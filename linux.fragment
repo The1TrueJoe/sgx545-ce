@@ -1,17 +1,29 @@
 # Kernel options the SGX545 driver needs.
 #
-# DRM is not optional even though this draws nothing itself: userspace finds
-# the device through libdrm's drmOpen(), so the driver has to publish a DRM
-# node. It registers no modesetting and owns no GEM objects -- display on this
-# board is ce5300-fb, entirely separately.
+# If you are integrating into openHC, this is mirrored at
+# board/ea-common/linux/sgx.fragment and selected by the `sgx` feature; see
+# README.md.
+
+# Userspace finds the GPU through libdrm's drmOpen(), so a DRM node has to
+# exist -- the stock Control4 system's /dev/dri/card0 is that node, not a KMS
+# device. The driver registers no modesetting and owns no GEM objects.
+#
+# Measured cost on Linux 7.1.8/i686: about 1.25 MiB of bzImage, nearly all of
+# it DRM core and its KMS/DisplayPort/HDCP helper libraries rather than the
+# driver -- 417 objects against the driver's 41. It is not trimmable from a
+# defconfig: DRM_KMS_HELPER and DRM_DISPLAY_HELPER have no prompt and are
+# pulled in by other promptless symbols, so disabling them in a fragment is
+# silently ignored. Measured, it changed the image by zero bytes. Reclaiming
+# it would take a kernel patch making the helper libraries conditional.
 CONFIG_DRM=y
 
-# PAT gives real write-combining for the SGX command buffers. Without it the
-# driver falls back to uncached, which works but is markedly slower.
+# PAT gives real write-combining for the SGX command buffers, where the GPU
+# reads what the CPU just wrote. Without it the driver falls back to uncached:
+# correct, markedly slower.
 CONFIG_X86_PAT=y
 CONFIG_MTRR=y
 
-# tools/sgxregs.sh reads the SGX identity registers through /dev/mem. Strict
-# devmem would block exactly the BAR range it needs to look at.
+# tools/sgxregs.sh reads the SGX identity registers through /dev/mem before any
+# driver is loaded. Strict devmem would block exactly the BAR range it looks at.
 CONFIG_DEVMEM=y
 # CONFIG_STRICT_DEVMEM is not set
