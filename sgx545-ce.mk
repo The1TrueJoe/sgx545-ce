@@ -2,10 +2,15 @@
 #
 # sgx545-ce — PowerVR SGX545 kernel services for the Intel Atom CE5300
 #
-# Installed into the kernel tree and built as obj-y rather than packaged as a
-# module: openHC builds CONFIG_MODULES=n, so a .ko would have nowhere to go.
-# This mirrors what board/external.mk's OHC_KERNEL_DRIVERS_HOOK does for
-# openHC's own drivers, for the same reason.
+# Installed into the kernel tree and built there, as a MODULE. It was obj-y
+# while openHC built CONFIG_MODULES=n; the EA family turned modules on
+# precisely so the DRM core this driver pulls in (~1.25 MiB of bzImage) lands
+# in the rootfs instead of the kernel image, which is the resource CEFDK's
+# bootlinux copy window actually constrains.
+#
+# The source still goes in through a LINUX_POST_PATCH_HOOK, the same shape as
+# board/external.mk's OHC_KERNEL_DRIVERS_HOOK, because it has to be in the tree
+# before the kernel configures.
 #
 # The driver lands at drivers/gpu/drm/sgx545ce/ and is registered by appending
 # one line to drivers/gpu/drm/Makefile. Its own Kbuild carries the include
@@ -42,6 +47,16 @@ define SGX545_CE_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/opt/ohc/bin/sgxregs
 endef
 
+# Installed WITHOUT an S-prefix, so busybox rcS does not run it at boot.
+# Nothing needs the GPU until there is a graphics application, and loading it
+# costs boot time and resident DRM for nothing. The splash is unaffected: it
+# draws through /dev/fb0 from ce5300-fb, which is builtin and independent of
+# DRM. Symlink it to /etc/init.d/S02sgx to make it automatic.
+define SGX545_CE_INSTALL_INIT_SYSV
+	$(INSTALL) -D -m 0755 $(SGX545_CE_SRCDIR)/sgx-init \
+		$(TARGET_DIR)/etc/init.d/sgx
+endef
+
 $(eval $(generic-package))
 
 # ── install into the kernel tree ───────────────────────────────────────────
@@ -54,8 +69,6 @@ define SGX545_CE_KERNEL_HOOK
 	mkdir -p $(LINUX_DIR)/$(SGX545_CE_KDIR)
 	cp -a $(SGX545_CE_SRCDIR)/src $(LINUX_DIR)/$(SGX545_CE_KDIR)/
 	cp -a $(SGX545_CE_SRCDIR)/Kbuild $(LINUX_DIR)/$(SGX545_CE_KDIR)/Kbuild
-	sed -i 's/^CONFIG_SGX545_CE ?= m/CONFIG_SGX545_CE ?= y/' \
-		$(LINUX_DIR)/$(SGX545_CE_KDIR)/Kbuild
 	sed -i 's/^SGX_CORE_REV ?= .*/SGX_CORE_REV ?= $(SGX545_CE_CORE_REV)/' \
 		$(LINUX_DIR)/$(SGX545_CE_KDIR)/Kbuild
 	if ! grep -q 'sgx545ce' $(LINUX_DIR)/drivers/gpu/drm/Makefile; then \

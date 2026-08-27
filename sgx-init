@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# Load the PowerVR SGX545 driver. NOT run at boot.
+#
+# Installed as /etc/init.d/sgx with no S-prefix on purpose, so busybox rcS
+# skips it. Nothing on this board needs the GPU yet, and loading it costs boot
+# time and ~1.25 MiB of resident DRM for no benefit until there is an actual
+# graphics application.
+#
+# The splash does not depend on any of this. It draws through /dev/fb0, which
+# comes from ce5300-fb -- builtin, gated on CONFIG_FB_SIMPLE, about 150 KB, and
+# entirely independent of DRM. The banner is up long before this would run.
+#
+# When something does want 3D:
+#
+#     /etc/init.d/sgx start      # or just: modprobe pvrsrvkm
+#
+# and to make it automatic, symlink it into the boot sequence after the splash:
+#
+#     ln -s /etc/init.d/sgx /etc/init.d/S02sgx
+#
+# modprobe pulls drm in as a dependency.
+
+case "$1" in
+	start)
+		printf "SGX: "
+		if ! [ -d /sys/bus/pci/devices/0000:01:02.0 ]; then
+			echo "no SGX at 01:02.0 on this board"
+			exit 0
+		fi
+		if modprobe pvrsrvkm 2>/dev/null; then
+			# loaded and working are different things: the driver registers
+			# a DRM node, and if it did not, say so rather than claim success
+			[ -e /dev/dri/card0 ] && echo "loaded, /dev/dri/card0 up" \
+			                     || echo "loaded, but NO /dev/dri/card0"
+		else
+			echo "modprobe pvrsrvkm failed"
+		fi
+		;;
+	stop)
+		modprobe -r pvrsrvkm 2>/dev/null && echo "SGX: unloaded"
+		;;
+	status)
+		grep -q '^pvrsrvkm ' /proc/modules 2>/dev/null \
+			&& echo "SGX: loaded$([ -e /dev/dri/card0 ] && echo ', card0 up')" \
+			|| echo "SGX: not loaded"
+		;;
+	restart|reload)
+		"$0" stop; "$0" start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|status|restart}"
+		exit 1
+		;;
+esac
