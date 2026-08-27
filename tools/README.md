@@ -22,6 +22,30 @@ binary shows `SrvInit` takes no arguments and returns a `PVRSRV_ERROR` in `eax`
 rather than links, so an unresolved symbol prints instead of the loader
 refusing to start the process.
 
+## busidshim.c
+
+Needed to run Intel's Cedarview DDK 1.7 userspace on a CE5300.
+
+`libsrv_um.so` calls `drmOpen(NULL, "pci:0000:00:02.0")` with that bus id
+hardcoded -- it is where the SGX sits on Cedarview. On the CE5300 the SGX is
+its own PCI function one bus further out, at `0000:01:02.0`, so
+`drmOpenByBusid()` matches nothing, returns -1, and `SrvInit()` fails with
+`PVRSRV_ERROR_INIT_FAILURE` having never issued a single ioctl -- which is why
+the kernel log is completely empty when this happens.
+
+The blob cannot be edited (Intel's licence forbids it), so `LD_PRELOAD` this
+and it corrects the bus id on the way through. `SGX_BUSID` overrides the
+replacement so it is not pinned to one board.
+
+```sh
+i686-linux-gnu-gcc -shared -fPIC -o busidshim.so tools/busidshim.c -ldl
+LD_PRELOAD=./busidshim.so ./sgxinit
+```
+
+Control4's DDK 1.12 blobs do not need this -- they call
+`drmOpen("pvrsrvkm", NULL)` and match on driver name instead -- but they fail
+the DDK version check against this 1.7 tree.
+
 ### Running it
 
 The DDK blobs are 32-bit glibc; openHC is musl. Rather than fight that during
