@@ -361,6 +361,15 @@ static const struct file_operations sPVRDrmFops = {
 	.mmap		= PVRMMap,
 	.poll		= drm_poll,
 	.llseek		= noop_llseek,
+	/*
+	 * DRM hands the mmap offset through as an unsigned token rather than a
+	 * signed file position -- PVRMMap keys its lookup on vm_pgoff, which is
+	 * exactly that. Since 6.12 drm_open_helper() enforces the declaration
+	 * and refuses the open with -EINVAL (plus a WARN) if it is missing, so
+	 * this is not optional. DRM_GEM_FOPS sets it for GEM drivers; this fops
+	 * is hand-rolled because we have no GEM, so it has to be set here.
+	 */
+	.fop_flags	= FOP_UNSIGNED_OFFSET,
 };
 
 /*
