@@ -2134,7 +2134,14 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
 	{
 		
 		bCheckCoreRev = IMG_TRUE;
-		for(i=0; i<ui32NumCoreExceptions; i+=2)
+		/*
+		 * ui32NumCoreExceptions counts PAIRS, but i indexes elements and
+		 * strides by two, so the bound has to be doubled. Upstream ships one
+		 * pair, where the loop runs once and is right by accident; with a
+		 * second pair the bound is still 2, i=2 fails 2<2, and every entry
+		 * after the first is silently never compared.
+		 */
+		for(i=0; i<ui32NumCoreExceptions*2; i+=2)
 		{
 			if( (psSGXFeatures->ui32CoreRev==aui32CoreRevExceptions[i]) &&
 				(psSGXFeatures->ui32CoreRevSW==aui32CoreRevExceptions[i+1])	)
