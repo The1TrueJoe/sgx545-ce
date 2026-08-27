@@ -53,7 +53,7 @@ endef
 # draws through /dev/fb0 from ce5300-fb, which is builtin and independent of
 # DRM. Symlink it to /etc/init.d/S02sgx to make it automatic.
 define SGX545_CE_INSTALL_INIT_SYSV
-	$(INSTALL) -D -m 0755 $(SGX545_CE_SRCDIR)/sgx-init \
+	$(INSTALL) -D -m 0755 $(@D)/sgx-init \
 		$(TARGET_DIR)/etc/init.d/sgx
 endef
 
