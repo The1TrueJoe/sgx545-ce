@@ -138,12 +138,24 @@ int main(void)
 	if (glGetError() != GL_NO_ERROR) FAILED("GL error during draw");
 	OK();
 
-	/* Centre of the surface is inside the triangle, so it must be the green
-	 * the fragment shader writes -- not the clear colour. That is the
-	 * difference between "the API worked" and "the GPU rasterised". */
-	STEP("read back the centre pixel");
-	glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	printf("got rgba(%u,%u,%u,%u)\n", px[0], px[1], px[2], px[3]);
+	/* Sample the CENTRE, which is inside the triangle, so it must be the
+	 * green the fragment shader writes -- not the clear colour. That is the
+	 * difference between "the API returned no error" and "the GPU actually
+	 * rasterised". (1,1) is the bottom-left corner and is outside the
+	 * triangle, so it reads back the clear colour and proves nothing.) */
+	{
+		EGLint sw = 0, sh = 0;
+		eglQuerySurface(dpy, surf, EGL_WIDTH, &sw);
+		eglQuerySurface(dpy, surf, EGL_HEIGHT, &sh);
+		if (sw <= 0) sw = 720;
+		if (sh <= 0) sh = 480;
+		STEP("read back the centre pixel");
+		glReadPixels(sw / 2, sh / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	}
+	printf("rgba(%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3],
+	       (px[1] > 200 && px[0] < 64 && px[2] < 64)
+	           ? "-- the shader's green: the GPU rasterised it"
+	           : "-- NOT the shader's green; that is the clear colour");
 
 	STEP("eglSwapBuffers (to the panel)");
 	if (!eglSwapBuffers(dpy, surf)) FAILED("swap");

@@ -70,14 +70,6 @@ static GLuint prog(const char *vs, const char *fs)
 	return p;
 }
 
-/* Report as overdraw-at-60fps: how many full-screen layers fit in a frame. */
-static void report(const char *what, double mpix_s, int w, int h)
-{
-	double per_frame = mpix_s * 1e6 / 60.0;
-	printf("  %-9s %8.1f Mpix/s   %5.1f full-screen layers at 60 fps\n",
-	       what, mpix_s, per_frame / (double)(w * h));
-}
-
 int main(void)
 {
 	EGLDisplay dpy; EGLConfig cfg; EGLSurface surf; EGLContext ctx;
@@ -100,7 +92,14 @@ int main(void)
 	eglQuerySurface(dpy, surf, EGL_WIDTH, &n);  if (n > 0) W = n;
 	eglQuerySurface(dpy, surf, EGL_HEIGHT, &n); if (n > 0) H = n;
 
-	printf("gpubench: %s\n", glGetString(GL_RENDERER));
+	/* Unlock the swap. Locked to the panel, every layer count reads the same
+	 * because we are waiting on the flip, not on the GPU -- which tells you
+	 * the GPU is not the limit but not how much headroom there is. */
+	{
+		EGLBoolean si = eglSwapInterval(dpy, 0);
+		printf("gpubench: %s\n", glGetString(GL_RENDERER));
+		printf("  eglSwapInterval(0) -> %s\n", si ? "accepted (vsync off)" : "REFUSED (still vsync-locked)");
+	}
 	printf("  surface %dx%d\n\n", W, H);
 
 	pflat = prog(vs_src, fs_flat);
@@ -110,30 +109,24 @@ int main(void)
 	glEnableVertexAttribArray(0);
 	glViewport(0, 0, W, H);
 
-	/* 1. flat fill */
-	iters = 300;
-	glUseProgram(pflat);
-	glUniform4f(glGetUniformLocation(pflat, "c"), 0.2f, 0.4f, 0.8f, 1.0f);
-	glDisable(GL_BLEND);
-	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); glFinish();     /* warm */
-	t0 = now();
-	for (i = 0; i < iters; i++) glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-	glFinish(); dt = now() - t0;
-	report("fill", (double)W * H * iters / dt / 1e6, W, H);
-
-	/* 2. alpha-blended fill — stacked UI layers */
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glUniform4f(glGetUniformLocation(pflat, "c"), 0.2f, 0.4f, 0.8f, 0.5f);
-	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); glFinish();
-	t0 = now();
-	for (i = 0; i < iters; i++) glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-	glFinish(); dt = now() - t0;
-	report("blend", (double)W * H * iters / dt / 1e6, W, H);
-
-	/* 3. textured + blended — icons and artwork */
+	/*
+	 * Measured in FRAMES, not draw calls, and every frame ends in
+	 * eglSwapBuffers. That is not a detail: the SGX is a tile-based
+	 * deferred renderer. Submit the same opaque full-screen quad N times
+	 * without a swap and hidden-surface removal throws away all but the
+	 * last, and the tile render may not flush at all until something
+	 * consumes the result -- so a draw-call loop measures how fast the
+	 * driver discards redundant work, which on this part reads as an
+	 * impossible ~114 Gpix/s.
+	 *
+	 * Each layer is offset and tinted so HSR cannot collapse them, and the
+	 * blended pass keeps them all alive by construction.
+	 */
 	{
+		static const int layers[] = { 1, 2, 4, 8 };
 		unsigned char *px = malloc(256 * 256 * 4);
+		size_t li;
+
 		for (i = 0; i < 256 * 256; i++) {
 			px[i*4+0] = i & 0xff; px[i*4+1] = (i >> 8) & 0xff;
 			px[i*4+2] = 0x80;     px[i*4+3] = 0xc0;
@@ -143,25 +136,51 @@ int main(void)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-		glUseProgram(ptex);
-		glUniform1i(glGetUniformLocation(ptex, "t"), 0);
-		glUniform4f(glGetUniformLocation(ptex, "c"), 1, 1, 1, 1);
-		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); glFinish();
-		t0 = now();
-		for (i = 0; i < iters; i++) glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-		glFinish(); dt = now() - t0;
-		report("texture", (double)W * H * iters / dt / 1e6, W, H);
 
-		/* 4. texture upload — new artwork per frame */
-		iters = 200;
+		printf("  layers   opaque fps   blended fps   textured fps\n");
+		for (li = 0; li < sizeof(layers)/sizeof(layers[0]); li++) {
+			int L = layers[li], pass, k;
+			double fps[3];
+			for (pass = 0; pass < 3; pass++) {
+				int frames = 60;
+				if (pass == 0) { glUseProgram(pflat); glDisable(GL_BLEND); }
+				if (pass == 1) { glUseProgram(pflat); glEnable(GL_BLEND);
+				                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); }
+				if (pass == 2) { glUseProgram(ptex);  glEnable(GL_BLEND);
+				                 glUniform1i(glGetUniformLocation(ptex, "t"), 0); }
+				/* one warm frame */
+				glClear(GL_COLOR_BUFFER_BIT);
+				eglSwapBuffers(dpy, surf);
+
+				t0 = now();
+				for (i = 0; i < frames; i++) {
+					glClear(GL_COLOR_BUFFER_BIT);
+					for (k = 0; k < L; k++) {
+						GLuint pr = (pass == 2) ? ptex : pflat;
+						/* vary per layer so HSR cannot collapse them */
+						glUniform4f(glGetUniformLocation(pr, "c"),
+						            0.2f + 0.05f * k, 0.4f, 0.8f,
+						            (pass == 0) ? 1.0f : 0.5f);
+						glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+					}
+					eglSwapBuffers(dpy, surf);
+				}
+				dt = now() - t0;
+				fps[pass] = frames / dt;
+			}
+			printf("  %5d   %10.1f   %11.1f   %12.1f\n",
+			       L, fps[0], fps[1], fps[2]);
+		}
+
+		/* texture upload — new artwork pushed each frame */
 		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 256, GL_RGBA, GL_UNSIGNED_BYTE, px);
 		glFinish();
 		t0 = now();
-		for (i = 0; i < iters; i++)
+		for (i = 0; i < 200; i++)
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 256, GL_RGBA, GL_UNSIGNED_BYTE, px);
 		glFinish(); dt = now() - t0;
-		printf("  %-9s %8.1f MB/s    (256x256 RGBA, %d/s)\n", "upload",
-		       256.0 * 256 * 4 * iters / dt / 1048576.0, (int)(iters / dt));
+		printf("\n  upload   %.1f MB/s (256x256 RGBA, %d/s)\n",
+		       256.0 * 256 * 4 * 200 / dt / 1048576.0, (int)(200 / dt));
 		free(px);
 	}
 
@@ -192,7 +211,7 @@ int main(void)
 		}
 	}
 
-	printf("\n  a launcher wants roughly 2-4 layers of overdraw at 60 fps.\n");
+	printf("\n  a launcher wants 2-4 layers at a solid 60 fps.\n");
 	eglDestroyContext(dpy, ctx); eglDestroySurface(dpy, surf); eglTerminate(dpy);
 	return 0;
 }
