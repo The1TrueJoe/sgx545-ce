@@ -2598,9 +2598,26 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
 
     if (bPFNMismatch)
     {
-        PVR_DPF((PVR_DBG_ERROR,
-            "OSAcquirePhysPageAddr: PFN calculation mismatch for VM_PFNMAP region"));
-	goto error;
+        /*
+         * A warning, not a failure. The comparison assumes the exporting
+         * driver used the remap_pfn_range() convention where vm_pgoff holds
+         * the starting PFN. fbdev does not: fb_mmap() goes through
+         * vm_iomap_memory(), which derives the PFN internally and leaves
+         * vm_pgoff as the caller's file offset, so the two legitimately
+         * disagree for a framebuffer mapping.
+         *
+         * It is safe to continue because the address actually used comes from
+         * CPUVAddrToPFN()'s page-table walk a few lines above, not from this
+         * calculation -- bPFNMismatch never feeds CPUPhysAddr. The check only
+         * detects "this VMA is not shaped the way I expected", which is true
+         * here and harmless.
+         *
+         * Failing it made eglInitialize() unable to wrap /dev/fb0, which is
+         * every GLES surface on this board.
+         */
+        PVR_DPF((PVR_DBG_WARNING,
+            "OSAcquirePhysPageAddr: vm_pgoff is not a PFN for this VM_PFNMAP "
+            "region (normal for fbdev); using the page-table PFN"));
     }
 
 exit:
