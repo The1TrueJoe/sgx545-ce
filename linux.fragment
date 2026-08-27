@@ -1,0 +1,17 @@
+# Kernel options the SGX545 driver needs.
+#
+# DRM is not optional even though this draws nothing itself: userspace finds
+# the device through libdrm's drmOpen(), so the driver has to publish a DRM
+# node. It registers no modesetting and owns no GEM objects -- display on this
+# board is ce5300-fb, entirely separately.
+CONFIG_DRM=y
+
+# PAT gives real write-combining for the SGX command buffers. Without it the
+# driver falls back to uncached, which works but is markedly slower.
+CONFIG_X86_PAT=y
+CONFIG_MTRR=y
+
+# tools/sgxregs.sh reads the SGX identity registers through /dev/mem. Strict
+# devmem would block exactly the BAR range it needs to look at.
+CONFIG_DEVMEM=y
+# CONFIG_STRICT_DEVMEM is not set

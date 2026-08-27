@@ -1,0 +1,17 @@
+config BR2_PACKAGE_SGX545_CE
+	bool "sgx545-ce (PowerVR SGX545 kernel driver)"
+	depends on BR2_LINUX_KERNEL
+	depends on BR2_i386
+	help
+	  PowerVR SGX545 kernel services for the Intel Atom CE5300 family,
+	  as fitted to the Control4 EA-1 and EA-3.
+
+	  Ported from the GPL DDK 1.7.862890 tree Intel published for
+	  Cedarview, which uses the same SGX545 core. Builds in-tree as
+	  obj-y, so it works with CONFIG_MODULES=n.
+
+	  This is the kernel half only. 3D also needs the matching userspace
+	  blobs and pvrsrvctl to upload the microkernel; see the repository
+	  README.
+
+	  https://github.com/openHC/sgx545-ce

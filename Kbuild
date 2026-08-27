@@ -144,4 +144,8 @@ pvrsrvkm-y += \
 
 pvrsrvkm-y += $(SYSDIR)/sysconfig.o
 
-obj-m += pvrsrvkm.o
+# Built as a module out-of-tree (fast to iterate on), and in-tree as obj-y by
+# the Buildroot package -- openHC builds with CONFIG_MODULES=n, so on the real
+# target this has to be builtin.
+CONFIG_SGX545_CE ?= m
+obj-$(CONFIG_SGX545_CE) += pvrsrvkm.o
