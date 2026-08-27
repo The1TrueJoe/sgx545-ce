@@ -40,6 +40,17 @@ extern "C" {
 
 #define	ALIGNSIZE(size, alignshift)	(((size) + ((1UL << (alignshift))-1)) & ~((1UL << (alignshift))-1))
 
+/*
+ * The kernel grew its own MAX/MIN in linux/minmax.h. These are #ifndef-guarded,
+ * but that only helps if the kernel's header came first -- otherwise minmax.h
+ * redefines them and every translation unit warns. Pull it in here so the guard
+ * sees the kernel's versions and steps aside: they are type-checked and
+ * single-evaluation, so they are the ones to want anyway.
+ */
+#if defined(__KERNEL__)
+#include <linux/minmax.h>
+#endif
+
 #ifndef MAX
 #define MAX(a,b) 					(((a) > (b)) ? (a) : (b))
 #endif
