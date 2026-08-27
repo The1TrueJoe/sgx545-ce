@@ -26,7 +26,7 @@
 
 
 
-#include <stddef.h>
+#include <linux/stddef.h>
 
 #include "img_defs.h"
 #include "services.h"

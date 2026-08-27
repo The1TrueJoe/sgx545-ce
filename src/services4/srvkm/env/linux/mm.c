@@ -34,6 +34,7 @@
 
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include <asm/io.h>
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0))
 #include <linux/wrapper.h>
@@ -523,6 +524,22 @@ DebugMemAllocRecordTypeToString(DEBUG_MEM_ALLOC_TYPE eAllocType)
 
 
 
+/* Size of the vmap area starting at pvCpuVAddr, in pages. */
+static IMG_UINT32
+VMallocAreaPageCount(IMG_VOID *pvCpuVAddr)
+{
+    struct vm_struct *psVmStruct = find_vm_area(pvCpuVAddr);
+
+    if (!psVmStruct)
+    {
+        return 0;
+    }
+
+    /* ->size includes one guard page. */
+    return (psVmStruct->size >> PAGE_SHIFT) - 1;
+}
+
+
 IMG_VOID *
 _VMallocWrapper(IMG_UINT32 ui32Bytes,
                 IMG_UINT32 ui32AllocFlags,
@@ -531,7 +548,9 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
 {
     pgprot_t PGProtFlags;
     IMG_VOID *pvRet;
-    
+    struct page **ppsPages;
+    IMG_UINT32 ui32PageCount, i;
+
     switch(ui32AllocFlags & PVRSRV_HAP_CACHETYPE_MASK)
     {
         case PVRSRV_HAP_CACHED:
@@ -551,22 +570,83 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
             return NULL;
     }
 
-	
-    pvRet = __vmalloc(ui32Bytes, GFP_KERNEL | __GFP_HIGHMEM | __GFP_ZERO, PGProtFlags);
-    
-#if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
-    if(pvRet)
+    /*
+     * This used to be a single __vmalloc() with PGProtFlags passed in. That
+     * argument was removed in 5.8 (88dca4ca5a93) because it never actually
+     * worked: vmalloc leaves the direct-map alias of the same pages cached,
+     * so asking for write-combining produced two mappings of one page with
+     * different memory types, which x86 leaves architecturally undefined.
+     *
+     * set_memory_wc() is not the replacement either -- it takes a direct-map
+     * address and does __pa() on it, which is meaningless for a vmalloc
+     * pointer.
+     *
+     * So do what vmalloc does internally, but keep control of the protection:
+     * allocate the pages, then vmap() them with the attributes we want. The
+     * pages come from the movable-free pool rather than the direct map, so
+     * there is no second alias to disagree with.
+     *
+     * It matters here specifically because the SGX command buffers are the
+     * write-combined ones -- the GPU reads what the CPU just wrote, and a
+     * stale cached alias shows up as the core executing old commands.
+     */
+    ui32PageCount = PAGE_ALIGN(ui32Bytes) >> PAGE_SHIFT;
+    if (ui32PageCount == 0)
     {
-        DebugMemAllocRecordAdd(DEBUG_MEM_ALLOC_TYPE_VMALLOC,
-                               pvRet,
-                               pvRet,
-                               0,
-                               NULL,
-                               PAGE_ALIGN(ui32Bytes),
-                               pszFileName,
-                               ui32Line
-                               );
+        return NULL;
     }
+
+    ppsPages = kvmalloc_array(ui32PageCount, sizeof(*ppsPages), GFP_KERNEL);
+    if (!ppsPages)
+    {
+        return NULL;
+    }
+
+    for (i = 0; i < ui32PageCount; i++)
+    {
+        ppsPages[i] = alloc_page(GFP_KERNEL | __GFP_HIGHMEM | __GFP_ZERO);
+        if (!ppsPages[i])
+        {
+            while (i-- > 0)
+            {
+                __free_page(ppsPages[i]);
+            }
+            kvfree(ppsPages);
+            return NULL;
+        }
+    }
+
+    pvRet = vmap(ppsPages, ui32PageCount, VM_MAP, PGProtFlags);
+
+    /*
+     * vmap() takes its own reference on each page, so the array is only
+     * needed for the call itself. VFreeWrapper recovers the pages from the
+     * mapping with vmalloc_to_page() before tearing it down.
+     */
+    if (!pvRet)
+    {
+        for (i = 0; i < ui32PageCount; i++)
+        {
+            __free_page(ppsPages[i]);
+        }
+    }
+    kvfree(ppsPages);
+
+    if (!pvRet)
+    {
+        return NULL;
+    }
+
+#if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
+    DebugMemAllocRecordAdd(DEBUG_MEM_ALLOC_TYPE_VMALLOC,
+                           pvRet,
+                           pvRet,
+                           0,
+                           NULL,
+                           PAGE_ALIGN(ui32Bytes),
+                           pszFileName,
+                           ui32Line
+                           );
 #else
     PVR_UNREFERENCED_PARAMETER(pszFileName);
     PVR_UNREFERENCED_PARAMETER(ui32Line);
@@ -579,13 +659,57 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
 IMG_VOID
 _VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line)
 {
+    struct page **ppsPages;
+    IMG_UINT32 ui32PageCount, i;
+    unsigned long ulAddr = (unsigned long)pvCpuVAddr;
+
 #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
     DebugMemAllocRecordRemove(DEBUG_MEM_ALLOC_TYPE_VMALLOC, pvCpuVAddr, pszFileName, ui32Line);
 #else
     PVR_UNREFERENCED_PARAMETER(pszFileName);
     PVR_UNREFERENCED_PARAMETER(ui32Line);
 #endif
-    vfree(pvCpuVAddr);
+
+    if (!pvCpuVAddr)
+    {
+        return;
+    }
+
+    ui32PageCount = VMallocAreaPageCount(pvCpuVAddr);
+    if (ui32PageCount == 0)
+    {
+        PVR_DPF((PVR_DBG_ERROR, "%s: no vmap area at %p", __FUNCTION__, pvCpuVAddr));
+        return;
+    }
+
+    /* Collect the pages while the mapping still exists. */
+    ppsPages = kvmalloc_array(ui32PageCount, sizeof(*ppsPages), GFP_KERNEL);
+    if (ppsPages)
+    {
+        for (i = 0; i < ui32PageCount; i++)
+        {
+            ppsPages[i] = vmalloc_to_page((void *)(ulAddr + (i << PAGE_SHIFT)));
+        }
+    }
+
+    vunmap(pvCpuVAddr);
+
+    if (ppsPages)
+    {
+        for (i = 0; i < ui32PageCount; i++)
+        {
+            if (ppsPages[i])
+            {
+                __free_page(ppsPages[i]);
+            }
+        }
+        kvfree(ppsPages);
+    }
+    else
+    {
+        PVR_DPF((PVR_DBG_ERROR, "%s: leaked %u pages at %p (no memory to track them)",
+                 __FUNCTION__, ui32PageCount, pvCpuVAddr));
+    }
 }
 
 

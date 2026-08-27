@@ -39,7 +39,7 @@
 #include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>			
-#include <stdarg.h>
+#include <linux/stdarg.h>
 #include "img_types.h"
 #include "servicesext.h"
 #include "pvr_debug.h"

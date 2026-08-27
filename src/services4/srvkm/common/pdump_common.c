@@ -25,7 +25,7 @@
  ******************************************************************************/
 
 #if defined(PDUMP)
-#include <stdarg.h>
+#include <linux/stdarg.h>
 
 #include "services_headers.h"
 #include "perproc.h"

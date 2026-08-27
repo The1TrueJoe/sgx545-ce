@@ -39,7 +39,6 @@ extern "C" {
 #if defined(__linux__) && defined(__KERNEL__)
 #include <linux/hardirq.h>
 #include <linux/string.h>
-#include <asm/system.h>
 #if defined(__arm__)
 #include <asm/memory.h>
 #endif
@@ -571,7 +570,7 @@ static INLINE PVRSRV_ERROR OSReleasePhysPageAddr(IMG_HANDLE hOSWrapMem)
 static inline IMG_BOOL OSInLISR(IMG_VOID unref__ *pvSysData)
 {
 	PVR_UNREFERENCED_PARAMETER(pvSysData);
-	return (in_irq()) ? IMG_TRUE : IMG_FALSE;
+	return (in_hardirq()) ? IMG_TRUE : IMG_FALSE;
 }
 
 static inline IMG_VOID OSWriteMemoryBarrier(IMG_VOID)

@@ -24,7 +24,7 @@
  *
  ******************************************************************************/
 
-#include <stddef.h>
+#include <linux/stddef.h>
 
 #include "sgxdefs.h"
 #include "sgxmmu.h"

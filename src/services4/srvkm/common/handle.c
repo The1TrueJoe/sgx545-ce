@@ -25,7 +25,7 @@
  ******************************************************************************/
 
 #if defined(PVR_SECURE_HANDLES) || defined (SUPPORT_SID_INTERFACE)
-#include <stddef.h>
+#include <linux/stddef.h>
 
 #include "services_headers.h"
 #include "handle.h"

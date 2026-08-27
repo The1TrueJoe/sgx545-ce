@@ -24,7 +24,7 @@
  *
  ******************************************************************************/
 
-#include <stdarg.h>
+#include <linux/stdarg.h>
 
 #if defined(__cplusplus)
 extern "C" {

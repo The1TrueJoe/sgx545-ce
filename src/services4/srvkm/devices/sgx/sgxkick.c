@@ -24,7 +24,7 @@
  *
  ******************************************************************************/
 
-#include <stddef.h> 
+#include <linux/stddef.h> 
 #include "services_headers.h"
 #include "sgxinfo.h"
 #include "sgxinfokm.h"

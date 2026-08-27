@@ -36,95 +36,55 @@
 #include <linux/mm.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
+#include <asm/cpufeature.h>
 
 #include "img_defs.h"
 #include "pvr_debug.h"
 #include "mutils.h"
 
 #if defined(SUPPORT_LINUX_X86_PAT)
-#define	PAT_LINUX_X86_WC	1
 
-#define	PAT_X86_ENTRY_BITS	8
-
-#define	PAT_X86_BIT_PWT		1U
-#define	PAT_X86_BIT_PCD		2U
-#define	PAT_X86_BIT_PAT		4U
-#define	PAT_X86_BIT_MASK	(PAT_X86_BIT_PAT | PAT_X86_BIT_PCD | PAT_X86_BIT_PWT)
-
+/*
+ * This used to hand-roll write-combining: read MSR_IA32_CR_PAT directly,
+ * convert page-protection bits to a PAT index, and check that the entry at
+ * that index really was WC before trusting it.
+ *
+ * None of that is needed any more. x86 has provided pgprot_writecombine()
+ * for years and it already does the PAT-entry selection (and the MTRR
+ * fallback) internally, so all that is left for us to decide is whether the
+ * CPU has PAT at all. The old code also used _PAGE_CACHE_WC and cpu_has_pat,
+ * both of which were removed -- protval constants became _PAGE_CACHE_MODE_*
+ * plus cachemode2protval() in 3.19, and cpu_has_* became boot_cpu_has().
+ */
 static IMG_BOOL g_write_combining_available = IMG_FALSE;
-
-#define	PROT_TO_PAT_INDEX(v, B) ((v & _PAGE_ ## B) ? PAT_X86_BIT_ ## B : 0)
-
-static inline IMG_UINT
-pvr_pat_index(pgprotval_t prot_val)
-{
-	IMG_UINT ret = 0;
-	pgprotval_t val = prot_val & _PAGE_CACHE_MASK;
-
-	ret |= PROT_TO_PAT_INDEX(val, PAT);
-	ret |= PROT_TO_PAT_INDEX(val, PCD);
-	ret |= PROT_TO_PAT_INDEX(val, PWT);
-
-	return ret;
-}
-
-static inline IMG_UINT
-pvr_pat_entry(u64 pat, IMG_UINT index)
-{
-	return (IMG_UINT)(pat >> (index * PAT_X86_ENTRY_BITS)) & PAT_X86_BIT_MASK;
-}
 
 static IMG_VOID
 PVRLinuxX86PATProbe(IMG_VOID)
 {
-	
-	if (cpu_has_pat)	 
-	{
-		u64 pat;
-		IMG_UINT pat_index;
-		IMG_UINT pat_entry;
-
-		PVR_TRACE(("%s: PAT available", __FUNCTION__));
-		
-		rdmsrl(MSR_IA32_CR_PAT, pat);
-		PVR_TRACE(("%s: Top 32 bits of PAT: 0x%.8x", __FUNCTION__, (IMG_UINT)(pat >> 32)));
-		PVR_TRACE(("%s: Bottom 32 bits of PAT: 0x%.8x", __FUNCTION__, (IMG_UINT)(pat)));
-
-		pat_index = pvr_pat_index(_PAGE_CACHE_WC);
-		PVR_TRACE(("%s: PAT index for write combining: %u", __FUNCTION__, pat_index));
-
-		pat_entry = pvr_pat_entry(pat, pat_index);
-		PVR_TRACE(("%s: PAT entry for write combining: 0x%.2x (should be 0x%.2x)", __FUNCTION__, pat_entry, PAT_LINUX_X86_WC));
-
 #if defined(SUPPORT_LINUX_X86_WRITECOMBINE)
-		g_write_combining_available = (IMG_BOOL)(pat_entry == PAT_LINUX_X86_WC);
-#endif
-	}
-#if defined(DEBUG)
-#if defined(SUPPORT_LINUX_X86_WRITECOMBINE)
+	g_write_combining_available =
+		boot_cpu_has(X86_FEATURE_PAT) ? IMG_TRUE : IMG_FALSE;
+
 	if (g_write_combining_available)
 	{
-		PVR_TRACE(("%s: Write combining available via PAT", __FUNCTION__));
+		PVR_TRACE(("%s: write combining available via PAT", __FUNCTION__));
 	}
 	else
 	{
-		PVR_TRACE(("%s: Write combining not available", __FUNCTION__));
+		PVR_TRACE(("%s: no PAT, write combining unavailable", __FUNCTION__));
 	}
-#else	
-	PVR_TRACE(("%s: Write combining disabled in driver build", __FUNCTION__));
-#endif	
-#endif	
+#else
+	PVR_TRACE(("%s: write combining disabled in driver build", __FUNCTION__));
+#endif
 }
 
 pgprot_t
 pvr_pgprot_writecombine(pgprot_t prot)
 {
-    
-     
-    return (g_write_combining_available) ?
-		__pgprot((pgprot_val(prot) & ~_PAGE_CACHE_MASK) | _PAGE_CACHE_WC) : pgprot_noncached(prot);
+	return g_write_combining_available ?
+		pgprot_writecombine(prot) : pgprot_noncached(prot);
 }
-#endif	
+#endif	/* SUPPORT_LINUX_X86_PAT */
 
 IMG_VOID
 PVRLinuxMUtilsInit(IMG_VOID)

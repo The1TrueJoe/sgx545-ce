@@ -41,7 +41,12 @@
 #include <linux/proc_fs.h>
 #include <linux/sched.h>
 #include <asm/ioctl.h>
-#include <drm/drmP.h>
+#include <linux/pci.h>
+
+#include <drm/drm_device.h>
+#include <drm/drm_file.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_ioctl.h>
 #include <drm/drm.h>
 
 #include "img_defs.h"
@@ -65,6 +70,10 @@
 #include "lock.h"
 #include "linkage.h"
 #include "pvr_drm.h"
+
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
+#include <drm/drm_ioctl.h>
 
 #if defined(PVR_DRI_DRM_NOT_PCI)
 #include "pvr_drm_mod.h"
@@ -94,29 +103,6 @@ struct drm_device *gpsPVRDRMDev;
 
 #define PVR_DRM_FILE struct drm_file *
 
-#if !defined(SUPPORT_DRI_DRM_EXT)
-#if defined(PVR_DRI_DRM_PLATFORM_DEV)
-#if defined(PVR_LDM_PLATFORM_PRE_REGISTERED)
-static struct platform_device_id asPlatIdList[] = {
-	{SYS_SGX_DEV_NAME, 0},
-	{}
-};
-#endif
-#else	
-static struct pci_device_id asPciIdList[] = {
-#if defined(PVR_DRI_DRM_NOT_PCI)
-	{1, 1, 1, 1, 0, 0, 0},
-#else	
-	{SYS_SGX_DEV_VENDOR_ID, SYS_SGX_DEV_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-#if defined(SYS_SGX_DEV1_DEVICE_ID)
-	{SYS_SGX_DEV_VENDOR_ID, SYS_SGX_DEV1_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-#endif	
-#endif	
-	{0}
-};
-#endif	
-#endif	
-
 DRI_DRM_STATIC int
 PVRSRVDrmLoad(struct drm_device *dev, unsigned long flags)
 {
@@ -129,7 +115,7 @@ PVRSRVDrmLoad(struct drm_device *dev, unsigned long flags)
 #if defined(PVR_DRI_DRM_PLATFORM_DEV)
 	gpsPVRLDMDev = dev->platformdev;
 #else
-	gpsPVRLDMDev = dev->pdev;
+	gpsPVRLDMDev = to_pci_dev(dev->dev);
 #endif
 #endif
 
@@ -332,148 +318,185 @@ PVRDRM_Display_ioctl(struct drm_device *dev, void *arg, struct drm_file *pFile)
 
 #if !defined(SUPPORT_DRI_DRM_EXT)
 
-#if defined(DRM_IOCTL_DEF)
-#define	PVR_DRM_IOCTL_DEF(ioctl, _func, _flags) DRM_IOCTL_DEF(DRM_##ioctl, _func, _flags)
-#else
 #define	PVR_DRM_IOCTL_DEF(ioctl, _func, _flags) DRM_IOCTL_DEF_DRV(ioctl, _func, _flags)
-#endif
 
-struct drm_ioctl_desc sPVRDrmIoctls[] = {
-	PVR_DRM_IOCTL_DEF(PVR_SRVKM, PVRSRV_BridgeDispatchKM, PVR_DRM_UNLOCKED),
-	PVR_DRM_IOCTL_DEF(PVR_IS_MASTER, PVRDRMIsMaster, DRM_MASTER | PVR_DRM_UNLOCKED),
-	PVR_DRM_IOCTL_DEF(PVR_UNPRIV, PVRDRMUnprivCmd, PVR_DRM_UNLOCKED),
+/*
+ * DRM_UNLOCKED is gone -- every ioctl has been unlocked since 4.x, so the
+ * flag no longer exists to be passed.
+ */
+static const struct drm_ioctl_desc sPVRDrmIoctls[] = {
+	PVR_DRM_IOCTL_DEF(PVR_SRVKM, PVRSRV_BridgeDispatchKM, 0),
+	PVR_DRM_IOCTL_DEF(PVR_IS_MASTER, PVRDRMIsMaster, DRM_MASTER),
+	PVR_DRM_IOCTL_DEF(PVR_UNPRIV, PVRDRMUnprivCmd, 0),
 #if defined(PDUMP)
-	PVR_DRM_IOCTL_DEF(PVR_DBGDRV, dbgdrv_ioctl, PVR_DRM_UNLOCKED),
+	PVR_DRM_IOCTL_DEF(PVR_DBGDRV, dbgdrv_ioctl, 0),
 #endif
 #if defined(DISPLAY_CONTROLLER) && defined(PVR_DISPLAY_CONTROLLER_DRM_IOCTL)
-	PVR_DRM_IOCTL_DEF(PVR_DISP, PVRDRM_Display_ioctl, DRM_MASTER | PVR_DRM_UNLOCKED)
+	PVR_DRM_IOCTL_DEF(PVR_DISP, PVRDRM_Display_ioctl, DRM_MASTER)
 #endif
 };
 
-static int pvr_max_ioctl = DRM_ARRAY_SIZE(sPVRDrmIoctls);
+static struct pci_device_id asPciIdList[] = {
+	{SYS_SGX_DEV_VENDOR_ID, SYS_SGX_DEV_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+#if defined(SYS_SGX_DEV1_DEVICE_ID)
+	{SYS_SGX_DEV_VENDOR_ID, SYS_SGX_DEV1_DEVICE_ID, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+#endif
+	{0}
+};
+MODULE_DEVICE_TABLE(pci, asPciIdList);
 
-#if defined(PVR_DRI_DRM_PLATFORM_DEV) && !defined(SUPPORT_DRI_DRM_EXT)
-static int PVRSRVDrmProbe(struct platform_device *pDevice);
-static int PVRSRVDrmRemove(struct platform_device *pDevice);
-#endif	
+/*
+ * struct drm_driver no longer embeds the file_operations, so they live out
+ * here and the driver points at them. .fasync went away entirely; nothing
+ * used it.
+ */
+static const struct file_operations sPVRDrmFops = {
+	.owner		= THIS_MODULE,
+	.open		= drm_open,
+	.release	= PVRSRVDrmRelease,
+	.unlocked_ioctl	= drm_ioctl,
+#if defined(CONFIG_COMPAT)
+	.compat_ioctl	= drm_compat_ioctl,
+#endif
+	.mmap		= PVRMMap,
+	.poll		= drm_poll,
+	.llseek		= noop_llseek,
+};
 
-static struct drm_driver sPVRDrmDriver = 
+/*
+ * driver_features is 0 deliberately. This is not a modesetting driver and it
+ * owns no GEM objects -- DRM is used purely as an ioctl multiplexer with a
+ * named device node, which is what userspace's drmOpen() matches on. Display
+ * on this board is ce5300-fb, entirely separately.
+ *
+ * .load/.unload are gone from struct drm_driver; the work they did now
+ * happens either side of drm_dev_register() in probe. .suspend/.resume are
+ * gone too and belong to the pci_driver. .pci_driver is gone -- the PCI
+ * driver is registered on its own, below.
+ */
+static const struct drm_driver sPVRDrmDriver =
 {
-#if defined(PVR_DRI_DRM_PLATFORM_DEV)
-	.driver_features = DRIVER_USE_PLATFORM_DEVICE,
-#else
 	.driver_features = 0,
-#endif
-	.dev_priv_size = 0,
-	.load = PVRSRVDrmLoad,
-	.unload = PVRSRVDrmUnload,
-	.open = PVRSRVDrmOpen,
-#if !defined(PVR_DRI_DRM_PLATFORM_DEV)
-	.suspend = PVRSRVDriverSuspend,
-	.resume = PVRSRVDriverResume,
-#endif
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37))
-	.get_map_ofs = drm_core_get_map_ofs,
-	.get_reg_ofs = drm_core_get_reg_ofs,
-#endif
-	.ioctls = sPVRDrmIoctls,
-	.fops = 
-	{
-		.owner = THIS_MODULE,
-		.open = drm_open,
-		.release = PVRSRVDrmRelease,
-		PVR_DRM_FOPS_IOCTL = drm_ioctl,
-		.mmap = PVRMMap,
-		.poll = drm_poll,
-		.fasync = drm_fasync,
-	},
-#if defined(PVR_DRI_DRM_PLATFORM_DEV)
-	.platform_driver =
-	{
-		.id_table = asPlatIdList,
-		.driver =
-		{
-			.name = PVR_DRM_NAME,
-		},
-		.probe = PVRSRVDrmProbe,
-		.remove = PVRSRVDrmRemove,
-		.suspend = PVRSRVDriverSuspend,
-		.resume = PVRSRVDriverResume,
-		.shutdown = PVRSRVDriverShutdown,
-	},
-#else
-	.pci_driver = 
-	{
-		.name = PVR_DRM_NAME,
-		.id_table = asPciIdList,
-	},
-#endif
-	.name = PVR_DRM_NAME,
-	.desc = PVR_DRM_DESC,
-	.date = PVR_BUILD_DATE,
-	.major = PVRVERSION_MAJ,
-	.minor = PVRVERSION_MIN,
-	.patchlevel = PVRVERSION_BUILD,
+	.open		= PVRSRVDrmOpen,
+	.ioctls		= sPVRDrmIoctls,
+	.num_ioctls	= ARRAY_SIZE(sPVRDrmIoctls),
+	.fops		= &sPVRDrmFops,
+	.name		= PVR_DRM_NAME,
+	.desc		= PVR_DRM_DESC,
+	.major		= PVRVERSION_MAJ,
+	.minor		= PVRVERSION_MIN,
+	.patchlevel	= PVRVERSION_BUILD,
 };
 
-#if defined(PVR_DRI_DRM_PLATFORM_DEV) && !defined(SUPPORT_DRI_DRM_EXT)
-static int
-PVRSRVDrmProbe(struct platform_device *pDevice)
+static int PVRSRVDrmProbe(struct pci_dev *pDevice, const struct pci_device_id *pId)
 {
+	struct drm_device *dev;
+	int iRes;
+
 	PVR_TRACE(("PVRSRVDrmProbe"));
 
-	return drm_get_platform_dev(pDevice, &sPVRDrmDriver);
-}
+	PVR_UNREFERENCED_PARAMETER(pId);
 
-static int
-PVRSRVDrmRemove(struct platform_device *pDevice)
-{
-	PVR_TRACE(("PVRSRVDrmRemove"));
-
-	drm_put_dev(gpsPVRDRMDev);
-
-	return 0;
-}
-
-#endif	
-static int __init PVRSRVDrmInit(void)
-{
-	int iRes;
-	sPVRDrmDriver.num_ioctls = pvr_max_ioctl;
-
-	
-	PVRDPFInit();
-
-#if defined(PVR_DRI_DRM_NOT_PCI)
-	iRes = drm_pvr_dev_add();
+	iRes = pci_enable_device(pDevice);
 	if (iRes != 0)
 	{
 		return iRes;
 	}
-#endif
 
-	iRes = drm_init(&sPVRDrmDriver);
-#if defined(PVR_DRI_DRM_NOT_PCI)
+	dev = drm_dev_alloc(&sPVRDrmDriver, &pDevice->dev);
+	if (IS_ERR(dev))
+	{
+		iRes = PTR_ERR(dev);
+		goto err_disable;
+	}
+
+	pci_set_drvdata(pDevice, dev);
+
+	/*
+	 * PVRSRVDrmLoad brings up PVR services, which the system layer needs
+	 * to have happened before anything touches the hardware. It used to be
+	 * drm_driver.load, called from inside registration; now it has to run
+	 * before we publish the node.
+	 */
+	iRes = PVRSRVDrmLoad(dev, 0);
 	if (iRes != 0)
 	{
-		drm_pvr_dev_remove();
+		goto err_put;
 	}
-#endif
+
+	iRes = drm_dev_register(dev, 0);
+	if (iRes != 0)
+	{
+		goto err_unload;
+	}
+
+	return 0;
+
+err_unload:
+	PVRSRVDrmUnload(dev);
+err_put:
+	drm_dev_put(dev);
+	pci_set_drvdata(pDevice, NULL);
+err_disable:
+	pci_disable_device(pDevice);
+
 	return iRes;
 }
-	
+
+static void PVRSRVDrmRemove(struct pci_dev *pDevice)
+{
+	struct drm_device *dev = pci_get_drvdata(pDevice);
+
+	PVR_TRACE(("PVRSRVDrmRemove"));
+
+	if (dev == NULL)
+	{
+		return;
+	}
+
+	drm_dev_unregister(dev);
+	PVRSRVDrmUnload(dev);
+	drm_dev_put(dev);
+
+	pci_set_drvdata(pDevice, NULL);
+	pci_disable_device(pDevice);
+}
+
+/*
+ * module.c's PVRSRVDriverShutdown only exists under PVR_LDM_MODULE, which we
+ * do not define, so do the same one thing here.
+ */
+static void PVRSRVDrmShutdown(struct pci_dev *pDevice)
+{
+	PVR_TRACE(("PVRSRVDrmShutdown"));
+
+	PVR_UNREFERENCED_PARAMETER(pDevice);
+
+	(void) PVRSRVSetPowerStateKM(PVRSRV_SYS_POWER_STATE_D3);
+}
+
+static struct pci_driver sPVRPciDriver =
+{
+	.name		= PVR_DRM_NAME,
+	.id_table	= asPciIdList,
+	.probe		= PVRSRVDrmProbe,
+	.remove		= PVRSRVDrmRemove,
+	.shutdown	= PVRSRVDrmShutdown,
+};
+
+static int __init PVRSRVDrmInit(void)
+{
+	PVRDPFInit();
+
+	return pci_register_driver(&sPVRPciDriver);
+}
+
 static void __exit PVRSRVDrmExit(void)
 {
-	drm_exit(&sPVRDrmDriver);
-
-#if defined(PVR_DRI_DRM_NOT_PCI)
-	drm_pvr_dev_remove();
-#endif
+	pci_unregister_driver(&sPVRPciDriver);
 }
 
 module_init(PVRSRVDrmInit);
 module_exit(PVRSRVDrmExit);
-#endif	
-#endif	
-
-
+#endif	/* !defined(SUPPORT_DRI_DRM_EXT) */
+#endif

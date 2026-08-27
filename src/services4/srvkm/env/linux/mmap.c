@@ -48,7 +48,10 @@
 #include <asm/current.h>
 #endif
 #if defined(SUPPORT_DRI_DRM)
-#include <drm/drmP.h>
+#include <drm/drm_device.h>
+#include <drm/drm_file.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_ioctl.h>
 #endif
 
 #include "img_defs.h"
@@ -562,10 +565,10 @@ DoMapToUser(LinuxMemArea *psLinuxMemArea,
 #if defined(PVR_MAKE_ALL_PFNS_SPECIAL)
 	    if (bMixedMap)
 	    {
-		result = vm_insert_mixed(ps_vma, ulVMAPos, pfn);
-                if(result != 0)
+		vm_fault_t vmf = vmf_insert_mixed(ps_vma, ulVMAPos, pfn);
+                if(vmf & VM_FAULT_ERROR)
                 {
-                    PVR_DPF((PVR_DBG_ERROR,"%s: Error - vm_insert_mixed failed (%d)", __FUNCTION__, result));
+                    PVR_DPF((PVR_DBG_ERROR,"%s: Error - vmf_insert_mixed failed (0x%x)", __FUNCTION__, vmf));
                     return IMG_FALSE;
                 }
 	    }
@@ -705,13 +708,7 @@ PVRMMap(struct file* pFile, struct vm_area_struct* ps_vma)
 #if defined(SUPPORT_DRI_DRM)
         LinuxUnLockMutex(&g_sMMapMutex);
 
-#if !defined(SUPPORT_DRI_DRM_EXT)
-	
-        return drm_mmap(pFile, ps_vma);
-#else
-	
 	return -ENOENT;
-#endif
 #else
         PVR_UNREFERENCED_PARAMETER(pFile);
 

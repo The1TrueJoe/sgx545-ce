@@ -28,7 +28,7 @@
 #if defined (PDUMP)
 
 #include <asm/atomic.h>
-#include <stdarg.h>
+#include <linux/stdarg.h>
 #if defined (SUPPORT_SGX)
 #include "sgxdefs.h" 
 #endif

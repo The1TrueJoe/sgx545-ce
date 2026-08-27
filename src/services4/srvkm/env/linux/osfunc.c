@@ -1824,9 +1824,9 @@ static void OSTimerCallbackBody(TIMER_CALLBACK_DATA *psTimerCBData)
 }
 
 
-static IMG_VOID OSTimerCallbackWrapper(IMG_UINT32 ui32Data)
+static void OSTimerCallbackWrapper(struct timer_list *psTimer)
 {
-    TIMER_CALLBACK_DATA	*psTimerCBData = (TIMER_CALLBACK_DATA*)ui32Data;
+    TIMER_CALLBACK_DATA	*psTimerCBData = container_of(psTimer, TIMER_CALLBACK_DATA, sTimer);
     
 #if defined(PVR_LINUX_TIMERS_USING_WORKQUEUES) || defined(PVR_LINUX_TIMERS_USING_SHARED_WORKQUEUE)
     int res;
@@ -1907,12 +1907,7 @@ IMG_HANDLE OSAddTimer(PFN_TIMER_FUNC pfnTimerFunc, IMG_VOID *pvData, IMG_UINT32 
                                 ?	1
                                 :	((HZ * ui32MsTimeout) / 1000);
     
-    init_timer(&psTimerCBData->sTimer);
-    
-    
-     
-    psTimerCBData->sTimer.function = (IMG_VOID *)OSTimerCallbackWrapper;
-    psTimerCBData->sTimer.data = (IMG_UINT32)psTimerCBData;
+    timer_setup(&psTimerCBData->sTimer, OSTimerCallbackWrapper, 0);
     
     return (IMG_HANDLE)(ui32i + 1);
 }
@@ -1980,7 +1975,7 @@ PVRSRV_ERROR OSDisableTimer (IMG_HANDLE hTimer)
 #endif
 
     
-    del_timer_sync(&psTimerCBData->sTimer);	
+    timer_delete_sync(&psTimerCBData->sTimer);	
     
 #if defined(PVR_LINUX_TIMERS_USING_WORKQUEUES)
     
@@ -2194,12 +2189,12 @@ IMG_BOOL OSAccessOK(IMG_VERIFY_TEST eVerification, IMG_VOID *pvUserPtr, IMG_UINT
 {
     if (eVerification == PVR_VERIFY_READ)
     {
-	return access_ok(VERIFY_READ, pvUserPtr, ui32Bytes);
+	return access_ok(pvUserPtr, ui32Bytes);
     }
     else
     {
         PVR_ASSERT(eVerification == PVR_VERIFY_WRITE);
-	return access_ok(VERIFY_WRITE, pvUserPtr, ui32Bytes);
+	return access_ok(pvUserPtr, ui32Bytes);
     }
 }
 
@@ -2233,6 +2228,7 @@ static IMG_BOOL CPUVAddrToPFN(struct vm_area_struct *psVMArea, IMG_UINT32 ulCPUV
     pud_t *psPUD;
     pmd_t *psPMD;
     pte_t *psPTE;
+    p4d_t *psP4D;
     struct mm_struct *psMM = psVMArea->vm_mm;
     spinlock_t *psPTLock;
     IMG_BOOL bRet = IMG_FALSE;
@@ -2244,7 +2240,11 @@ static IMG_BOOL CPUVAddrToPFN(struct vm_area_struct *psVMArea, IMG_UINT32 ulCPUV
     if (pgd_none(*psPGD) || pgd_bad(*psPGD))
         return bRet;
 
-    psPUD = pud_offset(psPGD, ulCPUVAddr);
+    psP4D = p4d_offset(psPGD, ulCPUVAddr);
+    if (p4d_none(*psP4D) || p4d_bad(*psP4D))
+        return bRet;
+
+    psPUD = pud_offset(psP4D, ulCPUVAddr);
     if (pud_none(*psPUD) || pud_bad(*psPUD))
         return bRet;
 
@@ -2311,7 +2311,7 @@ PVRSRV_ERROR OSReleasePhysPageAddr(IMG_HANDLE hOSWrapMem)
                         SetPageDirty(psPage);
                     }
 	        }
-                page_cache_release(psPage);
+                put_page(psPage);
 	    }
             break;
         }

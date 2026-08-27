@@ -1,0 +1,5 @@
+# Adds a fully built kernel (and therefore Module.symvers) on top of the
+# compile-only image, so modpost can actually resolve the driver's symbols
+# instead of warning about all 107 of them.
+FROM sgx545-dev
+RUN cd /k/linux && make -s -j"$(nproc)" ARCH=i386 CROSS_COMPILE=i686-linux-gnu- vmlinux modules

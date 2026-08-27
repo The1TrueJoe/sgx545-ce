@@ -1,3 +1,4 @@
+#include <linux/pm.h>
 /**********************************************************************
  *
  * Copyright (C) Imagination Technologies Ltd. All rights reserved.
@@ -93,11 +94,22 @@ IMG_INT dbgdrv_ioctl(struct drm_device *dev, IMG_VOID *arg, struct drm_file *pFi
 #define	DRM_PVR_DBGDRV		PVR_DRM_DBGDRV_CMD
 #define	DRM_PVR_DISP		PVR_DRM_DISP_CMD
 
-#define	DRM_IOCTL_PVR_SRVKM		_IO(0, DRM_PVR_SRVKM)
-#define	DRM_IOCTL_PVR_IS_MASTER 	_IO(0, DRM_PVR_IS_MASTER)
-#define	DRM_IOCTL_PVR_UNPRIV		_IO(0, DRM_PVR_UNPRIV)
-#define	DRM_IOCTL_PVR_DBGDRV		_IO(0, DRM_PVR_DBGDRV)
-#define	DRM_IOCTL_PVR_DISP		_IO(0, DRM_PVR_DISP)
+/*
+ * These have to carry DRM_COMMAND_BASE. The DDK wrote them as _IO(0, cmd),
+ * which worked with the old DRM_IOCTL_DEF() that indexed on the bare command
+ * number; the current DRM_IOCTL_DEF_DRV() indexes on
+ * DRM_IOCTL_NR(DRM_IOCTL_##ioctl) - DRM_COMMAND_BASE, so a bare number
+ * underflows and the ioctl table comes out with a nonsense size.
+ *
+ * DRM_COMMAND_BASE is also what userspace ends up sending: libdrm's
+ * drmCommandWrite()/drmCommandNone() add it to the command index they are
+ * handed, so this is the encoding on the wire either way.
+ */
+#define	DRM_IOCTL_PVR_SRVKM		DRM_IOW(DRM_COMMAND_BASE + DRM_PVR_SRVKM, PVRSRV_BRIDGE_PACKAGE)
+#define	DRM_IOCTL_PVR_IS_MASTER 	DRM_IO(DRM_COMMAND_BASE + DRM_PVR_IS_MASTER)
+#define	DRM_IOCTL_PVR_UNPRIV		DRM_IOWR(DRM_COMMAND_BASE + DRM_PVR_UNPRIV, IMG_UINT32)
+#define	DRM_IOCTL_PVR_DBGDRV		DRM_IOW(DRM_COMMAND_BASE + DRM_PVR_DBGDRV, IOCTL_PACKAGE)
+#define	DRM_IOCTL_PVR_DISP		DRM_IO(DRM_COMMAND_BASE + DRM_PVR_DISP)
 #endif	
 
 #endif	

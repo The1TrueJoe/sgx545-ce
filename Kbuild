@@ -79,10 +79,15 @@ ccflags-y += \
 	-DPVR_BUILD_TYPE=\"release\" \
 	-DRELEASE
 
-# Attach as a PCI device. Not SUPPORT_DRI_DRM_EXT: Cedarview let the psb
-# driver own the DRM device and attached PVR to it, but on CE5300 nothing
-# else wants it, so we own our own.
-ccflags-y += -DPVR_LDM_MODULE -DPVR_LDM_PCI_MODULE -DSUPPORT_DRI_DRM
+# Attach as a PCI device via DRM.
+#
+# Not SUPPORT_DRI_DRM_EXT: Cedarview let the psb driver own the DRM device and
+# attached PVR to it, but on CE5300 nothing else wants it, so we own our own.
+#
+# And deliberately not PVR_LDM_MODULE/PVR_LDM_PCI_MODULE: those make module.c
+# register its own pci_driver over the same id_table and define a second
+# gpsPVRLDMDev. With SUPPORT_DRI_DRM and no _EXT, pvr_drm.c is the PCI driver.
+ccflags-y += -DSUPPORT_DRI_DRM
 
 # The DDK predates -Wdeclaration-after-statement being default-on and uses
 # IMG_VOID/IMG_UINT32 aliases the kernel's own warnings dislike. Silence only

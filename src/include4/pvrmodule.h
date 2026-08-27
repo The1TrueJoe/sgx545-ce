@@ -30,5 +30,7 @@
 #include <linux/module.h>
 
 MODULE_AUTHOR("Imagination Technologies Ltd. <gpl-support@imgtec.com>");
+/* modpost has warned about a missing description since 6.11 (1fffe7a34c89). */
+MODULE_DESCRIPTION("PowerVR SGX545 kernel services (Intel Atom CE5300)");
 MODULE_LICENSE("GPL");
 #endif	

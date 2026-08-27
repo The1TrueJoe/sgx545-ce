@@ -65,23 +65,6 @@ static void *pvr_proc_seq_next (struct seq_file *m, void *v, loff_t *pos);
 static int pvr_proc_seq_show (struct seq_file *m, void *v);
 static ssize_t pvr_proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos);
 
-static struct file_operations pvr_proc_operations =
-{
-	.open		= pvr_proc_open,
-	.read		= seq_read,
-	.write		= pvr_proc_write,
-	.llseek		= seq_lseek,
-	.release	= seq_release,
-};
-
-static struct seq_operations pvr_proc_seq_operations =
-{
-	.start =	pvr_proc_seq_start,
-	.next =		pvr_proc_seq_next,
-	.stop =		pvr_proc_seq_stop,
-	.show =		pvr_proc_seq_show,
-};
-
 static struct proc_dir_entry* g_pProcQueue;
 static struct proc_dir_entry* g_pProcVersion;
 static struct proc_dir_entry* g_pProcSysNodes;
@@ -161,7 +144,7 @@ void* ProcSeq1ElementHeaderOff2Element(struct seq_file *sfile, loff_t off)
  * through proc_create_data()'s private pointer instead, reachable with
  * pde_data(). The DDK's own seq abstraction (PVR_PROC_SEQ_HANDLERS) is
  * untouched -- it already maps one-to-one onto struct seq_operations, so
- * every ProcSeqShow*/ProcSeqOff2Element* handler in the tree still works.
+ * every ProcSeqShow / ProcSeqOff2Element handler in the tree still works.
  *
  * The old read_proc_t entry points (CreateProcEntry, CreateProcReadEntry,
  * CreatePerProcessProcEntry, RemoveProcEntry, RemovePerProcessProcEntry) had

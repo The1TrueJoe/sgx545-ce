@@ -72,6 +72,29 @@ module_param(sgx_core_clock, uint, 0444);
 MODULE_PARM_DESC(sgx_core_clock,
 	"SGX core clock in Hz, used for watchdog timing only (default 400000000)");
 
+/*
+ * FIX_HW_BRN_SAMPLE_CACHE has two halves. The compile-time define (set by
+ * sgxerrata.h from SGX_CORE_REV) decides whether an extra device memory heap
+ * exists at all -- that is part of the UM/KM ABI, because sgxapi_km.h puts a
+ * heap ID behind the same define, so it has to match whatever userspace blobs
+ * were built with. This flag is the runtime half: whether the silicon in
+ * front of us actually needs the workaround.
+ *
+ * Intel needed the two to differ because Cedarview shipped both, and probed
+ * the MCH revision at 00:00.0 to tell them apart. There is no such device on
+ * CE5300, and every SGX545 revision the errata table lists for us (1013,
+ * 10131, 1014, 10141) carries the erratum, so it follows the define. Exposed
+ * as a parameter anyway so it can be flipped on the bench without a rebuild.
+ */
+#if defined(FIX_HW_BRN_SAMPLE_CACHE)
+bool need_sample_cache_workaround = true;
+#else
+bool need_sample_cache_workaround = false;
+#endif
+module_param(need_sample_cache_workaround, bool, 0444);
+MODULE_PARM_DESC(need_sample_cache_workaround,
+	"Apply the SGX545 sample-cache erratum workaround (default: per SGX_CORE_REV)");
+
 static unsigned int sgx_apm;
 module_param(sgx_apm, uint, 0444);
 MODULE_PARM_DESC(sgx_apm,
@@ -469,11 +492,13 @@ PVRSRV_ERROR SysDeinitialise(SYS_DATA *psSysData)
 
 	SysDeinitialiseCommon(gpsSysData);
 
+#if defined(PDUMP)
 	if (SYS_SPECIFIC_DATA_TEST(psSysSpecData, SYS_SPECIFIC_DATA_PDUMP_INIT))
 	{
 		PDUMPDEINIT();
 		SYS_SPECIFIC_DATA_CLEAR(psSysSpecData, SYS_SPECIFIC_DATA_PDUMP_INIT);
 	}
+#endif
 
 	gpsSysData = IMG_NULL;
 

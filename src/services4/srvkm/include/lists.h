@@ -27,7 +27,7 @@
 #ifndef __LISTS_UTILS__
 #define __LISTS_UTILS__
 
-#include <stdarg.h>
+#include <linux/stdarg.h>
 #include "img_types.h"
 
 #define DECLARE_LIST_FOR_EACH(TYPE) \

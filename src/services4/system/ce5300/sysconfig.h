@@ -86,4 +86,7 @@
 #define DEVICE_SGX_INTERRUPT		(1<<0)
 #define DEVICE_DISP_INTERRUPT		(1<<2)
 
+/* Runtime half of FIX_HW_BRN_SAMPLE_CACHE; see sysconfig.c. */
+extern bool need_sample_cache_workaround;
+
 #endif	/* __SOCCONFIG_H__ */
