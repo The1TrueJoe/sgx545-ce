@@ -131,7 +131,7 @@ Add as a submodule under `packages/`, where `board/external.mk`'s
 `packages/*/*.mk` glob will find it:
 
 ```bash
-git submodule add https://github.com/openHC/sgx545-ce packages/sgx545-ce
+git submodule add <url> packages/sgx545-ce
 ```
 
 Then in `board/Config.in`:
@@ -140,12 +140,26 @@ Then in `board/Config.in`:
 source "$BR2_EXTERNAL_OPENHC_PATH/../packages/sgx545-ce/Config.in"
 ```
 
-and add `BR2_PACKAGE_SGX545_CE=y` plus the contents of `linux.fragment` to the
-board's kernel config. The package installs the source into
-`drivers/gpu/drm/sgx545ce/` and appends one `obj-y` line, the same shape as
-openHC's own `OHC_KERNEL_DRIVERS_HOOK`.
+The rest goes through openHC's **feature** mechanism rather than a board
+defconfig edit — it is what that mechanism is for, and it puts the kernel
+fragment in the right place in the ordering automatically:
 
----
+| File | Contents |
+|---|---|
+| `board/ea-common/features/sgx.defconfig` | `BR2_PACKAGE_SGX545_CE=y` |
+| `board/ea-common/linux/sgx.fragment` | the contents of `linux.fragment` here |
+| `board/<board>/ohc.features` | add the word `sgx` |
+
+The ordering matters and the feature route gets it right for free:
+`common.fragment` sets `# CONFIG_DRM is not set` (serial console is the only
+head on these boards), and `build.sh` appends feature fragments *after* the
+board file, so `CONFIG_DRM=y` wins. Putting the options in the board fragment
+instead would work too, but only if you got them after `common.fragment` by
+hand.
+
+The package then installs the source into `drivers/gpu/drm/sgx545ce/` and
+appends one `obj-y` line, the same shape as openHC's own
+`OHC_KERNEL_DRIVERS_HOOK`, and drops `sgxregs` at `/opt/ohc/bin/sgxregs`.
 
 ## On the bench
 
