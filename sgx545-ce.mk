@@ -12,9 +12,12 @@
 # paths and the ~30 DDK build-option defines, so nothing about the build is
 # duplicated here.
 #
-# SGX_CORE_REV is the one knob worth knowing about. It defaults to 1014, which
-# is what an EA-3 reports; confirm with tools/sgxregs.sh on the board before
-# trusting it, and override here if a unit comes back different.
+# SGX_CORE_REV is the one knob worth knowing about, and it is NOT simply what
+# the silicon reports. An EA-3 reads back core revision 1.0.14, but the value
+# here has to match the microkernel the driver is paired with, because it also
+# selects the layout of the SGXMKIF structures they share. Intel's Cedarview
+# DDK 1.7 userspace is built for 1.0.13, so this is 1013. The full reasoning is
+# in the Kbuild next to the SGX_CORE_REV definition.
 #
 ################################################################################
 
@@ -26,7 +29,7 @@ SGX545_CE_LICENSE_FILES = src/COPYING
 SGX545_CE_DEPENDENCIES = linux
 
 SGX545_CE_KDIR = drivers/gpu/drm/sgx545ce
-SGX545_CE_CORE_REV = 1014
+SGX545_CE_CORE_REV = 1013
 
 # Nothing to build or install here -- the kernel build does both. Buildroot
 # still wants the package to exist so it can be selected and so licensing is

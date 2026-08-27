@@ -28,14 +28,34 @@ ccflags-y += \
 	-I$(SGXSRC)/services4/system/include \
 	-I$(SGXSRC)/services4/system/ce5300
 
-# Core selection.
+# Core selection -- and this follows the MICROKERNEL, not the silicon.
 #
-# SGX_CORE_REV=1014 is what the EA-3 reports. Intel shipped Cedarview as
-# 10131. sgxerrata.h gives both revisions the identical erratum set (just
-# FIX_HW_BRN_SAMPLE_CACHE), so the two builds differ only in the revision
-# check itself. Override on the command line to test the other:
-#   make SGX_CORE_REV=10131
-SGX_CORE_REV ?= 1014
+# The EA-3's SGX reports core revision 1.0.14 (read it with tools/sgxregs.sh).
+# The obvious thing is therefore SGX_CORE_REV=1014, and that is wrong.
+#
+# SGX_CORE_REV controls two different things through sgxerrata.h:
+#
+#   1. which hardware errata workarounds the driver applies, which should
+#      match the SILICON; and
+#   2. the layout of the SGXMKIF structures shared with the microkernel,
+#      which must match whatever the UKERNEL was built for.
+#
+# Those two want different values here, and (2) wins because it is fatal.
+# FIX_HW_BRN_31939 is defined for rev 1013 and not for 1014, and it adds a
+# field -- ui32BRN31939Mem -- to SGXMKIF_HOST_CTL, the control block the driver
+# and the microkernel share. Cedarview's DDK 1.7 userspace reports itself as
+# core rev 1.0.13, so its ukernel carries that field. A driver built for 1014
+# omits it, every field after it lands 4 bytes out, and the two sides disagree
+# about the shared memory they are both writing.
+#
+# So build for 1013 and pair with a 1013 ukernel. The cost is that the driver
+# applies BRN 31939's workaround on silicon that does not need it, which is
+# conservative rather than harmful. Both revisions also carry
+# FIX_HW_BRN_SAMPLE_CACHE, so nothing is lost there.
+#
+# Set this to 1014 if you ever pair with a userspace built for 1.0.14 -- and
+# then drop the core-rev exception in sgxinit.c too.
+SGX_CORE_REV ?= 1013
 ccflags-y += -DSGX545 -DSUPPORT_SGX545 -DSGX_CORE_REV=$(SGX_CORE_REV)
 
 # Device node name.

@@ -2029,7 +2029,22 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
 	IMG_BOOL	bCheckCoreRev;
 	const IMG_UINT32 aui32CoreRevExceptions[] =
 	{
-		0x10100, 0x10101
+		0x10100, 0x10101,
+		/*
+		 * EA-3 / Intel CE5310: the silicon is core revision 1.0.14, and the
+		 * only DDK 1.7 userspace that exists for this core -- Intel's
+		 * Cedarview release -- reports itself as 1.0.13. Without this pair
+		 * the check below refuses the combination outright.
+		 *
+		 * The driver is built for 1013 to match that userspace's SGXMKIF
+		 * layout (see the SGX_CORE_REV note in the Kbuild), so both sides
+		 * agree on the shared structures; what differs is only that 1013
+		 * carries FIX_HW_BRN_31939 and 1014 does not, i.e. the driver applies
+		 * one workaround the hardware no longer needs.
+		 *
+		 * Drop this if a userspace built for 1.0.14 ever turns up.
+		 */
+		0x1000e, 0x1000d
 	};
 	const IMG_UINT32	ui32NumCoreExceptions = sizeof(aui32CoreRevExceptions) / (2*sizeof(IMG_UINT32));
 	IMG_UINT	i;
