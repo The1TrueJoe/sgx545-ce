@@ -547,7 +547,7 @@ DoMapToUser(LinuxMemArea *psLinuxMemArea,
 #if defined(PVR_MAKE_ALL_PFNS_SPECIAL)
 	if (bMixedMap)
 	{
-            ps_vma->vm_flags |= VM_MIXEDMAP;
+            vm_flags_set(ps_vma, VM_MIXEDMAP);
 	}
 #endif
 	
@@ -737,14 +737,16 @@ PVRMMap(struct file* pFile, struct vm_area_struct* ps_vma)
     PVR_DPF((PVR_DBG_MESSAGE, "%s: Mapped psLinuxMemArea 0x%p\n",
          __FUNCTION__, psOffsetStruct->psLinuxMemArea));
 
-    ps_vma->vm_flags |= VM_RESERVED;
-    ps_vma->vm_flags |= VM_IO;
+    /* VM_RESERVED split into VM_DONTEXPAND|VM_DONTDUMP in 3.7; vm_flags
+     * became write-protected in 6.3, so all of these go through
+     * vm_flags_set() instead of |=. */
+    vm_flags_set(ps_vma, VM_DONTDUMP | VM_IO);
 
     
-    ps_vma->vm_flags |= VM_DONTEXPAND;
+    vm_flags_set(ps_vma, VM_DONTEXPAND);
     
     
-    ps_vma->vm_flags |= VM_DONTCOPY;
+    vm_flags_set(ps_vma, VM_DONTCOPY);
 
     ps_vma->vm_private_data = (void *)psOffsetStruct;
     
