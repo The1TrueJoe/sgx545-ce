@@ -52,6 +52,21 @@ ccflags-y += -DSGX545 -DSUPPORT_SGX545 -DSGX_CORE_REV=$(SGX_CORE_REV)
 PVR_MODNAME ?= pvrsrvkm
 ccflags-y += -DPVRSRV_MODNAME=\"$(PVR_MODNAME)\"
 
+# Diagnostics.
+#
+# PVR_DPF/PVR_TRACE compile to nothing in a release build, which is why a
+# failing SGXInit() produces a return code and complete silence in dmesg.
+# These two switch the messages back on WITHOUT touching the KM/UM build-option
+# bitmask -- neither appears in sgx_options.h, so the hash the userspace
+# compares against is unchanged. Turning on DEBUG instead would flip
+# OPTIONS_BIT0 and get us rejected by a release userspace.
+#
+# Set SGX_QUIET=1 to build without them once bring-up is done.
+SGX_QUIET ?= 0
+ifeq ($(SGX_QUIET),0)
+ccflags-y += -DPVRSRV_NEED_PVR_DPF -DPVRSRV_NEED_PVR_TRACE
+endif
+
 ccflags-y += \
 	-DLINUX \
 	-DPVR_BUILD_DIR=\"ce5300_linux\" \
