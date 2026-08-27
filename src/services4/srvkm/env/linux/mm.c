@@ -283,7 +283,7 @@ static IMG_VOID LinuxMMCleanup_MemRecords_ForEachVa(DEBUG_MEM_ALLOC_REC *psCurre
 			DebugMemAllocRecordRemove(DEBUG_MEM_ALLOC_TYPE_IO, psCurrentRecord->pvKey, __FILE__, __LINE__);
 			break;
 		case DEBUG_MEM_ALLOC_TYPE_VMALLOC:
-			VFreeWrapper(psCurrentRecord->pvCpuVAddr);
+			VFreeWrapper(psCurrentRecord->pvCpuVAddr, psCurrentRecord->ui32Bytes);
 			break;
 		case DEBUG_MEM_ALLOC_TYPE_ALLOC_PAGES:
 			
@@ -524,22 +524,6 @@ DebugMemAllocRecordTypeToString(DEBUG_MEM_ALLOC_TYPE eAllocType)
 
 
 
-/* Size of the vmap area starting at pvCpuVAddr, in pages. */
-static IMG_UINT32
-VMallocAreaPageCount(IMG_VOID *pvCpuVAddr)
-{
-    struct vm_struct *psVmStruct = find_vm_area(pvCpuVAddr);
-
-    if (!psVmStruct)
-    {
-        return 0;
-    }
-
-    /* ->size includes one guard page. */
-    return (psVmStruct->size >> PAGE_SHIFT) - 1;
-}
-
-
 IMG_VOID *
 _VMallocWrapper(IMG_UINT32 ui32Bytes,
                 IMG_UINT32 ui32AllocFlags,
@@ -657,7 +641,7 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
 
 
 IMG_VOID
-_VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line)
+_VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_UINT32 ui32Bytes, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line)
 {
     struct page **ppsPages;
     IMG_UINT32 ui32PageCount, i;
@@ -675,10 +659,10 @@ _VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line)
         return;
     }
 
-    ui32PageCount = VMallocAreaPageCount(pvCpuVAddr);
+    ui32PageCount = PAGE_ALIGN(ui32Bytes) >> PAGE_SHIFT;
     if (ui32PageCount == 0)
     {
-        PVR_DPF((PVR_DBG_ERROR, "%s: no vmap area at %p", __FUNCTION__, pvCpuVAddr));
+        PVR_DPF((PVR_DBG_ERROR, "%s: zero-length free at %p", __FUNCTION__, pvCpuVAddr));
         return;
     }
 
@@ -778,7 +762,8 @@ FreeVMallocLinuxMemArea(LinuxMemArea *psLinuxMemArea)
 
     PVR_DPF((PVR_DBG_MESSAGE,"%s: pvCpuVAddr: %p",
              __FUNCTION__, psLinuxMemArea->uData.sVmalloc.pvVmallocAddress));
-    VFreeWrapper(psLinuxMemArea->uData.sVmalloc.pvVmallocAddress);
+    VFreeWrapper(psLinuxMemArea->uData.sVmalloc.pvVmallocAddress,
+                 psLinuxMemArea->ui32ByteSize);
 
     LinuxMemAreaStructFree(psLinuxMemArea);
 }

@@ -144,15 +144,14 @@ PVRSRV_ERROR OSFreeMem_Impl(IMG_UINT32 ui32Flags, IMG_UINT32 ui32Size, IMG_PVOID
 #endif
 {	
     PVR_UNREFERENCED_PARAMETER(ui32Flags);
-    PVR_UNREFERENCED_PARAMETER(ui32Size);
     PVR_UNREFERENCED_PARAMETER(hBlockAlloc);
 
     if (is_vmalloc_addr(pvCpuVAddr))
     {
 #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
-        _VFreeWrapper(pvCpuVAddr, pszFilename, ui32Line);
+        _VFreeWrapper(pvCpuVAddr, ui32Size, pszFilename, ui32Line);
 #else
-        VFreeWrapper(pvCpuVAddr);
+        VFreeWrapper(pvCpuVAddr, ui32Size);
 #endif
     }
     else
@@ -2224,50 +2223,41 @@ typedef struct _sWrapMemInfo_
 static IMG_BOOL CPUVAddrToPFN(struct vm_area_struct *psVMArea, IMG_UINT32 ulCPUVAddr, IMG_UINT32 *pulPFN, struct page **ppsPage)
 {
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,10))
-    pgd_t *psPGD;
-    pud_t *psPUD;
-    pmd_t *psPMD;
-    pte_t *psPTE;
-    p4d_t *psP4D;
-    struct mm_struct *psMM = psVMArea->vm_mm;
-    spinlock_t *psPTLock;
     IMG_BOOL bRet = IMG_FALSE;
 
     *pulPFN = 0;
     *ppsPage = NULL;
 
-    psPGD = pgd_offset(psMM, ulCPUVAddr);
-    if (pgd_none(*psPGD) || pgd_bad(*psPGD))
-        return bRet;
-
-    psP4D = p4d_offset(psPGD, ulCPUVAddr);
-    if (p4d_none(*psP4D) || p4d_bad(*psP4D))
-        return bRet;
-
-    psPUD = pud_offset(psP4D, ulCPUVAddr);
-    if (pud_none(*psPUD) || pud_bad(*psPUD))
-        return bRet;
-
-    psPMD = pmd_offset(psPUD, ulCPUVAddr);
-    if (pmd_none(*psPMD) || pmd_bad(*psPMD))
-        return bRet;
-
-    psPTE = (pte_t *)pte_offset_map_lock(psMM, psPMD, ulCPUVAddr, &psPTLock);
-
-    if ((pte_none(*psPTE) == 0) && (pte_present(*psPTE) != 0) && (pte_write(*psPTE) != 0))
+    /*
+     * This used to walk the page tables by hand down to
+     * pte_offset_map_lock(), which is not exported to modules. follow_pfnmap()
+     * is the exported interface for exactly this case -- it is meant for
+     * VM_IO/VM_PFNMAP areas, which is what this fallback path is reached with
+     * (see the vm_flags check in the caller) -- and it does the locking too.
+     */
     {
-        *pulPFN = pte_pfn(*psPTE);
-	bRet = IMG_TRUE;
+        struct follow_pfnmap_args sArgs = {
+            .vma     = psVMArea,
+            .address = ulCPUVAddr,
+        };
 
-        if (pfn_valid(*pulPFN))
+        if (follow_pfnmap_start(&sArgs) != 0)
+            return bRet;
+
+        if (sArgs.writable)
         {
-            *ppsPage = pfn_to_page(*pulPFN);
+            *pulPFN = sArgs.pfn;
+            bRet = IMG_TRUE;
 
-            get_page(*ppsPage);
+            if (pfn_valid(*pulPFN))
+            {
+                *ppsPage = pfn_to_page(*pulPFN);
+                get_page(*ppsPage);
+            }
         }
-    }
 
-    pte_unmap_unlock(psPTE, psPTLock);
+        follow_pfnmap_end(&sArgs);
+    }
 
     return bRet;
 #else

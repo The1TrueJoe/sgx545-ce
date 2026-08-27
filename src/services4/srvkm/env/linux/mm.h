@@ -186,12 +186,18 @@ IMG_VOID _KFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_CHAR *pszFileName, IMG_UINT32 u
 IMG_VOID *_VMallocWrapper(IMG_UINT32 ui32Bytes, IMG_UINT32 ui32AllocFlags, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line);
 
 
+/*
+ * Takes the size now. The vmap-based allocator has to free the pages it
+ * mapped, and find_vm_area() -- the only way to recover the extent from the
+ * address alone -- is not exported to modules. Every caller had the size to
+ * hand anyway.
+ */
 #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
-#define VFreeWrapper(pvCpuVAddr) _VFreeWrapper(pvCpuVAddr, __FILE__, __LINE__)
+#define VFreeWrapper(pvCpuVAddr, ui32Bytes) _VFreeWrapper(pvCpuVAddr, ui32Bytes, __FILE__, __LINE__)
 #else
-#define VFreeWrapper(pvCpuVAddr) _VFreeWrapper(pvCpuVAddr, NULL, 0)
+#define VFreeWrapper(pvCpuVAddr, ui32Bytes) _VFreeWrapper(pvCpuVAddr, ui32Bytes, NULL, 0)
 #endif
-IMG_VOID _VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line);
+IMG_VOID _VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_UINT32 ui32Bytes, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line);
 
 
 LinuxMemArea *NewVMallocLinuxMemArea(IMG_UINT32 ui32Bytes, IMG_UINT32 ui32AreaFlags);
