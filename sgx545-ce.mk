@@ -27,7 +27,7 @@
 ################################################################################
 
 SGX545_CE_VERSION = local
-SGX545_CE_SITE = $(BR2_EXTERNAL_OPENHC_PATH)/../packages/sgx545-ce
+SGX545_CE_SITE = $(BR2_EXTERNAL_OPENHC_PATH)/ea-common/packages/sgx545-ce
 SGX545_CE_SITE_METHOD = local
 SGX545_CE_LICENSE = GPL-2.0
 SGX545_CE_LICENSE_FILES = src/COPYING
@@ -63,7 +63,7 @@ $(eval $(generic-package))
 #
 # A post-patch hook rather than a package build step, because the source has to
 # be in place before the kernel configures, not after it builds.
-SGX545_CE_SRCDIR = $(BR2_EXTERNAL_OPENHC_PATH)/../packages/sgx545-ce
+SGX545_CE_SRCDIR = $(BR2_EXTERNAL_OPENHC_PATH)/ea-common/packages/sgx545-ce
 
 define SGX545_CE_KERNEL_HOOK
 	mkdir -p $(LINUX_DIR)/$(SGX545_CE_KDIR)
