@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0
+config SGX545_CE
+	tristate "PowerVR SGX545 (Intel CE5300 / Cedarview) kernel services"
+	depends on X86 && DRM
+	help
+	  Kernel services (pvrsrvkm) for the Imagination PowerVR SGX545 GPU as
+	  fitted to the Intel Atom CE5300/CE5310 — and to Cedarview (GMA
+	  3600/3650), which carries the same core. Ported from Intel's GPL
+	  DDK 1.7.862890.
+
+	  This is the kernel half only. 3D additionally needs the matching
+	  DDK 1.7 userspace (EGL/GLES blobs + pvrsrvctl, which uploads the
+	  microkernel); the driver only has to accept that upload.
+
+	  Say M to build pvrsrvkm as a loadable module (recommended — the DDK is
+	  large and this keeps it out of the kernel image), or Y to build it in
+	  (which also works with CONFIG_MODULES=n).
+
+	  If unsure, say N.
