@@ -386,7 +386,18 @@ static long PVRSRVDRMCompatIoctl(struct file *filp, unsigned int cmd, unsigned l
 			return -EFAULT;
 		}
 
-		sPkg.ui32BridgeID      = sPkg32.ui32BridgeID;
+		/* The bridge IDs are PVRSRV_IOWR(index) = _IOWR('g', index,
+		 * PVRSRV_BRIDGE_PACKAGE), so the _IOC size field is sizeof(the package) —
+		 * 28 as the i686 userspace encodes it, but 40 in the kernel. pvr_bridge_k.c
+		 * compares the raw id against its own PVRSRV_BRIDGE_* macros (e.g. the
+		 * `cmd != CONNECT_SERVICES` test), so an i686-sized id matches NOTHING and
+		 * every call is mistaken for a device bridge needing a services handle.
+		 * Re-stamp the size field to the kernel's package size; _IOC_NR (the
+		 * dispatch index, PVRSRV_GET_BRIDGE_ID) is untouched. */
+		sPkg.ui32BridgeID      =
+			(sPkg32.ui32BridgeID & ~(_IOC_SIZEMASK << _IOC_SIZESHIFT))
+			| (((IMG_UINT32)sizeof(PVRSRV_BRIDGE_PACKAGE) & _IOC_SIZEMASK)
+			   << _IOC_SIZESHIFT);
 		sPkg.ui32Size          = sizeof(PVRSRV_BRIDGE_PACKAGE);
 		sPkg.pvParamIn         = compat_ptr(sPkg32.pvParamIn);
 		sPkg.ui32InBufferSize  = sPkg32.ui32InBufferSize;
