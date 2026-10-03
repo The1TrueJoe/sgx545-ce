@@ -392,7 +392,13 @@ static long PVRSRVDRMCompatIoctl(struct file *filp, unsigned int cmd, unsigned l
 		sPkg.ui32InBufferSize  = sPkg32.ui32InBufferSize;
 		sPkg.pvParamOut        = compat_ptr(sPkg32.pvParamOut);
 		sPkg.ui32OutBufferSize = sPkg32.ui32OutBufferSize;
+#if defined(SUPPORT_SID_INTERFACE)
+		/* With SID, handles are IMG_SID (u32) on both sides -- the inner structs
+		 * already match 32-bit userspace, so only the outer pointers need fixing. */
+		sPkg.hKernelServices   = sPkg32.hKernelServices;
+#else
 		sPkg.hKernelServices   = (IMG_HANDLE)(unsigned long)sPkg32.hKernelServices;
+#endif
 
 		printk(KERN_INFO "pvr-compat: bridge=0x%08x in=%u out=%u svc=0x%08x\n",
 		       sPkg32.ui32BridgeID, sPkg32.ui32InBufferSize,
