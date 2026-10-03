@@ -4614,6 +4614,56 @@ static IMG_BOOL PVRCompatBridgeGenericReturn(IMG_UINT32 ui32BridgeID)
 		|| ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DISCONNECT_SERVICES));
 }
 
+/* Pack one kernel PVRSRV_CLIENT_MEM_INFO (88 B) into the i686 layout (48 B) at
+ * pbyDst, returning the bytes written. Reads every field into locals before writing
+ * so an in-place (overlapping src/dst) repack is safe. The pointer fields are
+ * truncated to 32 bits: Linux sets pvLinAddr=0, and userspace treats pvLinAddrKM /
+ * psClientSyncInfo / psNext as opaque (it calls back into the kernel with the
+ * hKernelMemInfo handle, never these raw addresses). Handles are small indices
+ * (8->4 lossless). IMG_CPU_PHYADDR.uiAddr is IMG_UINTPTR_T but a 32-bit phys space. */
+static IMG_UINT32 PVRCompatPackClientMemInfo(IMG_PBYTE pbyDst,
+					     const PVRSRV_CLIENT_MEM_INFO *psK)
+{
+	IMG_UINT32 ui32LinAddr   = (IMG_UINT32)(unsigned long)psK->pvLinAddr;
+	IMG_UINT32 ui32LinAddrKM = (IMG_UINT32)(unsigned long)psK->pvLinAddrKM;
+	IMG_UINT32 ui32DevVAddr  = psK->sDevVAddr.uiAddr;
+	IMG_UINT32 ui32CpuPAddr  = (IMG_UINT32)psK->sCpuPAddr.uiAddr;
+	IMG_UINT32 ui32Flags     = psK->ui32Flags;
+	IMG_UINT32 ui32CFlags    = psK->ui32ClientFlags;
+	IMG_UINT32 ui32AllocSize = (IMG_UINT32)psK->uAllocSize;
+	IMG_UINT32 ui32SyncInfo  = (IMG_UINT32)(unsigned long)psK->psClientSyncInfo;
+	IMG_UINT32 ui32MapInfo   = (IMG_UINT32)(unsigned long)psK->hMappingInfo;
+	IMG_UINT32 ui32KMemInfo  = (IMG_UINT32)(unsigned long)psK->hKernelMemInfo;
+	IMG_UINT32 ui32ResItem   = (IMG_UINT32)(unsigned long)psK->hResItem;
+	IMG_UINT32 ui32Next      = (IMG_UINT32)(unsigned long)psK->psNext;
+	IMG_UINT32 *p = (IMG_UINT32 *)pbyDst;
+
+	p[0] = ui32LinAddr;  p[1] = ui32LinAddrKM; p[2]  = ui32DevVAddr; p[3]  = ui32CpuPAddr;
+	p[4] = ui32Flags;    p[5] = ui32CFlags;    p[6]  = ui32AllocSize;p[7]  = ui32SyncInfo;
+	p[8] = ui32MapInfo;  p[9] = ui32KMemInfo;  p[10] = ui32ResItem;  p[11] = ui32Next;
+	return 12 * sizeof(IMG_UINT32);
+}
+
+/* Pack one kernel PVRSRV_CLIENT_SYNC_INFO (32 B) into the i686 layout (20 B). Same
+ * read-all-then-write discipline. psSyncData is the kernel sync-counter pointer;
+ * truncated here (not read back by the kernel). NOTE for gles2tri: userspace polls
+ * sync counters through its own mmap, but if it ever dereferences psSyncData this
+ * must become a real per-process mapping, not a truncation. */
+static IMG_UINT32 PVRCompatPackClientSyncInfo(IMG_PBYTE pbyDst,
+					      const PVRSRV_CLIENT_SYNC_INFO *psK)
+{
+	IMG_UINT32 ui32SyncData = (IMG_UINT32)(unsigned long)psK->psSyncData;
+	IMG_UINT32 ui32WVAddr   = psK->sWriteOpsCompleteDevVAddr.uiAddr;
+	IMG_UINT32 ui32RVAddr   = psK->sReadOpsCompleteDevVAddr.uiAddr;
+	IMG_UINT32 ui32MapInfo  = (IMG_UINT32)(unsigned long)psK->hMappingInfo;
+	IMG_UINT32 ui32KSync    = (IMG_UINT32)(unsigned long)psK->hKernelSyncInfo;
+	IMG_UINT32 *p = (IMG_UINT32 *)pbyDst;
+
+	p[0] = ui32SyncData; p[1] = ui32WVAddr; p[2] = ui32RVAddr;
+	p[3] = ui32MapInfo;  p[4] = ui32KSync;
+	return 5 * sizeof(IMG_UINT32);
+}
+
 static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 								IMG_UINT32 *pui32CompatIn,
 								IMG_UINT32 *pui32CompatOut)
@@ -4665,6 +4715,16 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 			+ PVRSRV_MAX_CLIENT_HEAPS * (6 * sizeof(IMG_UINT32));
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ALLOC_DEVICEMEM))
+	{
+		/* IN {flags; HANDLE hDevCookie; HANDLE hDevMemHeap; u32 attribs; SIZE_T size;
+		 * SIZE_T align} = 24 i686 / 40 kernel (two handles + align pad). OUT
+		 * {eError; KMEM_INFO *psKernelMemInfo; CLIENT_MEM_INFO; CLIENT_SYNC_INFO} =
+		 * 4 + 4 + 48 + 20 = 76 i686 (kernel 136). */
+		*pui32CompatIn  = 6 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32) + 48 + 20;
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4683,6 +4743,27 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		IMG_UINT32 ui32Cookie = ((IMG_UINT32 *)pvBridgeIn)[1];
 
 		psK->hDevCookie = (IMG_HANDLE)(unsigned long)ui32Cookie;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ALLOC_DEVICEMEM))
+	{
+		/* i686 {flags@0, hDevCookie@4, hDevMemHeap@8, attribs@12, size@16, align@20}
+		 * -> kernel {flags@0, pad, hDevCookie@8, hDevMemHeap@16, attribs@24, size@28,
+		 * align@32}. Read all six i686 words first, then write the wider layout. */
+		IMG_UINT32 *p = pvBridgeIn;
+		IMG_UINT32 ui32Flags  = p[0];
+		IMG_UINT32 ui32Cookie = p[1];
+		IMG_UINT32 ui32Heap   = p[2];
+		IMG_UINT32 ui32Attribs= p[3];
+		IMG_UINT32 ui32Size   = p[4];
+		IMG_UINT32 ui32Align  = p[5];
+		PVRSRV_BRIDGE_IN_ALLOCDEVICEMEM *psK = pvBridgeIn;
+
+		psK->ui32BridgeFlags = ui32Flags;
+		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
+		psK->hDevMemHeap     = (IMG_HANDLE)(unsigned long)ui32Heap;
+		psK->ui32Attribs     = ui32Attribs;
+		psK->ui32Size        = ui32Size;
+		psK->ui32Alignment   = ui32Align;
 	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
@@ -4788,6 +4869,23 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 			pui32Dst[4] = ui32Attr;
 			pui32Dst[5] = ui32XTile;
 		}
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ALLOC_DEVICEMEM))
+	{
+		/* kernel {eError@0; pad; psKernelMemInfo*@8; CLIENT_MEM_INFO@16(88);
+		 * CLIENT_SYNC_INFO@104(32)} 136 -> i686 {eError@0; psKernelMemInfo@4;
+		 * CLIENT_MEM_INFO@8(48); CLIENT_SYNC_INFO@56(20)} 76. Forward order; each pack
+		 * helper reads its whole source before writing the lower-offset dest, and the
+		 * header is read first and written last, so no write clobbers an unread source. */
+		PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM *psK = pvBridgeOut;
+		IMG_PBYTE pby = pvBridgeOut;
+		IMG_UINT32 ui32Err = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32KMI = (IMG_UINT32)(unsigned long)psK->psKernelMemInfo;
+
+		(void)PVRCompatPackClientMemInfo (pby + 8,  &psK->sClientMemInfo);
+		(void)PVRCompatPackClientSyncInfo(pby + 8 + 48, &psK->sClientSyncInfo);
+		((IMG_UINT32 *)pby)[0] = ui32Err;
+		((IMG_UINT32 *)pby)[1] = ui32KMI;
 	}
 }
 #endif /* CONFIG_COMPAT */
