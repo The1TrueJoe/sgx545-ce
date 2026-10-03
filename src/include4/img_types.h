@@ -90,6 +90,23 @@ typedef IMG_INT32       IMG_RESULT;
 	typedef unsigned __int64	IMG_UINTPTR_T;
 	typedef signed __int64		IMG_PTRDIFF_T;
 	typedef IMG_UINT64			IMG_SIZE_T;
+#elif defined(__LP64__) || defined(__x86_64__) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 8)
+	/*
+	 * openHC: 64-bit Linux (x86_64). The upstream DDK only widened IMG_UINTPTR_T
+	 * for _WIN64, so on a 64-bit Linux kernel it fell through to `unsigned int`
+	 * and TRUNCATED every pointer stored through it. The services hash (per-process
+	 * data) and the handle-table keys (HAND_KEY) hold kernel pointers this way, so
+	 * a lookup returned a 32-bit-truncated pointer and the first real bridge call
+	 * (CONNECT_SERVICES reading psPerProc->bInitProcess) oopsed. It MUST be
+	 * pointer-sized.
+	 *
+	 * IMG_SIZE_T is deliberately left 32-bit: the 32-bit DDK userspace encodes the
+	 * bridge structs with 32-bit sizes, and matching that ABI is what the i686
+	 * compat path relies on. Only the pointer-holding type widens here.
+	 */
+	typedef unsigned long	IMG_UINTPTR_T;
+	typedef long		IMG_PTRDIFF_T;
+	typedef IMG_UINT32	IMG_SIZE_T;
 #else
 	typedef unsigned int	IMG_UINTPTR_T;
 	typedef IMG_UINT32		IMG_SIZE_T;
