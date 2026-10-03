@@ -42,6 +42,9 @@
 #include <linux/sched.h>
 #include <asm/ioctl.h>
 #include <linux/pci.h>
+#if defined(CONFIG_COMPAT)
+#include <linux/compat.h>	/* compat_ptr() for the 32-on-64 PVR bridge */
+#endif
 
 #include <drm/drm_device.h>
 #include <drm/drm_file.h>
@@ -345,6 +348,63 @@ static struct pci_device_id asPciIdList[] = {
 };
 MODULE_DEVICE_TABLE(pci, asPciIdList);
 
+#if defined(CONFIG_COMPAT)
+/*
+ * 32-bit userspace on a 64-bit kernel (the EA runs a modern x86_64 userspace, but
+ * the only SGX545 DDK is the 32-bit Cedarview 1.7). drm_compat_ioctl only
+ * translates CORE drm ioctls; PVR_SRVKM is a driver ioctl, so a compat caller's
+ * PVRSRV_BRIDGE_PACKAGE (two pointers + a handle, so a different size/layout by
+ * arch) falls through untranslated -> drm_ioctl copies the kernel's 40-byte size
+ * from the 28-byte user struct and the handler reads pvParamIn/Out at the wrong
+ * offsets. Translate the OUTER package here, then call the native dispatch. The
+ * inner param buffers are left as (compat_ptr) userspace pointers -- the bridge
+ * handlers copy those themselves; structs that are all u32 are byte-compatible,
+ * and the logging below maps which bridges still need inner translation.
+ */
+typedef struct PVRSRV_BRIDGE_PACKAGE_32_TAG
+{
+	IMG_UINT32	ui32BridgeID;
+	IMG_UINT32	ui32Size;
+	IMG_UINT32	pvParamIn;		/* 32-bit userspace pointer */
+	IMG_UINT32	ui32InBufferSize;
+	IMG_UINT32	pvParamOut;		/* 32-bit userspace pointer */
+	IMG_UINT32	ui32OutBufferSize;
+	IMG_UINT32	hKernelServices;	/* 32-bit handle/pointer */
+} PVRSRV_BRIDGE_PACKAGE_32;
+
+static long PVRSRVDRMCompatIoctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	if (_IOC_NR(cmd) == DRM_COMMAND_BASE + DRM_PVR_SRVKM)
+	{
+		PVRSRV_BRIDGE_PACKAGE_32 sPkg32;
+		PVRSRV_BRIDGE_PACKAGE sPkg;
+		struct drm_file *psFile = filp->private_data;
+		struct drm_device *psDev = psFile->minor->dev;
+
+		if (copy_from_user(&sPkg32, compat_ptr(arg), sizeof(sPkg32)))
+		{
+			return -EFAULT;
+		}
+
+		sPkg.ui32BridgeID      = sPkg32.ui32BridgeID;
+		sPkg.ui32Size          = sizeof(PVRSRV_BRIDGE_PACKAGE);
+		sPkg.pvParamIn         = compat_ptr(sPkg32.pvParamIn);
+		sPkg.ui32InBufferSize  = sPkg32.ui32InBufferSize;
+		sPkg.pvParamOut        = compat_ptr(sPkg32.pvParamOut);
+		sPkg.ui32OutBufferSize = sPkg32.ui32OutBufferSize;
+		sPkg.hKernelServices   = (IMG_HANDLE)(unsigned long)sPkg32.hKernelServices;
+
+		printk(KERN_INFO "pvr-compat: bridge=0x%08x in=%u out=%u svc=0x%08x\n",
+		       sPkg32.ui32BridgeID, sPkg32.ui32InBufferSize,
+		       sPkg32.ui32OutBufferSize, sPkg32.hKernelServices);
+
+		return (long)PVRSRV_BridgeDispatchKM(psDev, &sPkg, psFile);
+	}
+
+	return drm_compat_ioctl(filp, cmd, arg);
+}
+#endif /* CONFIG_COMPAT */
+
 /*
  * struct drm_driver no longer embeds the file_operations, so they live out
  * here and the driver points at them. .fasync went away entirely; nothing
@@ -356,7 +416,7 @@ static const struct file_operations sPVRDrmFops = {
 	.release	= PVRSRVDrmRelease,
 	.unlocked_ioctl	= drm_ioctl,
 #if defined(CONFIG_COMPAT)
-	.compat_ioctl	= drm_compat_ioctl,
+	.compat_ioctl	= PVRSRVDRMCompatIoctl,
 #endif
 	.mmap		= PVRMMap,
 	.poll		= drm_poll,
