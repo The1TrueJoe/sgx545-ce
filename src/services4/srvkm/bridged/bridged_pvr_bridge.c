@@ -27,6 +27,9 @@
 
 
 #include <linux/stddef.h>
+#if defined(CONFIG_COMPAT)
+#include <linux/compat.h>	/* in_compat_syscall() for the 32-on-64 bridge */
+#endif
 
 #include "img_defs.h"
 #include "services.h"
@@ -4580,6 +4583,65 @@ CommonBridgeInit(IMG_VOID)
 	return PVRSRV_OK;
 }
 
+#if defined(CONFIG_COMPAT)
+/*
+ * 32-bit userspace (the i686 PowerVR DDK blobs) on a 64-bit kernel. The bridge
+ * structs match the non-SID layout EXCEPT that IMG_HANDLE is 4 bytes in userspace
+ * and 8 in the kernel (and the 8-byte alignment inserts padding the i686 struct
+ * does not have). PVR secure handles are small table indices (< 256), so they
+ * survive a 4<->8 round trip losslessly. The kernel struct is the authority; a
+ * compat caller sends/receives a packed 4-byte-handle variant, so we translate
+ * per bridge: expand the IN into the kernel layout after it is copied in, and
+ * compact the OUT into the i686 layout before it is copied out. Bridges whose
+ * structs carry no handle/pointer need no entry (their sizes already match).
+ *
+ * Add bridges here as the GPU userspace exercises them: sgxinit first
+ * (CONNECT_SERVICES + a few SGX info calls), then gles2tri (mem/context/kick).
+ * See [[c4-ea-sgx-wpe-64bit]].
+ */
+static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
+								IMG_UINT32 *pui32CompatIn,
+								IMG_UINT32 *pui32CompatOut)
+{
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CONNECT_SERVICES))
+	{
+		/* IN {ui32BridgeFlags, ui32Flags} — no handle, same size.
+		 * OUT {PVRSRV_ERROR eError; IMG_HANDLE hKernelServices} — i686 packs to
+		 * {u32 eError, u32 handle} = 8, vs the kernel's 16 (pad + 8-byte handle). */
+		*pui32CompatIn  = sizeof(PVRSRV_BRIDGE_IN_CONNECT_SERVICES);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	return IMG_FALSE;
+}
+
+/* Expand the i686 IN (already copied into psBridgeIn, compat-sized) up to the
+ * kernel layout, in place. Expands larger, so any multi-field bridge must rewrite
+ * back-to-front; handle-free INs (like CONNECT_SERVICES) are a no-op. */
+static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
+{
+	(void)ui32BridgeID;
+	(void)pvBridgeIn;
+	/* CONNECT_SERVICES IN has no handle — nothing to do. */
+}
+
+/* Compact the kernel OUT (in psBridgeOut) down to the i686 layout, in place,
+ * before CopyToUser. */
+static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
+{
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CONNECT_SERVICES))
+	{
+		PVRSRV_BRIDGE_OUT_CONNECT_SERVICES *psK = pvBridgeOut;
+		IMG_UINT32 ui32Err    = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32Handle = (IMG_UINT32)(unsigned long)psK->hKernelServices;
+		IMG_UINT32 *pui32 = pvBridgeOut;
+
+		pui32[0] = ui32Err;
+		pui32[1] = ui32Handle;
+	}
+}
+#endif /* CONFIG_COMPAT */
+
 IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 					  PVRSRV_BRIDGE_PACKAGE   * psBridgePackageKM)
 {
@@ -4590,6 +4652,11 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	PVRSRV_BRIDGE_DISPATCH_TABLE_ENTRY *dte;
 	IMG_UINT32   ui32BridgeID = psBridgePackageKM->ui32BridgeID;
 	IMG_INT      err          = -EFAULT;
+	IMG_UINT32   ui32ExpectIn;
+	IMG_UINT32   ui32ExpectOut;
+#if defined(CONFIG_COMPAT)
+	IMG_BOOL     bCompat      = IMG_FALSE;
+#endif
 
 	if(ui32BridgeID >= (BRIDGE_DISPATCH_TABLE_ENTRY_COUNT))
 	{
@@ -4599,6 +4666,20 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	}
 
 	dte = &g_BridgeDispatchTable[ui32BridgeID];
+
+	/* The kernel struct sizes are the default expectation. A 32-bit caller sends
+	 * the packed i686 variant, so a bridge with a compat descriptor expects the
+	 * compat sizes instead (handle-free bridges keep the kernel sizes, which
+	 * already match). */
+	ui32ExpectIn  = dte->in_size;
+	ui32ExpectOut = dte->out_size;
+#if defined(CONFIG_COMPAT)
+	if (in_compat_syscall())
+	{
+		bCompat = IMG_TRUE;
+		(void)PVRCompatBridge(ui32BridgeID, &ui32ExpectIn, &ui32ExpectOut);
+	}
+#endif
 
 #if defined(DEBUG_TRACE_BRIDGE_KM)
 	PVR_DPF((PVR_DBG_ERROR, "%s: %s",
@@ -4611,13 +4692,13 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	g_BridgeGlobalStats.ui32IOCTLCount++;
 #endif
 
-	if (psBridgePackageKM->ui32InBufferSize != dte->in_size ||
-			psBridgePackageKM->ui32OutBufferSize != dte->out_size) {
+	if (psBridgePackageKM->ui32InBufferSize != ui32ExpectIn ||
+			psBridgePackageKM->ui32OutBufferSize != ui32ExpectOut) {
 		PVR_DPF((PVR_DBG_ERROR, "pvr: invalid param size for IOCTL#%d:\n"
 					"     kern/user in,out: %d/%d,%d/%d\n",
 					ui32BridgeID,
-					dte->in_size, psBridgePackageKM->ui32InBufferSize,
-					dte->out_size, psBridgePackageKM->ui32OutBufferSize));
+					ui32ExpectIn, psBridgePackageKM->ui32InBufferSize,
+					ui32ExpectOut, psBridgePackageKM->ui32OutBufferSize));
 		err = -EINVAL;
 		goto return_fault;
 	}
@@ -4706,6 +4787,15 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	psBridgeOut = psBridgePackageKM->pvParamOut;
 #endif
 
+#if defined(CONFIG_COMPAT)
+	/* psBridgeIn now holds the i686 IN as sent; expand it to the kernel layout
+	 * the handler expects (no-op for handle-free INs). */
+	if (bCompat)
+	{
+		PVRCompatExpandIn(ui32BridgeID, psBridgeIn);
+	}
+#endif
+
 	pfBridgeHandler = (BridgeWrapperFunction)dte->pfFunction;
 	err = pfBridgeHandler(ui32BridgeID,
 						  psBridgeIn,
@@ -4718,6 +4808,15 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 
 
 #if defined(__linux__)
+
+#if defined(CONFIG_COMPAT)
+	/* Compact the kernel OUT down to the i686 layout before it goes back to the
+	 * 32-bit caller; ui32OutBufferSize already carries the compat size. */
+	if (bCompat)
+	{
+		PVRCompatCompactOut(ui32BridgeID, psBridgeOut);
+	}
+#endif
 
 	if(CopyToUserWrapper(psPerProc,
 						 ui32BridgeID,
