@@ -4758,6 +4758,12 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 		goto return_fault;
 	}
 
+#if defined(CONFIG_COMPAT)
+	if (bCompat)
+		printk(KERN_INFO "pvr-compat: id=%u sizes-ok in=%u out=%u\n",
+		       ui32BridgeID, ui32ExpectIn, ui32ExpectOut);
+#endif
+
 	if(!psPerProc->bInitProcess)
 	{
 		if(PVRSRVGetInitServerState(PVRSRV_INIT_SERVER_RAN))
@@ -4851,6 +4857,12 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	}
 #endif
 
+#if defined(CONFIG_COMPAT)
+	if (bCompat)
+		printk(KERN_INFO "pvr-compat: id=%u pre-handler pfn=%p in=%p out=%p\n",
+		       ui32BridgeID, dte->pfFunction, psBridgeIn, psBridgeOut);
+#endif
+
 	pfBridgeHandler = (BridgeWrapperFunction)dte->pfFunction;
 	err = pfBridgeHandler(ui32BridgeID,
 						  psBridgeIn,
@@ -4860,6 +4872,12 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	{
 		goto return_fault;
 	}
+
+#if defined(CONFIG_COMPAT)
+	if (bCompat)
+		printk(KERN_INFO "pvr-compat: id=%u post-handler err=%d\n",
+		       ui32BridgeID, err);
+#endif
 
 
 #if defined(__linux__)
