@@ -3443,7 +3443,10 @@ _SetDispatchTableEntry(IMG_UINT32 ui32Index,
                        const IMG_CHAR *pszFunctionName,
 		       size_t in_size, size_t out_size)
 {
-	static IMG_UINT32 ui32PrevIndex = ~0UL;     
+	static IMG_UINT32 ui32PrevIndex = ~0U;     /* ~0U not ~0UL: on 64-bit LP64, ~0UL is
+	   0xFFFFFFFFFFFFFFFF which truncates to 0xFFFFFFFF here, then the first-entry guard
+	   `ui32PrevIndex != ~0UL` compares 0xFFFFFFFF != 0xFFFF...FFFF = true and the gap
+	   warning fires spuriously on index 0. Keep the sentinel 32-bit to match the field. */
 #if !defined(DEBUG)
 	PVR_UNREFERENCED_PARAMETER(pszIOCName);
 #endif
@@ -3472,7 +3475,7 @@ _SetDispatchTableEntry(IMG_UINT32 ui32Index,
 	}
 
 
-	if((ui32PrevIndex != ~0UL) &&
+	if((ui32PrevIndex != ~0U) &&
 	   ((ui32Index >= ui32PrevIndex + DISPATCH_TABLE_GAP_THRESHOLD) ||
 		(ui32Index <= ui32PrevIndex)))
 	{
@@ -4649,6 +4652,19 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT))
+	{
+		/* SrvInit's big "get SGX init data" call.
+		 * IN  {u32 ui32BridgeFlags; IMG_HANDLE hDevCookie} = 16 kernel / 8 i686.
+		 * OUT {PVRSRV_ERROR eError; SGX_BRIDGE_INFO_FOR_SRVINIT sInitInfo}, where
+		 * sInitInfo = {IMG_DEV_PHYADDR sPDDevPAddr; PVRSRV_HEAP_INFO asHeapInfo[32]}.
+		 * i686 PVRSRV_HEAP_INFO = 6*u32 = 24 (kernel 32: u32 + 4 pad + 8-byte handle +
+		 * 3*u32), sPDDevPAddr i686 4 / kernel 8. i686 OUT = 4 + 4 + 32*24 = 776. */
+		*pui32CompatIn  = 2 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32)
+			+ PVRSRV_MAX_CLIENT_HEAPS * (6 * sizeof(IMG_UINT32));
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4657,9 +4673,18 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
  * back-to-front; handle-free INs (like CONNECT_SERVICES) are a no-op. */
 static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 {
-	(void)ui32BridgeID;
-	(void)pvBridgeIn;
-	/* CONNECT_SERVICES IN has no handle — nothing to do. */
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT))
+	{
+		/* i686 {u32 flags@0, u32 hDevCookie@4} -> kernel {u32 flags@0, 4 pad,
+		 * IMG_HANDLE hDevCookie@8}. Read the 4-byte cookie before writing the
+		 * wider field (offset 8 is past it, so the read is safe either way). The
+		 * cookie is a small index-handle; zero-extend is lossless. flags@0 stays. */
+		PVRSRV_BRIDGE_IN_SGXINFO_FOR_SRVINIT *psK = pvBridgeIn;
+		IMG_UINT32 ui32Cookie = ((IMG_UINT32 *)pvBridgeIn)[1];
+
+		psK->hDevCookie = (IMG_HANDLE)(unsigned long)ui32Cookie;
+	}
+	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
 
 /* Compact the kernel OUT (in psBridgeOut) down to the i686 layout, in place,
@@ -4725,6 +4750,44 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 
 		pui32[0] = ui32Err;
 		pui32[1] = ui32Data;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT))
+	{
+		/* Repack {eError; {IMG_DEV_PHYADDR sPDDevPAddr; PVRSRV_HEAP_INFO[32]}} from
+		 * the kernel 1040-byte layout down to the i686 776-byte one. Header:
+		 * eError@0 (same), sPDDevPAddr kernel u64@8 -> i686 u32@4 (phys addr, 32-bit
+		 * space, truncation safe). Heaps: kernel 32-byte stride from @16, i686 24-byte
+		 * stride from @8; per element {ui32HeapID, hDevMemHeap(8->4 index-handle),
+		 * sDevVAddrBase.uiAddr, ui32HeapByteSize, ui32Attribs, ui32XTileStride}. Read
+		 * each source element fully into locals before writing the lower-offset dest,
+		 * and go forward -> no write clobbers an unread source. */
+		PVRSRV_BRIDGE_OUT_SGXINFO_FOR_SRVINIT *psK = pvBridgeOut;
+		IMG_PBYTE pbyBase = pvBridgeOut;
+		IMG_UINT32 ui32Err = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32PD  = (IMG_UINT32)psK->sInitInfo.sPDDevPAddr.uiAddr;
+		IMG_UINT32 i;
+
+		((IMG_UINT32 *)pbyBase)[0] = ui32Err;	/* @0 */
+		((IMG_UINT32 *)pbyBase)[1] = ui32PD;	/* @4 */
+
+		for (i = 0; i < PVRSRV_MAX_CLIENT_HEAPS; i++)
+		{
+			PVRSRV_HEAP_INFO *psH = &psK->sInitInfo.asHeapInfo[i];
+			IMG_UINT32 ui32HeapID = psH->ui32HeapID;
+			IMG_UINT32 ui32Heap   = (IMG_UINT32)(unsigned long)psH->hDevMemHeap;
+			IMG_UINT32 ui32VAddr  = psH->sDevVAddrBase.uiAddr;
+			IMG_UINT32 ui32Size   = psH->ui32HeapByteSize;
+			IMG_UINT32 ui32Attr   = psH->ui32Attribs;
+			IMG_UINT32 ui32XTile  = psH->ui32XTileStride;
+			IMG_UINT32 *pui32Dst  = (IMG_UINT32 *)(pbyBase + 8 + i * 24);
+
+			pui32Dst[0] = ui32HeapID;
+			pui32Dst[1] = ui32Heap;
+			pui32Dst[2] = ui32VAddr;
+			pui32Dst[3] = ui32Size;
+			pui32Dst[4] = ui32Attr;
+			pui32Dst[5] = ui32XTile;
+		}
 	}
 }
 #endif /* CONFIG_COMPAT */
