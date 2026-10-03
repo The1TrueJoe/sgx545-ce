@@ -4620,6 +4620,16 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ENUM_DEVICES))
+	{
+		/* IN has no handle (leave *pui32CompatIn = dte->in_size). OUT is
+		 * {eError, ui32NumDevices, PVRSRV_DEVICE_IDENTIFIER[16]}; each identifier
+		 * is i686 20 B (3 u32 + 2 four-byte ptrs) vs the kernel's 32 B (two 8-byte
+		 * PDUMP-name ptrs + 8-align pad). i686 OUT = 8 + 16*20 = 328. */
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32)
+			+ PVRSRV_MAX_DEVICES * (5 * sizeof(IMG_UINT32));
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4656,6 +4666,33 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 
 		pui32[0] = ui32Err;
 		pui32[1] = ui32Cookie;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ENUM_DEVICES))
+	{
+		/* Repack the identifier array from the kernel's 32-byte stride to the
+		 * i686 20-byte stride. eError + ui32NumDevices stay at offsets 0,4. Read
+		 * each source identifier into locals BEFORE writing the (lower-offset)
+		 * destination, and go forward: dest[i] ends at 28+i*20, source[i+1] starts
+		 * at 40+i*32, so a write never clobbers an unread source. The two PDUMP
+		 * name pointers are kernel addresses a release userspace ignores -> zero. */
+		PVRSRV_BRIDGE_OUT_ENUMDEVICE *psK = pvBridgeOut;
+		IMG_PBYTE pbyBase = pvBridgeOut;
+		IMG_UINT32 i;
+
+		for (i = 0; i < PVRSRV_MAX_DEVICES; i++)
+		{
+			PVRSRV_DEVICE_IDENTIFIER *psId = &psK->asDeviceIdentifier[i];
+			IMG_UINT32 ui32Type  = (IMG_UINT32)psId->eDeviceType;
+			IMG_UINT32 ui32Class = (IMG_UINT32)psId->eDeviceClass;
+			IMG_UINT32 ui32Index = psId->ui32DeviceIndex;
+			IMG_UINT32 *pui32Dst = (IMG_UINT32 *)(pbyBase + 8 + i * 20);
+
+			pui32Dst[0] = ui32Type;
+			pui32Dst[1] = ui32Class;
+			pui32Dst[2] = ui32Index;
+			pui32Dst[3] = 0;
+			pui32Dst[4] = 0;
+		}
 	}
 }
 #endif /* CONFIG_COMPAT */
