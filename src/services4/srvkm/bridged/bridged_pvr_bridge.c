@@ -4612,6 +4612,14 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO))
+	{
+		/* IN {flags, devIndex, deviceType} — all u32, no handle (same size).
+		 * OUT {PVRSRV_ERROR eError; IMG_HANDLE hDevCookie} -> i686 {u32, u32} = 8. */
+		*pui32CompatIn  = sizeof(PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4638,6 +4646,16 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 
 		pui32[0] = ui32Err;
 		pui32[1] = ui32Handle;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO))
+	{
+		PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO *psK = pvBridgeOut;
+		IMG_UINT32 ui32Err    = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32Cookie = (IMG_UINT32)(unsigned long)psK->hDevCookie;
+		IMG_UINT32 *pui32 = pvBridgeOut;
+
+		pui32[0] = ui32Err;
+		pui32[1] = ui32Cookie;
 	}
 }
 #endif /* CONFIG_COMPAT */
