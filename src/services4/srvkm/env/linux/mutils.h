@@ -48,7 +48,7 @@
 	#if defined(__arm__) || defined(__sh__)
 		#define	PGPROT_WC(pv)	pgprot_writecombine(pv)
 	#else
-		#if defined(__i386__) || defined(__mips__)
+		#if defined(__i386__) || defined(__x86_64__) || defined(__mips__)
 			#define	PGPROT_WC(pv)	pgprot_noncached(pv)
 		#else
 			#define PGPROT_WC(pv)	pgprot_noncached(pv)
@@ -59,7 +59,7 @@
 
 #define	PGPROT_UC(pv)	pgprot_noncached(pv)
 
-#if defined(__i386__) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26))
+#if (defined(__i386__) || defined(__x86_64__)) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26))
 	#define	IOREMAP(pa, bytes)	ioremap_cache(pa, bytes)
 #else	
 	#if defined(__arm__) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0))

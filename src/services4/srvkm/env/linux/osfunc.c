@@ -2893,7 +2893,10 @@ err_blocked:
 
 #endif
 
-#if defined(__i386__)
+/* x86_64 too: wbinvd/clflush/x86_clflush_size are identical on i386 and x86_64,
+ * so the same CPU cache primitives apply. The EA family builds an x86_64 kernel
+ * (the DDK was originally i386-only, hence the __i386__ guard). */
+#if defined(__i386__) || defined(__x86_64__)
 
 #define ROUND_UP(x,a) (((x) + (a) - 1) & ~((a) - 1))
 
