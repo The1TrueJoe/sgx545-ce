@@ -4599,6 +4599,18 @@ CommonBridgeInit(IMG_VOID)
  * (CONNECT_SERVICES + a few SGX info calls), then gles2tri (mem/context/kick).
  * See [[c4-ea-sgx-wpe-64bit]].
  */
+/* Bridges whose OUT is the generic PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError;
+ * IMG_VOID *pvData} — 16 B on x86_64 (4 + 4 pad + 8), 8 B on i686 (4 + 4). This
+ * is the default OUT of every PVR_IO_W bridge, so one rule covers a whole class.
+ * Their INs (if any) carry no handle, so only the OUT needs compacting. */
+static IMG_BOOL PVRCompatBridgeGenericReturn(IMG_UINT32 ui32BridgeID)
+{
+	return (IMG_BOOL)(
+		   ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_INITSRV_CONNECT)
+		|| ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_INITSRV_DISCONNECT)
+		|| ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DISCONNECT_SERVICES));
+}
+
 static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 								IMG_UINT32 *pui32CompatIn,
 								IMG_UINT32 *pui32CompatOut)
@@ -4628,6 +4640,13 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		 * PDUMP-name ptrs + 8-align pad). i686 OUT = 8 + 16*20 = 328. */
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32)
 			+ PVRSRV_MAX_DEVICES * (5 * sizeof(IMG_UINT32));
+		return IMG_TRUE;
+	}
+	if (PVRCompatBridgeGenericReturn(ui32BridgeID))
+	{
+		/* IN (if present) is handle-free -> leave *pui32CompatIn = dte in_size.
+		 * OUT PVRSRV_BRIDGE_RETURN 16 -> i686 {u32 eError, u32 pvData} = 8. */
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
 	return IMG_FALSE;
@@ -4693,6 +4712,19 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 			pui32Dst[3] = 0;
 			pui32Dst[4] = 0;
 		}
+	}
+	else if (PVRCompatBridgeGenericReturn(ui32BridgeID))
+	{
+		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
+		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
+		 * (INITSRV_CONNECT/DISCONNECT, DISCONNECT_SERVICES) -> truncate harmlessly. */
+		PVRSRV_BRIDGE_RETURN *psK = pvBridgeOut;
+		IMG_UINT32 ui32Err  = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32Data = (IMG_UINT32)(unsigned long)psK->pvData;
+		IMG_UINT32 *pui32 = pvBridgeOut;
+
+		pui32[0] = ui32Err;
+		pui32[1] = ui32Data;
 	}
 }
 #endif /* CONFIG_COMPAT */
