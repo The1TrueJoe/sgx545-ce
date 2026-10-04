@@ -4868,6 +4868,31 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO))
+	{
+		/* IN {flags; HANDLE hDevCookie} = 8 i686 / 16 kernel. OUT {SGX_INTERNAL_DEVINFO
+		 * {u32 ui32Flags; HANDLE hHostCtl; IMG_BOOL bForcePTOff}; eError} = i686 12+4=16
+		 * (kernel 32). */
+		*pui32CompatIn  = 2 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 4 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_TAKE_TOKEN))
+	{
+		/* IN {flags; HANDLE hKernelSyncInfo} = 8 i686 / 16 kernel. OUT {eError;
+		 * ui32ReadOpsPending; ui32WriteOpsPending} = 12 on both arches -> leave OUT. */
+		*pui32CompatIn = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT))
+	{
+		/* IN {flags; HANDLE hDevCookie; IMG_CPU_VIRTADDR pCpuVAddr; u32 size; u32 offset}
+		 * = i686 20 / kernel 32 (handle + user-VA both widen). OUT {eError; HANDLE
+		 * hHWTransferContext; IMG_DEV_VIRTADDR devvaddr} = i686 12 / kernel 20. */
+		*pui32CompatIn  = 5 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 3 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -5166,6 +5191,41 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		*(IMG_HANDLE *)(pby + 56) = (IMG_HANDLE)(unsigned long)ui32EvtH;
 		*(IMG_HANDLE *)(pby + 64) = (IMG_HANDLE)(unsigned long)ui32CloseH;
 	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO))
+	{
+		/* i686 {flags@0, hDevCookie@4} -> kernel {flags@0, pad, hDevCookie@8}. */
+		IMG_UINT32 ui32Cookie = ((IMG_UINT32 *)pvBridgeIn)[1];
+		PVRSRV_BRIDGE_IN_GETINTERNALDEVINFO *psK = pvBridgeIn;
+
+		psK->hDevCookie = (IMG_HANDLE)(unsigned long)ui32Cookie;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_TAKE_TOKEN))
+	{
+		/* i686 {flags@0, hKernelSyncInfo@4} -> kernel {flags@0, pad, hKernelSyncInfo@8}. */
+		IMG_UINT32 ui32H = ((IMG_UINT32 *)pvBridgeIn)[1];
+		PVRSRV_BRIDGE_IN_SYNC_OPS_TAKE_TOKEN *psK = pvBridgeIn;
+
+		psK->hKernelSyncInfo = (IMG_HANDLE)(unsigned long)ui32H;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT))
+	{
+		/* i686 {flags@0, hDevCookie@4, pCpuVAddr@8, size@12, offset@16} -> kernel
+		 * {flags@0, pad, hDevCookie@8, pCpuVAddr@16, size@24, offset@28}. hDevCookie is an
+		 * index-handle; pCpuVAddr is a 32-bit user VA -> both zero-extend. Read all first. */
+		IMG_UINT32 *p = pvBridgeIn;
+		IMG_UINT32 ui32Flags  = p[0];
+		IMG_UINT32 ui32Cookie = p[1];
+		IMG_UINT32 ui32CpuVA  = p[2];
+		IMG_UINT32 ui32Size   = p[3];
+		IMG_UINT32 ui32Offset = p[4];
+		PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_TRANSFER_CONTEXT *psK = pvBridgeIn;
+
+		psK->ui32BridgeFlags            = ui32Flags;
+		psK->hDevCookie                 = (IMG_HANDLE)(unsigned long)ui32Cookie;
+		psK->pHWTransferContextCpuVAddr = (IMG_CPU_VIRTADDR)(unsigned long)ui32CpuVA;
+		psK->ui32HWTransferContextSize  = ui32Size;
+		psK->ui32OffsetToPDDevPAddr     = ui32Offset;
+	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
 
@@ -5370,6 +5430,32 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 
 		p[0] = ui32Evt;
 		p[1] = ui32Err;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO))
+	{
+		/* kernel {SGX_INTERNAL_DEVINFO{u32 ui32Flags@0; HANDLE hHostCtl@8; IMG_BOOL
+		 * bForcePTOff@16}; eError@24} 32 -> i686 {ui32Flags@0; hHostCtl@4; bForcePTOff@8;
+		 * eError@12} 16. */
+		PVRSRV_BRIDGE_OUT_GETINTERNALDEVINFO *psK = pvBridgeOut;
+		IMG_UINT32 ui32Flags = psK->sSGXInternalDevInfo.ui32Flags;
+		IMG_UINT32 ui32Host  = (IMG_UINT32)(unsigned long)psK->sSGXInternalDevInfo.hHostCtlKernelMemInfoHandle;
+		IMG_UINT32 ui32Force = (IMG_UINT32)psK->sSGXInternalDevInfo.bForcePTOff;
+		IMG_UINT32 ui32Err   = (IMG_UINT32)psK->eError;
+		IMG_UINT32 *p = pvBridgeOut;
+
+		p[0] = ui32Flags; p[1] = ui32Host; p[2] = ui32Force; p[3] = ui32Err;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT))
+	{
+		/* kernel {eError@0; HANDLE hHWTransferContext@8; IMG_DEV_VIRTADDR devvaddr@16} 20
+		 * -> i686 {eError@0; hHWTransferContext@4; devvaddr@8} 12. */
+		PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_TRANSFER_CONTEXT *psK = pvBridgeOut;
+		IMG_UINT32 ui32Err  = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32Ctx  = (IMG_UINT32)(unsigned long)psK->hHWTransferContext;
+		IMG_UINT32 ui32VA   = psK->sHWTransferContextDevVAddr.uiAddr;
+		IMG_UINT32 *p = pvBridgeOut;
+
+		p[0] = ui32Err; p[1] = ui32Ctx; p[2] = ui32VA;
 	}
 }
 #endif /* CONFIG_COMPAT */
