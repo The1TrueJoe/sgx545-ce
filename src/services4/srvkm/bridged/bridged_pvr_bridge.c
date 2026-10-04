@@ -4805,6 +4805,29 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 			+ PVRSRV_MAX_CLIENT_HEAPS * (6 * sizeof(IMG_UINT32));
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETCLIENTINFO))
+	{
+		/* IN {flags; HANDLE hDevCookie} = 8 i686 / 16 kernel. OUT {SGX_CLIENT_INFO;
+		 * eError}: i686 = {u32 ui32ProcessID; void* pvProcess(4); PVRSRV_MISC_INFO(136,
+		 * UNUSED by the handler); u32 asDevData[24]; eError} = 4+4+136+96+4 = 244. The
+		 * handler fills only ui32ProcessID + asDevData, so the OUT repack zeroes the
+		 * sMiscInfo region (gles2tri reads only asDevData). 136 is the i686 sizeof
+		 * PVRSRV_MISC_INFO, fixed by the observed out=244. */
+		*pui32CompatIn  = 2 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32) + 136
+			+ SGX_MAX_DEV_DATA * sizeof(IMG_UINT32) + sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO))
+	{
+		/* IN {flags; HANDLE hDevCookie; SGX_CLIENT_INFO sClientInfo} = i686 4+4+240 = 248
+		 * (kernel larger). The handler reads only hDevCookie, so the expand places just
+		 * that handle and leaves sClientInfo untranslated. OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 2 * sizeof(IMG_UINT32)
+			+ (2 * sizeof(IMG_UINT32) + 136 + SGX_MAX_DEV_DATA * sizeof(IMG_UINT32));
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4956,6 +4979,23 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
 		psK->hDevMemContext  = (IMG_HANDLE)(unsigned long)ui32Ctx;
 	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETCLIENTINFO))
+	{
+		/* i686 {flags@0, hDevCookie@4} -> kernel {flags@0, pad, hDevCookie@8}. */
+		IMG_UINT32 ui32Cookie = ((IMG_UINT32 *)pvBridgeIn)[1];
+		PVRSRV_BRIDGE_IN_GETCLIENTINFO *psK = pvBridgeIn;
+
+		psK->hDevCookie = (IMG_HANDLE)(unsigned long)ui32Cookie;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO))
+	{
+		/* i686 {flags@0, hDevCookie@4, sClientInfo@8..248} -> kernel {flags@0, pad,
+		 * hDevCookie@8, sClientInfo@16..}. Handler reads only hDevCookie; place it and
+		 * leave sClientInfo unexpanded. */
+		IMG_UINT32 ui32Cookie = ((IMG_UINT32 *)pvBridgeIn)[1];
+
+		*(IMG_HANDLE *)((IMG_PBYTE)pvBridgeIn + 8) = (IMG_HANDLE)(unsigned long)ui32Cookie;
+	}
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
 	{
 		/* i686 {flags@0, hDevCookie@4, psKernelMemInfo@8, sClientMemInfo@12..60} ->
@@ -5028,7 +5068,8 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 	}
 	else if (PVRCompatBridgeGenericReturn(ui32BridgeID)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM)
-		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO))
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
@@ -5133,6 +5174,27 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 
 		((IMG_UINT32 *)pby)[0] = ui32Err;
 		((IMG_UINT32 *)pby)[1] = ui32Count;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETCLIENTINFO))
+	{
+		/* kernel SGX_CLIENT_INFO {ui32ProcessID; void *pvProcess; PVRSRV_MISC_INFO
+		 * sMiscInfo; u32 asDevData[24]} + eError -> i686 {ui32ProcessID@0; pvProcess@4;
+		 * sMiscInfo@8 (136, zeroed); asDevData@144 (96); eError@240} = 244. The handler
+		 * only wrote ui32ProcessID + asDevData; snapshot asDevData into a local (the
+		 * kernel struct is larger, so the i686 dest overlaps the source) then rebuild. */
+		PVRSRV_BRIDGE_OUT_GETCLIENTINFO *psK = pvBridgeOut;
+		IMG_PBYTE pby = pvBridgeOut;
+		IMG_UINT32 ui32PID  = psK->sClientInfo.ui32ProcessID;
+		IMG_UINT32 ui32Proc = (IMG_UINT32)(unsigned long)psK->sClientInfo.pvProcess;
+		IMG_UINT32 ui32Err  = (IMG_UINT32)psK->eError;
+		IMG_UINT32 aui32DevData[SGX_MAX_DEV_DATA];
+
+		OSMemCopy(aui32DevData, psK->sClientInfo.asDevData, sizeof(aui32DevData));
+		((IMG_UINT32 *)pby)[0] = ui32PID;
+		((IMG_UINT32 *)pby)[1] = ui32Proc;
+		OSMemSet(pby + 8, 0, 136);
+		OSMemCopy(pby + 8 + 136, aui32DevData, sizeof(aui32DevData));
+		*(IMG_UINT32 *)(pby + 8 + 136 + sizeof(aui32DevData)) = ui32Err;
 	}
 }
 #endif /* CONFIG_COMPAT */
