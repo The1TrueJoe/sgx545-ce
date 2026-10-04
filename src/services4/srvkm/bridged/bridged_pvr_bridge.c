@@ -4845,6 +4845,29 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_WAIT))
+	{
+		/* IN {flags; HANDLE hOSEventKM} = 8 i686 / 16 kernel. OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 2 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_OPEN))
+	{
+		/* IN {PVRSRV_EVENTOBJECT sEventObject} = i686 56 (szName[50] + handle@52) /
+		 * kernel 64 (handle@56). OUT {HANDLE hOSEvent; eError} = i686 8 / kernel 16. */
+		*pui32CompatIn  = 56;
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE))
+	{
+		/* IN {PVRSRV_EVENTOBJECT sEventObject; HANDLE hOSEventKM} = i686 56+4=60 /
+		 * kernel 64+8=72. OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 56 + sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -5116,6 +5139,33 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
 		psK->hDevMemContext  = (IMG_HANDLE)(unsigned long)ui32Ctx;
 	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_WAIT))
+	{
+		/* i686 {flags@0, hOSEventKM@4} -> kernel {flags@0, pad, hOSEventKM@8}. */
+		IMG_UINT32 ui32H = ((IMG_UINT32 *)pvBridgeIn)[1];
+
+		*(IMG_HANDLE *)((IMG_PBYTE)pvBridgeIn + 8) = (IMG_HANDLE)(unsigned long)ui32H;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_OPEN))
+	{
+		/* IN {PVRSRV_EVENTOBJECT}: szName[50]@0 stays; hOSEventKM i686@52 -> kernel@56. */
+		IMG_PBYTE pby = pvBridgeIn;
+		IMG_UINT32 ui32H = *(IMG_UINT32 *)(pby + 52);
+
+		*(IMG_HANDLE *)(pby + 56) = (IMG_HANDLE)(unsigned long)ui32H;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE))
+	{
+		/* IN {PVRSRV_EVENTOBJECT sEventObject; HANDLE hOSEventKM}: szName@0 stays;
+		 * EVENTOBJECT.hOSEventKM i686@52 -> kernel@56; trailing hOSEventKM i686@56 ->
+		 * kernel@64. Read both handles before writing (kernel@56 clobbers i686@56). */
+		IMG_PBYTE pby = pvBridgeIn;
+		IMG_UINT32 ui32EvtH   = *(IMG_UINT32 *)(pby + 52);
+		IMG_UINT32 ui32CloseH = *(IMG_UINT32 *)(pby + 56);
+
+		*(IMG_HANDLE *)(pby + 56) = (IMG_HANDLE)(unsigned long)ui32EvtH;
+		*(IMG_HANDLE *)(pby + 64) = (IMG_HANDLE)(unsigned long)ui32CloseH;
+	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
 
@@ -5174,7 +5224,9 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO)
-		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT))
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_WAIT)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
@@ -5307,6 +5359,17 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		 * eError@0 is untouched (lowest misc write is @4). */
 		PVRCompatXlateMiscInfo((IMG_PBYTE)pvBridgeOut + 4,
 				       (IMG_PBYTE)pvBridgeOut + 8, IMG_FALSE);
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_OPEN))
+	{
+		/* kernel {HANDLE hOSEvent@0; eError@8} 16 -> i686 {hOSEvent@0(4); eError@4} 8. */
+		PVRSRV_BRIDGE_OUT_EVENT_OBJECT_OPEN *psK = pvBridgeOut;
+		IMG_UINT32 ui32Evt = (IMG_UINT32)(unsigned long)psK->hOSEvent;
+		IMG_UINT32 ui32Err = (IMG_UINT32)psK->eError;
+		IMG_UINT32 *p = pvBridgeOut;
+
+		p[0] = ui32Evt;
+		p[1] = ui32Err;
 	}
 }
 #endif /* CONFIG_COMPAT */
