@@ -4725,6 +4725,22 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32) + 48 + 20;
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_MHANDLE_TO_MMAP_DATA))
+	{
+		/* IN {flags; IMG_HANDLE hMHandle} = 8 i686 / 16 kernel. OUT is 5 u32 = 20 on
+		 * both arches -> leave *pui32CompatOut at dte out_size (no repack). */
+		*pui32CompatIn = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
+	{
+		/* IN {flags; HANDLE hDevCookie; KMEM_INFO *psKernelMemInfo; CLIENT_MEM_INFO
+		 * sClientMemInfo} = 60 i686 / 112 kernel. OUT generic RETURN -> 8. The handler
+		 * reads only hDevCookie + psKernelMemInfo (as handles); sClientMemInfo unused. */
+		*pui32CompatIn  = 3 * sizeof(IMG_UINT32) + 48;
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4764,6 +4780,30 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		psK->ui32Attribs     = ui32Attribs;
 		psK->ui32Size        = ui32Size;
 		psK->ui32Alignment   = ui32Align;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_MHANDLE_TO_MMAP_DATA))
+	{
+		/* i686 {flags@0, hMHandle@4(4)} -> kernel {flags@0, pad, hMHandle@8(8)}. */
+		PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA *psK = pvBridgeIn;
+		IMG_UINT32 ui32MHandle = ((IMG_UINT32 *)pvBridgeIn)[1];
+
+		psK->hMHandle = (IMG_HANDLE)(unsigned long)ui32MHandle;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
+	{
+		/* i686 {flags@0, hDevCookie@4, psKernelMemInfo@8, sClientMemInfo@12..60} ->
+		 * kernel {flags@0, pad, hDevCookie@8, psKernelMemInfo@16, sClientMemInfo@24..}.
+		 * The handler reads only hDevCookie + psKernelMemInfo (as handle lookups), so
+		 * leave the embedded sClientMemInfo unexpanded. Read the three head words first. */
+		IMG_UINT32 *p = pvBridgeIn;
+		IMG_UINT32 ui32Flags  = p[0];
+		IMG_UINT32 ui32Cookie = p[1];
+		IMG_UINT32 ui32KMI    = p[2];
+		PVRSRV_BRIDGE_IN_FREEDEVICEMEM *psK = pvBridgeIn;
+
+		psK->ui32BridgeFlags = ui32Flags;
+		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
+		psK->psKernelMemInfo = (PVRSRV_KERNEL_MEM_INFO *)(unsigned long)ui32KMI;
 	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
@@ -4819,11 +4859,12 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 			pui32Dst[4] = 0;
 		}
 	}
-	else if (PVRCompatBridgeGenericReturn(ui32BridgeID))
+	else if (PVRCompatBridgeGenericReturn(ui32BridgeID)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
-		 * (INITSRV_CONNECT/DISCONNECT, DISCONNECT_SERVICES) -> truncate harmlessly. */
+		 * (INITSRV_CONNECT/DISCONNECT, DISCONNECT_SERVICES, FREE_DEVICEMEM) -> truncate. */
 		PVRSRV_BRIDGE_RETURN *psK = pvBridgeOut;
 		IMG_UINT32 ui32Err  = (IMG_UINT32)psK->eError;
 		IMG_UINT32 ui32Data = (IMG_UINT32)(unsigned long)psK->pvData;
