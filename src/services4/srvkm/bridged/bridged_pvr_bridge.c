@@ -4888,9 +4888,10 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 	    || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT))
 	{
 		/* Both IN {flags; HANDLE hDevCookie; IMG_CPU_VIRTADDR pCpuVAddr; u32 size; u32
-		 * offset} = i686 20 / kernel 32 (handle + user-VA both widen). Both OUT {eError;
-		 * HANDLE hCtx; IMG_DEV_VIRTADDR devvaddr} = i686 12 / kernel 20. Byte-identical. */
-		*pui32CompatIn  = 5 * sizeof(IMG_UINT32);
+		 * offset; HANDLE hDevMemContext} = i686 24 / kernel 40 (3 handles/ptrs widen).
+		 * Both OUT {eError; HANDLE hCtx; IMG_DEV_VIRTADDR devvaddr} = i686 12 / kernel 20.
+		 * Byte-identical layouts. */
+		*pui32CompatIn  = 6 * sizeof(IMG_UINT32);
 		*pui32CompatOut = 3 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
@@ -5220,9 +5221,9 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT))
 	{
 		/* Both (transfer + render ctx, byte-identical): i686 {flags@0, hDevCookie@4,
-		 * pCpuVAddr@8, size@12, offset@16} -> kernel {flags@0, pad, hDevCookie@8,
-		 * pCpuVAddr@16, size@24, offset@28}. hDevCookie index-handle + pCpuVAddr 32-bit
-		 * user VA both zero-extend; the 2 u32 shift up. Read all words, then write (raw
+		 * pCpuVAddr@8, size@12, offset@16, hDevMemContext@20} -> kernel {flags@0, pad,
+		 * hDevCookie@8, pCpuVAddr@16, size@24, offset@28, hDevMemContext@32}. 3
+		 * handles/ptrs zero-extend; the 2 u32 shift up. Read all words, then write (raw
 		 * offsets since the two structs differ only in field names). */
 		IMG_UINT32 *p = pvBridgeIn;
 		IMG_UINT32 ui32Flags  = p[0];
@@ -5230,6 +5231,7 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		IMG_UINT32 ui32CpuVA  = p[2];
 		IMG_UINT32 ui32Size   = p[3];
 		IMG_UINT32 ui32Offset = p[4];
+		IMG_UINT32 ui32MemCtx = p[5];
 		IMG_PBYTE pby = pvBridgeIn;
 
 		*(IMG_UINT32 *)(pby + 0)  = ui32Flags;
@@ -5237,6 +5239,7 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		*(IMG_HANDLE *)(pby + 16) = (IMG_HANDLE)(unsigned long)ui32CpuVA;
 		*(IMG_UINT32 *)(pby + 24) = ui32Size;
 		*(IMG_UINT32 *)(pby + 28) = ui32Offset;
+		*(IMG_HANDLE *)(pby + 32) = (IMG_HANDLE)(unsigned long)ui32MemCtx;
 	}
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN))
 	{
