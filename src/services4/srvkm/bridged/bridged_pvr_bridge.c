@@ -4795,6 +4795,16 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 			+ PVRSRV_MAX_CLIENT_HEAPS * (6 * sizeof(IMG_UINT32));
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_GET_DEVMEM_HEAPINFO))
+	{
+		/* IN {flags; HANDLE hDevCookie; HANDLE hDevMemContext} = 12 i686 / 24 kernel.
+		 * OUT {eError; u32 ui32ClientHeapCount; PVRSRV_HEAP_INFO[32]} = 8 + 32*24 = 776
+		 * i686 (kernel 1032; no header handle so heaps sit at @8 on both). */
+		*pui32CompatIn  = 3 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32)
+			+ PVRSRV_MAX_CLIENT_HEAPS * (6 * sizeof(IMG_UINT32));
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4931,6 +4941,20 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT *psK = pvBridgeIn;
 
 		psK->hDevCookie = (IMG_HANDLE)(unsigned long)ui32Cookie;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_GET_DEVMEM_HEAPINFO))
+	{
+		/* i686 {flags@0, hDevCookie@4, hDevMemContext@8} -> kernel {flags@0, pad,
+		 * hDevCookie@8, hDevMemContext@16}. Read both handles first. */
+		IMG_UINT32 *p = pvBridgeIn;
+		IMG_UINT32 ui32Flags  = p[0];
+		IMG_UINT32 ui32Cookie = p[1];
+		IMG_UINT32 ui32Ctx    = p[2];
+		PVRSRV_BRIDGE_IN_GET_DEVMEM_HEAPINFO *psK = pvBridgeIn;
+
+		psK->ui32BridgeFlags = ui32Flags;
+		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
+		psK->hDevMemContext  = (IMG_HANDLE)(unsigned long)ui32Ctx;
 	}
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
 	{
@@ -5092,6 +5116,23 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		((IMG_UINT32 *)pby)[0] = ui32Err;
 		((IMG_UINT32 *)pby)[1] = ui32Ctx;
 		((IMG_UINT32 *)pby)[2] = ui32Count;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_GET_DEVMEM_HEAPINFO))
+	{
+		/* kernel {eError@0; u32 count@4; PVRSRV_HEAP_INFO[32]@8 (32B stride)} 1032 ->
+		 * i686 {eError@0; count@4; heaps@8 (24B stride)} 776. Header (2 u32) sits at the
+		 * same offsets on both; pack heaps forward then write the header last. */
+		PVRSRV_BRIDGE_OUT_GET_DEVMEM_HEAPINFO *psK = pvBridgeOut;
+		IMG_PBYTE pby = pvBridgeOut;
+		IMG_UINT32 ui32Err   = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32Count = psK->ui32ClientHeapCount;
+		IMG_UINT32 i;
+
+		for (i = 0; i < PVRSRV_MAX_CLIENT_HEAPS; i++)
+			(void)PVRCompatPackHeapInfo(pby + 8 + i * 24, &psK->sHeapInfo[i]);
+
+		((IMG_UINT32 *)pby)[0] = ui32Err;
+		((IMG_UINT32 *)pby)[1] = ui32Count;
 	}
 }
 #endif /* CONFIG_COMPAT */
