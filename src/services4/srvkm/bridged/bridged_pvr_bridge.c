@@ -4665,6 +4665,25 @@ static IMG_UINT32 PVRCompatPackClientSyncInfo(IMG_PBYTE pbyDst,
 	return 5 * sizeof(IMG_UINT32);
 }
 
+/* Pack one kernel PVRSRV_HEAP_INFO (32 B: u32 + 4 pad + 8-byte handle + 3 u32) into
+ * the i686 layout (24 B: 6 u32), returning bytes written. Recurs in every heap-array
+ * OUT (SGXINFO_FOR_SRVINIT, CREATE_DEVMEMCONTEXT, GET_DEVMEM_HEAPINFO). Reads all fields
+ * before writing so an in-place overlapping repack is safe. hDevMemHeap is an index. */
+static IMG_UINT32 PVRCompatPackHeapInfo(IMG_PBYTE pbyDst, const PVRSRV_HEAP_INFO *psH)
+{
+	IMG_UINT32 ui32HeapID = psH->ui32HeapID;
+	IMG_UINT32 ui32Heap   = (IMG_UINT32)(unsigned long)psH->hDevMemHeap;
+	IMG_UINT32 ui32VAddr  = psH->sDevVAddrBase.uiAddr;
+	IMG_UINT32 ui32Size   = psH->ui32HeapByteSize;
+	IMG_UINT32 ui32Attr   = psH->ui32Attribs;
+	IMG_UINT32 ui32XTile  = psH->ui32XTileStride;
+	IMG_UINT32 *p = (IMG_UINT32 *)pbyDst;
+
+	p[0] = ui32HeapID; p[1] = ui32Heap;  p[2] = ui32VAddr;
+	p[3] = ui32Size;   p[4] = ui32Attr;  p[5] = ui32XTile;
+	return 6 * sizeof(IMG_UINT32);
+}
+
 static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 								IMG_UINT32 *pui32CompatIn,
 								IMG_UINT32 *pui32CompatOut)
@@ -4764,6 +4783,16 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		 * zero-extension. OUT generic RETURN -> 8. */
 		*pui32CompatIn  = 3 * sizeof(IMG_UINT32);
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT))
+	{
+		/* IN {flags; HANDLE hDevCookie} = 8 i686 / 16 kernel. OUT {eError; HANDLE
+		 * hDevMemContext; u32 ui32ClientHeapCount; PVRSRV_HEAP_INFO[32]} = i686
+		 * 4+4+4+32*24 = 780 (kernel 1048). */
+		*pui32CompatIn  = 2 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 3 * sizeof(IMG_UINT32)
+			+ PVRSRV_MAX_CLIENT_HEAPS * (6 * sizeof(IMG_UINT32));
 		return IMG_TRUE;
 	}
 	return IMG_FALSE;
@@ -4894,6 +4923,14 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		psK->ui32BridgeFlags = ui32Flags;
 		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
 		psK->psMiscInfo      = (SGX_MISC_INFO *)(unsigned long)ui32Misc;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT))
+	{
+		/* i686 {flags@0, hDevCookie@4} -> kernel {flags@0, pad, hDevCookie@8}. */
+		IMG_UINT32 ui32Cookie = ((IMG_UINT32 *)pvBridgeIn)[1];
+		PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT *psK = pvBridgeIn;
+
+		psK->hDevCookie = (IMG_HANDLE)(unsigned long)ui32Cookie;
 	}
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
 	{
@@ -5034,6 +5071,27 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		(void)PVRCompatPackClientSyncInfo(pby + 8 + 48, &psK->sClientSyncInfo);
 		((IMG_UINT32 *)pby)[0] = ui32Err;
 		((IMG_UINT32 *)pby)[1] = ui32KMI;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT))
+	{
+		/* kernel {eError@0; pad; HANDLE hDevMemContext@8; u32 ui32ClientHeapCount@16;
+		 * PVRSRV_HEAP_INFO[32]@24 (32B stride)} 1048 -> i686 {eError@0; ctx@4; count@8;
+		 * heaps@12 (24B stride)} 780. Header read into locals first; heaps packed forward
+		 * (helper reads each 32B element before writing the lower-offset 24B dest); header
+		 * written last. */
+		PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT *psK = pvBridgeOut;
+		IMG_PBYTE pby = pvBridgeOut;
+		IMG_UINT32 ui32Err   = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32Ctx   = (IMG_UINT32)(unsigned long)psK->hDevMemContext;
+		IMG_UINT32 ui32Count = psK->ui32ClientHeapCount;
+		IMG_UINT32 i;
+
+		for (i = 0; i < PVRSRV_MAX_CLIENT_HEAPS; i++)
+			(void)PVRCompatPackHeapInfo(pby + 12 + i * 24, &psK->sHeapInfo[i]);
+
+		((IMG_UINT32 *)pby)[0] = ui32Err;
+		((IMG_UINT32 *)pby)[1] = ui32Ctx;
+		((IMG_UINT32 *)pby)[2] = ui32Count;
 	}
 }
 #endif /* CONFIG_COMPAT */
