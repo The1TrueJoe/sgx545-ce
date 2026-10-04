@@ -4756,6 +4756,16 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO))
+	{
+		/* IN {flags; HANDLE hDevCookie; SGX_MISC_INFO *psMiscInfo} = 12 i686 / 24 kernel.
+		 * psMiscInfo is an inner USER pointer, but SGX_MISC_INFO is arch-identical here
+		 * (no EDM_MEMORY_DEBUG handle; all-u32 union) so it needs no translation, just
+		 * zero-extension. OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 3 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4870,6 +4880,21 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 	{
 		PVRCompatExpandDevInitPart2(pvBridgeIn);
 	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO))
+	{
+		/* i686 {flags@0, hDevCookie@4, psMiscInfo@8} -> kernel {flags@0, pad,
+		 * hDevCookie@8, psMiscInfo@16}. hDevCookie is an index-handle; psMiscInfo is a
+		 * 32-bit user VA -> zero-extension == compat_ptr. Read both words first. */
+		IMG_UINT32 *p = pvBridgeIn;
+		IMG_UINT32 ui32Flags  = p[0];
+		IMG_UINT32 ui32Cookie = p[1];
+		IMG_UINT32 ui32Misc   = p[2];
+		PVRSRV_BRIDGE_IN_SGXGETMISCINFO *psK = pvBridgeIn;
+
+		psK->ui32BridgeFlags = ui32Flags;
+		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
+		psK->psMiscInfo      = (SGX_MISC_INFO *)(unsigned long)ui32Misc;
+	}
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
 	{
 		/* i686 {flags@0, hDevCookie@4, psKernelMemInfo@8, sClientMemInfo@12..60} ->
@@ -4941,7 +4966,8 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		}
 	}
 	else if (PVRCompatBridgeGenericReturn(ui32BridgeID)
-		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM))
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
