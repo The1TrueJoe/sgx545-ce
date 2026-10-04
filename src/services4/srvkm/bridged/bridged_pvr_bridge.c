@@ -4828,6 +4828,23 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_GET_MISC_INFO))
+	{
+		/* IN {flags; PVRSRV_MISC_INFO} = 4 + 136 = 140 i686 (kernel 200: misc 8-aligned
+		 * at @8, 192 B). OUT {eError; PVRSRV_MISC_INFO} = 140 i686. Both translate the
+		 * embedded misc struct. gles2tri uses this for the global event object. */
+		*pui32CompatIn  = sizeof(IMG_UINT32) + 136;
+		*pui32CompatOut = sizeof(IMG_UINT32) + 136;
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT))
+	{
+		/* IN {flags; HANDLE hDevCookie; HANDLE hDevMemContext} = 12 i686 / 24 kernel.
+		 * OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 3 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -4892,6 +4909,72 @@ static void PVRCompatExpandDevInitPart2(IMG_VOID *pvBridgeIn)
 		else
 			for (j = c; j-- > 0; )	/* byte copy backward (dst >= src) */
 				d[j] = s[j];
+	}
+}
+
+/* Field map of PVRSRV_MISC_INFO: i686 offset, kernel offset, kind ('U'=u32, 'P'=ptr or
+ * handle 4<->8, 'B'=opaque byte block of size sz). i686 is 136 B, kernel 192 B
+ * (EVENTOBJNAME_MAXLENGTH=50; pointers/handles 8-byte and 8-aligned, so the nested
+ * PVRSRV_EVENTOBJECT and sCacheOpCtl shift). Fields are in ascending i686 order. */
+struct pvr_misc_fld { IMG_UINT16 i6; IMG_UINT16 kn; IMG_CHAR k; IMG_UINT16 sz; };
+static const struct pvr_misc_fld g_aMiscInfoFields[] = {
+	{  0,   0, 'U', 0 },	/* ui32StateRequest */
+	{  4,   4, 'U', 0 },	/* ui32StatePresent */
+	{  8,   8, 'P', 0 },	/* pvSOCTimerRegisterKM */
+	{ 12,  16, 'P', 0 },	/* pvSOCTimerRegisterUM */
+	{ 16,  24, 'P', 0 },	/* hSOCTimerRegisterOSMemHandle */
+	{ 20,  32, 'P', 0 },	/* hSOCTimerRegisterMappingInfo */
+	{ 24,  40, 'P', 0 },	/* pvSOCClockGateRegs */
+	{ 28,  48, 'U', 0 },	/* ui32SOCClockGateRegsSize */
+	{ 32,  56, 'P', 0 },	/* pszMemoryStr */
+	{ 36,  64, 'U', 0 },	/* ui32MemoryStrLen */
+	{ 40,  72, 'B', 50 },	/* sGlobalEventObject.szName[EVENTOBJNAME_MAXLENGTH] */
+	{ 92, 128, 'P', 0 },	/* sGlobalEventObject.hOSEventKM */
+	{ 96, 136, 'P', 0 },	/* hOSGlobalEvent */
+	{100, 144, 'B', 16 },	/* aui32DDKVersion[4] */
+	{116, 160, 'U', 0 },	/* sCacheOpCtl.bDeferOp */
+	{120, 164, 'U', 0 },	/* sCacheOpCtl.eCacheOpType */
+	{124, 168, 'P', 0 },	/* sCacheOpCtl.u (psClientMemInfo/psKernelMemInfo) */
+	{128, 176, 'P', 0 },	/* sCacheOpCtl.pvBaseVAddr */
+	{132, 184, 'U', 0 },	/* sCacheOpCtl.ui32Length */
+};
+
+/* Translate one PVRSRV_MISC_INFO between the i686 and kernel layouts. pDst/pSrc point at
+ * the misc struct's base in each layout (they may differ and overlap within one buffer).
+ * Expand (i686->kernel) grows, so walk fields high-i686-offset first; compact shrinks, so
+ * walk low first — either way a write never lands on a source word not yet consumed. */
+static void PVRCompatXlateMiscInfo(IMG_PBYTE pDst, IMG_PBYTE pSrc, IMG_BOOL bExpand)
+{
+	IMG_UINT32 n = sizeof(g_aMiscInfoFields) / sizeof(g_aMiscInfoFields[0]);
+	IMG_UINT32 ii, j;
+
+	BUILD_BUG_ON(sizeof(PVRSRV_MISC_INFO) != 192);
+
+	if (bExpand)
+	{
+		for (ii = n; ii-- > 0; )
+		{
+			const struct pvr_misc_fld *f = &g_aMiscInfoFields[ii];
+			IMG_PBYTE s = pSrc + f->i6;
+			IMG_PBYTE d = pDst + f->kn;
+
+			if (f->k == 'U')      { *(IMG_UINT32 *)d = *(IMG_UINT32 *)s; }
+			else if (f->k == 'P') { *(IMG_HANDLE *)d = (IMG_HANDLE)(unsigned long)*(IMG_UINT32 *)s; }
+			else                  { for (j = f->sz; j-- > 0; ) d[j] = s[j]; }
+		}
+	}
+	else
+	{
+		for (ii = 0; ii < n; ii++)
+		{
+			const struct pvr_misc_fld *f = &g_aMiscInfoFields[ii];
+			IMG_PBYTE s = pSrc + f->kn;
+			IMG_PBYTE d = pDst + f->i6;
+
+			if (f->k == 'U')      { *(IMG_UINT32 *)d = *(IMG_UINT32 *)s; }
+			else if (f->k == 'P') { *(IMG_UINT32 *)d = (IMG_UINT32)(unsigned long)*(IMG_HANDLE *)s; }
+			else                  { for (j = 0; j < f->sz; j++) d[j] = s[j]; }
+		}
 	}
 }
 
@@ -5012,6 +5095,27 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
 		psK->psKernelMemInfo = (PVRSRV_KERNEL_MEM_INFO *)(unsigned long)ui32KMI;
 	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_GET_MISC_INFO))
+	{
+		/* IN {flags@0; PVRSRV_MISC_INFO sMiscInfo}: i686 misc@4 -> kernel misc@8 (8-align);
+		 * flags@0 untouched (lowest misc write is @8). */
+		PVRCompatXlateMiscInfo((IMG_PBYTE)pvBridgeIn + 8,
+				       (IMG_PBYTE)pvBridgeIn + 4, IMG_TRUE);
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT))
+	{
+		/* i686 {flags@0, hDevCookie@4, hDevMemContext@8} -> kernel {flags@0, pad,
+		 * hDevCookie@8, hDevMemContext@16}. Read both handles first. */
+		IMG_UINT32 *p = pvBridgeIn;
+		IMG_UINT32 ui32Flags  = p[0];
+		IMG_UINT32 ui32Cookie = p[1];
+		IMG_UINT32 ui32Ctx    = p[2];
+		PVRSRV_BRIDGE_IN_DESTROY_DEVMEMCONTEXT *psK = pvBridgeIn;
+
+		psK->ui32BridgeFlags = ui32Flags;
+		psK->hDevCookie      = (IMG_HANDLE)(unsigned long)ui32Cookie;
+		psK->hDevMemContext  = (IMG_HANDLE)(unsigned long)ui32Ctx;
+	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
 
@@ -5069,7 +5173,8 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 	else if (PVRCompatBridgeGenericReturn(ui32BridgeID)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_DEVICEMEM)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO)
-		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO))
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
@@ -5195,6 +5300,13 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		OSMemSet(pby + 8, 0, 136);
 		OSMemCopy(pby + 8 + 136, aui32DevData, sizeof(aui32DevData));
 		*(IMG_UINT32 *)(pby + 8 + 136 + sizeof(aui32DevData)) = ui32Err;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_GET_MISC_INFO))
+	{
+		/* OUT {eError@0; PVRSRV_MISC_INFO sMiscInfo}: kernel misc@8 -> i686 misc@4.
+		 * eError@0 is untouched (lowest misc write is @4). */
+		PVRCompatXlateMiscInfo((IMG_PBYTE)pvBridgeOut + 4,
+				       (IMG_PBYTE)pvBridgeOut + 8, IMG_FALSE);
 	}
 }
 #endif /* CONFIG_COMPAT */
