@@ -4903,6 +4903,14 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_OPEN_DISPCLASS_DEVICE))
+	{
+		/* IN {flags; u32 ui32DeviceID; HANDLE hDevCookie} = 12 i686 / 16 kernel (handle
+		 * at @8 both; only its width differs). OUT {eError; HANDLE hDeviceKM} = 8/16. */
+		*pui32CompatIn  = 3 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -5257,6 +5265,14 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		psK->ui32ReadOpsPendingSnapshot  = ui32Read;
 		psK->ui32WriteOpsPendingSnapshot = ui32Write;
 	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_OPEN_DISPCLASS_DEVICE))
+	{
+		/* i686 {flags@0, ui32DeviceID@4, hDevCookie@8} -> kernel {flags@0, devID@4,
+		 * hDevCookie@8(8)}. flags+devID already right; just widen the handle at @8. */
+		IMG_UINT32 ui32Cookie = ((IMG_UINT32 *)pvBridgeIn)[2];
+
+		*(IMG_HANDLE *)((IMG_PBYTE)pvBridgeIn + 8) = (IMG_HANDLE)(unsigned long)ui32Cookie;
+	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
 
@@ -5491,6 +5507,17 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		((IMG_UINT32 *)pby)[0] = ui32Err;
 		((IMG_UINT32 *)pby)[1] = ui32Ctx;
 		((IMG_UINT32 *)pby)[2] = ui32VA;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_OPEN_DISPCLASS_DEVICE))
+	{
+		/* kernel {eError@0; HANDLE hDeviceKM@8} 16 -> i686 {eError@0; hDeviceKM@4} 8. */
+		PVRSRV_BRIDGE_OUT_OPEN_DISPCLASS_DEVICE *psK = pvBridgeOut;
+		IMG_UINT32 ui32Err = (IMG_UINT32)psK->eError;
+		IMG_UINT32 ui32Dev = (IMG_UINT32)(unsigned long)psK->hDeviceKM;
+		IMG_UINT32 *p = pvBridgeOut;
+
+		p[0] = ui32Err;
+		p[1] = ui32Dev;
 	}
 }
 #endif /* CONFIG_COMPAT */
