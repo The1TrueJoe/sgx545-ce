@@ -4884,13 +4884,22 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatIn = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
-	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT))
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT)
+	    || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT))
 	{
-		/* IN {flags; HANDLE hDevCookie; IMG_CPU_VIRTADDR pCpuVAddr; u32 size; u32 offset}
-		 * = i686 20 / kernel 32 (handle + user-VA both widen). OUT {eError; HANDLE
-		 * hHWTransferContext; IMG_DEV_VIRTADDR devvaddr} = i686 12 / kernel 20. */
+		/* Both IN {flags; HANDLE hDevCookie; IMG_CPU_VIRTADDR pCpuVAddr; u32 size; u32
+		 * offset} = i686 20 / kernel 32 (handle + user-VA both widen). Both OUT {eError;
+		 * HANDLE hCtx; IMG_DEV_VIRTADDR devvaddr} = i686 12 / kernel 20. Byte-identical. */
 		*pui32CompatIn  = 5 * sizeof(IMG_UINT32);
 		*pui32CompatOut = 3 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN))
+	{
+		/* IN {flags; HANDLE hKernelSyncInfo; u32 readSnap; u32 writeSnap} = 16 i686 /
+		 * 24 kernel. OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 4 * sizeof(IMG_UINT32);
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
 	return IMG_FALSE;
@@ -5207,24 +5216,43 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 
 		psK->hKernelSyncInfo = (IMG_HANDLE)(unsigned long)ui32H;
 	}
-	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT))
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT))
 	{
-		/* i686 {flags@0, hDevCookie@4, pCpuVAddr@8, size@12, offset@16} -> kernel
-		 * {flags@0, pad, hDevCookie@8, pCpuVAddr@16, size@24, offset@28}. hDevCookie is an
-		 * index-handle; pCpuVAddr is a 32-bit user VA -> both zero-extend. Read all first. */
+		/* Both (transfer + render ctx, byte-identical): i686 {flags@0, hDevCookie@4,
+		 * pCpuVAddr@8, size@12, offset@16} -> kernel {flags@0, pad, hDevCookie@8,
+		 * pCpuVAddr@16, size@24, offset@28}. hDevCookie index-handle + pCpuVAddr 32-bit
+		 * user VA both zero-extend; the 2 u32 shift up. Read all words, then write (raw
+		 * offsets since the two structs differ only in field names). */
 		IMG_UINT32 *p = pvBridgeIn;
 		IMG_UINT32 ui32Flags  = p[0];
 		IMG_UINT32 ui32Cookie = p[1];
 		IMG_UINT32 ui32CpuVA  = p[2];
 		IMG_UINT32 ui32Size   = p[3];
 		IMG_UINT32 ui32Offset = p[4];
-		PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_TRANSFER_CONTEXT *psK = pvBridgeIn;
+		IMG_PBYTE pby = pvBridgeIn;
 
-		psK->ui32BridgeFlags            = ui32Flags;
-		psK->hDevCookie                 = (IMG_HANDLE)(unsigned long)ui32Cookie;
-		psK->pHWTransferContextCpuVAddr = (IMG_CPU_VIRTADDR)(unsigned long)ui32CpuVA;
-		psK->ui32HWTransferContextSize  = ui32Size;
-		psK->ui32OffsetToPDDevPAddr     = ui32Offset;
+		*(IMG_UINT32 *)(pby + 0)  = ui32Flags;
+		*(IMG_HANDLE *)(pby + 8)  = (IMG_HANDLE)(unsigned long)ui32Cookie;
+		*(IMG_HANDLE *)(pby + 16) = (IMG_HANDLE)(unsigned long)ui32CpuVA;
+		*(IMG_UINT32 *)(pby + 24) = ui32Size;
+		*(IMG_UINT32 *)(pby + 28) = ui32Offset;
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN))
+	{
+		/* i686 {flags@0, hKernelSyncInfo@4, readSnap@8, writeSnap@12} -> kernel {flags@0,
+		 * pad, hKernelSyncInfo@8, readSnap@16, writeSnap@20}. Read all first. */
+		IMG_UINT32 *p = pvBridgeIn;
+		IMG_UINT32 ui32Flags = p[0];
+		IMG_UINT32 ui32H     = p[1];
+		IMG_UINT32 ui32Read  = p[2];
+		IMG_UINT32 ui32Write = p[3];
+		PVRSRV_BRIDGE_IN_SYNC_OPS_FLUSH_TO_TOKEN *psK = pvBridgeIn;
+
+		psK->ui32BridgeFlags             = ui32Flags;
+		psK->hKernelSyncInfo             = (IMG_HANDLE)(unsigned long)ui32H;
+		psK->ui32ReadOpsPendingSnapshot  = ui32Read;
+		psK->ui32WriteOpsPendingSnapshot = ui32Write;
 	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
@@ -5286,7 +5314,8 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_WAIT)
-		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE))
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
@@ -5445,17 +5474,20 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 
 		p[0] = ui32Flags; p[1] = ui32Host; p[2] = ui32Force; p[3] = ui32Err;
 	}
-	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT))
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT))
 	{
-		/* kernel {eError@0; HANDLE hHWTransferContext@8; IMG_DEV_VIRTADDR devvaddr@16} 20
-		 * -> i686 {eError@0; hHWTransferContext@4; devvaddr@8} 12. */
-		PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_TRANSFER_CONTEXT *psK = pvBridgeOut;
-		IMG_UINT32 ui32Err  = (IMG_UINT32)psK->eError;
-		IMG_UINT32 ui32Ctx  = (IMG_UINT32)(unsigned long)psK->hHWTransferContext;
-		IMG_UINT32 ui32VA   = psK->sHWTransferContextDevVAddr.uiAddr;
-		IMG_UINT32 *p = pvBridgeOut;
+		/* Both: kernel {eError@0; HANDLE hCtx@8; IMG_DEV_VIRTADDR devvaddr@16} 20 ->
+		 * i686 {eError@0; hCtx@4; devvaddr@8} 12. Raw offsets (structs differ only in
+		 * field names); read the handle+devaddr (kernel@8/@16) before writing @4/@8. */
+		IMG_PBYTE pby = pvBridgeOut;
+		IMG_UINT32 ui32Err = *(IMG_UINT32 *)(pby + 0);
+		IMG_UINT32 ui32Ctx = (IMG_UINT32)(unsigned long)*(IMG_HANDLE *)(pby + 8);
+		IMG_UINT32 ui32VA  = *(IMG_UINT32 *)(pby + 16);
 
-		p[0] = ui32Err; p[1] = ui32Ctx; p[2] = ui32VA;
+		((IMG_UINT32 *)pby)[0] = ui32Err;
+		((IMG_UINT32 *)pby)[1] = ui32Ctx;
+		((IMG_UINT32 *)pby)[2] = ui32VA;
 	}
 }
 #endif /* CONFIG_COMPAT */
