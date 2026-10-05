@@ -4963,6 +4963,15 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = sizeof(IMG_UINT32) + 48 + 20;
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_DOKICK))
+	{
+		/* The GPU render/transfer submit. IN {flags; HANDLE hDevCookie; SGX_CCB_KICK} =
+		 * 564 i686 / 784 kernel (SGX_CCB_KICK 556/768 — status-update arrays + handle
+		 * runs). OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 564;
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -5096,6 +5105,81 @@ static void PVRCompatXlateMiscInfo(IMG_PBYTE pDst, IMG_PBYTE pSrc, IMG_BOOL bExp
 	}
 }
 
+/* Expand SGX_DOKICK's IN (the GPU render/transfer submit) from i686 564 to kernel 784 in
+ * place. Layout is the DOKICK header {u32 flags; HANDLE hDevCookie} then SGX_CCB_KICK (i686
+ * 556 / kernel 768) — all offsets verified against the on-HW sizes + a local offsetof dumper.
+ * Field kinds: 'U'=u32, 'H'=handle/ptr run (4->8, 8-aligned in kernel), 'B'=opaque block
+ * (SGXMKIF_COMMAND, pointer-free), 'S'=SGX_INTERNEL_STATUS_UPDATE[] (each {CTL_STATUS 8-byte
+ * block; HANDLE} = i686 12 / kernel 16). Walk forward to compute both offsets, then apply
+ * highest-kernel-offset first so a write never lands on an unread i686 source word. NOTE:
+ * pahDstSyncHandles is a user ptr to ui32NumDstSyncObjects handles (4/8 per elem) — only read
+ * by the handler when that count>0; a simple kick uses 0 (same caveat as WRAP_EXT psSysPAddr). */
+static void PVRCompatExpandDoKick(IMG_VOID *pvBridgeIn)
+{
+	static const struct { IMG_CHAR kind; IMG_UINT32 cnt; } aFields[] = {
+		{'U',1}, {'H',1},        /* ui32BridgeFlags; hDevCookie */
+		{'B',32},                /* SGXMKIF_COMMAND sCommand */
+		{'H',1},                 /* hCCBKernelMemInfo */
+		{'U',1},                 /* ui32NumDstSyncObjects */
+		{'H',1},                 /* hKernelHWSyncListMemInfo */
+		{'H',1},                 /* pahDstSyncHandles (ptr) */
+		{'U',2},                 /* ui32NumTAStatusVals, ui32Num3DStatusVals */
+		{'S',32},                /* asTAStatusUpdate[SGX_MAX_TA_STATUS_VALS] */
+		{'S',4},                 /* as3DStatusUpdate[SGX_MAX_3D_STATUS_VALS] */
+		{'U',4},                 /* bFirstKickOrResume, bLastInScene, ui32CCBOffset, ui32NumSrcSyncs */
+		{'H',8},                 /* ahSrcKernelSyncInfo[SGX_MAX_SRC_SYNCS] */
+		{'U',1},                 /* bTADependency */
+		{'H',3},                 /* hTA3DSyncInfo, hTASyncInfo, h3DSyncInfo */
+		{'H',1},                 /* hDevMemContext */
+	};
+	IMG_UINT32 nF = sizeof(aFields) / sizeof(aFields[0]);
+	IMG_UINT32 aSrc[20], aDst[20];
+	IMG_UINT32 so = 0, ko = 0, i, j;
+	IMG_PBYTE pby = pvBridgeIn;
+
+	BUILD_BUG_ON(sizeof(PVRSRV_BRIDGE_IN_DOKICK) != 784);
+
+	for (i = 0; i < nF; i++)
+	{
+		IMG_CHAR k = aFields[i].kind;
+		IMG_UINT32 c = aFields[i].cnt;
+
+		if (k == 'H' || k == 'S')
+			ko = (ko + 7u) & ~7u;	/* 8-align the handle run / status-array */
+		aSrc[i] = so;
+		aDst[i] = ko;
+		if (k == 'U')      { so += c * 4u;  ko += c * 4u; }
+		else if (k == 'H') { so += c * 4u;  ko += c * 8u; }
+		else if (k == 'B') { so += c;       ko += c; }
+		else               { so += c * 12u; ko += c * 16u; }	/* 'S' */
+	}
+
+	for (i = nF; i-- > 0; )
+	{
+		IMG_CHAR k = aFields[i].kind;
+		IMG_UINT32 c = aFields[i].cnt;
+		IMG_PBYTE s = pby + aSrc[i];
+		IMG_PBYTE d = pby + aDst[i];
+
+		if (k == 'U')
+			for (j = c; j-- > 0; ) *(IMG_UINT32 *)(d + j * 4u) = *(IMG_UINT32 *)(s + j * 4u);
+		else if (k == 'H')
+			for (j = c; j-- > 0; )
+				*(IMG_HANDLE *)(d + j * 8u) = (IMG_HANDLE)(unsigned long)*(IMG_UINT32 *)(s + j * 4u);
+		else if (k == 'B')
+			for (j = c; j-- > 0; ) d[j] = s[j];
+		else /* 'S': per element, high index first; {block8, handle} i686 12 -> kernel 16 */
+			for (j = c; j-- > 0; )
+			{
+				IMG_PBYTE se = s + j * 12u, de = d + j * 16u;
+				IMG_UINT32 hv = *(IMG_UINT32 *)(se + 8);	/* read handle before block move */
+				IMG_UINT32 b;
+				for (b = 8; b-- > 0; ) de[b] = se[b];		/* CTL_STATUS 8-byte block */
+				*(IMG_HANDLE *)(de + 8) = (IMG_HANDLE)(unsigned long)hv;
+			}
+	}
+}
+
 static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 {
 	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT))
@@ -5142,6 +5226,10 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_DEVINITPART2))
 	{
 		PVRCompatExpandDevInitPart2(pvBridgeIn);
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_DOKICK))
+	{
+		PVRCompatExpandDoKick(pvBridgeIn);
 	}
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO))
 	{
@@ -5457,7 +5545,8 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_WAIT)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN)
-		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CLOSE_DISPCLASS_DEVICE))
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CLOSE_DISPCLASS_DEVICE)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_DOKICK))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
