@@ -5372,7 +5372,8 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		/* i686 40 {flags@0, hDevCookie@4, hDevMemContext@8, pvLinAddr@12, byteSize@16,
 		 * pageOffset@20, bPhysContig@24, numPTEs@28, psSysPAddr@32, flags2@36} -> kernel
 		 * 64 {flags@0, pad, hDevCookie@8, hDevMemContext@16, pvLinAddr@24, byteSize@32,
-		 * pageOffset@36, bPhysContig@40, numPTEs@44, pad, psSysPAddr@56, flags2@60}. Read
+		 * pageOffset@36, bPhysContig@40, numPTEs@44, psSysPAddr@48, flags2@56}. (numPTEs@44
+		 * ends 8-aligned so psSysPAddr sits at @48, no pad — verified by offsetof.) Read
 		 * all 10 words first. NOTE: psSysPAddr points at a user IMG_SYS_PHYADDR[] that is
 		 * 4-byte/elem on i686 vs 8 on kernel — only read by the handler when numPTEs>0
 		 * (the contiguous fb path uses 0). If a count>0 path ever appears, that array
@@ -5391,8 +5392,8 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 		*(IMG_UINT32 *)(pby + 36) = ui32POff;
 		*(IMG_UINT32 *)(pby + 40) = ui32Phys;
 		*(IMG_UINT32 *)(pby + 44) = ui32N;
-		*(IMG_HANDLE *)(pby + 56) = (IMG_HANDLE)(unsigned long)ui32Sys;
-		*(IMG_UINT32 *)(pby + 60) = ui32Flags2;
+		*(IMG_HANDLE *)(pby + 48) = (IMG_HANDLE)(unsigned long)ui32Sys;
+		*(IMG_UINT32 *)(pby + 56) = ui32Flags2;
 	}
 	/* Handle-free INs (CONNECT_SERVICES, the generic-return bridges) need nothing. */
 }
