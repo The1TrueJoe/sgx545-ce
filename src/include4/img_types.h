@@ -140,26 +140,17 @@ typedef struct _IMG_DEV_VIRTADDR
 
 typedef IMG_UINT32 IMG_DEVMEM_SIZE_T;
 
-/* openHC/LP64: these physical-address holders MUST stay 4-byte. Upstream typed
- * uiAddr as IMG_UINTPTR_T, which was 32-bit on the 32-bit builds this DDK targets;
- * our x86_64 port widened IMG_UINTPTR_T to 8 bytes (needed for the pointer-holding
- * handle/hash types — see above). That silently grew these phys structs 4->8, which
- * changes their layout/stride inside the SGX MMU page-table + memory-mapping code
- * (mmu.c builds 32-bit PTEs/PDEs from uiAddr) and broke uKernel bring-up: the GPU
- * took a BIF (MMU) fault the instant it executed and SGXInitialise never completed.
- * IMG_ADDRSPACE_PHYSADDR_BITS==32 here, so physical addresses ARE 32-bit (this SoC
- * has <4GB RAM); pin these to IMG_UINT32 to restore the known-good 32-bit layout. */
 typedef struct _IMG_CPU_PHYADDR
 {
-
-	IMG_UINT32 uiAddr;
+	
+	IMG_UINTPTR_T uiAddr;
 } IMG_CPU_PHYADDR;
 
 typedef struct _IMG_DEV_PHYADDR
 {
 #if IMG_ADDRSPACE_PHYSADDR_BITS == 32
-
-	IMG_UINT32 uiAddr;
+	
+	IMG_UINTPTR_T uiAddr;
 #else
 	IMG_UINT32 uiAddr;
 	IMG_UINT32 uiHighAddr;
@@ -168,8 +159,8 @@ typedef struct _IMG_DEV_PHYADDR
 
 typedef struct _IMG_SYS_PHYADDR
 {
-
-	IMG_UINT32 uiAddr;
+	
+	IMG_UINTPTR_T uiAddr;
 } IMG_SYS_PHYADDR;
 
 #include "img_defs.h"
