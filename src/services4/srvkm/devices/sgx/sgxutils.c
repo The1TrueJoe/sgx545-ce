@@ -871,7 +871,13 @@ IMG_HANDLE SGXRegisterHWRenderContextKM(IMG_HANDLE				hDeviceNode,
     pDst = (IMG_UINT8 *)psCleanup->psHWRenderContextMemInfo->pvLinAddrKM;
     pDst += ui32OffsetToPDDevPAddr;
 
-    for (iPtrByte = 0; iPtrByte < sizeof(IMG_DEV_PHYADDR); iPtrByte++)
+    /* openHC/LP64: copy 4 bytes, NOT sizeof(IMG_DEV_PHYADDR). The PD device phys
+     * addr is 32-bit (IMG_ADDRSPACE_PHYSADDR_BITS==32) and the i686 userspace laid
+     * out a 4-byte slot for it in this HW-context buffer. Our x86_64 build widened
+     * IMG_UINTPTR_T -> IMG_DEV_PHYADDR is 8 bytes, so sizeof() here would write 8
+     * bytes and overflow 4 zero-bytes into the NEXT context field (a device VA the
+     * GPU then dereferences -> BIF fault at 0x0). Little-endian: low 4 bytes = addr. */
+    for (iPtrByte = 0; iPtrByte < sizeof(IMG_UINT32); iPtrByte++)
     {
         pDst[iPtrByte] = pSrc[iPtrByte];
     }
@@ -1045,7 +1051,13 @@ IMG_HANDLE SGXRegisterHWTransferContextKM(IMG_HANDLE				hDeviceNode,
     pDst = (IMG_UINT8 *)psCleanup->psHWTransferContextMemInfo->pvLinAddrKM;
     pDst += ui32OffsetToPDDevPAddr;
 
-    for (iPtrByte = 0; iPtrByte < sizeof(IMG_DEV_PHYADDR); iPtrByte++)
+    /* openHC/LP64: copy 4 bytes, NOT sizeof(IMG_DEV_PHYADDR). The PD device phys
+     * addr is 32-bit (IMG_ADDRSPACE_PHYSADDR_BITS==32) and the i686 userspace laid
+     * out a 4-byte slot for it in this HW-context buffer. Our x86_64 build widened
+     * IMG_UINTPTR_T -> IMG_DEV_PHYADDR is 8 bytes, so sizeof() here would write 8
+     * bytes and overflow 4 zero-bytes into the NEXT context field (a device VA the
+     * GPU then dereferences -> BIF fault at 0x0). Little-endian: low 4 bytes = addr. */
+    for (iPtrByte = 0; iPtrByte < sizeof(IMG_UINT32); iPtrByte++)
     {
         pDst[iPtrByte] = pSrc[iPtrByte];
     }
@@ -1340,7 +1352,13 @@ IMG_HANDLE SGXRegisterHW2DContextKM(IMG_HANDLE				hDeviceNode,
     pDst = (IMG_UINT8 *)psCleanup->psHW2DContextMemInfo->pvLinAddrKM;
     pDst += ui32OffsetToPDDevPAddr;
 
-    for (iPtrByte = 0; iPtrByte < sizeof(IMG_DEV_PHYADDR); iPtrByte++)
+    /* openHC/LP64: copy 4 bytes, NOT sizeof(IMG_DEV_PHYADDR). The PD device phys
+     * addr is 32-bit (IMG_ADDRSPACE_PHYSADDR_BITS==32) and the i686 userspace laid
+     * out a 4-byte slot for it in this HW-context buffer. Our x86_64 build widened
+     * IMG_UINTPTR_T -> IMG_DEV_PHYADDR is 8 bytes, so sizeof() here would write 8
+     * bytes and overflow 4 zero-bytes into the NEXT context field (a device VA the
+     * GPU then dereferences -> BIF fault at 0x0). Little-endian: low 4 bytes = addr. */
+    for (iPtrByte = 0; iPtrByte < sizeof(IMG_UINT32); iPtrByte++)
     {
         pDst[iPtrByte] = pSrc[iPtrByte];
     }
