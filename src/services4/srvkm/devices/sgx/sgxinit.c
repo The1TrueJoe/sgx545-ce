@@ -180,10 +180,35 @@ static PVRSRV_ERROR InitDevInfo(PVRSRV_PER_PROCESS_DATA *psPerProc,
 	
 	psDevInfo->ui32ClientBuildOptions = psInitInfo->ui32ClientBuildOptions;
 
-	
+
 	psDevInfo->sSGXStructSizes = psInitInfo->sSGXStructSizes;
 
-	
+	/* openHC DIAG (temporary): the uKernel faults on a near-zero device VA at init
+	 * (EUR_CR_BIF_FAULT addr ~0x0000E000). Dump the control-structure device VAs the
+	 * uKernel uses so we can see which one came out ~0. Remove once the cause is found. */
+	{
+		#define OHC_DVA(p) ((p) ? (p)->sDevVAddr.uiAddr : 0xBADD0000u)
+		printk(KERN_INFO "ohc-diag DevInit2 ctl DevVAs: CCB=%08x CCBCtl=%08x EvtKick=%08x "
+		       "HostCtl=%08x TA3DCtl=%08x Misc=%08x\n",
+		       OHC_DVA(psDevInfo->psKernelCCBMemInfo),
+		       OHC_DVA(psDevInfo->psKernelCCBCtlMemInfo),
+		       OHC_DVA(psDevInfo->psKernelCCBEventKickerMemInfo),
+		       OHC_DVA(psDevInfo->psKernelSGXHostCtlMemInfo),
+		       OHC_DVA(psDevInfo->psKernelSGXTA3DCtlMemInfo),
+		       OHC_DVA(psDevInfo->psKernelSGXMiscMemInfo));
+		printk(KERN_INFO "ohc-diag DevInit2 sig/perf DevVAs: HWPerf=%08x TASig=%08x 3DSig=%08x; "
+		       "HostKick[0..2]=%08x %08x %08x buildOpts=%08x\n",
+#if defined(SUPPORT_SGX_HWPERF)
+		       OHC_DVA(psDevInfo->psKernelHWPerfCBMemInfo),
+#else
+		       0u,
+#endif
+		       OHC_DVA(psDevInfo->psKernelTASigBufferMemInfo),
+		       OHC_DVA(psDevInfo->psKernel3DSigBufferMemInfo),
+		       psInitInfo->aui32HostKickAddr[0], psInitInfo->aui32HostKickAddr[1],
+		       psInitInfo->aui32HostKickAddr[2], psInitInfo->ui32ClientBuildOptions);
+		#undef OHC_DVA
+	}
 
 	eError = OSAllocMem(PVRSRV_OS_NON_PAGEABLE_HEAP,
 						sizeof(PVRSRV_SGX_CCB_INFO),
