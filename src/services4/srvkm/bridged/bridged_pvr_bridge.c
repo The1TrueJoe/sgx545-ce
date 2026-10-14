@@ -4972,6 +4972,18 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
 	}
+	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_SUBMITTRANSFER))
+	{
+		/* The WSEGL framebuffer FLIP: the LinuxFB WSEGL blits the rendered back-buffer
+		 * to /dev/fb0 with an SGX transfer, so without this nothing ever reaches the
+		 * panel (gles2tri rasterises + swaps "ok" but fb0 never changes; ioctl#96 -22).
+		 * IN {flags; HANDLE hDevCookie; PVRSRV_TRANSFER_SGX_KICK sKick} — 22 four-byte
+		 * fields i686 = 88, kernel 160 (handles 4->8, 8-aligned runs; 2x ahSyncInfo[5]).
+		 * OUT generic RETURN -> 8. */
+		*pui32CompatIn  = 88;
+		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
+		return IMG_TRUE;
+	}
 	return IMG_FALSE;
 }
 
@@ -5180,6 +5192,65 @@ static void PVRCompatExpandDoKick(IMG_VOID *pvBridgeIn)
 	}
 }
 
+/* Expand SGX_SUBMITTRANSFER's IN (the WSEGL framebuffer flip) from the i686 packed
+ * layout (88 B) to the kernel layout (160 B) in place. Same descriptor walk as DOKICK:
+ * 'U'=u32, 'H'=handle run (4->8, each run 8-aligned in the kernel). Fields are the
+ * SUBMITTRANSFER header {flags; hDevCookie} then PVRSRV_TRANSFER_SGX_KICK (non-SID,
+ * PDUMP off): hCCBMemInfo, ui32SharedCmdCCBOffset, sHWTransferContextDevVAddr(u32),
+ * {hTASyncInfo,h3DSyncInfo}, ui32NumSrcSync, ahSrcSyncInfo[5], ui32NumDstSync,
+ * ahDstSyncInfo[5], {ui32Flags,ui32PDumpFlags}, hDevMemContext. The sync-handle arrays
+ * are copied in full (the handler reads ui32Num{Src,Dst}Sync of them); every handle is
+ * a small index+1, so the 4->8 zero-extend is lossless. BUILD_BUG_ON pins the kernel
+ * size so any struct/config drift fails the compile instead of corrupting the flip. */
+static void PVRCompatExpandSubmitTransfer(IMG_VOID *pvBridgeIn)
+{
+	static const struct { IMG_CHAR kind; IMG_UINT32 cnt; } aFields[] = {
+		{'U',1}, {'H',1},        /* ui32BridgeFlags; hDevCookie */
+		{'H',1},                 /* hCCBMemInfo */
+		{'U',2},                 /* ui32SharedCmdCCBOffset; sHWTransferContextDevVAddr */
+		{'H',2},                 /* hTASyncInfo, h3DSyncInfo */
+		{'U',1},                 /* ui32NumSrcSync */
+		{'H',5},                 /* ahSrcSyncInfo[SGX_MAX_TRANSFER_SYNC_OPS] */
+		{'U',1},                 /* ui32NumDstSync */
+		{'H',5},                 /* ahDstSyncInfo[SGX_MAX_TRANSFER_SYNC_OPS] */
+		{'U',2},                 /* ui32Flags, ui32PDumpFlags */
+		{'H',1},                 /* hDevMemContext */
+	};
+	IMG_UINT32 nF = sizeof(aFields) / sizeof(aFields[0]);
+	IMG_UINT32 aSrc[16], aDst[16];
+	IMG_UINT32 so = 0, ko = 0, i, j;
+	IMG_PBYTE pby = pvBridgeIn;
+
+	BUILD_BUG_ON(sizeof(PVRSRV_BRIDGE_IN_SUBMITTRANSFER) != 160);
+
+	for (i = 0; i < nF; i++)
+	{
+		IMG_CHAR k = aFields[i].kind;
+		IMG_UINT32 c = aFields[i].cnt;
+
+		if (k == 'H')
+			ko = (ko + 7u) & ~7u;	/* 8-align the handle run */
+		aSrc[i] = so;
+		aDst[i] = ko;
+		if (k == 'H') { so += c * 4u; ko += c * 8u; }
+		else          { so += c * 4u; ko += c * 4u; }	/* 'U' */
+	}
+
+	for (i = nF; i-- > 0; )
+	{
+		IMG_CHAR k = aFields[i].kind;
+		IMG_UINT32 c = aFields[i].cnt;
+		IMG_PBYTE s = pby + aSrc[i];
+		IMG_PBYTE d = pby + aDst[i];
+
+		if (k == 'U')
+			for (j = c; j-- > 0; ) *(IMG_UINT32 *)(d + j * 4u) = *(IMG_UINT32 *)(s + j * 4u);
+		else /* 'H' */
+			for (j = c; j-- > 0; )
+				*(IMG_HANDLE *)(d + j * 8u) = (IMG_HANDLE)(unsigned long)*(IMG_UINT32 *)(s + j * 4u);
+	}
+}
+
 static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 {
 	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT))
@@ -5230,6 +5301,10 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_DOKICK))
 	{
 		PVRCompatExpandDoKick(pvBridgeIn);
+	}
+	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_SUBMITTRANSFER))
+	{
+		PVRCompatExpandSubmitTransfer(pvBridgeIn);
 	}
 	else if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_GETMISCINFO))
 	{
@@ -5546,7 +5621,8 @@ static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN)
 		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CLOSE_DISPCLASS_DEVICE)
-		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_DOKICK))
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_DOKICK)
+		 || ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_SUBMITTRANSFER))
 	{
 		/* PVRSRV_BRIDGE_RETURN {PVRSRV_ERROR eError; IMG_VOID *pvData} ->
 		 * i686 {u32 eError, u32 pvData}. pvData is unset by these handlers
