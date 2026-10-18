@@ -268,7 +268,7 @@ PVRSRV_ERROR OSUnRegisterMem(IMG_VOID *pvCpuVAddr,
 
 #if defined(__linux__) || defined(__QNXNTO__)
 PVRSRV_ERROR OSGetSubMemHandle(IMG_HANDLE hOSMemHandle,
-							   IMG_UINTPTR_T ui32ByteOffset,
+							   IMG_UINT32 ui32ByteOffset,
 							   IMG_SIZE_T ui32Bytes,
 							   IMG_UINT32 ui32Flags,
 							   IMG_HANDLE *phOSMemHandleRet);

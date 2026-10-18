@@ -180,10 +180,8 @@ static PVRSRV_ERROR InitDevInfo(PVRSRV_PER_PROCESS_DATA *psPerProc,
 	
 	psDevInfo->ui32ClientBuildOptions = psInitInfo->ui32ClientBuildOptions;
 
-	
-	psDevInfo->sSGXStructSizes = psInitInfo->sSGXStructSizes;
 
-	
+	psDevInfo->sSGXStructSizes = psInitInfo->sSGXStructSizes;
 
 	eError = OSAllocMem(PVRSRV_OS_NON_PAGEABLE_HEAP,
 						sizeof(PVRSRV_SGX_CCB_INFO),
