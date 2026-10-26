@@ -80,10 +80,11 @@
 
 #if defined(PVR_DRI_DRM_NOT_PCI)
 #include "pvr_drm_mod.h"
+#endif
 
 #if defined(CONFIG_COMPAT)
+/* module.c: trace each 32-on-64 bridge call (off by default). */
 extern unsigned int gPVRCompatTrace;
-#endif
 #endif
 
 #define PVR_DRM_NAME	PVRSRV_MODNAME
