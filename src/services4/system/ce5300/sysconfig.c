@@ -432,6 +432,35 @@ PVRSRV_ERROR SysFinalise(IMG_VOID)
 	}
 	SYS_SPECIFIC_DATA_SET(&gsSysSpecificData, SYS_SPECIFIC_DATA_MISR_INSTALLED);
 
+#if defined(SYS_USING_INTERRUPTS)
+	/*
+	 * The SGX's own interrupt (the PCI INTx found in SysLocateDevices). Without
+	 * this nothing ever runs SGX_ISRHandler, so the MISR above is never
+	 * scheduled and no event object is signalled on GPU completion: every
+	 * EVENT_OBJECT_WAIT a client makes runs its full EVENT_OBJECT_TIMEOUT_MS
+	 * (100 ms) and only then re-polls. A client that waits a few times per
+	 * frame (render-to-texture, a readback, a full TA queue) then runs at ~1
+	 * frame per second while the CPU sits idle. Cedarview never needed this
+	 * call because psb's DRM IRQ handler forwarded the SGX interrupt; this
+	 * port has no psb. A failure here is not fatal: the driver still works,
+	 * polled, as it did before.
+	 */
+	if (gpsSGXDevNode != IMG_NULL)
+	{
+		eError = OSInstallDeviceLISR(gpsSysData, gsSGXDeviceMap.ui32IRQ,
+					     "pvrsrvkm", gpsSGXDevNode);
+		if (eError != PVRSRV_OK)
+		{
+			PVR_DPF((PVR_DBG_ERROR, "SysFinalise: OSInstallDeviceLISR(IRQ %u) failed; "
+				 "running polled", gsSGXDeviceMap.ui32IRQ));
+		}
+		else
+		{
+			SYS_SPECIFIC_DATA_SET(&gsSysSpecificData, SYS_SPECIFIC_DATA_LISR_INSTALLED);
+		}
+	}
+#endif
+
 	eError = SysCreateVersionString(gpsSysData);
 	if (eError != PVRSRV_OK)
 	{
@@ -456,6 +485,19 @@ PVRSRV_ERROR SysDeinitialise(SYS_DATA *psSysData)
 	}
 
 	psSysSpecData = (SYS_SPECIFIC_DATA *)psSysData->pvSysSpecificData;
+
+#if defined(SYS_USING_INTERRUPTS)
+	if (SYS_SPECIFIC_DATA_TEST(psSysSpecData, SYS_SPECIFIC_DATA_LISR_INSTALLED))
+	{
+		eError = OSUninstallDeviceLISR(psSysData);
+		if (eError != PVRSRV_OK)
+		{
+			PVR_DPF((PVR_DBG_ERROR, "SysDeinitialise: OSUninstallDeviceLISR failed"));
+			return eError;
+		}
+		SYS_SPECIFIC_DATA_CLEAR(psSysSpecData, SYS_SPECIFIC_DATA_LISR_INSTALLED);
+	}
+#endif
 
 	if (SYS_SPECIFIC_DATA_TEST(psSysSpecData, SYS_SPECIFIC_DATA_MISR_INSTALLED))
 	{
