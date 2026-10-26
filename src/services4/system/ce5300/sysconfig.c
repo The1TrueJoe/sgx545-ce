@@ -553,16 +553,20 @@ IMG_UINT32 SysGetInterruptSource(SYS_DATA *psSysData,
 				 PVRSRV_DEVICE_NODE *psDeviceNode)
 {
 	PVR_UNREFERENCED_PARAMETER(psSysData);
-	PVR_UNREFERENCED_PARAMETER(psDeviceNode);
 
 	/*
-	 * The SGX owns its PCI interrupt line outright on this part -- there is
-	 * no shared SoC interrupt-identity register to demultiplex, so the SGX
-	 * device layer reads EUR_CR_EVENT_STATUS itself. Returning 0 tells the
-	 * core "no system-level source information", which is what Cedarview
-	 * does too.
+	 * The SGX owns its PCI interrupt line outright on this part: there is no
+	 * shared SoC interrupt-identity register to demultiplex, so anything on
+	 * the line is the device's own. Say so. PVRSRVDeviceLISR only calls the
+	 * device ISR when this returns the node's ui32SOCInterruptBit, and the
+	 * ISR (SGX_ISRHandler) then reads EUR_CR_EVENT_STATUS to decide whether
+	 * there is work and clears it. Returning 0 here (as this port first did)
+	 * skipped the ISR on every interrupt, so nothing ever acknowledged the
+	 * SGX: the level-triggered line stormed until the kernel disabled it
+	 * ("irq 26: nobody cared"). Cedarview could return 0 because psb's IRQ
+	 * handler, not this LISR, took the SGX interrupt.
 	 */
-	return 0;
+	return psDeviceNode ? psDeviceNode->ui32SOCInterruptBit : 0;
 }
 
 IMG_VOID SysClearInterrupts(SYS_DATA *psSysData, IMG_UINT32 ui32ClearBits)
