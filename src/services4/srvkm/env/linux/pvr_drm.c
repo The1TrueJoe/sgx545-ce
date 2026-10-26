@@ -80,6 +80,10 @@
 
 #if defined(PVR_DRI_DRM_NOT_PCI)
 #include "pvr_drm_mod.h"
+
+#if defined(CONFIG_COMPAT)
+extern unsigned int gPVRCompatTrace;
+#endif
 #endif
 
 #define PVR_DRM_NAME	PVRSRV_MODNAME
@@ -411,7 +415,8 @@ static long PVRSRVDRMCompatIoctl(struct file *filp, unsigned int cmd, unsigned l
 		sPkg.hKernelServices   = (IMG_HANDLE)(unsigned long)sPkg32.hKernelServices;
 #endif
 
-		printk(KERN_INFO "pvr-compat: bridge=0x%08x in=%u out=%u svc=0x%08x\n",
+		if (gPVRCompatTrace)
+			printk(KERN_INFO "pvr-compat: bridge=0x%08x in=%u out=%u svc=0x%08x\n",
 		       sPkg32.ui32BridgeID, sPkg32.ui32InBufferSize,
 		       sPkg32.ui32OutBufferSize, sPkg32.hKernelServices);
 

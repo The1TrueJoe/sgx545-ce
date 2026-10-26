@@ -29,6 +29,9 @@
 #include <linux/stddef.h>
 #if defined(CONFIG_COMPAT)
 #include <linux/compat.h>	/* in_compat_syscall() for the 32-on-64 bridge */
+#if defined(CONFIG_COMPAT)
+extern unsigned int gPVRCompatTrace;
+#endif
 #include <linux/build_bug.h>	/* BUILD_BUG_ON for the DEVINITPART2 struct-size pin */
 #endif
 
@@ -4684,10 +4687,188 @@ static IMG_UINT32 PVRCompatPackHeapInfo(IMG_PBYTE pbyDst, const PVRSRV_HEAP_INFO
 	return 6 * sizeof(IMG_UINT32);
 }
 
+/* ---- Table-driven compat for the plain bridges ----------------------------------
+ * Most bridges are a flat run of 4-byte scalars and handles/pointers, so one
+ * layout string describes both sides: 'u' is a 4-byte scalar (same on both
+ * arches), 'h' a handle or user pointer (4 bytes i686; 8 bytes, 8-aligned, in the
+ * kernel). A decimal count repeats the next letter ("128u" = 128 scalars). The
+ * i686 struct is the packed run; the kernel struct is the same run with natural
+ * x86_64 alignment, padded to 8 when it holds a handle. Handles are small table
+ * indices and user pointers zero-extend (== compat_ptr), so 4<->8 is lossless.
+ *
+ * pszIn NULL = IN unchanged (no IN, or handle-free). ui32InSize overrides the
+ * computed i686 IN size when only the head of a larger struct is read by the
+ * handler (the trailing client mem/sync info of the UNMAP family is never read,
+ * so it is left unexpanded, as FREE_DEVICEMEM does above). pszOut "uh" is the
+ * generic PVRSRV_BRIDGE_RETURN every PVR_IO_W bridge answers with.
+ *
+ * These are the bridges a GL client (gl4es -> GLES2) adds over gles2tri/WebKit:
+ * render-target flush + context teardown on FBO/surface destroy, swapchain and
+ * sync-object lifetime, and the unmap side of the mappings above. */
+typedef struct PVR_COMPAT_LAYOUT_TAG
+{
+	IMG_UINT32 ui32BridgeID;
+	const IMG_CHAR *pszIn;
+	IMG_UINT32 ui32InSize;
+	const IMG_CHAR *pszOut;
+} PVR_COMPAT_LAYOUT;
+
+#define PVR_COMPAT_GENERIC_RETURN "uh"
+
+static const PVR_COMPAT_LAYOUT gasPVRCompatLayouts[] =
+{
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_FLUSH_HW_RENDER_TARGET),        "uhu",        0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_RENDER_CONTEXT),  "uuhh",       0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_TRANSFER_CONTEXT),"uuhh",       0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGX_SCHEDULE_PROCESS_QUEUES),       "uh",         0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_DISPCLASS_SWAPCHAIN),       "uhh",        0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SWAP_DISPCLASS_TO_SYSTEM),          "uhh",        0,  PVR_COMPAT_GENERIC_RETURN },
+	/* {flags; hDeviceKM; hBuffer; SwapInterval; hPrivateTag; ClipRectCount;
+	 *  IMG_RECT sClipRect[PVRSRV_MAX_DC_CLIP_RECTS]} — each rect is 4 ints. */
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SWAP_DISPCLASS_TO_BUFFER),          "uhhuhu128u", 0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CLOSE_BUFFERCLASS_DEVICE),          "uh",         0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_ALLOC_SYNC_INFO),                   "uh",         0,  "uh" },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_FREE_SYNC_INFO),                    "uh",         0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CREATE_SYNC_INFO_MOD_OBJ),          IMG_NULL,     0,  "uh" },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_DESTROY_SYNC_INFO_MOD_OBJ),         "uh",         0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_MODIFY_PENDING_SYNC_OPS),           "uhhu",       0,  "uuu" },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_MODIFY_COMPLETE_SYNC_OPS),          "uh",         0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_MOD_OBJ),         "uh",         0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_DELTA),           "uhu",        0,  PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CHG_DEV_MEM_ATTRIBS),               "hu",         0,  PVR_COMPAT_GENERIC_RETURN },
+	/* {flags; psKernelMemInfo|hKernelMemInfo; CLIENT_MEM_INFO(48); CLIENT_SYNC_INFO(20)}:
+	 * the handler reads only the handle, so expand the head and size the whole. */
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_UNMAP_DEV_MEMORY),                  "uh",         76, PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_UNMAP_DEVICECLASS_MEMORY),          "uh",         76, PVR_COMPAT_GENERIC_RETURN },
+	{ PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_UNWRAP_EXT_MEMORY),                 "uh",         76, PVR_COMPAT_GENERIC_RETURN },
+};
+
+#define PVR_COMPAT_MAX_WORDS 160
+
+/* Walk a layout string, filling the i686 and kernel byte offset of each field
+ * and whether it is a handle. Returns the field count; *pui32Size32 / *pui32Size64
+ * get the packed and naturally aligned struct sizes. */
+static IMG_UINT32 PVRCompatLayoutFields(const IMG_CHAR *psz,
+					IMG_UINT32 *pui32Off32, IMG_UINT32 *pui32Off64,
+					IMG_BOOL *pbHandle,
+					IMG_UINT32 *pui32Size32, IMG_UINT32 *pui32Size64)
+{
+	IMG_UINT32 n = 0, o32 = 0, o64 = 0, ui32Align = 4;
+
+	while (psz && *psz)
+	{
+		IMG_UINT32 ui32Rep = 0;
+		IMG_BOOL bHandle;
+
+		while (*psz >= '0' && *psz <= '9')
+			ui32Rep = ui32Rep * 10 + (IMG_UINT32)(*psz++ - '0');
+		if (ui32Rep == 0)
+			ui32Rep = 1;
+		bHandle = (*psz == 'h') ? IMG_TRUE : IMG_FALSE;
+		psz++;
+		while (ui32Rep-- && n < PVR_COMPAT_MAX_WORDS)
+		{
+			if (bHandle)
+			{
+				o64 = (o64 + 7) & ~7U;
+				ui32Align = 8;
+			}
+			if (pui32Off32)
+			{
+				pui32Off32[n] = o32;
+				pui32Off64[n] = o64;
+				pbHandle[n]   = bHandle;
+			}
+			o32 += 4;
+			o64 += bHandle ? 8 : 4;
+			n++;
+		}
+	}
+	*pui32Size32 = o32;
+	*pui32Size64 = (o64 + ui32Align - 1) & ~(ui32Align - 1);
+	return n;
+}
+
+static const PVR_COMPAT_LAYOUT *PVRCompatFindLayout(IMG_UINT32 ui32BridgeID)
+{
+	IMG_UINT32 i;
+
+	for (i = 0; i < sizeof(gasPVRCompatLayouts) / sizeof(gasPVRCompatLayouts[0]); i++)
+		if (gasPVRCompatLayouts[i].ui32BridgeID == ui32BridgeID)
+			return &gasPVRCompatLayouts[i];
+	return IMG_NULL;
+}
+
+/* i686 sizes for a table bridge. An IN without a layout keeps the kernel size. */
+static IMG_BOOL PVRCompatLayoutSizes(IMG_UINT32 ui32BridgeID,
+				     IMG_UINT32 *pui32CompatIn, IMG_UINT32 *pui32CompatOut)
+{
+	const PVR_COMPAT_LAYOUT *psL = PVRCompatFindLayout(ui32BridgeID);
+	IMG_UINT32 ui32S32, ui32S64;
+
+	if (!psL)
+		return IMG_FALSE;
+	if (psL->pszIn)
+	{
+		PVRCompatLayoutFields(psL->pszIn, IMG_NULL, IMG_NULL, IMG_NULL, &ui32S32, &ui32S64);
+		*pui32CompatIn = psL->ui32InSize ? psL->ui32InSize : ui32S32;
+	}
+	if (psL->pszOut)
+	{
+		PVRCompatLayoutFields(psL->pszOut, IMG_NULL, IMG_NULL, IMG_NULL, &ui32S32, &ui32S64);
+		*pui32CompatOut = ui32S32;
+	}
+	return IMG_TRUE;
+}
+
+/* Repack between the two layouts in place. bExpand: i686 -> kernel (IN), else
+ * kernel -> i686 (OUT). Every field is read into locals before any write, so the
+ * overlapping in-place move is safe in both directions. */
+static IMG_BOOL PVRCompatLayoutRepack(IMG_UINT32 ui32BridgeID, IMG_VOID *pv, IMG_BOOL bExpand)
+{
+	/* Called under the bridge lock (gPVRSRVLock), so static scratch is safe and
+	 * keeps ~2 KB of arrays off the kernel stack. */
+	static IMG_UINT32 aui32Off32[PVR_COMPAT_MAX_WORDS], aui32Off64[PVR_COMPAT_MAX_WORDS];
+	static IMG_BOOL abHandle[PVR_COMPAT_MAX_WORDS];
+	static IMG_UINT64 aui64Val[PVR_COMPAT_MAX_WORDS];
+	const PVR_COMPAT_LAYOUT *psL = PVRCompatFindLayout(ui32BridgeID);
+	const IMG_CHAR *psz;
+	IMG_PBYTE pby = pv;
+	IMG_UINT32 i, n, ui32S32, ui32S64;
+
+	if (!psL)
+		return IMG_FALSE;
+	psz = bExpand ? psL->pszIn : psL->pszOut;
+	if (!psz)
+		return IMG_TRUE;
+	n = PVRCompatLayoutFields(psz, aui32Off32, aui32Off64, abHandle, &ui32S32, &ui32S64);
+	for (i = 0; i < n; i++)
+	{
+		if (bExpand)
+			aui64Val[i] = *(IMG_UINT32 *)(pby + aui32Off32[i]);
+		else if (abHandle[i])
+			aui64Val[i] = *(IMG_UINT64 *)(pby + aui32Off64[i]);
+		else
+			aui64Val[i] = *(IMG_UINT32 *)(pby + aui32Off64[i]);
+	}
+	for (i = 0; i < n; i++)
+	{
+		if (!bExpand)
+			*(IMG_UINT32 *)(pby + aui32Off32[i]) = (IMG_UINT32)aui64Val[i];
+		else if (abHandle[i])
+			*(IMG_UINT64 *)(pby + aui32Off64[i]) = aui64Val[i];
+		else
+			*(IMG_UINT32 *)(pby + aui32Off64[i]) = (IMG_UINT32)aui64Val[i];
+	}
+	return IMG_TRUE;
+}
+
 static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 								IMG_UINT32 *pui32CompatIn,
 								IMG_UINT32 *pui32CompatOut)
 {
+	if (PVRCompatLayoutSizes(ui32BridgeID, pui32CompatIn, pui32CompatOut))
+		return IMG_TRUE;
 	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CONNECT_SERVICES))
 	{
 		/* IN {ui32BridgeFlags, ui32Flags} — no handle, same size.
@@ -5253,6 +5434,8 @@ static void PVRCompatExpandSubmitTransfer(IMG_VOID *pvBridgeIn)
 
 static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
 {
+	if (PVRCompatLayoutRepack(ui32BridgeID, pvBridgeIn, IMG_TRUE))
+		return;
 	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT))
 	{
 		/* i686 {u32 flags@0, u32 hDevCookie@4} -> kernel {u32 flags@0, 4 pad,
@@ -5565,6 +5748,8 @@ static void PVRCompatExpandIn(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeIn)
  * before CopyToUser. */
 static void PVRCompatCompactOut(IMG_UINT32 ui32BridgeID, IMG_VOID *pvBridgeOut)
 {
+	if (PVRCompatLayoutRepack(ui32BridgeID, pvBridgeOut, IMG_FALSE))
+		return;
 	if (ui32BridgeID == PVRSRV_GET_BRIDGE_ID(PVRSRV_BRIDGE_CONNECT_SERVICES))
 	{
 		PVRSRV_BRIDGE_OUT_CONNECT_SERVICES *psK = pvBridgeOut;
@@ -5923,7 +6108,7 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	}
 
 #if defined(CONFIG_COMPAT)
-	if (bCompat)
+	if (bCompat && gPVRCompatTrace)
 		printk(KERN_INFO "pvr-compat: id=%u sizes-ok in=%u out=%u\n",
 		       ui32BridgeID, ui32ExpectIn, ui32ExpectOut);
 #endif
@@ -6022,7 +6207,7 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 #endif
 
 #if defined(CONFIG_COMPAT)
-	if (bCompat)
+	if (bCompat && gPVRCompatTrace)
 		printk(KERN_INFO "pvr-compat: id=%u pre-handler pfn=%p in=%p out=%p\n",
 		       ui32BridgeID, dte->pfFunction, psBridgeIn, psBridgeOut);
 #endif
@@ -6038,7 +6223,7 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 	}
 
 #if defined(CONFIG_COMPAT)
-	if (bCompat)
+	if (bCompat && gPVRCompatTrace)
 		printk(KERN_INFO "pvr-compat: id=%u post-handler err=%d\n",
 		       ui32BridgeID, err);
 #endif
