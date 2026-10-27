@@ -41,6 +41,9 @@
 #endif
 #include <linux/slab.h>
 #include <linux/highmem.h>
+#if defined(CONFIG_X86)
+#include <asm/set_memory.h>
+#endif
 #include <linux/sched.h>
 
 #include "img_defs.h"
@@ -283,7 +286,8 @@ static IMG_VOID LinuxMMCleanup_MemRecords_ForEachVa(DEBUG_MEM_ALLOC_REC *psCurre
 			DebugMemAllocRecordRemove(DEBUG_MEM_ALLOC_TYPE_IO, psCurrentRecord->pvKey, __FILE__, __LINE__);
 			break;
 		case DEBUG_MEM_ALLOC_TYPE_VMALLOC:
-			VFreeWrapper(psCurrentRecord->pvCpuVAddr, psCurrentRecord->ui32Bytes);
+			/* The record has no cache type; resetting a write-back page is harmless. */
+			VFreeWrapperFlags(psCurrentRecord->pvCpuVAddr, psCurrentRecord->ui32Bytes, PVRSRV_HAP_UNCACHED);
 			break;
 		case DEBUG_MEM_ALLOC_TYPE_ALLOC_PAGES:
 			
@@ -524,6 +528,51 @@ DebugMemAllocRecordTypeToString(DEBUG_MEM_ALLOC_TYPE eAllocType)
 
 
 
+/*
+ * x86 PAT keeps a RAM page's memory type as a property of the page: every
+ * mapping of it -- the kernel's direct map, a vmap, the user mapping that
+ * vmf_insert_mixed() builds -- has to agree, and the user mapping takes its
+ * type from the page whatever vm_page_prot asked for. So set the type on the
+ * pages once, when they are allocated for a write-combined or uncached area,
+ * and put them back to write-back before they go back to the allocator.
+ * Elsewhere the type lives in each mapping's page protection alone.
+ */
+static IMG_VOID PVRSetPagesCacheType(struct page **ppsPages, IMG_UINT32 ui32PageCount, IMG_UINT32 ui32AllocFlags)
+{
+#if defined(CONFIG_X86)
+    switch (ui32AllocFlags & PVRSRV_HAP_CACHETYPE_MASK)
+    {
+        case PVRSRV_HAP_WRITECOMBINE:
+            set_pages_array_wc(ppsPages, ui32PageCount);
+            break;
+        case PVRSRV_HAP_UNCACHED:
+            set_pages_array_uc(ppsPages, ui32PageCount);
+            break;
+        default:
+            break;
+    }
+#else
+    PVR_UNREFERENCED_PARAMETER(ppsPages);
+    PVR_UNREFERENCED_PARAMETER(ui32PageCount);
+    PVR_UNREFERENCED_PARAMETER(ui32AllocFlags);
+#endif
+}
+
+static IMG_VOID PVRResetPagesCacheType(struct page **ppsPages, IMG_UINT32 ui32PageCount, IMG_UINT32 ui32AllocFlags)
+{
+#if defined(CONFIG_X86)
+    if (ui32AllocFlags & (PVRSRV_HAP_WRITECOMBINE | PVRSRV_HAP_UNCACHED))
+    {
+        set_pages_array_wb(ppsPages, ui32PageCount);
+    }
+#else
+    PVR_UNREFERENCED_PARAMETER(ppsPages);
+    PVR_UNREFERENCED_PARAMETER(ui32PageCount);
+    PVR_UNREFERENCED_PARAMETER(ui32AllocFlags);
+#endif
+}
+
+
 IMG_VOID *
 _VMallocWrapper(IMG_UINT32 ui32Bytes,
                 IMG_UINT32 ui32AllocFlags,
@@ -566,9 +615,9 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
      * pointer.
      *
      * So do what vmalloc does internally, but keep control of the protection:
-     * allocate the pages, then vmap() them with the attributes we want. The
-     * pages come from the movable-free pool rather than the direct map, so
-     * there is no second alias to disagree with.
+     * allocate the pages, give them the cache type we want (which on x86 also
+     * changes their direct-map alias, so the two agree), then vmap() them with
+     * the same attributes.
      *
      * It matters here specifically because the SGX command buffers are the
      * write-combined ones -- the GPU reads what the CPU just wrote, and a
@@ -600,6 +649,7 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
         }
     }
 
+    PVRSetPagesCacheType(ppsPages, ui32PageCount, ui32AllocFlags);
     pvRet = vmap(ppsPages, ui32PageCount, VM_MAP, PGProtFlags);
 
     /*
@@ -609,6 +659,7 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
      */
     if (!pvRet)
     {
+        PVRResetPagesCacheType(ppsPages, ui32PageCount, ui32AllocFlags);
         for (i = 0; i < ui32PageCount; i++)
         {
             __free_page(ppsPages[i]);
@@ -641,7 +692,7 @@ _VMallocWrapper(IMG_UINT32 ui32Bytes,
 
 
 IMG_VOID
-_VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_UINT32 ui32Bytes, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line)
+_VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_UINT32 ui32Bytes, IMG_UINT32 ui32AllocFlags, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line)
 {
     struct page **ppsPages;
     IMG_UINT32 ui32PageCount, i;
@@ -680,6 +731,7 @@ _VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_UINT32 ui32Bytes, IMG_CHAR *pszFileName,
 
     if (ppsPages)
     {
+        PVRResetPagesCacheType(ppsPages, ui32PageCount, ui32AllocFlags);
         for (i = 0; i < ui32PageCount; i++)
         {
             if (ppsPages[i])
@@ -762,8 +814,9 @@ FreeVMallocLinuxMemArea(LinuxMemArea *psLinuxMemArea)
 
     PVR_DPF((PVR_DBG_MESSAGE,"%s: pvCpuVAddr: %p",
              __FUNCTION__, psLinuxMemArea->uData.sVmalloc.pvVmallocAddress));
-    VFreeWrapper(psLinuxMemArea->uData.sVmalloc.pvVmallocAddress,
-                 psLinuxMemArea->ui32ByteSize);
+    VFreeWrapperFlags(psLinuxMemArea->uData.sVmalloc.pvVmallocAddress,
+                      psLinuxMemArea->ui32ByteSize,
+                      psLinuxMemArea->ui32AreaFlags);
 
     LinuxMemAreaStructFree(psLinuxMemArea);
 }
@@ -1120,6 +1173,8 @@ NewAllocPagesLinuxMemArea(IMG_UINT32 ui32Bytes, IMG_UINT32 ui32AreaFlags)
                            );
 #endif
 
+    PVRSetPagesCacheType(pvPageList, ui32PageCount, ui32AreaFlags);
+
     psLinuxMemArea->eAreaType = LINUX_MEM_AREA_ALLOC_PAGES;
     psLinuxMemArea->uData.sPageList.pvPageList = pvPageList;
     psLinuxMemArea->uData.sPageList.hBlockPageList = hBlockPageList;
@@ -1177,6 +1232,8 @@ FreeAllocPagesLinuxMemArea(LinuxMemArea *psLinuxMemArea)
 #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
     DebugMemAllocRecordRemove(DEBUG_MEM_ALLOC_TYPE_ALLOC_PAGES, pvPageList, __FILE__, __LINE__);
 #endif
+
+    PVRResetPagesCacheType(pvPageList, ui32PageCount, psLinuxMemArea->ui32AreaFlags);
 
     for(i=0;i<(IMG_INT32)ui32PageCount;i++)
     {
