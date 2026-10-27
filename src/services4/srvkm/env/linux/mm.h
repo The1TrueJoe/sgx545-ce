@@ -192,12 +192,19 @@ IMG_VOID *_VMallocWrapper(IMG_UINT32 ui32Bytes, IMG_UINT32 ui32AllocFlags, IMG_C
  * address alone -- is not exported to modules. Every caller had the size to
  * hand anyway.
  */
+/*
+ * The free side also takes the allocation's cache type: write-combined and
+ * uncached pages have to go back to write-back before they are freed (see
+ * PVRSetPagesCacheType in mm.c). VFreeWrapper is for cached allocations.
+ */
 #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
-#define VFreeWrapper(pvCpuVAddr, ui32Bytes) _VFreeWrapper(pvCpuVAddr, ui32Bytes, __FILE__, __LINE__)
+#define VFreeWrapper(pvCpuVAddr, ui32Bytes) _VFreeWrapper(pvCpuVAddr, ui32Bytes, PVRSRV_HAP_CACHED, __FILE__, __LINE__)
+#define VFreeWrapperFlags(pvCpuVAddr, ui32Bytes, ui32AllocFlags) _VFreeWrapper(pvCpuVAddr, ui32Bytes, ui32AllocFlags, __FILE__, __LINE__)
 #else
-#define VFreeWrapper(pvCpuVAddr, ui32Bytes) _VFreeWrapper(pvCpuVAddr, ui32Bytes, NULL, 0)
+#define VFreeWrapper(pvCpuVAddr, ui32Bytes) _VFreeWrapper(pvCpuVAddr, ui32Bytes, PVRSRV_HAP_CACHED, NULL, 0)
+#define VFreeWrapperFlags(pvCpuVAddr, ui32Bytes, ui32AllocFlags) _VFreeWrapper(pvCpuVAddr, ui32Bytes, ui32AllocFlags, NULL, 0)
 #endif
-IMG_VOID _VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_UINT32 ui32Bytes, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line);
+IMG_VOID _VFreeWrapper(IMG_VOID *pvCpuVAddr, IMG_UINT32 ui32Bytes, IMG_UINT32 ui32AllocFlags, IMG_CHAR *pszFileName, IMG_UINT32 ui32Line);
 
 
 LinuxMemArea *NewVMallocLinuxMemArea(IMG_UINT32 ui32Bytes, IMG_UINT32 ui32AreaFlags);

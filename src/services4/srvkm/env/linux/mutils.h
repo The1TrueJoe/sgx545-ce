@@ -48,7 +48,18 @@
 	#if defined(__arm__) || defined(__sh__)
 		#define	PGPROT_WC(pv)	pgprot_writecombine(pv)
 	#else
-		#if defined(__i386__) || defined(__x86_64__) || defined(__mips__)
+		#if defined(__i386__) || defined(__x86_64__)
+			/*
+			 * Real write-combining. This was pgprot_noncached(), which made
+			 * every buffer the DDK asks to be write-combined -- vertex, index
+			 * and command buffers, textures uploaded by the CPU -- uncached in
+			 * userspace: each store a separate bus transaction (73 MB/s
+			 * measured on CE5310, against GB/s write-combined). With PAT the
+			 * page's own memory type has to agree, which mm.c sees to
+			 * (PVRSetPagesCacheType); without PAT this is UC- as before.
+			 */
+			#define	PGPROT_WC(pv)	pgprot_writecombine(pv)
+		#elif defined(__mips__)
 			#define	PGPROT_WC(pv)	pgprot_noncached(pv)
 		#else
 			#define PGPROT_WC(pv)	pgprot_noncached(pv)
