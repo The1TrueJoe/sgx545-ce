@@ -37,6 +37,21 @@ int drmOpen(const char *name, const char *busid)
 	if (!real_drmOpen) {
 		real_drmOpen = dlsym(RTLD_NEXT, "drmOpen");
 		if (!real_drmOpen) {
+			/*
+			 * libdrm is not loaded yet. That is the normal case for a
+			 * program that does not link libdrm itself and only reaches
+			 * the DDK through dlopen (a GL wrapper such as gl4es, a
+			 * JVM): libsrv_um pulls libdrm in as its own dependency,
+			 * after this preloaded shim, and RTLD_NEXT cannot see it.
+			 * Load it ourselves rather than make every such caller
+			 * preload libdrm too.
+			 */
+			void *drm = dlopen("libdrm.so.2", RTLD_NOW | RTLD_GLOBAL);
+
+			if (drm)
+				real_drmOpen = dlsym(drm, "drmOpen");
+		}
+		if (!real_drmOpen) {
 			fprintf(stderr, "busidshim: no real drmOpen: %s\n", dlerror());
 			return -1;
 		}

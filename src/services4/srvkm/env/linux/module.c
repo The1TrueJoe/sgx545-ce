@@ -119,8 +119,17 @@
 #endif
 
 
-#if defined(PVRSRV_NEED_PVR_DPF)
 #include <linux/moduleparam.h>
+#if defined(CONFIG_COMPAT)
+/* Log every 32-bit bridge call (pvr-compat: lines). Off by default: a GL app makes
+ * dozens of calls per frame and each line goes to the console. Turn on with
+ * echo 1 > /sys/module/pvrsrvkm/parameters/gPVRCompatTrace when adding a bridge. */
+unsigned int gPVRCompatTrace;
+module_param(gPVRCompatTrace, uint, 0644);
+MODULE_PARM_DESC(gPVRCompatTrace, "Trace each 32-on-64 bridge call (default 0)");
+#endif
+
+#if defined(PVRSRV_NEED_PVR_DPF)
 extern IMG_UINT32 gPVRDebugLevel;
 module_param(gPVRDebugLevel, uint, 0644);
 MODULE_PARM_DESC(gPVRDebugLevel, "Sets the level of debug output (default 0x7)");

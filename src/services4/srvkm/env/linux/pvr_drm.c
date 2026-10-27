@@ -82,6 +82,11 @@
 #include "pvr_drm_mod.h"
 #endif
 
+#if defined(CONFIG_COMPAT)
+/* module.c: trace each 32-on-64 bridge call (off by default). */
+extern unsigned int gPVRCompatTrace;
+#endif
+
 #define PVR_DRM_NAME	PVRSRV_MODNAME
 #define PVR_DRM_DESC	"Imagination Technologies PVR DRM"
 
@@ -411,7 +416,8 @@ static long PVRSRVDRMCompatIoctl(struct file *filp, unsigned int cmd, unsigned l
 		sPkg.hKernelServices   = (IMG_HANDLE)(unsigned long)sPkg32.hKernelServices;
 #endif
 
-		printk(KERN_INFO "pvr-compat: bridge=0x%08x in=%u out=%u svc=0x%08x\n",
+		if (gPVRCompatTrace)
+			printk(KERN_INFO "pvr-compat: bridge=0x%08x in=%u out=%u svc=0x%08x\n",
 		       sPkg32.ui32BridgeID, sPkg32.ui32InBufferSize,
 		       sPkg32.ui32OutBufferSize, sPkg32.hKernelServices);
 
