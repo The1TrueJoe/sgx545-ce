@@ -113,4 +113,79 @@ void sgxtex_blit_bg(uint32_t *blk, const struct sgxtex_blit_ctx *c, uint32_t w, 
 void sgxtex_blit_pixel_program(uint32_t *pp, const struct sgxtex_blit_ctx *c, uint32_t src, uint32_t w,
 			       uint32_t h, uint32_t src_pitch);
 
+/* ---- general blits: any layout and format on either side, nearest or linear ---- */
+
+/* A surface as a blit sees it. */
+struct sgxtex_surface {
+	uint32_t addr;		/* device address of (0, 0) */
+	uint32_t w, h;
+	uint32_t pitch;		/* pixels per row: strided and linear layouts (linear: sgxtex_pitch(w)) */
+	uint32_t layout;	/* SGXTEX_LAYOUT_TWIDDLED / _LINEAR / _STRIDED */
+	uint32_t t1fmt;		/* format as a source (SGXTEX_FMT_*) */
+	uint32_t pbefmt;	/* format as a destination (SGXPBE_FMT_*) */
+};
+
+#define SGXTEX_FILTER_NEAREST 0
+#define SGXTEX_FILTER_LINEAR 1
+
+/*
+ * The source's DOUTT words. Strided sources hold their pitch where the
+ * minification filter bit would be, so they sample nearest (or magnify
+ * linearly); twiddled and linear ones take either filter. T0 clamps.
+ */
+void sgxtex_blit_source(uint32_t tex[4], const struct sgxtex_surface *src, int filter);
+
+/* Everything one blit writes, apart from the context's static programs. */
+struct sgxtex_blit {
+	uint32_t cmd[SGXTEX_BLIT_CMD_WORDS];	/* at the command's CCB offset */
+	uint32_t bg[SGXTEX_BLIT_BG_WORDS];	/* at ctx->bg */
+	uint32_t pds[SGXTEX_BLIT_PDS_WORDS];	/* at ctx->pds_primary */
+	uint32_t eot[SGXPBE_EOT_WORDS];		/* at ctx->eot_use */
+};
+
+/* src scaled onto all of dst (equal sizes copy; half sizes with LINEAR box-filter a mip level) */
+void sgxtex_blit_build(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, const struct sgxtex_surface *src,
+		       const struct sgxtex_surface *dst, int filter);
+
+/*
+ * The whole 0x1c0-byte transfer command at CCB offset `off`: the client words
+ * (b->cmd), the size word, the constant tail; the kernel fills the shared part
+ * at off + SGXTEX_CMD_SHARED, which is what SGX_SUBMITTRANSFER's
+ * ui32SharedCmdCCBOffset names. The client then advances the CCB control's
+ * write offset (word 0) by SGXTEX_CMD_BYTES before submitting.
+ */
+#define SGXTEX_CMD_BYTES 0x1c0
+#define SGXTEX_CMD_SHARED 0xac
+void sgxtex_blit_command_full(uint32_t out[SGXTEX_CMD_BYTES / 4], const struct sgxtex_blit *b, int twiddled_dst);
+
+/* ---- a transfer context of one's own (what libsrv_um's SGXCreateTransferContext sets up) ---- */
+
+/*
+ * Buffers, as the DDK allocates them (heap id, attribs, size):
+ *   CCB          kernel data (3), 0x4f, 0x10000 + 0x4c8     CCB control  kernel data (3), 0x4f, 8
+ *   bg block     general (0), 0xd, 0x4800 ("ISP stream")    PDS code     PDS pixel (6), 0xd, 0x1800
+ *   pixel PDS    PDS pixel (6), 0xd, 0x400                  USSE code    pixel shader (4), 0xd, 0x800
+ * The PDS code buffer holds the secondary program (at +0) and the pixel-event
+ * program (at +0x20); the USSE code buffer the end-of-tile, emit, nop and copy
+ * programs. Register with SGX_REGISTER_HW_TRANSFER_CONTEXT, PD offset 8.
+ */
+#define SGXTEX_XCTX_BYTES 0xb4
+void sgxtex_xctx_words(uint32_t ctx[SGXTEX_XCTX_BYTES / 4], uint32_t ccb, uint32_t ccb_ctl, uint32_t pid);
+
+/* the secondary PDS program: DOUTU to a `nop [end]` program; 8 words */
+#define SGXTEX_SECONDARY_WORDS 8
+void sgxtex_xctx_secondary(uint32_t *pds, uint32_t nop_use);
+
+/* the pixel-event PDS program: 5 data rows + 29 code words (PDS.md; tools/gen's pixel_event) */
+#define SGXTEX_EVENT_WORDS 49
+#define SGXTEX_EVENT_ROWS 5
+void sgxtex_xctx_pixel_event(uint32_t *pds, uint32_t eot_use, uint32_t emit_use);
+
+/* small USSE programs the context needs (words, low word first) */
+extern const uint32_t sgxtex_nop_shader[4];	/* phas.i #0, #0; nop [end] */
+extern const uint32_t sgxtex_emit_shader[6];	/* phas.i #0, #0; limm r0, #0; emit.t0 r0, #0, r0 [end] */
+
+/* DOUTU word 0 for a pixel-shader-heap program (PDS.md): temporaries in fours at b24 */
+uint32_t sgxtex_doutu(uint32_t use_addr, uint32_t temps);
+
 #endif
