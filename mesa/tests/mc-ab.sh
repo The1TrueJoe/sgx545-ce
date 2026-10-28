@@ -47,7 +47,10 @@ cat /dev/fb0 > $R/ctest/out/mc-$WHO.fb
 # single-buffered, so one dump can catch a frame half drawn)
 k=0
 while [ $k -lt ${MC_BURST:-0} ]; do
-	cat /dev/fb0 > $R/ctest/out/mc-$WHO-$k.fb; sleep 0.3; k=$((k+1))
+	cat /dev/fb0 > $R/ctest/out/mc-$WHO-$k.fb
+	# with gl4es drawing into the X window (MC_FB=3), the picture is there
+	[ -x $R/usr/bin/xwd ] && chroot $R /usr/bin/env -i DISPLAY=:0 PATH=/usr/bin:/bin xwd -root -silent > $R/ctest/out/mc-$WHO-$k.xwd 2>/dev/null
+	sleep 0.3; k=$((k+1))
 done
 killall java 2>/dev/null; sleep 3; killall -9 java 2>/dev/null
 wait $game 2>/dev/null
