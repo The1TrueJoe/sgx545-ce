@@ -135,18 +135,23 @@ So `ds1[0x30]` is U 0x70 and S2 0x60, and `ds0[0x30]` is U 0x30 and S1 0x60.
 
 The variant bits:
 
-- **Top nibble 2 with bit 27 set (`0x2f…`), printed `.x2.s27`.** Seen only
-  where the DOUT consumes a 3rd/4th word from temporaries.
-  - In a vertex fetch, `2f032343` sends (address, ctrl, DS1[0x32] =
-    index × stride). The DMA then reads from address + offset. That much is
-    certain: the vertex index enters the fetch nowhere else.
-  - That the bits mean "add word 2 to word 0" is a strong guess. Generator
-    0x1fc30 uses the same swizzle with top byte `07` and no product computed,
-    so plain MOVS ignores word 2.
-  - It is also seen on DOUTA pairs (`2f800466`), meaning unknown.
+- **Top nibble 2 with bit 27 set (`0x2f…`), printed `.x2.s27`: the DOUT
+  also consumes word 2, which DOUTD adds to its address.** Confirmed on
+  hardware:
+  - A replay of ref.bin with the vertex program's `2f032343` changed to
+    `07032343` (`mkreplay.py --poke 0x3040d844:0x07032343`) renders no
+    triangle at all: every vertex fetched vertex 0. The unchanged replay is
+    pixel-exact.
+  - Which of bits 29 and 27 does it is not known. The single-bit replays ran
+    on a GPU already wedged by the next experiment, so they say nothing.
+  - Also seen on DOUTA pairs (`2f800466`), meaning unknown.
 - **Top byte `03`, condition field 3, printed `.cc3`.** It is used only on the
   closing DOUTU of vertex-fetch programs, and every other DOUTU uses `07`.
-  Guess: bit 26 makes the task wait for the preceding DMAs (or the reverse).
+  - **Do not set bit 26 there.** A replay with the triangle's `030403e5`
+    changed to `070403e5` locked up the TA. SGX hardware recovery then failed
+    in a loop (`SGXInitialise failed (24)`) until a reboot (EA3, 2026-10-28).
+  - So the bit matters for vertex tasks. What it means is still a guess:
+    something that a vertex task must not wait on or signal.
 
 ### Arithmetic and logic (opcodes 4, 6, c, d)
 
@@ -348,9 +353,12 @@ The `cap` pattern ran on the EA3, 2026-10-27. All runs rc=0.
 
 ## Open questions
 
-- What bit 26 (MOVS `03`) and the `0x2f` variant bits mean exactly. A replay
-  with `2f032343` changed to `07032343` would show whether the index offset
-  is dropped.
+- What bit 26 (MOVS `03`) means: setting it on a vertex DOUTU hangs the TA.
+  Which of bits 27 and 29 makes a DOUT consume word 2.
+- **Experiments on hardware:** `re/decode/mkreplay.py --poke va:value`
+  rewrites a word before every kick. Change only things a wedge can't make
+  worse, and run one replay at a time, checking dmesg for `Hardware Recovery`
+  between runs. A failed recovery needs a reboot.
 - DOUTD ctrl bits 22–25. The DOUTU w0 top byte and w1 bit 2.
 - The remaining DOUTI bits 5–8, 17–20 and 25–26, and what precision values
   0/1/2 are.
