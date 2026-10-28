@@ -398,9 +398,9 @@ For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
 |---|---|---|---|
 | 0 | 00000000 | clip min `y0<<16 \| x0` | D |
 | 1 | 01df02cf | clip max `y1<<16 \| x1` (719, 479) | C |
-| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px); b15 = set unless the surface is the scanout buffer (`local_54`); b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
+| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px); b15 = set unless the surface's `param_1[6]` is non-zero: set for the back buffer *and* for fb0 (the swap), and with it cleared the PBE writes nothing at the address (replay, `re/tex/TEX.md` section 6), so it is not a scanout flag; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
 | 3 | 3e265000 | address, & ~3 (moved for rotated surfaces) | D |
-| side | 0x600 | b0-5 = PBE format code (format table +0x84); b9 = always; b10 = dither (GL_DITHER); b12 = `param 7`; b6-11 += `param_2[5]<<6` for format codes 3-14 | D |
+| side | 0x600 | b0-5 = PBE format code (format table +0x84: 0 BGRA8888, 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, see `re/tex/TEX.md`); b9 = always; b10 = dither (GL_DITHER); b12 = `param 7`; **b13 = twiddled destination** (table `DAT_0006d5bc` = {0, 0x2000} by memory layout; the transfer queue's texture uploads set it) [C]; b6-11 += `param_2[5]<<6` for format codes 3-14 | D |
 
 - The back buffer of a window is BGRA8888, top row first, with a pitch of
   720 rounded up to 32 = 736 px: 0x159000 bytes = 736 × 480 × 4.
@@ -498,8 +498,8 @@ constant):
 |---|---|---|
 | 0-11 | height - 1 | D |
 | 12-23 | width - 1 | D |
-| 24-28 | format: 0x02 RGBA4444, 0x04 RGBA5551, 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | D |
-| 29-31 | layout: 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the stride, b18-23 = stride/16 - 1 [G]) | D |
+| 24-28 | format: 0x02 RGBA4444 (stored ARGB4444), 0x04 RGBA5551 (stored ARGB1555), 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | D |
+| 29-31 | layout: 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch in texels - 1) low 3 bits in b9-11, the rest in b17-26 [D], `re/tex/TEX.md` section 3). Memory layouts 0 and 3 are in `re/tex/TEX.md` section 1 | D |
 
 **T2:** the base address. The mip levels follow the base level; the chain
 length is implied by the size, since no word changed with the level count.
