@@ -390,6 +390,116 @@ sgxs_outsel(uint32_t out_dwords, bool point_size)
    return out_dwords << 16 | 0x3000 | (point_size ? 0x100 : 0);
 }
 
+/*
+ * Constant-colour blending (STATE.md "Constant-colour blending").
+ *
+ * sop2's selectors (zero, s1, s2, s1a, s2a, asat) can't name a constant, and
+ * the DDK doesn't use k18/k19 for one either.  With any of CONSTANT_COLOR,
+ * ONE_MINUS_CONSTANT_COLOR, CONSTANT_ALPHA, ONE_MINUS_CONSTANT_ALPHA among
+ * the factors, libGLESv2's blend builder (FUN_000457d0) multiplies each side
+ * out with sopwm into r0/r1 and adds them, five instructions after the
+ * fragment colour (pa<c>), with o0 = the tile's colour (translucent pass):
+ *
+ *    sopwm r1, Y, o0      [c1=zero c2=Fd]          dst * Fd, all four bytes
+ *    sopwm r1, Y, o0      [mask=8 ... Fd alpha]    dst.a * Fda, the alpha byte
+ *    sopwm r0, pa<c>, X   [c1=Fs c2=zero]          src * Fs
+ *    sopwm r0, pa<c>, X   [mask=8 ... Fs alpha]    src.a * Fsa
+ *    sop2  o0, r0, r1     [end c1=one c2=one cop=add a1=one a2=one aop=add]
+ *
+ * X and Y are the colour, the tile or the constant, whichever the factor
+ * reads: the blend colour (glBlendColor) is a fragment secondary attribute,
+ * packed BGRA8 like the colour (the DDK's sa2 = 0x604080bf for 0.25 0.5 0.75
+ * 0.375) [D: k1-k4 captures; C: k1 replays b2 b3].  Two temporaries (r0, r1).
+ * Products round to nearest: 204 * 64 / 255 = 51.2 -> 51 [D].
+ */
+enum sgxs_bfactor {                 /* libGLESv2's nibble (ctx +0xfc): glBlendFunc order */
+   SGXS_BF_ZERO, SGXS_BF_ONE, SGXS_BF_SRC_COLOR, SGXS_BF_ONE_MINUS_SRC_COLOR,
+   SGXS_BF_SRC_ALPHA, SGXS_BF_ONE_MINUS_SRC_ALPHA, SGXS_BF_DST_ALPHA, SGXS_BF_ONE_MINUS_DST_ALPHA,
+   SGXS_BF_DST_COLOR, SGXS_BF_ONE_MINUS_DST_COLOR, SGXS_BF_SRC_ALPHA_SATURATE,
+   SGXS_BF_CONSTANT_COLOR, SGXS_BF_ONE_MINUS_CONSTANT_COLOR, SGXS_BF_CONSTANT_ALPHA,
+   SGXS_BF_ONE_MINUS_CONSTANT_ALPHA,
+};
+
+static inline bool
+sgxs_bfactor_is_constant(unsigned f)
+{
+   return f >= SGXS_BF_CONSTANT_COLOR && f <= SGXS_BF_ONE_MINUS_CONSTANT_ALPHA;
+}
+
+/* the packed BGRA8 blend colour, as the DDK writes it into its constant */
+static inline uint32_t
+sgxs_blend_color_word(const float rgba[4])
+{
+   uint32_t c[4];
+
+   for (int i = 0; i < 4; i++) {
+      float v = rgba[i] < 0 ? 0 : rgba[i] > 1 ? 1 : rgba[i];
+
+      c[i] = (uint32_t)(v * 255.0f + 0.5f);
+   }
+   return c[3] << 24 | c[0] << 16 | c[1] << 8 | c[2];
+}
+
+/*
+ * The five instructions, (lo, hi) pairs, for src/dst colour and alpha
+ * factors (enum sgxs_bfactor), the colour in pa<color_pa> and the blend
+ * colour in sa<const_sa>; bit-exact with the DDK's for color_pa 0, const_sa
+ * 2 (k1-k4).  The final sop2's ops are cop/aop (sgxws_bop order: 0 add, 1
+ * sub, 2 min, 3 max); the DDK always adds, so only add is proven.  With end
+ * false the sop2 doesn't end the program (a colour mask follows).
+ */
+#define SGXS_BLEND_CONST_INSTS 5
+static inline void
+sgxs_blend_const(uint32_t w[SGXS_BLEND_CONST_INSTS][2], unsigned src_rgb, unsigned dst_rgb,
+                 unsigned src_a, unsigned dst_a, unsigned color_pa, unsigned const_sa,
+                 unsigned cop, unsigned aop, bool end)
+{
+   /* libGLESv2 DAT_0006d000/d080 (dst side: src1 bank+number, hi selectors)
+    * and DAT_0006d0c0/d100 (src side: src2, hi selectors), by factor */
+   static const uint32_t d_lo[15] = { 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000,
+                                      0x80000000, 0x40000000, 0x40000000, 0x40000000, 0x40000000,
+                                      0x40000000, 0xc0000100, 0xc0000100, 0xc0000100, 0xc0000100 };
+   static const uint32_t d_hi[15] = { 0, 0x8000, 0x10, 0x8010, 0x18, 0x8018, 0x38, 0x8038,
+                                      0x30, 0x8030, 0x8, 0x10, 0x8010, 0x18, 0x8018 };
+   static const uint32_t s_lo[15] = { 0x20000000, 0x20000000, 0x20000000, 0x20000000, 0x20000000,
+                                      0x20000000, 0x10000000, 0x10000000, 0x10000000, 0x10000000,
+                                      0x10000000, 0x30000002, 0x30000002, 0x30000002, 0x30000002 };
+   static const uint32_t s_hi[15] = { 0, 0x1000000, 0x80, 0x1000080, 0xc0, 0x10000c0, 0x1c0,
+                                      0x10001c0, 0x180, 0x1000180, 0x40, 0x180, 0x1000180, 0x1c0,
+                                      0x10001c0 };
+   const unsigned f[4] = { dst_rgb, dst_a, src_rgb, src_a };
+
+   for (unsigned i = 0; i < 4; i++) {
+      unsigned k = f[i] < 15 ? f[i] : 0;
+      uint32_t lo, hi;
+
+      if (i < 2) {                  /* r1 = dst * Fd: sopwm r1, <colour|tile|constant>, o0 */
+         lo = d_lo[k];
+         if (lo == 0x80000000)
+            lo |= color_pa << 7;    /* the colour */
+         else if (lo == 0xc0000100)
+            lo = 0xc0000000 | const_sa << 7;
+         lo |= 0x10200000;
+         hi = d_hi[k] | (i ? 0x90800800 : 0x90807800);
+      } else {                      /* r0 = src * Fs: sopwm r0, pa<c>, <colour|tile|constant> */
+         lo = s_lo[k];
+         if (lo == 0x20000000)
+            lo |= color_pa;
+         else if (lo == 0x30000002)
+            lo = 0x30000000 | const_sa;
+         lo |= color_pa << 7 | 0x80000000;
+         hi = s_hi[k] | (i == 3 ? 0x90800800 : 0x90807800);
+      }
+      w[i][0] = lo;
+      w[i][1] = hi;
+   }
+   /* sop2 o0, r0, r1 [end c1=one c2=one cop a1=one a2=one aop]; without
+    * end it writes pa<c> instead (dst bank h1, number l21-27), as the Mesa
+    * driver's blend does before a colour mask.  cop l18-19, aop l16-17. */
+   w[4][0] = 0x00000001 | (cop & 3u) << 18 | (aop & 3u) << 16 | (end ? 0 : color_pa << 21);
+   w[4][1] = 0x81808804 | (end ? 1u << 18 | 1 : 2);
+}
+
 #ifdef __cplusplus
 }
 #endif

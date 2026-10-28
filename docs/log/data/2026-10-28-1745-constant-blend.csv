@@ -1,0 +1,9 @@
+run,capture,poke,prediction,pixels_differing,of
+b0,k1,none,identical,0,345600
+b2,k1,src-RGB sopwm 90807980->91807980 @0x370083a0,RGB of the DDK's k2 frame + alpha of k1,0,345600
+b3,k1,src-RGB sopwm ->908079c0,the DDK's k3 frame,0,345600
+kk0,kb0,none,identical,0,345600
+kk1,kb0,sop2 c1=k18 (80840981),discovery: per-4x4-block leftover values in B,43200,345600
+kk2,kb0,sop2 c2=k19 (81840831),discovery: unchanged (k19 = 0),0,345600
+kk3,kb0,sop2 a1=k18 (81b40001),discovery: alpha 255,43200,345600
+kk4,kb0,sop2 a2=k19 (81840e01),discovery: unchanged (k19 = 0),0,345600
