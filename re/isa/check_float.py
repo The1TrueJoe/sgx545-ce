@@ -210,6 +210,20 @@ for po, pargs in PRI_ARGS.items():
                 check(f"fdual {po:#x}+{so:#x} i{d} {srcs}", U(po, *pargs, f1=0x200 | D), pair=sec,
                       want={"pri": PRI_CODE[po], "sec": code})
 
+# mov secondary: one source, i0-i2 or a primary slot (int-source-select 4/5/6
+# = src0/src1/src2, or a register put into a slot the primary leaves free)
+MSRC_IN = [(A("i", 0), 0), (A("i", 1), 1), (A("i", 2), 2), (A(0x10, 4), 4), (A(0x10, 5), 5), (A(0x10, 6), 6),
+           (A("pa", 9), None)]
+for po, pargs in PRI_ARGS.items():
+    for d in range(3):
+        for a, code in MSRC_IN:
+            r = check(f"fdual {po:#x}+mov i{d} <- {a[:2]}", U(po, *pargs, f1=0x200 | D), pair=U(0xA3, A("i", d), a),
+                      want={"pri": PRI_CODE[po], "sec": 15})
+            if r and code is not None and hw.decode(*r).d.get("msrc") != code:
+                fails.append(f"fdual {po:#x}+mov <- {a[:2]}: msrc {hw.decode(*r).d.get('msrc')} want {code}")
+            if r and code is None and hw.decode(*r).d.get("msrc") not in (4, 6):
+                fails.append(f"fdual {po:#x}+mov <- pa9: msrc {hw.decode(*r).d.get('msrc')} want a free slot")
+
 print(f"{n_ok} encodings checked, {len(fails)} failures")
 for f in fails[:40]:
     print("  " + f)

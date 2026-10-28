@@ -182,9 +182,13 @@ meaning **unknown**).
 
 fmad16 (**encoder**): per-source swizzle (USEASM argument flags 25-26):
 src0 h9-10, src1 h13 + h18, src2 h21-22 (so fmad16 has no end bit); repeat
-1-2 in h12 (needs explicit increments h15/h14/h8). The four swizzle values
-are libusc's FMAD16_SWIZZLE_{LOWHIGH?, LOWLOW, HIGHHIGH, CVTFROMF32} (names in
-asserts; which value is which is a **guess**).
+1-2 in h12 (needs explicit increments h15/h14/h8). The swizzle value is
+libusc's FMAD16_SWIZZLE enum, passed through unchanged by asm.c: 0 each half
+reads its own half (no suffix), 1 `ll` both halves read the low half
+(LOWLOW), 2 `hh` both read the high half (HIGHHIGH), 3 `f32` the source is
+F32 and is converted (CVTFROMF32). **encoder** for the bits; the names are
+libusc's (f16opt.c asserts compare against LOWLOW = 1, HIGHHIGH = 2,
+CVTFROMF32 = 3).
 
 fdpc (**encoder**): fdp + clip-plane result cp0-7 (USEASM register type
 0xd) in l15-17, l14 set. Needs a multi-channel repeat or mask.
@@ -224,20 +228,30 @@ secondary computes into internal registers.
 | bits | field | values |
 |---|---|---|
 | h24-25 | pred | short predicate |
-| h18, h19, h26 | pri | 0 fmad, 1 mov, 2 fadm, 3 fmsa, 4 fddp, 5 fminmax, 6 USEASM 0x65, 7 USEASM 0xa7 |
-| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fadm/fsubflr/ffrc, 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 USEASM 0x65, 15 mov |
+| h18, h19, h26 | pri | 0 fmad, 1 mov, 2 fadm, 3 fmsa, 4 fddp, 5 fminmax, 6 ima32 (USEASM 0x65), 7 fssq (USEASM 0xa7) |
+| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fadm/fsubflr/ffrc, 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32 (USEASM 0x65), 15 mov |
 | h5, h13 | sd | secondary destination (and its first source): 0 i0, 1 i1, 2 i2, 3 i0 with the first source taken from the src0 slot |
 | h14-15 | sb | secondary second source: i0, i1, i2, or 3 = the primary's src1 |
 | h10, h21 | sc | secondary third source: i0, i1, i2, or 3 = the src2 slot |
+| h14, h15, h21 | msrc | instead of sb/sc when the secondary is mov: 0 i0, 1 i1, 2 i2, 4 the src0 slot, 5 the src1 slot, 6 the src2 slot (USEASM int-source-selects 4/5/6; a register operand goes into whichever of src0/src2 the primary leaves free) |
 | h12 | rpt | 1-2 |
 | h22 | fmt | format select as in the float classes |
 | h4, h3 | neg1, neg2 | negate the src1 / src2 slot |
 
-A one-source secondary op reads sb; a two-source one sb and sc. USEASM 0xa7
-exists only as a dual-issue primary (libusc internal op 0x8e; the corpus
-uses it once, in `v_norm`); 0x65 is described in the "Integer, fixed-point and multi-unit ops" section.
+A one-source secondary op reads sb; a two-source one sb and sc; mov reads
+msrc. All **encoder**.
 
-Checked: `check_float.py` (3217 oracle encodings over every operand type,
+`fssq` = USEASM 0xa7, libusc internal op 0x8e, exists only as a dual-issue
+primary: two sources in the src1/src2 slots, each source channel feeding the
+same destination channel (libusc's channel-use code treats it like a
+two-source mov). The corpus uses it once, in `v_norm`
+(`normalize(p.xyz)`): `fdual.fssq.mov o0, pa2, pa0, pa1 [sd=i2 msrc=src0]`
+then `fdual.mov.fmad o3, r0, c52, o0 [sd=i2 sb=i2 sc=src2]` and
+`frsq o1, i2`: i2 = p.z, o0 = fssq(p.x, p.y), i2 = i2 * i2 + o0, so
+fssq(a, b) = a*a + b*b (**corpus**; the name is a **guess**). ima32 (0x65) is
+described in the "Integer, fixed-point and multi-unit ops" section.
+
+Checked: `check_float.py` (3340 oracle encodings over every operand type,
 modifier, repeat/mask/increment, predicate, flag, swizzle, movc type and
 condition and fdual pairing) and `hwcheck.py` (all corpus words of these
 classes): no unexplained bit, every word round-trips.
@@ -351,7 +365,7 @@ condition and test vs testmask. Text:
 | h12-15 | mask | flags1 write mask verbatim (fdp: USEASM 0xc2 -> 7, 0xc3 -> 0xf). testmask also takes a repeat count n -> mask (1<<n)-1 (n <= 4); test rejects a repeat. A test with mask != 1 must write p0 | encoder; corpus: testmask mask=15 for bvec4 compares |
 | l20 | dest written | clear when USEASM arg0 has flag b16; then the dest field holds h0 + h19 (`nodst` = 0x280) | encoder; corpus: every `test` has no dest |
 | h18 | fmt | set when a source has arg flag b22 (float group, F16) or b24 (group 2 ops 0xf7-0xf9, C10; the dest flag counts there too). Sources and dest then have 6-bit numbers + bit 6 = per-operand format, printed `.f16` / `.c10` | encoder; corpus (`test.fsub.ge p1, sa20.f16, sa24.f16`, `test.fpsub8.lt p0, pa4.c10, pa5.c10`) |
-| h21 | f2_0 | USEASM flags2 b0 | encoder; corpus sets it only on the counter test of fixed-count loops (loop4, lp_s4/s32/s100, lp_nest, tx_dep_loop): meaning unknown |
+| h21 | f2_0 | USEASM flags2 b0 | encoder; libusc's asm.c (FUN_00018050, ITESTPRED only) copies it from bit 5 of its internal instruction flags, which no assert names; the corpus has it only on the counter test of fixed-count loops (loop4, lp_s4/s32/s100, lp_nest, tx_dep_loop): meaning unknown |
 | h22, h23, h20, h24-26 | nosched, skipinv, syncs, pred | as above | encoder |
 | dst / src1 / src2 | dst l21-27 h0-1 h19 (USEASM arg0), src1 = arg1 (testmask) / arg2 (test), src2 = next arg. One-source ops (frcp ... fexp2, fadd from 0xa4) get src2 = #0; fsubflr from 0x3 repeats src1 | encoder |
 
@@ -458,7 +472,7 @@ no rotate. The text shows n, rot and inv separately (lossless):
 ### Open questions
 
 - f2_0 (test h21, USEASM flags2 b0): only on fixed-trip-count loop counter
-  tests. Meaning unknown.
+  tests; libusc internal instruction flag bit 5 (unnamed). Meaning unknown.
 - partial (bitwise h2, USEASM flags1 b20): compiler never sets it.
 - test chan values 4-7, testmask type 0/1 (byte/word) and value 3, the
   sign/zero test value 3: encoder emits 4-7 / 0-2 but nothing names them;

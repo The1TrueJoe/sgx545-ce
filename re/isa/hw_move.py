@@ -100,10 +100,15 @@ form("fddpc", [("h27-31", 2), ("h9-10", 2)], common() + rpt_moe() + [FMT],
 # 0x100). The primary op uses the normal dst/src0/src1/src2 slots; the
 # secondary op computes into internal registers.
 #   primary op (h18 + h19 + h26):
-PRI = {0: "fmad", 1: "mov", 2: "fadm", 3: "fmsa", 4: "fddp", 5: "fminmax", 6: "op65", 7: "opa7"}
+PRI = {0: "fmad", 1: "mov", 2: "fadm", 3: "fmsa", 4: "fddp", 5: "fminmax", 6: "ima32", 7: "fssq"}
+#   7 = USEASM 0xa7 (libusc internal op 0x8e), which exists only dual-issued:
+#   two sources in the src1/src2 slots, each channel to the same dest channel
+#   (libusc's channel-use code treats it like mov with two sources); c2 v_norm
+#   uses it as x*x + y*y, so `fssq` (sum of squares; corpus). 6 = USEASM 0x65
+#   (ima32, see the Integer section).
 #   secondary op (h6-9); fadm, fsubflr and ffrc all encode as 3
 SEC = {0: "fmad", 1: "fmad16", 2: "fmsa", 3: "fadm", 4: "fmaxmin", 5: "frcp", 6: "frsq", 7: "fexp2",
-       8: "flog2", 9: "fsin", 10: "fcos", 11: "fadd", 12: "fsub", 13: "fmul", 14: "op65", 15: "mov"}
+       8: "flog2", 9: "fsin", 10: "fcos", 11: "fadd", 12: "fsub", 13: "fmul", 14: "ima32", 15: "mov"}
 #   secondary destination and first source (h5 + h13): i1 / i2 / i0 (the
 #   first source is then the same internal register), or 3: destination i0,
 #   first source = the src0 slot
@@ -112,6 +117,11 @@ SD = {0: "i0", 1: "i1", 2: "i2", 3: "i0s0"}
 SB = {0: "i0", 1: "i1", 2: "i2", 3: "src1"}
 #   secondary third source (h10 + h21): i0 / i1 / i2 / the src2 slot
 SC = {0: "i0", 1: "i1", 2: "i2", 3: "src2"}
+#   a mov secondary has one source, chosen by h14 + h15 + h21 instead: i0 /
+#   i1 / i2, or (h21 set) the src0 / src1 / src2 slot (USEASM int-source-
+#   selects 4/5/6 = src0/src1/src2; a register operand goes into whichever of
+#   the src0/src2 slots the primary leaves free)
+MSRC = {0: "i0", 1: "i1", 2: "i2", 4: "src0", 5: "src1", 6: "src2"}
 
 form("fdual", [("h27-31", 0x1b)],
      [Fld("pred", "h24-25", "pred", PRED2), Fld("skipinv", "h23"), Fld("nosched", "h11"), Fld("syncs", "h20"),
@@ -119,7 +129,10 @@ form("fdual", [("h27-31", 0x1b)],
       Fld("sec", "h6-9", "enum", SEC, show="mod"),
       Fld("rpt", "h12", "int", bias=1, default=1),
       FMT,
-      Fld("sd", "h5,h13", "enum", SD), Fld("sb", "h14-15", "enum", SB), Fld("sc", "h10,h21", "enum", SC),
+      Fld("sd", "h5,h13", "enum", SD),
+      Fld("sb", "h14-15", "enum", SB, when=lambda d: d.get("sec") != 15),
+      Fld("sc", "h10,h21", "enum", SC, when=lambda d: d.get("sec") != 15),
+      Fld("msrc", "h14,h15,h21", "enum", MSRC, when=lambda d: d.get("sec") == 15),
       # negate on the source in the src1 / src2 slot (argument flag 0)
       Fld("neg1", "h4"), Fld("neg2", "h3")],
      [DST_NOEXT, SRC0(fmt=True), SRC1(fmt=True), SRC2(fmt=True)], src="0x103620 fdual")

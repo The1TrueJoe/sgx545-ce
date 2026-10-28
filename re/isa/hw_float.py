@@ -107,10 +107,15 @@ for op, sub, name in ((2, 0, "fdp"), (4, 0, "fdsx"), (4, 1, "fdsy")):
 # --- hw 6: fmad16. Per-source F16 swizzle (USEASM argument flags 25-26):
 # src0 h9-10, src1 h13 + h18, src2 h21-22. Repeat 1-2 in h12 (needs the
 # explicit increments h15/h14/h8).
-SWZ16 = {0: "", 1: "sw1", 2: "sw2", 3: "sw3"}
+# Values are libusc's FMAD16_SWIZZLE enum (f16opt.c asserts compare it with
+# LOWLOW = 1, HIGHHIGH = 2, CVTFROMF32 = 3; asm.c passes it straight to the
+# USEASM argument flags): 0 each half its own, 1 both halves read the low
+# half, 2 both read the high half, 3 the source is F32, converted.
+SWZ16 = {0: "", 1: "ll", 2: "hh", 3: "f32"}
 form("fmad16", [("h27-31", 6)],
      common(end=None) + [
          Fld("rpt", "h12", "int", bias=1, default=1),
          Fld("inc0", "h15"), Fld("inc1", "h14"), Fld("inc2", "h8"),
-         Fld("swz0", "h9-10", "int"), Fld("swz1", "h13,h18", "int"), Fld("swz2", "h21-22", "int")],
+         Fld("swz0", "h9-10", "enum", SWZ16), Fld("swz1", "h13,h18", "enum", SWZ16),
+         Fld("swz2", "h21-22", "enum", SWZ16)],
      [DST(), SRC0(abs="h7"), SRC1(neg="h5", abs="h6"), SRC2(neg="h3", abs="h4")], src="0x1047f0 hw6")
