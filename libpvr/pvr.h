@@ -25,7 +25,7 @@ struct pvr {
 	int map_flags;		/* extra mmap flags for device memory: MAP_32BIT unless cleared */
 	int trace_fd;		/* pvrtrace-format log (tools/trace/pvrtrace.c), or -1 */
 	unsigned kicks;
-	struct { void *addr; size_t len; } maps[256];	/* device memory mapped so far */
+	struct { void *addr; size_t len; } maps[1024];	/* device memory mapped so far */
 	unsigned nmaps;
 };
 
@@ -35,12 +35,23 @@ struct pvr_buf {
 	uint32_t devva;
 	uint32_t size;
 	void *cpu;		/* CPU mapping, or NULL */
+	/* for pvr_free / pvr_unmap */
+	void *mmap_base;	/* what mmap returned (cpu may be an offset into it) */
+	size_t mmap_len;
+	int wrapped;		/* WRAP_EXT_MEMORY, not ALLOC_DEVICEMEM */
+	PVRSRV_CLIENT_MEM_INFO client_mem;
+	PVRSRV_CLIENT_SYNC_INFO client_sync;
 };
 
 /* One bridge call; returns the bridge's eError (first word of OUT) or -errno. */
 int pvr_call(struct pvr *p, uint32_t id, void *in, size_t in_size, void *out, size_t out_size);
 
 int pvr_open(struct pvr *p, const char *node);
+/* pvr_open on a node someone else opened (the fd is used, not dup'ed) */
+void pvr_open_fd(struct pvr *p, int fd);
+/* the whole bring-up a client needs: connect, acquire device 0, a memory context, the heaps */
+int pvr_init(struct pvr *p);
+int pvr_disconnect(struct pvr *p);
 int pvr_connect(struct pvr *p);
 int pvr_acquire(struct pvr *p, uint32_t index, uint32_t type);
 int pvr_memctx(struct pvr *p);
@@ -49,6 +60,12 @@ int pvr_alloc(struct pvr *p, struct pvr_buf *b, uint32_t heap_id, uint32_t attri
 	      uint32_t align);
 int pvr_map(struct pvr *p, struct pvr_buf *b);
 int pvr_wrap(struct pvr *p, struct pvr_buf *b, void *cpu, uint32_t size);
+/* FREE_DEVICEMEM or UNWRAP_EXT_MEMORY, and the CPU mapping */
+void pvr_free(struct pvr *p, struct pvr_buf *b);
+/* drop b's CPU mapping only */
+void pvr_unmap(struct pvr *p, struct pvr_buf *b);
+/* map the PVRSRV_SYNC_DATA of a kernel sync info handle; keep holds the mapping */
+volatile PVRSRV_SYNC_DATA *pvr_sync_data(struct pvr *p, IMG_HANDLE sync, struct pvr_buf *keep);
 int pvr_register_render_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
 			    IMG_HANDLE *handle, uint32_t *devva);
 int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick);

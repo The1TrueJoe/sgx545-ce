@@ -7,6 +7,7 @@
  *   PROBE_VERTS="x0 y0 ..."    triangle vertices, clip space, any multiple of 3
  *   PROBE_Z=z                  every vertex at this clip z (a vec3 position; default a vec2)
  *   PROBE_DRAWS=n              draw the vertex list n times      (1)
+ *   PROBE_FRAMES=n             n frames, each swapped; frame k clears with red = k/n (1)
  *   PROBE_VS / PROBE_FS        shader source overrides
  *   PROBE_PRIM=n               GL primitive enum                 (4 = GL_TRIANGLES)
  *   PROBE_ATTRS="n1 n2 ..."    extra float attributes a1, a2, ... with n components each
@@ -502,6 +503,7 @@ int main(void)
 	const char *vs = getenv("PROBE_VS"), *fs = getenv("PROBE_FS"), *out = getenv("PROBE_OUT");
 	const char *texfmt = getenv("PROBE_TEXFMT") ? getenv("PROBE_TEXFMT") : "rgba8888";
 	int nv, draws = getenv("PROBE_DRAWS") ? atoi(getenv("PROBE_DRAWS")) : 1;
+	int frames = getenv("PROBE_FRAMES") ? atoi(getenv("PROBE_FRAMES")) : 1;
 	GLenum prim = getenv("PROBE_PRIM") ? (GLenum)atoi(getenv("PROBE_PRIM")) : 4;
 	GLbitfield clearbits = GL_COLOR_BUFFER_BIT;
 	EGLDisplay dpy;
@@ -669,9 +671,6 @@ int main(void)
 
 	if (getenv("PROBE_FBO") && !fbo_setup())
 		return 1;
-	note("clear");
-	glClearColor(clear[0], clear[1], clear[2], clear[3]);
-	glClear(clearbits);
 	/* extra attribute a<k>, vertex v, component c = 0.25 * (k + 1) + 0.125 * v + 0.0625 * c */
 	stride = pos;
 	for (int a = 0; a < na; a++)
@@ -708,6 +707,13 @@ int main(void)
 	}
 	for (int a = 0; a <= na; a++)
 		glEnableVertexAttribArray(a);
+	for (int fr = 0; fr < frames; fr++) {
+	/* PROBE_FRAMES: frame fr clears to the clear colour with red = fr / frames */
+	if (frames > 1)
+		clear[0] = (float)fr / frames;
+	note("clear");
+	glClearColor(clear[0], clear[1], clear[2], clear[3]);
+	glClear(clearbits);
 	for (int i = 0; i < draws; i++) {
 		note("draw");
 		glDrawArrays(prim, 0, nv);
@@ -734,6 +740,11 @@ int main(void)
 			fbo_sample(w, h, prog);
 		}
 	}
+	if (fr < frames - 1) {
+		note("swap");
+		eglSwapBuffers(dpy, surf);
+		continue;
+	}
 	note("finish");
 	glFinish();
 	if (snapshot)
@@ -754,6 +765,7 @@ int main(void)
 	}
 	note("swap");
 	eglSwapBuffers(dpy, surf);
+	}
 	note("terminate");
 	eglTerminate(dpy);
 	return 0;

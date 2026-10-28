@@ -1,0 +1,5 @@
+mc_terrain       sgxc  27   libusc  15 +   6 secondary   samples 2/2
+mc_texfog        sgxc  23   libusc  13 +   6 secondary   samples 1/1
+mc_gui           sgxc  14   libusc   9 +   0 secondary   samples 1/1
+mc_sky           sgxc  11   libusc   6 +   6 secondary   samples 0/0
+total over 4: sgxc 75, libusc 43 main + 18 secondary

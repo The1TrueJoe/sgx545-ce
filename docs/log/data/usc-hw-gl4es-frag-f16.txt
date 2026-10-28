@@ -1,0 +1,5 @@
+mc_terrain       SAME     0/4096 px differ, max   0  centre 336699cc
+mc_texfog        SAME     0/4096 px differ, max   0  centre 336699cc
+mc_gui           SAME     0/4096 px differ, max   0  centre 336699cc
+mc_sky           SAME     0/4096 px differ, max   0  centre 9fbed1f2
+4/4 identical

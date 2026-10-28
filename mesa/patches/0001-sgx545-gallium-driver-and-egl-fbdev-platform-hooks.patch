@@ -1,0 +1,282 @@
+diff --git a/meson.build b/meson.build
+index 5f19ef9..d628c30 100644
+--- a/meson.build
++++ b/meson.build
+@@ -236,6 +236,7 @@ with_gallium_d3d12 = gallium_drivers.contains('d3d12')
+ with_gallium_asahi = gallium_drivers.contains('asahi')
+ with_gallium_rocket = gallium_drivers.contains('rocket')
+ with_gallium_ethosu = gallium_drivers.contains('ethosu')
++with_gallium_sgx545 = gallium_drivers.contains('sgx545')
+ foreach gallium_driver : gallium_drivers
+   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
+ endforeach
+@@ -487,6 +488,7 @@ with_platform_wayland = _platforms.contains('wayland')
+ with_platform_haiku = _platforms.contains('haiku')
+ with_platform_windows = _platforms.contains('windows')
+ with_platform_macos = _platforms.contains('macos')
++with_platform_fbdev = _platforms.contains('fbdev')
+ 
+ with_gfxstream_emulated_android = with_gfxstream_vk and with_platform_android and host_machine.system() == 'linux'
+ if with_gfxstream_emulated_android
+@@ -575,7 +577,7 @@ if with_egl
+   endif
+ 
+   # All the other platforms can be detected and cannot reach the native platform code
+-  _undetectable_platforms = ['x11', 'haiku', 'android', 'surfaceless']
++  _undetectable_platforms = ['x11', 'haiku', 'android', 'surfaceless', 'fbdev']
+ 
+   # Don't enforce the native platform if none of the undetectable platforms are enabled
+   _undetectable_platforms_enabled = []
+diff --git a/meson.options b/meson.options
+index 93a60e3..3f38ef0 100644
+--- a/meson.options
++++ b/meson.options
+@@ -12,7 +12,7 @@ option(
+   type : 'array',
+   value : ['auto'],
+   choices : [
+-    'auto', 'x11', 'wayland', 'haiku', 'android', 'windows', 'macos',
++    'auto', 'x11', 'wayland', 'haiku', 'android', 'windows', 'macos', 'fbdev',
+   ],
+   description : 'window systems to support. If this is set to `auto`, all ' +
+                 'platforms applicable will be enabled.'
+@@ -23,7 +23,7 @@ option(
+   type : 'combo',
+   value : 'auto',
+   choices : [
+-    'auto', 'x11', 'haiku', 'android', 'surfaceless',
++    'auto', 'x11', 'haiku', 'android', 'surfaceless', 'fbdev',
+   ],
+   description : 'the window system EGL assumes for EGL_DEFAULT_DISPLAY',
+ )
+@@ -87,7 +87,7 @@ option(
+     'all', 'auto',
+     'asahi', 'crocus', 'd3d12', 'ethosu', 'etnaviv', 'freedreno', 'i915', 'iris',
+     'lima', 'llvmpipe', 'nouveau', 'panfrost', 'r300', 'r600', 'radeonsi',
+-    'rocket', 'softpipe', 'svga', 'tegra', 'v3d', 'vc4', 'virgl', 'zink',
++    'rocket', 'sgx545', 'softpipe', 'svga', 'tegra', 'v3d', 'vc4', 'virgl', 'zink',
+   ],
+   description : 'List of gallium drivers to build. If this is set to auto ' +
+                 'all drivers applicable to the target OS/architecture ' +
+diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
+index edee4ff..11fe28d 100644
+--- a/src/egl/drivers/dri2/egl_dri2.c
++++ b/src/egl/drivers/dri2/egl_dri2.c
+@@ -913,6 +913,9 @@ dri2_initialize(_EGLDisplay *disp)
+    case _EGL_PLATFORM_ANDROID:
+       ret = dri2_initialize_android(disp);
+       break;
++   case _EGL_PLATFORM_FBDEV:
++      ret = dri2_initialize_fbdev(disp);
++      break;
+    default:
+       UNREACHABLE("Callers ensure we cannot get here.");
+       return EGL_FALSE;
+@@ -1006,6 +1009,8 @@ dri2_display_destroy(_EGLDisplay *disp)
+       break;
+    case _EGL_PLATFORM_DEVICE:
+       break;
++   case _EGL_PLATFORM_FBDEV:
++      break;
+    default:
+       UNREACHABLE("Platform teardown is not properly hooked.");
+       break;
+diff --git a/src/egl/drivers/dri2/egl_dri2.h b/src/egl/drivers/dri2/egl_dri2.h
+index aa5692a..d702344 100644
+--- a/src/egl/drivers/dri2/egl_dri2.h
++++ b/src/egl/drivers/dri2/egl_dri2.h
+@@ -573,6 +573,17 @@ dri2_initialize_android(_EGLDisplay *disp)
+ EGLBoolean
+ dri2_initialize_surfaceless(_EGLDisplay *disp);
+ 
++#ifdef HAVE_FBDEV_PLATFORM
++EGLBoolean
++dri2_initialize_fbdev(_EGLDisplay *disp);
++#else
++static inline EGLBoolean
++dri2_initialize_fbdev(_EGLDisplay *disp)
++{
++   return _eglError(EGL_NOT_INITIALIZED, "fbdev platform not built");
++}
++#endif
++
+ EGLBoolean
+ dri2_initialize_device(_EGLDisplay *disp);
+ static inline void
+diff --git a/src/egl/main/eglapi.c b/src/egl/main/eglapi.c
+index a6c6f95..d09aecf 100644
+--- a/src/egl/main/eglapi.c
++++ b/src/egl/main/eglapi.c
+@@ -1040,7 +1040,8 @@ _eglCreateWindowSurfaceCommon(_EGLDisplay *disp, EGLConfig config,
+    _EGLSurface *surf = NULL;
+    EGLSurface ret;
+ 
+-   if (native_window == NULL)
++   /* the fbdev platform's window is the framebuffer: any handle will do */
++   if (native_window == NULL && !(disp && disp->Platform == _EGL_PLATFORM_FBDEV))
+       RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+ 
+    if (disp && (disp->Platform == _EGL_PLATFORM_SURFACELESS ||
+diff --git a/src/egl/main/egldisplay.c b/src/egl/main/egldisplay.c
+index ef653aa..2ab7fcd 100644
+--- a/src/egl/main/egldisplay.c
++++ b/src/egl/main/egldisplay.c
+@@ -84,6 +84,7 @@ static const struct {
+    {_EGL_PLATFORM_SURFACELESS, "surfaceless"},
+    {_EGL_PLATFORM_DEVICE, "device"},
+    {_EGL_PLATFORM_WINDOWS, "windows"},
++   {_EGL_PLATFORM_FBDEV, "fbdev"},
+ };
+ 
+ /**
+diff --git a/src/egl/main/egldisplay.h b/src/egl/main/egldisplay.h
+index 6178140..60df96d 100644
+--- a/src/egl/main/egldisplay.h
++++ b/src/egl/main/egldisplay.h
+@@ -55,6 +55,7 @@ enum _egl_platform_type {
+    _EGL_PLATFORM_SURFACELESS,
+    _EGL_PLATFORM_DEVICE,
+    _EGL_PLATFORM_WINDOWS,
++   _EGL_PLATFORM_FBDEV,
+ 
+    _EGL_NUM_PLATFORMS,
+    _EGL_INVALID_PLATFORM = -1
+diff --git a/src/egl/meson.build b/src/egl/meson.build
+index 4e62ee4..3b50f16 100644
+--- a/src/egl/meson.build
++++ b/src/egl/meson.build
+@@ -104,6 +104,9 @@ if with_dri
+     'drivers/dri2/platform_surfaceless.c',
+   )
+ 
++  if with_platform_fbdev
++    files_egl += files('drivers/dri2/platform_fbdev.c')
++  endif
+   if with_platform_x11
+     files_egl += files('drivers/dri2/platform_x11.c')
+     incs_for_egl += inc_loader_x11
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+index dc631b4..3354b09 100644
+--- a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+@@ -88,6 +88,7 @@ static const struct drm_driver_descriptor *driver_descriptors[] = {
+    &ethosu_driver_descriptor,
+    &tegra_driver_descriptor,
+    &lima_driver_descriptor,
++   &sgx545_driver_descriptor,
+    &zink_driver_descriptor,
+    &kmsro_driver_descriptor,
+ };
+diff --git a/src/gallium/auxiliary/target-helpers/drm_helper.h b/src/gallium/auxiliary/target-helpers/drm_helper.h
+index 65481b3..87ef334 100644
+--- a/src/gallium/auxiliary/target-helpers/drm_helper.h
++++ b/src/gallium/auxiliary/target-helpers/drm_helper.h
+@@ -414,6 +414,23 @@ DRM_DRIVER_DESCRIPTOR(lima, lima_driconf, ARRAY_SIZE(lima_driconf))
+ DRM_DRIVER_DESCRIPTOR_STUB(lima)
+ #endif
+ 
++#ifdef GALLIUM_SGX545
++#include "sgx545/sgx545_public.h"
++
++static struct pipe_screen *
++pipe_sgx545_create_screen(int fd, const struct pipe_screen_config *config)
++{
++   struct pipe_screen *screen;
++
++   screen = sgx545_drm_screen_create(fd, config);
++   return screen ? debug_screen_wrap(screen) : NULL;
++}
++DRM_DRIVER_DESCRIPTOR(sgx545, NULL, 0)
++
++#else
++DRM_DRIVER_DESCRIPTOR_STUB(sgx545)
++#endif
++
+ #ifdef GALLIUM_ZINK
+ #include "zink/zink_public.h"
+ 
+diff --git a/src/gallium/auxiliary/target-helpers/drm_helper_public.h b/src/gallium/auxiliary/target-helpers/drm_helper_public.h
+index fe0e122..a588196 100644
+--- a/src/gallium/auxiliary/target-helpers/drm_helper_public.h
++++ b/src/gallium/auxiliary/target-helpers/drm_helper_public.h
+@@ -26,6 +26,7 @@ extern const struct drm_driver_descriptor rocket_driver_descriptor;
+ extern const struct drm_driver_descriptor ethosu_driver_descriptor;
+ extern const struct drm_driver_descriptor tegra_driver_descriptor;
+ extern const struct drm_driver_descriptor lima_driver_descriptor;
++extern const struct drm_driver_descriptor sgx545_driver_descriptor;
+ extern const struct drm_driver_descriptor zink_driver_descriptor;
+ extern const struct drm_driver_descriptor kmsro_driver_descriptor;
+ 
+diff --git a/src/gallium/meson.build b/src/gallium/meson.build
+index 67011f5..96b8e4f 100644
+--- a/src/gallium/meson.build
++++ b/src/gallium/meson.build
+@@ -184,6 +184,12 @@ if with_gallium_lima
+ else
+   driver_lima = declare_dependency()
+ endif
++if with_gallium_sgx545
++  subdir('winsys/sgx545/drm')
++  subdir('drivers/sgx545')
++else
++  driver_sgx545 = declare_dependency()
++endif
+ if with_gallium_rocket
+   subdir('winsys/rocket/drm')
+   subdir('drivers/rocket')
+diff --git a/src/gallium/targets/dri/meson.build b/src/gallium/targets/dri/meson.build
+index c526ffe..fb5fb92 100644
+--- a/src/gallium/targets/dri/meson.build
++++ b/src/gallium/targets/dri/meson.build
+@@ -61,7 +61,7 @@ libgallium_dri = shared_library(
+     driver_kmsro, driver_v3d, driver_vc4, driver_freedreno, driver_etnaviv,
+     driver_tegra, driver_i915, driver_svga, driver_virgl,
+     driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
+-    driver_asahi, driver_crocus, driver_rocket, driver_ethosu
++    driver_asahi, driver_crocus, driver_rocket, driver_ethosu, driver_sgx545
+   ],
+   install : true,
+   name_suffix : libname_suffix,
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index 0bbccbf..518268a 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -146,6 +146,18 @@ iris_predicate(int fd, const char *driver)
+    return ret;
+ }
+ 
++/* the Intel CE (Cedarview/Groveland) SoCs' PowerVR SGX545, under its
++ * services driver */
++bool
++sgx545_predicate(int fd, const char *driver)
++{
++   char *kernel_driver = loader_get_kernel_driver_name(fd);
++   bool ret = kernel_driver && strcmp(kernel_driver, "pvrsrvkm") == 0;
++
++   free(kernel_driver);
++   return ret;
++}
++
+ /* choose zink or nouveau GL */
+ bool
+ nouveau_zink_predicate(int fd, const char *driver)
+diff --git a/src/loader/pci_id_driver_map.h b/src/loader/pci_id_driver_map.h
+index 38c9b97..02af4df 100644
+--- a/src/loader/pci_id_driver_map.h
++++ b/src/loader/pci_id_driver_map.h
+@@ -46,6 +46,7 @@ static const int vmwgfx_chip_ids[] = {
+ 
+ bool amd_predicate(int fd, const char *driver);
+ bool iris_predicate(int fd, const char *driver);
++bool sgx545_predicate(int fd, const char *driver);
+ bool nouveau_zink_predicate(int fd, const char *driver);
+ 
+ static const struct {
+@@ -55,6 +56,7 @@ static const struct {
+    int num_chips_ids;
+    bool (*predicate)(int fd, const char *driver);
+ } driver_map[] = {
++   { 0x8086, "sgx545", NULL, -1, sgx545_predicate },
+    { 0x8086, "i915", i915_chip_ids, ARRAY_SIZE(i915_chip_ids) },
+    { 0x8086, "crocus", crocus_chip_ids, ARRAY_SIZE(crocus_chip_ids) },
+    { 0x8086, "iris", NULL, -1, iris_predicate },
