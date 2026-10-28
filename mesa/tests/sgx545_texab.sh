@@ -19,3 +19,8 @@ run npot PROBE_TEXSIZE="12 6" PROBE_TEXWRAP="33071 33071"
 run l8 PROBE_TEXSIZE="16 16" PROBE_TEXFMT=l8
 run la88 PROBE_TEXSIZE="16 16" PROBE_TEXFMT=la88
 run rgb565 PROBE_TEXSIZE="16 16" PROBE_TEXFMT=rgb565
+# dependent samples (a USSE smp with the texture state in SA): swizzled,
+# projected with a vec3 (gl4es' fixed-function lookups), with a bias
+run dep_swz PROBE_TEXSIZE="16 16" PROBE_FS="precision mediump float; uniform sampler2D t0; varying vec2 v; void main() { gl_FragColor = texture2D(t0, v.yx); }"
+run dep_proj3 PROBE_TEXSIZE="16 16" PROBE_TEXFILTER="9729 9729" PROBE_FS="precision mediump float; uniform sampler2D t0; varying vec2 v; void main() { gl_FragColor = texture2DProj(t0, vec3(v, 1.5)); }"
+run dep_bias PROBE_TEXSIZE="16 16" PROBE_FS="precision mediump float; uniform sampler2D t0; varying vec2 v; void main() { gl_FragColor = texture2D(t0, v * 2.0, 0.5); }"

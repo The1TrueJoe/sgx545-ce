@@ -308,12 +308,24 @@ struct usp_info {
    unsigned n_iters;
    struct { unsigned iterator, comps, format, sampler; bool sample, proj; } iters[16];
    const char *why;             /* what read_usp refused */
+   /* dependent samples (block 5 without b0): where the smp goes in the flat
+    * program (before instruction `at`), its template, sampler and raw texel
+    * register */
+   struct { unsigned at, sampler, raw; uint64_t smp; } deps[SGX545_MAX_DEP_SAMPLES];
+   unsigned n_deps;
+   unsigned n_insts;            /* instructions in the flat program, counted from the blocks */
+   unsigned branch_at[64];      /* flat indices of the branches (blocks 3) */
+   unsigned n_branches;
 };
 
 /* the block stream: true when every texture sample is non-dependent (the
  * PDS samples into pa; dependent ones need an smp the driver doesn't write yet) */
+/* The block stream (ISA.md "USP blocks"): code (2: n instructions), branch
+ * (3: one instruction), label (4), sample (5) and its unpack (6), end (7).
+ * Counts the flat program's instructions as it goes, so that each dependent
+ * sample knows where its smp belongs. */
 static bool
-blocks_supported(const uint8_t *u, size_t size, size_t off, const char **why)
+blocks_supported(const uint8_t *u, size_t size, size_t off, struct usp_info *info)
 {
    while (off + 4 <= size) {
       uint32_t type = rd32(u, off);
@@ -323,23 +335,88 @@ blocks_supported(const uint8_t *u, size_t size, size_t off, const char **why)
       case 2: {
          unsigned n = rd16(u, off);
 
+         info->n_insts += n;
          off += 4 + 16 + 2 * n + 8 * n;
          break;
       }
-      case 3: off += 10; break;
+      case 3:
+         if (info->n_branches == ARRAY_SIZE(info->branch_at))
+            return info->why = "too many branches", false;
+         info->branch_at[info->n_branches++] = info->n_insts++;
+         off += 10;
+         break;
       case 4: off += 2; break;
       case 5:
-         if (!(rd16(u, off) & 1))
-            return *why = "a dependent texture sample (block 5)", false;
+         if (!(rd16(u, off) & 1)) {
+            /* dependent: the template at +48, the raw texel's register at
+             * +32 (type +30: 1 = r), the sampler at +26 */
+            if (info->n_deps == SGX545_MAX_DEP_SAMPLES || rd16(u, off + 30) != 1)
+               return info->why = "a dependent texture sample (block 5)", false;
+            info->deps[info->n_deps].at = info->n_insts;
+            info->deps[info->n_deps].sampler = rd16(u, off + 26);
+            info->deps[info->n_deps].raw = rd16(u, off + 32);
+            info->deps[info->n_deps].smp = (uint64_t)rd32(u, off + 52) << 32 | rd32(u, off + 48);
+            info->n_deps++;
+         }
          off += 56;
          break;
       case 6: off += 74; break;
-      case 9: return *why = "block 9", false;
+      case 9: return info->why = "block 9", false;
       case 7: return true;
-      default: return *why = "an unknown block", false;
+      default: return info->why = "an unknown block", false;
       }
    }
-   return *why = "a block stream without its end", false;
+   return info->why = "a block stream without its end", false;
+}
+
+/* The flat program with each dependent sample's smp and its wdf put in
+ * (ISA.md "The texture-sample sequence"): the template with the raw texel's
+ * temporary as destination (l21-27, h7 clear: r) and the sampler's 4 state
+ * words, in SA from `sa` on, as the texture state (src1 l7-13, bank l30-31 =
+ * 3: sa; h17 clear); then `wdf` on the template's DRC before the compiler's
+ * unpack reads the texel. Branch offsets are moved with the code. NULL on
+ * allocation failure; *n is the new length. */
+static uint64_t *
+insert_samples(const uint64_t *code, unsigned count, const struct usp_info *info, const unsigned *sa,
+               unsigned *n)
+{
+   unsigned total = count + 2 * info->n_deps, j = 0, k = 0;
+   uint64_t *w = malloc(total * sizeof(*w));
+   unsigned *map = malloc((count + 1) * sizeof(*map));
+
+   if (!w || !map) {
+      free(w);
+      free(map);
+      return NULL;
+   }
+   for (unsigned i = 0; i <= count; i++) {
+      while (j < info->n_deps && info->deps[j].at == i) {
+         uint32_t lo = (uint32_t)info->deps[j].smp, hi = info->deps[j].smp >> 32;
+
+         lo = (lo & ~(0x7fu << 21 | 0x7fu << 7 | 0xc0000000u)) | info->deps[j].raw << 21 | sa[j] << 7 | 0xc0000000u;
+         hi &= ~(0x80u | 1u << 17);
+         w[k++] = (uint64_t)hi << 32 | lo;
+         w[k++] = (uint64_t)(0xf9200000u | (hi & 1)) << 32;   /* wdf drc */
+         j++;
+      }
+      map[i] = k;
+      if (i < count)
+         w[k++] = code[i];
+   }
+   /* the branches' relative offsets (l0-17, signed) */
+   for (unsigned b = 0; b < info->n_branches; b++) {
+      unsigned i = info->branch_at[b];
+      uint32_t lo = (uint32_t)code[i], hi = code[i] >> 32;
+      int off = (int)(lo << 14) >> 14, t = (int)i + off;
+
+      if (i >= count || t < 0 || t > (int)count)
+         continue;
+      off = (int)map[t] - (int)map[i];
+      w[map[i]] = (uint64_t)hi << 32 | (lo & ~0x3ffffu) | ((uint32_t)off & 0x3ffffu);
+   }
+   free(map);
+   *n = k;
+   return w;
 }
 
 static bool
@@ -396,7 +473,7 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
    if (rd32(u, 0x10) == 1)
       off += 4 * ((rd16(u, 0x80) + 31) / 32);
    off += 4 * ((rd16(u, 0x82) + 31) / 32);
-   return blocks_supported(u, size, off, &info->why);
+   return blocks_supported(u, size, off, info);
 }
 
 static bool
@@ -481,12 +558,35 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       so->prog.out_dwords = dwords;
       so->prog.const_dwords = so->const_dwords;
    } else {
-      so->prog.code = sgxws_upload_fs(ctx->hw, out.code, out.n_code, info.color_reg, NULL);
-      so->code = malloc(out.n_code * sizeof(*so->code));
-      if (so->code) {
-         memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
-         so->n_code = out.n_code;
+      /* dependent samples: their state words go in SA after the constants */
+      if (info.n_deps) {
+         unsigned sa[SGX545_MAX_DEP_SAMPLES], n;
+
+         if (info.n_insts != out.n_code || so->const_dwords + 4 * info.n_deps > SGX545_MAX_CONSTS) {
+            fprintf(stderr, "sgx545: USP blocks hold %u instructions, the program %u: not drawn\n",
+                    info.n_insts, out.n_code);
+            simple_mtx_unlock(&screen->lock);
+            sgx_shader_free(&out);
+            ralloc_free(nir);
+            return false;
+         }
+         for (unsigned j = 0; j < info.n_deps; j++) {
+            so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
+            so->dep_sampler[j] = info.deps[j].sampler;
+            sa[j] = so->dep_sa[j];
+         }
+         so->n_deps = info.n_deps;
+         so->const_dwords += 4 * info.n_deps;
+         so->code = insert_samples(out.code, out.n_code, &info, sa, &n);
+         so->n_code = so->code ? n : 0;
+      } else {
+         so->code = malloc(out.n_code * sizeof(*so->code));
+         if (so->code) {
+            memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
+            so->n_code = out.n_code;
+         }
       }
+      so->prog.code = so->code ? sgxws_upload_fs(ctx->hw, so->code, so->n_code, info.color_reg, NULL) : 0;
       so->color_reg = info.color_reg;
       so->prog.temps = info.temps;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;

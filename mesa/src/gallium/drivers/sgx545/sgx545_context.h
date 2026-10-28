@@ -31,6 +31,8 @@ struct sgx545_const {
 
 #define SGX545_MAX_CONSTS 256
 
+#define SGX545_MAX_DEP_SAMPLES 8
+
 struct sgx545_shader {
    struct nir_shader *nir;
    enum sgx545_shader_kind kind;
@@ -43,8 +45,11 @@ struct sgx545_shader {
    unsigned n_attribs;          /* vertex: attribute slots, 4 dwords each */
    /* fragment: the shader's code, kept for the blend variants (the colour
     * epilogue is the blend, sgxws_blend) */
-   uint64_t *code;
+   uint64_t *code;              /* with the dependent samples' smp put in */
    unsigned n_code, color_reg;
+   /* dependent samples: the SA register of each one's 4 texture state words,
+    * and its sampler */
+   unsigned dep_sa[SGX545_MAX_DEP_SAMPLES], dep_sampler[SGX545_MAX_DEP_SAMPLES], n_deps;
    struct {
       struct sgxws_blend key;
       uint32_t code;

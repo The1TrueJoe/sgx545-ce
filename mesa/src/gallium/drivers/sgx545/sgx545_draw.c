@@ -323,6 +323,17 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       }
       d.fs = &fsp;
       fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
+      /* a dependent sample's texture state: the DOUTT words, in SA */
+      for (unsigned j = 0; j < ctx->fs->n_deps; j++) {
+         unsigned unit = ctx->fs->dep_sampler[j];
+         struct pipe_sampler_view *view = unit < PIPE_MAX_SAMPLERS ? ctx->views[unit] : NULL;
+
+         if (!view || !sgx545_resource(view->texture)->texture) {
+            SGX545_DBG(DRAW, "sampler %u: no texture the GPU can sample, draw skipped\n", unit);
+            return;
+         }
+         sgx545_tex_words(view, ctx->samplers[unit], &fsk[ctx->fs->dep_sa[j]]);
+      }
       d.fs_consts = fsk;
       for (unsigned i = 0; i < d.fs->n_douti; i++) {
          unsigned unit = d.fs->douti_tex[i];
