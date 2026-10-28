@@ -72,6 +72,7 @@ class Gen:
         self.xfers = None       # None: no transfers; set(): all; else the transfer numbers to replay
         self.xctx = {}          # captured transfer context dev addr -> index
         self.nodelta = []       # (dev addr, size) never written by a delta
+        self.peeks = []         # (label, dev addr, words) printed after every event
         self.writes = []        # (dev addr, bytes, comment) written before every kick
 
     def op(self, *a):
@@ -322,6 +323,10 @@ class Gen:
             else:
                 self.xfer(r)
             prev = mem
+            if self.peeks:
+                self.op("sleep", self.sleep_ms)
+            for label, va, cnt in self.peeks:
+                self.op("peek", f"{kind}{n}:{label}", self.hx(va), cnt)
         for h in getattr(self, "last_dst", []) + getattr(self, "last_xdst", []):
             self.op("waitsync", h, self.wait_ms)
         self.rtdata = self.rt_data(kicks[-1], len(kicks))
@@ -399,12 +404,14 @@ def main():
     ap.add_argument("--usse", action="append", default=[])
     ap.add_argument("--poke", action="append", default=[])
     ap.add_argument("--write", action="append", default=[])
+    ap.add_argument("--peek", action="append", default=[], help="LABEL:VA:words printed after every event")
     ap.add_argument("--no-delta", action="append", default=[], help="VA:size the deltas leave alone")
     ap.add_argument("--xfers", help="'all' or comma-separated transfer numbers to replay as well")
     a = ap.parse_args()
     ids = lambda s: {int(x, 0) for x in s.split(",") if x}
     gen = Gen(pvrlog.load(a.log), a.outdir, ids(a.skip_heaps), ids(a.delta_skip_heaps), a.sleep, a.wait)
     gen.pokes = overrides(a)
+    gen.peeks = [(lb, int(va, 0), int(c, 0)) for lb, va, c in (p.split(":") for p in a.peek)]
     gen.nodelta = [tuple(int(x, 0) for x in d.split(":")) for d in a.no_delta]
     if a.xfers:
         gen.xfers = set() if a.xfers == "all" else {int(x) for x in a.xfers.split(",")}

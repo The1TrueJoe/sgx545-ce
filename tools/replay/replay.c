@@ -18,6 +18,7 @@
  *   xfer ccb=m<i> off=<n> ctx=<n> [tasync=s<i>] [sync3d=s<i>] [src=s<i>,..] [dst=s<i>,..] [flags=<n>]
  *                                              (SGX_SUBMITTRANSFER on transfer context n)
  *   waitsync <s<i>> <ms> | sleep <ms> | dump <dev addr> <len> <file>
+ *   peek <label> <dev addr> <n>                (print n words: progress of a multi-kick replay)
  *   flushrt <dev addr>                         (SGX_FLUSH_HW_RENDER_TARGET: drop the RT data set)
  * Buffers are named by capture-order index; m<i> is a buffer's mem info
  * handle, s<i> its sync info handle. A buffer that lands anywhere but its
@@ -381,6 +382,14 @@ static void run(FILE *f)
 			op_waitsync(tok[1], num(tok[2]));
 		} else if (!strcmp(tok[0], "flushrt")) {
 			bridge("SGX_FLUSH_HW_RENDER_TARGET", pvr_flush_rt(&P, num(tok[1])));
+		} else if (!strcmp(tok[0], "peek")) {
+			uint32_t va = num(tok[2]), n = num(tok[3]);
+			uint32_t *w = (uint32_t *)cpu(va, 4 * n);
+
+			printf("replay: peek %s %#x:", tok[1], va);
+			for (uint32_t j = 0; j < n; j++)
+				printf(" %08x", w[j]);
+			printf("\n");
 		} else if (!strcmp(tok[0], "sleep")) {
 			msleep(num(tok[1]));
 		} else if (!strcmp(tok[0], "dump")) {
