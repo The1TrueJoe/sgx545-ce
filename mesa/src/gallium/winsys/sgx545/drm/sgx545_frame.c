@@ -493,6 +493,8 @@ fail:
 
 #define IDX_COUNT 0x10000
 
+static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
+
 struct sgxws_ctx *
 sgxws_ctx_create(struct sgxws_dev *d)
 {
@@ -608,6 +610,14 @@ sgxws_ctx_create(struct sgxws_dev *d)
       p.p[i / 2] = (uint32_t)i | (uint32_t)(i + 1) << 16;
    c->idx = p.va;
    c->idx_count = IDX_COUNT;
+
+   /* The clear's programs for every colour mask, made now: the persistent
+    * part of the rings ends at the mark.  Made on demand they landed in the
+    * frame part, which every frame reuses, so the next frame's masked clear
+    * (the openhc-minecraft overlay clears alpha at every swap) ran whatever
+    * that frame had written there. */
+   for (unsigned m = 0; m < 16; m++)
+      clear_pds_masked(c, m);
 
    ring_mark(&c->pds_pix);
    ring_mark(&c->pds_vtx);
@@ -1079,8 +1089,6 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
       return e;
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
 }
-
-static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
 
 /* A clear: one triangle over the whole surface with the iterated colour.
  * wmask: the colour bytes written (B b0, G b1, R b2, A b3; 0xf all, 0 none:
