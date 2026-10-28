@@ -373,3 +373,17 @@ All 0 pixels off.
   - the sessions' "card0 is free" waits raced, so GPU jobs now take
     `flock /tmp/gpu.lock`;
   - four more power cycles.
+
+## 11. GPU blits of our own (16:00–16:50)
+
+`tools/tex/blitest` (entry `2026-10-28-1651-gpu-blits.md`) runs the transfer
+queue on a context built from `sgxtex` alone:
+- copies, mip levels (point-sampled or box-filtered) and scaled copies;
+- NPOT sources and RGB565 conversion;
+- sub-rectangles, decoded from the background block's vertex texture
+  coordinates;
+- the swap to `/dev/fb0` (1.3 ms).
+
+All byte-exact on the EA3. Render targets need no conversion
+(`sgxtex_rt_*`). Vsync is not established: probing the display controller
+hung the box once.

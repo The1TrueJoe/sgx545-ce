@@ -193,3 +193,173 @@ void sgxtex_blit_pixel_program(uint32_t *p, const struct sgxtex_blit_ctx *x, uin
 	p[9] = sgxtex_t1(SGXTEX_FMT_BGRA8888, SGXTEX_LAYOUT_STRIDED, w, h);
 	memcpy(p + 12, code, sizeof code);
 }
+
+/* ---- general blits ---- */
+
+uint32_t sgxtex_doutu(uint32_t use_addr, uint32_t temps)
+{
+	uint32_t off = use_addr - USE_BASE;
+
+	return ((temps + 3) >> 2) << 24 | off >> 19 | ((off & 0x7ffff) >> 3) << 4;
+}
+
+void sgxtex_blit_source(uint32_t tex[4], const struct sgxtex_surface *src, int filter)
+{
+	/* T0: clamp S and T, no mipmaps (b17-20 = 0xf); min/mag linear at b10/b12 */
+	uint32_t t0 = 0x001e0090 | (filter == SGXTEX_FILTER_LINEAR ? 0x1400 : 0);
+
+	if (src->layout == SGXTEX_LAYOUT_STRIDED)	/* the pitch takes b9-11 and b17-26 */
+		t0 = sgxtex_t0_stride(src->pitch) | (filter == SGXTEX_FILTER_LINEAR ? 0x1000 : 0);
+	tex[0] = t0;
+	tex[1] = sgxtex_t1(src->t1fmt, src->layout, src->w, src->h);
+	tex[2] = src->addr;
+	tex[3] = 0xa0800000;
+}
+
+static void pixel_program_tex(uint32_t *p, const struct sgxtex_blit_ctx *x, const uint32_t tex[4])
+{
+	static const uint32_t code[4] = { 0x07000305, 0x07040202, 0x07082364, 0xaf000000 };
+
+	memset(p, 0, SGXTEX_BLIT_PDS_WORDS * 4);
+	p[0] = sgxtex_doutu(x->copy_use, 0);
+	p[1] = 0x02000004;
+	p[4] = 0x40012001;	/* DOUTI: the texture coordinate */
+	p[6] = tex[2];
+	p[7] = tex[3];
+	p[8] = tex[0];
+	p[9] = tex[1];
+	memcpy(p + 12, code, sizeof code);
+}
+
+void sgxtex_blit_build(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, const struct sgxtex_surface *src,
+		       const struct sgxtex_surface *dst, int filter)
+{
+	uint32_t tex[4];
+	struct sgxpbe p;
+	int tw = dst->layout == SGXTEX_LAYOUT_TWIDDLED;
+
+	sgxtex_blit_command(b->cmd, c, dst->w, dst->h);
+	sgxtex_blit_bg(b->bg, c, dst->w, dst->h);
+	sgxtex_blit_source(tex, src, filter);
+	pixel_program_tex(b->pds, c, tex);
+	sgxpbe_words(&p, dst->w, dst->h, tw ? dst->w : dst->pitch, dst->addr, dst->pbefmt, tw, 0);
+	sgxpbe_eot_program(b->eot, &p);
+}
+
+static uint32_t f32(float f)
+{
+	uint32_t u;
+
+	memcpy(&u, &f, 4);
+	return u;
+}
+
+int sgxtex_blit_build_rect(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, const struct sgxtex_surface *src,
+			    const struct sgxtex_rect *sr, const struct sgxtex_surface *dst, const struct sgxtex_rect *dr,
+			    int filter)
+{
+	/* texel coordinate per destination pixel: s = sx + (x - dx) * sw / dw (same in y) */
+	float ku = (float)sr->w / dr->w, kv = (float)sr->h / dr->h;
+	float u0 = (sr->x - dr->x * ku) / src->w, v0 = (sr->y - dr->y * kv) / src->h;
+	float u1 = u0 + dst->w * ku / src->w, v2 = v0 + dst->h * kv / src->h;
+	int tw = dst->layout == SGXTEX_LAYOUT_TWIDDLED;
+	uint32_t x1 = dr->x + dr->w - 1, y1 = dr->y + dr->h - 1;
+	struct sgxpbe p;
+
+	if (tw && (dr->x || dr->w != dst->w))
+		return -1;
+	sgxtex_blit_build(b, c, src, dst, filter);
+	/* vertex texture coordinates: (0,0) -> (u0, v0), (W,0) -> (u1, v0), (0,H) -> (u0, v2) */
+	b->bg[3] = f32(u0), b->bg[4] = f32(v0);
+	b->bg[5] = f32(u1), b->bg[6] = f32(v0);
+	b->bg[7] = f32(u0), b->bg[8] = f32(v2);
+	/* tiles the rectangle touches (32x16) */
+	b->cmd[12] = (dr->x >> 5) << 16 | dr->y >> 4;
+	b->cmd[13] = (x1 >> 5) << 16 | y1 >> 4;
+	sgxpbe_words(&p, dst->w, dst->h, tw ? dst->w : dst->pitch, dst->addr, dst->pbefmt, tw, 0);
+	p.w[0] = dr->y << 16 | dr->x;
+	p.w[1] = y1 << 16 | x1;
+	sgxpbe_eot_program(b->eot, &p);
+	return 0;
+}
+
+void sgxtex_blit_command_full(uint32_t out[SGXTEX_CMD_BYTES / 4], const struct sgxtex_blit *b, int twiddled_dst)
+{
+	memset(out, 0, SGXTEX_CMD_BYTES);
+	memcpy(out, b->cmd, sizeof b->cmd);
+	out[0xa4 / 4] = SGXTEX_CMD_BYTES;
+	out[0xa8 / 4] = twiddled_dst ? 8 : 0;	/* as the DDK's uploads (8) and swaps (0) */
+	out[0x194 / 4] = 0x07c00000;
+}
+
+/* ---- render to texture ---- */
+
+void sgxtex_rt_surface(struct sgxtex_surface *s, uint32_t addr, uint32_t w, uint32_t h, uint32_t t1fmt,
+		       uint32_t pbefmt)
+{
+	int tw = sgxtex_is_pot(w) && sgxtex_is_pot(h);
+
+	s->addr = addr;
+	s->w = w;
+	s->h = h;
+	s->layout = tw ? SGXTEX_LAYOUT_TWIDDLED : SGXTEX_LAYOUT_LINEAR;
+	s->pitch = tw ? w : sgxtex_pitch(w);
+	s->t1fmt = t1fmt;
+	s->pbefmt = pbefmt;
+}
+
+void sgxtex_rt_pbe(struct sgxpbe *p, const struct sgxtex_surface *s, int dither)
+{
+	sgxpbe_words(p, s->w, s->h, s->pitch, s->addr, s->pbefmt, s->layout == SGXTEX_LAYOUT_TWIDDLED, dither);
+}
+
+size_t sgxtex_rt_bytes(const struct sgxtex_surface *s, uint32_t bpp)
+{
+	return (size_t)s->pitch * s->h * bpp;
+}
+
+/* ---- the transfer context's own buffers ---- */
+
+void sgxtex_xctx_words(uint32_t ctx[SGXTEX_XCTX_BYTES / 4], uint32_t ccb, uint32_t ccb_ctl, uint32_t pid)
+{
+	memset(ctx, 0, SGXTEX_XCTX_BYTES);
+	ctx[0] = 1;		/* flags */
+	/* ctx[2]: the page directory, filled in by the kernel (PD offset 8) */
+	ctx[3] = ccb;
+	ctx[4] = ccb_ctl;
+	ctx[0x2a] = pid;
+}
+
+void sgxtex_xctx_secondary(uint32_t *p, uint32_t nop_use)
+{
+	memset(p, 0, SGXTEX_SECONDARY_WORDS * 4);
+	p[0] = sgxtex_doutu(nop_use, 0);
+	p[1] = 0x00000004;
+	p[4] = 0x07000305;	/* DOUTU ds0[0..1] */
+	p[5] = 0xaf000000;	/* HALT */
+}
+
+void sgxtex_xctx_pixel_event(uint32_t *p, uint32_t eot_use, uint32_t emit_use)
+{
+	/* data rows DS0 DS0 DS1 DS1; the code is the 29 instructions PDS.md decodes */
+	static const uint32_t code[29] = {
+		0xcf820870, 0x8700c100, 0x90000005, 0x07000205, 0xaf000000, 0xcf820c70, 0x8700c100, 0x90000018,
+		0xdf820070, 0xcf08c070, 0x8700c100, 0x9000001b, 0x07840406, 0xf7800370, 0xcf0ac070, 0xc70cc030,
+		0xf7800370, 0xcf0ec070, 0xc760c030, 0xf7811470, 0xcf10c070, 0xc760c030, 0x07601805, 0xaf000000,
+		0xcf821070, 0x8700c100, 0x9000001c, 0x07040205, 0xaf000000,
+	};
+	const uint32_t eot = sgxtex_doutu(eot_use, 4), emit = sgxtex_doutu(emit_use, 4);
+	const uint32_t data[20] = {
+		eot, 0x00800000, 0, eot,
+		emit, 0x00c00000, 8, 2,
+		0x100, 0xff8, 4, 0,
+		0x00800000, 0x003ff000, 0, 0,
+		0x00400000, 0, 0, 0,
+	};
+
+	memcpy(p, data, sizeof data);
+	memcpy(p + 20, code, sizeof code);
+}
+
+const uint32_t sgxtex_nop_shader[4] = { 0x00000000, 0xfa440700, 0x00000000, 0xf8040140 };
+const uint32_t sgxtex_emit_shader[6] = { 0x00000000, 0xfa440700, 0x00000000, 0xfca00000, 0x80200000, 0xfb260040 };

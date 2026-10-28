@@ -389,11 +389,165 @@ exact rule]. Every texel of all four captures sits where `check.py --cube
 | present by rendering into fb0 | PBE address = the fb0 wrap | fb0 = the DDK's readback, 0 px |
 | depth store across renders | fbd with ZLS control `0x0017101c` | depth buffer written (float32) |
 
+## 10. GPU blits of our own: copies, mipmaps, sub-rectangles [C]
+
+`tools/tex/blitest.c` runs the transfer queue on a context it builds itself:
+no DDK library and no capture. Every word comes from `sgxtex`:
+- the 0xb4-byte HW transfer context (`sgxtex_xctx_words`);
+- the secondary PDS program, a DOUTU to a `nop [end]` shader;
+- the pixel-event program (the same code `tools/gen` assembles);
+- the emit, nop and copy shaders;
+- the per-blit command, background block, pixel program and end-of-tile
+  program.
+
+Before any GPU run, those builders were checked against the 364 words the
+DDK writes for its two transfer contexts in the p64 capture; all match.
+
+**Setting a context up** (libsrv_um `SGXCreateTransferContext`, decompiled):
+
+| buffer | heap, attribs, size |
+|---|---|
+| CCB | kernel data (3), 0x4f, 0x10000 + 0x4c8 |
+| CCB control | kernel data (3), 0x4f, 8 bytes: write offset, read offset |
+| USSE code | pixel shader (4), 0xd, 0x800 (end-of-tile, emit, nop, copy programs) |
+| "ISP stream" | general (0), 0xd, 0x4800 (the background block) |
+| PDS code | PDS pixel (6), 0xd, 0x1800 (secondary program at +0, pixel event at +0x20) |
+| pixel PDS | PDS pixel (6), 0xd, 0x400 (the background pixel program) |
+
+The context buffer is `{1, 0, PD (kernel), CCB, CCB control, 0 ...}` with the
+PID at word 0x2a; the DDK leaves the rest uninitialised. Register it with PD
+offset 8. Per blit, the client:
+1. writes the 0x1c0-byte command at the CCB write offset:
+   - words 0-15;
+   - +0xa4 = 0x1c0;
+   - +0xa8 = 8 for a twiddled destination, else 0;
+   - +0x194 = 0x07c00000;
+2. advances the control's write offset by 0x1c0;
+3. submits `SGX_SUBMITTRANSFER` with `ui32SharedCmdCCBOffset` = command +
+   0xac and the source and destination syncs;
+4. waits on the destination sync.
+
+Two traps:
+- surfaces need sync objects, so allocate them without attribs b3
+  (`PVRSRV_MEM_NO_SYNCOBJ`);
+- a sync object can only be mmapped once per process.
+
+**Sources and filters.**
+- Twiddled (T1 layout 0) and linear (layout 3) sources take either filter.
+  T0 is `001e0090` (clamp, no mips) plus `0x1400` for LINEAR.
+- Strided sources (layout 6) keep their pitch where the minification filter
+  bit would be, so they sample nearest.
+
+**The texture coordinates.** The background object is the triangle (0,0),
+(W,0), (0,H) over the whole destination. Block words 3-8 are the texture
+coordinates (u, v) at those three vertices, and the 3D interpolates them; a
+sweep of each word on the EA3 fits u = w3·(1-s-t) + w5·s + w7·t exactly (and
+the same for v). The DDK always writes (0,0), (1,0), (0,1); words 18, 20 and
+21 hold the vertices themselves, in a fixed-point form not decoded further.
+A sub-rectangle copy (`sgxtex_blit_build_rect`) does three things:
+- sets the coordinates so destination pixel (x, y) samples source texel
+  (sx − dx + x, sy − dy + y), scaled;
+- clips the PBE (words 0 and 1) to the destination rectangle;
+- clips the tiles (command words 12-13) to the ones it touches.
+
+T0 clamps, so no read leaves the source.
+
+**Twiddled destinations clip only in y.** For a twiddled surface the PBE
+takes the tile row length from the clip width. A 16-wide clip at x 8..23 of a
+64-wide texture wrote all 256 pixels, each to where a 16-wide texture would
+have it (256 of 256 fit that model). Full-width bands are exact. Any other
+rectangle of a twiddled texture takes three blits:
+1. read the texture back into a linear scratch surface;
+2. copy the rectangle into the scratch;
+3. upload the scratch.
+
+`sgxtex_blit_build_rect` refuses the single-blit case (returns −1).
+
+**Proven on the EA3** (`blitest`, `check_blit.py`): every destination byte is
+predicted, with no SGX recovery in any run.
+
+| case | what | result |
+|---|---|---|
+| up | 64×64 strided → twiddled (texture upload) | 4096 / 4096 |
+| down | twiddled → linear (readback, glCopyTexImage from a texture) | 4096 / 4096 |
+| mipn | 64×64 → 32×32, NEAREST | 1024 / 1024: texel (2x+1, 2y+1), as the DDK's glGenerateMipmap |
+| mipl | 64×64 → 32×32, LINEAR | 1024 / 1024: **a real box filter**, `(((a+b+1)>>1) + ((c+d+1)>>1) + 1) >> 1` |
+| up2x | 64×64 → 128×128, NEAREST | 16384 / 16384, pixel replication |
+| npot | 100×30 linear (layout 3, pitch 104) → strided | 3000 / 3000 |
+| to565 | RGBA8888 → RGB565 | 4096 / 4096: each channel truncated, no dither |
+| rsub | (8,4) 24×20 → (30,40) of a linear surface | 4096 / 4096 |
+| rscale | (0,0) 16×8 → (10,10) 32×16, 2× | 4096 / 4096 |
+| rband, rband2 | full-width bands into a twiddled texture (tile-aligned or not) | 4096 / 4096 each |
+| rcomp | (40,10) 16×16 → (8,24) of a twiddled texture in three blits | 4096 / 4096 |
+
+So glCopyTexImage2D, glCopyTexSubImage2D, texture-to-texture copies,
+glBlitFramebuffer-style scaled copies and box-filtered mipmap generation can
+all run on the GPU.
+
+## 11. Render targets the sampler reads directly [C]
+
+The DDK never converts a render-to-texture target: it renders it in the
+layout the sampler reads (section 4).
+- **Power-of-two** sizes are rendered twiddled: PBE sideband b13, PBE pitch
+  = the width, sampled as T1 layout 0.
+- **Other sizes** are rendered linear, with the pitch rounded up to 8
+  texels. A 100×60 RGBA8888 FBO gets PBE pitch 104 (`00338000`), sideband
+  0x601 and a 0x6180-byte buffer, and is sampled as T1 `6d06303b` (layout 3,
+  100×60) from the same address (`fbnpot`, retaken today).
+
+`sgxtex_rt_surface` and `sgxtex_rt_pbe` give exactly the DDK's words for
+both: 128×64 gives `003f8000`, sideband 0x2601 and T1 `0d07f03f`; 100×60
+gives `00338000`, 0x601 and `6d06303b`. The same PBE words work for a TA/3D
+render's end-of-tile program and for a transfer-queue blit, and render to
+texture is replay-proven for RGBA8888 and RGB565 (section 4).
+
+## 12. Tear-free presentation
+
+**Back buffer plus swap blit** [C]. `blitest present`:
+- wraps the real `/dev/fb0` the way the DDK's EGL does;
+- fills a 720×480 BGRA8888 back buffer (pitch 736);
+- blits it to fb0 on its own transfer context.
+
+fb0 read back afterwards equals the back buffer, 0 of 345600 pixels. Submit
+to completion took **1.3 ms**, so a frame rendered off-screen reaches the
+display in about a tenth of a 60 Hz frame.
+
+**Flipping is not available.** fb0 is `simplefb` over the fixed buffer the
+CEFDK left the display controller scanning out (0x7fc00000, 720×480, pitch
+2944). It has no virtual height and no pan, so FBIOPAN flips can't work.
+
+**Vsync: not established.** The display controller (VDC, 8086:2e61,
+BAR 0xdfb00000) has the i9xx layout:
+- pipe A's timing reads 857×525 total and 720×480 active (`035902cf`,
+  `020c01df`);
+- pipe A's config (+0x70008) read `80000000` (enabled);
+- its status (+0x70024) changed between reads (`342` → `302`).
+
+That status is where an i9xx pipe keeps its vblank bit (b1, write 1 to
+clear). Two cautions for anyone continuing:
+- A read-only scan of the whole 1 MB BAR hung the EA3 outright, with no ping
+  and a power cycle needed: holes in this window are not safe to read. Read
+  only known registers.
+- A few minutes after the cycle the whole VDC block started reading 0,
+  timings included, while its PCI command and power state were unchanged.
+  The cause is unknown; the reads before were read-only, and the test's one
+  write (clearing the vblank bit) came after it had already read 0. The
+  picture stayed up throughout (the user saw Minecraft on the screen
+  afterwards): scanout continued while the registers read 0, so something
+  gates register access, not the pipe.
+
+Until a vblank source is proven, swapping with the 1.3 ms blit is the
+tear-light path, and rendering straight into the fb0 wrap (section 6) is the
+zero-copy one.
+
 ## Open
 
 - The ZLS **load** enable (section 7).
 - The cut-over between CPU and transfer-queue uploads (between 256 and
   4096 texels).
+- A vblank source for vsync; why the VDC registers went to 0 (section 12).
+- The fixed-point format of the background block's vertex words 18, 20 and 21
+  (sub-rectangles don't need them; section 10).
 - PBE word 2 b15: it must be set for the PBE to write; what clearing it
   selects is unknown.
 - Formats beyond the ones probed: compressed textures (PVRTC/ETC), float

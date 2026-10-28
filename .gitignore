@@ -9,3 +9,4 @@ modules.order
 build/
 srvinit/srvinit
 mesa/src/gallium/winsys/sgx545/drm/sgx545_usse_progs.h
+tools/tex/blitest

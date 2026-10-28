@@ -787,11 +787,11 @@ PVRSRV_ERROR OSInstallMISR(IMG_VOID *pvSysData)
 
 	PVR_TRACE(("Installing MISR with cookie %p", pvSysData));
 
-	psEnvData->psWorkQueue = create_singlethread_workqueue("pvr_workqueue");
+	psEnvData->psWorkQueue = alloc_ordered_workqueue("pvr_workqueue", 0);
 
 	if (psEnvData->psWorkQueue == IMG_NULL)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "OSInstallMISR: create_singlethreaded_workqueue failed"));
+		PVR_DPF((PVR_DBG_ERROR, "OSInstallMISR: alloc_ordered_workqueue failed"));
 		return PVRSRV_ERROR_UNABLE_TO_CREATE_THREAD;
 	}
 
@@ -3094,7 +3094,7 @@ PVRSRV_ERROR PVROSFuncInit(IMG_VOID)
 {
 #if defined(PVR_LINUX_TIMERS_USING_WORKQUEUES)
     {
-        psTimerWorkQueue = create_workqueue("pvr_timer");
+        psTimerWorkQueue = alloc_ordered_workqueue("pvr_timer", 0);
         if (psTimerWorkQueue == NULL)
         {
 	    PVR_DPF((PVR_DBG_ERROR, "%s: couldn't create timer workqueue", __FUNCTION__));		

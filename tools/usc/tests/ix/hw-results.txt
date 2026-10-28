@@ -1,0 +1,5 @@
+ix_varr          SAME     0/4096 px differ, max   0  centre 669926ff
+ix_vattr         SAME     0/4096 px differ, max   0  centre 81924dff
+ix_frag          SAME     0/4096 px differ, max   0  centre 51474b68
+ix_fvary         SAME     0/4096 px differ, max   0  centre 998033ff
+4/4 identical

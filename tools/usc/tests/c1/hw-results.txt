@@ -17,22 +17,22 @@ sat              SAME     0/4096 px differ, max   0  centre b24dff73
 norm3            SAME     0/4096 px differ, max   0  centre 652be6ff
 len3             SAME     0/4096 px differ, max   0  centre ffffffff
 add              SAME     0/4096 px differ, max   0  centre e5ffffff
-add_m            DIFF  4096/4096 px differ, max   1  centre e6ffffff
+add_m            SAME     0/4096 px differ, max   0  centre e6ffffff
 add_l            SAME     0/4096 px differ, max   0  centre e5ffffff
 sub              SAME     0/4096 px differ, max   0  centre 8000ff00
 sub_m            SAME     0/4096 px differ, max   0  centre 8000ff00
-sub_l            DIFF  4096/4096 px differ, max   1  centre 7f00ff00
+sub_l            SAME     0/4096 px differ, max   0  centre 7f00ff00
 mul              SAME     0/4096 px differ, max   0  centre 2445cc95
 mul_m            SAME     0/4096 px differ, max   0  centre 2445cc95
-mul_l            DIFF  4096/4096 px differ, max   1  centre 2445cd95
+mul_l            SAME     0/4096 px differ, max   0  centre 2445cd95
 div              SAME     0/4096 px differ, max   0  centre ff55ff58
 div_m            SAME     0/4096 px differ, max   0  centre ff55ff58
-div_l            DIFF  4096/4096 px differ, max   1  centre ff56ff58
+div_l            SAME     0/4096 px differ, max   0  centre ff56ff58
 min              SAME     0/4096 px differ, max   0  centre 334d8073
 min_m            SAME     0/4096 px differ, max   0  centre 334d8073
 min_l            SAME     0/4096 px differ, max   0  centre 334d8073
 max              SAME     0/4096 px differ, max   0  centre b2e5ffff
-max_m            DIFF  4096/4096 px differ, max   1  centre b3e5ffff
+max_m            SAME     0/4096 px differ, max   0  centre b3e5ffff
 max_l            SAME     0/4096 px differ, max   0  centre b2e5ffff
 step             SAME     0/4096 px differ, max   0  centre 00ff00ff
 step_m           SAME     0/4096 px differ, max   0  centre 00ff00ff
@@ -45,16 +45,16 @@ dp4_m            SAME     0/4096 px differ, max   0  centre ffffffff
 dp4_l            SAME     0/4096 px differ, max   0  centre ffffffff
 pow              SAME     0/4096 px differ, max   0  centre ed56ff5a
 pow_m            SAME     0/4096 px differ, max   0  centre ed56ff5a
-pow_l            DIFF  4096/4096 px differ, max   1  centre ee57ff5b
+pow_l            SAME     0/4096 px differ, max   0  centre ee57ff5b
 mod              SAME     0/4096 px differ, max   0  centre 194d1a73
-mod_m            DIFF  4096/4096 px differ, max   1  centre 1a4d1973
-mod_l            DIFF  4096/4096 px differ, max 126  centre 7f4d9873
+mod_m            SAME     0/4096 px differ, max   0  centre 1a4d1973
+mod_l            SAME     0/4096 px differ, max   0  centre 7f4d9873
 mad              SAME     0/4096 px differ, max   0  centre 63deffaf
 mad_m            SAME     0/4096 px differ, max   0  centre 63deffaf
-mad_l            DIFF  4096/4096 px differ, max   1  centre 64deffaf
+mad_l            SAME     0/4096 px differ, max   0  centre 64deffaf
 mix              SAME     0/4096 px differ, max   0  centre 93a8b888
 mix_m            SAME     0/4096 px differ, max   0  centre 93a8b888
-mix_l            DIFF  4096/4096 px differ, max   1  centre 92a8b889
+mix_l            SAME     0/4096 px differ, max   0  centre 92a8b889
 lt               SAME     0/4096 px differ, max   0  centre 00ff00ff
 lt_m             SAME     0/4096 px differ, max   0  centre 00ff00ff
 lt_l             SAME     0/4096 px differ, max   0  centre 00ff00ff
@@ -103,4 +103,5 @@ loop_dyn         SAME     0/4096 px differ, max   0  centre 33e580ff
 vpos             SAME     0/4096 px differ, max   0  centre 00000000
 vmvp             SAME     0/4096 px differ, max   0  centre 00000000
 vvary            SAME     0/4096 px differ, max   0  centre 888e9768
-95/105 identical
+varr             SAME     0/4096 px differ, max   0  centre 00000000
+106/106 identical

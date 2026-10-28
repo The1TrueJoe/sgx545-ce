@@ -221,7 +221,7 @@ with the context dirty bits in parentheses:
 | 0x4 | 1 | ISPC, front stencil (present when ISPA b8) | ctx+0x788 | D |
 | 0x8, 0x10, 0x20 | 3 | back-face ISPA, ISPB, ISPC (two-sided stencil) | ctx+0x78c..0x794 | D |
 | 0x40 | 3 | PDS: secondary, middle word, primary | ctx+0xcac/cb0, frag+0x64, ctx+0xc9c/ca0 | D |
-| 0x80 | 2 | region clip (clears and driver objects only): `b31 \| xmin<<16 \| xmax`, `ymin<<16 \| ymax`, in 32×16-px tiles | RT+0x114, +0x118 or the scissor | D |
+| 0x80 | 2 | region clip, sticky until the next one (clears, driver objects, draws without a clear before them): `b31 \| xmin<<16 \| xmax`, `ymin<<16 \| ymax`, in 32×16-px tiles | RT+0x114, +0x118 or the scissor | C |
 | 0x100 | 6 | viewport (dirty 0x100) | ctx+0x13c..0x150 | C |
 | 0x200 | 1 | always 0 (dirty 0x200) | | D |
 | 0x400 | 1 | output select (dirty 0x1000) | vertex program +0x248 | D |
@@ -244,7 +244,7 @@ with the context dirty bits in parentheses:
 | 8 | ISPC follows (stencil enabled with a stencil buffer) | D |
 | 9 | ISPB follows: always set | D |
 | 11 | two-sided stencil | D (code) |
-| 15-18 | object type, set per draw (0x10000 for points in a mode-7 draw) | G |
+| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord); see "Lines and points" | C (1, 4) |
 | 20 | depth write disable | D |
 | 21 | no colour write: colour mask 0, or a blend that keeps the destination (ZERO, ONE) | D |
 | 22-24 | depth compare, `GL enum - 0x200`: never, less, equal, lequal, greater, notequal, gequal, always. Depth test off, or no depth buffer, gives always + no write (`0x01d00000`) | C (greater) |
@@ -255,7 +255,7 @@ with the context dirty bits in parentheses:
 | bits | field | tag |
 |---|---|---|
 | 4-7 | colour write mask: R = 8, G = 4, B = 2, A = 1 | D |
-| 8-15 | line/point width × 16 (1.0 → 0x10) | D |
+| 8-15 | line width × 16 (1.0 → 0x10, 9.5 → 0x98); points keep 0x10, their size is a vertex output | C |
 | 23 | depth bias (POLYGON_OFFSET_FILL) | D |
 
 ### ISPC: stencil (ctx+0xa0 front, +0xa4 back)
@@ -372,31 +372,227 @@ driver draws them the same way, byte-identical to the DDK):
   (0x00010700 → 0x01010700), perhaps a temporary count for that r0. The Mesa driver writes the blend
   back to pa<c> instead, with the same pixels.
 
+### Constant-colour blending
+
+`sgxs_blend_const` in `tools/state/sgxstate.h` builds the five
+instructions. They are bit-exact with the DDK's for k1-k5, k7 and k8.
+
+sop2's selectors can't name a constant. With any CONSTANT_COLOR /
+ONE_MINUS_CONSTANT_COLOR / CONSTANT_ALPHA / ONE_MINUS_CONSTANT_ALPHA
+factor, libGLESv2 (`FUN_000457d0`, the tables at `DAT_0006d000`-`d100`)
+multiplies each side out with sopwm and adds the halves:
+
+    sopwm r1, Y, o0      [c1=zero c2=Fd]           dst * Fd (all four bytes)
+    sopwm r1, Y, o0      [mask=8 c1=zero c2=Fda]   alpha byte: dst.a * Fda
+    sopwm r0, pa<c>, X   [c1=Fs c2=zero]           src * Fs
+    sopwm r0, pa<c>, X   [mask=8 c1=Fsa c2=zero]   src.a * Fsa
+    sop2  o0, r0, r1     [end c1=one c2=one cop=add a1=one a2=one aop=add]
+
+- X and Y are whichever of the colour, the tile (o0) or the constant the
+  factor reads.
+- **The constant is the blend colour, packed BGRA8 like the colour, in a
+  fragment secondary attribute.** The DDK puts it in sa2 of its 11-dword
+  constant DMA: glBlendColor(0.25, 0.5, 0.75, 0.375) = `604080bf` [D].
+- Products round to nearest: 204 × 64/255 = 51.2 gives 51 (`k1`) [D].
+- Turning k1's src-RGB sopwm into 1-s2 or s2a reproduces the DDK's own
+  ONE_MINUS_CONSTANT_COLOR and CONSTANT_ALPHA frames [C, b2 b3].
+- The DDK's final sop2 is always an add (`FUN_00045270(1,1,1,1,0,1,..)`).
+  Subtract and reverse subtract with constant factors are untested.
+
+**k18/k19 are not a constant.** In `kb0` (ONE, ZERO) the sop2 was turned
+into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery):
+
+- k19 reads 0 in colour and alpha.
+- k18 as c1 reads a different value per 4×4 block, zero in R and G. The
+  values step by the shader colour's own factor (102, 82, 66, 53 … =
+  102 × (204/255)^n): state left behind by earlier tasks, not a register
+  the program sets.
+- k18 in a1 gave alpha 255.
+
+So neither can carry a blend colour. The sopwm form above is what to use.
+
+### Alpha test (ES1)
+
+The ES1 driver (libGLES_CM, `tools/probe/probe1.c` captures `e1*`) needs
+no state words for it. The fragment program ends in one visibility-test
+instruction instead of its final `mov o0, colour`:
+
+    atst8 o0, p0.nw, pa0, sa0, sa1  [end]      f0000001 f934000d   (e1gt5)
+
+with ISPA pass type 1 (`03d00200`). `tools/state/sgxstate.h` has
+`sgxs_atst8`, `sgxs_atst_depth_word` and `sgxs_atst_alpha_word`.
+
+**The operands.** The secondary program writes sa0 and sa1 with DOUTA:
+
+| word | value | fields | tag |
+|---|---|---|---|
+| sa0, depth | `0000e00f` | `0xe000 \| depth func (GL - 0x200, 7 with no depth test) \| 8 when depth writes are off` | D |
+| sa1, alpha | `80008e00` (GREATER 0.5) | `ref8 << 24 \| alpha func (GL - 0x200) << 13 \| 0xe00`, ref8 = round(ref × 255): 0.5 → 128, 0.25 → 64 | C |
+
+- From `e1gt5`, changing sa1 to the reference 0.25 reproduces the DDK's
+  own `e1gt25` frame. Changing it to LESS or GEQUAL reproduces `e1lt5` and
+  `e1ge5`. All 0 pixels off [C, a1-a3].
+- ALWAYS (`8000ee00`) draws the frame with no alpha test [C, a7].
+- The Mesa driver's discard `atst8` (`f9340406`, sa3/sa4) carries these
+  same two words with the alpha function ALWAYS (`0xee00`). So its discard
+  program does an alpha test as soon as sa4 has another function and
+  reference.
+
+**The instruction.** atst8 fields:
+
+- dst l21-27, bank h0-1 (0 r, 1 o, 2 pa);
+- colour source l14-20, bank h2 (0 r, 1 pa);
+- the two sa operands l7-13 and l0-6 (bank l28-31 = 0xf);
+- end h18;
+- h6 = write p0 (`p0` instead of `p0.nw`);
+- h9-10 = the kill predicate (the discard form).
+
+The DDK's ES1 words also set **h3** (`sel36` in dis.py). With h3 cleared
+the replay's render stalls (447 ms) and leaves the right part of the frame
+unwritten, with no SGX recovery [C, a6]. Keep it.
+
+**Pass type.** It must not be opaque. With pass type 0 the failing pixels
+are drawn with garbage [C, a4]. Pass type 4 (punch-through, the Mesa
+driver's discard) works exactly like the DDK's 1 [C, a5].
+
+**Variants** [D]:
+
+- **Textured** (`e1texat`, GL_MODULATE): `sop2 r0, pa0, pa1` modulates,
+  then `atst8 o0, p0.nw, r0, sa0, sa1 [end]` (`f9340009`).
+- **With a blend** (`e1atbl`): `atst8 r0, p0, pa0, sa0, sa1` (`f930004c`,
+  writes p0, no end), then the blend predicated on it:
+  `(p0) sop2 o0, r0, o0 [end ...]`.
+- **GL_NEVER** (`e1nev`): no atst8. The draw gets ISPA `01f00200` (b20 and
+  b21: no depth, no colour writes).
+- ES1 points and lines draw as in "Lines and points" (`e1pt`, `e1spr`,
+  `e1ln`).
+
 ### Scissor and partial viewports: pass type 3 objects
 
-There is no per-pixel scissor rectangle in the state.
+There is no scissor rectangle register. The ISP keeps one **visible bit
+per pixel**, and every object is drawn only where it is set. Pass type 3
+("viewport generate") objects write the bit and draw nothing else. The
+**region clip** (group 0x80) limits which tiles the TA bins an object into,
+and it is **sticky**: an object without group 0x80 keeps the last one.
+`tools/state/sgxstate.h` builds all of it (`sgxs_scissor_objects`).
 
-When glScissor or glViewport covers less than the surface, libGLESv2
-inserts these objects ahead of the draws (`scissor` and `viewport`
-captures):
+**The two objects** (TA block header `d485`: ISPA, ISPC, region clip,
+output select, MTE, TSP; 9 dwords, DMA kind 0; no PDS group, so no pixel
+program runs):
 
-1. **Load object (scissor only):** a full-screen object that samples the
-   previous buffer (texture layout 6, T0 `00b60e90`, T1 `cc2cf1df`). It
-   keeps what lies outside the scissor.
-2. **Reset object:** a full-surface object with ISPA `07e00100` (pass type
-   3, no colour write, depth write on, always) and ISPC `00000000`, over
-   the whole region clip.
-3. **Rectangle object:** a 4-vertex strip (VDM prim 3) with screen-space
-   x, y, z positions of the rectangle (the `scissor` capture's vertices
-   are 100..300 × 330..430 = GL (100,50,200,100) flipped into a 480-high
-   window). It has ISPA `07e00100` and ISPC `02000000`, and its region
-   clip is the rectangle's tiles (`80030009 0014001a` = x 3..9, y 20..26).
-4. **The clear:** region-clipped the same way.
-5. **The draws:** unchanged, with the full-surface viewport transform when
-   only the scissor changed.
+| object | ISPA | ISPC | region clip | geometry (screen space, y down) |
+|---|---|---|---|---|
+| reset | `07e00100` | `00000000` (b25-27 = 0) | the target, or the old rectangle's tiles | triangle (0,0) (2w,0) (0,2h), VDM prim 0 |
+| set | `07e00100` | `02000000` (b25-27 = 1) | the rectangle's tiles | 4-vertex strip TL TR BL BR, VDM prim 3 |
 
-For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
-(1) of the visible region [D].
+- ISPA `07e00100`: pass type 3, b21 no colour write, depth always with
+  write, ISPC follows [D].
+- ISPC b25-27: 0 resets the bit under the object, 1 sets it [C, q1 q4].
+- The vertices are 2 dwords (x, y). The vertex program is
+  `mov o0, pa0 [rpt=2]; mov o2, c3; mov o3, c3` (z = w = 1.0), output
+  select `0x00040000`, MTE `0x40` [D]. The words are in `sgxstate.h`.
+- Pixel centres inside the strip get the bit: moving its left edge from
+  x 100 to 150 moved the scissor's edge [C, q2].
+- The set object only reaches its region clip's tiles [C, q3].
+- **Region clip words:** `0x80000000 | x0/32 << 16 | (x1-1)/32`,
+  `y0/16 << 16 | (y1-1)/16`, for a rectangle `[x0,x1) × [y0,y1)` in target
+  pixels. `glScissor(37, 23, 101, 57)` on 720×480 = x 37..138, y 400..457 =
+  `80010004 0019001c` [D, sc2].
+- **Draws inherit it:** with the reset turned into a set (everything
+  visible), the triangle was still cut to the tiles of the clear before it
+  (columns 3-9, rows 20-26), 0 pixels off that prediction [C, q1].
+
+**What libGLESv2 emits** (captures `sc1`-`sc6`, `vp1`, `nc0`) [D]:
+
+1. A render that doesn't start with a full-target clear starts with a
+   **load object**: a full-target triangle (0,0) (1440,0) (0,960), x y z u v
+   per vertex, sampling the colour buffer's previous contents (T0
+   `00b60e90`, T1 `cc2cf1df`: layout 6, format 0xc). It comes with
+   `PROBE_NOCLEAR` and no scissor too (`nc0`), so it is the render's "load",
+   not part of the scissor. With a scissor it is what keeps the pixels
+   outside it.
+2. Scissor (or a viewport) smaller than the target: **reset** over the whole
+   target, **set** over the rectangle.
+3. glClear inside a scissor is a strip over the rectangle (4 vertices, x y z
+   colour) with the rectangle's region clip.
+4. Draws: unchanged (own viewport transform, no group 0x80) after a clear
+   or a set object. With no clear in the render, the draw itself carries
+   the region clip (header `dfc3`, `sc4`).
+5. The scissor changes between draws (`sc5`): reset with the old
+   rectangle's region clip (full-target triangle), then set the new
+   rectangle.
+6. A zero-area scissor (`sc6`): the reset only; its clear is a degenerate
+   strip at (0,480).
+7. A scissor covering the whole target (`sc3`) emits nothing: the capture
+   equals `base3`.
+   Turning the scissor off between draws (`sc7`) is one pass-type-3 object
+   over the whole target with ISPA `07e00000` and **no ISPC group** (header
+   `d481`, full region clip). The next draw's block then carries only the
+   changed groups (header `d483`: ISPA, ISPB, a full region clip), with no
+   PDS or viewport group. So every group of the TA state block is sticky,
+   not just the region clip [D].
+8. A partial glViewport (`vp1`, no scissor): the clear stays full-target;
+   the draw is preceded by reset + set over the viewport rectangle and has
+   the viewport transform of section 3.
+
+### Lines and points
+
+`tools/state/sgxstate.h` has the words (`sgxs_prim`, `sgxs_ispa_objtype`,
+`sgxs_ispb_width`, `sgxs_point_size_word`, `sgxs_line_list_indices`).
+
+**Primitives.** The VDM index-list word is
+`0x80000000 | 0x00c00000 | prim << 26 | count`. prim is 0 triangles,
+1 lines, 2 points, 3 triangle strip, and b28 makes prim 0 a fan
+(`90c00004`) [D]. There is no line strip or loop. The DDK's GL_LINE_STRIP of
+4 vertices is a prim-1 list of count 6 over the identity indices
+(`lstrip`): its 2(n-1) vertices are the strip's n plus n-2 that follow them
+in memory, so its frame equals GL_LINES' (`cmp` identical) and with real
+data behind the strip it draws the stray lines seen under gl4es. Its
+GL_LINE_LOOP is right: count 8 over its own indices 0 1 1 2 2 3 3 0
+(`lloop`). A driver expands strips and loops into line lists the way the
+loop does.
+
+**ISPA object type** (b15-18, replaced per draw): 0 triangles, 1 lines, 3
+points, 4 point sprites [D].
+
+- A line list with object type 0 draws nothing, whether the VDM prim is
+  turned into lines (`tri2`) or the type turned off (`ln1`) [C, l3 l4].
+- Object type 4 is what generates gl_PointCoord: with 3 instead, the same
+  points are drawn the same size but the coordinate reads 0 [C, p4].
+
+**Line width** is ISPB b8-15 = width × 16, truncated, at most `ff`: 1.0
+`10`, 1.06 `10`, 4 `40`, 9.5 `98`, 16 `ff`. The DDK's other draws all carry
+`10` [C, l1 l2; D, `ln106` `ln16`]. glLineWidth clamps to [1, 16]
+(libGLESv2 0x255b0) [D].
+
+**Points.** A point draw's vertex program writes one output dword after
+the position and the varyings, an **F16 pair: the size in the low half**,
+0x5ffc (511.0, the largest point size) in the high half.
+
+- The words: gl_PointSize = 8.0 compiles to `mov o6, sa10` with sa10 =
+  `5ffc4800`; 16.0 gives `5ffc4c00`.
+- A computed size is clamped against sa10's low half (= 511) with
+  `fminmax o6, r62, i2, sa10.f16.lo` (`ptattr`).
+- Changing the low half from 8.0 to 16.0 draws the DDK's own 16-pixel frame
+  [C, p1].
+- Output select gets 0x100 (`00073100`) [D].
+- The ES2 driver gives every point draw a two-component texcoord set ahead
+  of the size (TSP words 2 and 1). The vertex program doesn't write it
+  (o4-o5 stay unwritten), so output select counts 4 + 2 + 1 = 7 [D].
+- The ES1 driver adds that set only for a sprite. `e1pt` has none (output
+  select 9 = position 4 + colour 4 + size 1). `e1spr` puts it after the
+  vertex colour (11, TSP word `0x15`) [D]. So it is only needed when
+  gl_PointCoord is read.
+- The coordinate set comes first, as tc0. A shader's own varyings follow it
+  (a varying vec2 is iterated as tc1), and the size comes last: `ptvar` /
+  `sprvar` have output select `00093100`, 4 + 2 + 2 + 1, size in o8 [D].
+- In a sprite (object type 4) the ISP writes gl_PointCoord there, and the
+  pixel program iterates it as tc0 (`DOUTI iterate tc0 x2 f16`, DOUTU w1
+  b24) [D]. The values are `(i + 0.5) / size` across the point, origin top
+  left. As `round(255 × value)` this predicts the DDK's 16-pixel sprites
+  exactly, and resized ones at 8 and 32 [C, p2 p3].
+- A point's square is `[c - size/2, c + size/2)` around its centre [C].
+- Without gl_PointSize written (`pt1`) the DDK draws nothing.
 
 ## 4. The render target
 
@@ -444,11 +640,11 @@ For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
 
 - The TE tile is 32 × 16 pixels. SGXAddRenderTarget computes
   `xtiles = (w+31)/32` and `ytiles = (h+15)/16`.
-- **Region clip** (TA block group 0x80, clear object only):
-  - word 0 = `0x80000000 | (xmax tile)`, with b12-21 = xmin;
-  - word 1 = ymax tile, with b12-21 = ymin;
-  - here 22 and 29;
-  - status: D (`scissor` capture).
+- **Region clip** (TA block group 0x80):
+  - word 0 = `0x80000000 | xmin tile << 16 | xmax tile`;
+  - word 1 = `ymin tile << 16 | ymax tile`;
+  - the whole 720×480 target is 0..22, 0..29;
+  - sticky TA state, see "Scissor and partial viewports" [C].
 - glScissor is not a hardware rectangle; see "Scissor and partial
   viewports" in section 3.
 - **Pbuffers** (`pb` 64×32, `pb2` 128×48): 2×2 macrotile mode
@@ -718,6 +914,33 @@ Base captures and their bases:
 | t16x8 … tnpot | sizes | T1 |
 | tmip, tmip2, tmipb | mipmaps | T0 b9, b18 |
 | pb, pb2, pb8888, pbd | pbuffer 64×32, 128×48, 8888, + depth | RT numbers, PBE words, viewport sign |
+| base3 | the probe defaults, second session (probe-st3, 2026-10-28 afternoon) | base for the rows below |
+| sc1 / sc2 | glScissor(100,50,200,100) / (37,23,101,57) | load, reset, set objects; region clips |
+| sc3 | glScissor of the whole target | nothing (= base3) |
+| sc4 | sc1 without glClear | the draw carries the region clip (header `dfc3`) |
+| sc5 | a second draw with glScissor(400,200,150,120) | reset over the old tiles, set the new |
+| sc6 | glScissor(0,0,0,0) | reset only |
+| nc0 | no glClear | the load object |
+| vp1 / vp2 | glViewport(100,50,200,100) / (37,23,101,57) | reset + set over the viewport, viewport words |
+| tri2 / fan | 4 vertices as GL_TRIANGLE_STRIP / GL_TRIANGLE_FAN | VDM prim 3 / prim 0 + b28 |
+| ln1 / ln4 / ln9 | GL_LINES, glLineWidth 1 / 4 / 9.5 | VDM prim 1, ISPA type 1, ISPB width |
+| lstrip / lloop | GL_LINE_STRIP / GL_LINE_LOOP | a prim-1 list: count 6 over identity indices (wrong) / count 8 over 0 1 1 2 2 3 3 0 |
+| pt1 / pt8 / pt16 | GL_POINTS without gl_PointSize / 8.0 / 16.0 | nothing / VDM prim 2, ISPA type 3, size output |
+| spr16 | 16-px points, gl_FragColor = gl_PointCoord | ISPA type 4, tc0 iteration |
+| ptattr | gl_PointSize from an attribute | fminmax clamp against 511 |
+| kb0 | glBlendFunc(ONE, ZERO), colour 0.8 0.6 0.4 0.5 | sop2 c1=one c2=zero |
+| k1-k5, k7, k8 | constant factors (src, dst, both), blend colour 0.25 0.5 0.75 0.375 | 4 sopwm + sop2, blend colour in sa2 |
+| k6 | k1 with blend colour 0.5 0.125 1 0.625 | sa2 only |
+| e1base | probe1 (GLES1): clear + a triangle with vertex colours, alpha 0 / 0.5 / 1 | base for the e1 rows |
+| e1gt5 / e1lt5 / e1gt25 / e1ge5 | glAlphaFunc GREATER 0.5 / LESS 0.5 / GREATER 0.25 / GEQUAL 0.5 | ISPA pass type 1, atst8, sa1 |
+| e1nev / e1alw | NEVER / ALWAYS | no atst8: ISPA b20+b21 / the base |
+| e1tex / e1texat | an RGBA texture, GL_MODULATE / + alpha test | sop2 modulate into r0, atst8 from r0 |
+| e1atbl | alpha test + SRC_ALPHA blend | atst8 writes p0, (p0) blend |
+| e1pt / e1spr / e1ln | ES1 points 8 / sprite 16 + texture / lines width 4 | as in ES2 |
+| ln16 / ln106 | GL_LINES width 16 / 1.06 | ISPB `ff` / `10` (truncated) |
+| sc7 | glScissor for the first draw, disabled for the second | one ISPC-less pass-type-3 object over the target |
+| pt100 | gl_PointSize 100 | sa10 `5ffc5640` (F16 100.0 in the low half) |
+| ptvar / sprvar | points with a varying vec2 / + gl_PointCoord | coordinate set tc0, varying tc1, size last |
 
 Every capture's TA state block, PBE words, RT numbers, PB descriptor and
 free list are rebuilt from the formulas by `build.py --check` (run with
@@ -748,6 +971,34 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 | p8a | 5 (control) | none (t8888) | identical | 0 differ |
 | p8 | 5, DOUTT | T0 `07fe0000` → `07fe1400` (min+mag linear, `0x2e018038`) | the DDK's own `tlin` readback | 0 differ (42484 pixels changed) |
 | p9 | 5, DOUTT | T0 → `07fe0048` (S, T mirror) | the DDK's own `tmirror` readback | 0 differ |
+| q0 | scissor (control) | none (`sc1`, glScissor(100, 50, 200, 100)) | identical | 0 differ |
+| q1 | scissor, ISPC set/reset | reset object ISPC `00000000` → `02000000` (`0x30401088`) | the whole target visible: the triangle beyond the scissor, cut to the clear's tiles 3-9 × 20-26 (sticky region clip) | 0 differ |
+| q2 | scissor, set geometry | set strip's left x 100.0 → 150.0 (`0x3e51d054`, `0x3e51d064`) | the scissor's left edge at 150 | 0 differ |
+| q3 | scissor, region clip | set object region clip `80030009` → `80030006` (`0x3040110c`) | nothing right of x = 224 (tile 6's end) | 0 differ |
+| q4 | scissor, ISPC set/reset | set object ISPC `02000000` → `00000000` (`0x30401108`) | nothing visible: an all-zero frame | 0 differ |
+| l0 | lines (control) | none (`ln1`, two GL_LINES) | identical | 0 differ |
+| l1 | ISPB width | `ln4` ISPB `000040f0` → `000010f0` (`0x30401088`) | the DDK's `ln1` frame | 0 differ |
+| l2 | ISPB width | `ln1` ISPB → `000098f0` | the DDK's `ln9` frame (width 9.5) | 0 differ |
+| l3 | VDM prim | `tri2` (strip) VDM word `8cc00004` → `84c00004` (lines, object type left 0) | the `ln1` frame | 720 differ: nothing drawn |
+| l4 | ISPA object type | `ln1` ISPA `01d08200` → `01d00200` (type 0) | (discovery) | the lines vanish: type 1 is required |
+| p0 | points (control) | none (`pt8`, gl_PointSize = 8.0) | identical | 0 differ |
+| p1 | point size | sa10 `5ffc4800` → `5ffc4c00` (`0x30401108`) | the DDK's `pt16` frame | 0 differ |
+| p2 | sprite size | `spr16` sa10 → `5ffc4800` | 8-px sprites, gl_PointCoord (i+0.5)/8 | 0 differ |
+| p3 | sprite size | `spr16` sa10 → `5ffc5000` | 32-px sprites, (i+0.5)/32 | 0 differ |
+| p4 | ISPA object type | `spr16` ISPA `01d20200` → `01d18200` (type 3) | (discovery) | same squares, coordinate 0: type 4 generates it |
+| b0 | constant blend (control) | none (`k1`: CONSTANT_COLOR, ZERO; colour 0.8 0.6 0.4 0.5, blend colour 0.25 0.5 0.75 0.375) | identical | 0 differ |
+| b2 | constant blend | k1's src-RGB sopwm `90807980` → `91807980` (c1 s2 → 1-s2, `0x370083a0`) | RGB of the DDK's `k2` frame, alpha of `k1` | 0 differ |
+| b3 | constant blend | the same word → `908079c0` (s2a) | the DDK's `k3` frame | 0 differ |
+| kk0 | k18/k19 (control) | none (`kb0`: ONE, ZERO) | identical | 0 differ |
+| kk1-kk4 | sop2 selectors | `kb0`'s sop2 with c1=k18 / c2=k19 / a1=k18 / a2=k19 | (discovery) | k19 reads 0; k18 reads leftover per-pixel state |
+| a0 | alpha test (control) | none (`e1gt5`: ES1, glAlphaFunc(GREATER, 0.5), vertex alpha 0, 0.5, 1) | identical | 0 differ |
+| a1 | alpha reference | sa1 `80008e00` → `40008e00` (`0x2e018038`, PDS data) | the DDK's `e1gt25` frame | 0 differ |
+| a2 | alpha func | sa1 → `80002e00` (LESS) | the DDK's `e1lt5` frame | 0 differ |
+| a3 | alpha func | sa1 → `8000ce00` (GEQUAL) | the DDK's `e1ge5` frame | 0 differ |
+| a7 | alpha func | sa1 → `8000ee00` (ALWAYS) | the DDK's `e1base` frame (no alpha test) | 0 differ |
+| a4 | pass type | ISPA `03d00200` → `01d00200` (opaque) | (discovery) | failing pixels drawn with garbage |
+| a5 | pass type | ISPA → `09d00200` (punch-through) | identical | 0 differ |
+| a6 | atst8 h3 | `f934000d` → `f9340005` | (discovery) | render stalls, right part unwritten, no recovery |
 
 p8 sets the min and mag bits together. The triangle samples a magnified
 texture, so only mag is proven by the pixels; min stays [D].

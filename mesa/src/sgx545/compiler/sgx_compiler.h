@@ -54,6 +54,12 @@ struct sgx_compile_options {
    /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
     * F16 iteration, fmad16, F16/C10 uniforms, as the DDK does */
    bool f16;
+   /* gl_FrontFacing: by default 1.0 (front). libusc reads p0 at entry and
+    * flips it with a per-draw driver constant, but in our programs p0 at
+    * entry is not reliable (EA3: ~11% of pixels differ run to run), so no
+    * per-primitive facing source is known yet. front_p0 = read p0 (set =
+    * front), for experiments. */
+   bool front_p0;
 };
 
 /* varying -> texture coordinate set (sgx_assign_varyings) */
@@ -71,8 +77,39 @@ struct sgx_varyings {
    unsigned set_comps[SGX_MAX_SETS];
 };
 
+/* where the driver puts what the program reads (the USP's lists, decoded) */
+struct sgx_const_map {
+   uint16_t k;                  /* constant number: uniform component (sgx_nir.c's numbering) */
+   uint16_t slot;               /* sa[sa_base + slot] */
+   uint8_t shift;               /* bit offset in the slot: F16 0/16, C10 0/10/20 */
+   uint8_t fmt;                 /* 1 f32, 2 F16 (round to nearest), 3 C10 (round(v * 255), signed 10 bits) */
+};
+
+struct sgx_iter_info {
+   uint8_t set;                 /* texture coordinate set (DOUTI source = set + 1) */
+   uint8_t comps;
+   uint8_t pa;                  /* first PA register */
+   uint8_t regs;                /* PA registers it fills */
+   uint8_t f16;                 /* iterated as F16 (two components per register) */
+   uint8_t sample;              /* a non-dependent sample: the raw RGBA8 texel lands in pa */
+   uint8_t proj;                /* ... with a projected coordinate (x/w, y/w) */
+   uint8_t sampler;             /* ... of this sampler */
+};
+
 struct sgx_shader {
    unsigned stage;              /* MESA_SHADER_VERTEX / _FRAGMENT */
+   /* what the program reads and writes */
+   unsigned sa_base;            /* first SA register of the constants (9 fragment, 10 vertex) */
+   unsigned n_consts;
+   struct sgx_const_map consts[256];
+   unsigned n_iters;            /* fragment: PDS iterations, in PA order */
+   struct sgx_iter_info iters[16];
+   unsigned colour_pa;          /* fragment: packed BGRA8 colour register */
+   bool discards;               /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
+   uint32_t in_mask[4];         /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
+   unsigned set_comps[SGX_MAX_SETS]; /* vertex: output set sizes (o4 on); 0 = unused */
+   bool point_size;             /* vertex: writes the point size, after the sets */
+   unsigned n_out_regs;         /* vertex: o registers written */
    uint8_t *usp;                /* the USP binary */
    size_t usp_size;
    uint64_t *code;              /* main program, flat (branch targets resolved) */
