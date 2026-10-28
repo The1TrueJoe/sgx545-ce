@@ -39,6 +39,8 @@ def decode(data, fmt, w, h):
     for o in range(0, len(data) - bpp + 1, bpp):
         t = data[o:o + bpp]
         if fmt in ("rgba8888", "rgb888"):
+            if fmt == "rgb888":    # expanded to 4 bytes, alpha 0xff
+                t = bytes(t[:3]) + b"\x80"
             if not t[3] & 0x80:
                 continue
             x = t[0] | (t[3] & 3) << 8

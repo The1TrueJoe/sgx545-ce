@@ -89,6 +89,15 @@ void sgxtex_encode_level(void *dst, const void *src, size_t src_stride, uint32_t
 			memcpy(d + (size_t)sgxtex_twiddle(x, y, w, h) * bpp, s + y * src_stride + (size_t)x * bpp, bpp);
 }
 
+uint16_t sgxtex_convert16(uint32_t t1fmt, uint16_t v)
+{
+	if (t1fmt == SGXTEX_FMT_RGBA4444)
+		return (uint16_t)(v >> 4 | v << 12);
+	if (t1fmt == SGXTEX_FMT_RGBA5551)
+		return (uint16_t)(v >> 1 | v << 15);
+	return v;
+}
+
 uint32_t sgxtex_t1(uint32_t fmt, uint32_t layout, uint32_t w, uint32_t h)
 {
 	return layout << 29 | (fmt & 0x1f) << 24 | (w - 1) << 12 | (h - 1);

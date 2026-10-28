@@ -64,6 +64,11 @@ def strided_tex(w, h, stride, addr, fmt=0x0C):
     return [t0, t1, addr, 0xA0800000]
 
 
+def twiddled_tex(w, h, addr, fmt=0x0D):
+    """DOUTT words of a twiddled source (glGenerateMipmap's previous level): clamp, nearest, no mips."""
+    return [0x001E0090, fmt << 24 | (w - 1) << 12 | (h - 1), addr, 0xA0800000]
+
+
 def pixel_program(copy_use, tex):
     """The background object's pixel PDS program: DOUTU (copy shader), DOUTI, DOUTT (the source)."""
     douto = ((copy_use - USE_BASE) >> 3) << 4
@@ -147,7 +152,8 @@ def check(path, n):
     pp = mem.words(prim, 16)
     tex = [pp[8], pp[9], pp[6], pp[7]]
     sw, sh = (tex[1] >> 12 & 0xFFF) + 1, (tex[1] & 0xFFF) + 1
-    sstride = ((tex[0] >> 9 & 7) | (tex[0] >> 17 & 0x3FF) << 3) + 1
+    strided = tex[1] >> 29 == 6
+    sstride = ((tex[0] >> 9 & 7) | (tex[0] >> 17 & 0x3FF) << 3) + 1 if strided else sw
     copy = USE_BASE + ((pp[0] >> 4) << 3)
     ev = mem.words(cmd[9], 4)
     eot = USE_BASE + ((ev[0] & 0xFFFF) >> 4 << 3)
@@ -156,14 +162,22 @@ def check(path, n):
     dw, dh = (words[1] & 0xFFFF) + 1, (words[1] >> 16) + 1
     dstride = ((words[2] >> 16 & 0xFFF) + 1) * 2
     side = (e[12] >> 22 & 0x3F) | (e[13] >> 10 & 0x3000) | (e[13] & 0x1F8) << 3
-    print(f"transfer {n}: source {sw}x{sh} stride {sstride} at {tex[2]:#x} -> "
+    print(f"transfer {n}: source {sw}x{sh} {'stride ' + str(sstride) if strided else 'twiddled'} at {tex[2]:#x} -> "
           f"dest {dw}x{dh} stride {dstride} at {words[3]:#x}, side {side:#x}")
     want_pbe, want_side = pbe(dw, dh, dstride, words[3], fmt=side & 0x3F, twiddled=bool(side & 0x2000),
                               dither=bool(side & 0x400), scanout=not words[2] & 0x8000)
+    want_cmd = command(bg, dw, dh, cmd[9])
+    if not strided:
+        # glGenerateMipmap keeps the level-0 tile clip for every level; the PBE clip bounds the writes
+        covers = cmd[13] >> 16 >= want_cmd[13] >> 16 and cmd[13] & 0xFFFF >= want_cmd[13] & 0xFFFF
+        print(f"  (tile clip word 13 = {cmd[13]:#x}, the level-0 size; covers the destination: {covers})")
+        if covers:
+            want_cmd[13] = cmd[13]
     results = [
-        ("command words 0-15", command(bg, dw, dh, cmd[9]), cmd),
+        ("command words 0-15", want_cmd, cmd),
         ("background block", bg_block(dw, dh, prim, sec), blk),
-        ("source DOUTT words", strided_tex(sw, sh, sstride, tex[2], tex[1] >> 24 & 0x1F), tex),
+        ("source DOUTT words", strided_tex(sw, sh, sstride, tex[2], tex[1] >> 24 & 0x1F) if strided
+         else twiddled_tex(sw, sh, tex[2], tex[1] >> 24 & 0x1F), tex),
         ("pixel PDS program", pixel_program(copy, tex), pp),
         ("end-of-tile program", eot_program(want_pbe, want_side), e),
     ]

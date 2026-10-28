@@ -30,12 +30,24 @@ says where each texel went with no guessing.
 All from `PROBE_TEXPAT` captures on 2026-10-28; `check.py` places every
 texel of every capture where `tex.py` predicts.
 
-### Byte order [D]
+### Texel formats [D]
 
-Texels are stored exactly as GL uploads them: RGBA8888 is R, G, B, A in
-memory (T1 format 0x0d), the 16-bit formats are the GL `ushort`. The render
-target's BGRA8888 is a different format code (T1 0x0c), so a texture and a
-BGRA surface are not interchangeable without a swizzle.
+Every format at 16×16 (`f*` captures), all 256 texels of each in place:
+
+| GL upload | T1 format | in memory |
+|---|---|---|
+| RGBA / UNSIGNED_BYTE | 0x0d | R, G, B, A bytes, as uploaded |
+| RGB / UNSIGNED_BYTE | 0x0d | expanded to R, G, B, 0xff |
+| RGB / UNSIGNED_SHORT_5_6_5 | 0x05 | the GL ushort |
+| RGBA / UNSIGNED_SHORT_4_4_4_4 | 0x02 | **ARGB4444**: the ushort rotated right by 4 (A on top) |
+| RGBA / UNSIGNED_SHORT_5_5_5_1 | 0x04 | **ARGB1555**: the ushort rotated right by 1 (A on top) |
+| LUMINANCE_ALPHA | 0x1b | L, A bytes, as uploaded |
+| LUMINANCE / ALPHA | 0x1a / 0x19 | the byte |
+
+The 4444/5551 rotations are the driver's conversion on upload; a client
+writing memory itself must apply them (`tex.convert`, `sgxtex_convert16`).
+The render target's BGRA8888 is another format code (T1 0x0c), so a texture
+and a BGRA surface are not interchangeable without a swizzle.
 
 ### Twiddled: power-of-two sizes, T1 layout 0 [D]
 
@@ -63,6 +75,23 @@ Rows top to bottom, each padded to a multiple of **8 texels**: 12×6 has a
 16-texel pitch (0x40 bytes), 100×30 a 104-texel pitch (0x1a0 bytes, the
 buffer is exactly 104 × 30 × 4). Every texel of both matches. T1 layout 3
 has no pitch field: the sampler derives it from the width the same way.
+n5x7 (pitch 8) matches too.
+
+### Mipmaps [D]
+
+Level n+1 follows level n with no padding or alignment, down to 1×1 on both
+axes; each level is laid out by its own size (twiddled when both sides are
+powers of two). m16 (16×16, 5 levels, 0x554 bytes), m32x8 (32×8 → 16×4 →
+8×2 → 4×1 → 2×1 → 1×1, 0x55c bytes) and m565 (RGB565, 0x2aa bytes) match
+texel for texel. T2 is the base; nothing else in the texture words moves
+with the level count (STATE.md).
+
+**glGenerateMipmap runs on the GPU**: one transfer per level (mg64: six,
+before the frame's kicks), each sampling the previous level as a twiddled
+texture (T0 `001e0090`: clamp, nearest, no mips) and writing the next one
+twiddled. With nearest sampling the DDK's "filter" is decimation: texel
+(x, y) of level n is texel (2x+1, 2y+1) of level n−1 (all 1365 generated
+texels of mg64). A driver that wants box-filtered mips should make its own.
 
 ## 2. Uploads: the CPU for small textures, the transfer queue otherwise [D]
 

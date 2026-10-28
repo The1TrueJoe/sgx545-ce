@@ -39,7 +39,7 @@ def main():
                     if a.fmt in ("rgba8888", "rgb888"):
                         want = (lv, f, x, y)
                     elif bpp == 2:
-                        want = (y * lw + x) & 0xFFFF
+                        want = tex.convert(a.fmt, (y * lw + x) & 0xFFFF)
                     else:
                         want = (y * lw + x) & 0xFF
                     if got.get(o) == want:

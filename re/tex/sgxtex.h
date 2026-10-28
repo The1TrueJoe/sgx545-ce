@@ -37,15 +37,19 @@ size_t sgxtex_level_offset(uint32_t w, uint32_t h, uint32_t bpp, uint32_t lv);
 size_t sgxtex_texel_offset(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t bpp, uint32_t lv);
 /*
  * Lay out one level: src is linear, top row first, src_stride bytes per row,
- * bpp bytes per texel exactly as GL uploads it (RGBA8888 = R,G,B,A bytes;
- * 16-bit formats = the GL ushort). dst points at the level's first byte.
+ * bpp bytes per texel exactly as stored (RGBA8888 = R,G,B,A bytes; RGB565 and
+ * LA88 = the GL ushort; RGBA4444 / RGBA5551 after sgxtex_convert16). dst
+ * points at the level's first byte.
  */
 void sgxtex_encode_level(void *dst, const void *src, size_t src_stride, uint32_t w, uint32_t h,
 			 uint32_t bpp);
 
+/* a GL RGBA4444 / RGBA5551 ushort as stored (ARGB4444 / ARGB1555); others unchanged */
+uint16_t sgxtex_convert16(uint32_t t1fmt, uint16_t v);
+
 /* T1 word of a sampled texture: format code (b24-28), layout (b29-31), size */
-#define SGXTEX_FMT_RGBA4444 0x02
-#define SGXTEX_FMT_RGBA5551 0x04
+#define SGXTEX_FMT_RGBA4444 0x02	/* stored ARGB4444 */
+#define SGXTEX_FMT_RGBA5551 0x04	/* stored ARGB1555 */
 #define SGXTEX_FMT_RGB565 0x05
 #define SGXTEX_FMT_BGRA8888 0x0c
 #define SGXTEX_FMT_RGBA8888 0x0d

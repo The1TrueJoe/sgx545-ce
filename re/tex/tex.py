@@ -8,8 +8,10 @@ Everything here is measured from the DDK's own uploads (re/tex/TEX.md):
 - not a power of two (T1 layout 3): linear rows, top row first, the pitch
   rounded up to 8 texels;
 - each mip level follows the previous one, levels down to 1x1;
-- texel bytes are the GL upload's: RGBA8888 is R, G, B, A in memory, the
-  16-bit formats are the GL ushort, RGB888 is expanded to RGBA8888 (A = 0xff).
+- texel bytes are the GL upload's: RGBA8888 is R, G, B, A in memory, RGB565
+  and LA88 are the GL ushort, L8/A8 the byte; RGB888 is expanded to RGBA8888
+  (A = 0xff); RGBA4444 is stored as ARGB4444 (the ushort rotated right by 4)
+  and RGBA5551 as ARGB1555 (rotated right by 1).
 
     import tex
     data = tex.encode(rgba_bytes, w, h, "rgba8888", levels=[...])
@@ -91,6 +93,15 @@ def encode_level(src, w, h, bpp):
     return bytes(out)
 
 
+def convert(fmt, v):
+    """A GL 16-bit texel -> the value in memory."""
+    if fmt == "rgba4444":
+        return (v >> 4 | v << 12) & 0xFFFF
+    if fmt == "rgba5551":
+        return (v >> 1 | v << 15) & 0xFFFF
+    return v
+
+
 def encode(levels, w, h, fmt):
     """levels: linear bytes of level 0, 1, ... in the GL upload format -> texture memory."""
     bpp = BPP[fmt]
@@ -99,5 +110,8 @@ def encode(levels, w, h, fmt):
         lw, lh = level_size(w, h, lv)
         if fmt == "rgb888":
             src = b"".join(src[3 * i:3 * i + 3] + b"\xff" for i in range(lw * lh))
+        elif fmt in ("rgba4444", "rgba5551"):
+            src = b"".join(convert(fmt, src[i] | src[i + 1] << 8).to_bytes(2, "little")
+                           for i in range(0, 2 * lw * lh, 2))
         out += encode_level(src, lw, lh, bpp)
     return bytes(out)
