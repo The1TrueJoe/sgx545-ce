@@ -6,7 +6,9 @@
  *   - every PVR services bridge call on the DRM node: id, IN bytes, OUT bytes;
  *   - every mmap/munmap of that node (device memory mapped to the CPU);
  *   - before each SGX kick and before each unmap, a copy of every live
- *     mapping, so the decoder sees exactly what the GPU was handed.
+ *     mapping, so the decoder sees exactly what the GPU was handed;
+ *   - the same copy before SGX_DEVINITPART2 and INITSRV_DISCONNECT, so a
+ *     SrvInit trace holds everything the init process wrote for the microkernel.
  *
  * The tracer stays dumb on purpose: no struct knowledge lives here, only the
  * outer bridge package. re/decode/ does the interpretation, so a wrong guess
@@ -59,6 +61,7 @@ enum {
 #define SNAP_KICK 1
 #define SNAP_UNMAP 2
 #define SNAP_EXIT 3
+#define SNAP_INIT 4
 
 #define MAX_MAPS 512
 
@@ -250,6 +253,9 @@ int ioctl(int fd, unsigned long req, ...)
 		kicks++;
 		snap_all(SNAP_KICK);
 	}
+	if ((pkg->id & 0xff) == NR(PVRSRV_BRIDGE_SGX_DEVINITPART2) ||
+	    (pkg->id & 0xff) == NR(PVRSRV_BRIDGE_INITSRV_DISCONNECT))
+		snap_all(SNAP_INIT);
 	follow(pkg, 0);
 	t = now_ns();
 	ret = real_ioctl(fd, req, arg);
