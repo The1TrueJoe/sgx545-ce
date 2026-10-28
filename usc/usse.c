@@ -233,3 +233,16 @@ usse_encode(const struct usse_inst *inst, unsigned fc, uint64_t *word, const cha
    *word = v;
    return 0;
 }
+
+const struct usse_form *
+usse_form_desc(unsigned form)
+{
+   return &usse_forms[form];
+}
+
+/* the k-th operand slot of a form, NULL past the end */
+const struct usse_slot *
+usse_form_slot(unsigned form, unsigned k)
+{
+   return k < usse_forms[form].nops ? &usse_forms[form].ops[k] : NULL;
+}

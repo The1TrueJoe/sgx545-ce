@@ -111,6 +111,8 @@ int32_t usse_get(const struct usse_inst *inst, enum usse_field_id f);
 int usse_encode(const struct usse_inst *inst, unsigned fc, uint64_t *word, const char **err);
 const char *usse_form_name(enum usse_form_id form);
 const char *usse_field_name(enum usse_field_id f);
+const struct usse_form *usse_form_desc(unsigned form);
+const struct usse_slot *usse_form_slot(unsigned form, unsigned k);
 
 static inline struct usse_opd
 usse_reg(enum usse_kind k, unsigned n)
