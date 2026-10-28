@@ -122,9 +122,13 @@ class Machine:
             regs.v[0x12C] = regs.v.get(0x12C, 0) & ~v
         r.on_write[0x134] = host_clear
 
-        def dpm_load(regs, v):          # 0x684: DPM free-list loads -> EVENT_STATUS2 bits 0-3
-            regs.v[0x118] = regs.v.get(0x118, 0) | (v & 0xF)
-        r.on_write[0x684] = dpm_load
+        def dpm_load(bit):              # 0x684 / 0x680 = 1: DPM TA / 3D free-list load -> EVENT_STATUS2 bit 0 / 1
+            def f(regs, v):
+                if v & 1:
+                    regs.v[0x118] = regs.v.get(0x118, 0) | bit
+            return f
+        r.on_write[0x684] = dpm_load(1)
+        r.on_write[0x680] = dpm_load(2)
 
         def dpm_op(store, clear, load):
             # 0x694 / 0x698 (DPM state / control): bits 0-2 = store / clear / load,

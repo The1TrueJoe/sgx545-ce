@@ -124,6 +124,8 @@ PRED_RE = re.compile(r"^\((!?)p(\d)\) ")
 
 
 class Task:
+    tt = None
+
     def __init__(self, pc, pa, poison):
         self.r = [poison + i for i in range(128)]
         self.pa = list(pa) + [0] * (128 - len(pa))
@@ -155,6 +157,8 @@ class USSE:
         self.on_unknown = None     # f(emu, task, inst, text) -> True if handled
         self.steps = 0
         self.bp = {}               # pc -> f(emu, task), called before the instruction
+        self.taint = None          # {mem addr: frozenset of origins} when tracking provenance
+        self.sat = {}              # provenance of the secondary attributes
         self.lock_halt = False
 
     # ------------------------------------------------------------------
@@ -255,9 +259,68 @@ class USSE:
             if self.on_unknown and self.on_unknown(self, t, x, text):
                 return
             raise EmuError(f"{pc:#06x}: no semantics for `{text}`")
+        if self.taint is not None:
+            self.track(t, x, ops, pc)
         f(t, x, d, ops, pc, text)
         if d.get("end"):
             raise Ended()
+
+    # provenance -------------------------------------------------------
+    def tkey(self, t, o, k=0):
+        kind = o["kind"]
+        if kind in ("r", "pa", "o", "i"):
+            return (t.tt, (kind, o["n"] + k))
+        if kind == "sa":
+            return (self.sat, o["n"] + k)
+        if kind == "ix":
+            n = (t.idx[o["idx"]] + o["off"] + k) & 127
+            return (self.sat, n) if o["bank"] == "sa" else (t.tt, (o["bank"], n))
+        return None
+
+    def tget(self, t, o, k=0):
+        key = self.tkey(t, o, k)
+        return key[0].get(key[1], frozenset()) if key else frozenset()
+
+    def tset(self, t, o, v, k=0):
+        key = self.tkey(t, o, k)
+        if key:
+            key[0][key[1]] = v
+
+    def track(self, t, x, ops, pc):
+        """origins flow through ALU ops; loads start them at a memory word
+        (or the word's own origins when the microkernel stored it)"""
+        if t.tt is None:
+            t.tt = {}
+        n = x.form.name
+        d = x.d
+        if n == "ld":
+            for k, a in enumerate(self.peek_addrs(t, d, ops[1], ops[2])):
+                self.tset(t, ops[0], self.taint.get(a, frozenset([a])), k)
+        elif n == "st":
+            for k, a in enumerate(self.peek_addrs(t, d, ops[0], ops[1])):
+                self.taint[a] = self.tget(t, ops[2], k if ops[2]["kind"] != "#" else 0)
+        elif n == "ldr":
+            self.tset(t, ops[0], frozenset([("cr", self.rd(t, ops[1]) * 4)]))
+        elif n == "str":
+            self.last_str_taint = self.tget(t, ops[1])
+        elif n == "limm":
+            self.tset(t, ops[0], frozenset())
+        elif n in ("test", "ba", "br", "lapc", "savl", "setl", "nop", "idf", "wdf", "emit", "phas.i"):
+            pass
+        elif ops and ops[0]["kind"] not in ("#", "p"):
+            src = frozenset()
+            for o in ops[1:]:
+                src |= self.tget(t, o)
+            nrep = d.get("rpt", 1) if d.get("rcnt") or n == "imae" else 1
+            for k in range(nrep):
+                self.tset(t, ops[0], src, k)
+
+    def peek_addrs(self, t, d, base_op, off_op):
+        """addrs() without changing the base register"""
+        save = self.rd(t, base_op)
+        out = self.addrs(t, d, base_op, off_op)
+        self.wr(t, base_op, save)
+        return out
 
     # moves ----------------------------------------------------------
     def reps(self, d):
@@ -457,6 +520,8 @@ class USSE:
 
     def op_str(self, t, x, d, ops, pc, text):
         self.regs.wr(self.rd(t, ops[0]) * 4, self.rd(t, ops[1]), pc)
+        if self.taint is not None:
+            self.regs.log[-1] = self.regs.log[-1] + (self.last_str_taint,)
 
     # flow -----------------------------------------------------------
     def op_ba(self, t, x, d, ops, pc, text):

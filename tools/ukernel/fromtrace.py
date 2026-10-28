@@ -35,8 +35,16 @@ class Event:
             self.first = g("bFirstKickOrResume")
             self.last = g("bLastInScene")
         else:
-            self.data = [0] * 6
-            self.ccb_va = self.ccb_off = None
+            # SGX_SUBMITTRANSFER: the kernel's TRANSFER command has the HW transfer
+            # context in Data[1]; the command sits in the context's CCB
+            I = "PVRSRV_BRIDGE_IN_SUBMITTRANSFER_TAG"
+            ctx = layout.get(mm.arch, I, rec.inp, "sKick.sHWTransferContextDevVAddr.uiAddr")
+            self.data = [0, ctx, 0, 0, 0, 0]
+            hccb = layout.get(mm.arch, I, rec.inp, "sKick.hCCBMemInfo")
+            ccb = next(b for b in mm.bufs if b.kmeminfo == hccb)
+            self.ccb_va = ccb.devva
+            self.ccb_off = layout.get(mm.arch, I, rec.inp, "sKick.ui32SharedCmdCCBOffset")
+            self.first = self.last = None
 
     def load(self, mem):
         for va, data, _ in self.memory.regions:
@@ -50,6 +58,17 @@ def contexts(log, mm):
     I = "PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
     O = "PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
     for r in log.of(pvrlog.Bridge):
+        if r.name == "SGX_REGISTER_HW_TRANSFER_CONTEXT":
+            I = "PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_TRANSFER_CONTEXT_TAG"
+            O = "PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_TRANSFER_CONTEXT_TAG"
+            ptr = layout.get(mm.arch, I, r.inp, "pHWTransferContextCpuVAddr")
+            ub = next(u for u in log.of(pvrlog.UBuf) if u.seq < r.seq and u.nr == r.nr and u.phase == 0
+                      and (u.ptr & 0xFFFFFFFF) == ptr & 0xFFFFFFFF)
+            out.append((layout.get(mm.arch, O, r.out, "sHWTransferContextDevVAddr.uiAddr"), ub.data,
+                        layout.get(mm.arch, I, r.inp, "ui32OffsetToPDDevPAddr")))
+            continue
+        I = "PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
+        O = "PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
         if r.name != "SGX_REGISTER_HW_RENDER_CONTEXT":
             continue
         ptr = layout.get(mm.arch, I, r.inp, "pHWRenderContextCpuVAddr")

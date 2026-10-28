@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fromtrace  # noqa: E402
-from sgxsim import Machine, PD_PHYS, DDK_ENTRIES  # noqa: E402
+from sgxsim import Machine, PD_PHYS, DDK_ENTRIES, A  # noqa: E402
 from emu import EmuError  # noqa: E402
 
 # what the hardware reports when each unit finishes: the event word the event
@@ -32,8 +32,9 @@ EV_3D_FREE = (0x400000, 0x1)
 
 
 class Runner:
-    def __init__(self, fw, trace, entries=DDK_ENTRIES, out=sys.stdout, poll_assist=True):
+    def __init__(self, fw, trace, entries=DDK_ENTRIES, out=sys.stdout, poll_assist=True, why=False):
         self.out = out
+        self.why = why
         self.ctxs = []
         self.events = fromtrace.kicks(trace, self.ctxs)
         self.m = Machine(fw, entries)
@@ -45,20 +46,51 @@ class Runner:
             self.m.mem.load(va, data)
             self.m.mem.wr(va + pdo, PD_PHYS)
         self.m.mem.log = []
+        self.regions = [(A[n], {"ta3d": 0xEC, "hostctl": 0x44, "kccb": 0x2000, "ccbctl": 8}.get(n, 0x40), n)
+                        for n in ("ta3d", "hostctl", "kccb", "ccbctl")]
+        for va, data, pdo in self.ctxs:
+            self.regions.append((va, len(data), "ctx"))
+        for k in self.events:
+            if k.kind != "kick":
+                continue
+            cmd = k.ccb_va + k.ccb_off - 0x58
+            h = k.memory.words(cmd, 18)
+            self.regions.append((cmd, 0x2C0, f"cmd{k.n}"))
+            for i, n, sz in ((9, "pb", 0x3C), (14, "rd", 0x1EC), (15, "deps", 0x28), (17, "rtentry", 0x38),
+                             (16, "rtdata", 0x18)):
+                if h[i] and not any(r[0] == h[i] for r in self.regions):
+                    self.regions.append((h[i], sz, n))
+        if why:
+            self.m.u.taint = {}
 
     def p(self, s):
         print(s, file=self.out)
+
+    def name(self, o):
+        if isinstance(o, tuple):
+            return f"CR{o[1]:#x}"
+        for base, size, n in self.regions:
+            if base <= o < base + size:
+                return f"{n}+{o - base:#x}"
+        return f"{o:#x}"
 
     def flush(self, title):
         m = self.m
         self.p(f"== {title}")
         for l in m.log:
             self.p(f"   {l}")
-        for op, a, v, pc in m.regs.log:
-            self.p(f"   {op} {a:#06x} = {v:#010x}  @{pc:#06x}")
+        for e in m.regs.log:
+            op, a, v, pc = e[:4]
+            src = ""
+            if len(e) > 4 and e[4]:
+                src = "  <- " + " ".join(sorted(self.name(o) for o in e[4]))
+            self.p(f"   {op} {a:#06x} = {v:#010x}  @{pc:#06x}{src}")
         for op, a, v, pc in m.mem.log or []:
             if op == "st" and pc is not None:
-                self.p(f"   mem {a:#010x} = {v:#010x}  @{pc:#06x}")
+                src = ""
+                if self.why and m.u.taint.get(a):
+                    src = "  <- " + " ".join(sorted(self.name(o) for o in m.u.taint[a]))
+                self.p(f"   mem {self.name(a)} = {v:#010x}  @{pc:#06x}{src}")
         m.log.clear()
         m.regs.log.clear()
         if m.mem.log is not None:
@@ -87,26 +119,46 @@ class Runner:
         ready flag). A trace snapshots memory before the ioctl, so kick n's is
         read back from a later snapshot when there is one."""
         cmd = k.ccb_va + k.ccb_off
-        later = [e for e in self.events if e.kind == "kick" and e.n > k.n]
+        i = self.events.index(k)
+        later = self.events[i + 1:]
         d = later[0].memory.read(cmd, 0x1E0) if later else None
         if d:
             self.m.mem.load(cmd, d)
         self.m.mem.wr(cmd, self.m.mem.rd(cmd) | 1)
 
+    def xfer(self, k):
+        """a transfer: the shared part is filled by SGXSubmitTransferKM"""
+        i = self.events.index(k)
+        later = self.events[i + 1:]
+        cmd = k.ccb_va + k.ccb_off
+        d = later[0].memory.read(cmd, 0xDC) if later else None
+        if d:
+            self.m.mem.load(cmd, d)
+        self.step(f"transfer {k.n}", self.m.kick, 1, k.data)
+        self.event("3D end of render (transfer)", EV_3D_END)
+        self.event("DPM 3D memory free (transfer)", EV_3D_FREE)
+
     def run(self):
         prev = None
         for k in self.events:
-            if k.kind != "kick":
-                continue
             if prev is None:
                 k.load(self.m.mem)
             else:
                 # later kicks: only what the client changed since the last one,
                 # so the microkernel's own writes stay
-                for (va, d, _), (va2, d2, _) in zip(prev.memory.regions, k.memory.regions):
-                    for i in range(0, len(d) - 3, 4):
+                before = {va: d for va, d, _ in prev.memory.regions}
+                for va, d2, _ in k.memory.regions:
+                    d = before.get(va)
+                    if d is None or len(d) != len(d2):
+                        self.m.mem.load(va, d2)      # a buffer new since the last event
+                        continue
+                    for i in range(0, len(d2) - 3, 4):
                         if d[i:i + 4] != d2[i:i + 4]:
                             self.m.mem.wr(va + i, struct.unpack_from("<I", d2, i)[0])
+            if k.kind == "xfer":
+                self.xfer(k)
+                prev = k
+                continue
             self.shared(k)
             self.step(f"TA kick {k.n}", self.m.kick, 0, k.data)
             self.event(f"TA finished ({k.n})", EV_TA_FINISHED)
@@ -123,9 +175,10 @@ def main():
     ap.add_argument("fw")
     ap.add_argument("trace")
     ap.add_argument("-o", "--out")
+    ap.add_argument("--why", action="store_true", help="show where each register value came from")
     a = ap.parse_args()
     out = open(a.out, "w") if a.out else sys.stdout
-    ok = Runner(open(a.fw, "rb").read(), a.trace, out=out).run()
+    ok = Runner(open(a.fw, "rb").read(), a.trace, out=out, why=a.why).run()
     sys.exit(0 if ok else 1)
 
 
