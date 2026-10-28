@@ -103,11 +103,25 @@ sgx545_stats_report(struct sgx545_context *ctx)
    /* the thread's own CPU time: the rest of the window it waited */
    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
    cpu = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
-   fprintf(stderr, "sgx545 stats: thread CPU %.0f ms of %.0f; flush: kick %.0f, target wait %.0f, slot wait %.0f ms\n",
-           (cpu - ctx->stats.cpu0) * ms, dt * ms, ctx->hw ? ctx->hw->ns_kick * ms : 0,
-           ctx->hw ? ctx->hw->ns_target_wait * ms : 0, ctx->hw ? ctx->hw->ns_slot_wait * ms : 0);
+   fprintf(stderr, "sgx545 stats: thread CPU %.0f ms of %.0f; flush %.0f: TA command %.0f, kick %.0f, target wait %.0f, "
+           "slot wait %.0f, sync wait %.0f ms\n",
+           (cpu - ctx->stats.cpu0) * ms, dt * ms, ctx->hw ? ctx->hw->ns_flush * ms : 0,
+           ctx->hw ? ctx->hw->ns_cmd * ms : 0, ctx->hw ? ctx->hw->ns_kick * ms : 0,
+           ctx->hw ? ctx->hw->ns_target_wait * ms : 0, ctx->hw ? ctx->hw->ns_slot_wait * ms : 0,
+           ctx->hw ? ctx->hw->ns_sync_wait * ms : 0);
    if (ctx->hw)
+      ctx->hw->ns_flush = ctx->hw->ns_cmd = ctx->hw->ns_sync_wait = 0;
+   fprintf(stderr, "sgx545 stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
+           "readback %u, deferred %u; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u\n",
+           ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch, ctx->stats.fl_read,
+           ctx->stats.fl_deferred, ctx->hw ? ctx->hw->ns_fence_wait * ms : 0,
+           ctx->hw && ctx->hw->n_latency ? ctx->hw->ns_latency * ms / ctx->hw->n_latency : 0,
+           ctx->hw ? ctx->hw->n_latency : 0);
+   if (ctx->hw) {
       ctx->hw->ns_kick = ctx->hw->ns_target_wait = ctx->hw->ns_slot_wait = 0;
+      ctx->hw->ns_fence_wait = ctx->hw->ns_latency = 0;
+      ctx->hw->n_latency = 0;
+   }
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
            dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,
@@ -135,6 +149,23 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
 
    if (flags & PIPE_FLUSH_END_OF_FRAME)
       ctx->stats.frames++;
+   /* A plain flush (glFlush) of an off-screen frame is deferred, as GL
+    * allows: submitting it split the frame, and the draws after it into the
+    * same target (the openhc-minecraft overlay's, after the game's glFlush)
+    * waited for the whole render.  The frame still goes at a fence, a
+    * readback, another target or the end of the frame; renders into the
+    * scanout buffer (the swap's copy) go now. */
+   if (ctx->recording && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) && !ctx->recording->wrapped &&
+       !debug_get_bool_option("SGX545_FLUSH_ALL", false)) {
+      ctx->stats.fl_deferred++;
+      return;
+   }
+   if (ctx->recording) {
+      if (flags & PIPE_FLUSH_END_OF_FRAME)
+         ctx->stats.fl_eof++;
+      else
+         ctx->stats.fl_other++;
+   }
    sgx545_flush_frame(ctx);
    if (fence) {
       struct sgx545_fence *f = CALLOC_STRUCT(sgx545_fence);

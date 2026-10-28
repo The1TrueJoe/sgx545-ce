@@ -102,6 +102,7 @@ struct sgxws_token {
    volatile PVRSRV_SYNC_DATA *sd;
    uint32_t value;
    uint32_t seq;                    /* the context's kick number (renders finish in order) */
+   uint64_t kicked_ns;              /* when it was kicked (stats) */
 };
 
 struct sgxws_rt_numbers {
@@ -245,6 +246,9 @@ struct sgxws_ctx {
    struct sgxws_token slot_token[SGXWS_SLOTS];
    uint32_t kicks, done_seq;         /* kicks submitted, the last one known done */
    uint64_t ns_kick, ns_target_wait, ns_slot_wait;   /* where sgxws_flush's time goes (stats) */
+   uint64_t ns_fence_wait;           /* fences waited for (sgxws_wait_seq) */
+   uint64_t ns_flush, ns_cmd, ns_sync_wait;   /* all of sgxws_flush; the TA command; a synchronous flush's wait */
+   uint64_t ns_latency; unsigned n_latency;   /* kick to seen done, renders that were waited for */
    uint32_t pixev, pixev_rows;       /* the recording frame's pixel event, for its kick */
    unsigned frames;
 };

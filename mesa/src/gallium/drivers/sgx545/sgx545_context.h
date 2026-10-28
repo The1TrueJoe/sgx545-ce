@@ -109,6 +109,7 @@ struct sgx545_context {
       bool on;
       uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
+      unsigned fl_eof, fl_other, fl_switch, fl_read, fl_deferred;   /* flushes by cause */
    } stats;
 
    struct blitter_context *blitter;     /* GPU blits: a quad through our own shaders */

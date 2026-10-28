@@ -1412,8 +1412,14 @@ slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
 {
    struct sgxws_token *t = &c->slot_token[i];
 
+   bool pending = t->sd != NULL;
+
    if (token_wait(t, ms))
       return -ETIMEDOUT;
+   if (pending && t->kicked_ns) {
+      c->ns_latency += now_ns() - t->kicked_ns;
+      c->n_latency++;
+   }
    if ((int32_t)(t->seq - c->done_seq) > 0)
       c->done_seq = t->seq;
    return 0;
@@ -1428,8 +1434,20 @@ sgxws_done_seq(struct sgxws_ctx *c)
    return c->done_seq;
 }
 
+static int sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms);
+
 int
 sgxws_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
+{
+   uint64_t t0 = now_ns();
+   int e = sgxws_wait_seq_(c, seq, timeout_ms);
+
+   c->ns_fence_wait += now_ns() - t0;
+   return e;
+}
+
+static int
+sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 {
    /* a kick no longer in its slot's token was waited for when the slot was
     * used again; the others up to seq are waited for here */
@@ -1474,8 +1492,20 @@ sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms)
  * Different targets (the back buffer, then the swap's copy to fb0) are in
  * flight together; the microkernel runs them in order.
  */
+static int sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms);
+
 int
 sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
+{
+   uint64_t t0 = now_ns();
+   int e = sgxws_flush_(c, timeout_ms);
+
+   c->ns_flush += now_ns() - t0;
+   return e;
+}
+
+static int
+sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
 {
    struct sgxws_rt *s = c->rt;
    struct sgxws_token done = { NULL, 0 };
@@ -1503,7 +1533,12 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    rd[0x5c / 4] = c->pixev;
    rd[0x60 / 4] = c->pixev_rows;
    s->rd_w4.map[0] = c->bg_pds[2];
-   ta_command(c, c->ccb.map + woff / 4);
+   {
+      uint64_t t0 = now_ns();
+
+      ta_command(c, c->ccb.map + woff / 4);
+      c->ns_cmd += now_ns() - t0;
+   }
 
    memset(&k, 0, sizeof(k));
    dst[0] = c->target.sync;
@@ -1536,13 +1571,18 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
       }
    }
    done.seq = ++c->kicks;
+   done.kicked_ns = now_ns();
    if (!done.sd && (int32_t)(done.seq - c->done_seq) > 0)
       c->done_seq = done.seq;             /* nothing to wait for */
    s->seq = done.seq;
    s->seq_slot = c->slot;
    c->slot_token[c->slot] = done;
-   if (!e && timeout_ms)
+   if (!e && timeout_ms) {
+      uint64_t t0 = now_ns();
+
       e = slot_wait(c, s->seq_slot, timeout_ms);
+      c->ns_sync_wait += now_ns() - t0;
+   }
    if (!e && c->dev->frame_gap_us) {
       struct timespec ts = { 0, (long)c->dev->frame_gap_us * 1000 };
 

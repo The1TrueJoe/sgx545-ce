@@ -67,8 +67,10 @@ begin_frame(struct sgx545_context *ctx)
    rt = get_rt(ctx, res->base.width0, res->base.height0, t.va);
    if (!rt)
       return false;
-   if (ctx->recording && ctx->recording != res)
+   if (ctx->recording && ctx->recording != res) {
       ctx->recording = NULL;    /* sgxws_begin flushes the other frame */
+      ctx->stats.fl_switch++;
+   }
    if (sgxws_begin(ctx->hw, rt, &t))
       return false;
    ctx->recording = res;

@@ -218,6 +218,7 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
     * the render is done.  Everything else is either CPU memory or idle (the
     * driver waits for every render). */
    if (res->bo.va && !res->texture && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
+      ctx->stats.fl_read += ctx->recording == res;
       sgx545_flush_resource_writes(ctx, res);
       /* and the renders already submitted into it */
       if (res->sync_data && sgxws_wait_sync(res->sync_data, 2000))

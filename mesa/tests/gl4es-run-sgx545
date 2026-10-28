@@ -1,7 +1,7 @@
 #!/bin/sh
 # gl4es-run with the open sgx545 driver (Mesa, /usr/lib/sgx545) instead of the
 # DDK: the same gl4es settings, no bus-id shim (only the DDK needs it).
-export LIBGL_DEEPBIND=0 LIBGL_FB=${MC_FB:-1} LIBGL_ES=2 LIBGL_GL=21 LIBGL_NOBANNER=1
+export LIBGL_DEEPBIND=0 LIBGL_FB=${MC_FB:-1} LIBGL_ES=2 LIBGL_GL=21 LIBGL_NOBANNER=${LIBGL_NOBANNER:-1}
 export LIBGL_VERTEXFOG=1 LIBGL_MIPMAP=3
 export LIBGL_EGL=/usr/lib/sgx545/libEGL.so.1 LIBGL_GLES=/usr/lib/sgx545/libGLESv2.so.2
 export LD_LIBRARY_PATH=/usr/lib/mc-overlay:/usr/lib/gl4es:/usr/lib/sgx545${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
