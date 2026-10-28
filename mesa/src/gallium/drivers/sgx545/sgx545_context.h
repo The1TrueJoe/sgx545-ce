@@ -26,7 +26,7 @@ enum sgx545_shader_kind {
 
 /* a constant in secondary attributes: sa[base + slot] = constant buffer 0 float k */
 struct sgx545_const {
-   uint16_t k, slot, fmt, shift;   /* fmt: 1 f32, 2 F16 half at shift */
+   uint16_t k, slot, fmt, shift;   /* fmt: 1 f32, 2 F16 half at shift, 3 C10 channel at shift */
 };
 
 #define SGX545_MAX_CONSTS 256

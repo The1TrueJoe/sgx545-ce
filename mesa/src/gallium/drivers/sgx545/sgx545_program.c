@@ -460,16 +460,19 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
    for (unsigned i = 0; i < n_c && off + 8 <= size; i++) {
       unsigned kind = rd16(u, off);
       struct sgx545_const *k = &so->consts[so->n_consts];
+      /* kind 1 f32, 2 F16 half (k, slot, shift); 3 a C10 channel, a 10-byte
+       * record (k, 0, slot, shift) */
+      unsigned at = kind == 3 ? off + 2 : off;
 
-      if (kind != 1 || so->n_consts == SGX545_MAX_CONSTS)
-         return info->why = "an F16/C10 constant or too many", false;
+      if (kind < 1 || kind > 3 || so->n_consts == SGX545_MAX_CONSTS)
+         return info->why = "a list C constant kind or too many", false;
       k->fmt = kind;
       k->k = rd16(u, off + 2);
-      k->slot = rd16(u, off + 4);
-      k->shift = rd16(u, off + 6);
+      k->slot = rd16(u, at + 4);
+      k->shift = rd16(u, at + 6);
       so->const_dwords = MAX2(so->const_dwords, k->slot + 1u);
       so->n_consts++;
-      off += 8;
+      off += kind == 3 ? 10 : 8;
    }
    if (n_d || n_sec || off > size)
       return info->why = n_d ? "list D" : n_sec ? "a secondary program" : "a short USP", false;

@@ -243,13 +243,26 @@ fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sg
    const float *cb = constant_data(ctx, stage);
    unsigned avail = ctx->constants[stage].buffer_size / 4;
 
+   /* F16 halves and C10 channels share a slot */
+   for (unsigned i = 0; i < so->n_consts; i++)
+      if (so->consts[i].fmt != 1)
+         block[base + so->consts[i].slot] = 0;
    for (unsigned i = 0; i < so->n_consts; i++) {
       const struct sgx545_const *k = &so->consts[i];
       float v = cb && k->k < avail ? cb[k->k] : 0.0f;
 
-      memcpy(&block[base + k->slot], &v, 4);
-      SGX545_DBG(DRAW, "  %s constant %u -> sa%u = %f\n", stage == MESA_SHADER_VERTEX ? "vs" : "fs",
-                 k->k, base + k->slot, v);
+      if (k->fmt == 2) {
+         block[base + k->slot] |= (uint32_t)sgxws_f16(v) << k->shift;
+      } else if (k->fmt == 3) {
+         /* C10: round(v * 255), signed 10 bits */
+         int c = (int)lrintf(CLAMP(v, -2.0f, 2.0f) * 255.0f);
+
+         block[base + k->slot] |= ((uint32_t)CLAMP(c, -512, 511) & 0x3ff) << k->shift;
+      } else {
+         memcpy(&block[base + k->slot], &v, 4);
+      }
+      SGX545_DBG(DRAW, "  %s constant %u -> sa%u (fmt %u at %u) = %f\n", stage == MESA_SHADER_VERTEX ? "vs" : "fs",
+                 k->k, base + k->slot, k->fmt, k->shift, v);
    }
 }
 
