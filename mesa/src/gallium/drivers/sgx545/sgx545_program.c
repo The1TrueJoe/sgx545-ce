@@ -435,7 +435,13 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       so->prog.out_dwords = dwords;
       so->prog.const_dwords = so->const_dwords;
    } else {
-      so->prog.code = sgxws_upload_fs(ctx->hw, out.code, out.n_code, info.color_reg);
+      so->prog.code = sgxws_upload_fs(ctx->hw, out.code, out.n_code, info.color_reg, NULL);
+      so->code = malloc(out.n_code * sizeof(*so->code));
+      if (so->code) {
+         memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
+         so->n_code = out.n_code;
+      }
+      so->color_reg = info.color_reg;
       so->prog.temps = info.temps;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
       /* One DOUTI per list A entry, in PA order (docs/PDS.md "DOUTI"): a
@@ -561,7 +567,38 @@ sgx545_delete_shader_state(struct pipe_context *pctx, void *hwcso)
    struct sgx545_shader *so = hwcso;
 
    ralloc_free(so->nir);
+   free(so->code);
    FREE(so);
+}
+
+/* the compiled fragment shader's program with its colour blended (b), or
+ * without (NULL); 0 when there is none */
+uint32_t
+sgx545_fs_program(struct sgx545_context *ctx, struct sgx545_shader *so, const struct sgxws_blend *b)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+   uint32_t va;
+
+   if (!b)
+      return so->prog.code;
+   for (unsigned i = 0; i < so->n_variants; i++) {
+      if (!memcmp(&so->variants[i].key, b, sizeof(*b)))
+         return so->variants[i].code;
+   }
+   if (!so->code)
+      return 0;
+   simple_mtx_lock(&screen->lock);
+   va = sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b);
+   simple_mtx_unlock(&screen->lock);
+   /* the program heap is never freed: past the table's size, the oldest
+    * variant's slot is reused and its program uploaded again when needed */
+   if (va) {
+      unsigned i = so->n_variants < ARRAY_SIZE(so->variants) ? so->n_variants++ : 0;
+
+      so->variants[i].key = *b;
+      so->variants[i].code = va;
+   }
+   return va;
 }
 
 void

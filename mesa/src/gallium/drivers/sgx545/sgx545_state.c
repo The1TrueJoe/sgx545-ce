@@ -13,13 +13,120 @@
 #include "sgx545_context.h"
 #include "sgx545_resource.h"
 
+/* A blend factor as a sop2 selector (sgxws_bsel), s1 the shader's colour and
+ * s2 the tile's; -1 for the constant and dual-source factors (the selectors
+ * k18/k19 are not known yet).  Without alpha in the colour buffer its alpha
+ * reads as 1. */
+static int
+blend_sel(enum pipe_blendfactor f, bool alpha, bool dst_alpha)
+{
+   int s;
+
+   switch (f) {
+   case PIPE_BLENDFACTOR_ZERO: s = SGXWS_BS_ZERO; break;
+   case PIPE_BLENDFACTOR_ONE: s = SGXWS_BS_ZERO | SGXWS_BS_INV; break;
+   case PIPE_BLENDFACTOR_SRC_COLOR: s = alpha ? SGXWS_BS_S1A : SGXWS_BS_S1; break;
+   case PIPE_BLENDFACTOR_INV_SRC_COLOR: s = (alpha ? SGXWS_BS_S1A : SGXWS_BS_S1) | SGXWS_BS_INV; break;
+   case PIPE_BLENDFACTOR_SRC_ALPHA: s = SGXWS_BS_S1A; break;
+   case PIPE_BLENDFACTOR_INV_SRC_ALPHA: s = SGXWS_BS_S1A | SGXWS_BS_INV; break;
+   case PIPE_BLENDFACTOR_DST_COLOR: s = alpha ? SGXWS_BS_S2A : SGXWS_BS_S2; break;
+   case PIPE_BLENDFACTOR_INV_DST_COLOR: s = (alpha ? SGXWS_BS_S2A : SGXWS_BS_S2) | SGXWS_BS_INV; break;
+   case PIPE_BLENDFACTOR_DST_ALPHA: s = SGXWS_BS_S2A; break;
+   case PIPE_BLENDFACTOR_INV_DST_ALPHA: s = SGXWS_BS_S2A | SGXWS_BS_INV; break;
+   case PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE:
+      if (alpha)
+         return SGXWS_BS_ZERO | SGXWS_BS_INV;
+      return dst_alpha ? SGXWS_BS_ASAT : SGXWS_BS_ZERO;   /* min(As, 1 - 1) */
+   default:
+      return -1;
+   }
+   if (!dst_alpha && (s & 7) == SGXWS_BS_S2A)
+      s = (s & SGXWS_BS_INV) ^ SGXWS_BS_INV;   /* 1 -> one, 1 - 1 -> zero */
+   return s;
+}
+
+/* the selector with the sources traded (sop2 o0, o0, pa<c>) */
+static int
+blend_swap_sel(int s)
+{
+   static const uint8_t swap[] = { SGXWS_BS_ZERO, SGXWS_BS_S2, SGXWS_BS_S1, SGXWS_BS_S2A, SGXWS_BS_S1A };
+
+   if ((s & 7) >= ARRAY_SIZE(swap))
+      return -1;            /* asat is min(s1.a, 1 - s2.a): not swappable */
+   return swap[s & 7] | (s & SGXWS_BS_INV);
+}
+
+static bool
+blend_op(enum pipe_blend_func func, uint8_t *op, bool *reverse)
+{
+   switch (func) {
+   case PIPE_BLEND_ADD: *op = SGXWS_BOP_ADD; return true;
+   case PIPE_BLEND_SUBTRACT: *op = SGXWS_BOP_SUB; return true;
+   case PIPE_BLEND_REVERSE_SUBTRACT: *op = SGXWS_BOP_SUB; *reverse = true; return true;
+   case PIPE_BLEND_MIN: *op = SGXWS_BOP_MIN; return true;
+   case PIPE_BLEND_MAX: *op = SGXWS_BOP_MAX; return true;
+   default: return false;
+   }
+}
+
+/* render target 0's blend as the colour epilogue's sop2 (sgxws_blend); false
+ * when sop2 can't express it */
+static bool
+blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, struct sgxws_blend *b)
+{
+   bool rev_c = false, rev_a = false, min_c, min_a;
+   int c1, c2, a1, a2;
+
+   memset(b, 0, sizeof(*b));
+   if (!blend_op(rt->rgb_func, &b->cop, &rev_c) || !blend_op(rt->alpha_func, &b->aop, &rev_a))
+      return false;
+   /* MIN and MAX take no factors */
+   min_c = b->cop >= SGXWS_BOP_MIN;
+   min_a = b->aop >= SGXWS_BOP_MIN;
+   c1 = min_c ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->rgb_src_factor, false, dst_alpha);
+   c2 = min_c ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->rgb_dst_factor, false, dst_alpha);
+   a1 = min_a ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->alpha_src_factor, true, dst_alpha);
+   a2 = min_a ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->alpha_dst_factor, true, dst_alpha);
+   if (c1 < 0 || c2 < 0 || a1 < 0 || a2 < 0)
+      return false;
+   if (rev_c || rev_a) {
+      /* dst - src: the tile becomes s1.  A subtract on the other channel
+       * would then run the wrong way; add, min and max don't care */
+      if ((!rev_c && b->cop == SGXWS_BOP_SUB) || (!rev_a && b->aop == SGXWS_BOP_SUB))
+         return false;
+      int t = c1;
+
+      c1 = blend_swap_sel(c2);
+      c2 = blend_swap_sel(t);
+      t = a1;
+      a1 = blend_swap_sel(a2);
+      a2 = blend_swap_sel(t);
+      if (c1 < 0 || c2 < 0 || a1 < 0 || a2 < 0)
+         return false;
+      b->swap = 1;
+   }
+   b->c1 = c1;
+   b->c2 = c2;
+   b->a1 = a1;
+   b->a2 = a2;
+   return true;
+}
+
 static void *
 sgx545_create_blend_state(struct pipe_context *pctx, const struct pipe_blend_state *cso)
 {
    struct sgx545_blend *so = CALLOC_STRUCT(sgx545_blend);
 
-   if (so)
-      so->base = *cso;
+   if (!so)
+      return NULL;
+   so->base = *cso;
+   if (cso->rt[0].blend_enable && !cso->logicop_enable) {
+      so->enable = blend_hw(&cso->rt[0], false, &so->hw[0]) && blend_hw(&cso->rt[0], true, &so->hw[1]);
+      if (!so->enable)
+         fprintf(stderr, "sgx545: blend (func %u/%u, factors %u %u %u %u) not drawn yet, drawing opaque\n",
+                 cso->rt[0].rgb_func, cso->rt[0].alpha_func, cso->rt[0].rgb_src_factor,
+                 cso->rt[0].rgb_dst_factor, cso->rt[0].alpha_src_factor, cso->rt[0].alpha_dst_factor);
+   }
    return so;
 }
 

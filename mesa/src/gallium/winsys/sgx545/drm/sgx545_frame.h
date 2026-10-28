@@ -136,6 +136,26 @@ struct sgxws_prog {
    uint32_t const_dwords;           /* vertex: constants DMA'd after the driver block */
 };
 
+/* Blending is fragment code (STATE.md section 3): in a translucent pass o0
+ * holds the tile's colour, and the colour epilogue is
+ *    sop2 o0, pa<c>, o0 [skipinv end c1 c2 cop a1 a2 aop]
+ * dst.rgb = (s1 * c1) cop (s2 * c2), dst.a = (s1.a * a1) aop (s2.a * a2),
+ * s1 the shader's colour, s2 the tile's; with swap the sources trade places
+ * (sop2 o0, o0, pa<c>), for a reverse subtract.  The DDK's SRC_ALPHA,
+ * ONE_MINUS_SRC_ALPHA draw is c1=a1=s1a, c2=a2=1-s1a, add (EA3). */
+enum sgxws_bsel {
+   SGXWS_BS_ZERO, SGXWS_BS_S1, SGXWS_BS_S2, SGXWS_BS_S1A, SGXWS_BS_S2A,
+   SGXWS_BS_ASAT,                   /* colour only: min(s1.a, 1 - s2.a) */
+   SGXWS_BS_INV = 8,                /* or'd in: 1 - the selection */
+};
+enum sgxws_bop { SGXWS_BOP_ADD, SGXWS_BOP_SUB, SGXWS_BOP_MIN, SGXWS_BOP_MAX };
+
+struct sgxws_blend {
+   uint8_t c1, c2, a1, a2;          /* sgxws_bsel; a1/a2 only zero, s1a, s2a (+ inv) */
+   uint8_t cop, aop;                /* sgxws_bop */
+   uint8_t swap;
+};
+
 struct sgxws_state {
    uint32_t depth_func;             /* 0 = depth test off */
    bool depth_write;
@@ -143,6 +163,8 @@ struct sgxws_state {
    bool front_ccw;                  /* front faces wind CCW in the target's memory
                                      * (gallium's sense: y down) */
    uint32_t color_mask;             /* ISPB colour mask: R8 G4 B2 A1 */
+   bool translucent;                /* ISPA pass type 1: o0 starts as the tile's
+                                     * colour (blending) */
    /* the viewport transform, as gallium gives it */
    float vp_scale[3], vp_translate[3];
 };
@@ -214,11 +236,14 @@ uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w, 
  *    temporaries), then emit the vertex; then the epilogue phase every
  *    vertex program needs (docs/GEN.md);
  *  - fragment: phas, the shader, then `mov o0, pa<color_pa> [end]` (output
- *    mode 1: the packed BGRA8 colour to the PBE);
+ *    mode 1: the packed BGRA8 colour to the PBE), or with blend the sop2
+ *    that blends it into o0 (draw it with sgxws_state.translucent);
  *  - fragment secondary (uniform-only code): phas, the code, `nop [end]`.
  */
 uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned temps);
-uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned color_pa);
+uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned color_pa,
+                         const struct sgxws_blend *blend);
+void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, uint32_t w[2]);
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned n);
 
 /* built-in shaders (tools/gen/mkusse.py) */

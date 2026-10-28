@@ -41,6 +41,15 @@ struct sgx545_shader {
    unsigned n_consts, const_dwords;
    struct sgx545_const consts[SGX545_MAX_CONSTS];
    unsigned n_attribs;          /* vertex: attribute slots, 4 dwords each */
+   /* fragment: the shader's code, kept for the blend variants (the colour
+    * epilogue is the blend, sgxws_blend) */
+   uint64_t *code;
+   unsigned n_code, color_reg;
+   struct {
+      struct sgxws_blend key;
+      uint32_t code;
+   } variants[8];
+   unsigned n_variants;
 };
 
 struct sgx545_vertex_elements {
@@ -58,6 +67,8 @@ struct sgx545_dsa {
 
 struct sgx545_blend {
    struct pipe_blend_state base;
+   bool enable;                 /* render target 0 blends, in a way sop2 can */
+   struct sgxws_blend hw[2];    /* by whether the colour buffer has alpha */
 };
 
 /* one render target's TA/3D structures, by size (sgxws_rt) */
@@ -88,7 +99,7 @@ struct sgx545_context {
    struct slab_child_pool transfer_pool;
    uint32_t *staging;               /* vertices gathered for one draw */
    size_t staging_size;
-   bool warned_shader, warned_prim;
+   bool warned_shader, warned_prim, warned_blend;
 };
 
 static inline struct sgx545_context *

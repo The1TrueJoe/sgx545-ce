@@ -25,7 +25,7 @@ Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 | `src/gallium/winsys/sgx545/drm/` | the winsys: `sgx545_frame.c` (`tools/gen`'s sgxgen as a multi-frame library: PB, render targets, PDS programs, TA state, VDM, kicks) over `libpvr/` (linked in by build.sh); `sgx545_frame_test.c` exercises it without Mesa |
 | `src/sgx545/compiler/` | the NIR → USSE compiler (`sgx_compiler.h`); its tools and checks are in `tools/usc` |
 | `src/egl/drivers/dri2/platform_fbdev.c` | EGL's `fbdev` platform: window = the framebuffer console |
-| `tests/` | `sgx545_eglinfo`, `sgx545_es2gears` (es2gears' shaders), `sgx545_cpugears` (fixed programs only) |
+| `tests/` | `sgx545_eglinfo`, `sgx545_es2gears` (es2gears' shaders), `sgx545_cpugears` (fixed programs only); `sgx545_texab.sh` and `sgx545_blendab.sh`, A/B against the DDK on the EA3 |
 
 `build.sh` also links `kernel/src` into the tree as `include/sgx545-kernel` (the
 bridge structures) and generates the fixed USSE programs from
@@ -106,6 +106,11 @@ The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared EA3, wrap G
   the DDK's GL driver did:
   - a vertex program becomes prologue phase, shader + `emit`, epilogue phase;
   - a fragment program becomes `phas`, shader, `mov o0, pa<colour> [end mask=1]`;
+    with blending, the last instruction is instead a `sop2` that blends the
+    colour into o0. In a translucent pass (ISPA pass type 1), o0 starts as the
+    tile's colour. Every GL factor but the constant ones maps onto sop2's
+    selectors. Reverse subtract trades the sources (`sop2 o0, o0, pa<c>`).
+    Each fragment shader keeps a program per blend state it has drawn with.
   - constants go into secondary attributes per list C, DMA'd in 16-dword chunks;
   - each varying is iterated with a DOUTI. A varying's set is its location -
     VARYING_SLOT_VAR0 on both sides, so stages compiled apart agree.
@@ -114,12 +119,12 @@ The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared EA3, wrap G
 
 This list is the next work, roughly in the order gl4es and Minecraft need it:
 
-1. **Textures.** The layout and upload (twiddled / linear: the textures
-   session's `sgxtex.{h,c}` and TEX.md), DOUTT words, and the compiler's sample blocks
-   (USP blocks 5/6). Today textures are CPU memory only and sampling shaders
-   are refused.
-2. **Blending and colour masks**: shader code appended after the colour, plus
-   ISPA pass type 1 (STATE.md "Blending and the colour mask are shader code").
+1. **Constant-colour blending** (`GL_CONSTANT_COLOR` and the rest). sop2 has
+   two more selectors, k18/k19, that are not decoded yet; until then those
+   draws come out opaque, with a message.
+2. **Textures, the rest**: dependent samples (the compiler's block 9), mipmap
+   generation on the GPU, compressed formats, render-to-texture with a
+   sampleable layout.
 3. **Scissor and partial viewports**: pass-type-3 objects and region clips.
 4. **Lines and points** (VDM primitive 1/2, point size output, set 0).
 5. **Depth/stencil buffers in memory (ZLS).** Depth works within one render today,

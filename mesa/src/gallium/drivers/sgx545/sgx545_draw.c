@@ -16,6 +16,7 @@
 #include "util/u_prim.h"
 
 #include "sgx545_context.h"
+#include "sgx545_program.h"
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
 #include "sgx545_texture.h"
@@ -247,6 +248,8 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    struct sgx545_screen *screen = sgx545_screen(pctx->screen);
    struct sgxws_state st;
    struct sgxws_draw d = { 0 };
+   struct sgxws_prog fsp;
+   const struct sgxws_blend *blend = NULL;
    uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = { 0 }, vsc[SGX545_MAX_CONSTS] = { 0 };
    uint32_t fsk[9 + SGX545_MAX_CONSTS] = { 0 }, tex[PIPE_MAX_SAMPLERS][4];
    const void *indices = NULL;
@@ -258,6 +261,9 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
    if (indirect || !ctx->vs || !ctx->fs)
       return;
+   build_state(ctx, &st);
+   if (ctx->blend && ctx->blend->enable && ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture)
+      blend = &ctx->blend->hw[util_format_has_alpha(ctx->framebuffer.cbufs[0].format)];
    /* each stage compiled or one of the fixed programs */
    compiled = ctx->vs->kind == SGX545_SHADER_COMPILED;
    if (compiled) {
@@ -269,7 +275,14 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       return;
    }
    if (ctx->fs->kind == SGX545_SHADER_COMPILED) {
-      d.fs = &ctx->fs->prog;
+      fsp = ctx->fs->prog;
+      if (blend) {
+         fsp.code = sgx545_fs_program(ctx, ctx->fs, blend);
+         if (!fsp.code)
+            return;
+         st.translucent = true;
+      }
+      d.fs = &fsp;
       fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
       d.fs_consts = fsk;
       for (unsigned i = 0; i < d.fs->n_douti; i++) {
@@ -286,6 +299,10 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       }
       d.tex = (const uint32_t (*)[4])tex;
    } else {
+      if (blend && !ctx->warned_blend) {
+         fprintf(stderr, "sgx545: blending needs a compiled fragment shader, drawing opaque\n");
+         ctx->warned_blend = true;
+      }
       switch (ctx->fs->kind) {
       case SGX545_SHADER_FS_CONSTANT:
          memcpy(color, ctx->fs->color, sizeof(color));
@@ -336,7 +353,6 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       }
       vertex_dwords += f[e].dwords;
    }
-   build_state(ctx, &st);
    d.state = &st;
    d.prim = prim;
 
