@@ -21,6 +21,13 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 | `decode/mkreplay.py` | turns a pvrtrace log into a replay script + data file |
 | `replay/replay.c` | static x86_64 musl program that runs that script through `replay/pvr.c`, no DDK loaded |
 | `decode/cmpfb.py` | compares a dumped render target with the probe's `glReadPixels` output |
+| `isa/usp.py` | parses a USP binary (the compiler's pre-patch shader container); layout from libusc's writer |
+| `isa/gen.py`, `isa/gen2.py` | one-op GLSL corpora for `isa/shc.c` (uniform inputs; varying inputs) |
+| `isa/uschook.c` | LD_PRELOAD: saves each USP binary libusc returns |
+| `isa/encfuzz.c` | LD_PRELOAD: logs every instruction libusc's assembler encodes and re-encodes one-bit-flipped copies |
+| `isa/mkfields.py`, `isa/fz.py` | turn an encfuzz log into `fields.json` (per-form bit fields) |
+| `isa/dis.py`, `isa/isa.py` | USSE disassembler driven by `fields.json` and `names.json` |
+| `isa/ISA.md` | the instruction set as decoded, with the evidence for each field (`mkisa.py` writes its tables) |
 
 ## Findings (confirmed on an EA3, 2026-10-27)
 
@@ -123,3 +130,15 @@ Learned on the way:
   (e.g. 0x2d003040: 0x5c after kick 1, 0x70 after kick 2); each names the
   sync-heap allocation's own mem handle. The render-context buffer's last word
   is the PID (0x4f5); replaying it unchanged did no harm.
+
+## USSE instruction set (2026-10-27)
+
+See `isa/ISA.md`. In short: the USP container is a typed block stream (parser
+fixed from libusc's writer, all 370 corpus shaders parse exactly); the work of
+uniform-only shaders lives in a separate secondary update program; libusc's
+own assembler (`UseAssembleInstruction`, libusc + 0x109f50), hooked and
+bit-flipped in-process on the EA3, gives the operand fields directly. The
+Eurasia layout holds: opcode h27-31, dst l21-27, src0 l14-20, src1 l7-13,
+src2 l0-6, banks in h0-2, l28-31 with extension bits h16/h17/h19, predicate
+h24-26. vec4 ops are one instruction with a repeat count, and swizzles are MOE
+increments.
