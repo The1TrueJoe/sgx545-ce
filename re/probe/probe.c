@@ -8,6 +8,9 @@
  *   PROBE_DRAWS=n              draw the vertex list n times      (1)
  *   PROBE_VS / PROBE_FS        shader source overrides
  *   PROBE_PRIM=n               GL primitive enum                 (4 = GL_TRIANGLES)
+ *   PROBE_ATTRS="n1 n2 ..."    extra float attributes a1, a2, ... with n components each
+ *   PROBE_INTERLEAVE=1         p and the extra attributes in one interleaved array
+ *   PROBE_TEX=n                n RGBA8 8x8 checker textures, units 0..n-1, sampler uniforms t0..
  *   PROBE_OUT=path             raw RGBA readback of the whole surface
  *
  * Marks each phase in the pvrtrace log through pvrtrace_note when the tracer is loaded.
@@ -62,6 +65,12 @@ void glFinish(void);
 GLenum glGetError(void);
 void glReadPixels(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *);
 void glViewport(GLint, GLint, GLsizei, GLsizei);
+void glGenTextures(GLsizei, GLuint *);
+void glBindTexture(GLenum, GLuint);
+void glActiveTexture(GLenum);
+void glTexImage2D(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *);
+void glTexParameteri(GLenum, GLenum, GLint);
+void glUniform1i(GLint, GLint);
 
 #define EGL_HEIGHT 0x3056
 #define EGL_WIDTH 0x3057
@@ -82,6 +91,11 @@ void glViewport(GLint, GLint, GLsizei, GLsizei);
 #define GL_FRAGMENT_SHADER 0x8B30
 #define GL_COMPILE_STATUS 0x8B81
 #define GL_LINK_STATUS 0x8B82
+#define GL_TEXTURE_2D 0x0DE1
+#define GL_TEXTURE0 0x84C0
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_NEAREST 0x2600
 
 static void (*mark)(const char *);
 static void (*snapshot)(void);
@@ -130,7 +144,10 @@ static GLuint shader(GLenum type, const char *src)
 
 int main(void)
 {
-	static float verts[3 * 2 * 64];
+	static float verts[3 * 2 * 64], inter[3 * 64 * 32], extra[8][3 * 64 * 4];
+	static unsigned char checker[8 * 8 * 4];
+	float asz[8];
+	int na, ntex, stride, il;
 	float clear[4], color[4];
 	EGLint maj, min, n, w = 0, h = 0;
 	EGLConfig cfg;
@@ -153,6 +170,9 @@ int main(void)
 	floats("PROBE_CLEAR", clear, 4, "0 0 0.5 1");
 	floats("PROBE_COLOR", color, 4, "0 1 0 1");
 	nv = floats("PROBE_VERTS", verts, (int)(sizeof verts / sizeof *verts), "-0.5 -0.5 0.5 -0.5 0 0.5") / 2;
+	na = floats("PROBE_ATTRS", asz, 8, "");
+	ntex = getenv("PROBE_TEX") ? atoi(getenv("PROBE_TEX")) : 0;
+	il = getenv("PROBE_INTERLEAVE") && atoi(getenv("PROBE_INTERLEAVE"));
 	if (!vs)
 		vs = "attribute vec4 p; void main() { gl_Position = p; }";
 	if (!fs)
@@ -174,6 +194,12 @@ int main(void)
 	glAttachShader(prog, shader(GL_VERTEX_SHADER, vs));
 	glAttachShader(prog, shader(GL_FRAGMENT_SHADER, fs));
 	glBindAttribLocation(prog, 0, "p");
+	for (int a = 0; a < na; a++) {
+		char name[8];
+
+		snprintf(name, sizeof name, "a%d", a + 1);
+		glBindAttribLocation(prog, a + 1, name);
+	}
 	glLinkProgram(prog);
 	glGetProgramiv(prog, GL_LINK_STATUS, &linked);
 	if (!linked)
@@ -183,12 +209,62 @@ int main(void)
 	if (loc >= 0)
 		glUniform4f(loc, color[0], color[1], color[2], color[3]);
 	glViewport(0, 0, w, h);
+	for (int i = 0; i < 8 * 8; i++) {
+		int on = ((i & 7) ^ (i >> 3)) & 1;
+
+		checker[4 * i] = on ? 255 : 0;
+		checker[4 * i + 1] = 128;
+		checker[4 * i + 2] = on ? 0 : 255;
+		checker[4 * i + 3] = 255;
+	}
+	for (int t = 0; t < ntex; t++) {
+		GLuint tex;
+		char name[8];
+
+		glActiveTexture(GL_TEXTURE0 + t);
+		glGenTextures(1, &tex);
+		glBindTexture(GL_TEXTURE_2D, tex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, checker);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		snprintf(name, sizeof name, "t%d", t);
+		loc = glGetUniformLocation(prog, name);
+		if (loc >= 0)
+			glUniform1i(loc, t);
+	}
 
 	note("clear");
 	glClearColor(clear[0], clear[1], clear[2], clear[3]);
 	glClear(GL_COLOR_BUFFER_BIT);
-	glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, verts);
-	glEnableVertexAttribArray(0);
+	/* extra attribute a<k>, vertex v, component c = 0.25 * (k + 1) + 0.125 * v + 0.0625 * c */
+	stride = 2;
+	for (int a = 0; a < na; a++)
+		stride += (int)asz[a];
+	for (int v = 0; v < nv; v++) {
+		int o = v * stride;
+
+		inter[o] = verts[2 * v];
+		inter[o + 1] = verts[2 * v + 1];
+		o += 2;
+		for (int a = 0; a < na; a++)
+			for (int c = 0; c < (int)asz[a]; c++, o++)
+				inter[o] = extra[a][v * (int)asz[a] + c] = 0.25f * (a + 1) + 0.125f * v + 0.0625f * c;
+	}
+	if (il) {
+		int off = 2;
+
+		glVertexAttribPointer(0, 2, GL_FLOAT, 0, stride * 4, inter);
+		for (int a = 0; a < na; a++) {
+			glVertexAttribPointer(a + 1, (int)asz[a], GL_FLOAT, 0, stride * 4, inter + off);
+			off += (int)asz[a];
+		}
+	} else {
+		glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, verts);
+		for (int a = 0; a < na; a++)
+			glVertexAttribPointer(a + 1, (int)asz[a], GL_FLOAT, 0, 0, extra[a]);
+	}
+	for (int a = 0; a <= na; a++)
+		glEnableVertexAttribArray(a);
 	for (int i = 0; i < draws; i++) {
 		note("draw");
 		glDrawArrays(prim, 0, nv);

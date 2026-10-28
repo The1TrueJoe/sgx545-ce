@@ -28,6 +28,9 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 | `isa/mkfields.py`, `isa/fz.py` | turn an encfuzz log into `fields.json` (per-form bit fields) |
 | `isa/dis.py`, `isa/isa.py` | USSE disassembler driven by `fields.json` and `names.json` |
 | `isa/ISA.md` | the instruction set as decoded, with the evidence for each field (`mkisa.py` writes its tables) |
+| `pds/dis.py` | finds every PDS program in a capture (VDM stream, TA state words, raw pointers, heap scan) and disassembles code and data segment |
+| `pds/PDS.md` | PDS instruction set, data-segment layout, DOUT word formats, the DDK's generators, each field tagged confirmed / strong / guess |
+| `pds/DumpDecomp.java` | Ghidra headless script: decompile every function in an address range (`analyzeHeadless ... -postScript DumpDecomp.java out.c lo hi`) |
 
 ## Findings (confirmed on an EA3, 2026-10-27)
 
@@ -188,3 +191,19 @@ pokes overrides after the snapshot loads and again before each kick
 - `isa/asm.py` assembles from `fields.json` and re-encodes nine compiler and
   driver encodings bit-exactly (`asm.py --check`). It refuses anything whose
   fields were never fuzzed.
+
+## PDS programs (2026-10-27)
+
+See `pds/PDS.md`. In short: the DDK's PDS generator is statically linked into
+libsrv_um/libGLESv2/libGLES_CM/libOpenVG and Ghidra decompiles it cleanly, so
+most encodings come straight from its literal-plus-shift formulas. A program
+is 16-byte data rows (DS0 DS0 DS1 DS1) then 32-bit code ending `af000000`.
+MOVS (`07……`) is the DOUT instruction: four 2-bit swizzle selects pick words
+from a DS0 pair and a DS1 pair, dest 2 DOUTI / 3 DOUTD / 4 DOUTT / 5 DOUTU.
+Vertex fetch = `MUL16 ds1[0x32], vertex index, stride` + `MOVS.x DOUTD` per
+attribute + DOUTU. Pixel programs = DOUTU + DOUTI per varying (+ DOUTT with
+the texture's 4 state words for each non-dependent sample). TA state words
+point at pixel programs as `data_dwords<<24 | (addr-0x2e000000)>>4`; DOUTU
+word 0 is `code base index | (offset/8)<<4`. `pds/dis.py` explains every bit
+of every instruction in 13 captures (textured, dependent, 4-attribute,
+interleaved, two varyings among them).
