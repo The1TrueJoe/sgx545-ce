@@ -388,7 +388,8 @@ int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick)
 		if (kick->ui32NumDstSyncObjects)
 			trace_ubuf(p, PVRSRV_BRIDGE_SGX_DOKICK & 0xff, kick->pahDstSyncHandles,
 				   kick->ui32NumDstSyncObjects * sizeof(IMG_HANDLE));
-		trace_snap(p, p->kicks);
+		if (!p->trace_kicks || p->kicks <= p->trace_kicks)
+			trace_snap(p, p->kicks);
 	}
 	return pvr_call(p, PVRSRV_BRIDGE_SGX_DOKICK, &in, sizeof in, &out, sizeof out);
 }

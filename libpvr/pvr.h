@@ -25,6 +25,7 @@ struct pvr {
 	int map_flags;		/* extra mmap flags for device memory: MAP_32BIT unless cleared */
 	int trace_fd;		/* pvrtrace-format log (tools/trace/pvrtrace.c), or -1 */
 	unsigned kicks;
+	unsigned trace_kicks;	/* snapshot only the first this many kicks (0: all) */
 	struct { void *addr; size_t len; } maps[1024];	/* device memory mapped so far */
 	unsigned nmaps;
 };

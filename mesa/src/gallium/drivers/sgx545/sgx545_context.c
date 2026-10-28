@@ -101,8 +101,7 @@ sgx545_context_destroy(struct pipe_context *pctx)
    simple_mtx_lock(&screen->lock);
    if (ctx->hw) {
       for (unsigned i = 0; i < ctx->num_rts; i++)
-         sgxws_rt_destroy(ctx->hw, ctx->rts[i]);
-      sgxws_ctx_destroy(ctx->hw);
+         sgxws_rt_destroy(ctx->hw, ctx->rts[i]);   /* flushes this context's frame */
    }
    simple_mtx_unlock(&screen->lock);
 
@@ -121,7 +120,9 @@ sgx545_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
       return NULL;
 
    simple_mtx_lock(&screen->lock);
-   ctx->hw = sgxws_ctx_create(&screen->dev);
+   if (!screen->hw)
+      screen->hw = sgxws_ctx_create(&screen->dev);
+   ctx->hw = screen->hw;
    if (ctx->hw) {
       sgxws_prog_builtin(ctx->hw, SGXWS_VS_XY, &ctx->vs_xy);
       sgxws_prog_builtin(ctx->hw, SGXWS_VS_XYZ, &ctx->vs_xyz);

@@ -426,9 +426,12 @@ sgxws_dev_init(struct sgxws_dev *d, int fd)
    d->verbose = getenv("SGX545_VERBOSE") ? atoi(getenv("SGX545_VERBOSE")) : 0;
    d->frame_gap_us = getenv("SGX545_FRAME_GAP_US") ? atoi(getenv("SGX545_FRAME_GAP_US")) : 0;
    pvr_open_fd(&d->pvr, fd);
-   /* SGX545_TRACE=path: a pvrtrace log of this client, as tools/decode reads a DDK capture */
+   /* SGX545_TRACE=path: a pvrtrace log of this client, as tools/decode reads a DDK
+    * capture; SGX545_TRACE_KICKS=n: memory copies for the first n kicks only */
    if (trace && (e = pvr_trace_open(&d->pvr, trace)))
       return e;
+   if (getenv("SGX545_TRACE_KICKS"))
+      d->pvr.trace_kicks = atoi(getenv("SGX545_TRACE_KICKS"));
    if ((e = pvr_init(&d->pvr)))
       return e;
    for (unsigned i = 0; i < d->pvr.nheaps; i++)
@@ -1374,7 +1377,7 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
 
       nanosleep(&ts, NULL);
    }
-   if (c->dev->verbose)
+   if (c->dev->verbose || e)
       ws_err("frame %u (target %u): %u objects, PB pages in use %#x, RT frames %u, rc %d\n",
              c->frames, s->frames, c->draws, c->pbdesc.map[5], s->rtdata.map[1], e);
 
