@@ -27,11 +27,20 @@ extern uint32_t sgx545_debug;
 
 struct sgx545_screen {
    struct pipe_screen base;
-   int fd;
+   int fd;                      /* the fd the screen was created on (its key) */
+   int dev_fd;                  /* the fd the services connection lives on */
 
    /* the services connection; one per screen, used under lock */
    struct sgxws_dev dev;
    simple_mtx_t lock;
+   /* The one hardware render context (CCB, parameter buffer) of the process,
+    * shared by every pipe context and serialised by the lock, as the DDK runs a
+    * GL client on one render context: a second render context with a parameter
+    * buffer of its own makes the microkernel's renders slow and then lock up
+    * (gl4es under glretrace, which creates two pipe contexts).  A frame being
+    * recorded is flushed when another target or context starts one
+    * (sgxws_begin). */
+   struct sgxws_ctx *hw;
 
    struct slab_parent_pool transfer_pool;
 };

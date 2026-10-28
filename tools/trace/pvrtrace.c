@@ -11,6 +11,7 @@
  *     SrvInit trace holds everything the init process wrote for the microkernel;
  *   - and before each SGX_SUBMITTRANSFER (numbered by its own counter), so the
  *     transfer command and its source are captured as the GPU will see them.
+ * PVRTRACE_SNAPKICKS=n stops the copies after the n-th kick (long clients).
  *
  * The tracer stays dumb on purpose: no struct knowledge lives here, only the
  * outer bridge package. tools/decode/ does the interpretation, so a wrong guess
@@ -75,6 +76,7 @@ static unsigned kicks, xfers;
 static unsigned long max_snap = 64u << 20;	/* skip mappings bigger than this */
 static int kick_nr = -1;			/* bridge index of SGX_DOKICK */
 static int snap_on_kick = 1;
+static unsigned snap_kicks;			/* PVRTRACE_SNAPKICKS: copies only up to this kick */
 static pthread_mutex_t lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 
 static int (*real_ioctl)(int, unsigned long, void *);
@@ -138,6 +140,8 @@ __attribute__((constructor)) static void init(void)
 		kick_nr = 83 + 3;	/* PVRSRV_BRIDGE_SGX_DOKICK in this build */
 	if ((e = getenv("PVRTRACE_NOSNAP")))
 		snap_on_kick = 0;
+	if ((e = getenv("PVRTRACE_SNAPKICKS")))
+		snap_kicks = strtoul(e, NULL, 0);
 
 	log_fd = open(path ? path : "/tmp/pvrtrace.bin",
 		      O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
@@ -186,6 +190,8 @@ static void snap_one(uint32_t why, uintptr_t a, size_t len)
 
 static void snap_all(uint32_t why)
 {
+	if (snap_kicks && kicks > snap_kicks && why != SNAP_INIT)
+		return;
 	for (int i = 0; i < nmaps; i++)
 		snap_one(why, maps[i].addr, maps[i].len);
 }

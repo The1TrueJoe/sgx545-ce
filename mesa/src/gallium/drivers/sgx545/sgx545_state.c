@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <math.h>
+#include <stdlib.h>
+
 #include "util/u_framebuffer.h"
 #include "util/u_helpers.h"
 #include "util/u_inlines.h"
@@ -388,10 +391,91 @@ sgx545_resource_copy_region(struct pipe_context *pctx, struct pipe_resource *dst
    util_resource_copy_region(pctx, dst, dst_level, dstx, dsty, dstz, src, src_level, src_box);
 }
 
+/* A colour blit on the CPU, through the resources' transfers (which wait for
+ * the GPU and re-lay textures out): nearest or bilinear, any scale, any pair
+ * of formats util_format can unpack and pack. What st/mesa blits are mostly
+ * mipmap levels (generated a level from the one above) and glCopyTexImage;
+ * the driver has no GPU blit yet. */
+static bool
+sgx545_blit_cpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
+{
+   const struct pipe_box *sb = &info->src.box, *db = &info->dst.box;
+   struct pipe_transfer *st, *dt;
+   uint8_t *src, *dst;
+   int sw = abs(sb->width), sh = abs(sb->height), dw = abs(db->width), dh = abs(db->height);
+
+   if (info->mask != PIPE_MASK_RGBA && (info->mask & ~PIPE_MASK_RGBA))
+      return false;
+   if (info->scissor_enable || info->render_condition_enable || info->alpha_blend ||
+       info->num_window_rectangles || sb->depth != 1 || db->depth != 1 || !sw || !sh || !dw || !dh ||
+       util_format_is_depth_or_stencil(info->src.format) || util_format_is_pure_integer(info->src.format) ||
+       !util_format_unpack_description(info->src.format)->unpack_rgba ||
+       !util_format_pack_description(info->dst.format)->pack_rgba_float)
+      return false;
+   src = pipe_texture_map(pctx, info->src.resource, info->src.level, sb->z, PIPE_MAP_READ,
+                          MIN2(sb->x, sb->x + sb->width), MIN2(sb->y, sb->y + sb->height), sw, sh, &st);
+   if (!src)
+      return false;
+   dst = pipe_texture_map(pctx, info->dst.resource, info->dst.level, db->z, PIPE_MAP_WRITE,
+                          MIN2(db->x, db->x + db->width), MIN2(db->y, db->y + db->height), dw, dh, &dt);
+   if (!dst) {
+      pipe_texture_unmap(pctx, st);
+      return false;
+   }
+
+   unsigned sbpp = util_format_get_blocksize(info->src.format), dbpp = util_format_get_blocksize(info->dst.format);
+   bool linear = info->filter == PIPE_TEX_FILTER_LINEAR && (sw != dw || sh != dh);
+   float *row = malloc(sizeof(float) * 4 * dw);
+
+   for (int y = 0; y < dh && row; y++) {
+      /* the destination row's centre in source pixels; a negative size flips */
+      float fy = (y + 0.5f) * sh / dh - 0.5f;
+      int yy = db->height < 0 ? dh - 1 - y : y;
+
+      for (int x = 0; x < dw; x++) {
+         float fx = (x + 0.5f) * sw / dw - 0.5f, c[4] = { 0 };
+         int xx = db->width < 0 ? dw - 1 - x : x;
+
+         if (linear) {
+            int x0 = MAX2((int)floorf(fx), 0), y0 = MAX2((int)floorf(fy), 0);
+            int x1 = MIN2(x0 + 1, sw - 1), y1 = MIN2(y0 + 1, sh - 1);
+            float ax = CLAMP(fx - x0, 0.0f, 1.0f), ay = CLAMP(fy - y0, 0.0f, 1.0f), t[4][4];
+            const int px[4] = { x0, x1, x0, x1 }, py[4] = { y0, y0, y1, y1 };
+            const float wt[4] = { (1 - ax) * (1 - ay), ax * (1 - ay), (1 - ax) * ay, ax * ay };
+
+            for (int k = 0; k < 4; k++) {
+               int sx = sb->width < 0 ? sw - 1 - px[k] : px[k], sy = sb->height < 0 ? sh - 1 - py[k] : py[k];
+
+               util_format_unpack_rgba(info->src.format, t[k], src + sy * st->stride + sx * sbpp, 1);
+               for (int i = 0; i < 4; i++)
+                  c[i] += wt[k] * t[k][i];
+            }
+         } else {
+            int sx = CLAMP((int)floorf(fx + 0.5f), 0, sw - 1), sy = CLAMP((int)floorf(fy + 0.5f), 0, sh - 1);
+
+            if (sb->width < 0)
+               sx = sw - 1 - sx;
+            if (sb->height < 0)
+               sy = sh - 1 - sy;
+            util_format_unpack_rgba(info->src.format, c, src + sy * st->stride + sx * sbpp, 1);
+         }
+         memcpy(&row[4 * xx], c, sizeof(c));
+      }
+      util_format_pack_rgba(info->dst.format, dst + yy * dt->stride, row, dw);
+   }
+   (void)dbpp;
+   free(row);
+   pipe_texture_unmap(pctx, st);
+   pipe_texture_unmap(pctx, dt);
+   return true;
+}
+
 static void
 sgx545_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 {
    if (util_try_blit_via_copy_region(pctx, info, false))
+      return;
+   if (sgx545_blit_cpu(pctx, info))
       return;
    fprintf(stderr, "sgx545: blit %s -> %s not supported yet\n",
            util_format_short_name(info->src.format), util_format_short_name(info->dst.format));

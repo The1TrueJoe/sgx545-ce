@@ -213,6 +213,40 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
  * the way the compiler looks varyings up (sgx_nir.c var_names): st names a
  * packed varying "packed:a,b", one name per varying it holds.
  */
+/* Mesa's fixed-function shaders (st's ffvertex and its fragment programs;
+ * ES1 through gl4es) pass colours, fog and texture coordinates in the legacy
+ * varying slots, which the compiler doesn't assign: move them to fixed VAR
+ * slots with fixed names, the same in both stages so that stages compiled
+ * apart agree. GLSL ES programs only use VAR slots, so the two never meet. */
+static void
+remap_legacy_varyings(nir_shader *nir)
+{
+   static const struct { gl_varying_slot slot; unsigned var; } map[] = {
+      { VARYING_SLOT_COL0, 0 }, { VARYING_SLOT_COL1, 1 }, { VARYING_SLOT_FOGC, 2 },
+      { VARYING_SLOT_TEX0, 3 }, { VARYING_SLOT_TEX1, 4 }, { VARYING_SLOT_TEX2, 5 },
+      { VARYING_SLOT_TEX3, 6 }, { VARYING_SLOT_TEX4, 7 }, { VARYING_SLOT_TEX5, 8 },
+      { VARYING_SLOT_TEX6, 9 },
+   };
+   nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
+   bool changed = false;
+
+   nir_foreach_variable_with_modes(var, nir, mode) {
+      for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
+         char name[32];
+
+         if (var->data.location != (int)map[i].slot)
+            continue;
+         var->data.location = VARYING_SLOT_VAR0 + map[i].var;
+         snprintf(name, sizeof(name), "sgx545_legacy%u", map[i].var);
+         var->name = ralloc_strdup(nir, name);
+         changed = true;
+         break;
+      }
+   }
+   if (changed)
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+}
+
 static void
 assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
 {
@@ -273,12 +307,27 @@ struct usp_info {
    unsigned temps, color_type, color_reg;
    unsigned n_iters;
    struct { unsigned iterator, comps, format, sampler; bool sample, proj; } iters[16];
+   const char *why;             /* what read_usp refused */
+   /* dependent samples (block 5 without b0): where the smp goes in the flat
+    * program (before instruction `at`), its template, sampler and raw texel
+    * register */
+   struct { unsigned at, sampler, raw; uint64_t smp; } deps[SGX545_MAX_DEP_SAMPLES];
+   unsigned n_deps;
+   unsigned n_insts;            /* instructions in the flat program, counted from the blocks */
+   unsigned sa_slots;           /* SA registers the program uses from its base on (header 0x7e) */
+   unsigned n_pa;               /* primary attribute registers (header 0x44) */
+   unsigned branch_at[64];      /* flat indices of the branches (blocks 3) */
+   unsigned n_branches;
 };
 
 /* the block stream: true when every texture sample is non-dependent (the
  * PDS samples into pa; dependent ones need an smp the driver doesn't write yet) */
+/* The block stream (ISA.md "USP blocks"): code (2: n instructions), branch
+ * (3: one instruction), label (4), sample (5) and its unpack (6), end (7).
+ * Counts the flat program's instructions as it goes, so that each dependent
+ * sample knows where its smp belongs. */
 static bool
-blocks_supported(const uint8_t *u, size_t size, size_t off)
+blocks_supported(const uint8_t *u, size_t size, size_t off, struct usp_info *info)
 {
    while (off + 4 <= size) {
       uint32_t type = rd32(u, off);
@@ -288,23 +337,88 @@ blocks_supported(const uint8_t *u, size_t size, size_t off)
       case 2: {
          unsigned n = rd16(u, off);
 
+         info->n_insts += n;
          off += 4 + 16 + 2 * n + 8 * n;
          break;
       }
-      case 3: off += 10; break;
+      case 3:
+         if (info->n_branches == ARRAY_SIZE(info->branch_at))
+            return info->why = "too many branches", false;
+         info->branch_at[info->n_branches++] = info->n_insts++;
+         off += 10;
+         break;
       case 4: off += 2; break;
       case 5:
-         if (!(rd16(u, off) & 1))
-            return false;
+         if (!(rd16(u, off) & 1)) {
+            /* dependent: the template at +48, the raw texel's register at
+             * +32 (type +30: 1 = r), the sampler at +26 */
+            if (info->n_deps == SGX545_MAX_DEP_SAMPLES || rd16(u, off + 30) != 1)
+               return info->why = "a dependent texture sample (block 5)", false;
+            info->deps[info->n_deps].at = info->n_insts;
+            info->deps[info->n_deps].sampler = rd16(u, off + 26);
+            info->deps[info->n_deps].raw = rd16(u, off + 32);
+            info->deps[info->n_deps].smp = (uint64_t)rd32(u, off + 52) << 32 | rd32(u, off + 48);
+            info->n_deps++;
+         }
          off += 56;
          break;
       case 6: off += 74; break;
-      case 9: return false;
+      case 9: return info->why = "block 9", false;
       case 7: return true;
-      default: return false;
+      default: return info->why = "an unknown block", false;
       }
    }
-   return false;
+   return info->why = "a block stream without its end", false;
+}
+
+/* The flat program with each dependent sample's smp and its wdf put in
+ * (ISA.md "The texture-sample sequence"): the template with the raw texel's
+ * temporary as destination (l21-27, h7 clear: r) and the sampler's 4 state
+ * words, in SA from `sa` on, as the texture state (src1 l7-13, bank l30-31 =
+ * 3: sa; h17 clear); then `wdf` on the template's DRC before the compiler's
+ * unpack reads the texel. Branch offsets are moved with the code. NULL on
+ * allocation failure; *n is the new length. */
+static uint64_t *
+insert_samples(const uint64_t *code, unsigned count, const struct usp_info *info, const unsigned *sa,
+               unsigned *n)
+{
+   unsigned total = count + 2 * info->n_deps, j = 0, k = 0;
+   uint64_t *w = malloc(total * sizeof(*w));
+   unsigned *map = malloc((count + 1) * sizeof(*map));
+
+   if (!w || !map) {
+      free(w);
+      free(map);
+      return NULL;
+   }
+   for (unsigned i = 0; i <= count; i++) {
+      while (j < info->n_deps && info->deps[j].at == i) {
+         uint32_t lo = (uint32_t)info->deps[j].smp, hi = info->deps[j].smp >> 32;
+
+         lo = (lo & ~(0x7fu << 21 | 0x7fu << 7 | 0xc0000000u)) | info->deps[j].raw << 21 | sa[j] << 7 | 0xc0000000u;
+         hi &= ~(0x80u | 1u << 17);
+         w[k++] = (uint64_t)hi << 32 | lo;
+         w[k++] = (uint64_t)(0xf9200000u | (hi & 1)) << 32;   /* wdf drc */
+         j++;
+      }
+      map[i] = k;
+      if (i < count)
+         w[k++] = code[i];
+   }
+   /* the branches' relative offsets (l0-17, signed) */
+   for (unsigned b = 0; b < info->n_branches; b++) {
+      unsigned i = info->branch_at[b];
+      uint32_t lo = (uint32_t)code[i], hi = code[i] >> 32;
+      int off = (int)(lo << 14) >> 14, t = (int)i + off;
+
+      if (i >= count || t < 0 || t > (int)count)
+         continue;
+      off = (int)map[t] - (int)map[i];
+      w[map[i]] = (uint64_t)hi << 32 | (lo & ~0x3ffffu) | ((uint32_t)off & 0x3ffffu);
+   }
+   free(map);
+   *n = k;
+   return w;
 }
 
 static bool
@@ -315,8 +429,10 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
    uint32_t n_b;
 
    if (size < 0x84 || rd32(u, 0) != 0x55535020 || rd32(u, 4) != 0x23)
-      return false;
+      return info->why = "not a USP", false;
    info->temps = rd16(u, 0x46);
+   info->n_pa = rd16(u, 0x44);
+   info->sa_slots = rd16(u, 0x7e);
    info->color_type = rd16(u, 0x66);
    info->color_reg = rd16(u, 0x68);
    n_a = rd16(u, 0x4e);
@@ -329,7 +445,7 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
       unsigned flags = rd16(u, off);
 
       if (info->n_iters == ARRAY_SIZE(info->iters) || (flags & ~0xdu))
-         return false;
+         return info->why = "an iteration list A entry", false;
       /* a plain iteration has flags 4 or 0xc; a sample entry 0, or 1 projected */
       info->iters[info->n_iters].sample = !(flags & 4);
       info->iters[info->n_iters].proj = flags & 1;
@@ -340,13 +456,13 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
       info->n_iters++;
    }
    for (uint32_t i = 0; i < n_b && off < size; i++)   /* list B: constants left in memory */
-      return false;
+      return info->why = "constants in memory (list B)", false;
    for (unsigned i = 0; i < n_c && off + 8 <= size; i++) {
       unsigned kind = rd16(u, off);
       struct sgx545_const *k = &so->consts[so->n_consts];
 
       if (kind != 1 || so->n_consts == SGX545_MAX_CONSTS)
-         return false;                             /* F16/C10 constants: not in F32 mode */
+         return info->why = "an F16/C10 constant or too many", false;
       k->fmt = kind;
       k->k = rd16(u, off + 2);
       k->slot = rd16(u, off + 4);
@@ -356,12 +472,12 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
       off += 8;
    }
    if (n_d || n_sec || off > size)
-      return false;
+      return info->why = n_d ? "list D" : n_sec ? "a secondary program" : "a short USP", false;
    /* the vertex input mask, then the output mask (both in u32s) */
    if (rd32(u, 0x10) == 1)
       off += 4 * ((rd16(u, 0x80) + 31) / 32);
    off += 4 * ((rd16(u, 0x82) + 31) / 32);
-   return blocks_supported(u, size, off);
+   return blocks_supported(u, size, off, info);
 }
 
 static bool
@@ -377,6 +493,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
 
    opts.verbose = (sgx545_debug & SGX545_DEBUG_NIR) != 0;
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
+   remap_legacy_varyings(nir);
    assign_varyings(nir, &vary);
    if (vertex) {
       nir_foreach_shader_in_variable(var, nir) {
@@ -406,7 +523,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       }
    }
    if (!read_usp(out.usp, out.usp_size, so, &info) || (!vertex && info.color_type != 3)) {
-      fprintf(stderr, "sgx545: %s shader: USP features not handled yet\n", vertex ? "vertex" : "fragment");
+      fprintf(stderr, "sgx545: %s shader: USP features not handled yet (%s)\n", vertex ? "vertex" : "fragment",
+              info.why ? info.why : "colour output");
       sgx_shader_free(&out);
       ralloc_free(nir);
       return false;
@@ -435,14 +553,55 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       so->prog.out_dwords = dwords;
       so->prog.const_dwords = so->const_dwords;
    } else {
-      so->prog.code = sgxws_upload_fs(ctx->hw, out.code, out.n_code, info.color_reg, NULL);
-      so->code = malloc(out.n_code * sizeof(*so->code));
-      if (so->code) {
-         memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
-         so->n_code = out.n_code;
+      /* dependent samples: their state words go in SA after the constants */
+      if (info.n_deps) {
+         unsigned sa[SGX545_MAX_DEP_SAMPLES], n;
+
+         if (info.n_insts != out.n_code ||
+             MAX2(so->const_dwords, info.sa_slots) + 4 * info.n_deps > SGX545_MAX_CONSTS) {
+            fprintf(stderr, "sgx545: USP blocks hold %u instructions, the program %u: not drawn\n",
+                    info.n_insts, out.n_code);
+            simple_mtx_unlock(&screen->lock);
+            sgx_shader_free(&out);
+            ralloc_free(nir);
+            return false;
+         }
+         /* after every SA register the program uses: its constants (list C)
+          * and the slots the compiler keeps for itself (header 0x7e) */
+         if (info.sa_slots > so->const_dwords)
+            SGX545_DBG(NIR, "fragment program: %u SA slots, %u in list C\n", info.sa_slots, so->const_dwords);
+         so->const_dwords = MAX2(so->const_dwords, info.sa_slots);
+         for (unsigned j = 0; j < info.n_deps; j++) {
+            so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
+            so->dep_sampler[j] = info.deps[j].sampler;
+            sa[j] = so->dep_sa[j];
+         }
+         so->n_deps = info.n_deps;
+         so->const_dwords += 4 * info.n_deps;
+         so->code = insert_samples(out.code, out.n_code, &info, sa, &n);
+         so->n_code = so->code ? n : 0;
+      } else {
+         so->code = malloc(out.n_code * sizeof(*so->code));
+         if (so->code) {
+            memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
+            so->n_code = out.n_code;
+         }
+      }
+      /* a program that discards: its feedback nop is the last instruction
+       * (the compiler's layout); the depth plane goes in after the iterated
+       * inputs, by one more PDS iteration */
+      so->discard_pa = -1;
+      if (orig->info.fs.uses_discard) {
+         if (!so->n_code || so->code[so->n_code - 1] != (uint64_t)0xf8000140u << 32) {
+            fprintf(stderr, "sgx545: fragment shader with discard: no feedback point, not drawn\n");
+            free(so->code);
+            so->code = NULL;
+         }
       }
       so->color_reg = info.color_reg;
+      so->temps = info.temps;
       so->prog.temps = info.temps;
+      so->prog.pa_dwords = info.n_pa;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
       /* One DOUTI per list A entry, in PA order (docs/PDS.md "DOUTI"): a
        * varying's iterator is its set + 1.  The writer's other kinds 0xb-0xf
@@ -484,6 +643,34 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
          last_plain = so->prog.n_douti;
          so->prog.douti[so->prog.n_douti++] = w;
       }
+      if (so->code && orig->info.fs.uses_discard) {
+         /* the triangle's depth plane (source 0x22, 3 components) after the
+          * inputs: pa<n> on, n = the registers the iterations above fill (an
+          * F32 component 1, an F16 pair 1, a sampled texel 1) */
+         unsigned pa = 0;
+
+         for (unsigned i = 0; i < so->prog.n_douti; i++) {
+            uint32_t w = so->prog.douti[i];
+
+            if (w & (1u << 24))
+               pa += w & (1u << 28) ? (((w >> 22) & 3) + 2) / 2 : ((w >> 22) & 3) + 1;
+            if (w & 0x600)
+               pa++;
+         }
+         if (so->prog.n_douti == ARRAY_SIZE(so->prog.douti)) {
+            free(so->code);
+            so->code = NULL;
+         } else {
+            last_plain = so->prog.n_douti;
+            so->prog.douti[so->prog.n_douti++] = 0x22u << 11 | 2u << 22 | 1u << 24 | 0x6000000u;
+            so->discard_pa = pa;
+            so->prog.pa_dwords = MAX2(so->prog.pa_dwords, pa + 3);
+            /* the visibility test's words in sa3, sa4 come with the secondary DMA */
+            so->prog.sec_dwords = 9 + so->const_dwords;
+         }
+      }
+      so->prog.code = so->code ? sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, NULL,
+                                                 so->discard_pa, so->temps) : 0;
       if (last_plain >= 0)
          so->prog.douti[last_plain] |= 1u << 29;   /* the last plain iteration */
       if (last_sample >= 0)
@@ -508,6 +695,7 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
 
    if (!so)
       return NULL;
+   so->discard_pa = -1;
    if (cso->type == PIPE_SHADER_IR_NIR)
       nir = cso->ir.nir;
    else
@@ -588,7 +776,7 @@ sgx545_fs_program(struct sgx545_context *ctx, struct sgx545_shader *so, const st
    if (!so->code)
       return 0;
    simple_mtx_lock(&screen->lock);
-   va = sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b);
+   va = sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b, so->discard_pa, so->temps);
    simple_mtx_unlock(&screen->lock);
    /* the program heap is never freed: past the table's size, the oldest
     * variant's slot is reused and its program uploaded again when needed */

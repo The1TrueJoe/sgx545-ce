@@ -1011,13 +1011,21 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
          }
       }
       emit_runs(c, USSE_FDP, nir_component_mask(n), d, 2, s, &NOF, 0);
-      /* the result: component n-1 of w, moved where NIR wants it */
+      /* the result: component n-1 of w (clamped to [0, 1] when NIR folded an
+       * fsat into it), moved where NIR wants it */
       struct sgx_ref res = vref(w, n - 1);
+      if (ld.fsat) {
+         unsigned t = new_vreg(c, 1);
+         struct sgx_ref td[4] = { vref(t, 0) }, ts[3][4] = { { res }, { ref(SGX_F_K, 0) }, { ref(SGX_F_K, 0x3f800000) } };
+         emit_runs(c, USSE_FMINMAX, 1, td, 3, ts, &NOF, 0);
+         res = vref(t, 0);
+      }
       if (ld.dest.is_ssa) {
-         struct sgx_val *v = &c->vals[alu->def.index];
+         /* (the chased def: the fsat's, when one was folded) */
+         struct sgx_val *v = &c->vals[ld.dest.ssa->index];
          v->kind = VAL_V;
-         v->n = w;
-         v->comp = n - 1;
+         v->n = res.n;
+         v->comp = res.comp;
          if (nc > 1)
             sgx_fail(c, "vector dot product result");
       } else {
@@ -1031,8 +1039,6 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
             if (wmask & (1u << k))
                emit_runs(c, USSE_MOV, 1u << k, dd, 1, ss, &NOF, 0);
       }
-      if (ld.fsat)
-         sgx_fail(c, "saturated dot product");
       return;
    }
 

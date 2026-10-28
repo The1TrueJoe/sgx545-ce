@@ -164,15 +164,44 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
    }
 }
 
+/* a destroyed screen's connection and hardware context, for the next screen */
+static struct {
+   int fd;
+   struct sgxws_dev dev;
+   struct sgxws_ctx *hw;
+} kept = { .fd = -1 };
+static simple_mtx_t kept_lock = SIMPLE_MTX_INITIALIZER;
+
 static void
 sgx545_screen_destroy(struct pipe_screen *pscreen)
 {
    struct sgx545_screen *screen = sgx545_screen(pscreen);
 
-   sgxws_dev_fini(&screen->dev);
+   /* Keep the services connection and a hardware context for the process's
+    * next screen instead of tearing them down: when srvinit started the
+    * microkernel, a render context's cleanup never completes (the bridge
+    * returns -EINVAL after its wait), and the next connection's TA then runs
+    * against a parameter buffer the microkernel doesn't use: no pages
+    * allocated, nothing drawn, renders waiting ~270 ms, then lockups (gl4es
+    * initialises EGL, terminates it and initialises it again).  The process's
+    * exit releases them. */
+   simple_mtx_lock(&kept_lock);
+   if (kept.fd < 0) {
+      kept.fd = screen->dev_fd;
+      kept.dev = screen->dev;
+      kept.hw = screen->hw;
+      screen->hw = NULL;
+   } else {
+      if (screen->hw)
+         sgxws_ctx_destroy(screen->hw);
+      sgxws_dev_fini(&screen->dev);
+      close(screen->dev_fd);
+   }
+   simple_mtx_unlock(&kept_lock);
+   if (screen->fd != screen->dev_fd)
+      close(screen->fd);
    slab_destroy_parent(&screen->transfer_pool);
    simple_mtx_destroy(&screen->lock);
-   close(screen->fd);
    FREE(screen);
 }
 
@@ -185,8 +214,20 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config)
    if (!screen)
       return NULL;
    sgx545_debug = debug_get_option_sgx545_debug();
-   screen->fd = fd;
-   if ((e = sgxws_dev_init(&screen->dev, fd))) {
+   screen->fd = screen->dev_fd = fd;
+   simple_mtx_lock(&kept_lock);
+   if (kept.fd >= 0) {
+      /* the previous screen's connection */
+      screen->dev_fd = kept.fd;
+      screen->dev = kept.dev;
+      screen->hw = kept.hw;
+      if (screen->hw)
+         screen->hw->dev = &screen->dev;   /* the device moved with it */
+      kept.fd = -1;
+      kept.hw = NULL;
+   }
+   simple_mtx_unlock(&kept_lock);
+   if (screen->dev_fd == fd && (e = sgxws_dev_init(&screen->dev, fd))) {
       fprintf(stderr, "sgx545: no PVR services on fd %d: %d\n", fd, e);
       FREE(screen);
       return NULL;

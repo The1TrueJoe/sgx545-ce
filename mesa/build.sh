@@ -61,7 +61,7 @@ for arch in $ARCHES; do
 			--buildtype=release --prefix=/usr --libdir=lib \
 			-Dplatforms=fbdev -Degl-native-platform=fbdev \
 			-Dgallium-drivers=sgx545 -Dvulkan-drivers= \
-			-Dglx=disabled -Dopengl=false -Dgles1=disabled -Dgles2=enabled -Degl=enabled \
+			-Dglx=disabled -Dopengl=false -Dgles1=enabled -Dgles2=enabled -Degl=enabled \
 			-Dgbm=disabled -Dllvm=disabled -Dxmlconfig=disabled -Dexpat=disabled \
 			-Dzstd=disabled -Dzlib=disabled -Dshader-cache=disabled -Dvalgrind=disabled \
 			-Dlibunwind=disabled -Dlmsensors=disabled \

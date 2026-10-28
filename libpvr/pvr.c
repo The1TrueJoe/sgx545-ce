@@ -410,6 +410,12 @@ int pvr_submit_transfer(struct pvr *p, PVRSRV_TRANSFER_SGX_KICK *kick)
 
 int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick)
 {
+	return pvr_kick_traced(p, kick, 1);
+}
+
+/* submit: 0 only traces the kick (and its memory) without sending it */
+int pvr_kick_traced(struct pvr *p, SGX_CCB_KICK *kick, int submit)
+{
 	PVRSRV_BRIDGE_IN_DOKICK in;
 	PVRSRV_BRIDGE_RETURN out = { 0 };
 
@@ -421,7 +427,14 @@ int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick)
 		if (kick->ui32NumDstSyncObjects)
 			trace_ubuf(p, PVRSRV_BRIDGE_SGX_DOKICK & 0xff, kick->pahDstSyncHandles,
 				   kick->ui32NumDstSyncObjects * sizeof(IMG_HANDLE));
-		trace_snap(p, p->kicks);
+		if (!p->trace_kicks || p->kicks <= p->trace_kicks)
+			trace_snap(p, p->kicks);
+	}
+	if (!submit) {
+		/* the bridge record the decoder finds kicks by, as if it had gone out */
+		if (p->trace_fd >= 0)
+			trace_bridge(p, PVRSRV_BRIDGE_SGX_DOKICK, 0, 0, &in, sizeof in, &out, sizeof out);
+		return 0;
 	}
 	return pvr_call(p, PVRSRV_BRIDGE_SGX_DOKICK, &in, sizeof in, &out, sizeof out);
 }

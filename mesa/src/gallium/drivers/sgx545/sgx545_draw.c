@@ -239,6 +239,33 @@ fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sg
    }
 }
 
+/* Every set the fragment program iterates or samples with must be one the
+ * vertex program outputs, with as many components: iterating a set the vertex
+ * program doesn't write locks the GPU up (EA3; first seen with the colour
+ * placeholder, then with gl4es' neverball shaders). */
+static bool
+varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
+{
+   for (unsigned i = 0; i < fs->n_douti; i++) {
+      uint32_t w = fs->douti[i];
+      unsigned need[2][2] = { { 0, 0 } }, n = 0;
+
+      /* plain iteration: set + 1 at b11-16, components - 1 at b22-23; sources
+       * from 0x20 on are not varyings (0x22: the depth plane of a discard) */
+      if ((w & (1u << 24)) && ((w >> 11) & 0x3f) < 0x20)
+         need[n][0] = ((w >> 11) & 0x3f) - 1, need[n++][1] = ((w >> 22) & 3) + 1;
+      if (w & 0x600)               /* sample half: coordinate set + 1 in the low bits, 2-D or projected */
+         need[n][0] = (w & 0x3f) - 1, need[n++][1] = w & 0x400 ? 3 : 2;
+      for (unsigned k = 0; k < n; k++) {
+         unsigned size = (vs->tsp_sizes >> (3 * need[k][0])) & 7;
+
+         if (need[k][0] >= 10 || !size || (size == 5 ? 4 : size) < need[k][1])
+            return false;
+      }
+   }
+   return true;
+}
+
 static void
 sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 unsigned drawid_offset, const struct pipe_draw_indirect_info *indirect,
@@ -294,10 +321,35 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          fsp.code = sgx545_fs_program(ctx, ctx->fs, blend);
          if (!fsp.code)
             return;
-         st.translucent = blend->blend;
       }
+      /* pass type: a blend 1; discard 4, or 2 with a blend (ISA.md) */
+      st.pass_type = ctx->fs->discard_pa >= 0 ? (blend && blend->blend ? 2 : 4) : blend && blend->blend ? 1 : 0;
       d.fs = &fsp;
       fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
+      /* a discard's visibility test (atst8 and pcoeff read sa3, sa4), as the
+       * DDK writes them (EA3): sa3 = 0xe000 | ISPA's depth compare (7 with the
+       * test off) | 8 without depth writes (always 0xe00f, LESS 0xe001,
+       * LEQUAL no write 0xe00b); sa4 = 0xee00 [G] */
+      if (ctx->fs->discard_pa >= 0) {
+         fsk[3] = 0xe000 | (st.depth_func ? (st.depth_func - 0x200) & 7 : 7) | (st.depth_write ? 0 : 8);
+         fsk[4] = 0xee00;
+      }
+      /* a dependent sample's texture state: the DOUTT words, in SA */
+      for (unsigned j = 0; j < ctx->fs->n_deps; j++) {
+         unsigned unit = ctx->fs->dep_sampler[j];
+         struct pipe_sampler_view *view = unit < PIPE_MAX_SAMPLERS ? ctx->views[unit] : NULL;
+
+         if (!view || !sgx545_resource(view->texture)->texture) {
+            SGX545_DBG(DRAW, "sampler %u: no texture the GPU can sample, draw skipped\n", unit);
+            return;
+         }
+         sgx545_tex_words(view, ctx->samplers[unit], &fsk[ctx->fs->dep_sa[j]]);
+         SGX545_DBG(DRAW, "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
+                    j, unit, util_format_short_name(view->format), view->texture->width0,
+                    view->texture->height0, view->texture->target, view->texture->last_level + 1,
+                    ctx->fs->dep_sa[j], fsk[ctx->fs->dep_sa[j]], fsk[ctx->fs->dep_sa[j] + 1],
+                    fsk[ctx->fs->dep_sa[j] + 2], fsk[ctx->fs->dep_sa[j] + 3]);
+      }
       d.fs_consts = fsk;
       for (unsigned i = 0; i < d.fs->n_douti; i++) {
          unsigned unit = d.fs->douti_tex[i];
@@ -366,6 +418,13 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          d.vs = f[e].dwords == 2 ? &ctx->vs_xy : &ctx->vs_xyz;
       }
       vertex_dwords += f[e].dwords;
+   }
+   if (compiled && ctx->fs->kind == SGX545_SHADER_COMPILED && !varyings_match(d.vs, d.fs)) {
+      if (!ctx->warned_varyings)
+         fprintf(stderr, "sgx545: the fragment shader iterates a varying the vertex shader doesn't "
+                 "write (VS sets %#x, FS DOUTI %#x...): draw skipped\n", d.vs->tsp_sizes, d.fs->douti[0]);
+      ctx->warned_varyings = true;
+      return;
    }
    d.state = &st;
    d.prim = prim;

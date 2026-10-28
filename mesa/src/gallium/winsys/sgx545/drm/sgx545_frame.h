@@ -75,6 +75,8 @@ struct sgxws_dev {
    uint32_t heap_base[16];          /* device address of each heap, by heap id */
    int verbose;
    unsigned frame_gap_us;           /* SGX545_FRAME_GAP_US: idle time after each render */
+   int dry_run;                     /* SGX545_DRY_RUN=n: frames from the n-th on are built
+                                     * (and traced) but never sent to the GPU */
 };
 
 /* one device allocation, mapped */
@@ -132,6 +134,7 @@ struct sgxws_prog {
    uint8_t douti_tex[10];           /* 0, or the sampler unit + 1 whose DOUTT follows it */
    uint32_t n_douti;
    uint32_t pds_middle;             /* TA state PDS middle word (0: the default) */
+   uint32_t pa_dwords;              /* fragment: primary attribute registers the program uses */
    /* both: */
    uint32_t const_dwords;           /* vertex: constants DMA'd after the driver block */
 };
@@ -170,8 +173,10 @@ struct sgxws_state {
    bool front_ccw;                  /* front faces wind CCW in the target's memory
                                      * (gallium's sense: y down) */
    uint32_t color_mask;             /* ISPB colour mask: R8 G4 B2 A1 */
-   bool translucent;                /* ISPA pass type 1: o0 starts as the tile's
-                                     * colour (blending) */
+   uint32_t pass_type;              /* ISPA b25-27: 0 opaque, 1 translucent (o0
+                                     * starts as the tile's colour: blending),
+                                     * 2 translucent with discard, 4 punch-through
+                                     * (discard) */
    /* the viewport transform, as gallium gives it */
    float vp_scale[3], vp_translate[3];
 };
@@ -249,7 +254,7 @@ uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w, 
  */
 uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned temps);
 uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned color_pa,
-                         const struct sgxws_blend *blend);
+                         const struct sgxws_blend *blend, int discard_pa, unsigned temps);
 void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint32_t w[2]);
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned n);
 

@@ -425,10 +425,14 @@ sgxws_dev_init(struct sgxws_dev *d, int fd)
    memset(d, 0, sizeof(*d));
    d->verbose = getenv("SGX545_VERBOSE") ? atoi(getenv("SGX545_VERBOSE")) : 0;
    d->frame_gap_us = getenv("SGX545_FRAME_GAP_US") ? atoi(getenv("SGX545_FRAME_GAP_US")) : 0;
+   d->dry_run = getenv("SGX545_DRY_RUN") ? atoi(getenv("SGX545_DRY_RUN")) : -1;
    pvr_open_fd(&d->pvr, fd);
-   /* SGX545_TRACE=path: a pvrtrace log of this client, as tools/decode reads a DDK capture */
+   /* SGX545_TRACE=path: a pvrtrace log of this client, as tools/decode reads a DDK
+    * capture; SGX545_TRACE_KICKS=n: memory copies for the first n kicks only */
    if (trace && (e = pvr_trace_open(&d->pvr, trace)))
       return e;
+   if (getenv("SGX545_TRACE_KICKS"))
+      d->pvr.trace_kicks = atoi(getenv("SGX545_TRACE_KICKS"));
    if ((e = pvr_init(&d->pvr)))
       return e;
    for (unsigned i = 0; i < d->pvr.nheaps; i++)
@@ -1001,12 +1005,15 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_d
    c->vdm_counter = (c->vdm_counter + 1) & 3;
 }
 
-/* Vertices per USSE task and index batch (libGLESv2 FUN_00017c20 limits them
- * by the USSE attribute space; the two values here fit every draw seen [G]). */
+/* Vertices per USSE task: 128 / output dwords, at most 16, as the DDK counts
+ * them (EA3 captures of probe-st: 4 and 8 output dwords 16 vertices, 12 10,
+ * 16 8, 20 6, 24 5; the input dwords don't count, 16 in still gives 16).
+ * Half that (64 / output dwords) hung the GPU at 12 output dwords. The DDK's
+ * clear draws 8 per task. */
 static uint32_t
 vertices_per_task(uint32_t out_dwords)
 {
-   uint32_t o = (out_dwords + 3) & ~3u, v = 64 / (o ? o : 4);
+   uint32_t o = (out_dwords + 3) & ~3u, v = 128 / (o ? o : 4);
 
    return v > 16 ? 16 : v;
 }
@@ -1015,10 +1022,10 @@ vertices_per_task(uint32_t out_dwords)
 static void
 vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
          uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords,
-         uint32_t temps)
+         uint32_t temps, uint32_t vpt)
 {
    struct pds p = { 0 };
-   uint32_t rows, va, vpt = vertices_per_task(out_dwords), batch = 16;
+   uint32_t rows, va, batch = 16;
 
    pds_d0(&p, 0, vb);
    pds_d0(&p, 1, attr_dwords - 1);  /* DOUTD: dwords-1, attribute register 0 */
@@ -1104,7 +1111,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
    blk[10] = 5;                                          /* one 4-component set */
    blk[11] = 0;
    state_block(c, blk, 12, 12, 3);
-   vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0);
+   vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0, 8);
    c->draws++;
    return 0;
 }
@@ -1114,8 +1121,7 @@ ispa(const struct sgxws_state *st)
 {
    uint32_t v = 0x200;              /* b9: ISPB follows */
 
-   if (st->translucent)
-      v |= 1u << 25;                /* pass type 1 */
+   v |= (st->pass_type & 7) << 25;  /* pass type */
 
    if (!st->depth_func)
       v |= 7u << 22 | 0x100000;     /* always, no write */
@@ -1174,11 +1180,20 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    blk[n++] = ispa(st);
    blk[n++] = 0x10 << 8 | (st->color_mask & 0xf) << 4;  /* ISPB: line width 1.0, colour mask */
    blk[n++] = pds_word(c, sec, rows);
-   /* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; the rest from the
-    * DDK's shader object (b0, b16-17 constant; b25-28 = 0xb for its uniform
-    * shader) [G] */
-   blk[n++] = fs->pds_middle ? fs->pds_middle
-                             : 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 | 0xbu << 25;
+   /* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; b0-15 = the
+    * fragment program's primary attributes in units of 4 dwords, b25-28 = 12
+    * divided by that (EA3, DDK captures with 0-5 vec4 varyings: units 1 1 1 2
+    * 2 3, b25-28 12 12 6 6 4; 0xb with one unit, as the DDK's uniform shader
+    * and every draw before had it); b16-17 = 3 [G]. A program with more
+    * attributes than the word declares locks the GPU up (two F32 vec4
+    * varyings, EA3). */
+   {
+      unsigned units = fs->pa_dwords > 4 ? (fs->pa_dwords + 3) / 4 : 1, per = 12 / units;
+
+      blk[n++] = fs->pds_middle ? fs->pds_middle
+                                : units | 3u << 16 | ((fs->sec_dwords + 3) >> 2) << 18 |
+                                  (per < 0xb ? per : 0xbu) << 25;
+   }
    /* DOUTU word 1: b24 = the program has plain iterations, b25 samples (PDS.md) */
    {
       uint32_t w1 = 4;
@@ -1228,7 +1243,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
 
    vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
-            vs->out_dwords, vs->temps);
+            vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
    c->draws++;
    return 0;
 }
@@ -1364,17 +1379,21 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    c->ccb_woff = (woff + TA_CMD_SIZE) & (CCB_RING - 1);
    c->ccbctl.map[0] = c->ccb_woff;                  /* CCB write offset */
    __sync_synchronize();
-   e = pvr_kick(&c->dev->pvr, &k);
-   if (e)
-      ws_err("SGX_DOKICK failed: %d\n", e);
-   else
-      e = wait_render(c, timeout_ms);
+   if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
+      e = pvr_kick_traced(&c->dev->pvr, &k, 0);     /* traced, not sent */
+   } else {
+      e = pvr_kick(&c->dev->pvr, &k);
+      if (e)
+         ws_err("SGX_DOKICK failed: %d\n", e);
+      else
+         e = wait_render(c, timeout_ms);
+   }
    if (!e && c->dev->frame_gap_us) {
       struct timespec ts = { 0, (long)c->dev->frame_gap_us * 1000 };
 
       nanosleep(&ts, NULL);
    }
-   if (c->dev->verbose)
+   if (c->dev->verbose || e)
       ws_err("frame %u (target %u): %u objects, PB pages in use %#x, RT frames %u, rc %d\n",
              c->frames, s->frames, c->draws, c->pbdesc.map[5], s->rtdata.map[1], e);
 
@@ -1505,14 +1524,49 @@ wmask_words(unsigned m, unsigned color_pa, uint32_t w[2])
 
 uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsigned color_pa,
-                const struct sgxws_blend *blend)
+                const struct sgxws_blend *blend, int discard_pa, unsigned temps)
 {
-   uint32_t *w = malloc((count + 3) * 8), va, b[2];
+   uint32_t *w = malloc((count + 8) * 8), va, b[2];
    bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
 
    if (!w)
       return 0;
+   if (discard_pa >= 0) {
+      /*
+       * A program that discards runs in two phases (ISA.md "Phases, visibility
+       * feedback and discard"; the DDK's words for `if (q.x > 0.0) discard`,
+       * EA3): phase 0 = phas to phase 1, pcoeff (hands the ISP the depth plane
+       * the PDS iterated into pa<n>..), the shader with the keep predicate in
+       * p1, and atst8 [end] in place of the compiler's feedback nop (its last
+       * instruction); phase 1, on an even instruction, = the colour out
+       * without end, then phas.i #0, #0 [end].
+       */
+      uint8_t reloc[1] = { 0 };
+
+      put(w, &n, 0, 0xfa440100u | ((temps + 3) / 4));    /* phas.i #phase1, #t [wait=1] */
+      put(w, &n, 0xb0000004u | (uint32_t)discard_pa << 14 | (uint32_t)(discard_pa + 1) << 7,
+          0xf8300004u);                                  /* pcoeff pa<n>, pa<n+1>, sa4 */
+      put_code(w, &n, code, count - 1);
+      put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14, 0xf9340406u);  /* atst8 [end] */
+      if (n & 1)
+         put(w, &n, 0, 0xf8000140u);                    /* nop: phase 1 on 16 bytes */
+      w[0] = n;                                         /* relocated to an absolute pc */
+      if (blend && blend->blend) {
+         sgxws_blend_words(blend, color_pa, !masked, b);
+         put(w, &n, b[0], b[1] & ~(1u << 18));           /* without end */
+      }
+      if (masked) {
+         wmask_words(blend->wmask, color_pa, b);
+         put(w, &n, b[0], b[1] & ~(1u << 18));
+      } else if (!blend || !blend->blend) {
+         put(w, &n, 0xa0000000u | color_pa << 7, 0x28a10001u);   /* mov o0, pa<c> [skipinv rcnt] */
+      }
+      put(w, &n, 0, 0xfa4c0700u);                       /* phas.i #0, #0 [end wait=7] */
+      va = sgxws_usse_upload(c, false, w, n, reloc, 1);
+      free(w);
+      return va;
+   }
    put(w, &n, 0, PHAS_HI | 0x700);                  /* phas.i #0, #0 [wait=7] */
    put_code(w, &n, code, count);
    if (blend && blend->blend) {

@@ -25,6 +25,7 @@ struct pvr {
 	int map_flags;		/* extra mmap flags for device memory: MAP_32BIT unless cleared */
 	int trace_fd;		/* pvrtrace-format log (tools/trace/pvrtrace.c), or -1 */
 	unsigned kicks;
+	unsigned trace_kicks;	/* snapshot only the first this many kicks (0: all) */
 	struct { void *addr; size_t len; } maps[1024];	/* device memory mapped so far */
 	unsigned nmaps;
 };
@@ -69,6 +70,7 @@ volatile PVRSRV_SYNC_DATA *pvr_sync_data(struct pvr *p, IMG_HANDLE sync, struct 
 int pvr_register_render_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
 			    IMG_HANDLE *handle, uint32_t *devva);
 int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick);
+int pvr_kick_traced(struct pvr *p, SGX_CCB_KICK *kick, int submit);
 int pvr_register_transfer_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
 			      IMG_HANDLE *handle, uint32_t *devva);
 int pvr_submit_transfer(struct pvr *p, PVRSRV_TRANSFER_SGX_KICK *kick);

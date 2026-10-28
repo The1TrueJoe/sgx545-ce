@@ -10,7 +10,10 @@
  * MaterialColor; a diffuse Color varying), compiled by the sgx545 compiler.
  * The gear geometry is the same as sgx545_cpugears'.
  *
- *   sgx545_es2gears [-n frames] [-o frame.rgba -f N]   (-o: glReadPixels of frame N)
+ *   sgx545_es2gears [-n frames] [-o frame.rgba -f N] [-p W H] [-r]
+ *     -o: glReadPixels of frame N; -p: draw into a W x H pbuffer instead of
+ *     the window; -r: glReadPixels every frame (as gl4es' pbuffer mode does);
+ *     -2: first render one frame into a 64x64 pbuffer (a second render target)
  */
 
 #include <math.h>
@@ -195,10 +198,11 @@ int
 main(int argc, char **argv)
 {
    static const EGLint cattr[] = { EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
-                                   EGL_DEPTH_SIZE, 16, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                                   EGL_DEPTH_SIZE, 16, EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
                                    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE };
    static const EGLint ctx_attr[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
-   int frames = 600, dump_frame = -1, opt;
+   int frames = 600, dump_frame = -1, opt, pb_w = 0, pb_h = 0, readback = 0, second = 0;
+   unsigned char *rb = NULL;
    const char *out = NULL;
    EGLDisplay dpy;
    EGLConfig cfg;
@@ -213,8 +217,15 @@ main(int argc, char **argv)
    GLint u_mvp, u_nm, u_light, u_mat;
    struct timespec t0, t1;
 
-   while ((opt = getopt(argc, argv, "n:o:f:")) != -1) {
-      if (opt == 'n')
+   while ((opt = getopt(argc, argv, "n:o:f:p:r2")) != -1) {
+      if (opt == '2')
+         second = 1;
+      else if (opt == 'p' && optind < argc) {
+         pb_w = atoi(optarg);
+         pb_h = atoi(argv[optind++]);
+      } else if (opt == 'r')
+         readback = 1;
+      else if (opt == 'n')
          frames = atoi(optarg);
       else if (opt == 'o')
          out = optarg;
@@ -225,13 +236,31 @@ main(int argc, char **argv)
    dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
    if (!eglInitialize(dpy, NULL, NULL) || !eglChooseConfig(dpy, cattr, &cfg, 1, &n) || !n)
       return printf("EGL init failed\n"), 1;
-   surf = eglCreateWindowSurface(dpy, cfg, 0, NULL);
+   if (pb_w) {
+      const EGLint pb[] = { EGL_WIDTH, pb_w, EGL_HEIGHT, pb_h, EGL_NONE };
+
+      surf = eglCreatePbufferSurface(dpy, cfg, pb);
+   } else {
+      surf = eglCreateWindowSurface(dpy, cfg, 0, NULL);
+   }
    ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attr);
+   if (second) {
+      const EGLint pb[] = { EGL_WIDTH, 64, EGL_HEIGHT, 64, EGL_NONE };
+      EGLSurface s2 = eglCreatePbufferSurface(dpy, cfg, pb);
+      unsigned char px[64 * 64 * 4];
+
+      eglMakeCurrent(dpy, s2, s2, ctx);
+      glClearColor(1, 0, 0, 1);
+      glClear(GL_COLOR_BUFFER_BIT);
+      glReadPixels(0, 0, 64, 64, GL_RGBA, GL_UNSIGNED_BYTE, px);
+      printf("es2gears: 64x64 pbuffer first, pixel %u %u %u %u\n", px[0], px[1], px[2], px[3]);
+   }
    if (!surf || !ctx || !eglMakeCurrent(dpy, surf, surf, ctx))
       return printf("surface/context failed %#x\n", eglGetError()), 1;
    eglQuerySurface(dpy, surf, EGL_WIDTH, &w);
    eglQuerySurface(dpy, surf, EGL_HEIGHT, &h);
-   printf("es2gears: %dx%d window, %s\n", w, h, glGetString(GL_RENDERER));
+   printf("es2gears: %dx%d %s, %s\n", w, h, pb_w ? "pbuffer" : "window", glGetString(GL_RENDERER));
+   rb = malloc((size_t)w * h * 4);
 
    make_gear(&g[0], 1.0f, 4.0f, 1.0f, 20, 0.7f);
    make_gear(&g[1], 0.5f, 2.0f, 2.0f, 10, 0.7f);
@@ -302,6 +331,8 @@ main(int argc, char **argv)
          }
          free(img);
       }
+      if (readback)
+         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rb);
       eglSwapBuffers(dpy, surf);
    }
    clock_gettime(CLOCK_MONOTONIC, &t1);
