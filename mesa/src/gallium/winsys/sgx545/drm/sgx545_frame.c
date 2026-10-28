@@ -1465,45 +1465,64 @@ sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsig
 }
 
 /* sop2's fields (hw10, tools/isa/hw_int.py): c1 h6-8 (complement h24), c2
- * h3-5 (h15), a1 h20-21 (h11), a2 h9-10 (h2), cop l18-19, aop l16-17; the
- * base is `sop2 o0, pa0, o0 [skipinv end]` with every factor zero, add.  The
- * alpha selectors number zero, s1a, s2a. */
+ * h3-5 (h15), a1 h20-21 (h11), a2 h9-10 (h2), cop l18-19, aop l16-17, end
+ * h18, dst l21-27 (bank h0-1: o 1, pa 2); the base is
+ * `sop2 r0, pa0, o0 [skipinv]` with every factor zero, add.  The alpha
+ * selectors number zero, s1a, s2a. */
 static uint32_t
 alpha_sel(unsigned s)
 {
    return (s & 7) == SGXWS_BS_S1A ? 1 : (s & 7) == SGXWS_BS_S2A ? 2 : 0;
 }
 
+/* end: the blend is the last instruction and writes o0; otherwise it
+ * writes pa<c> back for the colour mask */
 void
-sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, uint32_t w[2])
+sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint32_t w[2])
 {
-   uint32_t hi = 0x80840001u;
+   uint32_t hi = 0x80800000u;
 
+   hi |= end ? 1u << 18 | 1 : 2;
    hi |= (b->c1 & 7u) << 6 | (b->c1 & SGXWS_BS_INV ? 1u << 24 : 0);
    hi |= (b->c2 & 7u) << 3 | (b->c2 & SGXWS_BS_INV ? 1u << 15 : 0);
    hi |= alpha_sel(b->a1) << 20 | (b->a1 & SGXWS_BS_INV ? 1u << 11 : 0);
    hi |= alpha_sel(b->a2) << 9 | (b->a2 & SGXWS_BS_INV ? 1u << 2 : 0);
    /* src1 l7-13 (bank l30-31), src2 l0-6 (bank l28-29): pa = 2, o = 1 */
    w[0] = (b->swap ? 0x60000000u | color_pa : 0x90000000u | color_pa << 7) |
-          (b->cop & 3u) << 18 | (b->aop & 3u) << 16;
+          (end ? 0 : color_pa << 21) | (b->cop & 3u) << 18 | (b->aop & 3u) << 16;
    w[1] = hi;
+}
+
+/* sopwm o0, pa<c>, pa<c> [skipinv end mask=m c1=zero c2=zero cop=max aop=max]
+ * (hw12): the mask's x y z w are h12 h13 h14 h11 */
+static void
+wmask_words(unsigned m, unsigned color_pa, uint32_t w[2])
+{
+   w[0] = 0xa0000000u | color_pa << 7 | color_pa;
+   w[1] = 0x90b40601u | (m & 1 ? 1u << 12 : 0) | (m & 2 ? 1u << 13 : 0) |
+          (m & 4 ? 1u << 14 : 0) | (m & 8 ? 1u << 11 : 0);
 }
 
 uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsigned color_pa,
                 const struct sgxws_blend *blend)
 {
-   uint32_t *w = malloc((count + 2) * 8), va, b[2];
+   uint32_t *w = malloc((count + 3) * 8), va, b[2];
+   bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
 
    if (!w)
       return 0;
    put(w, &n, 0, PHAS_HI | 0x700);                  /* phas.i #0, #0 [wait=7] */
    put_code(w, &n, code, count);
-   if (blend) {
-      sgxws_blend_words(blend, color_pa, b);
+   if (blend && blend->blend) {
+      sgxws_blend_words(blend, color_pa, !masked, b);
       put(w, &n, b[0], b[1]);
-   } else {
+   }
+   if (masked) {
+      wmask_words(blend->wmask, color_pa, b);
+      put(w, &n, b[0], b[1]);
+   } else if (!blend || !blend->blend) {
       /* mov o0, pa<c> [skipinv end mask=1], as the DDK writes it (its uniform
        * shader's mov o0, sa9); without the mask this mov locks the GPU up (EA3) */
       put(w, &n, 0xa0000000u | color_pa << 7, 0x28851001u);

@@ -350,6 +350,28 @@ setting a state word.
   full-screen object that samples the previous buffer instead (a masked
   clear changes nothing).
 
+**Decoded on the EA3** (`b1`, `cm1`-`cm3` captures of probe-st; the Mesa
+driver draws them the same way, byte-identical to the DDK):
+
+- **The blend** is one `sop2` after the colour:
+  `sop2 o0, pa0, o0 [skipinv end c1=s1a c2=1-s1a cop=add a1=s1a a2=1-s1a aop=add]`
+  for SRC_ALPHA, ONE_MINUS_SRC_ALPHA. s1 is the shader's colour, s2 the
+  tile's (o0 starts as the tile's colour in a translucent pass). GL's
+  factors are sop2's selectors: zero, s1, s2, s1a, s2a, asat, each with a
+  complement (1-zero = one). Alpha has its own selectors and op, so
+  separate blend functions and equations cost nothing.
+- **Reverse subtract** works by trading the sources (`sop2 o0, o0, pa0`)
+  and renaming the selectors. The DDK has no EXT_blend_minmax: GL_MIN/MAX
+  raise INVALID_ENUM there. sop2's min and max ops do them.
+- **The colour mask** is
+  `sopwm o0, pa0, pa0 [skipinv end mask=m c1=zero c2=zero cop=max aop=max]`
+  after the colour, with m one bit per byte of the packed BGRA8 (B b0, G b1,
+  R b2, A b3). It comes with ISPB's mask, and ISPA stays opaque.
+- **Blend and mask together.** The DDK's sop2 loses `end` and writes `r0`,
+  then the sopwm reads pa0. One more word changes, 0x2e018020 in `cm2`
+  (0x00010700 → 0x01010700), perhaps a temporary count for that r0. The Mesa driver writes the blend
+  back to pa<c> instead, with the same pixels.
+
 ### Scissor and partial viewports: pass type 3 objects
 
 There is no per-pixel scissor rectangle in the state.

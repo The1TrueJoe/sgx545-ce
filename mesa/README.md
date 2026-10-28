@@ -110,7 +110,9 @@ The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared EA3, wrap G
     colour into o0. In a translucent pass (ISPA pass type 1), o0 starts as the
     tile's colour. Every GL factor but the constant ones maps onto sop2's
     selectors. Reverse subtract trades the sources (`sop2 o0, o0, pa<c>`).
-    Each fragment shader keeps a program per blend state it has drawn with.
+    A colour mask appends `sopwm o0, pa<c>, pa<c> [end mask=…]`, one bit per
+    byte of the packed BGRA8. Each fragment shader keeps a program per blend
+    and colour-mask state it has drawn with.
   - constants go into secondary attributes per list C, DMA'd in 16-dword chunks;
   - each varying is iterated with a DOUTI. A varying's set is its location -
     VARYING_SLOT_VAR0 on both sides, so stages compiled apart agree.

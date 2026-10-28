@@ -105,6 +105,7 @@ blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, struct sgxws_blen
          return false;
       b->swap = 1;
    }
+   b->blend = 1;
    b->c1 = c1;
    b->c2 = c2;
    b->a1 = a1;

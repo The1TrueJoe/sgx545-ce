@@ -150,10 +150,17 @@ enum sgxws_bsel {
 };
 enum sgxws_bop { SGXWS_BOP_ADD, SGXWS_BOP_SUB, SGXWS_BOP_MIN, SGXWS_BOP_MAX };
 
+/* The colour epilogue: blend (sop2), then the colour mask.  A colour mask is
+ *    sopwm o0, pa<c>, pa<c> [skipinv end mask=wmask c1=zero c2=zero cop=max aop=max]
+ * after the colour, a bit per byte of the packed BGRA8 (B b0, G b1, R b2,
+ * A b3), as the DDK's glColorMask draws (EA3); with a blend before it, the
+ * sop2 writes pa<c> back and doesn't end the program. */
 struct sgxws_blend {
+   uint8_t blend;                   /* the sop2 below */
    uint8_t c1, c2, a1, a2;          /* sgxws_bsel; a1/a2 only zero, s1a, s2a (+ inv) */
    uint8_t cop, aop;                /* sgxws_bop */
    uint8_t swap;
+   uint8_t wmask;                   /* bytes written; 0xf: no sopwm */
 };
 
 struct sgxws_state {
@@ -236,14 +243,14 @@ uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w, 
  *    temporaries), then emit the vertex; then the epilogue phase every
  *    vertex program needs (docs/GEN.md);
  *  - fragment: phas, the shader, then `mov o0, pa<color_pa> [end]` (output
- *    mode 1: the packed BGRA8 colour to the PBE), or with blend the sop2
- *    that blends it into o0 (draw it with sgxws_state.translucent);
+ *    mode 1: the packed BGRA8 colour to the PBE), or the blend and colour
+ *    mask epilogue (sgxws_blend; a blend draws with sgxws_state.translucent);
  *  - fragment secondary (uniform-only code): phas, the code, `nop [end]`.
  */
 uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned temps);
 uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned color_pa,
                          const struct sgxws_blend *blend);
-void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, uint32_t w[2]);
+void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint32_t w[2]);
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned n);
 
 /* built-in shaders (tools/gen/mkusse.py) */

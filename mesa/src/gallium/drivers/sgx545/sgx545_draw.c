@@ -249,6 +249,7 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    struct sgxws_state st;
    struct sgxws_draw d = { 0 };
    struct sgxws_prog fsp;
+   struct sgxws_blend epi = { 0 };
    const struct sgxws_blend *blend = NULL;
    uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = { 0 }, vsc[SGX545_MAX_CONSTS] = { 0 };
    uint32_t fsk[9 + SGX545_MAX_CONSTS] = { 0 }, tex[PIPE_MAX_SAMPLERS][4];
@@ -262,8 +263,21 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    if (indirect || !ctx->vs || !ctx->fs)
       return;
    build_state(ctx, &st);
-   if (ctx->blend && ctx->blend->enable && ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture)
-      blend = &ctx->blend->hw[util_format_has_alpha(ctx->framebuffer.cbufs[0].format)];
+   if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture) {
+      /* the colour epilogue: blend, then the colour mask (sgxws_blend) */
+      bool has_alpha = util_format_has_alpha(ctx->framebuffer.cbufs[0].format);
+      unsigned mask = ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA;
+
+      if (ctx->blend && ctx->blend->enable)
+         epi = ctx->blend->hw[has_alpha];
+      if (!has_alpha)
+         mask |= PIPE_MASK_A;
+      /* bytes of the packed BGRA8 colour */
+      epi.wmask = (mask & PIPE_MASK_B ? 1 : 0) | (mask & PIPE_MASK_G ? 2 : 0) |
+                  (mask & PIPE_MASK_R ? 4 : 0) | (mask & PIPE_MASK_A ? 8 : 0);
+      if (epi.blend || epi.wmask != 0xf)
+         blend = &epi;
+   }
    /* each stage compiled or one of the fixed programs */
    compiled = ctx->vs->kind == SGX545_SHADER_COMPILED;
    if (compiled) {
@@ -280,7 +294,7 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          fsp.code = sgx545_fs_program(ctx, ctx->fs, blend);
          if (!fsp.code)
             return;
-         st.translucent = true;
+         st.translucent = blend->blend;
       }
       d.fs = &fsp;
       fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
@@ -300,7 +314,7 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       d.tex = (const uint32_t (*)[4])tex;
    } else {
       if (blend && !ctx->warned_blend) {
-         fprintf(stderr, "sgx545: blending needs a compiled fragment shader, drawing opaque\n");
+         fprintf(stderr, "sgx545: blending and colour masks need a compiled fragment shader\n");
          ctx->warned_blend = true;
       }
       switch (ctx->fs->kind) {
