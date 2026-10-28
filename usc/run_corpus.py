@@ -11,6 +11,7 @@ and OUTDIR/<nnn>-<name>.code, and prints one line per shader. With --layout
 the uniform constant numbers follow glslcompiler's (layout.py).
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -70,6 +71,25 @@ def frag_for(vert):
     return "\n".join(lines) + f"\nvoid main() {{ gl_FragColor = {col}; }}\n"
 
 
+def calib_pins(path):
+    """-u pins from a calib.py result: each vector's first component, each
+    matrix column's (components the probe didn't see are extrapolated)"""
+    pins = {}
+    for nm, ks in json.load(open(path)).items():
+        known = [(j, k) for j, k in enumerate(ks) if k is not None]
+        if not known:
+            continue
+        cols = 4 if len(ks) == 16 else 0
+        if cols:
+            for c in range(4):
+                kc = [(j, k) for j, k in known if j // 4 == c]
+                if kc:
+                    pins[f"{nm}[{c}]"] = kc[0][1] - kc[0][0] % 4
+        else:
+            pins[nm] = known[0][1] - known[0][0]
+    return pins
+
+
 def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
     work = os.path.join(outdir, "work")
     os.makedirs(work, exist_ok=True)
@@ -79,7 +99,11 @@ def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
     open(base + ".vert", "w").write(vs)
     open(base + ".frag", "w").write(fs)
     args = [sgxc]
-    if use_layout:
+    cal = os.path.join(outdir, "calib", name + ".json")
+    if os.path.exists(cal):
+        for u, k in calib_pins(cal).items():
+            args += ["-u", f"{u}={k}"]
+    elif use_layout:
         for u, k in layout.uniforms(src).items():
             args += ["-u", f"{u}={k}"]
         if kind == "vert":

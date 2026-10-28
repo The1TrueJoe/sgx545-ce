@@ -17,12 +17,21 @@
 #include "util/ralloc.h"
 #include "util/u_math.h"
 #include "util/register_allocate.h"
+#include "util/hash_table.h"
+#include "util/set.h"
 
 #include "sgx_priv.h"
 
 #define SGX_F_K 20   /* constant bits, resolved to c<n> or limm when legalised */
 
 enum { VAL_NONE, VAL_V, VAL_PA, VAL_U, VAL_CONST };
+
+/* tex instrs whose coordinate is v.xy * rcp(v.w) of a vec4 varying v: the
+ * PDS's projected iteration does that divide (non-dependent, proj) */
+struct proj_tex {
+   nir_tex_instr *tex;
+   nir_intrinsic_instr *load;
+};
 
 struct sgx_val {
    uint8_t kind;
@@ -973,6 +982,68 @@ emit_br(struct sgx_ctx *c, unsigned l, unsigned pred)
 }
 
 static void emit_tex(struct sgx_ctx *c, nir_tex_instr *tex);
+
+/* tex(v.xy * rcp(v.w)) on a whole vec4 varying v: the DDK's non-dependent
+ * projected read (the PDS iterates v.xy / v.w); the divide isn't emitted */
+static nir_alu_instr *
+src_alu(nir_src *s, nir_op op)
+{
+   nir_instr *p = nir_def_instr(s->ssa);
+   if (p->type != nir_instr_type_alu || nir_instr_as_alu(p)->op != op)
+      return NULL;
+   return nir_instr_as_alu(p);
+}
+
+/* the varying load behind a mov of it (or the load itself), and the swizzle */
+static nir_intrinsic_instr *
+varying_load(nir_src *src, const uint8_t **swz, nir_alu_instr **mov)
+{
+   static const uint8_t ident[4] = { 0, 1, 2, 3 };
+   nir_instr *p = nir_def_instr(src->ssa);
+   *swz = ident;
+   *mov = NULL;
+   if (p->type == nir_instr_type_alu && nir_instr_as_alu(p)->op == nir_op_mov) {
+      *mov = nir_instr_as_alu(p);
+      *swz = (*mov)->src[0].swizzle;
+      p = nir_def_instr((*mov)->src[0].src.ssa);
+   }
+   if (p->type != nir_instr_type_intrinsic)
+      return NULL;
+   nir_intrinsic_instr *in = nir_instr_as_intrinsic(p);
+   if (in->intrinsic != nir_intrinsic_load_interpolated_input || in->def.num_components != 4 ||
+       nir_intrinsic_component(in) != 0)
+      return NULL;
+   return in;
+}
+
+static void
+find_projected(struct sgx_ctx *c, nir_function_impl *impl)
+{
+   nir_foreach_block(b, impl) {
+      nir_foreach_instr(instr, b) {
+         if (instr->type != nir_instr_type_tex)
+            continue;
+         nir_tex_instr *tex = nir_instr_as_tex(instr);
+         int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+         int pi = nir_tex_instr_src_index(tex, nir_tex_src_projector);
+         if (ci < 0 || pi < 0 || tex->coord_components != 2 || tex->op != nir_texop_tex ||
+             nir_tex_instr_src_index(tex, nir_tex_src_bias) >= 0)
+            continue;
+         const uint8_t *cs, *ps;
+         nir_alu_instr *cm, *pm;
+         nir_intrinsic_instr *l1 = varying_load(&tex->src[ci].src, &cs, &cm);
+         nir_intrinsic_instr *l2 = varying_load(&tex->src[pi].src, &ps, &pm);
+         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3)
+            continue;
+         _mesa_hash_table_insert(c->proj, tex, l1);
+         if (cm && list_is_singular(&cm->def.uses))
+            _mesa_set_add(c->skip, &cm->instr);
+         if (pm && list_is_singular(&pm->def.uses))
+            _mesa_set_add(c->skip, &pm->instr);
+      }
+   }
+}
+
 static void emit_cf_list(struct sgx_ctx *c, struct exec_list *list, struct loop_labels *loop);
 
 static void
@@ -981,6 +1052,8 @@ emit_block(struct sgx_ctx *c, nir_block *b, struct loop_labels *loop)
    nir_foreach_instr(instr, b) {
       if (c->failed)
          return;
+      if (_mesa_set_search(c->skip, instr))
+         continue;
       switch (instr->type) {
       case nir_instr_type_alu:
          emit_alu(c, nir_instr_as_alu(instr));
@@ -1095,7 +1168,24 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    nir_legacy_src ls = nir_legacy_chase_src(&tex->src[ci].src);
    unsigned ncoord = tex->coord_components;
    s->dependent = true;
-   if (ls.is_ssa && bi < 0 && pi < 0 && c->vals[ls.ssa->index].kind == VAL_PA) {
+   struct hash_entry *he = _mesa_hash_table_search(c->proj, tex);
+   if (he) {
+      nir_intrinsic_instr *load = he->data;
+      unsigned pa = c->vals[load->def.index].n;
+      for (unsigned i = 0; i < c->n_iters; i++) {
+         if (!c->iters[i].sample && c->iters[i].pa == pa && c->iters[i].comps == 4) {
+            s->dependent = false;
+            s->proj = true;
+            s->set = c->iters[i].set;
+            s->coord_pa = pa;
+         }
+      }
+      if (s->dependent) {
+         sgx_fail(c, "projected read of a varying that isn't iterated");
+         return;
+      }
+   } else if (ls.is_ssa && bi < 0 && pi < 0 && c->vals[ls.ssa->index].kind == VAL_PA) {
+      /* (a whole varying, or its first components) */
       unsigned pa = c->vals[ls.ssa->index].n;
       for (unsigned i = 0; i < c->n_iters; i++) {
          if (!c->iters[i].sample && c->iters[i].pa == pa && c->iters[i].comps >= ncoord) {
@@ -1112,6 +1202,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    if (!s->dependent) {
       struct sgx_iter *it = &c->iters[c->n_iters++];
       it->sample = true;
+      it->proj = s->proj;
       it->sampler = s->sampler;
       it->set = s->set;
       it->comps = 0;
@@ -1124,6 +1215,23 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       struct sgx_ref cr[4];
       for (unsigned k = 0; k < ncoord; k++)
          cr[k] = src_comp(c, &ls, k);
+      if (pi >= 0) {
+         /* projective: no smp bit for it, divide first */
+         nir_legacy_src lp = nir_legacy_chase_src(&tex->src[pi].src);
+         unsigned q = new_vreg(c, 1), t = new_vreg(c, ncoord);
+         struct sgx_ref qd[4] = { vref(q, 0) }, qs[1][4] = { { src_comp(c, &lp, 0) } };
+         emit_runs(c, USSE_FRCP, 1, qd, 1, qs, &NOF, 0);
+         struct sgx_ref td[4], ts[3][4];
+         for (unsigned k = 0; k < 4; k++) {
+            td[k] = vref(t, k);
+            ts[0][k] = k < ncoord ? cr[k] : cref(48);
+            ts[1][k] = vref(q, 0);
+            ts[2][k] = ref(SGX_F_K, 0x80000000);
+         }
+         emit_runs(c, USSE_FMAD, nir_component_mask(ncoord), td, 3, ts, &NOF, 0);
+         for (unsigned k = 0; k < ncoord; k++)
+            cr[k] = vref(t, k);
+      }
       bool run = !cr[0].neg && !cr[0].abs && cr[0].file != SGX_F_K && cr[0].file != SGX_F_C;
       for (unsigned k = 1; k < ncoord; k++)
          run &= ref_next(&cr[k - 1], &cr[k]);
@@ -1441,6 +1549,10 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
 
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
    c->vals = rzalloc_array(c, struct sgx_val, impl->ssa_alloc + 1);
+   c->skip = _mesa_pointer_set_create(c);
+   c->proj = _mesa_pointer_hash_table_create(c);
+   if (c->stage == MESA_SHADER_FRAGMENT)
+      find_projected(c, impl);
    emit_cf_list(c, &impl->body, NULL);
    if (!c->failed && c->stage == MESA_SHADER_FRAGMENT)
       emit_color(c);

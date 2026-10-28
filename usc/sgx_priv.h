@@ -79,6 +79,7 @@ struct sgx_vreg {
 struct sgx_iter {
    unsigned set, comps, pa;
    bool sample;         /* non-dependent sample entry (list A) */
+   bool proj;           /* ... iterated projected (x/w, y/w) */
    unsigned sampler;
 };
 
@@ -132,6 +133,9 @@ struct sgx_ctx {
    unsigned colour_pa;
    struct sgx_sample *samples[16];
    unsigned n_samples;
+
+   struct set *skip;             /* NIR instructions the backend doesn't emit */
+   struct hash_table *proj;      /* nir_tex_instr -> its projected varying load */
 
    /* results */
    unsigned n_temps, n_pa;

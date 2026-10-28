@@ -137,7 +137,7 @@ sample_blocks(struct buf *b, struct sgx_ctx *c, struct sgx_sample *s)
       }
    }
    u32(b, 5);
-   u16(b, s->dependent ? 0 : 1);
+   u16(b, s->dependent ? 0 : 1 | (s->proj ? 2 : 0));
    moe_state(b);
    u32(b, s->id);
    u16(b, 0);                    /* iflags */
@@ -193,7 +193,8 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
       for (unsigned i = 0; i < c->n_iters; i++) {
          struct sgx_iter *it = &c->iters[i];
          if (it->sample) {
-            u16(&b, 0); u16(&b, it->sampler); u16(&b, it->set + 1); u16(&b, 0); u16(&b, 0); u16(&b, 1);
+            /* flags 1 = projected (corpus c3 tx_nd_proj4) */
+            u16(&b, it->proj ? 1 : 0); u16(&b, it->sampler); u16(&b, it->set + 1); u16(&b, 0); u16(&b, 0); u16(&b, 1);
             n_pa = MAX2(n_pa, it->pa + 1);
          } else {
             u16(&b, 4); u16(&b, 0); u16(&b, it->set + 1); u16(&b, it->comps); u16(&b, 1); u16(&b, it->comps);

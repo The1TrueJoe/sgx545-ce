@@ -7,9 +7,12 @@
 
 #include "nir.h"
 #include "nir_builder.h"
+#include "nir_deref.h"
 #include "nir_legacy.h"
 
 #include "sgx_priv.h"
+
+static int lookup(const struct sgx_named *t, unsigned n, const char *name);
 
 static const nir_shader_compiler_options options = {
    .lower_fdiv = true,
@@ -184,10 +187,38 @@ lower_sincos(nir_shader *s)
    return nir_shader_alu_pass(s, lower_sincos_instr, nir_metadata_control_flow, NULL);
 }
 
-/* sampler derefs -> texture/sampler indices (the variable's unit) */
+/* sampler derefs -> texture/sampler indices. The USP's sampler number is
+ * glslcompiler's: it counts the samplers a shader uses, in order of use
+ * (corpus c3 tx_nd_s1: s1 alone is sampler 0; tx_nd_two: s, s1 = 0, 1),
+ * unless the caller pinned it (-s). */
+struct tex_ctx {
+   struct sgx_ctx *c;
+   nir_variable *seen[16];
+   unsigned n;
+};
+
+static unsigned
+sampler_number(struct tex_ctx *t, nir_variable *var)
+{
+   const struct sgx_compile_options *o = t->c->opts;
+   int pinned = lookup(o->samplers, o->n_samplers, var->name);
+   if (pinned >= 0)
+      return pinned;
+   unsigned next = 0;
+   for (unsigned i = 0; i < o->n_samplers; i++)
+      next = MAX2(next, (unsigned)o->samplers[i].value + 1);
+   for (unsigned i = 0; i < t->n; i++)
+      if (t->seen[i] == var)
+         return next + i;
+   if (t->n < 16)
+      t->seen[t->n++] = var;
+   return next + t->n - 1;
+}
+
 static bool
 lower_tex_derefs_instr(nir_builder *b, nir_instr *instr, void *data)
 {
+   struct tex_ctx *tc = data;
    if (instr->type != nir_instr_type_tex)
       return false;
    nir_tex_instr *tex = nir_instr_as_tex(instr);
@@ -197,7 +228,7 @@ lower_tex_derefs_instr(nir_builder *b, nir_instr *instr, void *data)
       if (t != nir_tex_src_texture_deref && t != nir_tex_src_sampler_deref)
          continue;
       nir_variable *var = nir_deref_instr_get_variable(nir_src_as_deref(tex->src[i].src));
-      unsigned unit = var ? var->data.binding : 0;
+      unsigned unit = var ? sampler_number(tc, var) : 0;
       if (t == nir_tex_src_texture_deref)
          tex->texture_index = unit;
       else
@@ -209,9 +240,92 @@ lower_tex_derefs_instr(nir_builder *b, nir_instr *instr, void *data)
 }
 
 static bool
-lower_tex_derefs(nir_shader *s)
+lower_tex_derefs(struct sgx_ctx *c)
 {
-   return nir_shader_instructions_pass(s, lower_tex_derefs_instr, nir_metadata_control_flow, NULL);
+   struct tex_ctx t = { .c = c };
+   return nir_shader_instructions_pass(c->nir, lower_tex_derefs_instr, nir_metadata_control_flow, &t);
+}
+
+/* ------------------------------------------------------------------------
+ * uniforms -> load_uniform with base = the constant number of the first
+ * component. Each deref step adds vec4-aligned offsets (array elements,
+ * struct members, matrix columns), unless the caller numbered that member
+ * itself (-u var.member=k): glslcompiler's layout of struct members isn't
+ * known, so it can be pinned member by member. */
+
+static unsigned
+slots4(const struct glsl_type *t)
+{
+   return 4 * glsl_count_vec4_slots(t, false, false);
+}
+
+struct unif_ctx {
+   struct sgx_ctx *c;
+   bool failed;
+};
+
+static bool
+lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   struct unif_ctx *u = data;
+   if (in->intrinsic != nir_intrinsic_load_deref)
+      return false;
+   nir_deref_instr *d = nir_src_as_deref(in->src[0]);
+   if (!nir_deref_mode_is(d, nir_var_uniform))
+      return false;
+   nir_deref_path path;
+   nir_deref_path_init(&path, d, NULL);
+   nir_variable *var = path.path[0]->var;
+   if (glsl_type_is_sampler(glsl_without_array(var->type))) {
+      nir_deref_path_finish(&path);
+      return false;
+   }
+   char name[256];
+   snprintf(name, sizeof name, "%s", var->name);
+   unsigned k = var->data.driver_location;
+   const struct glsl_type *t = var->type;
+   for (unsigned i = 1; path.path[i]; i++) {
+      nir_deref_instr *p = path.path[i];
+      if (p->deref_type == nir_deref_type_struct) {
+         for (unsigned f = 0; f < p->strct.index; f++)
+            k += slots4(glsl_get_struct_field(t, f));
+         size_t l = strlen(name);
+         snprintf(name + l, sizeof name - l, ".%s", glsl_get_struct_elem_name(t, p->strct.index));
+         int pinned = lookup(u->c->opts->uniforms, u->c->opts->n_uniforms, name);
+         if (pinned >= 0)
+            k = pinned;
+         t = glsl_get_struct_field(t, p->strct.index);
+      } else if (p->deref_type == nir_deref_type_array && nir_src_is_const(p->arr.index)) {
+         const struct glsl_type *e = glsl_type_is_matrix(t) ? glsl_get_column_type(t) : glsl_get_array_element(t);
+         k += nir_src_as_uint(p->arr.index) * slots4(e);
+         size_t l = strlen(name);
+         snprintf(name + l, sizeof name - l, "[%u]", (unsigned)nir_src_as_uint(p->arr.index));
+         int pinned = lookup(u->c->opts->uniforms, u->c->opts->n_uniforms, name);
+         if (pinned >= 0)
+            k = pinned;
+         t = e;
+      } else {
+         u->failed = true;
+         nir_deref_path_finish(&path);
+         return false;
+      }
+   }
+   nir_deref_path_finish(&path);
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def *v = nir_load_uniform(b, in->def.num_components, in->def.bit_size, nir_imm_int(b, 0),
+                                 .base = k, .range = in->def.num_components, .dest_type = nir_type_float32);
+   nir_def_replace(&in->def, v);
+   return true;
+}
+
+static bool
+lower_uniforms(struct sgx_ctx *c)
+{
+   struct unif_ctx u = { c, false };
+   bool p = nir_shader_intrinsics_pass(c->nir, lower_uniform_instr, nir_metadata_control_flow, &u);
+   if (u.failed)
+      sgx_fail(c, "indirectly indexed uniform (not supported yet)");
+   return p;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -383,10 +497,15 @@ assign_io(struct sgx_ctx *c)
    for (unsigned i = 0; i < o->n_uniforms; i++)
       next = MAX2(next, (unsigned)o->uniforms[i].value + 4);
    next = ALIGN_POT(next, 4);
+   unsigned next_sampler = 0;
+   for (unsigned i = 0; i < o->n_samplers; i++)
+      next_sampler = MAX2(next_sampler, (unsigned)o->samplers[i].value + 1);
    nir_foreach_uniform_variable(var, s) {
       if (glsl_type_is_sampler(glsl_without_array(var->type))) {
+         /* the USP's sampler number: glslcompiler counts the samplers a
+          * shader uses (corpus c3 tx_nd_s1: s1 alone is sampler 0) */
          int u = lookup(o->samplers, o->n_samplers, var->name);
-         var->data.binding = u >= 0 ? u : var->data.location >= 0 ? var->data.location : 0;
+         var->data.binding = u >= 0 ? (unsigned)u : next_sampler++;
          continue;
       }
       int k = lookup(o->uniforms, o->n_uniforms, var->name);
@@ -415,12 +534,11 @@ sgx_lower(struct sgx_ctx *c)
     * variables, they name the varyings) */
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
-   NIR_PASS(_, s, lower_tex_derefs);
-   /* projective reads: divide first (there is no smp bit for it) */
-   NIR_PASS(_, s, nir_lower_tex, &(nir_lower_tex_options){ .lower_txp = ~0u });
+   lower_tex_derefs(c);
 
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, 0);
-   NIR_PASS(_, s, nir_lower_io, nir_var_uniform, type_size_comps, 0);
+   lower_uniforms(c);
+   NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, lower_sincos);
    optimize(s);
 
