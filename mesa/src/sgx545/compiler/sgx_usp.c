@@ -374,6 +374,38 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
    put16(&b, 0x80, n_inmask);
    put16(&b, 0x82, 0x80);
 
+   /* the same, decoded, for a driver that doesn't read USPs */
+   out->sa_base = c->sa_base;
+   out->n_consts = 0;
+   for (unsigned k = 0; k < ARRAY_SIZE(c->const_used) && out->n_consts < ARRAY_SIZE(out->consts); k++) {
+      if (c->const_slot[k] < 0)
+         continue;
+      struct sgx_const_map *m = &out->consts[out->n_consts++];
+      m->k = k;
+      m->slot = c->const_slot[k];
+      m->shift = c->const_shift[k];
+      m->fmt = c->const_fmt[k] ? c->const_fmt[k] : 1;
+   }
+   out->n_iters = frag ? MIN2(c->n_iters, ARRAY_SIZE(out->iters)) : 0;
+   for (unsigned i = 0; i < out->n_iters; i++) {
+      struct sgx_iter *it = &c->iters[i];
+      struct sgx_iter_info *o = &out->iters[i];
+      o->set = it->set;
+      o->comps = it->comps;
+      o->pa = it->pa;
+      o->regs = it->sample ? 1 : it->f16 ? (it->comps + 1) / 2 : it->comps;
+      o->f16 = it->f16;
+      o->sample = it->sample;
+      o->proj = it->proj;
+      o->sampler = it->sampler;
+   }
+   out->colour_pa = c->colour_pa;
+   out->discards = c->discards;
+   memcpy(out->in_mask, inmask, sizeof(inmask));
+   for (unsigned i = 0; i < SGX_MAX_SETS; i++)
+      out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];
+   out->point_size = !frag && c->vary->point_size;
+   out->n_out_regs = frag ? 0 : c->n_out_regs;
    out->usp = malloc(b.d.size);
    memcpy(out->usp, b.d.data, b.d.size);
    out->usp_size = b.d.size;
