@@ -17,9 +17,13 @@
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
 
-/* A fence is every render submitted before it (they run in order). */
+/* A fence: the renders submitted before it, up to its kick number (renders
+ * finish in order).  Waiting for idle here made the swap's throttle (DRI
+ * waits on the previous frame's fence) wait for the frame just submitted, so
+ * CPU and GPU took turns every frame. */
 struct sgx545_fence {
    struct pipe_reference reference;
+   uint32_t seq;
 };
 
 static void
@@ -38,9 +42,9 @@ sgx545_fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
    struct sgx545_screen *screen = sgx545_screen(pscreen);
    bool done;
 
-   /* every render submitted before the fence: renders run in order */
    simple_mtx_lock(&screen->lock);
-   done = !screen->hw || !sgxws_wait_idle(screen->hw, timeout ? 2000 : 0);
+   done = !screen->hw ||
+          !sgxws_wait_seq(screen->hw, ((struct sgx545_fence *)fence)->seq, timeout ? 2000 : 0);
    simple_mtx_unlock(&screen->lock);
    return done;
 }
@@ -99,7 +103,11 @@ sgx545_stats_report(struct sgx545_context *ctx)
    /* the thread's own CPU time: the rest of the window it waited */
    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
    cpu = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
-   fprintf(stderr, "sgx545 stats: thread CPU %.0f ms of %.0f\n", (cpu - ctx->stats.cpu0) * ms, dt * ms);
+   fprintf(stderr, "sgx545 stats: thread CPU %.0f ms of %.0f; flush: kick %.0f, target wait %.0f, slot wait %.0f ms\n",
+           (cpu - ctx->stats.cpu0) * ms, dt * ms, ctx->hw ? ctx->hw->ns_kick * ms : 0,
+           ctx->hw ? ctx->hw->ns_target_wait * ms : 0, ctx->hw ? ctx->hw->ns_slot_wait * ms : 0);
+   if (ctx->hw)
+      ctx->hw->ns_kick = ctx->hw->ns_target_wait = ctx->hw->ns_slot_wait = 0;
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
            dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,
@@ -132,6 +140,7 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
       struct sgx545_fence *f = CALLOC_STRUCT(sgx545_fence);
 
       pipe_reference_init(&f->reference, 1);
+      f->seq = ctx->hw ? ctx->hw->kicks : 0;
       *fence = NULL;
       sgx545_fence_reference(pctx->screen, fence, (struct pipe_fence_handle *)f);
       sgx545_fence_reference(pctx->screen, (struct pipe_fence_handle **)&f, NULL);

@@ -1370,6 +1370,15 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    s->hwsync_access.map[0] = 1;
 }
 
+static uint64_t
+now_ns(void)
+{
+   struct timespec ts;
+
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+}
+
 static bool
 token_done(const struct sgxws_token *t)
 {
@@ -1420,6 +1429,21 @@ sgxws_done_seq(struct sgxws_ctx *c)
 }
 
 int
+sgxws_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
+{
+   /* a kick no longer in its slot's token was waited for when the slot was
+    * used again; the others up to seq are waited for here */
+   for (unsigned i = 0; i < SGXWS_SLOTS; i++) {
+      struct sgxws_token *t = &c->slot_token[i];
+
+      if (sgxws_seq_after(t->seq, c->done_seq) && !sgxws_seq_after(t->seq, seq) &&
+          slot_wait(c, i, timeout_ms))
+         return -ETIMEDOUT;
+   }
+   return 0;
+}
+
+int
 sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms)
 {
    int e = 0;
@@ -1467,9 +1491,14 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    /* the target's previous render reads its render details until it is
     * done; its slot's token is that render's until the slot is used again,
     * which waits for it */
-   if ((int32_t)(s->seq - c->done_seq) > 0 && c->slot_token[s->seq_slot].seq == s->seq &&
-       slot_wait(c, s->seq_slot, 2000))
-      ws_err("the target's last render did not finish\n");
+   {
+      uint64_t t0 = now_ns();
+
+      if ((int32_t)(s->seq - c->done_seq) > 0 && c->slot_token[s->seq_slot].seq == s->seq &&
+          slot_wait(c, s->seq_slot, 2000))
+         ws_err("the target's last render did not finish\n");
+      c->ns_target_wait += now_ns() - t0;
+   }
    rd = s->rd.map;
    rd[0x5c / 4] = c->pixev;
    rd[0x60 / 4] = c->pixev_rows;
@@ -1494,7 +1523,10 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
       e = pvr_kick_traced(&c->dev->pvr, &k, 0);     /* traced, not sent */
    } else {
+      uint64_t t0 = now_ns();
+
       e = pvr_kick(&c->dev->pvr, &k);
+      c->ns_kick += now_ns() - t0;
       if (e) {
          ws_err("SGX_DOKICK failed: %d\n", e);
       } else if (c->target.sync_data) {
@@ -1525,8 +1557,13 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    c->rt = NULL;
    /* the next frame records into the next slot, once the render there is done */
    c->slot = (c->slot + 1) % SGXWS_SLOTS;
-   if (slot_wait(c, c->slot, 2000) && !e)
-      e = -ETIMEDOUT;
+   {
+      uint64_t t0 = now_ns();
+
+      if (slot_wait(c, c->slot, 2000) && !e)
+         e = -ETIMEDOUT;
+      c->ns_slot_wait += now_ns() - t0;
+   }
    ring_use_slot(&c->pds_pix, c->slot);
    ring_use_slot(&c->pds_vtx, c->slot);
    ring_use_slot(&c->gen, c->slot);

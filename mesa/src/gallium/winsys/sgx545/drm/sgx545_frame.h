@@ -244,6 +244,7 @@ struct sgxws_ctx {
    unsigned slot;
    struct sgxws_token slot_token[SGXWS_SLOTS];
    uint32_t kicks, done_seq;         /* kicks submitted, the last one known done */
+   uint64_t ns_kick, ns_target_wait, ns_slot_wait;   /* where sgxws_flush's time goes (stats) */
    uint32_t pixev, pixev_rows;       /* the recording frame's pixel event, for its kick */
    unsigned frames;
 };
@@ -312,6 +313,8 @@ int sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d);
 int sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms);
 /* wait for every submitted render */
 int sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms);
+/* wait for the renders up to kick number seq (0 when done; timeout 0 polls) */
+int sgxws_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms);
 /* the last kick known done, looking without waiting; the kick number the
  * frame being recorded will get (renders finish in kick order) */
 uint32_t sgxws_done_seq(struct sgxws_ctx *c);
