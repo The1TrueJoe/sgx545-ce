@@ -218,7 +218,9 @@ program may hold several HALTs, as branch targets.
     programs use bases 10+ at 0x3c000000 + (n−10)·512K.
   - Confirmed: every DOUTU in 13 captures lands on a captured USSE buffer.
 - bits 24–31: `(n+3)>>2` for a per-shader count from GL, probably the
-  temporary register count in fours. Guess.
+  temporary register count in fours. Consistent with hardware: the probe's
+  main pixel program has 0 here, and with 4 poked in (isa/hwt.py) a test
+  program uses r0-r15 correctly on the EA3. Not shown: that 0 breaks them.
 
 **Word 1:**
 

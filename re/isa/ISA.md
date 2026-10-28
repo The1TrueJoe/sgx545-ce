@@ -23,7 +23,11 @@ Every field below carries one of these tags:
 - **corpus**: what the GLSL compiler emits for a one-feature shader
   (`gen.py`, `gen2.py`, `gen3.py`; corpora `corpus/c1..c3`), or what
   toggling that feature changes.
-- **hardware**: drawn on the EA3 (re/NOTES.md, the replayer).
+- **hardware**: drawn on the EA3 (re/NOTES.md, the replayer). Most of these come from
+  `hwt.py`: a hand-assembled fragment program moves its result to `o0`, which
+  the PBE stores unchanged, so one pixel of the back buffer is the 32-bit
+  register. Each hardware tag names the test (`hwt_<suite>.py` / test name;
+  logs in `hwt_out/`). See "Hardware checks" below.
 - **writer / reader / driver**: read from libusc's USP writer, the GLES
   driver's USP loader, or the rest of libGLESv2 (finalizer, draw-time
   program builder, linker) and libglslcompiler, in Ghidra decompiles
@@ -43,6 +47,7 @@ high word; an instruction is stored low word first.
 | `hw.py`, `hw_*.py` | the instruction forms (framework + one module per group of classes); `decode`, `encode`, `fmt`, `parse` |
 | `dis.py` | disassemble USP binaries (`python3 dis.py corpus/c3`) or hex words (`-x hi lo`) |
 | `asm.py` | assemble dis.py's text; `--check` runs `hwcheck.py`. Also accepts the older fields.json syntax (`asm_fz.py`) for existing callers |
+| `hwt.py`, `hwt_lib.py`, `hwt_*.py`, `hwt_out/` | run hand-assembled fragment programs on the EA3 through the replay and read the result register back from the back buffer; one suite per area, logs per suite |
 | `hwcheck.py` | every corpus word: has a form, no unexplained bit, text round-trips |
 | `check_float.py`, `check_pack.py`, `check_int.py`, `check_mem.py` | oracle sweeps per area (run from the scratchpad with `LIBUSC=` and the venv that has unicorn) |
 | `usp.py`, `smpblock.py` | the USP container and its texture-sample blocks |
@@ -52,6 +57,28 @@ high word; an instruction is stored low word first.
 Status: all 4154 instructions (1570 distinct) of the three corpora decode
 with no unexplained bit and round-trip (`python3 hwcheck.py`), and the four
 oracle sweeps pass (about 20,000 encoder outputs).
+
+## Hardware checks (hwt.py, EA3, 2026-10-28)
+
+    python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, EA3SH set; see hwt.py)
+
+Each test is a main pixel program poked into the probe frame's replay (main
+program at 0x37008388, its DOUTU given 16 temporaries) that ends `mov o0, rN
+[end]`; the PBE writes o0 unchanged, so the back buffer's pixels inside the
+triangle are rN (all 32 checked pixels equal; the background is the clear
+colour). Inputs come from `limm`. About 400 draws, no GPU hang or recovery.
+Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
+
+| suite | what | result |
+|---|---|---|
+| hwt_sanity | limm, mov to o0, c52, r15 | readout path exact |
+| hwt_p1 | fmad modifiers; fadm/fmsa/fsubflr; repeat with moe / inc0-2 / none / rpt=2; fmt + .f16 in each slot | confirmed; fadm/fmsa formulas found; **.f16 numbers count halves** |
+| hwt_p2 | movc 4 conds x 5 types; test 6 conds + neg/pos; p0-p3, !p; testmask; br offsets, loop, predicated br | confirmed; movc u8/i16/c10 are per byte / half / channel, signed; f32 denormal = 0, NaN only nz |
+| hwt_p3 | frcp frsq flog2 fexp2 fsqrt fsin fcos values; src modifiers; f16/c10 source + chan; rpt vs mask; c0-c63 | sin/cos argument in quarter turns; **h2 = F16 destination**; C10 = clamp(v/255, ±2); **c46/c47 = F16 (1,1)**, c57-c63 |
+| hwt_p4 | fminmax/fmaxmin (all orders); fmad16 swizzles x 3 sources; pck dmask lanes, u8/s16/f16 rounding, rint rnd 0-3, u8 unpack lanes | confirmed; swizzle 0-3 = lohi, lolo, hihi, f32; rnd = nearest-even, down, up, zero; **f32 -> f16 truncates** |
+| hwt_p5 | fadm/fmsa on new inputs; h2 partial write; C10 chan 3 and range | as above |
+| hwt_ba | ba absolute target | instruction index from the code base |
+| hwt_p6 | sop2 U8 select/add/sub/mul; C10 operands with each setfc | **setfc's 2nd argument is the C10 enable, on at start** |
 
 ## Instruction classes
 
@@ -99,9 +126,13 @@ source's is bank 0 + extension. src0 can't be indexed.
 ### Hardware constants (c<n>)
 
 libusc's table of the hardware's special constants
-(`USEASM_NUM_HW_SPECIAL_CONSTS`, regpack.c; **encoder**, values as libusc
-believes them; c48 = 0.0, c52 = 1.0, c4 = 2.0, c14 = 0.5, c45 = F16 (1, 1)
-also **hardware**/**corpus**):
+(`USEASM_NUM_HW_SPECIAL_CONSTS`, regpack.c; **encoder**), every entry read
+back on the EA3 (**hardware**, hwt_p3 `c0`..`c63`: `mov o0, cN`). The table
+below is the hardware's; two rows differ from libusc's: **c46 and c47 are the
+F16 pair (1.0, 1.0) = 0x3c003c00 like c45** (libusc says 0.5 and 1.0), and
+c57-c63 exist (libusc stops at c56). c28-c44 are the correctly rounded f32
+values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
+0x35d00d01, c44 = 0x3caaaaab).
 
 | c | value | c | value | c | value |
 |---|---|---|---|---|---|
@@ -111,8 +142,9 @@ also **hardware**/**corpus**):
 | 33 | π/2 | 34 | π | 35 | 1/π |
 | 36 | 2/π | 37 | 4/π | 38 | 2π |
 | 39 | 2^-16 | 40-44 | sin/cos series coefficients (1.55e-6, 2.17e-5, 2.60e-4, 2.60e-3, 0.0208) | 45 | F16 pair (1.0, 1.0) (EURASIA_USE_SPECIAL_CONSTANT_FLOAT16ONE) |
-| 46 | 0.5 | 47 | 1.0 | 48-51 | 0.0 (four, for vec4 repeats) |
-| 52-55 | 1.0 (four) | 56 | 0xffffffff (EURASIA_USE_SPECIAL_CONSTANT_INT32ONE) | | |
+| 46 | F16 pair (1.0, 1.0) (hardware; libusc: 0.5) | 47 | F16 pair (1.0, 1.0) (hardware; libusc: 1.0) | 48-51 | 0.0 (four, for vec4 repeats) |
+| 52-55 | 1.0 (four) | 56 | 0xffffffff (EURASIA_USE_SPECIAL_CONSTANT_INT32ONE) | 57-59 | 0xffffffff (hardware) |
+| 60-63 | 0x7fff7fff (hardware; F16 NaN pair, or two s16 maxima) | | | | |
 
 ## Float, moves and dual issue (hw 00-06, 1b)
 
@@ -155,13 +187,20 @@ aliases i0-i3 onto r124-r127 (the encoder relies on it).
 | hw6 | - | fmad16 |
 
 All sub-op values **encoder**; hw1 names **corpus** (one-op shaders); hw0
-fmad/fsubflr **corpus**, fadm/fmsa names **guess** (IMG enum order).
+fmad/fsubflr **corpus**. Semantics **hardware** (hwt_p1, hwt_p5): fmad =
+s0*s1 + s2; **fadm = (s0 + s1) * s2**; **fmsa = s0*s0 + s1*s2**; fsubflr(a,
+b) = a - floor(b) (2.75, 1.5 -> 1.75; -2.75, -2.75 -> 0.25). Each checked on
+two or three operand sets (fadm (-3, 5, 7.5) -> 15, (2, 3, 4) -> 20,
+(0.5, -6, 3) -> -16.5; fmsa -> 46.5, 16, -17.75); the names stay IMG's enum
+order.
 fminmax/fmaxmin: libusc writes fmin(a, b) as hw3 sub 1 on (a, a, b) and
 fmax(a, b) as sub 0 on (a, b, a) (**encoder**: USEASM 0xc/0xd are rewritten
-to 0x11/0x12); so sub 1 = min(max(s0, s1), s2), sub 0 = max(min(s0, s2), s1)
-fit both (**guess** beyond those two uses).
+to 0x11/0x12). **hardware** (hwt_p4, all six orderings of (1, 2, 3)):
+**fminmax (sub 1) = min(max(s0, s1), s2)**, **fmaxmin (sub 0) = max(min(s0,
+s2), s1)**: a clamp is one instruction, `fminmax d, x, lo, hi`.
 
-Modifiers, 3-source ops (**encoder**): h7 = |src0|; src0 negate has no bit
+Modifiers, 3-source ops (**encoder**; each bit **hardware**, hwt_p1 `fmad_*`:
+-|src1| and -|src2| combine as expected): h7 = |src0|; src0 negate has no bit
 (libusc folds it into src1's negate for fmad/fmad16/fddp and into src1 and
 src2 for fadm; fmsa rejects it); h5/h6 = -src1 / |src1|; h3/h4 = -src2 /
 |src2|. Two-source ops: src1 h5/h6, src2 h3/h4.
@@ -170,29 +209,57 @@ Repeat (FUN_00107080, SGX545 path, **encoder**): hw0/2/3/4: h12-13 =
 repeat count - 1 (a write mask is turned into a count; at most 4). h21 = moe
 (operands step by the MOE increments; libusc INST_MOE). With h21 clear,
 h15/h14/h8 say whether the first/second/third source steps (USEASM flags2
-bits 29/30/31; **corpus**: bit 30 appears with a register second source,
-bit 31 with a register third source).
+bits 29/30/31). **hardware** (hwt_p1 `rpt_*`, fmad rpt=4 on r0-3/r4-7/r8-11):
+`moe` steps all three sources by 1 (the MOE state at program start is
+increment 1); `inc0`/`inc1`/`inc2` step src0/src1/src2 and nothing else; the
+destination steps on every iteration in all cases (no inc bit: four copies of
+the first result in r12-r15); rpt=2 stops after two (r14 untouched).
 hw1 (scalar): h21 = rcnt; set: h12-15 = count - 1 (1-16); clear: h12-15 =
-write mask.
+write mask. **hardware** (hwt_p3 `frcp_rpt4_*`, `frcp_mask*`): rcnt rpt=4
+on r0-r3 writes 1/r0..1/r3 to r4-r7; mask=5 writes r4 = 1/r0 and r6 = 1/r2
+only (bit n enables iteration n; source and destination step over all four);
+mask=0 writes nothing.
 
 h22 = fmt (format select, **encoder**): set when any source has USEASM
 argument flag 22; every source number then has 6 bits and number bit 6
 marks that source as F16 (`pa2.f16`). The destination is unaffected.
+**hardware correction** (hwt_p1 `f16_*`): **an F16 source's 6-bit number
+counts 16-bit halves, not registers**: `rN.f16` (as dis.py prints it) is
+register N>>1, half N&1 (0 = bits 0-15). With r0 = (lo 3.0, hi 2.0) and r1 =
+(5.0, 4.0), `r0.f16`, `r1.f16`, `r2.f16`, `r3.f16` read 3, 2, 5, 4, in all
+three source slots. So F16 operands reach only the first 32 registers of a
+bank. f32 sources of the same instruction keep whole-register numbers (0-63)
+(`fmt_f32`). This is how the corpus's `fmad r0, pa0.f16` / `fmad pa0,
+pa1.f16` pairs widen one mediump pa register's two halves.
 
 hw1 source format (**encoder**): h7 = F16 source (h3 picks the high half);
 h8 = packed source with h3-4 picking one of four channels (USEASM argument
-flag 24; c10/u8 **guess**). h2 = USEASM flags2 bit 22 (scalar ops only;
-meaning **unknown**).
+flag 24). h2 = USEASM flags2 bit 22. **hardware** (hwt_p3, hwt_p5):
+- F16 (h7): h3 = 0 low half, 1 high half; h4 is ignored (chan 2/3 read the
+  high half like chan 1). The register number is a whole register here.
+- h8 is **C10**: the channel is a signed 10-bit value v at bits 10*chan, read
+  as **clamp(v / 255, -2, 2)** (0x0ff = 1.0, 0x100 = 256/255, 0x1fe = 2.0,
+  0x1ff = 2.0, 0x3ff = -1/255, 0x300 = -256/255, 0x200/0x201 = -2.0).
+  chan 3 of a 32-bit register is bits 30-31 as an unsigned 2-bit value (0x40000000
+  -> 1/255; the 40-bit internal registers presumably hold a full 10-bit alpha).
+- **h2 = F16 destination**: with an F16 source, the result is written as F16
+  into the half the source half selects (h3), and the other half is
+  **zeroed** (r3 = 0x5a5a5a5a -> 0x00003400 for 1/4 from the low half,
+  0x38000000 for 1/2 from the high half). With an f32 source h2 does nothing
+  (f32 result). Under a repeat the half stays fixed and the registers step.
+  This is how the corpus's mediump scalar code (`frcp pa9, pa9 [f16 chan=1
+  f2_22]`) works in place.
 
 fmad16 (**encoder**): per-source swizzle (USEASM argument flags 25-26):
 src0 h9-10, src1 h13 + h18, src2 h21-22 (so fmad16 has no end bit); repeat
 1-2 in h12 (needs explicit increments h15/h14/h8). The swizzle value is
-libusc's FMAD16_SWIZZLE enum, passed through unchanged by asm.c: 0 each half
-reads its own half (no suffix), 1 `ll` both halves read the low half
-(LOWLOW), 2 `hh` both read the high half (HIGHHIGH), 3 `f32` the source is
-F32 and is converted (CVTFROMF32). **encoder** for the bits; the names are
-libusc's (f16opt.c asserts compare against LOWLOW = 1, HIGHHIGH = 2,
-CVTFROMF32 = 3).
+libusc's FMAD16_SWIZZLE enum, passed through unchanged by asm.c (f16opt.c
+asserts compare against LOWLOW = 1, HIGHHIGH = 2, CVTFROMF32 = 3), printed
+as no suffix / `ll` / `hh` / `f32`: **hardware** (hwt_p4 `fmad16_swz*`, the
+same for all three sources): 0 = (lo, hi) as stored, 1 = (lo, lo), 2 = (hi,
+hi), 3 = the register read as one f32 and converted to F16 for both lanes
+(r0 = f32 1.5 -> 1.5 in both; r0 = H(2, 3) = f32 32.06 -> 32.06). fmad16
+computes both lanes (r0 = (2, 3), r1 = (5, 7), r2 = (0.25, 0.5) -> (10.25, 21.5)).
 
 fdpc (**encoder**): fdp + clip-plane result cp0-7 (USEASM register type
 0xd) in l15-17, l14 set. Needs a multi-channel repeat or mask.
@@ -219,6 +286,20 @@ clear), bits 2-3 zero test (1 zero, 2 nonzero), bit 4 AND instead of OR
 libusc's test types (asm.c g_auEncodeTest) are, in order: always, >0, >=0,
 ==0, <0, <=0, !=0, sign clear, sign set (specs 0x10, 0x1a, 0x6, 0x14, 0x19,
 0x5, 0x18, 0x12, 0x11).
+
+**hardware** (hwt_p2 `movc_*`, s1 = 0x11111111, s2 = 0x22222222):
+- **f32**: `z` true for +0, -0 and a denormal (0x00000001: denormals are
+  zero); `ltz` true only for a negative normal number (-0 and NaN are not
+  < 0); `gez` true for +0, -0, positives and the denormal, false for NaN;
+  `nz` true for NaN. So NaN is nz but neither ltz nor gez.
+- **i32**: two's complement on the whole word (0x80000000 and 0xffffffff
+  are ltz).
+- **u8**: **per byte**, signed (bit 7 is the sign): s0 = 0x00ff8001 with
+  `ltz` takes bytes 1 and 2 from s1 (0x22111122). The name u8 is libusc's.
+- **i16**: per 16-bit half, signed.
+- **c10**: per 10-bit channel (bits 0-9, 10-19, 20-29), signed: s0 =
+  0x3ff00200 with `ltz` takes channels 0 and 2 from s1 (0x11122111). (Bits
+  30-31 were equal in s1 and s2, so not seen.)
 
 USEASM mov with a register-type-9 operand encodes on hw 1f (`f80000c0`:
 type 9 <- src1; `f8000100`: dst <- type 9); see the "smp, ld/st, and the special class" section.
@@ -292,7 +373,7 @@ oracle; **corpus** = what GLSL produces it; **guess** = name/meaning not backed.
 | h20 | syncs | flags1 b2 | encoder |
 | h18 | end (pck, bitwise only) | flags1 b17 (test rejects it) | encoder |
 | h21 | rcnt (pck, bitwise) | set when flags1 repeat count n>0 | encoder |
-| h12-15 | rpt = n (stored n-1) when rcnt; else mask = flags1 b9-12 verbatim | flags1 b4-8 / b9-12 | encoder; "mask" = per-iteration enable mask is a **guess** (compiler always writes 1) |
+| h12-15 | rpt = n (stored n-1) when rcnt; else mask = flags1 b9-12 verbatim | flags1 b4-8 / b9-12 | encoder; per-iteration write enable: **hardware** for the scalar class (hwt_p3 `frcp_mask5_*`), assumed the same here |
 
 ### hw 08: `pck.<dst>.<src>` (FUN_001165c0)
 
@@ -311,7 +392,7 @@ offset/biased 8-bit format is a **guess**.
 | l16-17 | src1 lane (`.l<n>`) | USEASM arg1 flags b5-6 | encoder; meaning by source format is corpus: 8-bit sources pick a byte (`pck.u8.u8 pa9, pa9.l3`), 16-bit sources use 0/2 = low/high half (`pck.f16.f16 pa9, r0, pa9.l2`), c10 picks the 10-bit channel (`pck.f16.c10 pa11, i2.l2, i2.l1`) |
 | l14-15 | src2 lane | USEASM arg2 flags b5-6 | encoder, as above |
 | l18 | `scale` (pairs with one float side): flags2 b8. `rint` (float->float pairs): flags1 b24. Int->int pairs: encoder never sets it | encoder for the sources. scale = normalise (corpus: every F32->U8 colour write has it). rint: libusc's own trunc (intermediate op 0x96, the fast path of icvt_i32.c's TRC, `psTrcSrc` assert) is `pck.f32.f32 [rint rnd=zero]` -> round to integral with `rnd` (**encoder**+compiler code; the name is ours) |
-| l19-20 | rnd | arg3 must be type 0x10: USEASM 0x3a -> 0, 0x39 -> 1, 0x3b -> 2, 0 -> 3. Required for float->float pairs; with `scale` on float<->int pairs; otherwise not encoded | encoder for the mapping. 0 = nearest (compiler default, used for every corpus conversion), 3 = toward zero (the trunc above) are compiler-backed; 1 = down, 2 = up is a **guess** (x86 RC order) |
+| l19-20 | rnd | arg3 must be type 0x10: USEASM 0x3a -> 0, 0x39 -> 1, 0x3b -> 2, 0 -> 3. Required for float->float pairs; with `scale` on float<->int pairs; otherwise not encoded | encoder for the mapping. **hardware** (hwt_p4 `rint_*`, `pck.f32.f32 [rint]` on ±2.5, ±1.7, 3.5, 0.5): **0 = nearest-even, 1 = down (floor), 2 = up (ceil), 3 = toward zero**. It does **not** affect `pck.f16.f32` (always truncates, below) or `pck.u8.f32 [scale]` (always nearest) |
 | l21-27, h0-1, h19 | dst | r o pa sa g i ix | encoder |
 | l7-13, l30-31, h17 | src1 | r o pa sa c g # i ix | encoder |
 | l0-6, l28-29, h16 | src2 | same | encoder |
@@ -319,8 +400,20 @@ offset/biased 8-bit format is a **guess**.
 Notes:
 - Two sources: the compiler packs two values per instruction (corpus:
   `pck.u8.f32 pa9, pa9, pa13 [dmask=6]` then `... [dmask=9]` builds RGBA8),
-  and a one-value conversion passes #0 as src2. Which source lands in which
-  enabled lane (src1 low, src2 high) is a **guess**.
+  and a one-value conversion passes #0 as src2. **hardware** (hwt_p4
+  `pck_u8_dmask*`, and NOTES.md's colour draws): the enabled bytes, from
+  low to high, take src1, src2, src1, src2 (dmask 3 -> byte 0 src1, byte 1
+  src2; dmask 9 -> byte 0 src1, byte 3 src2; dmask 15 -> bytes 0/2 src1,
+  1/3 src2; a single enabled byte takes src1). Disabled bytes keep the old
+  value. `pck.s16.f32 d, a, b` puts a in bits 0-15, b in 16-31.
+- Conversions, **hardware** (hwt_p4): f32 -> u8 `scale` is x*255 rounded to
+  nearest and clamped to 0-255 (-0.1 -> 0, 1.5 -> 255, 0.7 -> 178, 1/510 ->
+  1), whatever rnd says. f32 -> s16 rounds to nearest-even (2.5 -> 2, 1.7 ->
+  2) and saturates (±70000 -> 0x7fff / 0x8000). **f32 -> f16 truncates**
+  (toward zero: 1 + 3*2^-12 -> 1.0, -(1 + 3*2^-12) -> -1.0) for every rnd
+  value, so a compiler wanting round-to-nearest F16 has to do it some other
+  way (fmad16's own rounding was not tested). u8 -> f32: `.l<n>` is byte n;
+  with `scale` the result is b/255 (0x99 -> 0.6), without it the integer.
 - Immediates are 7 bits. The encoder range-checks them as signed for USEASM
   ops that unpack from s8/o8/c10/s16 (local_44 = 1: 0x35-0x37, 0x3a, 0x3c-0x3e,
   0x41, 0x43-0x45, 0x48, 0x4a-0x4c) and unsigned otherwise; the bits are the
@@ -413,6 +506,12 @@ ALU result, so for `fsub a, b` it compares a with b.
 | 0x06 | clear | zero | OR | `ge` | a >= b | fl_ge, ic_ge, step (testmask) |
 | 0x11 / 0x12 | set / clear | none | AND | `neg` / `pos` | sign bit | step_l (`shl` by 31 then sign test) |
 
+**hardware** (hwt_p2 `test_*`, `pred_*`): all six comparisons give the
+expected predicate on (1, 2), (2, 2), (2, 1) with `test.fsub.<cond> p0`
+followed by `(p0) mov`; `test.fadd.neg/pos x, c48` on ±1 and 0 (pos(0) is
+true); p1, p2, p3 are written and read by the predicate field, and `!p0` /
+`!p1` invert.
+
 So "sign clear" includes +0 (gt needs the extra nonzero), and "none" passes
 under AND. libusc's own compare pseudo-ops confirm the table: USEASM 0xaa gt,
 0xab ge, 0xac eq, 0xad lt, 0xae le, 0xaf ne are rewritten by FUN_00119f50 to
@@ -433,7 +532,8 @@ also written when there is a dest (l20).
 mask of the given width that is all ones when the test passes and zero
 otherwise (corpus: every testmask is followed by `movc.nz.i32 d, d, c52, c48`
 = select 1.0/0.0, e.g. step, lt, bo_xor, ic_eqv, and vo_if's `movc.z.i32`
-select). The all-ones/zero reading is a **guess** consistent with movc.nz.
+select). **hardware** (hwt_p2 `testmask_*`): `testmask.fsub.lt.dword`
+writes 0xffffffff when the test passes and 0 when it fails.
 
 ### hw 0a-0e: bitwise (FUN_00117270)
 
@@ -478,12 +578,14 @@ no rotate. The text shows n, rot and inv separately (lossless):
 - f2_0 (test h21, USEASM flags2 b0): only on fixed-trip-count loop counter
   tests; libusc internal instruction flag bit 5 (unnamed). Meaning unknown.
 - partial (bitwise h2, USEASM flags1 b20): compiler never sets it.
-- test chan values 4-7, testmask type 0/1 (byte/word) and value 3, the
+- test chan values (not drawn), testmask type 0/1 (byte/word) and value 3, the
   sign/zero test value 3: encoder emits 4-7 / 0-2 but nothing names them;
   3 is never emitted.
 - group-2 ALU ops (0x20-0x26) names; whether 0xf8/0xf9 are FPADD8/FPSUB8.
-- rnd 1/2 = down/up is a guess; the pck `scale`/`rnd` bits on int->int pairs
-  are decoded but the encoder never sets them.
+- rnd 1/2 = down/up is now hardware (hwt_p4); the pck `scale`/`rnd` bits on
+  int->int pairs are decoded but the encoder never sets them. Why rnd has no
+  effect on f32 -> f16 (truncation) is open: maybe the F16 rounding mode
+  lives elsewhere (format control?).
 - Immediate sign for pck sources is an assembler range check only.
 
 ## Integer, fixed-point and multi-unit ops: hw 07, 10-19, 1a
@@ -641,6 +743,16 @@ The encoder requires the coissue. `dst.rgb = (src1 * c1) cop (src2 * c2)` and `d
 | l14 | aneg: negate alpha result | 0xe3 arg4 0x14 | encoder |
 
 The only corpus use is `mov_l`/`fl_gt_l`: `sop2 d, a, b [c1=one c2=zero a1=zero a2=one]`, a lowp select or move.
+
+**hardware** (hwt_p6), U8 operands and destination: `[c1=one c2=zero
+a1=zero a2=one]` gives rgb = src1's bytes 0-2, alpha = src2's byte 3
+(0x11335599, 0xaabbccdd -> 0xaa335599); `c1=one c2=one cop=add` is a
+per-byte saturating add, `cop=sub` a per-byte subtract clamped at 0, and
+`c1=s2 c2=zero a1=s2a` a per-byte multiply a*b/255 (0x80 * 0x40 -> 0x20).
+So the SOP2 formula above holds. C10 sources into a U8 destination: each
+channel (v/255) is clamped to a byte (0x100 -> 0xff, 0x080 -> 0x80; C10
+0x3ff = -1/255 subtracts 1); the alpha byte came out 0xff for a 32-bit C10
+source whose bits 30-31 were 0 (not understood).
 
 ### sopwm (hw 12, USEASM 0x58 / 0xfa, FUN_0010c9e0)
 
@@ -1111,8 +1223,8 @@ predicate.
 
 | form | fixed | fields | evidence |
 |---|---|---|---|
-| `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits (feature +0x20) | encoder |
-| `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | encoder, corpus |
+| `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits (feature +0x20) | encoder; **hardware** (hwt_ba): the target is the absolute instruction index from the USE code base the task runs from (DOUTU's base 0 = 0x37000000): `ba #0x1077` reached the instruction at 0x37008388 + 6*8 |
+| `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | encoder, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
 | `lapc` | h6-8 = 2 | return to the saved link address | encoder, corpus (fn_call) |
 | `nop` | h6-8 = 5 | h23 syncs (f1 b2), h18 end (f1 b17), l0 = f2 b26, l1 = f3 b5 | encoder, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
 | `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no arguments; needs word0 & 0x200000 | encoder; meaning unknown |
@@ -1145,7 +1257,7 @@ h18 = nosched for the whole group; no predicate. h19 = register form for ops
 | 2 | `smlsi v0..v3 [lim0 lim1 lim2]` (0xbe) | per operand (dest, src0, src1, src2) an 8-bit value: v0 l24-31, v1 l16-23, v2 l8-15, v3 l0-7; flag h3/h2/h1/h0 set = the value is a swizzle (four 2-bit selects, printed `#0.xyzw`), clear = a signed increment; lim0 h12-15, lim1 h8-11, lim2 h4-7 = USEASM arguments 8-10 / 4 (multiples of 4, up to 60) | encoder, corpus (every swizzled operation is bracketed by `smlsi`; libusc's ISMLSI); limits' meaning guess (temp / pa / sa wrap limits) |
 | 3 | `smbo v0..v3` (0xbf) | as op 1 | encoder; MOE base offsets (the USP code block keeps 4 MOE base offsets) — guess |
 | 4 | `imo v0..v3` (0xc0) | as op 1, signed (the encoder takes -32..31); no register form | encoder; name guess (increment MOE offsets) |
-| 5 | `setfc #a0, #a1` (0xc1) | a0 l0, a1 l8 (USEASM arguments must be #0/#1) | encoder, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l); name guess (set format control: EFO / colour) |
+| 5 | `setfc #a0, #a1` (0xc1) | a0 l0, a1 l8 (USEASM arguments must be #0/#1) | encoder, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l). **hardware** (hwt_p6): **a1 (l8) is the colour-class C10 enable** and is **on at program start**: `sop2 r3, r0.c10, r1.c10` reads C10 with no setfc, after `setfc #1, #1` and after `setfc #0, #1`; after `setfc #0, #0` or `#1, #0` the same word reads r64/r65 (garbage, different per pixel, no fault). a0 (l0) is then presumably the EFO F16 select (not drawn) |
 | 6 | `op0xfd dst, #n` (0xfd) | dst l21-27 + h0-1 + h19 (destination slot), n h11-14 (0..8), h23 skipinv | encoder; meaning unknown |
 
 The USP code block header's four MOE words are this state at block entry:
@@ -1161,7 +1273,7 @@ example after `smlsi #1, #1, #0.zyxw, #1` the next block has 0x8001 0x8001
 | 1 | `wdf [drc=d]` (0x9a) | h0 DRC; waits until the loads/samples that signal that DRC have written their results | encoder, corpus (after every uniform load and before the first use of a loaded or sampled register) |
 | 2 | `op0xd7 #n` (0xd7) | n l0-3 (below feature +0x10 = 16) | encoder; unknown |
 | 3 | `emit.<t0..t3> src0, src1, src2 [n f10 f12 f13 f3_20 imm end]` | tgt h14-15 (0x9c/0x9d 0, 0x101/0x102 1, 0xa2 2, 0x103/0x104 3); f12 h12 (0x101, 0x103; 0xa0 on older cores; f2 b5 on 0xa2); f13 h13 (0x101 + f3 b8: libusc's geometry "emit and cut" sets f3 0x100; 0xa1 on older cores; f2 b4 on 0xa2); f10 h10 (f3 b6 on 0x101/0x103, f3 b7 on 0x102/0x104); l21 = f3 b20; n = first argument (h0-1 + h9, 0..5); h18 end; h11 nosched. Sources: 0x101/0x102 src1 + src2; 0x103/0x104 src2 only; 0x9c-0x9e/0xa2 src0 (extension h19) + src1 (+ src2). Unused sources hold #0. 0x9d/0x9e/0xa1/0xa2 add a 14-bit immediate (l22-27, h3-8, h22-23); 0x9c sets h8 (= immediate 0x800) | encoder; 0x101 is libusc's geometry-shader vertex emit; target names unknown |
-| 4 | `limm dst, #imm32` (0x9b) | dst = destination slot (l21-27, h0-1, h19); imm l0-20 (bits 0-20), h4-8 (21-25), h12-17 (26-31); a label argument (type 0xb) gives its absolute address (+ offset); argument flag 11 inverts the value; h9-11 pred (PRED3); h23 skipinv; h22 nosched; h18 end | encoder, corpus (`limm r0, #4096` before indexed stores) |
+| 4 | `limm dst, #imm32` (0x9b) | dst = destination slot (l21-27, h0-1, h19); imm l0-20 (bits 0-20), h4-8 (21-25), h12-17 (26-31); a label argument (type 0xb) gives its absolute address (+ offset); argument flag 11 inverts the value; h9-11 pred (PRED3); h23 skipinv; h22 nosched; h18 end | encoder, corpus (`limm r0, #4096` before indexed stores); **hardware** (every hwt test loads its inputs with it: 0x12345678, 0xdeadbeef exact) |
 | 5 | `lock #n` / `release #n` (0xcd / 0xce) | l0 = 0 / 1; n l4-6 (below feature +0xc = 8) | encoder; names guess (mutexes) |
 | 6 | `ldr dst, addr [drc=d]` (0xd0), `str addr, data` (0xd1) | h19 = str; dst l21-27 + h7 (r/pa); addr = src2 slot whose immediate form has 14 bits (low 7 l0-6, high 7 l14-20); data = src1 slot; h0 DRC (ldr); h23 skipinv; h11 nosched | encoder; names guess |
 | 7 | `op0xd6 #n` (0xd6) | n l0-2 (0..5), l3 = f3 b6 (libusc sets it under the same compile flag as emit's f3 b6) | encoder; unknown |
@@ -1843,7 +1955,9 @@ backed above; this section only collects it.
   bitwise op's src2 takes a 16-bit rotated immediate; anything bigger is
   `limm` or a secondary attribute.
 - **Format select** (float classes, h22): any F16 source switches the whole
-  instruction to 6-bit numbers, so every source of it must be r0-r63 (etc.).
+  instruction to 6-bit numbers, so every source of it must be r0-r63 (etc.);
+  an F16 source's number counts halves (`2*reg + half`), so F16 sources
+  must live in r0-r31 / pa0-pa31 (hardware).
 - **Format control** (`setfc`, USP code block flags): while on (the
   compiler's default state is C10 on, EFO F16 off), number bit 6 of the
   colour/integer classes' operands (efo, sop2/sop3/sopwm, dot, ima8, fpma)
@@ -1858,9 +1972,19 @@ backed above; this section only collects it.
   records the MOE state at block entry). Scalar ops (hw 1) and moves can
   use a write mask instead of a count.
 - **Constants**: the hardware constant table covers 0, 1, powers of two,
-  1/2^n, e, π fractions, √2; anything else is a uniform in sa. Negation and
-  abs are free on most float sources (not on src0's negate: fold it into
-  another source as libusc does).
+  1/2^n, e, π fractions, √2, F16 (1, 1) (c45-c47), 0xffffffff (c56-c59)
+  (hardware); anything else is a uniform in sa or a `limm` (hardware: any
+  32-bit value into r). Negation and abs are free on most float sources (not
+  on src0's negate: fold it into another source as libusc does).
+- **Scalar functions** (hardware, hwt_p3): frcp/frsq/fsqrt/flog2/fexp2 are
+  correctly rounded or within an ulp on the values tried (1/3 =
+  0x3eaaaaab, rsq(2) = 0x3f3504f3); 1/±0 = ±inf, rsq(0) = inf, log2(0) =
+  -inf, rsq/log2/sqrt of a negative = 0x7fffffff, exp2(128) = inf,
+  exp2(-126.5) = 0 (denormal results flush to zero). **fsin(t) = sin(t·π/2)
+  and fcos(t) = cos(t·π/2)** with period 4 in t (fsin(1) = 1, fsin(2) = -0,
+  fsin(4.5) = sin(π/4)); they are only about 16 bits accurate (fsin(0.5) =
+  0.7071228 vs 0.7071068), so the compiler's range reduction to [-2, 2)
+  then `* c36` (2/π) is what GLSL sin(x) needs.
 
 ### Program structure and calling conventions
 
@@ -1871,9 +1995,10 @@ backed above; this section only collects it.
   `test.and.ne p0, #0, #0`, `(p0) ld ...`, `wdf`.
 - The last instruction of a finalised program has `end` (h18; hardware).
   USP code leaves that to the finalizer.
-- **Branches**: `br` offset = target index - this instruction's index,
-  signed 18 bits, in instructions; `ba` is absolute (plus the program's load
-  offset). Conditions are a `test` writing p0-p3, then a predicated `br`.
+- **Branches** (hardware): `br` offset = target index - this instruction's
+  index, signed 18 bits, in instructions; `ba` is absolute: the instruction
+  index from the task's USE code base (the program's load offset / 8 plus
+  the label). Conditions are a `test` writing p0-p3, then a predicated `br`.
 - **Calls**: `br [link]` to the function's label; the function returns with
   `lapc`; arguments and results in ordinary registers.
 - **Loops**: do-while with a float counter (`fmad r, r, c52, c52` = +1) and
