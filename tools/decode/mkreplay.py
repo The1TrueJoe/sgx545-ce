@@ -9,6 +9,8 @@ ref.bin capture; see docs/NOTES.md):
     --color r,g,b,a             the fragment uniform c, as FP16 pairs
     --usse VA:'insn; insn'      USSE instructions assembled by tools/isa/asm.py
     --poke VA:word,word         raw words
+    --write VA:file             a file's bytes (e.g. a texture laid out by tools/tex/tex.py)
+    --poke-at EVENT:VA:words    raw words before one event only (kick3, xfer1, ...)
 Each override is poked after the snapshot is loaded and again before every kick.
 
 Writes <outdir>/script (text, one op per line) and <outdir>/data (the bytes
@@ -20,6 +22,15 @@ Memory state before kick 1 is the kick-1 snapshot: each buffer outside the
 skipped heaps is zeroed, then its non-zero runs are written. Before each later
 kick only the words that changed since the previous kick's snapshot are written,
 outside the delta-skipped heaps (the ones the GPU itself writes).
+
+--xfers all (or a list of transfer numbers, 1-based) also replays the
+SGX_SUBMITTRANSFERs (texture uploads, the swap blit), interleaved with the
+kicks in capture order, and registers the transfer contexts. Each event's
+memory comes from its own snapshot (pvrtrace snapshots before every
+SUBMITTRANSFER); a buffer that did not exist yet at the previous event is
+written in full. --no-delta VA:size keeps a range the GPU writes (the back
+buffer before the swap, a texture after its upload) out of every delta, so the
+replay's own GPU work is what ends up there.
 """
 import argparse
 import os
@@ -59,6 +70,12 @@ class Gen:
         self.heapid = {}        # buf index -> SGX heap id (low byte), or None for wraps
         self.ctx_va = None
         self.pokes = []         # (dev addr, [words], comment) applied before every kick
+        self.xfers = None       # None: no transfers; set(): all; else the transfer numbers to replay
+        self.xctx = {}          # captured transfer context dev addr -> index
+        self.nodelta = []       # (dev addr, size) never written by a delta
+        self.peeks = []         # (label, dev addr, words) printed after every event
+        self.pokes_at = {}      # "kick3" / "xfer1" -> [(dev addr, [words])]: pokes before that event only
+        self.writes = []        # (dev addr, bytes, comment) written before every kick
 
     def op(self, *a):
         self.lines.append(" ".join(str(x) for x in a))
@@ -123,6 +140,16 @@ class Gen:
                     self.handles[sync] = f"s{i}"
                 size = g("PVRSRV_BRIDGE_IN_WRAP_EXT_MEMORY_TAG", r.inp, "ui32ByteSize")
                 self.op("wrap", i, self.hx(size), self.hx(b.devva))
+            elif r.name == "SGX_REGISTER_HW_TRANSFER_CONTEXT" and self.xfers is not None:
+                I = "PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_TRANSFER_CONTEXT_TAG"
+                O = "PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_TRANSFER_CONTEXT_TAG"
+                ub = [u for u in self.log.of(pvrlog.UBuf) if u.seq < r.seq and u.nr == r.nr and u.phase == 0
+                      and u.ptr == g(I, r.inp, "pHWTransferContextCpuVAddr")][-1]
+                size = g(I, r.inp, "ui32HWTransferContextSize")
+                va = g(O, r.out, "sHWTransferContextDevVAddr.uiAddr")
+                x = self.xctx[va] = len(self.xctx)
+                self.op("regxfer", x, self.hx(self.blob(ub.data[:size])), self.hx(size),
+                        self.hx(g(I, r.inp, "ui32OffsetToPDDevPAddr")), self.hx(va))
             elif r.name == "SGX_REGISTER_HW_RENDER_CONTEXT":
                 I = "PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
                 O = "PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
@@ -163,7 +190,9 @@ class Gen:
                 continue
             d = mem.read(b.devva, b.size)
             if d is None:
-                sys.exit(f"mkreplay: no snapshot for buffer {i} at {b.devva:#x}")
+                if self.xfers is None:
+                    sys.exit(f"mkreplay: no snapshot for buffer {i} at {b.devva:#x}")
+                continue    # not mapped yet at a transfer: a later event writes it
             self.op("zero", self.hx(b.devva), self.hx(b.size))
             n4 = len(d) // 4
             w = struct.unpack(f"<{n4}I", d[:n4 * 4])
@@ -181,10 +210,16 @@ class Gen:
             if hid is None or hid in self.dskip or b.cpu is None:
                 continue
             a, c = prev.read(b.devva, b.size), cur.read(b.devva, b.size)
+            if c is None:
+                continue
+            if a is None:   # did not exist at the previous event: all of it
+                a = bytes(len(c))
             n4 = len(c) // 4
             wa = struct.unpack(f"<{n4}I", a[:n4 * 4])
             wc = struct.unpack(f"<{n4}I", c[:n4 * 4])
-            for s, e in self.runs(wc, b.devva, lambda k: wa[k] != wc[k]):
+            keep = [(va - b.devva, n) for va, n in self.nodelta]
+            free = lambda k: not any(o <= 4 * k < o + n for o, n in keep)
+            for s, e in self.runs(wc, b.devva, lambda k: wa[k] != wc[k] and free(k)):
                 self.op("#", f"buf {i} heap {hid}: {e - s} word(s) at +{4 * s:#x}")
                 self.write_run(b.devva + 4 * s, c[4 * s:4 * e])
                 nwords += e - s
@@ -234,6 +269,23 @@ class Gen:
             sys.exit("mkreplay: kick on a memory context other than the first")
         self.op("kick", *t)
 
+    def xfer(self, r):
+        w = struct.unpack_from("<21I", r.inp, 0)
+        k = w[2:]   # PVRSRV_TRANSFER_SGX_KICK (i386): ccb, off, ctx, tasync, 3dsync, nsrc, src[5], ndst, dst[5], flags
+        t = [f"ccb={self.handle(k[0])}", f"off={k[1]:#x}", f"ctx={self.xctx[k[2]]}"]
+        if k[3]:
+            t.append(f"tasync={self.handle(k[3])}")
+        if k[4]:
+            t.append(f"sync3d={self.handle(k[4])}")
+        if k[5]:
+            t.append("src=" + ",".join(self.handle(h) for h in k[6:6 + k[5]]))
+        if k[11]:
+            self.last_xdst = [self.handle(h) for h in k[12:12 + k[11]]]
+            t.append("dst=" + ",".join(self.last_xdst))
+        if k[17]:
+            t.append(f"flags={k[17]:#x}")
+        self.op("xfer", *t)
+
     def rt_data(self, r, n):
         """The RT data set the last kick's TA command names (cmd +0x40)."""
         base = layout.layout(ARCH)["PVRSRV_BRIDGE_IN_DOKICK_TAG"].path("sCCBKick")[0]
@@ -245,24 +297,42 @@ class Gen:
     def run(self):
         self.setup()
         kicks = [r for r in self.log.of(pvrlog.Bridge) if r.name == "SGX_DOKICK"]
+        xfers = [r for r in self.log.of(pvrlog.Bridge) if r.name == "SGX_SUBMITTRANSFER"]
+        events = [("kick", n, r) for n, r in enumerate(kicks, 1)]
+        if self.xfers is not None:
+            events += [("xfer", n, r) for n, r in enumerate(xfers, 1) if not self.xfers or n in self.xfers]
+        events.sort(key=lambda e: e[2].seq)
         prev = None
-        for n, r in enumerate(kicks, 1):
-            mem = self.snapmem(n)
+        for kind, n, r in events:
+            mem = memmap.Memory(self.mm, [s for s in self.log.of(pvrlog.Snap) if s.reason == kind and s.kick == n])
             if prev is None:
-                self.op("#", "memory before kick 1 (kick-1 snapshot)")
+                self.op("#", f"memory before {kind} {n} (its snapshot)")
                 nb = self.full(mem)
                 self.op("#", f"{nb} non-zero bytes")
             else:
                 self.op("sleep", self.sleep_ms)
-                self.op("#", f"words changed between kick {n - 1} and kick {n}")
+                self.op("#", f"words changed up to {kind} {n}")
                 self.delta(prev, mem)
+            for va, d, why in self.writes:
+                self.op("#", why)
+                self.write_run(va, d)
             for va, words, why in self.pokes:
                 self.op("#", why)
                 self.op("poke", self.hx(va), *(f"{w:#010x}" for w in words))
+            for va, words in self.pokes_at.get(f"{kind}{n}", []):
+                self.op("#", f"poke before {kind} {n} only")
+                self.op("poke", self.hx(va), *(f"{w:#010x}" for w in words))
             self.op("sync")
-            self.kick(r)
+            if kind == "kick":
+                self.kick(r)
+            else:
+                self.xfer(r)
             prev = mem
-        for h in getattr(self, "last_dst", []):
+            if self.peeks:
+                self.op("sleep", self.sleep_ms)
+            for label, va, cnt in self.peeks:
+                self.op("peek", f"{kind}{n}:{label}", self.hx(va), cnt)
+        for h in getattr(self, "last_dst", []) + getattr(self, "last_xdst", []):
             self.op("waitsync", h, self.wait_ms)
         self.rtdata = self.rt_data(kicks[-1], len(kicks))
         os.makedirs(self.out, exist_ok=True)
@@ -338,10 +408,25 @@ def main():
     ap.add_argument("--color")
     ap.add_argument("--usse", action="append", default=[])
     ap.add_argument("--poke", action="append", default=[])
+    ap.add_argument("--write", action="append", default=[])
+    ap.add_argument("--poke-at", action="append", default=[], help="EVENT:VA:word,word (EVENT = kick3, xfer1, ...)")
+    ap.add_argument("--peek", action="append", default=[], help="LABEL:VA:words printed after every event")
+    ap.add_argument("--no-delta", action="append", default=[], help="VA:size the deltas leave alone")
+    ap.add_argument("--xfers", help="'all' or comma-separated transfer numbers to replay as well")
     a = ap.parse_args()
     ids = lambda s: {int(x, 0) for x in s.split(",") if x}
     gen = Gen(pvrlog.load(a.log), a.outdir, ids(a.skip_heaps), ids(a.delta_skip_heaps), a.sleep, a.wait)
     gen.pokes = overrides(a)
+    for spec in a.poke_at:
+        ev, va, ws = spec.split(":", 2)
+        gen.pokes_at.setdefault(ev, []).append((int(va, 0), [int(w, 0) for w in ws.split(",")]))
+    gen.peeks = [(lb, int(va, 0), int(c, 0)) for lb, va, c in (p.split(":") for p in a.peek)]
+    gen.nodelta = [tuple(int(x, 0) for x in d.split(":")) for d in a.no_delta]
+    if a.xfers:
+        gen.xfers = set() if a.xfers == "all" else {int(x) for x in a.xfers.split(",")}
+    for spec in a.write:
+        va, path = spec.split(":", 1)
+        gen.writes.append((int(va, 0), open(path, "rb").read(), f"write {spec}"))
     gen.run()
     with open(os.path.join(a.outdir, "script"), "a") as f:
         for d in a.dump:

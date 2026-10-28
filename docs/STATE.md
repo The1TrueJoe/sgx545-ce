@@ -420,9 +420,9 @@ For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
 |---|---|---|---|
 | 0 | 00000000 | clip min `y0<<16 \| x0` | D |
 | 1 | 01df02cf | clip max `y1<<16 \| x1` (719, 479) | C |
-| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px); b15 = set unless the surface is the scanout buffer (`local_54`); b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
+| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px); b15 = set unless the surface's `param_1[6]` is non-zero: set for the back buffer *and* for fb0 (the swap), and with it cleared the PBE writes nothing at the address (replay, `docs/TEX.md` section 6), so it is not a scanout flag; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
 | 3 | 3e265000 | address, & ~3 (moved for rotated surfaces) | D |
-| side | 0x600 | b0-5 = PBE format code (format table +0x84); b9 = always; b10 = dither (GL_DITHER); b12 = `param 7`; b6-11 += `param_2[5]<<6` for format codes 3-14 | D |
+| side | 0x600 | b0-5 = PBE format code (format table +0x84: 0 BGRA8888, 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, see `docs/TEX.md`); b9 = always; b10 = dither (GL_DITHER); b12 = `param 7`; **b13 = twiddled destination** (table `DAT_0006d5bc` = {0, 0x2000} by memory layout; the transfer queue's texture uploads set it) [C]; b6-11 += `param_2[5]<<6` for format codes 3-14 | D |
 
 - The back buffer of a window is BGRA8888, top row first, with a pitch of
   720 rounded up to 32 = 736 px: 0x159000 bytes = 736 × 480 × 4.
@@ -433,9 +433,12 @@ For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
 - Every surface EGL gave the probe was BGRA8888, PBE format code 0:
   windows, and pbuffers whether 5 6 5 or 8 8 8 8 was requested (`pb`,
   `pb8888`, `pbd`).
-- So code 0 = BGRA8888 [D]. Other codes come from libGLESv2's per-format
-  table (entry +0x84); its entries are filled at run time and were not
-  read.
+- So code 0 = BGRA8888 [D]. The other codes are in libGLESv2's per-format
+  table (`DAT_0006d5e4`, 0x8c bytes per entry, PBE code at +0x84, which is
+  static data): 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, 0x18 8-bit,
+  0x1b LA88. FBO render targets confirm 1, 3 and 5 (sideband 0x2601,
+  0x2603, 0x2605: twiddled + dither), and RGBA8888 and RGB565 render-to-texture
+  replays are pixel-exact (`docs/TEX.md` section 4) [C].
 
 ### Screen and tiles
 
@@ -520,8 +523,8 @@ constant):
 |---|---|---|
 | 0-11 | height - 1 | D |
 | 12-23 | width - 1 | D |
-| 24-28 | format: 0x02 RGBA4444, 0x04 RGBA5551, 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | D |
-| 29-31 | layout: 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the stride, b18-23 = stride/16 - 1 [G]) | D |
+| 24-28 | format: 0x02 RGBA4444 (stored ARGB4444), 0x04 RGBA5551 (stored ARGB1555), 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | D |
+| 29-31 | layout: 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch in texels - 1) low 3 bits in b9-11, the rest in b17-26 [D], `docs/TEX.md` section 3). Memory layouts 0 and 3 are in `docs/TEX.md` section 1 | D |
 
 **T2:** the base address. The mip levels follow the base level; the chain
 length is implied by the size, since no word changed with the level count.
@@ -665,9 +668,9 @@ For w × h, no multisampling:
 | 0x20 | 20006000 | region headers of this render | D |
 | 0x24 | 0 | kick +0x4c | G |
 | 0x28 | 20003000 | region headers of the next render | D |
-| 0x2c | 0 / 001710b4 | ZLS control: `drawable bits & 0xf80ee007 \| 0x111000 \| (xt-1)<<3` (kick +0x6c) | D |
-| 0x30, 0x34 | | depth / stencil store addresses - ZLS base | D |
-| 0x38, 0x3c | 80000000 | b31 \| depth / stencil load addresses - ZLS base | D |
+| 0x2c | 0 / 001710b4 | ZLS control: `drawable bits & 0xf80ee007 \| 0x111000 \| (xt-1)<<3` (kick +0x6c), windows only; FBOs get `0x140018`-style words with no store. b2+b12+b16+b17 store depth (float32), b19 negates it, b0/b1 lock the 3D, the load bit is unknown (`docs/TEX.md` section 7) | D, store C |
+| 0x30, 0x34 | | **depth** address - ZLS base, in both words (libGLESv2 `FUN_0002e2d0`; earlier read as depth/stencil store) | D |
+| 0x38, 0x3c | 80000000 | b31 \| **stencil** address - ZLS base, in both words (earlier read as depth/stencil load) | D |
 | 0x40 | 3f800000 | ISP background depth: the depth every tile starts from (kick +0x10, 1.0). glClearDepth does **not** change it: the clear writes depth through its own vertices' z, with depth write on in its ISPA (`cdepth`) | C |
 | 0x44 | 0x300 | kick +0x80 \| +0x14 | G |
 | 0x48 | 02046300 | background object: `0x2000000 \| (block - PB base)>>4` | D |

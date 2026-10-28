@@ -4,7 +4,7 @@ import struct
 from dataclasses import dataclass, field
 
 REC_BRIDGE, REC_MMAP, REC_MUNMAP, REC_SNAP, REC_NOTE, REC_UBUF = 1, 2, 3, 4, 5, 6
-SNAP_REASONS = {1: "kick", 2: "unmap", 3: "exit", 4: "init"}
+SNAP_REASONS = {1: "kick", 2: "unmap", 3: "exit", 4: "init", 5: "xfer"}
 
 # Bridge index -> name for this build, generated from the headers by libpvr/abi/ids.sh.
 BRIDGE_NAMES = {}

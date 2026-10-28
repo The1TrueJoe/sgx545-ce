@@ -1,0 +1,32 @@
+capture,what,texels_or_values,matched,differ
+p1x1,twiddle 1x1,1,1,0
+p2x1,twiddle 2x1,2,2,0
+p8x8,twiddle 8x8,64,64,0
+p16x8,twiddle 16x8,128,128,0
+p8x16,twiddle 8x16,128,128,0
+p32x8,twiddle 32x8,256,256,0
+p8x32,twiddle 8x32,256,256,0
+p64,twiddle 64x64 (16x16 tiles),4096,4096,0
+p128x32,twiddle 128x32,4096,4096,0
+p256x256,twiddle 256x256,65536,65536,0
+n5x7,linear pitch 8,35,35,0
+n12x6,linear pitch 16,72,72,0
+n100x30,linear pitch 104,3000,3000,0
+n33x17,linear pitch 40,561,561,0
+frgb565,format,256,256,0
+frgba4444,format (stored ARGB4444),256,256,0
+frgba5551,format (stored ARGB1555),256,256,0
+fl8,format,256,256,0
+fa8,format,256,256,0
+fla88,format,256,256,0
+frgb888,format (expanded to 8888),256,256,0
+m16,mip chain 16x16 5 levels,341,341,0
+m32x8,mip chain 32x8 6 levels,343,343,0
+m565,mip chain rgb565,341,341,0
+mg64,glGenerateMipmap = (2x+1 2y+1) decimation,1365,1365,0
+c8,cube 8x8,384,384,0
+c8m,cube 8x8 4 levels (stride 0x154),510,510,0
+c16m,cube 16x16 5 levels (stride 0x800),2046,2046,0
+c32m,cube 32x32 6 levels (stride 0x1800),8190,8190,0
+present.py --check,transfer words rebuilt (17 transfers x 74 words),1258,1258,0
+sgxtex.c vs tex.py/present.py,library C,103146,103146,0

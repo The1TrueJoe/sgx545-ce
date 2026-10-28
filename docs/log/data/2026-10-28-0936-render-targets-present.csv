@@ -1,0 +1,14 @@
+run,capture,what,compared_with,pixels,differ
+tp256,tp256,texture laid out by tex.py (RGBA8888 256x256 twiddled),ti256 DDK readback,345600,0
+tp565,tp565,texture laid out by tex.py (RGB565 64x64),ti565 DDK readback,345600,0
+tpn100,tpn100,texture laid out by tex.py (RGBA8888 100x30 linear),tin100 DDK readback,345600,0
+p64x,p64,native GPU texture upload + frame + swap (private wrap),p64 DDK readback,345600,0
+p64x -F,p64,swap blit into the real /dev/fb0 (read back with head -c),p64 DDK readback,345600,0
+blit -F,p64,present.py-built blit: 512x384 crop to fb0 over a pre-fill,prediction,345600,0
+direct -F,p64,PBE address = fb0 wrap (no blit),p64 DDK readback,345600,0
+direct15 -F,p64,same with PBE word 2 b15 cleared,prediction (written),345600,345600 (nothing written)
+fbx4,fbrgba8888,render to texture RGBA8888 + swap,fbrgba8888 DDK readback,345600,0
+fbclr2,fbrgba8888,render to texture with the FBO clear changed to green,prediction (170094 px changed),345600,0
+fb565,fbrgb565,render to texture RGB565 (dithered) + swap,fbrgb565 DDK readback,345600,0
+zls0,fbd,control: FBO with depth (DDK loses it),fbd DDK readback,345600,0
+zls3,fbd,ZLS control 0x0017101c: depth stored (float32),GL-correct prediction,345600,24306 (no load)
