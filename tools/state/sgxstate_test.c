@@ -98,9 +98,10 @@ main(void)
       check("spr16 ISPA", (uint32_t[]){ sgxs_ispa_objtype(0x01d00200, ot) }, (uint32_t[]){ 0x01d20200 }, 1);
       check("line strip refused", (uint32_t[]){ sgxs_prim(SGXS_GL_LINE_STRIP, false, &vb, &ot) },
             (uint32_t[]){ 0 }, 1);
-      check("ISPB widths 1 4 9.5",
-            (uint32_t[]){ sgxs_ispb_width(0xf0, 1), sgxs_ispb_width(0xf0, 4), sgxs_ispb_width(0xf0, 9.5f) },
-            (uint32_t[]){ 0x10f0, 0x40f0, 0x98f0 }, 3);
+      check("ISPB widths 1 4 9.5 1.06 16",
+            (uint32_t[]){ sgxs_ispb_width(0xf0, 1), sgxs_ispb_width(0xf0, 4), sgxs_ispb_width(0xf0, 9.5f),
+                          sgxs_ispb_width(0xf0, 1.06f), sgxs_ispb_width(0xf0, 16) },
+            (uint32_t[]){ 0x10f0, 0x40f0, 0x98f0, 0x10f0, 0xfff0 }, 5);
       check("point size words 8 16 32",
             (uint32_t[]){ sgxs_point_size_word(8), sgxs_point_size_word(16), sgxs_point_size_word(32) },
             (uint32_t[]){ 0x5ffc4800, 0x5ffc4c00, 0x5ffc5000 }, 3);
@@ -147,6 +148,24 @@ main(void)
       }
       check("k1 blend colour word", (uint32_t[]){ sgxs_blend_color_word((float[]){ 0.25f, 0.5f, 0.75f, 0.375f }) },
             (uint32_t[]){ 0x604080bf }, 1);
+   }
+
+   /* alpha test (e1gt5, e1lt5, e1gt25, e1ge5, e1texat, e1atbl; the Mesa discard words) */
+   {
+      uint32_t w[2];
+
+      check("e1 depth word", (uint32_t[]){ sgxs_atst_depth_word(0, false) }, (uint32_t[]){ 0xe00f }, 1);
+      check("alpha words GREATER .5, LESS .5, GREATER .25, GEQUAL .5, ALWAYS 0",
+            (uint32_t[]){ sgxs_atst_alpha_word(0x204, 0.5f), sgxs_atst_alpha_word(0x201, 0.5f),
+                          sgxs_atst_alpha_word(0x204, 0.25f), sgxs_atst_alpha_word(0x206, 0.5f),
+                          sgxs_atst_alpha_word(0x207, 0) },
+            (uint32_t[]){ 0x80008e00, 0x80002e00, 0x40008e00, 0x8000ce00, 0xee00 }, 5);
+      sgxs_atst8(w, SGXS_ATST_O, 0, true, 0, 0, 1, true, false, true);
+      check("e1gt5 atst8", w, (uint32_t[]){ 0xf0000001, 0xf934000d }, 2);
+      sgxs_atst8(w, SGXS_ATST_O, 0, false, 0, 0, 1, true, false, true);
+      check("e1texat atst8", w, (uint32_t[]){ 0xf0000001, 0xf9340009 }, 2);
+      sgxs_atst8(w, SGXS_ATST_R, 0, true, 0, 0, 1, false, true, true);
+      check("e1atbl atst8", w, (uint32_t[]){ 0xf0000001, 0xf930004c }, 2);
    }
 
    printf(fails ? "%d FAILED\n" : "all ok\n", fails);

@@ -184,7 +184,9 @@ struct sgxs_vpgen_obj {
  * a set over rect unless it is empty.  Returns how many (1 or 2).  Emit them
  * before the draws they clip; afterwards the region clip is rect's tiles
  * (or, after a lone reset, prev's), which the draws inherit.  To go back to
- * no clipping, make the whole target the rectangle.
+ * no clipping, make the whole target the rectangle.  (The DDK instead emits
+ * one pass-type-3 object over the whole target with ISPA 0x07e00000 and no
+ * ISPC group, header 0xd481, full region clip: `sc7` [D, not replayed].)
  */
 static inline unsigned
 sgxs_scissor_objects(struct sgxs_vpgen_obj obj[2], const struct sgxs_rect *prev,
@@ -326,8 +328,9 @@ sgxs_line_list_indices(uint16_t *idx, unsigned n, bool loop, uint16_t first)
 }
 
 /*
- * Line width: ISPB b8-15 = width * 16 (1.0 -> 0x10, 4 -> 0x40, 9.5 -> 0x98)
- * [C: l1, l2 draw the DDK's own width-1 and width-9.5 frames].  glLineWidth
+ * Line width: ISPB b8-15 = width * 16, truncated, at most 0xff (1.0 -> 0x10,
+ * 1.06 -> 0x10, 4 -> 0x40, 9.5 -> 0x98, 16 -> 0xff) [C: l1, l2 draw the
+ * DDK's own width-1 and width-9.5 frames; D: ln106, ln16].  glLineWidth
  * clamps to [1, 16] (libGLESv2 0x255b0).  Points and triangles keep 0x10.
  */
 static inline uint32_t
@@ -337,7 +340,7 @@ sgxs_ispb_width(uint32_t ispb, float width)
 
    if (!(width >= 1.0f))
       width = 1.0f;
-   w = (uint32_t)(width * 16.0f + 0.5f);
+   w = (uint32_t)(width * 16.0f);
    if (w > 0xff)
       w = 0xff;
    return (ispb & ~0xff00u) | w << 8;
@@ -348,12 +351,15 @@ sgxs_ispb_width(uint32_t ispb, float width)
  * the position and the varyings: an F16 pair, the size in the low half and
  * 0x5ffc (511.0) in the high half, as the DDK's compiled gl_PointSize = 8.0
  * writes it (`mov o6, sa10` with sa10 = 0x5ffc4800) [C: size p1].  Output
- * select gets 0x100.  Every point draw also has texcoord set 0 with two
- * components (TSP word 0 = 2, word 1 = 1) ahead of the size: the hardware's
- * point coordinate, which the vertex program doesn't write.  With
- * SGXS_OBJ_SPRITE the ISP generates gl_PointCoord into it: (i + 0.5) / size
- * across the point, origin top left, which the fragment program iterates as
- * tc0 (DOUTI "iterate tc0 x2 f16") [C: sprite sizes p2, p3].
+ * select gets 0x100.  For gl_PointCoord the draw needs one more texcoord set
+ * of two components ahead of the size, which the vertex program doesn't
+ * write: with SGXS_OBJ_SPRITE the ISP generates the coordinate into it,
+ * (i + 0.5) / size across the point, origin top left, and the fragment
+ * program iterates it as tc0 (DOUTI "iterate tc0 x2 f16") [C: sprite sizes
+ * p2, p3].  It is the first set: the shader's own varyings follow it (a
+ * varying vec2 is tc1) and the size comes last (ptvar, sprvar: out dwords 4
+ * + 2 + 2 + 1, the size in o8) [D].  The ES2 driver adds that set to every point draw (TSP words 2
+ * and 1, out dwords 4 + 2 + 1); the ES1 driver only to sprites [D].
  */
 static inline uint32_t
 sgxs_f16(float x)
@@ -498,6 +504,67 @@ sgxs_blend_const(uint32_t w[SGXS_BLEND_CONST_INSTS][2], unsigned src_rgb, unsign
     * driver's blend does before a colour mask.  cop l18-19, aop l16-17. */
    w[4][0] = 0x00000001 | (cop & 3u) << 18 | (aop & 3u) << 16 | (end ? 0 : color_pa << 21);
    w[4][1] = 0x81808804 | (end ? 1u << 18 | 1 : 2);
+}
+
+/*
+ * Alpha test (STATE.md "Alpha test"): the ES1 driver's, one USSE instruction.
+ *
+ *    atst8 <dst>, p0.nw, <colour>, sa<d>, sa<a>   [end]
+ *
+ * at the end of the fragment program, in place of the final `mov o0, colour`,
+ * with ISPA pass type 1 (the DDK's) or 4; with pass type 0 the failing pixels
+ * aren't killed [C: a4, a5].  The two sa operands are the visibility test's
+ * words, which the DDK's secondary program writes with DOUTA:
+ *
+ *    depth word: 0xe000 | depth func (GL - 0x200; 7 without a depth test) |
+ *                8 when depth writes are off                  (0xe00f) [D]
+ *    alpha word: ref8 << 24 | alpha func (GL - 0x200) << 13 | 0xe00
+ *                GREATER 0.5 = 0x80008e00                      [C: a1-a3]
+ *
+ * ref8 = round(ref * 255) (0.5 -> 128, 0.25 -> 64).  ALWAYS (0xee00) passes
+ * everything [C: a7]: that is the word the Mesa driver's discard atst8
+ * (sa3, sa4) already carries, so alpha test there is a different sa4.
+ * GL_NEVER: the DDK draws with ISPA b20 | b21 (no depth or colour writes)
+ * and no atst8 (e1nev).
+ *
+ * With a blend the DDK writes the predicate instead and ends on a predicated
+ * blend: `atst8 r0, p0, pa0, sa0, sa1; (p0) sop2 o0, r0, o0 [end ...]`
+ * (e1atbl) [D].  A texture modulate first goes to r0 and r0 is the source
+ * (e1texat) [D].
+ */
+static inline uint32_t
+sgxs_atst_depth_word(uint32_t depth_func, bool depth_write)
+{
+   uint32_t f = depth_func ? (depth_func - 0x200) & 7 : 7;
+
+   return 0xe000 | f | (depth_func && depth_write ? 0 : 8);
+}
+
+static inline uint32_t
+sgxs_atst_alpha_word(uint32_t alpha_func, float ref)
+{
+   float r = ref < 0 ? 0 : ref > 1 ? 1 : ref;
+
+   return (uint32_t)(r * 255.0f + 0.5f) << 24 | ((alpha_func - 0x200) & 7) << 13 | 0xe00;
+}
+
+/* register banks of atst8's destination (h0-1) and colour source (h2) */
+enum sgxs_atst_bank { SGXS_ATST_R, SGXS_ATST_O, SGXS_ATST_PA };
+
+/*
+ * atst8 dst, p0[.nw], src, sa<sa_depth>, sa<sa_alpha> [end]: dst in bank
+ * dst_bank (r, o, pa), src r or pa (src_pa), write_p0 sets the predicate
+ * (h6) instead of leaving it (.nw).  The DDK's ES1 words also set h3
+ * ("sel36" in dis.py), which the Mesa discard word doesn't; set_h3 keeps it.
+ * e1gt5: atst8 o0, p0.nw, pa0, sa0, sa1 [end] = f0000001 f934000d.
+ */
+static inline void
+sgxs_atst8(uint32_t w[2], enum sgxs_atst_bank dst_bank, unsigned dst, bool src_pa, unsigned src,
+           unsigned sa_depth, unsigned sa_alpha, bool end, bool write_p0, bool set_h3)
+{
+   w[0] = 0xf0000000u | (dst & 0x7f) << 21 | (src & 0x7f) << 14 | (sa_depth & 0x7f) << 7 | (sa_alpha & 0x7f);
+   w[1] = 0xf9300000u | (end ? 1u << 18 : 0) | (uint32_t)dst_bank | (src_pa ? 4 : 0) | (set_h3 ? 8 : 0) |
+          (write_p0 ? 0x40 : 0);
 }
 
 #ifdef __cplusplus
