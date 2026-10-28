@@ -4948,10 +4948,10 @@ static IMG_BOOL PVRCompatBridge(IMG_UINT32 ui32BridgeID,
 		/* The microkernel upload. IN i686 2068 / kernel 2192 (27 handles 4->8 plus
 		 * 8-align pads, two opaque u32 blocks) — reproduced + BUILD_BUG_ON-checked by
 		 * PVRCompatExpandDevInitPart2. OUT: the handler writes PVRSRV_BRIDGE_OUT_
-		 * SGXDEVINITPART2 {eError@0; u32 ui32KMBuildOptions@4} = 8, whose first 8 bytes
-		 * are already the i686 layout, BUT the dispatch over-declares out_size as
-		 * sizeof(PVRSRV_BRIDGE_RETURN)=16. So force compat OUT=8 to pass the size check;
-		 * no repack needed (CopyToUser sends the already-correct first 8 bytes). */
+		 * SGXDEVINITPART2 {eError@0; u32 ui32KMBuildOptions@4} = 8, the same on both
+		 * ABIs, so OUT needs no repack. (The dispatch table used to declare OUT as
+		 * sizeof(PVRSRV_BRIDGE_RETURN), 16 on x86_64; this forced 8 for i686 then and
+		 * matches the table now.) */
 		*pui32CompatIn  = 2068;
 		*pui32CompatOut = 2 * sizeof(IMG_UINT32);
 		return IMG_TRUE;
