@@ -102,13 +102,18 @@ def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
     open(base + ".vert", "w").write(vs)
     open(base + ".frag", "w").write(fs)
     args = [sgxc]
+    # measured constant numbers (calib.py) where there are any, the guess
+    # (layout.py) for the rest (ints, which the probe can't mark)
+    pins = layout.uniforms(src) if use_layout else {}
     cal = os.path.join(outdir, "calib", name + ".json")
     if os.path.exists(cal):
-        for u, k in calib_pins(cal).items():
-            args += ["-u", f"{u}={k}"]
-    elif use_layout:
-        for u, k in layout.uniforms(src).items():
-            args += ["-u", f"{u}={k}"]
+        measured = calib_pins(cal)
+        for u in list(pins):
+            if any(m == u or m.startswith(u + "[") or m.startswith(u + ".") for m in measured):
+                del pins[u]
+        pins.update(measured)
+    for u, k in pins.items():
+        args += ["-u", f"{u}={k}"]
         if kind == "vert":
             for a, k in layout.attributes(src).items():
                 args += ["-a", f"{a}={k}"]

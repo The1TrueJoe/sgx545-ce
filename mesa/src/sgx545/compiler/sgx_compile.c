@@ -1187,6 +1187,43 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       n = 3;
       break;
    }
+   case nir_op_ftrunc: {
+      /* sign(x) * floor(|x|): f = fract(|x|); a = |x| - f; x < 0 ? -a : a */
+      unsigned f = new_vreg(c, 4), a = new_vreg(c, 4), na = new_vreg(c, 4);
+      struct sgx_ref fd[4], ad[4], nd[4], ts[3][4];
+      for (unsigned k = 0; k < 4; k++) {
+         fd[k] = vref(f, k);
+         ad[k] = vref(a, k);
+         nd[k] = vref(na, k);
+         ts[0][k] = ts[1][k] = s[0][k];
+         ts[0][k].abs = ts[1][k].abs = 1;
+         ts[0][k].neg = ts[1][k].neg = 0;
+      }
+      emit_runs(c, USSE_FSUBFLR, wmask, fd, 2, ts, &NOF, 0);
+      for (unsigned k = 0; k < 4; k++) {
+         ts[0][k] = fd[k];
+         ts[1][k] = ref(SGX_F_K, 0xbf800000);
+         ts[2][k] = s[0][k];
+         ts[2][k].abs = 1;
+         ts[2][k].neg = 0;
+      }
+      emit_runs(c, USSE_FMAD, wmask, ad, 3, ts, &NOF, 0);
+      for (unsigned k = 0; k < 4; k++) {
+         ts[0][k] = ad[k];
+         ts[1][k] = ref(SGX_F_K, 0xbf800000);
+         ts[2][k] = ref(SGX_F_K, 0x80000000);
+      }
+      emit_runs(c, USSE_FMAD, wmask, nd, 3, ts, &NOF, 0);
+      form = USSE_MOVC_Z_F32;
+      fs.n = 1;
+      fs.f[0].id = USSE_F_COND;
+      fs.f[0].v = 2;   /* ltz */
+      SRC(0, s[0][k]);
+      SRC(1, nd[k]);
+      SRC(2, ad[k]);
+      n = 3;
+      break;
+   }
    case nir_op_slt:
    case nir_op_sge:
    case nir_op_seq:
@@ -1372,7 +1409,42 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    }
    case nir_intrinsic_load_uniform: {
       if (!nir_src_is_const(in->src[0])) {
-         sgx_fail(c, "indirect uniform load");
+         /* a[i]: pck.s16.f32 t, offset; ima16.sgn idx1, t, #1, #<SA of the
+          * array>; then each component from sa[idx1 + j] (libusc's pattern,
+          * ISA.md "What GLSL integer code compiles to") */
+         unsigned k = nir_intrinsic_base(in), range = nir_intrinsic_range(in);
+         for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_used); j++)
+            c->const_used[k + j] = 1;
+         nir_legacy_src lo = nir_legacy_chase_src(&in->src[0]);
+         unsigned t = new_vreg(c, 1);
+         struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_S16_F32);
+         pk->nops = 3;
+         pk->op[0] = vref(t, 0);
+         pk->op[1] = src_comp(c, &lo, 0);
+         pk->op[2] = ref(SGX_F_IMM, 0);
+         fld(pk, USSE_F_DMASK, 3);
+         emit(c, pk);
+         struct sgx_ins *ix = ins_alloc(c, SGX_INS_ALU, USSE_IMA16);
+         ix->nops = 4;
+         ix->op[0] = ref(SGX_F_IDX, 1);
+         ix->op[1] = vref(t, 0);
+         ix->op[2] = ref(SGX_F_IMM, 1);
+         ix->op[3] = ref(SGX_F_USLOT, k);
+         fld(ix, USSE_F_SGN, 1);
+         fld(ix, USSE_F_F1, 1);
+         fld(ix, USSE_F_F2, 1);
+         add(c, ix);
+         unsigned w = new_vreg(c, in->def.num_components);
+         for (unsigned j = 0; j < in->def.num_components; j++) {
+            struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, USSE_MOV);
+            m->nops = 2;
+            m->op[0] = vref(w, j);
+            m->op[1] = ref(SGX_F_IXSA, j);
+            add(c, m);
+         }
+         v->kind = VAL_V;
+         v->n = w;
+         v->comp = 0;
          return;
       }
       v->kind = VAL_U;
@@ -1909,6 +1981,503 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
 /* ------------------------------------------------------------------------
  * fragment epilogue: colour to packed BGRA8, discard feedback */
 
+/* ------------------------------------------------------------------------
+ * lowp in C10, as the DDK computes it: a lowp vec4 expression over lowp
+ * uniforms that only the colour reads runs in the colour classes on 10-bit
+ * fixed point (ISA.md "sop2"; corpus c1/c2 *_l). Its leaves are the uniforms
+ * as C10 (xyz in one SA slot, w in channel 0 of another). A value goes into
+ * an internal register (pck.c10.c10 i, xyz, w [scale]) for sopwm (add, sub,
+ * min, max), sop3l (mul, mix) and sop3 (x - y * z); rcp, log2 and exp2 run
+ * channel by channel and floor is x - fract(x) through F16. The root writes
+ * the U8 colour itself. */
+
+static bool
+c10_leaf(struct sgx_ctx *c, nir_def *d)
+{
+   nir_instr *p = nir_def_instr(d);
+   if (p->type != nir_instr_type_intrinsic)
+      return false;
+   nir_intrinsic_instr *in = nir_instr_as_intrinsic(p);
+   if (in->intrinsic != nir_intrinsic_load_uniform || !nir_src_is_const(in->src[0]) ||
+       nir_src_as_uint(in->src[0]) != 0)
+      return false;
+   unsigned k = nir_intrinsic_base(in);
+   return k + 3 < ARRAY_SIZE(c->const_lowp) && c->const_lowp[k] && d->num_components == 4 && d->bit_size == 16;
+}
+
+/* source s of a C10 node: a whole vec4, maybe negated */
+static nir_def *
+c10_src(nir_alu_instr *alu, unsigned s, bool *neg)
+{
+   nir_legacy_alu_src ls = nir_legacy_chase_alu_src(&alu->src[s], true);
+   if (!ls.src.is_ssa || ls.fabs)
+      return NULL;
+   for (unsigned j = 0; j < 4; j++)
+      if (ls.swizzle[j] != j)
+         return NULL;
+   *neg = ls.fneg;
+   return ls.src.ssa;
+}
+
+static nir_alu_instr *
+c10_alu(nir_def *d)
+{
+   nir_instr *p = nir_def_instr(d);
+   return p->type == nir_instr_type_alu ? nir_instr_as_alu(p) : NULL;
+}
+
+/* fadd(x, -fmul(y, z)) with the product used once: one sop3 */
+static nir_alu_instr *
+c10_msub(nir_alu_instr *alu, nir_def **x)
+{
+   bool n0, n1;
+   nir_def *a = c10_src(alu, 0, &n0), *b = c10_src(alu, 1, &n1);
+   if (alu->op != nir_op_fadd || !a || !b || n0 == n1)
+      return NULL;
+   nir_alu_instr *m = c10_alu(n1 ? b : a);
+   if (!m || m->op != nir_op_fmul || !list_is_singular(&m->def.uses))
+      return NULL;
+   *x = n1 ? a : b;
+   return m;
+}
+
+/* the tree under d: every node into `set` (with the fnegs folded into it) */
+static bool
+c10_tree(struct sgx_ctx *c, nir_def *d, struct set *set)
+{
+   if (d->bit_size != 16 || d->num_components != 4)
+      return false;
+   if (c10_leaf(c, d)) {
+      _mesa_set_add(set, nir_def_instr(d));
+      return true;
+   }
+   nir_alu_instr *alu = c10_alu(d);
+   if (!alu)
+      return false;
+   switch (alu->op) {
+   case nir_op_fadd: case nir_op_fmul: case nir_op_fmin: case nir_op_fmax: case nir_op_flrp:
+   case nir_op_frcp: case nir_op_flog2: case nir_op_fexp2: case nir_op_ffloor:
+      break;
+   default:
+      return false;
+   }
+   bool negs = false;
+   for (unsigned s = 0; s < nir_op_infos[alu->op].num_inputs; s++) {
+      bool neg;
+      nir_def *sd = c10_src(alu, s, &neg);
+      if (!sd || !c10_tree(c, sd, set))
+         return false;
+      if (neg) {
+         if (alu->op != nir_op_fadd || negs)
+            return false;
+         negs = true;
+         _mesa_set_add(set, nir_def_instr(alu->src[s].src.ssa));
+      }
+   }
+   _mesa_set_add(set, &alu->instr);
+   return true;
+}
+
+/* the colour's value as a C10 tree that nothing else reads */
+static void
+find_c10(struct sgx_ctx *c, nir_function_impl *impl)
+{
+   if (!c->p16)
+      return;
+   nir_intrinsic_instr *st = NULL;
+   nir_foreach_block(b, impl) {
+      nir_foreach_instr(instr, b) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+         if (in->intrinsic == nir_intrinsic_store_output) {
+            if (st)
+               return;
+            st = in;
+         }
+      }
+   }
+   if (!st || nir_intrinsic_write_mask(st) != 0xf || nir_intrinsic_component(st) != 0)
+      return;
+   nir_alu_instr *cv = c10_alu(st->src[0].ssa);
+   bool neg;
+   if (!cv || cv->op != nir_op_f2f32 || !list_is_singular(&cv->def.uses))
+      return;
+   nir_def *root = c10_src(cv, 0, &neg);
+   if (!root || neg || c10_leaf(c, root))
+      return;
+   struct set *set = _mesa_pointer_set_create(c);
+   if (!c10_tree(c, root, set))
+      return;
+   /* nothing outside reads the tree */
+   set_foreach(set, e) {
+      nir_instr *instr = (nir_instr *)e->key;
+      nir_def *d = instr->type == nir_instr_type_alu ? &nir_instr_as_alu(instr)->def
+                                                     : &nir_instr_as_intrinsic(instr)->def;
+      nir_foreach_use_including_if(use, d) {
+         if (nir_src_is_if(use))
+            return;
+         nir_instr *u = nir_src_use_instr(use);
+         if (u != &cv->instr && !_mesa_set_search(set, u))
+            return;
+      }
+   }
+   set_foreach(set, e)
+      _mesa_set_add(c->skip, e->key);
+   _mesa_set_add(c->skip, &cv->instr);
+   _mesa_set_add(c->skip, &st->instr);
+   c->c10_root = root;
+   c->has_color = true;
+}
+
+struct c10_state {
+   unsigned busy;                       /* internal registers in use */
+   struct { nir_def *d; int i; unsigned left; } held[3];
+   unsigned n_held;
+};
+
+/* a C10 value: an internal register, or a uniform's xyz/w slots */
+struct c10v {
+   int i;
+   unsigned k;
+   bool held;
+};
+
+static int
+c10_ialloc(struct sgx_ctx *c, struct c10_state *st)
+{
+   for (int i = 0; i < 3; i++) {
+      if (!(st->busy & 1u << i)) {
+         st->busy |= 1u << i;
+         return i;
+      }
+   }
+   sgx_fail(c, "lowp expression needs more than three internal registers");
+   return 0;
+}
+
+static struct sgx_ref
+iref(int i, bool c10)
+{
+   struct sgx_ref r = ref(SGX_F_I, i);
+   r.c10 = c10;
+   return r;
+}
+
+static struct sgx_ref
+c10_uref(struct sgx_ctx *c, unsigned k)
+{
+   c->const_used[k] = 1;
+   struct sgx_ref r = ref(SGX_F_U, k);
+   r.c10 = 1;
+   return r;
+}
+
+/* the C10 tree's uses of d */
+static unsigned
+c10_uses(struct sgx_ctx *c, nir_def *d)
+{
+   unsigned n = 0;
+   nir_foreach_use(use, d) {
+      nir_instr *u = nir_src_use_instr(use);
+      if (u->type == nir_instr_type_alu && nir_instr_as_alu(u)->op == nir_op_fneg &&
+          nir_legacy_float_mod_folds(nir_instr_as_alu(u)))
+         n += c10_uses(c, &nir_instr_as_alu(u)->def);
+      else
+         n++;
+   }
+   return n;
+}
+
+static void
+c10_release(struct c10_state *st, struct c10v v)
+{
+   if (v.i < 0 || v.held)
+      return;
+   st->busy &= ~(1u << v.i);
+}
+
+static void emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d, struct sgx_ref dst);
+
+/* d as a pair (a uniform not packed yet) or in an internal register */
+static struct c10v
+c10_get(struct sgx_ctx *c, struct c10_state *st, nir_def *d, bool want_i)
+{
+   for (unsigned h = 0; h < st->n_held; h++) {
+      if (st->held[h].d == d) {
+         struct c10v v = { st->held[h].i, 0, true };
+         if (--st->held[h].left == 0) {
+            v.held = false;     /* the last use frees it */
+            st->held[h] = st->held[--st->n_held];
+         }
+         return v;
+      }
+   }
+   struct c10v v = { -1, 0, false };
+   if (c10_leaf(c, d)) {
+      v.k = nir_intrinsic_base(nir_instr_as_intrinsic(nir_def_instr(d)));
+      for (unsigned j = 0; j < 4; j++) {
+         c->const_fmt[v.k + j] = j == 3 ? 4 : 3;
+         c->const_used[v.k + j] = 1;   /* list C names every channel */
+      }
+      if (!want_i)
+         return v;
+      v.i = c10_ialloc(c, st);
+      struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, USSE_PCK_C10_C10);
+      p->nops = 3;
+      p->op[0] = iref(v.i, false);
+      p->op[1] = c10_uref(c, v.k);
+      p->op[2] = c10_uref(c, v.k + 3);
+      p->op[1].c10 = p->op[2].c10 = 0;
+      fld(p, USSE_F_SCALE, 1);
+      add(c, p);
+      return v;     /* packed again for each use */
+   }
+   emit_c10(c, st, d, ref(SGX_F_NONE, 0));
+   v.i = st->held[--st->n_held].i;   /* emit_c10 leaves its result on top */
+   unsigned uses = c10_uses(c, d);
+   if (uses > 1) {
+      assert(st->n_held < 3);
+      st->held[st->n_held].d = d;
+      st->held[st->n_held].i = v.i;
+      st->held[st->n_held++].left = uses - 1;
+      v.held = true;
+   }
+   return v;
+}
+
+static struct sgx_ref
+c10_opd(struct sgx_ctx *c, struct c10v v, bool alpha)
+{
+   return v.i >= 0 ? iref(v.i, true) : c10_uref(c, v.k + (alpha ? 3 : 0));
+}
+
+static void
+c10_sop(struct sgx_ctx *c, unsigned form, struct sgx_ref dst, const struct sgx_ref *src, unsigned n,
+        const int *f, unsigned nf)
+{
+   struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, form);
+   i->nops = 1 + n;
+   i->op[0] = dst;
+   for (unsigned k = 0; k < n; k++)
+      i->op[1 + k] = src[k];
+   for (unsigned k = 0; k < nf; k++)
+      fld(i, f[2 * k], f[2 * k + 1]);
+   add(c, i);
+}
+
+/* d into dst (the colour, U8), or, with dst NONE, into a new internal
+ * register left on top of st->held */
+static void
+emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d, struct sgx_ref dst)
+{
+   nir_alu_instr *alu = c10_alu(d);
+   bool to_i = dst.file == SGX_F_NONE;
+   bool n0 = false, n1 = false;
+   nir_def *a = c10_src(alu, 0, &n0);
+   nir_def *b = nir_op_infos[alu->op].num_inputs > 1 ? c10_src(alu, 1, &n1) : NULL;
+   struct c10v va, vb, vt;
+   struct sgx_ref s[3];
+   int di = -1;
+#define DST() (to_i ? iref(di = c10_ialloc(c, st), true) : dst)
+   switch (alu->op) {
+   case nir_op_fadd:
+   case nir_op_fmin:
+   case nir_op_fmax: {
+      nir_def *x;
+      nir_alu_instr *m = c10_msub(alu, &x);
+      if (m) {
+         /* x - y * z: sop3 d, z, x, y [cop=sub c1=one c2=s0 a=one aop=sub] */
+         bool ny, nz;
+         nir_def *y = c10_src(m, 0, &ny), *z = c10_src(m, 1, &nz);
+         struct c10v vz = c10_get(c, st, z, true);
+         struct c10v vy = c10_get(c, st, y, true);
+         struct c10v vx = c10_get(c, st, x, true);
+         s[0] = c10_opd(c, vz, false);
+         s[1] = c10_opd(c, vx, false);
+         s[2] = c10_opd(c, vy, false);
+         c10_release(st, vz);
+         c10_release(st, vy);
+         c10_release(st, vx);
+         static const int f[] = { USSE_F_COP, 1, USSE_F_C1, 8, USSE_F_C2, 4, USSE_F_A, 4, USSE_F_AOP, 1 };
+         c10_sop(c, USSE_SOP3, DST(), s, 3, f, 5);
+         break;
+      }
+      if (n0) {
+         nir_def *t = a; a = b; b = t;
+         n0 = false; n1 = true;
+      }
+      va = c10_get(c, st, a, true);
+      vb = c10_get(c, st, b, true);
+      s[0] = c10_opd(c, va, false);
+      s[1] = c10_opd(c, vb, false);
+      c10_release(st, va);
+      c10_release(st, vb);
+      int op = alu->op == nir_op_fmin ? 2 : alu->op == nir_op_fmax ? 3 : n1 ? 1 : 0;
+      int f[] = { USSE_F_C1, 8, USSE_F_C2, 8, USSE_F_COP, op, USSE_F_AOP, op };
+      c10_sop(c, USSE_SOPWM, DST(), s, 2, f, 4);
+      break;
+   }
+   case nir_op_fmul: {
+      /* sop3l d, y, x.xyz, x.w [cop=add c1=s0 c2=zero a1=zero a2=s2a]: x
+       * straight from its slots when it is a uniform */
+      nir_def *x = a, *y = b;
+      if (!c10_leaf(c, a) && c10_leaf(c, b)) {
+         x = b;
+         y = a;
+      }
+      vb = c10_get(c, st, y, true);
+      va = c10_get(c, st, x, false);
+      s[0] = c10_opd(c, vb, false);
+      s[1] = c10_opd(c, va, false);
+      s[2] = c10_opd(c, va, true);
+      c10_release(st, vb);
+      c10_release(st, va);
+      static const int f[] = { USSE_F_COP, 0, USSE_F_C1, 4, USSE_F_C2, 0, USSE_F_A1, 0, USSE_F_A2, 1 };
+      c10_sop(c, USSE_SOP3L, DST(), s, 3, f, 5);
+      break;
+   }
+   case nir_op_flrp: {
+      /* sop3l d, t, a, b [cop=add c1=1-s0 c2=s0 a1=s1a a2=s2a] */
+      bool nt;
+      nir_def *t = c10_src(alu, 2, &nt);
+      vt = c10_get(c, st, t, true);
+      va = c10_get(c, st, a, true);
+      vb = c10_get(c, st, b, true);
+      s[0] = c10_opd(c, vt, false);
+      s[1] = c10_opd(c, va, false);
+      s[2] = c10_opd(c, vb, false);
+      c10_release(st, vt);
+      c10_release(st, va);
+      c10_release(st, vb);
+      static const int f[] = { USSE_F_COP, 0, USSE_F_C1, 12, USSE_F_C2, 4, USSE_F_A1, 1, USSE_F_A2, 1 };
+      c10_sop(c, USSE_SOP3L, DST(), s, 3, f, 5);
+      break;
+   }
+   case nir_op_frcp:
+   case nir_op_flog2:
+   case nir_op_fexp2: {
+      /* per channel into C10 (f16d): xyz to temporaries, w to an internal
+       * register, then two pck.c10.c10 put them together */
+      unsigned form = alu->op == nir_op_frcp ? USSE_FRCP : alu->op == nir_op_flog2 ? USSE_FLOG2 : USSE_FEXP2;
+      va = c10_get(c, st, a, true);
+      unsigned t[3];
+      int wi = va.held ? c10_ialloc(c, st) : va.i;
+      /* channel order as the DDK: z, y, x, then w over the source */
+      for (unsigned n = 0; n < 4; n++) {
+         unsigned ch = n < 3 ? 2 - n : 3;
+         struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, form);
+         i->nops = 2;
+         if (ch < 3) {
+            t[ch] = new_vreg(c, 1);
+            i->op[0] = vref(t[ch], 0);
+         } else {
+            i->op[0] = iref(wi, false);
+         }
+         i->op[1] = iref(va.i, false);
+         i->op[1].abs = alu->op == nir_op_flog2;
+         fld(i, USSE_F_C10, 1);
+         fld(i, USSE_F_CHAN, ch);
+         fld(i, USSE_F_F16D, 1);
+         add(c, i);
+      }
+      int r = c10_ialloc(c, st);
+      struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, USSE_PCK_C10_C10);
+      p->nops = 3;
+      p->op[0] = iref(r, false);
+      p->op[1] = vref(t[1], 0);
+      p->op[1].lane = 1;
+      p->op[2] = vref(t[2], 0);
+      p->op[2].lane = 2;
+      fld(p, USSE_F_DMASK, 6);
+      add(c, p);
+      p = ins_alloc(c, SGX_INS_ALU, USSE_PCK_C10_C10);
+      p->nops = 3;
+      p->op[0] = iref(r, false);
+      p->op[1] = vref(t[0], 0);
+      p->op[2] = iref(wi, false);
+      p->op[2].lane = 3;
+      fld(p, USSE_F_DMASK, 9);
+      add(c, p);
+      if (wi != va.i)
+         st->busy &= ~(1u << wi);
+      c10_release(st, va);
+      if (to_i) {
+         di = r;
+      } else {
+         s[0] = iref(r, true);
+         s[1] = ref(SGX_F_IMM, 0);
+         static const int f[] = { USSE_F_C1, 8, USSE_F_C2, 0, USSE_F_COP, 0, USSE_F_AOP, 0 };
+         c10_sop(c, USSE_SOPWM, dst, s, 2, f, 4);
+         st->busy &= ~(1u << r);
+      }
+      break;
+   }
+   case nir_op_ffloor: {
+      /* x - fract(x): fract per channel in f32 from F16 (fsubflr), back to
+       * C10, then a sopwm subtract */
+      va = c10_get(c, st, a, true);
+      unsigned fr[4];
+      static const uint8_t lanes[2][2] = { { 2, 1 }, { 0, 3 } };
+      for (unsigned q = 0; q < 2; q++) {
+         unsigned h = new_vreg16(c, 2);
+         struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_C10);
+         p->nops = 3;
+         p->op[0] = href(h, 0);
+         p->op[1] = iref(va.i, false);
+         p->op[1].lane = lanes[q][0];
+         p->op[2] = iref(va.i, false);
+         p->op[2].lane = lanes[q][1];
+         fld(p, USSE_F_SCALE, 1);
+         add(c, p);
+         for (unsigned hh = 0; hh < 2; hh++) {
+            unsigned ch = lanes[q][hh];
+            fr[ch] = new_vreg(c, 1);
+            struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
+            i->nops = 3;
+            i->op[0] = vref(fr[ch], 0);
+            i->op[1] = href(h, hh);
+            i->op[2] = href(h, hh);
+            add(c, i);
+         }
+      }
+      int f = c10_ialloc(c, st);
+      for (unsigned q = 0; q < 2; q++) {
+         struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, USSE_PCK_C10_F32);
+         p->nops = 3;
+         p->op[0] = iref(f, false);
+         p->op[1] = vref(fr[q ? 0 : 1], 0);
+         p->op[2] = vref(fr[q ? 3 : 2], 0);
+         fld(p, USSE_F_DMASK, q ? 9 : 6);
+         fld(p, USSE_F_SCALE, 1);
+         add(c, p);
+      }
+      s[0] = c10_opd(c, va, false);
+      s[1] = iref(f, true);
+      c10_release(st, va);
+      static const int fl[] = { USSE_F_C1, 8, USSE_F_C2, 8, USSE_F_COP, 1, USSE_F_AOP, 1 };
+      if (to_i) {
+         di = f;
+         c10_sop(c, USSE_SOPWM, iref(f, true), s, 2, fl, 4);
+      } else {
+         c10_sop(c, USSE_SOPWM, dst, s, 2, fl, 4);
+         st->busy &= ~(1u << f);
+      }
+      break;
+   }
+   default:
+      sgx_fail(c, "C10 %s", nir_op_infos[alu->op].name);
+      return;
+   }
+#undef DST
+   if (to_i) {
+      assert(st->n_held < 3 && di >= 0);
+      st->held[st->n_held].d = d;
+      st->held[st->n_held].i = di;
+      st->held[st->n_held++].left = 0;
+   }
+}
+
 static bool
 reads_pa0(const struct sgx_ref *r)
 {
@@ -1918,6 +2487,27 @@ reads_pa0(const struct sgx_ref *r)
 static void
 emit_color(struct sgx_ctx *c)
 {
+   if (c->c10_root) {
+      struct c10_state st = { 0 };
+      struct list_head *before = c->ins.prev;
+      c->colour_pa = 0;
+      emit_c10(c, &st, c->c10_root, ref(SGX_F_PA, 0));
+      /* internal registers don't survive a deschedule: nosched on all but
+       * the last two instructions of the sequence, as libusc marks it */
+      unsigned n = 0;
+      for (struct list_head *l = before->next; l != &c->ins; l = l->next)
+         n++;
+      for (struct list_head *l = before->next; n > 2; l = l->next, n--)
+         fld(list_entry(l, struct sgx_ins, link), USSE_F_NOSCHED, 1);
+      if (c->discards) {
+         if (!c->keep_pred)
+            emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
+         struct sgx_ins *f = ins_alloc(c, SGX_INS_FEEDBACK, USSE_NOP);
+         f->ndst = 0;
+         emit(c, f);
+      }
+      return;
+   }
    struct sgx_ref col[4];
    for (unsigned k = 0; k < 4; k++)
       col[k] = c->has_color ? c->color[k] : ref(SGX_F_K, 0);
@@ -2193,6 +2783,9 @@ uniform_layout(struct sgx_ctx *c)
          }
          c->const_slot[k] = pair_slot;
          c->const_shift[k] = (k & 1) * 16;
+      } else if (fmt == 4) {
+         /* C10 on its own (a lowp vector's w): channel 0 of a slot */
+         c->const_slot[k] = c->n_sa++;
       } else if (fmt == 3) {
          if (grp != (int)(k / 4)) {
             grp = k / 4;
@@ -2238,6 +2831,7 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
       o.half = half;
       return o;
    }
+   o.fcsel = r->c10;
    switch (r->file) {
    case SGX_F_V:
       o.kind = USSE_K_R;
@@ -2252,6 +2846,9 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
    case SGX_F_I: o.kind = USSE_K_I; o.n = r->n; break;
    case SGX_F_IMM: o.kind = USSE_K_IMM; o.n = (int32_t)r->n; break;
    case SGX_F_P: o.kind = USSE_K_P; o.n = r->n; break;
+   case SGX_F_USLOT: o.kind = USSE_K_IMM; o.n = c->sa_base + c->const_slot[r->n]; break;
+   case SGX_F_IXSA: o.kind = USSE_K_IX; o.ixbank = 3; o.idx = 1; o.n = r->n; break;
+   case SGX_F_IDX: o.kind = USSE_K_IDX; o.n = r->n; break;
    default: o.kind = USSE_K_NONE; break;
    }
    return o;
@@ -2304,6 +2901,12 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
                 i->form == USSE_PCK_F16_U8 || i->form == USSE_PCK_F16_C10;
    for (unsigned k = 0; k < i->nops; k++) {
       m.op[k] = phys_opd(c, &i->op[k]);
+      if (m.op[k].kind == USSE_K_I && slot_of(i->form, k)->enc[USSE_K_I] < 0) {
+         /* sop3's src0 has no internal bank: i<n> is r124+n, six bits
+          * under format control (ISA.md "Operand slots") */
+         m.op[k].kind = USSE_K_R;
+         m.op[k].n += 60;
+      }
       if (!i->op[k].h16 || i->op[k].file == SGX_F_K || i->op[k].file == SGX_F_C)
          continue;
       if (i->form == USSE_FMAD16) {
@@ -2363,6 +2966,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
    if (c->stage == MESA_SHADER_FRAGMENT) {
       find_projected(c, impl);
       find_discard(c, impl);
+      find_c10(c, impl);
    }
    emit_cf_list(c, &impl->body, NULL);
    if (!c->failed && c->stage == MESA_SHADER_FRAGMENT)

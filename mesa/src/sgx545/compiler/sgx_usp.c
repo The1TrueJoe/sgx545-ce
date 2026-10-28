@@ -217,7 +217,7 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
       if (c->const_slot[k] < 0)
          continue;
       unsigned fmt = c->const_fmt[k] ? c->const_fmt[k] : 1;
-      if (fmt == 3) {
+      if (fmt == 3 || fmt == 4) {
          u16(&b, 3); u16(&b, k); u16(&b, 0); u16(&b, c->const_slot[k]); u16(&b, c->const_shift[k]);
       } else {
          u16(&b, fmt); u16(&b, k); u16(&b, c->const_slot[k]); u16(&b, c->const_shift[k]);
@@ -390,7 +390,7 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
       m->k = k;
       m->slot = c->const_slot[k];
       m->shift = c->const_shift[k];
-      m->fmt = c->const_fmt[k] ? c->const_fmt[k] : 1;
+      m->fmt = c->const_fmt[k] == 4 ? 3 : c->const_fmt[k] ? c->const_fmt[k] : 1;
    }
    out->n_iters = frag ? MIN2(c->n_iters, ARRAY_SIZE(out->iters)) : 0;
    for (unsigned i = 0; i < out->n_iters; i++) {

@@ -346,6 +346,9 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    char name[256];
    snprintf(name, sizeof name, "%s", var->name);
    unsigned k = var->data.driver_location;
+   nir_def *dyn = NULL;          /* a dynamic offset in components (one level) */
+   unsigned dyn_range = 0;
+   b->cursor = nir_before_instr(&in->instr);
    unsigned prec = var->data.precision;
    const struct glsl_type *t = var->type;
    for (unsigned i = 1; path.path[i]; i++) {
@@ -369,6 +372,15 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
          if (pinned >= 0)
             k = pinned;
          t = e;
+      } else if (p->deref_type == nir_deref_type_array && !dyn) {
+         /* a[i]: the offset is computed at run time; the whole array is
+          * laid out (f32, contiguous) and read through an index register */
+         const struct glsl_type *e = glsl_type_is_matrix(t) ? glsl_get_column_type(t) : glsl_get_array_element(t);
+         unsigned len = glsl_type_is_matrix(t) ? glsl_get_matrix_columns(t) : glsl_get_length(t);
+         nir_def *i = nir_u2u32(b, p->arr.index.ssa);
+         dyn = nir_imul_imm(b, i, slots4(e));
+         dyn_range = len * slots4(e);
+         t = e;
       } else {
          u->failed = true;
          nir_deref_path_finish(&path);
@@ -376,6 +388,17 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
       }
    }
    nir_deref_path_finish(&path);
+   if (dyn) {
+      unsigned n = in->def.num_components;
+      for (unsigned j = 0; j < dyn_range && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
+         u->c->const_fmt[k + j] = 1;
+      nir_def *v = nir_load_uniform(b, n, 32, dyn, .base = k, .range = dyn_range,
+                                    .dest_type = nir_type_float32);
+      if (in->def.bit_size == 16)
+         v = nir_f2f16(b, v);
+      nir_def_replace(&in->def, v);
+      return true;
+   }
    /* the constants' format in SA, as the DDK loads them: F16 pairs for
     * mediump (16-bit loads), C10 for lowp vectors used as F16, else f32 */
    unsigned n = in->def.num_components, fmt = in->def.bit_size == 16 ? 2 : 1;
@@ -403,7 +426,8 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    }
    for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
       u->c->const_fmt[k + j] = fmt == 3 && j == 3 ? 1 : fmt;
-   b->cursor = nir_before_instr(&in->instr);
+   if (fmt == 2 && prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3) && k + 3 < ARRAY_SIZE(u->c->const_lowp))
+      u->c->const_lowp[k] = 1;
    nir_def *v = nir_load_uniform(b, n, in->def.bit_size, nir_imm_int(b, 0), .base = k, .range = n,
                                  .dest_type = in->def.bit_size == 16 ? nir_type_float16 : nir_type_float32);
    nir_def_replace(&in->def, v);
@@ -657,6 +681,12 @@ assign_io(struct sgx_ctx *c)
          continue;
       }
       int k = lookup(o->uniforms, o->n_uniforms, var->name);
+      if (k < 0) {
+         /* an array or matrix pinned element by element: its base */
+         char e0[80];
+         snprintf(e0, sizeof e0, "%s[0]", var->name);
+         k = lookup(o->uniforms, o->n_uniforms, e0);
+      }
       if (k < 0) {
          k = next;
          next += ALIGN_POT(type_size_comps(var->type, false), 4);
