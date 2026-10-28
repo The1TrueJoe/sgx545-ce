@@ -4,3 +4,5 @@ __pycache__/
 abi/abi-ids.o
 probe/probe
 replay/replay
+isa/shc
+isa/*.so
