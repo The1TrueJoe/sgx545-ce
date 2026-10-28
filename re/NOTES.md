@@ -41,3 +41,24 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 - **USSE code** is 64-bit instructions. The probe's vertex program is 9
   instructions at the start of the vertex-shader heap; the fragment program
   shares its first instructions.
+- **Clear** is a background object: three screen-space vertices (0,0) (1440,0)
+  (0,960) at z=1.0, 16 bytes each (x, y, z, colour ARGB8888), drawn as one
+  oversized triangle (coordinates look like half-pixel units). Changing
+  `glClearColor` only changes those three colour words.
+- **Vertex data** from a client array is copied into a general-heap vertex
+  buffer (`0x3e51d000` here) right after the clear object's vertices; a second
+  draw appends another copy.
+- **VDM control stream** (general heap, `0x3e518000` here). Words that carry an
+  address keep the command type in the top nibble and the address >> 4 in the
+  low 28 bits (`f3040d82` → `0x3040d820`). A draw is
+  `80c00003 <index buffer> f0000000 003fffff <PDS vertex program word> 01c00082`;
+  the stream ends with `c0000000`, and each extra draw inserts one such block
+  before the closing state words.
+- **Indices.** `glDrawArrays` becomes an indexed draw over a static 16-bit
+  identity index buffer (0, 1, 2, … 1024 entries); the clear object has its own
+  three-index buffer.
+- **PDS vertex programs** are a data segment followed by code. The clear and
+  the triangle share the same 4-word code (`67800072 2f032343 030403e5
+  af000000`); only the data segment differs: vertex address, DMA size in dwords
+  minus one, stride (clear: 3, 16; xy-float triangle: 1, 8) and one control
+  word (`0x0001010a` / `0x00011b0a`).
