@@ -298,6 +298,13 @@ form("br", FC + [("h6-8", 1), ("h19", 0)], _fc_sync() + [Fld("link", "h9"), Fld(
      [Imm("target", "l0-17", signed=True)], src="FUN_00119f50 0x96")
 # lapc: jump to the link address (asm.c: ILAPC = return)
 form("lapc", FC + [("h6-8", 2)], _fc_sync(), [], src="FUN_00119f50 0x97")
+# setl / savl (h6-8 = 3 / 4): set the link address from a register, save it
+# to one. Not in the shader corpora; the microkernel brackets every nested
+# call with `savl rN` ... `br [link]` ... `setl rN`, and jumps through a
+# table with `setl` + `lapc` (docs/UKERNEL.md).
+form("setl", FC + [("h6-8", 3)], _fc_sync(), [src1("src")], src="microkernel")
+form("savl", FC + [("h6-8", 4)], _fc_sync(), [Opd("dst", "l21-27", "h0-1", None, BANK_DST)],
+     src="microkernel")
 # USEASM 0x98: needs core feature word0 & 0x200000; no arguments
 form("op0x98", FC + [("h6-8", 0), ("h9", 1), ("h19", 1)], [Fld("nosched", "h11")], [],
      src="FUN_00119f50 0x98")
