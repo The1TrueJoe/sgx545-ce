@@ -184,7 +184,9 @@ struct sgxs_vpgen_obj {
  * a set over rect unless it is empty.  Returns how many (1 or 2).  Emit them
  * before the draws they clip; afterwards the region clip is rect's tiles
  * (or, after a lone reset, prev's), which the draws inherit.  To go back to
- * no clipping, make the whole target the rectangle.
+ * no clipping, make the whole target the rectangle.  (The DDK instead emits
+ * one pass-type-3 object over the whole target with ISPA 0x07e00000 and no
+ * ISPC group, header 0xd481, full region clip: `sc7` [D, not replayed].)
  */
 static inline unsigned
 sgxs_scissor_objects(struct sgxs_vpgen_obj obj[2], const struct sgxs_rect *prev,
@@ -326,8 +328,9 @@ sgxs_line_list_indices(uint16_t *idx, unsigned n, bool loop, uint16_t first)
 }
 
 /*
- * Line width: ISPB b8-15 = width * 16 (1.0 -> 0x10, 4 -> 0x40, 9.5 -> 0x98)
- * [C: l1, l2 draw the DDK's own width-1 and width-9.5 frames].  glLineWidth
+ * Line width: ISPB b8-15 = width * 16, truncated, at most 0xff (1.0 -> 0x10,
+ * 1.06 -> 0x10, 4 -> 0x40, 9.5 -> 0x98, 16 -> 0xff) [C: l1, l2 draw the
+ * DDK's own width-1 and width-9.5 frames; D: ln106, ln16].  glLineWidth
  * clamps to [1, 16] (libGLESv2 0x255b0).  Points and triangles keep 0x10.
  */
 static inline uint32_t
@@ -337,7 +340,7 @@ sgxs_ispb_width(uint32_t ispb, float width)
 
    if (!(width >= 1.0f))
       width = 1.0f;
-   w = (uint32_t)(width * 16.0f + 0.5f);
+   w = (uint32_t)(width * 16.0f);
    if (w > 0xff)
       w = 0xff;
    return (ispb & ~0xff00u) | w << 8;
@@ -353,7 +356,9 @@ sgxs_ispb_width(uint32_t ispb, float width)
  * write: with SGXS_OBJ_SPRITE the ISP generates the coordinate into it,
  * (i + 0.5) / size across the point, origin top left, and the fragment
  * program iterates it as tc0 (DOUTI "iterate tc0 x2 f16") [C: sprite sizes
- * p2, p3].  The ES2 driver adds that set to every point draw (TSP words 2
+ * p2, p3].  It is the first set: the shader's own varyings follow it (a
+ * varying vec2 is tc1) and the size comes last (ptvar, sprvar: out dwords 4
+ * + 2 + 2 + 1, the size in o8) [D].  The ES2 driver adds that set to every point draw (TSP words 2
  * and 1, out dwords 4 + 2 + 1); the ES1 driver only to sprites [D].
  */
 static inline uint32_t

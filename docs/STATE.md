@@ -525,6 +525,12 @@ program runs):
    strip at (0,480).
 7. A scissor covering the whole target (`sc3`) emits nothing: the capture
    equals `base3`.
+   Turning the scissor off between draws (`sc7`) is one pass-type-3 object
+   over the whole target with ISPA `07e00000` and **no ISPC group** (header
+   `d481`, full region clip). The next draw's block then carries only the
+   changed groups (header `d483`: ISPA, ISPB, a full region clip), with no
+   PDS or viewport group. So every group of the TA state block is sticky,
+   not just the region clip [D].
 8. A partial glViewport (`vp1`, no scissor): the clear stays full-target;
    the draw is preceded by reset + set over the viewport rectangle and has
    the viewport transform of section 3.
@@ -554,8 +560,9 @@ points, 4 point sprites [D].
 - Object type 4 is what generates gl_PointCoord: with 3 instead, the same
   points are drawn the same size but the coordinate reads 0 [C, p4].
 
-**Line width** is ISPB b8-15 = width × 16: 1.0 `10`, 4 `40`, 9.5 `98`; the
-DDK's draws all carry `10` [C, l1 l2]. glLineWidth clamps to [1, 16]
+**Line width** is ISPB b8-15 = width × 16, truncated, at most `ff`: 1.0
+`10`, 1.06 `10`, 4 `40`, 9.5 `98`, 16 `ff`. The DDK's other draws all carry
+`10` [C, l1 l2; D, `ln106` `ln16`]. glLineWidth clamps to [1, 16]
 (libGLESv2 0x255b0) [D].
 
 **Points.** A point draw's vertex program writes one output dword after
@@ -576,6 +583,9 @@ the position and the varyings, an **F16 pair: the size in the low half**,
   select 9 = position 4 + colour 4 + size 1). `e1spr` puts it after the
   vertex colour (11, TSP word `0x15`) [D]. So it is only needed when
   gl_PointCoord is read.
+- The coordinate set comes first, as tc0. A shader's own varyings follow it
+  (a varying vec2 is iterated as tc1), and the size comes last: `ptvar` /
+  `sprvar` have output select `00093100`, 4 + 2 + 2 + 1, size in o8 [D].
 - In a sprite (object type 4) the ISP writes gl_PointCoord there, and the
   pixel program iterates it as tc0 (`DOUTI iterate tc0 x2 f16`, DOUTU w1
   b24) [D]. The values are `(i + 0.5) / size` across the point, origin top
@@ -927,6 +937,10 @@ Base captures and their bases:
 | e1tex / e1texat | an RGBA texture, GL_MODULATE / + alpha test | sop2 modulate into r0, atst8 from r0 |
 | e1atbl | alpha test + SRC_ALPHA blend | atst8 writes p0, (p0) blend |
 | e1pt / e1spr / e1ln | ES1 points 8 / sprite 16 + texture / lines width 4 | as in ES2 |
+| ln16 / ln106 | GL_LINES width 16 / 1.06 | ISPB `ff` / `10` (truncated) |
+| sc7 | glScissor for the first draw, disabled for the second | one ISPC-less pass-type-3 object over the target |
+| pt100 | gl_PointSize 100 | sa10 `5ffc5640` (F16 100.0 in the low half) |
+| ptvar / sprvar | points with a varying vec2 / + gl_PointCoord | coordinate set tc0, varying tc1, size last |
 
 Every capture's TA state block, PBE words, RT numbers, PB descriptor and
 free list are rebuilt from the formulas by `build.py --check` (run with

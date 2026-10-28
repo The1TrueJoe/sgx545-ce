@@ -98,9 +98,10 @@ main(void)
       check("spr16 ISPA", (uint32_t[]){ sgxs_ispa_objtype(0x01d00200, ot) }, (uint32_t[]){ 0x01d20200 }, 1);
       check("line strip refused", (uint32_t[]){ sgxs_prim(SGXS_GL_LINE_STRIP, false, &vb, &ot) },
             (uint32_t[]){ 0 }, 1);
-      check("ISPB widths 1 4 9.5",
-            (uint32_t[]){ sgxs_ispb_width(0xf0, 1), sgxs_ispb_width(0xf0, 4), sgxs_ispb_width(0xf0, 9.5f) },
-            (uint32_t[]){ 0x10f0, 0x40f0, 0x98f0 }, 3);
+      check("ISPB widths 1 4 9.5 1.06 16",
+            (uint32_t[]){ sgxs_ispb_width(0xf0, 1), sgxs_ispb_width(0xf0, 4), sgxs_ispb_width(0xf0, 9.5f),
+                          sgxs_ispb_width(0xf0, 1.06f), sgxs_ispb_width(0xf0, 16) },
+            (uint32_t[]){ 0x10f0, 0x40f0, 0x98f0, 0x10f0, 0xfff0 }, 5);
       check("point size words 8 16 32",
             (uint32_t[]){ sgxs_point_size_word(8), sgxs_point_size_word(16), sgxs_point_size_word(32) },
             (uint32_t[]){ 0x5ffc4800, 0x5ffc4c00, 0x5ffc5000 }, 3);
