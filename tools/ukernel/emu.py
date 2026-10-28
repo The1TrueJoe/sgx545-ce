@@ -234,6 +234,30 @@ class USSE:
             return t
         raise EmuError(f"task from {pc:#x} did not end in {max_steps} steps (pc {t.pc:#x})")
 
+    def task_from_caller(self, pc, pa=(), poison=0xBAD00000):
+        """run a subroutine entry: the link register points at a program-end
+        landing pad, so a closing `lapc` returns there and the task ends"""
+        land = self.n
+        # append one `nop [end]` as the return landing pad
+        import struct as _s
+        lo, hi = 0, 0
+        for cand in ("nop [end]",):
+            import sys as _sys, os as _os
+            _sys.path.append(_os.path.join(_os.path.dirname(__file__), "..", "isa"))
+            import asm as _asm
+            hi, lo = _asm.assemble(cand)
+        self.code = self.code + _s.pack("<II", lo, hi)
+        self.dec.append(None)
+        self.n += 1
+        t = Task(pc, pa, poison)
+        t.link = land
+        try:
+            for _ in range(200000):
+                self.step(t)
+        except Ended:
+            return t
+        raise EmuError(f"subroutine from {pc:#x} did not return")
+
     def step(self, t):
         pc = t.pc
         if pc in self.bp:
