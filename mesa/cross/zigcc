@@ -1,0 +1,16 @@
+#!/bin/sh
+# zig cc / zig c++ as meson's cross compiler: zigcc <cc|c++> <target> args...
+# zig's linker driver wants "-Wl,--version-script=FILE" in one argument;
+# meson passes it as two, and passes -Wl,-O1, which zig rejects.
+mode=$1; target=$2; shift 2
+n=$#; prev=
+for a in "$@"; do
+	if [ -n "$prev" ]; then set -- "$@" "$prev=$a"; prev=; continue; fi
+	case "$a" in
+	-Wl,--version-script|-Wl,--dynamic-list) prev=$a ;;
+	-Wl,-O1) ;;
+	*) set -- "$@" "$a" ;;
+	esac
+done
+shift $n
+exec zig "$mode" -target "$target" -g0 "$@"

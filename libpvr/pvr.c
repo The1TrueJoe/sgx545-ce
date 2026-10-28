@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -118,7 +119,12 @@ int pvr_call(struct pvr *p, uint32_t id, void *in, size_t in_size, void *out, si
 		.hKernelServices = p->services,
 	};
 
-	int r = ioctl(p->fd, DRM_IOCTL_PVR_SRVKM, &pkg), e = r < 0 ? errno : 0;
+	int r, e;
+
+	do
+		r = ioctl(p->fd, DRM_IOCTL_PVR_SRVKM, &pkg);
+	while (r < 0 && (errno == EINTR || errno == EAGAIN));
+	e = r < 0 ? errno : 0;
 
 	if (p->trace_fd >= 0)
 		trace_bridge(p, id, r, e, in, in_size, out, out_size);
@@ -127,13 +133,37 @@ int pvr_call(struct pvr *p, uint32_t id, void *in, size_t in_size, void *out, si
 	return out_size >= 4 ? (int)*(PVRSRV_ERROR *)out : 0;
 }
 
-int pvr_open(struct pvr *p, const char *node)
+void pvr_open_fd(struct pvr *p, int fd)
 {
 	memset(p, 0, sizeof *p);
+#ifdef MAP_32BIT
 	p->map_flags = MAP_32BIT;
+#endif
 	p->trace_fd = -1;
-	p->fd = open(node ? node : "/dev/dri/card0", O_RDWR | O_CLOEXEC);
+	p->fd = fd;
+}
+
+int pvr_open(struct pvr *p, const char *node)
+{
+	pvr_open_fd(p, open(node ? node : "/dev/dri/card0", O_RDWR | O_CLOEXEC));
 	return p->fd < 0 ? -errno : 0;
+}
+
+int pvr_init(struct pvr *p)
+{
+	int e;
+
+	if ((e = pvr_connect(p)) || (e = pvr_acquire(p, 0, 0)) || (e = pvr_memctx(p)) || (e = pvr_heapinfo(p)))
+		return e;
+	return 0;
+}
+
+/* resman frees what is left when services disconnect; the call has no IN */
+int pvr_disconnect(struct pvr *p)
+{
+	PVRSRV_BRIDGE_RETURN out = { 0 };
+
+	return pvr_call(p, PVRSRV_BRIDGE_DISCONNECT_SERVICES, NULL, 0, &out, sizeof out);
 }
 
 int pvr_connect(struct pvr *p)
@@ -208,6 +238,8 @@ int pvr_alloc(struct pvr *p, struct pvr_buf *b, uint32_t heap_id, uint32_t attri
 	b->sync = out.sClientSyncInfo.hKernelSyncInfo;
 	b->devva = out.sClientMemInfo.sDevVAddr.uiAddr;
 	b->size = (uint32_t)out.sClientMemInfo.uAllocSize;
+	b->client_mem = out.sClientMemInfo;
+	b->client_sync = out.sClientSyncInfo;
 	return 0;
 }
 
@@ -238,7 +270,30 @@ int pvr_map(struct pvr *p, struct pvr_buf *b)
 		p->maps[p->nmaps++].len = out.ui32RealByteSize;
 	}
 	b->cpu = (char *)m + out.ui32ByteOffset;
+	b->mmap_base = m;
+	b->mmap_len = out.ui32RealByteSize;
 	return 0;
+}
+
+void pvr_unmap(struct pvr *p, struct pvr_buf *b)
+{
+	if (!b->mmap_base)
+		return;
+	for (unsigned i = 0; i < p->nmaps; i++)
+		if (p->maps[i].addr == b->mmap_base) {
+			p->maps[i] = p->maps[--p->nmaps];
+			break;
+		}
+	munmap(b->mmap_base, b->mmap_len);
+	b->mmap_base = NULL;
+	b->cpu = NULL;
+}
+
+volatile PVRSRV_SYNC_DATA *pvr_sync_data(struct pvr *p, IMG_HANDLE sync, struct pvr_buf *keep)
+{
+	memset(keep, 0, sizeof *keep);
+	keep->mem = sync;
+	return pvr_map(p, keep) ? NULL : keep->cpu;
 }
 
 int pvr_wrap(struct pvr *p, struct pvr_buf *b, void *cpu, uint32_t size)
@@ -262,7 +317,37 @@ int pvr_wrap(struct pvr *p, struct pvr_buf *b, void *cpu, uint32_t size)
 	b->devva = out.sClientMemInfo.sDevVAddr.uiAddr;
 	b->size = size;
 	b->cpu = cpu;
+	b->wrapped = 1;
+	b->client_mem = out.sClientMemInfo;
+	b->client_sync = out.sClientSyncInfo;
 	return 0;
+}
+
+void pvr_free(struct pvr *p, struct pvr_buf *b)
+{
+	PVRSRV_BRIDGE_RETURN out = { 0 };
+
+	if (!b->mem)
+		return;
+	pvr_unmap(p, b);
+	if (b->wrapped) {
+		PVRSRV_BRIDGE_IN_UNWRAP_EXT_MEMORY in;
+
+		memset(&in, 0, sizeof in);
+		in.hKernelMemInfo = b->mem;
+		in.sClientMemInfo = b->client_mem;
+		in.sClientSyncInfo = b->client_sync;
+		pvr_call(p, PVRSRV_BRIDGE_UNWRAP_EXT_MEMORY, &in, sizeof in, &out, sizeof out);
+	} else {
+		PVRSRV_BRIDGE_IN_FREEDEVICEMEM in;
+
+		memset(&in, 0, sizeof in);
+		in.hDevCookie = p->devcookie;
+		in.psKernelMemInfo = b->mem;
+		in.sClientMemInfo = b->client_mem;
+		pvr_call(p, PVRSRV_BRIDGE_FREE_DEVICEMEM, &in, sizeof in, &out, sizeof out);
+	}
+	memset(b, 0, sizeof *b);
 }
 
 int pvr_register_render_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
