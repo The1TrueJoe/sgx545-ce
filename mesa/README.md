@@ -123,14 +123,13 @@ This list is the next work, roughly in the order gl4es and Minecraft need it:
 
 1. **Discard** (and alpha test through it): ISPA pass type 2/4 and the DDK's
    phase split around the feedback; refused today.
-2. **Projected and other sample forms** the USP reader refuses ("USP
-   features not handled yet"): most of gl4es' textured fixed-function shaders
-   sample with a projector.
+2. **gl_FragCoord and gl_PointCoord** as fragment inputs, and a saturated
+   dot product: compiler gaps (reported to the compiler).
 3. **Constant-colour blending** (`GL_CONSTANT_COLOR` and the rest). sop2 has
    two more selectors, k18/k19, that are not decoded yet; until then those
    draws come out opaque, with a message.
-4. **Textures, the rest**: dependent samples (the compiler's block 9), mipmap
-   generation on the GPU, compressed formats, render-to-texture with a
+4. **Textures, the rest**: block 9, a GPU blit (the CPU one does mipmap
+   levels and copies today), compressed formats, render-to-texture with a
    sampleable layout.
 5. **Scissor and partial viewports**: pass-type-3 objects and region clips.
 6. **Lines and points** (VDM primitive 1/2, point size output, set 0).
@@ -193,6 +192,17 @@ What the first runs found, all fixed in the driver:
   done.
 - **Varyings.** A draw whose fragment program iterates a set the vertex
   program doesn't write is refused (it locks the GPU up).
+- **Dependent texture samples** (gl4es' projected lookups, swizzled or
+  biased coordinates): the USP's sample block carries an encoded `smp`
+  template; the driver puts it, with the sampler's four DOUTT words in SA
+  after the program's own, and a `wdf` into the flat program where the block
+  stream places it. Byte-identical to the DDK (`sgx545_texab.sh`).
+- **The PDS middle word** declares the fragment program's primary
+  attributes (b0-15, units of 4 dwords) and 12 / units in b25-28, as the DDK
+  writes it: a fixed word for one unit overflowed and locked the GPU up as
+  soon as a program iterated two F32 vec4 varyings.
+- **Vertices per USSE task** are 128 / output dwords, at most 16 (the DDK's
+  numbers for 4 to 24 output dwords).
 
 ## Plan: Minecraft on our driver (milestone e)
 
