@@ -11,6 +11,7 @@
  *   wrap <i> <size> <expected dev addr>        (a private page-aligned buffer)
  *   regctx <data off> <size> <PD offset> <captured dev addr>
  *   zero <dev addr> <len> | write <dev addr> <len> <data off>
+ *   poke <dev addr> <word>...                  (32-bit words, consecutive)
  *   sync                                       (memory barrier)
  *   kick key=value ...                         (see mkreplay.py)
  *   waitsync <s<i>> <ms> | sleep <ms> | dump <dev addr> <len> <file>
@@ -292,6 +293,16 @@ static void run(FILE *f)
 				for (uint32_t o = 0; o + 4 <= len; o += 4)
 					if (!memcmp(dst + o, &ctx_va_captured, 4))
 						memcpy(dst + o, &ctx_va, 4);
+		} else if (!strcmp(tok[0], "poke")) {
+			uint32_t va = num(tok[1]);
+
+			if (n < 3)
+				die("poke needs a word");
+			for (int j = 2; j < n; j++) {
+				uint32_t w = num(tok[j]);
+
+				memcpy(cpu(va + 4 * (uint32_t)(j - 2), 4), &w, 4);
+			}
 		} else if (!strcmp(tok[0], "sync")) {
 			__sync_synchronize();
 		} else if (!strcmp(tok[0], "kick")) {

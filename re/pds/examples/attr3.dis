@@ -1,0 +1,193 @@
+== raw kdata pointer (pixel event) @ 0x2e006000: data 0x50 bytes (inferred), code @ 0x2e006050 (29 inst); kick 1; from kdata 0x3200e5bc
+   0x2e006000: ds0[0]=00010400  ds0[1]=00000000  ds1[0]=00000000  ds1[1]=01008000
+   0x2e006010: ds0[2]=01010500  ds0[3]=00c00000  ds1[2]=00000008  ds1[3]=00000002
+   0x2e006020: ds0[4]=00000100  ds0[5]=00000ff8  ds1[4]=00000004  ds1[5]=00000000
+   0x2e006030: ds0[6]=00800000  ds0[7]=003ff000  ds1[6]=00000000  ds1[7]=00000000
+   0x2e006040: ds0[8]=00400000  ds0[9]=00000000  ds1[8]=00000000  ds1[9]=00000000
+     0 0x2e006050: cf820870  and ds1[0x30], in1, ds1[2]
+     1 0x2e006054: 8700c100  tst p0, ds1[0x30] == 0
+     2 0x2e006058: 90000005  bra p0, 5
+     3 0x2e00605c: 07000205  movs doutu, ds0[0], ds0[1], ds0[0], ds0[0]
+                    ; USE task: code base 0, pc 0x37008200 <pixshader buf@0x37008000+0x200 sz=0x8000>; w0[31:22]=0x0 w1=0x00000000 w2=0x00010400
+     4 0x2e006060: af000000  halt
+     5 0x2e006064: cf820c70  and ds1[0x30], in1, ds1[3]
+     6 0x2e006068: 8700c100  tst p0, ds1[0x30] == 0
+     7 0x2e00606c: 90000018  bra p0, 24
+     8 0x2e006070: df820070  xor? ds1[0x30], in1, ds1[0]
+     9 0x2e006074: cf08c070  and ds1[0x30], ds0[4], ds1[0x30]
+    10 0x2e006078: 8700c100  tst p0, ds1[0x30] == 0
+    11 0x2e00607c: 9000001b  bra p0, 27
+    12 0x2e006080: 07840406  movs douta, in2, ds1[0], in2, in2
+                    ; attribute write?: value <run time> ctrl 0x00000000
+    13 0x2e006084: f7800370  shl ds1[0x30], in0, 3
+    14 0x2e006088: cf0ac070  and ds1[0x30], ds0[5], ds1[0x30]
+    15 0x2e00608c: c70cc030  or ds0[0x30], ds0[6], ds1[0x30]
+    16 0x2e006090: f7800370  shl ds1[0x30], in0, 3
+    17 0x2e006094: cf0ec070  and ds1[0x30], ds0[7], ds1[0x30]
+    18 0x2e006098: c760c030  or ds0[0x30], ds0[0x30], ds1[0x30]
+    19 0x2e00609c: f7811470  shl ds1[0x30], in1, 20
+    20 0x2e0060a0: cf10c070  and ds1[0x30], ds0[8], ds1[0x30]
+    21 0x2e0060a4: c760c030  or ds0[0x30], ds0[0x30], ds1[0x30]
+    22 0x2e0060a8: 07601805  movs doutu, ds1[1], ds0[0x30], ds0[0x30], ds0[0x30]
+                    ; USE task: code base 0, pc 0x37004000 <pixshader buf@0x37004000+0x0 sz=0x400>; w0[31:22]=0x4 w1=<run time> w2=<run time>
+    23 0x2e0060ac: af000000  halt
+    24 0x2e0060b0: cf821070  and ds1[0x30], in1, ds1[4]
+    25 0x2e0060b4: 8700c100  tst p0, ds1[0x30] == 0
+    26 0x2e0060b8: 9000001c  bra p0, 28
+    27 0x2e0060bc: 07040205  movs doutu, ds0[2], ds0[3], ds0[2], ds0[2]
+                    ; USE task: code base 0, pc 0x37008280 <pixshader buf@0x37008000+0x280 sz=0x8000>; w0[31:22]=0x4 w1=0x00c00000 w2=0x01010500
+    28 0x2e0060c0: af000000  halt
+
+== pixel (TA state) @ 0x2e0060e0: data 0x30 bytes, code @ 0x2e006110 (4 inst); kick 1; from kdata 0x3200e780, kdata 0x3200f010, kdata 0x3200e698, kdata 0x3200f2d0
+   0x2e0060e0: ds0[0]=00010000  ds0[1]=02000004  ds1[0]=00000000  ds1[1]=40012001
+   0x2e0060f0: ds0[2]=00000000  ds0[3]=00000000  ds1[2]=00b60e90  ds1[3]=cc2cf1df
+   0x2e006100: ds0[4]=3e265000  ds0[5]=00800000  ds1[4]=00000000  ds1[5]=00000000
+     0 0x2e006110: 07000365  movs doutu, ds0[0], ds0[1], ds1[0], ds1[1]
+                    ; USE task: code base 0, pc 0x37008000 <pixshader buf@0x37008000+0x0 sz=0x8000>; w0[31:22]=0x0 w1=0x02000004 w2=0x00000000
+     1 0x2e006114: 070418a2  movs douti, ds1[1], ds0[2], ds0[3], ds0[3]
+                    ; iterate: w0=0x40012001 w1=0x00000000  sample tc0 type0? last
+     2 0x2e006118: 07083624  movs doutt, ds1[2], ds1[3], ds0[4], ds0[5]
+                    ; texture state: 0x00b60e90 0xcc2cf1df 0x3e265000 0x00800000  <general buf@0x3e265000+0x0 sz=0x159000>
+     3 0x2e00611c: af000000  halt
+
+== pixel (TA state) @ 0x2e006120: data 0x20 bytes, code @ 0x2e006140 (3 inst); kick 1; from pdsvertex 0x30401014
+   0x2e006120: ds0[0]=000102e0  ds0[1]=01000004  ds1[0]=00000000  ds1[1]=21c10000
+     0 0x2e006140: 07000365  movs doutu, ds0[0], ds0[1], ds1[0], ds1[1]
+                    ; USE task: code base 0, pc 0x37008170 <pixshader buf@0x37008000+0x170 sz=0x8000>; w0[31:22]=0x0 w1=0x01000004 w2=0x00000000
+     1 0x2e006144: 070418a2  movs douti, ds1[1], ds0[2], ds0[3], ds0[3]
+                    ; iterate: w0=0x21c10000 w1=0x00000000  iterate colour x4 last
+     2 0x2e006148: af000000  halt
+
+== pixel (TA state) @ 0x2e018000: data 0x10 bytes, code @ 0x2e018010 (2 inst); kick 1; from pdsvertex 0x3040100c, pdsvertex 0x3040108c, kdata 0x3200f008, kdata 0x3200e690, kdata 0x3200f2c8
+   0x2e018000: ds0[0]=0002a000  ds0[1]=00000000  ds1[0]=00000000  ds1[1]=00000000
+     0 0x2e018010: 07000345  movs doutu, ds0[0], ds0[1], ds1[0], ds1[0]
+                    ; USE task: code base 0, pc 0x37015000 <pixshader buf@0x37015000+0x0 sz=0x8>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     1 0x2e018014: af000000  halt
+
+== pixel (TA state) @ 0x2e018020: data 0x20 bytes, code @ 0x2e018040 (3 inst); kick 1; from pdsvertex 0x30401094
+   0x2e018020: ds0[0]=00010600  ds0[1]=01000004  ds1[0]=00000000  ds1[1]=37c00800
+     0 0x2e018040: 07000365  movs doutu, ds0[0], ds0[1], ds1[0], ds1[1]
+                    ; USE task: code base 0, pc 0x37008300 <pixshader buf@0x37008000+0x300 sz=0x8000>; w0[31:22]=0x0 w1=0x01000004 w2=0x00000000
+     1 0x2e018044: 070418a2  movs douti, ds1[1], ds0[2], ds0[3], ds0[3]
+                    ; iterate: w0=0x37c00800 w1=0x00000000  iterate tc0 x4 f16 last
+     2 0x2e018048: af000000  halt
+
+== VDM state (type 6, info 0e022401) @ 0x30400000: data 0x30 bytes, code @ 0x30400030 (6 inst); kick 1; from VDM 0x3e518050, VDM 0x3e518064
+   0x30400000: ds0[0]=00002000  ds0[1]=00000000  ds1[0]=00000000  ds1[1]=00000000
+   0x30400010: ds0[2]=0016000e  ds0[3]=00000100  ds1[2]=00000000  ds1[3]=00000000
+   0x30400020: ds0[4]=0000000a  ds0[5]=00000000  ds1[4]=00000000  ds1[5]=00000000
+     0 0x30400030: 07030346  movs douta, ds0[0], ds0[1], ds1[0x30], ds1[0x30]
+                    ; attribute write?: value 0x00002000 ctrl 0x00000000
+     1 0x30400034: 07070346  movs douta, ds0[2], ds0[3], ds1[0x30], ds1[0x30]
+                    ; attribute write?: value 0x0016000e ctrl 0x00000100
+     2 0x30400038: 07070346  movs douta, ds0[2], ds0[3], ds1[0x30], ds1[0x30]
+                    ; attribute write?: value 0x0016000e ctrl 0x00000100
+     3 0x3040003c: 07070346  movs douta, ds0[2], ds0[3], ds1[0x30], ds1[0x30]
+                    ; attribute write?: value 0x0016000e ctrl 0x00000100
+     4 0x30400040: 07080345  movs doutu, ds0[4], ds0[5], ds1[0], ds1[0]
+                    ; USE task: code base 10, pc 0x3c000000 <vtxshader buf@0x3c000000+0x0 sz=0x48>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     5 0x30400044: af000000  halt
+
+== VDM state (type 4, info 0400e100) @ 0x30400060: data 0x10 bytes, code @ 0x30400070 (2 inst); kick 1; from VDM 0x3e518048, VDM 0x3e51805c
+   0x30400060: ds0[0]=0000010a  ds0[1]=00000000  ds1[0]=00000000  ds1[1]=00000000
+     0 0x30400070: 07000345  movs doutu, ds0[0], ds0[1], ds1[0], ds1[0]
+                    ; USE task: code base 10, pc 0x3c000080 <vtxshader buf@0x3c000080+0x0 sz=0x8>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     1 0x30400074: af000000  halt
+
+== vertex fetch (VDM type 7, info 02c00082) @ 0x30401040: data 0x20 bytes, code @ 0x30401060 (4 inst); kick 1; from VDM 0x3e518018
+   0x30401040: ds0[0]=3e51d000  ds0[1]=00000003  ds1[0]=00000010  ds1[1]=00000000
+   0x30401050: ds0[2]=0001010a  ds0[3]=00000000  ds1[2]=00000000  ds1[3]=00000000
+     0 0x30401060: 67800072  mul16 ds1[0x32], in0.lo, ds1[0].lo
+     1 0x30401064: 2f032343  movs.x2.s27 doutd, ds0[0], ds0[1], ds1[0x32], ds1[0x32]
+                    ; DMA: addr 0x3e51d000 <general buf@0x3e51d000+0x0 sz=0x32000> ctrl 0x00000003 -> 4 dwords to attr 0 w2=<run time>
+     2 0x30401068: 030403e5  movs.cc3 doutu, ds0[2], ds0[3], ds1[1], ds1[1]
+                    ; USE task: code base 10, pc 0x3c008080 <vtxshader buf@0x3c008000+0x80 sz=0x8000>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     3 0x3040106c: af000000  halt
+
+== VDM state (type 4, info 0800e103) @ 0x30401120: data 0x20 bytes, code @ 0x30401140 (3 inst); kick 1; from VDM 0x3e518028
+   0x30401120: ds0[0]=304010e0  ds0[1]=02400009  ds1[0]=00000000  ds1[1]=00000000
+   0x30401130: ds0[2]=0000010a  ds0[3]=00000000  ds1[2]=00000000  ds1[3]=00000000
+     0 0x30401140: 07030223  movs doutd, ds0[0], ds0[1], ds0[0], ds0[1]
+                    ; DMA: addr 0x304010e0 <pdsvertex buf@0x30401000+0xe0 sz=0xc800> ctrl 0x02400009 -> 10 dwords to attr 0 [b22-24=1] [b25] w2=0x304010e0
+     1 0x30401144: 07040345  movs doutu, ds0[2], ds0[3], ds1[0], ds1[0]
+                    ; USE task: code base 10, pc 0x3c000080 <vtxshader buf@0x3c000080+0x0 sz=0x8>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     2 0x30401148: af000000  halt
+
+== vertex fetch (VDM type f, info 02c00205) @ 0x3040d820: data 0x50 bytes, code @ 0x3040d870 (10 inst); kick 1; from VDM 0x3e518040
+   0x3040d820: ds0[0]=3e51d030  ds0[1]=00000001  ds1[0]=00000008  ds1[1]=00000010
+   0x3040d830: ds0[2]=3e51d048  ds0[3]=00000c03  ds1[2]=0000000c  ds1[3]=00000004
+   0x3040d840: ds0[4]=3e51d078  ds0[5]=00000402  ds1[4]=00000000  ds1[5]=00000000
+   0x3040d850: ds0[6]=3e51d09c  ds0[7]=00000800  ds1[6]=00000000  ds1[7]=00000000
+   0x3040d860: ds0[8]=00011b0a  ds0[9]=00000000  ds1[8]=00000000  ds1[9]=00000000
+     0 0x3040d870: 67800072  mul16 ds1[0x32], in0.lo, ds1[0].lo
+     1 0x3040d874: 2f032343  movs.x2.s27 doutd, ds0[0], ds0[1], ds1[0x32], ds1[0x32]
+                    ; DMA: addr 0x3e51d030 <general buf@0x3e51d000+0x30 sz=0x32000> ctrl 0x00000001 -> 2 dwords to attr 0 w2=<run time>
+     2 0x3040d878: 67800472  mul16 ds1[0x32], in0.lo, ds1[1].lo
+     3 0x3040d87c: 2f072343  movs.x2.s27 doutd, ds0[2], ds0[3], ds1[0x32], ds1[0x32]
+                    ; DMA: addr 0x3e51d048 <general buf@0x3e51d000+0x48 sz=0x32000> ctrl 0x00000c03 -> 4 dwords to attr 12 w2=<run time>
+     4 0x3040d880: 67800872  mul16 ds1[0x32], in0.lo, ds1[2].lo
+     5 0x3040d884: 2f0b2343  movs.x2.s27 doutd, ds0[4], ds0[5], ds1[0x32], ds1[0x32]
+                    ; DMA: addr 0x3e51d078 <general buf@0x3e51d000+0x78 sz=0x32000> ctrl 0x00000402 -> 3 dwords to attr 4 w2=<run time>
+     6 0x3040d888: 67800c72  mul16 ds1[0x32], in0.lo, ds1[3].lo
+     7 0x3040d88c: 2f0f2343  movs.x2.s27 doutd, ds0[6], ds0[7], ds1[0x32], ds1[0x32]
+                    ; DMA: addr 0x3e51d09c <general buf@0x3e51d000+0x9c sz=0x32000> ctrl 0x00000800 -> 1 dwords to attr 8 w2=<run time>
+     8 0x3040d890: 03104345  movs.cc3 doutu, ds0[8], ds0[9], ds1[4], ds1[4]
+                    ; USE task: code base 10, pc 0x3c008d80 <vtxshader buf@0x3c008000+0xd80 sz=0x8000>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     9 0x3040d894: af000000  halt
+
+== VDM state (type 4, info 0e022403) @ 0x3040e000: data 0x30 bytes, code @ 0x3040e030 (8 inst); kick 1; from VDM 0x3e518000
+   0x3040e000: ds0[0]=30401000  ds0[1]=02c0000b  ds1[0]=00000000  ds1[1]=00000000
+   0x3040e020: ds0[4]=00010e0a  ds0[5]=00000000  ds1[4]=00000000  ds1[5]=00000000
+     0 0x3040e030: 87000000  tst p0, ds0[0] == 0
+     1 0x3040e034: 90000006  bra p0, 6
+     2 0x3040e038: 07000203  movs doutd, ds0[0], ds0[1], ds0[0], ds0[0]
+                    ; DMA: addr 0x30401000 <pdsvertex buf@0x30401000+0x0 sz=0xc800> ctrl 0x02c0000b -> 12 dwords to attr 0 [b22-24=3] [b25] w2=0x30401000
+     3 0x3040e03c: 87040000  tst p0, ds0[2] == 0
+     4 0x3040e040: 90000006  bra p0, 6
+     5 0x3040e044: 07040203  movs doutd, ds0[2], ds0[3], ds0[2], ds0[2]
+                    ; DMA: addr 0x00000000  ctrl 0x00000000 -> 1 dwords to attr 0 w2=0x00000000
+     6 0x3040e048: 07080305  movs doutu, ds0[4], ds0[5], ds1[0], ds0[4]
+                    ; USE task: code base 10, pc 0x3c008700 <vtxshader buf@0x3c008000+0x700 sz=0x8000>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     7 0x3040e04c: af000000  halt
+
+== VDM state (type 4, info 0e022405) @ 0x3040e080: data 0x30 bytes, code @ 0x3040e0b0 (8 inst); kick 1; from VDM 0x3e518020
+   0x3040e080: ds0[0]=30401080  ds0[1]=02000018  ds1[0]=00000000  ds1[1]=00000000
+   0x3040e0a0: ds0[4]=0001140a  ds0[5]=00000000  ds1[4]=00000000  ds1[5]=00000000
+     0 0x3040e0b0: 87000000  tst p0, ds0[0] == 0
+     1 0x3040e0b4: 90000006  bra p0, 6
+     2 0x3040e0b8: 07000203  movs doutd, ds0[0], ds0[1], ds0[0], ds0[0]
+                    ; DMA: addr 0x30401080 <pdsvertex buf@0x30401000+0x80 sz=0xc800> ctrl 0x02000018 -> 25 dwords to attr 0 [b25] w2=0x30401080
+     3 0x3040e0bc: 87040000  tst p0, ds0[2] == 0
+     4 0x3040e0c0: 90000006  bra p0, 6
+     5 0x3040e0c4: 07040203  movs doutd, ds0[2], ds0[3], ds0[2], ds0[2]
+                    ; DMA: addr 0x00000000  ctrl 0x00000000 -> 1 dwords to attr 0 w2=0x00000000
+     6 0x3040e0c8: 07080305  movs doutu, ds0[4], ds0[5], ds1[0], ds0[4]
+                    ; USE task: code base 10, pc 0x3c008a00 <vtxshader buf@0x3c008000+0xa00 sz=0x8000>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     7 0x3040e0cc: af000000  halt
+
+== unreferenced @ 0x2e002000: data 0x30 bytes (inferred), code @ 0x2e002030 (4 inst); kick 1; from none (scan)
+     0 0x2e002030: 07000305  movs doutu, ds0[0], ds0[1], ds1[0], ds0[0]
+                    ; USE task: code base 0, pc 0x37000000 <pixshader buf@0x37000000+0x0 sz=0x800>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     1 0x2e002034: 07040202  movs douti, ds0[2], ds0[3], ds0[2], ds0[2]
+                    ; iterate: w0=0x00000000 w1=0x00000000  
+     2 0x2e002038: 07082364  movs doutt, ds0[4], ds0[5], ds1[2], ds1[3]
+                    ; texture state: 0x00000000 0x00000000 0x00000000 0x00000000
+     3 0x2e00203c: af000000  halt
+
+   ... and 31 more with this code and data size at 0x2e002040 0x2e002080 0x2e0020c0 0x2e002100 0x2e002140 0x2e002180 0x2e0021c0 0x2e002200 0x2e002240 0x2e002280 0x2e0022c0 0x2e002300 0x2e002340 0x2e002380 0x2e0023c0 ...
+
+== unreferenced @ 0x3040e100: data 0x30 bytes (inferred), code @ 0x3040e130 (8 inst); kick 1; from none (scan)
+     0 0x3040e130: 87000000  tst p0, ds0[0] == 0
+     1 0x3040e134: 90000006  bra p0, 6
+     2 0x3040e138: 07000203  movs doutd, ds0[0], ds0[1], ds0[0], ds0[0]
+                    ; DMA: addr 0x00000000  ctrl 0x00000000 -> 1 dwords to attr 0 w2=0x00000000
+     3 0x3040e13c: 87040000  tst p0, ds0[2] == 0
+     4 0x3040e140: 90000006  bra p0, 6
+     5 0x3040e144: 07040203  movs doutd, ds0[2], ds0[3], ds0[2], ds0[2]
+                    ; DMA: addr 0x00000000  ctrl 0x00000000 -> 1 dwords to attr 0 w2=0x00000000
+     6 0x3040e148: 07080305  movs doutu, ds0[4], ds0[5], ds1[0], ds0[4]
+                    ; USE task: code base 0, pc 0x37000000 <pixshader buf@0x37000000+0x0 sz=0x800>; w0[31:22]=0x0 w1=0x00000000 w2=0x00000000
+     7 0x3040e14c: af000000  halt
+
+   ... and 397 more with this code and data size at 0x3040e180 0x3040e200 0x3040e280 0x3040e300 0x3040e380 0x3040e400 0x3040e480 0x3040e500 0x3040e580 0x3040e600 0x3040e680 0x3040e700 0x3040e780 0x3040e800 0x3040e880 ...
+
