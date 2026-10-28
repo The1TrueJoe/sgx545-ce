@@ -297,20 +297,16 @@ materialize(struct sgx_ctx *c, struct sgx_ins *at, struct sgx_ref src, unsigned 
          m->op[1].n &= 0x7fffffff;
       insert_before(at, m);
    } else if (src.h16) {
-      /* F16 -> f32: x.f16 * 1 + -0 under format select */
-      m = ins_alloc(c, SGX_INS_ALU, USSE_FMAD);
-      m->nops = 4;
+      /* F16 -> f32: x.f16 - floor(0) under format select (src1 takes any bank
+       * and the modifiers) */
+      m = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
+      m->nops = 3;
       m->rpt = n;
       m->op[0] = vref(v, 0);
       m->op[1] = src;
-      m->op[1].neg = 0;
       m->op[1].step = n > 1;
-      m->op[2] = cref(52);
-      m->op[2].neg = src.neg;
+      m->op[2] = cref(48);
       m->op[2].step = 0;
-      m->op[3] = cref(48);
-      m->op[3].neg = 1;
-      m->op[3].step = 0;
       insert_before(at, m);
    } else if (src.neg || src.abs) {
       /* x - floor(0): a move that applies the source modifiers */
@@ -390,8 +386,11 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          bool pck16 = i->form == USSE_PCK_U8_F16 || i->form == USSE_PCK_F16_F16 || i->form == USSE_PCK_F32_F16;
          unsigned reg = r->file == SGX_F_V ? r->comp / 2 : r->n / 2;
          bool small = r->file == SGX_F_V || r->file == SGX_F_U || reg < 32;
-         if ((s && s->fmt && small && i->form != USSE_TESTMASK_FADD_S0Z0O_BYTE_1) || scalar || pck16 ||
-             i->form == USSE_FMAD16)
+         struct sgx_ref plain = *r;
+         plain.h16 = 0;
+         bool kind_ok = slot_ok(i->form, k, &plain);
+         if (((s && s->fmt && small && i->form != USSE_TESTMASK_FADD_S0Z0O_BYTE_1) || scalar || pck16 ||
+              i->form == USSE_FMAD16) && kind_ok)
             continue;
       }
       if (slot_ok(i->form, k, r))
@@ -758,6 +757,30 @@ set_refs(struct sgx_ctx *c, nir_def *def, const struct sgx_ref *r, unsigned n)
       v->refs[k] = r[k < n ? k : 0];
 }
 
+static void emit_alu(struct sgx_ctx *c, nir_alu_instr *alu);
+
+/* a 16-bit op done in f32: the instruction selected as if the def were
+ * 32-bit (its F16 sources are format-select operands), then each component
+ * rounded to F16 */
+static void
+alu_as_f32(struct sgx_ctx *c, nir_alu_instr *alu)
+{
+   unsigned nc = alu->def.num_components;
+   alu->def.bit_size = 32;
+   struct sgx_val save = c->vals[alu->def.index];
+   emit_alu(c, alu);
+   alu->def.bit_size = 16;
+   struct sgx_val *v = &c->vals[alu->def.index];
+   struct sgx_ref r[4];
+   for (unsigned k = 0; k < nc; k++) {
+      nir_legacy_src ls = { .is_ssa = true, .ssa = &alu->def };
+      r[k] = f32_to_h(c, src_comp(c, &ls, k));
+   }
+   (void)save;
+   set_refs(c, &alu->def, r, nc);
+   (void)v;
+}
+
 /* the value of a 16-bit def lives in a new 16-bit vreg; pairs of it */
 static void
 emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
@@ -767,13 +790,22 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
    for (unsigned j = 0; j < nin && j < 3; j++)
       for (unsigned k = 0; k < nc; k++)
          s[j][k] = alu_src(c, alu, j, k);
+   if (alu->op == nir_op_fmin || alu->op == nir_op_fmax || alu->op == nir_op_fdot2 ||
+       alu->op == nir_op_fdot3 || alu->op == nir_op_fdot4 || alu->op == nir_op_fsat || alu->op == nir_op_fcsel ||
+       alu->op == nir_op_fsqrt || alu->op == nir_op_fsin_agx) {
+      /* no F16 form: the f32 instruction reading the F16 halves (format
+       * select), result converted back with fmad16's rounding */
+      alu_as_f32(c, alu);
+      return;
+   }
    if (alu->op == nir_op_mov || alu->op == nir_op_vec2 || alu->op == nir_op_vec3 || alu->op == nir_op_vec4 ||
-       alu->op == nir_op_f2f16) {
+       alu->op == nir_op_f2f16 || alu->op == nir_op_b2f16) {
       /* an alias of the halves it names (f2f16 of an F16-held 32-bit value is
        * a no-op; of a real f32 value, a rounding fmad16) */
       struct sgx_ref r[4];
       for (unsigned k = 0; k < nc; k++) {
-         r[k] = alu->op == nir_op_mov || alu->op == nir_op_f2f16 ? s[0][k] : alu_src(c, alu, k, 0);
+         r[k] = alu->op == nir_op_mov || alu->op == nir_op_f2f16 || alu->op == nir_op_b2f16 ? s[0][k]
+                                                                                            : alu_src(c, alu, k, 0);
          if (r[k].file == SGX_F_K && !r[k].h16) {
             /* a constant: its F16 bits (round to nearest) */
             r[k].n = _mesa_float_to_half(uif(r[k].n));

@@ -90,6 +90,9 @@ def calib_pins(path):
     return pins
 
 
+F16 = False
+
+
 def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
     work = os.path.join(outdir, "work")
     os.makedirs(work, exist_ok=True)
@@ -109,6 +112,10 @@ def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
         if kind == "vert":
             for a, k in layout.attributes(src).items():
                 args += ["-a", f"{a}={k}"]
+    # F16 for the mediump/lowp variants (their ints would become 16-bit too,
+    # which the int-to-float lowering doesn't take in loops)
+    if F16 and kind == "frag" and re.search(r"_[ml]$", name):
+        args.append("-p")
     args += ["-o", base, base + ".vert", base + ".frag"]
     r = subprocess.run(args, capture_output=True, text=True)
     stem = os.path.join(outdir, f"{idx:03d}-{name}")
@@ -132,7 +139,10 @@ def main():
     ap.add_argument("outdir")
     ap.add_argument("-k")
     ap.add_argument("--layout", action="store_true")
+    ap.add_argument("--f16", action="store_true", help="sgxc -p: mediump in F16")
     a = ap.parse_args()
+    global F16
+    F16 = a.f16
     os.makedirs(a.outdir, exist_ok=True)
     n_ok = n = 0
     for idx, (kind, name, src) in enumerate(parse(a.corpus)):

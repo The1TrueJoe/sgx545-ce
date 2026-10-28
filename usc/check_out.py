@@ -75,7 +75,8 @@ def useasm(x):
         else:
             f1 |= d.get("mask", 0) << 9
     if n in SCALAR:
-        return [U(SCALAR[n], *[arg(o) for o in ops], f1=f1)]
+        fl = (1 << 22 | 2 * d.get("chan", 0) << 5) if d.get("f16") else 0
+        return [U(SCALAR[n], arg(ops[0]), arg(ops[1], fl), f1=f1, f2=(1 << 22) if d.get("f16d") else 0)]
     if n == "mov":
         return [U(0xA3, *[arg(o) for o in ops], f1=f1)]
     if n == "movc":

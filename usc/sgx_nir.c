@@ -3,6 +3,7 @@
  * the NIR lowering pipeline that runs before instruction selection.
  */
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "nir.h"
@@ -263,6 +264,24 @@ widen_cmp16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
          alu->src[i].swizzle[c] = c < w->num_components ? c : 0;
    }
    return true;
+}
+
+/* 16-bit integer ALU (mediump ints) back to 32-bit: GLES2 ints become floats */
+static unsigned
+int16_to_32(const nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_alu)
+      return 0;
+   const nir_alu_instr *alu = nir_instr_as_alu(instr);
+   const nir_op_info *info = &nir_op_infos[alu->op];
+   /* moves, vectors and selects carry data of any type */
+   if (alu->op == nir_op_mov || nir_op_is_vec(alu->op) || alu->op == nir_op_bcsel)
+      return 0;
+   bool int16 = alu->def.bit_size == 16 && nir_alu_type_get_base_type(info->output_type) != nir_type_float;
+   for (unsigned i = 0; i < info->num_inputs; i++)
+      int16 |= nir_src_bit_size(alu->src[i].src) == 16 &&
+               nir_alu_type_get_base_type(info->input_types[i]) != nir_type_float;
+   return int16 ? 32 : 0;
 }
 
 static bool
@@ -638,6 +657,11 @@ sgx_lower(struct sgx_ctx *c)
    } while (progress);
 
    NIR_PASS(_, s, nir_shader_alu_pass, widen_cmp16_instr, nir_metadata_control_flow, NULL);
+   NIR_PASS(_, s, nir_lower_bit_size, int16_to_32, NULL);
+   NIR_PASS(_, s, nir_opt_constant_folding);
+   NIR_PASS(_, s, nir_opt_dce);
+   if (getenv("SGX_PRINT_PRE_I2F"))
+      nir_print_shader(s, stderr);
    NIR_PASS(_, s, nir_lower_int_to_float);
    NIR_PASS(_, s, nir_opt_copy_prop);
    NIR_PASS(_, s, nir_lower_bool_to_float, true);
