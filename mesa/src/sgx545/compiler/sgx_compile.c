@@ -2216,8 +2216,10 @@ c10_get(struct sgx_ctx *c, struct c10_state *st, nir_def *d, bool want_i)
    struct c10v v = { -1, 0, false };
    if (c10_leaf(c, d)) {
       v.k = nir_intrinsic_base(nir_instr_as_intrinsic(nir_def_instr(d)));
-      for (unsigned j = 0; j < 4; j++)
+      for (unsigned j = 0; j < 4; j++) {
          c->const_fmt[v.k + j] = j == 3 ? 4 : 3;
+         c->const_used[v.k + j] = 1;   /* list C names every channel */
+      }
       if (!want_i)
          return v;
       v.i = c10_ialloc(c, st);
@@ -2487,8 +2489,16 @@ emit_color(struct sgx_ctx *c)
 {
    if (c->c10_root) {
       struct c10_state st = { 0 };
+      struct list_head *before = c->ins.prev;
       c->colour_pa = 0;
       emit_c10(c, &st, c->c10_root, ref(SGX_F_PA, 0));
+      /* internal registers don't survive a deschedule: nosched on all but
+       * the last two instructions of the sequence, as libusc marks it */
+      unsigned n = 0;
+      for (struct list_head *l = before->next; l != &c->ins; l = l->next)
+         n++;
+      for (struct list_head *l = before->next; n > 2; l = l->next, n--)
+         fld(list_entry(l, struct sgx_ins, link), USSE_F_NOSCHED, 1);
       if (c->discards) {
          if (!c->keep_pred)
             emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
