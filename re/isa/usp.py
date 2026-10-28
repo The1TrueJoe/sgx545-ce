@@ -30,7 +30,7 @@ u32 / u16 / raw-bytes callbacks, so u16 fields leave later u32s unaligned.
     3  branch: 8-byte encoded instruction, u16 label
     4  label:  u16 label id
     5  sample (56 bytes), 6 sample unpack (74 bytes), 9 texture write
-       (82 bytes): parsed by smpblock.py (see notes_sample.md). The driver's
+       (82 bytes): parsed by smpblock.py (see ISA.md, "USP texture-sample blocks"). The driver's
        USP finalizer turns them into code; a dependent sample's block holds
        libusc's smp as a template (block["sample"]["smp"]), which is not
        part of "insts"

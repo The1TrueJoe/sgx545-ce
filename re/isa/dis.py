@@ -37,7 +37,7 @@ def dis_program(insts, indent="    ", fc=None):
 
 
 def sample_text(b):
-    """a USP texture-sample block (smpblock.py, notes_sample.md): the driver
+    """a USP texture-sample block (smpblock.py, ISA.md, "USP texture-sample blocks"): the driver
     turns it into code at finalize"""
     import smpblock
     return f"[{b['type']}] " + smpblock.text(b["sample"])

@@ -8,7 +8,7 @@ Encoders (Ghidra addresses, libusc file vaddr + 0x10000):
   FUN_00117270  and/or/xor/shl/rol/shr/asr/rlp (USEASM 0x4f-0x56)
 with the generic operand encoder FUN_00107830 (src1 slot FUN_001080b0, src2
 slot FUN_00108040, dest FUN_0010b9d0) and the predicate field FUN_00106f30.
-See notes_pack.md for the evidence behind every field.
+See ISA.md, "Pack/unpack, test, testmask, bitwise" for the evidence behind every field.
 """
 from hw import BANK_DST, BANK_SRC, PRED3, Fld, Opd, form, get, put, mask
 

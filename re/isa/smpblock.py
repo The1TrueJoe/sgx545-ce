@@ -1,6 +1,6 @@
 """USP texture-sample blocks (block types 5, 6, 9): parse and print them.
 
-See notes_sample.md for where every field comes from. In short:
+See ISA.md, "USP texture-sample blocks" for where every field comes from. In short:
 
   writer   libusc FUN_001042a0 (uspbin.c, the block walker; the sample cases
            are inlined: IR opcodes 0xa0-0xa4 -> block 5, 0xa5 -> block 6,

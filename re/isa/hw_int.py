@@ -1,7 +1,7 @@
 """Integer, fixed-point and multi-unit forms: hardware opcodes 07 (efo),
 10 (sop2), 11 (sop3, lrp1, ...), 12 (sopwm), 13 (ima8), 14 (ima16), 15 (imae),
 16 (adif, adifsum, bilin, ssum16, ...), 17 (firv, firh), 18 (dot3/dot4),
-19 (fpma), 1a (ima32, ...). See notes_int.md for the field tables.
+19 (fpma), 1a (ima32, ...). See ISA.md, "Integer, fixed-point and multi-unit ops" for the field tables.
 
 Encoders (Ghidra addresses = libusc file vaddr + 0x10000):
   FUN_00116100  USEASM 0x13 efo                         hw 07
@@ -25,7 +25,7 @@ Encoders (Ghidra addresses = libusc file vaddr + 0x10000):
   FUN_00119f50 inline: USEASM 0x66                   hw 1a, h20 = 1 (not on SGX545)
 Mnemonic sources: efo, sop2/sop3/sopwm, lrp1, alrp/asop, ima8/fpma/ima16/imae/ima32
 and dot3/dot4 are libusc's own names (asserts/struct names in usc.c); the
-others are Eurasia-family guesses (notes_int.md).
+others are Eurasia-family guesses (ISA.md, "Integer, fixed-point and multi-unit ops").
 """
 from hw import BANK_DST, BANK_SRC, BANK_SRC0, PRED2, Fld, Opd, form, get, mask, put
 

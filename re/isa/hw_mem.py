@@ -1,7 +1,7 @@
 """Texture sample (hw 1c), load (hw 1d), store (hw 1e) and the special class
 (hw 1f: flow control, MOE setup, sync, emit, ...).
 
-Encoders (Ghidra addresses = libusc + 0x10000; see notes_mem.md):
+Encoders (Ghidra addresses = libusc + 0x10000; see ISA.md, "smp, ld/st, and the special class"):
   smp        FUN_0010a3f0  USEASM 0x6f-0x7a
   ld / st    FUN_0010b190  USEASM 0x7b-0x92
   eld        FUN_0010ace0  USEASM 0x93, 0x94
