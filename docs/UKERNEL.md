@@ -275,18 +275,69 @@ EDM runs the event program, which starts the microkernel at its init entry
 
 - reads the TA3D control block, host control block and CCB addresses out of
   `sa` (they were DMAed in);
-- does first-time setup of the control block (clears the render-in-flight
-  list, sets the read offset to match the write offset so no stale command is
-  processed);
+- installs the event-program address and its control words into registers
+  `EUR_CR_*` 0xa68/0xa6c;
+- **tests the host control block's `ui32InterruptClearFlags` bit 0
+  (`PVRSRV_USSE_EDM_INTERRUPT_HWR`)**. On a clean boot that bit is clear and
+  the init task does nothing more than the next step. On a *recovery* re-init
+  the host set it in `HWRecoveryResetSGX` (`sgxinit.c`), and the init task
+  first runs the recovery rescan of section 5a before continuing;
 - writes `PVRSRV_USSE_EDM_INIT_COMPLETE` (bit 0) into the host control block's
   `ui32InitStatus` and ends.
 
-The host's `PollForValueKM` on `ui32InitStatus` then succeeds. The offline
-emulator reproduces exactly this: after `Machine.init()` the host control
-block's first word reads 1 (`tools/ukernel/run.py`, the `init` section). A
-timeout here is only logged ("Wait for uKernel initialisation failed"), so a
-successful `INITSRV_DISCONNECT` does not prove the microkernel ran — a client
-must render.
+So a clean boot's init path is trivial — set one word and end — while a
+recovery re-init does real work before it can set `ui32InitStatus`. The host's
+`PollForValueKM` on `ui32InitStatus` then succeeds. The offline emulator
+reproduces the clean path: after `Machine.init()` the host control block's
+first word reads 1 (`tools/ukernel/run.py`, the `init` section). A timeout here
+is only logged ("Wait for uKernel initialisation failed"), so a successful
+`INITSRV_DISCONNECT` does not prove the microkernel ran — a client must render.
+
+## 5a. Hardware recovery and re-initialisation
+
+When a core locks up, the host's watchdog or MISR calls `HWRecoveryResetSGX`,
+which pulses `EUR_CR_SOFT_RESET` and re-runs `SGXInitialise`. **A soft reset
+resets only the cores; all of device memory survives** — the host control
+block, the TA3D control block (including its render-in-flight list head), the
+kernel CCB and its read/write offsets, and every registered render context
+with its parameter-buffer free list. `HWRecoveryResetSGX` sets the HWR bit in
+`ui32InterruptClearFlags` before re-initialising, so the init task takes the
+recovery path above. That path, instead of starting clean:
+
+- **re-scans the surviving kernel CCB** from the read offset to the write
+  offset. It does not simply discard what is there; it walks each command and
+  rebuilds the microkernel's internal per-context lookup from it;
+- **walks the surviving render-in-flight list** (the control block's list
+  head) and, for each render still registered, dereferences the render
+  context and touches its structures (the context block, its sync and PB
+  fields) to re-attach it.
+
+Only after that does it set `ui32InitStatus`.
+
+This is why recovery is fragile, and it matches what the replayer session saw
+on hardware (`docs/log/entries/2026-10-28-2210-hwr-workqueues.md`): the first
+recovery after a TA lockup succeeded, but a second lockup — after a client
+that had locked up and whose `SGXCleanupRequest` had *failed*, leaving its
+render context still registered — left `SGXInitialise` failing every time
+(error 24, the `ui32InitStatus` poll timing out, 42 attempts). The likely
+mechanism: the recovery init path walks straight into the dead client's
+still-registered context, whose structures are inconsistent or partly torn
+down, and the init task faults or stalls there before it can write
+`ui32InitStatus`. The surviving kernel CCB (observed full, write offset 0x2f /
+read offset 0x30) feeds the same stale work back in.
+
+An open microkernel can avoid this. On a recovery re-init (the HWR bit set) it
+can **discard** the surviving state rather than replay it: set the CCB read
+offset equal to the write offset so no stale command is processed, and reset
+the render-in-flight list head to empty, accepting that the render that was in
+flight is lost — which it is in any case, because its core was reset
+mid-render. The clients whose contexts are abandoned will fail their own
+waits and tear down through the normal cleanup path once a working microkernel
+is back. This is a behaviour choice the open microkernel makes; it is not a
+reproduction of the DDK's, which rescans. It needs the same offline and
+hardware validation as the rest (a recovery re-init with a non-empty CCB and a
+stale render-in-flight entry, run through the emulator, then the wedge test on
+hardware).
 
 ## 5. Completion, sync objects and the host interrupt
 
@@ -465,3 +516,9 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   contexts in flight are not yet exercised.
 - The timer / active-power / lockup-detection path is read structurally but
   not run (no timer event in an offline frame).
+- The recovery rescan (section 5a) is understood from the init path and the
+  replayer's hardware incident, but exactly which dereference in the dead
+  context's structures faults or stalls the second re-init is not pinned down.
+  The open microkernel's "discard on recovery" approach sidesteps it rather
+  than reproducing it, so confirming the DDK's exact failure is useful for the
+  write-up but not a prerequisite for the replacement.
