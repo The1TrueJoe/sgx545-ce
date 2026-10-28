@@ -5,7 +5,7 @@ What a GL client needs beyond one flat-shaded triangle, as the Cedarview DDK
 memory, how they get there, how a render lands in a texture, how depth and
 stencil survive between renders, and how a frame reaches the display.
 
-Tags as in `re/state/STATE.md`: **[C]** replay-confirmed on the EA3, **[D]**
+Tags as in `docs/STATE.md`: **[C]** replay-confirmed on the EA3, **[D]**
 diff of captures or read from the DDK code that writes it, **[G]** guess.
 
 ## Tools
@@ -15,10 +15,10 @@ diff of captures or read from the DDK code that writes it, **[G]** guess.
 | `tex.py` | the encoder: linear texels → GPU memory (twiddle, NPOT pitch, mip chain) |
 | `rawmap.py` | reads a `PROBE_TEXPAT` texture back out of a capture: which texel sits at each offset |
 | `check.py` | compares every texel of a capture with `tex.py`'s prediction |
-| `re/probe/probe.c` | new knobs: `PROBE_TEXPAT`, `PROBE_TEXFILE`, `PROBE_TEXLEVELS`, `PROBE_TEXCUBE`, `PROBE_FBO`, `PROBE_FBODS`, `PROBE_FBOREENTER`, `PROBE_QUAD`, `PROBE_FBOCLEAR` |
-| `re/trace/pvrtrace.c` | now also snapshots all mapped memory before every `SGX_SUBMITTRANSFER` (reason `xfer`) |
-| `re/decode/mkreplay.py` | `--xfers` replays transfers and registers transfer contexts; `--write VA:file`; `--no-delta VA:size` |
-| `re/replay/replay.c` | `regxfer` and `xfer` ops; `-F` wraps the real `/dev/fb0` instead of private memory |
+| `tools/probe/probe.c` | new knobs: `PROBE_TEXPAT`, `PROBE_TEXFILE`, `PROBE_TEXLEVELS`, `PROBE_TEXCUBE`, `PROBE_FBO`, `PROBE_FBODS`, `PROBE_FBOREENTER`, `PROBE_QUAD`, `PROBE_FBOCLEAR` |
+| `tools/trace/pvrtrace.c` | now also snapshots all mapped memory before every `SGX_SUBMITTRANSFER` (reason `xfer`) |
+| `tools/decode/mkreplay.py` | `--xfers` replays transfers and registers transfer contexts; `--write VA:file`; `--no-delta VA:size` |
+| `tools/replay/replay.c` | `regxfer` and `xfer` ops; `-F` wraps the real `/dev/fb0` instead of private memory |
 
 `PROBE_TEXPAT=1` makes every texel name itself: RGBA8888 texels are
 `(x, y, level | face<<4, 0x80 | x>>8 | (y>>8)<<2)`, 16-bit texels are

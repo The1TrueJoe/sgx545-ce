@@ -1,6 +1,6 @@
 """SGX545 texture memory layout: linear texels -> the bytes the TSP reads.
 
-Everything here is measured from the DDK's own uploads (re/tex/TEX.md):
+Everything here is measured from the DDK's own uploads (docs/TEX.md):
 
 - twiddled (T1 layout 0, power-of-two sizes): square tiles of
   t = min(w, h, 16) texels, Morton order inside a tile with y in the lowest

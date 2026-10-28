@@ -13,7 +13,7 @@ end-of-tile programs in the transfer context's own buffers.
                                                           transfer context buffers, see TEX.md)
 
 Every word here is checked against the swap and the texture-upload transfers of
-the re/tex captures (see TEX.md).
+the tools/tex captures (see TEX.md).
 """
 import argparse
 import os

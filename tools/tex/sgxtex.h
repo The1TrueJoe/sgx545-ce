@@ -1,6 +1,6 @@
 /*
  * sgxtex: SGX545 texture memory layout and the transfer-queue blit, as
- * measured from the Cedarview DDK 1.7 on an EA3 (re/tex/TEX.md).
+ * measured from the Cedarview DDK 1.7 on an EA3 (docs/TEX.md).
  *
  * Plain C99, no dependencies: meant to be copied into a driver.
  *

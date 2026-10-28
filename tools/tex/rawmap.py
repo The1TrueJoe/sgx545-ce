@@ -4,7 +4,7 @@
 
 The texture buffer is the texture-heap (0xf0000000) allocation with the
 largest size, read at the kick-1 snapshot. Each texel of the pattern names
-itself (re/probe/probe.c, PROBE_TEXPAT):
+itself (tools/probe/probe.c, PROBE_TEXPAT):
   rgba8888 / rgb888: bytes x, y, level | face<<4, 0x80 | x>>8 | (y>>8)<<2
   16-bit formats: y*w + x;  l8 / a8: (y*w + x) & 0xff
 Prints the decoded (level, face, x, y) at the first offsets and, per level and

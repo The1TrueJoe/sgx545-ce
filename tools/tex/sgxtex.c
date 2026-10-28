@@ -1,4 +1,4 @@
-/* sgxtex: see sgxtex.h and re/tex/TEX.md */
+/* sgxtex: see sgxtex.h and docs/TEX.md */
 #include <string.h>
 
 #include "sgxtex.h"
