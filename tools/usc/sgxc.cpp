@@ -60,8 +60,9 @@ main(int argc, char **argv)
 
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false;
-   while ((c = getopt(argc, argv, "vpu:a:s:o:")) != -1) {
+   while ((c = getopt(argc, argv, "vpFu:a:s:o:")) != -1) {
       switch (c) {
+      case 'F': opts.front_p0 = true; break;
       case 'p': lowp16 = true; opts.f16 = true; break;
       case 'v': opts.verbose = true; break;
       case 'u': named(opts.uniforms, &opts.n_uniforms, optarg); break;

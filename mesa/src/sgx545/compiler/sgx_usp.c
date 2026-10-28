@@ -185,11 +185,6 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
     * shader with none (c1 `add`: 0xc, 0, 0xb, 4, 4, 1) */
    unsigned n_a = 0, n_pa = 0;
    if (frag) {
-      if (!c->n_iters) {
-         u16(&b, 0xc); u16(&b, 0); u16(&b, 0xb); u16(&b, 4); u16(&b, 4); u16(&b, 1);
-         n_a = 1;
-         n_pa = 1;
-      }
       for (unsigned i = 0; i < c->n_iters; i++) {
          struct sgx_iter *it = &c->iters[i];
          if (it->sample) {
@@ -202,6 +197,17 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
             n_pa = MAX2(n_pa, it->pa + regs);
          }
          n_a++;
+      }
+      /* libusc adds a dummy colour iteration (source 0x20) when nothing else
+       * is iterated; gl_PointCoord alone counts as nothing and comes first
+       * (DDK capture) */
+      bool real = false;
+      for (unsigned i = 0; i < c->n_iters; i++)
+         real |= !c->iters[i].pointcoord;
+      if (!real) {
+         u16(&b, 0xc); u16(&b, 0); u16(&b, 0xb); u16(&b, 4); u16(&b, 4); u16(&b, 1);
+         n_a++;
+         n_pa++;
       }
       n_pa = MAX2(n_pa, c->colour_pa + 1);
    }

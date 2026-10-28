@@ -54,6 +54,12 @@ struct sgx_compile_options {
    /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
     * F16 iteration, fmad16, F16/C10 uniforms, as the DDK does */
    bool f16;
+   /* gl_FrontFacing: by default 1.0 (front). libusc reads p0 at entry and
+    * flips it with a per-draw driver constant, but in our programs p0 at
+    * entry is not reliable (EA3: ~11% of pixels differ run to run), so no
+    * per-primitive facing source is known yet. front_p0 = read p0 (set =
+    * front), for experiments. */
+   bool front_p0;
 };
 
 /* varying -> texture coordinate set (sgx_assign_varyings) */
