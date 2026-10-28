@@ -2,7 +2,7 @@
  * replay: run a script made by re/decode/mkreplay.py through the native pvr
  * client, with no DDK library loaded.
  *
- *   replay [-k] [-n node] <script> <data>
+ *   replay [-k] [-H | -W] [-n node] <script> <data>
  *
  * One op per line ('#' starts a comment):
  *   connect | acquire <index> <type> | memctx
@@ -17,6 +17,11 @@
  * Buffers are named by capture-order index; m<i> is a buffer's mem info
  * handle, s<i> its sync info handle. A buffer that lands anywhere but its
  * captured device address stops the replay unless -k is given.
+ *
+ * Device memory and the wrapped buffer are mapped below 4 GB (MAP_32BIT) for
+ * drivers that truncate user addresses; -H maps them wherever mmap puts them
+ * (above 4 GB on x86_64), to test a driver without that bug; -W does that for
+ * the wrapped buffer only.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -36,7 +41,8 @@ static int nbufs;
 static unsigned char *data;
 static size_t data_len;
 static uint32_t ctx_va, ctx_va_captured;
-static int keep_going;
+static int keep_going, wrap_high;
+static uintptr_t cpu_lo = UINTPTR_MAX, cpu_hi;
 static int line_no;
 
 #define die(...) do { fprintf(stderr, "replay:%d: ", line_no); fprintf(stderr, __VA_ARGS__); \
@@ -243,16 +249,21 @@ static void run(FILE *f)
 
 			if (pvr_map(&P, buf(i)))
 				die("map of buffer %u failed", i);
+			if ((uintptr_t)bufs[i].cpu < cpu_lo)
+				cpu_lo = (uintptr_t)bufs[i].cpu;
+			if ((uintptr_t)bufs[i].cpu > cpu_hi)
+				cpu_hi = (uintptr_t)bufs[i].cpu;
 		} else if (!strcmp(tok[0], "wrap")) {
 			uint32_t i = num(tok[1]), size = num(tok[2]);
 			struct pvr_buf *b = buf(i);
-			void *m = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+			void *m = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | (wrap_high ? 0 : P.map_flags), -1, 0);
 
 			if (m == MAP_FAILED)
 				die("mmap for wrap: %s", strerror(errno));
 			memset(m, 0, size);	/* fault the pages in */
 			bridge("WRAP_EXT_MEMORY", pvr_wrap(&P, b, m, size));
 			check_va("wrapped buffer", (int)i, b->devva, num(tok[3]));
+			printf("replay: wrapped %#x bytes at %p\n", size, m);
 		} else if (!strcmp(tok[0], "regctx")) {
 			uint32_t off = num(tok[1]), size = num(tok[2]);
 			IMG_HANDLE h;
@@ -302,25 +313,30 @@ static void run(FILE *f)
 			die("unknown op '%s'", tok[0]);
 		}
 	}
-	printf("replay: %d buffers allocated, %d kicks\n", nallocs, nkicks);
+	printf("replay: %d buffers allocated, %d kicks, device memory mapped at %#lx..%#lx\n", nallocs, nkicks,
+	       (unsigned long)cpu_lo, (unsigned long)cpu_hi);
 }
 
 int main(int argc, char **argv)
 {
 	const char *node = NULL;
 	FILE *f, *d;
-	int c;
+	int c, high = 0;
 
-	while ((c = getopt(argc, argv, "kn:")) != -1) {
+	while ((c = getopt(argc, argv, "kHWn:")) != -1) {
 		if (c == 'k')
 			keep_going = 1;
+		else if (c == 'H')
+			high = wrap_high = 1;
+		else if (c == 'W')
+			wrap_high = 1;
 		else if (c == 'n')
 			node = optarg;
 		else
 			return 1;
 	}
 	if (argc - optind != 2) {
-		fprintf(stderr, "usage: replay [-k] [-n node] <script> <data>\n");
+		fprintf(stderr, "usage: replay [-k] [-H | -W] [-n node] <script> <data>\n");
 		return 1;
 	}
 	if (!(f = fopen(argv[optind], "r")) || !(d = fopen(argv[optind + 1], "rb"))) {
@@ -337,6 +353,8 @@ int main(int argc, char **argv)
 	fclose(d);
 	if (pvr_open(&P, node))
 		die("open %s: %s", node ? node : "/dev/dri/card0", strerror(errno));
+	if (high)
+		P.map_flags = 0;
 	run(f);
 	return 0;
 }

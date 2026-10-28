@@ -22,6 +22,7 @@ struct pvr {
 	IMG_HANDLE memctx;
 	PVRSRV_HEAP_INFO heaps[PVRSRV_MAX_CLIENT_HEAPS];
 	IMG_UINT32 nheaps;
+	int map_flags;		/* extra mmap flags for device memory: MAP_32BIT unless cleared */
 };
 
 struct pvr_buf {

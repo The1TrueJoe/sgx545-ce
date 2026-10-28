@@ -31,6 +31,7 @@ int pvr_call(struct pvr *p, uint32_t id, void *in, size_t in_size, void *out, si
 int pvr_open(struct pvr *p, const char *node)
 {
 	memset(p, 0, sizeof *p);
+	p->map_flags = MAP_32BIT;
 	p->fd = open(node ? node : "/dev/dri/card0", O_RDWR | O_CLOEXEC);
 	return p->fd < 0 ? -errno : 0;
 }
@@ -121,10 +122,11 @@ int pvr_map(struct pvr *p, struct pvr_buf *b)
 		return e;
 	/*
 	 * The offset is a services cookie in pages, as libsrv_um passes it to mmap2.
-	 * MAP_32BIT: the kernel's DoMapToUser walks the VMA with an IMG_UINT32
-	 * (ulVMAPos), so a mapping above 4 GB fails VM_INSERT_PAGE with -EFAULT.
+	 * MAP_32BIT by default: drivers before the user-address fix walk the VMA
+	 * with an IMG_UINT32 in DoMapToUser, so a mapping above 4 GB fails
+	 * VM_INSERT_PAGE with -EFAULT there. Clear p->map_flags on a fixed driver.
 	 */
-	m = mmap(NULL, out.ui32RealByteSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_32BIT, p->fd,
+	m = mmap(NULL, out.ui32RealByteSize, PROT_READ | PROT_WRITE, MAP_SHARED | p->map_flags, p->fd,
 		 (off_t)out.ui32MMapOffset << 12);
 	if (m == MAP_FAILED)
 		return -errno;
