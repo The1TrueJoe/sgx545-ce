@@ -20,6 +20,7 @@ import usp  # noqa: E402
 
 def line(lo, hi):
     x = hw.decode(lo, hi)
+    hw.track(x)
     if x is None:
         bits = [hw.bname(b) for b in range(64) if (hi << 32 | lo) >> b & 1]
         return f"{hi:08x} {lo:08x}  hw{hi >> 27:02x}?  {{?{' '.join(bits)}}}"
@@ -29,7 +30,9 @@ def line(lo, hi):
     return t
 
 
-def dis_program(insts, indent="    "):
+def dis_program(insts, indent="    ", fc=None):
+    if fc is not None:
+        hw.CTX["fc"] = fc       # format control at block entry (USP code block flags)
     return [indent + line(lo, hi) for lo, hi in insts]
 
 
@@ -44,13 +47,13 @@ def dis_shader(s):
     out = [f"== {s['name']} ({s['kind']})"]
     if s["pre"]:
         out.append("  secondary update program:")
-        out += dis_program(s["pre"])
+        out += dis_program(s["pre"], fc=2)
     out.append("  main program:")
     for b in s["blocks"]:
         if b["type"] == "label":
             out.append(f"  L{b['label']}:")
         elif b["type"] == "code":
-            out += dis_program(b["insts"])
+            out += dis_program(b["insts"], fc=b["flags"])
         elif b["type"] == "branch":
             out += [x + f"   -> L{b['label']}" for x in dis_program(b["insts"])]
         else:

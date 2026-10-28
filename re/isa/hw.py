@@ -66,7 +66,23 @@ def bname(b):
 
 
 # --------------------------------------------------------------------------
-# operands
+# decoding context
+
+# Format control (fc): bit 0 = F16 select for efo, bit 1 = C10 select for the
+# colour/integer classes (sop2/sop3/sopwm, dot, ima8, fpma). While a bit is
+# on, register number bit 6 of those classes' operands marks the operand as
+# F16 / C10 instead of addressing registers 64-127. The state at the start of
+# a USP code block is its header flags word (2 in every block the compiler
+# writes without `setfc`); `setfc #a, #b` changes it. Nothing in the
+# instruction itself records it, so decode/encode read it from here; dis.py
+# and hwcheck.py track it per block.
+CTX = {"fc": 2}
+
+
+def track(inst):
+    """update CTX after an instruction (setfc #efo_f16, #colour_c10)"""
+    if inst is not None and inst.form.name == "setfc":
+        CTX["fc"] = (inst.ops[0]["n"] & 1) | (inst.ops[1]["n"] & 1) << 1
 
 # Register banks, from the generic operand encoder (libusc + 0xf7830,
 # FUN_00107830): which 2-bit bank value and extension bit each USEASM
@@ -78,6 +94,7 @@ BANK_SRC = {(0, 0): "r", (1, 0): "o", (2, 0): "pa", (3, 0): "sa",
             (0, 1): "ix", (1, 1): "cg", (2, 1): "#", (3, 1): "i"}
 BANK_SRC0 = {(0, 0): "r", (1, 0): "pa", (0, 1): "o", (1, 1): "sa"}
 IXBANK = ["r", "o", "pa", "sa"]
+FC_KINDS = ("r", "o", "pa", "sa", "i")
 
 
 class Opd:
@@ -96,6 +113,7 @@ class Opd:
         self.kinds = kinds              # kinds the encoder accepts here (None = all in table)
         self.fixed_kind = fixed_kind    # slot with no bank bits (e.g. always a temporary)
         self.text = text                # custom (decode, encode) pair for odd slots
+        self.fc = None                  # format-control bit that applies (see CTX), set per class
 
     def nbits(self):
         return len(bitlist(self.num))
@@ -118,6 +136,10 @@ class Opd:
             o["f16"] = n >> 6 & 1
             n &= 0x3F
             width = 6
+        if self.fc is not None and CTX["fc"] >> self.fc & 1 and kind in FC_KINDS and width == 7:
+            if n & 0x40:
+                o["fc"] = ("f16", "c10")[self.fc]
+            n &= 0x3F
         if kind == "ix":
             ob = width - 3
             o.update(kind="ix", bank=IXBANK[n >> (ob + 1) & 3], idx=1 + (n >> ob & 1), off=n & ((1 << ob) - 1))
@@ -177,6 +199,14 @@ class Opd:
         if fmt:
             n |= o.get("f16", 0) << 6
             width = 7
+        if self.fc is not None and CTX["fc"] >> self.fc & 1 and kind in FC_KINDS and width == 7:
+            if n >> 6:
+                raise ValueError(f"{self.role}: register {n} > 63 while format control is on")
+            want = ("f16", "c10")[self.fc]
+            if o.get("fc") == want or (want == "f16" and o.get("f16")) or want in o.get("sfx", []):
+                n |= 0x40
+        elif o.get("fc") or (self.fc is not None and "c10" in o.get("sfx", [])):
+            raise ValueError(f"{self.role}: .c10/.f16 needs format control on (setfc)")
         if n >> self.nbits():
             raise ValueError(f"{self.role}: number {n} too big for {self.num}")
         v = put(v, self.num, n)
@@ -201,6 +231,8 @@ def opd_text(o):
         t = f"{k}{o['n']}"
     if o.get("f16"):
         t += ".f16"
+    if o.get("fc"):
+        t += "." + o["fc"]
     for x in o.get("sfx", []):
         t += "." + x
     if o.get("abs"):
@@ -494,3 +526,12 @@ import sys as _sys  # noqa: E402
 _sys.modules.setdefault("hw", _sys.modules[__name__])
 for _p in sorted(_glob.glob(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "hw_*.py"))):
     _il.import_module(_os.path.basename(_p)[:-3])
+
+# operands whose number bit 6 follows format control (see CTX): efo uses the
+# F16 bit, the colour/integer classes the C10 bit (hw_int.py, notes there)
+for _f in FORMS:
+    _op = _f.fval >> 59
+    if _op in (0x07, 0x10, 0x11, 0x12, 0x13, 0x18, 0x19) and (_f.fmask >> 59) == 0x1F:
+        for _o in _f.ops:
+            if not _o.text and not _o.fixed_kind and len(bitlist(_o.num)) == 7:
+                _o.fc = 0 if _op == 0x07 else 1

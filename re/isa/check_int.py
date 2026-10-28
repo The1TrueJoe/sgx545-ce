@@ -17,6 +17,9 @@ sys.path.insert(0, os.path.join(S, "sgx", "re", "isa"))
 os.environ.setdefault("LIBUSC", os.path.join(S, "bin", "libusc.so"))
 from uinst import U, A, try_enc, oracle  # noqa: E402
 import hw  # noqa: E402
+# raw register numbers: the encoder knows nothing of format control (hw.CTX),
+# so check with it off; with it on, number bit 6 reads as .c10/.f16 instead
+hw.CTX["fc"] = 0
 
 FEAT = 0x10000000 + 0x14DE40        # SGX545 feature word0 (oracle mapping)
 TFL = 0x10000000 + 0x1498A0 + 8     # core-table flags word (FUN_0011dd80..)

@@ -18,10 +18,10 @@ def insts(dirs):
         for p in sorted(glob.glob(os.path.join(d, "*.usp"))):
             s = usp.load(p)
             for lo, hi in s["pre"]:
-                yield p, lo, hi
+                yield p, lo, hi, 2
             for b in s["blocks"]:
                 for lo, hi in b.get("insts", []):
-                    yield p, lo, hi
+                    yield p, lo, hi, b.get("flags", 2) if b["type"] == "code" else 2
 
 
 def main(argv):
@@ -33,12 +33,19 @@ def main(argv):
     bad = collections.Counter()
     ex = {}
     seen = set()
-    for p, lo, hi in insts(dirs):
+    last = None
+    for p, lo, hi, fc in insts(dirs):
         n += 1
-        if (lo, hi) in seen:
-            continue
-        seen.add((lo, hi))
+        # format control: the block's entry state, then whatever setfc set
+        if (p, fc) != last:
+            hw.CTX["fc"] = fc
+            last = (p, fc)
+        key = (lo, hi, hw.CTX["fc"])
         x = hw.decode(lo, hi)
+        hw.track(x)
+        if key in seen:
+            continue
+        seen.add(key)
         op = hi >> 27
         if x is None:
             nof[op] += 1
