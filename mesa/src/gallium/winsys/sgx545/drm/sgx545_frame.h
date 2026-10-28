@@ -181,10 +181,16 @@ struct sgxws_state {
    float vp_scale[3], vp_translate[3];
 };
 
+#define SGXWS_MAX_INDICES 0xffff
+
 struct sgxws_draw {
    uint32_t prim;                   /* SGXWS_* */
    uint32_t count;                  /* vertices */
    const uint32_t *verts;           /* count x vs->attr_dwords dwords */
+   /* NULL: the vertices in order; else n_indices 16-bit indices into them
+    * (at most SGXWS_MAX_INDICES) */
+   const uint16_t *indices;
+   uint32_t n_indices;
    const struct sgxws_prog *vs, *fs;
    const struct sgxws_state *state;
    const uint32_t *fs_consts;       /* fs->sec_dwords dwords */

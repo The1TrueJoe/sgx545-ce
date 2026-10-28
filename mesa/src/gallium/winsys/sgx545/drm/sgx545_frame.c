@@ -545,7 +545,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
        ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x40000) ||
        ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000) ||
        ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000) ||
-       ring_init(d, &c->gen, H_GENERAL, 0x400000) ||
+       ring_init(d, &c->gen, H_GENERAL, 0xc00000) ||   /* a frame of terrain: ~100K vertices */
        ring_init(d, &c->vdm, H_GENERAL, 0x10000) ||
        ring_init(d, &c->usse_frame, H_PIXSHADER, 0x4000))
       goto fail;
@@ -1166,15 +1166,28 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    const struct sgxws_prog *vs = d->vs, *fs = d->fs;
    uint32_t blk[18], n = 0, rows, sec, prim, vrows;
    uint32_t vw = vs->attr_dwords * 4, vsec_dwords = 10 + vs->const_dwords;
+   uint32_t idx = c->idx, n_idx = d->count, idx_bytes = 0;
    struct sgxws_ptr v, u, vsec;
    int e;
 
-   if (d->count > c->idx_count)
+   if (d->indices) {
+      if (d->n_indices > SGXWS_MAX_INDICES)
+         return -E2BIG;
+      n_idx = d->n_indices;
+      idx_bytes = (n_idx * 2 + 15) & ~15u;
+   } else if (d->count > c->idx_count) {
       return -E2BIG;
-   if ((e = make_room(c, d->count * vw + vsec_dwords * 4)))
+   }
+   if ((e = make_room(c, d->count * vw + vsec_dwords * 4 + idx_bytes + DMA_ALIGN)))
       return e;
    v = ring_alloc(&c->gen, d->count * vw, DMA_ALIGN);
    memcpy(v.p, d->verts, d->count * vw);
+   if (d->indices) {
+      struct sgxws_ptr ip = ring_alloc(&c->gen, idx_bytes, 16);
+
+      memcpy(ip.p, d->indices, n_idx * 2);
+      idx = ip.va;
+   }
 
    /* fragment: the constants and the secondary program that DMAs them, then
     * the primary program that runs the shader */
@@ -1255,7 +1268,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vdm(c, 0x40000000 | sec >> 4);
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
 
-   vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
+   vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
             vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
    c->draws++;
    return 0;

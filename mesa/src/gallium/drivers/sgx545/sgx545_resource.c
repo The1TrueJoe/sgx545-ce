@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "util/os_time.h"
 #include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
@@ -254,9 +255,16 @@ sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
 
    /* only what the transfer covers: the game updates 16x16 sprites of a
     * 1024x512 atlas, and the whole level each time took a minute to load */
-   if (res->texture && (ptrans->usage & PIPE_MAP_WRITE))
+   if (res->texture && (ptrans->usage & PIPE_MAP_WRITE)) {
+      uint64_t t = ctx->stats.on ? os_time_get_nano() : 0;
+
       sgx545_tex_encode_box(res, ptrans->level, ptrans->box.x, ptrans->box.y,
                             ptrans->box.x + ptrans->box.width, ptrans->box.y + ptrans->box.height);
+      if (ctx->stats.on) {
+         ctx->stats.tex_ns += os_time_get_nano() - t;
+         ctx->stats.tex_writes++;
+      }
+   }
 
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);

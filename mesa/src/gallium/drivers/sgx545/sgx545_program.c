@@ -22,6 +22,7 @@
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
 #include "nir/tgsi_to_nir.h"
+#include "util/os_time.h"
 #include "util/u_memory.h"
 
 #include "sgx545_context.h"
@@ -721,8 +722,14 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
    bool fixed = no && (!strcmp(no, "1") ||
                        !strcmp(no, nir->info.stage == MESA_SHADER_VERTEX ? "vs" : "fs"));
 
-   if (!fixed && !nir->info.io_lowered && compile_shader(ctx, so, nir))
-      return so;
+   if (!fixed && !nir->info.io_lowered) {
+      uint64_t t = os_time_get_nano();
+      bool ok = compile_shader(ctx, so, nir);
+
+      ctx->stats.compile_ns += os_time_get_nano() - t;
+      if (ok)
+         return so;
+   }
 
    if (!nir->info.io_lowered)
       NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size, 0);

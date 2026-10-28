@@ -11,6 +11,7 @@
  */
 
 #include "util/format/u_format.h"
+#include "util/os_time.h"
 #include "util/half_float.h"
 #include "util/u_inlines.h"
 #include "util/u_prim.h"
@@ -222,6 +223,101 @@ get_index(const struct pipe_draw_info *info, const void *indices, unsigned i)
    }
 }
 
+/* element f of vertices first .. first + n - 1 into dst, vertex_dwords
+ * apart: the formats Minecraft's terrain and gl4es use go without a call
+ * per vertex (they took most of a frame's CPU time) */
+static void
+fetch_range(const struct fetch *f, unsigned first, unsigned n, uint32_t *dst, unsigned vertex_dwords)
+{
+   static float unorm8[256];
+   const uint8_t *src = f->base + (size_t)first * f->stride;
+   float *o = (float *)dst;
+
+   if (!f->defaults) {
+      for (unsigned i = 0; i < n; i++)
+         fetch_vertex(f, first + i, dst + i * vertex_dwords);
+      return;
+   }
+   switch (f->format) {
+   case PIPE_FORMAT_R32G32B32A32_FLOAT:
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords)
+         memcpy(o, src, 16);
+      return;
+   case PIPE_FORMAT_R32G32B32_FLOAT:
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
+         memcpy(o, src, 12);
+         o[3] = 1.0f;
+      }
+      return;
+   case PIPE_FORMAT_R32G32_FLOAT:
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
+         memcpy(o, src, 8);
+         o[2] = 0.0f;
+         o[3] = 1.0f;
+      }
+      return;
+   case PIPE_FORMAT_R32_FLOAT:
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
+         memcpy(o, src, 4);
+         o[1] = o[2] = 0.0f;
+         o[3] = 1.0f;
+      }
+      return;
+   case PIPE_FORMAT_R8G8B8A8_UNORM:
+      if (unorm8[255] != 1.0f)
+         for (unsigned i = 0; i < 256; i++)
+            unorm8[i] = i / 255.0f;
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
+         o[0] = unorm8[src[0]];
+         o[1] = unorm8[src[1]];
+         o[2] = unorm8[src[2]];
+         o[3] = unorm8[src[3]];
+      }
+      return;
+   case PIPE_FORMAT_R16G16_SSCALED:
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
+         int16_t v[2];
+
+         memcpy(v, src, 4);
+         o[0] = v[0];
+         o[1] = v[1];
+         o[2] = 0.0f;
+         o[3] = 1.0f;
+      }
+      return;
+   default:
+      for (unsigned i = 0; i < n; i++)
+         fetch_vertex(f, first + i, dst + i * vertex_dwords);
+      return;
+   }
+}
+
+/* every element of vertices first .. first + n - 1, packed */
+static void
+fetch_vertices(const struct fetch *f, unsigned n_fetch, unsigned first, unsigned n, uint32_t *v,
+               unsigned vertex_dwords)
+{
+   unsigned off = 0;
+
+   for (unsigned e = 0; e < n_fetch; e++) {
+      fetch_range(&f[e], first, n, v + off, vertex_dwords);
+      off += f[e].dwords;
+   }
+}
+
+static uint16_t *
+index_staging(struct sgx545_context *ctx, unsigned n)
+{
+   if (n > ctx->idx_staging_size) {
+      free(ctx->idx_staging);
+      ctx->idx_staging_size = MAX2(n, 16384);
+      ctx->idx_staging = malloc(ctx->idx_staging_size * 2);
+      if (!ctx->idx_staging)
+         ctx->idx_staging_size = 0;
+   }
+   return ctx->idx_staging;
+}
+
 static uint32_t *
 staging(struct sgx545_context *ctx, size_t dwords)
 {
@@ -294,7 +390,7 @@ varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
 }
 
 static void
-sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
+sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 unsigned drawid_offset, const struct pipe_draw_indirect_info *indirect,
                 const struct pipe_draw_start_count_bias *draws, unsigned num_draws)
 {
@@ -467,23 +563,98 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    if (!begin_frame(ctx))
       goto out;
    for (unsigned n = 0; n < num_draws; n++) {
-      unsigned count = draws[n].count, out_count;
+      unsigned count = draws[n].count, start = draws[n].start, out_count;
+      bool fan = info->mode == MESA_PRIM_TRIANGLE_FAN;
       uint32_t *v;
 
-      if (info->mode == MESA_PRIM_TRIANGLE_FAN)
-         out_count = count >= 3 ? (count - 2) * 3 : 0;
-      else
-         out_count = count;
-      if (!out_count || !(v = staging(ctx, (size_t)out_count * vertex_dwords)))
+      out_count = fan ? (count >= 3 ? (count - 2) * 3 : 0) : count;
+      if (!out_count)
+         continue;
+      /* glDrawArrays of a list or strip: the vertices in order */
+      if (!info->index_size && !fan && count <= SGXWS_MAX_INDICES) {
+         if (!(v = staging(ctx, (size_t)count * vertex_dwords)))
+            continue;
+         fetch_vertices(f, n_fetch, start, count, v, vertex_dwords);
+         d.verts = v;
+         d.count = count;
+         d.indices = NULL;
+         if (sgxws_draw(ctx->hw, &d))
+            fprintf(stderr, "sgx545: draw of %u vertices dropped\n", count);
+         continue;
+      }
+      /* indices (and fans): each vertex the draw uses fetched once, the GPU
+       * given 16-bit indices into them, as the DDK does.  A list longer than
+       * the index limit goes in pieces of whole triangles. */
+      if (fan || prim == SGXWS_TRIANGLES || out_count <= SGXWS_MAX_INDICES) {
+         unsigned piece = prim == SGXWS_TRIANGLES ? SGXWS_MAX_INDICES / 3 * 3 : SGXWS_MAX_INDICES;
+
+         for (unsigned p0 = 0; p0 < out_count; p0 += piece) {
+            unsigned np = MIN2(piece, out_count - p0), lo = ~0u, hi = 0;
+            uint32_t *sparse = NULL;
+            uint32_t *ix32 = staging(ctx, np);    /* the piece's indices, before rebasing */
+            uint16_t *ix = index_staging(ctx, np);
+
+            if (!ix || !ix32)
+               break;
+            for (unsigned i = 0; i < np; i++) {
+               unsigned k = p0 + i;
+
+               if (fan)
+                  k = (k % 3 == 0) ? 0 : k / 3 + k % 3;
+               ix32[i] = info->index_size ? get_index(info, indices, start + k) + draws[n].index_bias
+                                          : start + k;
+               lo = MIN2(lo, ix32[i]);
+               hi = MAX2(hi, ix32[i]);
+            }
+            if (hi - lo < 65536 && hi - lo + 1 <= 4 * np + 64) {
+               for (unsigned i = 0; i < np; i++)
+                  ix[i] = (uint16_t)(ix32[i] - lo);
+               /* (the indices are copied out of the staging buffer first) */
+               if (!(v = staging(ctx, (size_t)(hi - lo + 1) * vertex_dwords)))
+                  break;
+               fetch_vertices(f, n_fetch, lo, hi - lo + 1, v, vertex_dwords);
+               d.count = hi - lo + 1;
+               d.indices = ix;
+               d.n_indices = np;
+            } else {
+               /* a sparse range would fetch vertices nobody draws: this piece
+                * expanded, a vertex per index (ix32 is in the staging buffer) */
+               if (!(sparse = malloc((size_t)np * vertex_dwords * 4)))
+                  break;
+               for (unsigned i = 0; i < np; i++) {
+                  uint32_t *dst = sparse + i * vertex_dwords;
+
+                  for (unsigned e = 0; e < n_fetch; e++) {
+                     fetch_vertex(&f[e], ix32[i], dst);
+                     dst += f[e].dwords;
+                  }
+               }
+               v = sparse;
+               d.count = np;
+               d.indices = NULL;
+            }
+            d.verts = v;
+            SGX545_DBG(DRAW, "draw %s x%u (%u vertices)%s\n", u_prim_name(info->mode), np, d.count,
+                       compiled ? " (compiled)" : "");
+            if (sgxws_draw(ctx->hw, &d))
+               fprintf(stderr, "sgx545: draw of %u indices dropped\n", np);
+            free(sparse);
+            sparse = NULL;
+         }
+         d.indices = NULL;
+         continue;
+      }
+      /* the rest: every index expanded to its own vertex */
+      if (!(v = staging(ctx, (size_t)out_count * vertex_dwords)))
          continue;
       for (unsigned i = 0; i < out_count; i++) {
          unsigned k = i;
          uint32_t index, *dst = v + i * vertex_dwords;
 
-         if (info->mode == MESA_PRIM_TRIANGLE_FAN)
+         if (fan)
             k = (i % 3 == 0) ? 0 : i / 3 + i % 3;
-         index = info->index_size ? get_index(info, indices, draws[n].start + k) + draws[n].index_bias
-                                  : draws[n].start + k;
+         index = info->index_size ? get_index(info, indices, start + k) + draws[n].index_bias
+                                  : start + k;
          for (unsigned e = 0; e < n_fetch; e++) {
             fetch_vertex(&f[e], index, dst);
             dst += f[e].dwords;
@@ -497,6 +668,26 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    }
 out:
    simple_mtx_unlock(&screen->lock);
+}
+
+static void
+sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info, unsigned drawid_offset,
+                const struct pipe_draw_indirect_info *indirect, const struct pipe_draw_start_count_bias *draws,
+                unsigned num_draws)
+{
+   struct sgx545_context *ctx = sgx545_context(pctx);
+   uint64_t t;
+
+   if (!ctx->stats.on) {
+      sgx545_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
+      return;
+   }
+   t = os_time_get_nano();
+   sgx545_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
+   ctx->stats.draw_ns += os_time_get_nano() - t;
+   ctx->stats.draws += num_draws;
+   for (unsigned n = 0; n < num_draws; n++)
+      ctx->stats.verts += draws[n].count;
 }
 
 void

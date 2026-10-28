@@ -102,9 +102,18 @@ struct sgx545_context {
    struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS];          /* fragment */
    struct pipe_sampler_view *views[PIPE_MAX_SHADER_SAMPLER_VIEWS];  /* fragment */
 
+   /* SGX545_STATS=1: where the time goes, printed every 2 s */
+   struct {
+      bool on;
+      uint64_t t0, draw_ns, flush_ns, tex_ns, compile_ns;
+      unsigned draws, verts, flushes, tex_writes;
+   } stats;
+
    struct slab_child_pool transfer_pool;
    uint32_t *staging;               /* vertices gathered for one draw */
    size_t staging_size;
+   uint16_t *idx_staging;           /* its 16-bit indices */
+   unsigned idx_staging_size;
    bool warned_shader, warned_prim, warned_blend, warned_varyings;
 };
 
@@ -119,6 +128,8 @@ struct pipe_context *sgx545_context_create(struct pipe_screen *pscreen, void *pr
 void sgx545_state_init(struct sgx545_context *ctx);
 void sgx545_draw_init(struct sgx545_context *ctx);
 void sgx545_program_init(struct sgx545_context *ctx);
+
+void sgx545_stats_report(struct sgx545_context *ctx);
 
 /* submit and finish the frame being recorded */
 void sgx545_flush_frame(struct sgx545_context *ctx);

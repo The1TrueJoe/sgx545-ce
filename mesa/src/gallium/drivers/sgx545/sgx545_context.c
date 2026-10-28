@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "util/os_time.h"
 #include "util/u_debug.h"
 #include "util/u_debug_cb.h"
 #include "util/u_framebuffer.h"
@@ -42,11 +43,19 @@ sgx545_flush_frame(struct sgx545_context *ctx)
    struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
    int e;
 
+   uint64_t t;
+
    if (!ctx->recording)
       return;
+   t = ctx->stats.on ? os_time_get_nano() : 0;
    simple_mtx_lock(&screen->lock);
    e = sgxws_flush(ctx->hw, 2000);
    simple_mtx_unlock(&screen->lock);
+   if (ctx->stats.on) {
+      ctx->stats.flush_ns += os_time_get_nano() - t;
+      ctx->stats.flushes++;
+      sgx545_stats_report(ctx);
+   }
    if (e) {
       fprintf(stderr, "sgx545: frame did not finish: %d\n", e);
       /* SGX545_HANG_ABORT=1: stop the client at the first hang, before the
@@ -55,6 +64,23 @@ sgx545_flush_frame(struct sgx545_context *ctx)
          abort();
    }
    ctx->recording = NULL;
+}
+
+void
+sgx545_stats_report(struct sgx545_context *ctx)
+{
+   uint64_t now = os_time_get_nano(), dt = now - ctx->stats.t0;
+   double ms = 1e-6;
+
+   if (dt < 2000000000ull)
+      return;
+   fprintf(stderr, "sgx545 stats %.1f s: %u flushes, %u draws, %u vertices, %u texture writes; "
+           "ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
+           dt * 1e-9, ctx->stats.flushes, ctx->stats.draws, ctx->stats.verts, ctx->stats.tex_writes,
+           ctx->stats.draw_ns * ms, ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms, ctx->stats.compile_ns * ms);
+   memset(&ctx->stats, 0, sizeof(ctx->stats));
+   ctx->stats.on = true;
+   ctx->stats.t0 = now;
 }
 
 void
@@ -112,6 +138,7 @@ sgx545_context_destroy(struct pipe_context *pctx)
 
    slab_destroy_child(&ctx->transfer_pool);
    free(ctx->staging);
+   free(ctx->idx_staging);
    FREE(ctx);
 }
 
@@ -147,6 +174,8 @@ sgx545_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    ctx->base.set_debug_callback = u_default_set_debug_callback;
 
    slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);
+   ctx->stats.on = debug_get_bool_option("SGX545_STATS", false);
+   ctx->stats.t0 = os_time_get_nano();
    sgx545_resource_context_init(ctx);
    sgx545_state_init(ctx);
    sgx545_draw_init(ctx);
