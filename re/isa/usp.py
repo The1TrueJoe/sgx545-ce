@@ -29,9 +29,11 @@ u32 / u16 / raw-bytes callbacks, so u16 fields leave later u32s unaligned.
                count u16 per-instruction flags, count x 8-byte instructions
     3  branch: 8-byte encoded instruction, u16 label
     4  label:  u16 label id
-    5  sample (60 bytes of body), 6 (74 bytes), 9 (78 bytes): texture sample
-       descriptions the patcher turns into code; their instructions are
-       generated at finalize time, not stored here
+    5  sample (56 bytes), 6 sample unpack (74 bytes), 9 texture write
+       (82 bytes): parsed by smpblock.py (see notes_sample.md). The driver's
+       USP finalizer turns them into code; a dependent sample's block holds
+       libusc's smp as a template (block["sample"]["smp"]), which is not
+       part of "insts"
     7  end
 
 An instruction is 64 bits, stored as (low word, high word).
@@ -40,6 +42,12 @@ import glob
 import os
 import struct
 import sys
+
+try:
+    import smpblock
+except ImportError:  # append, never prepend: this directory's dis.py shadows the stdlib's
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    import smpblock
 
 MAGIC = 0x55535020
 
@@ -50,7 +58,7 @@ H_NC = 0x50     # u16: list C records
 H_NB = 0x52     # u32: list B records
 
 REC_SIZE = {1: 8, 2: 8, 3: 10, 4: 8, 5: 10}
-BLOCK_BODY = {5: 56, 6: 74, 9: 78}
+BLOCK_BODY = smpblock.BODY
 
 
 class Reader:
@@ -112,7 +120,8 @@ def blocks(r, end):
         elif t == 4:
             out.append({"type": "label", "label": r.u16()})
         elif t in BLOCK_BODY:
-            out.append({"type": "sample%d" % t, "raw": r.raw(BLOCK_BODY[t])})
+            raw = r.raw(BLOCK_BODY[t])
+            out.append({"type": "sample%d" % t, "raw": raw, "sample": smpblock.parse(t, raw)})
         else:
             raise ValueError(f"block type {t:#x} at {r.o - 4:#x}")
 

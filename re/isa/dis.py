@@ -34,11 +34,10 @@ def dis_program(insts, indent="    "):
 
 
 def sample_text(b):
-    try:
-        import smpblock  # the USP texture-sample block parser (notes_sample.md)
-        return smpblock.describe(b)
-    except Exception:
-        return f"({b['type']} block: texture sample generated at finalize)"
+    """a USP texture-sample block (smpblock.py, notes_sample.md): the driver
+    turns it into code at finalize"""
+    import smpblock
+    return f"[{b['type']}] " + smpblock.text(b["sample"])
 
 
 def dis_shader(s):
