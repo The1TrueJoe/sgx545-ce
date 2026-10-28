@@ -4,12 +4,107 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "pvr.h"
 
 /* pvr_drm.h: DRM_IOW(DRM_COMMAND_BASE + PVR_DRM_SRVKM_CMD, PVRSRV_BRIDGE_PACKAGE) */
 #define DRM_IOCTL_PVR_SRVKM _IOW('d', 0x40 + 0x12, PVRSRV_BRIDGE_PACKAGE)
+
+/* pvrtrace records (re/trace/pvrtrace.c; read by re/decode/pvrlog.py) */
+enum { REC_BRIDGE = 1, REC_MMAP = 2, REC_SNAP = 4, REC_UBUF = 6 };
+
+static void trace_put(struct pvr *p, const void *a, size_t n)
+{
+	const char *s = a;
+
+	while (n) {
+		ssize_t w = write(p->trace_fd, s, n);
+
+		if (w <= 0)
+			return;
+		s += w;
+		n -= (size_t)w;
+	}
+}
+
+static void trace_rec(struct pvr *p, uint32_t type, size_t len)
+{
+	uint32_t h[2] = { type, (uint32_t)len };
+
+	trace_put(p, h, sizeof h);
+}
+
+int pvr_trace_open(struct pvr *p, const char *path)
+{
+	/* "PVRT", version 2 (bridge records carry the services handle), pointer size */
+	uint32_t h[3] = { 0x54525650, 2, sizeof(void *) };
+
+	p->trace_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (p->trace_fd < 0)
+		return -errno;
+	trace_put(p, h, sizeof h);
+	return 0;
+}
+
+void pvr_trace_close(struct pvr *p)
+{
+	if (p->trace_fd >= 0)
+		close(p->trace_fd);
+	p->trace_fd = -1;
+}
+
+static void trace_bridge(struct pvr *p, uint32_t id, int ret, int err, const void *in, size_t in_size,
+			 const void *out, size_t out_size)
+{
+	struct timespec ts;
+	uint32_t h[5] = { id, (uint32_t)ret, (uint32_t)err, (uint32_t)in_size, (uint32_t)out_size };
+	uint64_t t, svc = (uint64_t)(uintptr_t)p->services;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	t = (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+	trace_rec(p, REC_BRIDGE, sizeof h + 16 + in_size + out_size);
+	trace_put(p, h, sizeof h);
+	trace_put(p, &t, 8);
+	trace_put(p, &svc, 8);
+	trace_put(p, in, in_size);
+	trace_put(p, out, out_size);
+}
+
+static void trace_mmap(struct pvr *p, void *addr, size_t len, int prot, int flags, uint64_t off)
+{
+	uint64_t r[5] = { (uintptr_t)addr, len, (uint32_t)prot | (uint64_t)(uint32_t)flags << 32, off,
+			  (uintptr_t)addr };
+
+	trace_rec(p, REC_MMAP, sizeof r);
+	trace_put(p, r, sizeof r);
+}
+
+static void trace_ubuf(struct pvr *p, uint32_t nr, const void *ptr, size_t len)
+{
+	uint32_t h[2] = { nr, 0 };
+	uint64_t a = (uintptr_t)ptr;
+
+	trace_rec(p, REC_UBUF, sizeof h + sizeof a + len);
+	trace_put(p, h, sizeof h);
+	trace_put(p, &a, sizeof a);
+	trace_put(p, ptr, len);
+}
+
+/* a copy of every mapping, as pvrtrace takes before each kick */
+static void trace_snap(struct pvr *p, uint32_t kick)
+{
+	for (unsigned i = 0; i < p->nmaps; i++) {
+		uint32_t h[2] = { 1, kick };
+		uint64_t a[2] = { (uintptr_t)p->maps[i].addr, p->maps[i].len };
+
+		trace_rec(p, REC_SNAP, sizeof h + sizeof a + p->maps[i].len);
+		trace_put(p, h, sizeof h);
+		trace_put(p, a, sizeof a);
+		trace_put(p, p->maps[i].addr, p->maps[i].len);
+	}
+}
 
 int pvr_call(struct pvr *p, uint32_t id, void *in, size_t in_size, void *out, size_t out_size)
 {
@@ -23,8 +118,12 @@ int pvr_call(struct pvr *p, uint32_t id, void *in, size_t in_size, void *out, si
 		.hKernelServices = p->services,
 	};
 
-	if (ioctl(p->fd, DRM_IOCTL_PVR_SRVKM, &pkg) < 0)
-		return -errno;
+	int r = ioctl(p->fd, DRM_IOCTL_PVR_SRVKM, &pkg), e = r < 0 ? errno : 0;
+
+	if (p->trace_fd >= 0)
+		trace_bridge(p, id, r, e, in, in_size, out, out_size);
+	if (r < 0)
+		return -e;
 	return out_size >= 4 ? (int)*(PVRSRV_ERROR *)out : 0;
 }
 
@@ -32,6 +131,7 @@ int pvr_open(struct pvr *p, const char *node)
 {
 	memset(p, 0, sizeof *p);
 	p->map_flags = MAP_32BIT;
+	p->trace_fd = -1;
 	p->fd = open(node ? node : "/dev/dri/card0", O_RDWR | O_CLOEXEC);
 	return p->fd < 0 ? -errno : 0;
 }
@@ -130,6 +230,13 @@ int pvr_map(struct pvr *p, struct pvr_buf *b)
 		 (off_t)out.ui32MMapOffset << 12);
 	if (m == MAP_FAILED)
 		return -errno;
+	if (p->trace_fd >= 0)
+		trace_mmap(p, m, out.ui32RealByteSize, PROT_READ | PROT_WRITE, MAP_SHARED | p->map_flags,
+			   (uint64_t)out.ui32MMapOffset << 12);
+	if (p->nmaps < sizeof p->maps / sizeof *p->maps) {
+		p->maps[p->nmaps].addr = m;
+		p->maps[p->nmaps++].len = out.ui32RealByteSize;
+	}
 	b->cpu = (char *)m + out.ui32ByteOffset;
 	return 0;
 }
@@ -169,7 +276,11 @@ int pvr_register_render_ctx(struct pvr *p, const void *ctx, uint32_t size, uint3
 		.hDevMemContext = p->memctx,
 	};
 	PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_RENDER_CONTEXT out = { 0 };
-	int e = pvr_call(p, PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT, &in, sizeof in, &out,
+	int e;
+
+	if (p->trace_fd >= 0)
+		trace_ubuf(p, PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT & 0xff, ctx, size);
+	e = pvr_call(p, PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT, &in, sizeof in, &out,
 			 sizeof out);
 
 	if (!e) {
@@ -187,5 +298,46 @@ int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick)
 	memset(&in, 0, sizeof in);
 	in.hDevCookie = p->devcookie;
 	in.sCCBKick = *kick;
+	p->kicks++;
+	if (p->trace_fd >= 0) {
+		if (kick->ui32NumDstSyncObjects)
+			trace_ubuf(p, PVRSRV_BRIDGE_SGX_DOKICK & 0xff, kick->pahDstSyncHandles,
+				   kick->ui32NumDstSyncObjects * sizeof(IMG_HANDLE));
+		trace_snap(p, p->kicks);
+	}
 	return pvr_call(p, PVRSRV_BRIDGE_SGX_DOKICK, &in, sizeof in, &out, sizeof out);
+}
+
+/* Heap info as GET_DEVMEM_HEAPINFO reports it (the decoders name heaps from this call). */
+int pvr_heapinfo(struct pvr *p)
+{
+	PVRSRV_BRIDGE_IN_GET_DEVMEM_HEAPINFO in = { .hDevCookie = p->devcookie, .hDevMemContext = p->memctx };
+	PVRSRV_BRIDGE_OUT_GET_DEVMEM_HEAPINFO out;
+	int e;
+
+	memset(&out, 0, sizeof out);
+	e = pvr_call(p, PVRSRV_BRIDGE_GET_DEVMEM_HEAPINFO, &in, sizeof in, &out, sizeof out);
+	if (e)
+		return e;
+	p->nheaps = out.ui32ClientHeapCount;
+	memcpy(p->heaps, out.sHeapInfo, sizeof p->heaps);
+	return 0;
+}
+
+int pvr_flush_rt(struct pvr *p, uint32_t rtdata)
+{
+	PVRSRV_BRIDGE_IN_SGX_FLUSH_HW_RENDER_TARGET in = { .hDevCookie = p->devcookie };
+	PVRSRV_BRIDGE_RETURN out = { 0 };
+
+	in.sHWRTDataSetDevVAddr.uiAddr = rtdata;
+	return pvr_call(p, PVRSRV_BRIDGE_SGX_FLUSH_HW_RENDER_TARGET, &in, sizeof in, &out, sizeof out);
+}
+
+int pvr_unregister_render_ctx(struct pvr *p, IMG_HANDLE ctx)
+{
+	PVRSRV_BRIDGE_IN_SGX_UNREGISTER_HW_RENDER_CONTEXT in = { .hDevCookie = p->devcookie,
+								 .hHWRenderContext = ctx };
+	PVRSRV_BRIDGE_RETURN out = { 0 };
+
+	return pvr_call(p, PVRSRV_BRIDGE_SGX_UNREGISTER_HW_RENDER_CONTEXT, &in, sizeof in, &out, sizeof out);
 }

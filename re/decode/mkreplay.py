@@ -33,7 +33,7 @@ import pvrlog
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "isa"))
 import asm  # noqa: E402
 
-ARCH = "x86"
+ARCH = "x86"            # set from the log: i386 DDK captures, or x86_64 (re/gen/frame -t)
 K = "_SGX_CCB_KICK_"
 
 
@@ -43,8 +43,10 @@ def g(rec, buf, path, base=0):
 
 class Gen:
     def __init__(self, log, out, skip, dskip, sleep_ms, wait_ms):
+        global ARCH
         self.log = log
         self.mm = memmap.build(log)
+        ARCH = self.mm.arch
         self.out = out
         self.skip = skip
         self.dskip = dskip
@@ -125,7 +127,7 @@ class Gen:
                 I = "PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
                 O = "PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_RENDER_CONTEXT_TAG"
                 ub = next(u for u in self.log.of(pvrlog.UBuf) if u.seq < r.seq and u.nr == r.nr and u.phase == 0
-                          and u.ptr == g(I, r.inp, "pHWRenderContextCpuVAddr"))
+                          and (u.ptr & 0xffffffff) == g(I, r.inp, "pHWRenderContextCpuVAddr") & 0xffffffff)
                 size = g(I, r.inp, "ui32HWRenderContextSize")
                 assert len(ub.data) == size
                 self.ctx_va = g(O, r.out, "sHWRenderContextDevVAddr.uiAddr")
@@ -207,8 +209,9 @@ class Gen:
         ndst = k("ui32NumDstSyncObjects")
         if ndst:
             ptr = k("pahDstSyncHandles")
-            ub = [u for u in self.log.of(pvrlog.UBuf) if u.seq < r.seq and u.phase == 0 and u.ptr == ptr][-1]
-            hs = struct.unpack(f"<{ndst}I", ub.data[:4 * ndst])
+            ub = [u for u in self.log.of(pvrlog.UBuf) if u.seq < r.seq and u.phase == 0 and (u.ptr & 0xffffffff) == ptr & 0xffffffff][-1]
+            hw = 8 if ARCH == "x86_64" else 4
+            hs = struct.unpack(f"<{ndst}{'Q' if hw == 8 else 'I'}", ub.data[:hw * ndst])
             self.last_dst = [self.handle(h) for h in hs]
             t.append("dst=" + ",".join(self.last_dst))
         for name, cnt, arr in (("ta", "ui32NumTAStatusVals", "asTAStatusUpdate"),
@@ -217,7 +220,10 @@ class Gen:
             # { u32 status dev addr, u32 status value, handle mem info } (12 bytes on i386)
             o = base + layout.layout(ARCH)[K].path(arr)[0]
             for j in range(k(cnt)):
-                va, val, h = struct.unpack_from("<III", r.inp, o + 12 * j)
+                if ARCH == "x86_64":
+                    va, val, h = struct.unpack_from("<IIQ", r.inp, o + 16 * j)
+                else:
+                    va, val, h = struct.unpack_from("<III", r.inp, o + 12 * j)
                 t.append(f"{name}={va:#x}:{val:#x}:{self.handle(h)}")
         for j in range(k("ui32NumSrcSyncs")):
             t.append(f"src={self.handle(k(f'ahSrcKernelSyncInfo[{j}]'))}")
@@ -227,6 +233,14 @@ class Gen:
         if k("hDevMemContext") != self.memctx:
             sys.exit("mkreplay: kick on a memory context other than the first")
         self.op("kick", *t)
+
+    def rt_data(self, r, n):
+        """The RT data set the last kick's TA command names (cmd +0x40)."""
+        base = layout.layout(ARCH)["PVRSRV_BRIDGE_IN_DOKICK_TAG"].path("sCCBKick")[0]
+        h = g(K, r.inp, "hCCBKernelMemInfo", base)
+        off = g(K, r.inp, "ui32CCBOffset", base)
+        ccb = next(b for b in self.bufs if b.kmeminfo == h)
+        return self.snapmem(n).u32(ccb.devva + off - 0x58 + 0x40)
 
     def run(self):
         self.setup()
@@ -250,6 +264,7 @@ class Gen:
             prev = mem
         for h in getattr(self, "last_dst", []):
             self.op("waitsync", h, self.wait_ms)
+        self.rtdata = self.rt_data(kicks[-1], len(kicks))
         os.makedirs(self.out, exist_ok=True)
         with open(os.path.join(self.out, "script"), "w") as f:
             f.write("\n".join(self.lines) + "\n")
@@ -309,6 +324,9 @@ def main():
     ap.add_argument("--skip-heaps", default="", help="heap ids not written before kick 1")
     ap.add_argument("--delta-skip-heaps", default="1,8,10", help="heap ids not written before later kicks")
     ap.add_argument("--dump", action="append", default=[], help="devva:size:file to dump at the end")
+    ap.add_argument("--flushrt", action="store_true",
+                    help="end with SGX_FLUSH_HW_RENDER_TARGET of the frame's RT data set, as the DDK does on "
+                         "teardown (it timed out and locked the GPU up on a srvinit-started EA3)")
     ap.add_argument("--sleep", type=int, default=200, help="ms between kicks")
     ap.add_argument("--wait", type=int, default=2000, help="longest wait for the last kick's destination syncs, ms")
     ap.add_argument("--vb", type=lambda x: int(x, 0), default=0x3e51d000,
@@ -329,6 +347,8 @@ def main():
         for d in a.dump:
             va, size, path = d.split(":", 2)
             f.write(f"dump {int(va, 0):#x} {int(size, 0):#x} {path}\n")
+        if a.flushrt:
+            f.write(f"flushrt {gen.rtdata:#x}\n")
     print(f"mkreplay: {len(gen.lines)} ops, {len(gen.data)} data bytes, {len(gen.bufs)} buffers -> {a.outdir}")
 
 

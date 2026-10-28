@@ -15,6 +15,7 @@
  *   sync                                       (memory barrier)
  *   kick key=value ...                         (see mkreplay.py)
  *   waitsync <s<i>> <ms> | sleep <ms> | dump <dev addr> <len> <file>
+ *   flushrt <dev addr>                         (SGX_FLUSH_HW_RENDER_TARGET: drop the RT data set)
  * Buffers are named by capture-order index; m<i> is a buffer's mem info
  * handle, s<i> its sync info handle. A buffer that lands anywhere but its
  * captured device address stops the replay unless -k is given.
@@ -311,6 +312,8 @@ static void run(FILE *f)
 			printf("replay: kick %d sent\n", nkicks);
 		} else if (!strcmp(tok[0], "waitsync")) {
 			op_waitsync(tok[1], num(tok[2]));
+		} else if (!strcmp(tok[0], "flushrt")) {
+			bridge("SGX_FLUSH_HW_RENDER_TARGET", pvr_flush_rt(&P, num(tok[1])));
 		} else if (!strcmp(tok[0], "sleep")) {
 			msleep(num(tok[1]));
 		} else if (!strcmp(tok[0], "dump")) {

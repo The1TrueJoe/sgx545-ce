@@ -7,3 +7,6 @@ replay/replay
 isa/shc
 isa/*.so
 srvinit/srvinit
+gen/frame
+gen/frame-fake
+gen/usse_progs.h
