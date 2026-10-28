@@ -1,0 +1,14 @@
+run,field,poke,expected,result,pixels_off_prediction
+p0,control,none,identical to capture,md5 56f8466a,0
+p1,TA state viewport x offset 360->180,0x30401098:0x43340000,frame shifted 180 px left,as predicted (64800 px differ from capture),0
+p2,ISPA depth compare -> greater write off,0x30401084:0x01100200,no triangle,no triangle,0
+p3a,ISPA depth compare -> less (control),0x30401084:0x00500200,unchanged,unchanged,0
+p3b,p3a + background depth 0.25,0x3200e5a0:0x3e800000,no triangle,no triangle,0
+p4,MTE cull -> 2,0x304010bc:0x01555622,no triangle,no triangle,0
+p4b,MTE cull -> 1,0x304010bc:0x01555621,unchanged,unchanged,0
+p5,end-of-tile clip 719x479 -> 359x239,0x37004010:0x002f0167 0xfca00070,only 360x240 written,259200 px left zero,0
+p6,end-of-tile stride 736 -> 640,0x37004018:0x005f8000 0xfca00090,frame re-laid at pitch 640,0 of 353280 differ,0
+p7,kick-1 VDM base skips the clear,0x3200f250:0x3e518020,triangle on untouched memory,as predicted,0
+p8a,textured control,none,identical,identical,0
+p8,texture T0 -> linear filter,0x2e018038:0x07fe1400,the DDK's own linear render,42484 px changed,0
+p9,texture T0 -> mirror wrap,0x2e018038:0x07fe0048,the DDK's own mirror render,as predicted,0

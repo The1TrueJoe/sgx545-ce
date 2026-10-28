@@ -1,0 +1,6 @@
+utc,by,why,outcome
+2026-10-28T04:20:03Z,main,clear the PDS DOUTU-bit-26 TA wedge,back at 04:20:57; SrvInit OK
+2026-10-28T04:39:41Z,srvinit,trace the blob SrvInit from cold boot,trace lost (tracer .so not synced before power cut)
+2026-10-28T04:41:19Z,srvinit,trace the blob SrvInit (retry),traced: 156917-byte log
+2026-10-28T05:47:45Z,srvinit,first open-srvinit boot,DEVINITPART2 failed -22
+2026-10-28T05:52:00Z,srvinit,open-srvinit boot with 16-byte OUT,GPU up without libsrv_init at 29.86 s uptime
