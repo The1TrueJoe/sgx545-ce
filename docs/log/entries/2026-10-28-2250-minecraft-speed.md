@@ -1,4 +1,4 @@
-# Minecraft on our driver: no flicker, and about twice as fast
+# Minecraft on our driver: no flicker, and three times as fast
 
 After first light in a world (entry `2026-10-28-2100-minecraft-world-ea1`), the
 user watched it on the EA1's monitor. The panel flickered, and the title
@@ -87,6 +87,28 @@ The render thread's CPU is the limit. A profile of that thread:
 - the game's code ~19%;
 - gl4es ~15%;
 - libc ~8%.
+
+
+## Later the same night: 10 -> 19 FPS
+
+![the bench world at ~19 FPS](../img/2026-10-29-0000-ea1-bench-19fps.png)
+
+| step | ours, FPS | what changed |
+|---|---|---|
+| fences wait for their own kick | ~10, es2gears 304 | the swap's throttle had waited for the GPU to go idle (`fe17f1c`) |
+| glFlush of an off-screen frame deferred | 12.7-13.2 | the game flushed before the overlay drew into the same back buffer, so the overlay's render waited for the frame's (`601480e`) |
+| vertex cache | 16-21 | draws from unchanged buffers keep their gathered vertices and rebased indices in device memory: 96% hits, ~6 MB (`c42616d`) |
+
+The DDK in the same world and session: 28-39 FPS. Ours went from 6-9 to
+16-19 tonight: from about a quarter of the DDK's rate to over half. Per frame
+now:
+- our draw path ~21 ms;
+- the rest of the render thread (Mesa's state tracker, gl4es, the game, the
+  kernel) ~68 ms;
+- the DDK's whole frame ~29 ms.
+
+The GPU waits are gone (target waits ~30 ms of 2 s). Next: the CPU per draw
+in Mesa's state tracker and ours, then F16/C10 shading.
 
 ## Still open
 

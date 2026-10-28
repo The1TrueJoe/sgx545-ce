@@ -495,6 +495,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    struct vcache_entry *v;
    bool fan = info->mode == MESA_PRIM_TRIANGLE_FAN;
    unsigned count = draw->count, out_count = fan ? (count >= 3 ? (count - 2) * 3 : 0) : count;
+   uint64_t now = os_time_get_nano();
 
    if (!ctx->vcache || out_count < 3 || n_fetch > PIPE_MAX_ATTRIBS)
       return false;
@@ -503,7 +504,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
          return false;
       ib = sgx545_resource(info->index.resource);
    }
-   if (out_count > SGXWS_MAX_INDICES)
+   if (out_count > SGXWS_MAX_INDICES || (ib && now - ib->written_ns < 1000000000ull))
       return false;
    memset(&key, 0, sizeof(key));
    key.n_fetch = n_fetch;
@@ -522,7 +523,9 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
       if (!f[e].stride) {
          fetch_vertex(&f[e], 0, key.el[e].konst);
       } else {
-         if (!f[e].res)
+         /* a buffer rewritten in the last second (the GUI's, the hand's
+          * streams) would only churn the cache */
+         if (!f[e].res || now - f[e].res->written_ns < 1000000000ull)
             return false;
          key.el[e].uid = f[e].res->uid;
          key.el[e].gen = f[e].res->gen;

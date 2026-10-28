@@ -242,8 +242,10 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
    ptrans->box = *box;
 
    if (prsc->target == PIPE_BUFFER) {
-      if (usage & PIPE_MAP_WRITE)
+      if (usage & PIPE_MAP_WRITE) {
          res->gen++;            /* the vertex cache's copies of it are stale */
+         res->written_ns = os_time_get_nano();
+      }
       ptrans->stride = 0;
       ptrans->layer_stride = 0;
       *out = ptrans;
