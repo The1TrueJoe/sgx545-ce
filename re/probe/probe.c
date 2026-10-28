@@ -84,6 +84,7 @@ void glViewport(GLint, GLint, GLsizei, GLsizei);
 #define GL_LINK_STATUS 0x8B82
 
 static void (*mark)(const char *);
+static void (*snapshot)(void);
 
 static void note(const char *s)
 {
@@ -148,6 +149,7 @@ int main(void)
 	unsigned char px[4];
 
 	mark = (void (*)(const char *))dlsym(RTLD_DEFAULT, "pvrtrace_note");
+	snapshot = (void (*)(void))dlsym(RTLD_DEFAULT, "pvrtrace_snapshot");
 	floats("PROBE_CLEAR", clear, 4, "0 0 0.5 1");
 	floats("PROBE_COLOR", color, 4, "0 1 0 1");
 	nv = floats("PROBE_VERTS", verts, (int)(sizeof verts / sizeof *verts), "-0.5 -0.5 0.5 -0.5 0 0.5") / 2;
@@ -193,6 +195,8 @@ int main(void)
 	}
 	note("finish");
 	glFinish();
+	if (snapshot)
+		snapshot();	/* the finished frame, as the replay's reference */
 	note("readback");
 	glReadPixels(w / 2, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
 	printf("probe: %dx%d centre rgba(%d,%d,%d,%d) glerr %#x\n", w, h, px[0], px[1], px[2], px[3],

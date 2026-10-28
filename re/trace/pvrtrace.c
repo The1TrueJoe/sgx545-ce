@@ -13,7 +13,7 @@
  * about a layout costs a re-decode, not a re-capture on the box.
  *
  * Builds for i386 (the Cedarview DDK) and x86_64 (our own client) alike:
- *   zig cc -target x86-linux-gnu.2.17 -O2 -shared -fPIC -o pvrtrace.so pvrtrace.c -ldl
+ *   re/trace/build.sh   (adds the kernel headers and this build's defines)
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -30,6 +30,11 @@
 #include <time.h>
 #include <unistd.h>
 
+/* The bridge structs, from the GPL kernel headers (build with re/abi/flags.sh). */
+#include "services.h"
+#include "pvr_bridge.h"
+#include "sgx_bridge.h"
+
 /* The outer package, in the caller's own ABI (pointers are native width). */
 struct pvr_bridge_package {
 	uint32_t id;
@@ -42,11 +47,13 @@ struct pvr_bridge_package {
 };
 
 enum {
-	REC_BRIDGE = 1,	/* u32 id, i32 ret, i32 err, u32 in_n, u32 out_n, u64 ns, in, out */
+	REC_BRIDGE = 1,	/* u32 id, i32 ret, i32 err, u32 in_n, u32 out_n, u64 ns, u64 services, in, out */
 	REC_MMAP = 2,	/* u64 addr, u64 len, u32 prot, u32 flags, u64 off, u64 ret */
 	REC_MUNMAP = 3,	/* u64 addr, u64 len */
 	REC_SNAP = 4,	/* u32 reason, u32 kickno, u64 addr, u64 len, data */
 	REC_NOTE = 5,	/* text */
+	REC_UBUF = 6,	/* u32 bridge nr, u32 phase (0 before, 1 after), u64 ptr, data:
+			   user memory a bridge's handler copies through a pointer in IN */
 };
 
 #define SNAP_KICK 1
@@ -132,7 +139,7 @@ __attribute__((constructor)) static void init(void)
 		return;
 	out("PVRT", 4);
 	{
-		uint32_t v[2] = { 1, (uint32_t)sizeof(void *) };
+		uint32_t v[2] = { 2, (uint32_t)sizeof(void *) };
 		out(v, sizeof v);
 	}
 	snprintf(buf, sizeof buf, "pid %d ptr %zu", getpid(), sizeof(void *));
@@ -177,6 +184,47 @@ static void snap_all(uint32_t why)
 		snap_one(why, maps[i].addr, maps[i].len);
 }
 
+static void ubuf(uint32_t nr, uint32_t phase, const void *p, size_t len)
+{
+	uint32_t h[2] = { nr, phase };
+	uint64_t a = (uintptr_t)p;
+
+	if (!p || !len || len > (16u << 20))
+		return;
+	rec(REC_UBUF, (uint32_t)(sizeof h + sizeof a + len));
+	out(h, sizeof h);
+	out(&a, sizeof a);
+	out(p, len);
+}
+
+#define NR(x) ((x) & 0xff)
+
+/* Save what the kernel will read (phase 0) or wrote (phase 1) through IN's pointers. */
+static void follow(const struct pvr_bridge_package *pkg, uint32_t phase)
+{
+	uint32_t nr = pkg->id & 0xff;
+
+	if (!pkg->in)
+		return;
+	if (nr == NR(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT) && !phase) {
+		PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_RENDER_CONTEXT *in = pkg->in;
+		ubuf(nr, phase, in->pHWRenderContextCpuVAddr, in->ui32HWRenderContextSize);
+	} else if (nr == NR(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT) && !phase) {
+		PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_TRANSFER_CONTEXT *in = pkg->in;
+		ubuf(nr, phase, in->pHWTransferContextCpuVAddr, in->ui32HWTransferContextSize);
+	} else if (nr == NR(PVRSRV_BRIDGE_SGX_GETMISCINFO)) {
+		PVRSRV_BRIDGE_IN_SGXGETMISCINFO *in = pkg->in;
+		ubuf(nr, phase, in->psMiscInfo, sizeof(SGX_MISC_INFO));
+	} else if (nr == NR(PVRSRV_BRIDGE_SGX_DOKICK) && !phase) {
+		PVRSRV_BRIDGE_IN_DOKICK *in = pkg->in;
+		ubuf(nr, phase, in->sCCBKick.pahDstSyncHandles,
+		     in->sCCBKick.ui32NumDstSyncObjects * sizeof(IMG_HANDLE));
+	} else if (nr == NR(PVRSRV_BRIDGE_WRAP_EXT_MEMORY) && !phase) {
+		PVRSRV_BRIDGE_IN_WRAP_EXT_MEMORY *in = pkg->in;
+		ubuf(nr, phase, in->psSysPAddr, in->ui32NumPageTableEntries * sizeof(IMG_SYS_PHYADDR));
+	}
+}
+
 /* glibc declares ioctl(int, unsigned long, ...); the request is all we need. */
 int ioctl(int fd, unsigned long req, ...)
 {
@@ -202,18 +250,23 @@ int ioctl(int fd, unsigned long req, ...)
 		kicks++;
 		snap_all(SNAP_KICK);
 	}
+	follow(pkg, 0);
 	t = now_ns();
 	ret = real_ioctl(fd, req, arg);
 	err = ret < 0 ? errno : 0;
+	follow(pkg, 1);
 	{
 		uint32_t h[5] = { pkg->id, (uint32_t)ret, (uint32_t)err, pkg->in_size, pkg->out_size };
 		uint32_t ins = pkg->in ? pkg->in_size : 0, outs = pkg->out ? pkg->out_size : 0;
 
 		h[3] = ins;
 		h[4] = outs;
-		rec(REC_BRIDGE, (uint32_t)(sizeof h + 8 + ins + outs));
+		uint64_t svc = (uintptr_t)pkg->services;
+
+		rec(REC_BRIDGE, (uint32_t)(sizeof h + 16 + ins + outs));
 		out(h, sizeof h);
 		out(&t, 8);
+		out(&svc, 8);
 		if (ins)
 			out(pkg->in, ins);
 		if (outs)

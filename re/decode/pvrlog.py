@@ -3,7 +3,7 @@ import os
 import struct
 from dataclasses import dataclass, field
 
-REC_BRIDGE, REC_MMAP, REC_MUNMAP, REC_SNAP, REC_NOTE = 1, 2, 3, 4, 5
+REC_BRIDGE, REC_MMAP, REC_MUNMAP, REC_SNAP, REC_NOTE, REC_UBUF = 1, 2, 3, 4, 5, 6
 SNAP_REASONS = {1: "kick", 2: "unmap", 3: "exit"}
 
 # Bridge index -> name for this build, generated from the headers by re/abi/ids.sh.
@@ -22,6 +22,7 @@ class Bridge:
     t_ns: int
     inp: bytes
     out: bytes
+    services: int = 0
 
     @property
     def nr(self):
@@ -65,6 +66,15 @@ class Note:
 
 
 @dataclass
+class UBuf:
+    seq: int
+    nr: int
+    phase: int   # 0: read by the kernel (before the call), 1: written by it (after)
+    ptr: int
+    data: bytes
+
+
+@dataclass
 class Log:
     ptr: int
     recs: list = field(default_factory=list)
@@ -76,7 +86,8 @@ class Log:
 def load(path):
     b = open(path, "rb").read()
     assert b[:4] == b"PVRT", "not a pvrtrace log"
-    _ver, ptr = struct.unpack_from("<II", b, 4)
+    ver, ptr = struct.unpack_from("<II", b, 4)
+    hdr = 36 if ver >= 2 else 28
     log = Log(ptr)
     o = 12
     seq = 0
@@ -90,7 +101,8 @@ def load(path):
         if typ == REC_BRIDGE:
             bid, ret, err, ni, no = struct.unpack_from("<IiiII", p, 0)
             (t,) = struct.unpack_from("<Q", p, 20)
-            log.recs.append(Bridge(seq, bid, ret, err, t, p[28:28 + ni], p[28 + ni:28 + ni + no]))
+            svc = struct.unpack_from("<Q", p, 28)[0] if ver >= 2 else 0
+            log.recs.append(Bridge(seq, bid, ret, err, t, p[hdr:hdr + ni], p[hdr + ni:hdr + ni + no], svc))
         elif typ == REC_MMAP:
             a, ln, pf, off, _r = struct.unpack_from("<QQQQQ", p, 0)
             log.recs.append(Mmap(seq, a, ln, pf & 0xFFFFFFFF, pf >> 32, off))
@@ -100,6 +112,9 @@ def load(path):
         elif typ == REC_SNAP:
             why, k, a, ln = struct.unpack_from("<IIQQ", p, 0)
             log.recs.append(Snap(seq, SNAP_REASONS.get(why, str(why)), k, a, p[24:24 + ln]))
+        elif typ == REC_UBUF:
+            nr, ph, a = struct.unpack_from("<IIQ", p, 0)
+            log.recs.append(UBuf(seq, nr, ph, a, p[16:]))
         elif typ == REC_NOTE:
             log.recs.append(Note(seq, p.decode(errors="replace")))
         seq += 1
