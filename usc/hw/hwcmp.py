@@ -148,9 +148,9 @@ def main():
     run = (f"cd {BOX} && mkdir -p ddk out_ddk out_sub && "
            f"n=$(dmesg | wc -l); R=/opt/sgx-i386; "
            f"export LD_PRELOAD=\"$R/usr/lib/sgx-busidshim.so {BOX}/uspsub.so\"; "
-           f"USPSUB_SAVE={BOX}/ddk $R/lib/ld-linux.so.2 --library-path $R/usr/lib:$R/lib {BOX}/glt list out_ddk > log_ddk 2>&1; "
+           f"USPSUB_SAVE={BOX}/ddk flock /tmp/gpu.lock $R/lib/ld-linux.so.2 --library-path $R/usr/lib:$R/lib {BOX}/glt list out_ddk > log_ddk 2>&1; "
            f"echo ddk rc=$?; "
-           f"USPSUB_DIR={BOX}/sub $R/lib/ld-linux.so.2 --library-path $R/usr/lib:$R/lib {BOX}/glt list out_sub > log_sub 2>&1; "
+           f"USPSUB_DIR={BOX}/sub flock /tmp/gpu.lock $R/lib/ld-linux.so.2 --library-path $R/usr/lib:$R/lib {BOX}/glt list out_sub > log_sub 2>&1; "
            f"echo sub rc=$?; "
            f"dmesg | tail -n +$((n+1)) | grep -i -E 'recover|lockup|hwr|timeout' | head -5; "
            f"tar cf res.tar out_ddk out_sub ddk log_ddk log_sub")

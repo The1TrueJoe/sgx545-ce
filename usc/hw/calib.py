@@ -164,7 +164,7 @@ def main():
     hwcmp.sh(f"rm -rf {hwcmp.BOX} && mkdir -p {hwcmp.BOX} && tar xf - -C {hwcmp.BOX}", inp=tar)
     r = hwcmp.sh(f"cd {hwcmp.BOX} && mkdir -p out && n=$(dmesg | wc -l); R=/opt/sgx-i386; "
                  f"LD_PRELOAD=\"$R/usr/lib/sgx-busidshim.so {hwcmp.BOX}/uspsub.so\" USPSUB_DIR={hwcmp.BOX}/sub "
-                 f"$R/lib/ld-linux.so.2 --library-path $R/usr/lib:$R/lib {hwcmp.BOX}/glt list out > log 2>&1; "
+                 f"flock /tmp/gpu.lock $R/lib/ld-linux.so.2 --library-path $R/usr/lib:$R/lib {hwcmp.BOX}/glt list out > log 2>&1; "
                  f"echo rc=$?; dmesg | tail -n +$((n+1)) | grep -i -E 'recover|lockup' | head -3; "
                  f"tar cf res.tar out log", check=False)
     print(r.stdout.decode(errors="replace").strip())
