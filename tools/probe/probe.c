@@ -32,6 +32,9 @@
  *   PROBE_POLYOFF="f u"        glEnable(POLYGON_OFFSET_FILL), glPolygonOffset
  *   PROBE_DITHER=0             glDisable(DITHER)
  *   PROBE_LINEWIDTH=w          glLineWidth
+ *   PROBE_NOCLEAR=1            no glClear (the draws land on the previous buffer)
+ *   PROBE_SCISSOR2="x y w h"   glScissor before every draw after the first (PROBE_DRAWS >= 2)
+ *   PROBE_VIEWPORT2="x y w h"  glViewport likewise
  * Textures (PROBE_TEX >= 1; all units the same):
  *   PROBE_TEXFMT=name          rgba8888 rgb565 rgba4444 rgba5551 rgb888 l8 a8 la88   (rgba8888)
  *   PROBE_TEXSIZE="w h"        (8 8); the checker repeats every 8 texels
@@ -713,8 +716,13 @@ int main(void)
 		clear[0] = (float)fr / frames;
 	note("clear");
 	glClearColor(clear[0], clear[1], clear[2], clear[3]);
-	glClear(clearbits);
+	if (!getenv("PROBE_NOCLEAR"))
+		glClear(clearbits);
 	for (int i = 0; i < draws; i++) {
+		if (i == 1 && ints("PROBE_SCISSOR2", v, 4, NULL) == 4)
+			glScissor((GLint)v[0], (GLint)v[1], (GLsizei)v[2], (GLsizei)v[3]);
+		if (i == 1 && floats("PROBE_VIEWPORT2", f, 4, "") == 4)
+			glViewport((GLint)f[0], (GLint)f[1], (GLsizei)f[2], (GLsizei)f[3]);
 		note("draw");
 		glDrawArrays(prim, 0, nv);
 	}

@@ -250,6 +250,37 @@ def use_task(w0):
     return (VTX_CODE + (base - 10) * 0x80000 if base >= 10 else PIX_CODE + base * 0x80000) + off
 
 
+USSE = False   # --usse: disassemble the USSE programs the PDS programs start
+
+
+def usse_dis(o, mem, va, maxn=96):
+    """the USSE program at va, up to the first instruction flagged end"""
+    if not USSE:
+        return
+    isa = os.path.join(HERE, "..", "isa")
+    if isa not in sys.path:
+        sys.path.append(isa)
+    import hw
+    o.h(f"USSE program {va:#x}")
+    heap = va & ~0x7ffff
+    nxt = set()   # phase entry points (phas.i #pc: heap + 8 * pc); an end before one doesn't stop
+    for i in range(maxn):
+        lo, hi = mem.u32(va + 8 * i), mem.u32(va + 8 * i + 4)
+        if lo is None or hi is None:
+            break
+        x = hw.decode(lo, hi)
+        t = hw.fmt(x) if x is not None else f"hw{hi >> 27:02x}?"
+        if x is not None and x.unknown:
+            t += f"  {{?{' '.join(x.unknown)}}}"
+        o.lines.append(f"    {va + 8 * i:#010x}  {hi:08x} {lo:08x}  {t}")
+        if t.startswith("phas") and "#" in t:
+            nxt.add(heap + 8 * int(t.split("#")[1].split(",")[0]))
+        if va + 8 * (i + 1) in nxt:
+            continue
+        if x is not None and " end" in " " + t.replace("[", " ").replace("]", " ").replace(",", " ") + " ":
+            break
+
+
 def pixel_program(o, mem, word):
     addr = PDS_PIXEL + ((word & 0x3ffffff) << 4)
     dsize = bits(word, 26, 6) * 16
@@ -260,6 +291,7 @@ def pixel_program(o, mem, word):
             o.w(where, v[0], f"DOUTU: USSE task at {use_task(v[0]):#x}, temps/4={v[0] >> 24} [D]")
             if v[1] is not None:
                 o.w(where, v[1], f"DOUTU w1: iterations={v[1] >> 24 & 1} samples={v[1] >> 25 & 1} [D]")
+            usse_dis(o, mem, use_task(v[0]))
         elif dest == 2 and v[0] is not None:
             o.w(where, v[0], f"DOUTI: {pdsdis.douti(v[0], v[1] or 0)}")
         elif dest == 4 and None not in v:
@@ -486,6 +518,7 @@ def kick(o, log, mm, k, n):
                                                   f"to attr {bits(v[1], 8, 14)} [D]")
                 elif dest == 5 and v[0] is not None:
                     o.w(f"{addr:#x} doutu", v[0], f"vertex shader {use_task(v[0]):#x} [D]")
+                    usse_dis(o, mem, use_task(v[0]))
 
 
 def main():
@@ -493,7 +526,10 @@ def main():
     ap.add_argument("capture")
     ap.add_argument("--kick", type=int)
     ap.add_argument("--brief", action="store_true", help="one line per word, for diffing two captures")
+    ap.add_argument("--usse", action="store_true", help="disassemble the USSE programs (tools/isa)")
     a = ap.parse_args()
+    global USSE
+    USSE = a.usse
     log = pvrlog.load(a.capture)
     mm = memmap.build(log)
     o = Out(a.brief)

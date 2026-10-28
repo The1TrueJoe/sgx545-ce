@@ -221,7 +221,7 @@ with the context dirty bits in parentheses:
 | 0x4 | 1 | ISPC, front stencil (present when ISPA b8) | ctx+0x788 | D |
 | 0x8, 0x10, 0x20 | 3 | back-face ISPA, ISPB, ISPC (two-sided stencil) | ctx+0x78c..0x794 | D |
 | 0x40 | 3 | PDS: secondary, middle word, primary | ctx+0xcac/cb0, frag+0x64, ctx+0xc9c/ca0 | D |
-| 0x80 | 2 | region clip (clears and driver objects only): `b31 \| xmin<<16 \| xmax`, `ymin<<16 \| ymax`, in 32×16-px tiles | RT+0x114, +0x118 or the scissor | D |
+| 0x80 | 2 | region clip, sticky until the next one (clears, driver objects, draws without a clear before them): `b31 \| xmin<<16 \| xmax`, `ymin<<16 \| ymax`, in 32×16-px tiles | RT+0x114, +0x118 or the scissor | C |
 | 0x100 | 6 | viewport (dirty 0x100) | ctx+0x13c..0x150 | C |
 | 0x200 | 1 | always 0 (dirty 0x200) | | D |
 | 0x400 | 1 | output select (dirty 0x1000) | vertex program +0x248 | D |
@@ -374,29 +374,65 @@ driver draws them the same way, byte-identical to the DDK):
 
 ### Scissor and partial viewports: pass type 3 objects
 
-There is no per-pixel scissor rectangle in the state.
+There is no scissor rectangle register. The ISP keeps one **visible bit
+per pixel**, and every object is drawn only where it is set. Pass type 3
+("viewport generate") objects write the bit and draw nothing else. The
+**region clip** (group 0x80) limits which tiles the TA bins an object into,
+and it is **sticky**: an object without group 0x80 keeps the last one.
+`tools/state/sgxstate.h` builds all of it (`sgxs_scissor_objects`).
 
-When glScissor or glViewport covers less than the surface, libGLESv2
-inserts these objects ahead of the draws (`scissor` and `viewport`
-captures):
+**The two objects** (TA block header `d485`: ISPA, ISPC, region clip,
+output select, MTE, TSP; 9 dwords, DMA kind 0; no PDS group, so no pixel
+program runs):
 
-1. **Load object (scissor only):** a full-screen object that samples the
-   previous buffer (texture layout 6, T0 `00b60e90`, T1 `cc2cf1df`). It
-   keeps what lies outside the scissor.
-2. **Reset object:** a full-surface object with ISPA `07e00100` (pass type
-   3, no colour write, depth write on, always) and ISPC `00000000`, over
-   the whole region clip.
-3. **Rectangle object:** a 4-vertex strip (VDM prim 3) with screen-space
-   x, y, z positions of the rectangle (the `scissor` capture's vertices
-   are 100..300 × 330..430 = GL (100,50,200,100) flipped into a 480-high
-   window). It has ISPA `07e00100` and ISPC `02000000`, and its region
-   clip is the rectangle's tiles (`80030009 0014001a` = x 3..9, y 20..26).
-4. **The clear:** region-clipped the same way.
-5. **The draws:** unchanged, with the full-surface viewport transform when
-   only the scissor changed.
+| object | ISPA | ISPC | region clip | geometry (screen space, y down) |
+|---|---|---|---|---|
+| reset | `07e00100` | `00000000` (b25-27 = 0) | the target, or the old rectangle's tiles | triangle (0,0) (2w,0) (0,2h), VDM prim 0 |
+| set | `07e00100` | `02000000` (b25-27 = 1) | the rectangle's tiles | 4-vertex strip TL TR BL BR, VDM prim 3 |
 
-For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
-(1) of the visible region [D].
+- ISPA `07e00100`: pass type 3, b21 no colour write, depth always with
+  write, ISPC follows [D].
+- ISPC b25-27: 0 resets the bit under the object, 1 sets it [C, q1 q4].
+- The vertices are 2 dwords (x, y). The vertex program is
+  `mov o0, pa0 [rpt=2]; mov o2, c3; mov o3, c3` (z = w = 1.0), output
+  select `0x00040000`, MTE `0x40` [D]. The words are in `sgxstate.h`.
+- Pixel centres inside the strip get the bit: moving its left edge from
+  x 100 to 150 moved the scissor's edge [C, q2].
+- The set object only reaches its region clip's tiles [C, q3].
+- **Region clip words:** `0x80000000 | x0/32 << 16 | (x1-1)/32`,
+  `y0/16 << 16 | (y1-1)/16`, for a rectangle `[x0,x1) × [y0,y1)` in target
+  pixels. `glScissor(37, 23, 101, 57)` on 720×480 = x 37..138, y 400..457 =
+  `80010004 0019001c` [D, sc2].
+- **Draws inherit it:** with the reset turned into a set (everything
+  visible), the triangle was still cut to the tiles of the clear before it
+  (columns 3-9, rows 20-26), 0 pixels off that prediction [C, q1].
+
+**What libGLESv2 emits** (captures `sc1`-`sc6`, `vp1`, `nc0`) [D]:
+
+1. A render that doesn't start with a full-target clear starts with a
+   **load object**: a full-target triangle (0,0) (1440,0) (0,960), x y z u v
+   per vertex, sampling the colour buffer's previous contents (T0
+   `00b60e90`, T1 `cc2cf1df`: layout 6, format 0xc). It comes with
+   `PROBE_NOCLEAR` and no scissor too (`nc0`), so it is the render's "load",
+   not part of the scissor. With a scissor it is what keeps the pixels
+   outside it.
+2. Scissor (or a viewport) smaller than the target: **reset** over the whole
+   target, **set** over the rectangle.
+3. glClear inside a scissor is a strip over the rectangle (4 vertices, x y z
+   colour) with the rectangle's region clip.
+4. Draws: unchanged (own viewport transform, no group 0x80) after a clear
+   or a set object. With no clear in the render, the draw itself carries
+   the region clip (header `dfc3`, `sc4`).
+5. The scissor changes between draws (`sc5`): reset with the old
+   rectangle's region clip (full-target triangle), then set the new
+   rectangle.
+6. A zero-area scissor (`sc6`): the reset only; its clear is a degenerate
+   strip at (0,480).
+7. A scissor covering the whole target (`sc3`) emits nothing: the capture
+   equals `base3`.
+8. A partial glViewport (`vp1`, no scissor): the clear stays full-target;
+   the draw is preceded by reset + set over the viewport rectangle and has
+   the viewport transform of section 3.
 
 ## 4. The render target
 
@@ -444,11 +480,11 @@ For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
 
 - The TE tile is 32 × 16 pixels. SGXAddRenderTarget computes
   `xtiles = (w+31)/32` and `ytiles = (h+15)/16`.
-- **Region clip** (TA block group 0x80, clear object only):
-  - word 0 = `0x80000000 | (xmax tile)`, with b12-21 = xmin;
-  - word 1 = ymax tile, with b12-21 = ymin;
-  - here 22 and 29;
-  - status: D (`scissor` capture).
+- **Region clip** (TA block group 0x80):
+  - word 0 = `0x80000000 | xmin tile << 16 | xmax tile`;
+  - word 1 = `ymin tile << 16 | ymax tile`;
+  - the whole 720×480 target is 0..22, 0..29;
+  - sticky TA state, see "Scissor and partial viewports" [C].
 - glScissor is not a hardware rectangle; see "Scissor and partial
   viewports" in section 3.
 - **Pbuffers** (`pb` 64×32, `pb2` 128×48): 2×2 macrotile mode
@@ -718,6 +754,14 @@ Base captures and their bases:
 | t16x8 … tnpot | sizes | T1 |
 | tmip, tmip2, tmipb | mipmaps | T0 b9, b18 |
 | pb, pb2, pb8888, pbd | pbuffer 64×32, 128×48, 8888, + depth | RT numbers, PBE words, viewport sign |
+| base3 | the probe defaults, second session (probe-st3, 2026-10-28 afternoon) | base for the rows below |
+| sc1 / sc2 | glScissor(100,50,200,100) / (37,23,101,57) | load, reset, set objects; region clips |
+| sc3 | glScissor of the whole target | nothing (= base3) |
+| sc4 | sc1 without glClear | the draw carries the region clip (header `dfc3`) |
+| sc5 | a second draw with glScissor(400,200,150,120) | reset over the old tiles, set the new |
+| sc6 | glScissor(0,0,0,0) | reset only |
+| nc0 | no glClear | the load object |
+| vp1 / vp2 | glViewport(100,50,200,100) / (37,23,101,57) | reset + set over the viewport, viewport words |
 
 Every capture's TA state block, PBE words, RT numbers, PB descriptor and
 free list are rebuilt from the formulas by `build.py --check` (run with
@@ -748,6 +792,11 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 | p8a | 5 (control) | none (t8888) | identical | 0 differ |
 | p8 | 5, DOUTT | T0 `07fe0000` → `07fe1400` (min+mag linear, `0x2e018038`) | the DDK's own `tlin` readback | 0 differ (42484 pixels changed) |
 | p9 | 5, DOUTT | T0 → `07fe0048` (S, T mirror) | the DDK's own `tmirror` readback | 0 differ |
+| q0 | scissor (control) | none (`sc1`, glScissor(100, 50, 200, 100)) | identical | 0 differ |
+| q1 | scissor, ISPC set/reset | reset object ISPC `00000000` → `02000000` (`0x30401088`) | the whole target visible: the triangle beyond the scissor, cut to the clear's tiles 3-9 × 20-26 (sticky region clip) | 0 differ |
+| q2 | scissor, set geometry | set strip's left x 100.0 → 150.0 (`0x3e51d054`, `0x3e51d064`) | the scissor's left edge at 150 | 0 differ |
+| q3 | scissor, region clip | set object region clip `80030009` → `80030006` (`0x3040110c`) | nothing right of x = 224 (tile 6's end) | 0 differ |
+| q4 | scissor, ISPC set/reset | set object ISPC `02000000` → `00000000` (`0x30401108`) | nothing visible: an all-zero frame | 0 differ |
 
 p8 sets the min and mag bits together. The triangle samples a magnified
 texture, so only mag is proven by the pixels; min stays [D].
