@@ -2,6 +2,15 @@
 
     python3 mkreplay.py <log.bin> <outdir> [--skip-heaps 8] [--delta-skip-heaps 1,8,10]
 
+Authoring the frame instead of copying it (addresses default to the probe's
+ref.bin capture; see re/NOTES.md):
+    --verts x0,y0,x1,y1,x2,y2   triangle positions (clip space), as floats
+    --clear r,g,b,a             clear colour (0..1), the background object's ARGB8888
+    --color r,g,b,a             the fragment uniform c, as FP16 pairs
+    --usse VA:'insn; insn'      USSE instructions assembled by re/isa/asm.py
+    --poke VA:word,word         raw words
+Each override is poked after the snapshot is loaded and again before every kick.
+
 Writes <outdir>/script (text, one op per line) and <outdir>/data (the bytes
 the write ops point into). Buffers are named by their index in capture order
 (allocations and wraps both count), handles as m<idx> (mem info) or s<idx>
@@ -20,6 +29,9 @@ import sys
 import layout
 import memmap
 import pvrlog
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "isa"))
+import asm  # noqa: E402
 
 ARCH = "x86"
 K = "_SGX_CCB_KICK_"
@@ -44,6 +56,7 @@ class Gen:
         self.handles = {}       # captured handle -> "m<i>" / "s<i>"
         self.heapid = {}        # buf index -> SGX heap id (low byte), or None for wraps
         self.ctx_va = None
+        self.pokes = []         # (dev addr, [words], comment) applied before every kick
 
     def op(self, *a):
         self.lines.append(" ".join(str(x) for x in a))
@@ -229,6 +242,9 @@ class Gen:
                 self.op("sleep", self.sleep_ms)
                 self.op("#", f"words changed between kick {n - 1} and kick {n}")
                 self.delta(prev, mem)
+            for va, words, why in self.pokes:
+                self.op("#", why)
+                self.op("poke", self.hx(va), *(f"{w:#010x}" for w in words))
             self.op("sync")
             self.kick(r)
             prev = mem
@@ -241,6 +257,51 @@ class Gen:
             f.write(self.data)
 
 
+def floats(s, n):
+    v = [float(x) for x in s.split(",")]
+    if len(v) != n:
+        sys.exit(f"mkreplay: expected {n} numbers in {s!r}")
+    return v
+
+
+def f32(x):
+    return struct.unpack("<I", struct.pack("<f", x))[0]
+
+
+def f16(x):
+    return struct.unpack("<H", struct.pack("<e", x))[0]
+
+
+def u8(x):
+    return max(0, min(255, round(x * 255)))
+
+
+def overrides(a):
+    out = []
+    if a.verts:
+        v = floats(a.verts, 6)
+        out.append((a.vb + 0x30, [f32(x) for x in v], f"triangle {a.verts}"))
+    if a.clear:
+        r, g, b, al = floats(a.clear, 4)
+        argb = u8(al) << 24 | u8(r) << 16 | u8(g) << 8 | u8(b)
+        for i in range(3):
+            out.append((a.vb + 0x10 * i + 0xc, [argb], f"clear vertex {i} colour {a.clear}"))
+    if a.color:
+        r, g, b, al = floats(a.color, 4)
+        out.append((a.uniform, [f16(r) | f16(g) << 16, f16(b) | f16(al) << 16], f"uniform c = {a.color}"))
+    for spec in a.usse:
+        va, prog = spec.split(":", 1)
+        words = []
+        for insn in [x for x in prog.split(";") if x.strip()]:
+            hi, lo = asm.assemble(insn)
+            words += [lo, hi]
+        out.append((int(va, 0), words, f"USSE at {va}: {prog.strip()}"))
+    for spec in a.poke:
+        va, ws = spec.split(":", 1)
+        out.append((int(va, 0), [int(w, 0) for w in ws.split(",")], f"poke {spec}"))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("log")
@@ -250,9 +311,19 @@ def main():
     ap.add_argument("--dump", action="append", default=[], help="devva:size:file to dump at the end")
     ap.add_argument("--sleep", type=int, default=200, help="ms between kicks")
     ap.add_argument("--wait", type=int, default=2000, help="longest wait for the last kick's destination syncs, ms")
+    ap.add_argument("--vb", type=lambda x: int(x, 0), default=0x3e51d000,
+                    help="vertex buffer: clear object at +0 (3 x {x,y,z,ARGB}), the triangle's x,y at +0x30")
+    ap.add_argument("--uniform", type=lambda x: int(x, 0), default=0x2e006184,
+                    help="the uniform c in the PDS pixel data, FP16 (r,g) then (b,a)")
+    ap.add_argument("--verts")
+    ap.add_argument("--clear")
+    ap.add_argument("--color")
+    ap.add_argument("--usse", action="append", default=[])
+    ap.add_argument("--poke", action="append", default=[])
     a = ap.parse_args()
     ids = lambda s: {int(x, 0) for x in s.split(",") if x}
     gen = Gen(pvrlog.load(a.log), a.outdir, ids(a.skip_heaps), ids(a.delta_skip_heaps), a.sleep, a.wait)
+    gen.pokes = overrides(a)
     gen.run()
     with open(os.path.join(a.outdir, "script"), "a") as f:
         for d in a.dump:
