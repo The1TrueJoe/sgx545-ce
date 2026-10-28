@@ -197,6 +197,47 @@ pokes overrides after the snapshot loads and again before each kick
   driver encodings bit-exactly (`asm.py --check`). It refuses anything whose
   fields were never fuzzed.
 
+## USSE semantics on hardware: one register per draw (EA3, 2026-10-28)
+
+`isa/hwt.py` turns the replay into an instruction tester. The main pixel
+program (0x37008388, after its `phas.i` word) is replaced by a test program
+that loads inputs with `limm`, runs the instruction under test and ends with
+`mov o0, rN [end]`. The PBE stores o0 unchanged in the BGRA8888 back buffer, so
+a pixel inside the triangle *is* rN, bit for bit; the replay dumps one row of
+32 pixels (all must agree) and the background pixel (the clear colour, to
+catch a program that didn't run).
+
+    S=<scratchpad>; CAP=<dir with ref.bin> REPLAY=<static replay> EA3SH=<ssh helper> \
+        python3 isa/hwt.py hwt_p1 [-k fmad] [--dry]
+
+- The captured main program had **no temporaries**: its DOUTU word 0 (PDS
+  data 0x2e018020) is 0x00010700. Poking 0x04010700 (top byte 4) gives it
+  r0-r15, and every r0-r15 test reads back exactly, consistent with the
+  top byte being the temporary count in fours (PDS.md; whether temporaries
+  fail without it was not tried).
+- One base script and data file serve every test (the data is uploaded once);
+  each test only adds its `poke` lines before each kick. About one draw per
+  second over ssh; ~400 draws in all, no hang, no SGX recovery, no reboot.
+- Branches that would leave the program are made safe by landing pads: each
+  candidate target is a `mov o0, rK [end]` with its own rK, so the readout
+  says where the branch went.
+- With format control off, a C10 operand names r64+, outside the program's 16
+  temporaries: the reads give per-pixel garbage but no fault.
+
+Results are in `isa/ISA.md` ("Hardware checks" and the **hardware** tags),
+logs in `isa/hwt_out/`. The ones a compiler would otherwise get wrong:
+- an F16 operand number under format select counts 16-bit halves (`2*reg +
+  half`), so F16 sources are limited to r0-r31;
+- fsin/fcos take quarter turns (sin(t·π/2)) at ~16-bit accuracy;
+- scalar ops' h2 writes an F16 result into the source's half and zeroes the
+  other half;
+- f32 -> f16 `pck` truncates whatever rnd says;
+- c46/c47 are F16 (1, 1), not 0.5 / 1.0 as libusc's table says;
+- fadm = (a + b) * c, fmsa = a*a + b*c; fminmax = min(max(a, b), c),
+  fmaxmin = max(min(a, c), b);
+- movc's u8/i16/c10 types select per byte / half / channel (signed);
+- `setfc`'s second argument is the colour-class C10 enable, on at task start.
+
 ## PDS programs (2026-10-27)
 
 See `pds/PDS.md`. In short: the DDK's PDS generator is statically linked into
