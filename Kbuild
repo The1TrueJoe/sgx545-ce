@@ -124,6 +124,12 @@ ccflags-y += \
 # gpsPVRLDMDev. With SUPPORT_DRI_DRM and no _EXT, pvr_drm.c is the PCI driver.
 ccflags-y += -DSUPPORT_DRI_DRM
 
+# The lockup watchdog (SGXOSTimer) and the MISR both run hardware recovery,
+# which sleeps waiting for a kernel CCB slot. As a kernel timer and a tasklet
+# they ran it in softirq context ("scheduling while atomic", a stuck reboot);
+# on workqueues they run it in process context.
+ccflags-y += -DPVR_LINUX_TIMERS_USING_WORKQUEUES -DPVR_LINUX_MISR_USING_PRIVATE_WORKQUEUE
+
 # The DDK predates -Wdeclaration-after-statement being default-on and uses
 # IMG_VOID/IMG_UINT32 aliases the kernel's own warnings dislike. Silence only
 # what upstream noise requires; do not add to this list to hide our own bugs.
