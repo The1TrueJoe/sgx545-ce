@@ -34,6 +34,7 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 | `state/decode.py` | annotates every TA/3D state word of a capture: TA command, render details, PB descriptor, VDM stream, TA state blocks, pixel programs and texture words, the end-of-tile PBE words; `--brief` for diffing two captures |
 | `state/build.py` | computes those words from GL-level parameters with STATE.md's formulas; `--check CAPTURE` compares them with the DDK's |
 | `state/STATE.md` | the TA/3D render state as decoded, each field tagged replay-confirmed / diff-confirmed / guess |
+| `tools/tex/` | texel layout encoder (`tex.py`, `sgxtex.{h,c}`), capture checkers, the transfer-queue blit builder (`present.py`); write-up `docs/TEX.md` |
 | `gen/sgxgen.c`, `gen/frame.c`, `gen/GEN.md` | frames built from code alone (no capture): the generator library, a scene-driven test program, a fake kernel driver for offline runs, `vary.py` checks against the blob |
 | `pds/DumpDecomp.java` | Ghidra headless script: decompile every function in an address range (`analyzeHeadless ... -postScript DumpDecomp.java out.c lo hi`) |
 
@@ -349,3 +350,17 @@ blob's own rendering with 0 pixels different.
 - **`SGX_FLUSH_HW_RENDER_TARGET` times out on a srvinit-started EA3**, and the
   GPU locks up after it. `replay` has a `flushrt` op, but `mkreplay.py` only
   emits it with `--flushrt`.
+
+## Textures, render targets, presentation (2026-10-28)
+
+See `docs/TEX.md`. In short: twiddled textures are 16×16 Morton tiles (y in
+the lowest bit) in row-major order, NPOT textures are linear with rows padded
+to 8 texels; uploads, `glGenerateMipmap` and `eglSwapBuffers` are all
+transfer-queue blits (a 3D render with only a background object), whose words
+`tools/tex/present.py` rebuilds; an FBO is a second RT data set on the same
+render context, rendered twiddled into its texture; fb0 is the mmap of
+`/dev/fb0` wrapped as GPU memory. All proven natively on the EA3, pixel-exact.
+The DDK drops FBO depth between renders; ZLS store works with the window
+path's bits, the load bit is still unknown. Per-render HW sync lists carry
+client-written absolute op counts: skip one submitted job and the 3D waits
+forever.

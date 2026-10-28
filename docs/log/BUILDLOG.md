@@ -348,3 +348,28 @@ All 0 pixels off.
 - **A compiler backend for USSE**, from NIR.
 - **A Mesa gallium driver.**
 - **Minecraft on the EA1, on that driver.**
+
+## 10. Textures, render targets and the display (08:00–09:40)
+
+`tools/tex` and `docs/TEX.md` (entries `2026-10-28-0920-textures.md` and
+`2026-10-28-0936-render-targets-present.md`):
+
+- **Texel layout:** 16×16 Morton tiles with y in the lowest bit; NPOT rows
+  padded to 8 texels; mips packed; cube faces in GL order. Checked texel by
+  texel in 29 captures (93,543 texels). `sgxtex.{h,c}` is the encoder as library C.
+- **Uploads and swaps:** both are transfer-queue blits, i.e. 3D renders with
+  only a background object. `present.py` rebuilds every word.
+- **Proven natively:**
+  - three textures laid out by our encoder;
+  - RGBA8888 and RGB565 render-to-texture;
+  - the swap into the real `/dev/fb0`, an authored blit, and rendering
+    straight into fb0.
+
+  Each is 0 pixels off.
+- **Depth across renders:** the DDK drops an FBO's depth. Its store was
+  turned on by hand; the load is still open.
+- **Hard lessons:**
+  - the per-render HW sync lists hold client-written absolute op counts;
+  - the sessions' "card0 is free" waits raced, so GPU jobs now take
+    `flock /tmp/gpu.lock`;
+  - four more power cycles.

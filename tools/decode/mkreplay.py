@@ -9,7 +9,8 @@ ref.bin capture; see docs/NOTES.md):
     --color r,g,b,a             the fragment uniform c, as FP16 pairs
     --usse VA:'insn; insn'      USSE instructions assembled by tools/isa/asm.py
     --poke VA:word,word         raw words
-    --write VA:file             a file's bytes (e.g. a texture laid out by re/tex/tex.py)
+    --write VA:file             a file's bytes (e.g. a texture laid out by tools/tex/tex.py)
+    --poke-at EVENT:VA:words    raw words before one event only (kick3, xfer1, ...)
 Each override is poked after the snapshot is loaded and again before every kick.
 
 Writes <outdir>/script (text, one op per line) and <outdir>/data (the bytes
@@ -73,6 +74,7 @@ class Gen:
         self.xctx = {}          # captured transfer context dev addr -> index
         self.nodelta = []       # (dev addr, size) never written by a delta
         self.peeks = []         # (label, dev addr, words) printed after every event
+        self.pokes_at = {}      # "kick3" / "xfer1" -> [(dev addr, [words])]: pokes before that event only
         self.writes = []        # (dev addr, bytes, comment) written before every kick
 
     def op(self, *a):
@@ -317,6 +319,9 @@ class Gen:
             for va, words, why in self.pokes:
                 self.op("#", why)
                 self.op("poke", self.hx(va), *(f"{w:#010x}" for w in words))
+            for va, words in self.pokes_at.get(f"{kind}{n}", []):
+                self.op("#", f"poke before {kind} {n} only")
+                self.op("poke", self.hx(va), *(f"{w:#010x}" for w in words))
             self.op("sync")
             if kind == "kick":
                 self.kick(r)
@@ -404,6 +409,7 @@ def main():
     ap.add_argument("--usse", action="append", default=[])
     ap.add_argument("--poke", action="append", default=[])
     ap.add_argument("--write", action="append", default=[])
+    ap.add_argument("--poke-at", action="append", default=[], help="EVENT:VA:word,word (EVENT = kick3, xfer1, ...)")
     ap.add_argument("--peek", action="append", default=[], help="LABEL:VA:words printed after every event")
     ap.add_argument("--no-delta", action="append", default=[], help="VA:size the deltas leave alone")
     ap.add_argument("--xfers", help="'all' or comma-separated transfer numbers to replay as well")
@@ -411,6 +417,9 @@ def main():
     ids = lambda s: {int(x, 0) for x in s.split(",") if x}
     gen = Gen(pvrlog.load(a.log), a.outdir, ids(a.skip_heaps), ids(a.delta_skip_heaps), a.sleep, a.wait)
     gen.pokes = overrides(a)
+    for spec in a.poke_at:
+        ev, va, ws = spec.split(":", 2)
+        gen.pokes_at.setdefault(ev, []).append((int(va, 0), [int(w, 0) for w in ws.split(",")]))
     gen.peeks = [(lb, int(va, 0), int(c, 0)) for lb, va, c in (p.split(":") for p in a.peek)]
     gen.nodelta = [tuple(int(x, 0) for x in d.split(":")) for d in a.no_delta]
     if a.xfers:

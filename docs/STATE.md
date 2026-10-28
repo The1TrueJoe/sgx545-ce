@@ -411,9 +411,12 @@ For pass-type-3 objects the ISPC word's b25-27 select reset (0) or set
 - Every surface EGL gave the probe was BGRA8888, PBE format code 0:
   windows, and pbuffers whether 5 6 5 or 8 8 8 8 was requested (`pb`,
   `pb8888`, `pbd`).
-- So code 0 = BGRA8888 [D]. Other codes come from libGLESv2's per-format
-  table (entry +0x84); its entries are filled at run time and were not
-  read.
+- So code 0 = BGRA8888 [D]. The other codes are in libGLESv2's per-format
+  table (`DAT_0006d5e4`, 0x8c bytes per entry, PBE code at +0x84, which is
+  static data): 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, 0x18 8-bit,
+  0x1b LA88. FBO render targets confirm 1, 3 and 5 (sideband 0x2601,
+  0x2603, 0x2605: twiddled + dither), and RGBA8888 and RGB565 render-to-texture
+  replays are pixel-exact (`docs/TEX.md` section 4) [C].
 
 ### Screen and tiles
 
@@ -643,9 +646,9 @@ For w × h, no multisampling:
 | 0x20 | 20006000 | region headers of this render | D |
 | 0x24 | 0 | kick +0x4c | G |
 | 0x28 | 20003000 | region headers of the next render | D |
-| 0x2c | 0 / 001710b4 | ZLS control: `drawable bits & 0xf80ee007 \| 0x111000 \| (xt-1)<<3` (kick +0x6c) | D |
-| 0x30, 0x34 | | depth / stencil store addresses - ZLS base | D |
-| 0x38, 0x3c | 80000000 | b31 \| depth / stencil load addresses - ZLS base | D |
+| 0x2c | 0 / 001710b4 | ZLS control: `drawable bits & 0xf80ee007 \| 0x111000 \| (xt-1)<<3` (kick +0x6c), windows only; FBOs get `0x140018`-style words with no store. b2+b12+b16+b17 store depth (float32), b19 negates it, b0/b1 lock the 3D, the load bit is unknown (`docs/TEX.md` section 7) | D, store C |
+| 0x30, 0x34 | | **depth** address - ZLS base, in both words (libGLESv2 `FUN_0002e2d0`; earlier read as depth/stencil store) | D |
+| 0x38, 0x3c | 80000000 | b31 \| **stencil** address - ZLS base, in both words (earlier read as depth/stencil load) | D |
 | 0x40 | 3f800000 | ISP background depth: the depth every tile starts from (kick +0x10, 1.0). glClearDepth does **not** change it: the clear writes depth through its own vertices' z, with depth write on in its ISPA (`cdepth`) | C |
 | 0x44 | 0x300 | kick +0x80 \| +0x14 | G |
 | 0x48 | 02046300 | background object: `0x2000000 \| (block - PB base)>>4` | D |

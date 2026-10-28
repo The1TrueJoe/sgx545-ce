@@ -10,5 +10,6 @@ Each document tags its claims by evidence: encoder or DDK code, capture diffs, o
 | [PDS.md](PDS.md) | The PDS instruction set and the DOUT words that start USSE tasks |
 | [ISA.md](ISA.md) | The USSE shader instruction set, hardware constants, the USP container |
 | [SRVINIT.md](SRVINIT.md) | Microkernel bring-up without `libsrv_init` |
+| [TEX.md](TEX.md) | Texture memory layout, uploads, render to texture, depth/stencil (ZLS), presentation to fb0 |
 | [GEN.md](GEN.md) | Generating a whole frame from code (`tools/gen`) |
 | [log/](log/BUILDLOG.md) | The build log: how all of the above was found, with frames and data |

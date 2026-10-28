@@ -26,3 +26,4 @@ The technical write-ups the log draws on:
 | `docs/PDS.md` | the PDS instruction set and DOUT words |
 | `docs/ISA.md` | the USSE instruction set, hardware constants, USP container |
 | `docs/SRVINIT.md` | microkernel bring-up without libsrv_init |
+| `docs/TEX.md` | texture memory layout, uploads, render to texture, ZLS, presentation |
