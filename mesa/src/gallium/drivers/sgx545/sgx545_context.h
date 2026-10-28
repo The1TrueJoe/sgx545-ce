@@ -18,16 +18,29 @@ struct nir_shader;
 /* what a shader turned out to be (sgx545_program.c) */
 enum sgx545_shader_kind {
    SGX545_SHADER_UNSUPPORTED,
+   SGX545_SHADER_COMPILED,      /* by mesa/src/sgx545/compiler */
    SGX545_SHADER_VS_POSITION,   /* gl_Position = attribute 0 */
    SGX545_SHADER_FS_UNIFORM,    /* gl_FragColor = a vec4 uniform */
    SGX545_SHADER_FS_CONSTANT,   /* gl_FragColor = a constant */
 };
+
+/* a constant in secondary attributes: sa[base + slot] = constant buffer 0 float k */
+struct sgx545_const {
+   uint16_t k, slot, fmt, shift;   /* fmt: 1 f32, 2 F16 half at shift */
+};
+
+#define SGX545_MAX_CONSTS 256
 
 struct sgx545_shader {
    struct nir_shader *nir;
    enum sgx545_shader_kind kind;
    unsigned ubo_offset;         /* FS_UNIFORM: byte offset of the vec4 in constant buffer 0 */
    float color[4];              /* FS_CONSTANT */
+   /* COMPILED: */
+   struct sgxws_prog prog;
+   unsigned n_consts, const_dwords;
+   struct sgx545_const consts[SGX545_MAX_CONSTS];
+   unsigned n_attribs;          /* vertex: attribute slots, 4 dwords each */
 };
 
 struct sgx545_vertex_elements {

@@ -363,6 +363,38 @@ dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secondary)
    return (dwords - 1) | reg << 8 | kind << 22 | (secondary ? 0x2000000 : 0);
 }
 
+/*
+ * A secondary/state program for any amount of constants: one DOUTD per 16
+ * dwords into consecutive secondary attributes, then the task.  The DDK
+ * never DMAs more than 25 dwords at once, and every b22-23 it writes is
+ * (dwords-1) & 3 (10/11/12/25 dwords: 1/2/3/0; 3-frame and uniform-array
+ * captures), so the chunks carry that too [D for the values, G for the
+ * meaning].
+ */
+#define DMA_CHUNK 16
+
+static uint32_t
+pds_dma_task(struct sgxws_ring *r, uint32_t src, uint32_t dwords, uint32_t task_w0, uint32_t task_w1,
+             uint32_t *rows)
+{
+   struct pds p = { 0 };
+   unsigned row = 0;
+
+   for (uint32_t off = 0; off < dwords; off += DMA_CHUNK, row++) {
+      uint32_t n = dwords - off < DMA_CHUNK ? dwords - off : DMA_CHUNK;
+
+      pds_d0(&p, 2 * row, src + off * 4);
+      pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, (n - 1) & 3, 1));
+      CODE(&p, MOVS(MV, row, 0x18, 0, 1, 0, 1, DOUTD));
+   }
+   pds_d1(&p, 0, 0);
+   pds_d0(&p, 2 * row, task_w0);
+   pds_d0(&p, 2 * row + 1, task_w1);
+   CODE(&p, MOVS(MV, row, 0, 0, 1, 2, 2, DOUTU));
+   CODE(&p, HALT);
+   return pds_emit(r, &p, rows);
+}
+
 /* ------------------------------------------------------------------ device */
 
 int
@@ -502,6 +534,17 @@ sgxws_ctx_create(struct sgxws_dev *d)
    c->clear_vs = usse_load(c, &usse_clear_vs, true);
    c->pe_ptoff = usse_load(c, &usse_pe_ptoff, false);
    c->pe_emit = usse_load(c, &usse_pe_emit, false);
+   {
+      /* phas, the secondary programs' prologue up to its wdf, nop [end] */
+      uint32_t w[12];
+
+      w[0] = 0;
+      w[1] = 0xfa440700;
+      memcpy(w + 2, usse_fs_uniform_sec.w + 2, 4 * 8);
+      w[10] = 0x00000000;
+      w[11] = 0xf8040140;
+      c->sec_wait = sgxws_usse_upload(c, false, w, 6, NULL, 0);
+   }
    /* every state-emit length up front: the code rings are never reset */
    for (int n = 1; n <= 32; n++)
       c->state_emit[n] = usse_load(c, usse_state_emit[n], true);
@@ -1058,17 +1101,19 @@ ispa(const struct sgxws_state *st)
    return v;
 }
 
-/* MTE cull (STATE.md section 3): 1 culls triangles that wind CCW in memory
- * order, 2 those that wind CW [C for GL's CCW front with back/front culling] */
+/* MTE cull (STATE.md section 3): with gallium's front_ccw (st flips it for a
+ * y-down window), 1 culls back faces of a CCW-front draw, 2 front faces;
+ * checked against the DDK on the EA3 for cull back, front, and back with a
+ * CW front */
 static uint32_t
 mte_ctrl(const struct sgxws_state *st)
 {
    uint32_t k = 0;
 
    if (st->cull == SGXWS_BACK)
-      k = st->front_ccw ? 2 : 1;
-   else if (st->cull == SGXWS_FRONT)
       k = st->front_ccw ? 1 : 2;
+   else if (st->cull == SGXWS_FRONT)
+      k = st->front_ccw ? 2 : 1;
    return 0x1555620 | k;
 }
 
@@ -1094,8 +1139,10 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    if (fs->sec_dwords) {
       u = ring_alloc(&c->pds_pix, fs->sec_dwords * 4, DMA_ALIGN);
       memcpy(u.p, d->fs_consts, fs->sec_dwords * 4);
-      sec = pds_secondary(&c->pds_pix, u.va, dma_ctrl(fs->sec_dwords, 0, 2, 1),
-                          doutu_w0(c, fs->sec ? fs->sec : c->empty_p, false, 0), 4, &rows);
+      /* a task that waits for the DMA (wdf) before it ends: the empty task
+       * here locks the GPU up (EA3) */
+      sec = pds_dma_task(&c->pds_pix, u.va, fs->sec_dwords,
+                         doutu_w0(c, fs->sec ? fs->sec : c->sec_wait, false, fs->sec_temps), 4, &rows);
    } else {
       sec = c->pds_empty_p;
       rows = 1;
@@ -1108,9 +1155,11 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
     * DDK's shader object (b0, b16-17 constant; b25-28 = 0xb for its uniform
     * shader) [G] */
    blk[n++] = fs->pds_middle ? fs->pds_middle
-                             : 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 | 0xbu << 25;
-   prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps),
-                    fs->n_douti ? (fs->n_douti << 24 | 4) : 4, fs->douti, fs->n_douti, &rows);
+                             : 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 |
+                                  (getenv("SGX545_MID") ? (uint32_t)strtoul(getenv("SGX545_MID"), NULL, 0) : 0xbu) << 25;
+   /* DOUTU word 1: b24 = the program has plain iterations (PDS.md) */
+   prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), fs->n_douti ? 0x01000004 : 4,
+                    fs->douti, fs->n_douti, &rows);
    blk[n++] = pds_word(c, prim, rows);
    /* viewport (6 floats): offset/scale for x, y, z, as gallium's transform [C x offset, D rest] */
    blk[n++] = f32(st->vp_translate[0]);
@@ -1141,8 +1190,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vsec.p[5] = f32(1.0f / 65535);
    if (vs->const_dwords)
       memcpy(vsec.p + 10, d->vs_consts, vs->const_dwords * 4);
-   sec = pds_secondary(&c->pds_vtx, vsec.va, dma_ctrl(vsec_dwords, 0, 1, 1),
-                       doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
+   sec = pds_dma_task(&c->pds_vtx, vsec.va, vsec_dwords, doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm(c, 0x40000000 | sec >> 4);
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
 
@@ -1330,4 +1378,89 @@ sgxws_prog_builtin(struct sgxws_ctx *c, enum sgxws_builtin which, struct sgxws_p
       s->sec_dwords = SGXWS_FS_UNIFORM_DWORDS;
       break;
    }
+}
+
+/* ------------------------------------------------------------------ compiled programs */
+
+#define PHAS_HI 0xfa440000u            /* phas.i #pc, #temps/4 [wait] (docs/ISA.md) */
+#define NOP_END_LO 0x00000000u
+#define NOP_END_HI 0xf8040140u         /* nop [end] */
+
+static void
+put(uint32_t *w, unsigned *n, uint32_t lo, uint32_t hi)
+{
+   w[2 * *n] = lo;
+   w[2 * *n + 1] = hi;
+   (*n)++;
+}
+
+static void
+put_code(uint32_t *w, unsigned *n, const uint64_t *code, unsigned count)
+{
+   for (unsigned i = 0; i < count; i++)
+      put(w, n, (uint32_t)code[i], (uint32_t)(code[i] >> 32));
+}
+
+uint32_t
+sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsigned temps)
+{
+   /* usse_vs_xy: [0] phas.i @p1, [1-4] the prologue, [7] phas.i @p2 [wait=2],
+    * [9] emit.t3 r0, #0, #0 [end f12 f10], [10-11] the epilogue phase */
+   const uint32_t *t = usse_vs_xy.w;
+   uint32_t *w = malloc((count + 12) * 8), va;
+   uint8_t reloc[2];
+   unsigned n = 0, p1, p2;
+
+   if (!w)
+      return 0;
+   p1 = 6;
+   p2 = p1 + 1 + count + 1;
+   put(w, &n, p1, PHAS_HI | ((temps + 3) / 4));    /* phase 0 -> phase 1 with its temporaries */
+   for (unsigned i = 1; i <= 4; i++)
+      put(w, &n, t[2 * i], t[2 * i + 1]);
+   put(w, &n, NOP_END_LO, NOP_END_HI);
+   put(w, &n, p2, t[2 * 7 + 1]);                    /* phase 1 -> the epilogue */
+   put_code(w, &n, code, count);
+   put(w, &n, t[2 * 9], t[2 * 9 + 1]);
+   put(w, &n, t[2 * 10], t[2 * 10 + 1]);
+   put(w, &n, t[2 * 11], t[2 * 11 + 1]);
+   reloc[0] = 0;
+   reloc[1] = p1;
+   va = sgxws_usse_upload(c, true, w, n, reloc, 2);
+   free(w);
+   return va;
+}
+
+uint32_t
+sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsigned color_pa)
+{
+   uint32_t *w = malloc((count + 2) * 8), va;
+   unsigned n = 0;
+
+   if (!w)
+      return 0;
+   put(w, &n, 0, PHAS_HI | 0x700);                  /* phas.i #0, #0 [wait=7] */
+   put_code(w, &n, code, count);
+   /* mov o0, pa<c> [skipinv end mask=1], as the DDK writes it (its uniform
+    * shader's mov o0, sa9); without the mask this mov locks the GPU up (EA3) */
+   put(w, &n, 0xa0000000u | color_pa << 7, 0x28851001u);
+   va = sgxws_usse_upload(c, false, w, n, NULL, 0);
+   free(w);
+   return va;
+}
+
+uint32_t
+sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned count)
+{
+   uint32_t *w = malloc((count + 2) * 8), va;
+   unsigned n = 0;
+
+   if (!w)
+      return 0;
+   put(w, &n, 0, PHAS_HI | 0x700);
+   put_code(w, &n, code, count);
+   put(w, &n, NOP_END_LO, NOP_END_HI);
+   va = sgxws_usse_upload(c, false, w, n, NULL, 0);
+   free(w);
+   return va;
 }

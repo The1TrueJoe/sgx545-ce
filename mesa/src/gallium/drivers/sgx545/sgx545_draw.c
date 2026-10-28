@@ -120,36 +120,37 @@ build_state(struct sgx545_context *ctx, struct sgxws_state *st)
    memcpy(st->vp_translate, ctx->viewport.translate, sizeof(st->vp_translate));
 }
 
-static const void *
+static const float *
 constant_data(struct sgx545_context *ctx, mesa_shader_stage stage)
 {
    struct pipe_constant_buffer *cb = &ctx->constants[stage];
 
    if (cb->user_buffer)
-      return (const uint8_t *)cb->user_buffer + cb->buffer_offset;
+      return (const float *)((const uint8_t *)cb->user_buffer + cb->buffer_offset);
    if (cb->buffer)
-      return (const uint8_t *)sgx545_resource(cb->buffer)->data + cb->buffer_offset;
+      return (const float *)((const uint8_t *)sgx545_resource(cb->buffer)->data + cb->buffer_offset);
    return NULL;
 }
 
-/* where the vertex program's attribute 0 comes from */
+/* where one vertex element comes from */
 struct fetch {
    const uint8_t *base;
    uint32_t stride;
    enum pipe_format format;
-   unsigned dwords;
+   unsigned dwords;             /* dwords it fills in the vertex */
+   bool defaults;               /* missing components 0, 0, 0, 1 (compiled shaders) */
 };
 
 static bool
-setup_fetch(struct sgx545_context *ctx, struct fetch *f)
+setup_fetch(struct sgx545_context *ctx, unsigned e, struct fetch *f)
 {
    const struct pipe_vertex_element *ve;
    const struct pipe_vertex_buffer *vb;
 
-   if (!ctx->velems || !ctx->velems->num_elements)
+   if (!ctx->velems || e >= ctx->velems->num_elements)
       return false;
-   ve = &ctx->velems->elements[0];
-   if (ve->vertex_buffer_index >= ctx->num_vertex_buffers || ve->instance_divisor)
+   ve = &ctx->velems->elements[e];
+   if (ve->vertex_buffer_index >= ctx->num_vertex_buffers)
       return false;
    vb = &ctx->vertex_buffers[ve->vertex_buffer_index];
    if (vb->is_user_buffer)
@@ -159,7 +160,8 @@ setup_fetch(struct sgx545_context *ctx, struct fetch *f)
    else
       return false;
    f->base += vb->buffer_offset + ve->src_offset;
-   f->stride = ve->src_stride;
+   /* an instanced element is one value for the whole draw (one instance) */
+   f->stride = ve->instance_divisor ? 0 : ve->src_stride;
    f->format = ve->src_format;
    return true;
 }
@@ -168,14 +170,29 @@ static void
 fetch_vertex(const struct fetch *f, unsigned index, uint32_t *out)
 {
    const uint8_t *src = f->base + (size_t)index * f->stride;
-   float v[4];
+   float v[4] = { 0, 0, 0, 1 };
 
-   if (f->format == PIPE_FORMAT_R32G32_FLOAT || f->format == PIPE_FORMAT_R32G32B32_FLOAT ||
-       f->format == PIPE_FORMAT_R32G32B32A32_FLOAT) {
+   if (!f->defaults && (f->format == PIPE_FORMAT_R32G32_FLOAT ||
+                        f->format == PIPE_FORMAT_R32G32B32_FLOAT ||
+                        f->format == PIPE_FORMAT_R32G32B32A32_FLOAT)) {
       memcpy(out, src, f->dwords * 4);
       return;
    }
-   util_format_unpack_rgba(f->format, v, src, 1);
+   if (f->format == PIPE_FORMAT_R32G32B32A32_FLOAT)
+      memcpy(v, src, 16);
+   else if (f->format == PIPE_FORMAT_R32G32B32_FLOAT)
+      memcpy(v, src, 12);
+   else if (f->format == PIPE_FORMAT_R32G32_FLOAT)
+      memcpy(v, src, 8);
+   else if (f->format == PIPE_FORMAT_R32_FLOAT)
+      memcpy(v, src, 4);
+   else {
+      float t[4];
+      unsigned n = util_format_get_nr_components(f->format);
+
+      util_format_unpack_rgba(f->format, t, src, 1);
+      memcpy(v, t, n * sizeof(float));
+   }
    memcpy(out, v, f->dwords * 4);
 }
 
@@ -202,6 +219,24 @@ staging(struct sgx545_context *ctx, size_t dwords)
    return ctx->staging;
 }
 
+/* a compiled shader's constants: sa[base + slot] = constant buffer 0 float k */
+static void
+fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sgx545_shader *so,
+            uint32_t *block, unsigned base)
+{
+   const float *cb = constant_data(ctx, stage);
+   unsigned avail = ctx->constants[stage].buffer_size / 4;
+
+   for (unsigned i = 0; i < so->n_consts; i++) {
+      const struct sgx545_const *k = &so->consts[i];
+      float v = cb && k->k < avail ? cb[k->k] : 0.0f;
+
+      memcpy(&block[base + k->slot], &v, 4);
+      SGX545_DBG(DRAW, "  %s constant %u -> sa%u = %f\n", stage == MESA_SHADER_VERTEX ? "vs" : "fs",
+                 k->k, base + k->slot, v);
+   }
+}
+
 static void
 sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 unsigned drawid_offset, const struct pipe_draw_indirect_info *indirect,
@@ -211,28 +246,51 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    struct sgx545_screen *screen = sgx545_screen(pctx->screen);
    struct sgxws_state st;
    struct sgxws_draw d = { 0 };
-   uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = { 0 };
+   uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = { 0 }, vsc[SGX545_MAX_CONSTS] = { 0 };
+   uint32_t fsk[9 + SGX545_MAX_CONSTS] = { 0 };
    const void *indices = NULL;
-   struct fetch f;
+   struct fetch f[PIPE_MAX_ATTRIBS];
+   unsigned n_fetch = 1, vertex_dwords = 0;
    float color[4];
    uint32_t prim;
+   bool compiled;
 
-   if (indirect || !ctx->vs || !ctx->fs || ctx->vs->kind != SGX545_SHADER_VS_POSITION)
+   if (indirect || !ctx->vs || !ctx->fs)
       return;
-   switch (ctx->fs->kind) {
-   case SGX545_SHADER_FS_CONSTANT:
-      memcpy(color, ctx->fs->color, sizeof(color));
-      break;
-   case SGX545_SHADER_FS_UNIFORM: {
-      const uint8_t *cb = constant_data(ctx, MESA_SHADER_FRAGMENT);
-
-      if (!cb)
-         return;
-      memcpy(color, cb + ctx->fs->ubo_offset, sizeof(color));
-      break;
+   /* each stage compiled or one of the fixed programs */
+   compiled = ctx->vs->kind == SGX545_SHADER_COMPILED;
+   if (compiled) {
+      d.vs = &ctx->vs->prog;
+      fill_consts(ctx, MESA_SHADER_VERTEX, ctx->vs, vsc, 0);
+      d.vs_consts = vsc;
+      n_fetch = ctx->vs->n_attribs;
+   } else if (ctx->vs->kind != SGX545_SHADER_VS_POSITION) {
+      return;
    }
-   default:
-      return;
+   if (ctx->fs->kind == SGX545_SHADER_COMPILED) {
+      d.fs = &ctx->fs->prog;
+      fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
+      d.fs_consts = fsk;
+   } else {
+      switch (ctx->fs->kind) {
+      case SGX545_SHADER_FS_CONSTANT:
+         memcpy(color, ctx->fs->color, sizeof(color));
+         break;
+      case SGX545_SHADER_FS_UNIFORM: {
+         const uint8_t *cb = (const uint8_t *)constant_data(ctx, MESA_SHADER_FRAGMENT);
+
+         if (!cb)
+            return;
+         memcpy(color, cb + ctx->fs->ubo_offset, sizeof(color));
+         break;
+      }
+      default:
+         return;
+      }
+      d.fs = &ctx->fs_uniform;
+      fsc[SGXWS_FS_UNIFORM_OFF] = sgxws_f16(color[0]) | sgxws_f16(color[1]) << 16;
+      fsc[SGXWS_FS_UNIFORM_OFF + 1] = sgxws_f16(color[2]) | sgxws_f16(color[3]) << 16;
+      d.fs_consts = fsc;
    }
    switch (info->mode) {
    case MESA_PRIM_TRIANGLES:
@@ -250,15 +308,20 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       ctx->warned_prim = true;
       return;
    }
-   if (!setup_fetch(ctx, &f))
-      return;
-   /* gl_Position = attribute 0: two components fetched -> (x, y, 0, 1); more -> (x, y, z, 1) */
-   f.dwords = util_format_get_nr_components(f.format) == 2 ? 2 : 3;
-   d.vs = f.dwords == 2 ? &ctx->vs_xy : &ctx->vs_xyz;
-   d.fs = &ctx->fs_uniform;
-   fsc[SGXWS_FS_UNIFORM_OFF] = sgxws_f16(color[0]) | sgxws_f16(color[1]) << 16;
-   fsc[SGXWS_FS_UNIFORM_OFF + 1] = sgxws_f16(color[2]) | sgxws_f16(color[3]) << 16;
-   d.fs_consts = fsc;
+   for (unsigned e = 0; e < n_fetch; e++) {
+      if (!setup_fetch(ctx, e, &f[e]))
+         return;
+      if (compiled) {
+         f[e].dwords = 4;
+         f[e].defaults = true;
+      } else {
+         /* gl_Position = attribute 0: two components fetched -> (x, y, 0, 1); more -> (x, y, z, 1) */
+         f[e].dwords = util_format_get_nr_components(f[e].format) == 2 ? 2 : 3;
+         f[e].defaults = false;
+         d.vs = f[e].dwords == 2 ? &ctx->vs_xy : &ctx->vs_xyz;
+      }
+      vertex_dwords += f[e].dwords;
+   }
    build_state(ctx, &st);
    d.state = &st;
    d.prim = prim;
@@ -281,21 +344,24 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          out_count = count >= 3 ? (count - 2) * 3 : 0;
       else
          out_count = count;
-      if (!out_count || !(v = staging(ctx, (size_t)out_count * f.dwords)))
+      if (!out_count || !(v = staging(ctx, (size_t)out_count * vertex_dwords)))
          continue;
       for (unsigned i = 0; i < out_count; i++) {
          unsigned k = i;
-         uint32_t index;
+         uint32_t index, *dst = v + i * vertex_dwords;
 
          if (info->mode == MESA_PRIM_TRIANGLE_FAN)
             k = (i % 3 == 0) ? 0 : i / 3 + i % 3;
          index = info->index_size ? get_index(info, indices, draws[n].start + k) + draws[n].index_bias
                                   : draws[n].start + k;
-         fetch_vertex(&f, index, v + i * f.dwords);
+         for (unsigned e = 0; e < n_fetch; e++) {
+            fetch_vertex(&f[e], index, dst);
+            dst += f[e].dwords;
+         }
       }
       d.verts = v;
       d.count = out_count;
-      SGX545_DBG(DRAW, "draw %s x%u\n", u_prim_name(info->mode), out_count);
+      SGX545_DBG(DRAW, "draw %s x%u%s\n", u_prim_name(info->mode), out_count, compiled ? " (compiled)" : "");
       if (sgxws_draw(ctx->hw, &d))
          fprintf(stderr, "sgx545: draw of %u vertices dropped\n", out_count);
    }

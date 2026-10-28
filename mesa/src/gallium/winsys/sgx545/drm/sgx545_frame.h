@@ -118,6 +118,7 @@ struct sgxws_prog {
    bool vertex;
    uint32_t code;                   /* USSE main program (device address) */
    uint32_t sec;                    /* USSE secondary program (fragment), or 0 */
+   uint32_t sec_temps;              /* its temporaries */
    uint32_t temps;                  /* temporary registers */
    /* vertex: */
    uint32_t in_dwords;              /* primary attribute registers the program uses */
@@ -167,6 +168,7 @@ struct sgxws_ctx {
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm, usse_frame;
    /* fixed programs */
    uint32_t empty_v, empty_p, copy_fs, clear_vs, pe_ptoff, pe_emit, state_emit[33];
+   uint32_t sec_wait;                /* pixel secondary task: wait for the constants' DMA */
    uint32_t empty_state, terminate;  /* VDM state programs (PDS vertex heap) */
    uint32_t pds_empty_p;             /* pixel PDS program: run the empty task */
    uint32_t clear_pds;               /* pixel PDS program: iterate colour, copy_fs */
@@ -202,7 +204,22 @@ void sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *rt);
 uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w, unsigned n,
                            const uint8_t *reloc, unsigned nreloc);
 
-/* built-in shaders (re/gen/mkusse.py) */
+/*
+ * Compiled programs (mesa/src/sgx545/compiler: flat USSE words, low word
+ * first), finalised the way the DDK's GL driver finalises a USP (docs/ISA.md
+ * "Phases, visibility feedback and discard") and uploaded:
+ *  - vertex: phase 0 = the DDK's prologue; phase 1 = the shader (temps
+ *    temporaries), then emit the vertex; then the epilogue phase every
+ *    vertex program needs (docs/GEN.md);
+ *  - fragment: phas, the shader, then `mov o0, pa<color_pa> [end]` (output
+ *    mode 1: the packed BGRA8 colour to the PBE);
+ *  - fragment secondary (uniform-only code): phas, the code, `nop [end]`.
+ */
+uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned temps);
+uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned color_pa);
+uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned n);
+
+/* built-in shaders (tools/gen/mkusse.py) */
 enum sgxws_builtin {
    SGXWS_VS_XY,         /* gl_Position = vec4(a0.xy, 0, 1) */
    SGXWS_VS_XYZ,        /* gl_Position = vec4(a0.xyz, 1) */
