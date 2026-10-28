@@ -1971,6 +1971,61 @@ emit_color(struct sgx_ctx *c)
 }
 
 /* ------------------------------------------------------------------------
+ * peephole: two adjacent instructions whose operands continue each other
+ * become one repeat (vertex outputs written varying by varying) */
+
+static bool
+continues(const struct sgx_ref *a, unsigned na, const struct sgx_ref *b)
+{
+   if (a->file != b->file || a->neg != b->neg || a->abs != b->abs || a->h16 || b->h16 || a->lane || b->lane)
+      return false;
+   if (!a->step)
+      return !b->step && ref_same(a, b);
+   if (a->file == SGX_F_V)
+      return a->n == b->n && a->comp + na == b->comp;
+   if (a->file == SGX_F_K)
+      return false;
+   return a->n + na == b->n;
+}
+
+static bool
+same_fields(const struct sgx_ins *a, const struct sgx_ins *b)
+{
+   if (a->nfld != b->nfld)
+      return false;
+   for (unsigned k = 0; k < a->nfld; k++)
+      if (a->fld[k].id != b->fld[k].id || a->fld[k].v != b->fld[k].v)
+         return false;
+   return true;
+}
+
+static void
+merge_runs(struct sgx_ctx *c)
+{
+   list_for_each_entry_safe(struct sgx_ins, b, &c->ins, link) {
+      if (b->link.prev == &c->ins)
+         continue;
+      struct sgx_ins *a = list_entry(b->link.prev, struct sgx_ins, link);
+      unsigned cls = form_class(a->form);
+      if (a->kind != SGX_INS_ALU || b->kind != SGX_INS_ALU || a->form != b->form || a->pred || b->pred ||
+          (cls != CLS_ALL && cls != CLS_INC) || a->rpt + b->rpt > max_rpt(cls) || a->nops != b->nops ||
+          a->ndst != 1 || a->form == USSE_FDP || !same_fields(a, b) || a->writes_pred || b->writes_pred)
+         continue;
+      bool ok = true;
+      for (unsigned k = 0; k < a->nops && ok; k++)
+         ok = continues(&a->op[k], a->rpt, &b->op[k]) && (k == 0 || a->op[k].step || cls == CLS_INC);
+      /* b must not read what a writes */
+      for (unsigned k = 1; k < b->nops && ok; k++)
+         ok = !(b->op[k].file == a->op[0].file && b->op[k].n == a->op[0].n &&
+                (a->op[0].file != SGX_F_V || b->op[k].comp < a->op[0].comp + a->rpt));
+      if (!ok)
+         continue;
+      a->rpt += b->rpt;
+      list_del(&b->link);
+   }
+}
+
+/* ------------------------------------------------------------------------
  * liveness and register allocation */
 
 static void
@@ -2278,6 +2333,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
    emit_cf_list(c, &impl->body, NULL);
    if (!c->failed && c->stage == MESA_SHADER_FRAGMENT)
       emit_color(c);
+   if (!c->failed)
+      merge_runs(c);
    if (!c->failed)
       allocate(c);
    if (!c->failed) {
