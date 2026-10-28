@@ -144,5 +144,29 @@
   "hwt_p5.txt": "ef8c035481bec15ca564fd2cc0df5583",
   "hwt_p6.txt": "d75cfd4068c67b61f734752f1ee5655b",
   "hwt_sanity.txt": "007207433974fa1bca0f553a69e9ec6d"
+ },
+ "full_frames": {
+  "format": "raw BGRA8888 as stored, 736 px stride, 480 rows, 0x159000 bytes; PNG = columns 0-719, alpha forced 255",
+  "base": {
+   "md5": "278dd6363f38143541b76ad3553a9225",
+   "pixels": {
+    "0xcc336699": 302400,
+    "0xff00ff00": 43200
+   }
+  },
+  "fmad_plain": {
+   "md5": "d6fef414a0ccda5ebf99ea0ce840f264",
+   "pixels": {
+    "0xcc336699": 302400,
+    "0xc1b40000": 43200
+   }
+  },
+  "br_2": {
+   "md5": "4219a761a7e5ffe72a835b6d6a80e1b2",
+   "pixels": {
+    "0xcc336699": 302400,
+    "0x00000055": 43200
+   }
+  }
  }
 }
