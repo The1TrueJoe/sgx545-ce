@@ -1121,8 +1121,7 @@ ispa(const struct sgxws_state *st)
 {
    uint32_t v = 0x200;              /* b9: ISPB follows */
 
-   if (st->translucent)
-      v |= 1u << 25;                /* pass type 1 */
+   v |= (st->pass_type & 7) << 25;  /* pass type */
 
    if (!st->depth_func)
       v |= 7u << 22 | 0x100000;     /* always, no write */
@@ -1525,14 +1524,49 @@ wmask_words(unsigned m, unsigned color_pa, uint32_t w[2])
 
 uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsigned color_pa,
-                const struct sgxws_blend *blend)
+                const struct sgxws_blend *blend, int discard_pa, unsigned temps)
 {
-   uint32_t *w = malloc((count + 3) * 8), va, b[2];
+   uint32_t *w = malloc((count + 8) * 8), va, b[2];
    bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
 
    if (!w)
       return 0;
+   if (discard_pa >= 0) {
+      /*
+       * A program that discards runs in two phases (ISA.md "Phases, visibility
+       * feedback and discard"; the DDK's words for `if (q.x > 0.0) discard`,
+       * EA3): phase 0 = phas to phase 1, pcoeff (hands the ISP the depth plane
+       * the PDS iterated into pa<n>..), the shader with the keep predicate in
+       * p1, and atst8 [end] in place of the compiler's feedback nop (its last
+       * instruction); phase 1, on an even instruction, = the colour out
+       * without end, then phas.i #0, #0 [end].
+       */
+      uint8_t reloc[1] = { 0 };
+
+      put(w, &n, 0, 0xfa440100u | ((temps + 3) / 4));    /* phas.i #phase1, #t [wait=1] */
+      put(w, &n, 0xb0000004u | (uint32_t)discard_pa << 14 | (uint32_t)(discard_pa + 1) << 7,
+          0xf8300004u);                                  /* pcoeff pa<n>, pa<n+1>, sa4 */
+      put_code(w, &n, code, count - 1);
+      put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14, 0xf9340406u);  /* atst8 [end] */
+      if (n & 1)
+         put(w, &n, 0, 0xf8000140u);                    /* nop: phase 1 on 16 bytes */
+      w[0] = n;                                         /* relocated to an absolute pc */
+      if (blend && blend->blend) {
+         sgxws_blend_words(blend, color_pa, !masked, b);
+         put(w, &n, b[0], b[1] & ~(1u << 18));           /* without end */
+      }
+      if (masked) {
+         wmask_words(blend->wmask, color_pa, b);
+         put(w, &n, b[0], b[1] & ~(1u << 18));
+      } else if (!blend || !blend->blend) {
+         put(w, &n, 0xa0000000u | color_pa << 7, 0x28a10001u);   /* mov o0, pa<c> [skipinv rcnt] */
+      }
+      put(w, &n, 0, 0xfa4c0700u);                       /* phas.i #0, #0 [end wait=7] */
+      va = sgxws_usse_upload(c, false, w, n, reloc, 1);
+      free(w);
+      return va;
+   }
    put(w, &n, 0, PHAS_HI | 0x700);                  /* phas.i #0, #0 [wait=7] */
    put_code(w, &n, code, count);
    if (blend && blend->blend) {

@@ -173,8 +173,10 @@ struct sgxws_state {
    bool front_ccw;                  /* front faces wind CCW in the target's memory
                                      * (gallium's sense: y down) */
    uint32_t color_mask;             /* ISPB colour mask: R8 G4 B2 A1 */
-   bool translucent;                /* ISPA pass type 1: o0 starts as the tile's
-                                     * colour (blending) */
+   uint32_t pass_type;              /* ISPA b25-27: 0 opaque, 1 translucent (o0
+                                     * starts as the tile's colour: blending),
+                                     * 2 translucent with discard, 4 punch-through
+                                     * (discard) */
    /* the viewport transform, as gallium gives it */
    float vp_scale[3], vp_translate[3];
 };
@@ -252,7 +254,7 @@ uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w, 
  */
 uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned temps);
 uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned color_pa,
-                         const struct sgxws_blend *blend);
+                         const struct sgxws_blend *blend, int discard_pa, unsigned temps);
 void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint32_t w[2]);
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned n);
 

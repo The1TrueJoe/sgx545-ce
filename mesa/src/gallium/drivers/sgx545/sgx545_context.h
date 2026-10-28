@@ -46,7 +46,8 @@ struct sgx545_shader {
    /* fragment: the shader's code, kept for the blend variants (the colour
     * epilogue is the blend, sgxws_blend) */
    uint64_t *code;              /* with the dependent samples' smp put in */
-   unsigned n_code, color_reg;
+   unsigned n_code, color_reg, temps;
+   int discard_pa;              /* discards: the depth plane's first PA register; -1 doesn't */
    /* dependent samples: the SA register of each one's 4 texture state words,
     * and its sampler */
    unsigned dep_sa[SGX545_MAX_DEP_SAMPLES], dep_sampler[SGX545_MAX_DEP_SAMPLES], n_deps;

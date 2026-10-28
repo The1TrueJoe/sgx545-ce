@@ -491,15 +491,6 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    struct usp_info info = { 0 };
    bool vertex = nir->info.stage == MESA_SHADER_VERTEX;
 
-   /* A fragment shader that discards needs its own ISP pass type and the
-    * DDK's split into phases around the feedback (STATE.md, ISPA pass types 2
-    * and 4), which the driver doesn't do yet: drawn in an opaque pass, the first
-    * pixel it discards locks the GPU up (EA3, gl4es' clip planes). */
-   if (!vertex && orig->info.fs.uses_discard) {
-      fprintf(stderr, "sgx545: fragment shader with discard: not drawn yet\n");
-      ralloc_free(nir);
-      return false;
-   }
    opts.verbose = (sgx545_debug & SGX545_DEBUG_NIR) != 0;
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    remap_legacy_varyings(nir);
@@ -596,8 +587,19 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             so->n_code = out.n_code;
          }
       }
-      so->prog.code = so->code ? sgxws_upload_fs(ctx->hw, so->code, so->n_code, info.color_reg, NULL) : 0;
+      /* a program that discards: its feedback nop is the last instruction
+       * (the compiler's layout); the depth plane goes in after the iterated
+       * inputs, by one more PDS iteration */
+      so->discard_pa = -1;
+      if (orig->info.fs.uses_discard) {
+         if (!so->n_code || so->code[so->n_code - 1] != (uint64_t)0xf8000140u << 32) {
+            fprintf(stderr, "sgx545: fragment shader with discard: no feedback point, not drawn\n");
+            free(so->code);
+            so->code = NULL;
+         }
+      }
       so->color_reg = info.color_reg;
+      so->temps = info.temps;
       so->prog.temps = info.temps;
       so->prog.pa_dwords = info.n_pa;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
@@ -641,6 +643,34 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
          last_plain = so->prog.n_douti;
          so->prog.douti[so->prog.n_douti++] = w;
       }
+      if (so->code && orig->info.fs.uses_discard) {
+         /* the triangle's depth plane (source 0x22, 3 components) after the
+          * inputs: pa<n> on, n = the registers the iterations above fill (an
+          * F32 component 1, an F16 pair 1, a sampled texel 1) */
+         unsigned pa = 0;
+
+         for (unsigned i = 0; i < so->prog.n_douti; i++) {
+            uint32_t w = so->prog.douti[i];
+
+            if (w & (1u << 24))
+               pa += w & (1u << 28) ? (((w >> 22) & 3) + 2) / 2 : ((w >> 22) & 3) + 1;
+            if (w & 0x600)
+               pa++;
+         }
+         if (so->prog.n_douti == ARRAY_SIZE(so->prog.douti)) {
+            free(so->code);
+            so->code = NULL;
+         } else {
+            last_plain = so->prog.n_douti;
+            so->prog.douti[so->prog.n_douti++] = 0x22u << 11 | 2u << 22 | 1u << 24 | 0x6000000u;
+            so->discard_pa = pa;
+            so->prog.pa_dwords = MAX2(so->prog.pa_dwords, pa + 3);
+            /* the visibility test's words in sa3, sa4 come with the secondary DMA */
+            so->prog.sec_dwords = 9 + so->const_dwords;
+         }
+      }
+      so->prog.code = so->code ? sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, NULL,
+                                                 so->discard_pa, so->temps) : 0;
       if (last_plain >= 0)
          so->prog.douti[last_plain] |= 1u << 29;   /* the last plain iteration */
       if (last_sample >= 0)
@@ -665,6 +695,7 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
 
    if (!so)
       return NULL;
+   so->discard_pa = -1;
    if (cso->type == PIPE_SHADER_IR_NIR)
       nir = cso->ir.nir;
    else
@@ -745,7 +776,7 @@ sgx545_fs_program(struct sgx545_context *ctx, struct sgx545_shader *so, const st
    if (!so->code)
       return 0;
    simple_mtx_lock(&screen->lock);
-   va = sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b);
+   va = sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b, so->discard_pa, so->temps);
    simple_mtx_unlock(&screen->lock);
    /* the program heap is never freed: past the table's size, the oldest
     * variant's slot is reused and its program uploaded again when needed */
