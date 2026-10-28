@@ -306,12 +306,19 @@ pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
    return rows << 26 | (va - c->dev->heap_base[H_PDSPIXEL]) >> 4;
 }
 
-/* pixel program: DOUTU, then one DOUTI per iterated input (the DDK's 0x1e970 layout) */
+/*
+ * pixel program (the DDK's 0x1e970 layout): DOUTU, then per iterated input a
+ * DOUTI, and after a sampling DOUTI the DOUTT with the texture's four words.
+ * A DOUTI takes its word from the high half of a DS1 pair (the first shares
+ * DS1 pair 0 with the DOUTU) and a zero DS0 pair; a DOUTT takes T0, T1 from a
+ * DS1 pair and T2, T3 from a DS0 pair, as the background object's does.
+ */
 static uint32_t
 pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_t *douti,
-          unsigned n_douti, uint32_t *rows)
+          const uint8_t *douti_tex, unsigned n_douti, const uint32_t (*tex)[4], uint32_t *rows)
 {
    struct pds p = { 0 };
+   unsigned d0 = 1, d1 = 1;
 
    pds_d0(&p, 0, task_w0);
    pds_d0(&p, 1, task_w1);
@@ -319,14 +326,26 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_
    pds_d1(&p, 1, n_douti ? douti[0] : 0);
    CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 3, DOUTU));
    for (unsigned i = 0; i < n_douti; i++) {
-      /* each DOUTI takes its word from the high half of a DS1 pair [D for one] */
-      unsigned row = 1 + i;
+      unsigned r1 = d0++, r2 = 0;
 
-      pds_d0(&p, 2 * row, 0);
-      pds_d0(&p, 2 * row + 1, 0);
-      if (i)
-         pds_d1(&p, 2 * i + 1, douti[i]);
-      CODE(&p, MOVS(MV, row, i, 3, 0, 1, 1, DOUTI));
+      if (i) {
+         r2 = d1++;
+         pds_d1(&p, 2 * r2, 0);
+         pds_d1(&p, 2 * r2 + 1, douti[i]);
+      }
+      pds_d0(&p, 2 * r1, 0);
+      pds_d0(&p, 2 * r1 + 1, 0);
+      CODE(&p, MOVS(MV, r1, r2, 3, 0, 1, 1, DOUTI));
+      if (douti_tex && douti_tex[i] && tex) {
+         const uint32_t *t = tex[douti_tex[i] - 1];
+         unsigned a = d1++, b = d0++;
+
+         pds_d1(&p, 2 * a, t[0]);
+         pds_d1(&p, 2 * a + 1, t[1]);
+         pds_d0(&p, 2 * b, t[2]);
+         pds_d0(&p, 2 * b + 1, t[3]);
+         CODE(&p, MOVS(MV, b, a, 2, 3, 0, 1, DOUTT));
+      }
    }
    CODE(&p, HALT);
    return pds_emit(&c->pds_pix, &p, rows);
@@ -572,7 +591,8 @@ sgxws_ctx_create(struct sgxws_dev *d)
    {
       uint32_t douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29;
 
-      c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), 0x01000004, &douti, 1, NULL);
+      c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), 0x01000004, &douti, NULL, 1,
+                               NULL, NULL);
    }
 
    /* identity index buffer: glDrawArrays draws through it (STATE.md section 2) */
@@ -1155,11 +1175,21 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
     * DDK's shader object (b0, b16-17 constant; b25-28 = 0xb for its uniform
     * shader) [G] */
    blk[n++] = fs->pds_middle ? fs->pds_middle
-                             : 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 |
-                                  (getenv("SGX545_MID") ? (uint32_t)strtoul(getenv("SGX545_MID"), NULL, 0) : 0xbu) << 25;
-   /* DOUTU word 1: b24 = the program has plain iterations (PDS.md) */
-   prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), fs->n_douti ? 0x01000004 : 4,
-                    fs->douti, fs->n_douti, &rows);
+                             : 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 | 0xbu << 25;
+   /* DOUTU word 1: b24 = the program has plain iterations, b25 samples (PDS.md) */
+   {
+      uint32_t w1 = 4;
+
+      /* from each DOUTI's own halves: b24 = plain iteration, a sample half */
+      for (unsigned i = 0; i < fs->n_douti; i++) {
+         if (fs->douti[i] & (1u << 24))
+            w1 |= 0x01000000;
+         if (fs->douti_tex[i])
+            w1 |= 0x02000000;
+      }
+      prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), w1, fs->douti, fs->douti_tex,
+                       fs->n_douti, d->tex, &rows);
+   }
    blk[n++] = pds_word(c, prim, rows);
    /* viewport (6 floats): offset/scale for x, y, z, as gallium's transform [C x offset, D rest] */
    blk[n++] = f32(st->vp_translate[0]);

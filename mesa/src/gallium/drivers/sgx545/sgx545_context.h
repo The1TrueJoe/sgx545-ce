@@ -82,6 +82,8 @@ struct sgx545_context {
    struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
    unsigned num_vertex_buffers;
    struct pipe_constant_buffer constants[MESA_SHADER_STAGES];
+   struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS];          /* fragment */
+   struct pipe_sampler_view *views[PIPE_MAX_SHADER_SAMPLER_VIEWS];  /* fragment */
 
    struct slab_child_pool transfer_pool;
    uint32_t *staging;               /* vertices gathered for one draw */

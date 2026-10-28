@@ -12,14 +12,20 @@
 #include "sgx545_context.h"
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
+#include "sgx545_texture.h"
 
-/* render targets: the PBE writes rows of a multiple of 32 pixels (STATE.md section 4) */
+/* render targets: the PBE writes rows of a multiple of 32 pixels (STATE.md
+ * section 4).  A sampled texture in a format the TPU reads twiddled is laid
+ * out as a texture even when it may also be rendered to. */
 static bool
 is_render_target(const struct pipe_resource *templ)
 {
-   return templ->target != PIPE_BUFFER &&
-          (templ->bind & (PIPE_BIND_RENDER_TARGET | PIPE_BIND_DISPLAY_TARGET |
-                          PIPE_BIND_SCANOUT | PIPE_BIND_SHARED));
+   if (templ->target == PIPE_BUFFER)
+      return false;
+   if (templ->bind & (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))
+      return true;
+   return (templ->bind & PIPE_BIND_RENDER_TARGET) &&
+          !((templ->bind & PIPE_BIND_SAMPLER_VIEW) && sgx545_tex_format(templ->format));
 }
 
 static size_t
@@ -90,15 +96,27 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
       return prsc;
    }
 
-   /*
-    * Textures are CPU memory until the compiler can sample them: a GPU copy
-    * in the texture heap, laid out as re/tex/TEX.md describes, comes with
-    * the first textured draw.
-    */
+   /* Everything else has a linear CPU copy; a texture the GPU can sample
+    * also has its device copy in the texture heap, laid out as docs/TEX.md
+    * says, rewritten from the CPU copy whenever a level is written. */
    res->stride = util_format_get_stride(templ->format, templ->width0);
+   for (unsigned l = 0; l <= templ->last_level && l < ARRAY_SIZE(res->level_offset); l++)
+      res->level_offset[l] = level_offset(prsc, res->stride, l);
    res->data = align_malloc(MAX2(texture_size(prsc, res->stride), 1), 64);
    if (!res->data)
       goto fail;
+   if (sgx545_tex_format(templ->format) && templ->target != PIPE_TEXTURE_3D &&
+       templ->last_level < ARRAY_SIZE(res->level_offset)) {
+      int e;
+
+      simple_mtx_lock(&screen->lock);
+      e = sgxws_bo_alloc(&screen->dev, &res->bo, SGX545_HEAP_TEXTURE, 0x3,
+                         align(MAX2(sgx545_tex_size(prsc), 1), 4096), 0x1000);
+      simple_mtx_unlock(&screen->lock);
+      if (e)
+         goto fail;
+      res->texture = true;
+   }
    return prsc;
 
 fail:
@@ -192,8 +210,12 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
    /* A render target the frame being recorded writes: the CPU sees it once
     * the render is done.  Everything else is either CPU memory or idle (the
     * driver waits for every render). */
-   if (res->bo.va && !(usage & PIPE_MAP_UNSYNCHRONIZED))
+   if (res->bo.va && !res->texture && !(usage & PIPE_MAP_UNSYNCHRONIZED))
       sgx545_flush_resource_writes(ctx, res);
+   /* a texture written while a frame is recorded: that frame may sample the
+    * old contents, so it goes first */
+   if (res->texture && (usage & PIPE_MAP_WRITE) && ctx->recording)
+      sgx545_flush_frame(ctx);
 
    trans = slab_zalloc(&ctx->transfer_pool);
    if (!trans)
@@ -213,7 +235,7 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
 
    stride = level ? util_format_get_stride(prsc->format, u_minify(prsc->width0, level))
                   : res->stride;
-   base = res->bo.map ? (uint8_t *)res->bo.map : (uint8_t *)res->data;
+   base = res->bo.map && !res->texture ? (uint8_t *)res->bo.map : (uint8_t *)res->data;
    base += level_offset(prsc, res->stride, level);
    ptrans->stride = stride;
    ptrans->layer_stride = (uintptr_t)stride *
@@ -228,6 +250,10 @@ static void
 sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
 {
    struct sgx545_context *ctx = sgx545_context(pctx);
+   struct sgx545_resource *res = sgx545_resource(ptrans->resource);
+
+   if (res->texture && (ptrans->usage & PIPE_MAP_WRITE))
+      sgx545_tex_encode_level(res, ptrans->level);
 
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);

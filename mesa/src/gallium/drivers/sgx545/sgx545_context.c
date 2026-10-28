@@ -93,6 +93,8 @@ sgx545_context_destroy(struct pipe_context *pctx)
       pipe_vertex_buffer_unreference(&ctx->vertex_buffers[i]);
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
       pipe_resource_reference(&ctx->constants[i].buffer, NULL);
+   for (unsigned i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++)
+      pipe_sampler_view_reference(&ctx->views[i], NULL);
    if (pctx->stream_uploader)
       u_upload_destroy(pctx->stream_uploader);
 

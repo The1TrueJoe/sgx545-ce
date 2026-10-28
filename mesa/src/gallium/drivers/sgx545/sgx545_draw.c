@@ -18,6 +18,7 @@
 #include "sgx545_context.h"
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
+#include "sgx545_texture.h"
 
 static struct sgxws_rt *
 get_rt(struct sgx545_context *ctx, uint32_t w, uint32_t h)
@@ -247,7 +248,7 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    struct sgxws_state st;
    struct sgxws_draw d = { 0 };
    uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = { 0 }, vsc[SGX545_MAX_CONSTS] = { 0 };
-   uint32_t fsk[9 + SGX545_MAX_CONSTS] = { 0 };
+   uint32_t fsk[9 + SGX545_MAX_CONSTS] = { 0 }, tex[PIPE_MAX_SAMPLERS][4];
    const void *indices = NULL;
    struct fetch f[PIPE_MAX_ATTRIBS];
    unsigned n_fetch = 1, vertex_dwords = 0;
@@ -271,6 +272,19 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       d.fs = &ctx->fs->prog;
       fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
       d.fs_consts = fsk;
+      for (unsigned i = 0; i < d.fs->n_douti; i++) {
+         unsigned unit = d.fs->douti_tex[i];
+         struct pipe_sampler_view *view = unit ? ctx->views[unit - 1] : NULL;
+
+         if (!unit)
+            continue;
+         if (!view || !sgx545_resource(view->texture)->texture) {
+            SGX545_DBG(DRAW, "sampler %u: no texture the GPU can sample, draw skipped\n", unit - 1);
+            return;
+         }
+         sgx545_tex_words(view, ctx->samplers[unit - 1], tex[unit - 1]);
+      }
+      d.tex = (const uint32_t (*)[4])tex;
    } else {
       switch (ctx->fs->kind) {
       case SGX545_SHADER_FS_CONSTANT:

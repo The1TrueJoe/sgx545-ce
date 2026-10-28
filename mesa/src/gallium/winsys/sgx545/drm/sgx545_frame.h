@@ -128,7 +128,8 @@ struct sgxws_prog {
    uint32_t tsp_prec;               /* TA state: sets with precision value <= 2 */
    /* fragment: */
    uint32_t sec_dwords;             /* constant dwords DMA'd for the secondary program */
-   uint32_t douti[10];              /* DOUTI words, one per iterated varying */
+   uint32_t douti[10];              /* DOUTI words, one per iterated input or sample */
+   uint8_t douti_tex[10];           /* 0, or the sampler unit + 1 whose DOUTT follows it */
    uint32_t n_douti;
    uint32_t pds_middle;             /* TA state PDS middle word (0: the default) */
    /* both: */
@@ -154,6 +155,7 @@ struct sgxws_draw {
    const struct sgxws_state *state;
    const uint32_t *fs_consts;       /* fs->sec_dwords dwords */
    const uint32_t *vs_consts;       /* vs->const_dwords dwords */
+   const uint32_t (*tex)[4];        /* per sampler unit: the DOUTT words T0-T3 */
 };
 
 struct sgxws_ctx {

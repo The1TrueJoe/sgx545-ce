@@ -15,6 +15,7 @@
 #include "sgx545_program.h"
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
+#include "sgx545_texture.h"
 
 uint32_t sgx545_debug;
 
@@ -116,10 +117,16 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
    if (sample_count > 1 || MAX2(1, sample_count) != MAX2(1, storage_sample_count))
       return false;
 
-   if (usage & (PIPE_BIND_RENDER_TARGET | PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT |
-                PIPE_BIND_SHARED)) {
-      /* the PBE's BGRA8888 (STATE.md section 4) */
+   if (usage & (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) {
+      /* windows and pbuffers: the PBE's BGRA8888 (STATE.md section 4) */
       if (format != PIPE_FORMAT_B8G8R8A8_UNORM && format != PIPE_FORMAT_B8G8R8X8_UNORM)
+         return false;
+   }
+   if (usage & PIPE_BIND_RENDER_TARGET) {
+      /* RGBA8 textures say they can be rendered to, so st picks them over
+       * BGRA for GL_RGBA textures; rendering into a texture is not done yet */
+      if (format != PIPE_FORMAT_B8G8R8A8_UNORM && format != PIPE_FORMAT_B8G8R8X8_UNORM &&
+          format != PIPE_FORMAT_R8G8B8A8_UNORM && format != PIPE_FORMAT_R8G8B8X8_UNORM)
          return false;
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
@@ -141,23 +148,11 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
           format != PIPE_FORMAT_R32_UINT)
          return false;
    }
-   if (usage & PIPE_BIND_SAMPLER_VIEW) {
-      switch (format) {
-      case PIPE_FORMAT_R8G8B8A8_UNORM:
-      case PIPE_FORMAT_R8G8B8X8_UNORM:
-      case PIPE_FORMAT_B8G8R8A8_UNORM:
-      case PIPE_FORMAT_B8G8R8X8_UNORM:
-      case PIPE_FORMAT_B5G6R5_UNORM:
-      case PIPE_FORMAT_B4G4R4A4_UNORM:
-      case PIPE_FORMAT_B5G5R5A1_UNORM:
-      case PIPE_FORMAT_A8_UNORM:
-      case PIPE_FORMAT_L8_UNORM:
-      case PIPE_FORMAT_L8A8_UNORM:
-         break;
-      default:
-         return false;
-      }
-   }
+   /* textures: the formats with a T1 code (docs/TEX.md); render targets are
+    * BGRA8888, sampled through the strided layout only (not yet) */
+   if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx545_tex_format(format) &&
+       !(usage & PIPE_BIND_RENDER_TARGET))
+      return false;
    switch (target) {
    case PIPE_BUFFER:
    case PIPE_TEXTURE_2D:

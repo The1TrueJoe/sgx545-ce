@@ -26,6 +26,8 @@ struct sgx545_resource {
    bool wrapped;                /* resource_from_user_memory: an fbdev mapping */
 
    uint32_t stride;             /* bytes per row of level 0 */
+   size_t level_offset[16];     /* each level in the linear CPU copy */
+   bool texture;                /* data is the CPU copy of bo (texture heap, laid out by sgx545_texture.c) */
    uint32_t pitch;              /* pixels per row of a render target (a multiple of 32) */
 
    /* the kernel sync data, mapped once: the CPU waits on it before reading */

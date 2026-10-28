@@ -13,6 +13,8 @@ files_sgx545 = files(
   'sgx545_screen.c',
   'sgx545_screen.h',
   'sgx545_state.c',
+  'sgx545_texture.c',
+  'sgx545_texture.h',
 )
 
 libsgx545 = static_library(
