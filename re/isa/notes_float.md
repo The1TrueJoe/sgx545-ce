@@ -90,11 +90,13 @@ Repeat: h21 rcnt, h12-15 count-1 or write mask (**encoder**).
 movc type (**encoder** for the bits; names from libusc's IMOVC variants in
 asm.c): 1 u8, 2 i16 (**guess**: the fifth variant), 3 i32 (IMOVC_I32), 4
 f32 (IMOVC), 5 c10. Condition h7 + h22 (**encoder**): 0 `z` (s0 == 0), 1
-`nz`, 2 `gtz` (> 0), 3 `lez` (<= 0); these are the only USEASM test specs
-movc accepts. libusc's test types (asm.c g_auEncodeTest) are: always, <0,
-<=0, ==0, >0, >=0, !=0, sign set, sign clear, as USEASM test specs 0x10,
-0x1a, 0x6, 0x14, 0x19, 0x5, 0x18, 0x12, 0x11 (bits 0-1 sign test 1 positive
-2 negative, bits 2-3 zero test 1 zero 2 nonzero, bit 4 AND instead of OR).
+`nz`, 2 `ltz` (< 0), 3 `gez` (>= 0); these are the only USEASM test specs
+movc accepts. USEASM test spec: bits 0-1 sign test (1 sign set, 2 sign
+clear), bits 2-3 zero test (1 zero, 2 nonzero), bit 4 AND instead of OR
+(libusc's own compare pseudo-ops pin the sign values; notes_pack.md).
+libusc's test types (asm.c g_auEncodeTest) are, in order: always, >0, >=0,
+==0, <0, <=0, !=0, sign clear, sign set (specs 0x10, 0x1a, 0x6, 0x14, 0x19,
+0x5, 0x18, 0x12, 0x11).
 
 USEASM mov with a register-type-9 operand encodes on hw 1f (`f80000c0`:
 type 9 <- src1; `f8000100`: dst <- type 9); see notes_mem.md.

@@ -1,7 +1,7 @@
 """Assemble SGX545 USSE instructions from fields.json, the inverse of isa.decode.
 
-  python3 asm.py 'fmad16 pa9, -pa9, c45, c45 [f1.0 h12]' ...   prints "<hi> <lo>"
-  python3 asm.py --check                                       round-trips known encodings
+  python3 asm_fz.py 'fmad16 pa9, -pa9, c45, c45 [f1.0 h12]' ...   prints "<hi> <lo>"
+  python3 asm_fz.py --check                                       round-trips known encodings
 
 Syntax: the mnemonic as dis.py prints it (without '?'), then operands in
 USEASM argument order: optional '-' (negate, argument flag 0) or '|x|' (abs,

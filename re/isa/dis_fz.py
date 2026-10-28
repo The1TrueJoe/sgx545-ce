@@ -1,7 +1,7 @@
 """Disassemble SGX545 USSE instructions (DDK 1.7 encoding), from USP binaries.
 
-  python3 dis.py <dir or .usp>...      every shader: secondary program, then main
-  python3 dis.py -x <hi> <lo>          one instruction
+  python3 dis_fz.py <dir or .usp>...      every shader: secondary program, then main
+  python3 dis_fz.py -x <hi> <lo>          one instruction
 
 Fields come from ISA.md. Each instruction prints as
 

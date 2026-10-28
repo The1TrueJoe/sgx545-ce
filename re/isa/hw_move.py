@@ -26,12 +26,12 @@ form("mov", [("h27-31", 5), ("h8-10", 0), ("l28-29", 2), ("h16", 1), ("l0-6", 0)
      common() + rpt_mask(), [DST(), SRC1()], src="0x102370 mov")
 
 # movc d, s0, s1, s2: d = test(s0) ? s1 : s2. The test is USEASM's test spec
-# (dw4: bits 0-1 sign test, 2-3 zero test, bit 4 AND): only ==0, !=0, >0 and
-# <=0 encode, as h7 + h22. The type comes from libusc's IMOVC variants
+# (dw4: bits 0-1 sign test 1 set / 2 clear, 2-3 zero test 1 zero / 2 nonzero,
+# bit 4 AND): only ==0, !=0, <0 and >=0 encode, as h7 + h22. The type comes from libusc's IMOVC variants
 # (asm.c): IMOVC -> 4, IMOVC_I32 -> 3, the IMOVC_U8/IMOVC_C10 pair -> 1 and
 # 5, the fifth (internal op 0x87) -> 2.
 MOVC_TYPE = {1: "u8", 2: "i16", 3: "i32", 4: "f32", 5: "c10"}
-MOVC_COND = {0: "z", 1: "nz", 2: "gtz", 3: "lez"}
+MOVC_COND = {0: "z", 1: "nz", 2: "ltz", 3: "gez"}
 for t, name in MOVC_TYPE.items():
     form("movc", [("h27-31", 5), ("h8-10", t)],
          common() + rpt_mask() + [Fld("cond", "h7,h22", "enum", MOVC_COND, show="mod")],
