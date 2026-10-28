@@ -252,8 +252,11 @@ sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    struct sgx545_context *ctx = sgx545_context(pctx);
    struct sgx545_resource *res = sgx545_resource(ptrans->resource);
 
+   /* only what the transfer covers: the game updates 16x16 sprites of a
+    * 1024x512 atlas, and the whole level each time took a minute to load */
    if (res->texture && (ptrans->usage & PIPE_MAP_WRITE))
-      sgx545_tex_encode_level(res, ptrans->level);
+      sgx545_tex_encode_box(res, ptrans->level, ptrans->box.x, ptrans->box.y,
+                            ptrans->box.x + ptrans->box.width, ptrans->box.y + ptrans->box.height);
 
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);

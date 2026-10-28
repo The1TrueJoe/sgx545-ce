@@ -5,7 +5,8 @@
 # with gl4es' FPS counter, under the GPU lock and gpuwatch.sh; after SECONDS
 # the panel (fb0) is saved to /opt/minecraft/rootfs/ctest/out/mc-<who>.fb
 # (MC_BURST=n: and n more, mc-<who>-<k>.fb) and the game stopped. xdotool steps (sent through Xvfb) drive the menus: at
-# second `at`, run `xdotool cmd args`.
+# second `at`, run `xdotool cmd args`. MC_DIR (in MC_ENV): another game
+# directory in the root, so a test world leaves the player's saves alone.
 R=/opt/minecraft/rootfs
 WHO=$1 SECS=$2; shift 2
 D=$(dirname "$0")
@@ -34,6 +35,15 @@ $D/gpuwatch.sh chroot $R /usr/bin/env -i HOME=/root TERM=linux DISPLAY=:0 PATH=/
 	MC_GL=$WHO MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 $MC_ENV $pre \
 	/usr/local/bin/minecraft-ab Player > $R/ctest/out/mc-$WHO.log 2>&1 &
 game=$!
+# MC_READY=regex: the clock (SECONDS and the steps) starts when the game's
+# log first matches it, as loading times differ by stack and box
+if [ -n "$MC_READY" ]; then
+	w=0
+	while ! grep -q -E "$MC_READY" $R/ctest/out/mc-$WHO.log 2>/dev/null && kill -0 $game 2>/dev/null && [ $w -lt 900 ]; do
+		sleep 1; w=$((w+1))
+	done
+	echo "mc-ab: ready after $w s"
+fi
 t=0
 while [ $t -lt $SECS ] && kill -0 $game 2>/dev/null; do
 	for step in "$@"; do
