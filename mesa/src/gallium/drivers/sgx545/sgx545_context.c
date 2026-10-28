@@ -47,8 +47,13 @@ sgx545_flush_frame(struct sgx545_context *ctx)
    simple_mtx_lock(&screen->lock);
    e = sgxws_flush(ctx->hw, 2000);
    simple_mtx_unlock(&screen->lock);
-   if (e)
+   if (e) {
       fprintf(stderr, "sgx545: frame did not finish: %d\n", e);
+      /* SGX545_HANG_ABORT=1: stop the client at the first hang, before the
+       * recovery loop wedges the GPU (debugging on a shared box) */
+      if (debug_get_bool_option("SGX545_HANG_ABORT", false))
+         abort();
+   }
    ctx->recording = NULL;
 }
 

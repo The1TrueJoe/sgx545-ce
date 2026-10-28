@@ -99,7 +99,7 @@ struct sgx545_context {
    struct slab_child_pool transfer_pool;
    uint32_t *staging;               /* vertices gathered for one draw */
    size_t staging_size;
-   bool warned_shader, warned_prim, warned_blend;
+   bool warned_shader, warned_prim, warned_blend, warned_varyings;
 };
 
 static inline struct sgx545_context *

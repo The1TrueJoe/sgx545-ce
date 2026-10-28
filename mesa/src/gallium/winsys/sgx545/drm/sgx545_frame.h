@@ -75,6 +75,8 @@ struct sgxws_dev {
    uint32_t heap_base[16];          /* device address of each heap, by heap id */
    int verbose;
    unsigned frame_gap_us;           /* SGX545_FRAME_GAP_US: idle time after each render */
+   int dry_run;                     /* SGX545_DRY_RUN=n: frames from the n-th on are built
+                                     * (and traced) but never sent to the GPU */
 };
 
 /* one device allocation, mapped */

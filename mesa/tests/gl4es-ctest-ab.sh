@@ -15,7 +15,10 @@
 # /ctest/out/<who>-<test>-es<N>-<call>.png. tools: mesa/tests/ctest_cmp.py
 # compares them with each other and with gl4es' references.
 #
-# One GL client at a time: every replay holds the box's GPU lock.
+# One GL client at a time: every replay holds the box's GPU lock, through
+# gpuwatch.sh (next to this script), which also kills a replay at its first
+# SGX recovery: a client that keeps kicking through a recovery loop leaves
+# the GPU unable to finish any render until a power cycle.
 # CTEST_ENV="VAR=value ..." is added to each replay's environment (debugging).
 # CTEST_FB is gl4es' LIBGL_FB: 3 (pbuffer, as gl4es' own tests; the default) or
 # 1 (fb0 window, as the game runs; the DDK's pbuffers crash in
@@ -62,7 +65,7 @@ replay() {	# who name call es
 	out=/ctest/out/$who-$name-es$es-
 	rm -f $R$out*
 	start=$(cut -d' ' -f1 /proc/uptime)
-	flock /tmp/gpu.lock chroot $R /usr/bin/env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin \
+	$(dirname "$0")/gpuwatch.sh chroot $R /usr/bin/env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin \
 		DISPLAY=:1 LIBGL_FB=${CTEST_FB:-3} LIBGL_ES=$es LIBGL_SILENTSTUB=1 LIBGL_NOBANNER=1 LIBGL_NOERROR=1 \
 		LIBGL_DEEPBIND=0 LIBGL_EGL=$lib/libEGL.so.1 LIBGL_GLES=$gles \
 		LD_LIBRARY_PATH=/usr/lib/gl4es:$lib ${pre:+LD_PRELOAD=$pre} \

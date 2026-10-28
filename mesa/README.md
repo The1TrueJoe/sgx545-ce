@@ -121,53 +121,78 @@ The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared EA3, wrap G
 
 This list is the next work, roughly in the order gl4es and Minecraft need it:
 
-1. **Constant-colour blending** (`GL_CONSTANT_COLOR` and the rest). sop2 has
+1. **Discard** (and alpha test through it): ISPA pass type 2/4 and the DDK's
+   phase split around the feedback; refused today.
+2. **Projected and other sample forms** the USP reader refuses ("USP
+   features not handled yet"): most of gl4es' textured fixed-function shaders
+   sample with a projector.
+3. **Constant-colour blending** (`GL_CONSTANT_COLOR` and the rest). sop2 has
    two more selectors, k18/k19, that are not decoded yet; until then those
    draws come out opaque, with a message.
-2. **Textures, the rest**: dependent samples (the compiler's block 9), mipmap
+4. **Textures, the rest**: dependent samples (the compiler's block 9), mipmap
    generation on the GPU, compressed formats, render-to-texture with a
    sampleable layout.
-3. **Scissor and partial viewports**: pass-type-3 objects and region clips.
-4. **Lines and points** (VDM primitive 1/2, point size output, set 0).
-5. **Depth/stencil buffers in memory (ZLS).** Depth works within one render today,
+5. **Scissor and partial viewports**: pass-type-3 objects and region clips.
+6. **Lines and points** (VDM primitive 1/2, point size output, set 0).
+7. **Depth/stencil buffers in memory (ZLS).** Depth works within one render today,
    which covers a frame unless the rings fill mid-frame.
-6. **Present without tearing.** Render into a back buffer and blit to fb0 with the
+8. **Present without tearing.** Render into a back buffer and blit to fb0 with the
    transfer queue (`sgxtex_blit_*`), the way the DDK swaps, or flip a double-height
    fbdev.
-7. **Performance**: zero-copy vertex buffers (the PDS fetching from device
+9. **Performance**: zero-copy vertex buffers (the PDS fetching from device
    buffers), and pipelining frames instead of waiting for each render.
-8. **F16 mediump** (`sgx_compile_options.f16`), for the DDK's exact pixels on
+10. **F16 mediump** (`sgx_compile_options.f16`), for the DDK's exact pixels on
    mediump shaders.
-9. Prune the extension list. st/mesa advertises some extensions from defaults
+11. Prune the extension list. st/mesa advertises some extensions from defaults
    (S3TC, depth textures) that the driver can't do yet.
 
-## Plan: the gl4es ctest suite (milestone d)
+## The gl4es ctest suite on the EA3 (milestone d)
 
-gl4es' `tests/` are apitrace traces with reference images. The openhc-minecraft
-rig (`/var/tmp/run-ctest.sh TREE [ENV=1]` in the EA1's chroot) replays them with
-`glretrace` on Xvfb `:1`, through gl4es (`LIBGL_FB=1`, `LIBGL_ES=2`), and compares
-pixel counts. Its baseline: master fails 7 of 8 against the references on the
-DDK. The EA1 runs the live game and is off limits, so the rig goes on the EA3:
+gl4es' `tests/` are apitrace traces with reference images (`traces/`, `refs/`,
+the list in its `CMakeLists.txt`). `tests/gl4es-ctest-ab.sh` replays each one
+on the EA3, through the runtime's gl4es (unmodified), once on the DDK and once
+on ours, and snapshots the call ctest checks; `tests/ctest_cmp.py` compares the
+two snapshots pixel for pixel and each with gl4es' reference as `tests/test.sh`
+does (`compare -metric AE -fuzz 20%` over its region, under its tolerance).
 
-1. Install the openhc-minecraft runtime (`runtime-i386.tar.xz`, Debian bookworm
-   i386) under `/opt/minecraft/rootfs` on the EA3 (`mc-install` without the game
-   download), plus apitrace and the gl4es tree. The gotchas noted on the EA1
-   apply: a clean `resolv.conf` (mode 644) for apt; unpack apitrace's .deb
-   because the python3 dummy package blocks it.
-2. Build Mesa for i386 (`mesa/build.sh i386`) and copy `install/usr/lib` to
-   `/usr/lib/sgx545` in the chroot.
-3. Run each trace twice, A/B, with only the libraries gl4es loads switched:
-   - `LIBGL_EGL=/usr/lib/sgx/libEGL.so.1 LIBGL_GLES=/usr/lib/sgx/libGLESv2.so.2`
-     (the DDK);
-   - `LIBGL_EGL=/usr/lib/sgx545/libEGL.so.1 LIBGL_GLES=/usr/lib/sgx545/libGLESv2.so.2`
-     (ours).
+The rig (the EA1's copy of it is off limits):
 
-   Dump the last frame of each (`glretrace -s`), compare them pixel for pixel
-   with `tools/decode/cmpfb.py`, and record per-trace results in the build log.
-   One GL client at a time (concurrent clients cause SGX recovery storms).
-4. Expected first blockers: textures (every trace), blending, scissor, then
-   gl4es' own shader variants. The compiler is already checked against
-   gl4es' Minecraft shaders (`tools/usc`).
+- The openhc-minecraft runtime (`runtime-i386.tar.xz` from that repo's CI) in
+  an ext2 image on the EA3's USB disk (`/media/DISKTEST/mcroot-ext4.img`,
+  loop-mounted at `/opt/minecraft`; the root filesystem has 250 MB free). The
+  DDK goes to `/usr/lib/sgx` as `mc-session` puts it there, our i386 build to
+  `/usr/lib/sgx545`, apitrace's `glretrace` from Debian's `apitrace` package
+  (unpacked: the runtime's apt can't install it), and the traces to `/ctest`.
+- Each replay: Xvfb `:1`, `glretrace --singlethread` with
+  `LIBGL_FB=3` (pbuffer) and `LIBGL_EGL`/`LIBGL_GLES` naming one stack.
+- `LIBGL_NOTEST=1` for both stacks. gl4es' hardware probe initialises EGL,
+  terminates it and initialises it again; the DDK can't create a render target
+  after that (a NULL dereference in `SGXAddRenderTarget`), so without it the DDK
+  replays nothing.
+- `tests/gpuwatch.sh` runs every replay under the GPU lock and kills it at its
+  first SGX recovery. On this box one lockup, the DDK's or ours, often leaves
+  the microkernel unable to re-initialise ("SGXInitialise failed (24)"), so a
+  suite run checks the GPU before every replay and power-cycles the EA3 when
+  the reference scene no longer renders.
+- The GPU is brought up by the DDK's `sgxinit` (as `S95ohc-display` does at
+  boot). On a GPU that srvinit started, a process's render-context cleanup
+  never completes, and the next client's TA reads the dead client's render
+  target data.
+
+What the first runs found, all fixed in the driver:
+
+- **One render context per process.** Mesa creates two pipe contexts under
+  glretrace, and gl4es initialises EGL twice. A second render context with its
+  own parameter buffer made renders take 100-900 ms in a period-4 pattern and
+  then locked the 3D; the screen now owns the one render context, and keeps it
+  (with the services connection) across `eglTerminate`, as the DDK keeps its
+  per-process parameter buffer.
+- **Discard.** A fragment shader that discards needs its own ISP pass type
+  and phase split; drawn opaque, its first discarded pixel locks the GPU up
+  (gl4es' clip planes in neverball). Such shaders are refused until that is
+  done.
+- **Varyings.** A draw whose fragment program iterates a set the vertex
+  program doesn't write is refused (it locks the GPU up).
 
 ## Plan: Minecraft on our driver (milestone e)
 

@@ -70,6 +70,7 @@ volatile PVRSRV_SYNC_DATA *pvr_sync_data(struct pvr *p, IMG_HANDLE sync, struct 
 int pvr_register_render_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
 			    IMG_HANDLE *handle, uint32_t *devva);
 int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick);
+int pvr_kick_traced(struct pvr *p, SGX_CCB_KICK *kick, int submit);
 int pvr_heapinfo(struct pvr *p);
 /* Tell the microkernel to drop its cached state for an RT data set (the DDK's
  * SGXRemoveRenderTarget does this). A client that skips it leaves the next

@@ -213,6 +213,40 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
  * the way the compiler looks varyings up (sgx_nir.c var_names): st names a
  * packed varying "packed:a,b", one name per varying it holds.
  */
+/* Mesa's fixed-function shaders (st's ffvertex and its fragment programs;
+ * ES1 through gl4es) pass colours, fog and texture coordinates in the legacy
+ * varying slots, which the compiler doesn't assign: move them to fixed VAR
+ * slots with fixed names, the same in both stages so that stages compiled
+ * apart agree. GLSL ES programs only use VAR slots, so the two never meet. */
+static void
+remap_legacy_varyings(nir_shader *nir)
+{
+   static const struct { gl_varying_slot slot; unsigned var; } map[] = {
+      { VARYING_SLOT_COL0, 0 }, { VARYING_SLOT_COL1, 1 }, { VARYING_SLOT_FOGC, 2 },
+      { VARYING_SLOT_TEX0, 3 }, { VARYING_SLOT_TEX1, 4 }, { VARYING_SLOT_TEX2, 5 },
+      { VARYING_SLOT_TEX3, 6 }, { VARYING_SLOT_TEX4, 7 }, { VARYING_SLOT_TEX5, 8 },
+      { VARYING_SLOT_TEX6, 9 },
+   };
+   nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
+   bool changed = false;
+
+   nir_foreach_variable_with_modes(var, nir, mode) {
+      for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
+         char name[32];
+
+         if (var->data.location != (int)map[i].slot)
+            continue;
+         var->data.location = VARYING_SLOT_VAR0 + map[i].var;
+         snprintf(name, sizeof(name), "sgx545_legacy%u", map[i].var);
+         var->name = ralloc_strdup(nir, name);
+         changed = true;
+         break;
+      }
+   }
+   if (changed)
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+}
+
 static void
 assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
 {
@@ -273,12 +307,13 @@ struct usp_info {
    unsigned temps, color_type, color_reg;
    unsigned n_iters;
    struct { unsigned iterator, comps, format, sampler; bool sample, proj; } iters[16];
+   const char *why;             /* what read_usp refused */
 };
 
 /* the block stream: true when every texture sample is non-dependent (the
  * PDS samples into pa; dependent ones need an smp the driver doesn't write yet) */
 static bool
-blocks_supported(const uint8_t *u, size_t size, size_t off)
+blocks_supported(const uint8_t *u, size_t size, size_t off, const char **why)
 {
    while (off + 4 <= size) {
       uint32_t type = rd32(u, off);
@@ -295,16 +330,16 @@ blocks_supported(const uint8_t *u, size_t size, size_t off)
       case 4: off += 2; break;
       case 5:
          if (!(rd16(u, off) & 1))
-            return false;
+            return *why = "a dependent texture sample (block 5)", false;
          off += 56;
          break;
       case 6: off += 74; break;
-      case 9: return false;
+      case 9: return *why = "block 9", false;
       case 7: return true;
-      default: return false;
+      default: return *why = "an unknown block", false;
       }
    }
-   return false;
+   return *why = "a block stream without its end", false;
 }
 
 static bool
@@ -315,7 +350,7 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
    uint32_t n_b;
 
    if (size < 0x84 || rd32(u, 0) != 0x55535020 || rd32(u, 4) != 0x23)
-      return false;
+      return info->why = "not a USP", false;
    info->temps = rd16(u, 0x46);
    info->color_type = rd16(u, 0x66);
    info->color_reg = rd16(u, 0x68);
@@ -329,7 +364,7 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
       unsigned flags = rd16(u, off);
 
       if (info->n_iters == ARRAY_SIZE(info->iters) || (flags & ~0xdu))
-         return false;
+         return info->why = "an iteration list A entry", false;
       /* a plain iteration has flags 4 or 0xc; a sample entry 0, or 1 projected */
       info->iters[info->n_iters].sample = !(flags & 4);
       info->iters[info->n_iters].proj = flags & 1;
@@ -340,13 +375,13 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
       info->n_iters++;
    }
    for (uint32_t i = 0; i < n_b && off < size; i++)   /* list B: constants left in memory */
-      return false;
+      return info->why = "constants in memory (list B)", false;
    for (unsigned i = 0; i < n_c && off + 8 <= size; i++) {
       unsigned kind = rd16(u, off);
       struct sgx545_const *k = &so->consts[so->n_consts];
 
       if (kind != 1 || so->n_consts == SGX545_MAX_CONSTS)
-         return false;                             /* F16/C10 constants: not in F32 mode */
+         return info->why = "an F16/C10 constant or too many", false;
       k->fmt = kind;
       k->k = rd16(u, off + 2);
       k->slot = rd16(u, off + 4);
@@ -356,12 +391,12 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
       off += 8;
    }
    if (n_d || n_sec || off > size)
-      return false;
+      return info->why = n_d ? "list D" : n_sec ? "a secondary program" : "a short USP", false;
    /* the vertex input mask, then the output mask (both in u32s) */
    if (rd32(u, 0x10) == 1)
       off += 4 * ((rd16(u, 0x80) + 31) / 32);
    off += 4 * ((rd16(u, 0x82) + 31) / 32);
-   return blocks_supported(u, size, off);
+   return blocks_supported(u, size, off, &info->why);
 }
 
 static bool
@@ -375,8 +410,18 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    struct usp_info info = { 0 };
    bool vertex = nir->info.stage == MESA_SHADER_VERTEX;
 
+   /* A fragment shader that discards needs its own ISP pass type and the
+    * DDK's split into phases around the feedback (STATE.md, ISPA pass types 2
+    * and 4), which the driver doesn't do yet: drawn in an opaque pass, the first
+    * pixel it discards locks the GPU up (EA3, gl4es' clip planes). */
+   if (!vertex && orig->info.fs.uses_discard) {
+      fprintf(stderr, "sgx545: fragment shader with discard: not drawn yet\n");
+      ralloc_free(nir);
+      return false;
+   }
    opts.verbose = (sgx545_debug & SGX545_DEBUG_NIR) != 0;
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
+   remap_legacy_varyings(nir);
    assign_varyings(nir, &vary);
    if (vertex) {
       nir_foreach_shader_in_variable(var, nir) {
@@ -406,7 +451,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       }
    }
    if (!read_usp(out.usp, out.usp_size, so, &info) || (!vertex && info.color_type != 3)) {
-      fprintf(stderr, "sgx545: %s shader: USP features not handled yet\n", vertex ? "vertex" : "fragment");
+      fprintf(stderr, "sgx545: %s shader: USP features not handled yet (%s)\n", vertex ? "vertex" : "fragment",
+              info.why ? info.why : "colour output");
       sgx_shader_free(&out);
       ralloc_free(nir);
       return false;

@@ -425,6 +425,7 @@ sgxws_dev_init(struct sgxws_dev *d, int fd)
    memset(d, 0, sizeof(*d));
    d->verbose = getenv("SGX545_VERBOSE") ? atoi(getenv("SGX545_VERBOSE")) : 0;
    d->frame_gap_us = getenv("SGX545_FRAME_GAP_US") ? atoi(getenv("SGX545_FRAME_GAP_US")) : 0;
+   d->dry_run = getenv("SGX545_DRY_RUN") ? atoi(getenv("SGX545_DRY_RUN")) : -1;
    pvr_open_fd(&d->pvr, fd);
    /* SGX545_TRACE=path: a pvrtrace log of this client, as tools/decode reads a DDK
     * capture; SGX545_TRACE_KICKS=n: memory copies for the first n kicks only */
@@ -1367,11 +1368,15 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    c->ccb_woff = (woff + TA_CMD_SIZE) & (CCB_RING - 1);
    c->ccbctl.map[0] = c->ccb_woff;                  /* CCB write offset */
    __sync_synchronize();
-   e = pvr_kick(&c->dev->pvr, &k);
-   if (e)
-      ws_err("SGX_DOKICK failed: %d\n", e);
-   else
-      e = wait_render(c, timeout_ms);
+   if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
+      e = pvr_kick_traced(&c->dev->pvr, &k, 0);     /* traced, not sent */
+   } else {
+      e = pvr_kick(&c->dev->pvr, &k);
+      if (e)
+         ws_err("SGX_DOKICK failed: %d\n", e);
+      else
+         e = wait_render(c, timeout_ms);
+   }
    if (!e && c->dev->frame_gap_us) {
       struct timespec ts = { 0, (long)c->dev->frame_gap_us * 1000 };
 

@@ -239,6 +239,31 @@ fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sg
    }
 }
 
+/* Every set the fragment program iterates or samples with must be one the
+ * vertex program outputs, with as many components: iterating a set the vertex
+ * program doesn't write locks the GPU up (EA3; first seen with the colour
+ * placeholder, then with gl4es' neverball shaders). */
+static bool
+varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
+{
+   for (unsigned i = 0; i < fs->n_douti; i++) {
+      uint32_t w = fs->douti[i];
+      unsigned need[2][2] = { { 0, 0 } }, n = 0;
+
+      if (w & (1u << 24))          /* plain iteration: set + 1 at b11-16, components - 1 at b22-23 */
+         need[n][0] = ((w >> 11) & 0x3f) - 1, need[n++][1] = ((w >> 22) & 3) + 1;
+      if (w & 0x600)               /* sample half: coordinate set + 1 in the low bits, 2-D or projected */
+         need[n][0] = (w & 0x3f) - 1, need[n++][1] = w & 0x400 ? 3 : 2;
+      for (unsigned k = 0; k < n; k++) {
+         unsigned size = (vs->tsp_sizes >> (3 * need[k][0])) & 7;
+
+         if (need[k][0] >= 10 || !size || (size == 5 ? 4 : size) < need[k][1])
+            return false;
+      }
+   }
+   return true;
+}
+
 static void
 sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 unsigned drawid_offset, const struct pipe_draw_indirect_info *indirect,
@@ -366,6 +391,13 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          d.vs = f[e].dwords == 2 ? &ctx->vs_xy : &ctx->vs_xyz;
       }
       vertex_dwords += f[e].dwords;
+   }
+   if (compiled && ctx->fs->kind == SGX545_SHADER_COMPILED && !varyings_match(d.vs, d.fs)) {
+      if (!ctx->warned_varyings)
+         fprintf(stderr, "sgx545: the fragment shader iterates a varying the vertex shader doesn't "
+                 "write (VS sets %#x, FS DOUTI %#x...): draw skipped\n", d.vs->tsp_sizes, d.fs->douti[0]);
+      ctx->warned_varyings = true;
+      return;
    }
    d.state = &st;
    d.prim = prim;
