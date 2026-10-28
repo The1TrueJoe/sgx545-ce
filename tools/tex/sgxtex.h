@@ -184,6 +184,23 @@ int sgxtex_blit_build_rect(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *
 
 void sgxtex_blit_command_full(uint32_t out[SGXTEX_CMD_BYTES / 4], const struct sgxtex_blit *b, int twiddled_dst);
 
+/* ---- render to texture ---- */
+
+/*
+ * A texture the PBE renders into and the sampler then reads as it is (what
+ * the DDK does for FBO colour attachments, docs/TEX.md section 4):
+ * power-of-two sizes twiddled (PBE sideband b13, PBE pitch = width, T1
+ * layout 0), anything else linear with the pitch rounded up to 8 pixels (PBE
+ * pitch = that, T1 layout 3). Both the transfer-queue blits and a TA/3D
+ * render's end-of-tile program take these PBE words.
+ */
+void sgxtex_rt_surface(struct sgxtex_surface *s, uint32_t addr, uint32_t w, uint32_t h, uint32_t t1fmt,
+		       uint32_t pbefmt);
+/* the end-of-tile PBE words for rendering into s (dither as GL_DITHER says) */
+void sgxtex_rt_pbe(struct sgxpbe *p, const struct sgxtex_surface *s, int dither);
+/* bytes the texture takes (one level) */
+size_t sgxtex_rt_bytes(const struct sgxtex_surface *s, uint32_t bpp);
+
 /* ---- a transfer context of one's own (what libsrv_um's SGXCreateTransferContext sets up) ---- */
 
 /*

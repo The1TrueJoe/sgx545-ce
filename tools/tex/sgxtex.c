@@ -292,6 +292,32 @@ void sgxtex_blit_command_full(uint32_t out[SGXTEX_CMD_BYTES / 4], const struct s
 	out[0x194 / 4] = 0x07c00000;
 }
 
+/* ---- render to texture ---- */
+
+void sgxtex_rt_surface(struct sgxtex_surface *s, uint32_t addr, uint32_t w, uint32_t h, uint32_t t1fmt,
+		       uint32_t pbefmt)
+{
+	int tw = sgxtex_is_pot(w) && sgxtex_is_pot(h);
+
+	s->addr = addr;
+	s->w = w;
+	s->h = h;
+	s->layout = tw ? SGXTEX_LAYOUT_TWIDDLED : SGXTEX_LAYOUT_LINEAR;
+	s->pitch = tw ? w : sgxtex_pitch(w);
+	s->t1fmt = t1fmt;
+	s->pbefmt = pbefmt;
+}
+
+void sgxtex_rt_pbe(struct sgxpbe *p, const struct sgxtex_surface *s, int dither)
+{
+	sgxpbe_words(p, s->w, s->h, s->pitch, s->addr, s->pbefmt, s->layout == SGXTEX_LAYOUT_TWIDDLED, dither);
+}
+
+size_t sgxtex_rt_bytes(const struct sgxtex_surface *s, uint32_t bpp)
+{
+	return (size_t)s->pitch * s->h * bpp;
+}
+
 /* ---- the transfer context's own buffers ---- */
 
 void sgxtex_xctx_words(uint32_t ctx[SGXTEX_XCTX_BYTES / 4], uint32_t ccb, uint32_t ccb_ctl, uint32_t pid)

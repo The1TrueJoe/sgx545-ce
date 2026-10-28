@@ -29,11 +29,16 @@
  *     rband2  rows 10..25 -> rows 20..35 (unaligned band)
  *     rcomp   (40,10) 16x16 -> (8,24) of a twiddled 64x64 in three blits: readback to linear,
  *             sub-rectangle into it, upload
+ *   blitest <outdir> present  the swap: a 720x480 BGRA8888 back buffer (pitch 736) filled
+ *                             with a pattern, blitted into the real /dev/fb0 (wrapped as the
+ *                             DDK's EGL does); prints the blit's time. Read fb0 back after.
  *   blitest <outdir> sweep    one 64x64 strided copy per variant of the background
  *                             object's vertex words (bg[16..22]), into a cleared
  *                             destination: sweep<n>.bin, for working out sub-rectangles
  */
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,6 +256,40 @@ int main(int argc, char **argv)
 	dump(dir, "src", &lin, 64 * 64 * 4);
 	__sync_synchronize();
 
+	if (argc > 2 && !strcmp(argv[2], "present")) {
+		struct pvr_buf back, fb;
+		struct sgxtex_surface s_back = { 0, 720, 480, 736, SGXTEX_LAYOUT_STRIDED, SGXTEX_FMT_BGRA8888,
+						 SGXPBE_FMT_BGRA8888 };
+		struct sgxtex_surface s_fb = s_back;
+		struct timespec t0, t1;
+		int fd = open("/dev/fb0", O_RDWR);
+		void *m = fd < 0 ? MAP_FAILED : mmap(NULL, 736 * 480 * 4, PROT_READ | PROT_WRITE,
+						     MAP_SHARED | MAP_32BIT, fd, 0);
+		int e;
+
+		if (m == MAP_FAILED)
+			die("map /dev/fb0: %s", strerror(errno));
+		if ((e = pvr_wrap(&P, &fb, m, 736 * 480 * 4)))
+			die("WRAP_EXT_MEMORY of fb0: %d", e);
+		bo(&back, H_GENERAL, 0x3, 736 * 480 * 4, 0x1000);
+		/* B, G, R, A: a gradient with a grid, so a misplaced or torn row shows */
+		for (uint32_t y = 0; y < 480; y++)
+			for (uint32_t x = 0; x < 736; x++) {
+				uint8_t *p = (uint8_t *)back.cpu + 4 * (y * 736 + x);
+
+				p[0] = (uint8_t)(y * 255 / 479), p[1] = (uint8_t)(x * 255 / 719);
+				p[2] = (x % 40 == 0 || y % 40 == 0) ? 255 : (uint8_t)((x ^ y) & 0x7f), p[3] = 255;
+			}
+		dump(dir, "back", &back, 736 * 480 * 4);
+		__sync_synchronize();
+		s_back.addr = back.devva, s_fb.addr = fb.devva;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+		bad |= blit("swap", &back, &s_back, &fb, &s_fb, SGXTEX_FILTER_NEAREST);
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		printf("blitest: fb0 wrapped at %#x; swap blit submitted and complete in %ld us\n", fb.devva,
+		       (t1.tv_sec - t0.tv_sec) * 1000000 + (t1.tv_nsec - t0.tv_nsec) / 1000);
+		return bad;
+	}
 	if (argc > 2 && !strcmp(argv[2], "rect")) {
 		static const struct sgxtex_rect r[][2] = {
 			{ { 8, 4, 24, 20 }, { 30, 40, 24, 20 } },
