@@ -7,3 +7,4 @@
 Module.symvers
 modules.order
 build/
+srvinit/srvinit
