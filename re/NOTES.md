@@ -26,8 +26,9 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 | `isa/uschook.c` | LD_PRELOAD: saves each USP binary libusc returns |
 | `isa/encfuzz.c` | LD_PRELOAD: logs every instruction libusc's assembler encodes and re-encodes one-bit-flipped copies |
 | `isa/mkfields.py`, `isa/fz.py` | turn an encfuzz log into `fields.json` (per-form bit fields) |
-| `isa/dis.py`, `isa/isa.py` | USSE disassembler driven by `fields.json` and `names.json` |
-| `isa/ISA.md` | the instruction set as decoded, with the evidence for each field (`mkisa.py` writes its tables) |
+| `isa/dis.py`, `isa/asm.py`, `isa/hw.py`, `isa/hw_*.py` | USSE disassembler/assembler; the instruction forms read from libusc's encoder |
+| `isa/oracle.py`, `isa/uinst.py`, `isa/check_*.py`, `isa/hwcheck.py` | libusc's encoder in an emulator; oracle sweeps and the corpus round-trip check |
+| `isa/ISA.md` | the instruction set, with the evidence for each field, and what a compiler needs (`ISA_fz.md`: the superseded first pass) |
 | `pds/dis.py` | finds every PDS program in a capture (VDM stream, TA state words, raw pointers, heap scan) and disassembles code and data segment |
 | `pds/PDS.md` | PDS instruction set, data-segment layout, DOUT word formats, the DDK's generators, each field tagged confirmed / strong / guess |
 | `pds/DumpDecomp.java` | Ghidra headless script: decompile every function in an address range (`analyzeHeadless ... -postScript DumpDecomp.java out.c lo hi`) |
@@ -139,17 +140,21 @@ Learned on the way:
   sync-heap allocation's own mem handle. The render-context buffer's last word
   is the PID (0x4f5); replaying it unchanged did no harm.
 
-## USSE instruction set (2026-10-27)
+## USSE instruction set (2026-10-27, completed 2026-10-28)
 
-See `isa/ISA.md`. In short: the USP container is a typed block stream (parser
-fixed from libusc's writer, all 370 corpus shaders parse exactly); the work of
-uniform-only shaders lives in a separate secondary update program; libusc's
-own assembler (`UseAssembleInstruction`, libusc + 0x109f50), hooked and
-bit-flipped in-process on the EA3, gives the operand fields directly. The
-Eurasia layout holds: opcode h27-31, dst l21-27, src0 l14-20, src1 l7-13,
-src2 l0-6, banks in h0-2, l28-31 with extension bits h16/h17/h19, predicate
-h24-26. vec4 ops are one instruction with a repeat count, and swizzles are MOE
-increments.
+See `isa/ISA.md`. libusc's USE assembler (useasm.c, `UseAssembleInstruction`
+at libusc + 0x109f50) was decompiled with Ghidra and is also run in an i386
+emulator (`isa/oracle.py`, bit-exact against 5045 instructions logged on the
+EA3), so every field position comes from the encoder and is checked by
+sweeping it (`isa/check_*.py`, ~20,000 encodings). `isa/hw.py` + `hw_*.py`
+hold the forms for all 32 hardware opcodes; `isa/dis.py` decodes every word of
+the three corpora (c3 adds texture, flow, int, indexing and vertex shaders)
+with no unexplained bit, and `isa/asm.py` re-encodes all of them. Findings
+worth knowing outside the ISA: dependent texture reads are USP sample blocks
+too (the GLES finalizer writes the `smp`); the USP vertex bitmask is the set
+of live attribute registers; code-block flags are the format-control state
+that decides whether register bit 6 is a C10/F16 select in the colour/EFO
+classes; GLSL ES ints compile to float code.
 
 ## Our own frame: authored inputs and hand-assembled shaders (EA3, 2026-10-27)
 
@@ -196,6 +201,47 @@ pokes overrides after the snapshot loads and again before each kick
 - `isa/asm.py` assembles from `fields.json` and re-encodes nine compiler and
   driver encodings bit-exactly (`asm.py --check`). It refuses anything whose
   fields were never fuzzed.
+
+## USSE semantics on hardware: one register per draw (EA3, 2026-10-28)
+
+`isa/hwt.py` turns the replay into an instruction tester. The main pixel
+program (0x37008388, after its `phas.i` word) is replaced by a test program
+that loads inputs with `limm`, runs the instruction under test and ends with
+`mov o0, rN [end]`. The PBE stores o0 unchanged in the BGRA8888 back buffer, so
+a pixel inside the triangle *is* rN, bit for bit; the replay dumps one row of
+32 pixels (all must agree) and the background pixel (the clear colour, to
+catch a program that didn't run).
+
+    S=<scratchpad>; CAP=<dir with ref.bin> REPLAY=<static replay> EA3SH=<ssh helper> \
+        python3 isa/hwt.py hwt_p1 [-k fmad] [--dry]
+
+- The captured main program had **no temporaries**: its DOUTU word 0 (PDS
+  data 0x2e018020) is 0x00010700. Poking 0x04010700 (top byte 4) gives it
+  r0-r15, and every r0-r15 test reads back exactly, consistent with the
+  top byte being the temporary count in fours (PDS.md; whether temporaries
+  fail without it was not tried).
+- One base script and data file serve every test (the data is uploaded once);
+  each test only adds its `poke` lines before each kick. About one draw per
+  second over ssh; ~400 draws in all, no hang, no SGX recovery, no reboot.
+- Branches that would leave the program are made safe by landing pads: each
+  candidate target is a `mov o0, rK [end]` with its own rK, so the readout
+  says where the branch went.
+- With format control off, a C10 operand names r64+, outside the program's 16
+  temporaries: the reads give per-pixel garbage but no fault.
+
+Results are in `isa/ISA.md` ("Hardware checks" and the **hardware** tags),
+logs in `isa/hwt_out/`. The ones a compiler would otherwise get wrong:
+- an F16 operand number under format select counts 16-bit halves (`2*reg +
+  half`), so F16 sources are limited to r0-r31;
+- fsin/fcos take quarter turns (sin(t·π/2)) at ~16-bit accuracy;
+- scalar ops' h2 writes an F16 result into the source's half and zeroes the
+  other half;
+- f32 -> f16 `pck` truncates whatever rnd says;
+- c46/c47 are F16 (1, 1), not 0.5 / 1.0 as libusc's table says;
+- fadm = (a + b) * c, fmsa = a*a + b*c; fminmax = min(max(a, b), c),
+  fmaxmin = max(min(a, c), b);
+- movc's u8/i16/c10 types select per byte / half / channel (signed);
+- `setfc`'s second argument is the colour-class C10 enable, on at task start.
 
 ## PDS programs (2026-10-27)
 
