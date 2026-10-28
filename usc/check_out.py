@@ -33,10 +33,14 @@ def arg(o, flags=0):
     if k not in RT:
         raise KeyError(f"operand kind {k}")
     f = flags | (1 if o.get("neg") else 0) | (2 if o.get("abs") else 0)
+    n = o["n"]
     for s in o.get("sfx", []):
         if len(s) == 2 and s[0] == "l":
             f |= int(s[1]) << 5
-    return A(k, o["n"], f)
+    if o.get("f16"):
+        f |= 1 << 22                 # USEASM's F16 format flag; the number counts halves
+        n = 2 * n + o.get("half", 0)
+    return A(k, n, f)
 
 
 def common(x):
@@ -82,9 +86,15 @@ def useasm(x):
     if n == "pck":
         dfmt = PCKF[x.form.fval >> 38 & 7]
         sfmt = PCKF[x.form.fval >> 41 & 7]
-        base = {("u8", "f32"): 0x20, ("f32", "u8"): 0x34}.get((dfmt, sfmt))
+        base = {("u8", "f32"): 0x20, ("f32", "u8"): 0x34, ("u8", "f16"): 0x21, ("f16", "u8"): 0x3B,
+                ("f16", "c10"): 0x3E, ("f16", "f16"): 0x15}.get((dfmt, sfmt))
         if base is None:
             return None
+        if (dfmt, sfmt) == ("f16", "f16"):
+            # 0x15 (pack half) and 0x38 (unpack half) share the form; float -> float takes rnd
+            a = [arg(ops[0], d.get("dmask", 15) << 7), arg(ops[1]), arg(ops[2]),
+                 A(0x10, {0: 0x3a, 1: 0x39, 2: 0x3b, 3: 0}[d.get("rnd", 0)])]
+            return [U(op, *a, f1=f1, f2=f2) for op in (0x15, 0x38)]
         a = [arg(ops[0], d.get("dmask", 15) << 7), arg(ops[1]), arg(ops[2])]
         if d.get("scale"):
             f2 |= 0x100
@@ -102,6 +112,10 @@ def useasm(x):
             return [U(op, A("c", 0, 0x10000), A(0xC, ops[0]["n"]), arg(ops[1]), arg(ops[2]), f1=f1, test=test)]
         test = d["cond"] | (d["type"] + 1) << 9
         return [U(op, *[arg(o) for o in ops], f1=f1, test=test)]
+    if n == "fmad16":
+        f1 |= 0x200 if d.get("rpt", 1) == 1 else d["rpt"] << 4
+        a = [arg(ops[0])] + [arg(o, d.get(f"swz{j}", 0) << 25) for j, o in enumerate(ops[1:])]
+        return [U(0x10, *a, f1=f1)]
     if n == "limm":
         return [U(0x9B, arg(ops[0]), A(8, ops[1]["n"]), f1=f1)]
     if n == "nop":

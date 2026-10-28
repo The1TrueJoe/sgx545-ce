@@ -247,6 +247,31 @@ lower_tex_derefs(struct sgx_ctx *c)
 }
 
 /* ------------------------------------------------------------------------
+ * float16 (mediump, from Mesa's precision lowering): comparisons of 16-bit
+ * values become comparisons of their f2f32 (the backend reads the F16
+ * halves directly as format-select operands), so booleans stay 32-bit */
+static bool
+widen_cmp16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if (!nir_alu_instr_is_comparison(alu) || nir_src_bit_size(alu->src[0].src) != 16)
+      return false;
+   b->cursor = nir_before_instr(&alu->instr);
+   for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++) {
+      nir_def *w = nir_f2f32(b, nir_ssa_for_alu_src(b, alu, i));
+      nir_src_rewrite(&alu->src[i].src, w);
+      for (unsigned c = 0; c < NIR_MAX_VEC_COMPONENTS; c++)
+         alu->src[i].swizzle[c] = c < w->num_components ? c : 0;
+   }
+   return true;
+}
+
+static bool
+vec_to_regs_32(const nir_instr *instr, unsigned wrmask, const void *data)
+{
+   return nir_instr_as_alu(instr)->def.bit_size == 32;
+}
+
+/* ------------------------------------------------------------------------
  * uniforms -> load_uniform with base = the constant number of the first
  * component. Each deref step adds vec4-aligned offsets (array elements,
  * struct members, matrix columns), unless the caller numbered that member
@@ -283,10 +308,12 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    char name[256];
    snprintf(name, sizeof name, "%s", var->name);
    unsigned k = var->data.driver_location;
+   unsigned prec = var->data.precision;
    const struct glsl_type *t = var->type;
    for (unsigned i = 1; path.path[i]; i++) {
       nir_deref_instr *p = path.path[i];
       if (p->deref_type == nir_deref_type_struct) {
+         prec = glsl_get_struct_field_data(t, p->strct.index)->precision;
          for (unsigned f = 0; f < p->strct.index; f++)
             k += slots4(glsl_get_struct_field(t, f));
          size_t l = strlen(name);
@@ -311,9 +338,36 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
       }
    }
    nir_deref_path_finish(&path);
+   /* the constants' format in SA, as the DDK loads them: F16 pairs for
+    * mediump (16-bit loads), C10 for lowp vectors used as F16, else f32 */
+   unsigned n = in->def.num_components, fmt = in->def.bit_size == 16 ? 2 : 1;
+   if (u->c->opts->verbose)
+      fprintf(stderr, "uniform %s: constant %u, %u x %u bits, precision %u\n", name, k, n, in->def.bit_size, prec);
+   if (fmt == 1 && u->c->p16 && prec == GLSL_PRECISION_LOW && !(k & 3)) {
+      /* every use an f2f16, and what those are read for at most xyz */
+      bool all16 = true;
+      unsigned read = 0;
+      nir_foreach_use_including_if(use, &in->def) {
+         nir_instr *ui = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
+         if (!ui || ui->type != nir_instr_type_alu ||
+             (nir_instr_as_alu(ui)->op != nir_op_f2f16 && nir_instr_as_alu(ui)->op != nir_op_f2fmp)) {
+            all16 = false;
+            break;
+         }
+         nir_alu_instr *cv = nir_instr_as_alu(ui);
+         unsigned r16 = nir_def_components_read(&cv->def);
+         for (unsigned j = 0; j < cv->def.num_components; j++)
+            if (r16 >> j & 1)
+               read |= 1u << cv->src[0].swizzle[j];
+      }
+      if (all16 && !(read & ~7u))
+         fmt = 3;
+   }
+   for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
+      u->c->const_fmt[k + j] = fmt == 3 && j == 3 ? 1 : fmt;
    b->cursor = nir_before_instr(&in->instr);
-   nir_def *v = nir_load_uniform(b, in->def.num_components, in->def.bit_size, nir_imm_int(b, 0),
-                                 .base = k, .range = in->def.num_components, .dest_type = nir_type_float32);
+   nir_def *v = nir_load_uniform(b, n, in->def.bit_size, nir_imm_int(b, 0), .base = k, .range = n,
+                                 .dest_type = in->def.bit_size == 16 ? nir_type_float16 : nir_type_float32);
    nir_def_replace(&in->def, v);
    return true;
 }
@@ -469,6 +523,33 @@ assign_io(struct sgx_ctx *c)
          if (var->data.location >= VARYING_SLOT_VAR0)
             map_varying(c->out_reg, var, c->vary, obase);
    } else {
+      /* in F16 mode, a varying every load of which is mediump is iterated as
+       * F16 (list A format 2: two components per register, as the DDK does) */
+      bool hp[128] = { 0 }, mp[128] = { 0 };
+      nir_foreach_function_impl(impl, s) {
+         nir_foreach_block(b, impl) {
+            nir_foreach_instr(instr, b) {
+               if (instr->type != nir_instr_type_intrinsic ||
+                   nir_instr_as_intrinsic(instr)->intrinsic != nir_intrinsic_load_interpolated_input)
+                  continue;
+               nir_io_semantics sem = nir_intrinsic_io_semantics(nir_instr_as_intrinsic(instr));
+               if (sem.location < 128)
+                  (sem.medium_precision ? mp : hp)[sem.location] = true;
+            }
+         }
+      }
+      bool set16[SGX_MAX_SETS] = { 0 };
+      if (c->p16) {
+         nir_foreach_shader_in_variable(var, s) {
+            char names[8][64];
+            unsigned l = var->data.location;
+            if (l < VARYING_SLOT_VAR0 || l >= 128 || !mp[l] || hp[l] || var_names(var, names, 8) != 1)
+               continue;
+            const struct sgx_varying *vy = find_varying(c->vary, names[0]);
+            if (vy && vy->rows == 1)
+               set16[vy->set] = true;
+         }
+      }
       /* varyings in PA in list A order: by set */
       int pbase[SGX_MAX_SETS];
       unsigned pa = 0;
@@ -482,8 +563,10 @@ assign_io(struct sgx_ctx *c)
             it->set = set;
             it->comps = vy->comps;
             it->pa = pa;
-            pbase[set] = pa;
-            pa += vy->comps;
+            it->f16 = set16[set];
+            /* F16: in_reg holds SGX_IN_HALF | the half index */
+            pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
+            pa += it->f16 ? (vy->comps + 1) / 2 : vy->comps;
          }
       }
       c->n_pa_inputs = pa;
@@ -554,6 +637,7 @@ sgx_lower(struct sgx_ctx *c)
       }
    } while (progress);
 
+   NIR_PASS(_, s, nir_shader_alu_pass, widen_cmp16_instr, nir_metadata_control_flow, NULL);
    NIR_PASS(_, s, nir_lower_int_to_float);
    NIR_PASS(_, s, nir_opt_copy_prop);
    NIR_PASS(_, s, nir_lower_bool_to_float, true);
@@ -563,7 +647,8 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_opt_dce);
 
    NIR_PASS(_, s, nir_convert_from_ssa, true, false);
-   NIR_PASS(_, s, nir_lower_vec_to_regs, NULL, NULL);
+   /* 16-bit vectors stay vecN: the backend packs F16 halves itself */
+   NIR_PASS(_, s, nir_lower_vec_to_regs, vec_to_regs_32, NULL);
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, nir_legacy_trivialize, true);
    nir_index_ssa_defs(nir_shader_get_entrypoint(s));

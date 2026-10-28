@@ -59,8 +59,10 @@ main(int argc, char **argv)
    int c;
 
    memset(&opts, 0, sizeof(opts));
-   while ((c = getopt(argc, argv, "vu:a:s:o:")) != -1) {
+   bool lowp16 = false;
+   while ((c = getopt(argc, argv, "vpu:a:s:o:")) != -1) {
       switch (c) {
+      case 'p': lowp16 = true; opts.f16 = true; break;
       case 'v': opts.verbose = true; break;
       case 'u': named(opts.uniforms, &opts.n_uniforms, optarg); break;
       case 'a': named(opts.attribs, &opts.n_attribs, optarg); break;
@@ -76,6 +78,7 @@ main(int argc, char **argv)
    memset(&so, 0, sizeof(so));
    so.glsl_version = 100;
    so.do_link = 0;
+   so.lower_precision = lowp16;   /* -p: mediump/lowp arithmetic in float16 */
 
    struct gl_context local_ctx;
    struct gl_context *ctx = &local_ctx;

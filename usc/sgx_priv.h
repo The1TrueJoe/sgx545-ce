@@ -37,6 +37,7 @@ struct sgx_ref {
    uint8_t comp;
    uint8_t neg : 1, abs : 1;
    uint8_t step : 1;    /* steps by one per iteration (else the same every iteration) */
+   uint8_t h16 : 1;     /* an F16 half: n (comp for vregs) counts halves, 2 * reg + half */
    uint8_t lane;        /* pck .l<n> */
    uint32_t n;
 };
@@ -71,7 +72,8 @@ struct sgx_ins {
 };
 
 struct sgx_vreg {
-   unsigned size;
+   unsigned size;       /* registers, or halves for a 16-bit vreg */
+   bool half;
    int phys;
    int first, last;     /* live range in ins ips, -1 = unused */
 };
@@ -80,6 +82,7 @@ struct sgx_iter {
    unsigned set, comps, pa;
    bool sample;         /* non-dependent sample entry (list A) */
    bool proj;           /* ... iterated projected (x/w, y/w) */
+   bool f16;            /* iterated as F16 (mediump), two components per register */
    unsigned sampler;
 };
 
@@ -92,6 +95,7 @@ struct sgx_sample {
    int coord_pa;        /* ... and its plain iteration, -1 none */
    unsigned pa;         /* where the PDS leaves the raw texel (RGBA8, unpacked in place) */
    unsigned lod;        /* dependent: 0 none, 1 bias, 2 replace */
+   bool f16;            /* unpacked to F16 (two channels per register), else left as RGBA8 */
    struct sgx_ins *ins; /* dependent: the SAMPLE pseudo-instruction (dst raw, coord, lod) */
 };
 
@@ -108,6 +112,7 @@ struct sgx_ctx {
    /* register per I/O component: [location * 4 + component] (VARYING_SLOT_* /
     * VERT_ATTRIB_*), -1 none */
    int in_reg[512], out_reg[512];
+#define SGX_IN_HALF 0x10000      /* in_reg: an F16-iterated component, low bits = its half */
    struct sgx_iter iters[16];
    unsigned n_iters;
    unsigned n_pa_inputs;
@@ -121,7 +126,9 @@ struct sgx_ctx {
 
    /* uniforms */
    uint8_t const_used[1024];
+   uint8_t const_fmt[1024];      /* 1 f32 (list C kind 1), 2 f16 (kind 2), 3 c10 (kind 3) */
    int const_slot[1024];
+   uint8_t const_shift[1024];    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
    unsigned n_sa;
    unsigned sa_base;
 
@@ -130,11 +137,14 @@ struct sgx_ctx {
    bool has_color;
    int keep_vreg;                /* discard: 1.0 = keep, -1 none */
    bool discards;
+   bool keep_pred;               /* the single discard wrote p1 (= keep) itself */
+   bool p16;                     /* mediump in F16, as the DDK computes it */
    unsigned colour_pa;
    struct sgx_sample *samples[16];
    unsigned n_samples;
 
    struct set *skip;             /* NIR instructions the backend doesn't emit */
+   struct nir_alu_instr *discard_cmp; /* the one discard's comparison (p1 directly) */
    struct hash_table *proj;      /* nir_tex_instr -> its projected varying load */
 
    /* results */

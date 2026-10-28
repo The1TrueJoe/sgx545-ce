@@ -197,18 +197,25 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
             u16(&b, it->proj ? 1 : 0); u16(&b, it->sampler); u16(&b, it->set + 1); u16(&b, 0); u16(&b, 0); u16(&b, 1);
             n_pa = MAX2(n_pa, it->pa + 1);
          } else {
-            u16(&b, 4); u16(&b, 0); u16(&b, it->set + 1); u16(&b, it->comps); u16(&b, 1); u16(&b, it->comps);
-            n_pa = MAX2(n_pa, it->pa + it->comps);
+            unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
+            u16(&b, 4); u16(&b, 0); u16(&b, it->set + 1); u16(&b, it->comps); u16(&b, it->f16 ? 2 : 1); u16(&b, regs);
+            n_pa = MAX2(n_pa, it->pa + regs);
          }
          n_a++;
       }
       n_pa = MAX2(n_pa, c->colour_pa + 1);
    }
-   /* list C: constant k -> sa slot, one f32 each */
+   /* list C: constant k -> sa slot: kind 1 f32, 2 F16 half (shift 0/16),
+    * 3 C10 channel (10-byte record: kind, k, 0, slot, shift) */
    for (unsigned k = 0; k < ARRAY_SIZE(c->const_used); k++) {
       if (c->const_slot[k] < 0)
          continue;
-      u16(&b, 1); u16(&b, k); u16(&b, c->const_slot[k]); u16(&b, 0);
+      unsigned fmt = c->const_fmt[k] ? c->const_fmt[k] : 1;
+      if (fmt == 3) {
+         u16(&b, 3); u16(&b, k); u16(&b, 0); u16(&b, c->const_slot[k]); u16(&b, c->const_shift[k]);
+      } else {
+         u16(&b, fmt); u16(&b, k); u16(&b, c->const_slot[k]); u16(&b, c->const_shift[k]);
+      }
    }
    /* no secondary update program; vertex: the live input mask */
    uint32_t inmask[4] = { 0 };
@@ -332,6 +339,7 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
    unsigned n_c = 0;
    for (unsigned k = 0; k < ARRAY_SIZE(c->const_used); k++)
       n_c += c->const_slot[k] >= 0;
+   unsigned n_slots = c->n_sa;
    put32(&b, 0x00, 0x55535020);
    put32(&b, 0x04, 0x23);
    put32(&b, 0x08, b.d.size - 12);
@@ -362,7 +370,7 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
    put16(&b, 0x76, c->discards ? 4 : 0xffff);
    put16(&b, 0x78, c->discards ? 5 : 0xffff);
    put16(&b, 0x7a, 0xffff);
-   put16(&b, 0x7e, n_c);
+   put16(&b, 0x7e, n_slots);
    put16(&b, 0x80, n_inmask);
    put16(&b, 0x82, 0x80);
 

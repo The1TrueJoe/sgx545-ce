@@ -51,6 +51,9 @@ struct sgx_compile_options {
    unsigned n_samplers;
    struct sgx_named samplers[SGX_MAX_NAMED];
    bool verbose;
+   /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
+    * F16 iteration, fmad16, F16/C10 uniforms, as the DDK does */
+   bool f16;
 };
 
 /* varying -> texture coordinate set (sgx_assign_varyings) */

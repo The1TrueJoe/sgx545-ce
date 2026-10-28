@@ -72,7 +72,7 @@ def pins(d, name, stage):
     return [f"{stage}:{u}={k}" for u, k in run_corpus.calib_pins(p).items()]
 
 
-def build(sgxc, out, progs, which):
+def build(sgxc, out, progs, which, f16=False):
     d = os.path.join(out, which)
     work = os.path.join(d, "work")
     os.makedirs(work, exist_ok=True)
@@ -86,8 +86,17 @@ def build(sgxc, out, progs, which):
             args += ["-a", f"{a}={k}"]
         for p in pins(os.path.join(out, "f"), name, "frag") + pins(os.path.join(out, "v"), name, "vert"):
             args += ["-u", p]
-        r = subprocess.run(args + ["-o", base, base + ".vert", base + ".frag"], capture_output=True, text=True)
         kind = "frag" if which == "f" else "vert"
+        # mediump fragment shaders in F16, as the DDK computes them; the vertex
+        # shader (the other stage here) in F32
+        if f16 and kind == "frag":
+            rv = subprocess.run(args + ["-o", base, base + ".vert", base + ".frag"], capture_output=True, text=True)
+            args = args + ["-p"]
+            if rv.returncode == 0:
+                os.replace(base + ".vert.usp", base + ".vert.usp.f32")
+        r = subprocess.run(args + ["-o", base, base + ".vert", base + ".frag"], capture_output=True, text=True)
+        if f16 and kind == "frag" and os.path.exists(base + ".vert.usp.f32"):
+            os.replace(base + ".vert.usp.f32", base + ".vert.usp")
         ok = r.returncode == 0
         if ok:
             os.replace(f"{base}.{kind}.usp", os.path.join(d, f"{i:03d}-{name}.usp"))
@@ -103,6 +112,7 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--calibrate", action="store_true")
     ap.add_argument("--draw", action="store_true")
+    ap.add_argument("--f16", action="store_true", help="fragment shaders in F16 (sgxc -p)")
     a = ap.parse_args()
     src = open(os.path.join(HERE, "mc.glsl")).read()
     sh = {}
@@ -110,13 +120,13 @@ def main():
         sh.setdefault(m.group(2), {})[m.group(1)] = m.group(3)
     progs = [(n, s["vert"], s["frag"]) for n, s in sh.items()]
     for w in ("f", "v"):
-        build(a.sgxc, a.out, progs, w)
+        build(a.sgxc, a.out, progs, w, a.f16)
     if a.calibrate:
         for w in ("f", "v"):
             subprocess.run([sys.executable, "-I", os.path.join(USC, "hw", "calib.py"), a.sgxc,
                             os.path.join(a.out, w)], check=True)
         for w in ("f", "v"):
-            build(a.sgxc, a.out, progs, w)
+            build(a.sgxc, a.out, progs, w, a.f16)
     if a.draw:
         for w in ("f", "v"):
             for st in ("one", "both"):
