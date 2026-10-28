@@ -326,7 +326,7 @@ PVRMMapOSMemHandleToMMapData(PVRSRV_PER_PROCESS_DATA *psPerProc,
 	   PVR_ASSERT(*pui32RealByteSize == psOffsetStruct->ui32RealByteSize);
 	   
 	   *pui32MMapOffset = psOffsetStruct->ui32MMapOffset;
-	   *pui32UserVAddr = psOffsetStruct->ui32UserVAddr;
+	   *pui32UserVAddr = (IMG_UINT32)psOffsetStruct->ulUserVAddr;
 	   psOffsetStruct->ui32RefCount++;
 
 	   eError = PVRSRV_OK;
@@ -429,9 +429,9 @@ PVRMMapReleaseMMapData(PVRSRV_PER_PROCESS_DATA *psPerProc,
 
 	    psOffsetStruct->ui32RefCount--;
 
-	    *pbMUnmap = (IMG_BOOL)((psOffsetStruct->ui32RefCount == 0) && (psOffsetStruct->ui32UserVAddr != 0));
+	    *pbMUnmap = (IMG_BOOL)((psOffsetStruct->ui32RefCount == 0) && (psOffsetStruct->ulUserVAddr != 0));
 
-	    *pui32UserVAddr = (*pbMUnmap) ? psOffsetStruct->ui32UserVAddr : 0;
+	    *pui32UserVAddr = (*pbMUnmap) ? (IMG_UINT32)psOffsetStruct->ulUserVAddr : 0;
 	    *pui32RealByteSize = (*pbMUnmap) ? psOffsetStruct->ui32RealByteSize : 0;
 
 	    eError = PVRSRV_OK;
@@ -525,7 +525,7 @@ DoMapToUser(LinuxMemArea *psLinuxMemArea,
 
     {
         
-        IMG_UINT32 ulVMAPos;
+        unsigned long ulVMAPos;	/* a user address: above 4 GB for a native 64-bit client */
 	IMG_UINT32 ui32ByteEnd = ui32ByteOffset + ui32ByteSize;
 	IMG_UINT32 ui32PA;
 #if defined(PVR_MAKE_ALL_PFNS_SPECIAL)
@@ -656,7 +656,7 @@ MMapVCloseNoLock(struct vm_area_struct* ps_vma)
     {
 	if (psOffsetStruct->ui32RefCount != 0)
 	{
-	        PVR_DPF((PVR_DBG_MESSAGE, "%s: psOffsetStruct %p has non-zero reference count (ui32RefCount = %u). User mode address of start of mapping: 0x%x", __FUNCTION__, psOffsetStruct, psOffsetStruct->ui32RefCount, psOffsetStruct->ui32UserVAddr));
+	        PVR_DPF((PVR_DBG_MESSAGE, "%s: psOffsetStruct %p has non-zero reference count (ui32RefCount = %u). User mode address of start of mapping: 0x%lx", __FUNCTION__, psOffsetStruct, psOffsetStruct->ui32RefCount, psOffsetStruct->ulUserVAddr));
 	}
 
 	DestroyOffsetStruct(psOffsetStruct);
@@ -773,9 +773,9 @@ PVRMMap(struct file* pFile, struct vm_area_struct* ps_vma)
         goto unlock_and_return;
     }
     
-    PVR_ASSERT(psOffsetStruct->ui32UserVAddr == 0)
+    PVR_ASSERT(psOffsetStruct->ulUserVAddr == 0)
 
-    psOffsetStruct->ui32UserVAddr = ps_vma->vm_start;
+    psOffsetStruct->ulUserVAddr = ps_vma->vm_start;
 
     
     if(psOffsetStruct->psLinuxMemArea->bNeedsCacheInvalidate)
@@ -900,11 +900,11 @@ static void ProcSeqShowMMapRegistrations(struct seq_file *sfile, void *el)
 
 	seq_printf( sfile,
 #if !defined(DEBUG_LINUX_XML_PROC_FILES)
-						"%-8p       %08x %-8p %08x %08x   %-8d   %-24s %-5u %-8s %08x(%s)\n",
+						"%-8p       %08lx %-8p %08x %08x   %-8d   %-24s %-5u %-8s %08x(%s)\n",
 #else
                         "<mmap_record>\n"
 						"\t<pointer>%-8p</pointer>\n"
-                        "\t<user_virtual>%-8x</user_virtual>\n"
+                        "\t<user_virtual>%-8lx</user_virtual>\n"
                         "\t<kernel_virtual>%-8p</kernel_virtual>\n"
                         "\t<cpu_physical>%08x</cpu_physical>\n"
                         "\t<mmap_offset>%08x</mmap_offset>\n"
@@ -917,7 +917,7 @@ static void ProcSeqShowMMapRegistrations(struct seq_file *sfile, void *el)
                         "</mmap_record>\n",
 #endif
                         psLinuxMemArea,
-						psOffsetStruct->ui32UserVAddr + ui32ByteOffset,
+						psOffsetStruct->ulUserVAddr + ui32ByteOffset,
 						LinuxMemAreaToCpuVAddr(psLinuxMemArea),
                         LinuxMemAreaToCpuPAddr(psLinuxMemArea,0).uiAddr,
 						psOffsetStruct->ui32MMapOffset,

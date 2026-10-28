@@ -2213,14 +2213,14 @@ typedef struct _sWrapMemInfo_
     IMG_SYS_PHYADDR *psPhysAddr;
     IMG_INT iPageOffset;
 #if defined(DEBUG)
-    IMG_UINT32 ulStartAddr;
-    IMG_UINT32 ulBeyondEndAddr;
+    unsigned long ulStartAddr;
+    unsigned long ulBeyondEndAddr;
     struct vm_area_struct *psVMArea;
 #endif
 } sWrapMemInfo;
 
 
-static IMG_BOOL CPUVAddrToPFN(struct vm_area_struct *psVMArea, IMG_UINT32 ulCPUVAddr, IMG_UINT32 *pulPFN, struct page **ppsPage)
+static IMG_BOOL CPUVAddrToPFN(struct vm_area_struct *psVMArea, unsigned long ulCPUVAddr, IMG_UINT32 *pulPFN, struct page **ppsPage)
 {
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,10))
     IMG_BOOL bRet = IMG_FALSE;
@@ -2344,13 +2344,18 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
                                     IMG_SYS_PHYADDR *psSysPAddr,
                                     IMG_HANDLE *phOSWrapMem)
 {
-    IMG_UINT32 ulStartAddrOrig = (IMG_UINT32) pvCPUVAddr;
-    IMG_UINT32 ulAddrRangeOrig = (IMG_UINT32) ui32Bytes;
-    IMG_UINT32 ulBeyondEndAddrOrig = ulStartAddrOrig + ulAddrRangeOrig;
-    IMG_UINT32 ulStartAddr;
-    IMG_UINT32 ulAddrRange;
-    IMG_UINT32 ulBeyondEndAddr;
-    IMG_UINT32 ulAddr;
+    /*
+     * User addresses: unsigned long, not IMG_UINT32. A native x86_64 client
+     * wraps memory above 4 GB, and a truncated address would have
+     * get_user_pages() pin whatever happens to sit at the low 32 bits.
+     */
+    unsigned long ulStartAddrOrig = (unsigned long) pvCPUVAddr;
+    unsigned long ulAddrRangeOrig = (unsigned long) ui32Bytes;
+    unsigned long ulBeyondEndAddrOrig = ulStartAddrOrig + ulAddrRangeOrig;
+    unsigned long ulStartAddr;
+    unsigned long ulAddrRange;
+    unsigned long ulBeyondEndAddr;
+    unsigned long ulAddr;
     IMG_INT i;
     struct vm_area_struct *psVMArea;
     sWrapMemInfo *psInfo = NULL;
@@ -2369,7 +2374,7 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
     if (ulBeyondEndAddr <= ulStartAddr)
     {
         PVR_DPF((PVR_DBG_ERROR,
-            "OSAcquirePhysPageAddr: Invalid address range (start %x, length %x)",
+            "OSAcquirePhysPageAddr: Invalid address range (start %lx, length %lx)",
 		ulStartAddrOrig, ulAddrRangeOrig));
         goto error;
     }
@@ -2473,7 +2478,7 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
     if (psVMArea == NULL)
     {
         PVR_DPF((PVR_DBG_ERROR,
-            "OSAcquirePhysPageAddr: Couldn't find memory region containing start address %x", ulStartAddrOrig));
+            "OSAcquirePhysPageAddr: Couldn't find memory region containing start address %lx", ulStartAddrOrig));
         
         goto error;
     }
@@ -2485,7 +2490,7 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
     if (ulStartAddrOrig < psVMArea->vm_start)
     {
         PVR_DPF((PVR_DBG_ERROR,
-            "OSAcquirePhysPageAddr: Start address %x is outside of the region returned by find_vma", ulStartAddrOrig));
+            "OSAcquirePhysPageAddr: Start address %lx is outside of the region returned by find_vma", ulStartAddrOrig));
         goto error;
     }
 
@@ -2493,7 +2498,7 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
     if (ulBeyondEndAddrOrig > psVMArea->vm_end)
     {
         PVR_DPF((PVR_DBG_ERROR,
-            "OSAcquirePhysPageAddr: End address %x is outside of the region returned by find_vma", ulBeyondEndAddrOrig));
+            "OSAcquirePhysPageAddr: End address %lx is outside of the region returned by find_vma", ulBeyondEndAddrOrig));
         goto error;
     }
 
@@ -2711,7 +2716,7 @@ IMG_VOID *FindMMapBaseVAddr(struct list_head *psMMapOffsetStructList,
 		if(OSGetCurrentProcessIDKM() != psOffsetStruct->ui32PID)
 			continue;
 
-		pvMinVAddr = (IMG_VOID *)psOffsetStruct->ui32UserVAddr;
+		pvMinVAddr = (IMG_VOID *)psOffsetStruct->ulUserVAddr;
 
 		
 		if(pvRangeAddrStart >= pvMinVAddr &&
