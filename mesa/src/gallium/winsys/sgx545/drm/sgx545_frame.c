@@ -144,18 +144,22 @@ static void
 ring_mark(struct sgxws_ring *r)
 {
    r->mark = r->used;
+   r->part = ((r->bo.b.size - r->mark) / SGXWS_SLOTS) & ~0xffu;
+   r->hi = r->mark + r->part;
 }
 
+/* record into slot k: what the frame there before wrote is done with */
 static void
-ring_reset(struct sgxws_ring *r)
+ring_use_slot(struct sgxws_ring *r, unsigned k)
 {
-   r->used = r->mark;
+   r->used = r->mark + k * r->part;
+   r->hi = r->used + r->part;
 }
 
 static uint32_t
 ring_room(const struct sgxws_ring *r)
 {
-   return r->bo.b.size - r->used;
+   return (r->hi ? r->hi : r->bo.b.size) - r->used;
 }
 
 /* where something landed: device address and CPU pointer */
@@ -170,7 +174,7 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
    struct sgxws_ptr p;
    uint32_t o = (r->used + align - 1) & ~(align - 1);
 
-   if (o + size > r->bo.b.size) {
+   if (o + size > (r->hi ? r->hi : r->bo.b.size)) {
       /* sgxws_draw keeps the frame rings from filling; this is a bug */
       ws_err("ring at %#x full (%#x + %#x)\n", r->bo.va, o, size);
       abort();
@@ -548,11 +552,11 @@ sgxws_ctx_create(struct sgxws_dev *d)
        /* the frame rings hold a whole frame of Minecraft (~1500 draws, ~100K
         * vertices): a ring that fills submits the frame so far and waits for
         * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
-       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x200000) ||
-       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x200000) ||
-       ring_init(d, &c->gen, H_GENERAL, 0x1800000) ||
-       ring_init(d, &c->vdm, H_GENERAL, 0x80000) ||
-       ring_init(d, &c->usse_frame, H_PIXSHADER, 0x4000))
+       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + SGXWS_SLOTS * 0x200000) ||
+       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000 + SGXWS_SLOTS * 0x200000) ||
+       ring_init(d, &c->gen, H_GENERAL, 0x80000 + SGXWS_SLOTS * 0x1000000) ||
+       ring_init(d, &c->vdm, H_GENERAL, SGXWS_SLOTS * 0x80000 + 0x1000) ||
+       ring_init(d, &c->usse_frame, H_PIXSHADER, SGXWS_SLOTS * 0x4000 + 0x1000))
       goto fail;
 
    /* fixed USSE programs */
@@ -622,6 +626,8 @@ sgxws_ctx_create(struct sgxws_dev *d)
    ring_mark(&c->pds_pix);
    ring_mark(&c->pds_vtx);
    ring_mark(&c->gen);
+   ring_mark(&c->vdm);
+   ring_mark(&c->usse_frame);
    return c;
 
 fail:
@@ -635,7 +641,8 @@ sgxws_ctx_destroy(struct sgxws_ctx *c)
 {
    int e;
 
-   sgxws_flush(c, 2000);
+   sgxws_flush(c, 0);
+   sgxws_wait_idle(c, 2000);
    if ((e = pvr_unregister_render_ctx(&c->dev->pvr, c->hwctx)))
       ws_err("SGX_UNREGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
    /* the rest of the device memory goes with the services connection (resman) */
@@ -805,7 +812,8 @@ sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *s)
          ws_err("SGX_FLUSH_HW_RENDER_TARGET %#x failed: %d\n", s->rtdata.va, e);
    }
    if (c->rt == s)
-      sgxws_flush(c, 2000);
+      sgxws_flush(c, 0);
+   sgxws_wait_idle(c, 2000);
    /* The kernel-data structures stay allocated: the microkernel may still
     * hold pointers into them (re/gen/GEN.md, "Layout"). */
    sgxws_bo_free(c->dev, &s->tailptr);
@@ -954,13 +962,10 @@ sgxws_recording(struct sgxws_ctx *c)
 int
 sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target *t)
 {
-   uint32_t pixev, rows;
-   uint32_t *rd;
-
    if (c->rt == rt && c->target.va == t->va)
       return 0;
    if (c->rt) {
-      int e = sgxws_flush(c, 2000);
+      int e = sgxws_flush(c, 0);
 
       if (e)
          return e;
@@ -970,12 +975,10 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target 
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
 
-   pixev = pixel_event(c, eot_program(c), &rows);
+   /* the render details are the target's: written at the kick, once its
+    * previous render is done */
+   c->pixev = pixel_event(c, eot_program(c), &c->pixev_rows);
    background(c);
-   rd = rt->rd.map;
-   rd[0x5c / 4] = pixev;
-   rd[0x60 / 4] = rows;
-   rt->rd_w4.map[0] = c->bg_pds[2];
    return 0;
 }
 
@@ -1083,7 +1086,7 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    if (frame_has_room(c, vertex_bytes))
       return 0;
    c->room_flushes++;
-   if ((e = sgxws_flush(c, 2000)))
+   if ((e = sgxws_flush(c, 0)))
       return e;
    if ((e = sgxws_begin(c, rt, &t)))
       return e;
@@ -1367,39 +1370,107 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    s->hwsync_access.map[0] = 1;
 }
 
-static int
-wait_render(struct sgxws_ctx *c, unsigned ms)
+static bool
+token_done(const struct sgxws_token *t)
 {
-   volatile PVRSRV_SYNC_DATA *sd = c->target.sync_data;
-   unsigned t = 0;
+   return !t->sd || (int32_t)(t->sd->ui32WriteOpsComplete - t->value) >= 0;
+}
 
-   if (!sd)
-      return 0;
-   while (sd->ui32WriteOpsComplete < sd->ui32WriteOpsPending && t < ms * 10) {
+/* poll a render's completion, as the DDK's client waits (0.1 ms steps) */
+static int
+token_wait(struct sgxws_token *t, unsigned ms)
+{
+   unsigned n = 0;
+
+   while (!token_done(t) && n < ms * 10) {
       struct timespec ts = { 0, 100000 };
 
       nanosleep(&ts, NULL);
-      t++;
+      n++;
    }
-   if (c->dev->verbose)
-      ws_err("render target write ops %u/%u after %u.%u ms\n", sd->ui32WriteOpsComplete,
-             sd->ui32WriteOpsPending, t / 10, t % 10);
-   return sd->ui32WriteOpsComplete < sd->ui32WriteOpsPending ? -ETIMEDOUT : 0;
+   if (!token_done(t))
+      return -ETIMEDOUT;
+   t->sd = NULL;
+   return 0;
 }
 
+/* wait for the render that last used ring slot i */
+static int
+slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
+{
+   struct sgxws_token *t = &c->slot_token[i];
+
+   if (token_wait(t, ms))
+      return -ETIMEDOUT;
+   if ((int32_t)(t->seq - c->done_seq) > 0)
+      c->done_seq = t->seq;
+   return 0;
+}
+
+uint32_t
+sgxws_done_seq(struct sgxws_ctx *c)
+{
+   for (unsigned i = 0; i < SGXWS_SLOTS; i++)
+      if (token_done(&c->slot_token[i]))
+         slot_wait(c, i, 0);
+   return c->done_seq;
+}
+
+int
+sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms)
+{
+   int e = 0;
+
+   for (unsigned i = 0; i < SGXWS_SLOTS; i++)
+      if (slot_wait(c, i, timeout_ms))
+         e = -ETIMEDOUT;
+   return e;
+}
+
+int
+sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms)
+{
+   struct sgxws_token t = { sd, sd ? sd->ui32WriteOpsPending : 0 };
+
+   return token_wait(&t, timeout_ms);
+}
+
+/*
+ * Submitting a frame doesn't wait for its render: the next frame records into
+ * the next ring slot meanwhile, as the DDK overlaps the CPU's next frame with
+ * the GPU's last.  What the CPU must not touch while a render runs:
+ *  - the ring slot it was recorded in, until it is done (the slot is used
+ *    again SGXWS_SLOTS submissions later);
+ *  - its render target's structures (render details, region headers, sync
+ *    lists): the next frame into the same target is kicked once the one
+ *    before is done, so a target has one render in flight.
+ * Different targets (the back buffer, then the swap's copy to fb0) are in
+ * flight together; the microkernel runs them in order.
+ */
 int
 sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
 {
    struct sgxws_rt *s = c->rt;
+   struct sgxws_token done = { NULL, 0 };
    SGX_CCB_KICK k;
    IMG_HANDLE dst[1];
-   uint32_t woff = c->ccb_woff;
+   uint32_t woff = c->ccb_woff, *rd;
    int e;
 
    if (!s)
       return 0;
 
    vdm_end(c);
+   /* the target's previous render reads its render details until it is
+    * done; its slot's token is that render's until the slot is used again,
+    * which waits for it */
+   if ((int32_t)(s->seq - c->done_seq) > 0 && c->slot_token[s->seq_slot].seq == s->seq &&
+       slot_wait(c, s->seq_slot, 2000))
+      ws_err("the target's last render did not finish\n");
+   rd = s->rd.map;
+   rd[0x5c / 4] = c->pixev;
+   rd[0x60 / 4] = c->pixev_rows;
+   s->rd_w4.map[0] = c->bg_pds[2];
    ta_command(c, c->ccb.map + woff / 4);
 
    memset(&k, 0, sizeof(k));
@@ -1421,11 +1492,22 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
       e = pvr_kick_traced(&c->dev->pvr, &k, 0);     /* traced, not sent */
    } else {
       e = pvr_kick(&c->dev->pvr, &k);
-      if (e)
+      if (e) {
          ws_err("SGX_DOKICK failed: %d\n", e);
-      else
-         e = wait_render(c, timeout_ms);
+      } else if (c->target.sync_data) {
+         /* the kick counted one more pending write on the target */
+         done.sd = c->target.sync_data;
+         done.value = c->target.sync_data->ui32WriteOpsPending;
+      }
    }
+   done.seq = ++c->kicks;
+   if (!done.sd && (int32_t)(done.seq - c->done_seq) > 0)
+      c->done_seq = done.seq;             /* nothing to wait for */
+   s->seq = done.seq;
+   s->seq_slot = c->slot;
+   c->slot_token[c->slot] = done;
+   if (!e && timeout_ms)
+      e = slot_wait(c, s->seq_slot, timeout_ms);
    if (!e && c->dev->frame_gap_us) {
       struct timespec ts = { 0, (long)c->dev->frame_gap_us * 1000 };
 
@@ -1438,12 +1520,15 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    s->frames++;
    c->frames++;
    c->rt = NULL;
-   /* the render has finished (or the GPU is gone): the frame's memory is free */
-   ring_reset(&c->pds_pix);
-   ring_reset(&c->pds_vtx);
-   ring_reset(&c->gen);
-   ring_reset(&c->vdm);
-   ring_reset(&c->usse_frame);
+   /* the next frame records into the next slot, once the render there is done */
+   c->slot = (c->slot + 1) % SGXWS_SLOTS;
+   if (slot_wait(c, c->slot, 2000) && !e)
+      e = -ETIMEDOUT;
+   ring_use_slot(&c->pds_pix, c->slot);
+   ring_use_slot(&c->pds_vtx, c->slot);
+   ring_use_slot(&c->gen, c->slot);
+   ring_use_slot(&c->vdm, c->slot);
+   ring_use_slot(&c->usse_frame, c->slot);
    return e;
 }
 

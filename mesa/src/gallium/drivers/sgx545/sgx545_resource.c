@@ -173,8 +173,14 @@ sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 
    if (res->bo.b.mem) {
       simple_mtx_lock(&screen->lock);
+      /* renders in flight may still use it (and a target's last render keeps
+       * a pointer to its sync data) */
+      if (screen->hw)
+         sgxws_wait_idle(screen->hw, 2000);
       pvr_unmap(&screen->dev.pvr, &res->sync_map);
       sgxws_bo_free(&screen->dev, &res->bo);
+      if (res->alt.b.mem)
+         sgxws_bo_free(&screen->dev, &res->alt);
       simple_mtx_unlock(&screen->lock);
    }
    if (res->data)
@@ -211,14 +217,15 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
    /* A render target the frame being recorded writes: the CPU sees it once
     * the render is done.  Everything else is either CPU memory or idle (the
     * driver waits for every render). */
-   if (res->bo.va && !res->texture && !(usage & PIPE_MAP_UNSYNCHRONIZED))
+   if (res->bo.va && !res->texture && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
       sgx545_flush_resource_writes(ctx, res);
-   /* a texture written while a frame is recorded: that frame may sample the
-    * old contents, so it goes first */
-   if (res->texture && (usage & PIPE_MAP_WRITE) && ctx->recording) {
-      ctx->stats.tex_flushes += ctx->stats.on;
-      sgx545_flush_frame(ctx);
+      /* and the renders already submitted into it */
+      if (res->sync_data && sgxws_wait_sync(res->sync_data, 2000))
+         fprintf(stderr, "sgx545: a render into a mapped buffer did not finish\n");
    }
+   /* A texture write lands in the CPU copy; the unmap puts it on the device
+    * copy, or on a second one when a render may still sample the first
+    * (tex_write) */
 
    trans = slab_zalloc(&ctx->transfer_pool);
    if (!trans)
@@ -250,6 +257,76 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
 }
 
 static void
+alt_dirty_add(struct sgx545_resource *res, unsigned level, unsigned x0, unsigned y0, unsigned x1,
+              unsigned y1)
+{
+   if (!res->alt.va || res->n_alt_dirty == SGX545_ALT_ALL)
+      return;
+   if (res->n_alt_dirty == ARRAY_SIZE(res->alt_dirty)) {
+      res->n_alt_dirty = SGX545_ALT_ALL;
+      return;
+   }
+   res->alt_dirty[res->n_alt_dirty].level = level;
+   res->alt_dirty[res->n_alt_dirty].x0 = x0;
+   res->alt_dirty[res->n_alt_dirty].y0 = y0;
+   res->alt_dirty[res->n_alt_dirty].x1 = MIN2(x1, 0xffff);
+   res->alt_dirty[res->n_alt_dirty].y1 = MIN2(y1, 0xffff);
+   res->n_alt_dirty++;
+}
+
+/*
+ * A write to a texture's level box (already in the CPU copy) onto the device
+ * copy.  Minecraft animates sprites of its block atlas every tick (water,
+ * lava, fire) while the frames before still sample the atlas: writing under
+ * a render in flight would show half-updated sprites, and waiting for the GPU
+ * at every tick threw the CPU/GPU overlap away.  So a busy copy is left to
+ * its renders and the other copy takes over, brought up to date from the
+ * CPU copy first.
+ */
+static void
+tex_write(struct sgx545_context *ctx, struct sgx545_resource *res, unsigned level, unsigned x0,
+          unsigned y0, unsigned x1, unsigned y1)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+   uint32_t done = ctx->hw ? sgxws_done_seq(ctx->hw) : 0;
+
+   if (ctx->hw && sgxws_seq_after(res->use_seq, done)) {
+      struct sgxws_bo b;
+      uint32_t u;
+
+      if (!res->alt.va) {
+         simple_mtx_lock(&screen->lock);
+         if (sgxws_bo_alloc(&screen->dev, &res->alt, SGX545_HEAP_TEXTURE, 0x3,
+                            align(MAX2(sgx545_tex_size(&res->base), 1), 4096), 0x1000))
+            memset(&res->alt, 0, sizeof(res->alt));
+         simple_mtx_unlock(&screen->lock);
+         res->n_alt_dirty = SGX545_ALT_ALL;
+         res->alt_use_seq = 0;
+      }
+      if (!res->alt.va || sgxws_seq_after(res->alt_use_seq, done)) {
+         /* no second copy, or both busy: wait for the renders */
+         ctx->stats.tex_flushes += ctx->stats.on;
+         sgx545_finish(ctx);
+      }
+      if (res->alt.va) {
+         b = res->bo, res->bo = res->alt, res->alt = b;
+         u = res->use_seq, res->use_seq = res->alt_use_seq, res->alt_use_seq = u;
+         if (res->n_alt_dirty == SGX545_ALT_ALL) {
+            for (unsigned l = 0; l <= res->base.last_level; l++)
+               sgx545_tex_encode_level(res, l);
+         } else {
+            for (unsigned i = 0; i < res->n_alt_dirty; i++)
+               sgx545_tex_encode_box(res, res->alt_dirty[i].level, res->alt_dirty[i].x0,
+                                     res->alt_dirty[i].y0, res->alt_dirty[i].x1, res->alt_dirty[i].y1);
+         }
+         res->n_alt_dirty = 0;
+      }
+   }
+   sgx545_tex_encode_box(res, level, x0, y0, x1, y1);
+   alt_dirty_add(res, level, x0, y0, x1, y1);
+}
+
+static void
 sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
 {
    struct sgx545_context *ctx = sgx545_context(pctx);
@@ -260,8 +337,8 @@ sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    if (res->texture && (ptrans->usage & PIPE_MAP_WRITE)) {
       uint64_t t = ctx->stats.on ? os_time_get_nano() : 0;
 
-      sgx545_tex_encode_box(res, ptrans->level, ptrans->box.x, ptrans->box.y,
-                            ptrans->box.x + ptrans->box.width, ptrans->box.y + ptrans->box.height);
+      tex_write(ctx, res, ptrans->level, ptrans->box.x, ptrans->box.y,
+                ptrans->box.x + ptrans->box.width, ptrans->box.y + ptrans->box.height);
       if (ctx->stats.on) {
          ctx->stats.tex_ns += os_time_get_nano() - t;
          ctx->stats.tex_writes++;

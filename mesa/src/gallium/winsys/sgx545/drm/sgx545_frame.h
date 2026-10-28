@@ -87,9 +87,21 @@ struct sgxws_bo {
 };
 
 /* a bump allocator inside one device allocation; reset() returns to mark */
+/* A ring: the persistent part up to mark, then SGXWS_SLOTS equal parts,
+ * one per frame in flight; a frame records into the part [lo, hi). */
+#define SGXWS_SLOTS 3
+
 struct sgxws_ring {
    struct sgxws_bo bo;
    uint32_t used, mark;
+   uint32_t part, hi;
+};
+
+/* a submitted render: done when its sync's completed writes reach value */
+struct sgxws_token {
+   volatile PVRSRV_SYNC_DATA *sd;
+   uint32_t value;
+   uint32_t seq;                    /* the context's kick number (renders finish in order) */
 };
 
 struct sgxws_rt_numbers {
@@ -104,6 +116,8 @@ struct sgxws_rt {
    struct sgxws_bo rtdata, rtword, entword[2], tailptr, ta40, ta50, rgn[2], ta88[2], bgblock;
    struct sgxws_bo rd, rd_sync, rd_w8, rd_w4, hwsync, hwsync_access;
    uint32_t frames;                 /* frames rendered into it */
+   uint32_t seq;                    /* its last render's kick number: one in flight per target */
+   unsigned seq_slot;               /* and the ring slot that render used */
 };
 
 /* where a frame's pixels go */
@@ -225,6 +239,12 @@ struct sgxws_ctx {
    uint32_t bg_pds[3];
    unsigned draws;                   /* objects recorded in this frame */
    unsigned room_flushes;            /* frames submitted early because a ring filled */
+   /* frames in flight: the ring slot recording now, and the render that last
+    * used each slot */
+   unsigned slot;
+   struct sgxws_token slot_token[SGXWS_SLOTS];
+   uint32_t kicks, done_seq;         /* kicks submitted, the last one known done */
+   uint32_t pixev, pixev_rows;       /* the recording frame's pixel event, for its kick */
    unsigned frames;
 };
 
@@ -286,9 +306,27 @@ bool sgxws_recording(struct sgxws_ctx *c);
 int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth,
                 unsigned wmask);
 int sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d);
-/* Submit the frame and wait up to timeout_ms for its render; 0 when done.
- * A no-op when nothing is recorded. */
+/* Submit the frame; with timeout_ms, wait up to that long for its render (0
+ * when done), else return once it is submitted.  A no-op when nothing is
+ * recorded. */
 int sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms);
+/* wait for every submitted render */
+int sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms);
+/* the last kick known done, looking without waiting; the kick number the
+ * frame being recorded will get (renders finish in kick order) */
+uint32_t sgxws_done_seq(struct sgxws_ctx *c);
+static inline uint32_t
+sgxws_next_seq(const struct sgxws_ctx *c)
+{
+   return c->kicks + 1;
+}
+static inline bool
+sgxws_seq_after(uint32_t a, uint32_t b)
+{
+   return (int32_t)(a - b) > 0;
+}
+/* wait for the renders that write a buffer (its sync's pending writes) */
+int sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms);
 
 #ifdef __cplusplus
 }

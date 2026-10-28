@@ -30,6 +30,15 @@ struct sgx545_resource {
    bool texture;                /* data is the CPU copy of bo (texture heap, laid out by sgx545_texture.c) */
    uint32_t pitch;              /* pixels per row of a render target (a multiple of 32) */
 
+   /* A texture written while a render may still sample it: the write goes to
+    * a second copy, which takes over (the DDK's ghosting).  alt lacks what
+    * was written since it was current: alt_dirty boxes, or everything. */
+   uint32_t use_seq;            /* the last kick that samples bo */
+   struct sgxws_bo alt;
+   uint32_t alt_use_seq;
+   unsigned n_alt_dirty;        /* SGX545_ALT_ALL: re-encode everything */
+   struct { uint16_t level, x0, y0, x1, y1; } alt_dirty[32];
+
    /* the kernel sync data, mapped once: the CPU waits on it before reading */
    struct pvr_buf sync_map;
    volatile PVRSRV_SYNC_DATA *sync_data;
@@ -52,6 +61,8 @@ sgx545_resource_sampleable(const struct sgx545_resource *res)
           (res->base.format == PIPE_FORMAT_B8G8R8A8_UNORM || res->base.format == PIPE_FORMAT_B8G8R8X8_UNORM ||
            res->base.format == PIPE_FORMAT_R8G8B8A8_UNORM || res->base.format == PIPE_FORMAT_R8G8B8X8_UNORM);
 }
+
+#define SGX545_ALT_ALL (~0u)
 
 struct sgx545_transfer {
    struct pipe_transfer base;

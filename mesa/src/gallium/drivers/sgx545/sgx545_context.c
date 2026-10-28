@@ -15,8 +15,7 @@
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
 
-/* Every frame is waited for: rendering is synchronous for now, so a fence
- * is signalled by the time it exists. */
+/* A fence is every render submitted before it (they run in order). */
 struct sgx545_fence {
    struct pipe_reference reference;
 };
@@ -34,7 +33,14 @@ static bool
 sgx545_fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
                     struct pipe_fence_handle *fence, uint64_t timeout)
 {
-   return true;
+   struct sgx545_screen *screen = sgx545_screen(pscreen);
+   bool done;
+
+   /* every render submitted before the fence: renders run in order */
+   simple_mtx_lock(&screen->lock);
+   done = !screen->hw || !sgxws_wait_idle(screen->hw, timeout ? 2000 : 0);
+   simple_mtx_unlock(&screen->lock);
+   return done;
 }
 
 void
@@ -49,7 +55,8 @@ sgx545_flush_frame(struct sgx545_context *ctx)
       return;
    t = ctx->stats.on ? os_time_get_nano() : 0;
    simple_mtx_lock(&screen->lock);
-   e = sgxws_flush(ctx->hw, 2000);
+   /* SGX545_SYNC=1: wait for every frame's render (as before frames overlapped) */
+   e = sgxws_flush(ctx->hw, debug_get_bool_option("SGX545_SYNC", false) ? 2000 : 0);
    simple_mtx_unlock(&screen->lock);
    if (ctx->stats.on) {
       ctx->stats.flush_ns += os_time_get_nano() - t;
@@ -64,6 +71,18 @@ sgx545_flush_frame(struct sgx545_context *ctx)
          abort();
    }
    ctx->recording = NULL;
+}
+
+void
+sgx545_finish(struct sgx545_context *ctx)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+
+   sgx545_flush_frame(ctx);
+   simple_mtx_lock(&screen->lock);
+   if (ctx->hw && sgxws_wait_idle(ctx->hw, 2000))
+      fprintf(stderr, "sgx545: a render did not finish\n");
+   simple_mtx_unlock(&screen->lock);
 }
 
 void
@@ -121,7 +140,7 @@ sgx545_context_destroy(struct pipe_context *pctx)
    struct sgx545_context *ctx = sgx545_context(pctx);
    struct sgx545_screen *screen = sgx545_screen(pctx->screen);
 
-   sgx545_flush_frame(ctx);
+   sgx545_finish(ctx);
    if (ctx->blitter)
       util_blitter_destroy(ctx->blitter);
    util_unreference_framebuffer_state(&ctx->framebuffer);

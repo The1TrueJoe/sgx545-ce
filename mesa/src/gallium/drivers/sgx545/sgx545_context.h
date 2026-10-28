@@ -87,6 +87,7 @@ struct sgx545_context {
    struct sgxws_ctx *hw;
    struct sgxws_prog vs_xy, vs_xyz, fs_uniform;
    struct sgxws_rt *rts[SGX545_MAX_RTS];
+   uint32_t rt_va[SGX545_MAX_RTS];      /* the target each was made for */
    unsigned num_rts;
    struct sgx545_resource *recording;   /* the target of the frame being recorded */
 
@@ -134,8 +135,10 @@ void sgx545_program_init(struct sgx545_context *ctx);
 
 void sgx545_stats_report(struct sgx545_context *ctx);
 
-/* submit and finish the frame being recorded */
+/* submit the frame being recorded (its render runs on while the CPU goes on) */
 void sgx545_flush_frame(struct sgx545_context *ctx);
+/* submit it and wait for every render submitted */
+void sgx545_finish(struct sgx545_context *ctx);
 /* before the CPU touches res: finish any frame that renders into it */
 void sgx545_flush_resource_writes(struct sgx545_context *ctx, struct sgx545_resource *res);
 

@@ -22,15 +22,24 @@
 #include "sgx545_screen.h"
 #include "sgx545_texture.h"
 
+/* A target's TA/3D structures, one set per target address while there are
+ * few: a target has one render in flight, so the back buffer and fb0 (the
+ * swap's copy) need sets of their own to render one after the other without
+ * waiting.  Past SGX545_MAX_RTS targets share by size. */
 static struct sgxws_rt *
-get_rt(struct sgx545_context *ctx, uint32_t w, uint32_t h)
+get_rt(struct sgx545_context *ctx, uint32_t w, uint32_t h, uint32_t va)
 {
    for (unsigned i = 0; i < ctx->num_rts; i++)
-      if (ctx->rts[i]->w == w && ctx->rts[i]->h == h)
+      if (ctx->rts[i]->w == w && ctx->rts[i]->h == h && ctx->rt_va[i] == va)
          return ctx->rts[i];
-   if (ctx->num_rts == SGX545_MAX_RTS)
+   if (ctx->num_rts == SGX545_MAX_RTS) {
+      for (unsigned i = 0; i < ctx->num_rts; i++)
+         if (ctx->rts[i]->w == w && ctx->rts[i]->h == h)
+            return ctx->rts[i];
       return NULL;
+   }
    ctx->rts[ctx->num_rts] = sgxws_rt_create(ctx->hw, w, h);
+   ctx->rt_va[ctx->num_rts] = va;
    return ctx->rts[ctx->num_rts] ? ctx->rts[ctx->num_rts++] : NULL;
 }
 
@@ -55,7 +64,7 @@ begin_frame(struct sgx545_context *ctx)
                  cbuf->texture->height0);
       return false;
    }
-   rt = get_rt(ctx, res->base.width0, res->base.height0);
+   rt = get_rt(ctx, res->base.width0, res->base.height0, t.va);
    if (!rt)
       return false;
    if (ctx->recording && ctx->recording != res)
@@ -467,6 +476,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
             return;
          }
          sgx545_tex_words(view, ctx->samplers[unit], &fsk[ctx->fs->dep_sa[j]]);
+         sgx545_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
          SGX545_DBG(DRAW, "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
                     j, unit, util_format_short_name(view->format), view->texture->width0,
                     view->texture->height0, view->texture->target, view->texture->last_level + 1,
@@ -485,6 +495,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
             return;
          }
          sgx545_tex_words(view, ctx->samplers[unit - 1], tex[unit - 1]);
+         sgx545_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
       }
       d.tex = (const uint32_t (*)[4])tex;
    } else {
