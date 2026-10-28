@@ -428,7 +428,16 @@ int main(int argc, char **argv)
 	static struct pvr p;
 	static struct init s;
 	static PVRSRV_BRIDGE_IN_SGXDEVINITPART2 in2;
-	PVRSRV_BRIDGE_OUT_SGXDEVINITPART2 out2 = { 0 };
+	/*
+	 * The driver's dispatch table expects sizeof(PVRSRV_BRIDGE_RETURN) of OUT
+	 * for DEVINITPART2 (16 bytes on x86_64), though the handler only writes
+	 * the 8-byte PVRSRV_BRIDGE_OUT_SGXDEVINITPART2. i386 never noticed: there
+	 * both are 8.
+	 */
+	union {
+		PVRSRV_BRIDGE_OUT_SGXDEVINITPART2 o;
+		PVRSRV_BRIDGE_RETURN r;
+	} out2 = { 0 };
 	PVRSRV_BRIDGE_RETURN ret = { 0 };
 	uint8_t *fw;
 	int c, err = 0, connected = 0;
@@ -500,9 +509,9 @@ int main(int argc, char **argv)
 	}
 
 	TRY("devinitpart2", pvr_call(&p, PVRSRV_BRIDGE_SGX_DEVINITPART2, &in2, sizeof in2, &out2, sizeof out2));
-	if (out2.ui32KMBuildOptions != in2.sInitInfo.ui32ClientBuildOptions)
+	if (out2.o.ui32KMBuildOptions != in2.sInitInfo.ui32ClientBuildOptions)
 		fprintf(stderr, "srvinit: kernel build options 0x%x, microkernel's 0x%x\n",
-			out2.ui32KMBuildOptions, in2.sInitInfo.ui32ClientBuildOptions);
+			out2.o.ui32KMBuildOptions, in2.sInitInfo.ui32ClientBuildOptions);
 	step = "initsrv disconnect";
 	{
 		/* This is where the kernel resets the core and starts the microkernel. */

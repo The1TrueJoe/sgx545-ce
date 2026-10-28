@@ -22,6 +22,32 @@ every `SGX_BRIDGE_INIT_INFO` field are identical.
     srvinit -n plan.txt -f fw.bin out/          # on any x86_64 Linux, no GPU touched
     python3 re/srvinit/check.py diff trace.bin out/
 
+## On hardware (EA3, 2026-10-28)
+
+Run from a cold boot, before anything else touched the GPU, in place of
+`run.sh sgxinit`:
+
+- `srvinit` returned 0. dmesg shows the same `SysFinalise: SGX revision =
+  1.0.14` and `SGXInit: HW core rev (1000e)…` lines as a blob boot, and no
+  errors.
+- The blob-free `re/replay` frame ran next. Its back buffer was identical to
+  the reference (md5 `56f8466a…`, the frame that matches the probe pixel for
+  pixel).
+- The i386 blob client `gles2tri` then drew its triangle: the centre pixel is
+  `rgba(0,255,0,255)`, the shader's green, and the swap went to the panel.
+- The replay again, after the blob client: still identical.
+
+The only process involved was the static musl binary. `libsrv_init` and
+`libsrv_um` were never loaded.
+
+One thing the offline check could not catch, and the first hardware run hit:
+the driver's dispatch table registers `SGX_DEVINITPART2` with an OUT size of
+`sizeof(PVRSRV_BRIDGE_RETURN)`. That is 16 bytes on x86_64, while the handler
+only writes the 8-byte `PVRSRV_BRIDGE_OUT_SGXDEVINITPART2`. i386 never
+noticed, because both are 8 there. A native caller must pass 16 bytes, or
+the call fails with -22 and leaves the driver unusable until a reboot. srvinit
+passes a union of the two. The cleaner fix is in the driver's table.
+
 Where things come from:
 - **firmware**: bytes from the firmware file;
 - **computed**: our own code works it out from what the kernel returned, such
