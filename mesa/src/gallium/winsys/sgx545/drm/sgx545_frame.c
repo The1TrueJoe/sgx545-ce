@@ -1076,8 +1076,13 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
 }
 
+static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
+
+/* A clear: one triangle over the whole surface with the iterated colour.
+ * wmask: the colour bytes written (B b0, G b1, R b2, A b3; 0xf all, 0 none:
+ * GL's glColorMask, which gallium hands the clear) */
 int
-sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth)
+sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth, unsigned wmask)
 {
    const struct sgxws_rt *s = c->rt;
    struct sgxws_ptr v;
@@ -1086,6 +1091,11 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
    uint32_t blk[12];
    int e;
 
+   bool zwrite = write_depth && (depth != 1.0f || c->draws);
+
+   /* nothing to write: no colour, and the depth every render starts with */
+   if (!(wmask & 0xf) && !zwrite)
+      return 0;
    if ((e = make_room(c, 3 * 16)))
       return e;
    v = ring_alloc(&c->gen, 3 * 16, DMA_ALIGN);
@@ -1097,13 +1107,16 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
    }
    /* TA state block: ISPA ISPB PDS region-clip output-select MTE TSP (header 0xd4c3) */
    blk[0] = 0x1 | 0x2 | 0x40 | 0x80 | 0x400 | 0x1000 | 0x4000 | 0x8000;
-   /* always; depth write only for a depth clear to something other than the
-    * background depth (1.0) */
-   blk[1] = write_depth && depth != 1.0f ? 0x01c00200 : 0x01d00200;
-   blk[2] = 0xf << 4;                                    /* ISPB: colour mask */
+   /* always; depth write for a depth clear, except to the background depth
+    * (1.0) before anything was drawn: every render starts there */
+   blk[1] = zwrite ? 0x01c00200 : 0x01d00200;
+   if (!(wmask & 0xf))
+      blk[1] |= 1u << 21;                                /* no colour write (STATE.md ISPA b21) */
+   /* ISPB: colour mask (R8 G4 B2 A1, from the byte mask) */
+   blk[2] = ((wmask & 4 ? 8 : 0) | (wmask & 2 ? 4 : 0) | (wmask & 1 ? 2 : 0) | (wmask & 8 ? 1 : 0)) << 4;
    blk[3] = pds_word(c, c->pds_empty_p, 1);
    blk[4] = 0x00030001;                                  /* [G] */
-   blk[5] = pds_word(c, c->clear_pds, 2);
+   blk[5] = pds_word(c, (wmask & 0xf) == 0xf ? c->clear_pds : clear_pds_masked(c, wmask & 0xf), 2);
    blk[6] = 0x80000000 | 0 << 16 | (s->n.xt - 1);        /* region clip: whole surface, in tiles */
    blk[7] = 0 << 16 | (s->n.yt - 1);
    blk[8] = 8 << 16 | 0x1800;                            /* 8 output dwords [D], 0x1800 [G] */
@@ -1600,4 +1613,23 @@ sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned co
    va = sgxws_usse_upload(c, false, w, n, NULL, 0);
    free(w);
    return va;
+}
+
+/* The clear's pixel program with a colour mask (wmask: bytes of the packed
+ * BGRA8, as sgxws_blend's): the iterated colour through the colour mask's
+ * sopwm instead of copy_fs's mov. */
+static uint32_t
+clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
+{
+   if (!c->clear_pds_masked[wmask]) {
+      uint32_t w[4], douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29, fs;
+
+      w[0] = 0;
+      w[1] = PHAS_HI | 0x700;                            /* phas.i #0, #0 [wait=7] */
+      wmask_words(wmask, 0, w + 2);
+      fs = sgxws_usse_upload(c, false, w, 2, NULL, 0);
+      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), 0x01000004, &douti, NULL, 1,
+                                             NULL, NULL);
+   }
+   return c->clear_pds_masked[wmask];
 }

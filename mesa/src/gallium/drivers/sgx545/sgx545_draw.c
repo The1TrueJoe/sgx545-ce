@@ -76,8 +76,22 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
 
    SGX545_DBG(DRAW, "clear %#x (%.3f %.3f %.3f %.3f) depth %.3f\n", buffers, color->f[0], color->f[1],
               color->f[2], color->f[3], depth);
+   /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
+    * b3); a buffer without alpha keeps its X byte written. A colour clear
+    * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
+    * clear (the openhc-minecraft overlay, every frame) must not touch RGB. */
+   unsigned cm = buffers & PIPE_CLEAR_COLOR0 ? color_clear_mask & 0xf : 0, wmask;
+
+   if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
+       !util_format_has_alpha(ctx->framebuffer.cbufs[0].format) && cm)
+      cm |= PIPE_MASK_A;
+   wmask = (cm & PIPE_MASK_B ? 1 : 0) | (cm & PIPE_MASK_G ? 2 : 0) | (cm & PIPE_MASK_R ? 4 : 0) |
+           (cm & PIPE_MASK_A ? 8 : 0);
+   /* a depth-only clear writes no colour (mask 0) */
    if (!(buffers & PIPE_CLEAR_COLOR0) && !(have_depth && (buffers & PIPE_CLEAR_DEPTH)))
       return;
+   if ((buffers & PIPE_CLEAR_COLOR0) && !wmask && !(have_depth && (buffers & PIPE_CLEAR_DEPTH)))
+      return;        /* every colour channel masked, no depth */
    simple_mtx_lock(&screen->lock);
    if (begin_frame(ctx)) {
       static const float black[4];
@@ -85,7 +99,7 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
       /* The ISP starts every render at depth 1.0 (render details +0x40), so
        * a depth clear only needs drawing when it is not 1.0. */
       sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? color->f : black, (float)depth,
-                  have_depth && (buffers & PIPE_CLEAR_DEPTH));
+                  have_depth && (buffers & PIPE_CLEAR_DEPTH), wmask);
    }
    simple_mtx_unlock(&screen->lock);
 }

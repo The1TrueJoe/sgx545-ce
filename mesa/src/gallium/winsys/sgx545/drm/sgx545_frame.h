@@ -208,6 +208,7 @@ struct sgxws_ctx {
    uint32_t empty_state, terminate;  /* VDM state programs (PDS vertex heap) */
    uint32_t pds_empty_p;             /* pixel PDS program: run the empty task */
    uint32_t clear_pds;               /* pixel PDS program: iterate colour, copy_fs */
+   uint32_t clear_pds_masked[16];    /* the same with a colour mask (by byte mask), on demand */
    uint32_t idx;                     /* identity 16-bit index buffer */
    uint32_t idx_count;
    uint32_t vdm_counter;             /* the DDK's rotating TA-state buffer index */
@@ -275,7 +276,8 @@ int sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_tar
 bool sgxws_recording(struct sgxws_ctx *c);
 
 /* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md "Clear") */
-int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth);
+int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth,
+                unsigned wmask);
 int sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d);
 /* Submit the frame and wait up to timeout_ms for its render; 0 when done.
  * A no-op when nothing is recorded. */

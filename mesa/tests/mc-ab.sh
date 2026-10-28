@@ -3,8 +3,8 @@
 #   mc-ab.sh ddk|sgx545 SECONDS [xdotool steps: "at:sec cmd args" ...]
 # Runs the openhc-minecraft runtime's game (/opt/minecraft/rootfs) on Xvfb :0
 # with gl4es' FPS counter, under the GPU lock and gpuwatch.sh; after SECONDS
-# the panel (fb0) is saved to /opt/minecraft/rootfs/ctest/out/mc-<who>.fb and
-# the game stopped. xdotool steps (sent through Xvfb) drive the menus: at
+# the panel (fb0) is saved to /opt/minecraft/rootfs/ctest/out/mc-<who>.fb
+# (MC_BURST=n: and n more, mc-<who>-<k>.fb) and the game stopped. xdotool steps (sent through Xvfb) drive the menus: at
 # second `at`, run `xdotool cmd args`.
 R=/opt/minecraft/rootfs
 WHO=$1 SECS=$2; shift 2
@@ -43,6 +43,12 @@ while [ $t -lt $SECS ] && kill -0 $game 2>/dev/null; do
 	sleep 1; t=$((t+1))
 done
 cat /dev/fb0 > $R/ctest/out/mc-$WHO.fb
+# MC_BURST=n: n more panel dumps, 0.3 s apart (ours draws into fb0 itself,
+# single-buffered, so one dump can catch a frame half drawn)
+k=0
+while [ $k -lt ${MC_BURST:-0} ]; do
+	cat /dev/fb0 > $R/ctest/out/mc-$WHO-$k.fb; sleep 0.3; k=$((k+1))
+done
 killall java 2>/dev/null; sleep 3; killall -9 java 2>/dev/null
 wait $game 2>/dev/null
 kill $xvfb 2>/dev/null
