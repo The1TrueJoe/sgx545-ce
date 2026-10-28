@@ -1651,8 +1651,10 @@ varying_load(nir_src *src, const uint8_t **swz, nir_alu_instr **mov)
    if (p->type != nir_instr_type_intrinsic)
       return NULL;
    nir_intrinsic_instr *in = nir_instr_as_intrinsic(p);
-   if (in->intrinsic != nir_intrinsic_load_interpolated_input || in->def.num_components != 4 ||
-       nir_intrinsic_component(in) != 0)
+   /* (load_input: the driver's fragment inputs are lowered without
+    * interpolation intrinsics) */
+   if ((in->intrinsic != nir_intrinsic_load_interpolated_input && in->intrinsic != nir_intrinsic_load_input) ||
+       in->def.num_components != 4 || nir_intrinsic_component(in) != 0)
       return NULL;
    return in;
 }
@@ -1856,11 +1858,26 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          sgx_fail(c, "projected read of a varying that isn't iterated");
          return;
       }
-   } else if (ls.is_ssa && bi < 0 && pi < 0 && c->vals[ls.ssa->index].kind == VAL_PA) {
-      /* (a whole varying, or its first components) */
-      unsigned pa = c->vals[ls.ssa->index].n;
-      for (unsigned i = 0; i < c->n_iters; i++) {
-         if (!c->iters[i].sample && c->iters[i].pa == pa && c->iters[i].comps >= ncoord) {
+   } else if (bi < 0 && pi < 0) {
+      /* (a whole varying, or its first components; directly or through a
+       * mov that takes its first components in order) */
+      int pa = -1;
+      const uint8_t *cs;
+      nir_alu_instr *cm;
+      nir_intrinsic_instr *l;
+
+      if (ls.is_ssa && c->vals[ls.ssa->index].kind == VAL_PA)
+         pa = c->vals[ls.ssa->index].n;
+      else if ((l = varying_load(&tex->src[ci].src, &cs, &cm)) && c->vals[l->def.index].kind == VAL_PA) {
+         bool prefix = true;
+
+         for (unsigned j = 0; j < ncoord; j++)
+            prefix &= cs[j] == j;
+         if (prefix)
+            pa = c->vals[l->def.index].n;
+      }
+      for (unsigned i = 0; pa >= 0 && i < c->n_iters; i++) {
+         if (!c->iters[i].sample && c->iters[i].pa == (unsigned)pa && c->iters[i].comps >= ncoord) {
             s->dependent = false;
             s->set = c->iters[i].set;
             s->coord_pa = pa;

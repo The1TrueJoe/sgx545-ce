@@ -519,6 +519,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
          so->n_attribs = MAX2(so->n_attribs, var->data.driver_location + 1);
       }
    }
+   if (sgx545_debug & SGX545_DEBUG_NIR)
+      nir_print_shader(nir, stderr);
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx545: %s shader did not compile:\n%s\n", vertex ? "vertex" : "fragment",
               out.log ? out.log : "");

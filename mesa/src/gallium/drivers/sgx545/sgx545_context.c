@@ -93,9 +93,9 @@ sgx545_stats_report(struct sgx545_context *ctx)
 
    if (dt < 2000000000ull)
       return;
-   fprintf(stderr, "sgx545 stats %.1f s: %u flushes (%u for texture writes, %u rings full), %u draws, "
+   fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
-           dt * 1e-9, ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,
+           dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,
            ctx->stats.draws, ctx->stats.verts, ctx->stats.tex_writes,
            ctx->stats.draw_ns * ms, ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms, ctx->stats.compile_ns * ms);
    memset(&ctx->stats, 0, sizeof(ctx->stats));
@@ -117,6 +117,8 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
 {
    struct sgx545_context *ctx = sgx545_context(pctx);
 
+   if (flags & PIPE_FLUSH_END_OF_FRAME)
+      ctx->stats.frames++;
    sgx545_flush_frame(ctx);
    if (fence) {
       struct sgx545_fence *f = CALLOC_STRUCT(sgx545_fence);

@@ -447,7 +447,12 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    } else if (ctx->vs->kind != SGX545_SHADER_VS_POSITION) {
       return;
    }
-   if (ctx->fs->kind == SGX545_SHADER_COMPILED) {
+   /* SGX545_EXP_FS_CONST=1 (measuring): every fragment shader a constant white */
+   static int exp_fs_const = -1;
+
+   if (exp_fs_const < 0)
+      exp_fs_const = debug_get_bool_option("SGX545_EXP_FS_CONST", false);
+   if (ctx->fs->kind == SGX545_SHADER_COMPILED && !exp_fs_const) {
       fsp = ctx->fs->prog;
       if (blend) {
          fsp.code = sgx545_fs_program(ctx, ctx->fs, blend);
@@ -503,8 +508,12 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          fprintf(stderr, "sgx545: blending and colour masks need a compiled fragment shader\n");
          ctx->warned_blend = true;
       }
-      switch (ctx->fs->kind) {
+      switch (exp_fs_const ? SGX545_SHADER_FS_CONSTANT : ctx->fs->kind) {
       case SGX545_SHADER_FS_CONSTANT:
+         if (exp_fs_const) {
+            color[0] = color[1] = color[2] = color[3] = 1.0f;
+            break;
+         }
          memcpy(color, ctx->fs->color, sizeof(color));
          break;
       case SGX545_SHADER_FS_UNIFORM: {

@@ -60,8 +60,13 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
    for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT; s += MESA_SHADER_FRAGMENT) {
       struct pipe_shader_caps *caps = (struct pipe_shader_caps *)&pscreen->shader_caps[s];
 
-      caps->max_instructions = caps->max_alu_instructions = caps->max_tex_instructions =
-         caps->max_tex_indirections = 16384;
+      caps->max_instructions = caps->max_alu_instructions = caps->max_tex_instructions = 16384;
+      /* 8: st then doesn't pack varyings (st_extensions.c), so every varying
+       * keeps a texture coordinate set of its own, as the DDK's compiler
+       * allocates them; a projected or plain read of a whole varying is then
+       * sampled by the PDS before the shader runs, not by the shader
+       * (Minecraft's terrain: two dependent samples per pixel otherwise) */
+      caps->max_tex_indirections = 8;
       caps->max_control_flow_depth = 32;
       /* ISA.md: 16 attributes, 10 texture coordinate sets */
       caps->max_inputs = s == MESA_SHADER_VERTEX ? 16 : 10;
@@ -214,6 +219,14 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config)
    if (!screen)
       return NULL;
    sgx545_debug = debug_get_option_sgx545_debug();
+   /* The GL linker's varying optimisation (nir_opt_varyings) packs varyings
+    * into shared slots whatever the driver asks: gl4es's fog went in front of
+    * a texture coordinate, so neither texture read could be done by the PDS
+    * (a projected read needs a whole vec4 varying at component 0) and both
+    * became dependent samples, most of a Minecraft frame's GPU time.  The
+    * DDK's compiler keeps varyings as declared; so do we, for this process,
+    * unless the user set it. */
+   setenv("MESA_GLSL_DISABLE_IO_OPT", "1", 0);
    screen->fd = screen->dev_fd = fd;
    simple_mtx_lock(&kept_lock);
    if (kept.fd >= 0) {
