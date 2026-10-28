@@ -83,6 +83,7 @@ struct sgx_iter {
    bool sample;         /* non-dependent sample entry (list A) */
    bool proj;           /* ... iterated projected (x/w, y/w) */
    bool f16;            /* iterated as F16 (mediump), two components per register */
+   bool pointcoord;     /* gl_PointCoord (set 0) */
    unsigned sampler;
 };
 
@@ -113,6 +114,7 @@ struct sgx_ctx {
     * VERT_ATTRIB_*), -1 none */
    int in_reg[512], out_reg[512];
 #define SGX_IN_HALF 0x10000      /* in_reg: an F16-iterated component, low bits = its half */
+#define SGX_ITER_FRAGCOORD 14    /* list A iterator of gl_FragCoord (DDK capture) */
    struct sgx_iter iters[16];
    unsigned n_iters;
    unsigned n_pa_inputs;
@@ -139,6 +141,7 @@ struct sgx_ctx {
    bool discards;
    bool keep_pred;               /* the single discard wrote p1 (= keep) itself */
    bool p16;                     /* mediump in F16, as the DDK computes it */
+   int face_vreg;                /* gl_FrontFacing as 1.0 / 0.0, from p0 at entry; -1 none */
    unsigned colour_pa;
    struct sgx_sample *samples[16];
    unsigned n_samples;

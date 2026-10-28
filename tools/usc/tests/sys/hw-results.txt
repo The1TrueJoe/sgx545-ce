@@ -1,0 +1,6 @@
+fc               SAME     0/4096 px differ, max   0  centre 818180ff
+fcm              SAME     0/4096 px differ, max   0  centre 818180ff
+pc               SAME     0/4096 px differ, max   0  centre 000000ff
+ff               SAME     0/4096 px differ, max   0  centre ff0000ff
+fcv              SAME     0/4096 px differ, max   0  centre c5c84b34
+5/5 identical

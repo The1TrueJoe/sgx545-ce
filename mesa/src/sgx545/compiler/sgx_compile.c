@@ -375,6 +375,11 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          }
          if (!r->step && cls != CLS_INC && i->rpt > 1)
             sgx_fail(c, "constant can't step in %s", usse_form_name(i->form));
+         if (r->file == SGX_F_C && !slot_ok(i->form, k, r)) {
+            /* a slot without constants (src0): through a register */
+            struct sgx_ref m = materialize(c, i, *r, i->rpt);
+            *r = m;
+         }
          continue;
       }
       if (r->h16) {
@@ -1411,6 +1416,28 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    }
    case nir_intrinsic_load_input:
    case nir_intrinsic_load_interpolated_input: {
+      if (c->stage == MESA_SHADER_FRAGMENT && nir_intrinsic_io_semantics(in).location == VARYING_SLOT_FACE) {
+         /* gl_FrontFacing: p0 at program entry (DDK capture: libusc reads p0
+          * before anything writes it); 1.0 front, 0.0 back */
+         if (c->face_vreg < 0) {
+            c->face_vreg = new_vreg(c, 1);
+            struct sgx_ins *m1 = ins_alloc(c, SGX_INS_ALU, USSE_MOV);
+            m1->nops = 2;
+            m1->op[0] = vref(c->face_vreg, 0);
+            m1->op[1] = cref(48);
+            struct sgx_ins *m2 = ins_alloc(c, SGX_INS_ALU, USSE_MOV);
+            m2->nops = 2;
+            m2->op[0] = vref(c->face_vreg, 0);
+            m2->op[1] = cref(52);
+            m2->pred = 1;
+            list_add(&m2->link, &c->ins);
+            list_add(&m1->link, &c->ins);
+         }
+         v->kind = VAL_V;
+         v->n = c->face_vreg;
+         v->comp = 0;
+         return;
+      }
       nir_src *off = &in->src[in->intrinsic == nir_intrinsic_load_input ? 0 : 1];
       if (!nir_src_is_const(*off)) {
          sgx_fail(c, "indirect input load");
@@ -2317,6 +2344,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
    c->vary = vary;
    c->stage = nir->info.stage;
    c->keep_vreg = -1;
+   c->face_vreg = -1;
    c->p16 = opts->f16;
    c->n_labels = 6;     /* 3 start, 4 feedback, 5 phase 1: as libusc numbers them */
    c->sa_base = c->stage == MESA_SHADER_FRAGMENT ? 9 : 10;

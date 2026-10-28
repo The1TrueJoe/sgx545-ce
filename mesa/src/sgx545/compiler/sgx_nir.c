@@ -120,6 +120,12 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
       if (vertex && builtin && (var->data.location == VARYING_SLOT_PSIZ || !strcmp(var->name, "gl_PointSize")) &&
           var_used(nir, var, true))
          out->point_size = true;
+      /* the point-sprite coordinate is iterated from set 0, the set a vertex
+       * shader that writes gl_PointSize reserves (DDK capture: gl_PointCoord
+       * = list A iterator 1) */
+      if (!vertex && builtin && (var->data.location == VARYING_SLOT_PNTC || !strcmp(var->name, "gl_PointCoord")) &&
+          var_used(nir, var, false))
+         out->point_size = true;
       if (builtin || n >= 32)
          continue;
       if (!var_used(nir, var, vertex))
@@ -245,6 +251,19 @@ lower_tex_derefs(struct sgx_ctx *c)
 {
    struct tex_ctx t = { .c = c };
    return nir_shader_instructions_pass(c->nir, lower_tex_derefs_instr, nir_metadata_control_flow, &t);
+}
+
+/* gl_FrontFacing as the constant true (see sgx_compile_options.front_p0) */
+static bool
+front_true_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   if ((in->intrinsic != nir_intrinsic_load_input && in->intrinsic != nir_intrinsic_load_front_face) ||
+       (in->intrinsic == nir_intrinsic_load_input &&
+        nir_intrinsic_io_semantics(in).location != VARYING_SLOT_FACE))
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def_replace(&in->def, nir_imm_intN_t(b, ~0ull, in->def.bit_size));
+   return true;
 }
 
 /* ------------------------------------------------------------------------
@@ -569,11 +588,38 @@ assign_io(struct sgx_ctx *c)
                set16[vy->set] = true;
          }
       }
-      /* varyings in PA in list A order: by set */
+      /* gl_FragCoord first (list A iterator 14, F32, as the DDK orders it),
+       * then the sets in order; gl_PointCoord is set 0 */
       int pbase[SGX_MAX_SETS];
       unsigned pa = 0;
+      bool fragcoord = false, pointcoord = false;
+      nir_foreach_shader_in_variable(var, s) {
+         fragcoord |= var->data.location == VARYING_SLOT_POS;
+         pointcoord |= var->data.location == VARYING_SLOT_PNTC;
+      }
+      if (fragcoord) {
+         struct sgx_iter *it = &c->iters[c->n_iters++];
+         it->set = SGX_ITER_FRAGCOORD - 1;
+         it->comps = 4;
+         it->pa = pa;
+         for (unsigned j = 0; j < 4; j++)
+            c->in_reg[VARYING_SLOT_POS * 4 + j] = pa + j;
+         pa += 4;
+      }
       for (unsigned set = 0; set < SGX_MAX_SETS; set++) {
          pbase[set] = -1;
+         if (set == 0 && pointcoord && c->vary->point_size) {
+            struct sgx_iter *it = &c->iters[c->n_iters++];
+            it->set = 0;
+            it->comps = 2;
+            it->pa = pa;
+            it->f16 = c->p16;
+            it->pointcoord = true;
+            for (unsigned j = 0; j < 2; j++)
+               c->in_reg[VARYING_SLOT_PNTC * 4 + j] = it->f16 ? (int)(SGX_IN_HALF | (2 * pa + j)) : (int)(pa + j);
+            pa += it->f16 ? 1 : 2;
+            continue;
+         }
          for (unsigned v = 0; v < c->vary->n; v++) {
             const struct sgx_varying *vy = &c->vary->v[v];
             if (set < vy->set || set >= vy->set + vy->rows)
@@ -637,6 +683,8 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
    lower_tex_derefs(c);
+   if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_p0)
+      NIR_PASS(_, s, nir_shader_intrinsics_pass, front_true_instr, nir_metadata_control_flow, NULL);
 
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, 0);
    lower_uniforms(c);
