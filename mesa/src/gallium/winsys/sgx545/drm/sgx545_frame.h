@@ -206,6 +206,9 @@ struct sgxws_draw {
     * (at most SGXWS_MAX_INDICES) */
    const uint16_t *indices;
    uint32_t n_indices;
+   /* or both already in device memory (the driver's vertex cache): their
+    * addresses, nothing copied (verts_va 16-byte aligned, idx_va even) */
+   uint32_t verts_va, idx_va;
    const struct sgxws_prog *vs, *fs;
    const struct sgxws_state *state;
    const uint32_t *fs_consts;       /* fs->sec_dwords dwords */

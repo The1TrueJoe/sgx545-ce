@@ -5,6 +5,7 @@
 
 #include "util/os_time.h"
 #include "util/format/u_format.h"
+#include "util/u_atomic.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_math.h"
@@ -72,6 +73,9 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
    prsc->screen = pscreen;
 
    if (templ->target == PIPE_BUFFER) {
+      static uint32_t next_uid;
+
+      res->uid = p_atomic_inc_return(&next_uid);
       res->stride = templ->width0;
       res->data = align_malloc(MAX2(templ->width0, 1), 64);
       if (!res->data)
@@ -238,6 +242,8 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
    ptrans->box = *box;
 
    if (prsc->target == PIPE_BUFFER) {
+      if (usage & PIPE_MAP_WRITE)
+         res->gen++;            /* the vertex cache's copies of it are stale */
       ptrans->stride = 0;
       ptrans->layer_stride = 0;
       *out = ptrans;

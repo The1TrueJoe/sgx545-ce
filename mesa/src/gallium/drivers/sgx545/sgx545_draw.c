@@ -13,6 +13,9 @@
 #include "util/format/u_format.h"
 #include "util/os_time.h"
 #include "util/half_float.h"
+#include "util/hash_table.h"
+#include "util/list.h"
+#include "util/u_math.h"
 #include "util/u_inlines.h"
 #include "util/u_prim.h"
 
@@ -167,6 +170,8 @@ struct fetch {
    enum pipe_format format;
    unsigned dwords;             /* dwords it fills in the vertex */
    bool defaults;               /* missing components 0, 0, 0, 1 (compiled shaders) */
+   const struct sgx545_resource *res;   /* the buffer, NULL for client memory */
+   uint32_t offset;             /* where in it */
 };
 
 static bool
@@ -181,13 +186,17 @@ setup_fetch(struct sgx545_context *ctx, unsigned e, struct fetch *f)
    if (ve->vertex_buffer_index >= ctx->num_vertex_buffers)
       return false;
    vb = &ctx->vertex_buffers[ve->vertex_buffer_index];
-   if (vb->is_user_buffer)
+   f->res = NULL;
+   if (vb->is_user_buffer) {
       f->base = vb->buffer.user;
-   else if (vb->buffer.resource)
-      f->base = sgx545_resource(vb->buffer.resource)->data;
-   else
+   } else if (vb->buffer.resource) {
+      f->res = sgx545_resource(vb->buffer.resource);
+      f->base = f->res->data;
+   } else {
       return false;
-   f->base += vb->buffer_offset + ve->src_offset;
+   }
+   f->offset = vb->buffer_offset + ve->src_offset;
+   f->base += f->offset;
    /* an instanced element is one value for the whole draw (one instance) */
    f->stride = ve->instance_divisor ? 0 : ve->src_stride;
    f->format = ve->src_format;
@@ -400,6 +409,220 @@ varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
    return true;
 }
 
+
+/* ------------------------------------------------------------- vertex cache */
+
+/*
+ * gl4es draws its display lists (Minecraft's chunks) from buffers that don't
+ * change between frames, and every frame the draw gathered, converted and
+ * copied the same vertices again: a third of the render thread's time.  A
+ * draw whose vertices all come from buffers (or are constant) keeps its
+ * gathered vertices and rebased 16-bit indices in device memory, found again
+ * by what they were made from: the buffers (by id and write count), where in
+ * them, the formats, the index range.  An entry the GPU may still read is
+ * not freed.
+ */
+#define VCACHE_BUDGET (40u << 20)
+
+struct vcache_key {
+   uint32_t n_fetch, mode, index_size, ib_uid, ib_gen, start, count;
+   int32_t index_bias;
+   struct {
+      uint32_t uid, gen, offset, stride, format;
+      uint32_t konst[4];        /* a constant element's value (stride 0) */
+   } el[PIPE_MAX_ATTRIBS];
+};
+
+struct vcache_entry {
+   struct vcache_key key;       /* first: the hash table's key */
+   struct list_head link;
+   struct sgxws_bo bo;
+   uint32_t verts_va, idx_va, nverts, nidx, last_seq, bytes;
+};
+
+static uint32_t
+vcache_hash(const void *k)
+{
+   return _mesa_hash_data(k, sizeof(struct vcache_key));
+}
+
+static bool
+vcache_equal(const void *a, const void *b)
+{
+   return !memcmp(a, b, sizeof(struct vcache_key));
+}
+
+static void
+vcache_free(struct sgx545_context *ctx, struct vcache_entry *v)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+
+   _mesa_hash_table_remove_key(ctx->vcache, &v->key);
+   list_del(&v->link);
+   ctx->vcache_bytes -= v->bytes;
+   sgxws_bo_free(&screen->dev, &v->bo);
+   free(v);
+}
+
+/* room for bytes more: the least recently used entries the GPU is done with go */
+static bool
+vcache_room(struct sgx545_context *ctx, uint32_t bytes)
+{
+   uint32_t done = sgxws_done_seq(ctx->hw);
+
+   while (ctx->vcache_bytes + bytes > VCACHE_BUDGET && !list_is_empty(&ctx->vcache_lru)) {
+      struct vcache_entry *v = list_last_entry(&ctx->vcache_lru, struct vcache_entry, link);
+
+      if (sgxws_seq_after(v->last_seq, done))
+         return false;
+      vcache_free(ctx, v);
+   }
+   return ctx->vcache_bytes + bytes <= VCACHE_BUDGET;
+}
+
+/* Draw draws[n] from the cache, filling it on a miss; false: not cacheable
+ * (the caller draws it the usual way).  Called with the lock held, the frame
+ * begun and d set up but for its vertices. */
+static bool
+vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
+            const struct pipe_draw_start_count_bias *draw, const struct fetch *f, unsigned n_fetch,
+            unsigned vertex_dwords, struct sgxws_draw *d)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+   const struct sgx545_resource *ib = NULL;
+   struct vcache_key key;
+   struct hash_entry *he;
+   struct vcache_entry *v;
+   bool fan = info->mode == MESA_PRIM_TRIANGLE_FAN;
+   unsigned count = draw->count, out_count = fan ? (count >= 3 ? (count - 2) * 3 : 0) : count;
+
+   if (!ctx->vcache || out_count < 3 || n_fetch > PIPE_MAX_ATTRIBS)
+      return false;
+   if (info->index_size) {
+      if (info->has_user_indices)
+         return false;
+      ib = sgx545_resource(info->index.resource);
+   }
+   if (out_count > SGXWS_MAX_INDICES)
+      return false;
+   memset(&key, 0, sizeof(key));
+   key.n_fetch = n_fetch;
+   key.mode = info->mode;
+   key.index_size = info->index_size;
+   key.ib_uid = ib ? ib->uid : 0;
+   key.ib_gen = ib ? ib->gen : 0;
+   key.start = draw->start;
+   key.count = count;
+   key.index_bias = info->index_size ? draw->index_bias : 0;
+   for (unsigned e = 0; e < n_fetch; e++) {
+      if (!f[e].defaults)
+         return false;
+      key.el[e].format = f[e].format;
+      key.el[e].stride = f[e].stride;
+      if (!f[e].stride) {
+         fetch_vertex(&f[e], 0, key.el[e].konst);
+      } else {
+         if (!f[e].res)
+            return false;
+         key.el[e].uid = f[e].res->uid;
+         key.el[e].gen = f[e].res->gen;
+         key.el[e].offset = f[e].offset;
+      }
+   }
+
+   he = _mesa_hash_table_search(ctx->vcache, &key);
+   if (he) {
+      v = he->data;
+      ctx->stats.vc_hits++;
+   } else {
+      /* gather once: the vertices the draw uses, the indices rebased */
+      const void *indices = ib ? ib->data : NULL;
+      unsigned lo = ~0u, hi = 0, vbytes, ibytes;
+      uint32_t *verts;
+      uint16_t *ix;
+
+      for (unsigned i = 0; i < out_count; i++) {
+         unsigned k = fan ? ((i % 3 == 0) ? 0 : i / 3 + i % 3) : i;
+         unsigned index = info->index_size ? get_index(info, indices, draw->start + k) + draw->index_bias
+                                           : draw->start + k;
+
+         lo = MIN2(lo, index);
+         hi = MAX2(hi, index);
+      }
+      if (hi - lo >= 65536 || hi - lo + 1 > 4 * out_count + 64) {
+         ctx->stats.vc_uncacheable++;
+         return false;
+      }
+      vbytes = align((hi - lo + 1) * vertex_dwords * 4, 64);
+      ibytes = align(out_count * 2, 16);
+      if (!vcache_room(ctx, vbytes + ibytes) || !(v = calloc(1, sizeof(*v)))) {
+         ctx->stats.vc_uncacheable++;
+         return false;
+      }
+      if (sgxws_bo_alloc(&screen->dev, &v->bo, SGX545_HEAP_GENERAL, 0x1, align(vbytes + ibytes, 4096), 0x1000)) {
+         free(v);
+         ctx->stats.vc_uncacheable++;
+         return false;
+      }
+      /* gathered in cached memory, then copied whole (the bo is write-combined) */
+      verts = staging(ctx, vbytes / 4 + ibytes / 4);
+      if (!verts) {
+         sgxws_bo_free(&screen->dev, &v->bo);
+         free(v);
+         return false;
+      }
+      fetch_vertices(f, n_fetch, lo, hi - lo + 1, verts, vertex_dwords);
+      ix = (uint16_t *)((uint8_t *)verts + vbytes);
+      for (unsigned i = 0; i < out_count; i++) {
+         unsigned k = fan ? ((i % 3 == 0) ? 0 : i / 3 + i % 3) : i;
+         unsigned index = info->index_size ? get_index(info, indices, draw->start + k) + draw->index_bias
+                                           : draw->start + k;
+
+         ix[i] = (uint16_t)(index - lo);
+      }
+      memcpy(v->bo.map, verts, vbytes + out_count * 2);
+      v->key = key;
+      v->verts_va = v->bo.va;
+      v->idx_va = v->bo.va + vbytes;
+      v->nverts = hi - lo + 1;
+      v->nidx = out_count;
+      v->bytes = vbytes + ibytes;
+      ctx->vcache_bytes += v->bytes;
+      list_add(&v->link, &ctx->vcache_lru);
+      _mesa_hash_table_insert(ctx->vcache, &v->key, v);
+      ctx->stats.vc_misses++;
+   }
+   /* most recently used first; the frame being recorded reads it */
+   list_del(&v->link);
+   list_add(&v->link, &ctx->vcache_lru);
+   v->last_seq = sgxws_next_seq(ctx->hw);
+   d->verts = NULL;
+   d->indices = NULL;
+   d->verts_va = v->verts_va;
+   d->idx_va = v->idx_va;
+   d->count = v->nverts;
+   d->n_indices = v->nidx;
+   if (sgxws_draw(ctx->hw, d))
+      fprintf(stderr, "sgx545: draw of %u indices dropped\n", v->nidx);
+   d->verts_va = d->idx_va = 0;
+   return true;
+}
+
+void
+sgx545_draw_fini(struct sgx545_context *ctx)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+
+   if (!ctx->vcache)
+      return;
+   simple_mtx_lock(&screen->lock);
+   list_for_each_entry_safe(struct vcache_entry, v, &ctx->vcache_lru, link)
+      vcache_free(ctx, v);
+   simple_mtx_unlock(&screen->lock);
+   _mesa_hash_table_destroy(ctx->vcache, NULL);
+   ctx->vcache = NULL;
+}
+
 static void
 sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 unsigned drawid_offset, const struct pipe_draw_indirect_info *indirect,
@@ -592,6 +815,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       out_count = fan ? (count >= 3 ? (count - 2) * 3 : 0) : count;
       if (!out_count)
          continue;
+      if (compiled && prim != SGXWS_TRIANGLE_STRIP && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
+         continue;
       /* glDrawArrays of a list or strip: the vertices in order */
       if (!info->index_size && !fan && count <= SGXWS_MAX_INDICES) {
          if (!(v = staging(ctx, (size_t)count * vertex_dwords)))
@@ -715,6 +940,11 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info, un
 void
 sgx545_draw_init(struct sgx545_context *ctx)
 {
+   /* SGX545_VCACHE=0: no vertex cache */
+   if (debug_get_bool_option("SGX545_VCACHE", true)) {
+      ctx->vcache = _mesa_hash_table_create(NULL, vcache_hash, vcache_equal);
+      list_inithead(&ctx->vcache_lru);
+   }
    ctx->base.draw_vbo = sgx545_draw_vbo;
    ctx->base.clear = sgx545_clear;
 }

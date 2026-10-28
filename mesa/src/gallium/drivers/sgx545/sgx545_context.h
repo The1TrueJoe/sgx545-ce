@@ -9,6 +9,7 @@
 #include "pipe/p_context.h"
 #include "util/u_blitter.h"
 #include "pipe/p_state.h"
+#include "util/list.h"
 #include "util/slab.h"
 
 #include "sgx545_frame.h"
@@ -110,9 +111,16 @@ struct sgx545_context {
       uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read, fl_deferred;   /* flushes by cause */
+      unsigned vc_hits, vc_misses, vc_uncacheable;
    } stats;
 
    struct blitter_context *blitter;     /* GPU blits: a quad through our own shaders */
+
+   /* draws from unchanged buffers, their vertices gathered and indices
+    * rebased once into device memory (sgx545_draw.c) */
+   struct hash_table *vcache;
+   struct list_head vcache_lru;         /* most recently used first */
+   uint64_t vcache_bytes;
 
    struct slab_child_pool transfer_pool;
    uint32_t *staging;               /* vertices gathered for one draw */
@@ -132,6 +140,7 @@ struct pipe_context *sgx545_context_create(struct pipe_screen *pscreen, void *pr
 
 void sgx545_state_init(struct sgx545_context *ctx);
 void sgx545_draw_init(struct sgx545_context *ctx);
+void sgx545_draw_fini(struct sgx545_context *ctx);
 void sgx545_program_init(struct sgx545_context *ctx);
 
 void sgx545_stats_report(struct sgx545_context *ctx);

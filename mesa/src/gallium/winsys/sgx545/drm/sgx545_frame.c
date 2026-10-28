@@ -1185,23 +1185,38 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    struct sgxws_ptr v, u, vsec;
    int e;
 
-   if (d->indices) {
-      if (d->n_indices > SGXWS_MAX_INDICES)
+   if (d->verts_va) {
+      if (d->idx_va) {
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx = d->idx_va;
+      } else if (d->count > c->idx_count) {
          return -E2BIG;
-      n_idx = d->n_indices;
-      idx_bytes = (n_idx * 2 + 15) & ~15u;
-   } else if (d->count > c->idx_count) {
-      return -E2BIG;
-   }
-   if ((e = make_room(c, d->count * vw + vsec_dwords * 4 + idx_bytes + DMA_ALIGN)))
-      return e;
-   v = ring_alloc(&c->gen, d->count * vw, DMA_ALIGN);
-   memcpy(v.p, d->verts, d->count * vw);
-   if (d->indices) {
-      struct sgxws_ptr ip = ring_alloc(&c->gen, idx_bytes, 16);
+      }
+      if ((e = make_room(c, vsec_dwords * 4 + DMA_ALIGN)))
+         return e;
+      v.va = d->verts_va;
+      v.p = NULL;
+   } else {
+      if (d->indices) {
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx_bytes = (n_idx * 2 + 15) & ~15u;
+      } else if (d->count > c->idx_count) {
+         return -E2BIG;
+      }
+      if ((e = make_room(c, d->count * vw + vsec_dwords * 4 + idx_bytes + DMA_ALIGN)))
+         return e;
+      v = ring_alloc(&c->gen, d->count * vw, DMA_ALIGN);
+      memcpy(v.p, d->verts, d->count * vw);
+      if (d->indices) {
+         struct sgxws_ptr ip = ring_alloc(&c->gen, idx_bytes, 16);
 
-      memcpy(ip.p, d->indices, n_idx * 2);
-      idx = ip.va;
+         memcpy(ip.p, d->indices, n_idx * 2);
+         idx = ip.va;
+      }
    }
 
    /* fragment: the constants and the secondary program that DMAs them, then

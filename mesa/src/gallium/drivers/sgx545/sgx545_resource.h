@@ -25,6 +25,7 @@ struct sgx545_resource {
    struct sgxws_bo bo;
    bool wrapped;                /* resource_from_user_memory: an fbdev mapping */
 
+   uint32_t uid, gen;           /* buffers: an id never reused, and a count of writes (vertex cache) */
    uint32_t stride;             /* bytes per row of level 0 */
    size_t level_offset[16];     /* each level in the linear CPU copy */
    bool texture;                /* data is the CPU copy of bo (texture heap, laid out by sgx545_texture.c) */
