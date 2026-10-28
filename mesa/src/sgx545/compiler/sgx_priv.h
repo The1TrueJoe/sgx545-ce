@@ -30,6 +30,9 @@ enum sgx_file {
    SGX_F_IMM,
    SGX_F_U,     /* uniform constant number (becomes sa after layout) */
    SGX_F_P,     /* predicate */
+   SGX_F_USLOT, /* the absolute SA number of uniform constant n (an immediate, after layout) */
+   SGX_F_IXSA,  /* sa[idx1 + n] */
+   SGX_F_IDX,   /* index register n (destination) */
 };
 
 struct sgx_ref {

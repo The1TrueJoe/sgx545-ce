@@ -30,6 +30,10 @@ PCKF = ["u8", "s8", "o8", "u16", "s16", "f16", "f32", "c10"]
 def arg(o, flags=0):
     from uinst import A
     k = o["kind"]
+    if k == "ix":       # bank[idxN + off]
+        return A(o["bank"], o["off"], flags | (1 if o.get("neg") else 0) | (2 if o.get("abs") else 0), o["idx"])
+    if k == "idx":      # index register destination (USEASM type 4)
+        return A(4, o["n"], flags)
     if k not in RT:
         raise KeyError(f"operand kind {k}")
     f = flags | (1 if o.get("neg") else 0) | (2 if o.get("abs") else 0)
@@ -88,7 +92,7 @@ def useasm(x):
         dfmt = PCKF[x.form.fval >> 38 & 7]
         sfmt = PCKF[x.form.fval >> 41 & 7]
         base = {("u8", "f32"): 0x20, ("f32", "u8"): 0x34, ("u8", "f16"): 0x21, ("f16", "u8"): 0x3B,
-                ("f16", "c10"): 0x3E, ("f16", "f16"): 0x15}.get((dfmt, sfmt))
+                ("f16", "c10"): 0x3E, ("f16", "f16"): 0x15, ("s16", "f32"): 0x1C}.get((dfmt, sfmt))
         if base is None:
             return None
         if (dfmt, sfmt) == ("f16", "f16"):
@@ -117,6 +121,10 @@ def useasm(x):
         f1 |= 0x200 if d.get("rpt", 1) == 1 else d["rpt"] << 4
         a = [arg(ops[0])] + [arg(o, d.get(f"swz{j}", 0) << 25) for j, o in enumerate(ops[1:])]
         return [U(0x10, *a, f1=f1)]
+    if n == "ima16":
+        sel = {0: 0x2C, 1: 0x1E, 2: 0x1F, 3: 0x20}
+        return [U(0x63, *[arg(o) for o in ops], A(0x10, sel[d.get("f1", 0)]), A(0x10, sel[d.get("f2", 0)]),
+                  f1=f1 | 0x200, f2=(0x1000 if d.get("sgn") else 0) | (0x400 if d.get("sat") else 0))]
     if n == "limm":
         return [U(0x9B, arg(ops[0]), A(8, ops[1]["n"]), f1=f1)]
     if n == "nop":

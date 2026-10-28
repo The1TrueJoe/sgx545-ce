@@ -1187,6 +1187,43 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       n = 3;
       break;
    }
+   case nir_op_ftrunc: {
+      /* sign(x) * floor(|x|): f = fract(|x|); a = |x| - f; x < 0 ? -a : a */
+      unsigned f = new_vreg(c, 4), a = new_vreg(c, 4), na = new_vreg(c, 4);
+      struct sgx_ref fd[4], ad[4], nd[4], ts[3][4];
+      for (unsigned k = 0; k < 4; k++) {
+         fd[k] = vref(f, k);
+         ad[k] = vref(a, k);
+         nd[k] = vref(na, k);
+         ts[0][k] = ts[1][k] = s[0][k];
+         ts[0][k].abs = ts[1][k].abs = 1;
+         ts[0][k].neg = ts[1][k].neg = 0;
+      }
+      emit_runs(c, USSE_FSUBFLR, wmask, fd, 2, ts, &NOF, 0);
+      for (unsigned k = 0; k < 4; k++) {
+         ts[0][k] = fd[k];
+         ts[1][k] = ref(SGX_F_K, 0xbf800000);
+         ts[2][k] = s[0][k];
+         ts[2][k].abs = 1;
+         ts[2][k].neg = 0;
+      }
+      emit_runs(c, USSE_FMAD, wmask, ad, 3, ts, &NOF, 0);
+      for (unsigned k = 0; k < 4; k++) {
+         ts[0][k] = ad[k];
+         ts[1][k] = ref(SGX_F_K, 0xbf800000);
+         ts[2][k] = ref(SGX_F_K, 0x80000000);
+      }
+      emit_runs(c, USSE_FMAD, wmask, nd, 3, ts, &NOF, 0);
+      form = USSE_MOVC_Z_F32;
+      fs.n = 1;
+      fs.f[0].id = USSE_F_COND;
+      fs.f[0].v = 2;   /* ltz */
+      SRC(0, s[0][k]);
+      SRC(1, nd[k]);
+      SRC(2, ad[k]);
+      n = 3;
+      break;
+   }
    case nir_op_slt:
    case nir_op_sge:
    case nir_op_seq:
@@ -1372,7 +1409,42 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    }
    case nir_intrinsic_load_uniform: {
       if (!nir_src_is_const(in->src[0])) {
-         sgx_fail(c, "indirect uniform load");
+         /* a[i]: pck.s16.f32 t, offset; ima16.sgn idx1, t, #1, #<SA of the
+          * array>; then each component from sa[idx1 + j] (libusc's pattern,
+          * ISA.md "What GLSL integer code compiles to") */
+         unsigned k = nir_intrinsic_base(in), range = nir_intrinsic_range(in);
+         for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_used); j++)
+            c->const_used[k + j] = 1;
+         nir_legacy_src lo = nir_legacy_chase_src(&in->src[0]);
+         unsigned t = new_vreg(c, 1);
+         struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_S16_F32);
+         pk->nops = 3;
+         pk->op[0] = vref(t, 0);
+         pk->op[1] = src_comp(c, &lo, 0);
+         pk->op[2] = ref(SGX_F_IMM, 0);
+         fld(pk, USSE_F_DMASK, 3);
+         emit(c, pk);
+         struct sgx_ins *ix = ins_alloc(c, SGX_INS_ALU, USSE_IMA16);
+         ix->nops = 4;
+         ix->op[0] = ref(SGX_F_IDX, 1);
+         ix->op[1] = vref(t, 0);
+         ix->op[2] = ref(SGX_F_IMM, 1);
+         ix->op[3] = ref(SGX_F_USLOT, k);
+         fld(ix, USSE_F_SGN, 1);
+         fld(ix, USSE_F_F1, 1);
+         fld(ix, USSE_F_F2, 1);
+         add(c, ix);
+         unsigned w = new_vreg(c, in->def.num_components);
+         for (unsigned j = 0; j < in->def.num_components; j++) {
+            struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, USSE_MOV);
+            m->nops = 2;
+            m->op[0] = vref(w, j);
+            m->op[1] = ref(SGX_F_IXSA, j);
+            add(c, m);
+         }
+         v->kind = VAL_V;
+         v->n = w;
+         v->comp = 0;
          return;
       }
       v->kind = VAL_U;
@@ -2252,6 +2324,9 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
    case SGX_F_I: o.kind = USSE_K_I; o.n = r->n; break;
    case SGX_F_IMM: o.kind = USSE_K_IMM; o.n = (int32_t)r->n; break;
    case SGX_F_P: o.kind = USSE_K_P; o.n = r->n; break;
+   case SGX_F_USLOT: o.kind = USSE_K_IMM; o.n = c->sa_base + c->const_slot[r->n]; break;
+   case SGX_F_IXSA: o.kind = USSE_K_IX; o.ixbank = 3; o.idx = 1; o.n = r->n; break;
+   case SGX_F_IDX: o.kind = USSE_K_IDX; o.n = r->n; break;
    default: o.kind = USSE_K_NONE; break;
    }
    return o;
