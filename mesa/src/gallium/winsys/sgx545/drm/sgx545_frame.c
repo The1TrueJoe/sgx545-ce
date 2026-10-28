@@ -1005,12 +1005,15 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_d
    c->vdm_counter = (c->vdm_counter + 1) & 3;
 }
 
-/* Vertices per USSE task and index batch (libGLESv2 FUN_00017c20 limits them
- * by the USSE attribute space; the two values here fit every draw seen [G]). */
+/* Vertices per USSE task: 128 / output dwords, at most 16, as the DDK counts
+ * them (EA3 captures of probe-st: 4 and 8 output dwords 16 vertices, 12 10,
+ * 16 8, 20 6, 24 5; the input dwords don't count, 16 in still gives 16).
+ * Half that (64 / output dwords) hung the GPU at 12 output dwords. The DDK's
+ * clear draws 8 per task. */
 static uint32_t
 vertices_per_task(uint32_t out_dwords)
 {
-   uint32_t o = (out_dwords + 3) & ~3u, v = 64 / (o ? o : 4);
+   uint32_t o = (out_dwords + 3) & ~3u, v = 128 / (o ? o : 4);
 
    return v > 16 ? 16 : v;
 }
@@ -1019,10 +1022,10 @@ vertices_per_task(uint32_t out_dwords)
 static void
 vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
          uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords,
-         uint32_t temps)
+         uint32_t temps, uint32_t vpt)
 {
    struct pds p = { 0 };
-   uint32_t rows, va, vpt = vertices_per_task(out_dwords), batch = 16;
+   uint32_t rows, va, batch = 16;
 
    pds_d0(&p, 0, vb);
    pds_d0(&p, 1, attr_dwords - 1);  /* DOUTD: dwords-1, attribute register 0 */
@@ -1108,7 +1111,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
    blk[10] = 5;                                          /* one 4-component set */
    blk[11] = 0;
    state_block(c, blk, 12, 12, 3);
-   vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0);
+   vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0, 8);
    c->draws++;
    return 0;
 }
@@ -1178,11 +1181,20 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    blk[n++] = ispa(st);
    blk[n++] = 0x10 << 8 | (st->color_mask & 0xf) << 4;  /* ISPB: line width 1.0, colour mask */
    blk[n++] = pds_word(c, sec, rows);
-   /* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; the rest from the
-    * DDK's shader object (b0, b16-17 constant; b25-28 = 0xb for its uniform
-    * shader) [G] */
-   blk[n++] = fs->pds_middle ? fs->pds_middle
-                             : 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 | 0xbu << 25;
+   /* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; b0-15 = the
+    * fragment program's primary attributes in units of 4 dwords, b25-28 = 12
+    * divided by that (EA3, DDK captures with 0-5 vec4 varyings: units 1 1 1 2
+    * 2 3, b25-28 12 12 6 6 4; 0xb with one unit, as the DDK's uniform shader
+    * and every draw before had it); b16-17 = 3 [G]. A program with more
+    * attributes than the word declares locks the GPU up (two F32 vec4
+    * varyings, EA3). */
+   {
+      unsigned units = fs->pa_dwords > 4 ? (fs->pa_dwords + 3) / 4 : 1, per = 12 / units;
+
+      blk[n++] = fs->pds_middle ? fs->pds_middle
+                                : units | 3u << 16 | ((fs->sec_dwords + 3) >> 2) << 18 |
+                                  (per < 0xb ? per : 0xbu) << 25;
+   }
    /* DOUTU word 1: b24 = the program has plain iterations, b25 samples (PDS.md) */
    {
       uint32_t w1 = 4;
@@ -1232,7 +1244,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
 
    vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
-            vs->out_dwords, vs->temps);
+            vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
    c->draws++;
    return 0;
 }

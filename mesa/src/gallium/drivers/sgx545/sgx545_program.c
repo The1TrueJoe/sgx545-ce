@@ -314,6 +314,8 @@ struct usp_info {
    struct { unsigned at, sampler, raw; uint64_t smp; } deps[SGX545_MAX_DEP_SAMPLES];
    unsigned n_deps;
    unsigned n_insts;            /* instructions in the flat program, counted from the blocks */
+   unsigned sa_slots;           /* SA registers the program uses from its base on (header 0x7e) */
+   unsigned n_pa;               /* primary attribute registers (header 0x44) */
    unsigned branch_at[64];      /* flat indices of the branches (blocks 3) */
    unsigned n_branches;
 };
@@ -429,6 +431,8 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
    if (size < 0x84 || rd32(u, 0) != 0x55535020 || rd32(u, 4) != 0x23)
       return info->why = "not a USP", false;
    info->temps = rd16(u, 0x46);
+   info->n_pa = rd16(u, 0x44);
+   info->sa_slots = rd16(u, 0x7e);
    info->color_type = rd16(u, 0x66);
    info->color_reg = rd16(u, 0x68);
    n_a = rd16(u, 0x4e);
@@ -562,7 +566,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       if (info.n_deps) {
          unsigned sa[SGX545_MAX_DEP_SAMPLES], n;
 
-         if (info.n_insts != out.n_code || so->const_dwords + 4 * info.n_deps > SGX545_MAX_CONSTS) {
+         if (info.n_insts != out.n_code ||
+             MAX2(so->const_dwords, info.sa_slots) + 4 * info.n_deps > SGX545_MAX_CONSTS) {
             fprintf(stderr, "sgx545: USP blocks hold %u instructions, the program %u: not drawn\n",
                     info.n_insts, out.n_code);
             simple_mtx_unlock(&screen->lock);
@@ -570,6 +575,11 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             ralloc_free(nir);
             return false;
          }
+         /* after every SA register the program uses: its constants (list C)
+          * and the slots the compiler keeps for itself (header 0x7e) */
+         if (info.sa_slots > so->const_dwords)
+            SGX545_DBG(NIR, "fragment program: %u SA slots, %u in list C\n", info.sa_slots, so->const_dwords);
+         so->const_dwords = MAX2(so->const_dwords, info.sa_slots);
          for (unsigned j = 0; j < info.n_deps; j++) {
             so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
             so->dep_sampler[j] = info.deps[j].sampler;
@@ -589,6 +599,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       so->prog.code = so->code ? sgxws_upload_fs(ctx->hw, so->code, so->n_code, info.color_reg, NULL) : 0;
       so->color_reg = info.color_reg;
       so->prog.temps = info.temps;
+      so->prog.pa_dwords = info.n_pa;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
       /* One DOUTI per list A entry, in PA order (docs/PDS.md "DOUTI"): a
        * varying's iterator is its set + 1.  The writer's other kinds 0xb-0xf

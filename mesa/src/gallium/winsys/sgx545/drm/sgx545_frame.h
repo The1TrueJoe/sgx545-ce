@@ -134,6 +134,7 @@ struct sgxws_prog {
    uint8_t douti_tex[10];           /* 0, or the sampler unit + 1 whose DOUTT follows it */
    uint32_t n_douti;
    uint32_t pds_middle;             /* TA state PDS middle word (0: the default) */
+   uint32_t pa_dwords;              /* fragment: primary attribute registers the program uses */
    /* both: */
    uint32_t const_dwords;           /* vertex: constants DMA'd after the driver block */
 };

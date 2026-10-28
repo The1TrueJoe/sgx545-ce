@@ -333,6 +333,11 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
             return;
          }
          sgx545_tex_words(view, ctx->samplers[unit], &fsk[ctx->fs->dep_sa[j]]);
+         SGX545_DBG(DRAW, "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
+                    j, unit, util_format_short_name(view->format), view->texture->width0,
+                    view->texture->height0, view->texture->target, view->texture->last_level + 1,
+                    ctx->fs->dep_sa[j], fsk[ctx->fs->dep_sa[j]], fsk[ctx->fs->dep_sa[j] + 1],
+                    fsk[ctx->fs->dep_sa[j] + 2], fsk[ctx->fs->dep_sa[j] + 3]);
       }
       d.fs_consts = fsk;
       for (unsigned i = 0; i < d.fs->n_douti; i++) {
