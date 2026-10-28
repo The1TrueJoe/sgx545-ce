@@ -15,6 +15,9 @@ in `img/`, and the raw numbers in `data/`.
   our own x86_64 program, with no Intel code loaded at any point.
 - The command stream, render state, PDS programs and USSE shader instruction set are
   decoded well enough to author frames by hand.
+- At 08:15 a frame built entirely from code (`re/gen`, no captured bytes) matched the
+  blob's reference frame bit for bit. Ten variations (colours, two draws, depth tests, a
+  viewport, other surface sizes) matched the blob's own rendering with 0 pixels different.
 - What remains is turning that into a compiler and a Mesa driver.
 
 | | |
@@ -297,16 +300,50 @@ They shared a single EA3 with a session working on the box's Ethernet switch dri
 - **Sharing the EA3.** Before a GPU run, each session messaged the others. Before any
   power cycle it waited for objections.
 - **The EA1 was off limits.** It runs the live Minecraft session.
-- **Power cycles.** Five Bench-plug cycles were needed on the 28th (`data/story-power-cycles.csv`).
+- **Power cycles.** Eight Bench-plug cycles were needed on the 28th (`data/story-power-cycles.csv`).
   One cleared the PDS wedge. One was lost because a file was not `sync`ed before the plug cut
-  power. Three were srvinit's tests.
+  power. Three were srvinit's tests. Three cleared hangs of the first generated frames.
 
 The milestone list is in `data/story-timeline.csv`.
 
-## 9. Next
+## 9. A frame from code alone (07:50–08:30)
 
-- **A frame that is ours end to end.** Our init, our state words from `re/state/build.py`,
-  our PDS and USSE programs, no captured bytes.
+`re/gen` (see `re/gen/GEN.md` and `entries/2026-10-28-0830-frame-from-code.md`) builds
+every buffer of a frame from GL-level parameters:
+
+- the PB and its free list;
+- the RT data and render details;
+- the TA command;
+- the VDM stream and the TA state blocks;
+- every PDS program, from PDS.md's encodings;
+- every USSE program, from assembly text through `re/isa`'s encoder.
+
+It drew the reference triangle bit for bit (md5 `56f8466a…`).
+
+Getting there took three power cycles, and two lessons:
+
+- **The vertex epilogue.** A vertex program's `phas` points at a last phase
+  (`emit.t1 [end f3_20]`); without it the TA hangs.
+- **The previous client.** The microkernel keeps pointers to the previous
+  client's render details and reads them at the next TA. A client with a
+  different kernel-data layout hangs. `sgxgen` now allocates exactly like the
+  DDK, which makes it safe next to blob clients and replays.
+
+Checked against the blob drawing the same scenes:
+
+- two draws;
+- depth LESS/GREATER, with and without depth writes;
+- a viewport;
+- 128×48 and 320×200 surfaces.
+
+All 0 pixels off.
+
+![two draws, depth tests and a viewport, generated](img/2026-10-28-0830-frame-from-code-2.png)
+
+## 10. Next
+
+- **Generated shaders.** The NIR compiler backend fills `sgx_shader`. Then textures,
+  blending, scissor and multi-frame contexts in `re/gen`.
 - **Test-boot the 64-bit DoMapToUser fix**, so native clients can map anywhere.
 - **A compiler backend for USSE**, from NIR.
 - **A Mesa gallium driver.**

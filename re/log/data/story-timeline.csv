@@ -28,3 +28,7 @@ utc,workstream,milestone,commit
 2026-10-28T06:26:25Z,hwcheck,442 hand-assembled draws on the EA3; no hang; decoder corrections,3755f9b
 2026-10-28T06:54:41Z,isa,Merged ISA + finalizer + hardware check; corrections applied,def0390
 2026-10-28T06:54:53Z,srvinit,srvinit assembles the PDS programs itself; firmware file = microkernel only,64a5a78
+2026-10-28T08:01:00Z,frame-from-code,re/gen generator runs on fakepvr; its trace decodes like a DDK capture,
+2026-10-28T08:15:00Z,frame-from-code,First frame built from code alone: back buffer md5 56f8466a (the reference) on a fresh boot,88dfc68
+2026-10-28T08:21:00Z,frame-from-code,DDK kernel-data layout: generated frames safe after DDK clients and replays,88dfc68
+2026-10-28T08:27:00Z,frame-from-code,10 generated variations (colours/two draws/depth/viewport/sizes) all 0 pixels off the blob,

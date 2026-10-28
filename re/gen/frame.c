@@ -2,7 +2,9 @@
  * frame: draw one frame on the SGX545 from code alone (re/gen/sgxgen.c), then
  * dump the render target. Nothing is read from a capture.
  *
- *   frame [-v] [-n node] [-t trace.bin] [-o out.bin] [-s WxH] [-k r,g,b,a] ops...
+ *   frame [-v] [-n node] [-t trace.bin] [-o out.bin] [-s WxH] [-p] [-k r,g,b,a] ops...
+ *
+ * -p makes the surface y-up, as an EGL pbuffer (rows bottom first in -o).
  *
  * The frame starts with a clear (-k, default 0,0,0.5,1: the probe's), then
  * runs the ops in order:
@@ -59,10 +61,12 @@ int main(int argc, char **argv)
 	struct { char op; char *arg; } ops[64];
 	int nops = 0;
 	unsigned long flush = 0;
+	uint32_t sflags = 0;
 
-	while ((opt = getopt(argc, argv, "vn:t:o:s:k:d:V:C:T:F:")) != -1) {
+	while ((opt = getopt(argc, argv, "vpn:t:o:s:k:d:V:C:T:F:")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
+		case 'p': sflags |= SGX_SURFACE_Y_UP; break;
 		case 'n': node = optarg; break;
 		case 'F': flush = strtoul(optarg, NULL, 0); break;
 		case 't': trace = optarg; break;
@@ -98,7 +102,7 @@ int main(int argc, char **argv)
 		return e ? 1 : 0;
 	}
 	c = sgx_ctx_create(&dev);
-	s = sgx_surface_create(c, w, h);
+	s = sgx_surface_create(c, w, h, sflags);
 	vs_xy = sgx_shader_builtin(c, SGX_VS_XY);
 	vs_xyz = sgx_shader_builtin(c, SGX_VS_XYZ);
 	fs = sgx_shader_builtin(c, SGX_FS_UNIFORM);

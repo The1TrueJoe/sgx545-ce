@@ -74,6 +74,7 @@ struct sgx_rt_numbers {
 
 struct sgx_surface {
 	uint32_t w, h, stride;		/* stride in pixels */
+	uint32_t flags;
 	struct sgx_bo color;		/* BGRA8888, top row first */
 	struct sgx_rt_numbers rt;
 	struct sgx_bo rtdata, rtword, entword[2], tailptr, ta40, ta50, rgn[2], ta88[2], bgblock;
@@ -141,7 +142,10 @@ int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace);
 void sgx_dev_close(struct sgx_dev *d);
 
 struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d);
-struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h);
+/* flags: SGX_SURFACE_Y_UP lays rows out bottom first (an EGL pbuffer; a window is
+ * top row first) */
+#define SGX_SURFACE_Y_UP 1
+struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h, uint32_t flags);
 /* Release a surface: the microkernel caches its RT data set and must be told to
  * drop it (SGX_FLUSH_HW_RENDER_TARGET), or the next client's TA hangs. */
 void sgx_surface_destroy(struct sgx_ctx *c, struct sgx_surface *s);

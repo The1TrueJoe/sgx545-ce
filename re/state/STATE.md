@@ -522,7 +522,7 @@ physical address at byte offset 8, and returns its device address (here
 | 1 | 0 | |
 | 2 | 0 | page directory, filled by the kernel (`ui32OffsetToPDDevPAddr` = 8) [D] |
 | 3 | 3200f000 | CCB base (kdata, 0x10420 bytes = 0x10000 + 0x420 of control) [D] |
-| 4 | 3200aa60 | CCB control: write offset, read offset (kdata, 8 bytes) [D] |
+| 4 | 3200aa40 | CCB control: write offset, read offset (kdata, 8 bytes) [D] (0x3200aa60 is a transfer context's) |
 | 5 | 0 | |
 | 6 | 3200e000 | PB descriptor (kdata, 0x3c) [D] |
 | 7 | 10462000 | 0x40-byte scratch block in the 3D params heap (the microkernel's per-context data) [D] |
@@ -547,12 +547,12 @@ heap. Here that is 0x400000 + 0x22000 = 0x422000 bytes = 0x422 pages.
 | 0x2c | 0x400 | ZLS threshold = pages - 0x22 |
 | 0x30 | 0x400 | global threshold = pages - 0x22 |
 | 0x34 | 0x300 | PDS threshold = min(ZLS, TA) - 0x100 |
-| 0x38 | 3200e03c | PB block list (kdata, 0x10 bytes): {pages, first page \| last page<<16, PB address, 0} |
+| 0x38 | 3200e03c | PB block list (kdata, 0x10 bytes): {pages, first page \| last page<<16, PB descriptor address, 0} (`FUN_0001e980`; the capture has 0x3200e000) |
 
 All [D] (formula and capture agree).
 
 **Free list** (3D params heap, 0x40000 bytes, `FUN_0001e980`): one u32 per
-page, `prev<<16 | next`. Page 0 has prev 0xffff, and the last page has next
+page, `prev<<16 | next`, indexed by page number from the heap base. Page 0 has prev 0xffff, and the last page has next
 0xffff: `ffff0001 00000002 00010003 … 041f0421 0420ffff`. The client writes
 it once, before the first kick.
 
@@ -729,7 +729,15 @@ texture, so only mag is proven by the pixels; min stays [D].
 
 ## Building a frame from scratch
 
-What the next step has to generate, in order, without a capture:
+Done in `re/gen` (see `re/gen/GEN.md`): a frame built from these formulas
+alone is pixel-exact on the EA3. Two things it needed that this file didn't
+say:
+
+- every vertex program ends with an epilogue phase;
+- the kernel-data heap must be laid out as the DDK lays it out, because the
+  microkernel reads the previous client's render details.
+
+The list of what a frame needs, in order:
 
 1. **Device memory:** allocate the heaps' buffers.
    - The kernel-data CCB, PB descriptor, render details and RT data;

@@ -34,6 +34,7 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 | `state/decode.py` | annotates every TA/3D state word of a capture: TA command, render details, PB descriptor, VDM stream, TA state blocks, pixel programs and texture words, the end-of-tile PBE words; `--brief` for diffing two captures |
 | `state/build.py` | computes those words from GL-level parameters with STATE.md's formulas; `--check CAPTURE` compares them with the DDK's |
 | `state/STATE.md` | the TA/3D render state as decoded, each field tagged replay-confirmed / diff-confirmed / guess |
+| `gen/sgxgen.c`, `gen/frame.c`, `gen/GEN.md` | frames built from code alone (no capture): the generator library, a scene-driven test program, a fake kernel driver for offline runs, `vary.py` checks against the blob |
 | `pds/DumpDecomp.java` | Ghidra headless script: decompile every function in an address range (`analyzeHeadless ... -postScript DumpDecomp.java out.c lo hi`) |
 
 ## Findings (confirmed on an EA3, 2026-10-27)
@@ -325,3 +326,26 @@ See `state/STATE.md`. In short:
   - PBE clip and stride;
   - kick 1's VDM base;
   - T0 filter and wrap.
+
+## A frame from code alone (EA3, 2026-10-28)
+
+See `gen/GEN.md`. `re/gen/frame` builds every buffer of a frame from
+GL-level parameters with the formulas in STATE.md, PDS.md and ISA.md, and
+nothing from a capture. It draws the reference triangle bit for bit (md5
+`56f8466a…`). Ten variations (vertices and colours, two draws, depth
+LESS/GREATER/no-write, a viewport, 128×48 and 320×200 surfaces) match the
+blob's own rendering with 0 pixels different.
+
+- `pvr.c` writes pvrtrace logs of its own runs (`frame -t`), so the
+  decoders read generated frames like captures. `mkreplay.py` reads x86_64
+  traces.
+- **Every vertex program ends with an epilogue phase** that the previous
+  `phas.i` points to: `phas.i #0, #0 [wait=7]; emit.t1 r0, #0, #0 [end f12
+  f10 f3_20]`. Without it the TA locks up.
+- **The microkernel reads the previous client's render details and RT data
+  entry** when the next TA starts; a client with a different kernel-data
+  layout hangs the TA. DDK clients and replays of DDK captures share one
+  layout; `sgxgen` allocates the same way.
+- **`SGX_FLUSH_HW_RENDER_TARGET` times out on a srvinit-started EA3**, and the
+  GPU locks up after it. `replay` has a `flushrt` op, but `mkreplay.py` only
+  emits it with `--flushrt`.

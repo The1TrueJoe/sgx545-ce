@@ -576,7 +576,7 @@ static void background(struct sgx_ctx *c, struct sgx_surface *s)
 	b[22] = 0x3f80;
 }
 
-struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h)
+struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h, uint32_t flags)
 {
 	struct sgx_dev *d = c->dev;
 	struct sgx_surface *s = calloc(1, sizeof *s);
@@ -585,6 +585,7 @@ struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h
 
 	s->w = w;
 	s->h = h;
+	s->flags = flags;
 	s->stride = (w + 31) & ~31u;
 	rt_numbers(r, w, h);
 	bo_alloc(d, &s->color, H_GENERAL, 0x10000003, s->stride * h * 4, 0x1000);
@@ -903,11 +904,16 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	blk[n++] = 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 | 0xbu << 25;
 	prim = pds_pixel(c, doutu_w0(c, fs->code, 0, fs->temps), 4, 0, &rows);
 	blk[n++] = pds_word(c, prim, rows);
-	/* viewport (window: y flipped) [C x offset, D rest] */
+	/* viewport: a window flips y, a pbuffer doesn't [C x offset, D rest] */
 	blk[n++] = f32(vx + vwid * 0.5f);
 	blk[n++] = f32(vwid * 0.5f);
-	blk[n++] = f32((float)s->h - (vy + vh * 0.5f));
-	blk[n++] = f32(-vh * 0.5f);
+	if (s->flags & SGX_SURFACE_Y_UP) {
+		blk[n++] = f32(vy + vh * 0.5f);
+		blk[n++] = f32(vh * 0.5f);
+	} else {
+		blk[n++] = f32((float)s->h - (vy + vh * 0.5f));
+		blk[n++] = f32(-vh * 0.5f);
+	}
 	blk[n++] = f32((zn + zf) * 0.5f);
 	blk[n++] = f32((zf - zn) * 0.5f);
 	blk[n++] = 0;						/* header 0x200 */
