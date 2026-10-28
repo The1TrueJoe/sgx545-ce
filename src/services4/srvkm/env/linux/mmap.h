@@ -65,7 +65,14 @@ typedef struct KV_OFFSET_STRUCT_TAG
     IMG_UINT32			ui32RefCount;
 
     
-    IMG_UINT32			ui32UserVAddr;
+    /*
+     * Start of the user mapping. unsigned long, not IMG_UINT32: a native
+     * x86_64 client maps above 4 GB. The bridge still reports it in 32-bit
+     * ui32UserVAddr fields (MHANDLE_TO_MMAP_DATA, RELEASE_MMAP_DATA) because
+     * the i386 DDK's ABI has them that way; a 64-bit client must keep its own
+     * mmap() result rather than trust those.
+     */
+    unsigned long		ulUserVAddr;
 
     
 #if defined(DEBUG_LINUX_MMAP_AREAS)
