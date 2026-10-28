@@ -1,5 +1,5 @@
 /*
- * USSE encoder: hw.encode() (re/isa/hw.py) over the generated tables.
+ * USSE encoder: hw.encode() (tools/isa/hw.py) over the generated tables.
  */
 #include <string.h>
 

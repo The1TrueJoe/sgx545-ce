@@ -14,7 +14,7 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ISA = os.path.join(HERE, "..", "re", "isa")
+ISA = os.path.join(HERE, "..", "isa")
 sys.path.insert(0, ISA)
 import hw  # noqa: E402
 import usp  # noqa: E402

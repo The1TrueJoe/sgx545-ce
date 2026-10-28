@@ -1,7 +1,7 @@
-"""Compile a GLSL corpus (re/isa/corpus/c*.glsl format: "@frag name" /
+"""Compile a GLSL corpus (tools/isa/corpus/c*.glsl format: "@frag name" /
 "@vert name" headers) with sgxc.
 
-    python3 -I usc/run_corpus.py SGXC corpus.glsl OUTDIR [-k name] [--layout]
+    python3 -I tools/usc/run_corpus.py SGXC corpus.glsl OUTDIR [-k name] [--layout]
 
 Each fragment shader is paired with a pass-through vertex shader that
 writes every varying it reads (and each vertex shader with a fragment

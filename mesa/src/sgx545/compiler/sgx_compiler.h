@@ -1,6 +1,6 @@
 /*
  * SGX545 shader compiler: NIR in, USSE code out, wrapped in the DDK 1.7
- * USP container (re/isa/ISA.md "The USP container") so the GLES driver's
+ * USP container (docs/ISA.md "The USP container") so the GLES driver's
  * finalizer (or a future gallium driver's) can link it.
  *
  * The input/output conventions are the ones the DDK's driver expects from

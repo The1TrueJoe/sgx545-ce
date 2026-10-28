@@ -1,8 +1,8 @@
 """Instruction counts, sgxc vs libusc, per shader.
 
-    python3 -I usc/count.py OURS_DIR DDK_DIR [--md]
+    python3 -I tools/usc/count.py OURS_DIR DDK_DIR [--md]
 
-Both directories hold NNN-name.usp (DDK_DIR: re/isa/corpus/c1, or the
+Both directories hold NNN-name.usp (DDK_DIR: tools/isa/corpus/c1, or the
 DDK binaries hwcmp.py saved). Counted: the main program's code and branch
 instructions, the secondary update program's (per draw, not per pixel:
 shown apart), and the texture sample blocks (the finalizer adds their code).
@@ -12,7 +12,7 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "re", "isa"))
+sys.path.insert(0, os.path.join(HERE, "..", "isa"))
 import usp  # noqa: E402
 
 

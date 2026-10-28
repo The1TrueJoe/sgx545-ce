@@ -3,7 +3,7 @@ gl4es's own fpe_VertexShader/fpe_FragmentShader + ConvertShader for the
 game's fixed-function states), compiled with sgxc and drawn on the EA3
 against the DDK.
 
-    python3 -I usc/tests/gl4es/mc_run.py SGXC OUT [--calibrate] [--draw]
+    python3 -I tools/usc/tests/gl4es/mc_run.py SGXC OUT [--calibrate] [--draw]
 
 OUT/f: one entry per program with the fragment shader under test, OUT/v
 with the vertex shader under test (both stages are compiled; hwcmp.py

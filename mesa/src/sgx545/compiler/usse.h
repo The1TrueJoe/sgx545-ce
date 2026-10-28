@@ -1,6 +1,6 @@
 /*
  * USSE (SGX545) machine instructions: one instruction = a form from
- * re/isa/hw.py (usse_forms.h, generated), its field values and operands.
+ * tools/isa/hw.py (usse_forms.h, generated), its field values and operands.
  * usse_encode() is a port of hw.encode() over the generated tables.
  */
 #ifndef USSE_H

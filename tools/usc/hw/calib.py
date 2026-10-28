@@ -1,7 +1,7 @@
 """Find out, on the EA3, which DDK constant number each uniform component
 gets (libglslcompiler chooses them, and keeps the map outside the USP).
 
-    python3 -I usc/hw/calib.py SGXC OUTDIR [-k name]
+    python3 -I tools/usc/hw/calib.py SGXC OUTDIR [-k name]
 
 For every test in OUTDIR (a run_corpus.py output) whose shader under test
 has uniforms: draw the real program (DDK-compiled, so the DDK's numbering

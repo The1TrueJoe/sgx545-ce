@@ -1,15 +1,17 @@
 """Check the generated C encoder against hw.py: every instruction of the
-corpora (re/isa/corpus/c1..c3), decoded by hw.decode(), is handed to
+corpora (tools/isa/corpus/c1..c3), decoded by hw.decode(), is handed to
 usse_encode() (tests/enc_lines.c) and must come back as the same 64 bits.
 
-    python3 -I usc/check_enc.py [build/enc_lines]
+    cc -std=c11 -O1 -I mesa/src/sgx545/compiler -o tools/usc/build/enc_lines \
+        tools/usc/tests/enc_lines.c mesa/src/sgx545/compiler/usse.c
+    python3 -I tools/usc/check_enc.py [tools/usc/build/enc_lines]
 """
 import os
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ISA = os.path.join(HERE, "..", "re", "isa")
+ISA = os.path.join(HERE, "..", "isa")
 sys.path.insert(0, ISA)
 import hw  # noqa: E402
 import usp  # noqa: E402

@@ -4,7 +4,7 @@ object, outside the USP. A USP from another compiler has to use the same
 numbers for the DDK's driver to feed it, so this approximates them from the
 source.
 
-Constants (read off corpus c1's USP list C, re/isa/corpus/c1): every uniform
+Constants (read off corpus c1's USP list C, tools/isa/corpus/c1): every uniform
 and literal gets constants on its first appearance in main(), in source
 order; vectors and matrices start at a multiple of 4, scalars take the next
 free component. `1.0 / u` gives 1.0 constant 0 and u 4-7; `if (u.x > 0.5)

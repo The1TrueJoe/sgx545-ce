@@ -1,7 +1,7 @@
 """Draw each compiled shader on the EA3 twice, with the DDK's own USP and
 with sgxc's (uspsub.so), and compare the frames pixel by pixel.
 
-    python3 -I usc/hw/hwcmp.py OUTDIR [-k name] [--stage frag|vert|both] [--dry]
+    python3 -I tools/usc/hw/hwcmp.py OUTDIR [-k name] [--stage frag|vert|both] [--dry]
 
 OUTDIR is a run_corpus.py output (NNN-name.usp + work/name.vert/.frag). The
 box needs /opt/sgx-i386 (the DDK, as for re/probe); glt and uspsub.so are
