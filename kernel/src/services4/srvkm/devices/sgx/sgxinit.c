@@ -1206,7 +1206,14 @@ IMG_VOID HWRecoveryResetSGX (PVRSRV_DEVICE_NODE *psDeviceNode,
 
 	PVRSRVPowerUnlock(ui32CallerID);
 
-	
+	/* A microkernel that did not come back never reads the kernel CCB, which
+	   is usually full by now: queueing more would only wait out
+	   MAX_HW_TIME_US for a slot. The watchdog retries the recovery. */
+	if (eError != PVRSRV_OK)
+	{
+		return;
+	}
+
 	SGXScheduleProcessQueuesKM(psDeviceNode);
 
 	
