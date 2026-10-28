@@ -24,6 +24,10 @@ Every field below carries one of these tags:
   (`gen.py`, `gen2.py`, `gen3.py`; corpora `corpus/c1..c3`), or what
   toggling that feature changes.
 - **hardware**: drawn on the EA3 (re/NOTES.md, the replayer).
+- **writer / reader / driver**: read from libusc's USP writer, the GLES
+  driver's USP loader, or the rest of libGLESv2 (finalizer, draw-time
+  program builder, linker) and libglslcompiler, in Ghidra decompiles
+  (USP sections only).
 - **guess**: a name or meaning that fits but isn't backed by the above.
 
 Function names are Ghidra's with its 0x10000 image base: `FUN_001147f0` is
@@ -1174,7 +1178,7 @@ depthf).
 | op | form | layout | evidence |
 |---|---|---|---|
 | 0 | `pcoeff src0, src1, src2` (0xd2), `ptoff` (0xd3: h15, no sources) | | encoder; names guess (plane coefficients / punch-through off) |
-| 1 | `atst8 dst, pdst, src0, src1, src2` (0xd4) | dst l21-27 + h0-1 without extension (r o pa); pdst = predicate p0-p3 in h7-8, h6 = write it (cleared by the argument's flag 16, "disable write-back": printed `p1.nw`); h22 = f2 b25; h3/h4/h5 sel | encoder; name guess |
+| 1 | `atst8 dst, pdst, src0, src1, src2` (0xd4) | dst l21-27 + h0-1 without extension (r o pa); pdst = predicate p0-p3 in h7-8, h6 = write it (cleared by the argument's flag 16, "disable write-back": printed `p1.nw`); h22 = f2 b25; h3/h4/h5 sel. The GLES driver's own atst8 (`f9340406`) also sets h10, which libusc never does: read as depthf's PRED2 h9-10 = 2, a (p1) predicate (driver; guess) | encoder; name guess |
 | 3 | `depthf src0, src1, src2` (0xd5) | h9-10 pred (PRED2); h4/h5 sel (0x36 rejected) | encoder; name guess |
 
 #### phase / 0xfe-0x100 (h20-22 = 4, h23 = 0)
@@ -1220,9 +1224,11 @@ the target label). The patcher lays the blocks out and fills the targets.
   gradients (fdsx/fdsy) and a sample block).
 - **discard** (dc_*): the condition is a test writing the keep-predicate (p1,
   e.g. `test.fsub.le p1, pa4, pa5` for `if (a.x > b.x) discard`), then a
-  code block holding only `nop` between two labels. The kill itself is not
-  in the USP binary; the patcher replaces that slot (the visibility-test
-  instructions above are the likely candidates; guess).
+  code block holding only `nop` between two labels (USP header 0x76 / 0x78
+  name them). The kill is not in the USP binary: the draw-time builder
+  replaces that nop with `atst8 ... [end]` predicated on p1 and splits the
+  program into two phases (driver; see "Phases, visibility feedback and
+  discard").
 - **calls** (fn_call): the function body is its own labelled region ending
   in `lapc` (a branch block with label 0xffff); each call site is `br
   [link]` (asm.c ICALL: f1 b19) to that label; arguments and results go
@@ -1245,7 +1251,8 @@ the target label). The patcher lays the blocks out and fills the targets.
 - br/ba h10 (f1 b22) and USEASM 0xd7 share target feature +0x10 (16).
 - smp's coordinate count (how many registers the coordinate spans) is not in
   the word; it follows from the dimension and the projective/PCF modes.
-- Where the discard is finally emitted (patcher, not in USP code).
+- The discard path is traced (see "Phases, visibility feedback and
+  discard"); the visibility-test operands are not.
 
 ## USP texture-sample blocks and the driver's sample finalizer
 
@@ -1553,60 +1560,126 @@ The PDS side (DOUTI/DOUTT bit layouts, `FUN_00046b00` = 0x36b00, `FUN_00047b90`
 ## The USP container
 
 Read from libusc's writer (`tools/intern/usc2/uspbin.c`; in
-`libusc.so.1.7.862890`: header and lists `0xf28a0`, code-block walker
-`0xf42a0`, code block `0xf4090`, branch `0xf26e0`, labels `0xf2380`/`0xf23d0`,
-secondary-program writer `0xf2660`, record kind 3 `0xf2250`). **Confirmed**:
-`usp.py` parses all 370 shaders of both corpora and every one ends exactly on
-the end block at the declared size.
+`libusc.so.1.7.862890`: header and lists `0xf28a0` = `FUN_001028a0` in the
+decompile, code-block walker `0xf42a0`, code block `0xf4090`, branch `0xf26e0`,
+labels `0xf2380`/`0xf23d0`, secondary-program writer `0xf2660`, record kind 3
+`0xf2250`) and from the driver's reader (libGLESv2 `FUN_000511d0`, block type
+1, in `$S/gles_sw.c`), which copies the header into a 0xbc-byte record (the
+*record* below, `rec+N`) that the finalizer and `FUN_00054da0` (the finalised
+program, *PROG*) read. **Confirmed**: `usp.py` sizes every list from the header
+alone and parses all 552 shaders of c1-c3; every one ends exactly on the end
+block at the declared size.
 
 Everything goes through u32 / u16 / raw-byte write callbacks, packed with no
 padding, so a u16 field leaves the next u32 unaligned.
 
-| offset | type | meaning |
-|---|---|---|
-| 0x00 | u32 | magic `0x55535020` ("USP ") |
-| 0x04 | u32 | version `0x23` |
-| 0x08 | u32 | size of the binary **minus 12** (the old note said total size; it is 12 short) |
-| 0x0c | u32 | 1: block type "PC shader header" |
-| 0x10 | u32 | program type: 0 fragment, 1 vertex |
-| 0x14 … 0x4d | | flags, register counts, constants-buffer sizes (not decoded) |
-| 0x4e | u16 | list A entries |
-| 0x50 | u16 | list C records |
-| 0x52 | u32 | list B records |
-| 0x56 … 0x7b | | more counts (not decoded) |
-| 0x7c | u16 | instructions in the secondary update program |
-| 0x7e … 0x83 | | (0x82 is always 0x80) |
+### Header
 
-After the header, in order:
+The writer's sources: *state* is libusc's compile state, *SAO* the driver's
+`psSAOffsets` parameter block (state +0x714; glCompileShader fills it, e.g.
+SAO[6] = 9 / 10 and SAO[7] = 0x77 / 0x1f6 for fragment / vertex). Tags: writer
+(field source), reader (where the loader puts it), driver (what reads it),
+corpus (values in c1-c3).
 
-1. **List A**: 12 bytes (6 u16) per entry. These are the iterated inputs; a
-   fragment shader reading varying `a` has `(4, 0, 1, 4, 1, 4)` (highp),
-   `(4, 0, 1, 4, 2, 2)` (mediump), `(4, 0, 1, 4, 3, 2)` (lowp). Field 3 looks like
-   the varying index, field 5 the precision. **Guess** beyond that.
-2. **List B**, then **List C**: records whose first u16 is a kind. Kinds 1, 2
-   and 4 are 8 bytes; kinds 3 and 5 are 10. Kind 1 `(1, n, n, 0)` is one per
-   uniform component the shader reads (constant n → register n). Kinds 2, 3,
-   4 and 5 aren't in the corpus, so only their sizes are known (from the writer).
-3. **Secondary update program**: header `0x7c` instructions, 8 bytes each.
-   **Confirmed** to be a separate program from the main one: every fragment
-   shader's starts with the same four instructions, and the compiler moves all
-   uniform-only math here (`gl_FragColor = -u` puts the negate here and leaves
-   one instruction in the main program; `-a * b` with varyings puts it in the
-   main program and leaves this empty). That it is *the* SGX secondary update
-   program (runs once per draw, writes secondary attributes) is a **strong
-   guess** from that behaviour.
-4. Vertex programs only: a bitmask of `ceil(n/32)` u32: the primary attribute
-   registers the program reads (the PDS fetches those; **corpus**, c3 vo_*), n
-   = header +0x44 (= +0x80), the attribute register count. `usp.py` still sizes
-   it by fit.
-5. Four u32. The writer takes them from the compile state at +0x7fc.
-6. **Block stream**, each block a u32 type and a body, until type 7:
+| off | type | field | meaning | tag |
+|---|---|---|---|---|
+| 0x00 | u32 | magic | `0x55535020` ("USP ") | writer, reader |
+| 0x04 | u32 | version | `0x23` (the reader rejects anything else) | writer, reader |
+| 0x08 | u32 | size | size of the binary **minus 12** | writer |
+| 0x0c | u32 | block type | 1: PC shader header (the reader requires it first) | writer, reader |
+| 0x10 | u32 | program type | 0 fragment, 1 vertex, 2 geometry (SAO[0]) | writer, reader |
+| 0x14 | u32 | flags A | 2 = state +0x9c b20; 4 = +0x9c b21 (the finalizer then lets the colour stay in pa0 in output mode 3); **8 = feedback split**: libusc split the program at a feedback point (`psPreFeedbackBlock`, `psPreFeedbackDriverEpilogBlock`, finalise.c), PROG flag 0x40; 0x10 = state +0xa0 b1, PROG flag 0x80. Corpus: 2 most texture shaders, 8 dc_* except dc_always, else 0 | writer, reader, corpus; meaning of 2/4 unknown |
+| 0x18 | u32 | compile flags | state +0xac verbatim (the flags glslcompiler passes to libusc). b5 (0x20) = the driver will insert visibility feedback (finalise.c only builds the pre-feedback epilog block when it is set); discard shaders also get b11 (0x800); b3 with dynamically indexed uniforms (ix_n, vix_*); b29/b30 vary | writer, corpus; other bits unknown |
+| 0x1c | u32 | flags B | 1 = state +0x9c b14 (all dc_*), PROG 1; 2 = the last instruction cannot take `end` (read by `FUN_00054da0` with the block list), PROG 2; 4 = state +0x7cc ≠ 0 or +0xa0 b10, PROG 4 (sets `phas` h13 and fragment state +0x22c = 2 at draw time); 8 / 0x10 = state +0x9c b11 / b12, PROG 8 / 0x10 (0x10: the finalizer counts one more colour register); 0x20 = +0x9c b4; **0x40 = no secondary update program** (state +0x70c empty), PROG 0x100. The finalizer adds 0x100 when a branch is out of range (PROG 0x800) | writer, reader, driver, corpus |
+| 0x20 | u32 | SAO[0x1a] | 1..10 (reader rejects others), always 9; PROG +4 | writer, reader; unknown |
+| 0x24 | u32 | SAO[0x1b] | always 0x2793; PROG +8 | writer; unknown |
+| 0x28 | u32 | workaround count | u32 ids after the header: 0x54c1, 0x54d1, 0x5518 (21697, 21713, 21784) when state +0xbc b0/b1/b2; none in the corpora | writer, reader; hardware-erratum (BRN) numbers is a guess |
+| 0x2c | u32 | flags C | which SA areas exist (`FUN_00054da0` turns them into PROG +0x30 bits): 1 = list B non-empty; 4 = memory area 0x34/0x60 (state +0x788); 8 = constants in SA (0x3c, 0x7e; state +0x13ec); 0x10 = indexable temporaries in memory (0x40, 0x4a; state +0x9c b2). Corpus: 8 with uniforms, 0x18 with temp arrays | writer, reader, driver, corpus |
+| 0x30 | u16 | SAO[1] | 0; PROG +0x34 (flags C 1) | writer, driver |
+| 0x32 | u16 | | 0 | writer |
+| 0x34 | u16 | SA of memory area | SAO[2] when flags C 4, else 0xffff | writer, driver |
+| 0x36 | u16 | | 0xffff | writer |
+| 0x38 | u32 | in-memory constants | state +0x110 (0 in the corpora) | writer |
+| 0x3c | u16 | constant SA base | first SA register holding constants (SAO[6]: 9 fragment, 10 vertex; `tx_dep_bias` reads its uniform from sa9). List C register numbers are relative to it | writer, driver, corpus |
+| 0x3e | u16 | constant SA count | SA registers available from 0x3c (SAO[7]: 0x77, 0x1f6); the finalizer puts texture state after the program's SAs and moves it to memory when it doesn't fit below 0x3c + 0x3e | writer, driver |
+| 0x40 | u16 | scratch SA | SA register with the address of the indexable-temporary memory (SAO[8], 1 in ix_comp/ix_tmp*), else 0xffff | writer, corpus |
+| 0x42 | u16 | SAO[0xf] | 0; rec +0x3c, PROG +0x26; the finalizer's PDS budget is `0x80 - rec+0x3c` | writer, driver; meaning unknown |
+| 0x44 | u16 | PA count | primary attribute registers the main program uses (fragment: iterated inputs, vi_4 = 16; vertex: attribute registers) | writer, driver, corpus |
+| 0x46 | u16 | temp count | temporaries (r) of the main program (0 straight-line, 5 loops, 13 fl_big); the finalizer raises it for its own code | writer, driver, corpus |
+| 0x48 | u16 | secondary temp count | temporaries of the secondary update program (mod_m: r0-r4 = 5, sign 4, div_m 1) | writer, corpus |
+| 0x4a | u32 | scratch size | bytes of indexable-temporary memory (state +200 × +0x734; ix_comp 0x1000, ix_tmparr 0x4000) | writer, corpus |
+| 0x4e | u16 | list A entries | iterated inputs (fragment only; vertex 0) | writer, reader |
+| 0x50 | u16 | list C records | constants in SA registers | writer, reader |
+| 0x52 | u32 | list B records | constants in memory | writer, reader |
+| 0x56 | u16 | list D entries | 3-u16 entries (libusc 1.7 writes 0) | writer, reader |
+| 0x58 | 2 u32 | sampler mask | one bit per sampler (≤ 16, asserted), state +0x744; set only by the vertex texture shaders (vtx_*) | writer, corpus; meaning unknown |
+| 0x60 | u32 | memory area size | state +0x788 × +200 × 4 (flags C 4) | writer |
+| 0x64 | u16 | | -(state +0x7bc × 4); 0 | writer; unknown |
+| 0x66 | u16 | colour type | fragment: register type of the colour result, 4-valued (1 r, 2 o, 3 pa): 3 | writer, reader, corpus |
+| 0x68 | u16 | colour register | fragment: its number (pa0; pa2 in dc_gt) | writer, reader, corpus |
+| 0x6a | u16 | colour format | fragment: 1 f32, 2 f16, 3 c10, 4 u8 (4 everywhere: packed BGRA8) | writer, reader, corpus |
+| 0x6c | u16 | colour registers | fragment: 1 | writer, reader |
+| 0x6e / 0x70 / 0x72 | u16 | colour alternatives | fragment: the r, pa and o register the finalizer may move the colour to (output modes 2, 3, 1 below) | writer, driver |
+| 0x74 | u16 | start label | label at the main program's start (3, fn_call 4). The loader opens a code block there; the finalizer puts its placeholders in it | writer, reader, driver, corpus |
+| 0x76 | u16 | feedback label | label just before the discard `nop` (the pre-feedback driver epilog), 0xffff if none. PROG +0x16 = its instruction index | writer, reader, driver, corpus (dc_* 4) |
+| 0x78 | u16 | phase-1 label | label after the epilog, where the post-feedback phase starts. PROG +0x18 | writer, reader, driver, corpus (dc_* 5) |
+| 0x7a | u16 | fourth label | PROG +0x1a; 0xffff in the corpora | writer, reader; guess: the sample-rate split point (`psPreSplitBlock`) |
+| 0x7c | u16 | secondary instructions | length of the secondary update program | writer, reader |
+| 0x7e | u16 | SA constant count | SA registers from 0x3c holding constants (flags C 8; tx_dep_bias 1) | writer, driver, corpus |
+| 0x80 | u16 | input mask bits | vertex: the mask's bit count (SAO block +0x14) | writer, reader |
+| 0x82 | u16 | output mask bits | always 0x80 | writer, reader |
+
+The colour *output mode* is the patch context's +0x2cc, set per draw
+(`FUN_0004f2a0`): 0 when blend or colour-mask code will be appended (the
+colour stays where it is), 1 otherwise (moved to the o register: the
+hardware capture's `mov o0, sa9`); the finalizer (`FUN_000541a0`,
+`FUN_000546f0`) adds the move. (**driver**, **hardware**)
+
+### Lists and blocks
+
+After the header, in this order (writer and reader agree):
+
+1. **Workaround ids**: header 0x28 u32s.
+2. **List A** (fragment): 12 bytes (6 u16) per iterated input, in PA
+   order: flags (4 or 0xc for a plain iteration; a sample entry has the
+   sampler in the next field; b1 from another input flag; other bits not
+   traced), sampler, iterator (texture coordinate set + 1 for varyings;
+   0xb/0xc, 0xd, 0xe, 0xf for the writer's other input kinds: the
+   draw-time builder iterates the first two from DOUTI source 0x20, the
+   colour, and the rest from source 0), components, format (1 f32, 2 f16,
+   3 c10: highp, mediump, lowp in the corpus), registers (PA registers it
+   takes: 4 for a highp vec4, 2 for a mediump one). A highp `a` gives
+   `(4, 0, 1, 4, 1, 4)`. (**writer**, **driver** `FUN_00046b00`, **corpus**;
+   which GLSL input each of 0xb-0xf is, gl_FragCoord, gl_PointCoord or
+   gl_FrontFacing, is open)
+3. **List B** then **List C**: constant records whose first u16 is a kind.
+   Kinds 1, 2 and 4 are 8 bytes; kinds 3 and 5 are 10. Kind 1 `(1, n, n, 0)`
+   is one uniform component; 2 is two (F16 halves, `(n & 3) != 3`), 3 a C10
+   triple, 4 a 32-bit value. List B holds constants the driver leaves in
+   memory, list C those it loads into SA registers from header 0x3c on
+   (`FUN_00054da0` adds 0x3c to list C's register field and copies both into
+   PROG). Only list C occurs in the corpora. (**writer**, **driver**)
+4. **List D**: header 0x56 entries of 3 u16 (reader checks ≤ 16, ≤ 4);
+   never written.
+5. **Secondary update program**: header 0x7c instructions, 8 bytes each.
+   **Confirmed** separate from the main program: the compiler moves all
+   uniform-only math here (`gl_FragColor = -u` puts the negate here and
+   leaves one instruction in the main program). It runs once per draw and
+   its pa registers are the main program's sa (**hardware**, re/NOTES.md).
+6. Vertex only: the input mask, `ceil(header 0x80 / 32)` u32: the primary
+   attribute registers the program reads (the PDS fetches those; corpus vo_*).
+7. **Output mask**, `ceil(header 0x82 / 32)` = 4 u32 from state +0x7fc,
+   always `ffffffff ffffffff 0 0`. libusc renumbers vertex outputs by its set
+   bits (`FUN_0007d380`: output n → popcount of the bits below n), so with all
+   64 bits set the numbering is the identity. Its meaning beyond that is a
+   **guess** (the output registers that exist).
+8. **Block stream**, each block a u32 type and a body, until type 7:
 
 | type | body | meaning |
 |---|---|---|
 | 2 | u16 n, u16 flags, 4 u16 MOE state, 4 u16 MOE base offsets, n u16 per-instruction flags, n × 8-byte instructions | straight-line code. flags = format control at block entry (bit 0 EFO F16, bit 1 C10; 2 unless the code uses `setfc`; **corpus**). MOE state per operand: 0x8000 \| increment or 0x4000 \| swizzle |
 | 3 | 8-byte instruction, u16 label | branch (the target is patched at finalize) |
-| 4 | u16 label | label |
+| 4 | u16 label | label; header 0x74-0x7a name the ones the driver patches at |
 | 5 | 56 bytes | texture sample: non-dependent (iterated coordinate) or dependent (libusc's encoded smp as a template); see the sample-block section |
 | 6 | 74 bytes | sample unpack: texel data to the shader's registers and formats |
 | 9 | 82 bytes | texture write (not produced by GLSL ES) |
@@ -1618,6 +1691,139 @@ why no `smp` appears in USP code.
 
 Each instruction is 64 bits, stored as (low word, high word). The disassembler
 names the bits l0..l31 and h0..h31.
+
+## Phases, visibility feedback and discard
+
+A USP fragment program is not runnable as it stands: the finalizer and the
+draw-time builder `FUN_00046b00` (libGLESv2 0x36b00, also the DOUTI builder
+of re/pds/PDS.md) wrap it in phase instructions, and for `discard` add the
+visibility feedback. Read from the decompile and, where Ghidra merged
+variables, from the x86 (`objdump -d --start-address=0x36b00`). Tags:
+**driver** (read from the code), **hardware** (the probe capture in
+re/NOTES.md), **guess**.
+
+### What the finalizer prepares
+
+- The loader opens a code block at the start label (header 0x74), and
+  `FUN_00054b80` puts *k* placeholder instructions (driver opcode 0x60) into
+  it, k = patch context +0x2d0 = 1, or 2 when the draw needs feedback
+  (`FUN_0004f2b0`, set from the draw state below). PROG +0x14 = the index of
+  the first placeholder. (**driver**)
+- PROG +0x16 = the instruction index at the feedback label (0x76): the USP's
+  discard `nop`. PROG +0x18 = the index at the phase-1 label (0x78).
+  (**driver**)
+- PROG byte 0 flags: 1, 4, 8, 0x10 = header flags B 1, 4, 8, 0x10; 2 = the
+  program's last instruction cannot carry `end` (flags B 2, or the last
+  instruction's opcode, `FUN_000593e0`); 0x40 / 0x80 = flags A 8 / 0x10;
+  0x100 = flags B 0x40; 0x800 = branch fix-up; 0x20, 0x200, 0x400 come from
+  finalizer state that was not traced. The draw-time builder reads 2, 4 and
+  0x40 (0x40 only to add one more `phas` when blend code gets a phase of its
+  own in a feedback program). PROG +0x78 = the colour register after the
+  finalizer's move. (**driver**)
+
+### The draw state (ctx +0x7a0)
+
+`FUN_00049a00` sets ctx +0x7a0 together with ISPA (STATE.md: pass type in
+b25-27) when the linked fragment shader's compiled-object flags (+0x1c,
+glslcompiler's result +4) have b3, *the shader discards* (glslcompiler sets
+b3 in `FUN_00019690` when the parser met `discard`, statement 0x23 in a
+fragment shader, `FUN_0004c460`):
+
+| ctx +0x7a0 | when | ISPA pass type |
+|---|---|---|
+| 0 | the shader doesn't discard | 0 opaque / 1 translucent (blend) |
+| 1 | discards, triangles (ctx +0xc74 = the GL primitive 4-6) | 4 punch-through, or 2 when blending |
+| 9 | discards, points or lines (primitive 0-3, or 7) | 5 |
+
+(**driver**; the pass-type names are STATE.md's.)
+
+### What the draw-time builder emits
+
+Instruction words as written (low high), decoded with `dis.py -x`:
+
+| words | decodes as | role |
+|---|---|---|
+| `00000000 fa440700` | `phas.i #0, #0 [wait=7]` | single phase: no next phase |
+| `pc>>3 fa440800 \| t` | `phas.i #pc, #t` | phase 0 → phase 1 at `pc` (byte address relative to the code heap, /8); t = (temps + 3) / 4 in h0-7; h13 = PROG flag 4; h11 (`rate=1`) when the blend code runs in a phase of its own |
+| `00000000 fa4c0700` | `phas.i #0, #0 [end wait=7]` | last phase ends here |
+| `00000000 f8040140` | `nop [end]` | appended when PROG flag 2 says the last instruction can't take `end` |
+| `n<<14 \| (n+1)<<7 \| b0000004 f8300004` | `pcoeff pa<n>, ...` | n = PA registers taken by the program's iterated inputs: the first register after them |
+| `c<<21 \| c<<14 \| f0000184 f9340406` | `atst8 pa<c>, p0.nw, pa<c>, ... [end]` with h10 set | c = PROG +0x78, the colour register |
+| `a0000000 28a10002` | `mov pa0, pa0 [skipinv rcnt]` | a no-op in pcoeff's place (state 9) |
+| `(n+2)<<14 \| f0000184 fb340404` | `(p1) depthf pa<n+2>, ... [end]` | built for state 9, see below |
+
+Without feedback (ctx +0x7a0 bit 0 clear):
+- placeholder 0 = `phas.i #0, #0 [wait=7]`, then the program, with `end`
+  set (h18) on its last instruction, or `nop [end]` appended (PROG flag 2).
+  **hardware**: the probe's finalised main program is
+  `phas.i #0,#0 [wait=7]`, `mov o0, sa9 [end]`, and its secondary program
+  starts with the same `phas`.
+- Blend and colour-mask code (`FUN_000457d0`; the mask is the
+  `sopwm ... 0x90b00601 | mask<<11` of STATE.md) is appended after the
+  program; with ctx +0x1280 it gets a phase of its own (a `phas` to it, then
+  `phas.i #0,#0`).
+
+With feedback, ctx +0x7a0 = 1 (discard on triangles):
+
+```
+[+0x14]   phas.i #phase1, #temps4             (phase 0 runs up to the feedback)
+[+0x14+1] pcoeff pa<n>, ...                   (PDS-iterated value, see below)
+          ... the shader up to the discard test (writes p1 = keep) ...
+[+0x16]   atst8 pa<c>, p0.nw, pa<c>, ... [end] (replaces the USP's nop; h10 set)
+[+0x18]   phase 1: the rest of the shader (colour packing)
+          phas.i #0, #0 [end wait=7]          (appended after the program)
+```
+
+- The PDS program gets one more plain iteration after the shader's own:
+  DOUTI iterate half `0x7811000` (source 0x22, 3 components, 0x6000000),
+  or `0x7c11000` (4 components) with ctx +0x1280; it fills pa<n>..: that is
+  what `pcoeff` reads (**driver**; that source 0x22 is the triangle's depth
+  plane, so `pcoeff` = hand the ISP its plane coefficients, is a **guess**
+  from the name).
+- **Which predicate kills**: atst8's h10. libusc's encoder never sets it
+  (`{?h10}` in dis.py); in depthf, the same group's h9-10 is a 2-bit
+  predicate (PRED2) where 2 = p1, and atst8's word has h9-10 = 2. So the
+  feedback is predicated on p1, the keep predicate the USP's `test`
+  computed: pixels with p1 false fail (**guess**, strong: the driver
+  never writes p1 itself, and the USP's only discard code is that test).
+- atst8's other operands (src1 = 3, src2 = 4 with bank bits l28-31 = 0xf)
+  are fixed; the colour register is both its source and destination
+  (alpha test on the colour's 8-bit alpha, with the reference/function in
+  ISP state: **guess**; GLES2 has no alpha test, so the ISP's function is
+  presumably "always" for a pure discard). Not traced.
+
+With ctx +0x7a0 = 9 (discard on points/lines): a second extra iteration
+(`0x7800000`, source 0, 3 components) is added, pcoeff's slot gets
+`mov pa0, pa0`, and the builder computes `(p1) depthf pa<n+2>, ... [end]`
+(hi `fb340404`, predicated on p1). **But the x86 stores those two words into
+its own stack slots (`0xb8(%esp)`, `0xbc(%esp)` at 0x37304-0x3731e), not into
+the program**: the discard `nop` stays, and the slot at 0xbc is the temporary
+count returned by the blend builder, so the program's temp count becomes
+0xfb340404. As compiled this path looks broken in DDK 1.7 (**driver**;
+not run on hardware).
+
+### What a compiler must emit to discard
+
+Nothing is "killed" in the USSE: a discarding pixel shader is a two-phase
+program whose phase 0 ends in a visibility test, and the ISP decides.
+
+1. Compute the keep condition into a predicate (libusc uses p1).
+2. Start the program with `phas.i #<phase-1 address>, #<temps/4>` and
+   `pcoeff pa<n>, ...` (with the PDS iterating the extra 3-component
+   source-0x22 input into pa<n>.. after the varyings).
+3. Run everything the feedback depends on in phase 0, then
+   `atst8 pa<c>, p0.nw, pa<c>, #3?, #4? [end]` with h9-10 = 2 (p1):
+   copy the driver's words `f0000184 | c<<21 | c<<14`, `f9340406`.
+4. Phase 1 (the colour output) follows, ending with
+   `phas.i #0, #0 [end wait=7]`.
+5. ISPA pass type 4 (2 when blending) for triangles. For points and
+   lines the driver wants pass type 5 and `(p1) depthf`, but its own code
+   never emits the depthf; untested.
+
+Open: the atst8 / depthf / pcoeff operand meanings, h10 confirmed as a
+predicate, the 0x22 iterator source, and whether a discard that is
+unconditional (dc_always: flags A 8 clear, so PROG 0x40 clear) is handled
+differently by the hardware; all need a draw on the EA3.
 
 ## What a compiler needs
 
@@ -1677,8 +1883,15 @@ backed above; this section only collects it.
 - **if/else**: libusc if-converts (both sides, predicated `mov`), even for
   large bodies; branches only around texture reads.
 - **discard**: a `test` writes the keep predicate (p1, the inverted
-  condition); the USP holds a `nop` placeholder that the finalizer replaces
-  with the kill (which instruction exactly is open).
+  condition); the USP holds a `nop` at the feedback label. At draw time the
+  program becomes two phases: `phas` + `pcoeff` at the start, the nop
+  replaced by `atst8 ... [end]` predicated on p1 (h9-10 = 2), the rest in
+  phase 1, and ISPA pass type 4. See "Phases, visibility feedback and
+  discard" for the words and what is a guess.
+- **Phases**: every finalised fragment program (main and secondary) starts
+  with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
+  hardware) and ends with `end` on its last instruction or an appended
+  `nop [end]`; a feedback program ends with `phas.i #0, #0 [end wait=7]`.
 - **Loads and samples** set a DRC (drc0/drc1): `wdf drc` before the first
   use of the result; alternate DRCs to keep two in flight.
 
@@ -1702,7 +1915,12 @@ backed above; this section only collects it.
   DOUTI/DOUTT, re/pds/PDS.md).
 - The colour is built in pa0 as packed BGRA8: two `pck.u8.f32 ... scale`
   with destination byte masks (byte 0 B, 1 G, 2 R, 3 A: hardware); the
-  finalised program writes the colour to o0 (hardware, the probe).
+  finalised program writes the colour to o0 (hardware, the probe). The USP
+  header (0x66-0x6c) says where the compiler left it; blending and the
+  colour mask are code the driver appends, reading it from there.
+- Iterators: each list-A entry is one DOUTI in PA order; a varying's
+  iterator is its *fragment-side* texture coordinate set + 1, and GL's
+  linker maps it to the vertex shader's set (below).
 - Texture reads: see "The texture-sample sequence a compiler must emit"
   above: `smp` (dimension, LOD mode, coordinate, 4 texture-state words in
   sa), `wdf`, unpack with `pck`. Projection has no bit: divide first.
@@ -1712,13 +1930,48 @@ backed above; this section only collects it.
 - Attributes arrive in pa, in order of first use, one register per
   component used (a vec4 takes 4); the USP's vertex bitmask is the set of
   live pa registers and header +0x44/+0x80 their count.
-- `gl_Position` is o0-o3. Varyings follow from o4, packed in order (vec4 = 4
-  registers, vec2 = 2, float = 1; c3 vo_vall puts o0 at o4, o1 at o8, o2 at
-  o12, o3 at o14). Outputs can be read back as sources.
-- `gl_PointSize` is clamped to the point size range with
-  `fminmax oN, x, x, saK.f16` (an F16 min/max pair in sa) and written after
-  the varyings; when it is written, varyings start at o6 instead of o4.
-  Why o4-o5 are skipped is not explained by the USP binary (the driver's
-  output layout; open).
+- **The output buffer** (what the TA reads per vertex) is: the position,
+  o0-o3; then the enabled *texture coordinate sets* 0..9 in set order, each
+  taking its size (1-4 dwords) with no gaps; then the point size, one
+  dword, when the shader writes it. The driver builds the TA words from the
+  vertex shader's compiled-object fields (glCompileShader copies them from
+  glslcompiler's UniFlex program +0x34..+0x84): +0x20 bits 3-12 = set 0-9
+  enabled, b13 (0x2000) = point size; +0x24.. = size per set; +0x4c.. =
+  precision per set. Output select = `dwords << 16 | 0x3000`, `| 0x100` with
+  point size (dwords = 4 + sizes + 1); TSP word 0 = 3 bits per set (1, 2, 3,
+  or 5 for 4 components); TSP word 1 = the sets with precision value < 3
+  (libGLESv2 at 0x2f4b0, `+0x248/+0x24c/+0x250`; re/state/STATE.md). The USP
+  has none of this: its header has no output count. (**driver**)
+- **Varyings to sets**: glslcompiler (`FUN_00029ff0`, 10 sets × 4
+  components, "Failed to allocate varyings") takes the active varyings by
+  type, mat4, mat2, vec4, mat3, vec3, vec2, float (table 0x464c0), within
+  a type the largest first (by the symbol's +0x14, the array size: guess),
+  and gives each row a new set while sets remain; past 10 it
+  packs rows into free components of sets with the same precision.
+  (**driver**; corpus: vo_vall's o0, o1, o2 (vec2), o3 (float) land at o4,
+  o8, o12, o14 = sets 0-3 of sizes 4, 4, 2, 1.) Unwritten varyings get no set.
+- **gl_PointSize**: when a vertex shader writes it, glslcompiler reserves
+  set 0 *before* allocating varyings: enabled, 2 components, precision 1
+  (`FUN_00029ff0`: `+0x218 = 1` first free set, component bits 0-1 used).
+  The shader never writes it, so o4-o5 are a hole and varyings start at
+  o6, with the point size last (vo_ps: o6; vo_psv: vec4 at o6-o9, size at
+  o10) (**driver**, **corpus**). Guess: set 0 is where the hardware puts
+  the point-sprite coordinate (gl_PointCoord) for points. The size is
+  clamped first: glslcompiler applies ICode op 0x24 with the constant 511.0
+  to it (`FUN_0003c5a0`; a min, guess) and libusc emits
+  `fminmax oN, x, x, saK.f16` against the driver's range in sa.
+- **Matching the fragment shader**: each shader is allocated on its own;
+  GL's linker (0x2f4b0) matches varyings by name (type, size and
+  invariance must agree) and keeps a per-program table, program +0xb0[fs
+  set] = vs set (and +0xd8 the reverse). The draw-time DOUTI for a varying
+  takes source = +0xb0[its set] + 1, so the fragment program reads the
+  vertex shader's set into its own PA order. A compiler that compiles both
+  stages can give a varying the same set on both sides and needs no table.
+- **What a compiler must produce**: position in o0-o3; each varying in
+  the o registers of its set (4 + the sizes of the lower sets); the point
+  size, if written, after the last set, with set 0 reserved (2 dwords,
+  unwritten) ahead of the varyings; and to the driver/TA: the set mask,
+  sizes and precisions (output select and TSP words above). Outputs can be
+  read back as sources.
 - Vertex texture fetch is always a USSE `smp` with LOD (c48 = 0.0 for
   `texture2D`).
