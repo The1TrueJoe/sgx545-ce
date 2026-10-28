@@ -531,7 +531,10 @@ clear). Two cautions for anyone continuing:
 - A few minutes after the cycle the whole VDC block started reading 0,
   timings included, while its PCI command and power state were unchanged.
   The cause is unknown; the reads before were read-only, and the test's one
-  write (clearing the vblank bit) came after it had already read 0.
+  write (clearing the vblank bit) came after it had already read 0. The
+  picture stayed up throughout (the user saw Minecraft on the screen
+  afterwards): scanout continued while the registers read 0, so something
+  gates register access, not the pipe.
 
 Until a vblank source is proven, swapping with the 1.3 ms blit is the
 tear-light path, and rendering straight into the fb0 wrap (section 6) is the
