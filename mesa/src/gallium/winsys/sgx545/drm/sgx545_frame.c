@@ -698,7 +698,6 @@ sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h)
    rd[0xcc / 4] = 0x100;
    rd[0xd0 / 4] = s->rd_sync.va;
    rd[0xd8 / 4] = s->rtdata.va;
-   rd[0xdc / 4] = s->rtdata.va + 0x18 + 0x38;
    rd[0x104 / 4] = 1;                     /* [G] */
    rd[0x110 / 4] = s->rd_w8.va;
    rd[0x114 / 4] = s->rd_w4.va;
@@ -1171,8 +1170,9 @@ vdm_end(struct sgxws_ctx *c)
  * target as the DDK's swaps do it (3- and 6-frame captures of probe-st with
  * PROBE_FRAMES): one kick, first and last in scene; TA flags 0x63, plus 0x10
  * on the target's first frame; the frame number at +0x20 and at b14 of the 3D
- * flags; the RT data entry and the region headers alternate, frame 0 taking
- * entry 1 and the second region-header array.
+ * flags; the RT data entry (in the command and in render details +0xdc) and
+ * the region headers alternate, frame 0 taking entry 1 and the second
+ * region-header array.
  */
 static void
 ta_command(struct sgxws_ctx *c, uint32_t *cmd)
@@ -1180,6 +1180,7 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    struct sgxws_rt *s = c->rt;
    uint32_t f = s->frames, odd = f & 1, *t = cmd + 0x238 / 4, *rd = s->rd.map;
    uint32_t rgn_this = s->rgn[odd ? 0 : 1].va, rgn_next = s->rgn[odd ? 1 : 0].va;
+   uint32_t entry = s->rtdata.va + 0x18 + 0x38 * (odd ? 0 : 1);
 
    memset(cmd, 0, TA_CMD_SIZE);
    cmd[0x00 / 4] = TA_CMD_SIZE;                     /* size, rounded to 64 */
@@ -1195,7 +1196,7 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    cmd[0x38 / 4] = s->rd.va;
    cmd[0x3c / 4] = s->hwsync.va;
    cmd[0x40 / 4] = s->rtdata.va;
-   cmd[0x44 / 4] = s->rtdata.va + 0x18 + 0x38 * (odd ? 0 : 1);
+   cmd[0x44 / 4] = entry;
    t[0x00 / 4] = 0x20000000;                        /* TE AA */
    t[0x04 / 4] = s->n.mtile1;
    t[0x08 / 4] = s->n.mtile2;
@@ -1214,6 +1215,22 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
 
    rd[0x20 / 4] = rgn_this;                         /* region headers of this render */
    rd[0x28 / 4] = rgn_next;                         /* and of the next */
+   /* The RT data entry this render retires.  It must follow cmd+0x44: left
+    * at entry 1 (as one frame needs), the microkernel retires the wrong entry
+    * on odd frames, their PB pages are never freed, and the 3D locks up on
+    * the fourth frame (EA3, 2026-10-28). */
+   rd[0xdc / 4] = entry;
+
+   /* What the DDK's client writes before every kick (a word-by-word diff of
+    * its 6-frame capture against ours): the frame counter in the RT data
+    * header's word, which picks the entry that renders (counter & 1), and the
+    * render-details and HW sync-list access words, which the microkernel
+    * clears.  Left alone, the counter stays at 1, odd frames retire the
+    * wrong entry, their PB pages are never freed, and the 3D locks up on the
+    * fourth frame (EA3, 2026-10-28). */
+   s->rtword.map[0] = f + 1;
+   s->rd_sync.map[0] = 1;
+   s->hwsync_access.map[0] = 1;
 }
 
 static int
