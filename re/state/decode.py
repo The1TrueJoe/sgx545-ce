@@ -165,7 +165,7 @@ def ta_block(o, mem, va, n):
                 if j == 0:
                     o.w(where, v, "texcoord sizes, 3 bits per set (1,2,3 comps; 5 = 4) [D]")
                 else:
-                    o.w(where, v, "texcoord sets with precision < 2 (bitmask) [D]")
+                    o.w(where, v, "texcoord sets with precision value <= 2 (bitmask) [D]")
             else:
                 o.w(where, v, f"{nm} [G]")
         i += cnt

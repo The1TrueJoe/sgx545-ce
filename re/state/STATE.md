@@ -326,7 +326,7 @@ z scale.
   - Status: D.
 - **TSP word 0:** 3 bits per texcoord set: 1, 2, 3 components, or 5 for 4
   components [D].
-- **TSP word 1:** a bitmask of the sets with a precision below 2 [D].
+- **TSP word 1:** a bitmask of the sets whose precision value is at most 2 (libGLESv2 0x203bc: `cmpl $0x2, 0x4c(set)`, `ja` skips) [D].
 
 ### Blending and the colour mask are shader code
 
