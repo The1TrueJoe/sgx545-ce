@@ -425,9 +425,9 @@ def vdm(o, mem, va):
             blocks.append((t, addr, bits(info, 26, 6) * 16))
             va += 8
             continue
-        if t == 8:
+        if t in (8, 9):
             a, b, c, d, e = (mem.u32(va + 4 * k) for k in range(1, 6))
-            o.w(f"{va:#x}", w, f"VDM index list: count={w & 0xffff} prim={bits(w, 26, 2)} "
+            o.w(f"{va:#x}", w, f"VDM index list: count={w & 0xffff} prim={bits(w, 26, 2)}{' fan' if w & 1 << 28 else ''} "
                                f"(0 tri, 1 line, 2 point, 3 strip; fan = b28) flags {w & 0x00c00000:#x} [D]")
             o.w(f"{va + 4:#x}", a, f"  index buffer {a & ~3:#x}{' 32-bit' if c & 0x1000000 else ' 16-bit'} [D]"
                                    + tag(mem, a & ~3))
