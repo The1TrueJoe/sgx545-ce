@@ -107,7 +107,7 @@ struct sgx545_context {
    /* SGX545_STATS=1: where the time goes, printed every 2 s */
    struct {
       bool on;
-      uint64_t t0, draw_ns, flush_ns, tex_ns, compile_ns;
+      uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
    } stats;
 

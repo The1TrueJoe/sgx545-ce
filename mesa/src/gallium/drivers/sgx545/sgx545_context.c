@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <time.h>
+
 #include "util/os_time.h"
 #include "util/u_debug.h"
 #include "util/u_debug_cb.h"
@@ -88,11 +90,16 @@ sgx545_finish(struct sgx545_context *ctx)
 void
 sgx545_stats_report(struct sgx545_context *ctx)
 {
-   uint64_t now = os_time_get_nano(), dt = now - ctx->stats.t0;
+   uint64_t now = os_time_get_nano(), dt = now - ctx->stats.t0, cpu;
    double ms = 1e-6;
+   struct timespec ts;
 
    if (dt < 2000000000ull)
       return;
+   /* the thread's own CPU time: the rest of the window it waited */
+   clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+   cpu = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+   fprintf(stderr, "sgx545 stats: thread CPU %.0f ms of %.0f\n", (cpu - ctx->stats.cpu0) * ms, dt * ms);
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
            dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,
@@ -103,6 +110,7 @@ sgx545_stats_report(struct sgx545_context *ctx)
       ctx->hw->room_flushes = 0;
    ctx->stats.on = true;
    ctx->stats.t0 = now;
+   ctx->stats.cpu0 = cpu;
 }
 
 void

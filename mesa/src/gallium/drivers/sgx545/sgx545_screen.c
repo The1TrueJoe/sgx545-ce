@@ -112,6 +112,10 @@ sgx545_init_screen_caps(struct pipe_screen *pscreen)
    caps->clip_planes = 0;
    caps->texture_transfer_modes = 0;
    caps->max_vertex_element_src_offset = 2047;
+   /* the draw gathers vertices from wherever they are, so client arrays
+    * needn't be copied into upload buffers first (u_vbuf's copy was a
+    * second memcpy of every gl4es draw) */
+   caps->user_vertex_buffers = true;
 }
 
 static bool

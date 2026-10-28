@@ -1376,17 +1376,20 @@ token_done(const struct sgxws_token *t)
    return !t->sd || (int32_t)(t->sd->ui32WriteOpsComplete - t->value) >= 0;
 }
 
-/* poll a render's completion, as the DDK's client waits (0.1 ms steps) */
+/* poll a render's completion: 50 us steps doubling to 1 ms (a frame's wait
+ * at 0.1 ms steps was thousands of wakeups, a quarter of the render
+ * thread's CPU time in the kernel) */
 static int
 token_wait(struct sgxws_token *t, unsigned ms)
 {
-   unsigned n = 0;
+   uint64_t waited = 0, step = 50000, limit = (uint64_t)ms * 1000000;
 
-   while (!token_done(t) && n < ms * 10) {
-      struct timespec ts = { 0, 100000 };
+   while (!token_done(t) && waited < limit) {
+      struct timespec ts = { 0, (long)step };
 
       nanosleep(&ts, NULL);
-      n++;
+      waited += step;
+      step = step * 2 < 1000000 ? step * 2 : 1000000;
    }
    if (!token_done(t))
       return -ETIMEDOUT;
