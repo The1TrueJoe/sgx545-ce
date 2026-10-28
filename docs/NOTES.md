@@ -126,7 +126,11 @@ Learned on the way:
   VMA with `IMG_UINT32 ulVMAPos`, so mapping device memory above 4 GB fails
   with `VM_INSERT_PAGE failed (-14)`. i386 clients never notice. The replay maps
   with `MAP_32BIT`; the real fix is `unsigned long` in the driver (same
-  pattern in osfunc.c `ulPFNRaw` is worth checking).
+  pattern in osfunc.c `ulPFNRaw` is worth checking). Fixed in `kernel/`
+  (`DoMapToUser` and `OSAcquirePhysPageAddr`), and tested on an EA3 with a CI
+  kernel: `replay -H` (all device memory above 4 GB) and `-W` (wrapped buffer
+  above 4 GB) give the same back buffer as the default mode, and the i386
+  probe is unchanged (log entry `2026-10-28-1310-user-va-64bit`).
 - Apart from that, the native x86_64 bridge (no compat layer) works for every
   call used here: connect, acquire, memctx, alloc, mhandle→mmap, wrap,
   render-context registration, DOKICK with a native `pahDstSyncHandles` array.
