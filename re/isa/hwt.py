@@ -31,6 +31,7 @@ sys.path = [p for p in sys.path if os.path.abspath(p or ".") != HERE]
 import dataclasses  # noqa: E402,F401
 sys.path.insert(0, HERE)
 import asm  # noqa: E402
+import hw  # noqa: E402
 
 PROG = 0x37008388           # main pixel program, after its phas.i header
 DOUTU0 = 0x2e018020         # main program's DOUTU word 0 in the PDS data
@@ -65,34 +66,54 @@ def base(work):
 
 
 def program(lines):
+    """assemble, tracking format control (setfc) the way the hardware does; it starts
+    with the colour C10 select on (hwt_p6)"""
+    hw.CTX["fc"] = 2
     words = []
     for t in lines:
-        hi, lo = asm.assemble(t)
+        if t.startswith("raw "):            # "raw <hi> <lo>": a word the assembler (rightly) refuses
+            hi, lo = (int(x, 16) for x in t.split()[1:3])
+        else:
+            hi, lo = asm.assemble(t)
+        hw.track(hw.decode(lo, hi))
         words += [lo, hi]
+    hw.CTX["fc"] = 2
     return words
 
 
-def script(tmpl, name, words, pokes=()):
-    p = [f"poke {PROG:#x} " + " ".join(f"{w:#010x}" for w in words)]
+def script(tmpl, name, words, pokes=(), full=False):
+    # no words: leave the captured main program (`mov o0, sa9`, the uniform colour) in place
+    p = [f"poke {PROG:#x} " + " ".join(f"{w:#010x}" for w in words)] if words else []
     p += [f"poke {va:#x} " + " ".join(f"{w:#010x}" for w in ws) for va, ws in pokes]
     y, x, n = ROW
     s = tmpl.replace("{POKES}", "\n".join(p))
-    return s + f"dump {FB + (y * PITCH + x) * 4:#x} {n * 4:#x} {BOX}/{name}.row\ndump {FB:#x} 0x4 {BOX}/{name}.bg\n"
+    s += f"dump {FB + (y * PITCH + x) * 4:#x} {n * 4:#x} {BOX}/{name}.row\ndump {FB:#x} 0x4 {BOX}/{name}.bg\n"
+    if full:
+        s += f"dump {FB:#x} {PITCH * 480 * 4:#x} {BOX}/{name}.fb\n"
+    return s
 
 
 RUNNER = r"""
 cd %(box)s
+# the replay needs the GPU to itself (its buffers must land at the captured addresses):
+# wait while another process has the PVR device open, and retry a draw that collided (rc 2)
+busy() { for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] && continue; ls -l $p/fd 2>/dev/null | grep -q /dev/dri/card0 && return 0; done; return 1; }
 for t in $(cat list); do
-  rm -f $t.row $t.bg
-  n=$(dmesg | wc -l)
-  ./replay $t.s data > $t.log 2>&1 & P=$!
-  ( sleep 20; kill -9 $P 2>/dev/null && echo WATCHDOG ) & W=$!
-  wait $P; rc=$?; kill $W 2>/dev/null
-  k=$(dmesg | tail -n +$((n+1)) | grep -v pvr-compat | grep -i -E 'recover|lockup|hwr|timeout|error' | head -3)
+  for try in 1 2 3 4 5; do
+    i=0; while busy && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done
+    rm -f $t.row $t.bg
+    n=$(dmesg | wc -l)
+    ./replay $t.s data > $t.log 2>&1 & P=$!
+    ( sleep 20; kill -9 $P 2>/dev/null && echo WATCHDOG ) & W=$!
+    wait $P; rc=$?; kill $W 2>/dev/null
+    [ $rc = 2 ] && grep -q "landed at" $t.log && { echo "$t: another GPU client, retry"; sleep 5; continue; }
+    break
+  done
+  k=$(dmesg | tail -n +$((n+1)) | grep -v -E 'pvr-compat|PVRSRVOpenDCDeviceKM|OSAcquirePhysPageAddr' | grep -i -E 'recover|lockup|hwr|timeout|error' | head -3)
   echo "$t rc=$rc $k"
   if [ $rc != 0 ] || [ -n "$k" ]; then echo "STOP at $t"; tail -5 $t.log; break; fi
 done
-tar cf res.tar *.row *.bg 2>/dev/null
+tar cf res.tar *.row *.bg $(ls *.fb 2>/dev/null) 2>/dev/null
 """
 
 
@@ -130,6 +151,8 @@ def main():
     ap.add_argument("suite")
     ap.add_argument("-k", default="")
     ap.add_argument("--dry", action="store_true", help="assemble and print, don't run")
+    ap.add_argument("--full", metavar="DIR", help="also dump each test's whole back buffer (BGRA8888, "
+                    "736-pixel stride, 480 rows) to DIR/hwt_frame_<test>.bgra")
     ap.add_argument("--work", default=os.environ.get("HWT_WORK", "/tmp/hwt"))
     a = ap.parse_args()
     sys.path.insert(0, os.getcwd())
@@ -138,8 +161,7 @@ def main():
     os.makedirs(a.work, exist_ok=True)
     for name, lines, *_ in tests:
         print(f"-- {name}")
-        for t in lines:
-            hi, lo = asm.assemble(t)
+        for t, (lo, hi) in zip(lines, zip(*[iter(program(lines))] * 2)):
             print(f"   {hi:08x} {lo:08x}  {t}")
     if a.dry:
         return
@@ -147,9 +169,15 @@ def main():
     for t in tests:
         name, lines = t[0], t[1]
         pokes = t[3] if len(t) > 3 else ()
-        open(os.path.join(a.work, f"{name}.s"), "w").write(script(tmpl, name, program(lines), pokes))
+        open(os.path.join(a.work, f"{name}.s"), "w").write(script(tmpl, name, program(lines) if lines else [], pokes,
+                                                                  full=bool(a.full)))
     log, res = run_box(a.work, tests)
     print(log.strip())
+    if a.full:
+        os.makedirs(a.full, exist_ok=True)
+        for name, *_ in tests:
+            if f"{name}.fb" in res:
+                open(os.path.join(a.full, f"hwt_frame_{name}.bgra"), "wb").write(res[f"{name}.fb"])
     bad = 0
     for name, lines, expect, *_ in tests:
         row, bg = res.get(f"{name}.row"), res.get(f"{name}.bg")

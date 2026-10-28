@@ -6,7 +6,7 @@
 Syntax is what dis.py prints (see hw.py): optional predicate in
 parentheses, mnemonic with its .modifiers, operands in hardware slot order
 (r o pa sa c g i # idx, bank[idxN+off] for indexed operands, -x / |x| for
-modifiers, .f16 under format select), then in brackets the flags and fields
+modifiers, .f16.lo|.hi / .c10 under format select), then in brackets the flags and fields
 (name or name=value). Every form comes from libusc's assembler, so anything
 the encoder can't produce is rejected rather than guessed.
 

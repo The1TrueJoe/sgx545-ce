@@ -1,0 +1,6 @@
+base rc=0 
+fmad_plain rc=0 
+br_2 rc=0
+base                     0xff00ff00  f32 -1.7146522e+38 f16 (nan, nan)  
+fmad_plain               0xc1b40000  f32 -22.5          f16 (0, -2.85156)  ok
+br_2                     0x00000055  f32 1.1911037e-43  f16 (5.06639e-06, 0)  ok

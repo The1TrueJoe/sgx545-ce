@@ -1,0 +1,19 @@
+test_f16_half_r0_lt_r1   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_f16_half_r1_lt_r0   0x3f800000  f32 1              f16 (0, 1.875)  
+efo_bit6_nofc            0x40404200  f32 3.0040283      f16 (3, 2.125)   NONUNIFORM [1065353216, 1077953024, 3410908202, 3770768386]
+efo_bit6_fc01            0x40404200  f32 3.0040283      f16 (3, 2.125)   NONUNIFORM [1065353216, 1077953024, 3410908202, 3770768386]
+efo_bit6_fc11            0x40800000  f32 4              f16 (0, 2.25)  ok
+sop2_c10_alpha_src       0x100000ff  f32 2.5244316e-29  f16 (1.51992e-05, 0.000488281)  
+sop2_c10_bytes           0x00442211  f32 6.2570345e-39  f16 (0.0118484, 4.05312e-06)  
+test_c10_onehot0_chan0   0x3f800000  f32 1              f16 (0, 1.875)  
+test_c10_onehot0_chan1   0x3f800000  f32 1              f16 (0, 1.875)  
+test_c10_onehot0_chan2   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_c10_onehot0_chan3   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_c10_onehot1_chan0   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_c10_onehot1_chan1   0x3f800000  f32 1              f16 (0, 1.875)  
+test_c10_onehot1_chan2   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_c10_onehot1_chan3   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_c10_onehot2_chan0   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_c10_onehot2_chan1   0x3f800000  f32 1              f16 (0, 1.875)  
+test_c10_onehot2_chan2   0xaaaaaaaa  f32 -3.0316488e-13 f16 (-0.052063, -0.052063)  
+test_c10_onehot2_chan3   0x3f800000  f32 1              f16 (0, 1.875)  

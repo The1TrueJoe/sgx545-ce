@@ -246,6 +246,33 @@ logs in `isa/hwt_out/`. The ones a compiler would otherwise get wrong:
 - movc's u8/i16/c10 types select per byte / half / channel (signed);
 - `setfc`'s second argument is the colour-class C10 enable, on at task start.
 
+Second round (hwt_p7-p11), after the first write-up:
+- **Assembler bug found and fixed:** without `[fmt]`, `asm.py` silently
+  dropped a `.f16` / `.c10` on `test` operands, so hwt_p7-p9's "F16/C10
+  test" draws were plain 32-bit compares (their suites now say so and
+  assemble to the words that ran). `hw.parse` now sets `fmt` itself when an
+  operand has a format suffix (as USEASM does) and refuses any operand that
+  doesn't survive encoding. hwt_p10 redid the draws.
+- **New operand syntax:** F16 operands whose numbers count halves (float
+  classes and test under format select, efo under F16 format control: all
+  three shown on hardware) print and assemble as `r0.f16.lo` / `r0.f16.hi`
+  (encoded 2*reg + half); bare `.f16` there is an error. The corpus now reads
+  as what it does: `fmad r0, pa0.f16.lo, ...` / `fmad pa0, pa0.f16.hi, ...`.
+  hwcheck.py and all four oracle sweeps pass with it.
+- `setfc`'s first argument is the efo F16 enable, off at task start.
+- fmad is not fused (the product is rounded first); fmad16 rounds to nearest.
+- A repeat steps an F16 operand by one half.
+- test chan on C10 compares: 0/1/2 = that channel, 5 = any, 6 = all.
+- A C10 source's alpha (sop2) is its channel 0.
+- fdp writes only the last iteration's destination.
+- testmask byte/word write 0xff/0xffff.
+- `br [link]` + `lapc` return to the next instruction.
+- The bitwise ops behave as named, and a register shift by 33 gives 0.
+- **The EA3 GPU is shared:** another session's blob probe captures collide with
+  the replay (its buffers then land elsewhere: `replay:4: buffer 0 landed at
+  ...`, rc 2). hwt.py's runner now waits while any other process has
+  /dev/dri/card0 open and retries a collided draw.
+
 ## PDS programs (2026-10-27)
 
 See `pds/PDS.md`. In short: the DDK's PDS generator is statically linked into
