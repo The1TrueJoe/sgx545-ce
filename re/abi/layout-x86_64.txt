@@ -1,0 +1,2755 @@
+
+*** Dumping AST Record Layout
+         0 | struct __va_list_tag
+         0 |   unsigned int gp_offset
+         4 |   unsigned int fp_offset
+         8 |   void * overflow_arg_area
+        16 |   void * reg_save_area
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct __NSConstantString_tag
+         0 |   const int * isa
+         8 |   int flags
+        16 |   const char * str
+        24 |   long length
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _IMG_DEV_VIRTADDR
+         0 |   IMG_UINT32 uiAddr
+           | [sizeof=4, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _IMG_CPU_PHYADDR
+         0 |   IMG_UINTPTR_T uiAddr
+           | [sizeof=8, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _IMG_DEV_PHYADDR
+         0 |   IMG_UINTPTR_T uiAddr
+           | [sizeof=8, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _IMG_SYS_PHYADDR
+         0 |   IMG_UINTPTR_T uiAddr
+           | [sizeof=8, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SYNC_DATA_
+         0 |   IMG_UINT32 ui32WriteOpsPending
+         4 |   volatile IMG_UINT32 ui32WriteOpsComplete
+         8 |   IMG_UINT32 ui32ReadOpsPending
+        12 |   volatile IMG_UINT32 ui32ReadOpsComplete
+        16 |   IMG_UINT32 ui32LastOpDumpVal
+        20 |   IMG_UINT32 ui32LastReadOpDumpVal
+           | [sizeof=24, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_CLIENT_SYNC_INFO_
+         0 |   PVRSRV_SYNC_DATA * psSyncData
+         8 |   struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+         8 |     IMG_UINT32 uiAddr
+        12 |   struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+        12 |     IMG_UINT32 uiAddr
+        16 |   IMG_HANDLE hMappingInfo
+        24 |   IMG_HANDLE hKernelSyncInfo
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_RESOURCE_TAG
+         0 |   volatile IMG_UINT32 ui32Lock
+         4 |   IMG_UINT32 ui32ID
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _IMG_RECT_
+         0 |   IMG_INT32 x0
+         4 |   IMG_INT32 y0
+         8 |   IMG_INT32 x1
+        12 |   IMG_INT32 y1
+           | [sizeof=16, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _IMG_RECT_16_
+         0 |   IMG_INT16 x0
+         2 |   IMG_INT16 y0
+         4 |   IMG_INT16 x1
+         6 |   IMG_INT16 y1
+           | [sizeof=8, align=2]
+
+*** Dumping AST Record Layout
+         0 | struct DISPLAY_DIMS_TAG
+         0 |   IMG_UINT32 ui32ByteStride
+         4 |   IMG_UINT32 ui32Width
+         8 |   IMG_UINT32 ui32Height
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct DISPLAY_FORMAT_TAG
+         0 |   PVRSRV_PIXEL_FORMAT pixelformat
+           | [sizeof=4, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct DISPLAY_SURF_ATTRIBUTES_TAG
+         0 |   PVRSRV_PIXEL_FORMAT pixelformat
+         4 |   struct DISPLAY_DIMS_TAG sDims
+         4 |     IMG_UINT32 ui32ByteStride
+         8 |     IMG_UINT32 ui32Width
+        12 |     IMG_UINT32 ui32Height
+           | [sizeof=16, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct DISPLAY_MODE_INFO_TAG
+         0 |   PVRSRV_PIXEL_FORMAT pixelformat
+         4 |   struct DISPLAY_DIMS_TAG sDims
+         4 |     IMG_UINT32 ui32ByteStride
+         8 |     IMG_UINT32 ui32Width
+        12 |     IMG_UINT32 ui32Height
+        16 |   IMG_UINT32 ui32RefreshHZ
+        20 |   IMG_UINT32 ui32OEMFlags
+           | [sizeof=24, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct DISPLAY_INFO_TAG
+         0 |   IMG_UINT32 ui32MaxSwapChains
+         4 |   IMG_UINT32 ui32MaxSwapChainBuffers
+         8 |   IMG_UINT32 ui32MinSwapInterval
+        12 |   IMG_UINT32 ui32MaxSwapInterval
+        16 |   IMG_UINT32 ui32PhysicalWidthmm
+        20 |   IMG_UINT32 ui32PhysicalHeightmm
+        24 |   IMG_CHAR[50] szDisplayName
+           | [sizeof=76, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct ACCESS_INFO_TAG
+         0 |   IMG_UINT32 ui32Size
+         4 |   IMG_UINT32 ui32FBPhysBaseAddress
+         8 |   IMG_UINT32 ui32FBMemAvailable
+        12 |   IMG_UINT32 ui32SysPhysBaseAddress
+        16 |   IMG_UINT32 ui32SysSize
+        20 |   IMG_UINT32 ui32DevIRQ
+           | [sizeof=24, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_REGISTRY_INFO_
+         0 |   IMG_UINT32 ui32DevCookie
+         8 |   IMG_PCHAR pszKey
+        16 |   IMG_PCHAR pszValue
+        24 |   IMG_PCHAR pszBuf
+        32 |   IMG_UINT32 ui32BufSize
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct BUFFER_INFO_TAG
+         0 |   IMG_UINT32 ui32BufferCount
+         4 |   IMG_UINT32 ui32BufferDeviceID
+         8 |   PVRSRV_PIXEL_FORMAT pixelformat
+        12 |   IMG_UINT32 ui32ByteStride
+        16 |   IMG_UINT32 ui32Width
+        20 |   IMG_UINT32 ui32Height
+        24 |   IMG_UINT32 ui32Flags
+        28 |   IMG_CHAR[50] szDeviceName
+           | [sizeof=80, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_DEVICE_IDENTIFIER_
+         0 |   PVRSRV_DEVICE_TYPE eDeviceType
+         4 |   PVRSRV_DEVICE_CLASS eDeviceClass
+         8 |   IMG_UINT32 ui32DeviceIndex
+        16 |   IMG_CHAR * pszPDumpDevName
+        24 |   IMG_CHAR * pszPDumpRegName
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_CLIENT_DEV_DATA_
+         0 |   IMG_UINT32 ui32NumDevices
+         8 |   PVRSRV_DEVICE_IDENTIFIER[16] asDevID
+       520 |   PVRSRV_ERROR (*[16])(PPVRSRV_DEV_DATA) apfnDevConnect
+       648 |   PVRSRV_ERROR (*[16])(PPVRSRV_DEV_DATA) apfnDumpTrace
+           | [sizeof=776, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_CONNECTION_
+         0 |   IMG_HANDLE hServices
+         8 |   IMG_UINT32 ui32ProcessID
+        16 |   struct _PVRSRV_CLIENT_DEV_DATA_ sClientDevData
+        16 |     IMG_UINT32 ui32NumDevices
+        24 |     PVRSRV_DEVICE_IDENTIFIER[16] asDevID
+       536 |     PVRSRV_ERROR (*[16])(PPVRSRV_DEV_DATA) apfnDevConnect
+       664 |     PVRSRV_ERROR (*[16])(PPVRSRV_DEV_DATA) apfnDumpTrace
+       792 |   IMG_UINT32 ui32SrvFlags
+           | [sizeof=800, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_DEV_DATA_
+         0 |   const PVRSRV_CONNECTION * psConnection
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_MEMUPDATE_
+         0 |   IMG_UINT32 ui32UpdateAddr
+         4 |   IMG_UINT32 ui32UpdateVal
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_HWREG_
+         0 |   IMG_UINT32 ui32RegAddr
+         4 |   IMG_UINT32 ui32RegVal
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_MEMBLK_
+         0 |   struct _IMG_DEV_VIRTADDR sDevVirtAddr
+         0 |     IMG_UINT32 uiAddr
+         8 |   IMG_HANDLE hOSMemHandle
+        16 |   IMG_HANDLE hOSWrapMem
+        24 |   IMG_HANDLE hBuffer
+        32 |   IMG_HANDLE hResItem
+        40 |   IMG_SYS_PHYADDR * psIntSysPAddr
+           | [sizeof=48, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_CLIENT_MEM_INFO_
+         0 |   IMG_PVOID pvLinAddr
+         8 |   IMG_PVOID pvLinAddrKM
+        16 |   struct _IMG_DEV_VIRTADDR sDevVAddr
+        16 |     IMG_UINT32 uiAddr
+        24 |   struct _IMG_CPU_PHYADDR sCpuPAddr
+        24 |     IMG_UINTPTR_T uiAddr
+        32 |   IMG_UINT32 ui32Flags
+        36 |   IMG_UINT32 ui32ClientFlags
+        40 |   IMG_SIZE_T uAllocSize
+        48 |   struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        56 |   IMG_HANDLE hMappingInfo
+        64 |   IMG_HANDLE hKernelMemInfo
+        72 |   IMG_HANDLE hResItem
+        80 |   struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+           | [sizeof=88, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_HEAP_INFO_
+         0 |   IMG_UINT32 ui32HeapID
+         8 |   IMG_HANDLE hDevMemHeap
+        16 |   struct _IMG_DEV_VIRTADDR sDevVAddrBase
+        16 |     IMG_UINT32 uiAddr
+        20 |   IMG_UINT32 ui32HeapByteSize
+        24 |   IMG_UINT32 ui32Attribs
+        28 |   IMG_UINT32 ui32XTileStride
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_EVENTOBJECT_
+         0 |   IMG_CHAR[50] szName
+        56 |   IMG_HANDLE hOSEventKM
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3)
+         0 |   PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+         0 |   struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+           | [sizeof=8, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2)
+         0 |   IMG_BOOL bDeferOp
+         4 |   PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+         8 |   union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+         8 |     PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+         8 |     struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+        16 |   IMG_VOID * pvBaseVAddr
+        24 |   IMG_UINT32 ui32Length
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_MISC_INFO_
+         0 |   IMG_UINT32 ui32StateRequest
+         4 |   IMG_UINT32 ui32StatePresent
+         8 |   IMG_VOID * pvSOCTimerRegisterKM
+        16 |   IMG_VOID * pvSOCTimerRegisterUM
+        24 |   IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        32 |   IMG_HANDLE hSOCTimerRegisterMappingInfo
+        40 |   IMG_VOID * pvSOCClockGateRegs
+        48 |   IMG_UINT32 ui32SOCClockGateRegsSize
+        56 |   IMG_CHAR * pszMemoryStr
+        64 |   IMG_UINT32 ui32MemoryStrLen
+        72 |   struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+        72 |     IMG_CHAR[50] szName
+       128 |     IMG_HANDLE hOSEventKM
+       136 |   IMG_HANDLE hOSGlobalEvent
+       144 |   IMG_UINT32[4] aui32DDKVersion
+       160 |   struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       160 |     IMG_BOOL bDeferOp
+       164 |     PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       168 |     union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       168 |       PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       168 |       struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       176 |     IMG_VOID * pvBaseVAddr
+       184 |     IMG_UINT32 ui32Length
+           | [sizeof=192, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SYNC_TOKEN_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:434:2)
+         0 |   IMG_HANDLE hKernelSyncInfo
+         8 |   IMG_UINT32 ui32ReadOpsPendingSnapshot
+        12 |   IMG_UINT32 ui32WriteOpsPendingSnapshot
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SYNC_TOKEN_
+         0 |   struct _PVRSRV_SYNC_TOKEN_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:434:2) sPrivate
+         0 |     IMG_HANDLE hKernelSyncInfo
+         8 |     IMG_UINT32 ui32ReadOpsPendingSnapshot
+        12 |     IMG_UINT32 ui32WriteOpsPendingSnapshot
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_KERNEL_MEM_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/services4/include/servicesint.h:119:2)
+         0 |   IMG_BOOL bInUse
+         8 |   IMG_HANDLE hDevCookieInt
+        16 |   IMG_UINT32 ui32ShareIndex
+        20 |   IMG_UINT32 ui32OrigReqAttribs
+        24 |   IMG_UINT32 ui32OrigReqSize
+        28 |   IMG_UINT32 ui32OrigReqAlignment
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_KERNEL_MEM_INFO_
+         0 |   IMG_PVOID pvLinAddrKM
+         8 |   struct _IMG_DEV_VIRTADDR sDevVAddr
+         8 |     IMG_UINT32 uiAddr
+        12 |   IMG_UINT32 ui32Flags
+        16 |   IMG_SIZE_T uAllocSize
+        24 |   struct _PVRSRV_MEMBLK_ sMemBlk
+        24 |     struct _IMG_DEV_VIRTADDR sDevVirtAddr
+        24 |       IMG_UINT32 uiAddr
+        32 |     IMG_HANDLE hOSMemHandle
+        40 |     IMG_HANDLE hOSWrapMem
+        48 |     IMG_HANDLE hBuffer
+        56 |     IMG_HANDLE hResItem
+        64 |     IMG_SYS_PHYADDR * psIntSysPAddr
+        72 |   IMG_PVOID pvSysBackupBuffer
+        80 |   IMG_UINT32 ui32RefCount
+        84 |   IMG_BOOL bPendingFree
+        88 |   struct _PVRSRV_KERNEL_SYNC_INFO_ * psKernelSyncInfo
+        96 |   PVRSRV_MEMTYPE memType
+       104 |   struct _PVRSRV_KERNEL_MEM_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/services4/include/servicesint.h:119:2) sShareMemWorkaround
+       104 |     IMG_BOOL bInUse
+       112 |     IMG_HANDLE hDevCookieInt
+       120 |     IMG_UINT32 ui32ShareIndex
+       124 |     IMG_UINT32 ui32OrigReqAttribs
+       128 |     IMG_UINT32 ui32OrigReqSize
+       132 |     IMG_UINT32 ui32OrigReqAlignment
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_KERNEL_SYNC_INFO_
+         0 |   PVRSRV_SYNC_DATA * psSyncData
+         8 |   struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+         8 |     IMG_UINT32 uiAddr
+        12 |   struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+        12 |     IMG_UINT32 uiAddr
+        16 |   PVRSRV_KERNEL_MEM_INFO * psSyncDataMemInfoKM
+        24 |   IMG_UINT32 ui32RefCount
+        32 |   IMG_HANDLE hResItem
+        40 |   IMG_UINT32 ui32UID
+           | [sizeof=48, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_DEVICE_SYNC_OBJECT_
+         0 |   IMG_UINT32 ui32ReadOpsPendingVal
+         4 |   struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+         4 |     IMG_UINT32 uiAddr
+         8 |   IMG_UINT32 ui32WriteOpsPendingVal
+        12 |   struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+        12 |     IMG_UINT32 uiAddr
+           | [sizeof=16, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SYNC_OBJECT
+         0 |   PVRSRV_KERNEL_SYNC_INFO * psKernelSyncInfoKM
+         8 |   IMG_UINT32 ui32WriteOpsPending
+        12 |   IMG_UINT32 ui32ReadOpsPending
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_COMMAND
+         0 |   IMG_SIZE_T uCmdSize
+         4 |   IMG_UINT32 ui32DevIndex
+         8 |   IMG_UINT32 CommandType
+        12 |   IMG_UINT32 ui32DstSyncCount
+        16 |   IMG_UINT32 ui32SrcSyncCount
+        24 |   PVRSRV_SYNC_OBJECT * psDstSync
+        32 |   PVRSRV_SYNC_OBJECT * psSrcSync
+        40 |   IMG_SIZE_T uDataSize
+        44 |   IMG_UINT32 ui32ProcessID
+        48 |   IMG_VOID * pvData
+           | [sizeof=56, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_QUEUE_INFO_
+         0 |   IMG_VOID * pvLinQueueKM
+         8 |   IMG_VOID * pvLinQueueUM
+        16 |   volatile IMG_SIZE_T ui32ReadOffset
+        20 |   volatile IMG_SIZE_T ui32WriteOffset
+        24 |   IMG_UINT32 * pui32KickerAddrKM
+        32 |   IMG_UINT32 * pui32KickerAddrUM
+        40 |   IMG_SIZE_T ui32QueueSize
+        44 |   IMG_UINT32 ui32ProcessID
+        48 |   IMG_HANDLE[2] hMemBlock
+        64 |   struct _PVRSRV_QUEUE_INFO_ * psNextKM
+           | [sizeof=72, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_HEAP_INFO_KM_
+         0 |   IMG_UINT32 ui32HeapID
+         4 |   struct _IMG_DEV_VIRTADDR sDevVAddrBase
+         4 |     IMG_UINT32 uiAddr
+         8 |   IMG_HANDLE hDevMemHeap
+        16 |   IMG_UINT32 ui32HeapByteSize
+        20 |   IMG_UINT32 ui32Attribs
+        24 |   IMG_UINT32 ui32XTileStride
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_EVENTOBJECT_KM_
+         0 |   IMG_CHAR[50] szName
+        56 |   IMG_HANDLE hOSEventKM
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_MISC_INFO_KM_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/services4/include/servicesint.h:263:2)
+         0 |   IMG_BOOL bDeferOp
+         4 |   PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   IMG_VOID * pvBaseVAddr
+        24 |   IMG_UINT32 ui32Length
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_MISC_INFO_KM_
+         0 |   IMG_UINT32 ui32StateRequest
+         4 |   IMG_UINT32 ui32StatePresent
+         8 |   IMG_VOID * pvSOCTimerRegisterKM
+        16 |   IMG_VOID * pvSOCTimerRegisterUM
+        24 |   IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        32 |   IMG_HANDLE hSOCTimerRegisterMappingInfo
+        40 |   IMG_VOID * pvSOCClockGateRegs
+        48 |   IMG_UINT32 ui32SOCClockGateRegsSize
+        56 |   IMG_CHAR * pszMemoryStr
+        64 |   IMG_UINT32 ui32MemoryStrLen
+        72 |   struct _PVRSRV_EVENTOBJECT_KM_ sGlobalEventObject
+        72 |     IMG_CHAR[50] szName
+       128 |     IMG_HANDLE hOSEventKM
+       136 |   IMG_HANDLE hOSGlobalEvent
+       144 |   IMG_UINT32[4] aui32DDKVersion
+       160 |   struct _PVRSRV_MISC_INFO_KM_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/services4/include/servicesint.h:263:2) sCacheOpCtl
+       160 |     IMG_BOOL bDeferOp
+       164 |     PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       168 |     PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+       176 |     IMG_VOID * pvBaseVAddr
+       184 |     IMG_UINT32 ui32Length
+           | [sizeof=192, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_DEVICECLASS_BUFFER_TAG
+         0 |   PFN_GET_BUFFER_ADDR pfnGetBufferAddr
+         8 |   IMG_HANDLE hDevMemContext
+        16 |   IMG_HANDLE hExtDevice
+        24 |   IMG_HANDLE hExtBuffer
+        32 |   PVRSRV_KERNEL_SYNC_INFO * psKernelSyncInfo
+        40 |   IMG_UINT32 ui32MemMapRefCount
+           | [sizeof=48, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_CLIENT_DEVICECLASS_INFO_TAG
+         0 |   IMG_HANDLE hDeviceKM
+         8 |   IMG_HANDLE hServices
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_RETURN_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_VOID * pvData
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_PACKAGE_TAG
+         0 |   IMG_UINT32 ui32BridgeID
+         4 |   IMG_UINT32 ui32Size
+         8 |   IMG_VOID * pvParamIn
+        16 |   IMG_UINT32 ui32InBufferSize
+        24 |   IMG_VOID * pvParamOut
+        32 |   IMG_UINT32 ui32OutBufferSize
+        40 |   IMG_HANDLE hKernelServices
+           | [sizeof=48, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_CONNECT_SERVICES_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 ui32Flags
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 uiDevIndex
+         8 |   PVRSRV_DEVICE_TYPE eDeviceType
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ENUMCLASS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   PVRSRV_DEVICE_CLASS sDeviceClass
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_CLOSE_DISPCLASS_DEVICE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ENUM_DISPCLASS_FORMATS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_DISPCLASS_SYSBUFFER_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_DISPCLASS_INFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_CLOSE_BUFFERCLASS_DEVICE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_BUFFERCLASS_INFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_RELEASE_DEVICEINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_FREE_CLASSDEVICEINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   PVRSRV_DEVICE_CLASS DeviceClass
+         8 |   IMG_VOID * pvDevInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_DEVMEM_HEAPINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hDevMemContext
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_DESTROY_DEVMEMCONTEXT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hDevMemContext
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ALLOCDEVICEMEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hDevMemHeap
+        24 |   IMG_UINT32 ui32Attribs
+        28 |   IMG_SIZE_T ui32Size
+        32 |   IMG_SIZE_T ui32Alignment
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MAPMEMINFOTOUSER_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNMAPMEMINFOFROMUSER_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   IMG_PVOID pvLinAddr
+        24 |   IMG_HANDLE hMappingInfo
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_FREEDEVICEMEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        24 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        24 |     IMG_PVOID pvLinAddr
+        32 |     IMG_PVOID pvLinAddrKM
+        40 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        40 |       IMG_UINT32 uiAddr
+        48 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        48 |       IMG_UINTPTR_T uiAddr
+        56 |     IMG_UINT32 ui32Flags
+        60 |     IMG_UINT32 ui32ClientFlags
+        64 |     IMG_SIZE_T uAllocSize
+        72 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        80 |     IMG_HANDLE hMappingInfo
+        88 |     IMG_HANDLE hKernelMemInfo
+        96 |     IMG_HANDLE hResItem
+       104 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+           | [sizeof=112, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_EXPORTDEVICEMEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GETFREEDEVICEMEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 ui32Flags
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_CREATECOMMANDQUEUE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_SIZE_T ui32QueueSize
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_DESTROYCOMMANDQUEUE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   PVRSRV_QUEUE_INFO * psQueueInfo
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hMHandle
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_RELEASE_MMAP_DATA_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hMHandle
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_RESERVE_DEV_VIRTMEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevMemHeap
+        16 |   IMG_DEV_VIRTADDR * psDevVAddr
+        24 |   IMG_SIZE_T ui32Size
+        28 |   IMG_SIZE_T ui32Alignment
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_CONNECT_SERVICES_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hKernelServices
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_RESERVE_DEV_VIRTMEM_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   PVRSRV_KERNEL_SYNC_INFO * psKernelSyncInfo
+        24 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        24 |     IMG_PVOID pvLinAddr
+        32 |     IMG_PVOID pvLinAddrKM
+        40 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        40 |       IMG_UINT32 uiAddr
+        48 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        48 |       IMG_UINTPTR_T uiAddr
+        56 |     IMG_UINT32 ui32Flags
+        60 |     IMG_UINT32 ui32ClientFlags
+        64 |     IMG_SIZE_T uAllocSize
+        72 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        80 |     IMG_HANDLE hMappingInfo
+        88 |     IMG_HANDLE hKernelMemInfo
+        96 |     IMG_HANDLE hResItem
+       104 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+       112 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+       112 |     PVRSRV_SYNC_DATA * psSyncData
+       120 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       120 |       IMG_UINT32 uiAddr
+       124 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       124 |       IMG_UINT32 uiAddr
+       128 |     IMG_HANDLE hMappingInfo
+       136 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=144, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_FREE_DEV_VIRTMEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+       104 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+       104 |     PVRSRV_SYNC_DATA * psSyncData
+       112 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       112 |       IMG_UINT32 uiAddr
+       116 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       116 |       IMG_UINT32 uiAddr
+       120 |     IMG_HANDLE hMappingInfo
+       128 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MAP_DEV_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelMemInfo
+        16 |   IMG_HANDLE hDstDevMemHeap
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_MAP_DEV_MEMORY_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   PVRSRV_KERNEL_MEM_INFO * psDstKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sDstClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+       104 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sDstClientSyncInfo
+       104 |     PVRSRV_SYNC_DATA * psSyncData
+       112 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       112 |       IMG_UINT32 uiAddr
+       116 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       116 |       IMG_UINT32 uiAddr
+       120 |     IMG_HANDLE hMappingInfo
+       128 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNMAP_DEV_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+       104 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+       104 |     PVRSRV_SYNC_DATA * psSyncData
+       112 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       112 |       IMG_UINT32 uiAddr
+       116 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       116 |       IMG_UINT32 uiAddr
+       120 |     IMG_HANDLE hMappingInfo
+       128 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MAP_EXT_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   IMG_SYS_PHYADDR * psSysPAddr
+        24 |   IMG_UINT32 ui32Flags
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNMAP_EXT_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+         8 |     IMG_PVOID pvLinAddr
+        16 |     IMG_PVOID pvLinAddrKM
+        24 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        24 |       IMG_UINT32 uiAddr
+        32 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        32 |       IMG_UINTPTR_T uiAddr
+        40 |     IMG_UINT32 ui32Flags
+        44 |     IMG_UINT32 ui32ClientFlags
+        48 |     IMG_SIZE_T uAllocSize
+        56 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        64 |     IMG_HANDLE hMappingInfo
+        72 |     IMG_HANDLE hKernelMemInfo
+        80 |     IMG_HANDLE hResItem
+        88 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+        96 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+        96 |     PVRSRV_SYNC_DATA * psSyncData
+       104 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       104 |       IMG_UINT32 uiAddr
+       108 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       108 |       IMG_UINT32 uiAddr
+       112 |     IMG_HANDLE hMappingInfo
+       120 |     IMG_HANDLE hKernelSyncInfo
+       128 |   IMG_UINT32 ui32Flags
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MAP_DEVICECLASS_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceClassBuffer
+        16 |   IMG_HANDLE hDevMemContext
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_MAP_DEVICECLASS_MEMORY_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+         8 |     IMG_PVOID pvLinAddr
+        16 |     IMG_PVOID pvLinAddrKM
+        24 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        24 |       IMG_UINT32 uiAddr
+        32 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        32 |       IMG_UINTPTR_T uiAddr
+        40 |     IMG_UINT32 ui32Flags
+        44 |     IMG_UINT32 ui32ClientFlags
+        48 |     IMG_SIZE_T uAllocSize
+        56 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        64 |     IMG_HANDLE hMappingInfo
+        72 |     IMG_HANDLE hKernelMemInfo
+        80 |     IMG_HANDLE hResItem
+        88 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+        96 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+        96 |     PVRSRV_SYNC_DATA * psSyncData
+       104 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       104 |       IMG_UINT32 uiAddr
+       108 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       108 |       IMG_UINT32 uiAddr
+       112 |     IMG_HANDLE hMappingInfo
+       120 |     IMG_HANDLE hKernelSyncInfo
+       128 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+       136 |   IMG_HANDLE hMappingInfo
+           | [sizeof=144, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNMAP_DEVICECLASS_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+       104 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+       104 |     PVRSRV_SYNC_DATA * psSyncData
+       112 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       112 |       IMG_UINT32 uiAddr
+       116 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       116 |       IMG_UINT32 uiAddr
+       120 |     IMG_HANDLE hMappingInfo
+       128 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_MEMPOL_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   IMG_UINT32 ui32Offset
+        20 |   IMG_UINT32 ui32Value
+        24 |   IMG_UINT32 ui32Mask
+        28 |   PDUMP_POLL_OPERATOR eOperator
+        32 |   IMG_UINT32 ui32Flags
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_SYNCPOL_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_SYNC_INFO * psKernelSyncInfo
+        16 |   IMG_BOOL bIsRead
+        20 |   IMG_BOOL bUseLastOpDumpVal
+        24 |   IMG_UINT32 ui32Value
+        28 |   IMG_UINT32 ui32Mask
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_DUMPMEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_PVOID pvLinAddr
+        16 |   IMG_PVOID pvAltLinAddr
+        24 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        32 |   IMG_UINT32 ui32Offset
+        36 |   IMG_UINT32 ui32Bytes
+        40 |   IMG_UINT32 ui32Flags
+           | [sizeof=48, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_DUMPSYNC_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_PVOID pvAltLinAddr
+        16 |   PVRSRV_KERNEL_SYNC_INFO * psKernelSyncInfo
+        24 |   IMG_UINT32 ui32Offset
+        28 |   IMG_UINT32 ui32Bytes
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_DUMPREG_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _PVRSRV_HWREG_ sHWReg
+        16 |     IMG_UINT32 ui32RegAddr
+        20 |     IMG_UINT32 ui32RegVal
+        24 |   IMG_UINT32 ui32Flags
+        28 |   IMG_CHAR[32] szRegRegion
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_REGPOL_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _PVRSRV_HWREG_ sHWReg
+        16 |     IMG_UINT32 ui32RegAddr
+        20 |     IMG_UINT32 ui32RegVal
+        24 |   IMG_UINT32 ui32Mask
+        28 |   IMG_UINT32 ui32Flags
+        32 |   IMG_CHAR[32] szRegRegion
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_DUMPPDREG_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   struct _PVRSRV_HWREG_ sHWReg
+         4 |     IMG_UINT32 ui32RegAddr
+         8 |     IMG_UINT32 ui32RegVal
+        12 |   IMG_UINT32 ui32Flags
+           | [sizeof=16, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_MEMPAGES_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hKernelMemInfo
+        24 |   IMG_DEV_PHYADDR * pPages
+        32 |   IMG_UINT32 ui32NumPages
+        36 |   struct _IMG_DEV_VIRTADDR sDevVAddr
+        36 |     IMG_UINT32 uiAddr
+        40 |   IMG_UINT32 ui32Start
+        44 |   IMG_UINT32 ui32Length
+        48 |   IMG_UINT32 ui32Flags
+           | [sizeof=56, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_COMMENT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_CHAR[200] szComment
+       204 |   IMG_UINT32 ui32Flags
+           | [sizeof=208, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_SETFRAME_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 ui32Frame
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_BITMAP_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_CHAR[20] szFileName
+        36 |   IMG_UINT32 ui32FileOffset
+        40 |   IMG_UINT32 ui32Width
+        44 |   IMG_UINT32 ui32Height
+        48 |   IMG_UINT32 ui32StrideInBytes
+        52 |   struct _IMG_DEV_VIRTADDR sDevBaseAddr
+        52 |     IMG_UINT32 uiAddr
+        56 |   IMG_HANDLE hDevMemContext
+        64 |   IMG_UINT32 ui32Size
+        68 |   PDUMP_PIXEL_FORMAT ePixelFormat
+        72 |   PDUMP_MEM_FORMAT eMemFormat
+        76 |   IMG_UINT32 ui32Flags
+           | [sizeof=80, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_READREG_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_CHAR[20] szFileName
+        36 |   IMG_UINT32 ui32FileOffset
+        40 |   IMG_UINT32 ui32Address
+        44 |   IMG_UINT32 ui32Size
+        48 |   IMG_UINT32 ui32Flags
+        52 |   IMG_CHAR[32] szRegRegion
+           | [sizeof=88, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_DRIVERINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_CHAR[200] szString
+       204 |   IMG_BOOL bContinuous
+           | [sizeof=208, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PDUMP_DUMPPDDEVPADDR_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelMemInfo
+        16 |   IMG_UINT32 ui32Offset
+        24 |   struct _IMG_DEV_PHYADDR sPDDevPAddr
+        24 |     IMG_UINTPTR_T uiAddr
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_PDUM_IN_CYCLE_COUNT_REG_READ_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_UINT32 ui32RegOffset
+        20 |   IMG_BOOL bLastFrame
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ENUMDEVICE_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32NumDevices
+         8 |   PVRSRV_DEVICE_IDENTIFIER[16] asDeviceIdentifier
+           | [sizeof=520, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ENUMCLASS_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32NumDevices
+         8 |   IMG_UINT32[16] ui32DevID
+           | [sizeof=72, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_OPEN_DISPCLASS_DEVICE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 ui32DeviceID
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_OPEN_DISPCLASS_DEVICE_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_WRAP_EXT_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hDevMemContext
+        24 |   IMG_VOID * pvLinAddr
+        32 |   IMG_SIZE_T ui32ByteSize
+        36 |   IMG_SIZE_T ui32PageOffset
+        40 |   IMG_BOOL bPhysContig
+        44 |   IMG_UINT32 ui32NumPageTableEntries
+        48 |   IMG_SYS_PHYADDR * psSysPAddr
+        56 |   IMG_UINT32 ui32Flags
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_WRAP_EXT_MEMORY_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+         8 |     IMG_PVOID pvLinAddr
+        16 |     IMG_PVOID pvLinAddrKM
+        24 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        24 |       IMG_UINT32 uiAddr
+        32 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        32 |       IMG_UINTPTR_T uiAddr
+        40 |     IMG_UINT32 ui32Flags
+        44 |     IMG_UINT32 ui32ClientFlags
+        48 |     IMG_SIZE_T uAllocSize
+        56 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        64 |     IMG_HANDLE hMappingInfo
+        72 |     IMG_HANDLE hKernelMemInfo
+        80 |     IMG_HANDLE hResItem
+        88 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+        96 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+        96 |     PVRSRV_SYNC_DATA * psSyncData
+       104 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       104 |       IMG_UINT32 uiAddr
+       108 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       108 |       IMG_UINT32 uiAddr
+       112 |     IMG_HANDLE hMappingInfo
+       120 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=128, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNWRAP_EXT_MEMORY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+       104 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+       104 |     PVRSRV_SYNC_DATA * psSyncData
+       112 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       112 |       IMG_UINT32 uiAddr
+       116 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       116 |       IMG_UINT32 uiAddr
+       120 |     IMG_HANDLE hMappingInfo
+       128 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ENUM_DISPCLASS_FORMATS_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32Count
+         8 |   DISPLAY_FORMAT[10] asFormat
+           | [sizeof=48, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ENUM_DISPCLASS_DIMS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   struct DISPLAY_FORMAT_TAG sFormat
+        16 |     PVRSRV_PIXEL_FORMAT pixelformat
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ENUM_DISPCLASS_DIMS_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32Count
+         8 |   DISPLAY_DIMS[10] asDim
+           | [sizeof=128, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GET_DISPCLASS_INFO_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   struct DISPLAY_INFO_TAG sDisplayInfo
+         4 |     IMG_UINT32 ui32MaxSwapChains
+         8 |     IMG_UINT32 ui32MaxSwapChainBuffers
+        12 |     IMG_UINT32 ui32MinSwapInterval
+        16 |     IMG_UINT32 ui32MaxSwapInterval
+        20 |     IMG_UINT32 ui32PhysicalWidthmm
+        24 |     IMG_UINT32 ui32PhysicalHeightmm
+        28 |     IMG_CHAR[50] szDisplayName
+           | [sizeof=80, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GET_DISPCLASS_SYSBUFFER_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hBuffer
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_CREATE_DISPCLASS_SWAPCHAIN_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_UINT32 ui32Flags
+        20 |   struct DISPLAY_SURF_ATTRIBUTES_TAG sDstSurfAttrib
+        20 |     PVRSRV_PIXEL_FORMAT pixelformat
+        24 |     struct DISPLAY_DIMS_TAG sDims
+        24 |       IMG_UINT32 ui32ByteStride
+        28 |       IMG_UINT32 ui32Width
+        32 |       IMG_UINT32 ui32Height
+        36 |   struct DISPLAY_SURF_ATTRIBUTES_TAG sSrcSurfAttrib
+        36 |     PVRSRV_PIXEL_FORMAT pixelformat
+        40 |     struct DISPLAY_DIMS_TAG sDims
+        40 |       IMG_UINT32 ui32ByteStride
+        44 |       IMG_UINT32 ui32Width
+        48 |       IMG_UINT32 ui32Height
+        52 |   IMG_UINT32 ui32BufferCount
+        56 |   IMG_UINT32 ui32OEMFlags
+        60 |   IMG_UINT32 ui32SwapChainID
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_CREATE_DISPCLASS_SWAPCHAIN_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hSwapChain
+        16 |   IMG_UINT32 ui32SwapChainID
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_DESTROY_DISPCLASS_SWAPCHAIN_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_HANDLE hSwapChain
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SET_DISPCLASS_RECT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_HANDLE hSwapChain
+        24 |   struct _IMG_RECT_ sRect
+        24 |     IMG_INT32 x0
+        28 |     IMG_INT32 y0
+        32 |     IMG_INT32 x1
+        36 |     IMG_INT32 y1
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SET_DISPCLASS_COLOURKEY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_HANDLE hSwapChain
+        24 |   IMG_UINT32 ui32CKColour
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_DISPCLASS_BUFFERS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_HANDLE hSwapChain
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GET_DISPCLASS_BUFFERS_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32BufferCount
+         8 |   IMG_HANDLE[9] ahBuffer
+           | [sizeof=80, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SWAP_DISPCLASS_TO_BUFFER_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_HANDLE hBuffer
+        24 |   IMG_UINT32 ui32SwapInterval
+        32 |   IMG_HANDLE hPrivateTag
+        40 |   IMG_UINT32 ui32ClipRectCount
+        44 |   IMG_RECT[32] sClipRect
+           | [sizeof=560, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SWAP_DISPCLASS_TO_SYSTEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_HANDLE hSwapChain
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_OPEN_BUFFERCLASS_DEVICE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 ui32DeviceID
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_OPEN_BUFFERCLASS_DEVICE_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hDeviceKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GET_BUFFERCLASS_INFO_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   struct BUFFER_INFO_TAG sBufferInfo
+         4 |     IMG_UINT32 ui32BufferCount
+         8 |     IMG_UINT32 ui32BufferDeviceID
+        12 |     PVRSRV_PIXEL_FORMAT pixelformat
+        16 |     IMG_UINT32 ui32ByteStride
+        20 |     IMG_UINT32 ui32Width
+        24 |     IMG_UINT32 ui32Height
+        28 |     IMG_UINT32 ui32Flags
+        32 |     IMG_CHAR[50] szDeviceName
+           | [sizeof=84, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_BUFFERCLASS_BUFFER_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDeviceKM
+        16 |   IMG_UINT32 ui32BufferIndex
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GET_BUFFERCLASS_BUFFER_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hBuffer
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GET_DEVMEM_HEAPINFO_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32ClientHeapCount
+         8 |   PVRSRV_HEAP_INFO[32] sHeapInfo
+           | [sizeof=1032, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hDevMemContext
+        16 |   IMG_UINT32 ui32ClientHeapCount
+        24 |   PVRSRV_HEAP_INFO[32] sHeapInfo
+           | [sizeof=1048, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_CREATE_DEVMEMHEAP_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hDevMemHeap
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+       104 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+       104 |     PVRSRV_SYNC_DATA * psSyncData
+       112 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       112 |       IMG_UINT32 uiAddr
+       116 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       116 |       IMG_UINT32 uiAddr
+       120 |     IMG_HANDLE hMappingInfo
+       128 |     IMG_HANDLE hKernelSyncInfo
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_EXPORTDEVICEMEM_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hMemInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_MAPMEMINFOTOUSER_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_PVOID pvLinAddr
+        16 |   IMG_HANDLE hMappingInfo
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GETFREEDEVICEMEM_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_SIZE_T ui32Total
+         8 |   IMG_SIZE_T ui32Free
+        12 |   IMG_SIZE_T ui32LargestBlock
+           | [sizeof=16, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32MMapOffset
+         8 |   IMG_UINT32 ui32ByteOffset
+        12 |   IMG_UINT32 ui32RealByteSize
+        16 |   IMG_UINT32 ui32UserVAddr
+           | [sizeof=20, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_RELEASE_MMAP_DATA_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_BOOL bMUnmap
+         8 |   IMG_UINT32 ui32UserVAddr
+        12 |   IMG_UINT32 ui32RealByteSize
+           | [sizeof=16, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_MISC_INFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   struct _PVRSRV_MISC_INFO_ sMiscInfo
+         8 |     IMG_UINT32 ui32StateRequest
+        12 |     IMG_UINT32 ui32StatePresent
+        16 |     IMG_VOID * pvSOCTimerRegisterKM
+        24 |     IMG_VOID * pvSOCTimerRegisterUM
+        32 |     IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        40 |     IMG_HANDLE hSOCTimerRegisterMappingInfo
+        48 |     IMG_VOID * pvSOCClockGateRegs
+        56 |     IMG_UINT32 ui32SOCClockGateRegsSize
+        64 |     IMG_CHAR * pszMemoryStr
+        72 |     IMG_UINT32 ui32MemoryStrLen
+        80 |     struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+        80 |       IMG_CHAR[50] szName
+       136 |       IMG_HANDLE hOSEventKM
+       144 |     IMG_HANDLE hOSGlobalEvent
+       152 |     IMG_UINT32[4] aui32DDKVersion
+       168 |     struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       168 |       IMG_BOOL bDeferOp
+       172 |       PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       176 |       union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       176 |         PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       176 |         struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       184 |       IMG_VOID * pvBaseVAddr
+       192 |       IMG_UINT32 ui32Length
+           | [sizeof=200, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GET_MISC_INFO_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   struct _PVRSRV_MISC_INFO_ sMiscInfo
+         8 |     IMG_UINT32 ui32StateRequest
+        12 |     IMG_UINT32 ui32StatePresent
+        16 |     IMG_VOID * pvSOCTimerRegisterKM
+        24 |     IMG_VOID * pvSOCTimerRegisterUM
+        32 |     IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        40 |     IMG_HANDLE hSOCTimerRegisterMappingInfo
+        48 |     IMG_VOID * pvSOCClockGateRegs
+        56 |     IMG_UINT32 ui32SOCClockGateRegsSize
+        64 |     IMG_CHAR * pszMemoryStr
+        72 |     IMG_UINT32 ui32MemoryStrLen
+        80 |     struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+        80 |       IMG_CHAR[50] szName
+       136 |       IMG_HANDLE hOSEventKM
+       144 |     IMG_HANDLE hOSGlobalEvent
+       152 |     IMG_UINT32[4] aui32DDKVersion
+       168 |     struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       168 |       IMG_BOOL bDeferOp
+       172 |       PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       176 |       union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       176 |         PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       176 |         struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       184 |       IMG_VOID * pvBaseVAddr
+       192 |       IMG_UINT32 ui32Length
+           | [sizeof=200, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_RELEASE_MISC_INFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   struct _PVRSRV_MISC_INFO_ sMiscInfo
+         8 |     IMG_UINT32 ui32StateRequest
+        12 |     IMG_UINT32 ui32StatePresent
+        16 |     IMG_VOID * pvSOCTimerRegisterKM
+        24 |     IMG_VOID * pvSOCTimerRegisterUM
+        32 |     IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        40 |     IMG_HANDLE hSOCTimerRegisterMappingInfo
+        48 |     IMG_VOID * pvSOCClockGateRegs
+        56 |     IMG_UINT32 ui32SOCClockGateRegsSize
+        64 |     IMG_CHAR * pszMemoryStr
+        72 |     IMG_UINT32 ui32MemoryStrLen
+        80 |     struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+        80 |       IMG_CHAR[50] szName
+       136 |       IMG_HANDLE hOSEventKM
+       144 |     IMG_HANDLE hOSGlobalEvent
+       152 |     IMG_UINT32[4] aui32DDKVersion
+       168 |     struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       168 |       IMG_BOOL bDeferOp
+       172 |       PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       176 |       union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       176 |         PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       176 |         struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       184 |       IMG_VOID * pvBaseVAddr
+       192 |       IMG_UINT32 ui32Length
+           | [sizeof=200, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_RELEASE_MISC_INFO_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   struct _PVRSRV_MISC_INFO_ sMiscInfo
+         8 |     IMG_UINT32 ui32StateRequest
+        12 |     IMG_UINT32 ui32StatePresent
+        16 |     IMG_VOID * pvSOCTimerRegisterKM
+        24 |     IMG_VOID * pvSOCTimerRegisterUM
+        32 |     IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        40 |     IMG_HANDLE hSOCTimerRegisterMappingInfo
+        48 |     IMG_VOID * pvSOCClockGateRegs
+        56 |     IMG_UINT32 ui32SOCClockGateRegsSize
+        64 |     IMG_CHAR * pszMemoryStr
+        72 |     IMG_UINT32 ui32MemoryStrLen
+        80 |     struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+        80 |       IMG_CHAR[50] szName
+       136 |       IMG_HANDLE hOSEventKM
+       144 |     IMG_HANDLE hOSGlobalEvent
+       152 |     IMG_UINT32[4] aui32DDKVersion
+       168 |     struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       168 |       IMG_BOOL bDeferOp
+       172 |       PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       176 |       union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       176 |         PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       176 |         struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       184 |       IMG_VOID * pvBaseVAddr
+       192 |       IMG_UINT32 ui32Length
+           | [sizeof=200, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_PDUMP_ISCAPTURING_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_BOOL bIsCapturing
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GET_FB_STATS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_SIZE_T ui32Total
+         8 |   IMG_SIZE_T ui32Available
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MAPPHYSTOUSERSPACE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _IMG_SYS_PHYADDR sSysPhysAddr
+        16 |     IMG_UINTPTR_T uiAddr
+        24 |   IMG_UINT32 uiSizeInBytes
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_MAPPHYSTOUSERSPACE_TAG
+         0 |   IMG_PVOID pvUserAddr
+         8 |   IMG_UINT32 uiActualSize
+        16 |   IMG_PVOID pvProcess
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNMAPPHYSTOUSERSPACE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_PVOID pvUserAddr
+        24 |   IMG_PVOID pvProcess
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GETPHYSTOUSERSPACEMAP_TAG
+         0 |   IMG_PVOID * ppvTbl
+         8 |   IMG_UINT32 uiTblSize
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_REGISTER_SIM_PROCESS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_PVOID pvProcess
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_REGISTER_SIM_PROCESS_TAG
+         0 |   struct _IMG_SYS_PHYADDR sRegsPhysBase
+         0 |     IMG_UINTPTR_T uiAddr
+         8 |   IMG_VOID * pvRegsBase
+        16 |   IMG_PVOID pvProcess
+        24 |   IMG_UINT32 ulNoOfEntries
+        32 |   IMG_PVOID pvTblLinAddr
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNREGISTER_SIM_PROCESS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_PVOID pvProcess
+        24 |   IMG_VOID * pvRegsBase
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_PROCESS_SIMISR_EVENT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_UINT32 ui32StatusAndMask
+        20 |   PVRSRV_ERROR eError
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_INITSRV_DISCONNECT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_BOOL bInitSuccesful
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ALLOC_SHARED_SYS_MEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 ui32Flags
+         8 |   IMG_SIZE_T ui32Size
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ALLOC_SHARED_SYS_MEM_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+           | [sizeof=104, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_FREE_SHARED_SYS_MEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+        16 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+        16 |     IMG_PVOID pvLinAddr
+        24 |     IMG_PVOID pvLinAddrKM
+        32 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        32 |       IMG_UINT32 uiAddr
+        40 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        40 |       IMG_UINTPTR_T uiAddr
+        48 |     IMG_UINT32 ui32Flags
+        52 |     IMG_UINT32 ui32ClientFlags
+        56 |     IMG_SIZE_T uAllocSize
+        64 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        72 |     IMG_HANDLE hMappingInfo
+        80 |     IMG_HANDLE hKernelMemInfo
+        88 |     IMG_HANDLE hResItem
+        96 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+           | [sizeof=104, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_FREE_SHARED_SYS_MEM_TAG
+         0 |   PVRSRV_ERROR eError
+           | [sizeof=4, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MAP_MEMINFO_MEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelMemInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_MAP_MEMINFO_MEM_TAG
+         0 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+         0 |     IMG_PVOID pvLinAddr
+         8 |     IMG_PVOID pvLinAddrKM
+        16 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        16 |       IMG_UINT32 uiAddr
+        24 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        24 |       IMG_UINTPTR_T uiAddr
+        32 |     IMG_UINT32 ui32Flags
+        36 |     IMG_UINT32 ui32ClientFlags
+        40 |     IMG_SIZE_T uAllocSize
+        48 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        56 |     IMG_HANDLE hMappingInfo
+        64 |     IMG_HANDLE hKernelMemInfo
+        72 |     IMG_HANDLE hResItem
+        80 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+        88 |   struct _PVRSRV_CLIENT_SYNC_INFO_ sClientSyncInfo
+        88 |     PVRSRV_SYNC_DATA * psSyncData
+        96 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+        96 |       IMG_UINT32 uiAddr
+       100 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       100 |       IMG_UINT32 uiAddr
+       104 |     IMG_HANDLE hMappingInfo
+       112 |     IMG_HANDLE hKernelSyncInfo
+       120 |   PVRSRV_KERNEL_MEM_INFO * psKernelMemInfo
+       128 |   PVRSRV_ERROR eError
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_UNMAP_MEMINFO_MEM_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   struct _PVRSRV_CLIENT_MEM_INFO_ sClientMemInfo
+         8 |     IMG_PVOID pvLinAddr
+        16 |     IMG_PVOID pvLinAddrKM
+        24 |     struct _IMG_DEV_VIRTADDR sDevVAddr
+        24 |       IMG_UINT32 uiAddr
+        32 |     struct _IMG_CPU_PHYADDR sCpuPAddr
+        32 |       IMG_UINTPTR_T uiAddr
+        40 |     IMG_UINT32 ui32Flags
+        44 |     IMG_UINT32 ui32ClientFlags
+        48 |     IMG_SIZE_T uAllocSize
+        56 |     struct _PVRSRV_CLIENT_SYNC_INFO_ * psClientSyncInfo
+        64 |     IMG_HANDLE hMappingInfo
+        72 |     IMG_HANDLE hKernelMemInfo
+        80 |     IMG_HANDLE hResItem
+        88 |     struct _PVRSRV_CLIENT_MEM_INFO_ * psNext
+           | [sizeof=96, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_UNMAP_MEMINFO_MEM_TAG
+         0 |   PVRSRV_ERROR eError
+           | [sizeof=4, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_EVENT_OBJECT_WAI_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hOSEventKM
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_EVENT_OBJECT_OPEN_TAG
+         0 |   struct _PVRSRV_EVENTOBJECT_ sEventObject
+         0 |     IMG_CHAR[50] szName
+        56 |     IMG_HANDLE hOSEventKM
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_EVENT_OBJECT_OPEN_TAG
+         0 |   IMG_HANDLE hOSEvent
+         8 |   PVRSRV_ERROR eError
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_EVENT_OBJECT_CLOSE_TAG
+         0 |   struct _PVRSRV_EVENTOBJECT_ sEventObject
+         0 |     IMG_CHAR[50] szName
+        56 |     IMG_HANDLE hOSEventKM
+        64 |   IMG_HANDLE hOSEventKM
+           | [sizeof=72, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_CREATE_SYNC_INFO_MOD_OBJ_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hKernelSyncInfoModObj
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_DESTROY_SYNC_INFO_MOD_OBJ
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfoModObj
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MODIFY_PENDING_SYNC_OPS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfoModObj
+        16 |   IMG_HANDLE hKernelSyncInfo
+        24 |   IMG_UINT32 ui32ModifyFlags
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_MODIFY_COMPLETE_SYNC_OPS_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfoModObj
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_MODIFY_PENDING_SYNC_OPS_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32ReadOpsPending
+         8 |   IMG_UINT32 ui32WriteOpsPending
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SYNC_OPS_TAKE_TOKEN_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SYNC_OPS_TAKE_TOKEN_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32ReadOpsPending
+         8 |   IMG_UINT32 ui32WriteOpsPending
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SYNC_OPS_FLUSH_TO_TOKEN_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfo
+        16 |   IMG_UINT32 ui32ReadOpsPendingSnapshot
+        20 |   IMG_UINT32 ui32WriteOpsPendingSnapshot
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SYNC_OPS_FLUSH_TO_MOD_OBJ_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfoModObj
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SYNC_OPS_FLUSH_TO_DELTA_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfo
+        16 |   IMG_UINT32 ui32Delta
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ALLOC_SYNC_INFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_ALLOC_SYNC_INFO_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hKernelSyncInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_FREE_SYNC_INFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hKernelSyncInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_CHG_DEV_MEM_ATTRIBS_TAG
+         0 |   IMG_SID hKernelMemInfo
+         4 |   IMG_UINT32 ui32Attribs
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_HWPERF_CB_ENTRY_
+         0 |   IMG_UINT32 ui32FrameNo
+         4 |   IMG_UINT32 ui32PID
+         8 |   IMG_UINT32 ui32RTData
+        12 |   IMG_UINT32 ui32Type
+        16 |   IMG_UINT32 ui32Ordinal
+        20 |   IMG_UINT32 ui32Info
+        24 |   IMG_UINT32 ui32Clocksx16
+        28 |   IMG_UINT32[1][9] ui32Counters
+        64 |   IMG_UINT32[1][8] ui32MiscCounters
+           | [sizeof=96, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _CTL_STATUS_
+         0 |   struct _IMG_DEV_VIRTADDR sStatusDevAddr
+         0 |     IMG_UINT32 uiAddr
+         4 |   IMG_UINT32 ui32StatusValue
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_MISCINFO_FEATURES
+         0 |   IMG_UINT32 ui32CoreRev
+         4 |   IMG_UINT32 ui32CoreID
+         8 |   IMG_UINT32 ui32DDKVersion
+        12 |   IMG_UINT32 ui32DDKBuild
+        16 |   IMG_UINT32 ui32CoreIdSW
+        20 |   IMG_UINT32 ui32CoreRevSW
+        24 |   IMG_UINT32 ui32BuildOptions
+           | [sizeof=28, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_MISCINFO_LOCKUPS
+         0 |   IMG_UINT32 ui32HostDetectedLockups
+         4 |   IMG_UINT32 ui32uKernelDetectedLockups
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_MISCINFO_ACTIVEPOWER
+         0 |   IMG_UINT32 ui32NumActivePowerEvents
+           | [sizeof=4, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_MISCINFO_SPM
+         0 |   IMG_HANDLE hRTDataSet
+         8 |   IMG_UINT32 ui32NumOutOfMemSignals
+        12 |   IMG_UINT32 ui32NumSPMRenders
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_MISCINFO_SET_HWPERF_STATUS
+         0 |   IMG_UINT32 ui32NewHWPerfStatus
+         4 |   IMG_UINT32 ui32PerfGroup
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | union _SGX_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/sgxapi_km.h:314:2)
+         0 |   IMG_UINT32 reserved
+         0 |   struct _PVRSRV_SGX_MISCINFO_FEATURES sSGXFeatures
+         0 |     IMG_UINT32 ui32CoreRev
+         4 |     IMG_UINT32 ui32CoreID
+         8 |     IMG_UINT32 ui32DDKVersion
+        12 |     IMG_UINT32 ui32DDKBuild
+        16 |     IMG_UINT32 ui32CoreIdSW
+        20 |     IMG_UINT32 ui32CoreRevSW
+        24 |     IMG_UINT32 ui32BuildOptions
+         0 |   IMG_UINT32 ui32SGXClockSpeed
+         0 |   struct _PVRSRV_SGX_MISCINFO_ACTIVEPOWER sActivePower
+         0 |     IMG_UINT32 ui32NumActivePowerEvents
+         0 |   struct _PVRSRV_SGX_MISCINFO_LOCKUPS sLockups
+         0 |     IMG_UINT32 ui32HostDetectedLockups
+         4 |     IMG_UINT32 ui32uKernelDetectedLockups
+         0 |   struct _PVRSRV_SGX_MISCINFO_SPM sSPM
+         0 |     IMG_HANDLE hRTDataSet
+         8 |     IMG_UINT32 ui32NumOutOfMemSignals
+        12 |     IMG_UINT32 ui32NumSPMRenders
+         0 |   struct _PVRSRV_SGX_MISCINFO_SET_HWPERF_STATUS sSetHWPerfStatus
+         0 |     IMG_UINT32 ui32NewHWPerfStatus
+         4 |     IMG_UINT32 ui32PerfGroup
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_MISC_INFO_
+         0 |   SGX_MISC_INFO_REQUEST eRequest
+         4 |   IMG_UINT32 ui32Padding
+         8 |   union _SGX_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/sgxapi_km.h:314:2) uData
+         8 |     IMG_UINT32 reserved
+         8 |     struct _PVRSRV_SGX_MISCINFO_FEATURES sSGXFeatures
+         8 |       IMG_UINT32 ui32CoreRev
+        12 |       IMG_UINT32 ui32CoreID
+        16 |       IMG_UINT32 ui32DDKVersion
+        20 |       IMG_UINT32 ui32DDKBuild
+        24 |       IMG_UINT32 ui32CoreIdSW
+        28 |       IMG_UINT32 ui32CoreRevSW
+        32 |       IMG_UINT32 ui32BuildOptions
+         8 |     IMG_UINT32 ui32SGXClockSpeed
+         8 |     struct _PVRSRV_SGX_MISCINFO_ACTIVEPOWER sActivePower
+         8 |       IMG_UINT32 ui32NumActivePowerEvents
+         8 |     struct _PVRSRV_SGX_MISCINFO_LOCKUPS sLockups
+         8 |       IMG_UINT32 ui32HostDetectedLockups
+        12 |       IMG_UINT32 ui32uKernelDetectedLockups
+         8 |     struct _PVRSRV_SGX_MISCINFO_SPM sSPM
+         8 |       IMG_HANDLE hRTDataSet
+        16 |       IMG_UINT32 ui32NumOutOfMemSignals
+        20 |       IMG_UINT32 ui32NumSPMRenders
+         8 |     struct _PVRSRV_SGX_MISCINFO_SET_HWPERF_STATUS sSetHWPerfStatus
+         8 |       IMG_UINT32 ui32NewHWPerfStatus
+        12 |       IMG_UINT32 ui32PerfGroup
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_KICKTA_DUMPBITMAP_
+         0 |   struct _IMG_DEV_VIRTADDR sDevBaseAddr
+         0 |     IMG_UINT32 uiAddr
+         4 |   IMG_UINT32 ui32Flags
+         8 |   IMG_UINT32 ui32Width
+        12 |   IMG_UINT32 ui32Height
+        16 |   IMG_UINT32 ui32Stride
+        20 |   IMG_UINT32 ui32PDUMPFormat
+        24 |   IMG_UINT32 ui32BytesPP
+        28 |   IMG_CHAR[256] pszName
+           | [sizeof=284, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_PDUMP_CONTEXT_
+         0 |   IMG_UINT32 ui32CacheControl
+           | [sizeof=4, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_KICKTA_DUMP_ROFF_
+         0 |   IMG_HANDLE hKernelMemInfo
+         8 |   IMG_UINT32 uiAllocIndex
+        12 |   IMG_UINT32 ui32Offset
+        16 |   IMG_UINT32 ui32Value
+        24 |   IMG_PCHAR pszName
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_KICKTA_DUMP_BUFFER_
+         0 |   IMG_UINT32 ui32SpaceUsed
+         4 |   IMG_UINT32 ui32Start
+         8 |   IMG_UINT32 ui32End
+        12 |   IMG_UINT32 ui32BufferSize
+        16 |   IMG_UINT32 ui32BackEndLength
+        20 |   IMG_UINT32 uiAllocIndex
+        24 |   IMG_HANDLE hKernelMemInfo
+        32 |   IMG_PVOID pvLinAddr
+        40 |   IMG_HANDLE hCtrlKernelMemInfo
+        48 |   struct _IMG_DEV_VIRTADDR sCtrlDevVAddr
+        48 |     IMG_UINT32 uiAddr
+        56 |   IMG_PCHAR pszName
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_INIT_COMMAND::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/sgxscript.h:50:2)
+         0 |   SGX_INIT_OPERATION eOp
+         4 |   IMG_UINT32 ui32Offset
+         8 |   IMG_UINT32 ui32Value
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | union _SGX_INIT_COMMAND
+         0 |   SGX_INIT_OPERATION eOp
+         0 |   struct _SGX_INIT_COMMAND::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/sgxscript.h:50:2) sWriteHWReg
+         0 |     SGX_INIT_OPERATION eOp
+         4 |     IMG_UINT32 ui32Offset
+         8 |     IMG_UINT32 ui32Value
+           | [sizeof=12, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_INIT_SCRIPTS_
+         0 |   SGX_INIT_COMMAND[64] asInitCommandsPart1
+       768 |   SGX_INIT_COMMAND[64] asInitCommandsPart2
+      1536 |   SGX_INIT_COMMAND[16] asDeinitCommands
+           | [sizeof=1728, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGXMKIF_COMMAND_
+         0 |   IMG_UINT32 ui32ServiceAddress
+         4 |   IMG_UINT32 ui32CacheControl
+         8 |   IMG_UINT32[6] ui32Data
+           | [sizeof=32, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_KERNEL_CCB_
+         0 |   SGXMKIF_COMMAND[256] asCommands
+           | [sizeof=8192, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_CCB_CTL_
+         0 |   IMG_UINT32 ui32WriteOffset
+         4 |   IMG_UINT32 ui32ReadOffset
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGXMKIF_HOST_CTL_
+         0 |   volatile IMG_UINT32 ui32InitStatus
+         4 |   volatile IMG_UINT32 ui32PowerStatus
+         8 |   volatile IMG_UINT32 ui32CleanupStatus
+        12 |   IMG_UINT32 ui32uKernelDetectedLockups
+        16 |   IMG_UINT32 ui32HostDetectedLockups
+        20 |   IMG_UINT32 ui32HWRecoverySampleRate
+        24 |   IMG_UINT32 ui32uKernelTimerClock
+        28 |   IMG_UINT32 ui32ActivePowManSampleRate
+        32 |   IMG_UINT32 ui32InterruptFlags
+        36 |   IMG_UINT32 ui32InterruptClearFlags
+        40 |   IMG_UINT32 ui32BPSetClearSignal
+        44 |   IMG_UINT32 ui32NumActivePowerEvents
+        48 |   IMG_UINT32 ui32TimeWraps
+        52 |   IMG_UINT32 ui32HostClock
+        56 |   IMG_UINT32 ui32AssertFail
+        60 |   IMG_UINT32 ui32PerfGroup
+        64 |   IMG_UINT32 ui32BRN31939Mem
+        68 |   IMG_UINT32 ui32OpenCLDelayCount
+           | [sizeof=72, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGXMKIF_CMDTA_SHARED_
+         0 |   IMG_UINT32 ui32CtrlFlags
+         4 |   IMG_UINT32 ui32NumTAStatusVals
+         8 |   IMG_UINT32 ui32Num3DStatusVals
+        12 |   IMG_UINT32 ui32TATQSyncWriteOpsPendingVal
+        16 |   struct _IMG_DEV_VIRTADDR sTATQSyncWriteOpsCompleteDevVAddr
+        16 |     IMG_UINT32 uiAddr
+        20 |   IMG_UINT32 ui32TATQSyncReadOpsPendingVal
+        24 |   struct _IMG_DEV_VIRTADDR sTATQSyncReadOpsCompleteDevVAddr
+        24 |     IMG_UINT32 uiAddr
+        28 |   IMG_UINT32 ui323DTQSyncWriteOpsPendingVal
+        32 |   struct _IMG_DEV_VIRTADDR s3DTQSyncWriteOpsCompleteDevVAddr
+        32 |     IMG_UINT32 uiAddr
+        36 |   IMG_UINT32 ui323DTQSyncReadOpsPendingVal
+        40 |   struct _IMG_DEV_VIRTADDR s3DTQSyncReadOpsCompleteDevVAddr
+        40 |     IMG_UINT32 uiAddr
+        44 |   IMG_UINT32 ui32NumSrcSyncs
+        48 |   PVRSRV_DEVICE_SYNC_OBJECT[8] asSrcSyncs
+       176 |   struct _PVRSRV_DEVICE_SYNC_OBJECT_ sTA3DDependency
+       176 |     IMG_UINT32 ui32ReadOpsPendingVal
+       180 |     struct _IMG_DEV_VIRTADDR sReadOpsCompleteDevVAddr
+       180 |       IMG_UINT32 uiAddr
+       184 |     IMG_UINT32 ui32WriteOpsPendingVal
+       188 |     struct _IMG_DEV_VIRTADDR sWriteOpsCompleteDevVAddr
+       188 |       IMG_UINT32 uiAddr
+       192 |   CTL_STATUS[32] sCtlTAStatusInfo
+       448 |   CTL_STATUS[4] sCtl3DStatusInfo
+           | [sizeof=480, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGXMKIF_TRANSFERCMD_SHARED_
+         0 |   IMG_UINT32 ui32NumSrcSyncs
+         4 |   PVRSRV_DEVICE_SYNC_OBJECT[8] asSrcSyncs
+       132 |   IMG_UINT32 ui32NumDstSyncs
+       136 |   PVRSRV_DEVICE_SYNC_OBJECT[1] asDstSyncs
+       152 |   IMG_UINT32 ui32TASyncWriteOpsPendingVal
+       156 |   struct _IMG_DEV_VIRTADDR sTASyncWriteOpsCompleteDevVAddr
+       156 |     IMG_UINT32 uiAddr
+       160 |   IMG_UINT32 ui32TASyncReadOpsPendingVal
+       164 |   struct _IMG_DEV_VIRTADDR sTASyncReadOpsCompleteDevVAddr
+       164 |     IMG_UINT32 uiAddr
+       168 |   IMG_UINT32 ui323DSyncWriteOpsPendingVal
+       172 |   struct _IMG_DEV_VIRTADDR s3DSyncWriteOpsCompleteDevVAddr
+       172 |     IMG_UINT32 uiAddr
+       176 |   IMG_UINT32 ui323DSyncReadOpsPendingVal
+       180 |   struct _IMG_DEV_VIRTADDR s3DSyncReadOpsCompleteDevVAddr
+       180 |     IMG_UINT32 uiAddr
+       184 |   IMG_UINT32 ui32NumStatusVals
+       188 |   CTL_STATUS[4] sCtlStatusInfo
+           | [sizeof=220, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGXMKIF_HWDEVICE_SYNC_LIST_
+         0 |   struct _IMG_DEV_VIRTADDR sAccessDevAddr
+         0 |     IMG_UINT32 uiAddr
+         4 |   IMG_UINT32 ui32NumSyncObjects
+         8 |   PVRSRV_DEVICE_SYNC_OBJECT[1] asSyncData
+           | [sizeof=24, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_MISCINFO_STRUCT_SIZES_
+         0 |   IMG_UINT32 ui32Sizeof_CMDTA
+         4 |   IMG_UINT32 ui32Sizeof_CMDTA_SHARED
+         8 |   IMG_UINT32 ui32Sizeof_TRANSFERCMD
+        12 |   IMG_UINT32 ui32Sizeof_TRANSFERCMD_SHARED
+        16 |   IMG_UINT32 ui32Sizeof_3DREGISTERS
+        20 |   IMG_UINT32 ui32Sizeof_HWPBDESC
+        24 |   IMG_UINT32 ui32Sizeof_HWRENDERCONTEXT
+        28 |   IMG_UINT32 ui32Sizeof_HWRENDERDETAILS
+        32 |   IMG_UINT32 ui32Sizeof_HWRTDATA
+        36 |   IMG_UINT32 ui32Sizeof_HWRTDATASET
+        40 |   IMG_UINT32 ui32Sizeof_HWTRANSFERCONTEXT
+        44 |   IMG_UINT32 ui32Sizeof_HOST_CTL
+        48 |   IMG_UINT32 ui32Sizeof_COMMAND
+           | [sizeof=52, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_SGX_MISCINFO_INFO
+         0 |   IMG_UINT32 ui32MiscInfoFlags
+         4 |   struct _PVRSRV_SGX_MISCINFO_FEATURES sSGXFeatures
+         4 |     IMG_UINT32 ui32CoreRev
+         8 |     IMG_UINT32 ui32CoreID
+        12 |     IMG_UINT32 ui32DDKVersion
+        16 |     IMG_UINT32 ui32DDKBuild
+        20 |     IMG_UINT32 ui32CoreIdSW
+        24 |     IMG_UINT32 ui32CoreRevSW
+        28 |     IMG_UINT32 ui32BuildOptions
+        32 |   struct _SGX_MISCINFO_STRUCT_SIZES_ sSGXStructSizes
+        32 |     IMG_UINT32 ui32Sizeof_CMDTA
+        36 |     IMG_UINT32 ui32Sizeof_CMDTA_SHARED
+        40 |     IMG_UINT32 ui32Sizeof_TRANSFERCMD
+        44 |     IMG_UINT32 ui32Sizeof_TRANSFERCMD_SHARED
+        48 |     IMG_UINT32 ui32Sizeof_3DREGISTERS
+        52 |     IMG_UINT32 ui32Sizeof_HWPBDESC
+        56 |     IMG_UINT32 ui32Sizeof_HWRENDERCONTEXT
+        60 |     IMG_UINT32 ui32Sizeof_HWRENDERDETAILS
+        64 |     IMG_UINT32 ui32Sizeof_HWRTDATA
+        68 |     IMG_UINT32 ui32Sizeof_HWRTDATASET
+        72 |     IMG_UINT32 ui32Sizeof_HWTRANSFERCONTEXT
+        76 |     IMG_UINT32 ui32Sizeof_HOST_CTL
+        80 |     IMG_UINT32 ui32Sizeof_COMMAND
+           | [sizeof=84, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGXMKIF_HWPERF_CB_ENTRY_
+         0 |   IMG_UINT32 ui32FrameNo
+         4 |   IMG_UINT32 ui32PID
+         8 |   IMG_UINT32 ui32RTData
+        12 |   IMG_UINT32 ui32Type
+        16 |   IMG_UINT32 ui32Ordinal
+        20 |   IMG_UINT32 ui32Info
+        24 |   IMG_UINT32 ui32TimeWraps
+        28 |   IMG_UINT32 ui32Time
+        32 |   IMG_UINT32[1][9] ui32Counters
+        68 |   IMG_UINT32[1][8] ui32MiscCounters
+           | [sizeof=100, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGXMKIF_HWPERF_CB_
+         0 |   IMG_UINT32 ui32Woff
+         4 |   IMG_UINT32 ui32Roff
+         8 |   IMG_UINT32 ui32Ordinal
+        12 |   SGXMKIF_HWPERF_CB_ENTRY[256] psHWPerfCBData
+           | [sizeof=25612, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_BRIDGE_INFO_FOR_SRVINIT
+         0 |   struct _IMG_DEV_PHYADDR sPDDevPAddr
+         0 |     IMG_UINTPTR_T uiAddr
+         8 |   PVRSRV_HEAP_INFO[32] asHeapInfo
+           | [sizeof=1032, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_BRIDGE_INIT_INFO_
+         0 |   IMG_HANDLE hKernelCCBMemInfo
+         8 |   IMG_HANDLE hKernelCCBCtlMemInfo
+        16 |   IMG_HANDLE hKernelCCBEventKickerMemInfo
+        24 |   IMG_HANDLE hKernelSGXHostCtlMemInfo
+        32 |   IMG_HANDLE hKernelSGXTA3DCtlMemInfo
+        40 |   IMG_HANDLE hKernelSGXMiscMemInfo
+        48 |   IMG_UINT32[11] aui32HostKickAddr
+        92 |   struct _SGX_INIT_SCRIPTS_ sScripts
+        92 |     SGX_INIT_COMMAND[64] asInitCommandsPart1
+       860 |     SGX_INIT_COMMAND[64] asInitCommandsPart2
+      1628 |     SGX_INIT_COMMAND[16] asDeinitCommands
+      1820 |   IMG_UINT32 ui32ClientBuildOptions
+      1824 |   struct _SGX_MISCINFO_STRUCT_SIZES_ sSGXStructSizes
+      1824 |     IMG_UINT32 ui32Sizeof_CMDTA
+      1828 |     IMG_UINT32 ui32Sizeof_CMDTA_SHARED
+      1832 |     IMG_UINT32 ui32Sizeof_TRANSFERCMD
+      1836 |     IMG_UINT32 ui32Sizeof_TRANSFERCMD_SHARED
+      1840 |     IMG_UINT32 ui32Sizeof_3DREGISTERS
+      1844 |     IMG_UINT32 ui32Sizeof_HWPBDESC
+      1848 |     IMG_UINT32 ui32Sizeof_HWRENDERCONTEXT
+      1852 |     IMG_UINT32 ui32Sizeof_HWRENDERDETAILS
+      1856 |     IMG_UINT32 ui32Sizeof_HWRTDATA
+      1860 |     IMG_UINT32 ui32Sizeof_HWRTDATASET
+      1864 |     IMG_UINT32 ui32Sizeof_HWTRANSFERCONTEXT
+      1868 |     IMG_UINT32 ui32Sizeof_HOST_CTL
+      1872 |     IMG_UINT32 ui32Sizeof_COMMAND
+      1880 |   IMG_HANDLE hKernelHWPerfCBMemInfo
+      1888 |   IMG_HANDLE hKernelTASigBufferMemInfo
+      1896 |   IMG_HANDLE hKernel3DSigBufferMemInfo
+      1904 |   IMG_UINT32 ui32EDMTaskReg0
+      1908 |   IMG_UINT32 ui32EDMTaskReg1
+      1912 |   IMG_UINT32 ui32ClkGateCtl
+      1916 |   IMG_UINT32 ui32ClkGateCtl2
+      1920 |   IMG_UINT32 ui32ClkGateStatusReg
+      1924 |   IMG_UINT32 ui32ClkGateStatusMask
+      1928 |   IMG_UINT32 ui32CacheControl
+      1932 |   IMG_UINT32[24] asInitDevData
+      2032 |   IMG_HANDLE[18] asInitMemHandles
+           | [sizeof=2176, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_DEVICE_SYNC_LIST_
+         0 |   PSGXMKIF_HWDEVICE_SYNC_LIST psHWDeviceSyncList
+         8 |   IMG_HANDLE hKernelHWSyncListMemInfo
+        16 |   PVRSRV_CLIENT_MEM_INFO * psHWDeviceSyncListClientMemInfo
+        24 |   PVRSRV_CLIENT_MEM_INFO * psAccessResourceClientMemInfo
+        32 |   volatile IMG_UINT32 * pui32Lock
+        40 |   struct _SGX_DEVICE_SYNC_LIST_ * psNext
+        48 |   IMG_UINT32 ui32NumSyncObjects
+        56 |   IMG_HANDLE[1] ahSyncHandles
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_INTERNEL_STATUS_UPDATE_
+         0 |   struct _CTL_STATUS_ sCtlStatus
+         0 |     struct _IMG_DEV_VIRTADDR sStatusDevAddr
+         0 |       IMG_UINT32 uiAddr
+         4 |     IMG_UINT32 ui32StatusValue
+         8 |   IMG_HANDLE hKernelMemInfo
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_CCB_KICK_
+         0 |   struct _SGXMKIF_COMMAND_ sCommand
+         0 |     IMG_UINT32 ui32ServiceAddress
+         4 |     IMG_UINT32 ui32CacheControl
+         8 |     IMG_UINT32[6] ui32Data
+        32 |   IMG_HANDLE hCCBKernelMemInfo
+        40 |   IMG_UINT32 ui32NumDstSyncObjects
+        48 |   IMG_HANDLE hKernelHWSyncListMemInfo
+        56 |   IMG_HANDLE * pahDstSyncHandles
+        64 |   IMG_UINT32 ui32NumTAStatusVals
+        68 |   IMG_UINT32 ui32Num3DStatusVals
+        72 |   SGX_INTERNEL_STATUS_UPDATE[32] asTAStatusUpdate
+       584 |   SGX_INTERNEL_STATUS_UPDATE[4] as3DStatusUpdate
+       648 |   IMG_BOOL bFirstKickOrResume
+       652 |   IMG_BOOL bLastInScene
+       656 |   IMG_UINT32 ui32CCBOffset
+       660 |   IMG_UINT32 ui32NumSrcSyncs
+       664 |   IMG_HANDLE[8] ahSrcKernelSyncInfo
+       728 |   IMG_BOOL bTADependency
+       736 |   IMG_HANDLE hTA3DSyncInfo
+       744 |   IMG_HANDLE hTASyncInfo
+       752 |   IMG_HANDLE h3DSyncInfo
+       760 |   IMG_HANDLE hDevMemContext
+           | [sizeof=768, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_CLIENT_INFO_
+         0 |   IMG_UINT32 ui32ProcessID
+         8 |   IMG_VOID * pvProcess
+        16 |   struct _PVRSRV_MISC_INFO_ sMiscInfo
+        16 |     IMG_UINT32 ui32StateRequest
+        20 |     IMG_UINT32 ui32StatePresent
+        24 |     IMG_VOID * pvSOCTimerRegisterKM
+        32 |     IMG_VOID * pvSOCTimerRegisterUM
+        40 |     IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        48 |     IMG_HANDLE hSOCTimerRegisterMappingInfo
+        56 |     IMG_VOID * pvSOCClockGateRegs
+        64 |     IMG_UINT32 ui32SOCClockGateRegsSize
+        72 |     IMG_CHAR * pszMemoryStr
+        80 |     IMG_UINT32 ui32MemoryStrLen
+        88 |     struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+        88 |       IMG_CHAR[50] szName
+       144 |       IMG_HANDLE hOSEventKM
+       152 |     IMG_HANDLE hOSGlobalEvent
+       160 |     IMG_UINT32[4] aui32DDKVersion
+       176 |     struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       176 |       IMG_BOOL bDeferOp
+       180 |       PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       184 |       union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       184 |         PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       184 |         struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       192 |       IMG_VOID * pvBaseVAddr
+       200 |       IMG_UINT32 ui32Length
+       208 |   IMG_UINT32[24] asDevData
+           | [sizeof=304, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_INTERNAL_DEVINFO_
+         0 |   IMG_UINT32 ui32Flags
+         8 |   IMG_HANDLE hHostCtlKernelMemInfoHandle
+        16 |   IMG_BOOL bForcePTOff
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _SGX_INTERNAL_DEVINFO_KM_
+         0 |   IMG_UINT32 ui32Flags
+         8 |   IMG_HANDLE hHostCtlKernelMemInfoHandle
+        16 |   IMG_BOOL bForcePTOff
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct _PVRSRV_TRANSFER_SGX_KICK_
+         0 |   IMG_HANDLE hCCBMemInfo
+         8 |   IMG_UINT32 ui32SharedCmdCCBOffset
+        12 |   struct _IMG_DEV_VIRTADDR sHWTransferContextDevVAddr
+        12 |     IMG_UINT32 uiAddr
+        16 |   IMG_HANDLE hTASyncInfo
+        24 |   IMG_HANDLE h3DSyncInfo
+        32 |   IMG_UINT32 ui32NumSrcSync
+        40 |   IMG_HANDLE[5] ahSrcSyncInfo
+        80 |   IMG_UINT32 ui32NumDstSync
+        88 |   IMG_HANDLE[5] ahDstSyncInfo
+       128 |   IMG_UINT32 ui32Flags
+       132 |   IMG_UINT32 ui32PDumpFlags
+       136 |   IMG_HANDLE hDevMemContext
+           | [sizeof=144, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GETPHYSPAGEADDR
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevMemHeap
+        16 |   struct _IMG_DEV_VIRTADDR sDevVAddr
+        16 |     IMG_UINT32 uiAddr
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GETPHYSPAGEADDR
+         0 |   PVRSRV_ERROR eError
+         8 |   struct _IMG_DEV_PHYADDR DevPAddr
+         8 |     IMG_UINTPTR_T uiAddr
+        16 |   struct _IMG_CPU_PHYADDR CpuPAddr
+        16 |     IMG_UINTPTR_T uiAddr
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_SET_TRANSFER_CONTEXT_PRIORITY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hHWTransferContext
+        24 |   IMG_UINT32 ui32Priority
+        28 |   IMG_UINT32 ui32OffsetOfPriorityField
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_SET_RENDER_CONTEXT_PRIORITY_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hHWRenderContext
+        24 |   IMG_UINT32 ui32Priority
+        28 |   IMG_UINT32 ui32OffsetOfPriorityField
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GETCLIENTINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GETINTERNALDEVINFO_TAG
+         0 |   struct _SGX_INTERNAL_DEVINFO_ sSGXInternalDevInfo
+         0 |     IMG_UINT32 ui32Flags
+         8 |     IMG_HANDLE hHostCtlKernelMemInfoHandle
+        16 |     IMG_BOOL bForcePTOff
+        24 |   PVRSRV_ERROR eError
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_GETINTERNALDEVINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_GETCLIENTINFO_TAG
+         0 |   struct _SGX_CLIENT_INFO_ sClientInfo
+         0 |     IMG_UINT32 ui32ProcessID
+         8 |     IMG_VOID * pvProcess
+        16 |     struct _PVRSRV_MISC_INFO_ sMiscInfo
+        16 |       IMG_UINT32 ui32StateRequest
+        20 |       IMG_UINT32 ui32StatePresent
+        24 |       IMG_VOID * pvSOCTimerRegisterKM
+        32 |       IMG_VOID * pvSOCTimerRegisterUM
+        40 |       IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        48 |       IMG_HANDLE hSOCTimerRegisterMappingInfo
+        56 |       IMG_VOID * pvSOCClockGateRegs
+        64 |       IMG_UINT32 ui32SOCClockGateRegsSize
+        72 |       IMG_CHAR * pszMemoryStr
+        80 |       IMG_UINT32 ui32MemoryStrLen
+        88 |       struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+        88 |         IMG_CHAR[50] szName
+       144 |         IMG_HANDLE hOSEventKM
+       152 |       IMG_HANDLE hOSGlobalEvent
+       160 |       IMG_UINT32[4] aui32DDKVersion
+       176 |       struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       176 |         IMG_BOOL bDeferOp
+       180 |         PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       184 |         union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       184 |           PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       184 |           struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       192 |         IMG_VOID * pvBaseVAddr
+       200 |         IMG_UINT32 ui32Length
+       208 |     IMG_UINT32[24] asDevData
+       304 |   PVRSRV_ERROR eError
+           | [sizeof=312, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_RELEASECLIENTINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _SGX_CLIENT_INFO_ sClientInfo
+        16 |     IMG_UINT32 ui32ProcessID
+        24 |     IMG_VOID * pvProcess
+        32 |     struct _PVRSRV_MISC_INFO_ sMiscInfo
+        32 |       IMG_UINT32 ui32StateRequest
+        36 |       IMG_UINT32 ui32StatePresent
+        40 |       IMG_VOID * pvSOCTimerRegisterKM
+        48 |       IMG_VOID * pvSOCTimerRegisterUM
+        56 |       IMG_HANDLE hSOCTimerRegisterOSMemHandle
+        64 |       IMG_HANDLE hSOCTimerRegisterMappingInfo
+        72 |       IMG_VOID * pvSOCClockGateRegs
+        80 |       IMG_UINT32 ui32SOCClockGateRegsSize
+        88 |       IMG_CHAR * pszMemoryStr
+        96 |       IMG_UINT32 ui32MemoryStrLen
+       104 |       struct _PVRSRV_EVENTOBJECT_ sGlobalEventObject
+       104 |         IMG_CHAR[50] szName
+       160 |         IMG_HANDLE hOSEventKM
+       168 |       IMG_HANDLE hOSGlobalEvent
+       176 |       IMG_UINT32[4] aui32DDKVersion
+       192 |       struct _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:402:2) sCacheOpCtl
+       192 |         IMG_BOOL bDeferOp
+       196 |         PVRSRV_MISC_INFO_CPUCACHEOP_TYPE eCacheOpType
+       200 |         union _PVRSRV_MISC_INFO_::(unnamed at /private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/src/include4/services.h:412:3) u
+       200 |           PVRSRV_CLIENT_MEM_INFO * psClientMemInfo
+       200 |           struct _PVRSRV_KERNEL_MEM_INFO_ * psKernelMemInfo
+       208 |         IMG_VOID * pvBaseVAddr
+       216 |         IMG_UINT32 ui32Length
+       224 |     IMG_UINT32[24] asDevData
+           | [sizeof=320, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_ISPBREAKPOLL_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_DOKICK_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _SGX_CCB_KICK_ sCCBKick
+        16 |     struct _SGXMKIF_COMMAND_ sCommand
+        16 |       IMG_UINT32 ui32ServiceAddress
+        20 |       IMG_UINT32 ui32CacheControl
+        24 |       IMG_UINT32[6] ui32Data
+        48 |     IMG_HANDLE hCCBKernelMemInfo
+        56 |     IMG_UINT32 ui32NumDstSyncObjects
+        64 |     IMG_HANDLE hKernelHWSyncListMemInfo
+        72 |     IMG_HANDLE * pahDstSyncHandles
+        80 |     IMG_UINT32 ui32NumTAStatusVals
+        84 |     IMG_UINT32 ui32Num3DStatusVals
+        88 |     SGX_INTERNEL_STATUS_UPDATE[32] asTAStatusUpdate
+       600 |     SGX_INTERNEL_STATUS_UPDATE[4] as3DStatusUpdate
+       664 |     IMG_BOOL bFirstKickOrResume
+       668 |     IMG_BOOL bLastInScene
+       672 |     IMG_UINT32 ui32CCBOffset
+       676 |     IMG_UINT32 ui32NumSrcSyncs
+       680 |     IMG_HANDLE[8] ahSrcKernelSyncInfo
+       744 |     IMG_BOOL bTADependency
+       752 |     IMG_HANDLE hTA3DSyncInfo
+       760 |     IMG_HANDLE hTASyncInfo
+       768 |     IMG_HANDLE h3DSyncInfo
+       776 |     IMG_HANDLE hDevMemContext
+           | [sizeof=784, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_SCHEDULE_PROCESS_QUEUES_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SUBMITTRANSFER_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _PVRSRV_TRANSFER_SGX_KICK_ sKick
+        16 |     IMG_HANDLE hCCBMemInfo
+        24 |     IMG_UINT32 ui32SharedCmdCCBOffset
+        28 |     struct _IMG_DEV_VIRTADDR sHWTransferContextDevVAddr
+        28 |       IMG_UINT32 uiAddr
+        32 |     IMG_HANDLE hTASyncInfo
+        40 |     IMG_HANDLE h3DSyncInfo
+        48 |     IMG_UINT32 ui32NumSrcSync
+        56 |     IMG_HANDLE[5] ahSrcSyncInfo
+        96 |     IMG_UINT32 ui32NumDstSync
+       104 |     IMG_HANDLE[5] ahDstSyncInfo
+       144 |     IMG_UINT32 ui32Flags
+       148 |     IMG_UINT32 ui32PDumpFlags
+       152 |     IMG_HANDLE hDevMemContext
+           | [sizeof=160, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_READREGDWORD_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_PCHAR pszKey
+        24 |   IMG_PCHAR pszValue
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_READREGDWORD_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32Data
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGXGETMISCINFO_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   SGX_MISC_INFO * psMiscInfo
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGXINFO_FOR_SRVINIT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGXINFO_FOR_SRVINIT_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   struct _SGX_BRIDGE_INFO_FOR_SRVINIT sInitInfo
+         8 |     struct _IMG_DEV_PHYADDR sPDDevPAddr
+         8 |       IMG_UINTPTR_T uiAddr
+        16 |     PVRSRV_HEAP_INFO[32] asHeapInfo
+           | [sizeof=1040, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGXDEVINITPART2_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _SGX_BRIDGE_INIT_INFO_ sInitInfo
+        16 |     IMG_HANDLE hKernelCCBMemInfo
+        24 |     IMG_HANDLE hKernelCCBCtlMemInfo
+        32 |     IMG_HANDLE hKernelCCBEventKickerMemInfo
+        40 |     IMG_HANDLE hKernelSGXHostCtlMemInfo
+        48 |     IMG_HANDLE hKernelSGXTA3DCtlMemInfo
+        56 |     IMG_HANDLE hKernelSGXMiscMemInfo
+        64 |     IMG_UINT32[11] aui32HostKickAddr
+       108 |     struct _SGX_INIT_SCRIPTS_ sScripts
+       108 |       SGX_INIT_COMMAND[64] asInitCommandsPart1
+       876 |       SGX_INIT_COMMAND[64] asInitCommandsPart2
+      1644 |       SGX_INIT_COMMAND[16] asDeinitCommands
+      1836 |     IMG_UINT32 ui32ClientBuildOptions
+      1840 |     struct _SGX_MISCINFO_STRUCT_SIZES_ sSGXStructSizes
+      1840 |       IMG_UINT32 ui32Sizeof_CMDTA
+      1844 |       IMG_UINT32 ui32Sizeof_CMDTA_SHARED
+      1848 |       IMG_UINT32 ui32Sizeof_TRANSFERCMD
+      1852 |       IMG_UINT32 ui32Sizeof_TRANSFERCMD_SHARED
+      1856 |       IMG_UINT32 ui32Sizeof_3DREGISTERS
+      1860 |       IMG_UINT32 ui32Sizeof_HWPBDESC
+      1864 |       IMG_UINT32 ui32Sizeof_HWRENDERCONTEXT
+      1868 |       IMG_UINT32 ui32Sizeof_HWRENDERDETAILS
+      1872 |       IMG_UINT32 ui32Sizeof_HWRTDATA
+      1876 |       IMG_UINT32 ui32Sizeof_HWRTDATASET
+      1880 |       IMG_UINT32 ui32Sizeof_HWTRANSFERCONTEXT
+      1884 |       IMG_UINT32 ui32Sizeof_HOST_CTL
+      1888 |       IMG_UINT32 ui32Sizeof_COMMAND
+      1896 |     IMG_HANDLE hKernelHWPerfCBMemInfo
+      1904 |     IMG_HANDLE hKernelTASigBufferMemInfo
+      1912 |     IMG_HANDLE hKernel3DSigBufferMemInfo
+      1920 |     IMG_UINT32 ui32EDMTaskReg0
+      1924 |     IMG_UINT32 ui32EDMTaskReg1
+      1928 |     IMG_UINT32 ui32ClkGateCtl
+      1932 |     IMG_UINT32 ui32ClkGateCtl2
+      1936 |     IMG_UINT32 ui32ClkGateStatusReg
+      1940 |     IMG_UINT32 ui32ClkGateStatusMask
+      1944 |     IMG_UINT32 ui32CacheControl
+      1948 |     IMG_UINT32[24] asInitDevData
+      2048 |     IMG_HANDLE[18] asInitMemHandles
+           | [sizeof=2192, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGXDEVINITPART2_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32KMBuildOptions
+           | [sizeof=8, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_2DQUERYBLTSCOMPLETE_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hKernSyncInfo
+        24 |   IMG_BOOL bWaitForComplete
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGXFINDSHAREDPBDESC_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_BOOL bLockOnFailure
+        20 |   IMG_UINT32 ui32TotalPBSize
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGXFINDSHAREDPBDESC_TAG
+         0 |   IMG_HANDLE hKernelMemInfo
+         8 |   IMG_HANDLE hSharedPBDesc
+        16 |   IMG_HANDLE hSharedPBDescKernelMemInfoHandle
+        24 |   IMG_HANDLE hHWPBDescKernelMemInfoHandle
+        32 |   IMG_HANDLE hBlockKernelMemInfoHandle
+        40 |   IMG_HANDLE hHWBlockKernelMemInfoHandle
+        48 |   IMG_HANDLE[10] ahSharedPBDescSubKernelMemInfoHandles
+       128 |   IMG_UINT32 ui32SharedPBDescSubKernelMemInfoHandlesCount
+       132 |   PVRSRV_ERROR eError
+           | [sizeof=136, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGXUNREFSHAREDPBDESC_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hSharedPBDesc
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGXUNREFSHAREDPBDESC_TAG
+         0 |   PVRSRV_ERROR eError
+           | [sizeof=4, align=4]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGXADDSHAREDPBDESC_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_UINT32 ui32TotalPBSize
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hSharedPBDescKernelMemInfo
+        24 |   IMG_HANDLE hHWPBDescKernelMemInfo
+        32 |   IMG_HANDLE hBlockKernelMemInfo
+        40 |   IMG_HANDLE hHWBlockKernelMemInfo
+        48 |   IMG_HANDLE * phKernelMemInfoHandles
+        56 |   IMG_UINT32 ui32KernelMemInfoHandlesCount
+        60 |   struct _IMG_DEV_VIRTADDR sHWPBDescDevVAddr
+        60 |     IMG_UINT32 uiAddr
+           | [sizeof=64, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGXADDSHAREDPBDESC_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hSharedPBDesc
+           | [sizeof=16, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_RENDER_CONTEXT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_CPU_VIRTADDR pHWRenderContextCpuVAddr
+        24 |   IMG_UINT32 ui32HWRenderContextSize
+        28 |   IMG_UINT32 ui32OffsetToPDDevPAddr
+        32 |   IMG_HANDLE hDevMemContext
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_RENDER_CONTEXT_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hHWRenderContext
+        16 |   struct _IMG_DEV_VIRTADDR sHWRenderContextDevVAddr
+        16 |     IMG_UINT32 uiAddr
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_UNREGISTER_HW_RENDER_CONTEXT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_BOOL bForceCleanup
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hHWRenderContext
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_TRANSFER_CONTEXT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_CPU_VIRTADDR pHWTransferContextCpuVAddr
+        24 |   IMG_UINT32 ui32HWTransferContextSize
+        28 |   IMG_UINT32 ui32OffsetToPDDevPAddr
+        32 |   IMG_HANDLE hDevMemContext
+           | [sizeof=40, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_TRANSFER_CONTEXT_TAG
+         0 |   PVRSRV_ERROR eError
+         8 |   IMG_HANDLE hHWTransferContext
+        16 |   struct _IMG_DEV_VIRTADDR sHWTransferContextDevVAddr
+        16 |     IMG_UINT32 uiAddr
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_UNREGISTER_HW_TRANSFER_CONTEXT_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         4 |   IMG_BOOL bForceCleanup
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_HANDLE hHWTransferContext
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_FLUSH_HW_RENDER_TARGET_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   struct _IMG_DEV_VIRTADDR sHWRTDataSetDevVAddr
+        16 |     IMG_UINT32 uiAddr
+           | [sizeof=24, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_IN_SGX_READ_HWPERF_CB_TAG
+         0 |   IMG_UINT32 ui32BridgeFlags
+         8 |   IMG_HANDLE hDevCookie
+        16 |   IMG_UINT32 ui32ArraySize
+        24 |   PVRSRV_SGX_HWPERF_CB_ENTRY * psHWPerfCBData
+           | [sizeof=32, align=8]
+
+*** Dumping AST Record Layout
+         0 | struct PVRSRV_BRIDGE_OUT_SGX_READ_HWPERF_CB_TAG
+         0 |   PVRSRV_ERROR eError
+         4 |   IMG_UINT32 ui32DataCount
+         8 |   IMG_UINT32 ui32ClockSpeed
+        12 |   IMG_UINT32 ui32HostTimeStamp
+           | [sizeof=16, align=4]
+/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/sgx/re/abi/abi.c:1:1: error: FileNotFound
