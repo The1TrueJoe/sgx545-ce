@@ -2,3 +2,4 @@
 __pycache__/
 *.bin
 abi/abi-ids.o
+probe/probe

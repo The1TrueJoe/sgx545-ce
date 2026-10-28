@@ -1,5 +1,0 @@
-zig: warning: argument unused during compilation: '-c' [-Wunused-command-line-argument]
-re/abi/abi.c:2:10: fatal error: 'img_defs.h' file not found
-    2 | #include "img_defs.h"
-      |          ^~~~~~~~~~~~
-1 error generated.

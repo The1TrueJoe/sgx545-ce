@@ -134,7 +134,7 @@ class Memory:
         self.by_cpu = {s.addr: s.data for s in snaps}
         self.regions = []  # (devva, bytes, Buf)
         for b in mm.bufs:
-            if b.cpu is None:
+            if b.cpu is None or not b.size:
                 continue
             base = b.cpu - b.byte_off
             data = self.by_cpu.get(base)
