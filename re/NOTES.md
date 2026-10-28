@@ -30,6 +30,9 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 | `isa/ISA.md` | the instruction set as decoded, with the evidence for each field (`mkisa.py` writes its tables) |
 | `pds/dis.py` | finds every PDS program in a capture (VDM stream, TA state words, raw pointers, heap scan) and disassembles code and data segment |
 | `pds/PDS.md` | PDS instruction set, data-segment layout, DOUT word formats, the DDK's generators, each field tagged confirmed / strong / guess |
+| `state/decode.py` | annotates every TA/3D state word of a capture: TA command, render details, PB descriptor, VDM stream, TA state blocks, pixel programs and texture words, the end-of-tile PBE words; `--brief` for diffing two captures |
+| `state/build.py` | computes those words from GL-level parameters with STATE.md's formulas; `--check CAPTURE` compares them with the DDK's |
+| `state/STATE.md` | the TA/3D render state as decoded, each field tagged replay-confirmed / diff-confirmed / guess |
 | `pds/DumpDecomp.java` | Ghidra headless script: decompile every function in an address range (`analyzeHeadless ... -postScript DumpDecomp.java out.c lo hi`) |
 
 ## Findings (confirmed on an EA3, 2026-10-27)
@@ -207,3 +210,40 @@ point at pixel programs as `data_dwords<<24 | (addr-0x2e000000)>>4`; DOUTU
 word 0 is `code base index | (offset/8)<<4`. `pds/dis.py` explains every bit
 of every instruction in 13 captures (textured, dependent, 4-attribute,
 interleaved, two varyings among them).
+
+## TA/3D render state (2026-10-28)
+
+See `state/STATE.md`. In short:
+
+- **What a frame needs.** The TA command's client part (a 0x58-byte header,
+  then a tail at +0x238 with the TE/MTE numbers and the VDM base), the
+  render details (3D values, the background depth, the pixel event
+  program) and the PB descriptor. Add the RT data with region headers,
+  tail pointers and the background-object block, and the 68-byte HW render
+  context. `build.py --check` reproduces all of them from the formulas.
+- **The VDM stream** is state programs, `4|addr>>4` plus info. Each DMAs a
+  TA state block into USSE attributes, and the state program only emits
+  them. Draws are 6 words (index list + vertex program); the stream ends
+  with a terminate.
+- **The TA state block** is a header bitmask, then ISPA (depth compare
+  b22-24, write-off b20, pass type b25-27, sref), ISPB (colour mask,
+  line width, depth bias), ISPC (stencil), a PDS triple, an optional
+  region clip, the viewport (6 floats), the output select, the W clamp,
+  MTE control (cull b0-1) and the TSP words.
+- **Blending is shader code** plus pass type 1 in ISPA.
+- **Scissor and partial viewports** are pass-type-3 objects plus a region
+  clip in 32×16 tiles.
+- **The render target** is four PBE words that the end-of-tile USSE program
+  loads with LIMM and sends with EMITPIX: clip, stride/2-1 at b16, address,
+  plus a sideband word with the format and dither.
+- **Textures:** T0 = wrap/filter/mip, T1 = size + format (b24-28) +
+  layout (b29-31), T2 = address, T3 = from the shader.
+- **Proven on an EA3** by 12 one-field replays, each 0 pixels off its
+  prediction. The fields:
+  - the viewport x offset;
+  - ISPA dcmp;
+  - render details' background depth;
+  - MTE cull;
+  - PBE clip and stride;
+  - kick 1's VDM base;
+  - T0 filter and wrap.
