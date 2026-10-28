@@ -333,16 +333,23 @@ runs on the re-entry render, with the store on:
 | + b14 (`0x0017501c`, the DDK's "re-entry" bit) | stored, **not loaded**: red still covers green |
 | + b13 or + b15 | no visible change |
 | + b19 | the stored depths are negated (`bf400000`): a format bit |
-| + b0 or + b1 | **3D lockup**; once the recovery failed (`SGXInitialise failed (24)`) and the EA3 had to be power-cycled |
+| + b0 or + b1, stencil words left at the DDK's `c1b00000` | **3D lockup**; once the recovery failed (`SGXInitialise failed (24)`) and the EA3 had to be power-cycled |
+| + b0 (`0x0017501d`), stencil words +0x38/+0x3c = `00081000` (valid memory) | no lockup; a **depth-only render**: the re-entry triangle's depth is stored (0.75 in 3306 texels) but no colour is written. Still no load |
 
 The packed depth-stencil FBO (`fbds`, DEPTH24_STENCIL8) gets ZLS control
 `0x162018` (b13 and b17 on top of the depth-only word) and its stencil
 address 0x8000 after the depth (+0x38 = `80089000`); its depth is lost the
 same way (the re-entry triangle covers the first one).
 
-**Load: open.** No safe combination made the re-entry render start from
-the stored depth. TA-command 3D flag b8 (0x580, as the window depth capture
-has) on the re-entry render ended in a 3D lockup and recovery. What is known
+So the lockups were most likely the DDK's placeholder stencil words: `c1b00000`
+is b31 | b30 | 0x01b00000, an address past the end of the ZLS request base's
+range. Bits that make the 3D touch the stencil address then fault. **Point
++0x38/+0x3c at valid memory before trying ZLS bits.**
+
+**Load: open.** No combination made the re-entry render start from the
+stored depth. TA-command 3D flag b8 (0x580, as the window depth capture has)
+on the re-entry render locked up once with the placeholder stencil words; with
+valid ones it runs normally and still doesn't load. What is known
 for a driver: the store works (`0x0017101c`, depth at ZLS base + +0x30);
 loading it back needs the remaining bit(s) of the ZLS control or a
 render-details/3D-flag combination not found yet. Until then a driver can

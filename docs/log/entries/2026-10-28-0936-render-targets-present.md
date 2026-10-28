@@ -62,9 +62,12 @@ frame (left) has no green pixel left: libGLESv2 only sets up depth load/store
 
 Replaying the frame with the window path's ZLS bits on the FBO's render
 (`0x0017101c`) makes the GPU store the depth (as float32). The matching
-*load* was not found. Two candidate bits (b0, b1) hard-lock the 3D, and one
-of those lockups needed a power cycle. The rest of the bit sweep is in
-`docs/TEX.md` section 7.
+*load* was not found. Two candidate bits (b0, b1) hard-locked the 3D, and one
+of those lockups needed a power cycle. A later run showed why: the DDK leaves
+the stencil address words of an FBO without stencil at a placeholder that
+points past the end of memory. With valid stencil words, b0 runs fine and
+turns out to be a depth-only render (depth stored, no colour). The rest of the
+bit sweep is in `docs/TEX.md` section 7.
 
 ## Numbers
 
