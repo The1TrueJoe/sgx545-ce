@@ -77,9 +77,11 @@ the register window where we think it is?) — run it before loading anything.
 
 Not in this repo: the EGL/GLES blobs + `pvrsrvctl` (which uploads the SGX
 microkernel) are proprietary — Intel/Imagination, binary-redistributable with
-notice, no reverse engineering. Use the matched **DDK 1.7** set (the `sgx545-um`
-package, or the published Cedarview tarball). Its version must match the driver's
-`SGX_CORE_REV` or `pvrsrvctl` refuses the upload.
+notice, no reverse engineering. Use the matched **DDK 1.7** set:
+`cedarview-graphics-drivers_20120717.orig.tar.gz` from Ubuntu's archive,
+<https://old-releases.ubuntu.com/ubuntu/pool/multiverse/c/cedarview-graphics-drivers/>
+(the `.dsc` beside it is PGP-signed and carries the hash). Its version must match
+the driver's `SGX_CORE_REV` or `pvrsrvctl` refuses the upload.
 
 ## Licensing
 
