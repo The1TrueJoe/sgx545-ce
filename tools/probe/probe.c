@@ -35,6 +35,7 @@
  *   PROBE_NOCLEAR=1            no glClear (the draws land on the previous buffer)
  *   PROBE_SCISSOR2="x y w h"   glScissor before every draw after the first (PROBE_DRAWS >= 2)
  *   PROBE_VIEWPORT2="x y w h"  glViewport likewise
+ *   PROBE_NOSCISSOR2=1         glDisable(SCISSOR_TEST) before every draw after the first
  * Textures (PROBE_TEX >= 1; all units the same):
  *   PROBE_TEXFMT=name          rgba8888 rgb565 rgba4444 rgba5551 rgb888 l8 a8 la88   (rgba8888)
  *   PROBE_TEXSIZE="w h"        (8 8); the checker repeats every 8 texels
@@ -721,6 +722,8 @@ int main(void)
 	for (int i = 0; i < draws; i++) {
 		if (i == 1 && ints("PROBE_SCISSOR2", v, 4, NULL) == 4)
 			glScissor((GLint)v[0], (GLint)v[1], (GLsizei)v[2], (GLsizei)v[3]);
+		if (i == 1 && getenv("PROBE_NOSCISSOR2"))
+			glDisable(GL_SCISSOR_TEST);
 		if (i == 1 && floats("PROBE_VIEWPORT2", f, 4, "") == 4)
 			glViewport((GLint)f[0], (GLint)f[1], (GLsizei)f[2], (GLsizei)f[3]);
 		note("draw");
