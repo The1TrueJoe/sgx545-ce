@@ -199,12 +199,13 @@ are all **constant** (microkernel entry points); the result is **computed**.
 | pds0 | [0] doutu(0xd60), [1] 2 | `movs doutu` (one row), halt |
 | pds1 | [0] TA3D control address, [1] 0x3c0003f, [4] `(off·2 & 0xffff0) \| ((seg+15) & 15)` for 0xdf0 (no bit 27), [5] 2 | if in0 == 0: `movs doutd` (the TA3D address) then `movs doutu`; else halt |
 | pds2 | [0] doutu(0xe20), [1] 2 | as pds0 |
-| pds3 | [0] 2, [3] 0x100, [6] 0x200, [7] doutu(0x7050), [10] doutu(0x2cd0), [11] doutu(0x5670), [14] doutu(0x30) | `douta`s, then one of four DOUTUs picked by input bits |
+| pds3 | [0] 2, [3] 0x100, [6] 0x200, [7] doutu(0x7050), [10] doutu(0x2cd0), [11] doutu(0x5670), [14] doutu(0x30) | three `douta` put the event inputs in0/in2/in4 into the task's PA0–PA2 (DOUTA control 0 / 0x100 / 0x200: bits 8+ pick the register), then one of four DOUTUs picked by input bits |
 | pds4 | [0] doutu(0x73a0), [1] 2, [3] 0x200, [4] doutu(0x2ea0), [5] 2, [7] 0x4000f, [8] doutu(0x5740), [9] 2, [10] 0x120080 | two `douta`, then one of three DOUTUs picked by `in0 & ds1[3]`, `in0 & ds1[4]` |
 
-The words of value 2 sit next to each DOUTU word 0, so they are probably
-DOUTU word 1 (**guess**). Other constants in these programs (0x100, 0x200,
-0x4000f, 0x120080, 0x3c0003f) are not decoded.
+The word 2 beside each DOUTU word 0 is DOUTU word 1: the MOVS swizzle sends
+it as w1 (pds3's `07003885` sends ds1[3], ds0[0] = 2, ds0[1]; confirmed by
+the PDS session, `re/pds/PDS.md`). The 0x100 and 0x200 in pds3 and pds4 are
+DOUTA control words. 0x4000f, 0x120080 and 0x3c0003f are not decoded.
 
 Who points at which program: `pds0` is the event program (script register
 0xa68 below); `pds1`, `pds2`, `pds3` and `pds4` are referenced only from the
