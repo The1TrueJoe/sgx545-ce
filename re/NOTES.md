@@ -110,6 +110,11 @@ What the replay does, in capture order:
 Event objects, misc info, client info, transfer contexts, dispclass and the
 swap (`SUBMITTRANSFER`) are all skipped.
 
+**With no blob at all (2026-10-28):** after a boot where the srvinit session's
+open SrvInit brought the SGX up (no libsrv_init), the replay's back buffer was
+again md5 `56f8466a…`, before and after an i386 gles2tri. The frame needs no
+Intel code from power-on to pixels.
+
 Learned on the way:
 - **Kernel bug for native 64-bit clients:** `DoMapToUser` (mmap.c) walks the
   VMA with `IMG_UINT32 ulVMAPos`, so mapping device memory above 4 GB fails
