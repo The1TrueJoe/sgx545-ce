@@ -372,6 +372,45 @@ driver draws them the same way, byte-identical to the DDK):
   (0x00010700 → 0x01010700), perhaps a temporary count for that r0. The Mesa driver writes the blend
   back to pa<c> instead, with the same pixels.
 
+### Constant-colour blending
+
+`sgxs_blend_const` in `tools/state/sgxstate.h` builds the five
+instructions. They are bit-exact with the DDK's for k1-k5, k7 and k8.
+
+sop2's selectors can't name a constant. With any CONSTANT_COLOR /
+ONE_MINUS_CONSTANT_COLOR / CONSTANT_ALPHA / ONE_MINUS_CONSTANT_ALPHA
+factor, libGLESv2 (`FUN_000457d0`, the tables at `DAT_0006d000`-`d100`)
+multiplies each side out with sopwm and adds the halves:
+
+    sopwm r1, Y, o0      [c1=zero c2=Fd]           dst * Fd (all four bytes)
+    sopwm r1, Y, o0      [mask=8 c1=zero c2=Fda]   alpha byte: dst.a * Fda
+    sopwm r0, pa<c>, X   [c1=Fs c2=zero]           src * Fs
+    sopwm r0, pa<c>, X   [mask=8 c1=Fsa c2=zero]   src.a * Fsa
+    sop2  o0, r0, r1     [end c1=one c2=one cop=add a1=one a2=one aop=add]
+
+- X and Y are whichever of the colour, the tile (o0) or the constant the
+  factor reads.
+- **The constant is the blend colour, packed BGRA8 like the colour, in a
+  fragment secondary attribute.** The DDK puts it in sa2 of its 11-dword
+  constant DMA: glBlendColor(0.25, 0.5, 0.75, 0.375) = `604080bf` [D].
+- Products round to nearest: 204 × 64/255 = 51.2 gives 51 (`k1`) [D].
+- Turning k1's src-RGB sopwm into 1-s2 or s2a reproduces the DDK's own
+  ONE_MINUS_CONSTANT_COLOR and CONSTANT_ALPHA frames [C, b2 b3].
+- The DDK's final sop2 is always an add (`FUN_00045270(1,1,1,1,0,1,..)`).
+  Subtract and reverse subtract with constant factors are untested.
+
+**k18/k19 are not a constant.** In `kb0` (ONE, ZERO) the sop2 was turned
+into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery):
+
+- k19 reads 0 in colour and alpha.
+- k18 as c1 reads a different value per 4×4 block, zero in R and G. The
+  values step by the shader colour's own factor (102, 82, 66, 53 … =
+  102 × (204/255)^n): state left behind by earlier tasks, not a register
+  the program sets.
+- k18 in a1 gave alpha 255.
+
+So neither can carry a blend colour. The sopwm form above is what to use.
+
 ### Scissor and partial viewports: pass type 3 objects
 
 There is no scissor rectangle register. The ISP keeps one **visible bit
@@ -819,6 +858,9 @@ Base captures and their bases:
 | pt1 / pt8 / pt16 | GL_POINTS without gl_PointSize / 8.0 / 16.0 | nothing / VDM prim 2, ISPA type 3, size output |
 | spr16 | 16-px points, gl_FragColor = gl_PointCoord | ISPA type 4, tc0 iteration |
 | ptattr | gl_PointSize from an attribute | fminmax clamp against 511 |
+| kb0 | glBlendFunc(ONE, ZERO), colour 0.8 0.6 0.4 0.5 | sop2 c1=one c2=zero |
+| k1-k5, k7, k8 | constant factors (src, dst, both), blend colour 0.25 0.5 0.75 0.375 | 4 sopwm + sop2, blend colour in sa2 |
+| k6 | k1 with blend colour 0.5 0.125 1 0.625 | sa2 only |
 
 Every capture's TA state block, PBE words, RT numbers, PB descriptor and
 free list are rebuilt from the formulas by `build.py --check` (run with
@@ -864,6 +906,11 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 | p2 | sprite size | `spr16` sa10 → `5ffc4800` | 8-px sprites, gl_PointCoord (i+0.5)/8 | 0 differ |
 | p3 | sprite size | `spr16` sa10 → `5ffc5000` | 32-px sprites, (i+0.5)/32 | 0 differ |
 | p4 | ISPA object type | `spr16` ISPA `01d20200` → `01d18200` (type 3) | (discovery) | same squares, coordinate 0: type 4 generates it |
+| b0 | constant blend (control) | none (`k1`: CONSTANT_COLOR, ZERO; colour 0.8 0.6 0.4 0.5, blend colour 0.25 0.5 0.75 0.375) | identical | 0 differ |
+| b2 | constant blend | k1's src-RGB sopwm `90807980` → `91807980` (c1 s2 → 1-s2, `0x370083a0`) | RGB of the DDK's `k2` frame, alpha of `k1` | 0 differ |
+| b3 | constant blend | the same word → `908079c0` (s2a) | the DDK's `k3` frame | 0 differ |
+| kk0 | k18/k19 (control) | none (`kb0`: ONE, ZERO) | identical | 0 differ |
+| kk1-kk4 | sop2 selectors | `kb0`'s sop2 with c1=k18 / c2=k19 / a1=k18 / a2=k19 | (discovery) | k19 reads 0; k18 reads leftover per-pixel state |
 
 p8 sets the min and mag bits together. The triangle samples a magnified
 texture, so only mag is proven by the pixels; min stays [D].

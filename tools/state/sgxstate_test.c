@@ -114,6 +114,41 @@ main(void)
       }
    }
 
+   /* constant-colour blending: the DDK's words in k1-k4 (colour pa0, constant sa2) */
+   {
+      static const struct { const char *name; unsigned fs, fd; uint32_t w[10]; } k[] = {
+         { "k1 CONSTANT_COLOR, ZERO", SGXS_BF_CONSTANT_COLOR, SGXS_BF_ZERO,
+           { 0x90200000, 0x90807800, 0x90200000, 0x90800800, 0xb0000002, 0x90807980, 0xb0000002, 0x90800980,
+             0x00000001, 0x81848805 } },
+         { "k2 ONE_MINUS_CONSTANT_COLOR, ZERO", SGXS_BF_ONE_MINUS_CONSTANT_COLOR, SGXS_BF_ZERO,
+           { 0x90200000, 0x90807800, 0x90200000, 0x90800800, 0xb0000002, 0x91807980, 0xb0000002, 0x91800980,
+             0x00000001, 0x81848805 } },
+         { "k3 CONSTANT_ALPHA, ZERO", SGXS_BF_CONSTANT_ALPHA, SGXS_BF_ZERO,
+           { 0x90200000, 0x90807800, 0x90200000, 0x90800800, 0xb0000002, 0x908079c0, 0xb0000002, 0x908009c0,
+             0x00000001, 0x81848805 } },
+         { "k5 ONE, CONSTANT_COLOR", SGXS_BF_ONE, SGXS_BF_CONSTANT_COLOR,
+           { 0xd0200100, 0x90807810, 0xd0200100, 0x90800810, 0xa0000000, 0x91807800, 0xa0000000, 0x91800800,
+             0x00000001, 0x81848805 } },
+         { "k4 ONE_MINUS_CONSTANT_ALPHA, ZERO", SGXS_BF_ONE_MINUS_CONSTANT_ALPHA, SGXS_BF_ZERO,
+           { 0x90200000, 0x90807800, 0x90200000, 0x90800800, 0xb0000002, 0x918079c0, 0xb0000002, 0x918009c0,
+             0x00000001, 0x81848805 } },
+         { "k7 CONSTANT_ALPHA, ONE_MINUS_CONSTANT_ALPHA", SGXS_BF_CONSTANT_ALPHA, SGXS_BF_ONE_MINUS_CONSTANT_ALPHA,
+           { 0xd0200100, 0x9080f818, 0xd0200100, 0x90808818, 0xb0000002, 0x908079c0, 0xb0000002, 0x908009c0,
+             0x00000001, 0x81848805 } },
+         { "k8 CONSTANT_COLOR, ONE_MINUS_CONSTANT_COLOR", SGXS_BF_CONSTANT_COLOR, SGXS_BF_ONE_MINUS_CONSTANT_COLOR,
+           { 0xd0200100, 0x9080f810, 0xd0200100, 0x90808810, 0xb0000002, 0x90807980, 0xb0000002, 0x90800980,
+             0x00000001, 0x81848805 } },
+      };
+      for (unsigned i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+         uint32_t w[SGXS_BLEND_CONST_INSTS][2];
+
+         sgxs_blend_const(w, k[i].fs, k[i].fd, k[i].fs, k[i].fd, 0, 2, 0, 0, true);
+         check(k[i].name, &w[0][0], k[i].w, 10);
+      }
+      check("k1 blend colour word", (uint32_t[]){ sgxs_blend_color_word((float[]){ 0.25f, 0.5f, 0.75f, 0.375f }) },
+            (uint32_t[]){ 0x604080bf }, 1);
+   }
+
    printf(fails ? "%d FAILED\n" : "all ok\n", fails);
    return fails != 0;
 }
