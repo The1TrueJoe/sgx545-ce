@@ -411,6 +411,62 @@ into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery):
 
 So neither can carry a blend colour. The sopwm form above is what to use.
 
+### Alpha test (ES1)
+
+The ES1 driver (libGLES_CM, `tools/probe/probe1.c` captures `e1*`) needs
+no state words for it. The fragment program ends in one visibility-test
+instruction instead of its final `mov o0, colour`:
+
+    atst8 o0, p0.nw, pa0, sa0, sa1  [end]      f0000001 f934000d   (e1gt5)
+
+with ISPA pass type 1 (`03d00200`). `tools/state/sgxstate.h` has
+`sgxs_atst8`, `sgxs_atst_depth_word` and `sgxs_atst_alpha_word`.
+
+**The operands.** The secondary program writes sa0 and sa1 with DOUTA:
+
+| word | value | fields | tag |
+|---|---|---|---|
+| sa0, depth | `0000e00f` | `0xe000 \| depth func (GL - 0x200, 7 with no depth test) \| 8 when depth writes are off` | D |
+| sa1, alpha | `80008e00` (GREATER 0.5) | `ref8 << 24 \| alpha func (GL - 0x200) << 13 \| 0xe00`, ref8 = round(ref × 255): 0.5 → 128, 0.25 → 64 | C |
+
+- From `e1gt5`, changing sa1 to the reference 0.25 reproduces the DDK's
+  own `e1gt25` frame. Changing it to LESS or GEQUAL reproduces `e1lt5` and
+  `e1ge5`. All 0 pixels off [C, a1-a3].
+- ALWAYS (`8000ee00`) draws the frame with no alpha test [C, a7].
+- The Mesa driver's discard `atst8` (`f9340406`, sa3/sa4) carries these
+  same two words with the alpha function ALWAYS (`0xee00`). So its discard
+  program does an alpha test as soon as sa4 has another function and
+  reference.
+
+**The instruction.** atst8 fields:
+
+- dst l21-27, bank h0-1 (0 r, 1 o, 2 pa);
+- colour source l14-20, bank h2 (0 r, 1 pa);
+- the two sa operands l7-13 and l0-6 (bank l28-31 = 0xf);
+- end h18;
+- h6 = write p0 (`p0` instead of `p0.nw`);
+- h9-10 = the kill predicate (the discard form).
+
+The DDK's ES1 words also set **h3** (`sel36` in dis.py). With h3 cleared
+the replay's render stalls (447 ms) and leaves the right part of the frame
+unwritten, with no SGX recovery [C, a6]. Keep it.
+
+**Pass type.** It must not be opaque. With pass type 0 the failing pixels
+are drawn with garbage [C, a4]. Pass type 4 (punch-through, the Mesa
+driver's discard) works exactly like the DDK's 1 [C, a5].
+
+**Variants** [D]:
+
+- **Textured** (`e1texat`, GL_MODULATE): `sop2 r0, pa0, pa1` modulates,
+  then `atst8 o0, p0.nw, r0, sa0, sa1 [end]` (`f9340009`).
+- **With a blend** (`e1atbl`): `atst8 r0, p0, pa0, sa0, sa1` (`f930004c`,
+  writes p0, no end), then the blend predicated on it:
+  `(p0) sop2 o0, r0, o0 [end ...]`.
+- **GL_NEVER** (`e1nev`): no atst8. The draw gets ISPA `01f00200` (b20 and
+  b21: no depth, no colour writes).
+- ES1 points and lines draw as in "Lines and points" (`e1pt`, `e1spr`,
+  `e1ln`).
+
 ### Scissor and partial viewports: pass type 3 objects
 
 There is no scissor rectangle register. The ISP keeps one **visible bit
@@ -513,9 +569,13 @@ the position and the varyings, an **F16 pair: the size in the low half**,
 - Changing the low half from 8.0 to 16.0 draws the DDK's own 16-pixel frame
   [C, p1].
 - Output select gets 0x100 (`00073100`) [D].
-- Points always come with texcoord set 0 of two components (TSP words 2
-  and 1) ahead of the size. The vertex program doesn't write it (o4-o5
-  stay unwritten), so output select counts 4 + 2 + 1 = 7 [D].
+- The ES2 driver gives every point draw a two-component texcoord set ahead
+  of the size (TSP words 2 and 1). The vertex program doesn't write it
+  (o4-o5 stay unwritten), so output select counts 4 + 2 + 1 = 7 [D].
+- The ES1 driver adds that set only for a sprite. `e1pt` has none (output
+  select 9 = position 4 + colour 4 + size 1). `e1spr` puts it after the
+  vertex colour (11, TSP word `0x15`) [D]. So it is only needed when
+  gl_PointCoord is read.
 - In a sprite (object type 4) the ISP writes gl_PointCoord there, and the
   pixel program iterates it as tc0 (`DOUTI iterate tc0 x2 f16`, DOUTU w1
   b24) [D]. The values are `(i + 0.5) / size` across the point, origin top
@@ -861,6 +921,12 @@ Base captures and their bases:
 | kb0 | glBlendFunc(ONE, ZERO), colour 0.8 0.6 0.4 0.5 | sop2 c1=one c2=zero |
 | k1-k5, k7, k8 | constant factors (src, dst, both), blend colour 0.25 0.5 0.75 0.375 | 4 sopwm + sop2, blend colour in sa2 |
 | k6 | k1 with blend colour 0.5 0.125 1 0.625 | sa2 only |
+| e1base | probe1 (GLES1): clear + a triangle with vertex colours, alpha 0 / 0.5 / 1 | base for the e1 rows |
+| e1gt5 / e1lt5 / e1gt25 / e1ge5 | glAlphaFunc GREATER 0.5 / LESS 0.5 / GREATER 0.25 / GEQUAL 0.5 | ISPA pass type 1, atst8, sa1 |
+| e1nev / e1alw | NEVER / ALWAYS | no atst8: ISPA b20+b21 / the base |
+| e1tex / e1texat | an RGBA texture, GL_MODULATE / + alpha test | sop2 modulate into r0, atst8 from r0 |
+| e1atbl | alpha test + SRC_ALPHA blend | atst8 writes p0, (p0) blend |
+| e1pt / e1spr / e1ln | ES1 points 8 / sprite 16 + texture / lines width 4 | as in ES2 |
 
 Every capture's TA state block, PBE words, RT numbers, PB descriptor and
 free list are rebuilt from the formulas by `build.py --check` (run with
@@ -911,6 +977,14 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 | b3 | constant blend | the same word → `908079c0` (s2a) | the DDK's `k3` frame | 0 differ |
 | kk0 | k18/k19 (control) | none (`kb0`: ONE, ZERO) | identical | 0 differ |
 | kk1-kk4 | sop2 selectors | `kb0`'s sop2 with c1=k18 / c2=k19 / a1=k18 / a2=k19 | (discovery) | k19 reads 0; k18 reads leftover per-pixel state |
+| a0 | alpha test (control) | none (`e1gt5`: ES1, glAlphaFunc(GREATER, 0.5), vertex alpha 0, 0.5, 1) | identical | 0 differ |
+| a1 | alpha reference | sa1 `80008e00` → `40008e00` (`0x2e018038`, PDS data) | the DDK's `e1gt25` frame | 0 differ |
+| a2 | alpha func | sa1 → `80002e00` (LESS) | the DDK's `e1lt5` frame | 0 differ |
+| a3 | alpha func | sa1 → `8000ce00` (GEQUAL) | the DDK's `e1ge5` frame | 0 differ |
+| a7 | alpha func | sa1 → `8000ee00` (ALWAYS) | the DDK's `e1base` frame (no alpha test) | 0 differ |
+| a4 | pass type | ISPA `03d00200` → `01d00200` (opaque) | (discovery) | failing pixels drawn with garbage |
+| a5 | pass type | ISPA → `09d00200` (punch-through) | identical | 0 differ |
+| a6 | atst8 h3 | `f934000d` → `f9340005` | (discovery) | render stalls, right part unwritten, no recovery |
 
 p8 sets the min and mag bits together. The triangle samples a magnified
 texture, so only mag is proven by the pixels; min stays [D].

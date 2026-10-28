@@ -1,0 +1,9 @@
+run,capture,poke,prediction,pixels_differing,of
+a0,e1gt5,none,identical,0,345600
+a1,e1gt5,sa1 80008e00->40008e00 @0x2e018038,the DDK's e1gt25 frame,0,345600
+a2,e1gt5,sa1 ->80002e00 (LESS),the DDK's e1lt5 frame,0,345600
+a3,e1gt5,sa1 ->8000ce00 (GEQUAL),the DDK's e1ge5 frame,0,345600
+a7,e1gt5,sa1 ->8000ee00 (ALWAYS),the DDK's e1base frame,0,345600
+a4,e1gt5,ISPA 03d00200->01d00200 (opaque),discovery: failing pixels drawn with garbage,10644,345600
+a5,e1gt5,ISPA ->09d00200 (punch-through),identical,0,345600
+a6,e1gt5,atst8 hi f934000d->f9340005 (h3 clear),discovery: render stalls 447 ms; x>=512 unwritten; no recovery,186891,345600
