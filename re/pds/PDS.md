@@ -31,6 +31,10 @@ The status tags used below:
   ORed with shifted fields, so the encoders give the field positions directly.
 - **The static programs in libsrv_um .rodata** (0x229f0–0x23420): the
   pixel-event program, plus the transfer-queue programs.
+- **libsrv_init's five microkernel-entry templates** (file offset 0x1e20).
+  The srvinit session documents how they are filled in, in
+  `re/srvinit/SRVINIT.md`. They are the only source of TST and ALU ops with
+  condition 0, the unconditional BRA, and XOR (`d` with s = 0).
 - **libGLESv2 callers.** These show how GL fills the DOUTU, DOUTI and VDM
   words: the clear path at 0x1c560, the DOUTI builder at 0x36b00, the
   VDM-info helper at 0x7c20, and the VDM state emitters at 0x38eb0 and
@@ -96,7 +100,7 @@ Every instruction has these fields (confirmed for all classes below):
 |---|---|
 | 28–31 | opcode |
 | 27 | sub-op (`s`): selects between two operations of an opcode |
-| 24–26 | condition: 7 = always. BRA uses 0, meaning "if p0". MOVS also uses 3; see below |
+| 24–26 | condition: 7 = always, 0 = only if p0 (strong: BRA in all programs; TST, AND/XOR in the microkernel-entry programs). MOVS also uses 3; see below |
 
 Register operands come in three numberings:
 
@@ -131,7 +135,7 @@ So `ds1[0x30]` is U 0x70 and S2 0x60, and `ds0[0x30]` is U 0x30 and S1 0x60.
 | 3 | DOUTD | 2, or 3 with the `x` bits | DMA from memory into USSE attribute registers | confirmed |
 | 4 | DOUTT | 4 | texture state for the sample started by the preceding DOUTI | confirmed |
 | 5 | DOUTU | 3 | start the USSE task | confirmed |
-| 6 | DOUTA | 2 (pairs) | write a word (value, ctrl) to an attribute/output slot. Programs repeat it in threes (the VDM type-6 program, the transfer-queue programs), so it may feed a per-vertex FIFO | guess |
+| 6 | DOUTA | 2 (pairs) | write word 0 into the USSE primary attribute register named by ctrl bits 8+ | strong (microkernel entry programs; see DOUTA below) |
 
 The variant bits:
 
@@ -171,8 +175,9 @@ The variant bits:
 | 6 | 0 | MUL16: src1.half × src2.half, 16×16→32 | confirmed: the generator splits 32-bit products into 16-bit halves and recombines them with SHL 16 + ADD when the vertex count > 0x10000 or the stride > 0xffff |
 | c | 1 | AND | strong: pixel event masks with 8, 2, 4, 0x100, 0xff8, 0x3ff000 |
 | c | 0 | OR | strong: pixel event assembles the EOT word |
-| d | 1 | XOR? | guess: only `df820070` = in1 op ds1[0] (= 0), then AND 0x100 |
-| 4 | 1, 6 | 1, d | 0 | not seen |
+| d | 0 | XOR | strong: in libsrv_init's `pds3` it follows `t = x & m` as `x op t`, then a test for zero, i.e. "no bits other than m"; only XOR (or ANDN) makes that test useful |
+| d | 1 | ? | only `df820070` = in1 op ds1[0] (= 0), then AND 0x100; XOR-like there, NOR/NOT fit too |
+| 4 | 1, 6 | 1 | not seen |
 
 ### TST (opcode 8)
 
@@ -186,10 +191,12 @@ The variant bits:
 
 ### BRA (opcode 9)
 
-    31..28 9  26..24 cc (0 = if p0)  23..0 target instruction index (from the first code word)
+    31..28 9  26..24 cc (0 = if p0, 7 = always)  23..0 target instruction index (from the first code word)
 
-Strong: all 4 targets in the pixel-event program and the VDM state programs
-land on instruction boundaries, and the programs make sense.
+Strong: every target in the pixel-event, VDM state and microkernel-entry
+programs lands on an instruction boundary, and the programs make sense.
+libsrv_init's `pds1` is `tst in0 == 0; bra p0, 3; bra 4; 3: doutd; 4: doutu`,
+so `97000004` (condition 7) is unconditional.
 
 ### Shifts (opcode f)
 
@@ -219,6 +226,9 @@ program may hold several HALTs, as branch targets.
   - Confirmed: every DOUTU in 13 captures lands on a captured USSE buffer.
 - bits 24–31: `(n+3)>>2` for a per-shader count from GL, probably the
   temporary register count in fours. Guess.
+- bit 27 (0x8000000) is set on the microkernel's own task entries (with code
+  base 15, the kernel code heap; libsrv_init `pds0`/`pds2`/`pds3`/`pds4`),
+  but not in `pds1`'s word. Meaning unknown.
 
 **Word 1:**
 
@@ -228,7 +238,9 @@ program may hold several HALTs, as branch targets.
   triangle 0x00000004.
 - bit 2 is always set on pixel tasks. Guess: pixel pipe, or a sample-rate
   bit.
-- Vertex and state tasks have 0.
+- Vertex and state tasks have 0. Microkernel tasks have 2 (the word next to
+  every microkernel DOUTU word 0 in the libsrv_init templates; the DOUTU
+  swizzle there sends it as word 1).
 - The pixel-event program computes word 1 at run time: an OR of the tile
   position fields, 0x00800000 and 0x00400000.
 
@@ -304,11 +316,18 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
 - GL builds them at 0x37b90 as `(sampler word & mask) | override`, per
   texture unit.
 
-### DOUTA (2 words, guess)
+### DOUTA: write a primary attribute register (2 words)
 
-- (value, ctrl). ctrl bits 8+ look like a slot number: the static
-  transfer-queue programs write rows `(0, 0x100)`, `(0, 0x200)`, …
-  three times each.
+- **(value, ctrl): ctrl bits 8+ select the register.** Strong.
+  - libsrv_init's `pds3` (the microkernel's event entry) starts with
+    `douta (in0, 0)`, `douta (in2, 0x100)` and `douta (in4, 0x200)`. That
+    hands its inputs to the microkernel task in PA0–PA2; `pds4` does the
+    same with in0 and in4.
+  - The pixel-event program sends `(in2, 0)` before the EOT task.
+- **Repeated DOUTAs to the same register** (the VDM type-6 program, and the
+  transfer-queue programs' rows `(0, 0x100)`, `(0, 0x200)`, … three times
+  each) are unexplained. Guess: they feed per-vertex slots, not one
+  register.
 
 ## What the DDK generates
 
@@ -323,6 +342,7 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
 | 0x1fd60 | VDM type 6: DOUTA (0x2000, 0), 3 × DOUTA (x, 0x100), DOUTU | yes: 0x30400000 |
 | 0x1e4b0, 0x1e710 | loopback and auxiliary programs: DMA pairs, DOUTA of in0, DOUTI with the constant `0x20011000`, DOUTU | no |
 | 0x1e3a0 / 0x1fe00 | copy the static **pixel-event** program (0xc4 bytes from .rodata 0x23280 / 0x23360) and patch its data words | yes: 0x2e006000 |
+| libsrv_init firmware (file offset 0x1e20: `pds3` 0x100, `pds4` 0x68, `pds0` 0x18, `pds1` 0x38, `pds2` 0x18; see `re/srvinit/SRVINIT.md`) | **microkernel entry programs**: `pds0`/`pds2` one DOUTU; `pds1` optional DOUTD (TA3D control block) + DOUTU; `pds3` (event) and `pds4`: DOUTA of the inputs, then mask tests on in0/in1 picking one of several microkernel DOUTUs | in SrvInit traces (srvinit session) |
 | static (VDM state) | `tst ds0[0]; bra; doutd; tst ds0[2]; bra; doutd; doutu`: two optional state DMAs and a task. 0x3040e000 holds hundreds of these 0x80-byte slots | yes |
 
 The pixel-event program (0x2e006000) decoded:
@@ -371,9 +391,9 @@ The `cap` pattern ran on the EA3, 2026-10-27. All runs rc=0.
 - DOUTD ctrl bits 22–25. The DOUTU w0 top byte and w1 bit 2.
 - The remaining DOUTI bits 5–8, 17–20 and 25–26, and what precision values
   0/1/2 are.
-- The meaning of DOUTA (dest 6), and why it is issued in threes.
+- Why DOUTA is sometimes issued three times to the same register.
 - The pixel-event inputs and event bits. The data size of a raw-pointer
   program is inferred, not read.
 - The VDM info word bits 8–21 for state programs (`0e022403`, `0800e103`).
-- Opcodes and sub-ops not seen: 1, 3, 5, 7, b, e; ADD/MUL with s = 1; d with
-  s = 0.
+- Opcodes and sub-ops not seen: 1, 3, 5, 7, b, e; ADD/MUL with s = 1. What
+  d with s = 1 does.

@@ -92,7 +92,7 @@ class Inst:
 
 def decode(w):
     op, s, cc = w >> 28, (w >> 27) & 1, (w >> 24) & 7
-    pred = "" if cc == 7 else f"(cc{cc}) "
+    pred = {7: "", 0: "(p0) "}.get(cc, f"(cc{cc}?) ")
     if w == HALT:
         return Inst("halt")
     if op in (0, 2):
@@ -112,7 +112,7 @@ def decode(w):
         return Inst(text, reads=outs, dout=(dest, outs), known=dest in DOUT)
     if op in (4, 6, 0xc, 0xd):
         names = {(4, 0): "add", (4, 1): "sub?", (6, 0): "mul16", (6, 1): "mul16.s27?",
-                 (0xc, 0): "or", (0xc, 1): "and", (0xd, 0): "xor.s0?", (0xd, 1): "xor?"}
+                 (0xc, 0): "or", (0xc, 1): "and", (0xd, 0): "xor", (0xd, 1): "xor.s27?"}
         halves = op == 6
         dst, s2, s1 = w & 0x7f, (w >> 9) & 0x7f, (w >> 16) & 0xff
         extra = f" {{?b7-8={(w >> 7) & 3}}}" if (w >> 7) & 3 else ""
@@ -127,9 +127,9 @@ def decode(w):
         return Inst(text, reads=[(1, s2 >> 1)] if sel else [(0, s1 >> 1)])
     if op == 9:
         t = w & 0xffffff
-        cond = "p0" if cc == 0 else f"cc{cc}?"
         extra = f" {{?s27={s}}}" if s else ""
-        return Inst(f"bra {cond}, {t}{extra}", target=t, known=cc == 0 and not s)
+        text = {0: f"bra p0, {t}", 7: f"bra {t}"}.get(cc, f"bra cc{cc}?, {t}")
+        return Inst(text + extra, target=t, known=cc in (0, 7) and not s)
     if op == 0xf:
         src, amt, dst = (w >> 16) & 0xff, (w >> 8) & 0xff, w & 0xff
         text = f"{pred}{'shr' if s else 'shl'} {reg_u(dst)}, {reg_u(src)}, {amt}"
@@ -146,9 +146,9 @@ def plausible(w):
     if op in (0, 2):
         return (w & 0x1f) in DOUT and cc in (3, 7)
     if op in (4, 6, 8, 0xc, 0xd, 0xf):
-        return cc == 7
+        return cc in (0, 7)
     if op == 9:
-        return cc == 0 and (w & 0xffffff) < 0x400
+        return cc in (0, 7) and (w & 0xffffff) < 0x400
     return False
 
 
@@ -184,7 +184,8 @@ def describe_dout(dest, v, mm, mem):
         tags = " ".join(t for t in (cmdta.tag(mm, mem, x) for x in v if x is not None) if t)
         return "texture state: " + " ".join(h(x) for x in v) + (f"  {tags}" if tags else "")
     if dest == 6:
-        return f"attribute write?: value {h(v[0])} ctrl {h(v[1])}"
+        reg = "" if v[1] is None else f" -> attr {(v[1] >> 8) & 0xff}"
+        return f"attribute write: value {h(v[0])} ctrl {h(v[1])}{reg}"
     return ""
 
 
