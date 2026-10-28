@@ -143,6 +143,26 @@ struct sgxtex_blit {
 	uint32_t eot[SGXPBE_EOT_WORDS];		/* at ctx->eot_use */
 };
 
+/*
+ * The background object is the triangle (0,0) (W,0) (0,H) over the whole
+ * destination; words 3-8 of its block are the texture coordinates (u, v) at
+ * those three vertices, interpolated across it (EA3, 2026-10-28). A
+ * sub-rectangle copy keeps the triangle, sets the coordinates so destination
+ * pixel (x, y) samples source texel (sx - dx + x, sy - dy + y) scaled by
+ * sw/dw, sh/dh, clips the PBE to the destination rectangle and the tiles to
+ * the ones it touches. T0 clamps, so no read leaves the source.
+ *
+ * A twiddled destination only clips in y: the PBE takes a twiddled surface's
+ * tile row length from the clip width, so a narrower clip writes the right
+ * pixels to the wrong places. Full-width bands are exact. For any other
+ * rectangle of a twiddled surface: read it back to a linear scratch surface
+ * (sgxtex_blit_build), copy the rectangle into that (this function), and
+ * upload the scratch again; all three are exact on the EA3.
+ */
+struct sgxtex_rect {
+	uint32_t x, y, w, h;
+};
+
 /* src scaled onto all of dst (equal sizes copy; half sizes with LINEAR box-filter a mip level) */
 void sgxtex_blit_build(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, const struct sgxtex_surface *src,
 		       const struct sgxtex_surface *dst, int filter);
@@ -156,6 +176,12 @@ void sgxtex_blit_build(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, c
  */
 #define SGXTEX_CMD_BYTES 0x1c0
 #define SGXTEX_CMD_SHARED 0xac
+/* srect of src scaled onto drect of dst; the rest of dst is untouched (glCopyTexSubImage, glBlitFramebuffer).
+ * Returns -1 (and builds nothing) for a twiddled dst whose drect is not full width. */
+int sgxtex_blit_build_rect(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, const struct sgxtex_surface *src,
+			    const struct sgxtex_rect *srect, const struct sgxtex_surface *dst,
+			    const struct sgxtex_rect *drect, int filter);
+
 void sgxtex_blit_command_full(uint32_t out[SGXTEX_CMD_BYTES / 4], const struct sgxtex_blit *b, int twiddled_dst);
 
 /* ---- a transfer context of one's own (what libsrv_um's SGXCreateTransferContext sets up) ---- */

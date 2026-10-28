@@ -246,6 +246,43 @@ void sgxtex_blit_build(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, c
 	sgxpbe_eot_program(b->eot, &p);
 }
 
+static uint32_t f32(float f)
+{
+	uint32_t u;
+
+	memcpy(&u, &f, 4);
+	return u;
+}
+
+int sgxtex_blit_build_rect(struct sgxtex_blit *b, const struct sgxtex_blit_ctx *c, const struct sgxtex_surface *src,
+			    const struct sgxtex_rect *sr, const struct sgxtex_surface *dst, const struct sgxtex_rect *dr,
+			    int filter)
+{
+	/* texel coordinate per destination pixel: s = sx + (x - dx) * sw / dw (same in y) */
+	float ku = (float)sr->w / dr->w, kv = (float)sr->h / dr->h;
+	float u0 = (sr->x - dr->x * ku) / src->w, v0 = (sr->y - dr->y * kv) / src->h;
+	float u1 = u0 + dst->w * ku / src->w, v2 = v0 + dst->h * kv / src->h;
+	int tw = dst->layout == SGXTEX_LAYOUT_TWIDDLED;
+	uint32_t x1 = dr->x + dr->w - 1, y1 = dr->y + dr->h - 1;
+	struct sgxpbe p;
+
+	if (tw && (dr->x || dr->w != dst->w))
+		return -1;
+	sgxtex_blit_build(b, c, src, dst, filter);
+	/* vertex texture coordinates: (0,0) -> (u0, v0), (W,0) -> (u1, v0), (0,H) -> (u0, v2) */
+	b->bg[3] = f32(u0), b->bg[4] = f32(v0);
+	b->bg[5] = f32(u1), b->bg[6] = f32(v0);
+	b->bg[7] = f32(u0), b->bg[8] = f32(v2);
+	/* tiles the rectangle touches (32x16) */
+	b->cmd[12] = (dr->x >> 5) << 16 | dr->y >> 4;
+	b->cmd[13] = (x1 >> 5) << 16 | y1 >> 4;
+	sgxpbe_words(&p, dst->w, dst->h, tw ? dst->w : dst->pitch, dst->addr, dst->pbefmt, tw, 0);
+	p.w[0] = dr->y << 16 | dr->x;
+	p.w[1] = y1 << 16 | x1;
+	sgxpbe_eot_program(b->eot, &p);
+	return 0;
+}
+
 void sgxtex_blit_command_full(uint32_t out[SGXTEX_CMD_BYTES / 4], const struct sgxtex_blit *b, int twiddled_dst)
 {
 	memset(out, 0, SGXTEX_CMD_BYTES);

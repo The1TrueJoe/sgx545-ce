@@ -37,8 +37,55 @@ def count(a, b, n, size):
     return sum(a[i:i + size] != b[i:i + size] for i in range(0, n * size, size))
 
 
+def check_rect(d):
+    """blitest's rect mode: every pixel of the three destinations predicted."""
+    rd = lambda n: open(os.path.join(d, n + ".bin"), "rb").read()
+    bad = 0
+    for name, (sx, sy, sw, sh), (dx, dy, dw, dh), fill, tw in (
+            ("rsub", (8, 4, 24, 20), (30, 40, 24, 20), 0x11, False),
+            ("rscale", (0, 0, 16, 8), (10, 10, 32, 16), 0x11, False)):
+        got = rd(name)
+        diff = 0
+        for y in range(64):
+            for x in range(64):
+                if dx <= x < dx + dw and dy <= y < dy + dh:
+                    want = pattern(sx + (x - dx) * sw // dw, sy + (y - dy) * sh // dh)
+                else:
+                    want = bytes([fill]) * 4
+                o = (tex.twiddle(x, y, 64, 64) if tw else y * 64 + x) * 4
+                diff += got[o:o + 4] != want
+        print(f"  {name}: {4096 - diff} of 4096 match, {diff} differ")
+        bad += diff
+    return bad
+
+
+def check_rect2(d):
+    """blitest's rect2 mode: twiddled destinations, every pixel predicted."""
+    rd = lambda n: open(os.path.join(d, n + ".bin"), "rb").read()
+    bad = 0
+    for name, (sx, sy, sw, sh), (dx, dy, dw, dh) in (
+            ("rband", (0, 10, 64, 32), (0, 16, 64, 32)),
+            ("rband2", (0, 10, 64, 16), (0, 20, 64, 16)),
+            ("rcomp", (40, 10, 16, 16), (8, 24, 16, 16))):
+        got = rd(name)
+        diff = 0
+        for y in range(64):
+            for x in range(64):
+                inside = dx <= x < dx + dw and dy <= y < dy + dh
+                want = pattern(sx + x - dx, sy + y - dy) if inside else b"\x22" * 4
+                o = tex.twiddle(x, y, 64, 64) * 4
+                diff += got[o:o + 4] != want
+        print(f"  {name}: {4096 - diff} of 4096 match, {diff} differ")
+        bad += diff
+    return bad
+
+
 def main():
     d = sys.argv[1]
+    if len(sys.argv) > 2 and sys.argv[2] == "rect2":
+        sys.exit(1 if check_rect2(d) else 0)
+    if len(sys.argv) > 2 and sys.argv[2] == "rect":
+        sys.exit(1 if check_rect(d) else 0)
     rd = lambda n: open(os.path.join(d, n + ".bin"), "rb").read()
     src = lin_image(64, 64)
     assert rd("src") == src, "source dump differs from the pattern"
