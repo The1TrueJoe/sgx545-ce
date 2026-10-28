@@ -543,10 +543,13 @@ sgxws_ctx_create(struct sgxws_dev *d)
 
    if (ring_init(d, &c->usse_pix, H_PIXSHADER, 0x40000) ||
        ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x40000) ||
-       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000) ||
-       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000) ||
-       ring_init(d, &c->gen, H_GENERAL, 0xc00000) ||   /* a frame of terrain: ~100K vertices */
-       ring_init(d, &c->vdm, H_GENERAL, 0x10000) ||
+       /* the frame rings hold a whole frame of Minecraft (~1500 draws, ~100K
+        * vertices): a ring that fills submits the frame so far and waits for
+        * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
+       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x200000) ||
+       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x200000) ||
+       ring_init(d, &c->gen, H_GENERAL, 0x1800000) ||
+       ring_init(d, &c->vdm, H_GENERAL, 0x80000) ||
        ring_init(d, &c->usse_frame, H_PIXSHADER, 0x4000))
       goto fail;
 
@@ -1069,6 +1072,7 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 
    if (frame_has_room(c, vertex_bytes))
       return 0;
+   c->room_flushes++;
    if ((e = sgxws_flush(c, 2000)))
       return e;
    if ((e = sgxws_begin(c, rt, &t)))

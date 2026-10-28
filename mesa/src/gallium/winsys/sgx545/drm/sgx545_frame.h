@@ -224,6 +224,7 @@ struct sgxws_ctx {
    uint32_t vdm_start;
    uint32_t bg_pds[3];
    unsigned draws;                   /* objects recorded in this frame */
+   unsigned room_flushes;            /* frames submitted early because a ring filled */
    unsigned frames;
 };
 

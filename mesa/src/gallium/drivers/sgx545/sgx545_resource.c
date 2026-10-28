@@ -215,8 +215,10 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
       sgx545_flush_resource_writes(ctx, res);
    /* a texture written while a frame is recorded: that frame may sample the
     * old contents, so it goes first */
-   if (res->texture && (usage & PIPE_MAP_WRITE) && ctx->recording)
+   if (res->texture && (usage & PIPE_MAP_WRITE) && ctx->recording) {
+      ctx->stats.tex_flushes += ctx->stats.on;
       sgx545_flush_frame(ctx);
+   }
 
    trans = slab_zalloc(&ctx->transfer_pool);
    if (!trans)

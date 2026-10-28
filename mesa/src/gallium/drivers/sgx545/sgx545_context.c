@@ -74,11 +74,14 @@ sgx545_stats_report(struct sgx545_context *ctx)
 
    if (dt < 2000000000ull)
       return;
-   fprintf(stderr, "sgx545 stats %.1f s: %u flushes, %u draws, %u vertices, %u texture writes; "
-           "ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
-           dt * 1e-9, ctx->stats.flushes, ctx->stats.draws, ctx->stats.verts, ctx->stats.tex_writes,
+   fprintf(stderr, "sgx545 stats %.1f s: %u flushes (%u for texture writes, %u rings full), %u draws, "
+           "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
+           dt * 1e-9, ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,
+           ctx->stats.draws, ctx->stats.verts, ctx->stats.tex_writes,
            ctx->stats.draw_ns * ms, ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms, ctx->stats.compile_ns * ms);
    memset(&ctx->stats, 0, sizeof(ctx->stats));
+   if (ctx->hw)
+      ctx->hw->room_flushes = 0;
    ctx->stats.on = true;
    ctx->stats.t0 = now;
 }
