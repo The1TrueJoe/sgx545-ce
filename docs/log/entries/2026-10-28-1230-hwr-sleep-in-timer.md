@@ -63,3 +63,5 @@ cycle and the BUG in `data/2026-10-28-1230-hwr-sleep-in-timer-dmesg.txt`. The
 same failing recovery loop appeared again on the user-VA test kernel at
 144 s (ctest neverball through the open driver), without the BUG line in
 the part of the ring buffer that survived.
+
+Follow-up: moved to workqueues in 5d1ae00 and tested on the EA3, see `2026-10-28-2210-hwr-workqueues.md`. No more atomic sleeps and the box reboots normally, but the GPU still does not recover from this wedge.

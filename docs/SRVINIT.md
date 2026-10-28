@@ -52,9 +52,10 @@ afterwards with `INITSRV_DISCONNECT(0)`.
 
 - **Driver:** the table now declares `sizeof(PVRSRV_BRIDGE_OUT_SGXDEVINITPART2)`
   (`bridged_sgx_bridge.c`; the compat comment in `bridged_pvr_bridge.c` is
-  updated too). This hasn't been built or booted: building it needs openHC's
-  module CI or a kernel tree, and the EA3 gets no new kernels or modules from
-  this work.
+  updated too). Built by openHC CI and booted once from RAM on the EA3
+  (2026-10-28, log entry `2026-10-28-2210-hwr-workqueues`): srvinit's 8-byte
+  call went through first time, with no `invalid param size` line, so the
+  fallback never ran.
 - **srvinit:** sends 8 bytes and retries with 16 if the driver refuses with
   -EINVAL, so it works with both. Proven on the EA3's current (old-table)
   driver: dmesg shows the one expected `invalid param size for IOCTL#99`

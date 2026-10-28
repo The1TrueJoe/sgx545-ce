@@ -1,0 +1,55 @@
+== uptime 57.12, pvr-compat lines so far: 0
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d50000)
+srvinit rc=0
+== dmesg after srvinit
+[   57.227699] PVR: Installing MISR with cookie 0000000080717559
+[   57.230953] PVR: Installing device LISR pvrsrvkm on IRQ 26 with cookie 00000000292fecea
+[   57.238993] PVR: OSUnMapPhysToLin: unmapping 16384 bytes from 0000000002fbf198
+[   57.246075] PVR_K: SysFinalise: SGX revision = 1.0.14
+[   57.251168] PVR_K: SGXInit: HW core rev (1000e), SW core rev (1000d) check skipped.
+== replay 1
+replay rc=0
+replay: wrapped 0x159000 bytes at 0x41ff5000
+replay: s132 write ops 1/1, read ops 0/0 after 1 ms
+replay: dumped 0x159000 bytes at 0x3e265000 to /tmp/rp/bb.bin
+replay: 195 buffers allocated, 2 kicks, device memory mapped at 0x4002ffb8..0x422a7000
+replay: back buffer IDENTICAL to the reference
+== gles2tri
+[testgles] start 57s
+gles2tri: EGL/GLES2 on the SGX545
+  eglGetDisplay                         ok
+  eglInitialize                         busidshim: drmOpen busid pci:0000:00:02.0 -> pci:0000:01:02.0
+busidshim: drmOpen busid pci:0000:00:02.0 -> pci:0000:01:02.0
+  eglInitialize                         ok (EGL 1.4)
+    EGL_VENDOR  : Imagination Technologies
+    EGL_VERSION : 1.4 build 1.7@862890
+  eglChooseConfig                       ok
+  eglCreateWindowSurface (fbdev)        ok
+  eglCreateContext                      ok
+  eglMakeCurrent                        ok
+    GL_VENDOR   : Imagination Technologies
+    GL_RENDERER : PowerVR SGX 545
+    GL_VERSION  : OpenGL ES 2.0 build 1.7@862890
+  compile shaders (USSE compiler)       ok
+  link program                          ok
+  draw a triangle                       ok
+  read back the centre pixel            rgba(0,255,0,255) -- the shader's green: the GPU rasterised it
+  eglSwapBuffers (to the panel)         ok
+
+  the SGX545 rendered a frame.
+[testgles] gles2tri exited rc=0
+== replay 2
+replay rc=0
+replay: wrapped 0x159000 bytes at 0x41fc5000
+replay: s132 write ops 1/1, read ops 0/0 after 1 ms
+replay: dumped 0x159000 bytes at 0x3e265000 to /tmp/rp/bb.bin
+replay: 195 buffers allocated, 2 kicks, device memory mapped at 0x4002aaf8..0x423d1b80
+replay: back buffer IDENTICAL to the reference
+== dmesg after clients (pvr-compat filtered)
+[   58.114046] PVR_K:(Error): PVRSRVOpenDCDeviceKM: no devnode matching index -1 [625, drivers/gpu/drm/sgx545ce/src/services4/srvkm/common/deviceclass.c]
+[   58.133393] PVR_K:(Warning): OSAcquirePhysPageAddr: vm_pgoff is not a PFN for this VM_PFNMAP region (normal for fbdev); using the page-table PFN [2623, drivers/gpu/drm/sgx545ce/src/services4/srvkm/env/linux/osfunc.c]
+[   58.150061] PVR_K:(Warning): OSAcquirePhysPageAddr: Region contains pages which can't be locked down (no page structures) [2637, drivers/gpu/drm/sgx545ce/src/services4/srvkm/env/linux/osfunc.c]
+Version pc_i686_linux_XOrg_family sgxddk 17 1.7@862890 (release) ce5300_linux
+System Version String: SGX revision = 1.0.14
+
+invalid-param lines: 0
