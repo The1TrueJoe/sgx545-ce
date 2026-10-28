@@ -70,13 +70,24 @@ def markers(lv, base):
     return vals, codes
 
 
-def block(name, vs, fs, vals, lv):
-    lines = [f"test {name}", f"vs {hwcmp.BOX}/src/{name}.vert", f"fs {hwcmp.BOX}/src/{name}.frag"]
+def block(name, vs, fs, vals, lv, given=None):
+    """a probe draw: the test's own state (given: its tests.list lines, for
+    the other stage's uniforms, attributes, textures), the probed uniforms
+    set to markers"""
+    lines = [f"test {name}", f"pos {ATTR.findall(vs)[0][1]}", f"vs {hwcmp.BOX}/src/{name}.vert",
+             f"fs {hwcmp.BOX}/src/{name}.frag"]
+    probed = {nm for nm, _ in lv}
+    if given:
+        for ln in given:
+            w = ln.split()
+            if w and w[0] in ("u", "m", "i", "attr", "tex") and not (w[0] in ("u", "m") and w[1] in probed):
+                lines.append(ln)
+    else:
+        for a, (_, an) in enumerate(ATTR.findall(vs)[1:]):
+            lines.append(f"attr {an} {a + 1} " + " ".join(map(str, hwcmp.A1)))
     for nm, ty in lv:
         k = "m" if ty == "mat4" else "u"
         lines.append(f"{k} {nm} " + " ".join(f"{v:.9g}" for v in vals[nm]))
-    for a, (_, an) in enumerate(ATTR.findall(vs)[1:]):
-        lines.append(f"attr {an} {a + 1} " + " ".join(map(str, hwcmp.A1)))
     lines.append("end")
     return lines
 
@@ -92,6 +103,14 @@ def main():
     for d in ("src", "sub", "probe"):
         os.makedirs(os.path.join(stage, d))
     lines, plan = [], []
+    given, cur = {}, None
+    tl = os.path.join(a.outdir, "tests.list")
+    for ln in (open(tl).read().splitlines() if os.path.exists(tl) else []):
+        if ln.startswith("test "):
+            cur = ln.split()[1]
+            given[cur] = []
+        elif cur:
+            given[cur].append(ln)
     for usp in sorted(glob.glob(os.path.join(a.outdir, "*.usp"))):
         name = os.path.basename(usp)[4:-4]
         if a.k and a.k not in name:
@@ -135,7 +154,7 @@ def main():
                 for st in (("frag",) if kind == "frag" else ("vert", "frag")):
                     shutil.copy(os.path.join(pdir, f"p.{st}.usp"), os.path.join(stage, "sub", f"{bn}.{st}.usp"))
                 vals, _ = markers(lv, 1 + 100 * P)
-                lines += block(bn, vs, fs, vals, lv)
+                lines += block(bn, vs, fs, vals, lv, given.get(name))
             plan.append((name, k))
     open(os.path.join(stage, "list"), "w").write("\n".join(lines) + "\n")
     shutil.copy(os.path.join(hwcmp.BUILD, "glt"), stage)

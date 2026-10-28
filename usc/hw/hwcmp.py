@@ -104,6 +104,16 @@ def main():
     os.makedirs(os.path.join(stage_dir, "src"))
     os.makedirs(os.path.join(stage_dir, "sub"))
     lines, names = [], []
+    given = {}
+    if os.path.exists(os.path.join(a.outdir, "tests.list")):
+        # hand-written blocks (test <name> ... end), keyed by name
+        cur = None
+        for ln in open(os.path.join(a.outdir, "tests.list")).read().splitlines():
+            if ln.startswith("test "):
+                cur = ln.split()[1]
+                given[cur] = []
+            if cur:
+                given[cur].append(ln)
     for usp in sorted(glob.glob(os.path.join(a.outdir, "*.usp"))):
         name = os.path.basename(usp)[4:-4]
         if a.k and a.k not in name:
@@ -122,7 +132,10 @@ def main():
             o = os.path.join(a.outdir, "work", f"{name}.{other}.usp")
             if os.path.exists(o):
                 shutil.copy(o, os.path.join(stage_dir, "sub", f"{name}.{other}.usp"))
-        lines += test_block(name, vs, fs, [])
+        if name in given:
+            lines += [x.replace("@BOX@", BOX) for x in given[name]]
+        else:
+            lines += test_block(name, vs, fs, [])
         names.append(name)
     open(os.path.join(stage_dir, "list"), "w").write("\n".join(lines) + "\n")
     shutil.copy(os.path.join(BUILD, "glt"), stage_dir)

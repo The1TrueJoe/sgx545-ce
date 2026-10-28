@@ -1,0 +1,23 @@
+{
+ "_gl4es_AlphaRef": [
+  1
+ ],
+ "_gl4es_Fog.color": [
+  4,
+  5,
+  6,
+  7
+ ],
+ "_gl4es_Fog.density": [
+  8
+ ],
+ "_gl4es_Fog.start": [
+  12
+ ],
+ "_gl4es_Fog.end": [
+  13
+ ],
+ "_gl4es_Fog.scale": [
+  14
+ ]
+}

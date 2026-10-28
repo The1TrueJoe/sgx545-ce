@@ -1,0 +1,20 @@
+{
+ "_gl4es_Fog.color": [
+  0,
+  1,
+  2,
+  3
+ ],
+ "_gl4es_Fog.density": [
+  4
+ ],
+ "_gl4es_Fog.start": [
+  8
+ ],
+ "_gl4es_Fog.end": [
+  9
+ ],
+ "_gl4es_Fog.scale": [
+  10
+ ]
+}

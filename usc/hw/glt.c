@@ -12,7 +12,10 @@
  *   m <name> f*16                  glUniformMatrix4fv
  *   i <name> n                     glUniform1i (samplers)
  *   tex <unit> <kind>              8x8 RGBA texture: grad (r = s, g = t,
- *                                  b = 0.6 - s, a = 0.8) or checker; nearest
+ *                                  b = 0.6 - s, a = 0.8), checker, or cut (a
+ *                                  checker whose dark texels have alpha 0.05,
+ *                                  for alpha tests); nearest
+ *   pos <name>                     the position attribute's name (default p)
  *   attr <name> <loc> f*16         4 components for each of the quad's 4 corners
  *   end                            draw and save <outdir>/<name>.rgba
  * Every program gets attribute p (location 0) = the corner (x, y, 0, 1) of a
@@ -174,6 +177,7 @@ static GLuint shader(GLenum type, const char *src, const char *tag)
 
 struct test {
 	char name[128];
+	char pos[64];
 	char *vs, *fs;
 	struct { char name[64]; int n; float v[16]; } u[32];
 	int nu;
@@ -189,7 +193,13 @@ static void texture(int unit, int kind)
 	for (int y = 0; y < 8; y++) {
 		for (int x = 0; x < 8; x++) {
 			unsigned char *p = &px[(y * 8 + x) * 4];
-			if (kind == 1) {
+			if (kind == 3) {
+				int on = (x + y) & 1;
+				p[0] = (unsigned char)(x * 30 + 20);
+				p[1] = (unsigned char)(200 - y * 20);
+				p[2] = on ? 220 : 60;
+				p[3] = on ? 255 : 13;
+			} else if (kind == 1) {
 				p[0] = (unsigned char)(x * 32 + 16);
 				p[1] = (unsigned char)(y * 32 + 16);
 				p[2] = (unsigned char)(153 - x * 16);
@@ -225,7 +235,7 @@ static int draw(struct test *t, const char *outdir)
 	fs = shader(GL_FRAGMENT_SHADER, t->fs, tag);
 	glAttachShader(prog, vs);
 	glAttachShader(prog, fs);
-	glBindAttribLocation(prog, 0, "p");
+	glBindAttribLocation(prog, 0, t->pos[0] ? t->pos : "p");
 	for (int i = 0; i < t->na; i++)
 		glBindAttribLocation(prog, t->a[i].loc, t->a[i].name);
 	glLinkProgram(prog);
@@ -346,11 +356,13 @@ int main(int argc, char **argv)
 			while (c < 16 && (x = strtok(NULL, " \t\n")))
 				t.a[t.na].v[c++] = strtof(x, NULL);
 			t.na++;
+		} else if (!strcmp(k, "pos") && a) {
+			snprintf(t.pos, sizeof t.pos, "%s", a);
 		} else if (!strcmp(k, "tex") && a) {
 			char *x = strtok(NULL, " \t\n");
 			int u = atoi(a);
 			if (u >= 0 && u < 4)
-				t.tex[u] = x && !strcmp(x, "checker") ? 2 : 1;
+				t.tex[u] = x && !strcmp(x, "checker") ? 2 : x && !strcmp(x, "cut") ? 3 : 1;
 		} else if (!strcmp(k, "end")) {
 			if (!t.vs || !t.fs)
 				fprintf(stderr, "glt: %s: missing shader\n", t.name), bad++;

@@ -8,6 +8,7 @@
  * (the main program's words as "hi lo" hex lines) and prefix.<stage>.txt (the
  * compiler's log). -u/-a/-s pin uniform constant numbers, attribute slots and
  * sampler units (the DDK's GLSL compiler chooses these; see sgx_compiler.h).
+ * A name prefixed "vert:" or "frag:" applies to that stage only.
  */
 #include <getopt.h>
 #include <stdio.h>
@@ -130,9 +131,28 @@ main(int argc, char **argv)
       }
       nir_shader *nir = sep->_LinkedShaders[st]->Program->nir;
       const char *sname = st == MESA_SHADER_VERTEX ? "vert" : "frag";
+      /* this stage's pins: unprefixed ones, and "vert:" / "frag:" ones */
+      struct sgx_compile_options so2 = opts;
+      struct { struct sgx_named *t; unsigned *n; } tabs[] = {
+         { so2.uniforms, &so2.n_uniforms }, { so2.attribs, &so2.n_attribs }, { so2.samplers, &so2.n_samplers } };
+      for (unsigned ti = 0; ti < 3; ti++) {
+         unsigned k = 0;
+         for (unsigned i = 0; i < *tabs[ti].n; i++) {
+            struct sgx_named e = tabs[ti].t[i];
+            const char *c = strchr(e.name, ':');
+            if (c) {
+               bool mine = !strncmp(e.name, sname, c - e.name) && strlen(sname) == (size_t)(c - e.name);
+               if (!mine)
+                  continue;
+               memmove(e.name, c + 1, strlen(c + 1) + 1);
+            }
+            tabs[ti].t[k++] = e;
+         }
+         *tabs[ti].n = k;
+      }
       struct sgx_shader out;
       memset(&out, 0, sizeof(out));
-      int r = sgx_compile(nir, &opts, &vary[st], &out);
+      int r = sgx_compile(nir, &so2, &vary[st], &out);
       char suffix[32];
       if (out.log) {
          snprintf(suffix, sizeof suffix, "%s.txt", sname);
