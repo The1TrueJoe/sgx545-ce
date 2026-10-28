@@ -142,8 +142,16 @@ The variant bits:
     `07032343` (`mkreplay.py --poke 0x3040d844:0x07032343`) renders no
     triangle at all: every vertex fetched vertex 0. The unchanged replay is
     pixel-exact.
-  - Which of bits 29 and 27 does it is not known. The single-bit replays ran
-    on a GPU already wedged by the next experiment, so they say nothing.
+  - **Neither bit does it alone; they act as one field.** Rerun after a power
+    cycle (EA3, 2026-10-28; the control was pixel-exact before and after):
+    - `27032343` (bit 29 only) and `0f032343` (bit 27 only) both render the
+      same wrong triangle: 75765 pixels differ, with one corner at clip
+      (0,0) and the other two off-screen to the left and below. Neither
+      locked up.
+    - Even vertex 0 is not at its captured position, so either single-bit
+      form changes the fetch address itself, not only the per-vertex
+      offset. What those two forms do is not decoded.
+    - Both bits (`2f`): correct. Neither (`07`): every vertex is vertex 0.
   - Also seen on DOUTA pairs (`2f800466`), meaning unknown.
 - **Top byte `03`, condition field 3, printed `.cc3`.** It is used only on the
   closing DOUTU of vertex-fetch programs, and every other DOUTU uses `07`.
@@ -354,7 +362,8 @@ The `cap` pattern ran on the EA3, 2026-10-27. All runs rc=0.
 ## Open questions
 
 - What bit 26 (MOVS `03`) means: setting it on a vertex DOUTU hangs the TA.
-  Which of bits 27 and 29 makes a DOUT consume word 2.
+  What the single-bit forms `27…`/`0f…` do with word 2 (both bits together
+  add it to the address).
 - **Experiments on hardware:** `re/decode/mkreplay.py --poke va:value`
   rewrites a word before every kick. Change only things a wedge can't make
   worse, and run one replay at a time, checking dmesg for `Hardware Recovery`
