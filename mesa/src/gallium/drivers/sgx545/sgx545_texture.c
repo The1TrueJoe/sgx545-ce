@@ -191,6 +191,23 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
    t[1] = (twiddled(prsc->width0, prsc->height0) ? 0u : 3u) << 29 | fmt << 24 |
           (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
    t[2] = res->bo.va;
+   if (!res->texture) {
+      /* A render target, read where it is: strided (T1 layout 6), the pitch
+       * - 1 in T0 b9-11 and b17-26 in place of the mipmap and min filter
+       * bits, as the DDK's swap blit reads its back buffer (TEX.md section
+       * 3).  B, G, R, A in memory is 0x0d, the format that swaps R and B
+       * against 0x0c. */
+      unsigned p = res->pitch - 1;
+      bool bgra = prsc->format == PIPE_FORMAT_B8G8R8A8_UNORM || prsc->format == PIPE_FORMAT_B8G8R8X8_UNORM;
+
+      t[0] = (p & 7) << 9 | (p >> 3) << 17;
+      if (sampler) {
+         t[0] |= wrap(sampler->wrap_t) << 3 | wrap(sampler->wrap_s) << 6;
+         if (sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR)
+            t[0] |= 1u << 12;
+      }
+      t[1] = 6u << 29 | (bgra ? 0x0du : 0x0cu) << 24 | (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
+   }
    /* T3: the sample instruction's half; 00800800 for a single 2-D sample [D] */
    t[3] = 0x00800800;
 }

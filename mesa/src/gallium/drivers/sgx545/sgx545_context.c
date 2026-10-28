@@ -119,6 +119,8 @@ sgx545_context_destroy(struct pipe_context *pctx)
    struct sgx545_screen *screen = sgx545_screen(pctx->screen);
 
    sgx545_flush_frame(ctx);
+   if (ctx->blitter)
+      util_blitter_destroy(ctx->blitter);
    util_unreference_framebuffer_state(&ctx->framebuffer);
    for (unsigned i = 0; i < ctx->num_vertex_buffers; i++)
       pipe_vertex_buffer_unreference(&ctx->vertex_buffers[i]);
@@ -187,6 +189,8 @@ sgx545_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
       return NULL;
    }
    ctx->base.const_uploader = ctx->base.stream_uploader;
+   /* after every hook it creates state through */
+   ctx->blitter = util_blitter_create(&ctx->base);
    return &ctx->base;
 }
 

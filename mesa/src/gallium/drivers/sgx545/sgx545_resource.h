@@ -41,6 +41,18 @@ sgx545_resource(struct pipe_resource *p)
    return (struct sgx545_resource *)p;
 }
 
+/* what the TPU can sample: a texture in the texture heap, or a 32-bit
+ * render target read in place as a strided texture (TEX.md sections 3, 11) */
+static inline bool
+sgx545_resource_sampleable(const struct sgx545_resource *res)
+{
+   if (res->texture)
+      return true;
+   return res->bo.va && res->pitch && res->base.last_level == 0 &&
+          (res->base.format == PIPE_FORMAT_B8G8R8A8_UNORM || res->base.format == PIPE_FORMAT_B8G8R8X8_UNORM ||
+           res->base.format == PIPE_FORMAT_R8G8B8A8_UNORM || res->base.format == PIPE_FORMAT_R8G8B8X8_UNORM);
+}
+
 struct sgx545_transfer {
    struct pipe_transfer base;
 };

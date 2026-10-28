@@ -462,7 +462,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          unsigned unit = ctx->fs->dep_sampler[j];
          struct pipe_sampler_view *view = unit < PIPE_MAX_SAMPLERS ? ctx->views[unit] : NULL;
 
-         if (!view || !sgx545_resource(view->texture)->texture) {
+         if (!view || !sgx545_resource_sampleable(sgx545_resource(view->texture))) {
             SGX545_DBG(DRAW, "sampler %u: no texture the GPU can sample, draw skipped\n", unit);
             return;
          }
@@ -480,7 +480,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
 
          if (!unit)
             continue;
-         if (!view || !sgx545_resource(view->texture)->texture) {
+         if (!view || !sgx545_resource_sampleable(sgx545_resource(view->texture))) {
             SGX545_DBG(DRAW, "sampler %u: no texture the GPU can sample, draw skipped\n", unit - 1);
             return;
          }

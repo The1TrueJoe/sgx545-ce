@@ -7,6 +7,7 @@
 #define SGX545_CONTEXT_H
 
 #include "pipe/p_context.h"
+#include "util/u_blitter.h"
 #include "pipe/p_state.h"
 #include "util/slab.h"
 
@@ -108,6 +109,8 @@ struct sgx545_context {
       uint64_t t0, draw_ns, flush_ns, tex_ns, compile_ns;
       unsigned draws, verts, flushes, tex_writes;
    } stats;
+
+   struct blitter_context *blitter;     /* GPU blits: a quad through our own shaders */
 
    struct slab_child_pool transfer_pool;
    uint32_t *staging;               /* vertices gathered for one draw */

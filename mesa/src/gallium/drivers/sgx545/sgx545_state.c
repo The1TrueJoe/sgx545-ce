@@ -470,9 +470,58 @@ sgx545_blit_cpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
    return true;
 }
 
+/* A colour blit into a render target from anything the TPU samples, drawn
+ * by u_blitter through our own shaders: the swap's copy of the back buffer
+ * to fb0 (a CPU copy reads the back buffer out of uncached memory). */
+static bool
+sgx545_blit_gpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
+{
+   struct sgx545_context *ctx = sgx545_context(pctx);
+   struct sgx545_resource *src = sgx545_resource(info->src.resource);
+   struct sgx545_resource *dst = sgx545_resource(info->dst.resource);
+   struct pipe_scissor_state scissor = { 0 };
+   struct pipe_stencil_ref ref = { 0 };
+   unsigned n_samplers = 0, n_views = 0;
+
+   if (!ctx->blitter || info->mask != PIPE_MASK_RGBA || info->scissor_enable ||
+       info->render_condition_enable || info->alpha_blend || info->num_window_rectangles ||
+       info->src.box.depth != 1 || info->dst.box.depth != 1 || info->dst.level || info->src.level ||
+       !sgx545_resource_sampleable(src) || dst->texture || !dst->bo.va || !dst->pitch ||
+       util_format_get_blocksize(info->dst.format) != 4 || util_format_is_pure_integer(info->src.format) ||
+       util_format_is_depth_or_stencil(info->src.format))
+      return false;
+   for (unsigned i = 0; i < PIPE_MAX_SAMPLERS; i++)
+      if (ctx->samplers[i])
+         n_samplers = i + 1;
+   for (unsigned i = 0; i < PIPE_MAX_SAMPLERS; i++)
+      if (ctx->views[i])
+         n_views = i + 1;
+   util_blitter_save_vertex_buffers(ctx->blitter, ctx->vertex_buffers, ctx->num_vertex_buffers);
+   util_blitter_save_vertex_elements(ctx->blitter, ctx->velems);
+   util_blitter_save_vertex_shader(ctx->blitter, ctx->vs);
+   util_blitter_save_so_targets(ctx->blitter, 0, NULL, MESA_PRIM_UNKNOWN);
+   util_blitter_save_rasterizer(ctx->blitter, ctx->rasterizer);
+   util_blitter_save_viewport(ctx->blitter, &ctx->viewport);
+   util_blitter_save_scissor(ctx->blitter, &scissor);
+   util_blitter_save_fragment_shader(ctx->blitter, ctx->fs);
+   util_blitter_save_blend(ctx->blitter, ctx->blend);
+   util_blitter_save_depth_stencil_alpha(ctx->blitter, ctx->dsa);
+   util_blitter_save_stencil_ref(ctx->blitter, &ref);
+   util_blitter_save_sample_mask(ctx->blitter, ~0u, 0);
+   util_blitter_save_framebuffer(ctx->blitter, &ctx->framebuffer);
+   util_blitter_save_fragment_sampler_states(ctx->blitter, n_samplers, (void **)ctx->samplers);
+   util_blitter_save_fragment_sampler_views(ctx->blitter, n_views, ctx->views);
+   util_blitter_save_fragment_constant_buffer_slot(ctx->blitter, &ctx->constants[MESA_SHADER_FRAGMENT]);
+   util_blitter_save_render_condition(ctx->blitter, NULL, false, 0);
+   util_blitter_blit(ctx->blitter, info, NULL);
+   return true;
+}
+
 static void
 sgx545_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 {
+   if (sgx545_blit_gpu(pctx, info))
+      return;
    if (util_try_blit_via_copy_region(pctx, info, false))
       return;
    if (sgx545_blit_cpu(pctx, info))
