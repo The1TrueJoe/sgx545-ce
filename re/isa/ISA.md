@@ -1164,7 +1164,7 @@ depthf).
 | op | form | layout | evidence |
 |---|---|---|---|
 | 0 | `pcoeff src0, src1, src2` (0xd2), `ptoff` (0xd3: h15, no sources) | | encoder; names guess (plane coefficients / punch-through off) |
-| 1 | `atst8 dst, pdst, src0, src1, src2` (0xd4) | dst l21-27 + h0-1 without extension (r o pa); pdst = predicate p0-p3 in h7-8, h6 = write it (cleared by the argument's flag 16, "disable write-back": printed `p1.nw`); h22 = f2 b25; h3/h4/h5 sel. The GLES driver's own atst8 (`f9340406`) also sets h10, which libusc never does: read as depthf's PRED2 h9-10 = 2, a (p1) predicate (driver; guess) | encoder; name guess |
+| 1 | `atst8 dst, pdst, src0, src1, src2` (0xd4) | dst l21-27 + h0-1 without extension (r o pa); pdst = predicate p0-p3 in h7-8, h6 = write it (cleared by the argument's flag 16, "disable write-back": printed `p1.nw`); h22 = f2 b25; h3/h4/h5 sel. The GLES driver's own atst8 (`f9340406`) also sets h10, which libusc never does: h9-10 is a PRED2 predicate as in depthf (2 = p1); a false predicate kills the pixel (driver, hardware: "Phases, visibility feedback and discard") | encoder; name guess |
 | 3 | `depthf src0, src1, src2` (0xd5) | h9-10 pred (PRED2); h4/h5 sel (0x36 rejected) | encoder; name guess |
 
 #### phase / 0xfe-0x100 (h20-22 = 4, h23 = 0)
@@ -1766,17 +1766,20 @@ With feedback, ctx +0x7a0 = 1 (discard on triangles):
   what `pcoeff` reads (**driver**; that source 0x22 is the triangle's depth
   plane, so `pcoeff` = hand the ISP its plane coefficients, is a **guess**
   from the name).
-- **Which predicate kills**: atst8's h10. libusc's encoder never sets it
-  (`{?h10}` in dis.py); in depthf, the same group's h9-10 is a 2-bit
-  predicate (PRED2) where 2 = p1, and atst8's word has h9-10 = 2. So the
-  feedback is predicated on p1, the keep predicate the USP's `test`
-  computed: pixels with p1 false fail (**guess**, strong: the driver
-  never writes p1 itself, and the USP's only discard code is that test).
+- **Which predicate kills**: atst8's h9-10, a PRED2 predicate (0 none,
+  1 p0, 2 p1, 3 !p0, as in depthf). libusc's encoder never sets it
+  (`{?h10}` in dis.py); the driver's word has 2 = p1, the keep predicate the
+  USP's `test` computed. A pixel whose atst8 predicate is false is killed.
+  **hardware** (EA3, `re/isa/discard/`, the left half of a triangle kept
+  by `if (q.x > 0.0) discard`): the stock driver keeps exactly the left
+  half (21600 of 43200 pixels); with h9-10 patched to 0 nothing is killed;
+  with p0 / !p0 about 83 % / 19 % survive, scattered over both halves (p0
+  is whatever the shader left there; the two are close to complementary).
 - atst8's other operands (src1 = 3, src2 = 4 with bank bits l28-31 = 0xf)
-  are fixed; the colour register is both its source and destination
-  (alpha test on the colour's 8-bit alpha, with the reference/function in
-  ISP state: **guess**; GLES2 has no alpha test, so the ISP's function is
-  presumably "always" for a pure discard). Not traced.
+  are fixed, and the colour register is both its source and destination.
+  The colour's alpha does not matter: the same draw with alpha 0 keeps the
+  same 21600 pixels (**hardware**), so whatever alpha test atst8 can do is
+  off in GL's ISP state. Operand meanings not traced.
 
 With ctx +0x7a0 = 9 (discard on points/lines): a second extra iteration
 (`0x7800000`, source 0, 3 components) is added, pcoeff's slot gets
@@ -1785,8 +1788,30 @@ With ctx +0x7a0 = 9 (discard on points/lines): a second extra iteration
 its own stack slots (`0xb8(%esp)`, `0xbc(%esp)` at 0x37304-0x3731e), not into
 the program**: the discard `nop` stays, and the slot at 0xbc is the temporary
 count returned by the blend builder, so the program's temp count becomes
-0xfb340404. As compiled this path looks broken in DDK 1.7 (**driver**;
-not run on hardware).
+0xfb340404 (**driver**).
+
+On hardware (EA3, 2026-10-28; `re/isa/discard/results.txt`):
+
+| draw | stock DDK 1.7 | `depthf_patch.py` | `pt_patch.py` |
+|---|---|---|---|
+| triangle, discard right half | left half kept | same | same |
+| 4 points (size 8), discard right two | **all 4 drawn**: discard ignored | left two kept | left two kept |
+| 3 lines, discard right half | **frame broken**: 88 % black, no clear, no SGX recovery | same | same |
+| 3 lines, discard never taken (`q.x > 5.0`) | frame broken | | same |
+| line strip, or a pbuffer | | | frame broken |
+
+- `depthf_patch.py` rewrites those 33 bytes to store the depthf through the
+  slot pointer (and leaves the temp count alone): points then discard
+  correctly in the depth-only pass (type 5) with `(p1) depthf`. So depthf's
+  predicate kills like atst8's (**hardware**).
+- `pt_patch.py` instead sends points and lines down the triangle path
+  (0x39d55 in `FUN_00049a00`: pass type 4/2, atst8): points discard
+  correctly that way too.
+- **Lines with any discarding shader render a broken frame** on every
+  path, also when the discard is never taken, so it is the feedback
+  program with lines (pcoeff's plane-coefficient iteration, or the ISP's
+  line handling), not the kill. Lines without discard draw normally. Not
+  explained; avoid discard on lines (or draw lines as thin triangles).
 
 ### What a compiler must emit to discard
 
@@ -1802,14 +1827,15 @@ program whose phase 0 ends in a visibility test, and the ISP decides.
    copy the driver's words `f0000184 | c<<21 | c<<14`, `f9340406`.
 4. Phase 1 (the colour output) follows, ending with
    `phas.i #0, #0 [end wait=7]`.
-5. ISPA pass type 4 (2 when blending) for triangles. For points and
-   lines the driver wants pass type 5 and `(p1) depthf`, but its own code
-   never emits the depthf; untested.
+5. ISPA pass type 4 (2 when blending) for triangles, and also for points
+   (hardware). Points also work with pass type 5 and
+   `(p1) depthf pa<n+2>, sa3, sa4 [end]` in atst8's place (the driver's
+   intent, after `depthf_patch.py`). Lines with a feedback program break
+   the frame either way (hardware): don't discard on lines.
 
-Open: the atst8 / depthf / pcoeff operand meanings, h10 confirmed as a
-predicate, the 0x22 iterator source, and whether a discard that is
-unconditional (dc_always: flags A 8 clear, so PROG 0x40 clear) is handled
-differently by the hardware; all need a draw on the EA3.
+Open: the atst8 / depthf / pcoeff operand meanings, the 0x22 iterator
+source, why lines break, and whether an unconditional discard
+(dc_always: flags A 8 clear, so PROG 0x40 clear) behaves differently.
 
 ## What a compiler needs
 
@@ -1871,8 +1897,9 @@ backed above; this section only collects it.
 - **discard**: a `test` writes the keep predicate (p1, the inverted
   condition); the USP holds a `nop` at the feedback label. At draw time the
   program becomes two phases: `phas` + `pcoeff` at the start, the nop
-  replaced by `atst8 ... [end]` predicated on p1 (h9-10 = 2), the rest in
-  phase 1, and ISPA pass type 4. See "Phases, visibility feedback and
+  replaced by `atst8 ... [end]` predicated on p1 (h9-10 = 2; a false
+  predicate kills, hardware), the rest in phase 1, and ISPA pass type 4.
+  Not on lines: any feedback program breaks a lines draw (hardware). See "Phases, visibility feedback and
   discard" for the words and what is a guess.
 - **Phases**: every finalised fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;

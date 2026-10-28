@@ -1,0 +1,8 @@
+cd /tmp/dc
+./run.sh t_ctrl stock PROBE_VS='attribute vec4 p; varying vec2 q; void main() { gl_Position = p; q = p.xy; }' PROBE_FS='precision mediump float; uniform vec4 c; varying vec2 q; void main() { gl_FragColor = c + vec4(q, 0.0, 0.0) * 0.0; }'
+./run.sh t_dc stock PROBE_VS='attribute vec4 p; varying vec2 q; void main() { gl_Position = p; q = p.xy; }' PROBE_FS='precision mediump float; uniform vec4 c; varying vec2 q; void main() { if (q.x > 0.0) discard; gl_FragColor = c; }'
+./run.sh t_dc_a0 stock PROBE_VS='attribute vec4 p; varying vec2 q; void main() { gl_Position = p; q = p.xy; }' PROBE_FS='precision mediump float; uniform vec4 c; varying vec2 q; void main() { if (q.x > 0.0) discard; gl_FragColor = c; }' PROBE_COLOR='0 1 0 0'
+./run.sh t_h0 atst00 PROBE_VS='attribute vec4 p; varying vec2 q; void main() { gl_Position = p; q = p.xy; }' PROBE_FS='precision mediump float; uniform vec4 c; varying vec2 q; void main() { if (q.x > 0.0) discard; gl_FragColor = c; }'
+./run.sh t_p0 atst02 PROBE_VS='attribute vec4 p; varying vec2 q; void main() { gl_Position = p; q = p.xy; }' PROBE_FS='precision mediump float; uniform vec4 c; varying vec2 q; void main() { if (q.x > 0.0) discard; gl_FragColor = c; }'
+./run.sh t_np0 atst06 PROBE_VS='attribute vec4 p; varying vec2 q; void main() { gl_Position = p; q = p.xy; }' PROBE_FS='precision mediump float; uniform vec4 c; varying vec2 q; void main() { if (q.x > 0.0) discard; gl_FragColor = c; }'
+./run.sh t_dfl depthf PROBE_VS='attribute vec4 p; varying vec2 q; void main() { gl_Position = p; q = p.xy; }' PROBE_FS='precision mediump float; uniform vec4 c; varying vec2 q; void main() { if (q.x > 0.0) discard; gl_FragColor = c; }'
