@@ -7,6 +7,8 @@
 #include "util/u_helpers.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
+#include "util/u_surface.h"
+#include "util/format/u_format.h"
 
 #include "sgx545_context.h"
 #include "sgx545_resource.h"
@@ -212,6 +214,65 @@ sgx545_texture_barrier(struct pipe_context *pctx, unsigned flags)
 {
 }
 
+/* queries: none of GLES2's need the GPU yet */
+struct sgx545_query {
+   unsigned type;
+};
+
+static struct pipe_query *
+sgx545_create_query(struct pipe_context *pctx, unsigned query_type, unsigned index)
+{
+   struct sgx545_query *q = CALLOC_STRUCT(sgx545_query);
+
+   if (q)
+      q->type = query_type;
+   return (struct pipe_query *)q;
+}
+
+static void
+sgx545_destroy_query(struct pipe_context *pctx, struct pipe_query *q)
+{
+   FREE(q);
+}
+
+static bool
+sgx545_begin_end_query(struct pipe_context *pctx, struct pipe_query *q)
+{
+   return true;
+}
+
+static bool
+sgx545_get_query_result(struct pipe_context *pctx, struct pipe_query *q, bool wait,
+                        union pipe_query_result *result)
+{
+   memset(result, 0, sizeof(*result));
+   return true;
+}
+
+static void
+sgx545_set_active_query_state(struct pipe_context *pctx, bool enable)
+{
+}
+
+/* copies on the CPU: textures and buffers are CPU-visible, render targets are
+ * waited for by the map */
+static void
+sgx545_resource_copy_region(struct pipe_context *pctx, struct pipe_resource *dst, unsigned dst_level,
+                            unsigned dstx, unsigned dsty, unsigned dstz, struct pipe_resource *src,
+                            unsigned src_level, const struct pipe_box *src_box)
+{
+   util_resource_copy_region(pctx, dst, dst_level, dstx, dsty, dstz, src, src_level, src_box);
+}
+
+static void
+sgx545_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
+{
+   if (util_try_blit_via_copy_region(pctx, info, false))
+      return;
+   fprintf(stderr, "sgx545: blit %s -> %s not supported yet\n",
+           util_format_short_name(info->src.format), util_format_short_name(info->dst.format));
+}
+
 void
 sgx545_state_init(struct sgx545_context *ctx)
 {
@@ -247,4 +308,13 @@ sgx545_state_init(struct sgx545_context *ctx)
    p->sampler_view_release = u_default_sampler_view_release;
    p->set_sampler_views = sgx545_set_sampler_views;
    p->texture_barrier = sgx545_texture_barrier;
+   p->resource_release = u_default_resource_release;
+   p->create_query = sgx545_create_query;
+   p->destroy_query = sgx545_destroy_query;
+   p->begin_query = sgx545_begin_end_query;
+   p->end_query = sgx545_begin_end_query;
+   p->get_query_result = sgx545_get_query_result;
+   p->set_active_query_state = sgx545_set_active_query_state;
+   p->resource_copy_region = sgx545_resource_copy_region;
+   p->blit = sgx545_blit;
 }
