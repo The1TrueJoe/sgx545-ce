@@ -17,7 +17,7 @@ for m, src in (("neg", "-r0"), ("abs", "|r0|"), ("negabs", "-|r0|")):
                   {"neg": F(0.25), "abs": F(0.25), "negabs": F(-0.25)}[m]))
 # f16 source: r0 = (lo 4.0, hi 2.0), r1 = (lo 8.0, hi 16.0)
 for ch in range(4):
-    for f2 in ("", " f2_22"):
+    for f2 in ("", " f16d"):
         TESTS.append((f"frcp_f16_ch{ch}{f2.replace(' ', '_')}", load({"r0": H(4, 2), "r1": H(8, 16)})
                       + [f"frcp r3, r0  [skipinv mask=1 f16 chan={ch}{f2}]", out("r3")], None))
 # c10 source: r0 = ch0 0x100 | ch1 0x080 << 10 | ch2 0x040 << 20, r1 = 0x020 | 0x3ff << 10

@@ -231,6 +231,13 @@ three source slots. So F16 operands reach only the first 32 registers of a
 bank. f32 sources of the same instruction keep whole-register numbers (0-63)
 (`fmt_f32`). This is how the corpus's `fmad r0, pa0.f16` / `fmad pa0,
 pa1.f16` pairs widen one mediump pa register's two halves.
+dis.py therefore prints an F16 r/o/pa/sa source as the register and half it
+reads: `pa0.lo` / `pa0.hi` (encoded number 2*reg + half, registers 0-31);
+asm.py takes that form, and still takes `rN.f16` with N the encoded number
+(the hwt suites use it). The test class's F16 operands print the same way;
+for the test class's destination and the C10 operands of `fpsub8` and
+friends the half reading is not checked on hardware (C10 operands keep the
+raw number and print `.c10`).
 
 hw1 source format (**encoder**): h7 = F16 source (h3 picks the high half);
 h8 = packed source with h3-4 picking one of four channels (USEASM argument
@@ -248,7 +255,7 @@ flag 24). h2 = USEASM flags2 bit 22. **hardware** (hwt_p3, hwt_p5):
   0x38000000 for 1/2 from the high half). With an f32 source h2 does nothing
   (f32 result). Under a repeat the half stays fixed and the registers step.
   This is how the corpus's mediump scalar code (`frcp pa9, pa9 [f16 chan=1
-  f2_22]`) works in place.
+  f16d]`) works in place. dis.py prints h2 as `f16d`.
 
 fmad16 (**encoder**): per-source swizzle (USEASM argument flags 25-26):
 src0 h9-10, src1 h13 + h18, src2 h21-22 (so fmad16 has no end bit); repeat

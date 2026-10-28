@@ -121,7 +121,7 @@ for op in range(4, 11):
         check(f"{name} mask {m}", U(op, A("r", 1), A("r", 3), f1=m << 9), want={"rcnt": 0, "mask": m})
     for rpt in range(1, 17):
         check(f"{name} rpt {rpt}", U(op, A("r", 1), A("r", 3), f1=rpt << 4), want={"rcnt": 1 if rpt > 0 else 0})
-    check(f"{name} f2.22", U(op, A("r", 1), A("r", 3), f1=0x200, f2=1 << 22), want={"f2_22": 1})
+    check(f"{name} f2.22", U(op, A("r", 1), A("r", 3), f1=0x200, f2=1 << 22), want={"f16d": 1})
     for bit, fld in ((0, "skipinv"), (2, "syncs"), (3, "nosched"), (17, "end")):
         check(f"{name} f1.{bit}", U(op, A("r", 1), A("r", 3), f1=0x200 | 1 << bit), want={fld: 1})
 

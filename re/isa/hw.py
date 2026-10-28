@@ -19,7 +19,10 @@ Operands: r<n> temporary, o<n> output, pa<n> primary attribute, sa<n>
 secondary attribute, c<n> hardware constant, g<n> special register, i<n>
 internal register, #<n> immediate, idx<n> index register, and indexed
 operands as bank[idx<n>+off] (pa[idx1+3]). -x negates, |x| takes the
-absolute value; .f16 marks a source read as F16 under format select.
+absolute value. Under format select an F16 source of r/o/pa/sa prints as
+the half it reads, pa1.lo / pa1.hi (its number counts halves; hardware),
+other F16 sources as .f16; .c10 / .f16 also mark format-controlled operands
+(see CTX).
 """
 
 # --------------------------------------------------------------------------
@@ -95,6 +98,7 @@ BANK_SRC = {(0, 0): "r", (1, 0): "o", (2, 0): "pa", (3, 0): "sa",
 BANK_SRC0 = {(0, 0): "r", (1, 0): "pa", (0, 1): "o", (1, 1): "sa"}
 IXBANK = ["r", "o", "pa", "sa"]
 FC_KINDS = ("r", "o", "pa", "sa", "i")
+HALF_KINDS = ("r", "o", "pa", "sa")
 
 
 class Opd:
@@ -136,6 +140,11 @@ class Opd:
             o["f16"] = n >> 6 & 1
             n &= 0x3F
             width = 6
+            if o["f16"] and kind in HALF_KINDS:
+                # an F16 source's number counts 16-bit halves (hardware, hwt_p1)
+                del o["f16"]
+                o["half"] = n & 1
+                n >>= 1
         if self.fc is not None and CTX["fc"] >> self.fc & 1 and kind in FC_KINDS and width == 7:
             if n & 0x40:
                 o["fc"] = ("f16", "c10")[self.fc]
@@ -197,8 +206,18 @@ class Opd:
         else:
             n = o["n"]
         if fmt:
-            n |= o.get("f16", 0) << 6
+            if "half" in o:
+                if kind not in HALF_KINDS:
+                    raise ValueError(f"{self.role}: .lo/.hi only on r/o/pa/sa")
+                n = n << 1 | o["half"]
+                if n >> 6:
+                    raise ValueError(f"{self.role}: F16 half {n} > 63 (registers 0-31 only)")
+                n |= 0x40
+            else:
+                n |= o.get("f16", 0) << 6
             width = 7
+        elif "half" in o:
+            raise ValueError(f"{self.role}: .lo/.hi needs format select (an F16 source)")
         if self.fc is not None and CTX["fc"] >> self.fc & 1 and kind in FC_KINDS and width == 7:
             if n >> 6:
                 raise ValueError(f"{self.role}: register {n} > 63 while format control is on")
@@ -231,6 +250,8 @@ def opd_text(o):
         t = f"{k}{o['n']}"
     if o.get("f16"):
         t += ".f16"
+    if "half" in o:
+        t += (".lo", ".hi")[o["half"]]
     if o.get("fc"):
         t += "." + o["fc"]
     for x in o.get("sfx", []):
@@ -254,9 +275,13 @@ def opd_parse(t):
         t = t[1:-1]
     parts = t.split(".")
     t, sfx = parts[0], parts[1:]
-    if "f16" in sfx:
+    if "f16" in sfx:            # raw: the number is the encoded one (halves for r/o/pa/sa)
         o["f16"] = 1
         sfx.remove("f16")
+    for i, hl in enumerate(("lo", "hi")):
+        if hl in sfx:
+            o["half"] = i
+            sfx.remove(hl)
     if sfx:
         o["sfx"] = sfx
     m = re.fullmatch(r"(r|o|pa|sa)\[idx(\d)\+(\d+)\]", t)

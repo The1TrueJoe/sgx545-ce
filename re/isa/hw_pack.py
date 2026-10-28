@@ -53,10 +53,13 @@ class COpd(Opd):
             n = get(v, self.lane)
             if n:
                 o.setdefault("sfx", []).append(f"l{n}")
-        if self.fmtname and o.get("f16"):
+        if self.fmtname and (o.get("f16") or "half" in o):
             nm = self.fmtname(d)
             if nm != "f16":
-                del o["f16"]
+                # a C10 operand: hw.Opd read the number as F16 halves; undo that
+                if "half" in o:
+                    o["n"] = o["n"] << 1 | o.pop("half")
+                o.pop("f16", None)
                 o.setdefault("sfx", []).append(nm)
         return o
 

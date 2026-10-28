@@ -87,8 +87,10 @@ for sub, name in enumerate(SCALAR):
              # h3-4 picking the channel (USEASM argument flags 22 and 24)
              Fld("f16", "h7"), Fld("c10", "h8"),
              Fld("chan", "h3-4", "int"),
-             # USEASM flags2 bit 22
-             Fld("f2_22", "h2")],
+             # USEASM flags2 bit 22: F16 destination (hardware, hwt_p3: with an
+             # F16 source the result goes, as F16, into the half h3 selects and
+             # the other half is zeroed; no effect with an f32 source)
+             Fld("f16d", "h2")],
          [DST(), _scalar_src()], src="0x1047f0 hw1")
 
 # --- hw 3: three-source min/max. libusc writes fmin(a, b) as sub-op 1 on

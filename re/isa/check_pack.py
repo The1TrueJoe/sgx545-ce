@@ -185,14 +185,15 @@ def check_test():
         chk(f"test src1 {t}", tst(s1=A(t, n)), ops={1: {"kind": t, "n": n}})
         chk(f"test src2 {t}", tst(s2=A(t, n)), ops={2: {"kind": t, "n": n}})
     chk("test src2 ix", tst(s2=A("pa", 2, 0, 2)), ops={2: {"kind": "ix", "idx": 2, "off": 2}})
-    # format: F16 sources/dest on the float group, C10 on group 2 (flag b24)
-    chk("test f16 src1", tst(s1=A("r", 8, 0x400000)), f={"fmt": 1}, ops={1: {"f16": 1}})
-    chk("test f16 src2", tst(s2=A("r", 9, 0x400000)), f={"fmt": 1}, ops={2: {"f16": 1}})
+    # format: F16 sources/dest on the float group, C10 on group 2 (flag b24).
+    # An F16 operand's number counts halves (hardware, hwt_p1): r8 = r4.lo, r9 = r4.hi
+    chk("test f16 src1", tst(s1=A("r", 8, 0x400000)), f={"fmt": 1}, ops={1: {"n": 4, "half": 0}})
+    chk("test f16 src2", tst(s2=A("r", 9, 0x400000)), f={"fmt": 1}, ops={2: {"n": 4, "half": 1}})
     # the dest flag alone does not select the format; a source flag does
-    chk("test f16 dst", tst(a0=A("r", 5, 0x400000), s1=A("r", 8, 0x400000)), f={"fmt": 1}, ops={1: {"f16": 1}})
+    chk("test f16 dst", tst(a0=A("r", 5, 0x400000), s1=A("r", 8, 0x400000)), f={"fmt": 1}, ops={1: {"n": 2, "half": 1}})
     chk("test f16 dst only", tst(a0=A("r", 5, 0x400000)), f={"fmt": 0}, ops={1: {"n": 5}})
     chk("testmask f16", tsm(a0=A("r", 5, 0x400000), s1=A("r", 8, 0x400000)), f={"fmt": 1},
-        ops={0: {"f16": 1}, 1: {"f16": 1}})
+        ops={0: {"n": 2, "half": 1}, 1: {"n": 4, "half": 0}})
     for op in (0xf7, 0xf8, 0xf9):
         chk(f"test c10 {op:#x}", tst(op, s1=A("pa", 4, 0x1000000), s2=A("pa", 5, 0x1000000)), f={"fmt": 1},
             ops={1: {"sfx": ["c10"]}, 2: {"sfx": ["c10"]}})
