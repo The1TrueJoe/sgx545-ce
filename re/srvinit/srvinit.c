@@ -8,8 +8,9 @@
  * scripts, hand it all to the kernel with SGX_DEVINITPART2, then disconnect,
  * which is when the kernel actually starts the microkernel.
  *
- * The only Imagination bytes are the firmware file that fetch-firmware.sh pulls
- * from your own DDK. Every address and register value is computed here.
+ * The only Imagination bytes are the USSE microkernel, from the firmware file
+ * that fetch-firmware.sh pulls from your own DDK. The PDS programs that enter
+ * it are assembled here, and every address is computed here.
  *
  *   srvinit [-f firmware]           initialise the GPU (once per boot, as root)
  *   srvinit -n plan [-f fw] outdir   offline: build everything from the
@@ -27,10 +28,7 @@
 #include "sgxdefs.h"
 
 #define FW_DEFAULT "/lib/firmware/sgx545-ukernel-1.7.862890.bin"
-#define FW_SIZE 0xd148
-
-/* Firmware file layout: libsrv_init .rodata 0x1e20..0xef68. */
-#define FW_UKERNEL 0x1e0
+/* The firmware file is the microkernel alone: libsrv_init .rodata 0x2000..0xef68. */
 #define UKERNEL_SIZE 0xcf68
 
 enum {
@@ -58,29 +56,24 @@ enum {
 static const struct {
 	const char *name;
 	uint32_t heap, attribs, size, align;
-	uint32_t fw;		/* offset of its template in the firmware file, or ~0 */
 } bufs[NBUF] = {
-	[B_CCB] = { "ccb", KD, RW, 0x2000, 0x1000, ~0u },
-	[B_CCBCTL] = { "ccbctl", KD, RW, 0x8, 0x1000, ~0u },
-	[B_KICKER] = { "kicker", KD, RW, 0x4, 0x10, ~0u },
-	[B_TA3DCTL] = { "ta3dctl", KD, RW | PVRSRV_HAP_MULTI_PROCESS, 0xec, 0x20, ~0u },
-	[B_HOSTCTL] = { "hostctl", KD, RW | PVRSRV_HAP_MULTI_PROCESS, 0x44, 0x20, ~0u },
-	[B_MISC] = { "misc", KD, RW | PVRSRV_HAP_MULTI_PROCESS, 0x54, 0x20, ~0u },
-	[B_HWPERF] = { "hwperf", KD, RW, 0x640c, 0x20, ~0u },
-	[B_TASIG] = { "tasig", KD, RW, 0x620, 0x20, ~0u },
-	[B_3DSIG] = { "3dsig", KD, RW, 0x2088, 0x20, ~0u },
-	[B_UKERNEL] = { "ukernel", KC, RO, UKERNEL_SIZE, 0x8, FW_UKERNEL },
-	[B_PDS0] = { "pds0", KC, RO, 0x18, 0x10, 0x168 },
-	[B_PDS1] = { "pds1", KC, RO, 0x38, 0x10, 0x180 },
-	[B_PDS2] = { "pds2", KC, RO, 0x18, 0x10, 0x1b8 },
-	[B_PDS3] = { "pds3", KC, RO, 0x100, 0x10, 0x000 },
-	[B_PDS4] = { "pds4", KC, RO, 0x68, 0x10, 0x100 },
+	[B_CCB] = { "ccb", KD, RW, 0x2000, 0x1000 },
+	[B_CCBCTL] = { "ccbctl", KD, RW, 0x8, 0x1000 },
+	[B_KICKER] = { "kicker", KD, RW, 0x4, 0x10 },
+	[B_TA3DCTL] = { "ta3dctl", KD, RW | PVRSRV_HAP_MULTI_PROCESS, 0xec, 0x20 },
+	[B_HOSTCTL] = { "hostctl", KD, RW | PVRSRV_HAP_MULTI_PROCESS, 0x44, 0x20 },
+	[B_MISC] = { "misc", KD, RW | PVRSRV_HAP_MULTI_PROCESS, 0x54, 0x20 },
+	[B_HWPERF] = { "hwperf", KD, RW, 0x640c, 0x20 },
+	[B_TASIG] = { "tasig", KD, RW, 0x620, 0x20 },
+	[B_3DSIG] = { "3dsig", KD, RW, 0x2088, 0x20 },
+	[B_UKERNEL] = { "ukernel", KC, RO, UKERNEL_SIZE, 0x8 },
+	[B_PDS0] = { "pds0", KC, RO, 0x18, 0x10 },
+	[B_PDS1] = { "pds1", KC, RO, 0x38, 0x10 },
+	[B_PDS2] = { "pds2", KC, RO, 0x18, 0x10 },
+	[B_PDS3] = { "pds3", KC, RO, 0x100, 0x10 },
+	[B_PDS4] = { "pds4", KC, RO, 0x68, 0x10 },
 };
 
-/* Microkernel entry points (byte offsets into it) the PDS programs jump to. */
-#define UK_EVENT 0xd60
-#define UK_ENTRY1 0xdf0
-#define UK_ENTRY2 0xe20
 
 /* What the rest of the build needs to know about where things landed. */
 struct init {
@@ -136,6 +129,207 @@ static int limm(struct init *s, uint32_t off, uint32_t v)
 	return 0;
 }
 
+/*
+ * PDS assembly (re/pds/PDS.md). A program is its data segment, 16-byte rows of
+ * DS0 DS0 DS1 DS1, then 32-bit code. Operands are unified register numbers:
+ * DS0 words 0x00-0x3f, DS1 words 0x40-0x7f, the inputs from 0x80 (which are
+ * DS0 words 0x40 on).
+ */
+#define D0(n) (n)
+#define D1(n) (0x40 + (n))
+#define IN(n) (0x80 + (n))
+#define T0 D0(0x30)		/* scratch words */
+#define T1 D1(0x30)
+#define CC_P0 0
+#define CC_ALWAYS 7
+#define DOUTD 3
+#define DOUTU 5
+#define DOUTA 6
+
+struct pds {
+	uint32_t *w;
+	unsigned data;		/* data segment size in words */
+	unsigned pc;		/* next code word */
+};
+
+static void ds(struct pds *p, unsigned r, uint32_t v)
+{
+	unsigned k = r & 0x3f;
+
+	p->w[(k >> 1) * 4 + (r >= 0x40 ? 2 : 0) + (k & 1)] = v;
+}
+
+static void emit(struct pds *p, uint32_t i) { p->w[p->data + p->pc++] = i; }
+
+/* A DS0-side word index (inputs follow DS0 word 0x3f). */
+static unsigned ds0w(unsigned r) { return r >= 0x80 ? r - 0x40 : r; }
+
+/* MOVS: four words, from one DS0 pair and one DS1 pair, to a DOUT destination. */
+static void movs(struct pds *p, unsigned dest, unsigned a, unsigned b, unsigned c, unsigned d)
+{
+	unsigned src[4] = { a, b, c, d }, r1 = 0, r2 = 0, sel = 0;
+
+	for (int i = 0; i < 4; i++) {
+		unsigned s;
+
+		if (src[i] >= 0x40 && src[i] < 0x80) {
+			r2 = (src[i] - 0x40) >> 1;
+			s = 2 + (src[i] & 1);
+		} else {
+			r1 = ds0w(src[i]) >> 1;
+			s = ds0w(src[i]) & 1;
+		}
+		sel |= s << (11 - 2 * i);
+	}
+	emit(p, (uint32_t)CC_ALWAYS << 24 | r1 << 18 | r2 << 13 | sel | dest);
+}
+
+/* Two-source ALU op: d = a (DS0 side) op b (DS1 side); sources in 16-bit units. */
+static void alu(struct pds *p, unsigned cc, unsigned op, unsigned d, unsigned a, unsigned b)
+{
+	emit(p, op << 24 | cc << 24 | ds0w(a) * 2 << 16 | (b - 0x40) * 2 << 9 | d);
+}
+
+#define AND 0xc8	/* op 0xc, bit 27 */
+#define XOR 0xd0
+
+/* p0 = (r == 0) */
+static void tst(struct pds *p, unsigned cc, unsigned r)
+{
+	if (r >= 0x40 && r < 0x80)
+		emit(p, 0x80000000u | cc << 24 | (r - 0x40) * 2 << 9 | 1 << 8);
+	else
+		emit(p, 0x80000000u | cc << 24 | ds0w(r) * 2 << 16);
+}
+
+static void bra(struct pds *p, unsigned cc, unsigned target) { emit(p, 0x90000000u | cc << 24 | target); }
+static void halt(struct pds *p) { emit(p, 0xaf000000u); }
+
+static struct pds prog(struct init *s, int i, unsigned data_words)
+{
+	return (struct pds){ w(s, i), data_words, 0 };
+}
+
+/*
+ * Start the microkernel at offset e: DOUTU with word 0 from doutu(), word 1 = 2,
+ * word 2 = 0.
+ */
+static void pds_entry(struct init *s, int i, uint32_t e)
+{
+	struct pds p = prog(s, i, 4);
+
+	ds(&p, D0(0), doutu(s, va(s, B_UKERNEL) + e));
+	ds(&p, D0(1), 2);
+	movs(&p, DOUTU, D0(0), D0(1), D1(0), D0(0));
+	halt(&p);
+}
+
+/* pds1: if in0 == 0, first a DOUTD from the TA3D control block (control word 0x3c0003f), then enter at 0xdf0. */
+static void pds_ta3d(struct init *s)
+{
+	struct pds p = prog(s, B_PDS1, 8);
+	uint32_t off = va(s, B_UKERNEL) + 0xdf0 - s->code_heap;
+
+	ds(&p, D0(0), va(s, B_TA3DCTL));
+	ds(&p, D0(1), 0x3c0003f);
+	/* As libsrv_init writes it: no bit 27 and no segment subtracted, unlike doutu(). */
+	ds(&p, D0(2), ((off * 2) & 0xffff0) | (((off >> 19) + 15) & 15));
+	ds(&p, D0(3), 2);
+	tst(&p, CC_ALWAYS, IN(0));
+	bra(&p, CC_P0, 3);
+	bra(&p, CC_ALWAYS, 4);
+	movs(&p, DOUTD, D0(0), D0(1), D0(0), D0(0));
+	movs(&p, DOUTU, D0(2), D0(3), D1(0), D0(2));
+	halt(&p);
+}
+
+/*
+ * pds3: an event dispatcher. in0, in2, in4 go to the task's PA0-PA2; the event
+ * bits in in1 (low 24) pick the handler: any of 0x100 -> 0x30; otherwise the
+ * first of 0x400090, 0x200, 0x300400 that has a bit set selects 0x7050, 0x2cd0
+ * or 0x5670, but only if no other bit is set and in0 is 0; anything else -> 0x30.
+ */
+static void pds_events(struct init *s)
+{
+	struct pds p = prog(s, B_PDS3, 24);
+	uint32_t uk = va(s, B_UKERNEL);
+	static const struct { uint32_t mask, entry; } ev[3] = {
+		{ 0x400090, 0x7050 }, { 0x200, 0x2cd0 }, { 0x300400, 0x5670 },
+	};
+
+	ds(&p, D0(0), 2);
+	ds(&p, D1(0), 0x000);
+	ds(&p, D1(1), 0x100);
+	ds(&p, D1(2), 0x200);
+	ds(&p, D1(6), doutu(s, uk + 0x30));
+	ds(&p, D1(7), 0xffffff);
+	ds(&p, D1(8), 0x100);
+	for (int i = 0; i < 3; i++) {
+		ds(&p, D1(3 + i), doutu(s, uk + ev[i].entry));
+		ds(&p, D1(9 + i), ev[i].mask);
+	}
+	movs(&p, DOUTA, IN(0), D1(0), IN(0), IN(0));
+	movs(&p, DOUTA, IN(2), D1(1), IN(2), IN(2));
+	movs(&p, DOUTA, IN(4), D1(2), IN(4), IN(4));
+	alu(&p, CC_ALWAYS, AND, T0, IN(1), D1(7));
+	alu(&p, CC_ALWAYS, AND, T1, T0, D1(8));
+	tst(&p, CC_ALWAYS, T1);
+	bra(&p, CC_P0, 8);
+	bra(&p, CC_ALWAYS, 38);
+	for (int i = 0; i < 3; i++) {
+		unsigned next = p.pc + 10;	/* the next mask test */
+
+		alu(&p, CC_ALWAYS, AND, T1, T0, D1(9 + i));
+		tst(&p, CC_ALWAYS, T1);
+		bra(&p, CC_P0, i < 2 ? next : 38);
+		if (i == 0) {
+			/* the first test keeps the order xor, tst, (p0) tst in0 */
+			alu(&p, CC_ALWAYS, XOR, T1, T0, T1);
+			tst(&p, CC_ALWAYS, T1);
+			tst(&p, CC_P0, IN(0));
+		} else {
+			tst(&p, CC_ALWAYS, IN(0));
+			alu(&p, CC_P0, XOR, T1, T0, T1);
+			tst(&p, CC_P0, T1);
+		}
+		bra(&p, CC_P0, p.pc + 2);
+		bra(&p, CC_ALWAYS, 38);
+		movs(&p, DOUTU, D1(3 + i), D0(0), D0(1), D0(0));
+		halt(&p);
+	}
+	movs(&p, DOUTU, D1(6), D0(0), D0(1), D0(0));
+	halt(&p);
+}
+
+/* pds4: in0 and in4 to PA0 and PA2, then in0 & 0x4000f -> 0x73a0, in0 & 0x120080 -> 0x2ea0, else 0x5740. */
+static void pds_events2(struct init *s)
+{
+	struct pds p = prog(s, B_PDS4, 12);
+	uint32_t uk = va(s, B_UKERNEL);
+
+	ds(&p, D0(0), doutu(s, uk + 0x73a0));
+	ds(&p, D0(1), 2);
+	ds(&p, D0(2), doutu(s, uk + 0x2ea0));
+	ds(&p, D0(3), 2);
+	ds(&p, D0(4), doutu(s, uk + 0x5740));
+	ds(&p, D0(5), 2);
+	ds(&p, D1(0), 0x000);
+	ds(&p, D1(1), 0x200);
+	ds(&p, D1(3), 0x4000f);
+	ds(&p, D1(4), 0x120080);
+	movs(&p, DOUTA, IN(0), D1(0), IN(0), IN(0));
+	movs(&p, DOUTA, IN(4), D1(1), IN(4), IN(4));
+	for (int i = 0; i < 2; i++) {
+		alu(&p, CC_ALWAYS, AND, T0, IN(0), D1(3 + i));
+		tst(&p, CC_ALWAYS, T0);
+		bra(&p, CC_P0, p.pc + 3);
+		movs(&p, DOUTU, D0(2 * i), D0(2 * i + 1), D1(2), D0(2 * i));
+		halt(&p);
+	}
+	movs(&p, DOUTU, D0(4), D0(5), D1(2), D0(4));
+	halt(&p);
+}
+
 struct script {
 	SGX_INIT_COMMAND *c;
 	unsigned n, max;
@@ -156,7 +350,6 @@ static void end(struct script *sc) { sc->c[sc->n++].eOp = SGX_INIT_OP_HALT; }
 /* Write the buffers' contents and the bridge's init info (handles aside). */
 static int build(struct init *s, const uint8_t *fw, SGX_BRIDGE_INIT_INFO *ii)
 {
-	uint32_t uk = va(s, B_UKERNEL);
 	uint32_t *t;
 	struct script sc;
 	static const uint32_t tasig[] = { 0x304, 0x26c, 0x270, 0x2a0, 0x2a4, 0x378 };
@@ -171,11 +364,9 @@ static int build(struct init *s, const uint8_t *fw, SGX_BRIDGE_INIT_INFO *ii)
 		[SGXMKIF_CMD_PROCESS_QUEUES] = 0x156, [9] = 0x157,
 	};
 
-	for (int i = 0; i < NBUF; i++) {
+	for (int i = 0; i < NBUF; i++)
 		memset(s->b[i].cpu, 0, bufs[i].size);
-		if (bufs[i].fw != ~0u)
-			memcpy(s->b[i].cpu, fw + bufs[i].fw, bufs[i].size);
-	}
+	memcpy(w(s, B_UKERNEL), fw, UKERNEL_SIZE);
 
 	/* The microkernel's control block: where everything else is. */
 	t = w(s, B_TA3DCTL);
@@ -197,39 +388,12 @@ static int build(struct init *s, const uint8_t *fw, SGX_BRIDGE_INIT_INFO *ii)
 	t[0] = sizeof sig3d / 4;
 	memcpy(t + 2, sig3d, sizeof sig3d);
 
-	/* PDS programs: their data segments name the microkernel code they start. */
-	t = w(s, B_PDS0);
-	t[0] = doutu(s, uk + UK_EVENT);
-	t[1] = 2;
-	t = w(s, B_PDS1);
-	t[0] = va(s, B_TA3DCTL);
-	t[1] = 0x3c0003f;
-	{
-		uint32_t off = uk + UK_ENTRY1 - s->code_heap;
-		t[4] = ((off * 2) & 0xffff0) | (((off >> 19) + 15) & 15);
-	}
-	t[5] = 2;
-	t = w(s, B_PDS2);
-	t[0] = doutu(s, uk + UK_ENTRY2);
-	t[1] = 2;
-	t = w(s, B_PDS3);
-	t[0] = 2;
-	t[3] = 0x100;
-	t[6] = 0x200;
-	t[7] = doutu(s, uk + 0x7050);
-	t[10] = doutu(s, uk + 0x2cd0);
-	t[11] = doutu(s, uk + 0x5670);
-	t[14] = doutu(s, uk + 0x30);
-	t = w(s, B_PDS4);
-	t[0] = doutu(s, uk + 0x73a0);
-	t[1] = 2;
-	t[3] = 0x200;
-	t[4] = doutu(s, uk + 0x2ea0);
-	t[5] = 2;
-	t[7] = 0x4000f;
-	t[8] = doutu(s, uk + 0x5740);
-	t[9] = 2;
-	t[10] = 0x120080;
+	/* The PDS programs that start the microkernel. */
+	pds_entry(s, B_PDS0, 0xd60);	/* the event program (script register 0xa68) */
+	pds_ta3d(s);
+	pds_entry(s, B_PDS2, 0xe20);
+	pds_events(s);
+	pds_events2(s);
 
 	/* The microkernel's own immediates: buffer and program addresses. */
 	if (limm(s, 0xbaf8, 0x1800100) || limm(s, 0xbb10, va(s, B_PDS4) >> 4) ||
@@ -348,17 +512,17 @@ static uint32_t apphint(const char *key)
 static uint8_t *load_fw(const char *path)
 {
 	FILE *f = fopen(path, "rb");
-	uint8_t *d = malloc(FW_SIZE + 1);
+	uint8_t *d = malloc(UKERNEL_SIZE + 1);
 	size_t n;
 
 	if (!f || !d) {
 		fprintf(stderr, "srvinit: %s: %s\n", path, strerror(errno));
 		exit(2);
 	}
-	n = fread(d, 1, FW_SIZE + 1, f);
+	n = fread(d, 1, UKERNEL_SIZE + 1, f);
 	fclose(f);
-	if (n != FW_SIZE) {
-		fprintf(stderr, "srvinit: %s: %zu bytes, want %u (run fetch-firmware.sh)\n", path, n, FW_SIZE);
+	if (n != UKERNEL_SIZE) {
+		fprintf(stderr, "srvinit: %s: %zu bytes, want %u (run fetch-firmware.sh)\n", path, n, UKERNEL_SIZE);
 		exit(2);
 	}
 	return d;

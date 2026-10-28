@@ -4,8 +4,9 @@
 that does what the DDK's `SrvInit()` does. It talks to the kernel driver
 through its native 64-bit bridge, so no compat layer is involved, and no
 Imagination library is loaded. The only Imagination bytes it uses are the
-microkernel firmware file, which `fetch-firmware.sh` pulls from your own
-copy of the Cedarview DDK 1.7.862890.
+USSE microkernel, a firmware file that `fetch-firmware.sh` pulls from your
+own copy of the Cedarview DDK 1.7.862890. The PDS programs that start the
+microkernel are assembled by srvinit itself.
 
     re/srvinit/fetch-firmware.sh [libsrv_init.so | DDK dir | Cedarview tarball] [out]
     re/srvinit/build.sh
@@ -64,27 +65,25 @@ values were then confirmed against the trace.
 
 ## The firmware file
 
-`sgx545-ukernel-1.7.862890.bin` is libsrv_init's `.rodata` from 0x1e20 to its
-end at 0xef68, byte for byte: 53576 bytes, sha256
-`d7e550e9199e3e4107dc440ce2676ffd1dd3aaf7af4f51a1002e02686bd12861`. It comes
+`sgx545-ukernel-1.7.862890.bin` is the USSE microkernel alone: libsrv_init's
+`.rodata` from 0x2000 to its end at 0xef68, byte for byte. That is 53096
+bytes, sha256
+`73dce0885c45ecbe691f86305b3645e525e7a5e18de3de3b5a469d0df8850349`. It comes
 from `libsrv_init.so.1.7.862890` (sha256 `4d3df850…53b6d`), which ships in
 `cedarview-graphics-drivers_20120717.orig.tar.gz` (sha256 `c23e7261…8fd83`,
 the same pin as openHC's `sgx545-um` package). The extraction script checks
-all three hashes and gets the same output from the library, from a DDK
-directory, and from the downloaded tarball.
+all three hashes.
 
-| offset | size | what |
-|---|---|---|
-| 0x000 | 0x100 | PDS program `pds3` (template) |
-| 0x100 | 0x068 | PDS program `pds4` (template) |
-| 0x168 | 0x018 | PDS program `pds0` (template) |
-| 0x180 | 0x038 | PDS program `pds1` (template) |
-| 0x1b8 | 0x018 | PDS program `pds2` (template) |
-| 0x1d0 | 0x010 | padding |
-| 0x1e0 | 0xcf68 | USSE microkernel |
+The rest of libsrv_init's `.rodata` is not needed:
+- the five PDS program templates (0x1e20–0x1ff0), which srvinit assembles
+  itself, byte-identical (see below);
+- the app-hint name `HWPerfFlags`;
+- a switch jump table.
 
-The rest of `.rodata` is the app-hint name `HWPerfFlags` and a switch jump
-table, neither of which is firmware.
+An earlier version of the file (the span from 0x1e20, 53576 bytes, sha256
+`d7e550e9…`) still carried the templates. The extraction script gave the same
+output from the library, from a DDK directory, and from the downloaded
+tarball.
 
 ## The bridge sequence
 
@@ -186,21 +185,25 @@ placeholder is there before patching.
 | 0x0e40 | pds3 address & ~0xf | computed |
 | 0x0e50 | 6 | constant |
 
-**PDS programs**: **firmware** templates, with their data segments filled
-in. `doutu(e)` is a DOUTU word 0 for microkernel offset `e`: with `off` =
-microkernel address + e − kernel code heap base and `seg = off >> 19`, the
-word is `((seg + 15) & 15) | 0x8000000 | ((off − seg·2^19)·2 & 0x3ffff0)`.
-That is USE code base 15 (the kernel code heap, set by the script below) plus
-the offset in 8-byte instructions << 4, as in `re/pds/PDS.md`. The offsets
-are all **constant** (microkernel entry points); the result is **computed**.
+**PDS programs**: **assembled by srvinit** (`pds_entry`, `pds_ta3d`,
+`pds_events`, `pds_events2`, with a small encoder for MOVS/DOUT, AND/XOR, TST,
+BRA and HALT following `re/pds/PDS.md`). They come out byte-identical to
+libsrv_init's patched templates. Each one is a data segment (16-byte rows,
+DS0 DS0 DS1 DS1) and then code. `doutu(e)` is a DOUTU word 0 for microkernel
+offset `e`: with `off` = microkernel address + e − kernel code heap base and
+`seg = off >> 19`, the word is
+`((seg + 15) & 15) | 0x8000000 | ((off − seg·2^19)·2 & 0x3ffff0)`. That is
+USE code base 15 (the kernel code heap, set by the script below) plus the
+offset in 8-byte instructions << 4, as in `re/pds/PDS.md`. The entry offsets
+are **constant** (microkernel entry points); the words are **computed**.
 
-| program | words written | code (re/pds/dis.py) |
+| program | data | code |
 |---|---|---|
-| pds0 | [0] doutu(0xd60), [1] 2 | `movs doutu` (one row), halt |
-| pds1 | [0] TA3D control address, [1] 0x3c0003f, [4] `(off·2 & 0xffff0) \| ((seg+15) & 15)` for 0xdf0 (no bit 27), [5] 2 | if in0 == 0: `movs doutd` (the TA3D address) then `movs doutu`; else halt |
-| pds2 | [0] doutu(0xe20), [1] 2 | as pds0 |
-| pds3 | [0] 2, [3] 0x100, [6] 0x200, [7] doutu(0x7050), [10] doutu(0x2cd0), [11] doutu(0x5670), [14] doutu(0x30) | three `douta` put the event inputs in0/in2/in4 into the task's PA0–PA2 (DOUTA control 0 / 0x100 / 0x200: bits 8+ pick the register), then one of four DOUTUs picked by input bits |
-| pds4 | [0] doutu(0x73a0), [1] 2, [3] 0x200, [4] doutu(0x2ea0), [5] 2, [7] 0x4000f, [8] doutu(0x5740), [9] 2, [10] 0x120080 | two `douta`, then one of three DOUTUs picked by `in0 & ds1[3]`, `in0 & ds1[4]` |
+| pds0 | ds0[0] doutu(0xd60), ds0[1] 2 | `movs doutu, ds0[0], ds0[1], ds1[0], ds0[0]`; halt |
+| pds1 | ds0[0] TA3D control address, ds0[1] 0x3c0003f, ds0[2] `(off·2 & 0xffff0) \| ((seg+15) & 15)` for 0xdf0 (no bit 27), ds0[3] 2 | if in0 == 0, first `movs doutd` (the TA3D address, control 0x3c0003f); then `movs doutu` to 0xdf0 |
+| pds2 | as pds0, for 0xe20 | as pds0 |
+| pds3 | ds0[0] 2; ds1[0..2] 0, 0x100, 0x200; ds1[3..5] doutu(0x7050, 0x2cd0, 0x5670); ds1[6] doutu(0x30); ds1[7] 0xffffff; ds1[8] 0x100; ds1[9..11] 0x400090, 0x200, 0x300400 | `douta` in0, in2, in4 to PA0–PA2 (DOUTA control 0 / 0x100 / 0x200: bits 8+ pick the register). With t = in1 & 0xffffff: any bit of 0x100 → 0x30. Otherwise the first of 0x400090, 0x200, 0x300400 with a bit in t selects 0x7050, 0x2cd0 or 0x5670, if t has no other bit and in0 is 0. Anything else → 0x30. 40 instructions. |
+| pds4 | ds0[0,2,4] doutu(0x73a0, 0x2ea0, 0x5740), ds0[1,3,5] 2; ds1[0] 0, ds1[1] 0x200, ds1[3] 0x4000f, ds1[4] 0x120080 | `douta` in0 to PA0 and in4 to PA2; in0 & 0x4000f → 0x73a0, else in0 & 0x120080 → 0x2ea0, else 0x5740. 14 instructions. |
 
 The word 2 beside each DOUTU word 0 is DOUTU word 1: the MOVS swizzle sends
 it as w1 (pds3's `07003885` sends ds1[3], ds0[0] = 2, ds0[1]; confirmed by
@@ -209,7 +212,9 @@ DOUTA control words. 0x4000f, 0x120080 and 0x3c0003f are not decoded.
 
 Who points at which program: `pds0` is the event program (script register
 0xa68 below); `pds1`, `pds2`, `pds3` and `pds4` are referenced only from the
-microkernel's own immediates.
+microkernel's own immediates. The masks, DOUTA control words and data
+constants are **constant** (from libsrv_init); what they mean to the
+microkernel (which event bits are which) is not decoded.
 
 ## SGX_BRIDGE_INIT_INFO
 
@@ -279,14 +284,16 @@ EVENT_HOST_ENABLE, EVENT_HOST_ENABLE2, CLKGATECTL, CLKGATECTL2.
 
 ## What still comes from Imagination
 
-- The USSE microkernel (0xcf68 bytes) and the five PDS programs (0x1d0
-  bytes), from the firmware file.
-- The constants above that describe this microkernel build: its entry points
-  (host kicks, the PDS DOUTU targets), its limm patch
-  sites and their fixed values, its struct sizes and build options, the
-  signature register lists, and the script values for registers the GPL
-  headers don't name.
+- The USSE microkernel (0xcf68 bytes), from the firmware file.
+- The constants above that describe this microkernel build:
+  - its entry points (host kicks, the PDS DOUTU targets and the event masks);
+  - its limm patch sites and their fixed values;
+  - its struct sizes and build options;
+  - the signature register lists;
+  - the script values for registers the GPL headers don't name.
 
-The PDS programs are short and decode fully with `re/pds/dis.py`, so they
-are the obvious next thing to write ourselves. That would leave only the
-microkernel in the firmware file.
+The PDS programs used to be copied from the firmware file too. srvinit now
+assembles them; the output is the same bytes, checked with `check.py` against
+the trace. The hardware run above used the earlier build that copied them.
+Since every buffer and bridge field is byte-identical, the GPU sees the same
+input.
