@@ -75,6 +75,24 @@ Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
 | hwt_p5 | fadm/fmsa on new inputs; h2 partial write; C10 chan 3 and range | as above |
 | hwt_ba | ba absolute target | instruction index from the code base |
 | hwt_p6 | sop2 U8 select/add/sub/mul; C10 operands with each setfc | **setfc's 2nd argument is the C10 enable, on at start** |
+| hwt_p7 | efo F16 numbering; fmad fused?/rounding; fmad16 rounding; C10 alpha; testmask byte/word; call + lapc; fdp; bitwise | efo F16 counts halves; **fmad rounds the product (not fused)**; fmad16 rounds to nearest; fdp writes only the last iteration's dst |
+| hwt_p8 | setfc's first argument; C10 alpha source; C10 -> U8 byte order | **setfc's 1st argument is the efo F16 enable, off at start**; C10 alpha reads channel 0 |
+| hwt_p10 | test with format select: F16 numbering, chan on F16 and C10 compares | **test's F16 operands count halves too**; C10 operands are whole registers; chan table |
+| hwt_p11 | a repeat over an F16 operand | moe / inc step it by one half |
+
+hwt_p7-p9's `test` lines with `.f16` / `.c10` were drawn before the assembler
+fix below: without `[fmt]` the assembler of the time **silently dropped** the
+suffix, so those draws compared plain 32-bit registers (the suites are written
+that way now, so they assemble to the words that ran; their `test` results
+are not F16/C10 facts). hwt_p10 redoes them with format select.
+
+**Text syntax (changed 2026-10-28, from these results):** where an F16 operand
+number counts halves (float classes and test under format select, efo under
+F16 format control), dis.py prints and asm.py takes the register and the half:
+`r0.f16.lo` = encoded number 0, `r0.f16.hi` = 1, `pa3.f16.lo` = 6. A bare
+`.f16` there is an error, as is a `.f16` / `.c10` an instruction can't encode
+(it used to be dropped); asm.py sets `fmt` itself when an operand has a format
+suffix, as USEASM does. C10 operands stay whole registers (`pa4.c10`).
 
 ## Instruction classes
 
@@ -218,15 +236,29 @@ mask=0 writes nothing.
 
 h22 = fmt (format select, **encoder**): set when any source has USEASM
 argument flag 22; every source number then has 6 bits and number bit 6
-marks that source as F16 (`pa2.f16`). The destination is unaffected.
+marks that source as F16 (`pa1.f16.lo`). The destination is unaffected.
 **hardware correction** (hwt_p1 `f16_*`): **an F16 source's 6-bit number
-counts 16-bit halves, not registers**: `rN.f16` (as dis.py prints it) is
-register N>>1, half N&1 (0 = bits 0-15). With r0 = (lo 3.0, hi 2.0) and r1 =
-(5.0, 4.0), `r0.f16`, `r1.f16`, `r2.f16`, `r3.f16` read 3, 2, 5, 4, in all
+counts 16-bit halves, not registers**: encoded number N is register N>>1,
+half N&1 (0 = bits 0-15). With r0 = (lo 3.0, hi 2.0) and r1 = (5.0, 4.0),
+numbers 0, 1, 2, 3 (now written `r0.f16.lo`, `r0.f16.hi`, `r1.f16.lo`,
+`r1.f16.hi`) read 3, 2, 5, 4, in all
 three source slots. So F16 operands reach only the first 32 registers of a
 bank. f32 sources of the same instruction keep whole-register numbers (0-63)
-(`fmt_f32`). This is how the corpus's `fmad r0, pa0.f16` / `fmad pa0,
-pa1.f16` pairs widen one mediump pa register's two halves.
+(`fmt_f32`). This is how the corpus's `fmad r0, pa0.f16.lo` / `fmad pa0,
+pa0.f16.hi` pairs (raw numbers 0 and 1, printed `pa0.f16` / `pa1.f16`
+before the syntax change) widen one mediump pa register's two halves. dis.py
+and asm.py now write F16 operands this way (see "Hardware checks"). A repeat
+steps an F16 operand by one half, with `moe` or its inc bit (hwt_p11: `fmad
+r12, r0.f16.lo, c52, c48 [rpt=2 moe fmt]` reads r0.lo then r0.hi), which is
+what the corpus's mediump `fdp pa0, pa2.f16.lo, pa0.f16.lo [rpt=3 moe fmt]`
+(vec3 over pa2.lo, pa2.hi, pa3.lo) relies on.
+
+Rounding, **hardware** (hwt_p7): **fmad is not fused**: (1 + 2^-12)^2 -
+(1 + 2^-11) gives 0, not 2^-24, so the product is rounded to f32 before
+the add; the product rounds to nearest ((1 + 2069*2^-23)^2 -> 0x3f80102b).
+fmad16 rounds to nearest in F16 ((1 + 23*2^-10)^2 -> 0x3c2f, truncation
+would give 0x3c2e), and so does its f32 -> F16 swizzle (1 + 3*2^-12 ->
+0x3c01), unlike `pck.f16.f32`, which truncates.
 
 hw1 source format (**encoder**): h7 = F16 source (h3 picks the high half);
 h8 = packed source with h3-4 picking one of four channels (USEASM argument
@@ -255,6 +287,11 @@ order: **hardware** (hwt_p4 `fmad16_swz*`, the same for all three sources):
 as one f32 and converted to F16 for both lanes (r0 = f32 1.5 -> 1.5 in both;
 r0 = H(2, 3) = f32 32.06 -> 32.06). fmad16 computes both lanes
 (r0 = (2, 3), r1 = (5, 7), r2 = (0.25, 0.5) -> (10.25, 21.5)).
+
+fdp, **hardware** (hwt_p7 `fdp_rpt*`): `fdp r12, r0, r4 [rpt=n moe]` is the
+n-component dot product, written only to the last iteration's destination
+(r12 + n - 1: rpt=3 -> r14 = 3210, rpt=4 -> r15 = 43210 for (1, 2, 3, 4) .
+(10, 100, 1000, 10000)); the other destinations keep their values.
 
 fdpc (**encoder**): fdp + clip-plane result cp0-7 (USEASM register type
 0xd) in l15-17, l14 set. Needs a multi-channel repeat or mask.
@@ -441,12 +478,12 @@ condition and test vs testmask. Text:
 | h10-11 | cond: sign test | spec b0-1: 0 none, 1 sign bit set, 2 sign bit clear, 3 never emitted | encoder; meaning corpus |
 | h8-9 | cond: zero test | spec b2-3: 0 none, 1 zero, 2 nonzero, 3 never emitted | encoder; meaning corpus |
 | h7 | cond: combine | spec b4: 0 OR, 1 AND | encoder; meaning corpus |
-| h4-6 | chan (test only) | spec b5-8 (0-7, 8+ rejected); which channel's result is tested | encoder; values 0-3 = channel is a **guess**, 4-7 (and/or over channels?) **guess**; corpus uses 0, and 2 for lowp c10 compares |
+| h4-6 | chan (test only) | spec b5-8 (0-7, 8+ rejected); which channel's result is tested | encoder; corpus uses 0, and 2 for lowp c10 compares. **hardware** (hwt_p10, `test.fpsub8.lt` with fmt on three C10 channels): 0, 1, 2 = channel 0, 1, 2; 5 = any of them; 6 = all three; 7 = channel 0 or channel 2 (seen: true for TFF, FFT, TFT-like patterns, false for FTF); 3 and 4 never true here (3 is probably the alpha channel, equal in both operands). On an F16 compare only chan 0 tested the value (1-3 were false); on an f32 compare (hwt_p9, no fmt) chan 0, 5 and 7 gave the result and the others false |
 | h2-3 | pdst (test only) | USEASM arg1, type 0xc, p0-p3 | encoder |
-| h4-5 | type (testmask only) | spec b9-11: 1 -> 0 `byte`, 2 -> 1 `word`, 3 -> 2 `dword`; others rejected | encoder; 3 = USEASM_TEST_MASK_DWORD (libusc assert string) and the only one the corpus uses; byte/word are **guess** |
+| h4-5 | type (testmask only) | spec b9-11: 1 -> 0 `byte`, 2 -> 1 `word`, 3 -> 2 `dword`; others rejected | encoder; 3 = USEASM_TEST_MASK_DWORD (libusc assert string) and the only one the corpus uses. **hardware** (hwt_p7): a passing f32 test writes 0x000000ff / 0x0000ffff / 0xffffffff for byte / word / dword, a failing one 0 |
 | h12-15 | mask | flags1 write mask verbatim (fdp: USEASM 0xc2 -> 7, 0xc3 -> 0xf). testmask also takes a repeat count n -> mask (1<<n)-1 (n <= 4); test rejects a repeat. A test with mask != 1 must write p0 | encoder; corpus: testmask mask=15 for bvec4 compares |
 | l20 | dest written | clear when USEASM arg0 has flag b16; then the dest field holds h0 + h19 (`nodst` = 0x280) | encoder; corpus: every `test` has no dest |
-| h18 | fmt | set when a source has arg flag b22 (float group, F16) or b24 (group 2 ops 0xf7-0xf9, C10; the dest flag counts there too). Sources and dest then have 6-bit numbers + bit 6 = per-operand format, printed `.f16` / `.c10` | encoder; corpus (`test.fsub.ge p1, sa20.f16, sa24.f16`, `test.fpsub8.lt p0, pa4.c10, pa5.c10`) |
+| h18 | fmt | set when a source has arg flag b22 (float group, F16) or b24 (group 2 ops 0xf7-0xf9, C10; the dest flag counts there too). Sources and dest then have 6-bit numbers + bit 6 = per-operand format, printed `.f16.lo/.hi` / `.c10` | encoder; corpus (`test.fsub.ge p1, sa10.f16.lo, sa12.f16.lo`, `test.fpsub8.lt p0, pa4.c10, pa5.c10`). **hardware** (hwt_p10): an F16 operand's number counts halves like the float classes' (r0 = (3, 10), r1 = (5, 1), r2 = (7, 0.5): numbers 1 < 0 false, 2 < 1 true = 10 < 3, 5 < 10); a C10 operand is a whole register. The destination's numbering under fmt (testmask) was not drawn; the tools treat it like the sources |
 | h21 | f2_0 | USEASM flags2 b0 | encoder; corpus sets it only on the counter test of fixed-count loops (loop4, lp_s4/s32/s100, lp_nest, tx_dep_loop): meaning unknown |
 | h22, h23, h20, h24-26 | nosched, skipinv, syncs, pred | as above | encoder |
 | dst / src1 / src2 | dst l21-27 h0-1 h19 (USEASM arg0), src1 = arg1 (testmask) / arg2 (test), src2 = next arg. One-source ops (frcp ... fexp2, fadd from 0xa4) get src2 = #0; fsubflr from 0x3 repeats src1 | encoder |
@@ -530,6 +567,12 @@ writes 0xffffffff when the test passes and 0 when it fails.
 | 0d | 0 / 1 | `shr` / `asr` | 0x53 / 0x54 |
 | 0e | - | `rlp` | 0x56 |
 
+**hardware** (hwt_p7 `bit_*`, r0 = 0xf0f0ff00, r1 = 0x3c3c0ff0): and, or,
+xor, shl, shr (logical), asr (arithmetic), rol by an immediate, shr by a
+register, `and #0xff00 [rot=16]` = & 0xff000000 and `and.inv #1` = &
+~1 all give the expected words; a register shift by 33 gives 0 (the count
+is not taken mod 32).
+
 All encoder; no corpus instance (the compiler only uses these ALU ops under
 TEST). Mnemonic names follow the USEASM op order and the TEST ALU codes
 (**guess** for the exact semantics of rol/asr/rlp).
@@ -563,9 +606,8 @@ no rotate. The text shows n, rot and inv separately (lossless):
 - f2_0 (test h21, USEASM flags2 b0): only on fixed-trip-count loop counter
   tests. Meaning unknown.
 - partial (bitwise h2, USEASM flags1 b20): compiler never sets it.
-- test chan values (not drawn), testmask type 0/1 (byte/word) and value 3, the
-  sign/zero test value 3: encoder emits 4-7 / 0-2 but nothing names them;
-  3 is never emitted.
+- test chan 3, 4 and 7 (see the chan row: drawn, not explained); testmask
+  type value 3; the sign/zero test value 3 (never emitted).
 - group-2 ALU ops (0x20-0x26) names; whether 0xf8/0xf9 are FPADD8/FPSUB8.
 - rnd 1/2 = down/up is now hardware (hwt_p4); the pck `scale`/`rnd` bits on
   int->int pairs are decoded but the encoder never sets them. Why rnd has no
@@ -641,7 +683,7 @@ Operand slots come from the generic encoder FUN_00107830:
 
 **Operand bit 6.** In sop2/sop3/sopwm/dot/ima8/fpma, USEASM flags2 b24 makes every number 6 bits. Bit 6 is then the per-operand format flag (USEASM arg flag b24, C10 vs U8).
 
-In efo the same happens for F16 sources (arg flag b22). There is no instruction bit that records this, so the decoder prints the raw 7-bit number. For example, the corpus's `pa64` and `i64` are pa0 and i0 with the format flag set.
+In efo the same happens for F16 sources (arg flag b22). There is no instruction bit that records this; dis.py tracks `setfc` per code block (hw.CTX). **hardware** (hwt_p7, hwt_p8): efo's F16 select is `setfc`'s **first** argument and is **off at program start**; with it on, an F16 operand's number counts halves like the float classes' (`efo r3, r0.f16.hi, r1, c52 [d=a0 a=a0=s0+s2]` with r0 = (3, 2) gives 3.0 = 2 + 1), and the result is f32. With it off the same word reads r64 (per-pixel garbage).
 
 All corpus sop/dot/fpma words come from programs with flags2 b24. So a backend that wants r64-r127 in these classes cannot also use per-operand C10/F16. Whether the hardware takes a global mode from somewhere (the program header?) is **unknown**.
 
@@ -736,8 +778,12 @@ per-byte saturating add, `cop=sub` a per-byte subtract clamped at 0, and
 `c1=s2 c2=zero a1=s2a` a per-byte multiply a*b/255 (0x80 * 0x40 -> 0x20).
 So the SOP2 formula above holds. C10 sources into a U8 destination: each
 channel (v/255) is clamped to a byte (0x100 -> 0xff, 0x080 -> 0x80; C10
-0x3ff = -1/255 subtracts 1); the alpha byte came out 0xff for a 32-bit C10
-source whose bits 30-31 were 0 (not understood).
+0x3ff = -1/255 subtracts 1); channels 0, 1, 2 go to bytes 0, 1, 2 (hwt_p8
+`sop2_c10_bytes`: (0x011, 0x022, 0x044) -> 0x00442211). The **alpha of a
+32-bit C10 source is its channel 0** (hwt_p7/p8: bits 30-31 make no
+difference; r1 channel 0 = 0x010 -> alpha byte 0x10). A C10 destination
+(`sop2 r3.c10, ...`) gets the three 10-bit channels at bits 0-29 (0x04020100
+for (0x100, 0x080, 0x040)), bits 30-31 zero.
 
 ### sopwm (hw 12, USEASM 0x58 / 0xfa, FUN_0010c9e0)
 
@@ -1210,7 +1256,7 @@ predicate.
 |---|---|---|---|
 | `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits (feature +0x20) | encoder; **hardware** (hwt_ba): the target is the absolute instruction index from the USE code base the task runs from (DOUTU's base 0 = 0x37000000): `ba #0x1077` reached the instruction at 0x37008388 + 6*8 |
 | `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | encoder, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
-| `lapc` | h6-8 = 2 | return to the saved link address | encoder, corpus (fn_call) |
+| `lapc` | h6-8 = 2 | return to the saved link address | encoder, corpus (fn_call); **hardware** (hwt_p7 `call_lapc`): `br #3 [link]` ... `lapc` returns to the instruction after the br |
 | `nop` | h6-8 = 5 | h23 syncs (f1 b2), h18 end (f1 b17), l0 = f2 b26, l1 = f3 b5 | encoder, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
 | `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no arguments; needs word0 & 0x200000 | encoder; meaning unknown |
 
@@ -1242,7 +1288,7 @@ h18 = nosched for the whole group; no predicate. h19 = register form for ops
 | 2 | `smlsi v0..v3 [lim0 lim1 lim2]` (0xbe) | per operand (dest, src0, src1, src2) an 8-bit value: v0 l24-31, v1 l16-23, v2 l8-15, v3 l0-7; flag h3/h2/h1/h0 set = the value is a swizzle (four 2-bit selects, printed `#0.xyzw`), clear = a signed increment; lim0 h12-15, lim1 h8-11, lim2 h4-7 = USEASM arguments 8-10 / 4 (multiples of 4, up to 60) | encoder, corpus (every swizzled operation is bracketed by `smlsi`; libusc's ISMLSI); limits' meaning guess (temp / pa / sa wrap limits) |
 | 3 | `smbo v0..v3` (0xbf) | as op 1 | encoder; MOE base offsets (the USP code block keeps 4 MOE base offsets) — guess |
 | 4 | `imo v0..v3` (0xc0) | as op 1, signed (the encoder takes -32..31); no register form | encoder; name guess (increment MOE offsets) |
-| 5 | `setfc #a0, #a1` (0xc1) | a0 l0, a1 l8 (USEASM arguments must be #0/#1) | encoder, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l). **hardware** (hwt_p6): **a1 (l8) is the colour-class C10 enable** and is **on at program start**: `sop2 r3, r0.c10, r1.c10` reads C10 with no setfc, after `setfc #1, #1` and after `setfc #0, #1`; after `setfc #0, #0` or `#1, #0` the same word reads r64/r65 (garbage, different per pixel, no fault). a0 (l0) is then presumably the EFO F16 select (not drawn) |
+| 5 | `setfc #a0, #a1` (0xc1) | a0 l0, a1 l8 (USEASM arguments must be #0/#1) | encoder, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l). **hardware** (hwt_p6): **a1 (l8) is the colour-class C10 enable** and is **on at program start**: `sop2 r3, r0.c10, r1.c10` reads C10 with no setfc, after `setfc #1, #1` and after `setfc #0, #1`; after `setfc #0, #0` or `#1, #0` the same word reads r64/r65 (garbage, different per pixel, no fault). **a0 (l0) is the efo F16 enable** and is **off at program start** (hwt_p8: an efo with operand bit 6 reads r64 with no setfc or after `setfc #0, #1`, and the F16 half after `setfc #1, #1`) |
 | 6 | `op0xfd dst, #n` (0xfd) | dst l21-27 + h0-1 + h19 (destination slot), n h11-14 (0..8), h23 skipinv | encoder; meaning unknown |
 
 The USP code block header's four MOE words are this state at block entry:
@@ -1737,10 +1783,16 @@ backed above; this section only collects it.
 - **Immediates**: 7 bits in a source (signed in some integer forms); a
   bitwise op's src2 takes a 16-bit rotated immediate; anything bigger is
   `limm` or a secondary attribute.
-- **Format select** (float classes, h22): any F16 source switches the whole
-  instruction to 6-bit numbers, so every source of it must be r0-r63 (etc.);
-  an F16 source's number counts halves (`2*reg + half`), so F16 sources
-  must live in r0-r31 / pa0-pa31 (hardware).
+- **Format select** (float classes, h22; test, h18): any F16 source switches
+  the whole instruction to 6-bit numbers, so every source of it must be
+  r0-r63 (etc.); an F16 source's number counts halves (`2*reg + half`,
+  written `r0.f16.lo/.hi`), so F16 sources must live in r0-r31 / pa0-pa31,
+  and a repeat steps them by halves (hardware). efo's F16 operands under
+  format control work the same way.
+- **Rounding** (hardware): fmad rounds the product to f32 before the add
+  (not fused); fmad16 and its f32 -> F16 swizzle round to nearest;
+  `pck.f16.f32` truncates; `pck.f32.f32 [rint]` takes rnd (nearest-even,
+  down, up, zero).
 - **Format control** (`setfc`, USP code block flags): while on (the
   compiler's default state is C10 on, EFO F16 off), number bit 6 of the
   colour/integer classes' operands (efo, sop2/sop3/sopwm, dot, ima8, fpma)
@@ -1798,7 +1850,8 @@ backed above; this section only collects it.
 
 ### Comparisons and conversions
 
-- Float compare: `test.fsub.<cond> pN, a, b` with lt/le/eq/ne/gt/ge on a-b;
+- Float compare: `test.fsub.<cond> pN, a, b` with lt/le/eq/ne/gt/ge on a-b
+  (hardware; F16 operands are half-numbered, chan 0);
   against zero `test.fadd.<cond> pN, x, c48`. Vector compares: `testmask`
   then `movc.nz.i32 d, m, c52, c48` (1.0 / 0.0). Select: `movc.<cond>.<type>`
   (==0, !=0, <0, >=0 on src0).
@@ -1830,7 +1883,7 @@ backed above; this section only collects it.
   registers, vec2 = 2, float = 1; c3 vo_vall puts o0 at o4, o1 at o8, o2 at
   o12, o3 at o14). Outputs can be read back as sources.
 - `gl_PointSize` is clamped to the point size range with
-  `fminmax oN, x, x, saK.f16` (an F16 min/max pair in sa) and written after
+  `fminmax oN, x, x, saK.f16.lo` (an F16 min/max pair in sa) and written after
   the varyings; when it is written, varyings start at o6 instead of o4.
   Why o4-o5 are skipped is not explained by the USP binary (the driver's
   output layout; open).

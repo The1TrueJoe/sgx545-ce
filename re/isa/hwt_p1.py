@@ -41,11 +41,13 @@ TESTS.append(("rpt2_stop", load({**V, "r14": 0x5a5a5a5a}) + ["fmad r12, r0, r4, 
               0x5a5a5a5a))
 
 # fmt + .f16: r0 = (lo 3.0, hi 2.0), r1 = (lo 5.0, hi 4.0). Is the number a register (low half?) or a half index?
+# (it is a half index: test f16_src0_r<n> draws encoded number n, now written r<n/2>.f16.lo/hi)
+HALF = ("lo", "hi")
 FH = {"r0": H(3, 2), "r1": H(5, 4), "r2": F(0.5)}
 for n in range(4):
-    TESTS.append((f"f16_src0_r{n}", load(FH) + [f"fmad r3, r{n}.f16, c52, c48  [skipinv fmt]", out("r3")], None))
+    TESTS.append((f"f16_src0_r{n}", load(FH) + [f"fmad r3, r{n >> 1}.f16.{HALF[n & 1]}, c52, c48  [skipinv fmt]", out("r3")], None))
 for n in range(2):
-    TESTS.append((f"f16_src1_r{n}", load(FH) + [f"fmad r3, r2, r{n}.f16, c48  [skipinv fmt]", out("r3")], None))
-    TESTS.append((f"f16_src2_r{n}", load(FH) + [f"fmad r3, r2, c52, r{n}.f16  [skipinv fmt]", out("r3")], None))
+    TESTS.append((f"f16_src1_r{n}", load(FH) + [f"fmad r3, r2, r0.f16.{HALF[n]}, c48  [skipinv fmt]", out("r3")], None))
+    TESTS.append((f"f16_src2_r{n}", load(FH) + [f"fmad r3, r2, c52, r0.f16.{HALF[n]}  [skipinv fmt]", out("r3")], None))
 # fmt set with no F16 source: plain f32 numbers keep working?
 TESTS.append(("fmt_f32", load(FH) + ["fmad r3, r2, c4, c52  [skipinv fmt]", out("r3")], F(2.0)))

@@ -46,6 +46,13 @@ class COpd(Opd):
         self.lane = lane            # spec of a 2-bit lane select printed as .l<n>
         self.fmtname = fmtname      # callable(d) -> name printed instead of .f16
 
+    def halved(self, o, d):
+        # under test's format select an F16 operand's number counts halves like the float classes'
+        # (hardware, hwt_p10); a C10 operand (group-2 ops) is a whole register
+        if self.fmtname and self.fmtname(d) != "f16":
+            return False
+        return super().halved(o, d)
+
     def decode(self, v, d, used):
         o = super().decode(v, d, used)
         if self.lane:
@@ -193,7 +200,7 @@ for _tm, _op in ((0, 9), (1, 0xF)):
         if not _tm:
             _ops.append(POpd("pdst", "h2-3"))
         if _w:
-            _ops.append(_dst(fmt=True))
+            _ops.append(_dst(fmt=True, fmtname=_fmtname))
         _ops += [_src1(fmt=True, fmtname=_fmtname), _src2(fmt=True, fmtname=_fmtname)]
         form("testmask" if _tm else "test", [("h27-31", _op), ("l20", _w)], _test_fields(_tm, _w), _ops,
              src=f"FUN_00112770 hw{_op:02x}")

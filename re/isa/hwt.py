@@ -31,6 +31,7 @@ sys.path = [p for p in sys.path if os.path.abspath(p or ".") != HERE]
 import dataclasses  # noqa: E402,F401
 sys.path.insert(0, HERE)
 import asm  # noqa: E402
+import hw  # noqa: E402
 
 PROG = 0x37008388           # main pixel program, after its phas.i header
 DOUTU0 = 0x2e018020         # main program's DOUTU word 0 in the PDS data
@@ -65,10 +66,18 @@ def base(work):
 
 
 def program(lines):
+    """assemble, tracking format control (setfc) the way the hardware does; it starts
+    with the colour C10 select on (hwt_p6)"""
+    hw.CTX["fc"] = 2
     words = []
     for t in lines:
-        hi, lo = asm.assemble(t)
+        if t.startswith("raw "):            # "raw <hi> <lo>": a word the assembler (rightly) refuses
+            hi, lo = (int(x, 16) for x in t.split()[1:3])
+        else:
+            hi, lo = asm.assemble(t)
+        hw.track(hw.decode(lo, hi))
         words += [lo, hi]
+    hw.CTX["fc"] = 2
     return words
 
 
@@ -82,13 +91,21 @@ def script(tmpl, name, words, pokes=()):
 
 RUNNER = r"""
 cd %(box)s
+# the replay needs the GPU to itself (its buffers must land at the captured addresses):
+# wait while another process has the PVR device open, and retry a draw that collided (rc 2)
+busy() { for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] && continue; ls -l $p/fd 2>/dev/null | grep -q /dev/dri/card0 && return 0; done; return 1; }
 for t in $(cat list); do
-  rm -f $t.row $t.bg
-  n=$(dmesg | wc -l)
-  ./replay $t.s data > $t.log 2>&1 & P=$!
-  ( sleep 20; kill -9 $P 2>/dev/null && echo WATCHDOG ) & W=$!
-  wait $P; rc=$?; kill $W 2>/dev/null
-  k=$(dmesg | tail -n +$((n+1)) | grep -v pvr-compat | grep -i -E 'recover|lockup|hwr|timeout|error' | head -3)
+  for try in 1 2 3 4 5; do
+    i=0; while busy && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done
+    rm -f $t.row $t.bg
+    n=$(dmesg | wc -l)
+    ./replay $t.s data > $t.log 2>&1 & P=$!
+    ( sleep 20; kill -9 $P 2>/dev/null && echo WATCHDOG ) & W=$!
+    wait $P; rc=$?; kill $W 2>/dev/null
+    [ $rc = 2 ] && grep -q "landed at" $t.log && { echo "$t: another GPU client, retry"; sleep 5; continue; }
+    break
+  done
+  k=$(dmesg | tail -n +$((n+1)) | grep -v -E 'pvr-compat|PVRSRVOpenDCDeviceKM|OSAcquirePhysPageAddr' | grep -i -E 'recover|lockup|hwr|timeout|error' | head -3)
   echo "$t rc=$rc $k"
   if [ $rc != 0 ] || [ -n "$k" ]; then echo "STOP at $t"; tail -5 $t.log; break; fi
 done
@@ -138,8 +155,7 @@ def main():
     os.makedirs(a.work, exist_ok=True)
     for name, lines, *_ in tests:
         print(f"-- {name}")
-        for t in lines:
-            hi, lo = asm.assemble(t)
+        for t, (lo, hi) in zip(lines, zip(*[iter(program(lines))] * 2)):
             print(f"   {hi:08x} {lo:08x}  {t}")
     if a.dry:
         return

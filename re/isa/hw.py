@@ -19,7 +19,11 @@ Operands: r<n> temporary, o<n> output, pa<n> primary attribute, sa<n>
 secondary attribute, c<n> hardware constant, g<n> special register, i<n>
 internal register, #<n> immediate, idx<n> index register, and indexed
 operands as bank[idx<n>+off] (pa[idx1+3]). -x negates, |x| takes the
-absolute value; .f16 marks a source read as F16 under format select.
+absolute value; .f16 marks a source read as F16 under format select. Where
+the hardware numbers F16 operands in 16-bit halves (the float classes'
+format select, efo's F16 format control: hardware, ISA.md) the register is
+written whole and the half named: r0.f16.lo = bits 0-15 of r0, r0.f16.hi =
+bits 16-31 (encoded number 2*reg + half).
 """
 
 # --------------------------------------------------------------------------
@@ -95,6 +99,7 @@ BANK_SRC = {(0, 0): "r", (1, 0): "o", (2, 0): "pa", (3, 0): "sa",
 BANK_SRC0 = {(0, 0): "r", (1, 0): "pa", (0, 1): "o", (1, 1): "sa"}
 IXBANK = ["r", "o", "pa", "sa"]
 FC_KINDS = ("r", "o", "pa", "sa", "i")
+HALF_KINDS = ("r", "o", "pa", "sa")      # register banks whose F16 numbers count halves
 
 
 class Opd:
@@ -103,10 +108,12 @@ class Opd:
     num: number bits; bank/ext: bank selector bits and extension bit (None if
     the slot has none); table: (bank, ext) -> kind; neg/abs: modifier bits;
     fmt: True if the slot follows format select (h22 in the float classes:
-    the number shrinks to 6 bits and bit 6 marks an F16 source)."""
+    the number shrinks to 6 bits and bit 6 marks an F16 source).
+    half16: an F16 operand's number counts 16-bit halves (2*reg + half), as
+    the hardware reads the float classes' format-select operands (ISA.md)."""
 
     def __init__(self, role, num, bank=None, ext=None, table=None, neg=None, abs=None, fmt=False,
-                 kinds=None, fixed_kind=None, text=None):
+                 kinds=None, fixed_kind=None, text=None, half16=True):
         self.role, self.num, self.bank, self.ext = role, num, bank, ext
         self.table = table or {}
         self.neg, self.abs, self.fmt = neg, abs, fmt
@@ -114,6 +121,15 @@ class Opd:
         self.fixed_kind = fixed_kind    # slot with no bank bits (e.g. always a temporary)
         self.text = text                # custom (decode, encode) pair for odd slots
         self.fc = None                  # format-control bit that applies (see CTX), set per class
+        self.half16 = half16
+
+    def halved(self, o, d):
+        """does this operand's number count F16 halves?"""
+        if o["kind"] not in HALF_KINDS:
+            return False
+        if self.fmt and d.get("fmt") and o.get("f16"):
+            return self.half16
+        return self.fc == 0 and CTX["fc"] & 1 and (o.get("fc") == "f16" or o.get("f16"))
 
     def nbits(self):
         return len(bitlist(self.num))
@@ -152,6 +168,9 @@ class Opd:
             o["n"] = n & 0x3F
         else:
             o["n"] = n
+        if self.halved(o, d):
+            o["half"] = o["n"] & 1
+            o["n"] >>= 1
         for m in ("neg", "abs"):
             spec = getattr(self, m)
             if spec:
@@ -196,6 +215,13 @@ class Opd:
             n = o["n"] | 0x40
         else:
             n = o["n"]
+        if self.halved(o, d):
+            if "half" not in o:
+                raise ValueError(f"{self.role}: F16 operand numbers count halves here: "
+                                 f"write {kind}{n}.f16.lo or {kind}{n}.f16.hi")
+            n = 2 * n + o["half"]
+        elif "half" in o:
+            raise ValueError(f"{self.role}: .lo/.hi only on an F16 operand of a slot that numbers halves")
         if fmt:
             n |= o.get("f16", 0) << 6
             width = 7
@@ -233,6 +259,8 @@ def opd_text(o):
         t += ".f16"
     if o.get("fc"):
         t += "." + o["fc"]
+    if "half" in o:
+        t += (".lo", ".hi")[o["half"]]
     for x in o.get("sfx", []):
         t += "." + x
     if o.get("abs"):
@@ -257,6 +285,10 @@ def opd_parse(t):
     if "f16" in sfx:
         o["f16"] = 1
         sfx.remove("f16")
+    for h, x in enumerate(("lo", "hi")):
+        if x in sfx:
+            o["half"] = h
+            sfx.remove(x)
     if sfx:
         o["sfx"] = sfx
     m = re.fullmatch(r"(r|o|pa|sa)\[idx(\d)\+(\d+)\]", t)
@@ -487,15 +519,33 @@ def parse(text):
                     d[k] = inv[val] if val in inv else int(val, 0)
                 else:
                     d[k] = int(val, 0)
+            # USEASM sets the format-select flag when any operand has a format flag; do the same
+            if "fmt" not in d and any(f.name == "fmt" for f in f.fields) and any(
+                    o.get("f16") or {"f16", "c10"} & set(o.get("sfx", [])) for o in ops):
+                d["fmt"] = 1
             inst = Inst(f, d, ops, [])
             lo, hi = encode(inst)
             back = decode(lo, hi)
             if back is None or back.form is not f:
                 raise ValueError("decodes as another form")
+            # every operand must survive: a suffix the encoding can't hold is an error, not dropped
+            want = [opd_text(o) for o in ops]
+            got = [opd_text(o) for o in back.ops]
+            for w, g in zip(want, got):
+                if w != g and not _same_opd(w, g):
+                    raise ValueError(f"operand {w!r} encodes as {g!r}")
             return inst
         except (ValueError, KeyError, IndexError) as e:
             errs.append(f"{f.src or f.name}: {e}")
     raise ValueError(f"cannot assemble {text!r}: " + "; ".join(errs) if errs else f"unknown mnemonic {parts[0]}")
+
+
+def _same_opd(a, b):
+    """operand texts that differ only in spelling (number base, 'cg' slots)"""
+    try:
+        return opd_text(opd_parse(a)) == opd_text(opd_parse(b))
+    except ValueError:
+        return False
 
 
 def _split_ops(s):
