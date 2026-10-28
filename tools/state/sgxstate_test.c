@@ -80,6 +80,40 @@ main(void)
    r = sgxs_rect_from_gl(0, 0, 0, 0, 720, 480);
    check("sc6 count", (uint32_t[]){ sgxs_scissor_objects(o, NULL, &r, 720, 480) }, (uint32_t[]){ 1 }, 1);
 
+   /* lines and points (ln1, ln4, ln9, tri2, fan, pt8, pt16, spr16 captures) */
+   {
+      uint32_t vb, ot;
+
+      sgxs_prim(SGXS_GL_LINES, false, &vb, &ot);
+      check("ln1 VDM word / ISPA", (uint32_t[]){ 0x80c00000 | vb | 4, sgxs_ispa_objtype(0x01d00200, ot) },
+            (uint32_t[]){ 0x84c00004, 0x01d08200 }, 2);
+      sgxs_prim(SGXS_GL_TRIANGLE_FAN, false, &vb, &ot);
+      check("fan VDM word", (uint32_t[]){ 0x80c00000 | vb | 4 }, (uint32_t[]){ 0x90c00004 }, 1);
+      sgxs_prim(SGXS_GL_TRIANGLE_STRIP, false, &vb, &ot);
+      check("tri2 VDM word", (uint32_t[]){ 0x80c00000 | vb | 4 }, (uint32_t[]){ 0x8cc00004 }, 1);
+      sgxs_prim(SGXS_GL_POINTS, false, &vb, &ot);
+      check("pt8 VDM word / ISPA", (uint32_t[]){ 0x80c00000 | vb | 3, sgxs_ispa_objtype(0x01d00200, ot) },
+            (uint32_t[]){ 0x88c00003, 0x01d18200 }, 2);
+      sgxs_prim(SGXS_GL_POINTS, true, &vb, &ot);
+      check("spr16 ISPA", (uint32_t[]){ sgxs_ispa_objtype(0x01d00200, ot) }, (uint32_t[]){ 0x01d20200 }, 1);
+      check("line strip refused", (uint32_t[]){ sgxs_prim(SGXS_GL_LINE_STRIP, false, &vb, &ot) },
+            (uint32_t[]){ 0 }, 1);
+      check("ISPB widths 1 4 9.5",
+            (uint32_t[]){ sgxs_ispb_width(0xf0, 1), sgxs_ispb_width(0xf0, 4), sgxs_ispb_width(0xf0, 9.5f) },
+            (uint32_t[]){ 0x10f0, 0x40f0, 0x98f0 }, 3);
+      check("point size words 8 16 32",
+            (uint32_t[]){ sgxs_point_size_word(8), sgxs_point_size_word(16), sgxs_point_size_word(32) },
+            (uint32_t[]){ 0x5ffc4800, 0x5ffc4c00, 0x5ffc5000 }, 3);
+      check("pt8 output select", (uint32_t[]){ sgxs_outsel(7, true) }, (uint32_t[]){ 0x00073100 }, 1);
+      {
+         uint16_t idx[8];
+         unsigned n = sgxs_line_list_indices(idx, 4, true, 0);
+
+         check("line loop of 4", (uint32_t[]){ n, idx[0], idx[1], idx[2], idx[5], idx[6], idx[7] },
+               (uint32_t[]){ 8, 0, 1, 1, 3, 3, 0 }, 7);
+      }
+   }
+
    printf(fails ? "%d FAILED\n" : "all ok\n", fails);
    return fails != 0;
 }

@@ -244,7 +244,7 @@ with the context dirty bits in parentheses:
 | 8 | ISPC follows (stencil enabled with a stencil buffer) | D |
 | 9 | ISPB follows: always set | D |
 | 11 | two-sided stencil | D (code) |
-| 15-18 | object type, set per draw (0x10000 for points in a mode-7 draw) | G |
+| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord); see "Lines and points" | C (1, 4) |
 | 20 | depth write disable | D |
 | 21 | no colour write: colour mask 0, or a blend that keeps the destination (ZERO, ONE) | D |
 | 22-24 | depth compare, `GL enum - 0x200`: never, less, equal, lequal, greater, notequal, gequal, always. Depth test off, or no depth buffer, gives always + no write (`0x01d00000`) | C (greater) |
@@ -255,7 +255,7 @@ with the context dirty bits in parentheses:
 | bits | field | tag |
 |---|---|---|
 | 4-7 | colour write mask: R = 8, G = 4, B = 2, A = 1 | D |
-| 8-15 | line/point width × 16 (1.0 → 0x10) | D |
+| 8-15 | line width × 16 (1.0 → 0x10, 9.5 → 0x98); points keep 0x10, their size is a vertex output | C |
 | 23 | depth bias (POLYGON_OFFSET_FILL) | D |
 
 ### ISPC: stencil (ctx+0xa0 front, +0xa4 back)
@@ -433,6 +433,57 @@ program runs):
 8. A partial glViewport (`vp1`, no scissor): the clear stays full-target;
    the draw is preceded by reset + set over the viewport rectangle and has
    the viewport transform of section 3.
+
+### Lines and points
+
+`tools/state/sgxstate.h` has the words (`sgxs_prim`, `sgxs_ispa_objtype`,
+`sgxs_ispb_width`, `sgxs_point_size_word`, `sgxs_line_list_indices`).
+
+**Primitives.** The VDM index-list word is
+`0x80000000 | 0x00c00000 | prim << 26 | count`. prim is 0 triangles,
+1 lines, 2 points, 3 triangle strip, and b28 makes prim 0 a fan
+(`90c00004`) [D]. There is no line strip or loop. The DDK's GL_LINE_STRIP of
+4 vertices is a prim-1 list of count 6 over the identity indices
+(`lstrip`): its 2(n-1) vertices are the strip's n plus n-2 that follow them
+in memory, so its frame equals GL_LINES' (`cmp` identical) and with real
+data behind the strip it draws the stray lines seen under gl4es. Its
+GL_LINE_LOOP is right: count 8 over its own indices 0 1 1 2 2 3 3 0
+(`lloop`). A driver expands strips and loops into line lists the way the
+loop does.
+
+**ISPA object type** (b15-18, replaced per draw): 0 triangles, 1 lines, 3
+points, 4 point sprites [D].
+
+- A line list with object type 0 draws nothing, whether the VDM prim is
+  turned into lines (`tri2`) or the type turned off (`ln1`) [C, l3 l4].
+- Object type 4 is what generates gl_PointCoord: with 3 instead, the same
+  points are drawn the same size but the coordinate reads 0 [C, p4].
+
+**Line width** is ISPB b8-15 = width × 16: 1.0 `10`, 4 `40`, 9.5 `98`; the
+DDK's draws all carry `10` [C, l1 l2]. glLineWidth clamps to [1, 16]
+(libGLESv2 0x255b0) [D].
+
+**Points.** A point draw's vertex program writes one output dword after
+the position and the varyings, an **F16 pair: the size in the low half**,
+0x5ffc (511.0, the largest point size) in the high half.
+
+- The words: gl_PointSize = 8.0 compiles to `mov o6, sa10` with sa10 =
+  `5ffc4800`; 16.0 gives `5ffc4c00`.
+- A computed size is clamped against sa10's low half (= 511) with
+  `fminmax o6, r62, i2, sa10.f16.lo` (`ptattr`).
+- Changing the low half from 8.0 to 16.0 draws the DDK's own 16-pixel frame
+  [C, p1].
+- Output select gets 0x100 (`00073100`) [D].
+- Points always come with texcoord set 0 of two components (TSP words 2
+  and 1) ahead of the size. The vertex program doesn't write it (o4-o5
+  stay unwritten), so output select counts 4 + 2 + 1 = 7 [D].
+- In a sprite (object type 4) the ISP writes gl_PointCoord there, and the
+  pixel program iterates it as tc0 (`DOUTI iterate tc0 x2 f16`, DOUTU w1
+  b24) [D]. The values are `(i + 0.5) / size` across the point, origin top
+  left. As `round(255 × value)` this predicts the DDK's 16-pixel sprites
+  exactly, and resized ones at 8 and 32 [C, p2 p3].
+- A point's square is `[c - size/2, c + size/2)` around its centre [C].
+- Without gl_PointSize written (`pt1`) the DDK draws nothing.
 
 ## 4. The render target
 
@@ -762,6 +813,12 @@ Base captures and their bases:
 | sc6 | glScissor(0,0,0,0) | reset only |
 | nc0 | no glClear | the load object |
 | vp1 / vp2 | glViewport(100,50,200,100) / (37,23,101,57) | reset + set over the viewport, viewport words |
+| tri2 / fan | 4 vertices as GL_TRIANGLE_STRIP / GL_TRIANGLE_FAN | VDM prim 3 / prim 0 + b28 |
+| ln1 / ln4 / ln9 | GL_LINES, glLineWidth 1 / 4 / 9.5 | VDM prim 1, ISPA type 1, ISPB width |
+| lstrip / lloop | GL_LINE_STRIP / GL_LINE_LOOP | a prim-1 list: count 6 over identity indices (wrong) / count 8 over 0 1 1 2 2 3 3 0 |
+| pt1 / pt8 / pt16 | GL_POINTS without gl_PointSize / 8.0 / 16.0 | nothing / VDM prim 2, ISPA type 3, size output |
+| spr16 | 16-px points, gl_FragColor = gl_PointCoord | ISPA type 4, tc0 iteration |
+| ptattr | gl_PointSize from an attribute | fminmax clamp against 511 |
 
 Every capture's TA state block, PBE words, RT numbers, PB descriptor and
 free list are rebuilt from the formulas by `build.py --check` (run with
@@ -797,6 +854,16 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 | q2 | scissor, set geometry | set strip's left x 100.0 → 150.0 (`0x3e51d054`, `0x3e51d064`) | the scissor's left edge at 150 | 0 differ |
 | q3 | scissor, region clip | set object region clip `80030009` → `80030006` (`0x3040110c`) | nothing right of x = 224 (tile 6's end) | 0 differ |
 | q4 | scissor, ISPC set/reset | set object ISPC `02000000` → `00000000` (`0x30401108`) | nothing visible: an all-zero frame | 0 differ |
+| l0 | lines (control) | none (`ln1`, two GL_LINES) | identical | 0 differ |
+| l1 | ISPB width | `ln4` ISPB `000040f0` → `000010f0` (`0x30401088`) | the DDK's `ln1` frame | 0 differ |
+| l2 | ISPB width | `ln1` ISPB → `000098f0` | the DDK's `ln9` frame (width 9.5) | 0 differ |
+| l3 | VDM prim | `tri2` (strip) VDM word `8cc00004` → `84c00004` (lines, object type left 0) | the `ln1` frame | 720 differ: nothing drawn |
+| l4 | ISPA object type | `ln1` ISPA `01d08200` → `01d00200` (type 0) | (discovery) | the lines vanish: type 1 is required |
+| p0 | points (control) | none (`pt8`, gl_PointSize = 8.0) | identical | 0 differ |
+| p1 | point size | sa10 `5ffc4800` → `5ffc4c00` (`0x30401108`) | the DDK's `pt16` frame | 0 differ |
+| p2 | sprite size | `spr16` sa10 → `5ffc4800` | 8-px sprites, gl_PointCoord (i+0.5)/8 | 0 differ |
+| p3 | sprite size | `spr16` sa10 → `5ffc5000` | 32-px sprites, (i+0.5)/32 | 0 differ |
+| p4 | ISPA object type | `spr16` ISPA `01d20200` → `01d18200` (type 3) | (discovery) | same squares, coordinate 0: type 4 generates it |
 
 p8 sets the min and mag bits together. The triangle samples a magnified
 texture, so only mag is proven by the pixels; min stays [D].

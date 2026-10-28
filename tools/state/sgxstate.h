@@ -227,6 +227,169 @@ static const uint32_t sgxs_vpgen_vs[SGXS_VPGEN_VS_WORDS][2] = {
    { 0xa0200000, 0xfb275400 },   /* emit.t1 r0, #0, #0 [end f12 f10 f3_20] */
 };
 
+/*
+ * Primitives (STATE.md "Lines and points").
+ *
+ * The VDM index-list word: 0x80000000 | 0x00c00000 | prim << 26 | count,
+ * and b28 for a triangle fan (prim 0).  The hardware primitives are
+ * triangles, lines, points and triangle strips; there is no line strip or
+ * loop.  The DDK's own GL_LINE_STRIP is a list over the strip's vertices plus
+ * two of whatever follows them (count 2(n-1), identity indices: `lstrip`),
+ * the stray lines to the screen centre seen under gl4es; its GL_LINE_LOOP is
+ * a list over the right indices, 0 1 1 2 2 3 3 0 (`lloop`).  So strips and
+ * loops are expanded to line lists by the driver, as the loop is.
+ *
+ * The ISP must be told the object type as well (ISPA b15-18): lines drawn as
+ * VDM prim 1 with object type 0 draw nothing [C: l3, l4].
+ */
+enum sgxs_vdm_prim {
+   SGXS_PRIM_TRIANGLES = 0,
+   SGXS_PRIM_LINES = 1,
+   SGXS_PRIM_POINTS = 2,
+   SGXS_PRIM_TRIANGLE_STRIP = 3,
+};
+#define SGXS_VDM_FAN (1u << 28)
+
+enum sgxs_objtype {
+   SGXS_OBJ_TRIANGLE = 0,           /* [D] */
+   SGXS_OBJ_LINE = 1,               /* [C] */
+   SGXS_OBJ_POINT = 3,              /* gl_PointSize points [D] */
+   SGXS_OBJ_SPRITE = 4,             /* points whose fragment shader reads gl_PointCoord [D] */
+};
+
+/* GL primitive enums (GL_POINTS .. GL_TRIANGLE_FAN) */
+#define SGXS_GL_POINTS 0
+#define SGXS_GL_LINES 1
+#define SGXS_GL_LINE_LOOP 2
+#define SGXS_GL_LINE_STRIP 3
+#define SGXS_GL_TRIANGLES 4
+#define SGXS_GL_TRIANGLE_STRIP 5
+#define SGXS_GL_TRIANGLE_FAN 6
+
+/* The hardware primitive for a GL mode: the VDM index-list bits (prim << 26,
+ * fan b28) and the ISPA object type.  Returns false for line strips and
+ * loops: expand them to GL_LINES first (sgxs_line_list_indices). */
+static inline bool
+sgxs_prim(unsigned gl_mode, bool sprite, uint32_t *vdm_bits, uint32_t *objtype)
+{
+   switch (gl_mode) {
+   case SGXS_GL_POINTS:
+      *vdm_bits = SGXS_PRIM_POINTS << 26;
+      *objtype = sprite ? SGXS_OBJ_SPRITE : SGXS_OBJ_POINT;
+      return true;
+   case SGXS_GL_LINES:
+      *vdm_bits = SGXS_PRIM_LINES << 26;
+      *objtype = SGXS_OBJ_LINE;
+      return true;
+   case SGXS_GL_TRIANGLES:
+      *vdm_bits = SGXS_PRIM_TRIANGLES << 26;
+      *objtype = SGXS_OBJ_TRIANGLE;
+      return true;
+   case SGXS_GL_TRIANGLE_STRIP:
+      *vdm_bits = SGXS_PRIM_TRIANGLE_STRIP << 26;
+      *objtype = SGXS_OBJ_TRIANGLE;
+      return true;
+   case SGXS_GL_TRIANGLE_FAN:
+      *vdm_bits = SGXS_PRIM_TRIANGLES << 26 | SGXS_VDM_FAN;
+      *objtype = SGXS_OBJ_TRIANGLE;
+      return true;
+   default:
+      return false;
+   }
+}
+
+/* ISPA with the object type in b15-18 (the DDK replaces those bits per draw) */
+static inline uint32_t
+sgxs_ispa_objtype(uint32_t ispa, uint32_t objtype)
+{
+   return (ispa & ~0x78000u) | (objtype & 0xf) << 15;
+}
+
+/* A line strip (loop: also back to the first) of n vertices as a line list:
+ * writes 2(n-1) indices (2n for a loop) to idx, returns the count. */
+static inline unsigned
+sgxs_line_list_indices(uint16_t *idx, unsigned n, bool loop, uint16_t first)
+{
+   unsigned k = 0;
+
+   if (n < 2)
+      return 0;
+   for (unsigned i = 0; i + 1 < n; i++) {
+      idx[k++] = (uint16_t)(first + i);
+      idx[k++] = (uint16_t)(first + i + 1);
+   }
+   if (loop) {
+      idx[k++] = (uint16_t)(first + n - 1);
+      idx[k++] = first;
+   }
+   return k;
+}
+
+/*
+ * Line width: ISPB b8-15 = width * 16 (1.0 -> 0x10, 4 -> 0x40, 9.5 -> 0x98)
+ * [C: l1, l2 draw the DDK's own width-1 and width-9.5 frames].  glLineWidth
+ * clamps to [1, 16] (libGLESv2 0x255b0).  Points and triangles keep 0x10.
+ */
+static inline uint32_t
+sgxs_ispb_width(uint32_t ispb, float width)
+{
+   uint32_t w;
+
+   if (!(width >= 1.0f))
+      width = 1.0f;
+   w = (uint32_t)(width * 16.0f + 0.5f);
+   if (w > 0xff)
+      w = 0xff;
+   return (ispb & ~0xff00u) | w << 8;
+}
+
+/*
+ * Points.  The vertex program writes the size as one more output dword after
+ * the position and the varyings: an F16 pair, the size in the low half and
+ * 0x5ffc (511.0) in the high half, as the DDK's compiled gl_PointSize = 8.0
+ * writes it (`mov o6, sa10` with sa10 = 0x5ffc4800) [C: size p1].  Output
+ * select gets 0x100.  Every point draw also has texcoord set 0 with two
+ * components (TSP word 0 = 2, word 1 = 1) ahead of the size: the hardware's
+ * point coordinate, which the vertex program doesn't write.  With
+ * SGXS_OBJ_SPRITE the ISP generates gl_PointCoord into it: (i + 0.5) / size
+ * across the point, origin top left, which the fragment program iterates as
+ * tc0 (DOUTI "iterate tc0 x2 f16") [C: sprite sizes p2, p3].
+ */
+static inline uint32_t
+sgxs_f16(float x)
+{
+   union { float f; uint32_t u; } v = { x };
+   uint32_t s = v.u >> 16 & 0x8000, e = v.u >> 23 & 0xff, m = v.u & 0x7fffff;
+
+   if (e == 0xff)
+      return s | 0x7c00 | (m ? 0x200 : 0);
+   if (e < 113)                     /* below the smallest normal F16: flush */
+      return s;
+   if (e > 142)
+      return s | 0x7bff;            /* clamp to the largest finite */
+   m += 0x1000;                     /* round to nearest */
+   if (m & 0x800000) {
+      m = 0;
+      e++;
+   }
+   return s | (e - 112) << 10 | m >> 13;
+}
+
+/* the output dword a vertex program writes for gl_PointSize = size */
+static inline uint32_t
+sgxs_point_size_word(float size)
+{
+   return 0x5ffc0000u | sgxs_f16(size);
+}
+
+/* output select for a draw: vertex output dwords, 0x3000, and 0x100 when
+ * the program writes the point size [D] */
+static inline uint32_t
+sgxs_outsel(uint32_t out_dwords, bool point_size)
+{
+   return out_dwords << 16 | 0x3000 | (point_size ? 0x100 : 0);
+}
+
 #ifdef __cplusplus
 }
 #endif
