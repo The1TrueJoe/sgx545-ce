@@ -42,12 +42,29 @@ The only process involved was the static musl binary. `libsrv_init` and
 `libsrv_um` were never loaded.
 
 One thing the offline check could not catch, and the first hardware run hit:
-the driver's dispatch table registers `SGX_DEVINITPART2` with an OUT size of
+the driver's dispatch table registered `SGX_DEVINITPART2` with an OUT size of
 `sizeof(PVRSRV_BRIDGE_RETURN)`. That is 16 bytes on x86_64, while the handler
 only writes the 8-byte `PVRSRV_BRIDGE_OUT_SGXDEVINITPART2`. i386 never
-noticed, because both are 8 there. A native caller must pass 16 bytes, or
-the call fails with -22 and leaves the driver unusable until a reboot. srvinit
-passes a union of the two. The cleaner fix is in the driver's table.
+noticed, because both are 8 there, and the compat path forces 8 anyway. A
+wrong size fails with -22 and changes nothing, because the check runs before
+the handler. What leaves the driver unusable until a reboot is giving up
+afterwards with `INITSRV_DISCONNECT(0)`.
+
+- **Driver:** the table now declares `sizeof(PVRSRV_BRIDGE_OUT_SGXDEVINITPART2)`
+  (`bridged_sgx_bridge.c`; the compat comment in `bridged_pvr_bridge.c` is
+  updated too). This hasn't been built or booted: building it needs openHC's
+  module CI or a kernel tree, and the EA3 gets no new kernels or modules from
+  this work.
+- **srvinit:** sends 8 bytes and retries with 16 if the driver refuses with
+  -EINVAL, so it works with both. Proven on the EA3's current (old-table)
+  driver: dmesg shows the one expected `invalid param size for IOCTL#99`
+  line, then a normal start.
+
+The second and third hardware runs: the second used the build that copied
+the PDS templates from the firmware file. The third used the build that
+assembles them itself, with the microkernel-only firmware and the size
+fallback. Both rendered `gles2tri` green, and both left the replay identical
+before and after it.
 
 Where things come from:
 - **firmware**: bytes from the firmware file;
@@ -294,6 +311,4 @@ EVENT_HOST_ENABLE, EVENT_HOST_ENABLE2, CLKGATECTL, CLKGATECTL2.
 
 The PDS programs used to be copied from the firmware file too. srvinit now
 assembles them; the output is the same bytes, checked with `check.py` against
-the trace. The hardware run above used the earlier build that copied them.
-Since every buffer and bridge field is byte-identical, the GPU sees the same
-input.
+the trace, and the third hardware run used that build.

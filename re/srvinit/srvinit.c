@@ -593,10 +593,11 @@ int main(int argc, char **argv)
 	static struct init s;
 	static PVRSRV_BRIDGE_IN_SGXDEVINITPART2 in2;
 	/*
-	 * The driver's dispatch table expects sizeof(PVRSRV_BRIDGE_RETURN) of OUT
-	 * for DEVINITPART2 (16 bytes on x86_64), though the handler only writes
-	 * the 8-byte PVRSRV_BRIDGE_OUT_SGXDEVINITPART2. i386 never noticed: there
-	 * both are 8.
+	 * Drivers before the dispatch-table fix expect sizeof(PVRSRV_BRIDGE_RETURN)
+	 * of OUT for DEVINITPART2 (16 bytes on x86_64), though the handler only
+	 * writes the 8-byte PVRSRV_BRIDGE_OUT_SGXDEVINITPART2; i386 never noticed,
+	 * both are 8 there. The size check runs before the handler, so a rejected
+	 * call changes nothing: send 8, and 16 if the driver refuses it.
 	 */
 	union {
 		PVRSRV_BRIDGE_OUT_SGXDEVINITPART2 o;
@@ -672,7 +673,10 @@ int main(int argc, char **argv)
 		s.b[i].cpu = NULL;
 	}
 
-	TRY("devinitpart2", pvr_call(&p, PVRSRV_BRIDGE_SGX_DEVINITPART2, &in2, sizeof in2, &out2, sizeof out2));
+	err = pvr_call(&p, PVRSRV_BRIDGE_SGX_DEVINITPART2, &in2, sizeof in2, &out2, sizeof out2.o);
+	if (err == -EINVAL)
+		err = pvr_call(&p, PVRSRV_BRIDGE_SGX_DEVINITPART2, &in2, sizeof in2, &out2, sizeof out2.r);
+	TRY("devinitpart2", err);
 	if (out2.o.ui32KMBuildOptions != in2.sInitInfo.ui32ClientBuildOptions)
 		fprintf(stderr, "srvinit: kernel build options 0x%x, microkernel's 0x%x\n",
 			out2.o.ui32KMBuildOptions, in2.sInitInfo.ui32ClientBuildOptions);
