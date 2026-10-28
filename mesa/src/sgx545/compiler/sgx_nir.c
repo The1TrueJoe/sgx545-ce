@@ -426,6 +426,8 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    }
    for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
       u->c->const_fmt[k + j] = fmt == 3 && j == 3 ? 1 : fmt;
+   if (fmt == 2 && prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3) && k + 3 < ARRAY_SIZE(u->c->const_lowp))
+      u->c->const_lowp[k] = 1;
    nir_def *v = nir_load_uniform(b, n, in->def.bit_size, nir_imm_int(b, 0), .base = k, .range = n,
                                  .dest_type = in->def.bit_size == 16 ? nir_type_float16 : nir_type_float32);
    nir_def_replace(&in->def, v);

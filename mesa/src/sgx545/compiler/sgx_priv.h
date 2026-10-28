@@ -41,6 +41,7 @@ struct sgx_ref {
    uint8_t neg : 1, abs : 1;
    uint8_t step : 1;    /* steps by one per iteration (else the same every iteration) */
    uint8_t h16 : 1;     /* an F16 half: n (comp for vregs) counts halves, 2 * reg + half */
+   uint8_t c10 : 1;     /* a C10 operand of the colour classes (format control) */
    uint8_t lane;        /* pck .l<n> */
    uint32_t n;
 };
@@ -134,6 +135,7 @@ struct sgx_ctx {
    uint8_t const_fmt[1024];      /* 1 f32 (list C kind 1), 2 f16 (kind 2), 3 c10 (kind 3) */
    int const_slot[1024];
    uint8_t const_shift[1024];    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
+   uint8_t const_lowp[1024];     /* the first of a lowp vec4 uniform (C10 candidate) */
    unsigned n_sa;
    unsigned sa_base;
 
@@ -150,6 +152,7 @@ struct sgx_ctx {
    unsigned n_samples;
 
    struct set *skip;             /* NIR instructions the backend doesn't emit */
+   struct nir_def *c10_root;     /* the colour as a lowp C10 expression (emit_c10) */
    struct nir_alu_instr *discard_cmp; /* the one discard's comparison (p1 directly) */
    struct hash_table *proj;      /* nir_tex_instr -> its projected varying load */
 
