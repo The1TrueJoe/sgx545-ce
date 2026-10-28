@@ -119,8 +119,12 @@ int pvr_map(struct pvr *p, struct pvr_buf *b)
 
 	if (e)
 		return e;
-	/* the offset is a services cookie in pages, as libsrv_um passes it to mmap2 */
-	m = mmap(NULL, out.ui32RealByteSize, PROT_READ | PROT_WRITE, MAP_SHARED, p->fd,
+	/*
+	 * The offset is a services cookie in pages, as libsrv_um passes it to mmap2.
+	 * MAP_32BIT: the kernel's DoMapToUser walks the VMA with an IMG_UINT32
+	 * (ulVMAPos), so a mapping above 4 GB fails VM_INSERT_PAGE with -EFAULT.
+	 */
+	m = mmap(NULL, out.ui32RealByteSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_32BIT, p->fd,
 		 (off_t)out.ui32MMapOffset << 12);
 	if (m == MAP_FAILED)
 		return -errno;
