@@ -32,7 +32,7 @@ static const nir_shader_compiler_options options = {
    /* fmad: the product is rounded before the add (hwt_p7: not fused) */
    .float_mul_add32 = nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
    .no_integers = true,
-   .max_unroll_iterations = 32,
+   .max_unroll_iterations = 8,   /* (libusc unrolls nothing; a 16-trip loop with a break became 125 instructions) */
    .lower_int64_options = ~0,
    .lower_doubles_options = ~0,
    .force_indirect_unrolling = nir_var_all,
