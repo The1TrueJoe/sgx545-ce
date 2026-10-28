@@ -1,32 +1,44 @@
-"""Disassemble SGX545 USSE instructions (DDK 1.7 encoding), from USP binaries.
+"""Disassemble SGX545 USSE code (DDK 1.7 encoding) from USP binaries.
 
   python3 dis.py <dir or .usp>...      every shader: secondary program, then main
-  python3 dis.py -x <hi> <lo>          one instruction
+  python3 dis.py -x <hi> <lo>...       instructions given as hex word pairs
 
-Fields come from ISA.md. Each instruction prints as
+Decoding comes from hw.py, whose forms are read from libusc's own assembler
+(see ISA.md). Each instruction prints as
 
-  <hi> <lo>  <mnemonic> <operands>  [flags]  {?unknown bits}
+  <hi> <lo>  [(pred)] mnemonic[.mods] operands  [flags]  {?unexplained bits}
 
-Operands are in USEASM argument order (the first is the destination for ALU
-ops). Every 1-bit no field explains is listed in {?...} by position (l = low
-word, h = high word), so nothing is silently dropped. A mnemonic that isn't
-backed by a one-op corpus shader carries a trailing '?'; flags print as the
-encoder input that sets them (f1.13 = USEASM flags1 bit 13) unless named."""
+A word no form matches prints as hwNN? with all its set bits listed. The
+{?...} list is empty for every instruction of the corpora (hwcheck.py)."""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hw  # noqa: E402
 import usp  # noqa: E402
-from isa import decode  # noqa: E402
 
 
-def line(hi, lo):
-    text, unknown = decode(hi, lo)
-    return f"{hi:08x} {lo:08x}  {text}" + (f"  {{?{' '.join(unknown)}}}" if unknown else "")
+def line(lo, hi):
+    x = hw.decode(lo, hi)
+    if x is None:
+        bits = [hw.bname(b) for b in range(64) if (hi << 32 | lo) >> b & 1]
+        return f"{hi:08x} {lo:08x}  hw{hi >> 27:02x}?  {{?{' '.join(bits)}}}"
+    t = f"{hi:08x} {lo:08x}  {hw.fmt(x)}"
+    if x.unknown:
+        t += f"  {{?{' '.join(x.unknown)}}}"
+    return t
 
 
 def dis_program(insts, indent="    "):
-    return [indent + line(hi, lo) for lo, hi in insts]
+    return [indent + line(lo, hi) for lo, hi in insts]
+
+
+def sample_text(b):
+    try:
+        import smpblock  # the USP texture-sample block parser (notes_sample.md)
+        return smpblock.describe(b)
+    except Exception:
+        return f"({b['type']} block: texture sample generated at finalize)"
 
 
 def dis_shader(s):
@@ -43,14 +55,15 @@ def dis_shader(s):
         elif b["type"] == "branch":
             out += [x + f"   -> L{b['label']}" for x in dis_program(b["insts"])]
         else:
-            out.append(f"    ({b['type']} block: texture sample generated at finalize)")
+            out.append("    " + sample_text(b))
     return out
 
 
 def main(argv):
     if argv and argv[0] == "-x":
-        hi, lo = int(argv[1], 16), int(argv[2], 16)
-        print(line(hi, lo))
+        w = argv[1:]
+        for i in range(0, len(w), 2):
+            print(line(int(w[i + 1], 16), int(w[i], 16)))
         return
     for a in argv:
         paths = [a] if a.endswith(".usp") else sorted(

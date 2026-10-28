@@ -41,18 +41,19 @@ def U(op, *args, f1=0, f2=0, f3=0, test=0):
     return w
 
 
-def enc(inst, strict=True, offset=0):
-    """-> (lo, hi); with strict, an encoder error report raises ValueError"""
-    ret, lo, hi, errs, calls = oracle().encode(inst, offset=offset)
+def enc(inst, strict=True, offset=0, pair=None):
+    """-> (lo, hi); with strict, an encoder error report raises ValueError.
+    pair: second instruction of a dual-issue pair (set f1 bit 25 on inst)"""
+    ret, lo, hi, errs, calls = oracle().encode(inst, offset=offset, pair=pair)
     if strict and errs:
         raise ValueError(f"encoder reported {errs} error(s) (ret {ret})")
     return lo, hi
 
 
-def try_enc(inst, offset=0):
+def try_enc(inst, offset=0, pair=None):
     """-> (lo, hi) or None if the encoder rejects it (error report or a fault)"""
     try:
-        ret, lo, hi, errs, calls = oracle().encode(inst, offset=offset)
+        ret, lo, hi, errs, calls = oracle().encode(inst, offset=offset, pair=pair)
     except Exception:
         return None
     return None if errs else (lo, hi)

@@ -231,7 +231,7 @@ def opd_parse(t):
     if m:
         o.update(kind="ix", bank=m.group(1), idx=int(m.group(2)), off=int(m.group(3)))
         return o
-    m = re.fullmatch(r"(r|o|pa|sa|c|g|i|idx|#|L|p)(-?\d+|0x[0-9a-fA-F]+)", t)
+    m = re.fullmatch(r"([a-z]+|#|L)(-?\d+|0x[0-9a-fA-F]+)", t)
     if not m:
         raise ValueError(f"bad operand {t!r}")
     k = {"L": "lbl"}.get(m.group(1), m.group(1))
@@ -407,9 +407,10 @@ def parse(text):
         pred = m.group(1)
         t = t[m.end():]
     flags = []
-    if "  [" in t:
-        t, fl = t.split("  [", 1)
-        flags = fl.rstrip("] ").split()
+    m = re.search(r"\s\[([^\[\]]*)\]\s*$", t)     # trailing " [flags]" (an index has no space before '[')
+    if m:
+        flags = m.group(1).split()
+        t = t[:m.start()]
     t = t.strip()
     mnem, _, rest = t.partition(" ")
     parts = mnem.split(".")
@@ -420,27 +421,27 @@ def parse(text):
             continue
         try:
             d = {}
-            mods = parts[1:]
+            mods = list(parts[1:])
             for fl in f.fields:
                 if fl.kind == "pred":
                     inv = {v: k for k, v in fl.table.items()}
                     d[fl.name] = inv[pred or ""]
                 elif fl.show == "mod":
+                    # modifiers are printed in field order: consume them in order
+                    nxt = mods[0] if mods else None
                     if fl.kind == "bool":
-                        d[fl.name] = int(fl.name in mods)
+                        d[fl.name] = int(nxt == fl.name)
+                        if d[fl.name]:
+                            mods.pop(0)
                     elif fl.kind == "enum":
-                        hit = [k for k, v in fl.table.items() if v and v in mods]
-                        d[fl.name] = hit[0] if hit else [k for k, v in fl.table.items() if v == ""][0]
-            used_mods = set()
-            for fl in f.fields:
-                if fl.show == "mod":
-                    if fl.kind == "bool" and d.get(fl.name):
-                        used_mods.add(fl.name)
-                    elif fl.kind == "enum" and fl.table.get(d.get(fl.name)):
-                        used_mods.add(fl.table[d[fl.name]])
-            extra = [m for m in mods if m not in used_mods]
-            if extra != (f.mn(d) if f.mn else []):
-                raise ValueError(f"modifiers {extra} not in this form")
+                        hit = [k for k, v in fl.table.items() if v and v == nxt]
+                        if hit:
+                            d[fl.name] = hit[0]
+                            mods.pop(0)
+                        else:
+                            d[fl.name] = [k for k, v in fl.table.items() if v == ""][0]
+            if mods != (f.mn(d) if f.mn else []):
+                raise ValueError(f"modifiers {mods} not in this form")
             for x in flags:
                 k, _, val = x.partition("=")
                 fl = [y for y in f.fields if y.name == k]

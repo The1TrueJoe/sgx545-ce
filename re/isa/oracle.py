@@ -117,11 +117,17 @@ class Oracle:
         else:
             raise RuntimeError(f"libusc called {name}")
 
-    def encode(self, inst, offset=0, base=0):
-        """inst: list of up to 64 dwords (USE_INST). -> (ret, lo, hi, n_errors)"""
+    def encode(self, inst, offset=0, base=0, pair=None):
+        """inst: list of up to 64 dwords (USE_INST). pair: the second USE_INST
+        of a dual-issue pair (flags1 bit 25); libusc finds it through a
+        pointer at dw 0x3d. -> (ret, lo, hi, n_errors, callbacks called)"""
         mu = self.mu
         w = list(inst) + [0] * (64 - len(inst))
         pinst, pout = HEAP + 0x2000, HEAP + 0x3000
+        if pair is not None:
+            p2 = list(pair) + [0] * (64 - len(pair))
+            mu.mem_write(HEAP + 0x4000, struct.pack("<64I", *[x & 0xFFFFFFFF for x in p2]))
+            w[0x3D] = HEAP + 0x4000
         mu.mem_write(pinst, struct.pack("<64I", *[x & 0xFFFFFFFF for x in w]))
         mu.mem_write(pout, b"\0" * 64)
         sp = STACK + 0xF0000
