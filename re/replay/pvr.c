@@ -179,6 +179,39 @@ int pvr_register_render_ctx(struct pvr *p, const void *ctx, uint32_t size, uint3
 	return e;
 }
 
+int pvr_register_transfer_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
+			      IMG_HANDLE *handle, uint32_t *devva)
+{
+	PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_TRANSFER_CONTEXT in = {
+		.hDevCookie = p->devcookie,
+		.pHWTransferContextCpuVAddr = (IMG_CPU_VIRTADDR)ctx,
+		.ui32HWTransferContextSize = size,
+		.ui32OffsetToPDDevPAddr = pd_off,
+		.hDevMemContext = p->memctx,
+	};
+	PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_TRANSFER_CONTEXT out = { 0 };
+	int e = pvr_call(p, PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT, &in, sizeof in, &out,
+			 sizeof out);
+
+	if (!e) {
+		*handle = out.hHWTransferContext;
+		*devva = out.sHWTransferContextDevVAddr.uiAddr;
+	}
+	return e;
+}
+
+int pvr_submit_transfer(struct pvr *p, PVRSRV_TRANSFER_SGX_KICK *kick)
+{
+	PVRSRV_BRIDGE_IN_SUBMITTRANSFER in;
+	PVRSRV_BRIDGE_RETURN out = { 0 };
+
+	memset(&in, 0, sizeof in);
+	in.hDevCookie = p->devcookie;
+	in.sKick = *kick;
+	in.sKick.hDevMemContext = p->memctx;
+	return pvr_call(p, PVRSRV_BRIDGE_SGX_SUBMITTRANSFER, &in, sizeof in, &out, sizeof out);
+}
+
 int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick)
 {
 	PVRSRV_BRIDGE_IN_DOKICK in;

@@ -48,5 +48,8 @@ int pvr_wrap(struct pvr *p, struct pvr_buf *b, void *cpu, uint32_t size);
 int pvr_register_render_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
 			    IMG_HANDLE *handle, uint32_t *devva);
 int pvr_kick(struct pvr *p, SGX_CCB_KICK *kick);
+int pvr_register_transfer_ctx(struct pvr *p, const void *ctx, uint32_t size, uint32_t pd_off,
+			      IMG_HANDLE *handle, uint32_t *devva);
+int pvr_submit_transfer(struct pvr *p, PVRSRV_TRANSFER_SGX_KICK *kick);
 
 #endif

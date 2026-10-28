@@ -10,10 +10,13 @@
  *   map <i>
  *   wrap <i> <size> <expected dev addr>        (a private page-aligned buffer)
  *   regctx <data off> <size> <PD offset> <captured dev addr>
+ *   regxfer <n> <data off> <size> <PD offset> <captured dev addr>   (transfer context n)
  *   zero <dev addr> <len> | write <dev addr> <len> <data off>
  *   poke <dev addr> <word>...                  (32-bit words, consecutive)
  *   sync                                       (memory barrier)
  *   kick key=value ...                         (see mkreplay.py)
+ *   xfer ccb=m<i> off=<n> ctx=<n> [tasync=s<i>] [sync3d=s<i>] [src=s<i>,..] [dst=s<i>,..] [flags=<n>]
+ *                                              (SGX_SUBMITTRANSFER on transfer context n)
  *   waitsync <s<i>> <ms> | sleep <ms> | dump <dev addr> <len> <file>
  * Buffers are named by capture-order index; m<i> is a buffer's mem info
  * handle, s<i> its sync info handle. A buffer that lands anywhere but its
@@ -22,9 +25,11 @@
  * Device memory and the wrapped buffer are mapped below 4 GB (MAP_32BIT) for
  * drivers that truncate user addresses; -H maps them wherever mmap puts them
  * (above 4 GB on x86_64), to test a driver without that bug; -W does that for
- * the wrapped buffer only.
+ * the wrapped buffer only. -F wraps the framebuffer (/dev/fb0, mapped) instead of
+ * private memory, so a frame the replay presents lands on the display.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,7 +47,8 @@ static int nbufs;
 static unsigned char *data;
 static size_t data_len;
 static uint32_t ctx_va, ctx_va_captured;
-static int keep_going, wrap_high;
+static int keep_going, wrap_high, wrap_fb;
+static uint32_t xctx_va[4];
 static uintptr_t cpu_lo = UINTPTR_MAX, cpu_hi;
 static int line_no;
 
@@ -216,6 +222,49 @@ static void op_waitsync(const char *h, uint32_t ms)
 	       t >= ms ? " (timed out)" : "");
 }
 
+static void op_xfer(char **tok, int n)
+{
+	PVRSRV_TRANSFER_SGX_KICK k;
+
+	memset(&k, 0, sizeof k);
+	for (int i = 1; i < n; i++) {
+		char *key = tok[i], *v = strchr(key, '=');
+
+		if (v)
+			*v++ = 0;
+		if (!v)
+			die("xfer field '%s' needs a value", key);
+		if (!strcmp(key, "ccb")) {
+			k.hCCBMemInfo = handle(v);
+		} else if (!strcmp(key, "off")) {
+			k.ui32SharedCmdCCBOffset = num(v);
+		} else if (!strcmp(key, "ctx")) {
+			if (num(v) >= 4 || !xctx_va[num(v)])
+				die("transfer context %s not registered", v);
+			k.sHWTransferContextDevVAddr.uiAddr = xctx_va[num(v)];
+		} else if (!strcmp(key, "tasync")) {
+			k.hTASyncInfo = handle(v);
+		} else if (!strcmp(key, "sync3d")) {
+			k.h3DSyncInfo = handle(v);
+		} else if (!strcmp(key, "src") || !strcmp(key, "dst")) {
+			int src = key[0] == 's';
+
+			for (char *s = strtok(v, ","); s; s = strtok(NULL, ",")) {
+				IMG_UINT32 *cnt = src ? &k.ui32NumSrcSync : &k.ui32NumDstSync;
+
+				if (*cnt >= SGX_MAX_TRANSFER_SYNC_OPS)
+					die("too many transfer syncs");
+				(src ? k.ahSrcSyncInfo : k.ahDstSyncInfo)[(*cnt)++] = handle(s);
+			}
+		} else if (!strcmp(key, "flags")) {
+			k.ui32Flags = num(v);
+		} else {
+			die("unknown xfer field '%s'", key);
+		}
+	}
+	bridge("SGX_SUBMITTRANSFER", pvr_submit_transfer(&P, &k));
+}
+
 static void run(FILE *f)
 {
 	char line[8192];
@@ -257,11 +306,16 @@ static void run(FILE *f)
 		} else if (!strcmp(tok[0], "wrap")) {
 			uint32_t i = num(tok[1]), size = num(tok[2]);
 			struct pvr_buf *b = buf(i);
-			void *m = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | (wrap_high ? 0 : P.map_flags), -1, 0);
+			int fb = wrap_fb ? open("/dev/fb0", O_RDWR) : -1;
+			void *m = fb >= 0 ? mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | (wrap_high ? 0 : P.map_flags), fb, 0)
+					  : mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | (wrap_high ? 0 : P.map_flags), -1, 0);
 
+			if (wrap_fb && fb < 0)
+				die("open /dev/fb0: %s", strerror(errno));
 			if (m == MAP_FAILED)
 				die("mmap for wrap: %s", strerror(errno));
-			memset(m, 0, size);	/* fault the pages in */
+			if (fb < 0)
+				memset(m, 0, size);	/* fault the pages in */
 			bridge("WRAP_EXT_MEMORY", pvr_wrap(&P, b, m, size));
 			check_va("wrapped buffer", (int)i, b->devva, num(tok[3]));
 			printf("replay: wrapped %#x bytes at %p\n", size, m);
@@ -277,6 +331,16 @@ static void run(FILE *f)
 			if (ctx_va != ctx_va_captured)
 				fprintf(stderr, "replay: render context at %#x, captured at %#x (kicks use %#x)\n",
 					ctx_va, ctx_va_captured, ctx_va);
+		} else if (!strcmp(tok[0], "regxfer")) {
+			uint32_t x = num(tok[1]), off = num(tok[2]), size = num(tok[3]);
+			IMG_HANDLE h;
+
+			if (x >= 4 || (size_t)off + size > data_len)
+				die("bad regxfer");
+			bridge("SGX_REGISTER_HW_TRANSFER_CONTEXT",
+			       pvr_register_transfer_ctx(&P, data + off, size, num(tok[4]), &h, &xctx_va[x]));
+			if (xctx_va[x] != num(tok[5]))
+				fprintf(stderr, "replay: transfer context %u at %#x, captured at %s\n", x, xctx_va[x], tok[5]);
 		} else if (!strcmp(tok[0], "zero")) {
 			uint32_t len = num(tok[2]);
 
@@ -309,6 +373,9 @@ static void run(FILE *f)
 			nkicks++;
 			op_kick(tok, n);
 			printf("replay: kick %d sent\n", nkicks);
+		} else if (!strcmp(tok[0], "xfer")) {
+			op_xfer(tok, n);
+			printf("replay: transfer sent\n");
 		} else if (!strcmp(tok[0], "waitsync")) {
 			op_waitsync(tok[1], num(tok[2]));
 		} else if (!strcmp(tok[0], "sleep")) {
@@ -334,9 +401,11 @@ int main(int argc, char **argv)
 	FILE *f, *d;
 	int c, high = 0;
 
-	while ((c = getopt(argc, argv, "kHWn:")) != -1) {
+	while ((c = getopt(argc, argv, "kHWFn:")) != -1) {
 		if (c == 'k')
 			keep_going = 1;
+		else if (c == 'F')
+			wrap_fb = 1;
 		else if (c == 'H')
 			high = wrap_high = 1;
 		else if (c == 'W')
@@ -347,7 +416,7 @@ int main(int argc, char **argv)
 			return 1;
 	}
 	if (argc - optind != 2) {
-		fprintf(stderr, "usage: replay [-k] [-H | -W] [-n node] <script> <data>\n");
+		fprintf(stderr, "usage: replay [-k] [-H | -W] [-F] [-n node] <script> <data>\n");
 		return 1;
 	}
 	if (!(f = fopen(argv[optind], "r")) || !(d = fopen(argv[optind + 1], "rb"))) {

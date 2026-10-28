@@ -8,7 +8,9 @@
  *   - before each SGX kick and before each unmap, a copy of every live
  *     mapping, so the decoder sees exactly what the GPU was handed;
  *   - the same copy before SGX_DEVINITPART2 and INITSRV_DISCONNECT, so a
- *     SrvInit trace holds everything the init process wrote for the microkernel.
+ *     SrvInit trace holds everything the init process wrote for the microkernel;
+ *   - and before each SGX_SUBMITTRANSFER (numbered by its own counter), so the
+ *     transfer command and its source are captured as the GPU will see them.
  *
  * The tracer stays dumb on purpose: no struct knowledge lives here, only the
  * outer bridge package. re/decode/ does the interpretation, so a wrong guess
@@ -62,13 +64,14 @@ enum {
 #define SNAP_UNMAP 2
 #define SNAP_EXIT 3
 #define SNAP_INIT 4
+#define SNAP_XFER 5
 
 #define MAX_MAPS 512
 
 static struct { uintptr_t addr; size_t len; uint64_t off; } maps[MAX_MAPS];
 static int nmaps;
 static int log_fd = -1;
-static unsigned kicks;
+static unsigned kicks, xfers;
 static unsigned long max_snap = 64u << 20;	/* skip mappings bigger than this */
 static int kick_nr = -1;			/* bridge index of SGX_DOKICK */
 static int snap_on_kick = 1;
@@ -252,6 +255,13 @@ int ioctl(int fd, unsigned long req, ...)
 	if (snap_on_kick && (int)(pkg->id & 0xff) == kick_nr) {
 		kicks++;
 		snap_all(SNAP_KICK);
+	}
+	if (snap_on_kick && (pkg->id & 0xff) == NR(PVRSRV_BRIDGE_SGX_SUBMITTRANSFER)) {
+		unsigned k = kicks;
+
+		kicks = ++xfers;	/* the record's number is the transfer's own */
+		snap_all(SNAP_XFER);
+		kicks = k;
 	}
 	if ((pkg->id & 0xff) == NR(PVRSRV_BRIDGE_SGX_DEVINITPART2) ||
 	    (pkg->id & 0xff) == NR(PVRSRV_BRIDGE_INITSRV_DISCONNECT))

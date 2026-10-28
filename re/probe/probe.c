@@ -37,6 +37,21 @@
  *   PROBE_TEXFILTER="min mag"  GL enums                          (0x2600 0x2600 = NEAREST)
  *   PROBE_TEXWRAP="s t"        GL enums                          (0x2901 = REPEAT)
  *   PROBE_MIPMAP=1             glGenerateMipmap after the upload
+ *   PROBE_TEXPAT=1             texels name their own coordinates instead of the checker:
+ *                              8888/888: r = x, g = y, b = level | face<<4, a = 0x80 | x>>8 | (y>>8)<<2;
+ *                              16-bit formats (and la88 as l | a<<8): y*w + x; l8/a8: (y*w + x) & 0xff
+ *   PROBE_TEXFILE=path         level 0 texels from a file, raw, in the GL upload format
+ *   PROBE_TEXLEVELS=n          upload levels 0..n-1 one by one (each with its own level number)
+ *   PROBE_TEXCUBE=1            a cube map: all six faces uploaded (face f in the pattern)
+ *
+ * Render to texture (the triangle pass goes into an FBO, the window samples it):
+ *   PROBE_FBO="w h fmt"        colour texture rgba8888 rgb565 rgba4444 rgba5551 rgb888
+ *   PROBE_FBODS="d s"          depth / stencil renderbuffers (16 0, 0 8, 24 8 = packed)
+ *   PROBE_FBOCLEAR="r g b a"   the window's clear in the sampling pass   (0.2 0.2 0.2 1)
+ *   PROBE_QUAD="x0 y0 x1 y1"   the window quad that samples the FBO      (-0.75 -0.75 0.75 0.75)
+ *   PROBE_FBOREENTER="x0 y0 x1 y1 x2 y2 z r g b a"  after sampling once, draw this triangle
+ *                              (at clip z, colour) into the FBO again without a clear,
+ *                              then sample again: the FBO's depth must survive the window render
  *
  * Marks each phase in the pvrtrace log through pvrtrace_note when the tracer is loaded.
  * EGL and GLES are loaded with dlopen, so the binary has no DT_NEEDED on the DDK's
@@ -107,6 +122,7 @@ typedef char GLchar;
 	X(GL, void, glLineWidth, (GLfloat)) \
 	X(GL, void, glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, const void *)) \
 	X(GL, void, glEnableVertexAttribArray, (GLuint)) \
+	X(GL, void, glDisableVertexAttribArray, (GLuint)) \
 	X(GL, void, glDrawArrays, (GLenum, GLint, GLsizei)) \
 	X(GL, void, glFinish, (void)) \
 	X(GL, GLenum, glGetError, (void)) \
@@ -117,7 +133,15 @@ typedef char GLchar;
 	X(GL, void, glActiveTexture, (GLenum)) \
 	X(GL, void, glTexImage2D, (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *)) \
 	X(GL, void, glTexParameteri, (GLenum, GLenum, GLint)) \
-	X(GL, void, glGenerateMipmap, (GLenum))
+	X(GL, void, glGenerateMipmap, (GLenum)) \
+	X(GL, void, glGenFramebuffers, (GLsizei, GLuint *)) \
+	X(GL, void, glBindFramebuffer, (GLenum, GLuint)) \
+	X(GL, void, glFramebufferTexture2D, (GLenum, GLenum, GLenum, GLuint, GLint)) \
+	X(GL, void, glGenRenderbuffers, (GLsizei, GLuint *)) \
+	X(GL, void, glBindRenderbuffer, (GLenum, GLuint)) \
+	X(GL, void, glRenderbufferStorage, (GLenum, GLenum, GLsizei, GLsizei)) \
+	X(GL, void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint)) \
+	X(GL, GLenum, glCheckFramebufferStatus, (GLenum))
 
 #define DECL(lib, ret, name, args) static ret(*name) args;
 FNS(DECL)
@@ -169,8 +193,23 @@ FNS(DECL)
 #define GL_TEXTURE_WRAP_T 0x2803
 #define GL_NEAREST 0x2600
 #define GL_REPEAT 0x2901
+#define GL_TEXTURE_CUBE_MAP 0x8513
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_RENDERBUFFER 0x8D41
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_DEPTH_ATTACHMENT 0x8D00
+#define GL_STENCIL_ATTACHMENT 0x8D20
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_DEPTH_COMPONENT16 0x81A5
+#define GL_STENCIL_INDEX8 0x8D48
+#define GL_DEPTH24_STENCIL8_OES 0x88F0
+#define GL_TRIANGLES 4
+#define GL_TRIANGLE_STRIP 5
 
 static void (*mark)(const char *);
+static GLuint fbo, fbotex, sprog;
+static float quad[16];
 static void (*snapshot)(void);
 
 static void note(const char *s)
@@ -299,6 +338,151 @@ static int texels(const char *fmt, int w, int h, void *out, GLenum *gfmt, GLenum
 		}
 	}
 	return 1;
+}
+
+/* PROBE_TEXPAT: every texel names its own coordinates, level and face (see the header) */
+static int pattern(const char *fmt, int w, int h, int level, int face, void *out, GLenum *gfmt, GLenum *gtype)
+{
+	unsigned char *b = out;
+	uint16_t *s = out;
+
+	if (!texels(fmt, 1, 1, out, gfmt, gtype))
+		return 0;
+	for (int y = 0; y < h; y++)
+		for (int x = 0; x < w; x++) {
+			int i = y * w + x;
+			unsigned char r = (unsigned char)x, g = (unsigned char)y, bl = (unsigned char)(level | face << 4),
+				      a = (unsigned char)(0x80 | x >> 8 | (y >> 8) << 2);
+
+			if (!strcmp(fmt, "rgba8888"))
+				b[4 * i] = r, b[4 * i + 1] = g, b[4 * i + 2] = bl, b[4 * i + 3] = a;
+			else if (!strcmp(fmt, "rgb888"))
+				b[3 * i] = r, b[3 * i + 1] = g, b[3 * i + 2] = bl;
+			else if (!strcmp(fmt, "l8") || !strcmp(fmt, "a8"))
+				b[i] = (unsigned char)i;
+			else
+				s[i] = (uint16_t)i;	/* 565, 4444, 5551, la88 (l = low byte) */
+		}
+	return 1;
+}
+
+static int texbytes(GLenum gf, GLenum gt)
+{
+	if (gt != GL_UNSIGNED_BYTE)
+		return 2;
+	return gf == GL_RGBA ? 4 : gf == GL_RGB ? 3 : gf == GL_LUMINANCE_ALPHA ? 2 : 1;
+}
+
+/* fill tex with level `level` of face `face` of a w x h texture: pattern, file or checker */
+static int teximage(const char *fmt, int w, int h, int level, int face, void *tex, GLenum *gf, GLenum *gt)
+{
+	const char *file = getenv("PROBE_TEXFILE");
+	int lw = w >> level > 0 ? w >> level : 1, lh = h >> level > 0 ? h >> level : 1;
+
+	if (getenv("PROBE_TEXPAT") && atoi(getenv("PROBE_TEXPAT"))) {
+		if (!pattern(fmt, lw, lh, level, face, tex, gf, gt))
+			return 0;
+	} else if (!texels(fmt, lw, lh, tex, gf, gt)) {
+		return 0;
+	}
+	if (file && !level && !face) {
+		FILE *fp = fopen(file, "rb");
+		size_t n = (size_t)lw * lh * texbytes(*gf, *gt);
+
+		if (!fp || fread(tex, 1, n, fp) != n)
+			return note("short PROBE_TEXFILE"), 0;
+		fclose(fp);
+	}
+	return 1;
+}
+
+/* PROBE_FBO: a w x h colour texture (and PROBE_FBODS renderbuffers) bound as the draw target */
+static int fbo_setup(void)
+{
+	long v[3];
+	GLenum gf = GL_RGBA, gt = GL_UNSIGNED_BYTE;
+	GLuint rb[2];
+	long ds[2] = { 0, 0 };
+	const char *fmt = getenv("PROBE_FBO");
+	static unsigned char one[4];
+	char name[16];
+
+	if (ints("PROBE_FBO", v, 2, NULL) != 2 || sscanf(fmt, "%*s %*s %15s", name) != 1)
+		return note("PROBE_FBO needs w h fmt"), 0;
+	if (!texels(name, 1, 1, one, &gf, &gt))
+		return note("bad PROBE_FBO format"), 0;
+	glGenTextures(1, &fbotex);
+	glBindTexture(GL_TEXTURE_2D, fbotex);
+	glTexImage2D(GL_TEXTURE_2D, 0, (GLint)gf, (GLsizei)v[0], (GLsizei)v[1], 0, gf, gt, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812F);	/* CLAMP_TO_EDGE: NPOT targets */
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812F);
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbotex, 0);
+	ints("PROBE_FBODS", ds, 2, NULL);
+	glGenRenderbuffers(2, rb);
+	if (ds[0] && ds[1]) {
+		glBindRenderbuffer(GL_RENDERBUFFER, rb[0]);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8_OES, (GLsizei)v[0], (GLsizei)v[1]);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb[0]);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb[0]);
+	} else if (ds[0]) {
+		glBindRenderbuffer(GL_RENDERBUFFER, rb[0]);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, (GLsizei)v[0], (GLsizei)v[1]);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb[0]);
+	} else if (ds[1]) {
+		glBindRenderbuffer(GL_RENDERBUFFER, rb[1]);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, (GLsizei)v[0], (GLsizei)v[1]);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb[1]);
+	}
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		return note("FBO incomplete"), 0;
+	glViewport(0, 0, (GLsizei)v[0], (GLsizei)v[1]);
+	sprog = glCreateProgram();
+	glAttachShader(sprog, shader(GL_VERTEX_SHADER, "attribute vec4 p; attribute vec2 a1; varying vec2 v; "
+				    "void main() { gl_Position = p; v = a1; }"));
+	glAttachShader(sprog, shader(GL_FRAGMENT_SHADER, "precision mediump float; uniform sampler2D t0; varying vec2 v; "
+				    "void main() { gl_FragColor = texture2D(t0, v); }"));
+	glBindAttribLocation(sprog, 0, "p");
+	glBindAttribLocation(sprog, 1, "a1");
+	glLinkProgram(sprog);
+	{
+		float q[4];
+
+		floats("PROBE_QUAD", q, 4, "-0.75 -0.75 0.75 0.75");
+		/* strip: x, y, u, v */
+		float qq[16] = { q[0], q[1], 0, 0, q[2], q[1], 1, 0, q[0], q[3], 0, 1, q[2], q[3], 1, 1 };
+
+		memcpy(quad, qq, sizeof qq);
+	}
+	return 1;
+}
+
+/* the window pass: clear, then the quad sampling the FBO texture */
+static void fbo_sample(int w, int h, GLuint prog)
+{
+	float c[4];
+	GLint loc;
+
+	note("fbo sample");
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0, 0, w, h);
+	floats("PROBE_FBOCLEAR", c, 4, "0.2 0.2 0.2 1");
+	glClearColor(c[0], c[1], c[2], c[3]);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glUseProgram(sprog);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, fbotex);
+	if ((loc = glGetUniformLocation(sprog, "t0")) >= 0)
+		glUniform1i(loc, 0);
+	glVertexAttribPointer(0, 2, GL_FLOAT, 0, 16, quad);
+	glVertexAttribPointer(1, 2, GL_FLOAT, 0, 16, quad + 2);
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(1);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+	glUseProgram(prog);
 }
 
 int main(void)
@@ -453,24 +637,38 @@ int main(void)
 			tw = v[0], th = v[1];
 		ints("PROBE_TEXFILTER", filt, 2, NULL);
 		ints("PROBE_TEXWRAP", wrap, 2, NULL);
-		if (tw * th > 1024 * 1024 || !texels(texfmt, (int)tw, (int)th, tex, &gf, &gt))
-			return note("bad texture format or size"), 1;
+		int cube = getenv("PROBE_TEXCUBE") && atoi(getenv("PROBE_TEXCUBE"));
+		int levels = getenv("PROBE_TEXLEVELS") ? atoi(getenv("PROBE_TEXLEVELS")) : 1;
+		GLenum target = cube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+
+		if (tw * th > 1024 * 1024)
+			return note("bad texture size"), 1;
 		glActiveTexture(GL_TEXTURE0 + t);
 		glGenTextures(1, &tx);
-		glBindTexture(GL_TEXTURE_2D, tx);
-		glTexImage2D(GL_TEXTURE_2D, 0, (GLint)gf, (GLsizei)tw, (GLsizei)th, 0, gf, gt, tex);
+		glBindTexture(target, tx);
+		for (int fc = 0; fc < (cube ? 6 : 1); fc++)
+			for (int l = 0; l < levels; l++) {
+				GLsizei lw = tw >> l > 0 ? (GLsizei)(tw >> l) : 1, lh = th >> l > 0 ? (GLsizei)(th >> l) : 1;
+
+				if (!teximage(texfmt, (int)tw, (int)th, l, fc, tex, &gf, &gt))
+					return note("bad texture format"), 1;
+				glTexImage2D(cube ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + (GLenum)fc : GL_TEXTURE_2D, l, (GLint)gf,
+					     lw, lh, 0, gf, gt, tex);
+			}
 		if (getenv("PROBE_MIPMAP") && atoi(getenv("PROBE_MIPMAP")))
-			glGenerateMipmap(GL_TEXTURE_2D);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (GLint)filt[0]);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (GLint)filt[1]);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (GLint)wrap[0]);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (GLint)wrap[1]);
+			glGenerateMipmap(target);
+		glTexParameteri(target, GL_TEXTURE_MIN_FILTER, (GLint)filt[0]);
+		glTexParameteri(target, GL_TEXTURE_MAG_FILTER, (GLint)filt[1]);
+		glTexParameteri(target, GL_TEXTURE_WRAP_S, (GLint)wrap[0]);
+		glTexParameteri(target, GL_TEXTURE_WRAP_T, (GLint)wrap[1]);
 		snprintf(name, sizeof name, "t%d", t);
 		loc = glGetUniformLocation(prog, name);
 		if (loc >= 0)
 			glUniform1i(loc, t);
 	}
 
+	if (getenv("PROBE_FBO") && !fbo_setup())
+		return 1;
 	note("clear");
 	glClearColor(clear[0], clear[1], clear[2], clear[3]);
 	glClear(clearbits);
@@ -513,6 +711,28 @@ int main(void)
 	for (int i = 0; i < draws; i++) {
 		note("draw");
 		glDrawArrays(prim, 0, nv);
+	}
+	if (fbo) {
+		static float re[3 * 3];
+		float r[11];
+
+		fbo_sample(w, h, prog);
+		if (floats("PROBE_FBOREENTER", r, 11, "") == 11) {
+			long fv[2];
+
+			note("fbo reenter");
+			ints("PROBE_FBO", fv, 2, NULL);
+			glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+			glViewport(0, 0, (GLsizei)fv[0], (GLsizei)fv[1]);
+			for (int i = 0; i < 3; i++)
+				re[3 * i] = r[2 * i], re[3 * i + 1] = r[2 * i + 1], re[3 * i + 2] = r[6];
+			if ((loc = glGetUniformLocation(prog, "c")) >= 0)
+				glUniform4f(loc, r[7], r[8], r[9], r[10]);
+			glDisableVertexAttribArray(1);
+			glVertexAttribPointer(0, 3, GL_FLOAT, 0, 0, re);
+			glDrawArrays(GL_TRIANGLES, 0, 3);
+			fbo_sample(w, h, prog);
+		}
 	}
 	note("finish");
 	glFinish();
