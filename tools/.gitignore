@@ -1,0 +1,11 @@
+*.so
+__pycache__/
+*.bin
+abi/abi-ids.o
+probe/probe
+replay/replay
+isa/shc
+isa/*.so
+gen/frame
+gen/frame-fake
+gen/usse_progs.h
