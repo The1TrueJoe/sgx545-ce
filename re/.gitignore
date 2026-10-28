@@ -6,3 +6,4 @@ probe/probe
 replay/replay
 isa/shc
 isa/*.so
+srvinit/srvinit
