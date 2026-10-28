@@ -17,8 +17,28 @@
  *   up2x    64x64 strided  -> 128x128 strided, NEAREST (scaled copy)
  *   npot    100x30 linear  -> 100x30 strided           (NPOT texture -> surface)
  *   to565   64x64 strided RGBA8888 -> 64x64 strided RGB565  (format conversion)
+ *
+ *   blitest <outdir> rect     sub-rectangles (glCopyTexSubImage, glBlitFramebuffer):
+ *     rsub    (8,4) 24x20 of the strided source -> (30,40) of a strided 64x64 filled with 0x11
+ *     rsubtw  (40,10) 16x16 -> (8,24) of a twiddled 64x64 filled with 0x22: sgxtex refuses it
+ *             now (see rect2); before the check the PBE wrote it to the wrong places
+ *     rscale  (0,0) 16x8 -> (10,10) 32x16 of a strided 64x64 filled with 0x11, NEAREST (2x)
+ *   blitest <outdir> rect2    twiddled destinations: the PBE takes a twiddled surface's tile
+ *                             row length from the clip width, so only full-width bands clip:
+ *     rband   rows 10..41 of the source -> rows 16..47 of a twiddled 64x64 (tile-aligned band)
+ *     rband2  rows 10..25 -> rows 20..35 (unaligned band)
+ *     rcomp   (40,10) 16x16 -> (8,24) of a twiddled 64x64 in three blits: readback to linear,
+ *             sub-rectangle into it, upload
+ *   blitest <outdir> present  the swap: a 720x480 BGRA8888 back buffer (pitch 736) filled
+ *                             with a pattern, blitted into the real /dev/fb0 (wrapped as the
+ *                             DDK's EGL does); prints the blit's time. Read fb0 back after.
+ *   blitest <outdir> sweep    one 64x64 strided copy per variant of the background
+ *                             object's vertex words (bg[16..22]), into a cleared
+ *                             destination: sweep<n>.bin, for working out sub-rectangles
  */
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -121,6 +141,11 @@ static volatile PVRSRV_SYNC_DATA *sync_data(IMG_HANDLE h)
 	return c[n++].d;
 }
 
+/* background-block words to override before a blit: index, value; index -1 ends */
+static int bg_override[8][2] = { { -1, 0 } };
+
+static const struct sgxtex_rect *blit_srect, *blit_drect;	/* set: a sub-rectangle blit */
+
 static int blit(const char *name, struct pvr_buf *sb, const struct sgxtex_surface *src, struct pvr_buf *db,
 		const struct sgxtex_surface *dst, int filter)
 {
@@ -131,7 +156,15 @@ static int blit(const char *name, struct pvr_buf *sb, const struct sgxtex_surfac
 	unsigned t = 0;
 	int e;
 
-	sgxtex_blit_build(&b, &X, src, dst, filter);
+	if (blit_srect) {
+		if (sgxtex_blit_build_rect(&b, &X, src, blit_srect, dst, blit_drect, filter)) {
+			printf("blitest: %-6s refused by sgxtex (twiddled, not full width)\n", name);
+			return 0;
+		}
+	} else
+		sgxtex_blit_build(&b, &X, src, dst, filter);
+	for (int i = 0; i < 8 && bg_override[i][0] >= 0; i++)
+		b.bg[bg_override[i][0]] = (uint32_t)bg_override[i][1];
 	put(&bgb, X.bg, b.bg, SGXTEX_BLIT_BG_WORDS);
 	put(&pdsp, X.pds_primary, b.pds, SGXTEX_BLIT_PDS_WORDS);
 	put(&usse, X.eot_use, b.eot, SGXPBE_EOT_WORDS);
@@ -222,6 +255,121 @@ int main(int argc, char **argv)
 			pattern((uint8_t *)npot.cpu + 4 * (y * 104 + x), x, y);
 	dump(dir, "src", &lin, 64 * 64 * 4);
 	__sync_synchronize();
+
+	if (argc > 2 && !strcmp(argv[2], "present")) {
+		struct pvr_buf back, fb;
+		struct sgxtex_surface s_back = { 0, 720, 480, 736, SGXTEX_LAYOUT_STRIDED, SGXTEX_FMT_BGRA8888,
+						 SGXPBE_FMT_BGRA8888 };
+		struct sgxtex_surface s_fb = s_back;
+		struct timespec t0, t1;
+		int fd = open("/dev/fb0", O_RDWR);
+		void *m = fd < 0 ? MAP_FAILED : mmap(NULL, 736 * 480 * 4, PROT_READ | PROT_WRITE,
+						     MAP_SHARED | MAP_32BIT, fd, 0);
+		int e;
+
+		if (m == MAP_FAILED)
+			die("map /dev/fb0: %s", strerror(errno));
+		if ((e = pvr_wrap(&P, &fb, m, 736 * 480 * 4)))
+			die("WRAP_EXT_MEMORY of fb0: %d", e);
+		bo(&back, H_GENERAL, 0x3, 736 * 480 * 4, 0x1000);
+		/* B, G, R, A: a gradient with a grid, so a misplaced or torn row shows */
+		for (uint32_t y = 0; y < 480; y++)
+			for (uint32_t x = 0; x < 736; x++) {
+				uint8_t *p = (uint8_t *)back.cpu + 4 * (y * 736 + x);
+
+				p[0] = (uint8_t)(y * 255 / 479), p[1] = (uint8_t)(x * 255 / 719);
+				p[2] = (x % 40 == 0 || y % 40 == 0) ? 255 : (uint8_t)((x ^ y) & 0x7f), p[3] = 255;
+			}
+		dump(dir, "back", &back, 736 * 480 * 4);
+		__sync_synchronize();
+		s_back.addr = back.devva, s_fb.addr = fb.devva;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+		bad |= blit("swap", &back, &s_back, &fb, &s_fb, SGXTEX_FILTER_NEAREST);
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		printf("blitest: fb0 wrapped at %#x; swap blit submitted and complete in %ld us\n", fb.devva,
+		       (t1.tv_sec - t0.tv_sec) * 1000000 + (t1.tv_nsec - t0.tv_nsec) / 1000);
+		return bad;
+	}
+	if (argc > 2 && !strcmp(argv[2], "rect")) {
+		static const struct sgxtex_rect r[][2] = {
+			{ { 8, 4, 24, 20 }, { 30, 40, 24, 20 } },
+			{ { 40, 10, 16, 16 }, { 8, 24, 16, 16 } },
+			{ { 0, 0, 16, 8 }, { 10, 10, 32, 16 } },
+		};
+
+		memset(out.cpu, 0x11, out.size);
+		memset(tw.cpu, 0x22, tw.size);
+		__sync_synchronize();
+		blit_srect = &r[0][0], blit_drect = &r[0][1];
+		bad |= blit("rsub", &lin, &s_lin, &out, &s_out, SGXTEX_FILTER_NEAREST);
+		dump(dir, "rsub", &out, 64 * 64 * 4);
+		blit_srect = &r[1][0], blit_drect = &r[1][1];
+		bad |= blit("rsubtw", &lin, &s_lin, &tw, &s_tw, SGXTEX_FILTER_NEAREST);
+		dump(dir, "rsubtw", &tw, 64 * 64 * 4);
+		memset(out.cpu, 0x11, out.size);
+		__sync_synchronize();
+		blit_srect = &r[2][0], blit_drect = &r[2][1];
+		bad |= blit("rscale", &lin, &s_lin, &out, &s_out, SGXTEX_FILTER_NEAREST);
+		dump(dir, "rscale", &out, 64 * 64 * 4);
+		return bad;
+	}
+	if (argc > 2 && !strcmp(argv[2], "rect2")) {
+		static const struct sgxtex_rect band[][2] = {
+			{ { 0, 10, 64, 32 }, { 0, 16, 64, 32 } },
+			{ { 0, 10, 64, 16 }, { 0, 20, 64, 16 } },
+			{ { 40, 10, 16, 16 }, { 8, 24, 16, 16 } },
+		};
+
+		memset(tw.cpu, 0x22, tw.size);
+		__sync_synchronize();
+		blit_srect = &band[0][0], blit_drect = &band[0][1];
+		bad |= blit("rband", &lin, &s_lin, &tw, &s_tw, SGXTEX_FILTER_NEAREST);
+		dump(dir, "rband", &tw, 64 * 64 * 4);
+		memset(tw.cpu, 0x22, tw.size);
+		__sync_synchronize();
+		blit_srect = &band[1][0], blit_drect = &band[1][1];
+		bad |= blit("rband2", &lin, &s_lin, &tw, &s_tw, SGXTEX_FILTER_NEAREST);
+		dump(dir, "rband2", &tw, 64 * 64 * 4);
+		memset(tw.cpu, 0x22, tw.size);
+		__sync_synchronize();
+		blit_srect = blit_drect = NULL;
+		bad |= blit("rcomp1", &tw, &s_tw, &out, &s_out, SGXTEX_FILTER_NEAREST);
+		blit_srect = &band[2][0], blit_drect = &band[2][1];
+		bad |= blit("rcomp2", &lin, &s_lin, &out, &s_out, SGXTEX_FILTER_NEAREST);
+		blit_srect = blit_drect = NULL;
+		bad |= blit("rcomp3", &out, &s_out, &tw, &s_tw, SGXTEX_FILTER_NEAREST);
+		dump(dir, "rcomp", &tw, 64 * 64 * 4);
+		return bad;
+	}
+	if (argc > 2 && !strcmp(argv[2], "sweep")) {
+		/* bg[16..22] for 64x64 are 0x1000 0x3f80 0x10400010 1.0 0x104000 0x1000 0x3f80 */
+		/* bg[3..8] for any size are 0 0 1.0 0 0 1.0; bg[19] 1.0 */
+		static const int v[][4] = {
+			{ -1 },
+			{ 3, 0x3e800000, -1 },	/* 0.25 */
+			{ 4, 0x3e800000, -1 },
+			{ 5, 0x3f000000, -1 },	/* 0.5 */
+			{ 6, 0x3e800000, -1 },
+			{ 7, 0x3e800000, -1 },
+			{ 8, 0x3f000000, -1 },
+			{ 9, 0x3e800000, -1 },
+			{ 19, 0x3f000000, -1 },
+		};
+		for (unsigned i = 0; i < sizeof v / sizeof *v; i++) {
+			char name[16];
+			int n = 0;
+
+			for (int j = 0; j + 1 < 4 && v[i][j] >= 0; j += 2, n++)
+				bg_override[n][0] = v[i][j], bg_override[n][1] = v[i][j + 1];
+			bg_override[n][0] = -1;
+			memset(out.cpu, 0, out.size);
+			__sync_synchronize();
+			snprintf(name, sizeof name, "sweep%u", i);
+			bad |= blit(name, &lin, &s_lin, &out, &s_out, SGXTEX_FILTER_NEAREST);
+			dump(dir, name, &out, 64 * 64 * 4);
+		}
+		return bad;
+	}
 
 	bad |= blit("up", &lin, &s_lin, &tw, &s_tw, SGXTEX_FILTER_NEAREST);
 	dump(dir, "up", &tw, 64 * 64 * 4);
