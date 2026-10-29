@@ -17,3 +17,8 @@ run() {
 run proj4 "$V4" "precision mediump float; uniform sampler2D t0; varying vec4 v; void main() { gl_FragColor = texture2DProj(t0, v); }"
 run xy4 "$V4" "precision mediump float; uniform sampler2D t0; varying vec4 v; void main() { gl_FragColor = texture2D(t0, v.xy); }"
 run proj4c "$V4" "precision mediump float; uniform sampler2D t0; varying vec4 v; void main() { gl_FragColor = texture2DProj(t0, v) * vec4(0.5, 1.0, 1.0, 1.0); }"
+# dependent reads at mediump-computed coordinates (F16 pairs into smp.2d.f16)
+V2="attribute vec4 p; attribute vec2 a1; varying vec2 uv; void main() { gl_Position = p; uv = p.xy * 0.5 + vec2(0.5, 0.5); }"
+run dep_half "$V2" "precision mediump float; uniform sampler2D t0; varying vec2 uv; void main() { gl_FragColor = texture2D(t0, uv * 0.5 + 0.25); }"
+run dep_halfmul "$V2" "precision mediump float; uniform sampler2D t0; varying vec2 uv; void main() { gl_FragColor = texture2D(t0, uv.yx * uv); }"
+run plain_mul "$V2" "precision mediump float; uniform sampler2D t0; varying vec2 uv; void main() { gl_FragColor = texture2D(t0, uv) * vec4(0.5, 1.0, 0.75, 1.0); }"
