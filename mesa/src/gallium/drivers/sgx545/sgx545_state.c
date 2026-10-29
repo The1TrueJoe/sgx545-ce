@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "util/os_time.h"
 #include "util/u_framebuffer.h"
 #include "util/u_helpers.h"
 #include "util/u_inlines.h"
@@ -15,6 +16,7 @@
 
 #include "sgx545_context.h"
 #include "sgx545_resource.h"
+#include "sgx545_screen.h"
 
 /* A blend factor as a sop2 selector (sgxws_bsel), s1 the shader's colour and
  * s2 the tile's; -1 for the constant and dual-source factors (the selectors
@@ -424,6 +426,23 @@ sgx545_blit_cpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
    }
 
    unsigned sbpp = util_format_get_blocksize(info->src.format), dbpp = util_format_get_blocksize(info->dst.format);
+
+   /* the same size, not mirrored left to right (glCopyTexSubImage): a row at
+    * a time through util_format's row converters, a vertical flip by the
+    * order of the rows */
+   if (sw == dw && sh == dh && (sb->width < 0) == (db->width < 0) &&
+       util_format_translate(info->dst.format, dst, dt->stride, 0, 0, info->src.format, src, st->stride, 0, 0, 0, 0)) {
+      for (int y = 0; y < dh; y++) {
+         int sy = (sb->height < 0) != (db->height < 0) ? sh - 1 - y : y;
+
+         util_format_translate(info->dst.format, dst + y * dt->stride, dt->stride, 0, 0, info->src.format,
+                               src + sy * st->stride, st->stride, 0, 0, dw, 1);
+      }
+      pipe_texture_unmap(pctx, st);
+      pipe_texture_unmap(pctx, dt);
+      return true;
+   }
+
    bool linear = info->filter == PIPE_TEX_FILTER_LINEAR && (sw != dw || sh != dh);
    float *row = malloc(sizeof(float) * 4 * dw);
 
@@ -520,12 +539,27 @@ sgx545_blit_gpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
 static void
 sgx545_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 {
-   if (sgx545_blit_gpu(pctx, info))
+   struct sgx545_context *ctx = sgx545_context(pctx);
+   uint64_t t0;
+
+   if (sgx545_blit_gpu(pctx, info)) {
+      ctx->stats.blit_gpu++;
       return;
-   if (util_try_blit_via_copy_region(pctx, info, false))
+   }
+   if (util_try_blit_via_copy_region(pctx, info, false)) {
+      ctx->stats.blit_copy++;
       return;
-   if (sgx545_blit_cpu(pctx, info))
+   }
+   t0 = os_time_get_nano();
+   if (sgx545_blit_cpu(pctx, info)) {
+      ctx->stats.blit_cpu++;
+      ctx->stats.blit_cpu_px += (uint64_t)abs(info->dst.box.width) * abs(info->dst.box.height);
+      ctx->stats.blit_cpu_ns += os_time_get_nano() - t0;
+      SGX545_DBG(DRAW, "CPU blit %s %ux%u -> %s %ux%u (dst texture %d)\n", util_format_short_name(info->src.format),
+                 info->src.box.width, info->src.box.height, util_format_short_name(info->dst.format),
+                 info->dst.box.width, info->dst.box.height, sgx545_resource(info->dst.resource)->texture);
       return;
+   }
    fprintf(stderr, "sgx545: blit %s -> %s not supported yet\n",
            util_format_short_name(info->src.format), util_format_short_name(info->dst.format));
 }

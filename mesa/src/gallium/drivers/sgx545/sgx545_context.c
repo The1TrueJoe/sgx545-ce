@@ -123,6 +123,9 @@ sgx545_stats_report(struct sgx545_context *ctx)
       ctx->hw->ns_fence_wait = ctx->hw->ns_latency = 0;
       ctx->hw->n_latency = 0;
    }
+   fprintf(stderr, "sgx545 stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms)\n", ctx->stats.blit_gpu,
+           ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
+           ctx->stats.blit_cpu_ns * ms);
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
            dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,

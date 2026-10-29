@@ -1,7 +1,7 @@
 #!/bin/sh
 # EA1: one run on WHO (sgx545|ddk) in the fixed benchmark world (/opt/mc-ab/bench-world,
 # restored before every run), SECS after the menu; prints FPS + stats
-WHO=${1:-sgx545} SECS=${2:-150}
+WHO=${1:-sgx545} SECS=${2:-170}
 R=/opt/minecraft/rootfs A=$R/opt/mc-ab
 rm -rf $A/saves/*; cp -a $A/bench-world "$A/saves/bench"
 rm -f $R/ctest/out/mc-$WHO*
