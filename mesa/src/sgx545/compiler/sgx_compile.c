@@ -40,6 +40,8 @@ struct sgx_val {
    uint32_t n;
    nir_load_const_instr *lc;
    struct sgx_ref *refs;   /* VAL_REFS: one ref per component (F16 halves, aliases) */
+   struct sgx_ref *shadow; /* a 16-bit register only assembled then read (find_shadow_regs):
+                            * what each component was stored from, read as an alias */
 };
 
 #define NUM_TEMPS 124
@@ -417,6 +419,8 @@ src_comp(struct sgx_ctx *c, nir_legacy_src *ls, unsigned comp)
 {
    if (!ls->is_ssa) {
       struct sgx_val *v = &c->vals[ls->reg.handle->index];
+      if (v->shadow)
+         return v->shadow[comp + ls->reg.base_offset * 4];
       if (sgx_vreg(c, v->n)->half)
          return href(v->n, comp + ls->reg.base_offset * 4);
       return vref(v->n, comp + ls->reg.base_offset * 4);
@@ -752,8 +756,18 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
    }
    bool neg0 = sp[0][0].neg;
    sp[0][0].neg = sp[0][1].neg = 0;
-   for (unsigned j = 0; j < 3; j++)
+   for (unsigned j = 0; j < 3; j++) {
+      if (j && sp[j][0].file == SGX_F_K && sp[j][0].h16 && sp[j][1].file == SGX_F_K && sp[j][1].h16 &&
+          ((sp[j][0].n ^ (sp[j][0].neg ? 0x8000 : 0)) & 0xffff) == 0xbc00 &&
+          ((sp[j][1].n ^ (sp[j][1].neg ? 0x8000 : 0)) & 0xffff) == 0xbc00) {
+         /* (-1, -1): -c45, as libusc writes it (no limm) */
+         r[j] = cref(45);
+         r[j].neg = 1;
+         swz[j] = SWZ_LOHI;
+         continue;
+      }
       r[j] = pair_src(c, sp[j][0], sp[j][1], &swz[j]);
+   }
    if (!is_rpa(&r[0])) {
       r[0] = pair_reg(c, sp[0][0], sp[0][1]);
       swz[0] = SWZ_LOHI;
@@ -955,16 +969,21 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
                mm[1][0] = ref(SGX_F_K, 0x3c00); mm[1][0].h16 = 1; mm[1][1] = mm[1][0];
                mm[2][0] = ref(SGX_F_K, 0); mm[2][0].h16 = 1; mm[2][1] = mm[2][0];
             }
+            if (l1 == l0) {
+               /* one lane: fmad16 writes both halves of the destination */
+               fmad16(c, dp, mm);
+               break;
+            }
             fmad16(c, href(t, 0), mm);
             lane[q] = href(t, 0);
-            if (l1 == l0)
-               break;
          }
+         if (l1 == l0)
+            break;
          struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F16);
          i->nops = 3;
          i->op[0] = dp;
          i->op[1] = lane[0];
-         i->op[2] = l1 == l0 ? lane[0] : lane[1];
+         i->op[2] = lane[1];
          add(c, i);
          break;
       }
@@ -1409,6 +1428,13 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_decl_reg: {
       unsigned n = nir_intrinsic_num_components(in) * MAX2(nir_intrinsic_num_array_elems(in), 1);
       v->kind = VAL_V;
+      if (_mesa_set_search(c->shadow_regs, in)) {
+         v->shadow = ralloc_array(c, struct sgx_ref, 4);
+         for (unsigned k = 0; k < 4; k++) {
+            v->shadow[k] = ref(SGX_F_K, 0);
+            v->shadow[k].h16 = 1;
+         }
+      }
       v->n = nir_intrinsic_bit_size(in) == 16 ? new_vreg16(c, ALIGN_POT(n, 2)) : new_vreg(c, n);
       return;
    }
@@ -1425,6 +1451,12 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          struct sgx_val *rv = &c->vals[in->src[1].ssa->index];
          nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
          unsigned wm = nir_intrinsic_write_mask(in), base = nir_intrinsic_base(in) * 4;
+         if (rv->shadow) {
+            for (unsigned k = 0; k < 4; k++)
+               if (wm >> k & 1)
+                  rv->shadow[k] = src_comp(c, &ls, k);
+            return;
+         }
          for (unsigned pr = 0; pr < 2; pr++) {
             unsigned m = wm >> (2 * pr) & 3;
             if (!m)
@@ -1758,6 +1790,61 @@ find_projected(struct sgx_ctx *c, nir_function_impl *impl)
             _mesa_set_add(c->skip, &cm->instr);
          if (pm && list_is_singular(&pm->def.uses))
             _mesa_set_add(c->skip, &pm->instr);
+      }
+   }
+}
+
+/* 16-bit registers that one block writes component by component and only
+ * then reads (a vecN the vec-to-regs lowering made one): the reads become
+ * aliases of what was stored, with no pck.f16.f16 into a register */
+static void
+find_shadow_regs(struct sgx_ctx *c, nir_function_impl *impl)
+{
+   nir_foreach_block(b, impl) {
+      nir_foreach_instr(instr, b) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *decl = nir_instr_as_intrinsic(instr);
+         if (decl->intrinsic != nir_intrinsic_decl_reg || nir_intrinsic_bit_size(decl) != 16 ||
+             nir_intrinsic_num_array_elems(decl) || nir_intrinsic_num_components(decl) > 4)
+            continue;
+         nir_block *blk = NULL;
+         bool ok = true;
+         nir_foreach_use_including_if(use, &decl->def) {
+            nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
+            if (!u || u->type != nir_instr_type_intrinsic) {
+               ok = false;
+               break;
+            }
+            nir_intrinsic_instr *ui = nir_instr_as_intrinsic(u);
+            if ((ui->intrinsic != nir_intrinsic_load_reg && ui->intrinsic != nir_intrinsic_store_reg) ||
+                nir_intrinsic_base(ui) != 0 ||
+                (ui->intrinsic == nir_intrinsic_store_reg && nir_intrinsic_legacy_fsat(ui)) ||
+                (blk && u->block != blk)) {
+               ok = false;
+               break;
+            }
+            blk = u->block;
+         }
+         if (!ok || !blk)
+            continue;
+         /* in that block: no store after a load */
+         bool loaded = false;
+         nir_foreach_instr(i2, blk) {
+            if (i2->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *ui = nir_instr_as_intrinsic(i2);
+            unsigned r = ui->intrinsic == nir_intrinsic_load_reg ? 0 : 1;
+            if ((ui->intrinsic != nir_intrinsic_load_reg && ui->intrinsic != nir_intrinsic_store_reg) ||
+                ui->src[r].ssa != &decl->def)
+               continue;
+            if (ui->intrinsic == nir_intrinsic_load_reg)
+               loaded = true;
+            else if (loaded)
+               ok = false;
+         }
+         if (ok)
+            _mesa_set_add(c->shadow_regs, decl);
       }
    }
 }
@@ -2633,8 +2720,16 @@ emit_color(struct sgx_ctx *c)
       /* pck.u8.f16 D, r, a [dmask=12] then D, b, g [dmask=3], as the DDK packs
        * an F16 colour */
       for (unsigned k = 0; k < 4; k++) {
-         if (col[k].file == SGX_F_K) {
-            col[k] = cref(col[k].n ? 45 : 48);
+         if (col[k].file != SGX_F_K)
+            continue;
+         uint32_t n = col[k].n;
+         if (n == 0 || (!col[k].h16 && n == 0x3f800000) || (col[k].h16 && (n & 0xffff) == 0x3c00)) {
+            col[k] = cref(n ? 45 : 48);
+            col[k].h16 = 1;
+         } else {
+            /* another F16 constant (a register alias of it): its halves */
+            int sw;
+            col[k] = pair_src(c, col[k], col[k], &sw);
             col[k].h16 = 1;
          }
       }
@@ -3083,6 +3178,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       find_discard(c, impl);
       find_c10(c, impl);
    }
+   c->shadow_regs = _mesa_pointer_set_create(c);
+   find_shadow_regs(c, impl);
    emit_cf_list(c, &impl->body, NULL);
    if (!c->failed && c->stage == MESA_SHADER_FRAGMENT)
       emit_color(c);

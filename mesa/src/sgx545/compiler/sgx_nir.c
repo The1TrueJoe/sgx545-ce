@@ -426,6 +426,8 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    }
    for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
       u->c->const_fmt[k + j] = fmt == 3 && j == 3 ? 1 : fmt;
+   for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_prec); j++)
+      u->c->const_prec[k + j] = prec;
    if (fmt == 2 && prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3) && k + 3 < ARRAY_SIZE(u->c->const_lowp))
       u->c->const_lowp[k] = 1;
    nir_def *v = nir_load_uniform(b, n, in->def.bit_size, nir_imm_int(b, 0), .base = k, .range = n,
@@ -442,6 +444,123 @@ lower_uniforms(struct sgx_ctx *c)
    if (u.failed)
       sgx_fail(c, "indirectly indexed uniform (not supported yet)");
    return p;
+}
+
+/* the precision of the uniform component at comp, from the variables (for a
+ * driver that hands over load_uniform already lowered; assign_uniforms has
+ * numbered them in components, the numbering such a driver's loads use) */
+static unsigned
+type_prec_at(const struct glsl_type *t, unsigned prec, unsigned comp)
+{
+   if (glsl_type_is_struct(t)) {
+      for (unsigned f = 0; f < glsl_get_length(t); f++) {
+         const struct glsl_type *ft = glsl_get_struct_field(t, f);
+         unsigned n = 4 * glsl_count_vec4_slots(ft, false, false);
+         if (comp < n) {
+            unsigned fp = glsl_get_struct_field_data(t, f)->precision;
+            return type_prec_at(ft, fp ? fp : prec, comp);
+         }
+         comp -= n;
+      }
+      return 0;
+   }
+   if (glsl_type_is_array(t)) {
+      const struct glsl_type *e = glsl_get_array_element(t);
+      unsigned n = 4 * glsl_count_vec4_slots(e, false, false);
+      return n ? type_prec_at(e, prec, comp % n) : 0;
+   }
+   return prec;
+}
+
+static unsigned
+uniform_prec(struct sgx_ctx *c, unsigned k)
+{
+   if (k < ARRAY_SIZE(c->const_prec) && c->const_prec[k])
+      return c->const_prec[k];
+   nir_foreach_variable_with_modes(var, c->nir, nir_var_uniform) {
+      if (glsl_type_is_sampler(glsl_without_array(var->type)) || var->data.driver_location < 0)
+         continue;
+      unsigned base = var->data.driver_location, n = 4 * glsl_count_vec4_slots(var->type, false, false);
+      if (k >= base && k < base + n)
+         return type_prec_at(var->type, var->data.precision, k - base);
+   }
+   return 0;
+}
+
+/* f32 uniforms that F16 math reads (every use an f2f16), in the format the
+ * DDK loads such a constant in: mediump as F16 constants (list C kind 2,
+ * rounded at upload), a lowp vector's xyz as C10 (kind 3), highp left f32
+ * (converted where read with pck.f16.f32, truncating as libusc's own
+ * conversion does). sgxc's frontend loads mediump uniforms 16-bit already;
+ * the gallium driver's arrive as f32 load_uniform. */
+static void
+uniform_formats(struct sgx_ctx *c)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(c->nir);
+   nir_foreach_block(b, impl) {
+      nir_foreach_instr_safe(instr, b) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+         if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16) {
+            /* a 16-bit load the frontend made (a driver with 16-bit loads):
+             * F16 constants */
+            unsigned k = nir_intrinsic_base(in);
+            unsigned range = nir_src_is_const(in->src[0]) ? in->def.num_components : nir_intrinsic_range(in);
+            for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_fmt); j++)
+               if (!c->const_fmt[k + j])
+                  c->const_fmt[k + j] = 2;
+            continue;
+         }
+         if (in->intrinsic != nir_intrinsic_load_uniform || in->def.bit_size != 32 ||
+             !nir_src_is_const(in->src[0]) || nir_src_as_uint(in->src[0]) != 0 ||
+             nir_alu_type_get_base_type(nir_intrinsic_dest_type(in)) != nir_type_float)
+            continue;
+         unsigned k = nir_intrinsic_base(in), n = in->def.num_components;
+         if (k + n > ARRAY_SIZE(c->const_fmt))
+            continue;
+         bool ok = true;
+         unsigned read = 0;
+         for (unsigned j = 0; j < n; j++)
+            ok &= c->const_fmt[k + j] <= 1;
+         nir_foreach_use_including_if(use, &in->def) {
+            nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
+            if (!u || u->type != nir_instr_type_alu ||
+                (nir_instr_as_alu(u)->op != nir_op_f2f16 && nir_instr_as_alu(u)->op != nir_op_f2fmp)) {
+               ok = false;
+               break;
+            }
+            nir_alu_instr *cv = nir_instr_as_alu(u);
+            unsigned r16 = nir_def_components_read(&cv->def);
+            for (unsigned j = 0; j < cv->def.num_components; j++)
+               if (r16 >> j & 1)
+                  read |= 1u << cv->src[0].swizzle[j];
+         }
+         if (!ok)
+            continue;
+         unsigned prec = uniform_prec(c, k);
+         if (prec == GLSL_PRECISION_LOW && !(k & 3) && !(read & ~7u)) {
+            for (unsigned j = 0; j < n; j++)
+               c->const_fmt[k + j] = j == 3 ? 1 : 3;
+            continue;
+         }
+         if (prec != GLSL_PRECISION_MEDIUM && prec != GLSL_PRECISION_LOW)
+            continue;
+         nir_builder bb = nir_builder_at(nir_after_instr(instr));
+         nir_def *h = nir_load_uniform(&bb, n, 16, in->src[0].ssa, .base = k, .range = n,
+                                       .dest_type = nir_type_float16);
+         nir_foreach_use_safe(use, &in->def) {
+            nir_alu_instr *cv = nir_instr_as_alu(nir_src_use_instr(use));
+            bb.cursor = nir_before_instr(&cv->instr);
+            unsigned swz[NIR_MAX_VEC_COMPONENTS];
+            for (unsigned j = 0; j < cv->def.num_components; j++)
+               swz[j] = cv->src[0].swizzle[j];
+            nir_def_rewrite_uses(&cv->def, nir_swizzle(&bb, h, swz, cv->def.num_components));
+         }
+         for (unsigned j = 0; j < n; j++)
+            c->const_fmt[k + j] = 2;
+      }
+   }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -741,6 +860,7 @@ sgx_lower(struct sgx_ctx *c)
          .opt_tex_dest_types = nir_type_float,
       };
       NIR_PASS(_, s, nir_opt_16bit_tex_image, &t16);
+      uniform_formats(c);
    }
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, lower_sincos);
