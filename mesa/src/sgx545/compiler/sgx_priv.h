@@ -137,6 +137,7 @@ struct sgx_ctx {
    int const_slot[1024];
    uint8_t const_shift[1024];    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
    uint8_t const_lowp[1024];     /* the first of a lowp vec4 uniform (C10 candidate) */
+   uint8_t const_prec[1024];     /* GLSL precision of the uniform behind constant k (0 unknown) */
    unsigned n_sa;
    unsigned sa_base;
 
@@ -153,6 +154,7 @@ struct sgx_ctx {
    unsigned n_samples;
 
    struct set *skip;             /* NIR instructions the backend doesn't emit */
+   struct set *shadow_regs;      /* decl_regs read as aliases (find_shadow_regs) */
    struct nir_def *c10_root;     /* the colour as a lowp C10 expression (emit_c10) */
    struct nir_alu_instr *discard_cmp; /* the one discard's comparison (p1 directly) */
    struct hash_table *proj;      /* nir_tex_instr -> its projected varying load */
