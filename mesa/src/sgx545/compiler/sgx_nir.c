@@ -591,8 +591,11 @@ assign_io(struct sgx_ctx *c)
       nir_foreach_function_impl(impl, s) {
          nir_foreach_block(b, impl) {
             nir_foreach_instr(instr, b) {
+               /* (sgxc's inputs are interpolated loads; the gallium driver's
+                * plain load_input) */
                if (instr->type != nir_instr_type_intrinsic ||
-                   nir_instr_as_intrinsic(instr)->intrinsic != nir_intrinsic_load_interpolated_input)
+                   (nir_instr_as_intrinsic(instr)->intrinsic != nir_intrinsic_load_interpolated_input &&
+                    nir_instr_as_intrinsic(instr)->intrinsic != nir_intrinsic_load_input))
                   continue;
                nir_io_semantics sem = nir_intrinsic_io_semantics(nir_instr_as_intrinsic(instr));
                if (sem.location < 128)

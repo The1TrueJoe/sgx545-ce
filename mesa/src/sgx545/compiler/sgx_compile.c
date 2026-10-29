@@ -639,6 +639,25 @@ f32_to_h(struct sgx_ctx *c, struct sgx_ref x)
    return href(t, 0);
 }
 
+static struct sgx_ref pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz);
+
+/* a pck.f16.f16 source for an F16 value: a constant's half bits go in as a
+ * register pair (an F16 constant's bits are not an f32), f32 is converted */
+static struct sgx_ref
+store_h(struct sgx_ctx *c, struct sgx_ref x)
+{
+   if (x.file == SGX_F_K && x.h16) {
+      int sw;
+      struct sgx_ref r = pair_src(c, x, x, &sw);
+      r.h16 = 1;
+      r.lane = 0;
+      return r;
+   }
+   if (!x.h16 || x.file == SGX_F_K)
+      return f32_to_h(c, x);
+   return x;
+}
+
 /* a register operand for a fmad16 source reading lanes (a, b), and its swizzle */
 static struct sgx_ref
 pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz)
@@ -1381,10 +1400,10 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
             pk->nops = 3;
             pk->op[0] = href(rv->n, base + 2 * pr);
             struct sgx_ref lo = src_comp(c, &ls, 2 * pr), hi = src_comp(c, &ls, 2 * pr + 1);
-            if (!lo.h16 || lo.file == SGX_F_K)
-               lo = f32_to_h(c, lo);
-            if (m & 2 && (!hi.h16 || hi.file == SGX_F_K))
-               hi = f32_to_h(c, hi);
+            if (m & 1)
+               lo = store_h(c, lo);
+            if (m & 2)
+               hi = store_h(c, hi);
             pk->op[1] = m == 2 ? hi : lo;
             pk->op[2] = m == 3 ? hi : ref(SGX_F_IMM, 0);
             pk->op[1].neg = pk->op[1].abs = pk->op[2].neg = pk->op[2].abs = 0;
