@@ -195,6 +195,7 @@ file_kind(unsigned file)
    case SGX_F_I: return USSE_K_I;
    case SGX_F_IMM: return USSE_K_IMM;
    case SGX_F_P: return USSE_K_P;
+   case SGX_F_LIT: return USSE_K_SA;
    default: return -1;
    }
 }
@@ -438,7 +439,7 @@ src_comp(struct sgx_ctx *c, nir_legacy_src *ls, unsigned comp)
    case VAL_U: {
       c->const_used[v->n + comp] = 1;
       struct sgx_ref r = ref(SGX_F_U, v->n + comp);
-      r.h16 = c->const_fmt[v->n + comp] == 2;
+      r.h16 = c->const_fmt[v->n + comp] == 2 || c->const_fmt[v->n + comp] == 5;
       return r;
    }
    case VAL_CONST:
@@ -673,6 +674,19 @@ pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz)
          return cref(48);
       if (w == 0x3c003c00)
          return cref(45);
+      if (c->opts->driver_consts && !c->lit_off) {
+         /* a literal in SA, as libusc keeps them beside the uniforms */
+         unsigned n;
+         for (n = 0; n < c->n_lits && c->lit_bits[n] != w; n++)
+            ;
+         if (n < ARRAY_SIZE(c->lit_bits)) {
+            if (n == c->n_lits)
+               c->lit_bits[c->n_lits++] = w;
+            struct sgx_ref r = ref(SGX_F_LIT, n);
+            r.h16 = 1;
+            return r;
+         }
+      }
       unsigned l = new_vreg16(c, 2);
       struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, USSE_LIMM);
       m->nops = 2;
@@ -769,7 +783,9 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
       r[j] = pair_src(c, sp[j][0], sp[j][1], &swz[j]);
    }
    if (!is_rpa(&r[0])) {
+      c->lit_off = true;
       r[0] = pair_reg(c, sp[0][0], sp[0][1]);
+      c->lit_off = false;
       swz[0] = SWZ_LOHI;
    }
    if (neg0)
@@ -2986,7 +3002,7 @@ uniform_layout(struct sgx_ctx *c)
       if (!c->const_used[k])
          continue;
       unsigned fmt = c->const_fmt[k] ? c->const_fmt[k] : 1;
-      if (fmt == 2) {
+      if (fmt == 2 || fmt == 5) {
          if (pair != (int)(k / 2)) {
             pair = k / 2;
             pair_slot = c->n_sa++;
@@ -3007,6 +3023,8 @@ uniform_layout(struct sgx_ctx *c)
          c->const_slot[k] = c->n_sa++;
       }
    }
+   for (unsigned i = 0; i < c->n_lits; i++)
+      c->lit_slot[i] = c->n_sa++;
 }
 
 static struct usse_opd
@@ -3028,6 +3046,11 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
       case SGX_F_U:
          reg = c->sa_base + c->const_slot[r->n];
          half = c->const_shift[r->n] / 16;
+         o.kind = USSE_K_SA;
+         break;
+      case SGX_F_LIT:
+         reg = c->sa_base + c->lit_slot[r->n];
+         half = 0;
          o.kind = USSE_K_SA;
          break;
       default:
@@ -3057,6 +3080,7 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
    case SGX_F_IMM: o.kind = USSE_K_IMM; o.n = (int32_t)r->n; break;
    case SGX_F_P: o.kind = USSE_K_P; o.n = r->n; break;
    case SGX_F_USLOT: o.kind = USSE_K_IMM; o.n = c->sa_base + c->const_slot[r->n]; break;
+   case SGX_F_LIT: o.kind = USSE_K_SA; o.n = c->sa_base + c->lit_slot[r->n]; break;
    case SGX_F_IXSA: o.kind = USSE_K_IX; o.ixbank = 3; o.idx = 1; o.n = r->n; break;
    case SGX_F_IDX: o.kind = USSE_K_IDX; o.n = r->n; break;
    default: o.kind = USSE_K_NONE; break;

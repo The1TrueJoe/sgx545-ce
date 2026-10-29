@@ -404,7 +404,7 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    unsigned n = in->def.num_components, fmt = in->def.bit_size == 16 ? 2 : 1;
    if (u->c->opts->verbose)
       fprintf(stderr, "uniform %s: constant %u, %u x %u bits, precision %u\n", name, k, n, in->def.bit_size, prec);
-   if (fmt == 1 && u->c->p16 && prec == GLSL_PRECISION_LOW && !(k & 3)) {
+   if (fmt == 1 && u->c->p16 && prec == GLSL_PRECISION_LOW && !(k & 3) && !u->c->opts->driver_consts) {
       /* every use an f2f16, and what those are read for at most xyz */
       bool all16 = true;
       unsigned read = 0;
@@ -539,13 +539,16 @@ uniform_formats(struct sgx_ctx *c)
          if (!ok)
             continue;
          unsigned prec = uniform_prec(c, k);
-         if (prec == GLSL_PRECISION_LOW && !(k & 3) && !(read & ~7u)) {
+         bool c10 = prec == GLSL_PRECISION_LOW && !(k & 3) && !(read & ~7u);
+         if (c10 && !c->opts->driver_consts) {
             for (unsigned j = 0; j < n; j++)
                c->const_fmt[k + j] = j == 3 ? 1 : 3;
             continue;
          }
          if (prec != GLSL_PRECISION_MEDIUM && prec != GLSL_PRECISION_LOW)
             continue;
+         /* F16 constants; a C10 vector's xyz as the F16 of its C10 value (the
+          * driver converts at upload what libusc's secondary program does) */
          nir_builder bb = nir_builder_at(nir_after_instr(instr));
          nir_def *h = nir_load_uniform(&bb, n, 16, in->src[0].ssa, .base = k, .range = n,
                                        .dest_type = nir_type_float16);
@@ -558,7 +561,10 @@ uniform_formats(struct sgx_ctx *c)
             nir_def_rewrite_uses(&cv->def, nir_swizzle(&bb, h, swz, cv->def.num_components));
          }
          for (unsigned j = 0; j < n; j++)
-            c->const_fmt[k + j] = 2;
+            c->const_fmt[k + j] = c10 && j < 3 ? 5 : 2;
+         /* a whole lowp vec4: a C10 expression may read it (find_c10) */
+         if (prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3))
+            c->const_lowp[k] = 1;
       }
    }
 }

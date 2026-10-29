@@ -116,7 +116,7 @@ HDR = [
     (0x82, "H", "n_outmask", "bits in the output mask (always 128)"),
 ]
 
-REC_SIZE = {1: 8, 2: 8, 3: 10, 4: 8, 5: 10}
+REC_SIZE = {1: 8, 2: 8, 3: 10, 4: 8, 5: 10, 0x10: 8, 0x11: 10}  # 0x10/0x11: sgxc -D (our driver only)
 BLOCK_BODY = smpblock.BODY
 
 
