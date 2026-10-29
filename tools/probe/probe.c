@@ -4,6 +4,7 @@
  *
  *   PROBE_CLEAR="r g b a"      clear colour                    (0 0 0.5 1)
  *   PROBE_COLOR="r g b a"      uniform the fragment shader writes (0 1 0 1)
+ *   PROBE_UARRAY=n             a uniform "vec4 u[n]" set to u[i] = (i/n, 1-i/n, (i%4)/4, 1)
  *   PROBE_VERTS="x0 y0 ..."    triangle vertices, clip space, any multiple of 3
  *   PROBE_Z=z                  every vertex at this clip z (a vec3 position; default a vec2)
  *   PROBE_DRAWS=n              draw the vertex list n times      (1)
@@ -104,6 +105,7 @@ typedef char GLchar;
 	X(GL, GLint, glGetUniformLocation, (GLuint, const GLchar *)) \
 	X(GL, void, glUniform4f, (GLint, GLfloat, GLfloat, GLfloat, GLfloat)) \
 	X(GL, void, glUniform1i, (GLint, GLint)) \
+	X(GL, void, glUniform4fv, (GLint, GLsizei, const GLfloat *)) \
 	X(GL, void, glClearColor, (GLfloat, GLfloat, GLfloat, GLfloat)) \
 	X(GL, void, glClearDepthf, (GLfloat)) \
 	X(GL, void, glClearStencil, (GLint)) \
@@ -573,6 +575,18 @@ int main(void)
 	if (!linked)
 		return note("link failed"), 1;
 	glUseProgram(prog);
+	if (getenv("PROBE_UARRAY") && (loc = glGetUniformLocation(prog, "u")) >= 0) {
+		static GLfloat ua[4 * 256];
+		int n = atoi(getenv("PROBE_UARRAY"));
+
+		for (int i = 0; i < n && i < 256; i++) {
+			ua[4 * i + 0] = (float)i / n;
+			ua[4 * i + 1] = 1.0f - (float)i / n;
+			ua[4 * i + 2] = (float)(i % 4) / 4;
+			ua[4 * i + 3] = 1.0f;
+		}
+		glUniform4fv(loc, n < 256 ? n : 256, ua);
+	}
 	loc = glGetUniformLocation(prog, "c");
 	if (loc >= 0)
 		glUniform4f(loc, color[0], color[1], color[2], color[3]);

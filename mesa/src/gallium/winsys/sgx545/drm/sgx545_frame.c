@@ -1041,17 +1041,25 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
          uint32_t temps, uint32_t vpt)
 {
    struct pds p = { 0 };
-   uint32_t rows, va, batch = 16;
+   uint32_t rows, va, batch = 16, row = 0;
 
-   pds_d0(&p, 0, vb);
-   pds_d0(&p, 1, attr_dwords - 1);  /* DOUTD: dwords-1, attribute register 0 */
    pds_d1(&p, 0, stride);
    pds_d1(&p, 1, 0);
-   pds_d0(&p, 2, doutu_w0(c, vs, true, temps));
-   pds_d0(&p, 3, 0);
    CODE(&p, ALU(OP_MUL16, 0, S1_IN(0), S2_DS1(0), U_DS1(0x32)));  /* index * stride */
-   CODE(&p, MOVS(MV_X, 0, 0x19, 0, 1, 2, 2, DOUTD));              /* + ds1[0x32] */
-   CODE(&p, MOVS(MV_CC3, 1, 0, 0, 1, 3, 3, DOUTU));
+   /* The vertex in DMAs of at most 16 dwords, as the secondary DMAs (a
+    * longer one lost what came after: a lit vertex of 5 attributes, 20
+    * dwords, got garbage in its last one, Minecraft's first-person arm).
+    * The DDK DMAs per stream. */
+   for (uint32_t off = 0; off < attr_dwords; off += 16, row++) {
+      uint32_t n = attr_dwords - off < 16 ? attr_dwords - off : 16;
+
+      pds_d0(&p, 2 * row, vb + off * 4);
+      pds_d0(&p, 2 * row + 1, (n - 1) | off << 8);   /* DOUTD: dwords-1, attribute register */
+      CODE(&p, MOVS(MV_X, row, 0x19, 0, 1, 2, 2, DOUTD));          /* + ds1[0x32] */
+   }
+   pds_d0(&p, 2 * row, doutu_w0(c, vs, true, temps));
+   pds_d0(&p, 2 * row + 1, 0);
+   CODE(&p, MOVS(MV_CC3, row, 0, 0, 1, 3, 3, DOUTU));
    CODE(&p, HALT);
    va = pds_emit(&c->pds_vtx, &p, &rows);
    vdm(c, 0x80000000 | 0x00c00000 | prim << 26 | count);
