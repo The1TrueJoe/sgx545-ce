@@ -76,19 +76,13 @@ sgx545_tex_size(const struct pipe_resource *prsc)
    return sgx545_tex_level_offset(prsc, prsc->last_level + 1);
 }
 
-/* texel index of (x, y) in a twiddled w x h level */
-static uint32_t
-twiddle(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
-{
-   uint32_t n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)), i = 0;
-
-   for (uint32_t b = 0; b < n; b++)
-      i |= (y >> b & 1) << (2 * b) | (x >> b & 1) << (2 * b + 1);
-   return i | ((y >> n) * (w >> n) + (x >> n)) << (2 * n);
-}
-
+/* Copy the box x0..x1, y0..y1 of a level from the CPU copy into the texture
+ * heap.  The heap is write-combined: a twiddled tile the box covers whole is
+ * put together on the stack and written in one go, only partly covered tiles
+ * at the box's edges are written texel by texel. */
 void
-sgx545_tex_encode_level(struct sgx545_resource *res, unsigned level)
+sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned x0, unsigned y0,
+                      unsigned x1, unsigned y1)
 {
    struct pipe_resource *prsc = &res->base;
    unsigned w = u_minify(prsc->width0, level), h = u_minify(prsc->height0, level);
@@ -98,26 +92,62 @@ sgx545_tex_encode_level(struct sgx545_resource *res, unsigned level)
    uint8_t *dst = (uint8_t *)res->bo.map + sgx545_tex_level_offset(prsc, level);
    bool rgbx = prsc->format == PIPE_FORMAT_R8G8B8X8_UNORM;
 
+   x1 = MIN2(x1, w);
+   y1 = MIN2(y1, h);
+   if (x0 >= x1 || y0 >= y1)
+      return;
    if (!twiddled(w, h)) {
       size_t pitch = (size_t)align(w, 8) * bpp;
 
-      for (unsigned y = 0; y < h; y++) {
-         memcpy(dst + y * pitch, src + y * src_stride, (size_t)w * bpp);
+      for (unsigned y = y0; y < y1; y++) {
+         memcpy(dst + y * pitch + (size_t)x0 * bpp, src + y * src_stride + (size_t)x0 * bpp,
+                (size_t)(x1 - x0) * bpp);
          if (rgbx)
-            for (unsigned x = 0; x < w; x++)
+            for (unsigned x = x0; x < x1; x++)
                dst[y * pitch + x * 4 + 3] = 0xff;
       }
       return;
    }
-   for (unsigned y = 0; y < h; y++) {
-      for (unsigned x = 0; x < w; x++) {
-         uint8_t *d = dst + (size_t)twiddle(x, y, w, h) * bpp;
 
-         memcpy(d, src + y * src_stride + (size_t)x * bpp, bpp);
-         if (rgbx)
-            d[3] = 0xff;
+   /* a tile is t x t texels, Morton order inside (y in bit 0), tiles row by row */
+   unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)), t = 1u << n;
+   uint32_t spread[TILE];
+   uint8_t tile[TILE * TILE * 4];
+
+   for (unsigned i = 0; i < t; i++) {
+      spread[i] = 0;
+      for (unsigned b = 0; b < n; b++)
+         spread[i] |= (i >> b & 1) << (2 * b);
+   }
+   for (unsigned ty = y0 >> n; ty <= (y1 - 1) >> n; ty++) {
+      for (unsigned tx = x0 >> n; tx <= (x1 - 1) >> n; tx++) {
+         unsigned bx = tx << n, by = ty << n;
+         uint8_t *d = dst + ((size_t)ty * (w >> n) + tx) * t * t * bpp;
+         bool whole = bx >= x0 && by >= y0 && bx + t <= x1 && by + t <= y1;
+         unsigned xa = MAX2(bx, x0), xb = MIN2(bx + t, x1), ya = MAX2(by, y0), yb = MIN2(by + t, y1);
+         uint8_t *out = whole ? tile : d;
+
+         for (unsigned y = ya; y < yb; y++) {
+            const uint8_t *s = src + y * src_stride;
+
+            for (unsigned x = xa; x < xb; x++) {
+               uint8_t *o = out + (size_t)(spread[y - by] | spread[x - bx] << 1) * bpp;
+
+               memcpy(o, s + (size_t)x * bpp, bpp);
+               if (rgbx)
+                  o[3] = 0xff;
+            }
+         }
+         if (whole)
+            memcpy(d, tile, (size_t)t * t * bpp);
       }
    }
+}
+
+void
+sgx545_tex_encode_level(struct sgx545_resource *res, unsigned level)
+{
+   sgx545_tex_encode_box(res, level, 0, 0, ~0u, ~0u);
 }
 
 static unsigned
@@ -161,6 +191,23 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
    t[1] = (twiddled(prsc->width0, prsc->height0) ? 0u : 3u) << 29 | fmt << 24 |
           (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
    t[2] = res->bo.va;
+   if (!res->texture) {
+      /* A render target, read where it is: strided (T1 layout 6), the pitch
+       * - 1 in T0 b9-11 and b17-26 in place of the mipmap and min filter
+       * bits, as the DDK's swap blit reads its back buffer (TEX.md section
+       * 3).  B, G, R, A in memory is 0x0d, the format that swaps R and B
+       * against 0x0c. */
+      unsigned p = res->pitch - 1;
+      bool bgra = prsc->format == PIPE_FORMAT_B8G8R8A8_UNORM || prsc->format == PIPE_FORMAT_B8G8R8X8_UNORM;
+
+      t[0] = (p & 7) << 9 | (p >> 3) << 17;
+      if (sampler) {
+         t[0] |= wrap(sampler->wrap_t) << 3 | wrap(sampler->wrap_s) << 6;
+         if (sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR)
+            t[0] |= 1u << 12;
+      }
+      t[1] = 6u << 29 | (bgra ? 0x0du : 0x0cu) << 24 | (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
+   }
    /* T3: the sample instruction's half; 00800800 for a single 2-D sample [D] */
    t[3] = 0x00800800;
 }

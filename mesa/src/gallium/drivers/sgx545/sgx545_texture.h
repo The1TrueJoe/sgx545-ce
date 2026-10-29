@@ -23,6 +23,8 @@ size_t sgx545_tex_level_offset(const struct pipe_resource *prsc, unsigned level)
 
 /* lay a level out in device memory from the resource's linear CPU copy */
 void sgx545_tex_encode_level(struct sgx545_resource *res, unsigned level);
+void sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned x0, unsigned y0,
+                           unsigned x1, unsigned y1);
 
 /* the four DOUTT words for a view and sampler (docs/STATE.md section 5) */
 void sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler_state *sampler,

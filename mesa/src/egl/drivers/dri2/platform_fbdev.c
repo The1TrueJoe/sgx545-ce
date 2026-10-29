@@ -9,10 +9,16 @@
  * programs written for that (gl4es in framebuffer mode, es2gears for fbdev)
  * run unchanged.  The native window handle is not looked at; NULL is fine.
  *
- * The window's colour buffer is the framebuffer memory itself, made into a
- * pipe_resource with resource_from_user_memory: the GPU renders straight to
- * the scanout buffer and eglSwapBuffers only has to wait for the render.
- * Pbuffers are as on the surfaceless platform.
+ * A window renders into a back buffer of its own, and eglSwapBuffers copies
+ * the finished frame into the framebuffer memory (made into a pipe_resource
+ * with resource_from_user_memory) with a GPU blit, as the DDK's LinuxFB
+ * WSEGL does: rendering straight into the scanout buffer showed every
+ * half-drawn frame (Minecraft's title screen draws its panorama small,
+ * copies and blurs it several times, then stretches it over the screen).
+ * fb0 is simplefb, which can't pan, so there is no flipping.
+ * SGX545_FBDEV_DIRECT=1 renders into fb0 as before (no copy).  Single-
+ * buffered configs draw into fb0.  Pbuffers are as on the surfaceless
+ * platform.
  *
  * The GPU is found the way surfaceless finds a software device: the first
  * DRM primary node whose driver the loader knows.
@@ -50,6 +56,26 @@ struct fbdev_device {
 };
 
 static struct fbdev_device fbdev = { .fd = -1 };
+
+/* a surface, with a window's back buffer */
+struct fbdev_surface {
+   struct dri2_egl_surface base;     /* first: the EGL code casts */
+   struct dri_image *back;
+};
+
+static struct fbdev_surface *
+fbdev_surface(struct dri2_egl_surface *dri2_surf)
+{
+   return (struct fbdev_surface *)dri2_surf;
+}
+
+static bool
+fbdev_direct(void)
+{
+   const char *e = getenv("SGX545_FBDEV_DIRECT");
+
+   return e && atoi(e);
+}
 
 static bool
 fbdev_open(void)
@@ -106,6 +132,10 @@ fbdev_free_images(struct dri2_egl_surface *dri2_surf)
    if (dri2_surf->front) {
       dri2_destroy_image(dri2_surf->front);
       dri2_surf->front = NULL;
+   }
+   if (fbdev_surface(dri2_surf)->back) {
+      dri2_destroy_image(fbdev_surface(dri2_surf)->back);
+      fbdev_surface(dri2_surf)->back = NULL;
    }
 }
 
@@ -167,12 +197,17 @@ fbdev_image_get_buffers(struct dri_drawable *driDrawable, unsigned int format, u
          return 0;
    }
 
-   /* A window draws into the scanout buffer whether GL calls it the back
-    * buffer (double-buffered configs) or the front.  Pbuffers have only a
-    * "front" buffer, as on the surfaceless platform. */
+   /* A window's back buffer is an image of its own, unless it renders
+    * straight into the scanout buffer.  Pbuffers have only a "front"
+    * buffer, as on the surfaceless platform. */
    if (window && (buffer_mask & __DRI_IMAGE_BUFFER_BACK)) {
+      struct fbdev_surface *fs = fbdev_surface(dri2_surf);
+
+      if (!fs->back && !fbdev_direct())
+         fs->back = dri_create_image(dri2_dpy->dri_screen_render_gpu, dri2_surf->base.Width,
+                                     dri2_surf->base.Height, dri2_surf->visual, NULL, 0, 0, NULL);
       buffers->image_mask |= __DRI_IMAGE_BUFFER_BACK;
-      buffers->back = dri2_surf->front;
+      buffers->back = fs->back ? fs->back : dri2_surf->front;
    } else if (buffer_mask & __DRI_IMAGE_BUFFER_FRONT) {
       buffers->image_mask |= __DRI_IMAGE_BUFFER_FRONT;
       buffers->front = dri2_surf->front;
@@ -189,7 +224,7 @@ dri2_fbdev_create_surface(_EGLDisplay *disp, EGLint type, _EGLConfig *conf,
    struct dri2_egl_surface *dri2_surf;
    const struct dri_config *config;
 
-   dri2_surf = calloc(1, sizeof(*dri2_surf));
+   dri2_surf = calloc(1, sizeof(struct fbdev_surface));
    if (!dri2_surf) {
       _eglError(EGL_BAD_ALLOC, "eglCreateSurface");
       return NULL;
@@ -250,8 +285,16 @@ dri2_fbdev_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
 static EGLBoolean
 dri2_fbdev_swap_buffers(_EGLDisplay *disp, _EGLSurface *draw)
 {
-   /* the render goes to the scanout buffer: finishing it is presenting it */
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
+   struct fbdev_surface *fs = fbdev_surface(dri2_surf);
+   struct dri2_egl_context *dri2_ctx = dri2_egl_context(_eglGetCurrentContext());
+
    dri2_flush_drawable_for_swapbuffers(disp, draw);
+   /* the finished frame to the scanout buffer; without a back buffer the
+    * render went there and finishing it was presenting it */
+   if (draw->Type == EGL_WINDOW_BIT && fs->back && dri2_surf->front && dri2_ctx)
+      dri2_blit_image(dri2_ctx->dri_context, dri2_surf->front, fs->back, 0, 0, draw->Width,
+                      draw->Height, 0, 0, draw->Width, draw->Height, __BLIT_FLAG_FLUSH);
    return EGL_TRUE;
 }
 

@@ -22,6 +22,7 @@
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
 #include "nir/tgsi_to_nir.h"
+#include "util/os_time.h"
 #include "util/u_memory.h"
 
 #include "sgx545_context.h"
@@ -193,13 +194,23 @@ match_fs(struct sgx545_shader *so)
 /* ---------------------------------------------------------------- compiled shaders */
 
 /* st hands uniforms over as load_uniform in vec4 slots; the compiler numbers
- * constants in components (constant k = constant buffer 0 float k) */
+ * constants in components (constant k = constant buffer 0 float k), a
+ * dynamic offset (a[i]) too */
 static bool
 rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
-   if (in->intrinsic != nir_intrinsic_load_uniform || !nir_src_is_const(in->src[0]))
+   if (in->intrinsic != nir_intrinsic_load_uniform)
       return false;
    b->cursor = nir_before_instr(&in->instr);
+   if (!nir_src_is_const(in->src[0])) {
+      nir_def *v = nir_load_uniform(b, in->def.num_components, in->def.bit_size,
+                                    nir_imul_imm(b, in->src[0].ssa, 4),
+                                    .base = nir_intrinsic_base(in) * 4,
+                                    .range = nir_intrinsic_range(in) * 4,
+                                    .dest_type = nir_intrinsic_dest_type(in));
+      nir_def_replace(&in->def, v);
+      return true;
+   }
    nir_def *v = nir_load_uniform(b, in->def.num_components, in->def.bit_size, nir_imm_int(b, 0),
                                  .base = (nir_intrinsic_base(in) + nir_src_as_uint(in->src[0])) * 4,
                                  .range = nir_intrinsic_range(in) * 4,
@@ -251,42 +262,43 @@ static void
 assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
 {
    nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
+   static bool warned;
 
    memset(vary, 0, sizeof(*vary));
    nir_foreach_variable_with_modes(var, nir, mode) {
       const struct glsl_type *t = var->type;
-      const char *n = var->name ? var->name : "";
-      char names[8][64];
-      unsigned rows, comps, set, k = 0;
+      unsigned rows, comps, set, frac = var->data.location_frac;
+      struct sgx_varying *v;
+      char name[32];
 
-      if (var->data.location < VARYING_SLOT_VAR0)
+      if (var->data.location < VARYING_SLOT_VAR0 || vary->n == ARRAY_SIZE(vary->v))
          continue;
       rows = glsl_count_vec4_slots(t, false, false);
       t = glsl_without_array(t);
       comps = glsl_type_is_matrix(t) ? glsl_get_vector_elements(glsl_get_column_type(t))
                                      : glsl_get_vector_elements(t);
       set = var->data.location - VARYING_SLOT_VAR0;
-      if (!strncmp(n, "packed:", 7))
-         n += 7;
-      do {
-         const char *e = strchr(n, ',');
-         size_t len = e ? (size_t)(e - n) : strlen(n);
-
-         snprintf(names[k++], 64, "%.*s", (int)MIN2(len, 63), n);
-         n += len + (e ? 1 : 0);
-      } while (*n && k < ARRAY_SIZE(names));
-      for (unsigned i = 0; i < k && vary->n < ARRAY_SIZE(vary->v); i++) {
-         struct sgx_varying *v = &vary->v[vary->n++];
-
-         snprintf(v->name, sizeof(v->name), "%s", names[i]);
-         v->set = set;
-         v->rows = rows;
-         /* several varyings packed in one slot: share its components [G] */
-         v->comps = k > 1 ? MAX2(comps / k, 1) : comps;
-         v->precision = var->data.precision;
+      /* The compiler finds a varying's set by name.  st's packed slots are
+       * named after what they hold ("packed:a,b"), and a varying split over
+       * two slots names both: Minecraft's terrain (two vec3 texture
+       * coordinates and the fog) had its second slot written over the first.
+       * Each variable is named after its slot instead, the same in both
+       * stages. */
+      snprintf(name, sizeof(name), frac ? "sgx545_v%u_%u" : "sgx545_v%u", set, frac);
+      var->name = ralloc_strdup(nir, name);
+      if (frac && !warned) {
+         /* the compiler puts component j of a variable at its set's j */
+         fprintf(stderr, "sgx545: a varying at component %u of its slot: its components land at 0\n", frac);
+         warned = true;
       }
+      v = &vary->v[vary->n++];
+      snprintf(v->name, sizeof(v->name), "%s", name);
+      v->set = set;
+      v->rows = rows;
+      v->comps = comps;
+      v->precision = var->data.precision;
       for (unsigned r = 0; r < rows && set + r < SGX_MAX_SETS; r++)
-         vary->set_comps[set + r] = MAX2(vary->set_comps[set + r], var->data.location_frac + comps);
+         vary->set_comps[set + r] = MAX2(vary->set_comps[set + r], frac + comps);
    }
 }
 
@@ -460,16 +472,19 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
    for (unsigned i = 0; i < n_c && off + 8 <= size; i++) {
       unsigned kind = rd16(u, off);
       struct sgx545_const *k = &so->consts[so->n_consts];
+      /* kind 1 f32, 2 F16 half (k, slot, shift); 3 a C10 channel, a 10-byte
+       * record (k, 0, slot, shift) */
+      unsigned at = kind == 3 ? off + 2 : off;
 
-      if (kind != 1 || so->n_consts == SGX545_MAX_CONSTS)
-         return info->why = "an F16/C10 constant or too many", false;
+      if (kind < 1 || kind > 3 || so->n_consts == SGX545_MAX_CONSTS)
+         return info->why = "a list C constant kind or too many", false;
       k->fmt = kind;
       k->k = rd16(u, off + 2);
-      k->slot = rd16(u, off + 4);
-      k->shift = rd16(u, off + 6);
+      k->slot = rd16(u, at + 4);
+      k->shift = rd16(u, at + 6);
       so->const_dwords = MAX2(so->const_dwords, k->slot + 1u);
       so->n_consts++;
-      off += 8;
+      off += kind == 3 ? 10 : 8;
    }
    if (n_d || n_sec || off > size)
       return info->why = n_d ? "list D" : n_sec ? "a secondary program" : "a short USP", false;
@@ -504,6 +519,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
          so->n_attribs = MAX2(so->n_attribs, var->data.driver_location + 1);
       }
    }
+   if (sgx545_debug & SGX545_DEBUG_NIR)
+      nir_print_shader(nir, stderr);
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx545: %s shader did not compile:\n%s\n", vertex ? "vertex" : "fragment",
               out.log ? out.log : "");
@@ -707,8 +724,14 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
    bool fixed = no && (!strcmp(no, "1") ||
                        !strcmp(no, nir->info.stage == MESA_SHADER_VERTEX ? "vs" : "fs"));
 
-   if (!fixed && !nir->info.io_lowered && compile_shader(ctx, so, nir))
-      return so;
+   if (!fixed && !nir->info.io_lowered) {
+      uint64_t t = os_time_get_nano();
+      bool ok = compile_shader(ctx, so, nir);
+
+      ctx->stats.compile_ns += os_time_get_nano() - t;
+      if (ok)
+         return so;
+   }
 
    if (!nir->info.io_lowered)
       NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size, 0);

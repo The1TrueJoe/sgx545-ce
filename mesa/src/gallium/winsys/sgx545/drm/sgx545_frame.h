@@ -87,9 +87,22 @@ struct sgxws_bo {
 };
 
 /* a bump allocator inside one device allocation; reset() returns to mark */
+/* A ring: the persistent part up to mark, then SGXWS_SLOTS equal parts,
+ * one per frame in flight; a frame records into the part [lo, hi). */
+#define SGXWS_SLOTS 3
+
 struct sgxws_ring {
    struct sgxws_bo bo;
    uint32_t used, mark;
+   uint32_t part, hi;
+};
+
+/* a submitted render: done when its sync's completed writes reach value */
+struct sgxws_token {
+   volatile PVRSRV_SYNC_DATA *sd;
+   uint32_t value;
+   uint32_t seq;                    /* the context's kick number (renders finish in order) */
+   uint64_t kicked_ns;              /* when it was kicked (stats) */
 };
 
 struct sgxws_rt_numbers {
@@ -104,6 +117,8 @@ struct sgxws_rt {
    struct sgxws_bo rtdata, rtword, entword[2], tailptr, ta40, ta50, rgn[2], ta88[2], bgblock;
    struct sgxws_bo rd, rd_sync, rd_w8, rd_w4, hwsync, hwsync_access;
    uint32_t frames;                 /* frames rendered into it */
+   uint32_t seq;                    /* its last render's kick number: one in flight per target */
+   unsigned seq_slot;               /* and the ring slot that render used */
 };
 
 /* where a frame's pixels go */
@@ -181,10 +196,19 @@ struct sgxws_state {
    float vp_scale[3], vp_translate[3];
 };
 
+#define SGXWS_MAX_INDICES 0xffff
+
 struct sgxws_draw {
    uint32_t prim;                   /* SGXWS_* */
    uint32_t count;                  /* vertices */
    const uint32_t *verts;           /* count x vs->attr_dwords dwords */
+   /* NULL: the vertices in order; else n_indices 16-bit indices into them
+    * (at most SGXWS_MAX_INDICES) */
+   const uint16_t *indices;
+   uint32_t n_indices;
+   /* or both already in device memory (the driver's vertex cache): their
+    * addresses, nothing copied (verts_va 16-byte aligned, idx_va even) */
+   uint32_t verts_va, idx_va;
    const struct sgxws_prog *vs, *fs;
    const struct sgxws_state *state;
    const uint32_t *fs_consts;       /* fs->sec_dwords dwords */
@@ -208,6 +232,7 @@ struct sgxws_ctx {
    uint32_t empty_state, terminate;  /* VDM state programs (PDS vertex heap) */
    uint32_t pds_empty_p;             /* pixel PDS program: run the empty task */
    uint32_t clear_pds;               /* pixel PDS program: iterate colour, copy_fs */
+   uint32_t clear_pds_masked[16];    /* the same with a colour mask (by byte mask), on demand */
    uint32_t idx;                     /* identity 16-bit index buffer */
    uint32_t idx_count;
    uint32_t vdm_counter;             /* the DDK's rotating TA-state buffer index */
@@ -217,6 +242,17 @@ struct sgxws_ctx {
    uint32_t vdm_start;
    uint32_t bg_pds[3];
    unsigned draws;                   /* objects recorded in this frame */
+   unsigned room_flushes;            /* frames submitted early because a ring filled */
+   /* frames in flight: the ring slot recording now, and the render that last
+    * used each slot */
+   unsigned slot;
+   struct sgxws_token slot_token[SGXWS_SLOTS];
+   uint32_t kicks, done_seq;         /* kicks submitted, the last one known done */
+   uint64_t ns_kick, ns_target_wait, ns_slot_wait;   /* where sgxws_flush's time goes (stats) */
+   uint64_t ns_fence_wait;           /* fences waited for (sgxws_wait_seq) */
+   uint64_t ns_flush, ns_cmd, ns_sync_wait;   /* all of sgxws_flush; the TA command; a synchronous flush's wait */
+   uint64_t ns_latency; unsigned n_latency;   /* kick to seen done, renders that were waited for */
+   uint32_t pixev, pixev_rows;       /* the recording frame's pixel event, for its kick */
    unsigned frames;
 };
 
@@ -275,11 +311,32 @@ int sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_tar
 bool sgxws_recording(struct sgxws_ctx *c);
 
 /* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md "Clear") */
-int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth);
+int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth,
+                unsigned wmask);
 int sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d);
-/* Submit the frame and wait up to timeout_ms for its render; 0 when done.
- * A no-op when nothing is recorded. */
+/* Submit the frame; with timeout_ms, wait up to that long for its render (0
+ * when done), else return once it is submitted.  A no-op when nothing is
+ * recorded. */
 int sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms);
+/* wait for every submitted render */
+int sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms);
+/* wait for the renders up to kick number seq (0 when done; timeout 0 polls) */
+int sgxws_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms);
+/* the last kick known done, looking without waiting; the kick number the
+ * frame being recorded will get (renders finish in kick order) */
+uint32_t sgxws_done_seq(struct sgxws_ctx *c);
+static inline uint32_t
+sgxws_next_seq(const struct sgxws_ctx *c)
+{
+   return c->kicks + 1;
+}
+static inline bool
+sgxws_seq_after(uint32_t a, uint32_t b)
+{
+   return (int32_t)(a - b) > 0;
+}
+/* wait for the renders that write a buffer (its sync's pending writes) */
+int sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms);
 
 #ifdef __cplusplus
 }

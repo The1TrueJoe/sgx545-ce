@@ -30,7 +30,11 @@ run revsub PROBE_BLEND="770 1 32779"
 run min PROBE_BLEND="1 1 32775"
 run max PROBE_BLEND="1 1 32776"
 }
-# glColorMask (r g b a), alone and under a blend
+# glColorMask (r g b a), alone and under a blend. The mask applies to the
+# clear too, so the masked channels keep what the surface held before: a
+# pbuffer, which starts zeroed on both stacks (ours draws the window into fb0
+# itself, which still shows the last client's picture)
+export PROBE_PBUFFER="720 480" PROBE_CONFIG="8 8 8 8 0 0"
 run m1011 PROBE_CMASK="1 0 1 1"
 run m0111 PROBE_CMASK="0 1 1 1"
 run m1101 PROBE_CMASK="1 1 0 1"

@@ -144,18 +144,22 @@ static void
 ring_mark(struct sgxws_ring *r)
 {
    r->mark = r->used;
+   r->part = ((r->bo.b.size - r->mark) / SGXWS_SLOTS) & ~0xffu;
+   r->hi = r->mark + r->part;
 }
 
+/* record into slot k: what the frame there before wrote is done with */
 static void
-ring_reset(struct sgxws_ring *r)
+ring_use_slot(struct sgxws_ring *r, unsigned k)
 {
-   r->used = r->mark;
+   r->used = r->mark + k * r->part;
+   r->hi = r->used + r->part;
 }
 
 static uint32_t
 ring_room(const struct sgxws_ring *r)
 {
-   return r->bo.b.size - r->used;
+   return (r->hi ? r->hi : r->bo.b.size) - r->used;
 }
 
 /* where something landed: device address and CPU pointer */
@@ -170,7 +174,7 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
    struct sgxws_ptr p;
    uint32_t o = (r->used + align - 1) & ~(align - 1);
 
-   if (o + size > r->bo.b.size) {
+   if (o + size > (r->hi ? r->hi : r->bo.b.size)) {
       /* sgxws_draw keeps the frame rings from filling; this is a bug */
       ws_err("ring at %#x full (%#x + %#x)\n", r->bo.va, o, size);
       abort();
@@ -493,6 +497,8 @@ fail:
 
 #define IDX_COUNT 0x10000
 
+static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
+
 struct sgxws_ctx *
 sgxws_ctx_create(struct sgxws_dev *d)
 {
@@ -543,11 +549,14 @@ sgxws_ctx_create(struct sgxws_dev *d)
 
    if (ring_init(d, &c->usse_pix, H_PIXSHADER, 0x40000) ||
        ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x40000) ||
-       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000) ||
-       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000) ||
-       ring_init(d, &c->gen, H_GENERAL, 0x400000) ||
-       ring_init(d, &c->vdm, H_GENERAL, 0x10000) ||
-       ring_init(d, &c->usse_frame, H_PIXSHADER, 0x4000))
+       /* the frame rings hold a whole frame of Minecraft (~1500 draws, ~100K
+        * vertices): a ring that fills submits the frame so far and waits for
+        * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
+       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + SGXWS_SLOTS * 0x200000) ||
+       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000 + SGXWS_SLOTS * 0x200000) ||
+       ring_init(d, &c->gen, H_GENERAL, 0x80000 + SGXWS_SLOTS * 0x1000000) ||
+       ring_init(d, &c->vdm, H_GENERAL, SGXWS_SLOTS * 0x80000 + 0x1000) ||
+       ring_init(d, &c->usse_frame, H_PIXSHADER, SGXWS_SLOTS * 0x4000 + 0x1000))
       goto fail;
 
    /* fixed USSE programs */
@@ -606,9 +615,19 @@ sgxws_ctx_create(struct sgxws_dev *d)
    c->idx = p.va;
    c->idx_count = IDX_COUNT;
 
+   /* The clear's programs for every colour mask, made now: the persistent
+    * part of the rings ends at the mark.  Made on demand they landed in the
+    * frame part, which every frame reuses, so the next frame's masked clear
+    * (the openhc-minecraft overlay clears alpha at every swap) ran whatever
+    * that frame had written there. */
+   for (unsigned m = 0; m < 16; m++)
+      clear_pds_masked(c, m);
+
    ring_mark(&c->pds_pix);
    ring_mark(&c->pds_vtx);
    ring_mark(&c->gen);
+   ring_mark(&c->vdm);
+   ring_mark(&c->usse_frame);
    return c;
 
 fail:
@@ -622,7 +641,8 @@ sgxws_ctx_destroy(struct sgxws_ctx *c)
 {
    int e;
 
-   sgxws_flush(c, 2000);
+   sgxws_flush(c, 0);
+   sgxws_wait_idle(c, 2000);
    if ((e = pvr_unregister_render_ctx(&c->dev->pvr, c->hwctx)))
       ws_err("SGX_UNREGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
    /* the rest of the device memory goes with the services connection (resman) */
@@ -792,7 +812,8 @@ sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *s)
          ws_err("SGX_FLUSH_HW_RENDER_TARGET %#x failed: %d\n", s->rtdata.va, e);
    }
    if (c->rt == s)
-      sgxws_flush(c, 2000);
+      sgxws_flush(c, 0);
+   sgxws_wait_idle(c, 2000);
    /* The kernel-data structures stay allocated: the microkernel may still
     * hold pointers into them (re/gen/GEN.md, "Layout"). */
    sgxws_bo_free(c->dev, &s->tailptr);
@@ -941,13 +962,10 @@ sgxws_recording(struct sgxws_ctx *c)
 int
 sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target *t)
 {
-   uint32_t pixev, rows;
-   uint32_t *rd;
-
    if (c->rt == rt && c->target.va == t->va)
       return 0;
    if (c->rt) {
-      int e = sgxws_flush(c, 2000);
+      int e = sgxws_flush(c, 0);
 
       if (e)
          return e;
@@ -957,12 +975,10 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target 
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
 
-   pixev = pixel_event(c, eot_program(c), &rows);
+   /* the render details are the target's: written at the kick, once its
+    * previous render is done */
+   c->pixev = pixel_event(c, eot_program(c), &c->pixev_rows);
    background(c);
-   rd = rt->rd.map;
-   rd[0x5c / 4] = pixev;
-   rd[0x60 / 4] = rows;
-   rt->rd_w4.map[0] = c->bg_pds[2];
    return 0;
 }
 
@@ -1069,15 +1085,19 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 
    if (frame_has_room(c, vertex_bytes))
       return 0;
-   if ((e = sgxws_flush(c, 2000)))
+   c->room_flushes++;
+   if ((e = sgxws_flush(c, 0)))
       return e;
    if ((e = sgxws_begin(c, rt, &t)))
       return e;
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
 }
 
+/* A clear: one triangle over the whole surface with the iterated colour.
+ * wmask: the colour bytes written (B b0, G b1, R b2, A b3; 0xf all, 0 none:
+ * GL's glColorMask, which gallium hands the clear) */
 int
-sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth)
+sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth, unsigned wmask)
 {
    const struct sgxws_rt *s = c->rt;
    struct sgxws_ptr v;
@@ -1086,6 +1106,11 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
    uint32_t blk[12];
    int e;
 
+   bool zwrite = write_depth && (depth != 1.0f || c->draws);
+
+   /* nothing to write: no colour, and the depth every render starts with */
+   if (!(wmask & 0xf) && !zwrite)
+      return 0;
    if ((e = make_room(c, 3 * 16)))
       return e;
    v = ring_alloc(&c->gen, 3 * 16, DMA_ALIGN);
@@ -1097,13 +1122,16 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
    }
    /* TA state block: ISPA ISPB PDS region-clip output-select MTE TSP (header 0xd4c3) */
    blk[0] = 0x1 | 0x2 | 0x40 | 0x80 | 0x400 | 0x1000 | 0x4000 | 0x8000;
-   /* always; depth write only for a depth clear to something other than the
-    * background depth (1.0) */
-   blk[1] = write_depth && depth != 1.0f ? 0x01c00200 : 0x01d00200;
-   blk[2] = 0xf << 4;                                    /* ISPB: colour mask */
+   /* always; depth write for a depth clear, except to the background depth
+    * (1.0) before anything was drawn: every render starts there */
+   blk[1] = zwrite ? 0x01c00200 : 0x01d00200;
+   if (!(wmask & 0xf))
+      blk[1] |= 1u << 21;                                /* no colour write (STATE.md ISPA b21) */
+   /* ISPB: colour mask (R8 G4 B2 A1, from the byte mask) */
+   blk[2] = ((wmask & 4 ? 8 : 0) | (wmask & 2 ? 4 : 0) | (wmask & 1 ? 2 : 0) | (wmask & 8 ? 1 : 0)) << 4;
    blk[3] = pds_word(c, c->pds_empty_p, 1);
    blk[4] = 0x00030001;                                  /* [G] */
-   blk[5] = pds_word(c, c->clear_pds, 2);
+   blk[5] = pds_word(c, (wmask & 0xf) == 0xf ? c->clear_pds : clear_pds_masked(c, wmask & 0xf), 2);
    blk[6] = 0x80000000 | 0 << 16 | (s->n.xt - 1);        /* region clip: whole surface, in tiles */
    blk[7] = 0 << 16 | (s->n.yt - 1);
    blk[8] = 8 << 16 | 0x1800;                            /* 8 output dwords [D], 0x1800 [G] */
@@ -1153,15 +1181,43 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    const struct sgxws_prog *vs = d->vs, *fs = d->fs;
    uint32_t blk[18], n = 0, rows, sec, prim, vrows;
    uint32_t vw = vs->attr_dwords * 4, vsec_dwords = 10 + vs->const_dwords;
+   uint32_t idx = c->idx, n_idx = d->count, idx_bytes = 0;
    struct sgxws_ptr v, u, vsec;
    int e;
 
-   if (d->count > c->idx_count)
-      return -E2BIG;
-   if ((e = make_room(c, d->count * vw + vsec_dwords * 4)))
-      return e;
-   v = ring_alloc(&c->gen, d->count * vw, DMA_ALIGN);
-   memcpy(v.p, d->verts, d->count * vw);
+   if (d->verts_va) {
+      if (d->idx_va) {
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx = d->idx_va;
+      } else if (d->count > c->idx_count) {
+         return -E2BIG;
+      }
+      if ((e = make_room(c, vsec_dwords * 4 + DMA_ALIGN)))
+         return e;
+      v.va = d->verts_va;
+      v.p = NULL;
+   } else {
+      if (d->indices) {
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx_bytes = (n_idx * 2 + 15) & ~15u;
+      } else if (d->count > c->idx_count) {
+         return -E2BIG;
+      }
+      if ((e = make_room(c, d->count * vw + vsec_dwords * 4 + idx_bytes + DMA_ALIGN)))
+         return e;
+      v = ring_alloc(&c->gen, d->count * vw, DMA_ALIGN);
+      memcpy(v.p, d->verts, d->count * vw);
+      if (d->indices) {
+         struct sgxws_ptr ip = ring_alloc(&c->gen, idx_bytes, 16);
+
+         memcpy(ip.p, d->indices, n_idx * 2);
+         idx = ip.va;
+      }
+   }
 
    /* fragment: the constants and the secondary program that DMAs them, then
     * the primary program that runs the shader */
@@ -1242,7 +1298,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vdm(c, 0x40000000 | sec >> 4);
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
 
-   vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
+   vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
             vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
    c->draws++;
    return 0;
@@ -1329,40 +1385,175 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    s->hwsync_access.map[0] = 1;
 }
 
-static int
-wait_render(struct sgxws_ctx *c, unsigned ms)
+static uint64_t
+now_ns(void)
 {
-   volatile PVRSRV_SYNC_DATA *sd = c->target.sync_data;
-   unsigned t = 0;
+   struct timespec ts;
 
-   if (!sd)
-      return 0;
-   while (sd->ui32WriteOpsComplete < sd->ui32WriteOpsPending && t < ms * 10) {
-      struct timespec ts = { 0, 100000 };
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+}
+
+static bool
+token_done(const struct sgxws_token *t)
+{
+   return !t->sd || (int32_t)(t->sd->ui32WriteOpsComplete - t->value) >= 0;
+}
+
+/* poll a render's completion: 50 us steps doubling to 1 ms (a frame's wait
+ * at 0.1 ms steps was thousands of wakeups, a quarter of the render
+ * thread's CPU time in the kernel) */
+static int
+token_wait(struct sgxws_token *t, unsigned ms)
+{
+   uint64_t waited = 0, step = 50000, limit = (uint64_t)ms * 1000000;
+
+   while (!token_done(t) && waited < limit) {
+      struct timespec ts = { 0, (long)step };
 
       nanosleep(&ts, NULL);
-      t++;
+      waited += step;
+      step = step * 2 < 1000000 ? step * 2 : 1000000;
    }
-   if (c->dev->verbose)
-      ws_err("render target write ops %u/%u after %u.%u ms\n", sd->ui32WriteOpsComplete,
-             sd->ui32WriteOpsPending, t / 10, t % 10);
-   return sd->ui32WriteOpsComplete < sd->ui32WriteOpsPending ? -ETIMEDOUT : 0;
+   if (!token_done(t))
+      return -ETIMEDOUT;
+   t->sd = NULL;
+   return 0;
 }
+
+/* wait for the render that last used ring slot i */
+static int
+slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
+{
+   struct sgxws_token *t = &c->slot_token[i];
+
+   bool pending = t->sd != NULL;
+
+   if (token_wait(t, ms))
+      return -ETIMEDOUT;
+   if (pending && t->kicked_ns) {
+      c->ns_latency += now_ns() - t->kicked_ns;
+      c->n_latency++;
+   }
+   if ((int32_t)(t->seq - c->done_seq) > 0)
+      c->done_seq = t->seq;
+   return 0;
+}
+
+uint32_t
+sgxws_done_seq(struct sgxws_ctx *c)
+{
+   for (unsigned i = 0; i < SGXWS_SLOTS; i++)
+      if (token_done(&c->slot_token[i]))
+         slot_wait(c, i, 0);
+   return c->done_seq;
+}
+
+static int sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms);
+
+int
+sgxws_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
+{
+   uint64_t t0 = now_ns();
+   int e = sgxws_wait_seq_(c, seq, timeout_ms);
+
+   c->ns_fence_wait += now_ns() - t0;
+   return e;
+}
+
+static int
+sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
+{
+   /* a kick no longer in its slot's token was waited for when the slot was
+    * used again; the others up to seq are waited for here */
+   for (unsigned i = 0; i < SGXWS_SLOTS; i++) {
+      struct sgxws_token *t = &c->slot_token[i];
+
+      if (sgxws_seq_after(t->seq, c->done_seq) && !sgxws_seq_after(t->seq, seq) &&
+          slot_wait(c, i, timeout_ms))
+         return -ETIMEDOUT;
+   }
+   return 0;
+}
+
+int
+sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms)
+{
+   int e = 0;
+
+   for (unsigned i = 0; i < SGXWS_SLOTS; i++)
+      if (slot_wait(c, i, timeout_ms))
+         e = -ETIMEDOUT;
+   return e;
+}
+
+int
+sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms)
+{
+   struct sgxws_token t = { sd, sd ? sd->ui32WriteOpsPending : 0 };
+
+   return token_wait(&t, timeout_ms);
+}
+
+/*
+ * Submitting a frame doesn't wait for its render: the next frame records into
+ * the next ring slot meanwhile, as the DDK overlaps the CPU's next frame with
+ * the GPU's last.  What the CPU must not touch while a render runs:
+ *  - the ring slot it was recorded in, until it is done (the slot is used
+ *    again SGXWS_SLOTS submissions later);
+ *  - its render target's structures (render details, region headers, sync
+ *    lists): the next frame into the same target is kicked once the one
+ *    before is done, so a target has one render in flight.
+ * Different targets (the back buffer, then the swap's copy to fb0) are in
+ * flight together; the microkernel runs them in order.
+ */
+static int sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms);
 
 int
 sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
 {
+   uint64_t t0 = now_ns();
+   int e = sgxws_flush_(c, timeout_ms);
+
+   c->ns_flush += now_ns() - t0;
+   return e;
+}
+
+static int
+sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
+{
    struct sgxws_rt *s = c->rt;
+   struct sgxws_token done = { NULL, 0 };
    SGX_CCB_KICK k;
    IMG_HANDLE dst[1];
-   uint32_t woff = c->ccb_woff;
+   uint32_t woff = c->ccb_woff, *rd;
    int e;
 
    if (!s)
       return 0;
 
    vdm_end(c);
-   ta_command(c, c->ccb.map + woff / 4);
+   /* the target's previous render reads its render details until it is
+    * done; its slot's token is that render's until the slot is used again,
+    * which waits for it */
+   {
+      uint64_t t0 = now_ns();
+
+      if ((int32_t)(s->seq - c->done_seq) > 0 && c->slot_token[s->seq_slot].seq == s->seq &&
+          slot_wait(c, s->seq_slot, 2000))
+         ws_err("the target's last render did not finish\n");
+      c->ns_target_wait += now_ns() - t0;
+   }
+   rd = s->rd.map;
+   rd[0x5c / 4] = c->pixev;
+   rd[0x60 / 4] = c->pixev_rows;
+   s->rd_w4.map[0] = c->bg_pds[2];
+   {
+      uint64_t t0 = now_ns();
+
+      ta_command(c, c->ccb.map + woff / 4);
+      c->ns_cmd += now_ns() - t0;
+   }
 
    memset(&k, 0, sizeof(k));
    dst[0] = c->target.sync;
@@ -1382,11 +1573,30 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
       e = pvr_kick_traced(&c->dev->pvr, &k, 0);     /* traced, not sent */
    } else {
+      uint64_t t0 = now_ns();
+
       e = pvr_kick(&c->dev->pvr, &k);
-      if (e)
+      c->ns_kick += now_ns() - t0;
+      if (e) {
          ws_err("SGX_DOKICK failed: %d\n", e);
-      else
-         e = wait_render(c, timeout_ms);
+      } else if (c->target.sync_data) {
+         /* the kick counted one more pending write on the target */
+         done.sd = c->target.sync_data;
+         done.value = c->target.sync_data->ui32WriteOpsPending;
+      }
+   }
+   done.seq = ++c->kicks;
+   done.kicked_ns = now_ns();
+   if (!done.sd && (int32_t)(done.seq - c->done_seq) > 0)
+      c->done_seq = done.seq;             /* nothing to wait for */
+   s->seq = done.seq;
+   s->seq_slot = c->slot;
+   c->slot_token[c->slot] = done;
+   if (!e && timeout_ms) {
+      uint64_t t0 = now_ns();
+
+      e = slot_wait(c, s->seq_slot, timeout_ms);
+      c->ns_sync_wait += now_ns() - t0;
    }
    if (!e && c->dev->frame_gap_us) {
       struct timespec ts = { 0, (long)c->dev->frame_gap_us * 1000 };
@@ -1400,12 +1610,20 @@ sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
    s->frames++;
    c->frames++;
    c->rt = NULL;
-   /* the render has finished (or the GPU is gone): the frame's memory is free */
-   ring_reset(&c->pds_pix);
-   ring_reset(&c->pds_vtx);
-   ring_reset(&c->gen);
-   ring_reset(&c->vdm);
-   ring_reset(&c->usse_frame);
+   /* the next frame records into the next slot, once the render there is done */
+   c->slot = (c->slot + 1) % SGXWS_SLOTS;
+   {
+      uint64_t t0 = now_ns();
+
+      if (slot_wait(c, c->slot, 2000) && !e)
+         e = -ETIMEDOUT;
+      c->ns_slot_wait += now_ns() - t0;
+   }
+   ring_use_slot(&c->pds_pix, c->slot);
+   ring_use_slot(&c->pds_vtx, c->slot);
+   ring_use_slot(&c->gen, c->slot);
+   ring_use_slot(&c->vdm, c->slot);
+   ring_use_slot(&c->usse_frame, c->slot);
    return e;
 }
 
@@ -1600,4 +1818,23 @@ sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned co
    va = sgxws_usse_upload(c, false, w, n, NULL, 0);
    free(w);
    return va;
+}
+
+/* The clear's pixel program with a colour mask (wmask: bytes of the packed
+ * BGRA8, as sgxws_blend's): the iterated colour through the colour mask's
+ * sopwm instead of copy_fs's mov. */
+static uint32_t
+clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
+{
+   if (!c->clear_pds_masked[wmask]) {
+      uint32_t w[4], douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29, fs;
+
+      w[0] = 0;
+      w[1] = PHAS_HI | 0x700;                            /* phas.i #0, #0 [wait=7] */
+      wmask_words(wmask, 0, w + 2);
+      fs = sgxws_usse_upload(c, false, w, 2, NULL, 0);
+      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), 0x01000004, &douti, NULL, 1,
+                                             NULL, NULL);
+   }
+   return c->clear_pds_masked[wmask];
 }

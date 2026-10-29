@@ -131,7 +131,7 @@ main(int argc, char **argv)
       uint64_t sum;
       int e;
 
-      if (sgxws_begin(c, rt, &t) || sgxws_clear(c, clear, 1.0f, false) || sgxws_draw(c, &d))
+      if (sgxws_begin(c, rt, &t) || sgxws_clear(c, clear, 1.0f, false, 0xf) || sgxws_draw(c, &d))
          return 1;
       if ((e = sgxws_flush(c, 2000))) {
          fprintf(stderr, "frame %d: flush failed %d\n", f, e);
