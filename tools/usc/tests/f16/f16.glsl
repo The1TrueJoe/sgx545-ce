@@ -40,3 +40,6 @@ void main(){ gl_FragColor = vec4(mix(vec3(0.1,0.2,0.3), c.rgb, f), 1.0); }
 @frag c10s_m
 precision mediump float; uniform lowp vec4 c; varying float f;
 void main(){ gl_FragColor = vec4(fract(c.xyz * (1.0 + f*7.0)), 1.0); }
+@frag lit255_m
+precision mediump float; uniform lowp vec4 c; varying float f;
+void main() { vec3 m = c.rgb; m = m * f; gl_FragColor = vec4(floor(m * 255.0) / 255.0, 1.0); }
