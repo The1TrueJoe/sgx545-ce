@@ -1943,10 +1943,31 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          for (unsigned k = 0; k < ncoord; k++)
             cr[k] = vref(t, k);
       }
+      bool h16 = pi < 0;
+      for (unsigned k = 0; k < ncoord; k++)
+         h16 &= cr[k].h16;
       bool run = !cr[0].neg && !cr[0].abs && cr[0].file != SGX_F_K && cr[0].file != SGX_F_C;
       for (unsigned k = 1; k < ncoord; k++)
          run &= ref_next(&cr[k - 1], &cr[k]);
-      if (!run) {
+      if (h16) {
+         /* F16 coordinates: smp .f16 (cfmt) reads them two to a register,
+          * as libusc samples a mediump coordinate (corpus tests/f16) */
+         s->f16coord = true;
+         run = ncoord <= 2 && (cr[0].file == SGX_F_V || cr[0].file == SGX_F_PA) &&
+               (ncoord == 1 ? !((cr[0].file == SGX_F_V ? cr[0].comp : cr[0].n) & 1) && !cr[0].neg && !cr[0].abs
+                            : same_reg_pair(&cr[0], &cr[1]) && !cr[0].neg && !cr[0].abs);
+         if (!run) {
+            unsigned t = new_vreg16(c, 2 * ((ncoord + 1) / 2));
+            for (unsigned p = 0; 2 * p < ncoord; p++) {
+               /* x * 1 + 0 per pair: takes any lanes, modifiers, constants */
+               struct sgx_ref m[3][2] = { { cr[2 * p], 2 * p + 1 < ncoord ? cr[2 * p + 1] : cr[2 * p] } };
+               m[1][0] = ref(SGX_F_K, 0x3c00); m[1][0].h16 = 1; m[1][1] = m[1][0];
+               m[2][0] = ref(SGX_F_K, 0); m[2][0].h16 = 1; m[2][1] = m[2][0];
+               fmad16(c, href(t, 2 * p), m);
+            }
+            cr[0] = href(t, 0);
+         }
+      } else if (!run) {
          unsigned t = new_vreg(c, ncoord);
          struct sgx_ref td[4], ts[1][4];
          for (unsigned k = 0; k < 4; k++) {
@@ -1962,7 +1983,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       i->nops = 2;
       i->op[0] = raw;
       i->op[1] = cr[0];
-      i->rpt = ncoord;          /* the coordinate's registers are read */
+      i->rpt = s->f16coord ? (ncoord + 1) / 2 : ncoord;   /* the coordinate's registers are read */
       if (bi >= 0) {
          nir_legacy_src lb = nir_legacy_chase_src(&tex->src[bi].src);
          s->lod = 1;
