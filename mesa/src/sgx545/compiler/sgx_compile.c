@@ -668,7 +668,13 @@ static struct sgx_ref
 pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz)
 {
    if (a.file == SGX_F_K && a.h16 && b.file == SGX_F_K && b.h16) {
-      uint32_t w = (a.n & 0xffff) | (b.n & 0xffff) << 16;
+      /* the modifiers go into the bits (abs, then negate) */
+      uint32_t ha = a.n & 0xffff, hb = b.n & 0xffff;
+      if (a.abs) ha &= 0x7fff;
+      if (a.neg) ha ^= 0x8000;
+      if (b.abs) hb &= 0x7fff;
+      if (b.neg) hb ^= 0x8000;
+      uint32_t w = ha | hb << 16;
       *swz = SWZ_LOHI;
       if (w == 0)
          return cref(48);
@@ -768,6 +774,16 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
       sp[0][0] = sp[1][0]; sp[0][1] = sp[1][1];
       sp[1][0] = t0; sp[1][1] = t1;
    }
+   /* x * 1 + y with x a constant: y * 1 + x (exact either way) */
+   bool one = true;
+   for (unsigned l = 0; l < 2; l++)
+      one &= sp[1][l].file == SGX_F_K && sp[1][l].h16 && !sp[1][l].neg && !sp[1][l].abs &&
+             (sp[1][l].n & 0xffff) == 0x3c00;
+   if (one && !is_rpa(&sp[0][0]) && is_rpa(&sp[2][0]) && !sp[2][0].neg && is_rpa(&sp[2][1]) && !sp[2][1].neg) {
+      struct sgx_ref t0 = sp[0][0], t1 = sp[0][1];
+      sp[0][0] = sp[2][0]; sp[0][1] = sp[2][1];
+      sp[2][0] = t0; sp[2][1] = t1;
+   }
    bool neg0 = sp[0][0].neg;
    sp[0][0].neg = sp[0][1].neg = 0;
    for (unsigned j = 0; j < 3; j++) {
@@ -786,6 +802,24 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
       c->lit_off = true;
       r[0] = pair_reg(c, sp[0][0], sp[0][1]);
       c->lit_off = false;
+      swz[0] = SWZ_LOHI;
+   }
+   if (!is_rpa(&r[0]) && sp[0][0].file == SGX_F_K && sp[0][1].file == SGX_F_K) {
+      /* a constant pair with a hardware constant's value (0, 1.0): src0
+       * takes registers only, so limm it */
+      struct sgx_ref a = sp[0][0], b = sp[0][1];
+      uint32_t ha = a.n & 0xffff, hb = b.n & 0xffff;
+      if (a.abs) ha &= 0x7fff;
+      if (a.neg) ha ^= 0x8000;
+      if (b.abs) hb &= 0x7fff;
+      if (b.neg) hb ^= 0x8000;
+      unsigned l = new_vreg16(c, 2);
+      struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, USSE_LIMM);
+      m->nops = 2;
+      m->op[0] = href(l, 0);
+      m->op[1] = ref(SGX_F_IMM, ha | hb << 16);
+      add(c, m);
+      r[0] = href(l, 0);
       swz[0] = SWZ_LOHI;
    }
    if (neg0)
@@ -897,9 +931,28 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
             /* a constant: its F16 bits (round to nearest) */
             r[k].n = _mesa_float_to_half(uif(r[k].n));
             r[k].h16 = 1;
-         } else if (!r[k].h16) {
+         } else if (!r[k].h16 && alu->op == nir_op_f2f16) {
             r[k] = f32_to_h(c, r[k]);
          }
+         /* (a vecN or mov of an f32 value, a fract's: it stays f32; an F16
+          * reader converts it, the colour packs it from f32) */
+      }
+      set_refs(c, &alu->def, r, nc);
+      return;
+   }
+   if (alu->op == nir_op_ffract) {
+      /* fsubflr's f32 result as is (libusc packs it to U8 straight from
+       * f32); an F16 reader converts where it reads it */
+      struct sgx_ref r[4];
+      for (unsigned k = 0; k < nc; k++) {
+         unsigned f = new_vreg(c, 1);
+         struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
+         i->nops = 3;
+         i->op[0] = vref(f, 0);
+         i->op[1] = s[0][k];
+         i->op[2] = s[0][k];
+         emit(c, i);
+         r[k] = vref(f, 0);
       }
       set_refs(c, &alu->def, r, nc);
       return;
@@ -2274,7 +2327,8 @@ c10_tree(struct sgx_ctx *c, nir_def *d, struct set *set)
       return false;
    switch (alu->op) {
    case nir_op_fadd: case nir_op_fmul: case nir_op_fmin: case nir_op_fmax: case nir_op_flrp:
-   case nir_op_frcp: case nir_op_flog2: case nir_op_fexp2: case nir_op_ffloor:
+   case nir_op_frcp: case nir_op_flog2: case nir_op_fexp2: case nir_op_ffloor: case nir_op_ffma:
+   case nir_op_fmad:
       break;
    default:
       return false;
@@ -2286,7 +2340,8 @@ c10_tree(struct sgx_ctx *c, nir_def *d, struct set *set)
       if (!sd || !c10_tree(c, sd, set))
          return false;
       if (neg) {
-         if (alu->op != nir_op_fadd || negs)
+         /* fadd: one negated side; ffma: one negated factor */
+         if ((alu->op != nir_op_fadd && !((alu->op == nir_op_ffma || alu->op == nir_op_fmad) && s < 2)) || negs)
             return false;
          negs = true;
          _mesa_set_add(set, nir_def_instr(alu->src[s].src.ssa));
@@ -2536,6 +2591,53 @@ emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d, struct sgx_ref dst
       c10_sop(c, USSE_SOPWM, DST(), s, 2, f, 4);
       break;
    }
+   case nir_op_ffma:
+   case nir_op_fmad: {
+      bool n2;
+      nir_def *cc = c10_src(alu, 2, &n2);
+      if (n0 || n1) {
+         /* c - a * b: sop3 d, b, c, a [cop=sub c1=one c2=s0 a=one aop=sub],
+          * libusc's x - y * z */
+         struct c10v vz = c10_get(c, st, b, true);
+         struct c10v vy = c10_get(c, st, a, true);
+         struct c10v vx = c10_get(c, st, cc, true);
+         s[0] = c10_opd(c, vz, false);
+         s[1] = c10_opd(c, vx, false);
+         s[2] = c10_opd(c, vy, false);
+         c10_release(st, vz);
+         c10_release(st, vy);
+         c10_release(st, vx);
+         static const int f[] = { USSE_F_COP, 1, USSE_F_C1, 8, USSE_F_C2, 4, USSE_F_A, 4, USSE_F_AOP, 1 };
+         c10_sop(c, USSE_SOP3, DST(), s, 3, f, 5);
+         break;
+      }
+      /* a * b + c: the product into an internal register (sop3l), then a
+       * sopwm add, as libusc does a lowp mad */
+      nir_def *x = a, *y = b;
+      if (!c10_leaf(c, a) && c10_leaf(c, b)) {
+         x = b;
+         y = a;
+      }
+      vb = c10_get(c, st, y, true);
+      va = c10_get(c, st, x, false);
+      s[0] = c10_opd(c, vb, false);
+      s[1] = c10_opd(c, va, false);
+      s[2] = c10_opd(c, va, true);
+      c10_release(st, vb);
+      c10_release(st, va);
+      static const int fm[] = { USSE_F_COP, 0, USSE_F_C1, 4, USSE_F_C2, 0, USSE_F_A1, 0, USSE_F_A2, 1 };
+      int pi = c10_ialloc(c, st);
+      c10_sop(c, USSE_SOP3L, iref(pi, true), s, 3, fm, 5);
+      struct c10v vp = { pi, 0, false };
+      vt = c10_get(c, st, cc, true);
+      s[0] = c10_opd(c, vp, false);
+      s[1] = c10_opd(c, vt, false);
+      c10_release(st, vp);
+      c10_release(st, vt);
+      static const int fa[] = { USSE_F_C1, 8, USSE_F_C2, 8, USSE_F_COP, 0, USSE_F_AOP, 0 };
+      c10_sop(c, USSE_SOPWM, DST(), s, 2, fa, 4);
+      break;
+   }
    case nir_op_fmul: {
       /* sop3l d, y, x.xyz, x.w [cop=add c1=s0 c2=zero a1=zero a2=s2a]: x
        * straight from its slots when it is a uniform */
@@ -2782,6 +2884,12 @@ emit_color(struct sgx_ctx *c)
     * the first wrote D, so D must not be what it reads (ISA.md "Fragment shaders") */
    unsigned d = 0;
    for (unsigned k = 0; k < 4; k++) {
+      if (col[k].h16 && col[k].file == SGX_F_K) {
+         /* an F16 constant beside f32 channels: its f32 bits */
+         union { float f; uint32_t u; } x = { .f = _mesa_half_to_float(col[k].n & 0xffff) };
+         col[k] = ref(SGX_F_K, x.u);
+         continue;
+      }
       if (col[k].h16 && col[k].file != SGX_F_K) {
          /* F16 -> f32 (format select) */
          unsigned v = new_vreg(c, 1);

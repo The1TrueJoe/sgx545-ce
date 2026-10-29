@@ -7,4 +7,6 @@ hfog_m           SAME     0/4096 px differ, max   0  centre a26cff9d
 htex_m           SAME     0/4096 px differ, max   0  centre 4d503553
 hfog2_m          SAME     0/4096 px differ, max   0  centre a26cff9d
 htex2_m          SAME     0/4096 px differ, max   0  centre 4d503553
-8/9 identical
+fog_m            SAME     0/4096 px differ, max   0  centre 3564a9ff
+c10s_m           SAME     0/4096 px differ, max   0  centre 6caa9fff
+10/11 identical
