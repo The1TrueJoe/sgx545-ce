@@ -372,6 +372,38 @@ def build(a):
     # list walk is the next increment; the host-interrupt tail is here.
     a.label("render_done")
     a.phas()
+    a.i(f"ld.a.d r0, sa{SA_SELF}, #{SC_RD} [moe]")    # render details
+    a.i("wdf")
+    # TA3D dependency sync: the destination the host/next client polls. The
+    # render details hold a pointer to the dependency block (word 56); its
+    # sync object has {write-ops-pending at +0x10, write-ops-complete-addr at
+    # +0x14}. Set *complete-addr = pending + 1 (docs/UKERNEL.md §5). Single
+    # render: frame index 0, so no per-frame stride.
+    a.i("ld.a.d r2, r0, #56 [moe]")                   # dependency block
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")                     # none -> skip
+    a.i("(p0) ba rd_wops")
+    a.i("ld.a.d r4, r2, #4 [moe]")                    # pending  (block + 0x10)
+    a.i("ld.a.d r5, r2, #5 [moe]")                    # complete address (block + 0x14)
+    a.i("wdf")
+    a.i("imae r4, r4, #1, #1 [t2=u32]")               # pending + 1
+    a.i("st.a.d r5, #0, r4 [moe]")                    # *complete = pending + 1
+    a.i("idf")
+    a.i("wdf")
+    a.label("rd_wops")
+    # write-ops tracking: render details word 65 vs frame+1; reset word 66
+    a.i("ld.a.d r2, r0, #65 [moe]")
+    a.i("wdf")
+    a.i("limm r3, #1")                                # frame index 0 + 1
+    a.i("test.xor.ne p1, r2, r3")
+    a.i("(!p1) st.a.d r0, #66, #0 [moe]")
+    a.i("(p1) st.a.d r0, #66, r3 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    # (the DDK also walks the render's other sync categories, returns the PB
+    #  free list and updates the render-in-flight list here; those need the
+    #  control-block bookkeeping a multi-render scheduler keeps and are the
+    #  next increment -- docs/UKERNEL.md §5)
     a.label("raise_host_irq")
     a.i(f"limm r0, #{SW_EVENT}")
     a.i(f"str #{CR_EVENT_STATUS // 4}, r0")

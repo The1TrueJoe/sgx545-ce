@@ -43,7 +43,9 @@ Implemented and validated offline (no hardware):
   its sync-heap address (the counters the host and next client wait on);
 - **3D start** — programs the ISP/PBE 3D state from the render details (61
   struct-sourced registers) before starting the 3D;
-- **completion** — the host-interrupt tail (`SW_EVENT`).
+- **render done** — the TA3D destination sync update (`*complete = pending+1`
+  for the sync the host/replay polls on) and the write-ops reset, then the
+  host-interrupt tail (`SW_EVENT`).
 
 `run_ours.py` confirms ours programs **every** struct-sourced core register
 with the same value as the DDK, per phase, for four frames (the reference DDK
@@ -53,9 +55,11 @@ DDK's (7 on the reference capture).
 
 Not yet reproduced (the next increments, each needs its own validation): the
 completion-event handshakes (cache-invalidate / DPM-load *waits* — ours pulses
-the request without waiting yet), the **3D destination sync-object**
-update (the write-ops-complete = pending+1 walk, docs/UKERNEL.md §5; the TA
-status walk is done), transfers, cleanup, power, and the multi-render
-scheduler the DDK keeps (ours is one context). Nothing runs on hardware until
+the request without waiting yet), the rest of the render teardown the DDK does
+at 3D-end (its other sync-category list walks, the parameter-buffer free-list
+return, the render-in-flight list and context refcount — these need the
+control-block bookkeeping a multi-render scheduler keeps; ours does the one
+destination-sync write a single replayed frame is polled on), transfers,
+cleanup, power, and the `srvinit --ours` loader. Nothing runs on hardware until
 a full frame's completion path is reproduced offline and the box + recovery
 method are chosen.
