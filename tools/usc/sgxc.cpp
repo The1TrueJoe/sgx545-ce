@@ -17,6 +17,7 @@
 
 #include "main/mtypes.h"
 #include "nir.h"
+#include "nir_builder.h"
 #include "gl_nir_linker.h"
 #include "linker_util.h"
 #include "standalone.h"
@@ -51,6 +52,32 @@ write_file(const char *prefix, const char *suffix, const void *d, size_t n)
    fclose(f);
 }
 
+static unsigned
+vec4_slots(const struct glsl_type *type, bool bindless)
+{
+   return glsl_count_vec4_slots(type, false, bindless);
+}
+
+/* the gallium driver's (sgx545_program.c): load_uniform base and offset from
+ * vec4 slots to components */
+static bool
+rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   if (in->intrinsic != nir_intrinsic_load_uniform)
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def *off = nir_src_is_const(in->src[0]) ? nir_imm_int(b, 0) : nir_imul_imm(b, in->src[0].ssa, 4);
+   unsigned base = nir_intrinsic_base(in) + (nir_src_is_const(in->src[0]) ? nir_src_as_uint(in->src[0]) : 0);
+   /* and a 16-bit load as an f32 one plus f2f16: the driver doesn't set
+    * glsl_16bit_load_dst, so its mediump uniforms arrive that way */
+   bool h = in->def.bit_size == 16;
+   nir_def *v = nir_load_uniform(b, in->def.num_components, 32, off, .base = (int)(base * 4),
+                                 .range = nir_intrinsic_range(in) * 4,
+                                 .dest_type = h ? nir_type_float32 : nir_intrinsic_dest_type(in));
+   nir_def_replace(&in->def, h ? nir_f2f16(b, v) : v);
+   return true;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -59,10 +86,11 @@ main(int argc, char **argv)
    int c;
 
    memset(&opts, 0, sizeof(opts));
-   bool lowp16 = false;
-   while ((c = getopt(argc, argv, "vpFu:a:s:o:")) != -1) {
+   bool lowp16 = false, driver_uniforms = false;
+   while ((c = getopt(argc, argv, "vpFLu:a:s:o:")) != -1) {
       switch (c) {
       case 'F': opts.front_p0 = true; break;
+      case 'L': driver_uniforms = true; break;
       case 'p': lowp16 = true; opts.f16 = true; break;
       case 'v': opts.verbose = true; break;
       case 'u': named(opts.uniforms, &opts.n_uniforms, optarg); break;
@@ -70,7 +98,7 @@ main(int argc, char **argv)
       case 's': named(opts.samplers, &opts.n_samplers, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
@@ -153,6 +181,21 @@ main(int argc, char **argv)
             tabs[ti].t[k++] = e;
          }
          *tabs[ti].n = k;
+      }
+      if (driver_uniforms) {
+         /* -L: uniforms lowered before the compiler sees them, the way the
+          * gallium driver hands them over (st's vec4 driver_location, then
+          * the driver's rescale to components); constant numbers are then
+          * the driver's, not glslcompiler's */
+         unsigned loc = 0;
+         nir_foreach_variable_with_modes(var, nir, nir_var_uniform) {
+            if (glsl_type_is_sampler(glsl_without_array(var->type)))
+               continue;
+            var->data.driver_location = loc;
+            loc += glsl_count_vec4_slots(var->type, false, false);
+         }
+         NIR_PASS(_, nir, nir_lower_io, nir_var_uniform, vec4_slots, (nir_lower_io_options)0);
+         NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
       }
       struct sgx_shader out;
       memset(&out, 0, sizeof(out));
