@@ -33,6 +33,7 @@ enum sgx_file {
    SGX_F_USLOT, /* the absolute SA number of uniform constant n (an immediate, after layout) */
    SGX_F_IXSA,  /* sa[idx1 + n] */
    SGX_F_IDX,   /* index register n (destination) */
+   SGX_F_LIT,   /* literal constant n (driver_consts: an SA slot the driver fills) */
 };
 
 struct sgx_ref {
@@ -140,6 +141,10 @@ struct sgx_ctx {
    uint8_t const_prec[1024];     /* GLSL precision of the uniform behind constant k (0 unknown) */
    unsigned n_sa;
    unsigned sa_base;
+   uint32_t lit_bits[32];        /* driver_consts: literal slots' values */
+   int lit_slot[32];
+   unsigned n_lits;
+   bool lit_off;                 /* while a register is needed (fmad16 src0) */
 
    /* fragment */
    struct sgx_ref color[4];

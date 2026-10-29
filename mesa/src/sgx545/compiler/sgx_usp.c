@@ -225,9 +225,17 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
       unsigned fmt = c->const_fmt[k] ? c->const_fmt[k] : 1;
       if (fmt == 3 || fmt == 4) {
          u16(&b, 3); u16(&b, k); u16(&b, 0); u16(&b, c->const_slot[k]); u16(&b, c->const_shift[k]);
+      } else if (fmt == 5) {
+         /* driver_consts: kind 0x10, F16 of the C10 value (kind 2's record) */
+         u16(&b, 0x10); u16(&b, k); u16(&b, c->const_slot[k]); u16(&b, c->const_shift[k]);
       } else {
          u16(&b, fmt); u16(&b, k); u16(&b, c->const_slot[k]); u16(&b, c->const_shift[k]);
       }
+   }
+   /* driver_consts: kind 0x11, a literal (kind, value low, value high, slot, shift) */
+   for (unsigned i = 0; i < c->n_lits; i++) {
+      u16(&b, 0x11); u16(&b, c->lit_bits[i] & 0xffff); u16(&b, c->lit_bits[i] >> 16);
+      u16(&b, c->lit_slot[i]); u16(&b, 0);
    }
    /* no secondary update program; vertex: the live input mask */
    uint32_t inmask[4] = { 0 };
@@ -351,6 +359,7 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
    unsigned n_c = 0;
    for (unsigned k = 0; k < ARRAY_SIZE(c->const_used); k++)
       n_c += c->const_slot[k] >= 0;
+   n_c += c->n_lits;
    unsigned n_slots = c->n_sa;
    put32(&b, 0x00, 0x55535020);
    put32(&b, 0x04, 0x23);
@@ -396,7 +405,15 @@ sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out)
       m->k = k;
       m->slot = c->const_slot[k];
       m->shift = c->const_shift[k];
-      m->fmt = c->const_fmt[k] == 4 ? 3 : c->const_fmt[k] ? c->const_fmt[k] : 1;
+      m->fmt = c->const_fmt[k] == 4 ? 3 : c->const_fmt[k] == 5 ? 0x10 : c->const_fmt[k] ? c->const_fmt[k] : 1;
+   }
+   for (unsigned i = 0; i < c->n_lits && out->n_consts < ARRAY_SIZE(out->consts); i++) {
+      struct sgx_const_map *m = &out->consts[out->n_consts++];
+      m->k = 0xffff;
+      m->slot = c->lit_slot[i];
+      m->shift = 0;
+      m->fmt = 0x11;
+      m->value = c->lit_bits[i];
    }
    out->n_iters = frag ? MIN2(c->n_iters, ARRAY_SIZE(out->iters)) : 0;
    for (unsigned i = 0; i < out->n_iters; i++) {

@@ -60,6 +60,11 @@ struct sgx_compile_options {
     * per-primitive facing source is known yet. front_p0 = read p0 (set =
     * front), for experiments. */
    bool front_p0;
+   /* the driver loads constant formats the DDK's driver has no list C kind
+    * for (sgx_const_map fmt 0x10 / 0x11): a lowp vector's xyz pre-converted
+    * to F16 and literal constants, where libusc converts once per draw in its
+    * secondary program and keeps literals with the uniforms */
+   bool driver_consts;
 };
 
 /* varying -> texture coordinate set (sgx_assign_varyings) */
@@ -82,7 +87,12 @@ struct sgx_const_map {
    uint16_t k;                  /* constant number: uniform component (sgx_nir.c's numbering) */
    uint16_t slot;               /* sa[sa_base + slot] */
    uint8_t shift;               /* bit offset in the slot: F16 0/16, C10 0/10/20 */
-   uint8_t fmt;                 /* 1 f32, 2 F16 (round to nearest), 3 C10 (round(v * 255), signed 10 bits) */
+   uint8_t fmt;                 /* 1 f32, 2 F16 (round to nearest), 3 C10 (round(v * 255), signed 10 bits);
+                                 * with driver_consts: 0x10 F16 of the C10 value c (fmt 3's rule):
+                                 * c / 255 rounded to nearest F16, as pck.f16.c10 [scale] gives it
+                                 * (hardware, tests/c10); 0x11 a literal: k = 0xffff, value (32 bits)
+                                 * ORed into the slot at shift */
+   uint32_t value;              /* fmt 0x11 */
 };
 
 struct sgx_iter_info {
