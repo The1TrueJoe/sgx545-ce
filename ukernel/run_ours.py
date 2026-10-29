@@ -81,10 +81,17 @@ def run_ours(code, man, events, ctxs):
     dma(u, mem)
     u.task(man["entries"]["init"] // 8)
     out = []
-    for k in events:
-        if k.kind != "kick":
-            continue
+    kicks = [k for k in events if k.kind == "kick"]
+    for i, k in enumerate(kicks):
         k.load(mem)
+        # CMDTA_SHARED (ui32NumTAStatusVals and the status list) is filled by
+        # the kernel at kick time; a trace snapshots memory before the ioctl,
+        # so load it from a later event's snapshot, as tools/ukernel/run.py does
+        if i + 1 < len(kicks):
+            cmd = k.ccb_va + k.ccb_off - 0x58
+            d = kicks[i + 1].memory.read(cmd, 0x1E0)
+            if d:
+                mem.load(cmd, d)
         # the kernel CCB command the host wrote: ServiceAddress = type 0 (TA),
         # data[1] = context (our host-kick table is the identity)
         slot = (k.n - 1) & 0xFF
@@ -94,13 +101,20 @@ def run_ours(code, man, events, ctxs):
         mem.wr(A["ccbctl"] + 0, k.n)        # kernel CCB write offset (slot count)
         mem.wr(A["ccbctl"] + 4, slot)       # read offset
         regs.log.clear()
+        mem.log = []
         dma(u, mem)
         u.task(man["entries"]["kick"] // 8)
         out += [("TA%d" % k.n, a, v) for a, v in reg_writes(u)]
+        # this TA's finish: write its status-value list to the sync heap
+        mem.log = []
+        dma(u, mem)
+        u.task(man["entries"]["ta_finished"] // 8)
+        out += [("sync%d" % k.n, a, v) for (op, a, v, pc) in mem.log
+                if op == "st" and 0x2d000000 <= a < 0x2e000000]
         if k.last:
             regs.log.clear()
             dma(u, mem)
-            u.task(man["entries"]["ta_finished"] // 8)
+            u.task(man["entries"]["do_3d"] // 8)
             out += [("3D", a, v) for a, v in reg_writes(u)]
             regs.log.clear()
             dma(u, mem)
@@ -130,6 +144,30 @@ def run_ddk(fw, trace):
     return perphase
 
 
+def run_ddk_sync(fw, trace):
+    """the DDK's sync-heap (0x2d......) memory writes, grouped as {sync<N>:
+    {addr: value}} to line up with ours' per-kick TA-finished phases"""
+    import re
+    sys.path.insert(0, os.path.join(ROOT, "tools", "ukernel"))
+    import importlib
+    runmod = importlib.import_module("run")
+    r = runmod.Runner(open(fw, "rb").read(), trace, out=open(os.devnull, "w"))
+    out = {}
+    orig = r.flush
+
+    def flush(title):
+        m = re.match(r"TA finished \((\d+)\)", title)
+        if m and r.m.mem.log:
+            d = out.setdefault("sync" + m.group(1), {})
+            for (op, a, v, pc) in r.m.mem.log:
+                if op == "st" and 0x2d000000 <= a < 0x2e000000:
+                    d[a] = v
+        orig(title)
+    r.flush = flush
+    r.run()
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trace")
@@ -153,7 +191,18 @@ def main():
                 print(f"  {ph:4} {r:#06x} = {ours_ph[ph][r]:#010x}")
         return
     ddk = run_ddk(a.ddk, a.trace)
+    # the TA status-value sync-heap writes: ours tags them sync<N>, the DDK
+    # does them in its "TA finished (N)" phase as memory writes
+    ddk_sync = run_ddk_sync(a.ddk, a.trace)
     bad = 0
+    for ph, ddk_sync_vals in ddk_sync.items():
+        om = {r: v for (p, r, v) in out if p == ph}
+        miss = [(r, ddk_sync_vals[r], om.get(r)) for r in ddk_sync_vals if om.get(r) != ddk_sync_vals[r]]
+        print(f"[{ph}] DDK {len(ddk_sync_vals)} sync-heap writes, ours {len(om)}")
+        for r, dv, ov in sorted(miss):
+            tag = "MISSING" if ov is None else "DIFF"
+            print(f"    {tag} {r:#010x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
+        bad += len(miss)
     for ph, ddk_phase in PHASE_MAP.items():
         om = ours_ph.get(ph, {})
         dm = {r: v for r, v in ddk.get(ddk_phase, {}).items() if r not in PLUMBING}

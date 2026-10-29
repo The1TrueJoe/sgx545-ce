@@ -316,9 +316,41 @@ def build(a):
     # ======================================================================
     a.label("ta_finished")
     a.phas()
-    # (the TA status-value writes to the sync heap are a per-command list; the
-    #  single-triangle frame has them, but reproducing the list walk is the
-    #  next increment -- see run_ours.py's diff, which covers the registers)
+    # TA status-value list (docs/UKERNEL.md §5): CMDTA_SHARED holds a count at
+    # command+0x5c and that many {sStatusDevAddr, ui32StatusValue} pairs from
+    # command+0x118; write each value to its address (sync-heap counters the
+    # host and the next client wait on).
+    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_CMD} [moe]")   # TA command base
+    a.i("wdf")
+    a.i("ld.a.d r2, r1, #%d [moe]" % (0x5c // 4))     # NumTAStatusVals
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")                     # count == 0 -> skip
+    a.i("(p0) ba ta_status_done")
+    # entries base = command + 0x118; walk by index i (imae truncates its
+    # first operand to 16 bits, so a small index must drive the addressing,
+    # not a 32-bit pointer advanced through imae)
+    a.i("limm r7, #%d" % 0x118)
+    a.i("imae r6, r7, #1, r1 [t2=u32]")               # r6 = command + 0x118
+    a.i("limm r8, #0")                                # i = 0
+    a.label("ta_status_loop")
+    a.i("imae r3, r8, #8, r6 [t2=u32]")               # r3 = r6 + i*8
+    a.i("ld.a.d r4, r3, #0 [moe]")                    # sStatusDevAddr
+    a.i("ld.a.d r5, r3, #1 [moe]")                    # ui32StatusValue
+    a.i("wdf")
+    a.i("st.a.d r4, #0, r5 [moe]")                    # *addr = value
+    a.i("idf")
+    a.i("imae r8, r8, #1, #1 [t2=u32]")               # i++
+    a.i("test.isub16.ne p0, r2, r2, #1")              # --count != 0 -> loop
+    a.i("(p0) ba ta_status_loop")
+    a.label("ta_status_done")
+    a.i("wdf")
+    a.end()
+
+    # ======================================================================
+    # do_3d: program and start the 3D for the scene (run on the last TA's finish)
+    # ======================================================================
+    a.label("do_3d")
+    a.phas()
     a.i(f"ld.a.d r10, sa{SA_SELF}, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, sa{SA_SELF}, #{SC_PB} [moe]")   # PB descriptor
     a.i("wdf")
