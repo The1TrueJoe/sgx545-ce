@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include "util/os_time.h"
+#include "util/u_debug.h"
 #include "util/u_framebuffer.h"
 #include "util/u_helpers.h"
 #include "util/u_inlines.h"
@@ -542,6 +543,22 @@ sgx545_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
    struct sgx545_context *ctx = sgx545_context(pctx);
    uint64_t t0;
 
+   /* SGX545_DEBUG_BLITS=n: every 255th blit described (an odd stride, so alternating kinds show), n times */
+   static int blits_left = -1;
+   static unsigned blit_no;
+
+   if (blits_left < 0)
+      blits_left = debug_get_num_option("SGX545_DEBUG_BLITS", 0);
+   if (blits_left > 0 && blit_no++ % 255 == 0) {
+      blits_left--;
+      fprintf(stderr, "sgx545 blit %u: %s %ux%u%s (%d,%d %dx%d) -> %s %ux%u%s (%d,%d %dx%d) filter %u mask %#x scissor %d\n",
+              blit_no - 1, util_format_short_name(info->src.format), info->src.resource->width0,
+              info->src.resource->height0, sgx545_resource(info->src.resource)->texture ? " texture" : "",
+              info->src.box.x, info->src.box.y, info->src.box.width, info->src.box.height,
+              util_format_short_name(info->dst.format), info->dst.resource->width0, info->dst.resource->height0,
+              sgx545_resource(info->dst.resource)->texture ? " texture" : "", info->dst.box.x, info->dst.box.y,
+              info->dst.box.width, info->dst.box.height, info->filter, info->mask, info->scissor_enable);
+   }
    if (sgx545_blit_gpu(pctx, info)) {
       ctx->stats.blit_gpu++;
       return;
