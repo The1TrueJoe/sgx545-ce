@@ -436,12 +436,60 @@ struct vcache_key {
    } el[PIPE_MAX_ATTRIBS];
 };
 
+/* Entries are cut from 2 MB chunks of device memory, not allocated one by
+ * one: with hundreds of entries alive, every allocation crawled through the
+ * services' segment list (over a third of the render thread in
+ * _SegmentListInsert).  A chunk whose entries are all gone is used again. */
+#define VCACHE_CHUNK (2u << 20)
+
+struct vcache_chunk {
+   struct list_head link;
+   struct sgxws_bo bo;
+   uint32_t used, live;
+};
+
 struct vcache_entry {
    struct vcache_key key;       /* first: the hash table's key */
    struct list_head link;
-   struct sgxws_bo bo;
+   struct vcache_chunk *chunk;
+   uint32_t offset;
    uint32_t verts_va, idx_va, nverts, nidx, last_seq, bytes;
 };
+
+static struct vcache_chunk *
+vcache_alloc(struct sgx545_context *ctx, uint32_t bytes, uint32_t *offset)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+   struct vcache_chunk *k = ctx->vcache_cur;
+
+   if (bytes > VCACHE_CHUNK)
+      return NULL;
+   if (!k || k->used + bytes > VCACHE_CHUNK) {
+      /* an emptied chunk, else a new one */
+      k = NULL;
+      list_for_each_entry(struct vcache_chunk, c, &ctx->vcache_chunks, link) {
+         if (!c->live) {
+            k = c;
+            break;
+         }
+      }
+      if (!k) {
+         if (list_length(&ctx->vcache_chunks) >= 48 || !(k = calloc(1, sizeof(*k))))
+            return NULL;
+         if (sgxws_bo_alloc(&screen->dev, &k->bo, SGX545_HEAP_GENERAL, 0x1, VCACHE_CHUNK, 0x1000)) {
+            free(k);
+            return NULL;
+         }
+         list_add(&k->link, &ctx->vcache_chunks);
+      }
+      k->used = 0;
+      ctx->vcache_cur = k;
+   }
+   *offset = k->used;
+   k->used += bytes;
+   k->live++;
+   return k;
+}
 
 static uint32_t
 vcache_hash(const void *k)
@@ -458,12 +506,10 @@ vcache_equal(const void *a, const void *b)
 static void
 vcache_free(struct sgx545_context *ctx, struct vcache_entry *v)
 {
-   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
-
    _mesa_hash_table_remove_key(ctx->vcache, &v->key);
    list_del(&v->link);
    ctx->vcache_bytes -= v->bytes;
-   sgxws_bo_free(&screen->dev, &v->bo);
+   v->chunk->live--;
    free(v);
 }
 
@@ -565,18 +611,13 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
          ctx->stats.vc_uncacheable++;
          return false;
       }
-      if (sgxws_bo_alloc(&screen->dev, &v->bo, SGX545_HEAP_GENERAL, 0x1, align(vbytes + ibytes, 4096), 0x1000)) {
+      verts = staging(ctx, vbytes / 4 + ibytes / 4);
+      if (!verts || !(v->chunk = vcache_alloc(ctx, vbytes + ibytes, &v->offset))) {
          free(v);
          ctx->stats.vc_uncacheable++;
          return false;
       }
-      /* gathered in cached memory, then copied whole (the bo is write-combined) */
-      verts = staging(ctx, vbytes / 4 + ibytes / 4);
-      if (!verts) {
-         sgxws_bo_free(&screen->dev, &v->bo);
-         free(v);
-         return false;
-      }
+      /* gathered in cached memory, then copied whole (the chunk is write-combined) */
       fetch_vertices(f, n_fetch, lo, hi - lo + 1, verts, vertex_dwords);
       ix = (uint16_t *)((uint8_t *)verts + vbytes);
       for (unsigned i = 0; i < out_count; i++) {
@@ -586,10 +627,10 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
 
          ix[i] = (uint16_t)(index - lo);
       }
-      memcpy(v->bo.map, verts, vbytes + out_count * 2);
+      memcpy((uint8_t *)v->chunk->bo.map + v->offset, verts, vbytes + out_count * 2);
       v->key = key;
-      v->verts_va = v->bo.va;
-      v->idx_va = v->bo.va + vbytes;
+      v->verts_va = v->chunk->bo.va + v->offset;
+      v->idx_va = v->verts_va + vbytes;
       v->nverts = hi - lo + 1;
       v->nidx = out_count;
       v->bytes = vbytes + ibytes;
@@ -624,6 +665,10 @@ sgx545_draw_fini(struct sgx545_context *ctx)
    simple_mtx_lock(&screen->lock);
    list_for_each_entry_safe(struct vcache_entry, v, &ctx->vcache_lru, link)
       vcache_free(ctx, v);
+   list_for_each_entry_safe(struct vcache_chunk, k, &ctx->vcache_chunks, link) {
+      sgxws_bo_free(&screen->dev, &k->bo);
+      free(k);
+   }
    simple_mtx_unlock(&screen->lock);
    _mesa_hash_table_destroy(ctx->vcache, NULL);
    ctx->vcache = NULL;
@@ -1000,6 +1045,7 @@ sgx545_draw_init(struct sgx545_context *ctx)
    if (debug_get_bool_option("SGX545_VCACHE", true)) {
       ctx->vcache = _mesa_hash_table_create(NULL, vcache_hash, vcache_equal);
       list_inithead(&ctx->vcache_lru);
+      list_inithead(&ctx->vcache_chunks);
    }
    ctx->base.draw_vbo = sgx545_draw_vbo;
    ctx->base.clear = sgx545_clear;
