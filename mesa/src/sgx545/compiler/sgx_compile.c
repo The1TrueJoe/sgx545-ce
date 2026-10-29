@@ -1676,7 +1676,8 @@ find_projected(struct sgx_ctx *c, nir_function_impl *impl)
          nir_alu_instr *cm, *pm;
          nir_intrinsic_instr *l1 = varying_load(&tex->src[ci].src, &cs, &cm);
          nir_intrinsic_instr *l2 = varying_load(&tex->src[pi].src, &ps, &pm);
-         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3)
+         /* (32-bit varyings: an F16-iterated one is read through halves) */
+         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3 || l1->def.bit_size != 32)
             continue;
          _mesa_hash_table_insert(c->proj, tex, l1);
          if (cm && list_is_singular(&cm->def.uses))
@@ -1876,8 +1877,10 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          if (prefix)
             pa = c->vals[l->def.index].n;
       }
+      /* (not an F16-iterated varying: its registers count halves) */
       for (unsigned i = 0; pa >= 0 && i < c->n_iters; i++) {
-         if (!c->iters[i].sample && c->iters[i].pa == (unsigned)pa && c->iters[i].comps >= ncoord) {
+         if (!c->iters[i].sample && !c->iters[i].f16 && c->iters[i].pa == (unsigned)pa &&
+             c->iters[i].comps >= ncoord) {
             s->dependent = false;
             s->set = c->iters[i].set;
             s->coord_pa = pa;
