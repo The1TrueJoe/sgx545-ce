@@ -1678,6 +1678,29 @@ varying_load(nir_src *src, const uint8_t **swz, nir_alu_instr **mov)
    return in;
 }
 
+/* a value an input load made: its value's n is the input register even when
+ * an F16 iteration turned the value into half references */
+static bool
+is_input_load(struct sgx_ctx *c, nir_def *d)
+{
+   nir_instr *p = nir_def_instr(d);
+
+   if (c->vals[d->index].kind == VAL_PA)
+      return true;
+   if (p->type != nir_instr_type_intrinsic)
+      return false;
+   nir_intrinsic_op op = nir_instr_as_intrinsic(p)->intrinsic;
+   return op == nir_intrinsic_load_input || op == nir_intrinsic_load_interpolated_input;
+}
+
+/* the input register a varying's iteration gives its first component: an F16
+ * iteration's halves are SGX_IN_HALF | 2 * pa (sgx_nir.c assign_io) */
+static unsigned
+iter_reg(const struct sgx_iter *it)
+{
+   return it->f16 ? (SGX_IN_HALF | 2 * it->pa) : it->pa;
+}
+
 static void
 find_projected(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -1695,8 +1718,7 @@ find_projected(struct sgx_ctx *c, nir_function_impl *impl)
          nir_alu_instr *cm, *pm;
          nir_intrinsic_instr *l1 = varying_load(&tex->src[ci].src, &cs, &cm);
          nir_intrinsic_instr *l2 = varying_load(&tex->src[pi].src, &ps, &pm);
-         /* (32-bit varyings: an F16-iterated one is read through halves) */
-         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3 || l1->def.bit_size != 32)
+         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3)
             continue;
          _mesa_hash_table_insert(c->proj, tex, l1);
          if (cm && list_is_singular(&cm->def.uses))
@@ -1866,12 +1888,13 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    if (he) {
       nir_intrinsic_instr *load = he->data;
       unsigned pa = c->vals[load->def.index].n;
+      /* (the PDS samples from the set itself, however it is iterated) */
       for (unsigned i = 0; i < c->n_iters; i++) {
-         if (!c->iters[i].sample && c->iters[i].pa == pa && c->iters[i].comps == 4) {
+         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == pa && c->iters[i].comps == 4) {
             s->dependent = false;
             s->proj = true;
             s->set = c->iters[i].set;
-            s->coord_pa = pa;
+            s->coord_pa = c->iters[i].pa;
          }
       }
       if (s->dependent) {
@@ -1886,9 +1909,9 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       nir_alu_instr *cm;
       nir_intrinsic_instr *l;
 
-      if (ls.is_ssa && c->vals[ls.ssa->index].kind == VAL_PA)
+      if (ls.is_ssa && is_input_load(c, ls.ssa))
          pa = c->vals[ls.ssa->index].n;
-      else if ((l = varying_load(&tex->src[ci].src, &cs, &cm)) && c->vals[l->def.index].kind == VAL_PA) {
+      else if ((l = varying_load(&tex->src[ci].src, &cs, &cm)) && is_input_load(c, &l->def)) {
          bool prefix = true;
 
          for (unsigned j = 0; j < ncoord; j++)
@@ -1896,13 +1919,12 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          if (prefix)
             pa = c->vals[l->def.index].n;
       }
-      /* (not an F16-iterated varying: its registers count halves) */
+      /* (an F16-iterated varying is matched by its halves' register) */
       for (unsigned i = 0; pa >= 0 && i < c->n_iters; i++) {
-         if (!c->iters[i].sample && !c->iters[i].f16 && c->iters[i].pa == (unsigned)pa &&
-             c->iters[i].comps >= ncoord) {
+         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == (unsigned)pa && c->iters[i].comps >= ncoord) {
             s->dependent = false;
             s->set = c->iters[i].set;
-            s->coord_pa = pa;
+            s->coord_pa = c->iters[i].pa;
          }
       }
    }

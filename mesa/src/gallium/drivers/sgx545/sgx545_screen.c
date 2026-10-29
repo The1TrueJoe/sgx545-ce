@@ -77,10 +77,11 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = 8;
          /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
-          * uniforms), as the DDK computes them: SGX545_F16=1.  Not yet the
-          * default: a constant 1.0 comes out 0 (an F16 limm read as F32), and
-          * mediump varyings are still iterated F32 (sgx545_varyab.sh) */
-         caps->fp16 = caps->glsl_16bit_consts = debug_get_bool_option("SGX545_F16", false);
+          * uniforms), as the DDK computes them: the varyings, texture and
+          * clipping A/B cases are byte-identical to the DDK with it
+          * (sgx545_varyab.sh, _texproj, _texshape, _nearclip).
+          * SGX545_F16=0 keeps F32 */
+         caps->fp16 = caps->glsl_16bit_consts = debug_get_bool_option("SGX545_F16", true);
       }
    }
 }

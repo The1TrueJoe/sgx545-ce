@@ -592,7 +592,19 @@ assign_io(struct sgx_ctx *c)
          nir_foreach_block(b, impl) {
             nir_foreach_instr(instr, b) {
                /* (sgxc's inputs are interpolated loads; the gallium driver's
-                * plain load_input) */
+                * are still derefs here, before nir_lower_io: their
+                * variable's precision says) */
+               if (instr->type == nir_instr_type_intrinsic &&
+                   nir_instr_as_intrinsic(instr)->intrinsic == nir_intrinsic_load_deref) {
+                  nir_deref_instr *d = nir_src_as_deref(nir_instr_as_intrinsic(instr)->src[0]);
+                  nir_variable *v = nir_deref_instr_get_variable(d);
+
+                  if (v && v->data.mode == nir_var_shader_in && v->data.location >= 0 &&
+                      v->data.location < 128)
+                     ((v->data.precision == GLSL_PRECISION_MEDIUM || v->data.precision == GLSL_PRECISION_LOW)
+                         ? mp : hp)[v->data.location] = true;
+                  continue;
+               }
                if (instr->type != nir_instr_type_intrinsic ||
                    (nir_instr_as_intrinsic(instr)->intrinsic != nir_intrinsic_load_interpolated_input &&
                     nir_instr_as_intrinsic(instr)->intrinsic != nir_intrinsic_load_input))
