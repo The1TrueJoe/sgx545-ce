@@ -2,5 +2,9 @@ alpha_m          DIFF   136/4096 px differ, max   1  centre 954b97ff
 k_m              SAME     0/4096 px differ, max   0  centre 874097bf
 texdep_m         SAME     0/4096 px differ, max   0  centre 909059cc
 texdepu_m        SAME     0/4096 px differ, max   0  centre 503079cc
-texmul_m         DIFF    13/4096 px differ, max  20  centre 4d503553
-3/5 identical
+texmul_m         SAME     0/4096 px differ, max   0  centre 4d503553
+hfog_m           SAME     0/4096 px differ, max   0  centre a26cff9d
+htex_m           SAME     0/4096 px differ, max   0  centre 4d503553
+hfog2_m          SAME     0/4096 px differ, max   0  centre a26cff9d
+htex2_m          SAME     0/4096 px differ, max   0  centre 4d503553
+8/9 identical

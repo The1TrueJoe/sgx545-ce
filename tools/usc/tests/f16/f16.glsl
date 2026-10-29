@@ -18,3 +18,19 @@ void main() { gl_FragColor = texture2D(s, u.xy * uv); }
 precision mediump float;
 varying vec4 t; varying vec2 uv; uniform sampler2D s;
 void main() { gl_FragColor = texture2D(s, uv) * t; }
+@frag hfog_m
+precision mediump float;
+uniform highp vec4 u; varying vec4 t; varying vec2 uv; uniform sampler2D s;
+void main() { gl_FragColor = mix(texture2D(s, uv), u, t.x); }
+@frag htex_m
+precision mediump float;
+varying vec4 t; varying vec2 uv; uniform highp sampler2D s;
+void main() { gl_FragColor = texture2D(s, uv) * t; }
+@frag hfog2_m
+precision mediump float;
+uniform highp vec4 u; varying vec4 t; varying vec2 uv; uniform sampler2D s;
+void main() { mediump vec4 c = u; gl_FragColor = mix(texture2D(s, uv), c, t.x); }
+@frag htex2_m
+precision mediump float;
+varying vec4 t; varying vec2 uv; uniform highp sampler2D s;
+void main() { mediump vec4 x = texture2D(s, uv); gl_FragColor = x * t; }

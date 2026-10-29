@@ -124,14 +124,14 @@ def useasm(x):
         sfmt = PCKF[x.form.fval >> 41 & 7]
         base = {("u8", "f32"): 0x20, ("f32", "u8"): 0x34, ("u8", "f16"): 0x21, ("f16", "u8"): 0x3B,
                 ("f16", "c10"): 0x3E, ("f16", "f16"): 0x15, ("s16", "f32"): 0x1C,
-                ("c10", "c10"): 0x4E, ("c10", "f32"): 0x2C}.get((dfmt, sfmt))
+                ("c10", "c10"): 0x4E, ("c10", "f32"): 0x2C, ("f16", "f32"): 0x14}.get((dfmt, sfmt))
         if base is None:
             return None
-        if (dfmt, sfmt) == ("f16", "f16"):
+        if (dfmt, sfmt) in (("f16", "f16"), ("f16", "f32")):
             # 0x15 (pack half) and 0x38 (unpack half) share the form; float -> float takes rnd
             a = [arg(ops[0], d.get("dmask", 15) << 7), arg(ops[1]), arg(ops[2]),
                  A(0x10, {0: 0x3a, 1: 0x39, 2: 0x3b, 3: 0}[d.get("rnd", 0)])]
-            return [U(op, *a, f1=f1, f2=f2) for op in (0x15, 0x38)]
+            return [U(op, *a, f1=f1, f2=f2) for op in ((0x15, 0x38) if sfmt == "f16" else (0x14,))]
         a = [arg(ops[0], d.get("dmask", 15) << 7), arg(ops[1]), arg(ops[2])]
         if d.get("scale"):
             f2 |= 0x100

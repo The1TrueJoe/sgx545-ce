@@ -733,6 +733,15 @@ sgx_lower(struct sgx_ctx *c)
 
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, 0);
    lower_uniforms(c);
+   if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT) {
+      /* a mediump read of a texel: the texture's result in F16 (the
+       * finalizer's unpack, pck.f16.u8), not f32 then converted */
+      nir_opt_16bit_tex_image_options t16 = {
+         .rounding_mode = nir_rounding_mode_undef,
+         .opt_tex_dest_types = nir_type_float,
+      };
+      NIR_PASS(_, s, nir_opt_16bit_tex_image, &t16);
+   }
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, lower_sincos);
    optimize(s);

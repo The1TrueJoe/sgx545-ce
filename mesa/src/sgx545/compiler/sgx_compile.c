@@ -827,6 +827,39 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
       /* an alias of the halves it names (f2f16 of an F16-held 32-bit value is
        * a no-op; of a real f32 value, a rounding fmad16) */
       struct sgx_ref r[4];
+      if (alu->op == nir_op_f2f16) {
+         /* an f32 uniform read as F16: pck.f16.f32, two halves at a time,
+          * truncating as libusc's own conversion of one does (hwt_p4) */
+         for (unsigned k = 0; k < nc; k++) {
+            r[k] = s[0][k];
+            if (r[k].file != SGX_F_U || r[k].h16 || r[k].neg || r[k].abs)
+               continue;
+            bool two = k + 1 < nc && s[0][k + 1].file == SGX_F_U && !s[0][k + 1].h16 && !s[0][k + 1].neg &&
+                       !s[0][k + 1].abs;
+            unsigned t = new_vreg16(c, 2);
+            struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F32);
+            pk->nops = 3;
+            pk->op[0] = href(t, 0);
+            pk->op[1] = s[0][k];
+            pk->op[2] = two ? s[0][k + 1] : s[0][k];
+            add(c, pk);
+            r[k] = href(t, 0);
+            if (two)
+               r[++k] = href(t, 1);
+         }
+         for (unsigned k = 0; k < nc; k++) {
+            if (r[k].h16)
+               continue;
+            if (r[k].file == SGX_F_K) {
+               r[k].n = _mesa_float_to_half(uif(r[k].n));
+               r[k].h16 = 1;
+            } else {
+               r[k] = f32_to_h(c, r[k]);
+            }
+         }
+         set_refs(c, &alu->def, r, nc);
+         return;
+      }
       for (unsigned k = 0; k < nc; k++) {
          r[k] = alu->op == nir_op_mov || alu->op == nir_op_f2f16 || alu->op == nir_op_b2f16 ? s[0][k]
                                                                                             : alu_src(c, alu, k, 0);
