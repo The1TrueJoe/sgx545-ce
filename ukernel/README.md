@@ -38,19 +38,24 @@ Implemented and validated offline (no hardware):
   entry from the context and the client CCB, points the BIF at the context's
   page directory, and programs the parameter-buffer, TE/macrotile/screen and
   RT registers (41 struct-sourced registers) before starting the TA;
+- **TA finished** — walks the TA command's status-value list (count at
+  command+0x5c, `{address, value}` pairs from +0x118) and writes each value to
+  its sync-heap address (the counters the host and next client wait on);
 - **3D start** — programs the ISP/PBE 3D state from the render details (61
   struct-sourced registers) before starting the 3D;
 - **completion** — the host-interrupt tail (`SW_EVENT`).
 
 `run_ours.py` confirms ours programs **every** struct-sourced core register
-with the same value as the DDK, per phase, for four frames: the reference DDK
-capture and three `frame-fake` scenes (default, a 320×200 clear+colour, and a
-depth test).
+with the same value as the DDK, per phase, for four frames (the reference DDK
+capture and three `frame-fake` scenes: default, a 320×200 clear+colour, and a
+depth test), and that the TA status-value writes to the sync heap match the
+DDK's (7 on the reference capture).
 
 Not yet reproduced (the next increments, each needs its own validation): the
 completion-event handshakes (cache-invalidate / DPM-load *waits* — ours pulses
-the request without waiting yet), the TA status-value and 3D sync-object list
-walks (docs/UKERNEL.md §5), transfers, cleanup, power, and the multi-render
+the request without waiting yet), the **3D destination sync-object**
+update (the write-ops-complete = pending+1 walk, docs/UKERNEL.md §5; the TA
+status walk is done), transfers, cleanup, power, and the multi-render
 scheduler the DDK keeps (ours is one context). Nothing runs on hardware until
 a full frame's completion path is reproduced offline and the box + recovery
 method are chosen.
