@@ -507,6 +507,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    bool vertex = nir->info.stage == MESA_SHADER_VERTEX;
 
    opts.verbose = (sgx545_debug & SGX545_DEBUG_NIR) != 0;
+   opts.f16 = ctx->base.screen->shader_caps[nir->info.stage].fp16;
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    remap_legacy_varyings(nir);
    assign_varyings(nir, &vary);

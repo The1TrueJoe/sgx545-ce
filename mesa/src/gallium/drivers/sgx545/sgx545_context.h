@@ -82,6 +82,8 @@ struct sgx545_blend {
 /* one render target's TA/3D structures, by size (sgxws_rt) */
 #define SGX545_MAX_RTS 8
 
+struct vcache_chunk;
+
 struct sgx545_context {
    struct pipe_context base;
 
@@ -121,6 +123,8 @@ struct sgx545_context {
    struct hash_table *vcache;
    struct list_head vcache_lru;         /* most recently used first */
    uint64_t vcache_bytes;
+   struct list_head vcache_chunks;      /* the device memory its entries are cut from */
+   struct vcache_chunk *vcache_cur;
 
    struct slab_child_pool transfer_pool;
    uint32_t *staging;               /* vertices gathered for one draw */

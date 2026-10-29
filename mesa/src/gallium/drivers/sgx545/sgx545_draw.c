@@ -91,6 +91,9 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
 
    SGX545_DBG(DRAW, "clear %#x (%.3f %.3f %.3f %.3f) depth %.3f\n", buffers, color->f[0], color->f[1],
               color->f[2], color->f[3], depth);
+   if (debug_get_num_option("SGX545_DEBUG_ATTRS", 0))
+      fprintf(stderr, "sgx545 clear %#x mask %#x depth %.3f, %u draws in the frame\n", buffers, color_clear_mask,
+              depth, ctx->hw ? ctx->hw->draws : 0);
    /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
     * b3); a buffer without alpha keeps its X byte written. A colour clear
     * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
@@ -433,12 +436,60 @@ struct vcache_key {
    } el[PIPE_MAX_ATTRIBS];
 };
 
+/* Entries are cut from 2 MB chunks of device memory, not allocated one by
+ * one: with hundreds of entries alive, every allocation crawled through the
+ * services' segment list (over a third of the render thread in
+ * _SegmentListInsert).  A chunk whose entries are all gone is used again. */
+#define VCACHE_CHUNK (2u << 20)
+
+struct vcache_chunk {
+   struct list_head link;
+   struct sgxws_bo bo;
+   uint32_t used, live;
+};
+
 struct vcache_entry {
    struct vcache_key key;       /* first: the hash table's key */
    struct list_head link;
-   struct sgxws_bo bo;
+   struct vcache_chunk *chunk;
+   uint32_t offset;
    uint32_t verts_va, idx_va, nverts, nidx, last_seq, bytes;
 };
+
+static struct vcache_chunk *
+vcache_alloc(struct sgx545_context *ctx, uint32_t bytes, uint32_t *offset)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+   struct vcache_chunk *k = ctx->vcache_cur;
+
+   if (bytes > VCACHE_CHUNK)
+      return NULL;
+   if (!k || k->used + bytes > VCACHE_CHUNK) {
+      /* an emptied chunk, else a new one */
+      k = NULL;
+      list_for_each_entry(struct vcache_chunk, c, &ctx->vcache_chunks, link) {
+         if (!c->live) {
+            k = c;
+            break;
+         }
+      }
+      if (!k) {
+         if (list_length(&ctx->vcache_chunks) >= 48 || !(k = calloc(1, sizeof(*k))))
+            return NULL;
+         if (sgxws_bo_alloc(&screen->dev, &k->bo, SGX545_HEAP_GENERAL, 0x1, VCACHE_CHUNK, 0x1000)) {
+            free(k);
+            return NULL;
+         }
+         list_add(&k->link, &ctx->vcache_chunks);
+      }
+      k->used = 0;
+      ctx->vcache_cur = k;
+   }
+   *offset = k->used;
+   k->used += bytes;
+   k->live++;
+   return k;
+}
 
 static uint32_t
 vcache_hash(const void *k)
@@ -455,12 +506,10 @@ vcache_equal(const void *a, const void *b)
 static void
 vcache_free(struct sgx545_context *ctx, struct vcache_entry *v)
 {
-   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
-
    _mesa_hash_table_remove_key(ctx->vcache, &v->key);
    list_del(&v->link);
    ctx->vcache_bytes -= v->bytes;
-   sgxws_bo_free(&screen->dev, &v->bo);
+   v->chunk->live--;
    free(v);
 }
 
@@ -562,18 +611,13 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
          ctx->stats.vc_uncacheable++;
          return false;
       }
-      if (sgxws_bo_alloc(&screen->dev, &v->bo, SGX545_HEAP_GENERAL, 0x1, align(vbytes + ibytes, 4096), 0x1000)) {
+      verts = staging(ctx, vbytes / 4 + ibytes / 4);
+      if (!verts || !(v->chunk = vcache_alloc(ctx, vbytes + ibytes, &v->offset))) {
          free(v);
          ctx->stats.vc_uncacheable++;
          return false;
       }
-      /* gathered in cached memory, then copied whole (the bo is write-combined) */
-      verts = staging(ctx, vbytes / 4 + ibytes / 4);
-      if (!verts) {
-         sgxws_bo_free(&screen->dev, &v->bo);
-         free(v);
-         return false;
-      }
+      /* gathered in cached memory, then copied whole (the chunk is write-combined) */
       fetch_vertices(f, n_fetch, lo, hi - lo + 1, verts, vertex_dwords);
       ix = (uint16_t *)((uint8_t *)verts + vbytes);
       for (unsigned i = 0; i < out_count; i++) {
@@ -583,10 +627,10 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
 
          ix[i] = (uint16_t)(index - lo);
       }
-      memcpy(v->bo.map, verts, vbytes + out_count * 2);
+      memcpy((uint8_t *)v->chunk->bo.map + v->offset, verts, vbytes + out_count * 2);
       v->key = key;
-      v->verts_va = v->bo.va;
-      v->idx_va = v->bo.va + vbytes;
+      v->verts_va = v->chunk->bo.va + v->offset;
+      v->idx_va = v->verts_va + vbytes;
       v->nverts = hi - lo + 1;
       v->nidx = out_count;
       v->bytes = vbytes + ibytes;
@@ -621,6 +665,10 @@ sgx545_draw_fini(struct sgx545_context *ctx)
    simple_mtx_lock(&screen->lock);
    list_for_each_entry_safe(struct vcache_entry, v, &ctx->vcache_lru, link)
       vcache_free(ctx, v);
+   list_for_each_entry_safe(struct vcache_chunk, k, &ctx->vcache_chunks, link) {
+      sgxws_bo_free(&screen->dev, &k->bo);
+      free(k);
+   }
    simple_mtx_unlock(&screen->lock);
    _mesa_hash_table_destroy(ctx->vcache, NULL);
    ctx->vcache = NULL;
@@ -739,7 +787,14 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       switch (exp_fs_const ? SGX545_SHADER_FS_CONSTANT : ctx->fs->kind) {
       case SGX545_SHADER_FS_CONSTANT:
          if (exp_fs_const) {
-            color[0] = color[1] = color[2] = color[3] = 1.0f;
+            /* a colour per fragment program, so each shader's objects show
+             * as flat silhouettes */
+            uint32_t h = (uint32_t)(uintptr_t)ctx->fs * 2654435761u;
+
+            color[0] = ((h >> 8) & 0xff) / 255.0f;
+            color[1] = ((h >> 16) & 0xff) / 255.0f;
+            color[2] = ((h >> 24) & 0xff) / 255.0f;
+            color[3] = 1.0f;
             break;
          }
          memcpy(color, ctx->fs->color, sizeof(color));
@@ -789,6 +844,49 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          d.vs = f[e].dwords == 2 ? &ctx->vs_xy : &ctx->vs_xyz;
       }
       vertex_dwords += f[e].dwords;
+   }
+   /* SGX545_DEBUG_ATTRS=n: the vertex elements of the first n draws with 5 or more inputs */
+   {
+      static int left = -1;
+
+      if (left < 0)
+         left = debug_get_num_option("SGX545_DEBUG_ATTRS", 0);
+      if (left > 0 && compiled && n_fetch >= 5) {
+         left--;
+         fprintf(stderr, "sgx545 attrs: %s x%u start %u index_size %u; depth func %#x write %d, cull %#x front_ccw %d, "
+                 "pass %u, blend %d wmask %#x, fs douti %u\n", u_prim_name(info->mode), draws[0].count, draws[0].start,
+                 info->index_size, st.depth_func, st.depth_write, st.cull, st.front_ccw, st.pass_type,
+                 blend ? blend->blend : 0, epi.wmask, d.fs ? d.fs->n_douti : 0);
+         for (unsigned u = 0; u < PIPE_MAX_SAMPLERS; u++) {
+            struct pipe_sampler_view *view = ctx->views[u];
+
+            if (view)
+               fprintf(stderr, "  sampler %u: %s %ux%u levels %u sampleable %d texture %d\n", u,
+                       util_format_short_name(view->format), view->texture->width0, view->texture->height0,
+                       view->texture->last_level + 1, sgx545_resource_sampleable(sgx545_resource(view->texture)),
+                       sgx545_resource(view->texture)->texture);
+         }
+         for (unsigned e = 0; e < n_fetch; e++) {
+            const struct pipe_vertex_element *ve = &ctx->velems->elements[e];
+            uint32_t val[4];
+
+            fetch_vertex(&f[e], info->index_size ? 0 : draws[0].start, val);
+            fprintf(stderr, "  el %u: %s stride %u offset %u divisor %u vb %u %s -> %f %f %f %f\n", e,
+                    util_format_short_name(f[e].format), f[e].stride, f[e].offset, ve->instance_divisor,
+                    ve->vertex_buffer_index, f[e].res ? "buffer" : "client", uif(val[0]), uif(val[1]),
+                    uif(val[2]), uif(val[3]));
+         }
+         {
+            const float *cb = constant_data(ctx, MESA_SHADER_VERTEX);
+
+            fprintf(stderr, "  vs constants (buffer %u floats):", ctx->constants[MESA_SHADER_VERTEX].buffer_size / 4);
+            for (unsigned i = 0; i < ctx->vs->n_consts; i++)
+               fprintf(stderr, " k%u>sa%u=%g", ctx->vs->consts[i].k, ctx->vs->consts[i].slot,
+                       cb && ctx->vs->consts[i].k < ctx->constants[MESA_SHADER_VERTEX].buffer_size / 4
+                          ? cb[ctx->vs->consts[i].k] : -999.0);
+            fprintf(stderr, "\n");
+         }
+      }
    }
    if (compiled && ctx->fs->kind == SGX545_SHADER_COMPILED && !varyings_match(d.vs, d.fs)) {
       if (!ctx->warned_varyings)
@@ -947,6 +1045,7 @@ sgx545_draw_init(struct sgx545_context *ctx)
    if (debug_get_bool_option("SGX545_VCACHE", true)) {
       ctx->vcache = _mesa_hash_table_create(NULL, vcache_hash, vcache_equal);
       list_inithead(&ctx->vcache_lru);
+      list_inithead(&ctx->vcache_chunks);
    }
    ctx->base.draw_vbo = sgx545_draw_vbo;
    ctx->base.clear = sgx545_clear;
