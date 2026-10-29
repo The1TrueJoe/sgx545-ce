@@ -77,14 +77,11 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = 8;
          /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
-          * uniforms), as the DDK computes them: SGX545_F16=1.  The varyings,
-          * texture and clipping A/B cases are byte-identical to the DDK with
-          * it (sgx545_varyab.sh, _texproj, _texshape, _nearclip), but it isn't
-          * the default yet: Minecraft's terrain fragment program grows from
-          * 21 to 53 instructions (texels unpacked to F32 then converted, F32
-          * constants converted per pixel; mesa/tests/data/f16-terrain), 14-18
-          * FPS against 20-28 in F32 */
-         caps->fp16 = caps->glsl_16bit_consts = debug_get_bool_option("SGX545_F16", false);
+          * uniforms), as the DDK computes them: the varyings, texture and
+          * clipping A/B cases are byte-identical to the DDK with it
+          * (sgx545_varyab.sh, _texproj, _texshape, _nearclip), and the bench
+          * world runs 24-28 FPS against 20-27 in F32.  SGX545_F16=0 keeps F32 */
+         caps->fp16 = caps->glsl_16bit_consts = debug_get_bool_option("SGX545_F16", true);
       }
    }
 }
