@@ -103,6 +103,7 @@ struct sgxws_token {
    uint32_t value;
    uint32_t seq;                    /* the context's kick number (renders finish in order) */
    uint64_t kicked_ns;              /* when it was kicked (stats) */
+   bool scanout;                    /* a render into the scanout buffer (stats) */
 };
 
 struct sgxws_rt_numbers {
@@ -127,6 +128,7 @@ struct sgxws_target {
    uint32_t stride;                 /* in pixels, a multiple of 32 */
    IMG_HANDLE sync;                 /* the buffer's kernel sync info */
    volatile PVRSRV_SYNC_DATA *sync_data;
+   bool scanout;                    /* the scanout buffer (stats only) */
 };
 
 /* A shader as the hardware runs it: USSE code plus what the PDS programs
@@ -252,6 +254,7 @@ struct sgxws_ctx {
    uint64_t ns_fence_wait;           /* fences waited for (sgxws_wait_seq) */
    uint64_t ns_flush, ns_cmd, ns_sync_wait;   /* all of sgxws_flush; the TA command; a synchronous flush's wait */
    uint64_t ns_latency; unsigned n_latency;   /* kick to seen done, renders that were waited for */
+   uint64_t ns_latency_scanout; unsigned n_latency_scanout;   /* of those, the ones into the scanout buffer */
    uint32_t pixev, pixev_rows;       /* the recording frame's pixel event, for its kick */
    unsigned frames;
 };

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#define _GNU_SOURCE
+#include <dlfcn.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -543,14 +545,20 @@ sgx545_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
    struct sgx545_context *ctx = sgx545_context(pctx);
    uint64_t t0;
 
-   /* SGX545_DEBUG_BLITS=n: every 255th blit described (an odd stride, so alternating kinds show), n times */
+   /* SGX545_DEBUG_BLITS=n: every 255th blit and its caller described (an odd stride, so alternating kinds show), n times */
    static int blits_left = -1;
    static unsigned blit_no;
 
    if (blits_left < 0)
       blits_left = debug_get_num_option("SGX545_DEBUG_BLITS", 0);
    if (blits_left > 0 && blit_no++ % 255 == 0) {
+      Dl_info dl;
+      void *ra = __builtin_return_address(0);
+
       blits_left--;
+      if (dladdr(ra, &dl))
+         fprintf(stderr, "sgx545 blit %u caller %s+%#lx (%s)\n", blit_no - 1, dl.dli_fname,
+                 (unsigned long)((char *)ra - (char *)dl.dli_fbase), dl.dli_sname ? dl.dli_sname : "?");
       fprintf(stderr, "sgx545 blit %u: %s %ux%u%s (%d,%d %dx%d) -> %s %ux%u%s (%d,%d %dx%d) filter %u mask %#x scissor %d\n",
               blit_no - 1, util_format_short_name(info->src.format), info->src.resource->width0,
               info->src.resource->height0, sgx545_resource(info->src.resource)->texture ? " texture" : "",

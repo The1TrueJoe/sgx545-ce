@@ -67,6 +67,7 @@ begin_frame(struct sgx545_context *ctx)
                  cbuf->texture->height0);
       return false;
    }
+   t.scanout = res->wrapped;
    rt = get_rt(ctx, res->base.width0, res->base.height0, t.va);
    if (!rt)
       return false;

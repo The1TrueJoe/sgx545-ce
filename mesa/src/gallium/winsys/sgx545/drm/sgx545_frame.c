@@ -1442,6 +1442,10 @@ slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
    if (pending && t->kicked_ns) {
       c->ns_latency += now_ns() - t->kicked_ns;
       c->n_latency++;
+      if (t->scanout) {
+         c->ns_latency_scanout += now_ns() - t->kicked_ns;
+         c->n_latency_scanout++;
+      }
    }
    if ((int32_t)(t->seq - c->done_seq) > 0)
       c->done_seq = t->seq;
@@ -1595,6 +1599,7 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    }
    done.seq = ++c->kicks;
    done.kicked_ns = now_ns();
+   done.scanout = c->target.scanout;
    if (!done.sd && (int32_t)(done.seq - c->done_seq) > 0)
       c->done_seq = done.seq;             /* nothing to wait for */
    s->seq = done.seq;

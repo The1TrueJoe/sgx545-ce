@@ -112,16 +112,20 @@ sgx545_stats_report(struct sgx545_context *ctx)
    if (ctx->hw)
       ctx->hw->ns_flush = ctx->hw->ns_cmd = ctx->hw->ns_sync_wait = 0;
    fprintf(stderr, "sgx545 stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
-           "readback %u, deferred %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u\n",
+           "readback %u, deferred %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
            ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch, ctx->stats.fl_read,
            ctx->stats.fl_deferred, ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
            (unsigned)(ctx->vcache_bytes >> 10), ctx->hw ? ctx->hw->ns_fence_wait * ms : 0,
            ctx->hw && ctx->hw->n_latency ? ctx->hw->ns_latency * ms / ctx->hw->n_latency : 0,
-           ctx->hw ? ctx->hw->n_latency : 0);
+           ctx->hw ? ctx->hw->n_latency : 0,
+           ctx->hw && ctx->hw->n_latency_scanout ? ctx->hw->ns_latency_scanout * ms / ctx->hw->n_latency_scanout : 0,
+           ctx->hw ? ctx->hw->n_latency_scanout : 0);
    if (ctx->hw) {
       ctx->hw->ns_kick = ctx->hw->ns_target_wait = ctx->hw->ns_slot_wait = 0;
       ctx->hw->ns_fence_wait = ctx->hw->ns_latency = 0;
       ctx->hw->n_latency = 0;
+      ctx->hw->ns_latency_scanout = 0;
+      ctx->hw->n_latency_scanout = 0;
    }
    fprintf(stderr, "sgx545 stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms)\n", ctx->stats.blit_gpu,
            ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
