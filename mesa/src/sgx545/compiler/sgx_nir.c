@@ -32,6 +32,8 @@ static const nir_shader_compiler_options options = {
    .lower_insert_word = true,
    /* fmad: the product is rounded before the add (hwt_p7: not fused) */
    .float_mul_add32 = nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
+   /* fmad16, as libusc fuses a mediump a * b + c (one rounding) */
+   .float_mul_add16 = nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
    .no_integers = true,
    .max_unroll_iterations = 8,   /* (libusc unrolls nothing; a 16-trip loop with a break became 125 instructions) */
    .lower_int64_options = ~0,
@@ -424,8 +426,15 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
       if (all16 && !(read & ~7u))
          fmt = 3;
    }
+   if (fmt == 2 && u->c->p16 && prec == GLSL_PRECISION_LOW && !(k & 3) && n >= 3 &&
+       !(nir_def_components_read(&in->def) & ~7u)) {
+      /* a lowp vector loaded 16-bit (sgxc's frontend) and read for xyz: C10
+       * as the DDK loads it, then to F16 where read; or with driver_consts
+       * the F16 of its C10 value from the upload */
+      fmt = u->c->opts->driver_consts ? 5 : 3;
+   }
    for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
-      u->c->const_fmt[k + j] = fmt == 3 && j == 3 ? 1 : fmt;
+      u->c->const_fmt[k + j] = fmt == 3 && j == 3 ? 1 : fmt == 5 && j == 3 ? 2 : fmt;
    for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_prec); j++)
       u->c->const_prec[k + j] = prec;
    if (fmt == 2 && prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3) && k + 3 < ARRAY_SIZE(u->c->const_lowp))
