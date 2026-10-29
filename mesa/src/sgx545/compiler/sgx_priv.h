@@ -101,6 +101,7 @@ struct sgx_sample {
    unsigned pa;         /* where the PDS leaves the raw texel (RGBA8, unpacked in place) */
    unsigned lod;        /* dependent: 0 none, 1 bias, 2 replace */
    bool f16;            /* unpacked to F16 (two channels per register), else left as RGBA8 */
+   bool f16coord;       /* dependent: F16 coordinates, two per register (smp .f16) */
    struct sgx_ins *ins; /* dependent: the SAMPLE pseudo-instruction (dst raw, coord, lod) */
 };
 

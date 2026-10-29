@@ -118,8 +118,14 @@ sample_blocks(struct buf *b, struct sgx_ctx *c, struct sgx_sample *s)
       m.nops = s->lod ? 4 : 3;
       m.op[0] = usse_reg(USSE_K_R, 0);
       struct sgx_ref cr = i->op[1];
-      m.op[1] = usse_reg(cr.file == SGX_F_PA ? USSE_K_PA : cr.file == SGX_F_U ? USSE_K_SA : USSE_K_R,
-                         cr.file == SGX_F_U ? c->sa_base + c->const_slot[cr.n] : phys(c, &cr));
+      unsigned cn = cr.file == SGX_F_U ? c->sa_base + c->const_slot[cr.n] : phys(c, &cr);
+      if (cr.h16 && cr.file == SGX_F_V)
+         cn = sgx_vreg(c, cr.n)->phys + cr.comp / 2;
+      else if (cr.h16 && cr.file != SGX_F_U)
+         cn = cr.n / 2;
+      m.op[1] = usse_reg(cr.file == SGX_F_PA ? USSE_K_PA : cr.file == SGX_F_U ? USSE_K_SA : USSE_K_R, cn);
+      if (s->f16coord)
+         usse_set(&m, USSE_F_CFMT, 1);
       m.op[2] = usse_reg(USSE_K_IMM, 0);
       if (s->lod) {
          struct sgx_ref lr = i->op[2];

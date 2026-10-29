@@ -194,6 +194,8 @@ def useasm(x):
         lod = 1 if ".bias" in mn else 2 if ".lod" in mn else 0
         op = 0x6F + dim + 3 * lod
         a = [arg(o) for o in ops]
+        if d.get("cfmt"):       # F16 / C10 coordinate: the coordinate's format flag
+            a[1] = arg(ops[1], {1: 1 << 22, 2: 1 << 24}[d["cfmt"]])
         return [U(op, *a, A(0xA, d.get("drc", 0)), A(0x10, 0x15), f1=f1 | 0x200)]
     return None
 
