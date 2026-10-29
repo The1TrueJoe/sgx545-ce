@@ -37,20 +37,22 @@ def assemble():
             idx += 1
     for name in pending:          # labels at the very end point past the code
         offset[name] = idx
-    # second pass: encode, substituting `ba LABEL` / `br LABEL` targets
+    # second pass: encode, resolving `ba LABEL` / `br LABEL` to instruction
+    # targets (ba is absolute, br is relative to this instruction)
+    import re
     words = []
     idx = 0
     for kind, val in a.lines:
         if kind == "label":
             continue
         text = val
-        for name, off in offset.items():
-            if f" {name}" in text or text.endswith(name):
-                # a branch to a named label: ba is absolute, br is relative
-                if text.split()[0].lstrip("(").split(")")[-1].strip() in ("ba",):
-                    text = text.replace(name, str(off))
-                elif text.split()[0] == "br":
-                    text = text.replace(name, str(off - idx))
+        m = re.match(r"(\(!?p\d\)\s*)?(ba|br)\s+([A-Za-z_]\w*)\s*(\[.*\])?$", text.strip())
+        if m:
+            name = m.group(3)
+            if name not in offset:
+                raise ValueError(f"branch to undefined label {name!r} in {text!r}")
+            tgt = offset[name] if m.group(2) == "ba" else offset[name] - idx
+            text = text.replace(name, f"#{tgt}")
         hi, lo = asm.assemble(text)
         words.append((lo, hi))
         idx += 1

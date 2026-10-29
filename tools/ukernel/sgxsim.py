@@ -92,75 +92,7 @@ class Machine:
 
     # a minimal model of the hardware's answers to polled registers --------
     def hw_model(self):
-        """registers the microkernel polls, answered as a working GPU would.
-        Each rule is documented in docs/UKERNEL.md ("Register sequences")."""
-        r = self.regs
-        r.v[0x138] = 0
-
-        # cache invalidates report completion in 0x138, one bit group per unit:
-        # PDS_INV0 -> 0x4, PDS_INV1 -> 0x8, PDS_INV_CSC -> 0x3, 0xa08 (USE) -> 0x60.
-        # The TA side waits for 0x27, the 3D side for 0x4b.
-        def inval(bits):
-            def f(regs, v):
-                if v & 1:
-                    regs.v[0x138] = regs.v.get(0x138, 0) | bits
-            return f
-        for a, bits in ((0xAD0, 0x4), (0xAD4, 0x8), (0xAE0, 0x3), (0xA08, 0x60)):
-            r.on_write[a] = inval(bits)
-
-        # 0x140 (written with the bits just polled) is modelled as no-op: the
-        # microkernel waits for 0x20 again after one 0xa08 and two acks, so
-        # the done bits behave as levels here (docs/UKERNEL.md, open questions)
-
-        def cr804(regs, v):             # 0x804 bit 28: MADD cache invalidate -> EVENT_STATUS bit 26
-            if v & 0x10000000:
-                regs.v[0x12C] = regs.v.get(0x12C, 0) | 0x04000000
-            return v & ~0x10000000
-        r.on_write[0x804] = cr804
-
-        def host_clear(regs, v):        # EVENT_HOST_CLEAR clears EVENT_STATUS bits
-            regs.v[0x12C] = regs.v.get(0x12C, 0) & ~v
-        r.on_write[0x134] = host_clear
-
-        def dpm_load(bit):              # 0x684 / 0x680 = 1: DPM TA / 3D free-list load -> EVENT_STATUS2 bit 0 / 1
-            def f(regs, v):
-                if v & 1:
-                    regs.v[0x118] = regs.v.get(0x118, 0) | bit
-            return f
-        r.on_write[0x684] = dpm_load(1)
-        r.on_write[0x680] = dpm_load(2)
-
-        def dpm_op(store, clear, load):
-            # 0x694 / 0x698 (DPM state / control): bits 0-2 = store / clear / load,
-            # address >> 3 above; each reports its own EVENT_STATUS bit
-            def f(regs, v):
-                b = 0
-                if v & 1:
-                    b |= store
-                if v & 2:
-                    b |= clear
-                if v & 4:
-                    b |= load
-                regs.v[0x12C] = regs.v.get(0x12C, 0) | b
-            return f
-        r.on_write[0x694] = dpm_op(0x10, 0x40, 0x20)
-        r.on_write[0x698] = dpm_op(0x80, 0x200, 0x100)
-
-        def otpm(regs, v):              # 0x24c = 9: OTPM invalidate + clear -> STATUS bit 20, STATUS2 bit 12
-            if v & 1:
-                regs.v[0x12C] = regs.v.get(0x12C, 0) | 0x100000
-            if v & 8:
-                regs.v[0x118] = regs.v.get(0x118, 0) | 0x1000
-        r.on_write[0x24C] = otpm
-
-        def tpc(regs, v):               # 0x224 bit 30: TPC flush -> EVENT_STATUS bit 10
-            if v & 0x40000000:
-                regs.v[0x12C] = regs.v.get(0x12C, 0) | 0x400
-        r.on_write[0x224] = tpc
-
-        def host_clear2(regs, v):
-            regs.v[0x118] = regs.v.get(0x118, 0) & ~v
-        r.on_write[0x114] = host_clear2
+        install_hw_model(self.regs)
 
     def auto_polls(self, regs=(0x118, 0x12C, 0x138), after=4):
         """exploration aid: a register read `after` times in a row from one pc
@@ -295,3 +227,77 @@ class Machine:
 
     def hostctl(self):
         return self.mem.words(A["hostctl"], 17)
+
+
+
+def install_hw_model(r):
+    """install the register model a working GPU presents to the microkernel:
+    the done bits each poll loop waits for appear when the request is written
+    (docs/UKERNEL.md, "Register sequences"). Shared by the DDK machine and
+    ukernel/run_ours.py."""
+    r.v[0x138] = 0
+
+    # cache invalidates report completion in 0x138, one bit group per unit:
+    # PDS_INV0 -> 0x4, PDS_INV1 -> 0x8, PDS_INV_CSC -> 0x3, 0xa08 (USE) -> 0x60.
+    # The TA side waits for 0x27, the 3D side for 0x4b.
+    def inval(bits):
+        def f(regs, v):
+            if v & 1:
+                regs.v[0x138] = regs.v.get(0x138, 0) | bits
+        return f
+    for a, bits in ((0xAD0, 0x4), (0xAD4, 0x8), (0xAE0, 0x3), (0xA08, 0x60)):
+        r.on_write[a] = inval(bits)
+
+    # 0x140 (written with the bits just polled) is modelled as no-op: the
+    # microkernel waits for 0x20 again after one 0xa08 and two acks, so
+    # the done bits behave as levels here (docs/UKERNEL.md, open questions)
+
+    def cr804(regs, v):             # 0x804 bit 28: MADD cache invalidate -> EVENT_STATUS bit 26
+        if v & 0x10000000:
+            regs.v[0x12C] = regs.v.get(0x12C, 0) | 0x04000000
+        return v & ~0x10000000
+    r.on_write[0x804] = cr804
+
+    def host_clear(regs, v):        # EVENT_HOST_CLEAR clears EVENT_STATUS bits
+        regs.v[0x12C] = regs.v.get(0x12C, 0) & ~v
+    r.on_write[0x134] = host_clear
+
+    def dpm_load(bit):              # 0x684 / 0x680 = 1: DPM TA / 3D free-list load -> EVENT_STATUS2 bit 0 / 1
+        def f(regs, v):
+            if v & 1:
+                regs.v[0x118] = regs.v.get(0x118, 0) | bit
+        return f
+    r.on_write[0x684] = dpm_load(1)
+    r.on_write[0x680] = dpm_load(2)
+
+    def dpm_op(store, clear, load):
+        # 0x694 / 0x698 (DPM state / control): bits 0-2 = store / clear / load,
+        # address >> 3 above; each reports its own EVENT_STATUS bit
+        def f(regs, v):
+            b = 0
+            if v & 1:
+                b |= store
+            if v & 2:
+                b |= clear
+            if v & 4:
+                b |= load
+            regs.v[0x12C] = regs.v.get(0x12C, 0) | b
+        return f
+    r.on_write[0x694] = dpm_op(0x10, 0x40, 0x20)
+    r.on_write[0x698] = dpm_op(0x80, 0x200, 0x100)
+
+    def otpm(regs, v):              # 0x24c = 9: OTPM invalidate + clear -> STATUS bit 20, STATUS2 bit 12
+        if v & 1:
+            regs.v[0x12C] = regs.v.get(0x12C, 0) | 0x100000
+        if v & 8:
+            regs.v[0x118] = regs.v.get(0x118, 0) | 0x1000
+    r.on_write[0x24C] = otpm
+
+    def tpc(regs, v):               # 0x224 bit 30: TPC flush -> EVENT_STATUS bit 10
+        if v & 0x40000000:
+            regs.v[0x12C] = regs.v.get(0x12C, 0) | 0x400
+    r.on_write[0x224] = tpc
+
+    def host_clear2(regs, v):
+        regs.v[0x118] = regs.v.get(0x118, 0) & ~v
+    r.on_write[0x114] = host_clear2

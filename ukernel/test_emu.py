@@ -18,8 +18,12 @@ sys.path.insert(0, os.path.join(ROOT, "tools", "ukernel"))
 from emu import USSE, Mem, Regs  # noqa: E402
 
 HOSTCTL = 0x32003100
+CTLBLK = 0x32003000
+KCCBCTL = 0x32002000
 CR_EVENT_STATUS = 0x12C
 SW_EVENT = 0x4000
+HC_INTCLEAR = 9
+SC_RIFLIST = 0x3C
 
 
 def load():
@@ -32,17 +36,38 @@ def load():
 def machine(code):
     mem, regs = Mem(), Regs()
     u = USSE(code, base=0x30000000, mem=mem, regs=regs)
-    u.sa[0] = 0x32003000           # control block self
-    u.sa[1] = HOSTCTL              # host control block
+    # the control block, as the entry PDS program's DMA presents it in sa
+    mem.wr(CTLBLK + 4 * 0, CTLBLK)
+    mem.wr(CTLBLK + 4 * 1, HOSTCTL)
+    mem.wr(CTLBLK + 4 * 2, KCCBCTL)
+    for i in range(64):
+        u.sa[i] = mem.rd(CTLBLK + 4 * i)
     return u, mem, regs
 
 
 def test_init(code, man):
     u, mem, regs = machine(code)
     mem.wr(HOSTCTL, 0)
+    mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 0)       # clean boot: HWR bit clear
     u.task(man["entries"]["init"] // 8)
     assert mem.rd(HOSTCTL) == 1, "init must set ui32InitStatus = PVRSRV_USSE_EDM_INIT_COMPLETE"
-    print("  init: ui32InitStatus = 1  OK")
+    print("  init (clean): ui32InitStatus = 1  OK")
+
+
+def test_recovery_init(code, man):
+    u, mem, regs = machine(code)
+    mem.wr(HOSTCTL, 0)
+    mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 1)       # recovery: INTERRUPT_HWR set
+    mem.wr(KCCBCTL + 0, 0x30)                   # kernel CCB write offset
+    mem.wr(KCCBCTL + 4, 0x2f)                   # read offset != write: stale commands
+    mem.wr(CTLBLK + 4 * SC_RIFLIST, 0xDEAD)     # a stale render-in-flight list head
+    for i in range(64):                         # re-DMA so sa reflects the memory
+        u.sa[i] = mem.rd(CTLBLK + 4 * i)
+    u.task(man["entries"]["init"] // 8)
+    assert mem.rd(KCCBCTL + 4) == 0x30, "recovery must discard the kernel CCB (read := write)"
+    assert mem.rd(CTLBLK + 4 * SC_RIFLIST) == 0, "recovery must empty the render-in-flight list"
+    assert mem.rd(HOSTCTL) == 1, "recovery must still set ui32InitStatus"
+    print("  init (recovery): CCB discarded, list emptied, InitStatus = 1  OK")
 
 
 def test_raise_irq(code, man):
@@ -58,8 +83,10 @@ def main():
     code, man = load()
     print("openHC microkernel offline tests:")
     test_init(code, man)
+    test_recovery_init(code, man)
     test_raise_irq(code, man)
     print("all OK")
+    print("(frame-level TA/3D register match vs the DDK: ukernel/run_ours.py TRACE --ddk FW)")
 
 
 if __name__ == "__main__":
