@@ -167,6 +167,14 @@ The pattern libusc writes for an unused source is the immediate #0: bank 2
 and the extension bit, number 0: in src2, l29 + h16. mov, rlp, smp without
 a LOD source and ld without a range operand write it in src2.
 
+A bit that no field, operand slot or fixed value of the form names is 0:
+libusc never sets one, and no corpus word has one (**encoder**, **corpus**).
+That covers, for example, hw 1's h22, hw 3/4's h10 beside the one-bit sub-op,
+h7 (|src0|) in the forms without a src0, mov/movc's h3-6, smp's h19,
+testmask's h2-3 and h6, and every bit the special class's forms don't list.
+A form without a predicate field (nop, idf, wdf, lock, the 0xd6/0xd7 ops,
+emit, ldr, str) has none: a `(p0)` prefix on it is an error.
+
 ### Text notation and defaults
 
 `asm.py` takes, and `dis.py` prints, the syntax below. An encoding check
@@ -197,12 +205,15 @@ number base, spacing) are equivalent.
   or sa operand is `r3.f16.lo` / `r3.f16.hi` (the number counts halves; a bare
   `.f16` on them is an error). An F16 indexed, constant, immediate or internal
   operand is a bare `.f16` that only sets bit 6: `pa[idx1+3].f16`, `c3.f16`,
-  `#3.f16`, `i1.f16` (`.lo` / `.hi` on them is an error). An f32 operand under
+  `#3.f16`, `i1.f16` (`.lo` / `.hi` on them is an error). The 6-bit numbers
+apply to every slot that follows format select whatever the op, so a
+test with `fmt` and a C10 ALU op has them too. An f32 operand under
   format select is written plain (`r40` is rejected: 6-bit numbers). Any format
   suffix sets `fmt`. Write `[fmt]` when all the operands are f32. Under format
   control (sop2, sopwm, the sop3 family, dot3/dot4, ima8, fpma) a C10 operand
   is `pa4.c10` (a whole register), and for efo an F16 one is `r3.f16.lo` /
-  `.hi`. Either is accepted only while the enable is on.
+  `.hi` (an internal register only takes the flag: `i1.f16`, as under format
+  select). Either is accepted only while the enable is on.
   hw 1's source format is not an operand suffix: its operand is plain and the
   brackets carry `f16` (h7), `c10` (h8), `chan=n` (h3-4) and `f16d` (h2,
   F16 destination).
@@ -224,6 +235,17 @@ number base, spacing) are equivalent.
   `rcnt` for a count of 1 and `rcnt rpt=n` otherwise. With h21 clear, h12-15
   is the mask, written `mask=v` when it differs from the class's default
   (below). The other classes write `rpt=n` directly.
+- **fmad16's swizzles** are bracket fields, not operand suffixes:
+  `swz0=`, `swz1=`, `swz2=` for src0-2 with the values `ll`, `hh`, `f32`;
+  0 (lo, hi as stored) is the default and isn't written:
+  `fmad16 r0, r1, r2, r3  [swz0=ll swz1=hh swz2=f32]`.
+- **smp's mask and ret** share h12-15. With `.rdata` / `.rinfo`, ret sets
+  h14-15, so only the mask's bits 0-1 (h12-13) are free. `mask=v` writes v
+  into h12-15 first and the suffix then sets h14-15, so `mask=1` and `mask=5`
+  give the same word with `.rdata`. dis.py prints the whole h12-15 value
+  when it isn't 1.
+- **Predicates outside h24-26.** depthf's and atst8's 2-bit predicate (h9-10,
+  PRED2) is written as the usual prefix: `(p1) atst8 pa0, p0.nw, pa0, sa3, sa4  [end]`.
 - **drc** (smp, ld, eld, ldr) is the bracket field `drc=n`, default 0. ld/st's
   range operand is written if and only if `range` (h6) is set. smp's LOD
   operand is written only when the `lod` suffix names one (`.bias`, `.lod`,
@@ -512,8 +534,8 @@ fmad16 (**encoder**): per-source swizzle (USEASM argument flags 25-26):
 src0 h9-10, src1 h13 + h18, src2 h21-22 (so fmad16 has no end bit); repeat
 1-2 in h12 (needs explicit increments h15/h14/h8). The swizzle value is
 libusc's FMAD16_SWIZZLE enum, passed through unchanged by asm.c (f16opt.c
-asserts compare against LOWLOW = 1, HIGHHIGH = 2, CVTFROMF32 = 3), printed
-as no suffix / `ll` / `hh` / `f32`: **hardware** (hwt_p4 `fmad16_swz*`, the
+asserts compare against LOWLOW = 1, HIGHHIGH = 2, CVTFROMF32 = 3), written
+`swz<n>=` in brackets, no field / `ll` / `hh` / `f32`: **hardware** (hwt_p4 `fmad16_swz*`, the
 same for all three sources): 0 = (lo, hi) as stored, 1 = (lo, lo), 2 = (hi,
 hi), 3 = the register read as one f32 and converted to F16 for both lanes
 (r0 = f32 1.5 -> 1.5 in both; r0 = H(2, 3) = f32 32.06 -> 32.06). fmad16
@@ -1512,7 +1534,7 @@ predicate.
 | `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits (feature +0x20) | encoder; **hardware** (hwt_ba): the target is the absolute instruction index from the USE code base the task runs from (DOUTU's base 0 = 0x37000000): `ba #0x1077` reached the instruction at 0x37008388 + 6*8 |
 | `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | encoder, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
 | `lapc` | h6-8 = 2 | return to the saved link address | encoder, corpus (fn_call); **hardware** (hwt_p7 `call_lapc`): `br #3 [link]` ... `lapc` returns to the instruction after the br |
-| `nop` | h6-8 = 5 | h23 syncs (f1 b2), h18 end (f1 b17), l0 = f2 b26, l1 = f3 b5 | encoder, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
+| `nop` | h6-8 = 5 | h23 syncs (f1 b2), h18 end (f1 b17), l0 = f2 b26, l1 = f3 b5; no predicate, h12 and h24-26 are 0 | encoder, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
 | `setl src` | h6-8 = 3 | set the link address from a register: src in the src1 slot (l7-13, bank l30-31, extension h17) | `static` (the DDK microkernel's code: a call through a table is `setl` + `lapc`, a nested call `savl rN` ... `br [link]` ... `setl rN`); `capture` (tools/ukernel's emulator runs a captured frame through the microkernel with this reading and matches the DDK's register and memory writes). libusc has no USEASM op for it, so there is no oracle |
 | `savl dst` | h6-8 = 4 | save the link address to a register: dst in the destination slot's number and bank (l21-27, h0-1), no extension bit | as `setl` |
 | `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no arguments; needs word0 & 0x200000 | encoder; meaning unknown |
