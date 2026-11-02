@@ -655,6 +655,13 @@ def build(a):
     # do_ta: program and start the TA for the context in r16 (subroutine)
     # ======================================================================
     a.label("do_ta")
+    # soft-reset the TA (EUR_CR_SOFT_RESET 0x080 bit 2) at the start, before it
+    # is programmed — the DDK does this early (ddk-ref lines 22-23), not before
+    # the kick, so the TA begins this kick from a clean state.
+    a.i("limm r5, #4")
+    a.i(f"str #{0x80 // 4}, r5")
+    a.i("limm r5, #0")
+    a.i(f"str #{0x80 // 4}, r5")
     # client CCB and its control, then the TA command base
     a.i("ld.a.d r1, r16, #%d [moe]" % CTX_CCB)      # client CCB base
     a.i("ld.a.d r2, r16, #%d [moe]" % CTX_CCBCTL)   # client CCB control
@@ -683,11 +690,23 @@ def build(a):
     a.i("st.a.d r3, #0, #0 [moe]")                 # rtdata[0] = 0 (render in progress)
     a.i("idf")
     a.i("wdf")
-    # point the BIF at this context's page directory, then invalidate the
-    # caches and wait (so the cores see this context's page tables)
+    # point the BIF at this context's page directory. Load the client PD into
+    # directory-list 0 (EUR_CR_BIF_DIR_LIST_BASE0 = 0xc84), pulse the BIF
+    # directory-cache invalidate (EUR_CR_BIF_CTRL 0xc00 bit 3 = INVALDC), then
+    # route the TA requestor to list 0 while the EDM stays on list 15
+    # (EUR_CR_BIF_BANK0 = 0xc78 = 0xf: b0-3 EDM=15, b4-7 TA=0). Without BANK0 the
+    # TA reads the control stream through the wrong page tables and faults on the
+    # kernel-data/command memory — EA1 HW 2026-11-02: EUR_CR_BIF_FAULT =
+    # 0x3200F00F (the TA command base). Then invalidate the PDS/USE caches.
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
     a.i("wdf")
-    a.i(f"str #{0xc84 // 4}, r4")
+    a.i(f"str #{0xc84 // 4}, r4")                   # BIF_DIR_LIST_BASE0 = client PD
+    a.i("limm r5, #0xf")                            # BIF_BANK0: EDM=list 15, TA=list 0
+    a.i(f"str #{0xc78 // 4}, r5")
+    a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
+    a.i(f"str #{0xc00 // 4}, r5")
+    a.i("limm r5, #0")
+    a.i(f"str #{0xc00 // 4}, r5")
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
     # clear 0xa74 before re-writing its TA-flags field below. The DDK clears it
     # (ddk-ref line 61) then writes the command's flags into b27-31; srvinit's
