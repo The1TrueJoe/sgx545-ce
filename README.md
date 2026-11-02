@@ -1,5 +1,8 @@
 # sgx545-ce
 
+> **Working on this repo?** Read [AGENTS.md](AGENTS.md) first: the end goal (upstream Linux, Mesa and
+> linux-firmware support for Cedarview), the standards the work must meet, and the milestones.
+
 An open driver stack for the PowerVR **SGX545** in the Intel Atom CE5300/CE5310
 (Control4 EA-1 / EA-3), the same core as Cedarview's GMA 3600. The kernel side is
 Intel's GPL DDK 1.7 ported to modern Linux; the userspace side is new, written from
