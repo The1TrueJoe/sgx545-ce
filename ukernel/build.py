@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright © 2026 Joseph Telaak
 """Assemble openHC's microkernel (ukernel.py) into the binary srvinit loads
 and a manifest of its entry offsets.
 

@@ -4,19 +4,19 @@ From `AGENTS.md` §3.4/§3.5 and §5 M1. Recorded here so the DDK microkernel
 stays a drop-in A/B reference and the firmware is submittable to
 linux-firmware.
 
-## License: MIT (proposed)
+## License: MIT (confirmed)
 
 openHC's microkernel (`ukernel/`) is written from `docs/` — behaviour,
 encodings and register meanings found by tracing and hardware tests
 (`tools/isa/hwt_*`), never translated from Imagination's bytes or decompiled
-code (the clean-room discipline in §3.6 and `ukernel/README.md`). It is
-therefore ours to license permissively. **MIT** is proposed: it is the
-simplest permissive license, is what linux-firmware and Mesa expect, and
-places no obligation on redistributors (an ISO can ship the firmware blob
-freely). The alternative, BSD-2/3-Clause, is equivalent for this purpose; MIT
-is chosen for brevity. A `LICENSE` file goes in `ukernel/` and a `WHENCE`
-entry names the built binary when it is submitted. *Joseph to confirm MIT vs
-BSD.*
+code (the clean-room discipline in `docs/CLEANROOM.md`, §3.6 and
+`ukernel/README.md`). It is therefore ours to license permissively. **MIT**
+(confirmed by Joseph, 2026-11-01): the simplest permissive license, what
+linux-firmware and Mesa expect, placing no obligation on redistributors (an
+ISO can ship the firmware blob freely). `ukernel/LICENSE` holds the MIT text
+with `Copyright © 2026 Joseph Telaak`, every `ukernel/*.py` carries an
+`SPDX-License-Identifier: MIT` + copyright header, and a `WHENCE` entry will
+name the built binary when it is submitted to linux-firmware.
 
 Nothing in `ukernel/` is copied or mechanically derived from `kernel/src/`
 (GPL-2.0). The register and struct *knowledge* used by the microkernel comes

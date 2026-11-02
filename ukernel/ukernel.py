@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright © 2026 Joseph Telaak
 """openHC's own SGX545 USSE microkernel, in assembly.
 
 The open replacement for Imagination's EDM microkernel, written from the
@@ -368,6 +370,7 @@ def build(a):
     a.i("wdf")
     a.i("limm r2, #0")                             # discard the render in flight
     a.i(f"st.a.d sa{SA_SELF}, #{SC_INFLIGHT}, r2 [moe]")
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_XFER}, r2 [moe]")   # and any transfer in flight
     a.i("idf")
     a.i("wdf")
     a.label("init_set")
