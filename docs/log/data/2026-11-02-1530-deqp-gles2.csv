@@ -37,7 +37,7 @@ shaders.function,0,0,4
 shaders.functions,31,0,44
 shaders.indexing,27,0,56
 shaders.invariance,0,0,3
-shaders.linkage,6,4,1
+shaders.linkage,6,0,1
 shaders.loops,254,0,230
 shaders.matrix,360,0,20
 shaders.misc,2,0,0
@@ -46,7 +46,7 @@ shaders.preprocessor,4,0,80
 shaders.random,187,26,73
 shaders.return,8,0,0
 shaders.scoping,0,0,8
-shaders.struct,13,1,2
+shaders.struct,13,0,2
 shaders.swizzles,558,0,99
 shaders.texture_functions,4,1,1
 state_query.floats,0,0,3
@@ -62,7 +62,7 @@ texture.specification,36,36,16
 texture.vertex,0,0,6
 texture.wrap,0,0,2
 uniform_api.random,15,0,22
-uniform_api.value,176,8,4
+uniform_api.value,176,0,4
 # first_pass: Crash 35, Fail 3075, Flake 13, Pass 13592, Skip 445, Timeout 1, Warn 4
-# now: Fail 405, Pass 16310, Skip 445, Timeout 1, Warn 4
+# now: Fail 392, Pass 16323, Skip 445, Timeout 1, Warn 4
 # ddk: Crash 11, Fail 1146, Flake 1, Pass 15837, Skip 124, Timeout 8, Warn 38
