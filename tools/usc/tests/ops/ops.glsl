@@ -28,3 +28,9 @@ void main() {
     mediump float b = (s[0].b[2].b[1].y + s[0].b[1].b[0].y + s[1].a) * s[0].b[1].a;
     mediump float a = float(s[0].c) + s[1].b[2].a - s[1].b[1].a;
     gl_FragColor = vec4(r, g, b, a); }
+@frag mixed_colour_m
+precision mediump float;
+uniform mediump float e;
+uniform highp float h;
+varying mediump float f;
+void main() { gl_FragColor = vec4(-7.5 - e, h, f * -0.25, 1.0); }

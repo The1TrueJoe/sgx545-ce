@@ -1254,6 +1254,21 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       struct sgx_ref r[4];
       for (unsigned k = 0; k < alu->def.num_components; k++)
          r[k] = alu_src(c, alu, 0, k);
+      nir_legacy_alu_dest fd = nir_legacy_chase_alu_dest(&alu->def);
+      if (!fd.dest.is_ssa && !c->def_dest) {
+         /* stored to a 32-bit register (the colour, dEQP random
+          * trigonometric.72): widen into it, x.f16 - floor(0) */
+         unsigned vreg, base;
+         def_dest(c, &alu->def, &fd.dest, &vreg, &base);
+         struct sgx_ref d[4], ss[2][4];
+         for (unsigned k = 0; k < 4; k++) {
+            d[k] = vref(vreg, base + k);
+            ss[0][k] = (fd.write_mask >> k & 1) ? const_f32(r[k]) : ref(SGX_F_C, 48);
+            ss[1][k] = ref(SGX_F_C, 48);
+         }
+         emit_runs(c, USSE_FSUBFLR, fd.write_mask, d, 2, ss, &NOF, 0);
+         return;
+      }
       set_refs(c, &alu->def, r, alu->def.num_components);
       return;
    }
