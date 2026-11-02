@@ -1820,7 +1820,10 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       if (p->type == nir_instr_type_alu || p->type == nir_instr_type_tex) {
          nir_legacy_dest ld = p->type == nir_instr_type_alu ? nir_legacy_chase_alu_dest(val).dest
                                                             : nir_legacy_chase_dest(val);
-         if (!ld.is_ssa)
+         /* (only when it really wrote the register: a texture's unpack and
+          * the aliasing paths leave the value somewhere of its own, dEQP
+          * random all_features.5's texture2DProj colour) */
+         if (!ld.is_ssa && c->vals[val->index].kind == VAL_NONE)
             return;
       }
       if (p->type == nir_instr_type_intrinsic && nir_instr_as_intrinsic(p)->intrinsic == nir_intrinsic_load_reg) {
