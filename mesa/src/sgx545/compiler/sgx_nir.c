@@ -189,10 +189,17 @@ lower_sincos_instr(nir_builder *b, nir_alu_instr *alu, void *data)
       return false;
    b->cursor = nir_before_instr(&alu->instr);
    nir_def *x = nir_ssa_for_alu_src(b, alu, 0);
+   /* (a mediump argument reduced in f32: F16 would keep few bits of the
+    * fraction of a larger angle) */
+   if (x->bit_size == 16)
+      x = nir_f2f32(b, x);
    double c = alu->op == nir_op_fsin ? 0.5 : 0.75;
    nir_def *u = nir_ffract(b, nir_fmad(b, x, nir_imm_float(b, 0.5 / M_PI), nir_imm_float(b, c)));
    nir_def *t = nir_fmad(b, u, nir_imm_float(b, 4.0), nir_imm_float(b, -2.0));
-   nir_def_replace(&alu->def, nir_fsin_agx(b, t));
+   nir_def *r = nir_fsin_agx(b, t);
+   if (alu->def.bit_size == 16)
+      r = nir_f2f16(b, r);
+   nir_def_replace(&alu->def, r);
    return true;
 }
 
