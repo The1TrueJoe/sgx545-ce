@@ -23,7 +23,7 @@ KCCBCTL = 0x32002000
 CR_EVENT_STATUS = 0x12C
 SW_EVENT = 0x4000
 HC_INTCLEAR = 9
-SC_RIFLIST = 0x3C
+SC_INFLIGHT = 0x14
 
 
 def patch_limm(code, off, v):
@@ -80,10 +80,10 @@ def test_recovery_init(code, man):
     mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 1)        # recovery: INTERRUPT_HWR set
     mem.wr(KCCBCTL + 0, 0x30)                   # kernel CCB write offset
     mem.wr(KCCBCTL + 4, 0x2f)                   # read offset != write: stale commands
-    mem.wr(CTLBLK + 4 * SC_RIFLIST, 0xDEAD)     # a stale render-in-flight list head
+    mem.wr(CTLBLK + 4 * SC_INFLIGHT, 0xDEAD)     # a stale render-in-flight list head
     run_event(u, man, regs)
     assert mem.rd(KCCBCTL + 4) == 0x30, "recovery must discard the kernel CCB (read := write)"
-    assert mem.rd(CTLBLK + 4 * SC_RIFLIST) == 0, "recovery must empty the render-in-flight list"
+    assert mem.rd(CTLBLK + 4 * SC_INFLIGHT) == 0, "recovery must empty the render-in-flight list"
     assert mem.rd(HOSTCTL) == 1, "recovery must still set ui32InitStatus"
     print("  init (recovery): CCB discarded, list emptied, InitStatus = 1  OK")
 
@@ -97,12 +97,70 @@ def test_raise_irq(code, man):
     print("  raise_host_irq: EVENT_STATUS <- SW_EVENT  OK")
 
 
+EV_3D_END = 0x40000          # PIXELBE end of render
+
+
+def test_render_teardown(code, man):
+    """render_done must free the render's slot, RT and context in-flight markers
+    and clear its destination sync objects (docs/UKERNEL.md §5). Values and
+    offsets mirror what the DDK writes; run_ours.py checks the same against the
+    live DDK over a real frame, this guards it with no trace or firmware."""
+    u, mem, regs = machine(code)
+    mem.wr(HOSTCTL, 1)                               # already initialised -> dispatch on events
+    rd, rtentry, ctx, rtdata = 0x32041a00, 0x32041cf0, 0x3000e000, 0x32041d60
+    sync0, sync1 = 0x2d0030f4, 0x2d0030fc
+    # the control-block scratch do_ta would have stored
+    mem.wr(CTLBLK + 4 * 0x32, rd)                    # SC_RD
+    mem.wr(CTLBLK + 4 * 0x34, rtentry)               # SC_RTENTRY
+    mem.wr(CTLBLK + 4 * 0x30, ctx)                   # SC_CTX
+    mem.wr(rtentry + 0x30, rtdata)                   # RT-data pointer
+    mem.wr(rd + 0xd0, sync0)                         # destination sync 0 address
+    mem.wr(rd + 0x240, sync1)                        # destination sync 1 address
+    mem.wr(rd + 4 * 56, 0)                           # no TA3D dependency block
+    mem.wr(rd + 4 * 65, 1)                           # write-ops word -> rd+0x108 := 0
+    mem.wr(sync0, 7); mem.wr(sync1, 7)               # non-zero, must be cleared
+    regs.v[CR_EVENT_STATUS] = EV_3D_END
+    u.task(man["entries"]["event"] // 8)
+    assert mem.rd(sync0) == 0 and mem.rd(sync1) == 0, "both destination sync objects must be cleared"
+    assert mem.rd(rtdata) == 1, "rtdata[0] must be marked render-complete"
+    assert mem.rd(rtentry + 0x4) == 0, "rtentry+0x4 (RT in use) must be freed"
+    assert mem.rd(rtentry + 0x34) == 0x10, "rtentry+0x34 must return to the idle state"
+    assert mem.rd(rd + 0x12c) == 0, "rd+0x12c (render active) must be cleared"
+    assert mem.rd(rd + 0x2a4) == 2, "rd+0x2a4 (render state) must move to freed"
+    assert mem.rd(rd + 0x108) == 0, "rd+0x108 (write-ops) must be reset"
+    for off in (0x28, 0x2c, 0x3c):
+        assert mem.rd(ctx + off) == 0, f"ctx+{off:#x} (in-flight render) must be cleared"
+    assert mem.rd(CTLBLK + 0x50) == 0, "control block +0x50 (in-flight slot) must be emptied"
+    print("  render teardown: sync objects cleared, render/RT/context slot freed  OK")
+
+
+def test_xfer_done(code, man):
+    """a transfer's 3D-end routes to xfer_done, not the render teardown: it
+    advances the transfer context's CCB past the 0x1c0-byte command and clears
+    the in-flight marker, leaving the render scratch untouched (docs/TEX.md §3)."""
+    u, mem, regs = machine(code)
+    mem.wr(HOSTCTL, 1)                               # initialised -> dispatch on events
+    ctx, ccbctl = 0x30010000, 0x3201e4d0
+    mem.wr(ctx + 4 * 4, ccbctl)                      # CTX_CCBCTL -> the CCB control
+    mem.wr(ccbctl + 4, 0)                            # read offset
+    mem.wr(CTLBLK + 4 * 0x15, ctx)                   # SC_XFER: a transfer in flight
+    mem.wr(CTLBLK + 4 * 0x32, 0x0BADC0DE)            # SC_RD sentinel (render path must not run)
+    regs.v[CR_EVENT_STATUS] = EV_3D_END
+    u.task(man["entries"]["event"] // 8)
+    assert mem.rd(ccbctl + 4) == 0x1c0, "transfer completion must advance the CCB past the command"
+    assert mem.rd(CTLBLK + 4 * 0x15) == 0, "the transfer in-flight marker must clear"
+    assert mem.rd(CTLBLK + 4 * 0x32) == 0x0BADC0DE, "the render teardown must not run for a transfer"
+    print("  transfer completion: CCB advanced, marker cleared, render path skipped  OK")
+
+
 def main():
     code, man = load()
     print("openHC microkernel offline tests:")
     test_init(code, man)
     test_recovery_init(code, man)
     test_raise_irq(code, man)
+    test_render_teardown(code, man)
+    test_xfer_done(code, man)
     print("all OK")
     print("(frame-level TA/3D register match vs the DDK: ukernel/run_ours.py TRACE --ddk FW)")
 

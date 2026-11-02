@@ -41,6 +41,10 @@ PLUMBING = {0x134, 0x114, 0x140, 0x694, 0x698, 0x24c, 0x224, 0xa08, 0xc00, 0xc78
 # ours phase -> the DDK Runner phase that does the same work
 PHASE_MAP = {"TA1": "TA kick 1", "3D": "TA finished (2)"}
 
+# HW render context words that also address a transfer context's CCB
+CTX_CCBCTL = 0x10 // 4
+TRANSFERCMD_SHARED = 0xac
+
 
 def ours():
     binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
@@ -140,11 +144,28 @@ def run_ours(code, man, events, ctxs):
             out += [("3D", a, v) for a, v in reg_writes(u)]
             event(u, mem, regs, man, EV_3D_END)   # -> render_done
             out += [("done", a, v) for a, v in reg_writes(u)]
-            cmd = k.ccb_va + k.ccb_off - 0x58
-            rd = mem.rd(cmd + 0x38)
+            # every memory write render_done makes (event() cleared the log, so
+            # mem.log is exactly the completion handler's writes)
             for (op, a, v, pc) in mem.log:
-                if op == "st" and (0x2d000000 <= a < 0x2e000000 or rd <= a < rd + 0x1ec):
+                if op == "st":
                     out.append(("done_mem", a, v))
+    # transfers (SGX_SUBMITTRANSFER): a 3D-only render. Drive each through our
+    # kick entry with a type-1 command (data[1] = transfer context), as the
+    # host does, and collect the 3D registers k_transfer programs.
+    xfers = [k for k in events if k.kind == "xfer"]
+    for i, x in enumerate(xfers):
+        x.load(mem)
+        ctx = x.data[1]
+        ccbctl = mem.rd(ctx + 4 * CTX_CCBCTL)          # the transfer context's CCB control
+        mem.wr(ccbctl + 4, x.ccb_off - TRANSFERCMD_SHARED)   # read offset -> this command
+        slot = i & 0xFF
+        c = A["kccb"] + 32 * slot
+        mem.wr(c + 0, 1)                               # type 1 = transfer
+        mem.wr(c + 4 * 3, ctx)                         # data[1] = transfer context
+        mem.wr(A["ccbctl"] + 0, i + 1)                 # kernel CCB write offset
+        mem.wr(A["ccbctl"] + 4, slot)                  # read offset
+        event(u, mem, regs, man, EV_HOST_KICK)         # -> kick -> k_transfer
+        out += [("XFER%d" % (i + 1), a, v) for a, v in reg_writes(u)]
     return out
 
 
@@ -194,8 +215,9 @@ def run_ddk_sync(fw, trace):
 
 
 def run_ddk_done(fw, trace):
-    """the DDK's sync-heap / render-details memory writes during render
-    completion (the '3D end of render' and 'DPM 3D memory free' phases)"""
+    """every memory write the DDK makes during render completion (the '3D end
+    of render' and 'DPM 3D memory free' phases): the sync-object updates and the
+    full render/RT/context teardown"""
     sys.path.insert(0, os.path.join(ROOT, "tools", "ukernel"))
     import importlib
     runmod = importlib.import_module("run")
@@ -204,9 +226,11 @@ def run_ddk_done(fw, trace):
     orig = r.flush
 
     def flush(title):
-        if title.startswith("3D end") or title.startswith("DPM 3D"):
+        # the TA-render completion only (the "(transfer)" variants are the
+        # transfer's own completion, validated separately)
+        if (title.startswith("3D end") or title.startswith("DPM 3D")) and "transfer" not in title:
             for (op, a, v, pc) in r.m.mem.log:
-                if op == "st" and 0x2d000000 <= a < 0x2e000000:
+                if op == "st":
                     out[a] = v
         orig(title)
     r.flush = flush
@@ -249,20 +273,43 @@ def main():
             tag = "MISSING" if ov is None else "DIFF"
             print(f"    {tag} {r:#010x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
         bad += len(miss)
-    # render completion: every sync-heap write ours makes must match the DDK's
+    # render completion: ours must reproduce every memory write the DDK makes
+    # during the teardown, with the same value (sync objects, render/RT/context
+    # slot free). EXTRA = a write ours makes that the DDK does not.
     ddk_done = run_ddk_done(a.ddk, a.trace)
-    ours_done = {r: v for (p, r, v) in out if p == "done_mem" and 0x2d000000 <= r < 0x2e000000}
-    dmiss = [(r, ours_done[r], ddk_done.get(r)) for r in ours_done if ddk_done.get(r) != ours_done[r]]
-    print(f"[done] ours {len(ours_done)} sync-heap writes (subset of the DDK's {len(ddk_done)})")
-    for r, ov, dv in sorted(dmiss):
-        print(f"    MISMATCH {r:#010x}: ours {ov:#010x} vs DDK " + ("(none)" if dv is None else f"{dv:#010x}"))
-    bad += len(dmiss)
+    ours_done = {r: v for (p, r, v) in out if p == "done_mem"}
+    dmiss = [(r, ddk_done[r], ours_done.get(r)) for r in ddk_done if ours_done.get(r) != ddk_done[r]]
+    extra = [r for r in ours_done if r not in ddk_done]
+    print(f"[done] DDK {len(ddk_done)} completion mem writes, ours {len(ours_done)}")
+    for r, dv, ov in sorted(dmiss):
+        tag = "MISSING" if ov is None else "DIFF"
+        print(f"    {tag} {r:#010x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
+    for r in sorted(extra):
+        print(f"    EXTRA   {r:#010x}: ours {ours_done[r]:#010x}")
+    bad += len(dmiss) + len(extra)
     for ph, ddk_phase in PHASE_MAP.items():
         om = ours_ph.get(ph, {})
         dm = {r: v for r, v in ddk.get(ddk_phase, {}).items() if r not in PLUMBING}
         diff = [(r, dm[r], om.get(r)) for r in dm if om.get(r) != dm[r]]
         extra = [r for r in om if r not in dm]
         print(f"[{ph} vs DDK '{ddk_phase}'] DDK {len(dm)} struct regs, ours {len(om)}")
+        for r, dv, ov in sorted(diff):
+            tag = "MISSING" if ov is None else "DIFF"
+            print(f"    {tag} {r:#06x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
+        for r in sorted(extra):
+            print(f"    EXTRA   {r:#06x}: ours {om[r]:#010x}")
+        bad += len(diff) + len(extra)
+    # transfers: each XFERn programs the 3D from its command, vs the DDK's
+    # "transfer n". (The DDK model fully programs only the first transfer; later
+    # ones are model no-ops, so only non-empty DDK phases are compared.)
+    for i in range(1, 1 + sum(1 for p in ours_ph if p.startswith("XFER"))):
+        om = ours_ph.get("XFER%d" % i, {})
+        dm = {r: v for r, v in ddk.get("transfer %d" % i, {}).items() if r not in PLUMBING}
+        if not dm:
+            continue
+        diff = [(r, dm[r], om.get(r)) for r in dm if om.get(r) != dm[r]]
+        extra = [r for r in om if r not in dm]
+        print(f"[XFER{i} vs DDK 'transfer {i}'] DDK {len(dm)} struct regs, ours {len(om)}")
         for r, dv, ov in sorted(diff):
             tag = "MISSING" if ov is None else "DIFF"
             print(f"    {tag} {r:#06x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))

@@ -41,7 +41,30 @@ SC_CMD = 0x31
 SC_RD = 0x32
 SC_PB = 0x33
 SC_RTENTRY = 0x34
-SC_RIFLIST = 0x3C    # render-in-flight list head (we keep it empty: 0 or 1 entry)
+SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
+                     # flight (0 = none). The DDK keeps a doubly-linked render-
+                     # in-flight list; one context needs only this single slot,
+                     # at the DDK's own offset so the A/B reference still matches.
+SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
+                     # none). Lets the 3D-end handler tell a transfer's completion
+                     # from a render's. (openHC's own slot; a transfer and a
+                     # render never overlap on one context.)
+TRANSFERCMD_BYTES = 0x1c0   # SGXMKIF_TRANSFERCMD size (docs/TEX.md §3)
+
+# ---- render-details / RT-data / context fields touched at render teardown ----
+# (docs/UKERNEL.md §5; byte offsets, observed from the DDK's completion writes)
+RD_SYNC0 = 0xD0 // 4         # 3D destination sync object 0 (its status word cleared)
+RD_SYNC1 = 0x240 // 4        # 3D destination sync object 1
+RD_WRITEOPS = 0x108 // 4     # render-details write-ops word
+RD_ACTIVE = 0x12C // 4       # render-details active flag (cleared when freed)
+RD_STATE = 0x2A4             # render-details state: 1 when the 3D starts, 2 when freed
+RT_RENDER = 0x4 // 4         # RT-data entry: the render using this RT (0 = free)
+RT_DATA = 0x30 // 4          # RT-data entry word holding the RT-data pointer
+RT_STATE = 0x34 // 4         # RT-data entry state flag
+RT_IDLE_STATE = 0x10         # the value that flag holds when the RT is idle
+CTX_INFLIGHT0 = 0x28 // 4    # HW context: the render in flight (two words + a flag)
+CTX_INFLIGHT1 = 0x2C // 4
+CTX_INFLIGHT_FLAG = 0x3C // 4
 
 # ---- host control block (SGXMKIF_HOST_CTL) word offsets --------------------
 HC_INIT = 0
@@ -155,6 +178,20 @@ D3_RD = [(0xcac, 0x00 // 4), (0xcb0, 0x04 // 4), (0x400, 0x08 // 4), (0x414, 0x0
 # fixed 3D-start constants the DDK writes with immediates (not from a struct)
 D3_CONST = [(0x63c, 3), (0x494, 0xff), (0x40c, 0), (0x410, 0), (0x404, 0),
             (0x658, 0), (0x43c, 1)]
+
+# ---- transfer (SGX_SUBMITTRANSFER): a 3D render with only a background object
+# (docs/TEX.md §3). The command is 0x1c0 bytes in the transfer context's CCB;
+# client words 0..15 program the ISP/PBE 3D state below (reg byte-offset, command
+# word). The shared part (kernel-filled syncs) sits at command+0xac.
+T3_CMD = [(0x4c4, 0), (0x4bc, 1), (0x4b8, 2), (0x404, 3), (0x408, 4), (0x414, 5), (0xcac, 6),
+          (0x42c, 7), (0x4c8, 8), (0xa5c, 9), (0xa60, 10), (0xa64, 11), (0x40c, 12), (0x410, 13),
+          (0x400, 14), (0xab8, 15), (0x148, 16)]
+# word 12 is the first tile ((x/32)<<16 | y/16) and 13 the last tile; a full-surface
+# blit has first tile 0, a sub-rectangle blit does not (confirmed against a capture
+# with the textures session). Word 4 (depth/stencil block) is 0 in every capture.
+# fixed transfer-start constants (the render's 0x63c=3 is 0 for a transfer; no PB)
+T3_CONST = [(0x480, 0), (0x63c, 0), (0x43c, 1)]
+TRANSFERCMD_SHARED = 0xac     # ui32SharedCmdCCBOffset points here; command base is 0xac before
 
 
 class Asm:
@@ -329,8 +366,8 @@ def build(a):
     a.i("st.a.d r1, #1, r2 [moe]")                 # read offset := write offset
     a.i("idf")
     a.i("wdf")
-    a.i("limm r2, #0")                             # render-in-flight list head := empty
-    a.i(f"st.a.d sa{SA_SELF}, #{SC_RIFLIST}, r2 [moe]")
+    a.i("limm r2, #0")                             # discard the render in flight
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_INFLIGHT}, r2 [moe]")
     a.i("idf")
     a.i("wdf")
     a.label("init_set")
@@ -452,10 +489,30 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.i("ba kick_adv")
-    # transfer (data[1] = HW transfer context): a 3D-only render (texture
-    # uploads and the swap blit). TODO: the full handler; stubbed so the
-    # command set dispatches.
+    # transfer (data[1] = HW transfer context): a 3D-only render whose single
+    # background object samples the source and writes the destination (texture
+    # uploads and the swap blit; docs/TEX.md §3). The transfer context carries a
+    # CCB at the same word offsets as a render context; its command's words 0..15
+    # program the 3D. Point the BIF at the context, invalidate the 3D-side
+    # caches, program the 3D from the command, and kick it. Completion comes
+    # back through the 3D-end event like any render.
     a.label("k_transfer")
+    a.i("mov r16, r8 [mask=1]")                     # transfer context
+    a.i("ld.a.d r1, r16, #%d [moe]" % CTX_CCB)      # client CCB base
+    a.i("ld.a.d r2, r16, #%d [moe]" % CTX_CCBCTL)   # CCB control
+    a.i("wdf")
+    a.i("ld.a.d r3, r2, #1 [moe]")                  # read offset (bytes)
+    a.i("wdf")
+    a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = transfer command base
+    a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)       # context page directory
+    a.i("wdf")
+    a.i(f"str #{0xc84 // 4}, r4")                   # BIF -> this context
+    a.invalidate(CR_PDS_INV1, INV_DONE_3D)
+    a.program(9, T3_CMD)
+    a.consts(T3_CONST)
+    a.st_sa(SA_SELF, SC_XFER, 16)                   # remember the transfer in flight
+    a.i("limm r5, #1")
+    a.i(f"str #{CR_3D_KICK // 4}, r5")              # start the 3D
     a.i("ba kick_adv")
     a.label("kick_adv")
     # read offset := (read offset + 1) & 0xff
@@ -491,6 +548,17 @@ def build(a):
     a.st_sa(SA_SELF, SC_RD, 10)
     a.st_sa(SA_SELF, SC_PB, 11)
     a.st_sa(SA_SELF, SC_RTENTRY, 12)
+    # record this render in flight (the DDK's render-in-flight bookkeeping, so
+    # the completion handler can free it and cleanup/power can tell a render is
+    # running): the control-block in-flight slot holds this RT entry, the RT
+    # entry points back at this render, and the RT-data completion flag is reset.
+    a.st_sa(SA_SELF, SC_INFLIGHT, 12)              # control block +0x50 = RT entry
+    a.i("st.a.d r12, #%d, r10 [moe]" % RT_RENDER)  # rtentry+0x4 = render details
+    a.i("ld.a.d r3, r12, #%d [moe]" % RT_DATA)     # rtdata = *(rtentry+0x30)
+    a.i("wdf")
+    a.i("st.a.d r3, #0, #0 [moe]")                 # rtdata[0] = 0 (render in progress)
+    a.i("idf")
+    a.i("wdf")
     # point the BIF at this context's page directory, then invalidate the
     # caches and wait (so the cores see this context's page tables)
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
@@ -571,6 +639,19 @@ def build(a):
     a.i(f"ld.a.d r10, sa{SA_SELF}, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, sa{SA_SELF}, #{SC_PB} [moe]")   # PB descriptor
     a.i("wdf")
+    # mark the context's in-flight render and move the render state to "3D
+    # running" (the DDK sets these once the scene's last TA has finished and the
+    # 3D is about to start); the completion handler clears them.
+    a.i(f"ld.a.d r2, sa{SA_SELF}, #{SC_CTX} [moe]")
+    a.i("wdf")
+    a.i("st.a.d r2, #%d, r10 [moe]" % CTX_INFLIGHT0)  # ctx+0x28 = render details
+    a.i("st.a.d r2, #%d, r10 [moe]" % CTX_INFLIGHT1)  # ctx+0x2c = render details
+    a.i("limm r3, #1")
+    a.i("limm r4, #%d" % RD_STATE)
+    a.i("imae r4, r4, #1, r10 [t2=u32]")              # &(rd+0x2a4)
+    a.i("st.a.d r4, #0, r3 [moe]")                    # rd+0x2a4 = 1 (3D running)
+    a.i("idf")
+    a.i("wdf")
     a.i("ld.a.d r4, r11, #%d [moe]" % (0x10 // 4))    # 0x600 <- pb+0x10
     a.i("wdf")
     a.i(f"str #{0x600 // 4}, r4")
@@ -589,7 +670,27 @@ def build(a):
     # destination's write-ops-complete to pending+1 (docs/UKERNEL.md §5). The
     # list walk is the next increment; the host-interrupt tail is here.
     a.label("render_done")
+    # a transfer in flight completes through this same 3D-end event, but its
+    # bookkeeping differs from a render's; route it to xfer_done.
+    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_XFER} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r1, r1")
+    a.i("(p0) ba xfer_done")
     a.i(f"ld.a.d r0, sa{SA_SELF}, #{SC_RD} [moe]")    # render details
+    a.i("wdf")
+    # HW device sync list (SGXMKIF_HWDEVICE_SYNC_LIST): the render's destination
+    # sync objects (here the colour and depth destinations, addressed by render-
+    # details words 0x34 and 0x90). Clear each one's ops-pending word now the 3D
+    # has drained, so the next render on this RT starts from zero pending ops
+    # (docs/UKERNEL.md §5 "3D end of render").
+    a.i("ld.a.d r2, r0, #%d [moe]" % RD_SYNC0)        # sync object 0 address
+    a.i("limm r5, #%d" % 0x240)
+    a.i("imae r3, r5, #1, r0 [t2=u32]")               # &(rd+0x240)
+    a.i("ld.a.d r3, r3, #0 [moe]")                    # sync object 1 address
+    a.i("wdf")
+    a.i("st.a.d r2, #0, #0 [moe]")                    # *sync0 = 0
+    a.i("st.a.d r3, #0, #0 [moe]")                    # *sync1 = 0
+    a.i("idf")
     a.i("wdf")
     # TA3D dependency sync: the destination the host/next client polls. The
     # render details hold a pointer to the dependency block (word 56); its
@@ -617,10 +718,55 @@ def build(a):
     a.i("(p1) st.a.d r0, #66, r3 [moe]")
     a.i("idf")
     a.i("wdf")
-    # (the DDK also walks the render's other sync categories, returns the PB
-    #  free list and updates the render-in-flight list here; those need the
-    #  control-block bookkeeping a multi-render scheduler keeps and are the
-    #  next increment -- docs/UKERNEL.md §5)
+    # Render-in-flight teardown / DPM 3D memory free (docs/UKERNEL.md §5). The
+    # render has completed, so free its slot and RT and clear the in-flight
+    # markers do_ta/do_3d set: mark the RT-data complete, move the render state
+    # to "freed", release the RT, and empty the context and control-block in-
+    # flight slots. One context: the in-flight "list" is the single control-
+    # block slot, cleared to 0 (not an unlink), which is also what tells the
+    # cleanup and power handlers no render is running.
+    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_RTENTRY} [moe]")  # RT-data entry
+    a.i(f"ld.a.d r2, sa{SA_SELF}, #{SC_CTX} [moe]")      # HW render context
+    a.i("wdf")
+    a.i("ld.a.d r3, r1, #%d [moe]" % RT_DATA)            # rtdata = *(rtentry+0x30)
+    a.i("wdf")
+    a.i("limm r4, #1")
+    a.i("st.a.d r3, #0, r4 [moe]")                       # rtdata[0] = 1 (render complete)
+    a.i("limm r4, #0")
+    a.i("st.a.d r1, #%d, r4 [moe]" % RT_RENDER)          # rtentry+0x4 = 0 (RT free)
+    a.i("limm r4, #%d" % RT_IDLE_STATE)
+    a.i("st.a.d r1, #%d, r4 [moe]" % RT_STATE)           # rtentry+0x34 = 0x10 (RT idle)
+    a.i("limm r4, #0")
+    a.i("st.a.d r2, #%d, r4 [moe]" % CTX_INFLIGHT0)      # ctx+0x28 = 0
+    a.i("st.a.d r2, #%d, r4 [moe]" % CTX_INFLIGHT1)      # ctx+0x2c = 0
+    a.i("st.a.d r2, #%d, r4 [moe]" % CTX_INFLIGHT_FLAG)  # ctx+0x3c = 0
+    a.i("st.a.d r0, #%d, r4 [moe]" % RD_ACTIVE)          # rd+0x12c = 0 (render inactive)
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_INFLIGHT}, r4 [moe]")  # control block +0x50 = 0 (none in flight)
+    a.i("limm r5, #%d" % RD_STATE)
+    a.i("imae r5, r5, #1, r0 [t2=u32]")                  # &(rd+0x2a4)
+    a.i("limm r4, #2")
+    a.i("st.a.d r5, #0, r4 [moe]")                       # rd+0x2a4 = 2 (render freed)
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba raise_host_irq")
+    # ======================================================================
+    # xfer_done: a transfer's 3D finished. Advance its context's CCB past the
+    # command (so the next transfer is found) and clear the in-flight marker,
+    # then raise the host interrupt. (The destination sync-object update from
+    # the transfer's SGXMKIF_TRANSFERCMD_SHARED is the next increment; docs/TEX.md.)
+    # ======================================================================
+    a.label("xfer_done")
+    a.i("ld.a.d r2, r1, #%d [moe]" % CTX_CCBCTL)         # the transfer context's CCB control
+    a.i("wdf")
+    a.i("ld.a.d r3, r2, #1 [moe]")                       # read offset
+    a.i("wdf")
+    a.i("limm r4, #%d" % TRANSFERCMD_BYTES)
+    a.i("imae r3, r4, #1, r3 [t2=u32]")                  # += command size
+    a.i("st.a.d r2, #1, r3 [moe]")                       # advance the CCB read offset
+    a.i("limm r4, #0")
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_XFER}, r4 [moe]")      # no transfer in flight
+    a.i("idf")
+    a.i("wdf")
     a.label("raise_host_irq")
     a.i(f"limm r0, #{SW_EVENT}")
     a.i(f"str #{CR_EVENT_STATUS // 4}, r0")
