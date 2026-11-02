@@ -31,7 +31,20 @@ parse_sel(const char *const *names, unsigned n, const char *s,
           uint8_t *v, bool *comp)
 {
    int i;
+   char *end;
+   long num = strtol(s, &end, 0);
    *comp = false;
+   if (*s && !*end) {
+      /* a number is the stored field value, complement bit included */
+      unsigned bits = 0;
+      while ((1u << bits) < n)
+         bits++;
+      if (num < 0 || num >= (2l << bits))
+         return false;
+      *v = num & ((1u << bits) - 1);
+      *comp = num >> bits;
+      return true;
+   }
    if (!strcmp(s, "one"))
       s = "1-zero";
    if (!strncmp(s, "1-", 2)) {
@@ -166,6 +179,16 @@ set_sel(const char *const *tbl, unsigned n, const char *v, uint8_t *sel, bool *c
 static bool
 set_enum(const char *const *tbl, unsigned n, const char *v, uint8_t *out)
 {
+   char *end;
+   if (v && *v) {
+      long num = strtol(v, &end, 0);
+      if (!*end) {
+         if (num < 0 || num >= (long)n)
+            return false;
+         *out = num;
+         return true;
+      }
+   }
    int i = v ? lookup(tbl, n, v) : -1;
    if (i < 0)
       return false;

@@ -23,14 +23,12 @@
 static void
 print_custom(struct isa_print_state *print, const char *name, uint64_t v)
 {
+   /* Numbers print in decimal (ISA.md "Text notation and defaults"). */
    if (!strcmp(name, "NODST")) {
       if (v != 0x280)
-         isa_print(print, " nodst=0x%" PRIx64, v);
+         isa_print(print, " nodst=%" PRIu64, v);
    } else if (!strcmp(name, "IMM16") || !strcmp(name, "LIMM")) {
-      if (v > 0xffff || (!strcmp(name, "IMM16") && v > 0xff))
-         isa_print(print, "#0x%" PRIx64, v);
-      else
-         isa_print(print, "#%" PRIu64, v);
+      isa_print(print, "#%" PRIu64, v);
    } else if (!strncmp(name, "SL", 2)) {
       /* smlsi operand: bit 8 = swizzle, else a signed 8-bit increment */
       if (v & 0x100) {
@@ -45,12 +43,8 @@ print_custom(struct isa_print_state *print, const char *name, uint64_t v)
          { "ROT", "rot" },   { "PATH", "path" }, { "EN", "n" },
          { "AM0", "am0" },   { "AM1", "am1" },   { "AM2", "am2" },
          { "AM3", "am3" },   { "LIM0", "lim0" }, { "LIM1", "lim1" },
-         { "LIM2", "lim2" },
+         { "LIM2", "lim2" }, { "EIMM", "imm" },
       };
-      if (!strcmp(name, "EIMM")) {
-         isa_print(print, " imm=0x%" PRIx64, v);
-         return;
-      }
       for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
          if (!strcmp(name, names[i].field)) {
             isa_print(print, " %s=%" PRIu64, names[i].text, v);

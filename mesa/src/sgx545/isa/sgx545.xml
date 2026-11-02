@@ -63,7 +63,7 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="4" display="(p3) "/>
 	<value val="5" display="(!p0) "/>
 	<value val="6" display="(!p1) "/>
-	<value val="7" display="(pN) "/>
+	<value val="7" display="(pn) "/>
 </enum>
 
 <enum name="#pred2">
@@ -143,12 +143,26 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="1" display="i1"/>
 </enum>
 
-<enum name="#f16swz">
-	<doc>fmad16 per-source swizzle (ISA.md "Float classes", hardware hwt_p4)</doc>
+<enum name="#swz0">
+	<doc>fmad16 src0 swizzle (ISA.md "Float classes", hardware hwt_p4)</doc>
 	<value val="0" display=""/>
-	<value val="1" display=".ll"/>
-	<value val="2" display=".hh"/>
-	<value val="3" display=".f32"/>
+	<value val="1" display=" swz0=ll"/>
+	<value val="2" display=" swz0=hh"/>
+	<value val="3" display=" swz0=f32"/>
+</enum>
+<enum name="#swz1">
+	<doc>fmad16 src1 swizzle (ISA.md "Float classes", hardware hwt_p4)</doc>
+	<value val="0" display=""/>
+	<value val="1" display=" swz1=ll"/>
+	<value val="2" display=" swz1=hh"/>
+	<value val="3" display=" swz1=f32"/>
+</enum>
+<enum name="#swz2">
+	<doc>fmad16 src2 swizzle (ISA.md "Float classes", hardware hwt_p4)</doc>
+	<value val="0" display=""/>
+	<value val="1" display=" swz2=ll"/>
+	<value val="2" display=" swz2=hh"/>
+	<value val="3" display=" swz2=f32"/>
 </enum>
 
 <enum name="#movc-cond">
@@ -408,21 +422,21 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="14" display=" mask=14"/>
 	<value val="15" display=" mask=15"/>
 	<value val="16" display=" rcnt"/>
-	<value val="17" display=" rpt=2"/>
-	<value val="18" display=" rpt=3"/>
-	<value val="19" display=" rpt=4"/>
-	<value val="20" display=" rpt=5"/>
-	<value val="21" display=" rpt=6"/>
-	<value val="22" display=" rpt=7"/>
-	<value val="23" display=" rpt=8"/>
-	<value val="24" display=" rpt=9"/>
-	<value val="25" display=" rpt=10"/>
-	<value val="26" display=" rpt=11"/>
-	<value val="27" display=" rpt=12"/>
-	<value val="28" display=" rpt=13"/>
-	<value val="29" display=" rpt=14"/>
-	<value val="30" display=" rpt=15"/>
-	<value val="31" display=" rpt=16"/>
+	<value val="17" display=" rcnt rpt=2"/>
+	<value val="18" display=" rcnt rpt=3"/>
+	<value val="19" display=" rcnt rpt=4"/>
+	<value val="20" display=" rcnt rpt=5"/>
+	<value val="21" display=" rcnt rpt=6"/>
+	<value val="22" display=" rcnt rpt=7"/>
+	<value val="23" display=" rcnt rpt=8"/>
+	<value val="24" display=" rcnt rpt=9"/>
+	<value val="25" display=" rcnt rpt=10"/>
+	<value val="26" display=" rcnt rpt=11"/>
+	<value val="27" display=" rcnt rpt=12"/>
+	<value val="28" display=" rcnt rpt=13"/>
+	<value val="29" display=" rcnt rpt=14"/>
+	<value val="30" display=" rcnt rpt=15"/>
+	<value val="31" display=" rcnt rpt=16"/>
 </enum>
 
 <enum name="#rm1">
@@ -443,21 +457,21 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="14" display=" mask=14"/>
 	<value val="15" display=" mask=15"/>
 	<value val="16" display=" rcnt"/>
-	<value val="17" display=" rpt=2"/>
-	<value val="18" display=" rpt=3"/>
-	<value val="19" display=" rpt=4"/>
-	<value val="20" display=" rpt=5"/>
-	<value val="21" display=" rpt=6"/>
-	<value val="22" display=" rpt=7"/>
-	<value val="23" display=" rpt=8"/>
-	<value val="24" display=" rpt=9"/>
-	<value val="25" display=" rpt=10"/>
-	<value val="26" display=" rpt=11"/>
-	<value val="27" display=" rpt=12"/>
-	<value val="28" display=" rpt=13"/>
-	<value val="29" display=" rpt=14"/>
-	<value val="30" display=" rpt=15"/>
-	<value val="31" display=" rpt=16"/>
+	<value val="17" display=" rcnt rpt=2"/>
+	<value val="18" display=" rcnt rpt=3"/>
+	<value val="19" display=" rcnt rpt=4"/>
+	<value val="20" display=" rcnt rpt=5"/>
+	<value val="21" display=" rcnt rpt=6"/>
+	<value val="22" display=" rcnt rpt=7"/>
+	<value val="23" display=" rcnt rpt=8"/>
+	<value val="24" display=" rcnt rpt=9"/>
+	<value val="25" display=" rcnt rpt=10"/>
+	<value val="26" display=" rcnt rpt=11"/>
+	<value val="27" display=" rcnt rpt=12"/>
+	<value val="28" display=" rcnt rpt=13"/>
+	<value val="29" display=" rcnt rpt=14"/>
+	<value val="30" display=" rcnt rpt=15"/>
+	<value val="31" display=" rcnt rpt=16"/>
 </enum>
 
 <enum name="#rm15">
@@ -478,21 +492,21 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="14" display=" mask=14"/>
 	<value val="15" display=""/>
 	<value val="16" display=" rcnt"/>
-	<value val="17" display=" rpt=2"/>
-	<value val="18" display=" rpt=3"/>
-	<value val="19" display=" rpt=4"/>
-	<value val="20" display=" rpt=5"/>
-	<value val="21" display=" rpt=6"/>
-	<value val="22" display=" rpt=7"/>
-	<value val="23" display=" rpt=8"/>
-	<value val="24" display=" rpt=9"/>
-	<value val="25" display=" rpt=10"/>
-	<value val="26" display=" rpt=11"/>
-	<value val="27" display=" rpt=12"/>
-	<value val="28" display=" rpt=13"/>
-	<value val="29" display=" rpt=14"/>
-	<value val="30" display=" rpt=15"/>
-	<value val="31" display=" rpt=16"/>
+	<value val="17" display=" rcnt rpt=2"/>
+	<value val="18" display=" rcnt rpt=3"/>
+	<value val="19" display=" rcnt rpt=4"/>
+	<value val="20" display=" rcnt rpt=5"/>
+	<value val="21" display=" rcnt rpt=6"/>
+	<value val="22" display=" rcnt rpt=7"/>
+	<value val="23" display=" rcnt rpt=8"/>
+	<value val="24" display=" rcnt rpt=9"/>
+	<value val="25" display=" rcnt rpt=10"/>
+	<value val="26" display=" rcnt rpt=11"/>
+	<value val="27" display=" rcnt rpt=12"/>
+	<value val="28" display=" rcnt rpt=13"/>
+	<value val="29" display=" rcnt rpt=14"/>
+	<value val="30" display=" rcnt rpt=15"/>
+	<value val="31" display=" rcnt rpt=16"/>
 </enum>
 
 <enum name="#rpt16">
@@ -1256,7 +1270,7 @@ NUM | BANK << 7 | EXT << 8.
 		explicit increments. No end bit.
 	</doc>
 	<display>
-		{PRED}{NAME} {DST}, {S0ABS}{SRC0}{S0ABS}{SW0}, {S1NEG}{S1ABS}{SRC1}{S1ABS}{SW1}, {S2NEG}{S2ABS}{SRC2}{S2ABS}{SW2} [{SKIPINV} {NOSCHED} {SYNCS} {RPT} {INC0} {INC1} {INC2}]
+		{PRED}{NAME} {DST}, {S0ABS}{SRC0}{S0ABS}, {S1NEG}{S1ABS}{SRC1}{S1ABS}, {S2NEG}{S2ABS}{SRC2}{S2ABS} [{SKIPINV} {NOSCHED} {SYNCS} {RPT} {INC0} {INC1} {INC2} {SW0} {SW1} {SW2}]
 	</display>
 	<field name="S2N" low="0" high="6" type="uint"/>
 	<field name="S1N" low="7" high="13" type="uint"/>
@@ -1272,7 +1286,7 @@ NUM | BANK << 7 | EXT << 8.
 	<field name="S1ABS" pos="38" type="bool" display="|"/>
 	<field name="S0ABS" pos="39" type="bool" display="|"/>
 	<field name="INC2" pos="40" type="bool" display=" inc2"/>
-	<field name="SW0" low="41" high="42" type="#f16swz"/>
+	<field name="SW0" low="41" high="42" type="#swz0"/>
 	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
 	<field name="RPT" pos="44" type="#rpt2"/>
 	<field name="SW1LO" pos="45" type="uint"/>
@@ -1283,11 +1297,11 @@ NUM | BANK << 7 | EXT << 8.
 	<field name="SW1HI" pos="50" type="uint"/>
 	<field name="DE" pos="51" type="uint"/>
 	<field name="SYNCS" pos="52" type="bool" display=" syncs"/>
-	<field name="SW2" low="53" high="54" type="#f16swz"/>
+	<field name="SW2" low="53" high="54" type="#swz2"/>
 	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
 	<field name="PRED" low="56" high="58" type="#pred3"/>
 	<pattern low="59" high="63">00110</pattern>
-	<derived name="SW1" type="#f16swz">
+	<derived name="SW1" type="#swz1">
 		<expr>{SW1LO} | ({SW1HI} &lt;&lt; 1)</expr>
 	</derived>
 	<derived name="MODE0" expr="#zero" type="uint"/>
@@ -1845,14 +1859,14 @@ NUM | BANK << 7 | EXT << 8.
 	<override>
 		<expr>{LOD} == 0</expr>
 		<display>
-			{PRED}{NAME}{DIM}{LOD}{CFMT}{PCF}{RET} {DST}, {COORD}, {SRC1} [{SKIPINV} {NOSCHED} {SYNCS} {DRC} {RM}]
+			{PRED}{NAME}{DIM}{RET}{PCF}{CFMT}{LOD} {DST}, {COORD}, {SRC1} [{SKIPINV} {NOSCHED} {SYNCS} {DRC} {RM}]
 		</display>
 		<assert low="0" high="6">0000000</assert>
 		<assert low="28" high="29">10</assert>
 		<assert pos="48">1</assert>
 	</override>
 	<display>
-		{PRED}{NAME}{DIM}{LOD}{CFMT}{PCF}{RET} {DST}, {COORD}, {SRC1}, {SRC2} [{SKIPINV} {NOSCHED} {SYNCS} {DRC} {RM}]
+		{PRED}{NAME}{DIM}{RET}{PCF}{CFMT}{LOD} {DST}, {COORD}, {SRC1}, {SRC2} [{SKIPINV} {NOSCHED} {SYNCS} {DRC} {RM}]
 	</display>
 	<field name="S2N" low="0" high="6" type="uint"/>
 	<field name="S2B" low="28" high="29" type="uint"/>
@@ -2070,7 +2084,6 @@ pa = 1.
 	<doc>Flow control: op in h6-8, predicate h24-26.</doc>
 	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
 	<pattern low="52" high="54">000</pattern>
-	<field name="PRED" low="56" high="58" type="#pred3"/>
 	<pattern low="59" high="63">11111</pattern>
 	<derived name="MODE0" expr="#zero" type="uint"/>
 	<encode>
@@ -2097,6 +2110,7 @@ pa = 1.
 	<pattern low="45" high="50">000000</pattern>
 	<pattern pos="51">0</pattern>
 	<field name="SYNCEND" pos="55" type="bool" display=" syncend"/>
+	<field name="PRED" low="56" high="58" type="#pred3"/>
 </bitset>
 
 <bitset name="ba" extends="#branch">
@@ -2123,6 +2137,7 @@ pa = 1.
 	<field name="XSYNCEND" pos="44" type="bool" display=" xsyncend"/>
 	<pattern low="45" high="51">0000000</pattern>
 	<field name="SYNCEND" pos="55" type="bool" display=" syncend"/>
+	<field name="PRED" low="56" high="58" type="#pred3"/>
 </bitset>
 
 <bitset name="lapc" extends="#flow-noarg">
@@ -2154,6 +2169,7 @@ pa = 1.
 		<expr>{S1N} | ({S1B} &lt;&lt; 7) | ({S1E} &lt;&lt; 9)</expr>
 		<param name="MODE0" as="MODE"/>
 	</derived>
+	<field name="PRED" low="56" high="58" type="#pred3"/>
 </bitset>
 
 <bitset name="savl" extends="#flow">
@@ -2175,12 +2191,13 @@ pa = 1.
 		<expr>{DN} | ({DB} &lt;&lt; 7)</expr>
 		<param name="MODE0" as="MODE"/>
 	</derived>
+	<field name="PRED" low="56" high="58" type="#pred3"/>
 </bitset>
 
 <bitset name="nop" extends="#flow">
 	<doc>h23 sync-start, h18 end, l0 = f2_26, l1 = f3_5.</doc>
 	<display>
-		{PRED}{NAME} [{NOSCHED} {SYNCS} {END} {F2_26} {F3_5}]
+		{NAME} [{NOSCHED} {SYNCS} {END} {F2_26} {F3_5}]
 	</display>
 	<field name="F2_26" pos="0" type="bool" display=" f2_26"/>
 	<field name="F3_5" pos="1" type="bool" display=" f3_5"/>
@@ -2192,12 +2209,13 @@ pa = 1.
 	<field name="END" pos="50" type="bool" display=" end"/>
 	<pattern pos="51">0</pattern>
 	<field name="SYNCS" pos="55" type="bool" display=" syncs"/>
+	<pattern low="56" high="58">000</pattern>
 </bitset>
 
 <bitset name="op0x98" extends="#flow">
 	<doc>h6-8 = 0, h9 = 1, h19 = 1; no arguments; meaning unknown.</doc>
 	<display>
-		{PRED}{NAME} [{NOSCHED} {SYNCEND} {XSYNCEND}]
+		{NAME} [{NOSCHED} {SYNCEND} {XSYNCEND}]
 	</display>
 	<pattern low="0" high="31">00000000000000000000000000000000</pattern>
 	<pattern low="32" high="37">000000</pattern>
@@ -2208,6 +2226,7 @@ pa = 1.
 	<pattern low="45" high="50">000000</pattern>
 	<pattern pos="51">1</pattern>
 	<field name="SYNCEND" pos="55" type="bool" display=" syncend"/>
+	<pattern low="56" high="58">000</pattern>
 </bitset>
 
 <!-- MOE control (h20-22 = 1): op h24-26, h18 nosched, h19 register form -->

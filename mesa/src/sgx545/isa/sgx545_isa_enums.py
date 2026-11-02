@@ -18,7 +18,7 @@ from isa import ISA
 # Field-value enums worth a C name. Their XML displays name the values.
 VALUE_ENUMS = [
     '#pred3', '#pred2', '#movc-cond', '#movc-type', '#pck-fmt', '#rnd',
-    '#test-alu', '#test-cond', '#testmask-type', '#f16swz', '#smp-dim',
+    '#test-alu', '#test-cond', '#testmask-type', '#swz0', '#smp-dim',
     '#smp-lod', '#ld-am', '#ld-size', '#emit-tgt',
 ]
 

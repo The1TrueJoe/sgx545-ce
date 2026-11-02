@@ -67,7 +67,7 @@ fcos r0, -|r1|
 frcp pa9, pa9 [f16 chan=1 f16d]
 frcp r0, r1 [f16]
 frcp r0, r1 [c10 chan=2]
-frcp r4, r0 [rpt=4]
+frcp r4, r0 [rcnt rpt=4]
 frcp r4, r0 [rcnt]
 frcp r4, r0 [mask=5]
 frsq o1, i2
@@ -75,16 +75,16 @@ frcp r0, c3
 
 # --- fmad16 -----------------------------------------------------------------
 fmad16 r0, r1, r2, r3
-fmad16 r0, r1.ll, r2.hh, r3.f32
+fmad16 r0, r1, r2, r3 [swz0=ll swz1=hh swz2=f32]
 fmad16 r0, |r1|, -c45, r3
-fmad16 r0, r1, c45, c52 [rpt=2 inc0 inc1 inc2]
+fmad16 r0, r1, c45, c52 [rpt=2 inc0 inc1 inc2 swz1=hh]
 
 # --- moves ------------------------------------------------------------------
 mov r0, r1
 mov o0, r15 [end]
 mov o0, c52
 mov r0, c48 [skipinv]
-mov r4, r0 [rpt=4]
+mov r4, r0 [rcnt rpt=4]
 mov r4, r0 [mask=3]
 mov r0, #127
 mov r0, sa[idx1+2]
@@ -94,7 +94,7 @@ movc.nz.i32 r0, r1, c52, c48
 movc.ltz.f32 r0, r1, i0, r1
 movc.gez.u8 r0, r1, r2, r3
 movc.z.i16 r0, pa1, r2, r3
-movc.nz.c10 r0, r1, r2, r3 [rpt=2]
+movc.nz.c10 r0, r1, r2, r3 [rcnt rpt=2]
 
 # --- pack / unpack ----------------------------------------------------------
 pck.u8.f32 pa9, pa9, pa13 [dmask=6 scale]
@@ -111,7 +111,7 @@ pck.f32.f32 r0, r1, #0 [rint]
 pck.f32.f32 r0, r1, #0 [rint rnd=down]
 pck.f32.u8 r8, r4.l1, #0 [scale]
 pck.c10.f32 r0, r1, r2 [dmask=7 scale]
-pck.u8.f32 r0, r1, r2 [rpt=2]
+pck.u8.f32 r0, r1, r2 [rcnt rpt=2]
 pck.u8.f32 r0, r1, r2 [skipinv nosched]
 
 # --- test / testmask --------------------------------------------------------
@@ -143,13 +143,13 @@ and r0, r1, r2
 or r0, r1, r2
 xor r0, g16, sa9
 and r0, r0, #1
-and r5, r8, #0xff00 [rot=16]
+and r5, r8, #65280 [rot=16]
 and.inv r0, r1, #1
 shl r0, r1, #4
 shr r0, r1, r2
 asr r0, r1, #3
 rol r0, r1, #8 [rot=4]
-and r0, r1, r2 [skipinv rpt=4]
+and r0, r1, r2 [skipinv rcnt rpt=4]
 rlp r0, r1, p2
 
 # --- texture sample ---------------------------------------------------------
@@ -160,6 +160,8 @@ smp.2d.bias r4, r2, sa8, c52
 smp.2d.lod r4, r2, sa8, c48
 smp.2d.grad r4, r2, sa8, r8
 smp.2d.f16 r4, pa2, sa8
+smp.2d.rdata.pcf.f16.bias r4, pa2, sa8, c52 [mask=0]
+smp.3d.rinfo.lod r4, r2, sa8, c48 [drc=1]
 smp.2d.c10 pa4, pa2, sa8
 smp.1d r0, r0, r0 [nosched]
 smp.2d r4, o2, sa8 [skipinv]
@@ -186,6 +188,7 @@ br #3 [link]
 ba #4215
 lapc
 nop [nosched]
+(pn) fmad r1, r2, r3, r4
 setl r3
 savl r5
 
@@ -199,8 +202,8 @@ wdf
 wdf [drc=1]
 idf [drc=1]
 limm r0, #4096
-limm r0, #0x12345678
-limm r0, #0xdeadbeef [skipinv]
+limm r0, #305419896
+limm r0, #3735928559 [skipinv]
 (p0) limm sa3, #7
 
 # --- phases and visibility --------------------------------------------------

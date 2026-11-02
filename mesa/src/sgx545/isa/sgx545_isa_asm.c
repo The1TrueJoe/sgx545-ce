@@ -236,7 +236,7 @@ parse_hash(struct asm_ctx *c, const char *s, long *v)
 static bool
 parse_pred(const char *s, bool short_form, uint8_t *pred)
 {
-   static const char *const p3[] = { NULL, "p0", "p1", "p2", "p3", "!p0", "!p1", "pN" };
+   static const char *const p3[] = { NULL, "p0", "p1", "p2", "p3", "!p0", "!p1", "pn" };
    static const char *const p2[] = { NULL, "p0", "p1", "!p0" };
    int v = short_form ? LOOKUP(p2, s) : LOOKUP(p3, s);
    if (v < 0)
@@ -286,18 +286,24 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
       I->nodst = v;
       return true;
    }
+   /* the classes with h21 rcnt write "rcnt" or "rcnt rpt=n" (checked at the end) */
    if (!strcmp(item, "rcnt") && !eq) {
       I->rcnt = true;
-      I->rpt = 1;
       return true;
    }
    if (!strcmp(item, "rpt") && eq && v >= 1) {
-      I->rcnt = true;
       I->rpt = v;
       return true;
    }
+   if ((!strcmp(item, "swz0") || !strcmp(item, "swz1") || !strcmp(item, "swz2")) && eq) {
+      int sw = v >= 0 ? v : LOOKUP(f16swz, val);
+      if (sw < 0 || sw > 3)
+         return fail(c, "bad swizzle '%s'", val);
+      I->swz[item[3] - '0'] = sw;
+      return true;
+   }
    if (!strcmp(item, "rnd") && eq) {
-      int r = LOOKUP(rnd_names, val);
+      int r = v >= 0 ? v : LOOKUP(rnd_names, val);
       if (r < 0)
          return fail(c, "bad rnd '%s'", val);
       I->rnd = r;
@@ -338,15 +344,6 @@ parse_operands(struct asm_ctx *c, struct sgx_isa_instr *I, const char *pat,
          break;
       case '0': case '1': case '2': {
          struct sgx_isa_src *o = &I->src[pat[i] - '0'];
-         /* fmad16 swizzles .ll/.hh/.f32 come last on its operands */
-         if (I->opc == SGX_ISA_OPC_FMAD16) {
-            char *d = strrchr(s, '.');
-            int sw = d ? LOOKUP(f16swz, d + 1) : -1;
-            if (sw > 0) {
-               *d = '\0';
-               I->swz[pat[i] - '0'] = sw;
-            }
-         }
          if (!parse_operand(c, s, o))
             return false;
          break;
@@ -471,6 +468,47 @@ static const struct simple_form simple[] = {
    { "op0xff", SGX_ISA_OPC_OP0XFF, "12N" }, { "op0xfe", SGX_ISA_OPC_OP0XFE, "12N" },
    { "op0x100", SGX_ISA_OPC_OP0X100, "12N" },
 };
+
+/* The forms with h21 rcnt: h12-15 is a repeat count or a write mask. */
+static bool
+has_rcnt(enum sgx_isa_opc opc)
+{
+   switch (opc) {
+   case SGX_ISA_OPC_FRCP: case SGX_ISA_OPC_FRSQ: case SGX_ISA_OPC_FLOG2:
+   case SGX_ISA_OPC_FEXP2: case SGX_ISA_OPC_FSQRT: case SGX_ISA_OPC_FSIN:
+   case SGX_ISA_OPC_FCOS: case SGX_ISA_OPC_MOV: case SGX_ISA_OPC_MOVC_U8:
+   case SGX_ISA_OPC_MOVC_I16: case SGX_ISA_OPC_MOVC_I32: case SGX_ISA_OPC_MOVC_F32:
+   case SGX_ISA_OPC_MOVC_C10: case SGX_ISA_OPC_OP0XF3_S6: case SGX_ISA_OPC_OP0XF3_S7:
+   case SGX_ISA_OPC_PCK: case SGX_ISA_OPC_AND: case SGX_ISA_OPC_OR:
+   case SGX_ISA_OPC_XOR: case SGX_ISA_OPC_SHL: case SGX_ISA_OPC_ROL:
+   case SGX_ISA_OPC_SHR: case SGX_ISA_OPC_ASR: case SGX_ISA_OPC_RLP:
+   case SGX_ISA_OPC_SMP:
+      return true;
+   default:
+      return false;
+   }
+}
+
+/* Forms with no predicate field reject a prefix. */
+static bool
+has_pred(enum sgx_isa_opc opc)
+{
+   switch (opc) {
+   case SGX_ISA_OPC_NOP: case SGX_ISA_OPC_OP0X98: case SGX_ISA_OPC_IDF:
+   case SGX_ISA_OPC_WDF: case SGX_ISA_OPC_LOCK: case SGX_ISA_OPC_RELEASE:
+   case SGX_ISA_OPC_OP0XD6: case SGX_ISA_OPC_OP0XD7: case SGX_ISA_OPC_EMIT:
+   case SGX_ISA_OPC_LDR: case SGX_ISA_OPC_STR: case SGX_ISA_OPC_SMOA:
+   case SGX_ISA_OPC_SMR: case SGX_ISA_OPC_SMLSI: case SGX_ISA_OPC_SMBO:
+   case SGX_ISA_OPC_IMO: case SGX_ISA_OPC_SMOA_R: case SGX_ISA_OPC_SMR_R:
+   case SGX_ISA_OPC_SMLSI_R: case SGX_ISA_OPC_SMBO_R: case SGX_ISA_OPC_SETFC:
+   case SGX_ISA_OPC_OP0XFD: case SGX_ISA_OPC_PCOEFF: case SGX_ISA_OPC_PTOFF:
+   case SGX_ISA_OPC_PHAS: case SGX_ISA_OPC_PHAS_I: case SGX_ISA_OPC_OP0XFF:
+   case SGX_ISA_OPC_OP0XFE: case SGX_ISA_OPC_OP0X100:
+      return false;
+   default:
+      return true;
+   }
+}
 
 static bool
 uses_pred2(enum sgx_isa_opc opc)
@@ -672,6 +710,8 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I,
       return fail(&c, "unknown mnemonic '%s'", mnem);
    }
 
+   if (*predtext && !has_pred(I->opc))
+      return fail(&c, "'%s' has no predicate field", mnem);
    if (*predtext && !parse_pred(predtext, uses_pred2(I->opc), &I->pred))
       return fail(&c, "bad predicate '%s'", predtext);
 
@@ -684,6 +724,14 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I,
          if (!parse_item(&c, I, t))
             return false;
       }
+   }
+   if (has_rcnt(I->opc)) {
+      if (I->rpt > 1 && !I->rcnt)
+         return fail(&c, "rpt=n needs rcnt here%s", "");
+      if (I->rcnt && !I->rpt)
+         I->rpt = 1;
+   } else if (I->rcnt) {
+      return fail(&c, "'%s' has no rcnt", mnem);
    }
    return true;
 }

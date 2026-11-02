@@ -62,22 +62,22 @@ fcos r0, -|r1|                                               ; 00000080 08010460
 frcp pa9, pa9 [f16 chan=1 f16d]                              ; 81200480 0800008e
 frcp r0, r1 [f16]                                            ; 00000080 08000080
 frcp r0, r1 [c10 chan=2]                                     ; 00000080 08000110
-frcp r4, r0 [rpt=4]                                          ; 00800000 08203000
+frcp r4, r0 [rcnt rpt=4]                                     ; 00800000 08203000
 frcp r4, r0 [rcnt]                                           ; 00800000 08200000
 frcp r4, r0 [mask=5]                                         ; 00800000 08005000
 frsq o1, i2                                                  ; c0200100 08020201
 frcp r0, c3                                                  ; 40000180 08020000
 
 fmad16 r0, r1, r2, r3                                        ; 00004103 30000000
-fmad16 r0, r1.ll, r2.hh, r3.f32                              ; 00004103 30640200
+fmad16 r0, r1, r2, r3 [swz0=ll swz1=hh swz2=f32]             ; 00004103 30640200
 fmad16 r0, |r1|, -c45, r3                                    ; 40005683 300200a0
-fmad16 r0, r1, c45, c52 [rpt=2 inc0 inc1 inc2]               ; 500056b4 3003d100
+fmad16 r0, r1, c45, c52 [rpt=2 inc0 inc1 inc2 swz1=hh]       ; 500056b4 3007d100
 
 mov r0, r1                                                   ; 20000080 28010000
 mov o0, r15 [end]                                            ; 20000780 28050001
 mov o0, c52                                                  ; 60001a00 28030001
 mov r0, c48 [skipinv]                                        ; 60001800 28830000
-mov r4, r0 [rpt=4]                                           ; 20800000 28213000
+mov r4, r0 [rcnt rpt=4]                                      ; 20800000 28213000
 mov r4, r0 [mask=3]                                          ; 20800000 28013000
 mov r0, #127                                                 ; a0003f80 28030000
 mov r0, sa[idx1+2]                                           ; 20003100 28030000
@@ -87,7 +87,7 @@ movc.nz.i32 r0, r1, c52, c48                                 ; 50005a30 28030380
 movc.ltz.f32 r0, r1, i0, r1                                  ; c0004001 28420400
 movc.gez.u8 r0, r1, r2, r3                                   ; 00004103 28400180
 movc.z.i16 r0, pa1, r2, r3                                   ; 00004103 28000204
-movc.nz.c10 r0, r1, r2, r3 [rpt=2]                           ; 00004103 28201580
+movc.nz.c10 r0, r1, r2, r3 [rcnt rpt=2]                      ; 00004103 28201580
 
 pck.u8.f32 pa9, pa9, pa13 [dmask=6 scale]                    ; a124048d 40001c1a
 pck.u8.f32 pa9, pa9, pa13 [dmask=9 scale]                    ; a124048d 40001c26
@@ -103,7 +103,7 @@ pck.f32.f32 r0, r1, #0 [rint]                                ; 20040080 40011dbc
 pck.f32.f32 r0, r1, #0 [rint rnd=down]                       ; 200c0080 40011dbc
 pck.f32.u8 r8, r4.l1, #0 [scale]                             ; 21050200 400111bc
 pck.c10.f32 r0, r1, r2 [dmask=7 scale]                       ; 00040082 40001ddc
-pck.u8.f32 r0, r1, r2 [rpt=2]                                ; 00000082 40201c3c
+pck.u8.f32 r0, r1, r2 [rcnt rpt=2]                           ; 00000082 40201c3c
 pck.u8.f32 r0, r1, r2 [skipinv nosched]                      ; 00000082 40c01c3c
 
 test.fsub.lt p0, r1, c6                                      ; 10038086 48091681
@@ -133,13 +133,13 @@ and r0, r1, r2                                               ; 00000082 50001000
 or r0, r1, r2                                                ; 00000082 50001008
 xor r0, g16, sa9                                             ; 70002809 58021000
 and r0, r0, #1                                               ; 20000001 50011000
-and r5, r8, #0xff00 [rot=16]                                 ; 20bf8400 50011430
+and r5, r8, #65280 [rot=16]                                  ; 20bf8400 50011430
 and.inv r0, r1, #1                                           ; 20000081 50011800
 shl r0, r1, #4                                               ; 20000084 60011000
 shr r0, r1, r2                                               ; 00000082 68001000
 asr r0, r1, #3                                               ; 20000083 68011008
 rol r0, r1, #8 [rot=4]                                       ; 20000088 60011108
-and r0, r1, r2 [skipinv rpt=4]                               ; 00000082 50a03000
+and r0, r1, r2 [skipinv rcnt rpt=4]                          ; 00000082 50a03000
 rlp r0, r1, p2                                               ; 20008080 70011000
 
 smp.2d r4, r2, sa8                                           ; e0808400 e0011400
@@ -149,6 +149,8 @@ smp.2d.bias r4, r2, sa8, c52                                 ; d0808434 e0011500
 smp.2d.lod r4, r2, sa8, c48                                  ; d0808430 e0011600
 smp.2d.grad r4, r2, sa8, r8                                  ; c0808408 e0001700
 smp.2d.f16 r4, pa2, sa8                                      ; e0808400 e001140c
+smp.2d.rdata.pcf.f16.bias r4, pa2, sa8, c52 [mask=0]         ; d0808434 e001452c
+smp.3d.rinfo.lod r4, r2, sa8, c48 [drc=1]                    ; d0808430 e0019a01
 smp.2d.c10 pa4, pa2, sa8                                     ; e0808400 e0011494
 smp.1d r0, r0, r0 [nosched]                                  ; 20000000 e0411000
 smp.2d r4, o2, sa8 [skipinv]                                 ; e0808400 e0851400
@@ -173,6 +175,7 @@ br #3 [link]                                                 ; 00000003 f8000240
 ba #4215                                                     ; 00001077 f8000000
 lapc                                                         ; 00000000 f8000080
 nop [nosched]                                                ; 00000000 f8000940
+(pn) fmad r1, r2, r3, r4                                     ; 00208184 07000000
 setl r3                                                      ; 00000180 f80000c0
 savl r5                                                      ; 00a00000 f8000100
 
@@ -185,8 +188,8 @@ wdf                                                          ; 00000000 f9200000
 wdf [drc=1]                                                  ; 00000000 f9200001
 idf [drc=1]                                                  ; 00000000 f8200001
 limm r0, #4096                                               ; 00001000 fc200000
-limm r0, #0x12345678                                         ; 00145678 fc204110
-limm r0, #0xdeadbeef [skipinv]                               ; 000dbeef fca37150
+limm r0, #305419896                                          ; 00145678 fc204110
+limm r0, #3735928559 [skipinv]                               ; 000dbeef fca37150
 (p0) limm sa3, #7                                            ; 00600007 fc280200
 
 phas.i #128, #4                                              ; 00000080 fa440004
