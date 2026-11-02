@@ -1,0 +1,72 @@
+P1 open half: does a client USSE `str` to an effective register take effect?
+EA1 (openhc-ea1-000FFF1AFCA9, 10.0.0.110), SGX545 core rev 1.0.14, kernel 7.1.8.
+tools/iso/suite_p1_write.py (safe) then tools/iso/suite_p1_dirbase.py (destructive).
+2026-11-02 ~20:20 UTC. RAM 1781388 kB; SGX BAR0 phys 0xdc000000 (16 MB); DIR base at boot ~0x01d6b000.
+
+=== suite_p1_write (safe: rig + controls + BIF read) ===
+== sanity_frame rc=0
+render done
+pix 0xff00ff00 uniform=1 bg=0xcc336699
+== sanity_st rc=0
+va R 0x3e19e000
+render done
+pix 0x55667788 uniform=1 bg=0xcc336699
+dump R 0 00000000 11223344 00000000 55667788 00000000 00000000 00000000 00000000 00000000
+== p1w_ldr_core_id rc=0
+va R 0x3e19e000
+reg 0x1c 0x1150000 0x1150000
+render done
+pix 0x1150000 uniform=1 bg=0xcc336699
+dump R 0 00000000 01150000
+== p1w_str_base14 rc=0
+va R 0x3e19e000
+reg 0xa44 0x726582a 0x726582a          <- wrote 0x12340; host reg UNCHANGED; shader read-back 0x0726582a (real value)
+render done
+pix 0x726582a uniform=1 bg=0xcc336699
+dump R 0 00000000 0726582a
+== p1w_str_base15 rc=0
+va R 0x3e19e000
+reg 0xa48 0x6600000 0x6600000          <- wrote 0x15150; host reg UNCHANGED; shader read-back 0x06600000 (real value)
+render done
+pix 0x6600000 uniform=1 bg=0xcc336699
+dump R 0 00000000 06600000
+== p1w_bif_read rc=0
+va R 0x3e19e000
+reg 0xc78 0x606f 0x707f                <- BANK0 changed across the frame (the GPU's own bank mgmt, not a client write)
+reg 0xc84 0x1d6b000 0x1d6b000          <- DIR_LIST_BASE0; client shader READ it (ldr) = 0x01d6b000
+render done
+pix 0x1d6b000 uniform=1 bg=0xcc336699
+dump R 0 00000000 0000707f 01d6b000
+
+=== suite_p1_dirbase (destructive: str sentinel 0x0a5a5000 -> BIF_DIR_LIST_BASE0 0xc84) ===
+== p1_str_dirbase rc=0
+va R 0x3e19e000
+reg 0xc84 0x1d6b000 0x1d6b000          <- host read before==after: the write did NOT change the register
+render done                            <- the frame itself completed; no in-frame wedge
+pix 0x1d6b000 uniform=1 bg=0xcc336699
+dump R 0 00000000 01d6b000 01d6b000 00000000
+   R[1]=0x01d6b000 shader read BEFORE the write; R[2]=0x01d6b000 shader read-BACK AFTER writing the
+   sentinel -> still the real value, not 0x0a5a5000. The `str` to 0xc84 is ignored as a register value.
+
+=== but the box went down seconds later (lockup -> reboot loop) ===
+Right after the iso process exited, ssh went unreachable; the EA1 rebooted (uptime observed 0 min).
+On the next boot the DDK printed its lockup/recovery debug dump and the CCB was stuck:
+
+[  170.558599] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[  170.563968] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[  170.569335] PVR_K: SGX Host control:
+[  170.572889] PVR_K:   (HC-0)  0x00000001 0x00000000 0x00000000 0x00000000
+[  170.579381] PVR_K:   (HC-10) 0x000000B4 0x0000000A 0x00061A80 0x00000000
+[  170.605701] PVR_K: SGX TA/3D control:
+[  170.609343] PVR_K:   (T3C-0)  0x32003000 0x32003100 0x32002000 0x00000000
+[  170.642593] PVR_K:   (T3C-50) 0x00000000 0x00000000 0x00010000 0x01D69000   <- PD phys in the T3D ctl block
+[  170.682596] PVR_K:   (T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[  170.709263] PVR_K: SGX Kernel CCB WO:0xB4 RO:0xB3                            <- one command queued, GPU not consuming (stuck)
+
+Reboot timeline (ssh probes): uptime 0 min -> 1 min -> ~170 s -> reboot -> ~50 s and climbing.
+A warm reboot does not clear it (SGX silicon state stuck); the EA1 has no smart plug, so it needs a
+power cycle by Joseph. STOPPED, not retried.
+
+Attribution: the controls in suite_p1_write -- `str` to the unused USE_CODE_BASE_14/15 and the plain
+`ldr` of 0xc84 in p1w_bif_read -- all ran clean with no reboot. Only the `str` to 0xc84 destabilised
+the box. No pstore/ramoops on this build, so the exact oops was not captured.
