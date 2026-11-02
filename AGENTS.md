@@ -201,7 +201,8 @@ Expectation to set in docs: the point of GL3 on this GPU is that apps start and 
 
 ## 6. Rules of engagement for sessions on this repo
 
-- Follow the repo's existing rules: wrap GPU runs on the shared EA3 in `flock /tmp/gpu.lock`, **the EA-1 is off limits**, never build Buildroot locally, and log hardware work in `docs/log/entries/`.
+- Follow the repo's existing rules: wrap GPU runs in `flock /tmp/gpu.lock`, never build Buildroot locally, and log hardware work in `docs/log/entries/`.
+- **Boxes (Joseph, 2026-11-01):** GPU work with visible output, including Minecraft on our driver, runs on the **EA-1** (the box on Joseph's monitor; it has no smart plug, so nothing wedge-prone; stop and restart `mc-session` around runs and tell the Minecraft session). The **EA3** belongs to the DSP and Ethernet-switch work; open-microkernel tests that may wedge the GPU run there in slots agreed with those sessions, recovered with the Bench plug.
 - Don't break openHC. `pvrsrvkm` + the overlay stay its shipping stack until the new driver replaces them.
 - Don't put uAPI in Mesa before the kernel side has merged. Don't write 32-bit compat structs in new uAPI. Don't copy `kernel/src` material into Mesa. Don't commit proprietary binaries.
 - Before code relies on any reverse-engineered fact, it goes into `docs/` with how it was established.

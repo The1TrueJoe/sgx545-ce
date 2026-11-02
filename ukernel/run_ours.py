@@ -49,11 +49,22 @@ def ours():
     return open(binp, "rb").read(), json.load(open(manp))
 
 
-def setup(code):
+def patch_limm(code, off, v):
+    lo, hi = struct.unpack_from("<II", code, off)
+    lo = (lo & 0xFFE00000) | (v & 0x1FFFFF)
+    hi = (hi & 0xFFFC0E0F) | ((v >> 17) & 0x1F0) | ((v >> 26) << 12)
+    struct.pack_into("<II", code, off, lo, hi)
+
+
+def setup(code, man):
+    # patch the control-block-base limm, as srvinit -o does on the box, so the
+    # event entry can populate `sa` itself (no DMA)
+    code = bytearray(code)
+    patch_limm(code, man["patches"]["ctlblk"], A["ta3d"])
     mem, regs = Mem(), Regs()
-    u = USSE(code, base=0x30000000, mem=mem, regs=regs)
+    u = USSE(bytes(code), base=0x30000000, mem=mem, regs=regs)
     install_hw_model(regs)
-    # the control block, laid out as srvinit does (sgxsim.A), DMAed into sa
+    # the control block, laid out as srvinit does (sgxsim.A)
     t = A["ta3d"]
     mem.wr(t + 4 * 0, t)
     mem.wr(t + 4 * 1, A["hostctl"])
@@ -62,24 +73,34 @@ def setup(code):
     return u, mem, regs
 
 
-def dma(u, mem):
-    """refresh sa0..sa63 from the control block, as the entry PDS program does"""
-    for i in range(64):
-        u.sa[i] = mem.rd(A["ta3d"] + 4 * i)
-
-
 def reg_writes(u):
     return [(a, v) for (op, a, v, pc) in u.regs.log if op == "str"]
 
 
+# EUR_CR_EVENT_STATUS bits the host-side model raises for each event
+EV_HOST_KICK = 0x4000       # SW_EVENT
+EV_TA_FINISHED = 0x2000
+EV_3D_END = 0x40000         # PIXELBE end of render
+
+
+def event(u, mem, regs, man, status):
+    """deliver one hardware event: set EUR_CR_EVENT_STATUS to exactly `status`
+    and run the event entry, which populates sa and dispatches"""
+    regs.v[0x12C] = status
+    regs.log.clear()
+    mem.log = []
+    u.task(man["entries"]["event"] // 8)
+
+
 def run_ours(code, man, events, ctxs):
-    u, mem, regs = setup(code)
+    u, mem, regs = setup(code, man)
     for va, data, pdo in ctxs:
         mem.load(va, data)
         mem.wr(va + pdo, PD_PHYS)
-    # init (clean)
-    dma(u, mem)
-    u.task(man["entries"]["init"] // 8)
+    # init: ui32InitStatus == 0 makes the event entry dispatch to init
+    mem.wr(A["hostctl"], 0)
+    mem.wr(A["hostctl"] + 4 * 9, 0)        # HWR clear (clean boot)
+    event(u, mem, regs, man, 0)
     out = []
     kicks = [k for k in events if k.kind == "kick"]
     for i, k in enumerate(kicks):
@@ -100,26 +121,24 @@ def run_ours(code, man, events, ctxs):
         mem.wr(c + 4 * 3, k.data[1])        # context
         mem.wr(A["ccbctl"] + 0, k.n)        # kernel CCB write offset (slot count)
         mem.wr(A["ccbctl"] + 4, slot)       # read offset
-        regs.log.clear()
-        mem.log = []
-        dma(u, mem)
-        u.task(man["entries"]["kick"] // 8)
+        # the client CCB read offset the microkernel reads to find this TA
+        # command (do_ta: command base = client CCB + read offset). A trace's
+        # snapshot of it is not always advanced (frame-fake leaves it 0), so
+        # set it to this kick's command-base offset, the state the DDK keeps.
+        client_ccbctl = mem.rd(k.data[1] + 4 * 4)      # HW render context word 4
+        mem.wr(client_ccbctl + 4, k.ccb_off - 0x58)
+        if k.last:                          # SGXDoKickKM sets CMDTA_SHARED READY for bLastInScene
+            cmd = k.ccb_va + k.ccb_off - 0x58
+            mem.wr(cmd, mem.rd(cmd) | 1)
+        event(u, mem, regs, man, EV_HOST_KICK)    # -> kick -> do_ta
         out += [("TA%d" % k.n, a, v) for a, v in reg_writes(u)]
-        # this TA's finish: write its status-value list to the sync heap
-        mem.log = []
-        dma(u, mem)
-        u.task(man["entries"]["ta_finished"] // 8)
+        # this TA's finish: the status walk, and on the last kick the 3D start
+        event(u, mem, regs, man, EV_TA_FINISHED)  # -> ta_finished (-> do_3d if last)
         out += [("sync%d" % k.n, a, v) for (op, a, v, pc) in mem.log
                 if op == "st" and 0x2d000000 <= a < 0x2e000000]
         if k.last:
-            regs.log.clear()
-            dma(u, mem)
-            u.task(man["entries"]["do_3d"] // 8)
             out += [("3D", a, v) for a, v in reg_writes(u)]
-            regs.log.clear()
-            mem.log = []
-            dma(u, mem)
-            u.task(man["entries"]["render_done"] // 8)
+            event(u, mem, regs, man, EV_3D_END)   # -> render_done
             out += [("done", a, v) for a, v in reg_writes(u)]
             cmd = k.ccb_va + k.ccb_off - 0x58
             rd = mem.rd(cmd + 0x38)

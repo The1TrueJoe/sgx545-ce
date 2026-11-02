@@ -45,9 +45,15 @@ SC_RIFLIST = 0x3C    # render-in-flight list head (we keep it empty: 0 or 1 entr
 
 # ---- host control block (SGXMKIF_HOST_CTL) word offsets --------------------
 HC_INIT = 0
+HC_POWER = 1         # ui32PowerStatus
+HC_CLEANUP = 2       # ui32CleanupStatus
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
+POWERCMD_POWEROFF = 1
+POWERCMD_IDLE = 2
+POWERCMD_RESUME = 3
+CTXSUSPCMD_RESUME = 2
 
 # ---- HW render context (SGX_REGISTER_HW_RENDER_CONTEXT) word offsets --------
 CTX_PD = 2           # page directory phys (kernel-filled)
@@ -56,8 +62,35 @@ CTX_CCBCTL = 4       # client CCB control (write/read offsets, bytes)
 
 # ---- SGXMKIF_COMMAND (kernel CCB entry, 32 bytes) --------------------------
 CMD_SERVICE = 0      # = command type (our host-kick table is the identity)
+CMD_DATA0 = 2        # ui32Data[0]
 CMD_DATA1 = 3        # ui32Data[1] = HW render context for a TA
 CMD_WORDS = 8        # 32 bytes
+
+# command types (SGXMKIF_CMD_TYPE); our host-kick table is the identity
+CMD_TA = 0
+CMD_TRANSFER = 1
+CMD_POWER = 3
+CMD_CTXSUSPEND = 4
+CMD_CLEANUP = 5
+CMD_GETMISCINFO = 6
+
+# ---- get-misc-info: the SGXMKIF version/feature surface and struct sizes ----
+# PVRSRV_SGX_MISCINFO_INFO, written into the misc buffer. The version words are
+# the SGXMKIF interface identity the kernel's DDK-version check validates
+# (docs/UKERNEL-DECISIONS.md: we stay SGXMKIF-compatible); the struct sizes are
+# the same ones srvinit declares in SGX_BRIDGE_INIT_INFO (docs/UKERNEL.md).
+MISC_READY = 0x1
+MISC_GET_STRUCT_SIZES = 0x2
+MISC_VER3 = 0x10711          # misc[3]
+MISC_BUILD = 862890          # misc[4] = DDK build 1.7.862890
+MISC_CORE = 545              # misc[5]
+MISC_VER6 = 0x1000D          # misc[6]
+MISC_BUILDOPTS = 0x60218     # misc[7] = ui32ClientBuildOptions
+# misc word -> struct size (SGX_MISCINFO_STRUCT_SIZES)
+MISC_SIZES = [(8, 0x2b0), (9, 0x1e0), (10, 0x4c8), (11, 0xdc), (12, 0xd0), (13, 0x3c),
+              (14, 0x44), (15, 0x1ec), (16, 0x38), (17, 0x50), (18, 0xb4), (19, 0x44), (20, 0x20)]
+CR_CORE_ID = 0x1C
+CR_CORE_REVISION = 0x20
 
 # ---- SGXMKIF_CMDTA client command header word offsets (docs/STATE.md §1) ---
 CMDTA_SIZE = 0x00 // 4
@@ -147,6 +180,13 @@ class Asm:
     def phas(self):
         self.i("phas.i #0, #0 [wait=7]")
 
+    def dispatch(self, bit, label):
+        """if EUR_CR_EVENT_STATUS (in r2) has `bit` set, branch to `label`"""
+        self.i(f"limm r3, #{bit}")
+        self.i("and r4, r2, r3")
+        self.i("test.and.ne p0, r4, r4")
+        self.i(f"(p0) ba {label}")
+
     def ld_sa(self, dst, saword, off):
         """dst = *(saword + off), a device load through a secondary attribute"""
         self.i(f"mov r{dst}, sa{saword} [mask=1]")
@@ -235,39 +275,67 @@ class Asm:
 
 def build(a):
     # ======================================================================
-    # init entry
+    # event entry: the one task the event program starts, which dispatches
     # ======================================================================
-    # Clean boot: set ui32InitStatus and end. Recovery (HWR bit set): discard
-    # the surviving kernel CCB and render-in-flight list first (docs/UKERNEL.md
-    # §5a) so no stale, possibly-dead work is replayed, then set init status.
-    #
-    # The init entry gets its addresses from patched limms, not the secondary
-    # attributes: the event program that starts it is a bare DOUTU (the DDK's
-    # event program is too; an event-kicked PDS program is not relied on to run
-    # a DMA), so there is no control block in `sa` here. r1 = host control
-    # address, r7 = CCB control, r8 = control block base.
-    a.label("init")
+    # The event program is a bare DOUTU (the DDK's is too; an event-kicked PDS
+    # program is not relied on to run a DMA), so `sa` is empty here. This entry
+    # loads the control block base from a loader-patched limm and populates the
+    # four secondary attributes the handlers use (self/host-control/CCB-control/
+    # kernel-CCB), the way the DDK's pds1 DMA would, then dispatches on whether
+    # init has run and on EUR_CR_EVENT_STATUS (docs/UKERNEL.md §2). Every
+    # handler is reached from here by a branch (one task), so only this entry
+    # has the phase/end wrapper.
+    a.label("event")
     a.phas()
-    a.patch(1, "hostctl")                      # r1 = SGXMKIF_HOST_CTL address
-    a.i(f"ld.a.d r2, r1, #{HC_INTCLEAR} [moe]")  # ui32InterruptClearFlags
+    a.patch(1, "ctlblk")                           # r1 = control block base
+    a.i(f"mov sa{SA_SELF}, r1 [mask=1]")
+    a.i(f"ld.a.d r2, r1, #{SA_HOSTCTL} [moe]")     # *(base+1) = host control
+    a.i("wdf")
+    a.i(f"mov sa{SA_HOSTCTL}, r2 [mask=1]")
+    a.i(f"ld.a.d r2, r1, #{SA_KCCBCTL} [moe]")     # *(base+2) = CCB control
+    a.i("wdf")
+    a.i(f"mov sa{SA_KCCBCTL}, r2 [mask=1]")
+    a.i(f"ld.a.d r2, r1, #{SA_KCCB} [moe]")        # *(base+0x16) = kernel CCB
+    a.i("wdf")
+    a.i(f"mov sa{SA_KCCB}, r2 [mask=1]")
+    # init not done yet (ui32InitStatus == 0) -> init
+    a.i(f"ld.a.d r2, sa{SA_HOSTCTL}, #{HC_INIT} [moe]")
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(p0) ba init")
+    # otherwise dispatch on the pending event bits
+    a.i(f"ldr r2, #{CR_EVENT_STATUS // 4}")
+    a.i("wdf")
+    a.dispatch(0x4000, "kick")                     # SW_EVENT: a host kick is waiting
+    a.dispatch(0x2000, "ta_finished")              # a TA finished
+    a.dispatch(0x40000, "render_done")             # pixel back-end end of render
+    a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)
+    a.end()
+
+    # ======================================================================
+    # init
+    # ======================================================================
+    # Reached from the event entry with `sa` populated. Clean boot: set
+    # ui32InitStatus. Recovery (HWR bit set): discard the surviving kernel CCB
+    # and render-in-flight list first (docs/UKERNEL.md §5a).
+    a.label("init")
+    a.i(f"ld.a.d r2, sa{SA_HOSTCTL}, #{HC_INTCLEAR} [moe]")   # ui32InterruptClearFlags
     a.i("wdf")
     a.i(f"test.and.ne p0, r2, #{EDM_INTERRUPT_HWR}")
-    a.i("(!p0) ba init_set")                   # clean boot: skip the discard
-    # recovery: kernel CCB read offset := write offset (drop stale commands)
-    a.patch(7, "ccbctl")                       # r7 = kernel CCB control
-    a.i("ld.a.d r2, r7, #0 [moe]")             # write offset
+    a.i("(!p0) ba init_set")                       # clean boot: skip the discard
+    a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")        # kernel CCB control
+    a.i("ld.a.d r2, r1, #0 [moe]")                 # write offset
     a.i("wdf")
-    a.i("st.a.d r7, #1, r2 [moe]")             # read offset := write offset
+    a.i("st.a.d r1, #1, r2 [moe]")                 # read offset := write offset
     a.i("idf")
     a.i("wdf")
-    a.patch(8, "ctlblk")                       # r8 = TA3D control block base
-    a.i("limm r2, #0")                          # render-in-flight list head := empty
-    a.i(f"st.a.d r8, #{SC_RIFLIST}, r2 [moe]")
+    a.i("limm r2, #0")                             # render-in-flight list head := empty
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_RIFLIST}, r2 [moe]")
     a.i("idf")
     a.i("wdf")
     a.label("init_set")
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
-    a.i(f"st.a.d r1, #{HC_INIT}, r0 [moe]")     # *hostctl = INIT_COMPLETE
+    a.i(f"st.a.d sa{SA_HOSTCTL}, #{HC_INIT}, r0 [moe]")   # ui32InitStatus = INIT_COMPLETE
     a.i("idf")
     a.i("wdf")
     a.end()
@@ -280,7 +348,6 @@ def build(a):
     # (our host-kick table is the identity, docs/UKERNEL.md §3). Dispatch, then
     # advance the read offset and end. One command per entry (one context).
     a.label("kick")
-    a.phas()
     a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")     # kernel CCB control
     a.i("ld.a.d r2, r1, #0 [moe]")              # write offset (slot index)
     a.i("ld.a.d r3, r1, #1 [moe]")              # read offset (slot index)
@@ -293,12 +360,103 @@ def build(a):
     a.i(f"ld.a.d r7, r6, #{CMD_SERVICE} [moe]")          # type
     a.i(f"ld.a.d r8, r6, #{CMD_DATA1} [moe]")            # data[1] = context
     a.i("wdf")
-    a.i("test.and.ne p0, r7, r7")               # type 0 = TA?
-    a.i("(p0) ba kick_adv")                     # non-TA: nothing else this version
-    a.i("mov r16, r8 [mask=1]")                 # pass context to do_ta
+    a.i(f"ld.a.d r9, r6, #{CMD_DATA0} [moe]")   # data[0]
+    a.i("wdf")
+    # dispatch on the command type (our host-kick table is the identity)
+    a.i(f"test.and.eq p0, r7, r7")              # type 0 = TA
+    a.i("(p0) ba k_ta")
+    a.i(f"test.xor.eq p0, r7, #{CMD_GETMISCINFO}")
+    a.i("(p0) ba k_getmiscinfo")
+    a.i(f"test.xor.eq p0, r7, #{CMD_POWER}")
+    a.i("(p0) ba k_power")
+    a.i(f"test.xor.eq p0, r7, #{CMD_CTXSUSPEND}")
+    a.i("(p0) ba k_ctxsuspend")
+    a.i(f"test.xor.eq p0, r7, #{CMD_CLEANUP}")
+    a.i("(p0) ba k_cleanup")
+    a.i(f"test.xor.eq p0, r7, #{CMD_TRANSFER}")
+    a.i("(p0) ba k_transfer")
+    a.i("ba kick_adv")                          # process-queues / unhandled: nothing
+    a.label("k_ta")
+    a.i("mov r16, r8 [mask=1]")                 # context
     a.i("savl r23")
     a.i("ba do_ta [link]")
     a.i("setl r23")
+    a.i("ba kick_adv")
+    # get-misc-info: core identity, version and struct sizes into the misc
+    # buffer (data[1]), then set READY (docs/UKERNEL.md §3 "Get misc info")
+    a.label("k_getmiscinfo")
+    a.i("mov r2, r8 [mask=1]")                  # misc buffer
+    a.i(f"ldr r1, #{CR_CORE_REVISION // 4}")
+    a.i(f"ldr r3, #{CR_CORE_ID // 4}")
+    a.i("wdf")
+    a.i("st.a.d r2, #1, r1 [moe]")              # core revision
+    a.i("st.a.d r2, #2, r3 [moe]")              # core id
+    for word, val in ((3, MISC_VER3), (4, MISC_BUILD), (5, MISC_CORE), (6, MISC_VER6), (7, MISC_BUILDOPTS)):
+        a.i(f"limm r1, #{val}")
+        a.i(f"st.a.d r2, #{word}, r1 [moe]")
+    a.i("ld.a.d r3, r2, #0 [moe]")              # flags
+    a.i("wdf")
+    a.i(f"test.and.ne p0, r3, #{MISC_GET_STRUCT_SIZES}")
+    a.i("(!p0) ba k_misc_ready")
+    for word, val in MISC_SIZES:
+        a.i(f"limm r1, #{val}")
+        a.i(f"st.a.d r2, #{word}, r1 [moe]")
+    a.label("k_misc_ready")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ld.a.d r3, r2, #0 [moe]")
+    a.i("wdf")
+    a.i(f"or r3, r3, #{MISC_READY}")
+    a.i("st.a.d r2, #0, r3 [moe]")              # ui32MiscInfoFlags |= READY
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # power (data[1] = PVRSRV_POWERCMD): report completion in ui32PowerStatus,
+    # which sgxpower.c polls. The DDK also drives its power-management state
+    # machine; the host-visible contract is the completion bit (full internals
+    # come with the multi-render scheduler). POWEROFF -> bit 3, IDLE -> bit 2.
+    a.label("k_power")
+    a.i(f"mov r2, sa{SA_HOSTCTL} [mask=1]")
+    a.i(f"ld.a.d r3, r2, #{HC_POWER} [moe]")
+    a.i("wdf")
+    a.i(f"test.xor.eq p0, r8, #{POWERCMD_POWEROFF}")
+    a.i("(p0) or r3, r3, #8")                   # POWMAN_POWEROFF_COMPLETE
+    a.i(f"test.xor.eq p0, r8, #{POWERCMD_IDLE}")
+    a.i("(p0) or r3, r3, #4")                   # POWMAN_IDLE_COMPLETE
+    a.i(f"st.a.d r2, #{HC_POWER}, r3 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # context suspend (data[0] = context, data[1] = suspend/resume): set or
+    # clear the context's suspend flag (bit 4 of its flags word)
+    a.label("k_ctxsuspend")
+    a.i("ld.a.d r1, r9, #0 [moe]")
+    a.i("wdf")
+    a.i(f"test.xor.eq p0, r8, #{CTXSUSPCMD_RESUME}")
+    a.i("(p0) and.inv r1, r1, #16")
+    a.i("(!p0) or r1, r1, #16")
+    a.i("st.a.d r9, #0, r1 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # cleanup (data[0] = resource type, data[1] = resource): report completion
+    # in ui32CleanupStatus, which sgxutils.c polls. The DDK also unlinks the
+    # resource from the microkernel's lists only when safe; that list surgery
+    # is the multi-render-bookkeeping item.
+    a.label("k_cleanup")
+    a.i(f"mov r2, sa{SA_HOSTCTL} [mask=1]")
+    a.i(f"ld.a.d r3, r2, #{HC_CLEANUP} [moe]")
+    a.i("wdf")
+    a.i("or r3, r3, #1")                        # CLEANUPCMD_COMPLETE
+    a.i(f"st.a.d r2, #{HC_CLEANUP}, r3 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # transfer (data[1] = HW transfer context): a 3D-only render (texture
+    # uploads and the swap blit). TODO: the full handler; stubbed so the
+    # command set dispatches.
+    a.label("k_transfer")
+    a.i("ba kick_adv")
     a.label("kick_adv")
     # read offset := (read offset + 1) & 0xff
     a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")
@@ -367,7 +525,6 @@ def build(a):
     # ta_finished: write the TA status values, then program and start the 3D
     # ======================================================================
     a.label("ta_finished")
-    a.phas()
     # TA status-value list (docs/UKERNEL.md §5): CMDTA_SHARED holds a count at
     # command+0x5c and that many {sStatusDevAddr, ui32StatusValue} pairs from
     # command+0x118; write each value to its address (sync-heap counters the
@@ -396,13 +553,21 @@ def build(a):
     a.i("(p0) ba ta_status_loop")
     a.label("ta_status_done")
     a.i("wdf")
+    # start the 3D once the scene's last TA has finished. CMDTA_SHARED's
+    # ui32CtrlFlags (command word 0) bit 0 (READY) is set by the kernel only
+    # for the last kick (bLastInScene), so a command with it set means render.
+    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_CMD} [moe]")   # TA command base
+    a.i("wdf")
+    a.i("ld.a.d r2, r1, #0 [moe]")                    # ui32CtrlFlags
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, #1")                     # READY (last in scene)?
+    a.i("(p0) ba do_3d")
     a.end()
 
     # ======================================================================
     # do_3d: program and start the 3D for the scene (run on the last TA's finish)
     # ======================================================================
     a.label("do_3d")
-    a.phas()
     a.i(f"ld.a.d r10, sa{SA_SELF}, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, sa{SA_SELF}, #{SC_PB} [moe]")   # PB descriptor
     a.i("wdf")
@@ -424,7 +589,6 @@ def build(a):
     # destination's write-ops-complete to pending+1 (docs/UKERNEL.md §5). The
     # list walk is the next increment; the host-interrupt tail is here.
     a.label("render_done")
-    a.phas()
     a.i(f"ld.a.d r0, sa{SA_SELF}, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # TA3D dependency sync: the destination the host/next client polls. The

@@ -84,7 +84,7 @@ def main():
     # a flat sidecar srvinit -o reads (plain text, fscanf-friendly): the entry
     # the event program starts, and the limm patch sites the loader fills
     with open(out + ".pat", "w") as f:
-        f.write(f"entry init {offset['init'] * 8}\n")
+        f.write(f"entry event {offset['event'] * 8}\n")   # the event program starts this
         for name, i in patches.items():
             f.write(f"patch {name} {i * 8}\n")
     print(f"{out}: {len(data)} bytes, {len(words)} instructions")

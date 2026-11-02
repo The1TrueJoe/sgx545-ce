@@ -50,7 +50,7 @@ sgx_nir_options(void)
 
 /* ------------------------------------------------------------------------
  * varyings -> texture coordinate sets, as glslcompiler allocates them
- * (FUN_00029ff0, ISA.md "Varyings to sets"): by type mat4, mat2, vec4,
+ * (ISA.md "Varyings to sets"): by type mat4, mat2, vec4,
  * mat3, vec3, vec2, float; within a type the largest array first, then
  * declaration order; one set per row while sets last.
  */

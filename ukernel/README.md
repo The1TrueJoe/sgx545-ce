@@ -27,9 +27,13 @@ build outputs are generated, not committed.
 
 Implemented and validated offline (no hardware):
 
-- **init** — gets its addresses from limms the srvinit loader patches (not the
-  secondary attributes: the event program that starts it is a bare DOUTU, so
-  there is no DMA'd control block in `sa` at init). Clean boot sets
+- **event entry** — the one task the bare-DOUTU event program starts. It loads
+  the control-block base from a loader-patched limm, populates the four `sa`
+  the handlers use (self / host-control / CCB-control / kernel-CCB), and
+  dispatches on `ui32InitStatus` and `EUR_CR_EVENT_STATUS` (host kick → kick,
+  TA finished → ta_finished, 3D end → render_done). Every handler is a branch
+  target of this one task;
+- **init** — reached from the event entry (sa populated). Clean boot sets
   `ui32InitStatus`; **recovery** re-init (the host control block's HWR bit set)
   first discards the surviving kernel CCB (read offset := write offset) and
   empties the render-in-flight list (docs/UKERNEL.md §5a — the double-lockup fix);
