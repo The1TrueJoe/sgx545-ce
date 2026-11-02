@@ -171,4 +171,10 @@ void sgx545_finish(struct sgx545_context *ctx);
 /* before the CPU touches res: finish any frame that renders into it */
 void sgx545_flush_resource_writes(struct sgx545_context *ctx, struct sgx545_resource *res);
 
+/* The frame this context records, if it still is one: a frame whose target
+ * was destroyed went at the destruction (sgx545_resource.c), and another
+ * context's frame on the shared render context ends ours (sgxws_begin).
+ * Compares addresses only: the resource may be gone. */
+struct sgx545_resource *sgx545_recording(struct sgx545_context *ctx);
+
 #endif

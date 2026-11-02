@@ -1059,6 +1059,12 @@ sgxws_recording(struct sgxws_ctx *c)
    return c->rt != NULL;
 }
 
+const struct sgxws_bo *
+sgxws_target_bo(const struct sgxws_ctx *c)
+{
+   return c->rt ? c->target.bo : NULL;
+}
+
 int
 sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target *t)
 {

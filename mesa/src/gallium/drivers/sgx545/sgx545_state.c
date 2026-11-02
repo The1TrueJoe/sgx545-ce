@@ -113,7 +113,7 @@ blend_bfactor(enum pipe_blendfactor f, bool dst_alpha)
 /* render target 0's blend as the colour epilogue (sgxws_blend): sop2, or its
  * sopwm form with a constant factor; false when neither can express it */
 static bool
-blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, struct sgxws_blend *b)
+blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, bool force_sopwm, struct sgxws_blend *b)
 {
    bool rev_c = false, rev_a = false, min_c, min_a;
    int c1, c2, a1, a2;
@@ -124,7 +124,8 @@ blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, struct sgxws_blen
    /* MIN and MAX take no factors */
    min_c = b->cop >= SGXWS_BOP_MIN;
    min_a = b->aop >= SGXWS_BOP_MIN;
-   if ((!min_c && (blend_factor_constant(rt->rgb_src_factor) || blend_factor_constant(rt->rgb_dst_factor))) ||
+   if (force_sopwm ||
+       (!min_c && (blend_factor_constant(rt->rgb_src_factor) || blend_factor_constant(rt->rgb_dst_factor))) ||
        (!min_a && (blend_factor_constant(rt->alpha_src_factor) || blend_factor_constant(rt->alpha_dst_factor)))) {
       /* dst - src reads r1, r0: only one direction per blend */
       if ((rev_c || rev_a) && ((!rev_c && b->cop == SGXWS_BOP_SUB) || (!rev_a && b->aop == SGXWS_BOP_SUB)))
@@ -134,8 +135,11 @@ blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, struct sgxws_blen
       b->swap = rev_c || rev_a;
       b->fs = min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_src_factor, dst_alpha);
       b->fd = min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_dst_factor, dst_alpha);
-      b->fsa = min_a ? SGXWS_BF_ONE : blend_bfactor(rt->alpha_src_factor, dst_alpha);
-      b->fda = min_a ? SGXWS_BF_ONE : blend_bfactor(rt->alpha_dst_factor, dst_alpha);
+      /* SRC_ALPHA_SATURATE's alpha is 1 */
+      b->fsa = min_a || rt->alpha_src_factor == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE
+                  ? SGXWS_BF_ONE : blend_bfactor(rt->alpha_src_factor, dst_alpha);
+      b->fda = min_a || rt->alpha_dst_factor == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE
+                  ? SGXWS_BF_ONE : blend_bfactor(rt->alpha_dst_factor, dst_alpha);
       return true;
    }
    c1 = min_c ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->rgb_src_factor, false, dst_alpha);
@@ -177,7 +181,11 @@ sgx545_create_blend_state(struct pipe_context *pctx, const struct pipe_blend_sta
       return NULL;
    so->base = *cso;
    if (cso->rt[0].blend_enable && !cso->logicop_enable) {
-      so->enable = blend_hw(&cso->rt[0], false, &so->hw[0]) && blend_hw(&cso->rt[0], true, &so->hw[1]);
+      /* the sop2 form, or the sopwm one where sop2's selectors can't say it
+       * (SRC_ALPHA_SATURATE with the sources traded) */
+      for (unsigned i = 0; i < 2; i++)
+         so->enable = blend_hw(&cso->rt[0], i, false, &so->hw[i]) || blend_hw(&cso->rt[0], i, true, &so->hw[i]);
+      so->enable = so->enable && so->hw[0].blend && so->hw[1].blend;
       if (!so->enable)
          fprintf(stderr, "sgx545: blend (func %u/%u, factors %u %u %u %u) not drawn yet, drawing opaque\n",
                  cso->rt[0].rgb_func, cso->rt[0].alpha_func, cso->rt[0].rgb_src_factor,

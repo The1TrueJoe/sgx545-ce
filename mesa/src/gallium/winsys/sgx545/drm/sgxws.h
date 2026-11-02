@@ -232,6 +232,8 @@ sgxws_bo_valid(const struct sgxws_bo *bo)
 /* wait for the submitted renders that write a render target (0 when done) */
 /* a buffer to be rendered into: its sync data, for sgxws_bo_wait */
 void sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo);
+/* the buffer the frame being recorded renders into, NULL when none is */
+const struct sgxws_bo *sgxws_target_bo(const struct sgxws_ctx *c);
 int sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms);
 
 struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d);

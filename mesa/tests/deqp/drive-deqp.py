@@ -4,6 +4,11 @@
 """Run dEQP-GLES2 on an EA from the host, across wedges and power cycles.
 
     drive-deqp.py sgx545|ddk [--box 10.0.0.113] [--chunk 200] [--filter REGEX] [--max-wedges N]
+                  [--name NAME] [--caselist FILE]
+
+--name keeps a run apart from the others (its results in run-NAME, its Mesa in
+lib-NAME on the box), e.g. a rerun of one build's fails with the next build;
+--caselist runs those tests instead of the mustpass list.
 
 run-deqp.sh runs the whole caselist in one go on the box, which is fine once
 nothing wedges. This is for the runs before that: the caselist goes to the box
@@ -76,9 +81,9 @@ def recoveries(box):
     return int(out.strip() or 0) if rc in (0, 1) else None
 
 
-def payload(box, who):
+def payload(box, who, name):
     """Copy what the run needs when it isn't there (a RAM root loses it at every boot)."""
-    rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -f {BOX_DIR}/.complete-{who}")
+    rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -f {BOX_DIR}/.complete-{name}")
     if rc == 0:
         return
     log("copying the payload to the box")
@@ -89,18 +94,18 @@ def payload(box, who):
         t.add(os.path.join(out, "gles2"), "gles2")
         if who == "sgx545":
             t.add(os.path.join(out, "deqp-gles2"), "deqp-gles2")
-            t.add(os.environ["MESA_DIR"], "lib")
+            t.add(os.environ["MESA_DIR"], "lib-" + name)
         else:
             t.add(os.path.join(out, "deqp-gles2-i386"), "deqp-gles2-i386")
-    rc, o = box.ssh(f"mkdir -p {BOX_DIR} && cd {BOX_DIR} && tar xf - && touch .complete-{who}", timeout=900,
+    rc, o = box.ssh(f"mkdir -p {BOX_DIR} && cd {BOX_DIR} && tar xf - && touch .complete-{name}", timeout=900,
                     stdin=buf.getvalue())
     if rc != 0:
         sys.exit(f"payload copy failed: {o.decode(errors='replace')}")
 
 
-def runner_script(who):
+def runner_script(who, name):
     if who == "sgx545":
-        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort"
+        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort"
         deqp = f"{BOX_DIR}/deqp-gles2"
     else:
         deqp = f"{BOX_DIR}/deqp-gles2-ddk"
@@ -116,11 +121,11 @@ def runner_script(who):
             f"--deqp-gl-config-name={CONFIG} --deqp-visibility=hidden > runner.log 2>&1; echo rc=$?")
 
 
-def canary(box, who):
+def canary(box, who, name):
     """Does a one-draw test still finish? A GPU that recovered does; a wedged one doesn't."""
     # (busybox has no timeout: a hung canary is the SSH call timing out)
     if who == "sgx545":
-        pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib EGL_PLATFORM=surfaceless"
+        pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless"
         exe = f"{BOX_DIR}/deqp-gles2"
     else:
         pre = ""
@@ -144,7 +149,7 @@ def recover(box):
     return False
 
 
-def run_chunk(box, who, tests):
+def run_chunk(box, who, name, tests):
     """(results {test: (status, seconds)}, wedged)"""
     rc, _ = box.ssh(f"cat > {BOX_DIR}/chunk.txt", stdin=("\n".join(tests) + "\n").encode())
     if rc != 0:
@@ -152,7 +157,7 @@ def run_chunk(box, who, tests):
     limit = 120 + len(tests) * 4 + 3 * TEST_TIMEOUT
     limit = min(limit, 3600)
     r0 = recoveries(box)
-    rc, out = box.ssh(runner_script(who), timeout=limit)
+    rc, out = box.ssh(runner_script(who, name), timeout=limit)
     res = {}
     wedged = rc is None
     if not wedged:
@@ -175,7 +180,7 @@ def run_chunk(box, who, tests):
     r1 = recoveries(box) if not wedged else None
     if r0 is not None and r1 is not None and r1 != r0:
         log(f"chunk of {len(tests)}: {r1 - r0} SGX recoveries")
-    if not wedged and not canary(box, who):
+    if not wedged and not canary(box, who, name):
         log("the canary didn't pass after this chunk")
         wedged = True
     return res, wedged
@@ -188,11 +193,14 @@ def main():
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--filter", default=None)
     ap.add_argument("--max-wedges", type=int, default=40)
+    ap.add_argument("--name", default=None)
+    ap.add_argument("--caselist", default=None)
     a = ap.parse_args()
     box = Box(a.box)
 
     global RUN_DIR
-    run_dir = RUN_DIR = os.path.join(WORK, "run-" + a.who)
+    name = a.name or a.who
+    run_dir = RUN_DIR = os.path.join(WORK, "run-" + name)
     os.makedirs(run_dir, exist_ok=True)
     res_path = os.path.join(run_dir, "results.csv")
     wedge_path = os.path.join(run_dir, "wedges.txt")
@@ -200,7 +208,7 @@ def main():
     if os.path.exists(res_path):
         with open(res_path) as f:
             done = {line.split(",")[0] for line in f if line.startswith("dEQP")}
-    with open(os.path.join(WORK, "out/mustpass/gles2-main.txt")) as f:
+    with open(a.caselist or os.path.join(WORK, "out/mustpass/gles2-main.txt")) as f:
         tests = [t.strip() for t in f if t.strip()]
     if a.filter:
         tests = [t for t in tests if re.search(a.filter, t)]
@@ -209,8 +217,8 @@ def main():
 
     if not box.alive():
         sys.exit("the box doesn't answer")
-    payload(box, a.who)
-    if not canary(box, a.who):
+    payload(box, a.who, name)
+    if not canary(box, a.who, name):
         sys.exit("the canary doesn't pass on a fresh box: not starting")
 
     size = a.chunk
@@ -220,7 +228,7 @@ def main():
     ran = 0
     while todo:
         chunk = todo[:size]
-        res, wedged = run_chunk(box, a.who, chunk)
+        res, wedged = run_chunk(box, a.who, name, chunk)
         for t, (status, secs) in res.items():
             res_file.write(f"{t},{status},{secs}\n")
         res_file.flush()
@@ -251,7 +259,7 @@ def main():
                 sys.exit(f"{wedges} wedges: stopping; rerun to carry on")
             if not recover(box):
                 sys.exit("the box didn't come back: stopping; rerun to carry on")
-            payload(box, a.who)
+            payload(box, a.who, name)
         elif size < a.chunk:
             size = min(a.chunk, size * 2)
         rate = ran / max(time.time() - t0, 1)

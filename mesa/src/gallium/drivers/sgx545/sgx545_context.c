@@ -49,6 +49,14 @@ sgx545_fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
    return done;
 }
 
+struct sgx545_resource *
+sgx545_recording(struct sgx545_context *ctx)
+{
+   if (ctx->recording && (!ctx->hw || sgxws_target_bo(ctx->hw) != &ctx->recording->bo))
+      ctx->recording = NULL;
+   return ctx->recording;
+}
+
 void
 sgx545_flush_frame(struct sgx545_context *ctx)
 {
@@ -57,7 +65,7 @@ sgx545_flush_frame(struct sgx545_context *ctx)
 
    uint64_t t;
 
-   if (!ctx->recording)
+   if (!sgx545_recording(ctx))
       return;
    t = ctx->stats.on ? os_time_get_nano() : 0;
    simple_mtx_lock(&screen->lock);
@@ -134,7 +142,7 @@ sgx545_stats_report(struct sgx545_context *ctx)
 void
 sgx545_flush_resource_writes(struct sgx545_context *ctx, struct sgx545_resource *res)
 {
-   if (ctx->recording == res)
+   if (sgx545_recording(ctx) == res)
       sgx545_flush_frame(ctx);
 }
 
@@ -151,7 +159,7 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
     * waited for the whole render.  The frame still goes at a fence, a
     * readback, another target or the end of the frame; renders into the
     * scanout buffer (the swap's copy) go now. */
-   if (ctx->recording && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) && !ctx->recording->wrapped &&
+   if (sgx545_recording(ctx) && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) && !ctx->recording->wrapped &&
        !(sgx545_debug & SGX545_DEBUG_FLUSH_ALL)) {
       ctx->stats.fl_deferred++;
       return;

@@ -73,7 +73,7 @@ begin_frame(struct sgx545_context *ctx)
    rt = get_rt(ctx, u_minify(res->base.width0, cbuf->level), u_minify(res->base.height0, cbuf->level), t.va);
    if (!rt)
       return false;
-   if (ctx->recording && ctx->recording != res) {
+   if (sgx545_recording(ctx) && ctx->recording != res) {
       ctx->recording = NULL;    /* sgxws_begin flushes the other frame */
       ctx->stats.fl_switch++;
    }
@@ -810,6 +810,10 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    build_state(ctx, &st);
    if (!build_clip(ctx, &st.clip))
       return;                 /* nothing visible: a zero-area scissor or viewport */
+   /* both faces culled: no triangle survives (lines and points aren't culled) */
+   if (ctx->rasterizer && ctx->rasterizer->base.cull_face == PIPE_FACE_FRONT_AND_BACK &&
+       u_reduced_prim(info->mode) == MESA_PRIM_TRIANGLES)
+      return;
    if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture) {
       /* the colour epilogue: blend, then the colour mask (sgxws_blend) */
       bool has_alpha = util_format_has_alpha(ctx->framebuffer.cbufs[0].format);
