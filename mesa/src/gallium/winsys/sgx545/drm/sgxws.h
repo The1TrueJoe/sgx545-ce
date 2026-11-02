@@ -166,8 +166,18 @@ struct sgxws_stats {
    unsigned room_flushes;                     /* frames submitted early because a ring filled */
 };
 
-/* fd: the GPU's kernel driver */
-struct sgxws_dev *sgxws_dev_create(int fd, bool verbose);
+/* debugging aids the driver passes on (its SGX545_DEBUG options) */
+struct sgxws_dev_options {
+   bool verbose;                /* print every frame submitted */
+   bool flush_rt;               /* SGX_FLUSH_HW_RENDER_TARGET at a target's destruction */
+   const char *trace;           /* a pvrtrace log of this client, as tools/decode reads a DDK capture */
+   unsigned trace_kicks;        /* and memory copies for its first n kicks only (0: all) */
+   int dry_run;                 /* frames from the n-th on are built (and traced) but never sent; -1: off */
+   unsigned frame_gap_us;       /* idle time after each render */
+};
+
+/* fd: the GPU's kernel driver; opts may be NULL */
+struct sgxws_dev *sgxws_dev_create(int fd, const struct sgxws_dev_options *opts);
 void sgxws_dev_destroy(struct sgxws_dev *d);
 
 int sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem, uint32_t size,

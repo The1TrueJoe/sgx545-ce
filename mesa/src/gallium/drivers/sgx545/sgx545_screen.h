@@ -12,12 +12,28 @@
 
 #include "sgxws.h"
 
-#define SGX545_DEBUG_FRAME (1 << 0)
-#define SGX545_DEBUG_NIR   (1 << 1)
-#define SGX545_DEBUG_DRAW  (1 << 2)
-#define SGX545_DEBUG_SYNC  (1 << 3)
+/* SGX545_DEBUG=flag,flag... (sgx545_debug_options in sgx545_screen.c) */
+#define SGX545_DEBUG_FRAME          (1 << 0)
+#define SGX545_DEBUG_NIR            (1 << 1)
+#define SGX545_DEBUG_DRAW           (1 << 2)
+#define SGX545_DEBUG_SYNC           (1 << 3)
+#define SGX545_DEBUG_STATS          (1 << 4)
+#define SGX545_DEBUG_SERIAL         (1 << 5)
+#define SGX545_DEBUG_HANG_ABORT     (1 << 6)
+#define SGX545_DEBUG_FLUSH_ALL      (1 << 7)
+#define SGX545_DEBUG_NO_VCACHE      (1 << 8)
+#define SGX545_DEBUG_NO_F16         (1 << 9)
+#define SGX545_DEBUG_NO_DRV_CONSTS  (1 << 10)
+#define SGX545_DEBUG_FS_CONST       (1 << 11)
+#define SGX545_DEBUG_ATTRS          (1 << 12)
+#define SGX545_DEBUG_BLITS          (1 << 13)
+#define SGX545_DEBUG_NO_VS_COMPILER (1 << 14)
+#define SGX545_DEBUG_NO_FS_COMPILER (1 << 15)
+#define SGX545_DEBUG_FLUSH_RT       (1 << 16)
 
 extern uint32_t sgx545_debug;
+/* SGX545_DUMP_USP=dir: every compiled program's USP written there */
+const char *sgx545_dump_usp_dir(void);
 
 #define SGX545_DBG(flag, ...)                                                  \
    do {                                                                        \

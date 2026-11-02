@@ -514,7 +514,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    opts.f16 = ctx->base.screen->shader_caps[nir->info.stage].fp16;
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
-   opts.driver_consts = debug_get_bool_option("SGX545_DRIVER_CONSTS", true);
+   opts.driver_consts = !(sgx545_debug & SGX545_DEBUG_NO_DRV_CONSTS);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    remap_legacy_varyings(nir);
    assign_varyings(nir, &vary);
@@ -536,12 +536,12 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       ralloc_free(nir);
       return false;
    }
-   if (getenv("SGX545_DUMP_USP")) {
+   if (sgx545_dump_usp_dir()) {
       static unsigned seq;
       char path[512];
       FILE *fp;
 
-      snprintf(path, sizeof(path), "%s/%s-%u.usp", getenv("SGX545_DUMP_USP"), vertex ? "vs" : "fs", seq++);
+      snprintf(path, sizeof(path), "%s/%s-%u.usp", sgx545_dump_usp_dir(), vertex ? "vs" : "fs", seq++);
       if ((fp = fopen(path, "wb"))) {
          fwrite(out.usp, 1, out.usp_size, fp);
          fclose(fp);
@@ -727,10 +727,9 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
       nir = tgsi_to_nir(cso->tokens, pctx->screen, false);
    so->nir = nir;
 
-   /* SGX545_NO_COMPILER=vs / fs / 1: the fixed programs for that stage / both */
-   const char *no = getenv("SGX545_NO_COMPILER");
-   bool fixed = no && (!strcmp(no, "1") ||
-                       !strcmp(no, nir->info.stage == MESA_SHADER_VERTEX ? "vs" : "fs"));
+   /* SGX545_DEBUG=novs / nofs: the fixed programs for that stage */
+   bool fixed = sgx545_debug & (nir->info.stage == MESA_SHADER_VERTEX ? SGX545_DEBUG_NO_VS_COMPILER
+                                                                      : SGX545_DEBUG_NO_FS_COMPILER);
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();

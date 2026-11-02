@@ -58,9 +58,9 @@ struct sgxws_dev {
    struct pvr pvr;
    uint32_t heap_base[16];          /* device address of each heap, by heap id */
    int verbose;
-   unsigned frame_gap_us;           /* SGX545_FRAME_GAP_US: idle time after each render */
-   int dry_run;                     /* SGX545_DRY_RUN=n: frames from the n-th on are built
-                                     * (and traced) but never sent to the GPU */
+   bool flush_rt;                   /* sgxws_dev_options */
+   unsigned frame_gap_us;
+   int dry_run;
 };
 
 /* a buffer's services side */
@@ -147,7 +147,7 @@ struct sgxws_ctx {
    unsigned frames;
 };
 
-int sgxws_dev_init(struct sgxws_dev *d, int fd);
+int sgxws_dev_init(struct sgxws_dev *d, int fd, const struct sgxws_dev_options *opts);
 void sgxws_dev_fini(struct sgxws_dev *d);
 
 /* a buffer in a given heap with given attributes (sgxws_bo_alloc picks them by use) */

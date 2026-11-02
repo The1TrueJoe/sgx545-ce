@@ -485,22 +485,23 @@ pds_dma_task(struct sgxws_ring *r, uint32_t src, uint32_t dwords, uint32_t task_
 /* ------------------------------------------------------------------ device */
 
 int
-sgxws_dev_init(struct sgxws_dev *d, int fd)
+sgxws_dev_init(struct sgxws_dev *d, int fd, const struct sgxws_dev_options *opts)
 {
-   const char *trace = getenv("SGX545_TRACE");
+   const struct sgxws_dev_options none = { .dry_run = -1 };
    int e;
 
+   if (!opts)
+      opts = &none;
    memset(d, 0, sizeof(*d));
-   d->verbose = getenv("SGX545_VERBOSE") ? atoi(getenv("SGX545_VERBOSE")) : 0;
-   d->frame_gap_us = getenv("SGX545_FRAME_GAP_US") ? atoi(getenv("SGX545_FRAME_GAP_US")) : 0;
-   d->dry_run = getenv("SGX545_DRY_RUN") ? atoi(getenv("SGX545_DRY_RUN")) : -1;
+   d->verbose = opts->verbose;
+   d->flush_rt = opts->flush_rt;
+   d->frame_gap_us = opts->frame_gap_us;
+   d->dry_run = opts->dry_run;
    pvr_open_fd(&d->pvr, fd);
-   /* SGX545_TRACE=path: a pvrtrace log of this client, as tools/decode reads a DDK
-    * capture; SGX545_TRACE_KICKS=n: memory copies for the first n kicks only */
-   if (trace && (e = pvr_trace_open(&d->pvr, trace)))
+   if (opts->trace && (e = pvr_trace_open(&d->pvr, opts->trace)))
       return e;
-   if (getenv("SGX545_TRACE_KICKS"))
-      d->pvr.trace_kicks = atoi(getenv("SGX545_TRACE_KICKS"));
+   if (opts->trace_kicks)
+      d->pvr.trace_kicks = opts->trace_kicks;
    if ((e = pvr_init(&d->pvr)))
       return e;
    for (unsigned i = 0; i < d->pvr.nheaps; i++)
@@ -516,20 +517,18 @@ sgxws_dev_fini(struct sgxws_dev *d)
 }
 
 struct sgxws_dev *
-sgxws_dev_create(int fd, bool verbose)
+sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
 {
    struct sgxws_dev *d = calloc(1, sizeof(*d));
    int e;
 
    if (!d)
       return NULL;
-   if ((e = sgxws_dev_init(d, fd))) {
+   if ((e = sgxws_dev_init(d, fd, opts))) {
       ws_err("no PVR services on fd %d: %d\n", fd, e);
       free(d);
       return NULL;
    }
-   if (verbose)
-      d->verbose = 1;
    return d;
 }
 
@@ -894,7 +893,7 @@ sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *s)
    /* SGX_FLUSH_HW_RENDER_TARGET is what the DDK sends here.  It times out on a
     * srvinit-started microkernel and the GPU locks up after it (docs/GEN.md),
     * so only on request. */
-   if (getenv("SGX545_FLUSH_RT")) {
+   if (c->dev->flush_rt) {
       int e = pvr_flush_rt(&c->dev->pvr, s->rtdata.va);
 
       if (e)

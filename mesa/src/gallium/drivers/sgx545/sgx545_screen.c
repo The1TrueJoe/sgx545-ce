@@ -24,10 +24,37 @@ static const struct debug_named_value sgx545_debug_options[] = {
    { "nir", SGX545_DEBUG_NIR, "print every shader's NIR" },
    { "draw", SGX545_DEBUG_DRAW, "print every draw" },
    { "sync", SGX545_DEBUG_SYNC, "print allocations and waits" },
+   { "stats", SGX545_DEBUG_STATS, "print where the time goes, every 2 s" },
+   { "serial", SGX545_DEBUG_SERIAL, "wait for every render after submitting it (no overlap)" },
+   { "hangabort", SGX545_DEBUG_HANG_ABORT, "abort at the first render that does not finish" },
+   { "flushall", SGX545_DEBUG_FLUSH_ALL, "submit at every flush (none deferred)" },
+   { "novcache", SGX545_DEBUG_NO_VCACHE, "no vertex cache" },
+   { "nof16", SGX545_DEBUG_NO_F16, "no F16/C10 fragment arithmetic" },
+   { "nodrvconsts", SGX545_DEBUG_NO_DRV_CONSTS, "no driver constant formats (lowp as F16, literals)" },
+   { "fsconst", SGX545_DEBUG_FS_CONST, "every fragment shader a constant colour per program (measuring)" },
+   { "attrs", SGX545_DEBUG_ATTRS, "describe the first draws with 5 or more vertex inputs, and clears" },
+   { "blits", SGX545_DEBUG_BLITS, "describe every 255th blit and its caller" },
+   { "novs", SGX545_DEBUG_NO_VS_COMPILER, "the fixed vertex programs instead of the compiler" },
+   { "nofs", SGX545_DEBUG_NO_FS_COMPILER, "the fixed fragment programs instead of the compiler" },
+   { "flushrt", SGX545_DEBUG_FLUSH_RT, "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)" },
    DEBUG_NAMED_VALUE_END
 };
 
 DEBUG_GET_ONCE_FLAGS_OPTION(sgx545_debug, "SGX545_DEBUG", sgx545_debug_options, 0)
+DEBUG_GET_ONCE_OPTION(sgx545_dump_usp, "SGX545_DUMP_USP", NULL)
+/* the winsys's debugging aids: a pvrtrace log of this client (and memory
+ * copies for its first n kicks), frames built but never sent from the n-th
+ * on, idle time after every render */
+DEBUG_GET_ONCE_OPTION(sgx545_trace, "SGX545_TRACE", NULL)
+DEBUG_GET_ONCE_NUM_OPTION(sgx545_trace_kicks, "SGX545_TRACE_KICKS", 0)
+DEBUG_GET_ONCE_NUM_OPTION(sgx545_dry_run, "SGX545_DRY_RUN", -1)
+DEBUG_GET_ONCE_NUM_OPTION(sgx545_frame_gap_us, "SGX545_FRAME_GAP_US", 0)
+
+const char *
+sgx545_dump_usp_dir(void)
+{
+   return debug_get_option_sgx545_dump_usp();
+}
 
 
 static const char *
@@ -81,7 +108,7 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
           * clipping A/B cases are byte-identical to the DDK with it
           * (sgx545_varyab.sh, _texproj, _texshape, _nearclip), and the bench
           * world runs 24-28 FPS against 20-27 in F32.  SGX545_F16=0 keeps F32 */
-         caps->fp16 = caps->glsl_16bit_consts = debug_get_bool_option("SGX545_F16", true);
+         caps->fp16 = caps->glsl_16bit_consts = !(sgx545_debug & SGX545_DEBUG_NO_F16);
       }
    }
 }
@@ -248,8 +275,16 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config)
       kept.hw = NULL;
    }
    simple_mtx_unlock(&kept_lock);
-   if (screen->dev_fd == fd &&
-       !(screen->dev = sgxws_dev_create(fd, sgx545_debug & SGX545_DEBUG_FRAME))) {
+   const struct sgxws_dev_options wsopts = {
+      .verbose = (sgx545_debug & SGX545_DEBUG_FRAME) != 0,
+      .flush_rt = (sgx545_debug & SGX545_DEBUG_FLUSH_RT) != 0,
+      .trace = debug_get_option_sgx545_trace(),
+      .trace_kicks = debug_get_option_sgx545_trace_kicks(),
+      .dry_run = debug_get_option_sgx545_dry_run(),
+      .frame_gap_us = debug_get_option_sgx545_frame_gap_us(),
+   };
+
+   if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {
       FREE(screen);
       return NULL;
    }

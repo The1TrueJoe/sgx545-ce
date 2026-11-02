@@ -545,12 +545,13 @@ sgx545_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
    struct sgx545_context *ctx = sgx545_context(pctx);
    uint64_t t0;
 
-   /* SGX545_DEBUG_BLITS=n: every 255th blit and its caller described (an odd stride, so alternating kinds show), n times */
+   /* SGX545_DEBUG=blits: every 255th blit and its caller described (an odd
+    * stride, so alternating kinds show), 40 times */
    static int blits_left = -1;
    static unsigned blit_no;
 
    if (blits_left < 0)
-      blits_left = debug_get_num_option("SGX545_DEBUG_BLITS", 0);
+      blits_left = (sgx545_debug & SGX545_DEBUG_BLITS) ? 40 : 0;
    if (blits_left > 0 && blit_no++ % 255 == 0) {
       Dl_info dl;
       void *ra = __builtin_return_address(0);

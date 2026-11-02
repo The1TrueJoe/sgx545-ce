@@ -94,7 +94,7 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
 
    SGX545_DBG(DRAW, "clear %#x (%.3f %.3f %.3f %.3f) depth %.3f\n", buffers, color->f[0], color->f[1],
               color->f[2], color->f[3], depth);
-   if (debug_get_num_option("SGX545_DEBUG_ATTRS", 0))
+   if (sgx545_debug & SGX545_DEBUG_ATTRS)
       fprintf(stderr, "sgx545 clear %#x mask %#x depth %.3f, %u draws in the frame\n", buffers, color_clear_mask,
               depth, ctx->hw ? sgxws_frame_objects(ctx->hw) : 0);
    /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
@@ -735,11 +735,9 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    } else if (ctx->vs->kind != SGX545_SHADER_VS_POSITION) {
       return;
    }
-   /* SGX545_EXP_FS_CONST=1 (measuring): every fragment shader a constant white */
-   static int exp_fs_const = -1;
+   /* SGX545_DEBUG=fsconst (measuring): every fragment shader a constant colour */
+   bool exp_fs_const = sgx545_debug & SGX545_DEBUG_FS_CONST;
 
-   if (exp_fs_const < 0)
-      exp_fs_const = debug_get_bool_option("SGX545_EXP_FS_CONST", false);
    if (ctx->fs->kind == SGX545_SHADER_COMPILED && !exp_fs_const) {
       fsp = ctx->fs->prog;
       if (blend) {
@@ -857,12 +855,12 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       }
       vertex_dwords += f[e].dwords;
    }
-   /* SGX545_DEBUG_ATTRS=n: the vertex elements of the first n draws with 5 or more inputs */
+   /* SGX545_DEBUG=attrs: the vertex elements of the first 16 draws with 5 or more inputs */
    {
       static int left = -1;
 
       if (left < 0)
-         left = debug_get_num_option("SGX545_DEBUG_ATTRS", 0);
+         left = (sgx545_debug & SGX545_DEBUG_ATTRS) ? 16 : 0;
       if (left > 0 && compiled && n_fetch >= 5) {
          left--;
          fprintf(stderr, "sgx545 attrs: %s x%u start %u index_size %u; depth func %#x write %d, cull %#x front_ccw %d, "
@@ -1053,8 +1051,8 @@ sgx545_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info, un
 void
 sgx545_draw_init(struct sgx545_context *ctx)
 {
-   /* SGX545_VCACHE=0: no vertex cache */
-   if (debug_get_bool_option("SGX545_VCACHE", true)) {
+   /* SGX545_DEBUG=novcache: no vertex cache */
+   if (!(sgx545_debug & SGX545_DEBUG_NO_VCACHE)) {
       ctx->vcache = _mesa_hash_table_create(NULL, vcache_hash, vcache_equal);
       list_inithead(&ctx->vcache_lru);
       list_inithead(&ctx->vcache_chunks);

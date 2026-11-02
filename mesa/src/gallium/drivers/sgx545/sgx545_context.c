@@ -61,8 +61,8 @@ sgx545_flush_frame(struct sgx545_context *ctx)
       return;
    t = ctx->stats.on ? os_time_get_nano() : 0;
    simple_mtx_lock(&screen->lock);
-   /* SGX545_SYNC=1: wait for every frame's render (as before frames overlapped) */
-   e = sgxws_flush(ctx->hw, debug_get_bool_option("SGX545_SYNC", false) ? 2000 : 0);
+   /* SGX545_DEBUG=serial: wait for every frame's render (as before frames overlapped) */
+   e = sgxws_flush(ctx->hw, (sgx545_debug & SGX545_DEBUG_SERIAL) ? 2000 : 0);
    simple_mtx_unlock(&screen->lock);
    if (ctx->stats.on) {
       ctx->stats.flush_ns += os_time_get_nano() - t;
@@ -71,9 +71,9 @@ sgx545_flush_frame(struct sgx545_context *ctx)
    }
    if (e) {
       fprintf(stderr, "sgx545: frame did not finish: %d\n", e);
-      /* SGX545_HANG_ABORT=1: stop the client at the first hang, before the
-       * recovery loop wedges the GPU (debugging on a shared box) */
-      if (debug_get_bool_option("SGX545_HANG_ABORT", false))
+      /* SGX545_DEBUG=hangabort: stop the client at the first hang, before
+       * the recovery loop wedges the GPU (debugging on a shared box) */
+      if (sgx545_debug & SGX545_DEBUG_HANG_ABORT)
          abort();
    }
    ctx->recording = NULL;
@@ -152,7 +152,7 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
     * readback, another target or the end of the frame; renders into the
     * scanout buffer (the swap's copy) go now. */
    if (ctx->recording && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) && !ctx->recording->wrapped &&
-       !debug_get_bool_option("SGX545_FLUSH_ALL", false)) {
+       !(sgx545_debug & SGX545_DEBUG_FLUSH_ALL)) {
       ctx->stats.fl_deferred++;
       return;
    }
@@ -245,7 +245,7 @@ sgx545_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    ctx->base.set_debug_callback = u_default_set_debug_callback;
 
    slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);
-   ctx->stats.on = debug_get_bool_option("SGX545_STATS", false);
+   ctx->stats.on = (sgx545_debug & SGX545_DEBUG_STATS) != 0;
    ctx->stats.t0 = os_time_get_nano();
    sgx545_resource_context_init(ctx);
    sgx545_state_init(ctx);

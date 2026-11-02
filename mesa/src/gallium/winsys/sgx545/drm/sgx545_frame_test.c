@@ -68,7 +68,7 @@ main(int argc, char **argv)
    }
 
    fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-   if (fd < 0 || sgxws_dev_init(&dev, fd)) {
+   if (fd < 0 || sgxws_dev_init(&dev, fd, NULL)) {
       fprintf(stderr, "services init failed\n");
       return 1;
    }

@@ -75,13 +75,22 @@ LD_LIBRARY_PATH=/tmp/mesa/lib PROBE_OUT=f.rgba ./probe       # tools/probe
 The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared EA3, wrap GPU runs in
 `flock /tmp/gpu.lock`.
 
+Debugging options follow Mesa's convention: flags in `SGX545_DEBUG`
+(`SGX545_DEBUG=help` lists them), read once at screen creation; nothing in
+the default path depends on the environment.
+
 | variable | effect |
 |---|---|
 | `SGX545_DEBUG=frame,draw,nir,sync` | per-frame/draw/shader/allocation logging |
-| `SGX545_TRACE=path` | a pvrtrace log of the client (every bridge call, memory before each kick); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
+| `SGX545_DEBUG=stats` | where the time goes, every 2 s: FPS, flushes by cause, vertex cache, the winsys's waits and render latency |
+| `SGX545_DEBUG=serial` | wait for every render after submitting it (GPU time per render in `stats`) |
+| `SGX545_DEBUG=hangabort,flushall,flushrt` | abort at a render that does not finish; no deferred flushes; SGX_FLUSH_HW_RENDER_TARGET at a target's destruction |
+| `SGX545_DEBUG=novcache,nof16,nodrvconsts` | turn off the vertex cache, F16/C10 fragment arithmetic, the driver constant formats |
+| `SGX545_DEBUG=novs,nofs` | the fixed programs (gl_Position = attribute 0; gl_FragColor = a uniform or constant) for that stage |
+| `SGX545_DEBUG=fsconst,attrs,blits` | measuring and tracing aids: constant-colour fragment programs; the first draws' vertex inputs; every 255th blit and its caller |
 | `SGX545_DUMP_USP=dir` | write each compiled USP (`tools/isa/usp.py`, `dis.py` read them) |
-| `SGX545_NO_COMPILER=1\|vs\|fs` | use the fixed programs (gl_Position = attribute 0; gl_FragColor = a uniform or constant) for both or one stage |
-| `SGX545_VERBOSE=1` | winsys logging (allocations, waits) |
+| `SGX545_TRACE=path`, `SGX545_TRACE_KICKS=n` | a pvrtrace log of the client (every bridge call, memory before each kick, for the first n kicks); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
+| `SGX545_DRY_RUN=n`, `SGX545_FRAME_GAP_US=us` | frames from the n-th on built but never sent; idle time after each render (hang bisecting) |
 | `FRAMEBUFFER=/dev/fbN` | the fbdev platform's framebuffer (default /dev/fb0) |
 
 ## How it works
