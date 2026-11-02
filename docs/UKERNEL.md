@@ -567,3 +567,59 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   The open microkernel's "discard on recovery" approach sidesteps it rather
   than reproducing it, so confirming the DDK's exact failure is useful for the
   write-up but not a prerequisite for the replacement.
+
+## 10. Clean-room readiness (for a re-implementation from this file alone)
+
+`docs/CLEANROOM.md` says `ukernel/` is re-implemented or reviewed from this
+document alone before linux-firmware submission. This section is the map and
+the gap list for that session.
+
+**Every handler in `ukernel/ukernel.py` and where its behaviour is specified:**
+
+| handler | spec |
+|---|---|
+| `event` (dispatch) | §2 (the control block as secondary attributes; dispatch table §3) |
+| `init` / recovery | §5a |
+| `kick` (CCB read + type dispatch) | §3 |
+| `do_ta` (TA kick) | §3, §6 (BIF/invalidate/DPM), §7 (register tables) |
+| `ta_finished` (status walk, 3D start) | §5 |
+| `do_3d` | §5, §7 |
+| `render_done` (sync + teardown) | §5 ("3D end of render", "DPM 3D memory free") |
+| `xfer_done` (transfer completion) | §3 (Transfer) |
+| `k_getmiscinfo` / `k_power` / `k_ctxsuspend` / `k_cleanup` | §3 |
+| `k_transfer` | §3 (Transfer), with the word→register table |
+
+**What `ukernel/` relies on that is specified in other documents, not here:**
+the USSE instruction encodings and the `moe`/repeat load-store addressing, the
+`imae` 16-bit source truncation and the `phas`/program-end flags are
+`docs/ISA.md`; the control-block base arriving in a loader-patched `limm`
+(the event program is a bare `DOUTU`, no DMA), the five entry PDS programs,
+and the kernel-data layout `srvinit` allocates are `docs/SRVINIT.md` and
+`docs/PDS.md`; the render-details / TA-command / transfer-command structures
+whose words §7 and §3 read are written by the Mesa driver and specified in
+`docs/STATE.md` and `docs/TEX.md`.
+
+**Evidence basis.** Every behaviour here was read from static analysis of the
+DDK microkernel (disassembly, `tools/isa/dis.py`) and then confirmed black-box
+in the offline emulator against the DDK as oracle: `ukernel/run_ours.py`
+builds the open microkernel and diffs the registers and memory it writes
+against the DDK's, per phase, over generated frames (`tools/gen` `frame-fake`
+and `blitest`) and a real capture — TA/3D 41+61 registers, the 12-write render
+teardown, and the 21-register transfer all match. **Nothing here is confirmed
+on hardware yet** (M1 step 5); until the EA bring-up, read every fact as
+`static` + `oracle`, not `hardware`. A per-fact evidence tag pass
+(`hardware`/`capture`/`oracle`/`static` per `docs/CLEANROOM.md`) across §§1–7
+is still to be done — this document predates that convention.
+
+**Implementation gaps the re-implementer should know (flags for the reviewer):**
+- **Transfer destination-sync update is not implemented.** `k_transfer` kicks
+  the 3D and `xfer_done` advances the transfer context's CCB and raises the
+  host IRQ, but the write-ops-complete update to the transfer's destination
+  sync objects (from `SGXMKIF_TRANSFERCMD_SHARED` at command+0xac) is not done
+  yet, so a transfer's client sees the queue advance but not the completion
+  signal. Data for it is captured (`docs/TEX.md`); it is the next increment.
+- **The advisory openHC version word is decided but not written.**
+  `docs/UKERNEL-DECISIONS.md` calls for a version word in a fixed control-block
+  slot at init; `init` does not write one yet.
+- **Single context only.** The render-in-flight list is one control-block slot
+  (+0x50); concurrent contexts are not handled (§9).

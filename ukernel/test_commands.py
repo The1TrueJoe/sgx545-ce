@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright © 2026 Joseph Telaak
 """Validate the open microkernel's host-kick command handlers against the DDK,
 offline. Needs the DDK firmware (srvinit/fetch-firmware.sh) as the oracle:
 

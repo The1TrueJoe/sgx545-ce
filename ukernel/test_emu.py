@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright © 2026 Joseph Telaak
 """Offline check of openHC's microkernel (ukernel/) in the emulator.
 
 Builds the image, then drives its entries through the USSE emulator

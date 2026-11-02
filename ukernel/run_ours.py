@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright © 2026 Joseph Telaak
 """Run openHC's microkernel (ukernel/) through a frame in the emulator and
 diff the core registers it programs against the DDK's.
 
