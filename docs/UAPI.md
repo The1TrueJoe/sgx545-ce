@@ -518,12 +518,18 @@ force. Summary in the table's last column; detail in the log entry.
 asked for in D9. A client `str` to `BIF_DIR_LIST_BASE0` (0xc84) **does not change the
 register** — host read 0x01d6b000 before and after, and the shader's own read-back
 unchanged, in a frame that returned `render done` — so a client **cannot repoint translation**
-to its own directory this way; the page-directory boundary survives this attack. The store is
+to its own directory this way; the page-directory boundary survives this attack. That store is
 also **not a denial of service**: an isolated re-run (Joseph's go, on a clean cold boot with
 WPE off and nothing else on the GPU) rendered a sanity frame, did the store, and left the box
 up with **0 SGX recoveries** over ~2.5 min idle — no reboot, no wedge. (The first run's reboot
 was a confound: another session's dEQP chunk had wedged and rebooted the box just before; that
-is not this store.) So the hardware simply **ignores** a client register store. See
+is not this store.) **Scope:** three registers were tried from a client task — `BIF_DIR_LIST_BASE0`
+and the two `USE_CODE_BASE_14`/`_15` controls — and all three stores were **dropped** (no change,
+no escape, no DoS). That a client store is dropped is **not** general: the microkernel is itself a
+USSE program that writes registers with `str` (UKERNEL.md §8), so stores land in *some* context,
+and which registers or task types drop a client store is unknown — `SOFT_RESET`, `EVENT_KICK` and
+the clock/power controls are untested and could be destructive. So a client store grants no escape
+and isn't a DoS *for these three*, but the validator still forbids client `str` (below). See
 `docs/log/entries/2026-11-02-2021-isolation-p1-register-write.md`.
 
 If any of these fails, the items above don't deliver isolation. Each needed a hardware
@@ -531,7 +537,7 @@ experiment before M2's exit test could mean anything; that experiment has now ru
 
 | # | premise | why it is in doubt | experiment | **hardware result (2026-11-02)** |
 |---|---|---|---|---|
-| **P1** | **A client's USSE task can't write `EUR_CR_*` registers.** | UKERNEL.md section 8 has the microkernel using `ldr`/`str` on the register file. ISA.md lists `ldr`/`str` (names a guess there) as ordinary instructions with a 14-bit immediate address, and neither doc says they are restricted (G1). A task that can write the directory-list base can point itself at any memory. | From a vertex and a pixel task of an ordinary client: `ldr` of `EUR_CR_CORE_ID` and compare with the known value; `str` to a harmless scratch-like register and read it from the host. | **FAILS (reads).** A fragment task's `ldr` returned the true `CORE_ID` (0x01150000), `CORE_REVISION` (0x1000e) and a live per-pixel `TIMER`. `str` to the unused `USE_CODE_BASE_14`/`_15` had no effect. The *effective*-register write (EA1, 2026-11-02): a `str` to `BIF_DIR_LIST_BASE0` **does not change the register** (host and shader read-back unchanged, frame completed), so a client **can't repoint translation** this way. The store is also **not a DoS** — an isolated re-run (clean cold boot, WPE off, GPU idle) left the box up with 0 SGX recoveries over ~2.5 min; the hardware ignores the store. (The first run's reboot was a concurrent dEQP wedge, not this store.) Fix: D9 option 1 (validate/forbid `ldr` in client code — reads leak; `str` need not be forbidden for safety). |
+| **P1** | **A client's USSE task can't write `EUR_CR_*` registers.** | UKERNEL.md section 8 has the microkernel using `ldr`/`str` on the register file. ISA.md lists `ldr`/`str` (names a guess there) as ordinary instructions with a 14-bit immediate address, and neither doc says they are restricted (G1). A task that can write the directory-list base can point itself at any memory. | From a vertex and a pixel task of an ordinary client: `ldr` of `EUR_CR_CORE_ID` and compare with the known value; `str` to a harmless scratch-like register and read it from the host. | **FAILS (reads).** A fragment task's `ldr` returned the true `CORE_ID` (0x01150000), `CORE_REVISION` (0x1000e) and a live per-pixel `TIMER`. `str` to the unused `USE_CODE_BASE_14`/`_15` had no effect. The *effective*-register write (EA1, 2026-11-02): a `str` to `BIF_DIR_LIST_BASE0` **does not change the register** (host and shader read-back unchanged, frame completed), so a client **can't repoint translation** this way, and that store is also **not a DoS** — an isolated re-run (clean cold boot, WPE off, GPU idle) left the box up with 0 SGX recoveries over ~2.5 min. (The first run's reboot was a concurrent dEQP wedge, not this store.) All three client stores tried (`BIF_DIR_LIST_BASE0`, `USE_CODE_BASE_14`/`_15`) were dropped — but not generally: the microkernel writes registers via `str` (UKERNEL.md §8), so stores land in some context, and untested registers (`SOFT_RESET`, `EVENT_KICK`, clock/power) could be destructive. Fix: D9 option 1 — validate/forbid client `ldr` (reads leak) **and** `str` (same scan; relax only once we know why client stores drop). |
 | **P2** | **Kernel memory can't be reached from a client's TA or 3D task.** | UKERNEL.md section 6 points the EDM's directory base at the context PD, which suggests the DDK maps kernel heaps in every PD. SRVINIT.md's allocations carry `EDM_PROTECT`, but no doc says what enforces it or whether it is enforced. | From a client shader: load and store an address in the kernel data heap, with the page mapped `EDM_PROTECT`, and watch the memory from the host. Also read the BIF bank registers' layout (G2). | **FAILS.** Pixel *and* vertex tasks `ld` the host control block, the TA3D control block (incl. word 0x16 kernel-CCB base and **word 0x17 the PD physical address**), the kernel CCB, and the microkernel code — all in the client's translation. A `st` into the kernel region wedged the GPU (HWR). A client could also allocate in the kernel-data heap. Fix: the new kernel driver owns the PD and does not map kernel heaps/code into client PDs. |
 | **P3** | **A client's PDS program can't enter the microkernel or gain its rights.** | DOUTU w0 picks the code base, and base 15 is the microkernel. w0 b27 is set on microkernel entries, meaning unknown (PDS.md). `USE_CODE_BASE` values carry `0x2000000` and `0x6000000` flags, not decoded (G4). | A client PDS program issues DOUTU with base 15, and with b27, at a test program; watch whether it runs, under which PD, and what P1 and P2 give it there. | **FAILS.** A client DOUTU naming code base 15 was not refused; the task ran from the kernel code base and wedged the GPU (HWR, pixel 0 not the uniform). DOUTU b27 changed nothing on a base-0 task. Fix: keep base 15 / the kernel code heap out of client PDS and PDs. |
 | **P4** | **The microkernel takes nothing from registers a client can write.** | UKERNEL.md section 1: secondary attributes "which the hardware does not clear between tasks" hold the microkernel's live state, the PD's physical address (word 0x17) among them. `sa` is what client shaders use for uniforms (G5). | Client shader reads `sa0`-`sa63` right after a microkernel task; then writes them and observes the next microkernel entry. | **Did not reproduce.** A client task's `sa11`-`sa63` held its own secondary-update results, per-task coefficient data (differs per pixel) and a prior same-client draw's clear colour — not the microkernel's named pointers; `sa` is reloaded per task. But P2 hands a client the PD physical address anyway. Cross-client `sa` leak (G6) needs two clients, untested. The write-then-observe half is **untested**: the bring-up (log 2026-11-02-0630) first read as "a USSE task cannot write `sa`", but that was corrected the same night. The DDK microkernel writes `sa` in its PDS-DMA-entered context, and the stall was a write in the bare-`DOUTU` context before any DMA. Since f672198 the open microkernel keeps its pointers in a temporary (r17) and reads no `sa`, so nothing a client leaves in `sa` can steer it. **P4 holds for our microkernel**; for the DDK microkernel it rests on the per-task reload seen above. |
@@ -822,14 +828,16 @@ writes land, a narrower check if only reads do.
 **Result (EA1, 2026-11-02, hardware; log 2026-11-02-2021):** the store does **not** take —
 `BIF_DIR_LIST_BASE0` read back unchanged from both the host and the shader in a frame that
 completed, so a client gets **no translation escape** from a register write (the page-directory
-boundary holds against it). The store is also **not a denial of service**: an isolated re-run
+boundary holds against it). That store is also **not a denial of service**: an isolated re-run
 (Joseph's go, on a clean cold boot with WPE off and the GPU idle) left the box up with 0 SGX
-recoveries over ~2.5 min — no reboot, no wedge — so the hardware simply ignores a client store.
-(The first run's reboot was a confound: another session's dEQP chunk had wedged and rebooted
-the box just before; not this store.) So option 1 is scoped to one firm requirement: forbid
-client register *loads* (`ldr`), because reads leak `EUR_CR_*`, incl. the PD physical base.
-*Stores* need not be forbidden for safety — they grant no escape and are not a DoS — so the
-validator only has to recognise and reject `ldr` of the register file. The cost is as weighed
+recoveries over ~2.5 min — no reboot, no wedge. (The first run's reboot was a confound: another
+session's dEQP chunk had wedged and rebooted the box just before; not this store.) **Scope:** three
+registers were tried from a client task — `BIF_DIR_LIST_BASE0` and the `USE_CODE_BASE_14`/`_15`
+controls — all dropped. This is not general: the microkernel is a USSE program that writes registers
+with `str` (UKERNEL.md §8), so stores land in *some* context, and untested registers (`SOFT_RESET`,
+`EVENT_KICK`, clock/power) could be destructive. So option 1 forbids **both** client `ldr` (reads
+leak `EUR_CR_*`, incl. the PD physical base — firm) **and** `str` (the same scan, so cheap; justified
+until we know why a client store is dropped, e.g. a per-task-type gate). The cost is as weighed
 above.
 
 ### D10. PB overflow
@@ -849,7 +857,7 @@ Facts the design needs that `docs/` doesn't have.
 
 | # | gap | blocks | where it would go |
 |---|---|---|---|
-| G1 | `ldr`/`str` from a client task: **resolved** (hardware, 7.2). Reads of `EUR_CR_*` work (P1 — leak). A `str` to an effective register (`BIF_DIR_LIST_BASE0`) does **not** change it — **no translation escape** — and is **not a DoS**: on an isolated re-run (clean cold boot, GPU idle) it wedged nothing (0 SGX recoveries, no reboot); the hardware ignores the store. So forbid client `ldr` (leak); `str` need not be forbidden for safety | isolation | ISA.md, logs 2026-11-02-0710 / 2026-11-02-2021 |
+| G1 | `ldr`/`str` from a client task (hardware, 7.2). Reads of `EUR_CR_*` work (P1 — leak). A `str` to `BIF_DIR_LIST_BASE0` is **dropped** — **no translation escape** — and **not a DoS** (isolated re-run, clean cold boot, GPU idle: 0 SGX recoveries, no reboot). Same for the `USE_CODE_BASE_14`/`_15` controls — three registers, all dropped. **Open:** not general — the microkernel writes registers via `str` (UKERNEL.md §8), so stores land in some context; which registers/task types drop a client store is unknown (`SOFT_RESET`/`EVENT_KICK`/clock/power untested, possibly destructive). So forbid client `ldr` (leak) **and** `str` (same scan); relax `str` only with a per-task-type gate explanation | isolation | ISA.md, logs 2026-11-02-0710 / 2026-11-02-2021 |
 | G2 | BIF requestors and banks: which units translate through which directory, whether EDM can use its own; registers 0xc84 and BANK0 fields. P2 showed the DDK maps kernel memory in the client-visible translation; the per-requestor bank layout (BANK0 EDM/TA/HOST/3D/2D indices, sgx545defs) is the lever a new driver uses to separate them | isolation, kernel MMU | UKERNEL.md, log 2026-11-02-0710 |
 | G3 | The MMU: PD and PT entry formats, page sizes, physical address width, read-only and `EDM_PROTECT` bits and whether each is enforced, invalid entries, fault status and interrupts, translation-cache rules | kernel MMU, `VM_MAP`, P2 | new section, UKERNEL.md |
 | G4 | DOUTU w0 b27 and base 15 from client programs; `USE_CODE_BASE` flags `0x2000000` and `0x6000000` (P3) | isolation | PDS.md |

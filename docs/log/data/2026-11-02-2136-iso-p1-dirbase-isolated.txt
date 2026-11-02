@@ -40,3 +40,10 @@ BIF_DIR_LIST_BASE0:
 So the store is BENIGN -- the hardware simply ignores it (like the USE_CODE_BASE_14/15 stores).
 The reboot in the first run (log 2026-11-02-2021) was the confound -- a concurrent dEQP chunk had
 wedged and rebooted the box just before -- NOT this store. The DoS question is settled: not a DoS.
+
+Scope: "benign" is for the THREE registers tried from a client task (BIF_DIR_LIST_BASE0 +
+USE_CODE_BASE_14/15), all dropped. NOT a general claim about client stores: the microkernel is a
+USSE program that writes registers with `str` (UKERNEL.md S8), so stores land in some context, and
+which registers/task types drop a client store is unknown. SOFT_RESET, EVENT_KICK, clock/power are
+untested and could be destructive. So the validator still forbids client `str` (same scan as `ldr`),
+relaxable only with a per-task-type-gate explanation.

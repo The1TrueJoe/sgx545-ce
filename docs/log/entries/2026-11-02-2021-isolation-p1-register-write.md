@@ -11,11 +11,14 @@ Answer, on the EA1 (core rev 1.0.14): **the write does not change the register �
 repoint translation this way.** The store grants no translation escape. Whether a client register
 store is *otherwise* harmful (a denial of service) was **undetermined on the first run** (the box
 was concurrently being wedged and rebooted by another session's dEQP chunk, so the reboot that
-followed the store couldn't be attributed to it) and was then **settled by an isolated re-run: the
-store is benign** — it wedges nothing. (An earlier draft of this entry called the store a DoS and
-said the box needed a power cycle — both wrong; corrected below after reconciling timelines with
-the mesa-gallium session, then confirmed by the isolated re-run at the end.) Register *reads* stay
-the firm problem for secrecy.
+followed the store couldn't be attributed to it) and was then **settled by an isolated re-run: this
+store is benign** — it wedges nothing. That holds for the three registers actually tried
+(`BIF_DIR_LIST_BASE0` and the two `USE_CODE_BASE_14`/`_15` controls); it is **not** a general claim
+that client register stores are harmless — the microkernel itself writes registers with `str`
+(UKERNEL.md §8), so stores land in some context, and which registers or task types drop a client
+store is unknown. (An earlier draft called the store a DoS and said the box needed a power cycle —
+both wrong; corrected below after reconciling timelines with the mesa-gallium session, then
+confirmed by the isolated re-run at the end.) Register *reads* stay the firm problem for secrecy.
 
 ## How it was tested
 
@@ -115,25 +118,34 @@ the one store). Data: `docs/log/data/2026-11-02-2136-iso-p1-dirbase-isolated.txt
 - After, idle, WPE still off: uptime climbed **411 → 537 s continuously (no reboot)** with **HWR 0**
   the whole ~2.5 min, no lockup/fault in dmesg. Then WPE restored, box left as found.
 
-So on a known-good idle GPU the store **wedges nothing**: no reboot, no recovery. The store is
-**benign** — the hardware simply ignores it, the same as the `USE_CODE_BASE_14`/`_15` stores. The
-first run's reboot was the concurrent dEQP wedge, confirmed not this store.
+So on a known-good idle GPU this store **wedges nothing**: no reboot, no recovery. The store to
+`BIF_DIR_LIST_BASE0` is **dropped and harmless**, the same as the `USE_CODE_BASE_14`/`_15` stores —
+three registers tried, all dropped. This is **not** a general result for client stores, though: the
+microkernel is a USSE program that writes registers with `str` (UKERNEL.md §8, e.g. acknowledging
+`EVENT_STATUS2`), so stores land in *some* context; nothing here says which registers or task types
+drop a client store, and untested ones (`SOFT_RESET`, `EVENT_KICK`, clock/power) could be
+destructive. The first run's reboot was the concurrent dEQP wedge, confirmed not this store.
 
 ## What this means for the uAPI (D9, G1)
 
-- A client register **store grants no translation escape** — it can't repoint `DIR_LIST_BASE0`. The
-  page-directory design survives this attack: a client can't swap in its own directory. **(firm)**
-- A client register **store is benign** — on a known-good idle GPU it changes nothing and wedges
-  nothing; the hardware ignores it. Not a DoS. **(firm, isolated re-run)**
+- A client store to `BIF_DIR_LIST_BASE0` **grants no translation escape** — it can't repoint the
+  directory. The page-directory design survives this attack: a client can't swap in its own. **(firm)**
+- That store, and the `USE_CODE_BASE_14`/`_15` controls, are **dropped and not a DoS** — on a known-
+  good idle GPU they change nothing and wedge nothing. Three registers, all dropped. **(firm for
+  these three, isolated re-run)**
+- **But not general:** the microkernel writes registers with `str` (UKERNEL.md §8), so client-form
+  stores land in some context. Which registers or task types drop a client store is **unknown**;
+  `SOFT_RESET`, `EVENT_KICK` and the clock/power controls are untested and could be destructive. **(open)**
 - A client register **load leaks** — P1 showed reads of `EUR_CR_*` work (`CORE_ID`, `TIMER`, the PD
   physical base at 0xc84), side channels and secrets. **(firm)**
 
-So D9 option 1 (kernel shader validation) is scoped to one firm requirement: forbid client register
-**loads** (`ldr`), because reads leak. **Stores** (`str`) need not be forbidden for safety — they
-grant no escape and are not a DoS — so a validator may forbid them defensively or ignore them; the
-load ban is the part that matters. The cost Joseph weighed in D9 (Mesa generates PDS per draw; the
-validator needs the full ISA in the kernel) is unchanged, but the validator only has to recognise and
-reject `ldr` of the register file, not reason about stores.
+So D9 option 1 (kernel shader validation) forbids client register **loads** (`ldr`) — reads leak,
+the firm reason — **and** **stores** (`str`). The store ban isn't because a store is known harmful
+(for the three tested it isn't) but because we can't yet show *every* client store is dropped, and
+the microkernel proves stores can land; forbidding `str` is the same scan as `ldr`, so it's free.
+Relax it only once we know *why* a client store is dropped — e.g. a per-task-type gate. The cost
+Joseph weighed in D9 (Mesa generates PDS per draw; the validator needs the full ISA in the kernel)
+is unchanged.
 
 ## Box
 
