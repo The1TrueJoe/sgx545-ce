@@ -140,31 +140,24 @@ the default path depends on the environment.
 
 ## What is missing
 
-This list is the next work, roughly in the order gl4es and Minecraft need it:
+This list is the next work, roughly in the order dEQP-GLES2 needs it (the fails
+lists in `src/gallium/drivers/sgx545/ci/` say what each costs):
 
-1. **Discard** (and alpha test through it): ISPA pass type 2/4 and the DDK's
-   phase split around the feedback; refused today.
-2. **gl_FragCoord and gl_PointCoord** as fragment inputs, and a saturated
-   dot product: compiler gaps (reported to the compiler).
-3. **Constant-colour blending** (`GL_CONSTANT_COLOR` and the rest). sop2 has
-   two more selectors, k18/k19, that are not decoded yet; until then those
-   draws come out opaque, with a message.
-4. **Textures, the rest**: block 9, a GPU blit (the CPU one does mipmap
-   levels and copies today), compressed formats, render-to-texture with a
-   sampleable layout.
-5. **Scissor and partial viewports**: pass-type-3 objects and region clips.
-6. **Lines and points** (VDM primitive 1/2, point size output, set 0).
-7. **Depth/stencil buffers in memory (ZLS).** Depth works within one render today,
-   which covers a frame unless the rings fill mid-frame.
-8. **Present without tearing.** Render into a back buffer and blit to fb0 with the
-   transfer queue (`sgxtex_blit_*`), the way the DDK swaps, or flip a double-height
-   fbdev.
-9. **Performance**: zero-copy vertex buffers (the PDS fetching from device
+1. **Depth/stencil buffers in memory (ZLS).** Depth and stencil work within one
+   render, which covers a frame unless the rings fill mid-frame or the target
+   changes. Stores work (TEX.md section 7); nothing has made a render load one yet.
+2. **Textures, the rest**: 4444, 5551 and 565 as native formats (st uses RGBA8
+   today, and T1 0x05 hands the compiler's unpack R and B swapped), LOD limits,
+   border colours. Compressed formats go through Mesa's CPU fallback.
+3. **Present without tearing.** Render into a back buffer and blit to fb0 with the
+   transfer queue, the way the DDK swaps, or flip a double-height fbdev.
+4. **Performance**: zero-copy vertex buffers (the PDS fetching from device
    buffers), and pipelining frames instead of waiting for each render.
-10. **F16 mediump** (`sgx_compile_options.f16`), for the DDK's exact pixels on
-   mediump shaders.
-11. Prune the extension list. st/mesa advertises some extensions from defaults
-   (S3TC, depth textures) that the driver can't do yet.
+5. **Prune the extension list.** st/mesa advertises from defaults some that the
+   driver can't do yet: GL_OES_depth_texture, GL_EXT_shadow_samplers,
+   GL_EXT_frag_depth, GL_EXT_texture_border_clamp, GL_OES_EGL_image_external and
+   the draw-buffers family. It takes a Mesa-side way to say no; there is no pipe
+   cap for most of them.
 
 ## dEQP-GLES2 (milestone M0's exit test)
 
