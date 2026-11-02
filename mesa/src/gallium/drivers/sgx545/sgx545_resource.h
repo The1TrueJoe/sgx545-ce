@@ -70,7 +70,7 @@ struct sgx545_transfer {
 void sgx545_resource_screen_init(struct sgx545_screen *screen);
 void sgx545_resource_context_init(struct sgx545_context *ctx);
 
-/* the target a render into this level and layer of the resource writes */
+/* the target a render into this level and layer of the resource writes; with the screen lock held */
 bool sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res, unsigned level,
                             unsigned layer, struct sgxws_target *t);
 

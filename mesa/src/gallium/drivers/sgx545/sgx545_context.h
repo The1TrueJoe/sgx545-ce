@@ -37,7 +37,8 @@ struct sgx545_const {
 
 #define SGX545_MAX_DEP_SAMPLES 8
 
-/* the fragment driver block's register with gallium's front_ccw in bit 0 */
+/* the fragment driver block's register that sets gl_FrontFacing's sense:
+ * bit 0 clear when gallium's front_ccw is set (A/B against the DDK) */
 #define SGX545_SA_FRONT 5
 
 struct sgx545_shader {
