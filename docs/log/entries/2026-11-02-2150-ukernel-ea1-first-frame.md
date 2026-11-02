@@ -62,3 +62,35 @@ freed it (queue hwcheck → mesa → me). Box restored to its normal install,
 mesa-gallium told it's free. Evidence:
 `docs/log/data/2026-11-02-2150-ea1-first-frame.dmesg.log` (bb.bin was all-zero,
 not kept).
+
+## Follow-up (frame -v): the TA never runs — PB pages-in-use stays 0
+
+Re-ran with `frame -v`, which reads the parameter-buffer descriptor's
+"pages in use" (PB+0x14) after each kick (sgxgen prints it; the DDK capture
+shows 0 before the first TA, 0x19 after):
+
+```
+sgxgen: after kick 1: PB pages in use 0, RT data +4 0, frame word 0x1
+sgxgen: after kick 2: PB pages in use 0, RT data +4 0, frame word 0x1
+frame: 720x480, 1 draw(s), render TIMED OUT
+```
+
+`frame`/`sgxgen` sends the correct two kicks (kick 1 TA-only `last=0`; kick 2 the
+render `last=1`, cmd+0x04=0x62, cmd+0x1c=0x400 render bit, `bLastInScene`→READY),
+so the client is right and the 3D-chain condition in `ta_finished` (READY bit)
+would fire — this is **not** a `ta_finished`/`do_3d` problem. **PB pages-in-use
+stays 0 after both kicks**, so the TA/VDM **never actually ran**: `do_ta`
+programs the PB / DPM / TE / RT / RD registers and writes `CR_TA_KICK` (0x200),
+but the geometry pipe never processes the parameter buffer. Hence no TA-finished
+event, nothing chains, the render sits in flight, the "0x2 tasks" watchdog trips,
+and the buffer stays all-zero.
+
+So the break is **inside `do_ta`'s TA-start sequence**, not the event handoff.
+Next: diff `do_ta`'s register writes against the DDK's own "TA kick 1" in
+`docs/log/data/2026-10-28-ukernel/ddk-ref-frame-registers.txt` — what the DDK
+writes to actually *start* the VDM/TA that `do_ta` omits or mis-orders (DPM
+free-list load/kick, the VDM/TA control, or the kick value/register). `run_ours`
+matches the DDK on struct-sourced registers but does not model the TA actually
+running (it injects `ta_finished`), so a missing TA-start register is exactly the
+kind of gap it can't see — the same class as the host-kick and dcu_invalid finds.
+Box recovered by reboot (not a hard wedge; lockup_ta/3d: no).
