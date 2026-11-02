@@ -41,6 +41,14 @@ struct sgx545_resource {
    uint32_t alt_use_seq;
    unsigned n_alt_dirty;        /* SGX545_ALT_ALL: re-encode everything */
    struct { uint16_t level, layer, x0, y0, x1, y1; } alt_dirty[32];
+
+   /* A cube map with mip levels sampled without mipmapping: the TPU then
+    * spaces the faces by level 0 alone, so it samples a copy of the six
+    * level-0 faces laid out that way (the DDK's storage for that case: 0x1800
+    * bytes for a 16x16 RGBA cube with 5 levels, 0x3000 with mipmapping, EA1).
+    * level0_gen counts the writes to level 0; cube0_gen is the one cube0 has. */
+   struct sgxws_bo cube0;
+   uint32_t level0_gen, cube0_gen;
 };
 
 static inline struct sgx545_resource *
@@ -73,5 +81,8 @@ void sgx545_resource_context_init(struct sgx545_context *ctx);
 /* the target a render into this level and layer of the resource writes; with the screen lock held */
 bool sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res, unsigned level,
                             unsigned layer, struct sgxws_target *t);
+
+/* brings res->cube0 up to date with level 0 (sgx545_tex_words samples it) */
+bool sgx545_resource_cube0(struct sgx545_context *ctx, struct sgx545_resource *res);
 
 #endif

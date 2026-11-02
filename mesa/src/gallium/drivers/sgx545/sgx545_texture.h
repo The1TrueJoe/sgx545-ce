@@ -28,6 +28,12 @@ void sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned
 /* and back, after the GPU rendered into a level */
 void sgx545_tex_decode_level(struct sgx545_resource *res, unsigned level);
 
+/* a cube map's six level-0 faces alone (res->cube0), and whether a sampler
+ * reads that copy: no mipmapping on a cube map that has levels */
+size_t sgx545_tex_cube0_size(const struct pipe_resource *prsc);
+void sgx545_tex_encode_cube0(struct sgx545_resource *res);
+bool sgx545_tex_uses_cube0(const struct pipe_sampler_view *view, const struct pipe_sampler_state *sampler);
+
 /* the four DOUTT words for a view and sampler (docs/STATE.md section 5) */
 void sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler_state *sampler,
                       uint32_t t[4]);

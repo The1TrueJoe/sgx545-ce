@@ -182,6 +182,7 @@ sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
          sgxws_wait_idle(screen->hw, 2000);
       sgxws_bo_free(screen->dev, &res->bo);
       sgxws_bo_free(screen->dev, &res->alt);
+      sgxws_bo_free(screen->dev, &res->cube0);
       simple_mtx_unlock(&screen->lock);
    }
    if (res->data)
@@ -218,6 +219,8 @@ sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res
       t->t1_layout = twiddled ? 0 : 3;
       sgxws_bo_prepare_target(screen->dev, &res->bo);    /* (the caller holds the lock) */
       res->rendered |= 1u << level;
+      if (!level)
+         res->level0_gen++;
       return true;
    }
    if (!res->bo.va || !res->pitch || level || layer || util_format_get_blocksize(res->base.format) != 4)
@@ -367,6 +370,42 @@ tex_write(struct sgx545_context *ctx, struct sgx545_resource *res, unsigned leve
    }
    sgx545_tex_encode_box(res, level, layer, x0, y0, x1, y1);
    alt_dirty_add(res, level, layer, x0, y0, x1, y1);
+   if (!level)
+      res->level0_gen++;
+}
+
+bool
+sgx545_resource_cube0(struct sgx545_context *ctx, struct sgx545_resource *res)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+
+   if (!res->cube0.va) {
+      simple_mtx_lock(&screen->lock);
+      if (sgxws_bo_alloc(screen->dev, &res->cube0, SGXWS_MEM_TEXTURE,
+                         align(sgx545_tex_cube0_size(&res->base), 4096), 0x1000)) {
+         memset(&res->cube0, 0, sizeof(res->cube0));
+         simple_mtx_unlock(&screen->lock);
+         return false;
+      }
+      simple_mtx_unlock(&screen->lock);
+      res->cube0_gen = res->level0_gen - 1;
+   }
+   if (res->cube0_gen == res->level0_gen)
+      return true;
+   /* level 0 rendered into: the CPU copy catches up, as for a map */
+   if (res->rendered & 1) {
+      sgx545_flush_resource_writes(ctx, res);
+      if (sgxws_bo_wait(&res->bo, 2000))
+         fprintf(stderr, "sgx545: a render into a sampled cube map did not finish\n");
+      sgx545_tex_decode_level(res, 0);
+      res->rendered &= ~1u;
+   }
+   /* (rare: a render in flight may still sample the old copy) */
+   if (ctx->hw && sgxws_seq_after(res->use_seq, sgxws_done_seq(ctx->hw)))
+      sgx545_finish(ctx);
+   sgx545_tex_encode_cube0(res);
+   res->cube0_gen = res->level0_gen;
+   return true;
 }
 
 static void

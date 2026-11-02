@@ -813,6 +813,15 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
 
    if (indirect || !ctx->vs || !ctx->fs)
       return;
+   /* cube maps sampled without mipmapping, from their level-0 copy: brought
+    * up to date before anything of this draw is recorded (it may wait) */
+   for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
+      struct pipe_sampler_view *view = ctx->views[unit];
+
+      if (view && sgx545_tex_uses_cube0(view, ctx->samplers[unit]) &&
+          !sgx545_resource_cube0(ctx, sgx545_resource(view->texture)))
+         return;
+   }
    build_state(ctx, &st);
    if (!build_clip(ctx, &st.clip))
       return;                 /* nothing visible: a zero-area scissor or viewport */
