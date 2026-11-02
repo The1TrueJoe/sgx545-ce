@@ -506,6 +506,8 @@ def parse(text):
                             mods.pop(0)
                         else:
                             d[fl.name] = [k for k, v in fl.table.items() if v == ""][0]
+            if pred and not any(fl.kind == "pred" for fl in f.fields):
+                raise ValueError("no predicate field")
             if mods != (f.mn(d) if f.mn else []):
                 raise ValueError(f"modifiers {mods} not in this form")
             for x in flags:
