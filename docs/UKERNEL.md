@@ -216,15 +216,20 @@ word → register map:
 
 | reg | cmd word | reg | cmd word |
 |---|---|---|---|
-| 0x4c4 | 0 | 0x4c8 | 8 |
-| 0x4bc | 1 | 0xa5c | 9 |
-| 0x4b8 | 2 | 0xa60 | 10 |
-| 0x404 | 3 | 0xa64 | 11 |
-| 0x414 | 5 | 0x410 | 13 (last tile) |
-| 0xcac | 6 | 0x400 | 14 |
-| 0x42c | 7 | 0xab8 | 15 |
+| 0x4c4 | 0 | 0xa5c | 9 |
+| 0x4bc | 1 | 0xa60 | 10 |
+| 0x4b8 | 2 | 0xa64 | 11 |
+| 0x404 | 3 | 0x40c | 12 (first tile) |
+| 0x408 | 4 (depth/stencil) | 0x410 | 13 (last tile) |
+| 0x414 | 5 | 0x400 | 14 |
+| 0xcac | 6 | 0xab8 | 15 |
+| 0x42c | 7 | 0x148 | 16 |
+| 0x4c8 | 8 | | |
 
-with 0x148/0x408/0x40c/0x480/0x63c = 0 and 0x43c = 1 as fixed constants. The
+with 0x480/0x63c = 0 and 0x43c = 1 as fixed constants. Word 12 (first tile) is
+0 for a full-surface blit but not for a sub-rectangle, so it is command-sourced,
+not a constant (confirmed against a capture with the textures session; word 4,
+the depth/stencil block, and word 16 are 0 in every capture seen). The
 transfer completes through the same 3D-end event as a render; the microkernel
 tells the two apart by a transfer-in-flight marker (control block +0x54) and
 routes a transfer to `xfer_done`, which advances the context's CCB past the

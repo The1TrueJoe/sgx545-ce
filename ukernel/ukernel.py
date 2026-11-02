@@ -183,11 +183,14 @@ D3_CONST = [(0x63c, 3), (0x494, 0xff), (0x40c, 0), (0x410, 0), (0x404, 0),
 # (docs/TEX.md §3). The command is 0x1c0 bytes in the transfer context's CCB;
 # client words 0..15 program the ISP/PBE 3D state below (reg byte-offset, command
 # word). The shared part (kernel-filled syncs) sits at command+0xac.
-T3_CMD = [(0x4c4, 0), (0x4bc, 1), (0x4b8, 2), (0x404, 3), (0x414, 5), (0xcac, 6),
-          (0x42c, 7), (0x4c8, 8), (0xa5c, 9), (0xa60, 10), (0xa64, 11), (0x410, 13),
-          (0x400, 14), (0xab8, 15)]
+T3_CMD = [(0x4c4, 0), (0x4bc, 1), (0x4b8, 2), (0x404, 3), (0x408, 4), (0x414, 5), (0xcac, 6),
+          (0x42c, 7), (0x4c8, 8), (0xa5c, 9), (0xa60, 10), (0xa64, 11), (0x40c, 12), (0x410, 13),
+          (0x400, 14), (0xab8, 15), (0x148, 16)]
+# word 12 is the first tile ((x/32)<<16 | y/16) and 13 the last tile; a full-surface
+# blit has first tile 0, a sub-rectangle blit does not (confirmed against a capture
+# with the textures session). Word 4 (depth/stencil block) is 0 in every capture.
 # fixed transfer-start constants (the render's 0x63c=3 is 0 for a transfer; no PB)
-T3_CONST = [(0x148, 0), (0x408, 0), (0x40c, 0), (0x480, 0), (0x63c, 0), (0x43c, 1)]
+T3_CONST = [(0x480, 0), (0x63c, 0), (0x43c, 1)]
 TRANSFERCMD_SHARED = 0xac     # ui32SharedCmdCCBOffset points here; command base is 0xac before
 
 
