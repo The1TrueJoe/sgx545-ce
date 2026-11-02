@@ -1,14 +1,14 @@
 /*
- * Copyright © 2026 The sgx545-ce authors
+ * Copyright © 2026 Joseph Telaak
  * SPDX-License-Identifier: MIT
  */
 
 /*
  * sgxws: SGX545 frames from GL-level parameters.
  *
- * This is re/gen/sgxgen.c as library code under the gallium driver: every
- * word comes from the formulas in re/state/STATE.md, re/pds/PDS.md and
- * re/isa/ISA.md (re/gen/GEN.md maps each buffer to its source).  What it
+ * This is tools/gen/sgxgen.c as library code under the gallium driver: every
+ * word comes from the formulas in docs/STATE.md, docs/PDS.md and
+ * docs/ISA.md (docs/GEN.md maps each buffer to its source).  What it
  * adds to sgxgen:
  *
  *  - colour buffers are the caller's (a pipe_resource, a wrapped fbdev

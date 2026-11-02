@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 The sgx545-ce authors
+ * Copyright © 2026 Joseph Telaak
  * SPDX-License-Identifier: MIT
  *
  * EGL initialised, used, terminated and initialised again in one process, as

@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 The sgx545-ce authors
+ * Copyright © 2026 Joseph Telaak
  * SPDX-License-Identifier: MIT
  */
 
@@ -12,7 +12,7 @@
  *   sgx545_frame_test [-n frames] [-r] [-c] [-f] [-o last.bin]
  *     -c   check every frame (reading uncached GPU memory: slow), not only the last
  *     -f   render straight into /dev/fb0 (wrapped), not a GPU buffer
- *     -o   dump the last frame (736-pixel pitch BGRA, as re/decode/cmpfb.py reads)
+ *     -o   dump the last frame (736-pixel pitch BGRA, as tools/decode/cmpfb.py reads)
  */
 
 #include <fcntl.h>

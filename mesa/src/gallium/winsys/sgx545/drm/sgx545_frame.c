@@ -1,14 +1,14 @@
 /*
- * Copyright © 2026 The sgx545-ce authors
+ * Copyright © 2026 Joseph Telaak
  * SPDX-License-Identifier: MIT
  */
 
 /*
  * sgxws: SGX545 frames from GL-level parameters.  See sgx545_frame.h.
  *
- * Tags in the comments follow re/state/STATE.md: [C] proven by a replay,
- * [D] from a diff or the DDK code that writes it, [G] guess (the value the
- * DDK uses, meaning unknown).
+ * Tags in the comments follow docs/STATE.md: [C] proven by a replay,
+ * [D] from a diff of captures, [G] guess (the value the DDK uses, meaning
+ * unknown).  docs/DRIVER-UPSTREAM.md says where each piece comes from.
  */
 
 #include <errno.h>
@@ -375,7 +375,7 @@ pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
 }
 
 /*
- * pixel program (the DDK's 0x1e970 layout): DOUTU, then per iterated input a
+ * pixel program (PDS.md "What the DDK generates"): DOUTU, then per iterated input a
  * DOUTI, and after a sampling DOUTI the DOUTT with the texture's four words.
  * A DOUTI takes its word from the high half of a DS1 pair (the first shares
  * DS1 pair 0 with the DOUTU) and a zero DS0 pair; a DOUTT takes T0, T1 from a
@@ -419,7 +419,7 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
-/* secondary/state program (0x1ed20): an optional DOUTD of n dwords, then a task */
+/* secondary/state program (PDS.md "What the DDK generates"): an optional DOUTD of n dwords, then a task */
 static uint32_t
 pds_secondary(struct sgxws_ring *r, uint32_t src, uint32_t dma_ctrl, uint32_t task_w0,
               uint32_t task_w1, uint32_t *rows)
@@ -541,7 +541,7 @@ sgxws_dev_destroy(struct sgxws_dev *d)
 
 /* ------------------------------------------------------------------ context */
 
-/* The parameter buffer (FUN_0001e980; STATE.md section 6). */
+/* The parameter buffer (STATE.md section 6, "PB descriptor"). */
 static int
 ctx_pb(struct sgxws_ctx *c, uint32_t bytes)
 {
@@ -613,7 +613,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
     * DDK gives it.  The microkernel keeps pointers to the previous client's
     * render details and RT data and reads them when the next client's TA
     * starts; after a DDK client, a frame with any other layout hangs the TA
-    * (re/gen/GEN.md, "Layout").
+    * (docs/GEN.md, "Layout").
     */
    for (int i = 0; i < 2; i++) {
       BO(d, &dummy, H_KDATA, 0x4f, 0x104c8, 0x1000);
@@ -671,7 +671,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
 
    /* VDM state programs that every frame ends with */
    c->empty_state = pds_secondary(&c->pds_vtx, 0, 0, doutu_w0(c, c->empty_v, true, 0), 0, NULL);
-   /* TA terminate (VDM type 6, FUN_0001fd60): DOUTA (0x2000, 0), 3 x (0x16000e, 0x100), then
+   /* TA terminate (VDM type 6, PDS.md "DOUTA"): DOUTA (0x2000, 0), 3 x (0x16000e, 0x100), then
     * a state-emit task for the two attributes [D; the values' meaning G] */
    pds_d0(&t, 0, 0x2000);
    pds_d0(&t, 1, 0);
@@ -739,7 +739,7 @@ sgxws_ctx_destroy(struct sgxws_ctx *c)
 
 /* ------------------------------------------------------------------ render target */
 
-/* SGXAddRenderTarget's numbers (STATE.md section 6; re/state/build.py rt_numbers) */
+/* SGXAddRenderTarget's numbers (STATE.md sections 4 and 6; tools/state/build.py rt_numbers) */
 static void
 rt_numbers(struct sgxws_rt_numbers *r, uint32_t w, uint32_t h)
 {
@@ -837,7 +837,8 @@ sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h)
       e[13] = 0x10;
    }
 
-   /* the background object's vertices in the PB (FUN_0001f990): fixed point, offset 0x1000 */
+   /* the background object's vertices in the PB (STATE.md section 6, "Background object
+    * block"): fixed point, offset 0x1000 */
    {
       uint32_t *b = s->bgblock.map;
 
@@ -903,7 +904,7 @@ sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *s)
       sgxws_flush(c, 0);
    sgxws_wait_idle(c, 2000);
    /* The kernel-data structures stay allocated: the microkernel may still
-    * hold pointers into them (re/gen/GEN.md, "Layout"). */
+    * hold pointers into them (docs/GEN.md, "Layout"). */
    sgxws_bo_free(c->dev, &s->tailptr);
    sgxws_bo_free(c->dev, &s->ta40);
    sgxws_bo_free(c->dev, &s->ta50);
@@ -917,7 +918,7 @@ sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *s)
 
 /* ------------------------------------------------------------------ per-frame programs */
 
-/* The end-of-tile program (FUN_000301d0): LIMM r0-r3 = the four PBE words,
+/* The end-of-tile program (STATE.md section 4): LIMM r0-r3 = the four PBE words,
  * EMITPIX them, EMITPIX the sideband word (STATE.md section 4) */
 static uint32_t
 eot_program(struct sgxws_ctx *c)
@@ -942,7 +943,7 @@ eot_program(struct sgxws_ctx *c)
    return p.va;
 }
 
-/* The pixel event program (libsrv_um's static template, PDS.md "pixel-event program decoded"):
+/* The pixel event program (PDS.md "pixel-event program decoded"):
  *   in1 & 8 -> task ds0[0];  in1 & 2 -> (in1 ^ ds1[0]) & 0x100 ? DOUTA + end-of-tile task : task ds0[2];
  *   in1 & 4 -> task ds0[2]. */
 static uint32_t
@@ -1104,7 +1105,7 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_d
    CODE(&p, HALT);
    va = pds_emit(&c->pds_vtx, &p, &rows);
    vdm(c, 0x40000000 | va >> 4);
-   /* info (libGLESv2 0x397f0): rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
+   /* info (STATE.md section 2): rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
    vdm(c, rows << 26 | ((c->vdm_counter + 0x2000) | 0x2020400 | ((n + 3) >> 2)));
    c->vdm_counter = (c->vdm_counter + 1) & 3;
 }
@@ -1122,7 +1123,7 @@ vertices_per_task(uint32_t out_dwords)
    return v > 16 ? 16 : v;
 }
 
-/* a draw: index list + vertex fetch program (STATE.md section 2; PDS.md 0x1f3d0) */
+/* a draw: index list + vertex fetch program (STATE.md section 2; PDS.md "What the DDK generates") */
 static void
 vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
          uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords,

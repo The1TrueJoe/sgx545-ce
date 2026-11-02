@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 The sgx545-ce authors
+ * Copyright © 2026 Joseph Telaak
  * SPDX-License-Identifier: MIT
  *
  * A render that doesn't start with a clear must keep what the previous one
