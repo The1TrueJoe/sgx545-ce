@@ -28,6 +28,7 @@ Environment:
               booted and its GPU is up (default: mesa/tests/deqp/recover-ea3.sh)
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
+  BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
 """
 import argparse
 import os
@@ -43,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.environ.get("DEQP_WORK", os.path.expanduser("~/.cache/sgx545/deqp"))
 BOX_DIR = os.environ.get("BOX_DIR", "/root/deqp")
 DDK_ROOT = os.environ.get("DDK_ROOT", "/opt/sgx-i386")
+BOX_ENV = os.environ.get("BOX_ENV", "")
 CONFIG = "rgba8888d24s8ms0"
 TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
 SSH_TIMEOUT = 25
@@ -105,7 +107,7 @@ def payload(box, who, name):
 
 def runner_script(who, name):
     if who == "sgx545":
-        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort"
+        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort {BOX_ENV}"
         deqp = f"{BOX_DIR}/deqp-gles2"
     else:
         deqp = f"{BOX_DIR}/deqp-gles2-ddk"
@@ -125,7 +127,7 @@ def canary(box, who, name):
     """Does a one-draw test still finish? A GPU that recovered does; a wedged one doesn't."""
     # (busybox has no timeout: a hung canary is the SSH call timing out)
     if who == "sgx545":
-        pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless"
+        pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless {BOX_ENV}"
         exe = f"{BOX_DIR}/deqp-gles2"
     else:
         pre = ""
