@@ -45,6 +45,11 @@ SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
                      # flight (0 = none). The DDK keeps a doubly-linked render-
                      # in-flight list; one context needs only this single slot,
                      # at the DDK's own offset so the A/B reference still matches.
+SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
+                     # none). Lets the 3D-end handler tell a transfer's completion
+                     # from a render's. (openHC's own slot; a transfer and a
+                     # render never overlap on one context.)
+TRANSFERCMD_BYTES = 0x1c0   # SGXMKIF_TRANSFERCMD size (docs/TEX.md §3)
 
 # ---- render-details / RT-data / context fields touched at render teardown ----
 # (docs/UKERNEL.md §5; byte offsets, observed from the DDK's completion writes)
@@ -173,6 +178,17 @@ D3_RD = [(0xcac, 0x00 // 4), (0xcb0, 0x04 // 4), (0x400, 0x08 // 4), (0x414, 0x0
 # fixed 3D-start constants the DDK writes with immediates (not from a struct)
 D3_CONST = [(0x63c, 3), (0x494, 0xff), (0x40c, 0), (0x410, 0), (0x404, 0),
             (0x658, 0), (0x43c, 1)]
+
+# ---- transfer (SGX_SUBMITTRANSFER): a 3D render with only a background object
+# (docs/TEX.md §3). The command is 0x1c0 bytes in the transfer context's CCB;
+# client words 0..15 program the ISP/PBE 3D state below (reg byte-offset, command
+# word). The shared part (kernel-filled syncs) sits at command+0xac.
+T3_CMD = [(0x4c4, 0), (0x4bc, 1), (0x4b8, 2), (0x404, 3), (0x414, 5), (0xcac, 6),
+          (0x42c, 7), (0x4c8, 8), (0xa5c, 9), (0xa60, 10), (0xa64, 11), (0x410, 13),
+          (0x400, 14), (0xab8, 15)]
+# fixed transfer-start constants (the render's 0x63c=3 is 0 for a transfer; no PB)
+T3_CONST = [(0x148, 0), (0x408, 0), (0x40c, 0), (0x480, 0), (0x63c, 0), (0x43c, 1)]
+TRANSFERCMD_SHARED = 0xac     # ui32SharedCmdCCBOffset points here; command base is 0xac before
 
 
 class Asm:
@@ -470,10 +486,30 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.i("ba kick_adv")
-    # transfer (data[1] = HW transfer context): a 3D-only render (texture
-    # uploads and the swap blit). TODO: the full handler; stubbed so the
-    # command set dispatches.
+    # transfer (data[1] = HW transfer context): a 3D-only render whose single
+    # background object samples the source and writes the destination (texture
+    # uploads and the swap blit; docs/TEX.md §3). The transfer context carries a
+    # CCB at the same word offsets as a render context; its command's words 0..15
+    # program the 3D. Point the BIF at the context, invalidate the 3D-side
+    # caches, program the 3D from the command, and kick it. Completion comes
+    # back through the 3D-end event like any render.
     a.label("k_transfer")
+    a.i("mov r16, r8 [mask=1]")                     # transfer context
+    a.i("ld.a.d r1, r16, #%d [moe]" % CTX_CCB)      # client CCB base
+    a.i("ld.a.d r2, r16, #%d [moe]" % CTX_CCBCTL)   # CCB control
+    a.i("wdf")
+    a.i("ld.a.d r3, r2, #1 [moe]")                  # read offset (bytes)
+    a.i("wdf")
+    a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = transfer command base
+    a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)       # context page directory
+    a.i("wdf")
+    a.i(f"str #{0xc84 // 4}, r4")                   # BIF -> this context
+    a.invalidate(CR_PDS_INV1, INV_DONE_3D)
+    a.program(9, T3_CMD)
+    a.consts(T3_CONST)
+    a.st_sa(SA_SELF, SC_XFER, 16)                   # remember the transfer in flight
+    a.i("limm r5, #1")
+    a.i(f"str #{CR_3D_KICK // 4}, r5")              # start the 3D
     a.i("ba kick_adv")
     a.label("kick_adv")
     # read offset := (read offset + 1) & 0xff
@@ -631,6 +667,12 @@ def build(a):
     # destination's write-ops-complete to pending+1 (docs/UKERNEL.md §5). The
     # list walk is the next increment; the host-interrupt tail is here.
     a.label("render_done")
+    # a transfer in flight completes through this same 3D-end event, but its
+    # bookkeeping differs from a render's; route it to xfer_done.
+    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_XFER} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r1, r1")
+    a.i("(p0) ba xfer_done")
     a.i(f"ld.a.d r0, sa{SA_SELF}, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # HW device sync list (SGXMKIF_HWDEVICE_SYNC_LIST): the render's destination
@@ -701,6 +743,25 @@ def build(a):
     a.i("imae r5, r5, #1, r0 [t2=u32]")                  # &(rd+0x2a4)
     a.i("limm r4, #2")
     a.i("st.a.d r5, #0, r4 [moe]")                       # rd+0x2a4 = 2 (render freed)
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba raise_host_irq")
+    # ======================================================================
+    # xfer_done: a transfer's 3D finished. Advance its context's CCB past the
+    # command (so the next transfer is found) and clear the in-flight marker,
+    # then raise the host interrupt. (The destination sync-object update from
+    # the transfer's SGXMKIF_TRANSFERCMD_SHARED is the next increment; docs/TEX.md.)
+    # ======================================================================
+    a.label("xfer_done")
+    a.i("ld.a.d r2, r1, #%d [moe]" % CTX_CCBCTL)         # the transfer context's CCB control
+    a.i("wdf")
+    a.i("ld.a.d r3, r2, #1 [moe]")                       # read offset
+    a.i("wdf")
+    a.i("limm r4, #%d" % TRANSFERCMD_BYTES)
+    a.i("imae r3, r4, #1, r3 [t2=u32]")                  # += command size
+    a.i("st.a.d r2, #1, r3 [moe]")                       # advance the CCB read offset
+    a.i("limm r4, #0")
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_XFER}, r4 [moe]")      # no transfer in flight
     a.i("idf")
     a.i("wdf")
     a.label("raise_host_irq")

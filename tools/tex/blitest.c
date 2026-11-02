@@ -232,8 +232,12 @@ int main(int argc, char **argv)
 	int bad = 0;
 
 	setvbuf(stdout, NULL, _IONBF, 0);
-	if (pvr_open(&P, NULL) || pvr_init(&P))
-		die("open/init: %s", strerror(errno));
+	if (pvr_open(&P, getenv("SGX_NODE")))
+		die("open: %s", strerror(errno));
+	if (getenv("SGX_TRACE") && pvr_trace_open(&P, getenv("SGX_TRACE")))
+		die("trace %s: %s", getenv("SGX_TRACE"), strerror(errno));
+	if (pvr_init(&P))
+		die("init: %s", strerror(errno));
 	context();
 
 	/* surfaces need sync objects (attribs without b3, NO_SYNCOBJ): the kick names them */

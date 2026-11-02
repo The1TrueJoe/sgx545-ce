@@ -93,11 +93,12 @@ static void trace_ubuf(struct pvr *p, uint32_t nr, const void *ptr, size_t len)
 	trace_put(p, ptr, len);
 }
 
-/* a copy of every mapping, as pvrtrace takes before each kick */
-static void trace_snap(struct pvr *p, uint32_t kick)
+/* a copy of every mapping, as pvrtrace takes before each kick or transfer
+ * (reason 1 = kick, 5 = xfer; the decoder pairs the snapshot to its event) */
+static void trace_snap(struct pvr *p, uint32_t reason, uint32_t kick)
 {
 	for (unsigned i = 0; i < p->nmaps; i++) {
-		uint32_t h[2] = { 1, kick };
+		uint32_t h[2] = { reason, kick };
 		uint64_t a[2] = { (uintptr_t)p->maps[i].addr, p->maps[i].len };
 
 		trace_rec(p, REC_SNAP, sizeof h + sizeof a + p->maps[i].len);
@@ -386,7 +387,11 @@ int pvr_register_transfer_ctx(struct pvr *p, const void *ctx, uint32_t size, uin
 		.hDevMemContext = p->memctx,
 	};
 	PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_TRANSFER_CONTEXT out = { 0 };
-	int e = pvr_call(p, PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT, &in, sizeof in, &out,
+	int e;
+
+	if (p->trace_fd >= 0)
+		trace_ubuf(p, PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT & 0xff, ctx, size);
+	e = pvr_call(p, PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT, &in, sizeof in, &out,
 			 sizeof out);
 
 	if (!e) {
@@ -405,6 +410,9 @@ int pvr_submit_transfer(struct pvr *p, PVRSRV_TRANSFER_SGX_KICK *kick)
 	in.hDevCookie = p->devcookie;
 	in.sKick = *kick;
 	in.sKick.hDevMemContext = p->memctx;
+	p->xfers++;
+	if (p->trace_fd >= 0)
+		trace_snap(p, 5, p->xfers);         /* snapshot memory before the transfer (reason xfer) */
 	return pvr_call(p, PVRSRV_BRIDGE_SGX_SUBMITTRANSFER, &in, sizeof in, &out, sizeof out);
 }
 
@@ -428,7 +436,7 @@ int pvr_kick_traced(struct pvr *p, SGX_CCB_KICK *kick, int submit)
 			trace_ubuf(p, PVRSRV_BRIDGE_SGX_DOKICK & 0xff, kick->pahDstSyncHandles,
 				   kick->ui32NumDstSyncObjects * sizeof(IMG_HANDLE));
 		if (!p->trace_kicks || p->kicks <= p->trace_kicks)
-			trace_snap(p, p->kicks);
+			trace_snap(p, 1, p->kicks);
 	}
 	if (!submit) {
 		/* the bridge record the decoder finds kicks by, as if it had gone out */

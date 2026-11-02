@@ -134,6 +134,25 @@ def test_render_teardown(code, man):
     print("  render teardown: sync objects cleared, render/RT/context slot freed  OK")
 
 
+def test_xfer_done(code, man):
+    """a transfer's 3D-end routes to xfer_done, not the render teardown: it
+    advances the transfer context's CCB past the 0x1c0-byte command and clears
+    the in-flight marker, leaving the render scratch untouched (docs/TEX.md §3)."""
+    u, mem, regs = machine(code)
+    mem.wr(HOSTCTL, 1)                               # initialised -> dispatch on events
+    ctx, ccbctl = 0x30010000, 0x3201e4d0
+    mem.wr(ctx + 4 * 4, ccbctl)                      # CTX_CCBCTL -> the CCB control
+    mem.wr(ccbctl + 4, 0)                            # read offset
+    mem.wr(CTLBLK + 4 * 0x15, ctx)                   # SC_XFER: a transfer in flight
+    mem.wr(CTLBLK + 4 * 0x32, 0x0BADC0DE)            # SC_RD sentinel (render path must not run)
+    regs.v[CR_EVENT_STATUS] = EV_3D_END
+    u.task(man["entries"]["event"] // 8)
+    assert mem.rd(ccbctl + 4) == 0x1c0, "transfer completion must advance the CCB past the command"
+    assert mem.rd(CTLBLK + 4 * 0x15) == 0, "the transfer in-flight marker must clear"
+    assert mem.rd(CTLBLK + 4 * 0x32) == 0x0BADC0DE, "the render teardown must not run for a transfer"
+    print("  transfer completion: CCB advanced, marker cleared, render path skipped  OK")
+
+
 def main():
     code, man = load()
     print("openHC microkernel offline tests:")
@@ -141,6 +160,7 @@ def main():
     test_recovery_init(code, man)
     test_raise_irq(code, man)
     test_render_teardown(code, man)
+    test_xfer_done(code, man)
     print("all OK")
     print("(frame-level TA/3D register match vs the DDK: ukernel/run_ours.py TRACE --ddk FW)")
 

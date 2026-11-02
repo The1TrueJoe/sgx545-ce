@@ -205,10 +205,32 @@ A transfer command (`SGX_SUBMITTRANSFER`, texture uploads and the swap blit)
 runs a **3D-only** render: no TA, no geometry, one background object covering
 the destination whose pixel program samples the source (`docs/TEX.md`
 section 3). data[1] is the HW transfer context; the command sits in that
-context's own CCB. The handler loads the 3D registers from the transfer
-command's words (the same 0x400/0x4xx/0x800/0xa5c ISP and PBE registers as a
-render's 3D start, section 7) and kicks the 3D core. 2D is unused on this
-build (its host-kick entry is 0).
+context's own CCB (found through the same CCB/read-offset words as a render
+context). The handler points the BIF at the context, invalidates the 3D-side
+caches, programs twenty ISP/PBE registers from the transfer command's words
+0..15 and kicks the 3D core. The open microkernel implements this
+(`ukernel/` `k_transfer`), and `run_ours.py` confirms all twenty registers
+equal the DDK's over a generated transfer frame (`tools/gen` `frame-fake`'s
+`blitest`, which builds every transfer word from `sgxtex`). The command's
+word → register map:
+
+| reg | cmd word | reg | cmd word |
+|---|---|---|---|
+| 0x4c4 | 0 | 0x4c8 | 8 |
+| 0x4bc | 1 | 0xa5c | 9 |
+| 0x4b8 | 2 | 0xa60 | 10 |
+| 0x404 | 3 | 0xa64 | 11 |
+| 0x414 | 5 | 0x410 | 13 (last tile) |
+| 0xcac | 6 | 0x400 | 14 |
+| 0x42c | 7 | 0xab8 | 15 |
+
+with 0x148/0x408/0x40c/0x480/0x63c = 0 and 0x43c = 1 as fixed constants. The
+transfer completes through the same 3D-end event as a render; the microkernel
+tells the two apart by a transfer-in-flight marker (control block +0x54) and
+routes a transfer to `xfer_done`, which advances the context's CCB past the
+0x1c0-byte command and raises the host interrupt. (Updating the transfer's
+destination sync objects from its `SGXMKIF_TRANSFERCMD_SHARED` is the next
+increment.) 2D is unused on this build (its host-kick entry is 0).
 
 ### Power (type 3)
 

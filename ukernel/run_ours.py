@@ -41,6 +41,10 @@ PLUMBING = {0x134, 0x114, 0x140, 0x694, 0x698, 0x24c, 0x224, 0xa08, 0xc00, 0xc78
 # ours phase -> the DDK Runner phase that does the same work
 PHASE_MAP = {"TA1": "TA kick 1", "3D": "TA finished (2)"}
 
+# HW render context words that also address a transfer context's CCB
+CTX_CCBCTL = 0x10 // 4
+TRANSFERCMD_SHARED = 0xac
+
 
 def ours():
     binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
@@ -145,6 +149,23 @@ def run_ours(code, man, events, ctxs):
             for (op, a, v, pc) in mem.log:
                 if op == "st":
                     out.append(("done_mem", a, v))
+    # transfers (SGX_SUBMITTRANSFER): a 3D-only render. Drive each through our
+    # kick entry with a type-1 command (data[1] = transfer context), as the
+    # host does, and collect the 3D registers k_transfer programs.
+    xfers = [k for k in events if k.kind == "xfer"]
+    for i, x in enumerate(xfers):
+        x.load(mem)
+        ctx = x.data[1]
+        ccbctl = mem.rd(ctx + 4 * CTX_CCBCTL)          # the transfer context's CCB control
+        mem.wr(ccbctl + 4, x.ccb_off - TRANSFERCMD_SHARED)   # read offset -> this command
+        slot = i & 0xFF
+        c = A["kccb"] + 32 * slot
+        mem.wr(c + 0, 1)                               # type 1 = transfer
+        mem.wr(c + 4 * 3, ctx)                         # data[1] = transfer context
+        mem.wr(A["ccbctl"] + 0, i + 1)                 # kernel CCB write offset
+        mem.wr(A["ccbctl"] + 4, slot)                  # read offset
+        event(u, mem, regs, man, EV_HOST_KICK)         # -> kick -> k_transfer
+        out += [("XFER%d" % (i + 1), a, v) for a, v in reg_writes(u)]
     return out
 
 
@@ -205,7 +226,9 @@ def run_ddk_done(fw, trace):
     orig = r.flush
 
     def flush(title):
-        if title.startswith("3D end") or title.startswith("DPM 3D"):
+        # the TA-render completion only (the "(transfer)" variants are the
+        # transfer's own completion, validated separately)
+        if (title.startswith("3D end") or title.startswith("DPM 3D")) and "transfer" not in title:
             for (op, a, v, pc) in r.m.mem.log:
                 if op == "st":
                     out[a] = v
@@ -270,6 +293,23 @@ def main():
         diff = [(r, dm[r], om.get(r)) for r in dm if om.get(r) != dm[r]]
         extra = [r for r in om if r not in dm]
         print(f"[{ph} vs DDK '{ddk_phase}'] DDK {len(dm)} struct regs, ours {len(om)}")
+        for r, dv, ov in sorted(diff):
+            tag = "MISSING" if ov is None else "DIFF"
+            print(f"    {tag} {r:#06x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
+        for r in sorted(extra):
+            print(f"    EXTRA   {r:#06x}: ours {om[r]:#010x}")
+        bad += len(diff) + len(extra)
+    # transfers: each XFERn programs the 3D from its command, vs the DDK's
+    # "transfer n". (The DDK model fully programs only the first transfer; later
+    # ones are model no-ops, so only non-empty DDK phases are compared.)
+    for i in range(1, 1 + sum(1 for p in ours_ph if p.startswith("XFER"))):
+        om = ours_ph.get("XFER%d" % i, {})
+        dm = {r: v for r, v in ddk.get("transfer %d" % i, {}).items() if r not in PLUMBING}
+        if not dm:
+            continue
+        diff = [(r, dm[r], om.get(r)) for r in dm if om.get(r) != dm[r]]
+        extra = [r for r in om if r not in dm]
+        print(f"[XFER{i} vs DDK 'transfer {i}'] DDK {len(dm)} struct regs, ours {len(om)}")
         for r, dv, ov in sorted(diff):
             tag = "MISSING" if ov is None else "DIFF"
             print(f"    {tag} {r:#06x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))

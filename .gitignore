@@ -14,3 +14,4 @@ tools/tex/blitest
 # is Imagination's) and the frames generated for the offline validators
 fw/
 gen/
+tools/tex/blitest-fake-native
