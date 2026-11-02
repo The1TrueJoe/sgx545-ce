@@ -381,7 +381,8 @@ sgxs_f16(float x)
    return s | (e - 112) << 10 | m >> 13;
 }
 
-/* the output dword a vertex program writes for gl_PointSize = size */
+/* the SA word the DDK loads for gl_PointSize = size: the input of its
+ * secondary program's clamp, which leaves an f32 for the output (STATE.md) */
 static inline uint32_t
 sgxs_point_size_word(float size)
 {

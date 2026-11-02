@@ -166,7 +166,7 @@ struct sgx_shader {
    bool discards;               /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
    uint32_t in_mask[4];         /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
    unsigned set_comps[SGX_MAX_SETS]; /* vertex: output set sizes (o4 on); 0 = unused */
-   bool point_size;             /* vertex: writes the point size, after the sets */
+   bool point_size;             /* vertex: writes the point size (f32), after the sets */
    unsigned n_out_regs;         /* vertex: o registers written */
    unsigned sa_slots;           /* SA registers used from sa_base on (constants and the compiler's own) */
    uint64_t *code;              /* main program, flat (branch targets resolved) */

@@ -1760,6 +1760,26 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
       struct sgx_ref d[4], ss[1][4];
       unsigned m = 0;
+      if (slot == VARYING_SLOT_PSIZ) {
+         /* an f32 output, clamped to the largest point size (docs/STATE.md
+          * "Lines and points"): min(x, 511) as libusc writes it, a constant
+          * at compile time */
+         int r = c->out_reg[VARYING_SLOT_PSIZ * 4];
+         if (r < 0)
+            return;
+         const uint32_t max = 0x43ff8000;
+         struct sgx_ref x = const_f32(src_comp(c, &ls, 0));
+         struct sgx_ref dd[4] = { ref(SGX_F_O, r) };
+         if (x.file == SGX_F_K) {
+            union { uint32_t u; float f; } v = { .u = x.n };
+            struct sgx_ref ks[1][4] = { { ref(SGX_F_K, v.f > 511.0f ? max : x.n) } };
+            emit_runs(c, USSE_MOV, 1, dd, 1, ks, &NOF, 0);
+         } else {
+            struct sgx_ref ts[3][4] = { { x }, { x }, { ref(SGX_F_K, max) } };
+            emit_runs(c, USSE_FMINMAX, 1, dd, 3, ts, &NOF, 0);
+         }
+         return;
+      }
       for (unsigned k = 0; k < 4; k++) {
          d[k] = ss[0][k] = ref(SGX_F_C, 48);
          int r = slot * 4 + k < ARRAY_SIZE(c->out_reg) ? c->out_reg[slot * 4 + k] : -1;
