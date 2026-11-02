@@ -1,0 +1,12 @@
+# mkexpect.py --reasons for our driver: REGEX<tab>why, first match wins
+functional\.fragment_ops\.(random|interaction)	fragment_ops random/interaction: the same test fails differently from run to run (a whole render lost, one quad missing, one channel wrong); suspect GPU memory left uninitialised or overrun, under investigation
+functional\.texture\..*cube	cube maps: NPOT faces, the small-face layout (the face stride below 16 texels is a guess), 8/16-bit and ETC1 faces; the DDK fails many of these too
+functional\.texture\.specification	texture uploads: unpack alignment, sub-image updates and copies of 16-bit formats; the DDK fails teximage2d_align too
+functional\.texture\.(mipmap|completeness|format|size)	texture sampling: LOD bias and completeness corner cases
+functional\.shaders\.texture_functions	texture2D's bias argument
+functional\.fbo\.render	render to texture: shared and recreated colour buffers, resizes; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared/recreate cases too
+functional\.shaders\.(random|operator|functions|struct)	compiler: built-in precision (trigonometric, exponential) and random combinations; with the compiler session
+functional\.polygon_offset	polygon offset units
+functional\.rasterization\.primitives	wide lines: the hardware's line quads against GL's rule; the DDK fails these too
+functional\.draw\.draw_elements\.points	points from glDrawElements; the DDK fails these too
+functional\.uniform_api\.value\.initial	uniforms a program never sets don't read as zero

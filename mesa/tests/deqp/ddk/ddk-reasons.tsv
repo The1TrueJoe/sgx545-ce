@@ -1,0 +1,7 @@
+# mkexpect.py --reasons for the DDK (Cedarview 1.7 libGLESv2 under IA32): REGEX<tab>why, first match wins
+functional\.shaders\.(loops|conversions|swizzles|operator|preprocessor|random|indexing|functions|constant_expressions|scoping|matrix|struct)	the DDK's shader compiler
+functional\.uniform_api	uniform API
+functional\.attribute_location	attribute location aliasing
+functional\.fbo	framebuffer objects
+functional\.texture	textures
+functional\.negative_api	negative API (errors not raised, crashes)
