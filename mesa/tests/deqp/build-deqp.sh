@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build dEQP-GLES2 and deqp-runner for the EA (x86_64, glibc 2.36 ABI), the
-# way Mesa's CI builds them (.gitlab-ci/container/build-deqp.sh and
+# way Mesa's CI builds them, plus mesa/tests/deqp/patches (.gitlab-ci/container/build-deqp.sh and
 # build-deqp-runner.sh of the Mesa release in mesa/VERSION): the same CTS
 # release, backports and patches; dEQP's surfaceless target, which renders to
 # pbuffers through EGL_PLATFORM_SURFACELESS_MESA (mesa/patches/0003 lets it
@@ -58,6 +58,11 @@ if [ ! -f "$W/src/.sgx545-patched" ]; then
 		done
 		for p in $GLES_PATCHES; do
 			git am -q < "$CI/container/patches/$p"
+		done
+		# ours: the surfaceless platform on an EGL 1.4 without
+		# EGL_KHR_create_context or client extensions (the DDK, for the A/B)
+		for p in "$HERE"/patches/*.patch; do
+			git apply "$p"
 		done
 		python3 external/fetch_sources.py
 	)
