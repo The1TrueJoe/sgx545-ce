@@ -96,6 +96,10 @@ struct sgx_shader {
 	/* fragment: */
 	uint32_t sec_dwords;		/* uniform dwords DMA'd to the secondary program */
 	uint32_t uniform_off;		/* dword of the vec4 FP16 uniform c in that block */
+	/* test programs (tools/iso), all 0 otherwise: */
+	uint32_t w0;			/* DOUTU word 0 as given, instead of the computed one */
+	const uint32_t *sec_init;	/* first words of the DMA'd block: fragment sa0-8; vertex sa6-9 */
+	uint32_t sec_init_n;
 };
 
 struct sgx_state {
@@ -155,6 +159,12 @@ void sgx_set_framebuffer(struct sgx_ctx *c, struct sgx_surface *s);
 /* built-in shaders (tools/gen/mkusse.py) */
 enum sgx_builtin { SGX_VS_XY, SGX_VS_XYZ, SGX_FS_UNIFORM };
 struct sgx_shader *sgx_shader_builtin(struct sgx_ctx *c, enum sgx_builtin which);
+
+/* for test programs: load code into the context's shader heap; phas.i relocations as in mkusse.py */
+uint32_t sgx_usse_load(struct sgx_ctx *c, int vertex, const uint32_t *w, unsigned n, const unsigned *reloc,
+		       unsigned nreloc);
+void sgx_bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t attribs, uint32_t size,
+		  uint32_t align);
 
 void sgx_clear(struct sgx_ctx *c, const float rgba[4], float depth);
 int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d);

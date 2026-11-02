@@ -120,6 +120,25 @@ static uint32_t usse_load(struct sgx_ctx *c, const struct usse_prog *pr, int ver
 	return p.va;
 }
 
+uint32_t sgx_usse_load(struct sgx_ctx *c, int vertex, const uint32_t *w, unsigned n, const unsigned *reloc,
+		       unsigned nreloc)
+{
+	struct sgx_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
+	struct sgx_ptr p = ring_alloc(r, n * 8, USSE_ALIGN);
+	uint32_t pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+
+	memcpy(p.p, w, n * 8);
+	for (unsigned i = 0; i < nreloc; i++)
+		p.p[2 * reloc[i]] += pc0;
+	return p.va;
+}
+
+void sgx_bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t attribs, uint32_t size,
+		  uint32_t align)
+{
+	bo_alloc(d, bo, heap, attribs, size, align);
+}
+
 /* DOUTU word 0 (PDS.md): code base register (pixel 0-9 at the pixel heap +
  * n*512K, vertex 10+), offset/8 in that window at b4, temporaries in fours at b24 */
 static uint32_t doutu_w0(struct sgx_ctx *c, uint32_t va, int vertex, uint32_t temps)
@@ -789,7 +808,7 @@ static uint32_t vertices_per_task(uint32_t out_dwords)
 
 /* a draw: index list + vertex fetch program (STATE.md section 2; PDS.md 0x1f3d0) */
 static void vdm_draw(struct sgx_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
-		     uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords)
+		     uint32_t stride, uint32_t attr_dwords, uint32_t vs_w0, uint32_t in_dwords, uint32_t out_dwords)
 {
 	struct pds p = { 0 };
 	uint32_t rows, va, vpt = vertices_per_task(out_dwords), batch = 16;
@@ -798,7 +817,7 @@ static void vdm_draw(struct sgx_ctx *c, uint32_t prim, uint32_t count, uint32_t 
 	pds_d0(&p, 1, attr_dwords - 1);		/* DOUTD: dwords-1, attribute register 0 */
 	pds_d1(&p, 0, stride);
 	pds_d1(&p, 1, 0);
-	pds_d0(&p, 2, doutu_w0(c, vs, 1, 0));
+	pds_d0(&p, 2, vs_w0);
 	pds_d0(&p, 3, 0);
 	CODE(&p, ALU(OP_MUL16, 0, S1_IN(0), S2_DS1(0), U_DS1(0x32)));	/* index * stride */
 	CODE(&p, MOVS(MV_X, 0, 0x19, 0, 1, 2, 2, DOUTD));		/* + ds1[0x32] */
@@ -843,7 +862,7 @@ void sgx_clear(struct sgx_ctx *c, const float rgba[4], float depth)
 	blk[10] = 5;						/* one 4-component set */
 	blk[11] = 0;
 	state_block(c, blk, 12, 12, 3);
-	vdm_draw(c, SGX_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8);
+	vdm_draw(c, SGX_TRIANGLES, 3, c->idx, v.va, 16, 4, doutu_w0(c, c->clear_vs, 1, 0), 4, 8);
 }
 
 static uint32_t ispa(const struct sgx_state *st)
@@ -893,6 +912,8 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	memset(u.p, 0, fs->sec_dwords * 4);
 	u.p[fs->uniform_off] = f16(d->color[0]) | f16(d->color[1]) << 16;
 	u.p[fs->uniform_off + 1] = f16(d->color[2]) | f16(d->color[3]) << 16;
+	for (uint32_t i = 0; i < fs->sec_init_n; i++)
+		u.p[i] = fs->sec_init[i];
 	sec = pds_secondary(&c->pds_pix, u.va, dma_ctrl(fs->sec_dwords, 0, 2, 1),
 			    doutu_w0(c, fs->sec, 0, 0), 4, &rows);
 	blk[n++] = 0;
@@ -902,7 +923,7 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	/* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; the rest from the DDK's
 	 * shader object (b0, b16-17 constant; b25-28 = 0xb for this shader) [G] */
 	blk[n++] = 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 | 0xbu << 25;
-	prim = pds_pixel(c, doutu_w0(c, fs->code, 0, fs->temps), 4, 0, &rows);
+	prim = pds_pixel(c, fs->w0 ? fs->w0 : doutu_w0(c, fs->code, 0, fs->temps), 4, 0, &rows);
 	blk[n++] = pds_word(c, prim, rows);
 	/* viewport: a window flips y, a pbuffer doesn't [C x offset, D rest] */
 	blk[n++] = f32(vx + vwid * 0.5f);
@@ -935,11 +956,14 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	vsec.p[3] = f32(1.0f / 255);
 	vsec.p[4] = f32(2.0f / 65535);
 	vsec.p[5] = f32(1.0f / 65535);
+	for (uint32_t i = 0; i < vs->sec_init_n; i++)
+		vsec.p[6 + i] = vs->sec_init[i];
 	sec = pds_secondary(&c->pds_vtx, vsec.va, dma_ctrl(10, 0, 1, 1), doutu_w0(c, c->empty_v, 1, 0), 0, &vrows);
 	vdm(c, 0x40000000 | sec >> 4);
 	vdm(c, vrows << 26 | 0xe100 | (10 + 3) >> 2);
 
-	vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords, vs->out_dwords);
+	vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords,
+		 vs->w0 ? vs->w0 : doutu_w0(c, vs->code, 1, vs->temps), vs->in_dwords, vs->out_dwords);
 	return 0;
 }
 
