@@ -405,9 +405,13 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          if (((s && s->fmt && small && i->form != USSE_TESTMASK_FADD_S0Z0O_BYTE_1) || scalar || pck16 ||
               i->form == USSE_FMAD16) && kind_ok)
             continue;
-      }
-      if (slot_ok(i->form, k, r))
+         /* (a slot with no format select can't read a half at all: mov would
+          * take the whole register) */
+         if (s && s->fmt && slot_ok(i->form, k, r))
+            continue;
+      } else if (slot_ok(i->form, k, r)) {
          continue;
+      }
       struct sgx_ref m = materialize(c, i, *r, i->rpt);
       r->h16 = 0;
       r->file = m.file;
@@ -467,6 +471,18 @@ alu_src(struct sgx_ctx *c, nir_alu_instr *alu, unsigned s, unsigned comp)
    struct sgx_ref r = src_comp(c, &ls.src, ls.swizzle[comp]);
    r.abs = ls.fabs;
    r.neg = ls.fneg;
+   return r;
+}
+
+/* an F16 constant in f32 math: its f32 bits */
+static struct sgx_ref
+const_f32(struct sgx_ref r)
+{
+   if (r.file == SGX_F_K && r.h16) {
+      union { float f; uint32_t u; } x = { .f = _mesa_half_to_float(r.n & 0xffff) };
+      r.n = x.u;
+      r.h16 = 0;
+   }
    return r;
 }
 
@@ -752,10 +768,15 @@ pair_reg_plain(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b)
       a = f32_to_h(c, a);
    if (!b.h16)
       b = f32_to_h(c, b);
-   if (a.file == SGX_F_K || b.file == SGX_F_K) {
+   if (a.file == SGX_F_K && b.file == SGX_F_K) {
       int sw;
       return pair_src(c, a, b, &sw);
    }
+   /* a constant beside a half (vec2(v.y, 0.5)): its half bits from a register */
+   if (a.file == SGX_F_K)
+      a = store_h(c, a);
+   if (b.file == SGX_F_K)
+      b = store_h(c, b);
    unsigned t = new_vreg16(c, 2);
    struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F16);
    i->nops = 3;
@@ -1124,6 +1145,21 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    unsigned wmask = ld.dest.is_ssa ? nir_component_mask(nc) : ld.write_mask;
    unsigned nin = nir_op_infos[alu->op].num_inputs;
 
+   if (alu->op == nir_op_mov && ld.dest.is_ssa && !ld.fsat) {
+      /* a swizzle of F16 halves (a mediump varying's v.yx as a coordinate) is
+       * the same 32-bit view */
+      struct sgx_ref r[4];
+      bool halves = true;
+      for (unsigned k = 0; k < nc; k++) {
+         r[k] = alu_src(c, alu, 0, k);
+         halves &= r[k].h16;
+      }
+      if (halves) {
+         set_refs(c, &alu->def, r, nc);
+         return;
+      }
+   }
+
    /* dot products: one fdp over all components, result in the last iteration's
     * destination: give it a vreg as wide as the inputs */
    if (alu->op == nir_op_fdot2 || alu->op == nir_op_fdot3 || alu->op == nir_op_fdot4) {
@@ -1132,8 +1168,8 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       struct sgx_ref s[2][4], d[4];
       for (unsigned k = 0; k < n; k++) {
          d[k] = vref(w, k);
-         s[0][k] = alu_src(c, alu, 0, k);
-         s[1][k] = alu_src(c, alu, 1, k);
+         s[0][k] = const_f32(alu_src(c, alu, 0, k));
+         s[1][k] = const_f32(alu_src(c, alu, 1, k));
       }
       /* both sources must be one run: copy any that isn't */
       for (unsigned j = 0; j < 2; j++) {
@@ -1197,7 +1233,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    for (unsigned k = 0; k < 4; k++) {
       d[k] = vref(vreg, base + k);
       for (unsigned j = 0; j < nin && j < 3; j++)
-         s[j][k] = (wmask & (1u << k)) ? alu_src(c, alu, j, k) : ref(SGX_F_C, 48);
+         s[j][k] = (wmask & (1u << k)) ? const_f32(alu_src(c, alu, j, k)) : ref(SGX_F_C, 48);
    }
 
    struct sgx_ref ops[3][4];
@@ -1210,8 +1246,9 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       form = USSE_MOV;
       n = 1;
       SRC(0, s[0][k]);
+      /* (mov has no format select: an F16 half widens through fsubflr too) */
       for (unsigned k = 0; k < 4; k++)
-         if ((wmask & (1u << k)) && (s[0][k].neg || s[0][k].abs))
+         if ((wmask & (1u << k)) && (s[0][k].neg || s[0][k].abs || s[0][k].h16))
             form = USSE_FSUBFLR;
       if (form == USSE_FSUBFLR) {
          n = 2;
@@ -2146,12 +2183,12 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          /* projective: no smp bit for it, divide first */
          nir_legacy_src lp = nir_legacy_chase_src(&tex->src[pi].src);
          unsigned q = new_vreg(c, 1), t = new_vreg(c, ncoord);
-         struct sgx_ref qd[4] = { vref(q, 0) }, qs[1][4] = { { src_comp(c, &lp, 0) } };
+         struct sgx_ref qd[4] = { vref(q, 0) }, qs[1][4] = { { const_f32(src_comp(c, &lp, 0)) } };
          emit_runs(c, USSE_FRCP, 1, qd, 1, qs, &NOF, 0);
          struct sgx_ref td[4], ts[3][4];
          for (unsigned k = 0; k < 4; k++) {
             td[k] = vref(t, k);
-            ts[0][k] = k < ncoord ? cr[k] : cref(48);
+            ts[0][k] = k < ncoord ? const_f32(cr[k]) : cref(48);
             ts[1][k] = vref(q, 0);
             ts[2][k] = ref(SGX_F_K, 0x80000000);
          }
@@ -2172,7 +2209,11 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          run = ncoord <= 2 && (cr[0].file == SGX_F_V || cr[0].file == SGX_F_PA) &&
                (ncoord == 1 ? !((cr[0].file == SGX_F_V ? cr[0].comp : cr[0].n) & 1) && !cr[0].neg && !cr[0].abs
                             : same_reg_pair(&cr[0], &cr[1]) && !cr[0].neg && !cr[0].abs);
-         if (!run) {
+         if (!run && ncoord == 2 && !cr[0].neg && !cr[0].abs && !cr[1].neg && !cr[1].abs &&
+             (cr[0].file != SGX_F_K || cr[1].file != SGX_F_K)) {
+            /* other lanes, no modifiers: packing them is the whole job */
+            cr[0] = pair_reg_plain(c, cr[0], cr[1]);
+         } else if (!run) {
             unsigned t = new_vreg16(c, 2 * ((ncoord + 1) / 2));
             for (unsigned p = 0; 2 * p < ncoord; p++) {
                /* x * 1 + 0 per pair: takes any lanes, modifiers, constants */
@@ -2185,12 +2226,16 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          }
       } else if (!run) {
          unsigned t = new_vreg(c, ncoord);
-         struct sgx_ref td[4], ts[1][4];
+         struct sgx_ref td[4], ts[2][4];
+         unsigned form = USSE_MOV;
          for (unsigned k = 0; k < 4; k++) {
             td[k] = vref(t, k);
-            ts[0][k] = k < ncoord ? cr[k] : ref(SGX_F_C, 48);
+            ts[0][k] = k < ncoord ? const_f32(cr[k]) : ref(SGX_F_C, 48);
+            ts[1][k] = cref(48);
+            if (ts[0][k].h16)
+               form = USSE_FSUBFLR;   /* F16 beside f32: widen (format select) */
          }
-         emit_runs(c, USSE_MOV, nir_component_mask(ncoord), td, 1, ts, &NOF, 0);
+         emit_runs(c, form, nir_component_mask(ncoord), td, form == USSE_MOV ? 1 : 2, ts, &NOF, 0);
          cr[0] = vref(t, 0);
       }
       unsigned rv = new_vreg(c, 1);
@@ -2890,9 +2935,8 @@ emit_color(struct sgx_ctx *c)
    unsigned d = 0;
    for (unsigned k = 0; k < 4; k++) {
       if (col[k].h16 && col[k].file == SGX_F_K) {
-         /* an F16 constant beside f32 channels: its f32 bits */
-         union { float f; uint32_t u; } x = { .f = _mesa_half_to_float(col[k].n & 0xffff) };
-         col[k] = ref(SGX_F_K, x.u);
+         /* an F16 constant beside f32 channels */
+         col[k] = const_f32(col[k]);
          continue;
       }
       if (col[k].h16 && col[k].file != SGX_F_K) {
