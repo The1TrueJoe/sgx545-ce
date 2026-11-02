@@ -1,12 +1,13 @@
 #!/bin/sh
-# blend and colour-mask A/B on the EA3: the DDK (i386 probe-st) against ours (x86_64 build),
+# blend and colour-mask A/B on the EA-1: the DDK (i386 probe, as sgx545_varyab.sh runs it) against ours (x86_64 build),
 # the probe's reference scene drawn with a half-transparent colour over the clear
 cd /tmp/mesa
+printf "#!/bin/sh\\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\\n" > ddk-probe.sh; chmod +x ddk-probe.sh
 export PROBE_COLOR="0.25 1 0.5 0.5"
 run() {
 	name=$1; shift
-	env "$@" PROBE_OUT=/tmp/mesa/bab-ddk-$name.rgba ./gpurun.sh /opt/sgx-i386/run.sh probe-st > /tmp/mesa/bab-ddk-$name.log 2>&1
-	env "$@" LD_LIBRARY_PATH=/tmp/mesa/lib PROBE_OUT=/tmp/mesa/bab-ours-$name.rgba ./gpurun.sh ./probe-x86_64 > /tmp/mesa/bab-$name.log 2>&1
+	env "$@" PROBE_OUT=/tmp/mesa/bab-ddk-$name.rgba ./gpuwatch.sh ./ddk-probe.sh > /tmp/mesa/bab-ddk-$name.log 2>&1
+	env "$@" LD_LIBRARY_PATH=/tmp/mesa/lib PROBE_OUT=/tmp/mesa/bab-ours-$name.rgba ./gpuwatch.sh ./probe-x86_64 > /tmp/mesa/bab-$name.log 2>&1
 	a=$(md5sum < bab-ddk-$name.rgba); b=$(md5sum < bab-ours-$name.rgba)
 	[ "$a" = "$b" ] && r=IDENTICAL || r=DIFFER
 	echo "$name: $r ddk $(grep -o 'centre rgba([0-9,]*)' bab-ddk-$name.log) ours $(grep -o 'centre rgba([0-9,]*)' bab-$name.log) $(grep -i -c 'recovery' bab-$name.log)"

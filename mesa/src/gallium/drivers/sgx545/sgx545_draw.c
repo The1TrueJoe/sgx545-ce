@@ -63,14 +63,14 @@ begin_frame(struct sgx545_context *ctx)
       return false;
    }
    res = sgx545_resource(cbuf->texture);
-   if (cbuf->level || !sgx545_resource_target(screen, res, &t)) {
+   if (!sgx545_resource_target(screen, res, cbuf->level, cbuf->first_layer, &t)) {
       SGX545_DBG(DRAW, "colour buffer %s %ux%u is not a render target\n",
                  util_format_short_name(cbuf->texture->format), cbuf->texture->width0,
                  cbuf->texture->height0);
       return false;
    }
    t.scanout = res->wrapped;
-   rt = get_rt(ctx, res->base.width0, res->base.height0, t.va);
+   rt = get_rt(ctx, u_minify(res->base.width0, cbuf->level), u_minify(res->base.height0, cbuf->level), t.va);
    if (!rt)
       return false;
    if (ctx->recording && ctx->recording != res) {
@@ -80,6 +80,9 @@ begin_frame(struct sgx545_context *ctx)
    if (sgxws_begin(ctx->hw, rt, &t))
       return false;
    ctx->recording = res;
+   /* a write to the texture waits for this render, as for one that samples it */
+   if (res->texture)
+      res->use_seq = sgxws_next_seq(ctx->hw);
    return true;
 }
 
@@ -102,6 +105,8 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
     * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
     * clear (the openhc-minecraft overlay, every frame) must not touch RGB. */
    unsigned cm = buffers & PIPE_CLEAR_COLOR0 ? color_clear_mask & 0xf : 0, wmask;
+   bool clear_stencil = have_depth && (buffers & PIPE_CLEAR_STENCIL) &&
+                        util_format_has_stencil(util_format_description(ctx->framebuffer.zsbuf.format));
 
    if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
        !util_format_has_alpha(ctx->framebuffer.cbufs[0].format) && cm)
@@ -109,10 +114,8 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
    wmask = (cm & PIPE_MASK_B ? 1 : 0) | (cm & PIPE_MASK_G ? 2 : 0) | (cm & PIPE_MASK_R ? 4 : 0) |
            (cm & PIPE_MASK_A ? 8 : 0);
    /* a depth-only clear writes no colour (mask 0) */
-   if (!(buffers & PIPE_CLEAR_COLOR0) && !(have_depth && (buffers & PIPE_CLEAR_DEPTH)))
-      return;
-   if ((buffers & PIPE_CLEAR_COLOR0) && !wmask && !(have_depth && (buffers & PIPE_CLEAR_DEPTH)))
-      return;        /* every colour channel masked, no depth */
+   if (!wmask && !(have_depth && (buffers & PIPE_CLEAR_DEPTH)) && !clear_stencil)
+      return;        /* nothing to clear: every colour channel masked, no depth or stencil */
    simple_mtx_lock(&screen->lock);
    if (begin_frame(ctx)) {
       static const float black[4];
@@ -120,7 +123,7 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
       /* The ISP starts every render at depth 1.0 (render details +0x40), so
        * a depth clear only needs drawing when it is not 1.0. */
       sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? color->f : black, (float)depth,
-                  have_depth && (buffers & PIPE_CLEAR_DEPTH), wmask);
+                  have_depth && (buffers & PIPE_CLEAR_DEPTH), wmask, clear_stencil ? (int)stencil : -1);
    }
    simple_mtx_unlock(&screen->lock);
 }
@@ -134,6 +137,38 @@ depth_func(const struct sgx545_context *ctx)
    if (!dsa || !dsa->depth_enabled || !ctx->framebuffer.zsbuf.texture)
       return 0;
    return SGXWS_NEVER + dsa->depth_func;   /* PIPE_FUNC_* is GL's order */
+}
+
+/* the ISPC word of one face (STATE.md "ISPC"; the ops' codes differ from gallium's) */
+static uint32_t
+stencil_word(const struct pipe_stencil_state *s)
+{
+   static const uint8_t op[] = {
+      [PIPE_STENCIL_OP_KEEP] = 0, [PIPE_STENCIL_OP_ZERO] = 1, [PIPE_STENCIL_OP_REPLACE] = 2,
+      [PIPE_STENCIL_OP_INCR] = 3, [PIPE_STENCIL_OP_DECR] = 4, [PIPE_STENCIL_OP_INVERT] = 5,
+      [PIPE_STENCIL_OP_INCR_WRAP] = 6, [PIPE_STENCIL_OP_DECR_WRAP] = 7,
+   };
+
+   return (uint32_t)s->writemask | (uint32_t)s->valuemask << 8 | (uint32_t)op[s->zpass_op] << 16 |
+          (uint32_t)op[s->zfail_op] << 19 | (uint32_t)op[s->fail_op] << 22 | (uint32_t)s->func << 25;
+}
+
+static void
+build_stencil(const struct sgx545_context *ctx, struct sgxws_state *st)
+{
+   const struct pipe_depth_stencil_alpha_state *dsa = ctx->dsa ? &ctx->dsa->base : NULL;
+
+   if (!dsa || !dsa->stencil[0].enabled || !ctx->framebuffer.zsbuf.texture ||
+       !util_format_has_stencil(util_format_description(ctx->framebuffer.zsbuf.format)))
+      return;
+   st->stencil = true;
+   st->ispc[0] = stencil_word(&dsa->stencil[0]);
+   st->stencil_ref[0] = ctx->stencil_ref.ref_value[0];
+   if (dsa->stencil[1].enabled) {
+      st->two_sided = true;
+      st->ispc[1] = stencil_word(&dsa->stencil[1]);
+      st->stencil_ref[1] = ctx->stencil_ref.ref_value[1];
+   }
 }
 
 static void
@@ -155,6 +190,33 @@ build_state(struct sgx545_context *ctx, struct sgxws_state *st)
                     (mask & PIPE_MASK_B ? 2 : 0) | (mask & PIPE_MASK_A ? 1 : 0);
    memcpy(st->vp_scale, ctx->viewport.scale, sizeof(st->vp_scale));
    memcpy(st->vp_translate, ctx->viewport.translate, sizeof(st->vp_translate));
+   st->line_width = rs ? rs->line_width : 1.0f;
+   build_stencil(ctx, st);
+}
+
+/* The pixels a draw reaches, in the target's memory order: the viewport's
+ * rectangle (the hardware clips to the guard band, not to the viewport) and
+ * the scissor.  False when that is nothing. */
+static bool
+build_clip(const struct sgx545_context *ctx, struct sgxws_rect *clip)
+{
+   const struct pipe_rasterizer_state *rs = ctx->rasterizer ? &ctx->rasterizer->base : NULL;
+   const struct pipe_viewport_state *vp = &ctx->viewport;
+   unsigned w = ctx->framebuffer.width, h = ctx->framebuffer.height;
+   float x0 = vp->translate[0] - fabsf(vp->scale[0]), x1 = vp->translate[0] + fabsf(vp->scale[0]);
+   float y0 = vp->translate[1] - fabsf(vp->scale[1]), y1 = vp->translate[1] + fabsf(vp->scale[1]);
+
+   clip->x0 = x0 > 0 ? MIN2((unsigned)lrintf(x0), w) : 0;
+   clip->y0 = y0 > 0 ? MIN2((unsigned)lrintf(y0), h) : 0;
+   clip->x1 = x1 > 0 ? MIN2((unsigned)lrintf(x1), w) : 0;
+   clip->y1 = y1 > 0 ? MIN2((unsigned)lrintf(y1), h) : 0;
+   if (rs && rs->scissor) {
+      clip->x0 = MAX2(clip->x0, ctx->scissor.minx);
+      clip->y0 = MAX2(clip->y0, ctx->scissor.miny);
+      clip->x1 = MIN2(clip->x1, ctx->scissor.maxx);
+      clip->y1 = MIN2(clip->y1, ctx->scissor.maxy);
+   }
+   return clip->x0 < clip->x1 && clip->y0 < clip->y1;
 }
 
 static const float *
@@ -167,6 +229,37 @@ constant_data(struct sgx545_context *ctx, mesa_shader_stage stage)
    if (cb->buffer)
       return (const float *)((const uint8_t *)sgx545_resource(cb->buffer)->data + cb->buffer_offset);
    return NULL;
+}
+
+/* primitives the hardware doesn't have, drawn as lists of triangles or lines */
+static bool
+expanded_prim(enum mesa_prim mode)
+{
+   return mode == MESA_PRIM_TRIANGLE_FAN || mode == MESA_PRIM_LINE_STRIP || mode == MESA_PRIM_LINE_LOOP;
+}
+
+/* how many vertices the list has (the count already trimmed to whole primitives) */
+static unsigned
+expanded_count(enum mesa_prim mode, unsigned count)
+{
+   switch (mode) {
+   case MESA_PRIM_TRIANGLE_FAN: return (count - 2) * 3;
+   case MESA_PRIM_LINE_STRIP: return 2 * (count - 1);
+   case MESA_PRIM_LINE_LOOP: return 2 * count;
+   default: return count;
+   }
+}
+
+/* the list's i-th vertex, as an offset into the draw */
+static unsigned
+expanded_vertex(enum mesa_prim mode, unsigned i, unsigned out_count)
+{
+   switch (mode) {
+   case MESA_PRIM_TRIANGLE_FAN: return i % 3 == 0 ? 0 : i / 3 + i % 3;
+   case MESA_PRIM_LINE_STRIP: return (i + 1) / 2;
+   case MESA_PRIM_LINE_LOOP: return i == out_count - 1 ? 0 : (i + 1) / 2;
+   default: return i;
+   }
 }
 
 /* where one vertex element comes from */
@@ -710,6 +803,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    if (indirect || !ctx->vs || !ctx->fs)
       return;
    build_state(ctx, &st);
+   if (!build_clip(ctx, &st.clip))
+      return;                 /* nothing visible: a zero-area scissor or viewport */
    if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture) {
       /* the colour epilogue: blend, then the colour mask (sgxws_blend) */
       bool has_alpha = util_format_has_alpha(ctx->framebuffer.cbufs[0].format);
@@ -749,6 +844,15 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       st.pass_type = ctx->fs->discard_pa >= 0 ? (blend && blend->blend ? 2 : 4) : blend && blend->blend ? 1 : 0;
       d.fs = &fsp;
       fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
+      /* a constant-colour blend reads the blend colour, packed BGRA8, in sa2 */
+      if (blend && blend->blend && blend->constant) {
+         const float *c = ctx->blend_color.color;
+
+         fsk[SGXWS_BLEND_CONST_SA] = float_to_ubyte(c[3]) << 24 | float_to_ubyte(c[0]) << 16 |
+                                     float_to_ubyte(c[1]) << 8 | float_to_ubyte(c[2]);
+         fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
+         fsp.temps = MAX2(fsp.temps, 2);
+      }
       /* a discard's visibility test (atst8 and pcoeff read sa3, sa4), as the
        * DDK writes them (EA3): sa3 = 0xe000 | ISPA's depth compare (7 with the
        * test off) | 8 without depth writes (always 0xe00f, LESS 0xe001,
@@ -835,6 +939,17 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    case MESA_PRIM_TRIANGLE_FAN:
       prim = SGXWS_TRIANGLES;     /* drawn as a list */
       break;
+   case MESA_PRIM_LINES:
+   case MESA_PRIM_LINE_STRIP:     /* drawn as a list: the hardware has no line strip */
+   case MESA_PRIM_LINE_LOOP:
+      prim = SGXWS_LINES;
+      break;
+   case MESA_PRIM_POINTS:
+      /* the size comes from the vertex program; without one the DDK draws nothing too */
+      if (!compiled || !ctx->vs->prog.point_size)
+         return;
+      prim = SGXWS_POINTS;
+      break;
    default:
       if (!ctx->warned_prim)
          fprintf(stderr, "sgx545: %s not drawn yet\n", u_prim_name(info->mode));
@@ -920,16 +1035,19 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       goto out;
    for (unsigned n = 0; n < num_draws; n++) {
       unsigned count = draws[n].count, start = draws[n].start, out_count;
-      bool fan = info->mode == MESA_PRIM_TRIANGLE_FAN;
+      bool list = expanded_prim(info->mode);
       uint32_t *v;
 
-      out_count = fan ? (count >= 3 ? (count - 2) * 3 : 0) : count;
+      /* only whole primitives: the VDM takes the count as it is */
+      if (!u_trim_pipe_prim(info->mode, &count))
+         continue;
+      out_count = expanded_count(info->mode, count);
       if (!out_count)
          continue;
-      if (compiled && prim != SGXWS_TRIANGLE_STRIP && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
+      if (compiled && (prim == SGXWS_TRIANGLES) && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
          continue;
       /* glDrawArrays of a list or strip: the vertices in order */
-      if (!info->index_size && !fan && count <= SGXWS_MAX_INDICES) {
+      if (!info->index_size && !list && count <= SGXWS_MAX_INDICES) {
          if (!(v = staging(ctx, (size_t)count * vertex_dwords)))
             continue;
          fetch_vertices(f, n_fetch, start, count, v, vertex_dwords);
@@ -940,11 +1058,12 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
             fprintf(stderr, "sgx545: draw of %u vertices dropped\n", count);
          continue;
       }
-      /* indices (and fans): each vertex the draw uses fetched once, the GPU
-       * given 16-bit indices into them, as the DDK does.  A list longer than
-       * the index limit goes in pieces of whole triangles. */
-      if (fan || prim == SGXWS_TRIANGLES || out_count <= SGXWS_MAX_INDICES) {
-         unsigned piece = prim == SGXWS_TRIANGLES ? SGXWS_MAX_INDICES / 3 * 3 : SGXWS_MAX_INDICES;
+      /* indices (and what is drawn as a list): each vertex the draw uses
+       * fetched once, the GPU given 16-bit indices into them, as the DDK does.
+       * A list longer than the index limit goes in pieces of whole primitives. */
+      if (list || prim != SGXWS_TRIANGLE_STRIP || out_count <= SGXWS_MAX_INDICES) {
+         unsigned piece = prim == SGXWS_TRIANGLES ? SGXWS_MAX_INDICES / 3 * 3 :
+                          prim == SGXWS_LINES ? SGXWS_MAX_INDICES / 2 * 2 : SGXWS_MAX_INDICES;
 
          for (unsigned p0 = 0; p0 < out_count; p0 += piece) {
             unsigned np = MIN2(piece, out_count - p0), lo = ~0u, hi = 0;
@@ -955,10 +1074,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
             if (!ix || !ix32)
                break;
             for (unsigned i = 0; i < np; i++) {
-               unsigned k = p0 + i;
+               unsigned k = list ? expanded_vertex(info->mode, p0 + i, out_count) : p0 + i;
 
-               if (fan)
-                  k = (k % 3 == 0) ? 0 : k / 3 + k % 3;
                ix32[i] = info->index_size ? get_index(info, indices, start + k) + draws[n].index_bias
                                           : start + k;
                lo = MIN2(lo, ix32[i]);
@@ -1006,11 +1123,9 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       if (!(v = staging(ctx, (size_t)out_count * vertex_dwords)))
          continue;
       for (unsigned i = 0; i < out_count; i++) {
-         unsigned k = i;
+         unsigned k = list ? expanded_vertex(info->mode, i, out_count) : i;
          uint32_t index, *dst = v + i * vertex_dwords;
 
-         if (fan)
-            k = (i % 3 == 0) ? 0 : i / 3 + i % 3;
          index = info->index_size ? get_index(info, indices, start + k) + draws[n].index_bias
                                   : start + k;
          for (unsigned e = 0; e < n_fetch; e++) {

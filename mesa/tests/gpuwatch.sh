@@ -5,7 +5,8 @@
 # them (a reference run that has to finish).
 #   gpuwatch.sh CMD...
 t0=$(cut -d' ' -f1 /proc/uptime)
-flock /tmp/gpu.lock "$@" &
+# GPU_LOCK_HELD=1: the caller holds the lock for a whole series of runs
+if [ -n "$GPU_LOCK_HELD" ]; then "$@" & else flock /tmp/gpu.lock "$@" & fi
 pid=$!
 while kill -0 $pid 2>/dev/null; do
 	n=$(dmesg | grep 'Recovery triggered' | awk -F'[][]' -v t="$t0" '$2 + 0 > t { n++ } END { print n + 0 }')

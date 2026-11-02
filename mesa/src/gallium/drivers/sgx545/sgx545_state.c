@@ -25,7 +25,7 @@
 
 /* A blend factor as a sop2 selector (sgxws_bsel), s1 the shader's colour and
  * s2 the tile's; -1 for the constant and dual-source factors (the selectors
- * k18/k19 are not known yet).  Without alpha in the colour buffer its alpha
+ * those go through blend_bfactor).  Without alpha in the colour buffer its alpha
  * reads as 1. */
 static int
 blend_sel(enum pipe_blendfactor f, bool alpha, bool dst_alpha)
@@ -79,8 +79,39 @@ blend_op(enum pipe_blend_func func, uint8_t *op, bool *reverse)
    }
 }
 
-/* render target 0's blend as the colour epilogue's sop2 (sgxws_blend); false
- * when sop2 can't express it */
+static bool
+blend_factor_constant(enum pipe_blendfactor f)
+{
+   return f == PIPE_BLENDFACTOR_CONST_COLOR || f == PIPE_BLENDFACTOR_INV_CONST_COLOR ||
+          f == PIPE_BLENDFACTOR_CONST_ALPHA || f == PIPE_BLENDFACTOR_INV_CONST_ALPHA;
+}
+
+/* a factor of a constant-colour blend (sgxws_bfactor); without alpha in the
+ * colour buffer its alpha reads as 1 */
+static uint8_t
+blend_bfactor(enum pipe_blendfactor f, bool dst_alpha)
+{
+   switch (f) {
+   case PIPE_BLENDFACTOR_ONE: return SGXWS_BF_ONE;
+   case PIPE_BLENDFACTOR_SRC_COLOR: return SGXWS_BF_SRC_COLOR;
+   case PIPE_BLENDFACTOR_INV_SRC_COLOR: return SGXWS_BF_ONE_MINUS_SRC_COLOR;
+   case PIPE_BLENDFACTOR_SRC_ALPHA: return SGXWS_BF_SRC_ALPHA;
+   case PIPE_BLENDFACTOR_INV_SRC_ALPHA: return SGXWS_BF_ONE_MINUS_SRC_ALPHA;
+   case PIPE_BLENDFACTOR_DST_ALPHA: return dst_alpha ? SGXWS_BF_DST_ALPHA : SGXWS_BF_ONE;
+   case PIPE_BLENDFACTOR_INV_DST_ALPHA: return dst_alpha ? SGXWS_BF_ONE_MINUS_DST_ALPHA : SGXWS_BF_ZERO;
+   case PIPE_BLENDFACTOR_DST_COLOR: return SGXWS_BF_DST_COLOR;
+   case PIPE_BLENDFACTOR_INV_DST_COLOR: return SGXWS_BF_ONE_MINUS_DST_COLOR;
+   case PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE: return dst_alpha ? SGXWS_BF_SRC_ALPHA_SATURATE : SGXWS_BF_ZERO;
+   case PIPE_BLENDFACTOR_CONST_COLOR: return SGXWS_BF_CONSTANT_COLOR;
+   case PIPE_BLENDFACTOR_INV_CONST_COLOR: return SGXWS_BF_ONE_MINUS_CONSTANT_COLOR;
+   case PIPE_BLENDFACTOR_CONST_ALPHA: return SGXWS_BF_CONSTANT_ALPHA;
+   case PIPE_BLENDFACTOR_INV_CONST_ALPHA: return SGXWS_BF_ONE_MINUS_CONSTANT_ALPHA;
+   default: return SGXWS_BF_ZERO;
+   }
+}
+
+/* render target 0's blend as the colour epilogue (sgxws_blend): sop2, or its
+ * sopwm form with a constant factor; false when neither can express it */
 static bool
 blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, struct sgxws_blend *b)
 {
@@ -93,6 +124,20 @@ blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, struct sgxws_blen
    /* MIN and MAX take no factors */
    min_c = b->cop >= SGXWS_BOP_MIN;
    min_a = b->aop >= SGXWS_BOP_MIN;
+   if ((!min_c && (blend_factor_constant(rt->rgb_src_factor) || blend_factor_constant(rt->rgb_dst_factor))) ||
+       (!min_a && (blend_factor_constant(rt->alpha_src_factor) || blend_factor_constant(rt->alpha_dst_factor)))) {
+      /* dst - src reads r1, r0: only one direction per blend */
+      if ((rev_c || rev_a) && ((!rev_c && b->cop == SGXWS_BOP_SUB) || (!rev_a && b->aop == SGXWS_BOP_SUB)))
+         return false;
+      b->blend = 1;
+      b->constant = 1;
+      b->swap = rev_c || rev_a;
+      b->fs = min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_src_factor, dst_alpha);
+      b->fd = min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_dst_factor, dst_alpha);
+      b->fsa = min_a ? SGXWS_BF_ONE : blend_bfactor(rt->alpha_src_factor, dst_alpha);
+      b->fda = min_a ? SGXWS_BF_ONE : blend_bfactor(rt->alpha_dst_factor, dst_alpha);
+      return true;
+   }
    c1 = min_c ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->rgb_src_factor, false, dst_alpha);
    c2 = min_c ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->rgb_dst_factor, false, dst_alpha);
    a1 = min_a ? SGXWS_BS_ZERO | SGXWS_BS_INV : blend_sel(rt->alpha_src_factor, true, dst_alpha);
@@ -253,17 +298,20 @@ static void
 sgx545_set_scissor_states(struct pipe_context *pctx, unsigned start_slot, unsigned num_scissors,
                           const struct pipe_scissor_state *scissor)
 {
-   /* pass-type-3 objects and region clips (STATE.md section 3): not yet */
+   if (start_slot == 0 && num_scissors)
+      sgx545_context(pctx)->scissor = scissor[0];
 }
 
 static void
 sgx545_set_blend_color(struct pipe_context *pctx, const struct pipe_blend_color *color)
 {
+   sgx545_context(pctx)->blend_color = *color;
 }
 
 static void
 sgx545_set_stencil_ref(struct pipe_context *pctx, const struct pipe_stencil_ref ref)
 {
+   sgx545_context(pctx)->stencil_ref = ref;
 }
 
 static void

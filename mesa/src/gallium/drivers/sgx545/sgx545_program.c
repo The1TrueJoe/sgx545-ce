@@ -267,6 +267,10 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
    nir_foreach_variable_with_modes(var, nir, mode) {
       const struct glsl_type *t = var->type;
       unsigned rows, comps, set, frac = var->data.location_frac;
+
+      /* the point size is the output dword after the sets */
+      if (nir->info.stage == MESA_SHADER_VERTEX && var->data.location == VARYING_SLOT_PSIZ)
+         vary->point_size = true;
       struct sgx_varying *v;
       char name[32];
 
@@ -521,7 +525,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
          so->prog.tsp_sizes |= (n == 4 ? 5 : n) << (3 * s);
 
       }
-      so->prog.out_dwords = dwords;
+      so->prog.point_size = vary.point_size;
+      so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0);
       so->prog.const_dwords = so->const_dwords;
    } else {
       /* dependent samples: their state words go in SA after the constants */

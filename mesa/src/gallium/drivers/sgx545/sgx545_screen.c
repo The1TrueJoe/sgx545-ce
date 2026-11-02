@@ -139,7 +139,7 @@ sgx545_init_screen_caps(struct pipe_screen *pscreen)
    caps->min_line_width = caps->min_line_width_aa = 1;
    caps->min_point_size = caps->min_point_size_aa = 1;
    caps->max_line_width = caps->max_line_width_aa = 16;
-   caps->max_point_size = caps->max_point_size_aa = 64;
+   caps->max_point_size = caps->max_point_size_aa = 511;
    caps->point_size_granularity = caps->line_width_granularity = 0.1f;
    caps->max_texture_lod_bias = 16;
    caps->alpha_test = true;
@@ -166,19 +166,17 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
          return false;
    }
    if (usage & PIPE_BIND_RENDER_TARGET) {
-      /* RGBA8 textures say they can be rendered to, so st picks them over
-       * BGRA for GL_RGBA textures; rendering into a texture is not done yet */
+      /* the PBE's formats (sgx545_resource_target) */
       if (format != PIPE_FORMAT_B8G8R8A8_UNORM && format != PIPE_FORMAT_B8G8R8X8_UNORM &&
-          format != PIPE_FORMAT_R8G8B8A8_UNORM && format != PIPE_FORMAT_R8G8B8X8_UNORM)
+          format != PIPE_FORMAT_R8G8B8A8_UNORM && format != PIPE_FORMAT_R8G8B8X8_UNORM &&
+          format != PIPE_FORMAT_B5G6R5_UNORM)
          return false;
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
-      /* The ISP keeps depth per tile and no depth buffer is loaded or stored
-       * (no ZLS yet), so depth is good within one render.  No stencil: the
-       * ISP's stencil state isn't programmed, so no format with stencil bits
-       * is offered (configs and renderbuffers get 0 stencil bits, which
-       * GLES2 allows) until it is. */
-      if (format != PIPE_FORMAT_Z16_UNORM && format != PIPE_FORMAT_Z24X8_UNORM)
+      /* The ISP keeps depth and stencil per tile and no buffer is loaded or
+       * stored (no ZLS yet), so they are good within one render. */
+      if (format != PIPE_FORMAT_Z16_UNORM && format != PIPE_FORMAT_Z24X8_UNORM &&
+          format != PIPE_FORMAT_Z24_UNORM_S8_UINT)
          return false;
    }
    if (usage & PIPE_BIND_VERTEX_BUFFER) {
