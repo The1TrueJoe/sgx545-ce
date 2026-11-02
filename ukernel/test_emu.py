@@ -26,11 +26,25 @@ HC_INTCLEAR = 9
 SC_RIFLIST = 0x3C
 
 
+def patch_limm(code, off, v):
+    """fill a `limm r, #0` at byte offset `off` with v, as srvinit -o does"""
+    import struct
+    lo, hi = struct.unpack_from("<II", code, off)
+    lo = (lo & 0xFFE00000) | (v & 0x1FFFFF)
+    hi = (hi & 0xFFFC0E0F) | ((v >> 17) & 0x1F0) | ((v >> 26) << 12)
+    struct.pack_into("<II", code, off, lo, hi)
+
+
 def load():
     binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
     manp = os.path.join(HERE, "sgx545-ukernel-openhc.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
-    return open(binp, "rb").read(), json.load(open(manp))
+    man = json.load(open(manp))
+    # patch the address limms as srvinit -o will on the box
+    code = bytearray(open(binp, "rb").read())
+    for name, addr in (("hostctl", HOSTCTL), ("ccbctl", KCCBCTL), ("ctlblk", CTLBLK)):
+        patch_limm(code, man["patches"][name], addr)
+    return bytes(code), man
 
 
 def machine(code):

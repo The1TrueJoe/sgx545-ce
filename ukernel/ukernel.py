@@ -134,6 +134,12 @@ class Asm:
     def i(self, text):
         self.lines.append(("i", text))
 
+    def patch(self, reg, name):
+        """a limm the srvinit loader fills with a device address at load time
+        (the DDK's own mechanism for dynamic addresses). build.py records its
+        offset and `name` in the manifest; the instruction is `limm rN, #0`."""
+        self.lines.append(("patch", (reg, name)))
+
     # --- building blocks -----------------------------------------------
     def end(self):
         self.i("nop [end]")
@@ -234,23 +240,34 @@ def build(a):
     # Clean boot: set ui32InitStatus and end. Recovery (HWR bit set): discard
     # the surviving kernel CCB and render-in-flight list first (docs/UKERNEL.md
     # §5a) so no stale, possibly-dead work is replayed, then set init status.
+    #
+    # The init entry gets its addresses from patched limms, not the secondary
+    # attributes: the event program that starts it is a bare DOUTU (the DDK's
+    # event program is too; an event-kicked PDS program is not relied on to run
+    # a DMA), so there is no control block in `sa` here. r1 = host control
+    # address, r7 = CCB control, r8 = control block base.
     a.label("init")
     a.phas()
-    a.ld_sa(1, SA_HOSTCTL, HC_INTCLEAR)        # r1 = ui32InterruptClearFlags
-    a.i(f"test.and.ne p0, r1, #{EDM_INTERRUPT_HWR}")
+    a.patch(1, "hostctl")                      # r1 = SGXMKIF_HOST_CTL address
+    a.i(f"ld.a.d r2, r1, #{HC_INTCLEAR} [moe]")  # ui32InterruptClearFlags
+    a.i("wdf")
+    a.i(f"test.and.ne p0, r2, #{EDM_INTERRUPT_HWR}")
     a.i("(!p0) ba init_set")                   # clean boot: skip the discard
     # recovery: kernel CCB read offset := write offset (drop stale commands)
-    a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")
-    a.i("ld.a.d r2, r1, #0 [moe]")             # write offset
+    a.patch(7, "ccbctl")                       # r7 = kernel CCB control
+    a.i("ld.a.d r2, r7, #0 [moe]")             # write offset
     a.i("wdf")
-    a.i("st.a.d r1, #1, r2 [moe]")             # read offset := write offset
+    a.i("st.a.d r7, #1, r2 [moe]")             # read offset := write offset
     a.i("idf")
     a.i("wdf")
+    a.patch(8, "ctlblk")                       # r8 = TA3D control block base
     a.i("limm r2, #0")                          # render-in-flight list head := empty
-    a.st_sa(SA_SELF, SC_RIFLIST, 2)
+    a.i(f"st.a.d r8, #{SC_RIFLIST}, r2 [moe]")
+    a.i("idf")
+    a.i("wdf")
     a.label("init_set")
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
-    a.i(f"st.a.d sa{SA_HOSTCTL}, #{HC_INIT}, r0 [moe]")
+    a.i(f"st.a.d r1, #{HC_INIT}, r0 [moe]")     # *hostctl = INIT_COMPLETE
     a.i("idf")
     a.i("wdf")
     a.end()

@@ -27,11 +27,12 @@ build outputs are generated, not committed.
 
 Implemented and validated offline (no hardware):
 
-- **init** — clean boot sets `ui32InitStatus`; **recovery** re-init (the host
-  control block's HWR bit set) first discards the surviving kernel CCB (read
-  offset := write offset) and empties the render-in-flight list, so no stale,
-  possibly-dead work is replayed (docs/UKERNEL.md §5a — the fix for the
-  double-lockup wedge the replayer hit);
+- **init** — gets its addresses from limms the srvinit loader patches (not the
+  secondary attributes: the event program that starts it is a bare DOUTU, so
+  there is no DMA'd control block in `sa` at init). Clean boot sets
+  `ui32InitStatus`; **recovery** re-init (the host control block's HWR bit set)
+  first discards the surviving kernel CCB (read offset := write offset) and
+  empties the render-in-flight list (docs/UKERNEL.md §5a — the double-lockup fix);
 - **host-kick dispatch** — reads the kernel CCB command, dispatches on its
   type (our host-kick table is the identity);
 - **TA kick** — derives the TA command, render details, PB descriptor and RT
