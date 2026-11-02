@@ -235,6 +235,12 @@ with the context dirty bits in parentheses:
   counter (`ctx+0xc80`) [D].
 - The DMA reads 25 dwords for the triangle's 18-word block. The extra words
   are whatever follows; the header alone says where the block ends.
+- The two-sided block (22 words, header `df7f`) is read with 27 dwords
+  (`stencil2`), and the VDM info word gives it 7, not `(22+3)>>2` = 6. The
+  DMA length is the part that matters: at 25 or 24 dwords the two-sided
+  draws come out blank or with wrong channels, differently from run to run;
+  at 27 or 28 they draw, whatever the info word says (EA3, dEQP
+  `fragment_ops.random`, 2026-11-02). The driver reads `max(25, words + 5)`.
 
 ### ISPA (ctx+0x780)
 

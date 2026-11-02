@@ -1470,8 +1470,15 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    blk[n++] = vs->tsp_prec;
    blk[0] = 0x1 | 0x2 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000 |
             (st->stencil ? 0x4 : 0) | (st->stencil && st->two_sided ? 0x38 : 0);
-   /* the DDK DMAs 25 dwords for a draw's block (kind 0); the header says where it ends */
-   state_block(c, blk, n, 25, 0);
+   /* the DDK DMAs 25 dwords for a draw's block (kind 0) and 27 (kind 2) for the
+    * 22-word two-sided one; the header says where it ends. 25 for the two-sided
+    * block draws nothing or the wrong colours from run to run (dEQP
+    * fragment_ops.random, EA3; 27 and 28 draw it, 24 and 25 don't) */
+   {
+      uint32_t dma = n + 5 > 25 ? n + 5 : 25;
+
+      state_block(c, blk, n, dma, (dma - 1) & 3);
+   }
 
    /* vertex secondary attributes: the block's own address, then the driver
     * constants 2/255, 1/255, 2/65535, 1/65535 [D], then the shader's constants
