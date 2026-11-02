@@ -1992,8 +1992,10 @@ After the header, in this order (writer and reader agree):
    3 c10: highp, mediump, lowp in the corpus), registers (PA registers it
    takes: 4 for a highp vec4, 2 for a mediump one). A highp `a` gives
    `(4, 0, 1, 4, 1, 4)`. (**writer**, **driver** `FUN_00046b00`, **corpus**;
-   which GLSL input each of 0xb-0xf is, gl_FragCoord or gl_PointCoord,
-   is open; gl_FrontFacing is not an iterated input: "Fragment shaders")
+   gl_FragCoord is iterator 14, DOUTI source 0, PDS.md "DOUTI"; gl_PointCoord
+   is set 0 of a sprite. gl_FrontFacing isn't iterated: the program reads it
+   from a global register, `test.and.ne p0, g16, #1`, with bit 0 set for
+   the faces wound CW in the target's memory (capture `frontface`, 2026-11-02))
 3. **List B** then **List C**: constant records whose first u16 is a kind.
    Kinds 1, 2 and 4 are 8 bytes; kinds 3 and 5 are 10. Kind 1 `(1, n, n, 0)`
    is one uniform component; 2 is two (F16 halves, `(n & 3) != 3`), 3 a C10

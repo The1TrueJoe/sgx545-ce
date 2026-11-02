@@ -390,7 +390,8 @@ pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
  */
 static uint32_t
 pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_t *douti,
-          const uint8_t *douti_tex, unsigned n_douti, const uint32_t (*tex)[4], uint32_t *rows)
+          const uint8_t *douti_tex, const uint8_t *douti_w1, unsigned n_douti, const uint32_t (*tex)[4],
+          uint32_t *rows)
 {
    struct pds p = { 0 };
    unsigned d0 = 1, d1 = 1;
@@ -408,7 +409,7 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_
          pds_d1(&p, 2 * r2, 0);
          pds_d1(&p, 2 * r2 + 1, douti[i]);
       }
-      pds_d0(&p, 2 * r1, 0);
+      pds_d0(&p, 2 * r1, douti_w1 ? douti_w1[i] : 0);
       pds_d0(&p, 2 * r1 + 1, 0);
       CODE(&p, MOVS(MV, r1, r2, 3, 0, 1, 1, DOUTI));
       if (douti_tex && douti_tex[i] && tex) {
@@ -700,7 +701,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    {
       uint32_t douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29;
 
-      c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), 0x01000004, &douti, NULL, 1,
+      c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), 0x01000004, &douti, NULL, NULL, 1,
                                NULL, NULL);
    }
 
@@ -1315,7 +1316,7 @@ ispa(const struct sgxws_state *st, uint32_t prim, unsigned face)
    if (prim == SGXWS_LINES)
       v |= 1u << 15;
    else if (prim == SGXWS_POINTS)
-      v |= 3u << 15;
+      v |= (st->sprite ? 4u : 3u) << 15;
    if (st->stencil)
       v |= 0x100 | st->stencil_ref[face];   /* ISPC follows, the reference */
    if (st->stencil && st->two_sided)
@@ -1443,7 +1444,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
          if (fs->douti_tex[i])
             w1 |= 0x02000000;
       }
-      prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), w1, fs->douti, fs->douti_tex,
+      prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), w1, fs->douti, fs->douti_tex, fs->douti_w1,
                        fs->n_douti, d->tex, &rows);
    }
    blk[n++] = pds_word(c, prim, rows);
@@ -2087,7 +2088,7 @@ clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
       w[1] = PHAS_HI | 0x700;                            /* phas.i #0, #0 [wait=7] */
       wmask_words(wmask, 0, w + 2);
       fs = sgxws_usse_upload(c, false, w, 2, NULL, 0);
-      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), 0x01000004, &douti, NULL, 1,
+      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), 0x01000004, &douti, NULL, NULL, 1,
                                              NULL, NULL);
    }
    return c->clear_pds_masked[wmask];

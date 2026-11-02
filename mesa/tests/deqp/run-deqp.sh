@@ -58,4 +58,4 @@ exec flock /tmp/gpu.lock "$D/deqp-runner" run \
 	"$@" \
 	-- \
 	--deqp-surface-type=pbuffer --deqp-surface-width=256 --deqp-surface-height=256 \
-	--deqp-gl-config-name=rgba8888d24s0ms0 --deqp-visibility=hidden
+	--deqp-gl-config-name=rgba8888d24s8ms0 --deqp-visibility=hidden

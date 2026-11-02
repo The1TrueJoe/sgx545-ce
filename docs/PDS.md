@@ -285,7 +285,7 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
 
 | bits | meaning | status |
 |---|---|---|
-| 11–16 | source: texture coordinate set + 1 (TC slot from the GL varying map), 0x20 = colour (`0x1c10000`); 0x22 seen in a GL path not captured | confirmed |
+| 11–16 | source: texture coordinate set + 1 (TC slot from the GL varying map); 0 = the fragment's position (gl_FragCoord: `27800000` x3, `27c00000` x4: x and y at pixel centres in the target's memory order, z, then 1/w; capture `fragcoord`, `fragcoordw`, 2026-11-02); 0x20 = colour (`0x1c10000`); 0x22 = the depth plane a discard's `pcoeff` reads, x3 (ISA.md "Phases, visibility feedback and discard") | capture |
 | 21 | colour iterator at precision < 2 | confirmed (set by GL); meaning of the precision values guessed |
 | 22–23 | components − 1 (forced 4 for colour) | confirmed |
 | 24 | plain iteration enabled | confirmed |
@@ -295,8 +295,8 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
 
 - Iterations fill the USSE PA registers in program order. The DOUTI does not
   name a destination register (strong).
-- w1 bits 4/5 (0x10/0x20) are set by GL for a coordinate-replacement case
-  (point sprites?), not captured.
+- w1 bit 4 (0x10): a sprite's gl_PointCoord (capture `sprite`, 2026-11-02:
+  `37400800`, iterate tc0 x2 f16, w1 0x10). Bit 5 (0x20) is not captured.
 - Examples:
   - `37c00800`: tc0 ×4, f16, last.
   - `17c00800 37401000`: tc0 ×4, then tc1 ×2 (last).

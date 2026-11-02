@@ -219,7 +219,7 @@ with the context dirty bits in parentheses:
 | 0x1 | 1 | ISPA | ctx+0x780, objtype bits 15-18 replaced per draw | D |
 | 0x2 | 1 | ISPB (present when ISPA b9) | ctx+0x784 | D |
 | 0x4 | 1 | ISPC, front stencil (present when ISPA b8) | ctx+0x788 | D |
-| 0x8, 0x10, 0x20 | 3 | back-face ISPA, ISPB, ISPC (two-sided stencil) | ctx+0x78c..0x794 | D |
+| 0x8, 0x10, 0x20 | 3 | second-face ISPA, ISPB, ISPC (two-sided stencil). Each face has its own ISPA reference. In a y-flipped window the first group (0x1, 0x2, 0x4) holds GL's **back** face's words and this one GL's front: the first group is the faces wound CCW in the target's memory (`stencil2`, header `df7f`, 2026-11-02) | ctx+0x78c..0x794 | capture |
 | 0x40 | 3 | PDS: secondary, middle word, primary | ctx+0xcac/cb0, frag+0x64, ctx+0xc9c/ca0 | D |
 | 0x80 | 2 | region clip, sticky until the next one (clears, driver objects, draws without a clear before them): `b31 \| xmin<<16 \| xmax`, `ymin<<16 \| ymax`, in 32×16-px tiles | RT+0x114, +0x118 or the scissor | C |
 | 0x100 | 6 | viewport (dirty 0x100) | ctx+0x13c..0x150 | C |
@@ -243,7 +243,7 @@ with the context dirty bits in parentheses:
 | 0-7 | stencil reference (single-sided; front/back in ISPC otherwise) | D (code) |
 | 8 | ISPC follows (stencil enabled with a stencil buffer) | D |
 | 9 | ISPB follows: always set | D |
-| 11 | two-sided stencil | D (code) |
+| 11 | two-sided stencil: set in both the front and the back group's ISPA | capture (`stencil2`, 2026-11-02) |
 | 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord); see "Lines and points" | C (1, 4) |
 | 20 | depth write disable | D |
 | 21 | no colour write: colour mask 0, or a blend that keeps the destination (ZERO, ONE) | D |
@@ -725,7 +725,7 @@ constant):
 | 0-11 | height - 1 | D |
 | 12-23 | width - 1 | D |
 | 24-28 | format: 0x02 RGBA4444 (stored ARGB4444), 0x04 RGBA5551 (stored ARGB1555), 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | D |
-| 29-31 | layout: 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch in texels - 1) low 3 bits in b9-11, the rest in b17-26 [D], `docs/TEX.md` section 3). Memory layouts 0 and 3 are in `docs/TEX.md` section 1 | D |
+| 29-31 | layout: 2 cube map (`cube`, T1 `4d00f00f`, 2026-11-02), 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch in texels - 1) low 3 bits in b9-11, the rest in b17-26 [D], `docs/TEX.md` section 3). Memory layouts 0 and 3 are in `docs/TEX.md` section 1 | D |
 
 **T2:** the base address. The mip levels follow the base level; the chain
 length is implied by the size, since no word changed with the level count.
