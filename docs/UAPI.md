@@ -514,12 +514,21 @@ P4 **holds for our microkernel by construction** (it no longer reads `sa`, f6721
 `tools/iso/`. So the items in 7.1 do not deliver isolation on their own, and D9 is in
 force. Summary in the table's last column; detail in the log entry.
 
+**P1's open half, on the EA1, 2026-11-02 (hardware):** the register-*write* test Joseph
+asked for in D9. A client `str` to `BIF_DIR_LIST_BASE0` (0xc84) **does not change the
+register** — host read 0x01d6b000 before and after, shader read-back unchanged — so a client
+**cannot repoint translation** to its own directory this way; the page-directory boundary
+survives this attack. But the store is **a denial of service**: within seconds it hung the
+GPU (`SGX Kernel CCB` stuck) and the EA1 rebooted into a lockup loop a warm reboot did not
+clear. So client register stores must still be forbidden (DoS), as must loads (P1 reads
+leak). See `docs/log/entries/2026-11-02-2021-isolation-p1-register-write.md`.
+
 If any of these fails, the items above don't deliver isolation. Each needed a hardware
 experiment before M2's exit test could mean anything; that experiment has now run.
 
 | # | premise | why it is in doubt | experiment | **hardware result (2026-11-02)** |
 |---|---|---|---|---|
-| **P1** | **A client's USSE task can't write `EUR_CR_*` registers.** | UKERNEL.md section 8 has the microkernel using `ldr`/`str` on the register file. ISA.md lists `ldr`/`str` (names a guess there) as ordinary instructions with a 14-bit immediate address, and neither doc says they are restricted (G1). A task that can write the directory-list base can point itself at any memory. | From a vertex and a pixel task of an ordinary client: `ldr` of `EUR_CR_CORE_ID` and compare with the known value; `str` to a harmless scratch-like register and read it from the host. | **FAILS (reads).** A fragment task's `ldr` returned the true `CORE_ID` (0x01150000), `CORE_REVISION` (0x1000e) and a live per-pixel `TIMER`. `str` to the unused `USE_CODE_BASE_14` had no effect; a write to an *effective* register (e.g. `BIF_DIR_LIST_BASE0`) is untested (risks a wedge) and must be assumed possible. Fix: D9 option 1 (validate/forbid `ldr`/`str` in client code); the PD cannot help. |
+| **P1** | **A client's USSE task can't write `EUR_CR_*` registers.** | UKERNEL.md section 8 has the microkernel using `ldr`/`str` on the register file. ISA.md lists `ldr`/`str` (names a guess there) as ordinary instructions with a 14-bit immediate address, and neither doc says they are restricted (G1). A task that can write the directory-list base can point itself at any memory. | From a vertex and a pixel task of an ordinary client: `ldr` of `EUR_CR_CORE_ID` and compare with the known value; `str` to a harmless scratch-like register and read it from the host. | **FAILS (reads).** A fragment task's `ldr` returned the true `CORE_ID` (0x01150000), `CORE_REVISION` (0x1000e) and a live per-pixel `TIMER`. `str` to the unused `USE_CODE_BASE_14`/`_15` had no effect. The *effective*-register write (EA1, 2026-11-02): a `str` to `BIF_DIR_LIST_BASE0` **does not change the register** (host and shader read-back unchanged), so a client **can't repoint translation** this way — but it **hangs the GPU and reboots the box** (DoS). So stores grant no escape yet must be forbidden anyway. Fix: D9 option 1 (validate/forbid `ldr` *and* `str` in client code); the PD cannot help against the reads. |
 | **P2** | **Kernel memory can't be reached from a client's TA or 3D task.** | UKERNEL.md section 6 points the EDM's directory base at the context PD, which suggests the DDK maps kernel heaps in every PD. SRVINIT.md's allocations carry `EDM_PROTECT`, but no doc says what enforces it or whether it is enforced. | From a client shader: load and store an address in the kernel data heap, with the page mapped `EDM_PROTECT`, and watch the memory from the host. Also read the BIF bank registers' layout (G2). | **FAILS.** Pixel *and* vertex tasks `ld` the host control block, the TA3D control block (incl. word 0x16 kernel-CCB base and **word 0x17 the PD physical address**), the kernel CCB, and the microkernel code — all in the client's translation. A `st` into the kernel region wedged the GPU (HWR). A client could also allocate in the kernel-data heap. Fix: the new kernel driver owns the PD and does not map kernel heaps/code into client PDs. |
 | **P3** | **A client's PDS program can't enter the microkernel or gain its rights.** | DOUTU w0 picks the code base, and base 15 is the microkernel. w0 b27 is set on microkernel entries, meaning unknown (PDS.md). `USE_CODE_BASE` values carry `0x2000000` and `0x6000000` flags, not decoded (G4). | A client PDS program issues DOUTU with base 15, and with b27, at a test program; watch whether it runs, under which PD, and what P1 and P2 give it there. | **FAILS.** A client DOUTU naming code base 15 was not refused; the task ran from the kernel code base and wedged the GPU (HWR, pixel 0 not the uniform). DOUTU b27 changed nothing on a base-0 task. Fix: keep base 15 / the kernel code heap out of client PDS and PDs. |
 | **P4** | **The microkernel takes nothing from registers a client can write.** | UKERNEL.md section 1: secondary attributes "which the hardware does not clear between tasks" hold the microkernel's live state, the PD's physical address (word 0x17) among them. `sa` is what client shaders use for uniforms (G5). | Client shader reads `sa0`-`sa63` right after a microkernel task; then writes them and observes the next microkernel entry. | **Did not reproduce.** A client task's `sa11`-`sa63` held its own secondary-update results, per-task coefficient data (differs per pixel) and a prior same-client draw's clear colour — not the microkernel's named pointers; `sa` is reloaded per task. But P2 hands a client the PD physical address anyway. Cross-client `sa` leak (G6) needs two clients, untested. The write-then-observe half is **untested**: the bring-up (log 2026-11-02-0630) first read as "a USSE task cannot write `sa`", but that was corrected the same night. The DDK microkernel writes `sa` in its PDS-DMA-entered context, and the stall was a write in the bare-`DOUTU` context before any DMA. Since f672198 the open microkernel keeps its pointers in a temporary (r17) and reads no `sa`, so nothing a client leaves in `sa` can steer it. **P4 holds for our microkernel**; for the DDK microkernel it rests on the per-task reload seen above. |
@@ -807,6 +816,15 @@ effective register such as `BIF_DIR_LIST_BASE0` take effect?), on the EA1, then 
 plan is option 1, kernel shader validation, scoped by that result: full coverage of stores if
 writes land, a narrower check if only reads do.
 
+**Result (EA1, 2026-11-02, hardware; log 2026-11-02-2021):** the store does **not** take —
+`BIF_DIR_LIST_BASE0` read back unchanged from both the host and the shader, so a client gets
+**no translation escape** from a register write (the page-directory boundary holds against it).
+But the store is **a denial of service**: it hung the GPU and rebooted the EA1 into a lockup
+loop. So option 1 stands with **full `ldr`/`str` coverage** — forbid client register *loads*
+(reads leak `EUR_CR_*`, incl. the PD physical base) *and* stores (DoS) — not because a store
+would breach the PD, which it does not, but because it crashes the machine. The cost is as
+weighed above; the reason is now precise.
+
 ### D10. PB overflow
 
 **Decided (Joseph, 2026-11-02): fail the job's fence with `-ENOSPC` in the first driver, as
@@ -824,7 +842,7 @@ Facts the design needs that `docs/` doesn't have.
 
 | # | gap | blocks | where it would go |
 |---|---|---|---|
-| G1 | `ldr`/`str` from a client task: reads of `EUR_CR_*` work (hardware, 7.2 P1); whether an *effective* register write works (e.g. `BIF_DIR_LIST_BASE0`) is still open and critical | isolation | ISA.md, log 2026-11-02-0710 |
+| G1 | `ldr`/`str` from a client task: **resolved** (hardware, 7.2). Reads of `EUR_CR_*` work (P1, leak). A `str` to an effective register (`BIF_DIR_LIST_BASE0`) does **not** change it — no translation escape — but hangs the GPU and reboots the box (DoS). So client `ldr` and `str` to the register file must both be forbidden | isolation | ISA.md, logs 2026-11-02-0710 / 2026-11-02-2021 |
 | G2 | BIF requestors and banks: which units translate through which directory, whether EDM can use its own; registers 0xc84 and BANK0 fields. P2 showed the DDK maps kernel memory in the client-visible translation; the per-requestor bank layout (BANK0 EDM/TA/HOST/3D/2D indices, sgx545defs) is the lever a new driver uses to separate them | isolation, kernel MMU | UKERNEL.md, log 2026-11-02-0710 |
 | G3 | The MMU: PD and PT entry formats, page sizes, physical address width, read-only and `EDM_PROTECT` bits and whether each is enforced, invalid entries, fault status and interrupts, translation-cache rules | kernel MMU, `VM_MAP`, P2 | new section, UKERNEL.md |
 | G4 | DOUTU w0 b27 and base 15 from client programs; `USE_CODE_BASE` flags `0x2000000` and `0x6000000` (P3) | isolation | PDS.md |
