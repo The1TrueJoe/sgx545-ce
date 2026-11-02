@@ -383,6 +383,15 @@ replay: <span class="ok">back buffer IDENTICAL to the reference</span></pre>
   </figure>
 </section>
 
+<section class="ch" id="upstream">
+  <div class="ch-head"><span class="when">2026-11-01 – 11-02</span><h2>Aiming at upstream</h2></div>
+  <div class="prose">
+    <p>The goal widened. The point is no longer a driver for one appliance but GPU acceleration for Cedarview netbooks on a stock distro, and the only route there is upstream: a DRM driver in Linux, the microkernel in linux-firmware, the GL driver in Mesa. The brief for that, with its milestones, is <code>AGENTS.md</code> at the repo root.</p>
+    <p>The first night after both EAs came back online went to the hardware those milestones were waiting on. openHC booted on our own GPU bring-up instead of Intel's <code>sgxinit</code>: the dashboard rendered through it, and the framebuffer matched Intel's path byte for byte. Our open microkernel ran on the GPU for the first time. It loaded, was kicked and executed, then stopped partway through its init. Markers it wrote into the GPU's debug dump showed where: a shader task on this core can't write its own secondary attributes, which the offline emulator had allowed.</p>
+    <p>The same night tested what a new kernel driver could promise. The first draft of the uAPI rests on four assumptions about isolation between clients, and hardware tests found three of them false on today's stack. A client shader can read GPU registers and kernel memory, and it can jump into kernel code. A kernel driver that owns the page tables can close the memory and code holes. Register access reaches from any task, so client shaders will need checking before they run. Better to know that before the driver exists than after.</p>
+  </div>
+</section>
+
 <section class="ch" id="how">
   <div class="ch-head"><span class="eyebrow">How it was run</span><h2>Six workstreams, one GPU</h2></div>
   <div class="prose">
@@ -408,15 +417,15 @@ replay: <span class="ok">back buffer IDENTICAL to the reference</span></pre>
 <section class="ch" id="next">
   <div class="ch-head"><span class="eyebrow">What's left</span><h2>Next</h2></div>
   <div class="next">
-    <div><b>gl4es on our driver</b><span>gl4es's own test suite, compared pixel for pixel against Intel's driver.</span></div>
-    <div><b>Minecraft</b><span>An i386 build in the game's chroot, A/B against the DDK with the same gl4es.</span></div>
-    <div><b>openHC ships it</b><span>srvinit at boot, then Mesa in release images; the DDK kept for A/B only.</span></div>
-    <div><b>Modern WebKit</b><span>Mesa's EGL 1.5 and GBM, once the kernel side gains dma-buf and KMS.</span></div>
+    <div><b>dEQP-GLES2</b><span>The full conformance run on our driver and on Intel&#x27;s, with a fails list we understand (M0).</span></div>
+    <div><b>Open microkernel</b><span>Finish init without secondary-attribute writes, then frames, multi-render, transfers and recovery on hardware (M1).</span></div>
+    <div><b>A new kernel driver</b><span>The uAPI draft in docs/UAPI.md, with client shader checks for register access, then the driver itself (M2).</span></div>
+    <div><b>Cedarview</b><span>A stock Debian or Ubuntu netbook drawing its desktop through our stack (M4).</span></div>
   </div>
 </section>
 
 <footer>
-  Source: sgx545-ce branch <code>um-re</code>, <code>re/log/BUILDLOG.md</code>, with the technical write-ups in <code>re/NOTES.md</code>, <code>re/state/STATE.md</code>, <code>re/pds/PDS.md</code>, <code>re/isa/ISA.md</code> and <code>re/srvinit/SRVINIT.md</code>. All frames were read back from the EA3's GPU. Times are UTC, 2026-10-28.
+  Source: sgx545-ce branch <code>um-re</code>, <code>docs/log/</code>, with the technical write-ups in <code>docs/</code>. Frames were read back from the EAs' GPUs. Times are UTC, from 2026-10-28.
 </footer>
 
 </div>
