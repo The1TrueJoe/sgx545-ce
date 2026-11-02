@@ -34,6 +34,28 @@ Every field below carries one of these tags:
   (USP sections only).
 - **guess**: a name or meaning that fits but isn't backed by the above.
 
+In the terms of docs/CLEANROOM.md: **encoder** is `static` (the decompile)
+plus `oracle` (the same encoder run black-box, which is what makes a
+position or value a fact); **corpus** is `oracle` (the DDK's compiler as a
+behavioural oracle); **hardware** is `hardware`; **writer / reader /
+driver** are `static`. A fact tagged only **guess** or `static` is not
+something shipping code may rely on yet.
+
+What an encoder needs from this page, and where it is:
+- The 64-bit word, bit names and instruction order: above.
+- Which class a word is: "Instruction classes" (h27-31) and, inside each
+  class, the sub-op bits named in its section.
+- Register banks, extension bits, number widths, indexing, constants:
+  "Registers" and "Operands"; slots that differ are listed in their class.
+- Per-class fields: each class's table. A field written `h6-8, h24` or
+  `h13 + h18` is split: the first range holds the low bits.
+- Modal state that the word alone doesn't carry: format select (h22 in the
+  float classes, per instruction), format control (`setfc`, per program;
+  "MOE control"), repeats and increments ("Float classes", "Fields shared by
+  hw 10-19"), and dual issue ("Dual issue").
+- Bank codes, number fields, unused slots and the text notation's defaults:
+  "Encoding conventions" below.
+
 Function names are Ghidra's with its 0x10000 image base: `FUN_001147f0` is
 libusc + 0x1047f0. Bit names: `l<n>` is bit n of the low word, `h<n>` of the
 high word; an instruction is stored low word first.
@@ -51,12 +73,135 @@ high word; an instruction is stored low word first.
 | `hwcheck.py` | every corpus word: has a form, no unexplained bit, text round-trips |
 | `check_float.py`, `check_pack.py`, `check_int.py`, `check_mem.py` | oracle sweeps per area (run from the scratchpad with `LIBUSC=` and the venv that has unicorn) |
 | `usp.py`, `smpblock.py` | the USP container and its texture-sample blocks |
+| `isadoc_cov.py` | spec side: does this page state every form's identifying bits, field positions, operand slots and enum values (necessary, not sufficient) |
+| `blind.py` | spec side: random valid instructions per form, and the score of an encoder written from this page alone against them (docs/CLEANROOM.md "Validation"). Two blind passes on 2026-11-01, fresh sessions that read only `docs/`: 120/122 words exact before the "Encoding conventions" section and the fixes it prompted (41% marked sure), 120/120 after (88% sure) |
 | `gen3.py` | the texture / flow / int / index / vertex corpus (`corpus/c3`, USEASM log `corpus/encfuzz_c3.log.gz`) |
 | `encfuzz.c`, `fz.py`, `mkfields.py`, `mkisa.py`, `fields.json`, `dis_fz.py`, `asm_fz.py`, `ISA_fz.md` | the first, bit-flip-fuzzing pass (superseded; kept for history) |
 
 Status: all 4154 instructions (1570 distinct) of the three corpora decode
 with no unexplained bit and round-trip (`python3 hwcheck.py`), and the four
 oracle sweeps pass (about 20,000 encoder outputs).
+
+## Encoding conventions (read this first)
+
+These rules hold in every class unless the class's section says otherwise.
+All **encoder** (and every one of them is exercised by the corpora's words);
+the bank codes are also **hardware** (every hwt test builds its operands from
+them).
+
+### Operand slots and bank codes
+
+A register operand is a number field, a bank field and, in most slots, an
+extension bit. The generic slots:
+
+| slot | number | bank | extension |
+|---|---|---|---|
+| dst | l21-27 | h0-1 | h19 |
+| src0 | l14-20 | h2 (one bit) | none in the float classes; efo h6, ima32 h15, smp/ld/st h18, emit and the visibility-test ops h19 |
+| src1 | l7-13 | l30-31 | h17 |
+| src2 | l0-6 | l28-29 | h16 |
+
+Bank and extension values (bank, ext):
+
+| dst | src1 / src2 | src0 |
+|---|---|---|
+| r 0,0 | r 0,0 | r 0,0 |
+| o 1,0 | o 1,0 | pa 1,0 |
+| pa 2,0 | pa 2,0 | o 0,1 |
+| indexed 3,0 | sa 3,0 | sa 1,1 |
+| sa 0,1 | indexed 0,1 | |
+| g 1,1 | c or g 1,1 | |
+| idx 2,1 | immediate 2,1 | |
+| i 3,1 | i 3,1 | |
+
+A slot without an extension bit takes only the ext = 0 kinds; a slot whose
+class gives it a one-bit bank (the destination of smp, ld, eld, ldr) is
+r = 0, pa = 1. A slot with no bank bits takes the one kind its class names.
+
+### The number field
+
+- r, o, pa, sa: the register number.
+- c<n>: n (0-63) on the c/g bank; g<n>: n + 0x40 on the same bank, so a
+  special register needs the full 7-bit field (never under format select).
+- #n: n (0-127). Bigger constants: `limm`, or a constant in sa.
+- i<n>: n on the i bank. The hardware has i0-i3; the disassembler prints
+  whatever number is there. In a slot that can't select the i bank the
+  register file's alias is used: i<n> is r(124+n), and the field holds
+  124 + n (under format control that is register 60 + n with the format
+  flag set, which is how libusc writes a C10 internal register in sop3's
+  src0: **corpus**, and pixel-identical on hardware in the compiler's A/B
+  runs).
+- idx<n> (destination ext bank 2): n as printed.
+- Indexed `bank[idx<k>+off]`: with a field of w bits (7, or 6 under format
+  select), the number is `ib << (w - 2) | (k - 1) << (w - 3) | off`, where ib
+  is r 0, o 1, pa 2, sa 3, and off has w - 3 bits (0-15, or 0-7). A source
+  slot can't be indexed when it has no extension bit; src0 never can.
+
+### Format select and format control
+
+Two different things change how numbers read.
+
+- **Format select** is a bit in the instruction: h22 in the float classes
+  (hw 0, 2, 3, 4) and in fdual, h18 in test/testmask. (The hw 1 scalar
+  functions mark their one source F16 or C10 with h7 / h8 instead, and
+  fmad16 is always F16.) While it is set, every slot the class lists as
+  following it has a 6-bit number (bits 0-5)
+  and bit 6 says that operand is F16. An F16 r, o, pa or sa operand's number
+  counts 16-bit halves: `r3.f16.lo` is 6, `r3.f16.hi` is 7 (**hardware**,
+  hwt_p1 / hwt_p10). Indexed, immediate and constant operands are not
+  halved; a bare `.f16` on them only sets bit 6.
+- **Format control** is program state, set by `setfc` (MOE control, op 5)
+  and at the start of a program C10 on, F16 off (**hardware**, hwt_p6 /
+  hwt_p8). It applies only to these classes: sop2, sopwm, the sop3 family,
+  dot3/dot4, ima8, fpma (the C10 enable) and efo (the F16 enable). In them,
+  while the enable is on, an r, o, pa, sa or i operand's 7-bit field (the
+  destination's as well as the sources') holds a
+  6-bit number and bit 6 marks it C10 (or F16 for efo, whose F16 numbers
+  count halves like the float classes'). Indexed, c/g, immediate and idx
+  operands keep the whole 7-bit field. No other class reads format control.
+
+### Unused slots and fixed patterns
+
+A slot a form doesn't use is zero, except where the class names a pattern.
+The pattern libusc writes for an unused source is the immediate #0: bank 2
+and the extension bit, number 0: in src2, l29 + h16. mov, rlp, smp without
+a LOD source and ld without a range operand write it in src2.
+
+### Text notation and defaults
+
+- `(p0)` is the predicate field; the mnemonic's suffixes are the class's enum
+  fields by name. An enum value with no name prints as the field name and the
+  value: `dim3`, `ret3`, `pcf3`, `cfmt3`, `am3`, `alu<two hex digits>`, and
+  test's conditions as `s<sign>z<zero><o|a>`. A select value with no known
+  meaning prints as `x<value>` (`c1=x7`). smp's `cfmt` is h3-4 as one field
+  (1 `.f16` = h3, 2 `.c10` = h4, 3 both) and `pcf` is h5-6 the same way.
+- Field widths are the word's; ranges a section quotes from libusc (imo
+  -32..31, op0xfd n 0..8, the sizes and modes libusc rejects) are limits of
+  its encoder. A value outside them still has the encoding the field gives;
+  what the hardware does with it is not known.
+- In the trailing brackets a bare name is a one-bit field that is set, and
+  `name=v` is the field's value, except `rpt=n`, which is the repeat count:
+  every class stores n - 1.
+- A field the text doesn't show holds its default. The default is 0, except:
+  - `mask` (when there is no repeat count): 1 in smp, pck, test, testmask
+    and the bitwise classes; 15 in sopwm; 0 elsewhere;
+  - `dmask` in pck: 15;
+  - `rpt`: 1 (stored as 0);
+  - test/testmask with no destination: the destination field is 0x280 (see
+    that section).
+- A field written as several ranges (`h6-8, h24`) takes its value's low bits
+  from the first range listed, and within a range the lower bit is the less
+  significant (h0-1 = 2 sets h1). sopwm's `mask=v` puts v's bits 0-3 in h12,
+  h13, h14, h11.
+- Signed fields (branch targets, smoa, imo, smlsi increments) are two's
+  complement in the field's width.
+- smlsi's `#0.zyxw` is a swizzle: the operand's flag bit set and the value
+  `x | y << 2 | z << 4 | w << 6` with x = 0, y = 1, z = 2, w = 3 for the
+  channel each position reads (`#0.zyxw` = 0xc6).
+- Values the encoder takes divided by 4 (smlsi `lim0-2`, phas.i `temps4`)
+  print as the stored field.
+- `syncend` is h23 and `xsyncend` h12, two separate bits. libusc's extended
+  sync-end sets both.
 
 ## Hardware checks (hwt.py, EA3, 2026-10-28)
 
@@ -223,6 +368,26 @@ Modifiers, 3-source ops (**encoder**; each bit **hardware**, hwt_p1 `fmad_*`:
 src2 for fadm; fmsa rejects it); h5/h6 = -src1 / |src1|; h3/h4 = -src2 /
 |src2|. Two-source ops: src1 h5/h6, src2 h3/h4.
 
+Which slots each form uses (**encoder**). The destination is the generic
+dst slot in all of them except fddp/fddpc (no extension bit). A slot not
+listed is zero.
+
+| forms | text operands -> slots | follow format select (h22) |
+|---|---|---|
+| fmad fadm fmsa fmaxmin fminmax | dst, src0, src1, src2 | src0, src1, src2 |
+| fsubflr fdp fdsx fdsy | dst, src1, src2 (no src0: l14-20 and h2 are 0) | src1, src2 |
+| fdpc | dst, cp<n> (l15-17), src1, src2; l14 = 1 | src1, src2 |
+| frcp ... fcos (hw 1) | dst, src1 (the single source is in the src1 slot, -src h5, \|src\| h6; src2's slot is unused and h16 is part of the sub-op) | none: h7 / h8 per source instead |
+| fmad16 (hw 6) | dst, src0, src1, src2; modifiers as hw 0 | none: every operand is a whole register holding an F16 pair, numbered as a register (no halves) |
+| fddp | dst (l21-27, h0-1), i<n> (h19: 0 i0, 1 i1), src0, src1, src2; modifiers as hw 0 | src0, src1, src2 |
+| fddpc | dst, i<n> (h19), cp<a> (h3-5), cp<b> (h6-8), src0, src1, src2; no modifiers | src0, src1, src2 |
+
+hw 1's `chan=` is the h3-4 field whatever h7/h8 say; it only selects a half
+or a channel when one of them is set. The repeat fields (inc0-2 and the
+rest) are in every hw 0/2/3/4 form, including those with no src0; fddpc's
+second clip plane (h6-8) shares h8 with inc2: the word holds the OR of
+the two, so a decoder can't tell them apart.
+
 Repeat (FUN_00107080, SGX545 path, **encoder**): hw0/2/3/4: h12-13 =
 repeat count - 1 (a write mask is turned into a count; at most 4). h21 = moe
 (operands step by the MOE increments; libusc INST_MOE). With h21 clear,
@@ -302,15 +467,15 @@ fdpc (**encoder**): fdp + clip-plane result cp0-7 (USEASM register type
 0xd) in l15-17, l14 set. Needs a multi-channel repeat or mask.
 fddp/fddpc (**encoder**): two dot products; the second result goes to i0/i1
 (h19), so the destination has no extension bit. fddpc: clip planes in h3-5
-and h6-8, no source modifiers.
+(the first cp operand) and h6-8 (the second), no source modifiers.
 
 ### Moves (hw 5)
 
 | h8-10 | form |
 |---|---|
-| 0 | mov d, s (src1 slot; src2 is the unused-source pattern: bank 2 + ext = #0, written by useasm's EncodeUnusedSource) |
+| 0 | mov d, s (src1 slot; src0's field is 0; src2 is the unused-source pattern: bank 2 + ext = #0, written by useasm's EncodeUnusedSource) |
 | 1-5 | movc.<cond>.<type> d, s0, s1, s2: d = test(s0) ? s1 : s2 |
-| 6, 7 | USEASM 0xf3 (target feature 0x2000; never emitted by libusc's compiler): writes an output; 7 has a src0, 6 none |
+| 6, 7 | `op0xf3.s6 d, s1, s2` / `op0xf3.s7 d, s0, s1, s2` (USEASM 0xf3, target feature 0x2000; never emitted by libusc's compiler): writes an output. Operand slots as `movc`; 6 has no src0 (its field is 0). Flags: `f1_1` = h7 and `f1_26` = h22 (the USEASM flags that pick movc's u8 / f32 types), `a3f` = h5-6 (the third source's argument flags 5-6, 0-3). Common fields, repeat and mask as below |
 
 Repeat: h21 rcnt, h12-15 count-1 or write mask (**encoder**).
 movc type (**encoder** for the bits; names from libusc's IMOVC variants in
@@ -359,6 +524,7 @@ secondary computes into internal registers.
 | h12 | rpt | 1-2 |
 | h22 | fmt | format select as in the float classes |
 | h4, h3 | neg1, neg2 | negate the src1 / src2 slot |
+| h23, h11, h20 | skipinv, nosched, syncs | as in the other ALU classes; fdual has no end bit (h18 is part of `pri`) |
 
 A one-source secondary op reads sb; a two-source one sb and sc; mov reads
 msrc. All **encoder**.
@@ -434,6 +600,11 @@ offset/biased 8-bit format is a **guess**.
 | l7-13, l30-31, h17 | src1 | r o pa sa c g # i ix | encoder |
 | l0-6, l28-29, h16 | src2 | same | encoder |
 
+Both bits exist in every pck form, whatever the pair: the rules above say
+when libusc sets them, not when they can be encoded. The text calls l18
+`rint` when both formats are f16 or f32 and `scale` otherwise (c10 counts as
+"otherwise"), and shows l19-20 as `rnd=`.
+
 Notes:
 - Two sources: the compiler packs two values per instruction (corpus:
   `pck.u8.f32 pa9, pa9, pa13 [dmask=6]` then `... [dmask=9]` builds RGBA8),
@@ -497,7 +668,7 @@ condition and test vs testmask. Text:
 | h2-3 | pdst (test only) | USEASM arg1, type 0xc, p0-p3 | encoder |
 | h4-5 | type (testmask only) | spec b9-11: 1 -> 0 `byte`, 2 -> 1 `word`, 3 -> 2 `dword`; others rejected | encoder; 3 = USEASM_TEST_MASK_DWORD (libusc assert string) and the only one the corpus uses. **hardware** (hwt_p7): a passing f32 test writes 0x000000ff / 0x0000ffff / 0xffffffff for byte / word / dword, a failing one 0 |
 | h12-15 | mask | flags1 write mask verbatim (fdp: USEASM 0xc2 -> 7, 0xc3 -> 0xf). testmask also takes a repeat count n -> mask (1<<n)-1 (n <= 4); test rejects a repeat. A test with mask != 1 must write p0 | encoder; corpus: testmask mask=15 for bvec4 compares |
-| l20 | dest written | clear when USEASM arg0 has flag b16; then the dest field holds h0 + h19 (`nodst` = 0x280) | encoder; corpus: every `test` has no dest |
+| l20 | dest written | set when the instruction has a destination (the generic dst slot), clear when USEASM arg0 has flag b16; then the dest field holds h0 + h19. The text shows that field as `nodst=v` when it isn't the default 0x280: v's bits 0-6 go to l21-27, 7-8 to h0-1, 9 to h19 | encoder; corpus: every `test` has no dest |
 | h18 | fmt | set when a source has arg flag b22 (float group, F16) or b24 (group 2 ops 0xf7-0xf9, C10; the dest flag counts there too). Sources and dest then have 6-bit numbers + bit 6 = per-operand format, printed `.f16.lo/.hi` / `.c10` | encoder; corpus (`test.fsub.ge p1, sa10.f16.lo, sa12.f16.lo`, `test.fpsub8.lt p0, pa4.c10, pa5.c10`). **hardware** (hwt_p10): an F16 operand's number counts halves like the float classes' (r0 = (3, 10), r1 = (5, 1), r2 = (7, 0.5): numbers 1 < 0 false, 2 < 1 true = 10 < 3, 5 < 10); a C10 operand is a whole register. The destination's numbering under fmt (testmask) was not drawn; the tools treat it like the sources |
 | h21 | f2_0 | USEASM flags2 b0 | encoder; libusc's asm.c (FUN_00018050, ITESTPRED only) copies it from bit 5 of its internal instruction flags, which no assert names; the corpus has it only on the counter test of fixed-count loops (loop4, lp_s4/s32/s100, lp_nest, tx_dep_loop): meaning unknown |
 | h22, h23, h20, h24-26 | nosched, skipinv, syncs, pred | as above | encoder |
@@ -597,7 +768,7 @@ TEST). Mnemonic names follow the USEASM op order and the TEST ALU codes
 | h27-31, h3 | opcode, sub-op | table above | encoder |
 | h11 | inv (`.inv`) | src2 inverted: USEASM arg2 flag 0x800 (src1 takes no flags) | encoder |
 | h2 | partial | USEASM flags1 b20; also stops the immediate compression | encoder; "16-bit/partial operation" meaning **guess** |
-| h6-10 | rot | immediate rotate-left count | encoder |
+| h6-10 | rot | immediate rotate-left count. The field exists whatever src2 is; with a register src2, libusc leaves it 0 | encoder |
 | l0-6, l14-20, h4-5 | src2 immediate | when src2's bank is `#` (l28-29 = 2, h16): a 16-bit value, bits 0-6 / 7-13 / 14-15 | encoder |
 | h21, h12-15 | rcnt, rpt/mask | as above | encoder |
 | h18, h20, h22, h23, h24-26 | end, syncs, nosched, skipinv, pred | as above | encoder |
@@ -613,7 +784,9 @@ no rotate. The text shows n, rot and inv separately (lossless):
 
 `rlp dst, src1, pN` (hw 0e): USEASM arg2 must be a predicate (type 0xc, p0-p3)
 -> l14-15; src2's slot is encoded as unused (#0: l28-29 = 2, h16 = 1; field
-`unused2` = 0x300); h3, h4-11 never set. Rotate-left-through-predicate is a
+`unused2` = 0x300: the src2 slot's number, bank and extension read as one
+10-bit value, number in bits 0-6, bank in 7-8, extension in 9); h3, h4-11
+never set. Rotate-left-through-predicate is a
 **guess** from the name.
 
 ### Open questions
@@ -696,7 +869,7 @@ Operand slots come from the generic encoder FUN_00107830:
 - src2: l0-6, bank l28-29, ext h16.
 - An index operand number is [bank 2][idx 1][offset 4].
 
-**Operand bit 6.** In sop2/sop3/sopwm/dot/ima8/fpma, USEASM flags2 b24 makes every number 6 bits. Bit 6 is then the per-operand format flag (USEASM arg flag b24, C10 vs U8).
+**Operand bit 6.** In sop2/sop3/sopwm/dot/ima8/fpma, USEASM flags2 b24 makes every number 6 bits. Bit 6 is then the per-operand format flag (USEASM arg flag b24, C10 vs U8). This covers r, o, pa, sa and i operands only; indexed, c/g, immediate and idx operands keep their 7-bit fields ("Encoding conventions"). The integer classes not named here (ima16, imae, hw 16, 17, 1a) never read format control.
 
 In efo the same happens for F16 sources (arg flag b22). There is no instruction bit that records this; dis.py tracks `setfc` per code block (hw.CTX). **hardware** (hwt_p7, hwt_p8): efo's F16 select is `setfc`'s **first** argument and is **off at program start**; with it on, an F16 operand's number counts halves like the float classes' (`efo r3, r0.f16.hi, r1, c52 [d=a0 a=a0=s0+s2]` with r0 = (3, 2) gives 3.0 = 2 + 1), and the result is f32. With it off the same word reads r64 (per-pixel garbage).
 
@@ -748,6 +921,8 @@ Units:
 | h8 | f3_10 | USEASM flags3 b10 | encoder; meaning unknown |
 | h5 h4 h3 | src0/src1/src2 negate | arg flag b0 | encoder |
 
+efo has no end bit (h18-19 is `i`), so it can't be a program's last instruction.
+
 Operands:
 - dst: l21-27, bank h0-1 (r o pa ix), no ext.
 - src0: l14-20, bank h2, ext h6 (r pa o sa).
@@ -776,11 +951,11 @@ The encoder requires the coissue. `dst.rgb = (src1 * c1) cop (src2 * c2)` and `d
 |---|---|---|---|
 | h6-8, h24 | c1: 0 zero 1 s1 2 s2 3 s1a 4 s2a 5 asat 6 k18; h24 complement | arg4 | encoder |
 | h3-5, h15 | c2: same, 6 = k19 | arg5 | encoder |
-| l18-19 | cop: add sub min max | arg6 | encoder |
+| l18-19 | cop: 0 add, 1 sub, 2 min, 3 max | arg6 | encoder |
 | l20 | cs1c: complement src1 (colour) | arg3 0x1a (else none 0x15) | encoder; usc bComplementCSrc1 |
 | h20-21, h11 | a1: zero s1a s2a k18 + complement | 0xe3 arg1 | encoder |
 | h9-10, h2 | a2: zero s1a s2a k19 + complement | 0xe3 arg2 | encoder |
-| l16-17 | aop | 0xe3 arg3 | encoder |
+| l16-17 | aop: 0 add, 1 sub, 2 min, 3 max | 0xe3 arg3 | encoder |
 | l15 | as1c: complement src1 (alpha) | 0xe3 arg0 0x1a | encoder; usc bComplementASrc1 |
 | l14 | aneg: negate alpha result | 0xe3 arg4 0x14 | encoder |
 
@@ -809,22 +984,22 @@ for (0x100, 0x080, 0x040)), bits 30-31 zero.
 | h12,h13,h14,h11 | mask, in USEASM order x y z w (stored rotated); default 15 | dest arg flags b7-10 with flag b20; a partial mask needs a non-indexed dest | encoder; usc puts auDestMask << 7 there |
 | h6-8, h24 | c1: 0 zero 1 asat 2 s1 3 s1a 6 s2 7 s2a (4, 5 unused) + complement | arg3 | encoder |
 | h3-5, h15 | c2: same | arg4 | encoder |
-| h20-21 | cop add sub min max | arg5 | encoder |
-| h9-10 | aop | arg6 | encoder |
+| h20-21 | cop: 0 add, 1 sub, 2 min, 3 max | arg5 | encoder |
+| h9-10 | aop: same values | arg6 | encoder |
 
 h2 and l14-20 are unused. Corpus: lowp add/sub/min/max (`sopwm d, a, b [c1=one c2=one cop=sub aop=sub]`) and lowp mix (0xfa).
 
 ### sop3 family (hw 11)
 
-All forms take dst, src0 (r/pa), src1 and src2. Selects for c1/c2 (h6-8 + h24, h3-5 + h15) are 0 zero, 1 asat, 2 s1, 3 s1a, 4 s0, 5 s0a, 6 s2, 7 s2a (**encoder**). h21 picks the colour op and h10 the coissued alpha op.
+All forms take dst, src0 (r/pa), src1 and src2. cop and aop are 0 add, 1 sub in every form of the family. Selects for c1/c2 (h6-8 + h24, h3-5 + h15) are 0 zero, 1 asat, 2 s1, 3 s1a, 4 s0, 5 s0a, 6 s2, 7 s2a (**encoder**). h21 picks the colour op and h10 the coissued alpha op.
 
 **sop3** (h21=0, h10=0; USEASM 0x59 + 0xde asop / 0xdf arsop):
 
 | bits | field | tag |
 |---|---|---|
-| h20 | cop add/sub (arg6 0x12/0x13) | encoder |
+| h20 | cop: 0 add, 1 sub (arg6 0x12/0x13) | encoder |
 | h12-13, h14 | a: alpha select zero s0a s1a s2a + complement (0xde/0xdf arg0) | encoder |
-| h9 | aop add/sub (0xde/0xdf arg1) | encoder |
+| h9 | aop: 0 add, 1 sub (0xde/0xdf arg1) | encoder |
 | h11 | arev: 0xdf instead of 0xde | encoder; usc uses 0xdf when bNegateAResult. In asop the other alpha select is c2's alpha; arsop swaps the roles (b - a) |
 
 **sop3l** (h21=0, h10=1; 0x59 + 0xe0 alrp):
@@ -843,14 +1018,14 @@ All forms take dst, src0 (r/pa), src1 and src2. Selects for c1/c2 (h6-8 + h24, h
 | h13, h20 | l1: zero / s1 + complement | encoder |
 | h12, h14 | l2: zero / s2 + complement | encoder |
 | h11 | cs: s0 / s0a | encoder; usc assert `psLrp1->uCS == SRC0ALPHA` |
-| c1/c2 fields | the coissued asop's two selects | encoder |
+| c1/c2 fields | the coissued asop's two selects, with the family's c1/c2 select values above | encoder |
 | h9 | aop | encoder |
 
 Colour = lerp(l1, l2, cs) is a **guess** from the name.
 
 **sop3x** (h21=1, h10=1; USEASM 0xe2 + 0xe0): c1 and c2 as above, plus the alrp alpha (a1, a2 as in sop3l).
 
-h11 and h20 (field p) encode the pair arg6/arg7: 0 `s1.s2`, 1 `s1.1-s2`, 2 `one.s2`, 3 `1-s1.s2`. The pair 1-s1, 1-s2 is rejected (**encoder**). The name and the meaning are **guess**; usc's asm.c never emits 0xe2 explicitly.
+h11 and h20 (field p, h11 the low bit) encode the pair arg6/arg7: 0 `s1.s2`, 1 `s1.1-s2`, 2 `one.s2`, 3 `1-s1.s2`. The pair 1-s1, 1-s2 is rejected (**encoder**). The name and the meaning are **guess**; usc's asm.c never emits 0xe2 explicitly.
 
 Corpus: lowp `mul_l`/`div_l`/`pow_l`/`mad_l` are `sop3l d, x, y, z [c1=s0 c2=zero a2=s2a]`. `mod_l` uses `sop3 [cop=sub c1=one c2=s0 a=one aop=sub]`.
 
@@ -865,7 +1040,7 @@ Corpus: lowp `mul_l`/`div_l`/`pow_l`/`mad_l` are `sop3l d, x, y, z [c1=s0 c2=zer
 | h5 | src0 present: coissue 0xda/0xdb (forms dot3s/dot4s) | | encoder |
 | h4 | f4: 0xdb or 0xdd rather than 0xda/0xdc | | encoder |
 | h20-21 (+h2 when h5=0) | a1: zero s1a s2a, 3 = x3 (+ complement) | coissue arg1; 0x5c 0x5d 0x60 0x61 force 3 | encoder |
-| h9-10, h3 | a2: zero s1a s2a, 3 = x3 + complement | coissue arg2 (0xda/0xdb) or arg3 (0xdc/0xdd); without a coissue 3 | encoder |
+| h9-10, h3 | a2: zero s1a s2a, 3 = x3 + complement | coissue arg2 (0xda/0xdb) or arg3 (0xdc/0xdd); without a coissue libusc writes 3, but the field holds any value | encoder |
 | l16-17 (h5=0) | as: alpha scale | arg2 0xe-0x11 (no coissue) or 0xdc/0xdd arg0 | encoder |
 | l15 (h5=0) | s1ac: complement of 0xdc/0xdd's fixed src1alpha (arg2) | | encoder |
 | l14-20 (h5=1) | src0 (r/pa) | 0xda/0xdb arg0 | encoder |
@@ -925,9 +1100,11 @@ src1 immediates are signed when sgn is set. src2 immediates are signed for s16 a
 The common fields are as above. firv and op16s1 have only h12-13 for the repeat (1..4); firh accepts 1..6. Only ima32 is named by libusc (`psIn->u.psIma32`); the other names are Eurasia-family **guesses**.
 
 **adif / adifsum** (16, h20-21=0, FUN_00110800, USEASM 0x67/0x68):
-- h6 = 1 makes it adifsum, with src0 (r/pa).
+- h6 = 1 makes it adifsum, with src0 (r/pa). adif has no src0 (l14-20 and h2 are 0).
 - h15 = s0f13 (src0 arg flag b13, unknown).
 - Probably |src1 - src2| (+ src0) (**guess**).
+
+Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unless an entry says otherwise. `fmt` (h8-9) in bilin, ssum16 and firv: 0 u8 (no suffix), 1 s8, 2 o8 (ssum16i is the separate form with h8-9 = 3). Fields given as USEASM values (op16s1's `x39`) print as the stored field value.
 
 **op16s1** (16, h20-21=1, 0x6e, FUN_00118bf0, patched):
 - f2_15 h3-6 (flags2 b15-18).
@@ -952,24 +1129,25 @@ The common fields are as above. firv and op16s1 have only h12-13 for the repeat 
 - x1b h24.
 - x1c h7.
 - x1d h10.
-- nf16 h15: set unless dest flag b16.
+- nf16 h15: set unless dest flag b16 (the text prints `nf16` when the bit is set).
 
-**ssum16i** (h8-9 = 3, 0x6a, FUN_001192a0, patched): src0 is an internal register (raw number); there is no src1.
+**ssum16i** (h8-9 = 3, 0x6a, FUN_001192a0, patched): src0 is an internal register, its number written raw in l14-20 with no bank bits; there is no src1 (l7-13, l30-31 are 0).
 
 **firv** (17, h2=0, 0x6c, FUN_00111850):
-- src0 SameBank.
+- src0 is read in src1's bank: its number in l14-20 with no bank bits (as ssum16).
 - fmt h8-9.
 - a5 h6-7 (immediate 0-2).
 - coef h3-5 (register type 0x11, 0-7).
-- shift: 5-bit two's complement in h10-11, h14-15, h24 (printed raw 0-31).
+- shift: 5-bit two's complement, bits 0-1 in h10-11, 2-3 in h14-15, 4 in h24 (printed raw 0-31).
 - a8 h20-21 (0-3).
+- The destination is the generic dst slot (g<n> as everywhere: number + 0x40 on ext bank 1).
 
-**firh** (h2=1, 0x6d inline, patched): the dest is an internal register (raw number). Shift bits 2-3 move to h0-1. h19 = flags2 b27.
+**firh** (h2=1, 0x6d inline, patched): repeat count - 1 in h12-14. The dest is an internal register, its number written raw in l21-27 with no bank bits. Shift bits 2-3 move to h0-1 (bits 0-1 stay in h10-11, bit 4 in h24). h19 = flags2 b27.
 
 **ima32** (1a, h20=0, 0x65, FUN_00118650): `dst = src0*src1 + src2`, 32-bit.
 - sgn h9 (flags2 0x1000 vs 0x800; it also makes immediates signed).
-- hi h4-6: the high 32 bits go to i0-i2 (arg1; usc psHighWordDest).
-- cin h10-11: carry-in from i0-i2 (arg5 0x2a + arg6).
+- hi h4-6: the high 32 bits go to i0-i2 (arg1; usc psHighWordDest): 0 nowhere, 4 i0, 5 i1, 6 i2.
+- cin h10-11: carry-in from i0-i2 (arg5 0x2a + arg6): 0 none, 1 i0, 2 i1, 3 i2.
 - negp h8 = src0 neg xor src1 neg.
 - src2 neg h7.
 - src0 r/pa/o/sa via ext h15.
@@ -1156,9 +1334,9 @@ terminator the encoder checks).
 | h22 | nosched | f1 b3 (not h11 as in the ALU classes) | encoder |
 | h21 | rcnt | set with a repeat count; SGX545 rejects any repeat | encoder |
 | h20 | syncs | f1 b2 (sync-start) | encoder |
-| h12-15 | mask (rpt when h21) | write mask; SGX545 accepts only mask 1, so h12 is always set | encoder |
-| h14 | ret = rdata | f3 b3. asm.c sets it for the sample's mode field = 1 | encoder; name guess (raw sample data) |
-| h15 | ret = rinfo | f3 b2 (mode 2). Mode 3 (f3 0x8000, "both") is rejected on SGX545; h14+h15 together is rejected | encoder; name guess (sample info) |
+| h12-15 | mask, or rpt - 1 when h21 is set | write mask (text `mask=`, default 1); SGX545's encoder accepts only mask 1 and no repeat, so libusc always has h12 set, but the field holds any value. `ret` below is ORed into bits 14-15 of the same field | encoder |
+| h14 | ret = 1: `.rdata` | f3 b3. asm.c sets it for the sample's mode field = 1 | encoder; name guess (raw sample data) |
+| h15 | ret = 2: `.rinfo` | f3 b2 (mode 2). Mode 3 (f3 0x8000, "both") is rejected on SGX545; h14+h15 together is rejected | encoder; name guess (sample info) |
 | h10-11 | dim | 0 1D (USEASM 0x6f+3k), 1 2D (+1), 2 3D (+2; cube maps) | encoder, corpus (2D for texture2D, 3D for samplerCube) |
 | h8-9 | lod | 0 none, 1 bias, 2 replace (texture2DLod), 3 gradients | encoder, corpus (bias, lod, grad seen in ef_c3) |
 | h7 | dst bank | 0 r, 1 pa (no other destination) | encoder |
@@ -1195,7 +1373,7 @@ placeholder), DRC.
 | h24-26 | pred | PRED3 | encoder, corpus (the `(p0) ld.a.d` of every secondary program) |
 | h23 | skipinv | f1 b0 | encoder, corpus |
 | h22 | 0 | nosched would set it but libusc rejects nosched on loads; h22 = 1 is eld | encoder |
-| h21 | moe | set unless f1 b31: a repeated load steps its operands by the MOE increments (same bit as the ALU classes) | encoder; meaning by analogy (guess) |
+| h21 | moe | set unless f1 b31 (so libusc's loads nearly always have it): a repeated load steps its operands by the MOE increments (same bit as the ALU classes). The text prints `moe` when it is set | encoder; meaning by analogy (guess) |
 | h20 | syncs | f1 b2 | encoder |
 | h19 | f2_3 | f2 b3; f3 b9 sets h19 and h1 | encoder; data-cache control (guess) |
 | h18, h2 | base bank | src0 slot: r, pa (h2), o (h18), sa (h2+h18) | encoder, corpus (base sa1 = local memory base) |
@@ -1243,7 +1421,8 @@ nosched is rejected.
 Same layout as ld, with these differences: no destination (l21-27 and h7
 are 0), no DRC (h0 = f3_13, f3 b13, target feature word1 & 0x400; unknown),
 h22 = nosched (allowed on stores), the data is the src2 slot (any source
-kind, including immediates). Corpus: ix_tmpw (`st.l.d sa1, pa1, sa9`,
+kind, including immediates). A store has no range operand: with the range
+flag (h6) set, src2 still holds the data. Corpus: ix_tmpw (`st.l.d sa1, pa1, sa9`,
 dynamic array writes; `st.l.d sa1, sa13, pa0 [rpt=16]`) and ix_comp.
 
 ---------------------------------------------------------------------------
@@ -1256,7 +1435,7 @@ The encoders' constant high words split the class on h20-22:
 |---|---|---|
 | 0 0 0 | flow control | h6-8 |
 | 0 0 1 | MOE control | h24-26 |
-| x 1 0 | other (h22 is data in limm and emit) | h24-26 |
+| x 1 0 | other (h22 is data in emit and nosched in limm) | h24-26 |
 | x 1 1 | visibility test (h22 is data in atst8) | h24-26 |
 | 1 0 0 | phase / 0xfe-0x100 (h23 = 0) | h24-26 |
 
@@ -1273,9 +1452,11 @@ predicate.
 | `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | encoder, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
 | `lapc` | h6-8 = 2 | return to the saved link address | encoder, corpus (fn_call); **hardware** (hwt_p7 `call_lapc`): `br #3 [link]` ... `lapc` returns to the instruction after the br |
 | `nop` | h6-8 = 5 | h23 syncs (f1 b2), h18 end (f1 b17), l0 = f2 b26, l1 = f3 b5 | encoder, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
+| `setl src` | h6-8 = 3 | set the link address from a register: src in the src1 slot (l7-13, bank l30-31, extension h17) | `static` (the DDK microkernel's code: a call through a table is `setl` + `lapc`, a nested call `savl rN` ... `br [link]` ... `setl rN`); `capture` (tools/ukernel's emulator runs a captured frame through the microkernel with this reading and matches the DDK's register and memory writes). libusc has no USEASM op for it, so there is no oracle |
+| `savl dst` | h6-8 = 4 | save the link address to a register: dst in the destination slot's number and bank (l21-27, h0-1), no extension bit | as `setl` |
 | `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no arguments; needs word0 & 0x200000 | encoder; meaning unknown |
 
-Fields of ba/br/lapc: h24-26 pred (PRED3; pN rejected), h23 syncend (f1 b18;
+Fields of ba/br/lapc/setl/savl: h24-26 pred (PRED3; pN rejected), h23 syncend (f1 b18;
 asm.c's branch sync-end), h12 xsyncend (f3 b4: the encoder sets h12 and
 h23; not with f1 b18), h11 nosched, and for ba/br h9 link (f1 b19: save the
 return address; asm.c ICALL = `br` + this flag) and h10 f1_22 (meaning
@@ -1294,7 +1475,10 @@ label 0xffff.
 #### MOE control (h20-22 = 1)
 
 h18 = nosched for the whole group; no predicate. h19 = register form for ops
-0-3 (the values come from src1/src2 instead of immediates; word0 & 4).
+0-3 (the values come from src1/src2 instead of immediates; word0 & 4),
+printed `smoa.r`, `smr.r`, `smlsi.r`, `smbo.r`: two operands, the generic
+src1 and src2 slots with their banks and extension bits, and nothing else in
+the word.
 
 | op | form | layout | evidence |
 |---|---|---|---|
@@ -1318,10 +1502,10 @@ example after `smlsi #1, #1, #0.zyxw, #1` the next block has 0x8001 0x8001
 | 0 | `idf [drc=d path=p]` (0x99) | h0 DRC, h14 second argument (#0/#1) | encoder; idf = issue data fence (guess) |
 | 1 | `wdf [drc=d]` (0x9a) | h0 DRC; waits until the loads/samples that signal that DRC have written their results | encoder, corpus (after every uniform load and before the first use of a loaded or sampled register) |
 | 2 | `op0xd7 #n` (0xd7) | n l0-3 (below feature +0x10 = 16) | encoder; unknown |
-| 3 | `emit.<t0..t3> src0, src1, src2 [n f10 f12 f13 f3_20 imm end]` | tgt h14-15 (0x9c/0x9d 0, 0x101/0x102 1, 0xa2 2, 0x103/0x104 3); f12 h12 (0x101, 0x103; 0xa0 on older cores; f2 b5 on 0xa2); f13 h13 (0x101 + f3 b8: libusc's geometry "emit and cut" sets f3 0x100; 0xa1 on older cores; f2 b4 on 0xa2); f10 h10 (f3 b6 on 0x101/0x103, f3 b7 on 0x102/0x104); l21 = f3 b20; n = first argument (h0-1 + h9, 0..5); h18 end; h11 nosched. Sources: 0x101/0x102 src1 + src2; 0x103/0x104 src2 only; 0x9c-0x9e/0xa2 src0 (extension h19) + src1 (+ src2). Unused sources hold #0. 0x9d/0x9e/0xa1/0xa2 add a 14-bit immediate (l22-27, h3-8, h22-23); 0x9c sets h8 (= immediate 0x800) | encoder; 0x101 is libusc's geometry-shader vertex emit; target names unknown |
+| 3 | `emit.<t0..t3> src0, src1, src2 [n f10 f12 f13 f3_20 imm end]` | tgt h14-15 (0x9c/0x9d 0, 0x101/0x102 1, 0xa2 2, 0x103/0x104 3); f12 h12 (0x101, 0x103; 0xa0 on older cores; f2 b5 on 0xa2); f13 h13 (0x101 + f3 b8: libusc's geometry "emit and cut" sets f3 0x100; 0xa1 on older cores; f2 b4 on 0xa2); f10 h10 (f3 b6 on 0x101/0x103, f3 b7 on 0x102/0x104); l21 = f3 b20; n = first argument (h0-1 + h9, 0..5); h18 end; h11 nosched. Sources: 0x101/0x102 src1 + src2; 0x103/0x104 src2 only; 0x9c-0x9e/0xa2 src0 (extension h19) + src1 (+ src2). Unused sources hold #0. 0x9d/0x9e/0xa1/0xa2 add a 14-bit immediate (bits 0-5 in l22-27, 6-11 in h3-8, 12-13 in h22-23); 0x9c sets h8 (= immediate 0x800). In the word all three source slots exist whatever the USEASM op (src0: l14-20, bank h2, extension h19; src1, src2 generic), the text always shows all three, and `imm=` and `n=` are the raw fields (n: bits 0-1 in h0-1, bit 2 in h9) | encoder; 0x101 is libusc's geometry-shader vertex emit; target names unknown |
 | 4 | `limm dst, #imm32` (0x9b) | dst = destination slot (l21-27, h0-1, h19); imm l0-20 (bits 0-20), h4-8 (21-25), h12-17 (26-31); a label argument (type 0xb) gives its absolute address (+ offset); argument flag 11 inverts the value; h9-11 pred (PRED3); h23 skipinv; h22 nosched; h18 end | encoder, corpus (`limm r0, #4096` before indexed stores); **hardware** (every hwt test loads its inputs with it: 0x12345678, 0xdeadbeef exact) |
 | 5 | `lock #n` / `release #n` (0xcd / 0xce) | l0 = 0 / 1; n l4-6 (below feature +0xc = 8) | encoder; names guess (mutexes) |
-| 6 | `ldr dst, addr [drc=d]` (0xd0), `str addr, data` (0xd1) | h19 = str; dst l21-27 + h7 (r/pa); addr = src2 slot whose immediate form has 14 bits (low 7 l0-6, high 7 l14-20); data = src1 slot; h0 DRC (ldr); h23 skipinv; h11 nosched | encoder; names guess |
+| 6 | `ldr dst, addr [drc=d]` (0xd0), `str addr, data` (0xd1) | h19 = str; dst l21-27 + h7 (r/pa); addr = src2 slot whose immediate form has 14 bits (low 7 l0-6, high 7 l14-20, and the slot's immediate bank: l29 + h16); data = src1 slot; h0 DRC (ldr); h23 skipinv; h11 nosched | encoder; names guess |
 | 7 | `op0xd6 #n` (0xd6) | n l0-2 (0..5), l3 = f3 b6 (libusc sets it under the same compile flag as emit's f3 b6) | encoder; unknown |
 
 h11 = nosched for all of them except limm (h22).
@@ -1335,7 +1519,7 @@ depthf).
 
 | op | form | layout | evidence |
 |---|---|---|---|
-| 0 | `pcoeff src0, src1, src2` (0xd2), `ptoff` (0xd3: h15, no sources) | | encoder; names guess (plane coefficients / punch-through off) |
+| 0 | `pcoeff src0, src1, src2` (0xd2), `ptoff` (0xd3: h15, no sources: every source field is 0) | | encoder; names guess (plane coefficients / punch-through off) |
 | 1 | `atst8 dst, pdst, src0, src1, src2` (0xd4) | dst l21-27 + h0-1 without extension (r o pa); pdst = predicate p0-p3 in h7-8, h6 = write it (cleared by the argument's flag 16, "disable write-back": printed `p1.nw`); h22 = f2 b25; h3/h4/h5 sel. The GLES driver's own atst8 (`f9340406`) also sets h10, which libusc never does: h9-10 is a PRED2 predicate as in depthf (2 = p1); a false predicate kills the pixel (driver, hardware: "Phases, visibility feedback and discard") | encoder; name guess |
 | 3 | `depthf src0, src1, src2` (0xd5) | h9-10 pred (PRED2); h4/h5 sel (0x36 rejected) | encoder; name guess |
 
@@ -1652,7 +1836,7 @@ USEASM ops 0x6f..0x7a = smp{1d,2d,3d} × {normal, bias, replace, grad}.
 | coordinate format | h3 F16, h4 C10 | arg1 flags b22 / b24 |
 | h5 | flags3 b0/b1 | **unknown** |
 | h14-15 path | flags3 b2/b3/b15 on a feature-gated path | **unknown** |
-| drc | h0-1 (0 or 1) | the arg after the last source, type 0xa |
+| drc | h0 (0 or 1; h1 is never set) | the arg after the last source, type 0xa |
 | (check only) | next arg must be type 0x10, number 0x15 | |
 
 ### The texture-sample sequence a compiler must emit
