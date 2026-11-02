@@ -41,6 +41,7 @@ DDK_ROOT = os.environ.get("DDK_ROOT", "/opt/sgx-i386")
 CONFIG = "rgba8888d24s8ms0"
 TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
 SSH_TIMEOUT = 25
+RUN_DIR = None
 
 
 def log(*a):
@@ -117,17 +118,18 @@ def runner_script(who):
 
 def canary(box, who):
     """Does a one-draw test still finish? A GPU that recovered does; a wedged one doesn't."""
+    # (busybox has no timeout: a hung canary is the SSH call timing out)
     if who == "sgx545":
         pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib EGL_PLATFORM=surfaceless"
         exe = f"{BOX_DIR}/deqp-gles2"
     else:
         pre = ""
         exe = f"{BOX_DIR}/deqp-gles2-ddk"
-    rc, out = box.ssh(f"cd {BOX_DIR} && timeout -s KILL 30 env {pre} {exe} "
+    rc, out = box.ssh(f"cd {BOX_DIR} && env {pre} {exe} "
                       f"--deqp-case=dEQP-GLES2.functional.color_clear.single_rgb --deqp-surface-type=pbuffer "
                       f"--deqp-surface-width=256 --deqp-surface-height=256 --deqp-gl-config-name={CONFIG} "
-                      f"--deqp-visibility=hidden --deqp-log-filename=/dev/null 2>&1 | tail -3", timeout=45)
-    return rc == 0 and b"Passed:" in out
+                      f"--deqp-visibility=hidden --deqp-log-filename=/dev/null 2>&1 | grep 'Passed:'", timeout=45)
+    return rc == 0 and b"Passed:        1/1" in out
 
 
 def recover(box):
@@ -161,6 +163,15 @@ def run_chunk(box, who, tests):
             parts = line.split(",")
             if len(parts) >= 2 and parts[0].startswith("dEQP"):
                 res[parts[0]] = (parts[1], parts[2] if len(parts) > 2 else "")
+    if not wedged:
+        # the failing tests' logs, for triage
+        rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - *.qpa 2>/dev/null", timeout=120)
+        if rc3 is not None and tar:
+            try:
+                with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+                    t.extractall(os.path.join(RUN_DIR, "logs"), filter="data")
+            except tarfile.TarError:
+                pass
     r1 = recoveries(box) if not wedged else None
     if r0 is not None and r1 is not None and r1 != r0:
         log(f"chunk of {len(tests)}: {r1 - r0} SGX recoveries")
@@ -180,7 +191,8 @@ def main():
     a = ap.parse_args()
     box = Box(a.box)
 
-    run_dir = os.path.join(WORK, "run-" + a.who)
+    global RUN_DIR
+    run_dir = RUN_DIR = os.path.join(WORK, "run-" + a.who)
     os.makedirs(run_dir, exist_ok=True)
     res_path = os.path.join(run_dir, "results.csv")
     wedge_path = os.path.join(run_dir, "wedges.txt")
