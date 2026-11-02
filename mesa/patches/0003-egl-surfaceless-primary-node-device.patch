@@ -1,0 +1,64 @@
+--- a/src/egl/drivers/dri2/platform_surfaceless.c
++++ b/src/egl/drivers/dri2/platform_surfaceless.c
+@@ -339,7 +339,52 @@
+    return true;
+ }
+ 
++/*
++ * sgx545-ce (openHC): the first DRM device whose primary node a hardware
++ * driver loads on.  EGL's device list only has devices with a render node,
++ * and the PowerVR services driver (pvrsrvkm) has none; its pbuffers are what
++ * dEQP's surfaceless target renders to.  A device with a render node is
++ * always tried first (surfaceless_probe_device).
++ */
+ static bool
++surfaceless_probe_primary(_EGLDisplay *disp)
++{
++   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
++   drmDevicePtr devices[16];
++   int n = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
++   bool found = false;
++
++   for (int i = 0; i < n && !found; i++) {
++      if (!(devices[i]->available_nodes & (1 << DRM_NODE_PRIMARY)) ||
++          (devices[i]->available_nodes & (1 << DRM_NODE_RENDER)))
++         continue;
++      dri2_dpy->fd_render_gpu = loader_open_device(devices[i]->nodes[DRM_NODE_PRIMARY]);
++      if (dri2_dpy->fd_render_gpu < 0)
++         continue;
++      dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
++      dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd_render_gpu);
++      if (dri2_dpy->driver_name) {
++         disp->Device = _eglFindDevice(dri2_dpy->fd_render_gpu, false);
++         if (!disp->Device)
++            disp->Device = _eglFindDevice(-1, true);
++         dri2_dpy->loader_extensions = image_loader_extensions;
++         if (dri2_create_screen(disp)) {
++            found = true;
++            break;
++         }
++         _eglLog(_EGL_WARNING, "surfaceless: failed to create a %s screen", dri2_dpy->driver_name);
++      }
++      free(dri2_dpy->driver_name);
++      dri2_dpy->driver_name = NULL;
++      close(dri2_dpy->fd_render_gpu);
++      dri2_dpy->fd_render_gpu = dri2_dpy->fd_display_gpu = -1;
++   }
++   if (n > 0)
++      drmFreeDevices(devices, n);
++   return found;
++}
++
++static bool
+ surfaceless_probe_device_sw(_EGLDisplay *disp)
+ {
+    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+@@ -389,6 +434,8 @@
+     */
+    driver_loaded = surfaceless_probe_device(disp, disp->Options.ForceSoftware,
+                                             disp->Options.Zink);
++   if (!driver_loaded && !disp->Options.ForceSoftware && !_eglHasAttrib(disp, EGL_DEVICE_EXT))
++      driver_loaded = surfaceless_probe_primary(disp);
+    if (!driver_loaded && disp->Options.ForceSoftware) {
+       _eglLog(_EGL_DEBUG, "Falling back to surfaceless swrast without DRM.");
+       driver_loaded = surfaceless_probe_device_sw(disp);

@@ -32,13 +32,15 @@ fi
 echo "$MESA_SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || {
 	echo "build.sh: $TARBALL does not match mesa/VERSION's sha256" >&2; exit 1; }
 
-if [ ! -f "$TREE/.sgx545-patched" ]; then
+# the tree is unpacked and patched again whenever mesa/patches changes
+PATCHSUM=$(cat "$HERE"/patches/*.patch | shasum -a 256 | cut -d' ' -f1)
+if [ "$(cat "$TREE/.sgx545-patched" 2>/dev/null)" != "$PATCHSUM" ]; then
 	rm -rf "$TREE"
 	tar -xJf "$TARBALL" -C "$B"
 	for p in "$HERE"/patches/*.patch; do
 		patch -d "$TREE" -p1 --batch --forward < "$p"
 	done
-	touch "$TREE/.sgx545-patched"
+	echo "$PATCHSUM" > "$TREE/.sgx545-patched"
 fi
 # the overlay, every build
 (cd "$HERE/src" && tar cf - .) | (cd "$TREE/src" && tar xf -)
