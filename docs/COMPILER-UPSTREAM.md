@@ -24,9 +24,9 @@ what goes to Mesa.
 - **No proprietary binaries or decompiler output** are in `mesa/`. The DDK
   corpus USPs (`tools/isa/corpus`, compiler output from the DDK) and the hwt
   logs stay in `tools/` and must not go to Mesa.
-- **Missing:** none of the files has a license header. Mesa needs an
-  `SPDX-License-Identifier: MIT` line and a copyright line on each one.
-  **Decision for Joseph:** whose name goes in the copyright line.
+- **Headers:** every file carries `Copyright © 2026 Joseph Telaak` and
+  `SPDX-License-Identifier: MIT` (Joseph's choice, 2026-11-01).
+  `gen_forms.py` writes them into `usse_forms.h`.
 
 ## 2. Provenance (§3.6)
 
@@ -196,7 +196,7 @@ Recommendation: do it, in this order:
 ## 5. Other Mesa expectations (§3.7)
 
 - **Style:** C11, Mesa formatting, no global state (`hw_const`'s static table
-  should become a const table). Fine apart from the license headers.
+  should become a const table).
 - **Debug options:** `opts.verbose`, `SGX_PRINT_PRE_I2F` and sgxc's `-v`
   belong in the driver's debug-option table (`SGX545_DEBUG=nir,...`), not in
   environment variables read by the compiler.

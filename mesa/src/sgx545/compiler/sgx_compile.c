@@ -1,4 +1,9 @@
 /*
+ * Copyright © 2026 Joseph Telaak
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
  * SGX545 compiler backend: instruction selection from NIR (after
  * sgx_lower()), register allocation, encoding.
  *

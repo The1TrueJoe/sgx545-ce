@@ -1,4 +1,9 @@
 /*
+ * Copyright © 2026 Joseph Telaak
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
  * The DDK 1.7 USP container (docs/ISA.md "The USP container"; usp.py
  * parses it): header, list A (iterated inputs), list C (constants in SA),
  * the (empty) secondary update program, masks and the block stream. Header
