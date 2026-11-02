@@ -827,8 +827,16 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    /* each stage compiled or one of the fixed programs */
    compiled = ctx->vs->kind == SGX545_SHADER_COMPILED;
    if (compiled) {
-      d.vs = &ctx->vs->prog;
-      fill_consts(ctx, MESA_SHADER_VERTEX, ctx->vs, vsc, 0);
+      struct sgx545_shader *vs = ctx->vs;
+
+      /* gl_PointCoord: the vertex shader's varyings move up to leave set 0 free */
+      if (ctx->fs->kind == SGX545_SHADER_COMPILED && ctx->fs->reads_pointcoord) {
+         if (!ctx->vs->prog.point_size || !(vs = sgx545_sprite_vs(ctx, ctx->vs)))
+            return;
+         st.sprite = info->mode == MESA_PRIM_POINTS;
+      }
+      d.vs = &vs->prog;
+      fill_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0);
       d.vs_consts = vsc;
       n_fetch = ctx->vs->n_attribs;
    } else if (ctx->vs->kind != SGX545_SHADER_VS_POSITION) {

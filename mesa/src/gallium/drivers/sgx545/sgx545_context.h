@@ -60,6 +60,8 @@ struct sgx545_shader {
       uint32_t code;
    } variants[8];
    unsigned n_variants;
+   bool reads_pointcoord;       /* fragment: its varyings start at set 1, gl_PointCoord is set 0 */
+   struct sgx545_shader *sprite_vs;   /* vertex: the same with set 0 reserved, made when first drawn with such a shader */
 };
 
 struct sgx545_vertex_elements {

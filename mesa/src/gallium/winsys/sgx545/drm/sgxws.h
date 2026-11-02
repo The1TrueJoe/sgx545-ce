@@ -93,6 +93,7 @@ struct sgxws_prog {
    uint32_t sec_dwords;             /* constant dwords DMA'd for the secondary program */
    uint32_t douti[10];              /* DOUTI words, one per iterated input or sample */
    uint8_t douti_tex[10];           /* 0, or the sampler unit + 1 whose DOUTT follows it */
+   uint8_t douti_w1[10];   /* each DOUTI's second word: 0x10 for a sprite's gl_PointCoord */
    uint32_t n_douti;
    uint32_t pds_middle;             /* TA state PDS middle word (0: the default) */
    uint32_t pa_dwords;              /* fragment: primary attribute registers the program uses */
@@ -166,6 +167,7 @@ struct sgxws_state {
     * (STATE.md "Scissor and partial viewports"); never empty */
    struct sgxws_rect clip;
    float line_width;
+   bool sprite;                     /* points that generate gl_PointCoord: ISPA object type 4 */
    /* stencil (STATE.md "ISPC"): ISPC words and references, face 0 the block's
     * first group (faces wound CCW in the target's memory, DDK capture) and 1
     * its back group, which two_sided sends */

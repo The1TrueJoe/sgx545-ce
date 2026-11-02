@@ -257,13 +257,24 @@ remap_legacy_varyings(nir_shader *nir)
       nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 }
 
+/* sprite: this vertex shader goes with a fragment shader that reads
+ * gl_PointCoord.  The ISP writes the coordinate into set 0 (STATE.md "Lines
+ * and points"), so everything else moves up one set. */
 static void
-assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
+assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
 {
    nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
    static bool warned;
 
    memset(vary, 0, sizeof(*vary));
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_foreach_variable_with_modes(var, nir, mode)
+         sprite |= var->data.location == VARYING_SLOT_PNTC;
+   }
+   if (sprite) {
+      vary->point_size = true;
+      vary->set_comps[0] = 2;
+   }
    nir_foreach_variable_with_modes(var, nir, mode) {
       const struct glsl_type *t = var->type;
       unsigned rows, comps, set, frac = var->data.location_frac;
@@ -280,7 +291,7 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
       t = glsl_without_array(t);
       comps = glsl_type_is_matrix(t) ? glsl_get_vector_elements(glsl_get_column_type(t))
                                      : glsl_get_vector_elements(t);
-      set = var->data.location - VARYING_SLOT_VAR0;
+      set = var->data.location - VARYING_SLOT_VAR0 + (sprite ? 1 : 0);
       /* The compiler finds a varying's set by name.  st's packed slots are
        * named after what they hold ("packed:a,b"), and a varying split over
        * two slots names both: Minecraft's terrain (two vec3 texture
@@ -443,7 +454,7 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
 }
 
 static bool
-compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader *orig)
+compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader *orig, bool sprite)
 {
    struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -460,7 +471,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    opts.driver_consts = !(sgx545_debug & SGX545_DEBUG_NO_DRV_CONSTS);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    remap_legacy_varyings(nir);
-   assign_varyings(nir, &vary);
+   assign_varyings(nir, &vary, sprite);
+   so->reads_pointcoord = nir->info.stage == MESA_SHADER_FRAGMENT && vary.point_size;
    struct sgx_layout layout = { layout_place, layout_first_free, nir };
 
    opts.layout = &layout;
@@ -520,6 +532,9 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
 
       }
       so->prog.point_size = vary.point_size;
+      /* the DDK's TSP word 1 for a sprite's coordinate set (`sprite`) */
+      if (sprite)
+         so->prog.tsp_prec |= 1;
       so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0);
       so->prog.const_dwords = so->const_dwords;
    } else {
@@ -609,6 +624,8 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
           * centres in the target's memory order, z, 1/w (DDK capture, EA-1) */
          if (it == SGX545_ITER_FRAGCOORD)
             it = 0;
+         if (out.iters[i].pointcoord)
+            so->prog.douti_w1[so->prog.n_douti] = 0x10;
          w = it << 11 | (out.iters[i].comps - 1) << 22 | 1u << 24 | 0x6000000u |
              (out.iters[i].f16 ? 1u << 28 : 0);
          last_plain = so->prog.n_douti;
@@ -679,7 +696,7 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir);
+      bool ok = compile_shader(ctx, so, nir, false);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -737,6 +754,19 @@ sgx545_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 
 /* the compiled fragment shader's program with its colour blended (b), or
  * without (NULL); 0 when there is none */
+struct sgx545_shader *
+sgx545_sprite_vs(struct sgx545_context *ctx, struct sgx545_shader *so)
+{
+   if (!so->sprite_vs && so->nir && (so->sprite_vs = CALLOC_STRUCT(sgx545_shader))) {
+      so->sprite_vs->nir = NULL;
+      if (!compile_shader(ctx, so->sprite_vs, so->nir, true) || !so->sprite_vs->prog.code) {
+         FREE(so->sprite_vs);
+         so->sprite_vs = NULL;
+      }
+   }
+   return so->sprite_vs;
+}
+
 uint32_t
 sgx545_fs_program(struct sgx545_context *ctx, struct sgx545_shader *so, const struct sgxws_blend *b)
 {
