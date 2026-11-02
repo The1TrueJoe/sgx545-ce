@@ -174,9 +174,11 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
       /* The ISP keeps depth per tile and no depth buffer is loaded or stored
-       * (no ZLS yet), so depth is good within one render. */
-      if (format != PIPE_FORMAT_Z16_UNORM && format != PIPE_FORMAT_Z24X8_UNORM &&
-          format != PIPE_FORMAT_Z24_UNORM_S8_UINT)
+       * (no ZLS yet), so depth is good within one render.  No stencil: the
+       * ISP's stencil state isn't programmed, so no format with stencil bits
+       * is offered (configs and renderbuffers get 0 stencil bits, which
+       * GLES2 allows) until it is. */
+      if (format != PIPE_FORMAT_Z16_UNORM && format != PIPE_FORMAT_Z24X8_UNORM)
          return false;
    }
    if (usage & PIPE_BIND_VERTEX_BUFFER) {
