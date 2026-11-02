@@ -10,6 +10,7 @@
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
+#include "pvrsgx_drv.h"
 #include "pvrsgx_gem.h"
 
 /* The GPU has 32-bit physical addresses and a 4 GiB address space. */
@@ -45,7 +46,7 @@ int pvrsgx_ioctl_create_bo(struct drm_device *drm, void *data, struct drm_file *
 	struct drm_gem_shmem_object *shmem;
 	int err;
 
-	if (args->_padding_c || (args->flags & ~DRM_POWERVR_SGX_BO_FLAGS_MASK) ||
+	if (args->_padding_c || (args->flags & ~PVRSGX_BO_FLAGS_MASK) ||
 	    !args->size || !PAGE_ALIGNED(args->size) || args->size > PVRSGX_BO_MAX_SIZE)
 		return -EINVAL;
 

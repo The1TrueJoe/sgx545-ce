@@ -36,6 +36,9 @@
 
 #define PAGE 4096u
 
+#define DRM_POWERVR_SGX_OBJ_ARRAY(cnt, ptr) \
+	{ .stride = sizeof((ptr)[0]), .count = (cnt), .array = (__u64)(uintptr_t)(ptr) }
+
 static const char *cur;
 
 #define fail(...) do { \
