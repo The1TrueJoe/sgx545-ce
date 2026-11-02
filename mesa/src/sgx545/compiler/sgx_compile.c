@@ -470,8 +470,11 @@ alu_src(struct sgx_ctx *c, nir_alu_instr *alu, unsigned s, unsigned comp)
 {
    nir_legacy_alu_src ls = nir_legacy_chase_alu_src(&alu->src[s], true);
    struct sgx_ref r = src_comp(c, &ls.src, ls.swizzle[comp]);
-   r.abs = ls.fabs;
-   r.neg = ls.fneg;
+   /* on top of any modifiers the value's refs already carry (an F16 view of
+    * an fneg folded into f2f32) */
+   if (ls.fabs)
+      r.abs = 1, r.neg = 0;
+   r.neg ^= ls.fneg;
    return r;
 }
 
@@ -535,9 +538,47 @@ struct fieldset {
    struct { uint16_t id; int32_t v; } f[6];
 };
 
+/* the register a vreg reference names (h16 refs count halves) */
+static bool
+same_vreg_reg(const struct sgx_ref *a, const struct sgx_ref *b)
+{
+   return a->file == SGX_F_V && b->file == SGX_F_V && a->n == b->n &&
+          (a->h16 ? a->comp / 2 : a->comp) == (b->h16 ? b->comp / 2 : b->comp);
+}
+
+static void emit_runs_raw(struct sgx_ctx *c, unsigned form, unsigned wmask, struct sgx_ref dst[4],
+                          unsigned nsrc, struct sgx_ref src[][4], const struct fieldset *fs, uint8_t pred);
+
+/* components are written in order, so a source naming a register an earlier
+ * component already wrote (r = r.yzwx in a loop) would read the new value:
+ * compute into a temporary, then copy */
 static void
 emit_runs(struct sgx_ctx *c, unsigned form, unsigned wmask, struct sgx_ref dst[4],
           unsigned nsrc, struct sgx_ref src[][4], const struct fieldset *fs, uint8_t pred)
+{
+   bool clash = false;
+   for (unsigned w = 0; w < 4; w++)
+      for (unsigned k = w + 1; k < 4; k++)
+         for (unsigned s = 0; s < nsrc; s++)
+            if ((wmask >> w & 1) && (wmask >> k & 1) && same_vreg_reg(&dst[w], &src[s][k]))
+               clash = true;
+   if (!clash || dst[ffs(wmask) - 1].h16) {
+      emit_runs_raw(c, form, wmask, dst, nsrc, src, fs, pred);
+      return;
+   }
+   unsigned t = new_vreg(c, 4);
+   struct sgx_ref td[4], ts[1][4];
+   for (unsigned k = 0; k < 4; k++) {
+      td[k] = vref(t, k);
+      ts[0][k] = td[k];
+   }
+   emit_runs_raw(c, form, wmask, td, nsrc, src, fs, pred);
+   emit_runs_raw(c, USSE_MOV, wmask, dst, 1, ts, &(struct fieldset){ 0 }, pred);
+}
+
+static void
+emit_runs_raw(struct sgx_ctx *c, unsigned form, unsigned wmask, struct sgx_ref dst[4],
+              unsigned nsrc, struct sgx_ref src[][4], const struct fieldset *fs, uint8_t pred)
 {
    unsigned cls = form_class(form);
    unsigned mr = max_rpt(cls);
@@ -1695,6 +1736,25 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                   rv->shadow[k] = src_comp(c, &ls, k);
             return;
          }
+         /* the second pair reading the first after it was written (r = r.yzwx
+          * in a loop): read the first pair from a copy */
+         struct sgx_ref sr[4];
+         for (unsigned k = 0; k < 4; k++)
+            sr[k] = (wm >> k & 1) ? src_comp(c, &ls, k) : ref(SGX_F_IMM, 0);
+         struct sgx_ref first = href(rv->n, base);
+         if ((wm & 3) && (wm & 0xc) &&
+             (same_vreg_reg(&sr[2], &first) || same_vreg_reg(&sr[3], &first))) {
+            unsigned t = new_vreg16(c, 2);
+            struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F16);
+            pk->nops = 3;
+            pk->op[0] = href(t, 0);
+            pk->op[1] = href(rv->n, base);
+            pk->op[2] = href(rv->n, base + 1);
+            add(c, pk);
+            for (unsigned k = 2; k < 4; k++)
+               if (same_vreg_reg(&sr[k], &first))
+                  sr[k].n = t, sr[k].comp -= base;
+         }
          for (unsigned pr = 0; pr < 2; pr++) {
             unsigned m = wm >> (2 * pr) & 3;
             if (!m)
@@ -1702,7 +1762,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
             struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F16);
             pk->nops = 3;
             pk->op[0] = href(rv->n, base + 2 * pr);
-            struct sgx_ref lo = src_comp(c, &ls, 2 * pr), hi = src_comp(c, &ls, 2 * pr + 1);
+            struct sgx_ref lo = sr[2 * pr], hi = sr[2 * pr + 1];
             if (m & 1)
                lo = store_h(c, lo);
             if (m & 2)

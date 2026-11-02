@@ -302,6 +302,11 @@ int16_as_32(nir_builder *b, nir_def *d, unsigned comp)
       return x->bit_size == 32 ? nir_channel(b, x, xc) : int16_as_32(b, x, xc);
    case nir_op_b2i16:
       return nir_b2i32(b, nir_channel(b, x, xc));
+   case nir_op_bcsel: {
+      nir_def *t = int16_as_32(b, p->src[1].src.ssa, p->src[1].swizzle[comp]);
+      nir_def *e = int16_as_32(b, p->src[2].src.ssa, p->src[2].swizzle[comp]);
+      return t && e ? nir_bcsel(b, nir_channel(b, x, xc), t, e) : NULL;
+   }
    default:
       return NULL;
    }
@@ -575,8 +580,12 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
       u->c->const_prec[k + j] = prec;
    if (fmt == 2 && prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3) && k + 3 < ARRAY_SIZE(u->c->const_lowp))
       u->c->const_lowp[k] = 1;
-   nir_def *v = nir_load_uniform(b, n, in->def.bit_size, nir_imm_int(b, 0), .base = k, .range = n,
-                                 .dest_type = in->def.bit_size == 16 ? nir_type_float16 : nir_type_float32);
+   /* (a bool is a 32-bit value, true when nonzero) */
+   unsigned bits = in->def.bit_size == 1 ? 32 : in->def.bit_size;
+   nir_def *v = nir_load_uniform(b, n, bits, nir_imm_int(b, 0), .base = k, .range = n,
+                                 .dest_type = bits == 16 ? nir_type_float16 : nir_type_float32);
+   if (in->def.bit_size == 1)
+      v = nir_ine_imm(b, v, 0);
    nir_def_replace(&in->def, v);
    return true;
 }
