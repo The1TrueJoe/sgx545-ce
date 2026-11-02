@@ -5,7 +5,7 @@ functional\.texture\.specification	texture uploads: unpack alignment, sub-image 
 functional\.texture\.(mipmap|completeness|format|size)	texture sampling: LOD bias and completeness corner cases
 functional\.shaders\.texture_functions	texture2D's bias argument
 functional\.fbo\.render	render to texture: shared and recreated colour buffers, resizes; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared/recreate cases too
-functional\.shaders\.(random|operator|functions|struct)	compiler: random combinations (about half pass with SGX545_DEBUG=nof16: F16 path); with the compiler session
+functional\.shaders\.(random|operator|functions|struct)	compiler: random combinations that fail with F16 off too; with the compiler session
 functional\.polygon_offset	polygon offset units
 functional\.rasterization\.primitives	wide lines: the hardware's line quads against GL's rule; the DDK fails these too
 functional\.draw\.draw_elements\.points	points from glDrawElements; the DDK fails these too
