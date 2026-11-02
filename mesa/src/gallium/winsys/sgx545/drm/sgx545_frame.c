@@ -8,7 +8,7 @@
  *
  * Tags in the comments follow docs/STATE.md: [C] proven by a replay,
  * [D] from a diff of captures, [G] guess (the value the DDK uses, meaning
- * unknown).  docs/DRIVER-UPSTREAM.md says where each piece comes from.
+ * unknown).
  */
 
 #include <errno.h>
