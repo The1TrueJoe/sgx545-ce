@@ -840,6 +840,16 @@ assign_io(struct sgx_ctx *c)
       nir_foreach_shader_in_variable(var, s) {
          int a = place(o, SGX_LAYOUT_ATTRIB, var->name);
          unsigned rows = type_size_vec4(var->type, false);
+         /* st splits a matrix attribute into one variable per column, all
+          * with the matrix's name: a column goes after the earlier ones */
+         if (a >= 0 && var->name) {
+            nir_foreach_shader_in_variable(prev, s) {
+               if (prev == var)
+                  break;
+               if (prev->name && !strcmp(prev->name, var->name))
+                  a += type_size_vec4(prev->type, false);
+            }
+         }
          if (a < 0) {
             a = next_attr;
             next_attr += rows;
