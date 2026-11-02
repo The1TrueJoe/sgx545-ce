@@ -677,7 +677,10 @@ kernel's scheduler timeout, are gaps (G17). The draft uses the scheduler timeout
 
 ## 10. Decisions for Joseph
 
-None of these is settled. The draft uses each recommendation so that it stays concrete.
+Joseph went through all ten on 2026-11-02; each section starts with what was decided. Two
+change the draft: the name (D1, `powervr_sgx`) and the stream encoding (D2), which sections
+2, 3 and 6 and `docs/uapi/sgx_drm_draft.h` don't reflect yet. D9 waits on one more hardware
+test.
 
 ### D1. Driver name (module, DRM name, Mesa loader key)
 
@@ -750,6 +753,8 @@ these words (MSAA, multi-RT) waits for a uAPI addition, which is append-only and
 
 ### D6. BO lists
 
+**Decided (Joseph, 2026-11-02): an optional per-job list of shared objects, as recommended.**
+
 **Recommendation: an optional per-job list of shared objects, for implicit sync only.**
 Residency needs no list because `VM_MAP` pins pages, and private objects are covered by the
 VM's reservation object. Alternative: no list at all, with userspace using
@@ -759,12 +764,17 @@ matches what `AGENTS.md` section 5 asked for. **Closes nothing:** an empty list 
 
 ### D7. VM contexts: explicit handles, or one per file
 
+**Decided (Joseph, 2026-11-02): explicit handles, as recommended.**
+
 **Recommendation: explicit handles, as pvr.** One VM per file is simpler and is all Mesa needs
 at first, but explicit handles are `AGENTS.md`'s house model and leave room for
 per-context VMs. Client-chosen addresses (not kernel-placed) fit a 4 GiB space with fixed
 heaps.
 
 ### D8. Host interface
+
+**Decided (Joseph, 2026-11-02): SGXMKIF-compatible through M2 bring-up, decide after M1, as
+recommended.**
 
 **Recommendation: keep SGXMKIF compatibility through M2 bring-up, as
 `docs/UKERNEL-DECISIONS.md` records, and decide after M1.** This uAPI doesn't depend on the
@@ -792,7 +802,15 @@ page directory (don't map kernel heaps, kernel code or base 15 into a client PD)
 
 This could end the upstream plan as written, so it deserves your attention before M2 code.
 
+**Decided (Joseph, 2026-11-02): run the register-write test first (does a client `str` to an
+effective register such as `BIF_DIR_LIST_BASE0` take effect?), on the EA1, then decide.** The
+plan is option 1, kernel shader validation, scoped by that result: full coverage of stores if
+writes land, a narrower check if only reads do.
+
 ### D10. PB overflow
+
+**Decided (Joseph, 2026-11-02): fail the job's fence with `-ENOSPC` in the first driver, as
+recommended.**
 
 **Recommendation: fail the job's fence with `-ENOSPC` in the first driver, and have Mesa
 size the PB and flush conservatively.** Alternative: kernel or firmware grows the PB, or runs
