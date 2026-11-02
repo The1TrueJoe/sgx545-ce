@@ -658,11 +658,26 @@ static void
 uniform_formats(struct sgx_ctx *c)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(c->nir);
+   const char *fc = getenv("SGX_F16_CONST");
+   bool no_const = fc && fc[0] == '0';
    nir_foreach_block(b, impl) {
       nir_foreach_instr_safe(instr, b) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;
          nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+         if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16 && no_const) {
+            /* (SGX_F16_CONST=0: an f32 load converted in the shader) */
+            nir_builder bb = nir_builder_at(nir_before_instr(instr));
+            nir_def *v = nir_load_uniform(&bb, in->def.num_components, 32, in->src[0].ssa,
+                                          .base = nir_intrinsic_base(in), .range = nir_intrinsic_range(in),
+                                          .dest_type = nir_type_float32);
+            unsigned k = nir_intrinsic_base(in);
+            unsigned range = nir_src_is_const(in->src[0]) ? in->def.num_components : nir_intrinsic_range(in);
+            for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_fmt); j++)
+               c->const_fmt[k + j] = 1;
+            nir_def_replace(&in->def, nir_f2f16(&bb, v));
+            continue;
+         }
          if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16) {
             /* a 16-bit load the frontend made (a driver with 16-bit loads):
              * F16 constants */
@@ -673,7 +688,7 @@ uniform_formats(struct sgx_ctx *c)
                   c->const_fmt[k + j] = 2;
             continue;
          }
-         if (in->intrinsic != nir_intrinsic_load_uniform || in->def.bit_size != 32 ||
+         if (no_const || in->intrinsic != nir_intrinsic_load_uniform || in->def.bit_size != 32 ||
              !nir_src_is_const(in->src[0]) || nir_src_as_uint(in->src[0]) != 0 ||
              nir_alu_type_get_base_type(nir_intrinsic_dest_type(in)) != nir_type_float)
             continue;
@@ -914,7 +929,10 @@ assign_io(struct sgx_ctx *c)
          }
       }
       bool set16[SGX_MAX_SETS] = { 0 };
-      if (c->p16) {
+      /* (SGX_F16_ITER=0: iterate every varying in f32, F16 math kept; a
+       * hardware bisection switch) */
+      const char *fi = getenv("SGX_F16_ITER");
+      if (c->p16 && !(fi && fi[0] == '0')) {
          nir_foreach_shader_in_variable(var, s) {
             char names[8][64];
             unsigned l = var->data.location;
