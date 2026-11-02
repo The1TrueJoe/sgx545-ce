@@ -840,6 +840,16 @@ assign_io(struct sgx_ctx *c)
       nir_foreach_shader_in_variable(var, s) {
          int a = place(o, SGX_LAYOUT_ATTRIB, var->name);
          unsigned rows = type_size_vec4(var->type, false);
+         /* st splits a matrix attribute into one variable per column, all
+          * with the matrix's name: a column goes after the earlier ones */
+         if (a >= 0 && var->name) {
+            nir_foreach_shader_in_variable(prev, s) {
+               if (prev == var)
+                  break;
+               if (prev->name && !strcmp(prev->name, var->name))
+                  a += type_size_vec4(prev->type, false);
+            }
+         }
          if (a < 0) {
             a = next_attr;
             next_attr += rows;
@@ -986,12 +996,70 @@ assign_io(struct sgx_ctx *c)
    }
 }
 
+/* ior source s is x & mask with a constant mask: the iand and x's index */
+static nir_alu_instr *
+masked(nir_alu_instr *ior, unsigned s, uint32_t mask, unsigned *xi)
+{
+   nir_alu_instr *a = nir_src_as_alu(ior->src[s].src);
+   if (!a || a->op != nir_op_iand)
+      return NULL;
+   for (unsigned j = 0; j < 2; j++) {
+      nir_alu_src *m = &a->src[j];
+      if (!nir_src_is_const(m->src))
+         continue;
+      bool all = true;
+      for (unsigned k = 0; k < a->def.num_components; k++)
+         all &= nir_src_comp_as_uint(m->src, m->swizzle[k]) == mask;
+      if (all) {
+         *xi = 1 - j;
+         return a;
+      }
+   }
+   return NULL;
+}
+
+/* the float x of ior source s = x & mask, in the ior's components */
+static nir_def *
+masked_x(nir_builder *b, nir_alu_instr *ior, unsigned s, nir_alu_instr *a, unsigned xi)
+{
+   unsigned sw[NIR_MAX_VEC_COMPONENTS];
+   for (unsigned k = 0; k < ior->def.num_components; k++)
+      sw[k] = a->src[xi].swizzle[ior->src[s].swizzle[k]];
+   return nir_swizzle(b, a->src[xi].src.ssa, sw, ior->def.num_components);
+}
+
+/* copysign as the GLSL frontend builds it for a driver with integers
+ * ((a & 0x7fffffff) | (b & 0x80000000), atan's result; 0x7fff / 0x8000 in
+ * mediump): the float form
+ * nir_copysign uses without them */
+static bool
+copysign_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   unsigned bits = alu->def.bit_size;
+   if (alu->op != nir_op_ior || (bits != 32 && bits != 16))
+      return false;
+   uint32_t sign = 1u << (bits - 1);
+   for (unsigned s = 0; s < 2; s++) {
+      unsigned mi, si;
+      nir_alu_instr *m = masked(alu, s, sign - 1, &mi), *g = masked(alu, 1 - s, sign, &si);
+      if (!m || !g)
+         continue;
+      b->cursor = nir_before_instr(&alu->instr);
+      nir_def *abs = nir_fabs(b, masked_x(b, alu, s, m, mi));
+      nir_def *neg = nir_flt_imm(b, masked_x(b, alu, 1 - s, g, si), 0.0);
+      nir_def_replace(&alu->def, nir_bcsel(b, neg, nir_fneg(b, abs), abs));
+      return true;
+   }
+   return false;
+}
+
 void
 sgx_lower(struct sgx_ctx *c)
 {
    nir_shader *s = c->nir;
 
    s->options = &options;
+   NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr, nir_metadata_control_flow, NULL);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(s), nir_var_shader_out);
    NIR_PASS(_, s, nir_lower_global_vars_to_local);

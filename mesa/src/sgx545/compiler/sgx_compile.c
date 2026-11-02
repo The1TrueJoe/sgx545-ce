@@ -582,6 +582,7 @@ emit_runs_raw(struct sgx_ctx *c, unsigned form, unsigned wmask, struct sgx_ref d
 {
    unsigned cls = form_class(form);
    unsigned mr = max_rpt(cls);
+   bool scalar = form >= USSE_FRCP && form <= USSE_FCOS;
    unsigned i = 0;
    while (i < 4) {
       if (!(wmask & (1u << i))) {
@@ -592,13 +593,30 @@ emit_runs_raw(struct sgx_ctx *c, unsigned form, unsigned wmask, struct sgx_ref d
       int mode[3] = { -1, -1, -1 };   /* 1 step, 0 hold */
       while (n < mr && i + n < 4 && (wmask & (1u << (i + n)))) {
          unsigned j = i + n;
-         if (!ref_next(&dst[j - 1], &dst[j]) || dst[j].file == SGX_F_K)
+         struct sgx_ref dp = dst[j - 1];
+         if (scalar && dp.h16) {
+            if (dp.file == SGX_F_V)
+               dp.comp += 1;
+            else
+               dp.n += 1;
+         }
+         if (!ref_next(&dp, &dst[j]) || dst[j].file == SGX_F_K)
             break;
          bool ok = true;
          int nm[3];
          for (unsigned s = 0; s < nsrc; s++) {
             nm[s] = mode[s];
             bool st = ref_next(&src[s][j - 1], &src[s][j]);
+            if (scalar && src[s][j].h16) {
+               /* a scalar op's F16 source steps by register, its half fixed
+                * (ISA.md hw1 source format) */
+               struct sgx_ref a = src[s][j - 1];
+               if (a.file == SGX_F_V)
+                  a.comp += 1;
+               else
+                  a.n += 1;
+               st = ref_next(&a, &src[s][j]);
+            }
             bool hd = ref_same(&src[s][j - 1], &src[s][j]) && cls == CLS_INC;
             if (nm[s] < 0)
                nm[s] = st ? 1 : hd ? 0 : -2;
@@ -1221,7 +1239,8 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
 {
    if ((alu->op == nir_op_fneg || alu->op == nir_op_fabs) && nir_legacy_float_mod_folds(alu))
       return;
-   if (alu->op == nir_op_fsat && nir_legacy_fsat_folds(alu))
+   /* (the F16 path doesn't take a folded fsat on its destination) */
+   if (alu->op == nir_op_fsat && alu->def.bit_size == 32 && !c->def_dest && nir_legacy_fsat_folds(alu))
       return;
 
    if (alu->def.bit_size == 16) {
@@ -1237,10 +1256,12 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       return;
    }
    nir_legacy_alu_dest ld = nir_legacy_chase_alu_dest(&alu->def);
-   if (c->def_dest && !ld.dest.is_ssa) {
+   if (c->def_dest) {
+      /* (an F16 op through f32: its own def, not a chased register or fsat) */
       ld.dest.is_ssa = true;
       ld.dest.ssa = &alu->def;
       ld.write_mask = nir_component_mask(alu->def.num_components);
+      ld.fsat = false;
    }
    unsigned vreg, base;
    unsigned nc = alu->def.num_components;
@@ -2440,7 +2461,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       if (bi >= 0) {
          nir_legacy_src lb = nir_legacy_chase_src(&tex->src[bi].src);
          s->lod = 1;
-         i->op[2] = src_comp(c, &lb, 0);
+         i->op[2] = const_f32(src_comp(c, &lb, 0));
          i->op[2].step = 0;
          i->nops = 3;
       }
@@ -2449,7 +2470,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    emit(c, i);
    if (s->dependent && i->nops == 3 && i->op[2].file == SGX_F_K && hw_const(i->op[2].n) >= 0)
       i->op[2] = cref(hw_const(i->op[2].n));
-   if (s->dependent && i->nops == 3 && !slot_ok(USSE_SMP_1D_BIAS, 3, &i->op[2])) {
+   /* (the bias is an f32 source: a mediump one widens) */
+   if (s->dependent && i->nops == 3 && (i->op[2].h16 || !slot_ok(USSE_SMP_1D_BIAS, 3, &i->op[2]))) {
       struct sgx_ref m = materialize(c, i, i->op[2], 1);
       i->op[2] = m;
       i->op[2].step = 0;
