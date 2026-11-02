@@ -13,8 +13,12 @@
 
 #include "util/macros.h"
 
+/*
+ * gen is what the XML's expressions read as ISA_GPU_ID(): the format
+ * control state, bit 0 = C10 enable, bit 1 = efo F16 enable.
+ */
 struct encode_state {
-   struct sgx545_isa_fc fc;
+   uint32_t gen;
 };
 
 static inline enum sgx_isa_opc
@@ -98,6 +102,17 @@ sgx_isa_reg_num(const struct sgx_isa_src *o)
    return o->file == SGX_ISA_FILE_I ? 124 + o->num : o->num;
 }
 
+static inline const struct sgx_isa_src *
+sgx_isa_noext(const struct sgx_isa_src *o, struct sgx_isa_src *tmp)
+{
+   if (o->file != SGX_ISA_FILE_I)
+      return o;
+   *tmp = *o;
+   tmp->file = SGX_ISA_FILE_R;
+   tmp->num = 124 + o->num;
+   return tmp;
+}
+
 static inline unsigned
 sgx_isa_rpt(const struct sgx_isa_instr *instr)
 {
@@ -114,15 +129,15 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
 #define SGX_SRC(n, m)  SGX_OPND(_src, m, &src->src[n])
 #define SGX_SRC0(m)    SGX_OPND(_src0, m, &src->src[0])
 #define SGX_DST1()     SGX_OPND(_dst1, 0, &src->dst)
+/* Slots without an extension bit: i<n> is r(124 + n) there. */
+#define SGX_DSTX(m)    SGX_OPND(_dst, m, sgx_isa_noext(&src->dst, &(struct sgx_isa_src){ 0 }))
+#define SGX_SRCX(n, m) SGX_OPND(_src, m, sgx_isa_noext(&src->src[n], &(struct sgx_isa_src){ 0 }))
 #define SGX_IS_IMM(n)  (src->src[n].file == SGX_ISA_FILE_IMM)
 /* Without a destination, test's dst field holds nodst (default 0x280). */
 #define SGX_TDST(m) \
    (src->dst.file != SGX_ISA_FILE_NONE ? SGX_DST(m) : (src->nodst ? src->nodst : 0x280))
 /* A named <expr> of the #instruction hierarchy, e.g. SGX_EXPR(__float_smode). */
 #define SGX_EXPR(n)    __instruction_expr_##n(s, p, src)
-/* Format control state, for the colour/integer classes. */
-#define SGX_FC_C10     (s->fc.c10)
-#define SGX_FC_F16     (s->fc.f16)
 
 #include "sgx545-isa-encode.h"
 
@@ -130,8 +145,9 @@ uint64_t
 sgx545_isa_encode(const struct sgx_isa_instr *instr,
                   const struct sgx545_isa_fc *fc)
 {
+   struct sgx545_isa_fc f = fc ? *fc : SGX545_ISA_FC_START;
    struct encode_state s = {
-      .fc = fc ? *fc : SGX545_ISA_FC_START,
+      .gen = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
    };
 
    return bitmask_to_uint64_t(encode__instruction(&s, NULL, (struct sgx_isa_instr *)instr));

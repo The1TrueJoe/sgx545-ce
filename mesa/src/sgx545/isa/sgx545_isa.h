@@ -124,9 +124,33 @@ struct sgx_isa_instr {
    bool sel34, sel36, sel37, sel43, pw, f2_25;
    uint8_t temps4, wait, rate;
 
-   /* integer / fixed point classes */
-   uint8_t ctl[16];     /* class-specific select fields, see sgx545.xml */
-   bool flag[8];
+   /*
+    * Colour / integer classes (sop2, sopwm, sop3 family, dot, ima8, fpma):
+    * each select is a value and a complement flag ("1-x").
+    */
+   uint8_t c0, c1, c2, a0, a1, a2, asel;
+   bool c0c, c1c, c2c, a0c, a1c, a2c, aselc;
+   uint8_t cop, aop;
+   bool cs1c, as1c, aneg, arev, cneg;
+   uint8_t l1, l2, lcs, p;      /* lrp1, sop3x */
+   bool l1c, l2c;
+   bool f4, f6, s1c, s2c, s1ac; /* dot */
+   uint8_t dcs, das;            /* dot colour / alpha scale */
+
+   /* ima16 / imae / ima32 */
+   bool sat, sgn, dflag1, s0hi, s1hi, s2hi, cout, cin, ci, negp;
+   uint8_t f2_15, f1, f2, t2, hi, cin3;
+
+   /* hw 16 / 17 */
+   uint8_t ifmt, x39, ii, a5, coef, shift, a8;
+   bool ileave, src23, dst23, irnd, x1b, x1c, x1d, nf16, s8, x38, s0f13, f2_27;
+
+   /* efo */
+   uint8_t efo_d, efo_i, efo_a, efo_m;
+   bool wi0, wi1, a0lneg, a0rneg, f3_10;
+
+   /* fdual */
+   uint8_t pri, sec, sd, sb, sc, msrc;
 };
 
 /* Format control (setfc): program state the colour/integer classes read. */

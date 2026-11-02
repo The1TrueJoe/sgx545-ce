@@ -59,7 +59,7 @@ if with_tests
       include_directories : [inc_include, inc_src],
       dependencies : [idep_sgx545_isa, idep_mesautil],
     ),
-    args : files('tests/gles2.txt'),
+    args : files('tests/gles2.txt', 'tests/int.txt'),
     suite : ['sgx545'],
   )
 endif

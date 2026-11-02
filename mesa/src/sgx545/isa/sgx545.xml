@@ -875,6 +875,84 @@ NUM | BANK << 7 | EXT << 8.
 		<map name="L1">src->src[1].lane</map>
 		<map name="L2">src->src[2].lane</map>
 		<map name="DRC">src->drc</map>
+
+		<!-- integer / fixed-point / hw 16-17 fields -->
+		<map name="RPT">sgx_isa_rpt(src)</map>
+		<map name="C0SEL">src->c0 &amp; 3</map>
+		<map name="C0C">src->c0c</map>
+		<map name="C1SEL">src->c1</map>
+		<map name="C1C">src->c1c</map>
+		<map name="C2SEL">src->c2</map>
+		<map name="C2C">src->c2c</map>
+		<map name="A0SEL">src->a0</map>
+		<map name="A0C">src->a0c</map>
+		<map name="A1SEL">src->a1</map>
+		<map name="A1C">src->a1c</map>
+		<map name="A2SEL">src->a2</map>
+		<map name="A2C">src->a2c</map>
+		<map name="ASEL">src->asel</map>
+		<map name="AC">src->aselc</map>
+		<map name="COP">src->cop</map>
+		<map name="AOP">src->aop</map>
+		<map name="CS1C">src->cs1c</map>
+		<map name="AS1C">src->as1c</map>
+		<map name="ANEG">src->aneg</map>
+		<map name="AREV">src->arev</map>
+		<map name="CNEG">src->cneg</map>
+		<map name="L1SEL">src->l1</map>
+		<map name="L1C">src->l1c</map>
+		<map name="L2SEL">src->l2</map>
+		<map name="L2C">src->l2c</map>
+		<map name="LCS">src->lcs</map>
+		<map name="P0">src->p &amp; 1</map>
+		<map name="P1">src->p &gt;&gt; 1</map>
+		<map name="M012">src->mask &amp; 7</map>
+		<map name="M3">src->mask &gt;&gt; 3</map>
+		<map name="SAT">src->sat</map>
+		<map name="SGN">src->sgn</map>
+		<map name="F2_15">src->f2_15</map>
+		<map name="DFLAG1">src->dflag1</map>
+		<map name="F1">src->f1</map>
+		<map name="F2">src->f2</map>
+		<map name="S0HI">src->s0hi</map>
+		<map name="S1HI">src->s1hi</map>
+		<map name="S2HI">src->s2hi</map>
+		<map name="T2">src->t2</map>
+		<map name="COUT">src->cout</map>
+		<map name="CIN">src->cin</map>
+		<map name="CI">src->ci</map>
+		<map name="HI">src->hi</map>
+		<map name="NEGP">src->negp</map>
+		<map name="F6">src->f6</map>
+		<map name="F4">src->f4</map>
+		<map name="DCS">src->dcs</map>
+		<map name="DAS">src->das</map>
+		<map name="S1C">src->s1c</map>
+		<map name="S2C">src->s2c</map>
+		<map name="S1AC">src->s1ac</map>
+		<map name="FMTX">src->ifmt</map>
+		<map name="ILEAVE">src->ileave</map>
+		<map name="SRC23">src->src23</map>
+		<map name="DST23">src->dst23</map>
+		<map name="IRND">src->irnd</map>
+		<map name="X1B">src->x1b</map>
+		<map name="X1C">src->x1c</map>
+		<map name="X1D">src->x1d</map>
+		<map name="NF16">src->nf16</map>
+		<map name="S8">src->s8</map>
+		<map name="X38">src->x38</map>
+		<map name="X39">src->x39</map>
+		<map name="II">src->ii</map>
+		<map name="S0F13">src->s0f13</map>
+		<map name="A5">src->a5</map>
+		<map name="COEF">src->coef</map>
+		<map name="SH01">src->shift &amp; 3</map>
+		<map name="SH23">(src->shift &gt;&gt; 2) &amp; 3</map>
+		<map name="SH4">src->shift &gt;&gt; 4</map>
+		<map name="A8">src->a8</map>
+		<map name="F2_27">src->f2_27</map>
+		<map name="S0NEG">src->src[0].neg</map>
+		<map name="S2NEG">src->src[2].neg</map>
 	</encode>
 </bitset>
 
@@ -1043,6 +1121,8 @@ NUM | BANK << 7 | EXT << 8.
 	<pattern low="59" high="63">00010</pattern>
 	<encode>
 		<map name="IDST">src->idst</map>
+		<map name="DN">SGX_DSTX(0) &amp; 0x7f</map>
+		<map name="DB">(SGX_DSTX(0) &gt;&gt; 7) &amp; 3</map>
 	</encode>
 </bitset>
 
@@ -1942,6 +2022,10 @@ NUM | BANK << 7 | EXT << 8.
 		<map name="DB">SGX_DST1() &gt;&gt; 7</map>
 		<map name="F2_2">src->f2_2</map>
 		<map name="F2_3">src->f2_3</map>
+		<map name="S1N">SGX_SRCX(1, 0) &amp; 0x7f</map>
+		<map name="S1B">(SGX_SRCX(1, 0) &gt;&gt; 7) &amp; 3</map>
+		<map name="S2N">SGX_SRCX(2, 0) &amp; 0x7f</map>
+		<map name="S2B">(SGX_SRCX(2, 0) &gt;&gt; 7) &amp; 3</map>
 		<map name="IMMLO">src->imm &amp; 0x7f</map>
 		<map name="IMMHI">src->imm &gt;&gt; 7</map>
 		<map name="SIZE">src->size</map>
@@ -1997,8 +2081,8 @@ pa = 1.
 		<map name="TARGET">src->target</map>
 		<map name="F2_26">src->f2_26</map>
 		<map name="F3_5">src->f3_5</map>
-		<map name="DN">SGX_DST(0) &amp; 0x7f</map>
-		<map name="DB">(SGX_DST(0) &gt;&gt; 7) &amp; 3</map>
+		<map name="DN">SGX_DSTX(0) &amp; 0x7f</map>
+		<map name="DB">(SGX_DSTX(0) &gt;&gt; 7) &amp; 3</map>
 	</encode>
 </bitset>
 
@@ -2641,6 +2725,8 @@ pa = 1.
 		<map name="PW">src->pw</map>
 		<map name="F2_25">src->f2_25</map>
 		<map name="PRED2">src->pred</map>
+		<map name="DN">SGX_DSTX(0) &amp; 0x7f</map>
+		<map name="DB">(SGX_DSTX(0) &gt;&gt; 7) &amp; 3</map>
 	</encode>
 </bitset>
 
@@ -2804,7 +2890,1322 @@ pa = 1.
 	<pattern low="44" high="45">11</pattern>
 </bitset>
 
-<!-- @INT@ -->
+<!-- ===================================================================== -->
+<!-- hw 07, 10-1a: integer, fixed point and multi-unit ops; hw 1b: fdual    -->
+<!-- ===================================================================== -->
+
+<!--
+Format control: the encoder's s->gen and the decoder's gpu_id carry it
+(bit 0 = setfc a1, the C10 enable; bit 1 = setfc a0, efo's F16 enable).
+-->
+<expr name="#fc-c10">(ISA_GPU_ID() &amp; 1) ? 3 : 0</expr>
+<expr name="#fc-f16">(ISA_GPU_ID() &amp; 2) ? 4 : 0</expr>
+
+<enum name="#rpt8">
+	<value val="0" display=""/>
+	<value val="1" display=" rpt=2"/>
+	<value val="2" display=" rpt=3"/>
+	<value val="3" display=" rpt=4"/>
+	<value val="4" display=" rpt=5"/>
+	<value val="5" display=" rpt=6"/>
+	<value val="6" display=" rpt=7"/>
+	<value val="7" display=" rpt=8"/>
+</enum>
+
+<enum name="#ima16-f1">
+	<value val="0" display=""/>
+	<value val="1" display=" f1=u8"/>
+	<value val="2" display=" f1=s8"/>
+	<value val="3" display=" f1=o8"/>
+</enum>
+
+<enum name="#ima16-f2">
+	<value val="0" display=""/>
+	<value val="1" display=" f2=u8"/>
+	<value val="2" display=" f2=s8"/>
+	<value val="3" display=" f2=o8"/>
+</enum>
+
+<enum name="#imae-ci">
+	<value val="0" display=""/>
+	<value val="1" display=" ci=i1"/>
+</enum>
+
+<enum name="#sop2-c1">
+	<value val="0" display=" c1=zero"/>
+	<value val="1" display=" c1=s1"/>
+	<value val="2" display=" c1=s2"/>
+	<value val="3" display=" c1=s1a"/>
+	<value val="4" display=" c1=s2a"/>
+	<value val="5" display=" c1=asat"/>
+	<value val="6" display=" c1=k18"/>
+	<value val="7" display=" c1=x7"/>
+	<value val="8" display=" c1=one"/>
+	<value val="9" display=" c1=1-s1"/>
+	<value val="10" display=" c1=1-s2"/>
+	<value val="11" display=" c1=1-s1a"/>
+	<value val="12" display=" c1=1-s2a"/>
+	<value val="13" display=" c1=1-asat"/>
+	<value val="14" display=" c1=1-k18"/>
+	<value val="15" display=" c1=1-x7"/>
+</enum>
+
+<enum name="#sop2-c2">
+	<value val="0" display=" c2=zero"/>
+	<value val="1" display=" c2=s1"/>
+	<value val="2" display=" c2=s2"/>
+	<value val="3" display=" c2=s1a"/>
+	<value val="4" display=" c2=s2a"/>
+	<value val="5" display=" c2=asat"/>
+	<value val="6" display=" c2=k19"/>
+	<value val="7" display=" c2=x7"/>
+	<value val="8" display=" c2=one"/>
+	<value val="9" display=" c2=1-s1"/>
+	<value val="10" display=" c2=1-s2"/>
+	<value val="11" display=" c2=1-s1a"/>
+	<value val="12" display=" c2=1-s2a"/>
+	<value val="13" display=" c2=1-asat"/>
+	<value val="14" display=" c2=1-k19"/>
+	<value val="15" display=" c2=1-x7"/>
+</enum>
+
+<enum name="#sop2-a1">
+	<value val="0" display=" a1=zero"/>
+	<value val="1" display=" a1=s1a"/>
+	<value val="2" display=" a1=s2a"/>
+	<value val="3" display=" a1=k18"/>
+	<value val="4" display=" a1=one"/>
+	<value val="5" display=" a1=1-s1a"/>
+	<value val="6" display=" a1=1-s2a"/>
+	<value val="7" display=" a1=1-k18"/>
+</enum>
+
+<enum name="#sop2-a2">
+	<value val="0" display=" a2=zero"/>
+	<value val="1" display=" a2=s1a"/>
+	<value val="2" display=" a2=s2a"/>
+	<value val="3" display=" a2=k19"/>
+	<value val="4" display=" a2=one"/>
+	<value val="5" display=" a2=1-s1a"/>
+	<value val="6" display=" a2=1-s2a"/>
+	<value val="7" display=" a2=1-k19"/>
+</enum>
+
+<enum name="#sopwm-c1">
+	<value val="0" display=" c1=zero"/>
+	<value val="1" display=" c1=asat"/>
+	<value val="2" display=" c1=s1"/>
+	<value val="3" display=" c1=s1a"/>
+	<value val="4" display=" c1=x4"/>
+	<value val="5" display=" c1=x5"/>
+	<value val="6" display=" c1=s2"/>
+	<value val="7" display=" c1=s2a"/>
+	<value val="8" display=" c1=one"/>
+	<value val="9" display=" c1=1-asat"/>
+	<value val="10" display=" c1=1-s1"/>
+	<value val="11" display=" c1=1-s1a"/>
+	<value val="12" display=" c1=1-x4"/>
+	<value val="13" display=" c1=1-x5"/>
+	<value val="14" display=" c1=1-s2"/>
+	<value val="15" display=" c1=1-s2a"/>
+</enum>
+
+<enum name="#sopwm-c2">
+	<value val="0" display=" c2=zero"/>
+	<value val="1" display=" c2=asat"/>
+	<value val="2" display=" c2=s1"/>
+	<value val="3" display=" c2=s1a"/>
+	<value val="4" display=" c2=x4"/>
+	<value val="5" display=" c2=x5"/>
+	<value val="6" display=" c2=s2"/>
+	<value val="7" display=" c2=s2a"/>
+	<value val="8" display=" c2=one"/>
+	<value val="9" display=" c2=1-asat"/>
+	<value val="10" display=" c2=1-s1"/>
+	<value val="11" display=" c2=1-s1a"/>
+	<value val="12" display=" c2=1-x4"/>
+	<value val="13" display=" c2=1-x5"/>
+	<value val="14" display=" c2=1-s2"/>
+	<value val="15" display=" c2=1-s2a"/>
+</enum>
+
+<enum name="#sop3-c1">
+	<value val="0" display=" c1=zero"/>
+	<value val="1" display=" c1=asat"/>
+	<value val="2" display=" c1=s1"/>
+	<value val="3" display=" c1=s1a"/>
+	<value val="4" display=" c1=s0"/>
+	<value val="5" display=" c1=s0a"/>
+	<value val="6" display=" c1=s2"/>
+	<value val="7" display=" c1=s2a"/>
+	<value val="8" display=" c1=one"/>
+	<value val="9" display=" c1=1-asat"/>
+	<value val="10" display=" c1=1-s1"/>
+	<value val="11" display=" c1=1-s1a"/>
+	<value val="12" display=" c1=1-s0"/>
+	<value val="13" display=" c1=1-s0a"/>
+	<value val="14" display=" c1=1-s2"/>
+	<value val="15" display=" c1=1-s2a"/>
+</enum>
+
+<enum name="#sop3-c2">
+	<value val="0" display=" c2=zero"/>
+	<value val="1" display=" c2=asat"/>
+	<value val="2" display=" c2=s1"/>
+	<value val="3" display=" c2=s1a"/>
+	<value val="4" display=" c2=s0"/>
+	<value val="5" display=" c2=s0a"/>
+	<value val="6" display=" c2=s2"/>
+	<value val="7" display=" c2=s2a"/>
+	<value val="8" display=" c2=one"/>
+	<value val="9" display=" c2=1-asat"/>
+	<value val="10" display=" c2=1-s1"/>
+	<value val="11" display=" c2=1-s1a"/>
+	<value val="12" display=" c2=1-s0"/>
+	<value val="13" display=" c2=1-s0a"/>
+	<value val="14" display=" c2=1-s2"/>
+	<value val="15" display=" c2=1-s2a"/>
+</enum>
+
+<enum name="#sop3-a">
+	<value val="0" display=" a=zero"/>
+	<value val="1" display=" a=s0a"/>
+	<value val="2" display=" a=s1a"/>
+	<value val="3" display=" a=s2a"/>
+	<value val="4" display=" a=one"/>
+	<value val="5" display=" a=1-s0a"/>
+	<value val="6" display=" a=1-s1a"/>
+	<value val="7" display=" a=1-s2a"/>
+</enum>
+
+<enum name="#sop3-a1">
+	<value val="0" display=" a1=zero"/>
+	<value val="1" display=" a1=s1a"/>
+	<value val="2" display=" a1=one"/>
+	<value val="3" display=" a1=1-s1a"/>
+</enum>
+
+<enum name="#sop3-a2">
+	<value val="0" display=" a2=zero"/>
+	<value val="1" display=" a2=s2a"/>
+	<value val="2" display=" a2=one"/>
+	<value val="3" display=" a2=1-s2a"/>
+</enum>
+
+<enum name="#lrp1-l1">
+	<value val="0" display=" l1=zero"/>
+	<value val="1" display=" l1=s1"/>
+	<value val="2" display=" l1=one"/>
+	<value val="3" display=" l1=1-s1"/>
+</enum>
+
+<enum name="#lrp1-l2">
+	<value val="0" display=" l2=zero"/>
+	<value val="1" display=" l2=s2"/>
+	<value val="2" display=" l2=one"/>
+	<value val="3" display=" l2=1-s2"/>
+</enum>
+
+<enum name="#dot-a1">
+	<value val="0" display=" a1=zero"/>
+	<value val="1" display=" a1=s1a"/>
+	<value val="2" display=" a1=s2a"/>
+	<value val="3" display=" a1=x3"/>
+	<value val="4" display=" a1=one"/>
+	<value val="5" display=" a1=1-s1a"/>
+	<value val="6" display=" a1=1-s2a"/>
+	<value val="7" display=" a1=1-x3"/>
+</enum>
+
+<enum name="#dot-a2">
+	<value val="0" display=" a2=zero"/>
+	<value val="1" display=" a2=s1a"/>
+	<value val="2" display=" a2=s2a"/>
+	<value val="3" display=" a2=x3"/>
+	<value val="4" display=" a2=one"/>
+	<value val="5" display=" a2=1-s1a"/>
+	<value val="6" display=" a2=1-s2a"/>
+	<value val="7" display=" a2=1-x3"/>
+</enum>
+
+<enum name="#ima8-c0">
+	<value val="0" display=" c0=s0"/>
+	<value val="1" display=" c0=s1"/>
+	<value val="2" display=" c0=s0a"/>
+	<value val="3" display=" c0=s1a"/>
+	<value val="4" display=" c0=1-s0"/>
+	<value val="5" display=" c0=1-s1"/>
+	<value val="6" display=" c0=1-s0a"/>
+	<value val="7" display=" c0=1-s1a"/>
+</enum>
+
+<enum name="#ima8-c1">
+	<value val="0" display=" c1=s1"/>
+	<value val="1" display=" c1=s1a"/>
+	<value val="2" display=" c1=1-s1"/>
+	<value val="3" display=" c1=1-s1a"/>
+</enum>
+
+<enum name="#ima8-c2">
+	<value val="0" display=" c2=s2"/>
+	<value val="1" display=" c2=s2a"/>
+	<value val="2" display=" c2=1-s2"/>
+	<value val="3" display=" c2=1-s2a"/>
+</enum>
+
+<enum name="#ima8-a0">
+	<value val="0" display=" a0=s0a"/>
+	<value val="1" display=" a0=s1a"/>
+	<value val="2" display=" a0=1-s0a"/>
+	<value val="3" display=" a0=1-s1a"/>
+</enum>
+
+<enum name="#cop4">
+	<value val="0" display=""/>
+	<value val="1" display=" cop=sub"/>
+	<value val="2" display=" cop=min"/>
+	<value val="3" display=" cop=max"/>
+</enum>
+
+<enum name="#aop4">
+	<value val="0" display=""/>
+	<value val="1" display=" aop=sub"/>
+	<value val="2" display=" aop=min"/>
+	<value val="3" display=" aop=max"/>
+</enum>
+
+<enum name="#cop2">
+	<value val="0" display=""/>
+	<value val="1" display=" cop=sub"/>
+</enum>
+
+<enum name="#aop2">
+	<value val="0" display=""/>
+	<value val="1" display=" aop=sub"/>
+</enum>
+
+<enum name="#efo-d">
+	<value val="0" display=""/>
+	<value val="1" display=" d=i1"/>
+	<value val="2" display=" d=a0"/>
+	<value val="3" display=" d=a1"/>
+</enum>
+
+<enum name="#efo-i">
+	<value val="0" display=""/>
+	<value val="1" display=" i=a1/a0"/>
+	<value val="2" display=" i=m0/m1"/>
+	<value val="3" display=" i=a0/m1"/>
+</enum>
+
+<enum name="#efo-a">
+	<value val="0" display=""/>
+	<value val="1" display=" a=m0+s0/i1+i0"/>
+	<value val="2" display=" a=m0+i0/i1+m1"/>
+	<value val="3" display=" a=s0+s2/s1+s2"/>
+</enum>
+
+<enum name="#efo-m">
+	<value val="0" display=""/>
+	<value val="1" display=" m=s2*s1/s2*s2"/>
+	<value val="2" display=" m=s1*s0/s2*s2"/>
+	<value val="3" display=" m=s1*i0/s2*i1"/>
+</enum>
+
+<enum name="#dot-cs">
+	<value val="0" display=""/>
+	<value val="1" display=" cs=x2"/>
+	<value val="2" display=" cs=x4"/>
+	<value val="3" display=" cs=x8"/>
+</enum>
+
+<enum name="#dot-as">
+	<value val="0" display=""/>
+	<value val="1" display=" as=x2"/>
+	<value val="2" display=" as=x4"/>
+	<value val="3" display=" as=x8"/>
+</enum>
+
+<enum name="#sop3x-p">
+	<value val="0" display=" p=s1.s2"/>
+	<value val="1" display=" p=s1.1-s2"/>
+	<value val="2" display=" p=one.s2"/>
+	<value val="3" display=" p=1-s1.s2"/>
+</enum>
+
+<enum name="#lrp1-cs">
+	<value val="0" display=" cs=s0"/>
+	<value val="1" display=" cs=s0a"/>
+</enum>
+
+<enum name="#i16-fmt">
+	<value val="0" display=""/>
+	<value val="1" display="=u8"/>
+	<value val="2" display="=s8"/>
+	<value val="3" display="=o8"/>
+</enum>
+
+<enum name="#imae-t2">
+	<value val="0" display=""/>
+	<value val="1" display=" t2=s16"/>
+	<value val="2" display=" t2=u32"/>
+	<value val="3" display=" t2=x3"/>
+</enum>
+
+<enum name="#fmt-u8">
+	<value val="0" display=""/>
+	<value val="1" display=" fmt=s8"/>
+	<value val="2" display=" fmt=o8"/>
+	<value val="3" display=" fmt=x3"/>
+</enum>
+
+<enum name="#ima32-hi">
+	<value val="0" display=""/>
+	<value val="1" display=" hi=1"/>
+	<value val="2" display=" hi=2"/>
+	<value val="3" display=" hi=3"/>
+	<value val="4" display=" hi=i0"/>
+	<value val="5" display=" hi=i1"/>
+	<value val="6" display=" hi=i2"/>
+	<value val="7" display=" hi=7"/>
+</enum>
+
+<enum name="#ima32-cin">
+	<value val="0" display=""/>
+	<value val="1" display=" cin=i0"/>
+	<value val="2" display=" cin=i1"/>
+	<value val="3" display=" cin=i2"/>
+</enum>
+
+<enum name="#fdual-pri">
+	<value val="0" display=".fmad"/>
+	<value val="1" display=".mov"/>
+	<value val="2" display=".fadm"/>
+	<value val="3" display=".fmsa"/>
+	<value val="4" display=".fddp"/>
+	<value val="5" display=".fminmax"/>
+	<value val="6" display=".ima32"/>
+	<value val="7" display=".fssq"/>
+</enum>
+
+<enum name="#fdual-sec">
+	<value val="0" display=".fmad"/>
+	<value val="1" display=".fmad16"/>
+	<value val="2" display=".fmsa"/>
+	<value val="3" display=".fadm"/>
+	<value val="4" display=".fmaxmin"/>
+	<value val="5" display=".frcp"/>
+	<value val="6" display=".frsq"/>
+	<value val="7" display=".fexp2"/>
+	<value val="8" display=".flog2"/>
+	<value val="9" display=".fsin"/>
+	<value val="10" display=".fcos"/>
+	<value val="11" display=".fadd"/>
+	<value val="12" display=".fsub"/>
+	<value val="13" display=".fmul"/>
+	<value val="14" display=".ima32"/>
+	<value val="15" display=".mov"/>
+</enum>
+
+<enum name="#fdual-sd">
+	<value val="0" display=" sd=i0"/>
+	<value val="1" display=" sd=i1"/>
+	<value val="2" display=" sd=i2"/>
+	<value val="3" display=" sd=i0s0"/>
+</enum>
+
+<enum name="#fdual-sb">
+	<value val="0" display=" sb=i0"/>
+	<value val="1" display=" sb=i1"/>
+	<value val="2" display=" sb=i2"/>
+	<value val="3" display=" sb=src1"/>
+</enum>
+
+<enum name="#fdual-sc">
+	<value val="0" display=" sc=i0"/>
+	<value val="1" display=" sc=i1"/>
+	<value val="2" display=" sc=i2"/>
+	<value val="3" display=" sc=src2"/>
+</enum>
+
+<enum name="#fdual-msrc">
+	<value val="0" display=" msrc=i0"/>
+	<value val="1" display=" msrc=i1"/>
+	<value val="2" display=" msrc=i2"/>
+	<value val="3" display=" msrc=x3"/>
+	<value val="4" display=" msrc=src0"/>
+	<value val="5" display=" msrc=src1"/>
+	<value val="6" display=" msrc=src2"/>
+	<value val="7" display=" msrc=x7"/>
+</enum>
+
+
+<bitset name="#int" extends="#instruction">
+	<doc>
+		Shared by hw 10-19 and 1a: short predicate h25-26, skipinv h23,
+		nosched h22, end h18; generic dst, src1 and src2 slots.
+	</doc>
+	<field name="S2N" low="0" high="6" type="uint"/>
+	<field name="S1N" low="7" high="13" type="uint"/>
+	<field name="DN" low="21" high="27" type="uint"/>
+	<field name="S2B" low="28" high="29" type="uint"/>
+	<field name="S1B" low="30" high="31" type="uint"/>
+	<field name="DB" low="32" high="33" type="uint"/>
+	<field name="S2E" pos="48" type="uint"/>
+	<field name="S1E" pos="49" type="uint"/>
+	<field name="END" pos="50" type="bool" display=" end"/>
+	<field name="DE" pos="51" type="uint"/>
+	<field name="NOSCHED" pos="54" type="bool" display=" nosched"/>
+	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
+	<field name="PRED" low="57" high="58" type="#pred2"/>
+	<derived name="DST" type="#dst" width="10">
+		<expr>{DN} | ({DB} &lt;&lt; 7) | ({DE} &lt;&lt; 9)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC1" type="#src" width="10">
+		<expr>{S1N} | ({S1B} &lt;&lt; 7) | ({S1E} &lt;&lt; 9)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC2" type="#src" width="10">
+		<expr>{S2N} | ({S2B} &lt;&lt; 7) | ({S2E} &lt;&lt; 9)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<!-- Colour classes: operands follow the C10 format control. -->
+<bitset name="#int-c10" extends="#int">
+	<derived name="IMODE" expr="#fc-c10" type="uint"/>
+	<encode>
+		<map name="DN">SGX_DST(SGX_EXPR(__fc_c10)) &amp; 0x7f</map>
+		<map name="DB">(SGX_DST(SGX_EXPR(__fc_c10)) &gt;&gt; 7) &amp; 3</map>
+		<map name="DE">SGX_DST(SGX_EXPR(__fc_c10)) &gt;&gt; 9</map>
+		<map name="S0N">SGX_SRC0(SGX_EXPR(__fc_c10)) &amp; 0x7f</map>
+		<map name="S0B">(SGX_SRC0(SGX_EXPR(__fc_c10)) &gt;&gt; 7) &amp; 1</map>
+		<map name="S1N">SGX_SRC(1, SGX_EXPR(__fc_c10)) &amp; 0x7f</map>
+		<map name="S1B">(SGX_SRC(1, SGX_EXPR(__fc_c10)) &gt;&gt; 7) &amp; 3</map>
+		<map name="S1E">SGX_SRC(1, SGX_EXPR(__fc_c10)) &gt;&gt; 9</map>
+		<map name="S2N">SGX_SRC(2, SGX_EXPR(__fc_c10)) &amp; 0x7f</map>
+		<map name="S2B">(SGX_SRC(2, SGX_EXPR(__fc_c10)) &gt;&gt; 7) &amp; 3</map>
+		<map name="S2E">SGX_SRC(2, SGX_EXPR(__fc_c10)) &gt;&gt; 9</map>
+	</encode>
+</bitset>
+
+<!-- The other integer classes don't read format control. -->
+<bitset name="#int-plain" extends="#int">
+	<derived name="IMODE" expr="#zero" type="uint"/>
+</bitset>
+
+<template name="INT_FLAGS">{SKIPINV} {NOSCHED} {END}</template>
+
+<!-- hw 10: sop2 -->
+<bitset name="sop2" extends="#int-c10">
+	<doc>
+		dst.rgb = (src1 * c1) cop (src2 * c2), dst.a = (src1.a * a1) aop
+		(src2.a * a2). No src0: l14-20 hold the alpha controls.
+	</doc>
+	<display>
+		{PRED}{NAME} {DST}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {C1} {C2} {COP} {CS1C} {A1} {A2} {AOP} {AS1C} {ANEG}]
+	</display>
+	<field name="ANEG" pos="14" type="bool" display=" aneg"/>
+	<field name="AS1C" pos="15" type="bool" display=" as1c"/>
+	<field name="AOP" low="16" high="17" type="#aop4"/>
+	<field name="COP" low="18" high="19" type="#cop4"/>
+	<field name="CS1C" pos="20" type="bool" display=" cs1c"/>
+	<field name="A2C" pos="34" type="uint"/>
+	<field name="C2SEL" low="35" high="37" type="uint"/>
+	<field name="C1SEL" low="38" high="40" type="uint"/>
+	<field name="A2SEL" low="41" high="42" type="uint"/>
+	<field name="A1C" pos="43" type="uint"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="C2C" pos="47" type="uint"/>
+	<field name="A1SEL" low="52" high="53" type="uint"/>
+	<field name="C1C" pos="56" type="uint"/>
+	<pattern low="59" high="63">10000</pattern>
+	<derived name="C1" type="#sop2-c1"><expr>{C1SEL} | ({C1C} &lt;&lt; 3)</expr></derived>
+	<derived name="C2" type="#sop2-c2"><expr>{C2SEL} | ({C2C} &lt;&lt; 3)</expr></derived>
+	<derived name="A1" type="#sop2-a1"><expr>{A1SEL} | ({A1C} &lt;&lt; 2)</expr></derived>
+	<derived name="A2" type="#sop2-a2"><expr>{A2SEL} | ({A2C} &lt;&lt; 2)</expr></derived>
+</bitset>
+
+<!-- hw 12: sopwm -->
+<bitset name="sopwm" extends="#int-c10">
+	<doc>
+		dst = (src1 * c1) cop (src2 * c2) per byte, with a write mask whose
+		bits 0-3 are stored in h12, h13, h14, h11. No repeat.
+	</doc>
+	<display>
+		{PRED}{NAME} {DST}, {SRC1}, {SRC2} [{INT_FLAGS} {MASK} {C1} {C2} {COP} {AOP}]
+	</display>
+	<pattern low="14" high="20">0000000</pattern>
+	<pattern pos="34">0</pattern>
+	<field name="C2SEL" low="35" high="37" type="uint"/>
+	<field name="C1SEL" low="38" high="40" type="uint"/>
+	<field name="AOP" low="41" high="42" type="#aop4"/>
+	<field name="M3" pos="43" type="uint"/>
+	<field name="M012" low="44" high="46" type="uint"/>
+	<field name="C2C" pos="47" type="uint"/>
+	<field name="COP" low="52" high="53" type="#cop4"/>
+	<field name="C1C" pos="56" type="uint"/>
+	<pattern low="59" high="63">10010</pattern>
+	<derived name="MASK" type="#rm15"><expr>{M012} | ({M3} &lt;&lt; 3)</expr></derived>
+	<derived name="C1" type="#sopwm-c1"><expr>{C1SEL} | ({C1C} &lt;&lt; 3)</expr></derived>
+	<derived name="C2" type="#sopwm-c2"><expr>{C2SEL} | ({C2C} &lt;&lt; 3)</expr></derived>
+</bitset>
+
+<!-- hw 11: sop3 family -->
+<bitset name="#sop3" extends="#int-c10">
+	<doc>
+		dst, src0 (r/pa), src1, src2; c1/c2 selects h6-8 + h24, h3-5 + h15;
+		h21 picks the colour op, h10 the coissued alpha op. No repeat.
+	</doc>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<field name="C2SEL" low="35" high="37" type="uint"/>
+	<field name="C1SEL" low="38" high="40" type="uint"/>
+	<field name="C2C" pos="47" type="uint"/>
+	<field name="C1C" pos="56" type="uint"/>
+	<pattern low="59" high="63">10001</pattern>
+	<derived name="C1" type="#sop3-c1"><expr>{C1SEL} | ({C1C} &lt;&lt; 3)</expr></derived>
+	<derived name="C2" type="#sop3-c2"><expr>{C2SEL} | ({C2C} &lt;&lt; 3)</expr></derived>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<bitset name="sop3" extends="#sop3">
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {C1} {C2} {COP} {A} {AOP} {AREV}]
+	</display>
+	<field name="AOP" pos="41" type="#aop2"/>
+	<pattern pos="42">0</pattern>
+	<field name="AREV" pos="43" type="bool" display=" arev"/>
+	<field name="ASEL" low="44" high="45" type="uint"/>
+	<field name="AC" pos="46" type="uint"/>
+	<field name="COP" pos="52" type="#cop2"/>
+	<pattern pos="53">0</pattern>
+	<derived name="A" type="#sop3-a"><expr>{ASEL} | ({AC} &lt;&lt; 2)</expr></derived>
+</bitset>
+
+<bitset name="sop3l" extends="#sop3">
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {C1} {C2} {COP} {A1} {A2} {CNEG}]
+	</display>
+	<field name="A1C" pos="41" type="uint"/>
+	<pattern pos="42">1</pattern>
+	<field name="CNEG" pos="43" type="bool" display=" cneg"/>
+	<field name="A2SEL" pos="44" type="uint"/>
+	<field name="A1SEL" pos="45" type="uint"/>
+	<field name="A2C" pos="46" type="uint"/>
+	<field name="COP" pos="52" type="#cop2"/>
+	<pattern pos="53">0</pattern>
+	<derived name="A1" type="#sop3-a1"><expr>{A1SEL} | ({A1C} &lt;&lt; 1)</expr></derived>
+	<derived name="A2" type="#sop3-a2"><expr>{A2SEL} | ({A2C} &lt;&lt; 1)</expr></derived>
+</bitset>
+
+<bitset name="lrp1" extends="#sop3">
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {L1} {L2} {LCS} {C1} {C2} {AOP}]
+	</display>
+	<field name="AOP" pos="41" type="#aop2"/>
+	<pattern pos="42">0</pattern>
+	<field name="LCS" pos="43" type="#lrp1-cs"/>
+	<field name="L2SEL" pos="44" type="uint"/>
+	<field name="L1SEL" pos="45" type="uint"/>
+	<field name="L2C" pos="46" type="uint"/>
+	<field name="L1C" pos="52" type="uint"/>
+	<pattern pos="53">1</pattern>
+	<derived name="L1" type="#lrp1-l1"><expr>{L1SEL} | ({L1C} &lt;&lt; 1)</expr></derived>
+	<derived name="L2" type="#lrp1-l2"><expr>{L2SEL} | ({L2C} &lt;&lt; 1)</expr></derived>
+</bitset>
+
+<bitset name="sop3x" extends="#sop3">
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {C1} {C2} {P} {A1} {A2}]
+	</display>
+	<field name="A1C" pos="41" type="uint"/>
+	<pattern pos="42">1</pattern>
+	<field name="P0" pos="43" type="uint"/>
+	<field name="A2SEL" pos="44" type="uint"/>
+	<field name="A1SEL" pos="45" type="uint"/>
+	<field name="A2C" pos="46" type="uint"/>
+	<field name="P1" pos="52" type="uint"/>
+	<pattern pos="53">1</pattern>
+	<derived name="P" type="#sop3x-p"><expr>{P0} | ({P1} &lt;&lt; 1)</expr></derived>
+	<derived name="A1" type="#sop3-a1"><expr>{A1SEL} | ({A1C} &lt;&lt; 1)</expr></derived>
+	<derived name="A2" type="#sop3-a2"><expr>{A2SEL} | ({A2C} &lt;&lt; 1)</expr></derived>
+</bitset>
+
+<!-- hw 18: dot3 / dot4 -->
+<bitset name="#dot" extends="#int-c10">
+	<doc>
+		h24 = 4-vector; h5 = a coissued alpha op with src0 (dot3s/dot4s);
+		cs h7-8 colour scale; src1/src2 complement h11/h15.
+	</doc>
+	<field name="A2C" pos="35" type="uint"/>
+	<field name="F4" pos="36" type="bool" display=" f4"/>
+	<field name="F6" pos="38" type="bool" display=" f6"/>
+	<field name="DCS" low="39" high="40" type="#dot-cs"/>
+	<field name="A2SEL" low="41" high="42" type="uint"/>
+	<field name="S1C" pos="43" type="bool" display=" s1c"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="S2C" pos="47" type="bool" display=" s2c"/>
+	<field name="A1SEL" low="52" high="53" type="uint"/>
+	<pattern low="59" high="63">11000</pattern>
+	<derived name="A2" type="#dot-a2"><expr>{A2SEL} | ({A2C} &lt;&lt; 2)</expr></derived>
+</bitset>
+
+<bitset name="#dot-noalpha" extends="#dot">
+	<display>
+		{PRED}{NAME} {DST}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {DCS} {DAS} {A1} {A2} {S1C} {S2C} {S1AC} {F4} {F6}]
+	</display>
+	<pattern pos="14">0</pattern>
+	<field name="S1AC" pos="15" type="bool" display=" s1ac"/>
+	<field name="DAS" low="16" high="17" type="#dot-as"/>
+	<pattern low="18" high="20">000</pattern>
+	<field name="A1C" pos="34" type="uint"/>
+	<pattern pos="37">0</pattern>
+	<derived name="A1" type="#dot-a1"><expr>{A1SEL} | ({A1C} &lt;&lt; 2)</expr></derived>
+</bitset>
+
+<bitset name="#dot-s" extends="#dot">
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {DCS} {A1} {A2} {S1C} {S2C} {F4} {F6}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<pattern pos="37">1</pattern>
+	<derived name="A1" type="#dot-a1"><expr>{A1SEL}</expr></derived>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<bitset name="dot3" extends="#dot-noalpha">
+	<pattern pos="56">0</pattern>
+</bitset>
+<bitset name="dot4" extends="#dot-noalpha">
+	<pattern pos="56">1</pattern>
+</bitset>
+<bitset name="dot3s" extends="#dot-s">
+	<pattern pos="56">0</pattern>
+</bitset>
+<bitset name="dot4s" extends="#dot-s">
+	<pattern pos="56">1</pattern>
+</bitset>
+
+<!-- hw 13 ima8, hw 19 fpma -->
+<bitset name="#ima8" extends="#int-c10">
+	<doc>
+		dst = c0 * c1 + c2 per channel, alpha = a0 * s1a + s2a; src0 (r/pa)
+		negate h3.
+	</doc>
+	<display>
+		{PRED}{NAME} {DST}, {S0NEG}{SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {C0} {C1} {C2} {A0} {A1C} {A2C} {SAT}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<field name="S0NEG" pos="35" type="bool" display="-"/>
+	<field name="C2SEL" pos="36" type="uint"/>
+	<field name="C1SEL" pos="37" type="uint"/>
+	<field name="A0C" pos="38" type="uint"/>
+	<field name="A1C" pos="39" type="bool" display=" a1c"/>
+	<field name="A2C" pos="40" type="bool" display=" a2c"/>
+	<field name="A0SEL" pos="41" type="uint"/>
+	<field name="C0C" pos="42" type="uint"/>
+	<field name="SAT" pos="43" type="bool" display=" sat"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="C2C" pos="47" type="uint"/>
+	<field name="C0SEL" low="52" high="53" type="uint"/>
+	<field name="C1C" pos="56" type="uint"/>
+	<derived name="C0" type="#ima8-c0"><expr>{C0SEL} | ({C0C} &lt;&lt; 2)</expr></derived>
+	<derived name="C1" type="#ima8-c1"><expr>{C1SEL} | ({C1C} &lt;&lt; 1)</expr></derived>
+	<derived name="C2" type="#ima8-c2"><expr>{C2SEL} | ({C2C} &lt;&lt; 1)</expr></derived>
+	<derived name="A0" type="#ima8-a0"><expr>{A0SEL} | ({A0C} &lt;&lt; 1)</expr></derived>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<bitset name="ima8" extends="#ima8">
+	<pattern low="59" high="63">10011</pattern>
+</bitset>
+<bitset name="fpma" extends="#ima8">
+	<pattern low="59" high="63">11001</pattern>
+</bitset>
+
+<!-- hw 14: ima16 -->
+<bitset name="ima16" extends="#int-plain">
+	<doc>dst = src0 * src1 + src2, 16-bit; src0 r/pa.</doc>
+	<display>
+		{PRED}{NAME}{SGN} {DST}, {SRC0}, {SRC1}, {S2NEG}{SRC2} [{INT_FLAGS} {RPT} {F1} {F2} {S1HI} {S2HI} {SAT} {F2_15} {DFLAG1}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<field name="F2_15" low="35" high="36" type="custom"/>
+	<field name="S2HI" pos="37" type="bool" display=" s2hi"/>
+	<field name="F1" low="38" high="39" type="#ima16-f1"/>
+	<field name="F2" low="40" high="41" type="#ima16-f2"/>
+	<field name="SAT" pos="42" type="bool" display=" sat"/>
+	<field name="SGN" pos="43" type="bool" display=".sgn"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<pattern pos="47">0</pattern>
+	<field name="S1HI" pos="52" type="bool" display=" s1hi"/>
+	<field name="S2NEG" pos="53" type="bool" display="-"/>
+	<field name="DFLAG1" pos="56" type="bool" display=" dflag1"/>
+	<pattern low="59" high="63">10100</pattern>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<!-- hw 15: imae -->
+<bitset name="imae" extends="#int-plain">
+	<doc>dst = src0 * src1 + src2: 16x16 + 32 with carry; src0 r/pa.</doc>
+	<display>
+		{PRED}{NAME}{SGN} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {T2} {S0HI} {S1HI} {S2HI} {COUT} {CIN} {CI} {SAT} {F2_15}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<field name="F2_15" low="35" high="37" type="custom"/>
+	<field name="T2" low="38" high="39" type="#imae-t2"/>
+	<field name="COUT" pos="40" type="bool" display=" cout"/>
+	<field name="CIN" pos="41" type="bool" display=" cin"/>
+	<field name="SAT" pos="42" type="bool" display=" sat"/>
+	<field name="SGN" pos="43" type="bool" display=".sgn"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="CI" pos="47" type="#imae-ci"/>
+	<field name="S2HI" pos="52" type="bool" display=" s2hi"/>
+	<field name="S1HI" pos="53" type="bool" display=" s1hi"/>
+	<field name="S0HI" pos="56" type="bool" display=" s0hi"/>
+	<pattern low="59" high="63">10101</pattern>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<!-- hw 1a: ima32 (h20 = 0), op1adrc (h20 = 1) -->
+<bitset name="ima32" extends="#int-plain">
+	<doc>
+		dst = src0 * src1 + src2, 32-bit; the high word to i0-i2 (hi), carry
+		in from i0-i2 (cin); src0 r/pa/o/sa with extension h15.
+	</doc>
+	<display>
+		{PRED}{NAME}{SGN} {DST}, {SRC0}, {SRC1}, {S2NEG}{SRC2} [{INT_FLAGS} {RPT} {HI} {CIN} {NEGP}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<pattern pos="35">0</pattern>
+	<field name="HI" low="36" high="38" type="#ima32-hi"/>
+	<field name="S2NEG" pos="39" type="bool" display="-"/>
+	<field name="NEGP" pos="40" type="bool" display=" negp"/>
+	<field name="SGN" pos="41" type="bool" display=".sgn"/>
+	<field name="CIN" low="42" high="43" type="#ima32-cin"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="S0E" pos="47" type="uint"/>
+	<pattern low="52" high="53">00</pattern>
+	<pattern pos="56">0</pattern>
+	<pattern low="59" high="63">11010</pattern>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7) | ({S0E} &lt;&lt; 8)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="CIN">src->cin3</map>
+		<map name="S0E">SGX_SRC0(0) &gt;&gt; 8</map>
+	</encode>
+</bitset>
+
+<bitset name="op1adrc" extends="#instruction">
+	<doc>
+		dest r/pa (h7), raw number; drc h0; sources src1, src2. Never emitted
+		for SGX545; the operation is unknown.
+	</doc>
+	<display>
+		{PRED}{NAME} {DST}, {SRC1}, {SRC2} [{SKIPINV} {NOSCHED} {END} {DRC} {RPT}]
+	</display>
+	<field name="S2N" low="0" high="6" type="uint"/>
+	<field name="S1N" low="7" high="13" type="uint"/>
+	<pattern low="14" high="20">0000000</pattern>
+	<field name="DN" low="21" high="27" type="uint"/>
+	<field name="S2B" low="28" high="29" type="uint"/>
+	<field name="S1B" low="30" high="31" type="uint"/>
+	<field name="DRC" pos="32" type="#drc"/>
+	<pattern low="33" high="38">000000</pattern>
+	<field name="DB" pos="39" type="uint"/>
+	<pattern low="40" high="43">0000</pattern>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<pattern pos="47">0</pattern>
+	<field name="S2E" pos="48" type="uint"/>
+	<field name="S1E" pos="49" type="uint"/>
+	<field name="END" pos="50" type="bool" display=" end"/>
+	<pattern pos="51">0</pattern>
+	<pattern pos="52">1</pattern>
+	<pattern pos="53">0</pattern>
+	<field name="NOSCHED" pos="54" type="bool" display=" nosched"/>
+	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
+	<pattern pos="56">0</pattern>
+	<field name="PRED" low="57" high="58" type="#pred2"/>
+	<pattern low="59" high="63">11010</pattern>
+	<derived name="MODE0" expr="#zero" type="uint"/>
+	<derived name="DST" type="#dst1" width="8">
+		<expr>{DN} | ({DB} &lt;&lt; 7)</expr>
+	</derived>
+	<derived name="SRC1" type="#src" width="10">
+		<expr>{S1N} | ({S1B} &lt;&lt; 7) | ({S1E} &lt;&lt; 9)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<derived name="SRC2" type="#src" width="10">
+		<expr>{S2N} | ({S2B} &lt;&lt; 7) | ({S2E} &lt;&lt; 9)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="DN">SGX_DST1() &amp; 0x7f</map>
+		<map name="DB">SGX_DST1() &gt;&gt; 7</map>
+		<map name="RPT">sgx_isa_rpt(src)</map>
+	</encode>
+</bitset>
+
+<!-- hw 16: adif / adifsum / op16s1 / bilin / ssum16 / ssum16i (no corpus words) -->
+<bitset name="#hw16" extends="#int-plain">
+	<pattern low="59" high="63">10110</pattern>
+</bitset>
+
+<bitset name="adif" extends="#hw16">
+	<doc>Probably |src1 - src2|; no src0.</doc>
+	<display>
+		{PRED}{NAME} {DST}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT}]
+	</display>
+	<pattern low="14" high="20">0000000</pattern>
+	<pattern low="34" high="43">0000000000</pattern>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<pattern pos="47">0</pattern>
+	<pattern low="52" high="53">00</pattern>
+	<pattern pos="56">0</pattern>
+</bitset>
+
+<bitset name="adifsum" extends="#hw16">
+	<doc>adif + src0 (r/pa): h6 set; s0f13 h15.</doc>
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {S0F13}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<pattern low="35" high="37">000</pattern>
+	<pattern pos="38">1</pattern>
+	<pattern low="39" high="43">00000</pattern>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="S0F13" pos="47" type="bool" display=" s0f13"/>
+	<pattern low="52" high="53">00</pattern>
+	<pattern pos="56">0</pattern>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<bitset name="op16s1" extends="#hw16">
+	<doc>Repeat h12-13 only. Operation unknown.</doc>
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {F2_15} {S8} {X38} {X1C} {X39} {II}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<field name="F2_15" low="35" high="38" type="custom"/>
+	<field name="S8" pos="39" type="bool" display=" s8"/>
+	<field name="X38" pos="40" type="bool" display=" x38"/>
+	<field name="X1C" pos="41" type="bool" display=" x1c"/>
+	<field name="X39" low="42" high="43" type="custom"/>
+	<field name="RPT" low="44" high="45" type="#rpt4"/>
+	<pattern pos="46">0</pattern>
+	<field name="II" pos="47" type="#imae-ci"/>
+	<pattern low="52" high="53">01</pattern>
+	<pattern pos="56">0</pattern>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<bitset name="bilin" extends="#hw16">
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {FMTX} {ILEAVE} {SRC23} {DST23} {IRND}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<pattern low="35" high="39">00000</pattern>
+	<field name="FMTX" low="40" high="41" type="#fmt-u8"/>
+	<field name="DST23" pos="42" type="bool" display=" dst23"/>
+	<field name="SRC23" pos="43" type="bool" display=" src23"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="IRND" pos="47" type="bool" display=" rnd"/>
+	<pattern low="52" high="53">10</pattern>
+	<field name="ILEAVE" pos="56" type="bool" display=" ileave"/>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
+<bitset name="#ssum16" extends="#hw16">
+	<doc>
+		src0 has no bank bits: its number (l14-20) is read in src1's bank;
+		src1 has no extension bit.
+	</doc>
+	<display>
+		{PRED}ssum16 {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {FMTX} {X1B} {X1C} {X1D} {NF16}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<pattern low="34" high="38">00000</pattern>
+	<field name="X1C" pos="39" type="bool" display=" x1c"/>
+	<field name="X1D" pos="42" type="bool" display=" x1d"/>
+	<pattern pos="43">0</pattern>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="NF16" pos="47" type="bool" display=" nf16"/>
+	<pattern low="52" high="53">11</pattern>
+	<field name="X1B" pos="56" type="bool" display=" x1b"/>
+	<derived name="SRC0" type="#src" width="10">
+		<expr>{S0N} | ({S1B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC1" type="#src" width="10">
+		<expr>{S1N} | ({S1B} &lt;&lt; 7)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="S0N">src->src[0].num</map>
+		<map name="S1E">0</map>
+	</encode>
+</bitset>
+<bitset name="ssum16" extends="#ssum16">
+	<derived name="FMTX" type="#fmt-u8"><expr>0</expr></derived>
+	<pattern low="40" high="41">00</pattern>
+</bitset>
+<bitset name="ssum16.s8" extends="#ssum16">
+	<derived name="FMTX" type="#fmt-u8"><expr>1</expr></derived>
+	<pattern low="40" high="41">01</pattern>
+</bitset>
+<bitset name="ssum16.o8" extends="#ssum16">
+	<derived name="FMTX" type="#fmt-u8"><expr>2</expr></derived>
+	<pattern low="40" high="41">10</pattern>
+</bitset>
+
+<bitset name="ssum16i" extends="#instruction">
+	<doc>src0 is an internal register, its number raw in l14-20; no src1.</doc>
+	<display>
+		{PRED}{NAME} {DST}, i{S0N}, {SRC2} [{SKIPINV} {NOSCHED} {END} {RPT} {X1B} {X1C} {X1D} {NF16}]
+	</display>
+	<field name="S2N" low="0" high="6" type="uint"/>
+	<pattern low="7" high="13">0000000</pattern>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="DN" low="21" high="27" type="uint"/>
+	<field name="S2B" low="28" high="29" type="uint"/>
+	<pattern low="30" high="31">00</pattern>
+	<field name="DB" low="32" high="33" type="uint"/>
+	<pattern low="34" high="38">00000</pattern>
+	<field name="X1C" pos="39" type="bool" display=" x1c"/>
+	<pattern low="40" high="41">11</pattern>
+	<field name="X1D" pos="42" type="bool" display=" x1d"/>
+	<pattern pos="43">0</pattern>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<field name="NF16" pos="47" type="bool" display=" nf16"/>
+	<field name="S2E" pos="48" type="uint"/>
+	<pattern pos="49">0</pattern>
+	<field name="END" pos="50" type="bool" display=" end"/>
+	<field name="DE" pos="51" type="uint"/>
+	<pattern low="52" high="53">11</pattern>
+	<field name="NOSCHED" pos="54" type="bool" display=" nosched"/>
+	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
+	<field name="X1B" pos="56" type="bool" display=" x1b"/>
+	<field name="PRED" low="57" high="58" type="#pred2"/>
+	<pattern low="59" high="63">10110</pattern>
+	<derived name="MODE0" expr="#zero" type="uint"/>
+	<derived name="DST" type="#dst" width="10">
+		<expr>{DN} | ({DB} &lt;&lt; 7) | ({DE} &lt;&lt; 9)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<derived name="SRC2" type="#src" width="10">
+		<expr>{S2N} | ({S2B} &lt;&lt; 7) | ({S2E} &lt;&lt; 9)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="S0N">src->src[0].num</map>
+		<map name="RPT">sgx_isa_rpt(src)</map>
+	</encode>
+</bitset>
+
+<!-- hw 17: firv (h2 = 0), firh (h2 = 1) -->
+<bitset name="firv" extends="#int-plain">
+	<doc>
+		src0's number (l14-20) is read in src1's bank. shift is 5 bits:
+		0-1 h10-11, 2-3 h14-15, 4 h24 (printed raw). Repeat h12-13.
+	</doc>
+	<display>
+		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {FMTX} {A5} {COEF} {SHIFT} {A8}]
+	</display>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<pattern pos="34">0</pattern>
+	<field name="COEF" low="35" high="37" type="custom"/>
+	<field name="A5" low="38" high="39" type="custom"/>
+	<field name="FMTX" low="40" high="41" type="#fmt-u8"/>
+	<field name="SH01" low="42" high="43" type="uint"/>
+	<field name="RPT" low="44" high="45" type="#rpt4"/>
+	<field name="SH23" low="46" high="47" type="uint"/>
+	<field name="A8" low="52" high="53" type="custom"/>
+	<field name="SH4" pos="56" type="uint"/>
+	<pattern low="59" high="63">10111</pattern>
+	<derived name="SHIFT" type="custom" width="5">
+		<expr>{SH01} | ({SH23} &lt;&lt; 2) | ({SH4} &lt;&lt; 4)</expr>
+	</derived>
+	<derived name="SRC0" type="#src" width="10">
+		<expr>{S0N} | ({S1B} &lt;&lt; 7) | ({S1E} &lt;&lt; 9)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="S0N">src->src[0].num</map>
+	</encode>
+</bitset>
+
+<bitset name="firh" extends="#instruction">
+	<doc>
+		The dest is an internal register, its number raw in l21-27; shift
+		bits 2-3 move to h0-1; repeat h12-14; h19 = f2_27.
+	</doc>
+	<display>
+		{PRED}{NAME} i{DN}, {SRC0}, {SRC1}, {SRC2} [{SKIPINV} {NOSCHED} {END} {RPT} {FMTX} {A5} {COEF} {SHIFT} {A8} {F2_27}]
+	</display>
+	<field name="S2N" low="0" high="6" type="uint"/>
+	<field name="S1N" low="7" high="13" type="uint"/>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="DN" low="21" high="27" type="uint"/>
+	<field name="S2B" low="28" high="29" type="uint"/>
+	<field name="S1B" low="30" high="31" type="uint"/>
+	<field name="SH23" low="32" high="33" type="uint"/>
+	<pattern pos="34">1</pattern>
+	<field name="COEF" low="35" high="37" type="custom"/>
+	<field name="A5" low="38" high="39" type="custom"/>
+	<field name="FMTX" low="40" high="41" type="#fmt-u8"/>
+	<field name="SH01" low="42" high="43" type="uint"/>
+	<field name="RPT" low="44" high="46" type="#rpt8"/>
+	<pattern pos="47">0</pattern>
+	<field name="S2E" pos="48" type="uint"/>
+	<field name="S1E" pos="49" type="uint"/>
+	<field name="END" pos="50" type="bool" display=" end"/>
+	<field name="F2_27" pos="51" type="bool" display=" f2_27"/>
+	<field name="A8" low="52" high="53" type="custom"/>
+	<field name="NOSCHED" pos="54" type="bool" display=" nosched"/>
+	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
+	<field name="SH4" pos="56" type="uint"/>
+	<field name="PRED" low="57" high="58" type="#pred2"/>
+	<pattern low="59" high="63">10111</pattern>
+	<derived name="SHIFT" type="custom" width="5">
+		<expr>{SH01} | ({SH23} &lt;&lt; 2) | ({SH4} &lt;&lt; 4)</expr>
+	</derived>
+	<derived name="MODE0" expr="#zero" type="uint"/>
+	<derived name="SRC0" type="#src" width="10">
+		<expr>{S0N} | ({S1B} &lt;&lt; 7) | ({S1E} &lt;&lt; 9)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<derived name="SRC1" type="#src" width="10">
+		<expr>{S1N} | ({S1B} &lt;&lt; 7) | ({S1E} &lt;&lt; 9)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<derived name="SRC2" type="#src" width="10">
+		<expr>{S2N} | ({S2B} &lt;&lt; 7) | ({S2E} &lt;&lt; 9)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="DN">src->dst.num</map>
+		<map name="S0N">src->src[0].num</map>
+		<map name="RPT">sgx_isa_rpt(src)</map>
+	</encode>
+</bitset>
+
+<!-- hw 07: efo -->
+<expr name="#efo-mode">(ISA_GPU_ID() &amp; 2) ? 4 : 0</expr>
+
+<bitset name="efo" extends="#instruction">
+	<doc>
+		Two multipliers and two adders feeding i0/i1: d (h20-21) picks what
+		the destination gets, i (h18-19) the internal writes, a (h16-17) the
+		adder inputs, m (h14-15) the multiplier inputs. Short predicate
+		h24-25; no end bit. Operands follow the F16 format control.
+	</doc>
+	<display>
+		{PRED}{NAME} {DST}, {S0NEG}{SRC0}, {S1NEG}{SRC1}, {S2NEG}{SRC2} [{SKIPINV} {NOSCHED} {RPT} {D} {I} {A} {M} {WI0} {WI1} {A0LNEG} {A0RNEG} {F3_10}]
+	</display>
+	<field name="S2N" low="0" high="6" type="uint"/>
+	<field name="S1N" low="7" high="13" type="uint"/>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="DN" low="21" high="27" type="uint"/>
+	<field name="S2B" low="28" high="29" type="uint"/>
+	<field name="S1B" low="30" high="31" type="uint"/>
+	<field name="DB" low="32" high="33" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<field name="S2NEG" pos="35" type="bool" display="-"/>
+	<field name="S1NEG" pos="36" type="bool" display="-"/>
+	<field name="S0NEG" pos="37" type="bool" display="-"/>
+	<field name="S0E" pos="38" type="uint"/>
+	<field name="S2E" pos="39" type="uint"/>
+	<field name="F3_10" pos="40" type="bool" display=" f3_10"/>
+	<field name="WI1" pos="41" type="bool" display=" wi1"/>
+	<field name="WI0" pos="42" type="bool" display=" wi0"/>
+	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
+	<field name="RPT" low="44" high="45" type="#rpt4"/>
+	<field name="M" low="46" high="47" type="#efo-m"/>
+	<field name="A" low="48" high="49" type="#efo-a"/>
+	<field name="I" low="50" high="51" type="#efo-i"/>
+	<field name="D" low="52" high="53" type="#efo-d"/>
+	<field name="A0LNEG" pos="54" type="bool" display=" a0lneg"/>
+	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
+	<field name="PRED" low="56" high="57" type="#pred2"/>
+	<field name="A0RNEG" pos="58" type="bool" display=" a0rneg"/>
+	<pattern low="59" high="63">00111</pattern>
+	<derived name="EMODE" expr="#efo-mode" type="uint"/>
+	<derived name="DST" type="#dst" width="10">
+		<expr>{DN} | ({DB} &lt;&lt; 7)</expr>
+		<param name="EMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7) | ({S0E} &lt;&lt; 8)</expr>
+		<param name="EMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC1" type="#src" width="10">
+		<expr>{S1N} | ({S1B} &lt;&lt; 7)</expr>
+		<param name="EMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC2" type="#src" width="10">
+		<expr>{S2N} | ({S2B} &lt;&lt; 7) | ({S2E} &lt;&lt; 9)</expr>
+		<param name="EMODE" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="DN">SGX_DSTX(SGX_EXPR(__efo_mode)) &amp; 0x7f</map>
+		<map name="DB">(SGX_DSTX(SGX_EXPR(__efo_mode)) &gt;&gt; 7) &amp; 3</map>
+		<map name="S0N">SGX_SRC0(SGX_EXPR(__efo_mode)) &amp; 0x7f</map>
+		<map name="S0B">(SGX_SRC0(SGX_EXPR(__efo_mode)) &gt;&gt; 7) &amp; 1</map>
+		<map name="S0E">SGX_SRC0(SGX_EXPR(__efo_mode)) &gt;&gt; 8</map>
+		<map name="S1N">SGX_SRCX(1, SGX_EXPR(__efo_mode)) &amp; 0x7f</map>
+		<map name="S1B">(SGX_SRCX(1, SGX_EXPR(__efo_mode)) &gt;&gt; 7) &amp; 3</map>
+		<map name="S2N">SGX_SRC(2, SGX_EXPR(__efo_mode)) &amp; 0x7f</map>
+		<map name="S2B">(SGX_SRC(2, SGX_EXPR(__efo_mode)) &gt;&gt; 7) &amp; 3</map>
+		<map name="S2E">SGX_SRC(2, SGX_EXPR(__efo_mode)) &gt;&gt; 9</map>
+		<map name="S0NEG">src->src[0].neg</map>
+		<map name="S1NEG">src->src[1].neg</map>
+		<map name="S2NEG">src->src[2].neg</map>
+		<map name="F3_10">src->f3_10</map>
+		<map name="WI0">src->wi0</map>
+		<map name="WI1">src->wi1</map>
+		<map name="M">src->efo_m</map>
+		<map name="A">src->efo_a</map>
+		<map name="I">src->efo_i</map>
+		<map name="D">src->efo_d</map>
+		<map name="A0LNEG">src->a0lneg</map>
+		<map name="A0RNEG">src->a0rneg</map>
+	</encode>
+</bitset>
+
+<!-- hw 1b: fdual -->
+<bitset name="fdual" extends="#instruction">
+	<doc>
+		Two ops in one word: the primary (pri = h18 | h19 &lt;&lt; 1 | h26 &lt;&lt; 2)
+		on dst (no extension bit) and the slots, the secondary (sec, h6-9)
+		into i0-i2: sd = h5 | h13 &lt;&lt; 1, sb = h14-15, sc = h10 | h21 &lt;&lt; 1;
+		for a mov secondary msrc = h14 | h15 &lt;&lt; 1 | h21 &lt;&lt; 2 instead.
+		No end bit.
+	</doc>
+	<override>
+		<expr>{SEC} == 15</expr>
+		<display>
+			{PRED}{NAME}{PRI}{SEC} {DST}, {SRC0}, {NEG1}{SRC1}, {NEG2}{SRC2} [{SKIPINV} {NOSCHED} {SYNCS} {RPT} {FMT} {SD} {MSRC}]
+		</display>
+		<derived name="MSRC" type="#fdual-msrc">
+			<expr>{SB} | ({SCHI} &lt;&lt; 2)</expr>
+		</derived>
+		<assert pos="42">0</assert>
+	</override>
+	<display>
+		{PRED}{NAME}{PRI}{SEC} {DST}, {SRC0}, {NEG1}{SRC1}, {NEG2}{SRC2} [{SKIPINV} {NOSCHED} {SYNCS} {RPT} {FMT} {SD} {SB} {SC}]
+	</display>
+	<field name="S2N" low="0" high="6" type="uint"/>
+	<field name="S1N" low="7" high="13" type="uint"/>
+	<field name="S0N" low="14" high="20" type="uint"/>
+	<field name="DN" low="21" high="27" type="uint"/>
+	<field name="S2B" low="28" high="29" type="uint"/>
+	<field name="S1B" low="30" high="31" type="uint"/>
+	<field name="DB" low="32" high="33" type="uint"/>
+	<field name="S0B" pos="34" type="uint"/>
+	<field name="NEG2" pos="35" type="bool" display="-"/>
+	<field name="NEG1" pos="36" type="bool" display="-"/>
+	<field name="SDLO" pos="37" type="uint"/>
+	<field name="SEC" low="38" high="41" type="#fdual-sec"/>
+	<field name="SCLO" pos="42" type="uint"/>
+	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
+	<field name="RPT" pos="44" type="#rpt2"/>
+	<field name="SDHI" pos="45" type="uint"/>
+	<field name="SB" low="46" high="47" type="#fdual-sb"/>
+	<field name="S2E" pos="48" type="uint"/>
+	<field name="S1E" pos="49" type="uint"/>
+	<field name="PRI0" pos="50" type="uint"/>
+	<field name="PRI1" pos="51" type="uint"/>
+	<field name="SYNCS" pos="52" type="bool" display=" syncs"/>
+	<field name="SCHI" pos="53" type="uint"/>
+	<field name="FMT" pos="54" type="bool" display=" fmt"/>
+	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
+	<field name="PRED" low="56" high="57" type="#pred2"/>
+	<field name="PRI2" pos="58" type="uint"/>
+	<pattern low="59" high="63">11011</pattern>
+	<derived name="PRI" type="#fdual-pri">
+		<expr>{PRI0} | ({PRI1} &lt;&lt; 1) | ({PRI2} &lt;&lt; 2)</expr>
+	</derived>
+	<derived name="SD" type="#fdual-sd"><expr>{SDLO} | ({SDHI} &lt;&lt; 1)</expr></derived>
+	<derived name="SC" type="#fdual-sc"><expr>{SCLO} | ({SCHI} &lt;&lt; 1)</expr></derived>
+	<derived name="SMODE" expr="#float-smode" type="uint"/>
+	<derived name="MODE0" expr="#zero" type="uint"/>
+	<derived name="DST" type="#dst" width="10">
+		<expr>{DN} | ({DB} &lt;&lt; 7)</expr>
+		<param name="MODE0" as="MODE"/>
+	</derived>
+	<derived name="SRC0" type="#src0" width="9">
+		<expr>{S0N} | ({S0B} &lt;&lt; 7)</expr>
+		<param name="SMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC1" type="#src" width="10">
+		<expr>{S1N} | ({S1B} &lt;&lt; 7) | ({S1E} &lt;&lt; 9)</expr>
+		<param name="SMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC2" type="#src" width="10">
+		<expr>{S2N} | ({S2B} &lt;&lt; 7) | ({S2E} &lt;&lt; 9)</expr>
+		<param name="SMODE" as="MODE"/>
+	</derived>
+	<encode>
+		<map name="DN">SGX_DSTX(0) &amp; 0x7f</map>
+		<map name="DB">(SGX_DSTX(0) &gt;&gt; 7) &amp; 3</map>
+		<map name="S0N">SGX_SRC0(SGX_EXPR(__float_smode)) &amp; 0x7f</map>
+		<map name="S0B">(SGX_SRC0(SGX_EXPR(__float_smode)) &gt;&gt; 7) &amp; 1</map>
+		<map name="S1N">SGX_SRC(1, SGX_EXPR(__float_smode)) &amp; 0x7f</map>
+		<map name="S1B">(SGX_SRC(1, SGX_EXPR(__float_smode)) &gt;&gt; 7) &amp; 3</map>
+		<map name="S1E">SGX_SRC(1, SGX_EXPR(__float_smode)) &gt;&gt; 9</map>
+		<map name="S2N">SGX_SRC(2, SGX_EXPR(__float_smode)) &amp; 0x7f</map>
+		<map name="S2B">(SGX_SRC(2, SGX_EXPR(__float_smode)) &gt;&gt; 7) &amp; 3</map>
+		<map name="S2E">SGX_SRC(2, SGX_EXPR(__float_smode)) &gt;&gt; 9</map>
+		<map name="NEG1">src->src[1].neg</map>
+		<map name="NEG2">src->src[2].neg</map>
+		<map name="SEC">src->sec</map>
+		<map name="PRI0">src->pri &amp; 1</map>
+		<map name="PRI1">(src->pri &gt;&gt; 1) &amp; 1</map>
+		<map name="PRI2">src->pri &gt;&gt; 2</map>
+		<map name="SDLO">src->sd &amp; 1</map>
+		<map name="SDHI">src->sd &gt;&gt; 1</map>
+		<map name="SB">src->sec == 15 ? (src->msrc &amp; 3) : src->sb</map>
+		<map name="SCLO">src->sc &amp; 1</map>
+		<map name="SCHI">src->sec == 15 ? (src->msrc &gt;&gt; 2) : (src->sc &gt;&gt; 1)</map>
+	</encode>
+</bitset>
+
 
 
 </isa>

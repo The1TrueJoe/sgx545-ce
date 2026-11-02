@@ -12,6 +12,7 @@
  *  - tidying the trailing "[...]" (empty brackets, leading spaces).
  */
 
+#include <ctype.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,7 +57,10 @@ print_custom(struct isa_print_state *print, const char *name, uint64_t v)
             return;
          }
       }
-      isa_print(print, " %s=%" PRIu64, name, v);
+      isa_print(print, " ");
+      for (const char *c = name; *c; c++)
+         isa_print(print, "%c", tolower((unsigned char)*c));
+      isa_print(print, "=%" PRIu64, v);
    }
 }
 
