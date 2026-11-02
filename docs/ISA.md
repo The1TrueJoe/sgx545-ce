@@ -1992,8 +1992,8 @@ After the header, in this order (writer and reader agree):
    3 c10: highp, mediump, lowp in the corpus), registers (PA registers it
    takes: 4 for a highp vec4, 2 for a mediump one). A highp `a` gives
    `(4, 0, 1, 4, 1, 4)`. (**writer**, **driver** `FUN_00046b00`, **corpus**;
-   which GLSL input each of 0xb-0xf is, gl_FragCoord, gl_PointCoord or
-   gl_FrontFacing, is open)
+   which GLSL input each of 0xb-0xf is, gl_FragCoord or gl_PointCoord,
+   is open; gl_FrontFacing is not an iterated input: "Fragment shaders")
 3. **List B** then **List C**: constant records whose first u16 is a kind.
    Kinds 1, 2 and 4 are 8 bytes; kinds 3 and 5 are 10. Kind 1 `(1, n, n, 0)`
    is one uniform component; 2 is two (F16 halves, `(n & 3) != 3`), 3 a C10
@@ -2298,6 +2298,14 @@ backed above; this section only collects it.
   no integer divide.
 
 ### Fragment shaders
+
+- **gl_FrontFacing** comes from special register g16: bit 0 is set for a
+  primitive that is clockwise in memory (**capture**, EA-1, one draw shape,
+  y-flipped window; other bits not examined). The DDK reads it with
+  `test.and.ne p0, g16, #1` and a per-draw constant in sa9 (only 0 captured;
+  nonzero presumably inverts). Our compiler: `xor r, g16, sa[front_sa]; and r,
+  r, #1; movc.nz.i32 f, r, c52, c48`, with the driver loading sa[front_sa]
+  bit 0 = 1 when counter-clockwise is front. Not yet drawn by our own programs.
 
 - Varyings arrive iterated in pa (USP list A: one entry per iterated input,
   with its precision); non-dependent texture results also land in pa (PDS

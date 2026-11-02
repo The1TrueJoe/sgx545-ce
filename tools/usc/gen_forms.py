@@ -32,6 +32,8 @@ import hw_int  # noqa: E402
 import hw_mem  # noqa: E402
 import hw_pack  # noqa: E402
 
+BITWISE = ("and", "or", "xor", "shl", "rol", "shr", "asr")
+
 # slot types (usse.h enum usse_slot_type)
 ST = {"Opd": 0, "COpd": 0, "SOpd": 0, "Imm": 1, "MoeVal": 2, "POpd": 3, "PredDst": 4, "SameBank": 5}
 
@@ -114,6 +116,10 @@ def main():
         w("};")
         ops = []
         for o in f.ops:
+            # the bitwise classes' src2: the generic slot; C takes immediates
+            # up to 127 (hw_pack's _imm_enc spreads bigger ones over l14-20, h4-5)
+            if o.text and o.role == "src2" and f.name in BITWISE:
+                o = hw_pack._BSRC2
             st = ST.get(type(o).__name__)
             if o.text or st is None:
                 ops.append(None)

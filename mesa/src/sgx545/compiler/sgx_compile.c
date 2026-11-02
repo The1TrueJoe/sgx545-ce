@@ -197,6 +197,7 @@ file_kind(unsigned file)
    case SGX_F_SA: case SGX_F_U: return USSE_K_SA;
    case SGX_F_O: return USSE_K_O;
    case SGX_F_C: return USSE_K_C;
+   case SGX_F_G: return USSE_K_G;
    case SGX_F_I: return USSE_K_I;
    case SGX_F_IMM: return USSE_K_IMM;
    case SGX_F_P: return USSE_K_P;
@@ -1531,6 +1532,39 @@ discard(struct sgx_ctx *c, nir_intrinsic_instr *in, bool cond)
    }
 }
 
+/* gl_FrontFacing, 1.0 front, 0.0 back: once, at program entry */
+static void
+front_face(struct sgx_ctx *c, struct sgx_val *v)
+{
+   if (c->face_vreg < 0) {
+      unsigned t = new_vreg(c, 1);
+      c->face_vreg = new_vreg(c, 1);
+      struct sgx_ins *x = ins_alloc(c, SGX_INS_ALU, USSE_XOR);
+      x->nops = 3;
+      x->op[0] = vref(t, 0);
+      x->op[1] = ref(SGX_F_G, 16);
+      x->op[2] = ref(SGX_F_SA, c->opts->front_sa);
+      struct sgx_ins *a = ins_alloc(c, SGX_INS_ALU, USSE_AND);
+      a->nops = 3;
+      a->op[0] = vref(t, 0);
+      a->op[1] = vref(t, 0);
+      a->op[2] = ref(SGX_F_IMM, 1);
+      struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, USSE_MOVC_Z_I32);
+      m->nops = 4;
+      m->op[0] = vref(c->face_vreg, 0);
+      m->op[1] = vref(t, 0);
+      m->op[2] = cref(52);
+      m->op[3] = cref(48);
+      fld(m, USSE_F_COND, 1);
+      list_add(&m->link, &c->ins);
+      list_add(&a->link, &c->ins);
+      list_add(&x->link, &c->ins);
+   }
+   v->kind = VAL_V;
+   v->n = c->face_vreg;
+   v->comp = 0;
+}
+
 static void
 emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
 {
@@ -1684,25 +1718,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_load_input:
    case nir_intrinsic_load_interpolated_input: {
       if (c->stage == MESA_SHADER_FRAGMENT && nir_intrinsic_io_semantics(in).location == VARYING_SLOT_FACE) {
-         /* gl_FrontFacing: p0 at program entry (DDK capture: libusc reads p0
-          * before anything writes it); 1.0 front, 0.0 back */
-         if (c->face_vreg < 0) {
-            c->face_vreg = new_vreg(c, 1);
-            struct sgx_ins *m1 = ins_alloc(c, SGX_INS_ALU, USSE_MOV);
-            m1->nops = 2;
-            m1->op[0] = vref(c->face_vreg, 0);
-            m1->op[1] = cref(48);
-            struct sgx_ins *m2 = ins_alloc(c, SGX_INS_ALU, USSE_MOV);
-            m2->nops = 2;
-            m2->op[0] = vref(c->face_vreg, 0);
-            m2->op[1] = cref(52);
-            m2->pred = 1;
-            list_add(&m2->link, &c->ins);
-            list_add(&m1->link, &c->ins);
-         }
-         v->kind = VAL_V;
-         v->n = c->face_vreg;
-         v->comp = 0;
+         front_face(c, v);
          return;
       }
       nir_src *off = &in->src[in->intrinsic == nir_intrinsic_load_input ? 0 : 1];
@@ -1734,6 +1750,9 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       }
       return;
    }
+   case nir_intrinsic_load_front_face:
+      front_face(c, v);
+      return;
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
       v->kind = VAL_CONST;
@@ -1760,6 +1779,26 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
       struct sgx_ref d[4], ss[1][4];
       unsigned m = 0;
+      if (slot == VARYING_SLOT_PSIZ) {
+         /* an f32 output, clamped to the largest point size (docs/STATE.md
+          * "Lines and points"): min(x, 511) as libusc writes it, a constant
+          * at compile time */
+         int r = c->out_reg[VARYING_SLOT_PSIZ * 4];
+         if (r < 0)
+            return;
+         const uint32_t max = 0x43ff8000;
+         struct sgx_ref x = const_f32(src_comp(c, &ls, 0));
+         struct sgx_ref dd[4] = { ref(SGX_F_O, r) };
+         if (x.file == SGX_F_K) {
+            union { uint32_t u; float f; } v = { .u = x.n };
+            struct sgx_ref ks[1][4] = { { ref(SGX_F_K, v.f > 511.0f ? max : x.n) } };
+            emit_runs(c, USSE_MOV, 1, dd, 1, ks, &NOF, 0);
+         } else {
+            struct sgx_ref ts[3][4] = { { x }, { x }, { ref(SGX_F_K, max) } };
+            emit_runs(c, USSE_FMINMAX, 1, dd, 3, ts, &NOF, 0);
+         }
+         return;
+      }
       for (unsigned k = 0; k < 4; k++) {
          d[k] = ss[0][k] = ref(SGX_F_C, 48);
          int r = slot * 4 + k < ARRAY_SIZE(c->out_reg) ? c->out_reg[slot * 4 + k] : -1;
@@ -3230,6 +3269,7 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
    case SGX_F_R: o.kind = USSE_K_R; o.n = r->n; break;
    case SGX_F_PA: o.kind = USSE_K_PA; o.n = r->n; break;
    case SGX_F_SA: o.kind = USSE_K_SA; o.n = r->n; break;
+   case SGX_F_G: o.kind = USSE_K_G; o.n = r->n; break;
    case SGX_F_U: o.kind = USSE_K_SA; o.n = c->sa_base + c->const_slot[r->n]; break;
    case SGX_F_O: o.kind = USSE_K_O; o.n = r->n; break;
    case SGX_F_C: o.kind = USSE_K_C; o.n = r->n; break;
