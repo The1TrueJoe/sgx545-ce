@@ -681,6 +681,9 @@ None of these is settled. The draft uses each recommendation so that it stays co
 
 ### D1. Driver name (module, DRM name, Mesa loader key)
 
+**Decided (Joseph, 2026-11-02): `powervr_sgx`.** The draft below still uses the `sgx545`
+placeholder until the rename. The original recommendation follows.
+
 **Recommendation: `sgx545`,** to be confirmed with the Imagination maintainers before any
 RFC. Upstream's Rogue driver is `powervr`, so `pvr` and `powervr` are taken. Plain `sgx` is
 short and covers later cores, but on Intel hardware it collides with Intel SGX (`/dev/sgx_enclave`,
@@ -692,6 +695,11 @@ placeholder is one search-and-replace from any of these, until something merges.
 
 ### D2. Stream encoding
 
+**Decided (Joseph, 2026-11-02): a `pvr_stream`-style stream, as `AGENTS.md` section 3.2
+describes,** with field layouts held in Mesa's tables as upstream's Rogue driver does. The
+struct layouts in section 3 and `docs/uapi/sgx_drm_draft.h` still need converting to it. The
+original recommendation follows.
+
 **Recommendation: plain extensible structs in the uAPI header,** validated by a per-field
 kernel table. pvr's `pvr_stream` format (scalar stream, extension headers, formats held
 outside the uAPI header, in Mesa's `rogue_kmd_stream.xml` and `pvr_stream_defs.c`) exists
@@ -702,6 +710,8 @@ model, so this departs from it in form and not in function. **Closes nothing:** 
 diverges, a `pvr_stream`-style table can replace it behind a new job type.
 
 ### D3. Job granularity: whole scene, or one job per TA kick
+
+**Decided (Joseph, 2026-11-02): whole scene, as recommended.**
 
 **Recommendation: a render job is a whole scene,** with an array of kicks. Alternative: one
 job per kick with FIRST and LAST flags, as SGXMKIF has, or separate geometry and fragment
@@ -718,6 +728,8 @@ jobs, as pvr has.
 
 ### D4. Parameter buffers and RT data: hidden, or client-allocated
 
+**Decided (Joseph, 2026-11-02): kernel-allocated and hidden, as recommended.**
+
 **Recommendation: kernel-allocated and hidden, behind `CREATE_CONTEXT` and
 `CREATE_RT_DATASET`.** pvr has userspace allocate the free-list and HWRT memory in BOs marked
 `PM_FW_PROTECT`, and pass their addresses. Here the kernel can compute all of it from the
@@ -728,6 +740,8 @@ between contexts. Adding a separate PB object later is additive, through
 `CREATE_CONTEXT.flags`.
 
 ### D5. Unnamed command words: kernel constant, or client value
+
+**Decided (Joseph, 2026-11-02): kernel constant until named and tested, as recommended.**
 
 **Recommendation: kernel constant until named and tested,** as in section 4. Alternative: a
 raw word in the stream with a mask. For: the client surface stays small, and every field in
