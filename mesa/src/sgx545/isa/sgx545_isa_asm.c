@@ -274,13 +274,18 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
    FLAG("sel34", sel34) FLAG("sel36", sel36) FLAG("sel37", sel37) FLAG("sel43", sel43)
    FLAG("f2_25", f2_25) FLAG("scale", scale) FLAG("rint", scale)
    VAL("mask", mask) VAL("drc", drc) VAL("chan", chan) VAL("a3f", a3f)
-   VAL("dmask", dmask) VAL("nodst", nodst) VAL("rot", rot) VAL("path", path)
+   VAL("dmask", dmask) VAL("rot", rot) VAL("path", path)
    VAL("n", n) VAL("imm", imm) VAL("rate", rate) VAL("wait", wait)
    VAL("am0", am4[0]) VAL("am1", am4[1]) VAL("am2", am4[2]) VAL("am3", am4[3])
    VAL("lim0", lim[0]) VAL("lim1", lim[1]) VAL("lim2", lim[2])
 #undef FLAG
 #undef VAL
 
+   if (!strcmp(item, "nodst") && eq && v >= 0) {
+      I->has_nodst = true;
+      I->nodst = v;
+      return true;
+   }
    if (!strcmp(item, "rcnt") && !eq) {
       I->rcnt = true;
       I->rpt = 1;

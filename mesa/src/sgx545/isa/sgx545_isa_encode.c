@@ -135,7 +135,7 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
 #define SGX_IS_IMM(n)  (src->src[n].file == SGX_ISA_FILE_IMM)
 /* Without a destination, test's dst field holds nodst (default 0x280). */
 #define SGX_TDST(m) \
-   (src->dst.file != SGX_ISA_FILE_NONE ? SGX_DST(m) : (src->nodst ? src->nodst : 0x280))
+   (src->dst.file != SGX_ISA_FILE_NONE ? SGX_DST(m) : (src->has_nodst ? src->nodst : 0x280))
 /* A named <expr> of the #instruction hierarchy, e.g. SGX_EXPR(__float_smode). */
 #define SGX_EXPR(n)    __instruction_expr_##n(s, p, src)
 

@@ -95,7 +95,8 @@ struct sgx_isa_instr {
    uint8_t tcond;       /* enum sgx_isa_test_cond */
    uint8_t pdst;
    uint8_t ttype;       /* enum sgx_isa_testmask_type */
-   uint16_t nodst;      /* raw dst field without a destination; 0 = 0x280 */
+   bool has_nodst;      /* without a destination, the dst field holds nodst */
+   uint16_t nodst;      /* (default 0x280 when has_nodst is false) */
    bool f2_0;
 
    /* bitwise */

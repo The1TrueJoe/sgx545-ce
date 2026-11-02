@@ -11,9 +11,11 @@
  * with the line. setfc lines update the format-control state the later
  * lines are encoded and decoded with.
  *
- *    sgx545_isa_test [-t] file...
+ *    sgx545_isa_test [-t] [-f N] file...
  *
  * -t prints the encoding table ("<text> ; <lo> <hi>") on stdout.
+ * -f N decodes N random words (with each format-control state); every word
+ *      that decodes cleanly must assemble back to itself.
  */
 
 #include <stdio.h>
@@ -102,6 +104,53 @@ run_file(const char *path, bool table, unsigned *count)
    return fails;
 }
 
+static uint64_t
+rnd64(uint64_t *x)
+{
+   /* xorshift64* */
+   *x ^= *x >> 12;
+   *x ^= *x << 25;
+   *x ^= *x >> 27;
+   return *x * 0x2545f4914f6cdd1dull;
+}
+
+static unsigned
+fuzz(unsigned n, unsigned *count)
+{
+   uint64_t seed = 0x5a5a1234deadbeefull;
+   unsigned fails = 0, decoded = 0;
+
+   for (unsigned i = 0; i < n; i++) {
+      uint64_t w = rnd64(&seed);
+      /* bias towards valid words: clear a random set of low-probability bits */
+      w &= rnd64(&seed) | rnd64(&seed);
+      struct sgx545_isa_fc fc = { .c10 = i & 1, .f16 = (i >> 1) & 1 };
+      char dis[512], err[256], dis2[512];
+      struct sgx_isa_instr I;
+
+      if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)))
+         continue;
+      decoded++;
+      if (!sgx545_isa_asm_line(dis, &I, err, sizeof(err))) {
+         if (fails++ < 40)
+            fprintf(stderr, "fuzz: %08x %08x: %s: %s\n", (uint32_t)w,
+                    (uint32_t)(w >> 32), dis, err);
+         continue;
+      }
+      uint64_t w2 = sgx545_isa_encode(&I, &fc);
+      if (w2 != w) {
+         sgx545_disasm_one(w2, &fc, dis2, sizeof(dis2));
+         if (fails++ < 40)
+            fprintf(stderr, "fuzz: %08x %08x: %s -> %08x %08x %s\n",
+                    (uint32_t)w, (uint32_t)(w >> 32), dis, (uint32_t)w2,
+                    (uint32_t)(w2 >> 32), dis2);
+      }
+   }
+   *count += decoded;
+   fprintf(stderr, "fuzz: %u of %u random words decoded\n", decoded, n);
+   return fails;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -111,6 +160,10 @@ main(int argc, char **argv)
    for (int i = 1; i < argc; i++) {
       if (!strcmp(argv[i], "-t")) {
          table = true;
+         continue;
+      }
+      if (!strcmp(argv[i], "-f") && i + 1 < argc) {
+         fails += fuzz(atoi(argv[++i]), &count);
          continue;
       }
       fails += run_file(argv[i], table, &count);

@@ -3775,6 +3775,33 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	<pattern low="59" high="63">10110</pattern>
 </bitset>
 
+<bitset name="#hw16-noext1" extends="#instruction">
+	<doc>#int's fields without src1's extension bit (h17 = 0).</doc>
+	<field name="S2N" low="0" high="6" type="uint"/>
+	<field name="S1N" low="7" high="13" type="uint"/>
+	<field name="DN" low="21" high="27" type="uint"/>
+	<field name="S2B" low="28" high="29" type="uint"/>
+	<field name="S1B" low="30" high="31" type="uint"/>
+	<field name="DB" low="32" high="33" type="uint"/>
+	<field name="S2E" pos="48" type="uint"/>
+	<pattern pos="49">0</pattern>
+	<field name="END" pos="50" type="bool" display=" end"/>
+	<field name="DE" pos="51" type="uint"/>
+	<field name="NOSCHED" pos="54" type="bool" display=" nosched"/>
+	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
+	<field name="PRED" low="57" high="58" type="#pred2"/>
+	<pattern low="59" high="63">10110</pattern>
+	<derived name="IMODE" expr="#zero" type="uint"/>
+	<derived name="DST" type="#dst" width="10">
+		<expr>{DN} | ({DB} &lt;&lt; 7) | ({DE} &lt;&lt; 9)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+	<derived name="SRC2" type="#src" width="10">
+		<expr>{S2N} | ({S2B} &lt;&lt; 7) | ({S2E} &lt;&lt; 9)</expr>
+		<param name="IMODE" as="MODE"/>
+	</derived>
+</bitset>
+
 <bitset name="adif" extends="#hw16">
 	<doc>Probably |src1 - src2|; no src0.</doc>
 	<display>
@@ -3851,7 +3878,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	</derived>
 </bitset>
 
-<bitset name="#ssum16" extends="#hw16">
+<bitset name="#ssum16" extends="#hw16-noext1">
 	<doc>
 		src0 has no bank bits: its number (l14-20) is read in src1's bank;
 		src1 has no extension bit.
@@ -3877,8 +3904,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 		<param name="IMODE" as="MODE"/>
 	</derived>
 	<encode>
-		<map name="S0N">src->src[0].num</map>
-		<map name="S1E">0</map>
+		<map name="S0N">SGX_SRC(0, 0) &amp; 0x7f</map>
 	</encode>
 </bitset>
 <bitset name="ssum16" extends="#ssum16">
@@ -3966,7 +3992,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 		<param name="IMODE" as="MODE"/>
 	</derived>
 	<encode>
-		<map name="S0N">src->src[0].num</map>
+		<map name="S0N">SGX_SRC(0, 0) &amp; 0x7f</map>
 	</encode>
 </bitset>
 
@@ -4020,7 +4046,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	</derived>
 	<encode>
 		<map name="DN">src->dst.num</map>
-		<map name="S0N">src->src[0].num</map>
+		<map name="S0N">SGX_SRC(0, 0) &amp; 0x7f</map>
 		<map name="RPT">sgx_isa_rpt(src)</map>
 	</encode>
 </bitset>
