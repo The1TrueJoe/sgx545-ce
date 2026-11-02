@@ -427,10 +427,13 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		goto out;
 	}
 
-	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE);
+	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
+	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
+				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
 	if (err)
 		goto out;
-	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE);
+	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE,
+				SGX_MMU_PTE_READONLY);
 	if (err)
 		goto out;
 
@@ -557,7 +560,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_HWR_SAMPLE_RATE] = UKERNEL_TIMER_HZ / HWR_CHECK_HZ;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = core_clock / UKERNEL_TIMER_HZ;
 	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
-	hc[HOSTCTL_POWER_STATUS] = HOSTCTL_POWMAN_NO_WORK;
+	/* SGXPostPowerState clears the power status before every start. */
+	hc[HOSTCTL_POWER_STATUS] = 0;
 	pvrsgx_ccb_reset(sdev);
 	/* The first command invalidates the directory cache. */
 	sdev->fw.cache_control = PVRSGX_CC_INVAL_BIF_PD;

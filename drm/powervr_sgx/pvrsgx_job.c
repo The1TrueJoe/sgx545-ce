@@ -10,6 +10,7 @@
  * are out.
  */
 
+#include <drm/drm_auth.h>
 #include <drm/drm_exec.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
