@@ -15,3 +15,5 @@ V3="attribute vec4 p; varying vec3 a; varying vec3 b; varying float f; void main
 run v33f "$V3" "precision mediump float; varying vec3 a; varying vec3 b; varying float f; void main() { gl_FragColor = vec4(a.x, b.y, a.z * f, b.z); }"
 run v33f_all "$V3" "precision mediump float; varying vec3 a; varying vec3 b; varying float f; void main() { gl_FragColor = vec4(a.y + b.x - 0.5, b.y * f, a.z, 1.0); }"
 run v2222 "attribute vec4 p; varying vec2 a; varying vec2 b; varying vec2 c; varying vec2 d; void main() { gl_Position = p; a = p.xy * 0.5 + 0.5; b = vec2(0.25, 0.75); c = p.yx * 0.5 + 0.5; d = vec2(0.5, 1.0); }" "precision mediump float; varying vec2 a; varying vec2 b; varying vec2 c; varying vec2 d; void main() { gl_FragColor = vec4(a.x, b.y, c.x * d.x, d.y); }"
+# mediump selects on varyings (the compiler widens the F16 values first)
+run sel_m "attribute vec4 p; varying vec4 a; varying vec4 b; void main() { gl_Position = p; a = vec4(p.x * 0.5 + 0.5, 0.25, p.y * 0.5 + 0.5, 1.0); b = vec4(0.5, p.y * 0.5 + 0.5, 0.75, 0.5); }" "precision mediump float; varying vec4 a; varying vec4 b; void main() { gl_FragColor = a.x > b.x ? a : b; }"

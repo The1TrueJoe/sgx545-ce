@@ -162,12 +162,15 @@ build_stencil(const struct sgx545_context *ctx, struct sgxws_state *st)
        !util_format_has_stencil(util_format_description(ctx->framebuffer.zsbuf.format)))
       return;
    st->stencil = true;
-   st->ispc[0] = stencil_word(&dsa->stencil[0]);
-   st->stencil_ref[0] = ctx->stencil_ref.ref_value[0];
+   /* the hardware's first group is the faces wound CCW in memory, whichever GL calls front */
+   unsigned first = dsa->stencil[1].enabled && !(ctx->rasterizer && ctx->rasterizer->base.front_ccw) ? 1 : 0;
+
+   st->ispc[0] = stencil_word(&dsa->stencil[first]);
+   st->stencil_ref[0] = ctx->stencil_ref.ref_value[first];
    if (dsa->stencil[1].enabled) {
       st->two_sided = true;
-      st->ispc[1] = stencil_word(&dsa->stencil[1]);
-      st->stencil_ref[1] = ctx->stencil_ref.ref_value[1];
+      st->ispc[1] = stencil_word(&dsa->stencil[!first]);
+      st->stencil_ref[1] = ctx->stencil_ref.ref_value[!first];
    }
 }
 
@@ -501,9 +504,10 @@ varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
       uint32_t w = fs->douti[i];
       unsigned need[2][2] = { { 0, 0 } }, n = 0;
 
-      /* plain iteration: set + 1 at b11-16, components - 1 at b22-23; sources
-       * from 0x20 on are not varyings (0x22: the depth plane of a discard) */
-      if ((w & (1u << 24)) && ((w >> 11) & 0x3f) < 0x20)
+      /* plain iteration: set + 1 at b11-16, components - 1 at b22-23; source 0
+       * (gl_FragCoord) and sources from 0x20 on are not varyings (0x22: the
+       * depth plane of a discard) */
+      if ((w & (1u << 24)) && ((w >> 11) & 0x3f) > 0 && ((w >> 11) & 0x3f) < 0x20)
          need[n][0] = ((w >> 11) & 0x3f) - 1, need[n++][1] = ((w >> 22) & 3) + 1;
       if (w & 0x600)               /* sample half: coordinate set + 1 in the low bits, 2-D or projected */
          need[n][0] = (w & 0x3f) - 1, need[n++][1] = w & 0x400 ? 3 : 2;

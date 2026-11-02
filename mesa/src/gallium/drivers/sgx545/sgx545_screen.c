@@ -166,10 +166,11 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
          return false;
    }
    if (usage & PIPE_BIND_RENDER_TARGET) {
-      /* the PBE's formats (sgx545_resource_target) */
+      /* the PBE's formats (sgx545_resource_target).  Not 565: st would then
+       * pick it for GL_RGB565 textures, and T1 0x05 hands the compiler's
+       * unpack R and B swapped; RGBA8 stands in */
       if (format != PIPE_FORMAT_B8G8R8A8_UNORM && format != PIPE_FORMAT_B8G8R8X8_UNORM &&
-          format != PIPE_FORMAT_R8G8B8A8_UNORM && format != PIPE_FORMAT_R8G8B8X8_UNORM &&
-          format != PIPE_FORMAT_B5G6R5_UNORM)
+          format != PIPE_FORMAT_R8G8B8A8_UNORM && format != PIPE_FORMAT_R8G8B8X8_UNORM)
          return false;
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
