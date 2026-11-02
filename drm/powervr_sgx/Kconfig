@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright © 2026 Joseph Telaak
+
+config DRM_POWERVR_SGX
+	tristate "PowerVR SGX545 (Intel CE5300/CE5310)"
+	depends on DRM && PCI && MMU && X86
+	select DRM_EXEC
+	select DRM_GEM_SHMEM_HELPER
+	select DRM_GPUVM
+	select DRM_SCHED
+	select FW_LOADER
+	help
+	  Render-only DRM driver for the PowerVR SGX545 in the Intel CE5300
+	  family (Control4 EA-1/EA-3), where the GPU is its own PCI function
+	  (8086:089b). The GPU runs a microkernel loaded with request_firmware().
+
+	  Not compatible with the vendor services driver (SGX545_CE): bind one
+	  or the other.
+
+	  If M is selected the module will be called powervr_sgx.

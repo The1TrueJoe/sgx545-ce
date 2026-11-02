@@ -1,0 +1,108 @@
+# powervr_sgx: the openHC EA real kernel with the new DRM driver in tree, the
+# driver again out of tree against it, and the uAPI tests. The artifact is a
+# RAM-boot test set for an EA (bzImage, modules, tests); never flash it.
+name: powervr-sgx
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [m2-drm]
+    paths:
+      - drm/**
+      - .github/workflows/powervr-sgx.yml
+
+env:
+  LINUX_VERSION: 7.1.8
+  OPENHC_REF: main
+  BOARD: ea1-v1
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: openHC (board config, patches, EA drivers)
+        uses: actions/checkout@v4
+        with:
+          repository: The1TrueJoe/openHC
+          ref: ${{ env.OPENHC_REF }}
+          path: openhc
+          sparse-checkout: board
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools
+
+      - name: Restore the kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.LINUX_VERSION }}.tar.xz
+          key: linux-${{ env.LINUX_VERSION }}
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ env.LINUX_VERSION }}-${{ github.sha }}
+          restore-keys: ccache-${{ env.LINUX_VERSION }}-
+
+      - name: Lay out the kernel
+        run: |
+          set -eux
+          [ -f linux-$LINUX_VERSION.tar.xz ] ||
+            curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
+          tar xf linux-$LINUX_VERSION.tar.xz
+          sh drm/ci/openhc-ea-kernel.sh "$PWD/openhc" "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+
+      - name: Build the kernel and modules
+        run: |
+          set -eux
+          export CCACHE_DIR=~/.cache/ccache
+          ccache -M 2G
+          make -C linux-$LINUX_VERSION ARCH=x86_64 CC="ccache gcc" KCFLAGS=-Werror=implicit-function-declaration \
+            -j"$(nproc)" bzImage modules
+          ccache -s
+
+      - name: The driver out of tree, with W=1
+        run: |
+          set -eux
+          make -C linux-$LINUX_VERSION ARCH=x86_64 M=$PWD/drm/powervr_sgx W=1 modules 2>&1 | tee oot.log
+          ! grep -E 'warning:|error:' oot.log
+
+      - name: uAPI tests (static, musl)
+        run: |
+          set -eux
+          make -C linux-$LINUX_VERSION ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr
+          musl-gcc -static -O2 -Wall -Wextra -Werror -I hdr/include -I drm/powervr_sgx/include/uapi/drm \
+            -o powervr_sgx_test drm/tests/powervr_sgx_test.c
+          # The header on its own, as userspace sees it.
+          echo '#include "powervr_sgx_drm.h"' | gcc -x c -fsyntax-only -Wall -Wpadded -Werror \
+            -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm -
+
+      - name: Collect the RAM-boot set
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          mkdir -p out/modules
+          cp $L/arch/x86/boot/bzImage out/bzImage
+          cp $L/.config out/config
+          cp powervr_sgx_test out/
+          for m in powervr_sgx gpu-sched drm_exec drm_gpuvm drm_shmem_helper; do
+            find $L -name "$m.ko" -exec cp {} out/modules/ \;
+          done
+          strings $L/vmlinux | grep -m1 'Linux version' > out/version
+          ls -l out out/modules
+          cat out/version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powervr-sgx-${{ env.BOARD }}
+          path: out/
+          retention-days: 14
