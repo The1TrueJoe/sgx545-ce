@@ -233,6 +233,9 @@ main(int argc, char **argv)
             loc += glsl_count_vec4_slots(var->type, false, false);
          }
          NIR_PASS(_, nir, nir_lower_io, nir_var_uniform, vec4_slots, (nir_lower_io_options)0);
+         /* (st hands over constant offsets folded: a struct member's is an
+          * iadd of constants until then) */
+         NIR_PASS(_, nir, nir_opt_constant_folding);
          NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
       }
       struct sgx_shader out;
