@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <dlfcn.h>
 #include <math.h>
 #include <stdlib.h>

@@ -5,16 +5,15 @@
 
 /*
  * Shaders.  The NIR -> USSE backend (src/sgx545/compiler) compiles each one
- * to a USP, as libusc did for the DDK, and this file is the rest of what the
- * DDK's GL driver did with it (docs/ISA.md "The USP container", "What a
- * compiler needs"): read the USP's lists, finalise and upload the programs,
- * and keep what a draw needs: the constants' places in secondary attributes,
+ * to code plus a struct sgx_shader that says what it needs (docs/ISA.md
+ * "What a compiler needs"); this file finalises and uploads the programs and
+ * keeps what a draw needs: the constants' places in secondary attributes,
  * the attribute slots, the vertex outputs, the fragment iterators.
  *
  * Varyings get texture coordinate set (location - VARYING_SLOT_VAR0) on both
  * sides, so a vertex and a fragment shader compiled apart still agree.
  *
- * Before the compiler (SGX545_NO_COMPILER=1 still selects this), a shader was
+ * Before the compiler (SGX545_DEBUG=novs,nofs still selects this), a shader was
  * matched against the fixed programs the winsys carries (tools/gen/mkusse.py):
  * gl_Position = attribute 0, gl_FragColor = one vec4 uniform or constant.
  */
@@ -395,6 +394,14 @@ read_program(const struct sgx_shader *out, struct sgx545_shader *so, struct prog
       info->deps[info->n_deps].raw = x->reg;
       info->deps[info->n_deps].smp = x->smp;
       info->n_deps++;
+   }
+   /* gl_FragCoord's iteration (set + 1 = 14) has no DOUTI source we know:
+    * the iterate half's sources are a coordinate set + 1 and 0x20 colour
+    * (docs/PDS.md "DOUTI").  Untried sources may lock the GPU up, so refuse
+    * the shader rather than guess. */
+   for (unsigned i = 0; i < out->n_iters; i++) {
+      if (!out->iters[i].sample && out->iters[i].set + 1 >= 0xb)
+         return info->why = "gl_FragCoord", false;
    }
    for (unsigned i = 0; i < out->n_blocks; i++) {
       if (out->blocks[i].kind != SGX_BLOCK_BRANCH)

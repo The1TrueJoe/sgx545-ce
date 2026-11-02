@@ -67,8 +67,10 @@ The hardware facts it holds:
 | pass type (blend 1, discard 4, both 2) | `sgx545_draw.c` | ISA.md "The draw state", STATE.md §3 ISPA | capture | doc gap: STATE.md's ISPA table should list pass types 1, 2 and 4 |
 | ISPA depth compare = the GL enum's low bits; every render starts at depth 1.0 | `sgx545_draw.c` | STATE.md §3 ISPA, §6 render details +0x40 | capture + hardware [C] | keep |
 | constant formats: F32, F16 (round to nearest even), C10 (clamp(lrint(v·255)), ±2.0), our kinds 0x10/0x11 | `sgx545_draw.c` | ISA.md "Hardware checks" (hwt_p3, tests/c10); COMPILER-UPSTREAM §3 | hardware | keep (kinds 0x10/0x11 move into `sgx_const_map`) |
-| the USP container: header, lists A-C, blocks 2-9 | `sgx545_program.c` | ISA.md "The USP container", "USP texture-sample blocks" | corpus parse | not upstream: the driver takes `struct sgx_shader` directly (COMPILER-UPSTREAM §3) |
-| dependent samples: the USP's smp template patched (dst l21-27, state in SA at l7-13, bank l30-31) + `wdf` | `sgx545_program.c` | ISA.md "The texture-sample sequence" | hardware (A/B pixel-exact) | compiler: it emits the smp and wdf; the driver only passes the texture words |
+| what a compiled program needs (constants, iterations, samples, branches) | `sgx545_program.c` `read_program` | `sgx_compiler.h` `struct sgx_shader` | — | done (b2ef377): the driver reads `struct sgx_shader`; nothing writes or parses a USP in `mesa/` |
+| dependent samples: the compiler's smp template (`sgx_sample_info.smp`) patched (dst l21-27, state in SA at l7-13, bank l30-31) + `wdf`, branch offsets moved | `sgx545_program.c` `insert_samples` | ISA.md "The texture-sample sequence" | hardware (A/B pixel-exact) | compiler: it emits the smp and wdf in place; the driver only passes the texture words |
+| gl_FragCoord: the compiler's iteration (set + 1 = 14) has no DOUTI source we know, so the shader is refused | `sgx545_program.c` `read_program` | PDS.md "DOUTI" (sources: set + 1, 0x20 colour) | — | doc gap: capture the DDK's DOUTI for gl_FragCoord |
+| gl_PointCoord: iterated as texture coordinate set 0 | `sgx545_program.c` | PDS.md "DOUTI" (w1 b4/b5 "coordinate replacement", not captured) | — | doc gap: capture a point-sprite draw |
 | varyings: set = location − VAR0 on both sides | `sgx545_program.c`, `sgx545_screen.c` | — (our convention) | — | keep |
 | render targets BGRA8888 only, rows padded to 32 px | `sgx545_screen.c`, `sgx545_resource.c` | STATE.md §4 "PBE words", "Format codes" | capture (code 0), FBO formats [C] | keep |
 | "as the DDK does" comments (indices, uniform pins, ghosting, context sharing) | throughout | — | — | reword to cite the doc section and the test that fixed the behaviour |
@@ -136,9 +138,10 @@ STATE.md §1/§6 and UKERNEL.md.
    (COMPILER-UPSTREAM §4), these become compiler output, and the fixed
    programs become assembly text assembled at build time.
    `sgx545_usse_progs.h` and `mesa/build.sh`'s call into `tools/` go away.
-3. **Drop the USP path from the driver.** Take `struct sgx_shader` from the
-   compiler (COMPILER-UPSTREAM §3). Dependent samples come out of the
-   compiler finished.
+3. **Dependent samples finished by the compiler.** The USP path is gone
+   (b2ef377): the driver takes `struct sgx_shader`. What is left is the smp
+   patching and `wdf` insertion in `insert_samples`, which the compiler can
+   emit in place.
 4. **The M3 driver.** It takes over §3's command-word layer and §2's driver
    facts, written from the docs and sitting on the new uAPI. `sgxws.h`'s
    shape (GL-level state in, words out) is a reasonable starting interface,
