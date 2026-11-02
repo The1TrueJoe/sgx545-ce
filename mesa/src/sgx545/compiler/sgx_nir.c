@@ -259,7 +259,7 @@ lower_tex_derefs(struct sgx_ctx *c)
    return nir_shader_instructions_pass(c->nir, lower_tex_derefs_instr, nir_metadata_control_flow, &t);
 }
 
-/* gl_FrontFacing as the constant true (see sgx_compile_options.front_p0) */
+/* gl_FrontFacing as the constant true (see sgx_compile_options.front_sa) */
 static bool
 front_true_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
@@ -863,7 +863,7 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
    lower_tex_derefs(c);
-   if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_p0)
+   if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_sa)
       NIR_PASS(_, s, nir_shader_intrinsics_pass, front_true_instr, nir_metadata_control_flow, NULL);
 
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, 0);

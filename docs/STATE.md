@@ -566,15 +566,20 @@ points, 4 point sprites [D].
 (libGLESv2 0x255b0) [D].
 
 **Points.** A point draw's vertex program writes one output dword after
-the position and the varyings, an **F16 pair: the size in the low half**,
-0x5ffc (511.0, the largest point size) in the high half.
+the position and the varyings: **the size as an f32**, clamped to 511.0, the
+largest point size [D; no draw of ours has run this yet].
 
-- The words: gl_PointSize = 8.0 compiles to `mov o6, sa10` with sa10 =
-  `5ffc4800`; 16.0 gives `5ffc4c00`.
-- A computed size is clamped against sa10's low half (= 511) with
-  `fminmax o6, r62, i2, sa10.f16.lo` (`ptattr`).
-- Changing the low half from 8.0 to 16.0 draws the DDK's own 16-pixel frame
-  [C, p1].
+- A computed size: `fminmax o6, pa4, pa4, sa10.f16.lo [fmt]` (corpus `vo_ps`;
+  `ptattr`), which is min(x, 511) with sa10's low half = 0x5ffc. The fminmax
+  writes f32 whatever format its sources are in.
+- gl_PointSize = 8.0: the program is `mov o6, sa10`, and sa10 is loaded with
+  `5ffc4800`, the F16 pair (size 8.0, 511.0); 16.0 gives `5ffc4c00`. That word
+  is the input of the secondary program, `fminmax pa10, pa10.f16.hi,
+  pa10.f16.hi, pa10.f16.lo` (corpus `vo_psk`), which leaves min(size, 511) in
+  sa10 as an f32 before the vertex program reads it.
+- Changing the loaded word's size from 8.0 to 16.0 draws the DDK's own
+  16-pixel frame [C, p1]. That replay still runs the secondary program, so
+  it doesn't show the output format by itself.
 - Output select gets 0x100 (`00073100`) [D].
 - The ES2 driver gives every point draw a two-component texcoord set ahead
   of the size (TSP words 2 and 1). The vertex program doesn't write it

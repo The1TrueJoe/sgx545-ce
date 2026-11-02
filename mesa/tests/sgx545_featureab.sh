@@ -80,3 +80,10 @@ run pt_var PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; void main(
 run pt_vary PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; varying vec2 c; void main() { gl_Position = p; gl_PointSize = 16.0; c = p.xy * 0.5 + 0.5; }" PROBE_FS="precision mediump float; varying vec2 c; void main() { gl_FragColor = vec4(c, 0.0, 1.0); }"
 run sprite PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; void main() { gl_Position = p; gl_PointSize = 32.0; }" PROBE_FS="precision mediump float; void main() { gl_FragColor = vec4(gl_PointCoord, 0.0, 1.0); }"
 run sprite_v PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; varying vec2 c; void main() { gl_Position = p; gl_PointSize = 32.0; c = p.xy * 0.5 + 0.5; }" PROBE_FS="precision mediump float; varying vec2 c; void main() { gl_FragColor = vec4(gl_PointCoord.x, c.y, 0.0, 1.0); }"
+# gl_FrontFacing: both windings in one draw, under both glFrontFace settings
+FFS="precision mediump float; void main() { gl_FragColor = gl_FrontFacing ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 1.0, 0.0, 1.0); }"
+BOTH="-0.9 -0.5 -0.1 -0.5 -0.5 0.5 0.1 -0.5 0.5 0.5 0.9 -0.5"
+run ff PROBE_VS="$FV" PROBE_FS="$FFS" PROBE_VERTS="$BOTH"
+run ff_cw PROBE_VS="$FV" PROBE_FS="$FFS" PROBE_VERTS="$BOTH" PROBE_FRONTFACE=2304
+run ff_pb PROBE_VS="$FV" PROBE_FS="$FFS" PROBE_VERTS="$BOTH" PROBE_PBUFFER="720 480" PROBE_CONFIG="8 8 8 8 0 0"
+run ff_pbcw PROBE_VS="$FV" PROBE_FS="$FFS" PROBE_VERTS="$BOTH" PROBE_PBUFFER="720 480" PROBE_CONFIG="8 8 8 8 0 0" PROBE_FRONTFACE=2304

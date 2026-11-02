@@ -475,6 +475,9 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    so->reads_pointcoord = nir->info.stage == MESA_SHADER_FRAGMENT && vary.point_size;
    struct sgx_layout layout = { layout_place, layout_first_free, nir };
 
+   /* gl_FrontFacing against the winding gallium calls front, sgx545_draw.c writes it */
+   opts.front_sa = SGX545_SA_FRONT;
+
    opts.layout = &layout;
    if (vertex) {
       nir_foreach_shader_in_variable(var, nir) {
@@ -582,6 +585,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             so->code = NULL;
          }
       }
+      so->uses_front_face = out.uses_front_face;
       so->color_reg = out.colour_pa;
       so->temps = out.n_temps;
       so->prog.temps = out.n_temps;

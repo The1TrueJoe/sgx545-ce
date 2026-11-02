@@ -210,6 +210,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
 
    out->sa_base = c->sa_base;
    out->sa_slots = c->n_sa;
+   out->uses_front_face = c->face_vreg >= 0;
    out->n_consts = 0;
    for (unsigned k = 0; k < ARRAY_SIZE(c->const_used) && out->n_consts < ARRAY_SIZE(out->consts); k++) {
       if (c->const_slot[k] < 0)

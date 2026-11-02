@@ -865,6 +865,10 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
          fsp.temps = MAX2(fsp.temps, 2);
       }
+      if (ctx->fs->uses_front_face) {
+         fsk[SGX545_SA_FRONT] = ctx->rasterizer && ctx->rasterizer->base.front_ccw;
+         fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
+      }
       /* a discard's visibility test (atst8 and pcoeff read sa3, sa4), as the
        * DDK writes them (EA3): sa3 = 0xe000 | ISPA's depth compare (7 with the
        * test off) | 8 without depth writes (always 0xe00f, LESS 0xe001,

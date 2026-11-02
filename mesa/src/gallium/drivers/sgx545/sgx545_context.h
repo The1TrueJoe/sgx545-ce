@@ -37,6 +37,9 @@ struct sgx545_const {
 
 #define SGX545_MAX_DEP_SAMPLES 8
 
+/* the fragment driver block's register with gallium's front_ccw in bit 0 */
+#define SGX545_SA_FRONT 5
+
 struct sgx545_shader {
    struct nir_shader *nir;
    enum sgx545_shader_kind kind;
@@ -60,6 +63,7 @@ struct sgx545_shader {
       uint32_t code;
    } variants[8];
    unsigned n_variants;
+   bool uses_front_face;        /* fragment: reads SGX545_SA_FRONT */
    bool reads_pointcoord;       /* fragment: its varyings start at set 1, gl_PointCoord is set 0 */
    struct sgx545_shader *sprite_vs;   /* vertex: the same with set 0 reserved, made when first drawn with such a shader */
 };

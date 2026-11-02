@@ -64,12 +64,11 @@ struct sgx_compile_options {
    /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
     * F16 iteration, fmad16, F16/C10 uniforms, as the DDK does */
    bool f16;
-   /* gl_FrontFacing: by default 1.0 (front). libusc reads p0 at entry and
-    * flips it with a per-draw driver constant, but in our programs p0 at
-    * entry is not reliable (EA3: ~11% of pixels differ run to run), so no
-    * per-primitive facing source is known yet. front_p0 = read p0 (set =
-    * front), for experiments. */
-   bool front_p0;
+   /* gl_FrontFacing = ((g16 ^ sa[front_sa]) & 1) != 0: g16 bit 0 is the
+    * primitive's winding in memory (docs/ISA.md "Fragment shaders"), and the
+    * driver loads this SA register with what makes that winding front.
+    * 0: constant true (no way to flip it under the DDK's driver) */
+   unsigned front_sa;
    /* the driver loads constant formats the DDK's driver has no list C kind
     * for (sgx_const_map fmt 0x10 / 0x11): a lowp vector's xyz pre-converted
     * to F16 and literal constants, where libusc converts once per draw in its
@@ -166,9 +165,10 @@ struct sgx_shader {
    bool discards;               /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
    uint32_t in_mask[4];         /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
    unsigned set_comps[SGX_MAX_SETS]; /* vertex: output set sizes (o4 on); 0 = unused */
-   bool point_size;             /* vertex: writes the point size, after the sets */
+   bool point_size;             /* vertex: writes the point size (f32), after the sets */
    unsigned n_out_regs;         /* vertex: o registers written */
    unsigned sa_slots;           /* SA registers used from sa_base on (constants and the compiler's own) */
+   bool uses_front_face;        /* fragment: reads sa[front_sa], so it must be loaded */
    uint64_t *code;              /* main program, flat (branch targets resolved) */
    unsigned n_code;
    unsigned n_samples;
