@@ -159,6 +159,9 @@ CR_PDS_INV1 = 0xAD4          # PDS cache invalidate, 3D side
 CR_PDS_INV_CSC = 0xAE0       # coefficient-store invalidate
 CR_DPM_STATE = 0x694
 CR_DPM_CONTROL = 0x698
+CR_DPM_FL_MODE = 0x664       # DPM free-list load selector (TA = 3, 3D = 5)
+CR_DPM_TA_FL = 0x684         # DPM TA free-list load  -> EUR_CR_EVENT_STATUS2 bit 0
+CR_DPM_3D_FL = 0x680         # DPM 3D free-list load  -> EUR_CR_EVENT_STATUS2 bit 1
 CR_OTPM = 0x24C
 CR_TPC = 0x224
 CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
@@ -335,6 +338,19 @@ class Asm:
         self.i(f"str #{CR_USE_INVAL // 4}, r5")        # USE cache invalidate
         self.wait(0x138, done_mask, CR_EVENT_HOST_CLEAR_0x140)
         self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done
+
+    def dpm_freelist(self, mode, kick_reg, done_bit):
+        """load a DPM free list so the geometry/render can allocate parameter-
+        buffer pages: selector 0x664 = `mode` (TA 3, 3D 5), then pulse the TA
+        (0x684) or 3D (0x680) load register, and wait for the done event in
+        EUR_CR_EVENT_STATUS2 (TA bit 0, 3D bit 1). Without this the free list is
+        empty, the parameter buffer's pages-in-use stays 0 and the TA never runs
+        — EA1 HW-confirmed 2026-11-02 (docs/UKERNEL.md §6 "Load the free-list")."""
+        self.i(f"limm r5, #{mode}")
+        self.i(f"str #{CR_DPM_FL_MODE // 4}, r5")
+        self.i("limm r5, #1")
+        self.i(f"str #{kick_reg // 4}, r5")
+        self.wait(CR_EVENT_STATUS2, done_bit, CR_EVENT_HOST_CLEAR2)
 
     def dpm_load(self):
         """load the DPM state and control, and clear the OTPM, waiting for each
@@ -676,6 +692,7 @@ def build(a):
     # parameter-buffer registers, then load the DPM state/control and wait for
     # the free list to be ready before the TA kicks (docs/UKERNEL.md §6)
     a.program(11, TA_PB)
+    a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
     a.dpm_load()
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
@@ -763,6 +780,7 @@ def build(a):
     a.i("ld.a.d r4, r11, #%d [moe]" % (0x10 // 4))    # 0x600 <- pb+0x10
     a.i("wdf")
     a.i(f"str #{0x600 // 4}, r4")
+    a.dpm_freelist(5, CR_DPM_3D_FL, 0x2)             # load the 3D free list before the render
     a.consts(D3_CONST)
     a.program(10, D3_RD)
     # invalidate the 3D-side caches and wait, then start the 3D
