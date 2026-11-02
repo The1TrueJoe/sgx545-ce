@@ -810,8 +810,10 @@ pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz)
       struct sgx_ref r = a;
       if (r.file == SGX_F_V)
          r.comp &= ~1u;
-      else
+      else if (r.file != SGX_F_U)
          r.n &= ~1u;
+      /* (a uniform keeps its own number: the encoder finds its SA register,
+       * and constant 2m may have none when only 2m+1 is read) */
       return r;
    }
    if (ref_same(&a, &b) && !a.h16 && a.file != SGX_F_K) {
@@ -3457,6 +3459,46 @@ uniform_layout(struct sgx_ctx *c)
       c->lit_slot[i] = c->n_sa++;
 }
 
+/* A format-select F16 operand counts halves in 6 bits: it reaches sa0-sa31
+ * only. With many uniforms an F16 constant's SA register can be past that
+ * (dEQP uniform_api mat4[3]): copy its halves to a temporary first with
+ * pck.f16.f16, whose sources are whole registers with a lane. Needs the
+ * layout, which only depends on the constants the program uses. */
+static void
+far_f16_uniforms(struct sgx_ctx *c)
+{
+   uniform_layout(c);
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      if (i->kind != SGX_INS_ALU || i->form == USSE_FMAD16 ||
+          (i->form >= USSE_FRCP && i->form <= USSE_FCOS) || i->form == USSE_PCK_U8_F16 ||
+          i->form == USSE_PCK_F16_F16 || i->form == USSE_PCK_F32_F16)
+         continue;
+      for (unsigned k = i->ndst; k < i->nops; k++) {
+         struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_U || !r->h16 || c->const_slot[r->n] < 0 ||
+             c->sa_base + c->const_slot[r->n] < 32)
+            continue;
+         unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         unsigned t = new_vreg16(c, ALIGN_POT(n, 2));
+         for (unsigned j = 0; j < n; j += 2) {
+            struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F16);
+            pk->nops = 3;
+            pk->op[0] = href(t, j);
+            pk->op[1] = ref(SGX_F_U, r->n + j);
+            pk->op[1].h16 = 1;
+            pk->op[2] = ref(SGX_F_U, r->n + (j + 1 < n ? j + 1 : j));
+            pk->op[2].h16 = 1;
+            insert_before(i, pk);
+         }
+         struct sgx_ref v = href(t, 0);
+         v.neg = r->neg;
+         v.abs = r->abs;
+         v.step = r->step;
+         *r = v;
+      }
+   }
+}
+
 static struct usse_opd
 phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
 {
@@ -3641,6 +3683,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       emit_color(c);
    if (!c->failed)
       merge_runs(c);
+   if (!c->failed)
+      far_f16_uniforms(c);
    if (!c->failed)
       allocate(c);
    if (!c->failed) {
