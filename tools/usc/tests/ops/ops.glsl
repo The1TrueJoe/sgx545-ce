@@ -34,3 +34,7 @@ uniform mediump float e;
 uniform highp float h;
 varying mediump float f;
 void main() { gl_FragColor = vec4(-7.5 - e, h, f * -0.25, 1.0); }
+@frag log_const_m
+precision mediump float;
+varying mediump float a; varying mediump float c;
+void main() { gl_FragColor = log(vec4(c, 2.0, a, a)); }

@@ -697,6 +697,9 @@ f32_to_h(struct sgx_ctx *c, struct sgx_ref x)
    struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, USSE_FMAD16);
    i->nops = 4;
    i->op[0] = href(t, 0);
+   /* (an F16 constant: its f32 value, not its bits read as f32; dEQP random
+    * exponential.14's log(vec4(c, 2.0, ...)) took log2(denormal)) */
+   x = const_f32(x);
    if (x.file == SGX_F_K) {
       int h = hw_const(x.n);
       if (h < 0) {
