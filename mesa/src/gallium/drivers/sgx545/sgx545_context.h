@@ -28,7 +28,9 @@ enum sgx545_shader_kind {
 
 /* a constant in secondary attributes: sa[base + slot] = constant buffer 0 float k */
 struct sgx545_const {
-   uint16_t k, slot, fmt, shift;   /* fmt: 1 f32, 2 F16 half at shift, 3 C10 channel at shift */
+   uint16_t k, slot, fmt, shift;   /* fmt: 1 f32, 2 F16 half at shift, 3 C10 channel at shift,
+                                    * 0x10 F16 half of the C10 value, 0x11 the literal `value` */
+   uint32_t value;
 };
 
 #define SGX545_MAX_CONSTS 256
@@ -114,6 +116,8 @@ struct sgx545_context {
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read, fl_deferred;   /* flushes by cause */
       unsigned vc_hits, vc_misses, vc_uncacheable;
+      unsigned blit_gpu, blit_copy, blit_cpu;
+      uint64_t blit_cpu_px, blit_cpu_ns;
    } stats;
 
    struct blitter_context *blitter;     /* GPU blits: a quad through our own shaders */

@@ -473,18 +473,22 @@ read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_inf
       unsigned kind = rd16(u, off);
       struct sgx545_const *k = &so->consts[so->n_consts];
       /* kind 1 f32, 2 F16 half (k, slot, shift); 3 a C10 channel, a 10-byte
-       * record (k, 0, slot, shift) */
-      unsigned at = kind == 3 ? off + 2 : off;
+       * record (k, 0, slot, shift).  Ours (opts.driver_consts): 0x10 an F16
+       * half of the C10 value, kind 2's record; 0x11 a literal, a 10-byte
+       * record (value low, value high, slot, shift) */
+      bool rec10 = kind == 3 || kind == 0x11;
+      unsigned at = rec10 ? off + 2 : off;
 
-      if (kind < 1 || kind > 3 || so->n_consts == SGX545_MAX_CONSTS)
+      if (!((kind >= 1 && kind <= 3) || kind == 0x10 || kind == 0x11) || so->n_consts == SGX545_MAX_CONSTS)
          return info->why = "a list C constant kind or too many", false;
       k->fmt = kind;
-      k->k = rd16(u, off + 2);
+      k->k = kind == 0x11 ? 0xffff : rd16(u, off + 2);
+      k->value = kind == 0x11 ? rd16(u, off + 2) | (uint32_t)rd16(u, off + 4) << 16 : 0;
       k->slot = rd16(u, at + 4);
       k->shift = rd16(u, at + 6);
       so->const_dwords = MAX2(so->const_dwords, k->slot + 1u);
       so->n_consts++;
-      off += kind == 3 ? 10 : 8;
+      off += rec10 ? 10 : 8;
    }
    if (n_d || n_sec || off > size)
       return info->why = n_d ? "list D" : n_sec ? "a secondary program" : "a short USP", false;
@@ -508,6 +512,9 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
 
    opts.verbose = (sgx545_debug & SGX545_DEBUG_NIR) != 0;
    opts.f16 = ctx->base.screen->shader_caps[nir->info.stage].fp16;
+   /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
+    * F16 and literals in SA, where libusc converts in a secondary program */
+   opts.driver_consts = debug_get_bool_option("SGX545_DRIVER_CONSTS", true);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    remap_legacy_varyings(nir);
    assign_varyings(nir, &vary);

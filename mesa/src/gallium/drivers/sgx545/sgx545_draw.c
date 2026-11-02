@@ -67,6 +67,7 @@ begin_frame(struct sgx545_context *ctx)
                  cbuf->texture->height0);
       return false;
    }
+   t.scanout = res->wrapped;
    rt = get_rt(ctx, res->base.width0, res->base.height0, t.va);
    if (!rt)
       return false;
@@ -372,11 +373,20 @@ fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sg
 
       if (k->fmt == 2) {
          block[base + k->slot] |= (uint32_t)sgxws_f16(v) << k->shift;
-      } else if (k->fmt == 3) {
-         /* C10: round(v * 255), signed 10 bits */
-         int c = (int)lrintf(CLAMP(v, -2.0f, 2.0f) * 255.0f);
+      } else if (k->fmt == 3 || k->fmt == 0x10) {
+         /* C10: round(v * 255), signed 10 bits, the product in double as the
+          * DDK has it (0.3f * 255 is 76.500003: 77, where a float product is
+          * 76.5 and rounds to even, 76); 0x10 is that value as F16, c / 255
+          * rounded to nearest as pck.f16.c10 gives it (c / 255 isn't dyadic,
+          * so the float in between can't round the F16 differently) */
+         int c = CLAMP((int)lrint(CLAMP((double)v, -2.0, 2.0) * 255.0), -512, 511);
 
-         block[base + k->slot] |= ((uint32_t)CLAMP(c, -512, 511) & 0x3ff) << k->shift;
+         if (k->fmt == 3)
+            block[base + k->slot] |= ((uint32_t)c & 0x3ff) << k->shift;
+         else
+            block[base + k->slot] |= (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
+      } else if (k->fmt == 0x11) {
+         block[base + k->slot] |= k->value << k->shift;
       } else {
          memcpy(&block[base + k->slot], &v, 4);
       }

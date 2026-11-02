@@ -6,4 +6,6 @@ export LIBGL_VERTEXFOG=1 LIBGL_MIPMAP=3
 export LIBGL_EGL=/usr/lib/sgx545/libEGL.so.1 LIBGL_GLES=/usr/lib/sgx545/libGLESv2.so.2
 export LD_LIBRARY_PATH=/usr/lib/mc-overlay:/usr/lib/gl4es:/usr/lib/sgx545${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export DISPLAY=${DISPLAY:-:0}
+# MC_LINEBUF=1: stdout line-buffered, so gl4es' FPS lines reach the log as they are printed
+[ -n "$MC_LINEBUF" ] && export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD }/usr/libexec/coreutils/libstdbuf.so" _STDBUF_O=L
 exec "$@"
