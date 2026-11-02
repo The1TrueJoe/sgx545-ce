@@ -125,7 +125,13 @@ priority order and, for most, writes the matching bit back to
 `EUR_CR_EVENT_HOST_CLEAR`/`CLEAR2` to acknowledge it before handling it.
 (openHC: the `kick` handler acknowledges SW_EVENT as its first action; the
 matching acknowledge in `ta_finished` and `render_done` is still to add,
-validated against the DDK render trace when frames run.)
+validated against the DDK render trace when frames run. The dispatch also
+acknowledges a pending **DCU-invalidate** in `EUR_CR_EVENT_STATUS2`
+(`dcu_invalid`, 0x400) up front: the kernel's `SysFinalise` leaves it set on
+the EA1, and since openHC read only `EUR_CR_EVENT_STATUS`, it re-triggered the
+event program forever — a storm that starved the host kick and locked the core,
+HW-confirmed 2026-11-02; see the log entry. Reading STATUS2, not just STATUS,
+is exactly what this paragraph requires.)
 The groups, with the status bit each corresponds to:
 
 | event | status bit | handler, in outline |
@@ -335,23 +341,33 @@ first word reads 1 (`tools/ukernel/run.py`, the `init` section). A timeout here
 is only logged ("Wait for uKernel initialisation failed"), so a successful
 `INITSRV_DISCONNECT` does not prove the microkernel ran — a client must render.
 
-**Hardware status (EA3, 2026-11-02).** The open microkernel's clean-boot init
-path runs on hardware: after `srvinit -o`, Host control `ui32InitStatus` reads 1
-and the advisory version word is at ctlblk+0x58 (evidence:
-`docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md`). The first
-event kick reaches the init entry and completes. **The next kick does not.** The
-kernel's `GETMISCINFO` compat-check command is queued (Kernel CCB `WO:1`) but the
-read offset never advances (`RO:0`) and the core locks up; sentinels on the
-post-init dispatch path never fire. So after init ends, the event program is not
-re-entered to service the SW_EVENT host kick. The srvinit setup is ruled out: the
-event-program address (`0xa68`), its control word, and the SW_EVENT host-enable
-(`EUR_CR_EVENT_HOST_ENABLE = 0x4000`) are set identically for the `-o` and the
-working `-f` paths, so the re-trigger is armed. The blocker is in the
-microkernel's behaviour after init — its init task ends but the core does not
-return to the event-wait state (it locks up with 2 tasks pending), which points
-at the init task's exit / task-phase handling, not registration. This is the open
-blocker ahead of frames; full evidence and next steps in
-`docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md`.
+**Hardware status (EA1, 2026-11-02; supersedes the EA3 reading below).** The
+open microkernel's clean-boot init path runs on hardware: after `srvinit -o`,
+the advisory version word is at ctlblk+0x58 (`T3C-50` word 2 = `0x00010000`),
+on both the EA3 and the EA1. **Init is done; the host `GETMISCINFO` kick is not
+serviced**, and the EA1 run with a proper entry counter shows the event program
+*is* re-entered after init (CTR climbs, the post-init dispatch runs) — revising
+the earlier EA3 guess that it was never re-entered. Two things were found and
+one fixed:
+
+1. **Fixed — `dcu_invalid` storm.** A data-cache-unit invalidate the kernel
+   leaves pending in `EUR_CR_EVENT_STATUS2` (0x400) after `SysFinalise`
+   re-triggered the event program forever, because openHC read only
+   `EUR_CR_EVENT_STATUS`. The dispatch now acknowledges it (§2). HW-confirmed:
+   STATUS2 `0x400`→`0`.
+2. **Open — the host kick never appears as SW_EVENT.** Even with STATUS2 clean,
+   the kick is not serviced: `EUR_CR_EVENT_STATUS & 0x4000` is never set when the
+   event program reads it, so the dispatch never branches to `kick`; the
+   `GETMISCINFO` command is queued (CCB `WO` > `RO`) but never consumed and the
+   core times out (`0x2 tasks`) into a kernel HWR-retry loop. The next step is to
+   trace how this kernel delivers the host kick to the microkernel (SW_EVENT in
+   EVENT_STATUS vs. a CCB the microkernel must poll vs. another bit) and whether
+   srvinit's `-o` host-kick / event-program wiring sets the bit our B_PDS0 reads.
+
+Full evidence and next steps:
+`docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md` (current) and
+`docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier
+EA3 run, whose "never re-entered" reading the EA1 counter corrects).
 
 ## 5a. Hardware recovery and re-initialisation
 

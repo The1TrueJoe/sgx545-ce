@@ -153,6 +153,10 @@ CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
 INV_DONE_TA = 0x27           # 0x138 bits for the TA-side invalidate
 INV_DONE_3D = 0x4B           # 0x138 bits for the 3D-side invalidate
 SW_EVENT = 0x4000
+DCU_INVALID = 0x400          # EUR_CR_EVENT_STATUS2: a data-cache-unit invalidate
+                             # completion. Pending after the kernel's SysFinalise
+                             # on the EA1; the event program must acknowledge it
+                             # or it re-triggers forever (docs/UKERNEL.md §2).
 
 # ---- register-programming tables (reg byte-offset, base word index) --------
 # base = pb (PB descriptor); docs/UKERNEL.md §6 "parameter-buffer setup"
@@ -365,6 +369,16 @@ def build(a):
     # otherwise dispatch on the pending event bits
     a.i(f"ldr r2, #{CR_EVENT_STATUS // 4}")
     a.i("wdf")
+    # acknowledge a pending DCU-invalidate in EUR_CR_EVENT_STATUS2 first. The
+    # dispatcher must read STATUS *and* STATUS2 and clear what it sees (docs
+    # §2); openHC only dispatched STATUS bits, so the invalidate-done the
+    # kernel leaves set after SysFinalise re-triggered the event program
+    # forever — a storm that starved the SW_EVENT host kick and locked the
+    # core (EA1 HW-confirmed 2026-11-02: STATUS2=0x400, event re-entered 16+
+    # times, the kick never serviced). Clearing a bit that is not set is a
+    # no-op, so the acknowledge is unconditional and no handler reads it.
+    a.i(f"limm r3, #{DCU_INVALID}")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR2 // 4}, r3")
     a.dispatch(0x4000, "kick")                     # SW_EVENT: a host kick is waiting
     a.dispatch(0x2000, "ta_finished")              # a TA finished
     a.dispatch(0x40000, "render_done")             # pixel back-end end of render
