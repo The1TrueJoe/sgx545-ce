@@ -31,6 +31,7 @@
  *   PROBE_SCISSOR="x y w h"    glEnable(SCISSOR_TEST), glScissor
  *   PROBE_VIEWPORT="x y w h"   glViewport                        (the whole surface)
  *   PROBE_CULL="face front"    glEnable(CULL_FACE), glCullFace, glFrontFace (GL enums)
+ *   PROBE_FRONTFACE=e          glFrontFace, no culling (GL enum)
  *   PROBE_POLYOFF="f u"        glEnable(POLYGON_OFFSET_FILL), glPolygonOffset
  *   PROBE_DITHER=0             glDisable(DITHER)
  *   PROBE_LINEWIDTH=w          glLineWidth
@@ -623,6 +624,8 @@ int main(void)
 		glStencilOpSeparate(0x0405, (GLenum)v[3], (GLenum)v[4], (GLenum)v[5]);
 		glStencilMaskSeparate(0x0405, (GLuint)v[6]);
 	}
+	if (ints("PROBE_FRONTFACE", v, 1, NULL) == 1)
+		glFrontFace((GLenum)v[0]);
 	if (ints("PROBE_CLEARSTENCIL", v, 1, NULL) == 1) {
 		glClearStencil((GLint)v[0]);
 		clearbits |= GL_STENCIL_BUFFER_BIT;
