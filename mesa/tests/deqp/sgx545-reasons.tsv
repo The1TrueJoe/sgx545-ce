@@ -9,4 +9,3 @@ functional\.shaders\.(random|operator|functions|struct)	compiler: random combina
 functional\.polygon_offset	polygon offset units
 functional\.rasterization\.primitives	wide lines: the hardware's line quads against GL's rule; the DDK fails these too
 functional\.draw\.draw_elements\.points	points from glDrawElements; the DDK fails these too
-functional\.(uniform_api\.value\.initial|shaders\.linkage\.uniform_struct)	compiler, F16 path: f32 uniforms read as F16 (pass with SGX545_DEBUG=nof16; with the compiler session)

@@ -1,5 +1,5 @@
-# 2026-11-02: 17165 tests, Fail 405, Pass 16310, Skip 445, Timeout 1, Warn 4
-# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re f85dccd (drive-deqp.py)
+# 2026-11-02: 17165 tests, Fail 392, Pass 16323, Skip 445, Timeout 1, Warn 4
+# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re 9e1f2c1 (drive-deqp.py)
 
 # fragment_ops random/interaction: two-sided stencil drew blank or wrong channels from run to run until its block got the DDK's 27-dword DMA (+45); the rest not looked at yet
 dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.1,Fail
@@ -388,7 +388,6 @@ dEQP-GLES2.functional.shaders.random.scalar_conversion.fragment.86,Fail
 dEQP-GLES2.functional.shaders.random.swizzle.fragment.27,Fail
 dEQP-GLES2.functional.shaders.random.trigonometric.fragment.63,Fail
 dEQP-GLES2.functional.shaders.random.trigonometric.fragment.72,Fail
-dEQP-GLES2.functional.shaders.struct.uniform.nested_struct_array_fragment,Fail
 
 # polygon offset units
 dEQP-GLES2.functional.polygon_offset.default_displacement_with_units,Fail
@@ -406,20 +405,6 @@ dEQP-GLES2.functional.rasterization.primitives.lines_wide,Fail
 # points from glDrawElements; the DDK fails these too
 dEQP-GLES2.functional.draw.draw_elements.points.multiple_attributes,Fail
 dEQP-GLES2.functional.draw.draw_elements.points.single_attribute,Fail
-
-# compiler, F16 path: f32 uniforms read as F16 (pass with SGX545_DEBUG=nof16; with the compiler session)
-dEQP-GLES2.functional.shaders.linkage.uniform_struct_fragment_only_vec4,Fail
-dEQP-GLES2.functional.shaders.linkage.uniform_struct_fragment_only_vec4_vec3,Fail
-dEQP-GLES2.functional.shaders.linkage.uniform_struct_partial_ivec2_vec2,Fail
-dEQP-GLES2.functional.shaders.linkage.uniform_struct_partial_vec2_vec3,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.array_in_struct.mat4_mat2_both,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.array_in_struct.mat4_mat2_fragment,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.basic_array.mat4_both,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.basic_array.mat4_fragment,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.nested_structs_arrays.mat4_mat2_both,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.nested_structs_arrays.mat4_mat2_fragment,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.struct_in_array.mat4_mat2_both,Fail
-dEQP-GLES2.functional.uniform_api.value.initial.render.struct_in_array.mat4_mat2_fragment,Fail
 
 # not looked at yet
 dEQP-GLES2.functional.depth_stencil_clear.depth_stencil,Fail
