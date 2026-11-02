@@ -1,0 +1,62 @@
+diff --git a/framework/platform/surfaceless/tcuSurfacelessPlatform.cpp b/framework/platform/surfaceless/tcuSurfacelessPlatform.cpp
+index 713c4ee..f2b0888 100644
+--- a/framework/platform/surfaceless/tcuSurfacelessPlatform.cpp
++++ b/framework/platform/surfaceless/tcuSurfacelessPlatform.cpp
+@@ -21,6 +21,7 @@
+  * \brief surfaceless platform
+  *//*--------------------------------------------------------------------*/
+ 
++#include <cstring>
+ #include "tcuSurfacelessPlatform.hpp"
+ 
+ #include <string>
+@@ -100,6 +101,12 @@ namespace surfaceless
+ 
+ bool isEGLExtensionSupported(const eglw::Library &egl, eglw::EGLDisplay, const std::string &extName)
+ {
++    /* EGL 1.4 without client extensions (the Cedarview DDK) has none of them */
++    if (!egl.queryString(EGL_NO_DISPLAY, EGL_EXTENSIONS))
++    {
++        egl.getError();
++        return false;
++    }
+     const vector<string> exts = eglu::getClientExtensions(egl);
+     return de::contains(exts.begin(), exts.end(), extName);
+ }
+@@ -387,6 +394,21 @@ EglRenderContext::EglRenderContext(const glu::RenderConfig &config, const tcu::C
+ 
+     context_attribs.push_back(EGL_NONE);
+ 
++    /* EGL 1.4 without EGL_KHR_create_context (the Cedarview DDK): an ES
++     * context is asked for by its client version alone */
++    {
++        const char *exts = m_egl.queryString(m_eglDisplay, EGL_EXTENSIONS);
++
++        if (contextType.getProfile() == glu::PROFILE_ES && flags == 0 &&
++            (!exts || !strstr(exts, "EGL_KHR_create_context")))
++        {
++            context_attribs.clear();
++            context_attribs.push_back(EGL_CONTEXT_CLIENT_VERSION);
++            context_attribs.push_back(contextType.getMajorVersion());
++            context_attribs.push_back(EGL_NONE);
++        }
++    }
++
+     const EglRenderContext *sharedEglRenderContext = dynamic_cast<const EglRenderContext *>(sharedContext);
+     eglw::EGLContext sharedEglContext =
+         sharedEglRenderContext ? sharedEglRenderContext->getEglContext() : EGL_NO_CONTEXT;
+@@ -407,12 +429,8 @@ EglRenderContext::EglRenderContext(const glu::RenderConfig &config, const tcu::C
+         GetProcFuncLoader funcLoader(m_egl);
+         glu::initCoreFunctions(&m_glFunctions, &funcLoader, contextType.getAPI());
+     }
+-#if !defined(DEQP_GLES2_RUNTIME_LOAD)
+-    else if (contextType.getAPI() == glu::ApiType::es(2, 0))
+-    {
+-        glw::initES20Direct(&m_glFunctions);
+-    }
+-#endif
++    /* (no direct ES2 loading: these binaries link no GLES library, and
++     * libGLESv2.so is loaded below, the DDK's or Mesa's) */
+ #if !defined(DEQP_GLES3_RUNTIME_LOAD)
+     else if (contextType.getAPI() == glu::ApiType::es(3, 0))
+     {

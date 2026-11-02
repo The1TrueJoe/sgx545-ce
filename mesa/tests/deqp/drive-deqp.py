@@ -130,7 +130,7 @@ def canary(box, who, name):
     else:
         pre = ""
         exe = f"{BOX_DIR}/deqp-gles2-ddk"
-    rc, out = box.ssh(f"cd {BOX_DIR} && env {pre} {exe} "
+    rc, out = box.ssh(f"cd {BOX_DIR} && env {pre} flock /tmp/gpu.lock {exe} "
                       f"--deqp-case=dEQP-GLES2.functional.color_clear.single_rgb --deqp-surface-type=pbuffer "
                       f"--deqp-surface-width=256 --deqp-surface-height=256 --deqp-gl-config-name={CONFIG} "
                       f"--deqp-visibility=hidden --deqp-log-filename=/dev/null 2>&1 | grep 'Passed:'", timeout=45)
