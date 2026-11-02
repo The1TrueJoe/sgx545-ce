@@ -209,9 +209,7 @@ sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res
       t->va = res->bo.va + sgx545_tex_offset(&res->base, level, layer);
       t->stride = twiddled ? w : align(w, 8);
       t->t1_layout = twiddled ? 0 : 3;
-      simple_mtx_lock(&screen->lock);
-      sgxws_bo_prepare_target(screen->dev, &res->bo);
-      simple_mtx_unlock(&screen->lock);
+      sgxws_bo_prepare_target(screen->dev, &res->bo);    /* (the caller holds the lock) */
       res->rendered |= 1u << level;
       return true;
    }

@@ -169,8 +169,7 @@ struct sgxws_state {
    float line_width;
    bool sprite;                     /* points that generate gl_PointCoord: ISPA object type 4 */
    /* stencil (STATE.md "ISPC"): ISPC words and references, face 0 the block's
-    * first group (faces wound CCW in the target's memory, DDK capture) and 1
-    * its back group, which two_sided sends */
+    * first group and 1 its second, which two_sided sends */
    bool stencil, two_sided;
    uint32_t ispc[2];
    uint8_t stencil_ref[2];

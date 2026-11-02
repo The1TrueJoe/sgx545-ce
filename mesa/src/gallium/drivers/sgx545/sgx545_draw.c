@@ -162,8 +162,9 @@ build_stencil(const struct sgx545_context *ctx, struct sgxws_state *st)
        !util_format_has_stencil(util_format_description(ctx->framebuffer.zsbuf.format)))
       return;
    st->stencil = true;
-   /* the hardware's first group is the faces wound CCW in memory, whichever GL calls front */
-   unsigned first = dsa->stencil[1].enabled && !(ctx->rasterizer && ctx->rasterizer->base.front_ccw) ? 1 : 0;
+   /* the hardware's first group is the back of gallium's front_ccw sense: with
+    * it set, gallium's face 1 (A/B against the DDK, windows and pbuffers) */
+   unsigned first = dsa->stencil[1].enabled && ctx->rasterizer && ctx->rasterizer->base.front_ccw ? 1 : 0;
 
    st->ispc[0] = stencil_word(&dsa->stencil[first]);
    st->stencil_ref[0] = ctx->stencil_ref.ref_value[first];
@@ -866,7 +867,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          fsp.temps = MAX2(fsp.temps, 2);
       }
       if (ctx->fs->uses_front_face) {
-         fsk[SGX545_SA_FRONT] = ctx->rasterizer && ctx->rasterizer->base.front_ccw;
+         fsk[SGX545_SA_FRONT] = !(ctx->rasterizer && ctx->rasterizer->base.front_ccw);
          fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
       }
       /* a discard's visibility test (atst8 and pcoeff read sa3, sa4), as the
