@@ -147,6 +147,13 @@ class Asm:
     def phas(self):
         self.i("phas.i #0, #0 [wait=7]")
 
+    def dispatch(self, bit, label):
+        """if EUR_CR_EVENT_STATUS (in r2) has `bit` set, branch to `label`"""
+        self.i(f"limm r3, #{bit}")
+        self.i("and r4, r2, r3")
+        self.i("test.and.ne p0, r4, r4")
+        self.i(f"(p0) ba {label}")
+
     def ld_sa(self, dst, saword, off):
         """dst = *(saword + off), a device load through a secondary attribute"""
         self.i(f"mov r{dst}, sa{saword} [mask=1]")
@@ -235,39 +242,67 @@ class Asm:
 
 def build(a):
     # ======================================================================
-    # init entry
+    # event entry: the one task the event program starts, which dispatches
     # ======================================================================
-    # Clean boot: set ui32InitStatus and end. Recovery (HWR bit set): discard
-    # the surviving kernel CCB and render-in-flight list first (docs/UKERNEL.md
-    # §5a) so no stale, possibly-dead work is replayed, then set init status.
-    #
-    # The init entry gets its addresses from patched limms, not the secondary
-    # attributes: the event program that starts it is a bare DOUTU (the DDK's
-    # event program is too; an event-kicked PDS program is not relied on to run
-    # a DMA), so there is no control block in `sa` here. r1 = host control
-    # address, r7 = CCB control, r8 = control block base.
-    a.label("init")
+    # The event program is a bare DOUTU (the DDK's is too; an event-kicked PDS
+    # program is not relied on to run a DMA), so `sa` is empty here. This entry
+    # loads the control block base from a loader-patched limm and populates the
+    # four secondary attributes the handlers use (self/host-control/CCB-control/
+    # kernel-CCB), the way the DDK's pds1 DMA would, then dispatches on whether
+    # init has run and on EUR_CR_EVENT_STATUS (docs/UKERNEL.md §2). Every
+    # handler is reached from here by a branch (one task), so only this entry
+    # has the phase/end wrapper.
+    a.label("event")
     a.phas()
-    a.patch(1, "hostctl")                      # r1 = SGXMKIF_HOST_CTL address
-    a.i(f"ld.a.d r2, r1, #{HC_INTCLEAR} [moe]")  # ui32InterruptClearFlags
+    a.patch(1, "ctlblk")                           # r1 = control block base
+    a.i(f"mov sa{SA_SELF}, r1 [mask=1]")
+    a.i(f"ld.a.d r2, r1, #{SA_HOSTCTL} [moe]")     # *(base+1) = host control
+    a.i("wdf")
+    a.i(f"mov sa{SA_HOSTCTL}, r2 [mask=1]")
+    a.i(f"ld.a.d r2, r1, #{SA_KCCBCTL} [moe]")     # *(base+2) = CCB control
+    a.i("wdf")
+    a.i(f"mov sa{SA_KCCBCTL}, r2 [mask=1]")
+    a.i(f"ld.a.d r2, r1, #{SA_KCCB} [moe]")        # *(base+0x16) = kernel CCB
+    a.i("wdf")
+    a.i(f"mov sa{SA_KCCB}, r2 [mask=1]")
+    # init not done yet (ui32InitStatus == 0) -> init
+    a.i(f"ld.a.d r2, sa{SA_HOSTCTL}, #{HC_INIT} [moe]")
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(p0) ba init")
+    # otherwise dispatch on the pending event bits
+    a.i(f"ldr r2, #{CR_EVENT_STATUS // 4}")
+    a.i("wdf")
+    a.dispatch(0x4000, "kick")                     # SW_EVENT: a host kick is waiting
+    a.dispatch(0x2000, "ta_finished")              # a TA finished
+    a.dispatch(0x40000, "render_done")             # pixel back-end end of render
+    a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)
+    a.end()
+
+    # ======================================================================
+    # init
+    # ======================================================================
+    # Reached from the event entry with `sa` populated. Clean boot: set
+    # ui32InitStatus. Recovery (HWR bit set): discard the surviving kernel CCB
+    # and render-in-flight list first (docs/UKERNEL.md §5a).
+    a.label("init")
+    a.i(f"ld.a.d r2, sa{SA_HOSTCTL}, #{HC_INTCLEAR} [moe]")   # ui32InterruptClearFlags
     a.i("wdf")
     a.i(f"test.and.ne p0, r2, #{EDM_INTERRUPT_HWR}")
-    a.i("(!p0) ba init_set")                   # clean boot: skip the discard
-    # recovery: kernel CCB read offset := write offset (drop stale commands)
-    a.patch(7, "ccbctl")                       # r7 = kernel CCB control
-    a.i("ld.a.d r2, r7, #0 [moe]")             # write offset
+    a.i("(!p0) ba init_set")                       # clean boot: skip the discard
+    a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")        # kernel CCB control
+    a.i("ld.a.d r2, r1, #0 [moe]")                 # write offset
     a.i("wdf")
-    a.i("st.a.d r7, #1, r2 [moe]")             # read offset := write offset
+    a.i("st.a.d r1, #1, r2 [moe]")                 # read offset := write offset
     a.i("idf")
     a.i("wdf")
-    a.patch(8, "ctlblk")                       # r8 = TA3D control block base
-    a.i("limm r2, #0")                          # render-in-flight list head := empty
-    a.i(f"st.a.d r8, #{SC_RIFLIST}, r2 [moe]")
+    a.i("limm r2, #0")                             # render-in-flight list head := empty
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_RIFLIST}, r2 [moe]")
     a.i("idf")
     a.i("wdf")
     a.label("init_set")
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
-    a.i(f"st.a.d r1, #{HC_INIT}, r0 [moe]")     # *hostctl = INIT_COMPLETE
+    a.i(f"st.a.d sa{SA_HOSTCTL}, #{HC_INIT}, r0 [moe]")   # ui32InitStatus = INIT_COMPLETE
     a.i("idf")
     a.i("wdf")
     a.end()
@@ -280,7 +315,6 @@ def build(a):
     # (our host-kick table is the identity, docs/UKERNEL.md §3). Dispatch, then
     # advance the read offset and end. One command per entry (one context).
     a.label("kick")
-    a.phas()
     a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")     # kernel CCB control
     a.i("ld.a.d r2, r1, #0 [moe]")              # write offset (slot index)
     a.i("ld.a.d r3, r1, #1 [moe]")              # read offset (slot index)
@@ -367,7 +401,6 @@ def build(a):
     # ta_finished: write the TA status values, then program and start the 3D
     # ======================================================================
     a.label("ta_finished")
-    a.phas()
     # TA status-value list (docs/UKERNEL.md §5): CMDTA_SHARED holds a count at
     # command+0x5c and that many {sStatusDevAddr, ui32StatusValue} pairs from
     # command+0x118; write each value to its address (sync-heap counters the
@@ -396,13 +429,21 @@ def build(a):
     a.i("(p0) ba ta_status_loop")
     a.label("ta_status_done")
     a.i("wdf")
+    # start the 3D once the scene's last TA has finished. CMDTA_SHARED's
+    # ui32CtrlFlags (command word 0) bit 0 (READY) is set by the kernel only
+    # for the last kick (bLastInScene), so a command with it set means render.
+    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_CMD} [moe]")   # TA command base
+    a.i("wdf")
+    a.i("ld.a.d r2, r1, #0 [moe]")                    # ui32CtrlFlags
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, #1")                     # READY (last in scene)?
+    a.i("(p0) ba do_3d")
     a.end()
 
     # ======================================================================
     # do_3d: program and start the 3D for the scene (run on the last TA's finish)
     # ======================================================================
     a.label("do_3d")
-    a.phas()
     a.i(f"ld.a.d r10, sa{SA_SELF}, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, sa{SA_SELF}, #{SC_PB} [moe]")   # PB descriptor
     a.i("wdf")
@@ -424,7 +465,6 @@ def build(a):
     # destination's write-ops-complete to pending+1 (docs/UKERNEL.md §5). The
     # list walk is the next increment; the host-interrupt tail is here.
     a.label("render_done")
-    a.phas()
     a.i(f"ld.a.d r0, sa{SA_SELF}, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # TA3D dependency sync: the destination the host/next client polls. The
