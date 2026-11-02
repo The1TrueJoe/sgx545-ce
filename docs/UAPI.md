@@ -510,7 +510,7 @@ HWPerf has no uAPI.
 ### 7.2 Four hardware premises this design needs, none established
 
 If any of these fails, the items above don't deliver isolation. Each needs a hardware
-experiment by the spec side before M2's exit test can mean anything.
+experiment before M2's exit test can mean anything.
 
 | # | premise | why it is in doubt | experiment | if it fails |
 |---|---|---|---|---|
@@ -780,7 +780,7 @@ leaves room for growth later with no uAPI change. It may be wrong for Minecraft-
 
 ## 11. Doc gaps
 
-Facts the design needs that `docs/` doesn't have. Each goes to the spec side.
+Facts the design needs that `docs/` doesn't have.
 
 | # | gap | blocks | where it would go |
 |---|---|---|---|
