@@ -237,15 +237,25 @@ class Asm:
         self.i(f"(p0) ba {label}")
 
     def ld_sa(self, dst, saword, off):
-        """dst = *(saword + off), a device load through a secondary attribute"""
-        self.i(f"mov r{dst}, sa{saword} [mask=1]")
-        self.i(f"ld.a.d r{dst}, r{dst}, #{off} [moe]")
+        """dst = *(*(ctlblk+saword) + off); saword 0 (SA_SELF) is the base (r17)
+        itself. The base is a reserved temp, not a secondary attribute, because a
+        task cannot write its own sa on this core (docs/UKERNEL.md §1)."""
+        if saword == SA_SELF:
+            self.i(f"ld.a.d r{dst}, r17, #{off} [moe]")
+        else:
+            self.i(f"ld.a.d r{dst}, r17, #{saword} [moe]")
+            self.i("wdf")
+            self.i(f"ld.a.d r{dst}, r{dst}, #{off} [moe]")
         self.i("wdf")
 
     def st_sa(self, saword, off, src):
-        """*(saword + off) = r<src>"""
-        self.i(f"mov r0, sa{saword} [mask=1]")
-        self.i(f"st.a.d r0, #{off}, r{src} [moe]")
+        """*(*(ctlblk+saword) + off) = r<src>; saword 0 (SA_SELF) is the base r17"""
+        if saword == SA_SELF:
+            self.i(f"st.a.d r17, #{off}, r{src} [moe]")
+        else:
+            self.i(f"ld.a.d r0, r17, #{saword} [moe]")
+            self.i("wdf")
+            self.i(f"st.a.d r0, #{off}, r{src} [moe]")
         self.i("idf")
         self.i("wdf")
 
@@ -336,19 +346,15 @@ def build(a):
     # has the phase/end wrapper.
     a.label("event")
     a.phas()
-    a.patch(1, "ctlblk")                           # r1 = control block base
-    a.i(f"mov sa{SA_SELF}, r1 [mask=1]")
-    a.i(f"ld.a.d r2, r1, #{SA_HOSTCTL} [moe]")     # *(base+1) = host control
+    a.patch(17, "ctlblk")                          # r17 = control block base, reserved for the
+                                                   # whole task. A USSE task cannot write its own
+                                                   # secondary attributes (hardware-confirmed), so
+                                                   # instead of populating sa the handlers derive
+                                                   # the host-control / CCB pointers from r17.
+    # init not done yet (ui32InitStatus == 0) -> init. host control = *(ctlblk + 1).
+    a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
-    a.i(f"mov sa{SA_HOSTCTL}, r2 [mask=1]")
-    a.i(f"ld.a.d r2, r1, #{SA_KCCBCTL} [moe]")     # *(base+2) = CCB control
-    a.i("wdf")
-    a.i(f"mov sa{SA_KCCBCTL}, r2 [mask=1]")
-    a.i(f"ld.a.d r2, r1, #{SA_KCCB} [moe]")        # *(base+0x16) = kernel CCB
-    a.i("wdf")
-    a.i(f"mov sa{SA_KCCB}, r2 [mask=1]")
-    # init not done yet (ui32InitStatus == 0) -> init
-    a.i(f"ld.a.d r2, sa{SA_HOSTCTL}, #{HC_INIT} [moe]")
+    a.i(f"ld.a.d r2, r2, #{HC_INIT} [moe]")
     a.i("wdf")
     a.i("test.and.eq p0, r2, r2")
     a.i("(p0) ba init")
@@ -368,26 +374,31 @@ def build(a):
     # ui32InitStatus. Recovery (HWR bit set): discard the surviving kernel CCB
     # and render-in-flight list first (docs/UKERNEL.md §5a).
     a.label("init")
-    a.i(f"ld.a.d r2, sa{SA_HOSTCTL}, #{HC_INTCLEAR} [moe]")   # ui32InterruptClearFlags
+    a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")   # host control = *(ctlblk+1)
+    a.i("wdf")
+    a.i(f"ld.a.d r2, r2, #{HC_INTCLEAR} [moe]")   # ui32InterruptClearFlags
     a.i("wdf")
     a.i(f"test.and.ne p0, r2, #{EDM_INTERRUPT_HWR}")
     a.i("(!p0) ba init_set")                       # clean boot: skip the discard
-    a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")        # kernel CCB control
+    a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")        # kernel CCB control
+    a.i("wdf")
     a.i("ld.a.d r2, r1, #0 [moe]")                 # write offset
     a.i("wdf")
     a.i("st.a.d r1, #1, r2 [moe]")                 # read offset := write offset
     a.i("idf")
     a.i("wdf")
     a.i("limm r2, #0")                             # discard the render in flight
-    a.i(f"st.a.d sa{SA_SELF}, #{SC_INFLIGHT}, r2 [moe]")
-    a.i(f"st.a.d sa{SA_SELF}, #{SC_XFER}, r2 [moe]")   # and any transfer in flight
+    a.i(f"st.a.d r17, #{SC_INFLIGHT}, r2 [moe]")
+    a.i(f"st.a.d r17, #{SC_XFER}, r2 [moe]")   # and any transfer in flight
     a.i("idf")
     a.i("wdf")
     a.label("init_set")
     a.i(f"limm r0, #{OPENHC_UK_VERSION}")
-    a.i(f"st.a.d sa{SA_SELF}, #{SC_VERSION}, r0 [moe]")   # advisory openHC version word
+    a.i(f"st.a.d r17, #{SC_VERSION}, r0 [moe]")   # advisory openHC version word
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
-    a.i(f"st.a.d sa{SA_HOSTCTL}, #{HC_INIT}, r0 [moe]")   # ui32InitStatus = INIT_COMPLETE
+    a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")   # host control = *(ctlblk+1)
+    a.i("wdf")
+    a.i(f"st.a.d r1, #{HC_INIT}, r0 [moe]")   # ui32InitStatus = INIT_COMPLETE
     a.i("idf")
     a.i("wdf")
     a.end()
@@ -400,14 +411,16 @@ def build(a):
     # (our host-kick table is the identity, docs/UKERNEL.md §3). Dispatch, then
     # advance the read offset and end. One command per entry (one context).
     a.label("kick")
-    a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")     # kernel CCB control
+    a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")     # kernel CCB control
+    a.i("wdf")
     a.i("ld.a.d r2, r1, #0 [moe]")              # write offset (slot index)
     a.i("ld.a.d r3, r1, #1 [moe]")              # read offset (slot index)
     a.i("wdf")
     a.i("test.xor.eq p0, r2, r3")               # empty?
     a.i("(p0) ba kick_end")
     # command = kernel CCB base + read_offset * 32
-    a.i(f"mov r6, sa{SA_KCCB} [mask=1]")
+    a.i(f"ld.a.d r6, r17, #{SA_KCCB} [moe]")
+    a.i("wdf")
     a.i(f"imae r6, r3, #{CMD_WORDS * 4}, r6 [t2=u32]")   # r6 = &command (bytes)
     a.i(f"ld.a.d r7, r6, #{CMD_SERVICE} [moe]")          # type
     a.i(f"ld.a.d r8, r6, #{CMD_DATA1} [moe]")            # data[1] = context
@@ -468,7 +481,8 @@ def build(a):
     # machine; the host-visible contract is the completion bit (full internals
     # come with the multi-render scheduler). POWEROFF -> bit 3, IDLE -> bit 2.
     a.label("k_power")
-    a.i(f"mov r2, sa{SA_HOSTCTL} [mask=1]")
+    a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
+    a.i("wdf")
     a.i(f"ld.a.d r3, r2, #{HC_POWER} [moe]")
     a.i("wdf")
     a.i(f"test.xor.eq p0, r8, #{POWERCMD_POWEROFF}")
@@ -496,7 +510,8 @@ def build(a):
     # resource from the microkernel's lists only when safe; that list surgery
     # is the multi-render-bookkeeping item.
     a.label("k_cleanup")
-    a.i(f"mov r2, sa{SA_HOSTCTL} [mask=1]")
+    a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
+    a.i("wdf")
     a.i(f"ld.a.d r3, r2, #{HC_CLEANUP} [moe]")
     a.i("wdf")
     a.i("or r3, r3, #1")                        # CLEANUPCMD_COMPLETE
@@ -531,7 +546,8 @@ def build(a):
     a.i("ba kick_adv")
     a.label("kick_adv")
     # read offset := (read offset + 1) & 0xff
-    a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")
+    a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")
+    a.i("wdf")
     a.i("ld.a.d r3, r1, #1 [moe]")
     a.i("wdf")
     a.i("imae r3, r3, #1, #1 [t2=u32]")
@@ -612,7 +628,7 @@ def build(a):
     # command+0x5c and that many {sStatusDevAddr, ui32StatusValue} pairs from
     # command+0x118; write each value to its address (sync-heap counters the
     # host and the next client wait on).
-    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_CMD} [moe]")   # TA command base
+    a.i(f"ld.a.d r1, r17, #{SC_CMD} [moe]")   # TA command base
     a.i("wdf")
     a.i("ld.a.d r2, r1, #%d [moe]" % (0x5c // 4))     # NumTAStatusVals
     a.i("wdf")
@@ -639,7 +655,7 @@ def build(a):
     # start the 3D once the scene's last TA has finished. CMDTA_SHARED's
     # ui32CtrlFlags (command word 0) bit 0 (READY) is set by the kernel only
     # for the last kick (bLastInScene), so a command with it set means render.
-    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_CMD} [moe]")   # TA command base
+    a.i(f"ld.a.d r1, r17, #{SC_CMD} [moe]")   # TA command base
     a.i("wdf")
     a.i("ld.a.d r2, r1, #0 [moe]")                    # ui32CtrlFlags
     a.i("wdf")
@@ -651,13 +667,13 @@ def build(a):
     # do_3d: program and start the 3D for the scene (run on the last TA's finish)
     # ======================================================================
     a.label("do_3d")
-    a.i(f"ld.a.d r10, sa{SA_SELF}, #{SC_RD} [moe]")   # render details
-    a.i(f"ld.a.d r11, sa{SA_SELF}, #{SC_PB} [moe]")   # PB descriptor
+    a.i(f"ld.a.d r10, r17, #{SC_RD} [moe]")   # render details
+    a.i(f"ld.a.d r11, r17, #{SC_PB} [moe]")   # PB descriptor
     a.i("wdf")
     # mark the context's in-flight render and move the render state to "3D
     # running" (the DDK sets these once the scene's last TA has finished and the
     # 3D is about to start); the completion handler clears them.
-    a.i(f"ld.a.d r2, sa{SA_SELF}, #{SC_CTX} [moe]")
+    a.i(f"ld.a.d r2, r17, #{SC_CTX} [moe]")
     a.i("wdf")
     a.i("st.a.d r2, #%d, r10 [moe]" % CTX_INFLIGHT0)  # ctx+0x28 = render details
     a.i("st.a.d r2, #%d, r10 [moe]" % CTX_INFLIGHT1)  # ctx+0x2c = render details
@@ -687,11 +703,11 @@ def build(a):
     a.label("render_done")
     # a transfer in flight completes through this same 3D-end event, but its
     # bookkeeping differs from a render's; route it to xfer_done.
-    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_XFER} [moe]")
+    a.i(f"ld.a.d r1, r17, #{SC_XFER} [moe]")
     a.i("wdf")
     a.i("test.and.ne p0, r1, r1")
     a.i("(p0) ba xfer_done")
-    a.i(f"ld.a.d r0, sa{SA_SELF}, #{SC_RD} [moe]")    # render details
+    a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # HW device sync list (SGXMKIF_HWDEVICE_SYNC_LIST): the render's destination
     # sync objects (here the colour and depth destinations, addressed by render-
@@ -740,8 +756,8 @@ def build(a):
     # flight slots. One context: the in-flight "list" is the single control-
     # block slot, cleared to 0 (not an unlink), which is also what tells the
     # cleanup and power handlers no render is running.
-    a.i(f"ld.a.d r1, sa{SA_SELF}, #{SC_RTENTRY} [moe]")  # RT-data entry
-    a.i(f"ld.a.d r2, sa{SA_SELF}, #{SC_CTX} [moe]")      # HW render context
+    a.i(f"ld.a.d r1, r17, #{SC_RTENTRY} [moe]")  # RT-data entry
+    a.i(f"ld.a.d r2, r17, #{SC_CTX} [moe]")      # HW render context
     a.i("wdf")
     a.i("ld.a.d r3, r1, #%d [moe]" % RT_DATA)            # rtdata = *(rtentry+0x30)
     a.i("wdf")
@@ -756,7 +772,7 @@ def build(a):
     a.i("st.a.d r2, #%d, r4 [moe]" % CTX_INFLIGHT1)      # ctx+0x2c = 0
     a.i("st.a.d r2, #%d, r4 [moe]" % CTX_INFLIGHT_FLAG)  # ctx+0x3c = 0
     a.i("st.a.d r0, #%d, r4 [moe]" % RD_ACTIVE)          # rd+0x12c = 0 (render inactive)
-    a.i(f"st.a.d sa{SA_SELF}, #{SC_INFLIGHT}, r4 [moe]")  # control block +0x50 = 0 (none in flight)
+    a.i(f"st.a.d r17, #{SC_INFLIGHT}, r4 [moe]")  # control block +0x50 = 0 (none in flight)
     a.i("limm r5, #%d" % RD_STATE)
     a.i("imae r5, r5, #1, r0 [t2=u32]")                  # &(rd+0x2a4)
     a.i("limm r4, #2")
@@ -791,7 +807,7 @@ def build(a):
     a.i("limm r4, #0")
     a.i("st.a.d r1, #%d, r4 [moe]" % CTX_XFER0)          # clear ctx in-flight fields
     a.i("st.a.d r1, #%d, r4 [moe]" % CTX_XFER1)
-    a.i(f"st.a.d sa{SA_SELF}, #{SC_XFER}, r4 [moe]")      # no transfer in flight
+    a.i(f"st.a.d r17, #{SC_XFER}, r4 [moe]")      # no transfer in flight
     a.i("idf")
     a.i("wdf")
     a.label("raise_host_irq")

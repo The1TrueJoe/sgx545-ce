@@ -30,26 +30,31 @@ writes where expected).
 
 ## Root cause
 
-The event entry self-populates its secondary attributes (`mov sa0/sa1/sa2/sa16,
-r`) so later handlers can read the control block through them. A USSE task
-cannot write its own secondary attributes on this hardware — they are inputs
-provided by the launching PDS program, not task-writable. The offline emulator
-models `mov sa, r` as a plain register write, which is why the whole suite
-passes offline while init stalls on hardware. (The DDK populates the
-microkernel's `sa` from a PDS DMA before the task runs; openHC's "bare DOUTU +
-self-populate `sa`" shortcut is invalid on the real core.)
+The event entry self-populated its secondary attributes (`mov sa0/sa1/sa2/sa16,
+r`) and stalled at the write. It is **not** a blanket "a task can't write `sa`"
+limit: the DDK microkernel writes `sa` (disassembly shows `mov sa9` and an
+indexed `mov sa[idx]`) and runs on hardware. The difference is *when*. The DDK's
+event program is a bare `DOUTU` (pds0) that enters the microkernel; the
+microkernel **emits** to trigger pds1, whose `DOUTD` DMAs the control block into
+`sa` and re-enters it — only in that re-entered context does the DDK write/read
+`sa`. openHC skipped the emit/DMA and wrote `sa` immediately in the initial
+bare-`DOUTU` context, where it faults. (Corrected 2026-11-02: an earlier note
+here mis-stated this as "tasks cannot write `sa`"; the emulator modelled `mov
+sa` as a plain register write, so the suite passed offline.)
 
-## Fix (next, offline, then re-test here)
+## Fix
 
-Two options; the first is self-contained in the microkernel:
-- **A — drop secondary attributes.** Keep the control-block base in a temp from
-  the loader-patched `ctlblk` limm (already done) and derive host-control / CCB
-  / kernel-CCB into temps with `ld.a.d base,#n` in each handler. No `mov sa`, no
-  load with `sa` as the address base. Re-validate `run_ours`/`test_emu`, then
-  re-run on the EA3.
-- **B — PDS-populate `sa`.** Restore the DDK's emit-triggered PDS DMA (pds1)
-  that fills the task's `sa` from the control block before entry, so the
-  microkernel only reads `sa` (srvinit's bring-up, `pds_ours`).
+- **B — drop `sa` (chosen, offline-validated).** Carry the control-block base in
+  a reserved temp (`r17`) from the loader-patched `ctlblk` limm and derive
+  host-control / CCB / kernel-CCB into temps with `ld.a.d r17,#n`. No `mov sa`,
+  no load with `sa` as the address base — so it does not depend on the emit/DMA
+  `sa` setup at all. `run_ours` (5 frames) and `test_emu` still match the DDK.
+  One hardware unknown: whether the bare-`DOUTU` context allocates `r17` — a
+  one-word sentinel on the next slot settles it (and if short, bump the DOUTU
+  register count in `pds_ours`).
+- **A — emit-triggered DMA (alternative).** Replicate the DDK: a pds1 `DOUTD`
+  for the `-o` path that fills `sa`, the microkernel emitting to trigger it. The
+  DDK-proven mechanism, but needs the emit protocol (open-srvinit's `pds_ours`).
 
 ## Box / method notes
 

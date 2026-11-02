@@ -46,6 +46,18 @@ that must survive between tasks lives in device memory (the control blocks
 below) and in the **secondary attribute** registers (`sa0`..`sa63`), which the
 hardware does not clear between tasks.
 
+A task writes its own secondary attributes only once the launching PDS has set
+up the `sa` context. The DDK's event program is a bare `DOUTU` (pds0) that
+enters the microkernel; the microkernel then **emits** to trigger a second PDS
+program (pds1) whose `DOUTD` DMAs the control block into `sa` and re-enters it,
+and only there does the DDK microkernel write/read `sa` (e.g. `mov sa9`). In
+the initial bare-`DOUTU` context, before that emit/DMA, writing `sa` faults
+(hardware-confirmed on the EA3, 2026-11-02: openHC's init entry wrote `sa1`
+directly in the bare context and stalled). So a microkernel that skips the
+emit/DMA must not touch `sa`; openHC instead carries the control-block base in
+a reserved temp from the loader-patched `limm` (`srvinit`'s `-o`) and derives
+the host-control / CCB pointers from it.
+
 The host raises its own events through `EUR_CR_EVENT_KICK2` (the
 multi-event-kick path this core uses): writing it makes the EDM run the event
 program, which is how `SGXInitialise` and every `SGXScheduleCCBCommand` reach
@@ -606,23 +618,23 @@ the registers and memory it writes against the DDK firmware's, per phase, as an
 12-write render teardown and the 21-register transfer all match.
 
 **First hardware run (EA3, `srvinit -o`).** The microkernel loads, is kicked,
-and executes, but init stalls: the event entry dies at its second/third
-secondary-attribute self-write (`mov sa1`/`mov sa2`), so InitStatus is never
-set and `SGXInitialise` times out. A USSE task cannot write its own secondary
-attributes on this core — the emulator models `mov sa, r` as a register write,
-which is why the suite passes offline but init fails on hardware
-(`docs/log/entries/2026-11-02-0630-ukernel-ea3-bringup.md`). A per-fact
-evidence tag pass (`hardware`/`capture`/`oracle`/`static`) across §§1–7 is
-still to be done.
+and executes, but init stalls: the event entry dies when it writes `sa` (`mov
+sa1`) directly in the initial bare-`DOUTU` context, so InitStatus is never set
+and `SGXInitialise` times out. `sa` is not a general "tasks can't write it"
+limit — the DDK microkernel writes `sa` (e.g. `mov sa9`) and runs — but only
+after it emits to trigger the pds1 DMA that establishes `sa`; openHC wrote `sa`
+before any such setup (`docs/log/entries/2026-11-02-0630-ukernel-ea3-bringup.md`).
+The emulator modelled `mov sa` as a plain register write, so the suite passed
+offline. **Fix (option B, offline-validated):** drop `sa` entirely — carry the
+control-block base in a reserved temp (`r17`) from the loader-patched `limm`
+and derive the host-control / CCB pointers from it; `run_ours`/`test_emu` still
+match the DDK. Its one hardware unknown is whether the bare-`DOUTU` context
+allocates that temp, settled by a one-word sentinel on the next slot.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
-- **Secondary-attribute self-population fails on hardware (the init blocker).**
-  The event entry writes `sa0/sa1/sa2/sa16` with `mov sa, r`; a task cannot
-  write its own secondary attributes on this core, so init stalls on the EA3.
-  Fix by deriving the control-block pointers into temps from the loader-patched
-  `ctlblk` base in each handler (no `mov sa`, no load with `sa` as base), or by
-  PDS-populating `sa` before entry. Until then every handler that reads through
-  `sa` must change too. See the hardware log entry.
+- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
+  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
+  0x16c), but a transfer also sets two sync-heap objects whose addresses come
 - **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
   the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
   0x16c), but a transfer also sets two sync-heap objects whose addresses come
