@@ -507,17 +507,22 @@ HWPerf has no uAPI.
 4. **Reserved VA.** `VM_MAP` refuses anything outside the client heaps, so a client can't
    create a mapping at a firmware address.
 
-### 7.2 Four hardware premises this design needs, none established
+### 7.2 Four hardware premises this design needs
 
-If any of these fails, the items above don't deliver isolation. Each needs a hardware
-experiment before M2's exit test can mean anything.
+**Tested on the EA3 (core rev 1.0.14), 2026-11-02 (hardware):** P1, P2 and P3 **fail**;
+P4 did not reproduce. See `docs/log/entries/2026-11-02-0710-isolation-p1p4.md` and
+`tools/iso/`. So the items in 7.1 do not deliver isolation on their own, and D9 is in
+force. Summary in the table's last column; detail in the log entry.
 
-| # | premise | why it is in doubt | experiment | if it fails |
+If any of these fails, the items above don't deliver isolation. Each needed a hardware
+experiment before M2's exit test could mean anything; that experiment has now run.
+
+| # | premise | why it is in doubt | experiment | **hardware result (2026-11-02)** |
 |---|---|---|---|---|
-| **P1** | **A client's USSE task can't write `EUR_CR_*` registers.** | UKERNEL.md section 8 has the microkernel using `ldr`/`str` on the register file. ISA.md lists `ldr`/`str` (names a guess there) as ordinary instructions with a 14-bit immediate address, and neither doc says they are restricted (G1). A task that can write the directory-list base can point itself at any memory. | From a vertex and a pixel task of an ordinary client: `ldr` of `EUR_CR_CORE_ID` and compare with the known value; `str` to a harmless scratch-like register and read it from the host. | Kernel validation of all shader code, or one client at a time (D9) |
-| **P2** | **Kernel memory can't be reached from a client's TA or 3D task.** | UKERNEL.md section 6 points the EDM's directory base at the context PD, which suggests the DDK maps kernel heaps in every PD. SRVINIT.md's allocations carry `EDM_PROTECT`, but no doc says what enforces it or whether it is enforced. | From a client shader: load and store an address in the kernel data heap, with the page mapped `EDM_PROTECT`, and watch the memory from the host. Also read the BIF bank registers' layout (G2). | Either EDM translates through a kernel-only PD (needs G2), or D9 |
-| **P3** | **A client's PDS program can't enter the microkernel or gain its rights.** | DOUTU w0 picks the code base, and base 15 is the microkernel. w0 b27 is set on microkernel entries, meaning unknown (PDS.md). `USE_CODE_BASE` values carry `0x2000000` and `0x6000000` flags, not decoded (G4). | A client PDS program issues DOUTU with base 15, and with b27, at a test program; watch whether it runs, under which PD, and what P1 and P2 give it there. | Don't map kernel code in client PDs if possible; else D9 |
-| **P4** | **The microkernel takes nothing from registers a client can write.** | UKERNEL.md section 1: secondary attributes "which the hardware does not clear between tasks" hold the microkernel's live state, the PD's physical address (word 0x17) among them. `sa` is what client shaders use for uniforms (G5). | Client shader reads `sa0`-`sa63` right after a microkernel task; then writes them and observes the next microkernel entry. | Microkernel reloads `sa` from kernel memory on every entry, and scrubs it on exit (firmware change, D8) |
+| **P1** | **A client's USSE task can't write `EUR_CR_*` registers.** | UKERNEL.md section 8 has the microkernel using `ldr`/`str` on the register file. ISA.md lists `ldr`/`str` (names a guess there) as ordinary instructions with a 14-bit immediate address, and neither doc says they are restricted (G1). A task that can write the directory-list base can point itself at any memory. | From a vertex and a pixel task of an ordinary client: `ldr` of `EUR_CR_CORE_ID` and compare with the known value; `str` to a harmless scratch-like register and read it from the host. | **FAILS (reads).** A fragment task's `ldr` returned the true `CORE_ID` (0x01150000), `CORE_REVISION` (0x1000e) and a live per-pixel `TIMER`. `str` to the unused `USE_CODE_BASE_14` had no effect; a write to an *effective* register (e.g. `BIF_DIR_LIST_BASE0`) is untested (risks a wedge) and must be assumed possible. Fix: D9 option 1 (validate/forbid `ldr`/`str` in client code); the PD cannot help. |
+| **P2** | **Kernel memory can't be reached from a client's TA or 3D task.** | UKERNEL.md section 6 points the EDM's directory base at the context PD, which suggests the DDK maps kernel heaps in every PD. SRVINIT.md's allocations carry `EDM_PROTECT`, but no doc says what enforces it or whether it is enforced. | From a client shader: load and store an address in the kernel data heap, with the page mapped `EDM_PROTECT`, and watch the memory from the host. Also read the BIF bank registers' layout (G2). | **FAILS.** Pixel *and* vertex tasks `ld` the host control block, the TA3D control block (incl. word 0x16 kernel-CCB base and **word 0x17 the PD physical address**), the kernel CCB, and the microkernel code — all in the client's translation. A `st` into the kernel region wedged the GPU (HWR). A client could also allocate in the kernel-data heap. Fix: the new kernel driver owns the PD and does not map kernel heaps/code into client PDs. |
+| **P3** | **A client's PDS program can't enter the microkernel or gain its rights.** | DOUTU w0 picks the code base, and base 15 is the microkernel. w0 b27 is set on microkernel entries, meaning unknown (PDS.md). `USE_CODE_BASE` values carry `0x2000000` and `0x6000000` flags, not decoded (G4). | A client PDS program issues DOUTU with base 15, and with b27, at a test program; watch whether it runs, under which PD, and what P1 and P2 give it there. | **FAILS.** A client DOUTU naming code base 15 was not refused; the task ran from the kernel code base and wedged the GPU (HWR, pixel 0 not the uniform). DOUTU b27 changed nothing on a base-0 task. Fix: keep base 15 / the kernel code heap out of client PDS and PDs. |
+| **P4** | **The microkernel takes nothing from registers a client can write.** | UKERNEL.md section 1: secondary attributes "which the hardware does not clear between tasks" hold the microkernel's live state, the PD's physical address (word 0x17) among them. `sa` is what client shaders use for uniforms (G5). | Client shader reads `sa0`-`sa63` right after a microkernel task; then writes them and observes the next microkernel entry. | **Did not reproduce.** A client task's `sa11`-`sa63` held its own secondary-update results, per-task coefficient data (differs per pixel) and a prior same-client draw's clear colour — not the microkernel's named pointers; `sa` is reloaded per task. But P2 hands a client the PD physical address anyway. Cross-client `sa` leak (G6) needs two clients, untested. The write-then-observe half was not run. |
 
 Related but smaller: leftovers. STATE.md (kk1-kk4) shows `k18` reading "state left behind
 by earlier tasks", per pixel. Whether that crosses clients is a gap (G6). If it does it is
@@ -755,8 +760,11 @@ firmware-ABI bump, versioned through `fw_interface_version`.
 
 ### D9. What to do if P1, P2 or P3 fails
 
-**Recommendation: decide after the experiments, but start them first.** If a client shader
-can reach registers or kernel memory, the options are:
+**The experiments ran (7.2, 2026-11-02): P1, P2 and P3 fail, so this is in force.** A client
+shader can reach registers (P1) and, as the DDK maps memory, kernel memory (P2), and can
+select the kernel code base (P3). P2 and P3 are the new kernel driver's to fix by owning the
+page directory (don't map kernel heaps, kernel code or base 15 into a client PD). P1 is not:
+`ldr`/`str` reach the registers from any task whatever the PD. The options for P1 are:
 
 1. **Validate shaders in the kernel.** `vc4` does this upstream for a GPU without an MMU
    (`vc4_validate_shaders.c`). It needs code heaps writable only by the kernel, so an upload
@@ -784,12 +792,12 @@ Facts the design needs that `docs/` doesn't have.
 
 | # | gap | blocks | where it would go |
 |---|---|---|---|
-| G1 | `ldr`/`str`: what they address, and whether a client task may run them (P1) | isolation | ISA.md |
-| G2 | BIF requestors and banks: which units translate through which directory, whether EDM can use its own; registers 0xc84 and BANK0 fields (P2) | isolation, kernel MMU | UKERNEL.md |
+| G1 | `ldr`/`str` from a client task: reads of `EUR_CR_*` work (hardware, 7.2 P1); whether an *effective* register write works (e.g. `BIF_DIR_LIST_BASE0`) is still open and critical | isolation | ISA.md, log 2026-11-02-0710 |
+| G2 | BIF requestors and banks: which units translate through which directory, whether EDM can use its own; registers 0xc84 and BANK0 fields. P2 showed the DDK maps kernel memory in the client-visible translation; the per-requestor bank layout (BANK0 EDM/TA/HOST/3D/2D indices, sgx545defs) is the lever a new driver uses to separate them | isolation, kernel MMU | UKERNEL.md, log 2026-11-02-0710 |
 | G3 | The MMU: PD and PT entry formats, page sizes, physical address width, read-only and `EDM_PROTECT` bits and whether each is enforced, invalid entries, fault status and interrupts, translation-cache rules | kernel MMU, `VM_MAP`, P2 | new section, UKERNEL.md |
 | G4 | DOUTU w0 b27 and base 15 from client programs; `USE_CODE_BASE` flags `0x2000000` and `0x6000000` (P3) | isolation | PDS.md |
-| G5 | Secondary attributes: shared between EDM and client tasks? (P4) | isolation, firmware | UKERNEL.md, ISA.md |
-| G6 | Leftovers across clients: USSE temporaries, `k18`, sticky TA state | threat model | ISA.md, STATE.md |
+| G5 | Secondary attributes: a client task's `sa` did not show the microkernel's `sa` state (hardware, 7.2 P4); `sa` looks reloaded per task. Whether the microkernel trusts `sa` a client could have set (the write-then-observe half) is still open | isolation, firmware | UKERNEL.md, ISA.md, log 2026-11-02-0710 |
+| G6 | Leftovers across clients: USSE temporaries, `k18`, sticky TA state, and `sa` (within one client, `sa` and a prior draw's clear colour leak across draws — hardware 7.2 P4). The cross-*client* case needs two simultaneous clients, untested | threat model | ISA.md, STATE.md, log 2026-11-02-0710 |
 | G7 | UKERNEL.md section 3 says the TA kick sets "the PDS and USE code bases for the context"; SRVINIT.md sets them once at init, and transfer word 15 sets 0xab8. Global or per context? | heap layout | UKERNEL.md |
 | G8 | Heap sizes, and which ranges are hardware requirements; whether PDS programs can run outside their heaps | heap table, `HEAP_INFO` | NOTES.md |
 | G9 | Scene shape: does one kick with both first and last work? Does the VDM stream have a jump? | D3, `ta_kicks` minimum | STATE.md 2 |

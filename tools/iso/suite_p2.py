@@ -32,17 +32,17 @@ TESTS = [
     # heap ids: kernel data = 3 here per SRVINIT, but tools/gen uses 3 for KDATA)
     T("p2_alloc_kdata", bufs=[("K", 3, 0xf, 0x1000, 0x1000)], dumps=[("K", 0, 1)], fs=None),
     # reads of kernel memory from a pixel task
-    T("p2_ld_hostctl", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 0x11)], fs=ld_kernel(HOSTCTL, 0x11)),
-    T("p2_ld_ta3dctl", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 0x18)], fs=ld_kernel(TA3DCTL, 0x18)),
-    T("p2_ld_kccb", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 8)], fs=ld_kernel(KCCB, 8)),
-    T("p2_ld_ukcode", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 8)], fs=ld_kernel(UKCODE, 8)),
+    T("p2_ld_hostctl", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 0x12)], fs=ld_kernel(HOSTCTL, 0x11)),
+    T("p2_ld_ta3dctl", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 0x19)], fs=ld_kernel(TA3DCTL, 0x18)),
+    T("p2_ld_kccb", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 0x9)], fs=ld_kernel(KCCB, 8)),
+    T("p2_ld_ukcode", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 0x9)], fs=ld_kernel(UKCODE, 8)),
     # read from a vertex task
-    T("p2_vs_ld_ta3dctl", bufs=[R], vsa=[(0, "R")], dumps=[("R", 0, 0x18)],
+    T("p2_vs_ld_ta3dctl", bufs=[R], vsa=[(0, "R")], dumps=[("R", 0, 0x19)],
       vs=[f"limm r1, #{TA3DCTL:#x}  [skipinv]"] +
          sum(([f"ld.a.d r0, r1, #{i}  [skipinv drc=0]", "wdf [drc=0]", f"st.a.d sa6, #{i}, r0  [skipinv]"]
               for i in range(0x18)), [])),
     # the write test, last: self-contained read/write/read of a kernel scratch word
-    T("p2_wr_tasig", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 3)], fs=[
+    T("p2_wr_tasig", bufs=[R], fsa=[(0, "R")], dumps=[("R", 0, 0x4)], fs=[
         f"limm r1, #{TASIG:#x}  [skipinv]", "ld.a.d r0, r1, #0  [skipinv drc=0]", "wdf [drc=0]",
         "st.a.d sa0, #0, r0  [skipinv]", "limm r2, #0xdeadbeef  [skipinv]", "st.a.d r1, #0, r2  [skipinv]",
         "ld.a.d r3, r1, #0  [skipinv drc=0]", "wdf [drc=0]", "st.a.d sa0, #1, r3  [skipinv]", out("r3")]),

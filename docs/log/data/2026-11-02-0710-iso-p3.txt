@@ -1,0 +1,11 @@
+### suite_p3 -k ''
+== p3_b27_ldr_core_id rc=0
+va R 0x3e19e000
+reg 0x1c 0x1150000 0x1150000
+render done
+pix 0x1150000 uniform=1 bg=0xcc336699
+dump R 0 00000000
+== p3_b27_plain rc=0
+render done
+pix 0xff00ff00 uniform=1 bg=0xcc336699
+
