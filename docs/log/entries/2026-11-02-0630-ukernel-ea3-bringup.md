@@ -32,7 +32,7 @@ writes where expected).
 
 The event entry self-populated its secondary attributes (`mov sa0/sa1/sa2/sa16,
 r`) and stalled at the write. It is **not** a blanket "a task can't write `sa`"
-limit: the DDK microkernel writes `sa` (disassembly shows `mov sa9` and an
+limit: the DDK microkernel writes `sa` (`mov sa9` and an
 indexed `mov sa[idx]`) and runs on hardware. The difference is *when*. The DDK's
 event program is a bare `DOUTU` (pds0) that enters the microkernel; the
 microkernel **emits** to trigger pds1, whose `DOUTD` DMAs the control block into
