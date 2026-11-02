@@ -689,12 +689,27 @@ def build(a):
     a.i("wdf")
     a.i(f"str #{0xc84 // 4}, r4")
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
+    # clear 0xa74 before re-writing its TA-flags field below. The DDK clears it
+    # (ddk-ref line 61) then writes the command's flags into b27-31; srvinit's
+    # init value (0x208200) is overwritten. Without the write our 0xa74 keeps
+    # only the init bits (b27-31 = 0) and the kicked TA does not run.
+    a.i("limm r5, #0")
+    a.i(f"str #{0xa74 // 4}, r5")
     # parameter-buffer registers, then load the DPM state/control and wait for
     # the free list to be ready before the TA kicks (docs/UKERNEL.md §6)
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
+    # 0xa74 = the TA command's flags word (cmd+0x14), as the DDK writes it after
+    # the TE registers and before the kick (ddk-ref line 91; STATE.md cmd+0x14 =
+    # 0x50000000 when kick flag 0x2000000 is clear). Read +0x14 (word 5), not the
+    # +0x18 constant.
+    a.i(f"ld.a.d r9, r17, #{SC_CMD} [moe]")
+    a.i("wdf")
+    a.i("ld.a.d r5, r9, #5 [moe]")
+    a.i("wdf")
+    a.i(f"str #{0xa74 // 4}, r5")
     a.program(12, TA_RT)
     a.program(10, TA_RD)
     # second cache invalidate, then the DPM state/control load — AFTER the
