@@ -302,86 +302,17 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
    }
 }
 
-static unsigned
-rd16(const uint8_t *p, size_t off)
-{
-   return p[off] | p[off + 1] << 8;
-}
-
-static uint32_t
-rd32(const uint8_t *p, size_t off)
-{
-   return p[off] | p[off + 1] << 8 | p[off + 2] << 16 | (uint32_t)p[off + 3] << 24;
-}
-
-/* what the draw needs from a USP (docs/ISA.md "The USP container") */
-struct usp_info {
-   unsigned temps, color_type, color_reg;
-   unsigned n_iters;
-   struct { unsigned iterator, comps, format, sampler; bool sample, proj; } iters[16];
-   const char *why;             /* what read_usp refused */
-   /* dependent samples (block 5 without b0): where the smp goes in the flat
-    * program (before instruction `at`), its template, sampler and raw texel
-    * register */
+/* what the draw needs from the compiled program besides its code: the
+ * dependent samples (where each smp goes in the flat program, its template,
+ * sampler and raw texel register) and the branches whose offsets move when
+ * the smps go in */
+struct prog_info {
+   const char *why;             /* what read_program refused */
    struct { unsigned at, sampler, raw; uint64_t smp; } deps[SGX545_MAX_DEP_SAMPLES];
    unsigned n_deps;
-   unsigned n_insts;            /* instructions in the flat program, counted from the blocks */
-   unsigned sa_slots;           /* SA registers the program uses from its base on (header 0x7e) */
-   unsigned n_pa;               /* primary attribute registers (header 0x44) */
-   unsigned branch_at[64];      /* flat indices of the branches (blocks 3) */
+   unsigned branch_at[64];      /* flat indices of the branches */
    unsigned n_branches;
 };
-
-/* the block stream: true when every texture sample is non-dependent (the
- * PDS samples into pa; dependent ones need an smp the driver doesn't write yet) */
-/* The block stream (ISA.md "USP blocks"): code (2: n instructions), branch
- * (3: one instruction), label (4), sample (5) and its unpack (6), end (7).
- * Counts the flat program's instructions as it goes, so that each dependent
- * sample knows where its smp belongs. */
-static bool
-blocks_supported(const uint8_t *u, size_t size, size_t off, struct usp_info *info)
-{
-   while (off + 4 <= size) {
-      uint32_t type = rd32(u, off);
-
-      off += 4;
-      switch (type) {
-      case 2: {
-         unsigned n = rd16(u, off);
-
-         info->n_insts += n;
-         off += 4 + 16 + 2 * n + 8 * n;
-         break;
-      }
-      case 3:
-         if (info->n_branches == ARRAY_SIZE(info->branch_at))
-            return info->why = "too many branches", false;
-         info->branch_at[info->n_branches++] = info->n_insts++;
-         off += 10;
-         break;
-      case 4: off += 2; break;
-      case 5:
-         if (!(rd16(u, off) & 1)) {
-            /* dependent: the template at +48, the raw texel's register at
-             * +32 (type +30: 1 = r), the sampler at +26 */
-            if (info->n_deps == SGX545_MAX_DEP_SAMPLES || rd16(u, off + 30) != 1)
-               return info->why = "a dependent texture sample (block 5)", false;
-            info->deps[info->n_deps].at = info->n_insts;
-            info->deps[info->n_deps].sampler = rd16(u, off + 26);
-            info->deps[info->n_deps].raw = rd16(u, off + 32);
-            info->deps[info->n_deps].smp = (uint64_t)rd32(u, off + 52) << 32 | rd32(u, off + 48);
-            info->n_deps++;
-         }
-         off += 56;
-         break;
-      case 6: off += 74; break;
-      case 9: return info->why = "block 9", false;
-      case 7: return true;
-      default: return info->why = "an unknown block", false;
-      }
-   }
-   return info->why = "a block stream without its end", false;
-}
 
 /* The flat program with each dependent sample's smp and its wdf put in
  * (ISA.md "The texture-sample sequence"): the template with the raw texel's
@@ -391,7 +322,7 @@ blocks_supported(const uint8_t *u, size_t size, size_t off, struct usp_info *inf
  * unpack reads the texel. Branch offsets are moved with the code. NULL on
  * allocation failure; *n is the new length. */
 static uint64_t *
-insert_samples(const uint64_t *code, unsigned count, const struct usp_info *info, const unsigned *sa,
+insert_samples(const uint64_t *code, unsigned count, const struct prog_info *info, const unsigned *sa,
                unsigned *n)
 {
    unsigned total = count + 2 * info->n_deps, j = 0, k = 0;
@@ -434,69 +365,76 @@ insert_samples(const uint64_t *code, unsigned count, const struct usp_info *info
 }
 
 static bool
-read_usp(const uint8_t *u, size_t size, struct sgx545_shader *so, struct usp_info *info)
+read_program(const struct sgx_shader *out, struct sgx545_shader *so, struct prog_info *info)
 {
-   size_t off = 0x84;
-   unsigned n_a, n_c, n_d, n_sec;
-   uint32_t n_b;
-
-   if (size < 0x84 || rd32(u, 0) != 0x55535020 || rd32(u, 4) != 0x23)
-      return info->why = "not a USP", false;
-   info->temps = rd16(u, 0x46);
-   info->n_pa = rd16(u, 0x44);
-   info->sa_slots = rd16(u, 0x7e);
-   info->color_type = rd16(u, 0x66);
-   info->color_reg = rd16(u, 0x68);
-   n_a = rd16(u, 0x4e);
-   n_c = rd16(u, 0x50);
-   n_b = rd32(u, 0x52);
-   n_d = rd16(u, 0x56);
-   n_sec = rd16(u, 0x7c);
-   off += 4 * rd32(u, 0x28);                       /* workaround ids */
-   for (unsigned i = 0; i < n_a && off + 12 <= size; i++, off += 12) {
-      unsigned flags = rd16(u, off);
-
-      if (info->n_iters == ARRAY_SIZE(info->iters) || (flags & ~0xdu))
-         return info->why = "an iteration list A entry", false;
-      /* a plain iteration has flags 4 or 0xc; a sample entry 0, or 1 projected */
-      info->iters[info->n_iters].sample = !(flags & 4);
-      info->iters[info->n_iters].proj = flags & 1;
-      info->iters[info->n_iters].sampler = rd16(u, off + 2);
-      info->iters[info->n_iters].iterator = rd16(u, off + 4);
-      info->iters[info->n_iters].comps = rd16(u, off + 6);
-      info->iters[info->n_iters].format = rd16(u, off + 8);
-      info->n_iters++;
-   }
-   for (uint32_t i = 0; i < n_b && off < size; i++)   /* list B: constants left in memory */
-      return info->why = "constants in memory (list B)", false;
-   for (unsigned i = 0; i < n_c && off + 8 <= size; i++) {
-      unsigned kind = rd16(u, off);
+   /* list C, decoded: kind 1 f32, 2 F16 half, 3 a C10 channel; ours
+    * (opts.driver_consts): 0x10 an F16 half of the C10 value, 0x11 a literal */
+   for (unsigned i = 0; i < out->n_consts; i++) {
+      const struct sgx_const_map *m = &out->consts[i];
       struct sgx545_const *k = &so->consts[so->n_consts];
-      /* kind 1 f32, 2 F16 half (k, slot, shift); 3 a C10 channel, a 10-byte
-       * record (k, 0, slot, shift).  Ours (opts.driver_consts): 0x10 an F16
-       * half of the C10 value, kind 2's record; 0x11 a literal, a 10-byte
-       * record (value low, value high, slot, shift) */
-      bool rec10 = kind == 3 || kind == 0x11;
-      unsigned at = rec10 ? off + 2 : off;
 
-      if (!((kind >= 1 && kind <= 3) || kind == 0x10 || kind == 0x11) || so->n_consts == SGX545_MAX_CONSTS)
-         return info->why = "a list C constant kind or too many", false;
-      k->fmt = kind;
-      k->k = kind == 0x11 ? 0xffff : rd16(u, off + 2);
-      k->value = kind == 0x11 ? rd16(u, off + 2) | (uint32_t)rd16(u, off + 4) << 16 : 0;
-      k->slot = rd16(u, at + 4);
-      k->shift = rd16(u, at + 6);
+      if (so->n_consts == SGX545_MAX_CONSTS)
+         return info->why = "too many constants", false;
+      k->fmt = m->fmt;
+      k->k = m->k;
+      k->value = m->value;
+      k->slot = m->slot;
+      k->shift = m->shift;
       so->const_dwords = MAX2(so->const_dwords, k->slot + 1u);
       so->n_consts++;
-      off += rec10 ? 10 : 8;
    }
-   if (n_d || n_sec || off > size)
-      return info->why = n_d ? "list D" : n_sec ? "a secondary program" : "a short USP", false;
-   /* the vertex input mask, then the output mask (both in u32s) */
-   if (rd32(u, 0x10) == 1)
-      off += 4 * ((rd16(u, 0x80) + 31) / 32);
-   off += 4 * ((rd16(u, 0x82) + 31) / 32);
-   return blocks_supported(u, size, off, info);
+   for (unsigned i = 0; i < out->n_samples; i++) {
+      const struct sgx_sample_info *x = &out->samples[i];
+
+      if (!x->dependent)
+         continue;
+      if (info->n_deps == SGX545_MAX_DEP_SAMPLES)
+         return info->why = "too many dependent texture samples", false;
+      info->deps[info->n_deps].at = x->at;
+      info->deps[info->n_deps].sampler = x->sampler;
+      info->deps[info->n_deps].raw = x->reg;
+      info->deps[info->n_deps].smp = x->smp;
+      info->n_deps++;
+   }
+   for (unsigned i = 0; i < out->n_blocks; i++) {
+      if (out->blocks[i].kind != SGX_BLOCK_BRANCH)
+         continue;
+      if (info->n_branches == ARRAY_SIZE(info->branch_at))
+         return info->why = "too many branches", false;
+      info->branch_at[info->n_branches++] = out->blocks[i].at;
+   }
+   return true;
+}
+
+/* the compiler's layout: vertex attributes where st put them
+ * (driver_location); uniforms and samplers are the compiler's */
+static int
+layout_place(void *data, enum sgx_layout_kind kind, const char *name)
+{
+   nir_shader *nir = data;
+
+   if (kind != SGX_LAYOUT_ATTRIB)
+      return -1;
+   nir_foreach_shader_in_variable(var, nir) {
+      if (var->name && !strcmp(var->name, name))
+         return var->data.driver_location;
+   }
+   return -1;
+}
+
+static unsigned
+layout_first_free(void *data, enum sgx_layout_kind kind)
+{
+   nir_shader *nir = data;
+   unsigned next = 0;
+
+   if (kind == SGX_LAYOUT_ATTRIB) {
+      nir_foreach_shader_in_variable(var, nir) {
+         if (var->name)
+            next = MAX2(next, var->data.driver_location + 1);
+      }
+   }
+   return next;
 }
 
 static bool
@@ -507,7 +445,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    struct sgx_compile_options opts = { 0 };
    struct sgx_varyings vary;
    struct sgx_shader out;
-   struct usp_info info = { 0 };
+   struct prog_info info = { 0 };
    bool vertex = nir->info.stage == MESA_SHADER_VERTEX;
 
    opts.verbose = (sgx545_debug & SGX545_DEBUG_NIR) != 0;
@@ -518,13 +456,13 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    remap_legacy_varyings(nir);
    assign_varyings(nir, &vary);
+   struct sgx_layout layout = { layout_place, layout_first_free, nir };
+
+   opts.layout = &layout;
    if (vertex) {
       nir_foreach_shader_in_variable(var, nir) {
-         if (!var->name || opts.n_attribs == SGX_MAX_NAMED)
-            continue;
-         snprintf(opts.attribs[opts.n_attribs].name, sizeof(opts.attribs[0].name), "%s", var->name);
-         opts.attribs[opts.n_attribs++].value = var->data.driver_location;
-         so->n_attribs = MAX2(so->n_attribs, var->data.driver_location + 1);
+         if (var->name)
+            so->n_attribs = MAX2(so->n_attribs, var->data.driver_location + 1);
       }
    }
    if (sgx545_debug & SGX545_DEBUG_NIR)
@@ -536,20 +474,21 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       ralloc_free(nir);
       return false;
    }
-   if (sgx545_dump_usp_dir()) {
+   if (sgx545_dump_code_dir()) {
       static unsigned seq;
       char path[512];
       FILE *fp;
 
-      snprintf(path, sizeof(path), "%s/%s-%u.usp", sgx545_dump_usp_dir(), vertex ? "vs" : "fs", seq++);
-      if ((fp = fopen(path, "wb"))) {
-         fwrite(out.usp, 1, out.usp_size, fp);
+      /* "hi lo" hex per instruction, as sgxc's .code (dis.py -x reads the pairs) */
+      snprintf(path, sizeof(path), "%s/%s-%u.code", sgx545_dump_code_dir(), vertex ? "vs" : "fs", seq++);
+      if ((fp = fopen(path, "w"))) {
+         for (unsigned i = 0; i < out.n_code; i++)
+            fprintf(fp, "%08x %08x\n", (unsigned)(out.code[i] >> 32), (unsigned)out.code[i]);
          fclose(fp);
       }
    }
-   if (!read_usp(out.usp, out.usp_size, so, &info) || (!vertex && info.color_type != 3)) {
-      fprintf(stderr, "sgx545: %s shader: USP features not handled yet (%s)\n", vertex ? "vertex" : "fragment",
-              info.why ? info.why : "colour output");
+   if (!read_program(&out, so, &info)) {
+      fprintf(stderr, "sgx545: %s shader: not handled yet (%s)\n", vertex ? "vertex" : "fragment", info.why);
       sgx_shader_free(&out);
       ralloc_free(nir);
       return false;
@@ -561,7 +500,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       unsigned dwords = 4;
 
       so->prog.vertex = true;
-      so->prog.code = sgxws_upload_vs(ctx->hw, out.code, out.n_code, info.temps);
+      so->prog.code = sgxws_upload_vs(ctx->hw, out.code, out.n_code, out.n_temps);
       so->prog.in_dwords = so->prog.attr_dwords = 4 * MAX2(so->n_attribs, 1);
       for (unsigned s = 0; s < SGX_MAX_SETS; s++) {
          unsigned n = vary.set_comps[s];
@@ -582,20 +521,19 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       if (info.n_deps) {
          unsigned sa[SGX545_MAX_DEP_SAMPLES], n;
 
-         if (info.n_insts != out.n_code ||
-             MAX2(so->const_dwords, info.sa_slots) + 4 * info.n_deps > SGX545_MAX_CONSTS) {
-            fprintf(stderr, "sgx545: USP blocks hold %u instructions, the program %u: not drawn\n",
-                    info.n_insts, out.n_code);
+         if (MAX2(so->const_dwords, out.sa_slots) + 4 * info.n_deps > SGX545_MAX_CONSTS) {
+            fprintf(stderr, "sgx545: %u SA slots and %u dependent samples: not drawn\n",
+                    out.sa_slots, info.n_deps);
             simple_mtx_unlock(&screen->lock);
             sgx_shader_free(&out);
             ralloc_free(nir);
             return false;
          }
          /* after every SA register the program uses: its constants (list C)
-          * and the slots the compiler keeps for itself (header 0x7e) */
-         if (info.sa_slots > so->const_dwords)
-            SGX545_DBG(NIR, "fragment program: %u SA slots, %u in list C\n", info.sa_slots, so->const_dwords);
-         so->const_dwords = MAX2(so->const_dwords, info.sa_slots);
+          * and the slots the compiler keeps for itself */
+         if (out.sa_slots > so->const_dwords)
+            SGX545_DBG(NIR, "fragment program: %u SA slots, %u in list C\n", out.sa_slots, so->const_dwords);
+         so->const_dwords = MAX2(so->const_dwords, out.sa_slots);
          for (unsigned j = 0; j < info.n_deps; j++) {
             so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
             so->dep_sampler[j] = info.deps[j].sampler;
@@ -623,48 +561,46 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             so->code = NULL;
          }
       }
-      so->color_reg = info.color_reg;
-      so->temps = info.temps;
-      so->prog.temps = info.temps;
-      so->prog.pa_dwords = info.n_pa;
+      so->color_reg = out.colour_pa;
+      so->temps = out.n_temps;
+      so->prog.temps = out.n_temps;
+      so->prog.pa_dwords = out.n_pa;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
-      /* One DOUTI per list A entry, in PA order (docs/PDS.md "DOUTI"): a
-       * varying's iterator is its set + 1.  The writer's other kinds 0xb-0xf
-       * (the colour placeholder in a shader without varyings) are dropped: the
-       * DDK iterates the colour for them (source 0x20), which hangs the GPU
-       * when the vertex program outputs no colour, and ours never do. */
+      /* One DOUTI per iteration, in PA order (docs/PDS.md "DOUTI"): a
+       * varying's iterator is its set + 1.  The DDK's driver also iterates a
+       * placeholder colour (source 0x20) in a shader without varyings; that
+       * hangs the GPU when the vertex program outputs no colour, and ours
+       * never do, so there is none (the compiler still counts its PA register
+       * in n_pa). */
       int last_plain = -1, last_sample = -1;
 
-      for (unsigned i = 0; i < info.n_iters && i < ARRAY_SIZE(so->prog.douti); i++) {
-         unsigned it = info.iters[i].iterator;
+      for (unsigned i = 0; i < out.n_iters && i < ARRAY_SIZE(so->prog.douti); i++) {
+         unsigned it = out.iters[i].set + 1;
          uint32_t w;
 
-         if (info.iters[i].sample) {
+         if (out.iters[i].sample) {
             /* sample half: coordinate set + 1, 2-D (0x200) or projected
              * (0x400) (docs/PDS.md).  A sample of the set the previous plain
              * DOUTI iterates is merged into it, as the DDK's generator does
              * (w0 & 0x400007ff); a separate one samples at coordinate 0
              * (EA3).  Otherwise a pure sample: 0x12000 and 0x6000000. */
-            uint32_t half = it | (info.iters[i].proj ? 0x400u : 0x200u);
+            uint32_t half = it | (out.iters[i].proj ? 0x400u : 0x200u);
             unsigned prev = so->prog.n_douti - 1;
 
             if (so->prog.n_douti && !so->prog.douti_tex[prev] && (so->prog.douti[prev] & 0x7ff) == 0 &&
                 ((so->prog.douti[prev] >> 11) & 0x3f) == it) {
                so->prog.douti[prev] |= half;
-               so->prog.douti_tex[prev] = info.iters[i].sampler + 1;
+               so->prog.douti_tex[prev] = out.iters[i].sampler + 1;
                last_sample = prev;
             } else {
                last_sample = so->prog.n_douti;
-               so->prog.douti_tex[so->prog.n_douti] = info.iters[i].sampler + 1;
+               so->prog.douti_tex[so->prog.n_douti] = out.iters[i].sampler + 1;
                so->prog.douti[so->prog.n_douti++] = half | 0x12000u | 0x6000000u;
             }
             continue;
          }
-         if (it >= 0xb)
-            continue;   /* the vertex programs output no colour: nothing to iterate */
-         else
-            w = it << 11 | (info.iters[i].comps - 1) << 22 | 1u << 24 | 0x6000000u |
-                (info.iters[i].format == 2 ? 1u << 28 : 0);
+         w = it << 11 | (out.iters[i].comps - 1) << 22 | 1u << 24 | 0x6000000u |
+             (out.iters[i].f16 ? 1u << 28 : 0);
          last_plain = so->prog.n_douti;
          so->prog.douti[so->prog.n_douti++] = w;
       }
@@ -704,7 +640,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    simple_mtx_unlock(&screen->lock);
    if (sgx545_debug & SGX545_DEBUG_NIR)
       fprintf(stderr, "sgx545: compiled %s shader: %u instructions, %u temps, %u constants, %u iterators\n",
-              vertex ? "vertex" : "fragment", out.n_code, info.temps, so->n_consts, info.n_iters);
+              vertex ? "vertex" : "fragment", out.n_code, out.n_temps, so->n_consts, out.n_iters);
    so->kind = so->prog.code ? SGX545_SHADER_COMPILED : SGX545_SHADER_UNSUPPORTED;
    sgx_shader_free(&out);
    ralloc_free(nir);

@@ -4,7 +4,7 @@
 
 sgxc = executable(
   'sgxc',
-  'sgxc.cpp',
+  'sgxc.cpp', 'sgx_usp.c',
   cpp_args : [cpp_msvc_compat_args],
   include_directories : [inc_include, inc_src, inc_mesa, inc_gallium, inc_gallium_aux,
                          inc_glsl],

@@ -18,7 +18,8 @@
 
 #include "sgx_priv.h"
 
-static int lookup(const struct sgx_named *t, unsigned n, const char *name);
+static int place(const struct sgx_compile_options *o, enum sgx_layout_kind k, const char *name);
+static unsigned first_free(const struct sgx_compile_options *o, enum sgx_layout_kind k);
 
 static const nir_shader_compiler_options options = {
    .lower_fdiv = true,
@@ -215,12 +216,10 @@ static unsigned
 sampler_number(struct tex_ctx *t, nir_variable *var)
 {
    const struct sgx_compile_options *o = t->c->opts;
-   int pinned = lookup(o->samplers, o->n_samplers, var->name);
+   int pinned = place(o, SGX_LAYOUT_SAMPLER, var->name);
    if (pinned >= 0)
       return pinned;
-   unsigned next = 0;
-   for (unsigned i = 0; i < o->n_samplers; i++)
-      next = MAX2(next, (unsigned)o->samplers[i].value + 1);
+   unsigned next = first_free(o, SGX_LAYOUT_SAMPLER);
    for (unsigned i = 0; i < t->n; i++)
       if (t->seen[i] == var)
          return next + i;
@@ -366,7 +365,7 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
             k += slots4(glsl_get_struct_field(t, f));
          size_t l = strlen(name);
          snprintf(name + l, sizeof name - l, ".%s", glsl_get_struct_elem_name(t, p->strct.index));
-         int pinned = lookup(u->c->opts->uniforms, u->c->opts->n_uniforms, name);
+         int pinned = place(u->c->opts, SGX_LAYOUT_UNIFORM, name);
          if (pinned >= 0)
             k = pinned;
          t = glsl_get_struct_field(t, p->strct.index);
@@ -375,7 +374,7 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
          k += nir_src_as_uint(p->arr.index) * slots4(e);
          size_t l = strlen(name);
          snprintf(name + l, sizeof name - l, "[%u]", (unsigned)nir_src_as_uint(p->arr.index));
-         int pinned = lookup(u->c->opts->uniforms, u->c->opts->n_uniforms, name);
+         int pinned = place(u->c->opts, SGX_LAYOUT_UNIFORM, name);
          if (pinned >= 0)
             k = pinned;
          t = e;
@@ -598,13 +597,17 @@ type_size_comps(const struct glsl_type *type, bool bindless)
    return 4 * glsl_count_vec4_slots(type, false, bindless);
 }
 
+/* the caller's layout (sgx_compile_options.layout), if it has one */
 static int
-lookup(const struct sgx_named *t, unsigned n, const char *name)
+place(const struct sgx_compile_options *o, enum sgx_layout_kind k, const char *name)
 {
-   for (unsigned i = 0; i < n; i++)
-      if (!strcmp(t[i].name, name))
-         return t[i].value;
-   return -1;
+   return o->layout && o->layout->place ? o->layout->place(o->layout->data, k, name) : -1;
+}
+
+static unsigned
+first_free(const struct sgx_compile_options *o, enum sgx_layout_kind k)
+{
+   return o->layout && o->layout->first_free ? o->layout->first_free(o->layout->data, k) : 0;
 }
 
 static void
@@ -692,11 +695,9 @@ assign_io(struct sgx_ctx *c)
    for (unsigned i = 0; i < 512; i++)
       c->in_reg[i] = c->out_reg[i] = -1;
    if (s->info.stage == MESA_SHADER_VERTEX) {
-      unsigned next_attr = 0;
-      for (unsigned i = 0; i < o->n_attribs; i++)
-         next_attr = MAX2(next_attr, o->attribs[i].value + 1);
+      unsigned next_attr = first_free(o, SGX_LAYOUT_ATTRIB);
       nir_foreach_shader_in_variable(var, s) {
-         int a = lookup(o->attribs, o->n_attribs, var->name);
+         int a = place(o, SGX_LAYOUT_ATTRIB, var->name);
          unsigned rows = type_size_vec4(var->type, false);
          if (a < 0) {
             a = next_attr;
@@ -819,27 +820,22 @@ assign_io(struct sgx_ctx *c)
    }
 
    /* uniforms: constant numbers */
-   unsigned next = 0;
-   for (unsigned i = 0; i < o->n_uniforms; i++)
-      next = MAX2(next, (unsigned)o->uniforms[i].value + 4);
-   next = ALIGN_POT(next, 4);
-   unsigned next_sampler = 0;
-   for (unsigned i = 0; i < o->n_samplers; i++)
-      next_sampler = MAX2(next_sampler, (unsigned)o->samplers[i].value + 1);
+   unsigned next = ALIGN_POT(first_free(o, SGX_LAYOUT_UNIFORM), 4);
+   unsigned next_sampler = first_free(o, SGX_LAYOUT_SAMPLER);
    nir_foreach_uniform_variable(var, s) {
       if (glsl_type_is_sampler(glsl_without_array(var->type))) {
          /* the USP's sampler number: glslcompiler counts the samplers a
           * shader uses (corpus c3 tx_nd_s1: s1 alone is sampler 0) */
-         int u = lookup(o->samplers, o->n_samplers, var->name);
+         int u = place(o, SGX_LAYOUT_SAMPLER, var->name);
          var->data.binding = u >= 0 ? (unsigned)u : next_sampler++;
          continue;
       }
-      int k = lookup(o->uniforms, o->n_uniforms, var->name);
+      int k = place(o, SGX_LAYOUT_UNIFORM, var->name);
       if (k < 0) {
          /* an array or matrix pinned element by element: its base */
          char e0[80];
          snprintf(e0, sizeof e0, "%s[0]", var->name);
-         k = lookup(o->uniforms, o->n_uniforms, e0);
+         k = place(o, SGX_LAYOUT_UNIFORM, e0);
       }
       if (k < 0) {
          k = next;

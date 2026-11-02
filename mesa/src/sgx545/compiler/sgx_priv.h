@@ -177,7 +177,7 @@ struct sgx_ctx {
 void sgx_lower(struct sgx_ctx *c);
 void sgx_logf(struct sgx_ctx *c, const char *fmt, ...);
 void sgx_fail(struct sgx_ctx *c, const char *fmt, ...);
-int sgx_write_usp(struct sgx_ctx *c, struct sgx_shader *out);
+int sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out);
 int sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w);
 
 static inline struct sgx_vreg *
