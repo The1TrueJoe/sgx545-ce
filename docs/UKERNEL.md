@@ -378,11 +378,17 @@ one fixed:
    started"), the `GETMISCINFO` DDK-version validate passes, Kernel CCB `WO == RO`
    (commands consumed). Offline: `test_emu` 5/5, `test_commands` 21/21, `run_ours`
    5/5 — all driven the hardware way.
-3. **Open — SGXOSTimer "0x2 tasks" HWR on the idle microkernel.** After `srvinit`
-   exits with no client following, a periodic lockup/HWR recurs (~0.5 s) though
-   commands keep being consumed (`WO == RO`). A post-init idle-stability issue
-   (the lockup check reads the `B_TASIG`/`B_3DSIG` signatures and task count), not
-   the kick path. The next thing to chase; likely tied to the power-idle handshake.
+3. **Fixed, HW-CONFIRMED — idle active-power.** After `srvinit` exited idle, a
+   periodic `SGXOSTimer` lockup/HWR (~0.5 s) recurred because the host never
+   powered the quiescent GPU down, so its watchdog kept sampling a halted EDM
+   (`0xb14^0xb20` frozen). The microkernel must raise the active-power idle
+   signal: `ui32InterruptFlags |= EDM_INTERRUPT_ACTIVE_POWER` (host-control word
+   8, bit 1) + the host IRQ, which `SGXTestActivePowerEvent` turns into a
+   power-down. openHC now does this at `kick_end` when the CCB is empty and
+   nothing is in flight. On the EA1: **0 lockups / 0 HWR over ~60 s idle** (was
+   6+ in 20 s); `srvinit` still rc=0. Later refinements: the same signal at the
+   end of `render_done` (render-idle), and the DDK-style timer-based active-power
+   with a latency.
 
 Full evidence and next steps:
 `docs/log/entries/2026-11-02-2100-ukernel-ea1-kick-serviced.md` (current),

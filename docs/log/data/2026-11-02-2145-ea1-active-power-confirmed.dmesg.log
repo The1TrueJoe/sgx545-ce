@@ -1,0 +1,9 @@
+=== srvinit rc=0, idle, 0 lockups/HWR (ACTIVE_POWER fix) ===
+lockup lines: 0; HWR lines: 0
+
+536:[    1.541127] PVR: SGX PCI region: 0xDC000000 to 0xDCFFFFFF
+537:[    1.546725] PVR: SGX registers at 0xDC000000 (+0x0), IRQ 26
+705:[   73.556789] PVR_K:(Error): pvr: invalid param size for IOCTL#99:
+708:[   73.573570] PVR_K:(Error): pvr: ioctl#99 failed (-22)
+713:[   73.608043] PVR_K: SysFinalise: SGX revision = 1.0.14
+714:[   73.613072] PVR_K: SGXInit: HW core rev (1000e), SW core rev (1000d) check skipped.

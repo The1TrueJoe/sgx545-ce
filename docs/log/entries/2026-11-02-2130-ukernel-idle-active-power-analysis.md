@@ -94,3 +94,27 @@ can only check that the idle path writes `hostctl[8] |= 0x2` and raises
 `SW_EVENT` — the actual power-down and the silenced watchdog are HW-only. So
 this fix wants an EA1 slot to confirm, coordinated with mesa-gallium under the
 gpu.lock rules.
+
+## HW confirmation (EA1, 2026-11-02 ~21:27 real UTC) — fix A works
+
+Implemented fix A: at `kick_end`, when the kernel CCB is empty (`WO == RO`) and
+nothing is in flight (`SC_INFLIGHT == 0`, `SC_XFER == 0`), set
+`hostctl.ui32InterruptFlags |= EDM_INTERRUPT_ACTIVE_POWER` (word 8, bit 1) and
+raise the host IRQ (reusing `raise_host_irq`). New constants `HC_INTFLAGS = 8`,
+`EDM_INTERRUPT_ACTIVE_POWER = 2`. Only fires when truly idle, so renders and
+transfers are untouched.
+
+Offline: `test_emu` 5/5, `run_ours` 5/5, `test_commands` 5/5 including a new
+`active-power` guard (idle raises ACTIVE_POWER + the host IRQ).
+
+On the EA1 (cold boot, `srvinit -o`): `srvinit` returns rc=0 "microkernel
+started" (kick still serviced), and over ~60 s idle the kernel logged **0
+`SGXOSTimer detected SGX lockup` lines and 0 `HWRecoveryResetSGX`** — versus 6+
+within the first 20 s before the fix. Load settled to 0.03. The watchdog is
+silent because the host powered the idle GPU down (`SGXIsDevicePowered` false),
+which is exactly the active-power handshake the fix adds. Evidence:
+`docs/log/data/2026-11-02-2145-ea1-active-power-confirmed.dmesg.log`.
+
+Fix A is the queue-drain idle signal; the render-idle case (raise the same at
+the end of `render_done`) and the DDK-style timer-based active-power (option B)
+remain as later refinements when frames run, but the HWR is resolved.

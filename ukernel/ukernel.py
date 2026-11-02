@@ -89,9 +89,14 @@ CTX_INFLIGHT_FLAG = 0x3C // 4
 HC_INIT = 0
 HC_POWER = 1         # ui32PowerStatus
 HC_CLEANUP = 2       # ui32CleanupStatus
+HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_POWER
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
+EDM_INTERRUPT_ACTIVE_POWER = 2   # host control ui32InterruptFlags bit 1: the
+                                 # microkernel is idle, so the host may power the
+                                 # core down (sgx_mkif_km.h
+                                 # PVRSRV_USSE_EDM_INTERRUPT_ACTIVE_POWER)
 POWERCMD_POWEROFF = 1
 POWERCMD_IDLE = 2
 POWERCMD_RESUME = 3
@@ -594,6 +599,40 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.label("kick_end")
+    # active-power idle signal: if the kernel CCB is now empty and nothing is in
+    # flight, tell the host the microkernel is idle so it can power the core
+    # down. Without this the host never powers down a quiescent GPU and its
+    # watchdog (SGXOSTimer, which reads 0xb14^0xb20) HWRs the halted, event-
+    # driven EDM — EA1 HW-confirmed 2026-11-02. ui32InterruptFlags is host-
+    # control word 8; the host gates its power-down on ui32InterruptClearFlags,
+    # so re-raising the bit is idempotent and never storms.
+    a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")
+    a.i("wdf")
+    a.i("ld.a.d r2, r1, #0 [moe]")                 # write offset
+    a.i("ld.a.d r3, r1, #1 [moe]")                 # read offset
+    a.i("wdf")
+    a.i("test.xor.eq p0, r2, r3")                  # queue empty?
+    a.i("(!p0) ba kick_idle_done")
+    a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")   # a render in flight?
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(!p0) ba kick_idle_done")
+    a.i(f"ld.a.d r2, r17, #{SC_XFER} [moe]")        # a transfer in flight?
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(!p0) ba kick_idle_done")
+    # idle: raise ACTIVE_POWER in host control, then the host IRQ
+    a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")
+    a.i("wdf")
+    a.i(f"ld.a.d r2, r1, #{HC_INTFLAGS} [moe]")
+    a.i("wdf")
+    a.i(f"or r2, r2, #{EDM_INTERRUPT_ACTIVE_POWER}")
+    a.i(f"st.a.d r1, #{HC_INTFLAGS}, r2 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i(f"limm r0, #{SW_EVENT}")
+    a.i("ba raise_host_irq")                        # write SW_EVENT to EVENT_STATUS
+    a.label("kick_idle_done")
     a.end()
 
     # ======================================================================
