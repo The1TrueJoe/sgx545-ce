@@ -1,4 +1,2 @@
-entry init 0
-patch hostctl 8
-patch ccbctl 48
-patch ctlblk 96
+entry event 0
+patch ctlblk 8

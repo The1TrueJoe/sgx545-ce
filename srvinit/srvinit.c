@@ -630,7 +630,7 @@ static void load_pat(const char *path, struct init *s)
 		exit(2);
 	}
 	while (fgets(line, sizeof line, f)) {
-		if (sscanf(line, "entry %15s %lu", name, &off) == 2 && !strcmp(name, "init"))
+		if (sscanf(line, "entry %15s %lu", name, &off) == 2 && !strcmp(name, "event"))
 			s->uk_entry = (uint32_t)off;
 		else if (sscanf(line, "patch %15s %lu", name, &off) == 2) {
 			if (!strcmp(name, "hostctl"))

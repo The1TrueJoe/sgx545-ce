@@ -40,30 +40,36 @@ def load():
     manp = os.path.join(HERE, "sgx545-ukernel-openhc.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     man = json.load(open(manp))
-    # patch the address limms as srvinit -o will on the box
+    # patch the control-block-base limm as srvinit -o does on the box
     code = bytearray(open(binp, "rb").read())
-    for name, addr in (("hostctl", HOSTCTL), ("ccbctl", KCCBCTL), ("ctlblk", CTLBLK)):
-        patch_limm(code, man["patches"][name], addr)
+    patch_limm(code, man["patches"]["ctlblk"], CTLBLK)
     return bytes(code), man
 
 
 def machine(code):
     mem, regs = Mem(), Regs()
     u = USSE(code, base=0x30000000, mem=mem, regs=regs)
-    # the control block, as the entry PDS program's DMA presents it in sa
+    # the control block the event entry reads to populate sa (self/hostctl/
+    # CCB control/kernel CCB)
     mem.wr(CTLBLK + 4 * 0, CTLBLK)
     mem.wr(CTLBLK + 4 * 1, HOSTCTL)
     mem.wr(CTLBLK + 4 * 2, KCCBCTL)
-    for i in range(64):
-        u.sa[i] = mem.rd(CTLBLK + 4 * i)
+    mem.wr(CTLBLK + 4 * 16, 0x32000000)
     return u, mem, regs
+
+
+def run_event(u, man, regs, status=0):
+    """deliver one event through the real event entry (which populates sa and
+    dispatches), as the bare-DOUTU event program does on the box"""
+    regs.v[CR_EVENT_STATUS] = status
+    u.task(man["entries"]["event"] // 8)
 
 
 def test_init(code, man):
     u, mem, regs = machine(code)
-    mem.wr(HOSTCTL, 0)
-    mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 0)       # clean boot: HWR bit clear
-    u.task(man["entries"]["init"] // 8)
+    mem.wr(HOSTCTL, 0)                          # ui32InitStatus 0 -> dispatch to init
+    mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 0)        # clean boot: HWR bit clear
+    run_event(u, man, regs)
     assert mem.rd(HOSTCTL) == 1, "init must set ui32InitStatus = PVRSRV_USSE_EDM_INIT_COMPLETE"
     print("  init (clean): ui32InitStatus = 1  OK")
 
@@ -71,13 +77,11 @@ def test_init(code, man):
 def test_recovery_init(code, man):
     u, mem, regs = machine(code)
     mem.wr(HOSTCTL, 0)
-    mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 1)       # recovery: INTERRUPT_HWR set
+    mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 1)        # recovery: INTERRUPT_HWR set
     mem.wr(KCCBCTL + 0, 0x30)                   # kernel CCB write offset
     mem.wr(KCCBCTL + 4, 0x2f)                   # read offset != write: stale commands
     mem.wr(CTLBLK + 4 * SC_RIFLIST, 0xDEAD)     # a stale render-in-flight list head
-    for i in range(64):                         # re-DMA so sa reflects the memory
-        u.sa[i] = mem.rd(CTLBLK + 4 * i)
-    u.task(man["entries"]["init"] // 8)
+    run_event(u, man, regs)
     assert mem.rd(KCCBCTL + 4) == 0x30, "recovery must discard the kernel CCB (read := write)"
     assert mem.rd(CTLBLK + 4 * SC_RIFLIST) == 0, "recovery must empty the render-in-flight list"
     assert mem.rd(HOSTCTL) == 1, "recovery must still set ui32InitStatus"
