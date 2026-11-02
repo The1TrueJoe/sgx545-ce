@@ -9,12 +9,13 @@ own directory there, the per-VM page directory the whole uAPI leans on is worthl
 
 Answer, on the EA1 (core rev 1.0.14): **the write does not change the register — a client cannot
 repoint translation this way.** The store grants no translation escape. Whether a client register
-store is *otherwise* harmful (a denial of service) came out **undetermined on this run**, and this
-entry says why: the box was concurrently being wedged and rebooted by another session's dEQP chunk,
-so the reboot that followed the store can't be attributed to it. (An earlier draft of this entry
-called the store a DoS and said the box needed a power cycle — both wrong; corrected below after
-reconciling timelines with the mesa-gallium session.) Register *reads* stay the firm problem for
-secrecy.
+store is *otherwise* harmful (a denial of service) was **undetermined on the first run** (the box
+was concurrently being wedged and rebooted by another session's dEQP chunk, so the reboot that
+followed the store couldn't be attributed to it) and was then **settled by an isolated re-run: the
+store is benign** — it wedges nothing. (An earlier draft of this entry called the store a DoS and
+said the box needed a power cycle — both wrong; corrected below after reconciling timelines with
+the mesa-gallium session, then confirmed by the isolated re-run at the end.) Register *reads* stay
+the firm problem for secrecy.
 
 ## How it was tested
 
@@ -100,25 +101,45 @@ What the controls show: `str` to the unused `USE_CODE_BASE_14`/`_15` and the pla
 the store either. The honest position: the store's **value effect is known (none — no escape); its side
 effect (DoS or benign) is unknown** on this run.
 
+## Isolated re-run (Joseph's go, 2026-11-02 ~21:36 real UTC): the store is benign
+
+Joseph approved the isolated re-run to settle the DoS half. open-ukernel's ACTIVE_POWER check had
+just cold-booted the box, giving a clean known-good GPU; I took the slot under `/tmp/gpu.lock`, with
+WPE stopped and nothing else on the GPU (`tools/iso/suite_p1_dirbase_iso.py`: a sanity frame, then
+the one store). Data: `docs/log/data/2026-11-02-2136-iso-p1-dirbase-isolated.txt`.
+
+- Boot was known-good first: uptime ~6 min, **0 SGX recoveries**, lock free, GPU idle.
+- `sanity_frame` rendered the green triangle (`0xff00ff00`) — the GPU was clean right before the store.
+- The store: `reg 0xc84 0x1d69000 0x1d69000` (unchanged), `render done`, read-back `0x01d69000` not
+  the sentinel — the write is ignored, as before.
+- After, idle, WPE still off: uptime climbed **411 → 537 s continuously (no reboot)** with **HWR 0**
+  the whole ~2.5 min, no lockup/fault in dmesg. Then WPE restored, box left as found.
+
+So on a known-good idle GPU the store **wedges nothing**: no reboot, no recovery. The store is
+**benign** — the hardware simply ignores it, the same as the `USE_CODE_BASE_14`/`_15` stores. The
+first run's reboot was the concurrent dEQP wedge, confirmed not this store.
+
 ## What this means for the uAPI (D9, G1)
 
 - A client register **store grants no translation escape** — it can't repoint `DIR_LIST_BASE0`. The
   page-directory design survives this attack: a client can't swap in its own directory. **(firm)**
-- Whether a client register **store is a denial of service** is **undetermined** — the one run was
-  confounded by a concurrent dEQP chunk that had independently wedged and rebooted the box. **(open)**
+- A client register **store is benign** — on a known-good idle GPU it changes nothing and wedges
+  nothing; the hardware ignores it. Not a DoS. **(firm, isolated re-run)**
 - A client register **load leaks** — P1 showed reads of `EUR_CR_*` work (`CORE_ID`, `TIMER`, the PD
   physical base at 0xc84), side channels and secrets. **(firm)**
 
-So D9 option 1 (kernel shader validation) stands, scoped by what is firm: forbid client register
-**loads** (reads leak — the solid reason), and forbid **stores** conservatively (they grant no escape;
-their DoS safety is unproven, not disproven). Settling the store half needs an isolated re-run — the
-store alone, on a box known good, nothing else on the GPU — which is Joseph's call. The cost Joseph
-weighed in D9 (Mesa generates PDS per draw; the validator needs the full ISA in the kernel) is unchanged.
+So D9 option 1 (kernel shader validation) is scoped to one firm requirement: forbid client register
+**loads** (`ldr`), because reads leak. **Stores** (`str`) need not be forbidden for safety — they
+grant no escape and are not a DoS — so a validator may forbid them defensively or ignore them; the
+load ban is the part that matters. The cost Joseph weighed in D9 (Mesa generates PDS per draw; the
+validator needs the full ISA in the kernel) is unchanged, but the validator only has to recognise and
+reject `ldr` of the register file, not reason about stores.
 
 ## Box
 
 EA1 (10.0.0.110 — the EA1's address now; the fleet note's 10.0.0.127 is stale). Ran as a second client
 beside the WPE compositor under `flock /tmp/gpu.lock`; mesa-gallium and open-ukernel warned first. The
 box's instability in this window was a concurrent dEQP chunk's, not established as the store's; it
-self-recovered by 20:24 with no power cycle. Stopped after the one store, not retried, per the no-plug
-rule; an isolated re-run is Joseph's call.
+self-recovered by 20:24 with no power cycle. Stopped after the one store, not retried then, per the
+no-plug rule; the isolated re-run (above) later ran with Joseph's go, on a clean cold boot with WPE
+off, and found the store benign — the box was left exactly as found (WPE restored, 0 recoveries).
