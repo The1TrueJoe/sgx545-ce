@@ -89,3 +89,10 @@ box already unstable from that wedge; the 20:24 reboot that followed is NOT attr
 above was read at ts ~170s on the 20:21 boot = the 20:24 reboot, in a window shared with the box's
 pre-existing instability. The box SELF-RECOVERED by 20:24 -- no power cycle. Net: no translation
 escape (firm); DoS undetermined (confounded) -- settle with an isolated re-run (Joseph's call).
+
+Clock note: the EA1's own clock runs ~5 min 11 s FAST. The box-clock times in the correction
+above are ~5 min ahead of real UTC. Real UTC (mesa-gallium's Mac clock): mesa's chunk ~20:04:20,
+its wedge ~20:06, box SSH dead 20:15:50, reboots ~20:17 and ~20:19:30, my iso run ~20:17 (the
+70-recovery burst ~20:17:35-20:18:06), stable after. mesa's flock was held continuously
+~20:04:20 to box death, so nothing of mine overlapped its chunk. Joseph power-cycled ~20:46 real
+(cutting a fresh mesa chunk started ~20:45:25) -- 29 min after my store, unrelated to it.
