@@ -4,6 +4,7 @@
 #ifndef PVRSGX_FW_H
 #define PVRSGX_FW_H
 
+#include <linux/bits.h>
 #include <linux/types.h>
 
 struct pvrsgx_device;

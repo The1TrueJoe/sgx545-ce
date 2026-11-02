@@ -14,6 +14,10 @@ on:
       - drm/**
       - .github/workflows/powervr-sgx.yml
 
+concurrency:
+  group: powervr-sgx-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   LINUX_VERSION: 7.1.8
   OPENHC_REF: main
@@ -80,7 +84,7 @@ jobs:
         run: |
           set -eux
           make -C linux-$LINUX_VERSION ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr
-          musl-gcc -static -O2 -Wall -Wextra -Werror -I hdr/include -I drm/powervr_sgx/include/uapi/drm \
+          musl-gcc -static -O2 -Wall -Wextra -Werror -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm \
             -o powervr_sgx_test drm/tests/powervr_sgx_test.c
           # The header on its own, as userspace sees it.
           echo '#include "powervr_sgx_drm.h"' | gcc -x c -fsyntax-only -Wall -Wpadded -Werror \

@@ -200,7 +200,7 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 	flags = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS);
 	clear = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR);
 	if ((flags & HOSTCTL_INTERRUPT_HWR) && !(clear & HOSTCTL_INTERRUPT_HWR))
-		drm_warn_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
+		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
 				     pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
 
 	pvrsgx_job_process_done(sdev);
