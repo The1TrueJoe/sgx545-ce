@@ -307,16 +307,31 @@ materialize(struct sgx_ctx *c, struct sgx_ins *at, struct sgx_ref src, unsigned 
       insert_before(at, m);
    } else if (src.h16) {
       /* F16 -> f32: x.f16 - floor(0) under format select (src1 takes any bank
-       * and the modifiers) */
+       * and a negate; an abs is taken from the f32 value) */
       m = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
       m->nops = 3;
       m->rpt = n;
       m->op[0] = vref(v, 0);
       m->op[1] = src;
+      m->op[1].abs = 0;
       m->op[1].step = n > 1;
       m->op[2] = cref(48);
       m->op[2].step = 0;
       insert_before(at, m);
+      if (src.abs) {
+         struct sgx_ins *a = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
+         a->nops = 3;
+         a->rpt = n;
+         a->op[0] = vref(v, 0);
+         a->op[1] = vref(v, 0);
+         a->op[1].abs = 1;
+         a->op[1].neg = src.neg;
+         a->op[1].step = n > 1;
+         a->op[2] = cref(48);
+         a->op[2].step = 0;
+         m->op[1].neg = 0;
+         insert_before(at, a);
+      }
    } else if (src.neg || src.abs) {
       /* x - floor(0): a move that applies the source modifiers */
       m = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
@@ -403,12 +418,15 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          struct sgx_ref plain = *r;
          plain.h16 = 0;
          bool kind_ok = slot_ok(i->form, k, &plain);
+         /* (|x| on a format-select or scalar F16 operand isn't known to work
+          * on hardware, and the DDK never writes it: widen, then |x| in f32) */
+         bool absok = !r->abs || pck16 || i->form == USSE_FMAD16;
          if (((s && s->fmt && small && i->form != USSE_TESTMASK_FADD_S0Z0O_BYTE_1) || scalar || pck16 ||
-              i->form == USSE_FMAD16) && kind_ok)
+              i->form == USSE_FMAD16) && kind_ok && absok)
             continue;
          /* (a slot with no format select can't read a half at all: mov would
           * take the whole register) */
-         if (s && s->fmt && slot_ok(i->form, k, r))
+         if (s && s->fmt && slot_ok(i->form, k, r) && absok)
             continue;
       } else if (slot_ok(i->form, k, r)) {
          continue;
