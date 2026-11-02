@@ -168,10 +168,10 @@ def recover(box):
 
 
 def run_chunk(box, who, name, tests):
-    """(results {test: (status, seconds)}, wedged)"""
+    """(results {test: (status, seconds)}, wedged, SGX recoveries during it)"""
     rc, _ = box.ssh(f"cat > {BOX_DIR}/chunk.txt", stdin=("\n".join(tests) + "\n").encode())
     if rc != 0:
-        return {}, True
+        return {}, True, 0
     limit = 120 + len(tests) * 4 + 3 * TEST_TIMEOUT
     limit = min(limit, 3600)
     r0 = recoveries(box)
@@ -201,7 +201,7 @@ def run_chunk(box, who, name, tests):
     if not wedged and not canary(box, who, name):
         log("the canary didn't pass after this chunk")
         wedged = True
-    return res, wedged
+    return res, wedged, (r1 - r0 if r0 is not None and r1 is not None else 0)
 
 
 def main():
@@ -213,6 +213,8 @@ def main():
     ap.add_argument("--max-wedges", type=int, default=40)
     ap.add_argument("--name", default=None)
     ap.add_argument("--caselist", default=None)
+    ap.add_argument("--max-recoveries", type=int, default=None,
+                    help="stop after a chunk with more SGX recoveries than this (a box without a plug)")
     ap.add_argument("--hold-lock", action="store_true",
                     help="hold /tmp/gpu.lock on the box for the whole run, so nothing interleaves between chunks")
     a = ap.parse_args()
@@ -270,10 +272,12 @@ def run(a, box, name, todo, res_path, wedge_path):
     ran = 0
     while todo:
         chunk = todo[:size]
-        res, wedged = run_chunk(box, a.who, name, chunk)
+        res, wedged, nrec = run_chunk(box, a.who, name, chunk)
         for t, (status, secs) in res.items():
             res_file.write(f"{t},{status},{secs}\n")
         res_file.flush()
+        if a.max_recoveries is not None and nrec > a.max_recoveries:
+            sys.exit(f"{nrec} SGX recoveries in a chunk of {len(chunk)} ({chunk[0]} ..): stopping")
         finished = [t for t in chunk if t in res]
         if not wedged and not finished:
             # the runner failed outright; never spin on it
