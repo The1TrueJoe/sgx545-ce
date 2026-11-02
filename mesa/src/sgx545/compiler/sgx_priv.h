@@ -159,7 +159,10 @@ struct sgx_ctx {
    bool discards;
    bool keep_pred;               /* the single discard wrote p1 (= keep) itself */
    bool p16;                     /* mediump in F16, as the DDK computes it */
-   int face_vreg;                /* gl_FrontFacing as 1.0 / 0.0, made at entry; -1 none */
+   int face_vreg;                /* gl_FrontFacing as made at entry; -1 none */
+   bool face_int;                /* ... as (g16 ^ sa) & 1, read only by selects */
+   int face_f32;                 /* ... as 1.0 / 0.0 (face_int: made when a select needs it) */
+   struct sgx_ins *face_and;     /* the and that makes face_int */
    unsigned colour_pa;
    struct sgx_sample *samples[16];
    unsigned n_samples;

@@ -873,6 +873,7 @@ set_refs(struct sgx_ctx *c, nir_def *def, const struct sgx_ref *r, unsigned n)
 }
 
 static void emit_alu(struct sgx_ctx *c, nir_alu_instr *alu);
+static struct sgx_ref cond_f32(struct sgx_ctx *c, struct sgx_ref r);
 
 /* a 16-bit op done in f32: the instruction selected as if the def were
  * 32-bit (its F16 sources are format-select operands), then each component
@@ -896,6 +897,54 @@ alu_as_f32(struct sgx_ctx *c, nir_alu_instr *alu)
    (void)v;
 }
 
+/* a register holding the F16 pair (x, y) as is: the pair itself, a constant's
+ * bits, or a pck.f16.f16 */
+static struct sgx_ref
+whole_pair(struct sgx_ctx *c, struct sgx_ref x, struct sgx_ref y)
+{
+   int sw;
+   if (x.file == SGX_F_K && y.file == SGX_F_K)
+      return pair_src(c, x, y, &sw);
+   if (same_reg_pair(&x, &y))
+      return x;
+   return pair_reg_plain(c, x, y);
+}
+
+/* An F16 select on one 32-bit condition for every channel (gl4es' gl_Color =
+ * gl_FrontFacing ? gl_FrontColor : gl_BackColor): movc.nz.i32 on whole
+ * register pairs, exact and without widening. false: not that shape. */
+static bool
+csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
+{
+   unsigned nc = alu->def.num_components;
+   struct sgx_ref cond = s[0][0];
+   if (!nir_legacy_chase_alu_dest(&alu->def).dest.is_ssa || cond.h16 || cond.neg || cond.abs || !is_rpa(&cond))
+      return false;
+   for (unsigned k = 0; k < nc; k++) {
+      if (!ref_same(&s[0][k], &cond))
+         return false;
+      for (unsigned j = 1; j < 3; j++)
+         if (s[j][k].neg || s[j][k].abs)
+            return false;
+   }
+   unsigned t = new_vreg16(c, ALIGN_POT(nc, 2));
+   for (unsigned p = 0; 2 * p < nc; p++) {
+      unsigned l1 = 2 * p + 1 < nc ? 2 * p + 1 : 2 * p;
+      struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, USSE_MOVC_Z_I32);
+      i->nops = 4;
+      i->op[0] = href(t, 2 * p);
+      i->op[1] = cond;
+      i->op[2] = whole_pair(c, s[1][2 * p], s[1][l1]);
+      i->op[3] = whole_pair(c, s[2][2 * p], s[2][l1]);
+      fld(i, USSE_F_COND, 1);
+      add(c, i);
+   }
+   c->vals[alu->def.index].kind = VAL_V;
+   c->vals[alu->def.index].n = t;
+   c->vals[alu->def.index].comp = 0;
+   return true;
+}
+
 /* the value of a 16-bit def lives in a new 16-bit vreg; pairs of it */
 static void
 emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
@@ -905,9 +954,11 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
    for (unsigned j = 0; j < nin && j < 3; j++)
       for (unsigned k = 0; k < nc; k++)
          s[j][k] = alu_src(c, alu, j, k);
+   if ((alu->op == nir_op_fcsel || alu->op == nir_op_b32csel) && csel16(c, alu, s))
+      return;
    if (alu->op == nir_op_fmin || alu->op == nir_op_fmax || alu->op == nir_op_fdot2 ||
        alu->op == nir_op_fdot3 || alu->op == nir_op_fdot4 || alu->op == nir_op_fsat || alu->op == nir_op_fcsel ||
-       alu->op == nir_op_fsqrt || alu->op == nir_op_fsin_agx) {
+       alu->op == nir_op_b32csel || alu->op == nir_op_fsqrt || alu->op == nir_op_fsin_agx) {
       /* no F16 form: the f32 instruction reading the F16 halves (format
        * select), result converted back with fmad16's rounding */
       alu_as_f32(c, alu);
@@ -1435,11 +1486,12 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       break;
    }
    case nir_op_fcsel:
+   case nir_op_b32csel:
       form = USSE_MOVC_Z_F32;
       fs.n = 1;
       fs.f[0].id = USSE_F_COND;
       fs.f[0].v = 1;
-      SRC(0, s[0][k]);
+      SRC(0, cond_f32(c, s[0][k]));
       SRC(1, s[1][k]);
       SRC(2, s[2][k]);
       n = 3;
@@ -1532,13 +1584,50 @@ discard(struct sgx_ctx *c, nir_intrinsic_instr *in, bool cond)
    }
 }
 
-/* gl_FrontFacing, 1.0 front, 0.0 back: once, at program entry */
+/* gl_FrontFacing as 1.0 / 0.0 from the 0 / 1 in t, put in after `after` */
+static unsigned
+face_float(struct sgx_ctx *c, unsigned t, struct list_head *after)
+{
+   unsigned f = new_vreg(c, 1);
+   struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, USSE_MOVC_Z_I32);
+   m->nops = 4;
+   m->op[0] = vref(f, 0);
+   m->op[1] = vref(t, 0);
+   m->op[2] = cref(52);
+   m->op[3] = cref(48);
+   fld(m, USSE_F_COND, 1);
+   list_add(&m->link, after);
+   return f;
+}
+
+/* A select's condition: the integer face value only movc.i32 reads as such;
+ * movc.f32 takes 1 for a denormal, so it gets the float. */
+static struct sgx_ref
+cond_f32(struct sgx_ctx *c, struct sgx_ref r)
+{
+   if (c->face_int && r.file == SGX_F_V && r.n == (unsigned)c->face_vreg) {
+      if (c->face_f32 < 0)
+         c->face_f32 = face_float(c, c->face_vreg, &c->face_and->link);
+      r.n = c->face_f32;
+      r.comp = 0;
+   }
+   return r;
+}
+
+/* gl_FrontFacing = ((g16 ^ sa[front_sa]) & 1) != 0, once, at program entry:
+ * 1.0 / 0.0, or the and's 0 / 1 when only selects read it */
 static void
-front_face(struct sgx_ctx *c, struct sgx_val *v)
+front_face(struct sgx_ctx *c, struct sgx_val *v, nir_def *def)
 {
    if (c->face_vreg < 0) {
+      bool cond_only = true;
+      nir_foreach_use_including_if(u, def) {
+         nir_instr *ui = nir_src_is_if(u) ? NULL : nir_src_use_instr(u);
+         cond_only &= ui && ui->type == nir_instr_type_alu &&
+                      (nir_instr_as_alu(ui)->op == nir_op_fcsel || nir_instr_as_alu(ui)->op == nir_op_b32csel) &&
+                      u == &nir_instr_as_alu(ui)->src[0].src;
+      }
       unsigned t = new_vreg(c, 1);
-      c->face_vreg = new_vreg(c, 1);
       struct sgx_ins *x = ins_alloc(c, SGX_INS_ALU, USSE_XOR);
       x->nops = 3;
       x->op[0] = vref(t, 0);
@@ -1549,16 +1638,11 @@ front_face(struct sgx_ctx *c, struct sgx_val *v)
       a->op[0] = vref(t, 0);
       a->op[1] = vref(t, 0);
       a->op[2] = ref(SGX_F_IMM, 1);
-      struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, USSE_MOVC_Z_I32);
-      m->nops = 4;
-      m->op[0] = vref(c->face_vreg, 0);
-      m->op[1] = vref(t, 0);
-      m->op[2] = cref(52);
-      m->op[3] = cref(48);
-      fld(m, USSE_F_COND, 1);
-      list_add(&m->link, &c->ins);
       list_add(&a->link, &c->ins);
       list_add(&x->link, &c->ins);
+      c->face_and = a;
+      c->face_int = cond_only;
+      c->face_vreg = cond_only ? (int)t : (int)face_float(c, t, &a->link);
    }
    v->kind = VAL_V;
    v->n = c->face_vreg;
@@ -1718,7 +1802,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_load_input:
    case nir_intrinsic_load_interpolated_input: {
       if (c->stage == MESA_SHADER_FRAGMENT && nir_intrinsic_io_semantics(in).location == VARYING_SLOT_FACE) {
-         front_face(c, v);
+         front_face(c, v, &in->def);
          return;
       }
       nir_src *off = &in->src[in->intrinsic == nir_intrinsic_load_input ? 0 : 1];
@@ -1751,7 +1835,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       return;
    }
    case nir_intrinsic_load_front_face:
-      front_face(c, v);
+      front_face(c, v, &in->def);
       return;
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
@@ -3379,6 +3463,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
    c->stage = nir->info.stage;
    c->keep_vreg = -1;
    c->face_vreg = -1;
+   c->face_f32 = -1;
    c->p16 = opts->f16;
    c->n_labels = 6;     /* 3 start, 4 feedback, 5 phase 1: as libusc numbers them */
    c->sa_base = c->stage == MESA_SHADER_FRAGMENT ? 9 : 10;

@@ -272,6 +272,17 @@ front_true_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    return true;
 }
 
+static bool
+csel16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if (alu->op != nir_op_bcsel || alu->def.bit_size != 16)
+      return false;
+   b->cursor = nir_before_instr(&alu->instr);
+   nir_def *cond = nir_b2f32(b, nir_ssa_for_alu_src(b, alu, 0));
+   nir_def_replace(&alu->def, nir_b32csel(b, cond, nir_ssa_for_alu_src(b, alu, 1), nir_ssa_for_alu_src(b, alu, 2)));
+   return true;
+}
+
 /* ------------------------------------------------------------------------
  * float16 (mediump, from Mesa's precision lowering): comparisons of 16-bit
  * values become comparisons of their f2f32 (the backend reads the F16
@@ -902,6 +913,9 @@ sgx_lower(struct sgx_ctx *c)
       nir_print_shader(s, stderr);
    NIR_PASS(_, s, nir_lower_int_to_float);
    NIR_PASS(_, s, nir_opt_copy_prop);
+   /* (a 16-bit bcsel would become fcsel, an f32-only opcode: b32csel takes
+    * any size, on the condition as a float) */
+   NIR_PASS(_, s, nir_shader_alu_pass, csel16_instr, nir_metadata_control_flow, NULL);
    NIR_PASS(_, s, nir_lower_bool_to_float, true);
    NIR_PASS(_, s, nir_opt_copy_prop);
    NIR_PASS(_, s, nir_opt_constant_folding);
