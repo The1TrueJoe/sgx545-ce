@@ -228,10 +228,14 @@ not a constant (confirmed against a capture with the textures session; word 4,
 the depth/stencil block, and word 16 are 0 in every capture seen). The
 transfer completes through the same 3D-end event as a render; the microkernel
 tells the two apart by a transfer-in-flight marker (control block +0x54) and
-routes a transfer to `xfer_done`, which advances the context's CCB past the
-0x1c0-byte command and raises the host interrupt. (Updating the transfer's
-destination sync objects from its `SGXMKIF_TRANSFERCMD_SHARED` is the next
-increment.) 2D is unused on this build (its host-kick entry is 0).
+routes a transfer to `xfer_done`. That handler signals the destination sync
+(the write-ops-complete value at command word 0x16c written to the sync address
+at word 0x168, in `SGXMKIF_TRANSFERCMD_SHARED` — so the client sees the blit
+done), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
+the context's CCB past the 0x1c0-byte command, and raises the host interrupt.
+The transfer also updates two sync-heap objects named by the kick's
+sync-handle list (not the shared command); reproducing those is the remaining
+increment. 2D is unused on this build (its host-kick entry is 0).
 
 ### Power (type 3)
 
@@ -604,14 +608,10 @@ confirmed on hardware yet** (M1 step 5). A per-fact evidence tag pass
 (`hardware`/`capture`/`oracle`/`static`) across §§1–7 is still to be done.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
-- **Transfer destination-sync update is not implemented.** `k_transfer` kicks
-  the 3D and `xfer_done` advances the transfer context's CCB and raises the
-  host IRQ, but the write-ops-complete update to the transfer's destination
-  sync objects (from `SGXMKIF_TRANSFERCMD_SHARED` at command+0xac) is not done
-  yet, so a transfer's client sees the queue advance but not the completion
-  signal. Data for it is captured (`docs/TEX.md`); it is the next increment.
-- **The advisory openHC version word is decided but not written.**
-  `docs/UKERNEL-DECISIONS.md` calls for a version word in a fixed control-block
-  slot at init; `init` does not write one yet.
+- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
+  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
+  0x16c), but a transfer also sets two sync-heap objects whose addresses come
+  from the kick's sync-handle list, not the command; those are not reproduced
+  yet, so a dependent job waiting on them would stall.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).

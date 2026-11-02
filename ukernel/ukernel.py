@@ -51,7 +51,17 @@ SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
                      # none). Lets the 3D-end handler tell a transfer's completion
                      # from a render's. (openHC's own slot; a transfer and a
                      # render never overlap on one context.)
+SC_VERSION = 0x16    # control block +0x58: openHC microkernel version, written
+                     # at init. Advisory (the DDK driver does not read it); an
+                     # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
+OPENHC_UK_VERSION = 0x00010000   # 1.0
 TRANSFERCMD_BYTES = 0x1c0   # SGXMKIF_TRANSFERCMD size (docs/TEX.md §3)
+# transfer completion: the shared command's destination-sync descriptor and the
+# transfer context's in-flight fields (docs/TEX.md; observed from a capture)
+XFER_SYNC_ADDR = 0x168 // 4   # command word: destination sync write-complete address
+XFER_SYNC_VAL = 0x16c // 4    # command word: the value to write (write-ops-complete)
+CTX_XFER0 = 0x14 // 4         # transfer context in-flight fields, cleared on completion
+CTX_XFER1 = 0xb0 // 4
 
 # ---- render-details / RT-data / context fields touched at render teardown ----
 # (docs/UKERNEL.md §5; byte offsets, observed from the DDK's completion writes)
@@ -374,6 +384,8 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.label("init_set")
+    a.i(f"limm r0, #{OPENHC_UK_VERSION}")
+    a.i(f"st.a.d sa{SA_SELF}, #{SC_VERSION}, r0 [moe]")   # advisory openHC version word
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
     a.i(f"st.a.d sa{SA_HOSTCTL}, #{HC_INIT}, r0 [moe]")   # ui32InitStatus = INIT_COMPLETE
     a.i("idf")
@@ -759,14 +771,26 @@ def build(a):
     # the transfer's SGXMKIF_TRANSFERCMD_SHARED is the next increment; docs/TEX.md.)
     # ======================================================================
     a.label("xfer_done")
-    a.i("ld.a.d r2, r1, #%d [moe]" % CTX_CCBCTL)         # the transfer context's CCB control
+    a.i("ld.a.d r5, r1, #%d [moe]" % CTX_CCB)            # transfer context CCB base
+    a.i("ld.a.d r2, r1, #%d [moe]" % CTX_CCBCTL)         # CCB control
     a.i("wdf")
-    a.i("ld.a.d r3, r2, #1 [moe]")                       # read offset
+    a.i("ld.a.d r3, r2, #1 [moe]")                       # read offset (this command)
     a.i("wdf")
+    a.i("imae r6, r3, #1, r5 [t2=u32]")                  # r6 = transfer command base
+    # destination sync: write the write-ops-complete value the kernel put in the
+    # command (word 0x16c) to the sync's complete-address (word 0x168), so the
+    # client sees the blit done (docs/TEX.md). (The transfer's other sync-heap
+    # objects come from the kick's sync-handle list -- the next increment.)
+    a.i("ld.a.d r7, r6, #%d [moe]" % XFER_SYNC_ADDR)     # destination sync address
+    a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # write-ops-complete value
+    a.i("wdf")
+    a.i("st.a.d r7, #0, r8 [moe]")
     a.i("limm r4, #%d" % TRANSFERCMD_BYTES)
-    a.i("imae r3, r4, #1, r3 [t2=u32]")                  # += command size
+    a.i("imae r3, r4, #1, r3 [t2=u32]")                  # read offset += command size
     a.i("st.a.d r2, #1, r3 [moe]")                       # advance the CCB read offset
     a.i("limm r4, #0")
+    a.i("st.a.d r1, #%d, r4 [moe]" % CTX_XFER0)          # clear ctx in-flight fields
+    a.i("st.a.d r1, #%d, r4 [moe]" % CTX_XFER1)
     a.i(f"st.a.d sa{SA_SELF}, #{SC_XFER}, r4 [moe]")      # no transfer in flight
     a.i("idf")
     a.i("wdf")

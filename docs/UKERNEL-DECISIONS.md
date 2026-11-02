@@ -51,10 +51,11 @@ mismatch at load. SGXMKIF already carries two such checks, which ours honours:
 
 For ours we add one field of our own to the version surface: a small
 **`openHC microkernel version`** word, written into a fixed control-block slot
-at init and bumped whenever our host-visible behaviour changes. It is advisory
-on the DDK driver (which does not read it) and lets an openHC-aware kernel log
-exactly which build is running. The authoritative compatibility gate stays the
-SGXMKIF build-options and struct-size checks, so the DDK stays a drop-in.
+at init and bumped whenever our host-visible behaviour changes. `init` writes
+`0x00010000` (1.0) to control-block `+0x58`; it is advisory on the DDK driver
+(which does not read it) and lets an openHC-aware kernel log exactly which
+build is running. The authoritative compatibility gate stays the SGXMKIF
+build-options and struct-size checks, so the DDK stays a drop-in.
 
 ## Reproducible build, no DDK inputs
 
