@@ -24,11 +24,11 @@ still encodes through `usse_forms.h`.
 | check | result |
 |---|---|
 | Words ISA.md quotes (phas.i x3, nop, mov rcnt, the driver's atst8, pcoeff) | 7/7 bit-exact |
-| Round trip, `tests/gles2.txt` + `tests/int.txt` | 243/243 |
+| Round trip, `tests/gles2.txt` + `tests/int.txt` | 246/246 |
 | Fuzz: 400,000 random words, each that decodes re-assembled from its text | 211,625 decode, 0 mismatches |
 | Mesa build (zig, x86_64-linux, Mesa's warning flags) | `libsgx545_isa.a` builds, no warnings |
-| Oracle comparison, `gles2.enc.txt` (177 GLES2 instructions) | 177/177 bit-exact; rejects were spellings only, fixed after ISA.md d7f97e4 |
-| Oracle comparison, `int.enc.txt` (66 integer / fdual) | pending |
+| Oracle comparison, `gles2.enc.txt` (180 GLES2 instructions) | 180/180 bit-exact (first pass 177/177; the rejects were spellings, fixed after ISA.md d7f97e4) |
+| Oracle comparison, `int.enc.txt` (66 integer, fixed-point, fdual) | 66/66 bit-exact (one spelling, op16s1 `i=`, fixed) |
 
 ## isaspec: what it couldn't express
 
@@ -54,10 +54,9 @@ e77b9f9: undescribed bits are 0 (hw1 h22, hw3/4 h10, h7 without src0, mov
 h3-6, smp h19, ...), nop has no predicate, internal registers are
 flag-only under format select and format control, 6-bit numbers in every
 slot under test's fmt, the smp mask/ret overlap, and the text notation.
-Open: efo's value names, the sop selects' defaults, dot's complement names,
-the integer classes' undescribed bits.
+The integer classes' undescribed bits and the spellings used for them are
+covered by 7359ad4. Nothing is open.
 
 ## Next
 
-1. The oracle comparison of `int.enc.txt`.
-2. Switch the compiler over (README.md "Switching the compiler over").
+1. Switch the compiler over (README.md "Switching the compiler over").

@@ -2945,6 +2945,11 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	<value val="3" display=" f2=o8"/>
 </enum>
 
+<enum name="#op16s1-i">
+	<value val="0" display=""/>
+	<value val="1" display=" i=i1"/>
+</enum>
+
 <enum name="#imae-ci">
 	<value val="0" display=""/>
 	<value val="1" display=" ci=i1"/>
@@ -3868,7 +3873,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	<field name="X39" low="42" high="43" type="custom"/>
 	<field name="RPT" low="44" high="45" type="#rpt4"/>
 	<pattern pos="46">0</pattern>
-	<field name="II" pos="47" type="#imae-ci"/>
+	<field name="II" pos="47" type="#op16s1-i"/>
 	<pattern low="52" high="53">01</pattern>
 	<pattern pos="56">0</pattern>
 	<derived name="SRC0" type="#src0" width="9">

@@ -75,8 +75,8 @@ is the isaspec change this needs (see below).
 
 ## ISA.md gaps hit while writing this
 
-Sent to the ISA.md owner. Answered in ISA.md (um-re d7f97e4, e77b9f9), and the
-XML follows the answers:
+Sent to the ISA.md owner. Answered in ISA.md (um-re d7f97e4, e77b9f9,
+7359ad4), and the XML follows the answers:
 
 1. Bits no field names are 0: hw 1 h22, hw 3/4 h10, h7 in the forms
    without src0, mov/movc h3-6, smp h19, testmask h2-3 and h6, the
@@ -92,10 +92,11 @@ XML follows the answers:
    `rcnt rpt=n`, smp's suffix order, `drc=n`, decimal numbers, fmad16's
    `swz0-2=`, fdual's `sd`/`sb`/`sc`/`msrc` names, numbers for enum values.
 
-Still open (asked with the integer table): efo's d/i/a/m value names, when
-the sop selects are omitted, dot's src1/src2 complement names, the
-undescribed bits of the integer classes, and whether efo's destination
-follows the F16 format control.
+7. The integer classes' undescribed bits (ima16 h15, ima32 h3/h20-21/h24,
+   the hw 16/17/1a forms, op1adrc) are 0 under the same rule; efo's
+   destination follows the F16 enable too. The spellings used here for
+   efo's d/i/a/m values, dot's `cs`/`as`/`s1c`/`s2c` and imae's `ci` are
+   listed under "Other spellings asm.py takes"; op16s1's h15 is `i=`.
 
 ## Switching the compiler over (not done yet)
 

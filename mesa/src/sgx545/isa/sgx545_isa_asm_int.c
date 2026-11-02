@@ -309,6 +309,8 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       return set_enum(fmt8, 3, value, &I->f2) && ++I->f2;
    if (!strcmp(name, "t2"))
       return SET_ENUM(imae_t2, t2);
+   if (!strcmp(name, "i") && o == SGX_ISA_OPC_OP16S1)
+      return SET_ENUM(ii01, ii);
    if (!strcmp(name, "ci")) {
       uint8_t v;
       if (!SET_ENUM(ii01, ii))
