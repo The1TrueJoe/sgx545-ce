@@ -127,7 +127,7 @@ main(int argc, char **argv)
    bool lowp16 = false, driver_uniforms = false;
    while ((c = getopt(argc, argv, "vpFLDu:a:s:o:")) != -1) {
       switch (c) {
-      case 'F': opts.front_p0 = true; break;
+      case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
       case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
       case 'p': lowp16 = true; opts.f16 = true; break;
