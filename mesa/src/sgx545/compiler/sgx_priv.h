@@ -159,6 +159,7 @@ struct sgx_ctx {
    bool discards;
    bool keep_pred;               /* the single discard wrote p1 (= keep) itself */
    bool p16;                     /* mediump in F16, as the DDK computes it */
+   bool def_dest;                /* emit_alu writes its def, never the register NIR stores it to */
    int face_vreg;                /* gl_FrontFacing as made at entry; -1 none */
    bool face_int;                /* ... as (g16 ^ sa) & 1, read only by selects */
    int face_f32;                 /* ... as 1.0 / 0.0 (face_int: made when a select needs it) */

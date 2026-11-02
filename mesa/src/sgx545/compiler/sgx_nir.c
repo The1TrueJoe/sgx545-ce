@@ -392,6 +392,21 @@ widen_cmp16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 static unsigned
 int16_to_32(const nir_instr *instr, void *data)
 {
+   if (instr->type == nir_instr_type_phi) {
+      /* a 16-bit integer phi (a mediump loop counter): an integer op feeds it */
+      nir_phi_instr *phi = nir_instr_as_phi((nir_instr *)instr);
+      if (phi->def.bit_size != 16)
+         return 0;
+      nir_foreach_phi_src(src, phi) {
+         nir_alu_instr *p = nir_def_as_alu_or_null(src->src.ssa);
+         if (p && p->op != nir_op_mov && !nir_op_is_vec(p->op) && p->op != nir_op_bcsel) {
+            nir_alu_type t = nir_alu_type_get_base_type(nir_op_infos[p->op].output_type);
+            if (t == nir_type_int || t == nir_type_uint)
+               return 32;
+         }
+      }
+      return 0;
+   }
    if (instr->type != nir_instr_type_alu)
       return 0;
    const nir_alu_instr *alu = nir_instr_as_alu(instr);
@@ -975,6 +990,14 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_var_copies);
    NIR_PASS(_, s, nir_lower_vars_to_ssa);
    optimize(s);
+   /* indexing of temporaries that unrolling didn't remove (a loop bounded by
+    * a uniform): if / else trees over the elements */
+   bool ind = false;
+   NIR_PASS(ind, s, nir_lower_indirect_derefs_to_if_else_trees, nir_var_function_temp, UINT32_MAX);
+   if (ind) {
+      NIR_PASS(_, s, nir_lower_vars_to_ssa);
+      optimize(s);
+   }
    /* (Mesa's GLSL linker hands over I/O already lowered: keep the
     * variables, they name the varyings) */
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);

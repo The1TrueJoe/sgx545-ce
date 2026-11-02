@@ -884,7 +884,11 @@ alu_as_f32(struct sgx_ctx *c, nir_alu_instr *alu)
    unsigned nc = alu->def.num_components;
    alu->def.bit_size = 32;
    struct sgx_val save = c->vals[alu->def.index];
+   /* (into the def: a 16-bit register it's stored to gets it by the store's
+    * pck, not as f32) */
+   c->def_dest = true;
    emit_alu(c, alu);
+   c->def_dest = false;
    alu->def.bit_size = 16;
    struct sgx_val *v = &c->vals[alu->def.index];
    struct sgx_ref r[4];
@@ -918,7 +922,7 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
 {
    unsigned nc = alu->def.num_components;
    struct sgx_ref cond = s[0][0];
-   if (!nir_legacy_chase_alu_dest(&alu->def).dest.is_ssa || cond.h16 || cond.neg || cond.abs || !is_rpa(&cond))
+   if (cond.h16 || cond.neg || cond.abs || !is_rpa(&cond))
       return false;
    for (unsigned k = 0; k < nc; k++) {
       if (!ref_same(&s[0][k], &cond))
@@ -1192,6 +1196,11 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       return;
    }
    nir_legacy_alu_dest ld = nir_legacy_chase_alu_dest(&alu->def);
+   if (c->def_dest && !ld.dest.is_ssa) {
+      ld.dest.is_ssa = true;
+      ld.dest.ssa = &alu->def;
+      ld.write_mask = nir_component_mask(alu->def.num_components);
+   }
    unsigned vreg, base;
    unsigned nc = alu->def.num_components;
    unsigned wmask = ld.dest.is_ssa ? nir_component_mask(nc) : ld.write_mask;
@@ -3245,19 +3254,38 @@ allocate(struct sgx_ctx *c)
    }
    free(first_is_read);
 
+   /* F16 values in r0-r31: under format select an F16 operand's number
+    * counts halves, so only those registers can be named (ISA.md "Float
+    * classes") */
    struct ra_regs *regs = ra_alloc_reg_set(c, NUM_TEMPS, true);
-   struct ra_class *cls[17] = { 0 };
+   struct ra_class *cls[17] = { 0 }, *cls_h[17] = { 0 }, *cls_6[17] = { 0 };
    for (unsigned s = 1; s <= 16; s++) {
       cls[s] = ra_alloc_contig_reg_class(regs, s);
       for (unsigned b = 0; b + s <= NUM_TEMPS; b++)
          ra_class_add_reg(cls[s], b);
+      cls_h[s] = ra_alloc_contig_reg_class(regs, s);
+      for (unsigned b = 0; b + s <= 32; b++)
+         ra_class_add_reg(cls_h[s], b);
+      cls_6[s] = ra_alloc_contig_reg_class(regs, s);
+      for (unsigned b = 0; b + s <= 64; b++)
+         ra_class_add_reg(cls_6[s], b);
    }
    ra_set_finalize(regs, NULL);
+   /* (an f32 operand beside an F16 one has a 6-bit number too: r0-r63) */
+   BITSET_WORD *six = rzalloc_array(c, BITSET_WORD, BITSET_WORDS(nv));
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      bool fmt = false;
+      for (unsigned k = 0; k < i->nops; k++)
+         fmt |= i->op[k].h16 && i->op[k].file != SGX_F_K && i->form != USSE_FMAD16;
+      for (unsigned k = 0; fmt && k < i->nops; k++)
+         if (i->op[k].file == SGX_F_V && i->op[k].n < nv)
+            BITSET_SET(six, i->op[k].n);
+   }
    struct ra_graph *g = ra_alloc_interference_graph(regs, nv);
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
       unsigned regs = r->half ? (r->size + 1) / 2 : r->size;
-      ra_set_node_class(g, v, cls[MIN2(MAX2(regs, 1), 16)]);
+      ra_set_node_class(g, v, (r->half ? cls_h : BITSET_TEST(six, v) ? cls_6 : cls)[MIN2(MAX2(regs, 1), 16)]);
    }
    for (unsigned a = 0; a < nv; a++) {
       struct sgx_vreg *x = sgx_vreg(c, a);
