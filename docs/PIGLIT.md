@@ -51,6 +51,13 @@ session's reboot only costs the pieces in flight.
   its work, with its output still unflushed). Why is not established; Mesa's
   libraries are not built `-z nodelete`, and the toolchain is zig's. Keeping
   `libEGL_mesa` loaded with `LD_PRELOAD` avoids it, and the runs do that.
+- **piglit needs `PIGLIT_NO_WINDOW=1`** on the surfaceless platform: without
+  it a test with `-auto` waits in a window event loop that returns at once, and
+  piglit calls `abort()` with nothing printed.
+- **piglit's EGL support comes with its EGL tests** (`PIGLIT_BUILD_EGL_TESTS`
+  defines `PIGLIT_HAS_EGL`, which the surfaceless platform needs), and
+  `tests/egl`'s programs need X11: the build turns the EGL tests on and skips
+  that one directory.
 - **A surfaceless display has no window configs**: a client must ask for
   `EGL_PBUFFER_BIT` (or `EGL_SURFACE_TYPE` 0), as dEQP and waffle do.
 

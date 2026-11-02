@@ -100,6 +100,10 @@ if [ ! -d "$W/piglit" ]; then
 	git clone -q --single-branch --no-checkout https://gitlab.freedesktop.org/mesa/piglit.git "$W/piglit"
 	git -C "$W/piglit" checkout -q "$PIGLIT_REV"
 	patch -d "$W/piglit" -p1 < "$CI/piglit/disable-vs_in.diff"
+	# the EGL tests are on for PIGLIT_HAS_EGL (the surfaceless platform needs it);
+	# tests/egl's own programs need X11
+	sed -i.orig 's|^	add_subdirectory (egl)$|	if (PIGLIT_USE_X11)\n		add_subdirectory (egl)\n	endif ()|' \
+		"$W/piglit/tests/CMakeLists.txt"
 fi
 # CMake's FindOpenGL wants a libGL; glvnd without GLX has libOpenGL, whose
 # soname the tests then record (waffle opens libGL.so.1: run-piglit.sh links it)
@@ -108,7 +112,7 @@ if [ ! -f "$W/piglit/build.ninja" ]; then
 	cmake -S "$W/piglit" -B "$W/piglit" -G Ninja -DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_TOOLCHAIN_FILE="$W/toolchain.cmake" -DPYTHON_EXECUTABLE="$(command -v python3)" \
 		-DOpenGL_GL_PREFERENCE=LEGACY -DPIGLIT_USE_WAFFLE=ON -DPIGLIT_USE_X11=OFF -DPIGLIT_USE_GBM=OFF \
-		-DPIGLIT_USE_WAYLAND=OFF -DPIGLIT_BUILD_GLX_TESTS=OFF -DPIGLIT_BUILD_EGL_TESTS=OFF \
+		-DPIGLIT_USE_WAYLAND=OFF -DPIGLIT_BUILD_GLX_TESTS=OFF -DPIGLIT_BUILD_EGL_TESTS=ON \
 		-DPIGLIT_BUILD_GL_TESTS=ON -DPIGLIT_BUILD_GLES1_TESTS=OFF -DPIGLIT_BUILD_GLES2_TESTS=OFF \
 		-DPIGLIT_BUILD_GLES3_TESTS=OFF -DPIGLIT_BUILD_VK_TESTS=OFF -DPIGLIT_BUILD_DMA_BUF_TESTS=OFF
 fi

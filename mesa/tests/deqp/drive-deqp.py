@@ -173,8 +173,8 @@ def piglit_env(name):
     # glvnd dispatches to this run's Mesa; it stays loaded, since unloading it at
     # waffle's teardown crashes the process at exit (docs/PIGLIT.md)
     lib = f"{BOX_DIR}/lib-{name}"
-    return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
-            f"LD_PRELOAD={lib}/libEGL_mesa.so.0 PIGLIT_PLATFORM=surfaceless_egl {BOX_ENV}")
+    return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib:{BOX_DIR}/piglit/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
+            f"LD_PRELOAD={lib}/libEGL_mesa.so.0 PIGLIT_PLATFORM=surfaceless_egl PIGLIT_NO_WINDOW=1 {BOX_ENV}")
 
 
 def piglit_regex(test):
