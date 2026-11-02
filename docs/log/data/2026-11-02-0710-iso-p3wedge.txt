@@ -1,0 +1,9 @@
+### suite_p3_wedge -k ''
+== p3_base15 rc=0
+render done
+pix 0 uniform=1 bg=0xcc336699
+kmsg: [  337.107174] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2423 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[  337.117994] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[  337.131591] PVR_K:(Error): SGX Register Base Address (Linear):   0x814E8000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+STOP at p3_base15
+
