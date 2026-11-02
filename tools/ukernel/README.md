@@ -5,6 +5,7 @@
 | `emu.py` | USSE emulator for microkernel-style code: the integer, memory, register-bank and flow-control forms, decoded by `tools/isa/hw.py`. Stops on anything it has no rule for |
 | `sgxsim.py` | the machine around it: kernel data laid out as srvinit does, the five microkernel PDS programs as behaviour, a model of the registers the microkernel polls, and the host side (init, CCB kicks, events) |
 | `fromtrace.py` | device memory, HW render contexts and kick parameters from a pvrtrace log (DDK capture or `tools/gen` `frame-fake -t`) |
+| `pds.py` | a PDS program interpreter: runs an event/entry PDS program (DOUTD DMA into the secondary attributes, DOUTA into a primary-attribute register, DOUTU launch) against device memory and starts the USSE task, so the whole event-program -> microkernel path runs offline |
 | `run.py` | a whole frame through a microkernel: init, each TA kick, TA finished, 3D end of render, DPM 3D free; prints every register access, store and task |
 
     srvinit/fetch-firmware.sh <ddk> /tmp/uk.bin          # the DDK's, for comparison (never committed)
