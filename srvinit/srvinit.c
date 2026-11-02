@@ -83,6 +83,8 @@ struct init {
 	uint32_t hwperf_flags;	/* app hint */
 	int ours;		/* load openHC's own microkernel (ukernel/) */
 	uint32_t uk_size;	/* its size, when ours */
+	uint32_t uk_entry;	/* the entry the event program starts, when ours */
+	uint32_t p_hostctl, p_ccbctl, p_ctlblk;	/* limm patch-site byte offsets (0 = none) */
 };
 
 /*
@@ -94,9 +96,7 @@ static uint32_t bufsz(const struct init *s, int i)
 {
 	if (s->ours && i == B_UKERNEL)
 		return s->uk_size;
-	if (s->ours && i == B_PDS0)
-		return 0x40;
-	return bufs[i].size;
+	return bufs[i].size;	/* our event program is a bare DOUTU, same size as the DDK's */
 }
 
 /* Heap type is the low 24 bits of ui32HeapID. */
@@ -260,22 +260,32 @@ static void pds_ta3d(struct init *s)
 }
 
 /*
- * openHC's event program: like pds1, DMA the TA3D control block into the
- * secondary attributes, then start our microkernel's entry (offset 0). Our
- * microkernel reads everything from that control block, so this one program
- * both populates its state and launches it; there is nothing to patch.
+ * Fill a limm at the given byte offset in our microkernel with a device
+ * address (same bit split as limm(), but the loader's own patch site, not a
+ * 0x?dbeef placeholder, so no sentinel check).
+ */
+static void limm_ours(struct init *s, uint32_t off, uint32_t v)
+{
+	uint32_t *i = (uint32_t *)((char *)w(s, B_UKERNEL) + off);
+
+	i[0] = (i[0] & 0xffe00000) | (v & 0x1fffff);
+	i[1] = (i[1] & 0xfffc0e0f) | ((v >> 17) & 0x1f0) | ((v >> 26) << 12);
+}
+
+/*
+ * openHC's event program: a bare DOUTU that starts our microkernel's entry,
+ * exactly like the DDK's event program. An event-kicked PDS program is not
+ * relied on to run a DMA, so the microkernel gets its addresses from limms the
+ * loader patches (not from the secondary attributes). bit 27 is set, as on
+ * every directly-started microkernel entry.
  */
 static void pds_ours(struct init *s)
 {
-	struct pds p = prog(s, B_PDS0, 8);
-	uint32_t off = va(s, B_UKERNEL) - s->code_heap;		/* entry at offset 0 */
+	struct pds p = prog(s, B_PDS0, 4);
 
-	ds(&p, D0(0), va(s, B_TA3DCTL));
-	ds(&p, D0(1), 0x3c0003f);
-	ds(&p, D0(2), ((off * 2) & 0xffff0) | (((off >> 19) + 15) & 15));
-	ds(&p, D0(3), 2);
-	movs(&p, DOUTD, D0(0), D0(1), D0(0), D0(0));
-	movs(&p, DOUTU, D0(2), D0(3), D1(0), D0(2));
+	ds(&p, D0(0), doutu(s, va(s, B_UKERNEL) + s->uk_entry));
+	ds(&p, D0(1), 2);
+	movs(&p, DOUTU, D0(0), D0(1), D1(0), D0(0));
 	halt(&p);
 }
 
@@ -431,7 +441,15 @@ static int build(struct init *s, const uint8_t *fw, SGX_BRIDGE_INIT_INFO *ii)
 
 	/* The PDS programs that start the microkernel. */
 	if (s->ours) {
-		pds_ours(s);		/* one event program: DMA + enter at offset 0 */
+		pds_ours(s);		/* a bare DOUTU to our entry */
+		/* fill the microkernel's address limms, as the DDK build patches
+		   its own placeholders */
+		if (s->p_hostctl)
+			limm_ours(s, s->p_hostctl, va(s, B_HOSTCTL));
+		if (s->p_ccbctl)
+			limm_ours(s, s->p_ccbctl, va(s, B_CCBCTL));
+		if (s->p_ctlblk)
+			limm_ours(s, s->p_ctlblk, va(s, B_TA3DCTL));
 	} else {
 		pds_entry(s, B_PDS0, 0xd60);	/* the event program (script register 0xa68) */
 		pds_ta3d(s);
@@ -595,6 +613,37 @@ static uint8_t *load_ours(const char *path, uint32_t *size)
 	return d;
 }
 
+/*
+ * Read the microkernel's <path>.pat sidecar (ukernel/build.py writes it): the
+ * entry the event program starts, and the limm patch-site byte offsets.
+ */
+static void load_pat(const char *path, struct init *s)
+{
+	char pp[1024], line[128], name[16];
+	unsigned long off;
+	FILE *f;
+
+	snprintf(pp, sizeof pp, "%s.pat", path);
+	f = fopen(pp, "r");
+	if (!f) {
+		fprintf(stderr, "srvinit: %s: %s (run ukernel/build.py)\n", pp, strerror(errno));
+		exit(2);
+	}
+	while (fgets(line, sizeof line, f)) {
+		if (sscanf(line, "entry %15s %lu", name, &off) == 2 && !strcmp(name, "init"))
+			s->uk_entry = (uint32_t)off;
+		else if (sscanf(line, "patch %15s %lu", name, &off) == 2) {
+			if (!strcmp(name, "hostctl"))
+				s->p_hostctl = (uint32_t)off;
+			else if (!strcmp(name, "ccbctl"))
+				s->p_ccbctl = (uint32_t)off;
+			else if (!strcmp(name, "ctlblk"))
+				s->p_ctlblk = (uint32_t)off;
+		}
+	}
+	fclose(f);
+}
+
 static void fill_handles(struct init *s, SGX_BRIDGE_INIT_INFO *ii)
 {
 	ii->hKernelCCBMemInfo = s->b[B_CCB].mem;
@@ -611,7 +660,7 @@ static void fill_handles(struct init *s, SGX_BRIDGE_INIT_INFO *ii)
 }
 
 /* Offline: addresses from a plan file ("buf <i> <devva>", "heap <id> <base>", "pd <a>"). */
-static int plan(const char *path, const uint8_t *fw, const char *outdir, int ours, uint32_t uk_size)
+static int plan(const char *path, const uint8_t *fw, const char *outdir, const struct init *proto)
 {
 	static struct init s;
 	static SGX_BRIDGE_INIT_INFO ii;
@@ -619,8 +668,12 @@ static int plan(const char *path, const uint8_t *fw, const char *outdir, int our
 	char l[128], k[16], fn[512];
 	unsigned long a, b;
 
-	s.ours = ours;
-	s.uk_size = uk_size;
+	s.ours = proto->ours;
+	s.uk_size = proto->uk_size;
+	s.uk_entry = proto->uk_entry;
+	s.p_hostctl = proto->p_hostctl;
+	s.p_ccbctl = proto->p_ccbctl;
+	s.p_ctlblk = proto->p_ctlblk;
 	if (!f)
 		return perror(path), 2;
 	while (fgets(l, sizeof l, f)) {
@@ -692,11 +745,12 @@ int main(int argc, char **argv)
 	if (ourspath) {
 		s.ours = 1;
 		fw = load_ours(ourspath, &s.uk_size);
+		load_pat(ourspath, &s);
 	} else {
 		fw = load_fw(fwpath);
 	}
 	if (planpath)
-		return optind < argc ? plan(planpath, fw, argv[optind], s.ours, s.uk_size) : 2;
+		return optind < argc ? plan(planpath, fw, argv[optind], &s) : 2;
 
 	TRY("open", pvr_open(&p, NULL));
 	TRY("connect", pvr_connect(&p));

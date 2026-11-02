@@ -27,6 +27,7 @@ def assemble():
     idx = 0
     pending = []
     offset = {}
+    patches = {}                  # name -> instruction index (patch sites)
     for kind, val in a.lines:
         if kind == "label":
             pending.append(val)
@@ -34,6 +35,8 @@ def assemble():
             for name in pending:
                 offset[name] = idx
             pending.clear()
+            if kind == "patch":
+                patches[val[1]] = idx
             idx += 1
     for name in pending:          # labels at the very end point past the code
         offset[name] = idx
@@ -45,7 +48,10 @@ def assemble():
     for kind, val in a.lines:
         if kind == "label":
             continue
-        text = val
+        if kind == "patch":
+            text = f"limm r{val[0]}, #0"       # the loader fills the immediate
+        else:
+            text = val
         m = re.match(r"(\(!?p\d\)\s*)?(ba|br)\s+([A-Za-z_]\w*)\s*(\[.*\])?$", text.strip())
         if m:
             name = m.group(3)
@@ -56,26 +62,34 @@ def assemble():
         hi, lo = asm.assemble(text)
         words.append((lo, hi))
         idx += 1
-    return words, offset
+    return words, offset, patches
 
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "sgx545-ukernel-openhc.bin")
     man = sys.argv[2] if len(sys.argv) > 2 else out.rsplit(".", 1)[0] + ".json"
-    words, offset = assemble()
+    words, offset, patches = assemble()
     data = b"".join(struct.pack("<II", lo, hi) for lo, hi in words)
     with open(out, "wb") as f:
         f.write(data)
     manifest = {
         "bytes": len(data),
         "instructions": len(words),
-        "entries": {k: v * 8 for k, v in offset.items()},   # byte offsets
+        "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
+        "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }
     with open(man, "w") as f:
         json.dump(manifest, f, indent=2)
+    # a flat sidecar srvinit -o reads (plain text, fscanf-friendly): the entry
+    # the event program starts, and the limm patch sites the loader fills
+    with open(out + ".pat", "w") as f:
+        f.write(f"entry init {offset['init'] * 8}\n")
+        for name, i in patches.items():
+            f.write(f"patch {name} {i * 8}\n")
     print(f"{out}: {len(data)} bytes, {len(words)} instructions")
     print(f"{man}: entries " + ", ".join(f"{k}=0x{v * 8:x}" for k, v in offset.items()))
+    print(f"{man}: patches " + ", ".join(f"{k}=0x{v * 8:x}" for k, v in patches.items()))
 
 
 if __name__ == "__main__":
