@@ -32,8 +32,8 @@
 #define SGX545_DEBUG_FLUSH_RT       (1 << 16)
 
 extern uint32_t sgx545_debug;
-/* SGX545_DUMP_USP=dir: every compiled program's USP written there */
-const char *sgx545_dump_usp_dir(void);
+/* SGX545_DUMP_CODE=dir: every compiled program's instructions written there */
+const char *sgx545_dump_code_dir(void);
 
 #define SGX545_DBG(flag, ...)                                                  \
    do {                                                                        \

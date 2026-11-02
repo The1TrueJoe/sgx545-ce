@@ -3,20 +3,22 @@
 The compiler itself (the part a driver links) is `mesa/src/sgx545/compiler/`. This
 directory holds `sgxc`, the checks and the EA3 test harness.
 
-NIR in, USSE machine code out, packed in the DDK 1.7 USP container (docs/ISA.md, "The USP
-container"). The GLES driver's finalizer, or a gallium driver's, links it into a runnable
-program. It is written in C against Mesa's NIR and is meant to become the compiler of a
-Mesa gallium driver.
+NIR in, USSE machine code out, with the constants, iterations, samples and branches a
+driver needs (`struct sgx_shader`). It is written in C against Mesa's NIR and is the
+compiler of the gallium driver. sgxc packs its output in the DDK 1.7 USP container
+(docs/ISA.md, "The USP container", `sgx_usp.c` here) so the DDK's GLES driver can run our
+programs for the A/B harness; the compiler itself doesn't know the container.
 
 | file | what |
 |---|---|
-| `gen_forms.py` | writes `mesa/src/sgx545/compiler/usse_forms.h`, the USSE encoding tables, from `tools/isa/hw.py` (all 172 forms) |
+| `gen_forms.py` | writes `mesa/src/sgx545/compiler/usse_forms.h`, the USSE encoding tables, from `tools/isa/hw.py` (all 174 forms) |
 | `mesa/src/sgx545/compiler/usse.[ch]` | the encoder: `hw.encode()` ported to C over those tables |
 | `…/sgx_compiler.h` | the API: `sgx_nir_options()`, `sgx_assign_varyings()`, `sgx_compile()` |
 | `…/sgx_nir.c` | NIR lowering: I/O and varying sets, uniforms (constant numbers, F16/C10 formats), sin/cos range reduction, samplers |
 | `…/sgx_compile.c` | instruction selection (vector ops as one repeated instruction where the operands allow), F16, textures, discard, control flow, liveness and register allocation (Mesa's `util/ra`), encoding |
-| `…/sgx_usp.c` | the USP writer: header, list A/C, code, label, branch and sample blocks |
-| `sgxc.cpp`, `meson.build` | standalone compiler: GLSL ES 1.00 via Mesa's GLSL frontend, each stage linked on its own |
+| `…/sgx_program.c` | the finished program: flat code with branch offsets, its blocks and samples, constant and iteration lists |
+| `sgx_usp.[ch]` | the USP writer (harness only): header, list A/C, code, label, branch and sample blocks, from a `struct sgx_shader` |
+| `sgxc.cpp`, `meson.build` | standalone compiler: GLSL ES 1.00 via Mesa's GLSL frontend, each stage linked on its own; `-u/-a/-s` pins are its `struct sgx_layout` |
 | `check_enc.py` | the C encoder against `hw.py` on every corpus word |
 | `check_out.py` | every emitted word: decodes, round-trips, and matches libusc's encoder (`oracle.py`) |
 | `run_corpus.py`, `layout.py` | compile a `tools/isa/corpus` file |

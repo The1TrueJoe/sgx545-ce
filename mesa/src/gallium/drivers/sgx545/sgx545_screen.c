@@ -41,7 +41,7 @@ static const struct debug_named_value sgx545_debug_options[] = {
 };
 
 DEBUG_GET_ONCE_FLAGS_OPTION(sgx545_debug, "SGX545_DEBUG", sgx545_debug_options, 0)
-DEBUG_GET_ONCE_OPTION(sgx545_dump_usp, "SGX545_DUMP_USP", NULL)
+DEBUG_GET_ONCE_OPTION(sgx545_dump_code, "SGX545_DUMP_CODE", NULL)
 /* the winsys's debugging aids: a pvrtrace log of this client (and memory
  * copies for its first n kicks), frames built but never sent from the n-th
  * on, idle time after every render */
@@ -51,9 +51,9 @@ DEBUG_GET_ONCE_NUM_OPTION(sgx545_dry_run, "SGX545_DRY_RUN", -1)
 DEBUG_GET_ONCE_NUM_OPTION(sgx545_frame_gap_us, "SGX545_FRAME_GAP_US", 0)
 
 const char *
-sgx545_dump_usp_dir(void)
+sgx545_dump_code_dir(void)
 {
-   return debug_get_option_sgx545_dump_usp();
+   return debug_get_option_sgx545_dump_code();
 }
 
 

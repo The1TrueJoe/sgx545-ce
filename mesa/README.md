@@ -88,7 +88,7 @@ the default path depends on the environment.
 | `SGX545_DEBUG=novcache,nof16,nodrvconsts` | turn off the vertex cache, F16/C10 fragment arithmetic, the driver constant formats |
 | `SGX545_DEBUG=novs,nofs` | the fixed programs (gl_Position = attribute 0; gl_FragColor = a uniform or constant) for that stage |
 | `SGX545_DEBUG=fsconst,attrs,blits` | measuring and tracing aids: constant-colour fragment programs; the first draws' vertex inputs; every 255th blit and its caller |
-| `SGX545_DUMP_USP=dir` | write each compiled USP (`tools/isa/usp.py`, `dis.py` read them) |
+| `SGX545_DUMP_CODE=dir` | write each compiled program as `vs-N.code` / `fs-N.code`, one "hi lo" hex pair per instruction (`tools/isa/dis.py -x` reads the pairs). The compiler no longer writes USPs; sgxc does, for the DDK A/B harness |
 | `SGX545_TRACE=path`, `SGX545_TRACE_KICKS=n` | a pvrtrace log of the client (every bridge call, memory before each kick, for the first n kicks); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
 | `SGX545_DRY_RUN=n`, `SGX545_FRAME_GAP_US=us` | frames from the n-th on built but never sent; idle time after each render (hang bisecting) |
 | `FRAMEBUFFER=/dev/fbN` | the fbdev platform's framebuffer (default /dev/fb0) |

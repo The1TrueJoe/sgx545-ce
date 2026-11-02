@@ -4,9 +4,10 @@
  */
 
 /*
- * SGX545 shader compiler: NIR in, USSE code out, wrapped in the DDK 1.7
- * USP container (docs/ISA.md "The USP container") so the GLES driver's
- * finalizer (or a future gallium driver's) can link it.
+ * SGX545 shader compiler: NIR in, USSE code out, plus what the driver needs
+ * to run it (constants, iterations, texture samples, branches). The DDK's
+ * USP container is not written here: tools/usc/sgx_usp.c builds it from
+ * struct sgx_shader for the A/B harness (docs/COMPILER-UPSTREAM.md §3).
  *
  * The input/output conventions are the ones the DDK's driver expects from
  * libusc (ISA.md "What a compiler needs"):
@@ -19,8 +20,9 @@
  *  - vertex attributes: attribute slot k at pa[4k..4k+3];
  *  - vertex outputs: position o0-o3, then the texture coordinate sets in
  *    order, each its size, then the point size.
- * Where the DDK's numbering comes from its GLSL compiler (constant numbers,
- * attribute slots), the caller can fix it with sgx_compile_options.
+ * Constant numbers, attribute slots and sampler units are the caller's to
+ * choose (sgx_compile_options.layout); sgxc's choice matches the DDK's GLSL
+ * compiler, for the A/B harness.
  */
 #ifndef SGX_COMPILER_H
 #define SGX_COMPILER_H
@@ -36,25 +38,28 @@ extern "C" {
 struct nir_shader;
 struct nir_shader_compiler_options;
 
-#define SGX_MAX_NAMED 64
 #define SGX_MAX_SETS 10
 
-struct sgx_named {
-   char name[64];
-   int value;
+enum sgx_layout_kind {
+   SGX_LAYOUT_UNIFORM,          /* -> first constant number (rows/elements at +4 each) */
+   SGX_LAYOUT_ATTRIB,           /* -> attribute slot (pa 4*slot) */
+   SGX_LAYOUT_SAMPLER,          /* -> texture unit */
+};
+
+/* Where the caller wants things. place() is asked for each uniform
+ * variable, struct member ("s.f") and constant array element ("a[2]"), each
+ * vertex input and each sampler, and returns a number or -1 for the
+ * compiler's own: uniforms vec4-aligned in declaration order, attributes in
+ * declaration order, samplers in order of first use, each from first_free()
+ * on. */
+struct sgx_layout {
+   int (*place)(void *data, enum sgx_layout_kind kind, const char *name);
+   unsigned (*first_free)(void *data, enum sgx_layout_kind kind);
+   void *data;
 };
 
 struct sgx_compile_options {
-   /* uniform name -> first constant number (rows/elements at +4 each);
-    * uniforms not named get vec4-aligned numbers after the named ones */
-   unsigned n_uniforms;
-   struct sgx_named uniforms[SGX_MAX_NAMED];
-   /* attribute name -> slot (pa 4*slot) */
-   unsigned n_attribs;
-   struct sgx_named attribs[SGX_MAX_NAMED];
-   /* sampler uniform name -> texture unit */
-   unsigned n_samplers;
-   struct sgx_named samplers[SGX_MAX_NAMED];
+   const struct sgx_layout *layout;     /* NULL: the compiler's own numbering */
    bool verbose;
    /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
     * F16 iteration, fmad16, F16/C10 uniforms, as the DDK does */
@@ -109,7 +114,45 @@ struct sgx_iter_info {
    uint8_t sample;              /* a non-dependent sample: the raw RGBA8 texel lands in pa */
    uint8_t proj;                /* ... with a projected coordinate (x/w, y/w) */
    uint8_t sampler;             /* ... of this sampler */
+   uint8_t pointcoord;          /* gl_PointCoord (set 0) */
 };
+
+/* A texture sample (docs/ISA.md "The texture-sample sequence"). A
+ * non-dependent one is the PDS's: the raw RGBA8 texel lands in pa `reg`. A
+ * dependent one is an smp the driver puts in before code[at], with the
+ * sampler's state words as its src1, writing the raw texel to temporary
+ * `reg`; the program unpacks it from there. */
+struct sgx_sample_info {
+   unsigned at;                 /* dependent: index in code[] it goes before */
+   uint16_t id;
+   uint8_t sampler;
+   uint8_t set;                 /* non-dependent: the coordinate's set */
+   uint8_t dim;                 /* 2 = 2D, 3 = cube */
+   uint8_t dependent, proj;
+   uint8_t reg;                 /* the raw texel: pa (non-dependent), r (dependent) */
+   int16_t coord_pa;            /* non-dependent: the coordinate's plain iteration, -1 none */
+   uint64_t smp;                /* dependent: the smp, destination r0, texture state #0 */
+};
+
+/* The program's structure, in order: runs of code, labels, branches, the
+ * discard feedback point and texture samples. A driver needs only the
+ * branches (to move their offsets when it inserts code) and the samples;
+ * the USP writer needs all of it. */
+enum sgx_block_kind {
+   SGX_BLOCK_CODE,              /* code[at .. at + n) */
+   SGX_BLOCK_LABEL,             /* label */
+   SGX_BLOCK_BRANCH,            /* code[at] branches to label (offset resolved) */
+   SGX_BLOCK_FEEDBACK,          /* code[at] is the discard feedback nop */
+   SGX_BLOCK_SAMPLE,            /* samples[at] */
+};
+
+struct sgx_block {
+   uint8_t kind;
+   uint16_t label;
+   unsigned at, n;
+};
+
+#define SGX_MAX_SAMPLES 16
 
 struct sgx_shader {
    unsigned stage;              /* MESA_SHADER_VERTEX / _FRAGMENT */
@@ -125,12 +168,18 @@ struct sgx_shader {
    unsigned set_comps[SGX_MAX_SETS]; /* vertex: output set sizes (o4 on); 0 = unused */
    bool point_size;             /* vertex: writes the point size, after the sets */
    unsigned n_out_regs;         /* vertex: o registers written */
-   uint8_t *usp;                /* the USP binary */
-   size_t usp_size;
+   unsigned sa_slots;           /* SA registers used from sa_base on (constants and the compiler's own) */
    uint64_t *code;              /* main program, flat (branch targets resolved) */
    unsigned n_code;
+   unsigned n_samples;
+   struct sgx_sample_info samples[SGX_MAX_SAMPLES];
+   struct sgx_block *blocks;
+   unsigned n_blocks;
    unsigned n_alu, n_tex, n_flow; /* instruction counts */
-   unsigned n_temps, n_pa;
+   unsigned n_temps;
+   unsigned n_pa;               /* PA registers: inputs, colour, and the placeholder
+                                 * colour iteration of a fragment program with no
+                                 * other (the DDK's driver iterates one) */
    char *log;                   /* listing / errors (malloc'd) */
 };
 

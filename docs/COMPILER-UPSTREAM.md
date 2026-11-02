@@ -7,7 +7,7 @@ what has to change before the code is offered to Mesa.
 
 The compiler is 8 files, 8.8k lines: `sgx_nir.c` (NIR lowering),
 `sgx_compile.c` (instruction selection, register allocation, encoding),
-`sgx_usp.c` (the DDK's USP container), `usse.c`/`usse.h` (the encoder),
+`sgx_usp.c` (the DDK's USP container; moved to `tools/usc` since, see §3), `usse.c`/`usse.h` (the encoder),
 the generated `usse_forms.h`, plus `sgx_compiler.h` and `sgx_priv.h`. The tools
 that test it (`tools/usc`, `tools/isa`) stay in this repo and are not part of
 what goes to Mesa.
@@ -143,16 +143,27 @@ from `hw.py`, and validate it black-box:
 Some of the compiler exists so the DDK's GLES driver can run our programs,
 which is what makes the A/B harness possible. An upstream driver doesn't need it:
 
-- **`sgx_usp.c`, the USP container.** The upstream driver should consume
-  `struct sgx_shader` directly: words, constant map, iterations, sample list.
-  Move USP writing into `tools/usc`, next to sgxc and hwcmp.
-- **glslcompiler's numbering.** This covers the pins (`opts.uniforms`,
-  `attribs`, `samplers`), the varying-to-set allocation in
-  `sgx_assign_varyings`, sampler numbering by first use, the constant numbers
-  measured by `calib.py`, and the USP label numbers 3/4/5. All of it matches
-  glslcompiler so that our USPs drop into the DDK's driver. Upstream, the driver
-  decides layouts. Keep the pin mechanism only in the harness build.
-- **The list A dummy colour iteration** is USP-only.
+- **`sgx_usp.c`, the USP container. Done (2026-11-01):** the compiler now
+  publishes the program's structure in `struct sgx_shader` (flat code, blocks:
+  code runs, labels, branches, the discard feedback point, samples; dependent
+  samples with their smp template; SA slots). `tools/usc/sgx_usp.c` builds the
+  USP from that for sgxc, and the gallium driver reads the fields instead of
+  parsing a USP (`SGX545_DUMP_USP` became `SGX545_DUMP_CODE`). Every corpus
+  and test set compiles to byte-identical USPs and code before and after
+  (6841 files, F32 and F16).
+- **glslcompiler's numbering.** This covers the pins, the varying-to-set
+  allocation in `sgx_assign_varyings`, sampler numbering by first use, the
+  constant numbers measured by `calib.py`, and the USP label numbers 3/4/5.
+  All of it matches glslcompiler so that our USPs drop into the DDK's driver.
+  Upstream, the driver decides layouts. **The pins are done (2026-11-01):** the
+  compiler takes a `struct sgx_layout` (place a name, first free number) from
+  its caller; the name tables and glslcompiler's numbers live in sgxc, and the
+  gallium driver answers with st's `driver_location` for attributes. Still in
+  the compiler: the varying-set allocation and first-use sampler order (the
+  compiler's defaults, which match glslcompiler), and the n_pa count of the
+  DDK driver's placeholder colour iteration.
+- **The list A dummy colour iteration** is USP-only (written by
+  `tools/usc/sgx_usp.c`).
 - **Ours, and staying:** the driver-only constant kinds 0x10 (F16 of a C10
   value) and 0x11 (literals) are our own interface, not the DDK's. Express them
   in `sgx_const_map`; the list C records exist only for the harness.

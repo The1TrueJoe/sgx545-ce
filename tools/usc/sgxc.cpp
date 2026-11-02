@@ -24,19 +24,56 @@
 #include "standalone_scaffolding.h"
 
 #include "sgx_compiler.h"
+#include "sgx_usp.h"
+
+/* -u / -a / -s pins: glslcompiler's constant numbers, attribute slots and
+ * sampler units (calib.py measures them), handed to the compiler as its
+ * layout (struct sgx_layout); names not pinned are the compiler's */
+#define MAX_NAMED 64
+
+struct named {
+   char name[64];
+   int value;
+};
+
+struct pins {
+   unsigned n[3];                       /* by enum sgx_layout_kind */
+   struct named t[3][MAX_NAMED];
+};
 
 static void
-named(struct sgx_named *tab, unsigned *n, const char *arg)
+named(struct pins *p, enum sgx_layout_kind k, const char *arg)
 {
    const char *eq = strchr(arg, '=');
-   if (!eq || *n >= SGX_MAX_NAMED || eq - arg >= 63) {
+   if (!eq || p->n[k] >= MAX_NAMED || eq - arg >= 63) {
       fprintf(stderr, "sgxc: bad name=value '%s'\n", arg);
       exit(2);
    }
-   memcpy(tab[*n].name, arg, eq - arg);
-   tab[*n].name[eq - arg] = 0;
-   tab[*n].value = atoi(eq + 1);
-   (*n)++;
+   struct named *e = &p->t[k][p->n[k]++];
+   memcpy(e->name, arg, eq - arg);
+   e->name[eq - arg] = 0;
+   e->value = atoi(eq + 1);
+}
+
+static int
+pins_place(void *data, enum sgx_layout_kind k, const char *name)
+{
+   const struct pins *p = (const struct pins *)data;
+   for (unsigned i = 0; i < p->n[k]; i++)
+      if (!strcmp(p->t[k][i].name, name))
+         return p->t[k][i].value;
+   return -1;
+}
+
+/* past every pin: a uniform pin takes a vec4 (rows and elements are pinned one by one) */
+static unsigned
+pins_first_free(void *data, enum sgx_layout_kind k)
+{
+   const struct pins *p = (const struct pins *)data;
+   unsigned next = 0;
+   for (unsigned i = 0; i < p->n[k]; i++)
+      next = MAX2(next, (unsigned)p->t[k][i].value + (k == SGX_LAYOUT_UNIFORM ? 4 : 1));
+   return next;
 }
 
 static void
@@ -82,6 +119,7 @@ int
 main(int argc, char **argv)
 {
    struct sgx_compile_options opts;
+   static struct pins pins;
    const char *prefix = "out";
    int c;
 
@@ -94,9 +132,9 @@ main(int argc, char **argv)
       case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
       case 'p': lowp16 = true; opts.f16 = true; break;
       case 'v': opts.verbose = true; break;
-      case 'u': named(opts.uniforms, &opts.n_uniforms, optarg); break;
-      case 'a': named(opts.attribs, &opts.n_attribs, optarg); break;
-      case 's': named(opts.samplers, &opts.n_samplers, optarg); break;
+      case 'u': named(&pins, SGX_LAYOUT_UNIFORM, optarg); break;
+      case 'a': named(&pins, SGX_LAYOUT_ATTRIB, optarg); break;
+      case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
          fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
@@ -166,23 +204,22 @@ main(int argc, char **argv)
       const char *sname = st == MESA_SHADER_VERTEX ? "vert" : "frag";
       /* this stage's pins: unprefixed ones, and "vert:" / "frag:" ones */
       struct sgx_compile_options so2 = opts;
-      struct { struct sgx_named *t; unsigned *n; } tabs[] = {
-         { so2.uniforms, &so2.n_uniforms }, { so2.attribs, &so2.n_attribs }, { so2.samplers, &so2.n_samplers } };
+      static struct pins mine;
+      memset(&mine, 0, sizeof(mine));
       for (unsigned ti = 0; ti < 3; ti++) {
-         unsigned k = 0;
-         for (unsigned i = 0; i < *tabs[ti].n; i++) {
-            struct sgx_named e = tabs[ti].t[i];
+         for (unsigned i = 0; i < pins.n[ti]; i++) {
+            struct named e = pins.t[ti][i];
             const char *c = strchr(e.name, ':');
             if (c) {
-               bool mine = !strncmp(e.name, sname, c - e.name) && strlen(sname) == (size_t)(c - e.name);
-               if (!mine)
+               if (strncmp(e.name, sname, c - e.name) || strlen(sname) != (size_t)(c - e.name))
                   continue;
                memmove(e.name, c + 1, strlen(c + 1) + 1);
             }
-            tabs[ti].t[k++] = e;
+            mine.t[ti][mine.n[ti]++] = e;
          }
-         *tabs[ti].n = k;
       }
+      struct sgx_layout layout = { pins_place, pins_first_free, &mine };
+      so2.layout = &layout;
       if (driver_uniforms) {
          /* -L: uniforms lowered before the compiler sees them, the way the
           * gallium driver hands them over (st's vec4 driver_location, then
@@ -213,8 +250,16 @@ main(int argc, char **argv)
          status = 1;
          continue;
       }
+      uint8_t *usp;
+      size_t usp_size;
+      if (sgx_write_usp(&out, &usp, &usp_size)) {
+         fprintf(stderr, "sgxc: %s shader: USP: out of memory\n", sname);
+         status = 1;
+         continue;
+      }
       snprintf(suffix, sizeof suffix, "%s.usp", sname);
-      write_file(prefix, suffix, out.usp, out.usp_size);
+      write_file(prefix, suffix, usp, usp_size);
+      free(usp);
       char *hex = (char *)malloc(out.n_code * 20 + 1);
       size_t k = 0;
       for (unsigned i = 0; i < out.n_code; i++)

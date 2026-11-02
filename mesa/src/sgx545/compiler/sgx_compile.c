@@ -3326,7 +3326,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       allocate(c);
    if (!c->failed) {
       uniform_layout(c);
-      ret = sgx_write_usp(c, out);
+      ret = sgx_finish_program(c, out);
    }
    out->stage = c->stage;
    out->log = c->log;
@@ -3340,7 +3340,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
 void
 sgx_shader_free(struct sgx_shader *s)
 {
-   free(s->usp);
+   free(s->blocks);
    free(s->code);
    free(s->log);
    memset(s, 0, sizeof(*s));
