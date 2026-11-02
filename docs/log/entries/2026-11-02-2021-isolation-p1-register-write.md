@@ -66,33 +66,39 @@ comes straight from the frame's own before/after reads, independent of anything 
 ## Was the store a denial of service? Undetermined — the run was confounded
 
 Minutes after, the EA1 went unreachable and rebooted. The first write-up read that as the store wedging
-the box into a reboot loop needing a power cycle. Reconciling the box clock with the mesa-gallium
-session's logs showed both of those were wrong:
+the box into a reboot loop needing a power cycle. Reconciling with the mesa-gallium session's logs showed
+both wrong. (The EA1's clock runs ~5 min 11 s fast, so box-read times — the lock mtime, `uptime`, box
+`dmesg` — are ~5 min ahead; the table is real UTC, from mesa's Mac clock.)
 
-| UTC | event |
+| real UTC | event |
 |---|---|
-| ~20:08 | read-only probe: box healthy, WPE holds `card0`, **no `/tmp/gpu.lock`, no dEQP** — I was off the box |
-| 20:09 | mesa-gallium's dEQP chunk starts, takes `/tmp/gpu.lock` (one flock round the whole runner) |
-| ~20:11 | its runner stops making progress (a "ring at 0x37000000 full" retry, then a hang mid `fbo.render.stencil.npot_tex2d_rgb_stencil_index8`) — **the box is wedged** |
-| 20:15:50–20:22:04 | box SSH dead |
-| ~20:21 | **reboot** (box back 20:22:04, uptime 0); mesa's wedged runner dies, lock released |
-| ~20:22 | **I take the lock (mtime 20:22) and run both suites** — safe suite clean, then the one store, `render done`, register unchanged |
-| 20:22–20:23 | ~70 SGX recoveries while my test (and WPE) ran; mesa had nothing running |
-| ~20:24:30 | **reboot again**; stable since (0 recoveries until mesa's next chunk at 20:45) |
+| before ~20:04 | read-only probe: box healthy, WPE holds `card0`, **no `/tmp/gpu.lock`, no dEQP** — I was off the box |
+| ~20:04:20 | mesa's dEQP chunk (200 tests, the untested RGB write-mask change) starts, takes `/tmp/gpu.lock` and holds it until the box dies |
+| ~20:06 | its last log write, mid `fbo.render.stencil.npot_tex2d_rgb_stencil_index8` — no progress after; **box wedged** |
+| 20:15:50 | mesa's SSH goes dead (timeout, then refused) |
+| ~20:17 | **reboot** (box clock 20:22, uptime 0); mesa's dead runner releases the lock |
+| ~20:17 | **I take the lock (box-clock mtime 20:22) and run both suites** — safe clean, then the one store, `render done`, register unchanged |
+| ~20:17:35–20:18:06 | ~70 SGX recoveries while my test (and WPE) ran; mesa had nothing running (its chunk died with the box) |
+| ~20:19:30 | **reboot again** (box clock 20:24:30); stable after |
+| ~20:46 | Joseph power-cycles the EA1 (cutting a fresh mesa chunk started ~20:45:25) — 29 min after my store, unrelated to it |
 
-So the **first wedge and the 20:21 reboot were mesa's dEQP, before my store ever ran.** My store ran at
-20:22 on a box that had just come up from that wedge, already unstable — dozens of SGX recoveries in the
-window, with WPE also rendering. The 20:24 reboot followed my test but **can't be attributed to the
-store**: the box was already thrashing, and the DDK lockup dump I first quoted (`SGX Kernel CCB WO:0xB4
-RO:0xB3`, in the data file) I read at ts ~170 s on the 20:21 boot — i.e. the 20:24 reboot, in a window
-shared with the box's pre-existing instability, not a dump of the store's own frame. `/var/log` is tmpfs
-and every boot wipes it, so no dmesg from the store's frame survives. The box **self-recovered by 20:24;
-no power cycle was needed** — that earlier claim was a misread of two reboots as a loop.
+So the **first wedge and the ~20:17 reboot were mesa's dEQP, before my store ever ran** — its flock was
+held continuously ~20:04:20 to the box's death, so nothing of mine could overlap. My store ran just after
+that reboot, on a box fresh out of mesa's hang via a warm reboot and already unstable — dozens of SGX
+recoveries in the window, WPE also rendering. The ~20:19:30 reboot followed my test but **can't be
+attributed to the store**: the GPU state right after a warm reboot from a hang is uncertain, and the DDK
+lockup dump I first quoted (`SGX Kernel CCB WO:0xB4 RO:0xB3`, in the data file) I read at `uptime` ~170 s
+on that boot — i.e. the ~20:19:30 reboot, in a window shared with the box's pre-existing instability, not
+a dump of the store's own frame. `/var/log` is tmpfs and every boot wipes it, so no dmesg from the store's
+frame survives. The box **self-recovered via that reboot — no power cycle was needed for it** (Joseph's
+later ~20:46 cycle was for mesa's next chunk); the earlier "reboot loop needing a power cycle" was a
+misread of two reboots.
 
-What the controls *do* still show: `str` to the unused `USE_CODE_BASE_14`/`_15` and the plain `ldr` of
-0xc84 all ran clean earlier — but those ran before mesa's chunk destabilised the box, so they don't
-isolate the store either. The honest position: the store's **value effect is known (none — no escape);
-its side effect (DoS or benign) is unknown** on this run.
+What the controls show: `str` to the unused `USE_CODE_BASE_14`/`_15` and the plain `ldr` of 0xc84 (in
+`suite_p1_write`) returned clean in the **same ~20:17 window, on the same warm-rebooted GPU** as the store
+— so they didn't visibly destabilise it, but they ran on the same uncertain-state GPU and don't isolate
+the store either. The honest position: the store's **value effect is known (none — no escape); its side
+effect (DoS or benign) is unknown** on this run.
 
 ## What this means for the uAPI (D9, G1)
 

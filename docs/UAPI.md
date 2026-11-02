@@ -520,12 +520,13 @@ register** — host read 0x01d6b000 before and after, and the shader's own read-
 unchanged, in a frame that returned `render done` — so a client **cannot repoint translation**
 to its own directory this way; the page-directory boundary survives this attack. Whether a
 client register store is *otherwise* harmful (a denial of service) is **undetermined**: the
-store ran at ~20:22 on a box another session's dEQP chunk had wedged and rebooted minutes
-earlier (20:11 wedge, ~20:21 reboot), which came back unstable (dozens of SGX recoveries in
-the window, with WPE also on the GPU), so the reboot that followed can't be pinned on the
-store, and no dmesg survived to show which. The box self-recovered — **no power cycle** was
-needed. Settling the DoS question needs an isolated re-run on a known-good box (Joseph's
-call). See `docs/log/entries/2026-11-02-2021-isolation-p1-register-write.md`.
+store ran just after a reboot, on a box another session's dEQP chunk had wedged and rebooted
+minutes earlier (its flock held continuously, so nothing of ours overlapped it), which came
+back unstable (dozens of SGX recoveries in the window, with WPE also on the GPU), so the
+reboot that followed can't be pinned on the store, and no dmesg survived to show which. The
+box self-recovered through that reboot — **no power cycle** was needed for it. Settling the
+DoS question needs an isolated re-run on a known-good box (Joseph's call). See
+`docs/log/entries/2026-11-02-2021-isolation-p1-register-write.md`.
 
 If any of these fails, the items above don't deliver isolation. Each needed a hardware
 experiment before M2's exit test could mean anything; that experiment has now run.
