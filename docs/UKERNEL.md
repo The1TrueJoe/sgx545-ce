@@ -343,10 +343,15 @@ event kick reaches the init entry and completes. **The next kick does not.** The
 kernel's `GETMISCINFO` compat-check command is queued (Kernel CCB `WO:1`) but the
 read offset never advances (`RO:0`) and the core locks up; sentinels on the
 post-init dispatch path never fire. So after init ends, the event program is not
-re-entered to service the SW_EVENT host kick. This points at the init-script
-setup of §4 (the event-program address and the SW_EVENT event-enable in
-`docs/SRVINIT.md`): the first kick arms and runs the event program, but a
-subsequent SW_EVENT does not re-run it. This is the open blocker ahead of frames.
+re-entered to service the SW_EVENT host kick. The srvinit setup is ruled out: the
+event-program address (`0xa68`), its control word, and the SW_EVENT host-enable
+(`EUR_CR_EVENT_HOST_ENABLE = 0x4000`) are set identically for the `-o` and the
+working `-f` paths, so the re-trigger is armed. The blocker is in the
+microkernel's behaviour after init — its init task ends but the core does not
+return to the event-wait state (it locks up with 2 tasks pending), which points
+at the init task's exit / task-phase handling, not registration. This is the open
+blocker ahead of frames; full evidence and next steps in
+`docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md`.
 
 ## 5a. Hardware recovery and re-initialisation
 

@@ -74,15 +74,30 @@ cannot see this. `test_emu`, `test_commands` and `run_ours` (all five traces,
   in `ta_finished` / `render_done` is still to add, validated against the DDK
   render trace when frames run.
 
+## srvinit event setup is ruled out
+
+The init-script setup is **identical for `-o` and `-f`** (srvinit.c `build()`,
+the common block after the `if (s->ours)` branch): the event PDS program address
+`0xa68 = B_PDS0`, control `0xa6c = 1`, and the SW_EVENT host-enable
+`EUR_CR_EVENT_HOST_ENABLE = 0x4000`. Only the PDS program *contents* (our bare
+DOUTU vs the DDK's) and the host-kick table differ. So for `-o` the event program
+is armed and SW_EVENT is enabled exactly as for the working DDK path — the
+re-trigger is set up. The blocker is therefore in the **microkernel's own
+behaviour after init**, not srvinit registration: openHC's init task ends but the
+core does not return to the event-wait state to re-run B_PDS0 on the next
+SW_EVENT (it locks up with 2 tasks pending, `dcu_invalid`). This implicates the
+init task's exit / task-phase handling (the `phas.i`/`nop [end]` wrapper, or
+something the DDK's init task does at exit that openHC omits).
+
 ## Next step (for the next EA3 slot)
 
-Determine why the event program is not re-entered after init. Add a sentinel at
-the very top of the event entry (before the init check) and one at `init` entry:
-if the top-of-event sentinel never fires, the event-program re-trigger on
-SW_EVENT is not set up (an `srvinit`/pds_ours event-registration question — how
-the DDK arms the event PDS program and the SW_EVENT enable); if it fires but
-loops into `init`, the post-init InitStatus read is wrong in the re-entered
-context. Compare against how the DDK's event program is registered and enabled.
+Add a sentinel at the very top of the event entry (before the init check): does
+B_PDS0 re-run at all on the next SW_EVENT? If it never fires, init's exit left the
+core wedged (the 2-task lockup) and the fix is in the init task's phase/exit
+sequence — compare the DDK init task's exit (its disasm/trace) against openHC's
+`phas()`/`end()`. If it fires but branches back into `init`, the post-init
+InitStatus read is wrong in the re-entered context. Either way the work is in the
+microkernel, not srvinit.
 
 ## Box / method notes
 
