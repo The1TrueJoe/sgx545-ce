@@ -603,11 +603,26 @@ whose words §7 and §3 read are written by the Mesa driver and specified in
 the registers and memory it writes against the DDK firmware's, per phase, as an
 `oracle` comparison in the offline emulator, over generated frames (`tools/gen`
 `frame-fake` and `blitest`) and a real capture: TA/3D 41+61 registers, the
-12-write render teardown and the 21-register transfer all match. **Nothing is
-confirmed on hardware yet** (M1 step 5). A per-fact evidence tag pass
-(`hardware`/`capture`/`oracle`/`static`) across §§1–7 is still to be done.
+12-write render teardown and the 21-register transfer all match.
+
+**First hardware run (EA3, `srvinit -o`).** The microkernel loads, is kicked,
+and executes, but init stalls: the event entry dies at its second/third
+secondary-attribute self-write (`mov sa1`/`mov sa2`), so InitStatus is never
+set and `SGXInitialise` times out. A USSE task cannot write its own secondary
+attributes on this core — the emulator models `mov sa, r` as a register write,
+which is why the suite passes offline but init fails on hardware
+(`docs/log/entries/2026-11-02-0630-ukernel-ea3-bringup.md`). A per-fact
+evidence tag pass (`hardware`/`capture`/`oracle`/`static`) across §§1–7 is
+still to be done.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
+- **Secondary-attribute self-population fails on hardware (the init blocker).**
+  The event entry writes `sa0/sa1/sa2/sa16` with `mov sa, r`; a task cannot
+  write its own secondary attributes on this core, so init stalls on the EA3.
+  Fix by deriving the control-block pointers into temps from the loader-patched
+  `ctlblk` base in each handler (no `mov sa`, no load with `sa` as base), or by
+  PDS-populating `sa` before entry. Until then every handler that reads through
+  `sa` must change too. See the hardware log entry.
 - **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
   the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
   0x16c), but a transfer also sets two sync-heap objects whose addresses come
