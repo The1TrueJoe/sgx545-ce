@@ -119,24 +119,34 @@ dispatcher decides what happened and branches to a handler. It is the
 microkernel's main loop in the sense that nearly every re-entry passes through
 it, but it is still a task that runs once and ends.
 
-The event word is a set of the `EUR_CR_EVENT_STATUS` bits that were pending,
-masked to the ones the microkernel acts on. The dispatcher tests them in
-priority order and, for most, writes the matching bit back to
+The event word is a set of the `EUR_CR_EVENT_STATUS`/`STATUS2` bits that were
+pending, masked to the ones the microkernel acts on. The dispatcher tests them
+in priority order and writes the matching bit back to
 `EUR_CR_EVENT_HOST_CLEAR`/`CLEAR2` to acknowledge it before handling it.
-(openHC: the `kick` handler acknowledges SW_EVENT as its first action; the
-matching acknowledge in `ta_finished` and `render_done` is still to add,
-validated against the DDK render trace when frames run. The dispatch also
-acknowledges a pending **DCU-invalidate** in `EUR_CR_EVENT_STATUS2`
+(openHC acknowledges a pending **DCU-invalidate** in `EUR_CR_EVENT_STATUS2`
 (`dcu_invalid`, 0x400) up front: the kernel's `SysFinalise` leaves it set on
 the EA1, and since openHC read only `EUR_CR_EVENT_STATUS`, it re-triggered the
 event program forever — a storm that starved the host kick and locked the core,
-HW-confirmed 2026-11-02; see the log entry. Reading STATUS2, not just STATUS,
-is exactly what this paragraph requires.)
+HW-confirmed 2026-11-02. The acknowledge in `ta_finished` and `render_done` is
+still to add, validated against the DDK render trace when frames run.)
+
+**The host kick is not an `EUR_CR_EVENT_STATUS` bit.** The host adds a command
+to the kernel CCB, advances the CCB write offset, and rings the
+**`EUR_CR_EVENT_KICK`** doorbell (`sgxutils.c SGXScheduleCCBCommand`); the
+doorbell runs the event program but sets no status bit. So the microkernel
+detects a waiting command by the kernel CCB **write offset ≠ read offset**, not
+by a status bit — openHC's dispatch falls through to the `kick` handler when no
+hardware-event bit is set, and `kick` returns at once if the CCB is empty.
+`SW_EVENT` (0x4000) in `EUR_CR_EVENT_STATUS` is the *opposite* direction: the
+microkernel sets it (via `raise_host_irq`) to signal the host, and the host's
+ISR clears it. Gating the host kick on `SW_EVENT`, as openHC first did, never
+fired — EA1 HW-confirmed 2026-11-02: `GETMISCINFO` sat unconsumed with
+`EVENT_STATUS = 0`. Fixed; HW confirmation of the serviced kick pending.
 The groups, with the status bit each corresponds to:
 
 | event | status bit | handler, in outline |
 |---|---|---|
-| host kick (a CCB command waiting) | SW_EVENT (0x4000) | read the kernel CCB, dispatch on the command (section 3) |
+| host kick (a CCB command waiting) | none — `EUR_CR_EVENT_KICK` doorbell; detect via CCB write ≠ read offset | read the kernel CCB, dispatch on the command (section 3) |
 | TA finished | TA_FINISHED (0x2000) | advance the render's TA state, write the TA status/sync values, maybe start the 3D |
 | TA terminate | TA_TERMINATE (0x1000) | end-of-scene bookkeeping on the TA side |
 | 3D end of render / pixel BE end | PIXELBE_END_RENDER (0x40000), ISP_END_TILE (0x800000) | finish the render, update the 3D sync objects, raise the host interrupt |
@@ -355,19 +365,25 @@ one fixed:
    re-triggered the event program forever, because openHC read only
    `EUR_CR_EVENT_STATUS`. The dispatch now acknowledges it (§2). HW-confirmed:
    STATUS2 `0x400`→`0`.
-2. **Open — the host kick never appears as SW_EVENT.** Even with STATUS2 clean,
-   the kick is not serviced: `EUR_CR_EVENT_STATUS & 0x4000` is never set when the
-   event program reads it, so the dispatch never branches to `kick`; the
-   `GETMISCINFO` command is queued (CCB `WO` > `RO`) but never consumed and the
-   core times out (`0x2 tasks`) into a kernel HWR-retry loop. The next step is to
-   trace how this kernel delivers the host kick to the microkernel (SW_EVENT in
-   EVENT_STATUS vs. a CCB the microkernel must poll vs. another bit) and whether
-   srvinit's `-o` host-kick / event-program wiring sets the bit our B_PDS0 reads.
+2. **Fixed (HW-confirm pending) — the host kick is not a status bit.** With
+   STATUS2 clean the kick was still not serviced: `EUR_CR_EVENT_STATUS & 0x4000`
+   was never set when the event program read it (EA1 dump: `EVENT_STATUS = 0`,
+   `sw_event: no`), so the SW_EVENT-gated dispatch never branched to `kick`; the
+   `GETMISCINFO` command sat queued (CCB `WO` > `RO`) and the core looped through
+   HWR. Root cause (from `sgxutils.c SGXScheduleCCBCommand`): the host kicks via
+   the `EUR_CR_EVENT_KICK` doorbell, which sets **no** status bit — the command
+   is found by the kernel CCB write offset ≠ read offset. The dispatch now falls
+   through to `kick` when no hardware-event bit is set, and `kick` returns at once
+   if the CCB is empty; the bogus SW_EVENT acknowledge is removed (§2). Offline:
+   `test_commands` get-misc-info 21/21 and `run_ours` 5/5 MATCH with the kick
+   driven the hardware way (doorbell + WO≠RO, no SW_EVENT). HW confirmation of a
+   serviced kick is pending an EA1 slot.
 
 Full evidence and next steps:
-`docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md` (current) and
+`docs/log/entries/2026-11-02-2045-ukernel-ea1-host-kick.md` and
+`docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md`, then
 `docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier
-EA3 run, whose "never re-entered" reading the EA1 counter corrects).
+EA3 run, whose "never re-entered" reading the EA1 counter corrected).
 
 ## 5a. Hardware recovery and re-initialisation
 

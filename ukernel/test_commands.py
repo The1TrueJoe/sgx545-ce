@@ -63,7 +63,7 @@ def ours_cmd(u, mem, regs, man, ctype, data):
     mem.wr(A["ccbctl"], 1)
     mem.wr(A["ccbctl"] + 4, 0)
     mem.log = []
-    regs.v[0x12C] = 0x4000                  # SW_EVENT
+    regs.v[0x12C] = 0                       # host kick = EUR_CR_EVENT_KICK doorbell: no EVENT_STATUS bit; the command is found via the CCB WO!=RO (set above)
     u.task(man["entries"]["event"] // 8)
 
 

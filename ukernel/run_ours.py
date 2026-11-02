@@ -84,7 +84,7 @@ def reg_writes(u):
 
 
 # EUR_CR_EVENT_STATUS bits the host-side model raises for each event
-EV_HOST_KICK = 0x4000       # SW_EVENT
+EV_HOST_KICK = 0            # host kick = EUR_CR_EVENT_KICK doorbell: no EVENT_STATUS bit (the microkernel finds the command via the kernel CCB write != read offset)
 EV_TA_FINISHED = 0x2000
 EV_3D_END = 0x40000         # PIXELBE end of render
 

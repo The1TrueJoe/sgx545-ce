@@ -379,11 +379,19 @@ def build(a):
     # no-op, so the acknowledge is unconditional and no handler reads it.
     a.i(f"limm r3, #{DCU_INVALID}")
     a.i(f"str #{CR_EVENT_HOST_CLEAR2 // 4}, r3")
-    a.dispatch(0x4000, "kick")                     # SW_EVENT: a host kick is waiting
     a.dispatch(0x2000, "ta_finished")              # a TA finished
     a.dispatch(0x40000, "render_done")             # pixel back-end end of render
     a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)
-    a.end()
+    # no hardware-event bit set: a host kick arrived via the EUR_CR_EVENT_KICK
+    # doorbell (sgxutils.c `SGXScheduleCCBCommand`), which leaves no
+    # EUR_CR_EVENT_STATUS bit — so look at the kernel CCB for a waiting command.
+    # The `kick` handler returns immediately if the CCB is empty (write offset
+    # == read offset). Gating this on SW_EVENT (0x4000) was wrong: that bit is
+    # the microkernel->host signal (set by raise_host_irq, cleared by the host
+    # ISR), never an incoming event, so the kick was never serviced — EA1
+    # HW-confirmed 2026-11-02 (GETMISCINFO sat unconsumed with EVENT_STATUS = 0,
+    # `sw_event: no`, the core looping through HWR).
+    a.i("ba kick")
 
     # ======================================================================
     # init
@@ -429,16 +437,11 @@ def build(a):
     # (our host-kick table is the identity, docs/UKERNEL.md §3). Dispatch, then
     # advance the read offset and end. One command per entry (one context).
     a.label("kick")
-    # acknowledge SW_EVENT before handling it (docs/UKERNEL.md §2): write the
-    # bit back to EUR_CR_EVENT_HOST_CLEAR. Without this the event program
-    # re-fires forever on the still-set bit (an event storm the core reports as
-    # a lockup) — hardware-confirmed on the EA3, 2026-11-02, where the open
-    # microkernel's init completed but the first host kick (GETMISCINFO) wedged
-    # the core. (The emulator runs one task to completion, so the storm is not
-    # visible offline.) The matching acknowledge in ta_finished / render_done is
-    # still to add, validated against the DDK render trace when frames are run.
-    a.i(f"limm r3, #{SW_EVENT}")
-    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
+    # a host kick leaves a command in the kernel CCB; find it at the read
+    # offset. There is no SW_EVENT to acknowledge — the host kicks via the
+    # EUR_CR_EVENT_KICK doorbell, not by setting a status bit, and SW_EVENT in
+    # EUR_CR_EVENT_STATUS is the microkernel->host signal the host ISR clears
+    # (see the event dispatch above).
     a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")     # kernel CCB control
     a.i("wdf")
     a.i("ld.a.d r2, r1, #0 [moe]")              # write offset (slot index)
