@@ -75,29 +75,27 @@ is the isaspec change this needs (see below).
 
 ## ISA.md gaps hit while writing this
 
-Each is a place where `sgx545.xml` currently assumes something; they were
-sent to the ISA.md owner and are tracked in the log entry.
+Sent to the ISA.md owner. Answered in ISA.md (um-re d7f97e4, e77b9f9), and the
+XML follows the answers:
 
-1. hw 1 (frcp..fcos) h22: not described; required 0.
-2. hw 3 / hw 4 h10: the sub-op is h9; h10 required 0.
-3. The forms without src0 (fsubflr, fdp, fdsx, fdsy, fdpc): h7 (`|src0|`)
-   required 0.
-4. mov / movc h3-6: not described; required 0.
-5. smp h19: not described; required 0.
-6. testmask h2-3, h6; ima16 h15; ima32 h3, h20-21, h24; adif/adifsum/
-   op16s1/bilin/ssum16 bits ISA.md doesn't name: required 0.
-7. nop: predicate allowed (h24-26), h12 required 0.
-8. Under format select, an `i<n>` operand: flagged only (`i1.f16`), not
-   halved. The same assumed under efo's F16 format control.
-9. test's fmt with a group-2 (C10) ALU op: indexed, immediate and constant
-   operands assumed to take 6-bit numbers as under F16 format select.
-10. smp's mask and ret share h12-15: the text's mask is read from h12-13
-    when ret (h14-15) is set.
-11. The text notation for several items isn't pinned down by ISA.md: abs
-    (`|x|` here), `rpt=n` vs `rcnt`, smp's mnemonic and `drc=`, rnd's value
-    names, fmad16 swizzle suffixes, efo's d/i/a/m value names, sop selects
-    and when they're omitted, fdual's `sd=3` name, dot's src1/src2
-    complement flags (`s1c`, `s2c` here).
+1. Bits no field names are 0: hw 1 h22, hw 3/4 h10, h7 in the forms
+   without src0, mov/movc h3-6, smp h19, testmask h2-3 and h6, the
+   special class's unlisted bits ("Unused slots and fixed patterns").
+2. nop and op0x98 have no predicate (h24-26 = 0); a prefix on a form
+   without a predicate field is an error.
+3. An `i<n>` operand under format select or efo's F16 control is
+   flag-only (`i1.f16`).
+4. Every slot that follows format select has 6-bit numbers whatever the
+   ALU op (test with fmt on a C10 op included).
+5. smp's mask and ret share h12-15; ret sets h14-15 over the mask.
+6. The text notation ("Text notation and defaults"): `|x|`, `(pn)`,
+   `rcnt rpt=n`, smp's suffix order, `drc=n`, decimal numbers, fmad16's
+   `swz0-2=`, fdual's `sd`/`sb`/`sc`/`msrc` names, numbers for enum values.
+
+Still open (asked with the integer table): efo's d/i/a/m value names, when
+the sop selects are omitted, dot's src1/src2 complement names, the
+undescribed bits of the integer classes, and whether efo's destination
+follows the F16 format control.
 
 ## Switching the compiler over (not done yet)
 
