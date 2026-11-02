@@ -749,6 +749,10 @@ sgx545_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 
    ralloc_free(so->nir);
    free(so->code);
+   if (so->sprite_vs) {
+      free(so->sprite_vs->code);
+      FREE(so->sprite_vs);
+   }
    FREE(so);
 }
 

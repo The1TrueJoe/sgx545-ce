@@ -73,3 +73,10 @@ run cube PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="16 16" PROBE_
 run cube8 PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="8 8" PROBE_ATTRS=2 PROBE_VS="$CV" PROBE_FS="precision mediump float; uniform samplerCube t0; varying vec3 v; void main() { gl_FragColor = textureCube(t0, v); }"
 run cube_dep PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="16 16" PROBE_ATTRS=2 PROBE_VS="$CV" PROBE_FS="precision mediump float; uniform samplerCube t0; varying vec3 v; void main() { gl_FragColor = textureCube(t0, v * vec3(1.0, -1.0, 1.0)) * 0.5; }"
 run cube_mip PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="16 16" PROBE_MIPMAP=1 PROBE_TEXFILTER="9987 9729" PROBE_ATTRS=2 PROBE_VS="$CV" PROBE_FS="precision mediump float; uniform samplerCube t0; varying vec3 v; void main() { gl_FragColor = textureCube(t0, v); }"
+# points (GL_POINTS 0): the size, and sprites
+PV="-0.5 -0.5 0.5 -0.25 0.0 0.5 0.25 0.25"
+run pt8 PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; void main() { gl_Position = p; gl_PointSize = 8.0; }"
+run pt_var PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; void main() { gl_Position = p; gl_PointSize = 16.0 + p.x * 16.0; }"
+run pt_vary PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; varying vec2 c; void main() { gl_Position = p; gl_PointSize = 16.0; c = p.xy * 0.5 + 0.5; }" PROBE_FS="precision mediump float; varying vec2 c; void main() { gl_FragColor = vec4(c, 0.0, 1.0); }"
+run sprite PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; void main() { gl_Position = p; gl_PointSize = 32.0; }" PROBE_FS="precision mediump float; void main() { gl_FragColor = vec4(gl_PointCoord, 0.0, 1.0); }"
+run sprite_v PROBE_PRIM=0 PROBE_VERTS="$PV" PROBE_VS="attribute vec4 p; varying vec2 c; void main() { gl_Position = p; gl_PointSize = 32.0; c = p.xy * 0.5 + 0.5; }" PROBE_FS="precision mediump float; varying vec2 c; void main() { gl_FragColor = vec4(gl_PointCoord.x, c.y, 0.0, 1.0); }"
