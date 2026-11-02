@@ -102,7 +102,7 @@ sent to the ISA.md owner and are tracked in the log entry.
 ## Switching the compiler over (not done yet)
 
 `mesa/src/sgx545/compiler` encodes through `usse_forms.h` / `usse.c`, which
-were generated from tables outside `docs/`. To move it onto this encoder:
+`tools/usc/gen_forms.py` generates. To move it onto this encoder:
 
 1. Link `idep_sgx545_isa` into `libsgx545_compiler` (meson), and include
    `sgx545_isa.h` where the compiler emits instructions.
