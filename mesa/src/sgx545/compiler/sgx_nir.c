@@ -272,6 +272,89 @@ front_true_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    return true;
 }
 
+/* The 32-bit value of component comp of a 16-bit integer that a conversion
+ * made (f2i16(x), i2i16(y), b2i16(c), a constant), through moves and vectors;
+ * NULL when it isn't one */
+static nir_def *
+int16_as_32(nir_builder *b, nir_def *d, unsigned comp)
+{
+   if (nir_def_is_const(d) && d->bit_size == 16)
+      return nir_imm_int(b, nir_src_comp_as_int(nir_src_for_ssa(d), comp));
+   nir_alu_instr *p = nir_def_as_alu_or_null(d);
+   if (!p)
+      return NULL;
+   if (nir_op_is_vec(p->op))
+      return int16_as_32(b, p->src[comp].src.ssa, p->src[comp].swizzle[0]);
+   nir_def *x = p->src[0].src.ssa;
+   unsigned xc = p->src[0].swizzle[comp];
+   switch (p->op) {
+   case nir_op_mov:
+      return int16_as_32(b, x, xc);
+   case nir_op_f2i16:
+   case nir_op_f2u16: {
+      nir_def *f = nir_channel(b, x, xc);
+      if (f->bit_size != 32)
+         f = nir_f2f32(b, f);
+      return p->op == nir_op_f2i16 ? nir_f2i32(b, f) : nir_f2u32(b, f);
+   }
+   case nir_op_i2i16:
+   case nir_op_u2u16:
+      return x->bit_size == 32 ? nir_channel(b, x, xc) : int16_as_32(b, x, xc);
+   case nir_op_b2i16:
+      return nir_b2i32(b, nir_channel(b, x, xc));
+   default:
+      return NULL;
+   }
+}
+
+/* What nir_lower_bit_size leaves of 16-bit integers (mediump int, under
+ * sgxc -p) are conversions at the edges: read them from the 32-bit value */
+static bool
+int16_conv_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if ((alu->op == nir_op_i2i32 || alu->op == nir_op_u2u32) && nir_src_bit_size(alu->src[0].src) == 32) {
+      /* (what's left of a 16-bit round trip) */
+      b->cursor = nir_before_instr(&alu->instr);
+      nir_def_replace(&alu->def, nir_ssa_for_alu_src(b, alu, 0));
+      return true;
+   }
+   if (nir_op_infos[alu->op].num_inputs != 1 || nir_src_bit_size(alu->src[0].src) != 16)
+      return false;
+   if (alu->op != nir_op_i2i32 && alu->op != nir_op_u2u32 && alu->op != nir_op_i2f32 &&
+       alu->op != nir_op_u2f32 && alu->op != nir_op_i2f16 && alu->op != nir_op_u2f16)
+      return false;
+   b->cursor = nir_before_instr(&alu->instr);
+   nir_def *xs[NIR_MAX_VEC_COMPONENTS];
+   for (unsigned k = 0; k < alu->def.num_components; k++) {
+      xs[k] = int16_as_32(b, alu->src[0].src.ssa, alu->src[0].swizzle[k]);
+      if (!xs[k])
+         return false;
+   }
+   nir_def *x = nir_vec(b, xs, alu->def.num_components);
+   nir_def *r = x;
+   if (alu->op == nir_op_i2f32 || alu->op == nir_op_i2f16)
+      r = nir_i2f32(b, x);
+   else if (alu->op == nir_op_u2f32 || alu->op == nir_op_u2f16)
+      r = nir_u2f32(b, x);
+   if (alu->def.bit_size == 16)
+      r = nir_f2f16(b, r);
+   nir_def_replace(&alu->def, r);
+   return true;
+}
+
+/* float(i) for a mediump result: nir_lower_int_to_float only takes 32-bit
+ * conversions, so the i2f32 it turns into a move, then f2f16 */
+static bool
+i2f16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if ((alu->op != nir_op_i2f16 && alu->op != nir_op_u2f16) || nir_src_bit_size(alu->src[0].src) != 32)
+      return false;
+   b->cursor = nir_before_instr(&alu->instr);
+   nir_def *x = nir_ssa_for_alu_src(b, alu, 0);
+   nir_def_replace(&alu->def, nir_f2f16(b, alu->op == nir_op_i2f16 ? nir_i2f32(b, x) : nir_u2f32(b, x)));
+   return true;
+}
+
 static bool
 csel16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 {
@@ -290,7 +373,10 @@ csel16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 static bool
 widen_cmp16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 {
-   if (!nir_alu_instr_is_comparison(alu) || nir_src_bit_size(alu->src[0].src) != 16)
+   /* (float compares only: an integer one is widened as an integer, by
+    * int16_to_32) */
+   if (!nir_alu_instr_is_comparison(alu) || nir_src_bit_size(alu->src[0].src) != 16 ||
+       nir_alu_type_get_base_type(nir_op_infos[alu->op].input_types[0]) != nir_type_float)
       return false;
    b->cursor = nir_before_instr(&alu->instr);
    for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++) {
@@ -310,14 +396,34 @@ int16_to_32(const nir_instr *instr, void *data)
       return 0;
    const nir_alu_instr *alu = nir_instr_as_alu(instr);
    const nir_op_info *info = &nir_op_infos[alu->op];
-   /* moves, vectors and selects carry data of any type */
+   /* moves, vectors and selects carry data of any type; a conversion from
+    * or to 32 bits (f2i16 of an f32) changes the size itself */
    if (alu->op == nir_op_mov || nir_op_is_vec(alu->op) || alu->op == nir_op_bcsel)
       return 0;
+   for (unsigned i = 0; i < info->num_inputs; i++)
+      if (!nir_alu_type_get_type_size(info->input_types[i]) && nir_src_bit_size(alu->src[i].src) >= 32)
+         return 0;
    bool int16 = alu->def.bit_size == 16 && nir_alu_type_get_base_type(info->output_type) != nir_type_float;
    for (unsigned i = 0; i < info->num_inputs; i++)
       int16 |= nir_src_bit_size(alu->src[i].src) == 16 &&
                nir_alu_type_get_base_type(info->input_types[i]) != nir_type_float;
    return int16 ? 32 : 0;
+}
+
+static bool
+vec_cmp_instr(const nir_instr *instr, const void *data)
+{
+   if (instr->type != nir_instr_type_alu)
+      return false;
+   switch (nir_instr_as_alu(instr)->op) {
+   case nir_op_ball_fequal2: case nir_op_ball_fequal3: case nir_op_ball_fequal4:
+   case nir_op_ball_iequal2: case nir_op_ball_iequal3: case nir_op_ball_iequal4:
+   case nir_op_bany_fnequal2: case nir_op_bany_fnequal3: case nir_op_bany_fnequal4:
+   case nir_op_bany_inequal2: case nir_op_bany_inequal3: case nir_op_bany_inequal4:
+      return true;
+   default:
+      return false;
+   }
 }
 
 static bool
@@ -905,12 +1011,18 @@ sgx_lower(struct sgx_ctx *c)
       }
    } while (progress);
 
+   /* all() / any() of vector compares (dEQP's isOk): scalar compares and
+    * iand / ior, which the bool lowering takes */
+   NIR_PASS(_, s, nir_lower_alu_to_scalar, vec_cmp_instr, NULL);
    NIR_PASS(_, s, nir_shader_alu_pass, widen_cmp16_instr, nir_metadata_control_flow, NULL);
    NIR_PASS(_, s, nir_lower_bit_size, int16_to_32, NULL);
    NIR_PASS(_, s, nir_opt_constant_folding);
    NIR_PASS(_, s, nir_opt_dce);
    if (getenv("SGX_PRINT_PRE_I2F"))
       nir_print_shader(s, stderr);
+   NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr, nir_metadata_control_flow, NULL);
+   NIR_PASS(_, s, nir_shader_alu_pass, i2f16_instr, nir_metadata_control_flow, NULL);
+   NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, nir_lower_int_to_float);
    NIR_PASS(_, s, nir_opt_copy_prop);
    /* (a 16-bit bcsel would become fcsel, an f32-only opcode: b32csel takes

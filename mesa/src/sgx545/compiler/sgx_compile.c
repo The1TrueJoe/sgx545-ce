@@ -3010,7 +3010,26 @@ emit_color(struct sgx_ctx *c)
    if (h16) {
       /* pck.u8.f16 D, r, a [dmask=12] then D, b, g [dmask=3], as the DDK packs
        * an F16 colour */
+      struct sgx_ref orig[4];
+      memcpy(orig, col, sizeof(orig));
       for (unsigned k = 0; k < 4; k++) {
+         if (col[k].file != SGX_F_K && (col[k].neg || col[k].abs)) {
+            /* pck has no modifiers: x * 1 + 0 applies them (once per value) */
+            unsigned j;
+            for (j = 0; j < k && !ref_same(&orig[j], &orig[k]); j++)
+               ;
+            if (j < k) {
+               col[k] = col[j];
+               continue;
+            }
+            unsigned t = new_vreg16(c, 2);
+            struct sgx_ref m[3][2] = { { col[k], col[k] } };
+            m[1][0] = ref(SGX_F_K, 0x3c00); m[1][0].h16 = 1; m[1][1] = m[1][0];
+            m[2][0] = ref(SGX_F_K, 0); m[2][0].h16 = 1; m[2][1] = m[2][0];
+            fmad16(c, href(t, 0), m);
+            col[k] = href(t, 0);
+            continue;
+         }
          if (col[k].file != SGX_F_K)
             continue;
          uint32_t n = col[k].n;
