@@ -247,8 +247,8 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
       if (sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR)
          t[0] |= 1u << 12;
    }
-   /* T1: layout (0 twiddled, 3 linear) | format | width-1 | height-1 */
-   t[1] = (twiddled(prsc->width0, prsc->height0) ? 0u : 3u) << 29 | fmt << 24 |
+   /* T1: layout (0 twiddled, 3 linear, 2 a cube map: DDK capture) | format | width-1 | height-1 */
+   t[1] = (prsc->target == PIPE_TEXTURE_CUBE ? 2u : twiddled(prsc->width0, prsc->height0) ? 0u : 3u) << 29 | fmt << 24 |
           (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
    t[2] = res->bo.va;
    if (!res->texture) {

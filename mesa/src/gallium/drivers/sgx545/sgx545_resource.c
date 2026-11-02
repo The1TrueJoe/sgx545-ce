@@ -199,10 +199,6 @@ sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res
       t->pbe_format = 1;
       t->t1_format = 0x0d;         /* swaps R and B against 0x0c: the PBE's order back */
       break;
-   case PIPE_FORMAT_B5G6R5_UNORM:
-      t->pbe_format = 3;
-      t->t1_format = 0x05;
-      break;
    default:
       return false;
    }

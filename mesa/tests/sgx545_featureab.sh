@@ -63,3 +63,13 @@ run fbo_4444 PROBE_FBO="128 128 rgba4444"
 run fbo_5551 PROBE_FBO="128 128 rgba5551"
 run fbo_npot PROBE_FBO="100 60 rgba8888"
 run fbo_ds PROBE_FBO="128 128 rgba8888" PROBE_FBODS="24 8"
+# built-in inputs
+FV="attribute vec4 p; void main() { gl_Position = p; }"
+run fc PROBE_VS="$FV" PROBE_FS="precision mediump float; void main() { gl_FragColor = vec4(gl_FragCoord.x / 720.0, gl_FragCoord.y / 480.0, gl_FragCoord.z, 1.0); }"
+run fc_w PROBE_VS="$FV" PROBE_FS="precision highp float; void main() { gl_FragColor = vec4(gl_FragCoord.x / 720.0, gl_FragCoord.w * 0.5, gl_FragCoord.z, 1.0); }"
+# cube maps
+CV="attribute vec4 p; attribute vec2 a1; varying vec3 v; void main() { gl_Position = p; v = vec3(p.xy, 1.0); }"
+run cube PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="16 16" PROBE_ATTRS=2 PROBE_VS="$CV" PROBE_FS="precision mediump float; uniform samplerCube t0; varying vec3 v; void main() { gl_FragColor = textureCube(t0, v); }"
+run cube8 PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="8 8" PROBE_ATTRS=2 PROBE_VS="$CV" PROBE_FS="precision mediump float; uniform samplerCube t0; varying vec3 v; void main() { gl_FragColor = textureCube(t0, v); }"
+run cube_dep PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="16 16" PROBE_ATTRS=2 PROBE_VS="$CV" PROBE_FS="precision mediump float; uniform samplerCube t0; varying vec3 v; void main() { gl_FragColor = textureCube(t0, v * vec3(1.0, -1.0, 1.0)) * 0.5; }"
+run cube_mip PROBE_TEX=1 PROBE_TEXCUBE=1 PROBE_TEXPAT=1 PROBE_TEXSIZE="16 16" PROBE_MIPMAP=1 PROBE_TEXFILTER="9987 9729" PROBE_ATTRS=2 PROBE_VS="$CV" PROBE_FS="precision mediump float; uniform samplerCube t0; varying vec3 v; void main() { gl_FragColor = textureCube(t0, v); }"

@@ -1318,7 +1318,7 @@ ispa(const struct sgxws_state *st, uint32_t prim, unsigned face)
       v |= 3u << 15;
    if (st->stencil)
       v |= 0x100 | st->stencil_ref[face];   /* ISPC follows, the reference */
-   if (st->stencil && st->two_sided && !face)
+   if (st->stencil && st->two_sided)
       v |= 0x800;
 
    if (!st->depth_func)

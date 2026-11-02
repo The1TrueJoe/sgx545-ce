@@ -305,6 +305,8 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary)
    }
 }
 
+#define SGX545_ITER_FRAGCOORD 14
+
 /* what the draw needs from the compiled program besides its code: the
  * dependent samples (where each smp goes in the flat program, its template,
  * sampler and raw texel register) and the branches whose offsets move when
@@ -398,14 +400,6 @@ read_program(const struct sgx_shader *out, struct sgx545_shader *so, struct prog
       info->deps[info->n_deps].raw = x->reg;
       info->deps[info->n_deps].smp = x->smp;
       info->n_deps++;
-   }
-   /* gl_FragCoord's iteration (set + 1 = 14) has no DOUTI source we know:
-    * the iterate half's sources are a coordinate set + 1 and 0x20 colour
-    * (docs/PDS.md "DOUTI").  Untried sources may lock the GPU up, so refuse
-    * the shader rather than guess. */
-   for (unsigned i = 0; i < out->n_iters; i++) {
-      if (!out->iters[i].sample && out->iters[i].set + 1 >= 0xb)
-         return info->why = "gl_FragCoord", false;
    }
    for (unsigned i = 0; i < out->n_blocks; i++) {
       if (out->blocks[i].kind != SGX_BLOCK_BRANCH)
@@ -611,6 +605,10 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             }
             continue;
          }
+         /* gl_FragCoord (the compiler's set 13) is source 0: x and y at pixel
+          * centres in the target's memory order, z, 1/w (DDK capture, EA-1) */
+         if (it == SGX545_ITER_FRAGCOORD)
+            it = 0;
          w = it << 11 | (out.iters[i].comps - 1) << 22 | 1u << 24 | 0x6000000u |
              (out.iters[i].f16 ? 1u << 28 : 0);
          last_plain = so->prog.n_douti;
