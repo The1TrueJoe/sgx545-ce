@@ -12,7 +12,7 @@
 #include "util/list.h"
 #include "util/slab.h"
 
-#include "sgx545_frame.h"
+#include "sgxws.h"
 
 struct sgx545_resource;
 struct nir_shader;
@@ -93,6 +93,7 @@ struct sgx545_context {
    struct sgxws_prog vs_xy, vs_xyz, fs_uniform;
    struct sgxws_rt *rts[SGX545_MAX_RTS];
    uint32_t rt_va[SGX545_MAX_RTS];      /* the target each was made for */
+   uint32_t rt_w[SGX545_MAX_RTS], rt_h[SGX545_MAX_RTS];   /* and its size */
    unsigned num_rts;
    struct sgx545_resource *recording;   /* the target of the frame being recorded */
 

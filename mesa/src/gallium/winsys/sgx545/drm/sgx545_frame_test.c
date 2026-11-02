@@ -47,7 +47,6 @@ main(int argc, char **argv)
    struct sgxws_bo color;
    struct sgxws_target t = { 0 };
    struct sgxws_prog vs, fs;
-   struct pvr_buf syncmap, fbbuf;
    struct sgxws_state st = { 0 };
    const char *out = NULL;
    int frames = 1, ramp = 0, use_fb = 0, check_all = 0, opt, fd, bad = 0;
@@ -90,24 +89,22 @@ main(int argc, char **argv)
          return 1;
       }
       m = mmap(NULL, fix.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fb, 0);
-      if (m == MAP_FAILED || pvr_wrap(&dev.pvr, &fbbuf, m, fix.smem_len)) {
+      if (m == MAP_FAILED || sgxws_bo_wrap(&dev, &color, m, fix.smem_len)) {
          fprintf(stderr, "wrapping fb0 failed\n");
          return 1;
       }
       stride = fix.line_length / 4;
-      t.va = fbbuf.devva;
-      t.sync = fbbuf.sync;
+      t.va = color.va;
       pixels = m;
    } else {
-      if (sgxws_bo_alloc(&dev, &color, SGX545_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR, stride * h * 4,
+      if (sgxws_bo_alloc(&dev, &color, SGXWS_MEM_RENDER_TARGET, stride * h * 4,
                          0x1000))
          return 1;
       t.va = color.va;
-      t.sync = color.b.sync;
       pixels = color.map;
    }
    t.stride = stride;
-   t.sync_data = pvr_sync_data(&dev.pvr, t.sync, &syncmap);
+   t.bo = &color;
 
    sgxws_prog_builtin(c, SGXWS_VS_XY, &vs);
    sgxws_prog_builtin(c, SGXWS_FS_UNIFORM, &fs);

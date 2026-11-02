@@ -8,7 +8,7 @@
 
 #include "pipe/p_state.h"
 
-#include "sgx545_frame.h"
+#include "sgxws.h"
 
 struct sgx545_context;
 struct sgx545_screen;
@@ -40,10 +40,6 @@ struct sgx545_resource {
    uint32_t alt_use_seq;
    unsigned n_alt_dirty;        /* SGX545_ALT_ALL: re-encode everything */
    struct { uint16_t level, x0, y0, x1, y1; } alt_dirty[32];
-
-   /* the kernel sync data, mapped once: the CPU waits on it before reading */
-   struct pvr_buf sync_map;
-   volatile PVRSRV_SYNC_DATA *sync_data;
 };
 
 static inline struct sgx545_resource *

@@ -89,10 +89,8 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
       res->pitch = align(templ->width0, 32);
       res->stride = res->pitch * util_format_get_blocksize(templ->format);
       simple_mtx_lock(&screen->lock);
-      e = sgxws_bo_alloc(&screen->dev, &res->bo, SGX545_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR,
+      e = sgxws_bo_alloc(screen->dev, &res->bo, SGXWS_MEM_RENDER_TARGET,
                          align(res->stride * templ->height0, 4096), 0x1000);
-      if (!e)
-         res->sync_data = pvr_sync_data(&screen->dev.pvr, res->bo.b.sync, &res->sync_map);
       simple_mtx_unlock(&screen->lock);
       if (e)
          goto fail;
@@ -115,7 +113,7 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
       int e;
 
       simple_mtx_lock(&screen->lock);
-      e = sgxws_bo_alloc(&screen->dev, &res->bo, SGX545_HEAP_TEXTURE, 0x3,
+      e = sgxws_bo_alloc(screen->dev, &res->bo, SGXWS_MEM_TEXTURE,
                          align(MAX2(sgx545_tex_size(prsc), 1), 4096), 0x1000);
       simple_mtx_unlock(&screen->lock);
       if (e)
@@ -153,15 +151,9 @@ sgx545_resource_from_user_memory(struct pipe_screen *pscreen, const struct pipe_
    size = align(res->stride * templ->height0, 4096);
 
    simple_mtx_lock(&screen->lock);
-   e = pvr_wrap(&screen->dev.pvr, &res->bo.b, user_memory, size);
-   if (!e) {
-      res->bo.va = res->bo.b.devva;
-      res->bo.map = res->bo.b.cpu;
-      res->sync_data = pvr_sync_data(&screen->dev.pvr, res->bo.b.sync, &res->sync_map);
-   }
+   e = sgxws_bo_wrap(screen->dev, &res->bo, user_memory, size);
    simple_mtx_unlock(&screen->lock);
    if (e) {
-      fprintf(stderr, "sgx545: WRAP_EXT_MEMORY of %u bytes failed: %d\n", size, e);
       FREE(res);
       return NULL;
    }
@@ -175,16 +167,14 @@ sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
    struct sgx545_screen *screen = sgx545_screen(pscreen);
    struct sgx545_resource *res = sgx545_resource(prsc);
 
-   if (res->bo.b.mem) {
+   if (sgxws_bo_valid(&res->bo)) {
       simple_mtx_lock(&screen->lock);
       /* renders in flight may still use it (and a target's last render keeps
        * a pointer to its sync data) */
       if (screen->hw)
          sgxws_wait_idle(screen->hw, 2000);
-      pvr_unmap(&screen->dev.pvr, &res->sync_map);
-      sgxws_bo_free(&screen->dev, &res->bo);
-      if (res->alt.b.mem)
-         sgxws_bo_free(&screen->dev, &res->alt);
+      sgxws_bo_free(screen->dev, &res->bo);
+      sgxws_bo_free(screen->dev, &res->alt);
       simple_mtx_unlock(&screen->lock);
    }
    if (res->data)
@@ -200,8 +190,7 @@ sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res
       return false;
    t->va = res->bo.va;
    t->stride = res->pitch;
-   t->sync = res->bo.b.sync;
-   t->sync_data = res->sync_data;
+   t->bo = &res->bo;
    return true;
 }
 
@@ -225,7 +214,7 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
       ctx->stats.fl_read += ctx->recording == res;
       sgx545_flush_resource_writes(ctx, res);
       /* and the renders already submitted into it */
-      if (res->sync_data && sgxws_wait_sync(res->sync_data, 2000))
+      if (sgxws_bo_wait(&res->bo, 2000))
          fprintf(stderr, "sgx545: a render into a mapped buffer did not finish\n");
    }
    /* A texture write lands in the CPU copy; the unmap puts it on the device
@@ -305,7 +294,7 @@ tex_write(struct sgx545_context *ctx, struct sgx545_resource *res, unsigned leve
 
       if (!res->alt.va) {
          simple_mtx_lock(&screen->lock);
-         if (sgxws_bo_alloc(&screen->dev, &res->alt, SGX545_HEAP_TEXTURE, 0x3,
+         if (sgxws_bo_alloc(screen->dev, &res->alt, SGXWS_MEM_TEXTURE,
                             align(MAX2(sgx545_tex_size(&res->base), 1), 4096), 0x1000))
             memset(&res->alt, 0, sizeof(res->alt));
          simple_mtx_unlock(&screen->lock);

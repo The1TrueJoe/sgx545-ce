@@ -96,6 +96,7 @@ sgx545_stats_report(struct sgx545_context *ctx)
 {
    uint64_t now = os_time_get_nano(), dt = now - ctx->stats.t0, cpu;
    double ms = 1e-6;
+   struct sgxws_stats ws = { 0 };
    struct timespec ts;
 
    if (dt < 2000000000ull)
@@ -103,41 +104,28 @@ sgx545_stats_report(struct sgx545_context *ctx)
    /* the thread's own CPU time: the rest of the window it waited */
    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
    cpu = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+   if (ctx->hw)
+      sgxws_get_stats(ctx->hw, &ws, true);
    fprintf(stderr, "sgx545 stats: thread CPU %.0f ms of %.0f; flush %.0f: TA command %.0f, kick %.0f, target wait %.0f, "
            "slot wait %.0f, sync wait %.0f ms\n",
-           (cpu - ctx->stats.cpu0) * ms, dt * ms, ctx->hw ? ctx->hw->ns_flush * ms : 0,
-           ctx->hw ? ctx->hw->ns_cmd * ms : 0, ctx->hw ? ctx->hw->ns_kick * ms : 0,
-           ctx->hw ? ctx->hw->ns_target_wait * ms : 0, ctx->hw ? ctx->hw->ns_slot_wait * ms : 0,
-           ctx->hw ? ctx->hw->ns_sync_wait * ms : 0);
-   if (ctx->hw)
-      ctx->hw->ns_flush = ctx->hw->ns_cmd = ctx->hw->ns_sync_wait = 0;
+           (cpu - ctx->stats.cpu0) * ms, dt * ms, ws.ns_flush * ms, ws.ns_cmd * ms, ws.ns_kick * ms,
+           ws.ns_target_wait * ms, ws.ns_slot_wait * ms, ws.ns_sync_wait * ms);
    fprintf(stderr, "sgx545 stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
            "readback %u, deferred %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
            ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch, ctx->stats.fl_read,
            ctx->stats.fl_deferred, ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
-           (unsigned)(ctx->vcache_bytes >> 10), ctx->hw ? ctx->hw->ns_fence_wait * ms : 0,
-           ctx->hw && ctx->hw->n_latency ? ctx->hw->ns_latency * ms / ctx->hw->n_latency : 0,
-           ctx->hw ? ctx->hw->n_latency : 0,
-           ctx->hw && ctx->hw->n_latency_scanout ? ctx->hw->ns_latency_scanout * ms / ctx->hw->n_latency_scanout : 0,
-           ctx->hw ? ctx->hw->n_latency_scanout : 0);
-   if (ctx->hw) {
-      ctx->hw->ns_kick = ctx->hw->ns_target_wait = ctx->hw->ns_slot_wait = 0;
-      ctx->hw->ns_fence_wait = ctx->hw->ns_latency = 0;
-      ctx->hw->n_latency = 0;
-      ctx->hw->ns_latency_scanout = 0;
-      ctx->hw->n_latency_scanout = 0;
-   }
+           (unsigned)(ctx->vcache_bytes >> 10), ws.ns_fence_wait * ms,
+           ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
+           ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout : 0, ws.n_latency_scanout);
    fprintf(stderr, "sgx545 stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms)\n", ctx->stats.blit_gpu,
            ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
            ctx->stats.blit_cpu_ns * ms);
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
-           dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ctx->hw ? ctx->hw->room_flushes : 0,
+           dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ws.room_flushes,
            ctx->stats.draws, ctx->stats.verts, ctx->stats.tex_writes,
            ctx->stats.draw_ns * ms, ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms, ctx->stats.compile_ns * ms);
    memset(&ctx->stats, 0, sizeof(ctx->stats));
-   if (ctx->hw)
-      ctx->hw->room_flushes = 0;
    ctx->stats.on = true;
    ctx->stats.t0 = now;
    ctx->stats.cpu0 = cpu;
@@ -179,7 +167,7 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
       struct sgx545_fence *f = CALLOC_STRUCT(sgx545_fence);
 
       pipe_reference_init(&f->reference, 1);
-      f->seq = ctx->hw ? ctx->hw->kicks : 0;
+      f->seq = ctx->hw ? sgxws_next_seq(ctx->hw) - 1 : 0;
       *fence = NULL;
       sgx545_fence_reference(pctx->screen, fence, (struct pipe_fence_handle *)f);
       sgx545_fence_reference(pctx->screen, (struct pipe_fence_handle **)&f, NULL);
@@ -236,7 +224,7 @@ sgx545_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 
    simple_mtx_lock(&screen->lock);
    if (!screen->hw)
-      screen->hw = sgxws_ctx_create(&screen->dev);
+      screen->hw = sgxws_ctx_create(screen->dev);
    ctx->hw = screen->hw;
    if (ctx->hw) {
       sgxws_prog_builtin(ctx->hw, SGXWS_VS_XY, &ctx->vs_xy);

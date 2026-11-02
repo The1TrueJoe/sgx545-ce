@@ -22,7 +22,8 @@
  *    context runs forever in fixed memory.
  *
  * Nothing here is gallium: the driver in src/gallium/drivers/sgx545 turns
- * pipe state into these calls.
+ * pipe state into the calls in sgxws.h.  This header is the winsys's own:
+ * it holds the services (libpvr) side, which the driver never includes.
  */
 
 #ifndef SGX545_FRAME_H
@@ -32,6 +33,7 @@
 #include <stdint.h>
 
 #include "pvr.h"
+#include "sgxws.h"
 
 /* SGX heap ids: the low byte of PVRSRV_HEAP_INFO::ui32HeapID */
 enum sgx545_heap {
@@ -51,24 +53,6 @@ enum sgx545_heap {
 extern "C" {
 #endif
 
-/* GL enums the state takes */
-#define SGXWS_NEVER 0x200
-#define SGXWS_LESS 0x201
-#define SGXWS_EQUAL 0x202
-#define SGXWS_LEQUAL 0x203
-#define SGXWS_GREATER 0x204
-#define SGXWS_NOTEQUAL 0x205
-#define SGXWS_GEQUAL 0x206
-#define SGXWS_ALWAYS 0x207
-#define SGXWS_FRONT 0x404
-#define SGXWS_BACK 0x405
-
-/* VDM primitive types */
-#define SGXWS_TRIANGLES 0
-#define SGXWS_LINES 1
-#define SGXWS_POINTS 2
-#define SGXWS_TRIANGLE_STRIP 3
-
 /* the services connection (libpvr) */
 struct sgxws_dev {
    struct pvr pvr;
@@ -79,11 +63,11 @@ struct sgxws_dev {
                                      * (and traced) but never sent to the GPU */
 };
 
-/* one device allocation, mapped */
-struct sgxws_bo {
+/* a buffer's services side */
+struct sgxws_bo_impl {
    struct pvr_buf b;
-   uint32_t va;
-   uint32_t *map;
+   struct pvr_buf sync_map;         /* the mapping of its sync data, if any */
+   volatile PVRSRV_SYNC_DATA *sd;   /* render targets: the sync data the CPU waits on */
 };
 
 /* a bump allocator inside one device allocation; reset() returns to mark */
@@ -120,102 +104,6 @@ struct sgxws_rt {
    uint32_t frames;                 /* frames rendered into it */
    uint32_t seq;                    /* its last render's kick number: one in flight per target */
    unsigned seq_slot;               /* and the ring slot that render used */
-};
-
-/* where a frame's pixels go */
-struct sgxws_target {
-   uint32_t va;                     /* BGRA8888, top row first */
-   uint32_t stride;                 /* in pixels, a multiple of 32 */
-   IMG_HANDLE sync;                 /* the buffer's kernel sync info */
-   volatile PVRSRV_SYNC_DATA *sync_data;
-   bool scanout;                    /* the scanout buffer (stats only) */
-};
-
-/* A shader as the hardware runs it: USSE code plus what the PDS programs
- * need to know about it. */
-struct sgxws_prog {
-   bool vertex;
-   uint32_t code;                   /* USSE main program (device address) */
-   uint32_t sec;                    /* USSE secondary program (fragment), or 0 */
-   uint32_t sec_temps;              /* its temporaries */
-   uint32_t temps;                  /* temporary registers */
-   /* vertex: */
-   uint32_t in_dwords;              /* primary attribute registers the program uses */
-   uint32_t out_dwords;             /* outputs per vertex */
-   uint32_t attr_dwords;            /* dwords fetched per vertex into pa0.. */
-   uint32_t tsp_sizes;              /* TA state: texcoord sizes, 3 bits per set */
-   uint32_t tsp_prec;               /* TA state: sets with precision value <= 2 */
-   /* fragment: */
-   uint32_t sec_dwords;             /* constant dwords DMA'd for the secondary program */
-   uint32_t douti[10];              /* DOUTI words, one per iterated input or sample */
-   uint8_t douti_tex[10];           /* 0, or the sampler unit + 1 whose DOUTT follows it */
-   uint32_t n_douti;
-   uint32_t pds_middle;             /* TA state PDS middle word (0: the default) */
-   uint32_t pa_dwords;              /* fragment: primary attribute registers the program uses */
-   /* both: */
-   uint32_t const_dwords;           /* vertex: constants DMA'd after the driver block */
-};
-
-/* Blending is fragment code (STATE.md section 3): in a translucent pass o0
- * holds the tile's colour, and the colour epilogue is
- *    sop2 o0, pa<c>, o0 [skipinv end c1 c2 cop a1 a2 aop]
- * dst.rgb = (s1 * c1) cop (s2 * c2), dst.a = (s1.a * a1) aop (s2.a * a2),
- * s1 the shader's colour, s2 the tile's; with swap the sources trade places
- * (sop2 o0, o0, pa<c>), for a reverse subtract.  The DDK's SRC_ALPHA,
- * ONE_MINUS_SRC_ALPHA draw is c1=a1=s1a, c2=a2=1-s1a, add (EA3). */
-enum sgxws_bsel {
-   SGXWS_BS_ZERO, SGXWS_BS_S1, SGXWS_BS_S2, SGXWS_BS_S1A, SGXWS_BS_S2A,
-   SGXWS_BS_ASAT,                   /* colour only: min(s1.a, 1 - s2.a) */
-   SGXWS_BS_INV = 8,                /* or'd in: 1 - the selection */
-};
-enum sgxws_bop { SGXWS_BOP_ADD, SGXWS_BOP_SUB, SGXWS_BOP_MIN, SGXWS_BOP_MAX };
-
-/* The colour epilogue: blend (sop2), then the colour mask.  A colour mask is
- *    sopwm o0, pa<c>, pa<c> [skipinv end mask=wmask c1=zero c2=zero cop=max aop=max]
- * after the colour, a bit per byte of the packed BGRA8 (B b0, G b1, R b2,
- * A b3), as the DDK's glColorMask draws (EA3); with a blend before it, the
- * sop2 writes pa<c> back and doesn't end the program. */
-struct sgxws_blend {
-   uint8_t blend;                   /* the sop2 below */
-   uint8_t c1, c2, a1, a2;          /* sgxws_bsel; a1/a2 only zero, s1a, s2a (+ inv) */
-   uint8_t cop, aop;                /* sgxws_bop */
-   uint8_t swap;
-   uint8_t wmask;                   /* bytes written; 0xf: no sopwm */
-};
-
-struct sgxws_state {
-   uint32_t depth_func;             /* 0 = depth test off */
-   bool depth_write;
-   uint32_t cull;                   /* 0, SGXWS_FRONT or SGXWS_BACK */
-   bool front_ccw;                  /* front faces wind CCW in the target's memory
-                                     * (gallium's sense: y down) */
-   uint32_t color_mask;             /* ISPB colour mask: R8 G4 B2 A1 */
-   uint32_t pass_type;              /* ISPA b25-27: 0 opaque, 1 translucent (o0
-                                     * starts as the tile's colour: blending),
-                                     * 2 translucent with discard, 4 punch-through
-                                     * (discard) */
-   /* the viewport transform, as gallium gives it */
-   float vp_scale[3], vp_translate[3];
-};
-
-#define SGXWS_MAX_INDICES 0xffff
-
-struct sgxws_draw {
-   uint32_t prim;                   /* SGXWS_* */
-   uint32_t count;                  /* vertices */
-   const uint32_t *verts;           /* count x vs->attr_dwords dwords */
-   /* NULL: the vertices in order; else n_indices 16-bit indices into them
-    * (at most SGXWS_MAX_INDICES) */
-   const uint16_t *indices;
-   uint32_t n_indices;
-   /* or both already in device memory (the driver's vertex cache): their
-    * addresses, nothing copied (verts_va 16-byte aligned, idx_va even) */
-   uint32_t verts_va, idx_va;
-   const struct sgxws_prog *vs, *fs;
-   const struct sgxws_state *state;
-   const uint32_t *fs_consts;       /* fs->sec_dwords dwords */
-   const uint32_t *vs_consts;       /* vs->const_dwords dwords */
-   const uint32_t (*tex)[4];        /* per sampler unit: the DOUTT words T0-T3 */
 };
 
 struct sgxws_ctx {
@@ -262,82 +150,17 @@ struct sgxws_ctx {
 int sgxws_dev_init(struct sgxws_dev *d, int fd);
 void sgxws_dev_fini(struct sgxws_dev *d);
 
-int sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx545_heap heap,
-                   uint32_t attribs, uint32_t size, uint32_t align);
-void sgxws_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo);
+/* a buffer in a given heap with given attributes (sgxws_bo_alloc picks them by use) */
+int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx545_heap heap,
+                        uint32_t attribs, uint32_t size, uint32_t align);
 /* the attributes the DDK gives a colour buffer it renders to */
 #define SGXWS_ATTRIBS_COLOR 0x10000003
-
-struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d);
-void sgxws_ctx_destroy(struct sgxws_ctx *c);
-
-struct sgxws_rt *sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h);
-void sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *rt);
 
 /* Upload a USSE program to the code heaps (phas.i targets in reloc[] are
  * relocated to where it lands).  Returns its device address. */
 uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w, unsigned n,
                            const uint8_t *reloc, unsigned nreloc);
 
-/*
- * Compiled programs (mesa/src/sgx545/compiler: flat USSE words, low word
- * first), finalised the way the DDK's GL driver finalises a USP (docs/ISA.md
- * "Phases, visibility feedback and discard") and uploaded:
- *  - vertex: phase 0 = the DDK's prologue; phase 1 = the shader (temps
- *    temporaries), then emit the vertex; then the epilogue phase every
- *    vertex program needs (docs/GEN.md);
- *  - fragment: phas, the shader, then `mov o0, pa<color_pa> [end]` (output
- *    mode 1: the packed BGRA8 colour to the PBE), or the blend and colour
- *    mask epilogue (sgxws_blend; a blend draws with sgxws_state.translucent);
- *  - fragment secondary (uniform-only code): phas, the code, `nop [end]`.
- */
-uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned temps);
-uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n, unsigned color_pa,
-                         const struct sgxws_blend *blend, int discard_pa, unsigned temps);
-void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint32_t w[2]);
-uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code, unsigned n);
-
-/* built-in shaders (tools/gen/mkusse.py) */
-enum sgxws_builtin {
-   SGXWS_VS_XY,         /* gl_Position = vec4(a0.xy, 0, 1) */
-   SGXWS_VS_XYZ,        /* gl_Position = vec4(a0.xyz, 1) */
-   SGXWS_FS_UNIFORM,    /* gl_FragColor = mediump uniform vec4, FP16 at fs_consts[9..10] */
-};
-void sgxws_prog_builtin(struct sgxws_ctx *c, enum sgxws_builtin which, struct sgxws_prog *p);
-#define SGXWS_FS_UNIFORM_DWORDS 11
-#define SGXWS_FS_UNIFORM_OFF 9
-uint32_t sgxws_f16(float x);
-
-/* Start a frame into rt / target, unless it is the one being recorded.
- * Recording into another target first flushes the current frame. */
-int sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target *t);
-bool sgxws_recording(struct sgxws_ctx *c);
-
-/* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md "Clear") */
-int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth,
-                unsigned wmask);
-int sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d);
-/* Submit the frame; with timeout_ms, wait up to that long for its render (0
- * when done), else return once it is submitted.  A no-op when nothing is
- * recorded. */
-int sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms);
-/* wait for every submitted render */
-int sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms);
-/* wait for the renders up to kick number seq (0 when done; timeout 0 polls) */
-int sgxws_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms);
-/* the last kick known done, looking without waiting; the kick number the
- * frame being recorded will get (renders finish in kick order) */
-uint32_t sgxws_done_seq(struct sgxws_ctx *c);
-static inline uint32_t
-sgxws_next_seq(const struct sgxws_ctx *c)
-{
-   return c->kicks + 1;
-}
-static inline bool
-sgxws_seq_after(uint32_t a, uint32_t b)
-{
-   return (int32_t)(a - b) > 0;
-}
 /* wait for the renders that write a buffer (its sync's pending writes) */
 int sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms);
 

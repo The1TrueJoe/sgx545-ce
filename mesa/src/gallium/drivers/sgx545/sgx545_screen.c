@@ -183,7 +183,7 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
 /* a destroyed screen's connection and hardware context, for the next screen */
 static struct {
    int fd;
-   struct sgxws_dev dev;
+   struct sgxws_dev *dev;
    struct sgxws_ctx *hw;
 } kept = { .fd = -1 };
 static simple_mtx_t kept_lock = SIMPLE_MTX_INITIALIZER;
@@ -210,7 +210,7 @@ sgx545_screen_destroy(struct pipe_screen *pscreen)
    } else {
       if (screen->hw)
          sgxws_ctx_destroy(screen->hw);
-      sgxws_dev_fini(&screen->dev);
+      sgxws_dev_destroy(screen->dev);
       close(screen->dev_fd);
    }
    simple_mtx_unlock(&kept_lock);
@@ -225,7 +225,6 @@ struct pipe_screen *
 sgx545_screen_create(int fd, const struct pipe_screen_config *config)
 {
    struct sgx545_screen *screen = CALLOC_STRUCT(sgx545_screen);
-   int e;
 
    if (!screen)
       return NULL;
@@ -245,19 +244,15 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config)
       screen->dev_fd = kept.fd;
       screen->dev = kept.dev;
       screen->hw = kept.hw;
-      if (screen->hw)
-         screen->hw->dev = &screen->dev;   /* the device moved with it */
       kept.fd = -1;
       kept.hw = NULL;
    }
    simple_mtx_unlock(&kept_lock);
-   if (screen->dev_fd == fd && (e = sgxws_dev_init(&screen->dev, fd))) {
-      fprintf(stderr, "sgx545: no PVR services on fd %d: %d\n", fd, e);
+   if (screen->dev_fd == fd &&
+       !(screen->dev = sgxws_dev_create(fd, sgx545_debug & SGX545_DEBUG_FRAME))) {
       FREE(screen);
       return NULL;
    }
-   if (sgx545_debug & SGX545_DEBUG_FRAME)
-      screen->dev.verbose = 1;
    simple_mtx_init(&screen->lock, mtx_plain);
    slab_create_parent(&screen->transfer_pool, sizeof(struct sgx545_transfer), 16);
 

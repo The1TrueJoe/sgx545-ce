@@ -91,34 +91,98 @@ u8(float x)
 /* ------------------------------------------------------------------ memory */
 
 int
-sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx545_heap heap, uint32_t attribs,
-               uint32_t size, uint32_t align)
+sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx545_heap heap, uint32_t attribs,
+                    uint32_t size, uint32_t align)
 {
-   int e = pvr_alloc(&d->pvr, &bo->b, heap, attribs, size, align);
+   struct sgxws_bo_impl *impl = calloc(1, sizeof(*impl));
+   int e;
 
-   if (e) {
+   if (!impl)
+      return -ENOMEM;
+   if ((e = pvr_alloc(&d->pvr, &impl->b, heap, attribs, size, align))) {
       ws_err("ALLOC_DEVICEMEM heap %u size %#x failed: %d\n", heap, size, e);
+      free(impl);
       return e;
    }
-   if ((e = pvr_map(&d->pvr, &bo->b))) {
-      ws_err("map of %#x failed: %d\n", bo->b.devva, e);
-      pvr_free(&d->pvr, &bo->b);
+   if ((e = pvr_map(&d->pvr, &impl->b))) {
+      ws_err("map of %#x failed: %d\n", impl->b.devva, e);
+      pvr_free(&d->pvr, &impl->b);
+      free(impl);
       return e;
    }
-   bo->va = bo->b.devva;
-   bo->map = bo->b.cpu;
+   bo->impl = impl;
+   bo->va = impl->b.devva;
+   bo->map = impl->b.cpu;
    memset(bo->map, 0, size);
    if (d->verbose)
       ws_err("heap %2u %#010x +%#x\n", heap, bo->va, size);
    return 0;
 }
 
+/* a render target's sync data, mapped once: the CPU waits on it before reading */
+static void
+bo_map_sync(struct sgxws_dev *d, struct sgxws_bo *bo)
+{
+   bo->impl->sd = pvr_sync_data(&d->pvr, bo->impl->b.sync, &bo->impl->sync_map);
+}
+
+int
+sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem, uint32_t size,
+               uint32_t align)
+{
+   int e;
+
+   switch (mem) {
+   case SGXWS_MEM_RENDER_TARGET:
+      if (!(e = sgxws_bo_alloc_heap(d, bo, SGX545_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR, size, align)))
+         bo_map_sync(d, bo);
+      return e;
+   case SGXWS_MEM_TEXTURE:
+      return sgxws_bo_alloc_heap(d, bo, SGX545_HEAP_TEXTURE, 0x3, size, align);
+   case SGXWS_MEM_VERTEX:
+      return sgxws_bo_alloc_heap(d, bo, SGX545_HEAP_GENERAL, 0x1, size, align);
+   }
+   return -EINVAL;
+}
+
+int
+sgxws_bo_wrap(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu, uint32_t size)
+{
+   struct sgxws_bo_impl *impl = calloc(1, sizeof(*impl));
+   int e;
+
+   if (!impl)
+      return -ENOMEM;
+   if ((e = pvr_wrap(&d->pvr, &impl->b, cpu, size))) {
+      ws_err("WRAP_EXT_MEMORY of %u bytes failed: %d\n", size, e);
+      free(impl);
+      return e;
+   }
+   bo->impl = impl;
+   bo->va = impl->b.devva;
+   bo->map = impl->b.cpu;
+   bo_map_sync(d, bo);
+   return 0;
+}
+
 void
 sgxws_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo)
 {
-   pvr_free(&d->pvr, &bo->b);
+   if (!bo->impl)
+      return;
+   if (bo->impl->sd)
+      pvr_unmap(&d->pvr, &bo->impl->sync_map);
+   pvr_free(&d->pvr, &bo->impl->b);
+   free(bo->impl);
+   bo->impl = NULL;
    bo->va = 0;
    bo->map = NULL;
+}
+
+int
+sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms)
+{
+   return bo->impl && bo->impl->sd ? sgxws_wait_sync(bo->impl->sd, timeout_ms) : 0;
 }
 
 /* For the structures whose placement matters (the kernel-data and sync heap
@@ -126,14 +190,14 @@ sgxws_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo)
  * back to. */
 #define BO(d, bo, heap, attribs, size, align)                                   \
    do {                                                                         \
-      if (sgxws_bo_alloc(d, bo, heap, attribs, size, align))                    \
+      if (sgxws_bo_alloc_heap(d, bo, heap, attribs, size, align))               \
          goto fail;                                                             \
    } while (0)
 
 static int
 ring_init(struct sgxws_dev *d, struct sgxws_ring *r, enum sgx545_heap heap, uint32_t size)
 {
-   int e = sgxws_bo_alloc(d, &r->bo, heap, 0x1, size, 0x1000);
+   int e = sgxws_bo_alloc_heap(d, &r->bo, heap, 0x1, size, 0x1000);
 
    /* nothing at a heap's first byte: a PDS state word or DOUTU word of 0 would name it */
    r->used = r->mark = 0x100;
@@ -144,7 +208,7 @@ static void
 ring_mark(struct sgxws_ring *r)
 {
    r->mark = r->used;
-   r->part = ((r->bo.b.size - r->mark) / SGXWS_SLOTS) & ~0xffu;
+   r->part = ((r->bo.impl->b.size - r->mark) / SGXWS_SLOTS) & ~0xffu;
    r->hi = r->mark + r->part;
 }
 
@@ -159,7 +223,7 @@ ring_use_slot(struct sgxws_ring *r, unsigned k)
 static uint32_t
 ring_room(const struct sgxws_ring *r)
 {
-   return (r->hi ? r->hi : r->bo.b.size) - r->used;
+   return (r->hi ? r->hi : r->bo.impl->b.size) - r->used;
 }
 
 /* where something landed: device address and CPU pointer */
@@ -174,7 +238,7 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
    struct sgxws_ptr p;
    uint32_t o = (r->used + align - 1) & ~(align - 1);
 
-   if (o + size > (r->hi ? r->hi : r->bo.b.size)) {
+   if (o + size > (r->hi ? r->hi : r->bo.impl->b.size)) {
       /* sgxws_draw keeps the frame rings from filling; this is a bug */
       ws_err("ring at %#x full (%#x + %#x)\n", r->bo.va, o, size);
       abort();
@@ -449,6 +513,31 @@ sgxws_dev_fini(struct sgxws_dev *d)
 {
    pvr_disconnect(&d->pvr);
    pvr_trace_close(&d->pvr);
+}
+
+struct sgxws_dev *
+sgxws_dev_create(int fd, bool verbose)
+{
+   struct sgxws_dev *d = calloc(1, sizeof(*d));
+   int e;
+
+   if (!d)
+      return NULL;
+   if ((e = sgxws_dev_init(d, fd))) {
+      ws_err("no PVR services on fd %d: %d\n", fd, e);
+      free(d);
+      return NULL;
+   }
+   if (verbose)
+      d->verbose = 1;
+   return d;
+}
+
+void
+sgxws_dev_destroy(struct sgxws_dev *d)
+{
+   sgxws_dev_fini(d);
+   free(d);
 }
 
 /* ------------------------------------------------------------------ context */
@@ -1568,17 +1657,17 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    }
 
    memset(&k, 0, sizeof(k));
-   dst[0] = c->target.sync;
+   dst[0] = c->target.bo->impl->b.sync;
    k.hDevMemContext = c->dev->pvr.memctx;
-   k.hCCBKernelMemInfo = c->ccb.b.mem;
+   k.hCCBKernelMemInfo = c->ccb.impl->b.mem;
    k.ui32CCBOffset = woff + 0x58;
    k.sCommand.ui32Data[1] = c->hwctx_va;
-   k.hKernelHWSyncListMemInfo = s->hwsync.b.mem;
+   k.hKernelHWSyncListMemInfo = s->hwsync.impl->b.mem;
    k.ui32NumDstSyncObjects = 1;
    k.pahDstSyncHandles = dst;
    k.bFirstKickOrResume = IMG_TRUE;
    k.bLastInScene = IMG_TRUE;
-   k.h3DSyncInfo = c->sync3d.b.sync;
+   k.h3DSyncInfo = c->sync3d.impl->b.sync;
    c->ccb_woff = (woff + TA_CMD_SIZE) & (CCB_RING - 1);
    c->ccbctl.map[0] = c->ccb_woff;                  /* CCB write offset */
    __sync_synchronize();
@@ -1591,10 +1680,10 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
       c->ns_kick += now_ns() - t0;
       if (e) {
          ws_err("SGX_DOKICK failed: %d\n", e);
-      } else if (c->target.sync_data) {
+      } else if (c->target.bo->impl->sd) {
          /* the kick counted one more pending write on the target */
-         done.sd = c->target.sync_data;
-         done.value = c->target.sync_data->ui32WriteOpsPending;
+         done.sd = c->target.bo->impl->sd;
+         done.value = done.sd->ui32WriteOpsPending;
       }
    }
    done.seq = ++c->kicks;
@@ -1850,4 +1939,38 @@ clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
                                              NULL, NULL);
    }
    return c->clear_pds_masked[wmask];
+}
+
+uint32_t
+sgxws_next_seq(const struct sgxws_ctx *c)
+{
+   return c->kicks + 1;
+}
+
+unsigned
+sgxws_frame_objects(const struct sgxws_ctx *c)
+{
+   return c->draws;
+}
+
+void
+sgxws_get_stats(struct sgxws_ctx *c, struct sgxws_stats *st, bool reset)
+{
+   st->ns_flush = c->ns_flush;
+   st->ns_cmd = c->ns_cmd;
+   st->ns_kick = c->ns_kick;
+   st->ns_target_wait = c->ns_target_wait;
+   st->ns_slot_wait = c->ns_slot_wait;
+   st->ns_sync_wait = c->ns_sync_wait;
+   st->ns_fence_wait = c->ns_fence_wait;
+   st->ns_latency = c->ns_latency;
+   st->ns_latency_scanout = c->ns_latency_scanout;
+   st->n_latency = c->n_latency;
+   st->n_latency_scanout = c->n_latency_scanout;
+   st->room_flushes = c->room_flushes;
+   if (reset) {
+      c->ns_flush = c->ns_cmd = c->ns_kick = c->ns_target_wait = c->ns_slot_wait = 0;
+      c->ns_sync_wait = c->ns_fence_wait = c->ns_latency = c->ns_latency_scanout = 0;
+      c->n_latency = c->n_latency_scanout = c->room_flushes = 0;
+   }
 }

@@ -29,6 +29,14 @@ sgx545_kernel_args = [
   '-Wno-unused-parameter', '-Wno-sign-compare', '-Wno-missing-field-initializers',
 ]
 
+# The driver's view of the winsys: sgxws.h alone.  No services or kernel
+# headers on its include path, so nothing from kernel/src can reach the
+# gallium driver (AGENTS.md section 3.5).
+idep_sgx545_ws = declare_dependency(
+  include_directories : include_directories('.'),
+)
+
+# the winsys's own: libpvr and the kernel's bridge headers
 idep_sgx545_ws_headers = declare_dependency(
   include_directories : [include_directories('.', 'libpvr'), inc_sgx545_kernel],
   compile_args : sgx545_kernel_args,

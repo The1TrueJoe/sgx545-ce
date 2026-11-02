@@ -10,7 +10,7 @@
 #include "util/simple_mtx.h"
 #include "util/slab.h"
 
-#include "sgx545_frame.h"
+#include "sgxws.h"
 
 #define SGX545_DEBUG_FRAME (1 << 0)
 #define SGX545_DEBUG_NIR   (1 << 1)
@@ -31,7 +31,7 @@ struct sgx545_screen {
    int dev_fd;                  /* the fd the services connection lives on */
 
    /* the services connection; one per screen, used under lock */
-   struct sgxws_dev dev;
+   struct sgxws_dev *dev;
    simple_mtx_t lock;
    /* The one hardware render context (CCB, parameter buffer) of the process,
     * shared by every pipe context and serialised by the lock, as the DDK runs a

@@ -33,16 +33,18 @@ static struct sgxws_rt *
 get_rt(struct sgx545_context *ctx, uint32_t w, uint32_t h, uint32_t va)
 {
    for (unsigned i = 0; i < ctx->num_rts; i++)
-      if (ctx->rts[i]->w == w && ctx->rts[i]->h == h && ctx->rt_va[i] == va)
+      if (ctx->rt_w[i] == w && ctx->rt_h[i] == h && ctx->rt_va[i] == va)
          return ctx->rts[i];
    if (ctx->num_rts == SGX545_MAX_RTS) {
       for (unsigned i = 0; i < ctx->num_rts; i++)
-         if (ctx->rts[i]->w == w && ctx->rts[i]->h == h)
+         if (ctx->rt_w[i] == w && ctx->rt_h[i] == h)
             return ctx->rts[i];
       return NULL;
    }
    ctx->rts[ctx->num_rts] = sgxws_rt_create(ctx->hw, w, h);
    ctx->rt_va[ctx->num_rts] = va;
+   ctx->rt_w[ctx->num_rts] = w;
+   ctx->rt_h[ctx->num_rts] = h;
    return ctx->rts[ctx->num_rts] ? ctx->rts[ctx->num_rts++] : NULL;
 }
 
@@ -94,7 +96,7 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
               color->f[2], color->f[3], depth);
    if (debug_get_num_option("SGX545_DEBUG_ATTRS", 0))
       fprintf(stderr, "sgx545 clear %#x mask %#x depth %.3f, %u draws in the frame\n", buffers, color_clear_mask,
-              depth, ctx->hw ? ctx->hw->draws : 0);
+              depth, ctx->hw ? sgxws_frame_objects(ctx->hw) : 0);
    /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
     * b3); a buffer without alpha keeps its X byte written. A colour clear
     * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
@@ -486,7 +488,7 @@ vcache_alloc(struct sgx545_context *ctx, uint32_t bytes, uint32_t *offset)
       if (!k) {
          if (list_length(&ctx->vcache_chunks) >= 48 || !(k = calloc(1, sizeof(*k))))
             return NULL;
-         if (sgxws_bo_alloc(&screen->dev, &k->bo, SGX545_HEAP_GENERAL, 0x1, VCACHE_CHUNK, 0x1000)) {
+         if (sgxws_bo_alloc(screen->dev, &k->bo, SGXWS_MEM_VERTEX, VCACHE_CHUNK, 0x1000)) {
             free(k);
             return NULL;
          }
@@ -676,7 +678,7 @@ sgx545_draw_fini(struct sgx545_context *ctx)
    list_for_each_entry_safe(struct vcache_entry, v, &ctx->vcache_lru, link)
       vcache_free(ctx, v);
    list_for_each_entry_safe(struct vcache_chunk, k, &ctx->vcache_chunks, link) {
-      sgxws_bo_free(&screen->dev, &k->bo);
+      sgxws_bo_free(screen->dev, &k->bo);
       free(k);
    }
    simple_mtx_unlock(&screen->lock);

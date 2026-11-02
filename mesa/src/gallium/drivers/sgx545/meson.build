@@ -23,8 +23,7 @@ libsgx545 = static_library(
   include_directories : [
     inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
   ],
-  c_args : sgx545_kernel_args,
-  dependencies : [idep_nir, idep_mesautil, idep_sgx545_ws_headers, idep_sgx545_compiler],
+  dependencies : [idep_nir, idep_mesautil, idep_sgx545_ws, idep_sgx545_compiler],
 )
 
 driver_sgx545 = declare_dependency(
