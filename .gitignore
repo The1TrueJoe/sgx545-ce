@@ -16,3 +16,5 @@ cap/
 fw/
 gen/
 tools/tex/blitest-fake-native
+tools/iso/iso
+tools/iso/iso-fake
