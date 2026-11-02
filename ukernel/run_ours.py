@@ -140,10 +140,10 @@ def run_ours(code, man, events, ctxs):
             out += [("3D", a, v) for a, v in reg_writes(u)]
             event(u, mem, regs, man, EV_3D_END)   # -> render_done
             out += [("done", a, v) for a, v in reg_writes(u)]
-            cmd = k.ccb_va + k.ccb_off - 0x58
-            rd = mem.rd(cmd + 0x38)
+            # every memory write render_done makes (event() cleared the log, so
+            # mem.log is exactly the completion handler's writes)
             for (op, a, v, pc) in mem.log:
-                if op == "st" and (0x2d000000 <= a < 0x2e000000 or rd <= a < rd + 0x1ec):
+                if op == "st":
                     out.append(("done_mem", a, v))
     return out
 
@@ -194,8 +194,9 @@ def run_ddk_sync(fw, trace):
 
 
 def run_ddk_done(fw, trace):
-    """the DDK's sync-heap / render-details memory writes during render
-    completion (the '3D end of render' and 'DPM 3D memory free' phases)"""
+    """every memory write the DDK makes during render completion (the '3D end
+    of render' and 'DPM 3D memory free' phases): the sync-object updates and the
+    full render/RT/context teardown"""
     sys.path.insert(0, os.path.join(ROOT, "tools", "ukernel"))
     import importlib
     runmod = importlib.import_module("run")
@@ -206,7 +207,7 @@ def run_ddk_done(fw, trace):
     def flush(title):
         if title.startswith("3D end") or title.startswith("DPM 3D"):
             for (op, a, v, pc) in r.m.mem.log:
-                if op == "st" and 0x2d000000 <= a < 0x2e000000:
+                if op == "st":
                     out[a] = v
         orig(title)
     r.flush = flush
@@ -249,14 +250,20 @@ def main():
             tag = "MISSING" if ov is None else "DIFF"
             print(f"    {tag} {r:#010x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
         bad += len(miss)
-    # render completion: every sync-heap write ours makes must match the DDK's
+    # render completion: ours must reproduce every memory write the DDK makes
+    # during the teardown, with the same value (sync objects, render/RT/context
+    # slot free). EXTRA = a write ours makes that the DDK does not.
     ddk_done = run_ddk_done(a.ddk, a.trace)
-    ours_done = {r: v for (p, r, v) in out if p == "done_mem" and 0x2d000000 <= r < 0x2e000000}
-    dmiss = [(r, ours_done[r], ddk_done.get(r)) for r in ours_done if ddk_done.get(r) != ours_done[r]]
-    print(f"[done] ours {len(ours_done)} sync-heap writes (subset of the DDK's {len(ddk_done)})")
-    for r, ov, dv in sorted(dmiss):
-        print(f"    MISMATCH {r:#010x}: ours {ov:#010x} vs DDK " + ("(none)" if dv is None else f"{dv:#010x}"))
-    bad += len(dmiss)
+    ours_done = {r: v for (p, r, v) in out if p == "done_mem"}
+    dmiss = [(r, ddk_done[r], ours_done.get(r)) for r in ddk_done if ours_done.get(r) != ddk_done[r]]
+    extra = [r for r in ours_done if r not in ddk_done]
+    print(f"[done] DDK {len(ddk_done)} completion mem writes, ours {len(ours_done)}")
+    for r, dv, ov in sorted(dmiss):
+        tag = "MISSING" if ov is None else "DIFF"
+        print(f"    {tag} {r:#010x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
+    for r in sorted(extra):
+        print(f"    EXTRA   {r:#010x}: ours {ours_done[r]:#010x}")
+    bad += len(dmiss) + len(extra)
     for ph, ddk_phase in PHASE_MAP.items():
         om = ours_ph.get(ph, {})
         dm = {r: v for r, v in ddk.get(ddk_phase, {}).items() if r not in PLUMBING}

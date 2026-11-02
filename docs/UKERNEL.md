@@ -357,10 +357,28 @@ into the sync-object updates the host and the next client wait on.
   the next frame's dependency, observe the render as done. It then updates the
   render-in-flight list (removing the finished render) and raises the host
   interrupt (SW_EVENT), with `ui32InterruptFlags` telling the host it was a
-  normal completion.
+  normal completion. The render details carry the destination sync objects at
+  words 0x34 and 0x90 (a colour and a depth destination for a one-context
+  frame); their ops-pending word is cleared as the 3D drains.
 - **DPM 3D memory free.** After a render the parameter-buffer pages it used
   are returned to the free list; the handler runs the DPM free-list store and
-  updates the PB descriptor's in-use count.
+  updates the PB descriptor's in-use count. It also **tears the render down**:
+  the render-details state word (+0x2a4) moves to freed (2), its active flag
+  (+0x12c) and write-ops word (+0x108) clear, the RT-data entry is released
+  (its render back-pointer +0x4 → 0, state +0x34 → idle 0x10, and the RT-data
+  completion word → 1), and the context's in-flight render words (+0x28, +0x2c,
+  +0x3c) and the control block's in-flight slot (+0x50) empty. do_ta/do_3d set
+  those markers at kick and 3D-start; the teardown reverses them.
+
+The open microkernel (`ukernel/`) reproduces this exactly: `run_ours.py`'s
+`[done]` check confirms every one of the DDK's completion memory writes
+(sync-object clears plus the full slot free) over a frame, and `test_emu.py`'s
+`render teardown` guards it with no trace. Because one render context runs at
+a time and completes before the next kick, the **render-in-flight list is a
+single slot** (control block +0x50), cleared rather than unlinked — but it
+sits at the DDK's own field offsets, so the DDK microkernel stays a drop-in
+A/B reference (`docs/UKERNEL-DECISIONS.md`) and the cleanup/power handlers read
+the same slot to tell whether a render is running.
 
 Because the microkernel owns the sync objects and the free list after the
 first kick, a client that submits a render and then does not let it complete

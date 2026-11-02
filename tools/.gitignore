@@ -9,3 +9,4 @@ isa/*.so
 gen/frame
 gen/frame-fake
 gen/usse_progs.h
+gen/frame-fake-native
