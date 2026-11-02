@@ -206,6 +206,7 @@ Expectation to set in docs: the point of GL3 on this GPU is that apps start and 
 - Don't break openHC. `pvrsrvkm` + the overlay stay its shipping stack until the new driver replaces them.
 - Don't put uAPI in Mesa before the kernel side has merged. Don't write 32-bit compat structs in new uAPI. Don't copy `kernel/src` material into Mesa. Don't commit proprietary binaries.
 - Before code relies on any reverse-engineered fact, it goes into `docs/` with how it was established.
+- **Clean room (Joseph, 2026-11-01):** follow `docs/CLEANROOM.md`. Shipping code is written from `docs/` only, by sessions that have not read decompiles or listings for that subsystem; validation is black-box.
 - When a decision closes off options (driver name, firmware host-interface changes, the uAPI shape), write it into `docs/` with the reasoning and check it with Joseph first.
 
 ---
