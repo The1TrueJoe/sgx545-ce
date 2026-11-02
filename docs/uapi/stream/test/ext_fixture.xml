@@ -1,0 +1,55 @@
+<?xml version="1.0" ?>
+
+<!--
+SPDX-License-Identifier: MIT
+Copyright © 2026 Joseph Telaak
+-->
+
+<!--
+Test-only streams for the extension path of the decoder: two header types, an
+extension stream behind a quirk, and a 64-bit field after a 32-bit header so
+that the decoder must skip (and check) alignment bytes.
+-->
+
+<csbgen name="FIXTURE" prefix="KMD_STREAM">
+
+  <enum name="EXTHDR_TYPE_DEMO">
+    <value name="0" value="0"/>
+    <value name="1" value="1"/>
+  </enum>
+
+  <struct name="EXTHDR_DEMO0" length="1">
+    <field name="type" start="29" end="31" type="EXTHDR_TYPE_DEMO" default="0"/>
+    <field name="continuation" start="28" end="28" type="bool"/>
+    <field name="has_quirky" start="1" end="1" type="bool"/>
+    <field name="has_extra" start="0" end="0" type="bool"/>
+  </struct>
+
+  <struct name="EXTHDR_DEMO1" length="1">
+    <field name="type" start="29" end="31" type="EXTHDR_TYPE_DEMO" default="1"/>
+    <field name="continuation" start="28" end="28" type="bool"/>
+    <field name="has_more" start="2" end="2" type="bool"/>
+  </struct>
+
+  <struct name="HDR" length="2">
+    <field name="length" start="0" end="31" type="uint"/>
+  </struct>
+
+  <stream name="CMD_DEMO" length="1">
+    <field name="count" size="32" type="uint" check="range" min="1" max="4"/>
+  </stream>
+
+  <stream name="CMD_DEMO_EXT_EXTRA" length="3">
+    <field name="extra_bits" size="32" type="uint" check="mask" mask="0xf0"/>
+    <field name="extra_addr" size="64" type="address" shift="0" check="addr" align="8" extent="0x40"/>
+  </stream>
+
+  <stream name="CMD_DEMO_EXT_QUIRKY" length="1" quirk="1234">
+    <field name="quirky" size="32" type="uint" check="none"/>
+  </stream>
+
+  <stream name="CMD_DEMO_EXT_MORE" length="1">
+    <field name="more" size="32" type="uint" check="range" min="0" max_limit="tiles_x"/>
+  </stream>
+
+</csbgen>

@@ -521,6 +521,11 @@ def parse(text):
                     d[k] = inv[val] if val in inv else int(val, 0)
                 else:
                     d[k] = int(val, 0)
+            # a field the mode doesn't use (rpt= without rcnt) is an error, not dropped
+            for x in flags:
+                k = x.partition("=")[0]
+                if not any(y.active(d) for y in f.fields if y.name == k):
+                    raise ValueError(f"{k} not used here")
             # USEASM sets the format-select flag when any operand has a format flag; do the same
             if "fmt" not in d and any(f.name == "fmt" for f in f.fields) and any(
                     o.get("f16") or {"f16", "c10"} & set(o.get("sfx", [])) for o in ops):

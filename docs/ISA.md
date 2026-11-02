@@ -169,12 +169,73 @@ a LOD source and ld without a range operand write it in src2.
 
 ### Text notation and defaults
 
-- `(p0)` is the predicate field; the mnemonic's suffixes are the class's enum
-  fields by name. An enum value with no name prints as the field name and the
-  value: `dim3`, `ret3`, `pcf3`, `cfmt3`, `am3`, `alu<two hex digits>`, and
-  test's conditions as `s<sign>z<zero><o|a>`. A select value with no known
-  meaning prints as `x<value>` (`c1=x7`). smp's `cfmt` is h3-4 as one field
-  (1 `.f16` = h3, 2 `.c10` = h4, 3 both) and `pcf` is h5-6 the same way.
+`asm.py` takes, and `dis.py` prints, the syntax below. An encoding check
+compares words, so spellings that encode the same bits (bracket order,
+number base, spacing) are equivalent.
+
+    [(pred) ]mnemonic[.suffix ...] [operand, operand, ...][  [field field=v ...]]
+
+- **Predicate.** The 3-bit field (PRED3): no prefix 0, `(p0)`-`(p3)` 1-4,
+  `(!p0)` 5, `(!p1)` 6, `(pn)` 7 (lower case). The 2-bit field (PRED2, fdual):
+  `(p0)` 1, `(p1)` 2, `(!p0)` 3.
+- **Suffixes** are the class's enum fields by name, **in the order the class's
+  syntax line gives** (`smp.2d.rdata.f16.bias`, `ld.a.b`, `movc.nz.u8`,
+  `pck.f16.f32`, `test.fsub.lt`, `testmask.fpsub8.s1z1a.word`,
+  `fdual.fadm.mov`); the order is fixed. A field at a value whose name is
+  empty (smp's `ret`, `pcf`, `cfmt` and `lod` at 0) has no suffix. An enum
+  value with no name is the field name and the value: `dim3`, `ret3`, `pcf3`,
+  `cfmt3`, `am3`, `alu<two hex digits>`, and test's conditions
+  `s<sign>z<zero><o|a>`. smp's `cfmt` is h3-4 as one field (1 `.f16` = h3,
+  2 `.c10` = h4, 3 both) and `pcf` is h5-6 the same way.
+- **Operands** come in the order of the class's syntax line, separated by
+  commas. Registers are the prefix and a decimal number (`r3`, `pa12`, `c52`,
+  `g17`, `i1`, `idx1`); `#n` is an immediate. An indexed operand is
+  `bank[idx<k>+<off>]` with the offset always written (`pa[idx1+0]`;
+  `pa[idx1]` is rejected). Negate is `-x`, absolute value `|x|`, both `-|x|`
+  (not `|-x|`), each only in a slot with that bit.
+- **Format suffixes.** Under format select (the `fmt` field), an F16 r, o, pa
+  or sa operand is `r3.f16.lo` / `r3.f16.hi` (the number counts halves; a bare
+  `.f16` on them is an error). An F16 indexed, constant, immediate or internal
+  operand is a bare `.f16` that only sets bit 6: `pa[idx1+3].f16`, `c3.f16`,
+  `#3.f16`, `i1.f16` (`.lo` / `.hi` on them is an error). An f32 operand under
+  format select is written plain (`r40` is rejected: 6-bit numbers). Any format
+  suffix sets `fmt`. Write `[fmt]` when all the operands are f32. Under format
+  control (sop2, sopwm, the sop3 family, dot3/dot4, ima8, fpma) a C10 operand
+  is `pa4.c10` (a whole register), and for efo an F16 one is `r3.f16.lo` /
+  `.hi`. Either is accepted only while the enable is on.
+  hw 1's source format is not an operand suffix: its operand is plain and the
+  brackets carry `f16` (h7), `c10` (h8), `chan=n` (h3-4) and `f16d` (h2,
+  F16 destination).
+- **Numbers** print in decimal everywhere (`limm r1, #305419896`,
+  `ba #4215`). Wherever a number goes, `0x` hex is accepted too, and a signed
+  field takes `-n`: `br #-2` (relative to the branch), smoa, imo, smlsi
+  increments.
+- **Brackets.** There must be whitespace before the trailing `[` (an indexed
+  operand's `[` has none); dis.py writes two spaces. Inside, order doesn't
+  matter (dis.py prints a fixed order per class, not part of this spec). A
+  bare name is a one-bit field that is set; `name=v` is any other field.
+  An enum field in brackets takes its name or its number (`sd=i0s0` and `sd=3`
+  are the same); a select value with no known meaning is `x<value>` (`c1=x7`,
+  or `c1=7`). dis.py prints some bracket enums even at 0 (efo's `d= i= a= m=`,
+  sop2's selects), but they can be left out. A field the current mode doesn't
+  use is an error, not ignored: `rpt=4` without `rcnt` in the classes below.
+- **Repeat or mask (h21 `rcnt`)** in hw 1, mov / movc / op0xf3, pck, the
+  bitwise classes and smp: with h21 set, h12-15 is the repeat count, written
+  `rcnt` for a count of 1 and `rcnt rpt=n` otherwise. With h21 clear, h12-15
+  is the mask, written `mask=v` when it differs from the class's default
+  (below). The other classes write `rpt=n` directly.
+- **drc** (smp, ld, eld, ldr) is the bracket field `drc=n`, default 0. ld/st's
+  range operand is written if and only if `range` (h6) is set. smp's LOD
+  operand is written only when the `lod` suffix names one (`.bias`, `.lod`,
+  `.grad`). Otherwise src2 holds the unused-source pattern and nothing is
+  written for it.
+- **fdual** is `fdual.<pri>.<sec> dst, src0, src1, src2` with the selects
+  `sd=i0|i1|i2|i0s0`, `sb=i0|i1|i2|src1`, `sc=i0|i1|i2|src2` and
+  `msrc=i0|i1|i2|src0|src1|src2` (the values in the Dual issue table, in
+  order; `i0s0` is sd = 3).
+- **Format control** is program state. A text check starts at the program-start
+  state (C10 on, efo F16 off) and applies each `setfc #efo_f16, #c10` line in
+  the order the lines come.
 - Field widths are the word's; ranges a section quotes from libusc (imo
   -32..31, op0xfd n 0..8, the sizes and modes libusc rejects) are limits of
   its encoder. A value outside them still has the encoding the field gives;
@@ -316,7 +377,7 @@ values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
 | bits | field | meaning | evidence |
 |---|---|---|---|
 | h27-31 | opcode | hardware class | encoder |
-| h24-26 | pred | 0 always, 1 p0, 2 p1, 3 p2, 4 p3, 5 !p0, 6 !p1, 7 pN (per-instance predicate) | encoder (FUN_00106f30 maps USEASM 0-7 to these codes); the pN name is a **guess** |
+| h24-26 | pred | 0 always, 1 p0, 2 p1, 3 p2, 4 p3, 5 !p0, 6 !p1, 7 pn (per-instance predicate) | encoder (FUN_00106f30 maps USEASM 0-7 to these codes); the pn name is a **guess** |
 | h24-25 | pred (short form, fdual and some special ops) | 0 always, 1 p0, 2 p1, 3 !p0 | encoder |
 | h23 | skipinv | skip invalid instances (libusc INST_SKIPINV; set on nearly every compiled instruction) | encoder; name from libusc's flag name |
 | h20 | syncs | sync start (libusc INST_SYNCSTART) | encoder; name from libusc's flag name |
@@ -517,7 +578,7 @@ secondary computes into internal registers.
 | h24-25 | pred | short predicate |
 | h18, h19, h26 | pri | 0 fmad, 1 mov, 2 fadm, 3 fmsa, 4 fddp, 5 fminmax, 6 ima32 (USEASM 0x65), 7 fssq (USEASM 0xa7) |
 | h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fadm/fsubflr/ffrc, 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32 (USEASM 0x65), 15 mov |
-| h5, h13 | sd | secondary destination (and its first source): 0 i0, 1 i1, 2 i2, 3 i0 with the first source taken from the src0 slot |
+| h5, h13 | sd | secondary destination (and its first source): 0 i0, 1 i1, 2 i2, 3 `i0s0`: i0 with the first source taken from the src0 slot |
 | h14-15 | sb | secondary second source: i0, i1, i2, or 3 = the primary's src1 |
 | h10, h21 | sc | secondary third source: i0, i1, i2, or 3 = the src2 slot |
 | h14, h15, h21 | msrc | instead of sb/sc when the secondary is mov: 0 i0, 1 i1, 2 i2, 4 the src0 slot, 5 the src1 slot, 6 the src2 slot (USEASM int-source-selects 4/5/6; a register operand goes into whichever of src0/src2 the primary leaves free) |
@@ -1320,7 +1381,7 @@ shaders aren't supported on this core"), 0xb7/0xb8 (0xcd/0xce).
 
 ### hw 1c: smp (FUN_0010a3f0)
 
-`smp.<dim>[.bias|.lod|.grad][.f16|.c10][.pcf|.pcf16][.rdata|.rinfo] dst, coord, state[, lod]  [drc=n ...]`
+`smp.<dim>[.rdata|.rinfo][.pcf|.pcf16][.f16|.c10][.bias|.lod|.grad] dst, coord, state[, lod]  [drc=n ...]`
 
 Arguments (USEASM): dest, coordinate, texture state, [LOD source], DRC
 (register type 10, number 0/1), and int-source-select 0x15 (a fixed
@@ -1456,7 +1517,7 @@ predicate.
 | `savl dst` | h6-8 = 4 | save the link address to a register: dst in the destination slot's number and bank (l21-27, h0-1), no extension bit | as `setl` |
 | `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no arguments; needs word0 & 0x200000 | encoder; meaning unknown |
 
-Fields of ba/br/lapc/setl/savl: h24-26 pred (PRED3; pN rejected), h23 syncend (f1 b18;
+Fields of ba/br/lapc/setl/savl: h24-26 pred (PRED3; pn rejected), h23 syncend (f1 b18;
 asm.c's branch sync-end), h12 xsyncend (f3 b4: the encoder sets h12 and
 h23; not with f1 b18), h11 nosched, and for ba/br h9 link (f1 b19: save the
 return address; asm.c ICALL = `br` + this flag) and h10 f1_22 (meaning

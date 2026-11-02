@@ -1,17 +1,21 @@
-# SGX545 DRM uAPI: design draft
+# powervr_sgx: the SGX545 DRM uAPI, design draft
 
-The interface between a new Linux DRM render driver for the PowerVR SGX545 and its
-Mesa driver. This is M2 step 1 of `AGENTS.md` section 5. It follows the rules in
+The interface between `powervr_sgx`, a new Linux DRM render driver for the PowerVR SGX545,
+and its Mesa driver. This is M2 step 1 of `AGENTS.md` section 5. It follows the rules in
 `AGENTS.md` sections 3.1 to 3.3, and `include/uapi/drm/pvr_drm.h` is the model for its
 shape.
 
-The header is [`uapi/sgx_drm_draft.h`](uapi/sgx_drm_draft.h). It is a design aid and
-nothing outside `docs/uapi` includes it. `uapi/check.sh` compiles it for i386 and
-x86_64 against the literal layouts in `uapi/layout.inc`.
+The header is [`uapi/powervr_sgx_drm.h`](uapi/powervr_sgx_drm.h), named as
+`include/uapi/drm/<driver>_drm.h` headers are. It is a design aid and nothing outside
+`docs/uapi` includes it. `uapi/check.sh` compiles it for i386 and x86_64 against the
+literal layouts in `uapi/layout.inc`. The command streams are defined in
+[`uapi/powervr_sgx_kmd_stream.xml`](uapi/powervr_sgx_kmd_stream.xml) (section 3).
 
-`sgx545` in every identifier is a working placeholder (decision D1). Everything in
-section 10 is open until Joseph has decided it; where the draft needs one answer to be
-concrete, it uses the recommended one.
+Identifiers spell the driver name in full: `drm_powervr_sgx_*` and
+`DRM_IOCTL_POWERVR_SGX_*`. `pvr` is the prefix of upstream's Rogue driver, whose module is
+`powervr`, so a shorter `drm_pvr_sgx_*` would read as part of the Rogue uAPI (D1).
+
+Joseph decided D1 to D10 on 2026-11-02 (section 10); this draft follows those decisions.
 
 **Read section 7.2 first.** The whole isolation design rests on four properties of the
 hardware that `docs/` does not establish.
@@ -36,12 +40,13 @@ hardware that `docs/` does not establish.
   surfaces. These live in its VM and are read under its page directory. (capture for
   where they live, gap for what isolates them)
 - **A job is a validated copy, not a pointer.** Userspace passes the client's part of a
-  command as a small struct. The kernel copies it, checks it field by field and builds
-  the firmware command in kernel memory. It never reads a firmware-visible structure
+  command as a stream of scalars. The kernel copies it, checks it field by field and
+  builds the firmware command in kernel memory. It never reads a firmware-visible structure
   back from memory the client can write. (design)
 - **A word nobody can name is not client-controlled.** Where STATE.md tags a command
   word [G], the kernel writes the value the captures show and there is no uAPI field.
-  When a word gets a name and a test, a field is appended to the stream. (design, D5)
+  When a word gets a name and a test, an extension stream carries it (section 3.1).
+  (design, D5)
 - **The uAPI does not expose the host interface.** Streams carry meanings, not SGXMKIF
   offsets, so the firmware interface can change without touching this header. (design,
   D8)
@@ -51,7 +56,7 @@ What this replaces on the client side (`docs/DRIVER-UPSTREAM.md` section 4):
 | today, in the winsys | with this uAPI |
 |---|---|
 | services heaps and allocation attributes | GEM objects, `VM_MAP` |
-| CCB ring, `SGXMKIF_CMDTA` | `SUBMIT_JOBS` with `drm_sgx545_cmd_ta_kick` and `drm_sgx545_cmd_render` |
+| CCB ring, `SGXMKIF_CMDTA` | `SUBMIT_JOBS` with `CMD_TA_KICK` and `CMD_RENDER` streams |
 | render details, RT data, region headers, tail pointers, RT numbers | `CREATE_RT_DATASET`, kernel-built |
 | parameter buffer, descriptor, block list, free list, thresholds | `CREATE_CONTEXT.param_buffer_pages`, kernel-built |
 | HW render context | `CREATE_CONTEXT`, kernel-built |
@@ -65,7 +70,7 @@ What Mesa keeps writing, because the hardware reads it as data: every word in
 
 All are `DRM_RENDER_ALLOW`. The driver has no global or modeset ioctls. Numbers are
 offsets from `DRM_COMMAND_BASE`. Sizes are in section 6. The header carries full
-kerneldoc; `Documentation/gpu/sgx545/uapi.rst` pulls it in the way
+kerneldoc; `Documentation/gpu/powervr_sgx/uapi.rst` pulls it in the way
 `Documentation/gpu/imagination/uapi.rst` does.
 
 | # | ioctl | dir | purpose | rests on |
@@ -94,12 +99,12 @@ the two sizes. A NULL pointer returns the size.
 | `GPU_INFO_GET` | `core_id` and `core_revision`, raw from `EUR_CR_CORE_ID` and `EUR_CR_CORE_REVISION`; `fw_interface_version` | capture: rev `0x1000e` on the CE5300 (SRVINIT.md). gap: Cedarview's value (G25) |
 | `LIMITS_GET` | RT size and samples limits, PB min/default/max in pages, largest TA kick count | capture: default PB of 0x400 pages (STATE.md 6). gap: RT limits (G14) |
 | `QUIRKS_GET` | quirk numbers, mandatory ones first, as pvr | design. The list is empty on rev 1014 until an erratum that reaches userspace is documented (G25) |
-| `HEAP_INFO_GET` | array of `drm_sgx545_heap`, see section 5 | capture, section 5 |
+| `HEAP_INFO_GET` | array of `drm_powervr_sgx_heap`, see section 5 | capture, section 5 |
 
 ### CREATE_BO, GET_BO_MMAP_OFFSET
 
 GEM on `drm_gem_shmem`. Objects are zeroed at allocation, and PRIME goes through the DRM
-core. `DRM_SGX545_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds.
+core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds.
 The CPU mapping's cache mode is a kernel decision and not part of the uAPI. It defaults
 to write-combined until coherency is established (G19).
 
@@ -187,17 +192,17 @@ multisampled frame (G14). `flags` is reserved. `TE_AA`, `RT +0x10`, `+0x14`, `+0
 `{jobs (obj_array), failed_index}`. All-or-nothing: on error no job was queued, and
 `failed_index` names the job that caused it.
 
-`drm_sgx545_job`:
+`drm_powervr_sgx_job`:
 
 | field | meaning |
 |---|---|
 | `type` | `RENDER` or `TRANSFER` |
 | `context_handle` | context of the matching type |
-| `flags` | reserved |
-| `cmd_stream`, `cmd_stream_len` | `drm_sgx545_cmd_render` or `drm_sgx545_cmd_transfer` (section 3) |
+| `flags` | per type: transfer has `DST_TWIDDLED`, render has none yet |
+| `cmd_stream`, `cmd_stream_len` | a `CMD_RENDER` or `CMD_TRANSFER` stream (section 3) |
 | `sync_ops` | array of `{handle, flags, value}`, wait or signal, binary or timeline, as pvr |
 | `bo_refs` | array of `{handle, flags}`, read or write. Only shared objects need one (D6) |
-| `ta_kicks` | render only: array of `drm_sgx545_cmd_ta_kick`, at least one |
+| `ta_kicks` | render only: array of `drm_powervr_sgx_ta_kick` `{cmd_stream, cmd_stream_len, flags}`, each a `CMD_TA_KICK` stream; at least one |
 | `rt_dataset_handle` | render only |
 
 **A render job is a whole scene** (D3). The first element of `ta_kicks` is the kick with
@@ -214,8 +219,8 @@ Fences and errors:
   and on each `bo_refs` entry as read or write. In-fences of `bo_refs` become scheduler
   dependencies.
 - `-ECANCELED`: the context is not OK (section 8). `-EIO`: the device is lost. `-ENOENT`:
-  a handle is wrong. `-EINVAL`: a stream or job field failed validation (sections 3 and
-  4). `-EFAULT`: a pointer is bad.
+  a handle is wrong. `-EINVAL`: a stream is malformed, or a stream or job field failed
+  validation (section 3). `-EFAULT`: a pointer is bad.
 
 Kernel side, for orientation: one `drm_sched` scheduler for the GPU, one entity per
 context, and a hardware limit of one job at a time in the first version, since the open
@@ -225,50 +230,152 @@ unit, so no half-submitted scene can sit in the firmware waiting for userspace.
 
 ## 3. Client streams, field by field
 
-A "stream" here is a plain extensible struct (D2): short input is zero-extended, and
-unknown trailing bytes must be zero. The kernel keeps a table per struct, one entry per
-field with its validator, in the manner of `pvr_stream_defs.c`.
+### 3.1 Stream format
 
-### 3.1 `drm_sgx545_cmd_ta_kick`
+The client's part of each command is a `pvr_stream`-style scalar stream (D2), the way
+upstream's Rogue driver passes its geometry, fragment and transfer commands
+(`drivers/gpu/drm/imagination/pvr_stream.c`). There are three streams:
 
-| field | goes to | kernel check | evidence |
-|---|---|---|---|
-| `vdm_base` | cmd+0x250, then register 0x238 | below 2^32; 4-byte aligned; inside a mapping of this VM at submit | hardware (p7): moving it by 0x20 skips the clear |
-| `ta_flags2` | cmd+0x24c, then register 0x218 | only bits 19, 22, 23, 25 | capture for the values `0` and `0x2400000`; gap for their meaning (G12) |
+| stream | where | per |
+|---|---|---|
+| `CMD_RENDER` | `drm_powervr_sgx_job.cmd_stream` of a render job | scene: the 3D values |
+| `CMD_TA_KICK` | `drm_powervr_sgx_ta_kick.cmd_stream`, one per element of `ta_kicks` | kick |
+| `CMD_TRANSFER` | `drm_powervr_sgx_job.cmd_stream` of a transfer job | transfer |
 
-The register also takes "a low-bits field" and "DPM bits" from the microkernel
-(UKERNEL.md section 7). Both are outside the client's reach.
+A stream is little-endian and laid out as follows (design; framing as `pvr_stream`):
 
-### 3.2 `drm_sgx545_cmd_render`
+1. A header of two `__u32`: the main stream's length in bytes, header included, then a
+   word that must be 0.
+2. The main stream: the fields in definition order, each naturally aligned from the start
+   of the stream (a 64-bit field on 8 bytes).
+3. Optionally, extension streams. Each group is announced by a `__u32` header: bits 29-31
+   are the header type, bit 28 says another header follows, and bits 0-27 hold one bit per
+   extension stream. The streams whose bits are set follow in bit order.
 
-| field | goes to | kernel check | evidence |
-|---|---|---|---|
-| `depth_addr` | rd+0x30 and +0x34, as offset from the ZLS base | below 2^32; if not 0, mapped for `pad_w·pad_h·4` bytes; required when `zls_control` is not 0 | capture: words; hardware: store at this address (TEX.md 7) |
-| `stencil_addr` | rd+0x38 and +0x3c, b31 + offset | below 2^32; if not 0, mapped for `pad_w·pad_h` bytes; required when `zls_control` b0 or b1, or `flags_3d` b8 | capture: words; hardware: a bad stencil address locks up the 3D (TEX.md 7) |
-| `pixel_event_pds_addr` | rd+0x5c, then register 0xa5c | inside `PDS_PIXEL`; 16-byte aligned; mapped | capture |
-| `pixel_event_pds_rows` | rd+0x60, then register 0xa60 | 1..63; the program's rows must lie inside the mapping | capture (5 rows) |
-| `bg_pds_secondary_addr` | cmd+0x08 | inside `PDS_PIXEL`; 16-byte aligned | capture |
-| `bg_pds_secondary_rows` | cmd+0x08 b26-31 | 1..63 | capture |
-| `bg_pds_primary_addr` | cmd+0x10 | inside `PDS_PIXEL`; 16-byte aligned | capture |
-| `bg_pds_primary_rows` | cmd+0x10 b26-31 | 1..63 | capture |
-| `zls_control` | rd+0x2c, then register 0x480 | only b0-2 and b12-20; bits 3-11 must be 0, the kernel writes `(xt-1)<<3` | hardware for store, b19 and b0 (TEX.md 7); gap for load and bit names (G13) |
-| `flags_3d` | cmd+0x1c | only b7, b8 | capture for the value `0x580`; gap for the names (G12) |
-| `bg_depth` | rd+0x40, then register 0x4b8 | none: a value in a register | hardware (p3b) |
-| `depth_bias_units` | rd+0x14 | none | capture (`polyoff`) |
-| `depth_bias_factor` | rd+0x18 | none | capture (`polyoff`) |
+The kernel copies the stream (at most 4 KiB) into kernel memory once, then decodes it.
+Where this is stricter than `pvr_stream.c`, the reason is that our fields get checked and
+pvr's do not:
+
+| rule | `pvr_stream.c` | here |
+|---|---|---|
+| main stream length | at least the header and at most the stream | **exactly** the length the kernel knows |
+| bytes skipped to align a field | ignored | must be 0 |
+| bytes after the last extension stream | ignored | `-EINVAL` |
+| the same header type twice | accepted | `-EINVAL` |
+| field values | copied into the firmware command | checked one by one (section 3.2), then across fields (sections 3.3 to 3.5) |
+
+**Growth.** A main stream never changes once released, so an old client's stream always
+decodes. A new field goes in an extension stream behind a new header bit. The driver's minor
+version (`drmGetVersion`) tells a client which bits a kernel accepts, as for any DRM uAPI
+addition; a bit tied to a hardware quirk is also listed by `QUIRKS_GET`. This is how D5 works
+with streams: a command
+word that gets a name and a test becomes an extension-stream field, and until then the
+kernel writes the captured constant. pvr's per-field `feature` flags exist for Rogue's BVNC
+variants. Nothing here needs them yet. If Cedarview diverges (G25), an extension stream
+behind a quirk carries the difference, and a must-have quirk makes it mandatory, as in pvr.
+
+**Fields carry values, not firmware words.** pvr's stream fields are register images that
+Mesa packs. Here a field is a value in the client's units, such as an address or a row
+count, and the kernel packs the firmware word. Each field can then be checked on its own,
+and the client never does arithmetic on kernel-chosen bases like `EUR_CR_PDS_EXEC_BASE`.
+Words that hold real register bit fields (`zls_control`, `flags_3d`, `ta_flags2`) are
+passed as register words with an allowed-bit mask.
+
+**Check order** for each stream of a job: copy, decode with the per-field checks, check the
+addresses against the job's VM (`mapped`), then run the command's cross-field rules. Any
+failure is `-EINVAL` and `failed_index` names the job.
+
+### 3.2 Field layout and kernel checks
+
+Generated from [`uapi/powervr_sgx_kmd_stream.xml`](uapi/powervr_sgx_kmd_stream.xml) by
+`uapi/gen_stream.py`; `uapi/check.sh` fails if this table is stale. Offsets are from the
+start of the stream.
+
+- **address** fields are device-virtual addresses in the job's VM. "below 2^32" and the
+  alignment and heap checks are made at decode. "mapped for" is checked against the VM's
+  mappings at submit: `rt_depth` is `pad_w·pad_h·4` and `rt_stencil` is `pad_w·pad_h` of
+  the job's RT dataset (section 3.4).
+- "reaches a register only" means the value goes into a register or a firmware word that
+  the hardware reads as a number, with no address in it. Nothing outside the VM depends on
+  it.
+- The `tiles_x` and `tiles_y` limits are the last tile column and row of the largest render
+  target (`rt_max_width/32 - 1`, `rt_max_height/16 - 1`).
+
+<!-- stream-table begin: generated by docs/uapi/gen_stream.py -->
+| stream | offset | field | bits | type | kernel check |
+|---|---|---|---|---|---|
+| `CMD_RENDER` | 0x00 | header: `length` = 80, then a zero word | 64 | | exact |
+| | 0x08 | `depth_addr` | 64 | address | 0 = none; below 2^32; mapped for `rt_depth` bytes |
+| | 0x10 | `stencil_addr` | 64 | address | 0 = none; below 2^32; mapped for `rt_stencil` bytes |
+| | 0x18 | `pixel_event_pds_addr` | 64 | address | not 0; below 2^32; in `PDS_PIXEL`; 16-byte aligned; mapped for 16·`pixel_event_pds_rows` bytes |
+| | 0x20 | `bg_pds_secondary_addr` | 64 | address | not 0; below 2^32; in `PDS_PIXEL`; 16-byte aligned |
+| | 0x28 | `bg_pds_primary_addr` | 64 | address | not 0; below 2^32; in `PDS_PIXEL`; 16-byte aligned |
+| | 0x30 | `pixel_event_pds_rows` | 32 | uint | 1..63 |
+| | 0x34 | `bg_pds_secondary_rows` | 32 | uint | 1..63 |
+| | 0x38 | `bg_pds_primary_rows` | 32 | uint | 1..63 |
+| | 0x3c | `zls_control` | 32 | uint | bits in `0x001ff007` only |
+| | 0x40 | `flags_3d` | 32 | uint | bits in `0x00000180` only |
+| | 0x44 | `bg_depth` | 32 | float | none: reaches a register only |
+| | 0x48 | `depth_bias_units` | 32 | int | none: reaches a register only |
+| | 0x4c | `depth_bias_factor` | 32 | float | none: reaches a register only |
+| `CMD_TA_KICK` | 0x00 | header: `length` = 20, then a zero word | 64 | | exact |
+| | 0x08 | `vdm_base` | 64 | address | not 0; below 2^32; 4-byte aligned; mapped for 0x4 bytes |
+| | 0x10 | `ta_flags2` | 32 | uint | bits in `0x02c80000` only |
+| `CMD_TRANSFER` | 0x00 | header: `length` = 48, then a zero word | 64 | | exact |
+| | 0x08 | `bg_block_addr` | 64 | address | not 0; below 2^32; 16-byte aligned; mapped for 0x200 bytes |
+| | 0x10 | `pixel_event_pds_addr` | 64 | address | not 0; below 2^32; in `PDS_PIXEL`; 16-byte aligned; mapped for 16·`pixel_event_pds_rows` bytes |
+| | 0x18 | `pixel_event_pds_rows` | 32 | uint | 1..63 |
+| | 0x1c | `first_tile_x` | 32 | uint | 0..`tiles_x` limit |
+| | 0x20 | `first_tile_y` | 32 | uint | 0..`tiles_y` limit |
+| | 0x24 | `last_tile_x` | 32 | uint | 0..`tiles_x` limit |
+| | 0x28 | `last_tile_y` | 32 | uint | 0..`tiles_y` limit |
+| | 0x2c | `bg_depth` | 32 | float | none: reaches a register only |
+<!-- stream-table end -->
 
 Where a field says "mapped", that is a programming-error check made at submit time. A
 client can unmap afterwards, so this check is not a security boundary: section 7.1 says
 what is.
 
+### 3.3 `CMD_TA_KICK`
+
+| field | goes to | evidence |
+|---|---|---|
+| `vdm_base` | cmd+0x250, then register 0x238 | hardware (p7): moving it by 0x20 skips the clear |
+| `ta_flags2` | cmd+0x24c, then register 0x218 | capture for the values `0` and `0x2400000`; gap for their meaning (G12) |
+
+The register also takes "a low-bits field" and "DPM bits" from the microkernel
+(UKERNEL.md section 7). Both are outside the client's reach. Which kick is first and which
+is last comes from the kick's position in `ta_kicks` (D3), not from the stream.
+
+### 3.4 `CMD_RENDER`
+
+| field | goes to | evidence |
+|---|---|---|
+| `depth_addr` | rd+0x30 and +0x34, as offset from the ZLS base | capture: words; hardware: store at this address (TEX.md 7) |
+| `stencil_addr` | rd+0x38 and +0x3c, b31 + offset | capture: words; hardware: a bad stencil address locks up the 3D (TEX.md 7) |
+| `pixel_event_pds_addr` | rd+0x5c, then register 0xa5c | capture |
+| `pixel_event_pds_rows` | rd+0x60, then register 0xa60 | capture (5 rows) |
+| `bg_pds_secondary_addr`, `bg_pds_secondary_rows` | cmd+0x08 | capture |
+| `bg_pds_primary_addr`, `bg_pds_primary_rows` | cmd+0x10 | capture |
+| `zls_control` | rd+0x2c, then register 0x480; bits 3-11 are the kernel's `(xt-1)<<3` | hardware for store, b19 and b0 (TEX.md 7); gap for load and bit names (G13) |
+| `flags_3d` | cmd+0x1c; bit 10 is the kernel's, on the last kick | capture for the value `0x580`; gap for the names (G12) |
+| `bg_depth` | rd+0x40, then register 0x4b8 | hardware (p3b) |
+| `depth_bias_units` | rd+0x14 | capture (`polyoff`) |
+| `depth_bias_factor` | rd+0x18 | capture (`polyoff`) |
+
+Cross-field rules, in the kernel's render check:
+
+| rule | evidence |
+|---|---|
+| `depth_addr` is not 0 when `zls_control` is not 0 | hardware: ZLS stores to it (TEX.md 7) |
+| `stencil_addr` is not 0 when `zls_control` has bit 0 or 1, or `flags_3d` has bit 8 | hardware: a bad stencil address locks up the 3D (TEX.md 7) |
+| depth and stencil each lie less than 2^30 above the ZLS request base, `min(depth, stencil) & 0xfff00000` | capture for the base (STATE.md 6); the 2^30 limit is a guess (G13) |
+
 `pad_w` and `pad_h` are the target's size rounded up to whole tiles, 32 and 16 pixels.
 That fits the one window capture: 736×480 at 4 bytes (TEX.md 7, `00081000` to `001da000`).
-Other sizes are a gap (G13).
-
-The kernel computes the ZLS request base as `min(depth, stencil) & 0xfff00000` (capture,
-STATE.md 6). The draft requires the offsets to fit below bit 30. That limit is a guess
-(G13): TEX.md 7 attributes its lockups to the placeholder `c1b00000` most likely being out
-of range, but no test has found the actual range.
+Other sizes are a gap (G13). The draft's limit on the ZLS offsets is a guess (G13): TEX.md 7
+attributes its lockups to the placeholder `c1b00000` most likely being out of range, but no
+test has found the actual range.
 
 The cmd+0x08 and +0x10 words are packed by the kernel as
 `rows<<26 | (addr - PDS_PIXEL base)>>4`, and cmd+0x0c takes the constant `0x00030001`
@@ -279,17 +386,22 @@ exist because later kicks can only send what changed. Here the kernel writes the
 set when it builds the job and uses deferred updates only where its firmware path needs
 them.
 
-### 3.3 `drm_sgx545_cmd_transfer`
+### 3.5 `CMD_TRANSFER`
 
-| field | goes to | kernel check | evidence |
-|---|---|---|---|
-| `bg_block_addr` | word 0 `1<<25 \| (block - base)>>4`; word 6 base `= block & 0xfff00000` | below 2^32; 16-byte aligned; mapped for 0x200 bytes | capture: words; hardware: blits from these words (TEX.md 10) |
-| `pixel_event_pds_addr` | word 9, then register 0xa5c | inside `PDS_PIXEL`; 16-byte aligned; mapped | capture |
-| `pixel_event_pds_rows` | word 10 | 1..63 | capture (5) |
-| `flags` | `DST_TWIDDLED`: cmd+0xa8 = 8 | only known flags | hardware (TEX.md 10) |
-| `first_tile_x`, `first_tile_y` | word 12 `x<<16 \| y` | at most last; below the limit | capture: word; hardware: sub-rectangles (TEX.md 10) |
-| `last_tile_x`, `last_tile_y` | word 13 `x<<16 \| y` | at least first; below the limit | capture: word; hardware: sub-rectangles |
-| `bg_depth` | word 2, then register 0x4b8 | none | capture (1.0) |
+| field | goes to | evidence |
+|---|---|---|
+| `bg_block_addr` | word 0 `1<<25 \| (block - base)>>4`; word 6 base `= block & 0xfff00000` | capture: words; hardware: blits from these words (TEX.md 10) |
+| `pixel_event_pds_addr` | word 9, then register 0xa5c | capture |
+| `pixel_event_pds_rows` | word 10 | capture (5) |
+| `first_tile_x`, `first_tile_y` | word 12 `x<<16 \| y` | capture: word; hardware: sub-rectangles (TEX.md 10) |
+| `last_tile_x`, `last_tile_y` | word 13 `x<<16 \| y` | capture: word; hardware: sub-rectangles |
+| `bg_depth` | word 2, then register 0x4b8 | capture (1.0) |
+
+Cross-field rule: `first_tile_x <= last_tile_x` and `first_tile_y <= last_tile_y`.
+
+`DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED` in `drm_powervr_sgx_job.flags` sets
+cmd+0xa8 = 8 (hardware, TEX.md 10). Like pvr's per-command flags, it is a job flag, not a
+stream field.
 
 Transfer words the kernel fills, with no client field (capture, TEX.md 3 and 10):
 
@@ -312,6 +424,24 @@ Everything else about a blit is client memory, read by the hardware under its pa
 directory: the background block with its PDS triple, the pixel program with the source's
 texture words, and the end-of-tile program with the destination's PBE words (TEX.md 3).
 
+### 3.6 One definition, both sides
+
+| file | what | who uses it |
+|---|---|---|
+| `uapi/powervr_sgx_kmd_stream.xml` | the streams, in the format of Mesa's `src/imagination/csbgen` (as `rogue/kmd_stream.xml`), plus validation attributes | the source of everything below |
+| Mesa's `gen_pack_header.py` | reads the XML; emits the defines and the `HDR` and `EXTHDR_*` packers. It parses `<stream>` and emits nothing for it, as for Rogue | Mesa |
+| `uapi/gen_stream.py user` | a writer per main stream (`SGX_KMD_STREAM_CMD_*_pack()`) with each field's offset | Mesa (G26) |
+| `uapi/gen_stream.py kernel-h`, `kernel-c` | the decoded structs and the tables: order, size, check, heap, extent | the kernel; generated copies in `uapi/stream/` |
+| `uapi/stream/powervr_sgx_stream.c` | the decoder: framing, per-field checks, the mapped check | reference for the kernel driver |
+| `uapi/stream/powervr_sgx_cmd_checks.c` | the cross-field rules of sections 3.4 and 3.5 | reference for the kernel driver (G27) |
+| `uapi/stream/test/` | host test: every stream written by the generated writer decodes to the same values, and each rule rejects the stream that breaks it; a fixture exercises extension streams, quirks and must-have bits | `check.sh` |
+
+csbgen ignores attributes it doesn't know, which is how `rogue/kmd_stream.xml` already
+carries the kernel-only `feature`. The validation attributes ride the same way: `check`
+(`none`, `range`, `mask`, `addr`), `min`, `max`, `max_limit`, `mask`, `align`, `heap`,
+`optional`, `extent`, `extent_field`, and `quirk` on an extension stream. The XML's header
+comment defines them.
+
 ## 4. How every word of the firmware commands is produced
 
 Column **how**: `U` from the stream, `K-obj` a kernel object's address, `K-calc` computed
@@ -323,7 +453,7 @@ by the kernel, `K-const` a captured constant.
 |---|---|---|---|---|
 | 0x00 | command size | K-calc | `0x2b0 + 8·n`, rounded up to 64 | capture |
 | 0x04 | TA flags | K-calc | by kick position: `0x71` first, `0x62` last | capture; gap for the bits and for middle kicks (G12) |
-| 0x08, 0x10 | background PDS secondary, primary | U | section 3.2 | capture |
+| 0x08, 0x10 | background PDS secondary, primary | U | section 3.4 | capture |
 | 0x0c | background PDS middle word | K-const | `0x00030001` | capture; gap for meaning |
 | 0x14, 0x18 | | K-const | `0x50000000` | capture |
 | 0x1c | 3D flags | U + K-calc | `flags_3d`; b10 set on the last kick | capture |
@@ -450,34 +580,37 @@ asserts with literal numbers, so that both targets passing means the layouts are
 negative control (`-DCHECK_NEGATIVE`, a `__u64` after a lone `__u32`) has to fail on both
 targets. It also compiles the header as C++ and checks this table against `layout.inc`.
 
+Streams have no C layout. Their offsets are in section 3.2, generated from the XML. Each
+field is naturally aligned from the stream's start, so a stream is the same bytes on both
+targets by construction. `check.sh` checks the rest: the committed kernel tables match the
+XML, the decoder compiles for both targets, and the stream test passes.
+
 <!-- layout-table begin: generated by docs/uapi/gen_table.py -->
 | struct | size | members: `offset name (size)` |
 |---|---|---|
-| `drm_sgx545_obj_array` | 16 | `0x00 stride (4)`, `0x04 count (4)`, `0x08 array (8)` |
-| `drm_sgx545_dev_query_gpu_info` | 16 | `0x00 core_id (4)`, `0x04 core_revision (4)`, `0x08 fw_interface_version (4)`, `0x0c _padding_c (4)` |
-| `drm_sgx545_dev_query_limits` | 32 | `0x00 rt_max_width (4)`, `0x04 rt_max_height (4)`, `0x08 rt_max_samples (4)`, `0x0c pb_min_pages (4)`, `0x10 pb_default_pages (4)`, `0x14 pb_max_pages (4)`, `0x18 max_ta_kicks (4)`, `0x1c _padding_1c (4)` |
-| `drm_sgx545_dev_query_quirks` | 16 | `0x00 quirks (8)`, `0x08 count (2)`, `0x0a musthave_count (2)`, `0x0c _padding_c (4)` |
-| `drm_sgx545_heap` | 32 | `0x00 base (8)`, `0x08 size (8)`, `0x10 flags (4)`, `0x14 page_size_log2 (4)`, `0x18 usse_base_index (4)`, `0x1c usse_window_log2 (4)` |
-| `drm_sgx545_dev_query_heap_info` | 16 | `0x00 heaps (16)` |
-| `drm_sgx545_ioctl_dev_query_args` | 16 | `0x00 type (4)`, `0x04 size (4)`, `0x08 pointer (8)` |
-| `drm_sgx545_ioctl_create_bo_args` | 24 | `0x00 size (8)`, `0x08 handle (4)`, `0x0c _padding_c (4)`, `0x10 flags (8)` |
-| `drm_sgx545_ioctl_get_bo_mmap_offset_args` | 16 | `0x00 handle (4)`, `0x04 _padding_4 (4)`, `0x08 offset (8)` |
-| `drm_sgx545_ioctl_create_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
-| `drm_sgx545_ioctl_destroy_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
-| `drm_sgx545_ioctl_vm_map_args` | 40 | `0x00 vm_context_handle (4)`, `0x04 flags (4)`, `0x08 device_addr (8)`, `0x10 handle (4)`, `0x14 _padding_14 (4)`, `0x18 offset (8)`, `0x20 size (8)` |
-| `drm_sgx545_ioctl_vm_unmap_args` | 24 | `0x00 vm_context_handle (4)`, `0x04 _padding_4 (4)`, `0x08 device_addr (8)`, `0x10 size (8)` |
-| `drm_sgx545_ioctl_create_context_args` | 24 | `0x00 type (4)`, `0x04 flags (4)`, `0x08 priority (4)`, `0x0c vm_context_handle (4)`, `0x10 param_buffer_pages (4)`, `0x14 handle (4)` |
-| `drm_sgx545_ioctl_destroy_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
-| `drm_sgx545_ioctl_get_context_state_args` | 16 | `0x00 handle (4)`, `0x04 state (4)`, `0x08 reset_count (4)`, `0x0c _padding_c (4)` |
-| `drm_sgx545_ioctl_create_rt_dataset_args` | 24 | `0x00 context_handle (4)`, `0x04 width (4)`, `0x08 height (4)`, `0x0c samples (4)`, `0x10 flags (4)`, `0x14 handle (4)` |
-| `drm_sgx545_ioctl_destroy_rt_dataset_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
-| `drm_sgx545_cmd_ta_kick` | 16 | `0x00 vdm_base (8)`, `0x08 ta_flags2 (4)`, `0x0c _padding_c (4)` |
-| `drm_sgx545_cmd_render` | 72 | `0x00 depth_addr (8)`, `0x08 stencil_addr (8)`, `0x10 pixel_event_pds_addr (8)`, `0x18 bg_pds_secondary_addr (8)`, `0x20 bg_pds_primary_addr (8)`, `0x28 pixel_event_pds_rows (4)`, `0x2c bg_pds_secondary_rows (4)`, `0x30 bg_pds_primary_rows (4)`, `0x34 zls_control (4)`, `0x38 flags_3d (4)`, `0x3c bg_depth (4)`, `0x40 depth_bias_units (4)`, `0x44 depth_bias_factor (4)` |
-| `drm_sgx545_cmd_transfer` | 48 | `0x00 bg_block_addr (8)`, `0x08 pixel_event_pds_addr (8)`, `0x10 pixel_event_pds_rows (4)`, `0x14 flags (4)`, `0x18 first_tile_x (4)`, `0x1c first_tile_y (4)`, `0x20 last_tile_x (4)`, `0x24 last_tile_y (4)`, `0x28 bg_depth (4)`, `0x2c _padding_2c (4)` |
-| `drm_sgx545_sync_op` | 16 | `0x00 handle (4)`, `0x04 flags (4)`, `0x08 value (8)` |
-| `drm_sgx545_bo_ref` | 8 | `0x00 handle (4)`, `0x04 flags (4)` |
-| `drm_sgx545_job` | 80 | `0x00 type (4)`, `0x04 context_handle (4)`, `0x08 flags (4)`, `0x0c cmd_stream_len (4)`, `0x10 cmd_stream (8)`, `0x18 sync_ops (16)`, `0x28 bo_refs (16)`, `0x38 ta_kicks (16)`, `0x48 rt_dataset_handle (4)`, `0x4c _padding_4c (4)` |
-| `drm_sgx545_ioctl_submit_jobs_args` | 24 | `0x00 jobs (16)`, `0x10 failed_index (4)`, `0x14 _padding_14 (4)` |
+| `drm_powervr_sgx_obj_array` | 16 | `0x00 stride (4)`, `0x04 count (4)`, `0x08 array (8)` |
+| `drm_powervr_sgx_dev_query_gpu_info` | 16 | `0x00 core_id (4)`, `0x04 core_revision (4)`, `0x08 fw_interface_version (4)`, `0x0c _padding_c (4)` |
+| `drm_powervr_sgx_dev_query_limits` | 32 | `0x00 rt_max_width (4)`, `0x04 rt_max_height (4)`, `0x08 rt_max_samples (4)`, `0x0c pb_min_pages (4)`, `0x10 pb_default_pages (4)`, `0x14 pb_max_pages (4)`, `0x18 max_ta_kicks (4)`, `0x1c _padding_1c (4)` |
+| `drm_powervr_sgx_dev_query_quirks` | 16 | `0x00 quirks (8)`, `0x08 count (2)`, `0x0a musthave_count (2)`, `0x0c _padding_c (4)` |
+| `drm_powervr_sgx_heap` | 32 | `0x00 base (8)`, `0x08 size (8)`, `0x10 flags (4)`, `0x14 page_size_log2 (4)`, `0x18 usse_base_index (4)`, `0x1c usse_window_log2 (4)` |
+| `drm_powervr_sgx_dev_query_heap_info` | 16 | `0x00 heaps (16)` |
+| `drm_powervr_sgx_ioctl_dev_query_args` | 16 | `0x00 type (4)`, `0x04 size (4)`, `0x08 pointer (8)` |
+| `drm_powervr_sgx_ioctl_create_bo_args` | 24 | `0x00 size (8)`, `0x08 handle (4)`, `0x0c _padding_c (4)`, `0x10 flags (8)` |
+| `drm_powervr_sgx_ioctl_get_bo_mmap_offset_args` | 16 | `0x00 handle (4)`, `0x04 _padding_4 (4)`, `0x08 offset (8)` |
+| `drm_powervr_sgx_ioctl_create_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
+| `drm_powervr_sgx_ioctl_destroy_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
+| `drm_powervr_sgx_ioctl_vm_map_args` | 40 | `0x00 vm_context_handle (4)`, `0x04 flags (4)`, `0x08 device_addr (8)`, `0x10 handle (4)`, `0x14 _padding_14 (4)`, `0x18 offset (8)`, `0x20 size (8)` |
+| `drm_powervr_sgx_ioctl_vm_unmap_args` | 24 | `0x00 vm_context_handle (4)`, `0x04 _padding_4 (4)`, `0x08 device_addr (8)`, `0x10 size (8)` |
+| `drm_powervr_sgx_ioctl_create_context_args` | 24 | `0x00 type (4)`, `0x04 flags (4)`, `0x08 priority (4)`, `0x0c vm_context_handle (4)`, `0x10 param_buffer_pages (4)`, `0x14 handle (4)` |
+| `drm_powervr_sgx_ioctl_destroy_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
+| `drm_powervr_sgx_ioctl_get_context_state_args` | 16 | `0x00 handle (4)`, `0x04 state (4)`, `0x08 reset_count (4)`, `0x0c _padding_c (4)` |
+| `drm_powervr_sgx_ioctl_create_rt_dataset_args` | 24 | `0x00 context_handle (4)`, `0x04 width (4)`, `0x08 height (4)`, `0x0c samples (4)`, `0x10 flags (4)`, `0x14 handle (4)` |
+| `drm_powervr_sgx_ioctl_destroy_rt_dataset_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
+| `drm_powervr_sgx_ta_kick` | 16 | `0x00 cmd_stream (8)`, `0x08 cmd_stream_len (4)`, `0x0c flags (4)` |
+| `drm_powervr_sgx_sync_op` | 16 | `0x00 handle (4)`, `0x04 flags (4)`, `0x08 value (8)` |
+| `drm_powervr_sgx_bo_ref` | 8 | `0x00 handle (4)`, `0x04 flags (4)` |
+| `drm_powervr_sgx_job` | 80 | `0x00 type (4)`, `0x04 context_handle (4)`, `0x08 flags (4)`, `0x0c cmd_stream_len (4)`, `0x10 cmd_stream (8)`, `0x18 sync_ops (16)`, `0x28 bo_refs (16)`, `0x38 ta_kicks (16)`, `0x48 rt_dataset_handle (4)`, `0x4c _padding_4c (4)` |
+| `drm_powervr_sgx_ioctl_submit_jobs_args` | 24 | `0x00 jobs (16)`, `0x10 failed_index (4)`, `0x14 _padding_14 (4)` |
 <!-- layout-table end -->
 
 ## 7. Threat model
@@ -593,13 +726,13 @@ check it.
 | address | checks | dereferenced by | if it is wrong |
 |---|---|---|---|
 | `vdm_base` | below 2^32, aligned, mapped at submit | HW (VDM) | fault or hang in this VM |
-| `depth_addr`, `stencil_addr` | below 2^32, extents mapped, ZLS allow-list and pairing (section 3.2) | HW (ZLS) | **hardware:** 3D lockup, and once a failed recovery and a power cycle (TEX.md 7) |
+| `depth_addr`, `stencil_addr` | below 2^32, extents mapped, ZLS allow-list and pairing (section 3.4) | HW (ZLS) | **hardware:** 3D lockup, and once a failed recovery and a power cycle (TEX.md 7) |
 | `pixel_event_pds_addr` | in `PDS_PIXEL`, aligned, rows mapped | HW (PDS) | fault or hang |
 | `bg_pds_secondary_addr`, `bg_pds_primary_addr` | in `PDS_PIXEL`, aligned | HW (PDS) | fault or hang |
 | `bg_block_addr` (transfer) | below 2^32, aligned, 0x200 bytes mapped | HW (ISP) | fault or hang |
 | transfer `pixel_event_pds_addr` | as above | HW (PDS) | fault or hang |
 | `VM_MAP.device_addr` | below 2^32, page aligned, inside one heap, no overlap | kernel | `-EINVAL` or `-EEXIST` |
-| `sync_ops`, `bo_refs`, `ta_kicks`, `jobs`, `cmd_stream`, `DEV_QUERY.pointer`, `quirks`, `heaps` | CPU user pointers: `copy_from_user` | kernel | `-EFAULT` |
+| `sync_ops`, `bo_refs`, `ta_kicks`, `jobs`, `cmd_stream` (job and kick), `DEV_QUERY.pointer`, `quirks`, `heaps` | CPU user pointers: `copy_from_user` | kernel | `-EFAULT` |
 
 **Class B:** inside client memory, read by the hardware at draw time. The kernel doesn't
 look at these and can't: the client can change them after submit, and a shader can compute
@@ -643,7 +776,10 @@ Each rule in sections 2 to 5 gets an IGT negative test: reserved fields non-zero
 outside the allow-lists, addresses above 2^32 and outside heaps, unaligned PDS and VDM
 addresses, extents crossing the end of a mapping, `zls_control` b0 with no stencil,
 `ta_kicks` empty and over the limit, render jobs on transfer contexts and the reverse,
-handles from another file. M2's exit test, that one client can't corrupt another, needs
+handles from another file. Malformed streams too: a non-zero header word, a main stream of
+the wrong length, non-zero alignment bytes, trailing bytes, an unknown header type or bit,
+a header type twice, a stream over 4 KiB. `uapi/stream/test/stream_test.c` already runs
+each of these against the reference decoder on the host. M2's exit test, that one client can't corrupt another, needs
 P1 to P4 as positive tests from an actual shader. It can't be met by ioctl tests alone.
 
 ## 8. Hardware recovery as userspace sees it
@@ -682,6 +818,7 @@ kernel's scheduler timeout, are gaps (G17). The draft uses the scheduler timeout
 | part | status |
 |---|---|
 | Struct layouts, on both targets | **Proven** by the compile (`uapi/check.sh`) |
+| Stream framing, per-field and cross-field checks | **Tested** on the host against the reference decoder (`uapi/stream/test`); not yet in a kernel |
 | Ioctl set and shape | **Follows pvr**; the reasoning is sound, but no code has run against it |
 | Heap bases | **capture** |
 | USSE reach, PDS address formats, request bases, free-list limit | **capture and hardware** |
@@ -696,14 +833,19 @@ kernel's scheduler timeout, are gaps (G17). The draft uses the scheduler timeout
 ## 10. Decisions for Joseph
 
 Joseph went through all ten on 2026-11-02; each section starts with what was decided. Two
-change the draft: the name (D1, `powervr_sgx`) and the stream encoding (D2), which sections
-2, 3 and 6 and `docs/uapi/sgx_drm_draft.h` don't reflect yet. D9 waits on one more hardware
-test.
+changed the draft: the name (D1, `powervr_sgx`) and the stream encoding (D2). Both are now
+applied, in sections 2, 3 and 6, `uapi/powervr_sgx_drm.h` and the stream definition
+`uapi/powervr_sgx_kmd_stream.xml`. Where D2 needed something the other decisions don't
+settle, it is a gap (G26, G27), not a change to them. D9's register-write test has run (D9).
 
 ### D1. Driver name (module, DRM name, Mesa loader key)
 
-**Decided (Joseph, 2026-11-02): `powervr_sgx`.** The draft below still uses the `sgx545`
-placeholder until the rename. The original recommendation follows.
+**Decided (Joseph, 2026-11-02): `powervr_sgx`.** Applied: the module and DRM name are
+`powervr_sgx`, the header is `powervr_sgx_drm.h` after upstream's `<driver>_drm.h`, and
+identifiers are `drm_powervr_sgx_*`, `DRM_IOCTL_POWERVR_SGX_*` and `DRM_POWERVR_SGX_*`.
+pvr's identifiers use `pvr` although its module is `powervr`; the same shortening here
+(`drm_pvr_sgx_*`) would read as part of the Rogue uAPI, so the name is spelled in full. The
+original recommendation follows.
 
 **Recommendation: `sgx545`,** to be confirmed with the Imagination maintainers before any
 RFC. Upstream's Rogue driver is `powervr`, so `pvr` and `powervr` are taken. Plain `sgx` is
@@ -717,9 +859,10 @@ placeholder is one search-and-replace from any of these, until something merges.
 ### D2. Stream encoding
 
 **Decided (Joseph, 2026-11-02): a `pvr_stream`-style stream, as `AGENTS.md` section 3.2
-describes,** with field layouts held in Mesa's tables as upstream's Rogue driver does. The
-struct layouts in section 3 and `docs/uapi/sgx_drm_draft.h` still need converting to it. The
-original recommendation follows.
+describes,** with field layouts held in Mesa's tables as upstream's Rogue driver does.
+Applied in section 3: `pvr_stream` framing, made stricter (section 3.1), with the field
+tables in one csbgen-format XML that generates the kernel's tables and the userspace
+writer (section 3.6). The original recommendation follows.
 
 **Recommendation: plain extensible structs in the uAPI header,** validated by a per-field
 kernel table. pvr's `pvr_stream` format (scalar stream, extension headers, formats held
@@ -876,9 +1019,11 @@ Facts the design needs that `docs/` doesn't have.
 | G17 | Hang detection: which core hung, EDM timer path, signature registers' use, how the host learns it | section 8 | UKERNEL.md 5a, 9 |
 | G18 | PB overflow: DPM out-of-memory path, thresholds, partial renders | D10 | UKERNEL.md, STATE.md 6 |
 | G19 | CPU and GPU coherency: `ui32CacheControl` bits, what the BIF snoops, CPU mapping modes | `CREATE_BO`, fence ordering | UKERNEL.md |
-| G20 | Transfer: word 1, 3, 4, 5, 14, +0x194 meanings; word 11 (code size in TEX.md, a flag in UKERNEL.md); register 0x408 (region headers on a render, depth/stencil block on a transfer); transfer destination sync in the open microkernel (UKERNEL.md section 10) | section 3.3, transfer fences | TEX.md, UKERNEL.md |
+| G20 | Transfer: word 1, 3, 4, 5, 14, +0x194 meanings; word 11 (code size in TEX.md, a flag in UKERNEL.md); register 0x408 (region headers on a render, depth/stencil block on a transfer); transfer destination sync in the open microkernel (UKERNEL.md section 10) | section 3.5, transfer fences | TEX.md, UKERNEL.md |
 | G21 | What state needs rebuilding after a soft reset, per structure | section 8 | UKERNEL.md 5a |
 | G22 | Interrupts: can the kernel identify which job completed from host control fields alone? | fences | UKERNEL.md 5 |
 | G23 | Power: what type 3 needs for runtime PM (states, resume path) | kernel | UKERNEL.md |
 | G24 | Per-context firmware state beyond the HW context: words 8-15 and the fields at +0x3c and +0x40 that the commands use | `CREATE_CONTEXT` | STATE.md 6 |
 | G25 | Cedarview: `EUR_CR_CORE_REVISION` for 10131, errata, heap layout, microkernel differences; documented errata for 1014 | quirks, M4 | STATE.md, NOTES.md |
+| G26 | Stream tooling in Mesa (from D2). csbgen parses `<stream>` but emits nothing for it; Rogue writes its streams by hand in the XML's order. Our writer comes from `gen_stream.py`, and the XML carries validation attributes csbgen ignores. Whether Mesa takes `gen_stream.py` beside csbgen (or a `<stream>` emitter in csbgen), and the attributes in its XML, is the Mesa maintainers' call. The kernel's tables are generated from that file and committed; kernel reviewers may want the source in the kernel tree instead | M3 winsys, M5 | `AGENTS.md` 3.7, DRIVER-UPSTREAM.md |
+| G27 | Cross-field rules (from D2). csbgen refuses unknown tags, so rules that join fields (section 3.4's depth and stencil requirements and ZLS offset limit, section 3.5's tile order) are hand-written in the kernel's per-command check, not generated. They are the one part of the validation with two copies, section 3 and `powervr_sgx_cmd_checks.c`, so a rule added to one can be missed in the other | validators | UAPI.md 3, `uapi/stream/` |

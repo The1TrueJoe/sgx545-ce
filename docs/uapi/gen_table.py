@@ -33,7 +33,7 @@ def table():
             end += sz
         if end != size:
             raise SystemExit(f"{name}: members end at {end}, size is {size}")
-    header = pathlib.Path(__file__).with_name("sgx_drm_draft.h").read_text()
+    header = pathlib.Path(__file__).with_name("powervr_sgx_drm.h").read_text()
     declared = set(re.findall(r"^struct (\w+) \{$", header, re.M))
     if declared != set(structs):
         raise SystemExit(f"header and layout.inc differ: {declared ^ set(structs)}")

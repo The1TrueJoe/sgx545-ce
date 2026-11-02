@@ -2,7 +2,7 @@
 // Copyright © 2026 Joseph Telaak
 
 /*
- * Static proof that sgx_drm_draft.h has one layout. layout.inc holds literal
+ * Static proof that powervr_sgx_drm.h has one layout. layout.inc holds literal
  * offsets and sizes, so this compiling on i386 and on x86_64 means the two layouts
  * are equal. -Wpadded (check.sh) separately refuses any implicit padding.
  *
@@ -12,7 +12,7 @@
 
 #include <stddef.h>
 
-#include "sgx_drm_draft.h"
+#include "powervr_sgx_drm.h"
 
 /* Natural alignment of a member, regardless of the target's ABI quirk for __u64. */
 #define NATURAL(off, size) ((off) % (size) == 0)
@@ -70,19 +70,19 @@ _Static_assert(check_member_bytes == check_struct_bytes,
 #define IOW_NR(n, sz)  (0x40000000u | ((unsigned)(sz) << 16) | 0x6400u | (0x40u + (n)))
 #define IOWR_NR(n, sz) (0xc0000000u | ((unsigned)(sz) << 16) | 0x6400u | (0x40u + (n)))
 
-_Static_assert(DRM_IOCTL_SGX545_DEV_QUERY == IOWR_NR(0x00, 16), "DEV_QUERY");
-_Static_assert(DRM_IOCTL_SGX545_CREATE_BO == IOWR_NR(0x01, 24), "CREATE_BO");
-_Static_assert(DRM_IOCTL_SGX545_GET_BO_MMAP_OFFSET == IOWR_NR(0x02, 16), "GET_BO_MMAP_OFFSET");
-_Static_assert(DRM_IOCTL_SGX545_CREATE_VM_CONTEXT == IOWR_NR(0x03, 8), "CREATE_VM_CONTEXT");
-_Static_assert(DRM_IOCTL_SGX545_DESTROY_VM_CONTEXT == IOW_NR(0x04, 8), "DESTROY_VM_CONTEXT");
-_Static_assert(DRM_IOCTL_SGX545_VM_MAP == IOW_NR(0x05, 40), "VM_MAP");
-_Static_assert(DRM_IOCTL_SGX545_VM_UNMAP == IOW_NR(0x06, 24), "VM_UNMAP");
-_Static_assert(DRM_IOCTL_SGX545_CREATE_CONTEXT == IOWR_NR(0x07, 24), "CREATE_CONTEXT");
-_Static_assert(DRM_IOCTL_SGX545_DESTROY_CONTEXT == IOW_NR(0x08, 8), "DESTROY_CONTEXT");
-_Static_assert(DRM_IOCTL_SGX545_GET_CONTEXT_STATE == IOWR_NR(0x09, 16), "GET_CONTEXT_STATE");
-_Static_assert(DRM_IOCTL_SGX545_CREATE_RT_DATASET == IOWR_NR(0x0a, 24), "CREATE_RT_DATASET");
-_Static_assert(DRM_IOCTL_SGX545_DESTROY_RT_DATASET == IOW_NR(0x0b, 8), "DESTROY_RT_DATASET");
-_Static_assert(DRM_IOCTL_SGX545_SUBMIT_JOBS == IOWR_NR(0x0c, 24), "SUBMIT_JOBS");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_DEV_QUERY == IOWR_NR(0x00, 16), "DEV_QUERY");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_CREATE_BO == IOWR_NR(0x01, 24), "CREATE_BO");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET == IOWR_NR(0x02, 16), "GET_BO_MMAP_OFFSET");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT == IOWR_NR(0x03, 8), "CREATE_VM_CONTEXT");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT == IOW_NR(0x04, 8), "DESTROY_VM_CONTEXT");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_VM_MAP == IOW_NR(0x05, 40), "VM_MAP");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_VM_UNMAP == IOW_NR(0x06, 24), "VM_UNMAP");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT == IOWR_NR(0x07, 24), "CREATE_CONTEXT");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT == IOW_NR(0x08, 8), "DESTROY_CONTEXT");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE == IOWR_NR(0x09, 16), "GET_CONTEXT_STATE");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET == IOWR_NR(0x0a, 24), "CREATE_RT_DATASET");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET == IOW_NR(0x0b, 8), "DESTROY_RT_DATASET");
+_Static_assert(DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS == IOWR_NR(0x0c, 24), "SUBMIT_JOBS");
 
 #ifdef CHECK_NEGATIVE
 /* 16 bytes with an implicit hole on x86_64, 12 on i386: the assert must fire. */
@@ -95,5 +95,5 @@ _Static_assert(offsetof(struct check_i386_trap, b) == 8, "i386 packs a __u64 aft
 #endif
 
 /* Reference the ABI so the translation unit is not empty. */
-extern const unsigned long sgx545_uapi_struct_bytes;
-const unsigned long sgx545_uapi_struct_bytes = check_struct_bytes;
+extern const unsigned long powervr_sgx_uapi_struct_bytes;
+const unsigned long powervr_sgx_uapi_struct_bytes = check_struct_bytes;

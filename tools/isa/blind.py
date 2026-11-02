@@ -4,6 +4,9 @@
     python3 -I tools/isa/blind.py gen SEED OUT.json       one random valid instruction per form
     python3 -I tools/isa/blind.py text KEY.json           the instruction texts, numbered (hand these over)
     python3 -I tools/isa/blind.py score KEY.json WORDS    compare "n hi lo ..." lines with the key
+    python3 -I tools/isa/blind.py table FILE...           check "<text> ; <lo> <hi>" lines written by
+                                                          the implementation side (setfc lines update
+                                                          format control; # starts a comment)
 
 gen draws random words per form, clears the bits the form doesn't use, and
 keeps a word only if it decodes to that form and its text re-encodes to the
@@ -58,6 +61,46 @@ def text(path):
         print(f"{n}\t{k['text']}")
 
 
+def diff_text(v, w):
+    """the bits of w that differ from the expected word v, and their ISA.md fields"""
+    diff = v ^ w
+    f = next(x for x in hw.FORMS if x.matches(v))
+    names = [fl.name for fl in f.fields if hw.mask(fl.spec) & diff]
+    for o in f.ops:
+        for part in ("num", "bank", "ext", "neg", "abs"):
+            spec = getattr(o, part)
+            if spec and hw.mask(spec) & diff:
+                names.append(f"{o.role} {part}")
+    bits = " ".join(hw.bname(b) for b in range(64) if diff >> b & 1)
+    return f"bits {bits} [{', '.join(dict.fromkeys(names))}]"
+
+
+def table(paths):
+    ok = bad = rej = 0
+    for path in paths:
+        hw.CTX["fc"] = 2
+        for ln, line in enumerate(open(path), 1):
+            if line.lstrip().startswith("#") or ";" not in line:
+                continue
+            t, _, w = line.partition(";")
+            w = w.split()
+            got = int(w[1], 16) << 32 | int(w[0], 16)
+            try:
+                lo, hi = hw.encode(hw.parse(t))
+            except Exception as e:
+                rej += 1
+                print(f"{path}:{ln} rejected {t.strip()!r}: {e}")
+                continue
+            hw.track(hw.decode(lo, hi))
+            v = hi << 32 | lo
+            if v == got:
+                ok += 1
+                continue
+            bad += 1
+            print(f"{path}:{ln} {t.strip()[:60]:60} {diff_text(v, got)}")
+    print(f"{ok} exact, {bad} differ, {rej} rejected")
+
+
 def score(path, words):
     key = json.load(open(path))
     got = {}
@@ -74,16 +117,7 @@ def score(path, words):
         if n not in got:
             print(f"{n:3} missing")
             continue
-        diff = v ^ got[n]
-        f = next(x for x in hw.FORMS if x.matches(v))
-        names = [fl.name for fl in f.fields if hw.mask(fl.spec) & diff]
-        for o in f.ops:
-            for part in ("num", "bank", "ext", "neg", "abs"):
-                spec = getattr(o, part)
-                if spec and hw.mask(spec) & diff:
-                    names.append(f"{o.role} {part}")
-        bits = " ".join(hw.bname(b) for b in range(64) if diff >> b & 1)
-        print(f"{n:3} {k['text'][:60]:60} bits {bits} [{', '.join(dict.fromkeys(names))}]")
+        print(f"{n:3} {k['text'][:60]:60} {diff_text(v, got[n])}")
     print(f"{ok}/{len(key)} exact")
 
 
@@ -95,5 +129,7 @@ if __name__ == "__main__":
         text(a[1])
     elif a[:1] == ["score"]:
         score(a[1], a[2])
+    elif a[:1] == ["table"]:
+        table(a[1:])
     else:
         sys.exit(__doc__)
