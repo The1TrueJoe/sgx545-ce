@@ -122,7 +122,13 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
 
       /* The ISP starts every render at depth 1.0 (render details +0x40), so
        * a depth clear only needs drawing when it is not 1.0. */
-      sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? color->f : black, (float)depth,
+      /* a buffer without alpha reads it as 1 wherever it's sampled: clear the X byte to that */
+      float rgba[4] = { color->f[0], color->f[1], color->f[2], color->f[3] };
+
+      if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
+          !util_format_has_alpha(ctx->framebuffer.cbufs[0].format))
+         rgba[3] = 1.0f;
+      sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? rgba : black, (float)depth,
                   have_depth && (buffers & PIPE_CLEAR_DEPTH), wmask, clear_stencil ? (int)stencil : -1);
    }
    simple_mtx_unlock(&screen->lock);

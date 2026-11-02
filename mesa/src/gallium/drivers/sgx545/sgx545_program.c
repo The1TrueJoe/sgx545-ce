@@ -447,7 +447,7 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
    if (kind == SGX_LAYOUT_ATTRIB) {
       nir_foreach_shader_in_variable(var, nir) {
          if (var->name)
-            next = MAX2(next, var->data.driver_location + 1);
+            next = MAX2(next, var->data.driver_location + glsl_count_attribute_slots(var->type, true));
       }
    }
    return next;
@@ -482,7 +482,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    if (vertex) {
       nir_foreach_shader_in_variable(var, nir) {
          if (var->name)
-            so->n_attribs = MAX2(so->n_attribs, var->data.driver_location + 1);
+            so->n_attribs = MAX2(so->n_attribs, var->data.driver_location + glsl_count_attribute_slots(var->type, true));
       }
    }
    if (sgx545_debug & SGX545_DEBUG_NIR)
