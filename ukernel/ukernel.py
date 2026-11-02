@@ -35,7 +35,12 @@ writes against the DDK's.
 SA_SELF = 0          # the control block's own device address
 SA_HOSTCTL = 1       # SGXMKIF_HOST_CTL address
 SA_KCCBCTL = 2       # kernel CCB control (write/read offsets)
-SA_KCCB = 16         # kernel CCB base
+SA_KCCB = 0x16       # kernel CCB base, control block +0x58. This is the DDK's
+                     # own slot: srvinit writes it at t[0x16] and the DDK model
+                     # keeps it there (tools/ukernel/sgxsim.py, +0x58). (It read
+                     # word 16 = +0x40 before — an unset slot — so the kick read
+                     # the command from a garbage address and wedged the core;
+                     # EA1 HW-confirmed 2026-11-02.)
 # our one-context scratch (control block words we own; written to memory so the
 # next task's DMA brings them back)
 SC_CTX = 0x30
@@ -51,9 +56,11 @@ SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
                      # none). Lets the 3D-end handler tell a transfer's completion
                      # from a render's. (openHC's own slot; a transfer and a
                      # render never overlap on one context.)
-SC_VERSION = 0x16    # control block +0x58: openHC microkernel version, written
+SC_VERSION = 0x18    # control block +0x60: openHC microkernel version, written
                      # at init. Advisory (the DDK driver does not read it); an
                      # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
+                     # A free slot: it was 0x16 before, which is the kernel CCB
+                     # base — init overwrote that base with the version word.
 OPENHC_UK_VERSION = 0x00010000   # 1.0
 TRANSFERCMD_BYTES = 0x1c0   # SGXMKIF_TRANSFERCMD size (docs/TEX.md §3)
 # transfer completion: the shared command's destination-sync descriptor and the

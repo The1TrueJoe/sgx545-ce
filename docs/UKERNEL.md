@@ -141,7 +141,9 @@ hardware-event bit is set, and `kick` returns at once if the CCB is empty.
 microkernel sets it (via `raise_host_irq`) to signal the host, and the host's
 ISR clears it. Gating the host kick on `SW_EVENT`, as openHC first did, never
 fired — EA1 HW-confirmed 2026-11-02: `GETMISCINFO` sat unconsumed with
-`EVENT_STATUS = 0`. Fixed; HW confirmation of the serviced kick pending.
+`EVENT_STATUS = 0`. Fixed and HW-confirmed on the EA1 (srvinit rc=0, GETMISCINFO
+validates, kernel CCB `WO == RO`); the kernel CCB base slot also had to be
+corrected (`SA_KCCB` word 0x16, not 16) — see §4.
 The groups, with the status bit each corresponds to:
 
 | event | status bit | handler, in outline |
@@ -365,21 +367,25 @@ one fixed:
    re-triggered the event program forever, because openHC read only
    `EUR_CR_EVENT_STATUS`. The dispatch now acknowledges it (§2). HW-confirmed:
    STATUS2 `0x400`→`0`.
-2. **Fixed (HW-confirm pending) — the host kick is not a status bit.** With
-   STATUS2 clean the kick was still not serviced: `EUR_CR_EVENT_STATUS & 0x4000`
-   was never set when the event program read it (EA1 dump: `EVENT_STATUS = 0`,
-   `sw_event: no`), so the SW_EVENT-gated dispatch never branched to `kick`; the
-   `GETMISCINFO` command sat queued (CCB `WO` > `RO`) and the core looped through
-   HWR. Root cause (from `sgxutils.c SGXScheduleCCBCommand`): the host kicks via
-   the `EUR_CR_EVENT_KICK` doorbell, which sets **no** status bit — the command
-   is found by the kernel CCB write offset ≠ read offset. The dispatch now falls
-   through to `kick` when no hardware-event bit is set, and `kick` returns at once
-   if the CCB is empty; the bogus SW_EVENT acknowledge is removed (§2). Offline:
-   `test_commands` get-misc-info 21/21 and `run_ours` 5/5 MATCH with the kick
-   driven the hardware way (doorbell + WO≠RO, no SW_EVENT). HW confirmation of a
-   serviced kick is pending an EA1 slot.
+2. **Fixed, HW-CONFIRMED — the host kick is serviced.** Two fixes: (a) the host
+   kick is the `EUR_CR_EVENT_KICK` doorbell (no status bit, `sgxutils.c`), found
+   by the kernel CCB write ≠ read offset, not `SW_EVENT` — dispatch now falls
+   through to `kick`, the bogus SW_EVENT ack is removed (§2); (b) the kernel CCB
+   base lives at control-block word **0x16** (+0x58), but `SA_KCCB` read word 16
+   (+0x40) and `SC_VERSION` sat on 0x16 so `init` overwrote the base — so the kick
+   read the command from garbage and ran a bogus `do_ta`. `SA_KCCB = 0x16`,
+   `SC_VERSION = 0x18`. On the EA1: `srvinit` returns rc=0 ("SGX545 microkernel
+   started"), the `GETMISCINFO` DDK-version validate passes, Kernel CCB `WO == RO`
+   (commands consumed). Offline: `test_emu` 5/5, `test_commands` 21/21, `run_ours`
+   5/5 — all driven the hardware way.
+3. **Open — SGXOSTimer "0x2 tasks" HWR on the idle microkernel.** After `srvinit`
+   exits with no client following, a periodic lockup/HWR recurs (~0.5 s) though
+   commands keep being consumed (`WO == RO`). A post-init idle-stability issue
+   (the lockup check reads the `B_TASIG`/`B_3DSIG` signatures and task count), not
+   the kick path. The next thing to chase; likely tied to the power-idle handshake.
 
 Full evidence and next steps:
+`docs/log/entries/2026-11-02-2100-ukernel-ea1-kick-serviced.md` (current),
 `docs/log/entries/2026-11-02-2045-ukernel-ea1-host-kick.md` and
 `docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md`, then
 `docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier

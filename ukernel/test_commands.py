@@ -49,7 +49,7 @@ def ours_machine(code):
     mem.wr(t + 0, t)
     mem.wr(t + 4, A["hostctl"])
     mem.wr(t + 8, A["ccbctl"])
-    mem.wr(t + 4 * 16, A["kccb"])
+    mem.wr(t + 4 * 0x16, A["kccb"])         # kernel CCB base (DDK slot +0x58)
     mem.wr(A["hostctl"], 1)                 # already initialised
 
     return u, mem, regs

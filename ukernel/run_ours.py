@@ -75,7 +75,7 @@ def setup(code, man):
     mem.wr(t + 4 * 0, t)
     mem.wr(t + 4 * 1, A["hostctl"])
     mem.wr(t + 4 * 2, A["ccbctl"])
-    mem.wr(t + 4 * 16, A["kccb"])
+    mem.wr(t + 4 * 0x16, A["kccb"])        # kernel CCB base (DDK slot +0x58)
     return u, mem, regs
 
 
