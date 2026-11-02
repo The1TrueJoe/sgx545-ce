@@ -25,7 +25,8 @@ $MESA_DIR for sgx545) is copied to $BOX_DIR (default /root/deqp) when missing.
 
 Environment:
   RECOVER     shell command that power-cycles the box and returns once it has
-              booted and its GPU is up (default: mesa/tests/deqp/recover-ea3.sh)
+              booted and its GPU is up (default: mesa/tests/deqp/recover-ea3.sh);
+              "none" stops the run at the first wedge instead
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
   BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
@@ -63,10 +64,17 @@ class Box:
         """(returncode, output); returncode None when the box didn't answer in time."""
         args = ["sshpass", "-p", "openhc", "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + self.host, cmd]
-        try:
-            r = subprocess.run(args, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return None, b""
+        for attempt in range(4):
+            t0 = time.time()
+            try:
+                r = subprocess.run(args, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return None, b""
+            # a login refused at once (the EA1 does that now and then) is not a wedge
+            if r.returncode != 255 or time.time() - t0 > 15:
+                break
+            time.sleep(3)
         return (None if r.returncode == 255 else r.returncode), r.stdout
 
     def alive(self, tries=3):
@@ -88,17 +96,20 @@ def payload(box, who, name):
     rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -f {BOX_DIR}/.complete-{name}")
     if rc == 0:
         return
-    log("copying the payload to the box")
+    # dEQP itself is there from an earlier run: only a new Mesa to send
+    exe = "deqp-gles2" if who == "sgx545" else "deqp-gles2-i386"
+    rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -x {BOX_DIR}/{exe}")
+    whole = rc != 0
+    log("copying the payload to the box" if whole else "copying our Mesa to the box")
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as t:
         out = os.path.join(WORK, "out")
-        t.add(os.path.join(out, "deqp-runner"), "deqp-runner")
-        t.add(os.path.join(out, "gles2"), "gles2")
+        if whole:
+            t.add(os.path.join(out, "deqp-runner"), "deqp-runner")
+            t.add(os.path.join(out, "gles2"), "gles2")
+            t.add(os.path.join(out, exe), exe)
         if who == "sgx545":
-            t.add(os.path.join(out, "deqp-gles2"), "deqp-gles2")
             t.add(os.environ["MESA_DIR"], "lib-" + name)
-        else:
-            t.add(os.path.join(out, "deqp-gles2-i386"), "deqp-gles2-i386")
     rc, o = box.ssh(f"mkdir -p {BOX_DIR} && cd {BOX_DIR} && tar xf - && touch .complete-{name}", timeout=900,
                     stdin=buf.getvalue())
     if rc != 0:
@@ -141,6 +152,10 @@ def canary(box, who, name):
 
 def recover(box):
     cmd = os.environ.get("RECOVER", shlex.quote(os.path.join(HERE, "recover-ea3.sh")))
+    if cmd == "none":
+        # a box without a smart plug: someone has to power-cycle it
+        log("wedged, and RECOVER=none: stopping; power-cycle the box and rerun to carry on")
+        return False
     log("wedged: recovering the box:", cmd)
     subprocess.run(cmd, shell=True, check=False)
     deadline = time.time() + 600
