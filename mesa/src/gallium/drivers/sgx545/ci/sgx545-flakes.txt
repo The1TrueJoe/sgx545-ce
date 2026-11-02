@@ -1,5 +1,5 @@
-# 2026-11-02: 17165 tests, Fail 378, Pass 16337, Skip 445, Timeout 1, Warn 4
-# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re 9cc3bb4 (drive-deqp.py)
+# 2026-11-02: 17165 tests, Fail 382, Pass 16333, Skip 445, Timeout 1, Warn 4
+# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re 269889a (drive-deqp.py)
 dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_bgra_depth_component16
 dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_rgb5_a1_depth_component16
 dEQP-GLES2.functional.fbo.render.color.blend_npot_tex2d_bgra_depth_component16
