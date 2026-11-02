@@ -4,7 +4,7 @@
 """Mesa CI expectation files from drive-deqp.py results.
 
     mkexpect.py PREFIX RESULTS.csv [MORE.csv ...] [--wedges WEDGES.txt]
-                [--reasons REASONS.txt] [--note TEXT]
+                [--reasons REASONS.txt] [--flakes SEEN.txt] [--note TEXT]
 
 Later files override earlier ones test by test (a rerun of the fails after the
 first pass). Writes PREFIX-fails.txt (Fail, Crash, Timeout, with the status
@@ -15,6 +15,9 @@ header saying where it came from, and prints the totals.
 REASONS.txt is "REGEX<tab>why" per line: the fails are written in groups under
 a "# why" comment, each test under the first regex that matches it, the rest
 last under "# not looked at yet".
+
+SEEN.txt names more flakes, one per line: tests seen both passing and failing
+on the same build (order-dependent ones that the runner never retried).
 """
 import argparse
 import collections
@@ -28,6 +31,7 @@ def main():
     ap.add_argument("results", nargs="+")
     ap.add_argument("--wedges", default=None)
     ap.add_argument("--reasons", default=None)
+    ap.add_argument("--flakes", default=None)
     ap.add_argument("--note", default="")
     a = ap.parse_args()
 
@@ -55,7 +59,12 @@ def main():
             + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
             + (f"\n# {a.note}" if a.note else "") + "\n")
     fails = sorted(t for t, s in status.items() if s in ("Fail", "Crash", "Timeout") and t not in wedges)
-    flakes = sorted(t for t, s in status.items() if s == "Flake")
+    seen = set()
+    if a.flakes:
+        with open(a.flakes) as f:
+            seen = {t.strip() for t in f if t.strip() and not t.startswith("#")}
+    flakes = sorted(t for t, s in status.items() if s == "Flake" or t in seen)
+    fails = [t for t in fails if t not in seen]
 
     groups = collections.OrderedDict((why, []) for _, why in reasons)
     groups["not looked at yet"] = []

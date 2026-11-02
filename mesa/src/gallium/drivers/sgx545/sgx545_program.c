@@ -29,33 +29,11 @@
 #include "sgx545_program.h"
 #include "sgx_compiler.h"
 
-static const nir_shader_compiler_options sgx545_nir_options = {
-   .lower_fdiv = true,
-   .lower_fmod = true,
-   .lower_fpow = true,
-   .lower_fsat = true,
-   .lower_flrp32 = true,
-   .lower_fdph = true,
-   .lower_ftrunc = true,
-   .lower_fsign = true,
-   .lower_bitops = true,
-   .lower_insert_byte = true,
-   .lower_insert_word = true,
-   .lower_extract_byte = true,
-   .lower_extract_word = true,
-   .lower_pack_half_2x16 = true,
-   .lower_unpack_half_2x16 = true,
-   .force_indirect_unrolling = nir_var_all,
-   .force_indirect_unrolling_sampler = true,
-   .max_unroll_iterations = 32,
-   .support_indirect_inputs = 0,
-   .support_indirect_outputs = 0,
-};
-
 const nir_shader_compiler_options *
 sgx545_get_nir_options(void)
 {
-   return &sgx545_nir_options;
+   /* the compiler's own, so the frontend builds what the compiler (and sgxc) expect */
+   return sgx_nir_options();
 }
 
 static unsigned
