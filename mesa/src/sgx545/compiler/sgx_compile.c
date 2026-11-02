@@ -1033,24 +1033,27 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
        * a no-op; of a real f32 value, a rounding fmad16) */
       struct sgx_ref r[4];
       if (alu->op == nir_op_f2f16) {
-         /* an f32 uniform read as F16: pck.f16.f32, two halves at a time,
-          * truncating as libusc's own conversion of one does (hwt_p4) */
+         /* an f32 uniform read as F16: pck.f16.f32, truncating as libusc's
+          * own conversion of one does (hwt_p4); one value per pck, in both
+          * halves (the second half of a two-source pck.f16.f32 read wrong on
+          * hardware, dEQP linkage.uniform_struct_*: only this form is proven) */
+         unsigned read = nir_def_components_read(&alu->def);
          for (unsigned k = 0; k < nc; k++) {
             r[k] = s[0][k];
             if (r[k].file != SGX_F_U || r[k].h16 || r[k].neg || r[k].abs)
                continue;
-            bool two = k + 1 < nc && s[0][k + 1].file == SGX_F_U && !s[0][k + 1].h16 && !s[0][k + 1].neg &&
-                       !s[0][k + 1].abs;
+            if (!(read >> k & 1)) {
+               r[k] = ref(SGX_F_K, 0);
+               continue;
+            }
             unsigned t = new_vreg16(c, 2);
             struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F32);
             pk->nops = 3;
             pk->op[0] = href(t, 0);
             pk->op[1] = s[0][k];
-            pk->op[2] = two ? s[0][k + 1] : s[0][k];
+            pk->op[2] = s[0][k];
             add(c, pk);
             r[k] = href(t, 0);
-            if (two)
-               r[++k] = href(t, 1);
          }
          for (unsigned k = 0; k < nc; k++) {
             if (r[k].h16)
