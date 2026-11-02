@@ -307,31 +307,16 @@ materialize(struct sgx_ctx *c, struct sgx_ins *at, struct sgx_ref src, unsigned 
       insert_before(at, m);
    } else if (src.h16) {
       /* F16 -> f32: x.f16 - floor(0) under format select (src1 takes any bank
-       * and a negate; an abs is taken from the f32 value) */
+       * and the modifiers) */
       m = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
       m->nops = 3;
       m->rpt = n;
       m->op[0] = vref(v, 0);
       m->op[1] = src;
-      m->op[1].abs = 0;
       m->op[1].step = n > 1;
       m->op[2] = cref(48);
       m->op[2].step = 0;
       insert_before(at, m);
-      if (src.abs) {
-         struct sgx_ins *a = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
-         a->nops = 3;
-         a->rpt = n;
-         a->op[0] = vref(v, 0);
-         a->op[1] = vref(v, 0);
-         a->op[1].abs = 1;
-         a->op[1].neg = src.neg;
-         a->op[1].step = n > 1;
-         a->op[2] = cref(48);
-         a->op[2].step = 0;
-         m->op[1].neg = 0;
-         insert_before(at, a);
-      }
    } else if (src.neg || src.abs) {
       /* x - floor(0): a move that applies the source modifiers */
       m = ins_alloc(c, SGX_INS_ALU, USSE_FSUBFLR);
@@ -418,15 +403,12 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          struct sgx_ref plain = *r;
          plain.h16 = 0;
          bool kind_ok = slot_ok(i->form, k, &plain);
-         /* (|x| on a format-select or scalar F16 operand isn't known to work
-          * on hardware, and the DDK never writes it: widen, then |x| in f32) */
-         bool absok = !r->abs || pck16 || i->form == USSE_FMAD16;
          if (((s && s->fmt && small && i->form != USSE_TESTMASK_FADD_S0Z0O_BYTE_1) || scalar || pck16 ||
-              i->form == USSE_FMAD16) && kind_ok && absok)
+              i->form == USSE_FMAD16) && kind_ok)
             continue;
          /* (a slot with no format select can't read a half at all: mov would
           * take the whole register) */
-         if (s && s->fmt && slot_ok(i->form, k, r) && absok)
+         if (s && s->fmt && slot_ok(i->form, k, r))
             continue;
       } else if (slot_ok(i->form, k, r)) {
          continue;
@@ -1051,24 +1033,27 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
        * a no-op; of a real f32 value, a rounding fmad16) */
       struct sgx_ref r[4];
       if (alu->op == nir_op_f2f16) {
-         /* an f32 uniform read as F16: pck.f16.f32, two halves at a time,
-          * truncating as libusc's own conversion of one does (hwt_p4) */
+         /* an f32 uniform read as F16: pck.f16.f32, truncating as libusc's
+          * own conversion of one does (hwt_p4); one value per pck, in both
+          * halves (the second half of a two-source pck.f16.f32 read wrong on
+          * hardware, dEQP linkage.uniform_struct_*: only this form is proven) */
+         unsigned read = nir_def_components_read(&alu->def);
          for (unsigned k = 0; k < nc; k++) {
             r[k] = s[0][k];
             if (r[k].file != SGX_F_U || r[k].h16 || r[k].neg || r[k].abs)
                continue;
-            bool two = k + 1 < nc && s[0][k + 1].file == SGX_F_U && !s[0][k + 1].h16 && !s[0][k + 1].neg &&
-                       !s[0][k + 1].abs;
+            if (!(read >> k & 1)) {
+               r[k] = ref(SGX_F_K, 0);
+               continue;
+            }
             unsigned t = new_vreg16(c, 2);
             struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_F16_F32);
             pk->nops = 3;
             pk->op[0] = href(t, 0);
             pk->op[1] = s[0][k];
-            pk->op[2] = two ? s[0][k + 1] : s[0][k];
+            pk->op[2] = s[0][k];
             add(c, pk);
             r[k] = href(t, 0);
-            if (two)
-               r[++k] = href(t, 1);
          }
          for (unsigned k = 0; k < nc; k++) {
             if (r[k].h16)
