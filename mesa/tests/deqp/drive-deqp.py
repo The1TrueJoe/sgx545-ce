@@ -50,6 +50,7 @@ CONFIG = "rgba8888d24s8ms0"
 TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
 SSH_TIMEOUT = 25
 RUN_DIR = None
+LOCK = "flock /tmp/gpu.lock"  # per chunk; empty with --hold-lock
 
 
 def log(*a):
@@ -128,7 +129,7 @@ def runner_script(who, name):
         wrap = (f"printf '#!/bin/sh\\ncd {BOX_DIR}\\nLD_PRELOAD={DDK_ROOT}/usr/lib/sgx-busidshim.so exec "
                 f"{DDK_ROOT}/lib/ld-linux.so.2 --library-path {DDK_ROOT}/usr/lib:{DDK_ROOT}/lib "
                 f"{BOX_DIR}/deqp-gles2-i386 \"$@\"\\n' > {deqp}; chmod +x {deqp}; ")
-    return (f"{wrap}cd {BOX_DIR} && rm -rf out && {env} flock /tmp/gpu.lock ./deqp-runner run --deqp {deqp} "
+    return (f"{wrap}cd {BOX_DIR} && rm -rf out && {env} {LOCK} ./deqp-runner run --deqp {deqp} "
             f"--caselist chunk.txt --output out --jobs 1 --timeout {TEST_TIMEOUT} -- "
             f"--deqp-surface-type=pbuffer --deqp-surface-width=256 --deqp-surface-height=256 "
             f"--deqp-gl-config-name={CONFIG} --deqp-visibility=hidden > runner.log 2>&1; echo rc=$?")
@@ -143,7 +144,7 @@ def canary(box, who, name):
     else:
         pre = ""
         exe = f"{BOX_DIR}/deqp-gles2-ddk"
-    rc, out = box.ssh(f"cd {BOX_DIR} && env {pre} flock /tmp/gpu.lock {exe} "
+    rc, out = box.ssh(f"cd {BOX_DIR} && env {pre} {LOCK} {exe} "
                       f"--deqp-case=dEQP-GLES2.functional.color_clear.single_rgb --deqp-surface-type=pbuffer "
                       f"--deqp-surface-width=256 --deqp-surface-height=256 --deqp-gl-config-name={CONFIG} "
                       f"--deqp-visibility=hidden --deqp-log-filename=/dev/null 2>&1 | grep 'Passed:'", timeout=45)
@@ -212,6 +213,8 @@ def main():
     ap.add_argument("--max-wedges", type=int, default=40)
     ap.add_argument("--name", default=None)
     ap.add_argument("--caselist", default=None)
+    ap.add_argument("--hold-lock", action="store_true",
+                    help="hold /tmp/gpu.lock on the box for the whole run, so nothing interleaves between chunks")
     a = ap.parse_args()
     box = Box(a.box)
 
@@ -234,6 +237,28 @@ def main():
 
     if not box.alive():
         sys.exit("the box doesn't answer")
+    holder = None
+    if a.hold_lock:
+        # one SSH session keeps the lock while the marker exists; the chunks run without flock
+        global LOCK
+        LOCK = ""
+        box.ssh("touch /tmp/deqp-job")
+        holder = subprocess.Popen(["sshpass", "-p", "openhc", "ssh", "-o", "StrictHostKeyChecking=no",
+                                   "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + a.box,
+                                   "flock /tmp/gpu.lock sh -c 'echo locked; while [ -e /tmp/deqp-job ]; do sleep 2; done'"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if b"locked" not in holder.stdout.readline():
+            sys.exit("could not take /tmp/gpu.lock")
+        log("holding /tmp/gpu.lock for the run")
+    try:
+        run(a, box, name, todo, res_path, wedge_path)
+    finally:
+        if holder:
+            box.ssh("rm -f /tmp/deqp-job")
+            holder.wait(timeout=30)
+
+
+def run(a, box, name, todo, res_path, wedge_path):
     payload(box, a.who, name)
     if not canary(box, a.who, name):
         sys.exit("the canary doesn't pass on a fresh box: not starting")
