@@ -158,7 +158,7 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 }
 
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
-		      u32 dev_addr, u32 size);
+		      u32 dev_addr, u32 size, u32 pte_flags);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);

@@ -44,7 +44,7 @@ int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
  * directory. Pages below 4 GiB, write-combined in every CPU mapping.
  */
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
-		      u32 dev_addr, u32 size)
+		      u32 dev_addr, u32 size, u32 pte_flags)
 {
 	unsigned int i;
 	int err = -ENOMEM;
@@ -65,8 +65,7 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 	km->cpu = vmap(km->pages, km->npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 	if (!km->cpu)
 		goto err_wb;
-	err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, dev_addr, km->pages, km->npages,
-				   SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
+	err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, dev_addr, km->pages, km->npages, pte_flags);
 	if (err)
 		goto err_unmap;
 	return 0;
