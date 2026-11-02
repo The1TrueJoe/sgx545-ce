@@ -274,6 +274,13 @@ def install_hw_model(r):
         # 0x694 / 0x698 (DPM state / control): bits 0-2 = store / clear / load,
         # address >> 3 above; each reports its own EVENT_STATUS bit
         def f(regs, v):
+            # the DPM state/control load only completes once the TE/command
+            # registers are programmed — the DDK writes them (0x204..) before
+            # 0x694/0x698. A microkernel that loads the DPM too early never sees
+            # the 0x240 done event and hangs; model that so run_ours catches it
+            # (EA1 HW 2026-11-02: do_ta stalled in dpm_load before the TE regs).
+            if not regs.v.get(0x204):
+                return
             b = 0
             if v & 1:
                 b |= store

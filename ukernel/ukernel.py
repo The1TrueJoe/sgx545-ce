@@ -693,11 +693,18 @@ def build(a):
     # the free list to be ready before the TA kicks (docs/UKERNEL.md §6)
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
-    a.dpm_load()
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
     a.program(12, TA_RT)
     a.program(10, TA_RD)
+    # second cache invalidate, then the DPM state/control load — AFTER the
+    # TE/command registers, as the DDK does (ddk-ref-frame-registers.txt lines
+    # 106-131). Done earlier (before the TE registers), dpm_load's 0x240 done
+    # event never fired, so do_ta stalled there and never reached CR_TA_KICK —
+    # EA1 HW sentinels 2026-11-02: before, do_ta stalled in dpm_load; after this
+    # reorder it runs through the kick (the TA start still needs more, separately).
+    a.invalidate(CR_PDS_INV0, INV_DONE_TA)
+    a.dpm_load()
     # TA flags 2 (0x218): the command word, always with bit 24, plus bit 23
     # when the RT entry's word 13 bit 23 is set (docs/UKERNEL.md §7)
     a.i(f"ldr r4, #{0x218 // 4}")
