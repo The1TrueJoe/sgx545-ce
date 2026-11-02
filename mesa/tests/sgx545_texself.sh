@@ -6,7 +6,7 @@ export PROBE_VS="attribute vec4 p; attribute vec2 a1; varying vec2 v; void main(
 export PROBE_FS="precision mediump float; uniform sampler2D t0; varying vec2 v; void main() { gl_FragColor = texture2D(t0, v); }"
 run() {
 	name=$1; shift
-	env "$@" LD_LIBRARY_PATH=/tmp/mesa/lib PROBE_OUT=/tmp/mesa/self-$name.rgba ./gpuwatch.sh ./probe-tex-x86_64 > /tmp/mesa/self-$name.log 2>&1
+	env "$@" LD_LIBRARY_PATH=/tmp/mesa/lib PROBE_OUT=/tmp/mesa/self-$name.rgba ./gpuwatch.sh ./probe-x86_64 > /tmp/mesa/self-$name.log 2>&1
 	echo "$name $(md5sum < self-$name.rgba | cut -c1-12) $(grep -o 'recoveries=[0-9]*' self-$name.log)"
 }
 run n16 PROBE_TEXSIZE="16 16"

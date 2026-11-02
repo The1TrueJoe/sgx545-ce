@@ -126,6 +126,13 @@ bo_map_sync(struct sgxws_dev *d, struct sgxws_bo *bo)
    bo->impl->sd = pvr_sync_data(&d->pvr, bo->impl->b.sync, &bo->impl->sync_map);
 }
 
+void
+sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo)
+{
+   if (!bo->impl->sd)
+      bo_map_sync(d, bo);
+}
+
 int
 sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem, uint32_t size,
                uint32_t align)
@@ -652,6 +659,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    c->empty_p = usse_load(c, &usse_empty, false);
    c->copy_fs = usse_load(c, &usse_copy_fs, false);
    c->clear_vs = usse_load(c, &usse_clear_vs, true);
+   c->vpgen_vs = usse_load(c, &usse_vpgen_vs, true);
    c->pe_ptoff = usse_load(c, &usse_pe_ptoff, false);
    c->pe_emit = usse_load(c, &usse_pe_emit, false);
    {
@@ -931,7 +939,8 @@ eot_program(struct sgxws_ctx *c)
    pbe[1] = (s->h - 1) << 16 | (s->w - 1);                 /* clip max [C] */
    pbe[2] = ((c->target.stride - 1) >> 1) << 16 | 0x8000;  /* stride/2-1 [C]; b15 [D] */
    pbe[3] = c->target.va & ~3u;                            /* address [D] */
-   side = 0x200 | 0 /* BGRA8888 */ | 0x400 /* dither */;
+   /* format, b9, dither, b13: twiddled */
+   side = 0x200 | c->target.pbe_format | 0x400 | (c->target.t1_layout == 0 ? 0x2000 : 0);
    p.p[0] = 0;                                             /* phas.i #0, #0 [wait=7] */
    p.p[1] = 0xfa440700;
    for (uint32_t r = 0; r < 4; r++)
@@ -1019,15 +1028,16 @@ background(struct sgxws_ctx *c)
    pds_d1(&p, 1, 1u | 0x12000u | 1u << 30);
    pds_d0(&p, 2, 0);
    pds_d0(&p, 3, 0);
-   /* DOUTT: T0 = the pitch (pitch-1 split over b9-11 and b17-26, re/tex/TEX.md;
-    * 0x20e00 at 736) | 0x90 (clamp S/T b7/b4); T1 = layout 6 (strided) | format
-    * 0x0c (BGRA8888) | w-1 | h-1; T2 = address; T3 [G] */
+   /* DOUTT: T0 = 0x90 (clamp S/T b7/b4) and, strided, the pitch (pitch-1 split
+    * over b9-11 and b17-26, TEX.md; 0x20e00 at 736), else T0's nearest, no
+    * mipmaps; T1 = the target's layout | format | w-1 | h-1; T2 = address; T3 [G] */
    {
       uint32_t pm1 = c->target.stride - 1;
 
-      pds_d1(&p, 2, (pm1 & 7) << 9 | (pm1 >> 3) << 17 | 0x90);
+      pds_d1(&p, 2, c->target.t1_layout == 6 ? (pm1 & 7) << 9 | (pm1 >> 3) << 17 | 0x90 : 0x07fe0090);
    }
-   pds_d1(&p, 3, 6u << 29 | 0x0cu << 24 | (s->w - 1) << 12 | (s->h - 1));
+   pds_d1(&p, 3, (uint32_t)c->target.t1_layout << 29 | (uint32_t)c->target.t1_format << 24 |
+                 (s->w - 1) << 12 | (s->h - 1));
    pds_d0(&p, 4, c->target.va);
    pds_d0(&p, 5, 0x00800000);
    CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 3, DOUTU));
@@ -1063,6 +1073,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target 
    c->target = *t;
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
+   c->clip = (struct sgxws_rect){ 0, 0, rt->w, rt->h };
 
    /* the render details are the target's: written at the kick, once its
     * previous render is done */
@@ -1086,6 +1097,7 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_d
    struct pds p = { 0 };
    uint32_t rows, va;
 
+   /* (the frame rings' headroom covers an object and its clip objects) */
    memset(b.p, 0, dma_dwords * 4);
    memcpy(b.p, blk, n * 4);
    /* the DDK's static state program: tst; bra; doutd; tst; bra; doutd; doutu */
@@ -1161,13 +1173,13 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
 }
 
 /* headroom one object needs in the frame rings, beyond its vertices */
-#define OBJ_PDS 0x400
-#define OBJ_VDM 0x100
+#define OBJ_PDS 0x800
+#define OBJ_VDM 0x200
 
 static bool
 frame_has_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 {
-   return ring_room(&c->gen) > vertex_bytes + 0x100 && ring_room(&c->pds_pix) > OBJ_PDS &&
+   return ring_room(&c->gen) > vertex_bytes + 0x200 && ring_room(&c->pds_pix) > OBJ_PDS &&
           ring_room(&c->pds_vtx) > OBJ_PDS && ring_room(&c->vdm) > OBJ_VDM + 0x40;
 }
 
@@ -1190,26 +1202,73 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
 }
 
+/* A pass-type-3 object: writes the visible bits under it and draws nothing
+ * (ISPC b25-27: 1 sets, 0 resets), with its region clip */
+static void
+vpgen_object(struct sgxws_ctx *c, bool set, const struct sgxws_rect *tiles, const float *xy,
+             uint32_t count, uint32_t prim)
+{
+   struct sgxws_ptr v = ring_alloc(&c->gen, count * 8, DMA_ALIGN);
+   uint32_t blk[9];
+
+   memcpy(v.p, xy, count * 8);
+   blk[0] = 0x1 | 0x4 | 0x80 | 0x400 | 0x1000 | 0x4000 | 0x8000;    /* d485 */
+   blk[1] = 0x07e00100;             /* pass type 3, no colour, always + write, ISPC follows */
+   blk[2] = set ? 0x02000000 : 0;
+   blk[3] = 0x80000000 | (tiles->x0 / 32) << 16 | (tiles->x1 - 1) / 32;
+   blk[4] = (tiles->y0 / 16) << 16 | (tiles->y1 - 1) / 16;
+   blk[5] = 4 << 16;                /* output select: 4 dwords per vertex */
+   blk[6] = 0x40;                   /* MTE control, as the clear's */
+   blk[7] = 0;
+   blk[8] = 0;
+   state_block(c, blk, 9, 9, 0);
+   vdm_draw(c, prim, count, c->idx, v.va, 8, 2, c->vpgen_vs, 2, 4, 0, vertices_per_task(4));
+}
+
+/* Make r the visible pixels (STATE.md "Scissor and partial viewports"): reset
+ * the bits over the whole target within the old rectangle's tiles, and set
+ * them over r, which leaves r's tiles as the region clip the draws inherit.
+ * Going back to the whole target is the same with r the whole target. */
+static void
+apply_clip(struct sgxws_ctx *c, const struct sgxws_rect *r)
+{
+   const struct sgxws_rt *s = c->rt;
+   float tri[6] = { 0, 0, 2.0f * s->w, 0, 0, 2.0f * s->h };
+   float strip[8] = { (float)r->x0, (float)r->y0, (float)r->x1, (float)r->y0,
+                      (float)r->x0, (float)r->y1, (float)r->x1, (float)r->y1 };
+
+   if (!memcmp(r, &c->clip, sizeof(*r)))
+      return;
+   vpgen_object(c, false, &c->clip, tri, 3, SGXWS_TRIANGLES);
+   vpgen_object(c, true, r, strip, 4, SGXWS_TRIANGLE_STRIP);
+   c->clip = *r;
+}
+
 /* A clear: one triangle over the whole surface with the iterated colour.
  * wmask: the colour bytes written (B b0, G b1, R b2, A b3; 0xf all, 0 none:
- * GL's glColorMask, which gallium hands the clear) */
+ * GL's glColorMask, which gallium hands the clear).  stencil: the value to
+ * clear to, -1 to leave it (the clear object gets ISPC 0e0200ff: always,
+ * zpass = replace, the value as its reference) */
 int
-sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth, unsigned wmask)
+sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth, unsigned wmask,
+            int stencil)
 {
    const struct sgxws_rt *s = c->rt;
    struct sgxws_ptr v;
    uint32_t argb = u8(rgba[3]) << 24 | u8(rgba[0]) << 16 | u8(rgba[1]) << 8 | u8(rgba[2]);
    float xy[3][2] = { { 0, 0 }, { 2.0f * s->w, 0 }, { 0, 2.0f * s->h } };
-   uint32_t blk[12];
+   struct sgxws_rect all = { 0, 0, s->w, s->h };
+   uint32_t blk[13], n = 0;
    int e;
 
    bool zwrite = write_depth && (depth != 1.0f || c->draws);
 
    /* nothing to write: no colour, and the depth every render starts with */
-   if (!(wmask & 0xf) && !zwrite)
+   if (!(wmask & 0xf) && !zwrite && stencil < 0)
       return 0;
    if ((e = make_room(c, 3 * 16)))
       return e;
+   apply_clip(c, &all);
    v = ring_alloc(&c->gen, 3 * 16, DMA_ALIGN);
    for (int i = 0; i < 3; i++) {
       v.p[4 * i + 0] = f32(xy[i][0]);
@@ -1218,35 +1277,49 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
       v.p[4 * i + 3] = argb;
    }
    /* TA state block: ISPA ISPB PDS region-clip output-select MTE TSP (header 0xd4c3) */
-   blk[0] = 0x1 | 0x2 | 0x40 | 0x80 | 0x400 | 0x1000 | 0x4000 | 0x8000;
+   blk[n++] = 0x1 | 0x2 | (stencil >= 0 ? 0x4 : 0) | 0x40 | 0x80 | 0x400 | 0x1000 | 0x4000 | 0x8000;
    /* always; depth write for a depth clear, except to the background depth
     * (1.0) before anything was drawn: every render starts there */
-   blk[1] = zwrite ? 0x01c00200 : 0x01d00200;
+   blk[n] = zwrite ? 0x01c00200 : 0x01d00200;
    if (!(wmask & 0xf))
-      blk[1] |= 1u << 21;                                /* no colour write (STATE.md ISPA b21) */
+      blk[n] |= 1u << 21;                                /* no colour write (STATE.md ISPA b21) */
+   if (stencil >= 0)
+      blk[n] |= 0x100 | (stencil & 0xff);                /* ISPC follows, the reference */
+   n++;
    /* ISPB: colour mask (R8 G4 B2 A1, from the byte mask) */
-   blk[2] = ((wmask & 4 ? 8 : 0) | (wmask & 2 ? 4 : 0) | (wmask & 1 ? 2 : 0) | (wmask & 8 ? 1 : 0)) << 4;
-   blk[3] = pds_word(c, c->pds_empty_p, 1);
-   blk[4] = 0x00030001;                                  /* [G] */
-   blk[5] = pds_word(c, (wmask & 0xf) == 0xf ? c->clear_pds : clear_pds_masked(c, wmask & 0xf), 2);
-   blk[6] = 0x80000000 | 0 << 16 | (s->n.xt - 1);        /* region clip: whole surface, in tiles */
-   blk[7] = 0 << 16 | (s->n.yt - 1);
-   blk[8] = 8 << 16 | 0x1800;                            /* 8 output dwords [D], 0x1800 [G] */
-   blk[9] = 0x40;                                        /* MTE ctrl of the clear [G] */
-   blk[10] = 5;                                          /* one 4-component set */
-   blk[11] = 0;
-   state_block(c, blk, 12, 12, 3);
+   blk[n++] = ((wmask & 4 ? 8 : 0) | (wmask & 2 ? 4 : 0) | (wmask & 1 ? 2 : 0) | (wmask & 8 ? 1 : 0)) << 4;
+   if (stencil >= 0)
+      blk[n++] = 0x0e0200ff;
+   blk[n++] = pds_word(c, c->pds_empty_p, 1);
+   blk[n++] = 0x00030001;                                /* [G] */
+   blk[n++] = pds_word(c, (wmask & 0xf) == 0xf ? c->clear_pds : clear_pds_masked(c, wmask & 0xf), 2);
+   blk[n++] = 0x80000000 | 0 << 16 | (s->n.xt - 1);      /* region clip: whole surface, in tiles */
+   blk[n++] = 0 << 16 | (s->n.yt - 1);
+   blk[n++] = 8 << 16 | 0x1800;                          /* 8 output dwords [D], 0x1800 [G] */
+   blk[n++] = 0x40;                                      /* MTE ctrl of the clear [G] */
+   blk[n++] = 5;                                         /* one 4-component set */
+   blk[n++] = 0;
+   state_block(c, blk, n, n, (n - 1) & 3);
    vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0, 8);
    c->draws++;
    return 0;
 }
 
 static uint32_t
-ispa(const struct sgxws_state *st)
+ispa(const struct sgxws_state *st, uint32_t prim, unsigned face)
 {
    uint32_t v = 0x200;              /* b9: ISPB follows */
 
    v |= (st->pass_type & 7) << 25;  /* pass type */
+   /* object type: 0 triangles, 1 lines, 3 points (a line list as type 0 draws nothing) */
+   if (prim == SGXWS_LINES)
+      v |= 1u << 15;
+   else if (prim == SGXWS_POINTS)
+      v |= 3u << 15;
+   if (st->stencil)
+      v |= 0x100 | st->stencil_ref[face];   /* ISPC follows, the reference */
+   if (st->stencil && st->two_sided && !face)
+      v |= 0x800;
 
    if (!st->depth_func)
       v |= 7u << 22 | 0x100000;     /* always, no write */
@@ -1276,7 +1349,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 {
    const struct sgxws_state *st = d->state;
    const struct sgxws_prog *vs = d->vs, *fs = d->fs;
-   uint32_t blk[18], n = 0, rows, sec, prim, vrows;
+   uint32_t blk[23], n = 0, rows, sec, prim, vrows, ispb;
    uint32_t vw = vs->attr_dwords * 4, vsec_dwords = 10 + vs->const_dwords;
    uint32_t idx = c->idx, n_idx = d->count, idx_bytes = 0;
    struct sgxws_ptr v, u, vsec;
@@ -1329,9 +1402,21 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       sec = c->pds_empty_p;
       rows = 1;
    }
+   apply_clip(c, &st->clip);
+   /* ISPB: line width * 16 at b8-15 (1.0 when the draw doesn't say), colour mask */
+   ispb = (st->line_width > 15.9f ? 255u : st->line_width > 1.0f ? (uint32_t)(st->line_width * 16.0f) : 16u) << 8 |
+          (st->color_mask & 0xf) << 4;
    blk[n++] = 0;
-   blk[n++] = ispa(st);
-   blk[n++] = 0x10 << 8 | (st->color_mask & 0xf) << 4;  /* ISPB: line width 1.0, colour mask */
+   blk[n++] = ispa(st, d->prim, 0);
+   blk[n++] = ispb;
+   if (st->stencil) {
+      blk[n++] = st->ispc[0];
+      if (st->two_sided) {
+         blk[n++] = ispa(st, d->prim, 1);
+         blk[n++] = ispb;
+         blk[n++] = st->ispc[1];
+      }
+   }
    blk[n++] = pds_word(c, sec, rows);
    /* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; b0-15 = the
     * fragment program's primary attributes in units of 4 dwords, b25-28 = 12
@@ -1370,12 +1455,14 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    blk[n++] = f32(st->vp_translate[2]);
    blk[n++] = f32(st->vp_scale[2]);
    blk[n++] = 0;                                          /* header 0x200 */
-   blk[n++] = vs->out_dwords << 16 | 0x3000;              /* output select */
+   /* output select: + 0x100 when the last output dword is the point size */
+   blk[n++] = vs->out_dwords << 16 | 0x3000 | (vs->point_size ? 0x100 : 0);
    blk[n++] = 0x3727c5ac;                                 /* W clamp 1e-5 */
    blk[n++] = mte_ctrl(st);
    blk[n++] = vs->tsp_sizes;                              /* TSP: texcoord sizes */
    blk[n++] = vs->tsp_prec;
-   blk[0] = 0x1 | 0x2 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000;
+   blk[0] = 0x1 | 0x2 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000 |
+            (st->stencil ? 0x4 : 0) | (st->stencil && st->two_sided ? 0x38 : 0);
    /* the DDK DMAs 25 dwords for a draw's block (kind 0); the header says where it ends */
    state_block(c, blk, n, 25, 0);
 
@@ -1832,6 +1919,72 @@ sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint
    w[1] = hi;
 }
 
+/* A constant-colour blend (STATE.md "Constant-colour blending"):
+ *    sopwm r1, Y, o0      [c1=zero c2=Fd]           dst * Fd, all four bytes
+ *    sopwm r1, Y, o0      [mask=8 c1=zero c2=Fda]   the alpha byte: dst.a * Fda
+ *    sopwm r0, pa<c>, X   [c1=Fs c2=zero]           src * Fs
+ *    sopwm r0, pa<c>, X   [mask=8 c1=Fsa c2=zero]   src.a * Fsa
+ *    sop2  o0, r0, r1     [end c1=one c2=one cop a1=one a2=one aop]
+ * X and Y are the colour, the tile or the constant, whichever the factor
+ * reads.  With end false the sop2 writes pa<c> back for the colour mask; with
+ * swap it reads r1, r0 (a reverse subtract). */
+#define BLEND_CONST_INSTS 5
+
+static void
+blend_const_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint32_t w[BLEND_CONST_INSTS][2])
+{
+   /* per factor: src1 of the dst side and its selectors; src2 of the src side and its */
+   enum { COLOUR, TILE, CONSTANT };
+   static const uint8_t reads[15] = { COLOUR, COLOUR, COLOUR, COLOUR, COLOUR, COLOUR, TILE, TILE,
+                                      TILE, TILE, TILE, CONSTANT, CONSTANT, CONSTANT, CONSTANT };
+   static const uint32_t d_hi[15] = { 0, 0x8000, 0x10, 0x8010, 0x18, 0x8018, 0x38, 0x8038,
+                                      0x30, 0x8030, 0x8, 0x10, 0x8010, 0x18, 0x8018 };
+   static const uint32_t s_hi[15] = { 0, 0x1000000, 0x80, 0x1000080, 0xc0, 0x10000c0, 0x1c0,
+                                      0x10001c0, 0x180, 0x1000180, 0x40, 0x180, 0x1000180, 0x1c0,
+                                      0x10001c0 };
+   const unsigned f[4] = { b->fd, b->fda, b->fs, b->fsa };
+
+   for (unsigned i = 0; i < 4; i++) {
+      unsigned k = f[i] < 15 ? f[i] : 0;
+      uint32_t lo, hi;
+
+      if (i < 2) {                  /* src1 at l7-13, bank l30-31: pa 2, o 1, sa 3 */
+         lo = reads[k] == COLOUR ? 0x80000000u | color_pa << 7 :
+              reads[k] == TILE ? 0x40000000u : 0xc0000000u | SGXWS_BLEND_CONST_SA << 7;
+         lo |= 0x10200000;          /* r1, src2 o0 */
+         hi = d_hi[k] | (i ? 0x90800800 : 0x90807800);
+      } else {                      /* src2 at l0-6, bank l28-29: pa 2, o 1, sa 3 */
+         lo = reads[k] == COLOUR ? 0x20000000u | color_pa :
+              reads[k] == TILE ? 0x10000000u : 0x30000000u | SGXWS_BLEND_CONST_SA;
+         lo |= color_pa << 7 | 0x80000000;    /* r0, src1 pa<c> */
+         hi = s_hi[k] | (i == 3 ? 0x90800800 : 0x90807800);
+      }
+      w[i][0] = lo;
+      w[i][1] = hi;
+   }
+   /* cop l18-19, aop l16-17; without end pa<c> (dst bank h1, number l21-27) */
+   w[4][0] = (b->swap ? 1u << 7 : 1u) | (b->cop & 3u) << 18 | (b->aop & 3u) << 16 | (end ? 0 : color_pa << 21);
+   w[4][1] = 0x81808804 | (end ? 1u << 18 | 1 : 2);
+}
+
+/* the blend's instructions; keep_going drops the end bit of one that would end the program */
+static void
+put_blend(uint32_t *w, unsigned *n, const struct sgxws_blend *b, unsigned color_pa, bool end, bool keep_going)
+{
+   if (b->constant) {
+      uint32_t k[BLEND_CONST_INSTS][2];
+
+      blend_const_words(b, color_pa, end, k);
+      for (unsigned i = 0; i < BLEND_CONST_INSTS; i++)
+         put(w, n, k[i][0], i == BLEND_CONST_INSTS - 1 && keep_going ? k[i][1] & ~(1u << 18) : k[i][1]);
+   } else {
+      uint32_t k[2];
+
+      sgxws_blend_words(b, color_pa, end, k);
+      put(w, n, k[0], keep_going ? k[1] & ~(1u << 18) : k[1]);
+   }
+}
+
 /* sopwm o0, pa<c>, pa<c> [skipinv end mask=m c1=zero c2=zero cop=max aop=max]
  * (hw12): the mask's x y z w are h12 h13 h14 h11 */
 static void
@@ -1846,12 +1999,15 @@ uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsigned color_pa,
                 const struct sgxws_blend *blend, int discard_pa, unsigned temps)
 {
-   uint32_t *w = malloc((count + 8) * 8), va, b[2];
+   uint32_t *w = malloc((count + 12) * 8), va, b[2];
    bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
 
    if (!w)
       return 0;
+   /* a constant-colour blend works in r0, r1 */
+   if (blend && blend->blend && blend->constant && temps < 2)
+      temps = 2;
    if (discard_pa >= 0) {
       /*
        * A program that discards runs in two phases (ISA.md "Phases, visibility
@@ -1872,10 +2028,8 @@ sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsig
       if (n & 1)
          put(w, &n, 0, 0xf8000140u);                    /* nop: phase 1 on 16 bytes */
       w[0] = n;                                         /* relocated to an absolute pc */
-      if (blend && blend->blend) {
-         sgxws_blend_words(blend, color_pa, !masked, b);
-         put(w, &n, b[0], b[1] & ~(1u << 18));           /* without end */
-      }
+      if (blend && blend->blend)
+         put_blend(w, &n, blend, color_pa, !masked, true);   /* without end */
       if (masked) {
          wmask_words(blend->wmask, color_pa, b);
          put(w, &n, b[0], b[1] & ~(1u << 18));
@@ -1889,10 +2043,8 @@ sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count, unsig
    }
    put(w, &n, 0, PHAS_HI | 0x700);                  /* phas.i #0, #0 [wait=7] */
    put_code(w, &n, code, count);
-   if (blend && blend->blend) {
-      sgxws_blend_words(blend, color_pa, !masked, b);
-      put(w, &n, b[0], b[1]);
-   }
+   if (blend && blend->blend)
+      put_blend(w, &n, blend, color_pa, !masked, false);
    if (masked) {
       wmask_words(blend->wmask, color_pa, b);
       put(w, &n, b[0], b[1]);

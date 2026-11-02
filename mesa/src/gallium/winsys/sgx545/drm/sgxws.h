@@ -64,9 +64,14 @@ enum sgxws_mem {
 /* where a frame's pixels go */
 struct sgxws_target {
    uint32_t va;                     /* BGRA8888, top row first */
-   uint32_t stride;                 /* in pixels, a multiple of 32 */
+   uint32_t stride;                 /* in pixels; even, or 1 */
    const struct sgxws_bo *bo;       /* the buffer (its renders are waited for through it) */
    bool scanout;                    /* the scanout buffer (stats only) */
+   /* its format and layout (TEX.md sections 4, 11): the PBE's format code, and
+    * how every tile's load samples it, T1's format and layout (6 strided,
+    * 3 linear with the pitch rounded up to 8 texels, 0 twiddled, which the
+    * PBE then writes twiddled too) */
+   uint8_t pbe_format, t1_format, t1_layout;
 };
 
 /* A shader as the hardware runs it: USSE code plus what the PDS programs
@@ -83,6 +88,7 @@ struct sgxws_prog {
    uint32_t attr_dwords;            /* dwords fetched per vertex into pa0.. */
    uint32_t tsp_sizes;              /* TA state: texcoord sizes, 3 bits per set */
    uint32_t tsp_prec;               /* TA state: sets with precision value <= 2 */
+   bool point_size;                 /* vertex: the last output dword is the point size */
    /* fragment: */
    uint32_t sec_dwords;             /* constant dwords DMA'd for the secondary program */
    uint32_t douti[10];              /* DOUTI words, one per iterated input or sample */
@@ -119,6 +125,28 @@ struct sgxws_blend {
    uint8_t cop, aop;                /* sgxws_bop */
    uint8_t swap;
    uint8_t wmask;                   /* bytes written; 0xf: no sopwm */
+   /* With a constant factor sop2's selectors can't name it (STATE.md
+    * "Constant-colour blending"): each side is multiplied out with sopwm into
+    * r0, r1 and the two added, in place of the sop2 above.  Factors as
+    * enum sgxws_bfactor; the blend colour, packed BGRA8, in sa2. */
+   uint8_t constant;
+   uint8_t fs, fd, fsa, fda;
+};
+
+/* a constant-colour blend's factors, in glBlendFunc's order */
+enum sgxws_bfactor {
+   SGXWS_BF_ZERO, SGXWS_BF_ONE, SGXWS_BF_SRC_COLOR, SGXWS_BF_ONE_MINUS_SRC_COLOR,
+   SGXWS_BF_SRC_ALPHA, SGXWS_BF_ONE_MINUS_SRC_ALPHA, SGXWS_BF_DST_ALPHA, SGXWS_BF_ONE_MINUS_DST_ALPHA,
+   SGXWS_BF_DST_COLOR, SGXWS_BF_ONE_MINUS_DST_COLOR, SGXWS_BF_SRC_ALPHA_SATURATE,
+   SGXWS_BF_CONSTANT_COLOR, SGXWS_BF_ONE_MINUS_CONSTANT_COLOR, SGXWS_BF_CONSTANT_ALPHA,
+   SGXWS_BF_ONE_MINUS_CONSTANT_ALPHA,
+};
+#define SGXWS_BLEND_CONST_SA 2
+
+/* A pixel rectangle of the target in memory order (the first row on top):
+ * x0 <= x < x1, y0 <= y < y1 */
+struct sgxws_rect {
+   uint32_t x0, y0, x1, y1;
 };
 
 struct sgxws_state {
@@ -134,6 +162,15 @@ struct sgxws_state {
                                      * (discard) */
    /* the viewport transform, as gallium gives it */
    float vp_scale[3], vp_translate[3];
+   /* draws reach only these pixels: the scissor and the viewport's rectangle
+    * (STATE.md "Scissor and partial viewports"); never empty */
+   struct sgxws_rect clip;
+   float line_width;
+   /* stencil (STATE.md "ISPC"): ISPC words and references, faces 0 front and
+    * 1 back; two_sided sends the back group */
+   bool stencil, two_sided;
+   uint32_t ispc[2];
+   uint8_t stencil_ref[2];
 };
 
 #define SGXWS_MAX_INDICES 0xffff
@@ -191,6 +228,8 @@ sgxws_bo_valid(const struct sgxws_bo *bo)
    return bo->impl != NULL;
 }
 /* wait for the submitted renders that write a render target (0 when done) */
+/* a buffer to be rendered into: its sync data, for sgxws_bo_wait */
+void sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo);
 int sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms);
 
 struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d);
@@ -234,8 +273,8 @@ int sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_tar
 bool sgxws_recording(struct sgxws_ctx *c);
 
 /* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md "Clear") */
-int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth,
-                unsigned wmask);
+int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth, unsigned wmask,
+                int stencil);
 int sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d);
 /* Submit the frame; with timeout_ms, wait up to that long for its render (0
  * when done), else return once it is submitted.  A no-op when nothing is

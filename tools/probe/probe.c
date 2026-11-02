@@ -23,6 +23,7 @@
  *   PROBE_CLEARDEPTH=z         glClearDepthf, and DEPTH_BUFFER_BIT in the clear
  *   PROBE_DEPTHRANGE="n f"     glDepthRangef
  *   PROBE_STENCIL="func ref mask sfail zfail zpass wmask"  glEnable(STENCIL_TEST) + func/op/mask
+ *   PROBE_STENCILBACK="func ref mask sfail zfail zpass wmask"  the same for GL_BACK only (after PROBE_STENCIL)
  *   PROBE_CLEARSTENCIL=s       glClearStencil, and STENCIL_BUFFER_BIT in the clear
  *   PROBE_BLEND="src dst [eq]" glEnable(BLEND), glBlendFunc, glBlendEquation (GL enums)
  *   PROBE_BLENDCOLOR="r g b a" glBlendColor
@@ -125,6 +126,9 @@ typedef char GLchar;
 	X(GL, void, glScissor, (GLint, GLint, GLsizei, GLsizei)) \
 	X(GL, void, glCullFace, (GLenum)) \
 	X(GL, void, glFrontFace, (GLenum)) \
+	X(GL, void, glStencilFuncSeparate, (GLenum, GLenum, GLint, GLuint)) \
+	X(GL, void, glStencilOpSeparate, (GLenum, GLenum, GLenum, GLenum)) \
+	X(GL, void, glStencilMaskSeparate, (GLenum, GLuint)) \
 	X(GL, void, glPolygonOffset, (GLfloat, GLfloat)) \
 	X(GL, void, glLineWidth, (GLfloat)) \
 	X(GL, void, glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, const void *)) \
@@ -613,6 +617,11 @@ int main(void)
 		glStencilFunc((GLenum)v[0], (GLint)v[1], (GLuint)v[2]);
 		glStencilOp((GLenum)v[3], (GLenum)v[4], (GLenum)v[5]);
 		glStencilMask((GLuint)v[6]);
+	}
+	if (ints("PROBE_STENCILBACK", v, 7, NULL) == 7) {
+		glStencilFuncSeparate(0x0405, (GLenum)v[0], (GLint)v[1], (GLuint)v[2]);
+		glStencilOpSeparate(0x0405, (GLenum)v[3], (GLenum)v[4], (GLenum)v[5]);
+		glStencilMaskSeparate(0x0405, (GLuint)v[6]);
 	}
 	if (ints("PROBE_CLEARSTENCIL", v, 1, NULL) == 1) {
 		glClearStencil((GLint)v[0]);

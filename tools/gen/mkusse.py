@@ -72,6 +72,17 @@ PROGS = {
         "emit.t3 r0, #0, #0 [end f12 f10]",
         "end:",
     ] + VS_EPILOGUE,
+    # pass-type-3 objects (scissor and partial viewports, STATE.md "Scissor and
+    # partial viewports"): screen-space x, y -> position with z = w = 1.0
+    "vpgen_vs": [
+        "phas.i @end, #0 [wait=2]",
+    ] + PROLOGUE + [
+        "mov o0, pa0 [skipinv rcnt rpt=2]",
+        "mov o2, c3 [skipinv rcnt]",
+        "mov o3, c3 [skipinv rcnt]",
+        "emit.t3 r0, #0, #0 [end f12 f10]",
+        "end:",
+    ] + VS_EPILOGUE,
     # the iterated colour (PDS DOUTI colour x4) is already the packed pixel
     "copy_fs": [
         "phas.i #0, #0 [wait=7]",

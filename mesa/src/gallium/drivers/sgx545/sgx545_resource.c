@@ -16,9 +16,10 @@
 #include "sgx545_screen.h"
 #include "sgx545_texture.h"
 
-/* render targets: the PBE writes rows of a multiple of 32 pixels (STATE.md
- * section 4).  A sampled texture in a format the TPU reads twiddled is laid
- * out as a texture even when it may also be rendered to. */
+/* What a window or pbuffer is, and the colour buffers in a format that isn't
+ * a texture format: rows of a multiple of 32 pixels (STATE.md section 4), read
+ * in place.  Anything in a texture format is laid out as a texture even when it
+ * is rendered to: the PBE writes that layout (TEX.md sections 4, 11). */
 static bool
 is_render_target(const struct pipe_resource *templ)
 {
@@ -26,8 +27,7 @@ is_render_target(const struct pipe_resource *templ)
       return false;
    if (templ->bind & (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))
       return true;
-   return (templ->bind & PIPE_BIND_RENDER_TARGET) &&
-          !((templ->bind & PIPE_BIND_SAMPLER_VIEW) && sgx545_tex_format(templ->format));
+   return (templ->bind & PIPE_BIND_RENDER_TARGET) && !sgx545_tex_format(templ->format);
 }
 
 static size_t
@@ -183,14 +183,47 @@ sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 }
 
 bool
-sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res,
-                       struct sgxws_target *t)
+sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res, unsigned level,
+                       unsigned layer, struct sgxws_target *t)
 {
-   if (!res->bo.va || !res->pitch || util_format_get_blocksize(res->base.format) != 4)
+   memset(t, 0, sizeof(*t));
+   t->bo = &res->bo;
+   switch (res->base.format) {
+   case PIPE_FORMAT_B8G8R8A8_UNORM:
+   case PIPE_FORMAT_B8G8R8X8_UNORM:
+      t->pbe_format = 0;
+      t->t1_format = 0x0c;
+      break;
+   case PIPE_FORMAT_R8G8B8A8_UNORM:
+   case PIPE_FORMAT_R8G8B8X8_UNORM:
+      t->pbe_format = 1;
+      t->t1_format = 0x0d;         /* swaps R and B against 0x0c: the PBE's order back */
+      break;
+   case PIPE_FORMAT_B5G6R5_UNORM:
+      t->pbe_format = 3;
+      t->t1_format = 0x05;
+      break;
+   default:
+      return false;
+   }
+   if (res->texture) {
+      unsigned w = u_minify(res->base.width0, level), h = u_minify(res->base.height0, level);
+      bool twiddled = util_is_power_of_two_nonzero(w) && util_is_power_of_two_nonzero(h);
+
+      t->va = res->bo.va + sgx545_tex_offset(&res->base, level, layer);
+      t->stride = twiddled ? w : align(w, 8);
+      t->t1_layout = twiddled ? 0 : 3;
+      simple_mtx_lock(&screen->lock);
+      sgxws_bo_prepare_target(screen->dev, &res->bo);
+      simple_mtx_unlock(&screen->lock);
+      res->rendered |= 1u << level;
+      return true;
+   }
+   if (!res->bo.va || !res->pitch || level || layer || util_format_get_blocksize(res->base.format) != 4)
       return false;
    t->va = res->bo.va;
    t->stride = res->pitch;
-   t->bo = &res->bo;
+   t->t1_layout = 6;
    return true;
 }
 
@@ -216,6 +249,16 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
       /* and the renders already submitted into it */
       if (sgxws_bo_wait(&res->bo, 2000))
          fprintf(stderr, "sgx545: a render into a mapped buffer did not finish\n");
+   }
+   /* A texture the GPU rendered into: the CPU copy catches up first */
+   if (res->texture && res->rendered && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
+      ctx->stats.fl_read += ctx->recording == res;
+      sgx545_flush_resource_writes(ctx, res);
+      if (sgxws_bo_wait(&res->bo, 2000))
+         fprintf(stderr, "sgx545: a render into a mapped texture did not finish\n");
+      u_foreach_bit(l, res->rendered)
+         sgx545_tex_decode_level(res, l);
+      res->rendered = 0;
    }
    /* A texture write lands in the CPU copy; the unmap puts it on the device
     * copy, or on a second one when a render may still sample the first
@@ -255,8 +298,8 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
 }
 
 static void
-alt_dirty_add(struct sgx545_resource *res, unsigned level, unsigned x0, unsigned y0, unsigned x1,
-              unsigned y1)
+alt_dirty_add(struct sgx545_resource *res, unsigned level, unsigned layer, unsigned x0, unsigned y0,
+              unsigned x1, unsigned y1)
 {
    if (!res->alt.va || res->n_alt_dirty == SGX545_ALT_ALL)
       return;
@@ -265,6 +308,7 @@ alt_dirty_add(struct sgx545_resource *res, unsigned level, unsigned x0, unsigned
       return;
    }
    res->alt_dirty[res->n_alt_dirty].level = level;
+   res->alt_dirty[res->n_alt_dirty].layer = layer;
    res->alt_dirty[res->n_alt_dirty].x0 = x0;
    res->alt_dirty[res->n_alt_dirty].y0 = y0;
    res->alt_dirty[res->n_alt_dirty].x1 = MIN2(x1, 0xffff);
@@ -282,8 +326,8 @@ alt_dirty_add(struct sgx545_resource *res, unsigned level, unsigned x0, unsigned
  * CPU copy first.
  */
 static void
-tex_write(struct sgx545_context *ctx, struct sgx545_resource *res, unsigned level, unsigned x0,
-          unsigned y0, unsigned x1, unsigned y1)
+tex_write(struct sgx545_context *ctx, struct sgx545_resource *res, unsigned level, unsigned layer,
+          unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
    struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
    uint32_t done = ctx->hw ? sgxws_done_seq(ctx->hw) : 0;
@@ -314,14 +358,14 @@ tex_write(struct sgx545_context *ctx, struct sgx545_resource *res, unsigned leve
                sgx545_tex_encode_level(res, l);
          } else {
             for (unsigned i = 0; i < res->n_alt_dirty; i++)
-               sgx545_tex_encode_box(res, res->alt_dirty[i].level, res->alt_dirty[i].x0,
+               sgx545_tex_encode_box(res, res->alt_dirty[i].level, res->alt_dirty[i].layer, res->alt_dirty[i].x0,
                                      res->alt_dirty[i].y0, res->alt_dirty[i].x1, res->alt_dirty[i].y1);
          }
          res->n_alt_dirty = 0;
       }
    }
-   sgx545_tex_encode_box(res, level, x0, y0, x1, y1);
-   alt_dirty_add(res, level, x0, y0, x1, y1);
+   sgx545_tex_encode_box(res, level, layer, x0, y0, x1, y1);
+   alt_dirty_add(res, level, layer, x0, y0, x1, y1);
 }
 
 static void
@@ -335,8 +379,9 @@ sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    if (res->texture && (ptrans->usage & PIPE_MAP_WRITE)) {
       uint64_t t = ctx->stats.on ? os_time_get_nano() : 0;
 
-      tex_write(ctx, res, ptrans->level, ptrans->box.x, ptrans->box.y,
-                ptrans->box.x + ptrans->box.width, ptrans->box.y + ptrans->box.height);
+      for (int z = ptrans->box.z; z < ptrans->box.z + ptrans->box.depth; z++)
+         tex_write(ctx, res, ptrans->level, z, ptrans->box.x, ptrans->box.y,
+                   ptrans->box.x + ptrans->box.width, ptrans->box.y + ptrans->box.height);
       if (ctx->stats.on) {
          ctx->stats.tex_ns += os_time_get_nano() - t;
          ctx->stats.tex_writes++;

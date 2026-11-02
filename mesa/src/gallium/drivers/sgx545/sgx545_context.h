@@ -99,6 +99,9 @@ struct sgx545_context {
 
    struct pipe_framebuffer_state framebuffer;
    struct pipe_viewport_state viewport;
+   struct pipe_scissor_state scissor;
+   struct pipe_blend_color blend_color;
+   struct pipe_stencil_ref stencil_ref;
    struct sgx545_rasterizer *rasterizer;
    struct sgx545_dsa *dsa;
    struct sgx545_blend *blend;

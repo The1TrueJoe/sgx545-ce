@@ -117,7 +117,7 @@ struct sgxws_ctx {
    struct sgxws_ring usse_pix, usse_vtx;
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm, usse_frame;
    /* fixed programs */
-   uint32_t empty_v, empty_p, copy_fs, clear_vs, pe_ptoff, pe_emit, state_emit[33];
+   uint32_t empty_v, empty_p, copy_fs, clear_vs, vpgen_vs, pe_ptoff, pe_emit, state_emit[33];
    uint32_t sec_wait;                /* pixel secondary task: wait for the constants' DMA */
    uint32_t empty_state, terminate;  /* VDM state programs (PDS vertex heap) */
    uint32_t pds_empty_p;             /* pixel PDS program: run the empty task */
@@ -132,6 +132,7 @@ struct sgxws_ctx {
    uint32_t vdm_start;
    uint32_t bg_pds[3];
    unsigned draws;                   /* objects recorded in this frame */
+   struct sgxws_rect clip;           /* what the visible bits and the region clip are now */
    unsigned room_flushes;            /* frames submitted early because a ring filled */
    /* frames in flight: the ring slot recording now, and the render that last
     * used each slot */

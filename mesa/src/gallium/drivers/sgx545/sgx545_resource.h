@@ -30,6 +30,7 @@ struct sgx545_resource {
    uint32_t stride;             /* bytes per row of level 0 */
    size_t level_offset[16];     /* each level in the linear CPU copy */
    bool texture;                /* data is the CPU copy of bo (texture heap, laid out by sgx545_texture.c) */
+   uint32_t rendered;           /* a texture's levels rendered into since data was last brought up to date */
    uint32_t pitch;              /* pixels per row of a render target (a multiple of 32) */
 
    /* A texture written while a render may still sample it: the write goes to
@@ -39,7 +40,7 @@ struct sgx545_resource {
    struct sgxws_bo alt;
    uint32_t alt_use_seq;
    unsigned n_alt_dirty;        /* SGX545_ALT_ALL: re-encode everything */
-   struct { uint16_t level, x0, y0, x1, y1; } alt_dirty[32];
+   struct { uint16_t level, layer, x0, y0, x1, y1; } alt_dirty[32];
 };
 
 static inline struct sgx545_resource *
@@ -69,8 +70,8 @@ struct sgx545_transfer {
 void sgx545_resource_screen_init(struct sgx545_screen *screen);
 void sgx545_resource_context_init(struct sgx545_context *ctx);
 
-/* the target a render into this resource writes */
-bool sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res,
-                            struct sgxws_target *t);
+/* the target a render into this level and layer of the resource writes */
+bool sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res, unsigned level,
+                            unsigned layer, struct sgxws_target *t);
 
 #endif

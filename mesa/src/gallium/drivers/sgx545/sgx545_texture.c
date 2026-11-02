@@ -58,22 +58,41 @@ level_bytes(unsigned w, unsigned h, unsigned bpp)
    return (size_t)(twiddled(w, h) ? w : align(w, 8)) * h * bpp;
 }
 
-size_t
-sgx545_tex_level_offset(const struct pipe_resource *prsc, unsigned level)
+/* a level within its mip chain */
+static size_t
+chain_offset(const struct pipe_resource *prsc, unsigned level)
 {
    unsigned bpp = util_format_get_blocksize(prsc->format);
    size_t off = 0;
 
    for (unsigned l = 0; l < level; l++)
-      off += level_bytes(u_minify(prsc->width0, l), u_minify(prsc->height0, l), bpp) *
-             prsc->array_size;
+      off += level_bytes(u_minify(prsc->width0, l), u_minify(prsc->height0, l), bpp);
    return off;
+}
+
+/* Cube faces follow one another, each a complete chain: packed when level 0
+ * is smaller than one 16x16 tile, else on a tile's bytes (TEX.md section 8:
+ * 8x8 0x154, 16x16 0x800, 32x32 0x1800; the alignment's rule is a fit, [G]) */
+static size_t
+face_stride(const struct pipe_resource *prsc)
+{
+   size_t chain = chain_offset(prsc, prsc->last_level + 1);
+
+   if (prsc->width0 < TILE)
+      return chain;
+   return align64(chain, TILE * TILE * util_format_get_blocksize(prsc->format));
+}
+
+size_t
+sgx545_tex_offset(const struct pipe_resource *prsc, unsigned level, unsigned layer)
+{
+   return layer * face_stride(prsc) + chain_offset(prsc, level);
 }
 
 size_t
 sgx545_tex_size(const struct pipe_resource *prsc)
 {
-   return sgx545_tex_level_offset(prsc, prsc->last_level + 1);
+   return prsc->array_size > 1 ? prsc->array_size * face_stride(prsc) : chain_offset(prsc, prsc->last_level + 1);
 }
 
 /* Copy the box x0..x1, y0..y1 of a level from the CPU copy into the texture
@@ -81,15 +100,15 @@ sgx545_tex_size(const struct pipe_resource *prsc)
  * put together on the stack and written in one go, only partly covered tiles
  * at the box's edges are written texel by texel. */
 void
-sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned x0, unsigned y0,
-                      unsigned x1, unsigned y1)
+sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned layer, unsigned x0,
+                      unsigned y0, unsigned x1, unsigned y1)
 {
    struct pipe_resource *prsc = &res->base;
    unsigned w = u_minify(prsc->width0, level), h = u_minify(prsc->height0, level);
    unsigned bpp = util_format_get_blocksize(prsc->format);
    unsigned src_stride = util_format_get_stride(prsc->format, w);
-   const uint8_t *src = (const uint8_t *)res->data + res->level_offset[level];
-   uint8_t *dst = (uint8_t *)res->bo.map + sgx545_tex_level_offset(prsc, level);
+   const uint8_t *src = (const uint8_t *)res->data + res->level_offset[level] + (size_t)layer * src_stride * h;
+   uint8_t *dst = (uint8_t *)res->bo.map + sgx545_tex_offset(prsc, level, layer);
    bool rgbx = prsc->format == PIPE_FORMAT_R8G8B8X8_UNORM;
 
    x1 = MIN2(x1, w);
@@ -147,7 +166,48 @@ sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned x0, 
 void
 sgx545_tex_encode_level(struct sgx545_resource *res, unsigned level)
 {
-   sgx545_tex_encode_box(res, level, 0, 0, ~0u, ~0u);
+   for (unsigned layer = 0; layer < res->base.array_size; layer++)
+      sgx545_tex_encode_box(res, level, layer, 0, 0, ~0u, ~0u);
+}
+
+/* what a render left in a level, into the CPU copy (uncached reads: only for a
+ * transfer of a texture rendered into) */
+void
+sgx545_tex_decode_level(struct sgx545_resource *res, unsigned level)
+{
+   struct pipe_resource *prsc = &res->base;
+   unsigned w = u_minify(prsc->width0, level), h = u_minify(prsc->height0, level);
+   unsigned bpp = util_format_get_blocksize(prsc->format);
+   unsigned stride = util_format_get_stride(prsc->format, w);
+
+   for (unsigned layer = 0; layer < prsc->array_size; layer++) {
+      uint8_t *dst = (uint8_t *)res->data + res->level_offset[level] + (size_t)layer * stride * h;
+      const uint8_t *src = (const uint8_t *)res->bo.map + sgx545_tex_offset(prsc, level, layer);
+
+      if (!twiddled(w, h)) {
+         size_t pitch = (size_t)align(w, 8) * bpp;
+
+         for (unsigned y = 0; y < h; y++)
+            memcpy(dst + y * stride, src + y * pitch, stride);
+         continue;
+      }
+      unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)), t = 1u << n;
+      uint32_t spread[TILE];
+
+      for (unsigned i = 0; i < t; i++) {
+         spread[i] = 0;
+         for (unsigned b = 0; b < n; b++)
+            spread[i] |= (i >> b & 1) << (2 * b);
+      }
+      for (unsigned y = 0; y < h; y++) {
+         for (unsigned x = 0; x < w; x++) {
+            size_t tile = (size_t)(y >> n) * (w >> n) + (x >> n);
+            size_t at = tile * t * t + (spread[y & (t - 1)] | spread[x & (t - 1)] << 1);
+
+            memcpy(dst + y * stride + (size_t)x * bpp, src + at * bpp, bpp);
+         }
+      }
+   }
 }
 
 static unsigned
