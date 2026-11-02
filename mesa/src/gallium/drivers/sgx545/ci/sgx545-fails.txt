@@ -1,5 +1,5 @@
-# 2026-11-02: 17165 tests, Fail 382, Pass 16333, Skip 445, Timeout 1, Warn 4
-# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re 269889a (drive-deqp.py)
+# 2026-11-02: 17165 tests, Fail 378, Pass 16337, Skip 445, Timeout 1, Warn 4
+# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re c76d83e, plus a 1-in-4 sample of the suite on it (drive-deqp.py)
 
 # fragment_ops random/interaction: two-sided stencil drew blank or wrong channels from run to run until its block got the DDK's 27-dword DMA (+45); the rest not looked at yet
 dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.1,Fail
@@ -361,12 +361,6 @@ dEQP-GLES2.functional.fbo.render.shared_depthbuffer.tex2d_bgra_depth_component16
 dEQP-GLES2.functional.fbo.render.shared_depthbuffer.tex2d_rgb_depth_component16,Fail
 dEQP-GLES2.functional.fbo.render.shared_depthbuffer.tex2d_rgba_depth_component16,Fail
 dEQP-GLES2.functional.fbo.render.stencil_clear.tex2d_rgb_stencil_index8,Fail
-
-# compiler: random combinations that fail with F16 off too; with the compiler session
-dEQP-GLES2.functional.shaders.random.all_features.fragment.20,Fail
-dEQP-GLES2.functional.shaders.random.all_features.fragment.32,Fail
-dEQP-GLES2.functional.shaders.random.all_features.fragment.5,Fail
-dEQP-GLES2.functional.shaders.random.all_features.fragment.88,Fail
 
 # polygon offset units
 dEQP-GLES2.functional.polygon_offset.default_displacement_with_units,Fail
