@@ -45,9 +45,15 @@ SC_RIFLIST = 0x3C    # render-in-flight list head (we keep it empty: 0 or 1 entr
 
 # ---- host control block (SGXMKIF_HOST_CTL) word offsets --------------------
 HC_INIT = 0
+HC_POWER = 1         # ui32PowerStatus
+HC_CLEANUP = 2       # ui32CleanupStatus
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
+POWERCMD_POWEROFF = 1
+POWERCMD_IDLE = 2
+POWERCMD_RESUME = 3
+CTXSUSPCMD_RESUME = 2
 
 # ---- HW render context (SGX_REGISTER_HW_RENDER_CONTEXT) word offsets --------
 CTX_PD = 2           # page directory phys (kernel-filled)
@@ -56,8 +62,35 @@ CTX_CCBCTL = 4       # client CCB control (write/read offsets, bytes)
 
 # ---- SGXMKIF_COMMAND (kernel CCB entry, 32 bytes) --------------------------
 CMD_SERVICE = 0      # = command type (our host-kick table is the identity)
+CMD_DATA0 = 2        # ui32Data[0]
 CMD_DATA1 = 3        # ui32Data[1] = HW render context for a TA
 CMD_WORDS = 8        # 32 bytes
+
+# command types (SGXMKIF_CMD_TYPE); our host-kick table is the identity
+CMD_TA = 0
+CMD_TRANSFER = 1
+CMD_POWER = 3
+CMD_CTXSUSPEND = 4
+CMD_CLEANUP = 5
+CMD_GETMISCINFO = 6
+
+# ---- get-misc-info: the SGXMKIF version/feature surface and struct sizes ----
+# PVRSRV_SGX_MISCINFO_INFO, written into the misc buffer. The version words are
+# the SGXMKIF interface identity the kernel's DDK-version check validates
+# (docs/UKERNEL-DECISIONS.md: we stay SGXMKIF-compatible); the struct sizes are
+# the same ones srvinit declares in SGX_BRIDGE_INIT_INFO (docs/UKERNEL.md).
+MISC_READY = 0x1
+MISC_GET_STRUCT_SIZES = 0x2
+MISC_VER3 = 0x10711          # misc[3]
+MISC_BUILD = 862890          # misc[4] = DDK build 1.7.862890
+MISC_CORE = 545              # misc[5]
+MISC_VER6 = 0x1000D          # misc[6]
+MISC_BUILDOPTS = 0x60218     # misc[7] = ui32ClientBuildOptions
+# misc word -> struct size (SGX_MISCINFO_STRUCT_SIZES)
+MISC_SIZES = [(8, 0x2b0), (9, 0x1e0), (10, 0x4c8), (11, 0xdc), (12, 0xd0), (13, 0x3c),
+              (14, 0x44), (15, 0x1ec), (16, 0x38), (17, 0x50), (18, 0xb4), (19, 0x44), (20, 0x20)]
+CR_CORE_ID = 0x1C
+CR_CORE_REVISION = 0x20
 
 # ---- SGXMKIF_CMDTA client command header word offsets (docs/STATE.md §1) ---
 CMDTA_SIZE = 0x00 // 4
@@ -327,12 +360,103 @@ def build(a):
     a.i(f"ld.a.d r7, r6, #{CMD_SERVICE} [moe]")          # type
     a.i(f"ld.a.d r8, r6, #{CMD_DATA1} [moe]")            # data[1] = context
     a.i("wdf")
-    a.i("test.and.ne p0, r7, r7")               # type 0 = TA?
-    a.i("(p0) ba kick_adv")                     # non-TA: nothing else this version
-    a.i("mov r16, r8 [mask=1]")                 # pass context to do_ta
+    a.i(f"ld.a.d r9, r6, #{CMD_DATA0} [moe]")   # data[0]
+    a.i("wdf")
+    # dispatch on the command type (our host-kick table is the identity)
+    a.i(f"test.and.eq p0, r7, r7")              # type 0 = TA
+    a.i("(p0) ba k_ta")
+    a.i(f"test.xor.eq p0, r7, #{CMD_GETMISCINFO}")
+    a.i("(p0) ba k_getmiscinfo")
+    a.i(f"test.xor.eq p0, r7, #{CMD_POWER}")
+    a.i("(p0) ba k_power")
+    a.i(f"test.xor.eq p0, r7, #{CMD_CTXSUSPEND}")
+    a.i("(p0) ba k_ctxsuspend")
+    a.i(f"test.xor.eq p0, r7, #{CMD_CLEANUP}")
+    a.i("(p0) ba k_cleanup")
+    a.i(f"test.xor.eq p0, r7, #{CMD_TRANSFER}")
+    a.i("(p0) ba k_transfer")
+    a.i("ba kick_adv")                          # process-queues / unhandled: nothing
+    a.label("k_ta")
+    a.i("mov r16, r8 [mask=1]")                 # context
     a.i("savl r23")
     a.i("ba do_ta [link]")
     a.i("setl r23")
+    a.i("ba kick_adv")
+    # get-misc-info: core identity, version and struct sizes into the misc
+    # buffer (data[1]), then set READY (docs/UKERNEL.md §3 "Get misc info")
+    a.label("k_getmiscinfo")
+    a.i("mov r2, r8 [mask=1]")                  # misc buffer
+    a.i(f"ldr r1, #{CR_CORE_REVISION // 4}")
+    a.i(f"ldr r3, #{CR_CORE_ID // 4}")
+    a.i("wdf")
+    a.i("st.a.d r2, #1, r1 [moe]")              # core revision
+    a.i("st.a.d r2, #2, r3 [moe]")              # core id
+    for word, val in ((3, MISC_VER3), (4, MISC_BUILD), (5, MISC_CORE), (6, MISC_VER6), (7, MISC_BUILDOPTS)):
+        a.i(f"limm r1, #{val}")
+        a.i(f"st.a.d r2, #{word}, r1 [moe]")
+    a.i("ld.a.d r3, r2, #0 [moe]")              # flags
+    a.i("wdf")
+    a.i(f"test.and.ne p0, r3, #{MISC_GET_STRUCT_SIZES}")
+    a.i("(!p0) ba k_misc_ready")
+    for word, val in MISC_SIZES:
+        a.i(f"limm r1, #{val}")
+        a.i(f"st.a.d r2, #{word}, r1 [moe]")
+    a.label("k_misc_ready")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ld.a.d r3, r2, #0 [moe]")
+    a.i("wdf")
+    a.i(f"or r3, r3, #{MISC_READY}")
+    a.i("st.a.d r2, #0, r3 [moe]")              # ui32MiscInfoFlags |= READY
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # power (data[1] = PVRSRV_POWERCMD): report completion in ui32PowerStatus,
+    # which sgxpower.c polls. The DDK also drives its power-management state
+    # machine; the host-visible contract is the completion bit (full internals
+    # come with the multi-render scheduler). POWEROFF -> bit 3, IDLE -> bit 2.
+    a.label("k_power")
+    a.i(f"mov r2, sa{SA_HOSTCTL} [mask=1]")
+    a.i(f"ld.a.d r3, r2, #{HC_POWER} [moe]")
+    a.i("wdf")
+    a.i(f"test.xor.eq p0, r8, #{POWERCMD_POWEROFF}")
+    a.i("(p0) or r3, r3, #8")                   # POWMAN_POWEROFF_COMPLETE
+    a.i(f"test.xor.eq p0, r8, #{POWERCMD_IDLE}")
+    a.i("(p0) or r3, r3, #4")                   # POWMAN_IDLE_COMPLETE
+    a.i(f"st.a.d r2, #{HC_POWER}, r3 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # context suspend (data[0] = context, data[1] = suspend/resume): set or
+    # clear the context's suspend flag (bit 4 of its flags word)
+    a.label("k_ctxsuspend")
+    a.i("ld.a.d r1, r9, #0 [moe]")
+    a.i("wdf")
+    a.i(f"test.xor.eq p0, r8, #{CTXSUSPCMD_RESUME}")
+    a.i("(p0) and.inv r1, r1, #16")
+    a.i("(!p0) or r1, r1, #16")
+    a.i("st.a.d r9, #0, r1 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # cleanup (data[0] = resource type, data[1] = resource): report completion
+    # in ui32CleanupStatus, which sgxutils.c polls. The DDK also unlinks the
+    # resource from the microkernel's lists only when safe; that list surgery
+    # is the multi-render-bookkeeping item.
+    a.label("k_cleanup")
+    a.i(f"mov r2, sa{SA_HOSTCTL} [mask=1]")
+    a.i(f"ld.a.d r3, r2, #{HC_CLEANUP} [moe]")
+    a.i("wdf")
+    a.i("or r3, r3, #1")                        # CLEANUPCMD_COMPLETE
+    a.i(f"st.a.d r2, #{HC_CLEANUP}, r3 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")
+    # transfer (data[1] = HW transfer context): a 3D-only render (texture
+    # uploads and the swap blit). TODO: the full handler; stubbed so the
+    # command set dispatches.
+    a.label("k_transfer")
+    a.i("ba kick_adv")
     a.label("kick_adv")
     # read offset := (read offset + 1) & 0xff
     a.i(f"mov r1, sa{SA_KCCBCTL} [mask=1]")
