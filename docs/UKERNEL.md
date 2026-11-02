@@ -123,6 +123,9 @@ The event word is a set of the `EUR_CR_EVENT_STATUS` bits that were pending,
 masked to the ones the microkernel acts on. The dispatcher tests them in
 priority order and, for most, writes the matching bit back to
 `EUR_CR_EVENT_HOST_CLEAR`/`CLEAR2` to acknowledge it before handling it.
+(openHC: the `kick` handler acknowledges SW_EVENT as its first action; the
+matching acknowledge in `ta_finished` and `render_done` is still to add,
+validated against the DDK render trace when frames run.)
 The groups, with the status bit each corresponds to:
 
 | event | status bit | handler, in outline |
@@ -331,6 +334,19 @@ reproduces the clean path: after `Machine.init()` the host control block's
 first word reads 1 (`tools/ukernel/run.py`, the `init` section). A timeout here
 is only logged ("Wait for uKernel initialisation failed"), so a successful
 `INITSRV_DISCONNECT` does not prove the microkernel ran — a client must render.
+
+**Hardware status (EA3, 2026-11-02).** The open microkernel's clean-boot init
+path runs on hardware: after `srvinit -o`, Host control `ui32InitStatus` reads 1
+and the advisory version word is at ctlblk+0x58 (evidence:
+`docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md`). The first
+event kick reaches the init entry and completes. **The next kick does not.** The
+kernel's `GETMISCINFO` compat-check command is queued (Kernel CCB `WO:1`) but the
+read offset never advances (`RO:0`) and the core locks up; sentinels on the
+post-init dispatch path never fire. So after init ends, the event program is not
+re-entered to service the SW_EVENT host kick. This points at the init-script
+setup of §4 (the event-program address and the SW_EVENT event-enable in
+`docs/SRVINIT.md`): the first kick arms and runs the event program, but a
+subsequent SW_EVENT does not re-run it. This is the open blocker ahead of frames.
 
 ## 5a. Hardware recovery and re-initialisation
 

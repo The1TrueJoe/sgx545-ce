@@ -238,8 +238,9 @@ class Asm:
 
     def ld_sa(self, dst, saword, off):
         """dst = *(*(ctlblk+saword) + off); saword 0 (SA_SELF) is the base (r17)
-        itself. The base is a reserved temp, not a secondary attribute, because a
-        task cannot write its own sa on this core (docs/UKERNEL.md §1)."""
+        itself. The base is a reserved temp, not a secondary attribute, because
+        sa is unset in the bare-DOUTU event context until the emit/DMA sets it up
+        (docs/UKERNEL.md §1)."""
         if saword == SA_SELF:
             self.i(f"ld.a.d r{dst}, r17, #{off} [moe]")
         else:
@@ -347,10 +348,13 @@ def build(a):
     a.label("event")
     a.phas()
     a.patch(17, "ctlblk")                          # r17 = control block base, reserved for the
-                                                   # whole task. A USSE task cannot write its own
-                                                   # secondary attributes (hardware-confirmed), so
-                                                   # instead of populating sa the handlers derive
-                                                   # the host-control / CCB pointers from r17.
+                                                   # whole task. A task can write its own secondary
+                                                   # attributes, but only after the emit-triggered
+                                                   # pds1 DMA sets sa up; this event program is a
+                                                   # bare DOUTU with no such DMA, so sa is empty on
+                                                   # entry (writing it here wedges init, EA3 HW-
+                                                   # confirmed 2026-11-02). The handlers therefore
+                                                   # derive host-control / CCB pointers from r17.
     # init not done yet (ui32InitStatus == 0) -> init. host control = *(ctlblk + 1).
     a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
@@ -411,6 +415,16 @@ def build(a):
     # (our host-kick table is the identity, docs/UKERNEL.md §3). Dispatch, then
     # advance the read offset and end. One command per entry (one context).
     a.label("kick")
+    # acknowledge SW_EVENT before handling it (docs/UKERNEL.md §2): write the
+    # bit back to EUR_CR_EVENT_HOST_CLEAR. Without this the event program
+    # re-fires forever on the still-set bit (an event storm the core reports as
+    # a lockup) — hardware-confirmed on the EA3, 2026-11-02, where the open
+    # microkernel's init completed but the first host kick (GETMISCINFO) wedged
+    # the core. (The emulator runs one task to completion, so the storm is not
+    # visible offline.) The matching acknowledge in ta_finished / render_done is
+    # still to add, validated against the DDK render trace when frames are run.
+    a.i(f"limm r3, #{SW_EVENT}")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")     # kernel CCB control
     a.i("wdf")
     a.i("ld.a.d r2, r1, #0 [moe]")              # write offset (slot index)
