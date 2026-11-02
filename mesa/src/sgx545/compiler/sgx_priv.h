@@ -1,4 +1,9 @@
 /*
+ * Copyright © 2026 Joseph Telaak
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
  * SGX545 compiler internals: the backend IR between NIR and USSE words.
  *
  * One sgx_ins is one USSE instruction (a form from usse_forms.h) over up to

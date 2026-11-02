@@ -1,4 +1,9 @@
 /*
+ * Copyright © 2026 Joseph Telaak
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
  * SGX545 compiler: NIR options, varying set allocation, I/O assignment and
  * the NIR lowering pipeline that runs before instruction selection.
  */

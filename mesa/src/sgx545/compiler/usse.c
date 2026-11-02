@@ -1,4 +1,9 @@
 /*
+ * Copyright © 2026 Joseph Telaak
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
  * USSE encoder: hw.encode() (tools/isa/hw.py) over the generated tables.
  */
 #include <string.h>
