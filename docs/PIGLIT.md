@@ -29,6 +29,12 @@ path.
 runs it a chunk at a time, as it does dEQP: `piglit-runner` takes no caselist,
 so each chunk goes to it as anchored `--include-tests` regexes.
 
+On a box other sessions share, `mesa/tests/piglit/slices.sh NAME` runs it in
+slices of about 30 minutes, each holding `/tmp/gpu.lock` throughout and starting
+only on the box's normal boot with no SGX recoveries but its own; the payload
+copy (no GPU work) goes first, in pieces marked done on the box, so another
+session's reboot only costs the pieces in flight.
+
 ## Build and setup traps
 
 - **waffle 1.8.1 doesn't build against glibc 2.34+** (its C11 `once_flag`
