@@ -127,12 +127,14 @@ blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, bool force_sopwm,
    if (force_sopwm ||
        (!min_c && (blend_factor_constant(rt->rgb_src_factor) || blend_factor_constant(rt->rgb_dst_factor))) ||
        (!min_a && (blend_factor_constant(rt->alpha_src_factor) || blend_factor_constant(rt->alpha_dst_factor)))) {
-      /* dst - src reads r1, r0: only one direction per blend */
-      if ((rev_c || rev_a) && ((!rev_c && b->cop == SGXWS_BOP_SUB) || (!rev_a && b->aop == SGXWS_BOP_SUB)))
-         return false;
+      /* dst - src reads r1, r0; a subtract on the other channel that runs
+       * the other way gets its products in r0 and r1 traded */
       b->blend = 1;
       b->constant = 1;
-      b->swap = rev_c || rev_a;
+      if (rev_c || rev_a) {
+         b->swap = rev_c || b->cop != SGXWS_BOP_SUB;
+         b->atrade = b->swap ? !rev_a && b->aop == SGXWS_BOP_SUB : rev_a;
+      }
       b->fs = min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_src_factor, dst_alpha);
       b->fd = min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_dst_factor, dst_alpha);
       /* SRC_ALPHA_SATURATE's alpha is 1 */

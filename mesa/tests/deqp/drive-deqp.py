@@ -25,7 +25,8 @@ $MESA_DIR for sgx545) is copied to $BOX_DIR (default /root/deqp) when missing.
 
 Environment:
   RECOVER     shell command that power-cycles the box and returns once it has
-              booted and its GPU is up (default: mesa/tests/deqp/recover-ea3.sh)
+              booted and its GPU is up (default: mesa/tests/deqp/recover-ea3.sh);
+              "none" stops the run at the first wedge instead
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
   BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
@@ -49,6 +50,7 @@ CONFIG = "rgba8888d24s8ms0"
 TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
 SSH_TIMEOUT = 25
 RUN_DIR = None
+LOCK = "flock /tmp/gpu.lock"  # per chunk; empty with --hold-lock
 
 
 def log(*a):
@@ -63,10 +65,17 @@ class Box:
         """(returncode, output); returncode None when the box didn't answer in time."""
         args = ["sshpass", "-p", "openhc", "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + self.host, cmd]
-        try:
-            r = subprocess.run(args, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return None, b""
+        for attempt in range(4):
+            t0 = time.time()
+            try:
+                r = subprocess.run(args, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return None, b""
+            # a login refused at once (the EA1 does that now and then) is not a wedge
+            if r.returncode != 255 or time.time() - t0 > 15:
+                break
+            time.sleep(3)
         return (None if r.returncode == 255 else r.returncode), r.stdout
 
     def alive(self, tries=3):
@@ -88,17 +97,20 @@ def payload(box, who, name):
     rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -f {BOX_DIR}/.complete-{name}")
     if rc == 0:
         return
-    log("copying the payload to the box")
+    # dEQP itself is there from an earlier run: only a new Mesa to send
+    exe = "deqp-gles2" if who == "sgx545" else "deqp-gles2-i386"
+    rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -x {BOX_DIR}/{exe}")
+    whole = rc != 0
+    log("copying the payload to the box" if whole else "copying our Mesa to the box")
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as t:
         out = os.path.join(WORK, "out")
-        t.add(os.path.join(out, "deqp-runner"), "deqp-runner")
-        t.add(os.path.join(out, "gles2"), "gles2")
+        if whole:
+            t.add(os.path.join(out, "deqp-runner"), "deqp-runner")
+            t.add(os.path.join(out, "gles2"), "gles2")
+            t.add(os.path.join(out, exe), exe)
         if who == "sgx545":
-            t.add(os.path.join(out, "deqp-gles2"), "deqp-gles2")
             t.add(os.environ["MESA_DIR"], "lib-" + name)
-        else:
-            t.add(os.path.join(out, "deqp-gles2-i386"), "deqp-gles2-i386")
     rc, o = box.ssh(f"mkdir -p {BOX_DIR} && cd {BOX_DIR} && tar xf - && touch .complete-{name}", timeout=900,
                     stdin=buf.getvalue())
     if rc != 0:
@@ -117,7 +129,7 @@ def runner_script(who, name):
         wrap = (f"printf '#!/bin/sh\\ncd {BOX_DIR}\\nLD_PRELOAD={DDK_ROOT}/usr/lib/sgx-busidshim.so exec "
                 f"{DDK_ROOT}/lib/ld-linux.so.2 --library-path {DDK_ROOT}/usr/lib:{DDK_ROOT}/lib "
                 f"{BOX_DIR}/deqp-gles2-i386 \"$@\"\\n' > {deqp}; chmod +x {deqp}; ")
-    return (f"{wrap}cd {BOX_DIR} && rm -rf out && {env} flock /tmp/gpu.lock ./deqp-runner run --deqp {deqp} "
+    return (f"{wrap}cd {BOX_DIR} && rm -rf out && {env} {LOCK} ./deqp-runner run --deqp {deqp} "
             f"--caselist chunk.txt --output out --jobs 1 --timeout {TEST_TIMEOUT} -- "
             f"--deqp-surface-type=pbuffer --deqp-surface-width=256 --deqp-surface-height=256 "
             f"--deqp-gl-config-name={CONFIG} --deqp-visibility=hidden > runner.log 2>&1; echo rc=$?")
@@ -132,7 +144,7 @@ def canary(box, who, name):
     else:
         pre = ""
         exe = f"{BOX_DIR}/deqp-gles2-ddk"
-    rc, out = box.ssh(f"cd {BOX_DIR} && env {pre} flock /tmp/gpu.lock {exe} "
+    rc, out = box.ssh(f"cd {BOX_DIR} && env {pre} {LOCK} {exe} "
                       f"--deqp-case=dEQP-GLES2.functional.color_clear.single_rgb --deqp-surface-type=pbuffer "
                       f"--deqp-surface-width=256 --deqp-surface-height=256 --deqp-gl-config-name={CONFIG} "
                       f"--deqp-visibility=hidden --deqp-log-filename=/dev/null 2>&1 | grep 'Passed:'", timeout=45)
@@ -141,6 +153,10 @@ def canary(box, who, name):
 
 def recover(box):
     cmd = os.environ.get("RECOVER", shlex.quote(os.path.join(HERE, "recover-ea3.sh")))
+    if cmd == "none":
+        # a box without a smart plug: someone has to power-cycle it
+        log("wedged, and RECOVER=none: stopping; power-cycle the box and rerun to carry on")
+        return False
     log("wedged: recovering the box:", cmd)
     subprocess.run(cmd, shell=True, check=False)
     deadline = time.time() + 600
@@ -197,6 +213,8 @@ def main():
     ap.add_argument("--max-wedges", type=int, default=40)
     ap.add_argument("--name", default=None)
     ap.add_argument("--caselist", default=None)
+    ap.add_argument("--hold-lock", action="store_true",
+                    help="hold /tmp/gpu.lock on the box for the whole run, so nothing interleaves between chunks")
     a = ap.parse_args()
     box = Box(a.box)
 
@@ -219,6 +237,28 @@ def main():
 
     if not box.alive():
         sys.exit("the box doesn't answer")
+    holder = None
+    if a.hold_lock:
+        # one SSH session keeps the lock while the marker exists; the chunks run without flock
+        global LOCK
+        LOCK = ""
+        box.ssh("touch /tmp/deqp-job")
+        holder = subprocess.Popen(["sshpass", "-p", "openhc", "ssh", "-o", "StrictHostKeyChecking=no",
+                                   "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + a.box,
+                                   "flock /tmp/gpu.lock sh -c 'echo locked; while [ -e /tmp/deqp-job ]; do sleep 2; done'"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if b"locked" not in holder.stdout.readline():
+            sys.exit("could not take /tmp/gpu.lock")
+        log("holding /tmp/gpu.lock for the run")
+    try:
+        run(a, box, name, todo, res_path, wedge_path)
+    finally:
+        if holder:
+            box.ssh("rm -f /tmp/deqp-job")
+            holder.wait(timeout=30)
+
+
+def run(a, box, name, todo, res_path, wedge_path):
     payload(box, a.who, name)
     if not canary(box, a.who, name):
         sys.exit("the canary doesn't pass on a fresh box: not starting")

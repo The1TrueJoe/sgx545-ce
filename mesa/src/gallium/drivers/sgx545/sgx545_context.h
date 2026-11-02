@@ -62,8 +62,8 @@ struct sgx545_shader {
    struct {
       struct sgxws_blend key;
       uint32_t code;
-   } variants[8];
-   unsigned n_variants;
+   } variants[32];
+   unsigned n_variants, next_variant;
    bool uses_front_face;        /* fragment: reads SGX545_SA_FRONT */
    bool reads_pointcoord;       /* fragment: its varyings start at set 1, gl_PointCoord is set 0 */
    struct sgx545_shader *sprite_vs;   /* vertex: the same with set 0 reserved, made when first drawn with such a shader */

@@ -132,6 +132,9 @@ struct sgxws_blend {
     * enum sgxws_bfactor; the blend colour, packed BGRA8, in sa2. */
    uint8_t constant;
    uint8_t fs, fd, fsa, fda;
+   /* the alpha side's products trade r0 and r1, so its subtract runs the
+    * other way from the colour's (SUBTRACT against REVERSE_SUBTRACT) */
+   uint8_t atrade;
 };
 
 /* a constant-colour blend's factors, in glBlendFunc's order */

@@ -7,11 +7,11 @@ draw.draw_elements,2,2,2
 draw.random,0,0,4
 fbo.api,0,0,2
 fbo.completeness,0,0,9
-fbo.render,101,72,110
-fragment_ops.blend,12,2,0
+fbo.render,101,64,110
+fragment_ops.blend,12,0,0
 fragment_ops.depth_stencil,1,0,0
-fragment_ops.interaction,92,69,2
-fragment_ops.random,100,75,0
+fragment_ops.interaction,92,0,2
+fragment_ops.random,100,0,0
 implementation_limits.max_vertex_uniform_vectors,1,1,0
 lifetime.attach,2,0,0
 negative_api.buffer,0,0,6
@@ -64,5 +64,5 @@ texture.wrap,0,0,2
 uniform_api.random,15,0,22
 uniform_api.value,176,0,4
 # first_pass: Crash 35, Fail 3075, Flake 13, Pass 13592, Skip 445, Timeout 1, Warn 4
-# now: Fail 378, Pass 16337, Skip 445, Timeout 1, Warn 4
+# now: Fail 224, Pass 16491, Skip 445, Timeout 1, Warn 4
 # ddk: Crash 11, Fail 1146, Flake 1, Pass 15837, Skip 124, Timeout 8, Warn 38

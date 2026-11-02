@@ -782,10 +782,13 @@ sgx545_fs_program(struct sgx545_context *ctx, struct sgx545_shader *so, const st
    simple_mtx_lock(&screen->lock);
    va = sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b, so->discard_pa, so->temps);
    simple_mtx_unlock(&screen->lock);
-   /* the program heap is never freed: past the table's size, the oldest
-    * variant's slot is reused and its program uploaded again when needed */
+   /* the program heap is never freed: past the table's size, the slots are
+    * reused in turn and a program uploaded again when needed (dEQP's
+    * fragment_ops.interaction draws one shader with dozens of blends; always
+    * reusing slot 0 uploaded at nearly every draw and filled the heap) */
    if (va) {
-      unsigned i = so->n_variants < ARRAY_SIZE(so->variants) ? so->n_variants++ : 0;
+      unsigned i = so->n_variants < ARRAY_SIZE(so->variants) ? so->n_variants++
+                                                              : so->next_variant++ % ARRAY_SIZE(so->variants);
 
       so->variants[i].key = *b;
       so->variants[i].code = va;

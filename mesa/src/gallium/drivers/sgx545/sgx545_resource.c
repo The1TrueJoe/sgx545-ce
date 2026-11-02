@@ -119,6 +119,10 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
       if (e)
          goto fail;
       res->texture = true;
+      /* the X byte of a format without alpha is read as alpha: 1 from the
+       * start, for a texture rendered into before anything is uploaded */
+      if (!util_format_has_alpha(templ->format) && util_format_get_blocksize(templ->format) == 4)
+         memset(res->bo.map, 0xff, sgx545_tex_size(prsc));
    }
    return prsc;
 
