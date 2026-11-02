@@ -369,9 +369,32 @@ complete mip chain in the layout of section 1. Face spacing:
 | c32m (32×32, 6 levels) | 0x1554 | 0x1800 |
 
 So faces are packed when level 0 is smaller than one 16×16 tile and aligned
-otherwise; 0x400 and 0x800 alignment both fit these two points [G for the
-exact rule]. Every texel of all four captures sits where `check.py --cube
+otherwise. Every texel of all four captures sits where `check.py --cube
 --face-stride` predicts (384, 510, 2046 and 8190 texels).
+
+**The alignment is 0x800 bytes in every format** [D] (EA1, 2026-11-02:
+probe cubes with full chains and NEAREST_MIPMAP_NEAREST, the DDK's texture
+buffer divided by six):
+
+| format | 8×8 | 16×16 | 32×32 | 64×64 |
+|---|---|---|---|---|
+| L8 | 0x55 (packed) | 0x800 | 0x800 | 0x1800 |
+| LA88, RGBA4444 | 0xaa (packed) | 0x800 | 0x1000 | 0x3000 |
+| RGBA8888 | 0x154 (packed) | 0x800 | 0x1800 | 0x5800 |
+
+**Mip levels sampled without mipmapping.** The sampler then spaces the faces
+by level 0 alone (T0 b18 set): with our chain-spaced faces every face but +X
+came from the wrong place, and no T0 bit tried (b17, b19, b20, b21-26)
+changes that. The DDK keeps such a cube in different storage: a 16×16 RGBA
+cube with five levels uploaded and a MIN filter of LINEAR samples a 0x1800
+buffer (six 0x400 faces, level 0 only), the same cube with
+NEAREST_MIPMAP_NEAREST a 0x3000 one. The driver keeps a copy of the level-0
+faces for that case (`res->cube0`).
+
+**NPOT faces** [D]. The DDK samples a 12×12, 15×15 or 20×20 cube as one
+linear face (T1 layout 3, a buffer of one face's bytes at the 8-texel pitch)
+and fails every NPOT cube test in dEQP-GLES2; layout 2 has no NPOT form that
+we know of.
 
 ## 9. What is proven on the EA3, pixel for pixel
 

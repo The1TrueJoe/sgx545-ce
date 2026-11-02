@@ -1,3 +1,3 @@
-# 2026-11-02: 17165 tests, Fail 224, Pass 16491, Skip 445, Timeout 1, Warn 4
-# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re c76d83e, plus 1-in-4 samples of the suite; the fails list and a sample again on the EA1 with um-re 7c53a80 (drive-deqp.py, without texture.filtering.cube and the texture specification, format and fbo resize/recreate groups)
+# 2026-11-02: 17165 tests, Fail 142, Pass 16574, Skip 445, Warn 4
+# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re c76d83e, plus 1-in-4 samples of the suite; on the EA1 the fails list and a sample with um-re 7c53a80, and every non-NPOT cube test with the cube fixes (drive-deqp.py)
 # tests that wedged the GPU or the box (drive-deqp.py)

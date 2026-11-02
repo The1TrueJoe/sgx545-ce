@@ -70,17 +70,32 @@ chain_offset(const struct pipe_resource *prsc, unsigned level)
    return off;
 }
 
-/* Cube faces follow one another, each a complete chain: packed when level 0
- * is smaller than one 16x16 tile, else on a tile's bytes (TEX.md section 8:
- * 8x8 0x154, 16x16 0x800, 32x32 0x1800; the alignment's rule is a fit, [G]) */
+/* Cube faces follow one another, each a complete chain of the levels the
+ * sampler sees: packed when level 0 is smaller than one 16x16 tile; a chain
+ * of mip levels on 0x800 bytes whatever the format (the DDK's cube storage,
+ * EA1: L8 16/32/64 0x800/0x800/0x1800 a face, LA88 and RGBA4444
+ * 0x800/0x1000/0x3000, RGBA8888 0x800/0x1800/0x5800); level 0 alone on a
+ * tile's bytes (RGBA8888 16x16: 0x400; the other formats unmeasured, [G]) */
 static size_t
-face_stride(const struct pipe_resource *prsc)
+face_stride_levels(const struct pipe_resource *prsc, unsigned levels)
 {
-   size_t chain = chain_offset(prsc, prsc->last_level + 1);
+   size_t chain = chain_offset(prsc, levels);
 
    if (prsc->width0 < TILE)
       return chain;
-   return align64(chain, TILE * TILE * util_format_get_blocksize(prsc->format));
+   return align64(chain, levels > 1 ? 0x800 : TILE * TILE * util_format_get_blocksize(prsc->format));
+}
+
+static size_t
+face_stride(const struct pipe_resource *prsc)
+{
+   return face_stride_levels(prsc, prsc->last_level + 1);
+}
+
+size_t
+sgx545_tex_cube0_size(const struct pipe_resource *prsc)
+{
+   return prsc->array_size * face_stride_levels(prsc, 1);
 }
 
 size_t
@@ -99,16 +114,15 @@ sgx545_tex_size(const struct pipe_resource *prsc)
  * heap.  The heap is write-combined: a twiddled tile the box covers whole is
  * put together on the stack and written in one go, only partly covered tiles
  * at the box's edges are written texel by texel. */
-void
-sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned layer, unsigned x0,
-                      unsigned y0, unsigned x1, unsigned y1)
+static void
+encode_box(struct sgx545_resource *res, unsigned level, unsigned layer, uint8_t *dst, unsigned x0,
+           unsigned y0, unsigned x1, unsigned y1)
 {
    struct pipe_resource *prsc = &res->base;
    unsigned w = u_minify(prsc->width0, level), h = u_minify(prsc->height0, level);
    unsigned bpp = util_format_get_blocksize(prsc->format);
    unsigned src_stride = util_format_get_stride(prsc->format, w);
    const uint8_t *src = (const uint8_t *)res->data + res->level_offset[level] + (size_t)layer * src_stride * h;
-   uint8_t *dst = (uint8_t *)res->bo.map + sgx545_tex_offset(prsc, level, layer);
    bool rgbx = prsc->format == PIPE_FORMAT_R8G8B8X8_UNORM;
 
    x1 = MIN2(x1, w);
@@ -161,6 +175,33 @@ sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned laye
             memcpy(d, tile, (size_t)t * t * bpp);
       }
    }
+}
+
+void
+sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned layer, unsigned x0,
+                      unsigned y0, unsigned x1, unsigned y1)
+{
+   encode_box(res, level, layer, (uint8_t *)res->bo.map + sgx545_tex_offset(&res->base, level, layer), x0, y0,
+              x1, y1);
+}
+
+void
+sgx545_tex_encode_cube0(struct sgx545_resource *res)
+{
+   size_t stride = face_stride_levels(&res->base, 1);
+
+   for (unsigned layer = 0; layer < res->base.array_size; layer++)
+      encode_box(res, 0, layer, (uint8_t *)res->cube0.map + layer * stride, 0, 0, ~0u, ~0u);
+}
+
+bool
+sgx545_tex_uses_cube0(const struct pipe_sampler_view *view, const struct pipe_sampler_state *sampler)
+{
+   const struct pipe_resource *prsc = view->texture;
+
+   return prsc->target == PIPE_TEXTURE_CUBE && prsc->last_level > 0 &&
+          ((const struct sgx545_resource *)prsc)->texture &&
+          !(sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE);
 }
 
 void
@@ -250,7 +291,8 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
    /* T1: layout (0 twiddled, 3 linear, 2 a cube map: DDK capture) | format | width-1 | height-1 */
    t[1] = (prsc->target == PIPE_TEXTURE_CUBE ? 2u : twiddled(prsc->width0, prsc->height0) ? 0u : 3u) << 29 | fmt << 24 |
           (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
-   t[2] = res->bo.va;
+   /* (the draw brought the level-0 copy up to date: sgx545_resource_cube0) */
+   t[2] = sgx545_tex_uses_cube0(view, sampler) && res->cube0.va ? res->cube0.va : res->bo.va;
    if (!res->texture) {
       /* A render target, read where it is: strided (T1 layout 6), the pitch
        * - 1 in T0 b9-11 and b17-26 in place of the mipmap and min filter

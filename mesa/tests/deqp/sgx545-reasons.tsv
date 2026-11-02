@@ -1,6 +1,7 @@
 # mkexpect.py --reasons for our driver: REGEX<tab>why, first match wins
 functional\.fragment_ops\.(random|interaction)	fragment_ops random/interaction: two-sided stencil (the 27-dword block DMA, +45) and blends with SUBTRACT on one side and REVERSE_SUBTRACT on the other (dropped until um-re 29f5a4c, +144) fixed; the rest order-dependent
-functional\.texture\..*cube	cube maps: NPOT faces (no cube layout for them: the DDK samples one linear face and fails every one), and faces of 8/16-bit formats with mip chains and chains sampled without mipmapping (fixed on the cube-wip branch: faces on 0x800 bytes, a level-0 copy; not yet run on hardware)
+functional\.texture\.mipmap\.cube\.bias	cube LOD bias (texture2D's bias argument fails the same way)
+functional\.texture\..*cube	cube maps: NPOT faces (15x15, and the 63/39/51/47 of teximage2d_align): no cube layout for them, the DDK samples one linear face and fails every one; a few 16-bit and copied faces
 functional\.texture\.specification	texture uploads: unpack alignment, sub-image updates and copies of 16-bit formats; the DDK fails teximage2d_align too
 functional\.texture\.(mipmap|completeness|format|size)	texture sampling: LOD bias and completeness corner cases
 functional\.shaders\.texture_functions	texture2D's bias argument
