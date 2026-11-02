@@ -643,7 +643,9 @@ sgxws_ctx_create(struct sgxws_dev *d)
       goto fail;
    }
 
-   if (ring_init(d, &c->usse_pix, H_PIXSHADER, 0x40000) ||
+   /* pixel programs are never freed (blend variants included): 1 MB of the
+    * 5 MB the ten code base registers reach */
+   if (ring_init(d, &c->usse_pix, H_PIXSHADER, 0x100000) ||
        ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x40000) ||
        /* the frame rings hold a whole frame of Minecraft (~1500 draws, ~100K
         * vertices): a ring that fills submits the frame so far and waits for
@@ -1941,7 +1943,9 @@ sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint
  *    sop2  o0, r0, r1     [end c1=one c2=one cop a1=one a2=one aop]
  * X and Y are the colour, the tile or the constant, whichever the factor
  * reads.  With end false the sop2 writes pa<c> back for the colour mask; with
- * swap it reads r1, r0 (a reverse subtract). */
+ * swap it reads r1, r0 (a reverse subtract).  With atrade the two alpha
+ * products go to the other register (r0.a = dst.a * Fda, r1.a = src.a * Fsa),
+ * after both whole-colour ones, so alpha subtracts the other way round. */
 #define BLEND_CONST_INSTS 5
 
 static void
@@ -1973,8 +1977,17 @@ blend_const_words(const struct sgxws_blend *b, unsigned color_pa, bool end, uint
          lo |= color_pa << 7 | 0x80000000;    /* r0, src1 pa<c> */
          hi = s_hi[k] | (i == 3 ? 0x90800800 : 0x90807800);
       }
+      if (b->atrade && (i & 1))
+         lo ^= 1u << 21;            /* r1 <-> r0 */
       w[i][0] = lo;
       w[i][1] = hi;
+   }
+   if (b->atrade) {
+      /* dst*Fd, src*Fs, then the alphas: neither alpha may be overwritten */
+      uint32_t t[2] = { w[1][0], w[1][1] };
+
+      w[1][0] = w[2][0], w[1][1] = w[2][1];
+      w[2][0] = t[0], w[2][1] = t[1];
    }
    /* cop l18-19, aop l16-17; without end pa<c> (dst bank h1, number l21-27) */
    w[4][0] = (b->swap ? 1u << 7 : 1u) | (b->cop & 3u) << 18 | (b->aop & 3u) << 16 | (end ? 0 : color_pa << 21);
