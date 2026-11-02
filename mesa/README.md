@@ -166,6 +166,34 @@ This list is the next work, roughly in the order gl4es and Minecraft need it:
 11. Prune the extension list. st/mesa advertises some extensions from defaults
    (S3TC, depth textures) that the driver can't do yet.
 
+## dEQP-GLES2 (milestone M0's exit test)
+
+dEQP-GLES2 runs the way Mesa's CI runs it, so its results and expectation
+files carry over upstream:
+- `mesa/tests/deqp/build-deqp.sh [x86_64|i386]` builds `deqp-gles2` from the
+  VK-GL-CTS release that the Mesa release in `mesa/VERSION` pins, with the
+  same backports and patches (read from that release's
+  `.gitlab-ci/container/build-deqp.sh`). It uses dEQP's `surfaceless` target
+  and cross-compiles with zig against our Mesa. It also builds `deqp-runner`
+  at the CI's version.
+  - Sources and the build live in `~/.cache/sgx545/deqp` (a few GB).
+  - The result is `out/`, which gets copied to the box.
+  - x86_64 is ours; i386 is for the DDK.
+- On the box, `run-deqp.sh sgx545|ddk` (from that `out/`) runs the GLES2
+  mustpass list under `deqp-runner`:
+  - pbuffers, 256×256, config `rgba8888d24s0ms0` (no stencil yet);
+  - one job (two render contexts on this GPU have locked it up);
+  - the whole run holds `/tmp/gpu.lock`.
+  - Ours runs on the surfaceless EGL platform (`EGL_PLATFORM=surfaceless`,
+    which `mesa/patches/0003` lets find pvrsrvkm's primary node), with
+    `SGX545_DEBUG=hangabort`, so a hang is one failure, not a wedged run.
+  - The DDK runs the i386 binary through its own loader and the bus-id shim:
+    its default EGL display offers pbuffers too.
+- Expectations are in `src/gallium/drivers/sgx545/ci/`, in Mesa CI's
+  format: `sgx545-fails.txt`, `-flakes.txt` and `-skips.txt` for ours, and
+  `ddk-*` for the DDK. Every entry gets a reason. Skips are only for tests
+  that hang the GPU.
+
 ## The gl4es ctest suite on the EA3 (milestone d)
 
 gl4es' `tests/` are apitrace traces with reference images (`traces/`, `refs/`,

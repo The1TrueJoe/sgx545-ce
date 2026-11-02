@@ -1,0 +1,4 @@
+# dEQP-GLES2 on the DDK (Intel Cedarview DDK 1.7 i386, the A/B oracle), EA3 (CE5300 SGX545 core rev 1014), Mesa CI format:
+# one "test,Status" per line.  Empty until the first full run; every entry
+# gets a reason above it (a docs/ fact, a missing feature from
+# mesa/README.md "What is missing", or a DDK comparison).

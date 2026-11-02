@@ -1,0 +1,3 @@
+# Tests not run on our driver (regexes, Mesa CI format).  Only for tests that
+# hang or wedge the GPU, each with the reason; everything else runs and is
+# listed in sgx545-fails.txt instead.
