@@ -54,15 +54,15 @@ state_query.integers,1,1,0
 state_query.rbo,0,0,1
 state_query.shader,0,0,1
 texture.completeness,5,5,14
-texture.filtering,72,72,16
-texture.format,10,10,10
-texture.mipmap,14,14,4
-texture.size,9,9,5
-texture.specification,36,36,16
+texture.filtering,72,16,16
+texture.format,10,9,10
+texture.mipmap,14,8,4
+texture.size,9,5,5
+texture.specification,36,20,16
 texture.vertex,0,0,6
 texture.wrap,0,0,2
 uniform_api.random,15,0,22
 uniform_api.value,176,0,4
 # first_pass: Crash 35, Fail 3075, Flake 13, Pass 13592, Skip 445, Timeout 1, Warn 4
-# now: Fail 224, Pass 16491, Skip 445, Timeout 1, Warn 4
+# now: Fail 142, Pass 16574, Skip 445, Warn 4
 # ddk: Crash 11, Fail 1146, Flake 1, Pass 15837, Skip 124, Timeout 8, Warn 38
