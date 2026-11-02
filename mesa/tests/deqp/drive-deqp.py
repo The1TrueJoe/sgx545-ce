@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
-"""Run dEQP-GLES2 on an EA from the host, across wedges and power cycles.
+"""Run dEQP-GLES2 (or piglit) on an EA from the host, across wedges and power cycles.
 
-    drive-deqp.py sgx545|ddk [--box 10.0.0.113] [--chunk 200] [--filter REGEX] [--max-wedges N]
+    drive-deqp.py sgx545|ddk|piglit [--box 10.0.0.113] [--chunk 200] [--filter REGEX] [--max-wedges N]
                   [--name NAME] [--caselist FILE]
 
 --name keeps a run apart from the others (its results in run-NAME, its Mesa in
@@ -22,6 +22,12 @@ is not run again. Those are the lines for ci/<who>-skips.txt.
 
 The box needs nothing but SSH: the payload ($DEQP_WORK/out, and our Mesa from
 $MESA_DIR for sgx545) is copied to $BOX_DIR (default /root/deqp) when missing.
+
+piglit runs piglit's gpu profile (quick_gl and quick_shader; mesa/tests/piglit/
+build-piglit.sh) on our desktop-GL Mesa ($MESA_DIR: the x86_64-gl build's lib)
+through piglit-runner, which takes no caselist: each chunk is passed as anchored
+--include-tests regexes. Its payload is $PIGLIT_WORK/out (default
+~/.cache/sgx545/piglit), in $BOX_DIR (default /root/piglit).
 
 Environment:
   RECOVER     shell command that power-cycles the box and returns once it has
@@ -43,7 +49,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.environ.get("DEQP_WORK", os.path.expanduser("~/.cache/sgx545/deqp"))
-BOX_DIR = os.environ.get("BOX_DIR", "/root/deqp")
+PIGLIT_WORK = os.environ.get("PIGLIT_WORK", os.path.expanduser("~/.cache/sgx545/piglit"))
+BOX_DIR = os.environ.get("BOX_DIR", "/root/deqp")    # /root/piglit for piglit (main)
 DDK_ROOT = os.environ.get("DDK_ROOT", "/opt/sgx-i386")
 BOX_ENV = os.environ.get("BOX_ENV", "")
 CONFIG = "rgba8888d24s8ms0"
@@ -92,8 +99,105 @@ def recoveries(box):
     return int(out.strip() or 0) if rc in (0, 1) else None
 
 
+def piglit_pieces(out):
+    """the payload as resumable pieces of a few MB: (marker name, paths relative to out)"""
+    pieces = [("top", [e for e in sorted(os.listdir(out)) if e != "piglit"])]
+
+    def split(rel, batch):
+        """a directory's subdirectories one piece each, its files in batches"""
+        d = os.path.join(out, rel)
+        entries = sorted(os.listdir(d))
+        files = [f"{rel}/{e}" for e in entries if not os.path.isdir(os.path.join(d, e))]
+        dirs = [e for e in entries if os.path.isdir(os.path.join(d, e))]
+        tag = rel.replace("/", "-")
+        for i in range(0, len(files), batch):
+            pieces.append((f"{tag}-files{i // batch}", files[i:i + batch]))
+        return dirs
+
+    for e in split("piglit", 1000):
+        if e in ("tests", "generated_tests"):
+            for sub in split(f"piglit/{e}", 1000):
+                if sub == "spec":    # most of the payload: one piece per extension or version
+                    for t in split(f"piglit/{e}/spec", 1000):
+                        pieces.append((f"{e}-spec-{t}", [f"piglit/{e}/spec/{t}"]))
+                else:
+                    pieces.append((f"{e}-{sub}", [f"piglit/{e}/{sub}"]))
+        elif e == "bin":
+            split("piglit/bin", 200)
+        else:
+            pieces.append((f"piglit-{e}", [f"piglit/{e}"]))
+    return pieces
+
+
+def piglit_payload(box, name):
+    """piglit's tree, glvnd and waffle once, in pieces a reboot can't spoil (each one
+    marked done on the box once unpacked: a copy cut off resumes); our Mesa
+    (libEGL_mesa, libgallium) per run name"""
+    out = os.path.join(PIGLIT_WORK, "out")
+    rc, done = box.ssh(f"mkdir -p {BOX_DIR}/.pieces && ls {BOX_DIR}/.pieces")
+    if rc != 0:
+        log("box busy: it doesn't answer")
+        sys.exit(4)
+    done = set(done.decode().split())
+    todo = [(m, paths) for m, paths in piglit_pieces(out) if m not in done]
+    if todo:
+        log(f"copying piglit to the box: {len(todo)} pieces")
+    for i, (marker, paths) in enumerate(todo):
+        tar = subprocess.run(["tar", "czf", "-", "-C", out] + paths, stdout=subprocess.PIPE, check=True,
+                             env=dict(os.environ, COPYFILE_DISABLE="1"))
+        rc, o = box.ssh(f"cd {BOX_DIR} && gzip -dc | tar xf - && touch .pieces/{shlex.quote(marker)}",
+                        timeout=900, stdin=tar.stdout)
+        if rc != 0:
+            # (a reboot of someone else's, usually: the next try carries on)
+            log(f"box busy: piglit copy stopped at {marker} ({i} of {len(todo)} done); "
+                f"{o.decode(errors='replace').strip()}")
+            sys.exit(4)
+    rc, _ = box.ssh(f"test -f {BOX_DIR}/lib-{name}/50_mesa.json")
+    if rc == 0:
+        return
+    log("copying our Mesa to the box")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as t:
+        t.add(os.environ["MESA_DIR"], "lib-" + name)
+        icd = (f'{{"file_format_version":"1.0.0","ICD":{{"library_path":"{BOX_DIR}/lib-{name}/libEGL_mesa.so.0"}}}}\n'
+               .encode())
+        ti = tarfile.TarInfo(f"lib-{name}/50_mesa.json")
+        ti.size = len(icd)
+        t.addfile(ti, io.BytesIO(icd))
+    rc, o = box.ssh(f"cd {BOX_DIR} && tar xf -", timeout=900, stdin=buf.getvalue())
+    if rc != 0:
+        sys.exit(f"payload copy failed: {o.decode(errors='replace')}")
+
+
+def piglit_env(name):
+    # glvnd dispatches to this run's Mesa; it stays loaded, since unloading it at
+    # waffle's teardown crashes the process at exit (docs/PIGLIT.md)
+    lib = f"{BOX_DIR}/lib-{name}"
+    return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
+            f"LD_PRELOAD={lib}/libEGL_mesa.so.0 PIGLIT_PLATFORM=surfaceless_egl {BOX_ENV}")
+
+
+def piglit_regex(test):
+    """a test name as an anchored regex; only regex syntax is escaped (Rust's regex rejects \\@)"""
+    return "^" + re.sub(r"([\\.+*?()|\[\]{}^$#&~-])", r"\\\1", test) + "$"
+
+
+def piglit_gpu_tests():
+    """the gpu profile's tests (tests/gpu.meta.xml: quick_gl and quick_shader), in profile order"""
+    import gzip
+    import xml.etree.ElementTree as ET
+
+    tests = []
+    for prof in ("quick_gl", "quick_shader"):
+        with gzip.open(os.path.join(PIGLIT_WORK, "out/piglit/tests", prof + ".xml.gz")) as f:
+            tests += [t.get("name") for t in ET.parse(f).getroot().iter("Test")]
+    return tests
+
+
 def payload(box, who, name):
     """Copy what the run needs when it isn't there (a RAM root loses it at every boot)."""
+    if who == "piglit":
+        return piglit_payload(box, name)
     rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -f {BOX_DIR}/.complete-{name}")
     if rc == 0:
         return
@@ -118,6 +222,11 @@ def payload(box, who, name):
 
 
 def runner_script(who, name):
+    if who == "piglit":
+        return (f"cd {BOX_DIR} && rm -rf out && set -- && while IFS= read -r t; do set -- \"$@\" "
+                f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX545_DEBUG=hangabort "
+                f"{LOCK} ./piglit-runner run --piglit-folder piglit --profile gpu --process-isolation "
+                f"--output out --jobs 1 --timeout {TEST_TIMEOUT} \"$@\" > runner.log 2>&1; echo rc=$?")
     if who == "sgx545":
         env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort {BOX_ENV}"
         deqp = f"{BOX_DIR}/deqp-gles2"
@@ -138,6 +247,11 @@ def runner_script(who, name):
 def canary(box, who, name):
     """Does a one-draw test still finish? A GPU that recovered does; a wedged one doesn't."""
     # (busybox has no timeout: a hung canary is the SSH call timing out)
+    if who == "piglit":
+        rc, out = box.ssh(f"cd {BOX_DIR}/piglit && env {piglit_env(name)} {LOCK} ./bin/shader_runner "
+                          f"tests/spec/glsl-1.10/execution/glsl-fs-add-masked.shader_test -auto -fbo 2>&1",
+                          timeout=45)
+        return rc == 0 and b'"result": "pass"' in out
     if who == "sgx545":
         pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless {BOX_ENV}"
         exe = f"{BOX_DIR}/deqp-gles2"
@@ -169,7 +283,8 @@ def recover(box):
 
 def run_chunk(box, who, name, tests):
     """(results {test: (status, seconds)}, wedged, SGX recoveries during it)"""
-    rc, _ = box.ssh(f"cat > {BOX_DIR}/chunk.txt", stdin=("\n".join(tests) + "\n").encode())
+    lines = [piglit_regex(t) for t in tests] if who == "piglit" else tests
+    rc, _ = box.ssh(f"cat > {BOX_DIR}/chunk.txt", stdin=("\n".join(lines) + "\n").encode())
     if rc != 0:
         return {}, True, 0
     limit = 120 + len(tests) * 4 + 3 * TEST_TIMEOUT
@@ -206,7 +321,7 @@ def run_chunk(box, who, name, tests):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("who", choices=["sgx545", "ddk"])
+    ap.add_argument("who", choices=["sgx545", "ddk", "piglit"])
     ap.add_argument("--box", default=os.environ.get("EA3", "10.0.0.113"))
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--filter", default=None)
@@ -215,6 +330,9 @@ def main():
     ap.add_argument("--caselist", default=None)
     ap.add_argument("--max-recoveries", type=int, default=None,
                     help="stop after a chunk with more SGX recoveries than this (a box without a plug)")
+    ap.add_argument("--slice-minutes", type=float, default=None,
+                    help="stop (exit 3) after the chunk that passes this many minutes, to share the box")
+    ap.add_argument("--copy-only", action="store_true", help="copy the payload and stop (no GPU work)")
     ap.add_argument("--hold-lock", action="store_true",
                     help="hold /tmp/gpu.lock on the box for the whole run, so nothing interleaves between chunks")
     a = ap.parse_args()
@@ -230,15 +348,34 @@ def main():
     if os.path.exists(res_path):
         with open(res_path) as f:
             done = {line.split(",")[0] for line in f if line.startswith("dEQP")}
-    with open(a.caselist or os.path.join(WORK, "out/mustpass/gles2-main.txt")) as f:
-        tests = [t.strip() for t in f if t.strip()]
+    if a.who == "piglit":
+        global BOX_DIR
+        BOX_DIR = os.environ.get("BOX_DIR", "/root/piglit")
+    if a.caselist:
+        with open(a.caselist) as f:
+            tests = [t.strip() for t in f if t.strip()]
+    elif a.who == "piglit":
+        tests = piglit_gpu_tests()
+    else:
+        with open(os.path.join(WORK, "out/mustpass/gles2-main.txt")) as f:
+            tests = [t.strip() for t in f if t.strip()]
     if a.filter:
         tests = [t for t in tests if re.search(a.filter, t)]
     todo = [t for t in tests if t not in done]
     log(f"{a.who}: {len(tests)} tests, {len(done)} have results, {len(todo)} to run")
 
     if not box.alive():
-        sys.exit("the box doesn't answer")
+        log("box busy: it doesn't answer (rebooting?)")
+        sys.exit(4)
+    payload(box, a.who, name)     # no GPU work: before the lock
+    if a.copy_only:
+        log("payload on the box")
+        return
+    if a.slice_minutes:
+        busy = box_busy(box, run_dir)
+        if busy:
+            log("box busy:", busy)
+            sys.exit(4)
     holder = None
     if a.hold_lock:
         # one SSH session keeps the lock while the marker exists; the chunks run without flock
@@ -247,10 +384,13 @@ def main():
         box.ssh("touch /tmp/deqp-job")
         holder = subprocess.Popen(["sshpass", "-p", "openhc", "ssh", "-o", "StrictHostKeyChecking=no",
                                    "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + a.box,
-                                   "flock /tmp/gpu.lock sh -c 'echo locked; while [ -e /tmp/deqp-job ]; do sleep 2; done'"],
+                                   "flock -n /tmp/gpu.lock sh -c 'echo locked; while [ -e /tmp/deqp-job ]; do sleep 2; done' "
+                                   "|| echo busy"],
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if b"locked" not in holder.stdout.readline():
-            sys.exit("could not take /tmp/gpu.lock")
+            box.ssh("rm -f /tmp/deqp-job")
+            log("box busy: someone holds /tmp/gpu.lock")
+            sys.exit(4)
         log("holding /tmp/gpu.lock for the run")
     try:
         run(a, box, name, todo, res_path, wedge_path)
@@ -260,8 +400,45 @@ def main():
             holder.wait(timeout=30)
 
 
+def box_state(box):
+    """(normal boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
+    rc, out = box.ssh("cat /proc/cmdline; cat /proc/sys/kernel/random/boot_id; "
+                      "dmesg | grep -c 'Recovery triggered'")
+    lines = out.decode(errors="replace").split("\n")
+    if rc not in (0, 1) or len(lines) < 3:
+        return None
+    cmdline = lines[0]
+    normal = "root=/dev/mmcblk0p1" in cmdline and "ohc.ramboot" not in cmdline
+    return normal, lines[1].strip(), int(lines[2].strip() or 0)
+
+
+def box_busy(box, run_dir):
+    """Why the box is someone else's right now, or None: a slice starts only on the box's
+    normal boot, with no SGX recoveries since it booted beyond what the last slice left"""
+    st = box_state(box)
+    if st is None:
+        return "doesn't answer"
+    normal, boot, rec = st
+    if not normal:
+        return "not on its normal boot (a test kernel or RAM image)"
+    try:
+        with open(os.path.join(run_dir, "box-state")) as f:
+            last_boot, last_rec = f.read().split()
+    except (OSError, ValueError):
+        last_boot, last_rec = None, 0
+    if rec and not (boot == last_boot and rec == int(last_rec)):
+        return f"{rec} SGX recoveries since boot that aren't ours"
+    return None
+
+
+def save_box_state(box, run_dir):
+    st = box_state(box)
+    if st:
+        with open(os.path.join(run_dir, "box-state"), "w") as f:
+            f.write(f"{st[1]} {st[2]}\n")
+
+
 def run(a, box, name, todo, res_path, wedge_path):
-    payload(box, a.who, name)
     if not canary(box, a.who, name):
         sys.exit("the canary doesn't pass on a fresh box: not starting")
 
@@ -271,6 +448,10 @@ def run(a, box, name, todo, res_path, wedge_path):
     t0 = time.time()
     ran = 0
     while todo:
+        if a.slice_minutes and time.time() - t0 > a.slice_minutes * 60:
+            save_box_state(box, RUN_DIR)
+            log(f"slice over: {len(todo)} left; rerun to carry on")
+            sys.exit(3)
         chunk = todo[:size]
         res, wedged, nrec = run_chunk(box, a.who, name, chunk)
         for t, (status, secs) in res.items():
@@ -310,6 +491,7 @@ def run(a, box, name, todo, res_path, wedge_path):
             size = min(a.chunk, size * 2)
         rate = ran / max(time.time() - t0, 1)
         log(f"{len(todo)} left, {ran} run, {rate:.2f} tests/s, {wedges} wedges, chunk {size}")
+    save_box_state(box, RUN_DIR)
     log("done")
 
 
