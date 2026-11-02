@@ -1,5 +1,5 @@
-# 2026-11-02: 17165 tests, Fail 392, Pass 16323, Skip 445, Timeout 1, Warn 4
-# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re 9e1f2c1 (drive-deqp.py)
+# 2026-11-02: 17165 tests, Fail 378, Pass 16337, Skip 445, Timeout 1, Warn 4
+# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re 9cc3bb4 (drive-deqp.py)
 
 # fragment_ops random/interaction: two-sided stencil drew blank or wrong channels from run to run until its block got the DDK's 27-dword DMA (+45); the rest not looked at yet
 dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.1,Fail
@@ -363,31 +363,17 @@ dEQP-GLES2.functional.fbo.render.shared_depthbuffer.tex2d_rgba_depth_component16
 dEQP-GLES2.functional.fbo.render.stencil_clear.tex2d_rgb_stencil_index8,Fail
 
 # compiler: random combinations (about half pass with SGX545_DEBUG=nof16: F16 path); with the compiler session
-dEQP-GLES2.functional.shaders.random.all_features.fragment.13,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.20,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.32,Fail
-dEQP-GLES2.functional.shaders.random.all_features.fragment.36,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.37,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.5,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.50,Fail
-dEQP-GLES2.functional.shaders.random.all_features.fragment.53,Fail
-dEQP-GLES2.functional.shaders.random.all_features.fragment.68,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.80,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.88,Fail
-dEQP-GLES2.functional.shaders.random.comparison_ops.fragment.21,Fail
-dEQP-GLES2.functional.shaders.random.comparison_ops.fragment.27,Fail
-dEQP-GLES2.functional.shaders.random.conditionals.combined.27,Fail
-dEQP-GLES2.functional.shaders.random.conditionals.fragment.27,Fail
 dEQP-GLES2.functional.shaders.random.exponential.fragment.14,Fail
 dEQP-GLES2.functional.shaders.random.exponential.fragment.26,Fail
 dEQP-GLES2.functional.shaders.random.exponential.fragment.38,Fail
-dEQP-GLES2.functional.shaders.random.exponential.fragment.6,Fail
 dEQP-GLES2.functional.shaders.random.exponential.fragment.80,Fail
-dEQP-GLES2.functional.shaders.random.scalar_conversion.combined.86,Fail
-dEQP-GLES2.functional.shaders.random.scalar_conversion.fragment.86,Fail
-dEQP-GLES2.functional.shaders.random.swizzle.fragment.27,Fail
-dEQP-GLES2.functional.shaders.random.trigonometric.fragment.63,Fail
-dEQP-GLES2.functional.shaders.random.trigonometric.fragment.72,Fail
 
 # polygon offset units
 dEQP-GLES2.functional.polygon_offset.default_displacement_with_units,Fail
