@@ -1,0 +1,12 @@
+# srvinit -o (openHC microkernel) on the EA3, 2026-10-29 ~03:47 UTC. Clean boot,
+# GPU not yet initialised, init-process slot free. srvinit rc=1.
+PVR_K:(Error): pvr: invalid param size for IOCTL#99: kern/user in,out: 2192/2192,16/8   # DEVINITPART2 8-byte OUT; srvinit retried with 16 (expected on this driver)
+PVR: Installing MISR
+PVR_K: SysFinalise: SGX revision = 1.0.14        # core reset + scripts ran: srvinit's setup worked
+PVR_K:(Error): PollForValueKM: Timeout. Expected 0x1 but found 0x0 (mask 0x1)   # host polled ui32InitStatus; our microkernel never set it
+PVR_K:(Error): SGXInitialise: Wait for uKernel initialisation failed
+# Host control dump: all zero -> ui32InitStatus (HC word 0) = 0
+# TA/3D control dump: (T3C-0) 0x32003000 0x32003100 0x32002000  -> self/hostctl/ccbctl correct
+#                     (T3C-50) ... 0x32000000 (kccb) ... ; (T3C-A0..B0) 0x32004000 0x3200A420 0x3200B000 (hwperf/tasig/3dsig)
+# -> the control block srvinit built is correct; the microkernel just did not complete init.
+# No lockup / hang / recovery / scheduling-while-atomic. Clean failure. Box rebooted cleanly (~20s).

@@ -74,10 +74,16 @@ CR_EVENT_HOST_CLEAR2 = 0x114
 CR_TA_KICK = 0x200           # starts the VDM/TA (unnamed in the GPL header)
 CR_3D_KICK = 0x428           # starts the 3D (unnamed)
 CR_USE_INVAL = 0xA08         # USE cache invalidate
+CR_PDS_INV0 = 0xAD0          # PDS cache invalidate, TA side
+CR_PDS_INV1 = 0xAD4          # PDS cache invalidate, 3D side
+CR_PDS_INV_CSC = 0xAE0       # coefficient-store invalidate
 CR_DPM_STATE = 0x694
 CR_DPM_CONTROL = 0x698
 CR_OTPM = 0x24C
 CR_TPC = 0x224
+CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
+INV_DONE_TA = 0x27           # 0x138 bits for the TA-side invalidate
+INV_DONE_3D = 0x4B           # 0x138 bits for the 3D-side invalidate
 SW_EVENT = 0x4000
 
 # ---- register-programming tables (reg byte-offset, base word index) --------
@@ -175,18 +181,50 @@ class Asm:
             self.i(f"limm r4, #{val}")
             self.i(f"str #{reg // 4}, r4")
 
-    def pulse_wait(self, reg, val, poll, bit):
-        """write reg=val, then spin until (poll & bit) is set, then end the spin.
-        The bit mask goes in a register (test immediates are only 7 bits)."""
-        self.i(f"limm r6, #{bit}")
-        self.i(f"limm r5, #{val}")
-        self.i(f"str #{reg // 4}, r5")
-        self.label(f"_w_{reg:x}_{poll:x}")
+    _wl = 0
+
+    def wait(self, poll, mask, ack):
+        """spin until (poll & mask) == mask, then write mask to the ack register.
+        The mask goes in a register (test immediates are only 7 bits)."""
+        Asm._wl += 1
+        lbl = f"_wait{Asm._wl}"
+        self.i(f"limm r6, #{mask}")
+        self.label(lbl)
         self.i(f"ldr r5, #{poll // 4}")
         self.i("wdf")
         self.i("and r5, r5, r6")
-        self.i("test.xor.ne p0, r5, r6")
-        self.i(f"(p0) ba _w_{reg:x}_{poll:x}")
+        self.i(f"test.xor.ne p0, r5, r6")
+        self.i(f"(p0) ba {lbl}")
+        self.i(f"str #{ack // 4}, r6")
+
+    def invalidate(self, inv_reg, done_mask):
+        """request a BIF/USE cache invalidate and wait for it (docs/UKERNEL.md
+        §6). inv_reg is the PDS invalidate for this side (TA 0xad0, 3D 0xad4);
+        the MADD and USE caches are pulsed too, and their done bits waited on."""
+        self.i(f"limm r5, #1")
+        self.i(f"str #{inv_reg // 4}, r5")             # PDS cache invalidate
+        self.i(f"str #{CR_PDS_INV_CSC // 4}, r5")      # coefficient-store invalidate
+        self.i("limm r5, #268435456")                  # 0x10000000: MADD cache
+        self.i(f"ldr r4, #{0x804 // 4}")
+        self.i("wdf")
+        self.i("or r4, r4, r5")
+        self.i(f"str #{0x804 // 4}, r4")
+        self.i("limm r5, #1")
+        self.i(f"str #{CR_USE_INVAL // 4}, r5")        # USE cache invalidate
+        self.wait(0x138, done_mask, CR_EVENT_HOST_CLEAR_0x140)
+        self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done
+
+    def dpm_load(self):
+        """load the DPM state and control, and clear the OTPM, waiting for each
+        (docs/UKERNEL.md §6) so the free list is ready before the TA kicks."""
+        self.i("limm r5, #2")
+        self.i(f"str #{CR_DPM_STATE // 4}, r5")        # DPM state load
+        self.i(f"str #{CR_DPM_CONTROL // 4}, r5")      # DPM control load
+        self.wait(CR_EVENT_STATUS, 0x240, CR_EVENT_HOST_CLEAR)
+        self.i("limm r5, #9")
+        self.i(f"str #{CR_OTPM // 4}, r5")             # OTPM invalidate + clear
+        self.wait(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR)
+        self.wait(CR_EVENT_STATUS2, 0x1000, CR_EVENT_HOST_CLEAR2)
 
 
 def build(a):
@@ -278,19 +316,16 @@ def build(a):
     a.st_sa(SA_SELF, SC_RD, 10)
     a.st_sa(SA_SELF, SC_PB, 11)
     a.st_sa(SA_SELF, SC_RTENTRY, 12)
-    # point the BIF at this context's page directory
+    # point the BIF at this context's page directory, then invalidate the
+    # caches and wait (so the cores see this context's page tables)
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
     a.i("wdf")
     a.i(f"str #{0xc84 // 4}, r4")
-    # parameter-buffer registers, then the DPM state/control load request.
-    # NOTE: this first version pulses the DPM load and does not yet wait for
-    # its completion events (docs/UKERNEL.md §6); the completion handshake is
-    # the next increment and needs its own hardware validation. The struct-
-    # sourced register programming below is what run_ours.py checks.
+    a.invalidate(CR_PDS_INV0, INV_DONE_TA)
+    # parameter-buffer registers, then load the DPM state/control and wait for
+    # the free list to be ready before the TA kicks (docs/UKERNEL.md §6)
     a.program(11, TA_PB)
-    a.i("limm r5, #2")
-    a.i(f"str #{CR_DPM_STATE // 4}, r5")
-    a.i(f"str #{CR_DPM_CONTROL // 4}, r5")
+    a.dpm_load()
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
     a.program(12, TA_RT)
@@ -359,7 +394,8 @@ def build(a):
     a.i(f"str #{0x600 // 4}, r4")
     a.consts(D3_CONST)
     a.program(10, D3_RD)
-    # start the 3D
+    # invalidate the 3D-side caches and wait, then start the 3D
+    a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")
     a.end()

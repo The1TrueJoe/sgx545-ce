@@ -313,3 +313,32 @@ EVENT_HOST_ENABLE, EVENT_HOST_ENABLE2, CLKGATECTL, CLKGATECTL2.
 The PDS programs used to be copied from the firmware file too. srvinit now
 assembles them; the output is the same bytes, checked with `check.py` against
 the trace, and the third hardware run used that build.
+
+## Loading openHC's own microkernel (`-o`)
+
+`srvinit -o ukernel/sgx545-ukernel-openhc.bin` loads openHC's microkernel
+(`ukernel/`) instead of the DDK's. It differs from the `-f` path in three
+ways, and nothing else — the allocations, control block, signature lists,
+init scripts and `SGX_BRIDGE_INIT_INFO` are the same:
+
+- **the image** is loaded at its own size (a multiple of 8), not the DDK's
+  fixed `UKERNEL_SIZE`;
+- **no immediates are patched.** The DDK build fills nine `limm` placeholders
+  with buffer and program addresses; ours has none — it reads every address
+  from the control block (DMAed into its secondary attributes), so there is
+  nothing to patch;
+- **the event program** (`pds0`, script register `0xa68`) is one PDS program
+  that DMAs the TA3D control block into the secondary attributes *and* starts
+  our microkernel's entry at offset 0 — the DDK splits the DMA (pds1) from the
+  launch (pds0) and relies on the microkernel emitting events to chain them;
+- **the host-kick table** is the identity, so a kernel-CCB command's
+  `ui32ServiceAddress` is its command type, which our microkernel's dispatch
+  switches on (the DDK encodes each type as a distinct microkernel entry).
+
+Offline (`srvinit -o ukernel.bin -n plan outdir`) the event program comes out
+as DOUTD (control word `0x3c0003f`) + DOUTU (code base 15, offset 0) + HALT,
+and `ukernel.bin` is byte-identical to the built image. On hardware this is
+the GPU bring-up path: `SGXInitialise` kicks the event, the EDM runs this
+program, our microkernel's init entry sets `ui32InitStatus`, and the host's
+poll succeeds. (A full frame additionally needs our microkernel's unified
+event dispatch, the next step.)

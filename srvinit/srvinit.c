@@ -81,7 +81,23 @@ struct init {
 	uint32_t code_heap, pixel_heap, vertex_heap, pds_pixel_heap;
 	uint32_t pd;		/* page directory, device physical */
 	uint32_t hwperf_flags;	/* app hint */
+	int ours;		/* load openHC's own microkernel (ukernel/) */
+	uint32_t uk_size;	/* its size, when ours */
 };
+
+/*
+ * Buffer size. openHC's microkernel is a different size from the DDK's, and
+ * its event PDS program is bigger (it DMAs the control block as well as
+ * starting the entry), so override those two in --ours mode.
+ */
+static uint32_t bufsz(const struct init *s, int i)
+{
+	if (s->ours && i == B_UKERNEL)
+		return s->uk_size;
+	if (s->ours && i == B_PDS0)
+		return 0x40;
+	return bufs[i].size;
+}
 
 /* Heap type is the low 24 bits of ui32HeapID. */
 static void heap_base(struct init *s, uint32_t type, uint32_t base)
@@ -244,6 +260,26 @@ static void pds_ta3d(struct init *s)
 }
 
 /*
+ * openHC's event program: like pds1, DMA the TA3D control block into the
+ * secondary attributes, then start our microkernel's entry (offset 0). Our
+ * microkernel reads everything from that control block, so this one program
+ * both populates its state and launches it; there is nothing to patch.
+ */
+static void pds_ours(struct init *s)
+{
+	struct pds p = prog(s, B_PDS0, 8);
+	uint32_t off = va(s, B_UKERNEL) - s->code_heap;		/* entry at offset 0 */
+
+	ds(&p, D0(0), va(s, B_TA3DCTL));
+	ds(&p, D0(1), 0x3c0003f);
+	ds(&p, D0(2), ((off * 2) & 0xffff0) | (((off >> 19) + 15) & 15));
+	ds(&p, D0(3), 2);
+	movs(&p, DOUTD, D0(0), D0(1), D0(0), D0(0));
+	movs(&p, DOUTU, D0(2), D0(3), D1(0), D0(2));
+	halt(&p);
+}
+
+/*
  * pds3: an event dispatcher. in0, in2, in4 go to the task's PA0-PA2; the event
  * bits in in1 (low 24) pick the handler: any of 0x100 -> 0x30; otherwise the
  * first of 0x400090, 0x200, 0x300400 that has a bit set selects 0x7050, 0x2cd0
@@ -363,10 +399,15 @@ static int build(struct init *s, const uint8_t *fw, SGX_BRIDGE_INIT_INFO *ii)
 		[SGXMKIF_CMD_CLEANUP] = 0x13a, [SGXMKIF_CMD_GETMISCINFO] = 0x173,
 		[SGXMKIF_CMD_PROCESS_QUEUES] = 0x156, [9] = 0x157,
 	};
+	/* openHC's host-kick table is the identity: a command's ServiceAddress
+	   is its type, which our microkernel's dispatch switches on. */
+	static const uint32_t kick_ours[SGXMKIF_CMD_MAX] = {
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+	};
 
 	for (int i = 0; i < NBUF; i++)
-		memset(s->b[i].cpu, 0, bufs[i].size);
-	memcpy(w(s, B_UKERNEL), fw, UKERNEL_SIZE);
+		memset(s->b[i].cpu, 0, bufsz(s, i));
+	memcpy(w(s, B_UKERNEL), fw, bufsz(s, B_UKERNEL));
 
 	/* The microkernel's control block: where everything else is. */
 	t = w(s, B_TA3DCTL);
@@ -389,22 +430,26 @@ static int build(struct init *s, const uint8_t *fw, SGX_BRIDGE_INIT_INFO *ii)
 	memcpy(t + 2, sig3d, sizeof sig3d);
 
 	/* The PDS programs that start the microkernel. */
-	pds_entry(s, B_PDS0, 0xd60);	/* the event program (script register 0xa68) */
-	pds_ta3d(s);
-	pds_entry(s, B_PDS2, 0xe20);
-	pds_events(s);
-	pds_events2(s);
+	if (s->ours) {
+		pds_ours(s);		/* one event program: DMA + enter at offset 0 */
+	} else {
+		pds_entry(s, B_PDS0, 0xd60);	/* the event program (script register 0xa68) */
+		pds_ta3d(s);
+		pds_entry(s, B_PDS2, 0xe20);
+		pds_events(s);
+		pds_events2(s);
 
-	/* The microkernel's own immediates: buffer and program addresses. */
-	if (limm(s, 0xbaf8, 0x1800100) || limm(s, 0xbb10, va(s, B_PDS4) >> 4) ||
-	    limm(s, 0xd60, 0x1001000) || limm(s, 0xd70, va(s, B_PDS1) >> 4) ||
-	    limm(s, 0xd78, va(s, B_TA3DCTL)) || limm(s, 0xdb0, 0x800100) ||
-	    limm(s, 0xdc0, va(s, B_PDS2) >> 4) || limm(s, 0xe40, va(s, B_PDS3) & ~0xfu) ||
-	    limm(s, 0xe50, 6))
-		return -1;
+		/* The microkernel's own immediates: buffer and program addresses. */
+		if (limm(s, 0xbaf8, 0x1800100) || limm(s, 0xbb10, va(s, B_PDS4) >> 4) ||
+		    limm(s, 0xd60, 0x1001000) || limm(s, 0xd70, va(s, B_PDS1) >> 4) ||
+		    limm(s, 0xd78, va(s, B_TA3DCTL)) || limm(s, 0xdb0, 0x800100) ||
+		    limm(s, 0xdc0, va(s, B_PDS2) >> 4) || limm(s, 0xe40, va(s, B_PDS3) & ~0xfu) ||
+		    limm(s, 0xe50, 6))
+			return -1;
+	}
 
 	memset(ii, 0, sizeof *ii);
-	memcpy(ii->aui32HostKickAddr, kick, sizeof kick);
+	memcpy(ii->aui32HostKickAddr, s->ours ? kick_ours : kick, sizeof kick);
 
 	sc = (struct script){ ii->sScripts.asInitCommandsPart1, 0, SGX_MAX_INIT_COMMANDS };
 	wr(&sc, 0xa58, 0);
@@ -528,6 +573,28 @@ static uint8_t *load_fw(const char *path)
 	return d;
 }
 
+/* openHC's microkernel (ukernel/build.py) is a plain image of its own size;
+   8-byte instructions, so the size is a multiple of 8. */
+static uint8_t *load_ours(const char *path, uint32_t *size)
+{
+	FILE *f = fopen(path, "rb");
+	uint8_t *d;
+	long n;
+
+	if (!f || fseek(f, 0, SEEK_END) || (n = ftell(f)) <= 0 || n % 8 || fseek(f, 0, SEEK_SET)) {
+		fprintf(stderr, "srvinit: %s: %s\n", path, f ? "bad size" : strerror(errno));
+		exit(2);
+	}
+	d = malloc(n);
+	if (!d || fread(d, 1, n, f) != (size_t)n) {
+		fprintf(stderr, "srvinit: %s: read failed\n", path);
+		exit(2);
+	}
+	fclose(f);
+	*size = (uint32_t)n;
+	return d;
+}
+
 static void fill_handles(struct init *s, SGX_BRIDGE_INIT_INFO *ii)
 {
 	ii->hKernelCCBMemInfo = s->b[B_CCB].mem;
@@ -544,7 +611,7 @@ static void fill_handles(struct init *s, SGX_BRIDGE_INIT_INFO *ii)
 }
 
 /* Offline: addresses from a plan file ("buf <i> <devva>", "heap <id> <base>", "pd <a>"). */
-static int plan(const char *path, const uint8_t *fw, const char *outdir)
+static int plan(const char *path, const uint8_t *fw, const char *outdir, int ours, uint32_t uk_size)
 {
 	static struct init s;
 	static SGX_BRIDGE_INIT_INFO ii;
@@ -552,6 +619,8 @@ static int plan(const char *path, const uint8_t *fw, const char *outdir)
 	char l[128], k[16], fn[512];
 	unsigned long a, b;
 
+	s.ours = ours;
+	s.uk_size = uk_size;
 	if (!f)
 		return perror(path), 2;
 	while (fgets(l, sizeof l, f)) {
@@ -564,7 +633,7 @@ static int plan(const char *path, const uint8_t *fw, const char *outdir)
 	}
 	fclose(f);
 	for (int i = 0; i < NBUF; i++)
-		s.b[i].cpu = calloc(1, bufs[i].size);
+		s.b[i].cpu = calloc(1, bufsz(&s, i));
 	if (build(&s, fw, &ii))
 		return 1;
 	fill_handles(&s, &ii);
@@ -572,7 +641,7 @@ static int plan(const char *path, const uint8_t *fw, const char *outdir)
 		snprintf(fn, sizeof fn, "%s/%s.bin", outdir, bufs[i].name);
 		if (!(f = fopen(fn, "wb")))
 			return perror(fn), 2;
-		fwrite(s.b[i].cpu, 1, bufs[i].size, f);
+		fwrite(s.b[i].cpu, 1, bufsz(&s, i), f);
 		fclose(f);
 	}
 	snprintf(fn, sizeof fn, "%s/initinfo.bin", outdir);
@@ -607,17 +676,27 @@ int main(int argc, char **argv)
 	uint8_t *fw;
 	int c, err = 0, connected = 0;
 
-	while ((c = getopt(argc, argv, "f:n:")) != -1) {
+	const char *ourspath = NULL;
+
+	while ((c = getopt(argc, argv, "f:n:o:")) != -1) {
 		if (c == 'f')
 			fwpath = optarg;
 		else if (c == 'n')
 			planpath = optarg;
+		else if (c == 'o')
+			ourspath = optarg;	/* load openHC's own microkernel */
 		else
-			return fprintf(stderr, "usage: srvinit [-f firmware] [-n plan outdir]\n"), 2;
+			return fprintf(stderr,
+				       "usage: srvinit [-f firmware | -o ukernel.bin] [-n plan outdir]\n"), 2;
 	}
-	fw = load_fw(fwpath);
+	if (ourspath) {
+		s.ours = 1;
+		fw = load_ours(ourspath, &s.uk_size);
+	} else {
+		fw = load_fw(fwpath);
+	}
 	if (planpath)
-		return optind < argc ? plan(planpath, fw, argv[optind]) : 2;
+		return optind < argc ? plan(planpath, fw, argv[optind], s.ours, s.uk_size) : 2;
 
 	TRY("open", pvr_open(&p, NULL));
 	TRY("connect", pvr_connect(&p));
@@ -653,7 +732,7 @@ int main(int argc, char **argv)
 	}
 	for (int i = 0; i < NBUF; i++) {
 		step = bufs[i].name;
-		if ((err = pvr_alloc(&p, &s.b[i], bufs[i].heap, bufs[i].attribs, bufs[i].size, bufs[i].align)) ||
+		if ((err = pvr_alloc(&p, &s.b[i], bufs[i].heap, bufs[i].attribs, bufsz(&s, i), bufs[i].align)) ||
 		    (err = pvr_map(&p, &s.b[i])))
 			goto fail;
 	}
