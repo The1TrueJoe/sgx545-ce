@@ -1,0 +1,19 @@
+#!/bin/sh
+# One-shot RAM boot of a test kernel, from the very start of the bootstrap's
+# boot, before any service or driver has touched the GPU. Sorts before
+# S00kexec, deletes itself first, so a hang recovers with a power-cycle and
+# the next boot is the normal one. The kernel under test is never flashed.
+[ "$1" = start ] || exit 0
+rm -f /etc/init.d/S00aramboot
+sync
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sys /sys 2>/dev/null
+case " $(cat /proc/cmdline) " in *" ohc_kexec="*) exit 0 ;; esac
+K=/boot/once/bzImage
+[ -f "$K" ] || exit 0
+[ -r /opt/ohc/board.env ] && . /opt/ohc/board.env
+echo "S00aramboot: kexec $K"
+kexec -l "$K" --command-line="console=ttyS0,115200 pci=realloc,nocrs,routeirq intel_iommu=off root=/dev/mmcblk0p1 rootwait rw ohc_kexec=1 ohc.ramboot=1 ${OHC_KEXEC_CMDLINE_EXTRA:-}" &&
+	sync && kexec -e
+echo "S00aramboot: kexec failed, booting normally" >&2
+exit 0

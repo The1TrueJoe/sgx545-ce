@@ -63,7 +63,8 @@ value is the one `docs/SRVINIT.md` lists.
 4. Fill the TA3D control block, the signature lists, the five PDS programs and the
    microkernel's immediates.
 5. Host control block: HWR check rate 10 (1 kHz timer / 100 Hz), timer clock = core
-   clock / 1000, active power off, `POWMAN_NO_WORK`. Empty kernel CCB.
+   clock / 1000, active power off, power status 0 (as `SGXPostPowerState` leaves it).
+   Empty kernel CCB.
 6. `CLKGATECTL` 0xa6aa, `CLKGATECTL2` 0xaaaaaa, script part 1.
 7. Reset (section 4).
 8. Event kicker 0, script part 2, `INIT_STATUS` 0, write barrier, `EUR_CR_EVENT_KICK2`.
