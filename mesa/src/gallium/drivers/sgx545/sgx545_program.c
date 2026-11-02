@@ -480,6 +480,18 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
 
    opts.layout = &layout;
    if (vertex) {
+      /* a matrix attribute arrives as a variable per column, all with the
+       * matrix's name: name the later columns apart so each one gets its own slot */
+      nir_foreach_shader_in_variable(var, nir) {
+         nir_foreach_shader_in_variable(prev, nir) {
+            if (prev == var)
+               break;
+            if (var->name && prev->name && !strcmp(var->name, prev->name)) {
+               var->name = ralloc_asprintf(var, "%s#%d", var->name, var->data.driver_location);
+               break;
+            }
+         }
+      }
       nir_foreach_shader_in_variable(var, nir) {
          if (var->name)
             so->n_attribs = MAX2(so->n_attribs, var->data.driver_location + glsl_count_attribute_slots(var->type, true));
