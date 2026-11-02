@@ -829,6 +829,27 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          epi = ctx->blend->hw[has_alpha];
       if (!has_alpha)
          mask |= PIPE_MASK_A;
+      /* A window's X byte takes whatever alpha came out.  A texture's is read
+       * as alpha where it's sampled, so it keeps the 1 it was created and
+       * cleared with: the blend's alpha is the tile's (tile * 1 + colour * 0) */
+      if (!has_alpha && sgx545_resource(ctx->framebuffer.cbufs[0].texture)->texture) {
+         if (!epi.blend) {
+            epi.blend = 1;
+            epi.c1 = SGXWS_BS_ZERO | SGXWS_BS_INV;
+            epi.c2 = SGXWS_BS_ZERO;
+            epi.cop = SGXWS_BOP_ADD;
+         }
+         epi.aop = SGXWS_BOP_ADD;
+         epi.atrade = 0;
+         if (epi.constant) {
+            epi.fsa = SGXWS_BF_ZERO;
+            epi.fda = SGXWS_BF_ONE;
+         } else {
+            /* with swap the tile is the first source */
+            epi.a1 = epi.swap ? SGXWS_BS_ZERO | SGXWS_BS_INV : SGXWS_BS_ZERO;
+            epi.a2 = epi.swap ? SGXWS_BS_ZERO : SGXWS_BS_ZERO | SGXWS_BS_INV;
+         }
+      }
       /* bytes of the packed BGRA8 colour */
       epi.wmask = (mask & PIPE_MASK_B ? 1 : 0) | (mask & PIPE_MASK_G ? 2 : 0) |
                   (mask & PIPE_MASK_R ? 4 : 0) | (mask & PIPE_MASK_A ? 8 : 0);
