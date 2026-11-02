@@ -906,6 +906,12 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
                     fsk[ctx->fs->dep_sa[j] + 2], fsk[ctx->fs->dep_sa[j] + 3]);
       }
       d.fs_consts = fsk;
+      if (sgx545_debug & SGX545_DEBUG_DRAW) {
+         fprintf(stderr, "  fs SA block: %u dwords, %u temps:", fsp.sec_dwords, fsp.temps);
+         for (unsigned i = 0; i < fsp.sec_dwords; i++)
+            fprintf(stderr, " %08x", fsk[i]);
+         fprintf(stderr, "\n");
+      }
       for (unsigned i = 0; i < d.fs->n_douti; i++) {
          unsigned unit = d.fs->douti_tex[i];
          struct pipe_sampler_view *view = unit ? ctx->views[unit - 1] : NULL;
