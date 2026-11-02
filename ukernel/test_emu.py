@@ -73,7 +73,8 @@ def test_init(code, man):
     mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 0)        # clean boot: HWR bit clear
     run_event(u, man, regs)
     assert mem.rd(HOSTCTL) == 1, "init must set ui32InitStatus = PVRSRV_USSE_EDM_INIT_COMPLETE"
-    print("  init (clean): ui32InitStatus = 1  OK")
+    assert mem.rd(CTLBLK + 4 * 0x16) == 0x00010000, "init must write the advisory openHC version word"
+    print("  init (clean): ui32InitStatus = 1, version word written  OK")
 
 
 def test_recovery_init(code, man):
@@ -142,17 +143,25 @@ def test_xfer_done(code, man):
     the in-flight marker, leaving the render scratch untouched (docs/TEX.md §3)."""
     u, mem, regs = machine(code)
     mem.wr(HOSTCTL, 1)                               # initialised -> dispatch on events
-    ctx, ccbctl = 0x30010000, 0x3201e4d0
+    ctx, ccb, ccbctl = 0x30010000, 0x32020000, 0x3201e4d0
+    mem.wr(ctx + 4 * 3, ccb)                         # CTX_CCB -> the CCB base
     mem.wr(ctx + 4 * 4, ccbctl)                      # CTX_CCBCTL -> the CCB control
-    mem.wr(ccbctl + 4, 0)                            # read offset
+    mem.wr(ccbctl + 4, 0)                            # read offset (command at CCB+0)
+    sync = 0x32002008
+    mem.wr(ccb + 0x168, sync)                        # destination sync complete-address
+    mem.wr(ccb + 0x16c, 1)                           # the write-ops-complete value
+    mem.wr(ctx + 0x14, 0xAA)                         # transfer in-flight fields, must clear
+    mem.wr(ctx + 0xb0, 0xBB)
     mem.wr(CTLBLK + 4 * 0x15, ctx)                   # SC_XFER: a transfer in flight
     mem.wr(CTLBLK + 4 * 0x32, 0x0BADC0DE)            # SC_RD sentinel (render path must not run)
     regs.v[CR_EVENT_STATUS] = EV_3D_END
     u.task(man["entries"]["event"] // 8)
+    assert mem.rd(sync) == 1, "transfer completion must signal the destination sync"
     assert mem.rd(ccbctl + 4) == 0x1c0, "transfer completion must advance the CCB past the command"
+    assert mem.rd(ctx + 0x14) == 0 and mem.rd(ctx + 0xb0) == 0, "ctx in-flight fields must clear"
     assert mem.rd(CTLBLK + 4 * 0x15) == 0, "the transfer in-flight marker must clear"
     assert mem.rd(CTLBLK + 4 * 0x32) == 0x0BADC0DE, "the render teardown must not run for a transfer"
-    print("  transfer completion: CCB advanced, marker cleared, render path skipped  OK")
+    print("  transfer completion: dest sync signalled, CCB advanced, render path skipped  OK")
 
 
 def main():

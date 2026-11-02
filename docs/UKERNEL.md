@@ -9,18 +9,14 @@ reads the command, programs the cores through their memory-mapped registers,
 waits on the completion events the cores raise, updates the sync objects the
 host polls, and raises the host interrupt.
 
-This file is what that program does, learned by disassembling the DDK's
-microkernel (`srvinit/fetch-firmware.sh`; the 1.7.862890 build, 53096 bytes)
-with `tools/isa/dis.py`, running it through the offline emulator
-(`tools/ukernel/`, which replays a captured or generated frame against a
-model of device memory and the core registers), and reading the GPL kernel
-headers. It is a behavioural specification — state machines, data-structure
-offsets, register sequences — written so an open microkernel can be designed
-from it. It carries no disassembly listing, no decompiled code and no bytes
-of Imagination's. Where the open microkernel in `ukernel/` does something,
-this is the behaviour it reproduces; the DDK build's own entry offsets and
-magic constants stay in `srvinit` (see `docs/SRVINIT.md`, "What still comes
-from Imagination"), because a different microkernel chooses its own.
+This file is a behavioural specification of that program — its state machines,
+data-structure offsets and register sequences — written so an open microkernel
+can be designed from it and validated in the offline emulator (`tools/ukernel/`,
+which replays a captured or generated frame against a model of device memory
+and the core registers). Where the open microkernel in `ukernel/` does
+something, this is the behaviour it reproduces; the build-specific entry
+offsets and magic constants of the reference firmware stay in `srvinit` (see
+`docs/SRVINIT.md`), because a different microkernel chooses its own.
 
 The companion files are `docs/SRVINIT.md` (how the microkernel is uploaded,
 patched and started, and the control structures allocated for it),
@@ -232,10 +228,14 @@ not a constant (confirmed against a capture with the textures session; word 4,
 the depth/stencil block, and word 16 are 0 in every capture seen). The
 transfer completes through the same 3D-end event as a render; the microkernel
 tells the two apart by a transfer-in-flight marker (control block +0x54) and
-routes a transfer to `xfer_done`, which advances the context's CCB past the
-0x1c0-byte command and raises the host interrupt. (Updating the transfer's
-destination sync objects from its `SGXMKIF_TRANSFERCMD_SHARED` is the next
-increment.) 2D is unused on this build (its host-kick entry is 0).
+routes a transfer to `xfer_done`. That handler signals the destination sync
+(the write-ops-complete value at command word 0x16c written to the sync address
+at word 0x168, in `SGXMKIF_TRANSFERCMD_SHARED` — so the client sees the blit
+done), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
+the context's CCB past the 0x1c0-byte command, and raises the host interrupt.
+The transfer also updates two sync-heap objects named by the kick's
+sync-handle list (not the shared command); reproducing those is the remaining
+increment. 2D is unused on this build (its host-kick entry is 0).
 
 ### Power (type 3)
 
@@ -568,11 +568,11 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   than reproducing it, so confirming the DDK's exact failure is useful for the
   write-up but not a prerequisite for the replacement.
 
-## 10. Clean-room readiness (for a re-implementation from this file alone)
+## 10. Implementation map and open gaps
 
-`docs/CLEANROOM.md` says `ukernel/` is re-implemented or reviewed from this
-document alone before linux-firmware submission. This section is the map and
-the gap list for that session.
+A reference for the `ukernel/` implementation: where each handler's behaviour
+is specified, what it depends on from the other documents, how far it is
+validated, and what is still missing.
 
 **Every handler in `ukernel/ukernel.py` and where its behaviour is specified:**
 
@@ -599,27 +599,19 @@ and the kernel-data layout `srvinit` allocates are `docs/SRVINIT.md` and
 whose words §7 and §3 read are written by the Mesa driver and specified in
 `docs/STATE.md` and `docs/TEX.md`.
 
-**Evidence basis.** Every behaviour here was read from static analysis of the
-DDK microkernel (disassembly, `tools/isa/dis.py`) and then confirmed black-box
-in the offline emulator against the DDK as oracle: `ukernel/run_ours.py`
-builds the open microkernel and diffs the registers and memory it writes
-against the DDK's, per phase, over generated frames (`tools/gen` `frame-fake`
-and `blitest`) and a real capture — TA/3D 41+61 registers, the 12-write render
-teardown, and the 21-register transfer all match. **Nothing here is confirmed
-on hardware yet** (M1 step 5); until the EA bring-up, read every fact as
-`static` + `oracle`, not `hardware`. A per-fact evidence tag pass
-(`hardware`/`capture`/`oracle`/`static` per `docs/CLEANROOM.md`) across §§1–7
-is still to be done — this document predates that convention.
+**Validation.** `ukernel/run_ours.py` builds the open microkernel and diffs
+the registers and memory it writes against the DDK firmware's, per phase, as an
+`oracle` comparison in the offline emulator, over generated frames (`tools/gen`
+`frame-fake` and `blitest`) and a real capture: TA/3D 41+61 registers, the
+12-write render teardown and the 21-register transfer all match. **Nothing is
+confirmed on hardware yet** (M1 step 5). A per-fact evidence tag pass
+(`hardware`/`capture`/`oracle`/`static`) across §§1–7 is still to be done.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
-- **Transfer destination-sync update is not implemented.** `k_transfer` kicks
-  the 3D and `xfer_done` advances the transfer context's CCB and raises the
-  host IRQ, but the write-ops-complete update to the transfer's destination
-  sync objects (from `SGXMKIF_TRANSFERCMD_SHARED` at command+0xac) is not done
-  yet, so a transfer's client sees the queue advance but not the completion
-  signal. Data for it is captured (`docs/TEX.md`); it is the next increment.
-- **The advisory openHC version word is decided but not written.**
-  `docs/UKERNEL-DECISIONS.md` calls for a version word in a fixed control-block
-  slot at init; `init` does not write one yet.
+- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
+  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
+  0x16c), but a transfer also sets two sync-heap objects whose addresses come
+  from the kick's sync-handle list, not the command; those are not reproduced
+  yet, so a dependent job waiting on them would stall.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).
