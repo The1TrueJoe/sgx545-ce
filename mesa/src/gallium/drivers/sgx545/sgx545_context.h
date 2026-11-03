@@ -154,7 +154,7 @@ struct sgx545_context {
    uint16_t *idx_staging;           /* its 16-bit indices */
    uint32_t *mem_consts[2];         /* a draw's constants in memory, vertex and fragment (sgx545_draw.c) */
    unsigned idx_staging_size;
-   bool warned_shader, warned_prim, warned_blend, warned_varyings;
+   bool warned_shader, warned_prim, warned_blend, warned_varyings, warned_cube;
 };
 
 static inline struct sgx545_context *

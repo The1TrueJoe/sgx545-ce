@@ -885,6 +885,19 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
       struct pipe_sampler_view *view = ctx->views[unit];
 
+      /* stopgap: no layout is known for NPOT cube faces, and sampling one of
+       * 16 texels or more, or its mipmaps, locks the 3D (piglit cubemap
+       * npot: a recovery a draw) */
+      if (view && view->texture->target == PIPE_TEXTURE_CUBE &&
+          !util_is_power_of_two_or_zero(view->texture->width0) &&
+          (view->texture->width0 >= 16 ||
+           (ctx->samplers[unit] && ctx->samplers[unit]->min_mip_filter != PIPE_TEX_MIPFILTER_NONE &&
+            view->u.tex.last_level > view->u.tex.first_level))) {
+         if (!ctx->warned_cube)
+            fprintf(stderr, "sgx545: NPOT cube maps of 16 texels or more, or mipmapped, not drawn yet\n");
+         ctx->warned_cube = true;
+         return;
+      }
       if (view && sgx545_tex_uses_cube0(view, ctx->samplers[unit]) &&
           !sgx545_resource_cube0(ctx, sgx545_resource(view->texture)))
          return;
