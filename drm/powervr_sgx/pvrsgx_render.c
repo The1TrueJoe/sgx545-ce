@@ -573,7 +573,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	if (rj->nkicks == 1)
 		cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10);	/* first and last kick; first render */
 	else
-		cmd[0x04 / 4] = first ? 0x71 : last ? 0x62 : 0x60;
+		/* 0x10 on the dataset's first render only, as for one kick */
+		cmd[0x04 / 4] = first ? 0x61 | (f ? 0 : 0x10) : last ? 0x62 : 0x60;
 	cmd[0x08 / 4] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
 	cmd[0x0c / 4] = 0x00030001;
 	cmd[0x10 / 4] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
