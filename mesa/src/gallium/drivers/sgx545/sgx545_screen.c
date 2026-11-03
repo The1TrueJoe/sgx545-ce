@@ -142,7 +142,13 @@ sgx545_init_screen_caps(struct pipe_screen *pscreen)
    caps->max_point_size = caps->max_point_size_aa = 511;
    caps->point_size_granularity = caps->line_width_granularity = 0.1f;
    caps->max_texture_lod_bias = 16;
-   caps->alpha_test = true;
+   /* What desktop GL has and the hardware does in the shader: st lowers the
+    * alpha test to a discard, two-sided colour to a select on the face, and
+    * gives every vertex program a point size (fixed function's points; a GLES
+    * vertex program writes its own) */
+   caps->alpha_test = false;
+   caps->two_sided_color = false;
+   caps->point_size_fixed = PIPE_POINT_SIZE_LOWER_ALWAYS;
    caps->clip_planes = 0;
    caps->texture_transfer_modes = 0;
    caps->max_vertex_element_src_offset = 2047;
