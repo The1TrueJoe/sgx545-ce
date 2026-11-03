@@ -93,6 +93,7 @@ struct sgx_varyings {
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
 #define SGX_SLOT_NONE 0xffff
+#define SGX_MAX_CONST_MAP (1024 + 32)   /* every constant number and literal */
 
 struct sgx_const_map {
    uint16_t k;                  /* constant number: uniform component (sgx_nir.c's numbering) */
@@ -161,7 +162,7 @@ struct sgx_shader {
    /* what the program reads and writes */
    unsigned sa_base;            /* first SA register of the constants (9 fragment, 10 vertex) */
    unsigned n_consts;
-   struct sgx_const_map consts[256];
+   struct sgx_const_map consts[SGX_MAX_CONST_MAP];
    unsigned n_iters;            /* fragment: PDS iterations, in PA order */
    struct sgx_iter_info iters[16];
    unsigned colour_pa;          /* fragment: packed BGRA8 colour register */
