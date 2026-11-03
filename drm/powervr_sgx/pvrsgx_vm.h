@@ -15,6 +15,7 @@ struct drm_device;
 struct drm_file;
 struct pvrsgx_device;
 struct pvrsgx_file;
+struct pvrsgx_pb;
 
 /**
  * struct pvrsgx_vm - A VM context: one page directory
@@ -29,7 +30,9 @@ struct pvrsgx_vm {
 	struct pvrsgx_mmu *mmu;
 	/** @params: 3D parameters addresses of this VM's kernel objects (pvrsgx_kobj.c). */
 	struct drm_mm params;
-	/** @lock: Serialises map and unmap. */
+	/** @pb: The parameter buffer its render contexts share, until the VM is closed. */
+	struct pvrsgx_pb *pb;
+	/** @lock: Serialises map and unmap, and @pb's creation. */
 	struct mutex lock;
 	struct kref ref;
 };
