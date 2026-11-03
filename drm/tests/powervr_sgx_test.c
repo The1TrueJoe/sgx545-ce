@@ -645,6 +645,146 @@ static void t_submit_invalid(int fd)
 	assert_eq(syncobj_wait(fd, s, 0), -EINVAL);
 }
 
+/* RT datasets */
+
+static uint32_t create_rtds(int fd, uint32_t ctx, uint32_t w, uint32_t h, int *err)
+{
+	struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
+		.context_handle = ctx, .width = w, .height = h, .samples = 1,
+	};
+
+	*err = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
+	return a.handle;
+}
+
+static void t_rtds_create_destroy(int fd)
+{
+	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args d = {};
+	int err;
+
+	d.handle = create_rtds(fd, ctx, 720, 480, &err);
+	assert_eq(err, 0);
+	assert_true(d.handle);
+	create_rtds(fd, ctx, 64, 32, &err);	/* the other macrotile mode */
+	assert_eq(err, 0);
+	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &d);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &d, ENOENT);
+	d.handle = 0;
+	d._padding_4 = 1;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &d, EINVAL);
+}
+
+static void t_rtds_invalid(int fd)
+{
+	uint32_t vm = create_vm(fd);
+	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
+		.context_handle = ctx, .width = 64, .height = 64, .samples = 1,
+	};
+	int err;
+
+	a.samples = 4;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	a.samples = 1;
+	a.flags = 1;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	a.flags = 0;
+	a.width = 0;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	a.width = 8192;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	create_rtds(fd, xctx, 64, 64, &err);	/* a transfer context has no PB */
+	assert_eq(err, -EINVAL);
+	create_rtds(fd, 0xdead, 64, 64, &err);
+	assert_eq(err, -ENOENT);
+}
+
+/* Render streams: every case fails validation, so nothing reaches the GPU. */
+
+struct rstreams {
+	uint64_t render[10];
+	uint64_t kick[3];
+	struct drm_powervr_sgx_ta_kick k[2];
+	struct drm_powervr_sgx_job j;
+};
+
+static void rstreams_init(struct rstreams *r, uint32_t ctx, uint32_t rtds, uint64_t pds, uint64_t vdm)
+{
+	uint32_t *r32 = (uint32_t *)r->render, *k32 = (uint32_t *)r->kick;
+
+	memset(r, 0, sizeof(*r));
+	r32[0] = 80;
+	r->render[3] = pds;			/* pixel event */
+	r->render[4] = pds + 0x40;		/* bg secondary */
+	r->render[5] = pds + 0x80;		/* bg primary */
+	r32[0x30 / 4] = 5;
+	r32[0x34 / 4] = 1;
+	r32[0x38 / 4] = 2;
+	k32[0] = 20;
+	r->kick[1] = vdm;
+	r->k[0] = (struct drm_powervr_sgx_ta_kick){ .cmd_stream = (uintptr_t)r->kick, .cmd_stream_len = 20 };
+	r->k[1] = r->k[0];
+	r->j = (struct drm_powervr_sgx_job){
+		.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER, .context_handle = ctx,
+		.cmd_stream = (uintptr_t)r->render, .cmd_stream_len = 80,
+		.ta_kicks = DRM_POWERVR_SGX_OBJ_ARRAY(1, r->k), .rt_dataset_handle = rtds,
+	};
+}
+
+static void t_submit_render_invalid(int fd)
+{
+	uint32_t vm = create_vm(fd), ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t ctx2 = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), rtds, rtds2;
+	uint32_t *r32;
+	struct rstreams r;
+	int err;
+
+	rtds = create_rtds(fd, ctx, 128, 128, &err);
+	assert_eq(err, 0);
+	rtds2 = create_rtds(fd, ctx2, 128, 128, &err);
+	assert_eq(err, 0);
+	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
+	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
+	r32 = (uint32_t *)r.render;
+
+#define REJECT(err_, ...) do { rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000); \
+		__VA_ARGS__; assert_eq(submit(fd, &r.j, 1, NULL), -(err_)); } while (0)
+
+	REJECT(EINVAL, r32[0] = 72);			/* main length is exact */
+	REJECT(EINVAL, r32[1] = 1);			/* header word must be zero */
+	REJECT(EINVAL, r.j.cmd_stream_len = 88);	/* no trailing bytes */
+	REJECT(EINVAL, r.j.cmd_stream_len = 8192);
+	REJECT(EINVAL, r.j.cmd_stream += 4);		/* 8-byte aligned */
+	REJECT(EFAULT, r.j.cmd_stream = 8);
+	REJECT(EINVAL, r.j.ta_kicks.count = 0);
+	REJECT(EOPNOTSUPP, r.j.ta_kicks.count = 2);	/* multi-kick scenes: G12 */
+	REJECT(EINVAL, r.k[0].flags = 1);
+	REJECT(EINVAL, ((uint32_t *)r.kick)[0] = 24);
+	REJECT(EINVAL, r.kick[1] = 0x3e100002);		/* VDM base 4-byte aligned */
+	REJECT(EINVAL, r.kick[1] = 0x3e200000);		/* not mapped */
+	REJECT(EINVAL, ((uint32_t *)r.kick)[4] = 1);	/* ta_flags2 bits outside the mask */
+	REJECT(EINVAL, r.render[3] = 0x2e200000);	/* pixel event not mapped */
+	REJECT(EINVAL, r.render[3] = 0x3e100000);	/* pixel event outside PDS pixel */
+	REJECT(EINVAL, r.render[4] = 0x2e100008);	/* PDS addresses 16-byte aligned */
+	REJECT(EINVAL, r.render[5] = 0x100000000ull);	/* below 2^32 */
+	REJECT(EINVAL, r32[0x30 / 4] = 0);		/* rows 1..63 */
+	REJECT(EINVAL, r32[0x34 / 4] = 64);
+	REJECT(EINVAL, r32[0x3c / 4] = 0x10000);	/* ZLS without a depth address */
+	REJECT(EINVAL, r32[0x3c / 4] = 0x8);		/* ZLS bits 3-11 are the kernel's */
+	REJECT(EINVAL, r32[0x40 / 4] = 0x100);		/* stencil flag without a stencil address */
+	REJECT(EINVAL, r32[0x40 / 4] = 0x1);		/* 3D flags outside the mask */
+	REJECT(EINVAL, r.render[1] = 0x3e100000);	/* depth not mapped for the whole target */
+	REJECT(EINVAL, r.j.flags = 1);			/* render jobs have no flags yet */
+	REJECT(EINVAL, r.j.rt_dataset_handle = rtds2);	/* another context's dataset */
+	REJECT(ENOENT, r.j.rt_dataset_handle = 0xdead);
+	REJECT(EINVAL, r.j.context_handle = xctx);	/* a render job on a transfer context */
+#undef REJECT
+}
+
 static const struct {
 	const char *name;
 	void (*fn)(int fd);
@@ -673,6 +813,9 @@ static const struct {
 	{ "submit-null-job-bo-ref", t_null_job_bo_ref },
 	{ "submit-null-job-vm-destroyed", t_null_job_vm_destroyed },
 	{ "submit-invalid", t_submit_invalid },
+	{ "rt-dataset-create-destroy", t_rtds_create_destroy },
+	{ "rt-dataset-invalid", t_rtds_invalid },
+	{ "submit-render-invalid", t_submit_render_invalid },
 };
 
 int main(int argc, char **argv)

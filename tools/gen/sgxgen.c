@@ -12,6 +12,11 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef SGXGEN_DRM
+#include <fcntl.h>
+#include <sys/mman.h>
+int ioctl(int fd, unsigned long req, ...);	/* musl's sys/ioctl.h clashes with the kernel's _IOC */
+#endif
 
 #include "sgxgen.h"
 #include "usse_progs.h"
@@ -68,6 +73,58 @@ static uint32_t u8(float x)
 
 /* ------------------------------------------------------------------ memory */
 
+#ifdef SGXGEN_DRM
+static int xioctl(int fd, unsigned long req, void *arg)
+{
+	int r;
+
+	do
+		r = ioctl(fd, req, arg);
+	while (r == -1 && (errno == EINTR || errno == EAGAIN));
+	return r == -1 ? -errno : 0;
+}
+
+/* A shmem object, CPU-mapped, mapped in the VM at the next free address of the heap. */
+static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t attribs, uint32_t size,
+		     uint32_t align)
+{
+	struct drm_powervr_sgx_ioctl_create_bo_args cb = {
+		.size = (size + 0xfff) & ~0xfffu, .flags = DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
+	};
+	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
+	struct drm_powervr_sgx_ioctl_vm_map_args vm = {};
+	uint32_t a = align < 0x1000 ? 0x1000 : align, addr;
+	void *p;
+	int e;
+
+	(void)attribs;
+	if (!d->heap_base[heap])
+		die("heap %u is the kernel's", heap);
+	addr = ((d->heap_next[heap] ? d->heap_next[heap] : d->heap_base[heap] + 0x1000) + a - 1) & ~(a - 1);
+	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &cb)))
+		die("CREATE_BO %#x failed: %d", size, e);
+	mo.handle = cb.handle;
+	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo)))
+		die("GET_BO_MMAP_OFFSET failed: %d", e);
+	p = mmap(NULL, cb.size, PROT_READ | PROT_WRITE, MAP_SHARED, d->fd, mo.offset);
+	if (p == MAP_FAILED)
+		die("mmap failed: %d", errno);
+	vm.vm_context_handle = d->vm;
+	vm.device_addr = addr;
+	vm.handle = cb.handle;
+	vm.size = cb.size;
+	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &vm)))
+		die("VM_MAP heap %u at %#x +%#llx failed: %d", heap, addr, (unsigned long long)cb.size, e);
+	d->heap_next[heap] = addr + cb.size;
+	bo->handle = cb.handle;
+	bo->va = addr;
+	bo->size = size;
+	bo->map = p;
+	memset(bo->map, 0, size);
+	if (d->verbose)
+		fprintf(stderr, "sgxgen: heap %2u %#010x +%#x\n", heap, bo->va, size);
+}
+#else
 static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t attribs, uint32_t size,
 		     uint32_t align)
 {
@@ -78,11 +135,13 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 	if ((e = pvr_map(&d->pvr, &bo->b)))
 		die("map of %#x failed: %d", bo->b.devva, e);
 	bo->va = bo->b.devva;
+	bo->size = size;
 	bo->map = bo->b.cpu;
 	memset(bo->map, 0, size);
 	if (d->verbose)
 		fprintf(stderr, "sgxgen: heap %2u %#010x +%#x\n", heap, bo->va, size);
 }
+#endif
 
 static void ring_init(struct sgx_dev *d, struct sgx_ring *r, uint32_t heap, uint32_t size)
 {
@@ -96,7 +155,7 @@ static struct sgx_ptr ring_alloc(struct sgx_ring *r, uint32_t size, uint32_t ali
 	struct sgx_ptr p;
 	uint32_t o = (r->used + align - 1) & ~(align - 1);
 
-	if (o + size > r->bo.b.size)
+	if (o + size > r->bo.size)
 		die("ring at %#x full (%#x + %#x)", r->bo.va, o, size);
 	r->used = o + size;
 	p.va = r->bo.va + o;
@@ -284,6 +343,41 @@ static uint32_t dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secon
 
 /* ------------------------------------------------------------------ device */
 
+#ifdef SGXGEN_DRM
+int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace)
+{
+	struct drm_powervr_sgx_heap h[DRM_POWERVR_SGX_HEAP_COUNT];
+	struct drm_powervr_sgx_dev_query_heap_info info = {
+		.heaps = { .stride = sizeof(h[0]), .count = DRM_POWERVR_SGX_HEAP_COUNT, .array = (uintptr_t)h },
+	};
+	struct drm_powervr_sgx_ioctl_dev_query_args q = {
+		.type = DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET, .size = sizeof(info), .pointer = (uintptr_t)&info,
+	};
+	struct drm_powervr_sgx_ioctl_create_vm_context_args vm = {};
+	int e;
+
+	(void)trace;
+	memset(d, 0, sizeof *d);
+	d->fd = open(node ? node : "/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+	if (d->fd < 0)
+		return -errno;
+	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_DEV_QUERY, &q)) ||
+	    (e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT, &vm)))
+		return e;
+	d->vm = vm.handle;
+	d->heap_base[H_GENERAL] = h[DRM_POWERVR_SGX_HEAP_GENERAL].base;
+	d->heap_base[H_PDSPIXEL] = h[DRM_POWERVR_SGX_HEAP_PDS_PIXEL].base;
+	d->heap_base[H_PDSVERTEX] = h[DRM_POWERVR_SGX_HEAP_PDS_VERTEX].base;
+	d->heap_base[H_PIXSHADER] = h[DRM_POWERVR_SGX_HEAP_USSE_PIXEL].base;
+	d->heap_base[H_VTXSHADER] = h[DRM_POWERVR_SGX_HEAP_USSE_VERTEX].base;
+	return 0;
+}
+
+void sgx_dev_close(struct sgx_dev *d)
+{
+	close(d->fd);
+}
+#else
 int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace)
 {
 	int e;
@@ -305,9 +399,11 @@ void sgx_dev_close(struct sgx_dev *d)
 {
 	pvr_trace_close(&d->pvr);
 }
+#endif
 
 /* ------------------------------------------------------------------ context */
 
+#ifndef SGXGEN_DRM
 /* The parameter buffer (FUN_0001e980; STATE.md section 6). */
 static void ctx_pb(struct sgx_ctx *c, uint32_t bytes)
 {
@@ -345,6 +441,7 @@ static void ctx_pb(struct sgx_ctx *c, uint32_t bytes)
 	pd[14] = c->pbblocks.va;
 	c->pb_pages = pages;
 }
+#endif
 
 struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d)
 {
@@ -356,6 +453,23 @@ struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d)
 	int e;
 
 	c->dev = d;
+#ifdef SGXGEN_DRM
+	{
+		struct drm_powervr_sgx_ioctl_create_context_args cc = {
+			.type = DRM_POWERVR_SGX_CTX_TYPE_RENDER, .vm_context_handle = d->vm,
+		};
+		struct drm_syncobj_create sc = {};
+
+		(void)dummy;
+		(void)hw;
+		(void)e;
+		if (xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &cc) ||
+		    xioctl(d->fd, DRM_IOCTL_SYNCOBJ_CREATE, &sc))
+			die("CREATE_CONTEXT failed");
+		c->ctx = cc.handle;
+		c->syncobj = sc.handle;
+	}
+#else
 	ctx_pb(c, 0x400000);
 	bo_alloc(d, &c->ccb, H_KDATA, 0x4f, 0x10420, 0x1000);
 	bo_alloc(d, &c->ccbctl, H_KDATA, 0x4f, 8, 0x20);
@@ -384,6 +498,7 @@ struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d)
 	hw[16] = (uint32_t)getpid();
 	if ((e = pvr_register_render_ctx(&d->pvr, hw, sizeof hw, 8, &c->hwctx, &c->hwctx_va)))
 		die("SGX_REGISTER_HW_RENDER_CONTEXT failed: %d", e);
+#endif
 
 	ring_init(d, &c->usse_pix, H_PIXSHADER, 0x8000);
 	ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x8000);
@@ -608,6 +723,24 @@ struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h
 	s->stride = (w + 31) & ~31u;
 	rt_numbers(r, w, h);
 	bo_alloc(d, &s->color, H_GENERAL, 0x10000003, s->stride * h * 4, 0x1000);
+#ifdef SGXGEN_DRM
+	{
+		struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
+			.context_handle = c->ctx, .width = w, .height = h, .samples = 1,
+		};
+		int e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
+
+		if (e)
+			die("CREATE_RT_DATASET %ux%u failed: %d", w, h, e);
+		s->rtds = a.handle;
+		(void)rd;
+		(void)rt;
+	}
+	s->eot = eot_program(c, s);
+	s->pixev = pixel_event(c, s->eot, &s->pixev_rows);
+	background(c, s);
+	return s;
+#else
 
 	/* SGXAddRenderTarget: RT data (2 entries), tail pointers, region headers (double
 	 * buffered), TA data blocks, the background object block */
@@ -694,8 +827,30 @@ struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h
 	s->hwsync.map[0] = s->hwsync_access.va;	/* SGXMKIF_HWDEVICE_SYNC_LIST.sAccessDevAddr */
 	s->hwsync_access.map[0] = 1;
 	return s;
+#endif
 }
 
+#ifdef SGXGEN_DRM
+void sgx_surface_destroy(struct sgx_ctx *c, struct sgx_surface *s)
+{
+	struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args a = { .handle = s->rtds };
+
+	if (xioctl(c->dev->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &a))
+		fprintf(stderr, "sgxgen: DESTROY_RT_DATASET failed\n");
+	if (c->fb == s)
+		c->fb = NULL;
+	free(s);
+}
+
+void sgx_ctx_destroy(struct sgx_ctx *c)
+{
+	struct drm_powervr_sgx_ioctl_destroy_context_args a = { .handle = c->ctx };
+
+	if (xioctl(c->dev->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &a))
+		fprintf(stderr, "sgxgen: DESTROY_CONTEXT failed\n");
+	free(c);
+}
+#else
 void sgx_surface_destroy(struct sgx_ctx *c, struct sgx_surface *s)
 {
 	/* SGX_FLUSH_HW_RENDER_TARGET is what the DDK sends here, but on the EA3
@@ -718,6 +873,7 @@ void sgx_ctx_destroy(struct sgx_ctx *c)
 		fprintf(stderr, "sgxgen: SGX_UNREGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
 	free(c);
 }
+#endif
 
 void sgx_set_framebuffer(struct sgx_ctx *c, struct sgx_surface *s)
 {
@@ -982,6 +1138,72 @@ static uint32_t vdm_end(struct sgx_ctx *c)
 	return at;
 }
 
+#ifdef SGXGEN_DRM
+static int64_t now_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000000000ll + ts.tv_nsec;
+}
+
+/*
+ * One render job: the scene is the whole VDM stream in one TA kick, which the
+ * kernel marks first and last (it starts the 3D). The client's part of the
+ * command is two streams (docs/UAPI.md section 3).
+ */
+int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
+{
+	struct sgx_surface *s = c->fb;
+	uint64_t render[10] = { 0 }, kick_buf[3] = { 0 };
+	uint32_t *r32 = (uint32_t *)render, *k32 = (uint32_t *)kick_buf;
+	struct drm_powervr_sgx_ta_kick kick = { .cmd_stream = (uintptr_t)kick_buf, .cmd_stream_len = 20 };
+	struct drm_powervr_sgx_sync_op op = { .handle = c->syncobj, .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL };
+	struct drm_powervr_sgx_job job = {
+		.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER,
+		.context_handle = c->ctx,
+		.cmd_stream = (uintptr_t)render,
+		.cmd_stream_len = 80,
+		.sync_ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
+		.ta_kicks = { .stride = sizeof(kick), .count = 1, .array = (uintptr_t)&kick },
+		.rt_dataset_handle = s->rtds,
+	};
+	struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
+		.jobs = { .stride = sizeof(job), .count = 1, .array = (uintptr_t)&job },
+	};
+	uint32_t h = c->syncobj;
+	struct drm_syncobj_wait w = { .handles = (uintptr_t)&h, .count_handles = 1 };
+	int64_t t0;
+	int e;
+
+	vdm_end(c);
+	/* CMD_RENDER: header, then the fields in order (UAPI.md 3.4) */
+	r32[0] = 80;
+	render[3] = s->pixev;				/* pixel_event_pds_addr */
+	render[4] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[0] & 0x3ffffff) << 4);	/* bg secondary */
+	render[5] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[2] & 0x3ffffff) << 4);	/* bg primary */
+	r32[0x30 / 4] = s->pixev_rows;
+	r32[0x34 / 4] = s->bg_pds[0] >> 26;
+	r32[0x38 / 4] = s->bg_pds[2] >> 26;
+	r32[0x44 / 4] = f32(1.0f);			/* bg_depth */
+	/* CMD_TA_KICK */
+	k32[0] = 20;
+	kick_buf[1] = c->vdm_start;
+
+	t0 = now_ns();
+	if ((e = xioctl(c->dev->fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj))) {
+		fprintf(stderr, "sgxgen: SUBMIT_JOBS failed: %d (job %d)\n", e, (int)sj.failed_index);
+		return e;
+	}
+	c->frames++;
+	w.timeout_nsec = t0 + (int64_t)timeout_ms * 1000000;
+	e = xioctl(c->dev->fd, DRM_IOCTL_SYNCOBJ_WAIT, &w);
+	if (c->dev->verbose)
+		fprintf(stderr, "sgxgen: render %s after %lld us\n", e ? "NOT done" : "done",
+			(long long)(now_ns() - t0) / 1000);
+	return e == -ETIME ? -ETIMEDOUT : e;
+}
+#else
 /* SGXMKIF_CMDTA, client part (STATE.md section 1) */
 static void ta_command(struct sgx_ctx *c, uint32_t vdm_base, int last)
 {
@@ -1093,3 +1315,4 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 			c->pbdesc.map[5], c->fb->rtdata.map[1], c->fb->rtword.map[0]);
 	return e;
 }
+#endif
