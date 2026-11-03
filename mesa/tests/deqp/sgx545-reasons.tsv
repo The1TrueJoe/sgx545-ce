@@ -12,3 +12,5 @@ functional\.rasterization\.primitives	wide lines: the hardware's line quads agai
 functional\.draw\.draw_elements\.points	points from glDrawElements; the DDK fails these too
 functional\.(implementation_limits|state_query\.integers)\.max_vertex_uniform_vectors	GL_MAX_VERTEX_UNIFORM_VECTORS 120: st keeps 8 for clip planes; a 136-vec4 buffer gave 128 but broke dynamic reads of constant arrays (shaders.indexing.tmp_array)
 functional\.depth_stencil_clear\.depth_stencil$	depth and stencil cleared together with no mask or scissor: the stencil comes out 0 (the masked and scissored variants pass)
+functional\.flush_finish\.flush_wait	Warn: glFlush/glFinish timing outside the test's margin, not diagnosed
+functional\.rasterization\.interpolation\..*lines	Warn: line colour interpolation within the low-quality tolerance only (the hardware's line quads), not diagnosed
