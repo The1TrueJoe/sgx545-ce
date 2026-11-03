@@ -313,6 +313,8 @@ def run_chunk(box, who, name, tests):
     rc, out = box.ssh(runner_script(who, name), timeout=limit)
     res = {}
     wedged = rc is None
+    # piglit-runner reports a comma in a name as "-"
+    named = {t.replace(",", "-"): t for t in tests} if who == "piglit" else {}
     if not wedged:
         rc2, csv = box.ssh(f"cat {BOX_DIR}/out/results.csv 2>/dev/null")
         if rc2 is None:
@@ -320,7 +322,7 @@ def run_chunk(box, who, name, tests):
         for line in csv.decode(errors="replace").splitlines():
             r = result_line(line)
             if r:
-                res[r[0]] = (r[1], r[2])
+                res[named.get(r[0], r[0])] = (r[1], r[2])
     if not wedged:
         # the failing tests' logs, for triage
         logs = "*.log" if who == "piglit" else "*.qpa"    # piglit-runner keeps a log per failing test
