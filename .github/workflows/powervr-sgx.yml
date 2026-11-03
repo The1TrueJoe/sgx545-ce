@@ -8,6 +8,10 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      board:
+        description: openHC EA board (ea1-v1, ea3-v2, ...)
+        default: ea1-v1
   push:
     branches: [m2-drm]
     paths:
@@ -18,13 +22,13 @@ on:
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
-  group: powervr-sgx-${{ github.ref }}
+  group: powervr-sgx-${{ github.ref }}-${{ inputs.board || 'ea1-v1' }}
   cancel-in-progress: true
 
 env:
   LINUX_VERSION: 7.1.8
   OPENHC_REF: main
-  BOARD: ea1-v1
+  BOARD: ${{ inputs.board || 'ea1-v1' }}
 
 jobs:
   build:
