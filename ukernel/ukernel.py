@@ -410,6 +410,11 @@ def build(a):
     # has the phase/end wrapper.
     a.label("event")
     a.phas()
+    # (A `lock #1`/`release #1` task mutex was tried here + in a.end() to serialise
+    # concurrent event tasks. It is offline-perfect (race_interleave 358/358) but
+    # HW-NEUTRAL — the EA3 lockup_TA is unchanged with it, so the two-task
+    # interleave is not what fails on hardware. Held out: a lock held across an
+    # HWR reset is an unknown risk, for no measured benefit. See the handover.)
     a.patch(17, "ctlblk")                          # r17 = control block base, reserved for the
                                                    # whole task. A task can write its own secondary
                                                    # attributes, but only after the emit-triggered
@@ -447,9 +452,13 @@ def build(a):
     # confirmed 2026-11-03: ta_finish stuck set at every lockup dump, do_ta +
     # ta_finished markers present but do_3d absent. The DDK acks these in its
     # handlers (str 0x134 = 0x2000 at TA finish, = 0x40000 at 3D end). Clearing an
-    # unset bit is a no-op, so the acknowledge is unconditional and precedes the
-    # dispatches, which test the r2 snapshot taken above.
+    # unset bit is a no-op. Mask the acknowledge to the r2 SNAPSHOT (and r3,r2,r3)
+    # so we clear ONLY the bits this task will dispatch: a bit that set after the
+    # snapshot (e.g. a TA finish for a kick not yet dispatched) must survive to
+    # re-trigger the event, else that kick is lost (race_interleave.py, ta3d-state
+    # 2026-11-03: the unconditional ack dropped a kick in ~5 interleavings).
     a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000}")
+    a.i("and r3, r2, r3")                          # ack only what the snapshot saw
     a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.dispatch(0x2000, "ta_finished")              # a TA finished
     a.dispatch(0x40000, "render_done")             # pixel back-end end of render
