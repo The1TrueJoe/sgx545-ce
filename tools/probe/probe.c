@@ -41,13 +41,16 @@
  *   PROBE_NOSCISSOR2=1         glDisable(SCISSOR_TEST) before every draw after the first
  * Textures (PROBE_TEX >= 1; all units the same):
  *   PROBE_TEXFMT=name          rgba8888 rgb565 rgba4444 rgba5551 rgb888 l8 a8 la88   (rgba8888)
+ *                              OES_depth_texture / packed_depth_stencil: depth16 depth32 d24s8;
+ *                              OES_texture_float / half_float: rgbaf32 lf32 rgbaf16 lf16
  *   PROBE_TEXSIZE="w h"        (8 8); the checker repeats every 8 texels
  *   PROBE_TEXFILTER="min mag"  GL enums                          (0x2600 0x2600 = NEAREST)
  *   PROBE_TEXWRAP="s t"        GL enums                          (0x2901 = REPEAT)
  *   PROBE_MIPMAP=1             glGenerateMipmap after the upload
  *   PROBE_TEXPAT=1             texels name their own coordinates instead of the checker:
  *                              8888/888: r = x, g = y, b = level | face<<4, a = 0x80 | x>>8 | (y>>8)<<2;
- *                              16-bit formats (and la88 as l | a<<8): y*w + x; l8/a8: (y*w + x) & 0xff
+ *                              16-bit formats (and la88 as l | a<<8): y*w + x; l8/a8: (y*w + x) & 0xff;
+ *                              depth32/d24s8: (y*w + x) << 8; f32/f16: (y*w + x) / (w*h) in every channel
  *   PROBE_TEXFILE=path         level 0 texels from a file, raw, in the GL upload format
  *   PROBE_TEXLEVELS=n          upload levels 0..n-1 one by one (each with its own level number)
  *   PROBE_TEXCUBE=1            a cube map: all six faces uploaded (face f in the pattern)
@@ -193,6 +196,12 @@ FNS(DECL)
 #define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
 #define GL_UNSIGNED_SHORT_5_5_5_1 0x8034
 #define GL_UNSIGNED_SHORT_5_6_5 0x8363
+#define GL_UNSIGNED_SHORT 0x1403
+#define GL_UNSIGNED_INT 0x1405
+#define GL_HALF_FLOAT_OES 0x8D61
+#define GL_DEPTH_COMPONENT 0x1902
+#define GL_DEPTH_STENCIL_OES 0x84F9
+#define GL_UNSIGNED_INT_24_8_OES 0x84FA
 #define GL_VERTEX_SHADER 0x8B31
 #define GL_FRAGMENT_SHADER 0x8B30
 #define GL_COMPILE_STATUS 0x8B81
@@ -316,6 +325,8 @@ static int texels(const char *fmt, int w, int h, void *out, GLenum *gfmt, GLenum
 {
 	unsigned char *b = out;
 	uint16_t *s = out;
+	uint32_t *u = out;
+	float *f = out;
 
 	for (int i = 0; i < w * h; i++) {
 		int on = ((i % w / 1) ^ (i / w)) & 1;
@@ -345,6 +356,30 @@ static int texels(const char *fmt, int w, int h, void *out, GLenum *gfmt, GLenum
 		} else if (!strcmp(fmt, "la88")) {
 			*gfmt = GL_LUMINANCE_ALPHA, *gtype = GL_UNSIGNED_BYTE;
 			b[2 * i] = r, b[2 * i + 1] = a;
+		} else if (!strcmp(fmt, "depth16")) {
+			/* depth 1.0 / 0.25 */
+			*gfmt = GL_DEPTH_COMPONENT, *gtype = GL_UNSIGNED_SHORT;
+			s[i] = on ? 0xffff : 0x4000;
+		} else if (!strcmp(fmt, "depth32")) {
+			*gfmt = GL_DEPTH_COMPONENT, *gtype = GL_UNSIGNED_INT;
+			u[i] = on ? 0xffffffffu : 0x40000000u;
+		} else if (!strcmp(fmt, "d24s8")) {
+			/* depth in the high 24 bits, stencil 0x5a */
+			*gfmt = GL_DEPTH_STENCIL_OES, *gtype = GL_UNSIGNED_INT_24_8_OES;
+			u[i] = (on ? 0xffffffu : 0x400000u) << 8 | 0x5a;
+		} else if (!strcmp(fmt, "rgbaf32")) {
+			*gfmt = GL_RGBA, *gtype = GL_FLOAT;
+			f[4 * i] = r / 255.0f, f[4 * i + 1] = g / 255.0f, f[4 * i + 2] = bl / 255.0f, f[4 * i + 3] = 1.0f;
+		} else if (!strcmp(fmt, "lf32")) {
+			*gfmt = GL_LUMINANCE, *gtype = GL_FLOAT;
+			f[i] = on ? 1.0f : 0.25f;
+		} else if (!strcmp(fmt, "rgbaf16")) {
+			/* half floats: 1.0 = 0x3c00, 0.5 = 0x3800, 0.25 = 0x3400, 0 */
+			*gfmt = GL_RGBA, *gtype = GL_HALF_FLOAT_OES;
+			s[4 * i] = on ? 0x3c00 : 0, s[4 * i + 1] = 0x3800, s[4 * i + 2] = on ? 0 : 0x3c00, s[4 * i + 3] = 0x3c00;
+		} else if (!strcmp(fmt, "lf16")) {
+			*gfmt = GL_LUMINANCE, *gtype = GL_HALF_FLOAT_OES;
+			s[i] = on ? 0x3c00 : 0x3400;
 		} else {
 			return 0;
 		}
@@ -357,6 +392,9 @@ static int pattern(const char *fmt, int w, int h, int level, int face, void *out
 {
 	unsigned char *b = out;
 	uint16_t *s = out;
+	uint32_t *u = out;
+	float *f = out;
+	int comps = !strcmp(fmt, "rgbaf32") || !strcmp(fmt, "rgbaf16") ? 4 : 1;
 
 	if (!texels(fmt, 1, 1, out, gfmt, gtype))
 		return 0;
@@ -372,6 +410,14 @@ static int pattern(const char *fmt, int w, int h, int level, int face, void *out
 				b[3 * i] = r, b[3 * i + 1] = g, b[3 * i + 2] = bl;
 			else if (!strcmp(fmt, "l8") || !strcmp(fmt, "a8"))
 				b[i] = (unsigned char)i;
+			else if (!strcmp(fmt, "depth32") || !strcmp(fmt, "d24s8"))
+				u[i] = (uint32_t)i << 8;
+			else if (*gtype == GL_FLOAT)
+				for (int c = 0; c < comps; c++)
+					f[comps * i + c] = (float)i / (float)(w * h);
+			else if (*gtype == GL_HALF_FLOAT_OES)
+				for (int c = 0; c < comps; c++)
+					s[comps * i + c] = (uint16_t)(0x3c00 * i / (w * h));	/* monotonic, not exact */
 			else
 				s[i] = (uint16_t)i;	/* 565, 4444, 5551, la88 (l = low byte) */
 		}
@@ -380,6 +426,14 @@ static int pattern(const char *fmt, int w, int h, int level, int face, void *out
 
 static int texbytes(GLenum gf, GLenum gt)
 {
+	int comps = gf == GL_RGBA ? 4 : gf == GL_RGB ? 3 : gf == GL_LUMINANCE_ALPHA ? 2 : 1;
+
+	if (gt == GL_FLOAT)
+		return 4 * comps;
+	if (gt == GL_HALF_FLOAT_OES)
+		return 2 * comps;
+	if (gt == GL_UNSIGNED_INT || gt == GL_UNSIGNED_INT_24_8_OES)
+		return 4;
 	if (gt != GL_UNSIGNED_BYTE)
 		return 2;
 	return gf == GL_RGBA ? 4 : gf == GL_RGB ? 3 : gf == GL_LUMINANCE_ALPHA ? 2 : 1;

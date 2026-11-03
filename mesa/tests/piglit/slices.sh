@@ -11,6 +11,8 @@
 #   mesa/tests/piglit/slices.sh NAME [SLICE_MINUTES]
 #
 # MESA_DIR is the x86_64-gl Mesa to test (copied to the box as lib-NAME);
+# BOX the box (the EA1), BOOT=ramboot for a box whose slices run on a RAM boot
+# the runner marked (drive-deqp.py --boot; the EA3);
 # results go to $PIGLIT_WORK/run-NAME. drive-deqp.py exits 0 when every test
 # has a result, 3 at a slice's end and 4 when the box is someone else's; the
 # loop stops for good on anything else (a wedge, or too many recoveries).
@@ -21,9 +23,10 @@ W=${PIGLIT_WORK:-$HOME/.cache/sgx545/piglit}
 NAME=${1:?name}
 SLICE=${2:-30}
 BOX=${BOX:-10.0.0.110}
+BOOT=${BOOT:-normal}
 PY=${PYTHON:-python3}
 while :; do
-	RECOVER=none DEQP_WORK="$W" "$PY" "$HERE/../deqp/drive-deqp.py" piglit --box "$BOX" --name "$NAME" \
+	RECOVER=none DEQP_WORK="$W" "$PY" "$HERE/../deqp/drive-deqp.py" piglit --box "$BOX" --boot "$BOOT" --name "$NAME" \
 		--chunk 50 --hold-lock --max-recoveries 3 --slice-minutes "$SLICE" >> "$W/run-$NAME.log" 2>&1
 	rc=$?
 	case $rc in
