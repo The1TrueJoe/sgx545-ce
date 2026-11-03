@@ -159,6 +159,8 @@ sgx_write_usp(const struct sgx_shader *s, uint8_t **usp, size_t *size)
 {
    struct buf b = { 0 };
    bool frag = s->stage != MESA_SHADER_VERTEX;
+   if (s->mem_dwords)
+      return -1;        /* constants in memory: no list B writer */
    for (unsigned i = 0; i < 0x84; i += 4)
       u32(&b, 0);
 

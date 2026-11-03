@@ -92,9 +92,12 @@ struct sgx_varyings {
 };
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
+#define SGX_SLOT_NONE 0xffff
+
 struct sgx_const_map {
    uint16_t k;                  /* constant number: uniform component (sgx_nir.c's numbering) */
-   uint16_t slot;               /* sa[sa_base + slot] */
+   uint16_t slot;               /* sa[sa_base + slot]; SGX_SLOT_NONE: in memory only */
+   uint16_t mem;                /* word of the constant memory block (mem_dwords), 0 none */
    uint8_t shift;               /* bit offset in the slot: F16 0/16, C10 0/10/20 */
    uint8_t fmt;                 /* 1 f32, 2 F16 (round to nearest), 3 C10 (round(v * 255), signed 10 bits);
                                  * with driver_consts: 0x10 F16 of the C10 value c (fmt 3's rule):
@@ -168,6 +171,15 @@ struct sgx_shader {
    bool point_size;             /* vertex: writes the point size (f32), after the sets */
    unsigned n_out_regs;         /* vertex: o registers written */
    unsigned sa_slots;           /* SA registers used from sa_base on (constants and the compiler's own) */
+   /* Constants past sa127 (counting 4 per dependent sample of a fragment
+    * program after sa_slots): the most-used stay in SA, every constant gets
+    * a word of a memory block the driver fills per draw like the SA ones,
+    * and the program loads the others from it (ld.a.d). Word 0 is unused.
+    * The driver loads SA slot mem_base_slot[j] with the block's address +
+    * 512 * j. 0: no block */
+   unsigned mem_dwords;
+   unsigned n_mem_bases;
+   uint8_t mem_base_slot[8];
    bool uses_front_face;        /* fragment: reads sa[front_sa], so it must be loaded */
    uint64_t *code;              /* main program, flat (branch targets resolved) */
    unsigned n_code;

@@ -35,7 +35,7 @@ smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
    m.nops = s->lod ? 4 : 3;
    m.op[0] = usse_reg(USSE_K_R, 0);
    struct sgx_ref cr = i->op[1];
-   unsigned cn = cr.file == SGX_F_U ? c->sa_base + c->const_slot[cr.n] : phys(c, &cr);
+   unsigned cn = cr.file == SGX_F_U ? sgx_const_sa(c, cr.n) : phys(c, &cr);
    if (cr.h16 && cr.file == SGX_F_V)
       cn = sgx_vreg(c, cr.n)->phys + cr.comp / 2;
    else if (cr.h16 && cr.file != SGX_F_U)
@@ -48,7 +48,7 @@ smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
       struct sgx_ref lr = i->op[2];
       unsigned k = lr.file == SGX_F_C ? USSE_K_C : lr.file == SGX_F_PA ? USSE_K_PA :
                    lr.file == SGX_F_U ? USSE_K_SA : USSE_K_R;
-      unsigned n = lr.file == SGX_F_U ? c->sa_base + c->const_slot[lr.n] : phys(c, &lr);
+      unsigned n = lr.file == SGX_F_U ? sgx_const_sa(c, lr.n) : phys(c, &lr);
       m.op[3] = usse_reg(k, n);
       m.op[3].neg = lr.neg;
       m.op[3].abs = lr.abs;
@@ -209,7 +209,11 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    }
 
    out->sa_base = c->sa_base;
-   out->sa_slots = c->n_sa;
+   out->sa_slots = c->n_sa_phys;
+   out->mem_dwords = c->mem_dwords;
+   out->n_mem_bases = c->n_mem_bases;
+   for (unsigned j = 0; j < c->n_mem_bases; j++)
+      out->mem_base_slot[j] = c->mem_base_sa[j];
    out->uses_front_face = c->face_vreg >= 0;
    out->n_consts = 0;
    for (unsigned k = 0; k < ARRAY_SIZE(c->const_used) && out->n_consts < ARRAY_SIZE(out->consts); k++) {
@@ -217,14 +221,16 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          continue;
       struct sgx_const_map *m = &out->consts[out->n_consts++];
       m->k = k;
-      m->slot = c->const_slot[k];
+      m->slot = c->slot_sa[c->const_slot[k]] < 0 ? SGX_SLOT_NONE : c->slot_sa[c->const_slot[k]];
+      m->mem = c->mem_dwords ? c->const_slot[k] + 1 : 0;
       m->shift = c->const_shift[k];
       m->fmt = c->const_fmt[k] == 4 ? 3 : c->const_fmt[k] == 5 ? 0x10 : c->const_fmt[k] ? c->const_fmt[k] : 1;
    }
    for (unsigned i = 0; i < c->n_lits && out->n_consts < ARRAY_SIZE(out->consts); i++) {
       struct sgx_const_map *m = &out->consts[out->n_consts++];
       m->k = 0xffff;
-      m->slot = c->lit_slot[i];
+      m->slot = c->slot_sa[c->lit_slot[i]] < 0 ? SGX_SLOT_NONE : c->slot_sa[c->lit_slot[i]];
+      m->mem = c->mem_dwords ? c->lit_slot[i] + 1 : 0;
       m->shift = 0;
       m->fmt = 0x11;
       m->value = c->lit_bits[i];

@@ -1485,6 +1485,15 @@ placeholder), DRC.
 | l7-13, l30-31 | off | any source kind, including #0-127 and indexed | encoder, corpus |
 | l0-6, l28-29 | range | without h6: the unused pattern | encoder |
 
+**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode, EA3
+2026-11-02): `ld.a.d` and `st.a.d` with an immediate offset `#i` access the
+dword at base + 4·(i + 1). `st.a.d sa0, #0` wrote word 1 of the buffer whose
+address was in sa0, `#2` wrote word 3, and `ld.a.d #2` read word 3 back.
+Microkernel code read with `#0`-`#7` lands as instruction pairs (low word,
+then the high word with the class) only under that reading: `wdf`'s high word
+0xf9200000 came from an odd word. Untested: register offsets, the b/w sizes,
+modes l/t, and offsets past #127.
+
 ### hw 1d: eld (FUN_0010ace0), h22 = 1
 
 `eld.<d|q> dst, src1, src0, #imm11, src2  [drc=n ...]` (USEASM 0x93 / 0x94;
@@ -2326,6 +2335,14 @@ backed above; this section only collects it.
   `smlsi` before, `smlsi #1, #1, #1, #1` after (the USP code block header
   records the MOE state at block entry). Scalar ops (hw 1) and moves can
   use a write mask instead of a count.
+- **Constants past sa127**: an operand names sa0-sa127, so a program's
+  constants from sa9/sa10 (and a fragment program's dependent texture state
+  after them) must end there. Ours keeps dynamically indexed and the most-used
+  constants in SA and loads the rest from a memory block per use: `ld.a.d
+  rN, sa<base>, #i`, `wdf`, then rN in place of the SA operand (same half,
+  lane and format). One base register reaches 128 dwords (see "Address"
+  above for the +1). The DDK's equivalent is list B (USP header 0x2c flag
+  1, 0x38, 0x52); none of the corpora use it.
 - **Constants**: the hardware constant table covers 0, 1, powers of two,
   1/2^n, e, π fractions, √2, F16 (1, 1) (c45-c47), 0xffffffff (c56-c59)
   (hardware); anything else is a uniform in sa or a `limm` (hardware: any

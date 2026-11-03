@@ -29,7 +29,7 @@
 /* -u / -a / -s pins: glslcompiler's constant numbers, attribute slots and
  * sampler units (calib.py measures them), handed to the compiler as its
  * layout (struct sgx_layout); names not pinned are the compiler's */
-#define MAX_NAMED 64
+#define MAX_NAMED 256
 
 struct named {
    char name[64];
@@ -255,14 +255,19 @@ main(int argc, char **argv)
       }
       uint8_t *usp;
       size_t usp_size;
-      if (sgx_write_usp(&out, &usp, &usp_size)) {
+      if (out.mem_dwords) {
+         /* the USP has no list B writer: code only */
+         fprintf(stderr, "sgxc: %s shader: %u SA slots, %u words of constants in memory: no USP\n", sname,
+                 out.sa_slots, out.mem_dwords);
+      } else if (sgx_write_usp(&out, &usp, &usp_size)) {
          fprintf(stderr, "sgxc: %s shader: USP: out of memory\n", sname);
          status = 1;
          continue;
+      } else {
+         snprintf(suffix, sizeof suffix, "%s.usp", sname);
+         write_file(prefix, suffix, usp, usp_size);
+         free(usp);
       }
-      snprintf(suffix, sizeof suffix, "%s.usp", sname);
-      write_file(prefix, suffix, usp, usp_size);
-      free(usp);
       char *hex = (char *)malloc(out.n_code * 20 + 1);
       size_t k = 0;
       for (unsigned i = 0; i < out.n_code; i++)

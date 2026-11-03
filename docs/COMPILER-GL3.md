@@ -92,8 +92,11 @@ Unknowns, each an hwt test to write before relying on it:
 - A UBO is then `ld.a.d` from a base address the driver puts in SA, with the
   offset immediate (0-127 registers) or in a register. Dynamic indexing uses
   `imae` (temp-array pattern in the corpus).
-- **Unknown, and needs hwt tests:** alignment, how large an immediate offset
-  can reach (7 bits plus the bank: in dwords?), the `range` operand,
+- An immediate offset counts dwords and reads base + 4·(i + 1) (ISA.md ld,
+  "Address"). The compiler already uses this for constants that don't fit in
+  SA (sgx_compiler.h `mem_dwords`).
+- **Unknown, and needs hwt tests:** alignment, register offsets, offsets past
+  #127, the `range` operand,
   whether loads see writes the CPU made since the last kick (data-cache
   control bits h1/h19 are guesses), and `ld.t`.
 - Alternative for small UBOs: the driver copies them into SA as constants. That
