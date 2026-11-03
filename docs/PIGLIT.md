@@ -97,6 +97,30 @@ The test passes in all three runs (default, `--subdivide 5`, `--subdivide 5
 --statechanges`, 25 cases each), and a full-screen 126-iteration loop takes
 under a second.
 
+## Failures so far (partial run, 2026-11-03)
+
+Of the 8,320 top-level tests with results, 399 fail, crash or time out. The
+causes known so far:
+
+- **Flat shading is not implemented.** The driver ignores the rasterizer's
+  `flatshade` and flat varyings, so `clipflat` fails every one of its
+  subtests. The hardware's shade-mode state is not yet known. A capture of the
+  DDK's GLES1 `glShadeModel(GL_FLAT)` against `GL_SMOOTH` would give it.
+- **No depth format can be sampled.** `sgx545_tex_format` has only the five
+  8-bit T1 codes. Mesa always exposes `ARB_depth_texture`, so a
+  `GL_DEPTH_COMPONENT` texture gets no format and the program crashes later
+  (SIGSEGV: `texdepth`, `teximage-errors`, `depth-tex-compare`, the
+  `arb_fragment_program_shadow` and `ext_packed_depth_stencil` tests,
+  `copyteximage`). The DDK's GLES2 lists `OES_depth_texture`,
+  `OES_packed_depth_stencil`, `OES_texture_float` and
+  `OES_texture_half_float`, so a DDK capture gives the T1 codes for depth and
+  float textures. `tools/probe` uploads those formats (`PROBE_TEXFMT` depth16,
+  depth32, d24s8, rgbaf32, lf32, rgbaf16, lf16).
+- **Window-buffer tests abort on the surfaceless platform** (SIGABRT, nothing
+  printed): `read-front`, `masked-clear`, `fbo-sys-blit`, the
+  `gl-1.0-drawbuffer-modes` family. These are the tests run without `-fbo`
+  that read or draw the front buffer. Not yet confirmed one by one.
+
 ## The DDK's desktop GL, as an oracle
 
 The DDK ships a desktop GL: `libPVROGL_MESA.so` (IMG's GL built on Mesa, with
