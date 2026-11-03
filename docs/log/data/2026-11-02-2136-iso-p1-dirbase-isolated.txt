@@ -1,0 +1,49 @@
+P1 open half, the DoS question re-run IN ISOLATION. EA1 (openhc-ea1-000FFF1AFCA9, 10.0.0.110),
+SGX545 core rev 1.0.14. 2026-11-02, real UTC (box clock runs ~5 min 11 s fast).
+tools/iso/suite_p1_dirbase_iso.py under flock /tmp/gpu.lock, WPE stopped, nothing else on the GPU.
+
+Conditions (known-good, verified before the run):
+- Box freshly cold-booted by open-ukernel's ACTIVE_POWER test; uptime ~6 min at run time.
+- 0 SGX recoveries this boot.
+- gpu.lock free; WPE stopped (/etc/init.d/S95ohc-display stop + swept WPEWebProcess); GPU idle
+  (no client held /dev/dri/card0); microkernel up (WPE had primed it before being stopped).
+- Real UTC run: 21:36:02Z -> 21:36:03Z.
+
+=== suite_p1_dirbase_iso ===
+== sanity_frame rc=0
+render done
+pix 0xff00ff00 uniform=1 bg=0xcc336699        <- GPU renders CLEAN right before the store
+== p1_str_dirbase rc=0
+va R 0x3e19e000
+reg 0xc84 0x1d69000 0x1d69000                  <- host read before == after: UNCHANGED
+render done                                    <- frame completed, no in-frame wedge
+pix 0x1d69000 uniform=1 bg=0xcc336699
+dump R 0 00000000 01d69000 01d69000 00000000
+   R[1] shader read before the write, R[2] read-back after writing sentinel 0x0a5a5000
+   -> both 0x01d69000 (the real DIR_LIST_BASE0 this boot), NOT the sentinel. Store ignored.
+
+=== after: no reboot, no recoveries (idle monitoring, WPE still off) ===
+immediately:  uptime 411s, HWR this boot 0, no lockup/recover/fault in dmesg, gpu.lock released
++26s:         uptime 461s, HWR 0
++51s:         uptime 487s, HWR 0
++77s:         uptime 512s, HWR 0
++102s:        uptime 537s, HWR 0
+(uptime climbs continuously 411 -> 537 s = same boot, NO reboot; HWR stays 0 the whole window)
+WPE restored (/etc/init.d/S95ohc-display start); WPEWebProcess back (pid 2868); uptime 566s, HWR 0.
+Box left exactly as found.
+
+=== conclusion ===
+On a known-good, freshly-cold-booted, IDLE GPU with nothing else on it, the client `str` to
+BIF_DIR_LIST_BASE0:
+- did NOT change the register (no translation escape) -- confirms the earlier firm result, and
+- did NOT wedge the box: frame completed, no reboot, 0 SGX recoveries over ~2.5 min idle.
+So the store is BENIGN -- the hardware simply ignores it (like the USE_CODE_BASE_14/15 stores).
+The reboot in the first run (log 2026-11-02-2021) was the confound -- a concurrent dEQP chunk had
+wedged and rebooted the box just before -- NOT this store. The DoS question is settled: not a DoS.
+
+Scope: "benign" is for the THREE registers tried from a client task (BIF_DIR_LIST_BASE0 +
+USE_CODE_BASE_14/15), all dropped. NOT a general claim about client stores: the microkernel is a
+USSE program that writes registers with `str` (UKERNEL.md S8), so stores land in some context, and
+which registers/task types drop a client store is unknown. SOFT_RESET, EVENT_KICK, clock/power are
+untested and could be destructive. So the validator still forbids client `str` (same scan as `ldr`),
+relaxable only with a per-task-type-gate explanation.

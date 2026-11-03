@@ -49,7 +49,7 @@ def ours_machine(code):
     mem.wr(t + 0, t)
     mem.wr(t + 4, A["hostctl"])
     mem.wr(t + 8, A["ccbctl"])
-    mem.wr(t + 4 * 16, A["kccb"])
+    mem.wr(t + 4 * 0x16, A["kccb"])         # kernel CCB base (DDK slot +0x58)
     mem.wr(A["hostctl"], 1)                 # already initialised
 
     return u, mem, regs
@@ -63,7 +63,7 @@ def ours_cmd(u, mem, regs, man, ctype, data):
     mem.wr(A["ccbctl"], 1)
     mem.wr(A["ccbctl"] + 4, 0)
     mem.log = []
-    regs.v[0x12C] = 0x4000                  # SW_EVENT
+    regs.v[0x12C] = 0                       # host kick = EUR_CR_EVENT_KICK doorbell: no EVENT_STATUS bit; the command is found via the CCB WO!=RO (set above)
     u.task(man["entries"]["event"] // 8)
 
 
@@ -113,6 +113,19 @@ def test_ctxsuspend(code, man):
     print("  context suspend/resume: flag toggled  OK")
 
 
+def test_active_power(code, man):
+    # draining the kernel CCB with nothing in flight leaves the microkernel
+    # idle; it must raise ACTIVE_POWER (host control ui32InterruptFlags, word 8,
+    # bit 1) and the host IRQ so the host can power the core down. Without it the
+    # host watchdog HWRs the quiescent GPU (EA1 HW, 2026-11-02).
+    u, mem, regs = ours_machine(code)
+    ours_cmd(u, mem, regs, man, 6, [0, A["misc"]])          # a GETMISCINFO, then idle
+    assert mem.rd(A["hostctl"] + 4 * 8) & 0x2, "idle must set EDM_INTERRUPT_ACTIVE_POWER in ui32InterruptFlags"
+    wrote = [v for (op, a, v, pc) in regs.log if op == "str" and a == 0x12C]
+    assert 0x4000 in wrote, "idle must raise the host IRQ (SW_EVENT in EUR_CR_EVENT_STATUS)"
+    print("  active-power: idle raises ACTIVE_POWER + host IRQ  OK")
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit("usage: test_commands.py DDK_FIRMWARE")
@@ -123,6 +136,7 @@ def main():
     test_power(code, man)
     test_cleanup(code, man)
     test_ctxsuspend(code, man)
+    test_active_power(code, man)
     print("all OK")
 
 

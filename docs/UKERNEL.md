@@ -119,15 +119,44 @@ dispatcher decides what happened and branches to a handler. It is the
 microkernel's main loop in the sense that nearly every re-entry passes through
 it, but it is still a task that runs once and ends.
 
-The event word is a set of the `EUR_CR_EVENT_STATUS` bits that were pending,
-masked to the ones the microkernel acts on. The dispatcher tests them in
-priority order and, for most, writes the matching bit back to
+The event word is a set of the `EUR_CR_EVENT_STATUS`/`STATUS2` bits that were
+pending, masked to the ones the microkernel acts on. The dispatcher tests them
+in priority order and writes the matching bit back to
 `EUR_CR_EVENT_HOST_CLEAR`/`CLEAR2` to acknowledge it before handling it.
+(openHC acknowledges a pending **DCU-invalidate** in `EUR_CR_EVENT_STATUS2`
+(`dcu_invalid`, 0x400) up front: the kernel's `SysFinalise` leaves it set on
+the EA1, and since openHC read only `EUR_CR_EVENT_STATUS`, it re-triggered the
+event program forever — a storm that starved the host kick and locked the core,
+HW-confirmed 2026-11-02. The **TA-finish** (`ta_finish`, 0x2000) and **3D-end**
+(`pbe_end_render` 0x40000, `isp_end_tile` 0x800000) bits in
+`EUR_CR_EVENT_STATUS` are acknowledged the same way, up front in the dispatcher:
+without it `ta_finished` re-triggered forever after the TA finished, so the next
+kick's host command was never processed and `do_3d` was never reached —
+HW-confirmed on the EA1 2026-11-03 (`EVENT_STATUS` stuck `0x2000`; acking it
+cleared the storm and let the frame advance to the render TA). The DDK acks these
+in its handlers (`str 0x134 = 0x2000` / `0x40000`); the 3D-end ack is by analogy
+and not yet exercised, since `render_done` does not run until the render TA
+stops hanging.)
+
+**The host kick is not an `EUR_CR_EVENT_STATUS` bit.** The host adds a command
+to the kernel CCB, advances the CCB write offset, and rings the
+**`EUR_CR_EVENT_KICK`** doorbell (`sgxutils.c SGXScheduleCCBCommand`); the
+doorbell runs the event program but sets no status bit. So the microkernel
+detects a waiting command by the kernel CCB **write offset ≠ read offset**, not
+by a status bit — openHC's dispatch falls through to the `kick` handler when no
+hardware-event bit is set, and `kick` returns at once if the CCB is empty.
+`SW_EVENT` (0x4000) in `EUR_CR_EVENT_STATUS` is the *opposite* direction: the
+microkernel sets it (via `raise_host_irq`) to signal the host, and the host's
+ISR clears it. Gating the host kick on `SW_EVENT`, as openHC first did, never
+fired — EA1 HW-confirmed 2026-11-02: `GETMISCINFO` sat unconsumed with
+`EVENT_STATUS = 0`. Fixed and HW-confirmed on the EA1 (srvinit rc=0, GETMISCINFO
+validates, kernel CCB `WO == RO`); the kernel CCB base slot also had to be
+corrected (`SA_KCCB` word 0x16, not 16) — see §4.
 The groups, with the status bit each corresponds to:
 
 | event | status bit | handler, in outline |
 |---|---|---|
-| host kick (a CCB command waiting) | SW_EVENT (0x4000) | read the kernel CCB, dispatch on the command (section 3) |
+| host kick (a CCB command waiting) | none — `EUR_CR_EVENT_KICK` doorbell; detect via CCB write ≠ read offset | read the kernel CCB, dispatch on the command (section 3) |
 | TA finished | TA_FINISHED (0x2000) | advance the render's TA state, write the TA status/sync values, maybe start the 3D |
 | TA terminate | TA_TERMINATE (0x1000) | end-of-scene bookkeeping on the TA side |
 | 3D end of render / pixel BE end | PIXELBE_END_RENDER (0x40000), ISP_END_TILE (0x800000) | finish the render, update the 3D sync objects, raise the host interrupt |
@@ -332,6 +361,50 @@ first word reads 1 (`tools/ukernel/run.py`, the `init` section). A timeout here
 is only logged ("Wait for uKernel initialisation failed"), so a successful
 `INITSRV_DISCONNECT` does not prove the microkernel ran — a client must render.
 
+**Hardware status (EA1, 2026-11-02; supersedes the EA3 reading below).** The
+open microkernel's clean-boot init path runs on hardware: after `srvinit -o`,
+the advisory version word is at ctlblk+0x58 (`T3C-50` word 2 = `0x00010000`),
+on both the EA3 and the EA1. **Init is done; the host `GETMISCINFO` kick is not
+serviced**, and the EA1 run with a proper entry counter shows the event program
+*is* re-entered after init (CTR climbs, the post-init dispatch runs) — revising
+the earlier EA3 guess that it was never re-entered. Two things were found and
+one fixed:
+
+1. **Fixed — `dcu_invalid` storm.** A data-cache-unit invalidate the kernel
+   leaves pending in `EUR_CR_EVENT_STATUS2` (0x400) after `SysFinalise`
+   re-triggered the event program forever, because openHC read only
+   `EUR_CR_EVENT_STATUS`. The dispatch now acknowledges it (§2). HW-confirmed:
+   STATUS2 `0x400`→`0`.
+2. **Fixed, HW-CONFIRMED — the host kick is serviced.** Two fixes: (a) the host
+   kick is the `EUR_CR_EVENT_KICK` doorbell (no status bit, `sgxutils.c`), found
+   by the kernel CCB write ≠ read offset, not `SW_EVENT` — dispatch now falls
+   through to `kick`, the bogus SW_EVENT ack is removed (§2); (b) the kernel CCB
+   base lives at control-block word **0x16** (+0x58), but `SA_KCCB` read word 16
+   (+0x40) and `SC_VERSION` sat on 0x16 so `init` overwrote the base — so the kick
+   read the command from garbage and ran a bogus `do_ta`. `SA_KCCB = 0x16`,
+   `SC_VERSION = 0x18`. On the EA1: `srvinit` returns rc=0 ("SGX545 microkernel
+   started"), the `GETMISCINFO` DDK-version validate passes, Kernel CCB `WO == RO`
+   (commands consumed). Offline: `test_emu` 5/5, `test_commands` 21/21, `run_ours`
+   5/5 — all driven the hardware way.
+3. **Fixed, HW-CONFIRMED — idle active-power.** After `srvinit` exited idle, a
+   periodic `SGXOSTimer` lockup/HWR (~0.5 s) recurred because the host never
+   powered the quiescent GPU down, so its watchdog kept sampling a halted EDM
+   (`0xb14^0xb20` frozen). The microkernel must raise the active-power idle
+   signal: `ui32InterruptFlags |= EDM_INTERRUPT_ACTIVE_POWER` (host-control word
+   8, bit 1) + the host IRQ, which `SGXTestActivePowerEvent` turns into a
+   power-down. openHC now does this at `kick_end` when the CCB is empty and
+   nothing is in flight. On the EA1: **0 lockups / 0 HWR over ~60 s idle** (was
+   6+ in 20 s); `srvinit` still rc=0. Later refinements: the same signal at the
+   end of `render_done` (render-idle), and the DDK-style timer-based active-power
+   with a latency.
+
+Full evidence and next steps:
+`docs/log/entries/2026-11-02-2100-ukernel-ea1-kick-serviced.md` (current),
+`docs/log/entries/2026-11-02-2045-ukernel-ea1-host-kick.md` and
+`docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md`, then
+`docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier
+EA3 run, whose "never re-entered" reading the EA1 counter corrected).
+
 ## 5a. Hardware recovery and re-initialisation
 
 When a core locks up, the host's watchdog or MISR calls `HWRecoveryResetSGX`,
@@ -440,10 +513,26 @@ models these as the hardware's answers (`sgxsim.py`, `hw_model`): writing an
 invalidate request makes the matching done bits appear, and the acknowledge
 register clears them.
 
-**Point the BIF at a context.** Write the context's page-directory address
-(shifted) into the EDM directory-list base register and into `BIF_BANK0`'s
-EDM index field, so the cores translate through that context's page tables
-(mirrors `SGXResetSetupBIFContexts` in `sgxreset.c`).
+**Point the BIF at a context — and keep the EDM on its own directory list.**
+Load the context's page-directory address (shifted) into **directory-list 0**
+(`EUR_CR_BIF_DIR_LIST_BASE0 = 0xc84`) and route the **TA/3D** requestors to list
+0 through `EUR_CR_BIF_BANK0 = 0xc78 = 0x0f` (b0-3 = EDM → list **15**, b4-7 = TA →
+list 0), so the cores that run the client's geometry/pixels translate through the
+client's page tables.
+
+**Hard design rule: the EDM (microkernel) stays on directory-list 15, with the
+firmware/kernel page directory, and is NEVER pointed at a client PD.** Only the
+TA and 3D requestors are moved onto the client's list. This is what lets the EDM
+fetch its own code and the kernel heaps (CCB, control block, kernel-data) through
+the kernel PD while the *client* PD contains only the client's own mappings — so
+the open DRM driver does not have to map kernel memory into every client address
+space (UAPI P2/P3). The DDK does the opposite: its TA kick writes `BIF_BANK0 =
+0x11` (EDM **and** TA both on list 1), loads list 1 with the context's PD, and
+then fetches the microkernel's own code through that client PD — which forces
+every client PD to carry the kernel heaps. openHC must not copy that; keeping the
+EDM isolated on list 15 is a deliberate divergence, verified on EA1 HW (the TA
+reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
+dir-list with a client requestor.
 
 **Parameter-buffer / DPM setup** (first kick of a render). Load the free-list
 head and limit registers (`EUR_CR_*` 0x600, 0x618, 0x61c, 0x648, 0x620-0x668)

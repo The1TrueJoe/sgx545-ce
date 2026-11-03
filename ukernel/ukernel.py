@@ -35,7 +35,12 @@ writes against the DDK's.
 SA_SELF = 0          # the control block's own device address
 SA_HOSTCTL = 1       # SGXMKIF_HOST_CTL address
 SA_KCCBCTL = 2       # kernel CCB control (write/read offsets)
-SA_KCCB = 16         # kernel CCB base
+SA_KCCB = 0x16       # kernel CCB base, control block +0x58. This is the DDK's
+                     # own slot: srvinit writes it at t[0x16] and the DDK model
+                     # keeps it there (tools/ukernel/sgxsim.py, +0x58). (It read
+                     # word 16 = +0x40 before — an unset slot — so the kick read
+                     # the command from a garbage address and wedged the core;
+                     # EA1 HW-confirmed 2026-11-02.)
 # our one-context scratch (control block words we own; written to memory so the
 # next task's DMA brings them back)
 SC_CTX = 0x30
@@ -51,9 +56,11 @@ SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
                      # none). Lets the 3D-end handler tell a transfer's completion
                      # from a render's. (openHC's own slot; a transfer and a
                      # render never overlap on one context.)
-SC_VERSION = 0x16    # control block +0x58: openHC microkernel version, written
+SC_VERSION = 0x18    # control block +0x60: openHC microkernel version, written
                      # at init. Advisory (the DDK driver does not read it); an
                      # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
+                     # A free slot: it was 0x16 before, which is the kernel CCB
+                     # base — init overwrote that base with the version word.
 OPENHC_UK_VERSION = 0x00010000   # 1.0
 TRANSFERCMD_BYTES = 0x1c0   # SGXMKIF_TRANSFERCMD size (docs/TEX.md §3)
 # transfer completion: the shared command's destination-sync descriptor and the
@@ -82,9 +89,14 @@ CTX_INFLIGHT_FLAG = 0x3C // 4
 HC_INIT = 0
 HC_POWER = 1         # ui32PowerStatus
 HC_CLEANUP = 2       # ui32CleanupStatus
+HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_POWER
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
+EDM_INTERRUPT_ACTIVE_POWER = 2   # host control ui32InterruptFlags bit 1: the
+                                 # microkernel is idle, so the host may power the
+                                 # core down (sgx_mkif_km.h
+                                 # PVRSRV_USSE_EDM_INTERRUPT_ACTIVE_POWER)
 POWERCMD_POWEROFF = 1
 POWERCMD_IDLE = 2
 POWERCMD_RESUME = 3
@@ -147,12 +159,19 @@ CR_PDS_INV1 = 0xAD4          # PDS cache invalidate, 3D side
 CR_PDS_INV_CSC = 0xAE0       # coefficient-store invalidate
 CR_DPM_STATE = 0x694
 CR_DPM_CONTROL = 0x698
+CR_DPM_FL_MODE = 0x664       # DPM free-list load selector (TA = 3, 3D = 5)
+CR_DPM_TA_FL = 0x684         # DPM TA free-list load  -> EUR_CR_EVENT_STATUS2 bit 0
+CR_DPM_3D_FL = 0x680         # DPM 3D free-list load  -> EUR_CR_EVENT_STATUS2 bit 1
 CR_OTPM = 0x24C
 CR_TPC = 0x224
 CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
 INV_DONE_TA = 0x27           # 0x138 bits for the TA-side invalidate
 INV_DONE_3D = 0x4B           # 0x138 bits for the 3D-side invalidate
 SW_EVENT = 0x4000
+DCU_INVALID = 0x400          # EUR_CR_EVENT_STATUS2: a data-cache-unit invalidate
+                             # completion. Pending after the kernel's SysFinalise
+                             # on the EA1; the event program must acknowledge it
+                             # or it re-triggers forever (docs/UKERNEL.md §2).
 
 # ---- register-programming tables (reg byte-offset, base word index) --------
 # base = pb (PB descriptor); docs/UKERNEL.md §6 "parameter-buffer setup"
@@ -238,8 +257,9 @@ class Asm:
 
     def ld_sa(self, dst, saword, off):
         """dst = *(*(ctlblk+saword) + off); saword 0 (SA_SELF) is the base (r17)
-        itself. The base is a reserved temp, not a secondary attribute, because a
-        task cannot write its own sa on this core (docs/UKERNEL.md §1)."""
+        itself. The base is a reserved temp, not a secondary attribute, because
+        sa is unset in the bare-DOUTU event context until the emit/DMA sets it up
+        (docs/UKERNEL.md §1)."""
         if saword == SA_SELF:
             self.i(f"ld.a.d r{dst}, r17, #{off} [moe]")
         else:
@@ -319,6 +339,19 @@ class Asm:
         self.wait(0x138, done_mask, CR_EVENT_HOST_CLEAR_0x140)
         self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done
 
+    def dpm_freelist(self, mode, kick_reg, done_bit):
+        """load a DPM free list so the geometry/render can allocate parameter-
+        buffer pages: selector 0x664 = `mode` (TA 3, 3D 5), then pulse the TA
+        (0x684) or 3D (0x680) load register, and wait for the done event in
+        EUR_CR_EVENT_STATUS2 (TA bit 0, 3D bit 1). Without this the free list is
+        empty, the parameter buffer's pages-in-use stays 0 and the TA never runs
+        — EA1 HW-confirmed 2026-11-02 (docs/UKERNEL.md §6 "Load the free-list")."""
+        self.i(f"limm r5, #{mode}")
+        self.i(f"str #{CR_DPM_FL_MODE // 4}, r5")
+        self.i("limm r5, #1")
+        self.i(f"str #{kick_reg // 4}, r5")
+        self.wait(CR_EVENT_STATUS2, done_bit, CR_EVENT_HOST_CLEAR2)
+
     def dpm_load(self):
         """load the DPM state and control, and clear the OTPM, waiting for each
         (docs/UKERNEL.md §6) so the free list is ready before the TA kicks."""
@@ -347,10 +380,13 @@ def build(a):
     a.label("event")
     a.phas()
     a.patch(17, "ctlblk")                          # r17 = control block base, reserved for the
-                                                   # whole task. A USSE task cannot write its own
-                                                   # secondary attributes (hardware-confirmed), so
-                                                   # instead of populating sa the handlers derive
-                                                   # the host-control / CCB pointers from r17.
+                                                   # whole task. A task can write its own secondary
+                                                   # attributes, but only after the emit-triggered
+                                                   # pds1 DMA sets sa up; this event program is a
+                                                   # bare DOUTU with no such DMA, so sa is empty on
+                                                   # entry (writing it here wedges init, EA3 HW-
+                                                   # confirmed 2026-11-02). The handlers therefore
+                                                   # derive host-control / CCB pointers from r17.
     # init not done yet (ui32InitStatus == 0) -> init. host control = *(ctlblk + 1).
     a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
@@ -361,11 +397,42 @@ def build(a):
     # otherwise dispatch on the pending event bits
     a.i(f"ldr r2, #{CR_EVENT_STATUS // 4}")
     a.i("wdf")
-    a.dispatch(0x4000, "kick")                     # SW_EVENT: a host kick is waiting
+    # acknowledge a pending DCU-invalidate in EUR_CR_EVENT_STATUS2 first. The
+    # dispatcher must read STATUS *and* STATUS2 and clear what it sees (docs
+    # §2); openHC only dispatched STATUS bits, so the invalidate-done the
+    # kernel leaves set after SysFinalise re-triggered the event program
+    # forever — a storm that starved the SW_EVENT host kick and locked the
+    # core (EA1 HW-confirmed 2026-11-02: STATUS2=0x400, event re-entered 16+
+    # times, the kick never serviced). Clearing a bit that is not set is a
+    # no-op, so the acknowledge is unconditional and no handler reads it.
+    a.i(f"limm r3, #{DCU_INVALID}")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR2 // 4}, r3")
+    # acknowledge the TA-finish (0x2000) and 3D-end (0x40000 pixel back-end,
+    # 0x800000 ISP end-of-tile) events in EUR_CR_EVENT_STATUS the same way: the
+    # dispatch() below only tests the r2 snapshot and branches, it never clears
+    # the serviced bit, and neither did the handlers — so the TA-finish event
+    # re-triggered ta_finished forever, starving the next host kick (kick 2's
+    # render) so do_3d was never reached, and the watchdog stormed. EA1 HW-
+    # confirmed 2026-11-03: ta_finish stuck set at every lockup dump, do_ta +
+    # ta_finished markers present but do_3d absent. The DDK acks these in its
+    # handlers (str 0x134 = 0x2000 at TA finish, = 0x40000 at 3D end). Clearing an
+    # unset bit is a no-op, so the acknowledge is unconditional and precedes the
+    # dispatches, which test the r2 snapshot taken above.
+    a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000}")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.dispatch(0x2000, "ta_finished")              # a TA finished
     a.dispatch(0x40000, "render_done")             # pixel back-end end of render
     a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)
-    a.end()
+    # no hardware-event bit set: a host kick arrived via the EUR_CR_EVENT_KICK
+    # doorbell (sgxutils.c `SGXScheduleCCBCommand`), which leaves no
+    # EUR_CR_EVENT_STATUS bit — so look at the kernel CCB for a waiting command.
+    # The `kick` handler returns immediately if the CCB is empty (write offset
+    # == read offset). Gating this on SW_EVENT (0x4000) was wrong: that bit is
+    # the microkernel->host signal (set by raise_host_irq, cleared by the host
+    # ISR), never an incoming event, so the kick was never serviced — EA1
+    # HW-confirmed 2026-11-02 (GETMISCINFO sat unconsumed with EVENT_STATUS = 0,
+    # `sw_event: no`, the core looping through HWR).
+    a.i("ba kick")
 
     # ======================================================================
     # init
@@ -411,6 +478,11 @@ def build(a):
     # (our host-kick table is the identity, docs/UKERNEL.md §3). Dispatch, then
     # advance the read offset and end. One command per entry (one context).
     a.label("kick")
+    # a host kick leaves a command in the kernel CCB; find it at the read
+    # offset. There is no SW_EVENT to acknowledge — the host kicks via the
+    # EUR_CR_EVENT_KICK doorbell, not by setting a status bit, and SW_EVENT in
+    # EUR_CR_EVENT_STATUS is the microkernel->host signal the host ISR clears
+    # (see the event dispatch above).
     a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")     # kernel CCB control
     a.i("wdf")
     a.i("ld.a.d r2, r1, #0 [moe]")              # write offset (slot index)
@@ -556,19 +628,75 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.label("kick_end")
+    # active-power idle signal: if the kernel CCB is now empty and nothing is in
+    # flight, tell the host the microkernel is idle so it can power the core
+    # down. Without this the host never powers down a quiescent GPU and its
+    # watchdog (SGXOSTimer, which reads 0xb14^0xb20) HWRs the halted, event-
+    # driven EDM — EA1 HW-confirmed 2026-11-02. ui32InterruptFlags is host-
+    # control word 8; the host gates its power-down on ui32InterruptClearFlags,
+    # so re-raising the bit is idempotent and never storms.
+    a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")
+    a.i("wdf")
+    a.i("ld.a.d r2, r1, #0 [moe]")                 # write offset
+    a.i("ld.a.d r3, r1, #1 [moe]")                 # read offset
+    a.i("wdf")
+    a.i("test.xor.eq p0, r2, r3")                  # queue empty?
+    a.i("(!p0) ba kick_idle_done")
+    a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")   # a render in flight?
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(!p0) ba kick_idle_done")
+    a.i(f"ld.a.d r2, r17, #{SC_XFER} [moe]")        # a transfer in flight?
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(!p0) ba kick_idle_done")
+    # idle: raise ACTIVE_POWER in host control, then the host IRQ
+    a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")
+    a.i("wdf")
+    a.i(f"ld.a.d r2, r1, #{HC_INTFLAGS} [moe]")
+    a.i("wdf")
+    a.i(f"or r2, r2, #{EDM_INTERRUPT_ACTIVE_POWER}")
+    a.i(f"st.a.d r1, #{HC_INTFLAGS}, r2 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i(f"limm r0, #{SW_EVENT}")
+    a.i("ba raise_host_irq")                        # write SW_EVENT to EVENT_STATUS
+    a.label("kick_idle_done")
     a.end()
 
     # ======================================================================
     # do_ta: program and start the TA for the context in r16 (subroutine)
     # ======================================================================
     a.label("do_ta")
-    # client CCB and its control, then the TA command base
+    # client CCB and its control, then the TA command base. Load it first: the
+    # first-kick flag that gates the per-scene setup lives in the command.
     a.i("ld.a.d r1, r16, #%d [moe]" % CTX_CCB)      # client CCB base
     a.i("ld.a.d r2, r16, #%d [moe]" % CTX_CCBCTL)   # client CCB control
     a.i("wdf")
     a.i("ld.a.d r3, r2, #1 [moe]")                  # client read offset (bytes)
     a.i("wdf")
     a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = command base (bytes)
+    # first-kick flag: TA command +0x04 bit 0 is bFirstKickOrResume (0x71), and
+    # is clear on the render / bLastInScene kick (0x62). A scene's first kick does
+    # the full per-scene setup (TA soft reset, PB descriptor, DPM free-list + state
+    # load, OTPM, RT region registers, client page directory); re-running any of
+    # that on a later kick re-initialises the parameter buffer / free list
+    # mid-scene and HANGS the TA — EA1 HW 2026-11-03 (kick 2: lockup_ta, do_3d
+    # unreached). The DDK does only a minimal kick there (ddk-ref "TA kick 2":
+    # TE/MTE, invalidate, RD, flags, kick). r13 = 1 on the first kick, 0 on a
+    # render kick; each setup block below is gated on it.
+    a.i("ld.a.d r13, r9, #1 [moe]")                 # cmd+0x04 (word 1)
+    a.i("wdf")
+    a.i("and r13, r13, #1")                         # r13 = bFirstKickOrResume
+    # soft-reset the TA (EUR_CR_SOFT_RESET 0x080 bit 2) on the first kick only, so
+    # it begins the scene clean (the DDK does this early, ddk-ref line 22).
+    a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
+    a.i("(p0) ba skip_ta_reset")
+    a.i("limm r5, #4")
+    a.i(f"str #{0x80 // 4}, r5")
+    a.i("limm r5, #0")
+    a.i(f"str #{0x80 // 4}, r5")
+    a.label("skip_ta_reset")
     # remember context, command, and the pointers the 3D phase needs
     a.i("ld.a.d r10, r9, #%d [moe]" % CMDTA_RD)     # render details
     a.i("ld.a.d r11, r9, #%d [moe]" % CMDTA_PB)     # PB descriptor
@@ -590,20 +718,78 @@ def build(a):
     a.i("st.a.d r3, #0, #0 [moe]")                 # rtdata[0] = 0 (render in progress)
     a.i("idf")
     a.i("wdf")
-    # point the BIF at this context's page directory, then invalidate the
-    # caches and wait (so the cores see this context's page tables)
+    # point the BIF at this context's page directory. Load the client PD into
+    # directory-list 0 (EUR_CR_BIF_DIR_LIST_BASE0 = 0xc84), pulse the BIF
+    # directory-cache invalidate (EUR_CR_BIF_CTRL 0xc00 bit 3 = INVALDC), then
+    # route the TA requestor to list 0 while the EDM stays on list 15
+    # (EUR_CR_BIF_BANK0 = 0xc78 = 0xf: b0-3 EDM=15, b4-7 TA=0). Without BANK0 the
+    # TA reads the control stream through the wrong page tables and faults on the
+    # kernel-data/command memory — EA1 HW 2026-11-02: EUR_CR_BIF_FAULT =
+    # 0x3200F00F (the TA command base). Then invalidate the PDS/USE caches.
+    # client page directory (0xc84): first kick only — the render kick reuses the
+    # scene's PD, and the DDK does not reload it (ddk-ref "TA kick 2").
+    a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
+    a.i("(p0) ba skip_bif_pd")
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
     a.i("wdf")
-    a.i(f"str #{0xc84 // 4}, r4")
+    a.i(f"str #{0xc84 // 4}, r4")                   # BIF_DIR_LIST_BASE0 = client PD
+    a.label("skip_bif_pd")
+    a.i("limm r5, #0xf")                            # BIF_BANK0: EDM=list 15, TA=list 0
+    a.i(f"str #{0xc78 // 4}, r5")
+    # directory-cache invalidate (INVALDC): first kick only.
+    a.i("test.and.eq p0, r13, r13")                 # render kick? skip INVALDC
+    a.i("(p0) ba skip_bif_invaldc")
+    a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
+    a.i(f"str #{0xc00 // 4}, r5")
+    a.i("limm r5, #0")
+    a.i(f"str #{0xc00 // 4}, r5")
+    a.label("skip_bif_invaldc")
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
-    # parameter-buffer registers, then load the DPM state/control and wait for
-    # the free list to be ready before the TA kicks (docs/UKERNEL.md §6)
+    # clear 0xa74 before re-writing its TA-flags field below. The DDK clears it
+    # (ddk-ref line 61) then writes the command's flags into b27-31; srvinit's
+    # init value (0x208200) is overwritten. Without the write our 0xa74 keeps
+    # only the init bits (b27-31 = 0) and the kicked TA does not run.
+    a.i("limm r5, #0")
+    a.i(f"str #{0xa74 // 4}, r5")
+    # parameter-buffer registers + TA free-list load: first kick only. These set
+    # up the scene's parameter buffer; re-running them on the render kick reloads
+    # the free list the first kick already allocated pages from and hangs the TA
+    # (the DDK skips them, ddk-ref "TA kick 2").
+    a.i("test.and.eq p0, r13, r13")             # render kick? skip PB + free list
+    a.i("(p0) ba skip_pb_fl")
     a.program(11, TA_PB)
-    a.dpm_load()
+    a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
+    a.label("skip_pb_fl")
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
+    # 0xa74 = the TA command's flags word (cmd+0x14), as the DDK writes it after
+    # the TE registers and before the kick (ddk-ref line 91; STATE.md cmd+0x14 =
+    # 0x50000000 when kick flag 0x2000000 is clear). Read +0x14 (word 5), not the
+    # +0x18 constant.
+    a.i(f"ld.a.d r9, r17, #{SC_CMD} [moe]")
+    a.i("wdf")
+    a.i("ld.a.d r5, r9, #5 [moe]")
+    a.i("wdf")
+    a.i(f"str #{0xa74 // 4}, r5")
+    # RT region-header / tail-pointer base registers (0x62c/0x634/0x234): first
+    # kick only — they describe the scene's parameter-buffer regions, set once and
+    # reused (the DDK skips them on the render kick).
+    a.i("test.and.eq p0, r13, r13")             # render kick? skip RT region regs
+    a.i("(p0) ba skip_rt")
     a.program(12, TA_RT)
+    a.label("skip_rt")
     a.program(10, TA_RD)
+    # second cache invalidate (both kicks), then the DPM state/control load. The
+    # load is first kick only: it loads the scene's DPM state, and re-running it
+    # mid-scene disturbs the in-flight parameter state (the DDK skips it on the
+    # render kick). Done before the TE registers, dpm_load's 0x240 done event
+    # never fired and do_ta stalled — EA1 HW sentinels 2026-11-02 — so it stays
+    # after them (ddk-ref-frame-registers.txt lines 106-131).
+    a.invalidate(CR_PDS_INV0, INV_DONE_TA)
+    a.i("test.and.eq p0, r13, r13")             # render kick? skip DPM state load
+    a.i("(p0) ba skip_dpm_load")
+    a.dpm_load()
+    a.label("skip_dpm_load")
     # TA flags 2 (0x218): the command word, always with bit 24, plus bit 23
     # when the RT entry's word 13 bit 23 is set (docs/UKERNEL.md §7)
     a.i(f"ldr r4, #{0x218 // 4}")
@@ -686,6 +872,7 @@ def build(a):
     a.i("ld.a.d r4, r11, #%d [moe]" % (0x10 // 4))    # 0x600 <- pb+0x10
     a.i("wdf")
     a.i(f"str #{0x600 // 4}, r4")
+    a.dpm_freelist(5, CR_DPM_3D_FL, 0x2)             # load the 3D free list before the render
     a.consts(D3_CONST)
     a.program(10, D3_RD)
     # invalidate the 3D-side caches and wait, then start the 3D

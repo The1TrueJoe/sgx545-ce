@@ -119,15 +119,17 @@ def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
                 args += ["-a", f"{a}={k}"]
     # F16 for the mediump/lowp variants (their ints would become 16-bit too,
     # which the int-to-float lowering doesn't take in loops)
-    if F16 and kind == "frag" and re.search(r"_[ml]$", name):
+    if F16 and re.search(r"_[ml]$", name):
         args.append("-p")
     args += ["-o", base, base + ".vert", base + ".frag"]
     r = subprocess.run(args, capture_output=True, text=True)
     stem = os.path.join(outdir, f"{idx:03d}-{name}")
-    ok = r.returncode == 0 and os.path.exists(f"{base}.{kind}.usp")
+    # (constants in memory: code only, no USP)
+    ok = r.returncode == 0 and os.path.exists(f"{base}.{kind}.code")
     if ok:
         for ext in ("usp", "code"):
-            os.replace(f"{base}.{kind}.{ext}", f"{stem}.{ext}")
+            if os.path.exists(f"{base}.{kind}.{ext}"):
+                os.replace(f"{base}.{kind}.{ext}", f"{stem}.{ext}")
     line = [x for x in r.stdout.splitlines() if x.startswith(kind + ":")]
     err = (r.stderr.strip().splitlines() or [""])[-1] if not ok else ""
     log = ""

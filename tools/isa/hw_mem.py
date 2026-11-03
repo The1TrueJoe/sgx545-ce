@@ -432,7 +432,7 @@ form("ptoff", VT + [("h22", 0), ("h24-26", 0), ("h15", 1)], [Fld("end", "h18"), 
      src="FUN_0010a1e0 0xd3")
 # op 1, USEASM 0xd4: dest (no extension: r/o/pa), predicate dest, 3 sources
 form("atst8", VT + [("h24-26", 1)],
-     [Fld("syncs", "h23"), Fld("f2_25", "h22"), Fld("end", "h18"), Fld("nosched", "h11"),
+     [Fld("pred", "h9-10", "pred", PRED2), Fld("syncs", "h23"), Fld("f2_25", "h22"), Fld("end", "h18"), Fld("nosched", "h11"),
       Fld("sel34", "h5"), Fld("sel36", "h3"), Fld("sel37", "h4")],
      [Opd("dst", "l21-27", "h0-1", None, {(0, 0): "r", (1, 0): "o", (2, 0): "pa", (3, 0): "ix"}),
       PredDst(), src0("h19"), src1(), src2()], src="FUN_00111ef0 0xd4")

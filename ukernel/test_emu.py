@@ -56,7 +56,7 @@ def machine(code):
     mem.wr(CTLBLK + 4 * 0, CTLBLK)
     mem.wr(CTLBLK + 4 * 1, HOSTCTL)
     mem.wr(CTLBLK + 4 * 2, KCCBCTL)
-    mem.wr(CTLBLK + 4 * 16, 0x32000000)
+    mem.wr(CTLBLK + 4 * 0x16, 0x32000000)        # kernel CCB base (DDK slot +0x58)
     return u, mem, regs
 
 
@@ -73,7 +73,7 @@ def test_init(code, man):
     mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 0)        # clean boot: HWR bit clear
     run_event(u, man, regs)
     assert mem.rd(HOSTCTL) == 1, "init must set ui32InitStatus = PVRSRV_USSE_EDM_INIT_COMPLETE"
-    assert mem.rd(CTLBLK + 4 * 0x16) == 0x00010000, "init must write the advisory openHC version word"
+    assert mem.rd(CTLBLK + 4 * 0x18) == 0x00010000, "init must write the advisory openHC version word"
     print("  init (clean): ui32InitStatus = 1, version word written  OK")
 
 

@@ -1,0 +1,164 @@
+Linux openhc-ea1-000FFF1AFCA9 7.1.8-m2drm #1 SMP PREEMPT_DYNAMIC Tue Nov  3 00:35:13 UTC 2026 x86_64 GNU/Linux
+console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 pci=realloc,nocrs,routeirq console=ttyS0,115200 pci=realloc,nocrs,routeirq intel_iommu=off root=/dev/mmcblk0p1 rootwait rw ohc_kexec=1 ohc.ramboot=1 memmap=exactmap memmap=68K@0 memmap=60K#0x11000 memmap=512K@0x20000 memmap=255M@1M memmap=1536M@0x10000000
+
+[   51.100779] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[   51.108098] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[   51.112107] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   51.125626] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[   64.051746] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+[  134.201509] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[  134.208872] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[  134.212840] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  134.226179] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[  134.264729] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+
+firmware running: 1 lost: 0 resets: 0 irqs: 0
+kernel PD 0x0377a000 idle PD 0x013e7000
+ccb wo 90 ro 90 issued 602 consumed 602
+hostctl init 0x1 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+CLKGATECTL           0x0000 0x0000a6aa
+CLKGATECTL2          0x0004 0x00aaaaaa
+CLKGATESTATUS        0x0008 0x00000020
+CORE_ID              0x001c 0x01150000
+CORE_REVISION        0x0020 0x0001000e
+SOFT_RESET           0x0080 0x00000000
+EVENT_STATUS         0x012c 0x20000000
+EVENT_STATUS2        0x0118 0x00000400
+EVENT_HOST_ENABLE    0x0130 0x00004000
+EVENT_HOST_ENABLE2   0x0110 0x00000000
+BIF_CTRL             0x0c00 0x00000000
+BIF_INT_STAT         0x0c04 0x00080000
+BIF_FAULT            0x0c08 0x00000000
+BIF_BANK0            0x0c78 0x0000000f
+BIF_DIR_LIST_BASE0   0x0c84 0x013e7000
+BIF_DIR_LIST_BASE15  0x0c70 0x0377a000
+EDM_TASK_REG0        0x0b14 0x0001259f
+EDM_TASK_REG1        0x0b20 0x00010000
+ 26:          0          0          0          0  IO-APIC   0-fasteoi   powervr_sgx
+--- test run 1 (c40676b build) ---
+dev-query-gpu-info
+  core_id 0x01150000 core_revision 0x0001000e fw_interface 1
+  ok
+dev-query-short-size
+  ok
+dev-query-limits-quirks
+  ok
+dev-query-heap-info
+  ok
+dev-query-invalid
+  ok
+create-bo
+  ok
+create-bo-invalid
+  ok
+mmap-bo
+  ok
+mmap-bo-invalid
+  ok
+vm-create-destroy
+  ok
+vm-map-unmap
+  ok
+vm-map-overlap
+  ok
+vm-map-kernel-ranges
+  ok
+vm-map-invalid
+  ok
+vm-handles-per-file
+  ok
+context-create-destroy
+  ok
+context-invalid
+  ok
+submit-null-job
+  null job signalled in 7612 us
+  ok
+submit-null-job-timeline
+  ok
+submit-null-job-chain
+  FAIL drm/tests/powervr_sgx_test.c:538: submit(fd, j, 3, NULL) == -22, expected 0 == 0
+  FAILED (exit 1)
+submit-null-job-many
+  600 null jobs in 27 ms
+  ok
+submit-null-job-bo-ref
+  ok
+submit-null-job-vm-destroyed
+  ok
+submit-invalid
+  ok
+23/24 passed
+rc=1
+[   51.100779] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[   51.108098] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[   51.112107] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   51.125626] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[   64.051746] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+firmware running: 1 lost: 0 resets: 0 irqs: 0
+kernel PD 0x02701000 idle PD 0x048e7000
+ccb wo 93 ro 93 issued 605 consumed 605
+hostctl init 0x1 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+--- test run 2 (27b6501 build, swapped into the same boot) ---
+[  313.079092] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[  313.086200] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[  313.090473] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  313.103912] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+dev-query-gpu-info
+  core_id 0x01150000 core_revision 0x0001000e fw_interface 1
+  ok
+dev-query-short-size
+  ok
+dev-query-limits-quirks
+  ok
+dev-query-heap-info
+  ok
+dev-query-invalid
+  ok
+create-bo
+  ok
+create-bo-invalid
+  ok
+mmap-bo
+  ok
+mmap-bo-invalid
+  ok
+vm-create-destroy
+  ok
+vm-map-unmap
+  ok
+vm-map-overlap
+  ok
+vm-map-kernel-ranges
+  ok
+vm-map-invalid
+  ok
+vm-handles-per-file
+  ok
+context-create-destroy
+  ok
+context-invalid
+  ok
+submit-null-job
+  null job signalled in 7465 us
+  ok
+submit-null-job-timeline
+  ok
+submit-null-job-chain
+  ok
+submit-null-job-many
+  600 null jobs in 32 ms
+  ok
+submit-null-job-bo-ref
+  ok
+submit-null-job-vm-destroyed
+  ok
+submit-invalid
+  ok
+24/24 passed
+rc=0
+firmware running: 1 lost: 0 resets: 0 irqs: 0
+kernel PD 0x04037000 idle PD 0x04036000
+ccb wo 96 ro 96 issued 608 consumed 608
+hostctl init 0x1 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+ 26:          0          0          0          0  IO-APIC   0-fasteoi   powervr_sgx

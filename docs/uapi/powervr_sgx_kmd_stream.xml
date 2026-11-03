@@ -1,0 +1,128 @@
+<?xml version="1.0" ?>
+
+<!--
+SPDX-License-Identifier: MIT
+Copyright © 2026 Joseph Telaak
+-->
+
+<!--
+The client command streams of the powervr_sgx uAPI (docs/UAPI.md section 3).
+
+One source for both sides:
+
+  - Mesa's csbgen (src/imagination/csbgen/gen_pack_header.py) reads this file as
+    it reads rogue/kmd_stream.xml: it emits the defines, enums and the HDR and
+    EXTHDR structs, and parses the streams without emitting anything for them.
+  - docs/uapi/gen_stream.py reads the same file and emits the kernel's stream
+    tables (field order, sizes, validators), a stream writer for userspace, and
+    the stream tables in docs/UAPI.md.
+
+Stream fields carry the csbgen attributes (name, size in bits, type, shift)
+plus the kernel's validation, which csbgen ignores the way it ignores
+kmd_stream.xml's "feature":
+
+  check="none"     the value only reaches a register; no check
+  check="range"    min <= value <= max; max_limit names a device limit instead
+  check="mask"     value & ~mask == 0
+  check="addr"     a device-virtual address in the job's VM: below 2^32,
+                   aligned to "align", inside "heap" (default: any client heap);
+                   optional="true" lets 0 mean "none"; "extent" is how many
+                   bytes from it must be mapped at submit: a number, rt_depth,
+                   rt_stencil, or rows16 (16 bytes per row of extent_field)
+
+Rules (UAPI.md section 3.1):
+
+  - A main stream is frozen once merged. New fields go in an extension stream,
+    named CMD_<X>_EXT_<NAME>, enabled by the has_<name> bit of an EXTHDR_<X><n>
+    struct. Fields are naturally aligned from the stream start; gap bytes must be
+    zero.
+  - Cross-field rules can't be written here (csbgen refuses unknown tags). They
+    are in UAPI.md section 3 and in the kernel's per-command check.
+-->
+
+<csbgen name="SGX" prefix="KMD_STREAM">
+
+  <define name="EXTHDR_DATA_MASK" value="0xFFFFFFF"/>
+  <define name="MAX_SIZE" value="4096"/>
+
+  <enum name="EXTHDR_TYPE_RENDER">
+    <value name="0" value="0"/>
+  </enum>
+
+  <enum name="EXTHDR_TYPE_TA_KICK">
+    <value name="0" value="0"/>
+  </enum>
+
+  <enum name="EXTHDR_TYPE_TRANSFER">
+    <value name="0" value="0"/>
+  </enum>
+
+  <!-- No extension streams yet: every data bit of these headers is rejected. -->
+  <struct name="EXTHDR_RENDER0" length="1">
+    <field name="type" start="29" end="31" type="EXTHDR_TYPE_RENDER" default="0"/>
+    <field name="continuation" start="28" end="28" type="bool"/>
+  </struct>
+
+  <struct name="EXTHDR_TA_KICK0" length="1">
+    <field name="type" start="29" end="31" type="EXTHDR_TYPE_TA_KICK" default="0"/>
+    <field name="continuation" start="28" end="28" type="bool"/>
+  </struct>
+
+  <struct name="EXTHDR_TRANSFER0" length="1">
+    <field name="type" start="29" end="31" type="EXTHDR_TYPE_TRANSFER" default="0"/>
+    <field name="continuation" start="28" end="28" type="bool"/>
+  </struct>
+
+  <!-- length: bytes of the main stream, this header included. Word 1 must be zero. -->
+  <struct name="HDR" length="2">
+    <field name="length" start="0" end="31" type="uint"/>
+  </struct>
+
+  <!-- The 3D part of a render job (drm_powervr_sgx_job.cmd_stream). -->
+  <stream name="CMD_RENDER" length="18">
+    <field name="depth_addr" size="64" type="address" shift="0"
+           check="addr" optional="true" extent="rt_depth"/>
+    <field name="stencil_addr" size="64" type="address" shift="0"
+           check="addr" optional="true" extent="rt_stencil"/>
+    <field name="pixel_event_pds_addr" size="64" type="address" shift="0"
+           check="addr" heap="pds_pixel" align="16"
+           extent="rows16" extent_field="pixel_event_pds_rows"/>
+    <field name="bg_pds_secondary_addr" size="64" type="address" shift="0"
+           check="addr" heap="pds_pixel" align="16"/>
+    <field name="bg_pds_primary_addr" size="64" type="address" shift="0"
+           check="addr" heap="pds_pixel" align="16"/>
+    <field name="pixel_event_pds_rows" size="32" type="uint" check="range" min="1" max="63"/>
+    <field name="bg_pds_secondary_rows" size="32" type="uint" check="range" min="1" max="63"/>
+    <field name="bg_pds_primary_rows" size="32" type="uint" check="range" min="1" max="63"/>
+    <!-- Bits 3-11 are the tile count, which the kernel fills. -->
+    <field name="zls_control" size="32" type="uint" check="mask" mask="0x001ff007"/>
+    <field name="flags_3d" size="32" type="uint" check="mask" mask="0x00000180"/>
+    <field name="bg_depth" size="32" type="float" check="none"/>
+    <field name="depth_bias_units" size="32" type="int" check="none"/>
+    <field name="depth_bias_factor" size="32" type="float" check="none"/>
+  </stream>
+
+  <!-- One TA kick of a render job (drm_powervr_sgx_ta_kick.cmd_stream). -->
+  <stream name="CMD_TA_KICK" length="3">
+    <field name="vdm_base" size="64" type="address" shift="0"
+           check="addr" align="4" extent="4"/>
+    <!-- Bits 19, 22, 23 and 25. -->
+    <field name="ta_flags2" size="32" type="uint" check="mask" mask="0x02c80000"/>
+  </stream>
+
+  <!-- A transfer job (drm_powervr_sgx_job.cmd_stream). -->
+  <stream name="CMD_TRANSFER" length="10">
+    <field name="bg_block_addr" size="64" type="address" shift="0"
+           check="addr" align="16" extent="0x200"/>
+    <field name="pixel_event_pds_addr" size="64" type="address" shift="0"
+           check="addr" heap="pds_pixel" align="16"
+           extent="rows16" extent_field="pixel_event_pds_rows"/>
+    <field name="pixel_event_pds_rows" size="32" type="uint" check="range" min="1" max="63"/>
+    <field name="first_tile_x" size="32" type="uint" check="range" min="0" max_limit="tiles_x"/>
+    <field name="first_tile_y" size="32" type="uint" check="range" min="0" max_limit="tiles_y"/>
+    <field name="last_tile_x" size="32" type="uint" check="range" min="0" max_limit="tiles_x"/>
+    <field name="last_tile_y" size="32" type="uint" check="range" min="0" max_limit="tiles_y"/>
+    <field name="bg_depth" size="32" type="float" check="none"/>
+  </stream>
+
+</csbgen>

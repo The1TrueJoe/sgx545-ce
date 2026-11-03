@@ -17,13 +17,23 @@
  *   sgx_clear / sgx_draw record into the frame's VDM stream;
  *   sgx_flush     submits it (two TA kicks, the second renders) and waits.
  *   sgx_surface_destroy / sgx_ctx_destroy release what the microkernel holds.
+ *
+ * Built with -DSGXGEN_DRM it talks to the powervr_sgx DRM driver instead of the
+ * DDK's services: the kernel then owns the firmware structures (HW render
+ * context, PB, RT data, render details) and a frame is one SUBMIT_JOBS render
+ * job of one TA kick, described by CMD_RENDER and CMD_TA_KICK streams.
  */
 #ifndef SGXGEN_H
 #define SGXGEN_H
 
 #include <stdint.h>
 
+#ifdef SGXGEN_DRM
+#include <drm/drm.h>
+#include "powervr_sgx_drm.h"
+#else
 #include "pvr.h"
+#endif
 
 /* GL enums the state objects take */
 #define SGX_NEVER 0x200
@@ -43,15 +53,25 @@
 #define SGX_TRIANGLE_STRIP 3
 
 struct sgx_dev {
+#ifdef SGXGEN_DRM
+	int fd;
+	uint32_t vm;			/* VM context handle */
+	uint32_t heap_next[16];		/* bump allocator per heap */
+#else
 	struct pvr pvr;
+#endif
 	uint32_t heap_base[16];		/* by SGX heap id */
 	int verbose;
 };
 
 /* one device allocation, mapped */
 struct sgx_bo {
+#ifdef SGXGEN_DRM
+	uint32_t handle;
+#else
 	struct pvr_buf b;
-	uint32_t va;
+#endif
+	uint32_t va, size;
 	uint32_t *map;
 };
 
@@ -79,6 +99,9 @@ struct sgx_surface {
 	struct sgx_rt_numbers rt;
 	struct sgx_bo rtdata, rtword, entword[2], tailptr, ta40, ta50, rgn[2], ta88[2], bgblock;
 	struct sgx_bo rd, rd_sync, rd_w8, rd_w4, hwsync, hwsync_access;
+#ifdef SGXGEN_DRM
+	uint32_t rtds;			/* RT dataset handle */
+#endif
 	uint32_t eot;			/* end-of-tile USSE program */
 	uint32_t pixev, pixev_rows;	/* pixel event PDS program */
 	uint32_t bg_pds[3];		/* background object PDS words (secondary, middle, primary) */
@@ -122,11 +145,17 @@ struct sgx_draw {
 
 struct sgx_ctx {
 	struct sgx_dev *dev;
+#ifdef SGXGEN_DRM
+	uint32_t ctx;			/* render context handle */
+	uint32_t syncobj;		/* signalled by each frame */
+	int ta_kicks;			/* 1: one kick renders; 2 (default): stream, then terminate */
+#else
 	struct sgx_bo pb, freelist, pbdesc, pbblocks, ccb, ccbctl, scratch, sync3d;
 	uint32_t pb_pages;
 	IMG_HANDLE hwctx;
 	uint32_t hwctx_va;
 	uint32_t ccb_woff;
+#endif
 	struct sgx_ring pds_pix, pds_vtx, usse_pix, usse_vtx, gen;
 	/* fixed programs */
 	uint32_t empty_v, empty_p, copy_fs, clear_vs, pe_ptoff, pe_emit, state_emit[33];

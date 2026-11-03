@@ -506,6 +506,12 @@ def parse(text):
                             mods.pop(0)
                         else:
                             d[fl.name] = [k for k, v in fl.table.items() if v == ""][0]
+            if f.name == "fdual":                   # -src on the src1 / src2 slot = neg1 / neg2
+                for n, o in zip(("neg1", "neg2"), ops[2:4]):
+                    if o.pop("neg", 0):
+                        d[n] = 1
+            if pred and not any(fl.kind == "pred" for fl in f.fields):
+                raise ValueError("no predicate field")
             if mods != (f.mn(d) if f.mn else []):
                 raise ValueError(f"modifiers {mods} not in this form")
             for x in flags:
@@ -518,9 +524,16 @@ def parse(text):
                     d[k] = 1
                 elif fl.kind == "enum":
                     inv = {v: kk for kk, v in fl.table.items()}
+                    val = _enum_alias(k, val)
                     d[k] = inv[val] if val in inv else int(val, 0)
                 else:
-                    d[k] = int(val, 0)
+                    m = re.fullmatch(r"i(\d)", val)     # ci=i1: an internal register number
+                    d[k] = int(m.group(1)) if m and k in ("ci", "i") else int(val, 0)
+            # a field the mode doesn't use (rpt= without rcnt) is an error, not dropped
+            for x in flags:
+                k = x.partition("=")[0]
+                if not any(y.active(d) for y in f.fields if y.name == k):
+                    raise ValueError(f"{k} not used here")
             # USEASM sets the format-select flag when any operand has a format flag; do the same
             if "fmt" not in d and any(f.name == "fmt" for f in f.fields) and any(
                     o.get("f16") or {"f16", "c10"} & set(o.get("sfx", [])) for o in ops):
@@ -540,6 +553,17 @@ def parse(text):
         except (ValueError, KeyError, IndexError) as e:
             errs.append(f"{f.src or f.name}: {e}")
     raise ValueError(f"cannot assemble {text!r}: " + "; ".join(errs) if errs else f"unknown mnemonic {parts[0]}")
+
+
+def _enum_alias(k, val):
+    """other spellings ISA.md uses: efo's i=m0/m1, a=s0+s2/s1+s2, m=s0*s2/s1*s2;
+    dot's cs=x4 / as=x2"""
+    if k in ("i", "a", "m") and "/" in val:
+        p, q = val.split("/")
+        return f"{k}0={p},{k}1={q}"
+    if k in ("cs", "as") and val in ("x2", "x4", "x8"):
+        return k[0] + val
+    return val
 
 
 def _same_opd(a, b):
