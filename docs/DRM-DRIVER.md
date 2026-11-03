@@ -28,7 +28,10 @@ gma500 auxiliary device first.
 | shader validator (D9) | hooks only; design in section 6 |
 | runtime PM, devcoredump | not started |
 
-Hardware results are in `docs/log/entries/` (search for `drm-`).
+On the EA1 (2026-11-03, `docs/log/entries/2026-11-03-0100-drm-first-boot.md`): the driver
+probes, starts the DDK microkernel from the kernel, passes the `GETMISCINFO` check, answers
+DEV_QUERY, runs NULL jobs with fences, unloads and reloads cleanly, and passes all 24 uAPI
+tests.
 
 ## 2. Layout
 
