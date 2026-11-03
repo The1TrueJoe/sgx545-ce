@@ -407,6 +407,19 @@ def build(a):
     # no-op, so the acknowledge is unconditional and no handler reads it.
     a.i(f"limm r3, #{DCU_INVALID}")
     a.i(f"str #{CR_EVENT_HOST_CLEAR2 // 4}, r3")
+    # acknowledge the TA-finish (0x2000) and 3D-end (0x40000 pixel back-end,
+    # 0x800000 ISP end-of-tile) events in EUR_CR_EVENT_STATUS the same way: the
+    # dispatch() below only tests the r2 snapshot and branches, it never clears
+    # the serviced bit, and neither did the handlers — so the TA-finish event
+    # re-triggered ta_finished forever, starving the next host kick (kick 2's
+    # render) so do_3d was never reached, and the watchdog stormed. EA1 HW-
+    # confirmed 2026-11-03: ta_finish stuck set at every lockup dump, do_ta +
+    # ta_finished markers present but do_3d absent. The DDK acks these in its
+    # handlers (str 0x134 = 0x2000 at TA finish, = 0x40000 at 3D end). Clearing an
+    # unset bit is a no-op, so the acknowledge is unconditional and precedes the
+    # dispatches, which test the r2 snapshot taken above.
+    a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000}")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.dispatch(0x2000, "ta_finished")              # a TA finished
     a.dispatch(0x40000, "render_done")             # pixel back-end end of render
     a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)

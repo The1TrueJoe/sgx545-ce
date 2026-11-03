@@ -127,8 +127,16 @@ in priority order and writes the matching bit back to
 (`dcu_invalid`, 0x400) up front: the kernel's `SysFinalise` leaves it set on
 the EA1, and since openHC read only `EUR_CR_EVENT_STATUS`, it re-triggered the
 event program forever — a storm that starved the host kick and locked the core,
-HW-confirmed 2026-11-02. The acknowledge in `ta_finished` and `render_done` is
-still to add, validated against the DDK render trace when frames run.)
+HW-confirmed 2026-11-02. The **TA-finish** (`ta_finish`, 0x2000) and **3D-end**
+(`pbe_end_render` 0x40000, `isp_end_tile` 0x800000) bits in
+`EUR_CR_EVENT_STATUS` are acknowledged the same way, up front in the dispatcher:
+without it `ta_finished` re-triggered forever after the TA finished, so the next
+kick's host command was never processed and `do_3d` was never reached —
+HW-confirmed on the EA1 2026-11-03 (`EVENT_STATUS` stuck `0x2000`; acking it
+cleared the storm and let the frame advance to the render TA). The DDK acks these
+in its handlers (`str 0x134 = 0x2000` / `0x40000`); the 3D-end ack is by analogy
+and not yet exercised, since `render_done` does not run until the render TA
+stops hanging.)
 
 **The host kick is not an `EUR_CR_EVENT_STATUS` bit.** The host adds a command
 to the kernel CCB, advances the CCB write offset, and rings the
