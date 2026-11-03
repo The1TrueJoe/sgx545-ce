@@ -362,8 +362,17 @@ static int rpm_status(char *buf, size_t n)
 /* 1 once suspended, 0 if not within ms, -1 without runtime PM. */
 static int rpm_wait_suspended(unsigned ms)
 {
-	char st[32];
+	FILE *fp = fopen("/sys/bus/pci/devices/0000:01:02.0/power/control", "r");
+	char st[32] = "";
 
+	/* "on": runtime PM forbidden (powervr_sgx.runtime_pm=0) */
+	if (fp) {
+		if (!fgets(st, sizeof(st), fp))
+			st[0] = 0;
+		fclose(fp);
+		if (!strncmp(st, "on", 2))
+			return -1;
+	}
 	for (unsigned t = 0; t <= ms; t += 20) {
 		if (rpm_status(st, sizeof(st)) || !strcmp(st, "unsupported"))
 			return -1;

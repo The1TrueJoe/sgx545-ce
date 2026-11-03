@@ -16,6 +16,7 @@
 
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/interrupt.h>
 #include <linux/iopoll.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
@@ -632,8 +633,10 @@ static int fw_check(struct pvrsgx_device *sdev)
 int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 {
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
-	bool first = !sdev->fw_started;
+	bool first = !sdev->fw_started, was_powered = READ_ONCE(sdev->powered);
 	int err;
+
+	WRITE_ONCE(sdev->powered, true);
 
 	/*
 	 * A restart starts from a fresh image and empty arenas: the microkernel
@@ -642,7 +645,12 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	 */
 	if (!first) {
 		sdev->fw_gen++;
-		if (restart_quiesce) {
+		/*
+		 * After a hang the clocks are on and the cores may be busy. After a
+		 * clean stop (runtime suspend) they are gated and quiet already, and
+		 * a register read there froze the EA3 (log 2026-11-03-0630).
+		 */
+		if (restart_quiesce && was_powered) {
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
 			wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
@@ -721,9 +729,17 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			drm_warn(&sdev->base, "microkernel did not power off\n");
 		for (int i = 0; i < 500 && (sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & 0xffffffdf); i++)
 			usleep_range(100, 200);
+		WRITE_ONCE(sdev->powered, false);
+		synchronize_irq(sdev->irq);
 		deinit_script(sdev);
 		sdev->fw_running = false;
+		wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_rd(sdev, SGX_CR_SOFT_RESET);
+	} else if (READ_ONCE(sdev->powered)) {
+		/* A failed start: the clocks are on, the microkernel isn't. */
+		WRITE_ONCE(sdev->powered, false);
+		synchronize_irq(sdev->irq);
+		wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
-	wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
-	sgx_rd(sdev, SGX_CR_SOFT_RESET);
 }

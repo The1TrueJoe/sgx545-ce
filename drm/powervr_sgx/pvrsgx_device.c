@@ -193,8 +193,11 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 static irqreturn_t pvrsgx_irq(int irq, void *arg)
 {
 	struct pvrsgx_device *sdev = arg;
-	u32 status = sgx_rd(sdev, SGX_CR_EVENT_STATUS) & sgx_rd(sdev, SGX_CR_EVENT_HOST_ENABLE);
+	u32 status;
 
+	if (!READ_ONCE(sdev->powered))
+		return IRQ_NONE;
+	status = sgx_rd(sdev, SGX_CR_EVENT_STATUS) & sgx_rd(sdev, SGX_CR_EVENT_HOST_ENABLE);
 	if (!(status & SGX_CR_EVENT_STATUS_SW_EVENT))
 		return IRQ_NONE;
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR,
@@ -313,7 +316,7 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
  * the same full start a reset does. A job on the GPU holds a reference from
  * run_job until it leaves the active list.
  */
-static bool runtime_pm = true;
+static bool runtime_pm;
 module_param(runtime_pm, bool, 0444);
 MODULE_PARM_DESC(runtime_pm, "Power the microkernel off when idle (autosuspend: the device's power/autosuspend_delay_ms)");
 

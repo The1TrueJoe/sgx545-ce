@@ -27,7 +27,7 @@ gma500 auxiliary device first.
 | transfer jobs | written; **blits pixel-exact** (copy, upload and readback, box-filtered mip; 360 in a row, interleaved with another process's renders; log `2026-11-03-0405-drm-transfers`) |
 | shader validator (D9) | hooks only; design in section 6 |
 | devcoredump on a hang | written; HW-verified (log `2026-11-03-0600-drm-rearm-bisect`) |
-| runtime PM | not started; the SGX function has no PCI PM capability, so runtime PM is the microkernel power-off alone |
+| runtime PM | written, **off by default** (`runtime_pm=1`): the first HW run froze the EA1 (log `2026-11-03-0610-drm-runtime-pm-wedge`); the SGX function has no PCI PM capability, so runtime PM is the microkernel power-off alone |
 
 First frames (2026-11-03, `docs/log/entries/2026-11-03-0210-drm-first-frame.md`): a clear and a
 triangle from client streams, pixels exact, 10 of 10 frames at 256x256, completion from the
