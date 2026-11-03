@@ -854,14 +854,18 @@ def build(a):
     a.i("(p0) ba ta_status_loop")
     a.label("ta_status_done")
     a.i("wdf")
-    # start the 3D once the scene's last TA has finished. CMDTA_SHARED's
-    # ui32CtrlFlags (command word 0) bit 0 (READY) is set by the kernel only
-    # for the last kick (bLastInScene), so a command with it set means render.
+    # start the 3D once the scene's LAST TA has finished. The last-in-scene kick
+    # is the TA command's flags word (cmd+0x04) bit 1: sgxgen writes 0x62 for the
+    # bLastInScene / render kick and 0x71 for a first/stream kick (bit 1 set only
+    # on 0x62). Command word 0 is the command SIZE (0x2c0, STATE.md §1), not a
+    # flags word — testing its bit 0 is always 0, so do_3d never ran on hardware
+    # (EA1 2026-11-03: ta_finished reached, do_3d marker absent). run_ours injects
+    # the 3D phase, so it could not catch this.
     a.i(f"ld.a.d r1, r17, #{SC_CMD} [moe]")   # TA command base
     a.i("wdf")
-    a.i("ld.a.d r2, r1, #0 [moe]")                    # ui32CtrlFlags
+    a.i("ld.a.d r2, r1, #1 [moe]")                    # cmd+0x04 = TA flags (0x71/0x62)
     a.i("wdf")
-    a.i("test.and.ne p0, r2, #1")                     # READY (last in scene)?
+    a.i("test.and.ne p0, r2, #2")                     # bLastInScene (bit 1)? render
     a.i("(p0) ba do_3d")
     a.end()
 
