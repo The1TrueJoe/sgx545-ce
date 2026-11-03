@@ -1245,6 +1245,39 @@ static void ta_command(struct sgx_ctx *c, uint32_t vdm_base, int last)
 	t[0x6c / 4] = 0x88;
 }
 
+/* SGXGEN_DUMP: the structures of the kick, word by word (A/B with powervr_sgx's debugfs "render"). */
+static void dump_words(const char *name, uint32_t va, const uint32_t *w, uint32_t bytes)
+{
+	fprintf(stderr, "%s @ 0x%08x:", name, va);
+	for (uint32_t i = 0; i < bytes / 4; i++)
+		fprintf(stderr, "%s%08x", i % 8 ? " " : "\n  ", w[i]);
+	fputc('\n', stderr);
+}
+
+static void dump_kick(struct sgx_ctx *c, uint32_t woff)
+{
+	struct sgx_surface *s = c->fb;
+	uint32_t first = (c->pb.va - c->dev->heap_base[H_3DPARAMS]) >> 12;
+
+	if (!getenv("SGXGEN_DUMP"))
+		return;
+	fprintf(stderr, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n", c->pb.va,
+		c->pb_pages, c->pb.va & 0xfff00000, c->freelist.va, c->scratch.va);
+	dump_words("hwctx(va)", c->hwctx_va, NULL, 0);
+	dump_words("ccbctl", c->ccbctl.va, c->ccbctl.map, 8);
+	dump_words("pbdesc", c->pbdesc.va, c->pbdesc.map, 0x3c);
+	dump_words("pbblocks", c->pbblocks.va, c->pbblocks.map, 0x10);
+	dump_words("freelist[first..]", c->freelist.va + first * 4, c->freelist.map + first, 0x20);
+	dump_words("ta_cmd", c->ccb.va + woff, c->ccb.map + woff / 4, 0x2c0);
+	dump_words("render_details", s->rd.va, s->rd.map, 0x1ec & ~3u);
+	dump_words("rtdata", s->rtdata.va, s->rtdata.map, 2 * 0x38 + 0x18);
+	dump_words("rtword", s->rtword.va, s->rtword.map, 4);
+	dump_words("hwsync", s->hwsync.va, s->hwsync.map, 0x28);
+	dump_words("bgblock", s->bgblock.va, s->bgblock.map, 0x60);
+	fprintf(stderr, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
+		s->rgn[0].va, s->rgn[1].va, s->tailptr.va, s->ta40.va, s->ta50.va, s->ta88[0].va, s->ta88[1].va);
+}
+
 static void kick(struct sgx_ctx *c, int last)
 {
 	struct sgx_surface *s = c->fb;
@@ -1256,6 +1289,7 @@ static void kick(struct sgx_ctx *c, int last)
 	k.hDevMemContext = c->dev->pvr.memctx;
 	k.hCCBKernelMemInfo = c->ccb.b.mem;
 	k.ui32CCBOffset = c->ccb_woff + 0x58;
+	dump_kick(c, c->ccb_woff);
 	k.sCommand.ui32Data[1] = c->hwctx_va;
 	k.hKernelHWSyncListMemInfo = s->hwsync.b.mem;
 	k.ui32NumDstSyncObjects = 1;

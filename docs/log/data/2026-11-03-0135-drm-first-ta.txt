@@ -54,3 +54,41 @@ BIF_DIR_LIST_BASE0   0x0c84 0x0cd7e000
 BIF_DIR_LIST_BASE15  0x0c70 0x0cd7e000
 EDM_TASK_REG0        0x0b14 0x000126e8
 EDM_TASK_REG1        0x0b20 0x00010000
+=== slot 2 (shared kernel heaps, 0a67753) ===
+sgxgen: heap  4 0x37001000 +0x8000
+sgxgen: heap  5 0x3c001000 +0x8000
+sgxgen: heap  6 0x2e001000 +0x10000
+sgxgen: heap  7 0x30401000 +0x10000
+sgxgen: heap  0 0x3e001000 +0x40000
+sgxgen: heap  0 0x3e041000 +0x5000
+sgxgen: heap  0 0x3e046000 +0x40000
+sgxgen: render NOT done after 2018694 us
+frame 0: render FAILED, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+0/1 frames right
+rc=1
+frame 0: render FAILED, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+0/1 frames right
+[  493.742870] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[  493.754073] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[  493.757516] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  493.770387] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[  494.028542] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+[  501.677500] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 609, consumed 609); resetting
+[  502.184151] powervr_sgx 0000:01:02.0: [drm] microkernel did not power off
+[  502.788528] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x20000000)
+[  502.796833] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not restart: device lost
+[  526.538167] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[  526.545205] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[  526.549541] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  526.562901] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[  526.613140] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+[  528.621515] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 2, consumed 2); resetting
+[  529.127841] powervr_sgx 0000:01:02.0: [drm] microkernel did not power off
+[  529.732397] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x20000000)
+[  529.740713] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not restart: device lost
+[  565.614527] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[  565.621500] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[  565.625846] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  565.638865] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+BIF after run 1: BANK0 0x1f, INT_STAT 0x000d0004, FAULT 0x16045041, EVENT_STATUS2 0x480
+BIF after run 2 (fresh drm_mm, PB at 0x10000000): BANK0 0x1f, INT_STAT 0x000d0004, FAULT 0x13045041, DIR_LIST_BASE1 0x0436f000
