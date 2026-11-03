@@ -86,8 +86,8 @@ jobs:
           make -C linux-$LINUX_VERSION ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr
           musl-gcc -static -O2 -Wall -Wextra -Werror -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm \
             -o powervr_sgx_test drm/tests/powervr_sgx_test.c
-          # The header on its own, as userspace sees it.
-          echo '#include "powervr_sgx_drm.h"' | gcc -x c -fsyntax-only -Wall -Wpadded -Werror \
+          # The header on its own, as userspace sees it (layouts: docs/uapi/check.sh).
+          echo '#include "powervr_sgx_drm.h"' | gcc -x c -fsyntax-only -Wall -Werror \
             -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm -
 
       - name: Collect the RAM-boot set
