@@ -57,6 +57,12 @@ K2_LOG = os.environ.get("UK_K2LOG") == "1"
 # free-list load isn't taking (upstream); A!=0,B=0 dpm_load overwrites it; B!=0,C=0
 # TA1 closes the scene; C!=0 & 0 at terminate = wiped between (0x3b>0 = power-off).
 DPM_LOG = os.environ.get("UK_DPMLOG") == "1"
+# EVENT_TIMER diagnostic (ta3d-state): the 0xacc enable didn't stop the watchdog HWR
+# (14/30). Log at init hostctl[6] (ui32uKernelTimerClock, the period), the 0xacc value
+# we wrote (hostctl[6]|ENABLE), and the 0xacc read-back. hostctl[6]=0 => the driver's
+# SGXUpdateTimingInfo didn't populate it (write a real period instead); nonzero =>
+# the timer fires but a bare event pass doesn't move 0xb14 (needs a real handler).
+TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -129,6 +135,7 @@ HC_POWER = 1         # ui32PowerStatus
 HC_CLEANUP = 2       # ui32CleanupStatus
 HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_POWER
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
+HC_TIMERCLK = 6      # ui32uKernelTimerClock (host-set EVENT_TIMER period)
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
 EDM_INTERRUPT_ACTIVE_POWER = 2   # host control ui32InterruptFlags bit 1: the
@@ -191,6 +198,12 @@ CR_EVENT_STATUS2 = 0x118
 CR_EVENT_HOST_CLEAR2 = 0x114
 CR_TA_KICK = 0x200           # starts the VDM/TA (unnamed in the GPL header)
 CR_3D_KICK = 0x428           # starts the 3D (unnamed)
+CR_EVENT_TIMER = 0xACC       # EUR_CR_EVENT_TIMER: bit 24 = ENABLE, low bits = period
+                             # (host ui32uKernelTimerClock). A periodic timer task
+                             # keeps the EDM moving so the host watchdog does not
+                             # false-HWR a quiescent core between kicks.
+EVENT_TIMER_ENABLE = 0x01000000
+EVENT_TIMER = 0x20000000     # EUR_CR_EVENT_STATUS bit 29: the timer event
 CR_USE_INVAL = 0xA08         # USE cache invalidate
 CR_PDS_INV0 = 0xAD0          # PDS cache invalidate, TA side
 CR_PDS_INV1 = 0xAD4          # PDS cache invalidate, 3D side
@@ -482,12 +495,28 @@ def build(a):
     # snapshot (e.g. a TA finish for a kick not yet dispatched) must survive to
     # re-trigger the event, else that kick is lost (race_interleave.py, ta3d-state
     # 2026-11-03: the unconditional ack dropped a kick in ~5 interleavings).
-    a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000}")
+    # EVENT_TIMER (0x20000000, bit 29) is acked here too: init enables the periodic
+    # timer to keep the EDM alive (see init_set), and if its event bit is not cleared
+    # the event program re-triggers continuously (a storm). Acked and NOT dispatched,
+    # a timer-only event falls through to `ba kick`, which returns at once on an empty
+    # CCB — so each period runs one short task (0xb14 moves) and no more.
+    a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000 | EVENT_TIMER}")
     a.i("and r3, r2, r3")                          # ack only what the snapshot saw
     a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.dispatch(0x2000, "ta_finished")              # a TA finished
     a.dispatch(0x40000, "render_done")             # pixel back-end end of render
     a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)
+    if TMR_LOG:
+        # reached here with no TA/3D bit = a timer-only event (or a bare kick). If the
+        # snapshot had the timer bit, ++ the tick counter (0x38): proves the timer is
+        # firing and the EDM is running our event task each period.
+        a.i("limm r4, #0x20000000")
+        a.i("test.and.eq p0, r2, r4")              # timer bit not set? skip
+        a.i("(p0) ba tmrlog_notick")
+        a.i("ld.a.d r4, r17, #0x38 [moe]"); a.i("wdf")
+        a.i("imae r4, r4, #1, #1 [t2=u32]")        # r4 += 1
+        a.st_sa(SA_SELF, 0x38, 4)
+        a.label("tmrlog_notick")
     # no hardware-event bit set: a host kick arrived via the EUR_CR_EVENT_KICK
     # doorbell (sgxutils.c `SGXScheduleCCBCommand`), which leaves no
     # EUR_CR_EVENT_STATUS bit — so look at the kernel CCB for a waiting command.
@@ -527,10 +556,40 @@ def build(a):
     a.label("init_set")
     a.i("limm r0, #0")
     a.i(f"st.a.d r17, #{SC_TAFLIGHT}, r0 [moe]")  # TA-in-flight flag must start clear
-    # (The DDK's init also writes 0x40=0x1ff and an 0x0e80 pulse — perf-counter
-    # enable/reset. Tried on HW 2026-11-03: they REGRESS the TA to lockup_TA (do_3d
-    # never reached), so leave them out. ta3d-state expected them harmless; they are
-    # not. The 0xacc EVENT_TIMER stays off too.)
+    # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
+    # at init/RESUME (pc 0x01f9). A periodic timer task keeps the EDM running
+    # (EDMTaskReg0 0xb14 moves), so the host watchdog (SGXOSTimer: 30 ms of no
+    # progress => HWRecoveryResetSGX) does NOT false-recover the core during the
+    # quiescent TA1->terminate gap. Our purely event-driven EDM otherwise goes idle
+    # between the two kicks, 0xb14 freezes, the watchdog HWRs mid-scene, SGXReset
+    # wipes the TA DPM, and the terminate kicks into a wiped free-list -> lockup_ta
+    # (EA3 DPMLOG 2026-11-03: 25 pages live at TA1 finish, 0 at the terminate, with
+    # no power event on 3/5 lockups). srvinit's init script writes 0xacc=0 (line 474);
+    # our init runs after it (and after every HWR) and re-enables it. The timer stays
+    # on through the whole active window; k_power will gate it on POWEROFF/IDLE as a
+    # power follow-up. (The DDK init also writes 0x40=0x1ff + an 0x0e80 pulse — perf-
+    # counter enable/reset — but those REGRESS the TA on HW 2026-11-03, left out.)
+    a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")
+    a.i("wdf")
+    a.i(f"ld.a.d r0, r1, #{HC_TIMERCLK} [moe]")   # host ui32uKernelTimerClock (period)
+    a.i("wdf")
+    a.i(f"limm r1, #{EVENT_TIMER_ENABLE}")
+    a.i("or r0, r0, r1")
+    a.i(f"str #{CR_EVENT_TIMER // 4}, r0")        # EUR_CR_EVENT_TIMER = period | ENABLE
+    if TMR_LOG:
+        # H1: hostctl[6] (period) -> 0x35, 0xacc read-back -> 0x37. H2: a timer-tick
+        # counter (0x38, ++ per timer-only event) and 0xb14^0xb20 (the watchdog's own
+        # metric) at init -> 0x39 and at the terminate entry -> 0x3a (0xb14 raw -> 0x3b).
+        a.i("limm r3, #0"); a.st_sa(SA_SELF, 0x38, 3)   # tick counter = 0
+        a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]"); a.i("wdf")
+        a.i(f"ld.a.d r3, r2, #{HC_TIMERCLK} [moe]"); a.i("wdf")
+        a.st_sa(SA_SELF, 0x35, 3)                 # hostctl[6] (timer period)
+        a.i(f"ldr r3, #{CR_EVENT_TIMER // 4}"); a.i("wdf")
+        a.st_sa(SA_SELF, 0x37, 3)                 # 0xacc read-back (what the HW holds)
+        a.i(f"ldr r3, #{0xb14 // 4}"); a.i("wdf")
+        a.i(f"ldr r4, #{0xb20 // 4}"); a.i("wdf")
+        a.i("xor r3, r3, r4")
+        a.st_sa(SA_SELF, 0x39, 3)                 # 0xb14 ^ 0xb20 at init
     a.i(f"limm r0, #{OPENHC_UK_VERSION}")
     a.i(f"st.a.d r17, #{SC_VERSION}, r0 [moe]")   # advisory openHC version word
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
@@ -828,6 +887,19 @@ def build(a):
         a.i("test.isub16.ne p0, r6, r6, r7")         # r6 = (now - kick1) & 0xffff
         a.st_sa(SA_SELF, 0x3b, 6)
         a.label("dpmlog_entry_done")
+    if TMR_LOG:
+        # terminate kick only (r13==0): log 0xb14^0xb20 -> 0x3a and 0xb14 raw -> 0x3b.
+        # Compared with the init value (0x39): if the watchdog metric moved between
+        # init and here, the EDM ran tasks across the gap (timer works); if equal, a
+        # bare timer pass doesn't advance the task registers (needs a real handler).
+        a.i("test.and.ne p0, r13, r13")             # first kick (r13!=0)? skip
+        a.i("(p0) ba tmrlog_term_done")
+        a.i(f"ldr r5, #{0xb14 // 4}"); a.i("wdf")
+        a.i(f"ldr r6, #{0xb20 // 4}"); a.i("wdf")
+        a.st_sa(SA_SELF, 0x3b, 5)                   # 0xb14 raw at terminate
+        a.i("xor r5, r5, r6")
+        a.st_sa(SA_SELF, 0x3a, 5)                   # 0xb14 ^ 0xb20 at terminate
+        a.label("tmrlog_term_done")
     if CR_PWRLOG:
         # first kick only (render kick r13==0 skips): log the power-up CR values
         # before do_ta reprograms any of them, into the T3C dump words.
