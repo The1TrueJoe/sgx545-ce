@@ -38,6 +38,12 @@ DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+
 # SC_TAFLIGHT): 0x35 do_ta count, 0x37 last do_ta client RO, 0x38 last cmd+0x04,
 # 0x39 last cmd+0x58 (kernel ready flag), 0x3a/0x3b kernel WO/RO at kick_end.
 CCB_TRACE = os.environ.get("UK_CCBTRACE") == "1"
+# Power-up CR log (ta3d-state): after srvinit ours goes idle -> ACTIVE_POWER ->
+# the core powers off; frame 1's kick powers it back up via SGXReset's soft-reset-
+# only (power-up) branch, which does NOT restore CRs to srvinit's init values, only
+# to hardware defaults. Log the candidate CRs at do_ta's FIRST kick (core powered)
+# to the T3C dump words so a cold frame-1 lockup shows which CR came up wrong.
+CR_PWRLOG = os.environ.get("UK_PWRLOG") == "1"
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -790,6 +796,19 @@ def build(a):
     a.i("ld.a.d r13, r9, #1 [moe]")                 # cmd+0x04 (word 1)
     a.i("wdf")
     a.i("and r13, r13, #1")                         # r13 = bFirstKickOrResume
+    if CR_PWRLOG:
+        # first kick only (render kick r13==0 skips): log the power-up CR values
+        # before do_ta reprograms any of them, into the T3C dump words.
+        a.i("test.and.eq p0, r13, r13")
+        a.i("(p0) ba pwrlog_done")
+        for word, reg in ((0x35, 0x630), (0x37, 0x080), (0x38, 0x040),
+                          (0x39, 0xe80), (0x3a, 0xa74), (0x3b, 0x274)):
+            a.i(f"ldr r5, #{reg // 4}")
+            a.i("wdf")
+            a.st_sa(SA_SELF, word, 5)
+        a.i("idf")
+        a.i("wdf")
+        a.label("pwrlog_done")
     if DEBUG_SENTINEL:
         a.i("ld.a.d r6, r17, #0x35 [moe]"); a.i("wdf")
         a.i("imae r6, r6, #1, #1 [t2=u32]")
