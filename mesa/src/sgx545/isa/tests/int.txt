@@ -1,0 +1,79 @@
+# Integer, fixed-point and multi-unit forms (hw 07, 10-1a) and fdual (hw 1b),
+# in docs/ISA.md's text notation. Program-start format control (C10 on,
+# efo F16 off) until a setfc line changes it.
+
+# --- lowp colour ops (C10 format control on) --------------------------------
+sop2 r0, r1, r2 [c1=one c2=zero a1=zero a2=one]
+sop2 r3, r0.c10, r1.c10 [c1=one c2=zero a1=zero a2=one]
+sop2 r0, r1, r2 [c1=one c2=one cop=sub a1=zero a2=one aop=sub]
+sop2 r0, r1, r2 [c1=s2 c2=zero a1=s2a a2=zero]
+sop2 r0, r1, r2 [c1=1-s1a c2=k19 cop=max cs1c a1=k18 a2=1-s2a aop=min as1c aneg]
+sop2 r3.c10, pa4.c10, sa5 [rpt=2 c1=one c2=zero a1=zero a2=one]
+(p0) sop2 r0, r1, r2 [skipinv c1=one c2=zero a1=zero a2=one]
+sopwm r0, r1, r2 [c1=one c2=one cop=sub aop=sub]
+sopwm r0, r1, r2 [mask=7 c1=s1 c2=s2a]
+sopwm o0, r1, r2 [mask=8 c1=zero c2=one]
+sop3 r0, r1, r2, r3 [c1=one c2=s0 cop=sub a=one aop=sub]
+sop3 r0, r1, r2, r3 [c1=s2 c2=zero a=s0a arev]
+sop3l r0, r1, r2, r3 [c1=s0 c2=zero a1=zero a2=s2a]
+sop3l r0, r1, r2, r3 [c1=s0 c2=zero cop=sub a1=1-s1a a2=s2a cneg]
+lrp1 r0, r1, r2, r3 [l1=s1 l2=1-s2 cs=s0a c1=s1a c2=zero aop=sub]
+sop3x r0, r1, r2, r3 [c1=s1 c2=s2 p=one.s2 a1=s1a a2=zero]
+dot3 r0, r1, r2 [a1=zero a2=x3]
+dot4 r0, r1, r2 [a1=zero a2=x3]
+dot3 r0, r1, r2 [rpt=2 cs=x4 as=x2 a1=s1a a2=1-s2a s1c s2c s1ac f4 f6]
+dot3s r0, r1, r2, r3 [a1=s1a a2=s2a]
+dot4s r0, pa1, r2, r3 [cs=x8 a1=x3 a2=zero]
+fpma r0, r1, r2, r3 [c0=s0 c1=s1 c2=s2 a0=s0a]
+fpma r0, -r1, r2, r3 [c0=1-s1a c1=1-s1 c2=s2a a0=1-s1a a1c a2c sat]
+ima8 r0, r1, r2, r3 [rpt=3 c0=s1 c1=s1a c2=s2 a0=s1a]
+setfc #0, #0
+sop2 r64, r65, r100 [c1=one c2=zero a1=zero a2=one]
+sopwm r70, r71, r72 [c1=one c2=one cop=sub aop=sub]
+setfc #0, #1
+
+# --- efo (F16 format control off, then on) ----------------------------------
+efo pa2, pa8, pa9, c52 [d=a0 a=s0+s2/s1+s2]
+efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2]
+efo r0, -r1, -r2, c52 [d=a0 a=s0+s2/s1+s2]
+efo r0, r1, r2, r3 [d=a0 i=m0/m1 m=s1*s0/s2*s2 wi0 wi1]
+efo r0, r1, r2, r3 [d=a1 i=a0/m1 a=m0+i0/i1+m1 m=s1*i0/s2*i1 a0lneg a0rneg f3_10]
+efo r0, sa1, r2, i0 [nosched rpt=4 d=a0]
+efo r125, r124, r125, i3 [d=i1]
+(p1) efo r0, r1, r2, r3 [skipinv d=a0]
+setfc #1, #1
+efo r3, r0.f16.hi, r1, c52 [d=a0 a=s0+s2/s1+s2]
+efo r3, r0.f16.lo, r1.f16.hi, r2.f16.lo [d=a0 a=s0+s2/s1+s2]
+setfc #0, #1
+
+# --- 16 / 32-bit integer ----------------------------------------------------
+ima16.sgn idx1, r0, #4, #0 [f1=u8 f2=u8]
+ima16 r0, r1, r2, r3
+ima16 r0, r1, r2, -r3 [rpt=2 f1=s8 f2=o8 s1hi s2hi sat f2_15=3 dflag1]
+imae.sgn pa0, pa1, #16, sa9 [t2=u32]
+imae.sgn pa1, r0, g17, pa1 [t2=u32]
+imae r0, r1, r2, r3 [s0hi s1hi s2hi cout cin ci=i1 sat f2_15=5]
+imae r0, r1, r2, r3 [t2=s16]
+ima32 r0, r1, r2, r3
+ima32.sgn r0, sa1, r2, -r3 [hi=i1 cin=i2 negp]
+ima32 r0, o1, #5, r3 [rpt=8]
+
+# --- hw 16 / 17 / 1a forms with no corpus words ------------------------------
+adif r0, r1, r2
+adifsum r0, r1, r2, r3 [s0f13]
+op16s1 r0, r1, r2, r3 [f2_15=5 s8 x38 x1c x39=2 i=i1]
+bilin r0, r1, r2, r3 [fmt=s8 ileave src23 dst23 rnd]
+ssum16 r0, r1, r2, r3 [x1b x1c x1d nf16]
+ssum16 r0, sa4, sa5, r3 [fmt=o8]
+ssum16i r0, i1, r3 [nf16]
+firv r0, r1, r2, r3 [fmt=s8 a5=2 coef=5 shift=21 a8=3]
+firh i1, r1, r2, r3 [rpt=6 coef=1 shift=31 f2_27]
+op1adrc pa3, r1, r2 [drc=1]
+
+# --- dual issue -------------------------------------------------------------
+fdual.fssq.mov o0, pa2, pa0, pa1 [sd=i2 msrc=src0]
+fdual.mov.fmad o3, r0, c52, o0 [sd=i2 sb=i2 sc=src2]
+fdual.fmad.fadd r0, r1, r2, r3 [sd=i0 sb=src1 sc=i1]
+fdual.fminmax.frcp r0, r1, -r2, -r3 [rpt=2 fmt sd=i1 sb=i0 sc=i0]
+fdual.ima32.mov r0, r1, r2, r3 [skipinv nosched syncs sd=i0s0 msrc=i1]
+(!p0) fdual.fmsa.fmul pa0, pa1.f16.lo, pa2, pa3 [fmt sd=i0 sb=i0 sc=i2]
