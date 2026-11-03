@@ -668,20 +668,35 @@ def build(a):
     # do_ta: program and start the TA for the context in r16 (subroutine)
     # ======================================================================
     a.label("do_ta")
-    # soft-reset the TA (EUR_CR_SOFT_RESET 0x080 bit 2) at the start, before it
-    # is programmed — the DDK does this early (ddk-ref lines 22-23), not before
-    # the kick, so the TA begins this kick from a clean state.
-    a.i("limm r5, #4")
-    a.i(f"str #{0x80 // 4}, r5")
-    a.i("limm r5, #0")
-    a.i(f"str #{0x80 // 4}, r5")
-    # client CCB and its control, then the TA command base
+    # client CCB and its control, then the TA command base. Load it first: the
+    # first-kick flag that gates the per-scene setup lives in the command.
     a.i("ld.a.d r1, r16, #%d [moe]" % CTX_CCB)      # client CCB base
     a.i("ld.a.d r2, r16, #%d [moe]" % CTX_CCBCTL)   # client CCB control
     a.i("wdf")
     a.i("ld.a.d r3, r2, #1 [moe]")                  # client read offset (bytes)
     a.i("wdf")
     a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = command base (bytes)
+    # first-kick flag: TA command +0x04 bit 0 is bFirstKickOrResume (0x71), and
+    # is clear on the render / bLastInScene kick (0x62). A scene's first kick does
+    # the full per-scene setup (TA soft reset, PB descriptor, DPM free-list + state
+    # load, OTPM, RT region registers, client page directory); re-running any of
+    # that on a later kick re-initialises the parameter buffer / free list
+    # mid-scene and HANGS the TA — EA1 HW 2026-11-03 (kick 2: lockup_ta, do_3d
+    # unreached). The DDK does only a minimal kick there (ddk-ref "TA kick 2":
+    # TE/MTE, invalidate, RD, flags, kick). r13 = 1 on the first kick, 0 on a
+    # render kick; each setup block below is gated on it.
+    a.i("ld.a.d r13, r9, #1 [moe]")                 # cmd+0x04 (word 1)
+    a.i("wdf")
+    a.i("and r13, r13, #1")                         # r13 = bFirstKickOrResume
+    # soft-reset the TA (EUR_CR_SOFT_RESET 0x080 bit 2) on the first kick only, so
+    # it begins the scene clean (the DDK does this early, ddk-ref line 22).
+    a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
+    a.i("(p0) ba skip_ta_reset")
+    a.i("limm r5, #4")
+    a.i(f"str #{0x80 // 4}, r5")
+    a.i("limm r5, #0")
+    a.i(f"str #{0x80 // 4}, r5")
+    a.label("skip_ta_reset")
     # remember context, command, and the pointers the 3D phase needs
     a.i("ld.a.d r10, r9, #%d [moe]" % CMDTA_RD)     # render details
     a.i("ld.a.d r11, r9, #%d [moe]" % CMDTA_PB)     # PB descriptor
@@ -711,15 +726,24 @@ def build(a):
     # TA reads the control stream through the wrong page tables and faults on the
     # kernel-data/command memory — EA1 HW 2026-11-02: EUR_CR_BIF_FAULT =
     # 0x3200F00F (the TA command base). Then invalidate the PDS/USE caches.
+    # client page directory (0xc84): first kick only — the render kick reuses the
+    # scene's PD, and the DDK does not reload it (ddk-ref "TA kick 2").
+    a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
+    a.i("(p0) ba skip_bif_pd")
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
     a.i("wdf")
     a.i(f"str #{0xc84 // 4}, r4")                   # BIF_DIR_LIST_BASE0 = client PD
+    a.label("skip_bif_pd")
     a.i("limm r5, #0xf")                            # BIF_BANK0: EDM=list 15, TA=list 0
     a.i(f"str #{0xc78 // 4}, r5")
+    # directory-cache invalidate (INVALDC): first kick only.
+    a.i("test.and.eq p0, r13, r13")                 # render kick? skip INVALDC
+    a.i("(p0) ba skip_bif_invaldc")
     a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
     a.i(f"str #{0xc00 // 4}, r5")
     a.i("limm r5, #0")
     a.i(f"str #{0xc00 // 4}, r5")
+    a.label("skip_bif_invaldc")
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
     # clear 0xa74 before re-writing its TA-flags field below. The DDK clears it
     # (ddk-ref line 61) then writes the command's flags into b27-31; srvinit's
@@ -727,10 +751,15 @@ def build(a):
     # only the init bits (b27-31 = 0) and the kicked TA does not run.
     a.i("limm r5, #0")
     a.i(f"str #{0xa74 // 4}, r5")
-    # parameter-buffer registers, then load the DPM state/control and wait for
-    # the free list to be ready before the TA kicks (docs/UKERNEL.md §6)
+    # parameter-buffer registers + TA free-list load: first kick only. These set
+    # up the scene's parameter buffer; re-running them on the render kick reloads
+    # the free list the first kick already allocated pages from and hangs the TA
+    # (the DDK skips them, ddk-ref "TA kick 2").
+    a.i("test.and.eq p0, r13, r13")             # render kick? skip PB + free list
+    a.i("(p0) ba skip_pb_fl")
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
+    a.label("skip_pb_fl")
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
     # 0xa74 = the TA command's flags word (cmd+0x14), as the DDK writes it after
@@ -742,16 +771,25 @@ def build(a):
     a.i("ld.a.d r5, r9, #5 [moe]")
     a.i("wdf")
     a.i(f"str #{0xa74 // 4}, r5")
+    # RT region-header / tail-pointer base registers (0x62c/0x634/0x234): first
+    # kick only — they describe the scene's parameter-buffer regions, set once and
+    # reused (the DDK skips them on the render kick).
+    a.i("test.and.eq p0, r13, r13")             # render kick? skip RT region regs
+    a.i("(p0) ba skip_rt")
     a.program(12, TA_RT)
+    a.label("skip_rt")
     a.program(10, TA_RD)
-    # second cache invalidate, then the DPM state/control load — AFTER the
-    # TE/command registers, as the DDK does (ddk-ref-frame-registers.txt lines
-    # 106-131). Done earlier (before the TE registers), dpm_load's 0x240 done
-    # event never fired, so do_ta stalled there and never reached CR_TA_KICK —
-    # EA1 HW sentinels 2026-11-02: before, do_ta stalled in dpm_load; after this
-    # reorder it runs through the kick (the TA start still needs more, separately).
+    # second cache invalidate (both kicks), then the DPM state/control load. The
+    # load is first kick only: it loads the scene's DPM state, and re-running it
+    # mid-scene disturbs the in-flight parameter state (the DDK skips it on the
+    # render kick). Done before the TE registers, dpm_load's 0x240 done event
+    # never fired and do_ta stalled — EA1 HW sentinels 2026-11-02 — so it stays
+    # after them (ddk-ref-frame-registers.txt lines 106-131).
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
+    a.i("test.and.eq p0, r13, r13")             # render kick? skip DPM state load
+    a.i("(p0) ba skip_dpm_load")
     a.dpm_load()
+    a.label("skip_dpm_load")
     # TA flags 2 (0x218): the command word, always with bit 24, plus bit 23
     # when the RT entry's word 13 bit 23 is set (docs/UKERNEL.md §7)
     a.i(f"ldr r4, #{0x218 // 4}")

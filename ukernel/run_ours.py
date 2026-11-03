@@ -40,8 +40,11 @@ PLUMBING = {0x134, 0x114, 0x140, 0x694, 0x698, 0x24c, 0x224, 0xa08, 0xc00, 0xc78
             0x12c, 0x118, 0x138, 0x804, 0x200, 0x428, 0xad0, 0xad4, 0xad8, 0xae0,
             0x080, 0x664, 0x684, 0x680, 0x0a74, 0x630, 0x604, 0x64c, 0x660}
 
-# ours phase -> the DDK Runner phase that does the same work
-PHASE_MAP = {"TA1": "TA kick 1", "3D": "TA finished (2)"}
+# ours phase -> the DDK Runner phase that does the same work. TA2 is the
+# second (render / bLastInScene) kick: the DDK does a MINIMAL kick there (it
+# skips the per-scene setup kick 1 already did), so comparing it catches a
+# microkernel that re-runs the first-kick setup on every kick.
+PHASE_MAP = {"TA1": "TA kick 1", "TA2": "TA kick 2", "3D": "TA finished (2)"}
 
 # HW render context words that also address a transfer context's CCB
 CTX_CCBCTL = 0x10 // 4
