@@ -278,7 +278,11 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
     * level 0 (TEX.md "Mipmaps"), so it reads as a texture of that size */
    unsigned base = prsc->target != PIPE_TEXTURE_CUBE && res->texture ? view->u.tex.first_level : 0;
    unsigned w = u_minify(prsc->width0, base), h = u_minify(prsc->height0, base);
-   bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE && view->u.tex.last_level > base;
+   /* a linear (NPOT) texture's levels aren't a chain the sampler knows (the
+    * DDK's GLES2 has no NPOT mipmaps), and sampling one with mipmapping
+    * locks the 3D (piglit fbo-generatemipmap-formats NPOT): its base level */
+   bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE && view->u.tex.last_level > base &&
+               (prsc->target == PIPE_TEXTURE_CUBE || twiddled(w, h));
 
    /* T0: wrap T b3-5, wrap S b6-8, mip linear b9, min linear b10, mag linear
     * b12, b17-20 0xf (0xd with mipmaps), b21-26 0x3f, b30 for L8/A8/LA88 */

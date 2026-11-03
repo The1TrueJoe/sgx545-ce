@@ -950,11 +950,14 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    if (compiled) {
       struct sgx545_shader *vs = ctx->vs;
 
-      /* gl_PointCoord: the vertex shader's varyings move up to leave set 0 free */
-      if (ctx->fs->kind == SGX545_SHADER_COMPILED && ctx->fs->reads_pointcoord) {
-         if (!ctx->vs->prog.point_size || !(vs = sgx545_sprite_vs(ctx, ctx->vs)))
+      /* the fragment shader's sets (gl_PointCoord: the vertex shader's
+       * varyings move up to leave set 0 free) */
+      if (ctx->fs->kind == SGX545_SHADER_COMPILED) {
+         if (ctx->fs->reads_pointcoord && !ctx->vs->prog.point_size)
             return;
-         st.sprite = info->mode == MESA_PRIM_POINTS;
+         if (!(vs = sgx545_vs_for(ctx, ctx->vs, ctx->fs)))
+            return;
+         st.sprite = ctx->fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       }
       d.vs = &vs->prog;
       if (vs->mem_dwords)
