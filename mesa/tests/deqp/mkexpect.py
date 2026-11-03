@@ -71,8 +71,11 @@ def main():
 
     groups = collections.OrderedDict((why, []) for _, why in reasons)
     groups["not looked at yet"] = []
+    missing = "no test program: piglit's GLES, EGL and window-system tests aren't built (build-piglit.sh)"
     for t in fails:
-        why = next((w for rx, w in reasons if rx.search(t)), "not looked at yet")
+        why = missing if status[t] == "Missing" else next((w for rx, w in reasons if rx.search(t)),
+                                                           "not looked at yet")
+        groups.setdefault(why, [])
         groups[why].append(t)
     body = ""
     for why, tests in groups.items():
