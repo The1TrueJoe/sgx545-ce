@@ -33,6 +33,11 @@ writes against the DDK's.
 import os
 
 DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+0xE8
+# CCB-trace diagnostic (ta3d-state): split lost-wakeup vs TA2-hangs-valid. Words
+# that reach the T3C dump (0x00-0x3b) and don't collide with live state (0x36 =
+# SC_TAFLIGHT): 0x35 do_ta count, 0x37 last do_ta client RO, 0x38 last cmd+0x04,
+# 0x39 last cmd+0x58 (kernel ready flag), 0x3a/0x3b kernel WO/RO at kick_end.
+CCB_TRACE = os.environ.get("UK_CCBTRACE") == "1"
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -706,6 +711,10 @@ def build(a):
     a.i("ld.a.d r2, r1, #0 [moe]")                 # write offset
     a.i("ld.a.d r3, r1, #1 [moe]")                 # read offset
     a.i("wdf")
+    if CCB_TRACE:
+        a.st_sa(SA_SELF, 0x3a, 2)                  # kernel CCB write offset
+        a.st_sa(SA_SELF, 0x3b, 3)                  # kernel CCB read offset
+        a.i("idf"); a.i("wdf")
     a.i("test.xor.eq p0, r2, r3")                  # queue empty?
     a.i("(!p0) ba kick_idle_done")
     a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")   # a render in flight?
@@ -742,6 +751,16 @@ def build(a):
     a.i("ld.a.d r3, r2, #1 [moe]")                  # client read offset (bytes)
     a.i("wdf")
     a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = command base (bytes)
+    if CCB_TRACE:
+        # count++ (0x35), and record THIS do_ta's client RO (0x37), cmd+0x04
+        # flags (0x38), and the kernel ready flag cmd+0x58 (0x39), pre-advance.
+        a.i("ld.a.d r6, r17, #0x35 [moe]"); a.i("wdf")
+        a.i("imae r6, r6, #1, #1 [t2=u32]"); a.st_sa(SA_SELF, 0x35, 6)
+        a.st_sa(SA_SELF, 0x37, 3)                       # client read offset (bytes)
+        a.i("ld.a.d r5, r9, #1 [moe]"); a.i("wdf"); a.st_sa(SA_SELF, 0x38, 5)   # cmd+0x04
+        a.i("ld.a.d r5, r9, #%d [moe]" % (0x58 // 4)); a.i("wdf")
+        a.st_sa(SA_SELF, 0x39, 5)                       # cmd+0x58 (kernel ready flag)
+        a.i("idf"); a.i("wdf")
     # advance the client CCB read offset past this command so the NEXT kick reads
     # its own command, not this one again. The read offset (client CCB control
     # word 1, bytes) is the microkernel's to advance — the client advances the
