@@ -98,6 +98,13 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
       /* ISA.md: 16 attributes, 10 texture coordinate sets */
       caps->max_inputs = s == MESA_SHADER_VERTEX ? 16 : 10;
       caps->max_outputs = s == MESA_SHADER_VERTEX ? 11 : 1;
+      /* Constants live in SA registers, sa9 (sa10 in a vertex program) to
+       * sa127.  How many uniforms that holds depends on the program: only
+       * the constants it uses go there, and mediump ones two to a register
+       * (dEQP's nested struct arrays of mat4 fit in a fragment program, and
+       * failed at a limit of 24 vec4).  So the limit stays at GLES2's vertex
+       * minimum, and a program that doesn't fit isn't drawn
+       * (sgx545_program.c) until constants can live in memory */
       caps->max_const_buffer0_size = 128 * 4 * sizeof(float);
       caps->max_const_buffers = 1;
       caps->max_temps = 64;

@@ -511,6 +511,24 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       return false;
    }
 
+   {
+      /* An instruction names an SA register in 7 bits: a program's constants
+       * (from sa9, sa10 in a vertex program) and a fragment program's
+       * texture state (after them) end at sa127.  Past it the numbers wrap,
+       * onto registers the program never loaded, and the 3D locks up (piglit
+       * glsl-uniform-interstage-limits).  Constants in memory (the DDK's list
+       * B) would lift this; until then such a program isn't drawn. */
+      unsigned end = (vertex ? 10 : 9) + MAX2(so->const_dwords, out.sa_slots) + (vertex ? 0 : 4 * info.n_deps);
+
+      if (end > 128) {
+         fprintf(stderr, "sgx545: %s shader needs SA registers up to sa%u (sa127 is the last): not drawn\n",
+                 vertex ? "vertex" : "fragment", end - 1);
+         sgx_shader_free(&out);
+         ralloc_free(nir);
+         return false;
+      }
+   }
+
    memset(&so->prog, 0, sizeof(so->prog));
    simple_mtx_lock(&screen->lock);
    if (vertex) {
