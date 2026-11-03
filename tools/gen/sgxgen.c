@@ -1245,35 +1245,6 @@ static void ta_command(struct sgx_ctx *c, uint32_t vdm_base, int last)
 	t[0x6c / 4] = 0x88;
 }
 
-static void kick(struct sgx_ctx *c, int last)
-{
-	struct sgx_surface *s = c->fb;
-	SGX_CCB_KICK k;
-	IMG_HANDLE dst[1] = { s->color.b.sync };
-	int e;
-
-	memset(&k, 0, sizeof k);
-	k.hDevMemContext = c->dev->pvr.memctx;
-	k.hCCBKernelMemInfo = c->ccb.b.mem;
-	k.ui32CCBOffset = c->ccb_woff + 0x58;
-	dump_kick(c, c->ccb_woff);
-	k.sCommand.ui32Data[1] = c->hwctx_va;
-	k.hKernelHWSyncListMemInfo = s->hwsync.b.mem;
-	k.ui32NumDstSyncObjects = 1;
-	k.pahDstSyncHandles = dst;
-	if (last) {
-		k.bLastInScene = IMG_TRUE;
-		k.h3DSyncInfo = c->sync3d.b.sync;
-	} else {
-		k.bFirstKickOrResume = IMG_TRUE;
-	}
-	c->ccb_woff += 0x2c0;
-	c->ccbctl.map[0] = c->ccb_woff;		/* CCB write offset */
-	__sync_synchronize();
-	if ((e = pvr_kick(&c->dev->pvr, &k)))
-		die("SGX_DOKICK failed: %d", e);
-}
-
 /* SGXGEN_DUMP: the structures of the kick, word by word (A/B with powervr_sgx's debugfs "render"). */
 static void dump_words(const char *name, uint32_t va, const uint32_t *w, uint32_t bytes)
 {
@@ -1305,6 +1276,35 @@ static void dump_kick(struct sgx_ctx *c, uint32_t woff)
 	dump_words("bgblock", s->bgblock.va, s->bgblock.map, 0x60);
 	fprintf(stderr, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
 		s->rgn[0].va, s->rgn[1].va, s->tailptr.va, s->ta40.va, s->ta50.va, s->ta88[0].va, s->ta88[1].va);
+}
+
+static void kick(struct sgx_ctx *c, int last)
+{
+	struct sgx_surface *s = c->fb;
+	SGX_CCB_KICK k;
+	IMG_HANDLE dst[1] = { s->color.b.sync };
+	int e;
+
+	memset(&k, 0, sizeof k);
+	k.hDevMemContext = c->dev->pvr.memctx;
+	k.hCCBKernelMemInfo = c->ccb.b.mem;
+	k.ui32CCBOffset = c->ccb_woff + 0x58;
+	dump_kick(c, c->ccb_woff);
+	k.sCommand.ui32Data[1] = c->hwctx_va;
+	k.hKernelHWSyncListMemInfo = s->hwsync.b.mem;
+	k.ui32NumDstSyncObjects = 1;
+	k.pahDstSyncHandles = dst;
+	if (last) {
+		k.bLastInScene = IMG_TRUE;
+		k.h3DSyncInfo = c->sync3d.b.sync;
+	} else {
+		k.bFirstKickOrResume = IMG_TRUE;
+	}
+	c->ccb_woff += 0x2c0;
+	c->ccbctl.map[0] = c->ccb_woff;		/* CCB write offset */
+	__sync_synchronize();
+	if ((e = pvr_kick(&c->dev->pvr, &k)))
+		die("SGX_DOKICK failed: %d", e);
 }
 
 static int wait_render(struct sgx_ctx *c, unsigned ms)
