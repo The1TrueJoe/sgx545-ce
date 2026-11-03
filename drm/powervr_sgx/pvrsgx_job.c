@@ -354,6 +354,9 @@ struct job_args {
 	u32 nbos;
 	struct pvrsgx_signal *signals;
 	u32 nsignals;
+	/* Earlier jobs of this submit whose signals this job waits on. */
+	u32 *intra;
+	u32 nintra;
 	bool inited;
 };
 
@@ -369,6 +372,7 @@ static void job_args_fini(struct job_args *ja)
 		dma_fence_chain_free(ja->signals[i].chain);
 	}
 	kvfree(ja->signals);
+	kvfree(ja->intra);
 	if (ja->job) {
 		if (ja->inited)
 			drm_sched_job_cleanup(&ja->job->base);
@@ -377,8 +381,21 @@ static void job_args_fini(struct job_args *ja)
 	}
 }
 
+/* The latest earlier job of this submit that signals handle at point, or -1. */
+static int intra_signaller(const struct job_args *prev, u32 nprev, u32 handle, u64 point)
+{
+	for (int k = nprev - 1; k >= 0; k--) {
+		for (u32 s = 0; s < prev[k].nsignals; s++) {
+			if (prev[k].signals[s].handle == handle && prev[k].signals[s].point == point)
+				return k;
+		}
+	}
+	return -1;
+}
+
 static int job_sync_ops(struct drm_file *file, struct job_args *ja,
-			const struct drm_powervr_sgx_obj_array *arr)
+			const struct drm_powervr_sgx_obj_array *arr,
+			const struct job_args *prev, u32 nprev)
 {
 	struct drm_powervr_sgx_sync_op *ops;
 	int err = 0;
@@ -388,7 +405,8 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 		return PTR_ERR_OR_ZERO(ops);
 
 	ja->signals = kvcalloc(arr->count, sizeof(*ja->signals), GFP_KERNEL);
-	if (!ja->signals) {
+	ja->intra = kvcalloc(arr->count, sizeof(*ja->intra), GFP_KERNEL);
+	if (!ja->signals || !ja->intra) {
 		err = -ENOMEM;
 		goto out;
 	}
@@ -405,6 +423,13 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 		}
 
 		if (!(ops[i].flags & DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL)) {
+			int k = intra_signaller(prev, nprev, ops[i].handle, ops[i].value);
+
+			/* Its fence exists once that job is armed: added then. */
+			if (k >= 0) {
+				ja->intra[ja->nintra++] = k;
+				continue;
+			}
 			err = drm_syncobj_find_fence(file, ops[i].handle, ops[i].value, 0, &fence);
 			if (!err)
 				err = drm_sched_job_add_dependency(&ja->job->base, fence);
@@ -416,6 +441,7 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 			err = -ENOENT;
 			break;
 		}
+		ja->signals[ja->nsignals].handle = ops[i].handle;
 		ja->signals[ja->nsignals].point = ops[i].value;
 		if (timeline) {
 			ja->signals[ja->nsignals].chain = dma_fence_chain_alloc();
@@ -464,7 +490,7 @@ out:
 }
 
 static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *in,
-		      struct job_args *ja)
+		      struct job_args *ja, const struct job_args *prev, u32 nprev)
 {
 	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
 	struct pvrsgx_device *sdev = sfile->sdev;
@@ -516,7 +542,7 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 		return err;
 	ja->inited = true;
 
-	err = job_sync_ops(file, ja, &in->sync_ops);
+	err = job_sync_ops(file, ja, &in->sync_ops, prev, nprev);
 	if (err)
 		return err;
 	err = job_bo_refs(file, ja, &in->bo_refs);
@@ -548,7 +574,7 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	}
 
 	for (u32 i = 0; i < n; i++) {
-		err = job_create(file, &in[i], &ja[i]);
+		err = job_create(file, &in[i], &ja[i], ja, i);
 		if (err) {
 			args->failed_index = i;
 			goto out;
@@ -582,13 +608,25 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 		}
 	}
 
-	/* Nothing can fail from here: arm, publish the fences, push. */
+	/* Arm in order, each after the earlier jobs it waits on. */
+	for (u32 i = 0; i < n; i++) {
+		for (u32 d = 0; d < ja[i].nintra; d++) {
+			struct dma_fence *f = &ja[ja[i].intra[d]].job->base.s_fence->finished;
+
+			err = drm_sched_job_add_dependency(&ja[i].job->base, dma_fence_get(f));
+			if (err) {
+				args->failed_index = i;
+				goto out_exec;
+			}
+		}
+		drm_sched_job_arm(&ja[i].job->base);
+	}
+
+	/* Nothing can fail from here: publish the fences, push. */
 	for (u32 i = 0; i < n; i++) {
 		struct pvrsgx_job *job = ja[i].job;
-		struct dma_fence *done;
+		struct dma_fence *done = &job->base.s_fence->finished;
 
-		drm_sched_job_arm(&job->base);
-		done = &job->base.s_fence->finished;
 		dma_resv_add_fence(drm_gpuvm_resv(&job->ctx->vm->gpuvm), done,
 				   DMA_RESV_USAGE_BOOKKEEP);
 		for (u32 b = 0; b < ja[i].nbos; b++)
