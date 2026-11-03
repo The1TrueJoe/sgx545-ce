@@ -136,9 +136,11 @@ def run_ours(code, man, events, ctxs):
         # set it to this kick's command-base offset, the state the DDK keeps.
         client_ccbctl = mem.rd(k.data[1] + 4 * 4)      # HW render context word 4
         mem.wr(client_ccbctl + 4, k.ccb_off - 0x58)
-        if k.last:                          # SGXDoKickKM sets CMDTA_SHARED READY for bLastInScene
-            cmd = k.ccb_va + k.ccb_off - 0x58
-            mem.wr(cmd, mem.rd(cmd) | 1)
+        # No synthetic READY bit here: the kernel does NOT set one (SGXKickTA only
+        # fills CMDTA_SHARED sync/status and flushes the CPU cache for bLastInScene,
+        # sgxutils.c). ta_finished must decide the 3D from the command's own flags
+        # (cmd+0x04 bit 1 = bLastInScene, 0x62 vs 0x71) in the loaded trace data —
+        # so a wrong 3D trigger makes the last kick skip do_3d and this diff fail.
         event(u, mem, regs, man, EV_HOST_KICK)    # -> kick -> do_ta
         out += [("TA%d" % k.n, a, v) for a, v in reg_writes(u)]
         # this TA's finish: the status walk, and on the last kick the 3D start
