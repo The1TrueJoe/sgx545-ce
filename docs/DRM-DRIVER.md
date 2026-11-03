@@ -21,7 +21,7 @@ gma500 auxiliary device first.
 | MMU: firmware directory, per-VM directories, idle directory | written |
 | GEM shmem, `GET_BO_MMAP_OFFSET`, PRIME import | written |
 | VM contexts on `drm_gpuvm`, `VM_MAP`/`VM_UNMAP` | written |
-| `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL and render jobs |
+| `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL, render and transfer jobs, mixed in one submit with in-submit waits (log `2026-11-03-0530-drm-mixed-submit-3d-dump`) |
 | render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **frames render** at 256x256 and 720x480, one-kick and two-kick scenes, any number of processes, and up to three render contexts in one VM sharing its PB (log `2026-11-03-0355-drm-shared-pb-restart`); the TA-flag 0x10 change was not shown to fix anything |
 | `DEV_QUERY` | written |
 | transfer jobs | written; **blits pixel-exact** (copy, upload and readback, box-filtered mip; 360 in a row, interleaved with another process's renders; log `2026-11-03-0405-drm-transfers`) |
@@ -177,6 +177,21 @@ VM so far before it lets go of the pages.
   uAPI suite passed (log `2026-11-03-0355-drm-shared-pb-restart`). The restarts that failed
   earlier (log `2026-11-03-0300-drm-cleanup`) followed hangs from the misplaced PB; which
   of the quiesce and the PB fix made the difference was not separated.
+- Those restarts only ever served new processes. A context, its VM's PB and its RT
+  datasets that live through a reset hung on their first render after it, and the next
+  reset lost the device (log `2026-11-03-0530-drm-mixed-submit-3d-dump`). Each now
+  remembers the reset count it was set up for, and its first job after a reset sets it
+  up again:
+  - the HW render context gets back bit 0 of word 0 (the microkernel clears it when it
+    first loads the context) and no render details in flight (+0x20, +0x24);
+  - the PB gets its free list and descriptor as at creation;
+  - the RT dataset is set up as new, with its frame count back to 0;
+  - the HW transfer context gets bit 0 of word 0 back.
+
+  With that, `powervr_sgx_hang` passes 5 forced hangs out of 5: the guilty context is
+  refused, and the contexts that were idle, a new one and a transfer context all render
+  right, as does a mixed submit (log `2026-11-03-0550-drm-reset-rearm`). Which of the
+  four is needed was not separated.
 - Teardown can send the microkernel's cleanup commands first (`cleanup`, UKERNEL.md 3).
   Off by default: on the DDK microkernel the RT and PB cleanups never complete, and the
   PB one stalls the kernel CCB.
