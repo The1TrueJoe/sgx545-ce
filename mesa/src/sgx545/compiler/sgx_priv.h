@@ -145,8 +145,16 @@ struct sgx_ctx {
    uint8_t const_shift[1024];    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
    uint8_t const_lowp[1024];     /* the first of a lowp vec4 uniform (C10 candidate) */
    uint8_t const_prec[1024];     /* GLSL precision of the uniform behind constant k (0 unknown) */
-   unsigned n_sa;
+   uint8_t const_pin[1024];      /* dynamically indexed (sa[idx1 + n]): stays in SA */
+   unsigned n_sa;                /* slots (constants, then literals) */
    unsigned sa_base;
+   /* where the slots live (place_constants): SA slot from sa_base, -1 memory
+    * only; with mem_dwords every slot is also block word slot + 1 */
+   int slot_sa[1024 + 32];
+   unsigned n_sa_phys;           /* SA slots used: kept slots, then the bases */
+   unsigned mem_dwords;
+   unsigned n_mem_bases;
+   uint8_t mem_base_sa[8];       /* SA slot holding block address + 512 * j */
    uint32_t lit_bits[32];        /* driver_consts: literal slots' values */
    int lit_slot[32];
    unsigned n_lits;
@@ -189,6 +197,19 @@ static inline struct sgx_vreg *
 sgx_vreg(struct sgx_ctx *c, unsigned i)
 {
    return util_dynarray_element(&c->vregs, struct sgx_vreg, i);
+}
+
+/* the SA register of uniform constant k / literal i (kept in SA) */
+static inline unsigned
+sgx_const_sa(const struct sgx_ctx *c, unsigned k)
+{
+   return c->sa_base + c->slot_sa[c->const_slot[k]];
+}
+
+static inline unsigned
+sgx_lit_sa(const struct sgx_ctx *c, unsigned i)
+{
+   return c->sa_base + c->slot_sa[c->lit_slot[i]];
 }
 
 #endif
