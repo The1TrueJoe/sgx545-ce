@@ -82,17 +82,20 @@ in the general ring, `sgxws_const_mem`), the spilled programs are right:
 | one uniform at a time through VS 118 vec4, and combinations | right |
 | VS `u[i]` loop over 118, FS `u[i]` loop over 126 (small rect) | right |
 
-The test still recovers, and that is run time, not a wrong program. The
-driver doesn't set `indirect_const_addr`, so GLSL lowers `u[i]` to a select
-ladder over the whole array, which leaves every element as a static use. The
-vertex program is then 1,321 instructions with 360 `ld.a.d`+`wdf` per
-iteration. At 126 iterations per pixel, a 25x25 px rect sometimes takes one
-recovery (TA lockup, no BIF fault), and a 62x62 rect takes two and draws
-nothing. The test covers the whole 250x250 FBO 256 times. The fix is an indexed
-load: an indirectly indexed array that doesn't fit SA goes to memory, and each
-access becomes one `ld.a.d` with a register offset. That needs the compiler,
-a hardware check of register offsets (ISA.md lists them untested), and then
-`indirect_const_addr` in the driver.
+Without `indirect_const_addr`, the test still recovered, and that was run time,
+not a wrong program. GLSL lowers `u[i]` to a select over the whole array, which
+leaves every element as a static use. The vertex program is then 1,321
+instructions with 360 `ld.a.d`+`wdf` per iteration. At 126 iterations per
+pixel, a 25x25 px rect sometimes takes one recovery (TA lockup, no BIF fault),
+and a 62x62 rect takes two and draws nothing.
+
+The fix is indexed loads, and it passes on the EA1 with no recoveries. An
+indexed array that doesn't fit SA is read from the block: the compiler clamps
+the index, adds it to the base with `imae` and loads each component with an
+immediate offset (36ad6fc). The driver sets `indirect_const_addr` (1836bfc).
+The test passes in all three runs (default, `--subdivide 5`, `--subdivide 5
+--statechanges`, 25 cases each), and a full-screen 126-iteration loop takes
+under a second.
 
 ## The DDK's desktop GL, as an oracle
 

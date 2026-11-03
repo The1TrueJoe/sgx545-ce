@@ -30,5 +30,16 @@ doesn't claim `indirect_const_addr`. That costs 360 `ld.a.d` per loop iteration 
 Each of these recoveries was a TA lockup with no BIF fault. One recovery's reset logged
 `SGXInitialise failed (24)`, and the next reset brought the GPU back.
 
-Next: indexed loads (register offset) for indirectly indexed arrays in memory, then
-`indirect_const_addr`.
+## Fixed: indexed loads
+
+Compiler 36ad6fc reads an indexed array that doesn't fit SA from the block. It clamps the
+index, adds it to the base register with `imae`, and loads each component with `ld.a.d` and
+an immediate offset, so it needs no register-offset form. Driver 1836bfc turns on
+`indirect_const_addr`, so `u[i]` reaches the compiler as an indexed load instead of a select.
+
+On the EA1 (~03:45 UTC), with 0 recoveries throughout:
+
+- the loops above pass, including 126 iterations over the full 250x250 target (under 1 s);
+- the static spills and combinations still pass;
+- `glsl-uniform-interstage-limits` passes in its default, `--subdivide 5` and
+  `--subdivide 5 --statechanges` runs (25 cases each).
