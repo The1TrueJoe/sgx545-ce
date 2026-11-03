@@ -206,9 +206,12 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
 /* Desktop GL's built-in varyings (colours, back colours, fog, texture
  * coordinates; also st's fixed-function shaders and ES1 through gl4es) are in
  * the legacy slots, which the compiler doesn't assign: move them to VAR slots
- * past those the linker hands out, the same in both stages. st's two-sided
- * colour reads the back colours in the fragment shader. */
-#define SGX545_LEGACY_VAR 16
+ * the program's own varyings leave free, each built-in its own whether this
+ * stage has it or not, so that two stages with the same varyings (a linked
+ * program's) place them alike; named after the built-in, so that a vertex
+ * shader compiled to its fragment shader's sets finds them anyway. st's
+ * two-sided colour reads the back colours in the fragment shader. */
+#define SGX545_LEGACY_NAME "sgx545_legacy"
 
 static void
 remap_legacy_varyings(nir_shader *nir)
@@ -219,18 +222,34 @@ remap_legacy_varyings(nir_shader *nir)
       VARYING_SLOT_TEX3, VARYING_SLOT_TEX4, VARYING_SLOT_TEX5, VARYING_SLOT_TEX6,
       VARYING_SLOT_TEX7,
    };
-   static_assert(SGX545_LEGACY_VAR + ARRAY_SIZE(map) <= 32, "legacy slots past VAR31");
    nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
+   int slot[ARRAY_SIZE(map)];
+   uint32_t used = 0;           /* VAR slots of the program's own varyings */
    bool changed = false;
 
+   nir_foreach_variable_with_modes(var, nir, mode) {
+      if (var->data.location >= VARYING_SLOT_VAR0 && var->data.location < VARYING_SLOT_VAR0 + 32) {
+         for (unsigned r = 0; r < glsl_count_vec4_slots(var->type, false, false); r++)
+            used |= BITFIELD_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 31);
+      }
+   }
+   for (unsigned i = 0, s = 0; i < ARRAY_SIZE(map); i++) {
+      while (s < 32 && (used & BITFIELD_BIT(s)))
+         s++;
+      slot[i] = s < 32 ? (int)s++ : -1;
+   }
    nir_foreach_variable_with_modes(var, nir, mode) {
       for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
          char name[32];
 
          if (var->data.location != (int)map[i])
             continue;
-         var->data.location = VARYING_SLOT_VAR0 + SGX545_LEGACY_VAR + i;
-         snprintf(name, sizeof(name), "sgx545_legacy%u", i);
+         if (slot[i] < 0) {
+            fprintf(stderr, "sgx545: no VAR slot left for a built-in varying\n");
+            break;
+         }
+         var->data.location = VARYING_SLOT_VAR0 + slot[i];
+         snprintf(name, sizeof(name), SGX545_LEGACY_NAME "%u", i);
          var->name = ralloc_strdup(nir, name);
          changed = true;
          break;
@@ -292,8 +311,9 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
       comps = glsl_type_is_matrix(t) ? glsl_get_vector_elements(glsl_get_column_type(t))
                                      : glsl_get_vector_elements(t);
       /* a built-in the two stages may declare apart (gl_FogFragCoord a float
-       * against fog's vec4): the whole slot */
-      if (slot >= SGX545_LEGACY_VAR) {
+       * against fog's vec4): the whole slot, under its own name */
+      bool legacy = var->name && !strncmp(var->name, SGX545_LEGACY_NAME, strlen(SGX545_LEGACY_NAME));
+      if (legacy) {
          frac = 0;
          comps = 4;
       }
@@ -304,7 +324,10 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
        * coordinates and the fog) had its second slot written over the first.
        * Each variable is named after its slot instead, the same in both
        * stages. */
-      snprintf(name, sizeof(name), frac ? "sgx545_v%u_%u" : "sgx545_v%u", slot, frac);
+      if (legacy)
+         snprintf(name, sizeof(name), "%s", var->name);
+      else
+         snprintf(name, sizeof(name), frac ? "sgx545_v%u_%u" : "sgx545_v%u", slot, frac);
       var->name = ralloc_strdup(nir, name);
       snprintf(v->name, sizeof(v->name), "%s", name);
       v->set = set;
