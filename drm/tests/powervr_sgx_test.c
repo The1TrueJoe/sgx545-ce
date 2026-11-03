@@ -25,11 +25,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Not <sys/ioctl.h>: musl redefines the kernel's _IOC macros there. */
+int ioctl(int fd, unsigned long req, ...);
 
 #include <drm/drm.h>
 #include "powervr_sgx_drm.h"
@@ -72,7 +74,7 @@ static int open_dev(void)
 	if (!d)
 		return -1;
 	while ((e = readdir(d))) {
-		char path[64], name[32] = "";
+		char path[300], name[32] = "";
 		struct drm_version v = { .name_len = sizeof(name) - 1, .name = name };
 		int fd;
 
