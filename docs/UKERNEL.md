@@ -308,6 +308,41 @@ the handler leaves the status clear and the host times out and retries — this
 is the "Wait for uKernel to clean up" message, and it is why a render-context
 cleanup fails on a GPU the DDK left mid-render (`docs/NOTES.md`).
 
+#### What a kernel driver needs from it (EA1, 2026-11-03)
+
+`powervr_sgx` sent the three cleanups the DDK sends, in its order (RT dataset at
+RT-dataset destroy, then render context, then PB descriptor at context
+destroy), each after the context's last render had completed (render-done
+SW_EVENT, fences signalled), on the DDK microkernel
+(`docs/log/entries/2026-11-03-0300-drm-cleanup.md`):
+
+| cleanup | data[1] | result |
+|---|---|---|
+| RT (1) | HW RT dataset | consumed; `CLEANUPCMD_COMPLETE` not set within 5 s |
+| RC (2) | HW render context | no timeout, but possibly the RT's late completion: one status bit serves all three |
+| PB (5) | PB descriptor | **not consumed**: the kernel CCB read offset stops at it, so every later command waits behind it until the host's job timeout resets the GPU |
+
+After ten frames the PB descriptor still reads 0x14 = 5, 0x18 =
+`04210005`, 0x20 = 5, 0x24 = 1 (STATE.md 6 has 0x14 = 0 before the first kick;
+0x18 was a copy of the head), so the microkernel seems to keep the last
+render's pages and RT data accounted as in use [G]. That would explain both
+timeouts, and is the leading candidate for why a second render context hangs
+on its third frame.
+
+What the open microkernel must do (the list for `ukernel/`):
+
+- once a context's last render has signalled render-done, treat its RT
+  dataset, render context and PB as idle: cleanup of an idle resource
+  completes at once;
+- always consume a cleanup command; report busy and done as different status
+  values instead of holding the CCB, so the host can retry or give up without
+  a reset;
+- keep a separate completion per command (or echo data[1] into the status), so
+  a late completion can't be taken for the next one;
+- leave nothing of a cleaned-up context where the next context's renders read
+  it (the PB accounting above, the in-flight slot +0x50, the RT-data entry
+  state).
+
 ### Get misc info (type 6)
 
 data[1] is the misc-info buffer. The handler writes the core identity and,
