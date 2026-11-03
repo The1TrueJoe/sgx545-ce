@@ -448,6 +448,13 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
     * F16 and literals in SA, where libusc converts in a secondary program */
    opts.driver_consts = !(sgx545_debug & SGX545_DEBUG_NO_DRV_CONSTS);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
+   {
+      /* a 1D texture is a 2D one a texel high (sgx545_resource): its samples
+       * become 2D ones on that row */
+      const nir_lower_tex_options tex = { .lower_1d = true };
+
+      NIR_PASS(_, nir, nir_lower_tex, &tex);
+   }
    remap_legacy_varyings(nir);
    assign_varyings(nir, &vary, sprite);
    so->reads_pointcoord = nir->info.stage == MESA_SHADER_FRAGMENT && vary.point_size;
