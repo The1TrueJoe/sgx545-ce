@@ -165,10 +165,12 @@ faults.
    open a hole. The scan is linear and allocation-free.
 4. The GPU must not be able to write a code object once it is validated. Client tasks
    (`st`), the PBE and the TA could all target a USSE heap address. Code pages are mapped
-   with the PTE `READONLY` bit. **Whether the BIF enforces it is not established (G3)**;
-   experiment E1 below decides it. If it does not, the fallback is to keep code objects
-   out of every directory a client write can use, which depends on the requestor banks
-   (G2): experiment E2.
+   with the PTE `READONLY` bit. **The BIF enforces it for a client task's `st`** (E1): the
+   store faults instead of landing, and the job is lost to a reset, which a client can
+   cause anyway. A PBE write into a code page is the case still to test (E1, second
+   half). Only if that one lands is the fallback needed: keeping code objects out of
+   every directory a client write can use, which depends on the requestor banks (G2,
+   experiment E2).
 5. `pvrsgx_validate_job` checks nothing about code: by rule 2 and section 4 a job can only
    run validated code. It stays as the place where stream fields that name programs
    (pixel-event PDS, background PDS) are checked against the PDS heaps once streams exist.
@@ -181,7 +183,7 @@ upload code through the ioctl instead of writing a mapped buffer: a change for M
 
 | | question | test |
 |---|---|---|
-| E1 | Does a PTE with `READONLY` stop a client task's `st`, and a PBE write? | Map a page read-only in a VM, `st` to it from a fragment task and render into it; read it back from the CPU |
+| E1 | Does a PTE with `READONLY` stop a client task's `st`, and a PBE write? | **Answered for `st` (EA1, 2026-11-03): yes, by a page fault.** A fragment task's `st` to a page the DDK maps `READONLY` raised a BIF fault at that page, did not land, and the stalled requestor was recovered by HWR; the read-write control did not fault (log `2026-11-03-0115-e1-pte-readonly`). The PBE write is still untested |
 | E2 | Which requestor does a USSE instruction fetch use? | Point list 0 and the EDM's list at directories that differ only in the USSE heap, run a task, see which code ran |
 | E3 | Do `ldr`/`str` have other encodings (another class, a DRC form) that reach the register file? | ISA.md coverage of the special class; a hardware check that a fuzzed word outside the known forms cannot read `CORE_ID` |
 
