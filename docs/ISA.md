@@ -2341,7 +2341,10 @@ backed above; this section only collects it.
   constants in SA and loads the rest from a memory block per use: `ld.a.d
   rN, sa<base>, #i`, `wdf`, then rN in place of the SA operand (same half,
   lane and format). One base register reaches 128 dwords (see "Address"
-  above for the +1). The DDK's equivalent is list B (USP header 0x2c flag
+  above for the +1). An indexed array that doesn't fit whole keeps its
+  index (clamped to the block with `fminmax`) and adds it to the base:
+  `pck.s16.f32 t, x`, `imae.sgn a, t, #4, sa<base> [t2=u32]`, then `ld.a.d
+  rN, a, #i` per component, so only immediate offsets are used. The DDK's equivalent is list B (USP header 0x2c flag
   1, 0x38, 0x52); none of the corpora use it.
 - **Constants**: the hardware constant table covers 0, 1, powers of two,
   1/2^n, e, π fractions, √2, F16 (1, 1) (c45-c47), 0xffffffff (c56-c59)

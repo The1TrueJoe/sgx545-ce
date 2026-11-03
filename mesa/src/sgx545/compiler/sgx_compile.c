@@ -1840,7 +1840,17 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
           * ISA.md "What GLSL integer code compiles to") */
          unsigned k = nir_intrinsic_base(in), range = nir_intrinsic_range(in);
          for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_used); j++)
-            c->const_used[k + j] = c->const_pin[k + j] = 1;
+            c->const_used[k + j] = 1;
+         unsigned a = 0;
+         while (a < c->n_ix_arr && c->ix_arr[a].k != k)
+            a++;
+         if (a == ARRAY_SIZE(c->ix_arr)) {
+            sgx_fail(c, "too many indexed uniform arrays");
+            return;
+         }
+         c->ix_arr[a].k = k;
+         c->ix_arr[a].range = MAX2(a < c->n_ix_arr ? c->ix_arr[a].range : 0, range);
+         c->n_ix_arr = MAX2(c->n_ix_arr, a + 1);
          nir_legacy_src lo = nir_legacy_chase_src(&in->src[0]);
          unsigned t = new_vreg(c, 1);
          struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, USSE_PCK_S16_F32);
@@ -3479,9 +3489,9 @@ operand_slots(const struct sgx_ctx *c, const struct sgx_ins *i, const struct sgx
 /* An instruction names sa0-sa127. The constants go from sa_base, a
  * fragment program's dependent texture state (4 each) after them. When the
  * slots don't fit, every slot also gets block word slot + 1 (ld.a.d's
- * offset #i reads base + 4 * (i + 1): iso sanity_st), dynamically indexed
- * constants and then the most-used ones stay in SA, and mem_uniforms loads
- * the rest. */
+ * offset #i reads base + 4 * (i + 1): iso sanity_st), indexed arrays that
+ * fit whole and then the most-used constants stay in SA, and mem_index /
+ * mem_uniforms load the rest. */
 static void
 place_constants(struct sgx_ctx *c)
 {
@@ -3507,33 +3517,158 @@ place_constants(struct sgx_ctx *c)
             for (unsigned j = 0; j < n && s + j < c->n_sa; j++)
                uses[s + j]++;
    }
-   for (unsigned k = 0; k < ARRAY_SIZE(c->const_pin); k++) {
-      if (c->const_pin[k] && c->const_slot[k] >= 0 && !keep[c->const_slot[k]]) {
-         keep[c->const_slot[k]] = true;
-         kept++;
-      }
+   /* indexed arrays whole (sa[idx1 + n]), smallest first; the others are
+    * read from memory (mem_index) */
+   bool *done = calloc(c->n_ix_arr, sizeof(*done));
+   for (;;) {
+      int best = -1;
+      for (unsigned a = 0; a < c->n_ix_arr; a++)
+         if (!done[a] && (best < 0 || c->ix_arr[a].range < c->ix_arr[best].range))
+            best = a;
+      if (best < 0)
+         break;
+      done[best] = true;
+      unsigned k = c->ix_arr[best].k, need = 0;
+      for (unsigned j = 0; j < c->ix_arr[best].range; j++)
+         need += !keep[c->const_slot[k + j]];
+      if (kept + need > room)
+         continue;
+      for (unsigned j = 0; j < c->ix_arr[best].range; j++)
+         keep[c->const_slot[k + j]] = true;
+      kept += need;
    }
-   if (kept > room) {
-      sgx_fail(c, "dynamically indexed uniforms need %u SA registers, %u are free", kept, room);
-   } else {
-      for (; kept < room; kept++) {
-         int best = -1;
-         for (unsigned s = 0; s < c->n_sa; s++)
-            if (!keep[s] && (best < 0 || uses[s] > uses[best]))
-               best = s;
-         keep[best] = true;
-      }
-      unsigned p = 0;
+   free(done);
+   for (; kept < room; kept++) {
+      int best = -1;
       for (unsigned s = 0; s < c->n_sa; s++)
-         c->slot_sa[s] = keep[s] ? (int)p++ : -1;
-      c->n_mem_bases = nb;
-      for (unsigned j = 0; j < nb; j++)
-         c->mem_base_sa[j] = p++;
-      c->n_sa_phys = p;
-      c->mem_dwords = c->n_sa + 1;
+         if (!keep[s] && (best < 0 || uses[s] > uses[best]))
+            best = s;
+      keep[best] = true;
    }
+   unsigned p = 0;
+   for (unsigned s = 0; s < c->n_sa; s++)
+      c->slot_sa[s] = keep[s] ? (int)p++ : -1;
+   c->n_mem_bases = nb;
+   for (unsigned j = 0; j < nb; j++)
+      c->mem_base_sa[j] = p++;
+   c->n_sa_phys = p;
+   c->mem_dwords = c->n_sa + 1;
    free(uses);
    free(keep);
+}
+
+/* An indexed array in memory: its sa[idx1 + j] sequence (pck.s16.f32 t, x;
+ * ima16 idx1, t, #1, #sa; mov d, sa[idx1 + j]) becomes
+ *    mov x', x; limm l, #max; fminmax x', x', c48, l   (stay in the block)
+ *    pck.s16.f32 t, x'
+ *    imae.sgn a, t, #4, sa<base> [t2=u32]              (per base used)
+ *    ld.a.d d, a, #((s + j) % 128) ...; wdf */
+static bool
+array_in_sa(const struct sgx_ctx *c, unsigned k)
+{
+   for (unsigned a = 0; a < c->n_ix_arr; a++) {
+      if (c->ix_arr[a].k != k)
+         continue;
+      for (unsigned j = 0; j < c->ix_arr[a].range; j++)
+         if (c->slot_sa[c->const_slot[k + j]] < 0)
+            return false;
+   }
+   return c->slot_sa[c->const_slot[k]] >= 0;
+}
+
+static void
+mem_index(struct sgx_ctx *c)
+{
+   if (!c->mem_dwords)
+      return;
+   list_for_each_entry_safe(struct sgx_ins, ix, &c->ins, link) {
+      if (ix->kind != SGX_INS_ALU || ix->form != USSE_IMA16 || ix->op[0].file != SGX_F_IDX ||
+          ix->op[3].file != SGX_F_USLOT || array_in_sa(c, ix->op[3].n))
+         continue;
+      struct sgx_ins *pk = list_entry(ix->link.prev, struct sgx_ins, link);
+      if (&pk->link == &c->ins || pk->form != USSE_PCK_S16_F32 || pk->op[0].file != SGX_F_V ||
+          ix->op[1].file != SGX_F_V || pk->op[0].n != ix->op[1].n) {
+         sgx_fail(c, "indexed uniform: no pck before ima16");
+         return;
+      }
+      unsigned s = c->const_slot[ix->op[3].n], comps = 0;
+      for (struct sgx_ins *m = list_entry(ix->link.next, struct sgx_ins, link);
+           &m->link != &c->ins && m->form == USSE_MOV && m->op[1].file == SGX_F_IXSA;
+           m = list_entry(m->link.next, struct sgx_ins, link))
+         comps = MAX2(comps, m->op[1].n + (m->op[1].step ? m->rpt : 1));
+
+      union { float f; uint32_t u; } max = { .f = (float)MAX2((int)(c->n_sa - s - comps), 0) };
+      unsigned x0 = new_vreg(c, 1), lim = new_vreg(c, 1);
+      struct sgx_ins *mv = ins_alloc(c, SGX_INS_ALU, USSE_MOV);
+      mv->nops = 2;
+      mv->op[0] = vref(x0, 0);
+      mv->op[1] = pk->op[1];
+      insert_before(pk, mv);
+      struct sgx_ins *li = ins_alloc(c, SGX_INS_ALU, USSE_LIMM);
+      li->nops = 2;
+      li->op[0] = vref(lim, 0);
+      li->op[1] = ref(SGX_F_IMM, max.u);
+      insert_before(pk, li);
+      struct sgx_ins *cl = ins_alloc(c, SGX_INS_ALU, USSE_FMINMAX);
+      cl->nops = 4;
+      cl->op[0] = vref(x0, 0);
+      cl->op[1] = vref(x0, 0);
+      cl->op[2] = cref(48);
+      cl->op[3] = vref(lim, 0);
+      insert_before(pk, cl);
+      pk->op[1] = vref(x0, 0);
+
+      int addr[8];
+      for (unsigned b = 0; b < ARRAY_SIZE(addr); b++)
+         addr[b] = -1;
+      struct sgx_ins *m = list_entry(ix->link.next, struct sgx_ins, link);
+      while (&m->link != &c->ins && m->form == USSE_MOV && m->op[1].file == SGX_F_IXSA) {
+         struct sgx_ins *next = list_entry(m->link.next, struct sgx_ins, link);
+         struct sgx_ref d = m->op[0];
+         unsigned n = m->op[1].n, rpt = m->rpt, pred = m->pred;
+         /* (a repeated mov: one load per iteration) */
+         for (unsigned r = 0; r < rpt; r++) {
+            unsigned w = s + n + (m->op[1].step ? r : 0), b = w / 128;
+            if (addr[b] < 0) {
+               addr[b] = new_vreg(c, 1);
+               struct sgx_ins *ia = ins_alloc(c, SGX_INS_ALU, USSE_IMAE);
+               ia->nops = 4;
+               ia->op[0] = vref(addr[b], 0);
+               ia->op[1] = ix->op[1];
+               ia->op[2] = ref(SGX_F_IMM, 4);
+               ia->op[3] = ref(SGX_F_SA, c->sa_base + c->mem_base_sa[b]);
+               fld(ia, USSE_F_SGN, 1);
+               fld(ia, USSE_F_T2, 2);
+               insert_before(ix, ia);
+            }
+            struct sgx_ins *ld = r ? ins_alloc(c, SGX_INS_ALU, USSE_LD_A_D) : m;
+            ld->form = USSE_LD_A_D;
+            ld->nops = 3;
+            ld->nfld = 0;
+            ld->rpt = 1;
+            ld->pred = pred;
+            ld->op[0] = d;
+            if (d.step && r) {
+               if (d.file == SGX_F_V)
+                  ld->op[0].comp += r;
+               else
+                  ld->op[0].n += r;
+            }
+            ld->op[1] = vref(addr[b], 0);
+            ld->op[2] = ref(SGX_F_IMM, w % 128);
+            if (r)
+               insert_before(next, ld);
+         }
+         m = next;
+      }
+      struct sgx_ins *wd = ins_alloc(c, SGX_INS_ALU, USSE_WDF);
+      wd->ndst = 0;
+      if (&m->link == &c->ins)
+         list_addtail(&wd->link, &c->ins);
+      else
+         insert_before(m, wd);
+      list_del(&ix->link);
+   }
 }
 
 /* Operands on slots not kept in SA: ld.a.d their words into a temporary
@@ -3809,6 +3944,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       merge_runs(c);
    if (!c->failed)
       far_f16_uniforms(c);
+   if (!c->failed)
+      mem_index(c);
    if (!c->failed)
       mem_uniforms(c);
    if (!c->failed)

@@ -145,7 +145,9 @@ struct sgx_ctx {
    uint8_t const_shift[1024];    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
    uint8_t const_lowp[1024];     /* the first of a lowp vec4 uniform (C10 candidate) */
    uint8_t const_prec[1024];     /* GLSL precision of the uniform behind constant k (0 unknown) */
-   uint8_t const_pin[1024];      /* dynamically indexed (sa[idx1 + n]): stays in SA */
+   /* dynamically indexed arrays: first constant, constants it spans */
+   struct { uint16_t k, range; } ix_arr[64];
+   unsigned n_ix_arr;
    unsigned n_sa;                /* slots (constants, then literals) */
    unsigned sa_base;
    /* where the slots live (place_constants): SA slot from sa_base, -1 memory
