@@ -1321,6 +1321,7 @@ static int wait_render(struct sgx_ctx *c, unsigned ms)
 	struct pvr_buf sb = { .mem = c->fb->color.b.sync };
 	volatile PVRSRV_SYNC_DATA *sd;
 	unsigned t = 0;
+	int e;
 
 	if (pvr_map(&c->dev->pvr, &sb))
 		die("map of the render target's sync data failed");
@@ -1334,7 +1335,9 @@ static int wait_render(struct sgx_ctx *c, unsigned ms)
 	if (c->dev->verbose)
 		fprintf(stderr, "sgxgen: render target write ops %u/%u after %u ms\n", sd->ui32WriteOpsComplete,
 			sd->ui32WriteOpsPending, t);
-	return sd->ui32WriteOpsComplete < sd->ui32WriteOpsPending ? -ETIMEDOUT : 0;
+	e = sd->ui32WriteOpsComplete < sd->ui32WriteOpsPending ? -ETIMEDOUT : 0;
+	pvr_unmap(&c->dev->pvr, &sb);
+	return e;
 }
 
 /* SGXGEN_DUMP_AFTER: what the microkernel left in the structures once the render is done. */

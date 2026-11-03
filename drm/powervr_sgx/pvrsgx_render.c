@@ -16,6 +16,7 @@
 #include <drm/drm_gpuvm.h>
 #include <drm/drm_print.h>
 
+#include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
@@ -529,6 +530,15 @@ static u32 pds_word(u64 addr, u32 rows)
  * frame, end to end"): 0x71 runs the stream, 0x62 runs the terminate words and
  * starts the 3D.
  */
+/*
+ * single_entry renders every frame as the dataset's first, on RT-data entry 1
+ * and region array 1, as tools/gen's DDK path does (it runs any number of
+ * frames and processes); otherwise frames alternate the two entries and count.
+ */
+static bool single_entry;
+module_param(single_entry, bool, 0644);
+MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
+
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 {
 	struct pvrsgx_render_job *rj = &job->render;
@@ -536,7 +546,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_rt_dataset *s = rj->rtds;
 	const struct powervr_sgx_stream_render *in = &rj->render;
 	bool first = k == 0, last = k == rj->nkicks - 1;
-	u32 f = s->frames, odd = f & 1, *cmd, *sh, *t, *rd, *sl, *s3d, *done;
+	u32 f = single_entry ? 0 : s->frames, odd = f & 1, *cmd, *sh, *t, *rd, *sl, *s3d, *done;
 	u32 rgn_this = kobj_va(s->rgn[odd ? 0 : 1]), rgn_next = kobj_va(s->rgn[odd ? 1 : 0]);
 	u32 entry = kobj_va(s->rtdata) + 0x18 + 0x38 * (odd ? 0 : 1);
 	u32 woff = r->ccb_woff, zls_base = 0;
