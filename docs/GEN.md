@@ -55,6 +55,8 @@ The `frame` options:
   entries and region arrays, as the DDK and powervr_sgx do. Frame 2 then has
   TA flags 0x61, cmd+0x20 = 1, 3D flags 0x4400, cmd+0x44 = entry 0, region
   array 0, and the RT frame word 2. This mode has run only on fakepvr so far.
+- `-S` / `-X` (with `-R`): each repeat on a new surface, or on a new context
+  and surface: one process standing in for separate `frame` runs.
 
 Checking a frame without the GPU:
 
