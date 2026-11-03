@@ -994,6 +994,12 @@ partial renders. Partial renders need ZLS load, which isn't found (TEX.md sectio
 leaves room for growth later with no uAPI change. It may be wrong for Minecraft-sized scenes
 (G18).
 
+### D11. The NULL job type
+
+**Decided (Joseph, 2026-11-03): keep `DRM_POWERVR_SGX_JOB_TYPE_NULL`.** A job with no GPU
+work that still goes through the scheduler and signals its fences, for IGT, fence and
+scheduler tests without a GPU workload. It can be dropped before the RFC if reviewers object.
+
 ## 11. Doc gaps
 
 Facts the design needs that `docs/` doesn't have.
