@@ -318,7 +318,8 @@ def run_chunk(box, who, name, tests):
                 res[r[0]] = (r[1], r[2])
     if not wedged:
         # the failing tests' logs, for triage
-        rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - *.qpa 2>/dev/null", timeout=120)
+        logs = "*.log" if who == "piglit" else "*.qpa"    # piglit-runner keeps a log per failing test
+        rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - {logs} 2>/dev/null", timeout=120)
         if rc3 is not None and tar:
             try:
                 with tarfile.open(fileobj=io.BytesIO(tar)) as t:
