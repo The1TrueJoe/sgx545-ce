@@ -325,6 +325,11 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 	drm_gpuvm_bo_put(vm_bo);
 	va = NULL;
 
+	/* A walk of this range while it was empty may be cached: drop it. */
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD;
+	mutex_unlock(&sdev->ccb_lock);
+
 out_unlock:
 	mutex_unlock(&vm->lock);
 out_va:
