@@ -513,10 +513,26 @@ models these as the hardware's answers (`sgxsim.py`, `hw_model`): writing an
 invalidate request makes the matching done bits appear, and the acknowledge
 register clears them.
 
-**Point the BIF at a context.** Write the context's page-directory address
-(shifted) into the EDM directory-list base register and into `BIF_BANK0`'s
-EDM index field, so the cores translate through that context's page tables
-(mirrors `SGXResetSetupBIFContexts` in `sgxreset.c`).
+**Point the BIF at a context — and keep the EDM on its own directory list.**
+Load the context's page-directory address (shifted) into **directory-list 0**
+(`EUR_CR_BIF_DIR_LIST_BASE0 = 0xc84`) and route the **TA/3D** requestors to list
+0 through `EUR_CR_BIF_BANK0 = 0xc78 = 0x0f` (b0-3 = EDM → list **15**, b4-7 = TA →
+list 0), so the cores that run the client's geometry/pixels translate through the
+client's page tables.
+
+**Hard design rule: the EDM (microkernel) stays on directory-list 15, with the
+firmware/kernel page directory, and is NEVER pointed at a client PD.** Only the
+TA and 3D requestors are moved onto the client's list. This is what lets the EDM
+fetch its own code and the kernel heaps (CCB, control block, kernel-data) through
+the kernel PD while the *client* PD contains only the client's own mappings — so
+the open DRM driver does not have to map kernel memory into every client address
+space (UAPI P2/P3). The DDK does the opposite: its TA kick writes `BIF_BANK0 =
+0x11` (EDM **and** TA both on list 1), loads list 1 with the context's PD, and
+then fetches the microkernel's own code through that client PD — which forces
+every client PD to carry the kernel heaps. openHC must not copy that; keeping the
+EDM isolated on list 15 is a deliberate divergence, verified on EA1 HW (the TA
+reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
+dir-list with a client requestor.
 
 **Parameter-buffer / DPM setup** (first kick of a render). Load the free-list
 head and limit registers (`EUR_CR_*` 0x600, 0x618, 0x61c, 0x648, 0x620-0x668)
