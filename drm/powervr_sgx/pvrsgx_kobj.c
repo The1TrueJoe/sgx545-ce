@@ -9,11 +9,10 @@
  * at a higher device-wide address hung its third render (EA1, 2026-11-03).
  *
  * Releasing one does not free it at once. The microkernel keeps pointers to
- * earlier renders' structures (docs/GEN.md, "Layout"; docs/UAPI.md 7.5): a
- * second context hangs its third render once the first context's structures
- * are gone (EA1, 2026-11-03). Until the driver sends the firmware's cleanup
- * commands (G15), released objects stay until the firmware restarts or the
- * device goes away; reap_after_render frees them once a later render is done.
+ * earlier renders' structures (docs/GEN.md, "Layout"; docs/UAPI.md 7.5), and
+ * its cleanup commands don't complete (G15), so released objects stay until
+ * the firmware restarts or the device goes away; reap_after_render frees them
+ * once a later render is done.
  */
 
 #include <linux/module.h>

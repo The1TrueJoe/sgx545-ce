@@ -322,12 +322,11 @@ SW_EVENT, fences signalled), on the DDK microkernel
 | RC (2) | HW render context | no timeout, but possibly the RT's late completion: one status bit serves all three |
 | PB (5) | PB descriptor | **not consumed**: the kernel CCB read offset stops at it, so every later command waits behind it until the host's job timeout resets the GPU |
 
-After ten frames the PB descriptor still reads 0x14 = 5, 0x18 =
-`04210005`, 0x20 = 5, 0x24 = 1 (STATE.md 6 has 0x14 = 0 before the first kick;
-0x18 was a copy of the head), so the microkernel seems to keep the last
-render's pages and RT data accounted as in use [G]. That would explain both
-timeouts, and is the leading candidate for why a second render context hangs
-on its third frame.
+After ten frames the PB descriptor reads 0x14 = 0x19, 0x18 = `04210019`, 0x20 =
+0x19, 0x24 = 1 at 720x480, and a DDK frame leaves exactly the same words
+(`docs/log/data/2026-11-03-0320-ddk-after-render.txt`). That accounting is
+normal and does not explain the timeouts [G]. (The second-context hang it was
+first blamed for was the PB's address: log `2026-11-03-0340-drm-per-vm-pb`.)
 
 What the open microkernel must do (the list for `ukernel/`):
 
@@ -340,8 +339,7 @@ What the open microkernel must do (the list for `ukernel/`):
 - keep a separate completion per command (or echo data[1] into the status), so
   a late completion can't be taken for the next one;
 - leave nothing of a cleaned-up context where the next context's renders read
-  it (the PB accounting above, the in-flight slot +0x50, the RT-data entry
-  state).
+  it (the in-flight slot +0x50, the RT-data entry state).
 
 ### Get misc info (type 6)
 

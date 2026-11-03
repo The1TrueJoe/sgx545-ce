@@ -22,7 +22,7 @@ gma500 auxiliary device first.
 | GEM shmem, `GET_BO_MMAP_OFFSET`, PRIME import | written |
 | VM contexts on `drm_gpuvm`, `VM_MAP`/`VM_UNMAP` | written |
 | `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL and render jobs |
-| render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **first frames rendered** (two-kick scenes, 10/10 at 256x256 and 720x480); a second render context hangs on its third frame, cause open (the microkernel seems to keep the first context's RT dataset and PB busy: its cleanups never complete); the TA-flag 0x10 change was not shown to fix anything |
+| render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **first frames rendered** (two-kick scenes); **seven processes in a row, 10/10 each at 720x480**, with the uAPI suite between; one PB per render context, so two render contexts in one VM are untested (G15); the TA-flag 0x10 change was not shown to fix anything |
 | `DEV_QUERY` | written |
 | transfer jobs | not started (HW transfer context, TEX.md 10) |
 | shader validator (D9) | hooks only; design in section 6 |
@@ -98,6 +98,16 @@ microkernel) gets list 15, and TA, 3D, host and 2D keep list 0.
 A VM's directory maps what the client mapped inside its heaps, and the kernel-owned
 structures the TA and 3D read under it: PB, free list, scratch block, region headers, tail
 pointers, background object block.
+
+The 3D parameters heap is per VM, as the DDK's per-context heap: the PB, free list,
+scratch block and background blocks of a VM's render contexts are allocated from the
+heap base (0x10000000) in that VM's own address space and mapped only in its directory.
+Every other kernel object has one device-wide address. The DPM numbers PB pages from the
+heap base, so a PB anywhere else breaks: with device-wide 3D-params addresses, the
+second process's PB sat at page 0x464 behind the first one's, rendered two frames and
+hung on its third (log `2026-11-03-0340-drm-per-vm-pb`). A second render context in the
+same VM still gets its own PB at a higher address, which is the same hazard; the DDK
+shares one PB per process, and so should the driver (one PB per VM, G15).
 
 **The kernel heaps: the design and what the DDK microkernel allows.** The design keeps the
 kernel code, kernel data and sync heaps out of every client directory. That is the fix for
