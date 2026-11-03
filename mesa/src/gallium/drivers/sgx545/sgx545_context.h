@@ -29,11 +29,14 @@ enum sgx545_shader_kind {
 /* a constant in secondary attributes: sa[base + slot] = constant buffer 0 float k */
 struct sgx545_const {
    uint16_t k, slot, fmt, shift;   /* fmt: 1 f32, 2 F16 half at shift, 3 C10 channel at shift,
-                                    * 0x10 F16 half of the C10 value, 0x11 the literal `value` */
+                                    * 0x10 F16 half of the C10 value, 0x11 the literal `value`;
+                                    * slot 0xffff: in the memory block only */
+   uint16_t mem;                   /* word of the constant memory block, 0 none */
    uint32_t value;
 };
 
-#define SGX545_MAX_CONSTS 256
+#define SGX545_MAX_CONSTS 256           /* SA dwords of constants (sa127 ends them) */
+#define SGX545_MAX_CONST_MAP 1024       /* constants a program reads, in SA or memory */
 
 #define SGX545_MAX_DEP_SAMPLES 8
 
@@ -49,7 +52,11 @@ struct sgx545_shader {
    /* COMPILED: */
    struct sgxws_prog prog;
    unsigned n_consts, const_dwords;
-   struct sgx545_const consts[SGX545_MAX_CONSTS];
+   struct sgx545_const consts[SGX545_MAX_CONST_MAP];
+   /* constants past sa127 (the compiler's ld.a.d): a block of mem_dwords per
+    * draw, its address + 512 * j in SA slot mem_base_slot[j] */
+   unsigned mem_dwords, n_mem_bases;
+   uint8_t mem_base_slot[8];
    unsigned n_attribs;          /* vertex: attribute slots, 4 dwords each */
    /* fragment: the shader's code, kept for the blend variants (the colour
     * epilogue is the blend, sgxws_blend) */
@@ -145,6 +152,7 @@ struct sgx545_context {
    uint32_t *staging;               /* vertices gathered for one draw */
    size_t staging_size;
    uint16_t *idx_staging;           /* its 16-bit indices */
+   uint32_t *mem_consts[2];         /* a draw's constants in memory, vertex and fragment (sgx545_draw.c) */
    unsigned idx_staging_size;
    bool warned_shader, warned_prim, warned_blend, warned_varyings;
 };

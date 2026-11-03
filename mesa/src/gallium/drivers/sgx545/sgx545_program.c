@@ -367,15 +367,25 @@ read_program(const struct sgx_shader *out, struct sgx545_shader *so, struct prog
       const struct sgx_const_map *m = &out->consts[i];
       struct sgx545_const *k = &so->consts[so->n_consts];
 
-      if (so->n_consts == SGX545_MAX_CONSTS)
+      if (so->n_consts == SGX545_MAX_CONST_MAP)
          return info->why = "too many constants", false;
       k->fmt = m->fmt;
       k->k = m->k;
       k->value = m->value;
       k->slot = m->slot;
       k->shift = m->shift;
-      so->const_dwords = MAX2(so->const_dwords, k->slot + 1u);
+      k->mem = m->mem;
+      if (k->slot != SGX_SLOT_NONE)
+         so->const_dwords = MAX2(so->const_dwords, k->slot + 1u);
       so->n_consts++;
+   }
+   if (out->mem_dwords > SGX545_MAX_CONST_MAP + 1)
+      return info->why = "constant memory block too large", false;
+   so->mem_dwords = out->mem_dwords;
+   so->n_mem_bases = MIN2(out->n_mem_bases, ARRAY_SIZE(so->mem_base_slot));
+   for (unsigned j = 0; j < so->n_mem_bases; j++) {
+      so->mem_base_slot[j] = out->mem_base_slot[j];
+      so->const_dwords = MAX2(so->const_dwords, out->mem_base_slot[j] + 1u);
    }
    for (unsigned i = 0; i < out->n_samples; i++) {
       const struct sgx_sample_info *x = &out->samples[i];
