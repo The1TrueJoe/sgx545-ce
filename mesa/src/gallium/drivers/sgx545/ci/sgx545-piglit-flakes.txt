@@ -1,0 +1,2 @@
+# 2026-11-03: 28515 tests, Crash 87, Fail 2072, Missing 437, Pass 3937, Skip 21978, Timeout 2, Warn 2
+# piglit gpu profile (quick_gl + quick_shader) on the EA3, um-re 60ddfec; the fails rerun on that build (lib-pg12)

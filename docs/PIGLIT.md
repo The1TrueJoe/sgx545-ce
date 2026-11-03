@@ -97,29 +97,80 @@ The test passes in all three runs (default, `--subdivide 5`, `--subdivide 5
 --statechanges`, 25 cases each), and a full-screen 126-iteration loop takes
 under a second.
 
-## Failures so far (partial run, 2026-11-03)
+## Results (EA3, 2026-11-03)
 
-Of the 8,320 top-level tests with results, 399 fail, crash or time out. The
-causes known so far:
+The whole `gpu` profile ran on the EA3 (a RAM boot of the #124 image), in
+slices, with 0 wedges. The 514 tests that didn't pass were then rerun on one
+build, um-re 60ddfec, because the first pass spanned several builds. The passes
+were not rerun. Of the 25,805 top-level tests:
 
-- **Flat shading is not implemented.** The driver ignores the rasterizer's
-  `flatshade` and flat varyings, so `clipflat` fails every one of its
-  subtests. The hardware's shade-mode state is not yet known. A capture of the
+| result | tests |
+|---|---|
+| Pass | 3,220 |
+| Skip | 21,668 |
+| Fail | 389 |
+| Crash | 87 |
+| Missing | 437 |
+| Timeout | 2 |
+| Warn | 2 |
+
+34 of the 514 passed on the rerun. "Missing" tests are the GLES, EGL and
+window-system programs, which aren't built.
+
+The expectations are `ci/sgx545-piglit-fails.txt`, written by `mkexpect.py` from
+the runs, with the reasons in `mesa/tests/piglit/sgx545-reasons.tsv`. Every
+failure is grouped under a reason. Where the cause is known it is stated;
+otherwise the reason gives the symptom and says "not diagnosed".
+
+Most failures come from these:
+
+- **Flat shading is not implemented** (1,303 entries, nearly all `clipflat`
+  subtests). The driver ignores the rasterizer's `flatshade` and flat
+  varyings. The hardware's shade-mode state is not known; a capture of the
   DDK's GLES1 `glShadeModel(GL_FLAT)` against `GL_SMOOTH` would give it.
-- **No depth format can be sampled.** `sgx545_tex_format` has only the five
-  8-bit T1 codes. Mesa always exposes `ARB_depth_texture`, so a
-  `GL_DEPTH_COMPONENT` texture gets no format and the program crashes later
-  (SIGSEGV: `texdepth`, `teximage-errors`, `depth-tex-compare`, the
-  `arb_fragment_program_shadow` and `ext_packed_depth_stencil` tests,
-  `copyteximage`). The DDK's GLES2 lists `OES_depth_texture`,
-  `OES_packed_depth_stencil`, `OES_texture_float` and
-  `OES_texture_half_float`, so a DDK capture gives the T1 codes for depth and
-  float textures. `tools/probe` uploads those formats (`PROBE_TEXFMT` depth16,
+- **Fragment programs that don't compile**, so nothing is drawn. These are
+  compiler work:
+  - gl_BackColor and gl_BackSecondaryColor (BFC0/BFC1) get no input register.
+    st lowers two-sided colour to a face select that reads them, so every
+    two-sided lighting and interpolation test is affected.
+  - gl_FragDepth has no output. Tests that write depth are affected, and so
+    are st's depth glDrawPixels and glCopyPixels.
+  - dFdx and dFdy are not supported.
+  - The 11th generic varying and gl_TexCoord[7] get no input register.
+- **No depth format can be sampled** (97). `sgx545_tex_format` has only the
+  five 8-bit T1 codes, and Mesa always exposes `ARB_depth_texture`, so a
+  `GL_DEPTH_COMPONENT` texture gets no format and the test crashes later. The
+  DDK's GLES2 lists `OES_depth_texture`, `OES_packed_depth_stencil`,
+  `OES_texture_float` and `OES_texture_half_float`, so a DDK capture gives
+  the T1 codes. `tools/probe` uploads those formats (`PROBE_TEXFMT` depth16,
   depth32, d24s8, rgbaf32, lf32, rgbaf16, lf16).
-- **Window-buffer tests abort on the surfaceless platform** (SIGABRT, nothing
-  printed): `read-front`, `masked-clear`, `fbo-sys-blit`, the
-  `gl-1.0-drawbuffer-modes` family. These are the tests run without `-fbo`
-  that read or draw the front buffer. Not yet confirmed one by one.
+- **No depth/stencil load or store (no ZLS).** Depth and stencil exist only
+  within one render, so reading, copying or blitting them fails (40).
+- **Texture formats, wrap modes and mipmaps** (180, 128, 21):
+  - Only five sampler formats.
+  - CLAMP and CLAMP_TO_BORDER are drawn as CLAMP_TO_EDGE.
+  - No LOD clamps, base level or LOD bias.
+  - No 3D textures (35).
+- **M6 features not there yet:** user clip planes, polygon modes and edge
+  flags, line stipple, logic ops, fixed-function point sprites.
+- **Window-buffer tests on the surfaceless platform**: tests that read, draw
+  or blit the front buffer or the window's depth/stencil abort or read nothing.
+
+## Open bug: NPOT cube maps lock the 3D (EA3, 2026-11-03)
+
+`arb_texture_cube_map@cubemap npot` and `arb_pixel_buffer_object@cubemap npot
+pbo` draw cube maps of NPOT faces (50, 25, 12, 6 and 3 texels), first with one
+level, then with mipmaps. Each draw that samples a 50 or 25 face takes an SGX
+recovery (lockup_ta and lockup_3d, no BIF fault): 69 in the 56 seconds the test
+runs. Skipping only the mipmapped draws still left 48 of them.
+
+The cause is that no layout for NPOT cube faces is known: `face_stride_levels`
+was measured on POT faces only, and dEQP's NPOT cube tests fail too (the DDK's
+as well). As a **stopgap**, not a fix, a draw is skipped when it samples an NPOT
+cube map of 16 texels or more, or a mipmapped one, with one `sgx545: NPOT cube
+maps ... not drawn yet` per context. With it the two tests take 0.6 s and no
+recoveries. The fix is the DDK's layout for these, from a capture, after which
+the guard goes.
 
 ## The DDK's desktop GL, as an oracle
 
