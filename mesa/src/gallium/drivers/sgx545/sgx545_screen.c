@@ -102,11 +102,14 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
        * sa127.  How many uniforms that holds depends on the program: only
        * the constants it uses go there, and mediump ones two to a register
        * (dEQP's nested struct arrays of mat4 fit in a fragment program, and
-       * failed at a limit of 24 vec4).  So the limit stays at GLES2's vertex
-       * minimum, and a program that doesn't fit isn't drawn
-       * (sgx545_program.c) until constants can live in memory */
+       * failed at a limit of 24 vec4).  The constants that don't fit are
+       * loaded from a block in memory (ld.a.d, sgxws_const_mem), so the
+       * limit is GLES2's vertex minimum, 128 vec4, in both stages */
       caps->max_const_buffer0_size = 128 * 4 * sizeof(float);
       caps->max_const_buffers = 1;
+      /* u[i]: indexed from SA, or from the block when the array doesn't fit
+       * (without it GLSL selects over the whole array, a load per element) */
+      caps->indirect_const_addr = true;
       caps->max_temps = 64;
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = 8;

@@ -36,7 +36,7 @@ struct sgx545_const {
 };
 
 #define SGX545_MAX_CONSTS 256           /* SA dwords of constants (sa127 ends them) */
-#define SGX545_MAX_CONST_MAP 1024       /* constants a program reads, in SA or memory */
+#define SGX545_MAX_CONST_MAP (1024 + 32) /* constants a program reads, in SA or memory: the compiler's map */
 
 #define SGX545_MAX_DEP_SAMPLES 8
 

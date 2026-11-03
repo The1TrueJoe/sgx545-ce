@@ -358,6 +358,8 @@ insert_samples(const uint64_t *code, unsigned count, const struct prog_info *inf
    return w;
 }
 
+static_assert(SGX545_MAX_CONST_MAP == SGX_MAX_CONST_MAP, "the driver holds the compiler's whole constant map");
+
 static bool
 read_program(const struct sgx_shader *out, struct sgx545_shader *so, struct prog_info *info)
 {
@@ -526,8 +528,9 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
        * (from sa9, sa10 in a vertex program) and a fragment program's
        * texture state (after them) end at sa127.  Past it the numbers wrap,
        * onto registers the program never loaded, and the 3D locks up (piglit
-       * glsl-uniform-interstage-limits).  Constants in memory (the DDK's list
-       * B) would lift this; until then such a program isn't drawn. */
+       * glsl-uniform-interstage-limits).  The compiler moves constants that
+       * don't fit to memory (mem_dwords), so this only catches a program
+       * whose SA use still runs past (a guard, not drawn). */
       unsigned end = (vertex ? 10 : 9) + MAX2(so->const_dwords, out.sa_slots) + (vertex ? 0 : 4 * info.n_deps);
 
       if (end > 128) {
