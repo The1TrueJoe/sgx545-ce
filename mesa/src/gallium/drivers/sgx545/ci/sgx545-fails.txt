@@ -1,5 +1,5 @@
-# 2026-11-02: 17165 tests, Fail 142, Pass 16574, Skip 445, Warn 4
-# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on an EA3 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: a full pass, then the fails rerun with each later build up to um-re c76d83e, plus 1-in-4 samples of the suite; on the EA1 the fails list and a sample with um-re 7c53a80, and every non-NPOT cube test with the cube fixes (drive-deqp.py)
+# 2026-11-03: 17165 tests, Fail 150, Pass 16566, Skip 445, Warn 4
+# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on the EA1 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: one full pass on um-re 5886029 (drive-deqp.py), 0 wedges, 0 recoveries; flakes: sgx545-flakes-seen.txt
 
 # cube LOD bias (texture2D's bias argument fails the same way)
 dEQP-GLES2.functional.texture.mipmap.cube.bias.linear_linear,Fail
@@ -64,7 +64,6 @@ dEQP-GLES2.functional.texture.specification.teximage2d_align.cube_rgba8888_47_4,
 dEQP-GLES2.functional.texture.specification.teximage2d_align.cube_rgba8888_47_8,Fail
 
 # texture sampling: LOD bias and completeness corner cases
-dEQP-GLES2.functional.texture.completeness.2d.npot_size,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.bias.linear_linear,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.bias.linear_nearest,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.bias.nearest_linear,Fail
@@ -74,9 +73,6 @@ dEQP-GLES2.functional.texture.mipmap.2d.bias.nearest_nearest,Fail
 dEQP-GLES2.functional.shaders.texture_functions.fragment.texture2dproj_vec4_bias,Fail
 
 # render to texture: shared and recreated colour buffers, resizes; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared/recreate cases too
-dEQP-GLES2.functional.fbo.render.color_clear.tex2d_rgb,Fail
-dEQP-GLES2.functional.fbo.render.color_clear.tex2d_rgb_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.color_clear.tex2d_rgb_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_bgra_depth_component16,Fail
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_bgra_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgb565_depth_component16,Fail
@@ -157,3 +153,11 @@ dEQP-GLES2.functional.state_query.integers.max_vertex_uniform_vectors_getfloat,F
 
 # depth and stencil cleared together with no mask or scissor: the stencil comes out 0 (the masked and scissored variants pass)
 dEQP-GLES2.functional.depth_stencil_clear.depth_stencil,Fail
+
+# Warn: glFlush/glFinish timing outside the test's margin, not diagnosed
+dEQP-GLES2.functional.flush_finish.flush_wait,Warn
+
+# Warn: line colour interpolation within the low-quality tolerance only (the hardware's line quads), not diagnosed
+dEQP-GLES2.functional.rasterization.interpolation.basic.lines,Warn
+dEQP-GLES2.functional.rasterization.interpolation.projected.lines,Warn
+dEQP-GLES2.functional.rasterization.interpolation.projected.lines_wide,Warn
