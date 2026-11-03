@@ -3340,6 +3340,90 @@ merge_runs(struct sgx_ctx *c)
 }
 
 /* ------------------------------------------------------------------------
+ * helper instances
+ *
+ * A derivative reads its 2x2 neighbours, and a dependent sample takes its LOD
+ * from them, so whatever feeds one runs with skipinv clear: helper instances
+ * then hold real values (the DDK's dsy, fwidth and tx_dep words). Flow-
+ * insensitive: every writer of a needed register is needed, and with any of
+ * them, the branch predicates too. PA isn't tracked: the iterations fill it
+ * on every instance, and the program writes it only for its outputs. */
+
+enum { NEED_R = 0, NEED_I = 128, NEED_P = 132, NEED_IDX = 136, NEED_V = 140 };
+
+/* mark (or test) the registers r covers */
+static bool
+need_ref(BITSET_WORD *nd, const struct sgx_ref *r, unsigned rpt, bool mark)
+{
+   unsigned base, lim;
+   switch (r->file) {
+   case SGX_F_V: base = NEED_V; lim = ~0u; break;
+   case SGX_F_R: base = NEED_R; lim = 128; break;
+   case SGX_F_I: base = NEED_I; lim = 4; break;
+   case SGX_F_P: base = NEED_P; lim = 4; break;
+   case SGX_F_IDX: base = NEED_IDX; lim = 4; break;
+   case SGX_F_IXSA: base = NEED_IDX + 1; lim = 1; break;
+   default: return false;
+   }
+   unsigned lo = r->file == SGX_F_IXSA ? 0 : r->n, hi = lo;
+   if (r->file != SGX_F_V && r->file != SGX_F_IXSA) {
+      hi += r->step && rpt > 1 ? rpt - 1 : 0;
+      if (r->h16) {
+         lo /= 2;
+         hi /= 2;
+      }
+   }
+   bool any = false;
+   for (unsigned k = lo; k <= hi && k < lim; k++) {
+      any |= BITSET_TEST(nd, base + k);
+      if (mark)
+         BITSET_SET(nd, base + k);
+   }
+   return any;
+}
+
+static void
+mark_helpers(struct sgx_ctx *c)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   BITSET_WORD *nd = rzalloc_array(c, BITSET_WORD, BITSET_WORDS(NEED_V + nv));
+   bool any = false;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      if (i->kind == SGX_INS_ALU && (i->form == USSE_FDSX || i->form == USSE_FDSY)) {
+         for (unsigned k = i->ndst; k < i->nops; k++)
+            need_ref(nd, &i->op[k], i->rpt, true);
+         any = true;
+      } else if (i->kind == SGX_INS_SAMPLE && i->smp->dependent) {
+         need_ref(nd, &i->op[1], 1, true);
+         any = true;
+      }
+   }
+   if (!any)
+      return;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link)
+      if (i->kind == SGX_INS_BR && i->pred)
+         BITSET_SET(nd, NEED_P + (i->pred & 3) - 1);
+   for (bool progress = true; progress;) {
+      progress = false;
+      list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+         if (i->kind != SGX_INS_ALU || i->noskip)
+            continue;
+         bool hit = i->writes_pred && BITSET_TEST(nd, NEED_P + i->writes_pred - 1);
+         for (unsigned k = 0; k < i->ndst && !hit; k++)
+            hit = need_ref(nd, &i->op[k], i->rpt, false);
+         if (!hit)
+            continue;
+         i->noskip = true;
+         progress = true;
+         for (unsigned k = i->ndst; k < i->nops; k++)
+            need_ref(nd, &i->op[k], i->rpt, true);
+         if (i->pred)
+            BITSET_SET(nd, NEED_P + (i->pred & 3) - 1);
+      }
+   }
+}
+
+/* ------------------------------------------------------------------------
  * liveness and register allocation */
 
 static void
@@ -3870,9 +3954,7 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
    for (unsigned k = 0; k < i->nfld; k++)
       usse_set(&m, i->fld[k].id, i->fld[k].v);
    unsigned cls = form_class(i->form);
-   if (i->kind == SGX_INS_ALU && i->form != USSE_LIMM)
-      usse_set(&m, USSE_F_SKIPINV, 1);
-   if (i->form == USSE_LIMM)
+   if (i->kind == SGX_INS_ALU && !i->noskip)
       usse_set(&m, USSE_F_SKIPINV, 1);
    if (i->pred)
       usse_set(&m, USSE_F_PRED, i->pred);
@@ -3990,6 +4072,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       mem_index(c);
    if (!c->failed)
       mem_uniforms(c);
+   if (!c->failed && c->stage == MESA_SHADER_FRAGMENT)
+      mark_helpers(c);
    if (!c->failed)
       allocate(c);
    if (!c->failed) {

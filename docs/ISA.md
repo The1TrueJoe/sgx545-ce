@@ -2398,7 +2398,13 @@ backed above; this section only collects it.
 - **Derivatives** (corpus c3 dsx, dsy, fwidth): `fdsx d, x, x` / `fdsy d,
   x, x`, one per component, never repeated. libusc multiplies dFdy's
   operand by a driver constant first (the target's y direction; Mesa's st
-  does the same). Values not hardware-tested.
+  does the same). What feeds a derivative runs with skipinv clear (that
+  fmad, and tx_dep's coordinate math, where the LOD needs the neighbours):
+  a 2x2 neighbour outside the primitive is an invalid instance, and a
+  skipinv instruction leaves its register stale. The derivative itself
+  keeps skipinv. **Hardware** (EA3 piglit, all skipinv): dFdx of an
+  iterated value is right; dFdy of an `fmul` and either derivative of an
+  `abs` are wrong. That skipinv is the cause is a **guess** until the rerun.
 - **Phases**: every finalised fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
   hardware) and ends with `end` on its last instruction or an appended
