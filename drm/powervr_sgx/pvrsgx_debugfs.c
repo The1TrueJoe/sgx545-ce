@@ -13,6 +13,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_mmu.h"
+#include "pvrsgx_render.h"
 
 /* Registers safe to read once the firmware is running. */
 static const struct {
@@ -67,8 +68,17 @@ static int status_show(struct seq_file *m, void *unused)
 	return 0;
 }
 
+static int render_show(struct seq_file *m, void *unused)
+{
+	struct drm_debugfs_entry *entry = m->private;
+
+	pvrsgx_render_debugfs_show(m, to_pvrsgx_device(entry->dev));
+	return 0;
+}
+
 static const struct drm_debugfs_info pvrsgx_debugfs_list[] = {
 	{ "status", status_show, 0 },
+	{ "render", render_show, 0 },
 };
 
 void pvrsgx_debugfs_init(struct drm_minor *minor)

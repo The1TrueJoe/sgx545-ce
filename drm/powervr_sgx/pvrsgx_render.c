@@ -17,6 +17,7 @@
 #include <drm/drm_print.h>
 
 #include <linux/sched.h>
+#include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -616,5 +617,58 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6])
 
 	memset(data, 0, 6 * sizeof(u32));
 	data[1] = kobj_va(r->hwctx);
+
+	mutex_lock(&job->ctx->sdev->last_lock);
+	kref_get(&s->ref);
+	swap(job->ctx->sdev->last_rtds, s);
+	job->ctx->sdev->last_cmd_off = woff;
+	mutex_unlock(&job->ctx->sdev->last_lock);
+	pvrsgx_rtds_put(s);
 	return 0;
+}
+
+static void dump(struct seq_file *m, const char *name, struct pvrsgx_kobj *o, u32 off, u32 bytes)
+{
+	const u32 *w = (const u32 *)((const u8 *)kobj_cpu(o) + off);
+
+	seq_printf(m, "%s @ 0x%08x:", name, kobj_va(o) + off);
+	for (u32 i = 0; i < bytes / 4; i++)
+		seq_printf(m, "%s%08x", i % 8 ? " " : "\n  ", w[i]);
+	seq_puts(m, "\n");
+}
+
+/* The structures of the last render job, word by word, for A/B against the DDK. */
+void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_rt_dataset *s;
+	struct pvrsgx_render_ctx *r;
+
+	mutex_lock(&sdev->last_lock);
+	s = sdev->last_rtds;
+	if (!s) {
+		mutex_unlock(&sdev->last_lock);
+		seq_puts(m, "no render yet\n");
+		return;
+	}
+	r = s->ctx->render;
+	seq_printf(m, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n",
+		   kobj_va(r->pb), r->pb_pages, r->pb_base, kobj_va(r->freelist), kobj_va(r->scratch));
+	dump(m, "hwctx", r->hwctx, 0, 0x44);
+	dump(m, "ccbctl", r->ccbctl, 0, 8);
+	dump(m, "pbdesc", r->pbdesc, 0, 0x3c);
+	dump(m, "pbblocks", r->pbblocks, 0, 0x10);
+	dump(m, "freelist[first..]", r->freelist,
+	     ((kobj_va(r->pb) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
+	dump(m, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
+	dump(m, "ta_cmd", r->ccb, sdev->last_cmd_off, TA_CMD_BYTES);
+	dump(m, "render_details", s->rd, 0, 0x1ec & ~3u);
+	dump(m, "rtdata", s->rtdata, 0, 2 * 0x38 + 0x18);
+	dump(m, "rtword", s->rtword, 0, 4);
+	dump(m, "hwsync", s->hwsync, 0, 0x28);
+	dump(m, "done", s->done, 0, SYNC_DATA_BYTES);
+	dump(m, "bgblock", s->bgblock, 0, 0x60);
+	seq_printf(m, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
+		   kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
+		   kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
+	mutex_unlock(&sdev->last_lock);
 }

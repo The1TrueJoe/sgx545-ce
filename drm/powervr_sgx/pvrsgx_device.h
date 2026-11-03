@@ -147,6 +147,11 @@ struct pvrsgx_device {
 	u64 renders_submitted, renders_done;
 	struct work_struct reap_work;
 
+	/** @last_render: The last render job's structures, for debugfs. */
+	struct mutex last_lock;
+	struct pvrsgx_rt_dataset *last_rtds;
+	u32 last_cmd_off;
+
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
 };

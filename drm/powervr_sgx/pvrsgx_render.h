@@ -65,5 +65,7 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in);
 void pvrsgx_render_job_fini(struct pvrsgx_job *job);
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6]);
+struct seq_file;
+void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev);
 
 #endif /* PVRSGX_RENDER_H */

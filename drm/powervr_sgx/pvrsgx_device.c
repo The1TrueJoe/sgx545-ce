@@ -20,6 +20,7 @@
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
+#include "pvrsgx_render.h"
 
 /*
  * The firmware's own heaps, each a whole number of 4 MiB directory entries: the
@@ -223,6 +224,7 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	int err;
 
 	mutex_init(&sdev->ccb_lock);
+	mutex_init(&sdev->last_lock);
 	spin_lock_init(&sdev->ccb_spin);
 
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
@@ -287,6 +289,8 @@ err_mmu:
 void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 {
 	pvrsgx_job_fini(sdev);
+	pvrsgx_rtds_put(sdev->last_rtds);
+	sdev->last_rtds = NULL;
 	pvrsgx_fw_stop(sdev);
 	free_irq(sdev->irq, sdev);
 	pvrsgx_kobj_fini(sdev);
