@@ -488,21 +488,31 @@ staging(struct sgx545_context *ctx, size_t dwords)
 /* a compiled shader's constants: sa[base + slot] = constant buffer 0 float k */
 static void
 fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sgx545_shader *so,
-            uint32_t *block, unsigned base)
+            uint32_t *block, unsigned base, uint32_t *mem)
 {
    const float *cb = constant_data(ctx, stage);
    unsigned avail = ctx->constants[stage].buffer_size / 4;
 
-   /* F16 halves and C10 channels share a slot */
-   for (unsigned i = 0; i < so->n_consts; i++)
-      if (so->consts[i].fmt != 1)
-         block[base + so->consts[i].slot] = 0;
+   /* F16 halves and C10 channels share a slot (or a word of the memory
+    * block, filled the same way; mem is mem_dwords long) */
+   for (unsigned i = 0; i < so->n_consts; i++) {
+      const struct sgx545_const *k = &so->consts[i];
+
+      if (k->fmt == 1)
+         continue;
+      if (k->slot != 0xffff)
+         block[base + k->slot] = 0;
+      if (k->mem && mem)
+         mem[k->mem] = 0;
+   }
    for (unsigned i = 0; i < so->n_consts; i++) {
       const struct sgx545_const *k = &so->consts[i];
       float v = cb && k->k < avail ? cb[k->k] : 0.0f;
+      uint32_t bits, *at[2] = { k->slot != 0xffff ? &block[base + k->slot] : NULL,
+                                k->mem && mem ? &mem[k->mem] : NULL };
 
       if (k->fmt == 2) {
-         block[base + k->slot] |= (uint32_t)sgxws_f16(v) << k->shift;
+         bits = (uint32_t)sgxws_f16(v) << k->shift;
       } else if (k->fmt == 3 || k->fmt == 0x10) {
          /* C10: round(v * 255), signed 10 bits, the product in double as the
           * DDK has it (0.3f * 255 is 76.500003: 77, where a float product is
@@ -512,17 +522,47 @@ fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sg
          int c = CLAMP((int)lrint(CLAMP((double)v, -2.0, 2.0) * 255.0), -512, 511);
 
          if (k->fmt == 3)
-            block[base + k->slot] |= ((uint32_t)c & 0x3ff) << k->shift;
+            bits = ((uint32_t)c & 0x3ff) << k->shift;
          else
-            block[base + k->slot] |= (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
+            bits = (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
       } else if (k->fmt == 0x11) {
-         block[base + k->slot] |= k->value << k->shift;
+         bits = k->value << k->shift;
       } else {
-         memcpy(&block[base + k->slot], &v, 4);
+         memcpy(&bits, &v, 4);
+         for (unsigned j = 0; j < 2; j++)
+            if (at[j])
+               *at[j] = bits;
+         continue;
       }
-      SGX545_DBG(DRAW, "  %s constant %u -> sa%u (fmt %u at %u) = %f\n", stage == MESA_SHADER_VERTEX ? "vs" : "fs",
-                 k->k, base + k->slot, k->fmt, k->shift, v);
+      for (unsigned j = 0; j < 2; j++)
+         if (at[j])
+            *at[j] |= bits;
+      SGX545_DBG(DRAW, "  %s constant %u -> sa%d mem%u (fmt %u at %u) = %f\n",
+                 stage == MESA_SHADER_VERTEX ? "vs" : "fs", k->k, k->slot != 0xffff ? (int)(base + k->slot) : -1,
+                 k->mem, k->fmt, k->shift, v);
    }
+}
+
+/* a program's constants in memory for this draw (sgxws_const_mem), filled into a
+ * buffer of the context's; NULL when it has none */
+static void
+mem_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sgx545_shader *so,
+           uint32_t *block, unsigned base, struct sgxws_const_mem *m)
+{
+   memset(m, 0, sizeof(*m));
+   if (!so->mem_dwords)
+      return;
+   uint32_t **buf = &ctx->mem_consts[stage == MESA_SHADER_VERTEX ? 0 : 1];
+
+   if (!*buf && !(*buf = malloc(SGX545_MAX_CONST_MAP * 4 + 4)))
+      return;
+   memset(*buf, 0, so->mem_dwords * 4);
+   fill_consts(ctx, stage, so, block, base, *buf);
+   m->words = *buf;
+   m->dwords = so->mem_dwords;
+   m->n_bases = so->n_mem_bases;
+   for (unsigned j = 0; j < so->n_mem_bases; j++)
+      m->base[j] = base + so->mem_base_slot[j];
 }
 
 /* Every set the fragment program iterates or samples with must be one the
@@ -904,7 +944,10 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          st.sprite = info->mode == MESA_PRIM_POINTS;
       }
       d.vs = &vs->prog;
-      fill_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0);
+      if (vs->mem_dwords)
+         mem_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, &d.vs_mem);
+      else
+         fill_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, NULL);
       d.vs_consts = vsc;
       n_fetch = ctx->vs->n_attribs;
    } else if (ctx->vs->kind != SGX545_SHADER_VS_POSITION) {
@@ -923,7 +966,10 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       /* pass type: a blend 1; discard 4, or 2 with a blend (ISA.md) */
       st.pass_type = ctx->fs->discard_pa >= 0 ? (blend && blend->blend ? 2 : 4) : blend && blend->blend ? 1 : 0;
       d.fs = &fsp;
-      fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
+      if (ctx->fs->mem_dwords)
+         mem_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9, &d.fs_mem);
+      else
+         fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9, NULL);
       /* a constant-colour blend reads the blend colour, packed BGRA8, in sa2 */
       if (blend && blend->blend && blend->constant) {
          const float *c = ctx->blend_color.color;

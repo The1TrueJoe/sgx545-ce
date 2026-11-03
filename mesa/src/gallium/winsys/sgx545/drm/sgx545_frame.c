@@ -1361,7 +1361,8 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    uint32_t blk[23], n = 0, rows, sec, prim, vrows, ispb;
    uint32_t vw = vs->attr_dwords * 4, vsec_dwords = 10 + vs->const_dwords;
    uint32_t idx = c->idx, n_idx = d->count, idx_bytes = 0;
-   struct sgxws_ptr v, u, vsec;
+   uint32_t mem_bytes = ((d->vs_mem.dwords * 4 + 15) & ~15u) + ((d->fs_mem.dwords * 4 + 15) & ~15u);
+   struct sgxws_ptr v, u, vsec, vmem = { 0 }, fmem = { 0 };
    int e;
 
    if (d->verts_va) {
@@ -1373,7 +1374,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       } else if (d->count > c->idx_count) {
          return -E2BIG;
       }
-      if ((e = make_room(c, vsec_dwords * 4 + DMA_ALIGN)))
+      if ((e = make_room(c, vsec_dwords * 4 + mem_bytes + DMA_ALIGN)))
          return e;
       v.va = d->verts_va;
       v.p = NULL;
@@ -1386,7 +1387,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       } else if (d->count > c->idx_count) {
          return -E2BIG;
       }
-      if ((e = make_room(c, d->count * vw + vsec_dwords * 4 + idx_bytes + DMA_ALIGN)))
+      if ((e = make_room(c, d->count * vw + vsec_dwords * 4 + idx_bytes + mem_bytes + DMA_ALIGN)))
          return e;
       v = ring_alloc(&c->gen, d->count * vw, DMA_ALIGN);
       memcpy(v.p, d->verts, d->count * vw);
@@ -1398,11 +1399,24 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       }
    }
 
+   /* the constants in memory, in this frame's general ring: a block no
+    * earlier draw of the frame used */
+   if (d->vs_mem.dwords) {
+      vmem = ring_alloc(&c->gen, d->vs_mem.dwords * 4, 16);
+      memcpy(vmem.p, d->vs_mem.words, d->vs_mem.dwords * 4);
+   }
+   if (d->fs_mem.dwords) {
+      fmem = ring_alloc(&c->gen, d->fs_mem.dwords * 4, 16);
+      memcpy(fmem.p, d->fs_mem.words, d->fs_mem.dwords * 4);
+   }
+
    /* fragment: the constants and the secondary program that DMAs them, then
     * the primary program that runs the shader */
    if (fs->sec_dwords) {
       u = ring_alloc(&c->pds_pix, fs->sec_dwords * 4, DMA_ALIGN);
       memcpy(u.p, d->fs_consts, fs->sec_dwords * 4);
+      for (unsigned j = 0; j < d->fs_mem.n_bases && d->fs_mem.dwords; j++)
+         u.p[d->fs_mem.base[j]] = fmem.va + 512 * j;
       /* a task that waits for the DMA (wdf) before it ends: the empty task
        * here locks the GPU up (EA3) */
       sec = pds_dma_task(&c->pds_pix, u.va, fs->sec_dwords,
@@ -1494,6 +1508,8 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vsec.p[5] = f32(1.0f / 65535);
    if (vs->const_dwords)
       memcpy(vsec.p + 10, d->vs_consts, vs->const_dwords * 4);
+   for (unsigned j = 0; j < d->vs_mem.n_bases && d->vs_mem.dwords; j++)
+      vsec.p[10 + d->vs_mem.base[j]] = vmem.va + 512 * j;
    sec = pds_dma_task(&c->pds_vtx, vsec.va, vsec_dwords, doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm(c, 0x40000000 | sec >> 4);
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
