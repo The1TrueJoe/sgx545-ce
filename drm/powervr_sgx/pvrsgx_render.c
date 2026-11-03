@@ -64,62 +64,141 @@ static void release(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
 
 /* ---------------------------------------------------------------- render context */
 
-int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 req_pages)
+/*
+ * The VM's parameter buffer: PB, free list, PB descriptor and block list. One
+ * per VM, shared by its render contexts, as the DDK shares one PB descriptor
+ * (pb.c): the DPM numbers PB pages from the 3D-params heap base, so a VM's PB
+ * must start there and a second one can't (UAPI.md G15). The first context
+ * sets the size; later requests are ignored, as the DDK does.
+ */
+static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm, u32 req_pages)
 {
-	struct pvrsgx_render_ctx *r = kzalloc_obj(*r);
-	struct pvrsgx_vm *vm = ctx->vm;
+	struct pvrsgx_pb *pb = kzalloc_obj(*pb);
 	u32 pages = (req_pages ?: PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
-	u32 first, last, zls, ta, pds, *fl, *pd, *hw;
-	int err = -ENOMEM;
+	u32 first, last, zls, ta, pds, *fl, *pd;
+	int err;
 
-	if (!r)
-		return -ENOMEM;
-	ctx->render = r;
+	if (!pb)
+		return ERR_PTR(-ENOMEM);
+	kref_init(&pb->ref);
+	pb->sdev = sdev;
 
 #define KOBJ(dst, range, size, min, v) do { \
 		(dst) = pvrsgx_kobj_create(sdev, range, size, min, v); \
 		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
 	} while (0)
 
-	/* The PB, and what is addressed from its 1 MiB-aligned base, in the VM too. */
-	KOBJ(r->pb, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, vm);
-	r->pb_base = kobj_va(r->pb) & 0xfff00000;
-	KOBJ(r->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, r->pb_base, vm);
-	KOBJ(r->scratch, PVRSGX_KRANGE_3DPARAMS, 0x40, r->pb_base, vm);
-	KOBJ(r->pbdesc, PVRSGX_KRANGE_KDATA, 0x3c, 0, NULL);
-	KOBJ(r->pbblocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
-	KOBJ(r->ccb, PVRSGX_KRANGE_KDATA, CCB_BYTES, 0, NULL);
-	KOBJ(r->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
-	KOBJ(r->sync3d, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
-	KOBJ(r->hwctx, PVRSGX_KRANGE_KCODE, 0x44, 0, NULL);
+	/* The PB, and what is addressed from its 1 MiB-aligned base, in the VM. */
+	KOBJ(pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, vm);
+	pb->base = kobj_va(pb->buf) & 0xfff00000;
+	KOBJ(pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base, vm);
+	KOBJ(pb->desc, PVRSGX_KRANGE_KDATA, 0x3c, 0, NULL);
+	KOBJ(pb->blocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
+#undef KOBJ
 
 	/* Free list: prev<<16 | next per page, indexed from the range's base. */
-	first = (kobj_va(r->pb) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT;
+	first = (kobj_va(pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT;
 	last = first + pages - 1;
-	fl = kobj_cpu(r->freelist);
+	fl = kobj_cpu(pb->freelist);
 	for (u32 i = first; i <= last; i++)
 		fl[i] = (i == first ? 0xffffu : i - 1) << 16 | (i == last ? 0xffffu : i + 1);
 
-	kobj_cpu(r->pbblocks)[0] = pages;
-	kobj_cpu(r->pbblocks)[1] = first | last << 16;
-	kobj_cpu(r->pbblocks)[2] = kobj_va(r->pbdesc);
+	kobj_cpu(pb->blocks)[0] = pages;
+	kobj_cpu(pb->blocks)[1] = first | last << 16;
+	kobj_cpu(pb->blocks)[2] = kobj_va(pb->desc);
 
 	zls = pages - PB_EXTRA_PAGES;
 	ta = pages + 0x10;
 	pds = min(zls, ta);
-	pd = kobj_cpu(r->pbdesc);
+	pd = kobj_cpu(pb->desc);
 	pd[1] = pages;
 	pd[2] = last << 16 | first;	/* free list head */
 	pd[3] = (last - 1) << 16;
-	pd[4] = kobj_va(r->freelist);
+	pd[4] = kobj_va(pb->freelist);
 	pd[6] = pd[2];
 	pd[7] = pd[3];
 	pd[10] = ta;			/* TA threshold */
 	pd[11] = zls;			/* ZLS threshold */
 	pd[12] = zls;			/* global threshold */
 	pd[13] = pds > 0x100 ? pds - 0x100 : 0;	/* PDS threshold */
-	pd[14] = kobj_va(r->pbblocks);
-	r->pb_pages = pages;
+	pd[14] = kobj_va(pb->blocks);
+	pb->pages = pages;
+	return pb;
+
+fail:
+	pvrsgx_pb_put(pb);
+	return ERR_PTR(err);
+}
+
+static void pb_release(struct kref *ref)
+{
+	struct pvrsgx_pb *pb = container_of(ref, struct pvrsgx_pb, ref);
+	struct pvrsgx_device *sdev = pb->sdev;
+
+	if (pb->desc)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_PB, kobj_va(pb->desc));
+	release(sdev, &pb->blocks);
+	release(sdev, &pb->desc);
+	release(sdev, &pb->freelist);
+	release(sdev, &pb->buf);
+	kfree(pb);
+}
+
+void pvrsgx_pb_put(struct pvrsgx_pb *pb)
+{
+	if (pb)
+		kref_put(&pb->ref, pb_release);
+}
+
+/* The VM's PB, created by its first render context; the VM keeps one reference until closed. */
+static struct pvrsgx_pb *vm_pb_get(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm, u32 req_pages)
+{
+	struct pvrsgx_pb *pb;
+
+	mutex_lock(&vm->lock);
+	if (!vm->pb) {
+		pb = pb_create(sdev, vm, req_pages);
+		if (IS_ERR(pb)) {
+			mutex_unlock(&vm->lock);
+			return pb;
+		}
+		vm->pb = pb;
+	}
+	pb = vm->pb;
+	kref_get(&pb->ref);
+	mutex_unlock(&vm->lock);
+	return pb;
+}
+
+int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 req_pages)
+{
+	struct pvrsgx_render_ctx *r = kzalloc_obj(*r);
+	struct pvrsgx_vm *vm = ctx->vm;
+	u32 *hw;
+	int err = -ENOMEM;
+
+	if (!r)
+		return -ENOMEM;
+	ctx->render = r;
+
+	r->pb = vm_pb_get(sdev, vm, req_pages);
+	if (IS_ERR(r->pb)) {
+		err = PTR_ERR(r->pb);
+		r->pb = NULL;
+		goto fail;
+	}
+
+#define KOBJ(dst, range, size, min, v) do { \
+		(dst) = pvrsgx_kobj_create(sdev, range, size, min, v); \
+		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
+	} while (0)
+
+	KOBJ(r->scratch, PVRSGX_KRANGE_3DPARAMS, 0x40, r->pb->base, vm);
+	KOBJ(r->ccb, PVRSGX_KRANGE_KDATA, CCB_BYTES, 0, NULL);
+	KOBJ(r->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
+	KOBJ(r->sync3d, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
+	KOBJ(r->hwctx, PVRSGX_KRANGE_KCODE, 0x44, 0, NULL);
+#undef KOBJ
 
 	/* HW render context: the microkernel points list 0 at word 2's directory. */
 	hw = kobj_cpu(r->hwctx);
@@ -127,11 +206,10 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 	hw[2] = pvrsgx_mmu_pd_addr(vm->mmu);
 	hw[3] = kobj_va(r->ccb);
 	hw[4] = kobj_va(r->ccbctl);
-	hw[6] = kobj_va(r->pbdesc);
+	hw[6] = kobj_va(r->pb->desc);
 	hw[7] = kobj_va(r->scratch);
 	hw[16] = task_tgid_nr(current);
 	return 0;
-#undef KOBJ
 
 fail:
 	pvrsgx_render_ctx_fini(sdev, ctx);
@@ -146,17 +224,12 @@ void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *c
 		return;
 	if (r->hwctx)
 		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_RC, kobj_va(r->hwctx));
-	if (r->pbdesc)
-		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_PB, kobj_va(r->pbdesc));
 	release(sdev, &r->hwctx);
 	release(sdev, &r->sync3d);
 	release(sdev, &r->ccbctl);
 	release(sdev, &r->ccb);
-	release(sdev, &r->pbblocks);
-	release(sdev, &r->pbdesc);
 	release(sdev, &r->scratch);
-	release(sdev, &r->freelist);
-	release(sdev, &r->pb);
+	pvrsgx_pb_put(r->pb);
 	kfree(r);
 	ctx->render = NULL;
 }
@@ -264,7 +337,7 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 	KOBJ(s->tailptr, PVRSGX_KRANGE_TADATA, s->n.tailptr_bytes, 0, vm);
 	KOBJ(s->ta40, PVRSGX_KRANGE_TADATA, 0x40, 0, vm);
 	KOBJ(s->ta50, PVRSGX_KRANGE_TADATA, 0x50, 0, vm);
-	KOBJ(s->bgblock, PVRSGX_KRANGE_3DPARAMS, 0x200, r->pb_base, vm);
+	KOBJ(s->bgblock, PVRSGX_KRANGE_3DPARAMS, 0x200, r->pb->base, vm);
 	for (int i = 0; i < 2; i++) {
 		KOBJ(s->rgn[i], PVRSGX_KRANGE_TADATA, s->n.region_bytes, 0, vm);
 		KOBJ(s->ta88[i], PVRSGX_KRANGE_TADATA, 0x88, 0, vm);
@@ -311,7 +384,7 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 
 	/* Render details; the per-render words are written at each job. */
 	rd = kobj_cpu(s->rd);
-	rd[0x00 / 4] = r->pb_base;
+	rd[0x00 / 4] = r->pb->base;
 	rd[0x08 / 4] = 0x80;
 	rd[0x0c / 4] = 0x000f0000;
 	rd[0x10 / 4] = 0x80000000;
@@ -319,7 +392,7 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 	rd[0x3c / 4] = 0x80000000;
 	rd[0x40 / 4] = f32_one();
 	rd[0x44 / 4] = 0x300;
-	rd[0x48 / 4] = 0x2000000 | (kobj_va(s->bgblock) - r->pb_base) >> 4;
+	rd[0x48 / 4] = 0x2000000 | (kobj_va(s->bgblock) - r->pb->base) >> 4;
 	rd[0x50 / 4] = 0x88;
 	rd[0x58 / 4] = 0x30;
 	rd[0x64 / 4] = 1;
@@ -598,7 +671,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	cmd[0x18 / 4] = 0x50000000;
 	cmd[0x1c / 4] = last ? in->flags_3d | BIT(10) | f << 14 : 0;
 	cmd[0x20 / 4] = f;
-	cmd[0x24 / 4] = kobj_va(r->pbdesc);
+	cmd[0x24 / 4] = kobj_va(r->pb->desc);
 	cmd[0x38 / 4] = kobj_va(s->rd);
 	cmd[0x3c / 4] = kobj_va(s->hwsync);
 	cmd[0x40 / 4] = kobj_va(s->rtdata);
@@ -641,7 +714,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	t[0x28 / 4] = 0x358637bd;			/* 1e-6 */
 	t[0x2c / 4] = 0x358637bd;
 	t[0x30 / 4] = (s->h - 1) << 16 | (s->w - 1);
-	t[0x3c / 4] = r->pb_base;
+	t[0x3c / 4] = r->pb->base;
 	t[0x6c / 4] = 0x88;
 
 	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
@@ -687,13 +760,13 @@ void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev)
 	}
 	r = s->ctx->render;
 	seq_printf(m, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n",
-		   kobj_va(r->pb), r->pb_pages, r->pb_base, kobj_va(r->freelist), kobj_va(r->scratch));
+		   kobj_va(r->pb->buf), r->pb->pages, r->pb->base, kobj_va(r->pb->freelist), kobj_va(r->scratch));
 	dump(m, "hwctx", r->hwctx, 0, 0x44);
 	dump(m, "ccbctl", r->ccbctl, 0, 8);
-	dump(m, "pbdesc", r->pbdesc, 0, 0x3c);
-	dump(m, "pbblocks", r->pbblocks, 0, 0x10);
-	dump(m, "freelist[first..]", r->freelist,
-	     ((kobj_va(r->pb) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
+	dump(m, "pbdesc", r->pb->desc, 0, 0x3c);
+	dump(m, "pbblocks", r->pb->blocks, 0, 0x10);
+	dump(m, "freelist[first..]", r->pb->freelist,
+	     ((kobj_va(r->pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
 	dump(m, "scratch", r->scratch, 0, 0x40);
 	dump(m, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
 	dump(m, "ta_cmd", r->ccb, sdev->last_cmd_off, TA_CMD_BYTES);

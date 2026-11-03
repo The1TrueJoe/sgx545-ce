@@ -1123,6 +1123,9 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	vdm(c, 0x40000000 | sec >> 4);
 	vdm(c, vrows << 26 | 0xe100 | (10 + 3) >> 2);
 
+	/* SGXGEN_FAULT: vertices from an unmapped address, a TA page fault (recovery tests) */
+	if (getenv("SGXGEN_FAULT"))
+		v.va = c->dev->heap_base[H_GENERAL] + 0x800000;
 	vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords,
 		 vs->w0 ? vs->w0 : doutu_w0(c, vs->code, 1, vs->temps), vs->in_dwords, vs->out_dwords);
 	return 0;
