@@ -12,13 +12,16 @@
  *        frame, pixel for pixel.
  * hang   context B draws from an unmapped vertex address (SGXGEN_FAULT): its
  *        render times out and the GPU is reset. B is GUILTY and refused
- *        (-ECANCELED), the reset count went up by one, and A (idle at the
- *        time), a new context C and the transfer context still work.
+ *        (-ECANCELED), the reset count went up by one, a devcoredump of
+ *        the hang exists, and A (idle at the time), a new context C and the
+ *        transfer context still work.
  *
  * -H skips the hang case. Exit 0 when everything is right; 77 when there is
  * no powervr_sgx device.
  */
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -291,6 +294,53 @@ static struct drm_powervr_sgx_ioctl_get_context_state_args state(uint32_t ctx)
 	return a;
 }
 
+/*
+ * The hang's devcoredump: a devcd<N>/data that starts with "powervr_sgx hang:".
+ * Freed (written to) once read, so the next hang can make one. Returns its size.
+ */
+static long coredump_take(void)
+{
+	DIR *d = opendir("/sys/class/devcoredump");
+	struct dirent *e;
+	long size = -1;
+
+	if (!d)
+		return -1;
+	while ((e = readdir(d))) {
+		char path[300], buf[4096];
+		long n, total = 0;
+		int f;
+
+		if (strncmp(e->d_name, "devcd", 5))
+			continue;
+		snprintf(path, sizeof(path), "/sys/class/devcoredump/%s/data", e->d_name);
+		f = open(path, O_RDONLY);
+		if (f < 0)
+			continue;
+		n = read(f, buf, sizeof(buf));
+		if (n > 18 && !strncmp(buf, "powervr_sgx hang:", 17)) {
+			total = n;
+			if (verbose)
+				printf("  %.*s", (int)(strchr(buf, '\n') ? strchr(buf, '\n') - buf + 1 : 0), buf);
+			while ((n = read(f, buf, sizeof(buf))) > 0)
+				total += n;
+			size = total;
+		}
+		close(f);
+		if (size >= 0) {
+			f = open(path, O_WRONLY);
+			if (f >= 0) {
+				if (write(f, "1", 1) != 1)
+					size = -2;
+				close(f);
+			}
+			break;
+		}
+	}
+	closedir(d);
+	return size;
+}
+
 #define CHECK(cond) do { if (!(cond)) { printf("  FAILED: %s\n", #cond); bad++; } } while (0)
 
 static int hang(struct rc *a, unsigned f)
@@ -299,7 +349,9 @@ static int hang(struct rc *a, unsigned f)
 	struct rc b, c;
 	struct sgx_job j;
 	int bad = 0, e;
+	long dump;
 
+	coredump_take();	/* none left from before */
 	rc_create(&b);
 	s0 = state(b.c->ctx);
 	setenv("SGXGEN_FAULT", "1", 1);
@@ -313,6 +365,9 @@ static int hang(struct rc *a, unsigned f)
 	CHECK(sb.reset_count == s0.reset_count + 1);
 	CHECK(state(a->c->ctx).state == DRM_POWERVR_SGX_CONTEXT_STATE_OK);
 	CHECK(state(xctx).state == DRM_POWERVR_SGX_CONTEXT_STATE_OK);
+	dump = coredump_take();
+	printf("  devcoredump: %ld bytes\n", dump);
+	CHECK(dump > 1000);
 
 	/* B is refused from now on. */
 	record(&b, f);

@@ -130,12 +130,12 @@ static u32 *fw_words(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 }
 
 /* The TA3D control block as the microkernel left it (in-flight slot, PB state). */
-void pvrsgx_fw_dump_ta3dctl(struct seq_buf *sb, struct pvrsgx_device *sdev)
+void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b, const char *name)
 {
-	const u32 *w = fw_words(sdev, PVRSGX_FW_TA3DCTL);
+	const u32 *w = fw_words(sdev, b);
 
-	seq_buf_printf(sb, "ta3dctl @ 0x%08x:", sdev->fw.addr[PVRSGX_FW_TA3DCTL]);
-	for (u32 i = 0; i < layout[PVRSGX_FW_TA3DCTL].size / 4; i++)
+	seq_buf_printf(sb, "%s @ 0x%08x:", name, sdev->fw.addr[b]);
+	for (u32 i = 0; i < layout[b].size / 4; i++)
 		seq_buf_printf(sb, "%s%08x", i % 8 ? " " : "\n  ", READ_ONCE(w[i]));
 	seq_buf_puts(sb, "\n");
 }

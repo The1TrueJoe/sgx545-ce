@@ -812,6 +812,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
+	if (last)
+		rj->cmd_off = woff;
 	if (last && snapshot)
 		render_snapshot(job->ctx->sdev, s, woff);
 	if (last)
@@ -939,6 +941,7 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 			kobj_cpu(x->hwctx)[0] |= BIT(0);	/* as a render context's, after a reset */
 		x->reset_seen = job->ctx->sdev->reset_count;
 	}
+	job->transfer.cmd_off = woff;
 	memset(cmd, 0, XFER_CMD_BYTES);
 	cmd[0] = 1u << 25 | ((u32)in->bg_block_addr - base) >> 4;
 	cmd[1] = 0x200;
@@ -1030,7 +1033,7 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	seq_buf_printf(sb, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
 		       kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
 		       kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
-	pvrsgx_fw_dump_ta3dctl(sb, sdev);
+	pvrsgx_fw_dump(sb, sdev, PVRSGX_FW_TA3DCTL, "ta3dctl");
 }
 
 #define DUMP_BYTES	SZ_16K
@@ -1080,4 +1083,23 @@ static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset
 		seq_buf_str(&sb);
 	}
 	mutex_unlock(&sdev->last_lock);
+}
+
+/* A job's command and the structures it names, for a devcoredump. */
+void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job)
+{
+	struct pvrsgx_device *sdev = job->ctx->sdev;
+
+	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER && job->render.rtds) {
+		mutex_lock(&sdev->last_lock);
+		render_dump(sb, sdev, job->render.rtds, job->render.cmd_off);
+		mutex_unlock(&sdev->last_lock);
+	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER && job->ctx->transfer) {
+		struct pvrsgx_transfer_ctx *x = job->ctx->transfer;
+
+		dump(sb, "xfer_hwctx", x->hwctx, 0, XFER_HWCTX_BYTES);
+		dump(sb, "xfer_ccbctl", x->ccbctl, 0, 8);
+		dump(sb, "xfer_cmd", x->ccb, job->transfer.cmd_off, XFER_CMD_BYTES);
+		dump(sb, "xfer_done", x->done, 0, SYNC_DATA_BYTES);
+	}
 }

@@ -28,6 +28,7 @@
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
+#include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
@@ -204,6 +205,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	drm_err(&sdev->base, "job timed out (ccb %llu, consumed %llu); resetting\n",
 		bad->ccb_seq, pvrsgx_ccb_consumed(sdev));
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
+	pvrsgx_coredump(sdev, bad);
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {

@@ -9,6 +9,7 @@ config DRM_POWERVR_SGX
 	select DRM_GPUVM
 	select DRM_SCHED
 	select FW_LOADER
+	select WANT_DEV_COREDUMP
 	help
 	  Render-only DRM driver for the PowerVR SGX545 in the Intel CE5300
 	  family (Control4 EA-1/EA-3), where the GPU is its own PCI function
