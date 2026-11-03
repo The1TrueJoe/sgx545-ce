@@ -2402,9 +2402,14 @@ backed above; this section only collects it.
   fmad, and tx_dep's coordinate math, where the LOD needs the neighbours):
   a 2x2 neighbour outside the primitive is an invalid instance, and a
   skipinv instruction leaves its register stale. The derivative itself
-  keeps skipinv. **Hardware** (EA3 piglit, all skipinv): dFdx of an
-  iterated value is right; dFdy of an `fmul` and either derivative of an
-  `abs` are wrong. That skipinv is the cause is a **guess** until the rerun.
+  keeps skipinv. `d` must not be a register `x` uses: the instances of a
+  quad don't all read before any writes, so a neighbour can read the
+  derivative instead of `x` (the DDK never overlaps them). **Hardware**
+  (EA3 piglit): with skipinv on everything, dFdx of an iterated value was
+  right while dFdy of an `fmul` and either derivative of an `abs` were
+  wrong. With the feeding math skipinv-clear, `glsl-fwidth` passes, and
+  every remaining failure was a derivative whose `d` was `x` (`fdsy r4, r4,
+  r4`), while each that wrote another register was right.
 - **Phases**: every finalised fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
   hardware) and ends with `end` on its last instruction or an appended

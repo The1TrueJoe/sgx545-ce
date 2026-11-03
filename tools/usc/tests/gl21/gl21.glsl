@@ -47,6 +47,11 @@ void main() { gl_FragColor = vec4(f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f
 precision highp float;
 varying float x; varying float y;
 void main() { gl_FragColor = vec4(dFdx(abs(x)) * 20.0, dFdy(y * 2.0) * 10.0, fwidth(x * y), 1.0); }
+@frag dv_neg
+#extension GL_OES_standard_derivatives : enable
+precision highp float;
+varying float x; varying float y;
+void main() { gl_FragColor = vec4(dFdx(-abs(x)) * 40.0, dFdx(x * 40.0), dFdy(-abs(y)) * 30.0, 1.0); }
 @frag dv_tex
 #extension GL_OES_standard_derivatives : enable
 precision highp float;
