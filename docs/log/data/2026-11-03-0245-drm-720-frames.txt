@@ -1,0 +1,59 @@
+# powervr_sgx frame runs by process order, EA1 RAM boots, 2026-11-03
+
+## driver before the TA-flag 0x10 change (4401757), one boot
+### process 1: powervr_sgx_frame -r -k 2 -n 10 (256x256)
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 3: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 4: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 5: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 6: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 7: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 8: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 9: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+10/10 frames right
+firmware running: 1 lost: 0 resets: 0 irqs: 30
+kernel PD 0x033bb000 idle PD 0x02347000
+ccb wo 21 ro 21 issued 21 consumed 21
+### process 2: powervr_sgx_frame -r -k 2 -n 10 -s 720x480
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+sgxgen: SUBMIT_JOBS failed: -125 (job 0)
+sgxgen: SUBMIT_JOBS failed: -125 (job 0)
+sgxgen: SUBMIT_JOBS failed: -125 (job 0)
+sgxgen: SUBMIT_JOBS failed: -125 (job 0)
+sgxgen: SUBMIT_JOBS failed: -125 (job 0)
+sgxgen: SUBMIT_JOBS failed: -125 (job 0)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render FAILED, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+frame 3: render done, centre 00000000 (want ffffff00), corner 00000000 (want ff000080)
+frame 4: render FAILED, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+frame 5: render FAILED, centre 00000000 (want ffffff00), corner 00000000 (want ff000080)
+frame 6: render FAILED, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+frame 7: render FAILED, centre 00000000 (want ffffff00), corner 00000000 (want ff000080)
+frame 8: render FAILED, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+frame 9: render FAILED, centre 00000000 (want ffffff00), corner 00000000 (want ff000080)
+2/10 frames right
+[   63.598479] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 27, consumed 27); resetting
+[   64.104946] powervr_sgx 0000:01:02.0: [drm] microkernel did not power off
+[   64.709388] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x20000000)
+[   64.717701] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not restart: device lost
+firmware running: 0 lost: 1 resets: 1 irqs: 36
+kernel PD 0x033bb000 idle PD 0x02347000
+ccb wo 0 ro 0 issued 0 consumed 0
+## driver with the 0x10 change (a7503fe), fresh boot
+### process 1: powervr_sgx_frame -k 2 -n 10 -s 720x480
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 3: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 4: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 5: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 6: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 7: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 8: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 9: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+10/10 frames right
+firmware running: 1 lost: 0 resets: 0 irqs: 30
+kernel PD 0x027e7000 idle PD 0x04261000
+ccb wo 21 ro 21 issued 21 consumed 21
