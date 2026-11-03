@@ -9,7 +9,8 @@
  *   powervr_sgx_frame [-v] [-k kicks] [-n frames] [-s WxH] [-o out.bgra]
  *
  * -k 2 (default) records the scene as two TA kicks, the stream and then the
- * terminate words; -k 1 as one kick that also renders.
+ * terminate words; -k 1 as one kick that also renders. -r gives every frame a
+ * new render target (RT dataset).
  *
  * Exit 0 when every frame's pixels are right.
  */
@@ -37,12 +38,13 @@ int main(int argc, char **argv)
 	struct sgx_surface *s;
 	struct sgx_ctx *c;
 	struct sgx_dev dev;
-	int opt, e, verbose = 0, kicks = 2;
+	int opt, e, verbose = 0, kicks = 2, fresh = 0;
 
-	while ((opt = getopt(argc, argv, "vk:n:s:o:")) != -1) {
+	while ((opt = getopt(argc, argv, "vrk:n:s:o:")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
 		case 'k': kicks = atoi(optarg); break;
+		case 'r': fresh = 1; break;	/* a new RT dataset every frame */
 		case 'n': frames = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 's':
 			if (sscanf(optarg, "%ux%u", &w, &h) != 2)
@@ -74,6 +76,10 @@ int main(int argc, char **argv)
 		uint32_t want_tri = f & 1 ? 0xffffff00 : 0xff00ff00, want_bg = 0xff000080;
 		uint32_t centre, corner;
 
+		if (fresh && f) {
+			sgx_surface_destroy(c, s);
+			s = sgx_surface_create(c, w, h, 0);
+		}
 		memset(s->color.map, 0, s->stride * h * 4);
 		sgx_set_framebuffer(c, s);
 		sgx_clear(c, clear, 1.0f);

@@ -211,8 +211,13 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 
+	/*
+	 * As the DDK's hardware recovery: no power-off handshake with a hung
+	 * microkernel, straight into the full start (clocks, scripts, a reset
+	 * that drains pending faults, the first kick).
+	 */
 	sdev->reset_count++;
-	pvrsgx_fw_stop(sdev);
+	sdev->fw_running = false;
 	if (pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not restart: device lost\n");
 		sdev->lost = true;
