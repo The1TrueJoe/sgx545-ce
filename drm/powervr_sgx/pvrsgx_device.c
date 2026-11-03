@@ -9,6 +9,7 @@
 #include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
@@ -304,4 +305,77 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	pvrsgx_mmu_destroy(sdev->reset_mmu);
 	pvrsgx_mmu_destroy(sdev->idle_mmu);
 	pvrsgx_mmu_destroy(sdev->kernel_mmu);
+}
+
+/*
+ * Runtime PM. The SGX function has no PCI PM capability, so the PCI core keeps
+ * it in D0: suspend is the microkernel's power-off (pvrsgx_fw_stop), resume
+ * the same full start a reset does. A job on the GPU holds a reference from
+ * run_job until it leaves the active list.
+ */
+static bool runtime_pm = true;
+module_param(runtime_pm, bool, 0444);
+MODULE_PARM_DESC(runtime_pm, "Power the microkernel off when idle (autosuspend: the device's power/autosuspend_delay_ms)");
+
+#define AUTOSUSPEND_MS	500
+
+int pvrsgx_power_get(struct pvrsgx_device *sdev)
+{
+	return runtime_pm ? pm_runtime_resume_and_get(&sdev->pdev->dev) : 0;
+}
+
+void pvrsgx_power_put(struct pvrsgx_device *sdev, u32 n)
+{
+	if (!runtime_pm || !n)
+		return;
+	pm_runtime_mark_last_busy(&sdev->pdev->dev);
+	while (n--)
+		pm_runtime_put_autosuspend(&sdev->pdev->dev);
+}
+
+/* After probe: drop the reference the PCI core takes for it, and allow suspend. */
+void pvrsgx_power_init(struct pvrsgx_device *sdev)
+{
+	struct device *dev = &sdev->pdev->dev;
+
+	if (!runtime_pm)
+		return;
+	pm_runtime_set_autosuspend_delay(dev, AUTOSUSPEND_MS);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
+	pm_runtime_allow(dev);
+}
+
+/* Before remove (the PCI core has resumed the device): undo pvrsgx_power_init. */
+void pvrsgx_power_fini(struct pvrsgx_device *sdev)
+{
+	struct device *dev = &sdev->pdev->dev;
+
+	if (!runtime_pm)
+		return;
+	pm_runtime_forbid(dev);
+	pm_runtime_dont_use_autosuspend(dev);
+	pm_runtime_get_noresume(dev);
+}
+
+int pvrsgx_runtime_suspend(struct device *dev)
+{
+	struct pvrsgx_device *sdev = pci_get_drvdata(to_pci_dev(dev));
+
+	if (!sdev->lost)
+		pvrsgx_fw_stop(sdev);
+	return 0;
+}
+
+int pvrsgx_runtime_resume(struct device *dev)
+{
+	struct pvrsgx_device *sdev = pci_get_drvdata(to_pci_dev(dev));
+
+	/* A failed start loses the device: run_job then fails every job with -EIO. */
+	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
+		drm_err(&sdev->base, "microkernel did not start on resume: device lost\n");
+		sdev->lost = true;
+	}
+	return 0;
 }

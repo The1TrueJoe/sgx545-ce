@@ -16,6 +16,9 @@
  *        the hang exists, and A (idle at the time), a new context C and the
  *        transfer context still work.
  *
+ * idle   (runtime PM) the device autosuspends once idle; a render, a mixed
+ *        submit and a blit from suspended each resume it and are right.
+ *
  * -H skips the hang case. Exit 0 when everything is right; 77 when there is
  * no powervr_sgx device.
  */
@@ -341,6 +344,36 @@ static long coredump_take(void)
 	return size;
 }
 
+/* power/runtime_status of the GPU's PCI function. */
+static int rpm_status(char *buf, size_t n)
+{
+	FILE *fp = fopen("/sys/bus/pci/devices/0000:01:02.0/power/runtime_status", "r");
+	int ok;
+
+	if (!fp)
+		return -1;
+	ok = fgets(buf, (int)n, fp) != NULL;
+	fclose(fp);
+	if (ok)
+		buf[strcspn(buf, "\n")] = 0;
+	return ok ? 0 : -1;
+}
+
+/* 1 once suspended, 0 if not within ms, -1 without runtime PM. */
+static int rpm_wait_suspended(unsigned ms)
+{
+	char st[32];
+
+	for (unsigned t = 0; t <= ms; t += 20) {
+		if (rpm_status(st, sizeof(st)) || !strcmp(st, "unsupported"))
+			return -1;
+		if (!strcmp(st, "suspended"))
+			return 1;
+		usleep(20000);
+	}
+	return 0;
+}
+
 #define CHECK(cond) do { if (!(cond)) { printf("  FAILED: %s\n", #cond); bad++; } } while (0)
 
 static int hang(struct rc *a, unsigned f)
@@ -386,6 +419,31 @@ static int hang(struct rc *a, unsigned f)
 	return !bad;
 }
 
+static int idle(struct rc *a, unsigned f)
+{
+	char st[32] = "";
+	int64_t t0;
+	int bad = 0, s, ok;
+
+	s = rpm_wait_suspended(3000);
+	if (s < 0) {
+		printf("  no runtime PM\n");
+		return 1;
+	}
+	CHECK(s == 1);
+	t0 = deadline(0);
+	ok = render(a, f);
+	printf("  render from suspended: %lld us\n", (long long)(deadline(0) - t0) / 1000);
+	CHECK(ok);
+	rpm_status(st, sizeof(st));
+	CHECK(!strcmp(st, "active"));
+	CHECK(rpm_wait_suspended(3000) == 1);
+	CHECK(mixed(a, f + 1));
+	CHECK(rpm_wait_suspended(3000) == 1);
+	CHECK(blit_alone(a));
+	return !bad;
+}
+
 int main(int argc, char **argv)
 {
 	unsigned rounds = 1, bad = 0, f = 0;
@@ -417,6 +475,9 @@ int main(int argc, char **argv)
 		bad += !ok;
 		ok = mixed(&a, f + 1);
 		printf("round %u: mixed render + transfer %s\n", r, ok ? "right" : "WRONG");
+		bad += !ok;
+		ok = idle(&a, f);
+		printf("round %u: idle (runtime PM) %s\n", r, ok ? "right" : "WRONG");
 		bad += !ok;
 		if (do_hang) {
 			ok = hang(&a, f);

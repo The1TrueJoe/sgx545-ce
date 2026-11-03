@@ -28,8 +28,8 @@ struct pvrsgx_pb {
 	u32 pages;
 	/** @base: The 3D request base, PB & 0xfff00000. */
 	u32 base;
-	/** @reset_seen: The device reset count it was last set up for. */
-	u32 reset_seen;
+	/** @fw_gen: The microkernel run (pvrsgx_device.fw_gen) it was last set up for. */
+	u32 fw_gen;
 };
 
 struct pvrsgx_render_ctx {

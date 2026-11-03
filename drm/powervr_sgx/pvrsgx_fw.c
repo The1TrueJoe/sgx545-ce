@@ -20,6 +20,7 @@
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
 #include <linux/seq_buf.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -455,9 +456,13 @@ int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
 	u32 data[6] = { type, addr };
 	u32 *status;
 	u32 v;
-	int err;
+	int err, pm;
 
 	if (!cleanup || !addr)
+		return 0;
+	/* A suspended microkernel holds nothing; the next start is a fresh one. */
+	pm = pm_runtime_get_if_active(&sdev->pdev->dev);
+	if (pm == 0)
 		return 0;
 	mutex_lock(&sdev->cleanup_lock);
 	if (!sdev->fw_running || sdev->lost) {
@@ -476,6 +481,8 @@ int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
 out:
 	mutex_unlock(&sdev->cleanup_lock);
+	if (pm > 0)
+		pm_runtime_put_autosuspend(&sdev->pdev->dev);
 	return err;
 }
 
@@ -625,7 +632,7 @@ static int fw_check(struct pvrsgx_device *sdev)
 int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 {
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
-	bool first = !sdev->fw_running && !sdev->reset_count;
+	bool first = !sdev->fw_started;
 	int err;
 
 	/*
@@ -634,6 +641,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	 * exactly this.
 	 */
 	if (!first) {
+		sdev->fw_gen++;
 		if (restart_quiesce) {
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
@@ -685,7 +693,11 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		return err;
 	}
 	sdev->fw_running = true;
-	drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
+	sdev->fw_started = true;
+	if (first || sdev->reset_count != sdev->reset_logged) {
+		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
+		sdev->reset_logged = sdev->reset_count;
+	}
 	if (first && pvrsgx_vm_shares_kernel_heaps(sdev))
 		drm_warn(&sdev->base,
 			 "every VM maps the firmware's heaps (DDK microkernel): clients are not isolated from the firmware (docs/UAPI.md 7.2, P2/P3)\n");

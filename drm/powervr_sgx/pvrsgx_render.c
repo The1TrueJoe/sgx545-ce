@@ -133,7 +133,7 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm 
 
 	pb->pages = pages;
 	pb_init(pb);
-	pb->reset_seen = sdev->reset_count;
+	pb->fw_gen = sdev->fw_gen;
 	return pb;
 
 fail:
@@ -639,17 +639,18 @@ module_param(single_entry, bool, 0644);
 MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
 
 /*
- * A reset starts a fresh microkernel, but a VM's PB lives through it with the
- * pages a hung TA took still off its free list: the next render on any of the
- * VM's contexts hangs, and the next restart fails. The PB's first job after a
- * reset sets it up as new. Nothing else needs it (log 2026-11-03-0600): the
- * HW contexts and RT datasets carry on as they are.
+ * A restart (a reset, or a runtime resume) starts a fresh microkernel, but a
+ * VM's PB lives through it. After a hang the pages the TA took are still off
+ * its free list: the next render on any of the VM's contexts hangs, and the
+ * next restart fails. The PB's first job after a restart sets it up as new.
+ * Nothing else needs it (log 2026-11-03-0600): the HW contexts and RT datasets
+ * carry on as they are.
  */
 static void pb_rearm(struct pvrsgx_device *sdev, struct pvrsgx_pb *pb)
 {
-	if (pb->reset_seen != sdev->reset_count) {
+	if (pb->fw_gen != sdev->fw_gen) {
 		pb_init(pb);
-		pb->reset_seen = sdev->reset_count;
+		pb->fw_gen = sdev->fw_gen;
 	}
 }
 
