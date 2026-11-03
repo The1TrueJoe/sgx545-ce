@@ -1,0 +1,46 @@
+=== S50 waitlog test Tue Nov  3 21:32:27 UTC 2026 ===
+--- srvinit -o uk-waitlog.bin ---
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d67000)
+--- 10 frames ---
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+--- watchdog T3C (D4=waitsite DC=EVENT_STATUS E0=EVENT_STATUS2 E4=CLKGATE E8=stage EC=ticks) ---
+[   51.574464] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10132 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   51.585361] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   51.681544] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   51.869442] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000000 0x00000000 0x00000001
+[   51.876109] PVR_K: 	(T3C-E0) 0x00000000 0x000CCFA0 0x00000004 0x00000129
+[   54.587464] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x109f6 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   54.598358] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   54.694551] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   54.882438] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000000 0x00000000 0x00000001
+[   54.889108] PVR_K: 	(T3C-E0) 0x00000000 0x000CCFA0 0x00000004 0x00000B14
+[   57.599462] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x109f0 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   57.610355] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   57.706551] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   57.894439] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000000 0x00000000 0x00000001
+[   57.901105] PVR_K: 	(T3C-E0) 0x00000000 0x000CCFA0 0x00000004 0x000014F9
+[   60.614462] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x109f4 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   60.625355] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   60.721546] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   60.909433] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000000 0x00000000 0x00000001
+[   60.916101] PVR_K: 	(T3C-E0) 0x00000000 0x000CCFA0 0x00000004 0x00001EE1
+[   63.321463] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x108c2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   63.332359] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   63.428556] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   63.616466] PVR_K: 	(T3C-D0) 0x00000000 0x00000000 0x00000000 0x00000001
+[   63.623135] PVR_K: 	(T3C-E0) 0x00000000 0x000CCFA0 0x00000002 0x0000279E
+[   66.038463] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x108c2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   66.049360] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   66.145552] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   66.333450] PVR_K: 	(T3C-D0) 0x00000000 0x00000000 0x00000000 0x00000001
+[   66.340117] PVR_K: 	(T3C-E0) 0x00000000 0x000CCFA0 0x00000002 0x0000305C
+=== S50 test complete ===
