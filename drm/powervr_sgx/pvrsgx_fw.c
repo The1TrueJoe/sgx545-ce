@@ -16,6 +16,7 @@
 
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/iopoll.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -39,6 +40,10 @@ MODULE_FIRMWARE("powervr_sgx/sgx545-ukernel-1.7.862890.bin");
 static unsigned int core_clock = 400000000;
 module_param(core_clock, uint, 0444);
 MODULE_PARM_DESC(core_clock, "SGX core clock in Hz; sets the microkernel timer (default 400 MHz)");
+
+static bool cleanup = true;
+module_param(cleanup, bool, 0644);
+MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (default on)");
 
 /* The DDK microkernel: libsrv_init's .rodata 0x2000..0xef68. */
 #define UKERNEL_SIZE		0xcf68
@@ -421,6 +426,40 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 	f->ddk = true;		/* the only image with these patch sites */
 	return 0;
+}
+
+/*
+ * Tell the microkernel to forget a resource (UKERNEL.md 3, cleanup). It
+ * completes only once nothing in flight uses it; the caller has waited for
+ * its own jobs. On a timeout the memory is kept anyway (graveyard).
+ */
+int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
+{
+	u32 data[6] = { type, addr };
+	u32 *status;
+	u32 v;
+	int err;
+
+	if (!cleanup || !addr)
+		return 0;
+	mutex_lock(&sdev->cleanup_lock);
+	if (!sdev->fw_running || sdev->lost) {
+		err = 0;
+		goto out;
+	}
+	status = &fw_words(sdev, PVRSGX_FW_HOSTCTL)[HOSTCTL_CLEANUP_STATUS];
+	err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_CLEANUP, data, NULL);
+	if (err)
+		goto out;
+	err = read_poll_timeout(READ_ONCE, v, v & HOSTCTL_CLEANUP_COMPLETE, 1000, 5 * USEC_PER_SEC,
+				false, *status);
+	if (err)
+		drm_err(&sdev->base, "cleanup %u of 0x%08x did not complete\n", type, addr);
+	WRITE_ONCE(*status, *status & ~HOSTCTL_CLEANUP_COMPLETE);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
+out:
+	mutex_unlock(&sdev->cleanup_lock);
+	return err;
 }
 
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)

@@ -120,6 +120,8 @@ struct pvrsgx_device {
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
 
+	/** @cleanup_lock: One cleanup command in flight (one status bit). */
+	struct mutex cleanup_lock;
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
 	/** @ccb_spin: Keeps @ccb_issued and the write offset in step for readers. */

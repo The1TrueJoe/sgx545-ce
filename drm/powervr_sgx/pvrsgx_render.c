@@ -143,6 +143,10 @@ void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *c
 
 	if (!r)
 		return;
+	if (r->hwctx)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_RC, kobj_va(r->hwctx));
+	if (r->pbdesc)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_PB, kobj_va(r->pbdesc));
 	release(sdev, &r->hwctx);
 	release(sdev, &r->sync3d);
 	release(sdev, &r->ccbctl);
@@ -193,6 +197,8 @@ static void rtds_release(struct kref *ref)
 	struct pvrsgx_rt_dataset *s = container_of(ref, struct pvrsgx_rt_dataset, ref);
 	struct pvrsgx_device *sdev = s->ctx->sdev;
 
+	if (s->rtdata)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_RT, kobj_va(s->rtdata));
 	release(sdev, &s->rd);
 	release(sdev, &s->rd_w8);
 	release(sdev, &s->rd_w4);
