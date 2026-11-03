@@ -15,7 +15,7 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
 
-/* Registers safe to read once the firmware is running. */
+/* Registers safe to read while the clocks are on. */
 static const struct {
 	const char *name;
 	u32 reg;
@@ -60,7 +60,8 @@ static int status_show(struct seq_file *m, void *unused)
 		   pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS),
 		   pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR),
 		   pvrsgx_fw_hostctl(sdev, HOSTCTL_ASSERT_FAIL));
-	if (!sdev->fw_running)
+	/* After a failed start the clocks are still on; after a stop they may not be. */
+	if (!sdev->fw_running && !sdev->lost)
 		return 0;
 	for (int i = 0; i < ARRAY_SIZE(regs); i++)
 		seq_printf(m, "%-20s 0x%04x 0x%08x\n", regs[i].name, regs[i].reg,

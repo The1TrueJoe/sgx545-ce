@@ -16,6 +16,7 @@
 
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/iopoll.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -39,6 +40,14 @@ MODULE_FIRMWARE("powervr_sgx/sgx545-ukernel-1.7.862890.bin");
 static unsigned int core_clock = 400000000;
 module_param(core_clock, uint, 0444);
 MODULE_PARM_DESC(core_clock, "SGX core clock in Hz; sets the microkernel timer (default 400 MHz)");
+
+static bool cleanup = true;
+module_param(cleanup, bool, 0644);
+MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (default on)");
+
+static bool restart_quiesce = true;
+module_param(restart_quiesce, bool, 0644);
+MODULE_PARM_DESC(restart_quiesce, "Before a restart, run the deinit script, hold the cores in reset and drop bus mastering, as an unload does (default on)");
 
 /* The DDK microkernel: libsrv_init's .rodata 0x2000..0xef68. */
 #define UKERNEL_SIZE		0xcf68
@@ -423,6 +432,40 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 	return 0;
 }
 
+/*
+ * Tell the microkernel to forget a resource (UKERNEL.md 3, cleanup). It
+ * completes only once nothing in flight uses it; the caller has waited for
+ * its own jobs. On a timeout the memory is kept anyway (graveyard).
+ */
+int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
+{
+	u32 data[6] = { type, addr };
+	u32 *status;
+	u32 v;
+	int err;
+
+	if (!cleanup || !addr)
+		return 0;
+	mutex_lock(&sdev->cleanup_lock);
+	if (!sdev->fw_running || sdev->lost) {
+		err = 0;
+		goto out;
+	}
+	status = &fw_words(sdev, PVRSGX_FW_HOSTCTL)[HOSTCTL_CLEANUP_STATUS];
+	err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_CLEANUP, data, NULL);
+	if (err)
+		goto out;
+	err = read_poll_timeout(READ_ONCE, v, v & HOSTCTL_CLEANUP_COMPLETE, 1000, 5 * USEC_PER_SEC,
+				false, *status);
+	if (err)
+		drm_err(&sdev->base, "cleanup %u of 0x%08x did not complete\n", type, addr);
+	WRITE_ONCE(*status, *status & ~HOSTCTL_CLEANUP_COMPLETE);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
+out:
+	mutex_unlock(&sdev->cleanup_lock);
+	return err;
+}
+
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
@@ -578,6 +621,15 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	 * exactly this.
 	 */
 	if (!first) {
+		if (restart_quiesce) {
+			/* What an unload and reload (which recovers) does in between. */
+			deinit_script(sdev);
+			wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+			sgx_rd(sdev, SGX_CR_SOFT_RESET);
+			pci_clear_master(sdev->pdev);
+			msleep(10);
+			pci_set_master(sdev->pdev);
+		}
 		memset(sdev->fw.data.cpu, 0, sdev->fw.data.size);
 		memset(sdev->fw.code.cpu, 0, sdev->fw.code.size);
 		err = fw_build(sdev, sdev->fw.image);

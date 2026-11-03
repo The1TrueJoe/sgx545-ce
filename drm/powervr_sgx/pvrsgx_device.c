@@ -224,6 +224,7 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	int err;
 
 	mutex_init(&sdev->ccb_lock);
+	mutex_init(&sdev->cleanup_lock);
 	mutex_init(&sdev->last_lock);
 	spin_lock_init(&sdev->ccb_spin);
 
