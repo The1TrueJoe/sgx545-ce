@@ -107,6 +107,9 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
        * limit is GLES2's vertex minimum, 128 vec4, in both stages */
       caps->max_const_buffer0_size = 128 * 4 * sizeof(float);
       caps->max_const_buffers = 1;
+      /* u[i]: indexed from SA, or from the block when the array doesn't fit
+       * (without it GLSL selects over the whole array, a load per element) */
+      caps->indirect_const_addr = true;
       caps->max_temps = 64;
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = 8;
