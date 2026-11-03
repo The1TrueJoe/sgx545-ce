@@ -1,0 +1,21 @@
+down (attempt 1)
+ramboot=ohc.ramboot
+=== fix-test test.log ===
+=== S50 fixtest Tue Nov  3 21:53:09 UTC 2026 ===
+--- srvinit -o uk-timer.bin (lost-kick fix 99ecefac) ---
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d33000)
+--- 10 frames ---
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+--- HWR count + md5 ---
+HWR=7
+56f8466aa4cf3b08cfbd166b63dd88ec  /tmp/f1.bin
+=== S50 test complete ===
