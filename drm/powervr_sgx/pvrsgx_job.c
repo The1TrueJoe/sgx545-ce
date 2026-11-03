@@ -397,7 +397,7 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 		bool timeline = type == DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ;
 		struct dma_fence *fence;
 
-		if ((ops[i].flags & ~DRM_POWERVR_SGX_SYNC_OP_FLAGS_MASK) ||
+		if ((ops[i].flags & ~PVRSGX_SYNC_OP_FLAGS_MASK) ||
 		    (type != DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ && !timeline) ||
 		    (!timeline && ops[i].value)) {
 			err = -EINVAL;

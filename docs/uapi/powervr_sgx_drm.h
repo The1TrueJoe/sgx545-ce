@@ -120,12 +120,18 @@ struct drm_powervr_sgx_dev_query_gpu_info {
 	 */
 	__u32 core_revision;
 
-	/** @fw_interface_version: Host interface version of the loaded firmware. */
+	/**
+	 * @fw_interface_version: Host interface of the loaded firmware, one of
+	 * ``DRM_POWERVR_SGX_FW_IF_*``.
+	 */
 	__u32 fw_interface_version;
 
 	/** @_padding_c: Reserved. This field must be zero. */
 	__u32 _padding_c;
 };
+
+/* The DDK 1.7 SGXMKIF host interface (D8, docs/UKERNEL-DECISIONS.md). */
+#define DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7 1
 
 /**
  * struct drm_powervr_sgx_dev_query_limits - Limits of the object-creating ioctls
@@ -732,6 +738,14 @@ enum drm_powervr_sgx_job_type {
 	DRM_POWERVR_SGX_JOB_TYPE_RENDER = 0,
 	/** @DRM_POWERVR_SGX_JOB_TYPE_TRANSFER: One 3D-only blit. */
 	DRM_POWERVR_SGX_JOB_TYPE_TRANSFER,
+	/**
+	 * @DRM_POWERVR_SGX_JOB_TYPE_NULL: No GPU work. The firmware takes it in
+	 * queue order with the context's other jobs, and its out-fences signal
+	 * once it has. Runs on a context of either type; no stream, no flags,
+	 * no TA kicks, no RT dataset. For testing synchronisation (and for a
+	 * fence that follows everything queued before it).
+	 */
+	DRM_POWERVR_SGX_JOB_TYPE_NULL,
 };
 
 /**

@@ -47,7 +47,7 @@ done
 install -D -m644 "$BD/$BOARD.dts" "$SRC/arch/x86/boot/dts/$BOARD.dts"
 
 rm -rf "$SRC/drivers/gpu/drm/powervr_sgx"
-cp -R "$DRM/powervr_sgx" "$SRC/drivers/gpu/drm/powervr_sgx"
+cp -RL "$DRM/powervr_sgx" "$SRC/drivers/gpu/drm/powervr_sgx"
 grep -q powervr_sgx "$SRC/drivers/gpu/drm/Kconfig" ||
 	printf '\nsource "drivers/gpu/drm/powervr_sgx/Kconfig"\n' >> "$SRC/drivers/gpu/drm/Kconfig"
 grep -q powervr_sgx "$SRC/drivers/gpu/drm/Makefile" ||
