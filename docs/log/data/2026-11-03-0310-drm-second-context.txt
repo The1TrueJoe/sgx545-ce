@@ -1,0 +1,13 @@
+[   30.891607] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[   30.902939] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[   30.906312] powervr_sgx 0000:01:02.0: [drm] every VM maps the firmware's heaps (DDK microkernel): clients are not isolated from the firmware (docs/UAPI.md 7.2, P2/P3)
+[   30.921201] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   30.934655] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[   31.003314] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+[   33.133492] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 27, consumed 27); resetting
+[   33.646162] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x20000000)
+[   33.654476] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not restart: device lost
+firmware running: 0 lost: 1 resets: 1 irqs: 36
+kernel PD 0x04b97000 idle PD 0x04b96000
+ccb wo 0 ro 0 issued 0 consumed 0
+hostctl init 0x0 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0

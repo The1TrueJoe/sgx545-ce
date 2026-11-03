@@ -22,7 +22,7 @@ gma500 auxiliary device first.
 | GEM shmem, `GET_BO_MMAP_OFFSET`, PRIME import | written |
 | VM contexts on `drm_gpuvm`, `VM_MAP`/`VM_UNMAP` | written |
 | `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL and render jobs |
-| render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **first frames rendered** (two-kick scenes, 10/10 at 256x256); 720x480 hangs at frame 2 |
+| render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **first frames rendered** (two-kick scenes, 10/10 at 256x256 and 720x480); a second render context hangs on its third frame, cause open; the TA-flag 0x10 change was not shown to fix anything |
 | `DEV_QUERY` | written |
 | transfer jobs | not started (HW transfer context, TEX.md 10) |
 | shader validator (D9) | hooks only; design in section 6 |
@@ -150,6 +150,9 @@ VM so far before it lets go of the pages.
   guilty job, `-ECANCELED` otherwise), and the microkernel is stopped and started from a
   clean control block and an empty CCB. This is the "discard" recovery of UKERNEL.md 5a.
   If it does not start again, the device is lost and every later job fails with `-EIO`.
+  Today the in-place restart after a render hang fails ("microkernel did not start") even
+  from a fresh image and cleared arenas; a module reload recovers (log
+  `2026-11-03-0310-drm-second-context`).
 
 ## 6. The shader validator (D9)
 
