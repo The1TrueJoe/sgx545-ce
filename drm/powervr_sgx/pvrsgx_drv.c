@@ -23,6 +23,7 @@
 #include "pvrsgx_fw.h"
 #include "pvrsgx_gem.h"
 #include "pvrsgx_job.h"
+#include "pvrsgx_render.h"
 #include "pvrsgx_vm.h"
 
 /* Elements are copied at min(stride, obj_size); a longer input tail must be zero. */
@@ -145,6 +146,7 @@ static int pvrsgx_open(struct drm_device *drm, struct drm_file *file)
 	sfile->sdev = to_pvrsgx_device(drm);
 	xa_init_flags(&sfile->vms, XA_FLAGS_ALLOC1);
 	xa_init_flags(&sfile->contexts, XA_FLAGS_ALLOC1);
+	xa_init_flags(&sfile->rtds, XA_FLAGS_ALLOC1);
 	file->driver_priv = sfile;
 	return 0;
 }
@@ -153,8 +155,10 @@ static void pvrsgx_postclose(struct drm_device *drm, struct drm_file *file)
 {
 	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
 
+	pvrsgx_rtds_destroy_all(sfile);
 	pvrsgx_context_destroy_all(sfile);
 	pvrsgx_vm_destroy_all(sfile);
+	xa_destroy(&sfile->rtds);
 	xa_destroy(&sfile->contexts);
 	xa_destroy(&sfile->vms);
 	kfree(sfile);
@@ -174,6 +178,8 @@ static const struct drm_ioctl_desc pvrsgx_ioctls[] = {
 	IOCTL(CREATE_CONTEXT, pvrsgx_ioctl_create_context),
 	IOCTL(DESTROY_CONTEXT, pvrsgx_ioctl_destroy_context),
 	IOCTL(GET_CONTEXT_STATE, pvrsgx_ioctl_get_context_state),
+	IOCTL(CREATE_RT_DATASET, pvrsgx_ioctl_create_rt_dataset),
+	IOCTL(DESTROY_RT_DATASET, pvrsgx_ioctl_destroy_rt_dataset),
 	IOCTL(SUBMIT_JOBS, pvrsgx_ioctl_submit_jobs),
 };
 

@@ -360,16 +360,16 @@ static void pds_events2(struct pvrsgx_device *sdev)
 	pds_halt(&p);
 }
 
-/* Upload and patch the microkernel, assemble its entry programs, fill the control blocks. */
-static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
+/*
+ * The microkernel's control block, rebuilt at every start: after a reset it
+ * must not find the previous run's render in flight (UKERNEL.md 5a, "discard").
+ */
+static void ta3dctl_fill(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
-	u32 *t;
-	int err;
+	u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
 
-	memcpy(f->cpu[PVRSGX_FW_UKERNEL], fw->data, UKERNEL_SIZE);
-
-	t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
+	memset(t, 0, layout[PVRSGX_FW_TA3DCTL].size);
 	t[0x00] = f->addr[PVRSGX_FW_TA3DCTL];
 	t[0x01] = f->addr[PVRSGX_FW_HOSTCTL];
 	t[0x02] = f->addr[PVRSGX_FW_CCBCTL];
@@ -379,6 +379,16 @@ static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
 	t[0x2b] = f->addr[PVRSGX_FW_HWPERF];
 	t[0x2c] = f->addr[PVRSGX_FW_TASIG];
 	t[0x2d] = f->addr[PVRSGX_FW_3DSIG];
+}
+
+/* Upload and patch the microkernel, assemble its entry programs, fill the signature lists. */
+static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
+{
+	struct pvrsgx_fw *f = &sdev->fw;
+	u32 *t;
+	int err;
+
+	memcpy(f->cpu[PVRSGX_FW_UKERNEL], fw->data, UKERNEL_SIZE);
 
 	t = fw_words(sdev, PVRSGX_FW_TASIG);
 	t[0] = ARRAY_SIZE(ta_sig);
@@ -563,6 +573,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	/* SGXPostPowerState clears the power status before every start. */
 	hc[HOSTCTL_POWER_STATUS] = 0;
 	pvrsgx_ccb_reset(sdev);
+	ta3dctl_fill(sdev);
 	/* The first command invalidates the directory cache. */
 	sdev->fw.cache_control = PVRSGX_CC_INVAL_BIF_PD;
 

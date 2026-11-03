@@ -18,6 +18,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
+#include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
 
 static bool idle_kernel_pd;
@@ -229,6 +230,7 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	sdev->core_rev = sgx_rd(sdev, SGX_CR_CORE_REVISION);
 	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x\n", sdev->core_id, sdev->core_rev);
 
+	pvrsgx_kobj_init(sdev);
 	err = pvrsgx_fw_init(sdev);
 	if (err)
 		goto err_fw;
@@ -255,6 +257,7 @@ err_job:
 	pvrsgx_job_fini(sdev);
 err_fw:
 	pvrsgx_fw_fini(sdev);
+	pvrsgx_kobj_fini(sdev);
 err_mmu:
 	if (sdev->reset_page)
 		__free_page(sdev->reset_page);
@@ -269,6 +272,7 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	pvrsgx_job_fini(sdev);
 	pvrsgx_fw_stop(sdev);
 	free_irq(sdev->irq, sdev);
+	pvrsgx_kobj_fini(sdev);
 	pvrsgx_fw_fini(sdev);
 	__free_page(sdev->reset_page);
 	/* The reset directory still names the scratch page's tables, never the page. */

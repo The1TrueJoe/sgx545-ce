@@ -607,7 +607,10 @@ static void t_submit_invalid(int fd)
 	a._padding_14 = 0;
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &a, EFAULT);
 
-	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_RENDER;
+	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_RENDER;	/* no RT dataset */
+	assert_eq(submit(fd, j, 2, &failed), -ENOENT);
+	assert_eq(failed, 1);
+	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;
 	assert_eq(submit(fd, j, 2, &failed), -EOPNOTSUPP);
 	assert_eq(failed, 1);
 	j[1].type = 9;

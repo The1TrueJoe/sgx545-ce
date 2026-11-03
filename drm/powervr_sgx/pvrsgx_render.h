@@ -1,0 +1,69 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* Copyright © 2026 Joseph Telaak */
+
+#ifndef PVRSGX_RENDER_H
+#define PVRSGX_RENDER_H
+
+#include <linux/kref.h>
+#include <linux/types.h>
+
+#include <uapi/drm/powervr_sgx_drm.h>
+
+#include "powervr_sgx_stream_defs.h"
+
+struct drm_device;
+struct drm_file;
+struct pvrsgx_context;
+struct pvrsgx_device;
+struct pvrsgx_file;
+struct pvrsgx_job;
+struct pvrsgx_kobj;
+
+/* The firmware half of a render context (STATE.md section 6). */
+struct pvrsgx_render_ctx {
+	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *pbdesc, *pbblocks, *pb, *freelist, *scratch, *sync3d;
+	u32 pb_pages;
+	/** @pb_base: The 3D request base, PB & 0xfff00000. */
+	u32 pb_base;
+	u32 ccb_woff;
+};
+
+/* SGXAddRenderTarget's numbers (STATE.md section 6). */
+struct pvrsgx_rt_numbers {
+	u32 xt, yt, mx, my, padx, pady;
+	u32 mtile1, mtile2, te_screen, mt_tiles, region_bytes, tailptr_bytes;
+};
+
+struct pvrsgx_rt_dataset {
+	struct kref ref;
+	struct pvrsgx_context *ctx;
+	u32 w, h;
+	struct pvrsgx_rt_numbers n;
+	struct pvrsgx_kobj *rd, *rd_w8, *rd_w4, *hwsync, *rtword, *rtdata, *entword[2];
+	struct pvrsgx_kobj *rd_sync, *hwsync_access, *done;
+	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2], *bgblock;
+	/** @frames: Renders into this dataset so far. */
+	u32 frames;
+};
+
+/* What a render job carries from SUBMIT_JOBS to run_job. */
+struct pvrsgx_render_job {
+	struct pvrsgx_rt_dataset *rtds;
+	struct powervr_sgx_stream_render render;
+	struct powervr_sgx_stream_ta_kick kick;
+};
+
+int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
+void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
+
+void pvrsgx_rtds_put(struct pvrsgx_rt_dataset *rtds);
+void pvrsgx_rtds_destroy_all(struct pvrsgx_file *sfile);
+int pvrsgx_ioctl_create_rt_dataset(struct drm_device *drm, void *data, struct drm_file *file);
+int pvrsgx_ioctl_destroy_rt_dataset(struct drm_device *drm, void *data, struct drm_file *file);
+
+int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
+			   const struct drm_powervr_sgx_job *in);
+void pvrsgx_render_job_fini(struct pvrsgx_job *job);
+int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6]);
+
+#endif /* PVRSGX_RENDER_H */

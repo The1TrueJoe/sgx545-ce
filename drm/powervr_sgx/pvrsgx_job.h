@@ -10,6 +10,8 @@
 #include <linux/list.h>
 #include <linux/types.h>
 
+#include "pvrsgx_render.h"
+
 struct drm_device;
 struct drm_file;
 struct drm_syncobj;
@@ -29,6 +31,8 @@ struct pvrsgx_context {
 	u32 type;
 	/** @state: enum drm_powervr_sgx_context_state. */
 	u32 state;
+	/** @render: The firmware half of a render context, else NULL. */
+	struct pvrsgx_render_ctx *render;
 };
 
 struct pvrsgx_signal {
@@ -52,6 +56,13 @@ struct pvrsgx_job {
 	u64 ccb_seq;
 	/** @node: In pvrsgx_device.active while on the GPU. */
 	struct list_head node;
+	/**
+	 * @done_cpu: Word the firmware sets to @done_val when the job is done;
+	 * NULL for a job that is done when the CCB has taken it.
+	 */
+	u32 *done_cpu;
+	u32 done_val;
+	struct pvrsgx_render_job render;
 
 	struct drm_gem_object **bos;
 	u32 *bo_flags;
@@ -64,6 +75,8 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev);
 void pvrsgx_job_fini(struct pvrsgx_device *sdev);
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev);
 void pvrsgx_context_destroy_all(struct pvrsgx_file *sfile);
+struct pvrsgx_context *pvrsgx_context_lookup(struct pvrsgx_file *sfile, u32 handle);
+void pvrsgx_context_put(struct pvrsgx_context *ctx);
 
 int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_file *file);
 int pvrsgx_ioctl_destroy_context(struct drm_device *drm, void *data, struct drm_file *file);

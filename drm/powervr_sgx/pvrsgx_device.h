@@ -6,6 +6,7 @@
 
 #include <drm/drm_device.h>
 #include <drm/drm_file.h>
+#include <drm/drm_mm.h>
 #include <drm/gpu_scheduler.h>
 
 #include <linux/io.h>
@@ -17,6 +18,16 @@
 #include <linux/xarray.h>
 
 #include "pvrsgx_regs.h"
+
+/* Device-wide ranges for kernel-owned objects (docs/UAPI.md section 5). */
+enum pvrsgx_krange {
+	PVRSGX_KRANGE_KDATA,	/* firmware only */
+	PVRSGX_KRANGE_KCODE,	/* firmware only */
+	PVRSGX_KRANGE_SYNC,	/* firmware only */
+	PVRSGX_KRANGE_3DPARAMS,	/* firmware and the owner's VM */
+	PVRSGX_KRANGE_TADATA,	/* firmware and the owner's VM */
+	PVRSGX_KRANGE_COUNT
+};
 
 struct firmware;
 struct pci_dev;
@@ -125,6 +136,15 @@ struct pvrsgx_device {
 
 	u32 reset_count;
 
+	/** @kobj_lock: Protects @krange and @graveyard. */
+	struct mutex kobj_lock;
+	struct drm_mm krange[PVRSGX_KRANGE_COUNT];
+	/** @graveyard: Released kernel objects the firmware may still read. */
+	struct list_head graveyard;
+	/** @renders_submitted, @renders_done: For reaping @graveyard. */
+	u64 renders_submitted, renders_done;
+	struct work_struct reap_work;
+
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
 };
@@ -140,6 +160,8 @@ struct pvrsgx_file {
 	struct xarray vms;
 	/** @contexts: Contexts by handle. */
 	struct xarray contexts;
+	/** @rtds: RT datasets by handle. */
+	struct xarray rtds;
 };
 
 static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)

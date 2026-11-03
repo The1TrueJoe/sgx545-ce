@@ -12,9 +12,14 @@ powervr_sgx-y := \
 	pvrsgx_fw.o \
 	pvrsgx_gem.o \
 	pvrsgx_job.o \
+	pvrsgx_kobj.o \
 	pvrsgx_mmu.o \
+	pvrsgx_render.o \
 	pvrsgx_validate.o \
-	pvrsgx_vm.o
+	pvrsgx_vm.o \
+	powervr_sgx_cmd_checks.o \
+	powervr_sgx_stream.o \
+	powervr_sgx_stream_defs.o
 
 powervr_sgx-$(CONFIG_DEBUG_FS) += pvrsgx_debugfs.o
 
