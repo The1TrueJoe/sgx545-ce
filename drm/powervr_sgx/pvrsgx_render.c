@@ -66,7 +66,7 @@ static void release(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
 
 /* ---------------------------------------------------------------- render context */
 
-/* The PB's free list and descriptor as new: at creation, and after a reset. */
+/* The PB's free list and descriptor as new: at creation, and after a reset (pb_rearm). */
 static void pb_init(struct pvrsgx_pb *pb)
 {
 	u32 pages = pb->pages, first, last, zls, ta, pds, *fl, *pd;
@@ -220,7 +220,6 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 	hw[6] = kobj_va(r->pb->desc);
 	hw[7] = kobj_va(r->scratch);
 	hw[16] = task_tgid_nr(current);
-	r->reset_seen = sdev->reset_count;
 	return 0;
 
 fail:
@@ -313,10 +312,7 @@ void pvrsgx_rtds_put(struct pvrsgx_rt_dataset *rtds)
 		kref_put(&rtds->ref, rtds_release);
 }
 
-/*
- * The dataset's structures as new, frame count 0: at creation, and after a
- * reset (a restarted microkernel has never seen it).
- */
+/* The dataset's structures as new, frame count 0. */
 static void rtds_init(struct pvrsgx_rt_dataset *s)
 {
 	struct pvrsgx_render_ctx *r = s->ctx->render;
@@ -328,7 +324,6 @@ static void rtds_init(struct pvrsgx_rt_dataset *s)
 	for (int i = 0; i < 2; i++)
 		kobj_cpu(s->entword[i])[0] = 0;
 	s->frames = 0;
-	s->reset_seen = s->ctx->sdev->reset_count;
 
 	/* RT data: header, then two entries of 14 words. */
 	kobj_cpu(s->rtword)[0] = 1;
@@ -643,47 +638,18 @@ static bool single_entry;
 module_param(single_entry, bool, 0644);
 MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
 
-#define REARM_HWCTX_BIT		BIT(0)
-#define REARM_HWCTX_RD		BIT(1)
-#define REARM_PB		BIT(2)
-#define REARM_RTDS		BIT(3)
-#define REARM_XFER_BIT		BIT(4)
-
-/* Debug: which of the set-ups below run (all by default), to tell which are needed. */
-static uint reset_rearm = 0x1f;
-module_param(reset_rearm, uint, 0644);
-MODULE_PARM_DESC(reset_rearm, "After a reset: 1 HW render context bit 0, 2 its render details, 4 PB, 8 RT dataset, 16 HW transfer context bit 0");
-
 /*
- * After a reset the microkernel starts from nothing, but a context, its VM's PB
- * and its datasets can live through it. Their first job after the reset sets
- * them up again: the HW context's first-use bit (the microkernel clears bit 0
- * of word 0 when it first loads the context) and no render in flight, the PB
- * as new (a hung TA leaves pages taken from the free list), the dataset as new.
+ * A reset starts a fresh microkernel, but a VM's PB lives through it with the
+ * pages a hung TA took still off its free list: the next render on any of the
+ * VM's contexts hangs, and the next restart fails. The PB's first job after a
+ * reset sets it up as new. Nothing else needs it (log 2026-11-03-0600): the
+ * HW contexts and RT datasets carry on as they are.
  */
-static void render_rearm(struct pvrsgx_device *sdev, struct pvrsgx_render_ctx *r,
-			 struct pvrsgx_rt_dataset *s)
+static void pb_rearm(struct pvrsgx_device *sdev, struct pvrsgx_pb *pb)
 {
-	u32 *hw = kobj_cpu(r->hwctx);
-
-	if (r->reset_seen != sdev->reset_count) {
-		if (reset_rearm & REARM_HWCTX_BIT)
-			hw[0] |= BIT(0);
-		if (reset_rearm & REARM_HWCTX_RD) {
-			hw[0x20 / 4] = 0;
-			hw[0x24 / 4] = 0;
-		}
-		r->reset_seen = sdev->reset_count;
-	}
-	if (r->pb->reset_seen != sdev->reset_count) {
-		if (reset_rearm & REARM_PB)
-			pb_init(r->pb);
-		r->pb->reset_seen = sdev->reset_count;
-	}
-	if (s->reset_seen != sdev->reset_count) {
-		if (reset_rearm & REARM_RTDS)
-			rtds_init(s);
-		s->reset_seen = sdev->reset_count;
+	if (pb->reset_seen != sdev->reset_count) {
+		pb_init(pb);
+		pb->reset_seen = sdev->reset_count;
 	}
 }
 
@@ -710,7 +676,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	if (last && k && snap_gap_ms)
 		msleep(snap_gap_ms);
 	if (first)
-		render_rearm(job->ctx->sdev, r, s);
+		pb_rearm(job->ctx->sdev, r->pb);
 	f = single_entry ? 0 : s->frames;
 	odd = f & 1;
 	rgn_this = kobj_va(s->rgn[odd ? 0 : 1]);
@@ -875,7 +841,6 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 	hw[3] = kobj_va(x->ccb);
 	hw[4] = kobj_va(x->ccbctl);
 	hw[0x2a] = task_tgid_nr(current);
-	x->reset_seen = sdev->reset_count;
 	return 0;
 
 fail:
@@ -936,11 +901,6 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	u32 woff = x->ccb_woff, base = (u32)in->bg_block_addr & 0xfff00000;
 	u32 *cmd = (u32 *)((u8 *)kobj_cpu(x->ccb) + woff), *sh, *done;
 
-	if (x->reset_seen != job->ctx->sdev->reset_count) {
-		if (reset_rearm & REARM_XFER_BIT)
-			kobj_cpu(x->hwctx)[0] |= BIT(0);	/* as a render context's, after a reset */
-		x->reset_seen = job->ctx->sdev->reset_count;
-	}
 	job->transfer.cmd_off = woff;
 	memset(cmd, 0, XFER_CMD_BYTES);
 	cmd[0] = 1u << 25 | ((u32)in->bg_block_addr - base) >> 4;

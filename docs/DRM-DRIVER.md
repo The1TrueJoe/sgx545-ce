@@ -26,7 +26,8 @@ gma500 auxiliary device first.
 | `DEV_QUERY` | written |
 | transfer jobs | written; **blits pixel-exact** (copy, upload and readback, box-filtered mip; 360 in a row, interleaved with another process's renders; log `2026-11-03-0405-drm-transfers`) |
 | shader validator (D9) | hooks only; design in section 6 |
-| runtime PM, devcoredump | not started |
+| devcoredump on a hang | written; HW-verified (log `2026-11-03-0600-drm-rearm-bisect`) |
+| runtime PM | not started; the SGX function has no PCI PM capability, so runtime PM is the microkernel power-off alone |
 
 First frames (2026-11-03, `docs/log/entries/2026-11-03-0210-drm-first-frame.md`): a clear and a
 triangle from client streams, pixels exact, 10 of 10 frames at 256x256, completion from the
@@ -49,9 +50,12 @@ tests.
 | `pvrsgx_gem.c` | shmem objects |
 | `pvrsgx_vm.c` | VM contexts, heaps, `VM_MAP`/`VM_UNMAP` |
 | `pvrsgx_job.c` | contexts, scheduler, fences, `SUBMIT_JOBS` |
+| `pvrsgx_render.c` | render and transfer contexts, PB, RT datasets, the TA and transfer commands |
 | `pvrsgx_validate.c` | D9 hooks |
-| `pvrsgx_debugfs.c` | `status`: firmware state, CCB, host control, registers |
-| `drm/tests/powervr_sgx_test.c` | uAPI tests, IGT style |
+| `pvrsgx_dump.c` | device state as text: debugfs `status`, the devcoredump on a hang |
+| `pvrsgx_debugfs.c` | `status`; `render` (the last render's structures); `render_before` (with `snapshot=1`: as its last kick was written) |
+| `drm/tests/powervr_sgx_test.c` | uAPI tests, IGT style: every ioctl, every reserved bit, streams, VAs outside the VM |
+| `drm/tests/powervr_sgx_frame.c`, `_blit.c`, `_hang.c` | frames, blits, mixed submits and hang recovery on the GPU |
 | `drm/ci/` | the openHC EA kernel with this driver, for CI and RAM boots |
 
 ## 3. Bringing the GPU up
@@ -177,21 +181,25 @@ VM so far before it lets go of the pages.
   uAPI suite passed (log `2026-11-03-0355-drm-shared-pb-restart`). The restarts that failed
   earlier (log `2026-11-03-0300-drm-cleanup`) followed hangs from the misplaced PB; which
   of the quiesce and the PB fix made the difference was not separated.
-- Those restarts only ever served new processes. A context, its VM's PB and its RT
-  datasets that live through a reset hung on their first render after it, and the next
-  reset lost the device (log `2026-11-03-0530-drm-mixed-submit-3d-dump`). Each now
-  remembers the reset count it was set up for, and its first job after a reset sets it
-  up again:
-  - the HW render context gets back bit 0 of word 0 (the microkernel clears it when it
-    first loads the context) and no render details in flight (+0x20, +0x24);
-  - the PB gets its free list and descriptor as at creation;
-  - the RT dataset is set up as new, with its frame count back to 0;
-  - the HW transfer context gets bit 0 of word 0 back.
-
-  With that, `powervr_sgx_hang` passes 5 forced hangs out of 5: the guilty context is
-  refused, and the contexts that were idle, a new one and a transfer context all render
-  right, as does a mixed submit (log `2026-11-03-0550-drm-reset-rearm`). Which of the
-  four is needed was not separated.
+- Those restarts only ever served new processes. A context that lives through a reset
+  hung on its first render after it, and so did a new context in the same VM; the next
+  reset then lost the device (log `2026-11-03-0530-drm-mixed-submit-3d-dump`). The cause
+  is the VM's PB: the hung TA took pages off its free list and nothing gives them back.
+  The PB now remembers the reset count it was set up for, and its first job after a
+  reset sets its free list, block list and descriptor up as new. That is the only thing
+  a restart has to redo. The HW render and transfer contexts (bit 0 of word 0, which
+  the microkernel clears on first use) and the RT datasets carry on as they are: with
+  each of them left out in turn the hang test still passes, and without the PB it fails
+  (log `2026-11-03-0600-drm-rearm-bisect`). `powervr_sgx_hang` passes 5 forced hangs
+  out of 5, with the guilty context refused and idle, new and transfer contexts and a
+  mixed submit all right afterwards.
+- On a timeout the driver takes a devcoredump before the restart
+  (`/sys/class/devcoredump/devcd<N>/data`, freed by writing to it). It holds the status
+  and registers, the host control and TA3D control blocks, the kernel CCB, and the hung
+  job's command and the structures it names: for a render, the PB, the RT dataset and
+  its render details, the region headers and tail pointers. A forced TA page fault's
+  dump is in `docs/log/data/2026-11-03-0600-drm-devcoredump.txt` (`BIF_FAULT` holds the
+  unmapped vertex address).
 - Teardown can send the microkernel's cleanup commands first (`cleanup`, UKERNEL.md 3).
   Off by default: on the DDK microkernel the RT and PB cleanups never complete, and the
   PB one stalls the kernel CCB.

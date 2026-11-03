@@ -12,6 +12,8 @@
 #include <linux/seq_buf.h>
 #include <linux/vmalloc.h>
 
+#include <uapi/drm/powervr_sgx_drm.h>
+
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_dump.h"
@@ -79,7 +81,11 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
  */
 void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 {
-	static const char *const types[] = { "null", "render", "transfer" };
+	static const char *const types[] = {
+		[DRM_POWERVR_SGX_JOB_TYPE_RENDER] = "render",
+		[DRM_POWERVR_SGX_JOB_TYPE_TRANSFER] = "transfer",
+		[DRM_POWERVR_SGX_JOB_TYPE_NULL] = "null",
+	};
 	struct seq_buf sb;
 	char *buf;
 
