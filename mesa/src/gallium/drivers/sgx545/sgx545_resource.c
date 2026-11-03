@@ -9,6 +9,7 @@
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_math.h"
+#include "util/u_surface.h"
 #include "util/u_transfer.h"
 
 #include "sgx545_context.h"
@@ -444,6 +445,24 @@ sgx545_resource_screen_init(struct sgx545_screen *screen)
    screen->base.resource_destroy = sgx545_resource_destroy;
 }
 
+/* clears of a surface outside glClear (st's copy and clear paths), on the
+ * CPU through a map: rare, and the map already decodes what a render left */
+static void
+sgx545_clear_render_target(struct pipe_context *pctx, struct pipe_surface *dst,
+                           const union pipe_color_union *color, unsigned x, unsigned y, unsigned w,
+                           unsigned h, bool render_condition_enabled)
+{
+   util_clear_render_target(pctx, dst, color, x, y, w, h);
+}
+
+static void
+sgx545_clear_depth_stencil(struct pipe_context *pctx, struct pipe_surface *dst, unsigned flags,
+                           double depth, unsigned stencil, unsigned x, unsigned y, unsigned w, unsigned h,
+                           bool render_condition_enabled)
+{
+   util_clear_depth_stencil(pctx, dst, flags, depth, stencil, x, y, w, h);
+}
+
 void
 sgx545_resource_context_init(struct sgx545_context *ctx)
 {
@@ -454,4 +473,7 @@ sgx545_resource_context_init(struct sgx545_context *ctx)
    ctx->base.transfer_flush_region = u_default_transfer_flush_region;
    ctx->base.buffer_subdata = u_default_buffer_subdata;
    ctx->base.texture_subdata = u_default_texture_subdata;
+   ctx->base.clear_render_target = sgx545_clear_render_target;
+   ctx->base.clear_depth_stencil = sgx545_clear_depth_stencil;
+   ctx->base.clear_texture = u_default_clear_texture;
 }
