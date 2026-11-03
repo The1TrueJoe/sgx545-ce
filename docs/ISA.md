@@ -2389,6 +2389,16 @@ backed above; this section only collects it.
   predicate kills, hardware), the rest in phase 1, and ISPA pass type 4.
   Not on lines: any feedback program breaks a lines draw (hardware). See "Phases, visibility feedback and
   discard" for the words and what is a guess.
+- **gl_FragDepth** (not in GLES 2, so no corpus): the DDK's points path
+  feeds the ISP a depth with `(p1) depthf pa<z>, sa3, sa4 [end]` in the
+  feedback nop's place, pa<z> the iterated z (above). Our compiler leaves
+  gl_FragDepth, clamped to [0, 1], in a pa register at the feedback nop for
+  a `depthf` there, pass type 5. **Guess**: that depthf's src0 is the depth
+  written; sa3/sa4 not traced. Needs hardware.
+- **Derivatives** (corpus c3 dsx, dsy, fwidth): `fdsx d, x, x` / `fdsy d,
+  x, x`, one per component, never repeated. libusc multiplies dFdy's
+  operand by a driver constant first (the target's y direction; Mesa's st
+  does the same). Values not hardware-tested.
 - **Phases**: every finalised fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
   hardware) and ends with `end` on its last instruction or an appended
@@ -2457,7 +2467,9 @@ backed above; this section only collects it.
   type, mat4, mat2, vec4, mat3, vec3, vec2, float (table 0x464c0), within
   a type the largest first (by the symbol's +0x14, the array size: guess),
   and gives each row a new set while sets remain; past 10 it
-  packs rows into free components of sets with the same precision.
+  packs rows into free components of sets with the same precision
+  (our `sgx_pack_varyings` does this without the precision rule: each
+  stage is placed on its own, and their precisions may differ).
   (**driver**; corpus: vo_vall's o0, o1, o2 (vec2), o3 (float) land at o4,
   o8, o12, o14 = sets 0-3 of sizes 4, 4, 2, 1.) Unwritten varyings get no set.
 - **gl_PointSize**: when a vertex shader writes it, glslcompiler reserves

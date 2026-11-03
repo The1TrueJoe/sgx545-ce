@@ -169,11 +169,64 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
       v->comps = glsl_get_vector_elements(e);
       v->precision = var->data.precision;
       v->set = set;
-      /* past ten sets glslcompiler packs rows into free components of
-       * sets of the same precision; not done here */
-      for (unsigned r = 0; r < v->rows && set < SGX_MAX_SETS; r++)
-         out->set_comps[set++] = v->comps;
+      for (unsigned r = 0; r < v->rows; r++, set++)
+         if (set < SGX_MAX_SETS)
+            out->set_comps[set] = v->comps;
    }
+   sgx_pack_varyings(out);
+}
+
+bool
+sgx_pack_varyings(struct sgx_varyings *out)
+{
+   bool fits = true;
+   for (unsigned i = 0; i < out->n; i++)
+      fits &= out->v[i].set + out->v[i].rows <= SGX_MAX_SETS && out->v[i].comp + out->v[i].comps <= 4;
+   if (fits)
+      return true;
+
+   /* glslcompiler: a set per row while sets remain, then rows into free
+    * components of earlier sets (ISA.md "Varyings to sets"). It packs by
+    * precision too, but a varying's precision may differ between the stages,
+    * each placed on its own, so not here (a mixed set is iterated in f32). A
+    * sprite's set 0 is the point coordinate's alone. */
+   uint8_t used[SGX_MAX_SETS] = { 0 };
+   unsigned next = out->point_size ? 1 : 0;
+   memset(out->set_comps, 0, sizeof(out->set_comps));
+   if (out->point_size) {
+      used[0] = 0xf;
+      out->set_comps[0] = 2;
+   }
+   for (unsigned i = 0; i < out->n; i++) {
+      struct sgx_varying *v = &out->v[i];
+      unsigned mask = (1u << v->comps) - 1;
+      bool placed = false;
+      if (next + v->rows <= SGX_MAX_SETS) {
+         v->set = next;
+         v->comp = 0;
+         next += v->rows;
+         placed = true;
+      }
+      for (unsigned st = 0; st + v->rows <= next && !placed; st++) {
+         for (unsigned c = 0; c + v->comps <= 4 && !placed; c++) {
+            bool ok = true;
+            for (unsigned r = 0; r < v->rows && ok; r++)
+               ok = !(used[st + r] & mask << c);
+            if (ok) {
+               v->set = st;
+               v->comp = c;
+               placed = true;
+            }
+         }
+      }
+      if (!placed)
+         return false;
+      for (unsigned r = 0; r < v->rows; r++) {
+         used[v->set + r] |= mask << v->comp;
+         out->set_comps[v->set + r] = MAX2(out->set_comps[v->set + r], v->comp + v->comps);
+      }
+   }
+   return true;
 }
 
 /* ------------------------------------------------------------------------
@@ -824,7 +877,8 @@ find_varying(const struct sgx_varyings *v, const char *name)
    return NULL;
 }
 
-/* per component of a varying variable, the register: base[set] + comp */
+/* per component of a varying variable, the register: base[set] + the
+ * varying's component in the set */
 static void
 map_varying(int *tab, nir_variable *var, const struct sgx_varyings *vary, const int *set_base)
 {
@@ -841,7 +895,7 @@ map_varying(int *tab, nir_variable *var, const struct sgx_varyings *vary, const 
          for (unsigned j = 0; j < vy->comps && comp + j < 4; j++) {
             unsigned at = (var->data.location + r) * 4 + comp + j;
             if (at < 512)
-               tab[at] = set_base[vy->set + r] + j;
+               tab[at] = set_base[vy->set + r] + vy->comp + j;
          }
       }
       comp += vy->rows == 1 ? vy->comps : 0;
@@ -928,20 +982,28 @@ assign_io(struct sgx_ctx *c)
             }
          }
       }
-      bool set16[SGX_MAX_SETS] = { 0 };
+      /* (a set is F16 when every varying in it is) */
+      bool set16[SGX_MAX_SETS] = { 0 }, not16[SGX_MAX_SETS] = { 0 };
       /* (SGX_F16_ITER=0: iterate every varying in f32, F16 math kept; a
        * hardware bisection switch) */
       const char *fi = getenv("SGX_F16_ITER");
       if (c->p16 && !(fi && fi[0] == '0')) {
          nir_foreach_shader_in_variable(var, s) {
             char names[8][64];
-            unsigned l = var->data.location;
-            if (l < VARYING_SLOT_VAR0 || l >= 128 || !mp[l] || hp[l] || var_names(var, names, 8) != 1)
+            unsigned l = var->data.location, n = var_names(var, names, 8);
+            if (l < VARYING_SLOT_VAR0 || l >= 128)
                continue;
-            const struct sgx_varying *vy = find_varying(c->vary, names[0]);
-            if (vy && vy->rows == 1)
-               set16[vy->set] = true;
+            for (unsigned i = 0; i < n; i++) {
+               const struct sgx_varying *vy = find_varying(c->vary, names[i]);
+               if (!vy)
+                  continue;
+               bool ok = mp[l] && !hp[l] && n == 1 && vy->rows == 1;
+               for (unsigned r = 0; r < vy->rows && vy->set + r < SGX_MAX_SETS; r++)
+                  (ok ? set16 : not16)[vy->set + r] = true;
+            }
          }
+         for (unsigned set = 0; set < SGX_MAX_SETS; set++)
+            set16[set] &= !not16[set];
       }
       /* gl_FragCoord first (list A iterator 14, F32, as the DDK orders it),
        * then the sets in order; gl_PointCoord is set 0 */
@@ -975,19 +1037,23 @@ assign_io(struct sgx_ctx *c)
             pa += it->f16 ? 1 : 2;
             continue;
          }
+         /* one iteration per set, of every varying in it */
+         unsigned comps = 0;
          for (unsigned v = 0; v < c->vary->n; v++) {
             const struct sgx_varying *vy = &c->vary->v[v];
-            if (set < vy->set || set >= vy->set + vy->rows)
-               continue;
-            struct sgx_iter *it = &c->iters[c->n_iters++];
-            it->set = set;
-            it->comps = vy->comps;
-            it->pa = pa;
-            it->f16 = set16[set];
-            /* F16: in_reg holds SGX_IN_HALF | the half index */
-            pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
-            pa += it->f16 ? (vy->comps + 1) / 2 : vy->comps;
+            if (set >= vy->set && set < vy->set + vy->rows)
+               comps = MAX2(comps, vy->comp + vy->comps);
          }
+         if (!comps)
+            continue;
+         struct sgx_iter *it = &c->iters[c->n_iters++];
+         it->set = set;
+         it->comps = MIN2(comps, 4);
+         it->pa = pa;
+         it->f16 = set16[set];
+         /* F16: in_reg holds SGX_IN_HALF | the half index */
+         pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
+         pa += it->f16 ? (it->comps + 1) / 2 : it->comps;
       }
       c->n_pa_inputs = pa;
       nir_foreach_shader_in_variable(var, s)

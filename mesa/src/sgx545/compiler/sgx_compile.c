@@ -1970,6 +1970,12 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       unsigned wmask = nir_intrinsic_write_mask(in) << nir_intrinsic_component(in);
       if (c->stage == MESA_SHADER_FRAGMENT) {
          nir_io_semantics sem = nir_intrinsic_io_semantics(in);
+         if (sem.location == FRAG_RESULT_DEPTH) {
+            nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
+            c->depth = src_comp(c, &ls, 0);
+            c->has_depth = true;
+            return;
+         }
          if (sem.location != FRAG_RESULT_COLOR && sem.location != FRAG_RESULT_DATA0) {
             sgx_fail(c, "fragment output %u", sem.location);
             return;
@@ -2016,6 +2022,37 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          m |= 1u << k;
       }
       emit_runs(c, USSE_MOV, m, d, 1, ss, &NOF, 0);
+      return;
+   }
+   case nir_intrinsic_ddx:
+   case nir_intrinsic_ddx_fine:
+   case nir_intrinsic_ddx_coarse:
+   case nir_intrinsic_ddy:
+   case nir_intrinsic_ddy_fine:
+   case nir_intrinsic_ddy_coarse: {
+      /* fdsx / fdsy d, x, x per component, as libusc writes them (corpus c3
+       * dsx, dsy; st has already flipped dFdy's sign for the target). f32
+       * only: an F16 source is format-selected, the result rounded back */
+      bool y = in->intrinsic == nir_intrinsic_ddy || in->intrinsic == nir_intrinsic_ddy_fine ||
+               in->intrinsic == nir_intrinsic_ddy_coarse;
+      nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
+      unsigned nc = in->def.num_components, w = new_vreg(c, nc);
+      struct sgx_ref r[4];
+      for (unsigned j = 0; j < nc; j++) {
+         struct sgx_ins *d = ins_alloc(c, SGX_INS_ALU, y ? USSE_FDSY : USSE_FDSX);
+         d->nops = 3;
+         d->op[0] = vref(w, j);
+         d->op[1] = d->op[2] = src_comp(c, &ls, j);
+         emit(c, d);
+         r[j] = in->def.bit_size == 16 ? f32_to_h(c, vref(w, j)) : vref(w, j);
+      }
+      if (in->def.bit_size == 16) {
+         set_refs(c, &in->def, r, nc);
+      } else {
+         v->kind = VAL_V;
+         v->n = w;
+         v->comp = 0;
+      }
       return;
    }
    case nir_intrinsic_terminate_if:
@@ -3101,6 +3138,28 @@ reads_pa0(const struct sgx_ref *r)
    return r->file == SGX_F_PA && (r->h16 ? r->n / 2 : r->n) == 0;
 }
 
+/* The feedback point (USP labels 4/5), after the colour: p1 = keep for a
+ * discard, gl_FragDepth clamped to [0, 1] in pa<depth_pa>. The driver puts
+ * its atst8, or (p1) depthf pa<depth_pa> for a depth write, in the nop's
+ * place (ISA.md "Phases, visibility feedback and discard"). */
+static void
+emit_feedback(struct sgx_ctx *c)
+{
+   if (c->discards && !c->keep_pred)
+      emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
+   if (c->has_depth) {
+      c->depth_pa = MAX2(c->n_pa_inputs, c->colour_pa + 1);
+      struct sgx_ref d[4] = { ref(SGX_F_PA, c->depth_pa) };
+      struct sgx_ref s[3][4] = { { c->depth }, { ref(SGX_F_K, 0) }, { ref(SGX_F_K, 0x3f800000) } };
+      emit_runs(c, USSE_FMINMAX, 1, d, 3, s, &NOF, 0);
+   }
+   if (c->discards || c->has_depth) {
+      struct sgx_ins *f = ins_alloc(c, SGX_INS_FEEDBACK, USSE_NOP);
+      f->ndst = 0;
+      emit(c, f);
+   }
+}
+
 static void
 emit_color(struct sgx_ctx *c)
 {
@@ -3116,13 +3175,7 @@ emit_color(struct sgx_ctx *c)
          n++;
       for (struct list_head *l = before->next; n > 2; l = l->next, n--)
          fld(list_entry(l, struct sgx_ins, link), USSE_F_NOSCHED, 1);
-      if (c->discards) {
-         if (!c->keep_pred)
-            emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
-         struct sgx_ins *f = ins_alloc(c, SGX_INS_FEEDBACK, USSE_NOP);
-         f->ndst = 0;
-         emit(c, f);
-      }
+      emit_feedback(c);
       return;
    }
    struct sgx_ref col[4];
@@ -3186,14 +3239,7 @@ emit_color(struct sgx_ctx *c)
          fld(p, USSE_F_SCALE, 1);
          add(c, p);
       }
-      if (c->discards && !c->keep_pred) {
-         emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
-      }
-      if (c->discards) {
-         struct sgx_ins *f = ins_alloc(c, SGX_INS_FEEDBACK, USSE_NOP);
-         f->ndst = 0;
-         emit(c, f);
-      }
+      emit_feedback(c);
       return;
    }
    /* pck.u8.f32 D, g, r [dmask=6] then D, b, a [dmask=9]: the second reads after
@@ -3233,13 +3279,7 @@ emit_color(struct sgx_ctx *c)
       fld(p, USSE_F_SCALE, 1);
       emit(c, p);
    }
-   if (c->discards) {
-      if (!c->keep_pred)
-         emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
-      struct sgx_ins *f = ins_alloc(c, SGX_INS_FEEDBACK, USSE_NOP);
-      f->ndst = 0;
-      emit(c, f);
-   }
+   emit_feedback(c);
 }
 
 /* ------------------------------------------------------------------------
@@ -3281,7 +3321,9 @@ merge_runs(struct sgx_ctx *c)
       unsigned cls = form_class(a->form);
       if (a->kind != SGX_INS_ALU || b->kind != SGX_INS_ALU || a->form != b->form || a->pred || b->pred ||
           (cls != CLS_ALL && cls != CLS_INC) || a->rpt + b->rpt > max_rpt(cls) || a->nops != b->nops ||
-          a->ndst != 1 || a->form == USSE_FDP || !same_fields(a, b) || a->writes_pred || b->writes_pred)
+          a->ndst != 1 || a->form == USSE_FDP || !same_fields(a, b) || a->writes_pred || b->writes_pred ||
+          /* (libusc never repeats a derivative) */
+          a->form == USSE_FDSX || a->form == USSE_FDSY)
          continue;
       bool ok = true;
       for (unsigned k = 0; k < a->nops && ok; k++)
