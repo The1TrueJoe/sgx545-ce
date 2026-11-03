@@ -41,9 +41,10 @@ static unsigned int core_clock = 400000000;
 module_param(core_clock, uint, 0444);
 MODULE_PARM_DESC(core_clock, "SGX core clock in Hz; sets the microkernel timer (default 400 MHz)");
 
-static bool cleanup = true;
+/* Off: on the DDK microkernel RT and PB cleanups never complete and stall the CCB. */
+static bool cleanup;
 module_param(cleanup, bool, 0644);
-MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (default on)");
+MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (debug; default off)");
 
 static bool restart_quiesce = true;
 module_param(restart_quiesce, bool, 0644);
