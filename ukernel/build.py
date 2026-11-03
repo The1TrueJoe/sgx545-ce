@@ -50,6 +50,10 @@ def assemble():
     for kind, val in a.lines:
         if kind == "label":
             continue
+        if kind == "raw":                      # a pre-encoded (hi, lo) word
+            words.append((val[1], val[0]))
+            idx += 1
+            continue
         if kind == "patch":
             text = f"limm r{val[0]}, #0"       # the loader fills the immediate
         else:

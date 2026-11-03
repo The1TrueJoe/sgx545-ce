@@ -30,6 +30,9 @@ word the DDK loads each core register from. Reproducing them is what makes our
 microkernel program the cores identically for a frame; `run_ours.py` diffs our
 writes against the DDK's.
 """
+import os
+
+DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+0xE8
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -56,6 +59,17 @@ SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
                      # none). Lets the 3D-end handler tell a transfer's completion
                      # from a render's. (openHC's own slot; a transfer and a
                      # render never overlap on one context.)
+SC_TAFLIGHT = 0x36   # control block +0xd8: 1 while a TA is in flight. Serialises
+                     # host kicks. Must be a word srvinit never writes: +0x64
+                     # (word 0x19) is clobbered by srvinit's control-block setup on
+                     # the EA3 (k_ta then deferred the very FIRST kick, do_ta never
+                     # ran, all T3C markers 0). 0x36 is in the microkernel's private
+                     # region (0 on every prior dump), next to the sentinel words.
+                     # host kicks: a TA kick arriving while this is set is left in
+                     # the kernel CCB and re-launched from ta_finished (the DDK
+                     # pattern). Without it a fast host (EA3 p1) delivers kick 2
+                     # while TA 1 runs, re-kicking the TA mid-run (lockup_TA) and
+                     # making ta_finished act on the wrong command (ta3d-state race).
 SC_VERSION = 0x18    # control block +0x60: openHC microkernel version, written
                      # at init. Advisory (the DDK driver does not read it); an
                      # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
@@ -76,11 +90,11 @@ RD_SYNC0 = 0xD0 // 4         # 3D destination sync object 0 (its status word cle
 RD_SYNC1 = 0x240 // 4        # 3D destination sync object 1
 RD_WRITEOPS = 0x108 // 4     # render-details write-ops word
 RD_ACTIVE = 0x12C // 4       # render-details active flag (cleared when freed)
-RD_STATE = 0x2A4             # render-details state: 1 when the 3D starts, 2 when freed
 RT_RENDER = 0x4 // 4         # RT-data entry: the render using this RT (0 = free)
 RT_DATA = 0x30 // 4          # RT-data entry word holding the RT-data pointer
 RT_STATE = 0x34 // 4         # RT-data entry state flag
 RT_IDLE_STATE = 0x10         # the value that flag holds when the RT is idle
+RD_STATE = 0x2A4             # render-details state: set to 2 (freed) at completion
 CTX_INFLIGHT0 = 0x28 // 4    # HW context: the render in flight (two words + a flag)
 CTX_INFLIGHT1 = 0x2C // 4
 CTX_INFLIGHT_FLAG = 0x3C // 4
@@ -235,6 +249,13 @@ class Asm:
     def i(self, text):
         self.lines.append(("i", text))
 
+    def raw(self, hi, lo):
+        """emit a raw instruction word (hi/lo 32-bit halves) the text assembler
+        can't encode -- the USE/EDM cache ops op0xff/op0x100 (ISA.md undecoded,
+        the DDK's data-cache flush/invalidate). hw.py decodes them; asm.py can't
+        emit them yet, so we inject the exact words ta3d-state read from the DDK."""
+        self.lines.append(("raw", (hi, lo)))
+
     def patch(self, reg, name):
         """a limm the srvinit loader fills with a device address at load time
         (the DDK's own mechanism for dynamic addresses). build.py records its
@@ -243,6 +264,13 @@ class Asm:
 
     # --- building blocks -----------------------------------------------
     def end(self):
+        # NOTE: the DDK task end (pc 0x1974) also runs op0x100 #3,#0,#3 + idf/wdf/
+        # phas here (a USE/EDM cache flush). Adding that whole sequence to every
+        # a.end() REGRESSED on HW (2026-11-03): the microkernel completed init
+        # (srvinit rc=0) but then stuck at a task end, never processing kicks
+        # (do_3d never reached, no lockup bit) -- likely the phas.i [wait=7] or the
+        # flush hanging in our event context. Left out pending ta3d-state's guidance
+        # on placement (only the worker task end? no phas? different op).
         self.i("nop [end]")
 
     def phas(self):
@@ -338,6 +366,9 @@ class Asm:
         self.i(f"str #{CR_USE_INVAL // 4}, r5")        # USE cache invalidate
         self.wait(0x138, done_mask, CR_EVENT_HOST_CLEAR_0x140)
         self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done
+        # NOTE: the DDK also runs op0xff #side (USE/EDM cache op) here after the MADD
+        # ack (3D=1, TA=0). Held out with the op0x100 flush above (the whole cache-op
+        # set regressed on HW 2026-11-03); re-add once ta3d-state confirms placement.
 
     def dpm_freelist(self, mode, kick_reg, done_bit):
         """load a DPM free list so the geometry/render can allocate parameter-
@@ -460,6 +491,12 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.label("init_set")
+    a.i("limm r0, #0")
+    a.i(f"st.a.d r17, #{SC_TAFLIGHT}, r0 [moe]")  # TA-in-flight flag must start clear
+    # (The DDK's init also writes 0x40=0x1ff and an 0x0e80 pulse — perf-counter
+    # enable/reset. Tried on HW 2026-11-03: they REGRESS the TA to lockup_TA (do_3d
+    # never reached), so leave them out. ta3d-state expected them harmless; they are
+    # not. The 0xacc EVENT_TIMER stays off too.)
     a.i(f"limm r0, #{OPENHC_UK_VERSION}")
     a.i(f"st.a.d r17, #{SC_VERSION}, r0 [moe]")   # advisory openHC version word
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
@@ -514,11 +551,22 @@ def build(a):
     a.i("(p0) ba k_transfer")
     a.i("ba kick_adv")                          # process-queues / unhandled: nothing
     a.label("k_ta")
+    # serialise: at most one TA in flight. If one is running, leave this kick in
+    # the kernel CCB (don't advance RO) and let ta_finished re-launch it, so we
+    # never re-kick a busy TA and ta_finished always acts on the in-flight command.
+    a.i(f"ld.a.d r2, r17, #{SC_TAFLIGHT} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, r2")               # TA already in flight -> defer
+    a.i("(p0) ba k_ta_defer")
     a.i("mov r16, r8 [mask=1]")                 # context
     a.i("savl r23")
     a.i("ba do_ta [link]")
     a.i("setl r23")
     a.i("ba kick_adv")
+    a.label("k_ta_defer")
+    if DEBUG_SENTINEL:
+        a.i("limm r6, #0x0DEF"); a.st_sa(SA_SELF, 0x3b, 6)   # saw a deferred kick
+    a.i("ba kick_end")
     # get-misc-info: core identity, version and struct sizes into the misc
     # buffer (data[1]), then set READY (docs/UKERNEL.md §3 "Get misc info")
     a.label("k_getmiscinfo")
@@ -608,7 +656,7 @@ def build(a):
     a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = transfer command base
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)       # context page directory
     a.i("wdf")
-    a.i(f"str #{0xc84 // 4}, r4")                   # BIF -> this context
+    a.i(f"str #{0xc38 // 4}, r4")                   # DIR_LIST_BASE1 = ctx PD (slot 1), list 0 (kernel PD) left intact
     a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     a.program(9, T3_CMD)
     a.consts(T3_CONST)
@@ -704,6 +752,10 @@ def build(a):
     a.i("ld.a.d r13, r9, #1 [moe]")                 # cmd+0x04 (word 1)
     a.i("wdf")
     a.i("and r13, r13, #1")                         # r13 = bFirstKickOrResume
+    if DEBUG_SENTINEL:
+        a.i("ld.a.d r6, r17, #0x35 [moe]"); a.i("wdf")
+        a.i("imae r6, r6, #1, #1 [t2=u32]")
+        a.st_sa(SA_SELF, 0x35, 6); a.st_sa(SA_SELF, 0x36, 13)
     # soft-reset the TA (EUR_CR_SOFT_RESET 0x080 bit 2) on the first kick only, so
     # it begins the scene clean (the DDK does this early, ddk-ref line 22).
     a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
@@ -735,22 +787,24 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     # point the BIF at this context's page directory. Load the client PD into
-    # directory-list 0 (EUR_CR_BIF_DIR_LIST_BASE0 = 0xc84), pulse the BIF
-    # directory-cache invalidate (EUR_CR_BIF_CTRL 0xc00 bit 3 = INVALDC), then
-    # route the TA requestor to list 0 while the EDM stays on list 15
-    # (EUR_CR_BIF_BANK0 = 0xc78 = 0xf: b0-3 EDM=15, b4-7 TA=0). Without BANK0 the
-    # TA reads the control stream through the wrong page tables and faults on the
-    # kernel-data/command memory — EA1 HW 2026-11-02: EUR_CR_BIF_FAULT =
-    # 0x3200F00F (the TA command base). Then invalidate the PDS/USE caches.
-    # client page directory (0xc84): first kick only — the render kick reuses the
-    # scene's PD, and the DDK does not reload it (ddk-ref "TA kick 2").
+    # directory-list 1 (EUR_CR_BIF_DIR_LIST_BASE1 = 0xc38), leaving list 0
+    # (0xc84 = the kernel PD that the 3D/ISP/PBE still read through) INTACT, pulse
+    # the BIF directory-cache invalidate (EUR_CR_BIF_CTRL 0xc00 bit 3 = INVALDC),
+    # then route the TA requestor to list 1 while the EDM stays on list 15
+    # (EUR_CR_BIF_BANK0 = 0xc78 = 0x1f: b0-3 EDM=15, b4-7 TA=1). We used to write
+    # the client PD into list 0 (0xc84), which clobbered the kernel PD and wedged
+    # the 3D: it reads kernel data through list 0 and stalls (lockup_3d, BIF_FAULT
+    # 0). HW baseline 2026-11-03: the DDK keeps 0xc84, puts the ctx PD in 0xc38,
+    # and BANK0 goes 0x0f->0x1f(TA)->0x101f(3D). client PD (0xc38): first kick
+    # only — the render kick reuses the scene's PD (ddk-ref "TA kick 2" = 0x1f, no
+    # reload). Then invalidate the PDS/USE caches.
     a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
     a.i("(p0) ba skip_bif_pd")
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
     a.i("wdf")
-    a.i(f"str #{0xc84 // 4}, r4")                   # BIF_DIR_LIST_BASE0 = client PD
+    a.i(f"str #{0xc38 // 4}, r4")                   # BIF_DIR_LIST_BASE1 = client PD (slot 1)
     a.label("skip_bif_pd")
-    a.i("limm r5, #0xf")                            # BIF_BANK0: EDM=list 15, TA=list 0
+    a.i("limm r5, #0x1f")                           # BIF_BANK0: EDM=list 15, TA=list 1
     a.i(f"str #{0xc78 // 4}, r5")
     # directory-cache invalidate (INVALDC): first kick only.
     a.i("test.and.eq p0, r13, r13")                 # render kick? skip INVALDC
@@ -761,12 +815,11 @@ def build(a):
     a.i(f"str #{0xc00 // 4}, r5")
     a.label("skip_bif_invaldc")
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
-    # clear 0xa74 before re-writing its TA-flags field below. The DDK clears it
-    # (ddk-ref line 61) then writes the command's flags into b27-31; srvinit's
-    # init value (0x208200) is overwritten. Without the write our 0xa74 keeps
-    # only the init bits (b27-31 = 0) and the kicked TA does not run.
-    a.i("limm r5, #0")
-    a.i(f"str #{0xa74 // 4}, r5")
+    # 0xa74's TA-flags field (b27-31) is written below, read-modify-write so
+    # srvinit's init bits (0x00208200, b9/b15/b21 — TA/ISP config the 3D needs)
+    # are PRESERVED. We used to clear 0xa74 to 0 first, which dropped 0x208200:
+    # the TA still ran but the 3D stalled after the kick (TRIG_3D, lockup_3d, no
+    # tile retires) — HW 2026-11-03 (DDK a74=0x50208200, ours was 0x50000000).
     # parameter-buffer registers + TA free-list load: first kick only. These set
     # up the scene's parameter buffer; re-running them on the render kick reloads
     # the free list the first kick already allocated pages from and hangs the TA
@@ -778,14 +831,17 @@ def build(a):
     a.label("skip_pb_fl")
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
-    # 0xa74 = the TA command's flags word (cmd+0x14), as the DDK writes it after
+    # 0xa74 |= the TA command's flags word (cmd+0x14), as the DDK writes it after
     # the TE registers and before the kick (ddk-ref line 91; STATE.md cmd+0x14 =
     # 0x50000000 when kick flag 0x2000000 is clear). Read +0x14 (word 5), not the
-    # +0x18 constant.
+    # +0x18 constant. OR it in (RMW) so srvinit's init bits (0x208200) survive —
+    # the DDK's a74 after the TA is 0x50208200, not 0x50000000 (HW 2026-11-03).
     a.i(f"ld.a.d r9, r17, #{SC_CMD} [moe]")
     a.i("wdf")
-    a.i("ld.a.d r5, r9, #5 [moe]")
+    a.i("ld.a.d r5, r9, #5 [moe]")                   # cmd+0x14 = TA flags (b27-31)
+    a.i(f"ldr r6, #{0xa74 // 4}")                    # current a74 (srvinit init 0x208200)
     a.i("wdf")
+    a.i("or r5, r5, r6")                             # a74 = init | flags
     a.i(f"str #{0xa74 // 4}, r5")
     # RT region-header / tail-pointer base registers (0x62c/0x634/0x234): first
     # kick only — they describe the scene's parameter-buffer regions, set once and
@@ -795,6 +851,45 @@ def build(a):
     a.program(12, TA_RT)
     a.label("skip_rt")
     a.program(10, TA_RD)
+    # cmd -> render-details copy block (DDK routine pc 0x07b1-0x07fb, called on EVERY
+    # TA kick; ours omitted it entirely -> ta3d-state kdiff). The render details are
+    # microkernel-internal (HW never reads rd); these words feed do_3d's register
+    # programming and the completion path, so without them do_3d programs the 3D from
+    # stale/zero fields and the ISP stalls at tile 0. r9 = command, r10 = render
+    # details. Fixed single-word copies first, batched to share fences:
+    CMD2RD = [(0x1c, 0xd4), (0x3c, 0xe0), (0x74, 0xe4), (0x78, 0xe8), (0x7c, 0xec),
+              (0x80, 0xf0), (0x4c, 0x118), (0x50, 0x11c), (0x48, 0x120), (0x08, 0x130),
+              (0x0c, 0x134), (0x10, 0x138), (0x20, 0x140), (0x60, 0x144), (0x84, 0x168)]
+    for i in range(0, len(CMD2RD), 6):
+        batch = CMD2RD[i:i + 6]
+        for k, (src, _) in enumerate(batch):
+            a.i("ld.a.d r%d, r9, #%d [moe]" % (2 + k, src // 4))
+        a.i("wdf")
+        for k, (_, dst) in enumerate(batch):
+            a.i("st.a.d r10, #%d, r%d [moe]" % (dst // 4, 2 + k))
+        a.i("idf")
+    a.i("wdf")
+    # conditional: if the 3D flags (cmd+0x1c) have bit 9 (0x200), copy cmd+0x110/0x114
+    # into rd+0xfc/0x100 (the DDK's 0x200-gated pair).
+    a.i("ld.a.d r2, r9, #%d [moe]" % (0x1c // 4))
+    a.i("wdf")
+    a.i("limm r3, #512")                         # 0x200
+    a.i("test.and.eq p0, r2, r3")                # (cmd+0x1c & 0x200) == 0 -> skip
+    a.i("(p0) ba skip_rd_cond")
+    a.i("ld.a.d r2, r9, #%d [moe]" % (0x110 // 4))
+    a.i("ld.a.d r3, r9, #%d [moe]" % (0x114 // 4))
+    a.i("wdf")
+    a.i("st.a.d r10, #%d, r2 [moe]" % (0xfc // 4))
+    a.i("st.a.d r10, #%d, r3 [moe]" % (0x100 // 4))
+    a.i("idf")
+    a.i("wdf")
+    a.label("skip_rd_cond")
+    # (The DDK also runs three counted blocks here — rd+0x168 from cmd+0x88,
+    # rd+0x144 pairs from cmd+0x218, and deferred updates from cmd+0x2a8 — but they
+    # feed the completion path, not do_3d's register programming (D3_RD reads only
+    # rd 0x00-0xcc + 0x108), and block B's source is still being confirmed with
+    # ta3d-state. Left out until validated, so the test binary carries only the
+    # kdiff-clean fixed copies.)
     # second cache invalidate (both kicks), then the DPM state/control load. The
     # load is first kick only: it loads the scene's DPM state, and re-running it
     # mid-scene disturbs the in-flight parameter state (the DDK skips it on the
@@ -817,15 +912,37 @@ def build(a):
     a.i("limm r5, #8388608")                     # 0x00800000, conditional
     a.i("(p0) or r4, r4, r5")
     a.i(f"str #{0x218 // 4}, r4")
-    # start the TA
+    # start the TA. Mark it in flight first (SC_TAFLIGHT) so a host kick arriving
+    # while it runs is deferred, not dispatched on top of it.
     a.i("limm r5, #1")
+    a.st_sa(SA_SELF, SC_TAFLIGHT, 5)            # TA in flight
     a.i(f"str #{CR_TA_KICK // 4}, r5")
+    if DEBUG_SENTINEL:
+        a.i("limm r6, #0xC01C"); a.st_sa(SA_SELF, 0x37, 6)
     a.i("lapc")
 
     # ======================================================================
     # ta_finished: write the TA status values, then program and start the 3D
     # ======================================================================
     a.label("ta_finished")
+    if DEBUG_SENTINEL:
+        a.i("limm r6, #0x7AF1"); a.st_sa(SA_SELF, 0x38, 6)
+    # this TA is no longer in flight; clear the flag so a deferred kick can launch.
+    a.i("limm r4, #0")
+    a.st_sa(SA_SELF, SC_TAFLIGHT, 4)
+    # save the TA state register 0x274 across the scene's kicks. At TA finish the
+    # DDK reads CR 0x274 and stores it to rd+0x124 (pc 0x0698); the next kick's
+    # TA_RD restore (0x274 <- rd+0x124, program() at the TA kick) reloads it. Ours
+    # restored but never saved, so kick 2 got the client's 0 instead of kick 1's
+    # TA state (0x00020000 on HW) -> inconsistent kick-2 tiling / region headers ->
+    # the ISP stalls at tile 0 with a clean BIF (ta3d-state kdiff 2026-11-03). The
+    # DDK does this on the non-last finish; it is harmless on the last.
+    a.i(f"ld.a.d r3, r17, #{SC_RD} [moe]")            # render details
+    a.i(f"ldr r4, #{0x274 // 4}")                     # CR 0x274 (TA scene state)
+    a.i("wdf")
+    a.i("st.a.d r3, #%d, r4 [moe]" % (0x124 // 4))    # rd+0x124 = CR 0x274
+    a.i("idf")
+    a.i("wdf")
     # TA status-value list (docs/UKERNEL.md §5): CMDTA_SHARED holds a count at
     # command+0x5c and that many {sStatusDevAddr, ui32StatusValue} pairs from
     # command+0x118; write each value to its address (sync-heap counters the
@@ -867,36 +984,149 @@ def build(a):
     a.i("wdf")
     a.i("test.and.ne p0, r2, #2")                     # bLastInScene (bit 1)? render
     a.i("(p0) ba do_3d")
-    a.end()
+    # not the last TA of the scene: the 3D waits. Re-enter the kick dispatch so a
+    # host kick that was deferred while this TA ran (SC_TAFLIGHT) launches now (the
+    # DDK re-launches the kick task from its TA-finished handler). If none is
+    # pending the dispatch falls through to kick_end and the event ends.
+    a.i("ba kick")
 
     # ======================================================================
     # do_3d: program and start the 3D for the scene (run on the last TA's finish)
     # ======================================================================
     a.label("do_3d")
+    if DEBUG_SENTINEL:
+        a.i("limm r6, #0x3DED"); a.st_sa(SA_SELF, 0x39, 6)
+    # CR 0x630: a double-buffered TA/3D context select (ta3d-state). The DDK r-m-w's
+    # it on the TA and 3D paths so bits 0-2 are clear by the 3D kick; ours never wrote
+    # it, so a non-zero power-up/srvinit value can point the 3D at the slot the TA did
+    # NOT fill -> ISP stalls at tile 0 with a clean BIF. Clear bits 0-2 (the DDK's net
+    # effect for this single-RT frame). Log the inherited value first (word 0x35).
+    a.i(f"ldr r5, #{0x630 // 4}")
+    a.i("wdf")
+    if DEBUG_SENTINEL:
+        a.st_sa(SA_SELF, 0x35, 5)                     # log 0x630's inherited value
+    a.i("shr r5, r5, #3")
+    a.i("shl r5, r5, #3")                             # clear bits 0-2
+    a.i(f"str #{0x630 // 4}, r5")
+    # flush the tail-pointer cache before the 3D. The last TA's final control-
+    # stream terminates and tail pointers sit in the TPC, not yet written back to
+    # the parameter buffer; without the flush the ISP walks UNTERMINATED region
+    # streams through valid PB pages and hangs with BIF_FAULT=0 -- EA1 HW
+    # 2026-11-03 (lockup_3d, do_3d reached, render_done never). The DDK flushes it
+    # first thing on the last-in-scene TA finish (ddk-ref "TA finished (2)"):
+    # CR_TPC (0x224) = 0x40000000, wait EUR_CR_EVENT_STATUS bit 10 (0x400,
+    # TPC_FLUSH), clear it. (ta3d-state, 2026-11-03.)
+    a.i("limm r5, #0x40000000")
+    a.i(f"str #{CR_TPC // 4}, r5")
+    a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
     a.i(f"ld.a.d r10, r17, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, r17, #{SC_PB} [moe]")   # PB descriptor
     a.i("wdf")
-    # mark the context's in-flight render and move the render state to "3D
-    # running" (the DDK sets these once the scene's last TA has finished and the
-    # 3D is about to start); the completion handler clears them.
+    # mark the context's in-flight render (the DDK sets these once the scene's
+    # last TA has finished and the 3D is about to start; the completion handler
+    # clears them). No rd+0x2a4 "3D running" flag: it is never read, the DDK
+    # never writes it, and at 0x2a4 it lands 0xb8 past the end of the 0x1ec-byte
+    # render details, clobbering a word of the following kdata the 3D reads
+    # (ta3d-state emulator diff 2026-11-03 — the sole write ours did that the
+    # DDK did not).
     a.i(f"ld.a.d r2, r17, #{SC_CTX} [moe]")
     a.i("wdf")
     a.i("st.a.d r2, #%d, r10 [moe]" % CTX_INFLIGHT0)  # ctx+0x28 = render details
     a.i("st.a.d r2, #%d, r10 [moe]" % CTX_INFLIGHT1)  # ctx+0x2c = render details
-    a.i("limm r3, #1")
-    a.i("limm r4, #%d" % RD_STATE)
-    a.i("imae r4, r4, #1, r10 [t2=u32]")              # &(rd+0x2a4)
-    a.i("st.a.d r4, #0, r3 [moe]")                    # rd+0x2a4 = 1 (3D running)
     a.i("idf")
     a.i("wdf")
-    a.i("ld.a.d r4, r11, #%d [moe]" % (0x10 // 4))    # 0x600 <- pb+0x10
+    # DPM allocated-page handover to the 3D (ta3d-state 2026-11-03, from the DDK
+    # microkernel save_ta_state @0x168d + load_3d_state @0x16e9). The TA's
+    # allocated-page counters (EUR_CR 0x700/0x710/0x724/0x72c) go through the PB
+    # descriptor into the 3D's free/dealloc registers (0x604/0x64c/0x660), so the
+    # 3D frees the right pages; do_3d wrote only 0x600 before.
+    # save_ta_state: stash the TA page counters in the PB descriptor, shifted.
+    a.i(f"ldr r4, #{0x700 // 4}")
+    a.i(f"ldr r5, #{0x710 // 4}")
+    a.i(f"ldr r6, #{0x724 // 4}")
+    a.i(f"ldr r7, #{0x72c // 4}")
     a.i("wdf")
+    a.i("shl r5, r5, #16")                            # CR0x710 << 16
+    a.i("shr r6, r6, #16")                            # (CR0x724 & 0xffff0000) >> 16
+    a.i("shr r7, r7, #16")                            # CR0x72c >> 16
+    a.i("st.a.d r11, #%d, r4 [moe]" % (0x18 // 4))    # pb+0x18 = CR0x700
+    a.i("st.a.d r11, #%d, r5 [moe]" % (0x1c // 4))    # pb+0x1c = CR0x710 << 16
+    a.i("st.a.d r11, #%d, r6 [moe]" % (0x20 // 4))    # pb+0x20 = CR0x724 >> 16
+    a.i("st.a.d r11, #%d, r7 [moe]" % (0x24 // 4))    # pb+0x24 = CR0x72c >> 16
+    a.i("idf")
+    a.i("wdf")
+    # load_3d_state: 0x600/0x604/0x64c/0x660 from the PB descriptor.
+    a.i("ld.a.d r4, r11, #%d [moe]" % (0x10 // 4))    # pb+0x10 (free-list address)
+    a.i("wdf")
+    a.i("shr r4, r4, #4")                             # (pb+0x10) & ~0xf
+    a.i("shl r4, r4, #4")
     a.i(f"str #{0x600 // 4}, r4")
-    a.dpm_freelist(5, CR_DPM_3D_FL, 0x2)             # load the 3D free list before the render
+    a.i("ld.a.d r4, r11, #%d [moe]" % (0x18 // 4))    # pb+0x18
+    a.i("ld.a.d r5, r11, #%d [moe]" % (0x1c // 4))    # pb+0x1c
+    a.i("ld.a.d r6, r11, #%d [moe]" % (0x20 // 4))    # pb+0x20
+    a.i("ld.a.d r7, r11, #%d [moe]" % (0x24 // 4))    # pb+0x24
+    a.i("wdf")
+    a.i(f"str #{0x604 // 4}, r4")                     # 0x604 = pb+0x18
+    a.i(f"str #{0x64c // 4}, r5")                     # 0x64c = pb+0x1c
+    a.i("shl r7, r7, #16")                            # pb+0x24 << 16
+    a.i("or r6, r6, r7")                              # pb+0x20 | (pb+0x24 << 16)
+    a.i(f"str #{0x660 // 4}, r6")                     # 0x660
+    a.dpm_freelist(5, CR_DPM_3D_FL, 0x2)             # 0x664=5, 0x680=1, wait: load the 3D free list
     a.consts(D3_CONST)
     a.program(10, D3_RD)
-    # invalidate the 3D-side caches and wait, then start the 3D
+    # D (ta3d-state): 3D flags. OR the render details' word 0x13c (0x07c00000)
+    # into 0xa74 (0x50000000 -> 0x57c00000); 0x658 = 0; 0x43c = 1.
+    a.i(f"ldr r4, #{0xa74 // 4}")
+    a.i("ld.a.d r5, r10, #%d [moe]" % (0x13c // 4))  # rd+0x13c
+    a.i("wdf")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0xa74 // 4}, r4")
+    a.i("limm r5, #0")
+    a.i(f"str #{0x658 // 4}, r5")
+    a.i("limm r5, #1")
+    a.i(f"str #{0x43c // 4}, r5")
+    # invalidate the 3D-side caches and wait
     a.invalidate(CR_PDS_INV1, INV_DONE_3D)
+    # C (ta3d-state, DDK @0x1289): the background-object PDS words. The client
+    # leaves bgblock[0..2] = 0, so without these the ISP's background object runs a
+    # zeroed PDS program and the 3D hangs (lockup_3d, BIF_FAULT 0). bgblock VA =
+    # *(rtentry+0x10); word0/1 = TA cmd+0x08/+0x0c; word2 = the kernel-data list
+    # the PDS primary points at, *(*(rd+0x114) + 4*rd[0x108]). Route the 3D
+    # requestor to list 1 (EUR_CR_BIF_BANK0 b12-15 = 1 -> 0x101f = the client PD),
+    # then pulse the EDM field to list 1 too (0x1011) so the EDM can write the
+    # client-PD bgblock, and back to 0x101f (EDM=15), with an idf/wdf fence so the
+    # writes land before the EDM returns to list 15. HW baseline: DDK c78 at 3D =
+    # 0x101f, bg pulse 0x1011->0x101f, c84 never touched.
+    a.i(f"ld.a.d r12, r17, #{SC_RTENTRY} [moe]")      # RT-data entry
+    a.i(f"ld.a.d r9, r17, #{SC_CMD} [moe]")           # TA command base
+    a.i("wdf")
+    a.i("ld.a.d r2, r12, #%d [moe]" % (0x10 // 4))    # bgblock VA = *(rtentry+0x10)
+    a.i("ld.a.d r3, r9, #%d [moe]" % (0x08 // 4))     # cmd+0x08  (bg PDS secondary)
+    a.i("ld.a.d r4, r9, #%d [moe]" % (0x0c // 4))     # cmd+0x0c  (bg PDS middle)
+    a.i("ld.a.d r6, r10, #%d [moe]" % (0x114 // 4))   # rd+0x114 = kernel-data list base
+    a.i("ld.a.d r7, r10, #%d [moe]" % (0x108 // 4))   # rd+0x108 = index
+    a.i("wdf")
+    a.i("imae r6, r7, #4, r6 [t2=u32]")               # list base + 4*index
+    a.i("ld.a.d r6, r6, #0 [moe]")                    # word2 (bg PDS primary)
+    a.i("wdf")
+    a.i("limm r5, #0x101f")                           # BANK0: 3D -> list 1 (client PD)
+    a.i(f"str #{0xc78 // 4}, r5")
+    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
+    a.i("wdf")
+    a.i("limm r5, #0x1011")                           # BANK0: EDM -> list 1 for the bg stores
+    a.i(f"str #{0xc78 // 4}, r5")
+    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
+    a.i("wdf")
+    a.i("st.a.d r2, #0, r3 [moe]")                    # bgblock[0] = cmd+0x08
+    a.i("st.a.d r2, #1, r4 [moe]")                    # bgblock[1] = cmd+0x0c
+    a.i("st.a.d r2, #2, r6 [moe]")                    # bgblock[2] = list word
+    a.i("idf")
+    a.i("wdf")
+    a.i("limm r5, #0x101f")                           # BANK0: EDM -> list 15, 3D stays list 1
+    a.i(f"str #{0xc78 // 4}, r5")
+    a.i(f"ldr r5, #{0xc78 // 4}")
+    a.i("wdf")
+    # start the 3D
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")
     a.end()
@@ -908,6 +1138,8 @@ def build(a):
     # destination's write-ops-complete to pending+1 (docs/UKERNEL.md §5). The
     # list walk is the next increment; the host-interrupt tail is here.
     a.label("render_done")
+    if DEBUG_SENTINEL:
+        a.i("limm r6, #0x4D04"); a.st_sa(SA_SELF, 0x3A, 6)
     # a transfer in flight completes through this same 3D-end event, but its
     # bookkeeping differs from a render's; route it to xfer_done.
     a.i(f"ld.a.d r1, r17, #{SC_XFER} [moe]")
@@ -942,6 +1174,8 @@ def build(a):
     a.i("ld.a.d r4, r2, #4 [moe]")                    # pending  (block + 0x10)
     a.i("ld.a.d r5, r2, #5 [moe]")                    # complete address (block + 0x14)
     a.i("wdf")
+    a.i("test.and.eq p0, r5, r5")                     # no complete address -> skip
+    a.i("(p0) ba rd_wops")
     a.i("imae r4, r4, #1, #1 [t2=u32]")               # pending + 1
     a.i("st.a.d r5, #0, r4 [moe]")                    # *complete = pending + 1
     a.i("idf")
@@ -983,7 +1217,7 @@ def build(a):
     a.i("limm r5, #%d" % RD_STATE)
     a.i("imae r5, r5, #1, r0 [t2=u32]")                  # &(rd+0x2a4)
     a.i("limm r4, #2")
-    a.i("st.a.d r5, #0, r4 [moe]")                       # rd+0x2a4 = 2 (render freed)
+    a.i("st.a.d r5, #0, r4 [moe]")                       # rd+0x2a4 = 2 (render freed; DDK does this at completion)
     a.i("idf")
     a.i("wdf")
     a.i("ba raise_host_irq")

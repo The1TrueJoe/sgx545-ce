@@ -131,8 +131,11 @@ class Machine:
 
     # ------------------------------------------------------------------
     def _unknown(self, u, t, x, text):
-        n = x.form.name
-        if n in ("op0xff", "op0x100"):
+        # op0xff / op0x100 (form f3_11, FUN_00108d50): the DDK's USE/EDM data-cache
+        # flush/invalidate. No memory/register semantics the sim models, so treat as
+        # a no-op (they only matter on real hardware). The mnemonic is in `text`;
+        # x.form.name is "f3_11".
+        if "op0xff" in text or "op0x100" in text or x.form.name in ("op0xff", "op0x100"):
             self.log.append(("op", t.pc - 1, text, [u.rd(t, o) for o in x.ops]))
             return True
         return False
@@ -236,6 +239,19 @@ def install_hw_model(r):
     (docs/UKERNEL.md, "Register sequences"). Shared by the DDK machine and
     ukernel/run_ours.py."""
     r.v[0x138] = 0
+
+    # DIR_LIST_BASE0 (0xc84) holds the kernel/host page directory on HW (EA3
+    # baseline 2026-11-03 = 0x01d77000), non-zero and != the ctx PD (PD_PHYS).
+    # The DDK's dir-list slot allocator reads it to decide the slot: != ctx PD ->
+    # take slot 1 (DIR_LIST_BASE1 0xc38 = ctx PD, BANK0 TA/3D -> 1). Seed it so
+    # the DDK reference path models HW and run_ours checks ours matches.
+    r.v[0xc84] = 0x01d77000
+
+    # 0xa74 (TA/ISP control) powers up with srvinit's init bits 0x00208200
+    # (b9/b15/b21). do_ta OR's the command's TA-flags into it; clearing it first
+    # drops 0x208200 and stalls the 3D (HW 2026-11-03). Seed it so run_ours sees
+    # the DDK's a74 = 0x50208200 (not 0x50000000) and checks ours preserves it.
+    r.v[0xa74] = 0x00208200
 
     # cache invalidates report completion in 0x138, one bit group per unit:
     # PDS_INV0 -> 0x4, PDS_INV1 -> 0x8, PDS_INV_CSC -> 0x3, 0xa08 (USE) -> 0x60.
