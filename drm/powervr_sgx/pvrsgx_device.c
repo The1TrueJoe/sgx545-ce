@@ -77,7 +77,9 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 	km->cpu = vmap(km->pages, km->npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 	if (!km->cpu)
 		goto err_wb;
-	err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, dev_addr, km->pages, km->npages, pte_flags);
+	if (!km->mmu)
+		km->mmu = sdev->kernel_mmu;
+	err = pvrsgx_mmu_map_pages(km->mmu, dev_addr, km->pages, km->npages, pte_flags);
 	if (err)
 		goto err_unmap;
 	return 0;
@@ -98,7 +100,7 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km)
 {
 	if (!km->pages)
 		return;
-	pvrsgx_mmu_unmap(sdev->kernel_mmu, km->dev_addr, km->size);
+	pvrsgx_mmu_unmap(km->mmu, km->dev_addr, km->size);
 	vunmap(km->cpu);
 	set_pages_array_wb(km->pages, km->npages);
 	for (unsigned int i = 0; i < km->npages; i++)

@@ -41,6 +41,8 @@ struct pvrsgx_vm;
  * mapping is write-combined.
  */
 struct pvrsgx_kmem {
+	/** @mmu: Directory it is mapped in; NULL (the default) is the firmware's. */
+	struct pvrsgx_mmu *mmu;
 	u32 dev_addr;
 	u32 size;
 	unsigned int npages;

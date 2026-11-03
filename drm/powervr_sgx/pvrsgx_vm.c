@@ -160,6 +160,7 @@ static void vm_release(struct kref *ref)
 		drm_gpuva_remove(va);
 		va_release(vm, va);
 	}
+	drm_mm_takedown(&vm->params);
 	pvrsgx_mmu_destroy(vm->mmu);
 	mutex_destroy(&vm->lock);
 	drm_gpuvm_put(&vm->gpuvm);
@@ -210,6 +211,7 @@ static struct pvrsgx_vm *vm_create(struct pvrsgx_device *sdev)
 		       0, SZ_4G_ULL, 0, 0, &pvrsgx_gpuvm_ops);
 	drm_gem_object_put(r_obj);
 	vm->sdev = sdev;
+	drm_mm_init(&vm->params, PVRSGX_HEAP_3D_PARAMS, PVRSGX_HEAP_TA_DATA - PVRSGX_HEAP_3D_PARAMS);
 	mutex_init(&vm->lock);
 	kref_init(&vm->ref);
 	return vm;

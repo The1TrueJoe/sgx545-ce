@@ -4,6 +4,9 @@
 /*
  * Kernel-owned objects at device-wide addresses: render contexts' and RT
  * datasets' firmware structures, parameter buffers, free lists, region headers.
+ * The 3D parameters range (PB, free list, scratch, background block) is per VM
+ * instead: the DPM numbers PB pages from the heap base, so a second context's PB
+ * at a higher device-wide address hung its third render (EA1, 2026-11-03).
  *
  * Releasing one does not free it at once. The microkernel keeps pointers to
  * earlier renders' structures (docs/GEN.md, "Layout"; docs/UAPI.md 7.5): a
@@ -55,26 +58,35 @@ int pvrsgx_kobj_init(struct pvrsgx_device *sdev)
 struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_krange range,
 				       u32 size, u32 min_addr, struct pvrsgx_vm *vm)
 {
-	struct pvrsgx_kobj *o = kzalloc_obj(*o);
+	struct pvrsgx_kobj *o;
 	u32 start = max(min_addr, ranges[range].start);
+	bool per_vm = range == PVRSGX_KRANGE_3DPARAMS;
 	int err;
 
+	if (per_vm && !vm)
+		return ERR_PTR(-EINVAL);
+	o = kzalloc_obj(*o);
 	if (!o)
 		return ERR_PTR(-ENOMEM);
 	o->range = range;
+	o->mm = per_vm ? &vm->params : &sdev->krange[range];
 	mutex_lock(&sdev->kobj_lock);
-	err = drm_mm_insert_node_in_range(&sdev->krange[range], &o->node, PAGE_ALIGN(size), PAGE_SIZE,
+	err = drm_mm_insert_node_in_range(o->mm, &o->node, PAGE_ALIGN(size), PAGE_SIZE,
 					  0, start, ranges[range].end, DRM_MM_INSERT_LOW);
 	mutex_unlock(&sdev->kobj_lock);
 	if (err)
 		goto err_free;
 
+	if (per_vm)
+		o->km.mmu = vm->mmu;
 	err = pvrsgx_kmem_alloc(sdev, &o->km, o->node.start, size, ranges[range].pte);
 	if (err)
 		goto err_node;
 	memset(o->km.cpu, 0, o->km.size);
 
-	if (vm) {
+	if (per_vm) {
+		o->vm = pvrsgx_vm_get(vm);
+	} else if (vm) {
 		err = pvrsgx_mmu_map_pages(vm->mmu, o->node.start, o->km.pages, o->km.npages, 0);
 		if (err)
 			goto err_kmem;
@@ -98,15 +110,17 @@ err_free:
 
 static void kobj_free(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 {
-	if (o->vm) {
-		pvrsgx_mmu_unmap(o->vm->mmu, kobj_va(o), o->km.size);
-		pvrsgx_vm_put(o->vm);
-	}
+	struct pvrsgx_vm *vm = o->vm;
+
+	if (vm && o->km.mmu != vm->mmu)
+		pvrsgx_mmu_unmap(vm->mmu, kobj_va(o), o->km.size);
 	pvrsgx_kmem_free(sdev, &o->km);
 	mutex_lock(&sdev->kobj_lock);
 	drm_mm_remove_node(&o->node);
 	mutex_unlock(&sdev->kobj_lock);
 	kfree(o);
+	/* Last: the node may belong to the VM's own allocator. */
+	pvrsgx_vm_put(vm);
 }
 
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
