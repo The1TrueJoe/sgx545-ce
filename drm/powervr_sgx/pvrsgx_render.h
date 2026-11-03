@@ -66,6 +66,17 @@ struct pvrsgx_render_job {
 	u32 nkicks;
 };
 
+/* A transfer context's firmware half: HW transfer context, command ring, completion sync. */
+struct pvrsgx_transfer_ctx {
+	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *done;
+	u32 ccb_woff;
+};
+
+struct pvrsgx_transfer_job {
+	struct powervr_sgx_stream_transfer xfer;
+	bool dst_twiddled;
+};
+
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
 void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
 
@@ -77,6 +88,12 @@ int pvrsgx_ioctl_destroy_rt_dataset(struct drm_device *drm, void *data, struct d
 int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in);
 void pvrsgx_render_job_fini(struct pvrsgx_job *job);
+
+int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
+void pvrsgx_transfer_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
+int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
+			     const struct drm_powervr_sgx_job *in);
+void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6]);
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
 struct seq_file;
 void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev);

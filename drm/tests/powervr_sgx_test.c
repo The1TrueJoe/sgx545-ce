@@ -610,8 +610,8 @@ static void t_submit_invalid(int fd)
 	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_RENDER;	/* no RT dataset */
 	assert_eq(submit(fd, j, 2, &failed), -ENOENT);
 	assert_eq(failed, 1);
-	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;
-	assert_eq(submit(fd, j, 2, &failed), -EOPNOTSUPP);
+	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;	/* no stream */
+	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
 	assert_eq(failed, 1);
 	j[1].type = 9;
 	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
@@ -787,6 +787,71 @@ static void t_submit_render_invalid(int fd)
 #undef REJECT
 }
 
+/* Transfer streams: every case fails validation, so nothing reaches the GPU. */
+
+struct xstream {
+	uint64_t s[6];
+	struct drm_powervr_sgx_job j;
+};
+
+static void xstream_init(struct xstream *x, uint32_t ctx, uint64_t bg, uint64_t pds)
+{
+	uint32_t *s32 = (uint32_t *)x->s;
+
+	memset(x, 0, sizeof(*x));
+	s32[0] = 48;
+	x->s[1] = bg;
+	x->s[2] = pds;			/* pixel event */
+	s32[6] = 5;			/* its rows */
+	s32[9] = 1;			/* last tile 1, 3 */
+	s32[10] = 3;
+	s32[11] = 0x3f800000;
+	x->j = (struct drm_powervr_sgx_job){
+		.type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER, .context_handle = ctx,
+		.cmd_stream = (uintptr_t)x->s, .cmd_stream_len = 48,
+	};
+}
+
+static void t_submit_transfer_invalid(int fd)
+{
+	uint32_t vm = create_vm(fd), xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), rtds;
+	struct xstream x;
+	uint32_t *s32;
+	int err;
+
+	rtds = create_rtds(fd, ctx, 64, 64, &err);
+	assert_eq(err, 0);
+	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
+	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
+	s32 = (uint32_t *)x.s;
+
+#define REJECT(err_, ...) do { xstream_init(&x, xctx, 0x3e100000, 0x2e100000); \
+		__VA_ARGS__; assert_eq(submit(fd, &x.j, 1, NULL), -(err_)); } while (0)
+
+	REJECT(EINVAL, s32[0] = 40);			/* length is exact */
+	REJECT(EINVAL, s32[1] = 1);			/* header word must be zero */
+	REJECT(EINVAL, x.j.cmd_stream_len = 0);
+	REJECT(EINVAL, x.j.cmd_stream += 4);		/* 8-byte aligned */
+	REJECT(EFAULT, x.j.cmd_stream = 8);
+	REJECT(EINVAL, x.s[1] = 0);			/* background block required */
+	REJECT(EINVAL, x.s[1] = 0x3e100008);		/* 16-byte aligned */
+	REJECT(EINVAL, x.s[1] = 0x3e200000);		/* not mapped */
+	REJECT(EINVAL, x.s[1] = 0x3e100f00);		/* not mapped for its 0x200 bytes */
+	REJECT(EINVAL, x.s[2] = 0x3e100000);		/* pixel event outside PDS pixel */
+	REJECT(EINVAL, x.s[2] = 0x2e200000);		/* pixel event not mapped */
+	REJECT(EINVAL, s32[6] = 0);			/* rows 1..63 */
+	REJECT(EINVAL, s32[6] = 64);
+	REJECT(EINVAL, s32[7] = 2);			/* first tile after the last */
+	REJECT(EINVAL, s32[10] = 0x10000);		/* tile limits */
+	REJECT(EINVAL, x.j.flags = 2);			/* flags outside the mask */
+	REJECT(EINVAL, x.j.rt_dataset_handle = rtds);	/* transfers take no RT dataset */
+	REJECT(EINVAL, x.j.ta_kicks.count = 1);		/* or kicks */
+	REJECT(EINVAL, x.j.context_handle = ctx);	/* a transfer on a render context */
+#undef REJECT
+}
+
 static const struct {
 	const char *name;
 	void (*fn)(int fd);
@@ -818,6 +883,7 @@ static const struct {
 	{ "rt-dataset-create-destroy", t_rtds_create_destroy },
 	{ "rt-dataset-invalid", t_rtds_invalid },
 	{ "submit-render-invalid", t_submit_render_invalid },
+	{ "submit-transfer-invalid", t_submit_transfer_invalid },
 };
 
 int main(int argc, char **argv)
