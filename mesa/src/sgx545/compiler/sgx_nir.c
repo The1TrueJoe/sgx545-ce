@@ -43,7 +43,8 @@ static const nir_shader_compiler_options options = {
    .no_integers = true,
    .max_unroll_iterations = 8,   /* (libusc unrolls nothing; a 16-trip loop with a break became 125 instructions) */
    .lower_int64_options = ~0,
-   .lower_doubles_options = ~0,
+   /* (not lower_doubles_options = ~0: GLSL ES has no doubles, and with it
+    * 144 dEQP fragment loops came out wrong, EA3) */
    .force_indirect_unrolling = nir_var_all,
    .force_indirect_unrolling_sampler = true,
 };
