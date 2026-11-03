@@ -1312,25 +1312,60 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 }
 #else
 /* SGXMKIF_CMDTA, client part (STATE.md section 1) */
+/*
+ * Every render is the surface's first (RT-data entry 1, region array 1, frame
+ * counter 0), which any number of frames and processes accept. SGXGEN_ALTERNATE=1
+ * counts frames and alternates the two entries and region arrays instead, as
+ * the DDK and powervr_sgx (pvrsgx_render.c) do.
+ */
+static uint32_t frame_no(struct sgx_surface *s)
+{
+	return getenv("SGXGEN_ALTERNATE") ? s->frames : 0;
+}
+
+static uint32_t rgn_this(struct sgx_surface *s)
+{
+	return s->rgn[frame_no(s) & 1 ? 0 : 1].va;
+}
+
+static uint32_t rt_entry(struct sgx_surface *s)
+{
+	return s->rtdata.va + 0x18 + 0x38 * (frame_no(s) & 1 ? 0 : 1);
+}
+
+/* what the microkernel clears and the client sets before a scene (SGXGEN_ALTERNATE) */
+static void scene_start(struct sgx_surface *s)
+{
+	uint32_t *rd = s->rd.map;
+
+	rd[0x20 / 4] = rgn_this(s);
+	rd[0x28 / 4] = s->rgn[frame_no(s) & 1 ? 1 : 0].va;
+	rd[0xdc / 4] = rt_entry(s);
+	s->rtword.map[0] = frame_no(s) + 1;
+	s->rd_sync.map[0] = 1;
+	s->hwsync_access.map[0] = 1;
+}
+
 static void ta_command(struct sgx_ctx *c, uint32_t vdm_base, int last)
 {
 	struct sgx_surface *s = c->fb;
-	uint32_t *cmd = c->ccb.map + c->ccb_woff / 4, *t = cmd + 0x238 / 4;
+	uint32_t *cmd = c->ccb.map + c->ccb_woff / 4, *t = cmd + 0x238 / 4, f = frame_no(s);
 
 	memset(cmd, 0, 0x2c0);
 	cmd[0x00 / 4] = 0x2c0;				/* size, rounded to 64 */
-	cmd[0x04 / 4] = last ? 0x62 : 0x71;		/* TA flags [D] */
+	cmd[0x04 / 4] = last ? 0x62 : 0x61 | (f ? 0 : 0x10);	/* TA flags [D]; 0x10 on the first render */
 	cmd[0x08 / 4] = s->bg_pds[0];
 	cmd[0x0c / 4] = s->bg_pds[1];
 	cmd[0x10 / 4] = s->bg_pds[2];
 	cmd[0x14 / 4] = 0x50000000;
 	cmd[0x18 / 4] = 0x50000000;
-	cmd[0x1c / 4] = last ? 0x400 : 0;		/* 3D flags: render */
+	cmd[0x1c / 4] = last ? 0x400 | f << 14 : 0;	/* 3D flags: render */
+	cmd[0x20 / 4] = f;
 	cmd[0x24 / 4] = c->pbdesc.va;
 	cmd[0x38 / 4] = s->rd.va;
 	cmd[0x3c / 4] = s->hwsync.va;
 	cmd[0x40 / 4] = s->rtdata.va;
-	cmd[0x44 / 4] = s->rtdata.va + 0x18 + 0x38;	/* entry 1 (frame counter 1) */
+	cmd[0x44 / 4] = rt_entry(s);
 	t[0x00 / 4] = 0x20000000;			/* TE AA */
 	t[0x04 / 4] = s->rt.mtile1;
 	t[0x08 / 4] = s->rt.mtile2;
@@ -1339,7 +1374,7 @@ static void ta_command(struct sgx_ctx *c, uint32_t vdm_base, int last)
 	t[0x14 / 4] = last ? 0x400000 : 0;		/* TA flags 2 */
 	t[0x18 / 4] = vdm_base;
 	t[0x1c / 4] = 0xa2;				/* [G] */
-	t[0x20 / 4] = s->rgn[1].va;
+	t[0x20 / 4] = rgn_this(s);
 	t[0x24 / 4] = s->tailptr.va;
 	t[0x28 / 4] = f32(1e-6f);
 	t[0x2c / 4] = f32(1e-6f);
@@ -1476,6 +1511,8 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 	vdm_end(c);
 	k2 = vdm_end(c);
 	dump_progs(c, "before", c->frames + 1);
+	if (getenv("SGXGEN_ALTERNATE"))
+		scene_start(c->fb);
 	ta_command(c, c->vdm_start, 0);
 	kick(c, 0);
 	nanosleep(&ts, NULL);
@@ -1487,6 +1524,7 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 	ta_command(c, k2, 1);
 	kick(c, 1);
 	c->frames++;
+	c->fb->frames++;
 	e = wait_render(c, timeout_ms);
 	if (c->dev->verbose)
 		fprintf(stderr, "sgxgen: after kick 2: PB pages in use %#x, RT data +4 %#x, frame word %#x\n",

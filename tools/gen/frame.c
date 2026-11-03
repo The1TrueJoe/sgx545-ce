@@ -5,7 +5,8 @@
  *   frame [-v] [-n node] [-t trace.bin] [-o out.bin] [-s WxH] [-p] [-k r,g,b,a] ops...
  *
  * -p makes the surface y-up, as an EGL pbuffer (rows bottom first in -o).
- * -R N draws the whole frame N times on the same context and surface
+ * -R N draws the whole frame N times on the same context and surface, each as the
+ * surface's first render unless SGXGEN_ALTERNATE=1 (frames count and alternate the RT entries)
  * (SGXGEN_DUMP_AFTER=1 dumps the microkernel-written structures after each, with
  * the region headers, tail pointers and TA blocks; SGXGEN_DUMP_PROGS=1 the 3D's
  * client programs before and after).
