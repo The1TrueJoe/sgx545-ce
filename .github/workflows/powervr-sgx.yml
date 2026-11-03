@@ -86,11 +86,11 @@ jobs:
         run: |
           set -eux
           make -C linux-$LINUX_VERSION ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr
-          musl-gcc -static -O2 -Wall -Wextra -Werror -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm \
+          musl-gcc -static -O2 -fno-strict-aliasing -Wall -Wextra -Werror -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm \
             -o powervr_sgx_test drm/tests/powervr_sgx_test.c
           # A real frame: tools/gen's frame builder on the DRM uAPI.
           python3 tools/gen/mkusse.py > tools/gen/usse_progs.h
-          musl-gcc -static -O2 -Wall -Wno-unused-function -DSGXGEN_DRM -I hdr/include -I hdr/include/drm \
+          musl-gcc -static -O2 -fno-strict-aliasing -Wall -Wno-unused-function -DSGXGEN_DRM -I hdr/include -I hdr/include/drm \
             -I drm/powervr_sgx/include/uapi/drm -I tools/gen \
             -o powervr_sgx_frame drm/tests/powervr_sgx_frame.c tools/gen/sgxgen.c -lm
           # The header on its own, as userspace sees it (layouts: docs/uapi/check.sh).
