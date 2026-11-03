@@ -91,12 +91,25 @@ microkernel) gets list 15, and TA, 3D, host and 2D keep list 0.
 | 0 | an empty directory | idle |
 | 0 | a VM's directory | written by the microkernel from the HW render context when a job of that VM runs |
 
-A VM's directory maps only what the client mapped inside its heaps, and (once render
-contexts exist) the kernel-owned structures the TA and 3D read under it: PB, free list,
-region headers, tail pointers. It never maps the kernel code or kernel data heaps. That is
-the fix for P2 and P3 in `docs/UAPI.md` 7.2: a client task that loads from a firmware
-address, or a PDS program that names code base 15, faults inside its own VM instead of
-reaching the microkernel. The DDK put every kernel heap in every directory.
+A VM's directory maps what the client mapped inside its heaps, and the kernel-owned
+structures the TA and 3D read under it: PB, free list, scratch block, region headers, tail
+pointers, background object block.
+
+**The kernel heaps: the design and what the DDK microkernel allows.** The design keeps the
+kernel code, kernel data and sync heaps out of every client directory. That is the fix for
+P2 and P3 in `docs/UAPI.md` 7.2: a client task that loads from a firmware address, or a PDS
+program that names code base 15, faults inside its own VM instead of reaching the
+microkernel. **The DDK microkernel does not allow it** (EA1, 2026-11-03, log
+`2026-11-03-0135-drm-first-ta`): on a TA kick it writes `BIF_BANK0 = 0x11`, which moves the
+EDM *and* the TA onto list 1, loads list 1 with the context's directory (HW render context
+word 2), and then fetches its own code at `0x3000b000` through it. With the kernel heaps
+absent from the client directory that fetch faults (`BIF_FAULT 0x3000b021`) and the TA
+never runs. So with the DDK microkernel the driver points every VM's directory entries for
+the three kernel heaps at the firmware directory's own page tables (`share_kernel_heaps`,
+on by default). The heaps are whole 4 MiB directory entries (`pvrsgx_kernel_heaps`), so the
+page tables are shared, not copied, and every later kernel mapping shows in every VM. This
+reopens P2 and P3 for as long as the DDK microkernel runs; the open microkernel, which
+keeps the EDM on list 15, is what closes them.
 
 Reset (`pvrsgx_reset`) follows the DDK's recovery path on every start: reset everything,
 clear the lists, run the cores with list 0 on a scratch directory and give each pending
