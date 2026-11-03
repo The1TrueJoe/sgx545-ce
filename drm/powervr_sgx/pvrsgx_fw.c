@@ -45,6 +45,10 @@ static bool cleanup = true;
 module_param(cleanup, bool, 0644);
 MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (default on)");
 
+static bool restart_quiesce = true;
+module_param(restart_quiesce, bool, 0644);
+MODULE_PARM_DESC(restart_quiesce, "Before a restart, run the deinit script, hold the cores in reset and drop bus mastering, as an unload does (default on)");
+
 /* The DDK microkernel: libsrv_init's .rodata 0x2000..0xef68. */
 #define UKERNEL_SIZE		0xcf68
 
@@ -617,6 +621,15 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	 * exactly this.
 	 */
 	if (!first) {
+		if (restart_quiesce) {
+			/* What an unload and reload (which recovers) does in between. */
+			deinit_script(sdev);
+			wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+			sgx_rd(sdev, SGX_CR_SOFT_RESET);
+			pci_clear_master(sdev->pdev);
+			msleep(10);
+			pci_set_master(sdev->pdev);
+		}
 		memset(sdev->fw.data.cpu, 0, sdev->fw.data.size);
 		memset(sdev->fw.code.cpu, 0, sdev->fw.code.size);
 		err = fw_build(sdev, sdev->fw.image);
