@@ -1,0 +1,56 @@
+sgxgen: heap  4 0x37001000 +0x8000
+sgxgen: heap  5 0x3c001000 +0x8000
+sgxgen: heap  6 0x2e001000 +0x10000
+sgxgen: heap  7 0x30401000 +0x10000
+sgxgen: heap  0 0x3e001000 +0x40000
+sgxgen: heap  0 0x3e041000 +0x5000
+sgxgen: heap  0 0x3e046000 +0x40000
+sgxgen: render NOT done after 2009257 us
+frame 0: render FAILED, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+0/1 frames right
+rc=1
+[  508.012040] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[  508.022109] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[  508.025590] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  508.038613] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[  508.282957] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+[  515.055607] powervr_sgx_fra[2525]: segfault at 14 ip 0000000000401c5b sp 00007ffdb9bb1a70 error 6 in powervr_sgx_frame[1c5b,401000+f000] likely on CPU 3 (core 1, socket 0)
+[  537.901516] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 609, consumed 609); resetting
+[  538.408174] powervr_sgx 0000:01:02.0: [drm] microkernel did not power off
+[  538.512577] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[  538.516534] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  579.823412] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[  579.830813] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[  579.834732] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  579.847768] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[  579.924328] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+[  581.934557] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 2, consumed 2); resetting
+[  582.440916] powervr_sgx 0000:01:02.0: [drm] microkernel did not power off
+[  582.545413] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[  582.549365] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[  610.349536] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 2, consumed 2); resetting
+[  610.855802] powervr_sgx 0000:01:02.0: [drm] microkernel did not power off
+[  610.960420] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[  610.964371] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+firmware running: 1 lost: 0 resets: 2 irqs: 0
+kernel PD 0x0cd7e000 idle PD 0x0cd7d000
+ccb wo 1 ro 1 issued 1 consumed 1
+hostctl init 0x1 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+CLKGATECTL           0x0000 0x0000a6aa
+CLKGATECTL2          0x0004 0x00aaaaaa
+CLKGATESTATUS        0x0008 0x00000020
+CORE_ID              0x001c 0x01150000
+CORE_REVISION        0x0020 0x0001000e
+SOFT_RESET           0x0080 0x00000000
+EVENT_STATUS         0x012c 0x20000000
+EVENT_STATUS2        0x0118 0x00000400
+EVENT_HOST_ENABLE    0x0130 0x00004000
+EVENT_HOST_ENABLE2   0x0110 0x00000000
+BIF_CTRL             0x0c00 0x00000000
+BIF_INT_STAT         0x0c04 0x00080000
+BIF_FAULT            0x0c08 0x00000000
+BIF_BANK0            0x0c78 0x0000000f
+BIF_DIR_LIST_BASE0   0x0c84 0x0cd7e000
+BIF_DIR_LIST_BASE15  0x0c70 0x0cd7e000
+EDM_TASK_REG0        0x0b14 0x000126e8
+EDM_TASK_REG1        0x0b20 0x00010000

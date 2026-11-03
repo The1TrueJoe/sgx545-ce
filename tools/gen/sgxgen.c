@@ -696,6 +696,9 @@ static void background(struct sgx_ctx *c, struct sgx_surface *s)
 	s->bg_pds[1] = 0x00030001;		/* [G] */
 	s->bg_pds[2] = pds_word(c, va, rows);
 
+#ifdef SGXGEN_DRM
+	(void)b;	/* the kernel fills the block (CREATE_RT_DATASET) */
+#else
 	/* the background object's vertices in the PB (FUN_0001f990): fixed point, offset 0x1000 */
 	b[5] = f32(1.0f);
 	b[8] = f32(1.0f);
@@ -708,6 +711,7 @@ static void background(struct sgx_ctx *c, struct sgx_surface *s)
 	b[20] = (s->h + 0x1000) * 0x100;
 	b[21] = 0x1000;
 	b[22] = 0x3f80;
+#endif
 }
 
 struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h, uint32_t flags)

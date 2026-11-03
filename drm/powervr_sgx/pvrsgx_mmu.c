@@ -211,3 +211,29 @@ bool pvrsgx_mmu_range_empty(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size)
 	mutex_unlock(&mmu->lock);
 	return empty;
 }
+
+/* Give [start, end) page tables of their own now, so their PDEs never change. */
+int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u32 end)
+{
+	int err = 0;
+
+	mutex_lock(&mmu->lock);
+	for (u64 a = start; a < end && !err; a += SGX_MMU_PDE_SPAN)
+		err = pte_get(mmu, a, true) ? 0 : -ENOMEM;
+	mutex_unlock(&mmu->lock);
+	return err;
+}
+
+/*
+ * Point dst's directory entries for [start, end) at src's page tables: src's
+ * mappings there show in dst too, and dst never maps anything there itself.
+ * Both ends 4 MiB aligned, src preallocated.
+ */
+void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u32 end)
+{
+	for (u64 a = start; a < end; a += SGX_MMU_PDE_SPAN) {
+		unsigned int i = a >> (SGX_MMU_PAGE_SHIFT + SGX_MMU_PT_SHIFT);
+
+		dst->pd[i] = src->pd[i];
+	}
+}

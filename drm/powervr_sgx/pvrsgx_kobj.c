@@ -14,6 +14,7 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 
+#include "pvrsgx_ccb.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_mmu.h"
@@ -70,6 +71,9 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 			goto err_kmem;
 		o->vm = pvrsgx_vm_get(vm);
 	}
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD;
+	mutex_unlock(&sdev->ccb_lock);
 	return o;
 
 err_kmem:

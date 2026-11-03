@@ -86,6 +86,8 @@ struct pvrsgx_fw {
 	u32 cache_control;
 	/** @interface: DRM_POWERVR_SGX_FW_IF_*. */
 	u32 interface;
+	/** @ddk: The DDK's microkernel, which runs under the job's directory. */
+	bool ddk;
 	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
 	u32 ddk_version, ddk_build;
 };
@@ -178,6 +180,12 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 {
 	iowrite32(val, sdev->regs + reg);
 }
+
+struct pvrsgx_krange_span {
+	u32 start, end;
+};
+
+extern const struct pvrsgx_krange_span pvrsgx_kernel_heaps[3];
 
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags);
