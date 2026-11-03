@@ -28,6 +28,7 @@
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
+#include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
@@ -94,12 +95,14 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	unsigned long flags;
 	bool more, reap = false;
 	bool cookie = dma_fence_begin_signalling();
+	u32 done = 0;
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		if (!job_done(job, consumed))
 			break;
 		list_del_init(&job->node);
+		done++;
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 			sdev->renders_done++;
 			reap = true;
@@ -109,6 +112,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	more = !list_empty(&sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
+	pvrsgx_power_put(sdev, done);
 
 	if (reap)
 		queue_work(system_dfl_wq, &sdev->reap_work);
@@ -154,8 +158,13 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	job->hw_fence = dma_fence_get(fence);
 
-	if (sdev->lost) {
-		dma_fence_set_error(fence, -EIO);
+	err = sdev->lost ? -EIO : pvrsgx_power_get(sdev);
+	if (!err && sdev->lost) {
+		pvrsgx_power_put(sdev, 1);
+		err = -EIO;
+	}
+	if (err) {
+		dma_fence_set_error(fence, err);
 		dma_fence_signal(fence);
 		return fence;
 	}
@@ -177,6 +186,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_PROCESS_QUEUES, data, &job->ccb_seq);
 	}
 	if (err) {
+		pvrsgx_power_put(sdev, 1);
 		dma_fence_set_error(fence, err);
 		dma_fence_signal(fence);
 		return fence;
@@ -199,15 +209,18 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	struct pvrsgx_job *bad = to_pvrsgx_job(sched_job), *job, *tmp;
 	struct pvrsgx_device *sdev = bad->ctx->sdev;
 	unsigned long flags;
+	u32 failed = 0;
 
 	drm_sched_stop(&sdev->sched, sched_job);
 	drm_err(&sdev->base, "job timed out (ccb %llu, consumed %llu); resetting\n",
 		bad->ccb_seq, pvrsgx_ccb_consumed(sdev));
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
+	pvrsgx_coredump(sdev, bad);
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
+		failed++;
 		if (job != bad)
 			WRITE_ONCE(job->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_INNOCENT);
 		dma_fence_set_error(job->hw_fence, job == bad ? -ETIME : -ECANCELED);
@@ -227,6 +240,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		sdev->lost = true;
 	}
 	drm_sched_start(&sdev->sched, 0);
+	pvrsgx_power_put(sdev, failed);
 	return DRM_GPU_SCHED_STAT_RESET;
 }
 

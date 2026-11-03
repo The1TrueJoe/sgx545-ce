@@ -12,6 +12,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -239,6 +240,7 @@ static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		pvrsgx_device_fini(sdev);
 		return err;
 	}
+	pvrsgx_power_init(sdev);
 	return 0;
 }
 
@@ -246,6 +248,7 @@ static void pvrsgx_remove(struct pci_dev *pdev)
 {
 	struct pvrsgx_device *sdev = pci_get_drvdata(pdev);
 
+	pvrsgx_power_fini(sdev);
 	drm_dev_unplug(&sdev->base);
 	pvrsgx_device_fini(sdev);
 }
@@ -257,6 +260,10 @@ static void pvrsgx_shutdown(struct pci_dev *pdev)
 	/* Leave the GPU quiet for whatever runs next. */
 	pvrsgx_fw_stop(sdev);
 }
+
+static const struct dev_pm_ops pvrsgx_pm_ops = {
+	RUNTIME_PM_OPS(pvrsgx_runtime_suspend, pvrsgx_runtime_resume, NULL)
+};
 
 static const struct pci_device_id pvrsgx_pci_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x089b) },	/* CE5300 family */
@@ -270,6 +277,7 @@ static struct pci_driver pvrsgx_pci_driver = {
 	.probe = pvrsgx_probe,
 	.remove = pvrsgx_remove,
 	.shutdown = pvrsgx_shutdown,
+	.driver.pm = pm_ptr(&pvrsgx_pm_ops),
 };
 module_pci_driver(pvrsgx_pci_driver);
 

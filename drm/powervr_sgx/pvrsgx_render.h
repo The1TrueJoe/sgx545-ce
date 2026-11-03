@@ -28,15 +28,14 @@ struct pvrsgx_pb {
 	u32 pages;
 	/** @base: The 3D request base, PB & 0xfff00000. */
 	u32 base;
-	/** @reset_seen: The device reset count it was last set up for. */
-	u32 reset_seen;
+	/** @fw_gen: The microkernel run (pvrsgx_device.fw_gen) it was last set up for. */
+	u32 fw_gen;
 };
 
 struct pvrsgx_render_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
 	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
-	u32 reset_seen;
 };
 
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
@@ -57,7 +56,6 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2], *bgblock;
 	/** @frames: Renders into this dataset so far. */
 	u32 frames;
-	u32 reset_seen;
 };
 
 #define PVRSGX_MAX_TA_KICKS	2
@@ -68,18 +66,20 @@ struct pvrsgx_render_job {
 	struct powervr_sgx_stream_render render;
 	struct powervr_sgx_stream_ta_kick kick[PVRSGX_MAX_TA_KICKS];
 	u32 nkicks;
+	/** @cmd_off: Where the last kick's TA command went in the context's ring. */
+	u32 cmd_off;
 };
 
 /* A transfer context's firmware half: HW transfer context, command ring, completion sync. */
 struct pvrsgx_transfer_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *done;
 	u32 ccb_woff;
-	u32 reset_seen;
 };
 
 struct pvrsgx_transfer_job {
 	struct powervr_sgx_stream_transfer xfer;
 	bool dst_twiddled;
+	u32 cmd_off;
 };
 
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
@@ -102,5 +102,7 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6]);
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
 struct seq_file;
 void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev, bool before);
+struct seq_buf;
+void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job);
 
 #endif /* PVRSGX_RENDER_H */

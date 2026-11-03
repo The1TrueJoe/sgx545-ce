@@ -66,7 +66,7 @@ static void release(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
 
 /* ---------------------------------------------------------------- render context */
 
-/* The PB's free list and descriptor as new: at creation, and after a reset. */
+/* The PB's free list and descriptor as new: at creation, and after a reset (pb_rearm). */
 static void pb_init(struct pvrsgx_pb *pb)
 {
 	u32 pages = pb->pages, first, last, zls, ta, pds, *fl, *pd;
@@ -133,7 +133,7 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm 
 
 	pb->pages = pages;
 	pb_init(pb);
-	pb->reset_seen = sdev->reset_count;
+	pb->fw_gen = sdev->fw_gen;
 	return pb;
 
 fail:
@@ -220,7 +220,6 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 	hw[6] = kobj_va(r->pb->desc);
 	hw[7] = kobj_va(r->scratch);
 	hw[16] = task_tgid_nr(current);
-	r->reset_seen = sdev->reset_count;
 	return 0;
 
 fail:
@@ -313,10 +312,7 @@ void pvrsgx_rtds_put(struct pvrsgx_rt_dataset *rtds)
 		kref_put(&rtds->ref, rtds_release);
 }
 
-/*
- * The dataset's structures as new, frame count 0: at creation, and after a
- * reset (a restarted microkernel has never seen it).
- */
+/* The dataset's structures as new, frame count 0. */
 static void rtds_init(struct pvrsgx_rt_dataset *s)
 {
 	struct pvrsgx_render_ctx *r = s->ctx->render;
@@ -328,7 +324,6 @@ static void rtds_init(struct pvrsgx_rt_dataset *s)
 	for (int i = 0; i < 2; i++)
 		kobj_cpu(s->entword[i])[0] = 0;
 	s->frames = 0;
-	s->reset_seen = s->ctx->sdev->reset_count;
 
 	/* RT data: header, then two entries of 14 words. */
 	kobj_cpu(s->rtword)[0] = 1;
@@ -644,29 +639,19 @@ module_param(single_entry, bool, 0644);
 MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
 
 /*
- * After a reset the microkernel starts from nothing, but a context, its VM's PB
- * and its datasets can live through it. Their first job after the reset sets
- * them up again: the HW context's first-use bit (the microkernel clears bit 0
- * of word 0 when it first loads the context) and no render in flight, the PB
- * as new (a hung TA leaves pages taken from the free list), the dataset as new.
+ * A restart (a reset, or a runtime resume) starts a fresh microkernel, but a
+ * VM's PB lives through it. After a hang the pages the TA took are still off
+ * its free list: the next render on any of the VM's contexts hangs, and the
+ * next restart fails. The PB's first job after a restart sets it up as new.
+ * Nothing else needs it (log 2026-11-03-0600): the HW contexts and RT datasets
+ * carry on as they are.
  */
-static void render_rearm(struct pvrsgx_device *sdev, struct pvrsgx_render_ctx *r,
-			 struct pvrsgx_rt_dataset *s)
+static void pb_rearm(struct pvrsgx_device *sdev, struct pvrsgx_pb *pb)
 {
-	u32 *hw = kobj_cpu(r->hwctx);
-
-	if (r->reset_seen != sdev->reset_count) {
-		hw[0] |= BIT(0);
-		hw[0x20 / 4] = 0;
-		hw[0x24 / 4] = 0;
-		r->reset_seen = sdev->reset_count;
+	if (pb->fw_gen != sdev->fw_gen) {
+		pb_init(pb);
+		pb->fw_gen = sdev->fw_gen;
 	}
-	if (r->pb->reset_seen != sdev->reset_count) {
-		pb_init(r->pb);
-		r->pb->reset_seen = sdev->reset_count;
-	}
-	if (s->reset_seen != sdev->reset_count)
-		rtds_init(s);
 }
 
 /* Debug: snapshot the structures as the last kick is written (debugfs render_before). */
@@ -692,7 +677,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	if (last && k && snap_gap_ms)
 		msleep(snap_gap_ms);
 	if (first)
-		render_rearm(job->ctx->sdev, r, s);
+		pb_rearm(job->ctx->sdev, r->pb);
 	f = single_entry ? 0 : s->frames;
 	odd = f & 1;
 	rgn_this = kobj_va(s->rgn[odd ? 0 : 1]);
@@ -794,6 +779,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
+	if (last)
+		rj->cmd_off = woff;
 	if (last && snapshot)
 		render_snapshot(job->ctx->sdev, s, woff);
 	if (last)
@@ -855,7 +842,6 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 	hw[3] = kobj_va(x->ccb);
 	hw[4] = kobj_va(x->ccbctl);
 	hw[0x2a] = task_tgid_nr(current);
-	x->reset_seen = sdev->reset_count;
 	return 0;
 
 fail:
@@ -916,10 +902,7 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	u32 woff = x->ccb_woff, base = (u32)in->bg_block_addr & 0xfff00000;
 	u32 *cmd = (u32 *)((u8 *)kobj_cpu(x->ccb) + woff), *sh, *done;
 
-	if (x->reset_seen != job->ctx->sdev->reset_count) {
-		kobj_cpu(x->hwctx)[0] |= BIT(0);	/* as a render context's, after a reset */
-		x->reset_seen = job->ctx->sdev->reset_count;
-	}
+	job->transfer.cmd_off = woff;
 	memset(cmd, 0, XFER_CMD_BYTES);
 	cmd[0] = 1u << 25 | ((u32)in->bg_block_addr - base) >> 4;
 	cmd[1] = 0x200;
@@ -1011,7 +994,7 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	seq_buf_printf(sb, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
 		       kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
 		       kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
-	pvrsgx_fw_dump_ta3dctl(sb, sdev);
+	pvrsgx_fw_dump(sb, sdev, PVRSGX_FW_TA3DCTL, "ta3dctl");
 }
 
 #define DUMP_BYTES	SZ_16K
@@ -1061,4 +1044,23 @@ static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset
 		seq_buf_str(&sb);
 	}
 	mutex_unlock(&sdev->last_lock);
+}
+
+/* A job's command and the structures it names, for a devcoredump. */
+void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job)
+{
+	struct pvrsgx_device *sdev = job->ctx->sdev;
+
+	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER && job->render.rtds) {
+		mutex_lock(&sdev->last_lock);
+		render_dump(sb, sdev, job->render.rtds, job->render.cmd_off);
+		mutex_unlock(&sdev->last_lock);
+	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER && job->ctx->transfer) {
+		struct pvrsgx_transfer_ctx *x = job->ctx->transfer;
+
+		dump(sb, "xfer_hwctx", x->hwctx, 0, XFER_HWCTX_BYTES);
+		dump(sb, "xfer_ccbctl", x->ccbctl, 0, 8);
+		dump(sb, "xfer_cmd", x->ccb, job->transfer.cmd_off, XFER_CMD_BYTES);
+		dump(sb, "xfer_done", x->done, 0, SYNC_DATA_BYTES);
+	}
 }
