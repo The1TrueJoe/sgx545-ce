@@ -188,6 +188,8 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       if (!real)
          n_pa++;
       n_pa = MAX2(n_pa, c->colour_pa + 1);
+      if (c->has_depth)
+         n_pa = MAX2(n_pa, c->depth_pa + 1);
    }
 
    /* vertex: the live input mask */
@@ -258,6 +260,8 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    }
    out->colour_pa = c->colour_pa;
    out->discards = c->discards;
+   out->writes_depth = c->has_depth;
+   out->depth_pa = c->depth_pa;
    memcpy(out->in_mask, inmask, sizeof(inmask));
    for (unsigned i = 0; i < SGX_MAX_SETS; i++)
       out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];

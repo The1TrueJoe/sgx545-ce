@@ -259,6 +259,8 @@ main(int argc, char **argv)
          /* the USP has no list B writer: code only */
          fprintf(stderr, "sgxc: %s shader: %u constants, %u SA slots, %u words in memory: no USP\n", sname,
                  out.n_consts, out.sa_slots, out.mem_dwords);
+      } else if (out.writes_depth) {
+         fprintf(stderr, "sgxc: %s shader: gl_FragDepth in pa%u: no USP\n", sname, out.depth_pa);
       } else if (sgx_write_usp(&out, &usp, &usp_size)) {
          fprintf(stderr, "sgxc: %s shader: USP: out of memory\n", sname);
          status = 1;
