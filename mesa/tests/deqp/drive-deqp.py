@@ -318,7 +318,8 @@ def run_chunk(box, who, name, tests):
                 res[r[0]] = (r[1], r[2])
     if not wedged:
         # the failing tests' logs, for triage
-        rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - *.qpa 2>/dev/null", timeout=120)
+        logs = "*.log" if who == "piglit" else "*.qpa"    # piglit-runner keeps a log per failing test
+        rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - {logs} 2>/dev/null", timeout=120)
         if rc3 is not None and tar:
             try:
                 with tarfile.open(fileobj=io.BytesIO(tar)) as t:
@@ -415,8 +416,9 @@ def main():
     finally:
         if holder:
             # a chunk cut short must not go on running on the box without the lock
-            box.ssh("pkill -f deqp-runner; pkill -f piglit-runner; pkill -f /deqp-gles2; pkill -f piglit/bin/; "
-                    "rm -f /tmp/deqp-job")
+            # (busybox here has no pkill)
+            box.ssh("for p in $(ps | grep -e deqp-runner -e piglit-runner -e /deqp-gles2 -e piglit/bin/ | "
+                    "grep -v grep | awk '{print $1}'); do kill $p; done; rm -f /tmp/deqp-job")
             try:
                 holder.wait(timeout=30)
             except subprocess.TimeoutExpired:
