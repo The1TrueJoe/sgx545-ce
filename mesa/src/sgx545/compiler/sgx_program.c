@@ -216,7 +216,14 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       out->mem_base_slot[j] = c->mem_base_sa[j];
    out->uses_front_face = c->face_vreg >= 0;
    out->n_consts = 0;
-   for (unsigned k = 0; k < ARRAY_SIZE(c->const_used) && out->n_consts < ARRAY_SIZE(out->consts); k++) {
+   unsigned n_map = c->n_lits;
+   for (unsigned k = 0; k < ARRAY_SIZE(c->const_used); k++)
+      n_map += c->const_slot[k] >= 0;
+   if (n_map > ARRAY_SIZE(out->consts)) {
+      sgx_fail(c, "%u constants, the map holds %zu", n_map, ARRAY_SIZE(out->consts));
+      goto fail;
+   }
+   for (unsigned k = 0; k < ARRAY_SIZE(c->const_used); k++) {
       if (c->const_slot[k] < 0)
          continue;
       struct sgx_const_map *m = &out->consts[out->n_consts++];
@@ -226,7 +233,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       m->shift = c->const_shift[k];
       m->fmt = c->const_fmt[k] == 4 ? 3 : c->const_fmt[k] == 5 ? 0x10 : c->const_fmt[k] ? c->const_fmt[k] : 1;
    }
-   for (unsigned i = 0; i < c->n_lits && out->n_consts < ARRAY_SIZE(out->consts); i++) {
+   for (unsigned i = 0; i < c->n_lits; i++) {
       struct sgx_const_map *m = &out->consts[out->n_consts++];
       m->k = 0xffff;
       m->slot = c->slot_sa[c->lit_slot[i]] < 0 ? SGX_SLOT_NONE : c->slot_sa[c->lit_slot[i]];

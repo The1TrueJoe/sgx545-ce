@@ -257,8 +257,8 @@ main(int argc, char **argv)
       size_t usp_size;
       if (out.mem_dwords) {
          /* the USP has no list B writer: code only */
-         fprintf(stderr, "sgxc: %s shader: %u SA slots, %u words of constants in memory: no USP\n", sname,
-                 out.sa_slots, out.mem_dwords);
+         fprintf(stderr, "sgxc: %s shader: %u constants, %u SA slots, %u words in memory: no USP\n", sname,
+                 out.n_consts, out.sa_slots, out.mem_dwords);
       } else if (sgx_write_usp(&out, &usp, &usp_size)) {
          fprintf(stderr, "sgxc: %s shader: USP: out of memory\n", sname);
          status = 1;
