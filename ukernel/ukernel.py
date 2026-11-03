@@ -49,6 +49,14 @@ CR_PWRLOG = os.environ.get("UK_PWRLOG") == "1"
 # EVENT_STATUS2 — if TRIG_TA (0x80) or an OOM bit is ALREADY set before our kick,
 # the hang comes from TA1 or its finish, not kick-2's programming.
 K2_LOG = os.environ.get("UK_K2LOG") == "1"
+# DPM trajectory log (ta3d-state): locate WHERE the terminate's TA DPM pages are
+# wiped (K2LOG showed 0x724/0x72c/0x700 = 0 at the terminate). 0x700 (the readback
+# of 0x61c = 0x04210000, so ~0x0421xxxx when live) at three kick-1 points, 0x724 at
+# TA1's finish, 0x740 at kick-1 entry, and the NumActivePowerEvents delta
+# (hostctl[11]) between kick 1 and the terminate. The decision tree: A=0 the
+# free-list load isn't taking (upstream); A!=0,B=0 dpm_load overwrites it; B!=0,C=0
+# TA1 closes the scene; C!=0 & 0 at terminate = wiped between (0x3b>0 = power-off).
+DPM_LOG = os.environ.get("UK_DPMLOG") == "1"
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -801,6 +809,25 @@ def build(a):
     a.i("ld.a.d r13, r9, #1 [moe]")                 # cmd+0x04 (word 1)
     a.i("wdf")
     a.i("and r13, r13, #1")                         # r13 = bFirstKickOrResume
+    if DPM_LOG:
+        # kick-1 entry: log 0x740 (CR read by the DDK's DPM slot-1 free step) to
+        # 0x3a and STASH hostctl[11] (NumActivePowerEvents) in word 0x3c.
+        # terminate entry: 0x3b = hostctl[11] now - the stashed kick-1 value
+        # (>0 means a power event happened between the two kicks).
+        a.i("test.and.eq p0, r13, r13")             # terminate (r13 == 0)? delta branch
+        a.i("(p0) ba dpmlog_term")
+        a.i(f"ldr r5, #{0x740 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x3a, 5)
+        a.i(f"ld.a.d r5, r17, #{SA_HOSTCTL} [moe]"); a.i("wdf")
+        a.i("ld.a.d r6, r5, #11 [moe]"); a.i("wdf")  # hostctl[11] NumActivePowerEvents
+        a.st_sa(SA_SELF, 0x3c, 6)                    # stash kick-1 value (scratch, not dumped)
+        a.i("ba dpmlog_entry_done")
+        a.label("dpmlog_term")
+        a.i(f"ld.a.d r5, r17, #{SA_HOSTCTL} [moe]"); a.i("wdf")
+        a.i("ld.a.d r6, r5, #11 [moe]"); a.i("wdf")  # hostctl[11] at the terminate
+        a.i("ld.a.d r7, r17, #0x3c [moe]"); a.i("wdf")  # the stashed kick-1 value
+        a.i("test.isub16.ne p0, r6, r6, r7")         # r6 = (now - kick1) & 0xffff
+        a.st_sa(SA_SELF, 0x3b, 6)
+        a.label("dpmlog_entry_done")
     if CR_PWRLOG:
         # first kick only (render kick r13==0 skips): log the power-up CR values
         # before do_ta reprograms any of them, into the T3C dump words.
@@ -890,6 +917,8 @@ def build(a):
     a.i("(p0) ba skip_pb_fl")
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
+    if DPM_LOG:                                 # point A: 0x700 after the free-list load (kick 1)
+        a.i(f"ldr r5, #{0x700 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x35, 5)
     a.label("skip_pb_fl")
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
@@ -965,6 +994,8 @@ def build(a):
     a.i("test.and.eq p0, r13, r13")             # render kick? skip DPM state load
     a.i("(p0) ba skip_dpm_load")
     a.dpm_load()
+    if DPM_LOG:                                 # point B: 0x700 after dpm_load (kick 1)
+        a.i(f"ldr r5, #{0x700 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x37, 5)
     a.label("skip_dpm_load")
     # TA flags 2 (0x218): the command word, always with bit 24, plus bit 23
     # when the RT entry's word 13 bit 23 is set (docs/UKERNEL.md §7)
@@ -1069,6 +1100,9 @@ def build(a):
     a.i("wdf")
     a.i("test.and.ne p0, r2, #2")                     # bLastInScene (bit 1)? render
     a.i("(p0) ba do_3d")
+    if DPM_LOG:                                       # point C: TA1's finish (non-last)
+        a.i(f"ldr r5, #{0x700 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x38, 5)
+        a.i(f"ldr r5, #{0x724 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x39, 5)
     # not the last TA of the scene: the 3D waits. Re-enter the kick dispatch so a
     # host kick that was deferred while this TA ran (SC_TAFLIGHT) launches now (the
     # DDK re-launches the kick task from its TA-finished handler). If none is
