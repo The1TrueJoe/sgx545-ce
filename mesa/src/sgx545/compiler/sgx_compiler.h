@@ -80,6 +80,7 @@ struct sgx_compile_options {
 struct sgx_varying {
    char name[64];
    unsigned set;        /* first set (one per row) */
+   unsigned comp;       /* first component in its sets: varyings may share a set */
    unsigned rows, comps;
    unsigned precision;  /* GLSL: 0 none, 1 high, 2 medium, 3 low */
 };
@@ -167,6 +168,11 @@ struct sgx_shader {
    struct sgx_iter_info iters[16];
    unsigned colour_pa;          /* fragment: packed BGRA8 colour register */
    bool discards;               /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
+   /* fragment: gl_FragDepth, clamped to [0, 1], is in pa<depth_pa> at the
+    * feedback nop, for a depthf there (predicated on p1 when it discards
+    * too); not in the DDK's USP */
+   bool writes_depth;
+   unsigned depth_pa;
    uint32_t in_mask[4];         /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
    unsigned set_comps[SGX_MAX_SETS]; /* vertex: output set sizes (o4 on); 0 = unused */
    bool point_size;             /* vertex: writes the point size (f32), after the sets */
@@ -202,6 +208,13 @@ const struct nir_shader_compiler_options *sgx_nir_options(void);
  * allocates them (ISA.md "Varyings to sets"); call on each stage's NIR
  * before linking removes unused ones */
 void sgx_assign_varyings(struct nir_shader *nir, bool vertex, struct sgx_varyings *out);
+
+/* Varyings whose sets go past the ten (or past a set's four components):
+ * re-placed in their order as glslcompiler does past ten sets, sharing sets
+ * (sgx_varying.comp); set_comps follows. Deterministic in the list, so two
+ * stages with the same list agree. Anything that already fits is left as it
+ * is. False: more than 10 x 4 components */
+bool sgx_pack_varyings(struct sgx_varyings *v);
 
 /* lower and compile; 0 on success */
 int sgx_compile(struct nir_shader *nir, const struct sgx_compile_options *opts,

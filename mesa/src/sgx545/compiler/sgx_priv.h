@@ -165,6 +165,9 @@ struct sgx_ctx {
    /* fragment */
    struct sgx_ref color[4];
    bool has_color;
+   struct sgx_ref depth;         /* gl_FragDepth */
+   bool has_depth;
+   unsigned depth_pa;
    int keep_vreg;                /* discard: 1.0 = keep, -1 none */
    bool discards;
    bool keep_pred;               /* the single discard wrote p1 (= keep) itself */
