@@ -415,8 +415,9 @@ def main():
     finally:
         if holder:
             # a chunk cut short must not go on running on the box without the lock
-            box.ssh("pkill -f deqp-runner; pkill -f piglit-runner; pkill -f /deqp-gles2; pkill -f piglit/bin/; "
-                    "rm -f /tmp/deqp-job")
+            # (busybox here has no pkill)
+            box.ssh("for p in $(ps | grep -e deqp-runner -e piglit-runner -e /deqp-gles2 -e piglit/bin/ | "
+                    "grep -v grep | awk '{print $1}'); do kill $p; done; rm -f /tmp/deqp-job")
             try:
                 holder.wait(timeout=30)
             except subprocess.TimeoutExpired:
