@@ -1337,6 +1337,30 @@ static int wait_render(struct sgx_ctx *c, unsigned ms)
 	return sd->ui32WriteOpsComplete < sd->ui32WriteOpsPending ? -ETIMEDOUT : 0;
 }
 
+/* SGXGEN_DUMP_AFTER: what the microkernel left in the structures once the render is done. */
+static void dump_after(struct sgx_ctx *c)
+{
+	struct sgx_surface *s = c->fb;
+	uint32_t first = (c->pb.va - c->dev->heap_base[H_3DPARAMS]) >> 12;
+	struct timespec ts = { 0, 100 * 1000000 };
+
+	if (!getenv("SGXGEN_DUMP_AFTER"))
+		return;
+	nanosleep(&ts, NULL);
+	fprintf(stderr, "== after frame %u\n", c->frames);
+	dump_words("pbdesc", c->pbdesc.va, c->pbdesc.map, 0x3c);
+	dump_words("freelist[first..]", c->freelist.va + first * 4, c->freelist.map + first, 0x20);
+	dump_words("scratch", c->scratch.va, c->scratch.map, 0x40);
+	dump_words("sync3d", c->sync3d.va, c->sync3d.map, 0x18);
+	dump_words("ccbctl", c->ccbctl.va, c->ccbctl.map, 8);
+	dump_words("render_details", s->rd.va, s->rd.map, 0x1ec & ~3u);
+	dump_words("rtdata", s->rtdata.va, s->rtdata.map, 2 * 0x38 + 0x18);
+	dump_words("rtword", s->rtword.va, s->rtword.map, 4);
+	dump_words("entword0", s->entword[0].va, s->entword[0].map, 4);
+	dump_words("entword1", s->entword[1].va, s->entword[1].map, 4);
+	dump_words("hwsync", s->hwsync.va, s->hwsync.map, 0x28);
+}
+
 int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 {
 	uint32_t k2;
@@ -1360,6 +1384,7 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 	if (c->dev->verbose)
 		fprintf(stderr, "sgxgen: after kick 2: PB pages in use %#x, RT data +4 %#x, frame word %#x\n",
 			c->pbdesc.map[5], c->fb->rtdata.map[1], c->fb->rtword.map[0]);
+	dump_after(c);
 	return e;
 }
 #endif

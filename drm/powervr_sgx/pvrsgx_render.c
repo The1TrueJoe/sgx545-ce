@@ -684,11 +684,14 @@ void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev)
 	dump(m, "pbblocks", r->pbblocks, 0, 0x10);
 	dump(m, "freelist[first..]", r->freelist,
 	     ((kobj_va(r->pb) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
+	dump(m, "scratch", r->scratch, 0, 0x40);
 	dump(m, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
 	dump(m, "ta_cmd", r->ccb, sdev->last_cmd_off, TA_CMD_BYTES);
 	dump(m, "render_details", s->rd, 0, 0x1ec & ~3u);
 	dump(m, "rtdata", s->rtdata, 0, 2 * 0x38 + 0x18);
 	dump(m, "rtword", s->rtword, 0, 4);
+	dump(m, "entword0", s->entword[0], 0, 4);
+	dump(m, "entword1", s->entword[1], 0, 4);
 	dump(m, "hwsync", s->hwsync, 0, 0x28);
 	dump(m, "done", s->done, 0, SYNC_DATA_BYTES);
 	dump(m, "bgblock", s->bgblock, 0, 0x60);
@@ -696,4 +699,5 @@ void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev)
 		   kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
 		   kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
 	mutex_unlock(&sdev->last_lock);
+	pvrsgx_fw_debugfs_ta3dctl(m, sdev);
 }
