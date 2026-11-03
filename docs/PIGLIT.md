@@ -68,6 +68,32 @@ Mesa 26.2.5` on `PowerVR SGX545 (sgx545-ce)`. Mesa grants 2.1 for
 `EXT_texture_sRGB` on top of 2.0, which needs an sRGB format the driver can
 sample.
 
+## Uniforms past sa127 (EA1, 2026-11-03)
+
+`glsl-uniform-interstage-limits` (118 vertex vec4, 126 fragment vec4, each
+array read as `u[i]` in a loop over a uniform count) first locked the 3D
+because the constants ran past sa127. With constants in memory (the compiler
+keeps the most-used in SA and loads the rest with `ld.a.d` from a per-draw block
+in the general ring, `sgxws_const_mem`), the spilled programs are right:
+
+| shader_test | result |
+|---|---|
+| VS sums 40 / 118 vec4, FS sums 40 / 120 vec4 (static indices) | right, no recoveries |
+| one uniform at a time through VS 118 vec4, and combinations | right |
+| VS `u[i]` loop over 118, FS `u[i]` loop over 126 (small rect) | right |
+
+The test still recovers, and that is run time, not a wrong program. The
+driver doesn't set `indirect_const_addr`, so GLSL lowers `u[i]` to a select
+ladder over the whole array, which leaves every element as a static use. The
+vertex program is then 1,321 instructions with 360 `ld.a.d`+`wdf` per
+iteration. At 126 iterations per pixel, a 25x25 px rect sometimes takes one
+recovery (TA lockup, no BIF fault), and a 62x62 rect takes two and draws
+nothing. The test covers the whole 250x250 FBO 256 times. The fix is an indexed
+load: an indirectly indexed array that doesn't fit SA goes to memory, and each
+access becomes one `ld.a.d` with a register offset. That needs the compiler,
+a hardware check of register offsets (ISA.md lists them untested), and then
+`indirect_const_addr` in the driver.
+
 ## The DDK's desktop GL, as an oracle
 
 The DDK ships a desktop GL: `libPVROGL_MESA.so` (IMG's GL built on Mesa, with
