@@ -658,6 +658,15 @@ def build(a):
     a.i("wdf")
     a.i(f"str #{0xc38 // 4}, r4")                   # DIR_LIST_BASE1 = ctx PD (slot 1), list 0 (kernel PD) left intact
     a.invalidate(CR_PDS_INV1, INV_DONE_3D)
+    # transfer's 3D field (b22-26) into 0xa74 (DDK pc 0x13a1): xfer cmd word 101
+    # (+0x194), masked replace like the render 3D field. r9 = transfer cmd base.
+    a.i("ld.a.d r5, r9, #%d [moe]" % (0x194 // 4))   # xfer cmd+0x194 = 3D flags
+    a.i(f"ldr r6, #{0xa74 // 4}")
+    a.i("limm r7, #0xf83fffff")                      # ~0x07c00000: keep all but the 3D field
+    a.i("wdf")
+    a.i("and r6, r6, r7")
+    a.i("or r5, r5, r6")
+    a.i(f"str #{0xa74 // 4}, r5")
     a.program(9, T3_CMD)
     a.consts(T3_CONST)
     a.st_sa(SA_SELF, SC_XFER, 16)                   # remember the transfer in flight
@@ -831,17 +840,20 @@ def build(a):
     a.label("skip_pb_fl")
     # TE / macrotile / screen layout from the command tail
     a.program(9, TA_TE)
-    # 0xa74 |= the TA command's flags word (cmd+0x14), as the DDK writes it after
-    # the TE registers and before the kick (ddk-ref line 91; STATE.md cmd+0x14 =
-    # 0x50000000 when kick flag 0x2000000 is clear). Read +0x14 (word 5), not the
-    # +0x18 constant. OR it in (RMW) so srvinit's init bits (0x208200) survive —
-    # the DDK's a74 after the TA is 0x50208200, not 0x50000000 (HW 2026-11-03).
+    # 0xa74's TA field (b27-31) = the command's flags word (cmd+0x14), as the DDK
+    # writes it after the TE registers and before the kick (ddk-ref pc 0x0986;
+    # STATE.md cmd+0x14 = 0x50000000 when kick flag 0x2000000 is clear). Masked
+    # REPLACE: clear the TA field (mask ~0xf8000000) and OR the flags in, so
+    # srvinit's init bits (0x208200) survive AND a stale TA field from a previous
+    # scene is cleared, not accumulated. The DDK's a74 after the TA = 0x50208200.
     a.i(f"ld.a.d r9, r17, #{SC_CMD} [moe]")
     a.i("wdf")
     a.i("ld.a.d r5, r9, #5 [moe]")                   # cmd+0x14 = TA flags (b27-31)
     a.i(f"ldr r6, #{0xa74 // 4}")                    # current a74 (srvinit init 0x208200)
+    a.i("limm r7, #0x07ffffff")                      # ~0xf8000000: keep all but the TA field
     a.i("wdf")
-    a.i("or r5, r5, r6")                             # a74 = init | flags
+    a.i("and r6, r6, r7")
+    a.i("or r5, r5, r6")                             # a74 = (a74 & ~TA-field) | flags
     a.i(f"str #{0xa74 // 4}, r5")
     # RT region-header / tail-pointer base registers (0x62c/0x634/0x234): first
     # kick only — they describe the scene's parameter-buffer regions, set once and
@@ -930,6 +942,13 @@ def build(a):
     # this TA is no longer in flight; clear the flag so a deferred kick can launch.
     a.i("limm r4, #0")
     a.st_sa(SA_SELF, SC_TAFLIGHT, 4)
+    # clear 0xa74's low nibble (b0-3) at TA finish (DDK pc 0x15b7): per-kick TA
+    # state that must not carry into the next scene (multi-frame hygiene).
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("limm r6, #0xfffffff0")
+    a.i("wdf")
+    a.i("and r5, r5, r6")
+    a.i(f"str #{0xa74 // 4}, r5")
     # save the TA state register 0x274 across the scene's kicks. At TA finish the
     # DDK reads CR 0x274 and stores it to rd+0x124 (pc 0x0698); the next kick's
     # TA_RD restore (0x274 <- rd+0x124, program() at the TA kick) reloads it. Ours
@@ -1074,12 +1093,16 @@ def build(a):
     a.dpm_freelist(5, CR_DPM_3D_FL, 0x2)             # 0x664=5, 0x680=1, wait: load the 3D free list
     a.consts(D3_CONST)
     a.program(10, D3_RD)
-    # D (ta3d-state): 3D flags. OR the render details' word 0x13c (0x07c00000)
-    # into 0xa74 (0x50000000 -> 0x57c00000); 0x658 = 0; 0x43c = 1.
+    # D (ta3d-state): 3D flags. 0xa74's 3D field (b22-26) = the render details'
+    # word 0x13c (0x07c00000), masked REPLACE (clear b22-26, OR in) so a stale 3D
+    # field from a previous scene is cleared, not accumulated; keeps the TA field
+    # (0x50000000) and srvinit's 0x208200 -> 0x57e08200. Then 0x658 = 0; 0x43c = 1.
     a.i(f"ldr r4, #{0xa74 // 4}")
-    a.i("ld.a.d r5, r10, #%d [moe]" % (0x13c // 4))  # rd+0x13c
+    a.i("ld.a.d r5, r10, #%d [moe]" % (0x13c // 4))  # rd+0x13c = 3D flags (b22-26)
+    a.i("limm r6, #0xf83fffff")                       # ~0x07c00000: keep all but the 3D field
     a.i("wdf")
-    a.i("or r4, r4, r5")
+    a.i("and r4, r4, r6")
+    a.i("or r4, r4, r5")                             # a74 = (a74 & ~3D-field) | flags
     a.i(f"str #{0xa74 // 4}, r4")
     a.i("limm r5, #0")
     a.i(f"str #{0x658 // 4}, r5")
