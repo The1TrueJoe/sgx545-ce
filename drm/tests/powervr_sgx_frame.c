@@ -10,7 +10,8 @@
  *
  * -k 2 (default) records the scene as two TA kicks, the stream and then the
  * terminate words; -k 1 as one kick that also renders. -r gives every frame a
- * new render target (RT dataset).
+ * new render target (RT dataset). -D prints debugfs "render" after every frame:
+ * what the microkernel left in the kernel-built structures.
  *
  * Exit 0 when every frame's pixels are right.
  */
@@ -21,6 +22,21 @@
 #include <unistd.h>
 
 #include "sgxgen.h"
+
+static void dump_render(unsigned f)
+{
+	FILE *fp;
+	char line[512];
+
+	usleep(100000);
+	fp = fopen("/sys/kernel/debug/dri/0000:01:02.0/render", "r");
+	if (!fp)
+		return;
+	printf("== after frame %u\n", f + 1);
+	while (fgets(line, sizeof line, fp))
+		fputs(line, stdout);
+	fclose(fp);
+}
 
 static uint32_t px(const struct sgx_surface *s, unsigned x, unsigned y)
 {
@@ -38,13 +54,14 @@ int main(int argc, char **argv)
 	struct sgx_surface *s;
 	struct sgx_ctx *c;
 	struct sgx_dev dev;
-	int opt, e, verbose = 0, kicks = 2, fresh = 0;
+	int opt, e, verbose = 0, kicks = 2, fresh = 0, dump = 0;
 
-	while ((opt = getopt(argc, argv, "vrk:n:s:o:")) != -1) {
+	while ((opt = getopt(argc, argv, "vDrk:n:s:o:")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
 		case 'k': kicks = atoi(optarg); break;
 		case 'r': fresh = 1; break;	/* a new RT dataset every frame */
+		case 'D': dump = 1; break;
 		case 'n': frames = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 's':
 			if (sscanf(optarg, "%ux%u", &w, &h) != 2)
@@ -94,6 +111,8 @@ int main(int argc, char **argv)
 		       e ? "FAILED" : "done", centre, want_tri, corner, want_bg);
 		if (e || centre != want_tri || corner != want_bg)
 			bad++;
+		if (dump)
+			dump_render(f);
 	}
 
 	if (out) {

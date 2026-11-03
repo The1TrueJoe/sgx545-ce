@@ -8,6 +8,7 @@
 #include <linux/types.h>
 
 struct pvrsgx_device;
+struct seq_file;
 
 /* Fixed device-virtual layout (docs/UAPI.md section 5). */
 #define PVRSGX_HEAP_3D_PARAMS		0x10000000u
@@ -61,6 +62,7 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev);
 int pvrsgx_fw_start(struct pvrsgx_device *sdev);
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev);
 u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word);
+void pvrsgx_fw_debugfs_ta3dctl(struct seq_file *m, struct pvrsgx_device *sdev);
 int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr);
 
 #endif /* PVRSGX_FW_H */

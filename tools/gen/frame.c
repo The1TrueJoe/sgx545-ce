@@ -5,6 +5,8 @@
  *   frame [-v] [-n node] [-t trace.bin] [-o out.bin] [-s WxH] [-p] [-k r,g,b,a] ops...
  *
  * -p makes the surface y-up, as an EGL pbuffer (rows bottom first in -o).
+ * -R N draws the whole frame N times on the same context and surface
+ * (SGXGEN_DUMP_AFTER=1 dumps the microkernel-written structures after each).
  *
  * The frame starts with a clear (-k, default 0,0,0.5,1: the probe's), then
  * runs the ops in order:
@@ -57,18 +59,19 @@ int main(int argc, char **argv)
 	const char *trace = NULL, *out = NULL, *node = NULL;
 	unsigned w = 720, h = 480;
 	float clear[4] = { 0, 0, 0.5f, 1 };
-	int opt, e, ndraws = 0, verbose = 0;
+	int opt, e = 0, ndraws = 0, verbose = 0, repeat = 1;
 	struct { char op; char *arg; } ops[64];
 	int nops = 0;
 	unsigned long flush = 0;
 	uint32_t sflags = 0;
 
-	while ((opt = getopt(argc, argv, "vpn:t:o:s:k:d:V:C:T:F:")) != -1) {
+	while ((opt = getopt(argc, argv, "vpn:t:o:s:k:d:V:C:T:F:R:")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
 		case 'p': sflags |= SGX_SURFACE_Y_UP; break;
 		case 'n': node = optarg; break;
 		case 'F': flush = strtoul(optarg, NULL, 0); break;
+		case 'R': repeat = atoi(optarg); break;
 		case 't': trace = optarg; break;
 		case 'o': out = optarg; break;
 		case 's':
@@ -106,77 +109,83 @@ int main(int argc, char **argv)
 	vs_xy = sgx_shader_builtin(c, SGX_VS_XY);
 	vs_xyz = sgx_shader_builtin(c, SGX_VS_XYZ);
 	fs = sgx_shader_builtin(c, SGX_FS_UNIFORM);
-	sgx_set_framebuffer(c, s);
-	sgx_clear(c, clear, 1.0f);
+	for (int rep = 0; rep < repeat && !e; rep++) {
+		struct sgx_state st0 = st;
 
-	for (int i = 0; i <= nops; i++) {
-		char *a = i < nops ? ops[i].arg : NULL;
-		float v[64], z[1];
+		ndraws = 0;
+		sgx_set_framebuffer(c, s);
+		sgx_clear(c, clear, 1.0f);
 
-		if (i == nops && ndraws)
-			break;
-		if (i == nops || ops[i].op == 'T') {
-			struct sgx_draw d = { .prim = SGX_TRIANGLES, .vs = vs_xy, .fs = fs, .state = &st,
-					      .color = { 0, 1, 0, 1 } };
-			float ref[6] = { -0.5f, -0.5f, 0.5f, -0.5f, 0, 0.5f }, xyz[96];
-			int n = 6, hasz = 0;
+		for (int i = 0; i <= nops; i++) {
+			char *a = i < nops ? ops[i].arg : NULL;
+			float v[64], z[1];
 
-			if (a) {
-				char *col = strchr(a, ':');
+			if (i == nops && ndraws)
+				break;
+			if (i == nops || ops[i].op == 'T') {
+				struct sgx_draw d = { .prim = SGX_TRIANGLES, .vs = vs_xy, .fs = fs, .state = &st,
+						      .color = { 0, 1, 0, 1 } };
+				float ref[6] = { -0.5f, -0.5f, 0.5f, -0.5f, 0, 0.5f }, xyz[96];
+				int n = 6, hasz = 0;
 
-				if (col)
-					*col++ = 0;
-				n = floats(a, v, 64);
-				if (n < 6 || (n % 6 != 0 && n % 6 != 1))
-					return fprintf(stderr, "frame: bad -T '%s'\n", a), 1;
-				if (n % 6 == 1) {
-					z[0] = v[--n];
-					hasz = 1;
+				if (a) {
+					char *col = strchr(a, ':');
+
+					if (col)
+						*col++ = 0;
+					n = floats(a, v, 64);
+					if (n < 6 || (n % 6 != 0 && n % 6 != 1))
+						return fprintf(stderr, "frame: bad -T '%s'\n", a), 1;
+					if (n % 6 == 1) {
+						z[0] = v[--n];
+						hasz = 1;
+					}
+					if (col && floats(col, d.color, 4) != 4)
+						return 1;
+				} else {
+					memcpy(v, ref, sizeof ref);
 				}
-				if (col && floats(col, d.color, 4) != 4)
+				d.count = (uint32_t)n / 2;
+				if (hasz) {
+					for (uint32_t k = 0; k < d.count; k++) {
+						xyz[3 * k] = v[2 * k];
+						xyz[3 * k + 1] = v[2 * k + 1];
+						xyz[3 * k + 2] = z[0];
+					}
+					d.vs = vs_xyz;
+					d.verts = xyz;
+				} else {
+					d.verts = v;
+				}
+				sgx_draw(c, &d);
+				ndraws++;
+			} else if (ops[i].op == 'd') {
+				float f[2] = { 0, 1 };
+				int n = floats(a, f, 2);
+
+				st.depth_func = (uint32_t)strtoul(a, NULL, 0);
+				st.depth_write = n < 2 || f[1] != 0;
+			} else if (ops[i].op == 'V') {
+				float f[4];
+
+				if (floats(a, f, 4) != 4)
 					return 1;
-			} else {
-				memcpy(v, ref, sizeof ref);
+				st.vp_x = f[0];
+				st.vp_y = f[1];
+				st.vp_w = f[2];
+				st.vp_h = f[3];
+			} else if (ops[i].op == 'C') {
+				char *x;
+
+				st.cull = (uint32_t)strtoul(a, &x, 0);
+				if (*x == ',')
+					st.front = (uint32_t)strtoul(x + 1, NULL, 0);
 			}
-			d.count = (uint32_t)n / 2;
-			if (hasz) {
-				for (uint32_t k = 0; k < d.count; k++) {
-					xyz[3 * k] = v[2 * k];
-					xyz[3 * k + 1] = v[2 * k + 1];
-					xyz[3 * k + 2] = z[0];
-				}
-				d.vs = vs_xyz;
-				d.verts = xyz;
-			} else {
-				d.verts = v;
-			}
-			sgx_draw(c, &d);
-			ndraws++;
-		} else if (ops[i].op == 'd') {
-			float f[2] = { 0, 1 };
-			int n = floats(a, f, 2);
-
-			st.depth_func = (uint32_t)strtoul(a, NULL, 0);
-			st.depth_write = n < 2 || f[1] != 0;
-		} else if (ops[i].op == 'V') {
-			float f[4];
-
-			if (floats(a, f, 4) != 4)
-				return 1;
-			st.vp_x = f[0];
-			st.vp_y = f[1];
-			st.vp_w = f[2];
-			st.vp_h = f[3];
-		} else if (ops[i].op == 'C') {
-			char *x;
-
-			st.cull = (uint32_t)strtoul(a, &x, 0);
-			if (*x == ',')
-				st.front = (uint32_t)strtoul(x + 1, NULL, 0);
 		}
+		e = sgx_flush(c, 2000);
+		printf("frame: %ux%u, %d draw(s), render %s\n", w, h, ndraws, e ? "TIMED OUT" : "done");
+		st = st0;
 	}
-	e = sgx_flush(c, 2000);
-	printf("frame: %ux%u, %d draw(s), render %s\n", w, h, ndraws, e ? "TIMED OUT" : "done");
 	if (out) {
 		FILE *f = fopen(out, "wb");
 		size_t n = (size_t)s->stride * h * 4;
