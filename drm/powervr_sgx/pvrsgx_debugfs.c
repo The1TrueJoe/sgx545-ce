@@ -73,13 +73,22 @@ static int render_show(struct seq_file *m, void *unused)
 {
 	struct drm_debugfs_entry *entry = m->private;
 
-	pvrsgx_render_debugfs_show(m, to_pvrsgx_device(entry->dev));
+	pvrsgx_render_debugfs_show(m, to_pvrsgx_device(entry->dev), false);
+	return 0;
+}
+
+static int render_before_show(struct seq_file *m, void *unused)
+{
+	struct drm_debugfs_entry *entry = m->private;
+
+	pvrsgx_render_debugfs_show(m, to_pvrsgx_device(entry->dev), true);
 	return 0;
 }
 
 static const struct drm_debugfs_info pvrsgx_debugfs_list[] = {
 	{ "status", status_show, 0 },
 	{ "render", render_show, 0 },
+	{ "render_before", render_before_show, 0 },
 };
 
 void pvrsgx_debugfs_init(struct drm_minor *minor)

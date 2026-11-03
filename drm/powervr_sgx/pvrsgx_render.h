@@ -96,6 +96,6 @@ int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
 void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6]);
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
 struct seq_file;
-void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev);
+void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev, bool before);
 
 #endif /* PVRSGX_RENDER_H */

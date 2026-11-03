@@ -294,6 +294,7 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	pvrsgx_job_fini(sdev);
 	pvrsgx_rtds_put(sdev->last_rtds);
 	sdev->last_rtds = NULL;
+	kvfree(sdev->render_snap);
 	pvrsgx_fw_stop(sdev);
 	free_irq(sdev->irq, sdev);
 	pvrsgx_kobj_fini(sdev);

@@ -199,5 +199,16 @@ void sgx_clear(struct sgx_ctx *c, const float rgba[4], float depth);
 int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d);
 /* submit the frame; waits up to timeout_ms for the render to finish; 0 = done */
 int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms);
+#ifdef SGXGEN_DRM
+/* The frame's render job (signals c->syncobj), for a SUBMIT_JOBS of the caller's
+ * own; *j must live until the ioctl returns. sgx_flush is this, submit and wait. */
+struct sgx_job {
+	uint64_t render[10], kick_buf[2][3];
+	struct drm_powervr_sgx_ta_kick kick[2];
+	struct drm_powervr_sgx_sync_op op;
+	struct drm_powervr_sgx_job job;
+};
+void sgx_render_job(struct sgx_ctx *c, struct sgx_job *j);
+#endif
 
 #endif

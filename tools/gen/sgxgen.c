@@ -1155,68 +1155,112 @@ static int64_t now_ns(void)
 	return ts.tv_sec * 1000000000ll + ts.tv_nsec;
 }
 
+/* SGXGEN_DUMP_PROGS: the 3D's client programs, word by word (with debugfs render_before/render). */
+static void dump_prog(struct sgx_ctx *c, const char *name, uint32_t va, uint32_t bytes)
+{
+	const struct sgx_ring *rs[] = { &c->pds_pix, &c->usse_pix };
+
+	for (unsigned i = 0; i < 2; i++) {
+		const struct sgx_bo *b = &rs[i]->bo;
+
+		if (va < b->va || va >= b->va + b->size)
+			continue;
+		if (bytes > b->va + b->size - va)
+			bytes = b->va + b->size - va;
+		fprintf(stderr, "%s @ 0x%08x:", name, va);
+		for (uint32_t j = 0; j < bytes / 4; j++)
+			fprintf(stderr, "%s%08x", j % 8 ? " " : "\n  ", b->map[(va - b->va) / 4 + j]);
+		fputc('\n', stderr);
+		return;
+	}
+	fprintf(stderr, "%s @ 0x%08x: not in the pixel rings\n", name, va);
+}
+
+static void dump_progs(struct sgx_ctx *c, const char *when, unsigned frame)
+{
+	struct sgx_surface *s = c->fb;
+	uint32_t base = c->dev->heap_base[H_PDSPIXEL];
+
+	if (!getenv("SGXGEN_DUMP_PROGS"))
+		return;
+	fprintf(stderr, "== programs %s frame %u: pixel event 0x%08x rows %u, eot 0x%08x, bg pds %08x %08x %08x\n",
+		when, frame, s->pixev, s->pixev_rows, s->eot, s->bg_pds[0], s->bg_pds[1], s->bg_pds[2]);
+	dump_prog(c, "pixel_event_pds", s->pixev, s->pixev_rows * 16 + 0x60);
+	dump_prog(c, "eot_usse", s->eot, 7 * 8);
+	dump_prog(c, "pe_ptoff_usse", c->pe_ptoff, 0x40);
+	dump_prog(c, "pe_emit_usse", c->pe_emit, 0x40);
+	dump_prog(c, "bg_primary_pds", base + ((s->bg_pds[2] & 0x3ffffff) << 4), (s->bg_pds[2] >> 26) * 16 + 0x40);
+	dump_prog(c, "bg_secondary_pds", base + ((s->bg_pds[0] & 0x3ffffff) << 4), (s->bg_pds[0] >> 26) * 16 + 0x20);
+}
+
 /*
  * One render job: the scene is the whole VDM stream in one TA kick, which the
  * kernel marks first and last (it starts the 3D). The client's part of the
  * command is two streams (docs/UAPI.md section 3).
  */
-int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
+void sgx_render_job(struct sgx_ctx *c, struct sgx_job *j)
 {
 	struct sgx_surface *s = c->fb;
-	uint64_t render[10] = { 0 }, kick_buf[2][3] = { { 0 } };
-	uint32_t *r32 = (uint32_t *)render;
-	struct drm_powervr_sgx_ta_kick kick[2] = {
-		{ .cmd_stream = (uintptr_t)kick_buf[0], .cmd_stream_len = 20 },
-		{ .cmd_stream = (uintptr_t)kick_buf[1], .cmd_stream_len = 20 },
-	};
-	struct drm_powervr_sgx_sync_op op = { .handle = c->syncobj, .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL };
-	struct drm_powervr_sgx_job job = {
+	uint32_t *r32 = (uint32_t *)j->render, k2;
+
+	memset(j, 0, sizeof *j);
+	vdm_end(c);
+	k2 = vdm_end(c);	/* the second kick's stream: the terminate words only */
+	/* CMD_RENDER: header, then the fields in order (UAPI.md 3.4) */
+	r32[0] = 80;
+	j->render[3] = s->pixev;			/* pixel_event_pds_addr */
+	j->render[4] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[0] & 0x3ffffff) << 4);	/* bg secondary */
+	j->render[5] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[2] & 0x3ffffff) << 4);	/* bg primary */
+	r32[0x30 / 4] = s->pixev_rows;
+	r32[0x34 / 4] = s->bg_pds[0] >> 26;
+	r32[0x38 / 4] = s->bg_pds[2] >> 26;
+	r32[0x44 / 4] = f32(1.0f);			/* bg_depth */
+	/* CMD_TA_KICK: the scene's stream, then (two kicks) the terminate words */
+	for (int i = 0; i < 2; i++) {
+		((uint32_t *)j->kick_buf[i])[0] = 20;
+		j->kick[i].cmd_stream = (uintptr_t)j->kick_buf[i];
+		j->kick[i].cmd_stream_len = 20;
+	}
+	j->kick_buf[0][1] = c->vdm_start;
+	j->kick_buf[1][1] = k2;
+	j->op.handle = c->syncobj;
+	j->op.flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL;
+	j->job = (struct drm_powervr_sgx_job){
 		.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER,
 		.context_handle = c->ctx,
-		.cmd_stream = (uintptr_t)render,
+		.cmd_stream = (uintptr_t)j->render,
 		.cmd_stream_len = 80,
-		.sync_ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
-		.ta_kicks = { .stride = sizeof(kick[0]), .count = (uint32_t)c->ta_kicks, .array = (uintptr_t)kick },
+		.sync_ops = { .stride = sizeof(j->op), .count = 1, .array = (uintptr_t)&j->op },
+		.ta_kicks = { .stride = sizeof(j->kick[0]), .count = (uint32_t)c->ta_kicks,
+			      .array = (uintptr_t)j->kick },
 		.rt_dataset_handle = s->rtds,
 	};
+	dump_progs(c, "before", ++c->frames);
+}
+
+int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
+{
+	struct sgx_job j;
 	struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
-		.jobs = { .stride = sizeof(job), .count = 1, .array = (uintptr_t)&job },
+		.jobs = { .stride = sizeof(j.job), .count = 1, .array = (uintptr_t)&j.job },
 	};
 	uint32_t h = c->syncobj;
 	struct drm_syncobj_wait w = { .handles = (uintptr_t)&h, .count_handles = 1 };
 	int64_t t0;
 	int e;
 
-	uint32_t k2;
-
-	vdm_end(c);
-	k2 = vdm_end(c);	/* the second kick's stream: the terminate words only */
-	/* CMD_RENDER: header, then the fields in order (UAPI.md 3.4) */
-	r32[0] = 80;
-	render[3] = s->pixev;				/* pixel_event_pds_addr */
-	render[4] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[0] & 0x3ffffff) << 4);	/* bg secondary */
-	render[5] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[2] & 0x3ffffff) << 4);	/* bg primary */
-	r32[0x30 / 4] = s->pixev_rows;
-	r32[0x34 / 4] = s->bg_pds[0] >> 26;
-	r32[0x38 / 4] = s->bg_pds[2] >> 26;
-	r32[0x44 / 4] = f32(1.0f);			/* bg_depth */
-	/* CMD_TA_KICK: the scene's stream, then (two kicks) the terminate words */
-	for (int i = 0; i < 2; i++)
-		((uint32_t *)kick_buf[i])[0] = 20;
-	kick_buf[0][1] = c->vdm_start;
-	kick_buf[1][1] = k2;
-
+	sgx_render_job(c, &j);
 	t0 = now_ns();
 	if ((e = xioctl(c->dev->fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj))) {
 		fprintf(stderr, "sgxgen: SUBMIT_JOBS failed: %d (job %d)\n", e, (int)sj.failed_index);
 		return e;
 	}
-	c->frames++;
 	w.timeout_nsec = t0 + (int64_t)timeout_ms * 1000000;
 	e = xioctl(c->dev->fd, DRM_IOCTL_SYNCOBJ_WAIT, &w);
 	if (c->dev->verbose)
 		fprintf(stderr, "sgxgen: render %s after %lld us\n", e ? "NOT done" : "done",
 			(long long)(now_ns() - t0) / 1000);
+	dump_progs(c, "after", c->frames);
 	return e == -ETIME ? -ETIMEDOUT : e;
 }
 #else

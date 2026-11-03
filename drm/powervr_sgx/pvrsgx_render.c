@@ -16,8 +16,10 @@
 #include <drm/drm_gpuvm.h>
 #include <drm/drm_print.h>
 
+#include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/sched.h>
+#include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -612,6 +614,15 @@ static bool single_entry;
 module_param(single_entry, bool, 0644);
 MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
 
+/* Debug: snapshot the structures as the last kick is written (debugfs render_before). */
+static bool snapshot;
+module_param(snapshot, bool, 0644);
+MODULE_PARM_DESC(snapshot, "Keep the structures as written for the last kick (debugfs render_before)");
+
+static uint snap_gap_ms;
+module_param(snap_gap_ms, uint, 0644);
+MODULE_PARM_DESC(snap_gap_ms, "Wait this long before writing a scene's last kick, so the snapshot follows the first kick's TA");
+
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 {
 	struct pvrsgx_render_job *rj = &job->render;
@@ -624,6 +635,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	u32 entry = kobj_va(s->rtdata) + 0x18 + 0x38 * (odd ? 0 : 1);
 	u32 woff = r->ccb_woff, zls_base = 0;
 
+	if (last && k && snap_gap_ms)
+		msleep(snap_gap_ms);
 	rd = kobj_cpu(s->rd);
 	if (first) {
 		/* Render details (STATE.md 6; UAPI.md 4.2). */
@@ -720,6 +733,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
+	if (last && snapshot)
+		render_snapshot(job->ctx->sdev, s, woff);
 	if (last)
 		s->frames++;
 
@@ -879,52 +894,97 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	data[1] = kobj_va(x->hwctx);
 }
 
-static void dump(struct seq_file *m, const char *name, struct pvrsgx_kobj *o, u32 off, u32 bytes)
+static void dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off, u32 bytes)
 {
 	const u32 *w = (const u32 *)((const u8 *)kobj_cpu(o) + off);
 
-	seq_printf(m, "%s @ 0x%08x:", name, kobj_va(o) + off);
+	seq_buf_printf(sb, "%s @ 0x%08x:", name, kobj_va(o) + off);
 	for (u32 i = 0; i < bytes / 4; i++)
-		seq_printf(m, "%s%08x", i % 8 ? " " : "\n  ", w[i]);
-	seq_puts(m, "\n");
+		seq_buf_printf(sb, "%s%08x", i % 8 ? " " : "\n  ", READ_ONCE(w[i]));
+	seq_buf_puts(sb, "\n");
 }
 
-/* The structures of the last render job, word by word, for A/B against the DDK. */
-void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev)
+/* The structures of a render, word by word, for A/B against the DDK. Under last_lock. */
+static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s,
+			u32 cmd_off)
 {
-	struct pvrsgx_rt_dataset *s;
-	struct pvrsgx_render_ctx *r;
+	struct pvrsgx_render_ctx *r = s->ctx->render;
+
+	seq_buf_printf(sb, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n",
+		       kobj_va(r->pb->buf), r->pb->pages, r->pb->base, kobj_va(r->pb->freelist),
+		       kobj_va(r->scratch));
+	dump(sb, "hwctx", r->hwctx, 0, 0x44);
+	dump(sb, "ccbctl", r->ccbctl, 0, 8);
+	dump(sb, "pbdesc", r->pb->desc, 0, 0x3c);
+	dump(sb, "pbblocks", r->pb->blocks, 0, 0x10);
+	dump(sb, "freelist[first..]", r->pb->freelist,
+	     ((kobj_va(r->pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
+	dump(sb, "scratch", r->scratch, 0, 0x40);
+	dump(sb, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
+	dump(sb, "ta_cmd", r->ccb, cmd_off, TA_CMD_BYTES);
+	dump(sb, "render_details", s->rd, 0, 0x1ec & ~3u);
+	dump(sb, "rd_w4", s->rd_w4, 0, 4);
+	dump(sb, "rd_w8", s->rd_w8, 0, 8);
+	dump(sb, "rd_sync", s->rd_sync, 0, 4);
+	dump(sb, "rtdata", s->rtdata, 0, 2 * 0x38 + 0x18);
+	dump(sb, "rtword", s->rtword, 0, 4);
+	dump(sb, "entword0", s->entword[0], 0, 4);
+	dump(sb, "entword1", s->entword[1], 0, 4);
+	dump(sb, "hwsync", s->hwsync, 0, 0x28);
+	dump(sb, "hwsync_access", s->hwsync_access, 0, 4);
+	dump(sb, "done", s->done, 0, SYNC_DATA_BYTES);
+	dump(sb, "bgblock", s->bgblock, 0, 0x60);
+	seq_buf_printf(sb, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
+		       kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
+		       kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
+	pvrsgx_fw_dump_ta3dctl(sb, sdev);
+}
+
+#define DUMP_BYTES	SZ_16K
+
+/*
+ * The last render job's structures now, or (before) as they were when its last
+ * kick was written: after snap_gap_ms that is after the first kick's TA and
+ * before the 3D.
+ */
+void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev, bool before)
+{
+	struct seq_buf sb;
+	char *buf;
 
 	mutex_lock(&sdev->last_lock);
-	s = sdev->last_rtds;
-	if (!s) {
+	if (before) {
+		seq_puts(m, sdev->render_snap ?: "no snapshot (powervr_sgx.snapshot=1)\n");
+		mutex_unlock(&sdev->last_lock);
+		return;
+	}
+	if (!sdev->last_rtds) {
 		mutex_unlock(&sdev->last_lock);
 		seq_puts(m, "no render yet\n");
 		return;
 	}
-	r = s->ctx->render;
-	seq_printf(m, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n",
-		   kobj_va(r->pb->buf), r->pb->pages, r->pb->base, kobj_va(r->pb->freelist), kobj_va(r->scratch));
-	dump(m, "hwctx", r->hwctx, 0, 0x44);
-	dump(m, "ccbctl", r->ccbctl, 0, 8);
-	dump(m, "pbdesc", r->pb->desc, 0, 0x3c);
-	dump(m, "pbblocks", r->pb->blocks, 0, 0x10);
-	dump(m, "freelist[first..]", r->pb->freelist,
-	     ((kobj_va(r->pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
-	dump(m, "scratch", r->scratch, 0, 0x40);
-	dump(m, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
-	dump(m, "ta_cmd", r->ccb, sdev->last_cmd_off, TA_CMD_BYTES);
-	dump(m, "render_details", s->rd, 0, 0x1ec & ~3u);
-	dump(m, "rtdata", s->rtdata, 0, 2 * 0x38 + 0x18);
-	dump(m, "rtword", s->rtword, 0, 4);
-	dump(m, "entword0", s->entword[0], 0, 4);
-	dump(m, "entword1", s->entword[1], 0, 4);
-	dump(m, "hwsync", s->hwsync, 0, 0x28);
-	dump(m, "done", s->done, 0, SYNC_DATA_BYTES);
-	dump(m, "bgblock", s->bgblock, 0, 0x60);
-	seq_printf(m, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
-		   kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
-		   kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
+	buf = kvmalloc(DUMP_BYTES, GFP_KERNEL);
+	if (buf) {
+		seq_buf_init(&sb, buf, DUMP_BYTES);
+		render_dump(&sb, sdev, sdev->last_rtds, sdev->last_cmd_off);
+		seq_puts(m, seq_buf_str(&sb));
+		kvfree(buf);
+	}
 	mutex_unlock(&sdev->last_lock);
-	pvrsgx_fw_debugfs_ta3dctl(m, sdev);
+}
+
+/* Called with the last kick written and not yet sent. */
+static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s, u32 cmd_off)
+{
+	struct seq_buf sb;
+
+	mutex_lock(&sdev->last_lock);
+	if (!sdev->render_snap)
+		sdev->render_snap = kvmalloc(DUMP_BYTES, GFP_NOWAIT | __GFP_NOWARN);
+	if (sdev->render_snap) {
+		seq_buf_init(&sb, sdev->render_snap, DUMP_BYTES);
+		render_dump(&sb, sdev, s, cmd_off);
+		seq_buf_str(&sb);
+	}
+	mutex_unlock(&sdev->last_lock);
 }

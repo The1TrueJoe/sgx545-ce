@@ -11,8 +11,11 @@
  * -k 2 (default) records the scene as two TA kicks, the stream and then the
  * terminate words; -k 1 as one kick that also renders. -r gives every frame a
  * new render target (RT dataset). -c N draws the frames round robin on N render
- * contexts in the same VM; -C replaces the context after every frame (same VM). -D prints debugfs "render" after every frame:
- * what the microkernel left in the kernel-built structures.
+ * contexts in the same VM; -C replaces the context after every frame (same VM).
+ * -D prints debugfs "render_before" (with powervr_sgx.snapshot=1, the
+ * structures as the last kick was written) and "render" (what the microkernel
+ * left in them) after every frame; SGXGEN_DUMP_PROGS=1 adds the client's 3D
+ * programs.
  *
  * Exit 0 when every frame's pixels are right.
  */
@@ -24,19 +27,26 @@
 
 #include "sgxgen.h"
 
-static void dump_render(unsigned f)
+static void dump_file(const char *name, const char *title, unsigned f)
 {
+	char path[128], line[512];
 	FILE *fp;
-	char line[512];
 
-	usleep(100000);
-	fp = fopen("/sys/kernel/debug/dri/0000:01:02.0/render", "r");
+	snprintf(path, sizeof path, "/sys/kernel/debug/dri/0000:01:02.0/%s", name);
+	fp = fopen(path, "r");
 	if (!fp)
 		return;
-	printf("== after frame %u\n", f + 1);
+	printf("== %s frame %u\n", title, f + 1);
 	while (fgets(line, sizeof line, fp))
 		fputs(line, stdout);
 	fclose(fp);
+}
+
+static void dump_render(unsigned f)
+{
+	usleep(100000);
+	dump_file("render_before", "before the 3D of", f);
+	dump_file("render", "after", f);
 }
 
 static uint32_t px(const struct sgx_surface *s, unsigned x, unsigned y)
