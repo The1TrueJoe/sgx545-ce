@@ -44,6 +44,11 @@ CCB_TRACE = os.environ.get("UK_CCBTRACE") == "1"
 # to hardware defaults. Log the candidate CRs at do_ta's FIRST kick (core powered)
 # to the T3C dump words so a cold frame-1 lockup shows which CR came up wrong.
 CR_PWRLOG = os.environ.get("UK_PWRLOG") == "1"
+# Kick-2 (terminate) entry log (ta3d-state): log the state TA1 / its finish left,
+# just before the terminate's 0x200 kick, to the T3C words. The key one is 0x118
+# EVENT_STATUS2 — if TRIG_TA (0x80) or an OOM bit is ALREADY set before our kick,
+# the hang comes from TA1 or its finish, not kick-2's programming.
+K2_LOG = os.environ.get("UK_K2LOG") == "1"
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -972,6 +977,19 @@ def build(a):
     a.i("limm r5, #8388608")                     # 0x00800000, conditional
     a.i("(p0) or r4, r4, r5")
     a.i(f"str #{0x218 // 4}, r4")
+    if K2_LOG:
+        # terminate kick only (r13==0): log TA1/finish's leftover state BEFORE the
+        # 0x200. 0x118 EVENT_STATUS2 is the key one (already TRIG_TA/OOM?).
+        a.i("test.and.ne p0, r13, r13")             # first kick (r13!=0)? skip
+        a.i("(p0) ba k2log_done")
+        for word, reg in ((0x35, 0x118), (0x37, 0x12c), (0x38, 0x008),
+                          (0x39, 0x724), (0x3a, 0x72c), (0x3b, 0x700)):
+            a.i(f"ldr r5, #{reg // 4}")
+            a.i("wdf")
+            a.st_sa(SA_SELF, word, 5)
+        a.i("idf")
+        a.i("wdf")
+        a.label("k2log_done")
     # start the TA. Mark it in flight first (SC_TAFLIGHT) so a host kick arriving
     # while it runs is deferred, not dispatched on top of it.
     a.i("limm r5, #1")
