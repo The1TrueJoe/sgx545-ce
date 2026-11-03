@@ -372,8 +372,9 @@ class Asm:
         self.wait(0x138, done_mask, CR_EVENT_HOST_CLEAR_0x140)
         self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done
         # NOTE: the DDK also runs op0xff #side (USE/EDM cache op) here after the MADD
-        # ack (3D=1, TA=0). Held out with the op0x100 flush above (the whole cache-op
-        # set regressed on HW 2026-11-03); re-add once ta3d-state confirms placement.
+        # ack. Tried op0xff #0 on the TA side (EA3 2026-11-03): no improvement (10/30
+        # frames, still intermittent lockup_TA) — the TA-cache invalidate is not the
+        # terminate-kick cause. See the op0x100 flush at ta_finished's tail instead.
 
     def dpm_freelist(self, mode, kick_reg, done_bit):
         """load a DPM free list so the geometry/render can allocate parameter-
@@ -1035,6 +1036,9 @@ def build(a):
     # host kick that was deferred while this TA ran (SC_TAFLIGHT) launches now (the
     # DDK re-launches the kick task from its TA-finished handler). If none is
     # pending the dispatch falls through to kick_end and the event ends.
+    # NOTE: the DDK runs op0x100 #3 (USE/EDM data-cache flush) in the shared task-end
+    # tail (pc 0x1974) here. Tried it (EA3 2026-11-03): no improvement (10/30 frames,
+    # same as op0xff) — the cache ops are not the terminate-kick cause.
     a.i("ba kick")
 
     # ======================================================================
