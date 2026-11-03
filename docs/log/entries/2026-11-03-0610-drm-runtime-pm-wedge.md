@@ -46,3 +46,9 @@ Changes made without the box:
 2. `runtime_pm=1`: suspend and resume alone, with the shared interrupt line's other
    user named (`/proc/interrupts`), and no forced hangs.
 3. Then the full `powervr_sgx_hang` with its idle case.
+
+## Outcome
+
+On the EA3 the first resume froze the same way, and the cause was the second suspect:
+the restart's quiesce reads a register of the gated core. Fixed in log
+`2026-11-03-0630-drm-runtime-pm-ea3`.
