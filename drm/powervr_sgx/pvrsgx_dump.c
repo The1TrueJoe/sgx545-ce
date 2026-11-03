@@ -65,8 +65,9 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_ASSERT_FAIL));
-	/* After a failed start the clocks are still on; after a stop they may not be. */
-	if (!sdev->fw_running && !sdev->lost)
+	seq_buf_printf(sb, "powered: %d\n", READ_ONCE(sdev->powered));
+	/* After a failed start the clocks are still on; after a stop they are not. */
+	if (!READ_ONCE(sdev->powered))
 		return;
 	for (int i = 0; i < ARRAY_SIZE(regs); i++)
 		seq_buf_printf(sb, "%-20s 0x%04x 0x%08x\n", regs[i].name, regs[i].reg,

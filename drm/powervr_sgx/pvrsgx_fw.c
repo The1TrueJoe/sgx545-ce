@@ -16,6 +16,7 @@
 
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/interrupt.h>
 #include <linux/iopoll.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
@@ -635,6 +636,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	bool first = !sdev->fw_started;
 	int err;
 
+	WRITE_ONCE(sdev->powered, true);
+
 	/*
 	 * A restart starts from a fresh image and empty arenas: the microkernel
 	 * changes both as it runs, and a module reload (which recovers) is
@@ -721,9 +724,17 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			drm_warn(&sdev->base, "microkernel did not power off\n");
 		for (int i = 0; i < 500 && (sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & 0xffffffdf); i++)
 			usleep_range(100, 200);
+		WRITE_ONCE(sdev->powered, false);
+		synchronize_irq(sdev->irq);
 		deinit_script(sdev);
 		sdev->fw_running = false;
+		wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_rd(sdev, SGX_CR_SOFT_RESET);
+	} else if (READ_ONCE(sdev->powered)) {
+		/* A failed start: the clocks are on, the microkernel isn't. */
+		WRITE_ONCE(sdev->powered, false);
+		synchronize_irq(sdev->irq);
+		wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
-	wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
-	sgx_rd(sdev, SGX_CR_SOFT_RESET);
 }

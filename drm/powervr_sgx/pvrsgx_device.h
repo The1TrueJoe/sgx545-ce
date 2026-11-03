@@ -119,6 +119,12 @@ struct pvrsgx_device {
 
 	struct pvrsgx_fw fw;
 	bool fw_running;
+	/**
+	 * @powered: The SGX is clocked and its registers may be read. Off between
+	 * a stop and the next start: a read of an unclocked CE5300 block can hang
+	 * the bus, and the interrupt line is shared.
+	 */
+	bool powered;
 	/** @fw_started: The microkernel has run since load; later starts are restarts. */
 	bool fw_started;
 	/** @fw_gen: Restarts (resets and runtime resumes) since load. */
