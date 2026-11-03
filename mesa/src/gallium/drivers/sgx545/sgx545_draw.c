@@ -876,6 +876,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    unsigned n_fetch = 1, vertex_dwords = 0;
    float color[4];
    uint32_t prim;
+   uint32_t sampled = 0;        /* the sampler units this draw reads */
    bool compiled;
 
    if (indirect || !ctx->vs || !ctx->fs)
@@ -1018,6 +1019,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          }
          sgx545_tex_words(view, ctx->samplers[unit], &fsk[ctx->fs->dep_sa[j]]);
          sgx545_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
+         sampled |= 1u << unit;
          SGX545_DBG(DRAW, "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
                     j, unit, util_format_short_name(view->format), view->texture->width0,
                     view->texture->height0, view->texture->target, view->texture->last_level + 1,
@@ -1043,6 +1045,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          }
          sgx545_tex_words(view, ctx->samplers[unit - 1], tex[unit - 1]);
          sgx545_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
+         sampled |= 1u << (unit - 1);
       }
       d.tex = (const uint32_t (*)[4])tex;
    } else {
@@ -1192,11 +1195,11 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
     * begin_frame, which flushes the previous target's frame when this draw
     * switches targets: mark them again with the frame they're now in (a
     * resource freed after this draw flushes that frame first: glCopyPixels'
-    * temporary, sampled into the window and freed at once) */
-   for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
-      if (ctx->views[unit])
-         sgx545_resource(ctx->views[unit]->texture)->use_seq = sgxws_next_seq(ctx->hw);
-   }
+    * temporary, sampled into the window and freed at once).  Only those: a
+    * texture merely bound would look in flight, and a later upload into it
+    * would go to its second copy (dEQP fbo.render.stencil*) */
+   u_foreach_bit(unit, sampled)
+      sgx545_resource(ctx->views[unit]->texture)->use_seq = sgxws_next_seq(ctx->hw);
    for (unsigned n = 0; n < num_draws; n++) {
       unsigned count = draws[n].count, start = draws[n].start, out_count;
       bool list = expanded_prim(info->mode);
