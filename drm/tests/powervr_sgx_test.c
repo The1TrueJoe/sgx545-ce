@@ -706,7 +706,7 @@ static void t_rtds_invalid(int fd)
 struct rstreams {
 	uint64_t render[10];
 	uint64_t kick[3];
-	struct drm_powervr_sgx_ta_kick k[2];
+	struct drm_powervr_sgx_ta_kick k[3];
 	struct drm_powervr_sgx_job j;
 };
 
@@ -726,6 +726,7 @@ static void rstreams_init(struct rstreams *r, uint32_t ctx, uint32_t rtds, uint6
 	r->kick[1] = vdm;
 	r->k[0] = (struct drm_powervr_sgx_ta_kick){ .cmd_stream = (uintptr_t)r->kick, .cmd_stream_len = 20 };
 	r->k[1] = r->k[0];
+	r->k[2] = r->k[0];
 	r->j = (struct drm_powervr_sgx_job){
 		.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER, .context_handle = ctx,
 		.cmd_stream = (uintptr_t)r->render, .cmd_stream_len = 80,
@@ -761,7 +762,8 @@ static void t_submit_render_invalid(int fd)
 	REJECT(EINVAL, r.j.cmd_stream += 4);		/* 8-byte aligned */
 	REJECT(EFAULT, r.j.cmd_stream = 8);
 	REJECT(EINVAL, r.j.ta_kicks.count = 0);
-	REJECT(EOPNOTSUPP, r.j.ta_kicks.count = 2);	/* multi-kick scenes: G12 */
+	REJECT(EOPNOTSUPP, r.j.ta_kicks.count = 3);	/* middle kicks: G12 */
+	REJECT(EINVAL, r.j.ta_kicks.count = 2; r.k[1].flags = 1);
 	REJECT(EINVAL, r.k[0].flags = 1);
 	REJECT(EINVAL, ((uint32_t *)r.kick)[0] = 24);
 	REJECT(EINVAL, r.kick[1] = 0x3e100002);		/* VDM base 4-byte aligned */

@@ -6,7 +6,10 @@
  * with -DSGXGEN_DRM) records a clear and a triangle, and one SUBMIT_JOBS render
  * job draws it. The pixels are checked against what the frame should contain.
  *
- *   powervr_sgx_frame [-v] [-n frames] [-s WxH] [-o out.bgra]
+ *   powervr_sgx_frame [-v] [-k kicks] [-n frames] [-s WxH] [-o out.bgra]
+ *
+ * -k 2 (default) records the scene as two TA kicks, the stream and then the
+ * terminate words; -k 1 as one kick that also renders.
  *
  * Exit 0 when every frame's pixels are right.
  */
@@ -34,11 +37,12 @@ int main(int argc, char **argv)
 	struct sgx_surface *s;
 	struct sgx_ctx *c;
 	struct sgx_dev dev;
-	int opt, e, verbose = 0;
+	int opt, e, verbose = 0, kicks = 2;
 
-	while ((opt = getopt(argc, argv, "vn:s:o:")) != -1) {
+	while ((opt = getopt(argc, argv, "vk:n:s:o:")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
+		case 'k': kicks = atoi(optarg); break;
 		case 'n': frames = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 's':
 			if (sscanf(optarg, "%ux%u", &w, &h) != 2)
@@ -56,6 +60,7 @@ int main(int argc, char **argv)
 	}
 	dev.verbose = verbose;
 	c = sgx_ctx_create(&dev);
+	c->ta_kicks = kicks;
 	s = sgx_surface_create(c, w, h, 0);
 	vs = sgx_shader_builtin(c, SGX_VS_XY);
 	fs = sgx_shader_builtin(c, SGX_FS_UNIFORM);

@@ -467,8 +467,8 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		return -EINVAL;
 	if (!in->ta_kicks.count)
 		return -EINVAL;
-	/* Scenes of several kicks need the middle-kick flags (G12). */
-	if (in->ta_kicks.count > 1)
+	/* Scenes of more than two kicks need the middle-kick flags (G12). */
+	if (in->ta_kicks.count > PVRSGX_MAX_TA_KICKS)
 		return -EOPNOTSUPP;
 
 	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
@@ -489,12 +489,14 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	if (err)
 		return err;
 
-	kicks = pvrsgx_obj_array_get(&in->ta_kicks, sizeof(*kicks), 1);
+	kicks = pvrsgx_obj_array_get(&in->ta_kicks, sizeof(*kicks), PVRSGX_MAX_TA_KICKS);
 	if (IS_ERR(kicks))
 		return PTR_ERR(kicks);
-	err = kicks[0].flags ? -EINVAL :
-	      stream_take(&powervr_sgx_stream_ta_kick_defs, &sctx, vm, kicks[0].cmd_stream,
-			  kicks[0].cmd_stream_len, &rj->kick);
+	rj->nkicks = in->ta_kicks.count;
+	for (u32 k = 0; k < rj->nkicks && !err; k++)
+		err = kicks[k].flags ? -EINVAL :
+		      stream_take(&powervr_sgx_stream_ta_kick_defs, &sctx, vm, kicks[k].cmd_stream,
+				  kicks[k].cmd_stream_len, &rj->kick[k]);
 	kvfree(kicks);
 	return err;
 }
@@ -511,56 +513,73 @@ static u32 pds_word(u64 addr, u32 rows)
 }
 
 /*
- * Write the render details and the TA command for the job's scene, and say
- * where the microkernel will report it done. Runs in run_job: one job on the
- * GPU at a time, so the context's CCB and the dataset are ours.
+ * Write the TA command for kick k of the job's scene (and, at the first, the
+ * render details), and say where the microkernel will report the scene done.
+ * Runs in run_job: one job on the GPU at a time, so the context's CCB and the
+ * dataset are ours.
+ *
+ * One kick both starts the scene and renders it (TA flags 0x63, the form Mesa
+ * uses). Two kicks are the captured form of a single-draw frame (STATE.md, "A
+ * frame, end to end"): 0x71 runs the stream, 0x62 runs the terminate words and
+ * starts the 3D.
  */
-int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6])
+int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 {
 	struct pvrsgx_render_job *rj = &job->render;
 	struct pvrsgx_render_ctx *r = job->ctx->render;
 	struct pvrsgx_rt_dataset *s = rj->rtds;
 	const struct powervr_sgx_stream_render *in = &rj->render;
+	bool first = k == 0, last = k == rj->nkicks - 1;
 	u32 f = s->frames, odd = f & 1, *cmd, *sh, *t, *rd, *sl, *s3d, *done;
 	u32 rgn_this = kobj_va(s->rgn[odd ? 0 : 1]), rgn_next = kobj_va(s->rgn[odd ? 1 : 0]);
 	u32 entry = kobj_va(s->rtdata) + 0x18 + 0x38 * (odd ? 0 : 1);
 	u32 woff = r->ccb_woff, zls_base = 0;
 
-	/* Render details (STATE.md 6; UAPI.md 4.2). */
 	rd = kobj_cpu(s->rd);
-	if (in->depth_addr || in->stencil_addr) {
-		u64 lo = in->depth_addr && in->stencil_addr ? min(in->depth_addr, in->stencil_addr) :
-			 in->depth_addr ?: in->stencil_addr;
+	if (first) {
+		/* Render details (STATE.md 6; UAPI.md 4.2). */
+		if (in->depth_addr || in->stencil_addr) {
+			u64 lo = in->depth_addr && in->stencil_addr ?
+				 min(in->depth_addr, in->stencil_addr) : in->depth_addr ?: in->stencil_addr;
 
-		zls_base = (u32)lo & 0xfff00000;
+			zls_base = (u32)lo & 0xfff00000;
+		}
+		rd[0x04 / 4] = zls_base;
+		rd[0x14 / 4] = in->depth_bias_units;
+		rd[0x18 / 4] = in->depth_bias_factor;
+		rd[0x20 / 4] = rgn_this;
+		rd[0x28 / 4] = rgn_next;
+		rd[0x2c / 4] = in->zls_control ? in->zls_control | (s->n.xt - 1) << 3 : 0;
+		rd[0x30 / 4] = in->depth_addr ? (u32)in->depth_addr - zls_base : 0;
+		rd[0x34 / 4] = rd[0x30 / 4];
+		rd[0x38 / 4] = BIT(31) | (in->stencil_addr ? (u32)in->stencil_addr - zls_base : 0);
+		rd[0x3c / 4] = rd[0x38 / 4];
+		rd[0x40 / 4] = in->bg_depth;
+		rd[0x5c / 4] = (u32)in->pixel_event_pds_addr;
+		rd[0x60 / 4] = in->pixel_event_pds_rows;
+		rd[0xdc / 4] = entry;
+		kobj_cpu(s->rd_w4)[0] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
+
+		/* What the microkernel clears and the client sets before a scene. */
+		kobj_cpu(s->rtword)[0] = f + 1;
+		kobj_cpu(s->rd_sync)[0] = 1;
+		kobj_cpu(s->hwsync_access)[0] = 1;
 	}
-	rd[0x04 / 4] = zls_base;
-	rd[0x14 / 4] = in->depth_bias_units;
-	rd[0x18 / 4] = in->depth_bias_factor;
-	rd[0x20 / 4] = rgn_this;
-	rd[0x28 / 4] = rgn_next;
-	rd[0x2c / 4] = in->zls_control ? in->zls_control | (s->n.xt - 1) << 3 : 0;
-	rd[0x30 / 4] = in->depth_addr ? (u32)in->depth_addr - zls_base : 0;
-	rd[0x34 / 4] = rd[0x30 / 4];
-	rd[0x38 / 4] = BIT(31) | (in->stencil_addr ? (u32)in->stencil_addr - zls_base : 0);
-	rd[0x3c / 4] = rd[0x38 / 4];
-	rd[0x40 / 4] = in->bg_depth;
-	rd[0x5c / 4] = (u32)in->pixel_event_pds_addr;
-	rd[0x60 / 4] = in->pixel_event_pds_rows;
-	rd[0xdc / 4] = entry;
-	kobj_cpu(s->rd_w4)[0] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
 
 	/* The TA command, in the context's ring. */
 	cmd = (u32 *)((u8 *)kobj_cpu(r->ccb) + woff);
 	memset(cmd, 0, TA_CMD_BYTES);
 	cmd[0x00 / 4] = TA_CMD_BYTES;
-	cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10);	/* first and last kick; first render */
+	if (rj->nkicks == 1)
+		cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10);	/* first and last kick; first render */
+	else
+		cmd[0x04 / 4] = first ? 0x71 : last ? 0x62 : 0x60;
 	cmd[0x08 / 4] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
 	cmd[0x0c / 4] = 0x00030001;
 	cmd[0x10 / 4] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
 	cmd[0x14 / 4] = 0x50000000;
 	cmd[0x18 / 4] = 0x50000000;
-	cmd[0x1c / 4] = in->flags_3d | BIT(10) | f << 14;
+	cmd[0x1c / 4] = last ? in->flags_3d | BIT(10) | f << 14 : 0;
 	cmd[0x20 / 4] = f;
 	cmd[0x24 / 4] = kobj_va(r->pbdesc);
 	cmd[0x38 / 4] = kobj_va(s->rd);
@@ -568,25 +587,28 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6])
 	cmd[0x40 / 4] = kobj_va(s->rtdata);
 	cmd[0x44 / 4] = entry;
 
-	/* CMDTA_SHARED: ready; the 3D sync; the dataset's completion word. */
+	/* CMDTA_SHARED: ready; the 3D sync on the last kick; the completion word on the first. */
 	sh = cmd + TA_CMD_SHARED / 4;
-	s3d = kobj_cpu(r->sync3d);
 	sh[0x00 / 4] = 1;				/* SGXMKIF_CMDTA_CTRLFLAGS_READY */
-	sh[0x1c / 4] = s3d[SYNC_WRITE_PENDING];
-	sh[0x20 / 4] = kobj_va(r->sync3d) + SYNC_WRITE_COMPLETE * 4;
-	sh[0x24 / 4] = s3d[SYNC_READ_PENDING]++;
-	sh[0x28 / 4] = kobj_va(r->sync3d) + SYNC_READ_COMPLETE * 4;
-
-	done = kobj_cpu(s->done);
-	sl = kobj_cpu(s->hwsync);
-	sl[1] = 1;					/* one destination */
-	sl[2] = done[SYNC_READ_PENDING];
-	sl[3] = kobj_va(s->done) + SYNC_READ_COMPLETE * 4;
-	sl[4] = done[SYNC_WRITE_PENDING]++;
-	sl[5] = kobj_va(s->done) + SYNC_WRITE_COMPLETE * 4;
-	/* The microkernel sets write-complete to the pending value plus one. */
-	job->done_cpu = &done[SYNC_WRITE_COMPLETE];
-	job->done_val = sl[4] + 1;
+	if (last) {
+		s3d = kobj_cpu(r->sync3d);
+		sh[0x1c / 4] = s3d[SYNC_WRITE_PENDING];
+		sh[0x20 / 4] = kobj_va(r->sync3d) + SYNC_WRITE_COMPLETE * 4;
+		sh[0x24 / 4] = s3d[SYNC_READ_PENDING]++;
+		sh[0x28 / 4] = kobj_va(r->sync3d) + SYNC_READ_COMPLETE * 4;
+	}
+	if (first) {
+		done = kobj_cpu(s->done);
+		sl = kobj_cpu(s->hwsync);
+		sl[1] = 1;				/* one destination */
+		sl[2] = done[SYNC_READ_PENDING];
+		sl[3] = kobj_va(s->done) + SYNC_READ_COMPLETE * 4;
+		sl[4] = done[SYNC_WRITE_PENDING]++;
+		sl[5] = kobj_va(s->done) + SYNC_WRITE_COMPLETE * 4;
+		/* The microkernel sets write-complete to the pending value plus one. */
+		job->done_cpu = &done[SYNC_WRITE_COMPLETE];
+		job->done_val = sl[4] + 1;
+	}
 
 	t = cmd + TA_CMD_TAIL / 4;
 	t[0x00 / 4] = 0x20000000;			/* TE AA */
@@ -594,8 +616,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6])
 	t[0x08 / 4] = s->n.mtile2;
 	t[0x0c / 4] = s->n.te_screen;
 	t[0x10 / 4] = s->n.mt_tiles;
-	t[0x14 / 4] = rj->kick.ta_flags2 | BIT(22);	/* this kick renders */
-	t[0x18 / 4] = (u32)rj->kick.vdm_base;
+	t[0x14 / 4] = rj->kick[k].ta_flags2 | (last ? BIT(22) : 0);	/* b22: this kick renders */
+	t[0x18 / 4] = (u32)rj->kick[k].vdm_base;
 	t[0x1c / 4] = 0xa2;
 	t[0x20 / 4] = rgn_this;
 	t[0x24 / 4] = kobj_va(s->tailptr);
@@ -605,15 +627,11 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6])
 	t[0x3c / 4] = r->pb_base;
 	t[0x6c / 4] = 0x88;
 
-	/* What the microkernel clears and the client sets before every kick. */
-	kobj_cpu(s->rtword)[0] = f + 1;
-	kobj_cpu(s->rd_sync)[0] = 1;
-	kobj_cpu(s->hwsync_access)[0] = 1;
-
 	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
-	s->frames++;
+	if (last)
+		s->frames++;
 
 	memset(data, 0, 6 * sizeof(u32));
 	data[1] = kobj_va(r->hwctx);

@@ -163,8 +163,11 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
 		mutex_unlock(&sdev->kobj_lock);
-		pvrsgx_render_job_build(job, data);
-		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_TA, data, &job->ccb_seq);
+		err = 0;
+		for (u32 k = 0; k < job->render.nkicks && !err; k++) {
+			pvrsgx_render_job_build(job, k, data);
+			err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_TA, data, &job->ccb_seq);
+		}
 	} else {
 		/* A NULL job is a no-op command: done when the microkernel has taken it. */
 		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_PROCESS_QUEUES, data, &job->ccb_seq);

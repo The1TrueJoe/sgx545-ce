@@ -468,6 +468,7 @@ struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d)
 			die("CREATE_CONTEXT failed");
 		c->ctx = cc.handle;
 		c->syncobj = sc.handle;
+		c->ta_kicks = 2;
 	}
 #else
 	ctx_pb(c, 0x400000);
@@ -1159,9 +1160,12 @@ static int64_t now_ns(void)
 int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 {
 	struct sgx_surface *s = c->fb;
-	uint64_t render[10] = { 0 }, kick_buf[3] = { 0 };
-	uint32_t *r32 = (uint32_t *)render, *k32 = (uint32_t *)kick_buf;
-	struct drm_powervr_sgx_ta_kick kick = { .cmd_stream = (uintptr_t)kick_buf, .cmd_stream_len = 20 };
+	uint64_t render[10] = { 0 }, kick_buf[2][3] = { { 0 } };
+	uint32_t *r32 = (uint32_t *)render;
+	struct drm_powervr_sgx_ta_kick kick[2] = {
+		{ .cmd_stream = (uintptr_t)kick_buf[0], .cmd_stream_len = 20 },
+		{ .cmd_stream = (uintptr_t)kick_buf[1], .cmd_stream_len = 20 },
+	};
 	struct drm_powervr_sgx_sync_op op = { .handle = c->syncobj, .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL };
 	struct drm_powervr_sgx_job job = {
 		.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER,
@@ -1169,7 +1173,7 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 		.cmd_stream = (uintptr_t)render,
 		.cmd_stream_len = 80,
 		.sync_ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
-		.ta_kicks = { .stride = sizeof(kick), .count = 1, .array = (uintptr_t)&kick },
+		.ta_kicks = { .stride = sizeof(kick[0]), .count = (uint32_t)c->ta_kicks, .array = (uintptr_t)kick },
 		.rt_dataset_handle = s->rtds,
 	};
 	struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
@@ -1180,7 +1184,10 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 	int64_t t0;
 	int e;
 
+	uint32_t k2;
+
 	vdm_end(c);
+	k2 = vdm_end(c);	/* the second kick's stream: the terminate words only */
 	/* CMD_RENDER: header, then the fields in order (UAPI.md 3.4) */
 	r32[0] = 80;
 	render[3] = s->pixev;				/* pixel_event_pds_addr */
@@ -1190,9 +1197,11 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 	r32[0x34 / 4] = s->bg_pds[0] >> 26;
 	r32[0x38 / 4] = s->bg_pds[2] >> 26;
 	r32[0x44 / 4] = f32(1.0f);			/* bg_depth */
-	/* CMD_TA_KICK */
-	k32[0] = 20;
-	kick_buf[1] = c->vdm_start;
+	/* CMD_TA_KICK: the scene's stream, then (two kicks) the terminate words */
+	for (int i = 0; i < 2; i++)
+		((uint32_t *)kick_buf[i])[0] = 20;
+	kick_buf[0][1] = c->vdm_start;
+	kick_buf[1][1] = k2;
 
 	t0 = now_ns();
 	if ((e = xioctl(c->dev->fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj))) {
