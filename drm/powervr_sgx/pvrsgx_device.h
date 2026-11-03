@@ -86,6 +86,8 @@ struct pvrsgx_fw {
 	u32 cache_control;
 	/** @interface: DRM_POWERVR_SGX_FW_IF_*. */
 	u32 interface;
+	/** @ddk: The DDK's microkernel, which runs under the job's directory. */
+	bool ddk;
 	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
 	u32 ddk_version, ddk_build;
 };

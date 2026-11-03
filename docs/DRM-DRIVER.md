@@ -105,11 +105,13 @@ EDM *and* the TA onto list 1, loads list 1 with the context's directory (HW rend
 word 2), and then fetches its own code at `0x3000b000` through it. With the kernel heaps
 absent from the client directory that fetch faults (`BIF_FAULT 0x3000b021`) and the TA
 never runs. So with the DDK microkernel the driver points every VM's directory entries for
-the three kernel heaps at the firmware directory's own page tables (`share_kernel_heaps`,
-on by default). The heaps are whole 4 MiB directory entries (`pvrsgx_kernel_heaps`), so the
+the three kernel heaps at the firmware directory's own page tables (`share_kernel_heaps`:
+-1, the default, does this only when the DDK microkernel is loaded, and warns at load). The heaps are whole 4 MiB directory entries (`pvrsgx_kernel_heaps`), so the
 page tables are shared, not copied, and every later kernel mapping shows in every VM. This
 reopens P2 and P3 for as long as the DDK microkernel runs; the open microkernel, which
-keeps the EDM on list 15, is what closes them.
+keeps the EDM on list 15, is what closes them. **The isolation the uAPI promises therefore
+needs the open microkernel: M1 is a prerequisite for the secure configuration, and the DDK
+microkernel is for bring-up and A/B testing only** (`docs/UAPI.md` D8).
 
 Reset (`pvrsgx_reset`) follows the DDK's recovery path on every start: reset everything,
 clear the lists, run the cores with list 0 on a scratch directory and give each pending

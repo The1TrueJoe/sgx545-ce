@@ -28,6 +28,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_mmu.h"
+#include "pvrsgx_vm.h"
 
 static char *firmware = "powervr_sgx/sgx545-ukernel-1.7.862890.bin";
 module_param(firmware, charp, 0444);
@@ -417,6 +418,7 @@ static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
 
 	memcpy(f->host_kick, host_kick, sizeof(host_kick));
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
+	f->ddk = true;		/* the only image with these patch sites */
 	return 0;
 }
 
@@ -601,6 +603,9 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	}
 	sdev->fw_running = true;
 	drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
+	if (first && pvrsgx_vm_shares_kernel_heaps(sdev))
+		drm_warn(&sdev->base,
+			 "every VM maps the firmware's heaps (DDK microkernel): clients are not isolated from the firmware (docs/UAPI.md 7.2, P2/P3)\n");
 
 	err = fw_check(sdev);
 	if (err)
