@@ -22,7 +22,7 @@ gma500 auxiliary device first.
 | GEM shmem, `GET_BO_MMAP_OFFSET`, PRIME import | written |
 | VM contexts on `drm_gpuvm`, `VM_MAP`/`VM_UNMAP` | written |
 | `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL and render jobs |
-| render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **first frames rendered** (two-kick scenes); **seven processes in a row, 10/10 each at 720x480**, with the uAPI suite between; one PB per render context, so two render contexts in one VM are untested (G15); the TA-flag 0x10 change was not shown to fix anything |
+| render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **frames render** at 256x256 and 720x480, one-kick and two-kick scenes, any number of processes, and up to three render contexts in one VM sharing its PB (log `2026-11-03-0355-drm-shared-pb-restart`); the TA-flag 0x10 change was not shown to fix anything |
 | `DEV_QUERY` | written |
 | transfer jobs | not started (HW transfer context, TEX.md 10) |
 | shader validator (D9) | hooks only; design in section 6 |
@@ -105,9 +105,13 @@ heap base (0x10000000) in that VM's own address space and mapped only in its dir
 Every other kernel object has one device-wide address. The DPM numbers PB pages from the
 heap base, so a PB anywhere else breaks: with device-wide 3D-params addresses, the
 second process's PB sat at page 0x464 behind the first one's, rendered two frames and
-hung on its third (log `2026-11-03-0340-drm-per-vm-pb`). A second render context in the
-same VM still gets its own PB at a higher address, which is the same hazard; the DDK
-shares one PB per process, and so should the driver (one PB per VM, G15).
+hung on its third (log `2026-11-03-0340-drm-per-vm-pb`). So a VM has one PB: its first
+render context creates it at the heap base (the size it asks for wins; later requests
+are ignored, as the DDK does), its other render contexts share it, and the VM keeps it
+until the client closes the VM. Two and three contexts in one VM, and a context replaced
+every frame, render correctly (log `2026-11-03-0355-drm-shared-pb-restart`). The DDK goes
+further and shares one PB across the whole device; per VM keeps clients' parameter data
+apart.
 
 **The kernel heaps: the design and what the DDK microkernel allows.** The design keeps the
 kernel code, kernel data and sync heaps out of every client directory. That is the fix for
@@ -161,9 +165,12 @@ VM so far before it lets go of the pages.
   clean control block and an empty CCB. This is the "discard" recovery of UKERNEL.md 5a.
   If it does not start again, the device is lost and every later job fails with `-EIO`.
   Before the restart the driver does what an unload does: deinit script, cores held in
-  reset, bus mastering dropped (`restart_quiesce`). With that, two in-place restarts
-  worked and the third failed; after that failure the TA stayed triggered and a module
-  reload did not recover either (log `2026-11-03-0300-drm-cleanup`).
+  reset, bus mastering dropped (`restart_quiesce`). With the per-VM PB, **14 forced
+  hangs in a row** (TA page faults from an unmapped vertex address, `SGXGEN_FAULT=1`,
+  including back-to-back hangs) **each restarted in place**, and the next frames and the
+  uAPI suite passed (log `2026-11-03-0355-drm-shared-pb-restart`). The restarts that failed
+  earlier (log `2026-11-03-0300-drm-cleanup`) followed hangs from the misplaced PB; which
+  of the quiesce and the PB fix made the difference was not separated.
 - Teardown can send the microkernel's cleanup commands first (`cleanup`, UKERNEL.md 3).
   Off by default: on the DDK microkernel the RT and PB cleanups never complete, and the
   PB one stalls the kernel CCB.
