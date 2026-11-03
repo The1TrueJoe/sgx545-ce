@@ -192,8 +192,9 @@ def piglit_env(name):
 
 
 def piglit_regex(test):
-    """a test name as an anchored regex; only regex syntax is escaped (Rust's regex rejects \\@)"""
-    return "^" + re.sub(r"([\\.+*?()|\[\]{}^$#&~-])", r"\\\1", test) + "$"
+    """a test name as an anchored regex; only regex syntax is escaped (Rust's regex rejects \\@),
+    and a comma matches as any character: piglit-runner splits --include-tests at commas"""
+    return "^" + re.sub(r"([\\.+*?()|\[\]{}^$#&~-])", r"\\\1", test).replace(",", ".") + "$"
 
 
 def piglit_gpu_tests():
