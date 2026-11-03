@@ -58,6 +58,10 @@ The `frame` options:
 - `-S` / `-X` (with `-R`): each repeat on a new surface, or on a new context
   and surface: one process standing in for separate `frame` runs.
 
+`tools/gen/fake-traces.sh [OUT]` builds `frame-fake` for the host (Linux or
+macOS) and writes the offline oracle traces to `gen/`: the one-frame
+reference, and two- and three-frame runs in each of the modes above.
+
 Checking a frame without the GPU:
 
     ea3$ /tmp/gen/frame-fake -n /dev/null -t fake.bin   # any x86_64 Linux; no GPU touched
