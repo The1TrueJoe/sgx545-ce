@@ -33,6 +33,8 @@ struct pvrsgx_context {
 	u32 state;
 	/** @render: The firmware half of a render context, else NULL. */
 	struct pvrsgx_render_ctx *render;
+	/** @transfer: The firmware half of a transfer context, else NULL. */
+	struct pvrsgx_transfer_ctx *transfer;
 };
 
 struct pvrsgx_signal {
@@ -63,6 +65,7 @@ struct pvrsgx_job {
 	u32 *done_cpu;
 	u32 done_val;
 	struct pvrsgx_render_job render;
+	struct pvrsgx_transfer_job transfer;
 
 	struct drm_gem_object **bos;
 	u32 *bo_flags;

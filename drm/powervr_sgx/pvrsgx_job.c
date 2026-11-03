@@ -64,6 +64,7 @@ static void context_release(struct kref *ref)
 	struct pvrsgx_context *ctx = container_of(ref, struct pvrsgx_context, ref);
 
 	pvrsgx_render_ctx_fini(ctx->sdev, ctx);
+	pvrsgx_transfer_ctx_fini(ctx->sdev, ctx);
 	pvrsgx_vm_put(ctx->vm);
 	kfree(ctx);
 }
@@ -168,6 +169,9 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 			pvrsgx_render_job_build(job, k, data);
 			err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_TA, data, &job->ccb_seq);
 		}
+	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
+		pvrsgx_transfer_job_build(job, data);
+		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_TRANSFER, data, &job->ccb_seq);
 	} else {
 		/* A NULL job is a no-op command: done when the microkernel has taken it. */
 		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_PROCESS_QUEUES, data, &job->ccb_seq);
@@ -319,12 +323,11 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	ctx->sdev = sdev;
 	ctx->type = args->type;
 	kref_init(&ctx->ref);
-	/* A transfer context's firmware half comes with the transfer stream. */
-	if (ctx->type == DRM_POWERVR_SGX_CTX_TYPE_RENDER) {
-		err = pvrsgx_render_ctx_init(sdev, ctx, args->param_buffer_pages);
-		if (err)
-			goto err_put;
-	}
+	err = ctx->type == DRM_POWERVR_SGX_CTX_TYPE_RENDER ?
+	      pvrsgx_render_ctx_init(sdev, ctx, args->param_buffer_pages) :
+	      pvrsgx_transfer_ctx_init(sdev, ctx);
+	if (err)
+		goto err_put;
 	err = drm_sched_entity_init(&ctx->entity, sched_priority(args->priority), &sched, 1, NULL);
 	if (err)
 		goto err_put;
@@ -562,10 +565,8 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 			return -EINVAL;
 		break;
 	case DRM_POWERVR_SGX_JOB_TYPE_RENDER:
-		break;
 	case DRM_POWERVR_SGX_JOB_TYPE_TRANSFER:
-		/* The transfer context's firmware half is still to come. */
-		return -EOPNOTSUPP;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -601,6 +602,12 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 		if (ctx->type != DRM_POWERVR_SGX_CTX_TYPE_RENDER)
 			return -EINVAL;
 		err = pvrsgx_render_job_init(file, job, in);
+		if (err)
+			return err;
+	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
+		if (ctx->type != DRM_POWERVR_SGX_CTX_TYPE_TRANSFER)
+			return -EINVAL;
+		err = pvrsgx_transfer_job_init(file, job, in);
 		if (err)
 			return err;
 	}
