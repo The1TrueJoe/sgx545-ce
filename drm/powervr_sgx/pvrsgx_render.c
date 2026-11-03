@@ -643,6 +643,17 @@ static bool single_entry;
 module_param(single_entry, bool, 0644);
 MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
 
+#define REARM_HWCTX_BIT		BIT(0)
+#define REARM_HWCTX_RD		BIT(1)
+#define REARM_PB		BIT(2)
+#define REARM_RTDS		BIT(3)
+#define REARM_XFER_BIT		BIT(4)
+
+/* Debug: which of the set-ups below run (all by default), to tell which are needed. */
+static uint reset_rearm = 0x1f;
+module_param(reset_rearm, uint, 0644);
+MODULE_PARM_DESC(reset_rearm, "After a reset: 1 HW render context bit 0, 2 its render details, 4 PB, 8 RT dataset, 16 HW transfer context bit 0");
+
 /*
  * After a reset the microkernel starts from nothing, but a context, its VM's PB
  * and its datasets can live through it. Their first job after the reset sets
@@ -656,17 +667,24 @@ static void render_rearm(struct pvrsgx_device *sdev, struct pvrsgx_render_ctx *r
 	u32 *hw = kobj_cpu(r->hwctx);
 
 	if (r->reset_seen != sdev->reset_count) {
-		hw[0] |= BIT(0);
-		hw[0x20 / 4] = 0;
-		hw[0x24 / 4] = 0;
+		if (reset_rearm & REARM_HWCTX_BIT)
+			hw[0] |= BIT(0);
+		if (reset_rearm & REARM_HWCTX_RD) {
+			hw[0x20 / 4] = 0;
+			hw[0x24 / 4] = 0;
+		}
 		r->reset_seen = sdev->reset_count;
 	}
 	if (r->pb->reset_seen != sdev->reset_count) {
-		pb_init(r->pb);
+		if (reset_rearm & REARM_PB)
+			pb_init(r->pb);
 		r->pb->reset_seen = sdev->reset_count;
 	}
-	if (s->reset_seen != sdev->reset_count)
-		rtds_init(s);
+	if (s->reset_seen != sdev->reset_count) {
+		if (reset_rearm & REARM_RTDS)
+			rtds_init(s);
+		s->reset_seen = sdev->reset_count;
+	}
 }
 
 /* Debug: snapshot the structures as the last kick is written (debugfs render_before). */
@@ -917,7 +935,8 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	u32 *cmd = (u32 *)((u8 *)kobj_cpu(x->ccb) + woff), *sh, *done;
 
 	if (x->reset_seen != job->ctx->sdev->reset_count) {
-		kobj_cpu(x->hwctx)[0] |= BIT(0);	/* as a render context's, after a reset */
+		if (reset_rearm & REARM_XFER_BIT)
+			kobj_cpu(x->hwctx)[0] |= BIT(0);	/* as a render context's, after a reset */
 		x->reset_seen = job->ctx->sdev->reset_count;
 	}
 	memset(cmd, 0, XFER_CMD_BYTES);
