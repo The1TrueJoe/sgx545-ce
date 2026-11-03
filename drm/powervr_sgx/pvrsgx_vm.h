@@ -5,6 +5,7 @@
 #define PVRSGX_VM_H
 
 #include <drm/drm_gpuvm.h>
+#include <drm/drm_mm.h>
 
 #include <linux/kref.h>
 #include <linux/mutex.h>
@@ -26,6 +27,8 @@ struct pvrsgx_vm {
 	struct drm_gpuvm gpuvm;
 	struct pvrsgx_device *sdev;
 	struct pvrsgx_mmu *mmu;
+	/** @params: 3D parameters addresses of this VM's kernel objects (pvrsgx_kobj.c). */
+	struct drm_mm params;
 	/** @lock: Serialises map and unmap. */
 	struct mutex lock;
 	struct kref ref;
