@@ -25,6 +25,7 @@
 #include "pvrsgx_gem.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_render.h"
+#include "pvrsgx_validate.h"
 #include "pvrsgx_vm.h"
 
 /* Elements are copied at min(stride, obj_size); a longer input tail must be zero. */
@@ -182,6 +183,7 @@ static const struct drm_ioctl_desc pvrsgx_ioctls[] = {
 	IOCTL(CREATE_RT_DATASET, pvrsgx_ioctl_create_rt_dataset),
 	IOCTL(DESTROY_RT_DATASET, pvrsgx_ioctl_destroy_rt_dataset),
 	IOCTL(SUBMIT_JOBS, pvrsgx_ioctl_submit_jobs),
+	IOCTL(UPLOAD_CODE, pvrsgx_ioctl_upload_code),
 };
 
 DEFINE_DRM_GEM_FOPS(pvrsgx_fops);

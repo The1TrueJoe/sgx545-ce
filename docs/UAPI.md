@@ -88,6 +88,7 @@ kerneldoc; `Documentation/gpu/powervr_sgx/uapi.rst` pulls it in the way
 | 0x0a | `CREATE_RT_DATASET` | RW | everything tiling a target of a given size needs | capture: STATE.md 6 |
 | 0x0b | `DESTROY_RT_DATASET` | W | | |
 | 0x0c | `SUBMIT_JOBS` | RW | render scenes and transfers, syncobj in/out, BO refs | capture: TEX.md 3, STATE.md 1 |
+| 0x0d | `UPLOAD_CODE` | RW | copy USSE code into a code object and validate it (D9, D12) | hardware: P1 (7.2); design |
 
 ### DEV_QUERY
 
@@ -108,6 +109,44 @@ core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFS
 The CPU mapping's cache mode is a kernel decision and not part of the uAPI. It defaults
 to write-combined until coherency is established (G19).
 
+`DRM_POWERVR_SGX_BO_CODE` makes a code object (D12): it holds USSE programs, it is the
+only kind of object the USSE heaps accept, and it can go nowhere else. It has no CPU
+mapping (so `ALLOW_CPU_ACCESS` with it is `-EINVAL`), PRIME export refuses it, and its
+contents arrive only through `UPLOAD_CODE`.
+
+### UPLOAD_CODE
+
+`{handle, flags, offset, size, pointer, bad_offset}`. The kernel copies `size` bytes from
+`pointer` into the code object at `offset`, both multiples of 8, and scans every 8-byte
+word of them (an instruction, low word first) before anything is copied. A word fails if:
+
+| rule | why |
+|---|---|
+| it matches none of the forms in the kernel's table | a later ISA finding can't open a hole: an unknown encoding is refused, not trusted |
+| it is `ldr` or `str` | the register file (P1, D9) |
+| it is `setl` or `savl` | they set the link address from a register, so a following `lapc` could jump anywhere. The GLES compiler never emits them; only the microkernel does |
+| it is `br` and its target (this instruction + the signed 18-bit field) is outside the object | the target is exact for a relative branch, so it is checked. `ba`, `phas.i` and `lapc` targets are absolute from the code base the task runs from, which depends on where the object is mapped: they can only reach the USSE heaps or the unassigned gaps after them (section 5), and a jump into a gap faults |
+
+On a failure nothing is copied, the ioctl returns `-EINVAL`, and `bad_offset` is the
+object offset of the first bad instruction, for the compiler's debug output.
+
+The table is generated from the clean-room isaspec description,
+`mesa/src/sgx545/isa/sgx545.xml`, by `drm/tools/gen_usse_table.py`: one (mask, match)
+pair per form, the bits the form's patterns fix. The generator refuses two forms that
+could match the same word.
+
+The GPU must not run code that changes after the scan. Code objects are mapped with the
+PTE `READONLY` bit, which stops a client task's `st` (E1, DRM-DRIVER.md section 6).
+While a VM maps the object, an upload may only write past the end of every earlier
+upload (`-EBUSY` otherwise): new code lands only in bytes the GPU sees as zeros, which
+is a harmless instruction. Once no VM maps it, the object can be uploaded anywhere
+again.
+
+PDS programs are not scanned. A PDS program reaches USSE code only through DOUTU, which
+picks a code base: 0-13 cover exactly the two USSE heaps, and 14 and 15 point at nothing
+in a client VM (with the open microkernel; under the DDK microkernel base 15 is the
+kernel code heap, P3). Per-draw PDS programs stay in ordinary objects.
+
 ### VM contexts, VM_MAP, VM_UNMAP
 
 Same shape as pvr: the client manages the address space and picks each mapping's
@@ -126,8 +165,9 @@ Rules the kernel enforces:
   is what stops a stale translation reaching a page the system has given to someone
   else.
 
-`VM_MAP.flags` is reserved. A read-only mapping flag gets added when the MMU's read-only
-bit is documented (G3): shader heaps are its first use.
+`VM_MAP.flags` is reserved. The USSE heaps take only code objects, a code object maps
+only into a USSE heap, and code objects are mapped read-only on the GPU (D12). A
+read-only flag for other objects can come later.
 
 ### CREATE_CONTEXT
 
@@ -597,6 +637,7 @@ XML, the decoder compiles for both targets, and the stream test passes.
 | `drm_powervr_sgx_ioctl_dev_query_args` | 16 | `0x00 type (4)`, `0x04 size (4)`, `0x08 pointer (8)` |
 | `drm_powervr_sgx_ioctl_create_bo_args` | 24 | `0x00 size (8)`, `0x08 handle (4)`, `0x0c _padding_c (4)`, `0x10 flags (8)` |
 | `drm_powervr_sgx_ioctl_get_bo_mmap_offset_args` | 16 | `0x00 handle (4)`, `0x04 _padding_4 (4)`, `0x08 offset (8)` |
+| `drm_powervr_sgx_ioctl_upload_code_args` | 40 | `0x00 handle (4)`, `0x04 flags (4)`, `0x08 offset (8)`, `0x10 size (8)`, `0x18 pointer (8)`, `0x20 bad_offset (8)` |
 | `drm_powervr_sgx_ioctl_create_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
 | `drm_powervr_sgx_ioctl_destroy_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
 | `drm_powervr_sgx_ioctl_vm_map_args` | 40 | `0x00 vm_context_handle (4)`, `0x04 flags (4)`, `0x08 device_addr (8)`, `0x10 handle (4)`, `0x14 _padding_14 (4)`, `0x18 offset (8)`, `0x20 size (8)` |
@@ -1006,6 +1047,26 @@ leaves room for growth later with no uAPI change. It may be wrong for Minecraft-
 **Decided (Joseph, 2026-11-03): keep `DRM_POWERVR_SGX_JOB_TYPE_NULL`.** A job with no GPU
 work that still goes through the scheduler and signals its fences, for IGT, fence and
 scheduler tests without a GPU workload. It can be dropped before the RFC if reviewers object.
+
+### D12. Code objects and the upload ioctl
+
+**Recommendation, to confirm (2026-11-03): USSE code goes only through
+`UPLOAD_CODE` into `BO_CODE` objects, as section 2 describes.** This is D9 option 1
+made concrete, and it closes some options:
+
+- The winsys can no longer write shaders into a mapped buffer. Mesa's code heap becomes
+  a code object per pool, filled by `UPLOAD_CODE` (M3).
+- An upload into a mapped object can only append. Freeing and reusing shader space
+  means unmapping the object first, so a pool that recycles space needs a second pool
+  to swap with. Alternative: allow overwrites of ranges no submitted job can still be
+  running. The kernel would need to know which jobs could use which code, which it
+  doesn't.
+- `setl`/`savl` are refused, and so are relative branches out of the object. A future
+  compiler that needs indirect calls would need a rule for where `setl`'s register can
+  point.
+
+Alternatives weighed in D9 (firmware-protected EDM, one client at a time, a trusted
+group) still stand if this is rejected.
 
 ## 11. Doc gaps
 

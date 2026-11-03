@@ -377,7 +377,7 @@ static void t_vm_map_unmap(int fd)
 
 	assert_eq(vm_map(fd, vm, bo, 0x3e000000, 0, 8 * PAGE), 0);
 	assert_eq(vm_map(fd, vm, bo, 0x3e100000, 4 * PAGE, 4 * PAGE), 0);
-	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, PAGE), 0);	/* USSE pixel */
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, PAGE), -EINVAL);	/* USSE pixel: code objects only */
 	assert_eq(vm_map(fd, vm, bo, 0xfffff000, 0, PAGE), 0);	/* last page */
 	assert_eq(vm_unmap(fd, vm, 0x3e000000, 8 * PAGE), 0);
 	assert_eq(vm_unmap(fd, vm, 0x3e000000, 8 * PAGE), -ENOENT);
@@ -701,6 +701,155 @@ static void t_submit_wait_unsignalled(int fd)
 	assert_eq(syncobj_wait(fd, done, 0), -EINVAL);
 }
 
+/* Code objects and UPLOAD_CODE (UAPI.md 2, D9, D12) */
+
+#include "usse_corpus.h"
+
+static int upload(int fd, uint32_t bo, uint64_t off, const void *w, uint64_t size, uint64_t *bad)
+{
+	struct drm_powervr_sgx_ioctl_upload_code_args a = {
+		.handle = bo, .offset = off, .size = size, .pointer = (uintptr_t)w,
+	};
+	int r = xioctl(fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a);
+
+	if (bad)
+		*bad = a.bad_offset;
+	return r;
+}
+
+static void t_code_bo(int fd)
+{
+	struct drm_powervr_sgx_ioctl_create_bo_args a = {
+		.size = PAGE, .flags = DRM_POWERVR_SGX_BO_CODE | DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
+	};
+	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
+	struct drm_prime_handle ph = { .flags = DRM_CLOEXEC };
+	uint32_t vm = create_vm(fd), code = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint32_t plain = create_bo(fd, PAGE, 0);
+
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &a, EINVAL);	/* no CPU access */
+	mo.handle = code;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo, EINVAL);
+	ph.handle = code;
+	assert_true(xioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) < 0);	/* not exportable */
+	ph.handle = plain;
+	assert_eq(xioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph), 0);
+	close(ph.fd);
+
+	/* The USSE heaps take code objects only, and code goes nowhere else. */
+	assert_eq(vm_map(fd, vm, plain, 0x37000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd, vm, plain, 0x3c000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd, vm, code, 0x3e000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd, vm, code, 0x2e000000, 0, PAGE), -EINVAL);	/* PDS pixel */
+	assert_eq(vm_map(fd, vm, code, 0x37000000, 0, 2 * PAGE), 0);
+	assert_eq(vm_map(fd, vm, code, 0x3c000000, 0, PAGE), 0);
+}
+
+/* Every corpus instruction passes, at the middle of a 4-page object. */
+static void t_upload_code_corpus(int fd)
+{
+	uint32_t n = sizeof(usse_corpus) / sizeof(usse_corpus[0]);
+	uint32_t bo = create_bo(fd, 4 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint64_t w[sizeof(usse_corpus) / sizeof(usse_corpus[0])], bad;
+
+	for (uint32_t i = 0; i < n; i++)
+		w[i] = (uint64_t)usse_corpus[i].hi << 32 | usse_corpus[i].lo;
+	assert_eq(upload(fd, bo, 2 * PAGE, w, sizeof(w), &bad), 0);
+	assert_eq(bad, ~0ull);
+	/* one at a time, so a refusal names the instruction */
+	for (uint32_t i = 0; i < n; i++)
+		if (upload(fd, bo, 2 * PAGE + 8 * i, &w[i], 8, NULL))
+			fail("refused: %s (%08x %08x)", usse_corpus[i].text, usse_corpus[i].lo,
+			     usse_corpus[i].hi);
+	printf("  %u corpus instructions accepted\n", n);
+}
+
+/*
+ * Words from the isaspec encoder (mesa/src/sgx545/isa), each with what must
+ * happen at word 2 of a 3-word upload at the start of a 1-page object.
+ */
+static const struct {
+	uint32_t lo, hi;
+	const char *what;
+	int ok;
+} crafted[] = {
+	{ 0x2000001c, 0xfe210000, "ldr r0, #28", 0 },
+	{ 0x20264000, 0xfe210081, "ldr pa1, #3200 [drc=1]", 0 },
+	{ 0x00400003, 0xfe200000, "ldr r2, r3", 0 },
+	{ 0x20064080, 0xfe290000, "str #3200, r1", 0 },
+	{ 0x00000203, 0xfe280800, "str r3, r4 [nosched]", 0 },
+	{ 0x00000180, 0xf80000c0, "setl r3", 0 },
+	{ 0x00a00000, 0xf8000100, "savl r5", 0 },
+	{ 0x0003fffd, 0xf8000040, "br #-3 (before the object)", 0 },
+	{ 0x0003fffe, 0xf8000040, "br #-2 (its first word)", 1 },
+	{ 0x000001fd, 0xf8000040, "br #509 (its last word)", 1 },
+	{ 0x000001fe, 0xf8000040, "br #510 (past its end)", 0 },
+	{ 0x0001ffff, 0xf8000040, "br #131071", 0 },
+	{ 0x0000001c, 0xfe210008, "ldr r0, #28 with a stray bit (h3): no form", 0 },
+	{ 0xffffffff, 0xffffffff, "all ones: no form", 0 },
+	{ 0xffffffff, 0x00000000, "fmad with every operand bit set", 1 },
+	{ 0x00000000, 0x00000000, "zero (what an object holds before an upload)", 1 },
+};
+
+static void t_upload_code_reject(int fd)
+{
+	uint32_t bo = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint64_t w[3] = { 0, 0, 0 }, bad;
+
+	for (unsigned int i = 0; i < sizeof(crafted) / sizeof(crafted[0]); i++) {
+		int r;
+
+		w[2] = (uint64_t)crafted[i].hi << 32 | crafted[i].lo;
+		r = upload(fd, bo, 0, w, sizeof(w), &bad);
+		if (crafted[i].ok ? r != 0 : r != -EINVAL || bad != 16)
+			fail("%s: %d, bad offset %#llx", crafted[i].what, r, (unsigned long long)bad);
+	}
+	/* a refusal names the first bad word */
+	w[0] = (uint64_t)crafted[0].hi << 32 | crafted[0].lo;
+	w[1] = w[2] = (uint64_t)crafted[3].hi << 32 | crafted[3].lo;
+	assert_eq(upload(fd, bo, 0x100, w, sizeof(w), &bad), -EINVAL);
+	assert_eq(bad, 0x100);
+}
+
+static void t_upload_code_invalid(int fd)
+{
+	uint32_t code = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_CODE), plain = create_bo(fd, PAGE, 0);
+	uint64_t w[2] = { 0, 0 };
+	struct drm_powervr_sgx_ioctl_upload_code_args a = {
+		.handle = code, .size = 16, .pointer = (uintptr_t)w,
+	};
+
+	assert_eq(upload(fd, code, 0, w, 16, NULL), 0);
+	assert_eq(upload(fd, plain, 0, w, 16, NULL), -EINVAL);	/* not a code object */
+	assert_eq(upload(fd, 0xdead, 0, w, 16, NULL), -ENOENT);
+	assert_eq(upload(fd, code, 4, w, 8, NULL), -EINVAL);	/* 8-byte aligned */
+	assert_eq(upload(fd, code, 0, w, 12, NULL), -EINVAL);
+	assert_eq(upload(fd, code, 0, w, 0, NULL), -EINVAL);
+	assert_eq(upload(fd, code, PAGE - 8, w, 16, NULL), -EINVAL);	/* past the end */
+	assert_eq(upload(fd, code, ~0ull - 7, w, 16, NULL), -EINVAL);
+	assert_eq(upload(fd, code, 0, (void *)8, 16, NULL), -EFAULT);
+	a.flags = 1;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a, EINVAL);
+}
+
+/* While mapped, uploads only append; once unmapped, anywhere again. */
+static void t_upload_code_mapped(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint64_t w[32] = { 0 };
+
+	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);
+	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);	/* not mapped: again */
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, 2 * PAGE), 0);
+	assert_eq(upload(fd, bo, 0x80, w, 0x100, NULL), -EBUSY);	/* overlaps uploaded code */
+	assert_eq(upload(fd, bo, 0xf8, w, 8, NULL), -EBUSY);
+	assert_eq(upload(fd, bo, 0x100, w, 0x100, NULL), 0);
+	assert_eq(upload(fd, bo, 0x400, w, 0x100, NULL), 0);	/* a gap is fine */
+	assert_eq(upload(fd, bo, 0x300, w, 0x100, NULL), -EBUSY);	/* behind the furthest */
+	assert_eq(vm_unmap(fd, vm, 0x37000000, 2 * PAGE), 0);
+	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);
+}
+
 /* RT datasets */
 
 static uint32_t create_rtds(int fd, uint32_t ctx, uint32_t w, uint32_t h, int *err)
@@ -933,7 +1082,7 @@ static void t_reserved_bits(int fd)
 	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
 	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
 
-	for (unsigned int b = 1; b < 64; b++) {
+	for (unsigned int b = 2; b < 64; b++) {	/* 0 CPU access, 1 code */
 		struct drm_powervr_sgx_ioctl_create_bo_args a = { .size = PAGE, .flags = 1ull << b };
 
 		BIT_REJECT("CREATE_BO flags", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &a));
@@ -1101,6 +1250,11 @@ static const struct {
 	{ "submit-render-invalid", t_submit_render_invalid },
 	{ "submit-transfer-invalid", t_submit_transfer_invalid },
 	{ "reserved-bits", t_reserved_bits },
+	{ "code-bo", t_code_bo },
+	{ "upload-code-corpus", t_upload_code_corpus },
+	{ "upload-code-reject", t_upload_code_reject },
+	{ "upload-code-invalid", t_upload_code_invalid },
+	{ "upload-code-mapped", t_upload_code_mapped },
 	{ "submit-other-vm", t_submit_other_vm },
 };
 

@@ -58,15 +58,20 @@ static void die(const char *what, int e)
 }
 
 struct buf {
-	uint32_t va;
-	uint8_t *cpu;
+	uint32_t va, handle, size;
+	uint8_t *cpu;	/* a code object's: a CPU copy, uploaded with upload() */
 };
 
-/* A CPU-mapped buffer object at the next free address of a heap. */
+/*
+ * A buffer object at the next free address of a heap: CPU-mapped, or in a
+ * USSE heap a code object with a CPU copy.
+ */
 static struct buf bo(int heap, uint32_t size)
 {
+	int code = heap == DRM_POWERVR_SGX_HEAP_USSE_PIXEL || heap == DRM_POWERVR_SGX_HEAP_USSE_VERTEX;
 	struct drm_powervr_sgx_ioctl_create_bo_args cb = {
-		.size = (size + 0xfff) & ~0xfffu, .flags = DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
+		.size = (size + 0xfff) & ~0xfffu,
+		.flags = code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
 	};
 	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
 	struct drm_powervr_sgx_ioctl_vm_map_args m = {};
@@ -77,13 +82,21 @@ static struct buf bo(int heap, uint32_t size)
 		heap_next[heap] = heap_base[heap] + 0x1000;
 	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_CREATE_BO, &cb)))
 		die("CREATE_BO", e);
-	mo.handle = cb.handle;
-	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo)))
-		die("GET_BO_MMAP_OFFSET", e);
-	b.cpu = mmap(NULL, cb.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mo.offset);
-	if (b.cpu == MAP_FAILED)
-		die("mmap", errno);
-	memset(b.cpu, 0, cb.size);
+	if (code) {
+		b.cpu = calloc(1, cb.size);
+		if (!b.cpu)
+			die("calloc", ENOMEM);
+	} else {
+		mo.handle = cb.handle;
+		if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo)))
+			die("GET_BO_MMAP_OFFSET", e);
+		b.cpu = mmap(NULL, cb.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mo.offset);
+		if (b.cpu == MAP_FAILED)
+			die("mmap", errno);
+		memset(b.cpu, 0, cb.size);
+	}
+	b.handle = cb.handle;
+	b.size = cb.size;
 	m.vm_context_handle = vm;
 	m.handle = cb.handle;
 	m.device_addr = heap_next[heap];
@@ -100,15 +113,48 @@ static void put(struct buf *b, uint32_t va, const uint32_t *w, uint32_t n)
 	memcpy(b->cpu + (va - b->va), w, n * 4);
 }
 
+/* A code object's bytes [va, va + bytes) to the GPU. */
+static void upload(struct buf *b, uint32_t va, uint32_t bytes)
+{
+	struct drm_powervr_sgx_ioctl_upload_code_args a = {
+		.handle = b->handle, .offset = va - b->va, .size = (bytes + 7) & ~7u,
+		.pointer = (uintptr_t)(b->cpu + (va - b->va)),
+	};
+	int e = xioctl(DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a);
+
+	if (e) {
+		fprintf(stderr, "powervr_sgx_blit: UPLOAD_CODE rejected offset %#llx\n",
+			(unsigned long long)a.bad_offset);
+		die("UPLOAD_CODE", e);
+	}
+}
+
 /* The context's static programs, as blitest's context() (TEX.md 10). */
 static struct sgxtex_blit_ctx X;
 static struct buf usse, bgb, pdsc, pdsp;
+static uint32_t emit, eot_next;
+
+/*
+ * Each blit's end-of-tile program goes to the next 128 bytes of the code
+ * object: once mapped, a code object only takes uploads past its end.
+ */
+static void eot_place(void)
+{
+	uint32_t ev[SGXTEX_EVENT_WORDS];
+
+	if (eot_next + 0x80 > usse.size)
+		die("out of code space", ENOSPC);
+	X.eot_use = usse.va + eot_next;
+	eot_next += 0x80;
+	sgxtex_xctx_pixel_event(ev, X.eot_use, emit);
+	put(&pdsc, X.pds_event, ev, SGXTEX_EVENT_WORDS);
+}
 
 static void programs(void)
 {
-	uint32_t sec[SGXTEX_SECONDARY_WORDS], ev[SGXTEX_EVENT_WORDS], emit, nop;
+	uint32_t sec[SGXTEX_SECONDARY_WORDS], nop;
 
-	usse = bo(DRM_POWERVR_SGX_HEAP_USSE_PIXEL, 0x800);
+	usse = bo(DRM_POWERVR_SGX_HEAP_USSE_PIXEL, 0x20000);
 	bgb = bo(DRM_POWERVR_SGX_HEAP_GENERAL, 0x4800);
 	pdsc = bo(DRM_POWERVR_SGX_HEAP_PDS_PIXEL, 0x1800);
 	pdsp = bo(DRM_POWERVR_SGX_HEAP_PDS_PIXEL, 0x400);
@@ -116,17 +162,16 @@ static void programs(void)
 	X.pds_secondary = pdsc.va;
 	X.pds_event = pdsc.va + 0x20;
 	X.pds_primary = pdsp.va;
-	X.eot_use = usse.va;
 	emit = usse.va + 0x80;
 	nop = usse.va + 0xc0;
 	X.copy_use = usse.va + 0x100;
 	put(&usse, emit, sgxtex_emit_shader, 6);
 	put(&usse, nop, sgxtex_nop_shader, 4);
 	put(&usse, X.copy_use, sgxtex_copy_shader, 4);
+	upload(&usse, usse.va, 0x200);
+	eot_next = 0x200;
 	sgxtex_xctx_secondary(sec, nop);
 	put(&pdsc, X.pds_secondary, sec, SGXTEX_SECONDARY_WORDS);
-	sgxtex_xctx_pixel_event(ev, X.eot_use, emit);
-	put(&pdsc, X.pds_event, ev, SGXTEX_EVENT_WORDS);
 }
 
 /* One blit: sgxtex's words into client memory, the rest as a CMD_TRANSFER stream. */
@@ -153,10 +198,12 @@ static int blit(const struct sgxtex_surface *src, const struct sgxtex_surface *d
 	struct timespec now;
 	int e;
 
+	eot_place();
 	sgxtex_blit_build(&b, &X, src, dst, filter);
 	put(&bgb, X.bg, b.bg, SGXTEX_BLIT_BG_WORDS);
 	put(&pdsp, X.pds_primary, b.pds, SGXTEX_BLIT_PDS_WORDS);
 	put(&usse, X.eot_use, b.eot, SGXPBE_EOT_WORDS);
+	upload(&usse, X.eot_use, SGXPBE_EOT_WORDS * 4);
 	__sync_synchronize();
 
 	/* CMD_TRANSFER (docs/UAPI.md 3.5): header, then the words the kernel turns into the command */

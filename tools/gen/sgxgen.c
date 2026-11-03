@@ -84,12 +84,18 @@ static int xioctl(int fd, unsigned long req, void *arg)
 	return r == -1 ? -errno : 0;
 }
 
-/* A shmem object, CPU-mapped, mapped in the VM at the next free address of the heap. */
+/*
+ * A shmem object mapped in the VM at the next free address of the heap, and
+ * CPU-mapped. In the USSE heaps it is a code object instead: no CPU mapping,
+ * map is a copy the caller uploads (sgx_bo_upload).
+ */
 static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t attribs, uint32_t size,
 		     uint32_t align)
 {
+	int code = heap == H_PIXSHADER || heap == H_VTXSHADER;
 	struct drm_powervr_sgx_ioctl_create_bo_args cb = {
-		.size = (size + 0xfff) & ~0xfffu, .flags = DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
+		.size = (size + 0xfff) & ~0xfffu,
+		.flags = code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
 	};
 	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
 	struct drm_powervr_sgx_ioctl_vm_map_args vm = {};
@@ -103,12 +109,18 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 	addr = ((d->heap_next[heap] ? d->heap_next[heap] : d->heap_base[heap] + 0x1000) + a - 1) & ~(a - 1);
 	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &cb)))
 		die("CREATE_BO %#x failed: %d", size, e);
-	mo.handle = cb.handle;
-	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo)))
-		die("GET_BO_MMAP_OFFSET failed: %d", e);
-	p = mmap(NULL, cb.size, PROT_READ | PROT_WRITE, MAP_SHARED, d->fd, mo.offset);
-	if (p == MAP_FAILED)
-		die("mmap failed: %d", errno);
+	if (code) {
+		p = calloc(1, cb.size);
+		if (!p)
+			die("out of memory");
+	} else {
+		mo.handle = cb.handle;
+		if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo)))
+			die("GET_BO_MMAP_OFFSET failed: %d", e);
+		p = mmap(NULL, cb.size, PROT_READ | PROT_WRITE, MAP_SHARED, d->fd, mo.offset);
+		if (p == MAP_FAILED)
+			die("mmap failed: %d", errno);
+	}
 	vm.vm_context_handle = d->vm;
 	vm.device_addr = addr;
 	vm.handle = cb.handle;
@@ -117,6 +129,8 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 		die("VM_MAP heap %u at %#x +%#llx failed: %d", heap, addr, (unsigned long long)cb.size, e);
 	d->heap_next[heap] = addr + cb.size;
 	bo->handle = cb.handle;
+	bo->code = code;
+	bo->uploaded = 0;
 	bo->va = addr;
 	bo->size = size;
 	bo->map = p;
@@ -1198,11 +1212,42 @@ static int64_t now_ns(void)
 	return ts.tv_sec * 1000000000ll + ts.tv_nsec;
 }
 
+int sgx_bo_upload(struct sgx_dev *d, struct sgx_bo *bo, uint32_t off, uint32_t size)
+{
+	struct drm_powervr_sgx_ioctl_upload_code_args a = {
+		.handle = bo->handle, .offset = off, .size = size,
+		.pointer = (uintptr_t)((uint8_t *)bo->map + off),
+	};
+	int e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a);
+
+	if (e)
+		fprintf(stderr, "sgxgen: UPLOAD_CODE %#x +%#x: %d (bad offset %#llx)\n", off, size, e,
+			(unsigned long long)a.bad_offset);
+	else if (off + size > bo->uploaded)
+		bo->uploaded = off + size;
+	return e;
+}
+
+/* The programs written to the USSE rings since the last submit, to the GPU. */
+static void usse_sync(struct sgx_ctx *c)
+{
+	struct sgx_ring *rs[] = { &c->usse_pix, &c->usse_vtx };
+
+	for (unsigned i = 0; i < 2; i++) {
+		uint32_t end = (rs[i]->used + 7) & ~7u;
+
+		if (end > rs[i]->bo.uploaded &&
+		    sgx_bo_upload(c->dev, &rs[i]->bo, rs[i]->bo.uploaded, end - rs[i]->bo.uploaded))
+			die("shader upload refused");
+	}
+}
+
 void sgx_render_job(struct sgx_ctx *c, struct sgx_job *j)
 {
 	struct sgx_surface *s = c->fb;
 	uint32_t *r32 = (uint32_t *)j->render, k2;
 
+	usse_sync(c);
 	memset(j, 0, sizeof *j);
 	vdm_end(c);
 	k2 = vdm_end(c);	/* the second kick's stream: the terminate words only */

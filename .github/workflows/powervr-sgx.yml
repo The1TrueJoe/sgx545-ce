@@ -19,6 +19,7 @@ on:
       - docs/uapi/**
       - tools/gen/sgxgen.*
       - tools/tex/sgxtex.*
+      - mesa/src/sgx545/isa/sgx545.xml
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
@@ -63,6 +64,10 @@ jobs:
           path: ~/.cache/ccache
           key: ccache-${{ env.LINUX_VERSION }}-${{ github.sha }}
           restore-keys: ccache-${{ env.LINUX_VERSION }}-
+
+      - name: The validator's USSE table is current with the ISA description
+        run: |
+          python3 drm/tools/gen_usse_table.py mesa/src/sgx545/isa/sgx545.xml | diff -u drm/powervr_sgx/pvrsgx_usse_table.h -
 
       - name: Lay out the kernel
         run: |

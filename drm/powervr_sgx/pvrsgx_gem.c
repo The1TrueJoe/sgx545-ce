@@ -2,6 +2,7 @@
 /* Copyright © 2026 Joseph Telaak */
 
 #include <drm/drm_gem.h>
+#include <drm/drm_prime.h>
 #include <drm/drm_vma_manager.h>
 
 #include <linux/pagemap.h>
@@ -16,8 +17,17 @@
 /* The GPU has 32-bit physical addresses and a 4 GiB address space. */
 #define PVRSGX_BO_MAX_SIZE	SZ_1G
 
+/* A code object's contents are validated: no other way to reach them. */
+static struct dma_buf *pvrsgx_gem_export(struct drm_gem_object *obj, int flags)
+{
+	if (to_pvrsgx_bo(obj)->flags & DRM_POWERVR_SGX_BO_CODE)
+		return ERR_PTR(-EPERM);
+	return drm_gem_prime_export(obj, flags);
+}
+
 static const struct drm_gem_object_funcs pvrsgx_gem_funcs = {
 	.free = drm_gem_shmem_object_free,
+	.export = pvrsgx_gem_export,
 	.print_info = drm_gem_shmem_object_print_info,
 	.pin = drm_gem_shmem_object_pin,
 	.unpin = drm_gem_shmem_object_unpin,
@@ -48,6 +58,9 @@ int pvrsgx_ioctl_create_bo(struct drm_device *drm, void *data, struct drm_file *
 
 	if (args->_padding_c || (args->flags & ~PVRSGX_BO_FLAGS_MASK) ||
 	    !args->size || !PAGE_ALIGNED(args->size) || args->size > PVRSGX_BO_MAX_SIZE)
+		return -EINVAL;
+	if ((args->flags & DRM_POWERVR_SGX_BO_CODE) &&
+	    (args->flags & DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS))
 		return -EINVAL;
 
 	shmem = drm_gem_shmem_create(drm, args->size);

@@ -68,6 +68,8 @@ struct sgx_dev {
 struct sgx_bo {
 #ifdef SGXGEN_DRM
 	uint32_t handle;
+	int code;			/* a code object: map is a CPU copy, uploaded to the GPU */
+	uint32_t uploaded;		/* code: bytes [0, uploaded) are on the GPU */
 #else
 	struct pvr_buf b;
 #endif
@@ -209,6 +211,8 @@ struct sgx_job {
 	struct drm_powervr_sgx_job job;
 };
 void sgx_render_job(struct sgx_ctx *c, struct sgx_job *j);
+/* A code object's bytes [off, off + size) to the GPU (UPLOAD_CODE); 0 or -errno. */
+int sgx_bo_upload(struct sgx_dev *d, struct sgx_bo *bo, uint32_t off, uint32_t size);
 #endif
 
 #endif

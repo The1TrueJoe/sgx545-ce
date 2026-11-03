@@ -51,6 +51,7 @@ static int verbose;
 static uint32_t xctx, xsync;
 static struct sgxtex_blit_ctx X;
 static struct sgx_bo usse, bgb, pdsc, pdsp, copy;
+static uint32_t emit, eot_next;
 
 static int xioctl(unsigned long req, void *arg)
 {
@@ -95,14 +96,14 @@ static void transfer_setup(void)
 		.type = DRM_POWERVR_SGX_CTX_TYPE_TRANSFER, .vm_context_handle = dev.vm,
 	};
 	struct drm_syncobj_create sc = {};
-	uint32_t sec[SGXTEX_SECONDARY_WORDS], ev[SGXTEX_EVENT_WORDS], emit, nop;
+	uint32_t sec[SGXTEX_SECONDARY_WORDS], nop;
 	int e;
 
 	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &cc)) || (e = xioctl(DRM_IOCTL_SYNCOBJ_CREATE, &sc)))
 		die("transfer context", e);
 	xctx = cc.handle;
 	xsync = sc.handle;
-	sgx_bo_alloc(&dev, &usse, HEAP_USSE_PIXEL, 0, 0x800, 0x1000);
+	sgx_bo_alloc(&dev, &usse, HEAP_USSE_PIXEL, 0, 0x20000, 0x1000);	/* a code object */
 	sgx_bo_alloc(&dev, &bgb, HEAP_GENERAL, 0, 0x4800, 0x1000);
 	sgx_bo_alloc(&dev, &pdsc, HEAP_PDS_PIXEL, 0, 0x1800, 0x1000);
 	sgx_bo_alloc(&dev, &pdsp, HEAP_PDS_PIXEL, 0, 0x400, 0x1000);
@@ -111,15 +112,28 @@ static void transfer_setup(void)
 	X.pds_secondary = pdsc.va;
 	X.pds_event = pdsc.va + 0x20;
 	X.pds_primary = pdsp.va;
-	X.eot_use = usse.va;
 	emit = usse.va + 0x80;
 	nop = usse.va + 0xc0;
 	X.copy_use = usse.va + 0x100;
 	put(&usse, emit, sgxtex_emit_shader, 6);
 	put(&usse, nop, sgxtex_nop_shader, 4);
 	put(&usse, X.copy_use, sgxtex_copy_shader, 4);
+	if ((e = sgx_bo_upload(&dev, &usse, 0, 0x200)))
+		die("UPLOAD_CODE", e);
+	eot_next = 0x200;
 	sgxtex_xctx_secondary(sec, nop);
 	put(&pdsc, X.pds_secondary, sec, SGXTEX_SECONDARY_WORDS);
+}
+
+/* Each blit's end-of-tile program at the next 128 bytes: a mapped code object only grows. */
+static void eot_place(void)
+{
+	uint32_t ev[SGXTEX_EVENT_WORDS];
+
+	if (eot_next + 0x80 > usse.size)
+		die("out of code space", ENOSPC);
+	X.eot_use = usse.va + eot_next;
+	eot_next += 0x80;
 	sgxtex_xctx_pixel_event(ev, X.eot_use, emit);
 	put(&pdsc, X.pds_event, ev, SGXTEX_EVENT_WORDS);
 }
@@ -139,11 +153,15 @@ static void transfer_job(struct xjob *x, const struct sgx_surface *s, uint32_t w
 				      SGXPBE_FMT_BGRA8888 };
 	struct sgxtex_blit b;
 	uint32_t n = 0;
+	int e;
 
+	eot_place();
 	sgxtex_blit_build(&b, &X, &src, &dst, SGXTEX_FILTER_NEAREST);
 	put(&bgb, X.bg, b.bg, SGXTEX_BLIT_BG_WORDS);
 	put(&pdsp, X.pds_primary, b.pds, SGXTEX_BLIT_PDS_WORDS);
 	put(&usse, X.eot_use, b.eot, SGXPBE_EOT_WORDS);
+	if ((e = sgx_bo_upload(&dev, &usse, X.eot_use - usse.va, SGXPBE_EOT_WORDS * 4)))
+		die("UPLOAD_CODE", e);
 	__sync_synchronize();
 
 	memset(x, 0, sizeof(*x));
