@@ -633,7 +633,7 @@ static int fw_check(struct pvrsgx_device *sdev)
 int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 {
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
-	bool first = !sdev->fw_started;
+	bool first = !sdev->fw_started, was_powered = READ_ONCE(sdev->powered);
 	int err;
 
 	WRITE_ONCE(sdev->powered, true);
@@ -645,7 +645,12 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	 */
 	if (!first) {
 		sdev->fw_gen++;
-		if (restart_quiesce) {
+		/*
+		 * After a hang the clocks are on and the cores may be busy. After a
+		 * clean stop (runtime suspend) they are gated and quiet already, and
+		 * a register read there froze the EA3 (log 2026-11-03-0630).
+		 */
+		if (restart_quiesce && was_powered) {
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
 			wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
