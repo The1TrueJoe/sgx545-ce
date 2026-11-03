@@ -59,6 +59,9 @@ TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
 SSH_TIMEOUT = 25
 RUN_DIR = None
 LOCK = "flock /tmp/gpu.lock"  # per chunk; empty with --hold-lock
+# --boot ramboot: the run's own RAM boot, marked by this file (gone with any reboot)
+RAMBOOT_MARK = "/tmp/ohc-test-ramboot"
+BOOT = "normal"
 
 
 def log(*a):
@@ -354,12 +357,16 @@ def main():
     ap.add_argument("--slice-minutes", type=float, default=None,
                     help="stop (exit 3) after the chunk that passes this many minutes, to share the box")
     ap.add_argument("--copy-only", action="store_true", help="copy the payload and stop (no GPU work)")
+    ap.add_argument("--boot", choices=["normal", "ramboot"], default="normal",
+                    help="the boot a slice runs on: p1's, or a RAM boot the runner marked with "
+                         + RAMBOOT_MARK + " (the EA3's)")
     ap.add_argument("--hold-lock", action="store_true",
                     help="hold /tmp/gpu.lock on the box for the whole run, so nothing interleaves between chunks")
     a = ap.parse_args()
     box = Box(a.box)
 
-    global RUN_DIR
+    global RUN_DIR, BOOT
+    BOOT = a.boot
     name = a.name or a.who
     run_dir = RUN_DIR = os.path.join(WORK, "run-" + name)
     os.makedirs(run_dir, exist_ok=True)
@@ -428,14 +435,17 @@ def main():
 
 
 def box_state(box):
-    """(normal boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
+    """(the run's boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
     rc, out = box.ssh("cat /proc/cmdline; cat /proc/sys/kernel/random/boot_id; "
-                      "dmesg | grep -c 'Recovery triggered'")
+                      f"dmesg | grep -c 'Recovery triggered'; test -f {RAMBOOT_MARK} && echo marked")
     lines = out.decode(errors="replace").split("\n")
     if rc not in (0, 1) or len(lines) < 3:
         return None
     cmdline = lines[0]
-    normal = "root=/dev/mmcblk0p1" in cmdline and "ohc.ramboot" not in cmdline
+    if BOOT == "ramboot":
+        normal = "ohc.ramboot=1" in cmdline and "marked" in lines[3:]
+    else:
+        normal = "root=/dev/mmcblk0p1" in cmdline and "ohc.ramboot" not in cmdline
     return normal, lines[1].strip(), int(lines[2].strip() or 0)
 
 
@@ -447,7 +457,8 @@ def box_busy(box, run_dir):
         return "doesn't answer"
     normal, boot, rec = st
     if not normal:
-        return "not on its normal boot (a test kernel or RAM image)"
+        return ("not on the run's RAM boot (no " + RAMBOOT_MARK + ")" if BOOT == "ramboot"
+                else "not on its normal boot (a test kernel or RAM image)")
     try:
         with open(os.path.join(run_dir, "box-state")) as f:
             last_boot, last_rec = f.read().split()
