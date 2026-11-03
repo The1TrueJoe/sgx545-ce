@@ -615,6 +615,7 @@ module_param(single_entry, bool, 0644);
 MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
 
 /* Debug: snapshot the structures as the last kick is written (debugfs render_before). */
+static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s, u32 cmd_off);
 static bool snapshot;
 module_param(snapshot, bool, 0644);
 MODULE_PARM_DESC(snapshot, "Keep the structures as written for the last kick (debugfs render_before)");
