@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Run dEQP-GLES2 (or piglit) on an EA from the host, across wedges and power cycles.
 
-    drive-deqp.py sgx545|ddk|piglit [--box 10.0.0.113] [--chunk 200] [--filter REGEX] [--max-wedges N]
+    drive-deqp.py sgx545|ddk|piglit [--box 10.0.0.110] [--chunk 200] [--filter REGEX] [--max-wedges N]
                   [--name NAME] [--caselist FILE]
 
 --name keeps a run apart from the others (its results in run-NAME, its Mesa in
@@ -31,8 +31,9 @@ through piglit-runner, which takes no caselist: each chunk is passed as anchored
 
 Environment:
   RECOVER     shell command that power-cycles the box and returns once it has
-              booted and its GPU is up (default: mesa/tests/deqp/recover-ea3.sh);
-              "none" stops the run at the first wedge instead
+              booted and its GPU is up, e.g. mesa/tests/deqp/recover-ea3.sh;
+              "none" (the default) stops the run at the first wedge instead
+  BOX         the box (default 10.0.0.110, the EA1, the GPU box)
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
   BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
@@ -282,7 +283,7 @@ def canary(box, who, name):
 
 
 def recover(box):
-    cmd = os.environ.get("RECOVER", shlex.quote(os.path.join(HERE, "recover-ea3.sh")))
+    cmd = os.environ.get("RECOVER", "none")
     if cmd == "none":
         # a box without a smart plug: someone has to power-cycle it
         log("wedged, and RECOVER=none: stopping; power-cycle the box and rerun to carry on")
@@ -342,7 +343,7 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit("terminated: the lock is let go"))
     ap = argparse.ArgumentParser()
     ap.add_argument("who", choices=["sgx545", "ddk", "piglit"])
-    ap.add_argument("--box", default=os.environ.get("EA3", "10.0.0.113"))
+    ap.add_argument("--box", default=os.environ.get("BOX", "10.0.0.110"))
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--filter", default=None)
     ap.add_argument("--max-wedges", type=int, default=40)
