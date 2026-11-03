@@ -610,6 +610,8 @@ static uint32_t eot_program(struct sgx_ctx *c, struct sgx_surface *s)
 	pbe[1] = (s->h - 1) << 16 | (s->w - 1);		/* clip max [C] */
 	pbe[2] = ((s->stride - 1) >> 1) << 16 | 0x8000;	/* stride/2-1 [C]; b15: not the scanout buffer [D] */
 	pbe[3] = s->color.va & ~3u;			/* address [D] */
+	if (getenv("SGXGEN_PBE_ADDR"))			/* tests: write the pixels elsewhere */
+		pbe[3] = (uint32_t)strtoul(getenv("SGXGEN_PBE_ADDR"), NULL, 0) & ~3u;
 	side = 0x200 | 0 /* BGRA8888 */ | 0x400 /* dither */;
 	p.p[0] = 0;					/* phas.i #0, #0 [wait=7] */
 	p.p[1] = 0xfa440700;

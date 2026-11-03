@@ -19,6 +19,9 @@
  * idle   (runtime PM) the device autosuspends once idle; a render, a mixed
  *        submit and a blit from suspended each resume it and are right.
  *
+ * -E runs only E1's second half: a frame whose PBE target is a code object
+ * (mapped read-only). Exit 0 if the object is unchanged afterwards.
+ *
  * -H skips the hang case. Exit 0 when everything is right; 77 when there is
  * no powervr_sgx device.
  */
@@ -145,9 +148,9 @@ struct xjob {
 	struct drm_powervr_sgx_job job;
 };
 
-static void transfer_job(struct xjob *x, const struct sgx_surface *s, uint32_t wait)
+static void transfer_job_va(struct xjob *x, uint32_t src_va, uint32_t src_pitch, uint32_t wait)
 {
-	struct sgxtex_surface src = { s->color.va, W, H, s->stride, SGXTEX_LAYOUT_STRIDED, SGXTEX_FMT_BGRA8888,
+	struct sgxtex_surface src = { src_va, W, H, src_pitch, SGXTEX_LAYOUT_STRIDED, SGXTEX_FMT_BGRA8888,
 				      SGXPBE_FMT_BGRA8888 };
 	struct sgxtex_surface dst = { copy.va, W, H, W, SGXTEX_LAYOUT_STRIDED, SGXTEX_FMT_BGRA8888,
 				      SGXPBE_FMT_BGRA8888 };
@@ -183,6 +186,11 @@ static void transfer_job(struct xjob *x, const struct sgx_surface *s, uint32_t w
 		.cmd_stream = (uintptr_t)x->s, .cmd_stream_len = 48,
 		.sync_ops = OBJ_ARRAY(n, x->op),
 	};
+}
+
+static void transfer_job(struct xjob *x, const struct sgx_surface *s, uint32_t wait)
+{
+	transfer_job_va(x, s->color.va, s->stride, wait);
 }
 
 static int submit(struct drm_powervr_sgx_job *j, uint32_t n)
@@ -471,19 +479,72 @@ static int idle(struct rc *a, unsigned f)
 	return !bad;
 }
 
+/*
+ * E1, second half (DRM-DRIVER.md section 6): can the PBE write into a code
+ * object, which is mapped read-only? A frame's end-of-tile program is pointed
+ * at a code object holding a known pattern of valid instructions; afterwards
+ * a transfer copies the object out and it is compared with the pattern.
+ */
+static int pbe_into_code(void)
+{
+	struct drm_powervr_sgx_ioctl_get_context_state_args s0, s1;
+	struct sgx_bo code;
+	struct xjob x;
+	struct drm_syncobj_array rs = { .handles = (uintptr_t)&xsync, .count_handles = 1 };
+	struct rc r;
+	char addr[16];
+	int e, changed = 0, pixels = 0;
+
+	sgx_bo_alloc(&dev, &code, HEAP_USSE_PIXEL, 0, W * H * 4, 0x1000);
+	for (uint32_t i = 0; i < W * H; i++)	/* fmad words: hi 0, any lo */
+		code.map[i] = i & 1 ? 0 : 0x12340000 + i;
+	if ((e = sgx_bo_upload(&dev, &code, 0, W * H * 4)))
+		die("UPLOAD_CODE", e);
+
+	r.c = sgx_ctx_create(&dev);
+	snprintf(addr, sizeof(addr), "%#x", code.va);
+	setenv("SGXGEN_PBE_ADDR", addr, 1);
+	r.s = sgx_surface_create(r.c, W, H, 0);
+	unsetenv("SGXGEN_PBE_ADDR");
+	r.vs = sgx_shader_builtin(r.c, SGX_VS_XY);
+	r.fs = sgx_shader_builtin(r.c, SGX_FS_UNIFORM);
+	s0 = state(r.c->ctx);
+	record(&r, 0);
+	e = sgx_flush(r.c, 6000);
+	s1 = state(r.c->ctx);
+	printf("  PBE at code object %#x: wait %d, context state %u, resets %u -> %u\n", code.va, e,
+	       s1.state, s0.reset_count, s1.reset_count);
+
+	memset(copy.map, 0, W * H * 4);
+	xioctl(DRM_IOCTL_SYNCOBJ_RESET, &rs);
+	transfer_job_va(&x, code.va, W, 0);
+	if ((e = submit(&x.job, 1)) || (e = wait_syncobj(xsync, 4000)))
+		die("copy of the code object", e);
+	for (uint32_t i = 0; i < W * H; i++) {
+		changed += copy.map[i] != code.map[i];
+		pixels += copy.map[i] == tri_colour(0) || copy.map[i] == want_bg;
+	}
+	printf("  code object afterwards: %d of %d words changed, %d look like the frame's pixels\n",
+	       changed, W * H, pixels);
+	sgx_surface_destroy(r.c, r.s);
+	sgx_ctx_destroy(r.c);
+	return !changed;
+}
+
 int main(int argc, char **argv)
 {
 	unsigned rounds = 1, bad = 0, f = 0;
-	int opt, e, do_hang = 1;
+	int opt, e, do_hang = 1, e1b = 0;
 	struct rc a;
 
-	while ((opt = getopt(argc, argv, "vn:H")) != -1) {
+	while ((opt = getopt(argc, argv, "vn:HE")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
+		case 'E': e1b = 1; break;
 		case 'n': rounds = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'H': do_hang = 0; break;
 		default:
-			fprintf(stderr, "usage: powervr_sgx_hang [-v] [-n rounds] [-H]\n");
+			fprintf(stderr, "usage: powervr_sgx_hang [-v] [-n rounds] [-H] [-E]\n");
 			return 2;
 		}
 	}
@@ -493,6 +554,12 @@ int main(int argc, char **argv)
 	}
 	dev.verbose = verbose;
 	transfer_setup();
+	if (e1b) {
+		e = pbe_into_code();
+		printf("%s\n", e ? "PBE write into a code object: stopped" : "PBE write into a code object: LANDED");
+		sgx_dev_close(&dev);
+		return e ? 0 : 1;
+	}
 	rc_create(&a);
 
 	for (unsigned r = 0; r < rounds; r++, f += 2) {
