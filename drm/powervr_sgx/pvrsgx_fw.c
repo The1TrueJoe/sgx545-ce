@@ -27,6 +27,7 @@
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_vm.h"
 
@@ -383,13 +384,13 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 }
 
 /* Upload and patch the microkernel, assemble its entry programs, fill the signature lists. */
-static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
+static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 *t;
 	int err;
 
-	memcpy(f->cpu[PVRSGX_FW_UKERNEL], fw->data, UKERNEL_SIZE);
+	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, UKERNEL_SIZE);
 
 	t = fw_words(sdev, PVRSGX_FW_TASIG);
 	t[0] = ARRAY_SIZE(ta_sig);
@@ -456,7 +457,8 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		f->cpu[b] = (u8 *)km->cpu + layout[b].offset;
 	}
 
-	err = fw_build(sdev, fw);
+	f->image = kmemdup(fw->data, UKERNEL_SIZE, GFP_KERNEL);
+	err = f->image ? fw_build(sdev, f->image) : -ENOMEM;
 out:
 	release_firmware(fw);
 	return err;
@@ -464,6 +466,8 @@ out:
 
 void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 {
+	kfree(sdev->fw.image);
+	sdev->fw.image = NULL;
 	pvrsgx_kmem_free(sdev, &sdev->fw.code);
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
 }
@@ -568,6 +572,20 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	bool first = !sdev->fw_running && !sdev->reset_count;
 	int err;
 
+	/*
+	 * A restart starts from a fresh image and empty arenas: the microkernel
+	 * changes both as it runs, and a module reload (which recovers) is
+	 * exactly this.
+	 */
+	if (!first) {
+		memset(sdev->fw.data.cpu, 0, sdev->fw.data.size);
+		memset(sdev->fw.code.cpu, 0, sdev->fw.code.size);
+		err = fw_build(sdev, sdev->fw.image);
+		if (err)
+			return err;
+		/* Nothing the old run pointed at matters any more. */
+		pvrsgx_kobj_reap(sdev, U64_MAX);
+	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
 	hc[HOSTCTL_HWR_SAMPLE_RATE] = UKERNEL_TIMER_HZ / HWR_CHECK_HZ;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = core_clock / UKERNEL_TIMER_HZ;

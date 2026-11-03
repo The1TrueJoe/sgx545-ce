@@ -88,6 +88,8 @@ struct pvrsgx_fw {
 	u32 interface;
 	/** @ddk: The DDK's microkernel, which runs under the job's directory. */
 	bool ddk;
+	/** @image: The microkernel as loaded, for restarts. */
+	u8 *image;
 	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
 	u32 ddk_version, ddk_build;
 };

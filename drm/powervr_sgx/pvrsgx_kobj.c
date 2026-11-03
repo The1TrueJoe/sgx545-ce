@@ -6,10 +6,19 @@
  * datasets' firmware structures, parameter buffers, free lists, region headers.
  *
  * Releasing one does not free it at once. The microkernel keeps pointers to
- * the last render's structures and reads them when the next TA starts
- * (docs/GEN.md, "Layout"; docs/UAPI.md 7.5), so a released object waits until
- * a render submitted after its release has finished.
+ * earlier renders' structures (docs/GEN.md, "Layout"; docs/UAPI.md 7.5): a
+ * second context hangs its third render once the first context's structures
+ * are gone (EA1, 2026-11-03). Until the driver sends the firmware's cleanup
+ * commands (G15), released objects stay until the firmware restarts or the
+ * device goes away; reap_after_render frees them once a later render is done.
  */
+
+#include <linux/module.h>
+
+static bool reap_after_render;
+module_param(reap_after_render, bool, 0444);
+MODULE_PARM_DESC(reap_after_render,
+		 "Free released kernel objects once a later render is done (debug; default: at firmware restart)");
 
 #include <linux/mm.h>
 #include <linux/slab.h>
@@ -113,6 +122,9 @@ void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 /* Free what was released before a render that has now finished. */
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 {
+	if (!reap_after_render && renders_done != U64_MAX)
+		return;
+
 	struct pvrsgx_kobj *o, *tmp;
 	LIST_HEAD(dead);
 
