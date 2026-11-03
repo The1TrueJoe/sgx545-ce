@@ -269,10 +269,9 @@ not a constant (confirmed against a capture with the textures session; word 4,
 the depth/stencil block, and word 16 are 0 in every capture seen). The
 transfer completes through the same 3D-end event as a render; the microkernel
 tells the two apart by a transfer-in-flight marker (control block +0x54) and
-routes a transfer to `xfer_done`. That handler signals the destination sync
-(the write-ops-complete value at command word 0x16c written to the sync address
-at word 0x168, in `SGXMKIF_TRANSFERCMD_SHARED` — so the client sees the blit
-done), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
+routes a transfer to `xfer_done`. That handler writes the status value at
+command word 0x16c to the address at word 0x168 (in `SGXMKIF_TRANSFERCMD_SHARED`
+at +0xac, that is `sCtlStatusInfo[0]`; the count is at 0x164), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
 the context's CCB past the 0x1c0-byte command, and raises the host interrupt.
 The transfer also updates two sync-heap objects named by the kick's
 sync-handle list (not the shared command); reproducing those is the remaining
@@ -738,13 +737,14 @@ match the DDK. Its one hardware unknown is whether the bare-`DOUTU` context
 allocates that temp, settled by a one-word sentinel on the next slot.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
-- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
-  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
-  0x16c), but a transfer also sets two sync-heap objects whose addresses come
-- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
-  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
-  0x16c), but a transfer also sets two sync-heap objects whose addresses come
-  from the kick's sync-handle list, not the command; those are not reproduced
-  yet, so a dependent job waiting on them would stall.
+- **A transfer's syncs are not all updated.** `xfer_done` writes the status
+  word (`sCtlStatusInfo[0]`, command words 0x168/0x16c), but not the
+  destination and source syncs the shared command lists: `ui32NumDstSyncs` at
+  0x130, `asDstSyncs[0]` at 0x134 (read-ops pending, read-ops-complete address,
+  write-ops pending, write-ops-complete address), `ui32NumSrcSyncs` at 0xac and
+  `asSrcSyncs[8]` from 0xb0. The DDK microkernel sets the destination's
+  write-ops-complete to its pending value plus one, and `powervr_sgx` completes a
+  transfer job on exactly that (EA1, log `2026-11-03-0405-drm-transfers`), so
+  the open microkernel has to do the same.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).

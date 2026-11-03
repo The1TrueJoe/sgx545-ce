@@ -24,7 +24,7 @@ gma500 auxiliary device first.
 | `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL and render jobs |
 | render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **frames render** at 256x256 and 720x480, one-kick and two-kick scenes, any number of processes, and up to three render contexts in one VM sharing its PB (log `2026-11-03-0355-drm-shared-pb-restart`); the TA-flag 0x10 change was not shown to fix anything |
 | `DEV_QUERY` | written |
-| transfer jobs | not started (HW transfer context, TEX.md 10) |
+| transfer jobs | written; **blits pixel-exact** (copy, upload and readback, box-filtered mip; 360 in a row, interleaved with another process's renders; log `2026-11-03-0405-drm-transfers`) |
 | shader validator (D9) | hooks only; design in section 6 |
 | runtime PM, devcoredump | not started |
 
@@ -158,6 +158,12 @@ VM so far before it lets go of the pages.
   command, so a job is complete when the CCB read offset has passed its command. The
   check runs from the SW_EVENT interrupt thread and from a poll every jiffy while jobs are
   out. Render jobs will complete on the 3D's end-of-render instead (UKERNEL.md 5).
+- A transfer job is one `TRANSFER` command (type 1) for the context's HW transfer
+  context. The kernel writes the 0x1c0-byte transfer command into the context's ring
+  from the `CMD_TRANSFER` stream (UAPI.md 3.5), with one destination sync of its own in
+  `SGXMKIF_TRANSFERCMD_SHARED`. The job is done when the microkernel sets that sync's
+  write-ops-complete to the pending value plus one, which raises SW_EVENT too. No source
+  syncs: ordering against other jobs is the scheduler's.
 - A NULL job is a `PROCESS_QUEUES` command: no GPU work, ordered with the context's other
   jobs. It exists to test the fence, syncobj and scheduler plumbing before the streams.
 - Timeout (2 s): the context is guilty, everything on the GPU fails (`-ETIME` for the
