@@ -1000,6 +1000,14 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	dump(sb, "hwsync_access", s->hwsync_access, 0, 4);
 	dump(sb, "done", s->done, 0, SYNC_DATA_BYTES);
 	dump(sb, "bgblock", s->bgblock, 0, 0x60);
+	/* what the TA wrote for the 3D */
+	dump(sb, "rgn0", s->rgn[0], 0, 0x60);
+	dump(sb, "rgn1", s->rgn[1], 0, 0x60);
+	dump(sb, "tailptr", s->tailptr, 0, 0x40);
+	dump(sb, "ta40", s->ta40, 0, 0x40);
+	dump(sb, "ta50", s->ta50, 0, 0x50);
+	dump(sb, "ta88[0]", s->ta88[0], 0, 0x88);
+	dump(sb, "ta88[1]", s->ta88[1], 0, 0x88);
 	seq_buf_printf(sb, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
 		       kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
 		       kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));

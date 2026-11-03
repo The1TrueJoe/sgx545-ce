@@ -1146,16 +1146,7 @@ static uint32_t vdm_end(struct sgx_ctx *c)
 	return at;
 }
 
-#ifdef SGXGEN_DRM
-static int64_t now_ns(void)
-{
-	struct timespec ts;
-
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return ts.tv_sec * 1000000000ll + ts.tv_nsec;
-}
-
-/* SGXGEN_DUMP_PROGS: the 3D's client programs, word by word (with debugfs render_before/render). */
+/* SGXGEN_DUMP_PROGS: the 3D's client programs, word by word (DDK path: with SGXGEN_DUMP/_AFTER; DRM path: with debugfs render_before/render). */
 static void dump_prog(struct sgx_ctx *c, const char *name, uint32_t va, uint32_t bytes)
 {
 	const struct sgx_ring *rs[] = { &c->pds_pix, &c->usse_pix };
@@ -1198,6 +1189,15 @@ static void dump_progs(struct sgx_ctx *c, const char *when, unsigned frame)
  * kernel marks first and last (it starts the 3D). The client's part of the
  * command is two streams (docs/UAPI.md section 3).
  */
+#ifdef SGXGEN_DRM
+static int64_t now_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000000000ll + ts.tv_nsec;
+}
+
 void sgx_render_job(struct sgx_ctx *c, struct sgx_job *j)
 {
 	struct sgx_surface *s = c->fb;
@@ -1409,6 +1409,15 @@ static void dump_after(struct sgx_ctx *c)
 	dump_words("entword0", s->entword[0].va, s->entword[0].map, 4);
 	dump_words("entword1", s->entword[1].va, s->entword[1].map, 4);
 	dump_words("hwsync", s->hwsync.va, s->hwsync.map, 0x28);
+	dump_words("bgblock", s->bgblock.va, s->bgblock.map, 0x60);
+	/* what the TA wrote for the 3D: region headers, tail pointers, its state blocks */
+	for (int i = 0; i < 2; i++)
+		dump_words(i ? "rgn1" : "rgn0", s->rgn[i].va, s->rgn[i].map, 0x60);
+	dump_words("tailptr", s->tailptr.va, s->tailptr.map, 0x40);
+	dump_words("ta40", s->ta40.va, s->ta40.map, 0x40);
+	dump_words("ta50", s->ta50.va, s->ta50.map, 0x50);
+	dump_words("ta88[0]", s->ta88[0].va, s->ta88[0].map, 0x88);
+	dump_words("ta88[1]", s->ta88[1].va, s->ta88[1].map, 0x88);
 }
 
 int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
@@ -1419,6 +1428,7 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 
 	vdm_end(c);
 	k2 = vdm_end(c);
+	dump_progs(c, "before", c->frames + 1);
 	ta_command(c, c->vdm_start, 0);
 	kick(c, 0);
 	nanosleep(&ts, NULL);
@@ -1435,6 +1445,7 @@ int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms)
 		fprintf(stderr, "sgxgen: after kick 2: PB pages in use %#x, RT data +4 %#x, frame word %#x\n",
 			c->pbdesc.map[5], c->fb->rtdata.map[1], c->fb->rtword.map[0]);
 	dump_after(c);
+	dump_progs(c, "after", c->frames);
 	return e;
 }
 #endif
