@@ -205,6 +205,7 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
       return false;
    switch (target) {
    case PIPE_BUFFER:
+   case PIPE_TEXTURE_1D:      /* a 2D texture a texel high, sampled on that row (sgx545_program.c) */
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_RECT:
    case PIPE_TEXTURE_CUBE:
