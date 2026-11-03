@@ -21,12 +21,16 @@ gma500 auxiliary device first.
 | MMU: firmware directory, per-VM directories, idle directory | written |
 | GEM shmem, `GET_BO_MMAP_OFFSET`, PRIME import | written |
 | VM contexts on `drm_gpuvm`, `VM_MAP`/`VM_UNMAP` | written |
-| `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL jobs only |
+| `drm_sched`, contexts, `SUBMIT_JOBS` with syncobjs (binary and timeline) and BO refs | written; NULL and render jobs |
+| render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **first frames rendered** (two-kick scenes, 10/10 at 256x256); 720x480 hangs at frame 2 |
 | `DEV_QUERY` | written |
-| render and transfer streams | waiting on the uAPI conversion (D2) |
-| firmware half of contexts (HW render/transfer context, ring, PB, RT data) | not started; STATE.md 6 |
+| transfer jobs | not started (HW transfer context, TEX.md 10) |
 | shader validator (D9) | hooks only; design in section 6 |
 | runtime PM, devcoredump | not started |
+
+First frames (2026-11-03, `docs/log/entries/2026-11-03-0210-drm-first-frame.md`): a clear and a
+triangle from client streams, pixels exact, 10 of 10 frames at 256x256, completion from the
+render-done interrupt.
 
 On the EA1 (2026-11-03, `docs/log/entries/2026-11-03-0100-drm-first-boot.md`): the driver
 probes, starts the DDK microkernel from the kernel, passes the `GETMISCINFO` check, answers
