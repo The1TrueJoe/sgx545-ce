@@ -676,6 +676,22 @@ def build(a):
     a.i("ld.a.d r3, r2, #1 [moe]")                  # client read offset (bytes)
     a.i("wdf")
     a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = command base (bytes)
+    # advance the client CCB read offset past this command so the NEXT kick reads
+    # its own command, not this one again. The read offset (client CCB control
+    # word 1, bytes) is the microkernel's to advance — the client advances the
+    # write offset. Without this, every TA kick re-read kick 1's command: EA1 HW
+    # 2026-11-03, do_ta ran twice but both reads landed on the 0x71 first kick
+    # (T3C-D0 sentinel: count 2, flag 1), so kick 2's 0x62 terminate was never
+    # seen, the TA locked up, and do_3d never ran. do_ta has already taken the
+    # command's pointers; the TA reads the (separate) VDM stream, not the command,
+    # so freeing the slot now is safe. (Single frame: no wrap; a multi-frame CCB
+    # must mask by its size.)
+    a.i("ld.a.d r4, r9, #0 [moe]")                  # command size (cmd+0x00, bytes)
+    a.i("wdf")
+    a.i("imae r3, r4, #1, r3 [t2=u32]")             # read offset += command size
+    a.i("st.a.d r2, #1, r3 [moe]")                  # client CCB control word 1
+    a.i("idf")
+    a.i("wdf")
     # first-kick flag: TA command +0x04 bit 0 is bFirstKickOrResume (0x71), and
     # is clear on the render / bLastInScene kick (0x62). A scene's first kick does
     # the full per-scene setup (TA soft reset, PB descriptor, DPM free-list + state
