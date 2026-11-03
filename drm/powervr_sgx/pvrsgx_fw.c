@@ -20,7 +20,7 @@
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/seq_file.h>
+#include <linux/seq_buf.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -130,14 +130,14 @@ static u32 *fw_words(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 }
 
 /* The TA3D control block as the microkernel left it (in-flight slot, PB state). */
-void pvrsgx_fw_debugfs_ta3dctl(struct seq_file *m, struct pvrsgx_device *sdev)
+void pvrsgx_fw_dump_ta3dctl(struct seq_buf *sb, struct pvrsgx_device *sdev)
 {
 	const u32 *w = fw_words(sdev, PVRSGX_FW_TA3DCTL);
 
-	seq_printf(m, "ta3dctl @ 0x%08x:", sdev->fw.addr[PVRSGX_FW_TA3DCTL]);
+	seq_buf_printf(sb, "ta3dctl @ 0x%08x:", sdev->fw.addr[PVRSGX_FW_TA3DCTL]);
 	for (u32 i = 0; i < layout[PVRSGX_FW_TA3DCTL].size / 4; i++)
-		seq_printf(m, "%s%08x", i % 8 ? " " : "\n  ", READ_ONCE(w[i]));
-	seq_puts(m, "\n");
+		seq_buf_printf(sb, "%s%08x", i % 8 ? " " : "\n  ", READ_ONCE(w[i]));
+	seq_buf_puts(sb, "\n");
 }
 
 u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word)

@@ -6,7 +6,9 @@
  *
  * -p makes the surface y-up, as an EGL pbuffer (rows bottom first in -o).
  * -R N draws the whole frame N times on the same context and surface
- * (SGXGEN_DUMP_AFTER=1 dumps the microkernel-written structures after each).
+ * (SGXGEN_DUMP_AFTER=1 dumps the microkernel-written structures after each, with
+ * the region headers, tail pointers and TA blocks; SGXGEN_DUMP_PROGS=1 the 3D's
+ * client programs before and after).
  *
  * The frame starts with a clear (-k, default 0,0,0.5,1: the probe's), then
  * runs the ops in order:

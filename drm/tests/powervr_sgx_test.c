@@ -645,6 +645,62 @@ static void t_submit_invalid(int fd)
 	assert_eq(syncobj_wait(fd, s, 0), -EINVAL);
 }
 
+static void t_context_state_invalid(int fd)
+{
+	struct drm_powervr_sgx_ioctl_get_context_state_args s = {
+		.handle = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER),
+	};
+
+	s._padding_c = 1;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+	s._padding_c = 0;
+	s.handle = 0xdead;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+}
+
+/* Handles are per file: another open file's context, syncobj and BO are not found. */
+static void t_submit_other_file(int fd)
+{
+	int fd2 = open_dev();
+	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER), ctx2, s2, bo2;
+	struct drm_powervr_sgx_sync_op op;
+	struct drm_powervr_sgx_bo_ref ref;
+	struct drm_powervr_sgx_job j;
+
+	/* fd2's handles above any of fd's */
+	for (int i = 0; i < 4; i++) {
+		create_ctx(fd2, create_vm(fd2), DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+		syncobj(fd2);
+		create_bo(fd2, PAGE, 0);
+	}
+	ctx2 = create_ctx(fd2, create_vm(fd2), DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	s2 = syncobj(fd2);
+	bo2 = create_bo(fd2, PAGE, 0);
+	op = (struct drm_powervr_sgx_sync_op)SIGNAL(s2);
+	ref = (struct drm_powervr_sgx_bo_ref){ .handle = bo2 };
+
+	j = null_job(ctx2, NULL, 0);
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	j = null_job(ctx, &op, 1);
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	j = null_job(ctx, NULL, 0);
+	j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &ref);
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	close(fd2);
+}
+
+/* A wait on a syncobj that was never signalled has no fence to wait for. */
+static void t_submit_wait_unsignalled(int fd)
+{
+	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	uint32_t s = syncobj(fd), done = syncobj(fd);
+	struct drm_powervr_sgx_sync_op op[] = { WAIT(s), SIGNAL(done) };
+	struct drm_powervr_sgx_job j = null_job(ctx, op, 2);
+
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	assert_eq(syncobj_wait(fd, done, 0), -EINVAL);
+}
+
 /* RT datasets */
 
 static uint32_t create_rtds(int fd, uint32_t ctx, uint32_t w, uint32_t h, int *err)
@@ -880,6 +936,9 @@ static const struct {
 	{ "submit-null-job-bo-ref", t_null_job_bo_ref },
 	{ "submit-null-job-vm-destroyed", t_null_job_vm_destroyed },
 	{ "submit-invalid", t_submit_invalid },
+	{ "context-state-invalid", t_context_state_invalid },
+	{ "submit-other-file", t_submit_other_file },
+	{ "submit-wait-unsignalled", t_submit_wait_unsignalled },
 	{ "rt-dataset-create-destroy", t_rtds_create_destroy },
 	{ "rt-dataset-invalid", t_rtds_invalid },
 	{ "submit-render-invalid", t_submit_render_invalid },

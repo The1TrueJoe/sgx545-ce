@@ -157,6 +157,8 @@ struct pvrsgx_device {
 	struct mutex last_lock;
 	struct pvrsgx_rt_dataset *last_rtds;
 	u32 last_cmd_off;
+	/** @render_snap: Text dump taken as a last kick was written (debugfs). */
+	char *render_snap;
 
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
