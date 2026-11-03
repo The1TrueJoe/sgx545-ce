@@ -28,12 +28,15 @@ struct pvrsgx_pb {
 	u32 pages;
 	/** @base: The 3D request base, PB & 0xfff00000. */
 	u32 base;
+	/** @reset_seen: The device reset count it was last set up for. */
+	u32 reset_seen;
 };
 
 struct pvrsgx_render_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
 	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
+	u32 reset_seen;
 };
 
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
@@ -54,6 +57,7 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2], *bgblock;
 	/** @frames: Renders into this dataset so far. */
 	u32 frames;
+	u32 reset_seen;
 };
 
 #define PVRSGX_MAX_TA_KICKS	2
@@ -70,6 +74,7 @@ struct pvrsgx_render_job {
 struct pvrsgx_transfer_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *done;
 	u32 ccb_woff;
+	u32 reset_seen;
 };
 
 struct pvrsgx_transfer_job {
