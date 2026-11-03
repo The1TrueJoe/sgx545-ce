@@ -25,7 +25,7 @@ gma500 auxiliary device first.
 | render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **frames render** at 256x256 and 720x480, one-kick and two-kick scenes, any number of processes, and up to three render contexts in one VM sharing its PB (log `2026-11-03-0355-drm-shared-pb-restart`); the TA-flag 0x10 change was not shown to fix anything |
 | `DEV_QUERY` | written |
 | transfer jobs | written; **blits pixel-exact** (copy, upload and readback, box-filtered mip; 360 in a row, interleaved with another process's renders; log `2026-11-03-0405-drm-transfers`) |
-| shader validator (D9) | hooks only; design in section 6 |
+| shader validator (D9) | written; HW-verified on the EA3: every frame, blit and hang test runs its shaders from validated read-only code objects, and the PBE can't write into one (log `2026-11-03-0730-drm-d9-validator`) |
 | devcoredump on a hang | written; HW-verified (log `2026-11-03-0600-drm-rearm-bisect`) |
 | runtime PM | written; HW-verified on the EA3 (log `2026-11-03-0630-drm-runtime-pm-ea3`), off by default (`runtime_pm=1`) until the EA1 has run it; the first try froze the EA1 (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
 
@@ -232,40 +232,50 @@ the PDS program, VDM stream or state word says. This is what makes validation fe
 no instruction-level check for P1, because every DOUTU target is either in a USSE heap or
 faults.
 
-**The rules.**
+**The rules, as implemented** (`pvrsgx_validate.c`; uAPI in UAPI.md section 2 and D12).
 
-1. Code objects. `CREATE_BO` gets a `CODE` flag. A code object has no CPU mapping and no
-   PRIME export. Its contents arrive through a new upload ioctl that copies from user
-   memory into the object and validates it in the kernel. An object can be uploaded once,
-   or again only while no VM maps it.
-2. `VM_MAP` into a USSE heap accepts only code objects, and a code object can be mapped
-   only into a USSE heap (`pvrsgx_validate_vm_map`).
-3. Validation scans every 8-byte-aligned word of the uploaded range, not just the paths a
-   program's branches reach: a DOUTU can enter at any instruction. A word fails if its
-   class is the special class with the "other" sub-class and the op is `ldr` or `str`.
-   Anything the decoder does not recognise also fails, so a later ISA discovery cannot
-   open a hole. The scan is linear and allocation-free.
-4. The GPU must not be able to write a code object once it is validated. Client tasks
-   (`st`), the PBE and the TA could all target a USSE heap address. Code pages are mapped
-   with the PTE `READONLY` bit. **The BIF enforces it for a client task's `st`** (E1): the
-   store faults instead of landing, and the job is lost to a reset, which a client can
-   cause anyway. A PBE write into a code page is the case still to test (E1, second
-   half). Only if that one lands is the fallback needed: keeping code objects out of
-   every directory a client write can use, which depends on the requestor banks (G2,
-   experiment E2).
+1. Code objects. `CREATE_BO` takes `DRM_POWERVR_SGX_BO_CODE`. A code object has no CPU
+   mapping (with `ALLOW_CPU_ACCESS` it is `-EINVAL`) and PRIME export refuses it. Its
+   contents arrive through `UPLOAD_CODE`, which copies from user memory and validates
+   in the kernel. While a VM maps the object, an upload may only write past the end of
+   every earlier one (`-EBUSY` otherwise), so code the GPU may be running never
+   changes; the new bytes were zeros, which decode as a harmless `fmad`. Once no VM
+   maps it, anywhere again. Uploads and `VM_MAP` serialise on the object's reservation
+   lock.
+2. `VM_MAP` into a USSE heap accepts only code objects, and a code object maps only into
+   a USSE heap (`pvrsgx_validate_vm_map`).
+3. Validation scans every 8-byte word of the upload, not just the paths a program's
+   branches reach: a DOUTU can enter at any instruction. The table is one (mask,
+   match) pair per form, generated from the clean-room isaspec description
+   (`mesa/src/sgx545/isa/sgx545.xml`) by `drm/tools/gen_usse_table.py`. That gives 109
+   forms, and the generator refuses any two that could match one word. CI checks the
+   committed table is current. A word fails if it matches no form (so a later ISA
+   discovery can't open a hole), or if it is `ldr` or `str` (P1), `setl` or `savl` (link
+   address from a register, so `lapc` could jump anywhere; the GLES compiler never emits
+   them), or a `br` whose target, this instruction plus the signed 18-bit offset, is
+   outside the object. `ba`, `phas.i` and `lapc` are absolute from the code base the task
+   runs from and can only reach the USSE heaps or the unassigned gaps after them (UAPI.md
+   section 5), which fault. The scan is linear and allocation-free; on a failure
+   nothing is copied and `bad_offset` names the first bad instruction.
+4. The GPU can't write a code object once it is validated: code objects are mapped with
+   the PTE `READONLY` bit. **The BIF enforces it for a client task's `st` and for the
+   PBE** (E1, both halves): each faults instead of landing, and the job is lost to a
+   reset, which a client can cause anyway.
 5. `pvrsgx_validate_job` checks nothing about code: by rule 2 and section 4 a job can only
-   run validated code. It stays as the place where stream fields that name programs
-   (pixel-event PDS, background PDS) are checked against the PDS heaps once streams exist.
+   run validated code. PDS programs aren't scanned: they reach USSE code only through
+   DOUTU's code base, 0-13 cover exactly the USSE heaps, and 14 and 15 point at nothing
+   in a client VM with the open microkernel (under the DDK microkernel base 15 is the
+   kernel code heap, P3).
 
 **Cost.** Mesa uploads a USSE program once per compiled shader, so the scan is off the
 draw path. Per-draw PDS programs (in the PDS heaps) are not scanned. The winsys has to
 upload code through the ioctl instead of writing a mapped buffer: a change for M3.
 
-**Experiments before the validator ships.**
+**Experiments behind the validator.**
 
 | | question | test |
 |---|---|---|
-| E1 | Does a PTE with `READONLY` stop a client task's `st`, and a PBE write? | **Answered for `st` (EA1, 2026-11-03): yes, by a page fault.** A fragment task's `st` to a page the DDK maps `READONLY` raised a BIF fault at that page, did not land, and the stalled requestor was recovered by HWR; the read-write control did not fault (log `2026-11-03-0115-e1-pte-readonly`). The PBE write is still untested |
+| E1 | Does a PTE with `READONLY` stop a client task's `st`, and a PBE write? | **Yes, both, by a page fault.** `st` (EA1, 2026-11-03): a fragment task's `st` to a page the DDK maps `READONLY` raised a BIF fault at that page, did not land, and the stalled requestor was recovered by HWR (log `2026-11-03-0115-e1-pte-readonly`). PBE (EA3, 2026-11-03, `powervr_sgx_hang -E`): a frame whose end-of-tile program points the PBE at a read-only code object faulted at its first page (`BIF_FAULT` 0x37021002), the job was reset, and all 16384 words of the object read back unchanged (log `2026-11-03-0730-drm-d9-validator`) |
 | E2 | Which requestor does a USSE instruction fetch use? | Point list 0 and the EDM's list at directories that differ only in the USSE heap, run a task, see which code ran |
 | E3 | Do `ldr`/`str` have other encodings (another class, a DRC form) that reach the register file? | ISA.md coverage of the special class; a hardware check that a fuzzed word outside the known forms cannot read `CORE_ID` |
 

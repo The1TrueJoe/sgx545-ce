@@ -1,0 +1,76 @@
+# powervr_sgx D9 shader validator on the EA3 (ea3-v2), RAM boot of b6d98a3 (tests: cd78c67), 2026-11-03 ~07:30 UTC, DDK microkernel
+# uAPI suite (38 tests incl. code-bo, upload-code-*), frames/blits/hang with every shader through UPLOAD_CODE into read-only code objects, then E1b (powervr_sgx_hang -E)
+
+HELD-BY-US
+code-bo
+upload-code-corpus
+  244 corpus instructions accepted
+upload-code-reject
+upload-code-invalid
+upload-code-mapped
+submit-other-vm
+38/38 passed
+
+# ---- frames (2 contexts; one kick; 720x480), blits, powervr_sgx_hang -n 2
+frame 19: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+20/20 frames right
+5/5 frames right
+3/3 frames right
+mipl  done, 1024/1024 pixels right
+all blits right
+round 0: render right
+round 0: mixed render + transfer right
+  no runtime PM
+round 0: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+  devcoredump: 27800 bytes
+round 0: hang recovery right
+round 1: render right
+round 1: mixed render + transfer right
+  no runtime PM
+round 1: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 1 -> 2
+  devcoredump: 27795 bytes
+round 1: hang recovery right
+all right
+[   50.480600] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 707, consumed 707); resetting
+[   52.656629] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 16, consumed 16); resetting
+
+# ---- E1b: a frame whose PBE target is a read-only code object
+  PBE at code object 0x37021000: wait 0, context state 1, resets 2 -> 3
+  code object afterwards: 0 of 16384 words changed, 0 look like the frame's pixels
+PBE write into a code object: stopped
+exit 0
+[   58.928715] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 11, consumed 11); resetting
+[   58.960708] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   58.966095] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+firmware running: 1 lost: 0 resets: 3 irqs: 158
+kernel PD 0x04cea000 idle PD 0x0132a000
+3/3 frames right
+
+# ---- its devcoredump, registers
+powervr_sgx hang: render job, ccb 11, reset 3
+firmware running: 1 lost: 0 resets: 2 irqs: 157
+kernel PD 0x04cea000 idle PD 0x0132a000
+ccb wo 11 ro 11 issued 11 consumed 11
+hostctl init 0x1 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+powered: 1
+CLKGATECTL           0x0000 0x0000a6aa
+CLKGATECTL2          0x0004 0x00aaaaaa
+CLKGATESTATUS        0x0008 0x000fffa7
+CORE_ID              0x001c 0x01150000
+CORE_REVISION        0x0020 0x0001000e
+SOFT_RESET           0x0080 0x00000000
+EVENT_STATUS         0x012c 0x20000000
+EVENT_STATUS2        0x0118 0x00000480
+EVENT_HOST_ENABLE    0x0130 0x00004000
+EVENT_HOST_ENABLE2   0x0110 0x00000000
+BIF_CTRL             0x0c00 0x00000000
+BIF_INT_STAT         0x0c04 0x00080020
+BIF_FAULT            0x0c08 0x37021002
+BIF_BANK0            0x0c78 0x0000202f
+BIF_DIR_LIST_BASE0   0x0c84 0x0132a000
+BIF_DIR_LIST_BASE15  0x0c70 0x04cea000
+EDM_TASK_REG0        0x0b14 0x0001109f
+EDM_TASK_REG1        0x0b20 0x00010000
+hostctl @ 0x32003100:
