@@ -1,0 +1,16 @@
+=== wait for box ===
+=== push uk-op100 ===
+Warning: Permanently added '10.0.0.113' (ED25519) to the list of known hosts.
+Warning: Permanently added '10.0.0.113' (ED25519) to the list of known hosts.
+local 4e5a64d26bca176b0b6136008c519ed4 / remote 4e5a64d26bca176b0b6136008c519ed4
+boot 1: srvinit: srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d28000)
+...RR...RR  -> 4/10 rendered
+14ca64770d29f32c40ee512df66f0ef7  /tmp/f1.bin
+boot 2: srvinit: srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d68000)
+....R.RR..  -> 3/10 rendered
+14ca64770d29f32c40ee512df66f0ef7  /tmp/f1.bin
+boot 3: srvinit: srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d6a000)
+....R.R.R.  -> 3/10 rendered
+14ca64770d29f32c40ee512df66f0ef7  /tmp/f1.bin
+===== op100: 10 / 30 frames rendered (baseline ~6-7/10) =====
+lock freed, box rebooting clean
