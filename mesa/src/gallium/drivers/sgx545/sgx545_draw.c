@@ -1096,6 +1096,15 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    simple_mtx_lock(&screen->lock);
    if (!begin_frame(ctx))
       goto out;
+   /* The textures it samples were marked used by the next kick before
+    * begin_frame, which flushes the previous target's frame when this draw
+    * switches targets: mark them again with the frame they're now in (a
+    * resource freed after this draw flushes that frame first: glCopyPixels'
+    * temporary, sampled into the window and freed at once) */
+   for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
+      if (ctx->views[unit])
+         sgx545_resource(ctx->views[unit]->texture)->use_seq = sgxws_next_seq(ctx->hw);
+   }
    for (unsigned n = 0; n < num_draws; n++) {
       unsigned count = draws[n].count, start = draws[n].start, out_count;
       bool list = expanded_prim(info->mode);
