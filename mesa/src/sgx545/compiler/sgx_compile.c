@@ -3451,7 +3451,9 @@ allocate(struct sgx_ctx *c)
       label_ip[i] = -1;
 
    /* uses at 2*ip, writes at 2*ip+1, except that a repeated instruction's
-    * destination is live while it reads (iterations interleave) */
+    * destination is live while it reads (iterations interleave), and so is
+    * a derivative's (a neighbour instance reads the source after this one
+    * has written) */
    bool *first_is_read = calloc(nv, sizeof(bool));
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       i->ip = ip;
@@ -3467,8 +3469,10 @@ allocate(struct sgx_ctx *c)
             first_is_read[r->n] = true;
          touch(c, r, 2 * ip, 0);
       }
+      bool early = i->rpt > 1 || i->kind == SGX_INS_SAMPLE ||
+                   (i->kind == SGX_INS_ALU && (i->form == USSE_FDSX || i->form == USSE_FDSY));
       for (unsigned k = 0; k < i->ndst; k++)
-         touch(c, &i->op[k], i->rpt > 1 || i->kind == SGX_INS_SAMPLE ? 2 * ip : 2 * ip + 1, 0);
+         touch(c, &i->op[k], early ? 2 * ip : 2 * ip + 1, 0);
       /* a predicated write keeps the old value */
       if (i->pred && i->ndst && i->op[0].file == SGX_F_V)
          touch(c, &i->op[0], 2 * ip, 0);
