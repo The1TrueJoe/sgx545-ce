@@ -335,6 +335,9 @@ def run_chunk(box, who, name, tests):
 
 
 def main():
+    # a kill (another session needs the box) unwinds like an exit: the lock is let go
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit("terminated: the lock is let go"))
     ap = argparse.ArgumentParser()
     ap.add_argument("who", choices=["sgx545", "ddk", "piglit"])
     ap.add_argument("--box", default=os.environ.get("EA3", "10.0.0.113"))
@@ -411,8 +414,13 @@ def main():
         run(a, box, name, todo, res_path, wedge_path)
     finally:
         if holder:
-            box.ssh("rm -f /tmp/deqp-job")
-            holder.wait(timeout=30)
+            # a chunk cut short must not go on running on the box without the lock
+            box.ssh("pkill -f deqp-runner; pkill -f piglit-runner; pkill -f /deqp-gles2; pkill -f piglit/bin/; "
+                    "rm -f /tmp/deqp-job")
+            try:
+                holder.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                holder.kill()
 
 
 def box_state(box):

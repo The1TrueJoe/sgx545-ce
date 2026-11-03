@@ -14,6 +14,8 @@
 # results go to $PIGLIT_WORK/run-NAME. drive-deqp.py exits 0 when every test
 # has a result, 3 at a slice's end and 4 when the box is someone else's; the
 # loop stops for good on anything else (a wedge, or too many recoveries).
+# To hand the box over mid-slice: kill this loop, then the drive-deqp.py it runs
+# (SIGTERM: it lets the lock go on its way out).
 HERE=$(cd "$(dirname "$0")" && pwd)
 W=${PIGLIT_WORK:-$HOME/.cache/sgx545/piglit}
 NAME=${1:?name}
