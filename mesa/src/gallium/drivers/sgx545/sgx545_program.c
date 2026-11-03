@@ -10,8 +10,10 @@
  * keeps what a draw needs: the constants' places in secondary attributes,
  * the attribute slots, the vertex outputs, the fragment iterators.
  *
- * Varyings get texture coordinate set (location - VARYING_SLOT_VAR0) on both
- * sides, so a vertex and a fragment shader compiled apart still agree.
+ * Varyings get texture coordinate sets in the order of their slots, the same
+ * on both sides when the two stages pass the same slots; a vertex shader that
+ * writes others is compiled again to its fragment shader's sets
+ * (sgx545_vs_for).
  *
  * Before the compiler (SGX545_DEBUG=novs,nofs still selects this), a shader was
  * matched against the fixed programs the winsys carries (tools/gen/mkusse.py):
@@ -201,20 +203,23 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
  * the way the compiler looks varyings up (sgx_nir.c var_names): st names a
  * packed varying "packed:a,b", one name per varying it holds.
  */
-/* Mesa's fixed-function shaders (st's ffvertex and its fragment programs;
- * ES1 through gl4es) pass colours, fog and texture coordinates in the legacy
- * varying slots, which the compiler doesn't assign: move them to fixed VAR
- * slots with fixed names, the same in both stages so that stages compiled
- * apart agree. GLSL ES programs only use VAR slots, so the two never meet. */
+/* Desktop GL's built-in varyings (colours, back colours, fog, texture
+ * coordinates; also st's fixed-function shaders and ES1 through gl4es) are in
+ * the legacy slots, which the compiler doesn't assign: move them to VAR slots
+ * past those the linker hands out, the same in both stages. st's two-sided
+ * colour reads the back colours in the fragment shader. */
+#define SGX545_LEGACY_VAR 16
+
 static void
 remap_legacy_varyings(nir_shader *nir)
 {
-   static const struct { gl_varying_slot slot; unsigned var; } map[] = {
-      { VARYING_SLOT_COL0, 0 }, { VARYING_SLOT_COL1, 1 }, { VARYING_SLOT_FOGC, 2 },
-      { VARYING_SLOT_TEX0, 3 }, { VARYING_SLOT_TEX1, 4 }, { VARYING_SLOT_TEX2, 5 },
-      { VARYING_SLOT_TEX3, 6 }, { VARYING_SLOT_TEX4, 7 }, { VARYING_SLOT_TEX5, 8 },
-      { VARYING_SLOT_TEX6, 9 },
+   static const gl_varying_slot map[] = {
+      VARYING_SLOT_COL0, VARYING_SLOT_COL1, VARYING_SLOT_BFC0, VARYING_SLOT_BFC1,
+      VARYING_SLOT_FOGC, VARYING_SLOT_TEX0, VARYING_SLOT_TEX1, VARYING_SLOT_TEX2,
+      VARYING_SLOT_TEX3, VARYING_SLOT_TEX4, VARYING_SLOT_TEX5, VARYING_SLOT_TEX6,
+      VARYING_SLOT_TEX7,
    };
+   static_assert(SGX545_LEGACY_VAR + ARRAY_SIZE(map) <= 32, "legacy slots past VAR31");
    nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
    bool changed = false;
 
@@ -222,10 +227,10 @@ remap_legacy_varyings(nir_shader *nir)
       for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
          char name[32];
 
-         if (var->data.location != (int)map[i].slot)
+         if (var->data.location != (int)map[i])
             continue;
-         var->data.location = VARYING_SLOT_VAR0 + map[i].var;
-         snprintf(name, sizeof(name), "sgx545_legacy%u", map[i].var);
+         var->data.location = VARYING_SLOT_VAR0 + SGX545_LEGACY_VAR + i;
+         snprintf(name, sizeof(name), "sgx545_legacy%u", i);
          var->name = ralloc_strdup(nir, name);
          changed = true;
          break;
@@ -235,63 +240,106 @@ remap_legacy_varyings(nir_shader *nir)
       nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 }
 
-/* sprite: this vertex shader goes with a fragment shader that reads
- * gl_PointCoord.  The ISP writes the coordinate into set 0 (STATE.md "Lines
- * and points"), so everything else moves up one set. */
+static int
+cmp_varying(const void *a, const void *b)
+{
+   const nir_variable *x = *(nir_variable *const *)a, *y = *(nir_variable *const *)b;
+
+   if (x->data.location != y->data.location)
+      return x->data.location - y->data.location;
+   return (int)x->data.location_frac - (int)y->data.location_frac;
+}
+
+/* The varyings' sets.  sprite: a fragment shader that reads gl_PointCoord
+ * (found here), or a vertex shader to go with one: the ISP writes the
+ * coordinate into set 0 (STATE.md "Lines and points"), so everything else
+ * moves up one set. */
 static void
 assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
 {
    nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
+   nir_variable *vars[ARRAY_SIZE(vary->v)];
+   unsigned n = 0;
+   uint64_t rows_used = 0;      /* by location - VAR0 */
+   bool psize = false;
    static bool warned;
 
    memset(vary, 0, sizeof(*vary));
-   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      nir_foreach_variable_with_modes(var, nir, mode)
-         sprite |= var->data.location == VARYING_SLOT_PNTC;
-   }
-   if (sprite) {
-      vary->point_size = true;
-      vary->set_comps[0] = 2;
-   }
    nir_foreach_variable_with_modes(var, nir, mode) {
-      const struct glsl_type *t = var->type;
-      unsigned rows, comps, set, frac = var->data.location_frac;
-
+      if (nir->info.stage == MESA_SHADER_FRAGMENT && var->data.location == VARYING_SLOT_PNTC)
+         sprite = true;
       /* the point size is the output dword after the sets */
       if (nir->info.stage == MESA_SHADER_VERTEX && var->data.location == VARYING_SLOT_PSIZ)
-         vary->point_size = true;
-      struct sgx_varying *v;
+         psize = true;
+      if (var->data.location < VARYING_SLOT_VAR0 || n == ARRAY_SIZE(vars))
+         continue;
+      vars[n++] = var;
+      for (unsigned r = 0; r < glsl_count_vec4_slots(var->type, false, false); r++)
+         rows_used |= BITFIELD64_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 63);
+   }
+   /* a set per slot in slot order (after gl_PointCoord's set 0), each
+    * variable at its component in the slot */
+   qsort(vars, n, sizeof(vars[0]), cmp_varying);
+   for (unsigned i = 0; i < n; i++) {
+      nir_variable *var = vars[i];
+      const struct glsl_type *t = var->type;
+      unsigned slot = var->data.location - VARYING_SLOT_VAR0, frac = var->data.location_frac;
+      unsigned rows = glsl_count_vec4_slots(t, false, false), comps, set;
+      struct sgx_varying *v = &vary->v[vary->n++];
       char name[32];
 
-      if (var->data.location < VARYING_SLOT_VAR0 || vary->n == ARRAY_SIZE(vary->v))
-         continue;
-      rows = glsl_count_vec4_slots(t, false, false);
       t = glsl_without_array(t);
       comps = glsl_type_is_matrix(t) ? glsl_get_vector_elements(glsl_get_column_type(t))
                                      : glsl_get_vector_elements(t);
-      set = var->data.location - VARYING_SLOT_VAR0 + (sprite ? 1 : 0);
+      /* a built-in the two stages may declare apart (gl_FogFragCoord a float
+       * against fog's vec4): the whole slot */
+      if (slot >= SGX545_LEGACY_VAR) {
+         frac = 0;
+         comps = 4;
+      }
+      set = (sprite ? 1 : 0) + util_bitcount64(rows_used & BITFIELD64_MASK(slot));
       /* The compiler finds a varying's set by name.  st's packed slots are
        * named after what they hold ("packed:a,b"), and a varying split over
        * two slots names both: Minecraft's terrain (two vec3 texture
        * coordinates and the fog) had its second slot written over the first.
        * Each variable is named after its slot instead, the same in both
        * stages. */
-      snprintf(name, sizeof(name), frac ? "sgx545_v%u_%u" : "sgx545_v%u", set, frac);
+      snprintf(name, sizeof(name), frac ? "sgx545_v%u_%u" : "sgx545_v%u", slot, frac);
       var->name = ralloc_strdup(nir, name);
-      if (frac && !warned) {
-         /* the compiler puts component j of a variable at its set's j */
-         fprintf(stderr, "sgx545: a varying at component %u of its slot: its components land at 0\n", frac);
-         warned = true;
-      }
-      v = &vary->v[vary->n++];
       snprintf(v->name, sizeof(v->name), "%s", name);
       v->set = set;
+      v->comp = frac;
       v->rows = rows;
       v->comps = comps;
       v->precision = var->data.precision;
       for (unsigned r = 0; r < rows && set + r < SGX_MAX_SETS; r++)
          vary->set_comps[set + r] = MAX2(vary->set_comps[set + r], frac + comps);
    }
+   /* past ten sets: rows into the free components of earlier sets */
+   vary->point_size = sprite;
+   if (sprite)
+      vary->set_comps[0] = 2;
+   if (!sgx_pack_varyings(vary) && !warned) {
+      fprintf(stderr, "sgx545: varyings past ten sets of four components\n");
+      warned = true;
+   }
+   vary->point_size = sprite || psize;
+}
+
+/* the same sets for the same varyings (the stages' precisions may differ) */
+static bool
+same_varyings(const struct sgx_varyings *a, const struct sgx_varyings *b)
+{
+   if (a->n != b->n || memcmp(a->set_comps, b->set_comps, sizeof(a->set_comps)))
+      return false;
+   for (unsigned i = 0; i < a->n; i++) {
+      const struct sgx_varying *x = &a->v[i], *y = &b->v[i];
+
+      if (strcmp(x->name, y->name) || x->set != y->set || x->comp != y->comp || x->rows != y->rows ||
+          x->comps != y->comps)
+         return false;
+   }
+   return true;
 }
 
 #define SGX545_ITER_FRAGCOORD 14
@@ -443,8 +491,10 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
    return next;
 }
 
+/* fs_vary: a vertex shader compiled to a fragment shader's sets */
 static bool
-compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader *orig, bool sprite)
+compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader *orig,
+               const struct sgx_varyings *fs_vary)
 {
    struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -468,8 +518,20 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       NIR_PASS(_, nir, nir_lower_tex, &tex);
    }
    remap_legacy_varyings(nir);
-   assign_varyings(nir, &vary, sprite);
+   /* (names the variables the way the list does) */
+   assign_varyings(nir, &vary, false);
+   bool sprite = fs_vary && fs_vary->point_size;
+   if (fs_vary) {
+      bool psize = vary.point_size;
+
+      vary = *fs_vary;
+      vary.point_size = sprite || psize;
+   }
    so->reads_pointcoord = nir->info.stage == MESA_SHADER_FRAGMENT && vary.point_size;
+   if (!so->vary)
+      so->vary = MALLOC_STRUCT(sgx_varyings);
+   if (so->vary)
+      *so->vary = fs_vary ? *fs_vary : vary;
    struct sgx_layout layout = { layout_place, layout_first_free, nir };
 
    /* gl_FrontFacing against the winding gallium calls front, sgx545_draw.c writes it */
@@ -613,6 +675,12 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             so->code = NULL;
          }
       }
+      /* gl_FragDepth waits in pa<depth_pa> at the feedback nop for a depthf
+       * whose form isn't traced yet: until then the triangle's own depth */
+      if (out.writes_depth && !ctx->warned_frag_depth) {
+         fprintf(stderr, "sgx545: gl_FragDepth not written yet (the triangle's depth is used)\n");
+         ctx->warned_frag_depth = true;
+      }
       so->uses_front_face = out.uses_front_face;
       so->color_reg = out.colour_pa;
       so->temps = out.n_temps;
@@ -728,7 +796,7 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, false);
+      bool ok = compile_shader(ctx, so, nir, NULL);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -781,27 +849,51 @@ sgx545_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 
    ralloc_free(so->nir);
    free(so->code);
-   if (so->sprite_vs) {
-      free(so->sprite_vs->code);
-      FREE(so->sprite_vs);
+   FREE(so->vary);
+   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_vs); i++) {
+      if (so->variants_vs[i]) {
+         free(so->variants_vs[i]->code);
+         FREE(so->variants_vs[i]->vary);
+         FREE(so->variants_vs[i]);
+      }
    }
    FREE(so);
 }
 
+struct sgx545_shader *
+sgx545_vs_for(struct sgx545_context *ctx, struct sgx545_shader *vs, const struct sgx545_shader *fs)
+{
+   struct sgx545_shader **slot;
+
+   if (!vs->vary || !fs->vary || same_varyings(vs->vary, fs->vary))
+      return vs;
+   for (unsigned i = 0; i < ARRAY_SIZE(vs->variants_vs); i++) {
+      if (vs->variants_vs[i] && same_varyings(vs->variants_vs[i]->vary, fs->vary) &&
+          vs->variants_vs[i]->vary->point_size == fs->vary->point_size)
+         return vs->variants_vs[i];
+   }
+   if (!vs->nir)
+      return NULL;
+   /* the oldest goes */
+   slot = &vs->variants_vs[vs->next_variant_vs++ % ARRAY_SIZE(vs->variants_vs)];
+   if (*slot) {
+      free((*slot)->code);
+      FREE((*slot)->vary);
+      FREE(*slot);
+   }
+   if (!(*slot = CALLOC_STRUCT(sgx545_shader)))
+      return NULL;
+   (*slot)->discard_pa = -1;
+   if (!compile_shader(ctx, *slot, vs->nir, fs->vary) || !(*slot)->prog.code) {
+      FREE((*slot)->vary);
+      FREE(*slot);
+      *slot = NULL;
+   }
+   return *slot;
+}
+
 /* the compiled fragment shader's program with its colour blended (b), or
  * without (NULL); 0 when there is none */
-struct sgx545_shader *
-sgx545_sprite_vs(struct sgx545_context *ctx, struct sgx545_shader *so)
-{
-   if (!so->sprite_vs && so->nir && (so->sprite_vs = CALLOC_STRUCT(sgx545_shader))) {
-      so->sprite_vs->nir = NULL;
-      if (!compile_shader(ctx, so->sprite_vs, so->nir, true) || !so->sprite_vs->prog.code) {
-         FREE(so->sprite_vs);
-         so->sprite_vs = NULL;
-      }
-   }
-   return so->sprite_vs;
-}
 
 uint32_t
 sgx545_fs_program(struct sgx545_context *ctx, struct sgx545_shader *so, const struct sgxws_blend *b)
