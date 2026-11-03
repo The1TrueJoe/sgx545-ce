@@ -94,6 +94,20 @@ class Box:
         return False
 
 
+STATUSES = {"Pass", "Fail", "Skip", "Crash", "Timeout", "Flake", "Warn", "Missing", "Wedge",
+            "ExpectedFail", "UnexpectedPass", "KnownFlake"}
+
+
+def result_line(line):
+    """(test, status, seconds) from a results.csv line; piglit's names may hold commas"""
+    parts = line.strip().rsplit(",", 2)
+    if len(parts) == 3 and parts[1] in STATUSES:
+        return parts[0], parts[1], parts[2]
+    if len(parts) >= 2 and parts[-1] in STATUSES:     # "test,Wedge,"-less forms
+        return ",".join(parts[:-1]), parts[-1], ""
+    return None
+
+
 def recoveries(box):
     rc, out = box.ssh("dmesg | grep -c 'Recovery triggered'")
     return int(out.strip() or 0) if rc in (0, 1) else None
@@ -173,8 +187,8 @@ def piglit_env(name):
     # glvnd dispatches to this run's Mesa; it stays loaded, since unloading it at
     # waffle's teardown crashes the process at exit (docs/PIGLIT.md)
     lib = f"{BOX_DIR}/lib-{name}"
-    return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
-            f"LD_PRELOAD={lib}/libEGL_mesa.so.0 PIGLIT_PLATFORM=surfaceless_egl {BOX_ENV}")
+    return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib:{BOX_DIR}/piglit/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
+            f"LD_PRELOAD={lib}/libEGL_mesa.so.0 PIGLIT_PLATFORM=surfaceless_egl PIGLIT_NO_WINDOW=1 {BOX_ENV}")
 
 
 def piglit_regex(test):
@@ -191,7 +205,8 @@ def piglit_gpu_tests():
     for prof in ("quick_gl", "quick_shader"):
         with gzip.open(os.path.join(PIGLIT_WORK, "out/piglit/tests", prof + ".xml.gz")) as f:
             tests += [t.get("name") for t in ET.parse(f).getroot().iter("Test")]
-    return tests
+    # GLX needs X: on the surfaceless platform its tests don't exist (not built)
+    return [t for t in tests if not t.startswith("glx@")]
 
 
 def payload(box, who, name):
@@ -225,7 +240,7 @@ def runner_script(who, name):
     if who == "piglit":
         return (f"cd {BOX_DIR} && rm -rf out && set -- && while IFS= read -r t; do set -- \"$@\" "
                 f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX545_DEBUG=hangabort "
-                f"{LOCK} ./piglit-runner run --piglit-folder piglit --profile gpu --process-isolation "
+                f"{LOCK} ./piglit-runner run --piglit-folder {BOX_DIR}/piglit --profile gpu --process-isolation "
                 f"--output out --jobs 1 --timeout {TEST_TIMEOUT} \"$@\" > runner.log 2>&1; echo rc=$?")
     if who == "sgx545":
         env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort {BOX_ENV}"
@@ -298,9 +313,9 @@ def run_chunk(box, who, name, tests):
         if rc2 is None:
             wedged = True
         for line in csv.decode(errors="replace").splitlines():
-            parts = line.split(",")
-            if len(parts) >= 2 and parts[0].startswith("dEQP"):
-                res[parts[0]] = (parts[1], parts[2] if len(parts) > 2 else "")
+            r = result_line(line)
+            if r:
+                res[r[0]] = (r[1], r[2])
     if not wedged:
         # the failing tests' logs, for triage
         rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - *.qpa 2>/dev/null", timeout=120)
@@ -347,7 +362,7 @@ def main():
     done = set()
     if os.path.exists(res_path):
         with open(res_path) as f:
-            done = {line.split(",")[0] for line in f if line.startswith("dEQP")}
+            done = {r[0] for r in map(result_line, f) if r}
     if a.who == "piglit":
         global BOX_DIR
         BOX_DIR = os.environ.get("BOX_DIR", "/root/piglit")

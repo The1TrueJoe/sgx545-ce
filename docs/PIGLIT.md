@@ -51,6 +51,13 @@ session's reboot only costs the pieces in flight.
   its work, with its output still unflushed). Why is not established; Mesa's
   libraries are not built `-z nodelete`, and the toolchain is zig's. Keeping
   `libEGL_mesa` loaded with `LD_PRELOAD` avoids it, and the runs do that.
+- **piglit needs `PIGLIT_NO_WINDOW=1`** on the surfaceless platform: without
+  it a test with `-auto` waits in a window event loop that returns at once, and
+  piglit calls `abort()` with nothing printed.
+- **piglit's EGL support comes with its EGL tests** (`PIGLIT_BUILD_EGL_TESTS`
+  defines `PIGLIT_HAS_EGL`, which the surfaceless platform needs), and
+  `tests/egl`'s programs need X11: the build turns the EGL tests on and skips
+  that one directory.
 - **A surfaceless display has no window configs**: a client must ask for
   `EGL_PBUFFER_BIT` (or `EGL_SURFACE_TYPE` 0), as dEQP and waffle do.
 
@@ -60,3 +67,23 @@ With the shipping caps, a desktop context reports `OpenGL version string: 2.0
 Mesa 26.2.5` on `PowerVR SGX545 (sgx545-ce)`. Mesa grants 2.1 for
 `EXT_texture_sRGB` on top of 2.0, which needs an sRGB format the driver can
 sample.
+
+## The DDK's desktop GL, as an oracle
+
+The DDK ships a desktop GL: `libPVROGL_MESA.so` (IMG's GL built on Mesa, with
+its own GLSL compiler) and its helper `libegl4ogl.so`. It is a GLX driver:
+`libegl4ogl.so` exports no EGL entry points, and the DDK's `libEGL` rejects
+`EGL_OPENGL_API` (`EGL_BAD_PARAMETER`), so without X it can't be run on an EA,
+only read. Its extension strings (EA1, 2026-11-02) are a GL 2.0 set:
+
+- **there:** `ARB_occlusion_query`, `EXT_texture3D`, `ARB_shadow` (+
+  `_ambient`, `EXT_shadow_funcs`), `ARB_depth_texture`, `ARB_point_sprite`,
+  `ARB_pixel_buffer_object`, `ARB_draw_buffers`, `ARB_texture_float`,
+  `ARB_color_buffer_float`, `ARB_half_float_pixel`,
+  `EXT_framebuffer_multisample`, `EXT_framebuffer_blit`,
+  `ARB_texture_border_clamp`, `EXT_stencil_two_side`, GLSL 1.10;
+- **not there:** `EXT_texture_sRGB`, which GL 2.1 needs.
+
+So the hardware path for occlusion queries and 3D textures exists (the
+driver for this core uses it), while sRGB has no oracle here: Intel's
+Windows GL 3.0 ICD for this core is the only one (AGENTS.md M6).

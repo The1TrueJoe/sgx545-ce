@@ -173,10 +173,14 @@ sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 
    if (sgxws_bo_valid(&res->bo)) {
       simple_mtx_lock(&screen->lock);
-      /* a frame still being recorded into it goes now, and renders in flight
-       * may still use it (and a target's last render keeps a pointer to its
-       * sync data) */
-      if (screen->hw && sgxws_target_bo(screen->hw) == &res->bo)
+      /* a frame still being recorded into it or sampling it goes now (st
+       * draws its bitmap cache at teardown and then frees the bitmap: the
+       * frame went to the GPU after the texture was freed, a 3D lockup), and
+       * renders in flight may still use it (and a target's last render keeps
+       * a pointer to its sync data) */
+      if (screen->hw && (sgxws_target_bo(screen->hw) == &res->bo ||
+                         res->use_seq == sgxws_next_seq(screen->hw) ||
+                         res->alt_use_seq == sgxws_next_seq(screen->hw)))
          sgxws_flush(screen->hw, 0);
       if (screen->hw)
          sgxws_wait_idle(screen->hw, 2000);
