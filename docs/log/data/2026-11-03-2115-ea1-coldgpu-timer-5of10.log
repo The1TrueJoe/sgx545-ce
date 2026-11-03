@@ -1,0 +1,10 @@
+=== reboot: S50zuktest runs the test during boot (cold GPU) ===
+ramboot? ohc.ramboot
+=== /root/uk/test.log ===
+=== S50 ukernel test Tue Nov  3 19:14:01 UTC 2026 ===
+cmdline: console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 pci=realloc,nocrs,routeirq console=ttyS0,115200 pci=realloc,nocrs,routeirq intel_iommu=off root=/dev/mmcblk0p1 rootwait rw ohc_kexec=1 ohc.ramboot=1 memmap=exactmap memmap=68K@0 memmap=60K#0x11000 memmap=512K@0x20000 memmap=255M@1M memmap=1536M@0x10000000
+card0: crw-rw----    1 root     video     226,   0 Nov  3 19:13 /dev/dri/card0
+--- srvinit -o uk-timer.bin (COLD GPU expected) ---
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d6b000)
+--- 10 frames (complete fix) ---
+frame: 720x480, 1 draw(s), render done
