@@ -49,4 +49,7 @@ devcoredump) away from a gated core.
 
 `runtime_pm` stays off by default until the EA1 has run it too.
 
+The EA1 ran the same set on 1d170e9 (log `2026-11-03-1700-drm-runtime-pm-ea1`), and
+`runtime_pm` is now on by default.
+
 Data: `docs/log/data/2026-11-03-0630-drm-runtime-pm-ea3.txt`.
