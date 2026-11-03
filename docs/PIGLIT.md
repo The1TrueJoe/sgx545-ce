@@ -100,22 +100,38 @@ under a second.
 ## Results (EA3, 2026-11-03)
 
 The whole `gpu` profile ran on the EA3 (a RAM boot of the #124 image), in
-slices, with 0 wedges. The 514 tests that didn't pass were then rerun on one
-build, um-re 60ddfec, because the first pass spanned several builds. The passes
-were not rerun. Of the 25,805 top-level tests:
+slices, with 0 wedges. Every test that didn't skip (3,700) was then rerun on
+one build: um-re c111b12 with the varyings driver below (lib-pg17), 0
+recoveries. Of the 25,805 top-level tests:
 
 | result | tests |
 |---|---|
-| Pass | 3,220 |
+| Pass | 3,372 |
 | Skip | 21,668 |
-| Fail | 389 |
+| Fail | 237 |
 | Crash | 87 |
 | Missing | 437 |
 | Timeout | 2 |
 | Warn | 2 |
 
-34 of the 514 passed on the rerun. "Missing" tests are the GLES, EGL and
-window-system programs, which aren't built.
+"Missing" tests are the GLES, EGL and window-system programs, which aren't
+built.
+
+The varyings work moved 153 tests from fail to pass. It gives the desktop
+built-ins a set each: the back colours, which st's two-sided colour reads in
+the fragment shader, and gl_TexCoord[7]. Sets are handed out in slot order and
+packed past ten. A vertex shader that writes slots its fragment shader doesn't
+read is compiled again to that shader's sets. The compiler's side
+(varyings sharing sets, derivatives, fragment depth) came in the same build.
+One test went the other way: `gl-1.4-polygon-offset`, which reads depth back,
+had passed by chance.
+
+**NPOT 2D textures sampled through their mipmaps lock the 3D.** This showed
+once coordinates were right: `arb_texture_compression@fbo-generatemipmap-formats`
+NPOT took 12 recoveries (lockup_3d), each NPOT subtest a few. An NPOT
+texture is linear (layout 3), and the DDK's GLES2 has no NPOT mipmaps, so no
+linear mip chain is known. Such a texture is now sampled from its base level
+only, and the test passes with no recoveries.
 
 The expectations are `ci/sgx545-piglit-fails.txt`, written by `mkexpect.py` from
 the runs, with the reasons in `mesa/tests/piglit/sgx545-reasons.tsv`. Every
@@ -124,20 +140,16 @@ otherwise the reason gives the symptom and says "not diagnosed".
 
 Most failures come from these:
 
-- **Flat shading is not implemented** (1,303 entries, nearly all `clipflat`
+- **Flat shading is not implemented** (1,311 entries, nearly all `clipflat`
   subtests). The driver ignores the rasterizer's `flatshade` and flat
   varyings. The hardware's shade-mode state is not known; a capture of the
   DDK's GLES1 `glShadeModel(GL_FLAT)` against `GL_SMOOTH` would give it.
-- **Fragment programs that don't compile**, so nothing is drawn. These are
-  compiler work:
-  - gl_BackColor and gl_BackSecondaryColor (BFC0/BFC1) get no input register.
-    st lowers two-sided colour to a face select that reads them, so every
-    two-sided lighting and interpolation test is affected.
-  - gl_FragDepth has no output. Tests that write depth are affected, and so
-    are st's depth glDrawPixels and glCopyPixels.
-  - dFdx and dFdy are not supported.
-  - The 11th generic varying and gl_TexCoord[7] get no input register.
-- **No depth format can be sampled** (97). `sgx545_tex_format` has only the
+- **gl_FragDepth isn't written** (19). The compiler leaves the value in a PA
+  register at the feedback nop for a `depthf`, but that instruction's form for
+  a written depth isn't traced. The driver warns once and the triangle's own
+  depth is used.
+- **Derivatives compile but give wrong values** (8).
+- **No depth format can be sampled** (96). `sgx545_tex_format` has only the
   five 8-bit T1 codes, and Mesa always exposes `ARB_depth_texture`, so a
   `GL_DEPTH_COMPONENT` texture gets no format and the test crashes later. The
   DDK's GLES2 lists `OES_depth_texture`, `OES_packed_depth_stencil`,
@@ -145,8 +157,8 @@ Most failures come from these:
   the T1 codes. `tools/probe` uploads those formats (`PROBE_TEXFMT` depth16,
   depth32, d24s8, rgbaf32, lf32, rgbaf16, lf16).
 - **No depth/stencil load or store (no ZLS).** Depth and stencil exist only
-  within one render, so reading, copying or blitting them fails (40).
-- **Texture formats, wrap modes and mipmaps** (180, 128, 21):
+  within one render, so reading, copying or blitting them fails (41).
+- **Texture formats, wrap modes and mipmaps** (49, 74, 13):
   - Only five sampler formats.
   - CLAMP and CLAMP_TO_BORDER are drawn as CLAMP_TO_EDGE.
   - No LOD clamps, base level or LOD bias.
