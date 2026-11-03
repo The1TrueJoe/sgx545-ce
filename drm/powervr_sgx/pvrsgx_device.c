@@ -316,9 +316,9 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
  * the same full start a reset does. A job on the GPU holds a reference from
  * run_job until it leaves the active list.
  */
-static bool runtime_pm;
+static bool runtime_pm = true;
 module_param(runtime_pm, bool, 0444);
-MODULE_PARM_DESC(runtime_pm, "Power the microkernel off when idle (autosuspend: the device's power/autosuspend_delay_ms)");
+MODULE_PARM_DESC(runtime_pm, "Power the microkernel off when idle (default on; autosuspend: the device's power/autosuspend_delay_ms)");
 
 #define AUTOSUSPEND_MS	500
 
