@@ -32,6 +32,7 @@ struct pvrsgx_context {
 };
 
 struct pvrsgx_signal {
+	u32 handle;
 	struct drm_syncobj *syncobj;
 	struct dma_fence_chain *chain;
 	u64 point;
