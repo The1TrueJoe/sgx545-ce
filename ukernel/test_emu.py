@@ -110,16 +110,17 @@ def test_render_teardown(code, man):
     live DDK over a real frame, this guards it with no trace or firmware."""
     u, mem, regs = machine(code)
     mem.wr(HOSTCTL, 1)                               # already initialised -> dispatch on events
-    rd, rtentry, ctx, rtdata = 0x32041a00, 0x32041cf0, 0x3000e000, 0x32041d60
+    rd, rtentry, ctx, rtdata, deps = 0x32041a00, 0x32041cf0, 0x3000e000, 0x32041d60, 0x32041f80
     sync0, sync1 = 0x2d0030f4, 0x2d0030fc
     # the control-block scratch do_ta would have stored
     mem.wr(CTLBLK + 4 * 0x32, rd)                    # SC_RD
     mem.wr(CTLBLK + 4 * 0x34, rtentry)               # SC_RTENTRY
     mem.wr(CTLBLK + 4 * 0x30, ctx)                   # SC_CTX
     mem.wr(rtentry + 0x30, rtdata)                   # RT-data pointer
-    mem.wr(rd + 0xd0, sync0)                         # destination sync 0 address
-    mem.wr(rd + 0x240, sync1)                        # destination sync 1 address
-    mem.wr(rd + 4 * 56, 0)                           # no TA3D dependency block
+    mem.wr(rd + 0xd0, sync0)                         # destination sync 0 = render-details word 0x34
+    mem.wr(rd + 0xe0, deps)                          # TA3D dependency block pointer (word 56)
+    mem.wr(deps + 0x00, sync1)                       # deps[0] = destination sync 1 address
+    mem.wr(deps + 0x14, 0)                           # no complete-addr -> counter step skipped
     mem.wr(rd + 4 * 65, 1)                           # write-ops word -> rd+0x108 := 0
     mem.wr(sync0, 7); mem.wr(sync1, 7)               # non-zero, must be cleared
     regs.v[CR_EVENT_STATUS] = EV_3D_END

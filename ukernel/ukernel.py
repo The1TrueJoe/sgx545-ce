@@ -63,6 +63,14 @@ DPM_LOG = os.environ.get("UK_DPMLOG") == "1"
 # SGXUpdateTimingInfo didn't populate it (write a real period instead); nonzero =>
 # the timer fires but a bare event pass doesn't move 0xb14 (needs a real handler).
 TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
+# Wait-site / hang-stage log (ta3d-state): on the EA1 a render hangs silently (the
+# ticking EDM hides it) and ~2.2 s later one of our self.wait() poll loops spins
+# forever on a done bit, freezing the EDM — that is the HWR the watchdog catches.
+# Find WHICH wait and WHICH stage. Words: 0x35 = the live wait-site id (nonzero = a
+# wait is spinning, names it); per timer tick (last wins) 0x37 = EVENT_STATUS,
+# 0x38 = EVENT_STATUS2, 0x39 = 0x008 CLKGATESTATUS, 0x3a = stage counters (byte each:
+# do_ta/ta_finished/do_3d/render_done), 0x3b = tick counter.
+WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -378,6 +386,9 @@ class Asm:
         The mask goes in a register (test immediates are only 7 bits)."""
         Asm._wl += 1
         lbl = f"_wait{Asm._wl}"
+        if WAIT_LOG:                                   # name this wait while it spins
+            self.i(f"limm r5, #{Asm._wl}")
+            self.st_sa(SA_SELF, 0x35, 5)
         self.i(f"limm r6, #{mask}")
         self.label(lbl)
         self.i(f"ldr r5, #{poll // 4}")
@@ -386,6 +397,9 @@ class Asm:
         self.i(f"test.xor.ne p0, r5, r6")
         self.i(f"(p0) ba {lbl}")
         self.i(f"str #{ack // 4}, r6")
+        if WAIT_LOG:                                   # wait returned -> clear the id
+            self.i("limm r5, #0")
+            self.st_sa(SA_SELF, 0x35, 5)
 
     def invalidate(self, inv_reg, done_mask):
         """request a BIF/USE cache invalidate and wait for it (docs/UKERNEL.md
@@ -500,33 +514,60 @@ def build(a):
     # the event program re-triggers continuously (a storm). Acked and NOT dispatched,
     # a timer-only event falls through to `ba kick`, which returns at once on an empty
     # CCB — so each period runs one short task (0xb14 moves) and no more.
-    a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000 | EVENT_TIMER}")
+    a.i(f"limm r3, #{0x1 | 0x2000 | 0x40000 | 0x800000 | EVENT_TIMER}")  # +0x1 DPM_3D_MEM_FREE (in 0xa58 enable, ta3d-state)
     a.i("and r3, r2, r3")                          # ack only what the snapshot saw
     a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.dispatch(0x2000, "ta_finished")              # a TA finished
     a.dispatch(0x40000, "render_done")             # pixel back-end end of render
     a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)
-    if TMR_LOG:
-        # reached here with no TA/3D bit = a timer-only event (or a bare kick). If the
-        # snapshot had the timer bit, ++ the tick counter (0x38): proves the timer is
-        # firing and the EDM is running our event task each period.
-        a.i("limm r4, #0x20000000")
-        a.i("test.and.eq p0, r2, r4")              # timer bit not set? skip
-        a.i("(p0) ba tmrlog_notick")
-        a.i("ld.a.d r4, r17, #0x38 [moe]"); a.i("wdf")
-        a.i("imae r4, r4, #1, #1 [t2=u32]")        # r4 += 1
-        a.st_sa(SA_SELF, 0x38, 4)
-        a.label("tmrlog_notick")
-    # no hardware-event bit set: a host kick arrived via the EUR_CR_EVENT_KICK
-    # doorbell (sgxutils.c `SGXScheduleCCBCommand`), which leaves no
-    # EUR_CR_EVENT_STATUS bit — so look at the kernel CCB for a waiting command.
-    # The `kick` handler returns immediately if the CCB is empty (write offset
-    # == read offset). Gating this on SW_EVENT (0x4000) was wrong: that bit is
-    # the microkernel->host signal (set by raise_host_irq, cleared by the host
-    # ISR), never an incoming event, so the kick was never serviced — EA1
-    # HW-confirmed 2026-11-02 (GETMISCINFO sat unconsumed with EVENT_STATUS = 0,
-    # `sw_event: no`, the core looping through HWR).
-    a.i("ba kick")
+    # A timer-only event (bit 29 set, no TA/3D bit above) must NOT scan the kernel
+    # CCB: at 1 kHz a CCB scan every tick races the doorbell task's dispatch /
+    # read-offset advance (the two-task RO race — frames 2+ HWR; EA3 2026-11-03).
+    # The DDK's timer path only samples AP/lockup, never the CCB. So a timer event
+    # ends via kick_end, which checks idle and re-raises ACTIVE_POWER but dispatches
+    # nothing. Real host kicks arrive as their own EUR_CR_EVENT_KICK doorbell events
+    # (sgxutils.c SGXScheduleCCBCommand) which leave NO EVENT_STATUS bit, so they
+    # fall through (no bit 29) to `kick` and are serviced there. Gating `kick` on
+    # SW_EVENT (0x4000) was wrong: that bit is the microkernel->host signal, not an
+    # incoming event (EA1 2026-11-02: GETMISCINFO sat unconsumed, core looping HWR).
+    a.i("limm r4, #0x20000000")
+    a.i("test.and.ne p0, r2, r4")                  # timer event (bit 29)?
+    if TMR_LOG or WAIT_LOG:
+        a.i("(!p0) ba not_timer_evt")              # not timer -> service doorbell
+        if TMR_LOG:
+            a.i("ld.a.d r4, r17, #0x38 [moe]"); a.i("wdf")
+            a.i("imae r4, r4, #1, #1 [t2=u32]")    # tick counter (0x38) += 1
+            a.st_sa(SA_SELF, 0x38, 4)
+        if WAIT_LOG:
+            # per-tick snapshot, last wins: the hang state as of the last tick
+            a.i(f"ldr r4, #{CR_EVENT_STATUS // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x37, 4)
+            a.i(f"ldr r4, #{CR_EVENT_STATUS2 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x38, 4)
+            a.i("ldr r4, #%d" % (0x008 // 4)); a.i("wdf"); a.st_sa(SA_SELF, 0x39, 4)  # CLKGATESTATUS
+            a.i("ld.a.d r4, r17, #0x3b [moe]"); a.i("wdf")
+            a.i("imae r4, r4, #1, #1 [t2=u32]"); a.st_sa(SA_SELF, 0x3b, 4)  # tick counter
+        a.i("ba tmr_tick_check")                   # timer event: check for a coincident doorbell
+        a.label("not_timer_evt")
+    else:
+        a.i("(p0) ba tmr_tick_check")              # timer event: check for a coincident doorbell
+    a.i("ba kick")                                 # not a timer event (bare doorbell): service it
+    # A timer-only event (bit 29) must still service a HOST KICK that coincided with
+    # this tick: a doorbell leaves NO EVENT_STATUS bit, so when it lands on the same
+    # pass the snapshot shows only bit 29. Ending here without looking strands the
+    # command in the kernel CCB until the NEXT doorbell -- which then runs the stale
+    # kick against a context being torn down and FAULTS the EDM (the EA1 WAIT_LOG freeze
+    # with waitsite=0, ta3d-state 2026-11-03). So read the kernel CCB: a command waiting
+    # (WO != RO) -> `kick` services it; empty -> end directly (NOT via kick_end, whose
+    # idle ACTIVE_POWER raise would fire a host IRQ every 1 kHz tick).
+    a.label("tmr_tick_check")
+    a.i(f"ld.a.d r5, r17, #{SA_KCCBCTL} [moe]")
+    a.i("wdf")
+    a.i("ld.a.d r6, r5, #0 [moe]")                 # kernel CCB write offset
+    a.i("ld.a.d r7, r5, #1 [moe]")                 # read offset
+    a.i("wdf")
+    a.i("test.xor.ne p0, r6, r7")                  # WO != RO -> a command is waiting
+    a.i("(p0) ba kick")                            # service the coincident doorbell
+    a.label("tmr_tick_end")
+    a.end()                                        # empty CCB: end, no AP raise / IRQ
 
     # ======================================================================
     # init
@@ -705,6 +746,24 @@ def build(a):
     a.i(f"st.a.d r2, #{HC_POWER}, r3 [moe]")
     a.i("idf")
     a.i("wdf")
+    # Gate EUR_CR_EVENT_TIMER with the power state (DDK power-down 0x050a / RESUME
+    # 0x01f9). POWEROFF/IDLE -> 0xacc=0: SGXPrePowerState stops the host timer and
+    # then polls SGXPollForClockGating, which a running 1 kHz EDM timer would keep
+    # the core clocked through and hang. RESUME -> re-arm (parity; this kernel's
+    # resume re-runs our init via SGXInitialise, so the arm is belt-and-braces).
+    # r2 = host control base, r8 = PVRSRV_POWERCMD (both from above).
+    a.i(f"test.xor.eq p0, r8, #{POWERCMD_RESUME}")   # RESUME?
+    a.i("(p0) ba k_power_resume")
+    a.i("limm r4, #0")                               # POWEROFF / IDLE: stop the timer
+    a.i(f"str #{CR_EVENT_TIMER // 4}, r4")
+    a.i("ba k_power_done")
+    a.label("k_power_resume")
+    a.i(f"ld.a.d r4, r2, #{HC_TIMERCLK} [moe]")      # host timer period
+    a.i("wdf")
+    a.i(f"limm r5, #{EVENT_TIMER_ENABLE}")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{CR_EVENT_TIMER // 4}, r4")           # 0xacc = period | ENABLE
+    a.label("k_power_done")
     a.i("ba kick_adv")
     # context suspend (data[0] = context, data[1] = suspend/resume): set or
     # clear the context's suspend flag (bit 4 of its flags word)
@@ -868,6 +927,14 @@ def build(a):
     a.i("ld.a.d r13, r9, #1 [moe]")                 # cmd+0x04 (word 1)
     a.i("wdf")
     a.i("and r13, r13, #1")                         # r13 = bFirstKickOrResume
+    if WAIT_LOG:
+        # stage marker: RESET to 1 only on the FIRST kick of a scene (r13!=0), so
+        # 0x3a tracks the CURRENT scene's furthest stage (a terminate-kick reset
+        # would mask a terminate-TA hang as "stuck at do_ta") — ta3d-state.
+        a.i("test.and.eq p0, r13, r13")             # render/terminate kick? don't reset
+        a.i("(p0) ba waitlog_do_ta_done")
+        a.i("limm r4, #1"); a.st_sa(SA_SELF, 0x3a, 4)
+        a.label("waitlog_do_ta_done")
     if DPM_LOG:
         # kick-1 entry: log 0x740 (CR read by the DDK's DPM slot-1 free step) to
         # 0x3a and STASH hostctl[11] (NumActivePowerEvents) in word 0x3c.
@@ -930,6 +997,16 @@ def build(a):
     a.i("ld.a.d r10, r9, #%d [moe]" % CMDTA_RD)     # render details
     a.i("ld.a.d r11, r9, #%d [moe]" % CMDTA_PB)     # PB descriptor
     a.i("ld.a.d r12, r9, #%d [moe]" % CMDTA_RTENTRY)  # RT entry
+    a.i("wdf")
+    # Copy the HW device sync list pointer (TA command +0x3c) into render-details
+    # word 56 (byte 0xE0), as the DDK does at every TA kick (ta3d-state's trace,
+    # pc 0x07c3). render_done reads rd+0xE0 to find the dependency block and sync1;
+    # the client leaves rd+0xE0 zeroed (sgxgen memsets the 0x1ec render details and
+    # never sets it), so without this copy the 3D-end sync-1 clear is skipped on HW.
+    a.i("ld.a.d r5, r9, #%d [moe]" % (0x3c // 4))   # cmd+0x3c = HW device sync list
+    a.i("wdf")
+    a.i("st.a.d r10, #%d, r5 [moe]" % (0xE0 // 4))  # rd+0xE0 = sync list pointer
+    a.i("idf")
     a.i("wdf")
     a.st_sa(SA_SELF, SC_CTX, 16)
     a.st_sa(SA_SELF, SC_CMD, 9)
@@ -1106,6 +1183,8 @@ def build(a):
     # ta_finished: write the TA status values, then program and start the 3D
     # ======================================================================
     a.label("ta_finished")
+    if WAIT_LOG:
+        a.i("limm r4, #2"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached ta_finished
     if DEBUG_SENTINEL:
         a.i("limm r6, #0x7AF1"); a.st_sa(SA_SELF, 0x38, 6)
     # this TA is no longer in flight; clear the flag so a deferred kick can launch.
@@ -1188,6 +1267,8 @@ def build(a):
     # do_3d: program and start the 3D for the scene (run on the last TA's finish)
     # ======================================================================
     a.label("do_3d")
+    if WAIT_LOG:
+        a.i("limm r4, #3"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached do_3d
     if DEBUG_SENTINEL:
         a.i("limm r6, #0x3DED"); a.st_sa(SA_SELF, 0x39, 6)
     # CR 0x630: a double-buffered TA/3D context select (ta3d-state). The DDK r-m-w's
@@ -1336,6 +1417,8 @@ def build(a):
     # destination's write-ops-complete to pending+1 (docs/UKERNEL.md §5). The
     # list walk is the next increment; the host-interrupt tail is here.
     a.label("render_done")
+    if WAIT_LOG:
+        a.i("limm r4, #4"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached render_done
     if DEBUG_SENTINEL:
         a.i("limm r6, #0x4D04"); a.st_sa(SA_SELF, 0x3A, 6)
     # a transfer in flight completes through this same 3D-end event, but its
@@ -1346,31 +1429,41 @@ def build(a):
     a.i("(p0) ba xfer_done")
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
-    # HW device sync list (SGXMKIF_HWDEVICE_SYNC_LIST): the render's destination
-    # sync objects (here the colour and depth destinations, addressed by render-
-    # details words 0x34 and 0x90). Clear each one's ops-pending word now the 3D
-    # has drained, so the next render on this RT starts from zero pending ops
-    # (docs/UKERNEL.md §5 "3D end of render").
-    a.i("ld.a.d r2, r0, #%d [moe]" % RD_SYNC0)        # sync object 0 address
-    a.i("limm r5, #%d" % 0x240)
-    a.i("imae r3, r5, #1, r0 [t2=u32]")               # &(rd+0x240)
-    a.i("ld.a.d r3, r3, #0 [moe]")                    # sync object 1 address
+    # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
+    # render's own sync ops-pending word (render-details word 0x34 = byte 0xD0 =
+    # rd_sync, an H_SYNC object the EDM's kernel PD maps) so the next render on
+    # this RT starts from zero pending ops.
+    a.i("ld.a.d r2, r0, #%d [moe]" % RD_SYNC0)        # sync 0 = *(rd+0xD0) = rd_sync
     a.i("wdf")
     a.i("st.a.d r2, #0, #0 [moe]")                    # *sync0 = 0
+    a.i("idf")
+    a.i("wdf")
+    # TA3D dependency block (render details word 56 = byte 0xE0). The DDK reads
+    # all its other 3D-completion client writes from here (ta3d-state's DDK memory
+    # trace, pc 0x0f45/0x0fc7); if the block pointer is 0 none of them run.
+    #   - sync 1 = *(*(deps+0x00)) cleared to 0 -- the destination access sync.
+    #     This fires whenever deps != 0, regardless of the complete-addr below.
+    #   - complete counter: *(deps+0x14) = *(deps+0x10) + 1 (single render, slot 0).
+    # The OLD sync-1 took its address from rd+0x240, which is PAST the 0x1ec
+    # render-details structure (STATE.md §6; 0x240 is a TA-command offset, not an
+    # rd one) -- a stale/zero pointer the EDM (dir-list 15 = kernel PD) wrote 0
+    # through: a BIF page fault at a client general-heap page or NULL = the EA1
+    # render hang (DDK renders 10/10 without that bug; feb0de8). All the DDK's
+    # targets are SYNCINFO-heap (0x2d00xxxx), which the kernel PD maps.
+    a.i("ld.a.d r2, r0, #56 [moe]")                   # deps = *(rd+0xE0)
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")                     # no deps -> skip sync1 + counter
+    a.i("(p0) ba rd_wops")
+    a.i("ld.a.d r3, r2, #0 [moe]")                    # sync 1 address = deps[0]
+    a.i("wdf")
+    a.i("test.and.eq p0, r3, r3")                     # null entry -> skip the clear
+    a.i("(p0) ba rd_sync1_done")
     a.i("st.a.d r3, #0, #0 [moe]")                    # *sync1 = 0
     a.i("idf")
     a.i("wdf")
-    # TA3D dependency sync: the destination the host/next client polls. The
-    # render details hold a pointer to the dependency block (word 56); its
-    # sync object has {write-ops-pending at +0x10, write-ops-complete-addr at
-    # +0x14}. Set *complete-addr = pending + 1 (docs/UKERNEL.md §5). Single
-    # render: frame index 0, so no per-frame stride.
-    a.i("ld.a.d r2, r0, #56 [moe]")                   # dependency block
-    a.i("wdf")
-    a.i("test.and.eq p0, r2, r2")                     # none -> skip
-    a.i("(p0) ba rd_wops")
-    a.i("ld.a.d r4, r2, #4 [moe]")                    # pending  (block + 0x10)
-    a.i("ld.a.d r5, r2, #5 [moe]")                    # complete address (block + 0x14)
+    a.label("rd_sync1_done")
+    a.i("ld.a.d r4, r2, #4 [moe]")                    # pending  (deps + 0x10)
+    a.i("ld.a.d r5, r2, #5 [moe]")                    # complete address (deps + 0x14)
     a.i("wdf")
     a.i("test.and.eq p0, r5, r5")                     # no complete address -> skip
     a.i("(p0) ba rd_wops")
