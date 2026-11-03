@@ -46,11 +46,14 @@ struct pvrsgx_rt_dataset {
 	u32 frames;
 };
 
+#define PVRSGX_MAX_TA_KICKS	2
+
 /* What a render job carries from SUBMIT_JOBS to run_job. */
 struct pvrsgx_render_job {
 	struct pvrsgx_rt_dataset *rtds;
 	struct powervr_sgx_stream_render render;
-	struct powervr_sgx_stream_ta_kick kick;
+	struct powervr_sgx_stream_ta_kick kick[PVRSGX_MAX_TA_KICKS];
+	u32 nkicks;
 };
 
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
@@ -64,7 +67,7 @@ int pvrsgx_ioctl_destroy_rt_dataset(struct drm_device *drm, void *data, struct d
 int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in);
 void pvrsgx_render_job_fini(struct pvrsgx_job *job);
-int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 data[6]);
+int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
 struct seq_file;
 void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev);
 

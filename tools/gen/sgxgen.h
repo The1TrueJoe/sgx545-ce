@@ -148,6 +148,7 @@ struct sgx_ctx {
 #ifdef SGXGEN_DRM
 	uint32_t ctx;			/* render context handle */
 	uint32_t syncobj;		/* signalled by each frame */
+	int ta_kicks;			/* 1: one kick renders; 2 (default): stream, then terminate */
 #else
 	struct sgx_bo pb, freelist, pbdesc, pbblocks, ccb, ccbctl, scratch, sync3d;
 	uint32_t pb_pages;
