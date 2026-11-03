@@ -74,6 +74,7 @@ struct sgx_ins {
    uint8_t ndst;        /* leading operands that are written */
    uint8_t nops;
    uint8_t writes_pred; /* test: predicate number + 1 */
+   bool noskip;         /* runs on helper instances too (skipinv clear) */
    uint8_t nfld;
    struct sgx_ref op[USSE_MAX_OPS];
    struct { uint16_t id; int32_t v; } fld[SGX_MAX_FLD];
