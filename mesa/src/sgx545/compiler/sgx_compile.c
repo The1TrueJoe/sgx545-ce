@@ -3728,8 +3728,102 @@ touch(struct sgx_ctx *c, const struct sgx_ref *r, int at, unsigned span)
  * its last read, any PA register below the count the program has anyway
  * (fragment: iterations and colour; vertex: the attributes it reads), as
  * libusc does it. Fewer temporaries per instance, more instances resident. */
+/* A 32-bit vreg nothing reads or writes as a run (no repeat steps through
+ * it) becomes one vreg per component: each is allocated, or placed in PA,
+ * for its own live range (a vec4 built a component at a time). */
 static void
-place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
+split_vregs(struct sgx_ctx *c)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   bool *run = calloc(nv, sizeof(bool));
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link)
+      for (unsigned k = 0; k < i->nops; k++)
+         if (i->op[k].file == SGX_F_V && i->op[k].n < nv &&
+             (i->op[k].h16 || (i->op[k].step && i->rpt > 1)))
+            run[i->op[k].n] = true;
+   int *split = malloc(nv * 16 * sizeof(int));
+   for (unsigned v = 0; v < nv * 16; v++)
+      split[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || run[r->n])
+            continue;
+         struct sgx_vreg *x = sgx_vreg(c, r->n);
+         if (x->half || x->size < 2 || x->size > 16)
+            continue;
+         int *slot = &split[r->n * 16 + r->comp];
+         if (*slot < 0)
+            *slot = new_vreg(c, 1);
+         r->n = *slot;
+         r->comp = 0;
+      }
+   }
+   free(split);
+   free(run);
+}
+
+/* A repeat whose source vreg dies here, read at the component its
+ * destination writes and stepping with it, writes in place: iteration k
+ * reads component k before writing it, and no later iteration reads what an
+ * earlier one wrote (libusc's fmad pa0, pa0, pa4, pa8 rpt=4). The
+ * destination vreg becomes the source's, so a mat4 * v chain needs one
+ * register run, not two. */
+static void
+coalesce_repeats(struct sgx_ctx *c)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      struct sgx_ref d = i->op[0];
+      if (d.file != SGX_F_V || d.h16 || !d.step || d.n >= nv)
+         continue;
+      struct sgx_vreg *t1 = sgx_vreg(c, d.n);
+      if (t1->half || t1->first != (int)(2 * i->ip) || (int)d.n == c->keep_vreg || (int)d.n == c->face_vreg)
+         continue;
+      int src = -1;
+      for (unsigned k = 1; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n == d.n || r->h16 || !r->step || r->comp != d.comp)
+            continue;
+         struct sgx_vreg *t0 = sgx_vreg(c, r->n);
+         if (!t0->half && t0->last == (int)(2 * i->ip) && (int)r->n != c->keep_vreg &&
+             (int)r->n != c->face_vreg && (int)r->n != c->face_f32)
+            src = r->n;
+         break;
+      }
+      if (src < 0)
+         continue;
+      /* every other operand naming the source reads it the same way */
+      bool ok = true;
+      for (unsigned k = 1; k < i->nops && ok; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file == SGX_F_V && r->n == (unsigned)src)
+            ok = r->comp == d.comp && r->step && !r->h16;
+      }
+      if (!ok)
+         continue;
+      struct sgx_vreg *t0 = sgx_vreg(c, src);
+      unsigned from = d.n;
+      list_for_each_entry(struct sgx_ins, j, &c->ins, link)
+         for (unsigned k = 0; k < j->nops; k++)
+            if (j->op[k].file == SGX_F_V && j->op[k].n == from)
+               j->op[k].n = src;
+      t0->last = t1->last;
+      t0->size = MAX2(t0->size, t1->size);
+      t1->first = t1->last = -1;
+   }
+}
+
+struct loop_span {
+   int head, tail;
+};
+
+static void
+place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
+            const struct loop_span *loops, unsigned nloops)
 {
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    unsigned end = 2 * nins + 2, npa = 0;
@@ -3775,8 +3869,10 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
          for (unsigned j = lo; j < lo + n && j < 128; j++) {
             if (k < i->ndst) {
+               /* (a single instruction reads before it writes: the colour's
+                * own sources may sit in the colour register) */
                if (first_w[j] < 0)
-                  first_w[j] = 2 * i->ip;
+                  first_w[j] = 2 * i->ip + (i->rpt == 1);
             } else {
                last[j] = MAX2(last[j], (int)(2 * i->ip));
                if (c->stage == MESA_SHADER_VERTEX)
@@ -3789,6 +3885,23 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
       for (unsigned p = 0; p < 128; p++)
          if (input[p])
             npa = p + 1;
+   /* in a loop, the next iteration reads (and writes) it again: busy over
+    * the whole loop */
+   for (bool changed = true; changed;) {
+      changed = false;
+      for (unsigned p = 0; p < 128; p++) {
+         for (unsigned l = 0; l < nloops; l++) {
+            if (last[p] >= loops[l].head && last[p] < loops[l].tail) {
+               last[p] = loops[l].tail;
+               changed = true;
+            }
+            if (first_w[p] > loops[l].head && first_w[p] <= loops[l].tail) {
+               first_w[p] = loops[l].head;
+               changed = true;
+            }
+         }
+      }
+   }
    if (!npa)
       return;
    BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, npa * BITSET_WORDS(end));
@@ -3819,6 +3932,63 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
             ok[r->n] = false;
       }
    }
+   /* in place: a repeat that starts a vreg and reads, at the component it
+    * writes and stepping with it, an input for the last time may write over
+    * that input (coalesce_repeats' rule) */
+   int *inplace = malloc(nv * sizeof(int));
+   for (unsigned v = 0; v < nv; v++)
+      inplace[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      const struct sgx_ref *d = &i->op[0];
+      if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred || d->file != SGX_F_V ||
+          d->h16 || !d->step || d->n >= nv || sgx_vreg(c, d->n)->first != (int)(2 * i->ip) ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      int base = -1;
+      for (unsigned k = 1; k < i->nops && base < 0; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file == SGX_F_PA && r->step && !r->h16 && r->n >= d->comp && r->n + i->rpt <= npa)
+            base = r->n - d->comp;
+      }
+      bool good = base >= 0;
+      for (unsigned j = 0; good && j < i->rpt; j++)
+         good = last[base + d->comp + j] == (int)(2 * i->ip);
+      /* (every operand naming those registers reads them aligned) */
+      for (unsigned k = 1; good && k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file == SGX_F_PA && r->n + (r->step ? i->rpt : 1) > (unsigned)base + d->comp &&
+             r->n < (unsigned)base + d->comp + i->rpt)
+            good = r->step && !r->h16 && r->n == (unsigned)base + d->comp;
+      }
+      if (good)
+         inplace[d->n] = base;
+   }
+   /* each component's own last use (a 32-bit vreg's register k is free
+    * once component k is: the colour's first pck reads .x, its second .z) */
+   int *lastc = malloc(nv * 16 * sizeof(int));
+   for (unsigned v = 0; v < nv * 16; v++)
+      lastc[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || r->h16)
+            continue;
+         unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         int at = 2 * i->ip + (k < i->ndst);
+         for (unsigned j = r->comp; j < r->comp + n && j < 16; j++)
+            lastc[r->n * 16 + j] = MAX2(lastc[r->n * 16 + j], at);
+      }
+   }
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      int m = -1;
+      for (unsigned j = 0; j < 16; j++)
+         m = MAX2(m, lastc[v * 16 + j]);
+      /* (a loop keeps it all: the allocator's range) */
+      if (r->half || r->size > 16 || m < r->last)
+         for (unsigned j = 0; j < 16; j++)
+            lastc[v * 16 + j] = r->last;
+   }
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
       if (!ok[v])
@@ -3828,27 +3998,34 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
       unsigned lo = r->first, hi = r->last;
       for (unsigned b = 0; b + regs <= MIN2(npa, lim); b++) {
          bool free = true;
-         for (unsigned p = b; p < b + regs && free; p++)
-            for (unsigned x = lo; x <= hi && x < end && free; x++)
-               free = !BITSET_TEST(BUSY(p), x);
+         for (unsigned p = b; p < b + regs && free; p++) {
+            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
+            for (unsigned x = lo; x <= h && x < end && free; x++)
+               free = !BITSET_TEST(BUSY(p), x) || ((int)b == inplace[v] && x == lo);
+         }
          if (!free)
             continue;
-         for (unsigned p = b; p < b + regs; p++)
-            BITSET_SET_RANGE(BUSY(p), lo, MIN2(hi, end - 1));
+         for (unsigned p = b; p < b + regs; p++) {
+            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
+            BITSET_SET_RANGE(BUSY(p), lo, MIN2(h, end - 1));
+         }
          r->pa = true;
          r->phys = b;
          break;
       }
    }
+   free(inplace);
+   free(lastc);
 #undef BUSY
 }
 
 static bool
 allocate(struct sgx_ctx *c)
 {
+   split_vregs(c);
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    int ip = 0;
-   struct { int head, tail; } loops[64];
+   struct loop_span loops[64];
    unsigned nloops = 0;
    int label_ip[256];
    for (unsigned i = 0; i < 256; i++)
@@ -3902,6 +4079,7 @@ allocate(struct sgx_ctx *c)
       }
    }
    free(first_is_read);
+   coalesce_repeats(c);
 
    /* F16 values in r0-r31: under format select an F16 operand's number
     * counts halves, so only those registers can be named (ISA.md "Float
@@ -3950,7 +4128,7 @@ allocate(struct sgx_ctx *c)
    }
    free(used);
    free(halfref);
-   place_in_pa(c, six, ip);
+   place_in_pa(c, six, ip, loops, nloops);
    struct ra_graph *g = ra_alloc_interference_graph(regs, nv);
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);

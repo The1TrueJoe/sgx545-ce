@@ -118,6 +118,18 @@ the next rows.
 - The old stack's gl4es hands the DDK mediump GLSL ES.
 - Compiled as highp, the gl4es Minecraft fragment shaders take 27/21/14/9 issue slots, against
   19/15/11/6 in F16.
+- `opts.fs_mediump` (626f712, `sgxc -M`, `run_corpus.py --fs-mediump`; off by default) compiles a
+  fragment program's floats as mediump:
+  - inputs, texels and uniforms become F16, and the ops over them are rebuilt in F16;
+  - texture coordinates stay f32.
+- GL asks of fixed-function colour math only the framebuffer's precision, so this is in spec for
+  st's `ff-fs` programs.
+- Effect on the highp builds:
+  - gl4es Minecraft frags: 68 → 51 issue slots, 19 → 2 temporaries, the same as their mediump
+    build;
+  - glmark2's frags: 901 → 886 (lighting math gains little; see co-issue and the F32 dot
+    products).
+- The driver sets it. For st's fixed-function programs that is `nir->info.name` "ff-fs".
 
 ### What closed the gap so far
 
@@ -125,7 +137,7 @@ the next rows.
 |---|---|---|
 | f6cdfcd | `nir_opt_shrink_vectors`: components nothing reads go. Example: `MV * v` where fog reads only `.z` | 13586 → 13113 instructions, 19760 → 18566 slots |
 | becc007 | `fold_movs`: an instruction writes the output or copy destination itself, so there is no trailing `mov` | → 12968, → 18257 |
-| 887e523 | `place_in_pa`: temporaries in PA registers after the input's last read, as libusc does | temporaries 7910 → 5820 |
+| 887e523 | `place_in_pa`: temporaries in PA registers after the input's last read, as libusc does. A register read inside a loop stays busy over the whole loop: bf9048a fixes that, 887e523 alone is wrong for loops that aren't unrolled | temporaries 7910 → 5820 |
 | 111d7e7 | 32-bit swizzles of SSA values are aliases, not register copies. Example: `vec4(x)`, which `nir_lower_vec_to_regs` turns into a swizzle. (Its `vec_to_regs_32` change was a misreading, undone in 5f3acd2.) | → 12238, → 17489 |
 | 894c995 | a comparison read only by selects keeps its `testmask` mask (no 1.0/0.0 `movc`); selects of F16 values move whole pairs (`movc.i32`); vregs shrink to the components used | → 11857, → 17018; temporaries → 4973 |
 | 98652ce | a scalar F16 `frcp`/`frsq`/`fexp2`/`flog2` is one instruction; with `driver_consts`, non-hardware f32 constants are SA literals (an `fdp` constant vector a run of them) instead of `limm` + `mov`; an F16 min/max/sat of f32 values runs in f32 and rounds once | glmark2 1513 → 1285; light-advanced frag 38 → 18 |
@@ -154,14 +166,17 @@ instructions at 5f3acd2).
   - We unpack every texel to F16 or F32, compute, and pack again: 11 instructions for
     `t_two`.
   - The sampler's channel swizzle (`zyxw`) also saves libusc the reorder.
+  - Example: `gl_FragColor = texture2D(s, uv)` (`tx_nd_*`) is 0 instructions for libusc. The
+    sample is swizzled into the colour's byte order and its PA register is the colour.
+  - We spend 4 (unpack, pack). Closing it needs the driver to take a sample swizzle and the
+    colour in the sample's register.
 - **Loops.**
   - We unroll every loop fully. `lp_nest` is 66 instructions against 11, but it runs no
     branches, so it is no slower.
   - libusc keeps small loops and predicates the exit.
 - **Precision on the desktop-GL path** (above).
-  - A mediump option for desktop GL's fragment programs (st's fixed-function and GLSL 1.x) would
-    give them the F16 path.
-  - That is a policy choice, so it is the driver's to make, opt-in.
+  - The driver enabling `fs_mediump` for `ff-fs` closes it for st's fixed-function programs.
+  - Desktop GLSL without qualifiers would be an opt-in beyond the spec.
 - **Co-issue.**
   - libusc pairs operations with `efo` and `fdual`: 134 and 36 instructions in c2+c3.
   - We emit neither, and the isaspec encoder doesn't assemble them yet.
