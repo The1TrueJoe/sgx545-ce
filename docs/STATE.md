@@ -104,27 +104,85 @@ the deferred updates.
 | off | ref.bin | field | tag |
 |---|---|---|---|
 | 0x00 | 0x2c0 | command size, rounded up to 64 bytes (`0x2b0 + 8·n` deferred updates) | D |
-| 0x04 | 0x71 / 0x62 | TA flags, from kick flags (ctx+0x164); see the bit table below | D |
+| 0x04 | 0x71 / 0x62 | TA flags, from kick flags (ctx+0x164); see "TA flags" below | D |
 | 0x08 | 04001800 | background object, PDS secondary word (kick +0x108) | D |
 | 0x0c | 00030001 | background object, PDS middle word | D |
 | 0x10 | 0c00060e | background object, PDS primary (0x2e0060e0: samples the render target itself, i.e. "load the old contents") | D |
 | 0x14 | 0x50000000 | `0x40000000 + 0x10000000` if kick flag 0x2000000 is clear; else `n<<27` from the render context +0x40 | D |
 | 0x18 | 0x50000000 | constant | D |
-| 0x1c | 0 / 0x400 / 0x580 | 3D flags: b0 = !kick.b1, b1 = kick.b11, b3 = kick.b12-13, b4, b7 = kick.b19, b8 = kick.b20, b10 = kick.b10/b9 (render), b12 = kick.b10 | D |
-| 0x20 | 0 | kick +0x00 | G |
+| 0x1c | 0 / 0x400 / 0x580 | 3D flags: b0 = !kick.b1, b1 = kick.b11, b3 = kick.b12-13, b4, b7 = kick.b19, b8 = kick.b20, b10 = kick.b10/b9 (render), b12 = kick.b10; b14 and up = the RT dataset's frame index on the kick that renders (0x4400 on frame 2, GEN.md). The microkernel copies it to render details +0xd4 at every kick (pc 0x07b1-0x07b5) and acts on it there (section 6, "Render details") | D |
+| 0x20 | 0 | the RT dataset's frame index (1 on frame 2, GEN.md). The microkernel copies it to TA3D +0xa4 and render details +0x140 at every kick (pc 0x07bc-0x07bf) | D |
 | 0x24 | 3200e000 | **PB descriptor** (kdata) | D |
 | 0x38 | 3200e560 | **render details** (kdata, 0x1ec) | D |
-| 0x3c | 3200e7a0 | render-target dependency block (kdata, 0x28: sync addresses) | G |
+| 0x3c | 3200e7a0 | **HW device sync list** (kdata, 0x28; `SGXMKIF_HWDEVICE_SYNC_LIST`), below. The microkernel copies it to render details +0xe0 at every kick (pc 0x07c3-0x07c5) | D |
 | 0x40 | 3200aac0 | **RT data** (kdata) | D |
 | 0x44 | 3200ab10 | RT data entry for this render (`+0x18 + idx·0x38`) | D |
 | 0x48 | 0 | kick +0x08 (with kick flag 0x20) | G |
 | 0x4c, 0x50 | 0 | multi-RT values (kick +0x60, +0x64) | G |
 | 0x54 | 0 / 6 | number of deferred render-details updates at +0x2a8 | D |
 
+### HW device sync list (cmd+0x3c, kdata, 0x28 bytes)
+
+`SGXMKIF_HWDEVICE_SYNC_LIST` (`sgx_mkif_km.h`), filled by the kernel at kick
+time; 0x28 bytes hold two objects.
+
+| word | field |
+|---|---|
+| 0 | `sAccessDevAddr`: address of a sync-heap word that holds 1 while the render is pending |
+| 1 | `ui32NumSyncObjects` |
+| 2 + 4n | object n: `ui32ReadOpsPendingVal` |
+| 3 + 4n | `sReadOpsCompleteDevVAddr` |
+| 4 + 4n | `ui32WriteOpsPendingVal` |
+| 5 + 4n | `sWriteOpsCompleteDevVAddr` |
+
+At the end of the render the microkernel writes `ui32WriteOpsPendingVal + 1`
+to object n's `sWriteOpsCompleteDevVAddr`, n being render details +0x108
+(pc 0x0f45-0x0f54), and zeroes the access word (pc 0x0fc7-0x0fcb) [D, code
+and trace]. A render is done for the host when the write-complete word
+reaches the pending value plus one. The host compares the two as wrapping
+32-bit counters.
+
 ### CMDTA_SHARED, cmd+0x58 to +0x238
 
-This part is filled by the kernel at kick time (sync objects, status
-updates). The client leaves it zero.
+The kernel fills it at kick time; the client leaves it zero. The layout is
+`SGXMKIF_CMDTA_SHARED` (`sgx_mkif_km.h`), offsets from cmd+0x58:
+
+| off | field | what the microkernel does with it |
+|---|---|---|
+| 0x00 | `ui32CtrlFlags`: READY = 1, set on every kick | read at the kick (pc 0x0648, 0x0728) |
+| 0x04, 0x08 | `ui32NumTAStatusVals`, `ui32Num3DStatusVals` | the counts of the status lists at the end of the struct |
+| 0x0c-0x18 | the TA TQ sync: write-ops pending, write-complete address, read-ops pending, read-complete address | read at TA start (pc 0x064c, 0x0730) |
+| 0x1c-0x28 | the 3D TQ sync, in the same order | copied to render details +0xe4..+0xf0 at every kick (pc 0x07c0-0x07c2). At the 3D end the read-complete address gets read-ops pending + 1. The write-complete address gets write-ops pending + 1 only when render details +0xd4 b9 (0x200) is set (pc 0x0f5c-0x0f6c) |
+| then | the source sync list, `sTA3DDependency`, `sCtlTAStatusInfo[]`, `sCtl3DStatusInfo[]` | the TA-finished handler writes each TA status value to its address. The 3D end writes the 3D list from its render-details copy (count at +0x144, pairs from +0x148; pc 0x0f7d-0x0f89) |
+
+All [D] from the structure and the DDK microkernel trace.
+
+### TA flags (cmd+0x04)
+
+The values the clients use:
+- 0x63 for a scene in one kick, 0x73 on a render target's first frame;
+- 0x71 and 0x62 for the first and last of two kicks;
+- 0x61 for the first kick after frame 1 (GEN.md);
+- 0x60 for a middle kick (no capture).
+
+Bits 5 and 6 are set on every kick. What the DDK microkernel does with each
+bit (`ddk-uk.bin`; pc = the test):
+
+| bit | DDK microkernel | tag |
+|---|---|---|
+| 0 (0x1) | first kick of the scene: pulses SOFT_RESET's TA bit (0x80 = 4, then 0) before the PB check (pc 0x091b). Also tested with b2 (mask 0x5) at TA finish (0x0673), scene setup (0x0755) and 0x0a77 | D (code) |
+| 1 (0x2) | last kick of the scene: the TA-finished handler starts the 3D (pc 0x0676) | D (code; openHC's `do_3d` gates on it, EA1 2026-11-03) |
+| 2 (0x4) | only ever tested with b0 (mask 0x5); no client sets it | G (resume) |
+| 3 (0x8) | tested with b0 (mask 0x9) before the stored-scene DPM load (pc 0x09fa); no client sets it | G |
+| 4 (0x10) | writes 0xa08 = 1, once per kick: the USE code-cache invalidate (pc 0x09b1) | D (code) |
+| 5 (0x20) | invalidates the TA-side caches: 0xad0 = 1 and 0xae0 = 1, then waits for 0x138 & 0x27 and acks 0x140 = 0x27 (pc 0x09a7) | D (code) |
+| 6 (0x40) | sets a bit in 0x804, then runs the MADD (texture) cache invalidate: waits for EVENT_STATUS b26 (`MADD_CACHE_INVALCOMPLETE`), acks it, then a USE data-cache flush (`op0xff #3`) (pc 0x0998). The 0x04000000 edge shows in the DDK's register sample at every render kick | D (code, regsample) |
+| 10 (0x400) | compares a sync value named by the command (+0x10c) before going on (pc 0x073c) | G |
+| 12 (0x1000), 13 (0x2000) | tested (pc 0x06b1 / 0x0ac6, 0x0790); no client sets them | G |
+
+One kick with both b0 and b1 set (0x63) renders: the services backend and
+powervr_sgx send every frame that way, and m2's smoke tests pass with it
+(10/10 frames on the EA1, 2026-11-04; hardware, not a replay poke).
 
 ### Tail, cmd+0x238 to +0x2a8
 
@@ -138,7 +196,7 @@ section 6 for the formulas.
 | 0x240 | 02010018 | TE MTILE2: macrotile Y boundaries (in 16-px tiles) = 8, 16, 24 | D |
 | 0x244 | 0001d016 | TE screen: last tile X (b0-11) = 22, last tile Y (b12-) = 29 | D |
 | 0x248 | 0x40 | tiles per macrotile (8 × 8) | D |
-| 0x24c | 0 / 0x2400000 | TA flags 2: b22-23 from kick flag 0xa00, b19, b25 | D (formula) |
+| 0x24c | 0 / 0x2400000 | TA flags 2: b22-23 from kick flag 0xa00, b19, b25. The microkernel loads it into the TA register 0x218 at TA start (pc 0x095c-0x0963, with +0x238..+0x248 into 0x204-0x214). b22 (0x400000) is set on the kick that renders: the DDK's kick 2 carries 0x400000, kick 1 0 | D (formula, trace) |
 | 0x250 | 3e518000 | **VDM control stream base** for this kick | C |
 | 0x254 | 0xa2 | kick +0x104 | G |
 | 0x258 | 20006000 | region header array of this render (TE PSG region base) | D |
@@ -753,13 +811,21 @@ physical address at byte offset 8, and returns its device address (here
 | 0 | 0x21 | flags: b0 = 1, b5 = per-context PB [D] |
 | 1 | 0 | |
 | 2 | 0 | page directory, filled by the kernel (`ui32OffsetToPDDevPAddr` = 8) [D] |
-| 3 | 3200f000 | CCB base (kdata, 0x10420 bytes = 0x10000 + 0x420 of control) [D] |
+| 3 | 3200f000 | CCB base (kdata, 0x10420 bytes: a 0x10000-byte ring and 0x420 bytes of room past its end, so a command that starts near the end runs on contiguously; the control words are word 4's block, not this) [D] |
 | 4 | 3200aa40 | CCB control: write offset, read offset (kdata, 8 bytes) [D] (0x3200aa60 is a transfer context's) |
-| 5 | 0 | |
+| 5 | 0 | commands in progress: the microkernel adds 1 when it takes a kick (pc 0x0122) and subtracts 1 when it advances the read offset (pc 0x0808) [D, trace] |
 | 6 | 3200e000 | PB descriptor (kdata, 0x3c) [D] |
 | 7 | 10462000 | 0x40-byte scratch block in the 3D params heap (the microkernel's per-context data) [D] |
 | 8-15 | 0 | |
 | 16 | pid | creating process ID (replaying the captured one is harmless) [D] |
+
+**The command ring.** The client writes each command at the control's write
+offset and then sets the write offset to `(woff + size) & 0xffff`, with size
+the command's word 0 (0x2c0 for a TA command). The microkernel reads the
+command at CCB base + read offset and advances the read offset by the same
+size, `& 0xffff` (pc 0x07fc-0x0804). A command is never split at the ring's
+end: one that starts near it runs into the 0x420 bytes of room. The transfer
+context's ring has 0x4c8 bytes of room. [D, code and trace]
 
 ### PB descriptor (kdata, 0x3c, `FUN_0001e980`)
 
@@ -807,8 +873,16 @@ For w × h, no multisampling:
 ### RT data (kdata, `nbuf·0x38 + 0x18` bytes; nbuf = 2)
 
 - **Header:**
-  - [0] = a 4-byte kdata word (frame counter?);
-  - [1] = 1;
+  - [0] = the address of a 4-byte kdata word, the frame word. The client
+    writes the frame index + 1 there before each scene. The microkernel never
+    reads it (DDK trace): it is the client's own record of which entry is next;
+  - [1] = a completion counter the microkernel advances. +1 at the finish of
+    a TA that does not end the scene (pc 0x069e-0x06a3), +1 at the end of a
+    render whose render details +0xd4 has b10 (pc 0x0fb1-0x0fb6). The DDK
+    trace shows 0, 1, 2 over a two-kick frame. Its starting value doesn't
+    matter to the microkernel: the DDK client writes 1, the open clients and
+    powervr_sgx write 0, and both render. The DDK's debug output calls it
+    "RT frames";
   - [2] = padded tiles in X (mx·4 = 0x20);
   - [5] = nbuf.
 - **Per entry (0x38 bytes from +0x18):**
@@ -833,6 +907,23 @@ For w × h, no multisampling:
   All [D] from the code and the capture; the purposes of the 0x40, 0x50
   and 0x88 TA-data blocks are [G].
 
+- **Which entry renders.** The client names the entry in the TA command
+  (+0x44, which the microkernel reads as render details +0xdc). It alternates
+  by frame: the frame word's value & 1 picks the entry. Entry word 1 holds
+  the render in flight on that entry; the render's end clears it and sets the
+  entry's state word (+0x34) to `0x10 | (render details +0xd4 >> 14) << 12`
+  (pc 0x0fa1-0x0fab). If the alternation and the frame word disagree, the
+  frames retire the wrong entry: their PB pages are never freed, and the 3D
+  locks up on the fourth frame (EA3, 2026-10-28).
+- **Renders in flight.** The microkernel tracks two renders in flight in
+  the TA3D control block (+0x50 and +0x54; the kick picks a free slot at
+  pc 0x09b7-0x09d3, and the render's end clears its slot at 0x0fbe-0x0fc5).
+  So one RT data set with its two entries holds two renders in flight. The
+  open clients keep one set per render target they draw to back to back
+  (the back buffer, then the swap's front buffer), so a render never waits
+  on the other target's. Gap: what a third kick does while both entries
+  have a render in flight is untested.
+
 ### Region headers and tail pointers (TA data heap)
 
 - **Region headers:** two arrays (double-buffered, 0x20006000 and
@@ -851,7 +942,11 @@ For w × h, no multisampling:
 `FUN_0001f990` fills it once per RT. The render details point at it as
 `0x2000000 | (addr - PB base)>>4` (+0x48).
 
-- [0-2] = 0.
+- [0-2] = 0 from the client. The microkernel writes them at every 3D start
+  (pc 0x128d-0x1296): [0] = render details +0x130 and [1] = +0x134 (the
+  background object's PDS secondary and middle words, cmd+0x08 and +0x0c),
+  and [2] = the word at render details +0x114 + 4 × (+0x108) (its PDS
+  primary). [D, trace]
 - [3-8] = a 2-D rotation matrix (identity + RT+0x30 for no rotation).
 - [10] = 0x202.
 - [15] = 0x100000.
@@ -891,6 +986,28 @@ For w × h, no multisampling:
 | 0x6c-0xc8 | 0 | kick +0xc0..+0xe4 and +0x94..+0xbc (multisample / PBE extras) | G |
 | 0xcc | 0x100 | b8 = kick flag 0x8000000 | D |
 | 0x13c | 07c00000 | `n<<22` from the render context +0x3c, default 0x7c00000 | D |
+
+The words past +0xd0 are set at kick time, and the microkernel reads them:
+
+| off | field | what the microkernel does with it | tag |
+|---|---|---|---|
+| 0xd0 | address of an 8-byte sync-heap word the client sets to 1 per scene | zeroed at the render's end, unless +0xd4 has b2 or b3 (pc 0x0fb8-0x0fbd) | D |
+| 0xd4 | copy of the TA command's 3D flags (cmd+0x1c), taken at every kick | b3 (0x8): the render completes on the 3D end alone, with no DPM-free rendezvous; the 3D start then writes 0x63c = 0 instead of 3 (UKERNEL.md §5). b9 (0x200): the 3D TQ write-complete is written at the end. b10 (0x400): RT data header [1] += 1 at the end. b14 and up: shifted into the RT data entry's state word | D |
+| 0xd8 | RT data address | header [1] counter (above) | D |
+| 0xdc | the RT data entry this render uses; must equal cmd+0x44 | its word 1 cleared, word 13 set to idle at the end; its word 4 (background block) filled at 3D start | D |
+| 0xe0 | copy of cmd+0x3c, the HW device sync list, taken at every kick | write-complete of entry (+0x108) set at the end | D |
+| 0xe4-0xf0 | copy of CMDTA_SHARED +0x1c..+0x28, the 3D TQ sync | read-complete (and with +0xd4 b9 write-complete) set at the end | D |
+| 0x104 | 1: the number of sync-list passes | the end advances +0x108 until it reaches this count | D |
+| 0x108 | the pass cursor, 0 at the first 3D start | indexes the sync list (+0xe0) and the +0x114 array; reset to 0 after the last pass (pc 0x0f55-0x0f5a) | D |
+| 0x110 | address of an 8-byte kdata word | not read by the microkernel in the traces | G |
+| 0x114 | address of an array of words, one per pass, holding the background object's PDS primary word (`rows<<26 \| offset>>4`); the client rewrites it before each kick | copied into the background block word 2 at 3D start | D |
+| 0x124 | the TA state register 0x274, saved at each TA finish (pc 0x069a) | restored into 0x274 at the next kick (pc 0x0a65) | D |
+| 0x130, 0x134 | the background object's PDS secondary and middle words | copied into background block words 0-1 at 3D start | D |
+| 0x140 | copy of cmd+0x20 (the frame index), taken at every kick | | D |
+| 0x144, 0x148.. | the 3D status-value count and its (address, value) pairs | each value written at the end (pc 0x0f7d-0x0f89) | D |
+
+All from the DDK microkernel (`ddk-uk.bin`) and its memory trace over a
+generated frame (`tools/ukernel/run.py`).
 
 ## Captures
 

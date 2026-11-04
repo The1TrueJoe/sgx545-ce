@@ -161,9 +161,11 @@ fixing.
 - **Background block words 3-8:** STATE.md §6 calls them a rotation matrix;
   TEX.md §10 measures them as texture coordinates.
 - **CCB 0x10420:** STATE.md §6 reads 0x420 as control; the code reads it as
-  room past the ring.
+  room past the ring. *Resolved:* it is room past the ring (STATE.md §6, HW
+  render context word 3 and "The command ring").
 - **RT data header word 1:** STATE.md §6 says it is 1; the clients and the
-  kernel driver leave it at 0.
+  kernel driver leave it at 0. *Resolved:* it is a counter the microkernel
+  advances, and its starting value doesn't matter (STATE.md §6 "RT data").
 - **`phas.i` target origin:** ISA.md's builder table says it counts from the
   code heap, while UAPI.md and ISA.md's `ba` say from the code base the task
   runs from. The two differ past the first 512 KB.
@@ -178,7 +180,8 @@ fixing.
 - **Event program:** SRVINIT.md `-o` describes the open microkernel's event
   program as DOUTD + DOUTU; UKERNEL.md 4a says a bare DOUTU.
 - **Directory-list base:** UKERNEL.md §6 says it is "shifted"; the code writes
-  the raw physical address.
+  the raw physical address. *Resolved:* raw is right; SGX545 has no 36-bit MMU
+  (UKERNEL.md §6 "The register map").
 - **Discard phase-0 `phas.i`:** ISA.md lists `fa440800|t`; the winsys's phase
   word is `[wait=1]`.
 - **Code comments behind the docs:**
@@ -187,6 +190,42 @@ fixing.
   - `sgx545_draw.c:1009` tags sa4 as a guess; STATE.md confirms ALWAYS (a7).
 - **DRIVER-UPSTREAM.md §2 behind the docs:** it still lists gl_FragCoord,
   gl_PointCoord, the pass types and sa3/sa4 as gaps.
+
+## Filled since the map was made
+
+Spec-side additions on 2026-11-04 (render state / TA3D). The row tables and
+the summary counts below haven't been re-tallied yet. The code check should
+re-read these rows against the sections named:
+
+- **Kernel: "TA command and render structures"**, all except the
+  tail-pointer formula and which TA-data blocks are per entry:
+  - STATE.md §1: the TA flags bit table, from the DDK microkernel's tests;
+    +0x1c b14 and up; +0x20; +0x24c b22; the CMDTA_SHARED offsets; the HW
+    device sync list;
+  - STATE.md §6: render details +0xd0..+0x148; the RT data header [0]/[1],
+    the entry alternation and the renders in flight; the command ring.
+- **Kernel: "Host control block and firmware commands"**: UKERNEL.md §1 has
+  the host-control word table, the flag bits and the timer values. §3 has
+  the doorbell and kicker, the `ui32CacheControl` bits, the power and
+  cleanup values, and the GETMISCINFO layout. The open gap is the CE5300
+  core clock, which is unmeasured.
+- **Kernel: "Register map"**: UKERNEL.md §6 "The register map", except the
+  registers safe to read on an unreset core and the BAR0 size (DRM-DRIVER.md).
+- **Winsys: "TA command", "Render details", "CCB", "Sync data"**:
+  STATE.md §1 and §6, as above. Render details +0x110 stays [G]: the
+  microkernel doesn't read it.
+- **Winsys: "RT allocations and RT data"**: the RT data part is filled
+  (STATE.md §6). The allocation order is not.
+- **Gallium: `get_rt`**: STATE.md §6 "Renders in flight", with what a third
+  kick does still open.
+- **Gallium: `sgx545_screen.h:52-59`**: UKERNEL.md §9 (two contexts sharing a
+  PB work; a second PB per context is still a gap).
+- **New:** UKERNEL.md §5 "Where the DDK microkernel raises the host
+  interrupt": every SW_EVENT site and what triggers it, the fact that no
+  completion waits for the timer, the hardware-done to IRQ times, and where
+  the open microkernel differs. UKERNEL.md §6 "Parameter-buffer / DPM setup"
+  is rewritten from the DDK's code: the free-list loads, the counter save,
+  0x63c, and the DPM modes. A fresh scene clears and doesn't load.
 
 ## Code against docs
 
