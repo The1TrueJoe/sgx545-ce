@@ -177,6 +177,8 @@ struct pvrsgx_device {
 	struct drm_gpu_scheduler sched;
 	/** @fence_context: Context of the hardware fences. */
 	u64 fence_context;
+	/** @done_lock: Keeps completions in order while imports are flushed. */
+	struct mutex done_lock;
 	/** @fence_lock: Protects @fence_seqno and @active. */
 	spinlock_t fence_lock;
 	/** @fence_seqno: Last hardware fence seqno. */
