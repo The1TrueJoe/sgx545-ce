@@ -78,8 +78,10 @@ libusc's numbers come from the corpus USPs in `tools/isa/corpus/c1`-`c3`.
 |---|---|---|---|---|---|---|---|
 | c2 (259 shaders) | um-re 1900475 | 1400 | 1963 | 1155 | 1099 + 36 | 1380 | 101 |
 | c2 | 894c995 | 1221 | 1758 | 764 | | | |
+| c2 | 5f3acd2 | 1197 | 1734 | 756 | | | |
 | c3 (174 shaders) | um-re 1900475 | 2098 | 2963 | 1206 | 1798 + 43 | 2277 | 219 |
 | c3 | 894c995 | 1812 | 2585 | 496 | | | |
+| c3 | 5f3acd2 | 1788 | 2561 | 565 | | | |
 
 The gl4es Minecraft shaders (`tools/usc/tests/gl4es/mc.glsl`), driver mode. Each cell is
 instructions / issue slots / temporaries. libusc's USPs for these have been requested from a
@@ -97,8 +99,25 @@ box run.
 | mc_sky frag | 6 / 6 / 3 | 6 / 6 / 2 | pending |
 | **total** | **106 / 239 / 66** | **98 / 180 / 34** | |
 
-On the new stack, Minecraft draws through st's fixed-function programs, not through these
-shaders. Those programs, and glmark2's shaders through both compilers, are the next rows.
+The glmark2 shaders, 56 of the 61 (`tools/usc/glmark2_corpus.py`, then `run_corpus.py --driver`).
+The five left out are terrain's three (desktop GLSL, vertex texture fetch) and bump-normals-tangent's
+two. Totals are instructions / issue slots / temporaries.
+
+| set | 894c995 | 5f3acd2 | libusc |
+|---|---|---|---|
+| glmark2 ES2 precision | 1513 / 2416 / 397 | 1225 / 2132 / 388 | pending |
+
+On the new stack, Minecraft draws through st's fixed-function programs, not through the gl4es
+shaders. Those programs, and libusc's output for glmark2 (`shc` takes the same corpus file), are
+the next rows.
+
+**Precision on the desktop-GL path.**
+- st builds the fixed-function programs (`ff-fs`, `ff-vs`) straight as 32-bit NIR.
+- Desktop GLSL has no precision qualifiers.
+- So every fragment program of Minecraft and of desktop glmark2 compiles in F32 on the new stack.
+- The old stack's gl4es hands the DDK mediump GLSL ES.
+- Compiled as highp, the gl4es Minecraft fragment shaders take 27/21/14/9 issue slots, against
+  19/15/11/6 in F16.
 
 ### What closed the gap so far
 
@@ -107,8 +126,14 @@ shaders. Those programs, and glmark2's shaders through both compilers, are the n
 | f6cdfcd | `nir_opt_shrink_vectors`: components nothing reads go. Example: `MV * v` where fog reads only `.z` | 13586 → 13113 instructions, 19760 → 18566 slots |
 | becc007 | `fold_movs`: an instruction writes the output or copy destination itself, so there is no trailing `mov` | → 12968, → 18257 |
 | 887e523 | `place_in_pa`: temporaries in PA registers after the input's last read, as libusc does | temporaries 7910 → 5820 |
-| 111d7e7 | 32-bit vecs and swizzles of SSA values are aliases, not register copies. Example: `vec4(x)` | → 12238, → 17489 |
+| 111d7e7 | 32-bit swizzles of SSA values are aliases, not register copies. Example: `vec4(x)`, which `nir_lower_vec_to_regs` turns into a swizzle. (Its `vec_to_regs_32` change was a misreading, undone in 5f3acd2.) | → 12238, → 17489 |
 | 894c995 | a comparison read only by selects keeps its `testmask` mask (no 1.0/0.0 `movc`); selects of F16 values move whole pairs (`movc.i32`); vregs shrink to the components used | → 11857, → 17018; temporaries → 4973 |
+| 98652ce | a scalar F16 `frcp`/`frsq`/`fexp2`/`flog2` is one instruction; with `driver_consts`, non-hardware f32 constants are SA literals (an `fdp` constant vector a run of them) instead of `limm` + `mov`; an F16 min/max/sat of f32 values runs in f32 and rounds once | glmark2 1513 → 1285; light-advanced frag 38 → 18 |
+| 09b4931 | `narrow16`: f32 selects/min/max over values that are F16 underneath run in F16, so the uniforms under them load as F16 constants | glmark2 → 1249; ideas-lamp-lit frag 173 → 145 |
+| cdd95cf | a select of one lane (a vec3's z) moves whole registers when the lane is in the same half of both sources | glmark2 → 1233 |
+
+From here the corpus runs every set three ways: F32, F16 and driver mode (11828 files, 17675
+instructions at 5f3acd2).
 
 ### What is left, largest first
 
@@ -133,6 +158,13 @@ shaders. Those programs, and glmark2's shaders through both compilers, are the n
   - We unroll every loop fully. `lp_nest` is 66 instructions against 11, but it runs no
     branches, so it is no slower.
   - libusc keeps small loops and predicates the exit.
+- **Precision on the desktop-GL path** (above).
+  - A mediump option for desktop GL's fragment programs (st's fixed-function and GLSL 1.x) would
+    give them the F16 path.
+  - That is a policy choice, so it is the driver's to make, opt-in.
+- **Co-issue.**
+  - libusc pairs operations with `efo` and `fdual`: 134 and 36 instructions in c2+c3.
+  - We emit neither, and the isaspec encoder doesn't assemble them yet.
 - **In-place repeats.**
   - libusc writes `fmad pa0, pa0, pa4, pa8 rpt=4`. We keep a repeated instruction's
     destination apart from its sources, which is safe but costs registers.

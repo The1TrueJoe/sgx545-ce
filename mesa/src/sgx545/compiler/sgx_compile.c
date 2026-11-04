@@ -1378,11 +1378,12 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    unsigned wmask = ld.dest.is_ssa ? nir_component_mask(nc) : ld.write_mask;
    unsigned nin = nir_op_infos[alu->op].num_inputs;
 
-   if (nir_op_is_vec_or_mov(alu->op) && ld.dest.is_ssa && !ld.fsat) {
-      /* an alias of its sources (sgx_nir.c's vec_to_regs_32 kept it) */
+   if (alu->op == nir_op_mov && ld.dest.is_ssa && !ld.fsat) {
+      /* a swizzle of an SSA value (nir_lower_vec_to_regs' vec4(x)): an
+       * alias of its components, not a register copy */
       struct sgx_ref r[4];
       for (unsigned k = 0; k < nc; k++)
-         r[k] = alu->op == nir_op_mov ? alu_src(c, alu, 0, k) : alu_src(c, alu, k, 0);
+         r[k] = alu_src(c, alu, 0, k);
       set_refs(c, &alu->def, r, nc);
       return;
    }

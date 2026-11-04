@@ -670,33 +670,10 @@ vec_cmp_instr(const nir_instr *instr, const void *data)
    }
 }
 
-/* a 32-bit vec into a register, unless the backend can alias it: its sources
- * SSA values (no register a later write would change), its users ALU
- * instructions and outputs (vec4(x) as the colour, a swizzle as a source) */
 static bool
 vec_to_regs_32(const nir_instr *instr, unsigned wrmask, const void *data)
 {
-   nir_alu_instr *alu = nir_instr_as_alu(instr);
-   if (alu->def.bit_size != 32)
-      return false;
-   for (unsigned s = 0; s < nir_op_infos[alu->op].num_inputs; s++) {
-      nir_instr *p = nir_def_instr(alu->src[s].src.ssa);
-      if (p->type == nir_instr_type_undef ||
-          (p->type == nir_instr_type_intrinsic && nir_instr_as_intrinsic(p)->intrinsic == nir_intrinsic_load_reg))
-         return true;
-   }
-   nir_foreach_use_including_if(use, &alu->def) {
-      if (nir_src_is_if(use))
-         return true;
-      nir_instr *u = nir_src_use_instr(use);
-      if (u->type == nir_instr_type_alu)
-         continue;
-      if (u->type == nir_instr_type_intrinsic &&
-          nir_instr_as_intrinsic(u)->intrinsic == nir_intrinsic_store_output)
-         continue;
-      return true;
-   }
-   return false;
+   return nir_instr_as_alu(instr)->def.bit_size == 32;
 }
 
 /* ------------------------------------------------------------------------
