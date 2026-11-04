@@ -3,9 +3,8 @@
 `mesa/src/sgx545/compiler` now emits every instruction through the encoder
 isaspec generates from `mesa/src/sgx545/isa/sgx545.xml`. That XML was written
 from `docs/ISA.md` alone. `usse_forms.h`, `usse.c` and `usse.h` are deleted,
-with `tools/usc/gen_forms.py`, which generated them. `check_enc.py` and
-`tests/enc_lines.c` stay with the spec side; enc_lines.c built against
-`usse.h`, so it no longer builds as it is.
+with `tools/usc/gen_forms.py`, which generated them, and `check_enc.py` /
+`tests/enc_lines.c`, which checked them.
 
 ## What changed
 
@@ -35,7 +34,18 @@ with `tools/usc/gen_forms.py`, which generated them. `check_enc.py` and
 | `meson test sgx545_isa` (`-Dbuild-tests=true`) | OK (246/246) |
 | `mesa/build.sh x86_64` (zig, the gallium driver) | Builds and links `libgallium-26.2.5.so`, no sgx545 warnings |
 
+## Validation (usse-compiler, black-box)
+
+- Its own corpus build (host Mesa 26.2.5 + patch 0004): 7886 files byte-identical.
+- `sgx545_isa_test gles2.txt int.txt -f 200000`: 0 failures.
+- `blind.py` on the `-t` tables: 246 exact.
+- A fresh blind draw over 174 forms: 166 exact. The 8 misses are isa-package
+  gaps, untouched by this change; nothing the compiler emits is affected:
+  - the assembler doesn't take efo `i=`, dot `cs=`/`as=`, `firh.s8`, st `am3` with
+    `.q`, or rlp `unused2=`;
+  - an fcos with both f16 and c10 gets h7 wrong: `struct sgx_isa_src.fmt` holds one
+    format, not both flags.
+
 ## Next
 
-- usse-compiler: `check_out.py` and `blind.py` on this commit, plus
-  `check_enc.py` (or retiring it with `enc_lines.c`, which needed `usse.h`).
+- The isa-package gaps above.
