@@ -53,3 +53,86 @@ the kernel are symbolised.
 | date | benchmark | top CPU hotspots (share of samples) | driver stats |
 |---|---|---|---|
 | 2026-11-04 | Minecraft (aee60b3) | not profiled yet | ~250 k vertices a frame; vertex cache 0 hits; the draw path ~40% of the render thread, ring-slot waits ~25%, render latency ~100-125 ms |
+
+## Shader code against libusc
+
+The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with
+ours shader by shader:
+
+```
+python3 -I tools/usc/run_corpus.py SGXC tools/isa/corpus/c2.glsl OUT --driver
+python3 -I tools/usc/count.py OUT tools/isa/corpus/c2 [--md]
+```
+
+`--driver` compiles every shader the way the gallium driver does (`sgxc -p -L -D -F`).
+`count.py` reports, per shader:
+- **instructions** in the main program;
+- **issue slots**: a repeat counts its iterations, so `fmad rpt=4` is 4;
+- **temporaries** (the header's `n_temps`). The DOUTU allocates them per instance, so fewer
+  temporaries let more instances be resident to hide texture latency;
+- libusc's **secondary update program** separately. It runs once per draw, not per pixel.
+
+libusc's numbers come from the corpus USPs in `tools/isa/corpus/c1`-`c3`.
+
+| set | when | instructions | issue slots | temporaries | libusc (main + secondary) | libusc slots | libusc temps |
+|---|---|---|---|---|---|---|---|
+| c2 (259 shaders) | um-re 1900475 | 1400 | 1963 | 1155 | 1099 + 36 | 1380 | 101 |
+| c2 | 894c995 | 1221 | 1758 | 764 | | | |
+| c3 (174 shaders) | um-re 1900475 | 2098 | 2963 | 1206 | 1798 + 43 | 2277 | 219 |
+| c3 | 894c995 | 1812 | 2585 | 496 | | | |
+
+The gl4es Minecraft shaders (`tools/usc/tests/gl4es/mc.glsl`), driver mode. Each cell is
+instructions / issue slots / temporaries. libusc's USPs for these have been requested from a
+box run.
+
+| shader | 1900475 | 894c995 | libusc |
+|---|---|---|---|
+| mc_terrain vert | 20 / 68 / 16 | 17 / 47 / 8 | pending |
+| mc_terrain frag | 19 / 19 / 6 | 19 / 19 / 0 | pending |
+| mc_texfog vert | 15 / 48 / 12 | 13 / 31 / 8 | pending |
+| mc_texfog frag | 15 / 15 / 5 | 15 / 15 / 0 | pending |
+| mc_gui vert | 6 / 28 / 8 | 5 / 24 / 8 | pending |
+| mc_gui frag | 11 / 11 / 4 | 11 / 11 / 0 | pending |
+| mc_sky vert | 14 / 44 / 12 | 12 / 27 / 8 | pending |
+| mc_sky frag | 6 / 6 / 3 | 6 / 6 / 2 | pending |
+| **total** | **106 / 239 / 66** | **98 / 180 / 34** | |
+
+On the new stack, Minecraft draws through st's fixed-function programs, not through these
+shaders. Those programs, and glmark2's shaders through both compilers, are the next rows.
+
+### What closed the gap so far
+
+| commit | change | corpus effect (all sets, F32 and F16) |
+|---|---|---|
+| f6cdfcd | `nir_opt_shrink_vectors`: components nothing reads go. Example: `MV * v` where fog reads only `.z` | 13586 → 13113 instructions, 19760 → 18566 slots |
+| becc007 | `fold_movs`: an instruction writes the output or copy destination itself, so there is no trailing `mov` | → 12968, → 18257 |
+| 887e523 | `place_in_pa`: temporaries in PA registers after the input's last read, as libusc does | temporaries 7910 → 5820 |
+| 111d7e7 | 32-bit vecs and swizzles of SSA values are aliases, not register copies. Example: `vec4(x)` | → 12238, → 17489 |
+| 894c995 | a comparison read only by selects keeps its `testmask` mask (no 1.0/0.0 `movc`); selects of F16 values move whole pairs (`movc.i32`); vregs shrink to the components used | → 11857, → 17018; temporaries → 4973 |
+
+### What is left, largest first
+
+- **Uniform-only math per pixel.**
+  - libusc moves expressions over uniforms into the secondary update program, which runs once
+    per draw. In c1 that is 877 of its 1037 instructions.
+  - We have no secondary program. `driver_consts` (`-D`) covers only the C10 → F16 conversion
+    of a lowp vector.
+  - Mesa's preamble (`nir_opt_preamble`) would produce the code. The driver would have to run
+    it from the PDS secondary program.
+- **Selects instead of predicates.**
+  - libusc tests into a predicate and writes the result under `(p0)` / `(!p0)`.
+  - We compute a 1.0/0.0 value or a mask and `movc` it.
+  - c3: `movc` 452 against 48, `testmask` 108 against 18.
+- **8-bit colour math.**
+  - libusc adds and multiplies RGBA8 texels and lowp colours in U8/C10 (`sopwm`, `sop2`).
+    `t_two` (sum of two textures) is 1 instruction.
+  - We unpack every texel to F16 or F32, compute, and pack again: 11 instructions for
+    `t_two`.
+  - The sampler's channel swizzle (`zyxw`) also saves libusc the reorder.
+- **Loops.**
+  - We unroll every loop fully. `lp_nest` is 66 instructions against 11, but it runs no
+    branches, so it is no slower.
+  - libusc keeps small loops and predicates the exit.
+- **In-place repeats.**
+  - libusc writes `fmad pa0, pa0, pa4, pa8 rpt=4`. We keep a repeated instruction's
+    destination apart from its sources, which is safe but costs registers.
