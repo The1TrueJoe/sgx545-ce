@@ -3763,6 +3763,60 @@ split_vregs(struct sgx_ctx *c)
    free(run);
 }
 
+/* A repeat whose source vreg dies here, read at the component its
+ * destination writes and stepping with it, writes in place: iteration k
+ * reads component k before writing it, and no later iteration reads what an
+ * earlier one wrote (libusc's fmad pa0, pa0, pa4, pa8 rpt=4). The
+ * destination vreg becomes the source's, so a mat4 * v chain needs one
+ * register run, not two. */
+static void
+coalesce_repeats(struct sgx_ctx *c)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      struct sgx_ref d = i->op[0];
+      if (d.file != SGX_F_V || d.h16 || !d.step || d.n >= nv)
+         continue;
+      struct sgx_vreg *t1 = sgx_vreg(c, d.n);
+      if (t1->half || t1->first != (int)(2 * i->ip) || (int)d.n == c->keep_vreg || (int)d.n == c->face_vreg)
+         continue;
+      int src = -1;
+      for (unsigned k = 1; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n == d.n || r->h16 || !r->step || r->comp != d.comp)
+            continue;
+         struct sgx_vreg *t0 = sgx_vreg(c, r->n);
+         if (!t0->half && t0->last == (int)(2 * i->ip) && (int)r->n != c->keep_vreg &&
+             (int)r->n != c->face_vreg && (int)r->n != c->face_f32)
+            src = r->n;
+         break;
+      }
+      if (src < 0)
+         continue;
+      /* every other operand naming the source reads it the same way */
+      bool ok = true;
+      for (unsigned k = 1; k < i->nops && ok; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file == SGX_F_V && r->n == (unsigned)src)
+            ok = r->comp == d.comp && r->step && !r->h16;
+      }
+      if (!ok)
+         continue;
+      struct sgx_vreg *t0 = sgx_vreg(c, src);
+      unsigned from = d.n;
+      list_for_each_entry(struct sgx_ins, j, &c->ins, link)
+         for (unsigned k = 0; k < j->nops; k++)
+            if (j->op[k].file == SGX_F_V && j->op[k].n == from)
+               j->op[k].n = src;
+      t0->last = t1->last;
+      t0->size = MAX2(t0->size, t1->size);
+      t1->first = t1->last = -1;
+   }
+}
+
 struct loop_span {
    int head, tail;
 };
@@ -3962,6 +4016,7 @@ allocate(struct sgx_ctx *c)
       }
    }
    free(first_is_read);
+   coalesce_repeats(c);
 
    /* F16 values in r0-r31: under format select an F16 operand's number
     * counts halves, so only those registers can be named (ISA.md "Float
