@@ -118,6 +118,18 @@ the next rows.
 - The old stack's gl4es hands the DDK mediump GLSL ES.
 - Compiled as highp, the gl4es Minecraft fragment shaders take 27/21/14/9 issue slots, against
   19/15/11/6 in F16.
+- `opts.fs_mediump` (626f712, `sgxc -M`, `run_corpus.py --fs-mediump`; off by default) compiles a
+  fragment program's floats as mediump:
+  - inputs, texels and uniforms become F16, and the ops over them are rebuilt in F16;
+  - texture coordinates stay f32.
+- GL asks of fixed-function colour math only the framebuffer's precision, so this is in spec for
+  st's `ff-fs` programs.
+- Effect on the highp builds:
+  - gl4es Minecraft frags: 68 → 51 issue slots, 19 → 2 temporaries, the same as their mediump
+    build;
+  - glmark2's frags: 901 → 886 (lighting math gains little; see co-issue and the F32 dot
+    products).
+- The driver sets it. For st's fixed-function programs that is `nir->info.name` "ff-fs".
 
 ### What closed the gap so far
 
@@ -159,9 +171,8 @@ instructions at 5f3acd2).
     branches, so it is no slower.
   - libusc keeps small loops and predicates the exit.
 - **Precision on the desktop-GL path** (above).
-  - A mediump option for desktop GL's fragment programs (st's fixed-function and GLSL 1.x) would
-    give them the F16 path.
-  - That is a policy choice, so it is the driver's to make, opt-in.
+  - The driver enabling `fs_mediump` for `ff-fs` closes it for st's fixed-function programs.
+  - Desktop GLSL without qualifiers would be an opt-in beyond the spec.
 - **Co-issue.**
   - libusc pairs operations with `efo` and `fdual`: 134 and 36 instructions in c2+c3.
   - We emit neither, and the isaspec encoder doesn't assemble them yet.
