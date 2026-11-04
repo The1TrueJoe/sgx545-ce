@@ -535,6 +535,39 @@ alu_of(nir_src s)
    return i->type == nir_instr_type_alu ? nir_instr_as_alu(i) : NULL;
 }
 
+/* The colour is packed to U8 with pck's saturation: a clamp to [0, 1] of
+ * what is stored there is the pack's own (libusc drops it, sat_m) */
+static bool
+colour_sat_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   if (in->intrinsic != nir_intrinsic_store_output)
+      return false;
+   unsigned loc = nir_intrinsic_io_semantics(in).location;
+   if (loc != FRAG_RESULT_COLOR && loc != FRAG_RESULT_DATA0)
+      return false;
+   nir_alu_instr *a = alu_of(in->src[0]);
+   nir_alu_instr *cv = NULL;
+   if (a && a->op == nir_op_f2f32) {
+      cv = a;
+      a = alu_of(a->src[0].src);
+   }
+   if (!a || a->op != nir_op_fsat)
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def *x = nir_ssa_for_alu_src(b, a, 0);
+   if (cv) {
+      nir_alu_instr *w = nir_alu_instr_create(b->shader, nir_op_f2f32);
+      w->src[0].src = nir_src_for_ssa(x);
+      for (unsigned k = 0; k < NIR_MAX_VEC_COMPONENTS; k++)
+         w->src[0].swizzle[k] = cv->src[0].swizzle[k];
+      nir_def_init(&w->instr, &w->def, cv->def.num_components, 32);
+      nir_builder_instr_insert(b, &w->instr);
+      x = &w->def;
+   }
+   nir_src_rewrite(&in->src[0], x);
+   return true;
+}
+
 /* ------------------------------------------------------------------------
  * fs_mediump: inputs, texels and uniforms that no texture coordinate needs
  * become F16, then every float op over F16 values is rebuilt in F16 (what
@@ -1524,6 +1557,9 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_var_copies);
    NIR_PASS(_, s, nir_lower_vars_to_ssa);
    optimize(s);
+   if (s->info.stage == MESA_SHADER_FRAGMENT &&
+       nir_shader_intrinsics_pass(s, colour_sat_instr, nir_metadata_control_flow, NULL))
+      optimize(s);
    /* indexing of temporaries that unrolling didn't remove (a loop bounded by
     * a uniform): if / else trees over the elements */
    bool ind = false;

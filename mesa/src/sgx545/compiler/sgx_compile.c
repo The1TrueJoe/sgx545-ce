@@ -3870,7 +3870,7 @@ place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
          if (r->file != SGX_F_O)
             continue;
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
-         int at = 2 * i->ip + (k < i->ndst && i->rpt == 1);
+         int at = 2 * i->ip + (k < i->ndst && (i->rpt == 1 || i->form == SGX_OP_FDP));
          for (unsigned j = r->n; j < r->n + n && j < 128; j++) {
             if (from[j] < 0 || at < from[j])
                from[j] = at;
@@ -4006,7 +4006,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
                /* (a single instruction reads before it writes: the colour's
                 * own sources may sit in the colour register) */
                if (first_w[j] < 0)
-                  first_w[j] = 2 * i->ip + (i->rpt == 1);
+                  first_w[j] = 2 * i->ip + (i->rpt == 1 || i->form == SGX_OP_FDP);
             } else {
                last[j] = MAX2(last[j], (int)(2 * i->ip));
                if (c->stage == MESA_SHADER_VERTEX)
@@ -4118,7 +4118,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
          /* (an F16 vreg by register: a repeat steps a register at a time) */
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
          unsigned first = half ? r->comp / 2 : r->comp;
-         bool early = i->rpt > 1 || i->kind == SGX_INS_SAMPLE ||
+         bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) || i->kind == SGX_INS_SAMPLE ||
                       (i->kind == SGX_INS_ALU && (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
          int at = 2 * i->ip + (k < i->ndst && !early);
          for (unsigned j = first; j < first + n && j < 16; j++) {
@@ -4189,9 +4189,9 @@ allocate(struct sgx_ctx *c)
       label_ip[i] = -1;
 
    /* uses at 2*ip, writes at 2*ip+1, except that a repeated instruction's
-    * destination is live while it reads (iterations interleave), and so is
-    * a derivative's (a neighbour instance reads the source after this one
-    * has written) */
+    * destination is live while it reads (iterations interleave; not fdp's,
+    * which writes once, after its last read), and so is a derivative's (a
+    * neighbour instance reads the source after this one has written) */
    bool *first_is_read = calloc(nv, sizeof(bool));
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       i->ip = ip;
@@ -4207,7 +4207,7 @@ allocate(struct sgx_ctx *c)
             first_is_read[r->n] = true;
          touch(c, r, 2 * ip, 0);
       }
-      bool early = i->rpt > 1 || i->kind == SGX_INS_SAMPLE ||
+      bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) || i->kind == SGX_INS_SAMPLE ||
                    (i->kind == SGX_INS_ALU && (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
       for (unsigned k = 0; k < i->ndst; k++)
          touch(c, &i->op[k], early ? 2 * ip : 2 * ip + 1, 0);
