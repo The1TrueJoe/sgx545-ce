@@ -18,17 +18,20 @@
 static void
 print_custom(struct isa_print_state *print, const char *name, uint64_t v)
 {
-   /* a MOVS row no select reads, when it isn't 0 */
+   /* a MOVS row no select reads, only when it isn't 0 */
    if (!strcmp(name, "UR1") || !strcmp(name, "UR2")) {
       if (v)
-         isa_print(print, " [r%c=0x%" PRIx64 "]", name[2], v);
-      return;
+         isa_print(print, " [r%c=", name[2]);
+      else
+         return;
    }
-   /* data-store words: small numbers in decimal, the rest in hex */
+   /* numbers below 10 in decimal, the rest in hex (PDS.md "Text notation") */
    if (v < 10)
       isa_print(print, "%" PRIu64, v);
    else
       isa_print(print, "0x%" PRIx64, v);
+   if (name[0] == 'U' && name[1] == 'R')
+      isa_print(print, "]");
 }
 
 static void
