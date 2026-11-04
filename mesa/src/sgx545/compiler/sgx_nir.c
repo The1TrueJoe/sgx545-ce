@@ -432,6 +432,73 @@ csel16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
    return true;
 }
 
+/* A 16-bit min / max / saturate of values that are f32 underneath (an f2f16,
+ * or a dot product, which has no F16 form and is computed in f32): done in
+ * f32 and rounded once. Rounding commutes with them, so the result is the
+ * same, one conversion fewer (max(dot(n, l), 0.0)). */
+static nir_alu_instr *
+alu_of(nir_src s)
+{
+   nir_instr *i = nir_def_instr(s.ssa);
+   return i->type == nir_instr_type_alu ? nir_instr_as_alu(i) : NULL;
+}
+
+static nir_def *
+f32_of(nir_builder *b, nir_alu_instr *alu, unsigned j)
+{
+   unsigned nc = alu->def.num_components;
+   nir_alu_instr *p = alu_of(alu->src[j].src);
+   if (nir_src_is_const(alu->src[j].src))
+      return nir_f2f32(b, nir_ssa_for_alu_src(b, alu, j));
+   if (!p || !list_is_singular(&p->def.uses))
+      return NULL;
+   if ((p->op == nir_op_f2f16 || p->op == nir_op_f2fmp) && nir_src_bit_size(p->src[0].src) == 32) {
+      unsigned swz[NIR_MAX_VEC_COMPONENTS];
+      for (unsigned k = 0; k < nc; k++)
+         swz[k] = p->src[0].swizzle[alu->src[j].swizzle[k]];
+      return nir_swizzle(b, p->src[0].src.ssa, swz, nc);
+   }
+   if ((p->op == nir_op_fdot2 || p->op == nir_op_fdot3 || p->op == nir_op_fdot4) && nc == 1) {
+      nir_def *a = nir_f2f32(b, nir_ssa_for_alu_src(b, p, 0));
+      nir_def *c = nir_f2f32(b, nir_ssa_for_alu_src(b, p, 1));
+      return nir_build_alu2(b, p->op, a, c);
+   }
+   return NULL;
+}
+
+static bool
+minmax32_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if ((alu->op != nir_op_fmin && alu->op != nir_op_fmax && alu->op != nir_op_fsat) ||
+       alu->def.bit_size != 16)
+      return false;
+   unsigned n = nir_op_infos[alu->op].num_inputs;
+   bool any = false;
+   for (unsigned j = 0; j < n; j++) {
+      nir_alu_instr *p = alu_of(alu->src[j].src);
+      any |= p && !nir_src_is_const(alu->src[j].src);
+   }
+   if (!any)
+      return false;
+   b->cursor = nir_before_instr(&alu->instr);
+   nir_def *x[2] = { NULL, NULL };
+   for (unsigned j = 0; j < n; j++) {
+      /* (checked before anything is built) */
+      nir_alu_instr *p = alu_of(alu->src[j].src);
+      if (!nir_src_is_const(alu->src[j].src) &&
+          !(p && list_is_singular(&p->def.uses) &&
+            (((p->op == nir_op_f2f16 || p->op == nir_op_f2fmp) && nir_src_bit_size(p->src[0].src) == 32) ||
+             ((p->op == nir_op_fdot2 || p->op == nir_op_fdot3 || p->op == nir_op_fdot4) &&
+              alu->def.num_components == 1))))
+         return false;
+   }
+   for (unsigned j = 0; j < n; j++)
+      x[j] = f32_of(b, alu, j);
+   nir_def *r = n == 1 ? nir_build_alu1(b, alu->op, x[0]) : nir_build_alu2(b, alu->op, x[0], x[1]);
+   nir_def_replace(&alu->def, nir_f2f16(b, r));
+   return true;
+}
+
 /* ------------------------------------------------------------------------
  * float16 (mediump, from Mesa's precision lowering): comparisons of 16-bit
  * values become comparisons of their f2f32 (the backend reads the F16
@@ -1230,6 +1297,10 @@ sgx_lower(struct sgx_ctx *c)
       }
    } while (progress);
 
+   if (c->p16) {
+      NIR_PASS(_, s, nir_shader_alu_pass, minmax32_instr, nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_opt_dce);
+   }
    /* all() / any() of vector compares (dEQP's isOk): scalar compares and
     * iand / ior, which the bool lowering takes */
    NIR_PASS(_, s, nir_lower_alu_to_scalar, vec_cmp_instr, NULL);

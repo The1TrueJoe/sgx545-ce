@@ -273,6 +273,7 @@ insert_before(struct sgx_ins *at, struct sgx_ins *n)
 }
 
 static void legalize(struct sgx_ctx *c, struct sgx_ins *i);
+static int lit_run(struct sgx_ctx *c, const uint32_t *w, unsigned n);
 
 /* append, legalising its operands (copies go in front of it) */
 static struct sgx_ins *
@@ -373,9 +374,17 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
             r->neg = 1;
             r->step = st && i->rpt > 1 && (h == 48 || h == 52);
          } else {
-            struct sgx_ref k2 = ref(SGX_F_K, want);
-            k2.step = 0;
-            *r = materialize(c, i, k2, 1);
+            /* a literal in SA where the slot takes one (driver_consts), else limm */
+            struct sgx_ref lit = ref(SGX_F_LIT, 0);
+            int ln = c->opts->driver_consts && !c->lit_off && slot_ok(i->form, k, &lit) ?
+                     lit_run(c, &want, 1) : -1;
+            if (ln >= 0) {
+               *r = ref(SGX_F_LIT, ln);
+            } else {
+               struct sgx_ref k2 = ref(SGX_F_K, want);
+               k2.step = 0;
+               *r = materialize(c, i, k2, 1);
+            }
             r->step = 0;
          }
          if (!r->step && cls != CLS_INC && i->rpt > 1)
@@ -741,6 +750,26 @@ store_h(struct sgx_ctx *c, struct sgx_ref x)
    if (!x.h16 || x.file == SGX_F_K)
       return f32_to_h(c, x);
    return x;
+}
+
+/* n literal words in consecutive SA slots (driver_consts): an existing run
+ * of them or new ones; -1 when there is no room */
+static int
+lit_run(struct sgx_ctx *c, const uint32_t *w, unsigned n)
+{
+   for (unsigned s = 0; s + n <= c->n_lits; s++) {
+      unsigned j = 0;
+      while (j < n && c->lit_bits[s + j] == w[j])
+         j++;
+      if (j == n)
+         return s;
+   }
+   if (c->n_lits + n > ARRAY_SIZE(c->lit_bits))
+      return -1;
+   unsigned s = c->n_lits;
+   for (unsigned j = 0; j < n; j++)
+      c->lit_bits[c->n_lits++] = w[j];
+   return s;
 }
 
 /* a register operand for a fmad16 source reading lanes (a, b), and its swizzle */
@@ -1244,7 +1273,15 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
             fld(i, SGX_FLD_F16D, 1);
             emit(c, i);
             lane[q] = href(t, hi);
+            if (nc == 1) {
+               /* a scalar: the half it landed in is the value */
+               c->vals[alu->def.index].n = t;
+               c->vals[alu->def.index].comp = hi;
+               break;
+            }
          }
+         if (nc == 1)
+            break;
          struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_F16);
          i->nops = 3;
          i->op[0] = dp;
@@ -1350,6 +1387,23 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
          for (unsigned k = 1; k < n; k++) {
             st &= ref_next(&s[j][k - 1], &s[j][k]);
             hd &= ref_same(&s[j][k - 1], &s[j][k]);
+         }
+         /* constants: a run of literals in SA */
+         bool kk = c->opts->driver_consts && !st && !hd;
+         uint32_t kw[4];
+         for (unsigned k = 0; k < n && kk; k++) {
+            kk = s[j][k].file == SGX_F_K && !s[j][k].h16;
+            kw[k] = s[j][k].n;
+            if (s[j][k].abs)
+               kw[k] &= 0x7fffffff;
+            if (s[j][k].neg)
+               kw[k] ^= 0x80000000u;
+         }
+         int ln = kk ? lit_run(c, kw, n) : -1;
+         if (ln >= 0) {
+            for (unsigned k = 0; k < n; k++)
+               s[j][k] = ref(SGX_F_LIT, ln + k);
+            continue;
          }
          if (!st && !hd) {
             unsigned t = new_vreg(c, n);
@@ -4201,6 +4255,29 @@ far_f16_uniforms(struct sgx_ctx *c)
           sgx_form_is_scalar(i->form) || i->form == SGX_OP_PCK_U8_F16 ||
           i->form == SGX_OP_PCK_F16_F16 || i->form == SGX_OP_PCK_F32_F16)
          continue;
+      bool fmt = false;
+      for (unsigned k = 0; k < i->nops; k++)
+         fmt |= i->op[k].h16 && i->op[k].file != SGX_F_K;
+      for (unsigned k = i->ndst; k < i->nops && fmt; k++) {
+         /* an f32 literal beside an F16 operand has a 6-bit number too */
+         struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_LIT || r->h16 || c->slot_sa[c->lit_slot[r->n]] < 0 || sgx_lit_sa(c, r->n) < 64)
+            continue;
+         unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         unsigned t = new_vreg(c, n);
+         struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, SGX_OP_MOV);
+         m->nops = 2;
+         m->rpt = n;
+         m->op[0] = vref(t, 0);
+         m->op[1] = *r;
+         m->op[1].neg = m->op[1].abs = 0;
+         insert_before(i, m);
+         struct sgx_ref v = vref(t, 0);
+         v.neg = r->neg;
+         v.abs = r->abs;
+         v.step = r->step;
+         *r = v;
+      }
       for (unsigned k = i->ndst; k < i->nops; k++) {
          struct sgx_ref *r = &i->op[k];
          if (r->file != SGX_F_U || !r->h16 || c->const_slot[r->n] < 0 ||
