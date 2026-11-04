@@ -286,6 +286,10 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 
 	drm_sched_job_cleanup(sched_job);
 	dma_fence_put(job->hw_fence);
+	for (u32 b = 0; b < job->nbos; b++)
+		drm_gem_object_put(job->bos[b]);
+	kvfree(job->bos);
+	kvfree(job->bo_flags);
 	pvrsgx_render_job_fini(job);
 	context_put(job->ctx);
 	kfree(job);
@@ -768,6 +772,13 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 				drm_syncobj_replace_fence(sig->syncobj, done);
 			}
 		}
+		/* The job keeps its list: run_job and completion flush the imports. */
+		job->bos = ja[i].bos;
+		job->bo_flags = ja[i].bo_flags;
+		job->nbos = ja[i].nbos;
+		ja[i].bos = NULL;
+		ja[i].bo_flags = NULL;
+		ja[i].nbos = 0;
 		drm_sched_entity_push_job(&job->base);
 		ja[i].job = NULL;	/* the scheduler owns it now */
 	}
