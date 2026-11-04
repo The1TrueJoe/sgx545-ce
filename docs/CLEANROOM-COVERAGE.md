@@ -151,7 +151,7 @@ fixing.
   - UAPI.md squares the padded tile count; the kernel driver rounds the side
     up first.
 - **Vertex secondary constants:** STATE.md §2 has 2⁻¹⁵ and 2⁻¹⁶; GEN.md and
-  the code have 2/65535 and 1/65535.
+  the code have 2/65535 and 1/65535. *Resolved:* 2/65535 and 1/65535, read from the DDK's captures (STATE.md §2).
 - **Vertices per task:** GEN.md says 64 / output dwords; the code and
   DRIVER-UPSTREAM.md say 128 (64 hung).
 - **PDS program alignment:** GEN.md and UAPI.md say 32 bytes; the winsys uses
@@ -220,6 +220,12 @@ re-read these rows against the sections named:
   kick does still open.
 - **Gallium: `sgx545_screen.h:52-59`**: UKERNEL.md §9 (two contexts sharing a
   PB work; a second PB per context is still a gap).
+- **Winsys: "Vertices per task", "Vertex secondary attributes"**: STATE.md §2
+  (the rule, the capture table, the hang, the slot layout and the constants).
+  Where the uniforms start stays G: no capture on disk has vertex uniforms.
+- **Winsys: "`sgxws_draw` TA block", word 1**: partly. STATE.md §3 "PDS words"
+  has b0-15, b16-17 and the lockup. b25-28 is still a gap: the captures on
+  disk don't fit the reported `12 / units` rule.
 - **New:** UKERNEL.md §5 "Where the DDK microkernel raises the host
   interrupt": every SW_EVENT site and what triggers it, the fact that no
   completion waits for the timer, the hardware-done to IRQ times, and where

@@ -706,9 +706,14 @@ elsewhere: in the host's completion path or in the GPU work itself.
 The open microkernel differs (`ukernel/`, um-re 1486d98):
 - it raises no host interrupt at TA finish;
 - a kick it defers while a TA runs is relaunched only from `ta_finished`;
-- a cleanup it defers waits for the next timer tick (`tmr_tick_check`);
-- `k_power` IDLE/POWEROFF stops the timer (0xacc = 0), so a command left in
-  the CCB after that waits for the next doorbell.
+- `render_complete` and `xfer_done` end without re-entering `kick`. So a
+  command left in the CCB while the render ran (a deferred cleanup, say)
+  waits for the next 1 kHz tick (`tmr_tick_check`, WO != RO), up to 1 ms. The
+  timer can't be stopped meanwhile: `k_power` is itself a CCB command and
+  runs only after what is queued ahead of it.
+
+These cost throughput, not correctness: powervr_sgx's uAPI tests (39/39) and
+multi-process renders pass without them.
 
 ## 6. Register sequences the microkernel runs
 
