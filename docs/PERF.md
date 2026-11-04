@@ -147,6 +147,61 @@ the next rows.
 From here the corpus runs every set three ways: F32, F16 and driver mode (11828 files, 17675
 instructions at 5f3acd2).
 
+### Temporaries
+
+Temporaries limit how many instances are resident, and so how much texture latency is hidden.
+They were the largest gap.
+
+Driver mode, temporaries per shader:
+
+| set | 5f3acd2 | 649281d | libusc |
+|---|---|---|---|
+| c2 | 756 | 198 | 101 |
+| c3 | 565 | 264 | 219 |
+| gl4es Minecraft (8 shaders) | 34 | 2 | pending |
+| glmark2 (56 shaders) | 388 | 195 | pending |
+| corpus, every set three ways | 7207 | 3484 | |
+
+| gl4es Minecraft shader | before (bf9048a) | after (649281d) |
+|---|---|---|
+| mc_terrain vert / frag | 8 / 0 | 0 / 0 |
+| mc_texfog vert / frag | 8 / 0 | 0 / 0 |
+| mc_gui vert / frag | 8 / 0 | 0 / 0 |
+| mc_sky vert / frag | 8 / 2 | 0 / 2 |
+
+glmark2, the biggest moves:
+- every vertex shader 8-13 → 4 or 0;
+- terrain frag 17 → 12, light-cel 12 → 9, bump-normals 7 → 4, light-advanced 6 → 3;
+- terrain-overlay, text-renderer and desktop frags → 0.
+
+How:
+- **Split** (f2247cb): a 32-bit vreg that no repeat steps through becomes one vreg per
+  component.
+- **Colour sources** (f2247cb): a single instruction reads before it writes, so the colour's
+  sources may sit in the colour register.
+- **In-place repeats** (083bdd0, 65e768e): a repeat whose source dies there, read at the
+  component it writes and stepping with it, writes over it. That is libusc's
+  `fmad pa0, pa0, pa4, pa8 rpt=4`: iteration k reads component k before writing it, and no later
+  iteration reads an earlier one's write. It applies to vregs and to dead PA inputs.
+- **Per-register PA liveness** (65e768e, a919daa): each register of a vreg is placed by its own
+  first and last use. 32-bit and F16 vregs both.
+- **mediump demotion** (a919daa): an op over mediump operands runs in F16, as GLSL ES allows.
+  Mesa had left `a * b` of mediump varyings in f32.
+- **F16 colour pairs** (a919daa): (g, r) / (b, a), one register per `pck`.
+- **`fdp`** (77632f3, 649281d): it writes only its last iteration's register, once and after its
+  reads. So the operand names that register alone, and it may land on its own inputs.
+- **Output registers** (60c90ff): a vertex shader's temporaries go in output registers before
+  their first write, as libusc does (`fmad o0, pa0, sa18, o0`). The `mat4 * v` accumulator ends
+  in `o0`.
+- **Colour clamp** (649281d): `clamp(colour, 0, 1)` goes, since the U8 `pck` saturates.
+
+What still holds temporaries:
+- internal registers (libusc's `efo` keeps `mat4 * v` partials in i0/i1);
+- C10 lowp math in internal registers;
+- `smlsi` swizzled repeats (`a.zxyw * b` in place);
+- scheduling: we emit a vector op component by component (`testmask`/`movc` interleaved) where
+  libusc repeats.
+
 ### What is left, largest first
 
 - **Uniform-only math per pixel.**
