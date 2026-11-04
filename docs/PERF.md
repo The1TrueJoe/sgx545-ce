@@ -137,7 +137,7 @@ the next rows.
 |---|---|---|
 | f6cdfcd | `nir_opt_shrink_vectors`: components nothing reads go. Example: `MV * v` where fog reads only `.z` | 13586 → 13113 instructions, 19760 → 18566 slots |
 | becc007 | `fold_movs`: an instruction writes the output or copy destination itself, so there is no trailing `mov` | → 12968, → 18257 |
-| 887e523 | `place_in_pa`: temporaries in PA registers after the input's last read, as libusc does | temporaries 7910 → 5820 |
+| 887e523 | `place_in_pa`: temporaries in PA registers after the input's last read, as libusc does. A register read inside a loop stays busy over the whole loop: bf9048a fixes that, 887e523 alone is wrong for loops that aren't unrolled | temporaries 7910 → 5820 |
 | 111d7e7 | 32-bit swizzles of SSA values are aliases, not register copies. Example: `vec4(x)`, which `nir_lower_vec_to_regs` turns into a swizzle. (Its `vec_to_regs_32` change was a misreading, undone in 5f3acd2.) | → 12238, → 17489 |
 | 894c995 | a comparison read only by selects keeps its `testmask` mask (no 1.0/0.0 `movc`); selects of F16 values move whole pairs (`movc.i32`); vregs shrink to the components used | → 11857, → 17018; temporaries → 4973 |
 | 98652ce | a scalar F16 `frcp`/`frsq`/`fexp2`/`flog2` is one instruction; with `driver_consts`, non-hardware f32 constants are SA literals (an `fdp` constant vector a run of them) instead of `limm` + `mov`; an F16 min/max/sat of f32 values runs in f32 and rounds once | glmark2 1513 → 1285; light-advanced frag 38 → 18 |
@@ -166,6 +166,10 @@ instructions at 5f3acd2).
   - We unpack every texel to F16 or F32, compute, and pack again: 11 instructions for
     `t_two`.
   - The sampler's channel swizzle (`zyxw`) also saves libusc the reorder.
+  - Example: `gl_FragColor = texture2D(s, uv)` (`tx_nd_*`) is 0 instructions for libusc. The
+    sample is swizzled into the colour's byte order and its PA register is the colour.
+  - We spend 4 (unpack, pack). Closing it needs the driver to take a sample swizzle and the
+    colour in the sample's register.
 - **Loops.**
   - We unroll every loop fully. `lp_nest` is 66 instructions against 11, but it runs no
     branches, so it is no slower.
