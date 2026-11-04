@@ -9,6 +9,7 @@
  * samples, and the decoded lists the driver loads (constants, iterations,
  * the vertex input mask).
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "nir.h"
@@ -262,6 +263,11 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    out->n_code = util_dynarray_num_elements(&flat, uint64_t);
    out->code = malloc(MAX2(flat.size, 8));
    memcpy(out->code, flat.data, flat.size);
+   /* the words as sgxc's .code (high, low), for tools/isa/dis.py */
+   if (c->opts->verbose) {
+      for (unsigned i = 0; i < out->n_code; i++)
+         fprintf(stderr, "%08x %08x\n", (unsigned)(out->code[i] >> 32), (unsigned)out->code[i]);
+   }
    out->n_blocks = util_dynarray_num_elements(&blocks, struct sgx_block);
    out->blocks = malloc(MAX2(blocks.size, sizeof(struct sgx_block)));
    memcpy(out->blocks, blocks.data, blocks.size);
