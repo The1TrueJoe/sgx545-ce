@@ -115,9 +115,12 @@ An imported dma-buf is a data object. It maps in every heap except the USSE ones
 addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an import
 with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
 GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, and an import's
-pages may be cached on the CPU side, so the kernel flushes every import a job lists
-before the job and after it: a job must list every import it reads or writes. An
-object in a job's BO list gets the job's fence
+pages may be cached on the CPU side. So the kernel flushes every import mapped in the
+job's VM at submit, before the job and again once it is done. It doesn't use the BO
+list for this: the list is optional (D6), and a client on explicit sync names no
+buffers at all. The cost is a CPU cache flush of every mapped import, twice per job
+(about 1.4 MB per 720x480 buffer), which is small next to a frame. A mapping made
+after a submit is not flushed for that job. An object in a job's BO list gets the job's fence
 in its reservation object (written: `WRITE`, else `READ`), and the job waits for the
 fences already there. That shared reservation is what makes a KMS commit of an imported
 buffer wait for the render (`powervr_sgx_prime`, the implicit frames).

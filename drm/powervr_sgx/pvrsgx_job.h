@@ -84,6 +84,10 @@ struct pvrsgx_job {
 	u32 *bo_flags;
 	/** @nbos: Number of @bos. */
 	u32 nbos;
+	/** @imports: Imported objects mapped in the VM at submit, flushed around the job. */
+	struct drm_gem_object **imports;
+	/** @nimports: Number of @imports. */
+	u32 nimports;
 	/** @signals: Syncobjs to signal with the job's fence. */
 	struct pvrsgx_signal *signals;
 	/** @nsignals: Number of @signals. */
