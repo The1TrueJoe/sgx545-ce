@@ -3394,6 +3394,106 @@ merge_runs(struct sgx_ctx *c)
    }
 }
 
+/* does r (over rpt iterations) touch registers [n, n + len) of file / vreg? */
+static bool
+ref_hits(const struct sgx_ref *r, unsigned rpt, unsigned file, unsigned v, unsigned n, unsigned len)
+{
+   if (r->file != file || (file == SGX_F_V && r->n != v))
+      return false;
+   unsigned lo = file == SGX_F_V ? r->comp : r->n;
+   if (r->h16)
+      lo /= 2;
+   unsigned hi = lo + (r->step && rpt > 1 ? rpt - 1 : 0);
+   return lo < n + len && hi >= n;
+}
+
+static bool
+ins_hits(const struct sgx_ins *i, unsigned file, unsigned v, unsigned n, unsigned len)
+{
+   for (unsigned k = 0; k < i->nops; k++)
+      if (ref_hits(&i->op[k], i->rpt, file, v, n, len))
+         return true;
+   return false;
+}
+
+/* mov d, t where t's only other reference is the instruction that wrote it:
+ * that instruction writes d instead (vertex outputs, copies out of a
+ * computation) */
+static void
+fold_movs(struct sgx_ctx *c)
+{
+   list_for_each_entry_safe(struct sgx_ins, m, &c->ins, link) {
+      if (m->kind != SGX_INS_ALU || m->form != SGX_OP_MOV || m->pred || m->nfld || m->nops != 2)
+         continue;
+      struct sgx_ref d = m->op[0], s = m->op[1];
+      if (s.file != SGX_F_V || s.neg || s.abs || s.h16 || s.lane || (m->rpt > 1 && !s.step) ||
+          d.h16 || d.lane || !d.step || (d.file != SGX_F_V && d.file != SGX_F_O) ||
+          sgx_vreg(c, s.n)->half || (int)s.n == c->keep_vreg || (int)s.n == c->face_vreg ||
+          (int)s.n == c->face_f32 || (d.file == SGX_F_V && sgx_vreg(c, d.n)->half))
+         continue;
+      unsigned dn = d.file == SGX_F_V ? d.comp : d.n;
+      /* the writer: back through this block, nothing between touching d */
+      struct sgx_ins *p = NULL;
+      bool ok = false;
+      for (struct list_head *l = m->link.prev; l != &c->ins; l = l->prev) {
+         struct sgx_ins *i = list_entry(l, struct sgx_ins, link);
+         if (i->kind != SGX_INS_ALU)
+            break;
+         bool w = false;
+         for (unsigned k = 0; k < i->ndst; k++)
+            w |= ref_hits(&i->op[k], i->rpt, SGX_F_V, s.n, s.comp, m->rpt);
+         if (w) {
+            p = i;
+            unsigned cls = form_class(i->form);
+            ok = i->ndst == 1 && !i->pred && i->rpt == m->rpt && i->op[0].file == SGX_F_V &&
+                 i->op[0].n == s.n && i->op[0].comp == s.comp && !i->op[0].h16 && i->op[0].step &&
+                 (cls == CLS_INC || cls == CLS_ALL) && i->form != SGX_OP_FDP &&
+                 slot_ok(i->form, 0, &d);
+            for (unsigned k = i->ndst; k < i->nops && ok; k++)
+               ok = !ref_hits(&i->op[k], i->rpt, d.file, d.n, dn, m->rpt);
+            break;
+         }
+         if (ins_hits(i, d.file, d.n, dn, m->rpt))
+            break;
+      }
+      if (!p || !ok)
+         continue;
+      /* t's other references: only before p in this run of instructions,
+       * the first of them an unconditional write of all of it */
+      struct list_head *start = &p->link;
+      while (start->prev != &c->ins && list_entry(start->prev, struct sgx_ins, link)->kind == SGX_INS_ALU)
+         start = start->prev;
+      bool seen = false, in_run = false;
+      list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+         if (&i->link == start)
+            in_run = true;
+         if (i == p)
+            in_run = false;
+         if (i == m || i == p || !ins_hits(i, SGX_F_V, s.n, s.comp, m->rpt))
+            continue;
+         if (!in_run) {
+            ok = false;
+            break;
+         }
+         if (!seen) {
+            bool rd = false;
+            for (unsigned k = i->ndst; k < i->nops; k++)
+               rd |= ref_hits(&i->op[k], i->rpt, SGX_F_V, s.n, s.comp, m->rpt);
+            if (rd || i->pred || i->ndst != 1 || i->op[0].file != SGX_F_V || i->op[0].n != s.n ||
+                i->op[0].comp > s.comp || i->op[0].comp + (i->op[0].step ? i->rpt : 1) < s.comp + m->rpt) {
+               ok = false;
+               break;
+            }
+            seen = true;
+         }
+      }
+      if (!ok)
+         continue;
+      p->op[0] = d;
+      list_del(&m->link);
+   }
+}
+
 /* ------------------------------------------------------------------------
  * helper instances
  *
@@ -4124,6 +4224,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       emit_color(c);
    if (!c->failed)
       merge_runs(c);
+   if (!c->failed)
+      fold_movs(c);
    if (!c->failed)
       far_f16_uniforms(c);
    if (!c->failed)
