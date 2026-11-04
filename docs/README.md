@@ -6,6 +6,7 @@ Each document tags its claims by evidence: encoder or DDK code, capture diffs, o
 | Document | Covers |
 |---|---|
 | [CLEANROOM.md](CLEANROOM.md) | How spec and implementation are kept apart, and which roles may read what |
+| [CLEANROOM-COVERAGE.md](CLEANROOM-COVERAGE.md) | Which doc section states each hardware fact the shipped code uses, and the facts the docs still need |
 | [NOTES.md](NOTES.md) | Services bridge, heaps, the two kicks per frame, capture and replay |
 | [STATE.md](STATE.md) | TA/3D render state: VDM stream, ISP/TSP words, PBE, textures, ZLS |
 | [PDS.md](PDS.md) | The PDS instruction set and the DOUT words that start USSE tasks |
