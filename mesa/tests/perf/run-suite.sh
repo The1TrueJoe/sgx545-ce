@@ -21,7 +21,7 @@
 # Needs (staged by the host): /root/m3 (mc-oldnew.sh, x11-up.sh, memdump),
 # /root/perf/bin (sgx545_perfmicro-i386 and -x86_64), the old stack's glmark2
 # in /opt/minecraft/rootfs/opt/perf-old (its own directory), the new stack's in
-# /opt/x64root, our x86_64 Mesa in /root/deqp/lib-m3c.
+# /opt/x64root, our x86_64 Mesa in $MESA_LIB (default /root/deqp/lib-m3c).
 set -u
 WHO=$1 RUNS=${2:-3}
 O=/root/perf/$WHO
@@ -109,7 +109,7 @@ for run in $(seq 1 $RUNS); do
 		out=$(LD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so /opt/sgx-i386/lib/ld-linux.so.2 \
 			--library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib $B/sgx545_perfmicro-i386 2>&1)
 	else
-		out=$(LD_LIBRARY_PATH=/root/deqp/lib-m3c EGL_PLATFORM=surfaceless $B/sgx545_perfmicro-x86_64 2>&1)
+		out=$(LD_LIBRARY_PATH=${MESA_LIB:-/root/deqp/lib-m3c} EGL_PLATFORM=surfaceless $B/sgx545_perfmicro-x86_64 2>&1)
 	fi
 	echo "$out" > "$O/micro-$run.log"
 	ok=$([ "$(rec)" = "$r0" ] && echo 1)

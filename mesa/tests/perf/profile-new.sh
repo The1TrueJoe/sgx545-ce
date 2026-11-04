@@ -23,7 +23,7 @@ report $R/var/tmp/perf/glmark2.data > "$O/glmark2.perf.txt"
 
 # (with the root's dev bound in, which x11-up.sh's start does)
 cp $B/sgx545_perfmicro-x86_64 $R/var/tmp/perf/
-mkdir -p $R/var/tmp/perf/mesa && cp -a /root/deqp/lib-m3c/. $R/var/tmp/perf/mesa/
+mkdir -p $R/var/tmp/perf/mesa && cp -a ${MESA_LIB:-/root/deqp/lib-m3c}/. $R/var/tmp/perf/mesa/
 chroot $R /usr/bin/env LD_LIBRARY_PATH=/var/tmp/perf/mesa EGL_PLATFORM=surfaceless SGX545_DEBUG=stats \
 	/usr/bin/perf record -q -F 499 -g -o /var/tmp/perf/micro.data /var/tmp/perf/sgx545_perfmicro-x86_64 > "$O/micro.log" 2>&1
 report $R/var/tmp/perf/micro.data > "$O/micro.perf.txt"
