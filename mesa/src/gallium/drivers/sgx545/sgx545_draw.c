@@ -722,13 +722,18 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    struct vcache_key key;
    struct hash_entry *he;
    struct vcache_entry *v;
-   bool fan = info->mode == MESA_PRIM_TRIANGLE_FAN;
-   unsigned count = draw->count, out_count = fan ? (count >= 3 ? (count - 2) * 3 : 0) : count;
+   /* triangle lists, and what is drawn as one: fans, and desktop GL's quads,
+    * quad strips and polygons (Minecraft's chunks are display lists of
+    * quads, drawn again every frame) */
+   bool expand = expanded_prim(info->mode) && u_reduced_prim(info->mode) == MESA_PRIM_TRIANGLES;
+   unsigned count = draw->count, out_count;
    uint64_t now = os_time_get_nano();
 
-   /* (lists and fans; desktop GL's quads and polygons take the uncached path) */
+   if (!u_trim_pipe_prim(info->mode, &count))
+      return false;
+   out_count = expand ? expanded_count(info->mode, count) : count;
    if (!ctx->vcache || out_count < 3 || n_fetch > PIPE_MAX_ATTRIBS ||
-       (info->mode != MESA_PRIM_TRIANGLES && !fan))
+       (info->mode != MESA_PRIM_TRIANGLES && !expand))
       return false;
    if (info->index_size) {
       if (info->has_user_indices)
@@ -776,7 +781,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
       uint16_t *ix;
 
       for (unsigned i = 0; i < out_count; i++) {
-         unsigned k = fan ? ((i % 3 == 0) ? 0 : i / 3 + i % 3) : i;
+         unsigned k = expand ? expanded_vertex(info->mode, i, out_count) : i;
          unsigned index = info->index_size ? get_index(info, indices, draw->start + k) + draw->index_bias
                                            : draw->start + k;
 
@@ -803,7 +808,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
       fetch_vertices(f, n_fetch, lo, hi - lo + 1, verts, vertex_dwords);
       ix = (uint16_t *)((uint8_t *)verts + vbytes);
       for (unsigned i = 0; i < out_count; i++) {
-         unsigned k = fan ? ((i % 3 == 0) ? 0 : i / 3 + i % 3) : i;
+         unsigned k = expand ? expanded_vertex(info->mode, i, out_count) : i;
          unsigned index = info->index_size ? get_index(info, indices, draw->start + k) + draw->index_bias
                                            : draw->start + k;
 

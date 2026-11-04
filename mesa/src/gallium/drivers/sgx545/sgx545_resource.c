@@ -394,6 +394,7 @@ sgx545_resource_target(struct sgx545_screen *screen, struct sgx545_resource *res
       t->t1_layout = twiddled ? 0 : 3;
       sgxws_bo_prepare_target(screen->dev, &res->bo);    /* (the caller holds the lock) */
       res->rendered |= 1u << level;
+      res->n_alt_dirty = SGX545_ALT_ALL;   /* the render isn't in the second copy */
       if (!level)
          res->level0_gen++;
       return true;
@@ -429,15 +430,33 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
       if (sgxws_bo_wait(&res->bo, 2000))
          fprintf(stderr, "sgx545: a render into a mapped buffer did not finish\n");
    }
-   /* A texture the GPU rendered into: the CPU copy catches up first */
-   if (res->texture && res->rendered && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
+   /* A texture the GPU rendered into: the CPU copy catches up first.  A read
+    * (piglit's probes, glReadPixels) brings up only the box it covers and the
+    * level stays rendered; a write brings up every level rendered into, as
+    * the unmap and the second copy work from the CPU copy. */
+   if (res->texture && res->rendered && !(usage & PIPE_MAP_UNSYNCHRONIZED) &&
+       ((usage & PIPE_MAP_WRITE) || (res->rendered & 1u << level))) {
+      uint64_t t;
+
       ctx->stats.fl_read += ctx->recording == res;
       sgx545_flush_resource_writes(ctx, res);
       if (sgxws_bo_wait(&res->bo, 2000))
          fprintf(stderr, "sgx545: a render into a mapped texture did not finish\n");
-      u_foreach_bit(l, res->rendered)
-         sgx545_tex_decode_level(res, l);
-      res->rendered = 0;
+      t = ctx->stats.on ? os_time_get_nano() : 0;
+      if (usage & PIPE_MAP_WRITE) {
+         u_foreach_bit(l, res->rendered) {
+            sgx545_tex_decode_level(res, l);
+            ctx->stats.rb_bytes += (uint64_t)util_format_get_stride(prsc->format, u_minify(prsc->width0, l)) *
+                                   u_minify(prsc->height0, l) * prsc->array_size;
+         }
+         res->rendered = 0;
+      } else {
+         for (int z = box->z; z < box->z + box->depth; z++)
+            sgx545_tex_decode_box(res, level, z, box->x, box->y, box->x + box->width, box->y + box->height);
+         ctx->stats.rb_bytes += (uint64_t)util_format_get_stride(prsc->format, box->width) * box->height * box->depth;
+      }
+      if (ctx->stats.on)
+         ctx->stats.rb_ns += os_time_get_nano() - t;
    }
    /* A texture write lands in the CPU copy; the unmap puts it on the device
     * copy, or on a second one when a render may still sample the first
