@@ -350,6 +350,12 @@ class USSE:
     def reps(self, d):
         return d.get("rpt", 1) if d.get("rcnt", 1) else 1
 
+    def op_op0x100(self, t, x, d, ops, pc, text):
+        pass        # DDK USE/EDM data-cache flush; HW-only, a no-op in the sim
+
+    def op_op0xff(self, t, x, d, ops, pc, text):
+        pass        # DDK USE/EDM data-cache invalidate (per side); HW-only no-op
+
     def op_mov(self, t, x, d, ops, pc, text):
         n = d.get("rpt", 1) if d.get("rcnt") else 1
         for k in range(n):

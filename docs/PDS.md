@@ -127,7 +127,7 @@ So `ds1[0x30]` is U 0x70 and S2 0x60, and `ds0[0x30]` is U 0x30 and S1 0x60.
   at 0x1e2c0, which sends 4 consecutive data words from any word offset,
   uses all four phases.
 - **dest** (bits 0–4) is the DOUT target; only 2–6 have been seen. Confirmed
-  for 2–5; 6 is a guess.
+  for 2–5; 6 is a guess. Other values print as `dout<n>`.
 
 | dest | name | words consumed | meaning | status |
 |---|---|---|---|---|
@@ -176,8 +176,13 @@ The variant bits:
 | c | 1 | AND | strong: pixel event masks with 8, 2, 4, 0x100, 0xff8, 0x3ff000 |
 | c | 0 | OR | strong: pixel event assembles the EOT word |
 | d | 0 | XOR | strong: in libsrv_init's `pds3` it follows `t = x & m` as `x op t`, then a test for zero, i.e. "no bits other than m"; only XOR (or ANDN) makes that test useful |
-| d | 1 | ? | only `df820070` = in1 op ds1[0] (= 0), then AND 0x100; XOR-like there, NOR/NOT fit too |
-| 4 | 1, 6 | 1 | not seen |
+| d | 1 | `op0xd.s1` | only `df820070` = in1 op ds1[0] (= 0), then AND 0x100; XOR-like there, NOR/NOT fit too |
+| 4, 6 | 1 | `op0x4.s1`, `op0x6.s1` | not seen |
+
+- **dst is 7 bits (0–6).** Confirmed for the field: bits 7–8 are always 0,
+  and the inputs (U 0x80+) are never written. The highest seen is 0x72.
+- **The shift's dst is 8 bits (0–7)** by its encoding, but only values below
+  0x80 have been seen. Its src does read inputs (U 0x80+).
 
 ### TST (opcode 8)
 
@@ -186,6 +191,7 @@ The variant bits:
 - **Sets p0 = (src == 0),** where src is src2 if `sel` is set, else src1.
   Strong guess: the state program skips its DMA when the address word is 0,
   and the pixel event program branches when an event bit is clear.
+- The source field `sel` doesn't pick is 0 in every TST seen (strong).
 - Examples: `87000000` tests ds0[0], `87040000` tests ds0[2], and `8700c100`
   tests ds1[0x30].
 
@@ -209,7 +215,73 @@ the reciprocal divide.
 ### HALT
 
 `af000000`: opcode a, s 1, cc 7. Confirmed: every program ends with it. A
-program may hold several HALTs, as branch targets.
+program may hold several HALTs, as branch targets. Opcode a with s = 0, or
+with another condition, has not been seen.
+
+### Text notation
+
+`tools/pds/dis.py` prints this, and an assembler takes it.
+
+- **Numbers:** below 10 in decimal, otherwise lowercase hex with `0x`. This
+  holds for every number: data-store words (`ds1[0x30]`), inputs (`in9`,
+  `in0xa`), the `[r1=]`/`[r2=]` row fields (`[r2=5]`), branch targets and
+  shift amounts. Immediates (branch targets, shift amounts) start with `#`.
+- **Registers:** `ds0[n]` and `ds1[n]` for the data-store words, and `in<n>`
+  for DS0 word 0x40 + n.
+  - A U operand is `ds0[u]` below 0x40, `ds1[u − 0x40]` below 0x80, else
+    `in<u − 0x80>`.
+  - An S1 or S2 operand names word `f >> 1` of its bank (S1 the DS0 side, S2
+    the DS1 side), with `.hi` added when `f` is odd.
+- **Condition:** cc 7 prints nothing, cc 0 is a `(p0) ` prefix, and any
+  other cc is a `.cc<n>` suffix on the mnemonic.
+- **MOVS:** `<dout>[.x2][.s27][.cc<n>] w0, w1, w2, w3`.
+  - `<dout>` is `douti`, `doutd`, `doutt`, `doutu` or `douta` for dest 2–6,
+    else `dout<n>`.
+  - `.x2` is opcode 2 (bit 29), and `.s27` is bit 27.
+  - `wN` is the word swizzle select N reads.
+  - A row field (bits 18–23 or 13–17) that no select reads is written after
+    the operands as `[r1=<n>]` or `[r2=<n>]`, only when it is nonzero.
+- **ALU:** `add|mul16|or|and|xor dst, src1, src2`, with dst a U operand,
+  src1 an S1 operand and src2 an S2 operand. An opcode and sub-op that the
+  table doesn't name print as `op0x<op>.s<s>`, e.g. `op0xd.s1`.
+- **TST:** `tst <src>`. An S2 (DS1) source means `sel` = 1, and an S1
+  source (DS0 or an input) means `sel` = 0.
+- **The rest:** `bra #n`, `shl|shr dst, src, #n` (dst and src U), and `halt`.
+
+| word | text |
+|---|---|
+| `2f032343` | `doutd.x2.s27 ds0[0], ds0[1], ds1[0x32], ds1[0x32]` |
+| `030403e5` | `doutu.cc3 ds0[2], ds0[3], ds1[1], ds1[1]` |
+| `07840406` | `douta in2, ds1[0], in2, in2` |
+| `cf820870` | `and ds1[0x30], in1, ds1[2]` |
+| `df820070` | `op0xd.s1 ds1[0x30], in1, ds1[0]` |
+| `8700c100` | `tst ds1[0x30]` |
+| `90000018` | `(p0) bra #0x18` |
+| `f7811470` | `shl ds1[0x30], in1, #0x14` |
+| `af000000` | `halt` |
+
+### Bits no field names
+
+These are 0 in every program of the 25 captures we have (the `caps`, `cube`
+and `ff` sets: 315 programs found through their pointers, 40 distinct code
+words). That evidence is strong. A decoder may treat them as reserved and
+refuse words that set them, and an encoder writes 0.
+
+| where | bits |
+|---|---|
+| TST | 27; 0–7; the source field `sel` doesn't pick (src2 when `sel` = 0, src1 when 1) |
+| BRA | 27 |
+| ALU (opcodes 4, 6, c, d) | 7–8 |
+| DOUTU word 0 | 22–23 |
+| DOUTU word 1 | all but 1, 2 and 22–25. Bit 1 comes only from the microkernel templates (the value 2 there) |
+| DOUTI word 0 | 5–8, 17–20, 31 |
+| DOUTI word 1 | 7–31 (0–6 is the half a merge copies; bit 4 is the sprite's point coordinate) |
+| DOUTD word 1 (ctrl) | 26–31 |
+| DOUTA word 1 (ctrl) | 0–7, and 16–31 (see DOUTA) |
+
+**The S1/S2 half bit in 32-bit ops** (ADD, OR, AND, XOR): every captured use
+and every generator passes an even number, so what an odd one does is
+unknown. The notation shows it as `.hi`, and nothing should emit it.
 
 ## DOUT word layouts
 
@@ -224,13 +296,16 @@ program may hold several HALTs, as branch targets.
   - Pixel programs use bases 0–9 at 0x37000000 + n·512K; vertex and state
     programs use bases 10+ at 0x3c000000 + (n−10)·512K.
   - Confirmed: every DOUTU in 13 captures lands on a captured USSE buffer.
-- bits 24–31: `(n+3)>>2` for a per-shader count from GL, probably the
-  temporary register count in fours. Consistent with hardware: the probe's
-  main pixel program has 0 here, and with 4 poked in (isa/hwt.py) a test
-  program uses r0-r15 correctly on the EA3. Not shown: that 0 breaks them.
-- bit 27 (0x8000000) is set on the microkernel's own task entries (with code
-  base 15, the kernel code heap; libsrv_init `pds0`/`pds2`/`pds3`/`pds4`),
-  but not in `pds1`'s word. Meaning unknown.
+- bits 22–23: 0 everywhere (strong).
+- bits 24–31: **one 8-bit field.** GL writes `(n+3)>>2` there for a
+  per-shader count, probably the temporary register count in fours.
+  Consistent with hardware: the probe's main pixel program has 0 here, and
+  with 4 poked in (isa/hwt.py) a test program uses r0-r15 correctly on the
+  EA3. Not shown: that 0 breaks them. Captured values are 0 and 1.
+- The microkernel's own task entries (with code base 15, the kernel code
+  heap; libsrv_init `pds0`/`pds2`/`pds3`/`pds4`) have bit 27 (0x8000000) set,
+  but `pds1`'s word does not. In this field that is the value 8, 32
+  temporaries; that reading is a guess.
 
 **Word 1:**
 
@@ -246,7 +321,10 @@ program may hold several HALTs, as branch targets.
 - The pixel-event program computes word 1 at run time: an OR of the tile
   position fields, 0x00800000 and 0x00400000.
 
-**Word 2:** 0 in every capture.
+**Word 2:** 0 in every program the generators build. The static
+pixel-event program repeats its word 0 there (`doutu ds0[0], ds0[1],
+ds0[0], ds0[0]`: 0x00010400, and 0x01010500 for the ds0[2] task), so the
+word is probably not read. Unknown.
 
 ### DOUTD: DMA into USSE attributes (2 words, +1 with `x`)
 
@@ -289,7 +367,7 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
 | 21 | colour iterator at precision < 2 | confirmed (set by GL); meaning of the precision values guessed |
 | 22–23 | components − 1 (forced 4 for colour) | confirmed |
 | 24 | plain iteration enabled | confirmed |
-| 25–26 | always set (0x6000000) | confirmed constant |
+| 25–26 | a 2-bit field, seen only as 3 or 0. It is 3 on every entry the GL builder 0x36b00 makes: plain, merged and pure-sample (`27800000`, `37400800`, `46012201`). It is 0 on the two entries built elsewhere, the clear's colour `21c10000` and the background object's sample `40012001`. Both of those are drawn at w = 1, so a guess is perspective-correct interpolation | 3/0 split strong (captures); meaning guess |
 | 27 / 28 | precision 2 / precision 1 from the USP entry; mediump varyings give bit 28 | confirmed field, guess that 1 = F16 |
 | 29 | last plain iteration | confirmed |
 
@@ -320,7 +398,10 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
 
 ### DOUTA: write a primary attribute register (2 words)
 
-- **(value, ctrl): ctrl bits 8+ select the register.** Strong.
+- **(value, ctrl): ctrl bits 8–15 select the register.** Strong for bits
+  8+. The width is not known: only registers 0, 1 and 2 have been seen
+  (ctrl 0, 0x100, 0x200). Bits 0–7 and 16–31 are always 0, so take 8–15 (a
+  primary attribute number) and treat the rest as reserved.
   - libsrv_init's `pds3` (the microkernel's event entry) starts with
     `douta (in0, 0)`, `douta (in2, 0x100)` and `douta (in4, 0x200)`. That
     hands its inputs to the microkernel task in PA0–PA2; `pds4` does the
@@ -390,12 +471,14 @@ The `cap` pattern ran on the EA3, 2026-10-27. All runs rc=0.
   rewrites a word before every kick. Change only things a wedge can't make
   worse, and run one replay at a time, checking dmesg for `Hardware Recovery`
   between runs. A failed recovery needs a reboot.
-- DOUTD ctrl bits 22–25. The DOUTU w0 top byte and w1 bit 2.
-- The remaining DOUTI bits 5–8, 17–20 and 25–26, and what precision values
-  0/1/2 are.
+- DOUTD ctrl bits 22–25. What the DOUTU w0 top byte counts, and w1 bit 2.
+- What DOUTI bits 25–26 mean (see DOUTI), and what precision values 0/1/2
+  are. Bits 5–8 and 17–20 have never been seen set.
+- The width of DOUTA's register field.
+- What an odd S1/S2 number does in a 32-bit ALU op.
 - Why DOUTA is sometimes issued three times to the same register.
 - The pixel-event inputs and event bits. The data size of a raw-pointer
   program is inferred, not read.
 - The VDM info word bits 8–21 for state programs (`0e022403`, `0800e103`).
-- Opcodes and sub-ops not seen: 1, 3, 5, 7, b, e; ADD/MUL with s = 1. What
-  d with s = 1 does.
+- Opcodes and sub-ops not seen: 1, 3, 5, 7, b, e; ADD/MUL with s = 1; a
+  with s = 0. What d with s = 1 does.

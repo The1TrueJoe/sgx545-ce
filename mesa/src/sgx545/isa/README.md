@@ -98,25 +98,22 @@ Sent to the ISA.md owner. Answered in ISA.md (um-re d7f97e4, e77b9f9,
    efo's d/i/a/m values, dot's `cs`/`as`/`s1c`/`s2c` and imae's `ci` are
    listed under "Other spellings asm.py takes"; op16s1's h15 is `i=`.
 
-## Switching the compiler over (not done yet)
+## The compiler on this encoder
 
-`mesa/src/sgx545/compiler` encodes through `usse_forms.h` / `usse.c`, which
-`tools/usc/gen_forms.py` generates. To move it onto this encoder:
+`mesa/src/sgx545/compiler` encodes through this library:
 
-1. Link `idep_sgx545_isa` into `libsgx545_compiler` (meson), and include
-   `sgx545_isa.h` where the compiler emits instructions.
-2. Replace each call that builds a word through `usse.c`'s per-form helpers
-   with a filled `struct sgx_isa_instr` and `sgx545_isa_encode(&instr,
-   &fc)`, where `fc` is the format-control state at that point (the
-   compiler's default is `SGX545_ISA_FC_START`; it changes only after a
-   `setfc` the compiler emits). Operands are given by slot (dst, src0,
-   src1, src2) exactly as ISA.md names them; a one-source form uses src1.
-3. Use `sgx545_disasm()` for the compiler's debug output and in place of any
-   disassembly through the old tables.
-4. Delete `usse_forms.h`, `usse.c` and `usse.h`, and `tools/usc/gen_forms.py`
-   with them; `tools/isa/hw.py` stays in `tools/` as a test oracle only.
-5. Run the dEQP-GLES2 suite before and after: the words must not change for
-   any shader (a word-level A/B over the corpus is the quickest check).
+- `sgx_forms.h` / `sgx_forms.c` name the forms the compiler emits (an opcode
+  plus its fixed fields: `pck.u8.f32`, `movc.i32`, ...), the fields it sets on
+  them, and each form's operand slots (role, the register files the slot
+  encodes, modifiers, whether it follows format select), which instruction
+  selection uses to legalize operands.
+- `sgx_encode_ins()` turns one IR instruction into a `struct sgx_isa_instr`
+  and calls `sgx545_isa_encode()` at the program-start format control (the
+  compiler emits no `setfc`); branches are encoded once their targets are
+  known, the dependent-sample template and the discard `nop` the same way.
 
-Until then nothing links this library; it builds with Mesa's tests
-(`-Dbuild-tests=true`) and with `tests/standalone.sh`.
+The old encoder (`usse_forms.h`, `usse.c`, `usse.h`, generated from
+`tools/isa/hw.py` by `tools/usc/gen_forms.py`) is deleted. Before it went,
+every corpus program (`tools/isa/corpus`, `tools/usc/tests`, plain and F16)
+gave byte-identical USPs and code with both encoders: 2600 outputs, and every
+instruction compared one by one.

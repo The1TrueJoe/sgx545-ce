@@ -37,7 +37,7 @@ struct fbuf {
 };
 static struct fbuf bufs[1024];		/* handle = index + 1; sync handle = index + 0x1001 */
 static unsigned nbufs;
-static char syncpages[64][4096] __attribute__((aligned(4096)));	/* sync data: all zero, complete == pending */
+static char syncpages[1024][4096] __attribute__((aligned(4096)));	/* sync data: all zero, complete == pending */
 
 static void heapinfo(PVRSRV_HEAP_INFO *h, IMG_UINT32 *n)
 {
@@ -148,7 +148,7 @@ void *fake_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 	(void)flags;
 	(void)fd;
 	if (h > 0x1000)
-		return h - 0x1001 < 64 ? syncpages[h - 0x1001] : MAP_FAILED;
+		return h - 0x1001 < 1024 ? syncpages[h - 0x1001] : MAP_FAILED;
 	if (h == 0 || h > nbufs)
 		return MAP_FAILED;
 	return bufs[h - 1].mem;

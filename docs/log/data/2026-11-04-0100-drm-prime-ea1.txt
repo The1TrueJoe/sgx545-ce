@@ -1,0 +1,62 @@
+# powervr_sgx PRIME on the EA1 (ea1-v1, 10.0.0.110), RAM boot of 697182a (run 41749725741), 2026-11-04 ~01:05 UTC, DDK microkernel
+# The test kernel drives the CEFDK framebuffer with simpledrm (FB_SIMPLE off).
+
+[    1.495431] [drm] Initialized simpledrm 1.0.0 for 7fc00000.framebuffer on minor 0
+[   24.476493] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[   24.504855] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 1
+/sys/class/drm/card0 DRIVER=simple-framebuffer
+/sys/class/drm/card1 DRIVER=powervr_sgx
+/sys/class/drm/renderD128 DRIVER=powervr_sgx
+
+# uAPI suite (now with prime), frames
+39/39 passed
+3/3 frames right
+
+# powervr_sgx_prime -n 6 -d 1500 (buffer filled with 0xdeadbeef from the CPU before every frame;
+# "stale" = that word still there; scanout read through /dev/mem at 0x7fc00000)
+kms: crtc 37 connector 39 mode 720x480
+a) simpledrm dumb buffer 1 (736x480, pitch 2944) -> powervr_sgx handle 1
+a) frame 0 explicit: buffer WRONG (centre ff00ff00, 1792 wrong, 1792 stale), scanout WRONG (0 wrong, 1792 stale)
+a) frame 1 implicit: buffer WRONG (centre ffffff00, 5136 wrong, 5136 stale), scanout WRONG (0 wrong, 5136 stale)
+a) frame 2 control : buffer WRONG (centre ff00ff00, 48 wrong, 48 stale), scanout WRONG (1 wrong, 345600 stale)
+a) frame 3 explicit: buffer WRONG (centre ffffff00, 45776 wrong, 45776 stale), scanout WRONG (0 wrong, 45776 stale)
+a) frame 4 implicit: buffer WRONG (centre ff00ff00, 43552 wrong, 43552 stale), scanout WRONG (0 wrong, 43552 stale)
+a) frame 5 control : buffer WRONG (centre ffffff00, 96 wrong, 96 stale), scanout WRONG (1 wrong, 345600 stale)
+b) powervr_sgx object 8 (1413120 bytes) -> simpledrm handle 2
+b) frame 0 explicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 1 implicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 2 control : buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout WRONG (0 wrong, 12960 stale)
+b) frame 3 explicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 4 implicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 5 control : buffer right (centre ffffff00, 0 wrong, 0 stale), scanout WRONG (0 wrong, 12960 stale)
+SOME FRAMES WRONG
+
+# ---- 4405ed7 (flush added, but job->bos was never set: no flush ran): path a as before, 1792-47584 stale per frame
+# ---- c95e32d (run 41752797996), 2026-11-04 ~01:37 UTC: the job keeps its BO list, listed imports flushed before and after
+39/39 passed
+kms: crtc 37 connector 39 mode 720x480
+a) simpledrm dumb buffer 1 (736x480, pitch 2944) -> powervr_sgx handle 1
+a) frame 0 explicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+a) frame 1 implicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+a) frame 2 control : buffer WRONG (centre ff00ff00, 48 wrong, 48 stale), scanout WRONG (1 wrong, 345600 stale)
+a) frame 3 explicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+a) frame 4 implicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+a) frame 5 control : buffer WRONG (centre ffffff00, 80 wrong, 80 stale), scanout WRONG (1 wrong, 345600 stale)
+a) frame 6 explicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+a) frame 7 implicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+a) frame 8 control : buffer WRONG (centre ff00ff00, 48 wrong, 48 stale), scanout WRONG (1 wrong, 345600 stale)
+b) powervr_sgx object 8 (1413120 bytes) -> simpledrm handle 2
+b) frame 0 explicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 1 implicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 2 control : buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout WRONG (0 wrong, 12983 stale)
+b) frame 3 explicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 4 implicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 5 control : buffer right (centre ffffff00, 0 wrong, 0 stale), scanout WRONG (1 wrong, 13023 stale)
+b) frame 6 explicit: buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 7 implicit: buffer right (centre ffffff00, 0 wrong, 0 stale), scanout right (0 wrong, 0 stale)
+b) frame 8 control : buffer right (centre ff00ff00, 0 wrong, 0 stale), scanout WRONG (1 wrong, 13027 stale)
+all frames right
+20/20 frames right
+all blits right
+round 1: hang recovery right
+all right

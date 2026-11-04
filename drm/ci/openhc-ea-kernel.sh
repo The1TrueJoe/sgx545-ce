@@ -9,8 +9,10 @@
 # Does what openHC's build does to the kernel (board/external.mk and
 # build/build.sh): global patches in Buildroot's order, the board/common and
 # board/ea/common kernel mirrors with their objs.mk lines, the board's device
-# tree, then the config from x86_64_defconfig, the family and board fragments,
-# the feature fragments and real-kernel.fragment. On top: the vendor driver
+# tree, then the config from x86_64_defconfig, the fragments build.sh composes
+# for the board and real-kernel.fragment. The fragment list and the DT files
+# come from build.sh itself (OHC_DEFCONFIG_ONLY), so the board/ea/<model>/<board>
+# layers are followed as openHC follows them. On top: the vendor driver
 # (SGX545_CE) out and powervr_sgx in as a module (powervr-sgx.fragment).
 # BOARD picks the board (default ea1-v1).
 set -eu
@@ -20,7 +22,6 @@ SRC=$2
 DRM=$3
 BOARD=${BOARD:-ea1-v1}
 B=$OHC/board
-BD=$B/ea/$BOARD
 
 for p in "$B"/common/patches/linux/*.patch "$B"/ea/common/patches/linux/*.patch; do
 	[ -e "$p" ] || continue
@@ -29,7 +30,7 @@ for p in "$B"/common/patches/linux/*.patch "$B"/ea/common/patches/linux/*.patch;
 done
 
 for m in "$B/common/kernel" "$B/ea/common/kernel"; do
-	for t in arch drivers sound; do
+	for t in arch drivers include sound; do
 		[ -d "$m/$t" ] || continue
 		( cd "$m" && find "$t" \( -name '*.c' -o -name '*.h' -o -name '*.dts' -o -name '*.dtsi' \
 			-o -name Makefile -o -name Kbuild -o -name Kconfig \) ) | while read -r f; do
@@ -44,7 +45,14 @@ for m in "$B/common/kernel" "$B/ea/common/kernel"; do
 	done
 done
 
-install -D -m644 "$BD/$BOARD.dts" "$SRC/arch/x86/boot/dts/$BOARD.dts"
+# The board's composition, as build.sh resolves it.
+GEN=$(mktemp -d)
+EFF=$(cd "$OHC" && OHC_DEFCONFIG_ONLY=1 BOARD=$BOARD BR2_OUTPUT_DIR=$GEN bash build/build.sh |
+	sed -n '/^BR2_/p')
+val() { printf '%s\n' "$EFF" | sed -n "s/^$1=\"\(.*\)\"$/\1/p" | tail -1 | sed "s|\$(BR2_EXTERNAL_OPENHC_PATH)|$B|g"; }
+for f in $(val BR2_OHC_BOARD_DTS); do
+	install -D -m644 "$B/$f" "$SRC/arch/x86/boot/dts/$(basename "$f")"
+done
 
 rm -rf "$SRC/drivers/gpu/drm/powervr_sgx"
 cp -RL "$DRM/powervr_sgx" "$SRC/drivers/gpu/drm/powervr_sgx"
@@ -53,15 +61,8 @@ grep -q powervr_sgx "$SRC/drivers/gpu/drm/Kconfig" ||
 grep -q powervr_sgx "$SRC/drivers/gpu/drm/Makefile" ||
 	printf '\nobj-$(CONFIG_DRM_POWERVR_SGX) += powervr_sgx/\n' >> "$SRC/drivers/gpu/drm/Makefile"
 
-features=$(cat "$B/ea/common/ohc.features" "$BD/ohc.features" 2>/dev/null |
-	sed 's/#.*//' | tr ' ' '\n' | awk 'NF && !seen[$0]++')
-frags="$B/ea/common/linux/common.fragment"
-[ -f "$BD/linux/$BOARD.fragment" ] && frags="$frags $BD/linux/$BOARD.fragment"
-for f in $features; do
-	for d in "$B/common/features/$f" "$B/ea/common/features/$f" "$BD/features/$f"; do
-		[ -f "$d/linux.fragment" ] && frags="$frags $d/linux.fragment"
-	done
-done
+frags="$(val BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES)"
+[ -n "$frags" ] || { echo "openhc-ea-kernel: build.sh gave no fragments for $BOARD" >&2; exit 1; }
 frags="$frags $B/ea/common/linux/real-kernel.fragment $DRM/ci/powervr-sgx.fragment"
 echo ">> fragments:"
 printf '   %s\n' $frags
@@ -72,7 +73,7 @@ make -C "$SRC" ARCH=x86_64 olddefconfig
 "$SRC/scripts/config" --file "$SRC/.config" -d MODULE_SIG -d MODULE_SIG_ALL -d MODULE_SIG_FORCE
 make -C "$SRC" ARCH=x86_64 olddefconfig
 
-for want in CONFIG_DRM=y CONFIG_DRM_POWERVR_SGX=m CONFIG_MODULES=y; do
+for want in CONFIG_DRM=y CONFIG_DRM_POWERVR_SGX=m CONFIG_MODULES=y CONFIG_DEV_COREDUMP=y CONFIG_DRM_SIMPLEDRM=y; do
 	grep -qx "$want" "$SRC/.config" || { echo "openhc-ea-kernel: $want missing" >&2; exit 1; }
 done
 if grep -q '^CONFIG_SGX545_CE=' "$SRC/.config"; then

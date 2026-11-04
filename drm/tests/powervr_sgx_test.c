@@ -377,7 +377,7 @@ static void t_vm_map_unmap(int fd)
 
 	assert_eq(vm_map(fd, vm, bo, 0x3e000000, 0, 8 * PAGE), 0);
 	assert_eq(vm_map(fd, vm, bo, 0x3e100000, 4 * PAGE, 4 * PAGE), 0);
-	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, PAGE), 0);	/* USSE pixel */
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, PAGE), -EINVAL);	/* USSE pixel: code objects only */
 	assert_eq(vm_map(fd, vm, bo, 0xfffff000, 0, PAGE), 0);	/* last page */
 	assert_eq(vm_unmap(fd, vm, 0x3e000000, 8 * PAGE), 0);
 	assert_eq(vm_unmap(fd, vm, 0x3e000000, 8 * PAGE), -ENOENT);
@@ -610,8 +610,8 @@ static void t_submit_invalid(int fd)
 	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_RENDER;	/* no RT dataset */
 	assert_eq(submit(fd, j, 2, &failed), -ENOENT);
 	assert_eq(failed, 1);
-	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;
-	assert_eq(submit(fd, j, 2, &failed), -EOPNOTSUPP);
+	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;	/* no stream */
+	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
 	assert_eq(failed, 1);
 	j[1].type = 9;
 	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
@@ -643,6 +643,261 @@ static void t_submit_invalid(int fd)
 
 	/* Nothing above was queued: the syncobj never got a fence. */
 	assert_eq(syncobj_wait(fd, s, 0), -EINVAL);
+}
+
+static void t_context_state_invalid(int fd)
+{
+	struct drm_powervr_sgx_ioctl_get_context_state_args s = {
+		.handle = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER),
+	};
+
+	s._padding_c = 1;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+	s._padding_c = 0;
+	s.handle = 0xdead;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+}
+
+/* Handles are per file: another open file's context, syncobj and BO are not found. */
+static void t_submit_other_file(int fd)
+{
+	int fd2 = open_dev();
+	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER), ctx2, s2, bo2;
+	struct drm_powervr_sgx_sync_op op;
+	struct drm_powervr_sgx_bo_ref ref;
+	struct drm_powervr_sgx_job j;
+
+	/* fd2's handles above any of fd's */
+	for (int i = 0; i < 4; i++) {
+		create_ctx(fd2, create_vm(fd2), DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+		syncobj(fd2);
+		create_bo(fd2, PAGE, 0);
+	}
+	ctx2 = create_ctx(fd2, create_vm(fd2), DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	s2 = syncobj(fd2);
+	bo2 = create_bo(fd2, PAGE, 0);
+	op = (struct drm_powervr_sgx_sync_op)SIGNAL(s2);
+	ref = (struct drm_powervr_sgx_bo_ref){ .handle = bo2 };
+
+	j = null_job(ctx2, NULL, 0);
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	j = null_job(ctx, &op, 1);
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	j = null_job(ctx, NULL, 0);
+	j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &ref);
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	close(fd2);
+}
+
+/* A wait on a syncobj that was never signalled has no fence to wait for. */
+static void t_submit_wait_unsignalled(int fd)
+{
+	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	uint32_t s = syncobj(fd), done = syncobj(fd);
+	struct drm_powervr_sgx_sync_op op[] = { WAIT(s), SIGNAL(done) };
+	struct drm_powervr_sgx_job j = null_job(ctx, op, 2);
+
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	assert_eq(syncobj_wait(fd, done, 0), -EINVAL);
+}
+
+/* Code objects and UPLOAD_CODE (UAPI.md 2, D9, D12) */
+
+#include "usse_corpus.h"
+
+static int upload(int fd, uint32_t bo, uint64_t off, const void *w, uint64_t size, uint64_t *bad)
+{
+	struct drm_powervr_sgx_ioctl_upload_code_args a = {
+		.handle = bo, .offset = off, .size = size, .pointer = (uintptr_t)w,
+	};
+	int r = xioctl(fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a);
+
+	if (bad)
+		*bad = a.bad_offset;
+	return r;
+}
+
+static void t_code_bo(int fd)
+{
+	struct drm_powervr_sgx_ioctl_create_bo_args a = {
+		.size = PAGE, .flags = DRM_POWERVR_SGX_BO_CODE | DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
+	};
+	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
+	struct drm_prime_handle ph = { .flags = DRM_CLOEXEC };
+	uint32_t vm = create_vm(fd), code = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint32_t plain = create_bo(fd, PAGE, 0);
+
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &a, EINVAL);	/* no CPU access */
+	mo.handle = code;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo, EINVAL);
+	ph.handle = code;
+	assert_true(xioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) < 0);	/* not exportable */
+	ph.handle = plain;
+	assert_eq(xioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph), 0);
+	close(ph.fd);
+
+	/* The USSE heaps take code objects only, and code goes nowhere else. */
+	assert_eq(vm_map(fd, vm, plain, 0x37000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd, vm, plain, 0x3c000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd, vm, code, 0x3e000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd, vm, code, 0x2e000000, 0, PAGE), -EINVAL);	/* PDS pixel */
+	assert_eq(vm_map(fd, vm, code, 0x37000000, 0, 2 * PAGE), 0);
+	assert_eq(vm_map(fd, vm, code, 0x3c000000, 0, PAGE), 0);
+}
+
+/*
+ * PRIME: an object's dma-buf maps on the CPU only with ALLOW_CPU_ACCESS, and an
+ * import goes where any data object goes (powervr_sgx_prime: a KMS device's).
+ */
+static void t_prime(int fd)
+{
+	struct drm_prime_handle ph = { .flags = DRM_CLOEXEC | DRM_RDWR }, im = {};
+	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
+	uint32_t plain = create_bo(fd, 2 * PAGE, 0);
+	uint32_t cpu = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS);
+	int fd2 = open_dev(), dfd;
+	uint32_t vm2, *p, *q;
+
+	assert_true(fd2 >= 0);
+	ph.handle = plain;
+	do_ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph);
+	assert_true(mmap(NULL, PAGE, PROT_READ, MAP_SHARED, ph.fd, 0) == MAP_FAILED);
+	assert_eq(errno, EINVAL);
+	close(ph.fd);
+
+	ph.handle = cpu;
+	do_ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph);
+	dfd = ph.fd;
+	p = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, dfd, 0);
+	assert_true(p != MAP_FAILED);
+	p[0] = 0x5a5a1234;
+
+	/* into the same file: the handle it already has */
+	im.fd = dfd;
+	do_ioctl(fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &im);
+	assert_eq(im.handle, cpu);
+
+	/* into another file: a data object there */
+	im = (struct drm_prime_handle){ .fd = dfd };
+	do_ioctl(fd2, DRM_IOCTL_PRIME_FD_TO_HANDLE, &im);
+	vm2 = create_vm(fd2);
+	assert_eq(vm_map(fd2, vm2, im.handle, 0x37000000, 0, PAGE), -EINVAL);	/* USSE: code only */
+	assert_eq(vm_map(fd2, vm2, im.handle, 0x3e000000, 0, 2 * PAGE), -EINVAL);	/* past its end */
+	assert_eq(vm_map(fd2, vm2, im.handle, 0x3e000000, 0, PAGE), 0);
+	mo.handle = im.handle;
+	do_ioctl(fd2, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo);
+	q = mmap(NULL, PAGE, PROT_READ, MAP_SHARED, fd2, mo.offset);
+	assert_true(q != MAP_FAILED);
+	assert_eq(q[0], 0x5a5a1234);
+	munmap(q, PAGE);
+	munmap(p, PAGE);
+	close(dfd);
+	close(fd2);
+}
+
+/* Every corpus instruction passes, at the middle of a 4-page object. */
+static void t_upload_code_corpus(int fd)
+{
+	uint32_t n = sizeof(usse_corpus) / sizeof(usse_corpus[0]);
+	uint32_t bo = create_bo(fd, 4 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint64_t w[sizeof(usse_corpus) / sizeof(usse_corpus[0])], bad;
+
+	for (uint32_t i = 0; i < n; i++)
+		w[i] = (uint64_t)usse_corpus[i].hi << 32 | usse_corpus[i].lo;
+	assert_eq(upload(fd, bo, 2 * PAGE, w, sizeof(w), &bad), 0);
+	assert_eq(bad, ~0ull);
+	/* one at a time, so a refusal names the instruction */
+	for (uint32_t i = 0; i < n; i++)
+		if (upload(fd, bo, 2 * PAGE + 8 * i, &w[i], 8, NULL))
+			fail("refused: %s (%08x %08x)", usse_corpus[i].text, usse_corpus[i].lo,
+			     usse_corpus[i].hi);
+	printf("  %u corpus instructions accepted\n", n);
+}
+
+/*
+ * Words from the isaspec encoder (mesa/src/sgx545/isa), each with what must
+ * happen at word 2 of a 3-word upload at the start of a 1-page object.
+ */
+static const struct {
+	uint32_t lo, hi;
+	const char *what;
+	int ok;
+} crafted[] = {
+	{ 0x2000001c, 0xfe210000, "ldr r0, #28", 0 },
+	{ 0x20264000, 0xfe210081, "ldr pa1, #3200 [drc=1]", 0 },
+	{ 0x00400003, 0xfe200000, "ldr r2, r3", 0 },
+	{ 0x20064080, 0xfe290000, "str #3200, r1", 0 },
+	{ 0x00000203, 0xfe280800, "str r3, r4 [nosched]", 0 },
+	{ 0x00000180, 0xf80000c0, "setl r3", 0 },
+	{ 0x00a00000, 0xf8000100, "savl r5", 0 },
+	{ 0x0003fffd, 0xf8000040, "br #-3 (before the object)", 0 },
+	{ 0x0003fffe, 0xf8000040, "br #-2 (its first word)", 1 },
+	{ 0x000001fd, 0xf8000040, "br #509 (its last word)", 1 },
+	{ 0x000001fe, 0xf8000040, "br #510 (past its end)", 0 },
+	{ 0x0001ffff, 0xf8000040, "br #131071", 0 },
+	{ 0x0000001c, 0xfe210008, "ldr r0, #28 with a stray bit (h3): no form", 0 },
+	{ 0xffffffff, 0xffffffff, "all ones: no form", 0 },
+	{ 0xffffffff, 0x00000000, "fmad with every operand bit set", 1 },
+	{ 0x00000000, 0x00000000, "zero (what an object holds before an upload)", 1 },
+};
+
+static void t_upload_code_reject(int fd)
+{
+	uint32_t bo = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint64_t w[3] = { 0, 0, 0 }, bad;
+
+	for (unsigned int i = 0; i < sizeof(crafted) / sizeof(crafted[0]); i++) {
+		int r;
+
+		w[2] = (uint64_t)crafted[i].hi << 32 | crafted[i].lo;
+		r = upload(fd, bo, 0, w, sizeof(w), &bad);
+		if (crafted[i].ok ? r != 0 : r != -EINVAL || bad != 16)
+			fail("%s: %d, bad offset %#llx", crafted[i].what, r, (unsigned long long)bad);
+	}
+	/* a refusal names the first bad word */
+	w[0] = (uint64_t)crafted[0].hi << 32 | crafted[0].lo;
+	w[1] = w[2] = (uint64_t)crafted[3].hi << 32 | crafted[3].lo;
+	assert_eq(upload(fd, bo, 0x100, w, sizeof(w), &bad), -EINVAL);
+	assert_eq(bad, 0x100);
+}
+
+static void t_upload_code_invalid(int fd)
+{
+	uint32_t code = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_CODE), plain = create_bo(fd, PAGE, 0);
+	uint64_t w[2] = { 0, 0 };
+	struct drm_powervr_sgx_ioctl_upload_code_args a = {
+		.handle = code, .size = 16, .pointer = (uintptr_t)w,
+	};
+
+	assert_eq(upload(fd, code, 0, w, 16, NULL), 0);
+	assert_eq(upload(fd, plain, 0, w, 16, NULL), -EINVAL);	/* not a code object */
+	assert_eq(upload(fd, 0xdead, 0, w, 16, NULL), -ENOENT);
+	assert_eq(upload(fd, code, 4, w, 8, NULL), -EINVAL);	/* 8-byte aligned */
+	assert_eq(upload(fd, code, 0, w, 12, NULL), -EINVAL);
+	assert_eq(upload(fd, code, 0, w, 0, NULL), -EINVAL);
+	assert_eq(upload(fd, code, PAGE - 8, w, 16, NULL), -EINVAL);	/* past the end */
+	assert_eq(upload(fd, code, ~0ull - 7, w, 16, NULL), -EINVAL);
+	assert_eq(upload(fd, code, 0, (void *)8, 16, NULL), -EFAULT);
+	a.flags = 1;
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a, EINVAL);
+}
+
+/* While mapped, uploads only append; once unmapped, anywhere again. */
+static void t_upload_code_mapped(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint64_t w[32] = { 0 };
+
+	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);
+	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);	/* not mapped: again */
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, 2 * PAGE), 0);
+	assert_eq(upload(fd, bo, 0x80, w, 0x100, NULL), -EBUSY);	/* overlaps uploaded code */
+	assert_eq(upload(fd, bo, 0xf8, w, 8, NULL), -EBUSY);
+	assert_eq(upload(fd, bo, 0x100, w, 0x100, NULL), 0);
+	assert_eq(upload(fd, bo, 0x400, w, 0x100, NULL), 0);	/* a gap is fine */
+	assert_eq(upload(fd, bo, 0x300, w, 0x100, NULL), -EBUSY);	/* behind the furthest */
+	assert_eq(vm_unmap(fd, vm, 0x37000000, 2 * PAGE), 0);
+	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);
 }
 
 /* RT datasets */
@@ -787,6 +1042,228 @@ static void t_submit_render_invalid(int fd)
 #undef REJECT
 }
 
+/* Transfer streams: every case fails validation, so nothing reaches the GPU. */
+
+struct xstream {
+	uint64_t s[6];
+	struct drm_powervr_sgx_job j;
+};
+
+static void xstream_init(struct xstream *x, uint32_t ctx, uint64_t bg, uint64_t pds)
+{
+	uint32_t *s32 = (uint32_t *)x->s;
+
+	memset(x, 0, sizeof(*x));
+	s32[0] = 48;
+	x->s[1] = bg;
+	x->s[2] = pds;			/* pixel event */
+	s32[6] = 5;			/* its rows */
+	s32[9] = 1;			/* last tile 1, 3 */
+	s32[10] = 3;
+	s32[11] = 0x3f800000;
+	x->j = (struct drm_powervr_sgx_job){
+		.type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER, .context_handle = ctx,
+		.cmd_stream = (uintptr_t)x->s, .cmd_stream_len = 48,
+	};
+}
+
+static void t_submit_transfer_invalid(int fd)
+{
+	uint32_t vm = create_vm(fd), xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), rtds;
+	struct xstream x;
+	uint32_t *s32;
+	int err;
+
+	rtds = create_rtds(fd, ctx, 64, 64, &err);
+	assert_eq(err, 0);
+	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
+	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
+	s32 = (uint32_t *)x.s;
+
+#define REJECT(err_, ...) do { xstream_init(&x, xctx, 0x3e100000, 0x2e100000); \
+		__VA_ARGS__; assert_eq(submit(fd, &x.j, 1, NULL), -(err_)); } while (0)
+
+	REJECT(EINVAL, s32[0] = 40);			/* length is exact */
+	REJECT(EINVAL, s32[1] = 1);			/* header word must be zero */
+	REJECT(EINVAL, x.j.cmd_stream_len = 0);
+	REJECT(EINVAL, x.j.cmd_stream += 4);		/* 8-byte aligned */
+	REJECT(EFAULT, x.j.cmd_stream = 8);
+	REJECT(EINVAL, x.s[1] = 0);			/* background block required */
+	REJECT(EINVAL, x.s[1] = 0x3e100008);		/* 16-byte aligned */
+	REJECT(EINVAL, x.s[1] = 0x3e200000);		/* not mapped */
+	REJECT(EINVAL, x.s[1] = 0x3e100f00);		/* not mapped for its 0x200 bytes */
+	REJECT(EINVAL, x.s[2] = 0x3e100000);		/* pixel event outside PDS pixel */
+	REJECT(EINVAL, x.s[2] = 0x2e200000);		/* pixel event not mapped */
+	REJECT(EINVAL, s32[6] = 0);			/* rows 1..63 */
+	REJECT(EINVAL, s32[6] = 64);
+	REJECT(EINVAL, s32[7] = 2);			/* first tile after the last */
+	REJECT(EINVAL, s32[10] = 0x10000);		/* tile limits */
+	REJECT(EINVAL, x.j.flags = 2);			/* flags outside the mask */
+	REJECT(EINVAL, x.j.rt_dataset_handle = rtds);	/* transfers take no RT dataset */
+	REJECT(EINVAL, x.j.ta_kicks.count = 1);		/* or kicks */
+	REJECT(EINVAL, x.j.context_handle = ctx);	/* a transfer on a render context */
+#undef REJECT
+}
+
+/*
+ * Every reserved bit and padding word, one at a time, on an otherwise valid
+ * call: each must fail with -EINVAL (bad flags, docs/UAPI.md 2).
+ */
+#define BIT_REJECT(what, bit, call) do { int _e = (call); \
+	if (_e != -EINVAL) fail("%s bit %u: %d, expected -EINVAL", what, (unsigned int)(bit), _e); } while (0)
+
+static void t_reserved_bits(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS);
+	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), s = syncobj(fd), rtds;
+	struct drm_powervr_sgx_sync_op op;
+	struct drm_powervr_sgx_bo_ref ref;
+	struct drm_powervr_sgx_job j;
+	struct rstreams r;
+	struct xstream x;
+	int err;
+
+	rtds = create_rtds(fd, ctx, 64, 64, &err);
+	assert_eq(err, 0);
+	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
+	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
+
+	for (unsigned int b = 2; b < 64; b++) {	/* 0 CPU access, 1 code */
+		struct drm_powervr_sgx_ioctl_create_bo_args a = { .size = PAGE, .flags = 1ull << b };
+
+		BIT_REJECT("CREATE_BO flags", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &a));
+	}
+	for (unsigned int b = 0; b < 32; b++) {
+		struct drm_powervr_sgx_ioctl_create_bo_args cb = { .size = PAGE, ._padding_c = 1u << b };
+		struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = { .handle = bo, ._padding_4 = 1u << b };
+		struct drm_powervr_sgx_ioctl_create_vm_context_args cv = { ._padding_4 = 1u << b };
+		struct drm_powervr_sgx_ioctl_destroy_vm_context_args dv = { .handle = vm, ._padding_4 = 1u << b };
+		struct drm_powervr_sgx_ioctl_vm_map_args m = {
+			.vm_context_handle = vm, .device_addr = 0x3e200000, .handle = bo, .size = PAGE,
+			.flags = 1u << b,
+		};
+		struct drm_powervr_sgx_ioctl_vm_map_args m2 = m;
+		struct drm_powervr_sgx_ioctl_vm_unmap_args u = {
+			.vm_context_handle = vm, .device_addr = 0x3e100000, .size = PAGE, ._padding_4 = 1u << b,
+		};
+		struct drm_powervr_sgx_ioctl_create_context_args cc = {
+			.type = DRM_POWERVR_SGX_CTX_TYPE_RENDER, .vm_context_handle = vm, .flags = 1u << b,
+		};
+		struct drm_powervr_sgx_ioctl_destroy_context_args dc = { .handle = ctx, ._padding_4 = 1u << b };
+		struct drm_powervr_sgx_ioctl_get_context_state_args gs = { .handle = ctx, ._padding_c = 1u << b };
+		struct drm_powervr_sgx_ioctl_create_rt_dataset_args cr = {
+			.context_handle = ctx, .width = 64, .height = 64, .samples = 1, .flags = 1u << b,
+		};
+		struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args dr = { .handle = rtds, ._padding_4 = 1u << b };
+		struct drm_powervr_sgx_ioctl_submit_jobs_args sj = { ._padding_14 = 1u << b };
+
+		BIT_REJECT("CREATE_BO padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &cb));
+		BIT_REJECT("GET_BO_MMAP_OFFSET padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo));
+		BIT_REJECT("CREATE_VM_CONTEXT padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT, &cv));
+		BIT_REJECT("DESTROY_VM_CONTEXT padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &dv));
+		BIT_REJECT("VM_MAP flags", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &m));
+		m2._padding_14 = 1u << b;
+		m2.flags = 0;
+		BIT_REJECT("VM_MAP padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &m2));
+		BIT_REJECT("VM_UNMAP padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &u));
+		BIT_REJECT("CREATE_CONTEXT flags", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &cc));
+		BIT_REJECT("DESTROY_CONTEXT padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &dc));
+		BIT_REJECT("GET_CONTEXT_STATE padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &gs));
+		BIT_REJECT("CREATE_RT_DATASET flags", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &cr));
+		BIT_REJECT("DESTROY_RT_DATASET padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &dr));
+		j = null_job(ctx, NULL, 0);
+		sj.jobs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &j);
+		BIT_REJECT("SUBMIT_JOBS padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj));
+
+		/* job: padding, then flags per type */
+		j._padding_4c = 1u << b;
+		BIT_REJECT("job padding", b, submit(fd, &j, 1, NULL));
+		j = null_job(ctx, NULL, 0);
+		j.flags = 1u << b;
+		BIT_REJECT("null job flags", b, submit(fd, &j, 1, NULL));
+		rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+		r.j.flags = 1u << b;
+		BIT_REJECT("render job flags", b, submit(fd, &r.j, 1, NULL));
+		rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+		r.k[0].flags = 1u << b;
+		BIT_REJECT("TA kick flags", b, submit(fd, &r.j, 1, NULL));
+		if (!((1u << b) & DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_FLAGS_MASK)) {
+			xstream_init(&x, xctx, 0x3e100000, 0x2e100000);
+			x.j.flags = 1u << b;
+			BIT_REJECT("transfer job flags", b, submit(fd, &x.j, 1, NULL));
+		}
+
+		/* sync ops: bits 4-30 are reserved; handle types 2-15 do not exist */
+		if (b >= 4 && b < 31) {
+			op = (struct drm_powervr_sgx_sync_op)SIGNAL(s);
+			op.flags |= 1u << b;
+			j = null_job(ctx, &op, 1);
+			BIT_REJECT("sync op flags", b, submit(fd, &j, 1, NULL));
+		}
+		if (b >= 2 && b < 16) {
+			op = (struct drm_powervr_sgx_sync_op)SIGNAL(s);
+			op.flags |= b;
+			j = null_job(ctx, &op, 1);
+			BIT_REJECT("sync op handle type", b, submit(fd, &j, 1, NULL));
+		}
+		if (b >= 1) {
+			ref = (struct drm_powervr_sgx_bo_ref){ .handle = bo, .flags = 1u << b };
+			j = null_job(ctx, NULL, 0);
+			j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &ref);
+			BIT_REJECT("BO ref flags", b, submit(fd, &j, 1, NULL));
+		}
+	}
+
+	/* Nothing above was queued, and the objects are all still there. */
+	assert_eq(syncobj_wait(fd, s, 0), -EINVAL);
+	j = null_job(ctx, NULL, 0);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+}
+
+/*
+ * Addresses outside the submitting context's VM: the same addresses mapped in
+ * another VM of the same file count for nothing.
+ */
+static void t_submit_other_vm(int fd)
+{
+	uint32_t vm = create_vm(fd), vm2 = create_vm(fd);
+	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
+	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), rtds;
+	struct rstreams r;
+	struct xstream x;
+	int err;
+
+	rtds = create_rtds(fd, ctx, 64, 64, &err);
+	assert_eq(err, 0);
+	/* Mapped in vm2 only. */
+	assert_eq(vm_map(fd, vm2, pds, 0x2e100000, 0, PAGE), 0);
+	assert_eq(vm_map(fd, vm2, gen, 0x3e100000, 0, PAGE), 0);
+	rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+	assert_eq(submit(fd, &r.j, 1, NULL), -EINVAL);
+	xstream_init(&x, xctx, 0x3e100000, 0x2e100000);
+	assert_eq(submit(fd, &x.j, 1, NULL), -EINVAL);
+
+	/* Mapped in vm, then unmapped: refused again. */
+	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
+	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
+	assert_eq(vm_unmap(fd, vm, 0x3e100000, PAGE), 0);
+	rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+	assert_eq(submit(fd, &r.j, 1, NULL), -EINVAL);
+	xstream_init(&x, xctx, 0x3e100000, 0x2e100000);
+	assert_eq(submit(fd, &x.j, 1, NULL), -EINVAL);
+
+	/* Addresses in the kernel's ranges, which no client can map. */
+	rstreams_init(&r, ctx, rtds, 0x2e100000, 0x10000000);	/* 3D params */
+	assert_eq(submit(fd, &r.j, 1, NULL), -EINVAL);
+	xstream_init(&x, xctx, 0x10000000, 0x2e100000);
+	assert_eq(submit(fd, &x.j, 1, NULL), -EINVAL);
+}
+
 static const struct {
 	const char *name;
 	void (*fn)(int fd);
@@ -815,9 +1292,21 @@ static const struct {
 	{ "submit-null-job-bo-ref", t_null_job_bo_ref },
 	{ "submit-null-job-vm-destroyed", t_null_job_vm_destroyed },
 	{ "submit-invalid", t_submit_invalid },
+	{ "context-state-invalid", t_context_state_invalid },
+	{ "submit-other-file", t_submit_other_file },
+	{ "submit-wait-unsignalled", t_submit_wait_unsignalled },
 	{ "rt-dataset-create-destroy", t_rtds_create_destroy },
 	{ "rt-dataset-invalid", t_rtds_invalid },
 	{ "submit-render-invalid", t_submit_render_invalid },
+	{ "submit-transfer-invalid", t_submit_transfer_invalid },
+	{ "reserved-bits", t_reserved_bits },
+	{ "code-bo", t_code_bo },
+	{ "prime", t_prime },
+	{ "upload-code-corpus", t_upload_code_corpus },
+	{ "upload-code-reject", t_upload_code_reject },
+	{ "upload-code-invalid", t_upload_code_invalid },
+	{ "upload-code-mapped", t_upload_code_mapped },
+	{ "submit-other-vm", t_submit_other_vm },
 };
 
 int main(int argc, char **argv)

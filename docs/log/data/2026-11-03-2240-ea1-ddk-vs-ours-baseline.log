@@ -1,0 +1,32 @@
+=== stage DDK fw + uk-9e48757 ===
+
+ddk=55ebb421 9e=e8f8ff13
+
+===== DDK: rendered 10 / 10 =====
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d69000)
+frame: 720x480, 1 draw(s), render done
+--- (P0) BIF (first 2 HWRs) ---
+
+
+===== OURS-9e48757: rendered 4 / 10 =====
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d69000)
+frame: 720x480, 1 draw(s), render done
+--- (P0) BIF (first 2 HWRs) ---
+[   51.255452] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10132 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   51.317522] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000001
+[   51.397005] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   51.402373] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     000D0400
+[   51.407730] PVR_K: (P0) EUR_CR_BIF_FAULT:        C011F00F
+[   54.272455] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x109f4 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   54.334513] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000001
+[   54.419733] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   54.425094] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     000D0400
+[   54.430457] PVR_K: (P0) EUR_CR_BIF_FAULT:        C00E900F
+[   57.294454] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x109f1 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   57.356508] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000001
+[   57.435996] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   57.441364] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     000D0400
+[   57.446738] PVR_K: (P0) EUR_CR_BIF_FAULT:        C015500F
+=== restore EA1 to normal ===
+
+restored: ramboot=NO webview=1

@@ -1,0 +1,44 @@
+[   30.110586] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[   30.121901] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[   30.125271] powervr_sgx 0000:01:02.0: [drm] every VM maps the firmware's heaps (DDK microkernel): clients are not isolated from the firmware (docs/UAPI.md 7.2, P2/P3)
+[   30.140163] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   30.153084] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[   30.222249] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+[   35.291487] powervr_sgx 0000:01:02.0: [drm] *ERROR* cleanup 1 of 0x32029000 did not complete
+[   40.298465] powervr_sgx 0000:01:02.0: [drm] *ERROR* cleanup 5 of 0x32010000 did not complete
+[   40.304455] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 26, consumed 23); resetting
+[   40.330471] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   40.334458] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   42.349494] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 3, consumed 3); resetting
+[   42.366775] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   42.370740] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   44.397490] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 3, consumed 3); resetting
+[   44.914716] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x20000000)
+[   44.923029] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not restart: device lost
+firmware running: 0 lost: 1 resets: 3 irqs: 32
+kernel PD 0x02567000 idle PD 0x02566000
+ccb wo 0 ro 0 issued 0 consumed 0
+hostctl init 0x0 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+CLKGATECTL           0x0000 0x0000a6aa
+CLKGATECTL2          0x0004 0x00aaaaaa
+CLKGATESTATUS        0x0008 0x000ccff8
+CORE_ID              0x001c 0x01150000
+CORE_REVISION        0x0020 0x0001000e
+SOFT_RESET           0x0080 0x00000000
+EVENT_STATUS         0x012c 0x20000000
+EVENT_STATUS2        0x0118 0x00000480
+EVENT_HOST_ENABLE    0x0130 0x00004000
+EVENT_HOST_ENABLE2   0x0110 0x00000000
+BIF_CTRL             0x0c00 0x00000000
+BIF_INT_STAT         0x0c04 0x000d0004
+BIF_FAULT            0x0c08 0x203ff050
+BIF_BANK0            0x0c78 0x0000000f
+BIF_DIR_LIST_BASE0   0x0c84 0x02566000
+BIF_DIR_LIST_BASE15  0x0c70 0x02567000
+EDM_TASK_REG0        0x0b14 0x00010000
+EDM_TASK_REG1        0x0b20 0x00010000
+
+## reload with cleanup=0 after the device was lost (same boot)
+Permission denied, please try again.
+Permission denied, please try again.
+root@10.0.0.110: Permission denied (publickey,password).

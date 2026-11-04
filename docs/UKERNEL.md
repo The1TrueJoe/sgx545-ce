@@ -269,10 +269,9 @@ not a constant (confirmed against a capture with the textures session; word 4,
 the depth/stencil block, and word 16 are 0 in every capture seen). The
 transfer completes through the same 3D-end event as a render; the microkernel
 tells the two apart by a transfer-in-flight marker (control block +0x54) and
-routes a transfer to `xfer_done`. That handler signals the destination sync
-(the write-ops-complete value at command word 0x16c written to the sync address
-at word 0x168, in `SGXMKIF_TRANSFERCMD_SHARED` — so the client sees the blit
-done), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
+routes a transfer to `xfer_done`. That handler writes the status value at
+command word 0x16c to the address at word 0x168 (in `SGXMKIF_TRANSFERCMD_SHARED`
+at +0xac, that is `sCtlStatusInfo[0]`; the count is at 0x164), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
 the context's CCB past the 0x1c0-byte command, and raises the host interrupt.
 The transfer also updates two sync-heap objects named by the kick's
 sync-handle list (not the shared command); reproducing those is the remaining
@@ -307,6 +306,66 @@ context's own structure. It reports completion by setting
 the handler leaves the status clear and the host times out and retries — this
 is the "Wait for uKernel to clean up" message, and it is why a render-context
 cleanup fails on a GPU the DDK left mid-render (`docs/NOTES.md`).
+
+#### What a kernel driver needs from it (EA1, 2026-11-03)
+
+`powervr_sgx` sent the three cleanups the DDK sends, in its order (RT dataset at
+RT-dataset destroy, then render context, then PB descriptor at context
+destroy), each after the context's last render had completed (render-done
+SW_EVENT, fences signalled), on the DDK microkernel
+(`docs/log/entries/2026-11-03-0300-drm-cleanup.md`):
+
+| cleanup | data[1] | result |
+|---|---|---|
+| RT (1) | HW RT dataset | consumed; `CLEANUPCMD_COMPLETE` not set within 5 s |
+| RC (2) | HW render context | no timeout, but possibly the RT's late completion: one status bit serves all three |
+| PB (5) | PB descriptor | **not consumed**: the kernel CCB read offset stops at it, so every later command waits behind it until the host's job timeout resets the GPU |
+
+After ten frames the PB descriptor reads 0x14 = 0x19, 0x18 = `04210019`, 0x20 =
+0x19, 0x24 = 1 at 720x480, and a DDK frame leaves exactly the same words
+(`docs/log/data/2026-11-03-0320-ddk-after-render.txt`). That accounting is
+normal and does not explain the timeouts [G]. (The second-context hang it was
+first blamed for was the PB's address: log `2026-11-03-0340-drm-per-vm-pb`.)
+
+What the open microkernel must do (the list for `ukernel/`):
+
+- once a context's last render has signalled render-done, treat its RT
+  dataset, render context and PB as idle: cleanup of an idle resource
+  completes at once;
+- always consume a cleanup command; report busy and done as different status
+  values instead of holding the CCB, so the host can retry or give up without
+  a reset;
+- keep a separate completion per command (or echo data[1] into the status), so
+  a late completion can't be taken for the next one;
+- leave nothing of a cleaned-up context where the next context's renders read
+  it (the in-flight slot +0x50, the RT-data entry state).
+
+#### Cleanup v2 (open microkernel, feature bit 0 of the firmware header)
+
+Agreed between `powervr_sgx` and `ukernel/` (2026-11-04). The type values and
+data[1] are as above. In addition:
+
+- data[2] is a nonzero sequence number the host picks. The host sends one
+  cleanup at a time, and only after every job of the resource's context has
+  signalled. It clears `ui32CleanupStatus` before each send.
+- The microkernel always consumes the command (advances the read offset), so
+  later commands never wait behind a cleanup.
+- It writes the outcome once, when it processes the command:
+  `COMPLETE | DONE` (bits 0 and 2) when the resource is gone and nothing will
+  read it again, or `COMPLETE | BUSY` (bits 0 and 1) while a render or page
+  release that uses it is still in flight. Then it echoes data[2] into host
+  control +0x40 (word 16).
+- On `BUSY` the host sends the same command again after about 1 ms. After 1 s
+  it gives up and keeps the memory until the next firmware restart. It never
+  resets for a cleanup.
+- The microkernel keeps a bound of its own as a backstop.
+
+`powervr_sgx` shares one PB per VM between its render contexts, and sends the
+PB cleanup (5) when the VM's PB goes, after its contexts' render-context
+cleanups (2). A render-context cleanup must therefore not free the PB.
+
+Without the feature bit the host speaks the contract above this heading: one
+command, `COMPLETE` polled for 5 s, memory kept on a timeout.
 
 ### Get misc info (type 6)
 
@@ -404,6 +463,57 @@ Full evidence and next steps:
 `docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md`, then
 `docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier
 EA3 run, whose "never re-entered" reading the EA1 counter corrected).
+
+## 4a. The firmware file
+
+`powervr_sgx` loads the microkernel with `request_firmware()`. It tries
+`powervr_sgx/sgx545-openhc-ukernel.bin` first, then the DDK image under its own
+name. A file that starts with the magic below is an open microkernel and is
+loaded from its header alone. Anything else must be the one DDK build the
+driver knows (size and patch placeholders checked).
+
+All words are little-endian u32. Offsets are from the start of the file.
+
+| offset | field | meaning |
+|---|---|---|
+| 0x00 | magic | `SGX5` `UKRN` (0x35584753, 0x4e524b55) |
+| 0x08 | header_size | bytes before the image; a multiple of 8 |
+| 0x0c | interface | host interface version, major << 16 \| minor. 1.0: SGXMKIF as in §3 (the DDK 1.7 command set and host control block) |
+| 0x10 | features | bit 0: cleanup v2 (§3, Cleanup). Bit 1: secure mode, the microkernel needs no kernel heap in a client page directory. Other bits must be 0 |
+| 0x14 | image_size | bytes of USSE code after the header; a multiple of 8 |
+| 0x18 | image_crc32 | CRC-32 (IEEE, as `crc32_le(~0, ...) ^ ~0`) of the image |
+| 0x1c | n_entries | entries in the entry table |
+| 0x20 | entries_off | offset of the entry table |
+| 0x24 | n_patches | entries in the patch table |
+| 0x28 | patches_off | offset of the patch table |
+| 0x2c | core_rev | SGX core revision it was validated on (`SGX_CR_CORE_REVISION`), 0 for any |
+| 0x30 | reserved | 4 words, 0 |
+| 0x40 | build_id | 32 bytes, NUL-padded text (for example `git describe`) |
+
+The entry table holds `{ u32 program, u32 offset }` pairs. `program` names the
+PDS program the driver builds to enter the microkernel. 0 is the event
+program, a bare `DOUTU` with bit 27 to `offset`. 1 to 4 are reserved for
+programs with the DDK's roles (§1, "The five entry PDS programs"). The open
+microkernel uses only 0. `offset` is in bytes from the start of the image.
+
+The patch table holds `{ u32 offset, u32 value }` pairs. Each one names an
+`limm` placeholder at `offset` in the image (the two-word form with
+`0x000dbeef` in its low 21 bits). The driver writes into it the value
+`value` names:
+
+| value | written |
+|---|---|
+| 1 | device address of the TA3D control block |
+| 2 | device address of the host control block |
+| 3 | device address of the kernel CCB control (write and read offsets) |
+| 4 | device address of the kernel CCB |
+| 5 | device address of the misc-info buffer |
+
+Host-kick table: identity. The `ServiceAddress` of a command is its type.
+
+The driver refuses a file whose sizes or offsets run past its end, whose CRC
+doesn't match, whose interface major it doesn't know, or that sets an unknown
+feature bit or table value.
 
 ## 5a. Hardware recovery and re-initialisation
 
@@ -721,13 +831,14 @@ match the DDK. Its one hardware unknown is whether the bare-`DOUTU` context
 allocates that temp, settled by a one-word sentinel on the next slot.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
-- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
-  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
-  0x16c), but a transfer also sets two sync-heap objects whose addresses come
-- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
-  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
-  0x16c), but a transfer also sets two sync-heap objects whose addresses come
-  from the kick's sync-handle list, not the command; those are not reproduced
-  yet, so a dependent job waiting on them would stall.
+- **A transfer's syncs are not all updated.** `xfer_done` writes the status
+  word (`sCtlStatusInfo[0]`, command words 0x168/0x16c), but not the
+  destination and source syncs the shared command lists: `ui32NumDstSyncs` at
+  0x130, `asDstSyncs[0]` at 0x134 (read-ops pending, read-ops-complete address,
+  write-ops pending, write-ops-complete address), `ui32NumSrcSyncs` at 0xac and
+  `asSrcSyncs[8]` from 0xb0. The DDK microkernel sets the destination's
+  write-ops-complete to its pending value plus one, and `powervr_sgx` completes a
+  transfer job on exactly that (EA1, log `2026-11-03-0405-drm-transfers`), so
+  the open microkernel has to do the same.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).

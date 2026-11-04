@@ -158,9 +158,11 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
     * same target (the openhc-minecraft overlay's, after the game's glFlush)
     * waited for the whole render.  The frame still goes at a fence, a
     * readback, another target or the end of the frame; renders into the
-    * scanout buffer (the swap's copy) go now. */
+    * scanout buffer (the swap's copy) or a shared one (a dma-buf another
+    * process or device reads: Xorg's glamor flushes its screen pixmap so)
+    * go now. */
    if (sgx545_recording(ctx) && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) && !ctx->recording->wrapped &&
-       !(sgx545_debug & SGX545_DEBUG_FLUSH_ALL)) {
+       !ctx->recording->shared && !(sgx545_debug & SGX545_DEBUG_FLUSH_ALL)) {
       ctx->stats.fl_deferred++;
       return;
    }

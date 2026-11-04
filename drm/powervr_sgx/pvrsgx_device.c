@@ -9,6 +9,7 @@
 #include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
@@ -77,7 +78,9 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 	km->cpu = vmap(km->pages, km->npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 	if (!km->cpu)
 		goto err_wb;
-	err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, dev_addr, km->pages, km->npages, pte_flags);
+	if (!km->mmu)
+		km->mmu = sdev->kernel_mmu;
+	err = pvrsgx_mmu_map_pages(km->mmu, dev_addr, km->pages, km->npages, pte_flags);
 	if (err)
 		goto err_unmap;
 	return 0;
@@ -98,7 +101,7 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km)
 {
 	if (!km->pages)
 		return;
-	pvrsgx_mmu_unmap(sdev->kernel_mmu, km->dev_addr, km->size);
+	pvrsgx_mmu_unmap(km->mmu, km->dev_addr, km->size);
 	vunmap(km->cpu);
 	set_pages_array_wb(km->pages, km->npages);
 	for (unsigned int i = 0; i < km->npages; i++)
@@ -116,7 +119,8 @@ static void reset_sleep(struct pvrsgx_device *sdev)
 
 static void soft_reset(struct pvrsgx_device *sdev, bool bif)
 {
-	sgx_wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF : 0));
+	sgx_wr(sdev, SGX_CR_SOFT_RESET,
+	       SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF : 0));
 }
 
 static void inval_dc(struct pvrsgx_device *sdev)
@@ -141,10 +145,10 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	sgx_wr(sdev, SGX_CR_BIF_BANK_SET, 0);
 	sgx_wr(sdev, SGX_CR_BIF_BANK0, 0);
 	for (unsigned int i = 0; i < SGX_BIF_NUM_DIRLISTS; i++)
-		sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(i), 0);
+		sgx_wr(sdev, sgx_cr_bif_dir_list_base(i), 0);
 
 	if (recovery) {
-		sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(0), pvrsgx_mmu_pd_addr(sdev->reset_mmu));
+		sgx_wr(sdev, sgx_cr_bif_dir_list_base(0), pvrsgx_mmu_pd_addr(sdev->reset_mmu));
 		reset_sleep(sdev);
 		soft_reset(sdev, false);
 		reset_sleep(sdev);
@@ -162,6 +166,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 			pvrsgx_mmu_map_pages(sdev->reset_mmu, addr, &sdev->reset_page, 1, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR, sgx_rd(sdev, SGX_CR_EVENT_STATUS));
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR2, sgx_rd(sdev, SGX_CR_EVENT_STATUS2));
+			/* The reset page's PTE is in memory before the cores leave reset. */
 			wmb();
 			reset_sleep(sdev);
 			soft_reset(sdev, false);
@@ -176,9 +181,9 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 
 	sgx_wr(sdev, SGX_CR_BIF_BANK0,
 	       FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, SGX_BIF_DIRLIST_EDM));
-	sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(SGX_BIF_DIRLIST_EDM),
+	sgx_wr(sdev, sgx_cr_bif_dir_list_base(SGX_BIF_DIRLIST_EDM),
 	       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
-	sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(0),
+	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
 	       pvrsgx_mmu_pd_addr(idle_kernel_pd ? sdev->kernel_mmu : sdev->idle_mmu));
 	inval_dc(sdev);
 
@@ -190,8 +195,11 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 static irqreturn_t pvrsgx_irq(int irq, void *arg)
 {
 	struct pvrsgx_device *sdev = arg;
-	u32 status = sgx_rd(sdev, SGX_CR_EVENT_STATUS) & sgx_rd(sdev, SGX_CR_EVENT_HOST_ENABLE);
+	u32 status;
 
+	if (!READ_ONCE(sdev->powered))
+		return IRQ_NONE;
+	status = sgx_rd(sdev, SGX_CR_EVENT_STATUS) & sgx_rd(sdev, SGX_CR_EVENT_HOST_ENABLE);
 	if (!(status & SGX_CR_EVENT_STATUS_SW_EVENT))
 		return IRQ_NONE;
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR,
@@ -212,7 +220,7 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 	clear = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR);
 	if ((flags & HOSTCTL_INTERRUPT_HWR) && !(clear & HOSTCTL_INTERRUPT_HWR))
 		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
-				     pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
+				    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
 
 	pvrsgx_job_process_done(sdev);
 	return IRQ_HANDLED;
@@ -224,6 +232,8 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	int err;
 
 	mutex_init(&sdev->ccb_lock);
+	mutex_init(&sdev->cleanup_lock);
+	mutex_init(&sdev->done_lock);
 	mutex_init(&sdev->last_lock);
 	spin_lock_init(&sdev->ccb_spin);
 
@@ -247,7 +257,8 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	/* Safe on a core in any state. */
 	sdev->core_id = sgx_rd(sdev, SGX_CR_CORE_ID);
 	sdev->core_rev = sgx_rd(sdev, SGX_CR_CORE_REVISION);
-	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x\n", sdev->core_id, sdev->core_rev);
+	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x\n",
+		 sdev->core_id, sdev->core_rev);
 
 	pvrsgx_kobj_init(sdev);
 	err = pvrsgx_fw_init(sdev);
@@ -291,6 +302,7 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	pvrsgx_job_fini(sdev);
 	pvrsgx_rtds_put(sdev->last_rtds);
 	sdev->last_rtds = NULL;
+	kvfree(sdev->render_snap);
 	pvrsgx_fw_stop(sdev);
 	free_irq(sdev->irq, sdev);
 	pvrsgx_kobj_fini(sdev);
@@ -300,4 +312,77 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	pvrsgx_mmu_destroy(sdev->reset_mmu);
 	pvrsgx_mmu_destroy(sdev->idle_mmu);
 	pvrsgx_mmu_destroy(sdev->kernel_mmu);
+}
+
+/*
+ * Runtime PM. The SGX function has no PCI PM capability, so the PCI core keeps
+ * it in D0: suspend is the microkernel's power-off (pvrsgx_fw_stop), resume
+ * the same full start a reset does. A job on the GPU holds a reference from
+ * run_job until it leaves the active list.
+ */
+static bool runtime_pm = true;
+module_param(runtime_pm, bool, 0444);
+MODULE_PARM_DESC(runtime_pm, "Power the microkernel off when idle (default on; autosuspend: the device's power/autosuspend_delay_ms)");
+
+#define AUTOSUSPEND_MS	500
+
+int pvrsgx_power_get(struct pvrsgx_device *sdev)
+{
+	return runtime_pm ? pm_runtime_resume_and_get(&sdev->pdev->dev) : 0;
+}
+
+void pvrsgx_power_put(struct pvrsgx_device *sdev, u32 n)
+{
+	if (!runtime_pm || !n)
+		return;
+	pm_runtime_mark_last_busy(&sdev->pdev->dev);
+	while (n--)
+		pm_runtime_put_autosuspend(&sdev->pdev->dev);
+}
+
+/* After probe: drop the reference the PCI core takes for it, and allow suspend. */
+void pvrsgx_power_init(struct pvrsgx_device *sdev)
+{
+	struct device *dev = &sdev->pdev->dev;
+
+	if (!runtime_pm)
+		return;
+	pm_runtime_set_autosuspend_delay(dev, AUTOSUSPEND_MS);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
+	pm_runtime_allow(dev);
+}
+
+/* Before remove (the PCI core has resumed the device): undo pvrsgx_power_init. */
+void pvrsgx_power_fini(struct pvrsgx_device *sdev)
+{
+	struct device *dev = &sdev->pdev->dev;
+
+	if (!runtime_pm)
+		return;
+	pm_runtime_forbid(dev);
+	pm_runtime_dont_use_autosuspend(dev);
+	pm_runtime_get_noresume(dev);
+}
+
+int pvrsgx_runtime_suspend(struct device *dev)
+{
+	struct pvrsgx_device *sdev = pci_get_drvdata(to_pci_dev(dev));
+
+	if (!sdev->lost)
+		pvrsgx_fw_stop(sdev);
+	return 0;
+}
+
+int pvrsgx_runtime_resume(struct device *dev)
+{
+	struct pvrsgx_device *sdev = pci_get_drvdata(to_pci_dev(dev));
+
+	/* A failed start loses the device: run_job then fails every job with -EIO. */
+	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
+		drm_err(&sdev->base, "microkernel did not start on resume: device lost\n");
+		sdev->lost = true;
+	}
+	return 0;
 }

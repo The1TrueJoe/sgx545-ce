@@ -1,0 +1,55 @@
+=== wait for box (may be mid-reboot) ===
+=== push sentinel binary (cat over ssh; box busybox has no sftp-server) ===
+Warning: Permanently added '10.0.0.113' (ED25519) to the list of known hosts.
+Warning: Permanently added '10.0.0.113' (ED25519) to the list of known hosts.
+local : 57c462bcb1fc5279e0974982722b60a1
+remote: 57c462bcb1fc5279e0974982722b60a1
+boot 1: TIMED OUT (started=yes)
+[   20.378524] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000001 0x00000000 0x0000C01C
+[   20.385185] PVR_K: 	(T3C-E0) 0x00007AF1 0x00000000 0x00000000 0x00000000
+[   20.190616] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   22.754142] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   22.860919] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000080
+[   22.866284] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: yes, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+   -> TRIG_TA frame
+---
+boot 2: TIMED OUT (started=yes)
+[   19.952079] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000001 0x00000000 0x0000C01C
+[   19.958748] PVR_K: 	(T3C-E0) 0x00007AF1 0x00000000 0x00000000 0x00000000
+[   19.764186] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   22.324161] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   22.430956] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000080
+[   22.436294] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: yes, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+   -> TRIG_TA frame
+---
+boot 3: TIMED OUT (started=yes)
+[   22.397910] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   22.404576] PVR_K: 	(T3C-E0) 0x00007AF1 0x00000000 0x00000000 0x00000000
+[   22.215325] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: yes, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   22.620542] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   22.727346] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000080
+[   22.732672] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: yes, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+   -> TRIG_TA frame
+---
+boot 4: TIMED OUT (started=yes)
+[   22.424579] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   22.431237] PVR_K: 	(T3C-E0) 0x00007AF1 0x00000000 0x00000000 0x00000000
+[   19.511421] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   22.129817] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   22.236616] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000080
+[   22.241984] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: yes, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+   -> TRIG_TA frame
+---
+boot 5: RENDER DONE (started=yes)
+boot 6: TIMED OUT (started=yes)
+[   20.180468] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000001 0x00000000 0x0000C01C
+[   20.187107] PVR_K: 	(T3C-E0) 0x00007AF1 0x00000000 0x00000000 0x00000000
+[   19.992549] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   22.544883] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   22.651649] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000080
+[   22.657036] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: yes, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+   -> TRIG_TA frame
+---
+collected 5 lockups, stopping
+===== renders=1 fails=5 =====
+lock freed, box rebooting to clean p1

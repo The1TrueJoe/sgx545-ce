@@ -38,7 +38,7 @@ import fromtrace                 # noqa: E402
 # CR-derived BIF-status copies and the accumulated mode word)
 PLUMBING = {0x134, 0x114, 0x140, 0x694, 0x698, 0x24c, 0x224, 0xa08, 0xc00, 0xc78,
             0x12c, 0x118, 0x138, 0x804, 0x200, 0x428, 0xad0, 0xad4, 0xad8, 0xae0,
-            0x080, 0x664, 0x684, 0x680, 0x0a74, 0x630, 0x604, 0x64c, 0x660}
+            0x080, 0x664, 0x684, 0x680, 0x630, 0x604, 0x64c, 0x660}
 
 # ours phase -> the DDK Runner phase that does the same work. TA2 is the
 # second (render / bLastInScene) kick: the DDK does a MINIMAL kick there (it
@@ -89,7 +89,8 @@ def reg_writes(u):
 # EUR_CR_EVENT_STATUS bits the host-side model raises for each event
 EV_HOST_KICK = 0            # host kick = EUR_CR_EVENT_KICK doorbell: no EVENT_STATUS bit (the microkernel finds the command via the kernel CCB write != read offset)
 EV_TA_FINISHED = 0x2000
-EV_3D_END = 0x40000         # PIXELBE end of render
+EV_3D_END = 0x40000         # PIXELBE end of render -> pixel_done (3D rendered, no completion)
+EV_DPM_FREE = 0x1           # DPM 3D memory free -> render_done (completes the render, DDK order)
 
 
 def event(u, mem, regs, man, status):
@@ -112,14 +113,18 @@ def run_ours(code, man, events, ctxs):
     event(u, mem, regs, man, 0)
     out = []
     kicks = [k for k in events if k.kind == "kick"]
-    for i, k in enumerate(kicks):
+    ki = 0
+    for e in events:
+        if e.kind != "kick":
+            continue                        # xfers + exit cleanups handled after this loop
+        k = e
         k.load(mem)
         # CMDTA_SHARED (ui32NumTAStatusVals and the status list) is filled by
         # the kernel at kick time; a trace snapshots memory before the ioctl,
         # so load it from a later event's snapshot, as tools/ukernel/run.py does
-        if i + 1 < len(kicks):
+        if ki + 1 < len(kicks):
             cmd = k.ccb_va + k.ccb_off - 0x58
-            d = kicks[i + 1].memory.read(cmd, 0x1E0)
+            d = kicks[ki + 1].memory.read(cmd, 0x1E0)
             if d:
                 mem.load(cmd, d)
         # the kernel CCB command the host wrote: ServiceAddress = type 0 (TA),
@@ -136,9 +141,11 @@ def run_ours(code, man, events, ctxs):
         # set it to this kick's command-base offset, the state the DDK keeps.
         client_ccbctl = mem.rd(k.data[1] + 4 * 4)      # HW render context word 4
         mem.wr(client_ccbctl + 4, k.ccb_off - 0x58)
-        if k.last:                          # SGXDoKickKM sets CMDTA_SHARED READY for bLastInScene
-            cmd = k.ccb_va + k.ccb_off - 0x58
-            mem.wr(cmd, mem.rd(cmd) | 1)
+        # No synthetic READY bit here: the kernel does NOT set one (SGXKickTA only
+        # fills CMDTA_SHARED sync/status and flushes the CPU cache for bLastInScene,
+        # sgxutils.c). ta_finished must decide the 3D from the command's own flags
+        # (cmd+0x04 bit 1 = bLastInScene, 0x62 vs 0x71) in the loaded trace data —
+        # so a wrong 3D trigger makes the last kick skip do_3d and this diff fail.
         event(u, mem, regs, man, EV_HOST_KICK)    # -> kick -> do_ta
         out += [("TA%d" % k.n, a, v) for a, v in reg_writes(u)]
         # this TA's finish: the status walk, and on the last kick the 3D start
@@ -147,13 +154,15 @@ def run_ours(code, man, events, ctxs):
                 if op == "st" and 0x2d000000 <= a < 0x2e000000]
         if k.last:
             out += [("3D", a, v) for a, v in reg_writes(u)]
-            event(u, mem, regs, man, EV_3D_END)   # -> render_done
+            event(u, mem, regs, man, EV_3D_END)   # -> pixel_done: 3D rendered, render stays in flight
+            event(u, mem, regs, man, EV_DPM_FREE) # -> render_done: complete on the DPM free (DDK order)
             out += [("done", a, v) for a, v in reg_writes(u)]
-            # every memory write render_done makes (event() cleared the log, so
-            # mem.log is exactly the completion handler's writes)
+            # every memory write render_done makes (event() cleared the log before the
+            # EV_DPM_FREE run, so mem.log is exactly the completion handler's writes)
             for (op, a, v, pc) in mem.log:
                 if op == "st":
                     out.append(("done_mem", a, v))
+        ki += 1
     # transfers (SGX_SUBMITTRANSFER): a 3D-only render. Drive each through our
     # kick entry with a type-1 command (data[1] = transfer context), as the
     # host does, and collect the 3D registers k_transfer programs.
@@ -171,6 +180,38 @@ def run_ours(code, man, events, ctxs):
         mem.wr(A["ccbctl"] + 4, slot)                  # read offset
         event(u, mem, regs, man, EV_HOST_KICK)         # -> kick -> k_transfer
         out += [("XFER%d" % (i + 1), a, v) for a, v in reg_writes(u)]
+    # RESMAN exit cleanups (CMD_CLEANUP = 5), after all renders/transfers. A cleanup that
+    # races a still-in-flight render must DEFER (SC_INFLIGHT set) so the host can't free
+    # the PB/RT under the running 3D / DPM-free, then complete once render_done -- which
+    # now runs on the DPM 3D-memory-free event (0x1), i.e. AFTER the pages are freed --
+    # clears SC_INFLIGHT. Model that race directly: assert SC_INFLIGHT, send the cleanup
+    # (must defer); clear it (render_done's effect on 0x1) and resend (must complete).
+    # Never deadlock (else the host frees the PB/RT under the free -> the EA1 render fault).
+    SC_INFLIGHT = 0x14
+    nclean = 0
+    for e in events:
+        if e.kind != "cleanup":
+            continue
+        slot = (0x80 + nclean) & 0xFF
+        nclean += 1
+        cc = A["kccb"] + 32 * slot
+        mem.wr(cc + 0, 5)                       # CMD_CLEANUP
+        mem.wr(cc + 4 * 2, e.data[0])           # cleanup type (RC 2, TC 3, ...)
+        mem.wr(cc + 4 * 3, e.data[1])           # resource device address
+        mem.wr(A["hostctl"] + 8, 0)             # host clears CleanupStatus before the send
+        mem.wr(A["ta3d"] + 4 * SC_INFLIGHT, e.data[1] or 0x1)  # a render in flight races the cleanup
+        mem.wr(A["ccbctl"] + 0, slot + 1)
+        mem.wr(A["ccbctl"] + 4, slot)
+        event(u, mem, regs, man, EV_HOST_KICK)  # -> k_cleanup, render in flight -> defer
+        deferred = not (mem.rd(A["hostctl"] + 8) & 0x1)
+        mem.wr(A["ta3d"] + 4 * SC_INFLIGHT, 0)  # render_done (on 0x1) clears SC_INFLIGHT after the free
+        mem.wr(A["ccbctl"] + 0, slot + 1)
+        mem.wr(A["ccbctl"] + 4, slot)
+        event(u, mem, regs, man, EV_HOST_KICK)  # -> k_cleanup again -> completes
+        completed = bool(mem.rd(A["hostctl"] + 8) & 0x1)
+        ok = deferred and completed
+        print("  cleanup type=%d res=%#x: deferred-while-in-flight=%s completed=%s  %s"
+              % (e.data[0], e.data[1], deferred, completed, "OK" if ok else "FAIL"))
     return out
 
 
@@ -250,7 +291,7 @@ def main():
     a = ap.parse_args()
     code, man = ours()
     ctxs = []
-    events = fromtrace.kicks(a.trace, ctxs)
+    events = fromtrace.kicks(a.trace, ctxs, cleanups=True)
     out = run_ours(code, man, events, ctxs)
     # ours, grouped by phase: {phase: {reg: value}} over struct-sourced registers
     ours_ph = {}
@@ -282,7 +323,11 @@ def main():
     # during the teardown, with the same value (sync objects, render/RT/context
     # slot free). EXTRA = a write ours makes that the DDK does not.
     ddk_done = run_ddk_done(a.ddk, a.trace)
-    ours_done = {r: v for (p, r, v) in out if p == "done_mem"}
+    # openHC-internal control-block scratch (rendezvous WAIT_3D/WAIT_FREE 0x1d/0x1e,
+    # cleanup defer counter 0x1c): bookkeeping the DDK keeps at its own offsets, not part
+    # of the render teardown the DDK writes. Exclude from the done comparison.
+    OHC_SCRATCH = {A["ta3d"] + 4 * w for w in (0x1c, 0x1d, 0x1e)}
+    ours_done = {r: v for (p, r, v) in out if p == "done_mem" and r not in OHC_SCRATCH}
     dmiss = [(r, ddk_done[r], ours_done.get(r)) for r in ddk_done if ours_done.get(r) != ddk_done[r]]
     extra = [r for r in ours_done if r not in ddk_done]
     print(f"[done] DDK {len(ddk_done)} completion mem writes, ours {len(ours_done)}")

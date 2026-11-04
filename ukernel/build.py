@@ -50,8 +50,15 @@ def assemble():
     for kind, val in a.lines:
         if kind == "label":
             continue
+        if kind == "raw":                      # a pre-encoded (hi, lo) word
+            words.append((val[1], val[0]))
+            idx += 1
+            continue
         if kind == "patch":
-            text = f"limm r{val[0]}, #0"       # the loader fills the immediate
+            text = f"limm r{val[0]}, #0xdbeef"  # 0xdbeef placeholder: the loader fills the
+                                                # immediate; powervr_sgx's loader checks the
+                                                # sentinel before patching (our srvinit's
+                                                # limm_ours does not, so either works)
         else:
             text = val
         m = re.match(r"(\(!?p\d\)\s*)?(ba|br)\s+([A-Za-z_]\w*)\s*(\[.*\])?$", text.strip())

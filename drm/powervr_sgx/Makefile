@@ -9,6 +9,7 @@ powervr_sgx-y := \
 	pvrsgx_ccb.o \
 	pvrsgx_device.o \
 	pvrsgx_drv.o \
+	pvrsgx_dump.o \
 	pvrsgx_fw.o \
 	pvrsgx_gem.o \
 	pvrsgx_job.o \

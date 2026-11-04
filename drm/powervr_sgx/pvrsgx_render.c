@@ -16,7 +16,10 @@
 #include <drm/drm_gpuvm.h>
 #include <drm/drm_print.h>
 
+#include <linux/delay.h>
+#include <linux/module.h>
 #include <linux/sched.h>
+#include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -63,62 +66,156 @@ static void release(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
 
 /* ---------------------------------------------------------------- render context */
 
-int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 req_pages)
+/* The PB's free list and descriptor as new: at creation, and after a reset (pb_rearm). */
+static void pb_init(struct pvrsgx_pb *pb)
 {
-	struct pvrsgx_render_ctx *r = kzalloc_obj(*r);
-	struct pvrsgx_vm *vm = ctx->vm;
-	u32 pages = (req_pages ?: PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
-	u32 first, last, zls, ta, pds, *fl, *pd, *hw;
-	int err = -ENOMEM;
-
-	if (!r)
-		return -ENOMEM;
-	ctx->render = r;
-
-#define KOBJ(dst, range, size, min, v) do { \
-		(dst) = pvrsgx_kobj_create(sdev, range, size, min, v); \
-		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
-	} while (0)
-
-	/* The PB, and what is addressed from its 1 MiB-aligned base, in the VM too. */
-	KOBJ(r->pb, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, vm);
-	r->pb_base = kobj_va(r->pb) & 0xfff00000;
-	KOBJ(r->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, r->pb_base, vm);
-	KOBJ(r->scratch, PVRSGX_KRANGE_3DPARAMS, 0x40, r->pb_base, vm);
-	KOBJ(r->pbdesc, PVRSGX_KRANGE_KDATA, 0x3c, 0, NULL);
-	KOBJ(r->pbblocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
-	KOBJ(r->ccb, PVRSGX_KRANGE_KDATA, CCB_BYTES, 0, NULL);
-	KOBJ(r->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
-	KOBJ(r->sync3d, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
-	KOBJ(r->hwctx, PVRSGX_KRANGE_KCODE, 0x44, 0, NULL);
+	u32 pages = pb->pages, first, last, zls, ta, pds, *fl, *pd;
 
 	/* Free list: prev<<16 | next per page, indexed from the range's base. */
-	first = (kobj_va(r->pb) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT;
+	first = (kobj_va(pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT;
 	last = first + pages - 1;
-	fl = kobj_cpu(r->freelist);
+	fl = kobj_cpu(pb->freelist);
 	for (u32 i = first; i <= last; i++)
 		fl[i] = (i == first ? 0xffffu : i - 1) << 16 | (i == last ? 0xffffu : i + 1);
 
-	kobj_cpu(r->pbblocks)[0] = pages;
-	kobj_cpu(r->pbblocks)[1] = first | last << 16;
-	kobj_cpu(r->pbblocks)[2] = kobj_va(r->pbdesc);
+	kobj_cpu(pb->blocks)[0] = pages;
+	kobj_cpu(pb->blocks)[1] = first | last << 16;
+	kobj_cpu(pb->blocks)[2] = kobj_va(pb->desc);
 
 	zls = pages - PB_EXTRA_PAGES;
 	ta = pages + 0x10;
 	pds = min(zls, ta);
-	pd = kobj_cpu(r->pbdesc);
+	pd = kobj_cpu(pb->desc);
+	memset(pd, 0, 0x3c);
 	pd[1] = pages;
 	pd[2] = last << 16 | first;	/* free list head */
 	pd[3] = (last - 1) << 16;
-	pd[4] = kobj_va(r->freelist);
+	pd[4] = kobj_va(pb->freelist);
 	pd[6] = pd[2];
 	pd[7] = pd[3];
 	pd[10] = ta;			/* TA threshold */
 	pd[11] = zls;			/* ZLS threshold */
 	pd[12] = zls;			/* global threshold */
 	pd[13] = pds > 0x100 ? pds - 0x100 : 0;	/* PDS threshold */
-	pd[14] = kobj_va(r->pbblocks);
-	r->pb_pages = pages;
+	pd[14] = kobj_va(pb->blocks);
+}
+
+/* A kernel object into *dst, which stays NULL on failure. */
+static int kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst, enum pvrsgx_krange range,
+		    u32 size, u32 min, struct pvrsgx_vm *vm)
+{
+	struct pvrsgx_kobj *o = pvrsgx_kobj_create(sdev, range, size, min, vm);
+
+	if (IS_ERR(o))
+		return PTR_ERR(o);
+	*dst = o;
+	return 0;
+}
+
+/*
+ * The VM's parameter buffer: PB, free list, PB descriptor and block list. One
+ * per VM, shared by its render contexts, as the DDK shares one PB descriptor
+ * (pb.c): the DPM numbers PB pages from the 3D-params heap base, so a VM's PB
+ * must start there and a second one can't (UAPI.md G15). The first context
+ * sets the size; later requests are ignored, as the DDK does.
+ */
+static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm, u32 req_pages)
+{
+	struct pvrsgx_pb *pb = kzalloc_obj(*pb);
+	u32 pages = (req_pages ?: PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
+	int err;
+
+	if (!pb)
+		return ERR_PTR(-ENOMEM);
+	kref_init(&pb->ref);
+	pb->sdev = sdev;
+
+	/* The PB, and what is addressed from its 1 MiB-aligned base, in the VM. */
+	err = kobj_new(sdev, &pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, vm);
+	if (err)
+		goto fail;
+	pb->base = kobj_va(pb->buf) & 0xfff00000;
+	err = kobj_new(sdev, &pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base, vm);
+	err = err ?: kobj_new(sdev, &pb->desc, PVRSGX_KRANGE_KDATA, 0x3c, 0, NULL);
+	err = err ?: kobj_new(sdev, &pb->blocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
+	if (err)
+		goto fail;
+
+	pb->pages = pages;
+	pb_init(pb);
+	pb->fw_gen = sdev->fw_gen;
+	return pb;
+
+fail:
+	pvrsgx_pb_put(pb);
+	return ERR_PTR(err);
+}
+
+static void pb_release(struct kref *ref)
+{
+	struct pvrsgx_pb *pb = container_of(ref, struct pvrsgx_pb, ref);
+	struct pvrsgx_device *sdev = pb->sdev;
+
+	if (pb->desc)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_PB, kobj_va(pb->desc));
+	release(sdev, &pb->blocks);
+	release(sdev, &pb->desc);
+	release(sdev, &pb->freelist);
+	release(sdev, &pb->buf);
+	kfree(pb);
+}
+
+void pvrsgx_pb_put(struct pvrsgx_pb *pb)
+{
+	if (pb)
+		kref_put(&pb->ref, pb_release);
+}
+
+/* The VM's PB, created by its first render context; the VM keeps one reference until closed. */
+static struct pvrsgx_pb *vm_pb_get(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm, u32 req_pages)
+{
+	struct pvrsgx_pb *pb;
+
+	mutex_lock(&vm->lock);
+	if (!vm->pb) {
+		pb = pb_create(sdev, vm, req_pages);
+		if (IS_ERR(pb)) {
+			mutex_unlock(&vm->lock);
+			return pb;
+		}
+		vm->pb = pb;
+	}
+	pb = vm->pb;
+	kref_get(&pb->ref);
+	mutex_unlock(&vm->lock);
+	return pb;
+}
+
+int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 req_pages)
+{
+	struct pvrsgx_render_ctx *r = kzalloc_obj(*r);
+	struct pvrsgx_vm *vm = ctx->vm;
+	u32 *hw;
+	int err = -ENOMEM;
+
+	if (!r)
+		return -ENOMEM;
+	ctx->render = r;
+
+	r->pb = vm_pb_get(sdev, vm, req_pages);
+	if (IS_ERR(r->pb)) {
+		err = PTR_ERR(r->pb);
+		r->pb = NULL;
+		goto fail;
+	}
+
+	err = kobj_new(sdev, &r->scratch, PVRSGX_KRANGE_3DPARAMS, 0x40, r->pb->base, vm);
+	err = err ?: kobj_new(sdev, &r->ccb, PVRSGX_KRANGE_KDATA, CCB_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &r->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &r->sync3d, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &r->hwctx, PVRSGX_KRANGE_KCODE, 0x44, 0, NULL);
+	if (err)
+		goto fail;
 
 	/* HW render context: the microkernel points list 0 at word 2's directory. */
 	hw = kobj_cpu(r->hwctx);
@@ -126,11 +223,10 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 	hw[2] = pvrsgx_mmu_pd_addr(vm->mmu);
 	hw[3] = kobj_va(r->ccb);
 	hw[4] = kobj_va(r->ccbctl);
-	hw[6] = kobj_va(r->pbdesc);
+	hw[6] = kobj_va(r->pb->desc);
 	hw[7] = kobj_va(r->scratch);
 	hw[16] = task_tgid_nr(current);
 	return 0;
-#undef KOBJ
 
 fail:
 	pvrsgx_render_ctx_fini(sdev, ctx);
@@ -143,15 +239,14 @@ void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *c
 
 	if (!r)
 		return;
+	if (r->hwctx)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_RC, kobj_va(r->hwctx));
 	release(sdev, &r->hwctx);
 	release(sdev, &r->sync3d);
 	release(sdev, &r->ccbctl);
 	release(sdev, &r->ccb);
-	release(sdev, &r->pbblocks);
-	release(sdev, &r->pbdesc);
 	release(sdev, &r->scratch);
-	release(sdev, &r->freelist);
-	release(sdev, &r->pb);
+	pvrsgx_pb_put(r->pb);
 	kfree(r);
 	ctx->render = NULL;
 }
@@ -193,6 +288,8 @@ static void rtds_release(struct kref *ref)
 	struct pvrsgx_rt_dataset *s = container_of(ref, struct pvrsgx_rt_dataset, ref);
 	struct pvrsgx_device *sdev = s->ctx->sdev;
 
+	if (s->rtdata)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_RT, kobj_va(s->rtdata));
 	release(sdev, &s->rd);
 	release(sdev, &s->rd_w8);
 	release(sdev, &s->rd_w4);
@@ -221,49 +318,18 @@ void pvrsgx_rtds_put(struct pvrsgx_rt_dataset *rtds)
 		kref_put(&rtds->ref, rtds_release);
 }
 
-static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, u32 h)
+/* The dataset's structures as new, frame count 0. */
+static void rtds_init(struct pvrsgx_rt_dataset *s)
 {
-	struct pvrsgx_device *sdev = ctx->sdev;
-	struct pvrsgx_render_ctx *r = ctx->render;
-	struct pvrsgx_vm *vm = ctx->vm;
-	struct pvrsgx_rt_dataset *s = kzalloc_obj(*s);
-	u32 *rt, *b, *rd;
-	int err;
+	struct pvrsgx_render_ctx *r = s->ctx->render;
+	u32 w = s->w, h = s->h, *rt, *b, *rd;
 
-	if (!s)
-		return ERR_PTR(-ENOMEM);
-	kref_init(&s->ref);
-	kref_get(&ctx->ref);
-	s->ctx = ctx;
-	s->w = w;
-	s->h = h;
-	rt_numbers(&s->n, w, h);
-
-#define KOBJ(dst, range, size, min, v) do { \
-		(dst) = pvrsgx_kobj_create(sdev, range, size, min, v); \
-		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
-	} while (0)
-
-	KOBJ(s->rd, PVRSGX_KRANGE_KDATA, 0x1ec, 0, NULL);
-	KOBJ(s->rd_w8, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
-	KOBJ(s->rd_w4, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
-	KOBJ(s->hwsync, PVRSGX_KRANGE_KDATA, 0x28, 0, NULL);
-	KOBJ(s->rtword, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
-	KOBJ(s->rtdata, PVRSGX_KRANGE_KDATA, 2 * 0x38 + 0x18, 0, NULL);
-	KOBJ(s->rd_sync, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
-	KOBJ(s->hwsync_access, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
-	KOBJ(s->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
-	/* What the TA writes and the 3D reads, under the VM's directory too. */
-	KOBJ(s->tailptr, PVRSGX_KRANGE_TADATA, s->n.tailptr_bytes, 0, vm);
-	KOBJ(s->ta40, PVRSGX_KRANGE_TADATA, 0x40, 0, vm);
-	KOBJ(s->ta50, PVRSGX_KRANGE_TADATA, 0x50, 0, vm);
-	KOBJ(s->bgblock, PVRSGX_KRANGE_3DPARAMS, 0x200, r->pb_base, vm);
-	for (int i = 0; i < 2; i++) {
-		KOBJ(s->rgn[i], PVRSGX_KRANGE_TADATA, s->n.region_bytes, 0, vm);
-		KOBJ(s->ta88[i], PVRSGX_KRANGE_TADATA, 0x88, 0, vm);
-		KOBJ(s->entword[i], PVRSGX_KRANGE_KDATA, 4, 0, NULL);
-	}
-#undef KOBJ
+	memset(kobj_cpu(s->rtdata), 0, 2 * 0x38 + 0x18);
+	memset(kobj_cpu(s->bgblock), 0, 0x60);
+	memset(kobj_cpu(s->rd), 0, 0x1ec);
+	for (int i = 0; i < 2; i++)
+		kobj_cpu(s->entword[i])[0] = 0;
+	s->frames = 0;
 
 	/* RT data: header, then two entries of 14 words. */
 	kobj_cpu(s->rtword)[0] = 1;
@@ -304,7 +370,7 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 
 	/* Render details; the per-render words are written at each job. */
 	rd = kobj_cpu(s->rd);
-	rd[0x00 / 4] = r->pb_base;
+	rd[0x00 / 4] = r->pb->base;
 	rd[0x08 / 4] = 0x80;
 	rd[0x0c / 4] = 0x000f0000;
 	rd[0x10 / 4] = 0x80000000;
@@ -312,7 +378,7 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 	rd[0x3c / 4] = 0x80000000;
 	rd[0x40 / 4] = f32_one();
 	rd[0x44 / 4] = 0x300;
-	rd[0x48 / 4] = 0x2000000 | (kobj_va(s->bgblock) - r->pb_base) >> 4;
+	rd[0x48 / 4] = 0x2000000 | (kobj_va(s->bgblock) - r->pb->base) >> 4;
 	rd[0x50 / 4] = 0x88;
 	rd[0x58 / 4] = 0x30;
 	rd[0x64 / 4] = 1;
@@ -327,6 +393,49 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 	kobj_cpu(s->rd_sync)[0] = 1;
 	kobj_cpu(s->hwsync)[0] = kobj_va(s->hwsync_access);
 	kobj_cpu(s->hwsync_access)[0] = 1;
+}
+
+static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, u32 h)
+{
+	struct pvrsgx_device *sdev = ctx->sdev;
+	struct pvrsgx_render_ctx *r = ctx->render;
+	struct pvrsgx_vm *vm = ctx->vm;
+	struct pvrsgx_rt_dataset *s = kzalloc_obj(*s);
+	int err;
+
+	if (!s)
+		return ERR_PTR(-ENOMEM);
+	kref_init(&s->ref);
+	kref_get(&ctx->ref);
+	s->ctx = ctx;
+	s->w = w;
+	s->h = h;
+	rt_numbers(&s->n, w, h);
+
+	err = kobj_new(sdev, &s->rd, PVRSGX_KRANGE_KDATA, 0x1ec, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rd_w8, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rd_w4, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->hwsync, PVRSGX_KRANGE_KDATA, 0x28, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rtword, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rtdata, PVRSGX_KRANGE_KDATA, 2 * 0x38 + 0x18, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rd_sync, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->hwsync_access, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
+	/* What the TA writes and the 3D reads, under the VM's directory too. */
+	err = err ?: kobj_new(sdev, &s->tailptr, PVRSGX_KRANGE_TADATA, s->n.tailptr_bytes, 0, vm);
+	err = err ?: kobj_new(sdev, &s->ta40, PVRSGX_KRANGE_TADATA, 0x40, 0, vm);
+	err = err ?: kobj_new(sdev, &s->ta50, PVRSGX_KRANGE_TADATA, 0x50, 0, vm);
+	err = err ?: kobj_new(sdev, &s->bgblock, PVRSGX_KRANGE_3DPARAMS, 0x200, r->pb->base, vm);
+	for (int i = 0; i < 2; i++) {
+		err = err ?: kobj_new(sdev, &s->rgn[i], PVRSGX_KRANGE_TADATA, s->n.region_bytes, 0,
+				      vm);
+		err = err ?: kobj_new(sdev, &s->ta88[i], PVRSGX_KRANGE_TADATA, 0x88, 0, vm);
+		err = err ?: kobj_new(sdev, &s->entword[i], PVRSGX_KRANGE_KDATA, 4, 0, NULL);
+	}
+	if (err)
+		goto fail;
+
+	rtds_init(s);
 	return s;
 
 fail:
@@ -472,7 +581,8 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		return -EOPNOTSUPP;
 
 	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
-	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size = PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
+	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size =
+		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
 	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
 	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
 	sctx.has_quirk = no_quirk;
@@ -523,6 +633,41 @@ static u32 pds_word(u64 addr, u32 rows)
  * frame, end to end"): 0x71 runs the stream, 0x62 runs the terminate words and
  * starts the 3D.
  */
+/*
+ * single_entry renders every frame as the dataset's first, on RT-data entry 1
+ * and region array 1, as tools/gen's DDK path does (it runs any number of
+ * frames and processes); otherwise frames alternate the two entries and count.
+ */
+static bool single_entry;
+module_param(single_entry, bool, 0644);
+MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
+
+/*
+ * A restart (a reset, or a runtime resume) starts a fresh microkernel, but a
+ * VM's PB lives through it. After a hang the pages the TA took are still off
+ * its free list: the next render on any of the VM's contexts hangs, and the
+ * next restart fails. The PB's first job after a restart sets it up as new.
+ * Nothing else needs it (log 2026-11-03-0600): the HW contexts and RT datasets
+ * carry on as they are.
+ */
+static void pb_rearm(struct pvrsgx_device *sdev, struct pvrsgx_pb *pb)
+{
+	if (pb->fw_gen != sdev->fw_gen) {
+		pb_init(pb);
+		pb->fw_gen = sdev->fw_gen;
+	}
+}
+
+/* Debug: snapshot the structures as the last kick is written (debugfs render_before). */
+static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s, u32 cmd_off);
+static bool snapshot;
+module_param(snapshot, bool, 0644);
+MODULE_PARM_DESC(snapshot, "Keep the structures as written for the last kick (debugfs render_before)");
+
+static uint snap_gap_ms;
+module_param(snap_gap_ms, uint, 0644);
+MODULE_PARM_DESC(snap_gap_ms, "Wait this long before writing a scene's last kick, so the snapshot follows the first kick's TA");
+
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 {
 	struct pvrsgx_render_job *rj = &job->render;
@@ -530,17 +675,26 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_rt_dataset *s = rj->rtds;
 	const struct powervr_sgx_stream_render *in = &rj->render;
 	bool first = k == 0, last = k == rj->nkicks - 1;
-	u32 f = s->frames, odd = f & 1, *cmd, *sh, *t, *rd, *sl, *s3d, *done;
-	u32 rgn_this = kobj_va(s->rgn[odd ? 0 : 1]), rgn_next = kobj_va(s->rgn[odd ? 1 : 0]);
-	u32 entry = kobj_va(s->rtdata) + 0x18 + 0x38 * (odd ? 0 : 1);
+	u32 f, odd, rgn_this, rgn_next, entry, *cmd, *sh, *t, *rd, *sl, *s3d, *done;
 	u32 woff = r->ccb_woff, zls_base = 0;
 
+	if (last && k && snap_gap_ms)
+		msleep(snap_gap_ms);
+	if (first)
+		pb_rearm(job->ctx->sdev, r->pb);
+	f = single_entry ? 0 : s->frames;
+	odd = f & 1;
+	rgn_this = kobj_va(s->rgn[odd ? 0 : 1]);
+	rgn_next = kobj_va(s->rgn[odd ? 1 : 0]);
+	entry = kobj_va(s->rtdata) + 0x18 + 0x38 * (odd ? 0 : 1);
 	rd = kobj_cpu(s->rd);
 	if (first) {
 		/* Render details (STATE.md 6; UAPI.md 4.2). */
 		if (in->depth_addr || in->stencil_addr) {
-			u64 lo = in->depth_addr && in->stencil_addr ?
-				 min(in->depth_addr, in->stencil_addr) : in->depth_addr ?: in->stencil_addr;
+			u64 lo = in->depth_addr ?: in->stencil_addr;
+
+			if (in->depth_addr && in->stencil_addr)
+				lo = min(in->depth_addr, in->stencil_addr);
 
 			zls_base = (u32)lo & 0xfff00000;
 		}
@@ -582,7 +736,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	cmd[0x18 / 4] = 0x50000000;
 	cmd[0x1c / 4] = last ? in->flags_3d | BIT(10) | f << 14 : 0;
 	cmd[0x20 / 4] = f;
-	cmd[0x24 / 4] = kobj_va(r->pbdesc);
+	cmd[0x24 / 4] = kobj_va(r->pb->desc);
 	cmd[0x38 / 4] = kobj_va(s->rd);
 	cmd[0x3c / 4] = kobj_va(s->hwsync);
 	cmd[0x40 / 4] = kobj_va(s->rtdata);
@@ -625,12 +779,17 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	t[0x28 / 4] = 0x358637bd;			/* 1e-6 */
 	t[0x2c / 4] = 0x358637bd;
 	t[0x30 / 4] = (s->h - 1) << 16 | (s->w - 1);
-	t[0x3c / 4] = r->pb_base;
+	t[0x3c / 4] = r->pb->base;
 	t[0x6c / 4] = 0x88;
 
 	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
+	/* The command is in memory before the write offset that hands it over. */
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
+	if (last)
+		rj->cmd_off = woff;
+	if (last && snapshot)
+		render_snapshot(job->ctx->sdev, s, woff);
 	if (last)
 		s->frames++;
 
@@ -646,48 +805,268 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	return 0;
 }
 
-static void dump(struct seq_file *m, const char *name, struct pvrsgx_kobj *o, u32 off, u32 bytes)
+/* ---------------------------------------------------------------- transfers */
+
+/*
+ * A transfer is a 3D-only render: the background object covers the
+ * destination, its pixel program samples the source and its end-of-tile
+ * program writes the destination, all client memory (TEX.md 3, 10). The
+ * kernel owns the HW transfer context, its command ring and the completion
+ * sync, and writes the command from the client's CMD_TRANSFER stream.
+ */
+#define XFER_HWCTX_BYTES	0xb4
+#define XFER_CCB_BYTES		0x104c8	/* 0x10000 ring + slack for a command that wraps */
+#define XFER_CMD_BYTES		0x1c0
+#define XFER_SHARED		0xac	/* SGXMKIF_TRANSFERCMD_SHARED */
+#define XFER_TILES_X_MAX	127	/* 4096 pixels: G14 has the real limit */
+#define XFER_TILES_Y_MAX	255
+
+int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
+{
+	struct pvrsgx_transfer_ctx *x = kzalloc_obj(*x);
+	u32 *hw;
+	int err;
+
+	if (!x)
+		return -ENOMEM;
+	ctx->transfer = x;
+
+	err = kobj_new(sdev, &x->ccb, PVRSGX_KRANGE_KDATA, XFER_CCB_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &x->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &x->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &x->hwctx, PVRSGX_KRANGE_KCODE, XFER_HWCTX_BYTES, 0, NULL);
+	if (err)
+		goto fail;
+
+	/* SGXCreateTransferContext's words; the rest stays zero. */
+	hw = kobj_cpu(x->hwctx);
+	hw[0] = 1;
+	hw[2] = pvrsgx_mmu_pd_addr(ctx->vm->mmu);
+	hw[3] = kobj_va(x->ccb);
+	hw[4] = kobj_va(x->ccbctl);
+	hw[0x2a] = task_tgid_nr(current);
+	return 0;
+
+fail:
+	pvrsgx_transfer_ctx_fini(sdev, ctx);
+	return err;
+}
+
+void pvrsgx_transfer_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
+{
+	struct pvrsgx_transfer_ctx *x = ctx->transfer;
+
+	if (!x)
+		return;
+	if (x->hwctx)
+		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_TC, kobj_va(x->hwctx));
+	release(sdev, &x->hwctx);
+	release(sdev, &x->done);
+	release(sdev, &x->ccbctl);
+	release(sdev, &x->ccb);
+	kfree(x);
+	ctx->transfer = NULL;
+}
+
+int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
+			     const struct drm_powervr_sgx_job *in)
+{
+	struct pvrsgx_transfer_job *tj = &job->transfer;
+	struct powervr_sgx_stream_ctx sctx = {};
+	struct pvrsgx_vm *vm = job->ctx->vm;
+	int err;
+
+	if (in->flags & ~DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_FLAGS_MASK)
+		return -EINVAL;
+	if (!job->ctx->transfer || in->ta_kicks.count || in->rt_dataset_handle)
+		return -EINVAL;
+	tj->dst_twiddled = in->flags & DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED;
+
+	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
+	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size =
+		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
+	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_X] = XFER_TILES_X_MAX;
+	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_Y] = XFER_TILES_Y_MAX;
+	sctx.has_quirk = no_quirk;
+	sctx.mapped = vm_mapped;
+	sctx.priv = vm;
+
+	err = stream_take(&powervr_sgx_stream_transfer_defs, &sctx, vm, in->cmd_stream,
+			  in->cmd_stream_len, &tj->xfer);
+	if (err)
+		return err;
+	return powervr_sgx_check_transfer(&tj->xfer);
+}
+
+/* Write the 0x1c0-byte transfer command into the context's ring (UAPI.md 3.5). */
+void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
+{
+	struct pvrsgx_transfer_ctx *x = job->ctx->transfer;
+	const struct powervr_sgx_stream_transfer *in = &job->transfer.xfer;
+	u32 woff = x->ccb_woff, base = (u32)in->bg_block_addr & 0xfff00000;
+	u32 *cmd = (u32 *)((u8 *)kobj_cpu(x->ccb) + woff), *sh, *done;
+
+	job->transfer.cmd_off = woff;
+	memset(cmd, 0, XFER_CMD_BYTES);
+	cmd[0] = 1u << 25 | ((u32)in->bg_block_addr - base) >> 4;
+	cmd[1] = 0x200;
+	cmd[2] = in->bg_depth;
+	cmd[3] = 3;
+	cmd[5] = 0x100;
+	cmd[6] = base;
+	cmd[7] = 0x80000000;
+	cmd[8] = 0x88;
+	cmd[9] = (u32)in->pixel_event_pds_addr;
+	cmd[10] = in->pixel_event_pds_rows;
+	cmd[11] = 1;
+	cmd[12] = in->first_tile_x << 16 | in->first_tile_y;
+	cmd[13] = in->last_tile_x << 16 | in->last_tile_y;
+	cmd[14] = 0x80;
+	cmd[15] = PVRSGX_HEAP_PDS_PIXEL;	/* EUR_CR_PDS_EXEC_BASE: never the client's */
+	cmd[0xa4 / 4] = XFER_CMD_BYTES;
+	cmd[0xa8 / 4] = job->transfer.dst_twiddled ? 8 : 0;
+	cmd[0x194 / 4] = 0x07c00000;
+
+	/* No source syncs; one destination, the kernel's completion sync. */
+	sh = cmd + XFER_SHARED / 4;
+	done = kobj_cpu(x->done);
+	sh[0x84 / 4] = 1;			/* ui32NumDstSyncs */
+	sh[0x88 / 4] = done[SYNC_READ_PENDING];
+	sh[0x8c / 4] = kobj_va(x->done) + SYNC_READ_COMPLETE * 4;
+	sh[0x90 / 4] = done[SYNC_WRITE_PENDING]++;
+	sh[0x94 / 4] = kobj_va(x->done) + SYNC_WRITE_COMPLETE * 4;
+	/* The microkernel sets write-complete to the pending value plus one. */
+	job->done_cpu = &done[SYNC_WRITE_COMPLETE];
+	job->done_val = sh[0x90 / 4] + 1;
+
+	x->ccb_woff = (woff + XFER_CMD_BYTES) & (CCB_RING - 1);
+	/* The command is in memory before the write offset that hands it over. */
+	wmb();
+	kobj_cpu(x->ccbctl)[0] = x->ccb_woff;
+
+	memset(data, 0, 6 * sizeof(u32));
+	data[1] = kobj_va(x->hwctx);
+}
+
+static void dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off, u32 bytes)
 {
 	const u32 *w = (const u32 *)((const u8 *)kobj_cpu(o) + off);
 
-	seq_printf(m, "%s @ 0x%08x:", name, kobj_va(o) + off);
+	seq_buf_printf(sb, "%s @ 0x%08x:", name, kobj_va(o) + off);
 	for (u32 i = 0; i < bytes / 4; i++)
-		seq_printf(m, "%s%08x", i % 8 ? " " : "\n  ", w[i]);
-	seq_puts(m, "\n");
+		seq_buf_printf(sb, "%s%08x", i % 8 ? " " : "\n  ", READ_ONCE(w[i]));
+	seq_buf_puts(sb, "\n");
 }
 
-/* The structures of the last render job, word by word, for A/B against the DDK. */
-void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev)
+/* The structures of a render, word by word, for A/B against the DDK. Under last_lock. */
+static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s,
+			u32 cmd_off)
 {
-	struct pvrsgx_rt_dataset *s;
-	struct pvrsgx_render_ctx *r;
+	struct pvrsgx_render_ctx *r = s->ctx->render;
+
+	seq_buf_printf(sb, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n",
+		       kobj_va(r->pb->buf), r->pb->pages, r->pb->base, kobj_va(r->pb->freelist),
+		       kobj_va(r->scratch));
+	dump(sb, "hwctx", r->hwctx, 0, 0x44);
+	dump(sb, "ccbctl", r->ccbctl, 0, 8);
+	dump(sb, "pbdesc", r->pb->desc, 0, 0x3c);
+	dump(sb, "pbblocks", r->pb->blocks, 0, 0x10);
+	dump(sb, "freelist[first..]", r->pb->freelist,
+	     ((kobj_va(r->pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
+	dump(sb, "scratch", r->scratch, 0, 0x40);
+	dump(sb, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
+	dump(sb, "ta_cmd", r->ccb, cmd_off, TA_CMD_BYTES);
+	dump(sb, "render_details", s->rd, 0, 0x1ec & ~3u);
+	dump(sb, "rd_w4", s->rd_w4, 0, 4);
+	dump(sb, "rd_w8", s->rd_w8, 0, 8);
+	dump(sb, "rd_sync", s->rd_sync, 0, 4);
+	dump(sb, "rtdata", s->rtdata, 0, 2 * 0x38 + 0x18);
+	dump(sb, "rtword", s->rtword, 0, 4);
+	dump(sb, "entword0", s->entword[0], 0, 4);
+	dump(sb, "entword1", s->entword[1], 0, 4);
+	dump(sb, "hwsync", s->hwsync, 0, 0x28);
+	dump(sb, "hwsync_access", s->hwsync_access, 0, 4);
+	dump(sb, "done", s->done, 0, SYNC_DATA_BYTES);
+	dump(sb, "bgblock", s->bgblock, 0, 0x60);
+	/* what the TA wrote for the 3D */
+	dump(sb, "rgn0", s->rgn[0], 0, 0x60);
+	dump(sb, "rgn1", s->rgn[1], 0, 0x60);
+	dump(sb, "tailptr", s->tailptr, 0, 0x40);
+	dump(sb, "ta40", s->ta40, 0, 0x40);
+	dump(sb, "ta50", s->ta50, 0, 0x50);
+	dump(sb, "ta88[0]", s->ta88[0], 0, 0x88);
+	dump(sb, "ta88[1]", s->ta88[1], 0, 0x88);
+	seq_buf_printf(sb, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x\n",
+		       kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr),
+		       kobj_va(s->ta40), kobj_va(s->ta50));
+	seq_buf_printf(sb, "ta88 0x%08x 0x%08x\n", kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
+	pvrsgx_fw_dump(sb, sdev, PVRSGX_FW_TA3DCTL, "ta3dctl");
+}
+
+#define DUMP_BYTES	SZ_16K
+
+/*
+ * The last render job's structures now, or (before) as they were when its last
+ * kick was written: after snap_gap_ms that is after the first kick's TA and
+ * before the 3D.
+ */
+void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev, bool before)
+{
+	struct seq_buf sb;
+	char *buf;
 
 	mutex_lock(&sdev->last_lock);
-	s = sdev->last_rtds;
-	if (!s) {
+	if (before) {
+		seq_puts(m, sdev->render_snap ?: "no snapshot (powervr_sgx.snapshot=1)\n");
+		mutex_unlock(&sdev->last_lock);
+		return;
+	}
+	if (!sdev->last_rtds) {
 		mutex_unlock(&sdev->last_lock);
 		seq_puts(m, "no render yet\n");
 		return;
 	}
-	r = s->ctx->render;
-	seq_printf(m, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n",
-		   kobj_va(r->pb), r->pb_pages, r->pb_base, kobj_va(r->freelist), kobj_va(r->scratch));
-	dump(m, "hwctx", r->hwctx, 0, 0x44);
-	dump(m, "ccbctl", r->ccbctl, 0, 8);
-	dump(m, "pbdesc", r->pbdesc, 0, 0x3c);
-	dump(m, "pbblocks", r->pbblocks, 0, 0x10);
-	dump(m, "freelist[first..]", r->freelist,
-	     ((kobj_va(r->pb) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
-	dump(m, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
-	dump(m, "ta_cmd", r->ccb, sdev->last_cmd_off, TA_CMD_BYTES);
-	dump(m, "render_details", s->rd, 0, 0x1ec & ~3u);
-	dump(m, "rtdata", s->rtdata, 0, 2 * 0x38 + 0x18);
-	dump(m, "rtword", s->rtword, 0, 4);
-	dump(m, "hwsync", s->hwsync, 0, 0x28);
-	dump(m, "done", s->done, 0, SYNC_DATA_BYTES);
-	dump(m, "bgblock", s->bgblock, 0, 0x60);
-	seq_printf(m, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
-		   kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
-		   kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
+	buf = kvmalloc(DUMP_BYTES, GFP_KERNEL);
+	if (buf) {
+		seq_buf_init(&sb, buf, DUMP_BYTES);
+		render_dump(&sb, sdev, sdev->last_rtds, sdev->last_cmd_off);
+		seq_puts(m, seq_buf_str(&sb));
+		kvfree(buf);
+	}
 	mutex_unlock(&sdev->last_lock);
+}
+
+/* Called with the last kick written and not yet sent. */
+static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s, u32 cmd_off)
+{
+	struct seq_buf sb;
+
+	mutex_lock(&sdev->last_lock);
+	if (!sdev->render_snap)
+		sdev->render_snap = kvmalloc(DUMP_BYTES, GFP_NOWAIT | __GFP_NOWARN);
+	if (sdev->render_snap) {
+		seq_buf_init(&sb, sdev->render_snap, DUMP_BYTES);
+		render_dump(&sb, sdev, s, cmd_off);
+		seq_buf_str(&sb);
+	}
+	mutex_unlock(&sdev->last_lock);
+}
+
+/* A job's command and the structures it names, for a devcoredump. */
+void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job)
+{
+	struct pvrsgx_device *sdev = job->ctx->sdev;
+
+	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER && job->render.rtds) {
+		mutex_lock(&sdev->last_lock);
+		render_dump(sb, sdev, job->render.rtds, job->render.cmd_off);
+		mutex_unlock(&sdev->last_lock);
+	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER && job->ctx->transfer) {
+		struct pvrsgx_transfer_ctx *x = job->ctx->transfer;
+
+		dump(sb, "xfer_hwctx", x->hwctx, 0, XFER_HWCTX_BYTES);
+		dump(sb, "xfer_ccbctl", x->ccbctl, 0, 8);
+		dump(sb, "xfer_cmd", x->ccb, job->transfer.cmd_off, XFER_CMD_BYTES);
+		dump(sb, "xfer_done", x->done, 0, SYNC_DATA_BYTES);
+	}
 }

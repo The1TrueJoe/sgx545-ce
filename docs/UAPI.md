@@ -6,8 +6,8 @@ and its Mesa driver. This is M2 step 1 of `AGENTS.md` section 5. It follows the 
 shape.
 
 The header is [`uapi/powervr_sgx_drm.h`](uapi/powervr_sgx_drm.h), named as
-`include/uapi/drm/<driver>_drm.h` headers are. It is a design aid and nothing outside
-`docs/uapi` includes it. `uapi/check.sh` compiles it for i386 and x86_64 against the
+`include/uapi/drm/<driver>_drm.h` headers are. The driver (`drm/powervr_sgx`, through a
+symlink) and the tests build against it. `uapi/check.sh` compiles it for i386 and x86_64 against the
 literal layouts in `uapi/layout.inc`. The command streams are defined in
 [`uapi/powervr_sgx_kmd_stream.xml`](uapi/powervr_sgx_kmd_stream.xml) (section 3).
 
@@ -88,6 +88,7 @@ kerneldoc; `Documentation/gpu/powervr_sgx/uapi.rst` pulls it in the way
 | 0x0a | `CREATE_RT_DATASET` | RW | everything tiling a target of a given size needs | capture: STATE.md 6 |
 | 0x0b | `DESTROY_RT_DATASET` | W | | |
 | 0x0c | `SUBMIT_JOBS` | RW | render scenes and transfers, syncobj in/out, BO refs | capture: TEX.md 3, STATE.md 1 |
+| 0x0d | `UPLOAD_CODE` | RW | copy USSE code into a code object and validate it (D9, D12) | hardware: P1 (7.2); design |
 
 ### DEV_QUERY
 
@@ -104,9 +105,63 @@ the two sizes. A NULL pointer returns the size.
 ### CREATE_BO, GET_BO_MMAP_OFFSET
 
 GEM on `drm_gem_shmem`. Objects are zeroed at allocation, and PRIME goes through the DRM
-core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds.
+core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds,
+and before an mmap of the object's exported dma-buf does.
 The CPU mapping's cache mode is a kernel decision and not part of the uAPI. It defaults
 to write-combined until coherency is established (G19).
+
+An imported dma-buf is a data object. It maps in every heap except the USSE ones.
+`GET_BO_MMAP_OFFSET` refuses it, because its CPU mapping is the dma-buf's. The GPU
+addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an import
+with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
+GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, and an import's
+pages may be cached on the CPU side. So the kernel flushes every import mapped in the
+job's VM at submit, before the job and again once it is done. It doesn't use the BO
+list for this: the list is optional (D6), and a client on explicit sync names no
+buffers at all. The cost is a CPU cache flush of every mapped import, twice per job
+(about 1.4 MB per 720x480 buffer), which is small next to a frame. A mapping made
+after a submit is not flushed for that job. An object in a job's BO list gets the job's fence
+in its reservation object (written: `WRITE`, else `READ`), and the job waits for the
+fences already there. That shared reservation is what makes a KMS commit of an imported
+buffer wait for the render (`powervr_sgx_prime`, the implicit frames).
+
+`DRM_POWERVR_SGX_BO_CODE` makes a code object (D12): it holds USSE programs, it is the
+only kind of object the USSE heaps accept, and it can go nowhere else. It has no CPU
+mapping (so `ALLOW_CPU_ACCESS` with it is `-EINVAL`), PRIME export refuses it, and its
+contents arrive only through `UPLOAD_CODE`.
+
+### UPLOAD_CODE
+
+`{handle, flags, offset, size, pointer, bad_offset}`. The kernel copies `size` bytes from
+`pointer` into the code object at `offset`, both multiples of 8, and scans every 8-byte
+word of them (an instruction, low word first) before anything is copied. A word fails if:
+
+| rule | why |
+|---|---|
+| it matches none of the forms in the kernel's table | a later ISA finding can't open a hole: an unknown encoding is refused, not trusted |
+| it is `ldr` or `str` | the register file (P1, D9) |
+| it is `setl` or `savl` | they set the link address from a register, so a following `lapc` could jump anywhere. The GLES compiler never emits them; only the microkernel does |
+| it is `br` and its target (this instruction + the signed 18-bit field) is outside the object | the target is exact for a relative branch, so it is checked. `ba`, `phas.i` and `lapc` targets are absolute from the code base the task runs from, which depends on where the object is mapped: they can only reach the USSE heaps or the unassigned gaps after them (section 5), and a jump into a gap faults |
+
+On a failure nothing is copied, the ioctl returns `-EINVAL`, and `bad_offset` is the
+object offset of the first bad instruction, for the compiler's debug output.
+
+The table is generated from the clean-room isaspec description,
+`mesa/src/sgx545/isa/sgx545.xml`, by `drm/tools/gen_usse_table.py`: one (mask, match)
+pair per form, the bits the form's patterns fix. The generator refuses two forms that
+could match the same word.
+
+The GPU must not run code that changes after the scan. Code objects are mapped with the
+PTE `READONLY` bit, which stops a client task's `st` (E1, DRM-DRIVER.md section 6).
+While a VM maps the object, an upload may only write past the end of every earlier
+upload (`-EBUSY` otherwise): new code lands only in bytes the GPU sees as zeros, which
+is a harmless instruction. Once no VM maps it, the object can be uploaded anywhere
+again.
+
+PDS programs are not scanned. A PDS program reaches USSE code only through DOUTU, which
+picks a code base: 0-13 cover exactly the two USSE heaps, and 14 and 15 point at nothing
+in a client VM (with the open microkernel; under the DDK microkernel base 15 is the
+kernel code heap, P3). Per-draw PDS programs stay in ordinary objects.
 
 ### VM contexts, VM_MAP, VM_UNMAP
 
@@ -126,8 +181,9 @@ Rules the kernel enforces:
   is what stops a stale translation reaching a page the system has given to someone
   else.
 
-`VM_MAP.flags` is reserved. A read-only mapping flag gets added when the MMU's read-only
-bit is documented (G3): shader heaps are its first use.
+`VM_MAP.flags` is reserved. The USSE heaps take only code objects, a code object maps
+only into a USSE heap, and code objects are mapped read-only on the GPU (D12). A
+read-only flag for other objects can come later.
 
 ### CREATE_CONTEXT
 
@@ -597,6 +653,7 @@ XML, the decoder compiles for both targets, and the stream test passes.
 | `drm_powervr_sgx_ioctl_dev_query_args` | 16 | `0x00 type (4)`, `0x04 size (4)`, `0x08 pointer (8)` |
 | `drm_powervr_sgx_ioctl_create_bo_args` | 24 | `0x00 size (8)`, `0x08 handle (4)`, `0x0c _padding_c (4)`, `0x10 flags (8)` |
 | `drm_powervr_sgx_ioctl_get_bo_mmap_offset_args` | 16 | `0x00 handle (4)`, `0x04 _padding_4 (4)`, `0x08 offset (8)` |
+| `drm_powervr_sgx_ioctl_upload_code_args` | 40 | `0x00 handle (4)`, `0x04 flags (4)`, `0x08 offset (8)`, `0x10 size (8)`, `0x18 pointer (8)`, `0x20 bad_offset (8)` |
 | `drm_powervr_sgx_ioctl_create_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
 | `drm_powervr_sgx_ioctl_destroy_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
 | `drm_powervr_sgx_ioctl_vm_map_args` | 40 | `0x00 vm_context_handle (4)`, `0x04 flags (4)`, `0x08 device_addr (8)`, `0x10 handle (4)`, `0x14 _padding_14 (4)`, `0x18 offset (8)`, `0x20 size (8)` |
@@ -766,7 +823,7 @@ These all rely on the PD and the premises. No validation in the kernel helps, sh
 | Unbounded firmware work per ioctl | `max_ta_kicks`, stream length capped at 4 KiB, ring space accounted with `drm_sched` credits | design |
 | Reset loop | A guilty context is refused from then on (section 8). A client can create new contexts, so a hang rate limit per file may be needed | gap for whether it is needed |
 | Failed recovery | The open microkernel discards surviving state rather than rescanning it (UKERNEL.md 5a). If re-init fails the device is lost: `-EIO` and a wedged event | capture for the DDK's failure; gap for the open path on hardware |
-| Foreign dma-buf outside the MMU's physical reach | Import checks the DMA mask | gap: physical address width (G3) |
+| Foreign dma-buf outside the MMU's physical reach | `VM_MAP` refuses an import whose pages the DMA layer bounced (no IOMMU) or that lie above 4 GiB | design; the bounced case is untested (the EA has no memory above 4 GiB) |
 | Non-zeroed memory | shmem pages are zero. Kernel-owned PB, region headers and tail pointers are zeroed before they are mapped | design |
 | Sticky TA state across contexts | "Every group of the TA state block is sticky" (STATE.md). A client's first block must carry every group it relies on. Not a kernel duty, but IGT should exercise it | capture for one client; gap across clients (G6) |
 
@@ -1007,6 +1064,26 @@ leaves room for growth later with no uAPI change. It may be wrong for Minecraft-
 work that still goes through the scheduler and signals its fences, for IGT, fence and
 scheduler tests without a GPU workload. It can be dropped before the RFC if reviewers object.
 
+### D12. Code objects and the upload ioctl
+
+**Recommendation, to confirm (2026-11-03): USSE code goes only through
+`UPLOAD_CODE` into `BO_CODE` objects, as section 2 describes.** This is D9 option 1
+made concrete, and it closes some options:
+
+- The winsys can no longer write shaders into a mapped buffer. Mesa's code heap becomes
+  a code object per pool, filled by `UPLOAD_CODE` (M3).
+- An upload into a mapped object can only append. Freeing and reusing shader space
+  means unmapping the object first, so a pool that recycles space needs a second pool
+  to swap with. Alternative: allow overwrites of ranges no submitted job can still be
+  running. The kernel would need to know which jobs could use which code, which it
+  doesn't.
+- `setl`/`savl` are refused, and so are relative branches out of the object. A future
+  compiler that needs indirect calls would need a rule for where `setl`'s register can
+  point.
+
+Alternatives weighed in D9 (firmware-protected EDM, one client at a time, a trusted
+group) still stand if this is rejected.
+
 ## 11. Doc gaps
 
 Facts the design needs that `docs/` doesn't have.
@@ -1027,12 +1104,12 @@ Facts the design needs that `docs/` doesn't have.
 | G12 | Unnamed words. TA flags: STATE.md section 1 refers to a bit table that isn't there; `0x71`/`0x62` there, `0x63`/`0x10` in DRIVER-UPSTREAM.md; no middle-kick value. TA flags 2, 3D flags, cmd+0x20, +0x28-0x37, +0x48-0x50, +0x254, +0x26c-0x298; rd+0x08, 0x0c, 0x1c, 0x24, 0x44, 0x54, 0x64, 0x6c-0xc8, 0xcc; PDS middle word. GEN.md lists `+0x104` under render details, STATE.md under the TA command | D5, what Mesa can do | STATE.md |
 | G13 | ZLS: the load enable, field widths, range of the offsets, which bits touch the stencil address | `zls_control` allow-list | TEX.md 7 |
 | G14 | Render target limits: maximum width and height, TE field widths, multisample numbers | `LIMITS`, `CREATE_RT_DATASET` | STATE.md 4, 6 |
-| G15 | Lifetime and ownership: purpose of the 0x88, 0x40 and 0x50 TA-data blocks, scratch block and dependency block, and who reads each; two PBs in one VM; `SGX_FLUSH_HW_RENDER_TARGET` timing out (GEN.md); concurrent contexts (UKERNEL.md section 9) | section 7.3, destroy paths | UKERNEL.md, GEN.md |
+| G15 | Lifetime and ownership: purpose of the 0x88, 0x40 and 0x50 TA-data blocks, scratch block and dependency block, and who reads each; `SGX_FLUSH_HW_RENDER_TARGET` timing out (GEN.md) and the DDK microkernel's RT and PB cleanups never completing (UKERNEL.md 3); concurrent contexts (UKERNEL.md section 9). **PB placement:** the DPM numbers PB pages from the 3D-params heap base, and a PB elsewhere hangs (EA1, 2026-11-03, log 2026-11-03-0340-drm-per-vm-pb). So the 3D-params heap is per VM, with one PB per VM at its base, shared by the VM's render contexts (verified with three contexts, log 2026-11-03-0355-drm-shared-pb-restart). Open: whether the DPM state of a shared PB stays right when contexts' renders interleave beyond one job at a time | section 7.3, destroy paths | UKERNEL.md, GEN.md |
 | G16 | Preemption or context suspend during a job: does type 4 do anything useful for scheduling? | `priority` | UKERNEL.md |
 | G17 | Hang detection: which core hung, EDM timer path, signature registers' use, how the host learns it | section 8 | UKERNEL.md 5a, 9 |
 | G18 | PB overflow: DPM out-of-memory path, thresholds, partial renders | D10 | UKERNEL.md, STATE.md 6 |
 | G19 | CPU and GPU coherency: `ui32CacheControl` bits, what the BIF snoops, CPU mapping modes | `CREATE_BO`, fence ordering | UKERNEL.md |
-| G20 | Transfer: word 1, 3, 4, 5, 14, +0x194 meanings; word 11 (code size in TEX.md, a flag in UKERNEL.md); register 0x408 (region headers on a render, depth/stencil block on a transfer); transfer destination sync in the open microkernel (UKERNEL.md section 10) | section 3.5, transfer fences | TEX.md, UKERNEL.md |
+| G20 | Transfer: word 1, 3, 4, 5, 14, +0x194 meanings; word 11 (code size in TEX.md, a flag in UKERNEL.md); register 0x408 (region headers on a render, depth/stencil block on a transfer); transfer destination sync in the open microkernel (UKERNEL.md section 10). Completion: the DDK microkernel sets the shared command's destination sync (`asDstSyncs[0]`, +0x134), which the driver's transfer jobs complete on (EA1, log 2026-11-03-0405-drm-transfers); words 0x168/0x16c are `sCtlStatusInfo[0]` | section 3.5, transfer fences | TEX.md, UKERNEL.md |
 | G21 | What state needs rebuilding after a soft reset, per structure | section 8 | UKERNEL.md 5a |
 | G22 | Interrupts: can the kernel identify which job completed from host control fields alone? | fences | UKERNEL.md 5 |
 | G23 | Power: what type 3 needs for runtime PM (states, resume path) | kernel | UKERNEL.md |

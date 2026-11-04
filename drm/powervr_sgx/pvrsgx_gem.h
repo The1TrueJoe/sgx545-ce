@@ -14,6 +14,8 @@ struct drm_file;
 struct pvrsgx_bo {
 	struct drm_gem_shmem_object base;
 	u64 flags;
+	/** @code_end: A code object's end of the furthest upload (under the resv lock). */
+	u64 code_end;
 };
 
 static inline struct pvrsgx_bo *to_pvrsgx_bo(struct drm_gem_object *obj)

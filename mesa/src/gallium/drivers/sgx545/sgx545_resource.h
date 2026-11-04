@@ -24,6 +24,8 @@ struct sgx545_resource {
    void *data;
    struct sgxws_bo bo;
    bool wrapped;                /* resource_from_user_memory: an fbdev mapping */
+   bool shared;                 /* imported or exported dma-buf: its frames name it (sgxws_use_bo) */
+   struct renderonly_scanout *scanout;   /* kmsro: its buffer on the display device */
 
    uint32_t uid, gen;           /* buffers: an id never reused, and a count of writes (vertex cache) */
    uint64_t written_ns;         /* buffers: when last written */

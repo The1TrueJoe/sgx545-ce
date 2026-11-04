@@ -112,8 +112,12 @@ def result_line(line):
     return None
 
 
+# the DDK's services driver, and powervr_sgx's job timeout
+RECOVERY_GREP = "grep -c -e 'Recovery triggered' -e 'job timed out'"
+
+
 def recoveries(box):
-    rc, out = box.ssh("dmesg | grep -c 'Recovery triggered'")
+    rc, out = box.ssh(f"dmesg | {RECOVERY_GREP}")
     return int(out.strip() or 0) if rc in (0, 1) else None
 
 
@@ -439,7 +443,7 @@ def main():
 def box_state(box):
     """(the run's boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
     rc, out = box.ssh("cat /proc/cmdline; cat /proc/sys/kernel/random/boot_id; "
-                      f"dmesg | grep -c 'Recovery triggered'; test -f {RAMBOOT_MARK} && echo marked")
+                      f"dmesg | {RECOVERY_GREP}; test -f {RAMBOOT_MARK} && echo marked")
     lines = out.decode(errors="replace").split("\n")
     if rc not in (0, 1) or len(lines) < 3:
         return None

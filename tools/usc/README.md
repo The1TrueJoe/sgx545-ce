@@ -11,8 +11,7 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 
 | file | what |
 |---|---|
-| `gen_forms.py` | writes `mesa/src/sgx545/compiler/usse_forms.h`, the USSE encoding tables, from `tools/isa/hw.py` (all 174 forms) |
-| `mesa/src/sgx545/compiler/usse.[ch]` | the encoder: `hw.encode()` ported to C over those tables |
+| `mesa/src/sgx545/compiler/sgx_forms.[ch]` | the forms the compiler emits, as `struct sgx_isa_instr` for the isaspec encoder in `mesa/src/sgx545/isa` |
 | `…/sgx_compiler.h` | the API: `sgx_nir_options()`, `sgx_assign_varyings()`, `sgx_compile()` |
 | `…/sgx_nir.c` | NIR lowering: I/O and varying sets, uniforms (constant numbers, F16/C10 formats), sin/cos range reduction, samplers |
 | `…/sgx_compile.c` | instruction selection (vector ops as one repeated instruction where the operands allow), F16, textures, discard, control flow, liveness and register allocation (Mesa's `util/ra`), encoding |

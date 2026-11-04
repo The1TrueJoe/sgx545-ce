@@ -1,5 +1,6 @@
 #!/bin/sh
-# Build Mesa with the sgx545 gallium driver and the EGL fbdev platform.
+# Build Mesa with the sgx545 gallium driver (over powervr_sgx, or pvrsrvkm
+# through libpvr), the EGL fbdev platform, and GBM.
 #
 #   mesa/build.sh [x86_64] [i386] [x86_64-gl]       (default: x86_64 i386)
 #
@@ -11,6 +12,9 @@
 #   i386    glibc 2.36: the Debian bookworm i386 root the Minecraft runtime uses.
 #   x86_64-gl  x86_64 with desktop GL through libglvnd (libEGL_mesa), for
 #           piglit (mesa/tests/piglit); finds glvnd in $GLVND_SYSROOT.
+#   x86_64-x11 x86_64 with desktop GL, GLX and the X11 platform through
+#           libglvnd, for an X server (DRI3 + Present) on the EA; compiles
+#           against the Debian root in $X11_SYSROOT (mesa/tests/x11/mkroot.py).
 # Installs into $SGX545_MESA_BUILD/<arch>/install (lib/libEGL.so.1,
 # lib/libGLESv2.so.2, lib/libgallium-<ver>.so, ...), and copies the winsys
 # test (sgx545_frame_test) next to it.
@@ -49,10 +53,15 @@ fi
 ln -sfn "$REPO/kernel/src" "$TREE/include/sgx545-kernel"
 ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx545/drm/libpvr"
 python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx545/drm/sgx545_usse_progs.h"
+# the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi) and the
+# packers for its command streams, from their one definition
+cp "$REPO/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h" "$TREE/include/drm-uapi/"
+python3 "$REPO/docs/uapi/gen_stream.py" user "$REPO/docs/uapi/powervr_sgx_kmd_stream.xml" \
+	> "$TREE/src/gallium/winsys/sgx545/drm/powervr_sgx_kmd_stream.h"
 
 for arch in $ARCHES; do
 	case $arch in
-	x86_64|x86_64-gl) target=x86_64-linux-gnu.2.36; family=x86_64; cpu=x86_64 ;;
+	x86_64|x86_64-gl|x86_64-x11) target=x86_64-linux-gnu.2.36; family=x86_64; cpu=x86_64 ;;
 	i386) target=x86-linux-gnu.2.36; family=x86; cpu=i686 ;;
 	*) echo "build.sh: unknown arch $arch" >&2; exit 1 ;;
 	esac
@@ -67,13 +76,23 @@ for arch in $ARCHES; do
 		sed -i.bak "s|^pkg_config_libdir = .*|pkg_config_libdir = ['$GLVND_SYSROOT/usr/lib/pkgconfig', '$GLVND_SYSROOT/usr/share/pkgconfig']\nsys_root = '$GLVND_SYSROOT'|" "$O/cross.ini"
 		api="-Dopengl=true -Dglvnd=enabled"
 	fi
+	platforms="-Dplatforms=fbdev -Degl-native-platform=fbdev -Dglx=disabled"
+	if [ "$arch" = x86_64-x11 ]; then
+		R=${X11_SYSROOT:?x86_64-x11 needs a Debian root in X11_SYSROOT (mesa/tests/x11/mkroot.py)}
+		sed -i.bak "s|^pkg_config_libdir = .*|pkg_config_libdir = ['$R/usr/lib/x86_64-linux-gnu/pkgconfig', '$R/usr/share/pkgconfig']\nsys_root = '$R'|" "$O/cross.ini"
+		# the root's headers after zig's own (its libc's win), its libraries for the link
+		x="'-idirafter', '$R/usr/include', '-L$R/usr/lib/x86_64-linux-gnu'"
+		sed -i.bak "s|^c = \[\(.*\)\]|c = [\1, $x]|; s|^cpp = \[\(.*\)\]|cpp = [\1, $x]|" "$O/cross.ini"
+		api="-Dopengl=true -Dglvnd=enabled"
+		platforms="-Dplatforms=x11 -Degl-native-platform=x11 -Dglx=dri -Dxlib-lease=disabled"
+	fi
 	if [ ! -f "$O/build/build.ninja" ]; then
 		meson setup "$O/build" "$TREE" --cross-file "$O/cross.ini" \
 			--buildtype=release --prefix=/usr --libdir=lib \
-			-Dplatforms=fbdev -Degl-native-platform=fbdev \
+			$platforms \
 			-Dgallium-drivers=sgx545 -Dvulkan-drivers= \
-			-Dglx=disabled $api -Dgles1=enabled -Dgles2=enabled -Degl=enabled \
-			-Dgbm=disabled -Dllvm=disabled -Dxmlconfig=disabled -Dexpat=disabled \
+			$api -Dgles1=enabled -Dgles2=enabled -Degl=enabled \
+			-Dgbm=enabled -Dllvm=disabled -Dxmlconfig=disabled -Dexpat=disabled \
 			-Dzstd=disabled -Dzlib=disabled -Dshader-cache=disabled -Dvalgrind=disabled \
 			-Dlibunwind=disabled -Dlmsensors=disabled \
 			-Dallow-fallback-for=libdrm -Dlibdrm:tests=false

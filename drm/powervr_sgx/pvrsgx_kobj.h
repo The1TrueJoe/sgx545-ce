@@ -16,17 +16,26 @@ struct pvrsgx_vm;
 /**
  * struct pvrsgx_kobj - A kernel-owned object the firmware or the TA/3D reads
  *
- * Its address is unique across the device: the firmware's directory maps every
- * one, and a VM maps the ones the TA and 3D use under its directory. A client
- * can never map anything in these ranges itself.
+ * Its address is unique across the device and the firmware's directory maps it,
+ * and a VM also maps the ones the TA and 3D use under its directory. The 3D
+ * parameters range is the exception: per VM, from the heap base, mapped only in
+ * that VM's directory, as the DDK's per-context heap (each context's PB starts
+ * at 0x10000000). A client can never map anything in these ranges itself.
  */
 struct pvrsgx_kobj {
+	/** @km: Its memory. */
 	struct pvrsgx_kmem km;
+	/** @node: Its place in @mm. */
 	struct drm_mm_node node;
+	/** @mm: The range allocator @node came from. */
+	struct drm_mm *mm;
+	/** @range: The range it was allocated in. */
 	enum pvrsgx_krange range;
 	/** @vm: Also mapped in this VM's directory, or NULL. */
 	struct pvrsgx_vm *vm;
+	/** @grave: In pvrsgx_device.graveyard once released. */
 	struct list_head grave;
+	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
 	u64 grave_seq;
 };
 

@@ -573,16 +573,15 @@ static bool
 varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
 {
    for (unsigned i = 0; i < fs->n_douti; i++) {
-      uint32_t w = fs->douti[i];
+      const struct sgx545_pds_douti *d = &fs->douti[i];
       unsigned need[2][2] = { { 0, 0 } }, n = 0;
 
-      /* plain iteration: set + 1 at b11-16, components - 1 at b22-23; source 0
-       * (gl_FragCoord) and sources from 0x20 on are not varyings (0x22: the
-       * depth plane of a discard) */
-      if ((w & (1u << 24)) && ((w >> 11) & 0x3f) > 0 && ((w >> 11) & 0x3f) < 0x20)
-         need[n][0] = ((w >> 11) & 0x3f) - 1, need[n++][1] = ((w >> 22) & 3) + 1;
-      if (w & 0x600)               /* sample half: coordinate set + 1 in the low bits, 2-D or projected */
-         need[n][0] = (w & 0x3f) - 1, need[n++][1] = w & 0x400 ? 3 : 2;
+      /* plain iteration: source set + 1; source 0 (gl_FragCoord) and sources
+       * from 0x20 on are not varyings (0x22: the depth plane of a discard) */
+      if (d->iterate && d->src > 0 && d->src < 0x20)
+         need[n][0] = d->src - 1, need[n++][1] = d->comps;
+      if (d->dim2 || d->proj)      /* sample half: coordinate set + 1, 2-D or projected */
+         need[n][0] = d->sample_set - 1, need[n++][1] = d->proj ? 3 : 2;
       for (unsigned k = 0; k < n; k++) {
          unsigned size = (vs->tsp_sizes >> (3 * need[k][0])) & 7;
 
@@ -1182,7 +1181,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    if (compiled && fs->kind == SGX545_SHADER_COMPILED && !varyings_match(d.vs, d.fs)) {
       if (!ctx->warned_varyings)
          fprintf(stderr, "sgx545: the fragment shader iterates a varying the vertex shader doesn't "
-                 "write (VS sets %#x, FS DOUTI %#x...): draw skipped\n", d.vs->tsp_sizes, d.fs->douti[0]);
+                 "write (VS sets %#x, FS DOUTI %#x...): draw skipped\n", d.vs->tsp_sizes,
+                 sgx545_pds_douti_w0(&d.fs->douti[0]));
       ctx->warned_varyings = true;
       return;
    }
@@ -1206,8 +1206,13 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
     * temporary, sampled into the window and freed at once).  Only those: a
     * texture merely bound would look in flight, and a later upload into it
     * would go to its second copy (dEQP fbo.render.stencil*) */
-   u_foreach_bit(unit, sampled)
-      sgx545_resource(ctx->views[unit]->texture)->use_seq = sgxws_next_seq(ctx->hw);
+   u_foreach_bit(unit, sampled) {
+      struct sgx545_resource *tex = sgx545_resource(ctx->views[unit]->texture);
+
+      tex->use_seq = sgxws_next_seq(ctx->hw);
+      if (tex->shared)
+         sgxws_use_bo(ctx->hw, &tex->bo, false);
+   }
    for (unsigned n = 0; n < num_draws; n++) {
       unsigned count = draws[n].count, start = draws[n].start, out_count;
       bool list = expanded_prim(info->mode);

@@ -32,7 +32,9 @@ firmware running: 1 lost: 0 resets: 0 irqs: 3
 
 ## Not yet
 
-- **720x480 (4x4 macrotile mode) hangs on the third frame**, reproducibly on a clean boot:
+- **720x480 (4x4 macrotile mode) hangs on the third frame**, reproducibly on a clean boot
+  (correction, `2026-11-03-0310-drm-second-context`: every such run was the second frame
+  process; as the first, 720x480 runs ten frames):
   frames 0 and 1 render, frame 2 times out. 256x256 (2x2 mode) runs 10 frames. The frame-2
   render reuses RT data entry 1 and region-header array 1 for the first time in mode 1.
 - **Restarting the firmware after a hang fails** ("microkernel did not start", device

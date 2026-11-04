@@ -20,13 +20,25 @@ struct pvrsgx_job;
 struct pvrsgx_kobj;
 
 /* The firmware half of a render context (STATE.md section 6). */
+/* A VM's parameter buffer, shared by its render contexts (pvrsgx_render.c). */
+struct pvrsgx_pb {
+	struct kref ref;
+	struct pvrsgx_device *sdev;
+	struct pvrsgx_kobj *buf, *freelist, *desc, *blocks;
+	u32 pages;
+	/** @base: The 3D request base, PB & 0xfff00000. */
+	u32 base;
+	/** @fw_gen: The microkernel run (pvrsgx_device.fw_gen) it was last set up for. */
+	u32 fw_gen;
+};
+
 struct pvrsgx_render_ctx {
-	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *pbdesc, *pbblocks, *pb, *freelist, *scratch, *sync3d;
-	u32 pb_pages;
-	/** @pb_base: The 3D request base, PB & 0xfff00000. */
-	u32 pb_base;
+	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
+	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
 };
+
+void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 
 /* SGXAddRenderTarget's numbers (STATE.md section 6). */
 struct pvrsgx_rt_numbers {
@@ -54,6 +66,20 @@ struct pvrsgx_render_job {
 	struct powervr_sgx_stream_render render;
 	struct powervr_sgx_stream_ta_kick kick[PVRSGX_MAX_TA_KICKS];
 	u32 nkicks;
+	/** @cmd_off: Where the last kick's TA command went in the context's ring. */
+	u32 cmd_off;
+};
+
+/* A transfer context's firmware half: HW transfer context, command ring, completion sync. */
+struct pvrsgx_transfer_ctx {
+	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *done;
+	u32 ccb_woff;
+};
+
+struct pvrsgx_transfer_job {
+	struct powervr_sgx_stream_transfer xfer;
+	bool dst_twiddled;
+	u32 cmd_off;
 };
 
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
@@ -67,8 +93,16 @@ int pvrsgx_ioctl_destroy_rt_dataset(struct drm_device *drm, void *data, struct d
 int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in);
 void pvrsgx_render_job_fini(struct pvrsgx_job *job);
+
+int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
+void pvrsgx_transfer_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
+int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
+			     const struct drm_powervr_sgx_job *in);
+void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6]);
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
 struct seq_file;
-void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev);
+void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev, bool before);
+struct seq_buf;
+void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job);
 
 #endif /* PVRSGX_RENDER_H */
