@@ -323,7 +323,8 @@ class Asm:
     def patch(self, reg, name):
         """a limm the srvinit loader fills with a device address at load time
         (the DDK's own mechanism for dynamic addresses). build.py records its
-        offset and `name` in the manifest; the instruction is `limm rN, #0`."""
+        offset and `name` in the manifest; the instruction is `limm rN, #0xdbeef`
+        (the 0xdbeef sentinel powervr_sgx's loader checks before patching)."""
         self.lines.append(("patch", (reg, name)))
 
     # --- building blocks -----------------------------------------------
