@@ -228,6 +228,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_PROCESS_QUEUES, data, &job->ccb_seq);
 	}
 	if (err) {
+		drm_err_ratelimited(&sdev->base, "job not sent to the microkernel (%d)\n", err);
 		pvrsgx_power_put(sdev, 1);
 		dma_fence_set_error(fence, err);
 		dma_fence_signal(fence);
