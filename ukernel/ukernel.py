@@ -91,11 +91,12 @@ SC_PB = 0x33
 SC_RTENTRY = 0x34
 # Cleanup serialisation (ta3d-state's DDK cleanup trace). A process-exit cleanup must
 # not complete (let the host free the PB/RT) until this process's render AND its DPM
-# page-release have finished. PAGE_RELEASE_PENDING is set when render_done runs (pixels
-# done, 0x40000) and cleared on the DPM 3D memory-free event (EVENT_STATUS bit 0);
-# k_cleanup defers while SC_INFLIGHT or this is set. CLEANUP_DEFER_CT bounds the defer
-# (N timer ticks then force-complete + log) so a lost event can never stick the box.
-PAGE_RELEASE_PENDING = 0x1b
+# page-release have finished. render_done now runs on the DPM 3D memory-free event
+# (EVENT_STATUS bit 0, the DDK order): it is the event that fires AFTER the scene's 3D
+# pages are freed, so when it clears SC_INFLIGHT the page release is already complete and
+# the host sees "done" (sync objects + IRQ) only then. k_cleanup therefore defers on
+# SC_INFLIGHT alone. CLEANUP_DEFER_CT bounds the defer (N timer ticks then force-complete
+# + log) so a lost event can never stick the box.
 CLEANUP_DEFER_CT = 0x1c
 CLEANUP_DEFER_MAX = 256      # ~256 ms at 1 kHz; a render completes in << 30 ms
 SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
@@ -524,17 +525,21 @@ def build(a):
     # a timer-only event falls through to `ba kick`, which returns at once on an empty
     # CCB — so each period runs one short task (0xb14 moves) and no more.
     # NOTE: 0x1 (DPM_3D_MEM_FREE) is deliberately NOT acked here -- it is acked by its
-    # own handler (dpm_free_done). If 0x1 arrives coincident with 0x40000, dispatch runs
-    # render_done (0x40000) and ends; leaving 0x1 un-acked lets it re-raise as its own
-    # event so dpm_free_done still runs (else the page-release flag would never clear and
-    # a deferred cleanup would stick, EA1 deadlock 2026-11-04).
+    # own handler (render_done), which now completes the render on this event (the DDK
+    # order: complete AFTER the scene's 3D pages are freed, so the host sees "done" only
+    # then). 0x40000/0x800000 (pixel back-end / ISP end) only mark the 3D as rendered;
+    # they run pixel_done, which routes a transfer to xfer_done and otherwise ends,
+    # leaving the render in flight until 0x1. If 0x1 arrives coincident with 0x40000,
+    # dispatch runs pixel_done (0x40000) and ends; leaving 0x1 un-acked lets it re-raise
+    # as its own event so render_done still runs (else the render would never complete
+    # and a deferred cleanup would stick, EA1 deadlock 2026-11-04).
     a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000 | EVENT_TIMER}")
     a.i("and r3, r2, r3")                          # ack only what the snapshot saw
     a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.dispatch(0x2000, "ta_finished")              # a TA finished
-    a.dispatch(0x40000, "render_done")             # pixel back-end end of render
-    a.dispatch(0x800000, "render_done")            # ISP end of tile (same handler)
-    a.dispatch(0x1, "dpm_free_done")               # DPM 3D memory free: pages returned
+    a.dispatch(0x40000, "pixel_done")              # pixel back-end: 3D rendered, await free
+    a.dispatch(0x800000, "pixel_done")             # ISP end of tile (same handler)
+    a.dispatch(0x1, "render_done")                 # DPM 3D memory free: complete the render
     # A timer-only event (bit 29 set, no TA/3D bit above) must NOT scan the kernel
     # CCB: at 1 kHz a CCB scan every tick races the doorbell task's dispatch /
     # read-offset advance (the two-task RO race — frames 2+ HWR; EA3 2026-11-03).
@@ -612,7 +617,6 @@ def build(a):
     a.label("init_set")
     a.i("limm r0, #0")
     a.i(f"st.a.d r17, #{SC_TAFLIGHT}, r0 [moe]")  # TA-in-flight flag must start clear
-    a.i(f"st.a.d r17, #{PAGE_RELEASE_PENDING}, r0 [moe]")  # no page release pending at init/HWR
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r0 [moe]")      # cleanup defer counter clear
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
     # at init/RESUME (pc 0x01f9). A periodic timer task keeps the EDM running
@@ -799,19 +803,18 @@ def build(a):
     # resource from the microkernel's lists only when safe; that list surgery
     # is the multi-render-bookkeeping item.
     a.label("k_cleanup")
-    # Defer the cleanup while this process's render is in flight (SC_INFLIGHT) OR its DPM
-    # page release is still pending (PAGE_RELEASE_PENDING): the host must not free the
-    # context's PB/RT until the 3D and its page-free have finished. Leave the command un-
-    # acked and the kernel CCB un-advanced (ba kick_end); the timer tick re-dispatches it
-    # (WO != RO), and once render_done + dpm_free_done clear both flags we complete. The
-    # DDK defers its ctx cleanup the same way (ta3d-state pc 0x039d). BOUND the defer so a
-    # lost event can never stick the box (EA1 deadlock 2026-11-04): after CLEANUP_DEFER_MAX
-    # ticks, force-complete and leave a loud marker.
+    # Defer the cleanup while this process's render is in flight (SC_INFLIGHT): the host
+    # must not free the context's PB/RT until the 3D and its page-free have finished.
+    # render_done now runs on the DPM 3D-memory-free event (0x1) and clears SC_INFLIGHT
+    # only there -- i.e. AFTER the pages are freed -- so SC_INFLIGHT alone covers both the
+    # render and its page release. Leave the command un-acked and the kernel CCB un-
+    # advanced (ba kick_end); the timer tick re-dispatches it (WO != RO), and once
+    # render_done clears SC_INFLIGHT we complete. The DDK defers its ctx cleanup the same
+    # way (ta3d-state pc 0x039d). BOUND the defer so a lost event can never stick the box
+    # (EA1 deadlock 2026-11-04): after CLEANUP_DEFER_MAX ticks, force-complete + log.
     a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")
-    a.i(f"ld.a.d r3, r17, #{PAGE_RELEASE_PENDING} [moe]")
     a.i("wdf")
-    a.i("or r2, r2, r3")                        # render in flight OR pages still releasing
-    a.i("test.and.eq p0, r2, r2")              # both clear -> complete now
+    a.i("test.and.eq p0, r2, r2")              # no render in flight -> complete now
     a.i("(p0) ba k_cleanup_complete")
     a.i(f"ld.a.d r3, r17, #{CLEANUP_DEFER_CT} [moe]")
     a.i("wdf")
@@ -1458,22 +1461,44 @@ def build(a):
     a.end()
 
     # ======================================================================
-    # render_done: update the destination sync objects and raise the host IRQ
+    # pixel_done: 0x40000 (pixel back-end) / 0x800000 (ISP end of tile)
     # ======================================================================
-    # The 3D-end handler walks the render's HW device sync list and sets each
-    # destination's write-ops-complete to pending+1 (docs/UKERNEL.md §5). The
-    # list walk is the next increment; the host-interrupt tail is here.
+    # The 3D has finished rendering, but the scene's DPM 3D pages are not freed yet.
+    # A render does NOT complete here: it waits for the DPM 3D-memory-free event (0x1,
+    # render_done, the DDK order) so the host sees "done" only after the free. Only a
+    # TRANSFER completes through this 3D-end event (its bookkeeping differs from a
+    # render's; route it to xfer_done). A render falls through to end, staying in
+    # flight (SC_INFLIGHT set) until 0x1.
+    a.label("pixel_done")
+    a.i(f"ld.a.d r1, r17, #{SC_XFER} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r1, r1")
+    a.i("(p0) ba xfer_done")
+    a.end()                                           # render pixels done; await 0x1
+
+    # ======================================================================
+    # render_done: complete the render on the DPM 3D-memory-free event (0x1)
+    # ======================================================================
+    # The DDK completes a render on EVENT_STATUS bit 0 (the scene's 3D pages freed),
+    # AFTER pixel-done -- so the host sees "done" (sync objects + IRQ) only once the
+    # free is complete, and the next process's do_ta free-list load cannot race a
+    # still-draining free (the EA1 consecutive-frame hang; scoreboard 2026-11-04). It
+    # walks the render's HW device sync list and sets each destination's write-ops-
+    # complete to pending+1 (docs/UKERNEL.md §5); the host-interrupt tail is below.
+    # 0x1 is not acked up-front (so a coincident 0x1 re-raises), so ack it here. A 0x1
+    # with no render in flight (SC_INFLIGHT == 0: a transfer's free, or a spurious
+    # event) has nothing to complete -- ack and end.
     a.label("render_done")
     if WAIT_LOG:
         a.i("limm r4, #4"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached render_done
     if DEBUG_SENTINEL:
         a.i("limm r6, #0x4D04"); a.st_sa(SA_SELF, 0x3A, 6)
-    # a transfer in flight completes through this same 3D-end event, but its
-    # bookkeeping differs from a render's; route it to xfer_done.
-    a.i(f"ld.a.d r1, r17, #{SC_XFER} [moe]")
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")        # ack EVENT_STATUS bit 0 (0x1)
+    a.i(f"ld.a.d r1, r17, #{SC_INFLIGHT} [moe]")      # a render in flight?
     a.i("wdf")
-    a.i("test.and.ne p0, r1, r1")
-    a.i("(p0) ba xfer_done")
+    a.i("test.and.eq p0, r1, r1")
+    a.i("(p0) ba render_done_noop")                   # no render: a transfer/spurious free
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
@@ -1551,9 +1576,9 @@ def build(a):
     a.i("st.a.d r2, #%d, r4 [moe]" % CTX_INFLIGHT1)      # ctx+0x2c = 0
     a.i("st.a.d r2, #%d, r4 [moe]" % CTX_INFLIGHT_FLAG)  # ctx+0x3c = 0
     a.i("st.a.d r0, #%d, r4 [moe]" % RD_ACTIVE)          # rd+0x12c = 0 (render inactive)
-    a.i(f"st.a.d r17, #{SC_INFLIGHT}, r4 [moe]")  # control block +0x50 = 0 (none in flight)
-    a.i("limm r4, #1")
-    a.i(f"st.a.d r17, #{PAGE_RELEASE_PENDING}, r4 [moe]")  # pages still releasing until DPM-3D-free (0x1)
+    a.i(f"st.a.d r17, #{SC_INFLIGHT}, r4 [moe]")  # control block +0x50 = 0 (none in flight);
+                                                  # this runs on 0x1 (after the page free), so
+                                                  # clearing it lets a deferred cleanup free safely
     a.i("limm r5, #%d" % RD_STATE)
     a.i("imae r5, r5, #1, r0 [t2=u32]")                  # &(rd+0x2a4)
     a.i("limm r4, #2")
@@ -1561,17 +1586,10 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.i("ba raise_host_irq")
-    # ======================================================================
-    # dpm_free_done: the DPM 3D memory-free event (EVENT_STATUS bit 0). The GPU has
-    # returned the scene's 3D pages. render_done already completed the render at pixel-
-    # done (0x40000); here we ack bit 0 (NOT acked up-front, so a coincident 0x1 re-
-    # raises as its own event rather than being lost) and clear PAGE_RELEASE_PENDING so a
-    # cleanup deferred since pixel-done can now free this process's PB/RT safely.
-    a.label("dpm_free_done")
-    a.i("limm r4, #1")
-    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")           # ack EVENT_STATUS bit 0
-    a.i("limm r4, #0")
-    a.i(f"st.a.d r17, #{PAGE_RELEASE_PENDING}, r4 [moe]")
+    # render_done_noop: a DPM 3D-memory-free event (0x1) arrived with no render in
+    # flight -- a transfer's own free, or a spurious/duplicate event. 0x1 is already
+    # acked at render_done's head; there is nothing to complete, so just end.
+    a.label("render_done_noop")
     a.i("idf")
     a.i("wdf")
     a.end()
