@@ -176,3 +176,27 @@ ask ta3d-state what the DDK's 0x1 handler does after the ack (does it poll a dra
 status?), then add that wait to render_done. Single run -- 3->5 could carry variance; a
 clean A/B (clean3 vs ro1, 3 runs each) is worth a later slot. Box released after, clean
 normal boot; m2 + uapi-stream queued.
+
+## HW RESULT: the RENDEZVOUS (7e2c15b, uk-rdv) = 4/10 -- completion timing is NOT the fix
+
+ta3d-state's actual DDK order is a rendezvous (not a drain wait): complete only when BOTH
+the 3D writeout (0x40000 + ISP-clock idle, WAIT_3D) and the DPM free (0x1, WAIT_FREE) are
+done. Implemented + offline-validated, HW on the same EA1 cold ramboot rig (data:
+docs/log/data/2026-11-04-ea1-rendezvous-4of10-ddk-10of10.log):
+- **ours (rendezvous): 4/10** (R..R..R..R, frames 1,4,7,10; HWR=14). **DDK on the same rig
+  the same session: 10/10, 0 HWR** -- the reference holds.
+- So the three completion-timing variants all sit at 3-5/10 (clean3 3, ro1 5, rendezvous
+  4) -- WITHIN run-to-run variance. **Completion timing is not the root cause.** The do_ta
+  BIF race survives whatever event we complete on. The real difference is elsewhere on the
+  kick / 3D-start path, not the completion.
+- Strong candidate (ta3d-state, low-confidence): the DDK runs a DPM STATE-LOAD routine
+  (writes 4 to 0x694/0x698 and waits for load-done) on the kick path AND at 3D start; ours
+  only CLEARS. That would leave the DPM in a state the next process's do_ta races.
+
+MEASUREMENT over hypothesis (main's call): built tools/ddk/regsample.c -- host-side us
+sampler of the named DPM/EVENT registers via /dev/mem (card0 BAR0 = 0xdc000000; 2173
+transitions in 2 s, ~3.5 us/poll, verified on HW). A/B harness runs it under ours AND the
+DDK on the same rig. First A/B run mis-detected the BAR0 (busybox 32-bit arithmetic
+overflows on 0xdc000000); fixed to read card0's resource directly, re-running now. The
+diff of ours vs DDK around each render-end and the next kick will show the DPM-state
+divergence directly, instead of more completion-timing guesses.
