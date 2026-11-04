@@ -841,6 +841,10 @@ optimize(nir_shader *s)
       NIR_PASS(progress, s, nir_opt_dce);
       NIR_PASS(progress, s, nir_opt_dead_cf);
       NIR_PASS(progress, s, nir_opt_cse);
+      /* components nothing reads (mat4 * v of which only .z is used); not a
+       * load's leading ones: their offset would be added in bytes, ours count
+       * components */
+      NIR_PASS(progress, s, nir_opt_shrink_vectors, false);
       NIR_PASS(progress, s, nir_opt_peephole_select,
                &(nir_opt_peephole_select_options){ .limit = 200, .indirect_load_ok = true,
                                                    .expensive_alu_ok = true, .discard_ok = true });
