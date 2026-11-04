@@ -3,8 +3,9 @@
 `mesa/src/sgx545/compiler` now emits every instruction through the encoder
 isaspec generates from `mesa/src/sgx545/isa/sgx545.xml`. That XML was written
 from `docs/ISA.md` alone. `usse_forms.h`, `usse.c` and `usse.h` are deleted,
-and so are the tools that generated and checked them (`tools/usc/gen_forms.py`,
-`check_enc.py`, `tests/enc_lines.c`).
+with `tools/usc/gen_forms.py`, which generated them. `check_enc.py` and
+`tests/enc_lines.c` stay with the spec side; enc_lines.c built against
+`usse.h`, so it no longer builds as it is.
 
 ## What changed
 
@@ -25,16 +26,16 @@ and so are the tools that generated and checked them (`tools/usc/gen_forms.py`,
 
 | check | result |
 |---|---|
-| Corpus: `tools/isa/corpus/c1-c3.glsl` and `tools/usc/tests/*/*.glsl`, via `run_corpus.py --layout`, plain and `--f16` | 2600 USP/code files byte-identical to um-re 74ad392; logs identical (1308/1338 compile, the same 30 fail before and after) |
-| The same corpus with `sgxc -F -L -D` (the gallium driver's front-face, uniform and constant modes), um-re's sgxc against this one | 2600 files byte-identical, logs identical |
+| The corpus as usse-compiler defines it: `tools/isa/corpus/c1-c3.glsl` and every `tools/usc/tests/*/*.glsl`, F32 and `--f16`, `--layout`; every file `run_corpus.py` writes (`.usp`, `.code`, `work/`) | 7886 files, `diff -rq` clean against bb8c44e's sgxc (all objects rebuilt for each side) |
+| The same corpus with `sgxc -F -L -D` (the gallium driver's front-face, uniform and constant modes) | 2600 USP/code files byte-identical, logs identical |
 | `dep`/`sys` with `-F`, which emits `xor`/`and` (gl_FrontFacing) | Byte-identical (12 bitwise words) |
 | Each instruction, with the old encoder still linked | ~24,000 encoded with both encoders: 0 differences (after the mask defaults) |
-| Slot capabilities: role, files, neg/abs, format select, for every (form, operand) the corpus reaches, plus smp's LOD slot | Old and new agree |
+| Slot capabilities (role, files, neg/abs, format select) for every (form, operand) the corpus reaches, plus smp's LOD slot | Old and new agree |
 | Coverage | Every form the compiler emits, including 180 `br`, 32 discard `nop`s, 2148 `ld`, 1213 `wdf`, and dependent `smp` templates in 208 USPs. `fadm`, `fmsa`, `fcos` and `pck.f32.f16` are in the form table but nothing emits them |
-| `sgx545_isa_test` | 246/246 |
+| `meson test sgx545_isa` (`-Dbuild-tests=true`) | OK (246/246) |
+| `mesa/build.sh x86_64` (zig, the gallium driver) | Builds and links `libgallium-26.2.5.so`, no sgx545 warnings |
 
 ## Next
 
-- usse-compiler: `blind.py` and its own tests on this commit.
-- The gallium driver links `idep_sgx545_compiler`, which now brings
-  `libsgx545_isa` with it; the target build (zig) still has to be run.
+- usse-compiler: `check_out.py` and `blind.py` on this commit, plus
+  `check_enc.py` (or retiring it with `enc_lines.c`, which needed `usse.h`).

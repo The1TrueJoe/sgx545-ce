@@ -18,6 +18,7 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 | `…/sgx_program.c` | the finished program: flat code with branch offsets, its blocks and samples, constant and iteration lists |
 | `sgx_usp.[ch]` | the USP writer (harness only): header, list A/C, code, label, branch and sample blocks, from a `struct sgx_shader` |
 | `sgxc.cpp`, `meson.build` | standalone compiler: GLSL ES 1.00 via Mesa's GLSL frontend, each stage linked on its own; `-u/-a/-s` pins are its `struct sgx_layout` |
+| `check_enc.py` | the C encoder against `hw.py` on every corpus word |
 | `check_out.py` | every emitted word: decodes, round-trips, and matches libusc's encoder (`oracle.py`) |
 | `run_corpus.py`, `layout.py` | compile a `tools/isa/corpus` file |
 | `count.py` | instruction counts against libusc |
@@ -53,6 +54,7 @@ them. `hw/calib.py` measures them on the EA3, and `layout.py` guesses them. A na
 ## Checking
 
 ```
+python3 -I tools/usc/check_enc.py                     # C encoder == hw.py on 4154 corpus words
 LIBUSC=.../libusc.so.1.7.862890 venv/bin/python -I tools/usc/check_out.py OUTDIR
 python3 -I tools/usc/hw/hwcmp.py OUTDIR               # EA3: DDK's USP vs ours, same GL program
 ```
