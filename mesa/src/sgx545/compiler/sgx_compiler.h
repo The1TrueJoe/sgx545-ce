@@ -74,6 +74,11 @@ struct sgx_compile_options {
     * to F16 and literal constants, where libusc converts once per draw in its
     * secondary program and keeps literals with the uniforms */
    bool driver_consts;
+   /* (with f16) every float of a fragment program is mediump, texture
+    * coordinates excepted: for programs without precision qualifiers whose
+    * results only need the framebuffer's precision (st's fixed-function
+    * fragment programs); off by default */
+   bool fs_mediump;
 };
 
 /* varying -> texture coordinate set (sgx_assign_varyings) */

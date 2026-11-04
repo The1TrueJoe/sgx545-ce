@@ -125,11 +125,12 @@ main(int argc, char **argv)
 
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false, driver_uniforms = false;
-   while ((c = getopt(argc, argv, "vpFLDu:a:s:o:")) != -1) {
+   while ((c = getopt(argc, argv, "vpFLDMu:a:s:o:")) != -1) {
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
       case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
+      case 'M': opts.fs_mediump = true; break;      /* fragment floats mediump (st's fixed function) */
       case 'p': lowp16 = true; opts.f16 = true; break;
       case 'v': opts.verbose = true; break;
       case 'u': named(&pins, SGX_LAYOUT_UNIFORM, optarg); break;
@@ -137,7 +138,7 @@ main(int argc, char **argv)
       case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
