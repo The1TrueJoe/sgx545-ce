@@ -3728,8 +3728,13 @@ touch(struct sgx_ctx *c, const struct sgx_ref *r, int at, unsigned span)
  * its last read, any PA register below the count the program has anyway
  * (fragment: iterations and colour; vertex: the attributes it reads), as
  * libusc does it. Fewer temporaries per instance, more instances resident. */
+struct loop_span {
+   int head, tail;
+};
+
 static void
-place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
+place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
+            const struct loop_span *loops, unsigned nloops)
 {
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    unsigned end = 2 * nins + 2, npa = 0;
@@ -3789,6 +3794,23 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
       for (unsigned p = 0; p < 128; p++)
          if (input[p])
             npa = p + 1;
+   /* in a loop, the next iteration reads (and writes) it again: busy over
+    * the whole loop */
+   for (bool changed = true; changed;) {
+      changed = false;
+      for (unsigned p = 0; p < 128; p++) {
+         for (unsigned l = 0; l < nloops; l++) {
+            if (last[p] >= loops[l].head && last[p] < loops[l].tail) {
+               last[p] = loops[l].tail;
+               changed = true;
+            }
+            if (first_w[p] > loops[l].head && first_w[p] <= loops[l].tail) {
+               first_w[p] = loops[l].head;
+               changed = true;
+            }
+         }
+      }
+   }
    if (!npa)
       return;
    BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, npa * BITSET_WORDS(end));
@@ -3848,7 +3870,7 @@ allocate(struct sgx_ctx *c)
 {
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    int ip = 0;
-   struct { int head, tail; } loops[64];
+   struct loop_span loops[64];
    unsigned nloops = 0;
    int label_ip[256];
    for (unsigned i = 0; i < 256; i++)
@@ -3950,7 +3972,7 @@ allocate(struct sgx_ctx *c)
    }
    free(used);
    free(halfref);
-   place_in_pa(c, six, ip);
+   place_in_pa(c, six, ip, loops, nloops);
    struct ra_graph *g = ra_alloc_interference_graph(regs, nv);
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
