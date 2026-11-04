@@ -28,7 +28,9 @@ There is nothing to configure: the device decides.
   same Mesa build runs on either: on pvrsrvkm openHC's images today, on powervr_sgx
   a RAM-booted kernel with the module loaded (`drm/ci/ea-ramboot`).
 
-`sgx545_frame_test -d <node>` runs the winsys without Mesa on either driver.
+`sgx545_frame_test -d <node>` runs the winsys without Mesa on either driver. On the EA1 under
+powervr_sgx (2026-11-04, kernel c95e32d) it draws the probe's clear and triangle at 720x480,
+pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 
 ## Building the backends
 
@@ -55,7 +57,8 @@ There is nothing to configure: the device decides.
 | render target | `CREATE_RT_DATASET` | RT data, render details, region headers, tail pointers written by the client |
 | a frame | one `SUBMIT_JOBS` render job: a `CMD_RENDER` stream and two `CMD_TA_KICK` streams (the scene, then the terminate words), written by the generated packers | the TA command in the CCB, `SGX_DOKICK` |
 | completion | each job signals the next point of one timeline syncobj per device; waits are syncobj waits | the target's sync object, polled |
-| shared buffers | dma-buf import and export; a shared buffer is named in each job's BO list, so the kernel orders the job against its other users (implicit sync) | not supported (`-ENOTSUP`); the fbdev framebuffer is wrapped user memory |
+| shared buffers | dma-buf import and export; a shared buffer is named in each job's BO list (the frame's target as written, sampled ones as read), so the kernel orders the job against its other users (implicit sync) and flushes the CPU cache of an imported one, which the SGX doesn't snoop | not supported (`-ENOTSUP`); the fbdev framebuffer is wrapped user memory |
+| scanout (kmsro) | the render target is ours, exported to the display device (simpledrm on the EA, card0; `mesa/patches/0006`) | the fbdev platform |
 | debugging aids | `SGX545_DRY_RUN` (a dry-run frame's point is signalled from the CPU) | also `SGX545_TRACE` (pvrtrace) and `SGX545_DEBUG=flushrt` |
 
 Kick numbers stay per context in both, so the driver's fences, the ring slots and
