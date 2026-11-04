@@ -3728,6 +3728,41 @@ touch(struct sgx_ctx *c, const struct sgx_ref *r, int at, unsigned span)
  * its last read, any PA register below the count the program has anyway
  * (fragment: iterations and colour; vertex: the attributes it reads), as
  * libusc does it. Fewer temporaries per instance, more instances resident. */
+/* A 32-bit vreg nothing reads or writes as a run (no repeat steps through
+ * it) becomes one vreg per component: each is allocated, or placed in PA,
+ * for its own live range (a vec4 built a component at a time). */
+static void
+split_vregs(struct sgx_ctx *c)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   bool *run = calloc(nv, sizeof(bool));
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link)
+      for (unsigned k = 0; k < i->nops; k++)
+         if (i->op[k].file == SGX_F_V && i->op[k].n < nv &&
+             (i->op[k].h16 || (i->op[k].step && i->rpt > 1)))
+            run[i->op[k].n] = true;
+   int *split = malloc(nv * 16 * sizeof(int));
+   for (unsigned v = 0; v < nv * 16; v++)
+      split[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || run[r->n])
+            continue;
+         struct sgx_vreg *x = sgx_vreg(c, r->n);
+         if (x->half || x->size < 2 || x->size > 16)
+            continue;
+         int *slot = &split[r->n * 16 + r->comp];
+         if (*slot < 0)
+            *slot = new_vreg(c, 1);
+         r->n = *slot;
+         r->comp = 0;
+      }
+   }
+   free(split);
+   free(run);
+}
+
 struct loop_span {
    int head, tail;
 };
@@ -3780,8 +3815,10 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
          for (unsigned j = lo; j < lo + n && j < 128; j++) {
             if (k < i->ndst) {
+               /* (a single instruction reads before it writes: the colour's
+                * own sources may sit in the colour register) */
                if (first_w[j] < 0)
-                  first_w[j] = 2 * i->ip;
+                  first_w[j] = 2 * i->ip + (i->rpt == 1);
             } else {
                last[j] = MAX2(last[j], (int)(2 * i->ip));
                if (c->stage == MESA_SHADER_VERTEX)
@@ -3868,6 +3905,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
 static bool
 allocate(struct sgx_ctx *c)
 {
+   split_vregs(c);
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    int ip = 0;
    struct loop_span loops[64];
