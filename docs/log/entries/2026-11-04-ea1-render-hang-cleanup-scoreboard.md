@@ -114,3 +114,37 @@ reliably (dpm_free_done runs on it: the cleanup completes), so render_done-on-0x
 now be reachable. Next: move render_done to the DPM-free event with the ack fix in place,
 keep the cleanup deferral (memory correctness) + the bound. The cleanup fix stays (DDK-
 correct behaviour) but is not itself the hang fix.
+
+## Update: render_done-on-0x1 implemented (1cccc1d), offline-validated, ready for HW
+
+Why this is NOT a guess this time -- the DDK is an existence proof: ta3d-state's trace has
+the DDK completing each render on EVENT_STATUS bit 0 (the DPM 3D-memory-free event, 0x1),
+AFTER pixel-done, and the DDK renders 10/10 on this exact EA1. So 0x1 DOES fire reliably
+once per render on this HW and completion-on-0x1 works; our earlier 2/10 was our own 0x1
+being lost in the up-front ack (now fixed: 0x1 is not acked up-front, it re-raises), not
+0x1 failing to fire.
+
+The change (1cccc1d):
+- 0x40000 / 0x800000 now run `pixel_done`: route a transfer to xfer_done, else END with
+  the render still in flight (SC_INFLIGHT set). No completion here.
+- 0x1 runs `render_done`: ack bit 0, then (guarded by SC_INFLIGHT != 0, so a transfer's or
+  a spurious free is a no-op) do the full completion -- sync0/sync1/counter/write-ops, the
+  render/RT/context teardown, SC_INFLIGHT = 0, host IRQ. The host sees "done" only after
+  the free, so the sequential next frame-dump process cannot start its do_ta into a still-
+  draining DPM free.
+- PAGE_RELEASE_PENDING + dpm_free_done deleted. k_cleanup now defers on SC_INFLIGHT alone
+  (render_done clears it on 0x1, i.e. after the free), still bounded (CLEANUP_DEFER_MAX).
+
+Offline (DDK firmware oracle, run_ours --ddk + test_commands):
+- [done] completion-write counts match the DDK exactly (v2x 12/12, v2s 20/20, v2f/v3f
+  15/15). Removing the PAGE_RELEASE store fixed the one EXTRA the baseline had
+  (0x3200306c = ta3d+0x6c); remaining diffs are the known frame-from-scratch oracle gap
+  (rd+0x2a4 frame counter, render-2-resolves-to-render-1 addresses), unchanged by this.
+- cleanup now defers-while-in-flight + completes on all four traces (SC_INFLIGHT gate), no
+  deadlock. test_commands cleanup-defer + cleanup-bound pass.
+
+HW-pending: flash on the EA1 when m2's PRIME slot frees. Expected: the consecutive-frame
+rate rises toward 10/10. If render_done is still not reached (rate stays ~2-3/10), enable
+WAIT_LOG (render_done stamps stage id 4) to see whether 0x1 dispatches -- but the DDK
+existence proof makes a lost-0x1 unlikely now. Awaiting ta3d-state's confirmation of the
+exact DDK completion order on 0x1 before spending the slot.
