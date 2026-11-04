@@ -217,9 +217,7 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
     * (an imported dma-buf among them: EGLImage, glamor's screen pixmap) are
     * sampled in place through the strided layout */
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx545_tex_format(format) &&
-       !(usage & PIPE_BIND_RENDER_TARGET) && format != PIPE_FORMAT_B8G8R8A8_UNORM &&
-       format != PIPE_FORMAT_B8G8R8X8_UNORM && format != PIPE_FORMAT_R8G8B8A8_UNORM &&
-       format != PIPE_FORMAT_R8G8B8X8_UNORM)
+       !(usage & PIPE_BIND_RENDER_TARGET))
       return false;
    switch (target) {
    case PIPE_BUFFER:
