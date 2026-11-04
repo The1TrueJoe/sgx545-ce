@@ -880,6 +880,10 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
 
    if (indirect || !ctx->vs || !ctx->fs)
       return;
+   /* the fragment shader as these textures need it (sRGB decoded) */
+   struct sgx545_shader *fs = sgx545_fs_for(ctx, ctx->fs);
+   if (!fs)
+      return;
    /* cube maps sampled without mipmapping, from their level-0 copy: brought
     * up to date before anything of this draw is recorded (it may wait) */
    for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
@@ -952,12 +956,12 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
 
       /* the fragment shader's sets (gl_PointCoord: the vertex shader's
        * varyings move up to leave set 0 free) */
-      if (ctx->fs->kind == SGX545_SHADER_COMPILED) {
-         if (ctx->fs->reads_pointcoord && !ctx->vs->prog.point_size)
+      if (fs->kind == SGX545_SHADER_COMPILED) {
+         if (fs->reads_pointcoord && !ctx->vs->prog.point_size)
             return;
-         if (!(vs = sgx545_vs_for(ctx, ctx->vs, ctx->fs)))
+         if (!(vs = sgx545_vs_for(ctx, ctx->vs, fs)))
             return;
-         st.sprite = ctx->fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
+         st.sprite = fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       }
       d.vs = &vs->prog;
       if (vs->mem_dwords)
@@ -972,20 +976,20 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    /* SGX545_DEBUG=fsconst (measuring): every fragment shader a constant colour */
    bool exp_fs_const = sgx545_debug & SGX545_DEBUG_FS_CONST;
 
-   if (ctx->fs->kind == SGX545_SHADER_COMPILED && !exp_fs_const) {
-      fsp = ctx->fs->prog;
+   if (fs->kind == SGX545_SHADER_COMPILED && !exp_fs_const) {
+      fsp = fs->prog;
       if (blend) {
-         fsp.code = sgx545_fs_program(ctx, ctx->fs, blend);
+         fsp.code = sgx545_fs_program(ctx, fs, blend);
          if (!fsp.code)
             return;
       }
       /* pass type: a blend 1; discard 4, or 2 with a blend (ISA.md) */
-      st.pass_type = ctx->fs->discard_pa >= 0 ? (blend && blend->blend ? 2 : 4) : blend && blend->blend ? 1 : 0;
+      st.pass_type = fs->discard_pa >= 0 ? (blend && blend->blend ? 2 : 4) : blend && blend->blend ? 1 : 0;
       d.fs = &fsp;
-      if (ctx->fs->mem_dwords)
-         mem_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9, &d.fs_mem);
+      if (fs->mem_dwords)
+         mem_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, &d.fs_mem);
       else
-         fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9, NULL);
+         fill_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, NULL);
       /* a constant-colour blend reads the blend colour, packed BGRA8, in sa2 */
       if (blend && blend->blend && blend->constant) {
          const float *c = ctx->blend_color.color;
@@ -995,7 +999,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
          fsp.temps = MAX2(fsp.temps, 2);
       }
-      if (ctx->fs->uses_front_face) {
+      if (fs->uses_front_face) {
          fsk[SGX545_SA_FRONT] = !(ctx->rasterizer && ctx->rasterizer->base.front_ccw);
          fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
       }
@@ -1003,27 +1007,27 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
        * DDK writes them (EA3): sa3 = 0xe000 | ISPA's depth compare (7 with the
        * test off) | 8 without depth writes (always 0xe00f, LESS 0xe001,
        * LEQUAL no write 0xe00b); sa4 = 0xee00 [G] */
-      if (ctx->fs->discard_pa >= 0) {
+      if (fs->discard_pa >= 0) {
          fsk[3] = 0xe000 | (st.depth_func ? (st.depth_func - 0x200) & 7 : 7) | (st.depth_write ? 0 : 8);
          fsk[4] = 0xee00;
       }
       /* a dependent sample's texture state: the DOUTT words, in SA */
-      for (unsigned j = 0; j < ctx->fs->n_deps; j++) {
-         unsigned unit = ctx->fs->dep_sampler[j];
+      for (unsigned j = 0; j < fs->n_deps; j++) {
+         unsigned unit = fs->dep_sampler[j];
          struct pipe_sampler_view *view = unit < PIPE_MAX_SAMPLERS ? ctx->views[unit] : NULL;
 
          if (!view || !sgx545_resource_sampleable(sgx545_resource(view->texture))) {
             SGX545_DBG(DRAW, "sampler %u: no texture the GPU can sample, draw skipped\n", unit);
             return;
          }
-         sgx545_tex_words(view, ctx->samplers[unit], &fsk[ctx->fs->dep_sa[j]]);
+         sgx545_tex_words(view, ctx->samplers[unit], &fsk[fs->dep_sa[j]]);
          sgx545_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
          sampled |= 1u << unit;
          SGX545_DBG(DRAW, "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
                     j, unit, util_format_short_name(view->format), view->texture->width0,
                     view->texture->height0, view->texture->target, view->texture->last_level + 1,
-                    ctx->fs->dep_sa[j], fsk[ctx->fs->dep_sa[j]], fsk[ctx->fs->dep_sa[j] + 1],
-                    fsk[ctx->fs->dep_sa[j] + 2], fsk[ctx->fs->dep_sa[j] + 3]);
+                    fs->dep_sa[j], fsk[fs->dep_sa[j]], fsk[fs->dep_sa[j] + 1],
+                    fsk[fs->dep_sa[j] + 2], fsk[fs->dep_sa[j] + 3]);
       }
       d.fs_consts = fsk;
       if (sgx545_debug & SGX545_DEBUG_DRAW) {
@@ -1052,12 +1056,12 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          fprintf(stderr, "sgx545: blending and colour masks need a compiled fragment shader\n");
          ctx->warned_blend = true;
       }
-      switch (exp_fs_const ? SGX545_SHADER_FS_CONSTANT : ctx->fs->kind) {
+      switch (exp_fs_const ? SGX545_SHADER_FS_CONSTANT : fs->kind) {
       case SGX545_SHADER_FS_CONSTANT:
          if (exp_fs_const) {
             /* a colour per fragment program, so each shader's objects show
              * as flat silhouettes */
-            uint32_t h = (uint32_t)(uintptr_t)ctx->fs * 2654435761u;
+            uint32_t h = (uint32_t)(uintptr_t)fs * 2654435761u;
 
             color[0] = ((h >> 8) & 0xff) / 255.0f;
             color[1] = ((h >> 16) & 0xff) / 255.0f;
@@ -1065,14 +1069,14 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
             color[3] = 1.0f;
             break;
          }
-         memcpy(color, ctx->fs->color, sizeof(color));
+         memcpy(color, fs->color, sizeof(color));
          break;
       case SGX545_SHADER_FS_UNIFORM: {
          const uint8_t *cb = (const uint8_t *)constant_data(ctx, MESA_SHADER_FRAGMENT);
 
          if (!cb)
             return;
-         memcpy(color, cb + ctx->fs->ubo_offset, sizeof(color));
+         memcpy(color, cb + fs->ubo_offset, sizeof(color));
          break;
       }
       default:
@@ -1127,13 +1131,17 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       }
       vertex_dwords += f[e].dwords;
    }
-   /* SGX545_DEBUG=attrs: the vertex elements of the first 16 draws with 5 or more inputs */
+   /* SGX545_DEBUG=attrs: the vertex elements of the first 16 draws of 200 or more
+    * vertices with 4 or more inputs (a terrain chunk's) */
    {
       static int left = -1;
 
       if (left < 0)
          left = (sgx545_debug & SGX545_DEBUG_ATTRS) ? 16 : 0;
-      if (left > 0 && compiled && n_fetch >= 5) {
+      /* (TEMP: SGX545_ATTRS_BUFFERS=1, only draws from buffers: display lists) */
+      bool want = left > 0 && compiled && n_fetch >= 4 && draws[0].count >= 200 &&
+                  !(getenv("SGX545_ATTRS_BUFFERS") && ctx->vertex_buffers[0].is_user_buffer);
+      if (want) {
          left--;
          fprintf(stderr, "sgx545 attrs: %s x%u start %u index_size %u; depth func %#x write %d, cull %#x front_ccw %d, "
                  "pass %u, blend %d wmask %#x, fs douti %u\n", u_prim_name(info->mode), draws[0].count, draws[0].start,
@@ -1170,7 +1178,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          }
       }
    }
-   if (compiled && ctx->fs->kind == SGX545_SHADER_COMPILED && !varyings_match(d.vs, d.fs)) {
+   if (compiled && fs->kind == SGX545_SHADER_COMPILED && !varyings_match(d.vs, d.fs)) {
       if (!ctx->warned_varyings)
          fprintf(stderr, "sgx545: the fragment shader iterates a varying the vertex shader doesn't "
                  "write (VS sets %#x, FS DOUTI %#x...): draw skipped\n", d.vs->tsp_sizes,

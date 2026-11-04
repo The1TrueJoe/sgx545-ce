@@ -23,6 +23,7 @@
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
 #include "nir/tgsi_to_nir.h"
+#include "util/format/u_format.h"
 #include "util/os_time.h"
 #include "util/u_memory.h"
 
@@ -514,10 +515,11 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
    return next;
 }
 
-/* fs_vary: a vertex shader compiled to a fragment shader's sets */
+/* fs_vary: a vertex shader compiled to a fragment shader's sets; srgb: the
+ * samplers whose texels a fragment shader decodes from sRGB */
 static bool
 compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader *orig,
-               const struct sgx_varyings *fs_vary)
+               const struct sgx_varyings *fs_vary, unsigned srgb)
 {
    struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -536,7 +538,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    {
       /* a 1D texture is a 2D one a texel high (sgx545_resource): its samples
        * become 2D ones on that row */
-      const nir_lower_tex_options tex = { .lower_1d = true };
+      const nir_lower_tex_options tex = { .lower_1d = true, .lower_srgb = srgb };
 
       NIR_PASS(_, nir, nir_lower_tex, &tex);
    }
@@ -822,7 +824,7 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -883,6 +885,13 @@ sgx545_delete_shader_state(struct pipe_context *pctx, void *hwcso)
          FREE(so->variants_vs[i]);
       }
    }
+   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_srgb); i++) {
+      if (so->variants_srgb[i]) {
+         free(so->variants_srgb[i]->code);
+         FREE(so->variants_srgb[i]->vary);
+         FREE(so->variants_srgb[i]);
+      }
+   }
    FREE(so);
 }
 
@@ -910,7 +919,44 @@ sgx545_vs_for(struct sgx545_context *ctx, struct sgx545_shader *vs, const struct
    if (!(*slot = CALLOC_STRUCT(sgx545_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
-   if (!compile_shader(ctx, *slot, vs->nir, fs->vary) || !(*slot)->prog.code) {
+   if (!compile_shader(ctx, *slot, vs->nir, fs->vary, 0) || !(*slot)->prog.code) {
+      FREE((*slot)->vary);
+      FREE(*slot);
+      *slot = NULL;
+   }
+   return *slot;
+}
+
+struct sgx545_shader *
+sgx545_fs_for(struct sgx545_context *ctx, struct sgx545_shader *fs)
+{
+   struct sgx545_shader **slot;
+   unsigned srgb = 0, unit;
+
+   if (fs->kind != SGX545_SHADER_COMPILED || !fs->nir)
+      return fs;
+   BITSET_FOREACH_SET(unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS) {
+      if (ctx->views[unit] && util_format_is_srgb(ctx->views[unit]->format))
+         srgb |= 1u << unit;
+   }
+   if (!srgb)
+      return fs;
+   for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
+      if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb)
+         return fs->variants_srgb[i];
+   }
+   /* the oldest goes */
+   slot = &fs->variants_srgb[fs->next_variant_srgb++ % ARRAY_SIZE(fs->variants_srgb)];
+   if (*slot) {
+      free((*slot)->code);
+      FREE((*slot)->vary);
+      FREE(*slot);
+   }
+   if (!(*slot = CALLOC_STRUCT(sgx545_shader)))
+      return NULL;
+   (*slot)->discard_pa = -1;
+   (*slot)->srgb = srgb;
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb) || !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);
       *slot = NULL;
