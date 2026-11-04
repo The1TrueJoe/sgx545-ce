@@ -1690,6 +1690,22 @@ def build(a):
     a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # write-ops-complete value
     a.i("wdf")
     a.i("st.a.d r7, #0, r8 [moe]")
+    # asDstSyncs[0] (SGXMKIF_TRANSFERCMD_SHARED word 0x134): set its write-ops-complete to
+    # write-ops-pending + 1, the done signal powervr_sgx (and the DDK) actually poll for a
+    # transfer -- the status word above (0x168/0x16c) is NOT it (UKERNEL.md §10). Layout:
+    # 0x134 read-ops pending, 0x138 read-complete addr, 0x13c write-ops pending, 0x140
+    # write-ops-complete addr. render_complete does the same for a render's deps sync.
+    # m2 2026-11-04: the blit rendered right but the done word never changed without this.
+    a.i("ld.a.d r9, r6, #%d [moe]" % (0x13c // 4))       # asDstSyncs[0] write-ops pending
+    a.i("ld.a.d r10, r6, #%d [moe]" % (0x140 // 4))      # write-ops-complete address
+    a.i("wdf")
+    a.i("test.and.eq p0, r10, r10")                      # no complete addr -> skip
+    a.i("(p0) ba xfer_dstsync_done")
+    a.i("imae r9, r9, #1, #1 [t2=u32]")                  # pending + 1
+    a.i("st.a.d r10, #0, r9 [moe]")                      # *write-ops-complete = pending + 1
+    a.i("idf")
+    a.i("wdf")
+    a.label("xfer_dstsync_done")
     a.i("limm r4, #%d" % TRANSFERCMD_BYTES)
     a.i("imae r3, r4, #1, r3 [t2=u32]")                  # read offset += command size
     a.i("st.a.d r2, #1, r3 [moe]")                       # advance the CCB read offset
