@@ -3851,6 +3851,110 @@ struct loop_span {
    int head, tail;
 };
 
+/* Vertex shader: temporaries in output registers before the program's
+ * first write of them (a mat4 * v accumulator in the o0-o3 it ends in, in
+ * place at the last step, as coalesce_repeats). Outputs are read back like
+ * any source; only their final value leaves the shader. */
+static void
+place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
+           const struct loop_span *loops, unsigned nloops, const unsigned *minb)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   unsigned end = 2 * nins + 2, no = 0;
+   int from[128];
+   for (unsigned p = 0; p < 128; p++)
+      from[p] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_O)
+            continue;
+         unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         int at = 2 * i->ip + (k < i->ndst && i->rpt == 1);
+         for (unsigned j = r->n; j < r->n + n && j < 128; j++) {
+            if (from[j] < 0 || at < from[j])
+               from[j] = at;
+            no = MAX2(no, j + 1);
+         }
+      }
+   }
+   for (unsigned p = 0; p < no; p++)
+      for (unsigned l = 0; l < nloops; l++)
+         if (from[p] > loops[l].head && from[p] <= loops[l].tail)
+            from[p] = loops[l].head;
+   /* the in-place step: an explicit output write reading, aligned, a vreg
+    * that dies there */
+   int *inplace = malloc(nv * sizeof(int));
+   for (unsigned v = 0; v < nv; v++)
+      inplace[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      const struct sgx_ref *d = &i->op[0];
+      if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred || d->file != SGX_F_O || !d->step ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      for (unsigned k = 1; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || r->h16 || (i->rpt > 1 && !r->step) || r->comp > d->n ||
+             sgx_vreg(c, r->n)->last != (int)(2 * i->ip))
+            continue;
+         bool good = true;
+         for (unsigned j = 1; j < i->nops && good; j++)
+            if (j != k && i->op[j].file == SGX_F_V && i->op[j].n == r->n)
+               good = i->op[j].comp == r->comp && i->op[j].step == r->step && !i->op[j].h16;
+         if (good)
+            inplace[r->n] = d->n - r->comp;
+         break;
+      }
+   }
+   bool *ok = calloc(nv, sizeof(bool));
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      ok[v] = r->first >= 0 && !r->pa && !r->half && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
+              (int)v != c->face_f32;
+   }
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv)
+            continue;
+         struct sgx_ref x = *r;
+         x.file = SGX_F_O;
+         if (i->kind != SGX_INS_ALU || r->h16 || !slot_ok(i->form, k, &x))
+            ok[r->n] = false;
+      }
+   }
+   /* what the placed vregs hold, per register */
+   BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, MAX2(no, 1) * BITSET_WORDS(end));
+#define OBUSY(p) (busy + (p) * BITSET_WORDS(end))
+   for (unsigned p = 0; p < no; p++)
+      if (from[p] >= 0)
+         BITSET_SET_RANGE(OBUSY(p), from[p], end - 1);
+      else
+         BITSET_SET_RANGE(OBUSY(p), 0, end - 1);   /* not an output the program writes */
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      if (!ok[v])
+         continue;
+      unsigned lo = r->first, hi = r->last, lim = BITSET_TEST(six, v) ? 64 : 128;
+      for (unsigned b = minb[v]; b + r->size <= MIN2(no, lim); b++) {
+         bool free = true;
+         for (unsigned p = b; p < b + r->size && free; p++)
+            for (unsigned x = lo; x <= hi && x < end && free; x++)
+               free = !BITSET_TEST(OBUSY(p), x) || ((int)b == inplace[v] && x == hi);
+         if (!free)
+            continue;
+         for (unsigned p = b; p < b + r->size; p++)
+            BITSET_SET_RANGE(OBUSY(p), lo, MIN2(hi, end - 1));
+         r->o = true;
+         r->phys = b;
+         break;
+      }
+   }
+#undef OBUSY
+   free(ok);
+   free(inplace);
+}
+
 static void
 place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             const struct loop_span *loops, unsigned nloops, const unsigned *minb)
@@ -4196,6 +4300,8 @@ allocate(struct sgx_ctx *c)
       if (i->kind == SGX_INS_ALU && i->form == SGX_OP_FDP && i->op[0].file == SGX_F_V && i->op[0].n < nv)
          minb[i->op[0].n] = MAX2(minb[i->op[0].n], i->rpt - 1u);
    place_in_pa(c, six, ip, loops, nloops, minb);
+   if (c->stage == MESA_SHADER_VERTEX)
+      place_in_o(c, six, ip, loops, nloops, minb);
    struct ra_graph *g = ra_alloc_interference_graph(regs, nv);
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
@@ -4207,11 +4313,11 @@ allocate(struct sgx_ctx *c)
    }
    for (unsigned a = 0; a < nv; a++) {
       struct sgx_vreg *x = sgx_vreg(c, a);
-      if (x->first < 0 || x->pa)
+      if (x->first < 0 || x->pa || x->o)
          continue;
       for (unsigned b = a + 1; b < nv; b++) {
          struct sgx_vreg *y = sgx_vreg(c, b);
-         if (y->first >= 0 && !y->pa && x->first <= y->last && y->first <= x->last)
+         if (y->first >= 0 && !y->pa && !y->o && x->first <= y->last && y->first <= x->last)
             ra_add_node_interference(g, a, b);
       }
    }
@@ -4223,7 +4329,7 @@ allocate(struct sgx_ctx *c)
    c->n_temps = 0;
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
-      if (r->first < 0 || r->pa)
+      if (r->first < 0 || r->pa || r->o)
          continue;
       r->phys = ra_get_node_reg(g, v);
       c->n_temps = MAX2(c->n_temps, r->phys + (r->half ? (r->size + 1) / 2 : r->size));
@@ -4622,7 +4728,7 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
       o.fmt = SGX_ISA_FMT_C10;
    switch (r->file) {
    case SGX_F_V:
-      o.file = sgx_vreg(c, r->n)->pa ? SGX_ISA_FILE_PA : SGX_ISA_FILE_R;
+      o.file = sgx_vreg(c, r->n)->pa ? SGX_ISA_FILE_PA : sgx_vreg(c, r->n)->o ? SGX_ISA_FILE_O : SGX_ISA_FILE_R;
       o.num = sgx_vreg(c, r->n)->phys + r->comp;
       break;
    case SGX_F_R: o.file = SGX_ISA_FILE_R; o.num = r->n; break;

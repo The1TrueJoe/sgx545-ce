@@ -579,7 +579,6 @@ static nir_def *
 src16(nir_builder *b, nir_alu_instr *alu, unsigned j)
 {
    unsigned nc = nir_ssa_alu_instr_src_components(alu, j);
-   nir_def *d = alu->src[j].src.ssa;
    unsigned swz[NIR_MAX_VEC_COMPONENTS];
    for (unsigned k = 0; k < nc; k++)
       swz[k] = alu->src[j].swizzle[k];
