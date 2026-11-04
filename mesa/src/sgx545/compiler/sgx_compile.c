@@ -1003,6 +1003,27 @@ whole_pair(struct sgx_ctx *c, struct sgx_ref x, struct sgx_ref y)
    return pair_reg_plain(c, x, y);
 }
 
+/* the half (0, 1) a plain F16 register operand names, -1 for anything else */
+static int
+half_of(const struct sgx_ref *x)
+{
+   if (!x->h16 || x->neg || x->abs || x->lane ||
+       (x->file != SGX_F_V && x->file != SGX_F_PA && x->file != SGX_F_R))
+      return -1;
+   return (x->file == SGX_F_V ? x->comp : x->n) & 1;
+}
+
+/* the whole register holding that half */
+static struct sgx_ref
+whole_reg(struct sgx_ref x)
+{
+   if (x.file == SGX_F_V)
+      x.comp &= ~1u;
+   else
+      x.n &= ~1u;
+   return x;
+}
+
 /* An F16 select on one 32-bit condition for every channel (gl4es' gl_Color =
  * gl_FrontFacing ? gl_FrontColor : gl_BackColor): movc.nz.i32 on whole
  * register pairs, exact and without widening. false: not that shape. */
@@ -1021,20 +1042,30 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
             return false;
    }
    unsigned t = new_vreg16(c, ALIGN_POT(nc, 2));
+   struct sgx_ref r[4];
    for (unsigned p = 0; 2 * p < nc; p++) {
       unsigned l1 = 2 * p + 1 < nc ? 2 * p + 1 : 2 * p;
       struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_MOVC_I32);
       i->nops = 4;
       i->op[0] = href(t, 2 * p);
       i->op[1] = cond;
-      i->op[2] = whole_pair(c, s[1][2 * p], s[1][l1]);
-      i->op[3] = whole_pair(c, s[2][2 * p], s[2][l1]);
+      int h1 = half_of(&s[1][l1]), h2 = half_of(&s[2][l1]);
+      if (l1 == 2 * p && h1 >= 0 && h1 == h2) {
+         /* one lane, in the same half of both: their registers as they are,
+          * the result in that half */
+         i->op[2] = whole_reg(s[1][l1]);
+         i->op[3] = whole_reg(s[2][l1]);
+         r[l1] = href(t, 2 * p + h1);
+      } else {
+         i->op[2] = whole_pair(c, s[1][2 * p], s[1][l1]);
+         i->op[3] = whole_pair(c, s[2][2 * p], s[2][l1]);
+         r[2 * p] = href(t, 2 * p);
+         r[l1] = href(t, l1);
+      }
       fld(i, SGX_FLD_COND, 1);
       add(c, i);
    }
-   c->vals[alu->def.index].kind = VAL_V;
-   c->vals[alu->def.index].n = t;
-   c->vals[alu->def.index].comp = 0;
+   set_refs(c, &alu->def, r, nc);
    return true;
 }
 
