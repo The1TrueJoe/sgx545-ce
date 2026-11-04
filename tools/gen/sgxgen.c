@@ -138,6 +138,31 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 	if (d->verbose)
 		fprintf(stderr, "sgxgen: heap %2u %#010x +%#x\n", heap, bo->va, size);
 }
+
+/* An object the caller holds (an imported dma-buf) mapped at the next free address of the heap. */
+static void bo_map_handle(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t handle, uint32_t size,
+			  uint32_t *map)
+{
+	struct drm_powervr_sgx_ioctl_vm_map_args vm = {};
+	uint32_t addr = (d->heap_next[heap] ? d->heap_next[heap] : d->heap_base[heap] + 0x1000);
+	int e;
+
+	size = (size + 0xfff) & ~0xfffu;
+	vm.vm_context_handle = d->vm;
+	vm.device_addr = addr;
+	vm.handle = handle;
+	vm.size = size;
+	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &vm)))
+		die("VM_MAP of handle %u at %#x +%#x failed: %d", handle, addr, size, e);
+	d->heap_next[heap] = addr + size;
+	memset(bo, 0, sizeof(*bo));
+	bo->handle = handle;
+	bo->va = addr;
+	bo->size = size;
+	bo->map = map;
+	if (d->verbose)
+		fprintf(stderr, "sgxgen: heap %2u %#010x +%#x (handle %u)\n", heap, bo->va, size, handle);
+}
 #else
 static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t attribs, uint32_t size,
 		     uint32_t align)
@@ -731,6 +756,39 @@ static void background(struct sgx_ctx *c, struct sgx_surface *s)
 #endif
 }
 
+#ifdef SGXGEN_DRM
+/* The RT dataset and the per-surface programs for a surface whose colour buffer is set. */
+static struct sgx_surface *surface_finish(struct sgx_ctx *c, struct sgx_surface *s)
+{
+	struct sgx_dev *d = c->dev;
+	struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
+		.context_handle = c->ctx, .width = s->w, .height = s->h, .samples = 1,
+	};
+	int e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
+
+	if (e)
+		die("CREATE_RT_DATASET %ux%u failed: %d", s->w, s->h, e);
+	s->rtds = a.handle;
+	s->eot = eot_program(c, s);
+	s->pixev = pixel_event(c, s->eot, &s->pixev_rows);
+	background(c, s);
+	return s;
+}
+
+struct sgx_surface *sgx_surface_import(struct sgx_ctx *c, uint32_t w, uint32_t h, uint32_t stride,
+				       uint32_t handle, uint32_t size, uint32_t *map)
+{
+	struct sgx_surface *s = calloc(1, sizeof *s);
+
+	s->w = w;
+	s->h = h;
+	s->stride = stride;
+	rt_numbers(&s->rt, w, h);
+	bo_map_handle(c->dev, &s->color, H_GENERAL, handle, size, map);
+	return surface_finish(c, s);
+}
+#endif
+
 struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h, uint32_t flags)
 {
 	struct sgx_dev *d = c->dev;
@@ -745,22 +803,9 @@ struct sgx_surface *sgx_surface_create(struct sgx_ctx *c, uint32_t w, uint32_t h
 	rt_numbers(r, w, h);
 	bo_alloc(d, &s->color, H_GENERAL, 0x10000003, s->stride * h * 4, 0x1000);
 #ifdef SGXGEN_DRM
-	{
-		struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
-			.context_handle = c->ctx, .width = w, .height = h, .samples = 1,
-		};
-		int e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
-
-		if (e)
-			die("CREATE_RT_DATASET %ux%u failed: %d", w, h, e);
-		s->rtds = a.handle;
-		(void)rd;
-		(void)rt;
-	}
-	s->eot = eot_program(c, s);
-	s->pixev = pixel_event(c, s->eot, &s->pixev_rows);
-	background(c, s);
-	return s;
+	(void)rd;
+	(void)rt;
+	return surface_finish(c, s);
 #else
 
 	/* SGXAddRenderTarget: RT data (2 entries), tail pointers, region headers (double

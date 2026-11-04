@@ -8,3 +8,8 @@ CONFIG_DRM=y
 CONFIG_DRM_POWERVR_SGX=m
 CONFIG_DEBUG_FS=y
 CONFIG_FW_LOADER=y
+# simpledrm in place of simplefb on the CEFDK framebuffer: a KMS device for
+# PRIME (powervr_sgx_prime). It only writes the framebuffer, never the VDC.
+# CONFIG_FB_SIMPLE is not set
+CONFIG_DRM_SIMPLEDRM=y
+CONFIG_DRM_FBDEV_EMULATION=y
