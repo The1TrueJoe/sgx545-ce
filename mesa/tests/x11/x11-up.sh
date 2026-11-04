@@ -14,10 +14,19 @@ R=$1; shift
 env_mesa="LD_LIBRARY_PATH=/opt/sgx545/lib GBM_BACKENDS_PATH=/opt/sgx545/lib/gbm \
 __EGL_VENDOR_LIBRARY_DIRS=/opt/sgx545/share/glvnd/egl_vendor.d __GLX_VENDOR_LIBRARY_NAME=mesa \
 LIBGL_DRIVERS_PATH=/opt/sgx545/lib/dri"
+# The root's dev, proc, sys and tmp are the box's own, bound in: while they are
+# mounted, removing the root removes the box's /dev and /tmp. stop (and a start
+# that fails) unmounts them.
 mounts() {
 	for d in dev proc sys tmp; do
 		mountpoint -q "$R/$d" || { mkdir -p "$R/$d"; mount --bind "/$d" "$R/$d"; }
 	done
+}
+unmounts() {
+	for d in tmp sys proc dev; do
+		mountpoint -q "$R/$d" && umount "$R/$d"
+	done
+	! grep -q " $R/" /proc/mounts
 }
 case $1 in
 start)
@@ -27,12 +36,17 @@ start)
 	chroot "$R" /usr/bin/env $env_mesa /usr/lib/xorg/Xorg :0 -nolisten tcp -noreset \
 		-config /etc/X11/xorg.conf -logfile /var/log/Xorg.0.log > "$R/var/log/xorg.out" 2>&1 &
 	for i in $(seq 1 30); do [ -S /tmp/.X11-unix/X0 ] && break; sleep 1; done
-	[ -S /tmp/.X11-unix/X0 ] && echo "Xorg :0 up" || { echo "Xorg did not start"; tail -30 "$R/var/log/Xorg.0.log"; exit 1; }
+	[ -S /tmp/.X11-unix/X0 ] && echo "Xorg :0 up" || {
+		echo "Xorg did not start"
+		tail -30 "$R/var/log/Xorg.0.log" "$R/var/log/xorg.out" 2>/dev/null
+		unmounts
+		exit 1
+	}
 	;;
 stop)
 	for p in $(ps | grep '/usr/lib/xorg/Xorg' | grep -v grep | awk '{print $1}'); do kill $p; done
 	sleep 2
-	for d in tmp sys proc dev; do umount "$R/$d" 2>/dev/null || true; done
+	unmounts
 	;;
 run)
 	shift

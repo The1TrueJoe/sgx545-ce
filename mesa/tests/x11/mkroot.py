@@ -112,7 +112,7 @@ def unpack(deb, root):
                     dest = os.path.join(root, m.name)
                     if (m.isfile() or m.issym() or m.islnk()) and os.path.lexists(dest) and not os.path.isdir(dest):
                         os.unlink(dest)
-                    t.extract(m, root, set_attrs=False, filter="fully_trusted")
+                    t.extract(m, root, filter="fully_trusted")  # modes kept; owners only as root
 
 
 def main():

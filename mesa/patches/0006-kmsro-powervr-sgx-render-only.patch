@@ -6,6 +6,9 @@ Cedarview's sits behind gma500's), so a platform display device (simpledrm on
 the EA's boot framebuffer) has to find its render node off the platform bus:
 render nodes of PCI devices are taken when their driver is powervr_sgx.
 
+An X server's GLX (AIGLX) loads <display driver>_dri.so: dril stubs for
+simpledrm and sgx545.
+
 --- a/meson.build
 +++ b/meson.build
 @@ -265,6 +265,7 @@
@@ -92,3 +95,36 @@ render nodes of PCI devices are taken when their driver is powervr_sgx.
           for (j = 0; j < n_drivers; j++) {
              /* Always try to open the render device with Zink if requested */
              if (strcmp("zink", drivers[j]) == 0 ||
+--- a/src/gallium/targets/dril/meson.build
++++ b/src/gallium/targets/dril/meson.build
+@@ -92,6 +92,7 @@
+                'rockchip',
+                'rzg2l-du',
++               'simpledrm',
+                'ssd130x',
+                'st7586',
+                'st7735r',
+                'sti',
+@@ -119,6 +120,7 @@
+              [with_gallium_lima, ['lima']],
+              [with_gallium_d3d12, ['d3d12']],
+              [with_gallium_zink, ['zink']],
++             [with_gallium_sgx545, ['sgx545']],
+              [with_gallium_asahi, ['asahi']]]
+   if d[0]
+     foreach name : d[1]
+--- a/src/gallium/targets/dril/dril_target.c
++++ b/src/gallium/targets/dril/dril_target.c
+@@ -677,6 +677,7 @@
+ DEFINE_LOADER_DRM_ENTRYPOINT(rockchip)
+ DEFINE_LOADER_DRM_ENTRYPOINT(rzg2l_du)
++DEFINE_LOADER_DRM_ENTRYPOINT(simpledrm)
+ DEFINE_LOADER_DRM_ENTRYPOINT(ssd130x)
+ DEFINE_LOADER_DRM_ENTRYPOINT(st7586)
+ DEFINE_LOADER_DRM_ENTRYPOINT(st7735r)
+ DEFINE_LOADER_DRM_ENTRYPOINT(sti)
+@@ -686,3 +687,4 @@
+ DEFINE_LOADER_DRM_ENTRYPOINT(lima)
+ DEFINE_LOADER_DRM_ENTRYPOINT(d3d12)
+ DEFINE_LOADER_DRM_ENTRYPOINT(zink)
++DEFINE_LOADER_DRM_ENTRYPOINT(sgx545)

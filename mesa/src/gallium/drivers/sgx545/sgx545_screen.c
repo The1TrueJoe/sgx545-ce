@@ -213,10 +213,13 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
           format != PIPE_FORMAT_R32_UINT)
          return false;
    }
-   /* textures: the formats with a T1 code (docs/TEX.md); render targets are
-    * BGRA8888, sampled through the strided layout only (not yet) */
+   /* textures: the formats with a T1 code (docs/TEX.md); render targets
+    * (an imported dma-buf among them: EGLImage, glamor's screen pixmap) are
+    * sampled in place through the strided layout */
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx545_tex_format(format) &&
-       !(usage & PIPE_BIND_RENDER_TARGET))
+       !(usage & PIPE_BIND_RENDER_TARGET) && format != PIPE_FORMAT_B8G8R8A8_UNORM &&
+       format != PIPE_FORMAT_B8G8R8X8_UNORM && format != PIPE_FORMAT_R8G8B8A8_UNORM &&
+       format != PIPE_FORMAT_R8G8B8X8_UNORM)
       return false;
    switch (target) {
    case PIPE_BUFFER:
