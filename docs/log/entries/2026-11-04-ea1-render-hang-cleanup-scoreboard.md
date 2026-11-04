@@ -90,3 +90,27 @@ DDK does, so this needs finding.
 3. Re-enable the "skip the reload when the PB is unchanged" gate (safe once (1)+(2) hold).
 4. Move render_done to the DPM-free event (0x1), resolving the dispatch fault above.
 This is M1's transfers/cleanup work item.
+
+## Update: deadlock-safe cleanup fix (dd5adc34) = 3/10, no deadlock, hang persists
+
+The deadlock-safe cleanup (k_cleanup defers while SC_INFLIGHT|PAGE_RELEASE_PENDING, 0x1
+acked by dpm_free_done not up-front, bounded 256 ticks) on the EA1: 3/10, HWR=7, same
+do_ta fault (BIF_FAULT 0x4031100F, BANK0=0x101F). NO deadlock (box completed + restored;
+the bound worked). Offline it's fully validated (v2x RC cleanup defers-while-releasing +
+completes; test_commands cleanup-defer/bound pass). Committed 76f3d9e + a7b4349.
+
+WHY it doesn't fix the hang: the cleanup deferral holds process N's MEMORY (PB/RT) until
+its render+page-release finishes, but the fault is the GPU-global DPM FREE-LIST race --
+process N+1's do_ta free-list load runs while process N's DPM 3D free is still draining.
+That is a GPU-timing race on a single DPM unit; holding memory does not serialise it. The
+DDK avoids it structurally by COMPLETING THE RENDER ON THE DPM-FREE EVENT (0x1), so the
+client does not see "done" (and the next process does not start its do_ta) until the free
+is complete. Ours completes at pixel-done (0x40000), so the client exits early and the
+next process races.
+
+So the hang fix is render_done ON 0x1 (the DDK order), which was tried before and timed
+out -- but that was BEFORE the ack fix. The deadlock-safe build proves 0x1 now dispatches
+reliably (dpm_free_done runs on it: the cleanup completes), so render_done-on-0x1 should
+now be reachable. Next: move render_done to the DPM-free event with the ack fix in place,
+keep the cleanup deferral (memory correctness) + the bound. The cleanup fix stays (DDK-
+correct behaviour) but is not itself the hang fix.
