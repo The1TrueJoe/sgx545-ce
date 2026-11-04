@@ -140,7 +140,7 @@ struct sgx545_context {
    /* SGX545_STATS=1: where the time goes, printed every 2 s */
    struct {
       bool on;
-      uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns;
+      uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns, rb_ns, rb_bytes;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read, fl_deferred;   /* flushes by cause */
       unsigned vc_hits, vc_misses, vc_uncacheable;

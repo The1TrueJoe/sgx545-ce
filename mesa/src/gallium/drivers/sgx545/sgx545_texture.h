@@ -27,6 +27,8 @@ void sgx545_tex_encode_box(struct sgx545_resource *res, unsigned level, unsigned
                            unsigned y0, unsigned x1, unsigned y1);
 /* and back, after the GPU rendered into a level */
 void sgx545_tex_decode_level(struct sgx545_resource *res, unsigned level);
+void sgx545_tex_decode_box(struct sgx545_resource *res, unsigned level, unsigned layer, unsigned x0,
+                           unsigned y0, unsigned x1, unsigned y1);
 
 /* a cube map's six level-0 faces alone (res->cube0), and whether a sampler
  * reads that copy: no mipmapping on a cube map that has levels */
