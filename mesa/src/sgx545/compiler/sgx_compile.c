@@ -3594,6 +3594,125 @@ touch(struct sgx_ctx *c, const struct sgx_ref *r, int at, unsigned span)
       v->last = at;
 }
 
+/* Temporaries in PA registers the program no longer needs: an input after
+ * its last read, any PA register below the count the program has anyway
+ * (fragment: iterations and colour; vertex: the attributes it reads), as
+ * libusc does it. Fewer temporaries per instance, more instances resident. */
+static void
+place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   unsigned end = 2 * nins + 2, npa = 0;
+   bool input[128] = { 0 };
+   if (c->stage == MESA_SHADER_FRAGMENT) {
+      bool real = false;
+      for (unsigned i = 0; i < c->n_iters; i++) {
+         const struct sgx_iter *it = &c->iters[i];
+         npa = MAX2(npa, it->pa + (it->sample ? 1 : it->f16 ? (it->comps + 1) / 2 : it->comps));
+         real |= !it->pointcoord;
+      }
+      if (!real)
+         npa++;
+      for (unsigned p = 0; p < npa && p < 128; p++)
+         input[p] = true;
+      npa = MAX2(npa, c->colour_pa + 1);
+      if (c->has_depth)
+         npa = MAX2(npa, c->depth_pa + 1);
+   }
+   /* what the program does with PA itself: inputs busy until their last
+    * read, a written register (colour, depth) from its write to the end */
+   int last[128], first_w[128];
+   for (unsigned p = 0; p < 128; p++)
+      last[p] = first_w[p] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      /* a finalizer that samples a non-dependent texture with USSE code
+       * reads the coordinate's plain iteration there (ISA.md, "Code
+       * generation") */
+      if (i->kind == SGX_INS_SAMPLE && !i->smp->dependent && i->smp->coord_pa >= 0) {
+         for (unsigned n = 0; n < c->n_iters; n++) {
+            const struct sgx_iter *it = &c->iters[n];
+            if (it->sample || (int)it->pa != i->smp->coord_pa)
+               continue;
+            for (unsigned j = it->pa; j < it->pa + (it->f16 ? (it->comps + 1) / 2 : it->comps) && j < 128; j++)
+               last[j] = MAX2(last[j], (int)(2 * i->ip));
+         }
+      }
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_PA)
+            continue;
+         unsigned lo = r->h16 ? r->n / 2 : r->n;
+         unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         for (unsigned j = lo; j < lo + n && j < 128; j++) {
+            if (k < i->ndst) {
+               if (first_w[j] < 0)
+                  first_w[j] = 2 * i->ip;
+            } else {
+               last[j] = MAX2(last[j], (int)(2 * i->ip));
+               if (c->stage == MESA_SHADER_VERTEX)
+                  input[j] = true;
+            }
+         }
+      }
+   }
+   if (c->stage == MESA_SHADER_VERTEX)
+      for (unsigned p = 0; p < 128; p++)
+         if (input[p])
+            npa = p + 1;
+   if (!npa)
+      return;
+   BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, npa * BITSET_WORDS(end));
+#define BUSY(p) (busy + (p) * BITSET_WORDS(end))
+   for (unsigned p = 0; p < npa; p++) {
+      if (!input[p] && c->stage == MESA_SHADER_VERTEX) {
+         BITSET_SET_RANGE(BUSY(p), 0, end - 1);
+         continue;
+      }
+      if (input[p] && last[p] >= 0)
+         BITSET_SET_RANGE(BUSY(p), 0, last[p]);
+      if (first_w[p] >= 0)
+         BITSET_SET_RANGE(BUSY(p), first_w[p], end - 1);
+   }
+   /* a vreg every reference of which can name PA */
+   bool *ok = rzalloc_array(c, bool, nv);
+   for (unsigned v = 0; v < nv; v++)
+      ok[v] = sgx_vreg(c, v)->first >= 0 && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
+              (int)v != c->face_f32;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv)
+            continue;
+         struct sgx_ref x = *r;
+         x.file = SGX_F_PA;
+         if (i->kind != SGX_INS_ALU || !slot_ok(i->form, k, &x))
+            ok[r->n] = false;
+      }
+   }
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      if (!ok[v])
+         continue;
+      unsigned regs = r->half ? (r->size + 1) / 2 : r->size;
+      unsigned lim = r->half ? 32 : BITSET_TEST(six, v) ? 64 : 128;
+      unsigned lo = r->first, hi = r->last;
+      for (unsigned b = 0; b + regs <= MIN2(npa, lim); b++) {
+         bool free = true;
+         for (unsigned p = b; p < b + regs && free; p++)
+            for (unsigned x = lo; x <= hi && x < end && free; x++)
+               free = !BITSET_TEST(BUSY(p), x);
+         if (!free)
+            continue;
+         for (unsigned p = b; p < b + regs; p++)
+            BITSET_SET_RANGE(BUSY(p), lo, MIN2(hi, end - 1));
+         r->pa = true;
+         r->phys = b;
+         break;
+      }
+   }
+#undef BUSY
+}
+
 static bool
 allocate(struct sgx_ctx *c)
 {
@@ -3681,6 +3800,7 @@ allocate(struct sgx_ctx *c)
          if (i->op[k].file == SGX_F_V && i->op[k].n < nv)
             BITSET_SET(six, i->op[k].n);
    }
+   place_in_pa(c, six, ip);
    struct ra_graph *g = ra_alloc_interference_graph(regs, nv);
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
@@ -3689,11 +3809,11 @@ allocate(struct sgx_ctx *c)
    }
    for (unsigned a = 0; a < nv; a++) {
       struct sgx_vreg *x = sgx_vreg(c, a);
-      if (x->first < 0)
+      if (x->first < 0 || x->pa)
          continue;
       for (unsigned b = a + 1; b < nv; b++) {
          struct sgx_vreg *y = sgx_vreg(c, b);
-         if (y->first >= 0 && x->first <= y->last && y->first <= x->last)
+         if (y->first >= 0 && !y->pa && x->first <= y->last && y->first <= x->last)
             ra_add_node_interference(g, a, b);
       }
    }
@@ -3704,7 +3824,7 @@ allocate(struct sgx_ctx *c)
    c->n_temps = 0;
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
-      if (r->first < 0)
+      if (r->first < 0 || r->pa)
          continue;
       r->phys = ra_get_node_reg(g, v);
       c->n_temps = MAX2(c->n_temps, r->phys + (r->half ? (r->size + 1) / 2 : r->size));
@@ -4056,7 +4176,7 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
       case SGX_F_V:
          o.num = sgx_vreg(c, r->n)->phys + r->comp / 2;
          o.half = r->comp & 1;
-         o.file = SGX_ISA_FILE_R;
+         o.file = sgx_vreg(c, r->n)->pa ? SGX_ISA_FILE_PA : SGX_ISA_FILE_R;
          break;
       case SGX_F_U:
          o.num = sgx_const_sa(c, r->n);
@@ -4080,7 +4200,7 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
       o.fmt = SGX_ISA_FMT_C10;
    switch (r->file) {
    case SGX_F_V:
-      o.file = SGX_ISA_FILE_R;
+      o.file = sgx_vreg(c, r->n)->pa ? SGX_ISA_FILE_PA : SGX_ISA_FILE_R;
       o.num = sgx_vreg(c, r->n)->phys + r->comp;
       break;
    case SGX_F_R: o.file = SGX_ISA_FILE_R; o.num = r->n; break;

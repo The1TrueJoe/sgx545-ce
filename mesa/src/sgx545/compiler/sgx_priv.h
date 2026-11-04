@@ -86,6 +86,7 @@ struct sgx_ins {
 struct sgx_vreg {
    unsigned size;       /* registers, or halves for a 16-bit vreg */
    bool half;
+   bool pa;             /* phys is a PA register (place_in_pa) */
    int phys;
    int first, last;     /* live range in ins ips, -1 = unused */
 };
