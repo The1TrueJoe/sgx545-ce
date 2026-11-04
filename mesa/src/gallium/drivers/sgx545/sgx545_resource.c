@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <errno.h>
+#include <unistd.h>
+
 #include "drm-uapi/drm_fourcc.h"
 #include "util/os_time.h"
 #include "util/format/u_format.h"
@@ -13,6 +16,7 @@
 #include "util/u_surface.h"
 #include "util/u_transfer.h"
 #include "frontend/winsys_handle.h"
+#include "renderonly/renderonly.h"
 
 #include "sgx545_context.h"
 #include "sgx545_resource.h"
@@ -31,6 +35,15 @@ is_render_target(const struct pipe_resource *templ)
    if (templ->bind & (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))
       return true;
    return (templ->bind & PIPE_BIND_RENDER_TARGET) && !sgx545_tex_format(templ->format);
+}
+
+/* A shared buffer is a linear render target as is_render_target makes them:
+ * BGRA/RGBA8, rows of a multiple of 32 pixels (STATE.md section 4), one level. */
+static bool
+shareable(const struct pipe_resource *templ)
+{
+   return templ->target == PIPE_TEXTURE_2D && templ->last_level == 0 && templ->array_size == 1 &&
+          util_format_get_blocksize(templ->format) == 4 && templ->nr_samples <= 1;
 }
 
 static size_t
@@ -83,6 +96,34 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
       res->data = align_malloc(MAX2(templ->width0, 1), 64);
       if (!res->data)
          goto fail;
+      return prsc;
+   }
+
+   if (is_render_target(templ) && screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ)) {
+      /* kmsro: a dumb buffer on the display device, rows padded to whole tiles */
+      struct pipe_resource scanout_tmpl = *templ;
+      struct winsys_handle handle = { 0 };
+      int e;
+
+      scanout_tmpl.width0 = align(templ->width0, 32);
+      res->scanout = renderonly_scanout_for_resource(&scanout_tmpl, screen->ro, &handle);
+      if (!res->scanout)
+         goto fail;
+      res->stride = handle.stride;
+      res->pitch = handle.stride / 4;
+      res->shared = true;
+      simple_mtx_lock(&screen->lock);
+      e = handle.stride % 128 ? -EINVAL
+                              : sgxws_bo_import(screen->dev, &res->bo, (int)handle.handle,
+                                                handle.stride * templ->height0);
+      if (!e)
+         sgxws_bo_prepare_target(screen->dev, &res->bo);
+      simple_mtx_unlock(&screen->lock);
+      close(handle.handle);
+      if (e) {
+         renderonly_scanout_destroy(res->scanout, screen->ro);
+         goto fail;
+      }
       return prsc;
    }
 
@@ -168,15 +209,6 @@ sgx545_resource_from_user_memory(struct pipe_screen *pscreen, const struct pipe_
    return &res->base;
 }
 
-/* A shared buffer is a linear render target as is_render_target makes them:
- * BGRA/RGBA8, rows of a multiple of 32 pixels (STATE.md section 4), one level. */
-static bool
-shareable(const struct pipe_resource *templ)
-{
-   return templ->target == PIPE_TEXTURE_2D && templ->last_level == 0 && templ->array_size == 1 &&
-          util_format_get_blocksize(templ->format) == 4 && templ->nr_samples <= 1;
-}
-
 static struct pipe_resource *
 sgx545_resource_from_handle(struct pipe_screen *pscreen, const struct pipe_resource *templ,
                             struct winsys_handle *whandle, unsigned usage)
@@ -209,6 +241,9 @@ sgx545_resource_from_handle(struct pipe_screen *pscreen, const struct pipe_resou
       FREE(res);
       return NULL;
    }
+   /* kmsro: a handle of it on the display device, for renderonly_get_handle */
+   if (screen->ro)
+      res->scanout = renderonly_create_gpu_import_for_resource(&res->base, screen->ro, NULL);
    return &res->base;
 }
 
@@ -229,6 +264,9 @@ sgx545_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pct
    whandle->modifier = DRM_FORMAT_MOD_LINEAR;
    switch (whandle->type) {
    case WINSYS_HANDLE_TYPE_KMS:
+      /* kmsro: the display device's handle */
+      if (screen->ro)
+         return res->scanout && renderonly_get_handle(res->scanout, whandle);
       if (sgxws_bo_kms_handle(&res->bo, &whandle->handle))
          return false;
       res->shared = true;
@@ -305,6 +343,8 @@ sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
       sgxws_bo_free(screen->dev, &res->cube0);
       simple_mtx_unlock(&screen->lock);
    }
+   if (res->scanout)
+      renderonly_scanout_destroy(res->scanout, screen->ro);
    if (res->data)
       align_free(res->data);
    FREE(res);
