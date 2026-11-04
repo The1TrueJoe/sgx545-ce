@@ -1009,6 +1009,32 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
    return true;
 }
 
+/* every use of a 32-bit bool is a select's condition */
+static bool
+cond_only(nir_def *def)
+{
+   nir_foreach_use_including_if(u, def) {
+      nir_instr *ui = nir_src_is_if(u) ? NULL : nir_src_use_instr(u);
+      if (!ui || ui->type != nir_instr_type_alu ||
+          (nir_instr_as_alu(ui)->op != nir_op_fcsel && nir_instr_as_alu(ui)->op != nir_op_b32csel) ||
+          u != &nir_instr_as_alu(ui)->src[0].src)
+         return false;
+   }
+   return true;
+}
+
+/* a 32-bit select of values held as F16 halves (mediump varyings through
+ * f2f32): csel16's whole-pair movc, the result still F16 halves */
+static bool
+f16_pairs(struct sgx_ctx *c, nir_alu_instr *alu)
+{
+   for (unsigned j = 1; j < 3; j++)
+      for (unsigned k = 0; k < alu->def.num_components; k++)
+         if (!alu_src(c, alu, j, k).h16)
+            return false;
+   return true;
+}
+
 /* the value of a 16-bit def lives in a new 16-bit vreg; pairs of it */
 static void
 emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
@@ -1570,6 +1596,14 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       }
       struct fieldset tf = { 3, { { SGX_FLD_ALU, 14 }, { SGX_FLD_COND, cd }, { SGX_FLD_TYPE, 2 } } };
       emit_runs(c, SGX_OP_TESTMASK, wmask, td, 2, ts, &tf, 0);
+      if (ld.dest.is_ssa && !ld.fsat && cond_only(&alu->def)) {
+         /* only selects read it: the mask itself (a passing dword test
+          * writes 0xffffffff, which movc.nz takes as true: ISA.md hwt_p2/p7) */
+         c->vals[alu->def.index].kind = VAL_V;
+         c->vals[alu->def.index].n = t;
+         c->vals[alu->def.index].comp = 0;
+         return;
+      }
       form = SGX_OP_MOVC_I32;
       fs.n = 1;
       fs.f[0].id = SGX_FLD_COND;
@@ -1582,6 +1616,8 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    }
    case nir_op_fcsel:
    case nir_op_b32csel:
+      if (ld.dest.is_ssa && !ld.fsat && f16_pairs(c, alu) && csel16(c, alu, s))
+         return;
       form = SGX_OP_MOVC_F32;
       fs.n = 1;
       fs.f[0].id = SGX_FLD_COND;
@@ -3808,6 +3844,26 @@ allocate(struct sgx_ctx *c)
          if (i->op[k].file == SGX_F_V && i->op[k].n < nv)
             BITSET_SET(six, i->op[k].n);
    }
+   /* a 32-bit vreg needs only the components something names (a bool's
+    * mask vreg of 4 written in .x) */
+   unsigned *used = calloc(nv, sizeof(unsigned));
+   bool *halfref = calloc(nv, sizeof(bool));
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv)
+            continue;
+         halfref[r->n] |= r->h16;
+         used[r->n] = MAX2(used[r->n], r->comp + (r->step && i->rpt > 1 ? i->rpt : 1));
+      }
+   }
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      if (!r->half && !halfref[v] && used[v] && used[v] < r->size)
+         r->size = used[v];
+   }
+   free(used);
+   free(halfref);
    place_in_pa(c, six, ip);
    struct ra_graph *g = ra_alloc_interference_graph(regs, nv);
    for (unsigned v = 0; v < nv; v++) {
