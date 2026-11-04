@@ -199,7 +199,8 @@ sgx545_resource_from_handle(struct pipe_screen *pscreen, const struct pipe_resou
    struct sgx545_resource *res;
    int e;
 
-   if (whandle->type != WINSYS_HANDLE_TYPE_FD || !shareable(templ) || whandle->offset ||
+   if (whandle->type != WINSYS_HANDLE_TYPE_FD || !shareable(templ) ||
+       (templ->bind & PIPE_BIND_DEPTH_STENCIL) || whandle->offset ||
        (whandle->modifier != DRM_FORMAT_MOD_LINEAR && whandle->modifier != DRM_FORMAT_MOD_INVALID) ||
        whandle->stride % 128 || whandle->stride < templ->width0 * 4)
       return NULL;
