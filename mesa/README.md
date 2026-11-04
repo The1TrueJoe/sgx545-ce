@@ -22,7 +22,7 @@ Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 | `patches/` | the hooks Mesa needs outside the overlay (meson options, loader, pipe-loader, EGL platform wiring); small, applied with `patch -p1` |
 | `cross/` | the zig cc wrapper and the meson cross-file template |
 | `src/gallium/drivers/sgx545/` | the gallium driver: screen, context, state, resources, draw/clear, shaders (`sgx545_program.c` is the USP finaliser) |
-| `src/gallium/winsys/sgx545/drm/` | the winsys: `sgxws.h` (all the driver sees of it), `sgx545_frame.c` (`tools/gen`'s sgxgen as a multi-frame library: PB, render targets, PDS programs, TA state, VDM, kicks) over `libpvr/` (linked in by build.sh); `sgx545_frame_test.c` exercises it without Mesa |
+| `src/gallium/winsys/sgx545/drm/` | the winsys: `sgxws.h` (all the driver sees of it); `sgx545_frame.c` (`tools/gen`'s sgxgen as a multi-frame library: rings, PDS programs, TA state, VDM) over a kernel backend, `sgx545_powervr_sgx.c` (the powervr_sgx DRM driver) or `sgx545_pvr.c` (pvrsrvkm through `libpvr/`, linked in by build.sh); `sgx545_frame_test.c` exercises it without Mesa. `docs/WINSYS.md` says which runs when |
 | `src/sgx545/compiler/` | the NIR → USSE compiler (`sgx_compiler.h`); its tools and checks are in `tools/usc` |
 | `src/egl/drivers/dri2/platform_fbdev.c` | EGL's `fbdev` platform: window = the framebuffer console |
 | `tests/` | `sgx545_eglinfo`, `sgx545_es2gears` (es2gears' shaders), `sgx545_cpugears` (fixed programs only); `sgx545_texab.sh` and `sgx545_blendab.sh`, A/B against the DDK on the EA3 |
@@ -40,7 +40,8 @@ reach the code that goes upstream.  Where the line runs today:
 |---|---|
 | `src/sgx545/compiler/` | **No.** Includes only Mesa and its own headers. |
 | `src/gallium/drivers/sgx545/` | **No.** It sees the winsys only through `sgxws.h` (GL-level state, the hardware's words as `docs/` describes them, opaque device/context/RT/buffer handles). Its meson dependency (`idep_sgx545_ws`) carries no kernel include path and no kernel defines, so an include of anything services-side fails to build. |
-| `src/gallium/winsys/sgx545/drm/` (`sgx545_frame.c`, `sgx545_frame.h`, `libpvr/`) | **Yes, by design, overlay only.** It is built against the kernel's bridge headers (`include/sgx545-kernel`, the `-DSERVICES4`... defines) and talks to `pvrsrvkm` through libpvr. It also lays out structures the microkernel reads (the TA command, render details, RT data, sync lists) by their offsets. M3 replaces it with a winsys over the new uAPI. |
+| `src/gallium/winsys/sgx545/drm/` (`sgx545_frame.c`, `sgx545_powervr_sgx.c`) | **No.** The frame recorder and the powervr_sgx backend include the dual-licensed uAPI header (`include/drm-uapi/powervr_sgx_drm.h`) and the packers generated from `docs/uapi/powervr_sgx_kmd_stream.xml`, nothing else. |
+| `src/gallium/winsys/sgx545/drm/` (`sgx545_pvr.c`, `libpvr/`) | **Yes, by design, overlay only.** Built only where build.sh links libpvr in, against the kernel's bridge headers (`include/sgx545-kernel`, the `-DSERVICES4`... defines), into objects of their own. It lays out structures the microkernel reads (the TA command, render details, RT data, sync lists) by their offsets. |
 | `src/egl/drivers/dri2/platform_fbdev.c` | No kernel material; openHC only (Mesa has no fbdev platform). |
 
 ## Building
