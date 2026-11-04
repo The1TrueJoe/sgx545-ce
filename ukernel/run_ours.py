@@ -323,7 +323,11 @@ def main():
     # during the teardown, with the same value (sync objects, render/RT/context
     # slot free). EXTRA = a write ours makes that the DDK does not.
     ddk_done = run_ddk_done(a.ddk, a.trace)
-    ours_done = {r: v for (p, r, v) in out if p == "done_mem"}
+    # openHC-internal control-block scratch (rendezvous WAIT_3D/WAIT_FREE 0x1d/0x1e,
+    # cleanup defer counter 0x1c): bookkeeping the DDK keeps at its own offsets, not part
+    # of the render teardown the DDK writes. Exclude from the done comparison.
+    OHC_SCRATCH = {A["ta3d"] + 4 * w for w in (0x1c, 0x1d, 0x1e)}
+    ours_done = {r: v for (p, r, v) in out if p == "done_mem" and r not in OHC_SCRATCH}
     dmiss = [(r, ddk_done[r], ours_done.get(r)) for r in ddk_done if ours_done.get(r) != ddk_done[r]]
     extra = [r for r in ours_done if r not in ddk_done]
     print(f"[done] DDK {len(ddk_done)} completion mem writes, ours {len(ours_done)}")

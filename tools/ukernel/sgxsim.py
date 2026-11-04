@@ -253,6 +253,13 @@ def install_hw_model(r):
     # the DDK's a74 = 0x50208200 (not 0x50000000) and checks ours preserves it.
     r.v[0xa74] = 0x00208200
 
+    # CLKGATECTL (0x000) powers up 0xA6AA on this box (b0-1 = 2 = clock-on-demand), so
+    # pixel_done's ISP-idle rendezvous runs; CLKGATESTATUS (0x008) bit 0 = the ISP clock
+    # = 0 (idle), so the bounded wait exits at once. Seed both so run_ours/the tests
+    # exercise the rendezvous spin instead of skipping it.
+    r.v[0x000] = 0xA6AA
+    r.v[0x008] = 0x0
+
     # cache invalidates report completion in 0x138, one bit group per unit:
     # PDS_INV0 -> 0x4, PDS_INV1 -> 0x8, PDS_INV_CSC -> 0x3, 0xa08 (USE) -> 0x60.
     # The TA side waits for 0x27, the 3D side for 0x4b.

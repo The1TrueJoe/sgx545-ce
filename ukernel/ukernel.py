@@ -99,6 +99,15 @@ SC_RTENTRY = 0x34
 # + log) so a lost event can never stick the box.
 CLEANUP_DEFER_CT = 0x1c
 CLEANUP_DEFER_MAX = 256      # ~256 ms at 1 kHz; a render completes in << 30 ms
+# Render-completion RENDEZVOUS (ta3d-state's DDK completion trace). A render completes
+# only once BOTH halves are done: the 3D writeout (0x40000 pixel back-end, after the ISP
+# clock goes idle) AND the DPM 3D memory free (0x1). do_3d sets both flags at 3D start;
+# pixel_done clears WAIT_3D, free_done clears WAIT_FREE, and whichever runs second (sees
+# the other already clear) does the completion. Completing on 0x1 alone (the earlier
+# build) let the client exit while the 3D writeout was still active -> the next process
+# kicked into a live 3D (BANK0 0x101F at every fault) = the 5/10 alternation.
+WAIT_3D = 0x1d               # set at 3D start, cleared by pixel_done (0x40000 + ISP idle)
+WAIT_FREE = 0x1e             # set at 3D start, cleared by free_done (0x1 DPM free)
 SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
                      # flight (0 = none). The DDK keeps a doubly-linked render-
                      # in-flight list; one context needs only this single slot,
@@ -524,22 +533,21 @@ def build(a):
     # the event program re-triggers continuously (a storm). Acked and NOT dispatched,
     # a timer-only event falls through to `ba kick`, which returns at once on an empty
     # CCB — so each period runs one short task (0xb14 moves) and no more.
-    # NOTE: 0x1 (DPM_3D_MEM_FREE) is deliberately NOT acked here -- it is acked by its
-    # own handler (render_done), which now completes the render on this event (the DDK
-    # order: complete AFTER the scene's 3D pages are freed, so the host sees "done" only
-    # then). 0x40000/0x800000 (pixel back-end / ISP end) only mark the 3D as rendered;
-    # they run pixel_done, which routes a transfer to xfer_done and otherwise ends,
-    # leaving the render in flight until 0x1. If 0x1 arrives coincident with 0x40000,
-    # dispatch runs pixel_done (0x40000) and ends; leaving 0x1 un-acked lets it re-raise
-    # as its own event so render_done still runs (else the render would never complete
-    # and a deferred cleanup would stick, EA1 deadlock 2026-11-04).
+    # NOTE: 0x1 (DPM_3D_MEM_FREE) is deliberately NOT acked here -- free_done acks it.
+    # A render completes via a RENDEZVOUS of two events (ta3d-state's DDK trace): 0x40000
+    # (pixel back-end, after the ISP clock idles) runs pixel_done and clears WAIT_3D; 0x1
+    # runs free_done and clears WAIT_FREE; whichever runs SECOND does the completion. If
+    # 0x1 arrives coincident with 0x40000, dispatch runs pixel_done (clears WAIT_3D, ends
+    # as WAIT_FREE is still set); leaving 0x1 un-acked lets it re-raise so free_done still
+    # runs and completes (else the render would never complete and a deferred cleanup
+    # would stick, EA1 deadlock 2026-11-04).
     a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000 | EVENT_TIMER}")
     a.i("and r3, r2, r3")                          # ack only what the snapshot saw
     a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
     a.dispatch(0x2000, "ta_finished")              # a TA finished
-    a.dispatch(0x40000, "pixel_done")              # pixel back-end: 3D rendered, await free
+    a.dispatch(0x40000, "pixel_done")              # pixel back-end: rendezvous half 1 (3D writeout)
     a.dispatch(0x800000, "pixel_done")             # ISP end of tile (same handler)
-    a.dispatch(0x1, "render_done")                 # DPM 3D memory free: complete the render
+    a.dispatch(0x1, "free_done")                   # DPM 3D memory free: rendezvous half 2
     # A timer-only event (bit 29 set, no TA/3D bit above) must NOT scan the kernel
     # CCB: at 1 kHz a CCB scan every tick races the doorbell task's dispatch /
     # read-offset advance (the two-task RO race — frames 2+ HWR; EA3 2026-11-03).
@@ -618,6 +626,8 @@ def build(a):
     a.i("limm r0, #0")
     a.i(f"st.a.d r17, #{SC_TAFLIGHT}, r0 [moe]")  # TA-in-flight flag must start clear
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r0 [moe]")      # cleanup defer counter clear
+    a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
+    a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
     # at init/RESUME (pc 0x01f9). A periodic timer task keeps the EDM running
     # (EDMTaskReg0 0xb14 moves), so the host watchdog (SGXOSTimer: 30 ms of no
@@ -1455,42 +1465,77 @@ def build(a):
     a.i(f"str #{0xc78 // 4}, r5")
     a.i(f"ldr r5, #{0xc78 // 4}")
     a.i("wdf")
+    # arm the completion rendezvous: this render is not done until BOTH the 3D writeout
+    # (pixel_done, 0x40000 + ISP idle) and the DPM free (free_done, 0x1) have happened.
+    a.i("limm r5, #1")
+    a.i(f"st.a.d r17, #{WAIT_3D}, r5 [moe]")
+    a.i(f"st.a.d r17, #{WAIT_FREE}, r5 [moe]")
+    a.i("idf")
+    a.i("wdf")
     # start the 3D
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")
     a.end()
 
     # ======================================================================
-    # pixel_done: 0x40000 (pixel back-end) / 0x800000 (ISP end of tile)
+    # pixel_done: 0x40000 (pixel back-end) / 0x800000 (ISP end) -- rendezvous half 1
     # ======================================================================
-    # The 3D has finished rendering, but the scene's DPM 3D pages are not freed yet.
-    # A render does NOT complete here: it waits for the DPM 3D-memory-free event (0x1,
-    # render_done, the DDK order) so the host sees "done" only after the free. Only a
-    # TRANSFER completes through this 3D-end event (its bookkeeping differs from a
-    # render's; route it to xfer_done). A render falls through to end, staying in
-    # flight (SC_INFLIGHT set) until 0x1.
+    # The 3D has finished rendering. The writeout is truly done only once the ISP clock
+    # goes idle; wait for that, clear WAIT_3D, and complete the render ONLY if WAIT_FREE
+    # (the DPM free, 0x1) has already cleared -- else end and let free_done complete it.
+    # A TRANSFER completes here directly (no rendezvous; its bookkeeping differs).
     a.label("pixel_done")
     a.i(f"ld.a.d r1, r17, #{SC_XFER} [moe]")
     a.i("wdf")
     a.i("test.and.ne p0, r1, r1")
     a.i("(p0) ba xfer_done")
-    a.end()                                           # render pixels done; await 0x1
+    a.i(f"ld.a.d r1, r17, #{SC_INFLIGHT} [moe]")      # a render in flight?
+    a.i("wdf")
+    a.i("test.and.eq p0, r1, r1")
+    a.i("(p0) ba pixel_done_end")                     # no render: spurious 3D-end
+    # ISP-idle rendezvous (ta3d-state): if CLKGATECTL&3==2 (clock-on-demand; 0xA6AA on
+    # this box, so always), poll CLKGATESTATUS (0x008) bit 0 until it reads 0. Bounded,
+    # so a stuck clock can never wedge the EDM; after the bound we proceed anyway.
+    a.i(f"ldr r5, #{0x0 // 4}")                        # EUR_CR_CLKGATECTL
+    a.i("wdf")
+    a.i("limm r7, #3"); a.i("and r5, r5, r7")
+    a.i("limm r7, #2"); a.i("test.xor.ne p0, r5, r7") # &3 != 2 -> no ISP wait
+    a.i("(p0) ba pixel_isp_done")
+    a.i("limm r6, #0")                                 # spin counter
+    a.label("pixel_isp_loop")
+    a.i(f"ldr r5, #{0x8 // 4}")                        # EUR_CR_CLKGATESTATUS
+    a.i("wdf")
+    a.i("limm r7, #1"); a.i("and r5, r5, r7")         # ISP clock bit
+    a.i("test.and.eq p0, r5, r5")                     # bit 0 == 0 -> ISP idle
+    a.i("(p0) ba pixel_isp_done")
+    a.i("imae r6, r6, #1, #1 [t2=u32]")               # counter += 1
+    a.i("limm r7, #4096")
+    a.i("test.xor.ne p0, r6, r7")                     # under the bound -> keep polling
+    a.i("(p0) ba pixel_isp_loop")
+    a.label("pixel_isp_done")
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{WAIT_3D}, r4 [moe]")           # WAIT_3D = 0 (3D writeout done)
+    a.i("idf")
+    a.i("wdf")
+    a.i(f"ld.a.d r1, r17, #{WAIT_FREE} [moe]")         # DPM free already done?
+    a.i("wdf")
+    a.i("test.and.eq p0, r1, r1")
+    a.i("(p0) ba render_complete")                     # both halves done -> complete
+    a.label("pixel_done_end")
+    a.i("idf")
+    a.i("wdf")
+    a.end()                                            # 3D writeout done; await 0x1
 
     # ======================================================================
-    # render_done: complete the render on the DPM 3D-memory-free event (0x1)
+    # free_done: 0x1 (DPM 3D memory free) -- rendezvous half 2
     # ======================================================================
-    # The DDK completes a render on EVENT_STATUS bit 0 (the scene's 3D pages freed),
-    # AFTER pixel-done -- so the host sees "done" (sync objects + IRQ) only once the
-    # free is complete, and the next process's do_ta free-list load cannot race a
-    # still-draining free (the EA1 consecutive-frame hang; scoreboard 2026-11-04). It
-    # walks the render's HW device sync list and sets each destination's write-ops-
-    # complete to pending+1 (docs/UKERNEL.md §5); the host-interrupt tail is below.
-    # 0x1 is not acked up-front (so a coincident 0x1 re-raises), so ack it here. A 0x1
-    # with no render in flight (SC_INFLIGHT == 0: a transfer's free, or a spurious
-    # event) has nothing to complete -- ack and end.
-    a.label("render_done")
+    # Ack 0x1 (not acked up-front, so a coincident 0x1 re-raises), clear WAIT_FREE, and
+    # complete the render ONLY if WAIT_3D (the 3D writeout) has already cleared -- else
+    # end and let pixel_done complete it. A 0x1 with no render in flight (SC_INFLIGHT==0:
+    # a transfer's free, or a spurious event) has nothing to complete -- ack and end.
+    a.label("free_done")
     if WAIT_LOG:
-        a.i("limm r4, #4"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached render_done
+        a.i("limm r4, #4"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached free_done
     if DEBUG_SENTINEL:
         a.i("limm r6, #0x4D04"); a.st_sa(SA_SELF, 0x3A, 6)
     a.i("limm r4, #1")
@@ -1499,6 +1544,24 @@ def build(a):
     a.i("wdf")
     a.i("test.and.eq p0, r1, r1")
     a.i("(p0) ba render_done_noop")                   # no render: a transfer/spurious free
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{WAIT_FREE}, r4 [moe]")         # WAIT_FREE = 0 (pages freed)
+    a.i("idf")
+    a.i("wdf")
+    a.i(f"ld.a.d r1, r17, #{WAIT_3D} [moe]")           # 3D writeout already done?
+    a.i("wdf")
+    a.i("test.and.eq p0, r1, r1")
+    a.i("(p0) ba render_complete")                     # both halves done -> complete
+    a.i("idf")
+    a.i("wdf")
+    a.end()                                            # pages freed; await 0x40000
+
+    # ======================================================================
+    # render_complete: both halves of the rendezvous done -- complete ONCE
+    # ======================================================================
+    # Walk the render's HW device sync list, set each destination's write-ops-complete
+    # to pending+1 (docs/UKERNEL.md §5), tear the render down, and interrupt the host.
+    a.label("render_complete")
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
