@@ -34,6 +34,7 @@
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
+#include "pvrsgx_trace.h"
 #include "pvrsgx_validate.h"
 #include "pvrsgx_vm.h"
 
@@ -97,14 +98,22 @@ static bool job_done(struct pvrsgx_job *job, u64 consumed)
  * its output later) and after (no stale line hides it). Which of them the job
  * touches is not known: a BO list is optional, and explicit sync names none.
  */
-static void job_flush_imports(struct pvrsgx_job *job)
+static void job_flush_imports(struct pvrsgx_job *job, bool after)
 {
+	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
+
 	for (u32 i = 0; i < job->nimports; i++) {
 		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);
 
-		if (shmem->sgt)
+		if (shmem->sgt) {
 			drm_clflush_sg(shmem->sgt);
+			bytes += shmem->base.size;
+		}
 	}
+	if (job->nimports)
+		trace_pvrsgx_flush_imports(job->hw_fence ? job->hw_fence->seqno : 0,
+					   job->nimports, bytes,
+					   t0 ? ktime_get_ns() - t0 : 0, after);
 }
 
 static void job_put_imports(struct pvrsgx_job *job)
@@ -141,10 +150,11 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 
 	list_for_each_entry(job, &finished, node)
-		job_flush_imports(job);
+		job_flush_imports(job, true);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &finished, node) {
 		list_del_init(&job->node);
+		trace_pvrsgx_job_done(job->type, job->hw_fence->seqno);
 		dma_fence_signal_locked(job->hw_fence);
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
@@ -210,7 +220,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		return fence;
 	}
 
-	job_flush_imports(job);
+	job_flush_imports(job, false);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
@@ -235,6 +245,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		return fence;
 	}
 
+	trace_pvrsgx_kick(job->type, job->ccb_seq, fence->seqno);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_add_tail(&job->node, &sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
