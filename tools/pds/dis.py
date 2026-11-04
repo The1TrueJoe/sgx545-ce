@@ -40,11 +40,16 @@ DOUT = {2: "douti", 3: "doutd", 4: "doutt", 5: "doutu", 6: "douta"}
 
 # ---------------------------------------------------------------- registers
 
+def num(n):
+    """PDS.md "Text notation": below 10 in decimal, otherwise 0x hex."""
+    return f"{n:#x}" if n >= 10 else f"{n}"
+
+
 def ds_name(bank, n):
     """A 32-bit data-store word. DS0 words 0x40.. are the PDS inputs."""
     if bank == 0 and n >= 0x40:
         return f"in{n - 0x40}"
-    return f"ds{bank}[{n:#x}]" if n >= 10 else f"ds{bank}[{n}]"
+    return f"ds{bank}[{num(n)}]"
 
 
 def reg_u(f):
@@ -56,20 +61,14 @@ def reg_u(f):
     return f"in{f - 0x80}"
 
 
-def reg_s1(f, halves=False):
+def reg_s1(f):
     """src1 of a two-source op: 16-bit units on the DS0 side (inputs from word 0x40)."""
-    s = ds_name(0, f >> 1)
-    if halves:
-        return s + (".hi" if f & 1 else ".lo")
-    return s + (".hi?" if f & 1 else "")
+    return ds_name(0, f >> 1) + (".hi" if f & 1 else "")
 
 
-def reg_s2(f, halves=False):
+def reg_s2(f):
     """src2 of a two-source op: 16-bit units on the DS1 side."""
-    s = ds_name(1, f >> 1)
-    if halves:
-        return s + (".hi" if f & 1 else ".lo")
-    return s + (".hi?" if f & 1 else "")
+    return ds_name(1, f >> 1) + (".hi" if f & 1 else "")
 
 
 def movs_word(sel, r1, r2):
@@ -91,8 +90,10 @@ class Inst:
 
 
 def decode(w):
+    """One code word in PDS.md's "Text notation"; bits it doesn't name print as {?...}."""
     op, s, cc = w >> 28, (w >> 27) & 1, (w >> 24) & 7
-    pred = {7: "", 0: "(p0) "}.get(cc, f"(cc{cc}?) ")
+    pred = "(p0) " if cc == 0 else ""
+    ccs = f".cc{cc}" if cc not in (0, 7) else ""
     if w == HALT:
         return Inst("halt")
     if op in (0, 2):
@@ -100,39 +101,39 @@ def decode(w):
         sw = [(w >> 11) & 3, (w >> 9) & 3, (w >> 7) & 3, (w >> 5) & 3]
         r2, r1 = (w >> 13) & 0x1f, (w >> 18) & 0x3f
         outs = [movs_word(x, r1, r2) for x in sw]
-        flags = ""
-        if op == 2:
-            flags += ".x2"          # top bits 0x2_ : seen on DOUTD with a 3rd (offset) word and DOUTA pairs
-        if s:
-            flags += ".s27"
-        if cc != 7:
-            flags += f".cc{cc}"     # 0x03 top byte: only on the closing DOUTU of vertex programs
-        name = DOUT.get(dest, f"dout{dest}?")
-        text = f"movs{flags} {name}, " + ", ".join(ds_name(*o) for o in outs)
+        flags = (".x2" if op == 2 else "") + (".s27" if s else "") + ccs
+        rows = ""
+        if r1 and not any(x < 2 for x in sw):
+            rows += f" [r1={num(r1)}]"
+        if r2 and not any(x >= 2 for x in sw):
+            rows += f" [r2={num(r2)}]"
+        name = DOUT.get(dest, f"dout{dest}")
+        text = f"{pred}{name}{flags} " + ", ".join(ds_name(*o) for o in outs) + rows
         return Inst(text, reads=outs, dout=(dest, outs), known=dest in DOUT)
     if op in (4, 6, 0xc, 0xd):
-        names = {(4, 0): "add", (4, 1): "sub?", (6, 0): "mul16", (6, 1): "mul16.s27?",
-                 (0xc, 0): "or", (0xc, 1): "and", (0xd, 0): "xor", (0xd, 1): "xor.s27?"}
-        halves = op == 6
+        names = {(4, 0): "add", (6, 0): "mul16", (0xc, 0): "or", (0xc, 1): "and", (0xd, 0): "xor"}
         dst, s2, s1 = w & 0x7f, (w >> 9) & 0x7f, (w >> 16) & 0xff
         extra = f" {{?b7-8={(w >> 7) & 3}}}" if (w >> 7) & 3 else ""
-        text = f"{pred}{names[(op, s)]} {reg_u(dst)}, {reg_s1(s1, halves)}, {reg_s2(s2, halves)}{extra}"
+        name = names.get((op, s), f"op{op:#x}.s{s}")
+        text = f"{pred}{name}{ccs} {reg_u(dst)}, {reg_s1(s1)}, {reg_s2(s2)}{extra}"
         reads = [(0, s1 >> 1), (1, s2 >> 1)]
         return Inst(text, reads=reads, known=s == 0 or op in (0xc, 0xd))
     if op == 8:
         s1, s2, sel = (w >> 16) & 0xff, (w >> 9) & 0x7f, (w >> 8) & 1
         src = reg_s2(s2) if sel else reg_s1(s1)
-        extra = "" if (w & 0xff) == 0 and not s else f" {{?low={w & 0xff:#x} s27={s}}}"
-        text = f"{pred}tst p0, {src} == 0{extra}"
+        other = s1 if sel else s2
+        extra = "" if (w & 0xff) == 0 and not s and not other else \
+            f" {{?low={w & 0xff:#x} s27={s} unpicked={other:#x}}}"
+        text = f"{pred}tst{ccs} {src}{extra}"
         return Inst(text, reads=[(1, s2 >> 1)] if sel else [(0, s1 >> 1)])
     if op == 9:
         t = w & 0xffffff
         extra = f" {{?s27={s}}}" if s else ""
-        text = {0: f"bra p0, {t}", 7: f"bra {t}"}.get(cc, f"bra cc{cc}?, {t}")
+        text = f"{pred}bra{ccs} #{num(t)}"
         return Inst(text + extra, target=t, known=cc in (0, 7) and not s)
     if op == 0xf:
         src, amt, dst = (w >> 16) & 0xff, (w >> 8) & 0xff, w & 0xff
-        text = f"{pred}{'shr' if s else 'shl'} {reg_u(dst)}, {reg_u(src)}, {amt}"
+        text = f"{pred}{'shr' if s else 'shl'}{ccs} {reg_u(dst)}, {reg_u(src)}, #{num(amt)}"
         rd = [] if src >= 0x80 else [(src >> 6, src & 0x3f)]
         return Inst(text, reads=rd)
     return Inst(f".word {w:#010x}", known=False)
