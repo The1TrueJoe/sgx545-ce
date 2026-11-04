@@ -20,6 +20,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "sgx545_pds.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -91,9 +93,8 @@ struct sgxws_prog {
    bool point_size;                 /* vertex: the last output dword is the point size */
    /* fragment: */
    uint32_t sec_dwords;             /* constant dwords DMA'd for the secondary program */
-   uint32_t douti[10];              /* DOUTI words, one per iterated input or sample */
+   struct sgx545_pds_douti douti[10];   /* DOUTIs, one per iterated input or sample */
    uint8_t douti_tex[10];           /* 0, or the sampler unit + 1 whose DOUTT follows it */
-   uint8_t douti_w1[10];   /* each DOUTI's second word: 0x10 for a sprite's gl_PointCoord */
    uint32_t n_douti;
    uint32_t pds_middle;             /* TA state PDS middle word (0: the default) */
    uint32_t pa_dwords;              /* fragment: primary attribute registers the program uses */
