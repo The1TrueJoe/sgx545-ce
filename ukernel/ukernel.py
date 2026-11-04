@@ -883,6 +883,18 @@ def build(a):
     a.program(9, T3_CMD)
     a.consts(T3_CONST)
     a.st_sa(SA_SELF, SC_XFER, 16)                   # remember the transfer in flight
+    # route the transfer's 3D requestor to list 1 (the ctx PD set in 0xc38 above), as
+    # do_3d does for a render -- EUR_CR_BIF_BANK0 = 0x101f (EDM=15, TA/3D=list 1). Without
+    # it BANK0 stays at its 0x0f idle default (EDM only), so the 3D's client-address reads
+    # fall through to list 0. Under srvinit list 0 is a shared PD that happens to map them;
+    # under powervr_sgx list 0 is an empty idle PD and the transfer BIF-faults on a client
+    # address (m2 2026-11-04: BANK0=0x0f, DIR_LIST_BASE0=idle, FAULT on 0x3e001000). We do
+    # NOT write the ctx PD into list 0 -- that clobbers the kernel PD the 3D/ISP/PBE read
+    # through and wedged srvinit (do_ta note, 2026-11-03); routing via BANK0 avoids that.
+    a.i("limm r5, #0x101f")
+    a.i(f"str #{0xc78 // 4}, r5")                    # BIF_BANK0: TA/3D -> list 1 (ctx PD)
+    a.i(f"ldr r5, #{0xc78 // 4}")                    # read-back + fence
+    a.i("wdf")
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")              # start the 3D
     a.i("ba kick_adv")
