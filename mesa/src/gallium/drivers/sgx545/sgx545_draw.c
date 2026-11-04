@@ -1138,10 +1138,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
 
       if (left < 0)
          left = (sgx545_debug & SGX545_DEBUG_ATTRS) ? 16 : 0;
-      /* (TEMP: SGX545_ATTRS_BUFFERS=1, only draws from buffers: display lists) */
-      bool want = left > 0 && compiled && n_fetch >= 4 && draws[0].count >= 200 &&
-                  !(getenv("SGX545_ATTRS_BUFFERS") && ctx->vertex_buffers[0].is_user_buffer);
-      if (want) {
+      if (left > 0 && compiled && n_fetch >= 4 && draws[0].count >= 200) {
          left--;
          fprintf(stderr, "sgx545 attrs: %s x%u start %u index_size %u; depth func %#x write %d, cull %#x front_ccw %d, "
                  "pass %u, blend %d wmask %#x, fs douti %u\n", u_prim_name(info->mode), draws[0].count, draws[0].start,
