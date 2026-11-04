@@ -89,8 +89,8 @@ def reg_writes(u):
 # EUR_CR_EVENT_STATUS bits the host-side model raises for each event
 EV_HOST_KICK = 0            # host kick = EUR_CR_EVENT_KICK doorbell: no EVENT_STATUS bit (the microkernel finds the command via the kernel CCB write != read offset)
 EV_TA_FINISHED = 0x2000
-EV_3D_END = 0x40000         # PIXELBE end of render (render_done sets PAGE_RELEASE_PENDING)
-EV_DPM_FREE = 0x1           # DPM 3D memory free: clears PAGE_RELEASE_PENDING (dpm_free_done)
+EV_3D_END = 0x40000         # PIXELBE end of render -> pixel_done (3D rendered, no completion)
+EV_DPM_FREE = 0x1           # DPM 3D memory free -> render_done (completes the render, DDK order)
 
 
 def event(u, mem, regs, man, status):
@@ -154,10 +154,11 @@ def run_ours(code, man, events, ctxs):
                 if op == "st" and 0x2d000000 <= a < 0x2e000000]
         if k.last:
             out += [("3D", a, v) for a, v in reg_writes(u)]
-            event(u, mem, regs, man, EV_3D_END)   # -> render_done
+            event(u, mem, regs, man, EV_3D_END)   # -> pixel_done: 3D rendered, render stays in flight
+            event(u, mem, regs, man, EV_DPM_FREE) # -> render_done: complete on the DPM free (DDK order)
             out += [("done", a, v) for a, v in reg_writes(u)]
-            # every memory write render_done makes (event() cleared the log, so
-            # mem.log is exactly the completion handler's writes)
+            # every memory write render_done makes (event() cleared the log before the
+            # EV_DPM_FREE run, so mem.log is exactly the completion handler's writes)
             for (op, a, v, pc) in mem.log:
                 if op == "st":
                     out.append(("done_mem", a, v))
@@ -179,11 +180,14 @@ def run_ours(code, man, events, ctxs):
         mem.wr(A["ccbctl"] + 4, slot)                  # read offset
         event(u, mem, regs, man, EV_HOST_KICK)         # -> kick -> k_transfer
         out += [("XFER%d" % (i + 1), a, v) for a, v in reg_writes(u)]
-    # RESMAN exit cleanups (CMD_CLEANUP = 5), after all renders/transfers. Each must
-    # DEFER while its render's page release is still pending (render_done set
-    # PAGE_RELEASE_PENDING at pixel-done), then complete once the DPM 3D memory-free event
-    # lands and dpm_free_done clears it -- never deadlock (else the host frees the PB/RT
-    # under the free, the EA1 render fault).
+    # RESMAN exit cleanups (CMD_CLEANUP = 5), after all renders/transfers. A cleanup that
+    # races a still-in-flight render must DEFER (SC_INFLIGHT set) so the host can't free
+    # the PB/RT under the running 3D / DPM-free, then complete once render_done -- which
+    # now runs on the DPM 3D-memory-free event (0x1), i.e. AFTER the pages are freed --
+    # clears SC_INFLIGHT. Model that race directly: assert SC_INFLIGHT, send the cleanup
+    # (must defer); clear it (render_done's effect on 0x1) and resend (must complete).
+    # Never deadlock (else the host frees the PB/RT under the free -> the EA1 render fault).
+    SC_INFLIGHT = 0x14
     nclean = 0
     for e in events:
         if e.kind != "cleanup":
@@ -195,17 +199,19 @@ def run_ours(code, man, events, ctxs):
         mem.wr(cc + 4 * 2, e.data[0])           # cleanup type (RC 2, TC 3, ...)
         mem.wr(cc + 4 * 3, e.data[1])           # resource device address
         mem.wr(A["hostctl"] + 8, 0)             # host clears CleanupStatus before the send
+        mem.wr(A["ta3d"] + 4 * SC_INFLIGHT, e.data[1] or 0x1)  # a render in flight races the cleanup
         mem.wr(A["ccbctl"] + 0, slot + 1)
         mem.wr(A["ccbctl"] + 4, slot)
-        event(u, mem, regs, man, EV_HOST_KICK)  # -> k_cleanup (page release may be pending)
+        event(u, mem, regs, man, EV_HOST_KICK)  # -> k_cleanup, render in flight -> defer
         deferred = not (mem.rd(A["hostctl"] + 8) & 0x1)
-        event(u, mem, regs, man, EV_DPM_FREE)   # pages returned -> dpm_free_done clears the flag
+        mem.wr(A["ta3d"] + 4 * SC_INFLIGHT, 0)  # render_done (on 0x1) clears SC_INFLIGHT after the free
         mem.wr(A["ccbctl"] + 0, slot + 1)
         mem.wr(A["ccbctl"] + 4, slot)
         event(u, mem, regs, man, EV_HOST_KICK)  # -> k_cleanup again -> completes
         completed = bool(mem.rd(A["hostctl"] + 8) & 0x1)
-        print("  cleanup type=%d res=%#x: deferred-while-releasing=%s completed=%s  %s"
-              % (e.data[0], e.data[1], deferred, completed, "OK" if completed else "DEADLOCK"))
+        ok = deferred and completed
+        print("  cleanup type=%d res=%#x: deferred-while-in-flight=%s completed=%s  %s"
+              % (e.data[0], e.data[1], deferred, completed, "OK" if ok else "FAIL"))
     return out
 
 
