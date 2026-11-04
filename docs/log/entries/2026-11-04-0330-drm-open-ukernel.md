@@ -1,4 +1,4 @@
-# powervr_sgx on the open microkernel: first boot, no DDK code anywhere
+# powervr_sgx on the open microkernel: frames render, no DDK code anywhere
 
 M2 and M1 meet. EA1 RAM boot of b24d0aa (ea1-v1), 2026-11-04 ~03:33 UTC. The
 microkernel is `ukernel/` at um-re 273225c (9736 bytes, built by `ukernel/build.py`),
@@ -43,10 +43,44 @@ This is the
 open microkernel's to fix (`docs/UKERNEL.md` §3, TA kick and transfer: "points the
 BIF at the context's page directory"). The TA path may well need the same change.
 
+## Second run: frames render
+
+3298009 fixed the driver's half. The microkernel's (um-re e78a17c) sets `BIF_BANK0` for
+a transfer, which sends TA/3D requests to directory list 1, the job's directory, as
+its render path already did. It doesn't touch list 0. On the RAM boot of 3298009 with
+that image (~04:50 UTC):
+
+| run | result |
+|---|---|
+| one frame, one kick and two kicks | right |
+| 10 frames in one process; 10 on two contexts sharing the VM's PB; 3 at 720x480 | all right |
+| 5 processes, each frame started from runtime suspend (a full restart) | 5/5 |
+| a new context for every frame | 5/5 |
+| uAPI suite | 39/39 |
+| `cleanup=1`: new contexts, new RT datasets, 5 processes (RC, RT and PB cleanups) | 15/15 frames right; every cleanup completed |
+| blit | the pixels are right, but the job never completes |
+
+So the whole render path runs on open code:
+- powervr_sgx builds every structure;
+- the open microkernel runs TA and 3D;
+- the client's programs come from sgxgen;
+- one shared context and one PB per VM work;
+- the cleanups complete. On the DDK microkernel the RT and PB cleanups never did.
+
+The multi-process alternation the open microkernel shows under srvinit (4 or 5 of
+10) does not appear here. The empty idle directory in list 0 was no problem: no
+fault, so renders don't need list 0 to map anything (`idle_kernel_pd` not needed).
+
+The blit's completion is the open microkernel's known gap (UKERNEL.md §10): its
+transfer-done handler writes the status word but not the destination sync, whose
+write-ops-complete powervr_sgx waits for. The job timed out and the restart
+recovered, twice.
+
 ## Next
 
-- The same steps on 3298009: one frame, then the per-VM PB and its type-5 cleanup
-  with `cleanup=1`.
-- The transfer's directory load, on the microkernel side.
+- The transfer's destination sync, on the microkernel side; then blits and the
+  mixed and hang tests.
+- Secure mode: which structures the cores read through a client's directory.
+- Cleanup v2, once the microkernel speaks it.
 
 Data: `docs/log/data/2026-11-04-0330-drm-open-ukernel.txt`.

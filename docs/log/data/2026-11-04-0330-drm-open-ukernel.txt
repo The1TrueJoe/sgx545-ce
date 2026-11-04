@@ -35,3 +35,36 @@ devcoredump: ccb wo 2 ro 1; BIF_INT_STAT 0x000d0080 BIF_FAULT 0x3e001000; BIF_DI
 39/39 passed
 firmware running: 1 lost: 0 resets: 2 irqs: 622
 ccb wo 97 ro 97 issued 609 consumed 609
+
+# ==== second run: RAM boot of 3298009 (run 41767480520), open microkernel um-re e78a17c
+# (ukernel md5 d28972ee, 9768 bytes; k_transfer now sets BIF_BANK0), features 0, 2026-11-04 ~04:50 UTC
+[    8.503862] powervr_sgx 0000:01:02.0: [drm] powervr_sgx/sgx545-openhc-ukernel.bin: open microkernel ukernel-e78a17c, interface 1.0, features 0x0
+[    8.515711] powervr_sgx 0000:01:02.0: [drm] microkernel started
+
+# ---- one frame, one kick
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+1/1 frames right
+ccb wo 2 ro 2 issued 2 consumed 2
+BIF_INT_STAT 0x00080000  BIF_FAULT 0x00000000  BIF_BANK0 0x0000101f
+
+# ---- blit: pixels right, completion never signalled (transfer dst sync not written)
+copy  TIMED OUT, 4096/4096 pixels right
+[   23.153622] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 2, consumed 2); resetting
+[   23.172755] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   25.200527] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 2, consumed 2); resetting
+[   25.220754] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+
+# ---- frames (each line one process)
+two kicks: 1/1 frames right
+10 frames: 10/10 frames right
+10 frames on 2 contexts: 10/10 frames right
+720x480 x3: 3/3 frames right
+5 processes, each frame from runtime suspend: 5/5
+new context every frame x5: 5/5 frames right
+uAPI: 39/39 passed
+
+# ---- reloaded with cleanup=1 (RT, RC and PB cleanups sent)
+new context every frame x5: 5/5 frames right
+new RT dataset every frame x5: 5/5 frames right
+5 processes (PB cleanup at VM close): 5/5
+no "did not complete"; firmware running: 1 lost: 0 resets: 0; ccb wo 61 ro 61 issued 61 consumed 61; BIF_FAULT 0
