@@ -1,0 +1,506 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Copyright © 2026 Joseph Telaak
+SPDX-License-Identifier: MIT
+-->
+
+<!--
+SGX545 PDS (programmable data sequencer) programs, from docs/PDS.md.
+
+The code: 32-bit instructions (#instruction). The data words the DOUT
+instructions send (DOUTU, DOUTD, DOUTI, DOUTA) have encode-only roots of
+their own: they sit in the data segment, which the decoder doesn't see.
+
+Register operands come in three numberings (PDS.md "Instruction encoding"):
+U (8-bit words: ds0, ds1, inputs), S1 (16-bit halves of ds0 and the inputs)
+and S2 (16-bit halves of ds1).
+-->
+
+<isa>
+
+<!-- ===================================================================== -->
+<!-- operands                                                               -->
+<!-- ===================================================================== -->
+
+<bitset name="#u" size="8">
+	<doc>U: 0x00-0x3f ds0, 0x40-0x7f ds1, 0x80+ inputs.</doc>
+	<encode type="struct sgx545_pds_reg *" case-prefix="SGX545_PDS_">
+		<map name="W">src->num</map>
+	</encode>
+</bitset>
+<bitset name="#u.ds0" extends="#u" displayname="ds0">
+	<display>{NAME}[{W}]</display>
+	<field name="W" low="0" high="5" type="custom"/>
+	<pattern low="6" high="7">00</pattern>
+</bitset>
+<bitset name="#u.ds1" extends="#u" displayname="ds1">
+	<display>{NAME}[{W}]</display>
+	<field name="W" low="0" high="5" type="custom"/>
+	<pattern low="6" high="7">01</pattern>
+</bitset>
+<bitset name="#u.in" extends="#u" displayname="in">
+	<display>{NAME}{W}</display>
+	<field name="W" low="0" high="6" type="custom"/>
+	<pattern pos="7">1</pattern>
+</bitset>
+
+<bitset name="#ud" size="7">
+	<doc>The ALU destination: U without the inputs (7 bits).</doc>
+	<encode type="struct sgx545_pds_reg *" case-prefix="SGX545_PDS_">
+		<map name="W">src->num</map>
+	</encode>
+</bitset>
+<bitset name="#ud.ds0" extends="#ud" displayname="ds0">
+	<display>{NAME}[{W}]</display>
+	<field name="W" low="0" high="5" type="custom"/>
+	<pattern pos="6">0</pattern>
+</bitset>
+<bitset name="#ud.ds1" extends="#ud" displayname="ds1">
+	<display>{NAME}[{W}]</display>
+	<field name="W" low="0" high="5" type="custom"/>
+	<pattern pos="6">1</pattern>
+</bitset>
+
+<enum name="#half">
+	<value val="0" display=""/>
+	<value val="1" display=".hi"/>
+</enum>
+
+<bitset name="#s1" size="8">
+	<doc>S1: ds0 halves; ds0 words 0x40+ are the inputs.</doc>
+	<encode type="struct sgx545_pds_reg *" case-prefix="SGX545_PDS_">
+		<map name="W">src->num</map>
+		<map name="HI">src->hi</map>
+	</encode>
+	<field name="HI" pos="0" type="#half"/>
+</bitset>
+<bitset name="#s1.ds0" extends="#s1" displayname="ds0">
+	<display>{NAME}[{W}]{HI}</display>
+	<field name="W" low="1" high="6" type="custom"/>
+	<pattern pos="7">0</pattern>
+</bitset>
+<bitset name="#s1.in" extends="#s1" displayname="in">
+	<display>{NAME}{W}{HI}</display>
+	<field name="W" low="1" high="6" type="custom"/>
+	<pattern pos="7">1</pattern>
+</bitset>
+
+<bitset name="#s2" size="7">
+	<doc>S2: ds1 halves.</doc>
+	<encode type="struct sgx545_pds_reg *" case-prefix="SGX545_PDS_">
+		<map name="W">src->num</map>
+		<map name="HI">src->hi</map>
+	</encode>
+</bitset>
+<bitset name="#s2.ds1" extends="#s2" displayname="ds1">
+	<display>{NAME}[{W}]{HI}</display>
+	<field name="HI" pos="0" type="#half"/>
+	<field name="W" low="1" high="6" type="custom"/>
+</bitset>
+
+<bitset name="#dsw" size="8">
+	<doc>
+		A data word a MOVS sends, for the display: bit 7 = ds1, else
+		ds0 (words 0x40+ are the inputs).
+	</doc>
+</bitset>
+<bitset name="#dsw.ds0" extends="#dsw" displayname="ds0">
+	<display>{NAME}[{W}]</display>
+	<field name="W" low="0" high="5" type="custom"/>
+	<pattern low="6" high="7">00</pattern>
+</bitset>
+<bitset name="#dsw.in" extends="#dsw" displayname="in">
+	<display>{NAME}{W}</display>
+	<field name="W" low="0" high="5" type="custom"/>
+	<pattern low="6" high="7">01</pattern>
+</bitset>
+<bitset name="#dsw.ds1" extends="#dsw" displayname="ds1">
+	<display>{NAME}[{W}]</display>
+	<field name="W" low="0" high="5" type="custom"/>
+	<pattern low="6" high="7">10</pattern>
+</bitset>
+
+<!-- ===================================================================== -->
+<!-- instructions                                                           -->
+<!-- ===================================================================== -->
+
+<enum name="#ccpfx">
+	<value val="0" display="(p0) "/>
+	<value val="1" display=""/>
+	<value val="2" display=""/>
+	<value val="3" display=""/>
+	<value val="4" display=""/>
+	<value val="5" display=""/>
+	<value val="6" display=""/>
+	<value val="7" display=""/>
+</enum>
+<enum name="#ccsfx">
+	<value val="0" display=""/>
+	<value val="1" display=".cc1"/>
+	<value val="2" display=".cc2"/>
+	<value val="3" display=".cc3"/>
+	<value val="4" display=".cc4"/>
+	<value val="5" display=".cc5"/>
+	<value val="6" display=".cc6"/>
+	<value val="7" display=""/>
+</enum>
+
+<bitset name="#instruction" size="32">
+	<doc>
+		Bits 28-31 opcode, 27 sub-op, 24-26 condition (7 always, 0 if p0).
+	</doc>
+	<field name="CC" low="24" high="26" type="uint"/>
+	<derived name="PFX" type="#ccpfx"><expr>{CC}</expr></derived>
+	<derived name="SFX" type="#ccsfx"><expr>{CC}</expr></derived>
+	<encode type="struct sgx545_pds_instr *" case-prefix="SGX545_PDS_OPC_">
+		<map name="CC">src->cc</map>
+		<map name="X2">src->x2</map>
+		<map name="S27">src->s27</map>
+		<map name="DEST">src->dest</map>
+		<map name="R1">src->r1</map>
+		<map name="R2">src->r2</map>
+		<map name="SW0">src->sel[0]</map>
+		<map name="SW1">src->sel[1]</map>
+		<map name="SW2">src->sel[2]</map>
+		<map name="SW3">src->sel[3]</map>
+		<map name="DST">&amp;src->dst</map>
+		<map name="SRC1">&amp;src->src1</map>
+		<map name="SRC2">&amp;src->src2</map>
+		<map name="SRC">&amp;src->src1</map>
+		<map name="AMOUNT">src->amount</map>
+		<map name="TARGET">src->target</map>
+	</encode>
+</bitset>
+
+<!-- MOVS: the DOUT instruction (opcode 0, or 2 with x2) -->
+
+<enum name="#dout">
+	<value val="0" display="dout0"/>
+	<value val="1" display="dout1"/>
+	<value val="2" display="douti"/>
+	<value val="3" display="doutd"/>
+	<value val="4" display="doutt"/>
+	<value val="5" display="doutu"/>
+	<value val="6" display="douta"/>
+	<value val="7" display="dout7"/>
+	<value val="8" display="dout8"/>
+	<value val="9" display="dout9"/>
+	<value val="10" display="dout10"/>
+	<value val="11" display="dout11"/>
+	<value val="12" display="dout12"/>
+	<value val="13" display="dout13"/>
+	<value val="14" display="dout14"/>
+	<value val="15" display="dout15"/>
+	<value val="16" display="dout16"/>
+	<value val="17" display="dout17"/>
+	<value val="18" display="dout18"/>
+	<value val="19" display="dout19"/>
+	<value val="20" display="dout20"/>
+	<value val="21" display="dout21"/>
+	<value val="22" display="dout22"/>
+	<value val="23" display="dout23"/>
+	<value val="24" display="dout24"/>
+	<value val="25" display="dout25"/>
+	<value val="26" display="dout26"/>
+	<value val="27" display="dout27"/>
+	<value val="28" display="dout28"/>
+	<value val="29" display="dout29"/>
+	<value val="30" display="dout30"/>
+	<value val="31" display="dout31"/>
+</enum>
+
+<bitset name="movs" extends="#instruction">
+	<doc>
+		Sends four data words to DOUT target DEST: word n is select
+		SWn of the DS0 pair R1 (0 lo, 1 hi) or the DS1 pair R2 (2 lo,
+		3 hi). x2 (bit 29) and s27 (bit 27) together make DOUTD add word
+		2 to its address; cc3 is the vertex-fetch DOUTU form.
+	</doc>
+	<display>
+		{PFX}{DEST}{X2}{S27}{SFX} {O0}, {O1}, {O2}, {O3}{UR1}{UR2}
+	</display>
+	<field name="DEST" low="0" high="4" type="#dout"/>
+	<field name="SW3" low="5" high="6" type="uint"/>
+	<field name="SW2" low="7" high="8" type="uint"/>
+	<field name="SW1" low="9" high="10" type="uint"/>
+	<field name="SW0" low="11" high="12" type="uint"/>
+	<field name="R2" low="13" high="17" type="uint"/>
+	<field name="R1" low="18" high="23" type="uint"/>
+	<field name="S27" pos="27" type="bool" display=".s27"/>
+	<pattern pos="28">0</pattern>
+	<field name="X2" pos="29" type="bool" display=".x2"/>
+	<pattern low="30" high="31">00</pattern>
+	<!-- a row no select reads (printed only when it isn't 0) -->
+	<derived name="UR1" type="custom" width="6">
+		<expr>(({SW0} &amp; 2) &amp;&amp; ({SW1} &amp; 2) &amp;&amp; ({SW2} &amp; 2) &amp;&amp; ({SW3} &amp; 2)) ? {R1} : 0</expr>
+	</derived>
+	<derived name="UR2" type="custom" width="6">
+		<expr>(!({SW0} &amp; 2) &amp;&amp; !({SW1} &amp; 2) &amp;&amp; !({SW2} &amp; 2) &amp;&amp; !({SW3} &amp; 2)) ? {R2} : 0</expr>
+	</derived>
+	<derived name="O0" type="#dsw" width="8">
+		<expr>({SW0} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW0} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW0} &amp; 1))</expr>
+	</derived>
+	<derived name="O1" type="#dsw" width="8">
+		<expr>({SW1} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW1} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW1} &amp; 1))</expr>
+	</derived>
+	<derived name="O2" type="#dsw" width="8">
+		<expr>({SW2} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW2} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW2} &amp; 1))</expr>
+	</derived>
+	<derived name="O3" type="#dsw" width="8">
+		<expr>({SW3} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW3} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW3} &amp; 1))</expr>
+	</derived>
+</bitset>
+
+<!-- arithmetic and logic: dst (U, 7 bits), src1 (S1), src2 (S2) -->
+
+<bitset name="#alu" extends="#instruction">
+	<display>
+		{PFX}{NAME}{SFX} {DST}, {SRC1}, {SRC2}
+	</display>
+	<field name="DST" low="0" high="6" type="#ud"/>
+	<pattern low="7" high="8">00</pattern>
+	<field name="SRC2" low="9" high="15" type="#s2"/>
+	<field name="SRC1" low="16" high="23" type="#s1"/>
+</bitset>
+<bitset name="add" extends="#alu">
+	<pattern pos="27">0</pattern>
+	<pattern low="28" high="31">0100</pattern>
+</bitset>
+<bitset name="mul16" extends="#alu">
+	<doc>src1's half times src2's half, 16 x 16 -> 32.</doc>
+	<pattern pos="27">0</pattern>
+	<pattern low="28" high="31">0110</pattern>
+</bitset>
+<bitset name="or" extends="#alu">
+	<pattern pos="27">0</pattern>
+	<pattern low="28" high="31">1100</pattern>
+</bitset>
+<bitset name="and" extends="#alu">
+	<pattern pos="27">1</pattern>
+	<pattern low="28" high="31">1100</pattern>
+</bitset>
+<bitset name="xor" extends="#alu">
+	<pattern pos="27">0</pattern>
+	<pattern low="28" high="31">1101</pattern>
+</bitset>
+<bitset name="op0x4.s1" extends="#alu">
+	<doc>Not seen (PDS.md).</doc>
+	<pattern pos="27">1</pattern>
+	<pattern low="28" high="31">0100</pattern>
+</bitset>
+<bitset name="op0x6.s1" extends="#alu">
+	<doc>Not seen (PDS.md).</doc>
+	<pattern pos="27">1</pattern>
+	<pattern low="28" high="31">0110</pattern>
+</bitset>
+<bitset name="op0xd.s1" extends="#alu">
+	<doc>Opcode d with s = 1: XOR-like where it is seen (PDS.md).</doc>
+	<pattern pos="27">1</pattern>
+	<pattern low="28" high="31">1101</pattern>
+</bitset>
+
+<!-- tst: p0 = (src == 0), src1 or (bit 8) src2 -->
+
+<bitset name="#tst" extends="#instruction">
+	<pattern low="0" high="7">00000000</pattern>
+	<pattern pos="27">0</pattern>
+	<pattern low="28" high="31">1000</pattern>
+</bitset>
+<bitset name="tst" extends="#tst">
+	<display>
+		{PFX}{NAME}{SFX} {SRC1}
+	</display>
+	<pattern pos="8">0</pattern>
+	<pattern low="9" high="15">0000000</pattern>
+	<field name="SRC1" low="16" high="23" type="#s1"/>
+</bitset>
+<bitset name="tst.s2" extends="#tst" displayname="tst">
+	<display>
+		{PFX}{NAME}{SFX} {SRC2}
+	</display>
+	<pattern pos="8">1</pattern>
+	<field name="SRC2" low="9" high="15" type="#s2"/>
+	<pattern low="16" high="23">00000000</pattern>
+</bitset>
+
+<!-- bra: to instruction TARGET, counted from the first code word -->
+
+<bitset name="bra" extends="#instruction">
+	<display>
+		{PFX}{NAME}{SFX} #{TARGET}
+	</display>
+	<field name="TARGET" low="0" high="23" type="custom"/>
+	<pattern pos="27">0</pattern>
+	<pattern low="28" high="31">1001</pattern>
+</bitset>
+
+<!-- shifts: dst = src (U) shifted by AMOUNT -->
+
+<bitset name="#shift" extends="#instruction">
+	<display>
+		{PFX}{NAME}{SFX} {DST}, {SRC}, #{AMOUNT}
+	</display>
+	<field name="DST" low="0" high="7" type="#u"/>
+	<field name="AMOUNT" low="8" high="15" type="custom"/>
+	<field name="SRC" low="16" high="23" type="#u"/>
+	<pattern low="28" high="31">1111</pattern>
+</bitset>
+<bitset name="shl" extends="#shift">
+	<pattern pos="27">0</pattern>
+</bitset>
+<bitset name="shr" extends="#shift">
+	<pattern pos="27">1</pattern>
+</bitset>
+
+<bitset name="halt" extends="#instruction">
+	<display>
+		{PFX}{NAME}{SFX}
+	</display>
+	<pattern low="0" high="23">000000000000000000000000</pattern>
+	<pattern pos="27">1</pattern>
+	<pattern low="28" high="31">1010</pattern>
+</bitset>
+
+<!-- ===================================================================== -->
+<!-- DOUT data words (encode only)                                          -->
+<!-- ===================================================================== -->
+
+<bitset name="#doutu-w0" size="32">
+	<doc>
+		DOUTU word 0: USE code base register, code offset / 8 in its
+		512 KB window, and the byte at 24-31 (temporaries in fours;
+		0x08 also marks the microkernel's tasks).
+	</doc>
+	<encode type="struct sgx545_pds_doutu *">
+		<map name="BASE">src->base</map>
+		<map name="OFF">src->offset &gt;&gt; 3</map>
+		<map name="TEMPS">src->temps4</map>
+	</encode>
+	<field name="BASE" low="0" high="3" type="uint"/>
+	<field name="OFF" low="4" high="21" type="uint"/>
+	<pattern low="22" high="23">00</pattern>
+	<field name="TEMPS" low="24" high="31" type="uint"/>
+</bitset>
+<bitset name="doutu-w0" extends="#doutu-w0">
+	<display>{BASE} {OFF} {TEMPS}</display>
+</bitset>
+
+<bitset name="#doutu-w1" size="32">
+	<doc>
+		DOUTU word 1: b1 on microkernel tasks, b2 on pixel tasks, b24 =
+		the pixel program has plain iterations, b25 = it has samples;
+		b22/b23 as the pixel-event program's tasks set them. The rest
+		is reserved (PDS.md "Bits no field names").
+	</doc>
+	<encode type="struct sgx545_pds_doutu *">
+		<map name="B1">src->b1</map>
+		<map name="PIXEL">src->pixel</map>
+		<map name="B22">src->b22</map>
+		<map name="B23">src->b23</map>
+		<map name="ITER">src->iterations</map>
+		<map name="SMP">src->samples</map>
+	</encode>
+	<pattern pos="0">0</pattern>
+	<field name="B1" pos="1" type="bool"/>
+	<field name="PIXEL" pos="2" type="bool"/>
+	<pattern low="3" high="21">0000000000000000000</pattern>
+	<field name="B22" pos="22" type="bool"/>
+	<field name="B23" pos="23" type="bool"/>
+	<field name="ITER" pos="24" type="bool"/>
+	<field name="SMP" pos="25" type="bool"/>
+	<pattern low="26" high="31">000000</pattern>
+</bitset>
+<bitset name="doutu-w1" extends="#doutu-w1">
+	<display>{B1} {PIXEL} {B22} {B23} {ITER} {SMP}</display>
+</bitset>
+
+<bitset name="#doutd-ctrl" size="32">
+	<doc>
+		DOUTD word 1: dwords - 1, the destination attribute register,
+		b22-24 (1-3 on state and uniform DMAs) and b25 (set on them).
+	</doc>
+	<encode type="struct sgx545_pds_doutd *">
+		<map name="DW">src->dwords - 1</map>
+		<map name="REG">src->reg</map>
+		<map name="KIND">src->kind</map>
+		<map name="SEC">src->secondary</map>
+	</encode>
+	<field name="DW" low="0" high="7" type="uint"/>
+	<field name="REG" low="8" high="21" type="uint"/>
+	<field name="KIND" low="22" high="24" type="uint"/>
+	<field name="SEC" pos="25" type="bool"/>
+	<pattern low="26" high="31">000000</pattern>
+</bitset>
+<bitset name="doutd-ctrl" extends="#doutd-ctrl">
+	<display>{DW} {REG} {KIND} {SEC}</display>
+</bitset>
+
+<bitset name="#douti" size="32">
+	<doc>
+		DOUTI word 0. Sample half: coordinate set + 1 (0 none), 2-D (b9),
+		projected (b10), last sample (b30). Iterate half: source (b11-16:
+		set + 1, 0 position, 0x20 colour, 0x22 depth plane; 0x24 on pure
+		samples), colour precision &lt; 2 (b21), components - 1, plain
+		iteration (b24), b25-26, precision 2 / 1 (b27 / b28), last plain
+		iteration (b29).
+	</doc>
+	<encode type="struct sgx545_pds_douti *">
+		<map name="TC">src->sample_set</map>
+		<map name="DIM2">src->dim2</map>
+		<map name="PROJ">src->proj</map>
+		<map name="SRC">src->src</map>
+		<map name="CPREC">src->colour_prec</map>
+		<map name="COMPS">src->comps ? src->comps - 1 : 0</map>
+		<map name="ITER">src->iterate</map>
+		<map name="B25">src->b25_26</map>
+		<map name="PREC2">src->prec2</map>
+		<map name="PREC1">src->prec1</map>
+		<map name="LASTI">src->last_iter</map>
+		<map name="LASTS">src->last_sample</map>
+	</encode>
+	<field name="TC" low="0" high="4" type="uint"/>
+	<pattern low="5" high="8">0000</pattern>
+	<field name="DIM2" pos="9" type="bool"/>
+	<field name="PROJ" pos="10" type="bool"/>
+	<field name="SRC" low="11" high="16" type="uint"/>
+	<pattern low="17" high="20">0000</pattern>
+	<field name="CPREC" pos="21" type="bool"/>
+	<field name="COMPS" low="22" high="23" type="uint"/>
+	<field name="ITER" pos="24" type="bool"/>
+	<field name="B25" low="25" high="26" type="uint"/>
+	<field name="PREC2" pos="27" type="bool"/>
+	<field name="PREC1" pos="28" type="bool"/>
+	<field name="LASTI" pos="29" type="bool"/>
+	<field name="LASTS" pos="30" type="bool"/>
+	<pattern pos="31">0</pattern>
+</bitset>
+<bitset name="douti" extends="#douti">
+	<display>{TC} {DIM2} {PROJ} {SRC} {CPREC} {COMPS} {ITER} {B25} {PREC2} {PREC1} {LASTI} {LASTS}</display>
+</bitset>
+
+<bitset name="#douti-w1" size="32">
+	<doc>DOUTI word 1: bits 0-6 go with the sample half; b4 = a sprite's gl_PointCoord.</doc>
+	<encode type="struct sgx545_pds_douti *">
+		<map name="W1">src->w1</map>
+	</encode>
+	<field name="W1" low="0" high="6" type="uint"/>
+	<pattern low="7" high="31">0000000000000000000000000</pattern>
+</bitset>
+<bitset name="douti-w1" extends="#douti-w1">
+	<display>{W1}</display>
+</bitset>
+
+<bitset name="#douta-ctrl" size="32">
+	<doc>DOUTA word 1: bits 8-15 select the primary attribute register.</doc>
+	<encode type="struct sgx545_pds_douta *">
+		<map name="REG">src->reg</map>
+	</encode>
+	<pattern low="0" high="7">00000000</pattern>
+	<field name="REG" low="8" high="15" type="uint"/>
+	<pattern low="16" high="31">0000000000000000</pattern>
+</bitset>
+<bitset name="douta-ctrl" extends="#douta-ctrl">
+	<display>{REG}</display>
+</bitset>
+
+</isa>

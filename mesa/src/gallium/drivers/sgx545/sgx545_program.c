@@ -720,26 +720,28 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
 
       for (unsigned i = 0; i < out.n_iters && i < ARRAY_SIZE(so->prog.douti); i++) {
          unsigned it = out.iters[i].set + 1;
-         uint32_t w;
 
          if (out.iters[i].sample) {
-            /* sample half: coordinate set + 1, 2-D (0x200) or projected
-             * (0x400) (docs/PDS.md).  A sample of the set the previous plain
-             * DOUTI iterates is merged into it, as the DDK's generator does
-             * (w0 & 0x400007ff); a separate one samples at coordinate 0
-             * (EA3).  Otherwise a pure sample: 0x12000 and 0x6000000. */
-            uint32_t half = it | (out.iters[i].proj ? 0x400u : 0x200u);
+            /* sample half: coordinate set + 1, 2-D or projected (docs/PDS.md).
+             * A sample of the set the previous plain DOUTI iterates is merged
+             * into it, as the DDK's generator does; a separate one samples at
+             * coordinate 0 (EA3).  Otherwise a pure sample (source 0x24). */
+            bool proj = out.iters[i].proj;
             unsigned prev = so->prog.n_douti - 1;
+            struct sgx545_pds_douti *d = so->prog.n_douti ? &so->prog.douti[prev] : NULL;
 
-            if (so->prog.n_douti && !so->prog.douti_tex[prev] && (so->prog.douti[prev] & 0x7ff) == 0 &&
-                ((so->prog.douti[prev] >> 11) & 0x3f) == it) {
-               so->prog.douti[prev] |= half;
+            if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 && !d->proj && d->src == it) {
+               d->sample_set = it;
+               d->dim2 = !proj;
+               d->proj = proj;
                so->prog.douti_tex[prev] = out.iters[i].sampler + 1;
                last_sample = prev;
             } else {
                last_sample = so->prog.n_douti;
                so->prog.douti_tex[so->prog.n_douti] = out.iters[i].sampler + 1;
-               so->prog.douti[so->prog.n_douti++] = half | 0x12000u | 0x6000000u;
+               so->prog.douti[so->prog.n_douti++] = (struct sgx545_pds_douti){
+                  .sample_set = it, .dim2 = !proj, .proj = proj, .src = 0x24, .b25_26 = 3,
+               };
             }
             continue;
          }
@@ -747,12 +749,11 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
           * centres in the target's memory order, z, 1/w (DDK capture, EA-1) */
          if (it == SGX545_ITER_FRAGCOORD)
             it = 0;
-         if (out.iters[i].pointcoord)
-            so->prog.douti_w1[so->prog.n_douti] = 0x10;
-         w = it << 11 | (out.iters[i].comps - 1) << 22 | 1u << 24 | 0x6000000u |
-             (out.iters[i].f16 ? 1u << 28 : 0);
          last_plain = so->prog.n_douti;
-         so->prog.douti[so->prog.n_douti++] = w;
+         so->prog.douti[so->prog.n_douti++] = (struct sgx545_pds_douti){
+            .src = it, .comps = out.iters[i].comps, .iterate = true, .b25_26 = 3,
+            .prec1 = out.iters[i].f16, .w1 = out.iters[i].pointcoord ? 0x10 : 0,
+         };
       }
       if (so->code && orig->info.fs.uses_discard) {
          /* the triangle's depth plane (source 0x22, 3 components) after the
@@ -761,11 +762,11 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
          unsigned pa = 0;
 
          for (unsigned i = 0; i < so->prog.n_douti; i++) {
-            uint32_t w = so->prog.douti[i];
+            const struct sgx545_pds_douti *d = &so->prog.douti[i];
 
-            if (w & (1u << 24))
-               pa += w & (1u << 28) ? (((w >> 22) & 3) + 2) / 2 : ((w >> 22) & 3) + 1;
-            if (w & 0x600)
+            if (d->iterate)
+               pa += d->prec1 ? (d->comps + 1) / 2 : d->comps;
+            if (d->dim2 || d->proj)
                pa++;
          }
          if (so->prog.n_douti == ARRAY_SIZE(so->prog.douti)) {
@@ -773,7 +774,9 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             so->code = NULL;
          } else {
             last_plain = so->prog.n_douti;
-            so->prog.douti[so->prog.n_douti++] = 0x22u << 11 | 2u << 22 | 1u << 24 | 0x6000000u;
+            so->prog.douti[so->prog.n_douti++] = (struct sgx545_pds_douti){
+               .src = 0x22, .comps = 3, .iterate = true, .b25_26 = 3,
+            };
             so->discard_pa = pa;
             so->prog.pa_dwords = MAX2(so->prog.pa_dwords, pa + 3);
             /* the visibility test's words in sa3, sa4 come with the secondary DMA */
@@ -783,9 +786,9 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       so->prog.code = so->code ? sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, NULL,
                                                  so->discard_pa, so->temps) : 0;
       if (last_plain >= 0)
-         so->prog.douti[last_plain] |= 1u << 29;   /* the last plain iteration */
+         so->prog.douti[last_plain].last_iter = true;
       if (last_sample >= 0)
-         so->prog.douti[last_sample] |= 1u << 30;  /* the last sample */
+         so->prog.douti[last_sample].last_sample = true;
    }
    simple_mtx_unlock(&screen->lock);
    if (sgx545_debug & SGX545_DEBUG_NIR)

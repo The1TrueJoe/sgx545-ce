@@ -24,6 +24,7 @@
 #include "util/macros.h"
 
 #include "sgx545_frame.h"
+#include "sgx545_pds.h"
 #include "sgx545_usse_progs.h"
 
 /* Placement: every PDS program the DDK makes starts on 32 bytes, every USSE
@@ -245,14 +246,27 @@ usse_load(struct sgxws_ctx *c, const struct usse_prog *pr, bool vertex)
    return sgxws_usse_upload(c, vertex, pr->w, pr->n, pr->reloc, pr->nreloc);
 }
 
-/* DOUTU word 0 (PDS.md): code base register (pixel 0-9 at the pixel heap +
- * n*512K, vertex 10+: from the device's heap layout), offset/8 in that window at b4, temporaries in fours at b24 */
+/* DOUTU word 0 (PDS.md): the code base register (pixel 0-9 at the pixel heap +
+ * n*512K, vertex 10+: from the device's heap layout), the offset in its window,
+ * temporaries in fours */
 static uint32_t
 doutu_w0(struct sgxws_ctx *c, uint32_t va, bool vertex, uint32_t temps)
 {
    uint32_t off = va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
 
-   return ((temps + 3) >> 2) << 24 | ((off >> 19) + c->dev->usse_base_index[vertex]) | ((off & 0x7ffff) >> 3) << 4;
+   return sgx545_pds_doutu_w0(&(struct sgx545_pds_doutu){
+      .base = (off >> 19) + c->dev->usse_base_index[vertex],
+      .offset = off & 0x7ffff,
+      .temps4 = (temps + 3) >> 2,
+   });
+}
+
+/* DOUTU word 1 of a pixel task (PDS.md) */
+static uint32_t
+doutu_w1_pixel(bool iterations, bool samples)
+{
+   return sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){
+      .pixel = true, .iterations = iterations, .samples = samples });
 }
 
 /* LIMM rN, #v (STATE.md, from the DDK's end-of-tile generator) */
@@ -272,36 +286,75 @@ struct pds {
    unsigned nc;
 };
 
-/* MOVS (DOUT): src1 = DS0 pair row, src2 = DS1 pair row; selects 0 s1.lo, 1 s1.hi, 2 s2.lo, 3 s2.hi */
-#define MOVS(top, r1, r2, a, b, c_, d_, dest)                                                     \
-   ((uint32_t)(top) << 24 | (uint32_t)(r1) << 18 | (uint32_t)(r2) << 13 | (a) << 11 | (b) << 9 | \
-    (c_) << 7 | (d_) << 5 | (dest))
-#define DOUTI 2
-#define DOUTD 3
-#define DOUTT 4
-#define DOUTU 5
-#define DOUTA 6
-#define MV 0x07                     /* always */
-#define MV_X 0x2f                   /* .x2.s27: DOUTD adds word 2 to its address */
-#define MV_CC3 0x03                 /* the vertex-fetch DOUTU form */
-/* ALU: op, sub-op, src1 (S1: 16-bit units, DS0 then inputs), src2 (S2: DS1, 16-bit units), dst (U) */
-#define ALU(op, s, s1, s2, dst) \
-   (0x07000000u | (uint32_t)(op) << 28 | (uint32_t)(s) << 27 | (s1) << 16 | (s2) << 9 | (dst))
-#define S1_DS0(w) (2 * (w))
-#define S1_IN(n) (2 * (0x40 + (n)))
-#define S2_DS1(w) (2 * (w))
-#define U_DS0(w) (w)
-#define U_DS1(w) (0x40 + (w))
-#define U_IN(n) (0x80 + (n))
-#define OP_ADD 4
-#define OP_MUL16 6
-#define OP_ANDOR 0xc                /* s 1 AND, s 0 OR */
-#define OP_XOR 0xd
-#define SHL(src, n, dst) (0xf7000000u | (src) << 16 | (n) << 8 | (dst))
-#define TST1(s1) (0x87000000u | (s1) << 16)          /* p0 = src1 == 0 */
-#define TST2(s2) (0x87000000u | (s2) << 9 | 0x100)   /* p0 = src2 == 0 */
-#define BRA_P0(t) (0x90000000u | (t))
-#define HALT 0xaf000000u
+/* The instructions, through the PDS encoder (src/sgx545/pds). */
+#define DOUTI SGX545_PDS_DOUTI
+#define DOUTD SGX545_PDS_DOUTD
+#define DOUTT SGX545_PDS_DOUTT
+#define DOUTU SGX545_PDS_DOUTU
+#define DOUTA SGX545_PDS_DOUTA
+enum { MV, MV_X, MV_CC3 };          /* always; .x2.s27 (DOUTD adds word 2); the vertex-fetch DOUTU */
+#define DS0 SGX545_PDS_DS0
+#define DS1 SGX545_PDS_DS1
+#define IN SGX545_PDS_IN
+
+/* MOVS (DOUT): r1 = DS0 pair row, r2 = DS1 pair row; selects 0 s1.lo, 1 s1.hi, 2 s2.lo, 3 s2.hi */
+static uint32_t
+pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b, unsigned c, unsigned d,
+         enum sgx545_pds_dout dest)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = SGX545_PDS_OPC_MOVS,
+      .cc = form == MV_CC3 ? SGX545_PDS_CC_3 : SGX545_PDS_CC_ALWAYS,
+      .x2 = form == MV_X,
+      .s27 = form == MV_X,
+      .dest = dest,
+      .r1 = r1,
+      .r2 = r2,
+      .sel = { a, b, c, d },
+   });
+}
+
+/* dst = src1 op src2: add, mul16, and, or, xor, op0xd.s1 */
+static uint32_t
+pds_alu(enum sgx545_pds_opc op, struct sgx545_pds_reg src1, struct sgx545_pds_reg src2, struct sgx545_pds_reg dst)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = op, .cc = SGX545_PDS_CC_ALWAYS, .dst = dst, .src1 = src1, .src2 = src2 });
+}
+
+static uint32_t
+pds_shl(struct sgx545_pds_reg src, unsigned n, struct sgx545_pds_reg dst)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = SGX545_PDS_OPC_SHL, .cc = SGX545_PDS_CC_ALWAYS, .dst = dst, .src1 = src, .amount = n });
+}
+
+/* p0 = src == 0 */
+static uint32_t
+pds_tst(struct sgx545_pds_reg src)
+{
+   bool ds1 = src.file == SGX545_PDS_FILE_DS1;
+
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = ds1 ? SGX545_PDS_OPC_TST_S2 : SGX545_PDS_OPC_TST,
+      .cc = SGX545_PDS_CC_ALWAYS,
+      .src1 = ds1 ? (struct sgx545_pds_reg){ 0 } : src,
+      .src2 = ds1 ? src : (struct sgx545_pds_reg){ 0 },
+   });
+}
+
+static uint32_t
+pds_bra_p0(unsigned target)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = SGX545_PDS_OPC_BRA, .cc = SGX545_PDS_CC_P0, .target = target });
+}
+
+static uint32_t
+pds_halt(void)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){ .opc = SGX545_PDS_OPC_HALT, .cc = SGX545_PDS_CC_ALWAYS });
+}
 
 static void
 pds_d0(struct pds *p, unsigned i, uint32_t v)
@@ -340,6 +393,11 @@ pds_emit(struct sgxws_ring *r, const struct pds *p, uint32_t *rows_out)
 
 #define CODE(p, w) ((p)->code[(p)->nc++] = (w))
 
+/* the clear's DOUTI: iterate the colour, 4 components, the last plain iteration [D] */
+static const struct sgx545_pds_douti clear_douti = {
+   .src = 0x20, .comps = 4, .iterate = true, .last_iter = true,
+};
+
 /* TA/3D state word for a pixel PDS program: rows<<26 | offset in the PDS pixel heap >> 4 */
 static uint32_t
 pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
@@ -355,9 +413,8 @@ pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
  * DS1 pair and T2, T3 from a DS0 pair, as the background object's does.
  */
 static uint32_t
-pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_t *douti,
-          const uint8_t *douti_tex, const uint8_t *douti_w1, unsigned n_douti, const uint32_t (*tex)[4],
-          uint32_t *rows)
+pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const struct sgx545_pds_douti *douti,
+          const uint8_t *douti_tex, unsigned n_douti, const uint32_t (*tex)[4], uint32_t *rows)
 {
    struct pds p = { 0 };
    unsigned d0 = 1, d1 = 1;
@@ -365,19 +422,19 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_
    pds_d0(&p, 0, task_w0);
    pds_d0(&p, 1, task_w1);
    pds_d1(&p, 0, 0);
-   pds_d1(&p, 1, n_douti ? douti[0] : 0);
-   CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 3, DOUTU));
+   pds_d1(&p, 1, n_douti ? sgx545_pds_douti_w0(&douti[0]) : 0);
+   CODE(&p, pds_movs(MV, 0, 0, 0, 1, 2, 3, DOUTU));
    for (unsigned i = 0; i < n_douti; i++) {
       unsigned r1 = d0++, r2 = 0;
 
       if (i) {
          r2 = d1++;
          pds_d1(&p, 2 * r2, 0);
-         pds_d1(&p, 2 * r2 + 1, douti[i]);
+         pds_d1(&p, 2 * r2 + 1, sgx545_pds_douti_w0(&douti[i]));
       }
-      pds_d0(&p, 2 * r1, douti_w1 ? douti_w1[i] : 0);
+      pds_d0(&p, 2 * r1, sgx545_pds_douti_w1(&douti[i]));
       pds_d0(&p, 2 * r1 + 1, 0);
-      CODE(&p, MOVS(MV, r1, r2, 3, 0, 1, 1, DOUTI));
+      CODE(&p, pds_movs(MV, r1, r2, 3, 0, 1, 1, DOUTI));
       if (douti_tex && douti_tex[i] && tex) {
          const uint32_t *t = tex[douti_tex[i] - 1];
          unsigned a = d1++, b = d0++;
@@ -386,10 +443,10 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_
          pds_d1(&p, 2 * a + 1, t[1]);
          pds_d0(&p, 2 * b, t[2]);
          pds_d0(&p, 2 * b + 1, t[3]);
-         CODE(&p, MOVS(MV, b, a, 2, 3, 0, 1, DOUTT));
+         CODE(&p, pds_movs(MV, b, a, 2, 3, 0, 1, DOUTT));
       }
    }
-   CODE(&p, HALT);
+   CODE(&p, pds_halt());
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
@@ -406,22 +463,23 @@ pds_secondary(struct sgxws_ring *r, uint32_t src, uint32_t dma_ctrl, uint32_t ta
       pds_d1(&p, 0, 0);
       pds_d0(&p, 2, task_w0);
       pds_d0(&p, 3, task_w1);
-      CODE(&p, MOVS(MV, 0, 0x18, 0, 1, 0, 1, DOUTD));
-      CODE(&p, MOVS(MV, 1, 0, 0, 1, 2, 2, DOUTU));
+      CODE(&p, pds_movs(MV, 0, 0x18, 0, 1, 0, 1, DOUTD));
+      CODE(&p, pds_movs(MV, 1, 0, 0, 1, 2, 2, DOUTU));
    } else {
       pds_d0(&p, 0, task_w0);
       pds_d0(&p, 1, task_w1);
-      CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 2, DOUTU));
+      CODE(&p, pds_movs(MV, 0, 0, 0, 1, 2, 2, DOUTU));
    }
-   CODE(&p, HALT);
+   CODE(&p, pds_halt());
    return pds_emit(r, &p, rows);
 }
 
-/* DOUTD control: dwords-1, attribute register at b8, b22-24 [G], b25 = secondary attributes [G] */
+/* DOUTD control: dwords, attribute register, b22-24 [G], b25 = secondary attributes [G] */
 static uint32_t
 dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secondary)
 {
-   return (dwords - 1) | reg << 8 | kind << 22 | (secondary ? 0x2000000 : 0);
+   return sgx545_pds_doutd_ctrl(&(struct sgx545_pds_doutd){
+      .dwords = dwords, .reg = reg, .kind = kind, .secondary = secondary });
 }
 
 /*
@@ -446,13 +504,13 @@ pds_dma_task(struct sgxws_ring *r, uint32_t src, uint32_t dwords, uint32_t task_
 
       pds_d0(&p, 2 * row, src + off * 4);
       pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, (n - 1) & 3, 1));
-      CODE(&p, MOVS(MV, row, 0x18, 0, 1, 0, 1, DOUTD));
+      CODE(&p, pds_movs(MV, row, 0x18, 0, 1, 0, 1, DOUTD));
    }
    pds_d1(&p, 0, 0);
    pds_d0(&p, 2 * row, task_w0);
    pds_d0(&p, 2 * row + 1, task_w1);
-   CODE(&p, MOVS(MV, row, 0, 0, 1, 2, 2, DOUTU));
-   CODE(&p, HALT);
+   CODE(&p, pds_movs(MV, row, 0, 0, 1, 2, 2, DOUTU));
+   CODE(&p, pds_halt());
    return pds_emit(r, &p, rows);
 }
 
@@ -571,27 +629,23 @@ sgxws_ctx_create(struct sgxws_dev *d)
    /* TA terminate (VDM type 6, PDS.md "DOUTA"): DOUTA (0x2000, 0), 3 x (0x16000e, 0x100), then
     * a state-emit task for the two attributes [D; the values' meaning G] */
    pds_d0(&t, 0, 0x2000);
-   pds_d0(&t, 1, 0);
+   pds_d0(&t, 1, sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){ .reg = 0 }));
    pds_d0(&t, 2, 0x0016000e);
-   pds_d0(&t, 3, 0x100);
+   pds_d0(&t, 3, sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){ .reg = 1 }));
    pds_d0(&t, 4, doutu_w0(c, c->state_emit[2], true, 0));
    pds_d0(&t, 5, 0);
-   CODE(&t, MOVS(MV, 0, 0x18, 0, 1, 2, 2, DOUTA));
+   CODE(&t, pds_movs(MV, 0, 0x18, 0, 1, 2, 2, DOUTA));
    for (int i = 0; i < 3; i++)
-      CODE(&t, MOVS(MV, 1, 0x18, 0, 1, 2, 2, DOUTA));
-   CODE(&t, MOVS(MV, 2, 0, 0, 1, 2, 2, DOUTU));
-   CODE(&t, HALT);
+      CODE(&t, pds_movs(MV, 1, 0x18, 0, 1, 2, 2, DOUTA));
+   CODE(&t, pds_movs(MV, 2, 0, 0, 1, 2, 2, DOUTU));
+   CODE(&t, pds_halt());
    c->terminate = pds_emit(&c->pds_vtx, &t, &rows);
 
    /* pixel programs shared by every object without inputs, and the clear's */
    c->pds_empty_p = pds_secondary(&c->pds_pix, 0, 0, doutu_w0(c, c->empty_p, false, 0), 0, NULL);
-   /* DOUTI: iterate the colour (source 0x20 at b11), 4 components, plain iteration, last [D] */
-   {
-      uint32_t douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29;
-
-      c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), 0x01000004, &douti, NULL, NULL, 1,
-                               NULL, NULL);
-   }
+   /* DOUTI: iterate the colour (source 0x20), 4 components, plain iteration, last [D] */
+   c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), doutu_w1_pixel(true, false), &clear_douti,
+                            NULL, 1, NULL, NULL);
 
    /* identity index buffer: glDrawArrays draws through it (STATE.md section 2) */
    p = ring_alloc(&c->gen, IDX_COUNT * 2, 4);
@@ -767,50 +821,50 @@ pixel_event(struct sgxws_ctx *c, uint32_t eot, uint32_t *rows)
    pds_d1(&p, 0, 0);
    pds_d1(&p, 1, doutu_w0(c, eot, false, 4));
    pds_d0(&p, 2, doutu_w0(c, c->pe_emit, false, 4));
-   pds_d0(&p, 3, 0x00c00000);
+   pds_d0(&p, 3, sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b22 = true, .b23 = true }));
    pds_d1(&p, 2, 8);
    pds_d1(&p, 3, 2);
    pds_d0(&p, 4, 0x100);
    pds_d0(&p, 5, 0xff8);
    pds_d1(&p, 4, 4);
    pds_d1(&p, 5, 0);
-   pds_d0(&p, 6, 0x00800000);
+   pds_d0(&p, 6, sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b23 = true }));
    pds_d0(&p, 7, 0x003ff000);
    pds_d1(&p, 6, 0);
    pds_d1(&p, 7, 0);
-   pds_d0(&p, 8, 0x00400000);
+   pds_d0(&p, 8, sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b22 = true }));
    pds_d0(&p, 9, 0);
    pds_d1(&p, 8, 0);
    pds_d1(&p, 9, 0);
-   /*  0 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(2), U_DS1(0x30)));
-   /*  1 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /*  2 */ CODE(&p, BRA_P0(5));
-   /*  3 */ CODE(&p, MOVS(MV, 0, 0, 0, 1, 0, 0, DOUTU));
-   /*  4 */ CODE(&p, HALT);
-   /*  5 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(3), U_DS1(0x30)));
-   /*  6 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /*  7 */ CODE(&p, BRA_P0(24));
-   /*  8 */ CODE(&p, ALU(OP_XOR, 1, S1_IN(1), S2_DS1(0), U_DS1(0x30)));
-   /*  9 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(4), S2_DS1(0x30), U_DS1(0x30)));
-   /* 10 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /* 11 */ CODE(&p, BRA_P0(27));
-   /* 12 */ CODE(&p, MOVS(MV, 0x21, 0, 0, 2, 0, 0, DOUTA));  /* (in2, ds1[0]) */
-   /* 13 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
-   /* 14 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)));
-   /* 15 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(6), S2_DS1(0x30), U_DS0(0x30)));
-   /* 16 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
-   /* 17 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(7), S2_DS1(0x30), U_DS1(0x30)));
-   /* 18 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
-   /* 19 */ CODE(&p, SHL(U_IN(1), 20, U_DS1(0x30)));
-   /* 20 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(8), S2_DS1(0x30), U_DS1(0x30)));
-   /* 21 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
-   /* 22 */ CODE(&p, MOVS(MV, 0x18, 0, 3, 0, 0, 0, DOUTU));  /* (ds1[1], ds0[0x30], ...) */
-   /* 23 */ CODE(&p, HALT);
-   /* 24 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(4), U_DS1(0x30)));
-   /* 25 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /* 26 */ CODE(&p, BRA_P0(28));
-   /* 27 */ CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTU));
-   /* 28 */ CODE(&p, HALT);
+   /*  0 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, IN(1), DS1(2), DS1(0x30)));
+   /*  1 */ CODE(&p, pds_tst(DS1(0x30)));
+   /*  2 */ CODE(&p, pds_bra_p0(5));
+   /*  3 */ CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTU));
+   /*  4 */ CODE(&p, pds_halt());
+   /*  5 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, IN(1), DS1(3), DS1(0x30)));
+   /*  6 */ CODE(&p, pds_tst(DS1(0x30)));
+   /*  7 */ CODE(&p, pds_bra_p0(24));
+   /*  8 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OP0XD_S1, IN(1), DS1(0), DS1(0x30)));
+   /*  9 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(4), DS1(0x30), DS1(0x30)));
+   /* 10 */ CODE(&p, pds_tst(DS1(0x30)));
+   /* 11 */ CODE(&p, pds_bra_p0(27));
+   /* 12 */ CODE(&p, pds_movs(MV, 0x21, 0, 0, 2, 0, 0, DOUTA));  /* (in2, ds1[0]) */
+   /* 13 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
+   /* 14 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(5), DS1(0x30), DS1(0x30)));
+   /* 15 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OR, DS0(6), DS1(0x30), DS0(0x30)));
+   /* 16 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
+   /* 17 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(7), DS1(0x30), DS1(0x30)));
+   /* 18 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
+   /* 19 */ CODE(&p, pds_shl(IN(1), 20, DS1(0x30)));
+   /* 20 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(8), DS1(0x30), DS1(0x30)));
+   /* 21 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
+   /* 22 */ CODE(&p, pds_movs(MV, 0x18, 0, 3, 0, 0, 0, DOUTU));  /* (ds1[1], ds0[0x30], ...) */
+   /* 23 */ CODE(&p, pds_halt());
+   /* 24 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, IN(1), DS1(4), DS1(0x30)));
+   /* 25 */ CODE(&p, pds_tst(DS1(0x30)));
+   /* 26 */ CODE(&p, pds_bra_p0(28));
+   /* 27 */ CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTU));
+   /* 28 */ CODE(&p, pds_halt());
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
@@ -824,10 +878,11 @@ background(struct sgxws_ctx *c)
    uint32_t rows, va;
 
    pds_d0(&p, 0, doutu_w0(c, c->copy_fs, false, 0));
-   pds_d0(&p, 1, 0x02000004);       /* DOUTU w1: samples (b25), b2 */
+   pds_d0(&p, 1, doutu_w1_pixel(false, true));
    pds_d1(&p, 0, 0);
-   /* DOUTI: sample texcoord set 0 (b0-4 = set+1), pure sample (b13, b16), last sample (b30) */
-   pds_d1(&p, 1, 1u | 0x12000u | 1u << 30);
+   /* DOUTI: sample texture coordinate set 0, a pure sample (source 0x24), the last */
+   pds_d1(&p, 1, sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
+                    .sample_set = 1, .src = 0x24, .last_sample = true }));
    pds_d0(&p, 2, 0);
    pds_d0(&p, 3, 0);
    /* DOUTT: T0 = 0x90 (clamp S/T b7/b4) and, strided, the pitch (pitch-1 split
@@ -842,10 +897,10 @@ background(struct sgxws_ctx *c)
                  (s->w - 1) << 12 | (s->h - 1));
    pds_d0(&p, 4, c->target.va);
    pds_d0(&p, 5, 0x00800000);
-   CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 3, DOUTU));
-   CODE(&p, MOVS(MV, 1, 0, 3, 0, 1, 1, DOUTI));
-   CODE(&p, MOVS(MV, 2, 1, 2, 3, 0, 1, DOUTT));
-   CODE(&p, HALT);
+   CODE(&p, pds_movs(MV, 0, 0, 0, 1, 2, 3, DOUTU));
+   CODE(&p, pds_movs(MV, 1, 0, 3, 0, 1, 1, DOUTI));
+   CODE(&p, pds_movs(MV, 2, 1, 2, 3, 0, 1, DOUTT));
+   CODE(&p, pds_halt());
    va = pds_emit(&c->pds_pix, &p, &rows);
    c->bg_pds[0] = pds_word(c, c->pds_empty_p, 1);
    c->bg_pds[1] = 0x00030001;       /* [G] */
@@ -916,14 +971,14 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_d
    pds_d0(&p, 3, 0);
    pds_d0(&p, 4, doutu_w0(c, c->state_emit[n], true, 0));
    pds_d0(&p, 5, 0);
-   CODE(&p, TST1(S1_DS0(0)));
-   CODE(&p, BRA_P0(6));
-   CODE(&p, MOVS(MV, 0, 0, 0, 1, 0, 0, DOUTD));
-   CODE(&p, TST1(S1_DS0(2)));
-   CODE(&p, BRA_P0(6));
-   CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTD));
-   CODE(&p, MOVS(MV, 2, 0, 0, 1, 2, 0, DOUTU));
-   CODE(&p, HALT);
+   CODE(&p, pds_tst(DS0(0)));
+   CODE(&p, pds_bra_p0(6));
+   CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTD));
+   CODE(&p, pds_tst(DS0(2)));
+   CODE(&p, pds_bra_p0(6));
+   CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTD));
+   CODE(&p, pds_movs(MV, 2, 0, 0, 1, 2, 0, DOUTU));
+   CODE(&p, pds_halt());
    va = pds_emit(&c->pds_vtx, &p, &rows);
    vdm(c, 0x40000000 | va >> 4);
    /* info (STATE.md section 2): rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
@@ -955,7 +1010,7 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
 
    pds_d1(&p, 0, stride);
    pds_d1(&p, 1, 0);
-   CODE(&p, ALU(OP_MUL16, 0, S1_IN(0), S2_DS1(0), U_DS1(0x32)));  /* index * stride */
+   CODE(&p, pds_alu(SGX545_PDS_OPC_MUL16, IN(0), DS1(0), DS1(0x32)));  /* index * stride */
    /* The vertex in DMAs of at most 16 dwords, as the secondary DMAs (a
     * longer one lost what came after: a lit vertex of 5 attributes, 20
     * dwords, got garbage in its last one, Minecraft's first-person arm).
@@ -964,13 +1019,13 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
       uint32_t n = attr_dwords - off < 16 ? attr_dwords - off : 16;
 
       pds_d0(&p, 2 * row, vb + off * 4);
-      pds_d0(&p, 2 * row + 1, (n - 1) | off << 8);   /* DOUTD: dwords-1, attribute register */
-      CODE(&p, MOVS(MV_X, row, 0x19, 0, 1, 2, 2, DOUTD));          /* + ds1[0x32] */
+      pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, 0, 0));
+      CODE(&p, pds_movs(MV_X, row, 0x19, 0, 1, 2, 2, DOUTD));          /* + ds1[0x32] */
    }
    pds_d0(&p, 2 * row, doutu_w0(c, vs, true, temps));
    pds_d0(&p, 2 * row + 1, 0);
-   CODE(&p, MOVS(MV_CC3, row, 0, 0, 1, 3, 3, DOUTU));
-   CODE(&p, HALT);
+   CODE(&p, pds_movs(MV_CC3, row, 0, 0, 1, 3, 3, DOUTU));
+   CODE(&p, pds_halt());
    va = pds_emit(&c->pds_vtx, &p, &rows);
    vdm(c, 0x80000000 | 0x00c00000 | prim << 26 | count);
    vdm(c, idx & ~1u);                /* 16-bit indices */
@@ -1255,19 +1310,16 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
                                 : units | 3u << 16 | ((fs->sec_dwords + 3) >> 2) << 18 |
                                   (per < 0xb ? per : 0xbu) << 25;
    }
-   /* DOUTU word 1: b24 = the program has plain iterations, b25 samples (PDS.md) */
+   /* DOUTU word 1: the program has plain iterations, samples (PDS.md) */
    {
-      uint32_t w1 = 4;
+      bool iter = false, smp = false;
 
-      /* from each DOUTI's own halves: b24 = plain iteration, a sample half */
       for (unsigned i = 0; i < fs->n_douti; i++) {
-         if (fs->douti[i] & (1u << 24))
-            w1 |= 0x01000000;
-         if (fs->douti_tex[i])
-            w1 |= 0x02000000;
+         iter |= fs->douti[i].iterate;
+         smp |= fs->douti_tex[i] != 0;
       }
-      prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), w1, fs->douti, fs->douti_tex, fs->douti_w1,
-                       fs->n_douti, d->tex, &rows);
+      prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), doutu_w1_pixel(iter, smp), fs->douti,
+                       fs->douti_tex, fs->n_douti, d->tex, &rows);
    }
    blk[n++] = pds_word(c, prim, rows);
    /* viewport (6 floats): offset/scale for x, y, z, as gallium's transform [C x offset, D rest] */
@@ -1816,14 +1868,14 @@ static uint32_t
 clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
 {
    if (!c->clear_pds_masked[wmask]) {
-      uint32_t w[4], douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29, fs;
+      uint32_t w[4], fs;
 
       w[0] = 0;
       w[1] = PHAS_HI | 0x700;                            /* phas.i #0, #0 [wait=7] */
       wmask_words(wmask, 0, w + 2);
       fs = sgxws_usse_upload(c, false, w, 2, NULL, 0);
-      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), 0x01000004, &douti, NULL, NULL, 1,
-                                             NULL, NULL);
+      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), doutu_w1_pixel(true, false),
+                                             &clear_douti, NULL, 1, NULL, NULL);
    }
    return c->clear_pds_masked[wmask];
 }
