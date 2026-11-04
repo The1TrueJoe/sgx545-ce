@@ -112,12 +112,12 @@ mean() { awk '{s += $1; n++} END {if (n) printf "%.1f", s / n; else printf "-"}'
 
 # menu, then the world
 w=0; while ! grep -q -E "$READY" "$LOG" 2>/dev/null && [ $w -lt 300 ]; do sleep 1; w=$((w+1)); done
+# LWJGL samples the mouse once a frame: a press and release need time between them
+click() { X mousemove "$1" "$2"; sleep 1; X mousedown 1; sleep 1; X mouseup 1; sleep 2; }
 sleep 10
-X mousemove 360 236 click 1
-sleep 3
-X mousemove 360 205 mousedown 1 mouseup 1
-sleep 3
-X mousemove 202 396 click 1
+click 360 236     # Singleplayer
+click 360 205     # the world
+click 202 396     # Play Selected World
 w=0; while ! grep -q 'joined the game' "$LOG" 2>/dev/null && [ $w -lt 300 ]; do sleep 1; w=$((w+1)); done
 sleep "$WARM"
 
