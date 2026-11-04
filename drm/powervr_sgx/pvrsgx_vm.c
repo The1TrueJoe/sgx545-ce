@@ -43,11 +43,13 @@
 static int share_kernel_heaps = -1;
 module_param(share_kernel_heaps, int, 0444);
 MODULE_PARM_DESC(share_kernel_heaps,
-		 "Map the firmware's heaps in every VM: -1 when the DDK microkernel runs (default), 0 never, 1 always");
+		 "Map the firmware's heaps in every VM: -1 unless the microkernel declares secure mode (default), 0 never, 1 always");
 
 bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
 {
-	return share_kernel_heaps < 0 ? sdev->fw.ddk : share_kernel_heaps;
+	if (share_kernel_heaps < 0)
+		return !(sdev->fw.features & PVRSGX_UKFW_SECURE);
+	return share_kernel_heaps;
 }
 
 /* The client heaps, the same in every VM. */

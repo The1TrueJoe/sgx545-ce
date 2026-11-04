@@ -26,9 +26,12 @@ structures: the host control block, the command buffer, render and transfer
 contexts, render target datasets and parameter buffers. Userspace never writes
 them.
 
-The driver accepts an image whose host interface it knows (today SGXMKIF as
-of DDK 1.7). After the start it asks the microkernel for its version and
-features.
+The driver looks for ``powervr_sgx/sgx545-openhc-ukernel.bin`` first. That file
+starts with a header giving the host interface version, feature bits, the
+image's CRC, its entry points and the immediates the driver fills with buffer
+addresses. If the open image is missing, the driver loads the DDK 1.7 build
+under its own name; it knows that build's entry points and patch sites. After
+the start it asks the microkernel for its version and features.
 
 Memory
 ======

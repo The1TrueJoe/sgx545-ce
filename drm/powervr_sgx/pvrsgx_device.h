@@ -95,8 +95,22 @@ struct pvrsgx_fw {
 	u32 interface;
 	/** @ddk: The DDK's microkernel, which runs under the job's directory. */
 	bool ddk;
+	/** @name: Firmware file the image came from. */
+	const char *name;
 	/** @image: The microkernel as loaded, for restarts. */
 	u8 *image;
+	/** @image_size: Bytes of USSE code in @image. */
+	u32 image_size;
+	/** @features: PVRSGX_UKFW_* of an open microkernel; 0 for the DDK's. */
+	u32 features;
+	/** @entries: An open microkernel's entry table (PDS program, offset), or NULL. */
+	u32 (*entries)[2];
+	/** @n_entries: Entries in @entries. */
+	u32 n_entries;
+	/** @patches: An open microkernel's patch table (offset, value), or NULL. */
+	u32 (*patches)[2];
+	/** @n_patches: Entries in @patches. */
+	u32 n_patches;
 	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
 	u32 ddk_version;
 	/** @ddk_build: Build number it reports with it. */
@@ -150,6 +164,8 @@ struct pvrsgx_device {
 
 	/** @cleanup_lock: One cleanup command in flight (one status bit). */
 	struct mutex cleanup_lock;
+	/** @cleanup_seq: Sequence number of the last cleanup v2 command. */
+	u32 cleanup_seq;
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
 	/** @ccb_spin: Keeps @ccb_issued and the write offset in step for readers. */
