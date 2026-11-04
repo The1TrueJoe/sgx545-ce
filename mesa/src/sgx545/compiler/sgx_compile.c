@@ -2184,9 +2184,41 @@ find_projected(struct sgx_ctx *c, nir_function_impl *impl)
    }
 }
 
+/* the registers a stored value reads, through movs, vecs and load_reg (and
+ * what blk stores into those registers) */
+static void
+regs_read(nir_def *d, nir_block *blk, struct set *regs, unsigned depth)
+{
+   nir_instr *p = nir_def_instr(d);
+   if (depth > 16)
+      return;
+   if (p->type == nir_instr_type_alu && nir_op_is_vec_or_mov(nir_instr_as_alu(p)->op)) {
+      nir_alu_instr *a = nir_instr_as_alu(p);
+      for (unsigned s = 0; s < nir_op_infos[a->op].num_inputs; s++)
+         regs_read(a->src[s].src.ssa, blk, regs, depth + 1);
+      return;
+   }
+   if (p->type != nir_instr_type_intrinsic ||
+       nir_instr_as_intrinsic(p)->intrinsic != nir_intrinsic_load_reg)
+      return;
+   nir_def *reg = nir_instr_as_intrinsic(p)->src[0].ssa;
+   if (_mesa_set_search(regs, reg))
+      return;
+   _mesa_set_add(regs, reg);
+   nir_foreach_instr(i, blk) {
+      if (i->type != nir_instr_type_intrinsic)
+         continue;
+      nir_intrinsic_instr *st = nir_instr_as_intrinsic(i);
+      if (st->intrinsic == nir_intrinsic_store_reg && st->src[1].ssa == reg)
+         regs_read(st->src[0].ssa, blk, regs, depth + 1);
+   }
+}
+
 /* 16-bit registers that one block writes component by component and only
  * then reads (a vecN the vec-to-regs lowering made one): the reads become
- * aliases of what was stored, with no pck.f16.f16 into a register */
+ * aliases of what was stored, with no pck.f16.f16 into a register. Not when
+ * a register the stored value reads is written before the last read (scalar
+ * phis' parallel copy, r = r.yzwx: the alias would read the new value) */
 static void
 find_shadow_regs(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -2220,6 +2252,7 @@ find_shadow_regs(struct sgx_ctx *c, nir_function_impl *impl)
             continue;
          /* in that block: no store after a load */
          bool loaded = false;
+         struct set *srcs = _mesa_pointer_set_create(NULL);
          nir_foreach_instr(i2, blk) {
             if (i2->type != nir_instr_type_intrinsic)
                continue;
@@ -2232,8 +2265,34 @@ find_shadow_regs(struct sgx_ctx *c, nir_function_impl *impl)
                loaded = true;
             else if (loaded)
                ok = false;
+            else
+               regs_read(ui->src[0].ssa, blk, srcs, 0);
          }
-         if (ok)
+         /* ... and none of what it was stored from written between its
+          * first store and its last load */
+         bool stored = false, between = false;
+         nir_instr *last_load = NULL;
+         nir_foreach_instr(i2, blk) {
+            if (i2->type == nir_instr_type_intrinsic &&
+                nir_instr_as_intrinsic(i2)->intrinsic == nir_intrinsic_load_reg &&
+                nir_instr_as_intrinsic(i2)->src[0].ssa == &decl->def)
+               last_load = i2;
+         }
+         nir_foreach_instr(i2, blk) {
+            if (i2 == last_load)
+               break;
+            if (i2->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *ui = nir_instr_as_intrinsic(i2);
+            if (ui->intrinsic != nir_intrinsic_store_reg)
+               continue;
+            if (ui->src[1].ssa == &decl->def)
+               stored = true;
+            else if (stored && _mesa_set_search(srcs, ui->src[1].ssa))
+               between = true;
+         }
+         _mesa_set_destroy(srcs, NULL);
+         if (ok && !between)
             _mesa_set_add(c->shadow_regs, decl);
       }
    }
