@@ -229,3 +229,29 @@ NEXT SINGLE CHANGE: add the DDK's DPM state-load/reset on the kick (0x0a0b) + 3D
 reset between renders instead of accumulating. Awaiting ta3d-state's exact sequence (asked)
 to implement; the A/B has already confirmed the direction. m2 has the box for its first
 powervr_sgx boot meanwhile; I take it back after for this test.
+
+## CORRECTION (ta3d-state + regsample data): NOT the DPM state-load; it's the 3D-page FREE
+
+ta3d-state retracted the state-load lead -- the DDK runs the value-4 load only to RESUME a
+stored scene, never a fresh one; each frame-dump is a fresh scene (same value-2 CLEAR we
+do), and its emulated trace only showed the load because of the loader bug. Settled from
+the regsample CSVs (docs/log/data/2026-11-04-regsample-{ours,ddk}.csv.gz):
+- **DPM_STATE (0x694) = 0x0 in EVERY row of BOTH arms** -- no value-4 load anywhere. Lead
+  dead.
+- **The DDK's r724 drains to 0 exactly 10x (once per frame), each right after a 0x40000
+  (3D-end) event**, counting down 0x00050005 -> 0x00030003 -> 0x00010001 -> 0 over a few
+  timer ticks (r72c 0x10001->0, r700 0x120019->0x19). So after the 3D ends, the DDK's DPM
+  actually FREES the scene's allocated pages and the counters drain.
+- **OURS: r724 stuck at 0x00190019 the whole run** (drains in 135/24891 rows vs the DDK's
+  ~1309). Our DPM never frees the 3D pages -- they accumulate, the next do_ta loads stale
+  counts, 3D/BIF fault.
+
+So the single change is whatever makes our 3D's DPM actually free its pages after the
+3D-end -- the dealloc/free-list setup in do_3d, NOT a state load. Candidates asked of
+ta3d-state: (1) the 3D dealloc regs do_3d loads from the PB desc (0x600/0x604/0x64c/0x660)
+-- wrong values so the free never runs? (2) a second DPM free/dealloc trigger the DDK
+issues at/after the 3D-end that we don't? (3) the TA->3D allocated-count handoff
+(save_ta_state stashes 0x700/0x710/0x724/0x72c into the PB desc) being wrong so the 3D
+frees the wrong count? Whatever makes r724 drain is the fix; the regsample will confirm.
+Awaiting ta3d-state's exact DDK write. (Joseph: a Minecraft FPS benchmark old-vs-new is
+uapi-stream's next EA1 job; plan the DPM HW test around that slot.)
