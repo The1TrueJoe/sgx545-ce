@@ -242,7 +242,7 @@ counts from `FUN_00017c20`:
 | 1 | 3e517004 | index buffer address; bit 0 is cleared for 16-bit indices, bits 0-1 for 32-bit [D] |
 | 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D] |
 | 3 | 003fffff | max index (constant) [D] |
-| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D] |
+| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. The DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords]. `64 / output dwords` hung the GPU at 12 output dwords (EA3, 2026-10-28, log `2026-10-28-1530-gl4es-ctest`; hardware, not a replay poke) |
 | 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D] |
 
 `glDrawArrays` draws through a static 16-bit identity index buffer.
@@ -253,7 +253,7 @@ counts from `FUN_00017c20`:
 |---|---|---|---|
 | 0x3040e000 (`43040e00 0e022403`) | 12 dw from 0x30401000, secondary attributes, kind 3 | 0x3c008700 | the clear's TA state block |
 | 0x3040e080 (`43040e08 0e022405`) | 25 dw from 0x30401080, kind 0 | 0x3c008a00 | the triangle's TA state block |
-| 0x30401120 (`43040112 0800e103`) | 10 dw from 0x304010e0, kind 1 | 0x3c000080 | vertex secondary attributes: the block's own address, then the vertex shader's uniforms and driver constants (2/255, 1/255, 2⁻¹⁵, 2⁻¹⁶) |
+| 0x30401120 (`43040112 0800e103`) | 10 dw from 0x304010e0, kind 1 | 0x3c000080 | vertex secondary attributes: sa0 = the block's own address, sa1 = 0, sa2-sa5 = the driver constants 2/255, 1/255, 2/65535, 1/65535 (`3c008081 3b808081 38000080 37800080`), sa6-sa9 = 0, then the vertex shader's uniforms [D: every DDK capture on disk, 24 of them, has this 10-dword block; none has vertex uniforms, so where they start is G] |
 | 0x30400060 (`43040006 0400e100`) | none | 0x3c000080 | empty secondary update (the end of the stream) |
 | 0x30400000 (`63040000 0e022401`) | DOUTA (0x2000,0), 3 × (0x16000e, 0x100) | 0x3c000000 | TA terminate |
 
@@ -356,8 +356,18 @@ reference (`cstencil`).
     DOUTT per input.
 - **Word 1:** from the fragment program object +0x64.
   - b18-24 = (secondary attribute dwords + 3)>>2 [D].
-  - b0, b16-17 and b25-28 come from the compiled shader [G]: the clear
-    gives `00030001`, the uniform shader `160f0001`.
+  - b0-15 = the primary attributes in units of 4 dwords, at least 1. A
+    program that reads more attributes than the word declares locks the GPU:
+    two F32 vec4 varyings under a constant `…0001` (EA3, 2026-10-28, log
+    `2026-10-28-1530-gl4es-ctest`; hardware).
+  - b16-17 = 3 in every capture [D].
+  - b25-28: the same log reports `12 / units`, capped at 0xb, from the DDK's
+    captures with 0-5 vec4 varyings (those captures are not in the tree).
+    The captures on disk all have units = 1, and show 0 for the clear
+    (`00030001`, colour iterated), 0xb when there are secondary attributes
+    (`160f0001`, `16130001`) and 12 without (`18030001`, one texture sample).
+    So b25-28 also depends on something besides the units. Gap: which inputs
+    set it.
 
 ### Viewport (6 floats)
 
