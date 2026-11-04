@@ -2,6 +2,9 @@
 
 The display path after M3. EA1 RAM boot of m2-drm c95e32d (CI run 41752797996) with the DDK
 microkernel, 2026-11-04 02:52 to 03:30 UTC. Nothing was flashed and there was no power-cycle.
+Another session's open-microkernel image was on the box, and powervr_sgx prefers it. The
+module was therefore loaded with `firmware=powervr_sgx/sgx545-ukernel-1.7.862890.bin`
+before every test, and dmesg showed no "open microkernel" line.
 The box is back on its normal boot.
 
 ## 1. GBM and kmsro on simpledrm
