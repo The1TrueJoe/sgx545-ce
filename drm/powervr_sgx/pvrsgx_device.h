@@ -6,6 +6,7 @@
 
 #include <drm/drm_device.h>
 #include <drm/drm_file.h>
+#include <drm/drm_mm.h>
 #include <drm/gpu_scheduler.h>
 
 #include <linux/io.h>
@@ -17,6 +18,16 @@
 #include <linux/xarray.h>
 
 #include "pvrsgx_regs.h"
+
+/* Device-wide ranges for kernel-owned objects (docs/UAPI.md section 5). */
+enum pvrsgx_krange {
+	PVRSGX_KRANGE_KDATA,	/* firmware only */
+	PVRSGX_KRANGE_KCODE,	/* firmware only */
+	PVRSGX_KRANGE_SYNC,	/* firmware only */
+	PVRSGX_KRANGE_3DPARAMS,	/* firmware and the owner's VM */
+	PVRSGX_KRANGE_TADATA,	/* firmware and the owner's VM */
+	PVRSGX_KRANGE_COUNT
+};
 
 struct firmware;
 struct pci_dev;
@@ -30,6 +41,8 @@ struct pvrsgx_vm;
  * mapping is write-combined.
  */
 struct pvrsgx_kmem {
+	/** @mmu: Directory it is mapped in; NULL (the default) is the firmware's. */
+	struct pvrsgx_mmu *mmu;
 	u32 dev_addr;
 	u32 size;
 	unsigned int npages;
@@ -75,6 +88,10 @@ struct pvrsgx_fw {
 	u32 cache_control;
 	/** @interface: DRM_POWERVR_SGX_FW_IF_*. */
 	u32 interface;
+	/** @ddk: The DDK's microkernel, which runs under the job's directory. */
+	bool ddk;
+	/** @image: The microkernel as loaded, for restarts. */
+	u8 *image;
 	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
 	u32 ddk_version, ddk_build;
 };
@@ -102,9 +119,21 @@ struct pvrsgx_device {
 
 	struct pvrsgx_fw fw;
 	bool fw_running;
+	/**
+	 * @powered: The SGX is clocked and its registers may be read. Off between
+	 * a stop and the next start: a read of an unclocked CE5300 block can hang
+	 * the bus, and the interrupt line is shared.
+	 */
+	bool powered;
+	/** @fw_started: The microkernel has run since load; later starts are restarts. */
+	bool fw_started;
+	/** @fw_gen: Restarts (resets and runtime resumes) since load. */
+	u32 fw_gen;
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
 
+	/** @cleanup_lock: One cleanup command in flight (one status bit). */
+	struct mutex cleanup_lock;
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
 	/** @ccb_spin: Keeps @ccb_issued and the write offset in step for readers. */
@@ -124,6 +153,24 @@ struct pvrsgx_device {
 	struct delayed_work poll_work;
 
 	u32 reset_count;
+	/** @reset_logged: @reset_count at the last "started" message (resumes are quiet). */
+	u32 reset_logged;
+
+	/** @kobj_lock: Protects @krange and @graveyard. */
+	struct mutex kobj_lock;
+	struct drm_mm krange[PVRSGX_KRANGE_COUNT];
+	/** @graveyard: Released kernel objects the firmware may still read. */
+	struct list_head graveyard;
+	/** @renders_submitted, @renders_done: For reaping @graveyard. */
+	u64 renders_submitted, renders_done;
+	struct work_struct reap_work;
+
+	/** @last_render: The last render job's structures, for debugfs. */
+	struct mutex last_lock;
+	struct pvrsgx_rt_dataset *last_rtds;
+	u32 last_cmd_off;
+	/** @render_snap: Text dump taken as a last kick was written (debugfs). */
+	char *render_snap;
 
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
@@ -140,6 +187,8 @@ struct pvrsgx_file {
 	struct xarray vms;
 	/** @contexts: Contexts by handle. */
 	struct xarray contexts;
+	/** @rtds: RT datasets by handle. */
+	struct xarray rtds;
 };
 
 static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)
@@ -157,12 +206,24 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 	iowrite32(val, sdev->regs + reg);
 }
 
+struct pvrsgx_krange_span {
+	u32 start, end;
+};
+
+extern const struct pvrsgx_krange_span pvrsgx_kernel_heaps[3];
+
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_fini(struct pvrsgx_device *sdev);
+int pvrsgx_power_get(struct pvrsgx_device *sdev);
+void pvrsgx_power_put(struct pvrsgx_device *sdev, u32 n);
+void pvrsgx_power_init(struct pvrsgx_device *sdev);
+void pvrsgx_power_fini(struct pvrsgx_device *sdev);
+int pvrsgx_runtime_suspend(struct device *dev);
+int pvrsgx_runtime_resume(struct device *dev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);

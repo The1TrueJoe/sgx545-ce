@@ -241,11 +241,13 @@ constant_data(struct sgx545_context *ctx, mesa_shader_stage stage)
    return NULL;
 }
 
-/* primitives the hardware doesn't have, drawn as lists of triangles or lines */
+/* primitives the hardware doesn't have, drawn as lists of triangles or lines
+ * (desktop GL's quads, quad strips and polygons too) */
 static bool
 expanded_prim(enum mesa_prim mode)
 {
-   return mode == MESA_PRIM_TRIANGLE_FAN || mode == MESA_PRIM_LINE_STRIP || mode == MESA_PRIM_LINE_LOOP;
+   return mode == MESA_PRIM_TRIANGLE_FAN || mode == MESA_PRIM_LINE_STRIP || mode == MESA_PRIM_LINE_LOOP ||
+          mode == MESA_PRIM_QUADS || mode == MESA_PRIM_QUAD_STRIP || mode == MESA_PRIM_POLYGON;
 }
 
 /* how many vertices the list has (the count already trimmed to whole primitives) */
@@ -253,9 +255,13 @@ static unsigned
 expanded_count(enum mesa_prim mode, unsigned count)
 {
    switch (mode) {
-   case MESA_PRIM_TRIANGLE_FAN: return (count - 2) * 3;
+   case MESA_PRIM_TRIANGLE_FAN:
+   case MESA_PRIM_POLYGON: return (count - 2) * 3;
+   case MESA_PRIM_TRIANGLE_STRIP: return (count - 2) * 3;
    case MESA_PRIM_LINE_STRIP: return 2 * (count - 1);
    case MESA_PRIM_LINE_LOOP: return 2 * count;
+   case MESA_PRIM_QUADS: return count / 4 * 6;
+   case MESA_PRIM_QUAD_STRIP: return (count / 2 - 1) * 6;
    default: return count;
    }
 }
@@ -265,7 +271,26 @@ static unsigned
 expanded_vertex(enum mesa_prim mode, unsigned i, unsigned out_count)
 {
    switch (mode) {
-   case MESA_PRIM_TRIANGLE_FAN: return i % 3 == 0 ? 0 : i / 3 + i % 3;
+   case MESA_PRIM_TRIANGLE_FAN:
+   case MESA_PRIM_POLYGON: return i % 3 == 0 ? 0 : i / 3 + i % 3;
+   /* a quad's two triangles keep its winding and both end on its last
+    * vertex, GL's provoking vertex for quads: 0 1 3, 1 2 3 */
+   case MESA_PRIM_QUADS: {
+      static const uint8_t quad[6] = { 0, 1, 3, 1, 2, 3 };
+      return i / 6 * 4 + quad[i % 6];
+   }
+   /* a strip's quad is 2q, 2q+1, 2q+3, 2q+2 around, its last vertex 2q+3:
+    * 0 1 3, 2 0 3 */
+   case MESA_PRIM_QUAD_STRIP: {
+      static const uint8_t quad[6] = { 0, 1, 3, 2, 0, 3 };
+      return i / 6 * 2 + quad[i % 6];
+   }
+   /* a strip's triangle t is t, t+1, t+2, its odd ones t+1, t, t+2 (GL's
+    * order, so every triangle keeps the strip's winding) */
+   case MESA_PRIM_TRIANGLE_STRIP: {
+      static const uint8_t odd[3] = { 1, 0, 2 };
+      return i / 3 + (i / 3 & 1 ? odd[i % 3] : i % 3);
+   }
    case MESA_PRIM_LINE_STRIP: return (i + 1) / 2;
    case MESA_PRIM_LINE_LOOP: return i == out_count - 1 ? 0 : (i + 1) / 2;
    default: return i;
@@ -463,21 +488,31 @@ staging(struct sgx545_context *ctx, size_t dwords)
 /* a compiled shader's constants: sa[base + slot] = constant buffer 0 float k */
 static void
 fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sgx545_shader *so,
-            uint32_t *block, unsigned base)
+            uint32_t *block, unsigned base, uint32_t *mem)
 {
    const float *cb = constant_data(ctx, stage);
    unsigned avail = ctx->constants[stage].buffer_size / 4;
 
-   /* F16 halves and C10 channels share a slot */
-   for (unsigned i = 0; i < so->n_consts; i++)
-      if (so->consts[i].fmt != 1)
-         block[base + so->consts[i].slot] = 0;
+   /* F16 halves and C10 channels share a slot (or a word of the memory
+    * block, filled the same way; mem is mem_dwords long) */
+   for (unsigned i = 0; i < so->n_consts; i++) {
+      const struct sgx545_const *k = &so->consts[i];
+
+      if (k->fmt == 1)
+         continue;
+      if (k->slot != 0xffff)
+         block[base + k->slot] = 0;
+      if (k->mem && mem)
+         mem[k->mem] = 0;
+   }
    for (unsigned i = 0; i < so->n_consts; i++) {
       const struct sgx545_const *k = &so->consts[i];
       float v = cb && k->k < avail ? cb[k->k] : 0.0f;
+      uint32_t bits, *at[2] = { k->slot != 0xffff ? &block[base + k->slot] : NULL,
+                                k->mem && mem ? &mem[k->mem] : NULL };
 
       if (k->fmt == 2) {
-         block[base + k->slot] |= (uint32_t)sgxws_f16(v) << k->shift;
+         bits = (uint32_t)sgxws_f16(v) << k->shift;
       } else if (k->fmt == 3 || k->fmt == 0x10) {
          /* C10: round(v * 255), signed 10 bits, the product in double as the
           * DDK has it (0.3f * 255 is 76.500003: 77, where a float product is
@@ -487,17 +522,47 @@ fill_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sg
          int c = CLAMP((int)lrint(CLAMP((double)v, -2.0, 2.0) * 255.0), -512, 511);
 
          if (k->fmt == 3)
-            block[base + k->slot] |= ((uint32_t)c & 0x3ff) << k->shift;
+            bits = ((uint32_t)c & 0x3ff) << k->shift;
          else
-            block[base + k->slot] |= (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
+            bits = (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
       } else if (k->fmt == 0x11) {
-         block[base + k->slot] |= k->value << k->shift;
+         bits = k->value << k->shift;
       } else {
-         memcpy(&block[base + k->slot], &v, 4);
+         memcpy(&bits, &v, 4);
+         for (unsigned j = 0; j < 2; j++)
+            if (at[j])
+               *at[j] = bits;
+         continue;
       }
-      SGX545_DBG(DRAW, "  %s constant %u -> sa%u (fmt %u at %u) = %f\n", stage == MESA_SHADER_VERTEX ? "vs" : "fs",
-                 k->k, base + k->slot, k->fmt, k->shift, v);
+      for (unsigned j = 0; j < 2; j++)
+         if (at[j])
+            *at[j] |= bits;
+      SGX545_DBG(DRAW, "  %s constant %u -> sa%d mem%u (fmt %u at %u) = %f\n",
+                 stage == MESA_SHADER_VERTEX ? "vs" : "fs", k->k, k->slot != 0xffff ? (int)(base + k->slot) : -1,
+                 k->mem, k->fmt, k->shift, v);
    }
+}
+
+/* a program's constants in memory for this draw (sgxws_const_mem), filled into a
+ * buffer of the context's; NULL when it has none */
+static void
+mem_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sgx545_shader *so,
+           uint32_t *block, unsigned base, struct sgxws_const_mem *m)
+{
+   memset(m, 0, sizeof(*m));
+   if (!so->mem_dwords)
+      return;
+   uint32_t **buf = &ctx->mem_consts[stage == MESA_SHADER_VERTEX ? 0 : 1];
+
+   if (!*buf && !(*buf = malloc(SGX545_MAX_CONST_MAP * 4 + 4)))
+      return;
+   memset(*buf, 0, so->mem_dwords * 4);
+   fill_consts(ctx, stage, so, block, base, *buf);
+   m->words = *buf;
+   m->dwords = so->mem_dwords;
+   m->n_bases = so->n_mem_bases;
+   for (unsigned j = 0; j < so->n_mem_bases; j++)
+      m->base[j] = base + so->mem_base_slot[j];
 }
 
 /* Every set the fragment program iterates or samples with must be one the
@@ -662,7 +727,9 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    unsigned count = draw->count, out_count = fan ? (count >= 3 ? (count - 2) * 3 : 0) : count;
    uint64_t now = os_time_get_nano();
 
-   if (!ctx->vcache || out_count < 3 || n_fetch > PIPE_MAX_ATTRIBS)
+   /* (lists and fans; desktop GL's quads and polygons take the uncached path) */
+   if (!ctx->vcache || out_count < 3 || n_fetch > PIPE_MAX_ATTRIBS ||
+       (info->mode != MESA_PRIM_TRIANGLES && !fan))
       return false;
    if (info->index_size) {
       if (info->has_user_indices)
@@ -809,6 +876,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    unsigned n_fetch = 1, vertex_dwords = 0;
    float color[4];
    uint32_t prim;
+   uint32_t sampled = 0;        /* the sampler units this draw reads */
    bool compiled;
 
    if (indirect || !ctx->vs || !ctx->fs)
@@ -818,6 +886,19 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
       struct pipe_sampler_view *view = ctx->views[unit];
 
+      /* stopgap: no layout is known for NPOT cube faces, and sampling one of
+       * 16 texels or more, or its mipmaps, locks the 3D (piglit cubemap
+       * npot: a recovery a draw) */
+      if (view && view->texture->target == PIPE_TEXTURE_CUBE &&
+          !util_is_power_of_two_or_zero(view->texture->width0) &&
+          (view->texture->width0 >= 16 ||
+           (ctx->samplers[unit] && ctx->samplers[unit]->min_mip_filter != PIPE_TEX_MIPFILTER_NONE &&
+            view->u.tex.last_level > view->u.tex.first_level))) {
+         if (!ctx->warned_cube)
+            fprintf(stderr, "sgx545: NPOT cube maps of 16 texels or more, or mipmapped, not drawn yet\n");
+         ctx->warned_cube = true;
+         return;
+      }
       if (view && sgx545_tex_uses_cube0(view, ctx->samplers[unit]) &&
           !sgx545_resource_cube0(ctx, sgx545_resource(view->texture)))
          return;
@@ -870,14 +951,20 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    if (compiled) {
       struct sgx545_shader *vs = ctx->vs;
 
-      /* gl_PointCoord: the vertex shader's varyings move up to leave set 0 free */
-      if (ctx->fs->kind == SGX545_SHADER_COMPILED && ctx->fs->reads_pointcoord) {
-         if (!ctx->vs->prog.point_size || !(vs = sgx545_sprite_vs(ctx, ctx->vs)))
+      /* the fragment shader's sets (gl_PointCoord: the vertex shader's
+       * varyings move up to leave set 0 free) */
+      if (ctx->fs->kind == SGX545_SHADER_COMPILED) {
+         if (ctx->fs->reads_pointcoord && !ctx->vs->prog.point_size)
             return;
-         st.sprite = info->mode == MESA_PRIM_POINTS;
+         if (!(vs = sgx545_vs_for(ctx, ctx->vs, ctx->fs)))
+            return;
+         st.sprite = ctx->fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       }
       d.vs = &vs->prog;
-      fill_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0);
+      if (vs->mem_dwords)
+         mem_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, &d.vs_mem);
+      else
+         fill_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, NULL);
       d.vs_consts = vsc;
       n_fetch = ctx->vs->n_attribs;
    } else if (ctx->vs->kind != SGX545_SHADER_VS_POSITION) {
@@ -896,7 +983,10 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       /* pass type: a blend 1; discard 4, or 2 with a blend (ISA.md) */
       st.pass_type = ctx->fs->discard_pa >= 0 ? (blend && blend->blend ? 2 : 4) : blend && blend->blend ? 1 : 0;
       d.fs = &fsp;
-      fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9);
+      if (ctx->fs->mem_dwords)
+         mem_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9, &d.fs_mem);
+      else
+         fill_consts(ctx, MESA_SHADER_FRAGMENT, ctx->fs, fsk, 9, NULL);
       /* a constant-colour blend reads the blend colour, packed BGRA8, in sa2 */
       if (blend && blend->blend && blend->constant) {
          const float *c = ctx->blend_color.color;
@@ -929,6 +1019,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          }
          sgx545_tex_words(view, ctx->samplers[unit], &fsk[ctx->fs->dep_sa[j]]);
          sgx545_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
+         sampled |= 1u << unit;
          SGX545_DBG(DRAW, "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
                     j, unit, util_format_short_name(view->format), view->texture->width0,
                     view->texture->height0, view->texture->target, view->texture->last_level + 1,
@@ -954,6 +1045,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          }
          sgx545_tex_words(view, ctx->samplers[unit - 1], tex[unit - 1]);
          sgx545_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
+         sampled |= 1u << (unit - 1);
       }
       d.tex = (const uint32_t (*)[4])tex;
    } else {
@@ -1000,6 +1092,9 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       prim = SGXWS_TRIANGLE_STRIP;
       break;
    case MESA_PRIM_TRIANGLE_FAN:
+   case MESA_PRIM_QUADS:
+   case MESA_PRIM_QUAD_STRIP:
+   case MESA_PRIM_POLYGON:
       prim = SGXWS_TRIANGLES;     /* drawn as a list */
       break;
    case MESA_PRIM_LINES:
@@ -1096,6 +1191,15 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    simple_mtx_lock(&screen->lock);
    if (!begin_frame(ctx))
       goto out;
+   /* The textures it samples were marked used by the next kick before
+    * begin_frame, which flushes the previous target's frame when this draw
+    * switches targets: mark them again with the frame they're now in (a
+    * resource freed after this draw flushes that frame first: glCopyPixels'
+    * temporary, sampled into the window and freed at once).  Only those: a
+    * texture merely bound would look in flight, and a later upload into it
+    * would go to its second copy (dEQP fbo.render.stencil*) */
+   u_foreach_bit(unit, sampled)
+      sgx545_resource(ctx->views[unit]->texture)->use_seq = sgxws_next_seq(ctx->hw);
    for (unsigned n = 0; n < num_draws; n++) {
       unsigned count = draws[n].count, start = draws[n].start, out_count;
       bool list = expanded_prim(info->mode);
@@ -1104,7 +1208,14 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       /* only whole primitives: the VDM takes the count as it is */
       if (!u_trim_pipe_prim(info->mode, &count))
          continue;
-      out_count = expanded_count(info->mode, count);
+      /* a strip longer than the index limit is drawn as a list of its
+       * triangles, which goes in pieces like any list */
+      d.prim = prim;
+      if (info->mode == MESA_PRIM_TRIANGLE_STRIP && count > SGXWS_MAX_INDICES) {
+         list = true;
+         d.prim = SGXWS_TRIANGLES;
+      }
+      out_count = list ? expanded_count(info->mode, count) : count;
       if (!out_count)
          continue;
       if (compiled && (prim == SGXWS_TRIANGLES) && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
@@ -1125,8 +1236,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
        * fetched once, the GPU given 16-bit indices into them, as the DDK does.
        * A list longer than the index limit goes in pieces of whole primitives. */
       if (list || prim != SGXWS_TRIANGLE_STRIP || out_count <= SGXWS_MAX_INDICES) {
-         unsigned piece = prim == SGXWS_TRIANGLES ? SGXWS_MAX_INDICES / 3 * 3 :
-                          prim == SGXWS_LINES ? SGXWS_MAX_INDICES / 2 * 2 : SGXWS_MAX_INDICES;
+         unsigned piece = d.prim == SGXWS_TRIANGLES ? SGXWS_MAX_INDICES / 3 * 3 :
+                          d.prim == SGXWS_LINES ? SGXWS_MAX_INDICES / 2 * 2 : SGXWS_MAX_INDICES;
 
          for (unsigned p0 = 0; p0 < out_count; p0 += piece) {
             unsigned np = MIN2(piece, out_count - p0), lo = ~0u, hi = 0;

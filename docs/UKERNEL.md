@@ -269,10 +269,9 @@ not a constant (confirmed against a capture with the textures session; word 4,
 the depth/stencil block, and word 16 are 0 in every capture seen). The
 transfer completes through the same 3D-end event as a render; the microkernel
 tells the two apart by a transfer-in-flight marker (control block +0x54) and
-routes a transfer to `xfer_done`. That handler signals the destination sync
-(the write-ops-complete value at command word 0x16c written to the sync address
-at word 0x168, in `SGXMKIF_TRANSFERCMD_SHARED` — so the client sees the blit
-done), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
+routes a transfer to `xfer_done`. That handler writes the status value at
+command word 0x16c to the address at word 0x168 (in `SGXMKIF_TRANSFERCMD_SHARED`
+at +0xac, that is `sCtlStatusInfo[0]`; the count is at 0x164), clears the transfer context's in-flight fields (+0x14, +0xb0), advances
 the context's CCB past the 0x1c0-byte command, and raises the host interrupt.
 The transfer also updates two sync-heap objects named by the kick's
 sync-handle list (not the shared command); reproducing those is the remaining
@@ -307,6 +306,39 @@ context's own structure. It reports completion by setting
 the handler leaves the status clear and the host times out and retries — this
 is the "Wait for uKernel to clean up" message, and it is why a render-context
 cleanup fails on a GPU the DDK left mid-render (`docs/NOTES.md`).
+
+#### What a kernel driver needs from it (EA1, 2026-11-03)
+
+`powervr_sgx` sent the three cleanups the DDK sends, in its order (RT dataset at
+RT-dataset destroy, then render context, then PB descriptor at context
+destroy), each after the context's last render had completed (render-done
+SW_EVENT, fences signalled), on the DDK microkernel
+(`docs/log/entries/2026-11-03-0300-drm-cleanup.md`):
+
+| cleanup | data[1] | result |
+|---|---|---|
+| RT (1) | HW RT dataset | consumed; `CLEANUPCMD_COMPLETE` not set within 5 s |
+| RC (2) | HW render context | no timeout, but possibly the RT's late completion: one status bit serves all three |
+| PB (5) | PB descriptor | **not consumed**: the kernel CCB read offset stops at it, so every later command waits behind it until the host's job timeout resets the GPU |
+
+After ten frames the PB descriptor reads 0x14 = 0x19, 0x18 = `04210019`, 0x20 =
+0x19, 0x24 = 1 at 720x480, and a DDK frame leaves exactly the same words
+(`docs/log/data/2026-11-03-0320-ddk-after-render.txt`). That accounting is
+normal and does not explain the timeouts [G]. (The second-context hang it was
+first blamed for was the PB's address: log `2026-11-03-0340-drm-per-vm-pb`.)
+
+What the open microkernel must do (the list for `ukernel/`):
+
+- once a context's last render has signalled render-done, treat its RT
+  dataset, render context and PB as idle: cleanup of an idle resource
+  completes at once;
+- always consume a cleanup command; report busy and done as different status
+  values instead of holding the CCB, so the host can retry or give up without
+  a reset;
+- keep a separate completion per command (or echo data[1] into the status), so
+  a late completion can't be taken for the next one;
+- leave nothing of a cleaned-up context where the next context's renders read
+  it (the in-flight slot +0x50, the RT-data entry state).
 
 ### Get misc info (type 6)
 
@@ -721,13 +753,14 @@ match the DDK. Its one hardware unknown is whether the bare-`DOUTU` context
 allocates that temp, settled by a one-word sentinel on the next slot.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
-- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
-  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
-  0x16c), but a transfer also sets two sync-heap objects whose addresses come
-- **A transfer's sync-heap objects are not all updated.** `xfer_done` signals
-  the destination sync from `SGXMKIF_TRANSFERCMD_SHARED` (command word 0x168/
-  0x16c), but a transfer also sets two sync-heap objects whose addresses come
-  from the kick's sync-handle list, not the command; those are not reproduced
-  yet, so a dependent job waiting on them would stall.
+- **A transfer's syncs are not all updated.** `xfer_done` writes the status
+  word (`sCtlStatusInfo[0]`, command words 0x168/0x16c), but not the
+  destination and source syncs the shared command lists: `ui32NumDstSyncs` at
+  0x130, `asDstSyncs[0]` at 0x134 (read-ops pending, read-ops-complete address,
+  write-ops pending, write-ops-complete address), `ui32NumSrcSyncs` at 0xac and
+  `asSrcSyncs[8]` from 0xb0. The DDK microkernel sets the destination's
+  write-ops-complete to its pending value plus one, and `powervr_sgx` completes a
+  transfer job on exactly that (EA1, log `2026-11-03-0405-drm-transfers`), so
+  the open microkernel has to do the same.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).

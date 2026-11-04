@@ -11,6 +11,7 @@
 #include <drm/drm_print.h>
 
 #include <linux/dma-resv.h>
+#include <linux/module.h>
 #include <linux/overflow.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -23,10 +24,30 @@
 #include "pvrsgx_fw.h"
 #include "pvrsgx_gem.h"
 #include "pvrsgx_mmu.h"
+#include "pvrsgx_render.h"
 #include "pvrsgx_validate.h"
 #include "pvrsgx_vm.h"
 
 #define SZ_4G_ULL (1ULL << 32)
+
+/*
+ * The DDK microkernel handles a TA kick under the job's directory: it moves the
+ * EDM's BIF_BANK0 index onto the list it loads with the context's directory,
+ * then fetches its own code and reads its control blocks through it (EA1,
+ * 2026-11-03, docs/DRM-DRIVER.md section 4). So with it, every VM must map the
+ * firmware's heaps, which gives a client's shaders the reach into kernel memory
+ * that P2 and P3 describe (docs/UAPI.md 7.2). The open microkernel keeps the
+ * EDM on its own list and needs none of this.
+ */
+static int share_kernel_heaps = -1;
+module_param(share_kernel_heaps, int, 0444);
+MODULE_PARM_DESC(share_kernel_heaps,
+		 "Map the firmware's heaps in every VM: -1 when the DDK microkernel runs (default), 0 never, 1 always");
+
+bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
+{
+	return share_kernel_heaps < 0 ? sdev->fw.ddk : share_kernel_heaps;
+}
 
 /* The client heaps, the same in every VM. */
 static const struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {
@@ -140,6 +161,7 @@ static void vm_release(struct kref *ref)
 		drm_gpuva_remove(va);
 		va_release(vm, va);
 	}
+	drm_mm_takedown(&vm->params);
 	pvrsgx_mmu_destroy(vm->mmu);
 	mutex_destroy(&vm->lock);
 	drm_gpuvm_put(&vm->gpuvm);
@@ -181,10 +203,16 @@ static struct pvrsgx_vm *vm_create(struct pvrsgx_device *sdev)
 		kfree(vm);
 		return ERR_PTR(-ENOMEM);
 	}
+	if (pvrsgx_vm_shares_kernel_heaps(sdev)) {
+		for (int i = 0; i < ARRAY_SIZE(pvrsgx_kernel_heaps); i++)
+			pvrsgx_mmu_share(vm->mmu, sdev->kernel_mmu, pvrsgx_kernel_heaps[i].start,
+					 pvrsgx_kernel_heaps[i].end);
+	}
 	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
 		       0, SZ_4G_ULL, 0, 0, &pvrsgx_gpuvm_ops);
 	drm_gem_object_put(r_obj);
 	vm->sdev = sdev;
+	drm_mm_init(&vm->params, PVRSGX_HEAP_3D_PARAMS, PVRSGX_HEAP_TA_DATA - PVRSGX_HEAP_3D_PARAMS);
 	mutex_init(&vm->lock);
 	kref_init(&vm->ref);
 	return vm;
@@ -202,6 +230,18 @@ struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle)
 	return vm;
 }
 
+/* The client let go of the VM: its contexts keep the PB, and nothing new can share it. */
+static void vm_close(struct pvrsgx_vm *vm)
+{
+	struct pvrsgx_pb *pb;
+
+	mutex_lock(&vm->lock);
+	pb = vm->pb;
+	vm->pb = NULL;
+	mutex_unlock(&vm->lock);
+	pvrsgx_pb_put(pb);
+}
+
 void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile)
 {
 	struct pvrsgx_vm *vm;
@@ -209,6 +249,7 @@ void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile)
 
 	xa_for_each(&sfile->vms, handle, vm) {
 		xa_erase(&sfile->vms, handle);
+		vm_close(vm);
 		pvrsgx_vm_put(vm);
 	}
 }
@@ -244,6 +285,7 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 	if (!vm)
 		return -EINVAL;
 	/* Contexts and jobs that use it keep it until they are done. */
+	vm_close(vm);
 	pvrsgx_vm_put(vm);
 	return 0;
 }
@@ -303,7 +345,8 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 		err = -EEXIST;
 		goto out_unlock;
 	}
-	err = pvrsgx_mmu_map_sgt(vm->mmu, args->device_addr, sgt, args->offset, args->size, 0);
+	err = pvrsgx_mmu_map_sgt(vm->mmu, args->device_addr, sgt, args->offset, args->size,
+				 pvrsgx_validate_pte_flags(to_pvrsgx_bo(obj)));
 	if (err)
 		goto out_unlock;
 
@@ -324,6 +367,11 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 	dma_resv_unlock(obj->resv);
 	drm_gpuvm_bo_put(vm_bo);
 	va = NULL;
+
+	/* A walk of this range while it was empty may be cached: drop it. */
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD;
+	mutex_unlock(&sdev->ccb_lock);
 
 out_unlock:
 	mutex_unlock(&vm->lock);

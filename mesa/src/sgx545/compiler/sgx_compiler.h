@@ -80,6 +80,7 @@ struct sgx_compile_options {
 struct sgx_varying {
    char name[64];
    unsigned set;        /* first set (one per row) */
+   unsigned comp;       /* first component in its sets: varyings may share a set */
    unsigned rows, comps;
    unsigned precision;  /* GLSL: 0 none, 1 high, 2 medium, 3 low */
 };
@@ -92,9 +93,13 @@ struct sgx_varyings {
 };
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
+#define SGX_SLOT_NONE 0xffff
+#define SGX_MAX_CONST_MAP (1024 + 32)   /* every constant number and literal */
+
 struct sgx_const_map {
    uint16_t k;                  /* constant number: uniform component (sgx_nir.c's numbering) */
-   uint16_t slot;               /* sa[sa_base + slot] */
+   uint16_t slot;               /* sa[sa_base + slot]; SGX_SLOT_NONE: in memory only */
+   uint16_t mem;                /* word of the constant memory block (mem_dwords), 0 none */
    uint8_t shift;               /* bit offset in the slot: F16 0/16, C10 0/10/20 */
    uint8_t fmt;                 /* 1 f32, 2 F16 (round to nearest), 3 C10 (round(v * 255), signed 10 bits);
                                  * with driver_consts: 0x10 F16 of the C10 value c (fmt 3's rule):
@@ -158,16 +163,30 @@ struct sgx_shader {
    /* what the program reads and writes */
    unsigned sa_base;            /* first SA register of the constants (9 fragment, 10 vertex) */
    unsigned n_consts;
-   struct sgx_const_map consts[256];
+   struct sgx_const_map consts[SGX_MAX_CONST_MAP];
    unsigned n_iters;            /* fragment: PDS iterations, in PA order */
    struct sgx_iter_info iters[16];
    unsigned colour_pa;          /* fragment: packed BGRA8 colour register */
    bool discards;               /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
+   /* fragment: gl_FragDepth, clamped to [0, 1], is in pa<depth_pa> at the
+    * feedback nop, for a depthf there (predicated on p1 when it discards
+    * too); not in the DDK's USP */
+   bool writes_depth;
+   unsigned depth_pa;
    uint32_t in_mask[4];         /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
    unsigned set_comps[SGX_MAX_SETS]; /* vertex: output set sizes (o4 on); 0 = unused */
    bool point_size;             /* vertex: writes the point size (f32), after the sets */
    unsigned n_out_regs;         /* vertex: o registers written */
    unsigned sa_slots;           /* SA registers used from sa_base on (constants and the compiler's own) */
+   /* Constants past sa127 (counting 4 per dependent sample of a fragment
+    * program after sa_slots): the most-used stay in SA, every constant gets
+    * a word of a memory block the driver fills per draw like the SA ones,
+    * and the program loads the others from it (ld.a.d). Word 0 is unused.
+    * The driver loads SA slot mem_base_slot[j] with the block's address +
+    * 512 * j. 0: no block */
+   unsigned mem_dwords;
+   unsigned n_mem_bases;
+   uint8_t mem_base_slot[8];
    bool uses_front_face;        /* fragment: reads sa[front_sa], so it must be loaded */
    uint64_t *code;              /* main program, flat (branch targets resolved) */
    unsigned n_code;
@@ -189,6 +208,13 @@ const struct nir_shader_compiler_options *sgx_nir_options(void);
  * allocates them (ISA.md "Varyings to sets"); call on each stage's NIR
  * before linking removes unused ones */
 void sgx_assign_varyings(struct nir_shader *nir, bool vertex, struct sgx_varyings *out);
+
+/* Varyings whose sets go past the ten (or past a set's four components):
+ * re-placed in their order as glslcompiler does past ten sets, sharing sets
+ * (sgx_varying.comp); set_comps follows. Deterministic in the list, so two
+ * stages with the same list agree. Anything that already fits is left as it
+ * is. False: more than 10 x 4 components */
+bool sgx_pack_varyings(struct sgx_varyings *v);
 
 /* lower and compile; 0 on success */
 int sgx_compile(struct nir_shader *nir, const struct sgx_compile_options *opts,

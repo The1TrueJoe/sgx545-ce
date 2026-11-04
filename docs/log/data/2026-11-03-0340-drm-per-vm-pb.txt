@@ -1,0 +1,102 @@
+# eba829c, EA1 RAM boot 2026-11-03 ~03:36 UTC
+## process 1: powervr_sgx_frame -k 2 -n 10 -s 720x480
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 3: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 4: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 5: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 6: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 7: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 8: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 9: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+10/10 frames right
+## process 2: powervr_sgx_frame -k 2 -n 10 -s 720x480
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 3: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 4: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 5: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 6: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 7: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 8: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 9: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+10/10 frames right
+## process 3: powervr_sgx_frame -k 2 -n 10 -s 720x480
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 3: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 4: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 5: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 6: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 7: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 8: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 9: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+10/10 frames right
+## process 4: powervr_sgx_frame -k 2 -n 10 -s 720x480
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 3: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 4: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 5: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 6: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 7: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 8: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 9: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+10/10 frames right
+## process 5: powervr_sgx_frame -k 2 -n 10 -s 720x480
+frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 2: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 3: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 4: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 5: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 6: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 7: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+frame 8: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+frame 9: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+10/10 frames right
+## then 256x256 -r, the uAPI suite, two more 720x480 processes
+[   30.061711] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e
+[   30.073126] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[   30.076496] powervr_sgx 0000:01:02.0: [drm] every VM maps the firmware's heaps (DDK microkernel): clients are not isolated from the firmware (docs/UAPI.md 7.2, P2/P3)
+[   30.091394] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   30.104711] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 0
+[   30.172277] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+firmware running: 1 lost: 0 resets: 0 irqs: 240
+kernel PD 0x02acf000 idle PD 0x02ace000
+ccb wo 0 ro 0 issued 768 consumed 768
+hostctl init 0x1 power 0x0 cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+CLKGATECTL           0x0000 0x0000a6aa
+CLKGATECTL2          0x0004 0x00aaaaaa
+CLKGATESTATUS        0x0008 0x00000020
+CORE_ID              0x001c 0x01150000
+CORE_REVISION        0x0020 0x0001000e
+SOFT_RESET           0x0080 0x00000000
+EVENT_STATUS         0x012c 0x20000000
+EVENT_STATUS2        0x0118 0x00000400
+EVENT_HOST_ENABLE    0x0130 0x00004000
+EVENT_HOST_ENABLE2   0x0110 0x00000000
+BIF_CTRL             0x0c00 0x00000000
+BIF_INT_STAT         0x0c04 0x00080000
+BIF_FAULT            0x0c08 0x00000000
+BIF_BANK0            0x0c78 0x0000808f
+BIF_DIR_LIST_BASE0   0x0c84 0x02ace000
+BIF_DIR_LIST_BASE15  0x0c70 0x02acf000
+EDM_TASK_REG0        0x0b14 0x00013b77
+EDM_TASK_REG1        0x0b20 0x00010000
+PB 0x10000000 pages 0x422 base 0x10000000; free list 0x10422000; scratch 0x10462000
+hwctx @ 0x30022000:
+  00000020 00000000 0247c000 3221a000 3222b000 00000000 32218000 10462000
+  00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+  00000385
+ccbctl @ 0x3222b000:
+  00003700 00003700
+pbdesc @ 0x32218000:
+  00000000 00000422 04210000 04200000 10422000 00000019 04210019 04200000
+  00000019 00000001 00000432 00000400 00000400 00000300 32219000
+pbblocks @ 0x32219000:
+  00000422 04210000 32218000 00000000

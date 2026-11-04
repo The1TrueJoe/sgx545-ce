@@ -98,8 +98,18 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
       /* ISA.md: 16 attributes, 10 texture coordinate sets */
       caps->max_inputs = s == MESA_SHADER_VERTEX ? 16 : 10;
       caps->max_outputs = s == MESA_SHADER_VERTEX ? 11 : 1;
+      /* Constants live in SA registers, sa9 (sa10 in a vertex program) to
+       * sa127.  How many uniforms that holds depends on the program: only
+       * the constants it uses go there, and mediump ones two to a register
+       * (dEQP's nested struct arrays of mat4 fit in a fragment program, and
+       * failed at a limit of 24 vec4).  The constants that don't fit are
+       * loaded from a block in memory (ld.a.d, sgxws_const_mem), so the
+       * limit is GLES2's vertex minimum, 128 vec4, in both stages */
       caps->max_const_buffer0_size = 128 * 4 * sizeof(float);
       caps->max_const_buffers = 1;
+      /* u[i]: indexed from SA, or from the block when the array doesn't fit
+       * (without it GLSL selects over the whole array, a load per element) */
+      caps->indirect_const_addr = true;
       caps->max_temps = 64;
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = 8;
@@ -142,7 +152,13 @@ sgx545_init_screen_caps(struct pipe_screen *pscreen)
    caps->max_point_size = caps->max_point_size_aa = 511;
    caps->point_size_granularity = caps->line_width_granularity = 0.1f;
    caps->max_texture_lod_bias = 16;
-   caps->alpha_test = true;
+   /* What desktop GL has and the hardware does in the shader: st lowers the
+    * alpha test to a discard, two-sided colour to a select on the face, and
+    * gives every vertex program a point size (fixed function's points; a GLES
+    * vertex program writes its own) */
+   caps->alpha_test = false;
+   caps->two_sided_color = false;
+   caps->point_size_fixed = PIPE_POINT_SIZE_LOWER_ALWAYS;
    caps->clip_planes = 0;
    caps->texture_transfer_modes = 0;
    caps->max_vertex_element_src_offset = 2047;
@@ -199,6 +215,7 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
       return false;
    switch (target) {
    case PIPE_BUFFER:
+   case PIPE_TEXTURE_1D:      /* a 2D texture a texel high, sampled on that row (sgx545_program.c) */
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_RECT:
    case PIPE_TEXTURE_CUBE:

@@ -1,0 +1,92 @@
+# c9a1af8 + SGXGEN_FAULT test build (local), EA1 RAM boot 2026-11-03 ~03:52 UTC
+## one PB per VM
+7.1.8-m2drm
+ohc.ramboot=1
+HELD-BY-US
+== -c 2 -n 20
+20/20 frames right
+== -c 3 -n 30
+30/30 frames right
+== -C -n 10
+10/10 frames right
+== -n 10
+10/10 frames right
+== -c 2 -n 20 -r
+20/20 frames right
+27/27 passed
+firmware running: 1 lost: 0 resets: 0 irqs: 270
+kernel PD 0x021a5000 idle PD 0x0269a000
+ccb wo 20 ro 20 issued 788 consumed 788
+PB 0x10000000 pages 0x422 base 0x10000000; free list 0x10422000; scratch 0x10464000
+hwctx @ 0x30021000:
+  00000020 00000000 0a9e1000 321d4000 321e5000 00000000 321b8000 10464000
+--
+pbdesc @ 0x321b8000:
+  00000000 00000422 04210000 04200000 10422000 00000019 04210019 04200000
+  00000019 00000001 00000432 00000400 00000400 00000300 321b9000
+## forced hangs (SGXGEN_FAULT: vertices from an unmapped address) and restarts
+3/3 frames right
+== round 1
+0/1 frames right
+5/5 frames right
+firmware running: 1 lost: 0 resets: 1 irqs: 379
+== round 2
+0/1 frames right
+5/5 frames right
+firmware running: 1 lost: 0 resets: 2 irqs: 394
+== round 3
+0/1 frames right
+5/5 frames right
+firmware running: 1 lost: 0 resets: 3 irqs: 409
+== round 4
+0/1 frames right
+5/5 frames right
+firmware running: 1 lost: 0 resets: 4 irqs: 424
+== round 5
+0/1 frames right
+5/5 frames right
+firmware running: 1 lost: 0 resets: 5 irqs: 439
+== round 6
+0/1 frames right
+5/5 frames right
+firmware running: 1 lost: 0 resets: 6 irqs: 454
+[   79.854079] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 851, consumed 851); resetting
+[   80.107050] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   80.111471] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   82.222730] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 13, consumed 13); resetting
+[   82.253296] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   82.257854] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   84.397486] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 13, consumed 13); resetting
+[   84.431237] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   84.435223] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   86.573487] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 13, consumed 13); resetting
+[   86.605939] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   86.609937] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   88.749490] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 13, consumed 13); resetting
+[   88.780369] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   88.784369] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   90.925492] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 13, consumed 13); resetting
+[   90.960635] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   90.965256] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+== double 1
+0/1 frames right
+0/1 frames right
+6/6 frames right
+== double 2
+0/1 frames right
+0/1 frames right
+6/6 frames right
+== double 3
+0/1 frames right
+0/1 frames right
+6/6 frames right
+== double 4
+0/1 frames right
+0/1 frames right
+6/6 frames right
+27/27 passed
+9/9 frames right
+firmware running: 1 lost: 0 resets: 14 irqs: 553
+kernel PD 0x021a5000 idle PD 0x0269a000
+ccb wo 126 ro 126 issued 638 consumed 638
+restarts-ok=8 timeouts=8 failed=0

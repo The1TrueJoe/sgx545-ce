@@ -47,7 +47,7 @@ done
 install -D -m644 "$BD/$BOARD.dts" "$SRC/arch/x86/boot/dts/$BOARD.dts"
 
 rm -rf "$SRC/drivers/gpu/drm/powervr_sgx"
-cp -R "$DRM/powervr_sgx" "$SRC/drivers/gpu/drm/powervr_sgx"
+cp -RL "$DRM/powervr_sgx" "$SRC/drivers/gpu/drm/powervr_sgx"
 grep -q powervr_sgx "$SRC/drivers/gpu/drm/Kconfig" ||
 	printf '\nsource "drivers/gpu/drm/powervr_sgx/Kconfig"\n' >> "$SRC/drivers/gpu/drm/Kconfig"
 grep -q powervr_sgx "$SRC/drivers/gpu/drm/Makefile" ||
@@ -72,7 +72,7 @@ make -C "$SRC" ARCH=x86_64 olddefconfig
 "$SRC/scripts/config" --file "$SRC/.config" -d MODULE_SIG -d MODULE_SIG_ALL -d MODULE_SIG_FORCE
 make -C "$SRC" ARCH=x86_64 olddefconfig
 
-for want in CONFIG_DRM=y CONFIG_DRM_POWERVR_SGX=m CONFIG_MODULES=y; do
+for want in CONFIG_DRM=y CONFIG_DRM_POWERVR_SGX=m CONFIG_MODULES=y CONFIG_DEV_COREDUMP=y; do
 	grep -qx "$want" "$SRC/.config" || { echo "openhc-ea-kernel: $want missing" >&2; exit 1; }
 done
 if grep -q '^CONFIG_SGX545_CE=' "$SRC/.config"; then

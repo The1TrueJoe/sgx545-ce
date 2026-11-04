@@ -100,6 +100,7 @@ struct drm_powervr_sgx_obj_array {
 #define DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET POWERVR_SGX_IOCTL(0x0a, DRM_IOWR, create_rt_dataset)
 #define DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET POWERVR_SGX_IOCTL(0x0b, DRM_IOW, destroy_rt_dataset)
 #define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS POWERVR_SGX_IOCTL(0x0c, DRM_IOWR, submit_jobs)
+#define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE POWERVR_SGX_IOCTL(0x0d, DRM_IOWR, upload_code)
 
 /**
  * DOC: PowerVR SGX IOCTL DEV_QUERY interface
@@ -120,12 +121,18 @@ struct drm_powervr_sgx_dev_query_gpu_info {
 	 */
 	__u32 core_revision;
 
-	/** @fw_interface_version: Host interface version of the loaded firmware. */
+	/**
+	 * @fw_interface_version: Host interface of the loaded firmware, one of
+	 * ``DRM_POWERVR_SGX_FW_IF_*``.
+	 */
 	__u32 fw_interface_version;
 
 	/** @_padding_c: Reserved. This field must be zero. */
 	__u32 _padding_c;
 };
+
+/* The DDK 1.7 SGXMKIF host interface (D8, docs/UKERNEL-DECISIONS.md). */
+#define DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7 1
 
 /**
  * struct drm_powervr_sgx_dev_query_limits - Limits of the object-creating ioctls
@@ -300,9 +307,20 @@ struct drm_powervr_sgx_ioctl_dev_query_args {
 
 /**
  * DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS - Allow %DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET
- * on this object. Bits 1..63 are reserved.
+ * on this object.
  */
 #define DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS (1ULL << 0)
+
+/**
+ * DRM_POWERVR_SGX_BO_CODE - A code object: USSE programs.
+ *
+ * Only code objects can be mapped into the USSE heaps, and a code object can be
+ * mapped nowhere else. The GPU sees it read-only. It has no CPU mapping and
+ * can't be exported, so %DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS must be clear. Its
+ * contents arrive only through %DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, which
+ * validates them. Bits 2..63 of the flags are reserved.
+ */
+#define DRM_POWERVR_SGX_BO_CODE (1ULL << 1)
 
 /**
  * struct drm_powervr_sgx_ioctl_create_bo_args - Arguments for %DRM_IOCTL_POWERVR_SGX_CREATE_BO
@@ -334,6 +352,56 @@ struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args {
 
 	/** @offset: [OUT] Fake offset to pass to mmap() on the DRM file. */
 	__u64 offset;
+};
+
+/**
+ * DOC: PowerVR SGX IOCTL UPLOAD_CODE interface
+ *
+ * Copies USSE instructions into a code object and validates them (docs/UAPI.md
+ * section 7.2, decision D9). An instruction is rejected if:
+ *
+ *  - it is not one of the forms the kernel knows (an unknown encoding might
+ *    reach what a known one can't);
+ *  - it reads or writes the core's register file (``ldr``, ``str``);
+ *  - it sets the link address from a register (``setl``, ``savl``), which
+ *    would let ``lapc`` jump anywhere;
+ *  - it is a relative branch (``br``) whose target is outside the object.
+ *
+ * On a rejection nothing is copied, the ioctl fails with -EINVAL, and
+ * @bad_offset is the byte offset in the object of the first rejected
+ * instruction.
+ *
+ * Bytes no upload wrote are zero, which is a harmless instruction. While a VM
+ * maps the object an upload may only write past every byte an earlier upload
+ * wrote, so code the GPU may be running never changes under it; otherwise
+ * -EBUSY. Once no VM maps the object it can be uploaded anywhere again.
+ */
+
+/**
+ * struct drm_powervr_sgx_ioctl_upload_code_args - Arguments for
+ * %DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE
+ */
+struct drm_powervr_sgx_ioctl_upload_code_args {
+	/** @handle: [IN] GEM handle of a code object (%DRM_POWERVR_SGX_BO_CODE). */
+	__u32 handle;
+
+	/** @flags: [IN] Reserved. Must be zero. */
+	__u32 flags;
+
+	/** @offset: [IN] Byte offset in the object. Must be a multiple of 8. */
+	__u64 offset;
+
+	/** @size: [IN] Bytes to copy. Must be a multiple of 8 and not zero. */
+	__u64 size;
+
+	/** @pointer: [IN] User pointer to the instructions, low word first. */
+	__u64 pointer;
+
+	/**
+	 * @bad_offset: [OUT] When validation rejects the code, the object offset
+	 * of the first rejected instruction; otherwise all ones.
+	 */
+	__u64 bad_offset;
 };
 
 /**
@@ -732,6 +800,14 @@ enum drm_powervr_sgx_job_type {
 	DRM_POWERVR_SGX_JOB_TYPE_RENDER = 0,
 	/** @DRM_POWERVR_SGX_JOB_TYPE_TRANSFER: One 3D-only blit. */
 	DRM_POWERVR_SGX_JOB_TYPE_TRANSFER,
+	/**
+	 * @DRM_POWERVR_SGX_JOB_TYPE_NULL: No GPU work. The firmware takes it in
+	 * queue order with the context's other jobs, and its out-fences signal
+	 * once it has. Runs on a context of either type; no stream, no flags,
+	 * no TA kicks, no RT dataset. For testing synchronisation (and for a
+	 * fence that follows everything queued before it).
+	 */
+	DRM_POWERVR_SGX_JOB_TYPE_NULL,
 };
 
 /**

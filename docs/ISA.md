@@ -213,7 +213,8 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
   control (sop2, sopwm, the sop3 family, dot3/dot4, ima8, fpma) a C10 operand
   is `pa4.c10` (a whole register), and for efo an F16 one is `r3.f16.lo` /
   `.hi` (an internal register only takes the flag: `i1.f16`, as under format
-  select). Either is accepted only while the enable is on.
+  select). The destination follows format control like the sources, for efo's
+  F16 enable as well as the C10 one (**encoder**). Either is accepted only while the enable is on.
   hw 1's source format is not an operand suffix: its operand is plain and the
   brackets carry `f16` (h7), `c10` (h8), `chan=n` (h3-4) and `f16d` (h2,
   F16 destination).
@@ -235,6 +236,14 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
   `rcnt` for a count of 1 and `rcnt rpt=n` otherwise. With h21 clear, h12-15
   is the mask, written `mask=v` when it differs from the class's default
   (below). The other classes write `rpt=n` directly.
+- **Other spellings asm.py takes.** efo's `i`, `a` and `m` as in the efo
+  corpus table (`i=m0/m1`, `a=s0+s2/s1+s2`, `m=s1*s0/s2*s2`) or as dis.py
+  prints them (`i=i0=m0,i1=m1`, `a=a0=s0+s2,a1=s1+s2`). dot's scales as
+  `cs=x4` / `as=x2` or `cs=cx4` / `as=ax2`. A carry-register field (imae's
+  `ci`, op16s1's `i`) as `i1` or `1`. fdual's `neg1` / `neg2` as the bracket
+  flags or as `-x` on the src1 / src2 operand. Any enum field at 0 may be left
+  out; dis.py prints the ones whose 0 has a name (efo's, the sop selects,
+  dot's `a1`/`a2`), so the examples on this page differ in which they show.
 - **fmad16's swizzles** are bracket fields, not operand suffixes:
   `swz0=`, `swz1=`, `swz2=` for src0-2 with the values `ll`, `hh`, `f32`;
   0 (lo, hi as stored) is the default and isn't written:
@@ -1476,6 +1485,15 @@ placeholder), DRC.
 | l7-13, l30-31 | off | any source kind, including #0-127 and indexed | encoder, corpus |
 | l0-6, l28-29 | range | without h6: the unused pattern | encoder |
 
+**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode, EA3
+2026-11-02): `ld.a.d` and `st.a.d` with an immediate offset `#i` access the
+dword at base + 4·(i + 1). `st.a.d sa0, #0` wrote word 1 of the buffer whose
+address was in sa0, `#2` wrote word 3, and `ld.a.d #2` read word 3 back.
+Microkernel code read with `#0`-`#7` lands as instruction pairs (low word,
+then the high word with the class) only under that reading: `wdf`'s high word
+0xf9200000 came from an odd word. Untested: register offsets, the b/w sizes,
+modes l/t, and offsets past #127.
+
 ### hw 1d: eld (FUN_0010ace0), h22 = 1
 
 `eld.<d|q> dst, src1, src0, #imm11, src2  [drc=n ...]` (USEASM 0x93 / 0x94;
@@ -2317,6 +2335,17 @@ backed above; this section only collects it.
   `smlsi` before, `smlsi #1, #1, #1, #1` after (the USP code block header
   records the MOE state at block entry). Scalar ops (hw 1) and moves can
   use a write mask instead of a count.
+- **Constants past sa127**: an operand names sa0-sa127, so a program's
+  constants from sa9/sa10 (and a fragment program's dependent texture state
+  after them) must end there. Ours keeps dynamically indexed and the most-used
+  constants in SA and loads the rest from a memory block per use: `ld.a.d
+  rN, sa<base>, #i`, `wdf`, then rN in place of the SA operand (same half,
+  lane and format). One base register reaches 128 dwords (see "Address"
+  above for the +1). An indexed array that doesn't fit whole keeps its
+  index (clamped to the block with `fminmax`) and adds it to the base:
+  `pck.s16.f32 t, x`, `imae.sgn a, t, #4, sa<base> [t2=u32]`, then `ld.a.d
+  rN, a, #i` per component, so only immediate offsets are used. The DDK's equivalent is list B (USP header 0x2c flag
+  1, 0x38, 0x52); none of the corpora use it.
 - **Constants**: the hardware constant table covers 0, 1, powers of two,
   1/2^n, e, π fractions, √2, F16 (1, 1) (c45-c47), 0xffffffff (c56-c59)
   (hardware); anything else is a uniform in sa or a `limm` (hardware: any
@@ -2360,6 +2389,27 @@ backed above; this section only collects it.
   predicate kills, hardware), the rest in phase 1, and ISPA pass type 4.
   Not on lines: any feedback program breaks a lines draw (hardware). See "Phases, visibility feedback and
   discard" for the words and what is a guess.
+- **gl_FragDepth** (not in GLES 2, so no corpus): the DDK's points path
+  feeds the ISP a depth with `(p1) depthf pa<z>, sa3, sa4 [end]` in the
+  feedback nop's place, pa<z> the iterated z (above). Our compiler leaves
+  gl_FragDepth, clamped to [0, 1], in a pa register at the feedback nop for
+  a `depthf` there, pass type 5. **Guess**: that depthf's src0 is the depth
+  written; sa3/sa4 not traced. Needs hardware.
+- **Derivatives** (corpus c3 dsx, dsy, fwidth): `fdsx d, x, x` / `fdsy d,
+  x, x`, one per component, never repeated. libusc multiplies dFdy's
+  operand by a driver constant first (the target's y direction; Mesa's st
+  does the same). What feeds a derivative runs with skipinv clear (that
+  fmad, and tx_dep's coordinate math, where the LOD needs the neighbours):
+  a 2x2 neighbour outside the primitive is an invalid instance, and a
+  skipinv instruction leaves its register stale. The derivative itself
+  keeps skipinv. `d` must not be a register `x` uses: the instances of a
+  quad don't all read before any writes, so a neighbour can read the
+  derivative instead of `x` (the DDK never overlaps them). **Hardware**
+  (EA3 piglit): with skipinv on everything, dFdx of an iterated value was
+  right while dFdy of an `fmul` and either derivative of an `abs` were
+  wrong. With the feeding math skipinv-clear, `glsl-fwidth` passes, and
+  every remaining failure was a derivative whose `d` was `x` (`fdsy r4, r4,
+  r4`), while each that wrote another register was right.
 - **Phases**: every finalised fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
   hardware) and ends with `end` on its last instruction or an appended
@@ -2428,7 +2478,9 @@ backed above; this section only collects it.
   type, mat4, mat2, vec4, mat3, vec3, vec2, float (table 0x464c0), within
   a type the largest first (by the symbol's +0x14, the array size: guess),
   and gives each row a new set while sets remain; past 10 it
-  packs rows into free components of sets with the same precision.
+  packs rows into free components of sets with the same precision
+  (our `sgx_pack_varyings` does this without the precision rule: each
+  stage is placed on its own, and their precisions may differ).
   (**driver**; corpus: vo_vall's o0, o1, o2 (vec2), o3 (float) land at o4,
   o8, o12, o14 = sets 0-3 of sizes 4, 4, 2, 1.) Unwritten varyings get no set.
 - **gl_PointSize**: when a vertex shader writes it, glslcompiler reserves

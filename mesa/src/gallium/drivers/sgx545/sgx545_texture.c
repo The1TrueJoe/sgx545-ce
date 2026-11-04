@@ -273,7 +273,16 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
    const struct pipe_resource *prsc = view->texture;
    const struct sgx545_resource *res = (const struct sgx545_resource *)prsc;
    unsigned fmt = sgx545_tex_format(prsc->format);
-   bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE && prsc->last_level > 0;
+   /* A view from a later base level (GL_TEXTURE_BASE_LEVEL) of a 2D texture
+    * starts at that level: the levels after it follow it as they follow
+    * level 0 (TEX.md "Mipmaps"), so it reads as a texture of that size */
+   unsigned base = prsc->target != PIPE_TEXTURE_CUBE && res->texture ? view->u.tex.first_level : 0;
+   unsigned w = u_minify(prsc->width0, base), h = u_minify(prsc->height0, base);
+   /* a linear (NPOT) texture's levels aren't a chain the sampler knows (the
+    * DDK's GLES2 has no NPOT mipmaps), and sampling one with mipmapping
+    * locks the 3D (piglit fbo-generatemipmap-formats NPOT): its base level */
+   bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE && view->u.tex.last_level > base &&
+               (prsc->target == PIPE_TEXTURE_CUBE || twiddled(w, h));
 
    /* T0: wrap T b3-5, wrap S b6-8, mip linear b9, min linear b10, mag linear
     * b12, b17-20 0xf (0xd with mipmaps), b21-26 0x3f, b30 for L8/A8/LA88 */
@@ -289,10 +298,11 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
          t[0] |= 1u << 12;
    }
    /* T1: layout (0 twiddled, 3 linear, 2 a cube map: DDK capture) | format | width-1 | height-1 */
-   t[1] = (prsc->target == PIPE_TEXTURE_CUBE ? 2u : twiddled(prsc->width0, prsc->height0) ? 0u : 3u) << 29 | fmt << 24 |
-          (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
+   t[1] = (prsc->target == PIPE_TEXTURE_CUBE ? 2u : twiddled(w, h) ? 0u : 3u) << 29 | fmt << 24 |
+          (w - 1) << 12 | (h - 1);
    /* (the draw brought the level-0 copy up to date: sgx545_resource_cube0) */
-   t[2] = sgx545_tex_uses_cube0(view, sampler) && res->cube0.va ? res->cube0.va : res->bo.va;
+   t[2] = sgx545_tex_uses_cube0(view, sampler) && res->cube0.va ? res->cube0.va
+                                                               : res->bo.va + chain_offset(prsc, base);
    if (!res->texture) {
       /* A render target, read where it is: strided (T1 layout 6), the pitch
        * - 1 in T0 b9-11 and b17-26 in place of the mipmap and min filter

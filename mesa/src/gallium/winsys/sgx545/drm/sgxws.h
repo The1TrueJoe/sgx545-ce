@@ -196,6 +196,15 @@ struct sgxws_draw {
    const uint32_t *fs_consts;       /* fs->sec_dwords dwords */
    const uint32_t *vs_consts;       /* vs->const_dwords dwords */
    const uint32_t (*tex)[4];        /* per sampler unit: the DOUTT words T0-T3 */
+   /* A program's constants that don't fit in SA (the compiler's ld.a.d from
+    * a memory block): copied to frame memory, a new block each draw, whose
+    * address + 512 * j goes in the program's SA register base[j] (an index
+    * into fs_consts, or into vs_consts) */
+   struct sgxws_const_mem {
+      const uint32_t *words;
+      uint32_t dwords;              /* 0: none */
+      uint8_t n_bases, base[8];
+   } vs_mem, fs_mem;
 };
 
 /* where the winsys's time goes (SGX545_STATS) */

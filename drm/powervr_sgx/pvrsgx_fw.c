@@ -16,9 +16,13 @@
 
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/interrupt.h>
+#include <linux/iopoll.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
+#include <linux/seq_buf.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -27,7 +31,9 @@
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
+#include "pvrsgx_vm.h"
 
 static char *firmware = "powervr_sgx/sgx545-ukernel-1.7.862890.bin";
 module_param(firmware, charp, 0444);
@@ -37,6 +43,15 @@ MODULE_FIRMWARE("powervr_sgx/sgx545-ukernel-1.7.862890.bin");
 static unsigned int core_clock = 400000000;
 module_param(core_clock, uint, 0444);
 MODULE_PARM_DESC(core_clock, "SGX core clock in Hz; sets the microkernel timer (default 400 MHz)");
+
+/* Off: on the DDK microkernel RT and PB cleanups never complete and stall the CCB. */
+static bool cleanup;
+module_param(cleanup, bool, 0644);
+MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (debug; default off)");
+
+static bool restart_quiesce = true;
+module_param(restart_quiesce, bool, 0644);
+MODULE_PARM_DESC(restart_quiesce, "Before a restart, run the deinit script, hold the cores in reset and drop bus mastering, as an unload does (default on)");
 
 /* The DDK microkernel: libsrv_init's .rodata 0x2000..0xef68. */
 #define UKERNEL_SIZE		0xcf68
@@ -114,6 +129,17 @@ static const u32 sig_3d[] = {
 static u32 *fw_words(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 {
 	return sdev->fw.cpu[b];
+}
+
+/* The TA3D control block as the microkernel left it (in-flight slot, PB state). */
+void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b, const char *name)
+{
+	const u32 *w = fw_words(sdev, b);
+
+	seq_buf_printf(sb, "%s @ 0x%08x:", name, sdev->fw.addr[b]);
+	for (u32 i = 0; i < layout[b].size / 4; i++)
+		seq_buf_printf(sb, "%s%08x", i % 8 ? " " : "\n  ", READ_ONCE(w[i]));
+	seq_buf_puts(sb, "\n");
 }
 
 u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word)
@@ -360,16 +386,16 @@ static void pds_events2(struct pvrsgx_device *sdev)
 	pds_halt(&p);
 }
 
-/* Upload and patch the microkernel, assemble its entry programs, fill the control blocks. */
-static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
+/*
+ * The microkernel's control block, rebuilt at every start: after a reset it
+ * must not find the previous run's render in flight (UKERNEL.md 5a, "discard").
+ */
+static void ta3dctl_fill(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
-	u32 *t;
-	int err;
+	u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
 
-	memcpy(f->cpu[PVRSGX_FW_UKERNEL], fw->data, UKERNEL_SIZE);
-
-	t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
+	memset(t, 0, layout[PVRSGX_FW_TA3DCTL].size);
 	t[0x00] = f->addr[PVRSGX_FW_TA3DCTL];
 	t[0x01] = f->addr[PVRSGX_FW_HOSTCTL];
 	t[0x02] = f->addr[PVRSGX_FW_CCBCTL];
@@ -379,6 +405,16 @@ static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
 	t[0x2b] = f->addr[PVRSGX_FW_HWPERF];
 	t[0x2c] = f->addr[PVRSGX_FW_TASIG];
 	t[0x2d] = f->addr[PVRSGX_FW_3DSIG];
+}
+
+/* Upload and patch the microkernel, assemble its entry programs, fill the signature lists. */
+static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
+{
+	struct pvrsgx_fw *f = &sdev->fw;
+	u32 *t;
+	int err;
+
+	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, UKERNEL_SIZE);
 
 	t = fw_words(sdev, PVRSGX_FW_TASIG);
 	t[0] = ARRAY_SIZE(ta_sig);
@@ -407,7 +443,48 @@ static int fw_build(struct pvrsgx_device *sdev, const struct firmware *fw)
 
 	memcpy(f->host_kick, host_kick, sizeof(host_kick));
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
+	f->ddk = true;		/* the only image with these patch sites */
 	return 0;
+}
+
+/*
+ * Tell the microkernel to forget a resource (UKERNEL.md 3, cleanup). It
+ * completes only once nothing in flight uses it; the caller has waited for
+ * its own jobs. On a timeout the memory is kept anyway (graveyard).
+ */
+int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
+{
+	u32 data[6] = { type, addr };
+	u32 *status;
+	u32 v;
+	int err, pm;
+
+	if (!cleanup || !addr)
+		return 0;
+	/* A suspended microkernel holds nothing; the next start is a fresh one. */
+	pm = pm_runtime_get_if_active(&sdev->pdev->dev);
+	if (pm == 0)
+		return 0;
+	mutex_lock(&sdev->cleanup_lock);
+	if (!sdev->fw_running || sdev->lost) {
+		err = 0;
+		goto out;
+	}
+	status = &fw_words(sdev, PVRSGX_FW_HOSTCTL)[HOSTCTL_CLEANUP_STATUS];
+	err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_CLEANUP, data, NULL);
+	if (err)
+		goto out;
+	err = read_poll_timeout(READ_ONCE, v, v & HOSTCTL_CLEANUP_COMPLETE, 1000, 5 * USEC_PER_SEC,
+				false, *status);
+	if (err)
+		drm_err(&sdev->base, "cleanup %u of 0x%08x did not complete\n", type, addr);
+	WRITE_ONCE(*status, *status & ~HOSTCTL_CLEANUP_COMPLETE);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
+out:
+	mutex_unlock(&sdev->cleanup_lock);
+	if (pm > 0)
+		pm_runtime_put_autosuspend(&sdev->pdev->dev);
+	return err;
 }
 
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
@@ -444,7 +521,8 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		f->cpu[b] = (u8 *)km->cpu + layout[b].offset;
 	}
 
-	err = fw_build(sdev, fw);
+	f->image = kmemdup(fw->data, UKERNEL_SIZE, GFP_KERNEL);
+	err = f->image ? fw_build(sdev, f->image) : -ENOMEM;
 out:
 	release_firmware(fw);
 	return err;
@@ -452,6 +530,8 @@ out:
 
 void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 {
+	kfree(sdev->fw.image);
+	sdev->fw.image = NULL;
 	pvrsgx_kmem_free(sdev, &sdev->fw.code);
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
 }
@@ -553,9 +633,40 @@ static int fw_check(struct pvrsgx_device *sdev)
 int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 {
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
-	bool first = !sdev->fw_running && !sdev->reset_count;
+	bool first = !sdev->fw_started, was_powered = READ_ONCE(sdev->powered);
 	int err;
 
+	WRITE_ONCE(sdev->powered, true);
+
+	/*
+	 * A restart starts from a fresh image and empty arenas: the microkernel
+	 * changes both as it runs, and a module reload (which recovers) is
+	 * exactly this.
+	 */
+	if (!first) {
+		sdev->fw_gen++;
+		/*
+		 * After a hang the clocks are on and the cores may be busy. After a
+		 * clean stop (runtime suspend) they are gated and quiet already, and
+		 * a register read there froze the EA3 (log 2026-11-03-0630).
+		 */
+		if (restart_quiesce && was_powered) {
+			/* What an unload and reload (which recovers) does in between. */
+			deinit_script(sdev);
+			wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+			sgx_rd(sdev, SGX_CR_SOFT_RESET);
+			pci_clear_master(sdev->pdev);
+			msleep(10);
+			pci_set_master(sdev->pdev);
+		}
+		memset(sdev->fw.data.cpu, 0, sdev->fw.data.size);
+		memset(sdev->fw.code.cpu, 0, sdev->fw.code.size);
+		err = fw_build(sdev, sdev->fw.image);
+		if (err)
+			return err;
+		/* Nothing the old run pointed at matters any more. */
+		pvrsgx_kobj_reap(sdev, U64_MAX);
+	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
 	hc[HOSTCTL_HWR_SAMPLE_RATE] = UKERNEL_TIMER_HZ / HWR_CHECK_HZ;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = core_clock / UKERNEL_TIMER_HZ;
@@ -563,6 +674,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	/* SGXPostPowerState clears the power status before every start. */
 	hc[HOSTCTL_POWER_STATUS] = 0;
 	pvrsgx_ccb_reset(sdev);
+	ta3dctl_fill(sdev);
 	/* The first command invalidates the directory cache. */
 	sdev->fw.cache_control = PVRSGX_CC_INVAL_BIF_PD;
 
@@ -589,7 +701,14 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		return err;
 	}
 	sdev->fw_running = true;
-	drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
+	sdev->fw_started = true;
+	if (first || sdev->reset_count != sdev->reset_logged) {
+		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
+		sdev->reset_logged = sdev->reset_count;
+	}
+	if (first && pvrsgx_vm_shares_kernel_heaps(sdev))
+		drm_warn(&sdev->base,
+			 "every VM maps the firmware's heaps (DDK microkernel): clients are not isolated from the firmware (docs/UAPI.md 7.2, P2/P3)\n");
 
 	err = fw_check(sdev);
 	if (err)
@@ -610,9 +729,17 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			drm_warn(&sdev->base, "microkernel did not power off\n");
 		for (int i = 0; i < 500 && (sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & 0xffffffdf); i++)
 			usleep_range(100, 200);
+		WRITE_ONCE(sdev->powered, false);
+		synchronize_irq(sdev->irq);
 		deinit_script(sdev);
 		sdev->fw_running = false;
+		wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_rd(sdev, SGX_CR_SOFT_RESET);
+	} else if (READ_ONCE(sdev->powered)) {
+		/* A failed start: the clocks are on, the microkernel isn't. */
+		WRITE_ONCE(sdev->powered, false);
+		synchronize_irq(sdev->irq);
+		wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
-	wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
-	sgx_rd(sdev, SGX_CR_SOFT_RESET);
 }

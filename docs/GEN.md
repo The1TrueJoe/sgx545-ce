@@ -49,6 +49,18 @@ The `frame` options:
 - `-C face[,front]`: culling.
 - `-t trace.bin`: write a trace of the run.
 - `-o`: dump the render target.
+- `-R N`: draw the frame N times on one context and surface. By default every
+  render is the surface's first: RT-data entry 1, region array 1, frame
+  counter 0. With `SGXGEN_ALTERNATE=1` the frames count and alternate the two
+  entries and region arrays, as the DDK and powervr_sgx do. Frame 2 then has
+  TA flags 0x61, cmd+0x20 = 1, 3D flags 0x4400, cmd+0x44 = entry 0, region
+  array 0, and the RT frame word 2. This mode has run only on fakepvr so far.
+- `-S` / `-X` (with `-R`): each repeat on a new surface, or on a new context
+  and surface: one process standing in for separate `frame` runs.
+
+`tools/gen/fake-traces.sh [OUT]` builds `frame-fake` for the host (Linux or
+macOS) and writes the offline oracle traces to `gen/`: the one-frame
+reference, and two- and three-frame runs in each of the modes above.
 
 Checking a frame without the GPU:
 
@@ -273,7 +285,7 @@ entry and render details. It reads them when the next client's TA starts.
     must stay inside clip space without them);
   - stencil;
   - depth/stencil buffers in memory (ZLS);
-  - more than one frame per context;
+  - alternating frames (`SGXGEN_ALTERNATE`) on hardware;
   - more draws than the rings hold.
 - The [G] constants above.
 - The RT cleanup timeout (see "Layout").

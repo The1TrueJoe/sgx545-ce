@@ -9,6 +9,7 @@
  * samples, and the decoded lists the driver loads (constants, iterations,
  * the vertex input mask).
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "nir.h"
@@ -35,7 +36,7 @@ smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
    m.nops = s->lod ? 4 : 3;
    m.op[0] = usse_reg(USSE_K_R, 0);
    struct sgx_ref cr = i->op[1];
-   unsigned cn = cr.file == SGX_F_U ? c->sa_base + c->const_slot[cr.n] : phys(c, &cr);
+   unsigned cn = cr.file == SGX_F_U ? sgx_const_sa(c, cr.n) : phys(c, &cr);
    if (cr.h16 && cr.file == SGX_F_V)
       cn = sgx_vreg(c, cr.n)->phys + cr.comp / 2;
    else if (cr.h16 && cr.file != SGX_F_U)
@@ -48,7 +49,7 @@ smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
       struct sgx_ref lr = i->op[2];
       unsigned k = lr.file == SGX_F_C ? USSE_K_C : lr.file == SGX_F_PA ? USSE_K_PA :
                    lr.file == SGX_F_U ? USSE_K_SA : USSE_K_R;
-      unsigned n = lr.file == SGX_F_U ? c->sa_base + c->const_slot[lr.n] : phys(c, &lr);
+      unsigned n = lr.file == SGX_F_U ? sgx_const_sa(c, lr.n) : phys(c, &lr);
       m.op[3] = usse_reg(k, n);
       m.op[3].neg = lr.neg;
       m.op[3].abs = lr.abs;
@@ -188,6 +189,8 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       if (!real)
          n_pa++;
       n_pa = MAX2(n_pa, c->colour_pa + 1);
+      if (c->has_depth)
+         n_pa = MAX2(n_pa, c->depth_pa + 1);
    }
 
    /* vertex: the live input mask */
@@ -209,22 +212,35 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    }
 
    out->sa_base = c->sa_base;
-   out->sa_slots = c->n_sa;
+   out->sa_slots = c->n_sa_phys;
+   out->mem_dwords = c->mem_dwords;
+   out->n_mem_bases = c->n_mem_bases;
+   for (unsigned j = 0; j < c->n_mem_bases; j++)
+      out->mem_base_slot[j] = c->mem_base_sa[j];
    out->uses_front_face = c->face_vreg >= 0;
    out->n_consts = 0;
-   for (unsigned k = 0; k < ARRAY_SIZE(c->const_used) && out->n_consts < ARRAY_SIZE(out->consts); k++) {
+   unsigned n_map = c->n_lits;
+   for (unsigned k = 0; k < ARRAY_SIZE(c->const_used); k++)
+      n_map += c->const_slot[k] >= 0;
+   if (n_map > ARRAY_SIZE(out->consts)) {
+      sgx_fail(c, "%u constants, the map holds %zu", n_map, ARRAY_SIZE(out->consts));
+      goto fail;
+   }
+   for (unsigned k = 0; k < ARRAY_SIZE(c->const_used); k++) {
       if (c->const_slot[k] < 0)
          continue;
       struct sgx_const_map *m = &out->consts[out->n_consts++];
       m->k = k;
-      m->slot = c->const_slot[k];
+      m->slot = c->slot_sa[c->const_slot[k]] < 0 ? SGX_SLOT_NONE : c->slot_sa[c->const_slot[k]];
+      m->mem = c->mem_dwords ? c->const_slot[k] + 1 : 0;
       m->shift = c->const_shift[k];
       m->fmt = c->const_fmt[k] == 4 ? 3 : c->const_fmt[k] == 5 ? 0x10 : c->const_fmt[k] ? c->const_fmt[k] : 1;
    }
-   for (unsigned i = 0; i < c->n_lits && out->n_consts < ARRAY_SIZE(out->consts); i++) {
+   for (unsigned i = 0; i < c->n_lits; i++) {
       struct sgx_const_map *m = &out->consts[out->n_consts++];
       m->k = 0xffff;
-      m->slot = c->lit_slot[i];
+      m->slot = c->slot_sa[c->lit_slot[i]] < 0 ? SGX_SLOT_NONE : c->slot_sa[c->lit_slot[i]];
+      m->mem = c->mem_dwords ? c->lit_slot[i] + 1 : 0;
       m->shift = 0;
       m->fmt = 0x11;
       m->value = c->lit_bits[i];
@@ -245,6 +261,8 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    }
    out->colour_pa = c->colour_pa;
    out->discards = c->discards;
+   out->writes_depth = c->has_depth;
+   out->depth_pa = c->depth_pa;
    memcpy(out->in_mask, inmask, sizeof(inmask));
    for (unsigned i = 0; i < SGX_MAX_SETS; i++)
       out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];
@@ -253,6 +271,11 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    out->n_code = util_dynarray_num_elements(&flat, uint64_t);
    out->code = malloc(MAX2(flat.size, 8));
    memcpy(out->code, flat.data, flat.size);
+   /* the words as sgxc's .code (high, low), for tools/isa/dis.py */
+   if (c->opts->verbose) {
+      for (unsigned i = 0; i < out->n_code; i++)
+         fprintf(stderr, "%08x %08x\n", (unsigned)(out->code[i] >> 32), (unsigned)out->code[i]);
+   }
    out->n_blocks = util_dynarray_num_elements(&blocks, struct sgx_block);
    out->blocks = malloc(MAX2(blocks.size, sizeof(struct sgx_block)));
    memcpy(out->blocks, blocks.data, blocks.size);

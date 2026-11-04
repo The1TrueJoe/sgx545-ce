@@ -1,0 +1,29 @@
+# 5c6fd45, EA1 RAM boot 2026-11-03 ~04:03 UTC
+7.1.8-m2drm
+ohc.ramboot=1
+HELD-BY-US
+copy  done, 4096/4096 pixels right
+down  done, 4096/4096 pixels right
+mipl  done, 1024/1024 pixels right
+all blits right
+firmware running: 1 lost: 0 resets: 0 irqs: 4
+kernel PD 0x013c3000 idle PD 0x02653000
+ccb wo 5 ro 5 issued 5 consumed 5
+all blits right
+40/40 frames right
+all blits right
+121
+submit-transfer-invalid
+28/28 passed
+firmware running: 1 lost: 0 resets: 0 irqs: 484
+kernel PD 0x013c3000 idle PD 0x02653000
+ccb wo 28 ro 28 issued 1052 consumed 1052
+0/1 frames right
+all blits right
+0/1 frames right
+all blits right
+[   48.749479] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 1054, consumed 1054); resetting
+[   48.816931] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   50.925480] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 23, consumed 23); resetting
+[   50.949482] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+firmware running: 1 lost: 0 resets: 2 irqs: 524

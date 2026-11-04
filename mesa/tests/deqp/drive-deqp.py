@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Run dEQP-GLES2 (or piglit) on an EA from the host, across wedges and power cycles.
 
-    drive-deqp.py sgx545|ddk|piglit [--box 10.0.0.113] [--chunk 200] [--filter REGEX] [--max-wedges N]
+    drive-deqp.py sgx545|ddk|piglit [--box 10.0.0.110] [--chunk 200] [--filter REGEX] [--max-wedges N]
                   [--name NAME] [--caselist FILE]
 
 --name keeps a run apart from the others (its results in run-NAME, its Mesa in
@@ -31,8 +31,9 @@ through piglit-runner, which takes no caselist: each chunk is passed as anchored
 
 Environment:
   RECOVER     shell command that power-cycles the box and returns once it has
-              booted and its GPU is up (default: mesa/tests/deqp/recover-ea3.sh);
-              "none" stops the run at the first wedge instead
+              booted and its GPU is up, e.g. mesa/tests/deqp/recover-ea3.sh;
+              "none" (the default) stops the run at the first wedge instead
+  BOX         the box (default 10.0.0.110, the EA1, the GPU box)
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
   BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
@@ -58,6 +59,9 @@ TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
 SSH_TIMEOUT = 25
 RUN_DIR = None
 LOCK = "flock /tmp/gpu.lock"  # per chunk; empty with --hold-lock
+# --boot ramboot: the run's own RAM boot, marked by this file (gone with any reboot)
+RAMBOOT_MARK = "/tmp/ohc-test-ramboot"
+BOOT = "normal"
 
 
 def log(*a):
@@ -92,6 +96,20 @@ class Box:
                 return True
             time.sleep(3)
         return False
+
+
+STATUSES = {"Pass", "Fail", "Skip", "Crash", "Timeout", "Flake", "Warn", "Missing", "Wedge",
+            "ExpectedFail", "UnexpectedPass", "KnownFlake"}
+
+
+def result_line(line):
+    """(test, status, seconds) from a results.csv line; piglit's names may hold commas"""
+    parts = line.strip().rsplit(",", 2)
+    if len(parts) == 3 and parts[1] in STATUSES:
+        return parts[0], parts[1], parts[2]
+    if len(parts) >= 2 and parts[-1] in STATUSES:     # "test,Wedge,"-less forms
+        return ",".join(parts[:-1]), parts[-1], ""
+    return None
 
 
 def recoveries(box):
@@ -173,13 +191,14 @@ def piglit_env(name):
     # glvnd dispatches to this run's Mesa; it stays loaded, since unloading it at
     # waffle's teardown crashes the process at exit (docs/PIGLIT.md)
     lib = f"{BOX_DIR}/lib-{name}"
-    return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
-            f"LD_PRELOAD={lib}/libEGL_mesa.so.0 PIGLIT_PLATFORM=surfaceless_egl {BOX_ENV}")
+    return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib:{BOX_DIR}/piglit/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
+            f"LD_PRELOAD={lib}/libEGL_mesa.so.0 PIGLIT_PLATFORM=surfaceless_egl PIGLIT_NO_WINDOW=1 {BOX_ENV}")
 
 
 def piglit_regex(test):
-    """a test name as an anchored regex; only regex syntax is escaped (Rust's regex rejects \\@)"""
-    return "^" + re.sub(r"([\\.+*?()|\[\]{}^$#&~-])", r"\\\1", test) + "$"
+    """a test name as an anchored regex; only regex syntax is escaped (Rust's regex rejects \\@),
+    and a comma matches as any character: piglit-runner splits --include-tests at commas"""
+    return "^" + re.sub(r"([\\.+*?()|\[\]{}^$#&~-])", r"\\\1", test).replace(",", ".") + "$"
 
 
 def piglit_gpu_tests():
@@ -191,7 +210,8 @@ def piglit_gpu_tests():
     for prof in ("quick_gl", "quick_shader"):
         with gzip.open(os.path.join(PIGLIT_WORK, "out/piglit/tests", prof + ".xml.gz")) as f:
             tests += [t.get("name") for t in ET.parse(f).getroot().iter("Test")]
-    return tests
+    # GLX needs X: on the surfaceless platform its tests don't exist (not built)
+    return [t for t in tests if not t.startswith("glx@")]
 
 
 def payload(box, who, name):
@@ -225,7 +245,7 @@ def runner_script(who, name):
     if who == "piglit":
         return (f"cd {BOX_DIR} && rm -rf out && set -- && while IFS= read -r t; do set -- \"$@\" "
                 f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX545_DEBUG=hangabort "
-                f"{LOCK} ./piglit-runner run --piglit-folder piglit --profile gpu --process-isolation "
+                f"{LOCK} ./piglit-runner run --piglit-folder {BOX_DIR}/piglit --profile gpu --process-isolation "
                 f"--output out --jobs 1 --timeout {TEST_TIMEOUT} \"$@\" > runner.log 2>&1; echo rc=$?")
     if who == "sgx545":
         env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort {BOX_ENV}"
@@ -266,7 +286,7 @@ def canary(box, who, name):
 
 
 def recover(box):
-    cmd = os.environ.get("RECOVER", shlex.quote(os.path.join(HERE, "recover-ea3.sh")))
+    cmd = os.environ.get("RECOVER", "none")
     if cmd == "none":
         # a box without a smart plug: someone has to power-cycle it
         log("wedged, and RECOVER=none: stopping; power-cycle the box and rerun to carry on")
@@ -293,17 +313,20 @@ def run_chunk(box, who, name, tests):
     rc, out = box.ssh(runner_script(who, name), timeout=limit)
     res = {}
     wedged = rc is None
+    # piglit-runner reports a comma in a name as "-"
+    named = {t.replace(",", "-"): t for t in tests} if who == "piglit" else {}
     if not wedged:
         rc2, csv = box.ssh(f"cat {BOX_DIR}/out/results.csv 2>/dev/null")
         if rc2 is None:
             wedged = True
         for line in csv.decode(errors="replace").splitlines():
-            parts = line.split(",")
-            if len(parts) >= 2 and parts[0].startswith("dEQP"):
-                res[parts[0]] = (parts[1], parts[2] if len(parts) > 2 else "")
+            r = result_line(line)
+            if r:
+                res[named.get(r[0], r[0])] = (r[1], r[2])
     if not wedged:
         # the failing tests' logs, for triage
-        rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - *.qpa 2>/dev/null", timeout=120)
+        logs = "*.log" if who == "piglit" else "*.qpa"    # piglit-runner keeps a log per failing test
+        rc3, tar = box.ssh(f"cd {BOX_DIR}/out && tar cf - {logs} 2>/dev/null", timeout=120)
         if rc3 is not None and tar:
             try:
                 with tarfile.open(fileobj=io.BytesIO(tar)) as t:
@@ -320,9 +343,12 @@ def run_chunk(box, who, name, tests):
 
 
 def main():
+    # a kill (another session needs the box) unwinds like an exit: the lock is let go
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit("terminated: the lock is let go"))
     ap = argparse.ArgumentParser()
     ap.add_argument("who", choices=["sgx545", "ddk", "piglit"])
-    ap.add_argument("--box", default=os.environ.get("EA3", "10.0.0.113"))
+    ap.add_argument("--box", default=os.environ.get("BOX", "10.0.0.110"))
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--filter", default=None)
     ap.add_argument("--max-wedges", type=int, default=40)
@@ -333,12 +359,16 @@ def main():
     ap.add_argument("--slice-minutes", type=float, default=None,
                     help="stop (exit 3) after the chunk that passes this many minutes, to share the box")
     ap.add_argument("--copy-only", action="store_true", help="copy the payload and stop (no GPU work)")
+    ap.add_argument("--boot", choices=["normal", "ramboot"], default="normal",
+                    help="the boot a slice runs on: p1's, or a RAM boot the runner marked with "
+                         + RAMBOOT_MARK + " (the EA3's)")
     ap.add_argument("--hold-lock", action="store_true",
                     help="hold /tmp/gpu.lock on the box for the whole run, so nothing interleaves between chunks")
     a = ap.parse_args()
     box = Box(a.box)
 
-    global RUN_DIR
+    global RUN_DIR, BOOT
+    BOOT = a.boot
     name = a.name or a.who
     run_dir = RUN_DIR = os.path.join(WORK, "run-" + name)
     os.makedirs(run_dir, exist_ok=True)
@@ -347,7 +377,7 @@ def main():
     done = set()
     if os.path.exists(res_path):
         with open(res_path) as f:
-            done = {line.split(",")[0] for line in f if line.startswith("dEQP")}
+            done = {r[0] for r in map(result_line, f) if r}
     if a.who == "piglit":
         global BOX_DIR
         BOX_DIR = os.environ.get("BOX_DIR", "/root/piglit")
@@ -396,19 +426,28 @@ def main():
         run(a, box, name, todo, res_path, wedge_path)
     finally:
         if holder:
-            box.ssh("rm -f /tmp/deqp-job")
-            holder.wait(timeout=30)
+            # a chunk cut short must not go on running on the box without the lock
+            # (busybox here has no pkill)
+            box.ssh("for p in $(ps | grep -e deqp-runner -e piglit-runner -e /deqp-gles2 -e piglit/bin/ | "
+                    "grep -v grep | awk '{print $1}'); do kill $p; done; rm -f /tmp/deqp-job")
+            try:
+                holder.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                holder.kill()
 
 
 def box_state(box):
-    """(normal boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
+    """(the run's boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
     rc, out = box.ssh("cat /proc/cmdline; cat /proc/sys/kernel/random/boot_id; "
-                      "dmesg | grep -c 'Recovery triggered'")
+                      f"dmesg | grep -c 'Recovery triggered'; test -f {RAMBOOT_MARK} && echo marked")
     lines = out.decode(errors="replace").split("\n")
     if rc not in (0, 1) or len(lines) < 3:
         return None
     cmdline = lines[0]
-    normal = "root=/dev/mmcblk0p1" in cmdline and "ohc.ramboot" not in cmdline
+    if BOOT == "ramboot":
+        normal = "ohc.ramboot=1" in cmdline and "marked" in lines[3:]
+    else:
+        normal = "root=/dev/mmcblk0p1" in cmdline and "ohc.ramboot" not in cmdline
     return normal, lines[1].strip(), int(lines[2].strip() or 0)
 
 
@@ -420,7 +459,8 @@ def box_busy(box, run_dir):
         return "doesn't answer"
     normal, boot, rec = st
     if not normal:
-        return "not on its normal boot (a test kernel or RAM image)"
+        return ("not on the run's RAM boot (no " + RAMBOOT_MARK + ")" if BOOT == "ramboot"
+                else "not on its normal boot (a test kernel or RAM image)")
     try:
         with open(os.path.join(run_dir, "box-state")) as f:
             last_boot, last_rec = f.read().split()

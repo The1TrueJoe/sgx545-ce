@@ -7,8 +7,8 @@
                 [--reasons REASONS.txt] [--flakes SEEN.txt] [--note TEXT]
 
 Later files override earlier ones test by test (a rerun of the fails after the
-first pass). Writes PREFIX-fails.txt (Fail, Crash, Timeout, with the status
-deqp-runner compares against), PREFIX-flakes.txt (tests that came out Flake)
+first pass). Works for dEQP and piglit results. Writes PREFIX-fails.txt (Fail,
+Crash, Timeout, Warn, Missing, with the status the runner compares against), PREFIX-flakes.txt (tests that came out Flake)
 and PREFIX-skips.txt (tests that wedged the GPU, or the box), each with a
 header saying where it came from, and prints the totals.
 
@@ -39,9 +39,11 @@ def main():
     for path in a.results:
         with open(path) as f:
             for line in f:
-                parts = line.strip().split(",")
-                if len(parts) >= 2 and parts[0].startswith("dEQP"):
-                    status[parts[0]] = parts[1]
+                # TEST,STATUS,SECONDS; a piglit name can hold commas, which
+                # piglit-runner reports as "-"
+                parts = line.strip().rsplit(",", 2)
+                if len(parts) == 3 and parts[0]:
+                    status[parts[0].replace(",", "-")] = parts[1]
     wedges = []
     if a.wedges:
         with open(a.wedges) as f:
@@ -58,7 +60,8 @@ def main():
     head = (f"# {time.strftime('%Y-%m-%d')}: {len(status)} tests, "
             + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
             + (f"\n# {a.note}" if a.note else "") + "\n")
-    fails = sorted(t for t, s in status.items() if s in ("Fail", "Crash", "Timeout") and t not in wedges)
+    fails = sorted(t for t, s in status.items()
+                   if s in ("Fail", "Crash", "Timeout", "Warn", "Missing") and t not in wedges)
     seen = set()
     if a.flakes:
         with open(a.flakes) as f:
@@ -68,8 +71,11 @@ def main():
 
     groups = collections.OrderedDict((why, []) for _, why in reasons)
     groups["not looked at yet"] = []
+    missing = "no test program: piglit's GLES, EGL and window-system tests aren't built (build-piglit.sh)"
     for t in fails:
-        why = next((w for rx, w in reasons if rx.search(t)), "not looked at yet")
+        why = missing if status[t] == "Missing" else next((w for rx, w in reasons if rx.search(t)),
+                                                           "not looked at yet")
+        groups.setdefault(why, [])
         groups[why].append(t)
     body = ""
     for why, tests in groups.items():

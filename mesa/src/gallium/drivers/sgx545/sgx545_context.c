@@ -218,6 +218,8 @@ sgx545_context_destroy(struct pipe_context *pctx)
    slab_destroy_child(&ctx->transfer_pool);
    free(ctx->staging);
    free(ctx->idx_staging);
+   free(ctx->mem_consts[0]);
+   free(ctx->mem_consts[1]);
    FREE(ctx);
 }
 

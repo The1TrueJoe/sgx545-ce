@@ -1,0 +1,2 @@
+# 2026-11-03: 28515 tests, Crash 87, Fail 1729, Missing 437, Pass 4280, Skip 21978, Timeout 2, Warn 2
+# piglit gpu profile on the EA3; every test that didn't skip rerun on um-re c111b12 + the varyings driver (lib-pg17)

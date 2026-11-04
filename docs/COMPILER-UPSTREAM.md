@@ -94,8 +94,13 @@ checks", so it's indicative, not exhaustive.)
 
 - `fcos`: hwt_p3 confirms its value on hardware. No A/B shader uses cos yet.
 - `fadm`, `fmsa`: hwt_p1/p5 confirm them. Selected only for some fmad shapes.
-- `fdsx`, `fdsy` (derivatives): **encoder + corpus only**. These need an hwt
-  test and an A/B shader with `dFdx`/`dFdy` before upstream.
+- `fdsx`, `fdsy` (derivatives): ours match the DDK's words for corpus c3
+  dsx/dsy. piglit on the EA3 showed that their sources must run on helper
+  instances (skipinv clear) and that the destination must not share the
+  source's register. Retest after the register fix; they also need an hwt
+  test before upstream.
+- `depthf` (gl_FragDepth): the driver writes it at the feedback point; what
+  it does with our depth is a guess until a hardware test.
 - `pck.f32.f16`: the conversion is hwt_p4. No A/B shader takes this path.
 
 ### 2.2 Conventions and behaviour: the DDK as an oracle

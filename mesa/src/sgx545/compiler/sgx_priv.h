@@ -74,6 +74,7 @@ struct sgx_ins {
    uint8_t ndst;        /* leading operands that are written */
    uint8_t nops;
    uint8_t writes_pred; /* test: predicate number + 1 */
+   bool noskip;         /* runs on helper instances too (skipinv clear) */
    uint8_t nfld;
    struct sgx_ref op[USSE_MAX_OPS];
    struct { uint16_t id; int32_t v; } fld[SGX_MAX_FLD];
@@ -145,8 +146,18 @@ struct sgx_ctx {
    uint8_t const_shift[1024];    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
    uint8_t const_lowp[1024];     /* the first of a lowp vec4 uniform (C10 candidate) */
    uint8_t const_prec[1024];     /* GLSL precision of the uniform behind constant k (0 unknown) */
-   unsigned n_sa;
+   /* dynamically indexed arrays: first constant, constants it spans */
+   struct { uint16_t k, range; } ix_arr[64];
+   unsigned n_ix_arr;
+   unsigned n_sa;                /* slots (constants, then literals) */
    unsigned sa_base;
+   /* where the slots live (place_constants): SA slot from sa_base, -1 memory
+    * only; with mem_dwords every slot is also block word slot + 1 */
+   int slot_sa[1024 + 32];
+   unsigned n_sa_phys;           /* SA slots used: kept slots, then the bases */
+   unsigned mem_dwords;
+   unsigned n_mem_bases;
+   uint8_t mem_base_sa[8];       /* SA slot holding block address + 512 * j */
    uint32_t lit_bits[32];        /* driver_consts: literal slots' values */
    int lit_slot[32];
    unsigned n_lits;
@@ -155,6 +166,9 @@ struct sgx_ctx {
    /* fragment */
    struct sgx_ref color[4];
    bool has_color;
+   struct sgx_ref depth;         /* gl_FragDepth */
+   bool has_depth;
+   unsigned depth_pa;
    int keep_vreg;                /* discard: 1.0 = keep, -1 none */
    bool discards;
    bool keep_pred;               /* the single discard wrote p1 (= keep) itself */
@@ -189,6 +203,19 @@ static inline struct sgx_vreg *
 sgx_vreg(struct sgx_ctx *c, unsigned i)
 {
    return util_dynarray_element(&c->vregs, struct sgx_vreg, i);
+}
+
+/* the SA register of uniform constant k / literal i (kept in SA) */
+static inline unsigned
+sgx_const_sa(const struct sgx_ctx *c, unsigned k)
+{
+   return c->sa_base + c->slot_sa[c->const_slot[k]];
+}
+
+static inline unsigned
+sgx_lit_sa(const struct sgx_ctx *c, unsigned i)
+{
+   return c->sa_base + c->slot_sa[c->lit_slot[i]];
 }
 
 #endif
