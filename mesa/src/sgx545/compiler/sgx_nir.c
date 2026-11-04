@@ -535,6 +535,39 @@ alu_of(nir_src s)
    return i->type == nir_instr_type_alu ? nir_instr_as_alu(i) : NULL;
 }
 
+/* The colour is packed to U8 with pck's saturation: a clamp to [0, 1] of
+ * what is stored there is the pack's own (libusc drops it, sat_m) */
+static bool
+colour_sat_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   if (in->intrinsic != nir_intrinsic_store_output)
+      return false;
+   unsigned loc = nir_intrinsic_io_semantics(in).location;
+   if (loc != FRAG_RESULT_COLOR && loc != FRAG_RESULT_DATA0)
+      return false;
+   nir_alu_instr *a = alu_of(in->src[0]);
+   nir_alu_instr *cv = NULL;
+   if (a && a->op == nir_op_f2f32) {
+      cv = a;
+      a = alu_of(a->src[0].src);
+   }
+   if (!a || a->op != nir_op_fsat)
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def *x = nir_ssa_for_alu_src(b, a, 0);
+   if (cv) {
+      nir_alu_instr *w = nir_alu_instr_create(b->shader, nir_op_f2f32);
+      w->src[0].src = nir_src_for_ssa(x);
+      for (unsigned k = 0; k < NIR_MAX_VEC_COMPONENTS; k++)
+         w->src[0].swizzle[k] = cv->src[0].swizzle[k];
+      nir_def_init(&w->instr, &w->def, cv->def.num_components, 32);
+      nir_builder_instr_insert(b, &w->instr);
+      x = &w->def;
+   }
+   nir_src_rewrite(&in->src[0], x);
+   return true;
+}
+
 /* ------------------------------------------------------------------------
  * fs_mediump: inputs, texels and uniforms that no texture coordinate needs
  * become F16, then every float op over F16 values is rebuilt in F16 (what
@@ -579,7 +612,6 @@ static nir_def *
 src16(nir_builder *b, nir_alu_instr *alu, unsigned j)
 {
    unsigned nc = nir_ssa_alu_instr_src_components(alu, j);
-   nir_def *d = alu->src[j].src.ssa;
    unsigned swz[NIR_MAX_VEC_COMPONENTS];
    for (unsigned k = 0; k < nc; k++)
       swz[k] = alu->src[j].swizzle[k];
@@ -633,56 +665,83 @@ seed16(nir_builder *b, nir_def *d)
    nir_def_rewrite_uses_after(d, w);
 }
 
+static bool
+low_prec(unsigned p)
+{
+   return p == GLSL_PRECISION_MEDIUM || p == GLSL_PRECISION_LOW;
+}
+
+/* the precision a texel has: its sampler's */
+static unsigned
+tex_prec(nir_tex_instr *t)
+{
+   int i = nir_tex_instr_src_index(t, nir_tex_src_texture_deref);
+   if (i < 0)
+      return 0;
+   nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(t->src[i].src));
+   return v ? v->data.precision : 0;
+}
+
+/* all: fs_mediump, every input, texel and uniform no coordinate needs (and
+ * their variables become mediump); otherwise those the program declares
+ * mediump or lowp. Ops whose operands are all F16 then run in F16: GLSL ES
+ * gives an operation its operands' highest precision. */
 static void
-fs_mediump(struct sgx_ctx *c)
+mediump_fs(struct sgx_ctx *c, bool all)
 {
    nir_shader *s = c->nir;
    nir_function_impl *impl = nir_shader_get_entrypoint(s);
    nir_builder b = nir_builder_create(impl);
-   /* inputs: a variable none of whose loads is a coordinate is mediump */
    struct set *coord = _mesa_pointer_set_create(c);
-   nir_foreach_block(blk, impl) {
-      nir_foreach_instr(instr, blk) {
-         if (instr->type != nir_instr_type_intrinsic)
-            continue;
-         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
-         if (in->intrinsic == nir_intrinsic_load_deref) {
-            nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
-            if (v && v->data.mode == nir_var_shader_in && feeds_coord(&in->def, 0))
-               _mesa_set_add(coord, v);
+   if (all) {
+      /* inputs: a variable none of whose loads is a coordinate is mediump */
+      nir_foreach_block(blk, impl) {
+         nir_foreach_instr(instr, blk) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            if (in->intrinsic == nir_intrinsic_load_deref) {
+               nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
+               if (v && v->data.mode == nir_var_shader_in && feeds_coord(&in->def, 0))
+                  _mesa_set_add(coord, v);
+            }
          }
       }
+      nir_foreach_shader_in_variable(var, s)
+         if (var->data.location >= VARYING_SLOT_VAR0 && !_mesa_set_search(coord, var))
+            var->data.precision = GLSL_PRECISION_MEDIUM;
+      nir_foreach_variable_with_modes(var, s, nir_var_uniform)
+         if (!glsl_type_is_sampler(glsl_without_array(var->type)))
+            var->data.precision = GLSL_PRECISION_MEDIUM;
    }
-   nir_foreach_shader_in_variable(var, s)
-      if (var->data.location >= VARYING_SLOT_VAR0 && !_mesa_set_search(coord, var))
-         var->data.precision = GLSL_PRECISION_MEDIUM;
-   nir_foreach_variable_with_modes(var, s, nir_var_uniform)
-      if (!glsl_type_is_sampler(glsl_without_array(var->type)))
-         var->data.precision = GLSL_PRECISION_MEDIUM;
-   /* seeds: those loads, the texels, the uniforms */
    nir_foreach_block(blk, impl) {
       nir_foreach_instr_safe(instr, blk) {
          nir_def *d = NULL;
          if (instr->type == nir_instr_type_tex) {
             nir_tex_instr *t = nir_instr_as_tex(instr);
-            if (t->op == nir_texop_tex || t->op == nir_texop_txb || t->op == nir_texop_txl)
+            if ((t->op == nir_texop_tex || t->op == nir_texop_txb || t->op == nir_texop_txl) &&
+                (all || low_prec(tex_prec(t))))
                d = &t->def;
          } else if (instr->type == nir_instr_type_intrinsic) {
             nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
             if (in->intrinsic == nir_intrinsic_load_deref) {
                nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
-               if (v && ((v->data.mode == nir_var_shader_in && v->data.location >= VARYING_SLOT_VAR0 &&
-                          !_mesa_set_search(coord, v)) ||
-                         v->data.mode == nir_var_uniform))
+               if (v && v->data.mode == nir_var_shader_in && v->data.location >= VARYING_SLOT_VAR0 &&
+                   (all ? !_mesa_set_search(coord, v) : low_prec(v->data.precision)))
+                  d = &in->def;
+               else if (v && v->data.mode == nir_var_uniform && (all || low_prec(v->data.precision)))
                   d = &in->def;
             } else if ((in->intrinsic == nir_intrinsic_load_interpolated_input ||
-                        in->intrinsic == nir_intrinsic_load_input) && !feeds_coord(&in->def, 0) &&
+                        in->intrinsic == nir_intrinsic_load_input) &&
                        nir_intrinsic_io_semantics(in).location >= VARYING_SLOT_VAR0) {
                nir_io_semantics sem = nir_intrinsic_io_semantics(in);
-               sem.medium_precision = 1;
-               nir_intrinsic_set_io_semantics(in, sem);
-               d = &in->def;
-            } else if (in->intrinsic == nir_intrinsic_load_uniform) {
+               if (all && !feeds_coord(&in->def, 0)) {
+                  sem.medium_precision = 1;
+                  nir_intrinsic_set_io_semantics(in, sem);
+               }
+               if (sem.medium_precision)
+                  d = &in->def;
+            } else if (in->intrinsic == nir_intrinsic_load_uniform && all) {
                d = &in->def;
             }
          }
@@ -1489,8 +1548,8 @@ sgx_lower(struct sgx_ctx *c)
 
    s->options = &options;
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr, nir_metadata_control_flow, NULL);
-   if (c->p16 && c->opts->fs_mediump && s->info.stage == MESA_SHADER_FRAGMENT)
-      fs_mediump(c);
+   if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT)
+      mediump_fs(c, c->opts->fs_mediump);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(s), nir_var_shader_out);
    NIR_PASS(_, s, nir_lower_global_vars_to_local);
@@ -1498,6 +1557,9 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_var_copies);
    NIR_PASS(_, s, nir_lower_vars_to_ssa);
    optimize(s);
+   if (s->info.stage == MESA_SHADER_FRAGMENT &&
+       nir_shader_intrinsics_pass(s, colour_sat_instr, nir_metadata_control_flow, NULL))
+      optimize(s);
    /* indexing of temporaries that unrolling didn't remove (a loop bounded by
     * a uniform): if / else trees over the elements */
    bool ind = false;

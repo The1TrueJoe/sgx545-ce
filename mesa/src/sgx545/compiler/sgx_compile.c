@@ -551,6 +551,17 @@ same_vreg_reg(const struct sgx_ref *a, const struct sgx_ref *b)
           (a->h16 ? a->comp / 2 : a->comp) == (b->h16 ? b->comp / 2 : b->comp);
 }
 
+/* two F16 halves of one register */
+static bool
+same_reg16(const struct sgx_ref *a, const struct sgx_ref *b)
+{
+   if (!a->h16 || !b->h16 || a->file != b->file || a->lane || b->lane)
+      return false;
+   if (a->file == SGX_F_V)
+      return a->n == b->n && a->comp / 2 == b->comp / 2;
+   return (a->file == SGX_F_PA || a->file == SGX_F_R) && a->n / 2 == b->n / 2;
+}
+
 static void emit_runs_raw(struct sgx_ctx *c, unsigned form, unsigned wmask, struct sgx_ref dst[4],
                           unsigned nsrc, struct sgx_ref src[][4], const struct fieldset *fs, uint8_t pred);
 
@@ -1456,9 +1467,17 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
          }
       }
       emit_runs(c, SGX_OP_FDP, nir_component_mask(n), d, 2, s, &NOF, 0);
-      /* the result: component n-1 of w (clamped to [0, 1] when NIR folded an
-       * fsat into it), moved where NIR wants it */
-      struct sgx_ref res = vref(w, n - 1);
+      /* fdp writes only the last iteration's destination (ISA.md hwt_p7): its
+       * operand names that register alone, the encoder takes rpt - 1 off,
+       * and nothing holds the ones below it */
+      unsigned w1 = new_vreg(c, 1);
+      struct sgx_ins *dp = list_last_entry(&c->ins, struct sgx_ins, link);
+      assert(dp->form == SGX_OP_FDP);
+      dp->op[0] = vref(w1, 0);
+      dp->op[0].step = 0;
+      /* the result (clamped to [0, 1] when NIR folded an fsat into it),
+       * moved where NIR wants it */
+      struct sgx_ref res = vref(w1, 0);
       if (ld.fsat) {
          unsigned t = new_vreg(c, 1);
          struct sgx_ref td[4] = { vref(t, 0) }, ts[3][4] = { { res }, { ref(SGX_F_K, 0) }, { ref(SGX_F_K, 0x3f800000) } };
@@ -3405,22 +3424,33 @@ emit_color(struct sgx_ctx *c)
             col[k].h16 = 1;
          }
       }
-      bool first = reads_pa0(&col[0]) || reads_pa0(&col[3]);
-      bool second = reads_pa0(&col[2]) || reads_pa0(&col[1]);
+      /* (g, r) [dmask=6] and (b, a) [dmask=9] when r, g share a register and
+       * b, a another (a vec4 as it is): each pck reads one register, so the
+       * first one's may become the colour (libusc's mul_m) */
+      bool rg = same_reg16(&col[0], &col[1]) && same_reg16(&col[2], &col[3]);
+      struct sgx_ref pr[2][2] = { { col[0], col[3] }, { col[2], col[1] } };
+      unsigned dm[2] = { 12, 3 };
+      if (rg) {
+         pr[0][0] = col[1]; pr[0][1] = col[0];
+         pr[1][0] = col[2]; pr[1][1] = col[3];
+         dm[0] = 6; dm[1] = 9;
+      }
+      bool first = reads_pa0(&pr[0][0]) || reads_pa0(&pr[0][1]);
+      bool second = reads_pa0(&pr[1][0]) || reads_pa0(&pr[1][1]);
       unsigned d = second && first ? MAX2(c->n_pa_inputs, 1) : 0;
       bool swap = second && !first;
       c->colour_pa = d;
       for (unsigned hh = 0; hh < 2; hh++) {
-         bool ra = (hh == 0) != swap;
+         unsigned q = (hh == 0) != swap ? 0 : 1;
          struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_U8_F16);
          p->nops = 3;
          p->op[0] = ref(SGX_F_PA, d);
-         p->op[1] = ra ? col[0] : col[2];
-         p->op[2] = ra ? col[3] : col[1];
+         p->op[1] = pr[q][0];
+         p->op[2] = pr[q][1];
          for (unsigned j = 1; j < 3; j++)
             if (p->op[j].file == SGX_F_C)
                p->op[j].lane = 0;
-         fld(p, SGX_FLD_DMASK, ra ? 12 : 3);
+         fld(p, SGX_FLD_DMASK, dm[q]);
          fld(p, SGX_FLD_SCALE, 1);
          add(c, p);
       }
@@ -3821,9 +3851,113 @@ struct loop_span {
    int head, tail;
 };
 
+/* Vertex shader: temporaries in output registers before the program's
+ * first write of them (a mat4 * v accumulator in the o0-o3 it ends in, in
+ * place at the last step, as coalesce_repeats). Outputs are read back like
+ * any source; only their final value leaves the shader. */
+static void
+place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
+           const struct loop_span *loops, unsigned nloops, const unsigned *minb)
+{
+   unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+   unsigned end = 2 * nins + 2, no = 0;
+   int from[128];
+   for (unsigned p = 0; p < 128; p++)
+      from[p] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_O)
+            continue;
+         unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         int at = 2 * i->ip + (k < i->ndst && (i->rpt == 1 || i->form == SGX_OP_FDP));
+         for (unsigned j = r->n; j < r->n + n && j < 128; j++) {
+            if (from[j] < 0 || at < from[j])
+               from[j] = at;
+            no = MAX2(no, j + 1);
+         }
+      }
+   }
+   for (unsigned p = 0; p < no; p++)
+      for (unsigned l = 0; l < nloops; l++)
+         if (from[p] > loops[l].head && from[p] <= loops[l].tail)
+            from[p] = loops[l].head;
+   /* the in-place step: an explicit output write reading, aligned, a vreg
+    * that dies there */
+   int *inplace = malloc(nv * sizeof(int));
+   for (unsigned v = 0; v < nv; v++)
+      inplace[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      const struct sgx_ref *d = &i->op[0];
+      if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred || d->file != SGX_F_O || !d->step ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      for (unsigned k = 1; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || r->h16 || (i->rpt > 1 && !r->step) || r->comp > d->n ||
+             sgx_vreg(c, r->n)->last != (int)(2 * i->ip))
+            continue;
+         bool good = true;
+         for (unsigned j = 1; j < i->nops && good; j++)
+            if (j != k && i->op[j].file == SGX_F_V && i->op[j].n == r->n)
+               good = i->op[j].comp == r->comp && i->op[j].step == r->step && !i->op[j].h16;
+         if (good)
+            inplace[r->n] = d->n - r->comp;
+         break;
+      }
+   }
+   bool *ok = calloc(nv, sizeof(bool));
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      ok[v] = r->first >= 0 && !r->pa && !r->half && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
+              (int)v != c->face_f32;
+   }
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv)
+            continue;
+         struct sgx_ref x = *r;
+         x.file = SGX_F_O;
+         if (i->kind != SGX_INS_ALU || r->h16 || !slot_ok(i->form, k, &x))
+            ok[r->n] = false;
+      }
+   }
+   /* what the placed vregs hold, per register */
+   BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, MAX2(no, 1) * BITSET_WORDS(end));
+#define OBUSY(p) (busy + (p) * BITSET_WORDS(end))
+   for (unsigned p = 0; p < no; p++)
+      if (from[p] >= 0)
+         BITSET_SET_RANGE(OBUSY(p), from[p], end - 1);
+      else
+         BITSET_SET_RANGE(OBUSY(p), 0, end - 1);   /* not an output the program writes */
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      if (!ok[v])
+         continue;
+      unsigned lo = r->first, hi = r->last, lim = BITSET_TEST(six, v) ? 64 : 128;
+      for (unsigned b = minb[v]; b + r->size <= MIN2(no, lim); b++) {
+         bool free = true;
+         for (unsigned p = b; p < b + r->size && free; p++)
+            for (unsigned x = lo; x <= hi && x < end && free; x++)
+               free = !BITSET_TEST(OBUSY(p), x) || ((int)b == inplace[v] && x == hi);
+         if (!free)
+            continue;
+         for (unsigned p = b; p < b + r->size; p++)
+            BITSET_SET_RANGE(OBUSY(p), lo, MIN2(hi, end - 1));
+         r->o = true;
+         r->phys = b;
+         break;
+      }
+   }
+#undef OBUSY
+   free(ok);
+   free(inplace);
+}
+
 static void
 place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
-            const struct loop_span *loops, unsigned nloops)
+            const struct loop_span *loops, unsigned nloops, const unsigned *minb)
 {
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    unsigned end = 2 * nins + 2, npa = 0;
@@ -3872,7 +4006,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
                /* (a single instruction reads before it writes: the colour's
                 * own sources may sit in the colour register) */
                if (first_w[j] < 0)
-                  first_w[j] = 2 * i->ip + (i->rpt == 1);
+                  first_w[j] = 2 * i->ip + (i->rpt == 1 || i->form == SGX_OP_FDP);
             } else {
                last[j] = MAX2(last[j], (int)(2 * i->ip));
                if (c->stage == MESA_SHADER_VERTEX)
@@ -3965,29 +4099,48 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
    }
    /* each component's own last use (a 32-bit vreg's register k is free
     * once component k is: the colour's first pck reads .x, its second .z) */
-   int *lastc = malloc(nv * 16 * sizeof(int));
-   for (unsigned v = 0; v < nv * 16; v++)
+   int *lastc = malloc(nv * 16 * sizeof(int)), *firstc = malloc(nv * 16 * sizeof(int));
+   bool *odd = calloc(nv, sizeof(bool));
+   for (unsigned v = 0; v < nv * 16; v++) {
       lastc[v] = -1;
+      firstc[v] = INT_MAX;
+   }
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       for (unsigned k = 0; k < i->nops; k++) {
          const struct sgx_ref *r = &i->op[k];
-         if (r->file != SGX_F_V || r->n >= nv || r->h16)
+         if (r->file != SGX_F_V || r->n >= nv)
             continue;
+         bool half = sgx_vreg(c, r->n)->half;
+         if (r->h16 != half) {
+            odd[r->n] = true;
+            continue;
+         }
+         /* (an F16 vreg by register: a repeat steps a register at a time) */
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
-         int at = 2 * i->ip + (k < i->ndst);
-         for (unsigned j = r->comp; j < r->comp + n && j < 16; j++)
+         unsigned first = half ? r->comp / 2 : r->comp;
+         bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) || i->kind == SGX_INS_SAMPLE ||
+                      (i->kind == SGX_INS_ALU && (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
+         int at = 2 * i->ip + (k < i->ndst && !early);
+         for (unsigned j = first; j < first + n && j < 16; j++) {
             lastc[r->n * 16 + j] = MAX2(lastc[r->n * 16 + j], at);
+            firstc[r->n * 16 + j] = MIN2(firstc[r->n * 16 + j], at);
+         }
       }
    }
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
-      int m = -1;
-      for (unsigned j = 0; j < 16; j++)
+      int m = -1, f = INT_MAX;
+      for (unsigned j = 0; j < 16; j++) {
          m = MAX2(m, lastc[v * 16 + j]);
+         f = MIN2(f, firstc[v * 16 + j]);
+      }
       /* (a loop keeps it all: the allocator's range) */
-      if (r->half || r->size > 16 || m < r->last)
-         for (unsigned j = 0; j < 16; j++)
+      if ((r->half ? (r->size + 1) / 2 : r->size) > 16 || m < r->last || f > r->first || odd[v]) {
+         for (unsigned j = 0; j < 16; j++) {
             lastc[v * 16 + j] = r->last;
+            firstc[v * 16 + j] = r->first;
+         }
+      }
    }
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
@@ -3996,18 +4149,20 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       unsigned regs = r->half ? (r->size + 1) / 2 : r->size;
       unsigned lim = r->half ? 32 : BITSET_TEST(six, v) ? 64 : 128;
       unsigned lo = r->first, hi = r->last;
-      for (unsigned b = 0; b + regs <= MIN2(npa, lim); b++) {
+      for (unsigned b = minb[v]; b + regs <= MIN2(npa, lim); b++) {
          bool free = true;
          for (unsigned p = b; p < b + regs && free; p++) {
-            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
-            for (unsigned x = lo; x <= h && x < end && free; x++)
+            unsigned l = MIN2(MAX2(firstc[v * 16 + p - b], (int)lo), (int)hi);
+            unsigned h = (unsigned)MAX2(lastc[v * 16 + p - b], (int)l);
+            for (unsigned x = l; x <= h && x < end && free; x++)
                free = !BITSET_TEST(BUSY(p), x) || ((int)b == inplace[v] && x == lo);
          }
          if (!free)
             continue;
          for (unsigned p = b; p < b + regs; p++) {
-            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
-            BITSET_SET_RANGE(BUSY(p), lo, MIN2(h, end - 1));
+            unsigned l = MIN2(MAX2(firstc[v * 16 + p - b], (int)lo), (int)hi);
+            unsigned h = (unsigned)MAX2(lastc[v * 16 + p - b], (int)l);
+            BITSET_SET_RANGE(BUSY(p), l, MIN2(h, end - 1));
          }
          r->pa = true;
          r->phys = b;
@@ -4016,6 +4171,8 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
    }
    free(inplace);
    free(lastc);
+   free(firstc);
+   free(odd);
 #undef BUSY
 }
 
@@ -4032,9 +4189,9 @@ allocate(struct sgx_ctx *c)
       label_ip[i] = -1;
 
    /* uses at 2*ip, writes at 2*ip+1, except that a repeated instruction's
-    * destination is live while it reads (iterations interleave), and so is
-    * a derivative's (a neighbour instance reads the source after this one
-    * has written) */
+    * destination is live while it reads (iterations interleave; not fdp's,
+    * which writes once, after its last read), and so is a derivative's (a
+    * neighbour instance reads the source after this one has written) */
    bool *first_is_read = calloc(nv, sizeof(bool));
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       i->ip = ip;
@@ -4050,7 +4207,7 @@ allocate(struct sgx_ctx *c)
             first_is_read[r->n] = true;
          touch(c, r, 2 * ip, 0);
       }
-      bool early = i->rpt > 1 || i->kind == SGX_INS_SAMPLE ||
+      bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) || i->kind == SGX_INS_SAMPLE ||
                    (i->kind == SGX_INS_ALU && (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
       for (unsigned k = 0; k < i->ndst; k++)
          touch(c, &i->op[k], early ? 2 * ip : 2 * ip + 1, 0);
@@ -4086,6 +4243,15 @@ allocate(struct sgx_ctx *c)
     * classes") */
    struct ra_regs *regs = ra_alloc_reg_set(c, NUM_TEMPS, true);
    struct ra_class *cls[17] = { 0 }, *cls_h[17] = { 0 }, *cls_6[17] = { 0 };
+   struct ra_class *cls_b[4] = { 0 }, *cls_b6[4] = { 0 };   /* one register from b up */
+   for (unsigned b = 1; b < 4; b++) {
+      cls_b[b] = ra_alloc_contig_reg_class(regs, 1);
+      cls_b6[b] = ra_alloc_contig_reg_class(regs, 1);
+      for (unsigned r = b; r < NUM_TEMPS; r++)
+         ra_class_add_reg(cls_b[b], r);
+      for (unsigned r = b; r < 64; r++)
+         ra_class_add_reg(cls_b6[b], r);
+   }
    for (unsigned s = 1; s <= 16; s++) {
       cls[s] = ra_alloc_contig_reg_class(regs, s);
       for (unsigned b = 0; b + s <= NUM_TEMPS; b++)
@@ -4128,23 +4294,34 @@ allocate(struct sgx_ctx *c)
    }
    free(used);
    free(halfref);
-   place_in_pa(c, six, ip, loops, nloops);
+   /* an fdp's result register sits rpt - 1 above its operand number */
+   unsigned *minb = calloc(nv, sizeof(unsigned));
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link)
+      if (i->kind == SGX_INS_ALU && i->form == SGX_OP_FDP && i->op[0].file == SGX_F_V && i->op[0].n < nv)
+         minb[i->op[0].n] = MAX2(minb[i->op[0].n], i->rpt - 1u);
+   place_in_pa(c, six, ip, loops, nloops, minb);
+   if (c->stage == MESA_SHADER_VERTEX)
+      place_in_o(c, six, ip, loops, nloops, minb);
    struct ra_graph *g = ra_alloc_interference_graph(regs, nv);
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
       unsigned regs = r->half ? (r->size + 1) / 2 : r->size;
-      ra_set_node_class(g, v, (r->half ? cls_h : BITSET_TEST(six, v) ? cls_6 : cls)[MIN2(MAX2(regs, 1), 16)]);
+      if (minb[v] && !r->half && regs <= 1)
+         ra_set_node_class(g, v, (BITSET_TEST(six, v) ? cls_b6 : cls_b)[MIN2(minb[v], 3)]);
+      else
+         ra_set_node_class(g, v, (r->half ? cls_h : BITSET_TEST(six, v) ? cls_6 : cls)[MIN2(MAX2(regs, 1), 16)]);
    }
    for (unsigned a = 0; a < nv; a++) {
       struct sgx_vreg *x = sgx_vreg(c, a);
-      if (x->first < 0 || x->pa)
+      if (x->first < 0 || x->pa || x->o)
          continue;
       for (unsigned b = a + 1; b < nv; b++) {
          struct sgx_vreg *y = sgx_vreg(c, b);
-         if (y->first >= 0 && !y->pa && x->first <= y->last && y->first <= x->last)
+         if (y->first >= 0 && !y->pa && !y->o && x->first <= y->last && y->first <= x->last)
             ra_add_node_interference(g, a, b);
       }
    }
+   free(minb);
    if (!ra_allocate(g)) {
       sgx_fail(c, "out of temporaries (no spilling yet)");
       return false;
@@ -4152,7 +4329,7 @@ allocate(struct sgx_ctx *c)
    c->n_temps = 0;
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
-      if (r->first < 0 || r->pa)
+      if (r->first < 0 || r->pa || r->o)
          continue;
       r->phys = ra_get_node_reg(g, v);
       c->n_temps = MAX2(c->n_temps, r->phys + (r->half ? (r->size + 1) / 2 : r->size));
@@ -4551,7 +4728,7 @@ phys_opd(struct sgx_ctx *c, const struct sgx_ref *r)
       o.fmt = SGX_ISA_FMT_C10;
    switch (r->file) {
    case SGX_F_V:
-      o.file = sgx_vreg(c, r->n)->pa ? SGX_ISA_FILE_PA : SGX_ISA_FILE_R;
+      o.file = sgx_vreg(c, r->n)->pa ? SGX_ISA_FILE_PA : sgx_vreg(c, r->n)->o ? SGX_ISA_FILE_O : SGX_ISA_FILE_R;
       o.num = sgx_vreg(c, r->n)->phys + r->comp;
       break;
    case SGX_F_R: o.file = SGX_ISA_FILE_R; o.num = r->n; break;
@@ -4607,6 +4784,10 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
             o.fmt = SGX_ISA_FMT_F16; /* format select: the number counts halves */
             fmt = true;
          }
+      }
+      if (form == SGX_OP_FDP && k == 0 && i->rpt > 1) {
+         assert(o.num >= i->rpt - 1u);
+         o.num -= i->rpt - 1;
       }
       sgx_form_opd(&x, form, k, &o);
    }
