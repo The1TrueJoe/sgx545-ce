@@ -340,6 +340,33 @@ What the open microkernel must do (the list for `ukernel/`):
 - leave nothing of a cleaned-up context where the next context's renders read
   it (the in-flight slot +0x50, the RT-data entry state).
 
+#### Cleanup v2 (open microkernel, feature bit 0 of the firmware header)
+
+Agreed between `powervr_sgx` and `ukernel/` (2026-11-04). The type values and
+data[1] are as above. In addition:
+
+- data[2] is a nonzero sequence number the host picks. The host sends one
+  cleanup at a time, and only after every job of the resource's context has
+  signalled. It clears `ui32CleanupStatus` before each send.
+- The microkernel always consumes the command (advances the read offset), so
+  later commands never wait behind a cleanup.
+- It writes the outcome once, when it processes the command:
+  `COMPLETE | DONE` (bits 0 and 2) when the resource is gone and nothing will
+  read it again, or `COMPLETE | BUSY` (bits 0 and 1) while a render or page
+  release that uses it is still in flight. Then it echoes data[2] into host
+  control +0x40 (word 16).
+- On `BUSY` the host sends the same command again after about 1 ms. After 1 s
+  it gives up and keeps the memory until the next firmware restart. It never
+  resets for a cleanup.
+- The microkernel keeps a bound of its own as a backstop.
+
+`powervr_sgx` shares one PB per VM between its render contexts, and sends the
+PB cleanup (5) when the VM's PB goes, after its contexts' render-context
+cleanups (2). A render-context cleanup must therefore not free the PB.
+
+Without the feature bit the host speaks the contract above this heading: one
+command, `COMPLETE` polled for 5 s, memory kept on a timeout.
+
 ### Get misc info (type 6)
 
 data[1] is the misc-info buffer. The handler writes the core identity and,
@@ -436,6 +463,57 @@ Full evidence and next steps:
 `docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md`, then
 `docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier
 EA3 run, whose "never re-entered" reading the EA1 counter corrected).
+
+## 4a. The firmware file
+
+`powervr_sgx` loads the microkernel with `request_firmware()`. It tries
+`powervr_sgx/sgx545-openhc-ukernel.bin` first, then the DDK image under its own
+name. A file that starts with the magic below is an open microkernel and is
+loaded from its header alone. Anything else must be the one DDK build the
+driver knows (size and patch placeholders checked).
+
+All words are little-endian u32. Offsets are from the start of the file.
+
+| offset | field | meaning |
+|---|---|---|
+| 0x00 | magic | `SGX5` `UKRN` (0x35584753, 0x4e524b55) |
+| 0x08 | header_size | bytes before the image; a multiple of 8 |
+| 0x0c | interface | host interface version, major << 16 \| minor. 1.0: SGXMKIF as in §3 (the DDK 1.7 command set and host control block) |
+| 0x10 | features | bit 0: cleanup v2 (§3, Cleanup). Bit 1: secure mode, the microkernel needs no kernel heap in a client page directory. Other bits must be 0 |
+| 0x14 | image_size | bytes of USSE code after the header; a multiple of 8 |
+| 0x18 | image_crc32 | CRC-32 (IEEE, as `crc32_le(~0, ...) ^ ~0`) of the image |
+| 0x1c | n_entries | entries in the entry table |
+| 0x20 | entries_off | offset of the entry table |
+| 0x24 | n_patches | entries in the patch table |
+| 0x28 | patches_off | offset of the patch table |
+| 0x2c | core_rev | SGX core revision it was validated on (`SGX_CR_CORE_REVISION`), 0 for any |
+| 0x30 | reserved | 4 words, 0 |
+| 0x40 | build_id | 32 bytes, NUL-padded text (for example `git describe`) |
+
+The entry table holds `{ u32 program, u32 offset }` pairs. `program` names the
+PDS program the driver builds to enter the microkernel. 0 is the event
+program, a bare `DOUTU` with bit 27 to `offset`. 1 to 4 are reserved for
+programs with the DDK's roles (§1, "The five entry PDS programs"). The open
+microkernel uses only 0. `offset` is in bytes from the start of the image.
+
+The patch table holds `{ u32 offset, u32 value }` pairs. Each one names an
+`limm` placeholder at `offset` in the image (the two-word form with
+`0x000dbeef` in its low 21 bits). The driver writes into it the value
+`value` names:
+
+| value | written |
+|---|---|
+| 1 | device address of the TA3D control block |
+| 2 | device address of the host control block |
+| 3 | device address of the kernel CCB control (write and read offsets) |
+| 4 | device address of the kernel CCB |
+| 5 | device address of the misc-info buffer |
+
+Host-kick table: identity. The `ServiceAddress` of a command is its type.
+
+The driver refuses a file whose sizes or offsets run past its end, whose CRC
+doesn't match, whose interface major it doesn't know, or that sets an unknown
+feature bit or table value.
 
 ## 5a. Hardware recovery and re-initialisation
 
