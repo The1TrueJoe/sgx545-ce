@@ -3932,6 +3932,63 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             ok[r->n] = false;
       }
    }
+   /* in place: a repeat that starts a vreg and reads, at the component it
+    * writes and stepping with it, an input for the last time may write over
+    * that input (coalesce_repeats' rule) */
+   int *inplace = malloc(nv * sizeof(int));
+   for (unsigned v = 0; v < nv; v++)
+      inplace[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      const struct sgx_ref *d = &i->op[0];
+      if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred || d->file != SGX_F_V ||
+          d->h16 || !d->step || d->n >= nv || sgx_vreg(c, d->n)->first != (int)(2 * i->ip) ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      int base = -1;
+      for (unsigned k = 1; k < i->nops && base < 0; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file == SGX_F_PA && r->step && !r->h16 && r->n >= d->comp && r->n + i->rpt <= npa)
+            base = r->n - d->comp;
+      }
+      bool good = base >= 0;
+      for (unsigned j = 0; good && j < i->rpt; j++)
+         good = last[base + d->comp + j] == (int)(2 * i->ip);
+      /* (every operand naming those registers reads them aligned) */
+      for (unsigned k = 1; good && k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file == SGX_F_PA && r->n + (r->step ? i->rpt : 1) > (unsigned)base + d->comp &&
+             r->n < (unsigned)base + d->comp + i->rpt)
+            good = r->step && !r->h16 && r->n == (unsigned)base + d->comp;
+      }
+      if (good)
+         inplace[d->n] = base;
+   }
+   /* each component's own last use (a 32-bit vreg's register k is free
+    * once component k is: the colour's first pck reads .x, its second .z) */
+   int *lastc = malloc(nv * 16 * sizeof(int));
+   for (unsigned v = 0; v < nv * 16; v++)
+      lastc[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || r->h16)
+            continue;
+         unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         int at = 2 * i->ip + (k < i->ndst);
+         for (unsigned j = r->comp; j < r->comp + n && j < 16; j++)
+            lastc[r->n * 16 + j] = MAX2(lastc[r->n * 16 + j], at);
+      }
+   }
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      int m = -1;
+      for (unsigned j = 0; j < 16; j++)
+         m = MAX2(m, lastc[v * 16 + j]);
+      /* (a loop keeps it all: the allocator's range) */
+      if (r->half || r->size > 16 || m < r->last)
+         for (unsigned j = 0; j < 16; j++)
+            lastc[v * 16 + j] = r->last;
+   }
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
       if (!ok[v])
@@ -3941,18 +3998,24 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       unsigned lo = r->first, hi = r->last;
       for (unsigned b = 0; b + regs <= MIN2(npa, lim); b++) {
          bool free = true;
-         for (unsigned p = b; p < b + regs && free; p++)
-            for (unsigned x = lo; x <= hi && x < end && free; x++)
-               free = !BITSET_TEST(BUSY(p), x);
+         for (unsigned p = b; p < b + regs && free; p++) {
+            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
+            for (unsigned x = lo; x <= h && x < end && free; x++)
+               free = !BITSET_TEST(BUSY(p), x) || ((int)b == inplace[v] && x == lo);
+         }
          if (!free)
             continue;
-         for (unsigned p = b; p < b + regs; p++)
-            BITSET_SET_RANGE(BUSY(p), lo, MIN2(hi, end - 1));
+         for (unsigned p = b; p < b + regs; p++) {
+            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
+            BITSET_SET_RANGE(BUSY(p), lo, MIN2(h, end - 1));
+         }
          r->pa = true;
          r->phys = b;
          break;
       }
    }
+   free(inplace);
+   free(lastc);
 #undef BUSY
 }
 
