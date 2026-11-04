@@ -128,7 +128,17 @@ window() {   # SECS: FPS mean and java CPU % over the next SECS seconds
 	f=$(tail -n +$((l0 + 1)) "$LOG" | fps | mean)
 	echo "$f fps, java CPU $(( (c1 - c0) * 100 / (100 * $1) ))%"
 }
+# MC_PROFILE=SECS (new stack): perf record of java for SECS of the standing view,
+# its report in /root/mcbench/new-<run>.perf.txt
+if [ -n "${MC_PROFILE:-}" ] && [ $WHO = new ]; then
+	chroot $R /usr/bin/perf record -q -F 499 -g -p "$(jpid)" -o /tmp/perf-mc.data -- sleep "$MC_PROFILE" \
+		> /dev/null 2>&1 &
+fi
 stand=$(window "$STAND")
+if [ -n "${MC_PROFILE:-}" ] && [ $WHO = new ]; then
+	chroot $R /usr/bin/perf report -i /tmp/perf-mc.data --stdio --no-children --sort dso,symbol \
+		--percent-limit 0.5 2>/dev/null | grep -v '^$' | head -80 > "$OUT/$WHO-$RUN.perf.txt"
+fi
 X key F3
 sleep 3
 if [ $WHO = old ]; then
