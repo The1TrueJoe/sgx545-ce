@@ -31,16 +31,16 @@ pre=$(ssh_ 'grep -o ohc.ramboot /proc/cmdline || echo NORMAL')
 echo "$pre" | grep -q NORMAL || { echo "FATAL: not normal boot ($pre)"; exit 3; }
 ssh_ "echo ukernel-ea1-regsample > /tmp/gpu.lock"
 
-echo "=== stage regsample + uk-ro1.bin (ddk-fw.bin already on box) ==="
+echo "=== stage regsample + uk-rdv.bin (ddk-fw.bin already on box) ==="
 put "$DDK/regsample" /root/uk/regsample
-put "$HW/uk-ro1.bin" /root/uk/uk-ro1.bin
-put "$HW/uk-ro1.bin.pat" /root/uk/uk-ro1.bin.pat
-ssh_ 'chmod +x /root/uk/regsample; md5sum /root/uk/regsample /root/uk/uk-ro1.bin /root/uk/ddk-fw.bin 2>/dev/null | cut -c1-8 | tr "\n" " "; echo'
+put "$HW/uk-rdv.bin" /root/uk/uk-rdv.bin
+put "$HW/uk-rdv.bin.pat" /root/uk/uk-rdv.bin.pat
+ssh_ 'chmod +x /root/uk/regsample; md5sum /root/uk/regsample /root/uk/uk-rdv.bin /root/uk/ddk-fw.bin 2>/dev/null | cut -c1-8 | tr "\n" " "; echo'
 
 # installer writes an S50 parametrized by the srvinit mode ($1 = "ours" | "ddk")
 mk_install() {
   MODE=$1
-  if [ "$MODE" = ddk ]; then SRV='./srvinit -f /root/uk/ddk-fw.bin'; else SRV='./srvinit -o /root/uk/uk-ro1.bin'; fi
+  if [ "$MODE" = ddk ]; then SRV='./srvinit -f /root/uk/ddk-fw.bin'; else SRV='./srvinit -o /root/uk/uk-rdv.bin'; fi
   cat > /tmp/ea1-rs-install.sh <<INSTALL
 #!/bin/sh
 set -e
@@ -52,28 +52,25 @@ L=/root/uk/test-$MODE.log; : > "\$L"
 C=/root/uk/reg-$MODE.csv
 echo "=== S50 regsample $MODE \$(date 2>/dev/null) ===" >> "\$L"
 i=0; while [ \$i -lt 15 ] && [ ! -e /dev/dri/card0 ]; do sleep 1; i=\$((i+1)); done
-# locate the SGX545 BAR0 (0x8086, CORE_ID high = 0x0115); named-reg reads only
-BASE=
-for d in /sys/bus/pci/devices/*/; do
-  [ "\$(cat \$d/vendor 2>/dev/null)" = 0x8086 ] || continue
-  b=\$(awk 'NR==1{print \$1}' "\$d/resource" 2>/dev/null)
-  [ "\$b" = 0x0000000000000000 ] && continue
-  off=\$(( b + 0x1c )); id=\$(dd if=/dev/mem bs=4 count=1 skip=\$(( off / 4 )) 2>/dev/null | od -An -tx4 | tr -d ' \n')
-  case "\$id" in 0115*) BASE=\$b; break;; esac
-done
+# SGX545 BAR0 straight from card0 (the pvrsrvkm device); no shell arithmetic on the
+# 64-bit address -- busybox sh is 32-bit signed and 0xdc000000 overflows it.
+BASE=\$(awk 'NR==1{print \$1}' /sys/class/drm/card0/device/resource 2>/dev/null)
 echo "SGX BAR0 base=\$BASE" >> "\$L"
 cd /root/uk || exit 0
 echo "--- $SRV ---" >> "\$L"
 $SRV >> "\$L" 2>&1
 rm -f /tmp/rs.stop
-if [ -n "\$BASE" ]; then ./regsample "\$BASE" 30000 "\$C" /tmp/rs.stop >> "\$L" 2>&1 & RS=\$!; else echo "NO BASE -- skipping regsample" >> "\$L"; RS=; fi
-echo "--- 3 frames (ts=date +%s.%N) ---" >> "\$L"
-for f in 1 2 3; do
+if [ -n "\$BASE" ]; then ./regsample "\$BASE" 90000 "\$C" /tmp/rs.stop >> "\$L" 2>&1 & RS=\$!; else echo "NO BASE -- skipping regsample" >> "\$L"; RS=; fi
+echo "--- 10 frames (ts=date +%s.%N) ---" >> "\$L"
+r=0; t=0
+for f in 1 2 3 4 5 6 7 8 9 10; do
   echo "FRAME \$f start \$(date +%s.%N 2>/dev/null)" >> "\$L"
-  ./frame-dump -o /tmp/f\$f.bin 2>&1 | tail -1 >> "\$L"
+  o=\$(./frame-dump -o /tmp/f\$f.bin 2>&1); echo "\$o" | tail -1 >> "\$L"
+  echo "\$o" | grep -qi "render done" && r=\$((r+1)) || t=\$((t+1))
   echo "FRAME \$f end \$(date +%s.%N 2>/dev/null)" >> "\$L"
 done
 touch /tmp/rs.stop; [ -n "\$RS" ] && wait \$RS 2>/dev/null
+echo "RENDERED=\$r TIMEOUT=\$t" >> "\$L"
 echo "HWR=\$(dmesg 2>/dev/null | grep -icE 'SGX lockup|Hardware Recovery')" >> "\$L"
 echo "regcsv rows=\$(wc -l < \$C 2>/dev/null)" >> "\$L"
 echo "=== S50 regsample $MODE complete ===" >> "\$L"
