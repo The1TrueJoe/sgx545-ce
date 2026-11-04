@@ -15,6 +15,7 @@
 #include <drm/drm_exec.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
+#include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_print.h>
 #include <drm/drm_syncobj.h>
 
