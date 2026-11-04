@@ -11,15 +11,14 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 
 | file | what |
 |---|---|
-| `gen_forms.py` | writes `mesa/src/sgx545/compiler/usse_forms.h`, the USSE encoding tables, from `tools/isa/hw.py` (all 174 forms) |
-| `mesa/src/sgx545/compiler/usse.[ch]` | the encoder: `hw.encode()` ported to C over those tables |
+| `mesa/src/sgx545/compiler/sgx_forms.[ch]` | the forms the compiler emits, as `struct sgx_isa_instr` for the isaspec encoder in `mesa/src/sgx545/isa` |
 | `…/sgx_compiler.h` | the API: `sgx_nir_options()`, `sgx_assign_varyings()`, `sgx_compile()` |
 | `…/sgx_nir.c` | NIR lowering: I/O and varying sets, uniforms (constant numbers, F16/C10 formats), sin/cos range reduction, samplers |
 | `…/sgx_compile.c` | instruction selection (vector ops as one repeated instruction where the operands allow), F16, textures, discard, control flow, liveness and register allocation (Mesa's `util/ra`), encoding |
 | `…/sgx_program.c` | the finished program: flat code with branch offsets, its blocks and samples, constant and iteration lists |
 | `sgx_usp.[ch]` | the USP writer (harness only): header, list A/C, code, label, branch and sample blocks, from a `struct sgx_shader` |
 | `sgxc.cpp`, `meson.build` | standalone compiler: GLSL ES 1.00 via Mesa's GLSL frontend, each stage linked on its own; `-u/-a/-s` pins are its `struct sgx_layout` |
-| `check_enc.py` | the C encoder against `hw.py` on every corpus word |
+| `check_enc.py` | the isaspec encoder (`mesa/src/sgx545/isa`, via `sgx545_isa_test -t`) against `hw.py` on every corpus word |
 | `check_out.py` | every emitted word: decodes, round-trips, and matches libusc's encoder (`oracle.py`) |
 | `run_corpus.py`, `layout.py` | compile a `tools/isa/corpus` file |
 | `count.py` | instruction counts against libusc |
@@ -55,7 +54,7 @@ them. `hw/calib.py` measures them on the EA3, and `layout.py` guesses them. A na
 ## Checking
 
 ```
-python3 -I tools/usc/check_enc.py                     # C encoder == hw.py on 4154 corpus words
+python3 -I tools/usc/check_enc.py [sgx545_isa_test]   # isaspec == hw.py on 4154 corpus words (efo, fdual not assembled)
 LIBUSC=.../libusc.so.1.7.862890 venv/bin/python -I tools/usc/check_out.py OUTDIR
 python3 -I tools/usc/hw/hwcmp.py OUTDIR               # EA3: DDK's USP vs ours, same GL program
 ```
