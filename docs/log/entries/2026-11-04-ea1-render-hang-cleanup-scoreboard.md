@@ -148,3 +148,31 @@ rate rises toward 10/10. If render_done is still not reached (rate stays ~2-3/10
 WAIT_LOG (render_done stamps stage id 4) to see whether 0x1 dispatches -- but the DDK
 existence proof makes a lost-0x1 unlikely now. Awaiting ta3d-state's confirmation of the
 exact DDK completion order on 0x1 before spending the slot.
+
+## HW RESULT: render_done-on-0x1 (1cccc1d) = 5/10, up from 3/10 -- partial fix
+
+EA1, same cold-GPU ramboot rig (data: docs/log/data/2026-11-04-0132-ea1-render-on-0x1-
+5of10.log). ta3d-state confirmed the order (test as-is, one change). Result:
+- **RENDERED=5 TIMEOUT=5, HWR=10**, vs clean3 3/10. Directionally right: completing on 0x1
+  (the free) instead of 0x40000 (pixels) raises the rate, confirming the serialisation
+  theory. But the race persists for ~half the renders.
+- **Alternating pattern R..R.R.R.R** (frames 1,4,6,8,10 render; 2,3,5,7,9 time out), vs
+  clean3's clustered R.R.......R. A render completes via 0x1, the NEXT faults + HWR, then
+  the one after completes (HWR left a clean GPU), alternating. So a SUCCESSFUL render still
+  leaves the next process's do_ta racing something.
+- Faults: do_ta-style BIF (BANK0=0x101F, FAULT 41B8500F / 4013500F / 41B7500F), and the
+  verbose dump shows at every lockup EVENT_STATUS = 0x20000000 (timer_irq: yes ONLY),
+  3d_mem_free: no, pbe_end_render: no, ta_finish: no -- the GPU is quiescent on the timer,
+  the timed-out render never signalled.
+- cleanup-timeout watch: no host force-free message (the 5 s host poll never fired; our
+  SC_INFLIGHT clears well inside it). BANK0 as above.
+
+LEADING HYPOTHESIS for the residual race: the 0x1 event may fire when the DPM 3D free
+STARTS, not when it finishes draining -- so render_done-on-0x1 signals the client (sync +
+IRQ) before the free is truly complete, and the next sequential frame-dump's do_ta still
+loads the free-list into a draining free. The DDK (10/10 on 0x1) likely WAITS for the free
+to fully drain inside its 0x1 handler (polls a DPM/BIF status) before signalling. Next:
+ask ta3d-state what the DDK's 0x1 handler does after the ack (does it poll a drain-complete
+status?), then add that wait to render_done. Single run -- 3->5 could carry variance; a
+clean A/B (clean3 vs ro1, 3 runs each) is worth a later slot. Box released after, clean
+normal boot; m2 + uapi-stream queued.

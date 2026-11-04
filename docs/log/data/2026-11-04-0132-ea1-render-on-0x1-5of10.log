@@ -1,0 +1,107 @@
+=== precheck: box must be on NORMAL boot, GPU cold ===
+precheck: NORMAL pvr=0
+=== on-box lock + stage uk-ro1.bin ===
+staged md5 remote=21326ad7 local=21326ad7
+=== install S50 (ro1) + S00aramboot + /boot/once ===
+install OK
+=== reboot into ramboot ===
+old boot_id=72e7910c-3c
+ [1] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [2] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [3] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [4] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [5] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [6] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [7] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [8] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [9] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [10] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [11] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [12] boot_id=ssh: cmdline=connect want=ohc.ramboot
+ [13] boot_id=2db93505-15 cmdline=ohc.ramboot want=ohc.ramboot
+  -> RAMBOOT OK
+=== wait for FRESH test.log (ro1-render-on-0x1 complete) ===
+test complete (5)
+=== TEST.LOG ===
+=== S50 ro1-render-on-0x1 Wed Nov  4 01:32:38 UTC 2026 ===
+--- srvinit -o uk-ro1.bin ---
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d69000)
+--- 10 frames ---
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+--- rate + HWR + md5 ---
+RENDERED=5 TIMEOUT=5
+HWR=10
+56f8466aa4cf3b08cfbd166b63dd88ec  /tmp/f1.bin
+--- cleanup-timeout watch (host force-free?) ---
+[    0.609180] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[   54.857571] clocksource: Watchdog remote CPU 3 read timed out
+--- (P0) BIF / BANK0 ---
+[   51.784447] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10141 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   51.795360] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   51.846517] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[   51.851900] PVR_K: 	(master_irq: no, timer_irq: yes, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   51.891454] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   51.896830] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   51.925918] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   51.936655] PVR_K: (P0) EUR_CR_BIF_FAULT:        41B8500F
+[   54.800450] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x109ce tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   54.811351] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   54.862515] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[   54.862549] PVR_K: 	(master_irq: no, timer_irq: yes, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   54.913172] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   54.918547] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   54.947625] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000001F
+[   54.958359] PVR_K: (P0) EUR_CR_BIF_FAULT:        0000000F
+[   57.620446] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x1092b tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   57.631339] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   57.682518] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[   57.687903] PVR_K: 	(master_irq: no, timer_irq: yes, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   57.727460] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   57.732834] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   57.761921] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   57.772658] PVR_K: (P0) EUR_CR_BIF_FAULT:        4013500F
+[   60.946448] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10b0b tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   60.957351] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   61.008507] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[   61.013886] PVR_K: 	(master_irq: no, timer_irq: yes, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   61.053444] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   61.058818] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   61.087908] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   61.098647] PVR_K: (P0) EUR_CR_BIF_FAULT:        41B7500F
+[   64.277459] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10b0e tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   64.288369] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   64.339523] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[   64.344902] PVR_K: 	(master_irq: no, timer_irq: yes, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   64.384472] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   64.389840] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   64.418931] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   64.429661] PVR_K: (P0) EUR_CR_BIF_FAULT:        4013500F
+=== S50 ro1-render-on-0x1 complete ===
+=== RESTORE to normal boot ===
+ [1] boot_id=ssh: cmdline=connect want=NORMAL
+ [2] boot_id=ssh: cmdline=connect want=NORMAL
+ [3] boot_id=ssh: cmdline=connect want=NORMAL
+ [4] boot_id=ssh: cmdline=connect want=NORMAL
+ [5] boot_id=ssh: cmdline=connect want=NORMAL
+ [6] boot_id=ssh: cmdline=connect want=NORMAL
+ [7] boot_id=ssh: cmdline=connect want=NORMAL
+ [8] boot_id=ssh: cmdline=connect want=NORMAL
+ [9] boot_id=ssh: cmdline=connect want=NORMAL
+ [10] boot_id=ssh: cmdline=connect want=NORMAL
+ [11] boot_id=ssh: cmdline=connect want=NORMAL
+ [12] boot_id=ssh: cmdline=connect want=NORMAL
+ [13] boot_id=80666c71-b4 cmdline=NORMAL want=NORMAL
+  -> NORMAL OK
+=== post-restore state ===
+boot=NORMAL kver=7.1.8
+files s50=0 aram=0 once=0
+=== DONE ===
