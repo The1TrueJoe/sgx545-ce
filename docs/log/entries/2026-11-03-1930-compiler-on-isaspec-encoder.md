@@ -3,8 +3,9 @@
 `mesa/src/sgx545/compiler` now emits every instruction through the encoder
 isaspec generates from `mesa/src/sgx545/isa/sgx545.xml`. That XML was written
 from `docs/ISA.md` alone. `usse_forms.h`, `usse.c` and `usse.h` are deleted,
-with `tools/usc/gen_forms.py`, which generated them, and `check_enc.py` /
-`tests/enc_lines.c`, which checked them.
+with `tools/usc/gen_forms.py`, which generated them. `check_enc.py` now
+checks the isaspec encoder (via `sgx545_isa_test -t`) against `hw.py` on the
+corpus words; `tests/enc_lines.c` is retired.
 
 ## What changed
 
@@ -39,6 +40,11 @@ with `tools/usc/gen_forms.py`, which generated them, and `check_enc.py` /
 - Its own corpus build (host Mesa 26.2.5 + patch 0004): 7886 files byte-identical.
 - `sgx545_isa_test gles2.txt int.txt -f 200000`: 0 failures.
 - `blind.py` on the `-t` tables: 246 exact.
+- `check_out.py --no-oracle`: all 13690 emitted instructions decode with no
+  unknown bit and round-trip.
+- `check_enc.py`, ported to the isaspec encoder: 4154 corpus words, 3981
+  identical, 0 differ, 173 the assembler doesn't take (163 efo `i=`, 10 fdual
+  with `sd=`/`sb=`/`sc=`; the compiler emits neither).
 - A fresh blind draw over 174 forms: 166 exact. The 8 misses are isa-package
   gaps, untouched by this change; nothing the compiler emits is affected:
   - the assembler doesn't take efo `i=`, dot `cs=`/`as=`, `firh.s8`, st `am3` with
