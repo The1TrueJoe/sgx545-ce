@@ -14,8 +14,16 @@
  * Every frame's pixels are checked in the buffer the GPU wrote and, through
  * /dev/mem, in the framebuffer the display scans out (simpledrm copies to it
  * on DIRTYFB). Before each frame the buffer is filled from the CPU, so stale
- * cache lines would show. -d holds each frame on the screen. Exit 0 when every
- * frame is right in both places.
+ * cache lines would show. Frames take turns:
+ *
+ *   explicit  wait for the job's syncobj, then DIRTYFB;
+ *   implicit  the buffer in the job's BO list as written, DIRTYFB at once: the
+ *             KMS commit must wait for the job's fence in the shared dma_resv;
+ *   control   no BO list, DIRTYFB at once: the scanout may well be stale, which
+ *             shows the implicit frames' check can fail (not counted).
+ *
+ * -d holds each frame on the screen. Exit 0 when every counted frame is right
+ * in both places.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -24,6 +32,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <drm/drm.h>
@@ -181,6 +190,42 @@ static int prime_move(int from, uint32_t handle, int to, uint32_t *out)
 	return e;
 }
 
+static int64_t now_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+/* Submit the frame, the colour buffer in its BO list if bo, and DIRTYFB before (or after) the wait. */
+static int submit_frame(struct sgx_ctx *c, struct kms *k, uint32_t fb_id, uint32_t bo, int dirty_first)
+{
+	struct sgx_job j;
+	struct drm_powervr_sgx_bo_ref ref = { .handle = bo, .flags = DRM_POWERVR_SGX_BO_REF_FLAG_WRITE };
+	struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
+		.jobs = { .stride = sizeof(j.job), .count = 1, .array = (uintptr_t)&j.job },
+	};
+	uint32_t h = c->syncobj;
+	struct drm_syncobj_wait w = { .handles = (uintptr_t)&h, .count_handles = 1 };
+	int e;
+
+	sgx_render_job(c, &j);
+	if (bo)
+		j.job.bo_refs = (struct drm_powervr_sgx_obj_array){
+			.stride = sizeof(ref), .count = 1, .array = (uintptr_t)&ref,
+		};
+	if ((e = xioctl(c->dev->fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj)))
+		return e;
+	if (dirty_first)
+		kms_dirty(k, fb_id);
+	w.timeout_nsec = now_ns() + 2000000000ll;
+	e = xioctl(c->dev->fd, DRM_IOCTL_SYNCOBJ_WAIT, &w);
+	if (!dirty_first)
+		kms_dirty(k, fb_id);
+	return e;
+}
+
 /* Pixels of the w x h image at p (stride in pixels) that are not what the frame should hold. */
 static unsigned check(const uint32_t *p, uint32_t stride, unsigned w, unsigned h, uint32_t tri, uint32_t bg,
 		      unsigned *poison)
@@ -208,7 +253,7 @@ int main(int argc, char **argv)
 	struct sgx_state st = { .front = SGX_CCW };
 	const float clear[4] = { 0, 0, 0.5f, 1 };
 	const float tri[6] = { -0.5f, -0.5f, 0.5f, -0.5f, 0, 0.5f };
-	unsigned frames = 4, hold_ms = 0, bad_frames = 0;
+	unsigned frames = 6, hold_ms = 0, bad_frames = 0;
 	int opt, e, path = 0;	/* 0: both, 1: a, 2: b */
 	struct kms k = {};
 	struct sgx_dev dev;
@@ -305,18 +350,20 @@ int main(int argc, char **argv)
 			};
 			uint32_t want_tri = f & 1 ? 0xffffff00 : 0xff00ff00, want_bg = 0xff000080;
 			unsigned gpu_bad, gpu_poison, out_bad = 0, out_poison = 0;
+			static const char *const mode_name[] = { "explicit", "implicit", "control" };
+			int mode = f % 3;
 
 			for (unsigned i = 0; i < (size_t)stride * h; i++)
 				map[i] = POISON;
 			sgx_set_framebuffer(c, s);
 			sgx_clear(c, clear, 1.0f);
-			if ((e = sgx_draw(c, &d)) || (e = sgx_flush(c, 2000))) {
+			if ((e = sgx_draw(c, &d)) ||
+			    (e = submit_frame(c, &k, fb_id, mode == 1 ? sgx_handle : 0, mode != 0))) {
 				printf("%c) frame %u: render failed: %d\n", 'a' + pass - 1, f, e);
 				bad_frames++;
 				continue;
 			}
 			gpu_bad = check(map, stride, w, h, want_tri, want_bg, &gpu_poison);
-			kms_dirty(&k, fb_id);
 			if (k.scanout) {
 				/* the display ignores alpha: compare XRGB */
 				out_bad = 0;
@@ -332,11 +379,12 @@ int main(int argc, char **argv)
 				if ((k.scanout[(size_t)(h / 2) * k.scanout_stride + w / 2] | 0xff000000u) != want_tri)
 					out_bad++;
 			}
-			printf("%c) frame %u: buffer %s (centre %08x, %u wrong, %u stale), scanout %s (%u wrong, %u stale)\n",
-			       'a' + pass - 1, f, gpu_bad ? "WRONG" : "right", map[(size_t)(h / 2) * stride + w / 2],
-			       gpu_bad, gpu_poison, !k.scanout ? "not checked" : out_bad + out_poison ? "WRONG" : "right",
+			printf("%c) frame %u %-8s: buffer %s (centre %08x, %u wrong, %u stale), scanout %s (%u wrong, %u stale)\n",
+			       'a' + pass - 1, f, mode_name[mode], gpu_bad ? "WRONG" : "right",
+			       map[(size_t)(h / 2) * stride + w / 2], gpu_bad, gpu_poison,
+			       !k.scanout ? "not checked" : out_bad + out_poison ? "WRONG" : "right",
 			       out_bad, out_poison);
-			if (gpu_bad || out_bad || out_poison)
+			if (gpu_bad || (mode != 2 && (out_bad || out_poison)))
 				bad_frames++;
 			if (hold_ms)
 				usleep(hold_ms * 1000);
