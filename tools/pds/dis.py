@@ -48,7 +48,7 @@ def num(n):
 def ds_name(bank, n):
     """A 32-bit data-store word. DS0 words 0x40.. are the PDS inputs."""
     if bank == 0 and n >= 0x40:
-        return f"in{n - 0x40}"
+        return f"in{num(n - 0x40)}"
     return f"ds{bank}[{num(n)}]"
 
 
@@ -58,7 +58,7 @@ def reg_u(f):
         return ds_name(0, f)
     if f < 0x80:
         return ds_name(1, f - 0x40)
-    return f"in{f - 0x80}"
+    return f"in{num(f - 0x80)}"
 
 
 def reg_s1(f):

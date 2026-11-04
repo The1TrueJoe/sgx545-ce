@@ -222,8 +222,10 @@ with another condition, has not been seen.
 
 `tools/pds/dis.py` prints this, and an assembler takes it.
 
-- **Numbers:** below 10 in decimal, otherwise lowercase hex with `0x`.
-  Immediates (branch targets, shift amounts) start with `#`.
+- **Numbers:** below 10 in decimal, otherwise lowercase hex with `0x`. This
+  holds for every number: data-store words (`ds1[0x30]`), inputs (`in9`,
+  `in0xa`), the `[r1=]`/`[r2=]` row fields (`[r2=5]`), branch targets and
+  shift amounts. Immediates (branch targets, shift amounts) start with `#`.
 - **Registers:** `ds0[n]` and `ds1[n]` for the data-store words, and `in<n>`
   for DS0 word 0x40 + n.
   - A U operand is `ds0[u]` below 0x40, `ds1[u − 0x40]` below 0x80, else
