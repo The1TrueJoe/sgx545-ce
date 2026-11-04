@@ -19,6 +19,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
+#include "pvrsgx_trace.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
@@ -202,6 +203,7 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 	status = sgx_rd(sdev, SGX_CR_EVENT_STATUS) & sgx_rd(sdev, SGX_CR_EVENT_HOST_ENABLE);
 	if (!(status & SGX_CR_EVENT_STATUS_SW_EVENT))
 		return IRQ_NONE;
+	trace_pvrsgx_irq(status);
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR,
 	       SGX_CR_EVENT_HOST_CLEAR_SW_EVENT | SGX_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT);
 	atomic_inc(&sdev->irq_count);
