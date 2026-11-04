@@ -255,3 +255,19 @@ issues at/after the 3D-end that we don't? (3) the TA->3D allocated-count handoff
 frees the wrong count? Whatever makes r724 drain is the fix; the regsample will confirm.
 Awaiting ta3d-state's exact DDK write. (Joseph: a Minecraft FPS benchmark old-vs-new is
 uapi-stream's next EA1 job; plan the DPM HW test around that slot.)
+
+## RESOLVED: the consecutive-frame hang is a SRVINIT HARNESS ARTIFACT, not a microkernel bug
+
+m2's powervr_sgx smoke test rendered the SAME microkernel (e78a17c) 10/10 consecutive, 5/5
+each-frame-a-new-process-from-suspend, 10/10 two-context sharing the PB, uAPI 39/39, and 15
+frames across 5 processes with cleanup=1. The 4/10 alternation NEVER occurs under the real
+driver. Cause: srvinit's frame-dump gives each process its own PB with no fixed base and no
+kernel-owned structures, so the DPM state does not carry across processes and r724 appears
+to "accumulate" (the A/B signature). powervr_sgx uses a per-VM PB at a FIXED base + kernel-
+owned structures -> the DPM state is consistent -> it drains normally. So every variant in
+this scoreboard (reload-every-frame, sync fix, DPM-completion, PB-gate, cleanup-defer,
+render-on-0x1, rendezvous) was correct enough -- the hang was never in the microkernel.
+The investigation's lasting value: tools/ddk/regsample.c (host us-sampler), the 2-frame
+oracle, the cleanup-defer + render-on-0x1 + rendezvous code (all DDK-correct and committed),
+and the measurement discipline that finally located the cause in the loader. The open
+microkernel renders multi-process under the open powervr_sgx driver with zero DDK = M1.
