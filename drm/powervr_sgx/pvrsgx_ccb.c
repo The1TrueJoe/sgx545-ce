@@ -56,7 +56,8 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
 	u32 *ctl = ccbctl(sdev), *cmd, wo;
 	unsigned long timeout = jiffies + msecs_to_jiffies(500);
 
-	if (type >= PVRSGX_CMD_MAX || !sdev->fw.host_kick[type])
+	/* The DDK image has no entry for some types; the open one's table is the identity. */
+	if (type >= PVRSGX_CMD_MAX || (sdev->fw.ddk && !sdev->fw.host_kick[type]))
 		return -EINVAL;
 
 	mutex_lock(&sdev->ccb_lock);

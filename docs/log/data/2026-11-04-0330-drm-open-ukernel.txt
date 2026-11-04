@@ -1,0 +1,37 @@
+# powervr_sgx on the open microkernel (um-re 273225c, ukernel md5 ce4f372c, wrapped by drm/tools/mkukfw.py, features 0)
+# EA1 RAM boot of b24d0aa (run 41757864040), 2026-11-04 ~03:33 UTC
+
+# ---- load
+[   22.449368] powervr_sgx 0000:01:02.0: [drm] powervr_sgx/sgx545-openhc-ukernel.bin: open microkernel ukernel-273225c, interface 1.0, features 0x0
+[   22.462105] powervr_sgx 0000:01:02.0: [drm] microkernel started
+[   22.466514] powervr_sgx 0000:01:02.0: [drm] every VM maps the firmware's heaps: clients are not isolated from the firmware
+[   22.477584] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   22.490554] [drm] Initialized powervr_sgx 0.1.0 for 0000:01:02.0 on minor 1
+suspended
+hostctl init 0x1 power 0x8 cleanup 0x0 uk-lockups 0 int 0x2/0x0 assert 0x0
+
+# ---- NULL job from suspended (resume = full restart), DEV_QUERY
+  core_id 0x01150000 core_revision 0x0001000e fw_interface 1
+submit-null-job
+  null job signalled in 10402 us
+2/2 passed
+suspended
+
+# ---- one frame (two kicks, then one kick): TA never sent (host_kick[0] = 0 refused by pvrsgx_ccb_send; fixed in 3298009)
+frame 0: render done, centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+ccbctl (render context CCB) 000002c0 00000000   <- written, never read
+hwctx word 0 00000021                           <- first-use bit still set
+ccb wo 1 ro 1 issued 1 consumed 1               <- only GETMISCINFO since the resume
+
+# ---- blit: transfer command not consumed, fault in the idle directory
+copy  TIMED OUT, 0/4096 pixels right
+[   94.513512] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 2, consumed 1); resetting
+[   94.532753] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   96.560501] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 2, consumed 1); resetting
+[   96.580750] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+devcoredump: ccb wo 2 ro 1; BIF_INT_STAT 0x000d0080 BIF_FAULT 0x3e001000; BIF_DIR_LIST_BASE0 0x040dd000 (the driver's idle directory); ta3dctl[0x15] 0x30011000 (the transfer context)
+
+# ---- after the two restarts: uAPI suite (600 NULL jobs among them)
+39/39 passed
+firmware running: 1 lost: 0 resets: 2 irqs: 622
+ccb wo 97 ro 97 issued 609 consumed 609
