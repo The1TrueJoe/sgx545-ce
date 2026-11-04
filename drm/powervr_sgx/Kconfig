@@ -8,6 +8,7 @@ config DRM_POWERVR_SGX
 	select DRM_GEM_SHMEM_HELPER
 	select DRM_GPUVM
 	select DRM_SCHED
+	select CRC32
 	select FW_LOADER
 	select WANT_DEV_COREDUMP
 	help
@@ -19,3 +20,11 @@ config DRM_POWERVR_SGX
 	  or the other.
 
 	  If M is selected the module will be called powervr_sgx.
+
+config DRM_POWERVR_SGX_KUNIT_TEST
+	tristate "KUnit tests for the PowerVR SGX545 driver" if !KUNIT_ALL_TESTS
+	depends on DRM_POWERVR_SGX && KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  Unit tests of the driver's firmware file checks. For developers;
+	  if unsure, say N.

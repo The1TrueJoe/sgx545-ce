@@ -52,7 +52,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools sparse
+            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools sparse qemu-system-x86
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
@@ -101,10 +101,24 @@ jobs:
           make -C linux-$LINUX_VERSION ARCH=x86_64 M=$PWD/drm/powervr_sgx C=2 modules 2>&1 | tee sparse.log
           ! grep -E 'powervr_sgx/.*(warning|error):' sparse.log
           perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse -f \
-            drm/powervr_sgx/*.[ch] docs/uapi/powervr_sgx_drm.h docs/uapi/stream/*.[ch] | tee checkpatch.log
+            drm/powervr_sgx/*.[ch] drm/powervr_sgx/tests/*.c docs/uapi/powervr_sgx_drm.h docs/uapi/stream/*.[ch] | tee checkpatch.log
           ! grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log
           python3 linux-$LINUX_VERSION/scripts/kernel-doc -none -Wall -Werror \
             docs/uapi/powervr_sgx_drm.h drm/powervr_sgx/pvrsgx_*.[ch]
+
+      - name: KUnit (x86_64 under QEMU, a clean tree)
+        run: |
+          set -eux
+          export CCACHE_DIR=~/.cache/ccache
+          rm -rf kunit-src && mkdir kunit-src && tar xf linux-$LINUX_VERSION.tar.xz -C kunit-src
+          K=kunit-src/linux-$LINUX_VERSION
+          cp -RL drm/powervr_sgx $K/drivers/gpu/drm/powervr_sgx
+          printf '\nsource "drivers/gpu/drm/powervr_sgx/Kconfig"\n' >> $K/drivers/gpu/drm/Kconfig
+          printf '\nobj-$(CONFIG_DRM_POWERVR_SGX) += powervr_sgx/\n' >> $K/drivers/gpu/drm/Makefile
+          cd $K
+          ./tools/testing/kunit/kunit.py run --arch=x86_64 --jobs "$(nproc)" \
+            --make_options "CC=ccache gcc" \
+            --kunitconfig=drivers/gpu/drm/powervr_sgx/tests/.kunitconfig
 
       - name: uAPI tests (static, musl)
         run: |

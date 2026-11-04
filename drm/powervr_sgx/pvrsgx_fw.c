@@ -610,13 +610,12 @@ out:
 }
 
 /* Copy n pairs at off of the file, or NULL if they run past its end. */
-static u32 (*ukfw_table(const struct firmware *fw, u32 off, u32 n))[2]
+static u32 (*ukfw_table(const u8 *data, size_t size, u32 off, u32 n))[2]
 {
-	const struct ukfw_pair *src = (const void *)(fw->data + off);
+	const struct ukfw_pair *src = (const void *)(data + off);
 	u32 (*t)[2];
 
-	if (!n || n > 64 || off > fw->size || n * sizeof(*src) > fw->size - off ||
-	    !IS_ALIGNED(off, 4))
+	if (!n || n > 64 || off > size || n * sizeof(*src) > size - off || !IS_ALIGNED(off, 4))
 		return NULL;
 	t = kmalloc_array(n, sizeof(*t), GFP_KERNEL);
 	if (!t)
@@ -630,73 +629,80 @@ static u32 (*ukfw_table(const struct firmware *fw, u32 off, u32 n))[2]
 
 /*
  * The open microkernel's file: check the header (docs/UKERNEL.md 4a) and take
- * its image and tables. -ENOENT if fw is not one.
+ * its image and tables into f. -ENOENT if data is not one; on -EINVAL, *why
+ * says what is wrong. f's tables and image are the caller's to free either way.
  */
-static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+static int ukfw_parse(const u8 *data, size_t size, struct pvrsgx_fw *f, const char **why)
 {
-	const struct ukfw_header *h = (const void *)fw->data;
-	struct pvrsgx_fw *f = &sdev->fw;
+	const struct ukfw_header *h = (const void *)data;
 	u32 hsize, isize, iface;
 	bool entry0 = false;
 
-	if (fw->size < UKFW_HEADER_MIN || le32_to_cpu(h->magic[0]) != UKFW_MAGIC0 ||
+	if (size < UKFW_HEADER_MIN || le32_to_cpu(h->magic[0]) != UKFW_MAGIC0 ||
 	    le32_to_cpu(h->magic[1]) != UKFW_MAGIC1)
 		return -ENOENT;
 	hsize = le32_to_cpu(h->header_size);
 	isize = le32_to_cpu(h->image_size);
 	iface = le32_to_cpu(h->interface);
 	f->features = le32_to_cpu(h->features);
-	if (hsize < UKFW_HEADER_MIN || !IS_ALIGNED(hsize, 8) || hsize > fw->size ||
-	    !isize || !IS_ALIGNED(isize, 8) || isize > fw->size - hsize || isize > UKFW_MAX_IMAGE) {
-		drm_err(&sdev->base, "%s: bad sizes (header %u, image %u, file %zu)\n", f->name,
-			hsize, isize, fw->size);
+	*why = "bad sizes";
+	if (hsize < UKFW_HEADER_MIN || !IS_ALIGNED(hsize, 8) || hsize > size ||
+	    !isize || !IS_ALIGNED(isize, 8) || isize > size - hsize || isize > UKFW_MAX_IMAGE)
 		return -EINVAL;
-	}
-	if (iface >> 16 != UKFW_IF_MAJOR || (f->features & ~UKFW_FEATURES)) {
-		drm_err(&sdev->base, "%s: interface %u.%u, features 0x%x not supported\n", f->name,
-			iface >> 16, iface & 0xffff, f->features);
+	*why = "interface or features not supported";
+	if (iface >> 16 != UKFW_IF_MAJOR || (f->features & ~UKFW_FEATURES))
 		return -EINVAL;
-	}
-	if (crc32_le(~0, fw->data + hsize, isize) != ~le32_to_cpu(h->image_crc32)) {
-		drm_err(&sdev->base, "%s: image CRC mismatch\n", f->name);
+	*why = "image CRC mismatch";
+	if (crc32_le(~0, data + hsize, isize) != ~le32_to_cpu(h->image_crc32))
 		return -EINVAL;
-	}
-	if (h->core_rev && le32_to_cpu(h->core_rev) != sdev->core_rev)
-		drm_warn(&sdev->base, "%s: validated on core revision 0x%x, this is 0x%x\n",
-			 f->name, le32_to_cpu(h->core_rev), sdev->core_rev);
 
+	*why = "bad entry or patch table";
 	f->n_entries = le32_to_cpu(h->n_entries);
 	f->n_patches = le32_to_cpu(h->n_patches);
-	f->entries = ukfw_table(fw, le32_to_cpu(h->entries_off), f->n_entries);
+	f->entries = ukfw_table(data, size, le32_to_cpu(h->entries_off), f->n_entries);
 	if (f->n_patches)
-		f->patches = ukfw_table(fw, le32_to_cpu(h->patches_off), f->n_patches);
+		f->patches = ukfw_table(data, size, le32_to_cpu(h->patches_off), f->n_patches);
 	if (!f->entries || (f->n_patches && !f->patches))
-		goto bad_table;
+		return -EINVAL;
 	for (u32 i = 0; i < f->n_entries; i++) {
 		if (f->entries[i][0] > 4 || f->entries[i][1] >= isize ||
 		    !IS_ALIGNED(f->entries[i][1], 8))
-			goto bad_table;
+			return -EINVAL;
 		entry0 |= !f->entries[i][0];
 	}
 	for (u32 i = 0; i < f->n_patches; i++) {
 		if (f->patches[i][0] > isize - 8 || !IS_ALIGNED(f->patches[i][0], 8) ||
 		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_MISC)
-			goto bad_table;
+			return -EINVAL;
 	}
 	if (!entry0)
-		goto bad_table;
+		return -EINVAL;
 
 	f->image_size = isize;
-	f->image = kmemdup(fw->data + hsize, isize, GFP_KERNEL);
-	if (!f->image)
-		return -ENOMEM;
+	f->image = kmemdup(data + hsize, isize, GFP_KERNEL);
+	return f->image ? 0 : -ENOMEM;
+}
+
+static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+{
+	const struct ukfw_header *h = (const void *)fw->data;
+	struct pvrsgx_fw *f = &sdev->fw;
+	const char *why = "";
+	u32 iface;
+	int err;
+
+	err = ukfw_parse(fw->data, fw->size, f, &why);
+	if (err == -EINVAL)
+		drm_err(&sdev->base, "%s: %s\n", f->name, why);
+	if (err)
+		return err;
+	iface = le32_to_cpu(h->interface);
+	if (h->core_rev && le32_to_cpu(h->core_rev) != sdev->core_rev)
+		drm_warn(&sdev->base, "%s: validated on core revision 0x%x, this is 0x%x\n",
+			 f->name, le32_to_cpu(h->core_rev), sdev->core_rev);
 	drm_info(&sdev->base, "%s: open microkernel %.32s, interface %u.%u, features 0x%x\n",
 		 f->name, h->build_id, iface >> 16, iface & 0xffff, f->features);
 	return 0;
-
-bad_table:
-	drm_err(&sdev->base, "%s: bad entry or patch table\n", f->name);
-	return -EINVAL;
 }
 
 static int ddk_load(struct pvrsgx_device *sdev, const struct firmware *fw)
@@ -997,3 +1003,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_fw_test.c"
+#endif
