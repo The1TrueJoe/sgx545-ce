@@ -1198,8 +1198,13 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
     * temporary, sampled into the window and freed at once).  Only those: a
     * texture merely bound would look in flight, and a later upload into it
     * would go to its second copy (dEQP fbo.render.stencil*) */
-   u_foreach_bit(unit, sampled)
-      sgx545_resource(ctx->views[unit]->texture)->use_seq = sgxws_next_seq(ctx->hw);
+   u_foreach_bit(unit, sampled) {
+      struct sgx545_resource *tex = sgx545_resource(ctx->views[unit]->texture);
+
+      tex->use_seq = sgxws_next_seq(ctx->hw);
+      if (tex->shared)
+         sgxws_use_bo(ctx->hw, &tex->bo, false);
+   }
    for (unsigned n = 0; n < num_draws; n++) {
       unsigned count = draws[n].count, start = draws[n].start, out_count;
       bool list = expanded_prim(info->mode);

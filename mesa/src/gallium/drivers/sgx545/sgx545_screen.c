@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include "drm-uapi/drm.h"
 #include "util/format/u_format.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
@@ -166,6 +167,9 @@ sgx545_init_screen_caps(struct pipe_screen *pscreen)
     * needn't be copied into upload buffers first (u_vbuf's copy was a
     * second memcpy of every gl4es draw) */
    caps->user_vertex_buffers = true;
+   /* linear render targets, over powervr_sgx */
+   if (sgxws_dev_has_dmabuf(sgx545_screen(pscreen)->dev))
+      caps->dmabuf = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;
 }
 
 static bool
