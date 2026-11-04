@@ -432,6 +432,102 @@ csel16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
    return true;
 }
 
+/* An f32 op exact under rounding (select, min, max, saturate, negate, abs,
+ * move, vec) that only f2f16 reads, over values that are F16 underneath: done
+ * in F16, so chains (if / return selects of mediump values) and the uniforms
+ * under them stay F16 instead of widening and narrowing again. */
+static bool
+narrow16_op(nir_op op)
+{
+   return op == nir_op_bcsel || op == nir_op_fmin || op == nir_op_fmax || op == nir_op_fsat ||
+          op == nir_op_fneg || op == nir_op_fabs || nir_op_is_vec_or_mov(op);
+}
+
+/* an f32 value whose F16 costs nothing: the f2f32 of one, a constant, a
+ * uniform (an F16 constant then), or such an op over them */
+static bool
+f16_free(nir_def *d, unsigned depth)
+{
+   nir_instr *p = nir_def_instr(d);
+   if (p->type == nir_instr_type_load_const)
+      return true;
+   if (p->type == nir_instr_type_intrinsic)
+      return nir_instr_as_intrinsic(p)->intrinsic == nir_intrinsic_load_uniform;
+   if (p->type != nir_instr_type_alu || depth > 8)
+      return false;
+   nir_alu_instr *a = nir_instr_as_alu(p);
+   if (a->op == nir_op_f2f32)
+      return nir_src_bit_size(a->src[0].src) == 16;
+   if (!narrow16_op(a->op))
+      return false;
+   for (unsigned j = a->op == nir_op_bcsel ? 1 : 0; j < nir_op_infos[a->op].num_inputs; j++)
+      if (!f16_free(a->src[j].src.ssa, depth + 1))
+         return false;
+   return true;
+}
+
+static bool
+narrow16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   nir_op op = alu->op;
+   if (alu->def.bit_size != 32 || !narrow16_op(op))
+      return false;
+   for (unsigned j = op == nir_op_bcsel ? 1 : 0; j < nir_op_infos[op].num_inputs; j++)
+      if (!f16_free(alu->src[j].src.ssa, 0))
+         return false;
+   if (list_is_empty(&alu->def.uses))
+      return false;
+   nir_foreach_use_including_if(use, &alu->def) {
+      nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
+      if (!u || u->type != nir_instr_type_alu ||
+          (nir_instr_as_alu(u)->op != nir_op_f2f16 && nir_instr_as_alu(u)->op != nir_op_f2fmp))
+         return false;
+   }
+   b->cursor = nir_before_instr(&alu->instr);
+   unsigned n = nir_op_infos[op].num_inputs;
+   /* (each source's f2f16 takes its swizzle: no new 32-bit move to narrow) */
+   nir_alu_instr *h = nir_alu_instr_create(b->shader, op);
+   for (unsigned j = 0; j < n; j++) {
+      if (op == nir_op_bcsel && j == 0) {
+         nir_alu_src_copy(&h->src[0], &alu->src[0]);
+         continue;
+      }
+      nir_alu_instr *cv = nir_alu_instr_create(b->shader, nir_op_f2f16);
+      nir_alu_src_copy(&cv->src[0], &alu->src[j]);
+      nir_def_init(&cv->instr, &cv->def, nir_ssa_alu_instr_src_components(alu, j), 16);
+      nir_builder_instr_insert(b, &cv->instr);
+      h->src[j].src = nir_src_for_ssa(&cv->def);
+      for (unsigned k = 0; k < NIR_MAX_VEC_COMPONENTS; k++)
+         h->src[j].swizzle[k] = k;
+   }
+   nir_def_init(&h->instr, &h->def, alu->def.num_components, 16);
+   nir_builder_instr_insert(b, &h->instr);
+   nir_foreach_use_safe(use, &alu->def) {
+      nir_alu_instr *cv = nir_instr_as_alu(nir_src_use_instr(use));
+      b->cursor = nir_before_instr(&cv->instr);
+      unsigned swz[NIR_MAX_VEC_COMPONENTS];
+      for (unsigned j = 0; j < cv->def.num_components; j++)
+         swz[j] = cv->src[0].swizzle[j];
+      nir_def_rewrite_uses(&cv->def, nir_swizzle(b, &h->def, swz, cv->def.num_components));
+   }
+   return true;
+}
+
+static void
+narrow16(nir_shader *s)
+{
+   bool progress;
+   do {
+      progress = false;
+      NIR_PASS(progress, s, nir_shader_alu_pass, narrow16_instr, nir_metadata_control_flow, NULL);
+      if (progress) {
+         NIR_PASS(_, s, nir_opt_algebraic);
+         NIR_PASS(_, s, nir_opt_constant_folding);
+         NIR_PASS(_, s, nir_opt_dce);
+      }
+   } while (progress);
+}
+
 /* A 16-bit min / max / saturate of values that are f32 underneath (an f2f16,
  * or a dot product, which has no F16 form and is computed in f32): done in
  * f32 and rounded once. Rounding commutes with them, so the result is the
@@ -1279,6 +1375,7 @@ sgx_lower(struct sgx_ctx *c)
          .opt_tex_dest_types = nir_type_float,
       };
       NIR_PASS(_, s, nir_opt_16bit_tex_image, &t16);
+      narrow16(s);
       uniform_formats(c);
    }
    NIR_PASS(_, s, nir_opt_dce);
