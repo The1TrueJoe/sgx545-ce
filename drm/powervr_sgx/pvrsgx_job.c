@@ -11,6 +11,7 @@
  */
 
 #include <drm/drm_auth.h>
+#include <drm/drm_cache.h>
 #include <drm/drm_exec.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
@@ -88,30 +89,58 @@ static bool job_done(struct pvrsgx_job *job, u64 consumed)
 }
 
 /* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
+/*
+ * The GPU's accesses don't snoop the CPU caches (log 2026-11-04-0100). Our own
+ * objects are write-combined on the CPU; an import may be cached, so flush the
+ * imports a job lists before it runs (no dirty line lands on its output later)
+ * and after (no stale line hides it).
+ */
+static void job_flush_imports(struct pvrsgx_job *job)
+{
+	for (u32 b = 0; b < job->nbos; b++) {
+		struct drm_gem_object *obj = job->bos[b];
+
+		if (drm_gem_is_imported(obj) && to_drm_gem_shmem_obj(obj)->sgt)
+			drm_clflush_sg(to_drm_gem_shmem_obj(obj)->sgt);
+	}
+}
+
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_job *job, *tmp;
 	u64 consumed = pvrsgx_ccb_consumed(sdev);
 	unsigned long flags;
 	bool more, reap = false;
-	bool cookie = dma_fence_begin_signalling();
+	LIST_HEAD(finished);
 	u32 done = 0;
+	bool cookie;
 
+	mutex_lock(&sdev->done_lock);
+	cookie = dma_fence_begin_signalling();
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		if (!job_done(job, consumed))
 			break;
-		list_del_init(&job->node);
+		list_move_tail(&job->node, &finished);
 		done++;
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 			sdev->renders_done++;
 			reap = true;
 		}
-		dma_fence_signal_locked(job->hw_fence);
 	}
 	more = !list_empty(&sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+
+	list_for_each_entry(job, &finished, node)
+		job_flush_imports(job);
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	list_for_each_entry_safe(job, tmp, &finished, node) {
+		list_del_init(&job->node);
+		dma_fence_signal_locked(job->hw_fence);
+	}
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
+	mutex_unlock(&sdev->done_lock);
 	pvrsgx_power_put(sdev, done);
 
 	if (reap)
@@ -172,6 +201,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		return fence;
 	}
 
+	job_flush_imports(job);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
@@ -220,6 +250,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
 	pvrsgx_coredump(sdev, bad);
 
+	mutex_lock(&sdev->done_lock);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
@@ -230,6 +261,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		dma_fence_signal_locked(job->hw_fence);
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	mutex_unlock(&sdev->done_lock);
 
 	/*
 	 * As the DDK's hardware recovery: no power-off handshake with a hung

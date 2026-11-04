@@ -114,7 +114,10 @@ An imported dma-buf is a data object. It maps in every heap except the USSE ones
 `GET_BO_MMAP_OFFSET` refuses it, because its CPU mapping is the dma-buf's. The GPU
 addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an import
 with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
-GPU would write the bounce copy. An object in a job's BO list gets the job's fence
+GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, and an import's
+pages may be cached on the CPU side, so the kernel flushes every import a job lists
+before the job and after it: a job must list every import it reads or writes. An
+object in a job's BO list gets the job's fence
 in its reservation object (written: `WRITE`, else `READ`), and the job waits for the
 fences already there. That shared reservation is what makes a KMS commit of an imported
 buffer wait for the render (`powervr_sgx_prime`, the implicit frames).
