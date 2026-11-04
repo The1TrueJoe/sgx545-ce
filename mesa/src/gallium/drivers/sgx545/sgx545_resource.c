@@ -99,6 +99,38 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
       return prsc;
    }
 
+   if (is_render_target(templ) && screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
+       screen->ro->create_for_resource == renderonly_create_kms_dumb_buffer_for_resource) {
+      /* kmsro with a display device whose buffers the CPU reads (simpledrm
+       * copies each frame out): its own dumb buffer, cached, imported; the
+       * kernel flushes the CPU caches around every job that lists it, which
+       * the winsys does for the frame's target */
+      struct pipe_resource scanout_tmpl = *templ;
+      struct winsys_handle handle = { 0 };
+      int e;
+
+      scanout_tmpl.width0 = align(templ->width0, 32);    /* rows of whole tiles */
+      res->scanout = renderonly_scanout_for_resource(&scanout_tmpl, screen->ro, &handle);
+      if (!res->scanout)
+         goto fail;
+      res->stride = handle.stride;
+      res->pitch = handle.stride / 4;
+      res->shared = true;
+      simple_mtx_lock(&screen->lock);
+      e = handle.stride % 128 ? -EINVAL
+                              : sgxws_bo_import(screen->dev, &res->bo, (int)handle.handle,
+                                                handle.stride * templ->height0);
+      if (!e)
+         sgxws_bo_prepare_target(screen->dev, &res->bo);
+      simple_mtx_unlock(&screen->lock);
+      close(handle.handle);
+      if (e) {
+         renderonly_scanout_destroy(res->scanout, screen->ro);
+         goto fail;
+      }
+      return prsc;
+   }
+
    if (is_render_target(templ)) {
       int e;
 
@@ -112,7 +144,7 @@ sgx545_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *
          goto fail;
       SGX545_DBG(SYNC, "render target %ux%u %s at %#x\n", templ->width0, templ->height0,
                  util_format_short_name(templ->format), res->bo.va);
-      /* kmsro: exported to the display device, which scans it out */
+      /* kmsro otherwise: exported to the display device, which scans it out */
       if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ)) {
          res->scanout = renderonly_scanout_for_resource(prsc, screen->ro, NULL);
          if (!res->scanout) {
