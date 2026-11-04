@@ -41,8 +41,8 @@ static const struct {
 	{ "BIF_INT_STAT", SGX_CR_BIF_INT_STAT },
 	{ "BIF_FAULT", SGX_CR_BIF_FAULT },
 	{ "BIF_BANK0", SGX_CR_BIF_BANK0 },
-	{ "BIF_DIR_LIST_BASE0", SGX_CR_BIF_DIR_LIST_BASE(0) },
-	{ "BIF_DIR_LIST_BASE15", SGX_CR_BIF_DIR_LIST_BASE(15) },
+	{ "BIF_DIR_LIST_BASE0", SGX_CR_BIF_DIR_LIST_BASE0 },
+	{ "BIF_DIR_LIST_BASE15", SGX_CR_BIF_DIR_LIST_BASE15 },
 	{ "EDM_TASK_REG0", 0xb14 },
 	{ "EDM_TASK_REG1", 0xb20 },
 };
@@ -53,15 +53,16 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
 
 	seq_buf_printf(sb, "firmware running: %d lost: %d resets: %u irqs: %d\n", sdev->fw_running,
 		       sdev->lost, sdev->reset_count, atomic_read(&sdev->irq_count));
-	seq_buf_printf(sb, "kernel PD 0x%08x idle PD 0x%08x\n", pvrsgx_mmu_pd_addr(sdev->kernel_mmu),
-		       pvrsgx_mmu_pd_addr(sdev->idle_mmu));
+	seq_buf_printf(sb, "kernel PD 0x%08x idle PD 0x%08x\n",
+		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu), pvrsgx_mmu_pd_addr(sdev->idle_mmu));
 	seq_buf_printf(sb, "ccb wo %u ro %u issued %llu consumed %llu\n", READ_ONCE(ctl[0]),
 		       READ_ONCE(ctl[1]), sdev->ccb_issued, pvrsgx_ccb_consumed(sdev));
-	seq_buf_printf(sb, "hostctl init 0x%x power 0x%x cleanup 0x%x uk-lockups %u int 0x%x/0x%x assert 0x%x\n",
+	seq_buf_printf(sb, "hostctl init 0x%x power 0x%x cleanup 0x%x uk-lockups %u ",
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INIT_STATUS),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_POWER_STATUS),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_CLEANUP_STATUS),
-		       pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS),
+		       pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
+	seq_buf_printf(sb, "int 0x%x/0x%x assert 0x%x\n",
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_ASSERT_FAIL));

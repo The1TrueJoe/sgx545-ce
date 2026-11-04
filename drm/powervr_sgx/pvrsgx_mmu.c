@@ -31,6 +31,7 @@ struct pvrsgx_mmu_pt {
 
 struct pvrsgx_mmu {
 	struct pvrsgx_device *sdev;
+	/** @lock: Guards the directory, the page tables and their use counts. */
 	struct mutex lock;
 	struct page *pd_page;
 	u32 *pd;

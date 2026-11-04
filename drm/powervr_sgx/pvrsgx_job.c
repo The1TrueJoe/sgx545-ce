@@ -134,7 +134,10 @@ static void reap_work_fn(struct work_struct *work)
 
 static void poll_work_fn(struct work_struct *work)
 {
-	pvrsgx_job_process_done(container_of(to_delayed_work(work), struct pvrsgx_device, poll_work));
+	struct pvrsgx_device *sdev = container_of(to_delayed_work(work), struct pvrsgx_device,
+						  poll_work);
+
+	pvrsgx_job_process_done(sdev);
 }
 
 static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
@@ -457,7 +460,8 @@ static int intra_signaller(const struct job_args *prev, u32 nprev, u32 handle, u
 {
 	for (int k = nprev - 1; k >= 0; k--) {
 		for (u32 s = 0; s < prev[k].nsignals; s++) {
-			if (prev[k].signals[s].handle == handle && prev[k].signals[s].point == point)
+			if (prev[k].signals[s].handle == handle &&
+			    prev[k].signals[s].point == point)
 				return k;
 		}
 	}
@@ -668,7 +672,9 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	drm_exec_init(&exec, DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES, 0);
 	drm_exec_until_all_locked(&exec) {
 		for (u32 i = 0; i < n; i++) {
-			err = drm_exec_prepare_obj(&exec, drm_gpuvm_resv_obj(&ja[i].job->ctx->vm->gpuvm), n);
+			struct drm_gpuvm *gpuvm = &ja[i].job->ctx->vm->gpuvm;
+
+			err = drm_exec_prepare_obj(&exec, drm_gpuvm_resv_obj(gpuvm), n);
 			drm_exec_retry_on_contention(&exec);
 			if (err)
 				goto out_exec;
@@ -683,8 +689,10 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 
 	for (u32 i = 0; i < n; i++) {
 		for (u32 b = 0; b < ja[i].nbos; b++) {
-			err = drm_sched_job_add_implicit_dependencies(&ja[i].job->base, ja[i].bos[b],
-								      ja[i].bo_flags[b] & DRM_POWERVR_SGX_BO_REF_FLAG_WRITE);
+			bool write = ja[i].bo_flags[b] & DRM_POWERVR_SGX_BO_REF_FLAG_WRITE;
+
+			err = drm_sched_job_add_implicit_dependencies(&ja[i].job->base,
+								      ja[i].bos[b], write);
 			if (err) {
 				args->failed_index = i;
 				goto out_exec;

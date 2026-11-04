@@ -132,7 +132,8 @@ static u32 *fw_words(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 }
 
 /* The TA3D control block as the microkernel left it (in-flight slot, PB state). */
-void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b, const char *name)
+void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
+		    const char *name)
 {
 	const u32 *w = fw_words(sdev, b);
 
@@ -169,7 +170,7 @@ static int limm(struct pvrsgx_device *sdev, u32 off, u32 v)
 	u32 *i = (u32 *)((u8 *)sdev->fw.cpu[PVRSGX_FW_UKERNEL] + off);
 
 	if ((i[0] & 0x1fffff) != 0xdbeef || i[1] != 0xfc237150) {
-		drm_err(&sdev->base, "%s: no limm placeholder at +0x%x\n", firmware, off);
+		drm_err(&sdev->base, "%s: no patch placeholder at +0x%x\n", firmware, off);
 		return -EINVAL;
 	}
 	i[0] = (i[0] & 0xffe00000) | (v & 0x1fffff);
@@ -499,7 +500,8 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		return err;
 	}
 	if (fw->size != UKERNEL_SIZE) {
-		drm_err(&sdev->base, "%s: %zu bytes, expected %u\n", firmware, fw->size, UKERNEL_SIZE);
+		drm_err(&sdev->base, "%s: %zu bytes, expected %u\n", firmware, fw->size,
+			UKERNEL_SIZE);
 		err = -EINVAL;
 		goto out;
 	}
@@ -653,10 +655,11 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		if (restart_quiesce && was_powered) {
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
-			wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+			wr(sdev, SGX_CR_SOFT_RESET,
+			   SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
 			sgx_rd(sdev, SGX_CR_SOFT_RESET);
 			pci_clear_master(sdev->pdev);
-			msleep(10);
+			fsleep(10000);
 			pci_set_master(sdev->pdev);
 		}
 		memset(sdev->fw.data.cpu, 0, sdev->fw.data.size);
@@ -690,6 +693,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 
 	hc[HOSTCTL_HOST_CLOCK] = (u32)ktime_to_us(ktime_get());
 	hc[HOSTCTL_INIT_STATUS] = 0;
+	/* The image and the host control block are in memory before the kick. */
 	wmb();
 	wr(sdev, SGX_CR_EVENT_KICK2, SGX_CR_EVENT_KICK_NOW);
 

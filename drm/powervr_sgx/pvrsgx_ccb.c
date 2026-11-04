@@ -61,7 +61,8 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
 
 	mutex_lock(&sdev->ccb_lock);
 	wo = ctl[CCB_WO];
-	while (((wo + 1) & (PVRSGX_CCB_SLOTS - 1)) == (READ_ONCE(ctl[CCB_RO]) & (PVRSGX_CCB_SLOTS - 1))) {
+	while (((wo + 1) & (PVRSGX_CCB_SLOTS - 1)) ==
+	       (READ_ONCE(ctl[CCB_RO]) & (PVRSGX_CCB_SLOTS - 1))) {
 		if (time_after(jiffies, timeout)) {
 			mutex_unlock(&sdev->ccb_lock);
 			drm_err(&sdev->base, "kernel CCB full (wo %u ro %u)\n", wo, ctl[CCB_RO]);
@@ -86,6 +87,7 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
 	spin_unlock_irq(&sdev->ccb_spin);
 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] =
 		(*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] + 1) & 0xff;
+	/* The command and the kicker count reach memory before the kick. */
 	wmb();
 	sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
 	mutex_unlock(&sdev->ccb_lock);

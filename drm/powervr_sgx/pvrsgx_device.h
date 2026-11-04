@@ -43,10 +43,15 @@ struct pvrsgx_vm;
 struct pvrsgx_kmem {
 	/** @mmu: Directory it is mapped in; NULL (the default) is the firmware's. */
 	struct pvrsgx_mmu *mmu;
+	/** @dev_addr: Device address. */
 	u32 dev_addr;
+	/** @size: Size in bytes, a whole number of pages. */
 	u32 size;
+	/** @npages: Number of pages. */
 	unsigned int npages;
+	/** @pages: The pages, below 4 GiB. */
 	struct page **pages;
+	/** @cpu: Write-combined kernel mapping. */
 	void *cpu;
 };
 
@@ -93,20 +98,28 @@ struct pvrsgx_fw {
 	/** @image: The microkernel as loaded, for restarts. */
 	u8 *image;
 	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
-	u32 ddk_version, ddk_build;
+	u32 ddk_version;
+	/** @ddk_build: Build number it reports with it. */
+	u32 ddk_build;
 };
 
 /**
  * struct pvrsgx_device - The SGX545
  */
 struct pvrsgx_device {
+	/** @base: The DRM device. */
 	struct drm_device base;
+	/** @pdev: The SGX PCI function. */
 	struct pci_dev *pdev;
 
+	/** @regs: The core registers (BAR 0). */
 	void __iomem *regs;
+	/** @irq: Its interrupt. */
 	int irq;
 
+	/** @core_id: SGX_CR_CORE_ID. */
 	u32 core_id;
+	/** @core_rev: SGX_CR_CORE_REVISION. */
 	u32 core_rev;
 
 	/** @kernel_mmu: Page directory the microkernel translates through. */
@@ -115,9 +128,12 @@ struct pvrsgx_device {
 	struct pvrsgx_mmu *idle_mmu;
 	/** @reset_mmu: Scratch directory that absorbs faults during reset. */
 	struct pvrsgx_mmu *reset_mmu;
+	/** @reset_page: The page every address of @reset_mmu maps. */
 	struct page *reset_page;
 
+	/** @fw: The microkernel and its buffers. */
 	struct pvrsgx_fw fw;
+	/** @fw_running: The microkernel has started and takes commands. */
 	bool fw_running;
 	/**
 	 * @powered: The SGX is clocked and its registers may be read. Off between
@@ -143,31 +159,40 @@ struct pvrsgx_device {
 
 	/** @sched: The one scheduler; one job on the GPU at a time. */
 	struct drm_gpu_scheduler sched;
+	/** @fence_context: Context of the hardware fences. */
 	u64 fence_context;
 	/** @fence_lock: Protects @fence_seqno and @active. */
 	spinlock_t fence_lock;
+	/** @fence_seqno: Last hardware fence seqno. */
 	u32 fence_seqno;
 	/** @active: Jobs handed to the firmware, oldest first. */
 	struct list_head active;
 	/** @poll_work: Checks completions while jobs are out. */
 	struct delayed_work poll_work;
 
+	/** @reset_count: GPU resets since load. */
 	u32 reset_count;
 	/** @reset_logged: @reset_count at the last "started" message (resumes are quiet). */
 	u32 reset_logged;
 
 	/** @kobj_lock: Protects @krange and @graveyard. */
 	struct mutex kobj_lock;
+	/** @krange: Allocators of the device-wide kernel object ranges. */
 	struct drm_mm krange[PVRSGX_KRANGE_COUNT];
 	/** @graveyard: Released kernel objects the firmware may still read. */
 	struct list_head graveyard;
-	/** @renders_submitted, @renders_done: For reaping @graveyard. */
-	u64 renders_submitted, renders_done;
+	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
+	u64 renders_submitted;
+	/** @renders_done: Render jobs the firmware has finished. */
+	u64 renders_done;
+	/** @reap_work: Frees @graveyard entries a later render made safe. */
 	struct work_struct reap_work;
 
-	/** @last_render: The last render job's structures, for debugfs. */
+	/** @last_lock: Protects @last_rtds and @last_cmd_off. */
 	struct mutex last_lock;
+	/** @last_rtds: RT dataset of the last render job, for debugfs. */
 	struct pvrsgx_rt_dataset *last_rtds;
+	/** @last_cmd_off: Its command's offset in the render context CCB. */
 	u32 last_cmd_off;
 	/** @render_snap: Text dump taken as a last kick was written (debugfs). */
 	char *render_snap;
@@ -182,6 +207,7 @@ struct pvrsgx_device {
  * struct pvrsgx_file - Per-open state
  */
 struct pvrsgx_file {
+	/** @sdev: The device. */
 	struct pvrsgx_device *sdev;
 	/** @vms: VM contexts by handle. */
 	struct xarray vms;

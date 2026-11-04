@@ -6,8 +6,8 @@ and its Mesa driver. This is M2 step 1 of `AGENTS.md` section 5. It follows the 
 shape.
 
 The header is [`uapi/powervr_sgx_drm.h`](uapi/powervr_sgx_drm.h), named as
-`include/uapi/drm/<driver>_drm.h` headers are. It is a design aid and nothing outside
-`docs/uapi` includes it. `uapi/check.sh` compiles it for i386 and x86_64 against the
+`include/uapi/drm/<driver>_drm.h` headers are. The driver (`drm/powervr_sgx`, through a
+symlink) and the tests build against it. `uapi/check.sh` compiles it for i386 and x86_64 against the
 literal layouts in `uapi/layout.inc`. The command streams are defined in
 [`uapi/powervr_sgx_kmd_stream.xml`](uapi/powervr_sgx_kmd_stream.xml) (section 3).
 
@@ -105,9 +105,19 @@ the two sizes. A NULL pointer returns the size.
 ### CREATE_BO, GET_BO_MMAP_OFFSET
 
 GEM on `drm_gem_shmem`. Objects are zeroed at allocation, and PRIME goes through the DRM
-core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds.
+core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds,
+and before an mmap of the object's exported dma-buf does.
 The CPU mapping's cache mode is a kernel decision and not part of the uAPI. It defaults
 to write-combined until coherency is established (G19).
+
+An imported dma-buf is a data object. It maps in every heap except the USSE ones.
+`GET_BO_MMAP_OFFSET` refuses it, because its CPU mapping is the dma-buf's. The GPU
+addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an import
+with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
+GPU would write the bounce copy. An object in a job's BO list gets the job's fence
+in its reservation object (written: `WRITE`, else `READ`), and the job waits for the
+fences already there. That shared reservation is what makes a KMS commit of an imported
+buffer wait for the render (`powervr_sgx_prime`, the implicit frames).
 
 `DRM_POWERVR_SGX_BO_CODE` makes a code object (D12): it holds USSE programs, it is the
 only kind of object the USSE heaps accept, and it can go nowhere else. It has no CPU
@@ -807,7 +817,7 @@ These all rely on the PD and the premises. No validation in the kernel helps, sh
 | Unbounded firmware work per ioctl | `max_ta_kicks`, stream length capped at 4 KiB, ring space accounted with `drm_sched` credits | design |
 | Reset loop | A guilty context is refused from then on (section 8). A client can create new contexts, so a hang rate limit per file may be needed | gap for whether it is needed |
 | Failed recovery | The open microkernel discards surviving state rather than rescanning it (UKERNEL.md 5a). If re-init fails the device is lost: `-EIO` and a wedged event | capture for the DDK's failure; gap for the open path on hardware |
-| Foreign dma-buf outside the MMU's physical reach | Import checks the DMA mask | gap: physical address width (G3) |
+| Foreign dma-buf outside the MMU's physical reach | `VM_MAP` refuses an import whose pages the DMA layer bounced (no IOMMU) or that lie above 4 GiB | design; the bounced case is untested (the EA has no memory above 4 GiB) |
 | Non-zeroed memory | shmem pages are zero. Kernel-owned PB, region headers and tail pointers are zeroed before they are mapped | design |
 | Sticky TA state across contexts | "Every group of the TA state block is sticky" (STATE.md). A client's first block must carry every group it relies on. Not a kernel duty, but IGT should exercise it | capture for one client; gap across clients (G6) |
 

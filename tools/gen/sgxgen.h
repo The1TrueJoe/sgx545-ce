@@ -212,6 +212,10 @@ struct sgx_job {
 	struct drm_powervr_sgx_job job;
 };
 void sgx_render_job(struct sgx_ctx *c, struct sgx_job *j);
+/* A surface whose colour buffer is a GEM handle the caller holds (an imported
+ * dma-buf), stride in pixels; map is the caller's CPU view of it, or NULL. */
+struct sgx_surface *sgx_surface_import(struct sgx_ctx *c, uint32_t w, uint32_t h, uint32_t stride,
+				       uint32_t handle, uint32_t size, uint32_t *map);
 /* A code object's bytes [off, off + size) to the GPU (UPLOAD_CODE); 0 or -errno. */
 int sgx_bo_upload(struct sgx_dev *d, struct sgx_bo *bo, uint32_t off, uint32_t size);
 #endif

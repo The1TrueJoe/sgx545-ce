@@ -119,7 +119,8 @@ static void reset_sleep(struct pvrsgx_device *sdev)
 
 static void soft_reset(struct pvrsgx_device *sdev, bool bif)
 {
-	sgx_wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF : 0));
+	sgx_wr(sdev, SGX_CR_SOFT_RESET,
+	       SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF : 0));
 }
 
 static void inval_dc(struct pvrsgx_device *sdev)
@@ -144,10 +145,10 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	sgx_wr(sdev, SGX_CR_BIF_BANK_SET, 0);
 	sgx_wr(sdev, SGX_CR_BIF_BANK0, 0);
 	for (unsigned int i = 0; i < SGX_BIF_NUM_DIRLISTS; i++)
-		sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(i), 0);
+		sgx_wr(sdev, sgx_cr_bif_dir_list_base(i), 0);
 
 	if (recovery) {
-		sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(0), pvrsgx_mmu_pd_addr(sdev->reset_mmu));
+		sgx_wr(sdev, sgx_cr_bif_dir_list_base(0), pvrsgx_mmu_pd_addr(sdev->reset_mmu));
 		reset_sleep(sdev);
 		soft_reset(sdev, false);
 		reset_sleep(sdev);
@@ -165,6 +166,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 			pvrsgx_mmu_map_pages(sdev->reset_mmu, addr, &sdev->reset_page, 1, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR, sgx_rd(sdev, SGX_CR_EVENT_STATUS));
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR2, sgx_rd(sdev, SGX_CR_EVENT_STATUS2));
+			/* The reset page's PTE is in memory before the cores leave reset. */
 			wmb();
 			reset_sleep(sdev);
 			soft_reset(sdev, false);
@@ -179,9 +181,9 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 
 	sgx_wr(sdev, SGX_CR_BIF_BANK0,
 	       FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, SGX_BIF_DIRLIST_EDM));
-	sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(SGX_BIF_DIRLIST_EDM),
+	sgx_wr(sdev, sgx_cr_bif_dir_list_base(SGX_BIF_DIRLIST_EDM),
 	       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
-	sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE(0),
+	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
 	       pvrsgx_mmu_pd_addr(idle_kernel_pd ? sdev->kernel_mmu : sdev->idle_mmu));
 	inval_dc(sdev);
 
@@ -218,7 +220,7 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 	clear = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR);
 	if ((flags & HOSTCTL_INTERRUPT_HWR) && !(clear & HOSTCTL_INTERRUPT_HWR))
 		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
-				     pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
+				    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
 
 	pvrsgx_job_process_done(sdev);
 	return IRQ_HANDLED;
@@ -254,7 +256,8 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	/* Safe on a core in any state. */
 	sdev->core_id = sgx_rd(sdev, SGX_CR_CORE_ID);
 	sdev->core_rev = sgx_rd(sdev, SGX_CR_CORE_REVISION);
-	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x\n", sdev->core_id, sdev->core_rev);
+	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x\n",
+		 sdev->core_id, sdev->core_rev);
 
 	pvrsgx_kobj_init(sdev);
 	err = pvrsgx_fw_init(sdev);

@@ -245,7 +245,7 @@ def def_entry(prefix, s, f):
 
 
 def kernel_c(streams, xml, prefix):
-    out = [SPDX_C, f"/* {GENERATED.format(xml=xml)} */", "",
+    out = ["// SPDX-License-Identifier: MIT", f"/* {GENERATED.format(xml=xml)} */", "",
            "#include <linux/array_size.h>", "#include <linux/stddef.h>", "",
            f'#include "{prefix}_stream_defs.h"', ""]
     for s in streams:

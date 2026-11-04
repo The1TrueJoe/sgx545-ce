@@ -5,6 +5,7 @@
 #define PVRSGX_REGS_H
 
 #include <linux/bits.h>
+#include <linux/types.h>
 
 /*
  * SGX545 core registers, BAR0 offset 0 on the CE5300. Names and fields follow
@@ -56,7 +57,9 @@
 #define   SGX_CR_BIF_INT_STAT_FAULT_TYPE	GENMASK(18, 16)
 #define SGX_CR_BIF_FAULT			0x0c08
 /* Directory lists 1-15 are consecutive; 0 sits apart. */
-#define SGX_CR_BIF_DIR_LIST_BASE(n)		((n) ? 0x0c38 + 4 * ((n) - 1) : 0x0c84)
+#define SGX_CR_BIF_DIR_LIST_BASE0		0x0c84
+#define SGX_CR_BIF_DIR_LIST_BASE1		0x0c38
+#define SGX_CR_BIF_DIR_LIST_BASE15		0x0c70
 #define SGX_CR_BIF_BANK_SET			0x0c74
 #define SGX_CR_BIF_BANK0			0x0c78
 #define   SGX_CR_BIF_BANK0_INDEX_EDM		GENMASK(3, 0)
@@ -68,10 +71,17 @@
 #define   SGX_CR_BIF_MEM_REQ_STAT_READS		GENMASK(10, 0)
 
 #define SGX_BIF_NUM_DIRLISTS			16
-/* The microkernel translates through the last directory list; TA, 3D and
+/*
+ * The microkernel translates through the last directory list; TA, 3D and
  * host requests through list 0, which the microkernel points at the job's
- * page directory. */
+ * page directory.
+ */
 #define SGX_BIF_DIRLIST_EDM			(SGX_BIF_NUM_DIRLISTS - 1)
+
+static inline u32 sgx_cr_bif_dir_list_base(unsigned int n)
+{
+	return n ? SGX_CR_BIF_DIR_LIST_BASE1 + 4 * (n - 1) : SGX_CR_BIF_DIR_LIST_BASE0;
+}
 
 /* MMU: two levels, 4 KiB pages, 32-bit device addresses and entries. */
 #define SGX_MMU_PAGE_SHIFT			12
