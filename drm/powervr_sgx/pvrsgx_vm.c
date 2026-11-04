@@ -10,9 +10,11 @@
 #include <drm/drm_gem.h>
 #include <drm/drm_print.h>
 
+#include <linux/device.h>
 #include <linux/dma-resv.h>
 #include <linux/module.h>
 #include <linux/overflow.h>
+#include <linux/scatterlist.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -290,6 +292,25 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 	return 0;
 }
 
+/*
+ * An import's pages were mapped for this device with its 32-bit DMA mask.
+ * Without an IOMMU a page above 4 GiB comes back as a swiotlb bounce buffer,
+ * which the GPU would write behind the exporter's back: refuse those.
+ */
+static bool import_reachable(struct device *dev, struct sg_table *sgt)
+{
+	struct scatterlist *sg;
+	unsigned int i;
+
+	if (device_iommu_mapped(dev))
+		return true;
+	for_each_sgtable_dma_sg(sgt, sg, i) {
+		if (sg_page(sg) && sg_dma_address(sg) != sg_phys(sg))
+			return false;
+	}
+	return true;
+}
+
 int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_vm_map_args *args = data;
@@ -337,6 +358,10 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 	sgt = drm_gem_shmem_get_pages_sgt(to_drm_gem_shmem_obj(obj));
 	if (IS_ERR(sgt)) {
 		err = PTR_ERR(sgt);
+		goto out_va;
+	}
+	if (drm_gem_is_imported(obj) && !import_reachable(drm->dev, sgt)) {
+		err = -EFAULT;
 		goto out_va;
 	}
 
