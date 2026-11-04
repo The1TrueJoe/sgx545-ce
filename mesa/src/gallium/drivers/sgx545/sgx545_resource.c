@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "drm-uapi/drm_fourcc.h"
 #include "util/os_time.h"
 #include "util/format/u_format.h"
 #include "util/u_atomic.h"
@@ -11,6 +12,7 @@
 #include "util/u_math.h"
 #include "util/u_surface.h"
 #include "util/u_transfer.h"
+#include "frontend/winsys_handle.h"
 
 #include "sgx545_context.h"
 #include "sgx545_resource.h"
@@ -164,6 +166,119 @@ sgx545_resource_from_user_memory(struct pipe_screen *pscreen, const struct pipe_
    }
    res->wrapped = true;
    return &res->base;
+}
+
+/* A shared buffer is a linear render target as is_render_target makes them:
+ * BGRA/RGBA8, rows of a multiple of 32 pixels (STATE.md section 4), one level. */
+static bool
+shareable(const struct pipe_resource *templ)
+{
+   return templ->target == PIPE_TEXTURE_2D && templ->last_level == 0 && templ->array_size == 1 &&
+          util_format_get_blocksize(templ->format) == 4 && templ->nr_samples <= 1;
+}
+
+static struct pipe_resource *
+sgx545_resource_from_handle(struct pipe_screen *pscreen, const struct pipe_resource *templ,
+                            struct winsys_handle *whandle, unsigned usage)
+{
+   struct sgx545_screen *screen = sgx545_screen(pscreen);
+   struct sgx545_resource *res;
+   int e;
+
+   if (whandle->type != WINSYS_HANDLE_TYPE_FD || !shareable(templ) || whandle->offset ||
+       (whandle->modifier != DRM_FORMAT_MOD_LINEAR && whandle->modifier != DRM_FORMAT_MOD_INVALID) ||
+       whandle->stride % 128 || whandle->stride < templ->width0 * 4)
+      return NULL;
+   res = CALLOC_STRUCT(sgx545_resource);
+   if (!res)
+      return NULL;
+   res->base = *templ;
+   pipe_reference_init(&res->base.reference, 1);
+   res->base.screen = pscreen;
+   res->stride = whandle->stride;
+   res->pitch = whandle->stride / 4;
+   res->shared = true;
+
+   simple_mtx_lock(&screen->lock);
+   e = sgxws_bo_import(screen->dev, &res->bo, (int)whandle->handle, res->stride * templ->height0);
+   if (!e)
+      sgxws_bo_prepare_target(screen->dev, &res->bo);
+   simple_mtx_unlock(&screen->lock);
+   if (e) {
+      SGX545_DBG(SYNC, "dma-buf import of %ux%u failed: %d\n", templ->width0, templ->height0, e);
+      FREE(res);
+      return NULL;
+   }
+   return &res->base;
+}
+
+static bool
+sgx545_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
+                           struct pipe_resource *prsc, struct winsys_handle *whandle, unsigned usage)
+{
+   struct sgx545_screen *screen = sgx545_screen(pscreen);
+   struct sgx545_resource *res = sgx545_resource(prsc);
+   int e, fd;
+
+   /* only linear render targets: a texture's device copy is twiddled or
+    * re-encoded from its CPU copy */
+   if (!sgxws_bo_valid(&res->bo) || res->texture || res->wrapped || !res->pitch || !shareable(prsc))
+      return false;
+   whandle->stride = res->stride;
+   whandle->offset = 0;
+   whandle->modifier = DRM_FORMAT_MOD_LINEAR;
+   switch (whandle->type) {
+   case WINSYS_HANDLE_TYPE_KMS:
+      if (sgxws_bo_kms_handle(&res->bo, &whandle->handle))
+         return false;
+      res->shared = true;
+      return true;
+   case WINSYS_HANDLE_TYPE_FD:
+      simple_mtx_lock(&screen->lock);
+      e = sgxws_bo_export(screen->dev, &res->bo, &fd);
+      simple_mtx_unlock(&screen->lock);
+      if (e)
+         return false;
+      whandle->handle = (unsigned)fd;
+      res->shared = true;
+      return true;
+   default:
+      return false;
+   }
+}
+
+static bool
+sgx545_resource_get_param(struct pipe_screen *pscreen, struct pipe_context *pctx,
+                          struct pipe_resource *prsc, unsigned plane, unsigned layer, unsigned level,
+                          enum pipe_resource_param param, unsigned usage, uint64_t *value)
+{
+   struct sgx545_resource *res = sgx545_resource(prsc);
+   struct winsys_handle whandle = { 0 };
+
+   switch (param) {
+   case PIPE_RESOURCE_PARAM_NPLANES:
+      *value = 1;
+      return true;
+   case PIPE_RESOURCE_PARAM_STRIDE:
+      *value = res->stride;
+      return true;
+   case PIPE_RESOURCE_PARAM_OFFSET:
+      *value = 0;
+      return true;
+   case PIPE_RESOURCE_PARAM_MODIFIER:
+      *value = DRM_FORMAT_MOD_LINEAR;
+      return true;
+   case PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS:
+   case PIPE_RESOURCE_PARAM_HANDLE_TYPE_FD:
+      whandle.type = param == PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS ? WINSYS_HANDLE_TYPE_KMS
+                                                                  : WINSYS_HANDLE_TYPE_FD;
+      if (!sgx545_resource_get_handle(pscreen, pctx, prsc, &whandle, usage))
+         return false;
+      *value = whandle.handle;
+      return true;
+   default:
+      return false;
+   }
 }
 
 static void
@@ -443,6 +558,11 @@ sgx545_resource_screen_init(struct sgx545_screen *screen)
    screen->base.resource_create = sgx545_resource_create;
    screen->base.resource_from_user_memory = sgx545_resource_from_user_memory;
    screen->base.resource_destroy = sgx545_resource_destroy;
+   if (sgxws_dev_has_dmabuf(screen->dev)) {
+      screen->base.resource_from_handle = sgx545_resource_from_handle;
+      screen->base.resource_get_handle = sgx545_resource_get_handle;
+      screen->base.resource_get_param = sgx545_resource_get_param;
+   }
 }
 
 /* clears of a surface outside glClear (st's copy and clear paths), on the

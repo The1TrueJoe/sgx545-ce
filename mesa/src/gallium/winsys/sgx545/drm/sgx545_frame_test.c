@@ -9,9 +9,11 @@
  * one context and checks every frame's pixels against the first; frame k
  * clears with red = k/n when -r is given (probe-st's PROBE_FRAMES).
  *
- *   sgx545_frame_test [-n frames] [-r] [-c] [-f] [-o last.bin]
+ *   sgx545_frame_test [-d node] [-n frames] [-r] [-c] [-f] [-o last.bin]
+ *     -d   the kernel driver's node (default: /dev/dri/renderD128 if it is
+ *          there, else /dev/dri/card0); powervr_sgx or pvrsrvkm
  *     -c   check every frame (reading uncached GPU memory: slow), not only the last
- *     -f   render straight into /dev/fb0 (wrapped), not a GPU buffer
+ *     -f   render straight into /dev/fb0 (wrapped; pvrsrvkm only), not a GPU buffer
  *     -o   dump the last frame (736-pixel pitch BGRA, as tools/decode/cmpfb.py reads)
  */
 
@@ -41,14 +43,14 @@ fnv(const void *p, size_t n)
 int
 main(int argc, char **argv)
 {
-   struct sgxws_dev dev;
+   struct sgxws_dev *dev;
    struct sgxws_ctx *c;
    struct sgxws_rt *rt;
    struct sgxws_bo color;
    struct sgxws_target t = { 0 };
    struct sgxws_prog vs, fs;
    struct sgxws_state st = { 0 };
-   const char *out = NULL;
+   const char *out = NULL, *node = NULL;
    int frames = 1, ramp = 0, use_fb = 0, check_all = 0, opt, fd, bad = 0;
    uint32_t w = 720, h = 480, stride = 736, *pixels;
    uint64_t first = 0;
@@ -56,8 +58,9 @@ main(int argc, char **argv)
    uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = { 0 };
    struct timespec t0, t1;
 
-   while ((opt = getopt(argc, argv, "n:rcfo:")) != -1) {
+   while ((opt = getopt(argc, argv, "d:n:rcfo:")) != -1) {
       switch (opt) {
+      case 'd': node = optarg; break;
       case 'n': frames = atoi(optarg); break;
       case 'r': ramp = 1; break;
       case 'c': check_all = 1; break;
@@ -67,12 +70,14 @@ main(int argc, char **argv)
       }
    }
 
-   fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-   if (fd < 0 || sgxws_dev_init(&dev, fd, NULL)) {
-      fprintf(stderr, "services init failed\n");
+   if (!node)
+      node = access("/dev/dri/renderD128", F_OK) ? "/dev/dri/card0" : "/dev/dri/renderD128";
+   fd = open(node, O_RDWR | O_CLOEXEC);
+   if (fd < 0 || !(dev = sgxws_dev_create(fd, NULL))) {
+      fprintf(stderr, "no SGX545 kernel driver on %s\n", node);
       return 1;
    }
-   c = sgxws_ctx_create(&dev);
+   c = sgxws_ctx_create(dev);
    if (!c)
       return 1;
    rt = sgxws_rt_create(c, w, h);
@@ -89,7 +94,7 @@ main(int argc, char **argv)
          return 1;
       }
       m = mmap(NULL, fix.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fb, 0);
-      if (m == MAP_FAILED || sgxws_bo_wrap(&dev, &color, m, fix.smem_len)) {
+      if (m == MAP_FAILED || sgxws_bo_wrap(dev, &color, m, fix.smem_len)) {
          fprintf(stderr, "wrapping fb0 failed\n");
          return 1;
       }
@@ -97,7 +102,7 @@ main(int argc, char **argv)
       t.va = color.va;
       pixels = m;
    } else {
-      if (sgxws_bo_alloc(&dev, &color, SGXWS_MEM_RENDER_TARGET, stride * h * 4,
+      if (sgxws_bo_alloc(dev, &color, SGXWS_MEM_RENDER_TARGET, stride * h * 4,
                          0x1000))
          return 1;
       t.va = color.va;
@@ -156,6 +161,6 @@ main(int argc, char **argv)
    }
    sgxws_rt_destroy(c, rt);
    sgxws_ctx_destroy(c);
-   sgxws_dev_fini(&dev);
+   sgxws_dev_destroy(dev);
    return bad ? 1 : 0;
 }

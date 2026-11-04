@@ -1,5 +1,6 @@
 #!/bin/sh
-# Build Mesa with the sgx545 gallium driver and the EGL fbdev platform.
+# Build Mesa with the sgx545 gallium driver (over powervr_sgx, or pvrsrvkm
+# through libpvr), the EGL fbdev platform, and GBM.
 #
 #   mesa/build.sh [x86_64] [i386] [x86_64-gl]       (default: x86_64 i386)
 #
@@ -49,6 +50,11 @@ fi
 ln -sfn "$REPO/kernel/src" "$TREE/include/sgx545-kernel"
 ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx545/drm/libpvr"
 python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx545/drm/sgx545_usse_progs.h"
+# the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi) and the
+# packers for its command streams, from their one definition
+cp "$REPO/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h" "$TREE/include/drm-uapi/"
+python3 "$REPO/docs/uapi/gen_stream.py" user "$REPO/docs/uapi/powervr_sgx_kmd_stream.xml" \
+	> "$TREE/src/gallium/winsys/sgx545/drm/powervr_sgx_kmd_stream.h"
 
 for arch in $ARCHES; do
 	case $arch in
@@ -73,7 +79,7 @@ for arch in $ARCHES; do
 			-Dplatforms=fbdev -Degl-native-platform=fbdev \
 			-Dgallium-drivers=sgx545 -Dvulkan-drivers= \
 			-Dglx=disabled $api -Dgles1=enabled -Dgles2=enabled -Degl=enabled \
-			-Dgbm=disabled -Dllvm=disabled -Dxmlconfig=disabled -Dexpat=disabled \
+			-Dgbm=enabled -Dllvm=disabled -Dxmlconfig=disabled -Dexpat=disabled \
 			-Dzstd=disabled -Dzlib=disabled -Dshader-cache=disabled -Dvalgrind=disabled \
 			-Dlibunwind=disabled -Dlmsensors=disabled \
 			-Dallow-fallback-for=libdrm -Dlibdrm:tests=false
