@@ -102,7 +102,7 @@ else
 	[ -S /tmp/.X11-unix/X0 ] || "$here/x11-up.sh" $R start
 	X() { "$here/x11-up.sh" $R run xdotool "$@"; }
 	"$here/x11-up.sh" $R run env -u MESA_GL_VERSION_OVERRIDE -u MESA_GLSL_VERSION_OVERRIDE \
-		SGX545_DEBUG=stats MC_OPTIFINE=0 MC_TWEAKS=0 MC_DIR=$GIN $GIN/mc-x64.sh Player > "$LOG" 2>&1 &
+		SGX545_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} MC_OPTIFINE=0 MC_TWEAKS=0 MC_DIR=$GIN $GIN/mc-x64.sh Player > "$LOG" 2>&1 &
 	READY="textures/items-atlas"
 	fps() { grep -o 'sgx545 stats [0-9.]* s: [0-9.]* FPS' | awk '{print $5}'; }
 fi
@@ -128,6 +128,7 @@ window() {   # SECS: FPS mean and java CPU % over the next SECS seconds
 	f=$(tail -n +$((l0 + 1)) "$LOG" | fps | mean)
 	echo "$f fps, java CPU $(( (c1 - c0) * 100 / (100 * $1) ))%"
 }
+# MC_DEBUG=flags (new stack): more SGX545_DEBUG flags, e.g. nir (the game's log keeps them)
 # MC_PROFILE=SECS (new stack): perf record of java for SECS of the standing view,
 # its report in /root/mcbench/new-<run>.perf.txt
 if [ -n "${MC_PROFILE:-}" ] && [ $WHO = new ]; then
