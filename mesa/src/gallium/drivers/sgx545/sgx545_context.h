@@ -79,6 +79,11 @@ struct sgx545_shader {
     * varyings differ from its own (sgx545_vs_for) */
    struct sgx545_shader *variants_vs[8];
    unsigned next_variant_vs;
+   /* fragment: the same decoding what the samplers in its mask sample as
+    * sRGB (sgx545_fs_for) */
+   unsigned srgb;
+   struct sgx545_shader *variants_srgb[4];
+   unsigned next_variant_srgb;
 };
 
 struct sgx545_vertex_elements {

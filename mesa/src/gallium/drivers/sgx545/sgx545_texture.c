@@ -26,20 +26,33 @@ unsigned
 sgx545_tex_format(enum pipe_format format)
 {
    switch (format) {
+   /* an sRGB format is its linear twin here: the fragment shader decodes
+    * what it samples (lower_srgb, sgx545_fs_for) */
    case PIPE_FORMAT_R8G8B8A8_UNORM:
    case PIPE_FORMAT_R8G8B8X8_UNORM:
+   case PIPE_FORMAT_R8G8B8A8_SRGB:
+   case PIPE_FORMAT_R8G8B8X8_SRGB:
       /* R, G, B, A bytes in memory.  The DDK tags them 0x0d and libusc folds a
        * zyxw reorder into the sample; our compiler unpacks xyzw, and with 0x0c
        * (BGRA8888) the texels come out GL's way: byte-identical to the DDK
        * on the EA3 (16x16, 64x64, NPOT, nearest and linear) */
       return 0x0c;
+   case PIPE_FORMAT_B8G8R8A8_UNORM:
+   case PIPE_FORMAT_B8G8R8X8_UNORM:
+   case PIPE_FORMAT_B8G8R8A8_SRGB:
+   case PIPE_FORMAT_B8G8R8X8_SRGB:
+      /* B, G, R, A bytes in memory: the format that swaps R and B against
+       * 0x0c, as a strided back buffer is sampled (sgx545_tex_words) */
+      return 0x0d;
    case PIPE_FORMAT_B5G6R5_UNORM:
       return 0x05;
    case PIPE_FORMAT_A8_UNORM:
       return 0x19;
    case PIPE_FORMAT_L8_UNORM:
+   case PIPE_FORMAT_L8_SRGB:
       return 0x1a;
    case PIPE_FORMAT_L8A8_UNORM:
+   case PIPE_FORMAT_L8A8_SRGB:
       return 0x1b;
    default:
       return 0;
