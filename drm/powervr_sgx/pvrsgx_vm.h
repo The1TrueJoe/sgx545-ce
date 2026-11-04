@@ -25,8 +25,11 @@ struct pvrsgx_pb;
  * a client's tasks away from the firmware's memory (docs/UAPI.md 7.2, P2/P3).
  */
 struct pvrsgx_vm {
+	/** @gpuvm: The GPU VA manager. */
 	struct drm_gpuvm gpuvm;
+	/** @sdev: The device. */
 	struct pvrsgx_device *sdev;
+	/** @mmu: Its page directory and tables. */
 	struct pvrsgx_mmu *mmu;
 	/** @params: 3D parameters addresses of this VM's kernel objects (pvrsgx_kobj.c). */
 	struct drm_mm params;
@@ -34,6 +37,7 @@ struct pvrsgx_vm {
 	struct pvrsgx_pb *pb;
 	/** @lock: Serialises map and unmap, and @pb's creation. */
 	struct mutex lock;
+	/** @ref: Held by the handle, its contexts and their jobs. */
 	struct kref ref;
 };
 

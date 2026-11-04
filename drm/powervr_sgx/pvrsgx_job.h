@@ -24,10 +24,15 @@ struct pvrsgx_vm;
  * struct pvrsgx_context - A queue of jobs in one VM
  */
 struct pvrsgx_context {
+	/** @ref: Held by the handle and by each job. */
 	struct kref ref;
+	/** @sdev: The device. */
 	struct pvrsgx_device *sdev;
+	/** @vm: The VM its jobs run in. */
 	struct pvrsgx_vm *vm;
+	/** @entity: Its scheduler queue. */
 	struct drm_sched_entity entity;
+	/** @type: enum drm_powervr_sgx_ctx_type. */
 	u32 type;
 	/** @state: enum drm_powervr_sgx_context_state. */
 	u32 state;
@@ -48,8 +53,11 @@ struct pvrsgx_signal {
  * struct pvrsgx_job - One submitted job
  */
 struct pvrsgx_job {
+	/** @base: The scheduler job. */
 	struct drm_sched_job base;
+	/** @ctx: The context it was submitted on. */
 	struct pvrsgx_context *ctx;
+	/** @type: enum drm_powervr_sgx_job_type. */
 	u32 type;
 
 	/** @hw_fence: Signalled when the firmware has finished the job. */
@@ -63,14 +71,22 @@ struct pvrsgx_job {
 	 * NULL for a job that is done when the CCB has taken it.
 	 */
 	u32 *done_cpu;
+	/** @done_val: Value of *@done_cpu once the job is done. */
 	u32 done_val;
+	/** @render: The render job, for a render context. */
 	struct pvrsgx_render_job render;
+	/** @transfer: The transfer job, for a transfer context. */
 	struct pvrsgx_transfer_job transfer;
 
+	/** @bos: Objects the job references, for implicit sync. */
 	struct drm_gem_object **bos;
+	/** @bo_flags: DRM_POWERVR_SGX_BO_REF_FLAG_* of each of @bos. */
 	u32 *bo_flags;
+	/** @nbos: Number of @bos. */
 	u32 nbos;
+	/** @signals: Syncobjs to signal with the job's fence. */
 	struct pvrsgx_signal *signals;
+	/** @nsignals: Number of @signals. */
 	u32 nsignals;
 };
 

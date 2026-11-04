@@ -64,7 +64,8 @@ int pvrsgx_obj_array_put(const struct drm_powervr_sgx_obj_array *out, const void
 	if (!out->stride)
 		return -EINVAL;
 	for (u32 i = 0; i < n; i++) {
-		if (copy_to_user(dst + (size_t)i * out->stride, (const u8 *)src + (size_t)i * obj_size, len))
+		if (copy_to_user(dst + (size_t)i * out->stride,
+				 (const u8 *)src + (size_t)i * obj_size, len))
 			return -EFAULT;
 		if (out->stride > len &&
 		    clear_user(dst + (size_t)i * out->stride + len, out->stride - len))

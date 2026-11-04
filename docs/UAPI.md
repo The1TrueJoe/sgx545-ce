@@ -6,8 +6,8 @@ and its Mesa driver. This is M2 step 1 of `AGENTS.md` section 5. It follows the 
 shape.
 
 The header is [`uapi/powervr_sgx_drm.h`](uapi/powervr_sgx_drm.h), named as
-`include/uapi/drm/<driver>_drm.h` headers are. It is a design aid and nothing outside
-`docs/uapi` includes it. `uapi/check.sh` compiles it for i386 and x86_64 against the
+`include/uapi/drm/<driver>_drm.h` headers are. The driver (`drm/powervr_sgx`, through a
+symlink) and the tests build against it. `uapi/check.sh` compiles it for i386 and x86_64 against the
 literal layouts in `uapi/layout.inc`. The command streams are defined in
 [`uapi/powervr_sgx_kmd_stream.xml`](uapi/powervr_sgx_kmd_stream.xml) (section 3).
 

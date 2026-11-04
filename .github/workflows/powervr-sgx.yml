@@ -50,7 +50,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools
+            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools sparse
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
@@ -91,6 +91,18 @@ jobs:
           set -eux
           make -C linux-$LINUX_VERSION ARCH=x86_64 M=$PWD/drm/powervr_sgx W=1 modules 2>&1 | tee oot.log
           ! grep -E 'warning:|error:' oot.log
+
+      - name: The driver through sparse and checkpatch --strict
+        run: |
+          set -eux
+          touch drm/powervr_sgx/*.c
+          make -C linux-$LINUX_VERSION ARCH=x86_64 M=$PWD/drm/powervr_sgx C=2 modules 2>&1 | tee sparse.log
+          ! grep -E 'powervr_sgx/.*(warning|error):' sparse.log
+          perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse -f \
+            drm/powervr_sgx/*.[ch] docs/uapi/powervr_sgx_drm.h docs/uapi/stream/*.[ch] | tee checkpatch.log
+          ! grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log
+          python3 linux-$LINUX_VERSION/scripts/kernel-doc -none -Wall -Werror \
+            docs/uapi/powervr_sgx_drm.h drm/powervr_sgx/pvrsgx_*.[ch]
 
       - name: uAPI tests (static, musl)
         run: |

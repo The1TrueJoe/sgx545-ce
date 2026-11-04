@@ -1,19 +1,12 @@
 /* SPDX-License-Identifier: (GPL-2.0-only WITH Linux-syscall-note) OR MIT */
 /* Copyright © 2026 Joseph Telaak */
 
-/*
- * Design draft of the powervr_sgx DRM uAPI, for the PowerVR SGX545. docs/UAPI.md
- * is the design document this header belongs to; docs/uapi/check.sh compiles it
- * for i386 and x86_64 against the literal layouts in docs/uapi/layout.inc.
- *
- * Not a merged interface. Nothing includes this outside docs/uapi.
- */
-
 #ifndef POWERVR_SGX_DRM_H
 #define POWERVR_SGX_DRM_H
 
 #include "drm.h"
 
+#include <linux/const.h>
 #include <linux/types.h>
 
 #if defined(__cplusplus)
@@ -79,28 +72,28 @@ struct drm_powervr_sgx_obj_array {
  */
 
 /**
- * POWERVR_SGX_IOCTL() - Build a powervr_sgx ioctl number
+ * PVR_SGX_IOCTL() - Build a powervr_sgx ioctl number
  * @_ioctl: Incrementing id of the ioctl. Added to %DRM_COMMAND_BASE.
  * @_mode: One of %DRM_IOW or %DRM_IOWR.
  * @_data: Middle of the args struct name, drm_powervr_sgx_ioctl_<_data>_args.
  */
-#define POWERVR_SGX_IOCTL(_ioctl, _mode, _data) \
+#define PVR_SGX_IOCTL(_ioctl, _mode, _data) \
 	_mode(DRM_COMMAND_BASE + (_ioctl), struct drm_powervr_sgx_ioctl_##_data##_args)
 
-#define DRM_IOCTL_POWERVR_SGX_DEV_QUERY POWERVR_SGX_IOCTL(0x00, DRM_IOWR, dev_query)
-#define DRM_IOCTL_POWERVR_SGX_CREATE_BO POWERVR_SGX_IOCTL(0x01, DRM_IOWR, create_bo)
-#define DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET POWERVR_SGX_IOCTL(0x02, DRM_IOWR, get_bo_mmap_offset)
-#define DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT POWERVR_SGX_IOCTL(0x03, DRM_IOWR, create_vm_context)
-#define DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT POWERVR_SGX_IOCTL(0x04, DRM_IOW, destroy_vm_context)
-#define DRM_IOCTL_POWERVR_SGX_VM_MAP POWERVR_SGX_IOCTL(0x05, DRM_IOW, vm_map)
-#define DRM_IOCTL_POWERVR_SGX_VM_UNMAP POWERVR_SGX_IOCTL(0x06, DRM_IOW, vm_unmap)
-#define DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT POWERVR_SGX_IOCTL(0x07, DRM_IOWR, create_context)
-#define DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT POWERVR_SGX_IOCTL(0x08, DRM_IOW, destroy_context)
-#define DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE POWERVR_SGX_IOCTL(0x09, DRM_IOWR, get_context_state)
-#define DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET POWERVR_SGX_IOCTL(0x0a, DRM_IOWR, create_rt_dataset)
-#define DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET POWERVR_SGX_IOCTL(0x0b, DRM_IOW, destroy_rt_dataset)
-#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS POWERVR_SGX_IOCTL(0x0c, DRM_IOWR, submit_jobs)
-#define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE POWERVR_SGX_IOCTL(0x0d, DRM_IOWR, upload_code)
+#define DRM_IOCTL_POWERVR_SGX_DEV_QUERY PVR_SGX_IOCTL(0x00, DRM_IOWR, dev_query)
+#define DRM_IOCTL_POWERVR_SGX_CREATE_BO PVR_SGX_IOCTL(0x01, DRM_IOWR, create_bo)
+#define DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET PVR_SGX_IOCTL(0x02, DRM_IOWR, get_bo_mmap_offset)
+#define DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT PVR_SGX_IOCTL(0x03, DRM_IOWR, create_vm_context)
+#define DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT PVR_SGX_IOCTL(0x04, DRM_IOW, destroy_vm_context)
+#define DRM_IOCTL_POWERVR_SGX_VM_MAP PVR_SGX_IOCTL(0x05, DRM_IOW, vm_map)
+#define DRM_IOCTL_POWERVR_SGX_VM_UNMAP PVR_SGX_IOCTL(0x06, DRM_IOW, vm_unmap)
+#define DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT PVR_SGX_IOCTL(0x07, DRM_IOWR, create_context)
+#define DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT PVR_SGX_IOCTL(0x08, DRM_IOW, destroy_context)
+#define DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE PVR_SGX_IOCTL(0x09, DRM_IOWR, get_context_state)
+#define DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET PVR_SGX_IOCTL(0x0a, DRM_IOWR, create_rt_dataset)
+#define DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET PVR_SGX_IOCTL(0x0b, DRM_IOW, destroy_rt_dataset)
+#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS PVR_SGX_IOCTL(0x0c, DRM_IOWR, submit_jobs)
+#define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE PVR_SGX_IOCTL(0x0d, DRM_IOWR, upload_code)
 
 /**
  * DOC: PowerVR SGX IOCTL DEV_QUERY interface
@@ -277,7 +270,9 @@ enum drm_powervr_sgx_dev_query {
 	DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET,
 	/** @DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET: &struct drm_powervr_sgx_dev_query_quirks. */
 	DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET,
-	/** @DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET: &struct drm_powervr_sgx_dev_query_heap_info. */
+	/**
+	 * @DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET: &struct drm_powervr_sgx_dev_query_heap_info.
+	 */
 	DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET,
 };
 
@@ -309,7 +304,7 @@ struct drm_powervr_sgx_ioctl_dev_query_args {
  * DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS - Allow %DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET
  * on this object.
  */
-#define DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS (1ULL << 0)
+#define DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS _BITULL(0)
 
 /**
  * DRM_POWERVR_SGX_BO_CODE - A code object: USSE programs.
@@ -320,7 +315,7 @@ struct drm_powervr_sgx_ioctl_dev_query_args {
  * contents arrive only through %DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, which
  * validates them. Bits 2..63 of the flags are reserved.
  */
-#define DRM_POWERVR_SGX_BO_CODE (1ULL << 1)
+#define DRM_POWERVR_SGX_BO_CODE _BITULL(1)
 
 /**
  * struct drm_powervr_sgx_ioctl_create_bo_args - Arguments for %DRM_IOCTL_POWERVR_SGX_CREATE_BO
@@ -736,7 +731,7 @@ struct drm_powervr_sgx_ta_kick {
 #define DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ 0U
 #define DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ 1U
 #define DRM_POWERVR_SGX_SYNC_OP_FLAG_WAIT 0U
-#define DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL (1U << 31)
+#define DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL _BITUL(31)
 
 /**
  * struct drm_powervr_sgx_sync_op - One wait or signal of a job
@@ -762,7 +757,7 @@ struct drm_powervr_sgx_sync_op {
  *    Without this flag the job reads it: the out-fence is added as a read fence
  *    and the job waits for earlier write fences.
  */
-#define DRM_POWERVR_SGX_BO_REF_FLAG_WRITE (1U << 0)
+#define DRM_POWERVR_SGX_BO_REF_FLAG_WRITE _BITUL(0)
 
 /**
  * struct drm_powervr_sgx_bo_ref - An object a job takes part in implicit sync on
@@ -788,7 +783,7 @@ struct drm_powervr_sgx_bo_ref {
  *    The transfer's destination surface is twiddled.
  */
 #define DRM_POWERVR_SGX_SUBMIT_JOB_RENDER_FLAGS_MASK 0U
-#define DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED (1U << 0)
+#define DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED _BITUL(0)
 #define DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_FLAGS_MASK \
 	DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED
 

@@ -77,7 +77,8 @@ int pvrsgx_ioctl_create_bo(struct drm_device *drm, void *data, struct drm_file *
 		return PTR_ERR(shmem);
 	to_pvrsgx_bo(&shmem->base)->flags = args->flags;
 	/* Pages the GPU can address. */
-	mapping_set_gfp_mask(shmem->base.filp->f_mapping, (GFP_HIGHUSER & ~__GFP_HIGHMEM) | __GFP_DMA32);
+	mapping_set_gfp_mask(shmem->base.filp->f_mapping,
+			     (GFP_HIGHUSER & ~__GFP_HIGHMEM) | __GFP_DMA32);
 
 	err = drm_gem_handle_create(file, &shmem->base, &args->handle);
 	drm_gem_object_put(&shmem->base);
