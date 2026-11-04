@@ -21,7 +21,8 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 | `check_enc.py` | the isaspec encoder (`mesa/src/sgx545/isa`, via `sgx545_isa_test -t`) against `hw.py` on every corpus word |
 | `check_out.py` | every emitted word: decodes, round-trips, and matches libusc's encoder (`oracle.py`) |
 | `run_corpus.py`, `layout.py` | compile a `tools/isa/corpus` file |
-| `count.py` | instruction counts against libusc |
+| `count.py` | instruction counts, issue slots and temporaries against libusc |
+| `glmark2_corpus.py` | glmark2's shaders as a corpus file (generated from a glmark2 checkout, not committed) |
 | `hw/glt.c`, `hw/uspsub.c`, `hw/hwcmp.py`, `hw/calib.py` | EA3: draw with the DDK's driver running our USPs, against the DDK's own |
 | `tests/gl4es/` | gl4es's Minecraft 1.7.10 shaders (`fpegen.c` runs gl4es's generator) and `mc_run.py` |
 
