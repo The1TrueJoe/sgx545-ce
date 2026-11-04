@@ -1,5 +1,5 @@
 kmsro pairs a KMS-only device with the SGX545 under powervr_sgx: a scanout
-buffer is a dumb buffer on the display device, imported into the GPU.
+buffer is the GPU's, exported to the display device (a linear render target).
 
 powervr_sgx is a PCI device (the CE5300's SGX is its own PCI function;
 Cedarview's sits behind gma500's), so a platform display device (simpledrm on
@@ -50,13 +50,15 @@ render nodes of PCI devices are taken when their driver is powervr_sgx.
  #include "zink/drm/zink_drm_public.h"
  #include "xf86drm.h"
  
-@@ -122,6 +123,11 @@
+@@ -122,6 +123,13 @@
           ro->create_for_resource = renderonly_create_gpu_import_for_resource;
           screen = vc4_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
  #endif
 +      } else if (strcmp(render_dev_name, "powervr_sgx") == 0) {
 +#if defined(GALLIUM_SGX545)
-+         ro->create_for_resource = renderonly_create_kms_dumb_buffer_for_resource;
++         /* the GPU's buffer is exported to the display device: the SGX
++          * doesn't snoop the CPU caches a dumb buffer is written through */
++         ro->create_for_resource = renderonly_create_gpu_import_for_resource;
 +         screen = sgx545_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
 +#endif
        }
