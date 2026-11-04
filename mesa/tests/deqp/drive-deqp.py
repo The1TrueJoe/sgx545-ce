@@ -37,6 +37,8 @@ Environment:
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
   BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
+  CHUNK_HOOK  a command on the box after every chunk (e.g. a debugfs status), its
+              output kept in run-NAME/chunk-hook.txt
 """
 import argparse
 import os
@@ -340,6 +342,19 @@ def run_chunk(box, who, name, tests):
     r1 = recoveries(box) if not wedged else None
     if r0 is not None and r1 is not None and r1 != r0:
         log(f"chunk of {len(tests)}: {r1 - r0} SGX recoveries")
+        # what the kernel said about them (and powervr_sgx's devcoredump, which expires)
+        rc4, out4 = box.ssh("dmesg | grep -E 'job timed out|Recovery|powervr_sgx' | tail -40; "
+                            "for d in /sys/class/devcoredump/devcd*; do [ -e $d/data ] && cat $d/data > /tmp/devcd-$(date +%s).bin; done; "
+                            "ls /tmp/devcd-*.bin 2>/dev/null", timeout=60)
+        if rc4 is not None:
+            with open(os.path.join(RUN_DIR, "recoveries.txt"), "ab") as f:
+                f.write(f"== after chunk starting {tests[0]}\n".encode() + out4)
+    if os.environ.get("CHUNK_HOOK") and not wedged:
+        # CHUNK_HOOK: a command on the box after every chunk, its output kept in chunk-hook.txt
+        rc5, out5 = box.ssh(os.environ["CHUNK_HOOK"], timeout=60)
+        if rc5 is not None:
+            with open(os.path.join(RUN_DIR, "chunk-hook.txt"), "ab") as f:
+                f.write(f"== after chunk starting {tests[0]}\n".encode() + out5)
     if not wedged and not canary(box, who, name):
         log("the canary didn't pass after this chunk")
         wedged = True
