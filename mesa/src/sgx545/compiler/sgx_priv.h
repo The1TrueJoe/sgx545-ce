@@ -6,7 +6,7 @@
 /*
  * SGX545 compiler internals: the backend IR between NIR and USSE words.
  *
- * One sgx_ins is one USSE instruction (a form from usse_forms.h) over up to
+ * One sgx_ins is one USSE instruction (a form from sgx_forms.h) over up to
  * `rpt` iterations; operands are sgx_refs that become USSE operands after
  * register allocation. Virtual registers (vregs) are runs of consecutive
  * temporaries, so a vector op can be one instruction with a repeat.
@@ -18,7 +18,7 @@
 #include "util/u_dynarray.h"
 
 #include "sgx_compiler.h"
-#include "usse.h"
+#include "sgx_forms.h"
 
 struct nir_shader;
 struct nir_def;
@@ -76,7 +76,7 @@ struct sgx_ins {
    uint8_t writes_pred; /* test: predicate number + 1 */
    bool noskip;         /* runs on helper instances too (skipinv clear) */
    uint8_t nfld;
-   struct sgx_ref op[USSE_MAX_OPS];
+   struct sgx_ref op[SGX_MAX_OPS];
    struct { uint16_t id; int32_t v; } fld[SGX_MAX_FLD];
    unsigned label;      /* LABEL, BR */
    unsigned ip;         /* index in the linear order (liveness) */

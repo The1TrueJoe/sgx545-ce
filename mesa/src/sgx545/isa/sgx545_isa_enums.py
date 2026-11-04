@@ -11,8 +11,8 @@ import os
 import re
 import sys
 
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             '..', '..', 'compiler', 'isaspec'))
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              '..', '..', 'compiler', 'isaspec')))
 from isa import ISA
 
 # Field-value enums worth a C name. Their XML displays name the values.

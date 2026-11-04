@@ -28,36 +28,36 @@ static int
 smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
 {
    struct sgx_ins *i = s->ins;
-   struct usse_inst m;
-   usse_init(&m, s->lod == 1 ? USSE_SMP_1D_BIAS : USSE_SMP_1D);
-   usse_set(&m, USSE_F_SKIPINV, 1);
-   usse_set(&m, USSE_F_DIM, s->dim == 3 ? 2 : 1);
-   m.nops = s->lod ? 4 : 3;
-   m.op[0] = usse_reg(USSE_K_R, 0);
+   struct sgx_isa_instr m;
+   sgx_form_init(&m, SGX_OP_SMP);
+   m.skipinv = true;
+   m.dim = s->dim == 3 ? 2 : 1;
+   m.lod = s->lod == 1 ? 1 : 0;
+   m.dst = (struct sgx_isa_src){ .file = SGX_ISA_FILE_R };
    struct sgx_ref cr = i->op[1];
    unsigned cn = cr.file == SGX_F_U ? sgx_const_sa(c, cr.n) : phys(c, &cr);
    if (cr.h16 && cr.file == SGX_F_V)
       cn = sgx_vreg(c, cr.n)->phys + cr.comp / 2;
    else if (cr.h16 && cr.file != SGX_F_U)
       cn = cr.n / 2;
-   m.op[1] = usse_reg(cr.file == SGX_F_PA ? USSE_K_PA : cr.file == SGX_F_U ? USSE_K_SA : USSE_K_R, cn);
+   m.src[0] = (struct sgx_isa_src){
+      .file = cr.file == SGX_F_PA ? SGX_ISA_FILE_PA : cr.file == SGX_F_U ? SGX_ISA_FILE_SA : SGX_ISA_FILE_R,
+      .num = cn,
+   };
    if (s->f16coord)
-      usse_set(&m, USSE_F_CFMT, 1);
-   m.op[2] = usse_reg(USSE_K_IMM, 0);
+      m.cfmt = 1;
+   m.src[1] = (struct sgx_isa_src){ .file = SGX_ISA_FILE_IMM };
    if (s->lod) {
       struct sgx_ref lr = i->op[2];
-      unsigned k = lr.file == SGX_F_C ? USSE_K_C : lr.file == SGX_F_PA ? USSE_K_PA :
-                   lr.file == SGX_F_U ? USSE_K_SA : USSE_K_R;
-      unsigned n = lr.file == SGX_F_U ? sgx_const_sa(c, lr.n) : phys(c, &lr);
-      m.op[3] = usse_reg(k, n);
-      m.op[3].neg = lr.neg;
-      m.op[3].abs = lr.abs;
+      m.src[2] = (struct sgx_isa_src){
+         .file = lr.file == SGX_F_C ? SGX_ISA_FILE_C : lr.file == SGX_F_PA ? SGX_ISA_FILE_PA :
+                 lr.file == SGX_F_U ? SGX_ISA_FILE_SA : SGX_ISA_FILE_R,
+         .num = lr.file == SGX_F_U ? sgx_const_sa(c, lr.n) : phys(c, &lr),
+         .neg = lr.neg,
+         .abs = lr.abs,
+      };
    }
-   const char *err;
-   if (usse_encode(&m, USSE_FC_DEFAULT, w, &err)) {
-      sgx_fail(c, "smp template: %s", err);
-      return -1;
-   }
+   *w = sgx545_isa_encode(&m, NULL);
    return 0;
 }
 
@@ -76,7 +76,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    util_dynarray_init(&flat, NULL);
    util_dynarray_init(&blocks, NULL);
    unsigned label_at[512];
-   struct { unsigned at, label; } fix[256];
+   struct { unsigned at, label, pred; } fix[256];
    unsigned nfix = 0;
    int run = -1;                 /* the open SGX_BLOCK_CODE, or -1 */
    for (unsigned i = 0; i < 512; i++)
@@ -105,33 +105,22 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
             label_at[i->label] = at;
          break;
       case SGX_INS_BR: {
-         struct usse_inst m;
-         usse_init(&m, USSE_BR);
-         if (i->pred)
-            usse_set(&m, USSE_F_PRED, i->pred);
-         m.nops = 1;
-         m.op[0] = usse_reg(USSE_K_IMM, 0);
-         const char *err;
-         if (usse_encode(&m, USSE_FC_DEFAULT, &w, &err)) {
-            sgx_fail(c, "branch: %s", err);
-            goto fail;
-         }
          if (nfix == ARRAY_SIZE(fix)) {
             sgx_fail(c, "too many branches");
             goto fail;
          }
          block(&blocks, SGX_BLOCK_BRANCH, i->label, at, 1);
          fix[nfix].at = at;
+         fix[nfix].pred = i->pred;
          fix[nfix++].label = i->label;
-         util_dynarray_append_typed(&flat, uint64_t, w);
+         util_dynarray_append_typed(&flat, uint64_t, 0);
          out->n_flow++;
          break;
       }
       case SGX_INS_FEEDBACK: {
-         struct usse_inst m;
-         usse_init(&m, USSE_NOP);
-         const char *err;
-         usse_encode(&m, USSE_FC_DEFAULT, &w, &err);
+         struct sgx_isa_instr m;
+         sgx_form_init(&m, SGX_OP_NOP);
+         w = sgx545_isa_encode(&m, NULL);
          block(&blocks, SGX_BLOCK_FEEDBACK, 0, at, 1);
          util_dynarray_append_typed(&flat, uint64_t, w);
          break;
@@ -161,7 +150,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       }
    }
 
-   /* branch offsets: target index - this index (l0-17, signed) */
+   /* branches, now that the targets are known: target index - this index */
    uint64_t *fw = flat.data;
    for (unsigned k = 0; k < nfix; k++) {
       unsigned t = label_at[fix[k].label];
@@ -169,8 +158,11 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          sgx_fail(c, "branch to an undefined label");
          goto fail;
       }
-      int off = (int)t - (int)fix[k].at;
-      fw[fix[k].at] = (fw[fix[k].at] & ~0x3ffffull) | ((uint64_t)off & 0x3ffff);
+      struct sgx_isa_instr m;
+      sgx_form_init(&m, SGX_OP_BR);
+      m.pred = fix[k].pred;
+      m.target = (int)t - (int)fix[k].at;
+      fw[fix[k].at] = sgx545_isa_encode(&m, NULL);
    }
 
    /* PA registers: the iterations, the colour, and the DDK driver's
