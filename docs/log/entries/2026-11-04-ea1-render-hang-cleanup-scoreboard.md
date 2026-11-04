@@ -200,3 +200,32 @@ DDK on the same rig. First A/B run mis-detected the BAR0 (busybox 32-bit arithme
 overflows on 0xdc000000); fixed to read card0's resource directly, re-running now. The
 diff of ours vs DDK around each render-end and the next kick will show the DPM-state
 divergence directly, instead of more completion-timing guesses.
+
+## A/B RESULT: the DDK RESETS the DPM page counters between renders; ours accumulates
+
+regsample A/B on the EA1 (ours uk-rdv 2/10, DDK 10/10, same cold ramboot rig; data:
+docs/log/data/2026-11-04-regsample-ours.csv 24891 rows, -ddk.csv 4081 rows). The named-
+register transition streams diverge exactly where ta3d-state's parked lead said:
+- **r724 (DPM allocated-page counter): DDK reads 0x00000000 in 1309 of 4081 rows (~1/3,
+  i.e. per render); ours only 135 of 24891 -- ours sits at 0x00190019 (two 16-bit page
+  counts) the whole time.** Same for **r72c**: DDK -> 0x00000000 1309x; ours stays
+  0x00010001. And **r700**: DDK drops to 0x00000019 1210x; ours holds 0x04210019.
+  => The DDK RESETS/RELOADS the DPM allocated-page state between renders. Ours leaves it
+  ACCUMULATED, so the next process's do_ta free-list reload loads stale DPM counts and the
+  3D/BIF faults (the 0x101F do_ta race). This is the root cause the completion-timing
+  variants never touched.
+- **BIF_BANK0: DDK cycles through 37 distinct values** (0x405f, 0x607f, 0x708f, 0x90af,
+  0x809f, 0x506f, 0x102f, ...); ours uses 2 (0x1f / 0x101f). The DDK remaps the BIF
+  dir-list banks per render; ours sets them once in do_3d.
+- DPM_STATE (0x694) reads 0x0 in BOTH -- the DDK's "write 4 + wait load-done" is transient
+  (write-only / auto-clearing, below the ~3.5 us sample), but its EFFECT (the r724/r72c/
+  r700 reset above) is plainly visible.
+- EVENT side: ours spends 19856 rows at EVENT_STATUS=0 (stalled) vs the DDK at the 1 kHz
+  timer (0x20000000) with render bits layered on; EVENT_STATUS2 = 0x400 persistently on
+  the DDK, 0 on ours.
+
+NEXT SINGLE CHANGE: add the DDK's DPM state-load/reset on the kick (0x0a0b) + 3D-start
+(0x1181) path -- write 4 to 0x694/0x698 and wait for load-done -- so the DPM counters
+reset between renders instead of accumulating. Awaiting ta3d-state's exact sequence (asked)
+to implement; the A/B has already confirmed the direction. m2 has the box for its first
+powervr_sgx boot meanwhile; I take it back after for this test.
