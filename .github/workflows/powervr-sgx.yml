@@ -28,8 +28,7 @@ concurrency:
 
 env:
   LINUX_VERSION: 7.1.8
-  # The last openHC before board/ea/<model>/<board> (#135); openhc-ea-kernel.sh reads the old layout.
-  OPENHC_REF: 8834869f45fd65c0a74ad67d23e67e75959f3760
+  OPENHC_REF: main
   BOARD: ${{ inputs.board || 'ea1-v1' }}
 
 jobs:
@@ -45,7 +44,9 @@ jobs:
           repository: The1TrueJoe/openHC
           ref: ${{ env.OPENHC_REF }}
           path: openhc
-          sparse-checkout: board
+          sparse-checkout: |
+            board
+            build
 
       - name: Host tools
         run: |
