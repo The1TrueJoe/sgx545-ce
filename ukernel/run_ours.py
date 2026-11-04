@@ -89,7 +89,8 @@ def reg_writes(u):
 # EUR_CR_EVENT_STATUS bits the host-side model raises for each event
 EV_HOST_KICK = 0            # host kick = EUR_CR_EVENT_KICK doorbell: no EVENT_STATUS bit (the microkernel finds the command via the kernel CCB write != read offset)
 EV_TA_FINISHED = 0x2000
-EV_3D_END = 0x40000         # PIXELBE end of render
+EV_3D_END = 0x40000         # PIXELBE end of render (render_done sets PAGE_RELEASE_PENDING)
+EV_DPM_FREE = 0x1           # DPM 3D memory free: clears PAGE_RELEASE_PENDING (dpm_free_done)
 
 
 def event(u, mem, regs, man, status):
@@ -112,14 +113,18 @@ def run_ours(code, man, events, ctxs):
     event(u, mem, regs, man, 0)
     out = []
     kicks = [k for k in events if k.kind == "kick"]
-    for i, k in enumerate(kicks):
+    ki = 0
+    for e in events:
+        if e.kind != "kick":
+            continue                        # xfers + exit cleanups handled after this loop
+        k = e
         k.load(mem)
         # CMDTA_SHARED (ui32NumTAStatusVals and the status list) is filled by
         # the kernel at kick time; a trace snapshots memory before the ioctl,
         # so load it from a later event's snapshot, as tools/ukernel/run.py does
-        if i + 1 < len(kicks):
+        if ki + 1 < len(kicks):
             cmd = k.ccb_va + k.ccb_off - 0x58
-            d = kicks[i + 1].memory.read(cmd, 0x1E0)
+            d = kicks[ki + 1].memory.read(cmd, 0x1E0)
             if d:
                 mem.load(cmd, d)
         # the kernel CCB command the host wrote: ServiceAddress = type 0 (TA),
@@ -156,6 +161,7 @@ def run_ours(code, man, events, ctxs):
             for (op, a, v, pc) in mem.log:
                 if op == "st":
                     out.append(("done_mem", a, v))
+        ki += 1
     # transfers (SGX_SUBMITTRANSFER): a 3D-only render. Drive each through our
     # kick entry with a type-1 command (data[1] = transfer context), as the
     # host does, and collect the 3D registers k_transfer programs.
@@ -173,6 +179,33 @@ def run_ours(code, man, events, ctxs):
         mem.wr(A["ccbctl"] + 4, slot)                  # read offset
         event(u, mem, regs, man, EV_HOST_KICK)         # -> kick -> k_transfer
         out += [("XFER%d" % (i + 1), a, v) for a, v in reg_writes(u)]
+    # RESMAN exit cleanups (CMD_CLEANUP = 5), after all renders/transfers. Each must
+    # DEFER while its render's page release is still pending (render_done set
+    # PAGE_RELEASE_PENDING at pixel-done), then complete once the DPM 3D memory-free event
+    # lands and dpm_free_done clears it -- never deadlock (else the host frees the PB/RT
+    # under the free, the EA1 render fault).
+    nclean = 0
+    for e in events:
+        if e.kind != "cleanup":
+            continue
+        slot = (0x80 + nclean) & 0xFF
+        nclean += 1
+        cc = A["kccb"] + 32 * slot
+        mem.wr(cc + 0, 5)                       # CMD_CLEANUP
+        mem.wr(cc + 4 * 2, e.data[0])           # cleanup type (RC 2, TC 3, ...)
+        mem.wr(cc + 4 * 3, e.data[1])           # resource device address
+        mem.wr(A["hostctl"] + 8, 0)             # host clears CleanupStatus before the send
+        mem.wr(A["ccbctl"] + 0, slot + 1)
+        mem.wr(A["ccbctl"] + 4, slot)
+        event(u, mem, regs, man, EV_HOST_KICK)  # -> k_cleanup (page release may be pending)
+        deferred = not (mem.rd(A["hostctl"] + 8) & 0x1)
+        event(u, mem, regs, man, EV_DPM_FREE)   # pages returned -> dpm_free_done clears the flag
+        mem.wr(A["ccbctl"] + 0, slot + 1)
+        mem.wr(A["ccbctl"] + 4, slot)
+        event(u, mem, regs, man, EV_HOST_KICK)  # -> k_cleanup again -> completes
+        completed = bool(mem.rd(A["hostctl"] + 8) & 0x1)
+        print("  cleanup type=%d res=%#x: deferred-while-releasing=%s completed=%s  %s"
+              % (e.data[0], e.data[1], deferred, completed, "OK" if completed else "DEADLOCK"))
     return out
 
 
@@ -252,7 +285,7 @@ def main():
     a = ap.parse_args()
     code, man = ours()
     ctxs = []
-    events = fromtrace.kicks(a.trace, ctxs)
+    events = fromtrace.kicks(a.trace, ctxs, cleanups=True)
     out = run_ours(code, man, events, ctxs)
     # ours, grouped by phase: {phase: {reg: value}} over struct-sourced registers
     ours_ph = {}
