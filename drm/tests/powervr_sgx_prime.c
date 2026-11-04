@@ -19,10 +19,10 @@
  *   explicit  wait for the job's syncobj, then DIRTYFB;
  *   implicit  DIRTYFB at once: the KMS commit must wait for the job's fence in
  *             the shared dma_resv;
- *   control   no BO list, DIRTYFB at once (not counted): the scanout may well
- *             be stale, which shows the implicit frames' check can fail, and an
- *             imported buffer's CPU view too, since the kernel flushes only the
- *             imports a job lists.
+ *   control   no BO list, DIRTYFB at once: the scanout may well be stale (not
+ *             counted), which shows the implicit frames' check can fail. The
+ *             buffer itself must still be right: the kernel flushes every
+ *             import mapped in the VM, listed or not.
  *
  * The explicit and implicit frames list the buffer as written.
  *
@@ -388,7 +388,7 @@ int main(int argc, char **argv)
 			       map[(size_t)(h / 2) * stride + w / 2], gpu_bad, gpu_poison,
 			       !k.scanout ? "not checked" : out_bad + out_poison ? "WRONG" : "right",
 			       out_bad, out_poison);
-			if (mode != 2 && (gpu_bad || out_bad || out_poison))
+			if (gpu_bad || (mode != 2 && (out_bad || out_poison)))
 				bad_frames++;
 			if (hold_ms)
 				usleep(hold_ms * 1000);
