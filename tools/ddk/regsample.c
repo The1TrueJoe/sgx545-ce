@@ -23,16 +23,24 @@
 #include <sys/stat.h>
 
 // NAMED registers only (offsets from ukernel.py / sgx545defs.h). No sweep.
+// The second group is the 3D-START page-release setup (ta3d-state 2026-11-04): the drain
+// is automatic, so ours leaving r724 un-drained means the 3D was armed with the wrong
+// pages at 3D start. These capture what do_3d's load_3d_state writes (0x600/0x604/0x64c/
+// 0x660 dealloc) + the release-arm (0x63c=3) + the TA counters feeding save_ta_state, so
+// the A/B can diff ours vs the DDK's runtime 3D-start values on HW.
 static const struct { const char *name; unsigned off; } REGS[] = {
     {"EVENT_STATUS",  0x12C},   // EUR_CR_EVENT_STATUS
     {"EVENT_STATUS2", 0x118},   // EUR_CR_EVENT_STATUS2
-    {"CLKGATESTATUS", 0x008},
-    {"r700",          0x700},   // DPM readback (of 0x61c)
-    {"r724",          0x724},   // DPM counter
-    {"r728",          0x728},
-    {"r72c",          0x72C},
+    {"r700",          0x700},   // DPM readback (of 0x61c); TA page counter
+    {"r710",          0x710},   // TA page counter (feeds save_ta_state)
+    {"r724",          0x724},   // DPM counter (the one that drains in the DDK, not ours)
+    {"r72c",          0x72C},   // DPM counter
     {"r740",          0x740},   // DPM slot-1 free readback
-    {"DPM_STATE",     0x694},   // EUR_CR_DPM_STATE (named, directly the DPM race)
+    {"dealloc600",    0x600},   // 3D free-list / dealloc base (load_3d_state)
+    {"dealloc604",    0x604},   // 3D dealloc = pb+0x18 (CR0x700)
+    {"arm63c",        0x63C},   // release-arm (ours writes 3 via D3_CONST)
+    {"dealloc64c",    0x64C},   // 3D dealloc = pb+0x1c
+    {"dealloc660",    0x660},   // 3D dealloc = pb+0x20 | pb+0x24<<16
     {"DPM_3D_FL",     0x680},   // 3D free-list load selector readback
     {"BIF_BANK0",     0xC78},   // EUR_CR_BIF_BANK0
 };
