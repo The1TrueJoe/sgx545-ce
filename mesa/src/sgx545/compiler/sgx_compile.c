@@ -551,6 +551,17 @@ same_vreg_reg(const struct sgx_ref *a, const struct sgx_ref *b)
           (a->h16 ? a->comp / 2 : a->comp) == (b->h16 ? b->comp / 2 : b->comp);
 }
 
+/* two F16 halves of one register */
+static bool
+same_reg16(const struct sgx_ref *a, const struct sgx_ref *b)
+{
+   if (!a->h16 || !b->h16 || a->file != b->file || a->lane || b->lane)
+      return false;
+   if (a->file == SGX_F_V)
+      return a->n == b->n && a->comp / 2 == b->comp / 2;
+   return (a->file == SGX_F_PA || a->file == SGX_F_R) && a->n / 2 == b->n / 2;
+}
+
 static void emit_runs_raw(struct sgx_ctx *c, unsigned form, unsigned wmask, struct sgx_ref dst[4],
                           unsigned nsrc, struct sgx_ref src[][4], const struct fieldset *fs, uint8_t pred);
 
@@ -3405,22 +3416,33 @@ emit_color(struct sgx_ctx *c)
             col[k].h16 = 1;
          }
       }
-      bool first = reads_pa0(&col[0]) || reads_pa0(&col[3]);
-      bool second = reads_pa0(&col[2]) || reads_pa0(&col[1]);
+      /* (g, r) [dmask=6] and (b, a) [dmask=9] when r, g share a register and
+       * b, a another (a vec4 as it is): each pck reads one register, so the
+       * first one's may become the colour (libusc's mul_m) */
+      bool rg = same_reg16(&col[0], &col[1]) && same_reg16(&col[2], &col[3]);
+      struct sgx_ref pr[2][2] = { { col[0], col[3] }, { col[2], col[1] } };
+      unsigned dm[2] = { 12, 3 };
+      if (rg) {
+         pr[0][0] = col[1]; pr[0][1] = col[0];
+         pr[1][0] = col[2]; pr[1][1] = col[3];
+         dm[0] = 6; dm[1] = 9;
+      }
+      bool first = reads_pa0(&pr[0][0]) || reads_pa0(&pr[0][1]);
+      bool second = reads_pa0(&pr[1][0]) || reads_pa0(&pr[1][1]);
       unsigned d = second && first ? MAX2(c->n_pa_inputs, 1) : 0;
       bool swap = second && !first;
       c->colour_pa = d;
       for (unsigned hh = 0; hh < 2; hh++) {
-         bool ra = (hh == 0) != swap;
+         unsigned q = (hh == 0) != swap ? 0 : 1;
          struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_U8_F16);
          p->nops = 3;
          p->op[0] = ref(SGX_F_PA, d);
-         p->op[1] = ra ? col[0] : col[2];
-         p->op[2] = ra ? col[3] : col[1];
+         p->op[1] = pr[q][0];
+         p->op[2] = pr[q][1];
          for (unsigned j = 1; j < 3; j++)
             if (p->op[j].file == SGX_F_C)
                p->op[j].lane = 0;
-         fld(p, SGX_FLD_DMASK, ra ? 12 : 3);
+         fld(p, SGX_FLD_DMASK, dm[q]);
          fld(p, SGX_FLD_SCALE, 1);
          add(c, p);
       }
@@ -3965,29 +3987,48 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
    }
    /* each component's own last use (a 32-bit vreg's register k is free
     * once component k is: the colour's first pck reads .x, its second .z) */
-   int *lastc = malloc(nv * 16 * sizeof(int));
-   for (unsigned v = 0; v < nv * 16; v++)
+   int *lastc = malloc(nv * 16 * sizeof(int)), *firstc = malloc(nv * 16 * sizeof(int));
+   bool *odd = calloc(nv, sizeof(bool));
+   for (unsigned v = 0; v < nv * 16; v++) {
       lastc[v] = -1;
+      firstc[v] = INT_MAX;
+   }
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       for (unsigned k = 0; k < i->nops; k++) {
          const struct sgx_ref *r = &i->op[k];
-         if (r->file != SGX_F_V || r->n >= nv || r->h16)
+         if (r->file != SGX_F_V || r->n >= nv)
             continue;
+         bool half = sgx_vreg(c, r->n)->half;
+         if (r->h16 != half) {
+            odd[r->n] = true;
+            continue;
+         }
+         /* (an F16 vreg by register: a repeat steps a register at a time) */
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
-         int at = 2 * i->ip + (k < i->ndst);
-         for (unsigned j = r->comp; j < r->comp + n && j < 16; j++)
+         unsigned first = half ? r->comp / 2 : r->comp;
+         bool early = i->rpt > 1 || i->kind == SGX_INS_SAMPLE ||
+                      (i->kind == SGX_INS_ALU && (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
+         int at = 2 * i->ip + (k < i->ndst && !early);
+         for (unsigned j = first; j < first + n && j < 16; j++) {
             lastc[r->n * 16 + j] = MAX2(lastc[r->n * 16 + j], at);
+            firstc[r->n * 16 + j] = MIN2(firstc[r->n * 16 + j], at);
+         }
       }
    }
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
-      int m = -1;
-      for (unsigned j = 0; j < 16; j++)
+      int m = -1, f = INT_MAX;
+      for (unsigned j = 0; j < 16; j++) {
          m = MAX2(m, lastc[v * 16 + j]);
+         f = MIN2(f, firstc[v * 16 + j]);
+      }
       /* (a loop keeps it all: the allocator's range) */
-      if (r->half || r->size > 16 || m < r->last)
-         for (unsigned j = 0; j < 16; j++)
+      if ((r->half ? (r->size + 1) / 2 : r->size) > 16 || m < r->last || f > r->first || odd[v]) {
+         for (unsigned j = 0; j < 16; j++) {
             lastc[v * 16 + j] = r->last;
+            firstc[v * 16 + j] = r->first;
+         }
+      }
    }
    for (unsigned v = 0; v < nv; v++) {
       struct sgx_vreg *r = sgx_vreg(c, v);
@@ -3999,15 +4040,17 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       for (unsigned b = 0; b + regs <= MIN2(npa, lim); b++) {
          bool free = true;
          for (unsigned p = b; p < b + regs && free; p++) {
-            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
-            for (unsigned x = lo; x <= h && x < end && free; x++)
+            unsigned l = MIN2(MAX2(firstc[v * 16 + p - b], (int)lo), (int)hi);
+            unsigned h = (unsigned)MAX2(lastc[v * 16 + p - b], (int)l);
+            for (unsigned x = l; x <= h && x < end && free; x++)
                free = !BITSET_TEST(BUSY(p), x) || ((int)b == inplace[v] && x == lo);
          }
          if (!free)
             continue;
          for (unsigned p = b; p < b + regs; p++) {
-            unsigned h = r->half ? hi : (unsigned)MAX2(lastc[v * 16 + p - b], (int)lo);
-            BITSET_SET_RANGE(BUSY(p), lo, MIN2(h, end - 1));
+            unsigned l = MIN2(MAX2(firstc[v * 16 + p - b], (int)lo), (int)hi);
+            unsigned h = (unsigned)MAX2(lastc[v * 16 + p - b], (int)l);
+            BITSET_SET_RANGE(BUSY(p), l, MIN2(h, end - 1));
          }
          r->pa = true;
          r->phys = b;
@@ -4016,6 +4059,8 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
    }
    free(inplace);
    free(lastc);
+   free(firstc);
+   free(odd);
 #undef BUSY
 }
 

@@ -633,56 +633,83 @@ seed16(nir_builder *b, nir_def *d)
    nir_def_rewrite_uses_after(d, w);
 }
 
+static bool
+low_prec(unsigned p)
+{
+   return p == GLSL_PRECISION_MEDIUM || p == GLSL_PRECISION_LOW;
+}
+
+/* the precision a texel has: its sampler's */
+static unsigned
+tex_prec(nir_tex_instr *t)
+{
+   int i = nir_tex_instr_src_index(t, nir_tex_src_texture_deref);
+   if (i < 0)
+      return 0;
+   nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(t->src[i].src));
+   return v ? v->data.precision : 0;
+}
+
+/* all: fs_mediump, every input, texel and uniform no coordinate needs (and
+ * their variables become mediump); otherwise those the program declares
+ * mediump or lowp. Ops whose operands are all F16 then run in F16: GLSL ES
+ * gives an operation its operands' highest precision. */
 static void
-fs_mediump(struct sgx_ctx *c)
+mediump_fs(struct sgx_ctx *c, bool all)
 {
    nir_shader *s = c->nir;
    nir_function_impl *impl = nir_shader_get_entrypoint(s);
    nir_builder b = nir_builder_create(impl);
-   /* inputs: a variable none of whose loads is a coordinate is mediump */
    struct set *coord = _mesa_pointer_set_create(c);
-   nir_foreach_block(blk, impl) {
-      nir_foreach_instr(instr, blk) {
-         if (instr->type != nir_instr_type_intrinsic)
-            continue;
-         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
-         if (in->intrinsic == nir_intrinsic_load_deref) {
-            nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
-            if (v && v->data.mode == nir_var_shader_in && feeds_coord(&in->def, 0))
-               _mesa_set_add(coord, v);
+   if (all) {
+      /* inputs: a variable none of whose loads is a coordinate is mediump */
+      nir_foreach_block(blk, impl) {
+         nir_foreach_instr(instr, blk) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            if (in->intrinsic == nir_intrinsic_load_deref) {
+               nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
+               if (v && v->data.mode == nir_var_shader_in && feeds_coord(&in->def, 0))
+                  _mesa_set_add(coord, v);
+            }
          }
       }
+      nir_foreach_shader_in_variable(var, s)
+         if (var->data.location >= VARYING_SLOT_VAR0 && !_mesa_set_search(coord, var))
+            var->data.precision = GLSL_PRECISION_MEDIUM;
+      nir_foreach_variable_with_modes(var, s, nir_var_uniform)
+         if (!glsl_type_is_sampler(glsl_without_array(var->type)))
+            var->data.precision = GLSL_PRECISION_MEDIUM;
    }
-   nir_foreach_shader_in_variable(var, s)
-      if (var->data.location >= VARYING_SLOT_VAR0 && !_mesa_set_search(coord, var))
-         var->data.precision = GLSL_PRECISION_MEDIUM;
-   nir_foreach_variable_with_modes(var, s, nir_var_uniform)
-      if (!glsl_type_is_sampler(glsl_without_array(var->type)))
-         var->data.precision = GLSL_PRECISION_MEDIUM;
-   /* seeds: those loads, the texels, the uniforms */
    nir_foreach_block(blk, impl) {
       nir_foreach_instr_safe(instr, blk) {
          nir_def *d = NULL;
          if (instr->type == nir_instr_type_tex) {
             nir_tex_instr *t = nir_instr_as_tex(instr);
-            if (t->op == nir_texop_tex || t->op == nir_texop_txb || t->op == nir_texop_txl)
+            if ((t->op == nir_texop_tex || t->op == nir_texop_txb || t->op == nir_texop_txl) &&
+                (all || low_prec(tex_prec(t))))
                d = &t->def;
          } else if (instr->type == nir_instr_type_intrinsic) {
             nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
             if (in->intrinsic == nir_intrinsic_load_deref) {
                nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
-               if (v && ((v->data.mode == nir_var_shader_in && v->data.location >= VARYING_SLOT_VAR0 &&
-                          !_mesa_set_search(coord, v)) ||
-                         v->data.mode == nir_var_uniform))
+               if (v && v->data.mode == nir_var_shader_in && v->data.location >= VARYING_SLOT_VAR0 &&
+                   (all ? !_mesa_set_search(coord, v) : low_prec(v->data.precision)))
+                  d = &in->def;
+               else if (v && v->data.mode == nir_var_uniform && (all || low_prec(v->data.precision)))
                   d = &in->def;
             } else if ((in->intrinsic == nir_intrinsic_load_interpolated_input ||
-                        in->intrinsic == nir_intrinsic_load_input) && !feeds_coord(&in->def, 0) &&
+                        in->intrinsic == nir_intrinsic_load_input) &&
                        nir_intrinsic_io_semantics(in).location >= VARYING_SLOT_VAR0) {
                nir_io_semantics sem = nir_intrinsic_io_semantics(in);
-               sem.medium_precision = 1;
-               nir_intrinsic_set_io_semantics(in, sem);
-               d = &in->def;
-            } else if (in->intrinsic == nir_intrinsic_load_uniform) {
+               if (all && !feeds_coord(&in->def, 0)) {
+                  sem.medium_precision = 1;
+                  nir_intrinsic_set_io_semantics(in, sem);
+               }
+               if (sem.medium_precision)
+                  d = &in->def;
+            } else if (in->intrinsic == nir_intrinsic_load_uniform && all) {
                d = &in->def;
             }
          }
@@ -1489,8 +1516,8 @@ sgx_lower(struct sgx_ctx *c)
 
    s->options = &options;
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr, nir_metadata_control_flow, NULL);
-   if (c->p16 && c->opts->fs_mediump && s->info.stage == MESA_SHADER_FRAGMENT)
-      fs_mediump(c);
+   if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT)
+      mediump_fs(c, c->opts->fs_mediump);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(s), nir_var_shader_out);
    NIR_PASS(_, s, nir_lower_global_vars_to_local);
