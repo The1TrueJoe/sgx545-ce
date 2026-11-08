@@ -10,7 +10,8 @@
 # KERNDIR is m2-drm's powervr-sgx-cedarview artifact (bzImage, modroot/, the
 # static uAPI tests). FIRMWARE, when given, is an OPEN microkernel image
 # (sgx545-openhc-ukernel.bin): never Intel's. Needs mmdebstrap,
-# squashfs-tools, dosfstools, grub-pc-bin, grub-efi-amd64-bin, grub-efi-ia32-bin.
+# squashfs-tools, dosfstools, grub-pc-bin, grub-efi-amd64-bin, grub-efi-ia32-bin,
+# debian-archive-keyring.
 set -eu
 K=$(realpath "$1") OUT=$(realpath -m "$2") VER=$3 FW=${4:-}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,6 +23,7 @@ mkdir -p "$OUT"
 
 # the root: Debian bookworm, only what the run needs
 mmdebstrap --variant=minbase --architectures=amd64 \
+	--keyring=/usr/share/keyrings/debian-archive-keyring.gpg \
 	--include=kmod,pciutils,usbutils,util-linux,procps,bash,tar,gzip,less \
 	--dpkgopt='path-exclude=/usr/share/doc/*' --dpkgopt='path-exclude=/usr/share/man/*' \
 	--dpkgopt='path-exclude=/usr/share/info/*' --dpkgopt='path-exclude=/usr/share/locale/*' \
