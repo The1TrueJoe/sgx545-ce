@@ -37,7 +37,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache dpkg-dev fakeroot rsync kmod debhelper
+            build-essential bc bison flex libelf-dev libdw-dev libssl-dev cpio ccache dpkg-dev fakeroot rsync kmod debhelper
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
