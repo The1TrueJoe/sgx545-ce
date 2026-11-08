@@ -10,6 +10,8 @@ on:
     paths:
       - mesa/**
       - drm/powervr_sgx/include/uapi/**
+      - drm/tools/mkukfw.py
+      - ukernel/**
       - docs/uapi/**
       - tools/gen/**
       - .github/workflows/mesa-debian.yml
@@ -43,6 +45,17 @@ jobs:
           set -eux
           SGX_MESA_BUILD=$PWD/build/mesa sh mesa/build.sh debian
 
+      - name: The firmware (the open microkernel, secure mode)
+        run: |
+          set -eux
+          v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          mkdir -p fw
+          python3 ukernel/build.py fw/uk.bin fw/uk.json
+          python3 drm/tools/mkukfw.py fw/uk.bin -o sgx545_ukernel.bin --manifest fw/uk.json \
+            --core-rev 0 --build-id "ukernel-$v"
+          python3 drm/tools/mkukfw.py --check sgx545_ukernel.bin | tee fw/check.txt
+          grep -q 'features 0x2' fw/check.txt
+
       - name: Package
         run: |
           set -eux
@@ -62,5 +75,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: mesa-sgx-trixie
-          path: mesa-sgx-trixie-*.tar.gz*
+          path: |
+            mesa-sgx-trixie-*.tar.gz*
+            sgx545_ukernel.bin
           retention-days: 90
