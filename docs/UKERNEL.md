@@ -720,7 +720,7 @@ DPM_OUT_OF_MEMORY_* fires at a threshold, while 0x22 pages are still free.
 for MT and GBL) reach pc 0x0ad1. It acks `EVENT_HOST_CLEAR` = 0x6 (MT and
 GBL together) and records which one fired in a sa8 flag. It then runs 0x0b50
 (the same entry from pds4 at 0x0af0). Run in the emulator with an injected
-event (`oom.py` in the ta3d-state workspace), it does this:
+event (`tools/ukernel/run.py`'s `Runner.event`), it does this:
 
 1. `rtdata` +0xc += 1 (an out-of-memory count), the RT data entry's state
    word (+0x34) |= 0x80, TA3D +0xdc = 0;
@@ -781,7 +781,7 @@ they accomplish. Offsets are from `sgx545defs.h` where it names them.
 ### The register map
 
 The core registers the microkernel and a kernel driver use, from
-`sgx545defs.h` (the GPL kernel's SGX545 header), with what the EA boxes show.
+`sgx545defs.h` (the GPL kernel's SGX545 header), with what a CE5300 shows.
 
 | reg | name | fields |
 |---|---|---|

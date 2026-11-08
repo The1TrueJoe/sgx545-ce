@@ -1,11 +1,11 @@
 # SGX545 textures, render targets, uploads and presentation
 
 What a GL client needs beyond one flat-shaded triangle, as the Cedarview DDK
-1.7 does it on the EA3 (CE5300, SGX545 rev 1.0.14): where texels live in
+1.7 does it on the CE5300 (SGX545 rev 1.0.14): where texels live in
 memory, how they get there, how a render lands in a texture, how depth and
 stencil survive between renders, and how a frame reaches the display.
 
-Tags as in `docs/STATE.md`: **[C]** replay-confirmed on the EA3, **[D]**
+Tags as in `docs/STATE.md`: **[C]** replay-confirmed on a CE5300 board, **[D]**
 diff of captures or read from the DDK code that writes it, **[G]** guess.
 
 ## Tools
@@ -111,7 +111,7 @@ texture. Then libGLESv2 allocates the texture in the texture heap
   texture all zero; the one before kick 1 shows it filled.
 
 (The Mac-side DDK copy's `powervr.ini` says `DisableHWTextureUpload=1`; the
-box evidently does not read that file. The cut-over between 256 and 4096
+board evidently does not read that file. The cut-over between 256 and 4096
 texels was not narrowed down.) Either way the bytes are the same, so a
 client that twiddles on the CPU with `tex.py` never needs the transfer.
 
@@ -223,7 +223,7 @@ written twiddled with dither:
 | RGBA5551 | 0x2604 | 4 | 0x04 |
 | RGBA4444 | 0x2605 | 5 | 0x02 (texels come out ARGB4444, as uploads are stored) |
 
-**Replayed natively on the EA3:** the replay's own FBO render (the texture
+**Replayed natively on a CE5300 board:** the replay's own FBO render (the texture
 kept out of every delta, `--no-delta`) leaves the texture byte-identical to
 the DDK's, and the window frame and its swap to the fb0 wrap match the DDK's
 readback, 0 of 345600 pixels. **Authored:** with the FBO's clear colour
@@ -269,7 +269,7 @@ how the stall was located: `0x2d00303c` counts TA kicks, `0x2d003030` and
   buffers of section 3. `libpvr` now has `pvr_register_transfer_ctx` and
   `pvr_submit_transfer`; `replay` has `regxfer` / `xfer`.
 
-Proven on the EA3, each read back from the real `/dev/fb0` with `head -c`
+Proven on a CE5300 board, each read back from the real `/dev/fb0` with `head -c`
 after the replay:
 
 | run | what | result |
@@ -317,7 +317,7 @@ STATE.md had +0x30/+0x34 as depth/stencil store and +0x38/+0x3c as
 depth/stencil load; the code writes the depth address into both of the first
 pair and the stencil address into both of the second.
 
-**Store, proven on the EA3** [C]. Replaying `fbd` natively (control: 0 of
+**Store, proven on a CE5300 board** [C]. Replaying `fbd` natively (control: 0 of
 345600 pixels off the DDK's frame) with the FBO's ZLS control set to
 `0x0017101c` (the DDK's FBO word plus b2, b12, b16, b17: the window path's
 bits) makes the 3D store the FBO's depth: after the frame the depth buffer
@@ -333,7 +333,7 @@ runs on the re-entry render, with the store on:
 | + b14 (`0x0017501c`, the DDK's "re-entry" bit) | stored, **not loaded**: red still covers green |
 | + b13 or + b15 | no visible change |
 | + b19 | the stored depths are negated (`bf400000`): a format bit |
-| + b0 or + b1, stencil words left at the DDK's `c1b00000` | **3D lockup**; once the recovery failed (`SGXInitialise failed (24)`) and the EA3 had to be power-cycled |
+| + b0 or + b1, stencil words left at the DDK's `c1b00000` | **3D lockup**; once the recovery failed (`SGXInitialise failed (24)`) and the board had to be power-cycled |
 | + b0 (`0x0017501d`), stencil words +0x38/+0x3c = `00081000` (valid memory) | no lockup; a **depth-only render**: the re-entry triangle's depth is stored (0.75 in 3306 texels) but no colour is written. Still no load |
 
 The packed depth-stencil FBO (`fbds`, DEPTH24_STENCIL8) gets ZLS control
@@ -372,7 +372,7 @@ So faces are packed when level 0 is smaller than one 16×16 tile and aligned
 otherwise. Every texel of all four captures sits where `check.py --cube
 --face-stride` predicts (384, 510, 2046 and 8190 texels).
 
-**The alignment is 0x800 bytes in every format** [D] (EA1, 2026-11-02:
+**The alignment is 0x800 bytes in every format** [D] (2026-11-02:
 probe cubes with full chains and NEAREST_MIPMAP_NEAREST, the DDK's texture
 buffer divided by six):
 
@@ -396,7 +396,7 @@ linear face (T1 layout 3, a buffer of one face's bytes at the 8-texel pitch)
 and fails every NPOT cube test in dEQP-GLES2; layout 2 has no NPOT form that
 we know of.
 
-## 9. What is proven on the EA3, pixel for pixel
+## 9. What is proven on hardware, pixel for pixel
 
 | claim | run | result |
 |---|---|---|
@@ -464,7 +464,7 @@ Two traps:
 **The texture coordinates.** The background object is the triangle (0,0),
 (W,0), (0,H) over the whole destination. Block words 3-8 are the texture
 coordinates (u, v) at those three vertices, and the 3D interpolates them; a
-sweep of each word on the EA3 fits u = w3·(1-s-t) + w5·s + w7·t exactly (and
+sweep of each word on a CE5300 board fits u = w3·(1-s-t) + w5·s + w7·t exactly (and
 the same for v). The DDK always writes (0,0), (1,0), (0,1); words 18, 20 and
 21 hold the vertices themselves, in a fixed-point form not decoded further.
 A sub-rectangle copy (`sgxtex_blit_build_rect`) does three things:
@@ -486,7 +486,7 @@ rectangle of a twiddled texture takes three blits:
 
 `sgxtex_blit_build_rect` refuses the single-blit case (returns −1).
 
-**Proven on the EA3** (`blitest`, `check_blit.py`): every destination byte is
+**Proven on a CE5300 board** (`blitest`, `check_blit.py`): every destination byte is
 predicted, with no SGX recovery in any run.
 
 | case | what | result |
@@ -548,7 +548,7 @@ BAR 0xdfb00000) has the i9xx layout:
 
 That status is where an i9xx pipe keeps its vblank bit (b1, write 1 to
 clear). Two cautions for anyone continuing:
-- A read-only scan of the whole 1 MB BAR hung the EA3 outright, with no ping
+- A read-only scan of the whole 1 MB BAR hung the board outright, with no ping
   and a power cycle needed: holes in this window are not safe to read. Read
   only known registers.
 - A few minutes after the cycle the whole VDC block started reading 0,
