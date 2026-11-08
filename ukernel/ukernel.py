@@ -139,6 +139,17 @@ SC_TAFLIGHT = 0x36   # control block +0xd8: 1 while a TA is in flight. Serialise
                      # pattern). Without it a fast host (EA3 p1) delivers kick 2
                      # while TA 1 runs, re-kicking the TA mid-run (lockup_TA) and
                      # making ta_finished act on the wrong command (ta3d-state race).
+PB_TA_LOADED = 0x2e  # control block +0xb8 (the DDK's loaded-PB marker, ta3d+0xb8): the PB
+                     # descriptor whose TA free list is currently loaded (0 = none). do_ta
+                     # loads the TA free list ONLY when the kick's PB differs -- the DDK loads
+                     # once per PB and lets the hardware keep the ring in sync (ta3d-state
+                     # 2026-11-08). Reloading every frame re-seeds the head from pb+0x18 (last
+                     # frame's snapshot), skipping the ~25 pages the 3D freed -> DPM_OUT_OF_MEM
+                     # at ~frame 40 (uapi-stream M1 exit). Reset at init (post-HWR the HW DPM is
+                     # wiped) and at cleanup (so a same-address PB realloc reloads).
+PB_3D_LOADED = 0x2f  # control block +0xbc (the DDK's ta3d+0xbc): the PB whose 3D free list +
+                     # save_ta_state are loaded. do_3d gates those on it the same way; 0x63c=3
+                     # and the ISP/PBE state (D3_RD) still run every 3D start.
 SC_VERSION = 0x18    # control block +0x60: openHC microkernel version, written
                      # at init. Advisory (the DDK driver does not read it); an
                      # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
@@ -647,6 +658,8 @@ def build(a):
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r0 [moe]")      # cleanup defer counter clear
     a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
+    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r0 [moe]")         # no PB free list loaded yet: an HWR
+    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r0 [moe]")         # wiped the HW DPM, so force a reload
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
     # at init/RESUME (pc 0x01f9). A periodic timer task keeps the EDM running
     # (EDMTaskReg0 0xb14 moves), so the host watchdog (SGXOSTimer: 30 ms of no
@@ -863,7 +876,9 @@ def build(a):
     a.label("k_cleanup_complete")
     a.i("limm r4, #0")
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r4 [moe]")   # reset the defer counter
-    a.i("idf")
+    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r4 [moe]")       # a cleaned-up PB may be freed and a new
+    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r4 [moe]")       # one reallocated at the same address: force
+    a.i("idf")                                          # a reload (the DDK clears these on cleanup)
     a.i("wdf")
     a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
@@ -1160,8 +1175,21 @@ def build(a):
     # (the DDK skips them, ddk-ref "TA kick 2").
     a.i("test.and.eq p0, r13, r13")             # render kick? skip PB + free list
     a.i("(p0) ba skip_pb_fl")
+    # Load the TA free list only when the PB changed. The DDK loads it ONCE PER PB and
+    # lets the hardware keep the free-list ring in sync; we reloaded on every scene's
+    # first kick, which re-seeds the head from pb+0x18 (last frame's saved 0x700) and
+    # skips the ~25 pages the 3D freed, exhausting the PB at ~frame 40 (DPM_OUT_OF_MEM_MT;
+    # uapi-stream M1 exit 2026-11-08, ta3d-state decode). PB_TA_LOADED is the DDK's own
+    # ta3d+0xb8 marker; init and cleanup reset it so an HWR or a same-address realloc reloads.
+    a.i(f"ld.a.d r5, r17, #{PB_TA_LOADED} [moe]")
+    a.i("wdf")
+    a.i("test.xor.eq p0, r5, r11")              # same PB already loaded -> skip the reload
+    a.i("(p0) ba skip_pb_fl")
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
+    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r11 [moe]")   # remember the loaded PB
+    a.i("idf")
+    a.i("wdf")
     if DPM_LOG:                                 # point A: 0x700 after the free-list load (kick 1)
         a.i(f"ldr r5, #{0x700 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x35, 5)
     a.label("skip_pb_fl")
@@ -1411,6 +1439,13 @@ def build(a):
     # allocated-page counters (EUR_CR 0x700/0x710/0x724/0x72c) go through the PB
     # descriptor into the 3D's free/dealloc registers (0x604/0x64c/0x660), so the
     # 3D frees the right pages; do_3d wrote only 0x600 before.
+    # Load the 3D free list + save_ta_state only when the PB changed (the per-PB rule, same
+    # as the TA side: the DDK loads once per PB and the HW keeps the ring in sync). When it
+    # is unchanged, 0x63c=3 and the ISP/PBE state (D3_CONST/D3_RD) below still run every 3D.
+    a.i(f"ld.a.d r4, r17, #{PB_3D_LOADED} [moe]")
+    a.i("wdf")
+    a.i("test.xor.eq p0, r4, r11")                    # same PB already loaded -> skip
+    a.i("(p0) ba skip_3d_fl")
     # save_ta_state: stash the TA page counters in the PB descriptor, shifted.
     a.i(f"ldr r4, #{0x700 // 4}")
     a.i(f"ldr r5, #{0x710 // 4}")
@@ -1443,6 +1478,10 @@ def build(a):
     a.i("or r6, r6, r7")                              # pb+0x20 | (pb+0x24 << 16)
     a.i(f"str #{0x660 // 4}, r6")                     # 0x660
     a.dpm_freelist(5, CR_DPM_3D_FL, 0x2)             # 0x664=5, 0x680=1, wait: load the 3D free list
+    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r11 [moe]")   # remember the loaded PB
+    a.i("idf")
+    a.i("wdf")
+    a.label("skip_3d_fl")
     a.consts(D3_CONST)
     a.program(10, D3_RD)
     # D (ta3d-state): 3D flags. 0xa74's 3D field (b22-26) = the render details'
