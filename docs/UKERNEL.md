@@ -131,7 +131,7 @@ EDM breakpoints, no `FIX_HW_BRN_28889`, no extended perf counters):
 | 12 | `ui32TimeWraps` | microkernel |
 | 13 | `ui32HostClock`: the host's clock in µs, written at start | host |
 | 14 | `ui32AssertFail` | microkernel |
-| 15 | `ui32PerfGroup` | host |
+| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_OPENHC_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
 | 16 | `ui32BRN31939Mem` (present because the build is for core revision 1013, which carries `FIX_HW_BRN_31939`; the host never touches it). The open microkernel reuses the word for its cleanup v2 sequence echo (section 3) | microkernel |
 | 17 | `ui32OpenCLDelayCount` | |
 
@@ -812,6 +812,12 @@ access to client memory:
 In all four DDK microkernel traces (one-, two- and four-frame runs) only two
 windows run. 0x128b runs at every 3D start. 0x0941 runs once, on the first
 kick of a new PB.
+
+The open microkernel opens none of these windows: its EDM stays on list 15.
+Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
+`do_3d`), and with `HOSTCTL_OPENHC_HOST_BGBLOCK` set the host writes that
+block instead. Everything else the EDM reads or writes is in kernel code,
+kernel data or the sync heap, all mapped in the kernel PD.
 
 The background-block write at 3D start (pc 0x128d-0x1296; `docs/STATE.md`
 §6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
