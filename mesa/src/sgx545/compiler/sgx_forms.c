@@ -78,7 +78,7 @@ static const struct sgx_form_info {
    [SGX_OP_MOVC_I32] = { "MOVC_I32", SGX_ISA_OPC_MOVC_I32, 4, { D, S0, S1, S2 } },
    PCK(F16, F32), PCK(F16, F16), PCK(F16, U8), PCK(F16, C10), PCK(F32, F16),
    PCK(F32, U8), PCK(U8, F32), PCK(U8, F16), PCK(S16, F32), PCK(C10, F32),
-   PCK(C10, C10),
+   PCK(C10, C10), PCK(F32, S16),
    [SGX_OP_TEST] = { "TEST", SGX_ISA_OPC_TEST, 3, { PD, S1T, S2T } },
    [SGX_OP_TESTMASK] = { "TESTMASK", SGX_ISA_OPC_TESTMASK, 3, { D, S1T, S2T } },
    [SGX_OP_AND] = { "AND", SGX_ISA_OPC_AND, 3, { D, S1, S2 } },
