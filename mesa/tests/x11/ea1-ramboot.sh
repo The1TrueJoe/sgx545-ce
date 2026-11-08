@@ -4,7 +4,7 @@
 #
 # From the host: RAM-boot a powervr_sgx test kernel (an m2-drm CI artifact
 # powervr-sgx-ea1-v1) on the EA1 and load its modules. Hold
-# ~/.cache/sgx545/locks/ea1.lock first.
+# ~/Documents/GitHub/sgx545-work/locks/ea1.lock first.
 #
 #   ea1-ramboot.sh KERNDIR [ddk|open]
 #
@@ -17,7 +17,7 @@ set -e
 K=$1 FW=${2:-ddk}
 here=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$here/../../.." && pwd)
-BOX=${BOX:-10.0.0.110}
+BOX=${BOX:?the address of the EA1 (DHCP moves it: 10.0.0.110, then 10.0.0.115)}
 E() { sshpass -p openhc ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no \
 	-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$BOX "$@"; }
 retry() { for i in 1 2 3 4 5; do "$@" && return 0; sleep 3; done; return 1; }
