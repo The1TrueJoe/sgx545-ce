@@ -1060,8 +1060,8 @@ def build(a):
         # dpm_load clear while A's scene is open but A's 3D has not started, so SC_INFLIGHT is
         # still 0 — my earlier SC_INFLIGHT check missed it). Flag 0x3a when a first kick's RT
         # differs from the already-open one. Both words are inside the devcd dump (<=0x3a).
-        a.i("test.and.eq p0, r13, r13")             # not a first kick -> skip
-        a.i("(p0) ba rtlog_done")
+        a.i("test.and.ne p0, r13, r13")             # first kick (r13 != 0)?
+        a.i("(!p0) ba rtlog_clear")                 # terminate (r13 == 0) -> this scene closes
         a.i(f"ld.a.d r5, r9, #{CMDTA_RTENTRY} [moe]")   # this kick's RT-data entry (cmd+0x44)
         a.i("ld.a.d r6, r17, #0x37 [moe]")          # OPEN_RT: the open scene's RT (0 = none open)
         a.i("wdf")
@@ -1073,6 +1073,11 @@ def build(a):
         a.i("(p0) ba rtlog_done")
         a.i("limm r6, #0x1217")
         a.st_sa(SA_SELF, 0x3a, 6)                   # a first kick opened a 2nd scene on a diff RT
+        a.i("ba rtlog_done")
+        a.label("rtlog_clear")                      # terminate kick: the scene's TA closes, so a
+        a.i("limm r5, #0")                          # serialized next scene isn't a false interleave
+        a.i("st.a.d r17, #0x37, r5 [moe]")          # (this write is in the TA phase, not the
+        a.i("idf"); a.i("wdf")                      # render-teardown the oracle diffs)
         a.label("rtlog_done")
     if WAIT_LOG:
         # stage marker: RESET to 1 only on the FIRST kick of a scene (r13!=0), so
@@ -1691,10 +1696,6 @@ def build(a):
     # Walk the render's HW device sync list, set each destination's write-ops-complete
     # to pending+1 (docs/UKERNEL.md §5), tear the render down, and interrupt the host.
     a.label("render_complete")
-    if RT_LOG:
-        a.i("limm r0, #0")                    # a scene closed -> clear OPEN_RT so the next
-        a.i("st.a.d r17, #0x37, r0 [moe]")    # first kick on a fresh scene isn't a false interleave
-        a.i("idf"); a.i("wdf")
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
