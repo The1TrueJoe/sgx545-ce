@@ -1885,6 +1885,45 @@ front_face(struct sgx_ctx *c, struct sgx_val *v, nir_def *def)
    v->comp = 0;
 }
 
+/* A vertex attribute in a raw format (opts.vtx_fmt): the components the
+ * shader reads, unpacked from PA[4i] into f32; those the format lacks are
+ * 0, 0, 1 */
+static void
+vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
+{
+   unsigned base = r & ~3, nc = in->def.num_components;
+   unsigned held = fmt == SGX_VF_F32_1 ? 1 : fmt == SGX_VF_F32_2 || fmt == SGX_VF_SSCALED16_2 ? 2 :
+                   fmt == SGX_VF_F32_3 ? 3 : 4;
+   nir_component_mask_t rd = nir_def_components_read(&in->def);
+   unsigned t = fmt >= SGX_VF_UNORM8_4 ? new_vreg(c, nc) : 0;
+   struct sgx_ref x[4];
+   for (unsigned k = 0; k < nc; k++) {
+      unsigned comp = (r & 3) + k;
+      if (comp >= held) {
+         x[k] = ref(SGX_F_K, comp == 3 ? 0x3f800000 : 0);
+         continue;
+      }
+      if (fmt < SGX_VF_UNORM8_4) {
+         x[k] = ref(SGX_F_PA, base + comp);
+         continue;
+      }
+      x[k] = vref(t, k);
+      if (!(rd >> k & 1))
+         continue;
+      /* pck.f32.u8 [scale] takes byte n (/255), pck.f32.s16 half n / 2 */
+      struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, fmt == SGX_VF_UNORM8_4 ? SGX_OP_PCK_F32_U8 : SGX_OP_PCK_F32_S16);
+      p->nops = 3;
+      p->op[0] = vref(t, k);
+      p->op[1] = ref(SGX_F_PA, base);
+      p->op[1].lane = fmt == SGX_VF_UNORM8_4 ? comp : 2 * comp;
+      p->op[2] = ref(SGX_F_IMM, 0);
+      if (fmt == SGX_VF_UNORM8_4)
+         fld(p, SGX_FLD_SCALE, 1);
+      emit(c, p);
+   }
+   set_refs(c, &in->def, x, nc);
+}
+
 static void
 emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
 {
@@ -2087,6 +2126,10 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
             r = -1;
       if (r < 0) {
          sgx_fail(c, "input %u.%u has no register", slot, nir_intrinsic_component(in));
+         return;
+      }
+      if (c->stage == MESA_SHADER_VERTEX && r / 4 < ARRAY_SIZE(c->opts->vtx_fmt) && c->opts->vtx_fmt[r / 4]) {
+         vtx_unpack(c, in, r, c->opts->vtx_fmt[r / 4]);
          return;
       }
       v->kind = VAL_PA;
@@ -3654,6 +3697,43 @@ fold_movs(struct sgx_ctx *c)
    }
 }
 
+/* the register file and number a plain register operand ends up in, after
+ * allocation; false for anything else */
+static bool
+reg_of(const struct sgx_ctx *c, const struct sgx_ref *r, unsigned *file, unsigned *n)
+{
+   if (r->neg || r->abs || r->h16 || r->lane || r->c10)
+      return false;
+   switch (r->file) {
+   case SGX_F_V: {
+      const struct sgx_vreg *v = sgx_vreg((struct sgx_ctx *)c, r->n);
+      *file = v->pa ? SGX_F_PA : v->o ? SGX_F_O : SGX_F_R;
+      *n = v->phys + r->comp;
+      return true;
+   }
+   case SGX_F_R: case SGX_F_PA: case SGX_F_O:
+      *file = r->file;
+      *n = r->n;
+      return true;
+   default:
+      return false;
+   }
+}
+
+/* a mov whose source and destination landed in the same registers (a value
+ * placed where its output goes) */
+static void
+drop_self_moves(struct sgx_ctx *c)
+{
+   list_for_each_entry_safe(struct sgx_ins, i, &c->ins, link) {
+      unsigned fd, nd, fs, ns;
+      if (i->kind == SGX_INS_ALU && i->form == SGX_OP_MOV && !i->pred && i->nops == 2 && !i->nfld &&
+          (i->rpt == 1 || (i->op[0].step && i->op[1].step)) &&
+          reg_of(c, &i->op[0], &fd, &nd) && reg_of(c, &i->op[1], &fs, &ns) && fd == fs && nd == ns)
+         list_del(&i->link);
+   }
+}
+
 /* ------------------------------------------------------------------------
  * helper instances
  *
@@ -4888,6 +4968,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       mark_helpers(c);
    if (!c->failed)
       allocate(c);
+   if (!c->failed)
+      drop_self_moves(c);
    if (!c->failed) {
       uniform_layout(c);
       ret = sgx_finish_program(c, out);
