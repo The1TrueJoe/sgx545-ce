@@ -540,6 +540,13 @@ The patch table holds `{ u32 offset, u32 value }` pairs. Each one names an
 
 Host-kick table: identity. The `ServiceAddress` of a command is its type.
 
+Host control word 15 (+0x3c) carries flags for the open microkernel only. The driver
+never sets it for the DDK image.
+
+| bit | meaning |
+|---|---|
+| 0 | the host has already written the background object's three PDS words (secondary, middle, primary, at the RT entry's background block +0x00/+0x04/+0x08) for every render; skip the 3D start's copy and its EDM-on-the-job's-directory window |
+
 The driver refuses a file whose sizes or offsets run past its end, whose CRC
 doesn't match, whose interface major it doesn't know, or that sets an unknown
 feature bit or table value.
@@ -777,6 +784,65 @@ compiled only with `FIX_HW_BRN_23944`, which the SGX545 errata don't define.
 
 These are the fixed `EUR_CR_*` sequences the handlers perform, named by what
 they accomplish. Offsets are from `sgx545defs.h` where it names them.
+
+### SGX545 core revisions: 1.0.13 (Cedarview) and 1.0.14 (CE5300)
+
+Both cores report `CORE_ID` 0x0115. `CORE_REVISION` reads 0x0001000d (1.0.13)
+on Cedarview and 0x0001000e (1.0.14) on the CE5300. What differs, from the
+GPL kernel headers and the DDK microkernel:
+
+**Errata.** The kernel's errata table (`sgxerrata.h`) lists four SGX545
+builds:
+
+| `SGX_CORE_REV` | errata |
+|---|---|
+| 1013 | `FIX_HW_BRN_31939`, `FIX_HW_BRN_SAMPLE_CACHE` |
+| 10131 | `FIX_HW_BRN_SAMPLE_CACHE` |
+| 1014 | `FIX_HW_BRN_SAMPLE_CACHE` |
+| 10141 | `FIX_HW_BRN_SAMPLE_CACHE` |
+
+- `CORE_REVISION` can't tell 1013 from 10131: both read 1.0.13. Cedarview
+  drivers were built as 10131.
+- **No `SGX_FEATURE_*` is keyed on the revision** (`sgxfeaturedefs.h`), so
+  the two cores have the same features, ISA and state words.
+
+**`FIX_HW_BRN_SAMPLE_CACHE` applies to every revision listed.** It adds a
+separate texture heap at a high address (`SGX_TEXTURE_HEAP_ID` 14,
+`SGX_TEXTURE_HEAP_BASE_REV1`; the 0xf0000000 heap in this document's
+captures). The heap id is part of the user/kernel ABI.
+
+Intel's Cedarview kernel made the workaround a runtime choice by probing
+the host bridge's revision, since some Cedarview parts don't need it. That
+probe is not in this tree, so which Cedarview steppings are exempt is a gap.
+Using the separate texture heap on all of them is always safe.
+
+**`FIX_HW_BRN_31939` (build 1013 only) is a firmware TA watchdog.**
+1. It adds host-control word 16 (`ui32BRN31939Mem`, §1).
+2. The DDK microkernel, which is built with the workaround, sets that word
+   to 500 at the kick of a TA whose TA flags have b12 (0x1000) set (pc
+   0x0ac8). It clears it at that TA's finish (pc 0x06b3).
+3. Every lockup sample (each `ui32HWRecoverySampleRate` ticks) it counts the
+   word down (pc 0x04b0). At 0 it runs the lockup check (pc 0x02d3),
+   about 5 s after the kick.
+4. No client in any capture sets TA flags b12, so the watchdog never runs.
+
+**The microkernel does not branch on the revision.** The DDK microkernel
+reads `CORE_REVISION` and `CORE_ID` only to report them in GETMISCINFO
+(words 1-2, pc 0x0174). It reports its own build constants in words 5-6:
+`ui32CoreIdSW` 545 and `ui32CoreRevSW` 0x1000d. So it is a 1.0.13 build,
+and the DDK kernel accepts it on a 1.0.14 core only through a
+revision-exception pair (`sgxinit.c`, 0x1000e/0x1000d).
+
+**What a driver and an open microkernel need for 1.0.13:**
+- one core-table entry covering revisions 0x1000d and 0x1000e;
+- the same heaps, the texture heap included;
+- the same host-control layout;
+- nothing revision-specific in the microkernel. An open microkernel that
+  doesn't implement the BRN 31939 watchdog loses nothing while no client
+  sets TA flags b12.
+
+[D, from the kernel headers and the DDK microkernel's code. The Cedarview
+side is not yet run on hardware.]
 
 ### The register map
 

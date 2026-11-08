@@ -17,7 +17,7 @@
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
-#include "pvrsgx_regs.h"
+#include "pvrsgx_hw.h"
 
 /* Device-wide ranges for kernel-owned objects (docs/UAPI.md section 5). */
 enum pvrsgx_krange {
@@ -30,6 +30,8 @@ enum pvrsgx_krange {
 };
 
 struct firmware;
+struct pvrsgx_core_info;
+struct gma500_sgx_device;
 struct pci_dev;
 struct pvrsgx_mmu;
 struct pvrsgx_vm;
@@ -62,10 +64,7 @@ enum pvrsgx_fw_buf {
 	PVRSGX_FW_KICKER,	/* EUR_CR_EVENT_KICKER target */
 	PVRSGX_FW_TA3DCTL,	/* the microkernel's control block */
 	PVRSGX_FW_HOSTCTL,	/* host control block */
-	PVRSGX_FW_MISC,		/* misc info, filled by GETMISCINFO */
-	PVRSGX_FW_HWPERF,	/* HWPerf circular buffer */
-	PVRSGX_FW_TASIG,	/* TA signature register list */
-	PVRSGX_FW_3DSIG,	/* 3D signature register list */
+	PVRSGX_FW_MISC,		/* misc info the microkernel may fill */
 	PVRSGX_FW_UKERNEL,	/* USSE microkernel */
 	PVRSGX_FW_PDS0,		/* PDS programs that enter it */
 	PVRSGX_FW_PDS1,
@@ -87,14 +86,10 @@ struct pvrsgx_fw {
 	u32 addr[PVRSGX_FW_NBUF];
 	/** @cpu: CPU address of each buffer. */
 	void *cpu[PVRSGX_FW_NBUF];
-	/** @host_kick: Microkernel entry of each SGXMKIF command type. */
-	u32 host_kick[11];
 	/** @cache_control: Invalidates to request with the next command. */
 	u32 cache_control;
 	/** @interface: DRM_POWERVR_SGX_FW_IF_*. */
 	u32 interface;
-	/** @ddk: The DDK's microkernel, which runs under the job's directory. */
-	bool ddk;
 	/** @name: Firmware file the image came from. */
 	const char *name;
 	/** @image: The microkernel as loaded, for restarts. */
@@ -111,10 +106,6 @@ struct pvrsgx_fw {
 	u32 (*patches)[2];
 	/** @n_patches: Entries in @patches. */
 	u32 n_patches;
-	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
-	u32 ddk_version;
-	/** @ddk_build: Build number it reports with it. */
-	u32 ddk_build;
 };
 
 /**
@@ -123,14 +114,20 @@ struct pvrsgx_fw {
 struct pvrsgx_device {
 	/** @base: The DRM device. */
 	struct drm_device base;
-	/** @pdev: The SGX PCI function. */
+	/** @pdev: The SGX PCI function (CE5300), or NULL behind gma500 (Cedarview). */
 	struct pci_dev *pdev;
+	/** @gma_sgx: The gma500 auxiliary device behind which the SGX sits, or NULL. */
+	struct gma500_sgx_device *gma_sgx;
+	/** @irq_work: The interrupt's bottom half behind gma500, which owns the line. */
+	struct work_struct irq_work;
 
 	/** @regs: The core registers (BAR 0). */
 	void __iomem *regs;
 	/** @irq: Its interrupt. */
 	int irq;
 
+	/** @core: What the driver knows about this core. */
+	const struct pvrsgx_core_info *core;
 	/** @core_id: SGX_CR_CORE_ID. */
 	u32 core_id;
 	/** @core_rev: SGX_CR_CORE_REVISION. */
@@ -162,10 +159,6 @@ struct pvrsgx_device {
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
 
-	/** @cleanup_lock: One cleanup command in flight (one status bit). */
-	struct mutex cleanup_lock;
-	/** @cleanup_seq: Sequence number of the last cleanup v2 command. */
-	u32 cleanup_seq;
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
 	/** @ccb_spin: Keeps @ccb_issued and the write offset in step for readers. */
@@ -206,15 +199,6 @@ struct pvrsgx_device {
 	/** @reap_work: Frees @graveyard entries a later render made safe. */
 	struct work_struct reap_work;
 
-	/** @last_lock: Protects @last_rtds and @last_cmd_off. */
-	struct mutex last_lock;
-	/** @last_rtds: RT dataset of the last render job, for debugfs. */
-	struct pvrsgx_rt_dataset *last_rtds;
-	/** @last_cmd_off: Its command's offset in the render context CCB. */
-	u32 last_cmd_off;
-	/** @render_snap: Text dump taken as a last kick was written (debugfs). */
-	char *render_snap;
-
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
 };
@@ -250,24 +234,12 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 	iowrite32(val, sdev->regs + reg);
 }
 
-struct pvrsgx_krange_span {
-	u32 start, end;
-};
-
-extern const struct pvrsgx_krange_span pvrsgx_kernel_heaps[3];
-
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_fini(struct pvrsgx_device *sdev);
-int pvrsgx_power_get(struct pvrsgx_device *sdev);
-void pvrsgx_power_put(struct pvrsgx_device *sdev, u32 n);
-void pvrsgx_power_init(struct pvrsgx_device *sdev);
-void pvrsgx_power_fini(struct pvrsgx_device *sdev);
-int pvrsgx_runtime_suspend(struct device *dev);
-int pvrsgx_runtime_resume(struct device *dev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);

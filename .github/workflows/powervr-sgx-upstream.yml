@@ -1,0 +1,130 @@
+# powervr_sgx as upstream would build it: mainline with the gma500 patch and
+# the driver in tree, through the checkers a DRM reviewer runs.
+# docs/UPSTREAM-READINESS.md lists what this covers.
+name: powervr-sgx-upstream
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [m2-drm]
+    paths:
+      - drm/powervr_sgx/**
+      - drm/gma500/**
+      - drm/ci/cedarview*
+      - drm/tools/gen_regs.py
+      - docs/uapi/**
+      - .github/workflows/powervr-sgx-upstream.yml
+
+concurrency:
+  group: powervr-sgx-upstream-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LINUX_VERSION: 7.1.8
+  SMATCH_REF: master
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev ccache sparse clang lld llvm \
+            coccinelle gcc-multilib libsqlite3-dev libdbd-sqlite3-perl libtry-tiny-perl
+
+      - name: Restore the kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.LINUX_VERSION }}.tar.xz
+          key: linux-${{ env.LINUX_VERSION }}
+
+      - name: Generated register header is current
+        run: |
+          python3 drm/tools/gen_regs.py kernel/src/services4/srvkm/hwdefs/sgx545defs.h |
+            diff -u drm/powervr_sgx/pvrsgx_regs.h -
+
+      - name: uAPI header, one layout on i386 and x86_64
+        run: |
+          set -eux
+          [ -f linux-$LINUX_VERSION.tar.xz ] ||
+            curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
+          tar xf linux-$LINUX_VERSION.tar.xz
+          L=linux-$LINUX_VERSION
+          make -C $L ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr >/dev/null
+          cmp drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h docs/uapi/powervr_sgx_drm.h
+          # As docs/uapi/check.sh: the kernel's headers as system headers, our header checked.
+          W="-std=c11 -Wall -Wextra -Wpedantic -Werror -Wpadded"
+          I="-isystem hdr/include -isystem hdr/include/drm -I docs/uapi"
+          for t in i386-linux-gnu x86_64-linux-gnu; do
+            clang --target=$t $W $I -c docs/uapi/check_layout.c -o /dev/null
+          done
+          # The asserts must catch a misplaced __u64.
+          ! clang --target=i386-linux-gnu $W $I -DCHECK_NEGATIVE \
+            -c docs/uapi/check_layout.c -o /dev/null 2>/dev/null
+
+      - name: Lay out mainline with the driver and gma500 patch in tree
+        run: |
+          set -eux
+          sh drm/ci/cedarview-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+          L=linux-$LINUX_VERSION
+          ./$L/scripts/config --file $L/.config -e DRM_POWERVR_SGX_KUNIT_TEST -e KUNIT
+          make -C $L ARCH=x86_64 olddefconfig
+          make -C $L ARCH=x86_64 -j"$(nproc)" prepare
+
+      - name: gcc W=1, sparse
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          D="drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/"
+          make -C $L ARCH=x86_64 -j"$(nproc)" W=1 $D 2>&1 | tee gcc.log
+          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' gcc.log
+          make -C $L ARCH=x86_64 -j"$(nproc)" C=2 $D 2>&1 | tee sparse.log
+          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' sparse.log
+
+      - name: smatch
+        run: |
+          set -eux
+          git clone -q --depth 1 -b $SMATCH_REF https://repo.or.cz/smatch.git smatch
+          make -C smatch -j"$(nproc)" >/dev/null
+          L=linux-$LINUX_VERSION
+          make -C $L ARCH=x86_64 -j"$(nproc)" C=2 CHECK="$PWD/smatch/smatch -p=kernel" \
+            drivers/gpu/drm/powervr_sgx/ 2>&1 | tee smatch.log
+          ! grep -E 'powervr_sgx/.*(warn|error):' smatch.log
+
+      - name: coccinelle
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          make -C $L ARCH=x86_64 coccicheck MODE=report M=drivers/gpu/drm/powervr_sgx 2>&1 | tee cocci.log
+          ! grep -E '^(\./)?drivers/gpu/drm/powervr_sgx/' cocci.log
+
+      - name: clang W=1
+        run: |
+          set -eux
+          # A copy of the laid-out tree: O= needs a clean source tree.
+          C=linux-clang
+          cp -a linux-$LINUX_VERSION $C
+          make -C $C ARCH=x86_64 LLVM=1 olddefconfig >/dev/null
+          make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" prepare >/dev/null
+          make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 \
+            drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/ 2>&1 | tee clang.log
+          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' clang.log
+
+      - name: checkpatch --strict and kernel-doc
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          perl $L/scripts/checkpatch.pl --strict --no-tree --terse -f \
+            $(ls drm/powervr_sgx/*.[ch] | grep -v _trace.h) drm/powervr_sgx/tests/*.c \
+            drm/powervr_sgx/include/uapi/drm/*.h | tee checkpatch.log
+          ! grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log
+          python3 $L/scripts/kernel-doc -none -Wall -Werror \
+            drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h drm/powervr_sgx/pvrsgx_*.[ch]

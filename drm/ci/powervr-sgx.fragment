@@ -1,4 +1,4 @@
-# The openHC EA real kernel with powervr_sgx in place of the vendor driver.
+# The CE5300 board kernel with powervr_sgx in place of the vendor driver.
 # RAM-boot test kernel only: never flash it.
 CONFIG_LOCALVERSION="-m2drm"
 CONFIG_MODULES=y
@@ -6,6 +6,8 @@ CONFIG_MODULE_UNLOAD=y
 CONFIG_DRM=y
 # CONFIG_SGX545_CE is not set
 CONFIG_DRM_POWERVR_SGX=m
+# The vendor microkernel for A/B runs; the upstream build leaves it out.
+CONFIG_DRM_POWERVR_SGX_DDK_COMPAT=y
 CONFIG_DEBUG_FS=y
 CONFIG_FW_LOADER=y
 # simpledrm in place of simplefb on the CEFDK framebuffer: a KMS device for

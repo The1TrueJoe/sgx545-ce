@@ -11,6 +11,7 @@
 #include <linux/types.h>
 
 #include "pvrsgx_render.h"
+#include "pvrsgx_transfer.h"
 
 struct drm_device;
 struct drm_file;
@@ -62,6 +63,8 @@ struct pvrsgx_job {
 
 	/** @hw_fence: Signalled when the firmware has finished the job. */
 	struct dma_fence *hw_fence;
+	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initialises it. */
+	struct dma_fence *hw_fence_mem;
 	/** @ccb_seq: Kernel CCB command that carries the job. */
 	u64 ccb_seq;
 	/** @node: In pvrsgx_device.active while on the GPU. */
@@ -97,6 +100,7 @@ struct pvrsgx_job {
 int pvrsgx_job_init(struct pvrsgx_device *sdev);
 void pvrsgx_job_fini(struct pvrsgx_device *sdev);
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev);
+bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev);
 void pvrsgx_context_destroy_all(struct pvrsgx_file *sfile);
 struct pvrsgx_context *pvrsgx_context_lookup(struct pvrsgx_file *sfile, u32 handle);
 void pvrsgx_context_put(struct pvrsgx_context *ctx);

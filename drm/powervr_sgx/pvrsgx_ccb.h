@@ -8,28 +8,22 @@
 
 struct pvrsgx_device;
 
-/* SGXMKIF command types (UKERNEL.md section 3). */
+/* Kernel CCB command types (docs/UKERNEL.md section 3). */
 enum pvrsgx_cmd {
 	PVRSGX_CMD_TA = 0,
 	PVRSGX_CMD_TRANSFER = 1,
-	PVRSGX_CMD_2D = 2,
 	PVRSGX_CMD_POWER = 3,
-	PVRSGX_CMD_CONTEXTSUSPEND = 4,
-	PVRSGX_CMD_CLEANUP = 5,
-	PVRSGX_CMD_GETMISCINFO = 6,
 	PVRSGX_CMD_PROCESS_QUEUES = 7,
-	PVRSGX_CMD_SETHWPERFSTATUS = 9,
-	PVRSGX_CMD_FLUSHPDCACHE = 10,
 	PVRSGX_CMD_MAX = 11
 };
 
-/* ui32CacheControl: invalidates the microkernel runs before the command. */
+/* Cache control: invalidates the microkernel runs before the command. */
 #define PVRSGX_CC_INVAL_BIF_PT	0x1
 #define PVRSGX_CC_INVAL_BIF_PD	0x2
 #define PVRSGX_CC_INVAL_BIF_SL	0x4
 #define PVRSGX_CC_INVAL_DATA	0x8
 
-/* SGXMKIF_COMMAND: service address, cache control, six data words. */
+/* A kernel CCB command: entry, cache control, six data words. */
 #define PVRSGX_CCB_SLOTS	256
 #define PVRSGX_CCB_CMD_WORDS	8
 

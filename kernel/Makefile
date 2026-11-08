@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 #
-# Out-of-tree build for iteration. openHC builds this in-tree as obj-y via the
-# Buildroot package in buildroot/ -- see README.md.
+# Out-of-tree build for iteration. A distribution can build this in-tree as
+# obj-y via the Buildroot package in buildroot/ -- see README.md.
 #
 #   make                         build against $(KERNELDIR)
 #   make KERNELDIR=/path/to/src  build against a specific kernel tree

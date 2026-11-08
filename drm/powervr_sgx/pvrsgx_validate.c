@@ -25,6 +25,7 @@
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
+#include "pvrsgx_core.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_gem.h"
 #include "pvrsgx_validate.h"
@@ -45,6 +46,14 @@ struct pvrsgx_usse_form {
 
 #include "pvrsgx_usse_table.h"
 
+/* The forms of each instruction set (pvrsgx_core.h). */
+static const struct {
+	const struct pvrsgx_usse_form *forms;
+	u32 n;
+} isas[] = {
+	[PVRSGX_ISA_SGX545] = { pvrsgx_usse_forms, ARRAY_SIZE(pvrsgx_usse_forms) },
+};
+
 /* br's target: l0-17, signed, in instructions from the branch. */
 #define USSE_BR_OFFSET		GENMASK_ULL(17, 0)
 
@@ -53,15 +62,17 @@ struct pvrsgx_usse_form {
  * of obj_insts instructions. Returns the index (from w) of the first bad one,
  * or -1. Linear in n, no allocation.
  */
-static s64 usse_scan(const u64 *w, u32 n, u32 first, u32 obj_insts)
+static s64 usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 obj_insts)
 {
+	const struct pvrsgx_usse_form *forms = isas[isa].forms;
+
 	for (u32 i = 0; i < n; i++) {
 		const struct pvrsgx_usse_form *f = NULL;
 		s64 target;
 
-		for (u32 k = 0; k < ARRAY_SIZE(pvrsgx_usse_forms); k++) {
-			if ((w[i] & pvrsgx_usse_forms[k].mask) == pvrsgx_usse_forms[k].match) {
-				f = &pvrsgx_usse_forms[k];
+		for (u32 k = 0; k < isas[isa].n; k++) {
+			if ((w[i] & forms[k].mask) == forms[k].match) {
+				f = &forms[k];
 				break;
 			}
 		}
@@ -113,6 +124,7 @@ int pvrsgx_validate_job(struct pvrsgx_device *sdev, struct pvrsgx_job *job)
 int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_upload_code_args *args = data;
+	struct pvrsgx_device *sdev = to_pvrsgx_device(drm);
 	struct drm_gem_object *obj;
 	struct pvrsgx_bo *bo;
 	struct iosys_map map;
@@ -143,7 +155,7 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 		err = -EFAULT;
 		goto out_buf;
 	}
-	bad = usse_scan(buf, args->size / 8, args->offset / 8, obj->size / 8);
+	bad = usse_scan(sdev->core->isa, buf, args->size / 8, args->offset / 8, obj->size / 8);
 	if (bad >= 0) {
 		args->bad_offset = args->offset + bad * 8;
 		err = -EINVAL;

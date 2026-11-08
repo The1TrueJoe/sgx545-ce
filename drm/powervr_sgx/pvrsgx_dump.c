@@ -42,9 +42,9 @@ static const struct {
 	{ "BIF_FAULT", SGX_CR_BIF_FAULT },
 	{ "BIF_BANK0", SGX_CR_BIF_BANK0 },
 	{ "BIF_DIR_LIST_BASE0", SGX_CR_BIF_DIR_LIST_BASE0 },
-	{ "BIF_DIR_LIST_BASE15", SGX_CR_BIF_DIR_LIST_BASE15 },
-	{ "EDM_TASK_REG0", 0xb14 },
-	{ "EDM_TASK_REG1", 0xb20 },
+	{ "BIF_DIR_LIST_BASE15", SGX_CR_BIF_DIR_LIST_BASE1 + 4 * (SGX_BIF_DIRLIST_EDM - 1) },
+	{ "EDM_TASK_REG0", SGX_CR_EDM_TASK_REG0 },
+	{ "EDM_TASK_REG1", SGX_CR_EDM_TASK_REG1 },
 };
 
 void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
@@ -57,10 +57,9 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
 		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu), pvrsgx_mmu_pd_addr(sdev->idle_mmu));
 	seq_buf_printf(sb, "ccb wo %u ro %u issued %llu consumed %llu\n", READ_ONCE(ctl[0]),
 		       READ_ONCE(ctl[1]), sdev->ccb_issued, pvrsgx_ccb_consumed(sdev));
-	seq_buf_printf(sb, "hostctl init 0x%x power 0x%x cleanup 0x%x uk-lockups %u ",
+	seq_buf_printf(sb, "hostctl init 0x%x power 0x%x uk-lockups %u ",
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INIT_STATUS),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_POWER_STATUS),
-		       pvrsgx_fw_hostctl(sdev, HOSTCTL_CLEANUP_STATUS),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
 	seq_buf_printf(sb, "int 0x%x/0x%x assert 0x%x\n",
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS),
@@ -91,7 +90,8 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	struct seq_buf sb;
 	char *buf;
 
-	buf = __vmalloc(COREDUMP_BYTES, GFP_KERNEL | __GFP_NOWARN | __GFP_NORETRY);
+	/* The timeout handler signals fences: no reclaim, so a dump can be lost but never waits. */
+	buf = __vmalloc(COREDUMP_BYTES, GFP_NOWAIT | __GFP_NOWARN);
 	if (!buf)
 		return;
 	seq_buf_init(&sb, buf, COREDUMP_BYTES);
@@ -106,5 +106,5 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	pvrsgx_job_dump(&sb, bad);
 	if (seq_buf_has_overflowed(&sb))
 		drm_warn(&sdev->base, "coredump truncated\n");
-	dev_coredumpv(sdev->base.dev, buf, seq_buf_used(&sb), GFP_KERNEL);
+	dev_coredumpv(sdev->base.dev, buf, seq_buf_used(&sb), GFP_NOWAIT);
 }

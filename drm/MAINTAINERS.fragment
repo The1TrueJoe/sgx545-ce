@@ -1,4 +1,4 @@
-DRM DRIVER FOR POWERVR SGX545
+DRM DRIVER FOR POWERVR SGX5XX
 M:	Joseph Telaak <joseph@telaak.dev>
 L:	dri-devel@lists.freedesktop.org
 S:	Maintained

@@ -1,8 +1,6 @@
 # Kernel options the SGX545 driver needs.
 #
-# If you are integrating into openHC, this is mirrored at
-# board/ea-common/linux/sgx.fragment and selected by the `sgx` feature; see
-# README.md.
+# A distribution can merge it into its kernel config; see README.md.
 
 # Userspace finds the GPU through libdrm's drmOpen(), so a DRM node has to
 # exist -- the stock Control4 system's /dev/dri/card0 is that node, not a KMS

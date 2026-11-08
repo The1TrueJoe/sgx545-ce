@@ -56,4 +56,13 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o);
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done);
 
+struct seq_buf;
+struct pvrsgx_vm;
+
+int pvrsgx_kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst,
+		    enum pvrsgx_krange range, u32 size, u32 min, struct pvrsgx_vm *vm);
+void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o);
+void pvrsgx_kobj_dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off,
+		      u32 bytes);
+
 #endif /* PVRSGX_KOBJ_H */

@@ -25,8 +25,8 @@ RUN wget -q "https://cdn.kernel.org/pub/linux/kernel/v${KVER%%.*}.x/linux-${KVER
 ENV ARCH=i386 CROSS_COMPILE=i686-linux-gnu-
 
 # A minimal i386 config that still carries everything the driver touches: PCI,
-# PAT/MTRR write-combining, procfs, DRM and loadable modules. openHC itself
-# builds the driver in-tree with CONFIG_MODULES=n, but iterating on a module
+# PAT/MTRR write-combining, procfs, DRM and loadable modules. A distribution
+# may build the driver in-tree with CONFIG_MODULES=n, but iterating on a module
 # is much faster and exercises the identical compile path.
 RUN cd linux \
  && make -s ARCH=i386 CROSS_COMPILE=i686-linux-gnu- tinyconfig \

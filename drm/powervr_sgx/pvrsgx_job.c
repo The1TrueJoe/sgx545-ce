@@ -11,7 +11,6 @@
  */
 
 #include <drm/drm_auth.h>
-#include <drm/drm_cache.h>
 #include <drm/drm_exec.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
@@ -22,6 +21,7 @@
 #include <linux/capability.h>
 #include <linux/dma-fence-chain.h>
 #include <linux/dma-resv.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -29,10 +29,12 @@
 
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
+#include "pvrsgx_pm.h"
 #include "pvrsgx_drv.h"
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
+#include "pvrsgx_prime.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_trace.h"
 #include "pvrsgx_validate.h"
@@ -41,7 +43,9 @@
 #define PVRSGX_MAX_JOBS		64
 #define PVRSGX_MAX_SYNC_OPS	64
 #define PVRSGX_MAX_BO_REFS	256
-#define PVRSGX_JOB_TIMEOUT_MS	2000
+static unsigned int job_timeout_ms = 2000;
+module_param(job_timeout_ms, uint, 0444);
+MODULE_PARM_DESC(job_timeout_ms, "How long a job may run before the GPU is reset (default 2000 ms)");
 
 static struct pvrsgx_job *to_pvrsgx_job(struct drm_sched_job *sched_job)
 {
@@ -90,39 +94,21 @@ static bool job_done(struct pvrsgx_job *job, u64 consumed)
 	return job->ccb_seq <= consumed;
 }
 
+/* Whether the oldest job on the GPU is done; for the hard IRQ handler. */
+bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_job *job;
+	unsigned long flags;
+	bool done;
+
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	job = list_first_entry_or_null(&sdev->active, struct pvrsgx_job, node);
+	done = job && job_done(job, pvrsgx_ccb_consumed(sdev));
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	return done;
+}
+
 /* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
-/*
- * The GPU's accesses don't snoop the CPU caches (log 2026-11-04-0100). Our own
- * objects are write-combined on the CPU; an import may be cached, so flush
- * every import mapped in the job's VM before it runs (no dirty line lands on
- * its output later) and after (no stale line hides it). Which of them the job
- * touches is not known: a BO list is optional, and explicit sync names none.
- */
-static void job_flush_imports(struct pvrsgx_job *job, bool after)
-{
-	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
-
-	for (u32 i = 0; i < job->nimports; i++) {
-		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);
-
-		if (shmem->sgt) {
-			drm_clflush_sg(shmem->sgt);
-			bytes += shmem->base.size;
-		}
-	}
-	if (job->nimports)
-		trace_pvrsgx_flush_imports(job->hw_fence ? job->hw_fence->seqno : 0,
-					   job->nimports, bytes,
-					   t0 ? ktime_get_ns() - t0 : 0, after);
-}
-
-static void job_put_imports(struct pvrsgx_job *job)
-{
-	for (u32 i = 0; i < job->nimports; i++)
-		drm_gem_object_put(job->imports[i]);
-	kfree(job->imports);
-}
-
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_job *job, *tmp;
@@ -150,7 +136,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 
 	list_for_each_entry(job, &finished, node)
-		job_flush_imports(job, true);
+		pvrsgx_prime_flush(job, true);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &finished, node) {
 		list_del_init(&job->node);
@@ -199,10 +185,13 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 
 	if (sched_job->s_fence->finished.error)
 		return NULL;
+	/* A reset context's queued jobs build on work that never finished. */
+	if (READ_ONCE(job->ctx->state) != DRM_POWERVR_SGX_CONTEXT_STATE_OK)
+		return ERR_PTR(-ECANCELED);
 
-	fence = kzalloc_obj(*fence);
-	if (!fence)
-		return ERR_PTR(-ENOMEM);
+	/* Allocated at submit: nothing here may wait for memory (dma-fence signalling). */
+	fence = job->hw_fence_mem;
+	job->hw_fence_mem = NULL;
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	dma_fence_init(fence, &pvrsgx_fence_ops, &sdev->fence_lock, sdev->fence_context,
 		       ++sdev->fence_seqno);
@@ -220,7 +209,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		return fence;
 	}
 
-	job_flush_imports(job, false);
+	pvrsgx_prime_flush(job, false);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
@@ -306,11 +295,12 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 
 	drm_sched_job_cleanup(sched_job);
 	dma_fence_put(job->hw_fence);
+	kfree(job->hw_fence_mem);	/* never run */
 	for (u32 b = 0; b < job->nbos; b++)
 		drm_gem_object_put(job->bos[b]);
 	kvfree(job->bos);
 	kvfree(job->bo_flags);
-	job_put_imports(job);
+	pvrsgx_prime_put(job);
 	pvrsgx_render_job_fini(job);
 	context_put(job->ctx);
 	kfree(job);
@@ -328,7 +318,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 		.ops = &pvrsgx_sched_ops,
 		.num_rqs = DRM_SCHED_PRIORITY_COUNT,
 		.credit_limit = 1,
-		.timeout = msecs_to_jiffies(PVRSGX_JOB_TIMEOUT_MS),
+		.timeout = msecs_to_jiffies(job_timeout_ms),
 		.name = "powervr_sgx",
 		.dev = sdev->base.dev,
 	};
@@ -507,9 +497,10 @@ static void job_args_fini(struct job_args *ja)
 	if (ja->job) {
 		if (ja->inited)
 			drm_sched_job_cleanup(&ja->job->base);
-		job_put_imports(ja->job);
+		pvrsgx_prime_put(ja->job);
 		pvrsgx_render_job_fini(ja->job);
 		context_put(ja->job->ctx);
+		kfree(ja->job->hw_fence_mem);
 		kfree(ja->job);
 	}
 }
@@ -669,6 +660,9 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 	job->type = in->type;
 	INIT_LIST_HEAD(&job->node);
 	ja->job = job;
+	job->hw_fence_mem = kzalloc_obj(*job->hw_fence_mem);
+	if (!job->hw_fence_mem)
+		return -ENOMEM;
 
 	err = drm_sched_job_init(&job->base, &ctx->entity, 1, sfile, file->client_id);
 	if (err)
@@ -723,8 +717,8 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	for (u32 i = 0; i < n; i++) {
 		err = job_create(file, &in[i], &ja[i], ja, i);
 		/* Before the reservations: VM_MAP takes vm->lock, then them. */
-		err = err ?: pvrsgx_vm_imports(ja[i].job->ctx->vm, &ja[i].job->imports,
-					       &ja[i].job->nimports);
+		err = err ?: pvrsgx_prime_imports(ja[i].job->ctx->vm, &ja[i].job->imports,
+						  &ja[i].job->nimports);
 		if (err) {
 			args->failed_index = i;
 			goto out;
