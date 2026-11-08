@@ -4,12 +4,13 @@
 # fool it), and greps the ro1 run tag (can't match a stale clean3 log). Same proven
 # cold-GPU ramboot rig. ALWAYS restores to normal boot.
 setopt sh_word_split
+: "${BOX_PASS:?set BOX_PASS to the board root password}"
 OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o PreferredAuthentications=password -o PubkeyAuthentication=no"
 H=root@10.0.0.110
-HW=/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC--claude-worktrees-optimistic-leakey-b1d663/ca698cd7-46e4-4e13-949b-9c4a8185b579/scratchpad/sgx/hwruns
+HW=${UK_HWRUNS:?set UK_HWRUNS to the directory with the built test images}
 BIN=uk-ro1.bin
 TAG=ro1-render-on-0x1
-ssh_() { sshpass -p openhc ssh $OPTS "$H" "$@" 2>&1 | grep -v "Permanently added"; }
+ssh_() { sshpass -p "$BOX_PASS" ssh $OPTS "$H" "$@" 2>&1 | grep -v "Permanently added"; }
 # wait_boot <old_boot_id> <NORMAL|RAMBOOT>: poll until reachable + boot_id changed + cmdline matches
 wait_boot() {
   old=$1; want=$2
@@ -32,8 +33,8 @@ echo "$pre" | grep -q '^NORMAL' || { echo "FATAL: box not on normal boot ($pre) 
 
 echo "=== on-box lock + stage $BIN ==="
 ssh_ "echo ukernel-ea1-ro1 > /tmp/gpu.lock"
-sshpass -p openhc ssh $OPTS "$H" "cat > /root/uk/uk-ro1.bin" < "$HW/uk-ro1.bin" 2>&1 | grep -v "Permanently added"
-sshpass -p openhc ssh $OPTS "$H" "cat > /root/uk/uk-ro1.bin.pat" < "$HW/uk-ro1.bin.pat" 2>&1 | grep -v "Permanently added"
+sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > /root/uk/uk-ro1.bin" < "$HW/uk-ro1.bin" 2>&1 | grep -v "Permanently added"
+sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > /root/uk/uk-ro1.bin.pat" < "$HW/uk-ro1.bin.pat" 2>&1 | grep -v "Permanently added"
 echo "staged md5 remote=$(ssh_ "md5sum /root/uk/$BIN | cut -c1-8") local=$(md5 -q "$HW/uk-ro1.bin" | cut -c1-8)"
 
 echo "=== install S50 (ro1) + S00aramboot + /boot/once ==="
@@ -85,7 +86,7 @@ chmod +x /etc/init.d/S00aramboot
 mkdir -p /boot/once; cp /boot/bzImage /boot/once/bzImage
 sh -n /etc/init.d/S50zuktest && sh -n /etc/init.d/S00aramboot && echo "install OK"
 INSTALL
-sshpass -p openhc ssh $OPTS "$H" "cat > /root/ea1-install2.sh" < /tmp/ea1-install2.sh 2>&1 | grep -v "Permanently added"
+sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > /root/ea1-install2.sh" < /tmp/ea1-install2.sh 2>&1 | grep -v "Permanently added"
 ssh_ 'sh /root/ea1-install2.sh 2>&1'
 
 echo "=== reboot into ramboot ==="
