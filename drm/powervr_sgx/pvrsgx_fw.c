@@ -43,6 +43,8 @@
 #define UKFW_HEADER_MIN		0x60
 #define UKFW_IF_MAJOR		1
 #define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE)
+/* Bits 16-31: the microkernel's own build variants, nothing the host must know. */
+#define UKFW_FEATURES_PRIVATE	GENMASK(31, 16)
 #define UKFW_MAX_IMAGE		(CODE_ARENA_SIZE - PDS_BYTES - 0x10)
 
 struct ukfw_header {
@@ -255,7 +257,8 @@ static int ukfw_parse(const u8 *data, size_t size, struct pvrsgx_fw *f, const ch
 	    !isize || !IS_ALIGNED(isize, 8) || isize > size - hsize || isize > UKFW_MAX_IMAGE)
 		return -EINVAL;
 	*why = "interface or features not supported";
-	if (iface >> 16 != UKFW_IF_MAJOR || (f->features & ~UKFW_FEATURES))
+	if (iface >> 16 != UKFW_IF_MAJOR ||
+	    (f->features & ~(UKFW_FEATURES | UKFW_FEATURES_PRIVATE)))
 		return -EINVAL;
 	*why = "image CRC mismatch";
 	if (crc32_le(~0, data + hsize, isize) != ~le32_to_cpu(h->image_crc32))
