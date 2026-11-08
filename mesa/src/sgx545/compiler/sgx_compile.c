@@ -261,41 +261,53 @@ slot_ok(unsigned form, unsigned k, const struct sgx_ref *r)
 static int
 hw_const(uint32_t bits)
 {
-   static uint32_t tab[64];
-   static bool init;
-   if (!init) {
-      for (int i = 0; i < 64; i++)
-         tab[i] = 0xdeadbeef;
-      union {
-         float f;
-         uint32_t u;
-      } x;
-#define SETF(i, v) (x.f = (float)(v), tab[i] = x.u)
-      SETF(48, 0.0);
-      SETF(52, 1.0);
-      for (int i = 0; i < 10; i++)
-         SETF(4 + i, ldexp(1.0, i + 1));
-      for (int i = 0; i < 14; i++)
-         SETF(14 + i, ldexp(1.0, -(i + 1)));
-      SETF(28, M_E);
-      SETF(29, 1.0 / M_E);
-      SETF(30, M_SQRT2);
-      SETF(31, M_SQRT1_2);
-      SETF(32, M_PI / 4);
-      SETF(33, M_PI / 2);
-      SETF(34, M_PI);
-      SETF(35, 1 / M_PI);
-      SETF(36, 2 / M_PI);
-      SETF(37, 4 / M_PI);
-      SETF(38, 2 * M_PI);
-      SETF(39, ldexp(1.0, -16));
-      tab[56] = 0xffffffff;
-#undef SETF
-      init = true;
-   }
-   for (int i = 0; i < 64; i++)
-      if (tab[i] == bits)
-         return i;
+   static const struct {
+      uint8_t c;
+      uint32_t bits;
+   } tab[] = {
+      {4, 0x40000000},  /* 2^1 */
+      {5, 0x40800000},  /* 2^2 */
+      {6, 0x41000000},  /* 2^3 */
+      {7, 0x41800000},  /* 2^4 */
+      {8, 0x42000000},  /* 2^5 */
+      {9, 0x42800000},  /* 2^6 */
+      {10, 0x43000000}, /* 2^7 */
+      {11, 0x43800000}, /* 2^8 */
+      {12, 0x44000000}, /* 2^9 */
+      {13, 0x44800000}, /* 2^10 */
+      {14, 0x3f000000}, /* 2^-1 */
+      {15, 0x3e800000}, /* 2^-2 */
+      {16, 0x3e000000}, /* 2^-3 */
+      {17, 0x3d800000}, /* 2^-4 */
+      {18, 0x3d000000}, /* 2^-5 */
+      {19, 0x3c800000}, /* 2^-6 */
+      {20, 0x3c000000}, /* 2^-7 */
+      {21, 0x3b800000}, /* 2^-8 */
+      {22, 0x3b000000}, /* 2^-9 */
+      {23, 0x3a800000}, /* 2^-10 */
+      {24, 0x3a000000}, /* 2^-11 */
+      {25, 0x39800000}, /* 2^-12 */
+      {26, 0x39000000}, /* 2^-13 */
+      {27, 0x38800000}, /* 2^-14 */
+      {28, 0x402df854}, /* e */
+      {29, 0x3ebc5ab2}, /* 1/e */
+      {30, 0x3fb504f3}, /* sqrt(2) */
+      {31, 0x3f3504f3}, /* sqrt(1/2) */
+      {32, 0x3f490fdb}, /* pi/4 */
+      {33, 0x3fc90fdb}, /* pi/2 */
+      {34, 0x40490fdb}, /* pi */
+      {35, 0x3ea2f983}, /* 1/pi */
+      {36, 0x3f22f983}, /* 2/pi */
+      {37, 0x3fa2f983}, /* 4/pi */
+      {38, 0x40c90fdb}, /* 2pi */
+      {39, 0x37800000}, /* 2^-16 */
+      {48, 0x00000000}, /* 0.0 */
+      {52, 0x3f800000}, /* 1.0 */
+      {56, 0xffffffff}, /* all ones */
+   };
+   for (unsigned i = 0; i < ARRAY_SIZE(tab); i++)
+      if (tab[i].bits == bits)
+         return tab[i].c;
    return -1;
 }
 
@@ -1110,9 +1122,10 @@ whole_reg(struct sgx_ref x)
    return x;
 }
 
-/* An F16 select on one 32-bit condition for every channel (gl4es' gl_Color =
- * gl_FrontFacing ? gl_FrontColor : gl_BackColor): movc.nz.i32 on whole
- * register pairs, exact and without widening. false: not that shape. */
+/* An F16 select on one 32-bit condition for every channel (two-sided
+ * lighting's gl_Color = gl_FrontFacing ? gl_FrontColor : gl_BackColor):
+ * movc.nz.i32 on whole register pairs, exact and without widening. false: not
+ * that shape. */
 static bool
 csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
 {
