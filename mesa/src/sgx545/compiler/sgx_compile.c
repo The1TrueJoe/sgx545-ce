@@ -25,6 +25,7 @@
 #include "util/half_float.h"
 #include "util/hash_table.h"
 #include "util/set.h"
+#include "util/u_debug.h"
 
 #include "sgx_priv.h"
 
@@ -105,21 +106,6 @@ new_vreg16(struct sgx_ctx *c, unsigned halves)
    unsigned v = new_vreg(c, halves);
    sgx_vreg(c, v)->half = true;
    return v;
-}
-
-bool
-sgx_disabled(const char *pass)
-{
-   const char *e = getenv("SGX_DISABLE");
-   size_t n = strlen(pass);
-   while (e && *e) {
-      const char *c = strchr(e, ',');
-      size_t l = c ? (size_t)(c - e) : strlen(e);
-      if (l == n && !strncmp(e, pass, n))
-         return true;
-      e = c ? c + 1 : NULL;
-   }
-   return false;
 }
 
 static struct sgx_ref
@@ -391,7 +377,7 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          } else {
             /* a literal in SA where the slot takes one (driver_consts), else limm */
             struct sgx_ref lit = ref(SGX_F_LIT, 0);
-            int ln = c->opts->driver_consts && !c->lit_off && !sgx_disabled("lit32") && slot_ok(i->form, k, &lit) ?
+            int ln = c->opts->driver_consts && !c->lit_off && !sgx_debug(c, SGX_DBG_NO_LIT32) && slot_ok(i->form, k, &lit) ?
                      lit_run(c, &want, 1) : -1;
             if (ln >= 0) {
                *r = ref(SGX_F_LIT, ln);
@@ -1076,7 +1062,7 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
       i->op[0] = href(t, 2 * p);
       i->op[1] = cond;
       int h1 = half_of(&s[1][l1]), h2 = half_of(&s[2][l1]);
-      if (l1 == 2 * p && h1 >= 0 && h1 == h2 && !sgx_disabled("csel1")) {
+      if (l1 == 2 * p && h1 >= 0 && h1 == h2 && !sgx_debug(c, SGX_DBG_NO_CSEL1)) {
          /* one lane, in the same half of both: their registers as they are,
           * the result in that half */
          i->op[2] = whole_reg(s[1][l1]);
@@ -1698,7 +1684,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
             hd &= ref_same(&s[j][k - 1], &s[j][k]);
          }
          /* constants: a run of literals in SA */
-         bool kk = c->opts->driver_consts && !st && !hd && !sgx_disabled("lit32");
+         bool kk = c->opts->driver_consts && !st && !hd && !sgx_debug(c, SGX_DBG_NO_LIT32);
          uint32_t kw[4];
          for (unsigned k = 0; k < n && kk; k++) {
             kk = s[j][k].file == SGX_F_K && !s[j][k].h16;
@@ -1967,7 +1953,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       }
       struct fieldset tf = { 3, { { SGX_FLD_ALU, 14 }, { SGX_FLD_COND, cd }, { SGX_FLD_TYPE, 2 } } };
       emit_runs(c, SGX_OP_TESTMASK, wmask, td, 2, ts, &tf, 0);
-      if (ld.dest.is_ssa && !ld.fsat && cond_only(&alu->def) && !sgx_disabled("condmask")) {
+      if (ld.dest.is_ssa && !ld.fsat && cond_only(&alu->def) && !sgx_debug(c, SGX_DBG_NO_CONDMASK)) {
          /* only selects read it: the mask itself (a passing dword test
           * writes 0xffffffff, which movc.nz takes as true: ISA.md hwt_p2/p7) */
          c->vals[alu->def.index].kind = VAL_V;
@@ -1987,7 +1973,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    }
    case nir_op_fcsel:
    case nir_op_b32csel:
-      if (ld.dest.is_ssa && !ld.fsat && !sgx_disabled("csel32") && f16_pairs(c, alu) && csel16(c, alu, s))
+      if (ld.dest.is_ssa && !ld.fsat && !sgx_debug(c, SGX_DBG_NO_CSEL32) && f16_pairs(c, alu) && csel16(c, alu, s))
          return;
       form = SGX_OP_MOVC_F32;
       fs.n = 1;
@@ -2557,17 +2543,8 @@ emit_br(struct sgx_ctx *c, unsigned l, unsigned pred)
 static void emit_tex(struct sgx_ctx *c, nir_tex_instr *tex);
 
 /* tex(v.xy * rcp(v.w)) on a whole vec4 varying v: the DDK's non-dependent
- * projected read (the PDS iterates v.xy / v.w); the divide isn't emitted */
-static nir_alu_instr *
-src_alu(nir_src *s, nir_op op)
-{
-   nir_instr *p = nir_def_instr(s->ssa);
-   if (p->type != nir_instr_type_alu || nir_instr_as_alu(p)->op != op)
-      return NULL;
-   return nir_instr_as_alu(p);
-}
-
-/* the varying load behind a mov of it (or the load itself), and the swizzle */
+ * projected read (the PDS iterates v.xy / v.w); the divide isn't emitted.
+ * The varying load behind a mov of it (or the load itself), and the swizzle */
 static nir_intrinsic_instr *
 varying_load(nir_src *src, const uint8_t **swz, nir_alu_instr **mov)
 {
@@ -3891,7 +3868,7 @@ ins_hits(const struct sgx_ins *i, unsigned file, unsigned v, unsigned n, unsigne
 static void
 fold_movs(struct sgx_ctx *c)
 {
-   if (sgx_disabled("fold"))
+   if (sgx_debug(c, SGX_DBG_NO_FOLD))
       return;
    list_for_each_entry_safe(struct sgx_ins, m, &c->ins, link) {
       if (m->kind != SGX_INS_ALU || m->form != SGX_OP_MOV || m->pred || m->nfld || m->nops != 2)
@@ -4029,7 +4006,7 @@ efo_runs(struct sgx_ctx *c)
 static void
 drop_self_moves(struct sgx_ctx *c)
 {
-   if (sgx_disabled("selfmov"))
+   if (sgx_debug(c, SGX_DBG_NO_SELFMOV))
       return;
    list_for_each_entry_safe(struct sgx_ins, i, &c->ins, link) {
       unsigned fd, nd, fs, ns;
@@ -4150,7 +4127,7 @@ touch(struct sgx_ctx *c, const struct sgx_ref *r, int at, unsigned span)
 static void
 split_vregs(struct sgx_ctx *c)
 {
-   if (sgx_disabled("split"))
+   if (sgx_debug(c, SGX_DBG_NO_SPLIT))
       return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    bool *run = calloc(nv, sizeof(bool));
@@ -4190,7 +4167,7 @@ split_vregs(struct sgx_ctx *c)
 static void
 coalesce_repeats(struct sgx_ctx *c)
 {
-   if (sgx_disabled("coalesce"))
+   if (sgx_debug(c, SGX_DBG_NO_COALESCE))
       return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
@@ -4296,7 +4273,7 @@ static void
 place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
            const struct loop_span *loops, unsigned nloops, const unsigned *minb)
 {
-   if (sgx_disabled("o"))
+   if (sgx_debug(c, SGX_DBG_NO_OUT))
       return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    unsigned end = 2 * nins + 2, no = 0;
@@ -4360,7 +4337,7 @@ static void
 place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             const struct loop_span *loops, unsigned nloops, const unsigned *minb)
 {
-   if (sgx_disabled("pa"))
+   if (sgx_debug(c, SGX_DBG_NO_PA))
       return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    unsigned end = 2 * nins + 2, npa = 0;
@@ -4459,7 +4436,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
    for (unsigned v = 0; v < nv; v++)
       ok[v] = sgx_vreg(c, v)->first >= 0 && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
               (int)v != c->face_f32;
-   if (c->stage == MESA_SHADER_VERTEX && !sgx_disabled("o")) {
+   if (c->stage == MESA_SHADER_VERTEX && !sgx_debug(c, SGX_DBG_NO_OUT)) {
       int *oin = malloc(nv * sizeof(int));
       bool *ook = calloc(nv, sizeof(bool));
       o_candidates(c, nv, oin, ook);
@@ -5254,6 +5231,28 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
 
 /* ------------------------------------------------------------------------ */
 
+static const struct debug_named_value sgx_debug_options[] = {
+   { "nopa", SGX_DBG_NO_PA, "Don't allocate values straight into primary attribute registers" },
+   { "noout", SGX_DBG_NO_OUT, "Don't compute vertex outputs in their output registers" },
+   { "nocoalesce", SGX_DBG_NO_COALESCE, "Don't let a repeat write over the source it reads" },
+   { "nosplit", SGX_DBG_NO_SPLIT, "Don't split vector registers into one per component" },
+   { "nofold", SGX_DBG_NO_FOLD, "Don't fold copies into the instruction that wrote the value" },
+   { "noselfmov", SGX_DBG_NO_SELFMOV, "Keep moves of a register to itself" },
+   { "nolit32", SGX_DBG_NO_LIT32, "Load 32-bit literals with limm, not from driver constant slots" },
+   { "nonarrow16", SGX_DBG_NO_NARROW16, "Don't narrow F16 arithmetic over converted values" },
+   { "nomediump", SGX_DBG_NO_MEDIUMP, "Compute fragment mediump in F32 (fixed-function programs aside)" },
+   { "nominmax32", SGX_DBG_NO_MINMAX32, "Don't compute F16 min/max/saturate of F32 values in F32" },
+   { "nocondmask", SGX_DBG_NO_CONDMASK, "Don't let selects read a comparison's test mask" },
+   { "nocsel1", SGX_DBG_NO_CSEL1, "Don't select a single F16 lane as a whole register" },
+   { "nocsel32", SGX_DBG_NO_CSEL32, "Don't select F16 pairs on one 32-bit condition" },
+   { "nocoissue", SGX_DBG_NO_COISSUE, "Don't co-issue vector-times-scalar sums as efo" },
+   { "nof16const", SGX_DBG_NO_F16_CONST, "Load mediump uniforms as F32 and convert in the shader" },
+   { "nof16iter", SGX_DBG_NO_F16_ITER, "Iterate every varying in F32" },
+   DEBUG_NAMED_VALUE_END,
+};
+
+DEBUG_GET_ONCE_FLAGS_OPTION(sgx_debug, "SGX545_COMPILER_DEBUG", sgx_debug_options, 0)
+
 int
 sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struct sgx_varyings *vary,
             struct sgx_shader *out)
@@ -5261,6 +5260,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
    struct sgx_ctx *c = rzalloc(NULL, struct sgx_ctx);
    int ret = -1;
    memset(out, 0, sizeof(*out));
+   c->debug = debug_get_option_sgx_debug();
    c->nir = nir;
    c->opts = opts;
    c->vary = vary;
@@ -5284,7 +5284,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
    c->skip = _mesa_pointer_set_create(c);
    c->proj = _mesa_pointer_hash_table_create(c);
    c->efo = _mesa_pointer_hash_table_create(c);
-   if (!sgx_disabled("coissue"))
+   if (!sgx_debug(c, SGX_DBG_NO_COISSUE))
       find_efo(c, impl);
    if (c->stage == MESA_SHADER_FRAGMENT) {
       find_projected(c, impl);
