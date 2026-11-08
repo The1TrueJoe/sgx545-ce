@@ -325,7 +325,7 @@ index a8603ad..9ca3461 100644
 +      'tests/child_render_node_test.c',
 +      link_with : libloader,
 +      include_directories : [inc_include, inc_src, inc_util, inc_gallium],
-+      dependencies : [idep_mesautil, dep_libdrm],
++      dependencies : [idep_mesautil, idep_xmlconfig, dep_libdrm],
 +    ),
 +    suite : ['loader'],
 +  )
