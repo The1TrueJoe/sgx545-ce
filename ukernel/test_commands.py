@@ -28,8 +28,8 @@ CORE_ID, CORE_REV = 0x1000E, 0x10014
 
 def build_ours():
     import subprocess
-    binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel-openhc.json")
+    binp = os.path.join(HERE, "sgx545-ukernel.bin")
+    manp = os.path.join(HERE, "sgx545-ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     man = json.load(open(manp))
     code = bytearray(open(binp, "rb").read())
@@ -160,7 +160,7 @@ def main():
         sys.exit("usage: test_commands.py DDK_FIRMWARE")
     fw = open(sys.argv[1], "rb").read()
     code, man = build_ours()
-    print("openHC microkernel command tests:")
+    print("microkernel command tests:")
     test_getmiscinfo(fw, code, man)
     test_power(code, man)
     test_cleanup(code, man)
