@@ -2,7 +2,7 @@
 # Run dEQP-GLES2 under deqp-runner on an EA, on our driver or the DDK, the way
 # Mesa's CI runs it: pbuffers on the surfaceless EGL platform, one config, and
 # the expectation files in src/gallium/drivers/sgx545/ci/ (Mesa's
-# *-fails/flakes/skips.txt conventions).  Run it ON the box, from the directory
+# *-fails/flakes/skips.txt conventions; the DDK's from mesa/tests/deqp/ddk/).  Run it ON the box, from the directory
 # build-deqp.sh's out/ was copied to:
 #
 #   run-deqp.sh sgx545|ddk [deqp-runner args...]     e.g. --fraction 20 for a quick pass

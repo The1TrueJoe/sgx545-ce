@@ -126,7 +126,8 @@ fi
 
 # ---- the rest of what goes to the box
 cp "$HERE/run-deqp.sh" "$W/out/"
-rm -rf "$W/out/ci" && cp -R "$REPO/mesa/src/gallium/drivers/sgx545/ci" "$W/out/ci"
+rm -rf "$W/out/ci" && cp -R "$REPO/mesa/src/gallium/drivers/sgx545/ci" "$W/out/ci" &&
+	cp "$HERE"/ddk/ddk-*.txt "$W/out/ci/"
 cp "$W/deqp-runner/target/x86_64-unknown-linux-gnu/release/deqp-runner" "$W/out/"
 {
 	echo "dEQP GLES opengl-es-cts-$DEQP_GLES_VERSION (Mesa $MESA_VERSION CI's backports and patches)"
