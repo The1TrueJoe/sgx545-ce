@@ -1,6 +1,6 @@
 # The desktop test root (Debian 13 trixie amd64, the current stable), built by .github/workflows/desktop-root.yml.
 # One package per line; Debian's own Mesa comes along as glvnd's fallback, ours is chosen
-# by desktop-up.sh's environment.
+# by the mesa-sgx package or desktop-up.sh's environment. passwd: useradd for the user "desk".
 xserver-xorg-core
 xserver-xorg-input-libinput
 xinit
@@ -17,6 +17,7 @@ mesa-utils
 glmark2-x11
 xdotool
 procps
+passwd
 less
 imagemagick
 mesa-utils-bin
