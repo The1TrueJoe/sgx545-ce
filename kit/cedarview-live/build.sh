@@ -12,12 +12,12 @@
 # guide says. TESTS holds powervr_sgx_test/_frame/_blit/_hang (static).
 # XFERBANK_FW is the open microkernel's blit variant B. Open code only.
 # Needs mmdebstrap, squashfs-tools, dosfstools, grub-pc-bin, grub-efi-amd64-bin,
-# grub-efi-ia32-bin, and Debian's keyring in KEYRING (a trusted.gpg.d directory).
+# grub-efi-ia32-bin, and Debian's keyring in KEYRING (a keyring file with trixie's keys).
 set -eu
 DEBS=$(realpath "$1") TESTS=$(realpath "$2") OUT=$(realpath -m "$3") VER=$4 FWX=${5:-}
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-KEYRING=${KEYRING:?a directory of Debian archive keys (etc/apt/trusted.gpg.d)}
+KEYRING=${KEYRING:?a Debian archive keyring file with trixie's keys}
 W=$(mktemp -d)
 ROOT=$W/root
 mkdir -p "$OUT"

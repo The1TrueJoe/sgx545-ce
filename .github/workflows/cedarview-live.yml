@@ -64,12 +64,13 @@ jobs:
               grep -o 'debian-archive-keyring_[0-9.]*_all\.deb' | sort -V | tail -1)
           curl -sfLO "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/$d"
           dpkg-deb -x "$d" keyring
+          cp keyring/usr/share/keyrings/debian-archive-keyring.pgp debian-archive-keyring.gpg
 
       - name: Build the image
         run: |
           set -eux
           v=$(git rev-parse --short HEAD)
-          sudo KEYRING="$PWD/keyring/etc/apt/trusted.gpg.d" sh kit/cedarview-live/build.sh \
+          sudo KEYRING="$PWD/debian-archive-keyring.gpg" sh kit/cedarview-live/build.sh \
             debs tests out "$v" fw/sgx545_ukernel-xferbank.bin
           { echo "kit $(cat kit/cedarview-live/SERIES) ($v) from ${GITHUB_SHA}"; cat sources.txt;
             echo "variant B: $(python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel-xferbank.bin | head -1)";
