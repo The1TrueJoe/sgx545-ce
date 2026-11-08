@@ -86,13 +86,18 @@ __dst1_case(struct encode_state *s, const struct sgx_isa_src *o)
    }
 }
 
-/* The number field: g<n> is n + 0x40 on the c/g bank, i<n> in an r slot is 124 + n. */
+/*
+ * The number field: g<n> is n + 0x40 on the c/g bank, i<n> in an r slot is
+ * 124 + n, a negative immediate its 7-bit two's complement (the signed
+ * immediates of ima16, imae, ...: ISA.md "imae").
+ */
 static inline uint32_t
 sgx_isa_opnd_num(const struct sgx_isa_src *o)
 {
    switch (o->file) {
-   case SGX_ISA_FILE_G: return o->num + 0x40;
-   default:             return o->num;
+   case SGX_ISA_FILE_G:   return o->num + 0x40;
+   case SGX_ISA_FILE_IMM: return (int32_t)o->num < 0 ? o->num & 0x7f : o->num;
+   default:               return o->num;
    }
 }
 
