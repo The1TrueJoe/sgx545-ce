@@ -34,6 +34,7 @@
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
+#include "pvrsgx_trace.h"
 #include "pvrsgx_transfer.h"
 #include "pvrsgx_vm.h"
 
@@ -762,10 +763,12 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	/* The command is in memory before the write offset that hands it over. */
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
-	if (last)
+	if (last) {
 		rj->cmd_off = woff;
-	if (last)
+		trace_pvrsgx_render_kick(kobj_va(s->rtdata), s->w, s->h, f, entry,
+					 rgn_this, rgn_next, woff);
 		s->frames++;
+	}
 
 	memset(data, 0, 6 * sizeof(u32));
 	data[1] = kobj_va(r->hwctx);

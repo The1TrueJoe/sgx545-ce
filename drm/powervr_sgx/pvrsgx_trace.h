@@ -28,6 +28,37 @@ TRACE_EVENT(pvrsgx_kick,
 		  __entry->fence_seqno)
 );
 
+/* A render's last kick: the dataset and the per-frame values it was given. */
+TRACE_EVENT(pvrsgx_render_kick,
+	TP_PROTO(u32 rtdata, u32 w, u32 h, u32 frame, u32 entry, u32 rgn_this,
+		 u32 rgn_next, u32 cmd_off),
+	TP_ARGS(rtdata, w, h, frame, entry, rgn_this, rgn_next, cmd_off),
+	TP_STRUCT__entry(
+		__field(u32, rtdata)
+		__field(u32, w)
+		__field(u32, h)
+		__field(u32, frame)
+		__field(u32, entry)
+		__field(u32, rgn_this)
+		__field(u32, rgn_next)
+		__field(u32, cmd_off)
+	),
+	TP_fast_assign(
+		__entry->rtdata = rtdata;
+		__entry->w = w;
+		__entry->h = h;
+		__entry->frame = frame;
+		__entry->entry = entry;
+		__entry->rgn_this = rgn_this;
+		__entry->rgn_next = rgn_next;
+		__entry->cmd_off = cmd_off;
+	),
+	TP_printk("rtdata=0x%08x %ux%u frame=%u entry=0x%08x rgn=0x%08x next=0x%08x cmd_off=0x%x",
+		  __entry->rtdata, __entry->w, __entry->h, __entry->frame,
+		  __entry->entry, __entry->rgn_this, __entry->rgn_next,
+		  __entry->cmd_off)
+);
+
 /* The microkernel's interrupt, in the hard handler. */
 TRACE_EVENT(pvrsgx_irq,
 	TP_PROTO(u32 status),
