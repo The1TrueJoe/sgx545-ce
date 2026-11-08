@@ -7,7 +7,8 @@
 #   minecraft-ab   the runtime's `minecraft` with MC_DIR (a game directory of
 #                  its own) and MC_GL=ddk (gl4es-run-ddk)
 #   gl4es-run-ddk  the runtime's gl4es-run, LIBGL_NOBANNER from the
-#                  environment, MC_LINEBUF=1 line-buffers stdout (mk-ddkrun.sh)
+#                  environment, MC_LINEBUF=1 line-buffers stdout, MC_PRELOAD more
+#                  preloads, e.g. pvrtrace (mk-ddkrun.sh)
 #   gl4es-run-sgx545  the same on our i386 Mesa in usr/lib/sgx545 (put there by the host)
 #   usr/lib/sgx    the box's DDK libraries and powervr.ini hints (mc-session's ddk_sync)
 # mc-oldnew.sh old drives the game with the x64 root's xdotool (the runtime
@@ -23,7 +24,7 @@ sed -e 's|^G=/opt/minecraft$|G=/opt/minecraft GD=${MC_DIR:-/opt/minecraft}|' \
 chmod 755 "$B/minecraft-ab"
 grep -q 'GD=' "$B/minecraft-ab" && grep -q 'gameDir "$GD"' "$B/minecraft-ab" &&
 	grep -q 'gl4es-run${MC_GL' "$B/minecraft-ab" || { echo "mk-oldrig: the launcher changed; minecraft-ab not made" >&2; exit 1; }
-sed 's/LIBGL_NOBANNER=1/LIBGL_NOBANNER=${LIBGL_NOBANNER:-1}/; s|^exec "\$@"|[ -n "$MC_LINEBUF" ] \&\& export LD_PRELOAD="$LD_PRELOAD /usr/libexec/coreutils/libstdbuf.so" _STDBUF_O=L\nexec "$@"|' \
+sed 's/LIBGL_NOBANNER=1/LIBGL_NOBANNER=${LIBGL_NOBANNER:-1}/; s|^exec "\$@"|[ -n "$MC_LINEBUF" ] \&\& export LD_PRELOAD="$LD_PRELOAD /usr/libexec/coreutils/libstdbuf.so" _STDBUF_O=L\n[ -n "$MC_PRELOAD" ] \&\& export LD_PRELOAD="$LD_PRELOAD $MC_PRELOAD"\nexec "$@"|' \
 	"$B/gl4es-run" > "$B/gl4es-run-ddk"
 chmod 755 "$B/gl4es-run-ddk"
 grep -q _STDBUF_O "$B/gl4es-run-ddk" || { echo "mk-oldrig: gl4es-run changed; gl4es-run-ddk not made" >&2; exit 1; }
