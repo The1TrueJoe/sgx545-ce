@@ -33,6 +33,7 @@
 #include "pvrsgx_core.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_fwif.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_pds.h"
@@ -112,7 +113,7 @@ static const struct {
 	[PVRSGX_FW_CCB] = { false, 0x0000, 0x2000 },
 	[PVRSGX_FW_CCBCTL] = { false, 0x2000, 0x8 },
 	[PVRSGX_FW_KICKER] = { false, 0x2010, 0x4 },
-	[PVRSGX_FW_TA3DCTL] = { false, 0x3000, 0xec },
+	[PVRSGX_FW_TA3DCTL] = { false, 0x3000, sizeof(struct pvrsgx_fw_ta3d_ctl) },
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
 	[PVRSGX_FW_HWPERF] = { false, 0x4000, 0x640c },
@@ -193,19 +194,18 @@ static int fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v)
  */
 static void ta3dctl_fill(struct pvrsgx_device *sdev)
 {
+	struct pvrsgx_fw_ta3d_ctl *t = sdev->fw.cpu[PVRSGX_FW_TA3DCTL];
 	struct pvrsgx_fw *f = &sdev->fw;
-	u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
 
-	memset(t, 0, layout[PVRSGX_FW_TA3DCTL].size);
-	t[0x00] = f->addr[PVRSGX_FW_TA3DCTL];
-	t[0x01] = f->addr[PVRSGX_FW_HOSTCTL];
-	t[0x02] = f->addr[PVRSGX_FW_CCBCTL];
-	t[0x13] = 0;	/* HWPerf flags */
-	t[0x16] = f->addr[PVRSGX_FW_CCB];
-	t[0x17] = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
-	t[0x2b] = f->addr[PVRSGX_FW_HWPERF];
-	t[0x2c] = f->addr[PVRSGX_FW_TASIG];
-	t[0x2d] = f->addr[PVRSGX_FW_3DSIG];
+	memset(t, 0, sizeof(*t));
+	t->self = f->addr[PVRSGX_FW_TA3DCTL];
+	t->host_ctl = f->addr[PVRSGX_FW_HOSTCTL];
+	t->ccb_ctl = f->addr[PVRSGX_FW_CCBCTL];
+	t->ccb = f->addr[PVRSGX_FW_CCB];
+	t->kernel_pd = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
+	t->hwperf = f->addr[PVRSGX_FW_HWPERF];
+	t->ta_sig = f->addr[PVRSGX_FW_TASIG];
+	t->sig_3d = f->addr[PVRSGX_FW_3DSIG];
 }
 
 /*

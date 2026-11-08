@@ -16,6 +16,49 @@
  * are padding here; the docs list them.
  */
 
+/**
+ * struct pvrsgx_fw_ta3d_ctl - The microkernel's control block
+ *
+ * docs/UKERNEL.md, "The TA3D control block". The host fills the addresses;
+ * the rest is the microkernel's live state, zero at every start.
+ */
+struct pvrsgx_fw_ta3d_ctl {
+	/** @self: Device address of this block. */
+	u32 self;
+	/** @host_ctl: Device address of the host control block. */
+	u32 host_ctl;
+	/** @ccb_ctl: Device address of the kernel CCB's write and read offsets. */
+	u32 ccb_ctl;
+	/* private: */
+	u32 pad_0c[16];
+	/* public: */
+	/** @hwperf_flags: 0. */
+	u32 hwperf_flags;
+	/* private: */
+	u32 pad_50[2];
+	/* public: */
+	/** @ccb: Device address of the kernel CCB. */
+	u32 ccb;
+	/** @kernel_pd: Physical address of the firmware's page directory. */
+	u32 kernel_pd;
+	/* private: */
+	u32 pad_60[19];
+	/* public: */
+	/** @hwperf: Device address of the HWPerf buffer. */
+	u32 hwperf;
+	/** @ta_sig: Device address of the TA signature register list. */
+	u32 ta_sig;
+	/** @sig_3d: Device address of the 3D signature register list. */
+	u32 sig_3d;
+	/* private: */
+	u32 pad_b8[13];
+};
+
+static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, hwperf_flags) == 0x4c);
+static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, kernel_pd) == 0x5c);
+static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, sig_3d) == 0xb4);
+static_assert(sizeof(struct pvrsgx_fw_ta3d_ctl) == 0xec);
+
 /* struct pvrsgx_fw_ta_cmd.ta_flags */
 #define PVRSGX_TA_FIRST_KICK		BIT(0)
 #define PVRSGX_TA_LAST_KICK		BIT(1)
