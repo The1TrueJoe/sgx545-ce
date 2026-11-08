@@ -98,6 +98,8 @@ struct sgx_isa_instr {
    uint8_t ttype;       /* enum sgx_isa_testmask_type */
    bool has_nodst;      /* without a destination, the dst field holds nodst */
    uint16_t nodst;      /* (default 0x280 when has_nodst is false) */
+   bool has_unused2;    /* rlp: src2's slot as one 10-bit value is unused2 */
+   uint16_t unused2;    /* (default 0x300, the unused pattern, when has_unused2 is false) */
    bool f2_0;
 
    /* bitwise */

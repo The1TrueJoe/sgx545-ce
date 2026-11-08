@@ -281,6 +281,11 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
 #undef FLAG
 #undef VAL
 
+   if (!strcmp(item, "unused2") && eq && v >= 0 && I->opc == SGX_ISA_OPC_RLP) {
+      I->has_unused2 = true;
+      I->unused2 = v;
+      return true;
+   }
    if (!strcmp(item, "nodst") && eq && v >= 0) {
       I->has_nodst = true;
       I->nodst = v;

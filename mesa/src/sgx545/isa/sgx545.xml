@@ -1747,22 +1747,25 @@ NUM | BANK << 7 | EXT << 8.
 </bitset>
 
 <bitset name="rlp" extends="#instruction">
-	<doc>rlp dst, src1, pN: the predicate in l14-15, src2 the unused pattern.</doc>
+	<doc>
+		rlp dst, src1, pN: the predicate in l14-15. src2's slot read as one
+		10-bit value is unused2, 0x300 (the unused pattern) by default.
+	</doc>
 	<display>
-		{PRED}{NAME} {DST}, {SRC1}, {PN} [{SKIPINV} {NOSCHED} {SYNCS} {END} {RM} {PARTIAL}]
+		{PRED}{NAME} {DST}, {SRC1}, {PN} [{SKIPINV} {NOSCHED} {SYNCS} {END} {RM} {PARTIAL} {UNUSED2}]
 	</display>
-	<pattern low="0" high="6">0000000</pattern>
+	<field name="U2N" low="0" high="6" type="uint"/>
 	<field name="S1N" low="7" high="13" type="uint"/>
 	<field name="PN" low="14" high="15" type="#pn"/>
 	<pattern low="16" high="20">00000</pattern>
 	<field name="DN" low="21" high="27" type="uint"/>
-	<pattern low="28" high="29">10</pattern>
+	<field name="U2B" low="28" high="29" type="uint"/>
 	<field name="S1B" low="30" high="31" type="uint"/>
 	<field name="DB" low="32" high="33" type="uint"/>
 	<field name="PARTIAL" pos="34" type="bool" display=" partial"/>
 	<pattern low="35" high="43">000000000</pattern>
 	<field name="RPTMASK" low="44" high="47" type="uint"/>
-	<pattern pos="48">1</pattern>
+	<field name="U2E" pos="48" type="uint"/>
 	<field name="S1E" pos="49" type="uint"/>
 	<field name="END" pos="50" type="bool" display=" end"/>
 	<field name="DE" pos="51" type="uint"/>
@@ -1774,6 +1777,9 @@ NUM | BANK << 7 | EXT << 8.
 	<pattern low="59" high="63">01110</pattern>
 	<derived name="RM" type="#rm1">
 		<expr>{RPTMASK} | ({RCNT} &lt;&lt; 4)</expr>
+	</derived>
+	<derived name="UNUSED2" type="custom" width="10">
+		<expr>{U2N} | ({U2B} &lt;&lt; 7) | ({U2E} &lt;&lt; 9)</expr>
 	</derived>
 	<derived name="MODE0" expr="#zero" type="uint"/>
 	<derived name="DST" type="#dst" width="10">
@@ -1787,6 +1793,9 @@ NUM | BANK << 7 | EXT << 8.
 	<encode>
 		<map name="PN">src->pdst</map>
 		<map name="PARTIAL">src->partial</map>
+		<map name="U2N">SGX_UNUSED2() &amp; 0x7f</map>
+		<map name="U2B">(SGX_UNUSED2() &gt;&gt; 7) &amp; 3</map>
+		<map name="U2E">SGX_UNUSED2() &gt;&gt; 9</map>
 	</encode>
 </bitset>
 

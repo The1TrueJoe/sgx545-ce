@@ -136,6 +136,8 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
 /* Without a destination, test's dst field holds nodst (default 0x280). */
 #define SGX_TDST(m) \
    (src->dst.file != SGX_ISA_FILE_NONE ? SGX_DST(m) : (src->has_nodst ? src->nodst : 0x280))
+/* rlp's src2 slot as one 10-bit value (default 0x300, the unused pattern) */
+#define SGX_UNUSED2()  (src->has_unused2 ? src->unused2 : 0x300)
 /* A named <expr> of the #instruction hierarchy, e.g. SGX_EXPR(__float_smode). */
 #define SGX_EXPR(n)    __instruction_expr_##n(s, p, src)
 

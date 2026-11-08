@@ -27,6 +27,9 @@ print_custom(struct isa_print_state *print, const char *name, uint64_t v)
    if (!strcmp(name, "NODST")) {
       if (v != 0x280)
          isa_print(print, " nodst=%" PRIu64, v);
+   } else if (!strcmp(name, "UNUSED2")) {
+      if (v != 0x300)
+         isa_print(print, " unused2=%" PRIu64, v);
    } else if (!strcmp(name, "IMM16") || !strcmp(name, "LIMM")) {
       isa_print(print, "#%" PRIu64, v);
    } else if (!strncmp(name, "SL", 2)) {
