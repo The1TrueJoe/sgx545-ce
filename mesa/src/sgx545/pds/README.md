@@ -1,9 +1,11 @@
 # SGX545 PDS programs (isaspec)
 
-`sgx545_pds.xml` describes the SGX545's PDS (programmable data sequencer)
-programs in Mesa's isaspec format, written from `docs/PDS.md`. isaspec
-generates the encoder and the disassembler from it; the C files here are the
-glue and a small text assembler.
+`sgx545_pds.xml` describes the PDS (programmable data sequencer) programs of
+the PowerVR SGX545 in Mesa's isaspec format. isaspec generates the encoder
+and the disassembler from it; the C files here are the glue and a small text
+assembler. The instruction set and its text notation are documented in
+`docs/PDS.md` of the sgx545-ce repository; the comments cite its sections by
+name.
 
 | file | what |
 |---|---|
@@ -21,7 +23,7 @@ from `../isa/sgx545_isa_enums.py` (`--prefix sgx545_pds`).
 
 ## The instructions
 
-The text is docs/PDS.md's "Text notation".
+The text is PDS.md's "Text notation".
 
 | op | s | form | text |
 |---|---|---|---|
@@ -53,19 +55,23 @@ DOUTA control word are encode-only roots: they sit in the data segment, which
 the decoder never sees (isaspec decodes from `#instruction` only). Each has a
 struct (`struct sgx545_pds_doutu`, ...) and an encoder
 (`sgx545_pds_doutu_w0()`, ...). The DOUTT words are texture state
-(docs/STATE.md, TEX.md), not described here.
+(`src/sgx545/csbgen/tex.xml`), not described here.
 
 ## Who uses it
 
-- The winsys (`gallium/winsys/sgx545/drm/sgx545_frame.c`) builds every PDS
+- The winsys (`src/gallium/winsys/sgx545/drm/sgx545_frame.c`) builds every PDS
   program through it: the pixel, secondary/state, DMA, vertex-fetch,
   pixel-event, background and TA-terminate programs, and their DOUTU, DOUTD,
   DOUTI and DOUTA words.
-- The driver (`gallium/drivers/sgx545/sgx545_program.c`) describes a fragment
+- The driver (`src/gallium/drivers/sgx545/sgx545_program.c`) describes a fragment
   program's iterations as `struct sgx545_pds_douti` (`struct sgxws_prog`);
   the winsys encodes them.
 
-## Gaps
+## Tests
 
-The PDS.md gaps hit while writing this, and their answers, are in
-`docs/log/entries/2026-11-04-0000-pds-isaspec.md`.
+`meson test --suite sgx545` runs `sgx545_pds` (with `-Dbuild-tests=true`):
+each line of `tests/pds.txt` goes text -> instruction -> word -> text, a
+line that gives a word must encode to it, and the DOUT data words PDS.md
+quotes are checked field by field. `sgx545_pds_test -f N` fuzzes N random
+words through decode and re-assembly; `-d` disassembles words read from
+stdin.

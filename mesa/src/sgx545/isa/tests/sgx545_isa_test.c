@@ -139,13 +139,13 @@ run_file(const char *path, bool table, unsigned *count)
       bool ok = true;
 
       if (have_want && (lo != want[0] || hi != want[1])) {
-         fprintf(stderr, "%s:%u: %s: encoded %08x %08x, expected %08x %08x\n",
-                 path, lineno, text, lo, hi, want[0], want[1]);
+         fprintf(stderr, "%s:%u: %s: encoded %08x %08x, expected %08x %08x\n", path, lineno, text,
+                 lo, hi, want[0], want[1]);
          ok = false;
       }
       if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)) || !same_text(dis, text)) {
-         fprintf(stderr, "%s:%u: %s: %08x %08x disassembles as: %s\n",
-                 path, lineno, text, lo, hi, dis);
+         fprintf(stderr, "%s:%u: %s: %08x %08x disassembles as: %s\n", path, lineno, text, lo, hi,
+                 dis);
          ok = false;
       }
       if (!ok)
@@ -185,7 +185,7 @@ fuzz(unsigned n, unsigned *count)
       w &= rnd64(&seed) | rnd64(&seed);
       if (i & 4)
          w = (w & ~(0x1full << 59)) | (rnd64(&seed) & 0x1full) << 59;
-      struct sgx545_isa_fc fc = { .c10 = i & 1, .f16 = (i >> 1) & 1 };
+      struct sgx545_isa_fc fc = {.c10 = i & 1, .f16 = (i >> 1) & 1};
       char dis[512], err[256], dis2[512];
       struct sgx_isa_instr I;
 
@@ -194,17 +194,16 @@ fuzz(unsigned n, unsigned *count)
       decoded++;
       if (!sgx545_isa_asm_line(dis, &I, err, sizeof(err))) {
          if (fails++ < 40)
-            fprintf(stderr, "fuzz: %08x %08x: %s: %s\n", (uint32_t)w,
-                    (uint32_t)(w >> 32), dis, err);
+            fprintf(stderr, "fuzz: %08x %08x: %s: %s\n", (uint32_t)w, (uint32_t)(w >> 32), dis,
+                    err);
          continue;
       }
       uint64_t w2 = sgx545_isa_encode(&I, &fc);
       if (w2 != w) {
          sgx545_disasm_one(w2, &fc, dis2, sizeof(dis2));
          if (fails++ < 40)
-            fprintf(stderr, "fuzz: %08x %08x: %s -> %08x %08x %s\n",
-                    (uint32_t)w, (uint32_t)(w >> 32), dis, (uint32_t)w2,
-                    (uint32_t)(w2 >> 32), dis2);
+            fprintf(stderr, "fuzz: %08x %08x: %s -> %08x %08x %s\n", (uint32_t)w,
+                    (uint32_t)(w >> 32), dis, (uint32_t)w2, (uint32_t)(w2 >> 32), dis2);
       }
    }
    *count += decoded;

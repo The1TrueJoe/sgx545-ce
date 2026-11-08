@@ -439,8 +439,8 @@ and S2 (16-bit halves of ds1).
 	<doc>
 		DOUTI word 0. Sample half: coordinate set + 1 (0 none), 2-D (b9),
 		projected (b10), last sample (b30). Iterate half: source (b11-16:
-		set + 1, 0 position, 0x20 colour, 0x22 depth plane; 0x24 on pure
-		samples), colour precision &lt; 2 (b21), components - 1, plain
+		set + 1, 0 position, 0x20 color, 0x22 depth plane; 0x24 on pure
+		samples), color precision &lt; 2 (b21), components - 1, plain
 		iteration (b24), b25-26, precision 2 / 1 (b27 / b28), last plain
 		iteration (b29).
 	</doc>
@@ -449,7 +449,7 @@ and S2 (16-bit halves of ds1).
 		<map name="DIM2">src->dim2</map>
 		<map name="PROJ">src->proj</map>
 		<map name="SRC">src->src</map>
-		<map name="CPREC">src->colour_prec</map>
+		<map name="CPREC">src->color_prec</map>
 		<map name="COMPS">src->comps ? src->comps - 1 : 0</map>
 		<map name="ITER">src->iterate</map>
 		<map name="B25">src->b25_26</map>

@@ -84,19 +84,13 @@ static const struct {
    const char *name;
    enum sgx545_pds_opc opc;
 } ops[] = {
-   { "op0xd.s1", SGX545_PDS_OPC_OP0XD_S1 },
-   { "op0x4.s1", SGX545_PDS_OPC_OP0X4_S1 },
-   { "op0x6.s1", SGX545_PDS_OPC_OP0X6_S1 },
-   { "add", SGX545_PDS_OPC_ADD },
-   { "mul16", SGX545_PDS_OPC_MUL16 },
-   { "or", SGX545_PDS_OPC_OR },
-   { "and", SGX545_PDS_OPC_AND },
-   { "xor", SGX545_PDS_OPC_XOR },
-   { "tst", SGX545_PDS_OPC_TST },
-   { "bra", SGX545_PDS_OPC_BRA },
-   { "shl", SGX545_PDS_OPC_SHL },
-   { "shr", SGX545_PDS_OPC_SHR },
-   { "halt", SGX545_PDS_OPC_HALT },
+   {"op0xd.s1", SGX545_PDS_OPC_OP0XD_S1}, {"op0x4.s1", SGX545_PDS_OPC_OP0X4_S1},
+   {"op0x6.s1", SGX545_PDS_OPC_OP0X6_S1}, {"add", SGX545_PDS_OPC_ADD},
+   {"mul16", SGX545_PDS_OPC_MUL16},       {"or", SGX545_PDS_OPC_OR},
+   {"and", SGX545_PDS_OPC_AND},           {"xor", SGX545_PDS_OPC_XOR},
+   {"tst", SGX545_PDS_OPC_TST},           {"bra", SGX545_PDS_OPC_BRA},
+   {"shl", SGX545_PDS_OPC_SHL},           {"shr", SGX545_PDS_OPC_SHR},
+   {"halt", SGX545_PDS_OPC_HALT},
 };
 
 static const char *const douts[] = {
@@ -143,7 +137,7 @@ static const char *operands(struct cursor *c, struct sgx545_pds_instr *in);
 const char *
 sgx545_pds_asm(const char *text, struct sgx545_pds_instr *in)
 {
-   struct cursor c = { text };
+   struct cursor c = {text};
 
    memset(in, 0, sizeof(*in));
    in->cc = SGX545_PDS_CC_ALWAYS;
@@ -246,7 +240,7 @@ operands(struct cursor *c, struct sgx545_pds_instr *in)
       if (in->src1.file == SGX545_PDS_FILE_DS1) {
          in->opc = SGX545_PDS_OPC_TST_S2;
          in->src2 = in->src1;
-         in->src1 = (struct sgx545_pds_reg){ 0 };
+         in->src1 = (struct sgx545_pds_reg){0};
       }
       return NULL;
    case SGX545_PDS_OPC_BRA:

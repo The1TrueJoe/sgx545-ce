@@ -2,20 +2,23 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# Build the ISA library and sgx545_isa_test without a Mesa build, against an
-# unpacked Mesa tree of mesa/VERSION's release (needs python3 with mako):
+# Build the ISA library (mesa/src/sgx545/isa) and sgx545_isa_test without a
+# Mesa build, against an unpacked Mesa tree of mesa/VERSION's release (needs
+# python3 with mako):
 #
-#    tests/standalone.sh <mesa-tree> [out-dir]  &&  <out-dir>/sgx545_isa_test tests/*.txt
+#    mesa/tests/isa-standalone/standalone.sh <mesa-tree> [out-dir]  &&
+#       <out-dir>/sgx545_isa_test mesa/src/sgx545/isa/tests/*.txt
 set -e
-HERE=$(cd "$(dirname "$0")/.." && pwd)
+T=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$T/../../src/sgx545/isa" && pwd)
 M=$(cd "$1" && pwd)
-B=${2:-$HERE/tests/build}
+B=${2:-$T/build}
 PY=${PYTHON:-python3}
 mkdir -p "$B/obj" "$B/isaspec"
 cp "$M"/src/compiler/isaspec/*.py "$B/isaspec/"
 (cd "$B" && mkdir -p a/src/compiler && rm -rf a/src/compiler/isaspec &&
  cp -R isaspec a/src/compiler/ &&
- P="$HERE/../../../patches/0004-isaspec-derived-bitset-params-and-override-fields.patch" &&
+ P="$T/../../patches/0004-isaspec-derived-bitset-params-and-override-fields.patch" &&
  # (a tree that already carries the patch is used as it is)
  { ! patch -d a -p1 --forward --batch --dry-run -s < "$P" >/dev/null 2>&1 ||
    patch -d a -p1 --forward --batch -s < "$P"; } &&
@@ -29,7 +32,7 @@ CF=(-std=gnu11 -g -O1 -I $B -I $HERE -I $M/src -I $M/include -I $M/src/compiler/
     -DHAVE_PTHREAD -DHAVE_STRUCT_TIMESPEC -DHAVE_TIMESPEC_GET -DHAVE_STRNDUP)
 OBJS=()
 for f in $B/sgx545-isa.c $HERE/sgx545_isa_encode.c $HERE/sgx545_isa_disasm.c \
-         $HERE/sgx545_isa_asm.c $HERE/sgx545_isa_asm_int.c $HERE/sgx545_isa_coissue.c $HERE/tests/standalone_stubs.c \
+         $HERE/sgx545_isa_asm.c $HERE/sgx545_isa_asm_int.c $HERE/sgx545_isa_coissue.c $T/standalone_stubs.c \
          $M/src/compiler/isaspec/isaspec.c $M/src/util/ralloc.c $M/src/util/hash_table.c; do
   o=$B/obj/$(basename $f .c).o
   ${CC:-cc} "${CF[@]}" -c $f -o $o

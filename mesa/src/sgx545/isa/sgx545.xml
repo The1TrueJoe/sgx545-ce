@@ -144,21 +144,21 @@ What isaspec cannot express directly, and how it is handled here:
 </enum>
 
 <enum name="#swz0">
-	<doc>fmad16 src0 swizzle (ISA.md "Float classes", hardware hwt_p4)</doc>
+	<doc>fmad16 src0 swizzle (ISA.md "Float classes")</doc>
 	<value val="0" display=""/>
 	<value val="1" display=" swz0=ll"/>
 	<value val="2" display=" swz0=hh"/>
 	<value val="3" display=" swz0=f32"/>
 </enum>
 <enum name="#swz1">
-	<doc>fmad16 src1 swizzle (ISA.md "Float classes", hardware hwt_p4)</doc>
+	<doc>fmad16 src1 swizzle (ISA.md "Float classes")</doc>
 	<value val="0" display=""/>
 	<value val="1" display=" swz1=ll"/>
 	<value val="2" display=" swz1=hh"/>
 	<value val="3" display=" swz1=f32"/>
 </enum>
 <enum name="#swz2">
-	<doc>fmad16 src2 swizzle (ISA.md "Float classes", hardware hwt_p4)</doc>
+	<doc>fmad16 src2 swizzle (ISA.md "Float classes")</doc>
 	<value val="0" display=""/>
 	<value val="1" display=" swz2=ll"/>
 	<value val="2" display=" swz2=hh"/>
@@ -1443,7 +1443,7 @@ NUM | BANK << 7 | EXT << 8.
 
 <bitset name="#op0xf3" extends="#move">
 	<doc>
-		USEASM 0xf3 (writes an output; never emitted by the compiler).
+		op0xf3 (writes an output; never emitted by the compiler).
 		f1_1 = h7, f1_26 = h22, a3f = h5-6.
 	</doc>
 	<field name="S2N" low="0" high="6" type="uint"/>
@@ -2421,7 +2421,7 @@ pa = 1.
 <bitset name="setfc" extends="#moe">
 	<doc>
 		a0 (l0) = the efo F16 enable (off at program start), a1 (l8) = the
-		C10 enable of the colour classes (on at program start).
+		C10 enable of the color classes (on at program start).
 	</doc>
 	<display>
 		{NAME} #{A0}, #{A1} [{NOSCHED}]
@@ -3285,13 +3285,6 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	<value val="1" display=" cs=s0a"/>
 </enum>
 
-<enum name="#i16-fmt">
-	<value val="0" display=""/>
-	<value val="1" display="=u8"/>
-	<value val="2" display="=s8"/>
-	<value val="3" display="=o8"/>
-</enum>
-
 <enum name="#imae-t2">
 	<value val="0" display=""/>
 	<value val="1" display=" t2=s16"/>
@@ -3420,7 +3413,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	</derived>
 </bitset>
 
-<!-- Colour classes: operands follow the C10 format control. -->
+<!-- Color classes: operands follow the C10 format control. -->
 <bitset name="#int-c10" extends="#int">
 	<derived name="IMODE" expr="#fc-c10" type="uint"/>
 	<encode>
@@ -3504,7 +3497,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 <bitset name="#sop3" extends="#int-c10">
 	<doc>
 		dst, src0 (r/pa), src1, src2; c1/c2 selects h6-8 + h24, h3-5 + h15;
-		h21 picks the colour op, h10 the coissued alpha op. No repeat.
+		h21 picks the color op, h10 the coissued alpha op. No repeat.
 	</doc>
 	<field name="S0N" low="14" high="20" type="uint"/>
 	<field name="S0B" pos="34" type="uint"/>
@@ -3588,7 +3581,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 <bitset name="#dot" extends="#int-c10">
 	<doc>
 		h24 = 4-vector; h5 = a coissued alpha op with src0 (dot3s/dot4s);
-		cs h7-8 colour scale; src1/src2 complement h11/h15.
+		cs h7-8 color scale; src1/src2 complement h11/h15.
 	</doc>
 	<field name="A2C" pos="35" type="uint"/>
 	<field name="F4" pos="36" type="bool" display=" f4"/>

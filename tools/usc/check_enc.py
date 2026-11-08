@@ -3,7 +3,7 @@ every instruction of the corpora (tools/isa/corpus/c1..c3), decoded by
 hw.decode() and printed in dis.py's notation, is assembled and encoded by
 sgx545_isa_test -t and must come back as the same 64 bits.
 
-    mesa/src/sgx545/isa/tests/standalone.sh <mesa-tree>    (or a Mesa build's sgx545_isa_test)
+    mesa/tests/isa-standalone/standalone.sh <mesa-tree>    (or a Mesa build's sgx545_isa_test)
     python3 -I tools/usc/check_enc.py [mesa/src/sgx545/isa/tests/build/sgx545_isa_test]
 """
 import os

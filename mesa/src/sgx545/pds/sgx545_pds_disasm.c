@@ -57,10 +57,10 @@ sgx545_pds_disasm_one(uint32_t word, char *buf, size_t size)
    if (!out)
       return false;
    sgx545pds_isa_disasm(&word, sizeof(word), out,
-                         &(struct isa_decode_options){
-                            .show_errors = true,
-                            .field_print_cb = print_custom,
-                         });
+                        &(struct isa_decode_options){
+                           .show_errors = true,
+                           .field_print_cb = print_custom,
+                        });
    fclose(out);
    tidy(text);
    bool ok = !strstr(text, "no match") && !strstr(text, "unexpected bits");

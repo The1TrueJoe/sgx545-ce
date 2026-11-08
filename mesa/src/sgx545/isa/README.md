@@ -1,9 +1,11 @@
 # SGX545 USSE instruction set (isaspec)
 
-`sgx545.xml` describes the SGX545's 64-bit USSE instructions in Mesa's
-isaspec format, written from `docs/ISA.md`. isaspec generates the encoder
-and the disassembler from it; the C files here are the glue and a small
-text assembler.
+`sgx545.xml` describes the 64-bit USSE (universal scalable shader engine)
+instructions of the PowerVR SGX545 in Mesa's isaspec format. isaspec
+generates the encoder and the disassembler from it; the C files here are the
+glue and a small text assembler. The instruction set and its text notation
+are documented in `docs/ISA.md` of the sgx545-ce repository; the comments
+cite its sections by name.
 
 | file | what |
 |---|---|
@@ -15,11 +17,23 @@ text assembler.
 | `sgx545_isa_coissue.c` | co-issue for a compiler: what an fdual's two halves read and write (`sgx545_isa_fdual_use()`), and the same-word races of fdual and efo (`sgx545_isa_coissue_hazard()`), from ISA.md "fdual for a compiler" and "efo" |
 | `sgx545_isa_enums.py` | generates `sgx545-isa-enums.h`: the opcode and operand-kind enums the encoder switches on, and the field-value enums |
 | `tests/sgx545_isa_test.c` | text -> struct -> words -> text round trip; checks expected words where a line gives them |
-| `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: ISA.md's efo control words and the other spellings of efo and fdual, as `a == b` lines) |
-| `tests/standalone.sh` | builds the library and the test against an unpacked Mesa tree, without a Mesa build |
+| `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: the efo control words and the other spellings of efo and fdual, as `a == b` lines, and the co-issue hazards) |
 
+Generated: `sgx545-isa.c` / `sgx545-isa.h` (decoder), `sgx545-isa-encode.h`
+(encoder), `sgx545-isa-enums.h`.
+
+## Tests
+
+`meson test --suite sgx545` runs `sgx545_isa` (with `-Dbuild-tests=true`):
+every line of the lists is assembled, encoded, disassembled and compared
+with its input, and a line that gives `; <lo> <hi>` must encode to those
+words.
+
+## isaspec change
+
+This needs one isaspec change, carried as
 `mesa/patches/0004-isaspec-derived-bitset-params-and-override-fields.patch`
-is the isaspec change this needs (see below).
+in sgx545-ce and to be sent upstream ahead of this tree (see below).
 
 ## How the XML is laid out
 
@@ -40,7 +54,7 @@ is the isaspec change this needs (see below).
   The encoder fills each range from its own `<map>`.
 - **Defaults in the text** ("a field the text doesn't show holds its
   default") are enums whose default value displays as nothing, or `custom`
-  fields printed by `sgx545_disasm.c` only when they differ.
+  fields printed by `sgx545_isa_disasm.c` only when they differ.
 
 ## What isaspec can't express, and what is done instead
 
@@ -74,47 +88,10 @@ is the isaspec change this needs (see below).
   spaces from field displays, so bracket items are space-separated in the
   XML and `sgx545_disasm()` collapses the runs.
 
-## ISA.md gaps hit while writing this
+## Users
 
-Sent to the ISA.md owner. Answered in ISA.md (um-re d7f97e4, e77b9f9,
-7359ad4), and the XML follows the answers:
-
-1. Bits no field names are 0: hw 1 h22, hw 3/4 h10, h7 in the forms
-   without src0, mov/movc h3-6, smp h19, testmask h2-3 and h6, the
-   special class's unlisted bits ("Unused slots and fixed patterns").
-2. nop and op0x98 have no predicate (h24-26 = 0); a prefix on a form
-   without a predicate field is an error.
-3. An `i<n>` operand under format select or efo's F16 control is
-   flag-only (`i1.f16`).
-4. Every slot that follows format select has 6-bit numbers whatever the
-   ALU op (test with fmt on a C10 op included).
-5. smp's mask and ret share h12-15; ret sets h14-15 over the mask.
-6. The text notation ("Text notation and defaults"): `|x|`, `(pn)`,
-   `rcnt rpt=n`, smp's suffix order, `drc=n`, decimal numbers, fmad16's
-   `swz0-2=`, fdual's `sd`/`sb`/`sc`/`msrc` names, numbers for enum values.
-
-7. The integer classes' undescribed bits (ima16 h15, ima32 h3/h20-21/h24,
-   the hw 16/17/1a forms, op1adrc) are 0 under the same rule; efo's
-   destination follows the F16 enable too. The spellings used here for
-   efo's d/i/a/m values, dot's `cs`/`as`/`s1c`/`s2c` and imae's `ci` are
-   listed under "Other spellings asm.py takes"; op16s1's h15 is `i=`.
-
-## The compiler on this encoder
-
-`mesa/src/sgx545/compiler` encodes through this library:
-
-- `sgx_forms.h` / `sgx_forms.c` name the forms the compiler emits (an opcode
-  plus its fixed fields: `pck.u8.f32`, `movc.i32`, ...), the fields it sets on
-  them, and each form's operand slots (role, the register files the slot
-  encodes, modifiers, whether it follows format select), which instruction
-  selection uses to legalize operands.
-- `sgx_encode_ins()` turns one IR instruction into a `struct sgx_isa_instr`
-  and calls `sgx545_isa_encode()` at the program-start format control (the
-  compiler emits no `setfc`); branches are encoded once their targets are
-  known, the dependent-sample template and the discard `nop` the same way.
-
-The old encoder (`usse_forms.h`, `usse.c`, `usse.h`, generated from
-`tools/isa/hw.py` by `tools/usc/gen_forms.py`) is deleted. Before it went,
-every corpus program (`tools/isa/corpus`, `tools/usc/tests`, plain and F16)
-gave byte-identical USPs and code with both encoders: 2600 outputs, and every
-instruction compared one by one.
+`src/sgx545/compiler` encodes through this library: it fills a `struct
+sgx_isa_instr` per instruction and calls `sgx545_isa_encode()` at the
+program-start format control (it emits no `setfc`).
+`sgx545_isa_fdual_use()` and `sgx545_isa_coissue_hazard()` give a scheduler
+the co-issue rules of fdual and efo.

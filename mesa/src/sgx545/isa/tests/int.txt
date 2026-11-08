@@ -1,8 +1,11 @@
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
 # Integer, fixed-point and multi-unit forms (hw 07, 10-1a) and fdual (hw 1b),
 # in docs/ISA.md's text notation. Program-start format control (C10 on,
 # efo F16 off) until a setfc line changes it.
 
-# --- lowp colour ops (C10 format control on) --------------------------------
+# --- lowp color ops (C10 format control on) --------------------------------
 sop2 r0, r1, r2 [c1=one c2=zero a1=zero a2=one]
 sop2 r3, r0.c10, r1.c10 [c1=one c2=zero a1=zero a2=one]
 sop2 r0, r1, r2 [c1=one c2=one cop=sub a1=zero a2=one aop=sub]

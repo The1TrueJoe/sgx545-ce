@@ -5,7 +5,7 @@
 The uAPI test's corpus of valid USSE instructions (drm/tests/usse_corpus.h):
 the clean-room isaspec encoder's words for its own test lists,
 
-  mesa/src/sgx545/isa/tests/standalone.sh <mesa-tree> <out>
+  mesa/tests/isa-standalone/standalone.sh <mesa-tree> <out>
   <out>/sgx545_isa_test -t tests/gles2.txt tests/int.txt > words.txt
   gen_usse_corpus.py words.txt > drm/tests/usse_corpus.h
 

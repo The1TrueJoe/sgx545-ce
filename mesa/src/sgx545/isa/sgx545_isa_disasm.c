@@ -17,8 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sgx545_isa.h"
 #include "sgx545-isa.h"
+#include "sgx545_isa.h"
 
 static void
 print_custom(struct isa_print_state *print, const char *name, uint64_t v)
@@ -42,11 +42,12 @@ print_custom(struct isa_print_state *print, const char *name, uint64_t v)
          isa_print(print, "#%d", (int)(int8_t)(v & 0xff));
       }
    } else if (v) {
-      static const struct { const char *field, *text; } names[] = {
-         { "ROT", "rot" },   { "PATH", "path" }, { "EN", "n" },
-         { "AM0", "am0" },   { "AM1", "am1" },   { "AM2", "am2" },
-         { "AM3", "am3" },   { "LIM0", "lim0" }, { "LIM1", "lim1" },
-         { "LIM2", "lim2" }, { "EIMM", "imm" },
+      static const struct {
+         const char *field, *text;
+      } names[] = {
+         {"ROT", "rot"},   {"PATH", "path"}, {"EN", "n"},     {"AM0", "am0"},
+         {"AM1", "am1"},   {"AM2", "am2"},   {"AM3", "am3"},  {"LIM0", "lim0"},
+         {"LIM1", "lim1"}, {"LIM2", "lim2"}, {"EIMM", "imm"},
       };
       for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
          if (!strcmp(name, names[i].field)) {
@@ -114,11 +115,10 @@ tidy(char *s)
 }
 
 bool
-sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc,
-                  char *buf, size_t size)
+sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc, char *buf, size_t size)
 {
    struct sgx545_isa_fc f = fc ? *fc : SGX545_ISA_FC_START;
-   uint32_t words[2] = { (uint32_t)word, (uint32_t)(word >> 32) };
+   uint32_t words[2] = {(uint32_t)word, (uint32_t)(word >> 32)};
    char *text = NULL;
    size_t len = 0;
    FILE *out = open_memstream(&text, &len);
@@ -135,16 +135,15 @@ sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc,
    fclose(out);
 
    tidy(text);
-   bool ok = !strstr(text, "no match") && !strstr(text, "unexpected bits") &&
-             !strstr(text, "dontcare");
+   bool ok =
+      !strstr(text, "no match") && !strstr(text, "unexpected bits") && !strstr(text, "dontcare");
    snprintf(buf, size, "%s", text);
    free(text);
    return ok;
 }
 
 void
-sgx545_disasm(const uint32_t *words, unsigned n, FILE *out,
-              const struct sgx545_isa_fc *fc)
+sgx545_disasm(const uint32_t *words, unsigned n, FILE *out, const struct sgx545_isa_fc *fc)
 {
    struct sgx545_isa_fc f = fc ? *fc : SGX545_ISA_FC_START;
    char line[512];
