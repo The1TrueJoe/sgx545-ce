@@ -17,7 +17,7 @@
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
-#include "pvrsgx_regs.h"
+#include "pvrsgx_hw.h"
 
 /* Device-wide ranges for kernel-owned objects (docs/UAPI.md section 5). */
 enum pvrsgx_krange {

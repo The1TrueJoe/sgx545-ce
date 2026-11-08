@@ -29,6 +29,7 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
 #include "pvrsgx_validate.h"
+#include "pvrsgx_prime.h"
 #include "pvrsgx_vm.h"
 
 /* The client heaps, the same in every VM. */
@@ -268,74 +269,6 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 	return 0;
 }
 
-/*
- * The imported objects mapped in vm, each once and referenced, for a job to
- * flush around itself (pvrsgx_job.c). *out is NULL when there are none.
- */
-int pvrsgx_vm_imports(struct pvrsgx_vm *vm, struct drm_gem_object ***out, u32 *n)
-{
-	struct drm_gem_object **objs = NULL;
-	struct drm_gpuva *va;
-	u32 count = 0, cap = 0;
-	int err = 0;
-
-	mutex_lock(&vm->lock);
-	drm_gpuvm_for_each_va(va, &vm->gpuvm) {
-		struct drm_gem_object *obj = va->gem.obj;
-		u32 i;
-
-		if (!obj || !drm_gem_is_imported(obj))
-			continue;
-		for (i = 0; i < count && objs[i] != obj; i++)
-			;
-		if (i < count)
-			continue;
-		if (count == cap) {
-			struct drm_gem_object **more;
-
-			cap = cap ? 2 * cap : 4;
-			more = krealloc_array(objs, cap, sizeof(*objs), GFP_KERNEL);
-			if (!more) {
-				err = -ENOMEM;
-				break;
-			}
-			objs = more;
-		}
-		drm_gem_object_get(obj);
-		objs[count++] = obj;
-	}
-	mutex_unlock(&vm->lock);
-
-	if (err) {
-		while (count)
-			drm_gem_object_put(objs[--count]);
-		kfree(objs);
-		return err;
-	}
-	*out = objs;
-	*n = count;
-	return 0;
-}
-
-/*
- * An import's pages were mapped for this device with its 32-bit DMA mask.
- * Without an IOMMU a page above 4 GiB comes back as a swiotlb bounce buffer,
- * which the GPU would write behind the exporter's back: refuse those.
- */
-static bool import_reachable(struct device *dev, struct sg_table *sgt)
-{
-	struct scatterlist *sg;
-	unsigned int i;
-
-	if (device_iommu_mapped(dev))
-		return true;
-	for_each_sgtable_dma_sg(sgt, sg, i) {
-		if (sg_page(sg) && sg_dma_address(sg) != sg_phys(sg))
-			return false;
-	}
-	return true;
-}
-
 int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_vm_map_args *args = data;
@@ -385,7 +318,7 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 		err = PTR_ERR(sgt);
 		goto out_va;
 	}
-	if (drm_gem_is_imported(obj) && !import_reachable(drm->dev, sgt)) {
+	if (drm_gem_is_imported(obj) && !pvrsgx_prime_reachable(drm->dev, sgt)) {
 		err = -EFAULT;
 		goto out_va;
 	}

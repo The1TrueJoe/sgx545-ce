@@ -109,7 +109,7 @@ static void reset_sleep(struct pvrsgx_device *sdev)
 static void soft_reset(struct pvrsgx_device *sdev, bool bif)
 {
 	sgx_wr(sdev, SGX_CR_SOFT_RESET,
-	       SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF : 0));
+	       SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF_RESET : 0));
 }
 
 static void inval_dc(struct pvrsgx_device *sdev)

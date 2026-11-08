@@ -539,7 +539,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
 			sgx_wr(sdev, SGX_CR_SOFT_RESET,
-			       SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+			       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
 			sgx_rd(sdev, SGX_CR_SOFT_RESET);
 			/* Behind gma500 bus mastering is the display's too: leave it. */
 			if (sdev->pdev)
@@ -570,8 +570,9 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 
 	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
-	       (SGX_CLKG_ALL(SGX_CR_CLKGATECTL_UNITS, SGX_CLKG_AUTO) & ~SGX_CR_CLKGATECTL_DPM) |
-	       FIELD_PREP(SGX_CR_CLKGATECTL_DPM, SGX_CLKG_ON));
+	       (SGX_CLKG_ALL(SGX_CR_CLKGATECTL_UNITS, SGX_CLKG_AUTO) &
+		~SGX_CR_CLKGATECTL_DPM_CLKG) |
+	       FIELD_PREP(SGX_CR_CLKGATECTL_DPM_CLKG, SGX_CLKG_ON));
 	sgx_wr(sdev, SGX_CR_CLKGATECTL2, SGX_CLKG_ALL(SGX_CR_CLKGATECTL2_UNITS, SGX_CLKG_AUTO));
 	sgx_wr(sdev, SGX_CR_EVENT_PDS_ENABLE, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
@@ -585,7 +586,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
-	sgx_wr(sdev, SGX_CR_EVENT_KICK2, SGX_CR_EVENT_KICK_NOW);
+	sgx_wr(sdev, SGX_CR_EVENT_KICK2, SGX_CR_EVENT_KICK2_NOW);
 
 	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
 			  HOSTCTL_INIT_COMPLETE, 500000);
@@ -623,7 +624,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			drm_warn(&sdev->base, "microkernel did not power off\n");
 		/* Wait for the clocks to gate; the DPM's stays on. */
 		for (int i = 0; i < 500; i++) {
-			if (!(sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & ~SGX_CR_CLKGATESTATUS_DPM))
+			if (!(sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & ~SGX_CR_CLKGATESTATUS_DPM_CLKS))
 				break;
 			usleep_range(100, 200);
 		}
@@ -631,13 +632,15 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		synchronize_irq(sdev->irq);
 		deinit_script(sdev);
 		sdev->fw_running = false;
-		sgx_wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET,
+		       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	} else if (READ_ONCE(sdev->powered)) {
 		/* A failed start: the clocks are on, the microkernel isn't. */
 		WRITE_ONCE(sdev->powered, false);
 		synchronize_irq(sdev->irq);
-		sgx_wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET,
+		       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
 }

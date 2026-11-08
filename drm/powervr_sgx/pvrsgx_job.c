@@ -11,7 +11,6 @@
  */
 
 #include <drm/drm_auth.h>
-#include <drm/drm_cache.h>
 #include <drm/drm_exec.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
@@ -35,6 +34,7 @@
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
+#include "pvrsgx_prime.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_trace.h"
 #include "pvrsgx_validate.h"
@@ -108,38 +108,6 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
 	return done;
 }
 
-/*
- * The GPU's accesses don't snoop the CPU caches (log 2026-11-04-0100). Our own
- * objects are write-combined on the CPU; an import may be cached, so flush
- * every import mapped in the job's VM before it runs (no dirty line lands on
- * its output later) and after (no stale line hides it). Which of them the job
- * touches is not known: a BO list is optional, and explicit sync names none.
- */
-static void job_flush_imports(struct pvrsgx_job *job, bool after)
-{
-	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
-
-	for (u32 i = 0; i < job->nimports; i++) {
-		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);
-
-		if (shmem->sgt) {
-			drm_clflush_sg(shmem->sgt);
-			bytes += shmem->base.size;
-		}
-	}
-	if (job->nimports)
-		trace_pvrsgx_flush_imports(job->hw_fence ? job->hw_fence->seqno : 0,
-					   job->nimports, bytes,
-					   t0 ? ktime_get_ns() - t0 : 0, after);
-}
-
-static void job_put_imports(struct pvrsgx_job *job)
-{
-	for (u32 i = 0; i < job->nimports; i++)
-		drm_gem_object_put(job->imports[i]);
-	kfree(job->imports);
-}
-
 /* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 {
@@ -168,7 +136,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 
 	list_for_each_entry(job, &finished, node)
-		job_flush_imports(job, true);
+		pvrsgx_prime_flush(job, true);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &finished, node) {
 		list_del_init(&job->node);
@@ -241,7 +209,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		return fence;
 	}
 
-	job_flush_imports(job, false);
+	pvrsgx_prime_flush(job, false);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
@@ -332,7 +300,7 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 		drm_gem_object_put(job->bos[b]);
 	kvfree(job->bos);
 	kvfree(job->bo_flags);
-	job_put_imports(job);
+	pvrsgx_prime_put(job);
 	pvrsgx_render_job_fini(job);
 	context_put(job->ctx);
 	kfree(job);
@@ -529,7 +497,7 @@ static void job_args_fini(struct job_args *ja)
 	if (ja->job) {
 		if (ja->inited)
 			drm_sched_job_cleanup(&ja->job->base);
-		job_put_imports(ja->job);
+		pvrsgx_prime_put(ja->job);
 		pvrsgx_render_job_fini(ja->job);
 		context_put(ja->job->ctx);
 		kfree(ja->job->hw_fence_mem);
@@ -749,8 +717,8 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	for (u32 i = 0; i < n; i++) {
 		err = job_create(file, &in[i], &ja[i], ja, i);
 		/* Before the reservations: VM_MAP takes vm->lock, then them. */
-		err = err ?: pvrsgx_vm_imports(ja[i].job->ctx->vm, &ja[i].job->imports,
-					       &ja[i].job->nimports);
+		err = err ?: pvrsgx_prime_imports(ja[i].job->ctx->vm, &ja[i].job->imports,
+						  &ja[i].job->nimports);
 		if (err) {
 			args->failed_index = i;
 			goto out;
