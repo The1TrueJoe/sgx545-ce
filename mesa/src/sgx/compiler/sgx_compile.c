@@ -2634,6 +2634,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          for (unsigned k = 0; k < 4; k++)
             if (wmask & (1u << k))
                c->color[k] = src_comp(c, &ls, k - nir_intrinsic_component(in));
+         c->color_mask |= wmask & 0xf;
          c->has_color = true;
          return;
       }
@@ -3970,7 +3971,9 @@ emit_color(struct sgx_ctx *c)
    }
    struct sgx_ref col[4];
    for (unsigned k = 0; k < 4; k++)
-      col[k] = c->has_color ? c->color[k] : ref(SGX_F_K, 0);
+      /* (a channel no store wrote is undefined: 0) */
+      col[k] = c->has_color && (c->color_mask >> k & 1) ? c->color[k]
+                                                        : ref(SGX_F_K, 0);
    bool h16 = c->has_color;
    for (unsigned k = 0; k < 4; k++)
       h16 &= col[k].h16 || (col[k].file == SGX_F_K &&
@@ -5731,8 +5734,8 @@ static const struct debug_named_value sgx_debug_options[] = {
    DEBUG_NAMED_VALUE_END,
 };
 
-DEBUG_GET_ONCE_FLAGS_OPTION(sgx_debug, "SGX_COMPILER_DEBUG",
-                            sgx_debug_options, 0)
+DEBUG_GET_ONCE_FLAGS_OPTION(sgx_debug, "SGX_COMPILER_DEBUG", sgx_debug_options,
+                            0)
 
 int
 sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,

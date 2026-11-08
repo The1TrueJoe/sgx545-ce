@@ -188,6 +188,7 @@ struct sgx_ctx {
 
    /* fragment */
    struct sgx_ref color[4];
+   unsigned color_mask; /* the channels of color[] a store wrote */
    bool has_color;
    struct sgx_ref depth; /* gl_FragDepth */
    bool has_depth;

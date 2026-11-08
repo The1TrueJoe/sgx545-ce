@@ -46,7 +46,8 @@ fi
 install -m 0755 "$HERE/kit-init" "$ROOT/sbin/kit-init"
 install -m 0755 "$HERE/kit-protect" "$ROOT/usr/local/sbin/"
 install -m 0755 "$HERE/kit-stick" "$HERE/kit-run" "$ROOT/usr/local/bin/"
-printf 'KIT_VERSION=%s\nDISKID=%s\nKERNEL=%s\n' "$VER" "$DISKID" "$KVER" > "$ROOT/etc/kit-release"
+printf 'KIT_SERIES=%s\nKIT_VERSION=%s\nDISKID=%s\nKERNEL=%s\n' "$(cat "$HERE/SERIES")" "$VER" "$DISKID" "$KVER" \
+	> "$ROOT/etc/kit-release"
 for d in proc sys dev tmp run var/log var/tmp root mnt; do mkdir -p "$ROOT/$d"; done
 mksquashfs "$ROOT" "$W/root.sqfs" -comp xz -noappend -quiet
 

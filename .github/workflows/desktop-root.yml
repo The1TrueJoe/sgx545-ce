@@ -39,7 +39,7 @@ jobs:
           set -eux
           pkgs=$(grep -v '^#' mesa/tests/desktop/packages.txt | grep . | paste -sd, -)
           sudo mmdebstrap --variant=apt --architectures=amd64 \
-            --keyring=keyring/usr/share/keyrings/debian-archive-keyring.gpg \
+            --keyring="$PWD/keyring/usr/share/keyrings" \
             --include="$pkgs" \
             --dpkgopt='path-exclude=/usr/share/doc/*' --dpkgopt='path-exclude=/usr/share/man/*' \
             --dpkgopt='path-exclude=/usr/share/info/*' \

@@ -33,9 +33,16 @@ writes against the DDK's.
 import os
 
 DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+0xE8
-RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector: flag ctlblk+0xe0 (word 0x38,
-                                             # inside the driver's devcd dump) = 0x1217 when a
-                                             # first kick starts a scene on a
+XFER_BANK_ALL = os.environ.get("UK_XFER_BANK") == "1"   # v3 Cedarview-1.0.13 blit variant B: route
+                                             # ALL of the transfer's data masters (TA/HOST/3D/2D)
+                                             # to list 1 (the ctx PD), not just TA/3D. The 1.0.13
+                                             # transfer pixel task may run on the 2D/HOST DM, whose
+                                             # BANK0 nibble we leave at list 0 (idle) -> USSE-code
+                                             # fetch at 0x37000000 faults (m2 devcd decode). Safe on
+                                             # the CE5300 (adds routing a 3D-DM transfer never uses).
+RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector (both words inside the devcd
+                                             # dump): word 0x37 = the open scene's RT, word 0x3a
+                                             # = 0x1217 when a first kick opens a scene on a
                                              # different RT while a render is still in flight (the
                                              # render-to-texture case the DDK's 2nd DPM slot
                                              # covers and ours does not). Default off -> no bytes.
@@ -888,9 +895,15 @@ def build(a):
     a.label("k_cleanup_complete")
     a.i("limm r4, #0")
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r4 [moe]")   # reset the defer counter
-    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r4 [moe]")       # a cleaned-up PB may be freed and a new
-    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r4 [moe]")       # one reallocated at the same address: force
-    a.i("idf")                                          # a reload (the DDK clears these on cleanup)
+    # Do NOT clear the PB free-list markers here. The DDK clears them on cleanup ONLY when the
+    # cleaned-up resource IS the loaded PB (pc 0x03a5/0x0475); an RT-dataset or render-context
+    # cleanup that shares the live PB must not. Minecraft's target switches send exactly those
+    # RT/ctx cleanups mid-scene; the old unconditional clear made the next kick reload the free
+    # list from the frame-1 descriptor -> stale head -> r700 walks to the 0xffff terminator and
+    # faults (ta3d-state 2026-11-08). A same-address PB realloc can't happen in one session: the
+    # driver keeps PB descriptors until the next microkernel restart (m2), and init clears the
+    # markers then -- the only time a PB address is reused.
+    a.i("idf")
     a.i("wdf")
     a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
@@ -940,8 +953,8 @@ def build(a):
     # address (m2 2026-11-04: BANK0=0x0f, DIR_LIST_BASE0=idle, FAULT on 0x3e001000). We do
     # NOT write the ctx PD into list 0 -- that clobbers the kernel PD the 3D/ISP/PBE read
     # through and wedged srvinit (do_ta note, 2026-11-03); routing via BANK0 avoids that.
-    a.i("limm r5, #0x101f")
-    a.i(f"str #{0xc78 // 4}, r5")                    # BIF_BANK0: TA/3D -> list 1 (ctx PD)
+    a.i(f"limm r5, #{0x1111f if XFER_BANK_ALL else 0x101f}")
+    a.i(f"str #{0xc78 // 4}, r5")                    # BIF_BANK0: TA/3D (or all DMs if XFER_BANK_ALL) -> list 1 (ctx PD)
     a.i(f"ldr r5, #{0xc78 // 4}")                    # read-back + fence
     a.i("wdf")
     a.i("limm r5, #1")
@@ -1055,19 +1068,29 @@ def build(a):
         # a scene on a different RT entry while a render is still in flight means two scenes share
         # our single DPM context, so this kick's dpm_load clear corrupts the in-flight scene's
         # free list (ta3d-state fbo64; the DDK uses a 2nd DPM slot). Flag it in word 0x3c.
-        a.i("test.and.eq p0, r13, r13")             # not a first kick -> skip
-        a.i("(p0) ba rtlog_done")
+        # Track the OPEN scene's RT in ctlblk word 0x37, set at a FIRST kick and cleared at
+        # render completion. The interleave corrupts at the TA level (B's first kick runs its
+        # dpm_load clear while A's scene is open but A's 3D has not started, so SC_INFLIGHT is
+        # still 0 — my earlier SC_INFLIGHT check missed it). Flag 0x3a when a first kick's RT
+        # differs from the already-open one. Both words are inside the devcd dump (<=0x3a).
+        a.i("test.and.ne p0, r13, r13")             # first kick (r13 != 0)?
+        a.i("(!p0) ba rtlog_clear")                 # terminate (r13 == 0) -> this scene closes
         a.i(f"ld.a.d r5, r9, #{CMDTA_RTENTRY} [moe]")   # this kick's RT-data entry (cmd+0x44)
-        a.i(f"ld.a.d r6, r17, #{SC_INFLIGHT} [moe]")    # in-flight render's RT entry (0 = none)
+        a.i("ld.a.d r6, r17, #0x37 [moe]")          # OPEN_RT: the open scene's RT (0 = none open)
         a.i("wdf")
-        a.i("test.and.eq p0, r6, r6")               # nothing in flight -> not an interleave
+        a.i("st.a.d r17, #0x37, r5 [moe]")          # this scene is now the open one
+        a.i("idf"); a.i("wdf")
+        a.i("test.and.eq p0, r6, r6")               # none open -> not an interleave
         a.i("(p0) ba rtlog_done")
         a.i("test.xor.eq p0, r5, r6")               # same RT -> not an interleave
         a.i("(p0) ba rtlog_done")
         a.i("limm r6, #0x1217")
-        a.st_sa(SA_SELF, 0x38, 6)                   # seen an interleaved scene (word 0x38 is
-                                                    # inside the driver's ta3dctl devcd dump,
-                                                    # which stops at 0x3a; sticky once set)
+        a.st_sa(SA_SELF, 0x3a, 6)                   # a first kick opened a 2nd scene on a diff RT
+        a.i("ba rtlog_done")
+        a.label("rtlog_clear")                      # terminate kick: the scene's TA closes, so a
+        a.i("limm r5, #0")                          # serialized next scene isn't a false interleave
+        a.i("st.a.d r17, #0x37, r5 [moe]")          # (this write is in the TA phase, not the
+        a.i("idf"); a.i("wdf")                      # render-teardown the oracle diffs)
         a.label("rtlog_done")
     if WAIT_LOG:
         # stage marker: RESET to 1 only on the FIRST kick of a scene (r13!=0), so

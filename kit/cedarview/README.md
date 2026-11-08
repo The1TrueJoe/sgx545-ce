@@ -12,6 +12,7 @@ side is [docs/TESTING-CEDARVIEW.md](../../docs/TESTING-CEDARVIEW.md).
 | `kit-stick` | the stick's disk, found by the image's fixed MBR disk id |
 | `kit-run` | the test run and the results file |
 | `grub.cfg`, `README-STICK.txt` | the boot menu, and the note on the stick's FAT partition |
+| `SERIES` | the kit's version for testers (`v2.1`): on the screen and in the results file name. Raise it for every kit a tester gets |
 
 CI: `.github/workflows/cedarview-kit.yml` builds it on every push to `kit/cedarview/`
 and keeps the image as the run's `sgx545-cedarview-kit` artifact for 90 days. Testers get

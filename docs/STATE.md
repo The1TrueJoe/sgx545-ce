@@ -938,7 +938,7 @@ constant):
 | 10 | min filter linear | D |
 | 12 | mag filter linear | C |
 | 17-20 | 0xf without mipmaps, 0xd with (b18 = mipmapping off) | D |
-| 21-26 | 0x3f in every capture (an LOD clamp?). On a CE5300 board (32×32, 6 levels, NEAREST_MIPMAP_NEAREST, open driver): b21-22 change nothing; b23-26 = 14 or 15 samples normally; b23-26 = 0..13 samples every level ≥ 1 as level 0. So it is not a max level counted in levels | G, C |
+| 21-26 | **LOD bias**, one 6-bit field v in 1/8 levels: bias = (v - 63)/8, so the DDK's 0x3f is no bias. Level sampled = floor(λ + bias + 0.5). On a CE5300 board, for 16- to 128-texel chains, the shift is the same at every size: v 63..59 → 0, 58..51 → -1, 47/43 → -2, 39/35 → -3, 19 → -5, 3 → -7. Not a clamp: GL's MAX_LEVEL/MAX_LOD need another mechanism. Whether a positive bias reaches into b27 is untested | C |
 | 30 | set for L8, A8 and LA88 (channel replication?) | D |
 
 **T1:**
@@ -1149,7 +1149,7 @@ For w × h, no multisampling:
 | 0x20 | 20006000 | region headers of this render | D |
 | 0x24 | 0 | kick +0x4c | G |
 | 0x28 | 20003000 | region headers of the next render | D |
-| 0x2c | 0 / 001710b4 | ZLS control: `drawable bits & 0xf80ee007 \| 0x111000 \| (xt-1)<<3` (kick +0x6c), windows only; FBOs get `0x140018`-style words with no store. b2+b12+b16+b17 store depth (float32), b19 negates it, b0/b1 lock the 3D, the load bit is unknown (`docs/TEX.md` section 7) | D, store C |
+| 0x2c | 0 / 001710b4 | ZLS control: `drawable bits & 0xf80ee007 \| 0x111000 \| (xt-1)<<3` (kick +0x6c), windows only; FBOs get `0x140018`-style words with no store. store = b2 \| b17 \| b18 (float32 depth), load = b1 \| b13 \| b14 (the render after a readback split: `001770b6`), b19 negates the stored depth. b0/b1 with invalid stencil words lock up the 3D (`docs/TEX.md` section 7) | D, store C |
 | 0x30, 0x34 | | **depth** address - ZLS base, in both words (libGLESv2 `FUN_0002e2d0`; earlier read as depth/stencil store) | D |
 | 0x38, 0x3c | 80000000 | b31 \| **stencil** address - ZLS base, in both words (earlier read as depth/stencil load) | D |
 | 0x40 | 3f800000 | ISP background depth: the depth every tile starts from (kick +0x10, 1.0). glClearDepth does **not** change it: the clear writes depth through its own vertices' z, with depth write on in its ISPA (`cdepth`) | C |
@@ -1305,7 +1305,7 @@ constants.
   32-bit formats.
 - For the other layouts:
   - b17-20 is 0xf without mipmaps and 0xd with them;
-  - b21-26 is 0x3f in every capture [O];
+  - b21-26 is the LOD bias, 0x3f = none [C];
   - which of b17-20 is "mipmapping off" beyond b18 is U.
 - b0-2, b11, b13-16 and b27-29 are 0 in every capture [U: 0].
 - b30 is the L8/A8/LA88 bit.

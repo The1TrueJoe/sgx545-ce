@@ -7,9 +7,14 @@ auxiliary device, `gma500_gfx.sgx`, for powervr_sgx (`CONFIG_DRM_POWERVR_SGX_GMA
 
 - `0001`: the auxiliary device, the interrupt hand-over, and gma500 keeping its
   hands off the SGX's registers while it has another owner.
+- `0002`: PRIME export of gma500's GEM objects, so Mesa (kmsro) can render into
+  scanout buffers allocated on the display device. gma500 had no PRIME at all.
+- `0003`: the graphics power island gets 10 ms to come up instead of 50 us, which
+  stops a "GPU: power management timed out" at every Cedarview boot.
 
 They are written to go to the gma500 maintainers as they are. Before sending,
 the author adds a `Signed-off-by:`, and an `Assisted-by:` trailer for the tooling.
 
-Untested on hardware: nobody here has a Cedarview machine. CI builds them
-(the `cedarview` job), and the tester kit runs them.
+On hardware: `0001` is proven on an Atom N2600 (the auxiliary device appears,
+powervr_sgx binds and identifies the core). `0002` is untested. CI builds both
+(the `cedarview` and Debian package jobs).
