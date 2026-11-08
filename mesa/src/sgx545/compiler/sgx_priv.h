@@ -208,6 +208,11 @@ sgx_vreg(struct sgx_ctx *c, unsigned i)
 }
 
 /* the SA register of uniform constant k / literal i (kept in SA) */
+/* SGX_DISABLE=a,b,...: turn optimisation passes off by name (a debugging
+ * bisect without rebuilding): pa o coalesce split fold selfmov lit32
+ * narrow16 mediump minmax32 condmask csel1 csel32 */
+bool sgx_disabled(const char *pass);
+
 static inline unsigned
 sgx_const_sa(const struct sgx_ctx *c, unsigned k)
 {
