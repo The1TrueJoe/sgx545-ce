@@ -741,5 +741,19 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I,
    } else if (I->rcnt) {
       return fail(&c, "'%s' has no rcnt", mnem);
    }
+   /* a source immediate is 7 bits, unsigned or (in the forms ISA.md says)
+    * two's complement: -64..127; the bitwise classes' src2 takes 16 */
+   for (unsigned k = 0; k < 3; k++) {
+      bool wide = k == 2 && (I->opc == SGX_ISA_OPC_AND || I->opc == SGX_ISA_OPC_OR ||
+                             I->opc == SGX_ISA_OPC_XOR || I->opc == SGX_ISA_OPC_SHL ||
+                             I->opc == SGX_ISA_OPC_SHR || I->opc == SGX_ISA_OPC_ROL ||
+                             I->opc == SGX_ISA_OPC_ASR);
+      int32_t n = (int32_t)I->src[k].num;
+      if (I->src[k].file == SGX_ISA_FILE_IMM && !wide && (n < -64 || n > 127)) {
+         char num[16];
+         snprintf(num, sizeof(num), "#%d", n);
+         return fail(&c, "immediate %s doesn't fit 7 bits", num);
+      }
+   }
    return true;
 }

@@ -85,3 +85,8 @@ ssum16 r0, sa4, sa5, r3 [fmt=o8] == ssum16.o8 r0, sa4, sa5, r3
 rlp r0, r1, p2 [unused2=5]
 rlp r0, r1, p2 [unused2=768] == rlp r0, r1, p2
 rlp r0, r1, p2 [unused2=0x3ff] == rlp r0, r1, p2 [unused2=1023]
+
+# A signed 7-bit immediate is its two's complement: imae's src2 for any t2
+# but 0 (ISA.md "imae"); the text shows the raw 7-bit value
+imae o72, pa36, r58, #-63 [skipinv rpt=7 f2_15=3 t2=u32 s2hi] == imae o72, pa36, r58, #65 [skipinv rpt=7 f2_15=3 t2=u32 s2hi]
+(!p0) imae pa0, r44, r6, #-52 [skipinv nosched rpt=4 f2_15=1 t2=x3 s1hi s2hi] == (!p0) imae pa0, r44, r6, #76 [skipinv nosched rpt=4 f2_15=1 t2=x3 s1hi s2hi]
