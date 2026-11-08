@@ -914,9 +914,12 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			wr(sdev, SGX_CR_SOFT_RESET,
 			   SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
 			sgx_rd(sdev, SGX_CR_SOFT_RESET);
-			pci_clear_master(sdev->pdev);
+			/* Behind gma500 bus mastering is the display's too: leave it. */
+			if (sdev->pdev)
+				pci_clear_master(sdev->pdev);
 			fsleep(10000);
-			pci_set_master(sdev->pdev);
+			if (sdev->pdev)
+				pci_set_master(sdev->pdev);
 		}
 		memset(sdev->fw.data.cpu, 0, sdev->fw.data.size);
 		memset(sdev->fw.code.cpu, 0, sdev->fw.code.size);

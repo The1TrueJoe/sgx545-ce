@@ -30,6 +30,7 @@ enum pvrsgx_krange {
 };
 
 struct firmware;
+struct gma500_sgx_device;
 struct pci_dev;
 struct pvrsgx_mmu;
 struct pvrsgx_vm;
@@ -123,8 +124,14 @@ struct pvrsgx_fw {
 struct pvrsgx_device {
 	/** @base: The DRM device. */
 	struct drm_device base;
-	/** @pdev: The SGX PCI function. */
+	/** @pdev: The SGX PCI function (CE5300), or NULL behind gma500 (Cedarview). */
 	struct pci_dev *pdev;
+	/** @gma_sgx: The gma500 auxiliary device behind which the SGX sits, or NULL. */
+	struct gma500_sgx_device *gma_sgx;
+	/** @irq_work: The interrupt's bottom half behind gma500, which owns the line. */
+	struct work_struct irq_work;
+	/** @parent_held: A runtime-PM reference on gma500 held while bound (runtime_pm=0). */
+	bool parent_held;
 
 	/** @regs: The core registers (BAR 0). */
 	void __iomem *regs;

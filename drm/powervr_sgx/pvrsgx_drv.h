@@ -16,7 +16,27 @@
 #define PVRSGX_SYNC_OP_FLAGS_MASK	(DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_MASK | \
 					 DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL)
 
+/* The registers this driver touches all lie below this offset. */
+#define PVRSGX_REGS_MIN			0x4000
+
+struct device;
+struct dev_pm_ops;
 struct drm_powervr_sgx_obj_array;
+struct pvrsgx_device;
+
+extern const struct dev_pm_ops pvrsgx_pm_ops;
+
+struct pvrsgx_device *pvrsgx_alloc(struct device *dev);
+int pvrsgx_probe_common(struct pvrsgx_device *sdev);
+void pvrsgx_remove_common(struct pvrsgx_device *sdev);
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+int pvrsgx_aux_register(void);
+void pvrsgx_aux_unregister(void);
+#else
+static inline int pvrsgx_aux_register(void) { return 0; }
+static inline void pvrsgx_aux_unregister(void) { }
+#endif
 
 void *pvrsgx_obj_array_get(const struct drm_powervr_sgx_obj_array *in, u32 obj_size,
 			   u32 max_count);

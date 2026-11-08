@@ -168,3 +168,84 @@ jobs:
           name: powervr-sgx-${{ env.BOARD }}
           path: out/
           retention-days: 14
+
+  # Cedarview (GMA3600/3650): mainline + drm/gma500 patches, no hardware here.
+  # The artifact is the kernel the Cedarview tester kit boots.
+  cedarview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev cpio ccache sparse
+
+      - name: Restore the kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.LINUX_VERSION }}.tar.xz
+          key: linux-${{ env.LINUX_VERSION }}
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-cdv-${{ env.LINUX_VERSION }}-${{ github.sha }}
+          restore-keys: ccache-cdv-${{ env.LINUX_VERSION }}-
+
+      - name: Lay out the kernel
+        run: |
+          set -eux
+          [ -f linux-$LINUX_VERSION.tar.xz ] ||
+            curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
+          tar xf linux-$LINUX_VERSION.tar.xz
+          sh drm/ci/cedarview-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+
+      - name: The gma500 patches through checkpatch --strict
+        run: |
+          set -eux
+          for p in drm/gma500/*.patch; do
+            perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse \
+              --ignore FILE_PATH_CHANGES "$p" | tee -a gma-checkpatch.log
+          done
+          ! grep -E ': (ERROR|WARNING|CHECK):' gma-checkpatch.log
+
+      - name: Build the kernel and modules
+        run: |
+          set -eux
+          export CCACHE_DIR=~/.cache/ccache
+          ccache -M 2G
+          make -C linux-$LINUX_VERSION ARCH=x86_64 CC="ccache gcc" -j"$(nproc)" bzImage modules
+          ccache -s
+
+      - name: gma500 and powervr_sgx with W=1 and sparse
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          touch $L/drivers/gpu/drm/gma500/*.c $L/drivers/gpu/drm/powervr_sgx/*.c
+          make -C $L ARCH=x86_64 W=1 C=1 drivers/gpu/drm/gma500/ drivers/gpu/drm/powervr_sgx/ 2>&1 | tee w1.log
+          ! grep -E '(gma500|powervr_sgx)/.*(warning|error):' w1.log
+
+      - name: Collect the Cedarview set
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          mkdir -p out/modules
+          cp $L/arch/x86/boot/bzImage out/bzImage
+          cp $L/.config out/config
+          make -C $L ARCH=x86_64 INSTALL_MOD_PATH=$PWD/out/modroot INSTALL_MOD_STRIP=1 modules_install
+          for m in gma500_gfx powervr_sgx gpu-sched drm_exec drm_gpuvm drm_shmem_helper; do
+            find $L -name "$m.ko" -exec cp {} out/modules/ \;
+          done
+          cp drm/gma500/*.patch out/
+          strings $L/vmlinux | grep -m1 'Linux version' > out/version
+          ls -l out out/modules
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powervr-sgx-cedarview
+          path: out/
+          retention-days: 14

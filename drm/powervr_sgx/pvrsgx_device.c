@@ -2,6 +2,9 @@
 /* Copyright © 2026 Joseph Telaak */
 
 #include <drm/drm_print.h>
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+#include <drm/gma500_sgx.h>
+#endif
 
 #include <linux/bitfield.h>
 #include <linux/delay.h>
@@ -235,9 +238,88 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
+static bool probe_only;
+module_param(probe_only, bool, 0444);
+MODULE_PARM_DESC(probe_only, "Report the SGX's identity and stop: no firmware, no device node");
+
+/*
+ * The SGX cores this driver has run on. Anything else is refused before the
+ * driver writes a register: its errata, clocks and microkernel are unknown.
+ */
+static const struct {
+	u32 id, rev;
+	const char *where;
+} known_cores[] = {
+	{ 0x01150000, 0x0001000e, "Intel CE5300 (SGX545 1.0.14)" },
+};
+
+static int identify(struct pvrsgx_device *sdev)
+{
+	/* Safe on a core in any state. */
+	sdev->core_id = sgx_rd(sdev, SGX_CR_CORE_ID);
+	sdev->core_rev = sgx_rd(sdev, SGX_CR_CORE_REVISION);
+
+	for (u32 i = 0; i < ARRAY_SIZE(known_cores); i++) {
+		if (known_cores[i].id == sdev->core_id && known_cores[i].rev == sdev->core_rev) {
+			drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x: %s\n",
+				 sdev->core_id, sdev->core_rev, known_cores[i].where);
+			return probe_only ? -ENODEV : 0;
+		}
+	}
+	drm_err(&sdev->base,
+		"SGX core id 0x%08x revision 0x%08x is not one this driver knows; not touching it. Please report these two values.\n",
+		sdev->core_id, sdev->core_rev);
+	return -ENODEV;
+}
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+/* Behind gma500 the hard handler runs from gma500's; its thread is a work item. */
+static irqreturn_t pvrsgx_gma_irq(void *data)
+{
+	struct pvrsgx_device *sdev = data;
+	irqreturn_t ret = pvrsgx_irq(sdev->irq, sdev);
+
+	if (ret == IRQ_WAKE_THREAD) {
+		queue_work(system_highpri_wq, &sdev->irq_work);
+		return IRQ_HANDLED;
+	}
+	return ret;
+}
+
+static void pvrsgx_gma_irq_work(struct work_struct *work)
+{
+	struct pvrsgx_device *sdev = container_of(work, struct pvrsgx_device, irq_work);
+
+	pvrsgx_irq_thread(sdev->irq, sdev);
+}
+#endif
+
+static int irq_setup(struct pvrsgx_device *sdev)
+{
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+	if (sdev->gma_sgx) {
+		INIT_WORK(&sdev->irq_work, pvrsgx_gma_irq_work);
+		return sdev->gma_sgx->set_irq_handler(sdev->gma_sgx, pvrsgx_gma_irq, sdev);
+	}
+#endif
+	return request_threaded_irq(sdev->irq, pvrsgx_irq, pvrsgx_irq_thread, IRQF_SHARED,
+				    "powervr_sgx", sdev);
+}
+
+static void irq_teardown(struct pvrsgx_device *sdev)
+{
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+	if (sdev->gma_sgx) {
+		sdev->gma_sgx->set_irq_handler(sdev->gma_sgx, NULL, NULL);
+		cancel_work_sync(&sdev->irq_work);
+		return;
+	}
+#endif
+	free_irq(sdev->irq, sdev);
+}
+
 int pvrsgx_device_init(struct pvrsgx_device *sdev)
 {
-	struct pci_dev *pdev = sdev->pdev;
 	int err;
 
 	mutex_init(&sdev->ccb_lock);
@@ -263,11 +345,9 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 			goto err_mmu;
 	}
 
-	/* Safe on a core in any state. */
-	sdev->core_id = sgx_rd(sdev, SGX_CR_CORE_ID);
-	sdev->core_rev = sgx_rd(sdev, SGX_CR_CORE_REVISION);
-	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x\n",
-		 sdev->core_id, sdev->core_rev);
+	err = identify(sdev);
+	if (err)
+		goto err_mmu;
 
 	pvrsgx_kobj_init(sdev);
 	err = pvrsgx_fw_init(sdev);
@@ -278,9 +358,7 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	if (err)
 		goto err_fw;
 
-	sdev->irq = pdev->irq;
-	err = request_threaded_irq(sdev->irq, pvrsgx_irq, pvrsgx_irq_thread, IRQF_SHARED,
-				   "powervr_sgx", sdev);
+	err = irq_setup(sdev);
 	if (err)
 		goto err_job;
 
@@ -291,7 +369,7 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 
 err_irq:
 	pvrsgx_fw_stop(sdev);
-	free_irq(sdev->irq, sdev);
+	irq_teardown(sdev);
 err_job:
 	pvrsgx_job_fini(sdev);
 err_fw:
@@ -313,7 +391,7 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	sdev->last_rtds = NULL;
 	kvfree(sdev->render_snap);
 	pvrsgx_fw_stop(sdev);
-	free_irq(sdev->irq, sdev);
+	irq_teardown(sdev);
 	pvrsgx_kobj_fini(sdev);
 	pvrsgx_fw_fini(sdev);
 	__free_page(sdev->reset_page);
@@ -337,47 +415,72 @@ MODULE_PARM_DESC(runtime_pm, "Power the microkernel off when idle (default on; a
 
 int pvrsgx_power_get(struct pvrsgx_device *sdev)
 {
-	return runtime_pm ? pm_runtime_resume_and_get(&sdev->pdev->dev) : 0;
+	return runtime_pm ? pm_runtime_resume_and_get(sdev->base.dev) : 0;
 }
 
 void pvrsgx_power_put(struct pvrsgx_device *sdev, u32 n)
 {
 	if (!runtime_pm || !n)
 		return;
-	pm_runtime_mark_last_busy(&sdev->pdev->dev);
+	pm_runtime_mark_last_busy(sdev->base.dev);
 	while (n--)
-		pm_runtime_put_autosuspend(&sdev->pdev->dev);
+		pm_runtime_put_autosuspend(sdev->base.dev);
 }
 
-/* After probe: drop the reference the PCI core takes for it, and allow suspend. */
+/*
+ * After probe. The PCI core holds a reference over probe and forbids runtime
+ * PM by default; an auxiliary device starts with runtime PM disabled, and its
+ * parent (gma500, which powers the graphics island) must stay up while the SGX
+ * runs: with runtime PM that is the child's own state, without it a reference.
+ */
 void pvrsgx_power_init(struct pvrsgx_device *sdev)
 {
-	struct device *dev = &sdev->pdev->dev;
+	struct device *dev = sdev->base.dev;
 
-	if (!runtime_pm)
+	if (!runtime_pm) {
+		if (sdev->gma_sgx && !pm_runtime_resume_and_get(dev->parent))
+			sdev->parent_held = true;
 		return;
+	}
 	pm_runtime_set_autosuspend_delay(dev, AUTOSUSPEND_MS);
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
-	pm_runtime_allow(dev);
+	if (sdev->pdev) {
+		pm_runtime_put_autosuspend(dev);
+		pm_runtime_allow(dev);
+	} else {
+		pm_runtime_set_active(dev);
+		pm_runtime_enable(dev);
+	}
 }
 
-/* Before remove (the PCI core has resumed the device): undo pvrsgx_power_init. */
+/* Before remove: undo pvrsgx_power_init, with the device awake. */
 void pvrsgx_power_fini(struct pvrsgx_device *sdev)
 {
-	struct device *dev = &sdev->pdev->dev;
+	struct device *dev = sdev->base.dev;
 
-	if (!runtime_pm)
+	if (!runtime_pm) {
+		if (sdev->parent_held)
+			pm_runtime_put(dev->parent);
+		sdev->parent_held = false;
 		return;
-	pm_runtime_forbid(dev);
-	pm_runtime_dont_use_autosuspend(dev);
-	pm_runtime_get_noresume(dev);
+	}
+	if (sdev->pdev) {
+		pm_runtime_forbid(dev);
+		pm_runtime_dont_use_autosuspend(dev);
+		pm_runtime_get_noresume(dev);
+	} else {
+		pm_runtime_get_sync(dev);
+		pm_runtime_dont_use_autosuspend(dev);
+		pm_runtime_disable(dev);
+		pm_runtime_set_suspended(dev);
+		pm_runtime_put_noidle(dev);
+	}
 }
 
 int pvrsgx_runtime_suspend(struct device *dev)
 {
-	struct pvrsgx_device *sdev = pci_get_drvdata(to_pci_dev(dev));
+	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
 
 	if (!sdev->lost)
 		pvrsgx_fw_stop(sdev);
@@ -386,7 +489,7 @@ int pvrsgx_runtime_suspend(struct device *dev)
 
 int pvrsgx_runtime_resume(struct device *dev)
 {
-	struct pvrsgx_device *sdev = pci_get_drvdata(to_pci_dev(dev));
+	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
 
 	/* A failed start loses the device: run_job then fails every job with -EIO. */
 	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
