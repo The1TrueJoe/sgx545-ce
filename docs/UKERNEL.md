@@ -990,31 +990,58 @@ its data accesses in either bank. [D, code and trace]
   - A CE5300 register sample shows 0x694 never at 4 over a run of frames.
 - **The OTPM clear** (0x24c), with its two done bits, follows.
 - **Two scenes on one PB: two DPM context slots.** A client that renders to
-  an FBO and then samples it can have two scenes open on the same PB. In the
-  2026-11-08 `fbo64` capture the window scene's first kick comes before the
-  FBO scene's last. The DDK keeps two slots: TA3D +0x50 and +0x54 each hold
-  the RT data entry whose scene owns that slot. At a kick (pc 0x09b7-0x0a1c):
-  1. **Pick the slot.** The entry's own slot if it already has one, else a
-     free slot. If both are taken, the slot the running 3D is not using:
-     `!(0x630 b1)`. So r5 = 0 or 4.
-  2. **Select it for the TA:** `0x630 = (0x630 & ~4) | r5` (b2 = the TA's
-     slot; pc 0x09d6).
-  3. **Evict.** If the slot held another entry with an open scene, the DDK
-     points the BIF at that scene's context and stores its DPM state (pc
-     0x1778, `0x694`/`0x698` mode 1), then points the BIF back. Eviction,
-     not serialisation, so a third open scene works too.
-  4. **First kick of a scene (TA flags b0 or b3):**
-     - `0x630 = (0x630 & ~1) | slot` (b0);
-     - the slot's TA data block, RT data entry word 5, goes to 0x62c for
-       slot 0 or 0x674 for slot 1, and word 6 to 0x634;
-     - then the per-scene DPM clear (pc 0x0a1d).
-  5. **Later kick whose entry was evicted:** the DDK loads its DPM state back
-     (pc 0x17be, mode 4) before the TA continues.
+  an FBO and then samples it can have two scenes open on the same PB; the
+  2026-11-08 `fbo64` capture does it. `tools/ukernel/interleave.py` replays
+  two surfaces of `tools/gen`'s v2s trace through a microkernel in two
+  orders, and the DDK microkernel's register and memory writes in both are
+  below. The TA3D control block holds three words: +0x50 is slot 0's RT data
+  entry, +0x54 slot 1's, and +0x64 the TA's current entry.
 
-  The 3D start selects its slot in 0x630 b1 (pc 0x1156), and stores/loads
-  the same way when its entry was evicted (pc 0x1166-0x1181). [D, code; the
-  interleave is from the capture. The store/load path is not in any trace:
-  0x740 read 0 throughout the DDK Minecraft register sample.]
+  **At every kick** (pc 0x08f8). If the TA's current entry is set and is not
+  this kick's, the DDK stores that scene's DPM state first and frees its slot:
+  1. The TA's slot is read from `0x630` b2, and that slot's word is cleared.
+  2. The BIF is pointed at the scene's context.
+  3. The DPM state is stored (pc 0x1778), into the scene's own RT data entry:
+     - `0x62c` (slot 0) or `0x674` (slot 1) = entry word 5, `0x694` = 1
+       (state store), then wait for `EVENT_STATUS` 0x10 and ack it;
+     - `0x634` = entry word 6, `0x698` = 1 (control store);
+     - `0x234`, `0x24c` = 4, `0x220`, `0x224` (OTPM and TPC flushes), then
+       wait for `EVENT_STATUS` 0x480 and `EVENT_STATUS2` 0x800 and ack them;
+     - `0x698` = 4.
+
+  So the TA holds one live DPM context at a time.
+
+  **Then the slot pick** (pc 0x09b7). The entry's own slot if it has one,
+  else a free slot (slot 0 first), else the slot the 3D is not using,
+  `!(0x630 b1)`. Then `0x630 b2` = the slot, the slot word = the entry, and
+  +0x64 = the entry.
+
+  **A first kick** (TA flags b0 or b3). `0x630 b0` = the slot. The entry's
+  word 5 goes to `0x62c` (slot 0) or `0x674` (slot 1), and word 6 to `0x634`.
+  Then the DPM clear: `0x694` = `0x698` = 2, then wait for and ack 0x240.
+
+  **A later kick whose entry was stored** (pc 0x17be). The same registers
+  from the entry's words, then `0x694` = `0x698` = 4 (load), before the TA
+  continues.
+
+  **3D start.** `0x630 b1` = the scene's slot, and +0x64 is cleared. At the
+  render's end, the slot holding the entry is cleared (pc 0x0fbe-0x0fc5).
+
+  The two orders, as the DDK ran them (`0x694` mode, then `0x630`):
+
+  | order | A first | B first | A last | B last |
+  |---|---|---|---|---|
+  | interleave: B starts while A is open, not rendered | clear; 0 | store A, then clear B in slot 0; 0 | store B, load A; 0 | load B; 0 |
+  | overlap: B starts while A's 3D runs | clear; 0 | clear B in slot 1, 0x674; 5 | (3D start A, b1 = 0) | 5, then 7 at B's 3D start |
+
+  - In the overlap order no store or load is needed. Slot 1 exists so that
+    the TA can bin a new scene while the 3D renders the other one.
+  - The TA and 3D free-list loads stay per PB in both orders.
+
+  [D: the DDK microkernel in the emulator, with OTPM_FLUSHED_INV modelled;
+  the interleave itself is from the capture. On hardware the DDK Minecraft
+  register sample read 0x740 = 0 throughout. 0x630 read 0 in a register
+  sample across an FBO interleave, which may mean 0x630 does not read back.]
 
 All [D] from the DDK microkernel's code and trace; the release behaviour is
 from the hardware register sample.
