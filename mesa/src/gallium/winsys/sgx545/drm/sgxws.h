@@ -181,6 +181,25 @@ struct sgxws_state {
 
 #define SGXWS_MAX_INDICES 0xffff
 
+/* One vertex DMA (PDS DOUTD, PDS.md "What the DDK generates"): dwords (1-16)
+ * of a vertex from va + index * stride into attribute register reg; with
+ * defaults, the components past dwords up to 4 read 0, 0, 0, 1.  block > 0:
+ * va is an offset into the draw's copy block block - 1. */
+struct sgxws_fetch {
+   uint32_t va, stride;
+   uint8_t dwords, reg, block;
+   bool defaults;
+};
+
+/* the DMAs a draw may have, its defaults counted */
+#define SGXWS_MAX_FETCH 30
+
+/* CPU memory the draw copies into its frame as is (a client array's bytes) */
+struct sgxws_block {
+   const void *cpu;
+   uint32_t bytes;
+};
+
 struct sgxws_draw {
    uint32_t prim;                   /* SGXWS_* */
    uint32_t count;                  /* vertices */
@@ -192,6 +211,12 @@ struct sgxws_draw {
    /* or both already in device memory (the driver's vertex cache): their
     * addresses, nothing copied (verts_va 16-byte aligned, idx_va even) */
    uint32_t verts_va, idx_va;
+   /* or n_fetch DMAs (the vertex buffers where they are, or copies of client
+    * arrays): no vertices copied, verts and verts_va unused */
+   const struct sgxws_fetch *fetch;
+   unsigned n_fetch;
+   const struct sgxws_block *blocks;
+   unsigned n_blocks;
    const struct sgxws_prog *vs, *fs;
    const struct sgxws_state *state;
    const uint32_t *fs_consts;       /* fs->sec_dwords dwords */
@@ -216,6 +241,7 @@ struct sgxws_stats {
    uint64_t ns_latency, ns_latency_scanout;   /* kick to seen done; of those, into the scanout buffer */
    unsigned n_latency, n_latency_scanout;
    unsigned room_flushes;                     /* frames submitted early because a ring filled */
+   uint64_t gpu_indices, gpu_verts;           /* what the VDM was given: indices, and the vertices they index */
 };
 
 /* debugging aids the driver passes on (its SGX545_DEBUG options) */
@@ -226,6 +252,7 @@ struct sgxws_dev_options {
    unsigned trace_kicks;        /* and memory copies for its first n kicks only (0: all) */
    int dry_run;                 /* frames from the n-th on are built (and traced) but never sent; -1: off */
    unsigned frame_gap_us;       /* idle time after each render */
+   unsigned slots;              /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 3) */
 };
 
 /* fd: the GPU's kernel driver; opts may be NULL */

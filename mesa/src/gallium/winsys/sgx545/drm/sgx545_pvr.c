@@ -59,7 +59,7 @@ struct pvr_ctx {
    IMG_HANDLE hwctx;
    uint32_t hwctx_va;
    uint32_t ccb_woff;
-   struct pvr_token token[SGXWS_SLOTS];   /* by kick number % SGXWS_SLOTS */
+   struct pvr_token token[SGXWS_MAX_SLOTS];   /* by kick number % c->slots */
 };
 
 /* The TA/3D structures SGXAddRenderTarget makes for one target. */
@@ -533,7 +533,7 @@ pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
 {
    struct pvr_ctx *k = c->k;
    struct pvr_rt *s = c->rt->k;
-   struct pvr_token *done = &k->token[seq % SGXWS_SLOTS];
+   struct pvr_token *done = &k->token[seq % c->slots];
    struct pvr *pvr = dev_pvr(c->dev);
    SGX_CCB_KICK kick;
    IMG_HANDLE dst[1];
@@ -590,7 +590,7 @@ pvr_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 {
    struct pvr_ctx *k = c->k;
 
-   return token_wait(&k->token[seq % SGXWS_SLOTS], timeout_ms);
+   return token_wait(&k->token[seq % c->slots], timeout_ms);
 }
 
 static void

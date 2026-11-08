@@ -38,6 +38,8 @@ static const struct debug_named_value sgx545_debug_options[] = {
    { "blits", SGX545_DEBUG_BLITS, "describe every 255th blit and its caller" },
    { "novs", SGX545_DEBUG_NO_VS_COMPILER, "the fixed vertex programs instead of the compiler" },
    { "nofs", SGX545_DEBUG_NO_FS_COMPILER, "the fixed fragment programs instead of the compiler" },
+   { "ffmediump", SGX545_DEBUG_FF_MEDIUMP, "fixed-function fragment programs at mediump (F16; texture coordinates F32)" },
+   { "zerocopy", SGX545_DEBUG_ZERO_COPY, "f32 vertex inputs DMAed where they are: buffers in place, client arrays copied as they are" },
    { "flushrt", SGX545_DEBUG_FLUSH_RT, "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)" },
    DEBUG_NAMED_VALUE_END
 };
@@ -51,6 +53,7 @@ DEBUG_GET_ONCE_OPTION(sgx545_trace, "SGX545_TRACE", NULL)
 DEBUG_GET_ONCE_NUM_OPTION(sgx545_trace_kicks, "SGX545_TRACE_KICKS", 0)
 DEBUG_GET_ONCE_NUM_OPTION(sgx545_dry_run, "SGX545_DRY_RUN", -1)
 DEBUG_GET_ONCE_NUM_OPTION(sgx545_frame_gap_us, "SGX545_FRAME_GAP_US", 0)
+DEBUG_GET_ONCE_NUM_OPTION(sgx545_slots, "SGX545_SLOTS", 0)
 
 const char *
 sgx545_dump_code_dir(void)
@@ -93,8 +96,7 @@ sgx545_init_shader_caps(struct pipe_screen *pscreen)
       /* 8: st then doesn't pack varyings (st_extensions.c), so every varying
        * keeps a texture coordinate set of its own, as the DDK's compiler
        * allocates them; a projected or plain read of a whole varying is then
-       * sampled by the PDS before the shader runs, not by the shader
-       * (Minecraft's terrain: two dependent samples per pixel otherwise) */
+       * sampled by the PDS before the shader runs, not by the shader */
       caps->max_tex_indirections = 8;
       caps->max_control_flow_depth = 32;
       /* ISA.md: 16 attributes, 10 texture coordinate sets */
@@ -165,8 +167,8 @@ sgx545_init_screen_caps(struct pipe_screen *pscreen)
    caps->texture_transfer_modes = 0;
    caps->max_vertex_element_src_offset = 2047;
    /* the draw gathers vertices from wherever they are, so client arrays
-    * needn't be copied into upload buffers first (u_vbuf's copy was a
-    * second memcpy of every gl4es draw) */
+    * needn't be copied into upload buffers first (u_vbuf's copy would be a
+    * second memcpy of every client-array draw) */
    caps->user_vertex_buffers = true;
    /* linear render targets, over powervr_sgx */
    if (sgxws_dev_has_dmabuf(sgx545_screen(pscreen)->dev))
@@ -249,8 +251,9 @@ sgx545_screen_destroy(struct pipe_screen *pscreen)
     * microkernel, a render context's cleanup never completes (the bridge
     * returns -EINVAL after its wait), and the next connection's TA then runs
     * against a parameter buffer the microkernel doesn't use: no pages
-    * allocated, nothing drawn, renders waiting ~270 ms, then lockups (gl4es
-    * initialises EGL, terminates it and initialises it again).  The process's
+    * allocated, nothing drawn, renders waiting ~270 ms, then lockups (an
+    * application that initialises EGL, terminates it and initialises it
+    * again).  The process's
     * exit releases them. */
    simple_mtx_lock(&kept_lock);
    if (kept.fd < 0) {
@@ -283,12 +286,11 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config, struct ren
       return NULL;
    sgx545_debug = debug_get_option_sgx545_debug();
    /* The GL linker's varying optimisation (nir_opt_varyings) packs varyings
-    * into shared slots whatever the driver asks: gl4es's fog went in front of
-    * a texture coordinate, so neither texture read could be done by the PDS
-    * (a projected read needs a whole vec4 varying at component 0) and both
-    * became dependent samples, most of a Minecraft frame's GPU time.  The
-    * DDK's compiler keeps varyings as declared; so do we, for this process,
-    * unless the user set it. */
+    * into shared slots whatever the driver asks: a fog varying packed in
+    * front of a texture coordinate keeps the PDS from doing the texture read
+    * (a projected read needs a whole vec4 varying at component 0), and it
+    * becomes a dependent sample in the shader.  Varyings are kept as
+    * declared, for this process, unless the user set it. */
    setenv("MESA_GLSL_DISABLE_IO_OPT", "1", 0);
    screen->fd = screen->dev_fd = fd;
    simple_mtx_lock(&kept_lock);
@@ -308,6 +310,7 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config, struct ren
       .trace_kicks = debug_get_option_sgx545_trace_kicks(),
       .dry_run = debug_get_option_sgx545_dry_run(),
       .frame_gap_us = debug_get_option_sgx545_frame_gap_us(),
+      .slots = debug_get_option_sgx545_slots(),
    };
 
    if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {

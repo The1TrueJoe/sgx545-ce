@@ -22,6 +22,7 @@
 #include "sgx545_context.h"
 #include "sgx545_csb.h"
 #include "sgx545_program.h"
+#include "sgx_compiler.h"
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
 #include "sgx545_texture.h"
@@ -104,7 +105,7 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
    /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
     * b3); a buffer without alpha keeps its X byte written. A colour clear
     * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
-    * clear (the openhc-minecraft overlay, every frame) must not touch RGB. */
+    * clear must not touch RGB. */
    unsigned cm = buffers & PIPE_CLEAR_COLOR0 ? color_clear_mask & 0xf : 0, wmask;
    bool clear_stencil = have_depth && (buffers & PIPE_CLEAR_STENCIL) &&
                         util_format_has_stencil(util_format_description(ctx->framebuffer.zsbuf.format));
@@ -318,8 +319,13 @@ struct fetch {
    enum pipe_format format;
    unsigned dwords;             /* dwords it fills in the vertex */
    bool defaults;               /* missing components 0, 0, 0, 1 (compiled shaders) */
-   const struct sgx545_resource *res;   /* the buffer, NULL for client memory */
+   /* the bytes as they are, for a vertex shader that unpacks them
+    * (SGX545_DEBUG=zerocopy, sgx545_shader.vtx_fmt): raw_bytes of them */
+   bool raw;
+   unsigned raw_bytes;
+   struct sgx545_resource *res; /* the buffer, NULL for client memory */
    uint32_t offset;             /* where in it */
+   unsigned vb;                 /* its vertex buffer binding */
 };
 
 static bool
@@ -334,7 +340,9 @@ setup_fetch(struct sgx545_context *ctx, unsigned e, struct fetch *f)
    if (ve->vertex_buffer_index >= ctx->num_vertex_buffers)
       return false;
    vb = &ctx->vertex_buffers[ve->vertex_buffer_index];
+   f->vb = ve->vertex_buffer_index;
    f->res = NULL;
+   f->raw = false;
    if (vb->is_user_buffer) {
       f->base = vb->buffer.user;
    } else if (vb->buffer.resource) {
@@ -357,6 +365,10 @@ fetch_vertex(const struct fetch *f, unsigned index, uint32_t *out)
    const uint8_t *src = f->base + (size_t)index * f->stride;
    float v[4] = { 0, 0, 0, 1 };
 
+   if (f->raw) {
+      memcpy(out, src, f->raw_bytes);
+      return;
+   }
    if (!f->defaults && (f->format == PIPE_FORMAT_R32G32_FLOAT ||
                         f->format == PIPE_FORMAT_R32G32B32_FLOAT ||
                         f->format == PIPE_FORMAT_R32G32B32A32_FLOAT)) {
@@ -392,8 +404,8 @@ get_index(const struct pipe_draw_info *info, const void *indices, unsigned i)
 }
 
 /* element f of vertices first .. first + n - 1 into dst, vertex_dwords
- * apart: the formats Minecraft's terrain and gl4es use go without a call
- * per vertex (they took most of a frame's CPU time) */
+ * apart: the common formats (f32 x 1-4, u8 x 4 unorm, s16 x 2 scaled) go
+ * without a call per vertex */
 static void
 fetch_range(const struct fetch *f, unsigned first, unsigned n, uint32_t *dst, unsigned vertex_dwords)
 {
@@ -404,6 +416,11 @@ fetch_range(const struct fetch *f, unsigned first, unsigned n, uint32_t *dst, un
    if (!f->defaults) {
       for (unsigned i = 0; i < n; i++)
          fetch_vertex(f, first + i, dst + i * vertex_dwords);
+      return;
+   }
+   if (f->raw) {
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords)
+         memcpy(o, src, f->raw_bytes);
       return;
    }
    switch (f->format) {
@@ -581,8 +598,7 @@ mem_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sgx
 
 /* Every set the fragment program iterates or samples with must be one the
  * vertex program outputs, with as many components: iterating a set the vertex
- * program doesn't write locks the GPU up (EA3; first seen with the colour
- * placeholder, then with gl4es' neverball shaders). */
+ * program doesn't write locks the GPU up. */
 static bool
 varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
 {
@@ -610,9 +626,9 @@ varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
 /* ------------------------------------------------------------- vertex cache */
 
 /*
- * gl4es draws its display lists (Minecraft's chunks) from buffers that don't
+ * Display lists and static vertex buffers are drawn from buffers that don't
  * change between frames, and every frame the draw gathered, converted and
- * copied the same vertices again: a third of the render thread's time.  A
+ * copied the same vertices again.  A
  * draw whose vertices all come from buffers (or are constant) keeps its
  * gathered vertices and rebased 16-bit indices in device memory, found again
  * by what they were made from: the buffers (by id and write count), where in
@@ -737,8 +753,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    struct hash_entry *he;
    struct vcache_entry *v;
    /* triangle lists, and what is drawn as one: fans, and desktop GL's quads,
-    * quad strips and polygons (Minecraft's chunks are display lists of
-    * quads, drawn again every frame) */
+    * quad strips and polygons (display lists of quads, drawn every frame) */
    bool expand = expanded_prim(info->mode) && u_reduced_prim(info->mode) == MESA_PRIM_TRIANGLES;
    unsigned count = draw->count, out_count;
    uint64_t now = os_time_get_nano();
@@ -768,7 +783,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    for (unsigned e = 0; e < n_fetch; e++) {
       if (!f[e].defaults)
          return false;
-      key.el[e].format = f[e].format;
+      key.el[e].format = f[e].format | (f[e].raw ? 0x80000000u : 0);
       key.el[e].stride = f[e].stride;
       if (!f[e].stride) {
          fetch_vertex(&f[e], 0, key.el[e].konst);
@@ -856,6 +871,148 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    return true;
 }
 
+/* an input format the compiler unpacks (sgx_compile_options.vtx_fmt), and
+ * the bytes a vertex has of it */
+static bool
+vtx_format(enum pipe_format format, uint8_t *fmt, unsigned *bytes)
+{
+   switch (format) {
+   case PIPE_FORMAT_R32_FLOAT: *fmt = SGX_VF_F32_1; *bytes = 4; return true;
+   case PIPE_FORMAT_R32G32_FLOAT: *fmt = SGX_VF_F32_2; *bytes = 8; return true;
+   case PIPE_FORMAT_R32G32B32_FLOAT: *fmt = SGX_VF_F32_3; *bytes = 12; return true;
+   case PIPE_FORMAT_R32G32B32A32_FLOAT: *fmt = SGX_VF_F32_4; *bytes = 16; return true;
+   case PIPE_FORMAT_R8G8B8A8_UNORM: *fmt = SGX_VF_UNORM8_4; *bytes = 4; return true;
+   case PIPE_FORMAT_R16G16_SSCALED: *fmt = SGX_VF_SSCALED16_2; *bytes = 4; return true;
+   default: return false;
+   }
+}
+
+/* raw inputs DMAed where they are (SGX545_DEBUG=zerocopy): a buffer's device
+ * copy in place, a client array's bytes copied as they are, one block per
+ * binding; the vertex shader unpacks them.  Draws up to the index limit; the
+ * rest take the gather, raw too. */
+static bool
+zc_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
+        const struct pipe_draw_start_count_bias *draw, const void *indices, const struct fetch *f,
+        unsigned n_fetch, struct sgxws_draw *d)
+{
+   struct sgxws_fetch zf[PIPE_MAX_ATTRIBS];
+   struct sgxws_block blocks[8];
+   const uint8_t *block_lo[8];
+   unsigned block_vb[8], n_blocks = 0;
+   bool list = expanded_prim(info->mode);
+   unsigned count = draw->count, out_count, lo = ~0u, hi = 0;
+   uint16_t *ix = NULL;
+
+   if (!u_trim_pipe_prim(info->mode, &count))
+      return false;
+   if (info->mode == MESA_PRIM_TRIANGLE_STRIP && count > SGXWS_MAX_INDICES)
+      return false;
+   out_count = list ? expanded_count(info->mode, count) : count;
+   if (!out_count || out_count > SGXWS_MAX_INDICES || n_fetch > PIPE_MAX_ATTRIBS)
+      return false;
+   for (unsigned e = 0; e < n_fetch; e++) {
+      if (!f[e].raw || f[e].dwords != 4 || (f[e].stride & 3) || f[e].stride > 0xffff)
+         return false;
+   }
+   /* the vertices the draw uses: in order, or through 16-bit indices from lo */
+   if (info->index_size || list) {
+      uint32_t *ix32 = staging(ctx, out_count);
+
+      if (!ix32 || !(ix = index_staging(ctx, out_count)))
+         return false;
+      for (unsigned i = 0; i < out_count; i++) {
+         unsigned k = list ? expanded_vertex(info->mode, i, out_count) : i;
+
+         ix32[i] = info->index_size ? get_index(info, indices, draw->start + k) + draw->index_bias
+                                    : draw->start + k;
+         lo = MIN2(lo, ix32[i]);
+         hi = MAX2(hi, ix32[i]);
+      }
+      if (hi - lo >= 65536)
+         return false;
+      for (unsigned i = 0; i < out_count; i++)
+         ix[i] = (uint16_t)(ix32[i] - lo);
+   } else {
+      lo = draw->start;
+      hi = draw->start + count - 1;
+   }
+   for (unsigned e = 0; e < n_fetch; e++) {
+      unsigned n = f[e].raw_bytes / 4;
+
+      zf[e] = (struct sgxws_fetch){ .stride = f[e].stride, .dwords = n, .reg = 4 * e };
+      if (f[e].res) {
+         if (!sgx545_buffer_vbo(ctx, f[e].res))
+            return false;
+         zf[e].va = f[e].res->vbo.va + f[e].offset + lo * f[e].stride;
+         if (zf[e].va & 3)
+            return false;
+         continue;
+      }
+      /* a client array: its binding's bytes from vertex lo to the end of vertex hi */
+      unsigned b;
+      const uint8_t *first = f[e].base + (size_t)lo * f[e].stride;
+      const uint8_t *end = f[e].base + (size_t)hi * f[e].stride + n * 4;
+
+      for (b = 0; b < n_blocks && block_vb[b] != f[e].vb; b++)
+         ;
+      if (b == n_blocks) {
+         if (n_blocks == ARRAY_SIZE(blocks))
+            return false;
+         block_vb[n_blocks] = f[e].vb;
+         block_lo[n_blocks] = first;
+         blocks[n_blocks].cpu = first;
+         blocks[n_blocks++].bytes = end - first;
+      } else {
+         const uint8_t *bend = (const uint8_t *)blocks[b].cpu + blocks[b].bytes;
+
+         if (first < block_lo[b]) {
+            blocks[b].cpu = block_lo[b] = first;
+         }
+         blocks[b].bytes = MAX2(end, bend) - block_lo[b];
+      }
+      zf[e].block = b + 1;
+   }
+   /* offsets into the blocks, now that each block's start is known (a
+    * frame's ring part holds 16 MB: blocks past 4 MB take the gather) */
+   uint32_t total = 0;
+
+   for (unsigned b = 0; b < n_blocks; b++)
+      total += blocks[b].bytes;
+   if (total > 4u << 20)
+      return false;
+   for (unsigned e = 0; e < n_fetch; e++) {
+      if (!zf[e].block)
+         continue;
+      zf[e].va = (f[e].base + (size_t)lo * f[e].stride) - block_lo[zf[e].block - 1];
+      if (zf[e].va & 3)
+         return false;
+   }
+   for (unsigned e = 0; e < n_fetch; e++)
+      if (f[e].res)
+         f[e].res->vbo_seq = sgxws_next_seq(ctx->hw);
+   d->fetch = zf;
+   d->n_fetch = n_fetch;
+   d->blocks = blocks;
+   d->n_blocks = n_blocks;
+   d->indices = ix;
+   d->n_indices = ix ? out_count : 0;
+   d->count = ix ? hi - lo + 1 : count;
+   d->verts = NULL;
+   d->verts_va = 0;
+   SGX545_DBG(DRAW, "zero-copy draw %s x%u (%u vertices, %u blocks)\n", u_prim_name(info->mode), out_count,
+              d->count, n_blocks);
+   if (sgxws_draw(ctx->hw, d))
+      fprintf(stderr, "sgx545: zero-copy draw of %u vertices dropped\n", out_count);
+   ctx->stats.zc_draws++;
+   d->fetch = NULL;
+   d->n_fetch = 0;
+   d->blocks = NULL;
+   d->n_blocks = 0;
+   d->indices = NULL;
+   return true;
+}
+
 void
 sgx545_draw_fini(struct sgx545_context *ctx)
 {
@@ -895,7 +1052,9 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    float color[4];
    uint32_t prim;
    uint32_t sampled = 0;        /* the sampler units this draw reads */
-   bool compiled;
+   bool compiled, raw = false;
+   uint8_t vfmt[16] = { 0 };
+   unsigned raw_bytes[16];
 
    if (indirect || !ctx->vs || !ctx->fs)
       return;
@@ -972,16 +1131,26 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    compiled = ctx->vs->kind == SGX545_SHADER_COMPILED;
    if (compiled) {
       struct sgx545_shader *vs = ctx->vs;
+      const struct sgx545_shader *vfs = fs->kind == SGX545_SHADER_COMPILED ? fs : NULL;
 
+      /* SGX545_DEBUG=zerocopy: inputs the vertex shader unpacks itself, when
+       * the compiler knows every format */
+      raw = (sgx545_debug & SGX545_DEBUG_ZERO_COPY) && ctx->velems && ctx->vs->n_attribs <= 16 &&
+            ctx->vs->n_attribs <= ctx->velems->num_elements;
+      for (unsigned e = 0; raw && e < ctx->vs->n_attribs; e++)
+         raw = vtx_format(ctx->velems->elements[e].src_format, &vfmt[e], &raw_bytes[e]);
       /* the fragment shader's sets (gl_PointCoord: the vertex shader's
        * varyings move up to leave set 0 free) */
-      if (fs->kind == SGX545_SHADER_COMPILED) {
-         if (fs->reads_pointcoord && !ctx->vs->prog.point_size)
+      if (vfs && fs->reads_pointcoord && !ctx->vs->prog.point_size)
+         return;
+      if (vfs || raw) {
+         if (raw && !(vs = sgx545_vs_for(ctx, ctx->vs, vfs, vfmt)))
+            raw = false;
+         if (!raw && !(vs = sgx545_vs_for(ctx, ctx->vs, vfs, NULL)))
             return;
-         if (!(vs = sgx545_vs_for(ctx, ctx->vs, fs)))
-            return;
-         st.sprite = fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       }
+      if (vfs)
+         st.sprite = fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       d.vs = &vs->prog;
       if (vs->mem_dwords)
          mem_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, &d.vs_mem);
@@ -1022,8 +1191,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          fsk[SGX545_SA_FRONT] = !(ctx->rasterizer && ctx->rasterizer->base.front_ccw);
          fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
       }
-      /* a discard's visibility test (atst8 and pcoeff read sa3, sa4), as the
-       * DDK writes them (EA3): sa3 = 0xe000 | ISPA's depth compare (7 with the
+      /* a discard's visibility test (atst8 and pcoeff read sa3, sa4; ISA.md
+       * "Phases, visibility feedback and discard"): sa3 = 0xe000 | ISPA's depth compare (7 with the
        * test off) | 8 without depth writes (always 0xe00f, LESS 0xe001,
        * LEQUAL no write 0xe00b); sa4 = 0xee00 [G] */
       if (fs->discard_pa >= 0) {
@@ -1142,6 +1311,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       if (compiled) {
          f[e].dwords = 4;
          f[e].defaults = true;
+         f[e].raw = raw;
+         f[e].raw_bytes = raw ? raw_bytes[e] : 0;
       } else {
          /* gl_Position = attribute 0: two components fetched -> (x, y, 0, 1); more -> (x, y, z, 1) */
          f[e].dwords = util_format_get_nr_components(f[e].format) == 2 ? 2 : 3;
@@ -1247,7 +1418,14 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       out_count = list ? expanded_count(info->mode, count) : count;
       if (!out_count)
          continue;
+      /* the vertex cache first: a display list drawn every frame is one DMA
+       * a vertex from its cached gather and its quads' indices expanded
+       * once, where zero-copy DMAs each input and expands them every draw
+       * (docs/PERF.md) */
       if (compiled && (prim == SGXWS_TRIANGLES) && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
+         continue;
+      if (compiled && (sgx545_debug & SGX545_DEBUG_ZERO_COPY) &&
+          zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
          continue;
       /* glDrawArrays of a list or strip: the vertices in order */
       if (!info->index_size && !list && count <= SGXWS_MAX_INDICES) {

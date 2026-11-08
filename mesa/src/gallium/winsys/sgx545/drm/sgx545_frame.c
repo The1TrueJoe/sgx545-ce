@@ -183,7 +183,7 @@ static void
 ring_mark(struct sgxws_ring *r)
 {
    r->mark = r->used;
-   r->part = ((r->size - r->mark) / SGXWS_SLOTS) & ~0xffu;
+   r->part = ((r->size - r->mark) / r->parts) & ~0xffu;
    r->hi = r->mark + r->part;
 }
 
@@ -562,6 +562,7 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
+   d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 3;
    d->dry_run = opts->dry_run;
    return d;
 }
@@ -601,6 +602,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    if (!c)
       return NULL;
    c->dev = d;
+   c->slots = d->slots;
    /* the kernel side first: under services, the kernel-data and sync
     * allocations keep the DDK's order */
    if (d->kif->ctx_init(c)) {
@@ -615,10 +617,10 @@ sgxws_ctx_create(struct sgxws_dev *d)
        /* the frame rings hold a whole frame of Minecraft (~1500 draws, ~100K
         * vertices): a ring that fills submits the frame so far and waits for
         * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
-       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + SGXWS_SLOTS * 0x200000) ||
-       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000 + SGXWS_SLOTS * 0x200000) ||
-       ring_init(d, &c->gen, H_GENERAL, 0x80000 + SGXWS_SLOTS * 0x1000000) ||
-       ring_init(d, &c->vdm, H_GENERAL, SGXWS_SLOTS * 0x80000 + 0x1000) ||
+       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + d->slots * 0x200000) ||
+       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000 + d->slots * 0x200000) ||
+       ring_init(d, &c->gen, H_GENERAL, 0x80000 + d->slots * 0x1000000) ||
+       ring_init(d, &c->vdm, H_GENERAL, d->slots * 0x80000 + 0x1000) ||
        ring_init(d, &c->eot_pool[0], H_PIXSHADER, SGXWS_EOT_CACHE * 0x80 + 0x100) ||
        ring_init(d, &c->eot_pool[1], H_PIXSHADER, SGXWS_EOT_CACHE * 0x80 + 0x100))
       goto fail;
@@ -675,6 +677,12 @@ sgxws_ctx_create(struct sgxws_dev *d)
       p.p[i / 2] = (uint32_t)i | (uint32_t)(i + 1) << 16;
    c->idx = p.va;
    c->idx_count = IDX_COUNT;
+   /* what a fetch of n dwords leaves out, at + 16 n: (0, 0, 1), (0, 1), (1),
+    * each 16-byte aligned like every DMA source the DDK uses */
+   p = ring_alloc(&c->gen, 64, DMA_ALIGN);
+   memset(p.p, 0, 64);
+   p.p[3] = p.p[6] = p.p[9] = p.p[12] = f32(1.0f);
+   c->defaults = p.va;
 
    /* The clear's programs for every colour mask, made now: the persistent
     * part of the rings ends at the mark.  Made on demand they landed in the
@@ -684,6 +692,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    for (unsigned m = 0; m < 16; m++)
       clear_pds_masked(c, m);
 
+   c->pds_pix.parts = c->pds_vtx.parts = c->gen.parts = c->vdm.parts = c->slots;
    ring_mark(&c->pds_pix);
    ring_mark(&c->pds_vtx);
    ring_mark(&c->gen);
@@ -1066,28 +1075,33 @@ vertices_per_task(uint32_t out_dwords)
    return v > 16 ? 16 : v;
 }
 
-/* a draw: index list + vertex fetch program (STATE.md section 2; PDS.md "What the DDK generates") */
+/* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md
+ * "What the DDK generates"): per stride a MUL16 of the index into ds1[0x32],
+ * then each DMA adds it to its address; the defaults DMA plainly. */
 static void
-vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
-         uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords,
-         uint32_t temps, uint32_t vpt)
+vdm_fetch(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, const struct sgxws_fetch *f,
+          unsigned nf, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords, uint32_t temps, uint32_t vpt)
 {
    struct pds p = { 0 };
-   uint32_t rows, va, batch = 16, row = 0;
+   uint32_t rows, va, batch = 16, row = 0, nstride = 0, last = ~0u;
 
-   pds_d1(&p, 0, stride);
-   pds_d1(&p, 1, 0);
-   CODE(&p, pds_alu(SGX545_PDS_OPC_MUL16, IN(0), DS1(0), DS1(0x32)));  /* index * stride */
-   /* The vertex in DMAs of at most 16 dwords, as the secondary DMAs (a
-    * longer one lost what came after: a lit vertex of 5 attributes, 20
-    * dwords, got garbage in its last one, Minecraft's first-person arm).
-    * The DDK DMAs per stream. */
-   for (uint32_t off = 0; off < attr_dwords; off += 16, row++) {
-      uint32_t n = attr_dwords - off < 16 ? attr_dwords - off : 16;
-
-      pds_d0(&p, 2 * row, vb + off * 4);
-      pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, 0, 0));
+   for (unsigned i = 0; i < nf; i++, row++) {
+      if (f[i].stride != last) {
+         pds_d1(&p, 2 * nstride, f[i].stride);
+         pds_d1(&p, 2 * nstride + 1, 0);
+         CODE(&p, pds_alu(SGX545_PDS_OPC_MUL16, IN(0), DS1(2 * nstride), DS1(0x32)));  /* index * stride */
+         nstride++;
+         last = f[i].stride;
+      }
+      pds_d0(&p, 2 * row, f[i].va);
+      pds_d0(&p, 2 * row + 1, dma_ctrl(f[i].dwords, f[i].reg, 0, 0));
       CODE(&p, pds_movs(MV_X, row, 0x19, 0, 1, 2, 2, DOUTD));          /* + ds1[0x32] */
+      if (f[i].defaults && f[i].dwords < 4) {
+         row++;
+         pds_d0(&p, 2 * row, c->defaults + f[i].dwords * 16);
+         pds_d0(&p, 2 * row + 1, dma_ctrl(4 - f[i].dwords, f[i].reg + f[i].dwords, 0, 0));
+         CODE(&p, pds_movs(MV, row, 0, 0, 1, 2, 2, DOUTD));
+      }
    }
    pds_d0(&p, 2 * row, doutu_w0(c, vs, true, temps));
    pds_d0(&p, 2 * row + 1, 0);
@@ -1114,6 +1128,24 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
       w5.in_size = (in_dwords * 4 + 0xf) >> 4;
       w5.data_rows = rows;
    }
+}
+
+/* the vertices packed, attr_dwords apart at vb: DMAs of at most 16 dwords,
+ * as the secondary DMAs (a longer one lost what came after: a lit vertex of
+ * 5 attributes, 20 dwords, got garbage in its last one, Minecraft's
+ * first-person arm) */
+static void
+vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
+         uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords,
+         uint32_t temps, uint32_t vpt)
+{
+   struct sgxws_fetch f[8];
+   unsigned nf = 0;
+
+   for (uint32_t off = 0; off < attr_dwords && nf < 8; off += 16)
+      f[nf++] = (struct sgxws_fetch){ .va = vb + off * 4, .stride = stride,
+                                      .dwords = attr_dwords - off < 16 ? attr_dwords - off : 16, .reg = off };
+   vdm_fetch(c, prim, count, idx, f, nf, vs, in_dwords, out_dwords, temps, vpt);
 }
 
 /* headroom one object needs in the frame rings, beyond its vertices */
@@ -1347,10 +1379,53 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    uint32_t vw = vs->attr_dwords * 4, vsec_dwords = 10 + vs->const_dwords;
    uint32_t idx = c->idx, n_idx = d->count, idx_bytes = 0;
    uint32_t mem_bytes = ((d->vs_mem.dwords * 4 + 15) & ~15u) + ((d->fs_mem.dwords * 4 + 15) & ~15u);
-   struct sgxws_ptr v, u, vsec, vmem = { 0 }, fmem = { 0 };
+   struct sgxws_ptr v = { 0 }, u, vsec, vmem = { 0 }, fmem = { 0 };
+   struct sgxws_fetch fetch[SGXWS_MAX_FETCH];
    int e;
 
-   if (d->verts_va) {
+   if (d->n_fetch) {
+      uint32_t block_bytes = 0, block_va[8];
+      unsigned nd = 0;
+
+      if (d->n_fetch > SGXWS_MAX_FETCH || d->n_blocks > 8)
+         return -E2BIG;
+      for (unsigned i = 0; i < d->n_fetch; i++)
+         nd += 1 + (d->fetch[i].defaults && d->fetch[i].dwords < 4);
+      if (nd > SGXWS_MAX_FETCH)
+         return -E2BIG;
+      for (unsigned b = 0; b < d->n_blocks; b++)
+         block_bytes += (d->blocks[b].bytes + DMA_ALIGN - 1) & ~(DMA_ALIGN - 1);
+      if (d->indices) {
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx_bytes = (n_idx * 2 + 15) & ~15u;
+      } else if (d->count > c->idx_count) {
+         return -E2BIG;
+      }
+      if ((e = make_room(c, block_bytes + vsec_dwords * 4 + idx_bytes + mem_bytes + DMA_ALIGN)))
+         return e;
+      for (unsigned b = 0; b < d->n_blocks; b++) {
+         struct sgxws_ptr bp = ring_alloc(&c->gen, d->blocks[b].bytes ? d->blocks[b].bytes : 4, DMA_ALIGN);
+
+         memcpy(bp.p, d->blocks[b].cpu, d->blocks[b].bytes);
+         block_va[b] = bp.va;
+      }
+      for (unsigned i = 0; i < d->n_fetch; i++) {
+         fetch[i] = d->fetch[i];
+         if (fetch[i].block) {
+            if (fetch[i].block > d->n_blocks)
+               return -EINVAL;
+            fetch[i].va += block_va[fetch[i].block - 1];
+         }
+      }
+      if (d->indices) {
+         struct sgxws_ptr ip = ring_alloc(&c->gen, idx_bytes, 16);
+
+         memcpy(ip.p, d->indices, n_idx * 2);
+         idx = ip.va;
+      }
+   } else if (d->verts_va) {
       if (d->idx_va) {
          if (d->n_indices > SGXWS_MAX_INDICES)
             return -E2BIG;
@@ -1508,8 +1583,14 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    sec = pds_dma_task(&c->pds_vtx, vsec.va, vsec_dwords, doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm_state(c, SGX545_VDMCTRL_BLOCK_TYPE_PDS_STATE, sec, vrows, SGX545_VDMCTRL_STATE_KIND_DMA, vsec_dwords, 0);
 
-   vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
-            vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
+   c->gpu_indices += n_idx;
+   c->gpu_verts += d->count;
+   if (d->n_fetch)
+      vdm_fetch(c, d->prim, n_idx, idx, fetch, d->n_fetch, vs->code, vs->in_dwords, vs->out_dwords, vs->temps,
+                vertices_per_task(vs->out_dwords));
+   else
+      vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
+               vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
    c->draws++;
    return 0;
 }
@@ -1581,8 +1662,8 @@ uint32_t
 sgxws_done_seq(struct sgxws_ctx *c)
 {
    /* oldest first: each one done moves done_seq on */
-   for (unsigned n = 1; n <= SGXWS_SLOTS; n++) {
-      unsigned i = (c->slot + n) % SGXWS_SLOTS;
+   for (unsigned n = 1; n <= c->slots; n++) {
+      unsigned i = (c->slot + n) % c->slots;
 
       if (slot_wait(c, i, 0))
          break;
@@ -1607,8 +1688,8 @@ sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 {
    /* the kicks still in the slots, up to seq; the older ones were waited
     * for when their slot was used again */
-   for (unsigned n = 1; n <= SGXWS_SLOTS; n++) {
-      unsigned i = (c->slot + n) % SGXWS_SLOTS;
+   for (unsigned n = 1; n <= c->slots; n++) {
+      unsigned i = (c->slot + n) % c->slots;
 
       if (!sgxws_seq_after(c->slot_kick[i].seq, seq) && slot_wait(c, i, timeout_ms))
          return -ETIMEDOUT;
@@ -1648,7 +1729,7 @@ code_sync(struct sgxws_ctx *c)
  * the next ring slot meanwhile, as the DDK overlaps the CPU's next frame with
  * the GPU's last.  What the CPU must not touch while a render runs:
  *  - the ring slot it was recorded in, until it is done (the slot is used
- *    again SGXWS_SLOTS submissions later);
+ *    again c->slots submissions later);
  *  - under services, its render target's structures (render details, region
  *    headers, sync lists): the next frame into the same target is kicked
  *    once the one before is done, so a target has one render in flight.
@@ -1720,7 +1801,7 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    c->frames++;
    c->rt = NULL;
    /* the next frame records into the next slot, once the render there is done */
-   c->slot = (c->slot + 1) % SGXWS_SLOTS;
+   c->slot = (c->slot + 1) % c->slots;
    {
       uint64_t t0 = sgxws_now_ns();
 
@@ -2050,9 +2131,12 @@ sgxws_get_stats(struct sgxws_ctx *c, struct sgxws_stats *st, bool reset)
    st->n_latency = c->n_latency;
    st->n_latency_scanout = c->n_latency_scanout;
    st->room_flushes = c->room_flushes;
+   st->gpu_indices = c->gpu_indices;
+   st->gpu_verts = c->gpu_verts;
    if (reset) {
       c->ns_flush = c->ns_cmd = c->ns_kick = c->ns_target_wait = c->ns_slot_wait = 0;
       c->ns_sync_wait = c->ns_fence_wait = c->ns_latency = c->ns_latency_scanout = 0;
       c->n_latency = c->n_latency_scanout = c->room_flushes = 0;
+      c->gpu_indices = c->gpu_verts = 0;
    }
 }

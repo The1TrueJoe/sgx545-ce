@@ -28,6 +28,11 @@ struct sgx545_resource {
    struct renderonly_scanout *scanout;   /* kmsro: its buffer on the display device */
 
    uint32_t uid, gen;           /* buffers: an id never reused, and a count of writes (vertex cache) */
+   /* buffers (SGX545_DEBUG=zerocopy): a device copy of data that draws DMA
+    * from, made at the first draw that reads it, kept up to date by writes;
+    * vbo_seq is the last kick that reads it */
+   struct sgxws_bo vbo;
+   uint32_t vbo_seq;
    uint64_t written_ns;         /* buffers: when last written */
    uint32_t stride;             /* bytes per row of level 0 */
    size_t level_offset[16];     /* each level in the linear CPU copy */
@@ -46,8 +51,8 @@ struct sgx545_resource {
 
    /* A cube map with mip levels sampled without mipmapping: the TPU then
     * spaces the faces by level 0 alone, so it samples a copy of the six
-    * level-0 faces laid out that way (the DDK's storage for that case: 0x1800
-    * bytes for a 16x16 RGBA cube with 5 levels, 0x3000 with mipmapping, EA1).
+    * level-0 faces laid out that way (docs/TEX.md: 0x1800 bytes for a 16x16
+    * RGBA cube with 5 levels, 0x3000 with mipmapping).
     * level0_gen counts the writes to level 0; cube0_gen is the one cube0 has. */
    struct sgxws_bo cube0;
    uint32_t level0_gen, cube0_gen;
@@ -78,6 +83,8 @@ struct sgx545_transfer {
 };
 
 void sgx545_resource_screen_init(struct sgx545_screen *screen);
+/* with the screen lock held: a buffer's device copy, made if need be */
+bool sgx545_buffer_vbo(struct sgx545_context *ctx, struct sgx545_resource *res);
 void sgx545_resource_context_init(struct sgx545_context *ctx);
 
 /* the target a render into this level and layer of the resource writes; with the screen lock held */

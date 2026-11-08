@@ -119,15 +119,19 @@ sgx545_stats_report(struct sgx545_context *ctx)
            (cpu - ctx->stats.cpu0) * ms, dt * ms, ws.ns_flush * ms, ws.ns_cmd * ms, ws.ns_kick * ms,
            ws.ns_target_wait * ms, ws.ns_slot_wait * ms, ws.ns_sync_wait * ms);
    fprintf(stderr, "sgx545 stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
-           "readback %u, deferred %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
+           "readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
            ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch, ctx->stats.fl_read,
-           ctx->stats.fl_deferred, ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
+           ctx->stats.fl_deferred, ctx->stats.zc_draws, ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
            (unsigned)(ctx->vcache_bytes >> 10), ws.ns_fence_wait * ms,
            ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
            ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout : 0, ws.n_latency_scanout);
    fprintf(stderr, "sgx545 stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms); textures read back %.0f ms (%llu KB)\n",
            ctx->stats.blit_gpu, ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
            ctx->stats.blit_cpu_ns * ms, ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
+   fprintf(stderr, "sgx545 stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame)\n",
+           (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
+           ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
+           ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0);
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
            dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ws.room_flushes,
@@ -155,8 +159,8 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
       ctx->stats.frames++;
    /* A plain flush (glFlush) of an off-screen frame is deferred, as GL
     * allows: submitting it split the frame, and the draws after it into the
-    * same target (the openhc-minecraft overlay's, after the game's glFlush)
-    * waited for the whole render.  The frame still goes at a fence, a
+    * same target (an application that flushes, then draws an overlay) waited
+    * for the whole render.  The frame still goes at a fence, a
     * readback, another target or the end of the frame; renders into the
     * scanout buffer (the swap's copy) or a shared one (a dma-buf another
     * process or device reads: Xorg's glamor flushes its screen pixmap so)

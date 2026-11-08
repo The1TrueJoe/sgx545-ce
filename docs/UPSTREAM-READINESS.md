@@ -154,6 +154,12 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
   - `nodrvconsts`;
   - `SGX545_FRAME_GAP_US`;
   - `SGX545_SLOTS`: pick the default and drop the knob.
+- **`setenv` in the driver.** `sgx545_screen_create` sets
+  `MESA_GLSL_DISABLE_IO_OPT=1` so that GLSL linking keeps varyings unpacked,
+  letting the PDS do whole-vec4 texture reads. A driver must not set the
+  process environment. It needs a compiler option instead: a
+  `nir_shader_compiler_options` / io-options flag that keeps
+  `nir_opt_varyings` from packing across slots, or a Mesa patch adding one.
 - **The compiler: done (1ba7774).** `SGX_DISABLE`, `SGX_F16_CONST` and
   `SGX_F16_ITER` are one `SGX545_COMPILER_DEBUG` flag table (`nopa`, `noout`,
   ..., `nocoissue`, `nof16const`, `nof16iter`), read once per compile.

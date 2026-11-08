@@ -30,6 +30,8 @@
 #define SGX545_DEBUG_NO_VS_COMPILER (1 << 14)
 #define SGX545_DEBUG_NO_FS_COMPILER (1 << 15)
 #define SGX545_DEBUG_FLUSH_RT       (1 << 16)
+#define SGX545_DEBUG_FF_MEDIUMP     (1 << 17)
+#define SGX545_DEBUG_ZERO_COPY      (1 << 18)
 
 extern uint32_t sgx545_debug;
 /* SGX545_DUMP_CODE=dir: every compiled program's instructions written there */
@@ -53,12 +55,16 @@ struct sgx545_screen {
     * shared by every pipe context and serialised by the lock, as the DDK runs a
     * GL client on one render context: a second render context with a parameter
     * buffer of its own makes the microkernel's renders slow and then lock up
-    * (gl4es under glretrace, which creates two pipe contexts).  A frame being
+    * (an application with two GL contexts).  A frame being
     * recorded is flushed when another target or context starts one
     * (sgxws_begin). */
    struct sgxws_ctx *hw;
 
    struct slab_parent_pool transfer_pool;
+
+   /* buffers' device copies a render may still read: freed once it's done */
+   struct { struct sgxws_bo bo; uint32_t seq; } retired[32];
+   unsigned n_retired;
 
    /* kmsro: the display device scanout buffers are allocated on */
    struct renderonly *ro;

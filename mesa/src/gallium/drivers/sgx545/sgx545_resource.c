@@ -334,6 +334,57 @@ sgx545_resource_get_param(struct pipe_screen *pscreen, struct pipe_context *pctx
    }
 }
 
+/* A buffer's device copy that renders may still read: freed once they are
+ * done, the ones already done now (screen lock held).  A full list waits for
+ * the GPU. */
+static void
+vbo_retire(struct sgx545_screen *screen, struct sgxws_bo *bo, uint32_t seq)
+{
+   uint32_t done;
+
+   if (!sgxws_bo_valid(bo))
+      return;
+   done = screen->hw ? sgxws_done_seq(screen->hw) : seq;
+   for (unsigned i = 0; i < screen->n_retired;) {
+      if (!sgxws_seq_after(screen->retired[i].seq, done)) {
+         sgxws_bo_free(screen->dev, &screen->retired[i].bo);
+         screen->retired[i] = screen->retired[--screen->n_retired];
+      } else {
+         i++;
+      }
+   }
+   if (sgxws_seq_after(seq, done) && screen->n_retired == ARRAY_SIZE(screen->retired)) {
+      sgxws_flush(screen->hw, 0);
+      sgxws_wait_idle(screen->hw, 2000);
+      for (unsigned i = 0; i < screen->n_retired; i++)
+         sgxws_bo_free(screen->dev, &screen->retired[i].bo);
+      screen->n_retired = 0;
+      done = seq;
+   }
+   if (sgxws_seq_after(seq, done)) {
+      screen->retired[screen->n_retired].bo = *bo;
+      screen->retired[screen->n_retired++].seq = seq;
+      memset(bo, 0, sizeof(*bo));
+   } else {
+      sgxws_bo_free(screen->dev, bo);
+   }
+}
+
+bool
+sgx545_buffer_vbo(struct sgx545_context *ctx, struct sgx545_resource *res)
+{
+   struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
+
+   if (sgxws_bo_valid(&res->vbo))
+      return true;
+   if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX, align(MAX2(res->base.width0, 16), 4096), 0x1000)) {
+      memset(&res->vbo, 0, sizeof(res->vbo));
+      return false;
+   }
+   memcpy(res->vbo.map, res->data, res->base.width0);
+   return true;
+}
+
 static void
 sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 {
@@ -356,6 +407,11 @@ sgx545_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
       sgxws_bo_free(screen->dev, &res->bo);
       sgxws_bo_free(screen->dev, &res->alt);
       sgxws_bo_free(screen->dev, &res->cube0);
+      simple_mtx_unlock(&screen->lock);
+   }
+   if (sgxws_bo_valid(&res->vbo)) {
+      simple_mtx_lock(&screen->lock);
+      vbo_retire(screen, &res->vbo, res->vbo_seq);
       simple_mtx_unlock(&screen->lock);
    }
    if (res->scanout)
@@ -475,6 +531,17 @@ sgx545_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsig
       if (usage & PIPE_MAP_WRITE) {
          res->gen++;            /* the vertex cache's copies of it are stale */
          res->written_ns = os_time_get_nano();
+         /* a device copy a render may still read is left to it; the next
+          * draw makes another (an unsynchronized write promises to miss
+          * what renders read, and goes in at the unmap) */
+         if (sgxws_bo_valid(&res->vbo) && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
+            struct sgx545_screen *screen = sgx545_screen(pctx->screen);
+
+            simple_mtx_lock(&screen->lock);
+            if (screen->hw && sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw)))
+               vbo_retire(screen, &res->vbo, res->vbo_seq);
+            simple_mtx_unlock(&screen->lock);
+         }
       }
       ptrans->stride = 0;
       ptrans->layer_stride = 0;
@@ -516,10 +583,10 @@ alt_dirty_add(struct sgx545_resource *res, unsigned level, unsigned layer, unsig
 
 /*
  * A write to a texture's level box (already in the CPU copy) onto the device
- * copy.  Minecraft animates sprites of its block atlas every tick (water,
- * lava, fire) while the frames before still sample the atlas: writing under
- * a render in flight would show half-updated sprites, and waiting for the GPU
- * at every tick threw the CPU/GPU overlap away.  So a busy copy is left to
+ * copy.  An application that animates sprites of a texture atlas updates it
+ * while the frames before still sample it: writing under a render in flight
+ * would show half-updated sprites, and waiting for the GPU at every update
+ * threw the CPU/GPU overlap away.  So a busy copy is left to
  * its renders and the other copy takes over, brought up to date from the
  * CPU copy first.
  */
@@ -608,8 +675,8 @@ sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    struct sgx545_context *ctx = sgx545_context(pctx);
    struct sgx545_resource *res = sgx545_resource(ptrans->resource);
 
-   /* only what the transfer covers: the game updates 16x16 sprites of a
-    * 1024x512 atlas, and the whole level each time took a minute to load */
+   /* only what the transfer covers: 16x16 updates of a 1024x512 atlas
+    * re-encoding the whole level each time were far too slow */
    if (res->texture && (ptrans->usage & PIPE_MAP_WRITE)) {
       uint64_t t = ctx->stats.on ? os_time_get_nano() : 0;
 
@@ -622,6 +689,9 @@ sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
       }
    }
 
+   if (ptrans->resource->target == PIPE_BUFFER && (ptrans->usage & PIPE_MAP_WRITE) && res->vbo.map)
+      memcpy((uint8_t *)res->vbo.map + ptrans->box.x, (const uint8_t *)res->data + ptrans->box.x,
+             ptrans->box.width);
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);
 }

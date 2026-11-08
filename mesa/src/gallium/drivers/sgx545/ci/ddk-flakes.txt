@@ -1,1 +1,0 @@
-# Tests that pass and fail on the DDK (Intel Cedarview DDK 1.7 i386, the A/B oracle) from run to run (regexes, Mesa CI format).

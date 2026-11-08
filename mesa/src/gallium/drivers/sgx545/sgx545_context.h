@@ -77,8 +77,11 @@ struct sgx545_shader {
    struct sgx_varyings *vary;   /* compiled: the varyings' sets (a variant's: its fragment shader's) */
    /* vertex: the same compiled to the sets of a fragment shader whose
     * varyings differ from its own (sgx545_vs_for) */
-   struct sgx545_shader *variants_vs[8];
+   struct sgx545_shader *variants_vs[16];
    unsigned next_variant_vs;
+   /* vertex: the input formats it unpacks (sgx_compile_options.vtx_fmt; all
+    * 0, f32 x 4, unless SGX545_DEBUG=zerocopy picked a variant) */
+   uint8_t vtx_fmt[16];
    /* fragment: the same decoding what the samplers in its mask sample as
     * sRGB (sgx545_fs_for) */
    unsigned srgb;
@@ -143,7 +146,7 @@ struct sgx545_context {
       uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns, rb_ns, rb_bytes;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read, fl_deferred;   /* flushes by cause */
-      unsigned vc_hits, vc_misses, vc_uncacheable;
+      unsigned vc_hits, vc_misses, vc_uncacheable, zc_draws;
       unsigned blit_gpu, blit_copy, blit_cpu;
       uint64_t blit_cpu_px, blit_cpu_ns;
    } stats;
