@@ -62,7 +62,13 @@ kernel configuration with that change added.
 
 There is no kernel package for CE5300 boards, because their kernels need board-specific
 changes. Use a Linux 7.1 or newer kernel for your board, and build only the driver with
-DKMS. From a copy of this repository:
+DKMS. The kernel must have four helper parts the driver uses. Check with:
+
+```bash
+grep -E 'DRM_(GPUVM|EXEC|SCHED|GEM_SHMEM_HELPER)=' /boot/config-$(uname -r)
+```
+
+All four must show `=y` or `=m`. Then, from a copy of this repository:
 
 ```bash
 sudo apt install dkms build-essential linux-headers-$(uname -r)
@@ -102,7 +108,10 @@ powervr_sgx ...: powervr_sgx/sgx545_ukernel.bin: open microkernel ..., features 
 powervr_sgx ...: microkernel started
 ```
 
-On Cedarview, `ls /sys/bus/auxiliary/devices/` should also list `gma500_gfx.sgx.0`. That
+On a CE5300 board, the first line reads `revision 0x0001000e: Intel CE5300 (SGX545 1.0.14)`
+instead.
+
+On Cedarview, `ls /sys/bus/auxiliary/devices/` should also list `gma500_gfx.sgx.` followed by a number. That
 shows the kernel has the change that hands the GPU over.
 
 If it says `no microkernel`, the firmware file isn't in the right place. If it says
