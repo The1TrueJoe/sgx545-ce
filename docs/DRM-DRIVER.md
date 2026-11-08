@@ -250,7 +250,7 @@ faults.
 3. Validation scans every 8-byte word of the upload, not just the paths a program's
    branches reach: a DOUTU can enter at any instruction. The table is one (mask,
    match) pair per form, generated from the clean-room isaspec description
-   (`mesa/src/sgx545/isa/sgx545.xml`) by `drm/tools/gen_usse_table.py`. That gives 109
+   (`mesa/src/sgx/isa/sgx.xml`) by `drm/tools/gen_usse_table.py`. That gives 109
    forms, and the generator refuses any two that could match one word. CI checks the
    committed table is current. A word fails if it matches no form (so a later ISA
    discovery can't open a hole), or if it is `ldr` or `str` (P1), `setl` or `savl` (link

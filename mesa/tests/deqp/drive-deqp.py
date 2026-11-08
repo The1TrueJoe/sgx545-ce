@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Run dEQP-GLES2 (or piglit) on an EA from the host, across wedges and power cycles.
 
-    drive-deqp.py sgx545|ddk|piglit [--box 10.0.0.110] [--chunk 200] [--filter REGEX] [--max-wedges N]
+    drive-deqp.py sgx|ddk|piglit [--box 10.0.0.110] [--chunk 200] [--filter REGEX] [--max-wedges N]
                   [--name NAME] [--caselist FILE]
 
 --name keeps a run apart from the others (its results in run-NAME, its Mesa in
@@ -21,7 +21,7 @@ a single test that still wedges goes into wedges.txt as a result of "Wedge" and
 is not run again. Those are the lines for ci/<who>-skips.txt.
 
 The box needs nothing but SSH: the payload ($DEQP_WORK/out, and our Mesa from
-$MESA_DIR for sgx545) is copied to $BOX_DIR (default /root/deqp) when missing.
+$MESA_DIR for sgx) is copied to $BOX_DIR (default /root/deqp) when missing.
 
 piglit runs piglit's gpu profile (quick_gl and quick_shader; mesa/tests/piglit/
 build-piglit.sh) on our desktop-GL Mesa ($MESA_DIR: the x86_64-gl build's lib)
@@ -36,7 +36,7 @@ Environment:
   BOX         the box (default 10.0.0.110, the EA1, the GPU box)
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
-  BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
+  BOX_ENV     more variables for our driver on the box, e.g. "SGX_F16=0"
   CHUNK_HOOK  a command on the box after every chunk (e.g. a debugfs status), its
               output kept in run-NAME/chunk-hook.txt
 """
@@ -228,7 +228,7 @@ def payload(box, who, name):
     if rc == 0:
         return
     # dEQP itself is there from an earlier run: only a new Mesa to send
-    exe = "deqp-gles2" if who == "sgx545" else "deqp-gles2-i386"
+    exe = "deqp-gles2" if who == "sgx" else "deqp-gles2-i386"
     rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -x {BOX_DIR}/{exe}")
     whole = rc != 0
     log("copying the payload to the box" if whole else "copying our Mesa to the box")
@@ -239,7 +239,7 @@ def payload(box, who, name):
             t.add(os.path.join(out, "deqp-runner"), "deqp-runner")
             t.add(os.path.join(out, "gles2"), "gles2")
             t.add(os.path.join(out, exe), exe)
-        if who == "sgx545":
+        if who == "sgx":
             t.add(os.environ["MESA_DIR"], "lib-" + name)
     rc, o = box.ssh(f"mkdir -p {BOX_DIR} && cd {BOX_DIR} && tar xf - && touch .complete-{name}", timeout=900,
                     stdin=buf.getvalue())
@@ -250,11 +250,11 @@ def payload(box, who, name):
 def runner_script(who, name):
     if who == "piglit":
         return (f"cd {BOX_DIR} && rm -rf out && set -- && while IFS= read -r t; do set -- \"$@\" "
-                f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX545_DEBUG=hangabort "
+                f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX_DEBUG=hangabort "
                 f"{LOCK} ./piglit-runner run --piglit-folder {BOX_DIR}/piglit --profile gpu --process-isolation "
                 f"--output out --jobs 1 --timeout {TEST_TIMEOUT} \"$@\" > runner.log 2>&1; echo rc=$?")
-    if who == "sgx545":
-        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort {BOX_ENV}"
+    if who == "sgx":
+        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX_DEBUG=hangabort {BOX_ENV}"
         deqp = f"{BOX_DIR}/deqp-gles2"
     else:
         deqp = f"{BOX_DIR}/deqp-gles2-ddk"
@@ -278,7 +278,7 @@ def canary(box, who, name):
                           f"tests/spec/glsl-1.10/execution/glsl-fs-add-masked.shader_test -auto -fbo 2>&1",
                           timeout=45)
         return rc == 0 and b'"result": "pass"' in out
-    if who == "sgx545":
+    if who == "sgx":
         pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless {BOX_ENV}"
         exe = f"{BOX_DIR}/deqp-gles2"
     else:
@@ -366,7 +366,7 @@ def main():
     import signal
     signal.signal(signal.SIGTERM, lambda *_: sys.exit("terminated: the lock is let go"))
     ap = argparse.ArgumentParser()
-    ap.add_argument("who", choices=["sgx545", "ddk", "piglit"])
+    ap.add_argument("who", choices=["sgx", "ddk", "piglit"])
     ap.add_argument("--box", default=os.environ.get("BOX", "10.0.0.110"))
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--filter", default=None)

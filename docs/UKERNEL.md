@@ -496,7 +496,7 @@ DCU-invalidate and TA/3D acks; the host kick found by the CCB offsets) and §4
 ## 4a. The firmware file
 
 `powervr_sgx` loads the microkernel with `request_firmware()`. It tries
-`powervr_sgx/sgx545_ukernel.bin` first, then the DDK image under its own
+`powervr_sgx/sgx_ukernel.bin` first, then the DDK image under its own
 name. A file that starts with the magic below is an open microkernel and is
 loaded from its header alone. Anything else must be the one DDK build the
 driver knows (size and patch placeholders checked).

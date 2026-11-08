@@ -1,0 +1,16 @@
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+
+# Text -> instruction -> words -> text over each list; a line that gives
+# words must encode to them.
+test(
+  'sgx_isa',
+  executable(
+    'sgx_isa_test',
+    'sgx_isa_test.c',
+    include_directories : [inc_include, inc_src],
+    dependencies : [idep_sgx_isa, idep_mesautil],
+  ),
+  args : files('gles2.txt', 'int.txt', 'coissue.txt'),
+  suite : ['sgx'],
+)

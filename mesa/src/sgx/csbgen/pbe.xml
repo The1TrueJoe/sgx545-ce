@@ -1,0 +1,55 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2026 Joseph Telaak
+SPDX-License-Identifier: MIT
+
+The PBE (pixel back end) words the end-of-tile program emits
+(docs/STATE.md section 4), for Mesa's csbgen. A field named
+unknown_<bits> holds bits STATE.md gives a value but no meaning; widths
+STATE.md doesn't give are taken up to the next known field.
+-->
+
+<csbgen name="SGX" prefix="PBE">
+
+  <enum name="FORMAT">
+    <value name="BGRA8888" value="0"/>
+    <value name="RGBA8888" value="1"/>
+    <value name="RGB565"   value="3"/>
+    <value name="RGBA5551" value="4"/>
+    <value name="RGBA4444" value="5"/>
+  </enum>
+
+  <!-- the clip rectangle, in pixels, inclusive -->
+  <struct name="STATE_WORD0" length="1">
+    <field name="y_min" start="16" end="31" type="uint"/>
+    <field name="x_min" start="0" end="15" type="uint"/>
+  </struct>
+
+  <struct name="STATE_WORD1" length="1">
+    <field name="y_max" start="16" end="31" type="uint"/>
+    <field name="x_max" start="0" end="15" type="uint"/>
+  </struct>
+
+  <struct name="STATE_WORD2" length="1">
+    <field name="downscale" start="30" end="31" type="uint"/>
+    <field name="rotation" start="28" end="29" type="uint"/>
+    <field name="pitch" start="16" end="27" type="uint"/>  <!-- pitch in pixels / 2 - 1 -->
+    <!-- cleared, the PBE writes nothing at the address -->
+    <field name="write_enable" start="15" end="15" type="bool" default="1"/>
+  </struct>
+
+  <struct name="STATE_WORD3" length="1">
+    <field name="address" start="2" end="31" type="address" shift="2"/>
+  </struct>
+
+  <!-- the sideband word, the end-of-tile program's second EMITPIX -->
+  <struct name="SIDEBAND" length="1">
+    <field name="twiddled" start="13" end="13" type="bool"/>
+    <field name="unknown_12" start="12" end="12" type="bool"/>
+    <field name="dither" start="10" end="10" type="bool"/>
+    <field name="unknown_9" start="9" end="9" type="bool" default="1"/>
+    <field name="format" start="0" end="5" type="FORMAT"/>
+  </struct>
+
+</csbgen>

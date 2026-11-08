@@ -1,0 +1,23 @@
+The loader picks sgx for the SGX545 under either kernel driver: the DDK's
+services driver (pvrsrvkm, openHC's stack) or the powervr_sgx DRM driver.
+
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -146,13 +146,14 @@ iris_predicate(int fd, const char *driver)
+    return ret;
+ }
+ 
+-/* the Intel CE (Cedarview/Groveland) SoCs' PowerVR SGX545, under its
+- * services driver */
++/* the Intel CE (Cedarview/Groveland) SoCs' PowerVR SGX545, under its DRM
++ * driver or the DDK's services driver */
+ bool
+ sgx_predicate(int fd, const char *driver)
+ {
+    char *kernel_driver = loader_get_kernel_driver_name(fd);
+-   bool ret = kernel_driver && strcmp(kernel_driver, "pvrsrvkm") == 0;
++   bool ret = kernel_driver && (strcmp(kernel_driver, "powervr_sgx") == 0 ||
++                                strcmp(kernel_driver, "pvrsrvkm") == 0);
+ 
+    free(kernel_driver);
+    return ret;

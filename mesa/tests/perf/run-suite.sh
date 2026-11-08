@@ -13,13 +13,13 @@
 #
 # Per run: Minecraft standing and walking (mc-oldnew.sh); glmark2's default
 # scenes in a 720x480 window and off-screen (desktop GL, through gl4es on the
-# old stack); the GPU microbenchmark (sgx545_perfmicro). The new stack adds
+# old stack); the GPU microbenchmark (sgx_perfmicro). The new stack adds
 # glmark2-es2 and glmark2-es2-drm (straight to the display, Xorg stopped).
 # Any GPU recovery voids that run. Results: /root/perf/<stack>/, a summary
 # with each measure's median, min and max in summary.txt.
 #
 # Needs (staged by the host): /root/m3 (mc-oldnew.sh, x11-up.sh, memdump),
-# /root/perf/bin (sgx545_perfmicro-i386 and -x86_64), the old stack's glmark2
+# /root/perf/bin (sgx_perfmicro-i386 and -x86_64), the old stack's glmark2
 # in /opt/minecraft/rootfs/opt/perf-old (its own directory), the new stack's in
 # /opt/x64root, our x86_64 Mesa in $MESA_LIB (default /root/deqp/lib-m3c).
 set -u
@@ -95,8 +95,8 @@ for run in $(seq 1 $RUNS); do
 		glmark glmark2-es2-window glmark2-es2 -s 720x480
 		$M/x11-up.sh $R_NEW stop
 		r0=$(rec)
-		out=$(chroot $R_NEW /usr/bin/env LD_LIBRARY_PATH=/opt/sgx545/lib GBM_BACKENDS_PATH=/opt/sgx545/lib/gbm \
-			__EGL_VENDOR_LIBRARY_DIRS=/opt/sgx545/share/glvnd/egl_vendor.d glmark2-es2-drm -s 720x480 2>&1)
+		out=$(chroot $R_NEW /usr/bin/env LD_LIBRARY_PATH=/opt/sgx/lib GBM_BACKENDS_PATH=/opt/sgx/lib/gbm \
+			__EGL_VENDOR_LIBRARY_DIRS=/opt/sgx/share/glvnd/egl_vendor.d glmark2-es2-drm -s 720x480 2>&1)
 		echo "$out" > "$O/glmark2-es2-drm-$run.log"
 		s=$(echo "$out" | grep -o 'glmark2 Score: [0-9]*' | awk '{print $3}')
 		[ "$(rec)" = "$r0" ] || s=void
@@ -107,9 +107,9 @@ for run in $(seq 1 $RUNS); do
 	r0=$(rec)
 	if [ $WHO = old ]; then
 		out=$(LD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so /opt/sgx-i386/lib/ld-linux.so.2 \
-			--library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib $B/sgx545_perfmicro-i386 2>&1)
+			--library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib $B/sgx_perfmicro-i386 2>&1)
 	else
-		out=$(LD_LIBRARY_PATH=${MESA_LIB:-/root/deqp/lib-m3c} EGL_PLATFORM=surfaceless $B/sgx545_perfmicro-x86_64 2>&1)
+		out=$(LD_LIBRARY_PATH=${MESA_LIB:-/root/deqp/lib-m3c} EGL_PLATFORM=surfaceless $B/sgx_perfmicro-x86_64 2>&1)
 	fi
 	echo "$out" > "$O/micro-$run.log"
 	ok=$([ "$(rec)" = "$r0" ] && echo 1)

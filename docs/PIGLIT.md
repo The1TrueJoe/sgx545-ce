@@ -133,8 +133,8 @@ texture is linear (layout 3), and the DDK's GLES2 has no NPOT mipmaps, so no
 linear mip chain is known. Such a texture is now sampled from its base level
 only, and the test passes with no recoveries.
 
-The expectations are `ci/sgx545-piglit-fails.txt`, written by `mkexpect.py` from
-the runs, with the reasons in `mesa/tests/piglit/sgx545-reasons.tsv`. Every
+The expectations are `ci/sgx-piglit-fails.txt`, written by `mkexpect.py` from
+the runs, with the reasons in `mesa/tests/piglit/sgx-reasons.tsv`. Every
 failure is grouped under a reason. Where the cause is known it is stated;
 otherwise the reason gives the symptom and says "not diagnosed".
 
@@ -149,7 +149,7 @@ Most failures come from these:
   a written depth isn't traced. The driver warns once and the triangle's own
   depth is used.
 - **Derivatives compile but give wrong values** (8).
-- **No depth format can be sampled** (96). `sgx545_tex_format` has only the
+- **No depth format can be sampled** (96). `sgx_tex_format` has only the
   five 8-bit T1 codes, and Mesa always exposes `ARB_depth_texture`, so a
   `GL_DEPTH_COMPONENT` texture gets no format and the test crashes later. The
   DDK's GLES2 lists `OES_depth_texture`, `OES_packed_depth_stencil`,
@@ -179,7 +179,7 @@ runs. Skipping only the mipmapped draws still left 48 of them.
 The cause is that no layout for NPOT cube faces is known: `face_stride_levels`
 was measured on POT faces only, and dEQP's NPOT cube tests fail too (the DDK's
 as well). As a **stopgap**, not a fix, a draw is skipped when it samples an NPOT
-cube map of 16 texels or more, or a mipmapped one, with one `sgx545: NPOT cube
+cube map of 16 texels or more, or a mipmapped one, with one `sgx: NPOT cube
 maps ... not drawn yet` per context. With it the two tests take 0.6 s and no
 recoveries. The fix is the DDK's layout for these, from a capture, after which
 the guard goes.

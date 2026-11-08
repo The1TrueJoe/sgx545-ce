@@ -8,7 +8,7 @@
 # the same revision and patch).  Desktop GL on a box with no X goes through
 # libglvnd: piglit and waffle link libOpenGL.so.0 and libEGL.so.1 from glvnd,
 # which dispatch to our libEGL_mesa (a second Mesa build with -Dopengl=true
-# -Dglvnd=enabled, in $SGX545_MESA_BUILD/x86_64-gl; the shipping GLES build
+# -Dglvnd=enabled, in $SGX_MESA_BUILD/x86_64-gl; the shipping GLES build
 # is left alone).
 #
 #   mesa/tests/piglit/build-piglit.sh
@@ -25,7 +25,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../.." && pwd)
 . "$REPO/mesa/VERSION"
 W=${PIGLIT_WORK:-$HOME/.cache/sgx545/piglit}
-B=${SGX545_MESA_BUILD:-$REPO/build/mesa}
+B=${SGX_MESA_BUILD:-$REPO/build/mesa}
 CI=$B/mesa-$MESA_VERSION/.gitlab-ci
 TARGET=x86_64-linux-gnu.2.36
 SYS=$W/sysroot                 # what the later builds compile and link against

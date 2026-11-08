@@ -118,13 +118,13 @@ Reviewers for reverse-engineered drivers (lima, etnaviv, asahi, panfrost) ask ho
 
 ### 3.7 Mesa expectations
 
-- **Location and name:** new gallium driver plus compiler. Talk to the `src/imagination` (Rogue) maintainers early about naming and placement. `src/imagination/sgx/…` versus `src/gallium/drivers/sgx545` is their call, and the ISA is unrelated to Rogue's. The DRM driver name (what `drmGetVersion` returns) decides the loader mapping. **Don't pick `pvr`**, which is taken.
+- **Location and name:** new gallium driver plus compiler. Talk to the `src/imagination` (Rogue) maintainers early about naming and placement. `src/imagination/sgx/…` versus `src/gallium/drivers/sgx` is their call, and the ISA is unrelated to Rogue's. The DRM driver name (what `drmGetVersion` returns) decides the loader mapping. **Don't pick `pvr`**, which is taken.
 - **Platforms:** with a proper render node and dma-buf, gallium gives you GBM, EGL Wayland/X11/surfaceless and DRI3 almost for free. The fbdev EGL platform in the overlay is downstream-only and won't go upstream (Mesa has no fbdev platform).
 - **Render-only pairing (`kmsro`/`renderonly`):** on Cedarview, the display device is gma500 and the render device is ours. Mesa needs a kmsro entry so opening gma500 creates our screen. Scanout buffers are linear (verify gma500's stride and alignment rules).
 - **Modifiers:** support `DRM_FORMAT_MOD_LINEAR` everywhere first. Twiddled/tiled layouts (TEX.md §1) would need modifiers in `drm_fourcc.h`. Check whether an Imagination vendor namespace exists before inventing one.
 - **Sync:** implicit sync through dma_resv for X/DRI3 and old Wayland; explicit timeline syncobj for Wayland's `linux-drm-syncobj-v1`.
 - **Testing culture:** dEQP via `deqp-runner`, with `*-fails.txt`/`*-flakes.txt`/`*-skips.txt` expectation files (Mesa CI convention), and piglit for desktop GL. A hardware CI runner (LAVA/ci-tron) is welcome but not required to merge. Khronos conformance submission is optional, but a clean dEQP-GLES2 run is the credibility bar.
-- **Code standards:** Mesa style, meson options, no environment-variable-only features in default paths, and the `SGX545_*` debug variables moved to the driver's debug-option table.
+- **Code standards:** Mesa style, meson options, no environment-variable-only features in default paths, and the `SGX_*` debug variables moved to the driver's debug-option table.
 
 ---
 
@@ -166,7 +166,7 @@ Leave `pvrsrvkm` alone apart from the downstream distribution's needs. **Don't a
 **Exit:** the driver boots the GPU from the kernel on the EA3 and runs submitted jobs, IGT passes, and one client can't corrupt another (test it).
 
 ### M3: Mesa winsys on the new uAPI
-Replace `libpvr` in `src/gallium/winsys/sgx545/` with a DRM winsys: BO allocation, VM_BIND, submit, syncobj, dma-buf import/export. Drop the fbdev platform from the upstream branch (keep it in the downstream overlay). Enable surfaceless, GBM, Wayland and X11.
+Replace `libpvr` in `src/gallium/winsys/sgx/` with a DRM winsys: BO allocation, VM_BIND, submit, syncobj, dma-buf import/export. Drop the fbdev platform from the upstream branch (keep it in the downstream overlay). Enable surfaceless, GBM, Wayland and X11.
 **Exit:** dEQP-GLES2 on the new kernel driver matches the M0 baseline. Weston or labwc runs on CE5300 through a KMS device. A minimal VDC KMS driver or simpledrm on the CEFDK framebuffer is fine for the EA. Lower priority than Cedarview.
 
 ### M4: Cedarview

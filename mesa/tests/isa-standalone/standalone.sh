@@ -2,15 +2,15 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# Build the ISA library (mesa/src/sgx545/isa) and sgx545_isa_test without a
+# Build the ISA library (mesa/src/sgx/isa) and sgx_isa_test without a
 # Mesa build, against an unpacked Mesa tree of mesa/VERSION's release (needs
 # python3 with mako):
 #
 #    mesa/tests/isa-standalone/standalone.sh <mesa-tree> [out-dir]  &&
-#       <out-dir>/sgx545_isa_test mesa/src/sgx545/isa/tests/*.txt
+#       <out-dir>/sgx_isa_test mesa/src/sgx/isa/tests/*.txt
 set -e
 T=$(cd "$(dirname "$0")" && pwd)
-HERE=$(cd "$T/../../src/sgx545/isa" && pwd)
+HERE=$(cd "$T/../../src/sgx/isa" && pwd)
 M=$(cd "$1" && pwd)
 B=${2:-$T/build}
 PY=${PYTHON:-python3}
@@ -24,19 +24,19 @@ cp "$M"/src/compiler/isaspec/*.py "$B/isaspec/"
    patch -d a -p1 --forward --batch -s < "$P"; } &&
  cp a/src/compiler/isaspec/*.py isaspec/)
 W=$B/isaspec
-$PY $W/decode.py --xml $HERE/sgx545.xml --out-c $B/sgx545-isa.c --out-h $B/sgx545-isa.h
-$PY $W/encode.py --xml $HERE/sgx545.xml --out-h $B/sgx545-isa-encode.h
-PYTHONPATH=$W $PY $HERE/sgx545_isa_enums.py --xml $HERE/sgx545.xml --out-h $B/sgx545-isa-enums.h
+$PY $W/decode.py --xml $HERE/sgx.xml --out-c $B/sgx-isa.c --out-h $B/sgx-isa.h
+$PY $W/encode.py --xml $HERE/sgx.xml --out-h $B/sgx-isa-encode.h
+PYTHONPATH=$W $PY $HERE/sgx_isa_enums.py --xml $HERE/sgx.xml --out-h $B/sgx-isa-enums.h
 CF=(-std=gnu11 -g -O1 -I $B -I $HERE -I $M/src -I $M/include -I $M/src/compiler/isaspec
     -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
     -DHAVE_PTHREAD -DHAVE_STRUCT_TIMESPEC -DHAVE_TIMESPEC_GET -DHAVE_STRNDUP)
 OBJS=()
-for f in $B/sgx545-isa.c $HERE/sgx545_isa_encode.c $HERE/sgx545_isa_disasm.c \
-         $HERE/sgx545_isa_asm.c $HERE/sgx545_isa_asm_int.c $HERE/sgx545_isa_coissue.c $T/standalone_stubs.c \
+for f in $B/sgx-isa.c $HERE/sgx_isa_encode.c $HERE/sgx_isa_disasm.c \
+         $HERE/sgx_isa_asm.c $HERE/sgx_isa_asm_int.c $HERE/sgx_isa_coissue.c $T/standalone_stubs.c \
          $M/src/compiler/isaspec/isaspec.c $M/src/util/ralloc.c $M/src/util/hash_table.c; do
   o=$B/obj/$(basename $f .c).o
   ${CC:-cc} "${CF[@]}" -c $f -o $o
   OBJS+=($o)
 done
-${CC:-cc} "${CF[@]}" $HERE/tests/sgx545_isa_test.c "${OBJS[@]}" -o $B/sgx545_isa_test
-echo "$B/sgx545_isa_test"
+${CC:-cc} "${CF[@]}" $HERE/tests/sgx_isa_test.c "${OBJS[@]}" -o $B/sgx_isa_test
+echo "$B/sgx_isa_test"

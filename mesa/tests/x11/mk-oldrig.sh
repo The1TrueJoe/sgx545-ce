@@ -9,7 +9,7 @@
 #   gl4es-run-ddk  the runtime's gl4es-run, LIBGL_NOBANNER from the
 #                  environment, MC_LINEBUF=1 line-buffers stdout, MC_PRELOAD more
 #                  preloads, e.g. pvrtrace (mk-ddkrun.sh)
-#   gl4es-run-sgx545  the same on our i386 Mesa in usr/lib/sgx545 (put there by the host)
+#   gl4es-run-sgx  the same on our i386 Mesa in usr/lib/sgx (put there by the host)
 #   usr/lib/sgx    the box's DDK libraries and powervr.ini hints (mc-session's ddk_sync)
 # mc-oldnew.sh old drives the game with the x64 root's xdotool (the runtime
 # has none).
@@ -28,14 +28,14 @@ sed 's/LIBGL_NOBANNER=1/LIBGL_NOBANNER=${LIBGL_NOBANNER:-1}/; s|^exec "\$@"|[ -n
 	"$B/gl4es-run" > "$B/gl4es-run-ddk"
 chmod 755 "$B/gl4es-run-ddk"
 grep -q _STDBUF_O "$B/gl4es-run-ddk" || { echo "mk-oldrig: gl4es-run changed; gl4es-run-ddk not made" >&2; exit 1; }
-# gl4es-run-sgx545: the same launcher on our i386 Mesa in $R/usr/lib/sgx545 (the
+# gl4es-run-sgx: the same launcher on our i386 Mesa in $R/usr/lib/sgx (the
 # same-binary head-to-head: only the GLES2 library differs)
-sed -e 's|^export LIBGL_EGL=.*|export LIBGL_EGL=/usr/lib/sgx545/libEGL.so.1 LIBGL_GLES=/usr/lib/sgx545/libGLESv2.so.2|' \
-	-e 's|^export LD_LIBRARY_PATH=/usr/lib/mc-overlay:/usr/lib/gl4es:/usr/lib/sgx|export LD_LIBRARY_PATH=/usr/lib/mc-overlay:/usr/lib/gl4es:/usr/lib/sgx545|' \
-	"$B/gl4es-run-ddk" > "$B/gl4es-run-sgx545"
-chmod 755 "$B/gl4es-run-sgx545"
-grep -q 'LIBGL_GLES=/usr/lib/sgx545' "$B/gl4es-run-sgx545" && grep -q 'gl4es:/usr/lib/sgx545' "$B/gl4es-run-sgx545" ||
-	{ echo "mk-oldrig: gl4es-run changed; gl4es-run-sgx545 not made" >&2; exit 1; }
+sed -e 's|^export LIBGL_EGL=.*|export LIBGL_EGL=/usr/lib/sgx/libEGL.so.1 LIBGL_GLES=/usr/lib/sgx/libGLESv2.so.2|' \
+	-e 's|^export LD_LIBRARY_PATH=/usr/lib/mc-overlay:/usr/lib/gl4es:/usr/lib/sgx|export LD_LIBRARY_PATH=/usr/lib/mc-overlay:/usr/lib/gl4es:/usr/lib/sgx|' \
+	"$B/gl4es-run-ddk" > "$B/gl4es-run-sgx"
+chmod 755 "$B/gl4es-run-sgx"
+grep -q 'LIBGL_GLES=/usr/lib/sgx' "$B/gl4es-run-sgx" && grep -q 'gl4es:/usr/lib/sgx' "$B/gl4es-run-sgx" ||
+	{ echo "mk-oldrig: gl4es-run changed; gl4es-run-sgx not made" >&2; exit 1; }
 # the DDK's libraries and hints in the root, as mc-session does it (its own functions)
 eval "$(sed -n '/^log() {/p; /^ddk_sync() {/,/^}/p; /^game_hints() {/,/^}/p' /opt/minecraft/bin/mc-session)"
 ddk_sync

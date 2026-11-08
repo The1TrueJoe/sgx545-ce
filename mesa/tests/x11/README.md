@@ -20,8 +20,8 @@ gl4es and no shims in the clients. Logs: `docs/log/entries/2026-11-04-0250-*` an
    - `python3 -I mesa/tests/x11/mkroot.py ~/Documents/GitHub/sgx545-work/<session>/build/x64/root <packages>`, with the
      packages listed in the 0250 log entry, plus `xdotool` for the benchmark's clicks.
    - `X11_SYSROOT=<root> mesa/build.sh x86_64-x11`.
-   - Put the build's `lib` and `share` in `<root>/opt/sgx545`. Point
-     `share/glvnd/egl_vendor.d/50_mesa.json` at `/opt/sgx545/lib/libEGL_mesa.so.0`.
+   - Put the build's `lib` and `share` in `<root>/opt/sgx`. Point
+     `share/glvnd/egl_vendor.d/50_mesa.json` at `/opt/sgx/lib/libEGL_mesa.so.0`.
    - Put a Zulu 8 x64 JRE in `<root>/opt/java/jre8-x64`; check its sha256 against Azul's
      metadata API.
 2. **Boot**: hold `~/Documents/GitHub/sgx545-work/locks/ea1.lock`. RAM-boot an m2-drm `powervr-sgx-ea1-v1`

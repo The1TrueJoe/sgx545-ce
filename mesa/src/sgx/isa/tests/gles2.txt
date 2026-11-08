@@ -1,0 +1,215 @@
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# GLES2-relevant USSE forms in docs/ISA.md's text notation, for the
+# clean-room isaspec encoder (mesa/src/sgx/isa). A line may end with
+# "; <lo> <hi>": words docs/ISA.md quotes for it. The rest are checked
+# black-box against the oracle.
+
+# --- words quoted in ISA.md -------------------------------------------------
+phas.i #0, #0 [wait=7] ; 00000000 fa440700
+phas.i #0, #0 [end wait=7] ; 00000000 fa4c0700
+nop [end] ; 00000000 f8040140
+mov pa0, pa0 [skipinv rcnt] ; a0000000 28a10002
+(p1) atst8 pa0, p0.nw, pa0, sa3, sa4 [end] ; f0000184 f9340406
+pcoeff pa0, pa1, sa4 ; b0000084 f8300004
+phas.i #0, #0 [rate=1] ; 00000000 fa440800
+
+# --- float 3-source ---------------------------------------------------------
+fmad r0, r1, r2, r3
+fmad r0, pa1, sa2, c52 [skipinv]
+fmad o0, r1, -r2, |r3|
+fmad r0, |r1|, -|r2|, -r3
+fmad pa4, pa0, pa4, c48 [rpt=4 moe]
+fmad r12, r0, r4, r8 [rpt=3 inc0 inc1]
+fmad r12, r0, c52, c48 [rpt=2 inc0]
+fmad r0, r0, c52, c52 [nosched syncs]
+fmad r0, pa0.f16.lo, c52, c48 [fmt]
+fmad pa0, pa0.f16.hi, c52, c48 [fmt]
+fmad r12, r0.f16.lo, c52, c48 [rpt=2 moe fmt]
+fmad r3, r1.f16.hi, r2.f16.lo, r4.f16.hi [fmt]
+fmad r3, r1, r2.f16.lo, c3.f16 [fmt]
+fmad r3, r1, r2, #3.f16 [fmt]
+(p0) fmad r1, r2, r3, r4
+(!p0) fmad r1, r2, r3, r4 [skipinv]
+(p3) fmad r1, r2, r3, r4
+(!p1) fmad r1, r2, r3, r4
+fmad r123, pa127, sa127, i3
+fmad r0, r1, g17, i0
+fmad r0, r1, pa[idx1+3], sa[idx2+15]
+fmad sa5, r1, r2, r3
+fmad pa[idx1+2], r1, r2, r3
+fmad i2, r1, r2, r3
+fmad g5, r1, r2, r3
+fmad idx1, r1, r2, r3
+fadm r0, r1, r2, r3
+fmsa r0, r1, r2, r3
+fminmax r0, r1, sa2, sa3
+fmaxmin r0, r1, r1, sa3 [skipinv]
+fmad r0, r1, pa[idx1+3].f16, r2 [fmt]
+
+# --- float 2-source, dot products, derivatives ------------------------------
+fsubflr r0, r1, r1
+fsubflr r0, -r1, |r2| [skipinv]
+fdp pa0, pa2.f16.lo, pa0.f16.lo [rpt=3 moe fmt]
+fdp r12, r0, r4 [rpt=4 moe]
+fdpc r0, cp3, r1, r2 [rpt=4 moe]
+fdsx r0, r1, r2
+fdsy r0, r1, r2 [rpt=2]
+fddp r0, i1, r1, r2, r3
+fddpc r0, i0, cp1, cp2, r1, r2, r3
+
+# --- float scalar -----------------------------------------------------------
+frcp r0, r1
+frsq r0, pa1 [skipinv]
+flog2 r0, sa1
+fexp2 r0, r1
+fsqrt r0, r1
+fsin r0, r1
+fcos r0, -|r1|
+frcp pa9, pa9 [f16 chan=1 f16d]
+frcp r0, r1 [f16]
+frcp r0, r1 [c10 chan=2]
+frcp r4, r0 [rcnt rpt=4]
+frcp r4, r0 [rcnt]
+frcp r4, r0 [mask=5]
+frsq o1, i2
+frcp r0, c3
+
+# --- fmad16 -----------------------------------------------------------------
+fmad16 r0, r1, r2, r3
+fmad16 r0, r1, r2, r3 [swz0=ll swz1=hh swz2=f32]
+fmad16 r0, |r1|, -c45, r3
+fmad16 r0, r1, c45, c52 [rpt=2 inc0 inc1 inc2 swz1=hh]
+
+# --- moves ------------------------------------------------------------------
+mov r0, r1
+mov o0, r15 [end]
+mov o0, c52
+mov r0, c48 [skipinv]
+mov r4, r0 [rcnt rpt=4]
+mov r4, r0 [mask=3]
+mov r0, #127
+mov r0, sa[idx1+2]
+(p0) mov r0, r1
+movc.z.i32 r0, r1, c52, c48
+movc.nz.i32 r0, r1, c52, c48
+movc.ltz.f32 r0, r1, i0, r1
+movc.gez.u8 r0, r1, r2, r3
+movc.z.i16 r0, pa1, r2, r3
+movc.nz.c10 r0, r1, r2, r3 [rcnt rpt=2]
+
+# --- pack / unpack ----------------------------------------------------------
+pck.u8.f32 pa9, pa9, pa13 [dmask=6 scale]
+pck.u8.f32 pa9, pa9, pa13 [dmask=9 scale]
+pck.f16.f32 r0, r1, r2
+pck.f32.f16 r0, pa1, #0
+pck.f32.f16 r0, pa1.l2, #0
+pck.u8.u8 pa9, pa9.l3, #0
+pck.f16.f16 pa9, r0, pa9.l2
+pck.f16.c10 pa11, i2.l2, i2.l1
+pck.s16.f32 r0, r1, #0
+pck.f32.f32 r0, r1, #0 [rint rnd=zero]
+pck.f32.f32 r0, r1, #0 [rint]
+pck.f32.f32 r0, r1, #0 [rint rnd=down]
+pck.f32.u8 r8, r4.l1, #0 [scale]
+pck.c10.f32 r0, r1, r2 [dmask=7 scale]
+pck.u8.f32 r0, r1, r2 [rcnt rpt=2]
+pck.u8.f32 r0, r1, r2 [skipinv nosched]
+
+# --- test / testmask --------------------------------------------------------
+test.fsub.lt p0, r1, c6
+test.fsub.le p1, pa4, pa5
+test.fsub.eq p0, r0, r1
+test.fsub.ne p0, r0, r1
+test.fsub.gt p0, r0, r1
+test.fsub.ge p0, r4, sa9
+test.fadd.ne p0, r1, c48
+test.fadd.neg p2, r1, c48
+test.fadd.pos p3, r1, c48
+test.and.ne p0, #0, #0
+test.shl.neg p2, r1, #31
+test.fsub.ge p1, sa10.f16.lo, sa12.f16.lo [fmt]
+test.fpsub8.lt p0, pa4.c10, pa5.c10 [chan=2 fmt]
+test.fsub.lt p0, r0, r1 [f2_0]
+test.fsub.lt p0, r2, r0, r1
+test.fsub.lt p0, r0, r1 [mask=15]
+test.fsub.s1z0o p0, r0, r1
+(p0) test.fsub.lt p1, r0, r1 [skipinv]
+testmask.fsub.lt.dword r0, r1, r2
+testmask.fsub.ne.dword r0, r1, r2 [mask=15]
+testmask.fsub.gt.byte r0, r1, r2
+testmask.fsub.ge.word r0, r1, r2
+
+# --- bitwise ----------------------------------------------------------------
+and r0, r1, r2
+or r0, r1, r2
+xor r0, g16, sa9
+and r0, r0, #1
+and r5, r8, #65280 [rot=16]
+and.inv r0, r1, #1
+shl r0, r1, #4
+shr r0, r1, r2
+asr r0, r1, #3
+rol r0, r1, #8 [rot=4]
+and r0, r1, r2 [skipinv rcnt rpt=4]
+rlp r0, r1, p2
+
+# --- texture sample ---------------------------------------------------------
+smp.2d r4, r2, sa8
+smp.2d r4, r2, sa8 [drc=1]
+smp.3d r4, r2, sa8
+smp.2d.bias r4, r2, sa8, c52
+smp.2d.lod r4, r2, sa8, c48
+smp.2d.grad r4, r2, sa8, r8
+smp.2d.f16 r4, pa2, sa8
+smp.2d.rdata.pcf.f16.bias r4, pa2, sa8, c52 [mask=0]
+smp.3d.rinfo.lod r4, r2, sa8, c48 [drc=1]
+smp.2d.c10 pa4, pa2, sa8
+smp.1d r0, r0, r0 [nosched]
+smp.2d r4, o2, sa8 [skipinv]
+smp.2d r4, sa2, sa8
+(p0) smp.2d r4, r2, sa8
+
+# --- loads and stores -------------------------------------------------------
+ld.a.d pa0, pa0, #0 [moe]
+(p0) ld.a.d pa0, pa0, #0 [skipinv moe]
+ld.l.d r0, sa1, pa1 [drc=1 moe]
+ld.a.d pa0, sa1, #4 [moe rpt=4]
+ld.l.w r0, sa1, r2 [moe]
+ld.l.b r0, sa1, r2 [moe]
+ld.t.d r0, sa1, r2
+st.l.d sa1, pa1, sa9 [moe]
+st.l.d sa1, sa13, pa0 [moe rpt=16]
+
+# --- flow control -----------------------------------------------------------
+br #3
+br #-2
+(p0) br #-2
+(!p0) br #5 [syncend]
+br #3 [link]
+ba #4215
+lapc
+nop [nosched]
+(pn) fmad r1, r2, r3, r4
+setl r3
+savl r5
+
+# --- MOE, format control, data fences, constants ----------------------------
+smlsi #1, #1, #1, #1
+smlsi #1, #1, #0.zyxw, #1
+smlsi #0, #4, #-1, #0.xyzw
+setfc #1, #1
+setfc #0, #1
+wdf
+wdf [drc=1]
+idf [drc=1]
+limm r0, #4096
+limm r0, #305419896
+limm r0, #3735928559 [skipinv]
+(p0) limm sa3, #7
+
+# --- phases and visibility --------------------------------------------------
+phas.i #128, #4
+phas.i #0, #0 [end wait=7]
+(p1) depthf pa2, sa3, sa4 [end]

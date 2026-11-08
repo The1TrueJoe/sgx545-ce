@@ -5,7 +5,7 @@
 # On the EA (powervr_sgx up, the Debian root staged by mc-x64-stage.sh): one
 # run of the A/B rig's benchmark (mcbench.sh) on the 64-bit GLX path: the
 # fixed world restored, the same clicks, SECS seconds in it, then the
-# driver's FPS (SGX545_DEBUG=stats, every 2 s) and the GPU's job timeouts.
+# driver's FPS (SGX_DEBUG=stats, every 2 s) and the GPU's job timeouts.
 #
 #   mc-x64-bench.sh ROOT [SECS]
 #
@@ -26,7 +26,7 @@ rm -rf "$G/saves" && mkdir -p "$G/saves" "$G/logs"
 cp -a "$G/bench-world" "$G/saves/bench"
 t0=$(dmesg | grep -c 'job timed out' || true)
 "$here/x11-up.sh" "$R" run env -u MESA_GL_VERSION_OVERRIDE -u MESA_GLSL_VERSION_OVERRIDE \
-	SGX545_DEBUG=stats /opt/mc-x64/mc-x64.sh > "$L" 2>&1 &
+	SGX_DEBUG=stats /opt/mc-x64/mc-x64.sh > "$L" 2>&1 &
 # the menu: the item atlas is the last texture the title screen loads
 for i in $(seq 1 120); do grep -q 'textures/items-atlas' "$L" && break; sleep 1; done
 sleep 10
@@ -36,8 +36,8 @@ X mousemove 360 205 mousedown 1 mouseup 1   # the world
 sleep 3
 X mousemove 202 396 click 1          # Play Selected World
 sleep "$SECS"
-echo "FPS, last 12 two-second windows: $(grep -o 'sgx545 stats [0-9.]* s: [0-9.]* FPS' "$L" | tail -12 | awk '{print $5}' | tr '\n' ' ')"
-grep 'sgx545 stats' "$L" | tail -4
+echo "FPS, last 12 two-second windows: $(grep -o 'sgx stats [0-9.]* s: [0-9.]* FPS' "$L" | tail -12 | awk '{print $5}' | tr '\n' ' ')"
+grep 'sgx stats' "$L" | tail -4
 echo "job timeouts during the run: $(( $(dmesg | grep -c 'job timed out' || true) - t0 ))"
 stop_game
 sleep 3

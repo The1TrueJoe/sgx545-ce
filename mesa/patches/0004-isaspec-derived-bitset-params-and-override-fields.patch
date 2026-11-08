@@ -1,6 +1,6 @@
 isaspec: params on derived bitset fields; a field an override defines wins
 
-Two changes the SGX545 ISA description (src/sgx545/isa/sgx545.xml) needs:
+Two changes the SGX545 ISA description (src/sgx/isa/sgx.xml) needs:
 
 - A <derived> field may have a bitset type, so an operand whose number,
   bank and extension bits are scattered across the instruction can be

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Minecraft on the EA3 through gl4es, on the DDK or on ours, for the A/B.
-#   mc-ab.sh ddk|sgx545 SECONDS [xdotool steps: "at:sec cmd args" ...]
+#   mc-ab.sh ddk|sgx SECONDS [xdotool steps: "at:sec cmd args" ...]
 # Runs the openhc-minecraft runtime's game (/opt/minecraft/rootfs) on Xvfb :0
 # with gl4es' FPS counter, under the GPU lock and gpuwatch.sh; after SECONDS
 # the panel (fb0) is saved to /opt/minecraft/rootfs/ctest/out/mc-<who>.fb

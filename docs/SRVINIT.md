@@ -89,7 +89,7 @@ bytes, sha256
 `73dce0885c45ecbe691f86305b3645e525e7a5e18de3de3b5a469d0df8850349`. It comes
 from `libsrv_init.so.1.7.862890` (sha256 `4d3df850…53b6d`), which ships in
 `cedarview-graphics-drivers_20120717.orig.tar.gz` (sha256 `c23e7261…8fd83`,
-the same pin as the `sgx545-um` package). The extraction script checks
+the same pin as the `sgx-um` package). The extraction script checks
 all three hashes.
 
 The rest of libsrv_init's `.rodata` is not needed:
@@ -316,7 +316,7 @@ the trace, and the third hardware run used that build.
 
 ## Loading the open microkernel (`-o`)
 
-`srvinit -o ukernel/sgx545_ukernel.bin` loads the open microkernel
+`srvinit -o ukernel/sgx_ukernel.bin` loads the open microkernel
 (`ukernel/`) instead of the DDK's. It differs from the `-f` path in three
 ways, and nothing else — the allocations, control block, signature lists,
 init scripts and `SGX_BRIDGE_INIT_INFO` are the same:
