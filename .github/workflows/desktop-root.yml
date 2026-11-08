@@ -1,4 +1,4 @@
-# The desktop test root (mesa/tests/desktop): Debian bookworm amd64 with Xorg,
+# The desktop test root (mesa/tests/desktop): Debian 13 (trixie) amd64, the current stable, with Xorg,
 # Xfce, a terminal and two browsers, built by mmdebstrap (maintainer scripts
 # run), as a tarball artifact. Our Mesa is not in it: the box puts the build in
 # /opt/sgx.
@@ -24,30 +24,37 @@ jobs:
 
       - name: Host tools
         run: |
+          set -eux
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends mmdebstrap debian-archive-keyring zstd
+          sudo apt-get install -y --no-install-recommends mmdebstrap zstd
+          # Debian's own current keyring (the runner's may predate trixie's keys)
+          d=$(curl -sfL https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/ |
+              grep -o 'debian-archive-keyring_[0-9.]*_all\.deb' | sort -V | tail -1)
+          curl -sfLO "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/$d"
+          dpkg-deb -x "$d" keyring
+          ls keyring/usr/share/keyrings/
 
       - name: The root
         run: |
           set -eux
           pkgs=$(grep -v '^#' mesa/tests/desktop/packages.txt | grep . | paste -sd, -)
           sudo mmdebstrap --variant=apt --architectures=amd64 \
-            --keyring=/usr/share/keyrings/debian-archive-keyring.gpg \
+            --keyring=keyring/usr/share/keyrings/debian-archive-keyring.gpg \
             --include="$pkgs" \
             --dpkgopt='path-exclude=/usr/share/doc/*' --dpkgopt='path-exclude=/usr/share/man/*' \
             --dpkgopt='path-exclude=/usr/share/info/*' \
             --customize-hook='chroot "$1" useradd -m -u 1000 -s /bin/bash -G video,input,render,audio desk' \
             --customize-hook='rm -rf "$1"/var/cache/apt/* "$1"/var/lib/apt/lists/*' \
-            bookworm root.tar http://deb.debian.org/debian
+            trixie root.tar http://deb.debian.org/debian
           sudo chown "$(id -u)" root.tar
           ls -l root.tar
-          zstd -T0 -12 --rm root.tar -o desktop-root-bookworm.tar.zst
-          ls -l desktop-root-bookworm.tar.zst
-          sha256sum desktop-root-bookworm.tar.zst | tee desktop-root-bookworm.tar.zst.sha256
+          zstd -T0 -12 --rm root.tar -o desktop-root-trixie.tar.zst
+          ls -l desktop-root-trixie.tar.zst
+          sha256sum desktop-root-trixie.tar.zst | tee desktop-root-trixie.tar.zst.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-root-bookworm
-          path: desktop-root-bookworm.tar.zst*
+          name: desktop-root-trixie
+          path: desktop-root-trixie.tar.zst*
           compression-level: 0
           retention-days: 30
