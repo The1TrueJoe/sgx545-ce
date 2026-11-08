@@ -1,4 +1,4 @@
-From e7ec79c9b2239806d5728d16935bd2af80d187ef Mon Sep 17 00:00:00 2001
+From 6660432d03edd1e351f8371ccaf0183c139f1ef8 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Sun, 8 Nov 2026 14:01:52 -0500
 Subject: [PATCH] drm/gma500: Publish the Cedarview SGX as an auxiliary device
@@ -6,7 +6,7 @@ Subject: [PATCH] drm/gma500: Publish the Cedarview SGX as an auxiliary device
 The GMA3600/3650 (Cedarview) GPU is a PowerVR SGX545 behind the same PCI
 function and register BAR as the display engine gma500 drives. gma500 has
 no use for the SGX beyond its own MMU setup, so give it to a driver of its
-own: publish an auxiliary device, "gma500.sgx", carrying the mapped SGX
+own: publish an auxiliary device, "gma500_gfx.sgx", carrying the mapped SGX
 register window and a hook that routes the SGX's interrupt to that driver.
 
 While a handler is registered, gma500 calls it for the SGX interrupt in
@@ -29,9 +29,9 @@ Only Cedarview publishes the device; Poulsbo and Oaktrail are unchanged.
  drivers/gpu/drm/gma500/psb_drv.c    |  3 +
  drivers/gpu/drm/gma500/psb_drv.h    | 18 ++++++
  drivers/gpu/drm/gma500/psb_irq.c    | 29 ++++++---
- drivers/gpu/drm/gma500/sgx_aux.c    | 92 +++++++++++++++++++++++++++++
+ drivers/gpu/drm/gma500/sgx_aux.c    | 93 +++++++++++++++++++++++++++++
  include/drm/gma500_sgx.h            | 49 +++++++++++++++
- 10 files changed, 195 insertions(+), 12 deletions(-)
+ 10 files changed, 196 insertions(+), 12 deletions(-)
  create mode 100644 drivers/gpu/drm/gma500/sgx_aux.c
  create mode 100644 include/drm/gma500_sgx.h
 
@@ -262,10 +262,10 @@ index c224c7f..4813ffb 100644
  	PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
 diff --git a/drivers/gpu/drm/gma500/sgx_aux.c b/drivers/gpu/drm/gma500/sgx_aux.c
 new file mode 100644
-index 0000000..8a39155
+index 0000000..fa948c3
 --- /dev/null
 +++ b/drivers/gpu/drm/gma500/sgx_aux.c
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,93 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * The SGX of a Cedarview GPU, published as an auxiliary device for a driver
@@ -331,6 +331,7 @@ index 0000000..8a39155
 +	aux->sgx.regs_len = PSB_SGX_SIZE;
 +	aux->sgx.set_irq_handler = gma_sgx_set_irq_handler;
 +	aux->sgx.adev.name = "sgx";
++	aux->sgx.adev.id = pci_dev_id(to_pci_dev(dev->dev));
 +	aux->sgx.adev.dev.parent = dev->dev;
 +	aux->sgx.adev.dev.release = gma_sgx_aux_release;
 +
@@ -360,7 +361,7 @@ index 0000000..8a39155
 +}
 diff --git a/include/drm/gma500_sgx.h b/include/drm/gma500_sgx.h
 new file mode 100644
-index 0000000..ae46b1f
+index 0000000..84feebe
 --- /dev/null
 +++ b/include/drm/gma500_sgx.h
 @@ -0,0 +1,49 @@
@@ -382,7 +383,7 @@ index 0000000..ae46b1f
 + *
 + * gma500 owns the PCI function, its register BAR and its interrupt. On parts
 + * whose SGX has a driver of its own (Cedarview), it publishes this auxiliary
-+ * device, named "gma500.sgx", whose parent is the GPU's PCI device. The SGX
++ * device, named "gma500_gfx.sgx", whose parent is the GPU's PCI device. The SGX
 + * driver uses the parent for DMA and runtime PM: holding the auxiliary device
 + * awake keeps gma500, and so the graphics power island, awake.
 + */

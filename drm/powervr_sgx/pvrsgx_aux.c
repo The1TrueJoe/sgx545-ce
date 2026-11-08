@@ -4,7 +4,7 @@
 /*
  * The SGX545 of a Cedarview GPU (GMA3600/3650). It shares the PCI function and
  * register BAR with the display engine, which gma500 drives; gma500 publishes
- * the SGX as the auxiliary device "gma500.sgx" with its register window mapped
+ * the SGX as the auxiliary device "gma500_gfx.sgx" with its register window mapped
  * and hands over its interrupt (include/drm/gma500_sgx.h).
  */
 
@@ -61,7 +61,7 @@ static void pvrsgx_aux_remove(struct auxiliary_device *adev)
 }
 
 static const struct auxiliary_device_id pvrsgx_aux_ids[] = {
-	{ .name = "gma500.sgx" },
+	{ .name = "gma500_gfx.sgx" },
 	{ }
 };
 MODULE_DEVICE_TABLE(auxiliary, pvrsgx_aux_ids);
