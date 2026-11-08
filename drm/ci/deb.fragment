@@ -1,0 +1,14 @@
+# On top of Debian's own kernel config: gma500 with the SGX auxiliary device and
+# powervr_sgx, as modules. A desktop kernel for Cedarview machines.
+CONFIG_DRM_GMA500=m
+CONFIG_DRM_POWERVR_SGX=m
+CONFIG_DRM_POWERVR_SGX_GMA500=y
+CONFIG_AUXILIARY_BUS=y
+# Debian signs with its own keys; ours isn't signed. No debug info: a smaller,
+# faster build.
+# CONFIG_MODULE_SIG is not set
+CONFIG_SYSTEM_TRUSTED_KEYS=""
+CONFIG_SYSTEM_REVOCATION_KEYS=""
+CONFIG_DEBUG_INFO_NONE=y
+# CONFIG_DEBUG_INFO_DWARF5 is not set
+# CONFIG_DEBUG_INFO_BTF is not set
