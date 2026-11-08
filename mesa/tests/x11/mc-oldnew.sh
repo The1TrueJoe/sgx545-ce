@@ -7,7 +7,8 @@
 #
 #   old  the openhc-minecraft install as mc-session runs it: i386 Zulu 8, gl4es,
 #        the DDK's GLES2 on pvrsrvkm, Xvfb (the normal boot); MC_GL=sgx545: the
-#        same with our i386 Mesa in its place (the same-binary head-to-head)
+#        same with our i386 Mesa in its place (the same-binary head-to-head);
+#        MC_ENV: more VAR=value words for the game (e.g. MC_PRELOAD, PVRTRACE_*)
 #   new  mc-x64.sh: x64 Zulu 8, LWJGL's amd64 natives, GLX/DRI3 on Xorg, our Mesa
 #        on powervr_sgx (a RAM boot, x11-up.sh's root at /opt/x64root)
 #
@@ -97,7 +98,7 @@ if [ $WHO = old ]; then
 	X() { X64=/opt/x64root; env -i DISPLAY=:0 $X64/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 \
 		--library-path $X64/usr/lib/x86_64-linux-gnu:$X64/lib/x86_64-linux-gnu $X64/usr/bin/xdotool "$@"; }
 	chroot $R /usr/bin/env -i HOME=/root TERM=linux DISPLAY=:0 PATH=/usr/local/bin:/usr/bin:/bin \
-		MC_GL=${MC_GL:-ddk} SGX545_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} LIBGL_NOTEST=1 MC_DIR=$GIN MC_TWEAKS=0 MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 MC_LINEBUF=1 \
+		${MC_ENV:-} MC_GL=${MC_GL:-ddk} SGX545_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} ${MC_NOTEST:+LIBGL_NOTEST=1} MC_DIR=$GIN MC_TWEAKS=0 MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 MC_LINEBUF=1 \
 		LD_PRELOAD=/usr/lib/sgx/sgx-busidshim.so /usr/local/bin/minecraft-ab Player > "$LOG" 2>&1 &
 	READY="foliage.png|textures/items-atlas"
 	fps() { grep -o 'fps: [0-9.]*' | awk '{print $2}'; }
