@@ -30,16 +30,19 @@ The only thing it writes is one small results file, onto the USB stick itself.
 
 ## 1. Download the test
 
-On the [Releases page](https://github.com/The1TrueJoe/sgx545-ce/releases), find the newest
-release named **Cedarview test kit**. Download the file that ends in **`.img.gz`**, for
-example `sgx545-cedarview-kit-v1.img.gz`. You don't need to unzip it.
+1. Open the download link from the GitHub issue where you were asked to test. You need to
+   be signed in to GitHub for the download to start.
+2. It downloads a **`.zip`** file. Open it (on Windows, double-click it, or right-click it
+   and choose **Extract All**) and take out the file that ends in **`.img.gz`**, for
+   example `sgx545-cedarview-kit-97baf09.img.gz`.
+3. Don't unzip the `.img.gz` file itself. The flashing program reads it as it is.
 
 ## 2. Put it on the USB stick
 
 Use one of these free programs:
 
 - **balenaEtcher** (Windows, Mac, Linux), from [etcher.balena.io](https://etcher.balena.io):
-  1. Click **Flash from file** and pick the `.img.gz` file.
+  1. Click **Flash from file** and pick the `.img.gz` file from step 1.
   2. Click **Select target** and pick your USB stick. Make sure it's the stick, not
      another drive.
   3. Click **Flash!** and wait until it says it's done.
