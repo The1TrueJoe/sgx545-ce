@@ -381,9 +381,21 @@ DDK's frame is green in every variant: it keeps the depth.
   - The same addresses serve the store and the load.
 - **Every DDK window render with a depth buffer stores depth** (`001710b4` at
   the terminating kick), split or not.
-- **Not yet replayed natively.** An FBO replay with b1 | b13 | b14 and valid
-  stencil words on the re-entry render would prove it. Until then a driver can
-  avoid most splits by kicking only the TA at glFlush/glFinish, as the DDK does.
+- **Proven natively on a CE5300 board** [C] (2026-11-08, an open Mesa driver
+  on the DDK microkernel). A 96×64 surface (xt 3) is split mid-frame by
+  glFlush, glFinish or a 1-pixel readback. The second draw is farther away,
+  depth LESS. The result is green in all 12 cases, with 24/0, 24/8 and 16/0
+  depth/stencil configs, and there were no lockups.
+  - Store with `00171014`, then load + store with `00177016`.
+  - +0x04 = buffer & 0xfff00000; +0x30/+0x34 = the depth offset; +0x38/+0x3c
+    = b31 | the stencil offset. The stencil offset is the depth offset plus
+    padded width × padded height × 4, with the height padded to 16.
+  - **The ZLS buffer must be GPU read-write** (`PVRSRV_MEM_READ | WRITE`).
+    Read-only memory made the store fault inside the buffer (BIF_FAULT), and
+    a 3D recovery followed.
+  - **TA command 3D flags b7 | b8 (0x180)** are needed on every render that
+    uses ZLS (the DDK sends 0x580 = 0x400 | 0x180). Without them nothing is
+    stored. Which of the two bits does it is not isolated.
 
 ## 8. Cube maps [D]
 
