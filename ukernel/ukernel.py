@@ -168,7 +168,11 @@ HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 HC_TIMERCLK = 6      # ui32uKernelTimerClock (host-set EVENT_TIMER period)
 HC_BGBLOCK = 15      # word +0x3c: bit 0 = HOSTCTL_OPENHC_HOST_BGBLOCK -- the host wrote the
-                     # background block on the CPU, so do_3d skips its EDM pulse (§4a / m2)
+                     # background block on the CPU, so do_3d skips its EDM pulse (§4a / m2).
+                     # This word is the DDK's ui32PerfGroup (HWPerf counter group); reusing it
+                     # is safe because powervr_sgx has no HWPerf and the driver sets it only for
+                     # open images (never the DDK one), and our uK never reads it as PerfGroup
+                     # (ta3d-state 2026-11-08).
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
 EDM_INTERRUPT_ACTIVE_POWER = 2   # host control ui32InterruptFlags bit 1: the
