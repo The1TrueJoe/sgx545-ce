@@ -148,8 +148,9 @@ Two different things change how numbers read.
   following it has a 6-bit number (bits 0-5)
   and bit 6 says that operand is F16. An F16 r, o, pa or sa operand's number
   counts 16-bit halves: `r3.f16.lo` is 6, `r3.f16.hi` is 7 (**hardware**,
-  hwt_p1 / hwt_p10). Indexed, immediate and constant operands are not
-  halved; a bare `.f16` on them only sets bit 6.
+  hwt_p1 / hwt_p10). Indexed, immediate, constant and idx operands are not
+  halved; a bare `.f16` on them only sets bit 6. For example, a test's
+  `idx16.f16` destination has number 16 with bit 6 set.
 - **Format control** is program state, set by `setfc` (MOE control, op 5)
   and at the start of a program C10 on, F16 off (**hardware**, hwt_p6 /
   hwt_p8). It applies only to these classes: sop2, sopwm, the sop3 family,
@@ -275,6 +276,8 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
   `name=v` is the field's value, except `rpt=n`, which is the repeat count:
   every class stores n - 1.
 - A field the text doesn't show holds its default. The default is 0, except:
+  - rlp's `unused2` (the src2 slot as one 10-bit value): 0x300, the unused
+    pattern. Any other value is written `unused2=v` in the brackets.
   - `mask` (when there is no repeat count): 1 in smp, pck, test, testmask
     and the bitwise classes; 15 in sopwm; 0 elsewhere;
   - `dmask` in pck: 15;
@@ -320,6 +323,7 @@ Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
 | hwt_p8 | setfc's first argument; C10 alpha source; C10 -> U8 byte order | **setfc's 1st argument is the efo F16 enable, off at start**; C10 alpha reads channel 0 |
 | hwt_p10 | test with format select: F16 numbering, chan on F16 and C10 compares | **test's F16 operands count halves too**; C10 operands are whole registers; chan table |
 | hwt_p11 | a repeat over an F16 operand | moe / inc step it by one half |
+| hwt_p12 | efo's m/a/i/d modes, wi, negates, chaining; fdual's every secondary and primary, i0s0, slot sharing, negates, rpt=2, same-word timing | all units as tabled; secondary sources settled (sd = 1st, sb, sc); sec 3 is fsubflr; neg1/neg2 primary only; same-word read of an internal register being written is a **race** (efo d, fdual primary) |
 
 hwt_p7-p9's `test` lines with `.f16` / `.c10` were drawn before the assembler
 fix below: without `[fmt]` the assembler of the time **silently dropped** the
@@ -608,7 +612,7 @@ secondary computes into internal registers.
 |---|---|---|
 | h24-25 | pred | short predicate |
 | h18, h19, h26 | pri | 0 fmad, 1 mov, 2 fadm, 3 fmsa, 4 fddp, 5 fminmax, 6 ima32 (USEASM 0x65), 7 fssq (USEASM 0xa7) |
-| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fadm/fsubflr/ffrc, 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32 (USEASM 0x65), 15 mov |
+| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fsubflr (USEASM fadm and ffrc encode as it too), 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32 (USEASM 0x65), 15 mov |
 | h5, h13 | sd | secondary destination (and its first source): 0 i0, 1 i1, 2 i2, 3 `i0s0`: i0 with the first source taken from the src0 slot |
 | h14-15 | sb | secondary second source: i0, i1, i2, or 3 = the primary's src1 |
 | h10, h21 | sc | secondary third source: i0, i1, i2, or 3 = the src2 slot |
@@ -621,86 +625,74 @@ secondary computes into internal registers.
 A one-source secondary op reads sb; a two-source one sb and sc; mov reads
 msrc. All **encoder**.
 
-What hardware has not confirmed yet (`tools/isa/hwt_p12.py` draws each):
-- which sources a two-source secondary (fadd, fsub, fmul, fmaxmin) reads: sb
-  and sc, or sd and sb;
-- whether a three-source one (fmad, fmsa, fadm) reads sd, sb, sc in that order;
-- the src1/src2 slot values the secondary sees (`sb=src1`, `sc=src2`);
-- the primary's result beside a secondary;
-- the one-source secondaries' results.
-
-The encodings are settled: every corpus fdual word assembles from its text to
-the same bits (`check_enc.py`).
+**hardware** (hwt_p12, EA3, 2026-11-08): 113 draws, every one ran with no
+recovery. Inputs were s0 = 2, s1 = 3, s2 = 5 and i0 = 7, i1 = 17, i2 = 19;
+the logs are in `hwt_out/hwt_p12.txt`. The encodings were already settled:
+every corpus fdual word assembles from its text to the same bits
+(`check_enc.py`).
 
 #### fdual for a compiler
 
-Each item below gives its evidence. "hwt_p12" means the suite draws it and
-the result is not in yet; don't rely on it until then.
+**Secondary op.** It writes only the internal register `sd` names (`i0s0`
+writes i0). The other two internal registers are unchanged after every op.
+Its sources, by **hardware** (hwt_p12):
 
-**Secondary operands.** The secondary writes the internal register `sd`
-names. `i0s0` writes i0.
-- One-source ops (frcp, frsq, fexp2, flog2, fsin, fcos) read `sb`:
-  `sd = op(sb)`. **corpus**: in fl_big,
-  `fdual.fmad.fsin pa8, r5, c38, c34 [sd=i2 sb=i0 sc=i0 neg2]` follows an efo
-  that left the angle in i0, and the next instruction reads the sine from i2.
-- Three-source ops (fmad, fmsa, fadm, fmad16) read `sd`, `sb`, `sc` in that
-  order, and `sd` is also the destination. `i0s0` takes the first source
-  from the src0 slot instead. **corpus**: in v_norm,
-  `fdual.mov.fmad o3, r0, c52, o0 [sd=i2 sb=i2 sc=src2]` computes
-  i2 = i2 * i2 + o0. The formula is the float class's op of the same name.
-- Two-source ops (fadd, fsub, fmul, fmaxmin): `sb` and `sc`, or `sd` and
-  `sb`. hwt_p12.
-- mov reads `msrc`.
-- sec 3 is one encoding for fadm, fsubflr and ffrc (**encoder**). What it
-  computes: hwt_p12 (`fdual_sec_fadm_*`).
-- ima32 as the secondary: no corpus use. hwt_p12.
+| sec | computes | e.g. (i0 = 7, i1 = 17, i2 = 19) |
+|---|---|---|
+| 0 fmad | `sd * sb + sc` | 7 * 17 + 19 = 138 |
+| 2 fmsa | `sd * sd + sb * sc` | 49 + 323 = 372 |
+| 3 | `sb - floor(sc)` (fsubflr; ffrc is it with sb = sc; not fadm) | 17 - 19 = -2 |
+| 4 fmaxmin | 17 from (7, 17, 19): `min(sb, sc)` or `min(max(sd, sb), sc)`, not yet told apart | 17 |
+| 5-10 frcp, frsq, fexp2, flog2, fsin, fcos | `op(sb)` (sin/cos in quarter turns, as in the float class) | 1/17, 2^17, ... |
+| 11 fadd, 12 fsub, 13 fmul | `sb op sc` | 36, -2, 323 |
+| 15 mov | `msrc` (i0-i2 or the src0/src1/src2 slot) | |
+| 1 fmad16, 14 ima32 | ran with f32 inputs; F16 / integer meaning not drawn | |
 
-**Primary operands.**
-- fmad: `dst = src0 * src1 + src2` (**corpus**: the fdual.fmad.* words read
-  as fmad does).
-- mov reads src1 (**corpus** v_norm: `o3 = c52`).
-- fssq reads src1 and src2, `src1^2 + src2^2` (**corpus** v_norm).
-- fadm, fmsa, fminmax: as their float-class forms, slots src0-src2.
-  **encoder**; values: hwt_p12.
-- fddp: reads src0-src2. Where its second result goes: hwt_p12
-  (`fdual_fddp_*`).
-- ima32: hwt_p12.
+- `sd=i0s0` replaces the first source (the one `sd` names in fmad/fmsa) with
+  the src0 slot: fmad gives `src0 * sb + sc` (2 * 17 + 19 = 53). It doesn't
+  touch one- and two-source ops.
+- `sb=src1` and `sc=src2` read those slots (7 * 3 + 19 = 40, 7 * 17 + 5 = 124).
 
-**Where a mov secondary's register source goes.** libusc puts it in a slot
-the primary doesn't read:
-- src0 when the primary is mov or fssq;
-- otherwise src2 when the primary doesn't read src2.
+**Primary op**, beside a `mov i0` secondary (**hardware**):
+- fmad `src0 * src1 + src2` (11); mov `src1` (3);
+- fadm `(src0 + src1) * src2` (25); fmsa `src0^2 + src1 * src2` (19);
+- fminmax `min(max(src0, src1), src2)` (3); fssq `src1^2 + src2^2` (34);
+- fddp gives `src0 * src1` (6) in dst, and leaves `src0 * src2` (10) in i0.
+  The secondary's own `mov i0` with `sd=i0` was overridden; whether fddp's
+  second result follows `sd` or is always i0 is not drawn.
+- ima32 with f32 inputs: not interpreted.
 
-The text names the slot with `msrc=src0|src1|src2`.
+**Sharing a slot.** Both ops read the same slot value
+(`fdual.fmad.fmad r3, r0, r1, r2 [sd=i0 sb=src1 sc=src2]`: r3 = 11,
+i0 = 7 * 3 + 5 = 26). **`neg1`/`neg2` (-src1 / -src2) apply to the primary
+only**: the same word with `-r1, -r2` gives r3 = -11 and still i0 = 26.
 
-**Sharing a slot.** `sb=src1`, `sc=src2` and `msrc=srcN` read the same slot
-the primary reads. Whether both ops then see the same value, negates included
-(`neg1`/`neg2` apply to the slot): hwt_p12 (`fdual_both`, `fdual_neg`). The
-corpus never shares a slot the primary reads.
+**Where a mov secondary's register source goes.** Any slot works: msrc=src0
+reads src0 even while an fmad primary reads it too. libusc's habit is to
+put it in a slot the primary doesn't read (src0 beside mov or fssq, src2
+otherwise). That is a choice, not a rule.
 
-**Pairings.** The encoder takes any primary with any secondary. The corpus
-uses fmad with fadm, fexp2, frcp, fsin, fcos, fsub, fmul; mov with fmad;
-fssq with mov; fadm with fsub; fddp with fexp2. Whether others misbehave:
-hwt_p12 draws each secondary under a mov primary and each primary under a mov
-secondary.
+**Pairings.** Every secondary under a mov primary, and every primary under a
+mov secondary, ran cleanly. Nothing seen forbids a pairing.
 
-**Repeat.** `rpt=2`: whether both ops step: hwt_p12 (`fdual_rpt2_*`).
+**Repeat.** With `rpt=2` the primary steps (r14 = 2 * 3 + 5, r15 = 4 * 6 + 10).
+The secondary's internal registers don't step: `sd` holds the one result
+(17 + 19), and the others are unchanged.
 
 **Timing.**
-- An internal register the secondary writes is read by the next instruction
-  with the new value (**corpus**: v_norm's `frsq o1, i2`, and fl_big).
-- In the same word, the primary reading that register sees the old value.
-  **corpus** fl_big:
-  `fdual.fmad.fsin pa1, r126, pa2, pa11 [sd=i2 sb=i1 sc=i0]` reads the
-  previous word's sine from r126 (i2) while writing the new one to i2. The
-  next fmad reads the new one.
+- The next instruction reads what the secondary wrote (every hwt_p12 test
+  reads back that way).
+- In the same word, the secondary reads an internal register before the
+  primary's destination writes it. `fdual.fmad.mov r125, r0, r1, r2
+  [sd=i0 msrc=i1]` leaves i0 = 17 (the old i1) and i1 = 11, the same on
+  every pixel.
+- **The other way round is a hazard.** The primary reading the internal
+  register the same word's secondary writes (`fdual.mov.fexp2 r3, r0, r124,
+  r2 [sd=i0 ...]`) gave the old value on some pixels of the row and the new
+  one on others. A compiler must not do it. (libusc's fl_big has
+  `fdual.fmad.fsin pa1, r126, ... [sd=i2]`; don't copy it.)
 - Internal registers don't survive a deschedule. libusc puts `nosched` on
   the words between an internal register's write and its last read.
-
-**Destination.** dst has no extension bit. r124-r127 name i0-i3 there as
-elsewhere (**corpus**: `fdual.fmad.fexp2 r124, pa1, pa5, c48`, read
-afterwards as i0). hwt_p12 (`fdual_dst_i1`) draws the primary writing an
-internal register while the secondary reads it.
 
 `fssq` = USEASM 0xa7, libusc internal op 0x8e, exists only as a dual-issue
 primary: two sources in the src1/src2 slots, each source channel feeding the
@@ -839,7 +831,7 @@ condition and test vs testmask. Text:
 | h7 | cond: combine | spec b4: 0 OR, 1 AND | encoder; meaning corpus |
 | h4-6 | chan (test only) | spec b5-8 (0-7, 8+ rejected); which channel's result is tested | encoder; corpus uses 0, and 2 for lowp c10 compares. **hardware** (hwt_p10, `test.fpsub8.lt` with fmt on three C10 channels): 0, 1, 2 = channel 0, 1, 2; 5 = any of them; 6 = all three; 7 = channel 0 or channel 2 (seen: true for TFF, FFT, TFT-like patterns, false for FTF); 3 and 4 never true here (3 is probably the alpha channel, equal in both operands). On an F16 compare only chan 0 tested the value (1-3 were false); on an f32 compare (hwt_p9, no fmt) chan 0, 5 and 7 gave the result and the others false |
 | h2-3 | pdst (test only) | USEASM arg1, type 0xc, p0-p3 | encoder |
-| h4-5 | type (testmask only) | spec b9-11: 1 -> 0 `byte`, 2 -> 1 `word`, 3 -> 2 `dword`; others rejected | encoder; 3 = USEASM_TEST_MASK_DWORD (libusc assert string) and the only one the corpus uses. **hardware** (hwt_p7): a passing f32 test writes 0x000000ff / 0x0000ffff / 0xffffffff for byte / word / dword, a failing one 0 |
+| h4-5 | type (testmask only) | spec b9-11: 1 -> 0 `byte`, 2 -> 1 `word`, 3 -> 2 `dword`; others rejected by libusc's encoder. The field's value 3 has no name and is written `.tm3`; it encodes as 3 | encoder; 3 = USEASM_TEST_MASK_DWORD (libusc assert string) and the only one the corpus uses. **hardware** (hwt_p7): a passing f32 test writes 0x000000ff / 0x0000ffff / 0xffffffff for byte / word / dword, a failing one 0 |
 | h12-15 | mask | flags1 write mask verbatim (fdp: USEASM 0xc2 -> 7, 0xc3 -> 0xf). testmask also takes a repeat count n -> mask (1<<n)-1 (n <= 4); test rejects a repeat. A test with mask != 1 must write p0 | encoder; corpus: testmask mask=15 for bvec4 compares |
 | l20 | dest written | set when the instruction has a destination (the generic dst slot), clear when USEASM arg0 has flag b16; then the dest field holds h0 + h19. The text shows that field as `nodst=v` when it isn't the default 0x280: v's bits 0-6 go to l21-27, 7-8 to h0-1, 9 to h19 | encoder; corpus: every `test` has no dest |
 | h18 | fmt | set when a source has arg flag b22 (float group, F16) or b24 (group 2 ops 0xf7-0xf9, C10; the dest flag counts there too). Sources and dest then have 6-bit numbers + bit 6 = per-operand format, printed `.f16.lo/.hi` / `.c10` | encoder; corpus (`test.fsub.ge p1, sa10.f16.lo, sa12.f16.lo`, `test.fpsub8.lt p0, pa4.c10, pa5.c10`). **hardware** (hwt_p10): an F16 operand's number counts halves like the float classes' (r0 = (3, 10), r1 = (5, 1), r2 = (7, 0.5): numbers 1 < 0 false, 2 < 1 true = 10 < 3, 5 < 10); a C10 operand is a whole register. The destination's numbering under fmt (testmask) was not drawn; the tools treat it like the sources |
@@ -958,8 +950,8 @@ no rotate. The text shows n, rot and inv separately (lossless):
 `rlp dst, src1, pN` (hw 0e): USEASM arg2 must be a predicate (type 0xc, p0-p3)
 -> l14-15; src2's slot is encoded as unused (#0: l28-29 = 2, h16 = 1; field
 `unused2` = 0x300: the src2 slot's number, bank and extension read as one
-10-bit value, number in bits 0-6, bank in 7-8, extension in 9); h3, h4-11
-never set. Rotate-left-through-predicate is a
+10-bit value, number in bits 0-6, bank in 7-8, extension in 9; the text
+shows it only when it isn't 0x300, as `unused2=v`); h3, h4-11 never set. Rotate-left-through-predicate is a
 **guess** from the name.
 
 ### Open questions
@@ -1096,24 +1088,20 @@ Units:
 
 efo has no end bit (h18-19 is `i`), so it can't be a program's last instruction.
 
-The unit wiring above (`d`, `i`, `a`, `m`, `wi0`/`wi1`, the negates) is read
-from usc's asm.c, not drawn. **hardware** so far: only the F16 operand
-numbering and one `d=a0 a=s0+s2` result (hwt_p7/p8).
-
-`tools/isa/hwt_p12.py` draws:
-- each `m` mode into I0/I1, including mode 2's m1, whose second operand is
-  only asserted to be s2;
-- each `a` and `i` mode, and each `d`;
-- whether I0/I1 keep their values without `wi0`/`wi1`;
-- `a0rneg`/`a0lneg`.
-
-The encodings are settled: every corpus efo word assembles from its text to
-the same bits.
-
-For chaining efos as v_mvp does, whether `d=i0` / `d=i1` give the internal
-register's value before or after this word writes it (`wi0`/`wi1`) matters.
-hwt_p12 draws both (`efo_d_i0` against `efo_d_i0_wi`) and a two-efo chain
-(`efo_chain`).
+**hardware** (hwt_p12, EA3, 2026-11-08), with s0 = 2, s1 = 3, s2 = 5 and
+I0 = 7, I1 = 17 beforehand. The unit wiring in the table above holds:
+- every `m` mode: mode 2's m1 is `s2 * s2`, and mode 3 reads I0/I1 as they
+  were before the word;
+- every `a` and `i` mode, and each `d`.
+- Without `wi0`/`wi1` the internal registers keep their values.
+- `a0rneg` negates A0's right input (s0 - s2 = -3).
+- `a0lneg` made no difference with `a=a0=s0+s2`.
+- Chaining works as v_mvp's does: an efo with `a=a0=m0+i0` reads the I0 the
+  previous efo wrote (10 + 10 = 20).
+- **Hazard:** `d=i0` while the same word writes I0 (`wi0`) gave the old value
+  on some pixels and the new one on others. `d=i1` with `wi1` read the old
+  value uniformly in this one draw. Don't make `d` name an internal register
+  the word writes.
 
 Operands:
 - dst: l21-27, bank h0-1 (r o pa ix), no ext.
@@ -1285,7 +1273,7 @@ Immediates are 7-bit signed unless the format is u8. usc uses u8 exactly when th
 | h9 | cin (arg6 0x2a) | | encoder; name **guess** |
 | h15 | ci: carry internal register i0/i1 (arg7, when cin or cout) | | encoder |
 
-src1 immediates are signed when sgn is set. src2 immediates are signed for s16 and u32 (usc sign-extends 16-bit constants for s16/u32: usc.c ~69289). Corpus: dynamic array addressing, `imae.sgn pa0, pa1, #16, sa9 [t2=u32]`.
+src1 immediates are signed when sgn is set. src2 immediates are signed whenever `t2` isn't 0: s16, u32 and the unnamed 3 (`t2=x3`) (usc sign-extends 16-bit constants for s16/u32: usc.c ~69289). So `imae o72, pa36, r58, #-63 [t2=u32]` is legal, and the 7-bit number holds -63 in two's complement. Corpus: dynamic array addressing, `imae.sgn pa0, pa1, #16, sa9 [t2=u32]`.
 
 ### hw 16 / 17 / 1a (no corpus words; encoder or encoder (patched))
 
@@ -1296,7 +1284,7 @@ The common fields are as above. firv and op16s1 have only h12-13 for the repeat 
 - h15 = s0f13 (src0 arg flag b13, unknown).
 - Probably |src1 - src2| (+ src0) (**guess**).
 
-Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unless an entry says otherwise. `fmt` (h8-9) in bilin, ssum16 and firv: 0 u8 (no suffix), 1 s8, 2 o8 (ssum16i is the separate form with h8-9 = 3). Fields given as USEASM values (op16s1's `x39`) print as the stored field value.
+Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unless an entry says otherwise. `fmt` (h8-9) in bilin, ssum16, firv and firh: 0 u8, 1 s8, 2 o8 (ssum16i is the separate form with h8-9 = 3). It is written as a mnemonic suffix, `bilin.s8`, `ssum16.o8`, `firh.s8`; u8 has none. `[fmt=s8]` in the brackets means the same. Fields given as USEASM values (op16s1's `x39`) print as the stored field value.
 
 **op16s1** (16, h20-21=1, 0x6e, FUN_00118bf0, patched):
 - f2_15 h3-6 (flags2 b15-18).
@@ -1576,7 +1564,7 @@ placeholder), DRC.
 | h9 | postinc | f1 b28 (not both) | encoder; name guess |
 | h7 | dst bank | 0 r, 1 pa | encoder |
 | h6 | range | f1 b29: src2 holds a 4th source | encoder; name guess |
-| h4-5 | size | 0 d (dword: 0x7d...), 1 w (0x7c...), 2 b (0x7b...); 3 (0x7e... "q") rejected | encoder, corpus (d); b/w from libusc's internal opcode order (byte, word, dword groups) |
+| h4-5 | size | 0 d (dword: 0x7d...), 1 w (0x7c...), 2 b (0x7b...), 3 `q` (0x7e...: libusc's encoder rejects it, but the field holds it; the text is `ld.<mode>.q` and it encodes as 3) | encoder, corpus (d); b/w from libusc's internal opcode order (byte, word, dword groups) |
 | h3 | f2_9 | f2 b9 | encoder; unknown |
 | h1 | f2_2 | f2 b2 | encoder; data-cache control (guess) |
 | h0 | drc | DRC the loaded data signals | encoder, corpus (ix_tmp*: loads alternate drc 0/1, each followed later by `wdf`) |

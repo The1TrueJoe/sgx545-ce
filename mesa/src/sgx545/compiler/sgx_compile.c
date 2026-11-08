@@ -107,6 +107,21 @@ new_vreg16(struct sgx_ctx *c, unsigned halves)
    return v;
 }
 
+bool
+sgx_disabled(const char *pass)
+{
+   const char *e = getenv("SGX_DISABLE");
+   size_t n = strlen(pass);
+   while (e && *e) {
+      const char *c = strchr(e, ',');
+      size_t l = c ? (size_t)(c - e) : strlen(e);
+      if (l == n && !strncmp(e, pass, n))
+         return true;
+      e = c ? c + 1 : NULL;
+   }
+   return false;
+}
+
 static struct sgx_ref
 ref(unsigned file, unsigned n)
 {
@@ -376,7 +391,7 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          } else {
             /* a literal in SA where the slot takes one (driver_consts), else limm */
             struct sgx_ref lit = ref(SGX_F_LIT, 0);
-            int ln = c->opts->driver_consts && !c->lit_off && slot_ok(i->form, k, &lit) ?
+            int ln = c->opts->driver_consts && !c->lit_off && !sgx_disabled("lit32") && slot_ok(i->form, k, &lit) ?
                      lit_run(c, &want, 1) : -1;
             if (ln >= 0) {
                *r = ref(SGX_F_LIT, ln);
@@ -1061,7 +1076,7 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
       i->op[0] = href(t, 2 * p);
       i->op[1] = cond;
       int h1 = half_of(&s[1][l1]), h2 = half_of(&s[2][l1]);
-      if (l1 == 2 * p && h1 >= 0 && h1 == h2) {
+      if (l1 == 2 * p && h1 >= 0 && h1 == h2 && !sgx_disabled("csel1")) {
          /* one lane, in the same half of both: their registers as they are,
           * the result in that half */
          i->op[2] = whole_reg(s[1][l1]);
@@ -1432,7 +1447,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
             hd &= ref_same(&s[j][k - 1], &s[j][k]);
          }
          /* constants: a run of literals in SA */
-         bool kk = c->opts->driver_consts && !st && !hd;
+         bool kk = c->opts->driver_consts && !st && !hd && !sgx_disabled("lit32");
          uint32_t kw[4];
          for (unsigned k = 0; k < n && kk; k++) {
             kk = s[j][k].file == SGX_F_K && !s[j][k].h16;
@@ -1701,7 +1716,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       }
       struct fieldset tf = { 3, { { SGX_FLD_ALU, 14 }, { SGX_FLD_COND, cd }, { SGX_FLD_TYPE, 2 } } };
       emit_runs(c, SGX_OP_TESTMASK, wmask, td, 2, ts, &tf, 0);
-      if (ld.dest.is_ssa && !ld.fsat && cond_only(&alu->def)) {
+      if (ld.dest.is_ssa && !ld.fsat && cond_only(&alu->def) && !sgx_disabled("condmask")) {
          /* only selects read it: the mask itself (a passing dword test
           * writes 0xffffffff, which movc.nz takes as true: ISA.md hwt_p2/p7) */
          c->vals[alu->def.index].kind = VAL_V;
@@ -1721,7 +1736,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    }
    case nir_op_fcsel:
    case nir_op_b32csel:
-      if (ld.dest.is_ssa && !ld.fsat && f16_pairs(c, alu) && csel16(c, alu, s))
+      if (ld.dest.is_ssa && !ld.fsat && !sgx_disabled("csel32") && f16_pairs(c, alu) && csel16(c, alu, s))
          return;
       form = SGX_OP_MOVC_F32;
       fs.n = 1;
@@ -3625,6 +3640,8 @@ ins_hits(const struct sgx_ins *i, unsigned file, unsigned v, unsigned n, unsigne
 static void
 fold_movs(struct sgx_ctx *c)
 {
+   if (sgx_disabled("fold"))
+      return;
    list_for_each_entry_safe(struct sgx_ins, m, &c->ins, link) {
       if (m->kind != SGX_INS_ALU || m->form != SGX_OP_MOV || m->pred || m->nfld || m->nops != 2)
          continue;
@@ -3725,6 +3742,8 @@ reg_of(const struct sgx_ctx *c, const struct sgx_ref *r, unsigned *file, unsigne
 static void
 drop_self_moves(struct sgx_ctx *c)
 {
+   if (sgx_disabled("selfmov"))
+      return;
    list_for_each_entry_safe(struct sgx_ins, i, &c->ins, link) {
       unsigned fd, nd, fs, ns;
       if (i->kind == SGX_INS_ALU && i->form == SGX_OP_MOV && !i->pred && i->nops == 2 && !i->nfld &&
@@ -3844,6 +3863,8 @@ touch(struct sgx_ctx *c, const struct sgx_ref *r, int at, unsigned span)
 static void
 split_vregs(struct sgx_ctx *c)
 {
+   if (sgx_disabled("split"))
+      return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    bool *run = calloc(nv, sizeof(bool));
    list_for_each_entry(struct sgx_ins, i, &c->ins, link)
@@ -3882,6 +3903,8 @@ split_vregs(struct sgx_ctx *c)
 static void
 coalesce_repeats(struct sgx_ctx *c)
 {
+   if (sgx_disabled("coalesce"))
+      return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
@@ -3939,6 +3962,8 @@ static void
 place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
            const struct loop_span *loops, unsigned nloops, const unsigned *minb)
 {
+   if (sgx_disabled("o"))
+      return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    unsigned end = 2 * nins + 2, no = 0;
    int from[128];
@@ -4039,6 +4064,8 @@ static void
 place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             const struct loop_span *loops, unsigned nloops, const unsigned *minb)
 {
+   if (sgx_disabled("pa"))
+      return;
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    unsigned end = 2 * nins + 2, npa = 0;
    bool input[128] = { 0 };
