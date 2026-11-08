@@ -684,6 +684,22 @@ tex_prec(nir_tex_instr *t)
    return v ? v->data.precision : 0;
 }
 
+/* a load or texel that is a float (an int or bool uniform or input, 32 bits
+ * as st hands them over, must not go through F16) */
+static bool
+float_value(nir_instr *instr)
+{
+   if (instr->type == nir_instr_type_tex)
+      return nir_alu_type_get_base_type(nir_instr_as_tex(instr)->dest_type) == nir_type_float;
+   nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+   if (in->intrinsic == nir_intrinsic_load_deref) {
+      const struct glsl_type *t = glsl_without_array_or_matrix(nir_src_as_deref(in->src[0])->type);
+      return glsl_get_base_type(t) == GLSL_TYPE_FLOAT || glsl_get_base_type(t) == GLSL_TYPE_FLOAT16;
+   }
+   return nir_intrinsic_has_dest_type(in) &&
+          nir_alu_type_get_base_type(nir_intrinsic_dest_type(in)) == nir_type_float;
+}
+
 /* all: fs_mediump, every input, texel and uniform no coordinate needs (and
  * their variables become mediump); otherwise those the program declares
  * mediump or lowp. Ops whose operands are all F16 then run in F16: GLSL ES
@@ -747,10 +763,7 @@ mediump_fs(struct sgx_ctx *c, bool all)
                d = &in->def;
             }
          }
-         if (d && d->bit_size == 32 && !list_is_empty(&d->uses) &&
-             (instr->type != nir_instr_type_intrinsic ||
-              nir_alu_type_get_base_type(nir_intrinsic_has_dest_type(nir_instr_as_intrinsic(instr)) ?
-                 nir_intrinsic_dest_type(nir_instr_as_intrinsic(instr)) : nir_type_float32) == nir_type_float) &&
+         if (d && d->bit_size == 32 && !list_is_empty(&d->uses) && float_value(instr) &&
              (instr->type != nir_instr_type_tex || !feeds_coord(d, 0)))
             seed16(&b, d);
       }
