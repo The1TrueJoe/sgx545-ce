@@ -250,6 +250,12 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx_tex_format(format) &&
        !(usage & PIPE_BIND_RENDER_TARGET))
       return false;
+   /* sRGB textures sample right (the fragment shader decodes them,
+    * sgx_fs_for), but piglit's ext_texture_srgb fails on mipmap generation,
+    * alpha test and mirrored-repeat filtering of them: not offered until it
+    * passes, so GL is 2.0 */
+   if (util_format_is_srgb(format))
+      return false;
    switch (target) {
    case PIPE_BUFFER:
    case PIPE_TEXTURE_1D: /* a 2D texture a texel high, sampled on that row

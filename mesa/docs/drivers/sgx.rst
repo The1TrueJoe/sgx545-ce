@@ -28,7 +28,8 @@ Supported APIs
 --------------
 
 - **OpenGL ES 2.0.**
-- **OpenGL 2.1** (desktop), with GLSL 1.20 and ``EXT_texture_sRGB``.
+- **OpenGL 2.0** (desktop), with GLSL 1.20. ``EXT_texture_sRGB``, the
+  rest of 2.1, waits on its piglit tests.
 - **OpenGL ES 1.1** and **OpenGL 1.x**, through Mesa's fixed-function
   shaders.
 
