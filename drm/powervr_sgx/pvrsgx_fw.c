@@ -970,8 +970,11 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
 			  HOSTCTL_INIT_COMPLETE, 500000);
 	if (err) {
-		drm_err(&sdev->base, "microkernel did not start (init status 0x%x, event status 0x%x)\n",
-			hc[HOSTCTL_INIT_STATUS], sgx_rd(sdev, SGX_CR_EVENT_STATUS));
+		drm_err(&sdev->base,
+			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",
+			hc[HOSTCTL_INIT_STATUS], sgx_rd(sdev, SGX_CR_EVENT_STATUS),
+			sgx_rd(sdev, SGX_CR_BIF_INT_STAT), sgx_rd(sdev, SGX_CR_BIF_FAULT),
+			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 		return err;
 	}
 	sdev->fw_running = true;
