@@ -3,7 +3,7 @@
 #
 #   gl4es-ctest-ab.sh [ddk|ours|both] [TEST...]
 #
-# Runs on the box (BusyBox sh) against the openhc-minecraft runtime at
+# Runs on the box (BusyBox sh) against the Minecraft runtime at
 # /opt/minecraft/rootfs. Needs, inside the root:
 #   /usr/lib/gl4es/libGL.so.1     the runtime's gl4es (unmodified)
 #   /usr/lib/sgx/                 the DDK (mc-session's ddk_sync puts it there)

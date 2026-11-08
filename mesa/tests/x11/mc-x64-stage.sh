@@ -2,14 +2,14 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# On the EA: copy what Minecraft needs from the openhc-minecraft install into
+# On the box: copy what Minecraft needs from the Minecraft install into
 # the Debian root, read-only on the install's side. The game directory is
 # ROOT/opt/mc-x64; saves, options and logs live there and nowhere else.
 #
 #   mc-x64-stage.sh ROOT
 #
 # Takes the install's game files (libraries, versions, assets, natives,
-# OptiFine), openHC's tweaker jar, and the A/B rig's options and benchmark
+# OptiFine), and the A/B rig's options and benchmark
 # world (/opt/mc-ab), so a run here compares with that rig's numbers.
 set -eu
 R=$1
@@ -24,7 +24,6 @@ for d in libraries versions assets natives optifine; do
 	[ -e "$G/$d" ] || cp -a "$M/$d" "$G/"
 done
 cp "$M/1.7.10.launch" "$G/"
-[ -f "$I/usr/lib/openhc-mc/openhc-mc.jar" ] && cp "$I/usr/lib/openhc-mc/openhc-mc.jar" "$G/"
 for f in options.txt optionsof.txt; do
 	[ -f "$G/$f" ] || { [ -f "$A/$f" ] && cp "$A/$f" "$G/"; } || true
 done

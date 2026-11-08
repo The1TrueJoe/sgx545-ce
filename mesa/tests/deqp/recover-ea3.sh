@@ -9,7 +9,7 @@
 BENCH=${BENCH:-$HOME/.cache/sgx545/bench.py}
 BOX=${EA3:-10.0.0.113}
 SGXINIT=${SGXINIT-ddk}
-SSH="sshpass -p openhc ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@$BOX"
+SSH="sshpass -p ${BOX_PASS:?the root password of the box} ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@$BOX"
 
 wait_box() {
 	i=0

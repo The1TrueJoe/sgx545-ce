@@ -5,7 +5,7 @@
 # One Minecraft benchmark run on the EA, on the old stack or the new, the same
 # way for both:
 #
-#   old  the openhc-minecraft install as mc-session runs it: i386 Zulu 8, gl4es,
+#   old  the Minecraft install as its session script runs it: i386 Zulu 8, gl4es,
 #        the DDK's GLES2 on pvrsrvkm, Xvfb (the normal boot); MC_GL=sgx: the
 #        same with our i386 Mesa in its place (the same-binary head-to-head);
 #        MC_ENV: more VAR=value words for the game (e.g. MC_PRELOAD, PVRTRACE_*)

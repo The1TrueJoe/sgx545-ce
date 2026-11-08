@@ -9,7 +9,8 @@
 #
 # KERNDIR is m2-drm's powervr-sgx-cedarview artifact (bzImage, modroot/, the
 # static uAPI tests). FIRMWARE, when given, is an OPEN microkernel image
-# (sgx545-openhc-ukernel.bin): never Intel's. Needs mmdebstrap,
+# (sgx545_ukernel.bin), and a secure-mode one (features 2): the Cedarview
+# kernel has no DDK compatibility. Never Intel's. Needs mmdebstrap,
 # squashfs-tools, dosfstools, grub-pc-bin, grub-efi-amd64-bin, grub-efi-ia32-bin,
 # debian-archive-keyring.
 set -eu
@@ -40,7 +41,7 @@ for t in powervr_sgx_test powervr_sgx_frame powervr_sgx_blit; do
 	[ -f "$K/$t" ] && install -m 0755 "$K/$t" "$ROOT/usr/local/lib/kit/"
 done
 if [ -n "$FW" ]; then
-	install -D -m 0644 "$FW" "$ROOT/lib/firmware/powervr_sgx/sgx545-openhc-ukernel.bin"
+	install -D -m 0644 "$FW" "$ROOT/lib/firmware/powervr_sgx/sgx545_ukernel.bin"
 fi
 install -m 0755 "$HERE/kit-init" "$ROOT/sbin/kit-init"
 install -m 0755 "$HERE/kit-protect" "$ROOT/usr/local/sbin/"
