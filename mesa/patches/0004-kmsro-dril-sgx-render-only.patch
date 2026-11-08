@@ -324,7 +324,7 @@ index a8603ad..9ca3461 100644
 +      'loader_child_render_node_test',
 +      'tests/child_render_node_test.c',
 +      link_with : libloader,
-+      include_directories : [inc_include, inc_src, inc_util],
++      include_directories : [inc_include, inc_src, inc_util, inc_gallium],
 +      dependencies : [idep_mesautil, dep_libdrm],
 +    ),
 +    suite : ['loader'],
