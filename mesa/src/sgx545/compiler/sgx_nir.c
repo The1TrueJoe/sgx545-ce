@@ -514,9 +514,10 @@ narrow16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 }
 
 static void
-narrow16(nir_shader *s)
+narrow16(struct sgx_ctx *c)
 {
-   if (sgx_disabled("narrow16"))
+   nir_shader *s = c->nir;
+   if (sgx_debug(c, SGX_DBG_NO_NARROW16))
       return;
    bool progress = true;
    for (unsigned round = 0; progress && round < 64; round++) {
@@ -1171,15 +1172,14 @@ static void
 uniform_formats(struct sgx_ctx *c)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(c->nir);
-   const char *fc = getenv("SGX_F16_CONST");
-   bool no_const = fc && fc[0] == '0';
+   bool no_const = sgx_debug(c, SGX_DBG_NO_F16_CONST);
    nir_foreach_block(b, impl) {
       nir_foreach_instr_safe(instr, b) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;
          nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
          if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16 && no_const) {
-            /* (SGX_F16_CONST=0: an f32 load converted in the shader) */
+            /* (nof16const: an f32 load converted in the shader) */
             nir_builder bb = nir_builder_at(nir_before_instr(instr));
             nir_def *v = nir_load_uniform(&bb, in->def.num_components, 32, in->src[0].ssa,
                                           .base = nir_intrinsic_base(in), .range = nir_intrinsic_range(in),
@@ -1448,10 +1448,8 @@ assign_io(struct sgx_ctx *c)
       }
       /* (a set is F16 when every varying in it is) */
       bool set16[SGX_MAX_SETS] = { 0 }, not16[SGX_MAX_SETS] = { 0 };
-      /* (SGX_F16_ITER=0: iterate every varying in f32, F16 math kept; a
-       * hardware bisection switch) */
-      const char *fi = getenv("SGX_F16_ITER");
-      if (c->p16 && !(fi && fi[0] == '0')) {
+      /* (nof16iter: every varying iterated in F32, F16 math kept) */
+      if (c->p16 && !sgx_debug(c, SGX_DBG_NO_F16_ITER)) {
          nir_foreach_shader_in_variable(var, s) {
             char names[8][64];
             unsigned l = var->data.location, n = var_names(var, names, 8);
@@ -1615,7 +1613,7 @@ sgx_lower(struct sgx_ctx *c)
 
    s->options = &options;
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr, nir_metadata_control_flow, NULL);
-   if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT && (c->opts->fs_mediump || !sgx_disabled("mediump")))
+   if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT && (c->opts->fs_mediump || !sgx_debug(c, SGX_DBG_NO_MEDIUMP)))
       mediump_fs(c, c->opts->fs_mediump);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(s), nir_var_shader_out);
@@ -1653,7 +1651,7 @@ sgx_lower(struct sgx_ctx *c)
          .opt_tex_dest_types = nir_type_float,
       };
       NIR_PASS(_, s, nir_opt_16bit_tex_image, &t16);
-      narrow16(s);
+      narrow16(c);
       uniform_formats(c);
    }
    NIR_PASS(_, s, nir_opt_dce);
@@ -1672,7 +1670,7 @@ sgx_lower(struct sgx_ctx *c)
       }
    } while (progress);
 
-   if (c->p16 && !sgx_disabled("minmax32")) {
+   if (c->p16 && !sgx_debug(c, SGX_DBG_NO_MINMAX32)) {
       NIR_PASS(_, s, nir_shader_alu_pass, minmax32_instr, nir_metadata_control_flow, NULL);
       NIR_PASS(_, s, nir_opt_dce);
    }
@@ -1683,8 +1681,6 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_bit_size, int16_to_32, NULL);
    NIR_PASS(_, s, nir_opt_constant_folding);
    NIR_PASS(_, s, nir_opt_dce);
-   if (getenv("SGX_PRINT_PRE_I2F"))
-      nir_print_shader(s, stderr);
    NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr, nir_metadata_control_flow, NULL);
    NIR_PASS(_, s, nir_shader_alu_pass, i2f16_instr, nir_metadata_control_flow, NULL);
    NIR_PASS(_, s, nir_opt_dce);

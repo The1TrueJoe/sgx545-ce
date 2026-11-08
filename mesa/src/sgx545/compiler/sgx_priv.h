@@ -15,6 +15,7 @@
 #define SGX_PRIV_H
 
 #include "util/list.h"
+#include "util/macros.h"
 #include "util/u_dynarray.h"
 
 #include "sgx_compiler.h"
@@ -116,6 +117,7 @@ struct sgx_sample {
 };
 
 struct sgx_ctx {
+   uint64_t debug;               /* enum sgx_debug */
    struct nir_shader *nir;
    const struct sgx_compile_options *opts;
    const struct sgx_varyings *vary;
@@ -209,10 +211,32 @@ sgx_vreg(struct sgx_ctx *c, unsigned i)
 }
 
 /* the SA register of uniform constant k / literal i (kept in SA) */
-/* SGX_DISABLE=a,b,...: turn optimisation passes off by name (a debugging
- * bisect without rebuilding): pa o coalesce split fold selfmov lit32
- * narrow16 mediump minmax32 condmask csel1 csel32 coissue */
-bool sgx_disabled(const char *pass);
+/* SGX545_COMPILER_DEBUG flags (sgx_compile.c): each no* flag turns one
+ * optimization off, to bisect a miscompile without rebuilding */
+enum sgx_debug {
+   SGX_DBG_NO_PA = BITFIELD64_BIT(0),
+   SGX_DBG_NO_OUT = BITFIELD64_BIT(1),
+   SGX_DBG_NO_COALESCE = BITFIELD64_BIT(2),
+   SGX_DBG_NO_SPLIT = BITFIELD64_BIT(3),
+   SGX_DBG_NO_FOLD = BITFIELD64_BIT(4),
+   SGX_DBG_NO_SELFMOV = BITFIELD64_BIT(5),
+   SGX_DBG_NO_LIT32 = BITFIELD64_BIT(6),
+   SGX_DBG_NO_NARROW16 = BITFIELD64_BIT(7),
+   SGX_DBG_NO_MEDIUMP = BITFIELD64_BIT(8),
+   SGX_DBG_NO_MINMAX32 = BITFIELD64_BIT(9),
+   SGX_DBG_NO_CONDMASK = BITFIELD64_BIT(10),
+   SGX_DBG_NO_CSEL1 = BITFIELD64_BIT(11),
+   SGX_DBG_NO_CSEL32 = BITFIELD64_BIT(12),
+   SGX_DBG_NO_COISSUE = BITFIELD64_BIT(13),
+   SGX_DBG_NO_F16_CONST = BITFIELD64_BIT(14),
+   SGX_DBG_NO_F16_ITER = BITFIELD64_BIT(15),
+};
+
+static inline bool
+sgx_debug(const struct sgx_ctx *c, uint64_t flag)
+{
+   return (c->debug & flag) != 0;
+}
 
 static inline unsigned
 sgx_const_sa(const struct sgx_ctx *c, unsigned k)

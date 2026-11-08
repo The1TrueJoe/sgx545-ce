@@ -237,7 +237,7 @@ What still holds temporaries:
   - We emit `efo` for a sum of vector × scalar terms (`mat4 * v`, `mat3 * n`) whose vectors
     sit in a bank (uniforms, attributes, varyings), as libusc's `v_mvp`: per lane pair one
     `efo` per term with the partials in i0/i1, then `mov` from i1. A `mat4 * v` is 10 issue
-    slots instead of 16. `SGX_DISABLE=coissue` turns it off. 32 `efo` in c2+c3.
+    slots instead of 16. `SGX545_COMPILER_DEBUG=nocoissue` turns it off. 32 `efo` in c2+c3.
   - Driver mode, issue slots: corpus 7791 → 7726, glmark2 2080 → 1826 (temporaries 195 →
     157), gl4es Minecraft 180 → 150. Instructions go up (glmark2 1211 → 1470): a repeat is one
     instruction, its `efo`s are several.
