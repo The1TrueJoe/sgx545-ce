@@ -35,3 +35,7 @@ precision mediump float;
 varying mediump vec4 v_coords;
 uniform bool ub_true;
 void main() { mediump vec4 res = v_coords; for (int i = 0; i < (ub_true ? 3 : 0); i++) res = res.yzwx; gl_FragColor = vec4(res.rgb, 1.0); }
+@frag loop_sel_count_hi_m
+varying mediump vec4 v_coords;
+uniform bool ub_true;
+void main() { mediump vec4 res = v_coords; for (highp int i = 0; i < (ub_true ? 3 : 0); i++) res = res.yzwx; gl_FragColor = vec4(res.rgb, 1.0); }
