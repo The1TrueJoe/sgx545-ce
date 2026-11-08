@@ -33,6 +33,13 @@ writes against the DDK's.
 import os
 
 DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+0xE8
+XFER_BANK_ALL = os.environ.get("UK_XFER_BANK") == "1"   # v3 Cedarview-1.0.13 blit variant B: route
+                                             # ALL of the transfer's data masters (TA/HOST/3D/2D)
+                                             # to list 1 (the ctx PD), not just TA/3D. The 1.0.13
+                                             # transfer pixel task may run on the 2D/HOST DM, whose
+                                             # BANK0 nibble we leave at list 0 (idle) -> USSE-code
+                                             # fetch at 0x37000000 faults (m2 devcd decode). Safe on
+                                             # the CE5300 (adds routing a 3D-DM transfer never uses).
 RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector (both words inside the devcd
                                              # dump): word 0x37 = the open scene's RT, word 0x3a
                                              # = 0x1217 when a first kick opens a scene on a
@@ -946,8 +953,8 @@ def build(a):
     # address (m2 2026-11-04: BANK0=0x0f, DIR_LIST_BASE0=idle, FAULT on 0x3e001000). We do
     # NOT write the ctx PD into list 0 -- that clobbers the kernel PD the 3D/ISP/PBE read
     # through and wedged srvinit (do_ta note, 2026-11-03); routing via BANK0 avoids that.
-    a.i("limm r5, #0x101f")
-    a.i(f"str #{0xc78 // 4}, r5")                    # BIF_BANK0: TA/3D -> list 1 (ctx PD)
+    a.i(f"limm r5, #{0x1111f if XFER_BANK_ALL else 0x101f}")
+    a.i(f"str #{0xc78 // 4}, r5")                    # BIF_BANK0: TA/3D (or all DMs if XFER_BANK_ALL) -> list 1 (ctx PD)
     a.i(f"ldr r5, #{0xc78 // 4}")                    # read-back + fence
     a.i("wdf")
     a.i("limm r5, #1")
