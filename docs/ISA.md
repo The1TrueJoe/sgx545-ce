@@ -1272,7 +1272,7 @@ Immediates are 7-bit signed unless the format is u8. usc uses u8 exactly when th
 | h9 | cin (arg6 0x2a) | | encoder; name **guess** |
 | h15 | ci: carry internal register i0/i1 (arg7, when cin or cout) | | encoder |
 
-src1 immediates are signed when sgn is set. src2 immediates are signed for s16 and u32 (usc sign-extends 16-bit constants for s16/u32: usc.c ~69289). Corpus: dynamic array addressing, `imae.sgn pa0, pa1, #16, sa9 [t2=u32]`.
+src1 immediates are signed when sgn is set. src2 immediates are signed whenever `t2` isn't 0: s16, u32 and the unnamed 3 (`t2=x3`) (usc sign-extends 16-bit constants for s16/u32: usc.c ~69289). So `imae o72, pa36, r58, #-63 [t2=u32]` is legal, and the 7-bit number holds -63 in two's complement. Corpus: dynamic array addressing, `imae.sgn pa0, pa1, #16, sa9 [t2=u32]`.
 
 ### hw 16 / 17 / 1a (no corpus words; encoder or encoder (patched))
 
