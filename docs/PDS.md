@@ -147,7 +147,7 @@ The variant bits:
     triangle at all: every vertex fetched vertex 0. The unchanged replay is
     pixel-exact.
   - **Neither bit does it alone; they act as one field.** Rerun after a power
-    cycle (EA3, 2026-10-28; the control was pixel-exact before and after):
+    cycle (2026-10-28; the control was pixel-exact before and after):
     - `27032343` (bit 29 only) and `0f032343` (bit 27 only) both render the
       same wrong triangle: 75765 pixels differ, with one corner at clip
       (0,0) and the other two off-screen to the left and below. Neither
@@ -161,7 +161,7 @@ The variant bits:
   closing DOUTU of vertex-fetch programs, and every other DOUTU uses `07`.
   - **Do not set bit 26 there.** A replay with the triangle's `030403e5`
     changed to `070403e5` locked up the TA. SGX hardware recovery then failed
-    in a loop (`SGXInitialise failed (24)`) until a reboot (EA3, 2026-10-28).
+    in a loop (`SGXInitialise failed (24)`) until a reboot (2026-10-28).
   - So the bit matters for vertex tasks. What it means is still a guess:
     something that a vertex task must not wait on or signal.
 
@@ -300,8 +300,8 @@ unknown. The notation shows it as `.hi`, and nothing should emit it.
 - bits 24–31: **one 8-bit field.** GL writes `(n+3)>>2` there for a
   per-shader count, probably the temporary register count in fours.
   Consistent with hardware: the probe's main pixel program has 0 here, and
-  with 4 poked in (isa/hwt.py) a test program uses r0-r15 correctly on the
-  EA3. Not shown: that 0 breaks them. Captured values are 0 and 1.
+  with 4 poked in (isa/hwt.py) a test program uses r0-r15 correctly on a
+  CE5300 board. Not shown: that 0 breaks them. Captured values are 0 and 1.
 - The microkernel's own task entries (with code base 15, the kernel code
   heap; libsrv_init `pds0`/`pds2`/`pds3`/`pds4`) have bit 27 (0x8000000) set,
   but `pds1`'s word does not. In this field that is the value 8, 32
@@ -450,7 +450,7 @@ with these new knobs:
 - `PROBE_INTERLEAVE`;
 - `PROBE_TEX`: n 8×8 RGBA checker textures, samplers t0….
 
-The `cap` pattern ran on the EA3, 2026-10-27. All runs rc=0.
+The `cap` pattern ran on a CE5300 board, 2026-10-27. All runs rc=0.
 
 | capture | what | PDS shows |
 |---|---|---|

@@ -95,7 +95,7 @@ done
 
 def ssh(cmd, inp=None, timeout=None):
     host = os.environ.get("EA3", "10.0.0.113")
-    return subprocess.run(["sshpass", "-p", "openhc", "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
+    return subprocess.run(["sshpass", "-p", os.environ["BOX_PASS"], "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
                            "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", f"root@{host}", cmd],
                           input=inp, capture_output=True, timeout=timeout, check=False)
 

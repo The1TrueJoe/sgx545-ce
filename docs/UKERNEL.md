@@ -52,9 +52,9 @@ enters the microkernel; the microkernel then **emits** to trigger a second PDS
 program (pds1) whose `DOUTD` DMAs the control block into `sa` and re-enters it,
 and only there does the DDK microkernel write/read `sa` (e.g. `mov sa9`). In
 the initial bare-`DOUTU` context, before that emit/DMA, writing `sa` faults
-(hardware-confirmed on the EA3, 2026-11-02: openHC's init entry wrote `sa1`
-directly in the bare context and stalled). So a microkernel that skips the
-emit/DMA must not touch `sa`; openHC instead carries the control-block base in
+(hardware-confirmed 2026-11-02: an init entry that wrote `sa1` directly in the
+bare context stalled). So a microkernel that skips the emit/DMA must not touch
+`sa`; the open microkernel instead carries the control-block base in
 a reserved temp from the loader-patched `limm` (`srvinit`'s `-o`) and derives
 the host-control / CCB pointers from it.
 
@@ -131,7 +131,7 @@ EDM breakpoints, no `FIX_HW_BRN_28889`, no extended perf counters):
 | 12 | `ui32TimeWraps` | microkernel |
 | 13 | `ui32HostClock`: the host's clock in µs, written at start | host |
 | 14 | `ui32AssertFail` | microkernel |
-| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_OPENHC_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
+| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
 | 16 | `ui32BRN31939Mem` (present because the build is for core revision 1013, which carries `FIX_HW_BRN_31939`; the host never touches it). The open microkernel reuses the word for its cleanup v2 sequence echo (section 3) | microkernel |
 | 17 | `ui32OpenCLDelayCount` | |
 
@@ -140,7 +140,7 @@ The timer values come from `sgxpower.c` with the CE5300 `sysconfig.c` constants:
 `SYS_SGX_ACTIVE_POWER_LATENCY_MS` 5. The core clock is the one value that
 comes from the platform (`sgx_core_clock`); the Cedarview `unified`
 sysconfig and powervr_sgx both assume 400 MHz. The DDK microkernel's 1 ms
-wake-ups in the EA1 register sample are 1.2 M TSC cycles apart, which is
+wake-ups in a CE5300 register sample are 1.2 M TSC cycles apart, which is
 consistent with 400 MHz if the TSC runs at 1.2 GHz. Gap: the TSC rate is
 unmeasured, so the real core clock is not yet confirmed.
 
@@ -156,35 +156,35 @@ The event word is a set of the `EUR_CR_EVENT_STATUS`/`STATUS2` bits that were
 pending, masked to the ones the microkernel acts on. The dispatcher tests them
 in priority order and writes the matching bit back to
 `EUR_CR_EVENT_HOST_CLEAR`/`CLEAR2` to acknowledge it before handling it.
-(openHC acknowledges a pending **DCU-invalidate** in `EUR_CR_EVENT_STATUS2`
-(`dcu_invalid`, 0x400) up front: the kernel's `SysFinalise` leaves it set on
-the EA1, and since openHC read only `EUR_CR_EVENT_STATUS`, it re-triggered the
-event program forever — a storm that starved the host kick and locked the core,
-HW-confirmed 2026-11-02. The **TA-finish** (`ta_finish`, 0x2000) and **3D-end**
-(`pbe_end_render` 0x40000, `isp_end_tile` 0x800000) bits in
-`EUR_CR_EVENT_STATUS` are acknowledged the same way, up front in the dispatcher:
-without it `ta_finished` re-triggered forever after the TA finished, so the next
-kick's host command was never processed and `do_3d` was never reached —
-HW-confirmed on the EA1 2026-11-03 (`EVENT_STATUS` stuck `0x2000`; acking it
-cleared the storm and let the frame advance to the render TA). The DDK acks these
-in its handlers (`str 0x134 = 0x2000` / `0x40000`); the 3D-end ack is by analogy
-and not yet exercised, since `render_done` does not run until the render TA
-stops hanging.)
+Every bit that triggers the event program must be acknowledged, or it
+re-triggers it forever:
+- A pending **DCU-invalidate** in `EUR_CR_EVENT_STATUS2` (`dcu_invalid`,
+  0x400) is left set by the kernel's `SysFinalise`. A microkernel that reads
+  only `EUR_CR_EVENT_STATUS` storms on it, which starves the host kick and
+  locks the core (hardware-confirmed 2026-11-02). The open microkernel
+  acknowledges it up front.
+- The **TA-finish** (`ta_finish`, 0x2000) and **3D-end** (`pbe_end_render`
+  0x40000, `isp_end_tile` 0x800000) bits in `EUR_CR_EVENT_STATUS` are
+  acknowledged up front in the open microkernel's dispatcher. Without that,
+  `ta_finished` re-triggered forever and the next kick's host command was
+  never processed (hardware-confirmed 2026-11-03: `EVENT_STATUS` stuck at
+  `0x2000`).
+- The DDK acks these in its handlers (`str 0x134 = 0x2000` / `0x40000`).
 
 **The host kick is not an `EUR_CR_EVENT_STATUS` bit.** The host adds a command
 to the kernel CCB, advances the CCB write offset, and rings the
 **`EUR_CR_EVENT_KICK`** doorbell (`sgxutils.c SGXScheduleCCBCommand`); the
 doorbell runs the event program but sets no status bit. So the microkernel
 detects a waiting command by the kernel CCB **write offset ≠ read offset**, not
-by a status bit — openHC's dispatch falls through to the `kick` handler when no
+by a status bit — the open microkernel's dispatch falls through to the `kick` handler when no
 hardware-event bit is set, and `kick` returns at once if the CCB is empty.
 `SW_EVENT` (0x4000) in `EUR_CR_EVENT_STATUS` is the *opposite* direction: the
 microkernel sets it (via `raise_host_irq`) to signal the host, and the host's
-ISR clears it. Gating the host kick on `SW_EVENT`, as openHC first did, never
-fired — EA1 HW-confirmed 2026-11-02: `GETMISCINFO` sat unconsumed with
-`EVENT_STATUS = 0`. Fixed and HW-confirmed on the EA1 (srvinit rc=0, GETMISCINFO
-validates, kernel CCB `WO == RO`); the kernel CCB base slot also had to be
-corrected (`SA_KCCB` word 0x16, not 16) — see §4.
+ISR clears it. Gating the host kick on `SW_EVENT` never fires: `GETMISCINFO`
+sits unconsumed with `EVENT_STATUS = 0` (hardware-confirmed 2026-11-02). With
+the CCB-offset test, `srvinit` returns rc=0, GETMISCINFO validates and the
+kernel CCB reads `WO == RO`. The kernel CCB base is control-block word 0x16
+(§4).
 The groups, with the status bit each corresponds to:
 
 | event | status bit | handler, in outline |
@@ -358,7 +358,7 @@ the handler leaves the status clear and the host times out and retries — this
 is the "Wait for uKernel to clean up" message, and it is why a render-context
 cleanup fails on a GPU the DDK left mid-render (`docs/NOTES.md`).
 
-#### What a kernel driver needs from it (EA1, 2026-11-03)
+#### What a kernel driver needs from it (2026-11-03)
 
 `powervr_sgx` sent the three cleanups the DDK sends, in its order (RT dataset at
 RT-dataset destroy, then render context, then PB descriptor at context
@@ -485,54 +485,18 @@ first word reads 1 (`tools/ukernel/run.py`, the `init` section). A timeout here
 is only logged ("Wait for uKernel initialisation failed"), so a successful
 `INITSRV_DISCONNECT` does not prove the microkernel ran — a client must render.
 
-**Hardware status (EA1, 2026-11-02; supersedes the EA3 reading below).** The
-open microkernel's clean-boot init path runs on hardware: after `srvinit -o`,
-the advisory version word is at ctlblk+0x58 (`T3C-50` word 2 = `0x00010000`),
-on both the EA3 and the EA1. **Init is done; the host `GETMISCINFO` kick is not
-serviced**, and the EA1 run with a proper entry counter shows the event program
-*is* re-entered after init (CTR climbs, the post-init dispatch runs) — revising
-the earlier EA3 guess that it was never re-entered. Two things were found and
-one fixed:
-
-1. **Fixed — `dcu_invalid` storm.** A data-cache-unit invalidate the kernel
-   leaves pending in `EUR_CR_EVENT_STATUS2` (0x400) after `SysFinalise`
-   re-triggered the event program forever, because openHC read only
-   `EUR_CR_EVENT_STATUS`. The dispatch now acknowledges it (§2). HW-confirmed:
-   STATUS2 `0x400`→`0`.
-2. **Fixed, HW-CONFIRMED — the host kick is serviced.** Two fixes: (a) the host
-   kick is the `EUR_CR_EVENT_KICK` doorbell (no status bit, `sgxutils.c`), found
-   by the kernel CCB write ≠ read offset, not `SW_EVENT` — dispatch now falls
-   through to `kick`, the bogus SW_EVENT ack is removed (§2); (b) the kernel CCB
-   base lives at control-block word **0x16** (+0x58), but `SA_KCCB` read word 16
-   (+0x40) and `SC_VERSION` sat on 0x16 so `init` overwrote the base — so the kick
-   read the command from garbage and ran a bogus `do_ta`. `SA_KCCB = 0x16`,
-   `SC_VERSION = 0x18`. On the EA1: `srvinit` returns rc=0 ("SGX545 microkernel
-   started"), the `GETMISCINFO` DDK-version validate passes, Kernel CCB `WO == RO`
-   (commands consumed). Offline: `test_emu` 5/5, `test_commands` 21/21, `run_ours`
-   5/5 — all driven the hardware way.
-3. **Fixed, HW-CONFIRMED — idle active-power.** After `srvinit` exited idle, a
-   periodic `SGXOSTimer` lockup/HWR (~0.5 s) recurred because the host never
-   powered the quiescent GPU down, so its watchdog kept sampling a halted EDM
-   (`0xb14^0xb20` frozen). The microkernel must raise the active-power idle
-   signal: `ui32InterruptFlags |= EDM_INTERRUPT_ACTIVE_POWER` (host-control word
-   8, bit 1) + the host IRQ, which `SGXTestActivePowerEvent` turns into a
-   power-down. openHC now does this at `kick_end` when the CCB is empty and
-   nothing is in flight. On the EA1: **0 lockups / 0 HWR over ~60 s idle** (was
-   6+ in 20 s); `srvinit` still rc=0. Later refinements: the same signal at the
-   end of `render_done` (render-idle), and the DDK-style timer-based active-power
-   with a latency.
-
-Full evidence and next steps:
-`docs/log/entries/2026-11-02-2100-ukernel-ea1-kick-serviced.md` (current),
-`docs/log/entries/2026-11-02-2045-ukernel-ea1-host-kick.md` and
-`docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md`, then
-`docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier
-EA3 run, whose "never re-entered" reading the EA1 counter corrected).
+**Hardware status (2026-11-02).** The open microkernel's clean-boot init path
+runs on hardware, the host `GETMISCINFO` kick is serviced (kernel CCB
+`WO == RO`), and the idle active-power signal keeps the host watchdog quiet
+(0 lockups over 60 s idle). The rules these runs established are in §2 (the
+DCU-invalidate and TA/3D acks; the host kick found by the CCB offsets) and §4
+(`SA_KCCB` at control-block word 0x16). The bring-up history is in
+`docs/log/entries/2026-11-08-ukernel-bringup-history.md`.
 
 ## 4a. The firmware file
 
 `powervr_sgx` loads the microkernel with `request_firmware()`. It tries
-`powervr_sgx/sgx545-openhc-ukernel.bin` first, then the DDK image under its own
+`powervr_sgx/sgx545_ukernel.bin` first, then the DDK image under its own
 name. A file that starts with the magic below is an open microkernel and is
 loaded from its header alone. Anything else must be the one DDK build the
 driver knows (size and patch placeholders checked).
@@ -666,7 +630,7 @@ into the sync-object updates the host and the next client wait on.
   - it waits for `EVENT_STATUS` & 0x240 (STATE_CLEAR b6, CONTROL_CLEAR b9)
     and acks 0x134 = 0x240;
   - a store/load follows only when `0x740 & 0x1ff` is nonzero, and 0x740
-    reads 0 throughout the EA1 register sample.
+    reads 0 throughout a CE5300 register sample.
 
   The TA and 3D free-list **loads** run once per PB, not per frame (TA3D
   +0xb8/+0xbc markers; one each over the two-frame trace).
@@ -716,7 +680,7 @@ handler is the ISP clock poll in the 3D-end handler (pc 0x0ec3-0x0ec6):
 The DDK's timer path does only active-power sampling and the lockup sample.
 It never completes work and never reads a CCB.
 
-The EA1 register sample of the DDK microkernel (2026-11-04) shows how long
+A CE5300 register sample of the DDK microkernel (2026-11-04) shows how long
 completion takes. The measure is the time from the end of the hardware work
 (`CLKGATESTATUS` back to idle) to the SW_EVENT edge:
 - TA: 13 k TSC cycles (median), 42 k at most;
@@ -756,7 +720,7 @@ DPM_OUT_OF_MEMORY_* fires at a threshold, while 0x22 pages are still free.
 for MT and GBL) reach pc 0x0ad1. It acks `EVENT_HOST_CLEAR` = 0x6 (MT and
 GBL together) and records which one fired in a sa8 flag. It then runs 0x0b50
 (the same entry from pds4 at 0x0af0). Run in the emulator with an injected
-event (`oom.py` in the ta3d-state workspace), it does this:
+event (`tools/ukernel/run.py`'s `Runner.event`), it does this:
 
 1. `rtdata` +0xc += 1 (an out-of-memory count), the RT data entry's state
    word (+0x34) |= 0x80, TA3D +0xdc = 0;
@@ -817,15 +781,15 @@ they accomplish. Offsets are from `sgx545defs.h` where it names them.
 ### The register map
 
 The core registers the microkernel and a kernel driver use, from
-`sgx545defs.h` (the GPL kernel's SGX545 header), with what the EA boxes show.
+`sgx545defs.h` (the GPL kernel's SGX545 header), with what a CE5300 shows.
 
 | reg | name | fields |
 |---|---|---|
 | 0x000 | `CLKGATECTL` | 2-bit modes per unit: ISP b0-1, ISP2 b2-3, TSP b4-5, TE b6-7, MTE b8-9, DPM b10-11, VDM b12-13, PDS0 b14-15; AUTO_MAN_REG b24. Mode 2 is clock on demand (the 3D-end ISP poll tests `& 3 == 2`) |
 | 0x004 | `CLKGATECTL2` | the same for PBE b0-1, CACHEL2, UCACHEL2, USE0, ITR0, TEX0, MADD0, USE1, ITR1, TEX1, MADD1, PDS1 b22-23 |
-| 0x008 | `CLKGATESTATUS` | 1 per running clock: ISP b0, ISP2 b1, TSP b2, TE b3, MTE b4, DPM b5, VDM b6, PDS0 b7, PBE b8, then the CLKGATECTL2 units from b9. An idle EA1 reads 0x20 (only the DPM's), so "all gated" is `& ~0x20 == 0` |
+| 0x008 | `CLKGATESTATUS` | 1 per running clock: ISP b0, ISP2 b1, TSP b2, TE b3, MTE b4, DPM b5, VDM b6, PDS0 b7, PBE b8, then the CLKGATECTL2 units from b9. An idle CE5300 reads 0x20 (only the DPM's), so "all gated" is `& ~0x20 == 0` |
 | 0x01c | `CORE_ID` | CONFIG b0-15, ID b16-31 |
-| 0x020 | `CORE_REVISION` | MAINTENANCE b0-7, MINOR b8-15, MAJOR b16-23, DESIGNER b24-31 (the EA's 1.0.14 reads 0x1000e) |
+| 0x020 | `CORE_REVISION` | MAINTENANCE b0-7, MINOR b8-15, MAJOR b16-23, DESIGNER b24-31 (the CE5300's 1.0.14 reads 0x1000e) |
 | 0x080 | `SOFT_RESET` | BIF b0, DPM b1, TA b2, USE b3, ISP b4, TSP b5; 1 holds the unit in reset, 0 releases |
 | 0x110 | `EVENT_HOST_ENABLE2` | enables for `EVENT_STATUS2` |
 | 0x114 | `EVENT_HOST_CLEAR2` | write 1s to clear `EVENT_STATUS2` bits |
@@ -840,7 +804,7 @@ The core registers the microkernel and a kernel driver use, from
 | 0xae8 | `EVENT_KICK2` | write NOW (b0) = 1: the init kick |
 | 0xc00 | `BIF_CTRL` | NOREORDER b0, PAUSE b1, FLUSH b2, INVALDC b3 (pulse 1 then 0), CLEAR_FAULT b4, MMU_BYPASS_* b8-15 (CACHE, VDM, TE, PBE, TSPP, ISP, USE, HOST) |
 | 0xc04 | `BIF_INT_STAT` | FAULT_REQ b0-15 (the requestors that faulted), FAULT_TYPE b16-18, FLUSH_COMPLETE b19 |
-| 0xc08 | `BIF_FAULT` | CID b0-3 (the requestor's context: faults by the EDM on list 15 read 0xf, EA1 2026-11-03), SB b4-8, ADDR b12-31 (the faulting page) |
+| 0xc08 | `BIF_FAULT` | CID b0-3 (the requestor's context: faults by the EDM on list 15 read 0xf, 2026-11-03), SB b4-8, ADDR b12-31 (the faulting page) |
 | 0xc38 + 4(n - 1) | `BIF_DIR_LIST_BASE1`..`15` | the page directory's physical address for list n (list 15 = 0xc70). ADDR b8-31; SGX545 has no 36-bit MMU, so the value is the page-aligned physical address itself, unshifted (`SGX_MMU_PDE_ADDR_ALIGNSHIFT` 0, as `sgxreset.c` writes it) |
 | 0xc74 | `BIF_BANK_SET` | SELECT_2D b0, SELECT_3D b2-3, SELECT_HOST b4, SELECT_TA b6-7, SELECT_EDM b8, SELECT_DPM_LSS b9; the DDK's reset writes 0 |
 | 0xc78 | `BIF_BANK0` | directory-list index per requestor: EDM b0-3, TA b4-7, HOST b8-11, 3D b12-15, 2D b16-19 |
@@ -880,8 +844,8 @@ the open DRM driver does not have to map kernel memory into every client address
 space (UAPI P2/P3). The DDK does the opposite: its TA kick writes `BIF_BANK0 =
 0x11` (EDM **and** TA both on list 1), loads list 1 with the context's PD, and
 then fetches the microkernel's own code through that client PD — which forces
-every client PD to carry the kernel heaps. openHC must not copy that; keeping the
-EDM isolated on list 15 is a deliberate divergence, verified on EA1 HW (the TA
+every client PD to carry the kernel heaps. The open microkernel does not copy that; keeping the
+EDM isolated on list 15 is a deliberate divergence, verified on hardware (the TA
 reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
 dir-list with a client requestor.
 
@@ -909,7 +873,7 @@ kick of a new PB.
 
 The open microkernel opens none of these windows: its EDM stays on list 15.
 Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
-`do_3d`), and with `HOSTCTL_OPENHC_HOST_BGBLOCK` set the host writes that
+`do_3d`), and with `HOSTCTL_HOST_BGBLOCK` set the host writes that
 block instead. Everything else the EDM reads or writes is in kernel code,
 kernel data or the sync heap, all mapped in the kernel PD.
 
@@ -948,7 +912,7 @@ its data accesses in either bank. [D, code and trace]
   - `pb[8]` = the high half of 0x724, `pb[9]` = the high half of 0x72c.
 - **Arming the page release.** The 3D start writes 0x63c = 3 (0 with render
   details +0xd4 b3). The pages the TA allocated are then freed by the
-  hardware while the 3D runs: the EA1 register sample shows 0x724 counting
+  hardware while the 3D runs: a CE5300 register sample shows 0x724 counting
   down from 0x190019 during the 3D, and DPM_3D_MEM_FREE follows. Nothing is
   written after the 3D end to start it.
 - **DPM state/control (0x694/0x698) take a mode:** 1 store (waits for
@@ -957,7 +921,7 @@ its data accesses in either bank. [D, code and trace]
   - A fresh scene runs the **clear** (pc 0x0a1d-0x0a4a).
   - The load (pc 0x17be) only resumes a stored scene (kick pc 0x09f7-0x0a0d;
     3D start pc 0x1166-0x1181, after the store at 0x1778).
-  - The EA1 register sample shows 0x694 never at 4 over a run of frames.
+  - A CE5300 register sample shows 0x694 never at 4 over a run of frames.
 - **The OTPM clear** (0x24c), with its two done bits, follows.
 
 All [D] from the DDK microkernel's code and trace; the release behaviour is
@@ -1084,7 +1048,7 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   0x18-0x37) across multiple concurrent render contexts — the single-context
   single-render path (es2gears, one Minecraft frame) is covered.
   - Two render contexts that share one PB render 10/10 on the open
-    microkernel under powervr_sgx (EA1, 2026-11-04).
+    microkernel under powervr_sgx (2026-11-04).
   - Under the DDK microkernel, a second HW render context with a PB of its
     own (two pipe contexts under services) made renders slow and then locked
     up. Placing the PB away from the 3D-params heap base was found to cause
@@ -1101,8 +1065,8 @@ memory matching. Only then does it go to the box `srvinit` loads it on
     what a 3D that never releases its TA's pages would do.
   - So the drain failure is probably real, and the 10/10 runs were simply
     shorter than the PB.
-  - The DDK drains 0x724 to 0 during every 3D (EA1 register sample).
-  - **Fixed (um-re f0dc24d, EA3 2026-11-08).** The cause: the DDK runs the
+  - The DDK drains 0x724 to 0 during every 3D (CE5300 register sample).
+  - **Fixed (um-re f0dc24d, 2026-11-08).** The cause: the DDK runs the
     TA free-list load, `save_ta_state` and the 3D free-list load only when
     the PB changes, and the open microkernel ran them every scene. Each TA
     load then re-seeded the free-list head from the descriptor and skipped
@@ -1160,19 +1124,10 @@ the registers and memory it writes against the DDK firmware's, per phase, as an
 `frame-fake` and `blitest`) and a real capture: TA/3D 41+61 registers, the
 12-write render teardown and the 21-register transfer all match.
 
-**First hardware run (EA3, `srvinit -o`).** The microkernel loads, is kicked,
-and executes, but init stalls: the event entry dies when it writes `sa` (`mov
-sa1`) directly in the initial bare-`DOUTU` context, so InitStatus is never set
-and `SGXInitialise` times out. `sa` is not a general "tasks can't write it"
-limit — the DDK microkernel writes `sa` (e.g. `mov sa9`) and runs — but only
-after it emits to trigger the pds1 DMA that establishes `sa`; openHC wrote `sa`
-before any such setup (`docs/log/entries/2026-11-02-0630-ukernel-ea3-bringup.md`).
-The emulator modelled `mov sa` as a plain register write, so the suite passed
-offline. **Fix (option B, offline-validated):** drop `sa` entirely — carry the
-control-block base in a reserved temp (`r17`) from the loader-patched `limm`
-and derive the host-control / CCB pointers from it; `run_ours`/`test_emu` still
-match the DDK. Its one hardware unknown is whether the bare-`DOUTU` context
-allocates that temp, settled by a one-word sentinel on the next slot.
+**The first hardware run** stalled in init: the event entry wrote `sa`
+directly in the bare-`DOUTU` context (§1). The fix carries the control-block
+base in a reserved temp (`r17`) from the loader-patched `limm`. The history is
+in `docs/log/entries/2026-11-08-ukernel-bringup-history.md`.
 
 **Implementation gaps the re-implementer should know (flags for the reviewer):**
 - **A transfer's syncs are not all updated.** `xfer_done` writes the status
@@ -1182,7 +1137,7 @@ allocates that temp, settled by a one-word sentinel on the next slot.
   write-ops pending, write-ops-complete address), `ui32NumSrcSyncs` at 0xac and
   `asSrcSyncs[8]` from 0xb0. The DDK microkernel sets the destination's
   write-ops-complete to its pending value plus one, and `powervr_sgx` completes a
-  transfer job on exactly that (EA1, log `2026-11-03-0405-drm-transfers`), so
+  transfer job on exactly that (log `2026-11-03-0405-drm-transfers`), so
   the open microkernel has to do the same.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).

@@ -13,7 +13,7 @@ microkernel are assembled by srvinit itself.
     srvinit [-f /lib/firmware/sgx545-ukernel-1.7.862890.bin]     # as root, once per boot
 
 Every value below is checked against the blob: a pvrtrace of the real
-`SrvInit` on an EA3 (`tools/trace`, now with an `init` snapshot before
+`SrvInit` on a CE5300 board (`tools/trace`, now with an `init` snapshot before
 `SGX_DEVINITPART2`) gave the bytes the init process wrote and the bridge it
 sent. `srvinit -n plan outdir` builds the same thing offline from the traced
 addresses, and `check.py diff` compares the two. Result: all 15 buffers and
@@ -23,7 +23,7 @@ every `SGX_BRIDGE_INIT_INFO` field are identical.
     srvinit -n plan.txt -f fw.bin out/          # on any x86_64 Linux, no GPU touched
     python3 srvinit/check.py diff trace.bin out/
 
-## On hardware (EA3, 2026-10-28)
+## On hardware (2026-10-28)
 
 Run from a cold boot, before anything else touched the GPU, in place of
 `run.sh sgxinit`:
@@ -52,12 +52,12 @@ afterwards with `INITSRV_DISCONNECT(0)`.
 
 - **Driver:** the table now declares `sizeof(PVRSRV_BRIDGE_OUT_SGXDEVINITPART2)`
   (`bridged_sgx_bridge.c`; the compat comment in `bridged_pvr_bridge.c` is
-  updated too). Built by openHC CI and booted once from RAM on the EA3
+  updated too). Built by CI and booted once from RAM on a CE5300 board
   (2026-10-28, log entry `2026-10-28-2210-hwr-workqueues`): srvinit's 8-byte
   call went through first time, with no `invalid param size` line, so the
   fallback never ran.
 - **srvinit:** sends 8 bytes and retries with 16 if the driver refuses with
-  -EINVAL, so it works with both. Proven on the EA3's current (old-table)
+  -EINVAL, so it works with both. Proven on the CE5300's current (old-table)
   driver: dmesg shows the one expected `invalid param size for IOCTL#99`
   line, then a normal start.
 
@@ -89,7 +89,7 @@ bytes, sha256
 `73dce0885c45ecbe691f86305b3645e525e7a5e18de3de3b5a469d0df8850349`. It comes
 from `libsrv_init.so.1.7.862890` (sha256 `4d3df850…53b6d`), which ships in
 `cedarview-graphics-drivers_20120717.orig.tar.gz` (sha256 `c23e7261…8fd83`,
-the same pin as openHC's `sgx545-um` package). The extraction script checks
+the same pin as the `sgx545-um` package). The extraction script checks
 all three hashes.
 
 The rest of libsrv_init's `.rodata` is not needed:
@@ -134,7 +134,7 @@ On any failure, srvinit sends `INITSRV_DISCONNECT(0)`, as SrvInit does.
 Attribute flags: `RW` = READ|WRITE|CACHE_CONSISTENT|NO_SYNCOBJ|EDM_PROTECT
 (0x4f); `MP` adds HAP_MULTI_PROCESS (0x2004f); `RO` = READ|NO_SYNCOBJ (9).
 Sizes, alignments and flags are all **constant**. The addresses shown are the
-ones the EA3 gave, the blob and srvinit alike; srvinit itself always uses
+ones the CE5300 gave, the blob and srvinit alike; srvinit itself always uses
 whatever the kernel returns.
 
 | # | buffer | heap | flags | size | align | address | handle field |
@@ -171,7 +171,7 @@ back from the kernel already zero.
 | 0x00 | its own address | computed |
 | 0x01 | host control address | computed |
 | 0x02 | CCB control address | computed |
-| 0x13 | app hint `HWPerfFlags` from /etc/powervr.ini, default 0 | computed (0 on the EA3) |
+| 0x13 | app hint `HWPerfFlags` from /etc/powervr.ini, default 0 | computed (0 on a CE5300 board) |
 | 0x16 | kernel CCB address | computed |
 | 0x17 | page directory, device physical (`SGXINFO_FOR_SRVINIT`) | computed |
 | 0x2b | HWPerf buffer address | computed |
@@ -314,9 +314,9 @@ The PDS programs used to be copied from the firmware file too. srvinit now
 assembles them; the output is the same bytes, checked with `check.py` against
 the trace, and the third hardware run used that build.
 
-## Loading openHC's own microkernel (`-o`)
+## Loading the open microkernel (`-o`)
 
-`srvinit -o ukernel/sgx545-ukernel-openhc.bin` loads openHC's microkernel
+`srvinit -o ukernel/sgx545_ukernel.bin` loads the open microkernel
 (`ukernel/`) instead of the DDK's. It differs from the `-f` path in three
 ways, and nothing else — the allocations, control block, signature lists,
 init scripts and `SGX_BRIDGE_INIT_INFO` are the same:

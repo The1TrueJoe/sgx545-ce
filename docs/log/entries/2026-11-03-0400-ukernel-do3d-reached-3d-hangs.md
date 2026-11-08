@@ -20,7 +20,7 @@ the geometry, which run_ours injects and cannot model.
 ## Hypothesis: do_3d runs before the last TA finishes (no kick serialisation)
 
 The DDK order is kick 1 → **TA finished (1)** → kick 2 → **TA finished (2)** → 3D:
-each TA completes before the next, and the 3D runs only after the last TA. openHC
+each TA completes before the next, and the 3D runs only after the last TA. The open microkernel
 services each kick on its own EUR_CR_EVENT_KICK doorbell, so both do_ta calls run
 back-to-back (counter: count 2). `SC_CMD` is overwritten by kick 2's do_ta, so when
 **kick 1's** ta_finish fires, ta_finished reads **kick 2's** command, sees

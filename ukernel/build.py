@@ -76,7 +76,7 @@ def assemble():
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "sgx545-ukernel-openhc.bin")
+        os.path.dirname(os.path.abspath(__file__)), f"{ukernel.CORE_NAME}_ukernel.bin")
     man = sys.argv[2] if len(sys.argv) > 2 else out.rsplit(".", 1)[0] + ".json"
     words, offset, patches = assemble()
     data = b"".join(struct.pack("<II", lo, hi) for lo, hi in words)
@@ -88,7 +88,10 @@ def main():
     # ours is defer-and-hold. build_id names the build. mkukfw --manifest reads both.
     features = int(os.environ.get("UK_FEATURES", "2"), 0)
     build_id = os.environ.get("UK_BUILD_ID", "openhc")
+    version = "%d.%d" % (ukernel.OPENHC_UK_VERSION >> 16, ukernel.OPENHC_UK_VERSION & 0xffff)
     manifest = {
+        "core": ukernel.CORE_NAME,          # the SGX core this image targets (per-core)
+        "version": version,                 # microkernel interface version, major.minor
         "bytes": len(data),
         "instructions": len(words),
         "features": features,

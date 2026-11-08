@@ -23,7 +23,7 @@ full VDM stream + setup), **kick 2 is `bLastInScene`** (terminate words only).
 `sgxgen.c` sets `cmd+0x04 = last ? 0x62 : 0x71` with `bFirstKickOrResume` /
 `bLastInScene` from `last` — so **cmd+0x04 bit 0 is the first-kick flag**.
 
-openHC's `do_ta` is one unconditional path: it re-ran *all* the setup on every
+the open microkernel's `do_ta` is one unconditional path: it re-ran *all* the setup on every
 kick. Re-loading the DPM free list (which kick 1 already allocated PB pages from)
 and re-resetting the TA mid-scene corrupts the in-flight scene and hangs the
 render TA.

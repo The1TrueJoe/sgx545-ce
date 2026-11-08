@@ -6,7 +6,7 @@ and every perf change is measured against them.
 
 | stack | userspace | kernel and firmware |
 |---|---|---|
-| **old** | the openhc-minecraft install as it runs: i386 Java, gl4es, the DDK's GLES2; Xvfb, gl4es drawing to the panel | pvrsrvkm and the DDK microkernel (the normal boot) |
+| **old** | the Minecraft install as it runs: i386 Java, gl4es, the DDK's GLES2; Xvfb, gl4es drawing to the panel | pvrsrvkm and the DDK microkernel (the normal boot) |
 | **new** | our Mesa: x64 Java, GLX/DRI3 on Xorg (modesetting + glamor on simpledrm); EGL surfaceless for the microbenchmark | powervr_sgx (a RAM boot) with the DDK or the open microkernel, as each row says |
 
 ## The suite
@@ -237,7 +237,7 @@ What still holds temporaries:
   - We emit `efo` for a sum of vector × scalar terms (`mat4 * v`, `mat3 * n`) whose vectors
     sit in a bank (uniforms, attributes, varyings), as libusc's `v_mvp`: per lane pair one
     `efo` per term with the partials in i0/i1, then `mov` from i1. A `mat4 * v` is 10 issue
-    slots instead of 16. `SGX_DISABLE=coissue` turns it off. 32 `efo` in c2+c3.
+    slots instead of 16. `SGX545_COMPILER_DEBUG=nocoissue` turns it off. 32 `efo` in c2+c3.
   - Driver mode, issue slots: corpus 7791 → 7726, glmark2 2080 → 1826 (temporaries 195 →
     157), gl4es Minecraft 180 → 150. Instructions go up (glmark2 1211 → 1470): a repeat is one
     instruction, its `efo`s are several.

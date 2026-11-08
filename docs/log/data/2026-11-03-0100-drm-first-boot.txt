@@ -1,4 +1,4 @@
-Linux openhc-ea1-000FFF1AFCA9 7.1.8-m2drm #1 SMP PREEMPT_DYNAMIC Tue Nov  3 00:35:13 UTC 2026 x86_64 GNU/Linux
+Linux ce5300-board 7.1.8-m2drm #1 SMP PREEMPT_DYNAMIC Tue Nov  3 00:35:13 UTC 2026 x86_64 GNU/Linux
 console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 pci=realloc,nocrs,routeirq console=ttyS0,115200 pci=realloc,nocrs,routeirq intel_iommu=off root=/dev/mmcblk0p1 rootwait rw ohc_kexec=1 ohc.ramboot=1 memmap=exactmap memmap=68K@0 memmap=60K#0x11000 memmap=512K@0x20000 memmap=255M@1M memmap=1536M@0x10000000
 
 [   51.100779] powervr_sgx 0000:01:02.0: [drm] SGX core id 0x01150000 revision 0x0001000e

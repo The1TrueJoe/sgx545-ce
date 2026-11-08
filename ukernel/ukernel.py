@@ -155,7 +155,13 @@ SC_VERSION = 0x18    # control block +0x60: openHC microkernel version, written
                      # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
                      # A free slot: it was 0x16 before, which is the kernel CCB
                      # base — init overwrote that base with the version word.
-OPENHC_UK_VERSION = 0x00010000   # 1.0
+OPENHC_UK_VERSION = 0x00010000   # 1.0 (packed major<<16 | minor)
+# The SGX core this image targets. The microkernel programs core registers for a
+# specific SGX5xx variant (register-programming tables = docs/UKERNEL.md §7), so
+# another core (e.g. SGX540/SGX531) needs its own image built from a core-specific
+# source. build.py names the output and the manifest "core" field from this, so the
+# images never collide. SGX545 is the CE5300's GPU.
+CORE_NAME = "sgx545"
 TRANSFERCMD_BYTES = 0x1c0   # SGXMKIF_TRANSFERCMD size (docs/TEX.md §3)
 # transfer completion: the shared command's destination-sync descriptor and the
 # transfer context's in-flight fields (docs/TEX.md; observed from a capture)

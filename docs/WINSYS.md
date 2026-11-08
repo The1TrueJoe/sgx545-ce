@@ -8,8 +8,8 @@ backend, `struct sgxws_kif` in `sgx545_frame.h`:
 
 | backend | file | kernel driver | who builds the firmware structures | ships in |
 |---|---|---|---|---|
-| powervr_sgx | `sgx545_powervr_sgx.c` | `powervr_sgx` (`drm/powervr_sgx`, docs/UAPI.md) | the kernel | upstream Mesa (M5); openHC once powervr_sgx replaces pvrsrvkm |
-| services | `sgx545_pvr.c` + `libpvr/` | `pvrsrvkm` (`kernel/`) | the client, as the DDK's GL driver does | the openHC overlay only |
+| powervr_sgx | `sgx545_powervr_sgx.c` | `powervr_sgx` (`drm/powervr_sgx`, docs/UAPI.md) | the kernel | upstream Mesa (M5); the boot image once powervr_sgx replaces pvrsrvkm |
+| services | `sgx545_pvr.c` + `libpvr/` | `pvrsrvkm` (`kernel/`) | the client, as the DDK's GL driver does | a downstream overlay only |
 
 ## Selecting the backend
 
@@ -25,7 +25,7 @@ There is nothing to configure: the device decides.
   surfaceless platform, GBM and DRI3 open. pvrsrvkm has only a primary node,
   which `mesa/patches/0003` lets the surfaceless platform fall back to.
 - **One box, either stack.** The EA boots with one of the two kernel drivers. The
-  same Mesa build runs on either: on pvrsrvkm openHC's images today, on powervr_sgx
+  same Mesa build runs on either: on pvrsrvkm the boot images today, on powervr_sgx
   a RAM-booted kernel with the module loaded (`drm/ci/ea-ramboot`).
 
 `sgx545_frame_test -d <node>` runs the winsys without Mesa on either driver. On the EA1 under

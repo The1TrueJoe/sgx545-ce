@@ -1,6 +1,6 @@
 # First TA/3D frame on the open microkernel (EA1): do_ta runs, the render never reaches the 3D
 
-First-ever TA/3D client against openHC's open microkernel (every prior frame on
+First-ever TA/3D client against the open microkernel (every prior frame on
 any box used the DDK microkernel). Cold boot, `srvinit -o /root/uk.bin` (our
 microkernel), then one `tools/gen/frame -o bb.bin` (a plain clear + single
 triangle, 736×480). Real UTC ~21:53 (EA1 clock runs +5m11s).

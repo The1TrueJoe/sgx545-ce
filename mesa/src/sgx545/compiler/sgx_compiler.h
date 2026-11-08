@@ -41,9 +41,9 @@ struct nir_shader_compiler_options;
 #define SGX_MAX_SETS 10
 
 enum sgx_layout_kind {
-   SGX_LAYOUT_UNIFORM,          /* -> first constant number (rows/elements at +4 each) */
-   SGX_LAYOUT_ATTRIB,           /* -> attribute slot (pa 4*slot) */
-   SGX_LAYOUT_SAMPLER,          /* -> texture unit */
+   SGX_LAYOUT_UNIFORM, /* -> first constant number (rows/elements at +4 each) */
+   SGX_LAYOUT_ATTRIB,  /* -> attribute slot (pa 4*slot) */
+   SGX_LAYOUT_SAMPLER, /* -> texture unit */
 };
 
 /* Where the caller wants things. place() is asked for each uniform
@@ -59,7 +59,7 @@ struct sgx_layout {
 };
 
 struct sgx_compile_options {
-   const struct sgx_layout *layout;     /* NULL: the compiler's own numbering */
+   const struct sgx_layout *layout; /* NULL: the compiler's own numbering */
    bool verbose;
    /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
     * F16 iteration, fmad16, F16/C10 uniforms, as the DDK does */
@@ -91,53 +91,56 @@ enum sgx_vtx_fmt {
    SGX_VF_F32_1,
    SGX_VF_F32_2,
    SGX_VF_F32_3,
-   SGX_VF_UNORM8_4,     /* one dword, x in the low byte, each / 255 */
-   SGX_VF_SSCALED16_2,  /* one dword, x the signed low half, y the high one, not normalised */
+   SGX_VF_UNORM8_4,    /* one dword, x in the low byte, each / 255 */
+   SGX_VF_SSCALED16_2, /* one dword, x the signed low half, y the high one, not
+                          normalised */
 };
 
 /* varying -> texture coordinate set (sgx_assign_varyings) */
 struct sgx_varying {
    char name[64];
-   unsigned set;        /* first set (one per row) */
-   unsigned comp;       /* first component in its sets: varyings may share a set */
+   unsigned set;  /* first set (one per row) */
+   unsigned comp; /* first component in its sets: varyings may share a set */
    unsigned rows, comps;
-   unsigned precision;  /* GLSL: 0 none, 1 high, 2 medium, 3 low */
+   unsigned precision; /* GLSL: 0 none, 1 high, 2 medium, 3 low */
 };
 
 struct sgx_varyings {
    unsigned n;
    struct sgx_varying v[32];
-   bool point_size;     /* set 0 reserved (vertex shaders that write gl_PointSize) */
+   /* set 0 reserved (vertex shaders that write gl_PointSize) */
+   bool point_size;
    unsigned set_comps[SGX_MAX_SETS];
 };
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
-#define SGX_SLOT_NONE 0xffff
-#define SGX_MAX_CONST_MAP (1024 + 32)   /* every constant number and literal */
+#define SGX_SLOT_NONE     0xffff
+#define SGX_MAX_CONST_MAP (1024 + 32) /* every constant number and literal */
 
 struct sgx_const_map {
-   uint16_t k;                  /* constant number: uniform component (sgx_nir.c's numbering) */
-   uint16_t slot;               /* sa[sa_base + slot]; SGX_SLOT_NONE: in memory only */
-   uint16_t mem;                /* word of the constant memory block (mem_dwords), 0 none */
-   uint8_t shift;               /* bit offset in the slot: F16 0/16, C10 0/10/20 */
-   uint8_t fmt;                 /* 1 f32, 2 F16 (round to nearest), 3 C10 (round(v * 255), signed 10 bits);
-                                 * with driver_consts: 0x10 F16 of the C10 value c (fmt 3's rule):
-                                 * c / 255 rounded to nearest F16, as pck.f16.c10 [scale] gives it
-                                 * (hardware, tests/c10); 0x11 a literal: k = 0xffff, value (32 bits)
-                                 * ORed into the slot at shift */
-   uint32_t value;              /* fmt 0x11 */
+   uint16_t k; /* constant number: uniform component (sgx_nir.c's numbering) */
+   uint16_t slot; /* sa[sa_base + slot]; SGX_SLOT_NONE: in memory only */
+   uint16_t mem;  /* word of the constant memory block (mem_dwords), 0 none */
+   uint8_t shift; /* bit offset in the slot: F16 0/16, C10 0/10/20 */
+   /* 1 f32, 2 F16 (round to nearest), 3 C10 (round(v * 255), signed 10
+    * bits); with driver_consts: 0x10 F16 of the C10 value c (fmt 3's rule):
+    * c / 255 rounded to nearest F16, as pck.f16.c10 [scale] gives it
+    * (hardware, tests/c10); 0x11 a literal: k = 0xffff, value (32 bits) ORed
+    * into the slot at shift */
+   uint8_t fmt;
+   uint32_t value; /* fmt 0x11 */
 };
 
 struct sgx_iter_info {
-   uint8_t set;                 /* texture coordinate set (DOUTI source = set + 1) */
+   uint8_t set; /* texture coordinate set (DOUTI source = set + 1) */
    uint8_t comps;
-   uint8_t pa;                  /* first PA register */
-   uint8_t regs;                /* PA registers it fills */
-   uint8_t f16;                 /* iterated as F16 (two components per register) */
-   uint8_t sample;              /* a non-dependent sample: the raw RGBA8 texel lands in pa */
-   uint8_t proj;                /* ... with a projected coordinate (x/w, y/w) */
-   uint8_t sampler;             /* ... of this sampler */
-   uint8_t pointcoord;          /* gl_PointCoord (set 0) */
+   uint8_t pa;     /* first PA register */
+   uint8_t regs;   /* PA registers it fills */
+   uint8_t f16;    /* iterated as F16 (two components per register) */
+   uint8_t sample; /* a non-dependent sample: the raw RGBA8 texel lands in pa */
+   uint8_t proj;   /* ... with a projected coordinate (x/w, y/w) */
+   uint8_t sampler;    /* ... of this sampler */
+   uint8_t pointcoord; /* gl_PointCoord (set 0) */
 };
 
 /* A texture sample (docs/ISA.md "The texture-sample sequence"). A
@@ -146,15 +149,16 @@ struct sgx_iter_info {
  * sampler's state words as its src1, writing the raw texel to temporary
  * `reg`; the program unpacks it from there. */
 struct sgx_sample_info {
-   unsigned at;                 /* dependent: index in code[] it goes before */
+   unsigned at; /* dependent: index in code[] it goes before */
    uint16_t id;
    uint8_t sampler;
-   uint8_t set;                 /* non-dependent: the coordinate's set */
-   uint8_t dim;                 /* 2 = 2D, 3 = cube */
+   uint8_t set; /* non-dependent: the coordinate's set */
+   uint8_t dim; /* 2 = 2D, 3 = cube */
    uint8_t dependent, proj;
-   uint8_t reg;                 /* the raw texel: pa (non-dependent), r (dependent) */
-   int16_t coord_pa;            /* non-dependent: the coordinate's plain iteration, -1 none */
-   uint64_t smp;                /* dependent: the smp, destination r0, texture state #0 */
+   uint8_t reg; /* the raw texel: pa (non-dependent), r (dependent) */
+   /* non-dependent: the coordinate's plain iteration, -1 none */
+   int16_t coord_pa;
+   uint64_t smp; /* dependent: the smp, destination r0, texture state #0 */
 };
 
 /* The program's structure, in order: runs of code, labels, branches, the
@@ -162,11 +166,11 @@ struct sgx_sample_info {
  * branches (to move their offsets when it inserts code) and the samples;
  * the USP writer needs all of it. */
 enum sgx_block_kind {
-   SGX_BLOCK_CODE,              /* code[at .. at + n) */
-   SGX_BLOCK_LABEL,             /* label */
-   SGX_BLOCK_BRANCH,            /* code[at] branches to label (offset resolved) */
-   SGX_BLOCK_FEEDBACK,          /* code[at] is the discard feedback nop */
-   SGX_BLOCK_SAMPLE,            /* samples[at] */
+   SGX_BLOCK_CODE,     /* code[at .. at + n) */
+   SGX_BLOCK_LABEL,    /* label */
+   SGX_BLOCK_BRANCH,   /* code[at] branches to label (offset resolved) */
+   SGX_BLOCK_FEEDBACK, /* code[at] is the discard feedback nop */
+   SGX_BLOCK_SAMPLE,   /* samples[at] */
 };
 
 struct sgx_block {
@@ -178,25 +182,29 @@ struct sgx_block {
 #define SGX_MAX_SAMPLES 16
 
 struct sgx_shader {
-   unsigned stage;              /* MESA_SHADER_VERTEX / _FRAGMENT */
+   unsigned stage; /* MESA_SHADER_VERTEX / _FRAGMENT */
    /* what the program reads and writes */
-   unsigned sa_base;            /* first SA register of the constants (9 fragment, 10 vertex) */
+   /* first SA register of the constants (9 fragment, 10 vertex) */
+   unsigned sa_base;
    unsigned n_consts;
    struct sgx_const_map consts[SGX_MAX_CONST_MAP];
-   unsigned n_iters;            /* fragment: PDS iterations, in PA order */
+   unsigned n_iters; /* fragment: PDS iterations, in PA order */
    struct sgx_iter_info iters[16];
-   unsigned colour_pa;          /* fragment: packed BGRA8 colour register */
-   bool discards;               /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
+   unsigned colour_pa; /* fragment: packed BGRA8 colour register */
+   bool discards; /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
    /* fragment: gl_FragDepth, clamped to [0, 1], is in pa<depth_pa> at the
     * feedback nop, for a depthf there (predicated on p1 when it discards
     * too); not in the DDK's USP */
    bool writes_depth;
    unsigned depth_pa;
-   uint32_t in_mask[4];         /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
-   unsigned set_comps[SGX_MAX_SETS]; /* vertex: output set sizes (o4 on); 0 = unused */
-   bool point_size;             /* vertex: writes the point size (f32), after the sets */
-   unsigned n_out_regs;         /* vertex: o registers written */
-   unsigned sa_slots;           /* SA registers used from sa_base on (constants and the compiler's own) */
+   /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
+   uint32_t in_mask[4];
+   /* vertex: output set sizes (o4 on); 0 = unused */
+   unsigned set_comps[SGX_MAX_SETS];
+   bool point_size; /* vertex: writes the point size (f32), after the sets */
+   unsigned n_out_regs; /* vertex: o registers written */
+   /* SA registers used from sa_base on (constants and the compiler's own) */
+   unsigned sa_slots;
    /* Constants past sa127 (counting 4 per dependent sample of a fragment
     * program after sa_slots): the most-used stay in SA, every constant gets
     * a word of a memory block the driver fills per draw like the SA ones,
@@ -206,8 +214,9 @@ struct sgx_shader {
    unsigned mem_dwords;
    unsigned n_mem_bases;
    uint8_t mem_base_slot[8];
-   bool uses_front_face;        /* fragment: reads sa[front_sa], so it must be loaded */
-   uint64_t *code;              /* main program, flat (branch targets resolved) */
+   /* fragment: reads sa[front_sa], so it must be loaded */
+   bool uses_front_face;
+   uint64_t *code; /* main program, flat (branch targets resolved) */
    unsigned n_code;
    unsigned n_samples;
    struct sgx_sample_info samples[SGX_MAX_SAMPLES];
@@ -215,10 +224,10 @@ struct sgx_shader {
    unsigned n_blocks;
    unsigned n_alu, n_tex, n_flow; /* instruction counts */
    unsigned n_temps;
-   unsigned n_pa;               /* PA registers: inputs, colour, and the placeholder
-                                 * colour iteration of a fragment program with no
-                                 * other (the DDK's driver iterates one) */
-   char *log;                   /* listing / errors (malloc'd) */
+   /* PA registers: inputs, colour, and the placeholder colour iteration of a
+    * fragment program with no other (the DDK's driver iterates one) */
+   unsigned n_pa;
+   char *log; /* listing / errors (malloc'd) */
 };
 
 const struct nir_shader_compiler_options *sgx_nir_options(void);
@@ -226,7 +235,8 @@ const struct nir_shader_compiler_options *sgx_nir_options(void);
 /* GLSL ES varyings to texture coordinate sets, as the DDK's glslcompiler
  * allocates them (ISA.md "Varyings to sets"); call on each stage's NIR
  * before linking removes unused ones */
-void sgx_assign_varyings(struct nir_shader *nir, bool vertex, struct sgx_varyings *out);
+void sgx_assign_varyings(struct nir_shader *nir, bool vertex,
+                         struct sgx_varyings *out);
 
 /* Varyings whose sets go past the ten (or past a set's four components):
  * re-placed in their order as glslcompiler does past ten sets, sharing sets

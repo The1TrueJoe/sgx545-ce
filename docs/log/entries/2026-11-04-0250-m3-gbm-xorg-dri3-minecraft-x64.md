@@ -65,7 +65,7 @@ with `MESA_GL_VERSION_OVERRIDE=2.1 MESA_GLSL_VERSION_OVERRIDE=120` until the dri
 
 `mesa/tests/x11/mc-x64.sh` starts vanilla 1.7.10, offline:
 - Zulu 8 x64 JRE (sha256 checked against Azul's metadata);
-- LWJGL 2.9.1's amd64 natives (`liblwjgl64.so`) from the openhc-minecraft install;
+- LWJGL 2.9.1's amd64 natives (`liblwjgl64.so`) from the Minecraft install;
 - the game files copied from that install into the root's `/opt/mc-x64`; the install and the
   user's worlds were not touched.
 

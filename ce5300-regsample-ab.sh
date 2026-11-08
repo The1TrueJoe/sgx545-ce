@@ -6,13 +6,14 @@
 # the DDK's DPM state does between processes that ours doesn't. Read-only, named regs
 # only. ALWAYS restores normal boot. Hold ea1.lock around the whole job (caller).
 setopt sh_word_split
+: "${BOX_PASS:?set BOX_PASS to the board root password}"
 OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o PreferredAuthentications=password -o PubkeyAuthentication=no"
 H=root@10.0.0.110
-HW=/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC--claude-worktrees-optimistic-leakey-b1d663/ca698cd7-46e4-4e13-949b-9c4a8185b579/scratchpad/sgx/hwruns
-DDK=/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC--claude-worktrees-optimistic-leakey-b1d663/ca698cd7-46e4-4e13-949b-9c4a8185b579/scratchpad/sgx/tools/ddk
-OUT=/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC--claude-worktrees-optimistic-leakey-b1d663/ca698cd7-46e4-4e13-949b-9c4a8185b579/scratchpad/sgx/docs/log/data
-ssh_() { sshpass -p openhc ssh $OPTS "$H" "$@" 2>&1 | grep -v "Permanently added"; }
-put()  { sshpass -p openhc ssh $OPTS "$H" "cat > $2" < "$1" 2>&1 | grep -v "Permanently added"; }
+HW=${UK_HWRUNS:?set UK_HWRUNS to the directory with the built test images}
+DDK=${UK_DDK:-$(cd "$(dirname "$0")" && pwd)/tools/ddk}
+OUT=${UK_OUT:-$(cd "$(dirname "$0")" && pwd)/docs/log/data}
+ssh_() { sshpass -p "$BOX_PASS" ssh $OPTS "$H" "$@" 2>&1 | grep -v "Permanently added"; }
+put()  { sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > $2" < "$1" 2>&1 | grep -v "Permanently added"; }
 wait_boot() { # <old_boot_id> <NORMAL|RAMBOOT>
   old=$1; want=$2; want2=NORMAL; [ "$want" = RAMBOOT ] && want2=ohc.ramboot
   for i in $(seq 1 50); do
@@ -112,7 +113,7 @@ run_arm() { # <ours|ddk>
   done
   echo "--- test-$MODE.log ---"; ssh_ "cat /root/uk/test-$MODE.log"
   mkdir -p "$OUT"
-  sshpass -p openhc scp $OPTS "$H:/root/uk/reg-$MODE.csv" "$OUT/2026-11-04-regsample-$MODE.csv" 2>&1 | grep -v "Permanently added" || \
+  sshpass -p "$BOX_PASS" scp $OPTS "$H:/root/uk/reg-$MODE.csv" "$OUT/2026-11-04-regsample-$MODE.csv" 2>&1 | grep -v "Permanently added" || \
     ssh_ "cat /root/uk/reg-$MODE.csv" > "$OUT/2026-11-04-regsample-$MODE.csv"
   echo "saved reg-$MODE.csv -> $OUT ($(wc -l < "$OUT/2026-11-04-regsample-$MODE.csv" 2>/dev/null) lines)"
 }
