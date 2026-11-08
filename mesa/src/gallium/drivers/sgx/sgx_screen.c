@@ -9,11 +9,13 @@
 #include "drm-uapi/drm.h"
 #include "renderonly/renderonly.h"
 #include "util/format/u_format.h"
+#include "util/log.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_screen.h"
 
 #include "sgx_context.h"
+#include "sgx_device.h"
 #include "sgx_program.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
@@ -74,7 +76,7 @@ sgx_dump_code_dir(void)
 static const char *
 sgx_get_name(struct pipe_screen *pscreen)
 {
-   return "PowerVR SGX545 (sgx545-ce)";
+   return sgx_screen(pscreen)->name;
 }
 
 static const char *
@@ -98,6 +100,8 @@ sgx_get_screen_fd(struct pipe_screen *pscreen)
 static void
 sgx_init_shader_caps(struct pipe_screen *pscreen)
 {
+   const struct sgx_device_features *f = sgx_screen(pscreen)->features;
+
    for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT;
         s += MESA_SHADER_FRAGMENT) {
       struct pipe_shader_caps *caps =
@@ -111,9 +115,9 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
        * sampled by the PDS before the shader runs, not by the shader */
       caps->max_tex_indirections = 8;
       caps->max_control_flow_depth = 32;
-      /* ISA.md: 16 attributes, 10 texture coordinate sets */
-      caps->max_inputs = s == MESA_SHADER_VERTEX ? 16 : 10;
-      caps->max_outputs = s == MESA_SHADER_VERTEX ? 11 : 1;
+      /* ISA.md: 16 attributes, 10 texture coordinate sets on the SGX545 */
+      caps->max_inputs = s == MESA_SHADER_VERTEX ? f->vs_inputs : f->fs_inputs;
+      caps->max_outputs = s == MESA_SHADER_VERTEX ? f->vs_outputs : 1;
       /* Constants live in SA registers, sa9 (sa10 in a vertex program) to
        * sa127.  How many uniforms that holds depends on the program: only
        * the constants it uses go there, and mediump ones two to a register
@@ -126,16 +130,16 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
       /* u[i]: indexed from SA, or from the block when the array doesn't fit
        * (without it GLSL selects over the whole array, a load per element) */
       caps->indirect_const_addr = true;
-      caps->max_temps = 64;
+      caps->max_temps = f->max_temps;
       if (s == MESA_SHADER_FRAGMENT) {
-         caps->max_texture_samplers = caps->max_sampler_views = 8;
+         caps->max_texture_samplers = caps->max_sampler_views = f->samplers;
          /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
           * uniforms), as the DDK computes them: the varyings, texture and
           * clipping A/B cases are byte-identical to the DDK with it
           * (sgx_varyab.sh, _texproj, _texshape, _nearclip), and the bench
           * world runs 24-28 FPS against 20-27 in F32.  SGX_F16=0 keeps F32 */
          caps->fp16 = caps->glsl_16bit_consts =
-            !(sgx_drv_debug & SGX_DEBUG_NO_F16);
+            f->f16 && !(sgx_drv_debug & SGX_DEBUG_NO_F16);
       }
    }
 }
@@ -143,6 +147,8 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
 static void
 sgx_init_screen_caps(struct pipe_screen *pscreen)
 {
+   struct sgx_screen *screen = sgx_screen(pscreen);
+   const struct sgx_device_features *f = screen->features;
    struct pipe_caps *caps = (struct pipe_caps *)&pscreen->caps;
 
    u_init_pipe_screen_caps(pscreen, 1);
@@ -151,16 +157,19 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    /* blending is shader code (STATE.md section 3): any equation per channel */
    caps->blend_equation_separate = true;
    caps->uma = true;
-   caps->max_texture_2d_size = 2048;
-   caps->max_texture_cube_levels = 12;
+   /* a texture can be a render target: no bigger than the kernel takes one */
+   caps->max_texture_2d_size =
+      MIN3(f->max_texture_size, screen->info->rt_max_width,
+           screen->info->rt_max_height);
+   caps->max_texture_cube_levels = f->max_cube_levels;
    caps->max_texture_3d_levels = 0;
    caps->max_render_targets = 1;
    caps->glsl_feature_level = 120;
    caps->glsl_feature_level_compatibility = 120;
    caps->essl_feature_level = 100;
    caps->max_viewports = 1;
-   caps->vendor_id = 0x8086;
-   caps->device_id = 0x089b;
+   caps->vendor_id = screen->info->pci_vendor;
+   caps->device_id = screen->info->pci_device;
    caps->fs_coord_origin_upper_left = true;
    caps->fs_coord_pixel_center_half_integer = true;
    caps->min_line_width = caps->min_line_width_aa = 1;
@@ -339,6 +348,17 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       FREE(screen);
       return NULL;
    }
+   screen->info = sgxws_dev_info(screen->dev);
+   screen->features = sgx_device_features(screen->info);
+   if (!screen->features) {
+      mesa_loge("sgx: no support for core id %#x revision %#x",
+                screen->info->core_id, screen->info->core_revision);
+      sgxws_dev_destroy(screen->dev);
+      FREE(screen);
+      return NULL;
+   }
+   snprintf(screen->name, sizeof(screen->name), "PowerVR %s",
+            screen->features->name);
    screen->ro = ro;
    simple_mtx_init(&screen->lock, mtx_plain);
    slab_create_parent(&screen->transfer_pool, sizeof(struct sgx_transfer), 16);

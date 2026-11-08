@@ -78,6 +78,11 @@ begin_frame(struct sgx_context *ctx)
    if (!rt)
       return false;
    if (sgx_recording(ctx) && ctx->recording != res) {
+      SGX_DBG(SYNC, "target switch: %s %ux%u -> %s %ux%u\n",
+              util_format_short_name(ctx->recording->base.format),
+              ctx->recording->base.width0, ctx->recording->base.height0,
+              util_format_short_name(res->base.format), res->base.width0,
+              res->base.height0);
       ctx->recording = NULL; /* sgxws_begin flushes the other frame */
       ctx->stats.fl_switch++;
    }
@@ -605,6 +610,20 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
             bits = (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
       } else if (k->fmt == 0x11) {
          bits = k->value << k->shift;
+      } else if (k->fmt == 0x12) {
+         /* the vec4 at k as the BGRA8 colour output, packed once a draw
+          * instead of every pixel (the blend constant's packing, sa2) */
+         float c[4];
+
+         for (unsigned j = 0; j < 4; j++)
+            c[j] = cb && k->k + j < avail ? cb[k->k + j] : 0.0f;
+         bits = (uint32_t)float_to_ubyte(c[3]) << 24 |
+                (uint32_t)float_to_ubyte(c[0]) << 16 |
+                (uint32_t)float_to_ubyte(c[1]) << 8 | float_to_ubyte(c[2]);
+         for (unsigned j = 0; j < 2; j++)
+            if (at[j])
+               *at[j] = bits;
+         continue;
       } else {
          memcpy(&bits, &v, 4);
          for (unsigned j = 0; j < 2; j++)
