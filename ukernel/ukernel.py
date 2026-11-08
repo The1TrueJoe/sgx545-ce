@@ -888,9 +888,15 @@ def build(a):
     a.label("k_cleanup_complete")
     a.i("limm r4, #0")
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r4 [moe]")   # reset the defer counter
-    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r4 [moe]")       # a cleaned-up PB may be freed and a new
-    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r4 [moe]")       # one reallocated at the same address: force
-    a.i("idf")                                          # a reload (the DDK clears these on cleanup)
+    # Do NOT clear the PB free-list markers here. The DDK clears them on cleanup ONLY when the
+    # cleaned-up resource IS the loaded PB (pc 0x03a5/0x0475); an RT-dataset or render-context
+    # cleanup that shares the live PB must not. Minecraft's target switches send exactly those
+    # RT/ctx cleanups mid-scene; the old unconditional clear made the next kick reload the free
+    # list from the frame-1 descriptor -> stale head -> r700 walks to the 0xffff terminator and
+    # faults (ta3d-state 2026-11-08). A same-address PB realloc can't happen in one session: the
+    # driver keeps PB descriptors until the next microkernel restart (m2), and init clears the
+    # markers then -- the only time a PB address is reused.
+    a.i("idf")
     a.i("wdf")
     a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
