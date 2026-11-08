@@ -6,7 +6,9 @@
 #
 # Fetches the release in mesa/VERSION (checked against its sha256), unpacks
 # it under $SGX_MESA_BUILD (default build/mesa in the repo), applies
-# mesa/patches, copies the mesa/src overlay over the tree, and builds with
+# mesa/patches (the series for upstream, then mesa/patches/pvrsrvkm: the DDK
+# services driver's pieces, not for upstream), copies the mesa/src overlay over
+# the tree, and builds with
 # zig cc for each target:
 #   x86_64  glibc 2.36 ABI: newer glibc userspaces (2.42) run it;
 #   i386    glibc 2.36: the Debian bookworm i386 root the Minecraft runtime uses.
@@ -39,11 +41,11 @@ echo "$MESA_SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || {
 	echo "build.sh: $TARBALL does not match mesa/VERSION's sha256" >&2; exit 1; }
 
 # the tree is unpacked and patched again whenever mesa/patches changes
-PATCHSUM=$(cat "$HERE"/patches/*.patch | shasum -a 256 | cut -d' ' -f1)
+PATCHSUM=$(cat "$HERE"/patches/*.patch "$HERE"/patches/pvrsrvkm/*.patch | shasum -a 256 | cut -d' ' -f1)
 if [ "$(cat "$TREE/.sgx-patched" 2>/dev/null)" != "$PATCHSUM" ]; then
 	rm -rf "$TREE"
 	tar -xJf "$TARBALL" -C "$B"
-	for p in "$HERE"/patches/*.patch; do
+	for p in "$HERE"/patches/*.patch "$HERE"/patches/pvrsrvkm/*.patch; do
 		patch -d "$TREE" -p1 --batch --forward < "$p"
 	done
 	echo "$PATCHSUM" > "$TREE/.sgx-patched"

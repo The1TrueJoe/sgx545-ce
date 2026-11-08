@@ -1,0 +1,25 @@
+loader: sgx under the DDK's services driver too (not for upstream)
+
+The sgx predicate also accepts pvrsrvkm, the DDK's services kernel
+driver, which the winsys's optional pvrsrvkm backend talks to.
+
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index c63cb69..01a03b3 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -147,12 +147,13 @@ iris_predicate(int fd, const char *driver)
+ }
+ 
+ /* the PowerVR SGX545 of Intel's CE5300/CE5310 and Cedarview SoCs, under its
+- * DRM driver */
++ * DRM driver or the DDK's services driver */
+ bool
+ sgx_predicate(int fd, const char *driver)
+ {
+    char *kernel_driver = loader_get_kernel_driver_name(fd);
+-   bool ret = kernel_driver && strcmp(kernel_driver, "powervr_sgx") == 0;
++   bool ret = kernel_driver && (strcmp(kernel_driver, "powervr_sgx") == 0 ||
++                                strcmp(kernel_driver, "pvrsrvkm") == 0);
+ 
+    free(kernel_driver);
+    return ret;

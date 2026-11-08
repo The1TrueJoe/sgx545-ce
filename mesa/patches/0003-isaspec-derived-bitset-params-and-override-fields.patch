@@ -15,26 +15,11 @@ Two changes the SGX545 ISA description (src/sgx/isa/sgx.xml) needs:
   field's encoding. The definition in the case being encoded wins: stop
   looking once it is found.
 
---- a/src/compiler/isaspec/isa.py
-+++ b/src/compiler/isaspec/isa.py
-@@ -178,6 +178,14 @@
-         if 'display' in xml.attrib:
-             self.display = xml.attrib['display'].strip()
-         self.call = 'call' in xml.attrib and xml.attrib['call'] == 'true'
-+        # A derived field may have a bitset type (e.g. an operand whose bits
-+        # are scattered across the instruction), and pass it parameters:
-+        self.params = []
-+        for param in xml.findall('param'):
-+            aas = name = param.attrib['name']
-+            if 'as' in param.attrib:
-+                aas = param.attrib['as']
-+            self.params.append([name, aas])
- 
- class BitSetCase(object):
-     """Class that encapsulates a single bitset case
+diff --git a/src/compiler/isaspec/encode.py b/src/compiler/isaspec/encode.py
+index da94d59..8d382c9 100755
 --- a/src/compiler/isaspec/encode.py
-+++ b/src/compiler/isaspec/encode.py	2026-11-02 18:41:06
-@@ -122,6 +122,10 @@
++++ b/src/compiler/isaspec/encode.py
+@@ -122,6 +122,10 @@ class DisplayField(object):
                  # the named field, we are done
                  if case.expr is None:
                      return
@@ -45,7 +30,7 @@ Two changes the SGX545 ISA description (src/sgx/isa/sgx.xml) needs:
          if bitset.extends is not None:
              yield from self.fields(bitset.isa.bitsets[bitset.extends])
  
-@@ -212,6 +216,19 @@
+@@ -212,6 +216,19 @@ class State(object):
                                      if target_name not in unique_names:
                                          yield target_name
                                          unique_names.append(target_name)
@@ -65,3 +50,22 @@ Two changes the SGX545 ISA description (src/sgx/isa/sgx.xml) needs:
  
      def case_name(self, bitset, name):
         return bitset.encode.case_prefix + name.upper().replace('.', '_').replace('-', '_').replace('#', '')
+diff --git a/src/compiler/isaspec/isa.py b/src/compiler/isaspec/isa.py
+index e5ba462..6d898c2 100644
+--- a/src/compiler/isaspec/isa.py
++++ b/src/compiler/isaspec/isa.py
+@@ -178,6 +178,14 @@ class BitSetDerivedField(BitSetField):
+         if 'display' in xml.attrib:
+             self.display = xml.attrib['display'].strip()
+         self.call = 'call' in xml.attrib and xml.attrib['call'] == 'true'
++        # A derived field may have a bitset type (e.g. an operand whose bits
++        # are scattered across the instruction), and pass it parameters:
++        self.params = []
++        for param in xml.findall('param'):
++            aas = name = param.attrib['name']
++            if 'as' in param.attrib:
++                aas = param.attrib['as']
++            self.params.append([name, aas])
+ 
+ class BitSetCase(object):
+     """Class that encapsulates a single bitset case
