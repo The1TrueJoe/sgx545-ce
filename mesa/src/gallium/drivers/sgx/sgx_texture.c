@@ -79,7 +79,8 @@ chain_offset(const struct pipe_resource *prsc, unsigned level)
    size_t off = 0;
 
    for (unsigned l = 0; l < level; l++)
-      off += level_bytes(u_minify(prsc->width0, l), u_minify(prsc->height0, l), bpp);
+      off += level_bytes(u_minify(prsc->width0, l), u_minify(prsc->height0, l),
+                         bpp);
    return off;
 }
 
@@ -96,7 +97,10 @@ face_stride_levels(const struct pipe_resource *prsc, unsigned levels)
 
    if (prsc->width0 < TILE)
       return chain;
-   return align64(chain, levels > 1 ? 0x800 : TILE * TILE * util_format_get_blocksize(prsc->format));
+   return align64(chain,
+                  levels > 1
+                     ? 0x800
+                     : TILE * TILE * util_format_get_blocksize(prsc->format));
 }
 
 static size_t
@@ -120,7 +124,8 @@ sgx_tex_offset(const struct pipe_resource *prsc, unsigned level, unsigned layer)
 size_t
 sgx_tex_size(const struct pipe_resource *prsc)
 {
-   return prsc->array_size > 1 ? prsc->array_size * face_stride(prsc) : chain_offset(prsc, prsc->last_level + 1);
+   return prsc->array_size > 1 ? prsc->array_size * face_stride(prsc)
+                               : chain_offset(prsc, prsc->last_level + 1);
 }
 
 /* Copy the box x0..x1, y0..y1 of a level from the CPU copy into the texture
@@ -128,14 +133,16 @@ sgx_tex_size(const struct pipe_resource *prsc)
  * put together on the stack and written in one go, only partly covered tiles
  * at the box's edges are written texel by texel. */
 static void
-encode_box(struct sgx_resource *res, unsigned level, unsigned layer, uint8_t *dst, unsigned x0,
-           unsigned y0, unsigned x1, unsigned y1)
+encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
+           uint8_t *dst, unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
    struct pipe_resource *prsc = &res->base;
-   unsigned w = u_minify(prsc->width0, level), h = u_minify(prsc->height0, level);
+   unsigned w = u_minify(prsc->width0, level),
+            h = u_minify(prsc->height0, level);
    unsigned bpp = util_format_get_blocksize(prsc->format);
    unsigned src_stride = util_format_get_stride(prsc->format, w);
-   const uint8_t *src = (const uint8_t *)res->data + res->level_offset[level] + (size_t)layer * src_stride * h;
+   const uint8_t *src = (const uint8_t *)res->data + res->level_offset[level] +
+                        (size_t)layer * src_stride * h;
    bool rgbx = prsc->format == PIPE_FORMAT_R8G8B8X8_UNORM;
 
    x1 = MIN2(x1, w);
@@ -146,7 +153,8 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer, uint8_t *ds
       size_t pitch = (size_t)align(w, 8) * bpp;
 
       for (unsigned y = y0; y < y1; y++) {
-         memcpy(dst + y * pitch + (size_t)x0 * bpp, src + y * src_stride + (size_t)x0 * bpp,
+         memcpy(dst + y * pitch + (size_t)x0 * bpp,
+                src + y * src_stride + (size_t)x0 * bpp,
                 (size_t)(x1 - x0) * bpp);
          if (rgbx)
             for (unsigned x = x0; x < x1; x++)
@@ -155,8 +163,10 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer, uint8_t *ds
       return;
    }
 
-   /* a tile is t x t texels, Morton order inside (y in bit 0), tiles row by row */
-   unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)), t = 1u << n;
+   /* a tile is t x t texels, Morton order inside (y in bit 0), tiles row by row
+    */
+   unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)),
+            t = 1u << n;
    uint32_t spread[TILE];
    uint8_t tile[TILE * TILE * 4];
 
@@ -170,14 +180,16 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer, uint8_t *ds
          unsigned bx = tx << n, by = ty << n;
          uint8_t *d = dst + ((size_t)ty * (w >> n) + tx) * t * t * bpp;
          bool whole = bx >= x0 && by >= y0 && bx + t <= x1 && by + t <= y1;
-         unsigned xa = MAX2(bx, x0), xb = MIN2(bx + t, x1), ya = MAX2(by, y0), yb = MIN2(by + t, y1);
+         unsigned xa = MAX2(bx, x0), xb = MIN2(bx + t, x1), ya = MAX2(by, y0),
+                  yb = MIN2(by + t, y1);
          uint8_t *out = whole ? tile : d;
 
          for (unsigned y = ya; y < yb; y++) {
             const uint8_t *s = src + y * src_stride;
 
             for (unsigned x = xa; x < xb; x++) {
-               uint8_t *o = out + (size_t)(spread[y - by] | spread[x - bx] << 1) * bpp;
+               uint8_t *o =
+                  out + (size_t)(spread[y - by] | spread[x - bx] << 1) * bpp;
 
                memcpy(o, s + (size_t)x * bpp, bpp);
                if (rgbx)
@@ -191,11 +203,12 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer, uint8_t *ds
 }
 
 void
-sgx_tex_encode_box(struct sgx_resource *res, unsigned level, unsigned layer, unsigned x0,
-                      unsigned y0, unsigned x1, unsigned y1)
+sgx_tex_encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
+                   unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
-   encode_box(res, level, layer, (uint8_t *)res->bo.map + sgx_tex_offset(&res->base, level, layer), x0, y0,
-              x1, y1);
+   encode_box(res, level, layer,
+              (uint8_t *)res->bo.map + sgx_tex_offset(&res->base, level, layer),
+              x0, y0, x1, y1);
 }
 
 void
@@ -204,11 +217,13 @@ sgx_tex_encode_cube0(struct sgx_resource *res)
    size_t stride = face_stride_levels(&res->base, 1);
 
    for (unsigned layer = 0; layer < res->base.array_size; layer++)
-      encode_box(res, 0, layer, (uint8_t *)res->cube0.map + layer * stride, 0, 0, ~0u, ~0u);
+      encode_box(res, 0, layer, (uint8_t *)res->cube0.map + layer * stride, 0,
+                 0, ~0u, ~0u);
 }
 
 bool
-sgx_tex_uses_cube0(const struct pipe_sampler_view *view, const struct pipe_sampler_state *sampler)
+sgx_tex_uses_cube0(const struct pipe_sampler_view *view,
+                   const struct pipe_sampler_state *sampler)
 {
    const struct pipe_resource *prsc = view->texture;
 
@@ -228,15 +243,18 @@ sgx_tex_encode_level(struct sgx_resource *res, unsigned level)
  * across the bus: only for a transfer of a texture rendered into, and only
  * what it covers) */
 void
-sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer, unsigned x0,
-                      unsigned y0, unsigned x1, unsigned y1)
+sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer,
+                   unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
    struct pipe_resource *prsc = &res->base;
-   unsigned w = u_minify(prsc->width0, level), h = u_minify(prsc->height0, level);
+   unsigned w = u_minify(prsc->width0, level),
+            h = u_minify(prsc->height0, level);
    unsigned bpp = util_format_get_blocksize(prsc->format);
    unsigned stride = util_format_get_stride(prsc->format, w);
-   uint8_t *dst = (uint8_t *)res->data + res->level_offset[level] + (size_t)layer * stride * h;
-   const uint8_t *src = (const uint8_t *)res->bo.map + sgx_tex_offset(prsc, level, layer);
+   uint8_t *dst = (uint8_t *)res->data + res->level_offset[level] +
+                  (size_t)layer * stride * h;
+   const uint8_t *src =
+      (const uint8_t *)res->bo.map + sgx_tex_offset(prsc, level, layer);
 
    x1 = MIN2(x1, w);
    y1 = MIN2(y1, h);
@@ -246,13 +264,14 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer, uns
       size_t pitch = (size_t)align(w, 8) * bpp;
 
       for (unsigned y = y0; y < y1; y++)
-         memcpy(dst + y * stride + (size_t)x0 * bpp, src + y * pitch + (size_t)x0 * bpp,
-                (size_t)(x1 - x0) * bpp);
+         memcpy(dst + y * stride + (size_t)x0 * bpp,
+                src + y * pitch + (size_t)x0 * bpp, (size_t)(x1 - x0) * bpp);
       return;
    }
    /* a row of tiles in one sequential copy, then reordered in cached memory
     * (a texel at a time from the heap is a bus read each) */
-   unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)), t = 1u << n;
+   unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)),
+            t = 1u << n;
    unsigned tx0 = x0 >> n, tx1 = (x1 - 1) >> n;
    size_t tile_bytes = (size_t)t * t * bpp, span = (tx1 - tx0 + 1) * tile_bytes;
    uint32_t spread[TILE];
@@ -272,7 +291,9 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer, uns
       }
       for (unsigned y = MAX2(ty << n, y0); y < MIN2((ty + 1) << n, y1); y++) {
          for (unsigned x = x0; x < x1; x++) {
-            size_t at = ((x >> n) - tx0) * tile_bytes + (size_t)(spread[y & (t - 1)] | spread[x & (t - 1)] << 1) * bpp;
+            size_t at =
+               ((x >> n) - tx0) * tile_bytes +
+               (size_t)(spread[y & (t - 1)] | spread[x & (t - 1)] << 1) * bpp;
 
             memcpy(dst + y * stride + (size_t)x * bpp, s + at, bpp);
          }
@@ -304,8 +325,8 @@ wrap(enum pipe_tex_wrap w)
 }
 
 void
-sgx_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler_state *sampler,
-                 uint32_t t[4])
+sgx_tex_words(const struct pipe_sampler_view *view,
+              const struct pipe_sampler_state *sampler, uint32_t t[4])
 {
    const struct pipe_resource *prsc = view->texture;
    const struct sgx_resource *res = (const struct sgx_resource *)prsc;
@@ -313,40 +334,49 @@ sgx_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler_st
    /* A view from a later base level (GL_TEXTURE_BASE_LEVEL) of a 2D texture
     * starts at that level: the levels after it follow it as they follow
     * level 0 (TEX.md "Mipmaps"), so it reads as a texture of that size */
-   unsigned base = prsc->target != PIPE_TEXTURE_CUBE && res->texture ? view->u.tex.first_level : 0;
+   unsigned base = prsc->target != PIPE_TEXTURE_CUBE && res->texture
+                      ? view->u.tex.first_level
+                      : 0;
    unsigned w = u_minify(prsc->width0, base), h = u_minify(prsc->height0, base);
    /* a linear (NPOT) texture's levels aren't a chain the sampler knows (the
     * DDK's GLES2 has no NPOT mipmaps), and sampling one with mipmapping
     * locks the 3D (piglit fbo-generatemipmap-formats NPOT): its base level */
-   bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE && view->u.tex.last_level > base &&
+   bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE &&
+               view->u.tex.last_level > base &&
                (prsc->target == PIPE_TEXTURE_CUBE || twiddled(w, h));
 
-   sgx_pack(&t[0], TEXSTATE_WORD0, t0) {
+   sgx_pack(&t[0], TEXSTATE_WORD0, t0)
+   {
       t0.no_mipmaps = !mips;
-      t0.unknown_30 = fmt == SGX_TEXSTATE_FORMAT_A8 || fmt == SGX_TEXSTATE_FORMAT_L8 ||
+      t0.unknown_30 = fmt == SGX_TEXSTATE_FORMAT_A8 ||
+                      fmt == SGX_TEXSTATE_FORMAT_L8 ||
                       fmt == SGX_TEXSTATE_FORMAT_LA88;
       if (sampler) {
          t0.wrap_t = wrap(sampler->wrap_t);
          t0.wrap_s = wrap(sampler->wrap_s);
-         t0.mip_linear = mips && sampler->min_mip_filter == PIPE_TEX_MIPFILTER_LINEAR;
+         t0.mip_linear =
+            mips && sampler->min_mip_filter == PIPE_TEX_MIPFILTER_LINEAR;
          t0.min_linear = sampler->min_img_filter == PIPE_TEX_FILTER_LINEAR;
          t0.mag_linear = sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR;
       }
    }
    /* T1: a cube map's layout from a DDK capture */
-   sgx_pack(&t[1], TEXSTATE_WORD1, t1) {
+   sgx_pack(&t[1], TEXSTATE_WORD1, t1)
+   {
       t1.layout = prsc->target == PIPE_TEXTURE_CUBE ? SGX_TEXSTATE_LAYOUT_CUBE
-                  : twiddled(w, h)                  ? SGX_TEXSTATE_LAYOUT_TWIDDLED
-                                                    : SGX_TEXSTATE_LAYOUT_LINEAR;
+                  : twiddled(w, h) ? SGX_TEXSTATE_LAYOUT_TWIDDLED
+                                   : SGX_TEXSTATE_LAYOUT_LINEAR;
       t1.format = fmt;
       t1.width = w - 1;
       t1.height = h - 1;
    }
    /* (the draw brought the level-0 copy up to date: sgx_resource_cube0) */
-   sgx_pack(&t[2], TEXSTATE_WORD2, t2) {
-      t2.address = SGX_DEV_ADDR(sgx_tex_uses_cube0(view, sampler) && res->cube0.va
-                                      ? res->cube0.va
-                                      : res->bo.va + chain_offset(prsc, base));
+   sgx_pack(&t[2], TEXSTATE_WORD2, t2)
+   {
+      t2.address =
+         SGX_DEV_ADDR(sgx_tex_uses_cube0(view, sampler) && res->cube0.va
+                         ? res->cube0.va
+                         : res->bo.va + chain_offset(prsc, base));
    }
    if (!res->texture) {
       /* A render target, read where it is: strided (T1 layout 6), the pitch
@@ -355,9 +385,11 @@ sgx_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler_st
        * 3).  B, G, R, A in memory is 0x0d, the format that swaps R and B
        * against 0x0c. */
       unsigned p = res->pitch - 1;
-      bool bgra = prsc->format == PIPE_FORMAT_B8G8R8A8_UNORM || prsc->format == PIPE_FORMAT_B8G8R8X8_UNORM;
+      bool bgra = prsc->format == PIPE_FORMAT_B8G8R8A8_UNORM ||
+                  prsc->format == PIPE_FORMAT_B8G8R8X8_UNORM;
 
-      sgx_pack(&t[0], TEXSTATE_STRIDED_WORD0, t0) {
+      sgx_pack(&t[0], TEXSTATE_STRIDED_WORD0, t0)
+      {
          t0.pitch_lo = p & 7;
          t0.pitch_hi = p >> 3;
          if (sampler) {
@@ -366,7 +398,8 @@ sgx_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler_st
             t0.mag_linear = sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR;
          }
       }
-      sgx_pack(&t[1], TEXSTATE_WORD1, t1) {
+      sgx_pack(&t[1], TEXSTATE_WORD1, t1)
+      {
          t1.layout = SGX_TEXSTATE_LAYOUT_STRIDED;
          t1.format = bgra ? 0x0d : 0x0c;
          t1.width = prsc->width0 - 1;
@@ -374,6 +407,5 @@ sgx_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler_st
       }
    }
    /* T3: the sample instruction's half; 00800800 for a single 2-D sample [D] */
-   sgx_pack(&t[3], TEXSTATE_WORD3, t3)
-      t3.unknown_11 = true;
+   sgx_pack(&t[3], TEXSTATE_WORD3, t3) t3.unknown_11 = true;
 }

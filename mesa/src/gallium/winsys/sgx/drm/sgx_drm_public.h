@@ -11,7 +11,8 @@ struct pipe_screen_config;
 struct renderonly;
 
 /* the GPU's render node paired with a KMS-only display device (kmsro) */
-struct pipe_screen *sgx_drm_screen_create_renderonly(int fd, struct renderonly *ro,
-                                                        const struct pipe_screen_config *config);
+struct pipe_screen *
+sgx_drm_screen_create_renderonly(int fd, struct renderonly *ro,
+                                 const struct pipe_screen_config *config);
 
 #endif

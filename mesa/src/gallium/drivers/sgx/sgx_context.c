@@ -28,23 +28,25 @@ struct sgx_fence {
 
 static void
 sgx_fence_reference(struct pipe_screen *pscreen, struct pipe_fence_handle **ptr,
-                       struct pipe_fence_handle *fence)
+                    struct pipe_fence_handle *fence)
 {
-   if (pipe_reference((struct pipe_reference *)*ptr, (struct pipe_reference *)fence))
+   if (pipe_reference((struct pipe_reference *)*ptr,
+                      (struct pipe_reference *)fence))
       FREE(*ptr);
    *ptr = fence;
 }
 
 static bool
 sgx_fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
-                    struct pipe_fence_handle *fence, uint64_t timeout)
+                 struct pipe_fence_handle *fence, uint64_t timeout)
 {
    struct sgx_screen *screen = sgx_screen(pscreen);
    bool done;
 
    simple_mtx_lock(&screen->lock);
    done = !screen->hw ||
-          !sgxws_wait_seq(screen->hw, ((struct sgx_fence *)fence)->seq, timeout ? 2000 : 0);
+          !sgxws_wait_seq(screen->hw, ((struct sgx_fence *)fence)->seq,
+                          timeout ? 2000 : 0);
    simple_mtx_unlock(&screen->lock);
    return done;
 }
@@ -52,7 +54,8 @@ sgx_fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
 struct sgx_resource *
 sgx_recording(struct sgx_context *ctx)
 {
-   if (ctx->recording && (!ctx->hw || sgxws_target_bo(ctx->hw) != &ctx->recording->bo))
+   if (ctx->recording &&
+       (!ctx->hw || sgxws_target_bo(ctx->hw) != &ctx->recording->bo))
       ctx->recording = NULL;
    return ctx->recording;
 }
@@ -69,7 +72,8 @@ sgx_flush_frame(struct sgx_context *ctx)
       return;
    t = ctx->stats.on ? os_time_get_nano() : 0;
    simple_mtx_lock(&screen->lock);
-   /* SGX_DEBUG=serial: wait for every frame's render (as before frames overlapped) */
+   /* SGX_DEBUG=serial: wait for every frame's render (as before frames
+    * overlapped) */
    e = sgxws_flush(ctx->hw, (sgx_drv_debug & SGX_DEBUG_SERIAL) ? 2000 : 0);
    simple_mtx_unlock(&screen->lock);
    if (ctx->stats.on) {
@@ -104,7 +108,7 @@ sgx_stats_report(struct sgx_context *ctx)
 {
    uint64_t now = os_time_get_nano(), dt = now - ctx->stats.t0, cpu;
    double ms = 1e-6;
-   struct sgxws_stats ws = { 0 };
+   struct sgxws_stats ws = {0};
    struct timespec ts;
 
    if (dt < 2000000000ull)
@@ -114,29 +118,46 @@ sgx_stats_report(struct sgx_context *ctx)
    cpu = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
    if (ctx->hw)
       sgxws_get_stats(ctx->hw, &ws, true);
-   fprintf(stderr, "sgx stats: thread CPU %.0f ms of %.0f; flush %.0f: TA command %.0f, kick %.0f, target wait %.0f, "
-           "slot wait %.0f, sync wait %.0f ms\n",
-           (cpu - ctx->stats.cpu0) * ms, dt * ms, ws.ns_flush * ms, ws.ns_cmd * ms, ws.ns_kick * ms,
-           ws.ns_target_wait * ms, ws.ns_slot_wait * ms, ws.ns_sync_wait * ms);
-   fprintf(stderr, "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
-           "readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
-           ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch, ctx->stats.fl_read,
-           ctx->stats.fl_deferred, ctx->stats.zc_draws, ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
-           (unsigned)(ctx->vcache_bytes >> 10), ws.ns_fence_wait * ms,
-           ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
-           ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout : 0, ws.n_latency_scanout);
-   fprintf(stderr, "sgx stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms); textures read back %.0f ms (%llu KB)\n",
-           ctx->stats.blit_gpu, ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
-           ctx->stats.blit_cpu_ns * ms, ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
-   fprintf(stderr, "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame)\n",
-           (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
-           ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
-           ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0);
-   fprintf(stderr, "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
-           "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
-           dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ws.room_flushes,
-           ctx->stats.draws, ctx->stats.verts, ctx->stats.tex_writes,
-           ctx->stats.draw_ns * ms, ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms, ctx->stats.compile_ns * ms);
+   fprintf(
+      stderr,
+      "sgx stats: thread CPU %.0f ms of %.0f; flush %.0f: TA command %.0f, kick %.0f, target wait %.0f, "
+      "slot wait %.0f, sync wait %.0f ms\n",
+      (cpu - ctx->stats.cpu0) * ms, dt * ms, ws.ns_flush * ms, ws.ns_cmd * ms,
+      ws.ns_kick * ms, ws.ns_target_wait * ms, ws.ns_slot_wait * ms,
+      ws.ns_sync_wait * ms);
+   fprintf(
+      stderr,
+      "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
+      "readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
+      ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch,
+      ctx->stats.fl_read, ctx->stats.fl_deferred, ctx->stats.zc_draws,
+      ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
+      (unsigned)(ctx->vcache_bytes >> 10), ws.ns_fence_wait * ms,
+      ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
+      ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout
+                           : 0,
+      ws.n_latency_scanout);
+   fprintf(
+      stderr,
+      "sgx stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms); textures read back %.0f ms (%llu KB)\n",
+      ctx->stats.blit_gpu, ctx->stats.blit_copy, ctx->stats.blit_cpu,
+      (unsigned long long)ctx->stats.blit_cpu_px, ctx->stats.blit_cpu_ns * ms,
+      ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
+   fprintf(
+      stderr,
+      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame)\n",
+      (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
+      ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
+      ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0);
+   fprintf(
+      stderr,
+      "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
+      "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
+      dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes,
+      ctx->stats.tex_flushes, ws.room_flushes, ctx->stats.draws,
+      ctx->stats.verts, ctx->stats.tex_writes, ctx->stats.draw_ns * ms,
+      ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms,
+      ctx->stats.compile_ns * ms);
    memset(&ctx->stats, 0, sizeof(ctx->stats));
    ctx->stats.on = true;
    ctx->stats.t0 = now;
@@ -151,7 +172,8 @@ sgx_flush_resource_writes(struct sgx_context *ctx, struct sgx_resource *res)
 }
 
 static void
-sgx_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsigned flags)
+sgx_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
+          unsigned flags)
 {
    struct sgx_context *ctx = sgx_context(pctx);
 
@@ -165,8 +187,9 @@ sgx_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsigned 
     * scanout buffer (the swap's copy) or a shared one (a dma-buf another
     * process or device reads: Xorg's glamor flushes its screen pixmap so)
     * go now. */
-   if (sgx_recording(ctx) && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) && !ctx->recording->wrapped &&
-       !ctx->recording->shared && !(sgx_drv_debug & SGX_DEBUG_FLUSH_ALL)) {
+   if (sgx_recording(ctx) && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) &&
+       !ctx->recording->wrapped && !ctx->recording->shared &&
+       !(sgx_drv_debug & SGX_DEBUG_FLUSH_ALL)) {
       ctx->stats.fl_deferred++;
       return;
    }
@@ -217,7 +240,8 @@ sgx_context_destroy(struct pipe_context *pctx)
    simple_mtx_lock(&screen->lock);
    if (ctx->hw) {
       for (unsigned i = 0; i < ctx->num_rts; i++)
-         sgxws_rt_destroy(ctx->hw, ctx->rts[i]);   /* flushes this context's frame */
+         sgxws_rt_destroy(ctx->hw,
+                          ctx->rts[i]); /* flushes this context's frame */
    }
    simple_mtx_unlock(&screen->lock);
 

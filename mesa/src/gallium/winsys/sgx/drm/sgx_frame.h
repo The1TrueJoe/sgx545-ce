@@ -55,7 +55,7 @@ enum sgx_heap {
    SGX_HEAP_PDSVERTEX = 7,
    SGX_HEAP_SYNC = 8,
    SGX_HEAP_3DPARAMS = 10,
-   SGX_HEAP_TEXTURE = 14,     /* 0xf0000000 */
+   SGX_HEAP_TEXTURE = 14, /* 0xf0000000 */
 };
 
 #ifdef __cplusplus
@@ -67,10 +67,11 @@ struct sgxws_kif;
 /* the connection to the kernel driver; a backend's device embeds it first */
 struct sgxws_dev {
    const struct sgxws_kif *kif;
-   uint32_t heap_base[16];          /* device address of each heap, by heap id */
-   uint8_t usse_base_index[2];      /* the first code base register of the pixel, vertex USSE heap */
+   uint32_t heap_base[16];     /* device address of each heap, by heap id */
+   uint8_t usse_base_index[2]; /* the first code base register of the pixel,
+                                  vertex USSE heap */
    int verbose;
-   bool flush_rt;                   /* sgxws_dev_options */
+   bool flush_rt; /* sgxws_dev_options */
    unsigned frame_gap_us;
    unsigned slots;
    int dry_run;
@@ -94,7 +95,7 @@ struct sgxws_ring {
    uint32_t used, mark;
    uint32_t part, hi, parts;
    uint32_t uploaded;
-   uint32_t last_seq;               /* the last kick that runs code from it (code pools) */
+   uint32_t last_seq; /* the last kick that runs code from it (code pools) */
 };
 
 struct sgxws_rt_numbers {
@@ -106,10 +107,10 @@ struct sgxws_rt_numbers {
 struct sgxws_rt {
    uint32_t w, h;
    struct sgxws_rt_numbers n;
-   uint32_t frames;                 /* frames rendered into it */
-   uint32_t seq;                    /* its last render's kick number */
-   unsigned seq_slot;               /* and the ring slot that render used */
-   void *k;                         /* the backend's */
+   uint32_t frames;   /* frames rendered into it */
+   uint32_t seq;      /* its last render's kick number */
+   unsigned seq_slot; /* and the ring slot that render used */
+   void *k;           /* the backend's */
 };
 
 /* end-of-tile programs, by target (they hold its PBE words) */
@@ -123,7 +124,7 @@ struct sgxws_eot {
 
 struct sgxws_ctx {
    struct sgxws_dev *dev;
-   void *k;                         /* the backend's */
+   void *k; /* the backend's */
    /* code (persistent) and per-frame rings */
    struct sgxws_ring usse_pix, usse_vtx;
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
@@ -133,28 +134,34 @@ struct sgxws_ctx {
    unsigned eot_cur, n_eot;
    struct sgxws_eot eot[SGXWS_EOT_CACHE];
    /* fixed programs */
-   uint32_t empty_v, empty_p, copy_fs, clear_vs, vpgen_vs, pe_ptoff, pe_emit, state_emit[33];
-   uint32_t sec_wait;                /* pixel secondary task: wait for the constants' DMA */
-   uint32_t empty_state, terminate;  /* VDM state programs (PDS vertex heap) */
-   uint32_t pds_empty_p;             /* pixel PDS program: run the empty task */
-   uint32_t clear_pds;               /* pixel PDS program: iterate colour, copy_fs */
-   uint32_t clear_pds_masked[16];    /* the same with a colour mask (by byte mask) */
-   uint32_t idx;                     /* identity 16-bit index buffer */
-   uint32_t defaults;                /* what a fetch leaves out (vdm_fetch) */
+   uint32_t empty_v, empty_p, copy_fs, clear_vs, vpgen_vs, pe_ptoff, pe_emit,
+      state_emit[33];
+   uint32_t sec_wait; /* pixel secondary task: wait for the constants' DMA */
+   uint32_t empty_state, terminate; /* VDM state programs (PDS vertex heap) */
+   uint32_t pds_empty_p;            /* pixel PDS program: run the empty task */
+   uint32_t clear_pds; /* pixel PDS program: iterate colour, copy_fs */
+   uint32_t
+      clear_pds_masked[16]; /* the same with a colour mask (by byte mask) */
+   uint32_t idx;            /* identity 16-bit index buffer */
+   uint32_t defaults;       /* what a fetch leaves out (vdm_fetch) */
    uint32_t idx_count;
-   uint32_t vdm_counter;             /* the DDK's rotating TA-state buffer index */
+   uint32_t vdm_counter; /* the DDK's rotating TA-state buffer index */
    /* the frame being recorded */
    struct sgxws_rt *rt;
    struct sgxws_target target;
    uint32_t vdm_start;
    uint32_t bg_pds[3];
-   uint32_t pixev, pixev_rows;       /* its pixel event program */
-   unsigned draws;                   /* objects recorded in this frame */
-   struct sgxws_rect clip;           /* what the visible bits and the region clip are now */
+   uint32_t pixev, pixev_rows; /* its pixel event program */
+   unsigned draws;             /* objects recorded in this frame */
+   struct sgxws_rect
+      clip; /* what the visible bits and the region clip are now */
    /* shared buffers it reads or writes (sgxws_use_bo) */
    unsigned n_use;
-   struct { const struct sgxws_bo *bo; bool write; } use[32];
-   unsigned room_flushes;            /* frames submitted early because a ring filled */
+   struct {
+      const struct sgxws_bo *bo;
+      bool write;
+   } use[32];
+   unsigned room_flushes; /* frames submitted early because a ring filled */
    /* frames in flight: the ring slot recording now, and the kick that last
     * used each slot */
    unsigned slot, slots;
@@ -163,14 +170,19 @@ struct sgxws_ctx {
       uint64_t kicked_ns;
       bool scanout;
    } slot_kick[SGXWS_MAX_SLOTS];
-   uint32_t kicks, done_seq;         /* kicks submitted, the last one known done */
-   uint64_t ns_kick, ns_target_wait, ns_slot_wait;   /* where sgxws_flush's time goes (stats) */
-   uint64_t ns_fence_wait;           /* fences waited for (sgxws_wait_seq) */
-   uint64_t ns_flush, ns_cmd, ns_sync_wait;   /* all of sgxws_flush; the command; a synchronous flush's wait */
-   uint64_t ns_latency; unsigned n_latency;   /* kick to seen done, renders that were waited for */
-   uint64_t ns_latency_scanout; unsigned n_latency_scanout;   /* of those, the ones into the scanout buffer */
+   uint32_t kicks, done_seq; /* kicks submitted, the last one known done */
+   uint64_t ns_kick, ns_target_wait,
+      ns_slot_wait;        /* where sgxws_flush's time goes (stats) */
+   uint64_t ns_fence_wait; /* fences waited for (sgxws_wait_seq) */
+   uint64_t ns_flush, ns_cmd, ns_sync_wait; /* all of sgxws_flush; the command;
+                                               a synchronous flush's wait */
+   uint64_t ns_latency;
+   unsigned n_latency; /* kick to seen done, renders that were waited for */
+   uint64_t ns_latency_scanout;
+   unsigned n_latency_scanout; /* of those, the ones into the scanout buffer */
    unsigned frames;
-   uint64_t gpu_indices, gpu_verts;  /* stats: the VDM's indices and the vertices behind them */
+   uint64_t gpu_indices,
+      gpu_verts; /* stats: the VDM's indices and the vertices behind them */
 };
 
 /*
@@ -186,11 +198,13 @@ struct sgxws_kif {
    void (*dev_destroy)(struct sgxws_dev *d);
 
    /* a buffer in a heap; in a USSE heap, a code buffer whose map may be a copy */
-   int (*bo_alloc)(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap, uint32_t attribs,
-                   uint32_t size, uint32_t align);
+   int (*bo_alloc)(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
+                   uint32_t attribs, uint32_t size, uint32_t align);
    void (*bo_free)(struct sgxws_dev *d, struct sgxws_bo *bo);
-   int (*bo_wrap)(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu, uint32_t size);
-   int (*bo_import)(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size);
+   int (*bo_wrap)(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu,
+                  uint32_t size);
+   int (*bo_import)(struct sgxws_dev *d, struct sgxws_bo *bo, int fd,
+                    uint32_t size);
    int (*bo_export)(struct sgxws_dev *d, const struct sgxws_bo *bo, int *fd);
    int (*bo_kms_handle)(const struct sgxws_bo *bo, uint32_t *handle);
    void (*bo_prepare_target)(struct sgxws_dev *d, struct sgxws_bo *bo);
@@ -198,7 +212,8 @@ struct sgxws_kif {
    /* code: bytes [off, off + size) of the copy to the GPU (NULL: the map is
     * the buffer); the buffer emptied, at the same address, while no render
     * runs code from it */
-   int (*code_upload)(struct sgxws_dev *d, struct sgxws_bo *bo, uint32_t off, uint32_t size);
+   int (*code_upload)(struct sgxws_dev *d, struct sgxws_bo *bo, uint32_t off,
+                      uint32_t size);
    int (*code_reset)(struct sgxws_dev *d, struct sgxws_bo *bo);
 
    int (*ctx_init)(struct sgxws_ctx *c);
@@ -216,19 +231,23 @@ struct sgxws_kif {
 };
 
 /* the backends: 0 and *d, or -ENODEV when fd isn't their kernel driver */
-int sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts, struct sgxws_dev **d);
-int sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts, struct sgxws_dev **d);
+int sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
+                                 struct sgxws_dev **d);
+int sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
+                         struct sgxws_dev **d);
 
-/* a buffer in a given heap with given attributes (sgxws_bo_alloc picks them by use) */
-int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
-                        uint32_t attribs, uint32_t size, uint32_t align);
+/* a buffer in a given heap with given attributes (sgxws_bo_alloc picks them by
+ * use) */
+int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo,
+                        enum sgx_heap heap, uint32_t attribs, uint32_t size,
+                        uint32_t align);
 /* the attributes the DDK gives a colour buffer it renders to */
 #define SGXWS_ATTRIBS_COLOR 0x10000003
 
 /* Upload a USSE program to the code heaps (phas.i targets in reloc[] are
  * relocated to where it lands).  Returns its device address. */
-uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w, unsigned n,
-                           const uint8_t *reloc, unsigned nreloc);
+uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
+                           unsigned n, const uint8_t *reloc, unsigned nreloc);
 
 /* the words every VDM stream ends with */
 void sgxws_vdm_end(struct sgxws_ctx *c);

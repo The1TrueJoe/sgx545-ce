@@ -23,31 +23,38 @@ struct sgx_resource {
     */
    void *data;
    struct sgxws_bo bo;
-   bool wrapped;                /* resource_from_user_memory: an fbdev mapping */
-   bool shared;                 /* imported or exported dma-buf: its frames name it (sgxws_use_bo) */
-   struct renderonly_scanout *scanout;   /* kmsro: its buffer on the display device */
+   bool wrapped; /* resource_from_user_memory: an fbdev mapping */
+   bool shared;  /* imported or exported dma-buf: its frames name it
+                    (sgxws_use_bo) */
+   struct renderonly_scanout
+      *scanout; /* kmsro: its buffer on the display device */
 
-   uint32_t uid, gen;           /* buffers: an id never reused, and a count of writes (vertex cache) */
+   uint32_t uid, gen; /* buffers: an id never reused, and a count of writes
+                         (vertex cache) */
    /* buffers (SGX_DEBUG=zerocopy): a device copy of data that draws DMA
     * from, made at the first draw that reads it, kept up to date by writes;
     * vbo_seq is the last kick that reads it */
    struct sgxws_bo vbo;
    uint32_t vbo_seq;
-   uint64_t written_ns;         /* buffers: when last written */
-   uint32_t stride;             /* bytes per row of level 0 */
-   size_t level_offset[16];     /* each level in the linear CPU copy */
-   bool texture;                /* data is the CPU copy of bo (texture heap, laid out by sgx_texture.c) */
-   uint32_t rendered;           /* a texture's levels rendered into since data was last brought up to date */
-   uint32_t pitch;              /* pixels per row of a render target (a multiple of 32) */
+   uint64_t written_ns;     /* buffers: when last written */
+   uint32_t stride;         /* bytes per row of level 0 */
+   size_t level_offset[16]; /* each level in the linear CPU copy */
+   bool texture;      /* data is the CPU copy of bo (texture heap, laid out by
+                         sgx_texture.c) */
+   uint32_t rendered; /* a texture's levels rendered into since data was last
+                         brought up to date */
+   uint32_t pitch;    /* pixels per row of a render target (a multiple of 32) */
 
    /* A texture written while a render may still sample it: the write goes to
     * a second copy, which takes over (the DDK's ghosting).  alt lacks what
     * was written since it was current: alt_dirty boxes, or everything. */
-   uint32_t use_seq;            /* the last kick that samples bo */
+   uint32_t use_seq; /* the last kick that samples bo */
    struct sgxws_bo alt;
    uint32_t alt_use_seq;
-   unsigned n_alt_dirty;        /* SGX_ALT_ALL: re-encode everything */
-   struct { uint16_t level, layer, x0, y0, x1, y1; } alt_dirty[32];
+   unsigned n_alt_dirty; /* SGX_ALT_ALL: re-encode everything */
+   struct {
+      uint16_t level, layer, x0, y0, x1, y1;
+   } alt_dirty[32];
 
    /* A cube map with mip levels sampled without mipmapping: the TPU then
     * spaces the faces by level 0 alone, so it samples a copy of the six
@@ -72,8 +79,10 @@ sgx_resource_sampleable(const struct sgx_resource *res)
    if (res->texture)
       return true;
    return res->bo.va && res->pitch && res->base.last_level == 0 &&
-          (res->base.format == PIPE_FORMAT_B8G8R8A8_UNORM || res->base.format == PIPE_FORMAT_B8G8R8X8_UNORM ||
-           res->base.format == PIPE_FORMAT_R8G8B8A8_UNORM || res->base.format == PIPE_FORMAT_R8G8B8X8_UNORM);
+          (res->base.format == PIPE_FORMAT_B8G8R8A8_UNORM ||
+           res->base.format == PIPE_FORMAT_B8G8R8X8_UNORM ||
+           res->base.format == PIPE_FORMAT_R8G8B8A8_UNORM ||
+           res->base.format == PIPE_FORMAT_R8G8B8X8_UNORM);
 }
 
 #define SGX_ALT_ALL (~0u)
@@ -87,9 +96,11 @@ void sgx_resource_screen_init(struct sgx_screen *screen);
 bool sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res);
 void sgx_resource_context_init(struct sgx_context *ctx);
 
-/* the target a render into this level and layer of the resource writes; with the screen lock held */
-bool sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res, unsigned level,
-                            unsigned layer, struct sgxws_target *t);
+/* the target a render into this level and layer of the resource writes; with
+ * the screen lock held */
+bool sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
+                         unsigned level, unsigned layer,
+                         struct sgxws_target *t);
 
 /* brings res->cube0 up to date with level 0 (sgx_tex_words samples it) */
 bool sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res);

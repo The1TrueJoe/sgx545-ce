@@ -25,14 +25,14 @@
 #include "sgx_frame.h"
 
 /* the CCB is a 64 KB ring with room for one command past its end [G] */
-#define CCB_RING 0x10000
-#define CCB_SIZE 0x10420
+#define CCB_RING    0x10000
+#define CCB_SIZE    0x10420
 #define TA_CMD_SIZE 0x2c0
 
-#define H_GENERAL SGX_HEAP_GENERAL
-#define H_TADATA SGX_HEAP_TADATA
-#define H_KDATA SGX_HEAP_KDATA
-#define H_SYNC SGX_HEAP_SYNC
+#define H_GENERAL  SGX_HEAP_GENERAL
+#define H_TADATA   SGX_HEAP_TADATA
+#define H_KDATA    SGX_HEAP_KDATA
+#define H_SYNC     SGX_HEAP_SYNC
 #define H_3DPARAMS SGX_HEAP_3DPARAMS
 
 struct pvr_dev {
@@ -43,8 +43,9 @@ struct pvr_dev {
 struct pvr_bo {
    struct sgxws_bo_impl base;
    struct pvr_buf b;
-   struct pvr_buf sync_map;         /* the mapping of its sync data, if any */
-   volatile PVRSRV_SYNC_DATA *sd;   /* render targets: the sync data the CPU waits on */
+   struct pvr_buf sync_map; /* the mapping of its sync data, if any */
+   volatile PVRSRV_SYNC_DATA
+      *sd; /* render targets: the sync data the CPU waits on */
 };
 
 /* a submitted render: done when its sync's completed writes reach value */
@@ -59,12 +60,13 @@ struct pvr_ctx {
    IMG_HANDLE hwctx;
    uint32_t hwctx_va;
    uint32_t ccb_woff;
-   struct pvr_token token[SGXWS_MAX_SLOTS];   /* by kick number % c->slots */
+   struct pvr_token token[SGXWS_MAX_SLOTS]; /* by kick number % c->slots */
 };
 
 /* The TA/3D structures SGXAddRenderTarget makes for one target. */
 struct pvr_rt {
-   struct sgxws_bo rtdata, rtword, entword[2], tailptr, ta40, ta50, rgn[2], ta88[2], bgblock;
+   struct sgxws_bo rtdata, rtword, entword[2], tailptr, ta40, ta50, rgn[2],
+      ta88[2], bgblock;
    struct sgxws_bo rd, rd_sync, rd_w8, rd_w4, hwsync, hwsync_access;
 };
 
@@ -85,8 +87,8 @@ pbo(const struct sgxws_bo *bo)
 /* ------------------------------------------------------------------ memory */
 
 static int
-pvr_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap, uint32_t attribs,
-             uint32_t size, uint32_t align)
+pvr_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
+             uint32_t attribs, uint32_t size, uint32_t align)
 {
    struct pvr_bo *impl = calloc(1, sizeof(*impl));
    int e;
@@ -173,7 +175,7 @@ token_wait(struct pvr_token *t, unsigned ms)
    uint64_t waited = 0, step = 50000, limit = (uint64_t)ms * 1000000;
 
    while (!token_done(t) && waited < limit) {
-      struct timespec ts = { 0, (long)step };
+      struct timespec ts = {0, (long)step};
 
       nanosleep(&ts, NULL);
       waited += step;
@@ -190,7 +192,7 @@ static int
 pvr_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms)
 {
    volatile PVRSRV_SYNC_DATA *sd = pbo(bo)->sd;
-   struct pvr_token t = { sd, sd ? sd->ui32WriteOpsPending : 0 };
+   struct pvr_token t = {sd, sd ? sd->ui32WriteOpsPending : 0};
 
    return token_wait(&t, timeout_ms);
 }
@@ -198,10 +200,10 @@ pvr_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms)
 /* For the structures whose placement matters (the kernel-data and sync heap
  * order, see pvr_ctx_init), a failed allocation leaves nothing to fall back
  * to. */
-#define BO(d, bo, heap, attribs, size, align)                                   \
-   do {                                                                         \
-      if (sgxws_bo_alloc_heap(d, bo, heap, attribs, size, align))               \
-         goto fail;                                                             \
+#define BO(d, bo, heap, attribs, size, align)                                  \
+   do {                                                                        \
+      if (sgxws_bo_alloc_heap(d, bo, heap, attribs, size, align))              \
+         goto fail;                                                            \
    } while (0)
 
 /* ------------------------------------------------------------------ context */
@@ -218,29 +220,33 @@ ctx_pb(struct sgxws_ctx *c, struct pvr_ctx *k, uint32_t bytes)
    BO(d, &k->pb, H_3DPARAMS, 0xb, pages << 12, 0x1000);
    first = (k->pb.va - d->heap_base[H_3DPARAMS]) >> 12;
    last = first + pages - 1;
-   /* the free list is indexed by page number from the heap base: prev<<16 | next;
-    * the DDK always allocates 0x40000, one u32 per page of the whole 256 MB heap */
-   BO(d, &k->freelist, H_3DPARAMS, 0xb, (last + 1) * 4 > 0x40000 ? (last + 1) * 4 : 0x40000, 0x10);
+   /* the free list is indexed by page number from the heap base: prev<<16 |
+    * next; the DDK always allocates 0x40000, one u32 per page of the whole 256
+    * MB heap */
+   BO(d, &k->freelist, H_3DPARAMS, 0xb,
+      (last + 1) * 4 > 0x40000 ? (last + 1) * 4 : 0x40000, 0x10);
    fl = k->freelist.map;
    for (uint32_t i = first; i <= last; i++)
-      fl[i] = (i == first ? 0xffffu : i - 1) << 16 | (i == last ? 0xffffu : i + 1);
+      fl[i] =
+         (i == first ? 0xffffu : i - 1) << 16 | (i == last ? 0xffffu : i + 1);
    /* block list: {pages, first | last<<16, PB descriptor, 0} */
    k->pbblocks.map[0] = pages;
    k->pbblocks.map[1] = first | last << 16;
    k->pbblocks.map[2] = k->pbdesc.va;
    pd = k->pbdesc.map;
-   uint32_t zls = (pages - 0x22) & 0xfffff, ta = pages + 0x10, pds = zls < ta ? zls : ta;
+   uint32_t zls = (pages - 0x22) & 0xfffff, ta = pages + 0x10,
+            pds = zls < ta ? zls : ta;
 
    pd[1] = pages;
-   pd[2] = last << 16 | first;      /* free list head */
+   pd[2] = last << 16 | first; /* free list head */
    pd[3] = (last - 1) << 16;
    pd[4] = k->freelist.va;
    pd[6] = pd[2];
    pd[7] = pd[3];
-   pd[10] = ta;                     /* TA threshold */
-   pd[11] = zls;                    /* ZLS threshold */
-   pd[12] = zls;                    /* global threshold */
-   pd[13] = pds > 0x100 ? pds - 0x100 : 0;  /* PDS threshold */
+   pd[10] = ta;                            /* TA threshold */
+   pd[11] = zls;                           /* ZLS threshold */
+   pd[12] = zls;                           /* global threshold */
+   pd[13] = pds > 0x100 ? pds - 0x100 : 0; /* PDS threshold */
    pd[14] = k->pbblocks.va;
    k->pb_pages = pages;
    return 0;
@@ -254,7 +260,7 @@ pvr_ctx_init(struct sgxws_ctx *c)
    struct sgxws_dev *d = c->dev;
    struct pvr_ctx *k = calloc(1, sizeof(*k));
    struct sgxws_bo dummy;
-   uint32_t hw[17] = { 0 };
+   uint32_t hw[17] = {0};
    int e;
 
    if (!k)
@@ -264,9 +270,11 @@ pvr_ctx_init(struct sgxws_ctx *c)
       goto fail;
    BO(d, &k->ccb, H_KDATA, 0x4f, CCB_SIZE, 0x1000);
    BO(d, &k->ccbctl, H_KDATA, 0x4f, 8, 0x20);
-   BO(d, &dummy, H_SYNC, 0x3, 4, 0x10);           /* SGXCreateRenderContext's own sync word */
+   BO(d, &dummy, H_SYNC, 0x3, 4,
+      0x10); /* SGXCreateRenderContext's own sync word */
    BO(d, &k->scratch, H_3DPARAMS, 0xb, 0x40, 0x40);
-   BO(d, &dummy, H_SYNC, 0x4b, 0x80, 0x20);       /* and its 0x80-byte buffer for GL */
+   BO(d, &dummy, H_SYNC, 0x4b, 0x80,
+      0x20); /* and its 0x80-byte buffer for GL */
    /*
     * The kernel-data and sync allocations of the DDK's two transfer contexts,
     * which we don't use: they keep every later structure at the address the
@@ -279,18 +287,21 @@ pvr_ctx_init(struct sgxws_ctx *c)
       BO(d, &dummy, H_KDATA, 0x4f, 0x104c8, 0x1000);
       BO(d, &dummy, H_KDATA, 0x4f, 8, 0x20);
       BO(d, &dummy, H_SYNC, 0x3, 4, 0x10);
-      BO(d, i ? &dummy : &k->sync3d, H_SYNC, 0x3, 4, 0x10);    /* the DDK's 3D sync */
+      BO(d, i ? &dummy : &k->sync3d, H_SYNC, 0x3, 4,
+         0x10); /* the DDK's 3D sync */
       BO(d, &dummy, H_KDATA, 0x4f, 4, 4);
    }
 
-   /* HW render context (SGXCreateRenderContext): the kernel fills the PD at word 2 */
-   hw[0] = 0x21;                    /* b0, b5 = per-context PB [D] */
+   /* HW render context (SGXCreateRenderContext): the kernel fills the PD at
+    * word 2 */
+   hw[0] = 0x21; /* b0, b5 = per-context PB [D] */
    hw[3] = k->ccb.va;
    hw[4] = k->ccbctl.va;
    hw[6] = k->pbdesc.va;
    hw[7] = k->scratch.va;
    hw[16] = (uint32_t)getpid();
-   if ((e = pvr_register_render_ctx(dev_pvr(d), hw, sizeof(hw), 8, &k->hwctx, &k->hwctx_va))) {
+   if ((e = pvr_register_render_ctx(dev_pvr(d), hw, sizeof(hw), 8, &k->hwctx,
+                                    &k->hwctx_va))) {
       sgxws_err("SGX_REGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
       goto fail;
    }
@@ -314,7 +325,8 @@ pvr_ctx_fini(struct sgxws_ctx *c)
    free(k);
 }
 
-/* ------------------------------------------------------------------ render target */
+/* ------------------------------------------------------------------ render
+ * target */
 
 static int
 pvr_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
@@ -355,7 +367,7 @@ pvr_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
    /* RT data: header, then per entry {HW ctx, render details in flight (the
     * microkernel fills it), tiles/16, tiles*12, bg block, TA data
     * 0x88/0x40/0x50, tail pointers and size, RTs, 0, kdata word, 0x10} */
-   s->rtword.map[0] = 1;            /* the frame counter: entry (1 & 1) renders first */
+   s->rtword.map[0] = 1; /* the frame counter: entry (1 & 1) renders first */
    rtd = s->rtdata.map;
    rtd[0] = s->rtword.va;
    rtd[2] = r->padx;
@@ -377,8 +389,8 @@ pvr_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
       e[13] = 0x10;
    }
 
-   /* the background object's vertices in the PB (STATE.md section 6, "Background object
-    * block"): fixed point, offset 0x1000 */
+   /* the background object's vertices in the PB (STATE.md section 6,
+    * "Background object block"): fixed point, offset 0x1000 */
    {
       uint32_t *b = s->bgblock.map;
 
@@ -398,28 +410,29 @@ pvr_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
    /* render details (STATE.md section 6); +0x20/+0x28 and the pixel event
     * program are set per frame */
    rd = s->rd.map;
-   rd[0x00 / 4] = k->pb.va & 0xfff00000;  /* 3D request base */
-   rd[0x08 / 4] = 0x80;                   /* [G] */
-   rd[0x0c / 4] = 0x000f0000;             /* [G] */
+   rd[0x00 / 4] = k->pb.va & 0xfff00000; /* 3D request base */
+   rd[0x08 / 4] = 0x80;                  /* [G] */
+   rd[0x0c / 4] = 0x000f0000;            /* [G] */
    rd[0x10 / 4] = 0x80000000;
-   rd[0x38 / 4] = 0x80000000;             /* no depth load */
-   rd[0x3c / 4] = 0x80000000;             /* no stencil load */
-   rd[0x40 / 4] = sgxws_f32(1.0f);        /* ISP background depth [C] */
-   rd[0x44 / 4] = 0x300;                  /* [G] */
+   rd[0x38 / 4] = 0x80000000;      /* no depth load */
+   rd[0x3c / 4] = 0x80000000;      /* no stencil load */
+   rd[0x40 / 4] = sgxws_f32(1.0f); /* ISP background depth [C] */
+   rd[0x44 / 4] = 0x300;           /* [G] */
    rd[0x48 / 4] = 0x2000000 | (s->bgblock.va - (k->pb.va & 0xfff00000)) >> 4;
    rd[0x50 / 4] = 0x88;
    rd[0x58 / 4] = 0x30;
-   rd[0x64 / 4] = 1;                      /* [G] */
+   rd[0x64 / 4] = 1; /* [G] */
    rd[0x68 / 4] = 1;
    rd[0xcc / 4] = 0x100;
    rd[0xd0 / 4] = s->rd_sync.va;
    rd[0xd8 / 4] = s->rtdata.va;
-   rd[0x104 / 4] = 1;                     /* [G] */
+   rd[0x104 / 4] = 1; /* [G] */
    rd[0x110 / 4] = s->rd_w8.va;
    rd[0x114 / 4] = s->rd_w4.va;
-   rd[0x13c / 4] = 0x07c00000;            /* [G] */
+   rd[0x13c / 4] = 0x07c00000; /* [G] */
    s->rd_sync.map[0] = 1;
-   s->hwsync.map[0] = s->hwsync_access.va; /* SGXMKIF_HWDEVICE_SYNC_LIST.sAccessDevAddr */
+   s->hwsync.map[0] =
+      s->hwsync_access.va; /* SGXMKIF_HWDEVICE_SYNC_LIST.sAccessDevAddr */
    s->hwsync_access.map[0] = 1;
    rt->k = s;
    return 0;
@@ -441,7 +454,8 @@ pvr_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
       int e = pvr_flush_rt(dev_pvr(c->dev), s->rtdata.va);
 
       if (e)
-         sgxws_err("SGX_FLUSH_HW_RENDER_TARGET %#x failed: %d\n", s->rtdata.va, e);
+         sgxws_err("SGX_FLUSH_HW_RENDER_TARGET %#x failed: %d\n", s->rtdata.va,
+                   e);
    }
    /* The kernel-data structures stay allocated: the microkernel may still
     * hold pointers into them (docs/GEN.md, "Layout"). */
@@ -456,7 +470,8 @@ pvr_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
    free(s);
 }
 
-/* ------------------------------------------------------------------ submission */
+/* ------------------------------------------------------------------ submission
+ */
 
 /*
  * SGXMKIF_CMDTA, client part (STATE.md section 1), for frame f of the render
@@ -474,32 +489,33 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    struct sgxws_rt *rt = c->rt;
    struct pvr_rt *s = rt->k;
    uint32_t f = rt->frames, odd = f & 1, *t = cmd + 0x238 / 4, *rd = s->rd.map;
-   uint32_t rgn_this = s->rgn[odd ? 0 : 1].va, rgn_next = s->rgn[odd ? 1 : 0].va;
+   uint32_t rgn_this = s->rgn[odd ? 0 : 1].va,
+            rgn_next = s->rgn[odd ? 1 : 0].va;
    uint32_t entry = s->rtdata.va + 0x18 + 0x38 * (odd ? 0 : 1);
 
    memset(cmd, 0, TA_CMD_SIZE);
-   cmd[0x00 / 4] = TA_CMD_SIZE;                     /* size, rounded to 64 */
-   cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10);           /* TA flags [D] */
+   cmd[0x00 / 4] = TA_CMD_SIZE;           /* size, rounded to 64 */
+   cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10); /* TA flags [D] */
    cmd[0x08 / 4] = c->bg_pds[0];
    cmd[0x0c / 4] = c->bg_pds[1];
    cmd[0x10 / 4] = c->bg_pds[2];
    cmd[0x14 / 4] = 0x50000000;
    cmd[0x18 / 4] = 0x50000000;
-   cmd[0x1c / 4] = 0x400 | f << 14;                 /* 3D flags: render, frame [D] */
-   cmd[0x20 / 4] = f;                               /* the target's frame number [D] */
+   cmd[0x1c / 4] = 0x400 | f << 14; /* 3D flags: render, frame [D] */
+   cmd[0x20 / 4] = f;               /* the target's frame number [D] */
    cmd[0x24 / 4] = k->pbdesc.va;
    cmd[0x38 / 4] = s->rd.va;
    cmd[0x3c / 4] = s->hwsync.va;
    cmd[0x40 / 4] = s->rtdata.va;
    cmd[0x44 / 4] = entry;
-   t[0x00 / 4] = 0x20000000;                        /* TE AA */
+   t[0x00 / 4] = 0x20000000; /* TE AA */
    t[0x04 / 4] = rt->n.mtile1;
    t[0x08 / 4] = rt->n.mtile2;
    t[0x0c / 4] = rt->n.te_screen;
    t[0x10 / 4] = rt->n.mt_tiles;
-   t[0x14 / 4] = 0x400000;                          /* TA flags 2: this kick renders */
+   t[0x14 / 4] = 0x400000; /* TA flags 2: this kick renders */
    t[0x18 / 4] = c->vdm_start;
-   t[0x1c / 4] = 0xa2;                              /* [G] */
+   t[0x1c / 4] = 0xa2; /* [G] */
    t[0x20 / 4] = rgn_this;
    t[0x24 / 4] = s->tailptr.va;
    t[0x28 / 4] = sgxws_f32(1e-6f);
@@ -508,8 +524,8 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    t[0x3c / 4] = k->pb.va & 0xfff00000;
    t[0x6c / 4] = 0x88;
 
-   rd[0x20 / 4] = rgn_this;                         /* region headers of this render */
-   rd[0x28 / 4] = rgn_next;                         /* and of the next */
+   rd[0x20 / 4] = rgn_this; /* region headers of this render */
+   rd[0x28 / 4] = rgn_next; /* and of the next */
    /* The RT data entry this render retires.  It must follow cmd+0x44: left
     * at entry 1 (as one frame needs), the microkernel retires the wrong entry
     * on odd frames, their PB pages are never freed, and the 3D locks up on
@@ -564,11 +580,11 @@ pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
    kick.bLastInScene = IMG_TRUE;
    kick.h3DSyncInfo = pbo(&k->sync3d)->b.sync;
    k->ccb_woff = (woff + TA_CMD_SIZE) & (CCB_RING - 1);
-   k->ccbctl.map[0] = k->ccb_woff;                  /* CCB write offset */
+   k->ccbctl.map[0] = k->ccb_woff; /* CCB write offset */
    __sync_synchronize();
    done->sd = NULL;
    if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
-      e = pvr_kick_traced(pvr, &kick, 0);           /* traced, not sent */
+      e = pvr_kick_traced(pvr, &kick, 0); /* traced, not sent */
    } else {
       uint64_t t0 = sgxws_now_ns();
 
@@ -631,7 +647,8 @@ static const struct sgxws_kif pvr_kif = {
 };
 
 int
-sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts, struct sgxws_dev **out)
+sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
+                     struct sgxws_dev **out)
 {
    struct pvr_dev *pd = calloc(1, sizeof(*pd));
    struct sgxws_dev *d = &pd->base;
@@ -651,7 +668,8 @@ sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts, struct sgxws_
       goto fail;
    }
    for (unsigned i = 0; i < pd->pvr.nheaps; i++)
-      d->heap_base[pd->pvr.heaps[i].ui32HeapID & 0xf] = pd->pvr.heaps[i].sDevVAddrBase.uiAddr;
+      d->heap_base[pd->pvr.heaps[i].ui32HeapID & 0xf] =
+         pd->pvr.heaps[i].sDevVAddrBase.uiAddr;
    /* code bases 0-9 cover the pixel heap, 10-13 the vertex heap (SRVINIT.md) */
    d->usse_base_index[0] = 0;
    d->usse_base_index[1] = 10;

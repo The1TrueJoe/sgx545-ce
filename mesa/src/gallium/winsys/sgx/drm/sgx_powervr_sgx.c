@@ -33,8 +33,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include <xf86drm.h>
 
@@ -72,15 +72,15 @@ struct zombie {
 struct psgx_dev {
    struct sgxws_dev base;
    int fd;
-   uint32_t vm;                     /* VM context */
-   uint32_t timeline;               /* syncobj: every job signals the next point */
-   simple_mtx_t lock;               /* the address space, the timeline's points, the zombies */
-   struct util_vma_heap vma[16];    /* by heap id */
+   uint32_t vm;       /* VM context */
+   uint32_t timeline; /* syncobj: every job signals the next point */
+   simple_mtx_t lock; /* the address space, the timeline's points, the zombies */
+   struct util_vma_heap vma[16]; /* by heap id */
    bool has_heap[16];
-   uint64_t point;                  /* the last point a job was given */
+   uint64_t point; /* the last point a job was given */
    struct zombie *zombies;
    unsigned n_zombies, max_zombies;
-   struct psgx_bo **imports;         /* imported buffers, to share one GEM handle */
+   struct psgx_bo **imports; /* imported buffers, to share one GEM handle */
    unsigned n_imports, max_imports;
 };
 
@@ -90,17 +90,17 @@ struct psgx_bo {
    uint32_t handle;
    uint32_t va;
    enum sgx_heap heap;
-   bool code;                       /* a code object: map is a copy */
-   bool shared;                     /* imported or exported: named in every job that uses it */
-   int dmabuf_fd;                   /* imported: the dma-buf, for its fences; else -1 */
-   unsigned refs;                   /* imports of the same dma-buf */
+   bool code;     /* a code object: map is a copy */
+   bool shared;   /* imported or exported: named in every job that uses it */
+   int dmabuf_fd; /* imported: the dma-buf, for its fences; else -1 */
+   unsigned refs; /* imports of the same dma-buf */
    void *map;
-   uint64_t write_point;            /* the last job that writes it */
+   uint64_t write_point; /* the last job that writes it */
 };
 
 struct psgx_ctx {
    uint32_t handle;
-   uint64_t point[SGXWS_MAX_SLOTS];     /* by kick number % c->slots */
+   uint64_t point[SGXWS_MAX_SLOTS]; /* by kick number % c->slots */
 };
 
 static const struct sgxws_kif psgx_kif;
@@ -129,7 +129,9 @@ xioctl(int fd, unsigned long req, void *arg)
 static int
 timeline_wait(struct psgx_dev *dd, uint64_t point, unsigned timeout_ms)
 {
-   int64_t abs = timeout_ms ? (int64_t)(sgxws_now_ns() + (uint64_t)timeout_ms * 1000000) : 0;
+   int64_t abs = timeout_ms
+                    ? (int64_t)(sgxws_now_ns() + (uint64_t)timeout_ms * 1000000)
+                    : 0;
    int e;
 
    if (!point)
@@ -153,18 +155,21 @@ static void
 vm_unmap(struct psgx_dev *dd, uint64_t va, uint64_t size)
 {
    struct drm_powervr_sgx_ioctl_vm_unmap_args a = {
-      .vm_context_handle = dd->vm, .device_addr = va, .size = size,
+      .vm_context_handle = dd->vm,
+      .device_addr = va,
+      .size = size,
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &a);
 
    if (e)
-      sgxws_err("VM_UNMAP %#llx +%#llx failed: %d\n", (unsigned long long)va, (unsigned long long)size, e);
+      sgxws_err("VM_UNMAP %#llx +%#llx failed: %d\n", (unsigned long long)va,
+                (unsigned long long)size, e);
 }
 
 static void
 gem_close(struct psgx_dev *dd, uint32_t handle)
 {
-   struct drm_gem_close a = { .handle = handle };
+   struct drm_gem_close a = {.handle = handle};
 
    xioctl(dd->fd, DRM_IOCTL_GEM_CLOSE, &a);
 }
@@ -214,7 +219,10 @@ static int
 vm_map(struct psgx_dev *dd, uint32_t handle, uint64_t va, uint64_t size)
 {
    struct drm_powervr_sgx_ioctl_vm_map_args a = {
-      .vm_context_handle = dd->vm, .device_addr = va, .handle = handle, .size = size,
+      .vm_context_handle = dd->vm,
+      .device_addr = va,
+      .handle = handle,
+      .size = size,
    };
 
    return xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &a);
@@ -225,7 +233,8 @@ create_bo(struct psgx_dev *dd, uint64_t size, bool code, uint32_t *handle)
 {
    struct drm_powervr_sgx_ioctl_create_bo_args a = {
       .size = size,
-      .flags = code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
+      .flags =
+         code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_CREATE_BO, &a);
 
@@ -234,8 +243,8 @@ create_bo(struct psgx_dev *dd, uint64_t size, bool code, uint32_t *handle)
 }
 
 static int
-psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap, uint32_t attribs,
-             uint32_t size, uint32_t align)
+psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
+              uint32_t attribs, uint32_t size, uint32_t align)
 {
    struct psgx_dev *dd = ddev(d);
    struct psgx_bo *impl;
@@ -244,7 +253,8 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap, uint
    int e;
 
    (void)attribs;
-   /* textures go to the general heap when there is no texture heap (TEX.md: convention only) */
+   /* textures go to the general heap when there is no texture heap (TEX.md:
+    * convention only) */
    if (heap == SGX_HEAP_TEXTURE && !dd->has_heap[heap])
       heap = SGX_HEAP_GENERAL;
    if (heap >= 16 || !dd->has_heap[heap])
@@ -267,10 +277,13 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap, uint
       impl->map = calloc(1, bytes);
       e = impl->map ? 0 : -ENOMEM;
    } else {
-      struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = { .handle = impl->handle };
+      struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {
+         .handle = impl->handle};
 
-      if (!(e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo))) {
-         impl->map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, dd->fd, mo.offset);
+      if (!(e =
+               xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo))) {
+         impl->map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED,
+                          dd->fd, mo.offset);
          if (impl->map == MAP_FAILED) {
             impl->map = NULL;
             e = -errno;
@@ -284,13 +297,14 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap, uint
    va = va_alloc(dd, heap, bytes, align > 0x1000 ? align : 0x1000);
    simple_mtx_unlock(&dd->lock);
    if (!va) {
-      sgxws_err("heap %u has no room for %#llx bytes\n", heap, (unsigned long long)bytes);
+      sgxws_err("heap %u has no room for %#llx bytes\n", heap,
+                (unsigned long long)bytes);
       e = -ENOMEM;
       goto fail_map;
    }
    if ((e = vm_map(dd, impl->handle, va, bytes))) {
-      sgxws_err("VM_MAP heap %u at %#llx +%#llx failed: %d\n", heap, (unsigned long long)va,
-                (unsigned long long)bytes, e);
+      sgxws_err("VM_MAP heap %u at %#llx +%#llx failed: %d\n", heap,
+                (unsigned long long)va, (unsigned long long)bytes, e);
       simple_mtx_lock(&dd->lock);
       util_vma_heap_free(&dd->vma[heap], va, bytes);
       simple_mtx_unlock(&dd->lock);
@@ -301,7 +315,8 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap, uint
    bo->va = impl->va;
    bo->map = impl->map;
    if (d->verbose)
-      sgxws_err("heap %2u %#010x +%#x%s\n", heap, bo->va, size, code ? " (code)" : "");
+      sgxws_err("heap %2u %#010x +%#x%s\n", heap, bo->va, size,
+                code ? " (code)" : "");
    return 0;
 
 fail_map:
@@ -466,7 +481,8 @@ psgx_bo_export(struct sgxws_dev *d, const struct sgxws_bo *bo, int *fd)
 
    if (impl->code)
       return -EINVAL;
-   if (drmPrimeHandleToFD(ddev(d)->fd, impl->handle, DRM_CLOEXEC | DRM_RDWR, fd))
+   if (drmPrimeHandleToFD(ddev(d)->fd, impl->handle, DRM_CLOEXEC | DRM_RDWR,
+                          fd))
       return -errno;
    impl->shared = true;
    return 0;
@@ -487,7 +503,7 @@ psgx_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms)
 
    /* and whoever else writes an imported buffer: its dma-buf's write fences */
    if (!e && impl->dmabuf_fd >= 0) {
-      struct pollfd p = { .fd = impl->dmabuf_fd, .events = POLLIN };
+      struct pollfd p = {.fd = impl->dmabuf_fd, .events = POLLIN};
 
       if (poll(&p, 1, (int)timeout_ms) == 0)
          e = -ETIMEDOUT;
@@ -496,19 +512,24 @@ psgx_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms)
 }
 
 static int
-psgx_code_upload(struct sgxws_dev *d, struct sgxws_bo *bo, uint32_t off, uint32_t size)
+psgx_code_upload(struct sgxws_dev *d, struct sgxws_bo *bo, uint32_t off,
+                 uint32_t size)
 {
    struct psgx_bo *impl = dbo(bo);
    struct drm_powervr_sgx_ioctl_upload_code_args a = {
-      .handle = impl->handle, .offset = off, .size = size,
+      .handle = impl->handle,
+      .offset = off,
+      .size = size,
       .pointer = (uintptr_t)((uint8_t *)impl->map + off),
    };
    int e = xioctl(ddev(d)->fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a);
 
    if (e)
-      sgxws_err("UPLOAD_CODE at %#x +%#x: %d, first refused instruction at %#x: %08x %08x\n",
-                impl->va + off, size, e, impl->va + (uint32_t)a.bad_offset,
-                ((uint32_t *)impl->map)[a.bad_offset / 4 + 1], ((uint32_t *)impl->map)[a.bad_offset / 4]);
+      sgxws_err(
+         "UPLOAD_CODE at %#x +%#x: %d, first refused instruction at %#x: %08x %08x\n",
+         impl->va + off, size, e, impl->va + (uint32_t)a.bad_offset,
+         ((uint32_t *)impl->map)[a.bad_offset / 4 + 1],
+         ((uint32_t *)impl->map)[a.bad_offset / 4]);
    return e;
 }
 
@@ -560,7 +581,7 @@ static void
 psgx_ctx_fini(struct sgxws_ctx *c)
 {
    struct psgx_ctx *k = c->k;
-   struct drm_powervr_sgx_ioctl_destroy_context_args a = { .handle = k->handle };
+   struct drm_powervr_sgx_ioctl_destroy_context_args a = {.handle = k->handle};
    int e = xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &a);
 
    if (e)
@@ -573,9 +594,13 @@ psgx_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
 {
    struct psgx_ctx *k = c->k;
    struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
-      .context_handle = k->handle, .width = rt->w, .height = rt->h, .samples = 1,
+      .context_handle = k->handle,
+      .width = rt->w,
+      .height = rt->h,
+      .samples = 1,
    };
-   int e = xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
+   int e =
+      xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
 
    if (e) {
       sgxws_err("CREATE_RT_DATASET %ux%u failed: %d\n", rt->w, rt->h, e);
@@ -588,17 +613,21 @@ psgx_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
 static void
 psgx_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
 {
-   struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args a = { .handle = (uint32_t)(uintptr_t)rt->k };
-   int e = xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &a);
+   struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args a = {
+      .handle = (uint32_t)(uintptr_t)rt->k};
+   int e =
+      xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &a);
 
    if (e)
       sgxws_err("DESTROY_RT_DATASET failed: %d\n", e);
 }
 
-/* ------------------------------------------------------------------ submission */
+/* ------------------------------------------------------------------ submission
+ */
 
 static void
-add_ref(struct drm_powervr_sgx_bo_ref *refs, unsigned *n, const struct sgxws_bo *bo, bool write)
+add_ref(struct drm_powervr_sgx_bo_ref *refs, unsigned *n,
+        const struct sgxws_bo *bo, bool write)
 {
    struct psgx_bo *impl = dbo(bo);
 
@@ -611,7 +640,8 @@ add_ref(struct drm_powervr_sgx_bo_ref *refs, unsigned *n, const struct sgxws_bo 
       }
    }
    refs[(*n)++] = (struct drm_powervr_sgx_bo_ref){
-      .handle = impl->handle, .flags = write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
+      .handle = impl->handle,
+      .flags = write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
    };
 }
 
@@ -637,7 +667,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    struct drm_powervr_sgx_sync_op op;
    struct drm_powervr_sgx_job job;
    struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
-      .jobs = { .stride = sizeof(job), .count = 1, .array = (uintptr_t)&job },
+      .jobs = {.stride = sizeof(job), .count = 1, .array = (uintptr_t)&job},
    };
    unsigned n_refs = 0;
    uint64_t point, t0;
@@ -646,7 +676,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    /* the scene's stream (it ends with the terminate words), then a stream
     * of the terminate words alone */
    for (unsigned i = 0; i < TA_KICKS; i++) {
-      struct SGX_KMD_STREAM_CMD_TA_KICK ta = { .vdm_base = c->vdm_start };
+      struct SGX_KMD_STREAM_CMD_TA_KICK ta = {.vdm_base = c->vdm_start};
 
       if (i) {
          ta.vdm_base = c->vdm.bo.va + ((c->vdm.used + 3) & ~3u);
@@ -668,7 +698,8 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    point = ++dd->point;
    op = (struct drm_powervr_sgx_sync_op){
       .handle = dd->timeline,
-      .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ | DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL,
+      .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ |
+               DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL,
       .value = point,
    };
    job = (struct drm_powervr_sgx_job){
@@ -676,14 +707,18 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       .context_handle = k->handle,
       .cmd_stream = (uintptr_t)render_buf,
       .cmd_stream_len = SGX_KMD_STREAM_CMD_RENDER_length,
-      .sync_ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
-      .bo_refs = { .stride = sizeof(refs[0]), .count = n_refs, .array = (uintptr_t)refs },
-      .ta_kicks = { .stride = sizeof(kicks[0]), .count = TA_KICKS, .array = (uintptr_t)kicks },
+      .sync_ops = {.stride = sizeof(op), .count = 1, .array = (uintptr_t)&op},
+      .bo_refs = {.stride = sizeof(refs[0]),
+                  .count = n_refs,
+                  .array = (uintptr_t)refs},
+      .ta_kicks = {.stride = sizeof(kicks[0]),
+                   .count = TA_KICKS,
+                   .array = (uintptr_t)kicks},
       .rt_dataset_handle = (uint32_t)(uintptr_t)c->rt->k,
    };
    t0 = sgxws_now_ns();
    if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
-      e = -ECANCELED;                     /* built, not sent */
+      e = -ECANCELED; /* built, not sent */
    } else if ((e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj))) {
       sgxws_err("SUBMIT_JOBS failed: %d\n", e);
    }
@@ -716,7 +751,7 @@ static void
 psgx_dev_destroy(struct sgxws_dev *d)
 {
    struct psgx_dev *dd = ddev(d);
-   struct drm_powervr_sgx_ioctl_destroy_vm_context_args a = { .handle = dd->vm };
+   struct drm_powervr_sgx_ioctl_destroy_vm_context_args a = {.handle = dd->vm};
 
    simple_mtx_lock(&dd->lock);
    reap(dd, true);
@@ -754,20 +789,25 @@ static const struct sgxws_kif psgx_kif = {
 static int
 dev_query(int fd, uint32_t type, void *out, uint32_t size)
 {
-   struct drm_powervr_sgx_ioctl_dev_query_args q = { .type = type, .size = size, .pointer = (uintptr_t)out };
+   struct drm_powervr_sgx_ioctl_dev_query_args q = {.type = type,
+                                                    .size = size,
+                                                    .pointer = (uintptr_t)out};
 
    return xioctl(fd, DRM_IOCTL_POWERVR_SGX_DEV_QUERY, &q);
 }
 
 int
-sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts, struct sgxws_dev **out)
+sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
+                             struct sgxws_dev **out)
 {
-   struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = { 0 };
+   struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {0};
    struct drm_powervr_sgx_dev_query_heap_info hi = {
-      .heaps = { .stride = sizeof(heaps[0]), .count = DRM_POWERVR_SGX_HEAP_COUNT, .array = (uintptr_t)heaps },
+      .heaps = {.stride = sizeof(heaps[0]),
+                .count = DRM_POWERVR_SGX_HEAP_COUNT,
+                .array = (uintptr_t)heaps},
    };
-   struct drm_powervr_sgx_dev_query_gpu_info gi = { 0 };
-   struct drm_powervr_sgx_ioctl_create_vm_context_args vm = { 0 };
+   struct drm_powervr_sgx_dev_query_gpu_info gi = {0};
+   struct drm_powervr_sgx_ioctl_create_vm_context_args vm = {0};
    struct psgx_dev *dd = calloc(1, sizeof(*dd));
    struct sgxws_dev *d = &dd->base;
    uint64_t cap = 0;
@@ -784,19 +824,23 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts, struc
       e = -ENODEV;
       goto fail;
    }
-   if ((e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_GPU_INFO_GET, &gi, sizeof(gi))) ||
-       (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET, &hi, sizeof(hi)))) {
+   if ((e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_GPU_INFO_GET, &gi,
+                      sizeof(gi))) ||
+       (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET, &hi,
+                      sizeof(hi)))) {
       sgxws_err("DEV_QUERY failed: %d\n", e);
       goto fail;
    }
-   for (unsigned i = 0; i < DRM_POWERVR_SGX_HEAP_COUNT && i < hi.heaps.count; i++) {
+   for (unsigned i = 0; i < DRM_POWERVR_SGX_HEAP_COUNT && i < hi.heaps.count;
+        i++) {
       enum sgx_heap id = heap_ids[i];
       uint64_t lo = heaps[i].base, hi_ = heaps[i].base + heaps[i].size;
 
       if (!heaps[i].size || hi_ > 1ull << 32)
          continue;
       d->heap_base[id] = (uint32_t)lo;
-      /* nothing at a heap's first page: a PDS state word or DOUTU word of 0 would name it */
+      /* nothing at a heap's first page: a PDS state word or DOUTU word of 0
+       * would name it */
       util_vma_heap_init(&dd->vma[id], lo + 0x1000, heaps[i].size - 0x1000);
       dd->vma[id].alloc_high = false;
       dd->has_heap[id] = true;
@@ -808,8 +852,10 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts, struc
       e = -ENODEV;
       goto fail_heaps;
    }
-   d->usse_base_index[0] = (uint8_t)heaps[DRM_POWERVR_SGX_HEAP_USSE_PIXEL].usse_base_index;
-   d->usse_base_index[1] = (uint8_t)heaps[DRM_POWERVR_SGX_HEAP_USSE_VERTEX].usse_base_index;
+   d->usse_base_index[0] =
+      (uint8_t)heaps[DRM_POWERVR_SGX_HEAP_USSE_PIXEL].usse_base_index;
+   d->usse_base_index[1] =
+      (uint8_t)heaps[DRM_POWERVR_SGX_HEAP_USSE_VERTEX].usse_base_index;
    if ((e = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT, &vm))) {
       sgxws_err("CREATE_VM_CONTEXT failed: %d\n", e);
       goto fail_heaps;
@@ -821,16 +867,16 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts, struc
    }
    simple_mtx_init(&dd->lock, mtx_plain);
    if (opts->verbose)
-      sgxws_err("powervr_sgx: core %#x rev %#x, firmware interface %u\n", gi.core_id, gi.core_revision,
-                gi.fw_interface_version);
+      sgxws_err("powervr_sgx: core %#x rev %#x, firmware interface %u\n",
+                gi.core_id, gi.core_revision, gi.fw_interface_version);
    *out = d;
    return 0;
 
 fail_vm: {
-      struct drm_powervr_sgx_ioctl_destroy_vm_context_args a = { .handle = dd->vm };
+   struct drm_powervr_sgx_ioctl_destroy_vm_context_args a = {.handle = dd->vm};
 
-      xioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &a);
-   }
+   xioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &a);
+}
 fail_heaps:
    for (unsigned i = 0; i < 16; i++)
       if (dd->has_heap[i])

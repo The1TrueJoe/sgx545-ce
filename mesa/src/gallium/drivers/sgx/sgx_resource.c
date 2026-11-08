@@ -4,19 +4,20 @@
  */
 
 #include <errno.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #include "drm-uapi/drm_fourcc.h"
-#include "util/os_time.h"
-#include "util/format/u_format.h"
-#include "util/u_atomic.h"
-#include "util/u_inlines.h"
-#include "util/u_memory.h"
-#include "util/u_math.h"
-#include "util/u_surface.h"
-#include "util/u_transfer.h"
 #include "frontend/winsys_handle.h"
 #include "renderonly/renderonly.h"
+#include "util/format/u_format.h"
+#include "util/os_time.h"
+#include "util/u_atomic.h"
+#include "util/u_inlines.h"
+#include "util/u_math.h"
+#include "util/u_memory.h"
+#include "util/u_surface.h"
+#include "util/u_transfer.h"
 
 #include "sgx_context.h"
 #include "sgx_resource.h"
@@ -32,9 +33,11 @@ is_render_target(const struct pipe_resource *templ)
 {
    if (templ->target == PIPE_BUFFER)
       return false;
-   if (templ->bind & (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))
+   if (templ->bind &
+       (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))
       return true;
-   return (templ->bind & PIPE_BIND_RENDER_TARGET) && !sgx_tex_format(templ->format);
+   return (templ->bind & PIPE_BIND_RENDER_TARGET) &&
+          !sgx_tex_format(templ->format);
 }
 
 /* A shared buffer is a linear render target as is_render_target makes them:
@@ -42,8 +45,10 @@ is_render_target(const struct pipe_resource *templ)
 static bool
 shareable(const struct pipe_resource *templ)
 {
-   return templ->target == PIPE_TEXTURE_2D && templ->last_level == 0 && templ->array_size == 1 &&
-          util_format_get_blocksize(templ->format) == 4 && templ->nr_samples <= 1;
+   return templ->target == PIPE_TEXTURE_2D && templ->last_level == 0 &&
+          templ->array_size == 1 &&
+          util_format_get_blocksize(templ->format) == 4 &&
+          templ->nr_samples <= 1;
 }
 
 static size_t
@@ -55,7 +60,8 @@ texture_size(struct pipe_resource *prsc, uint32_t stride)
       unsigned w = u_minify(prsc->width0, l), h = u_minify(prsc->height0, l);
 
       size += (size_t)(l ? util_format_get_stride(prsc->format, w) : stride) *
-              util_format_get_nblocksy(prsc->format, h) * prsc->depth0 * prsc->array_size;
+              util_format_get_nblocksy(prsc->format, h) * prsc->depth0 *
+              prsc->array_size;
    }
    return size;
 }
@@ -69,13 +75,15 @@ level_offset(struct pipe_resource *prsc, uint32_t stride, unsigned level)
       unsigned w = u_minify(prsc->width0, l), h = u_minify(prsc->height0, l);
 
       off += (size_t)(l ? util_format_get_stride(prsc->format, w) : stride) *
-             util_format_get_nblocksy(prsc->format, h) * prsc->depth0 * prsc->array_size;
+             util_format_get_nblocksy(prsc->format, h) * prsc->depth0 *
+             prsc->array_size;
    }
    return off;
 }
 
 static struct pipe_resource *
-sgx_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *templ)
+sgx_resource_create(struct pipe_screen *pscreen,
+                    const struct pipe_resource *templ)
 {
    struct sgx_screen *screen = sgx_screen(pscreen);
    struct sgx_resource *res = CALLOC_STRUCT(sgx_resource);
@@ -99,27 +107,31 @@ sgx_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *tem
       return prsc;
    }
 
-   if (is_render_target(templ) && screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
-       screen->ro->create_for_resource == renderonly_create_kms_dumb_buffer_for_resource) {
+   if (is_render_target(templ) && screen->ro &&
+       (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
+       screen->ro->create_for_resource ==
+          renderonly_create_kms_dumb_buffer_for_resource) {
       /* kmsro with a display device whose buffers the CPU reads (simpledrm
        * copies each frame out): its own dumb buffer, cached, imported; the
        * kernel flushes the CPU caches around every job that lists it, which
        * the winsys does for the frame's target */
       struct pipe_resource scanout_tmpl = *templ;
-      struct winsys_handle handle = { 0 };
+      struct winsys_handle handle = {0};
       int e;
 
-      scanout_tmpl.width0 = align(templ->width0, 32);    /* rows of whole tiles */
-      res->scanout = renderonly_scanout_for_resource(&scanout_tmpl, screen->ro, &handle);
+      scanout_tmpl.width0 = align(templ->width0, 32); /* rows of whole tiles */
+      res->scanout =
+         renderonly_scanout_for_resource(&scanout_tmpl, screen->ro, &handle);
       if (!res->scanout)
          goto fail;
       res->stride = handle.stride;
       res->pitch = handle.stride / 4;
       res->shared = true;
       simple_mtx_lock(&screen->lock);
-      e = handle.stride % 128 ? -EINVAL
-                              : sgxws_bo_import(screen->dev, &res->bo, (int)handle.handle,
-                                                handle.stride * templ->height0);
+      e = handle.stride % 128
+             ? -EINVAL
+             : sgxws_bo_import(screen->dev, &res->bo, (int)handle.handle,
+                               handle.stride * templ->height0);
       if (!e)
          sgxws_bo_prepare_target(screen->dev, &res->bo);
       simple_mtx_unlock(&screen->lock);
@@ -142,8 +154,9 @@ sgx_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *tem
       simple_mtx_unlock(&screen->lock);
       if (e)
          goto fail;
-      SGX_DBG(SYNC, "render target %ux%u %s at %#x\n", templ->width0, templ->height0,
-                 util_format_short_name(templ->format), res->bo.va);
+      SGX_DBG(SYNC, "render target %ux%u %s at %#x\n", templ->width0,
+              templ->height0, util_format_short_name(templ->format),
+              res->bo.va);
       /* kmsro otherwise: exported to the display device, which scans it out */
       if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ)) {
          res->scanout = renderonly_scanout_for_resource(prsc, screen->ro, NULL);
@@ -161,7 +174,8 @@ sgx_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *tem
     * also has its device copy in the texture heap, laid out as docs/TEX.md
     * says, rewritten from the CPU copy whenever a level is written. */
    res->stride = util_format_get_stride(templ->format, templ->width0);
-   for (unsigned l = 0; l <= templ->last_level && l < ARRAY_SIZE(res->level_offset); l++)
+   for (unsigned l = 0;
+        l <= templ->last_level && l < ARRAY_SIZE(res->level_offset); l++)
       res->level_offset[l] = level_offset(prsc, res->stride, l);
    res->data = align_malloc(MAX2(texture_size(prsc, res->stride), 1), 64);
    if (!res->data)
@@ -179,7 +193,8 @@ sgx_resource_create(struct pipe_screen *pscreen, const struct pipe_resource *tem
       res->texture = true;
       /* the X byte of a format without alpha is read as alpha: 1 from the
        * start, for a texture rendered into before anything is uploaded */
-      if (!util_format_has_alpha(templ->format) && util_format_get_blocksize(templ->format) == 4)
+      if (!util_format_has_alpha(templ->format) &&
+          util_format_get_blocksize(templ->format) == 4)
          memset(res->bo.map, 0xff, sgx_tex_size(prsc));
    }
    return prsc;
@@ -190,8 +205,9 @@ fail:
 }
 
 static struct pipe_resource *
-sgx_resource_from_user_memory(struct pipe_screen *pscreen, const struct pipe_resource *templ,
-                                 void *user_memory)
+sgx_resource_from_user_memory(struct pipe_screen *pscreen,
+                              const struct pipe_resource *templ,
+                              void *user_memory)
 {
    struct sgx_screen *screen = sgx_screen(pscreen);
    struct sgx_resource *res;
@@ -224,8 +240,9 @@ sgx_resource_from_user_memory(struct pipe_screen *pscreen, const struct pipe_res
 }
 
 static struct pipe_resource *
-sgx_resource_from_handle(struct pipe_screen *pscreen, const struct pipe_resource *templ,
-                            struct winsys_handle *whandle, unsigned usage)
+sgx_resource_from_handle(struct pipe_screen *pscreen,
+                         const struct pipe_resource *templ,
+                         struct winsys_handle *whandle, unsigned usage)
 {
    struct sgx_screen *screen = sgx_screen(pscreen);
    struct sgx_resource *res;
@@ -233,7 +250,8 @@ sgx_resource_from_handle(struct pipe_screen *pscreen, const struct pipe_resource
 
    if (whandle->type != WINSYS_HANDLE_TYPE_FD || !shareable(templ) ||
        (templ->bind & PIPE_BIND_DEPTH_STENCIL) || whandle->offset ||
-       (whandle->modifier != DRM_FORMAT_MOD_LINEAR && whandle->modifier != DRM_FORMAT_MOD_INVALID) ||
+       (whandle->modifier != DRM_FORMAT_MOD_LINEAR &&
+        whandle->modifier != DRM_FORMAT_MOD_INVALID) ||
        whandle->stride % 128 || whandle->stride < templ->width0 * 4)
       return NULL;
    res = CALLOC_STRUCT(sgx_resource);
@@ -247,24 +265,28 @@ sgx_resource_from_handle(struct pipe_screen *pscreen, const struct pipe_resource
    res->shared = true;
 
    simple_mtx_lock(&screen->lock);
-   e = sgxws_bo_import(screen->dev, &res->bo, (int)whandle->handle, res->stride * templ->height0);
+   e = sgxws_bo_import(screen->dev, &res->bo, (int)whandle->handle,
+                       res->stride * templ->height0);
    if (!e)
       sgxws_bo_prepare_target(screen->dev, &res->bo);
    simple_mtx_unlock(&screen->lock);
    if (e) {
-      SGX_DBG(SYNC, "dma-buf import of %ux%u failed: %d\n", templ->width0, templ->height0, e);
+      SGX_DBG(SYNC, "dma-buf import of %ux%u failed: %d\n", templ->width0,
+              templ->height0, e);
       FREE(res);
       return NULL;
    }
    /* kmsro: a handle of it on the display device, for renderonly_get_handle */
    if (screen->ro)
-      res->scanout = renderonly_create_gpu_import_for_resource(&res->base, screen->ro, NULL);
+      res->scanout = renderonly_create_gpu_import_for_resource(
+         &res->base, screen->ro, NULL);
    return &res->base;
 }
 
 static bool
 sgx_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
-                           struct pipe_resource *prsc, struct winsys_handle *whandle, unsigned usage)
+                        struct pipe_resource *prsc,
+                        struct winsys_handle *whandle, unsigned usage)
 {
    struct sgx_screen *screen = sgx_screen(pscreen);
    struct sgx_resource *res = sgx_resource(prsc);
@@ -272,7 +294,8 @@ sgx_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
 
    /* only linear render targets: a texture's device copy is twiddled or
     * re-encoded from its CPU copy */
-   if (!sgxws_bo_valid(&res->bo) || res->texture || res->wrapped || !res->pitch || !shareable(prsc))
+   if (!sgxws_bo_valid(&res->bo) || res->texture || res->wrapped ||
+       !res->pitch || !shareable(prsc))
       return false;
    whandle->stride = res->stride;
    whandle->offset = 0;
@@ -302,11 +325,13 @@ sgx_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
 
 static bool
 sgx_resource_get_param(struct pipe_screen *pscreen, struct pipe_context *pctx,
-                          struct pipe_resource *prsc, unsigned plane, unsigned layer, unsigned level,
-                          enum pipe_resource_param param, unsigned usage, uint64_t *value)
+                       struct pipe_resource *prsc, unsigned plane,
+                       unsigned layer, unsigned level,
+                       enum pipe_resource_param param, unsigned usage,
+                       uint64_t *value)
 {
    struct sgx_resource *res = sgx_resource(prsc);
-   struct winsys_handle whandle = { 0 };
+   struct winsys_handle whandle = {0};
 
    switch (param) {
    case PIPE_RESOURCE_PARAM_NPLANES:
@@ -323,8 +348,9 @@ sgx_resource_get_param(struct pipe_screen *pscreen, struct pipe_context *pctx,
       return true;
    case PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS:
    case PIPE_RESOURCE_PARAM_HANDLE_TYPE_FD:
-      whandle.type = param == PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS ? WINSYS_HANDLE_TYPE_KMS
-                                                                  : WINSYS_HANDLE_TYPE_FD;
+      whandle.type = param == PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS
+                        ? WINSYS_HANDLE_TYPE_KMS
+                        : WINSYS_HANDLE_TYPE_FD;
       if (!sgx_resource_get_handle(pscreen, pctx, prsc, &whandle, usage))
          return false;
       *value = whandle.handle;
@@ -353,7 +379,8 @@ vbo_retire(struct sgx_screen *screen, struct sgxws_bo *bo, uint32_t seq)
          i++;
       }
    }
-   if (sgxws_seq_after(seq, done) && screen->n_retired == ARRAY_SIZE(screen->retired)) {
+   if (sgxws_seq_after(seq, done) &&
+       screen->n_retired == ARRAY_SIZE(screen->retired)) {
       sgxws_flush(screen->hw, 0);
       sgxws_wait_idle(screen->hw, 2000);
       for (unsigned i = 0; i < screen->n_retired; i++)
@@ -377,7 +404,8 @@ sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res)
 
    if (sgxws_bo_valid(&res->vbo))
       return true;
-   if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX, align(MAX2(res->base.width0, 16), 4096), 0x1000)) {
+   if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX,
+                      align(MAX2(res->base.width0, 16), 4096), 0x1000)) {
       memset(&res->vbo, 0, sizeof(res->vbo));
       return false;
    }
@@ -422,8 +450,8 @@ sgx_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 }
 
 bool
-sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res, unsigned level,
-                       unsigned layer, struct sgxws_target *t)
+sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
+                    unsigned level, unsigned layer, struct sgxws_target *t)
 {
    memset(t, 0, sizeof(*t));
    t->bo = &res->bo;
@@ -436,26 +464,31 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res, unsigne
    case PIPE_FORMAT_R8G8B8A8_UNORM:
    case PIPE_FORMAT_R8G8B8X8_UNORM:
       t->pbe_format = 1;
-      t->t1_format = 0x0d;         /* swaps R and B against 0x0c: the PBE's order back */
+      t->t1_format =
+         0x0d; /* swaps R and B against 0x0c: the PBE's order back */
       break;
    default:
       return false;
    }
    if (res->texture) {
-      unsigned w = u_minify(res->base.width0, level), h = u_minify(res->base.height0, level);
-      bool twiddled = util_is_power_of_two_nonzero(w) && util_is_power_of_two_nonzero(h);
+      unsigned w = u_minify(res->base.width0, level),
+               h = u_minify(res->base.height0, level);
+      bool twiddled =
+         util_is_power_of_two_nonzero(w) && util_is_power_of_two_nonzero(h);
 
       t->va = res->bo.va + sgx_tex_offset(&res->base, level, layer);
       t->stride = twiddled ? w : align(w, 8);
       t->t1_layout = twiddled ? 0 : 3;
-      sgxws_bo_prepare_target(screen->dev, &res->bo);    /* (the caller holds the lock) */
+      sgxws_bo_prepare_target(screen->dev,
+                              &res->bo); /* (the caller holds the lock) */
       res->rendered |= 1u << level;
-      res->n_alt_dirty = SGX_ALT_ALL;   /* the render isn't in the second copy */
+      res->n_alt_dirty = SGX_ALT_ALL; /* the render isn't in the second copy */
       if (!level)
          res->level0_gen++;
       return true;
    }
-   if (!res->bo.va || !res->pitch || level || layer || util_format_get_blocksize(res->base.format) != 4)
+   if (!res->bo.va || !res->pitch || level || layer ||
+       util_format_get_blocksize(res->base.format) != 4)
       return false;
    t->va = res->bo.va;
    t->stride = res->pitch;
@@ -466,8 +499,9 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res, unsigne
 /* ---------------------------------------------------------------- transfers */
 
 static void *
-sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsigned level,
-                    unsigned usage, const struct pipe_box *box, struct pipe_transfer **out)
+sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
+                 unsigned level, unsigned usage, const struct pipe_box *box,
+                 struct pipe_transfer **out)
 {
    struct sgx_context *ctx = sgx_context(pctx);
    struct sgx_resource *res = sgx_resource(prsc);
@@ -497,19 +531,25 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsigned
       ctx->stats.fl_read += ctx->recording == res;
       sgx_flush_resource_writes(ctx, res);
       if (sgxws_bo_wait(&res->bo, 2000))
-         fprintf(stderr, "sgx: a render into a mapped texture did not finish\n");
+         fprintf(stderr,
+                 "sgx: a render into a mapped texture did not finish\n");
       t = ctx->stats.on ? os_time_get_nano() : 0;
       if (usage & PIPE_MAP_WRITE) {
-         u_foreach_bit(l, res->rendered) {
+         u_foreach_bit (l, res->rendered) {
             sgx_tex_decode_level(res, l);
-            ctx->stats.rb_bytes += (uint64_t)util_format_get_stride(prsc->format, u_minify(prsc->width0, l)) *
-                                   u_minify(prsc->height0, l) * prsc->array_size;
+            ctx->stats.rb_bytes += (uint64_t)util_format_get_stride(
+                                      prsc->format, u_minify(prsc->width0, l)) *
+                                   u_minify(prsc->height0, l) *
+                                   prsc->array_size;
          }
          res->rendered = 0;
       } else {
          for (int z = box->z; z < box->z + box->depth; z++)
-            sgx_tex_decode_box(res, level, z, box->x, box->y, box->x + box->width, box->y + box->height);
-         ctx->stats.rb_bytes += (uint64_t)util_format_get_stride(prsc->format, box->width) * box->height * box->depth;
+            sgx_tex_decode_box(res, level, z, box->x, box->y,
+                               box->x + box->width, box->y + box->height);
+         ctx->stats.rb_bytes +=
+            (uint64_t)util_format_get_stride(prsc->format, box->width) *
+            box->height * box->depth;
       }
       if (ctx->stats.on)
          ctx->stats.rb_ns += os_time_get_nano() - t;
@@ -529,7 +569,7 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsigned
 
    if (prsc->target == PIPE_BUFFER) {
       if (usage & PIPE_MAP_WRITE) {
-         res->gen++;            /* the vertex cache's copies of it are stale */
+         res->gen++; /* the vertex cache's copies of it are stale */
          res->written_ns = os_time_get_nano();
          /* a device copy a render may still read is left to it; the next
           * draw makes another (an unsynchronized write promises to miss
@@ -538,7 +578,8 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsigned
             struct sgx_screen *screen = sgx_screen(pctx->screen);
 
             simple_mtx_lock(&screen->lock);
-            if (screen->hw && sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw)))
+            if (screen->hw &&
+                sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw)))
                vbo_retire(screen, &res->vbo, res->vbo_seq);
             simple_mtx_unlock(&screen->lock);
          }
@@ -549,13 +590,16 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsigned
       return (uint8_t *)res->data + box->x;
    }
 
-   stride = level ? util_format_get_stride(prsc->format, u_minify(prsc->width0, level))
+   stride = level ? util_format_get_stride(prsc->format,
+                                           u_minify(prsc->width0, level))
                   : res->stride;
-   base = res->bo.map && !res->texture ? (uint8_t *)res->bo.map : (uint8_t *)res->data;
+   base = res->bo.map && !res->texture ? (uint8_t *)res->bo.map
+                                       : (uint8_t *)res->data;
    base += level_offset(prsc, res->stride, level);
    ptrans->stride = stride;
-   ptrans->layer_stride = (uintptr_t)stride *
-                          util_format_get_nblocksy(prsc->format, u_minify(prsc->height0, level));
+   ptrans->layer_stride =
+      (uintptr_t)stride *
+      util_format_get_nblocksy(prsc->format, u_minify(prsc->height0, level));
    *out = ptrans;
    return base + box->z * ptrans->layer_stride +
           util_format_get_nblocksy(prsc->format, box->y) * stride +
@@ -563,8 +607,8 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc, unsigned
 }
 
 static void
-alt_dirty_add(struct sgx_resource *res, unsigned level, unsigned layer, unsigned x0, unsigned y0,
-              unsigned x1, unsigned y1)
+alt_dirty_add(struct sgx_resource *res, unsigned level, unsigned layer,
+              unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
    if (!res->alt.va || res->n_alt_dirty == SGX_ALT_ALL)
       return;
@@ -591,8 +635,8 @@ alt_dirty_add(struct sgx_resource *res, unsigned level, unsigned layer, unsigned
  * CPU copy first.
  */
 static void
-tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level, unsigned layer,
-          unsigned x0, unsigned y0, unsigned x1, unsigned y1)
+tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level,
+          unsigned layer, unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    uint32_t done = ctx->hw ? sgxws_done_seq(ctx->hw) : 0;
@@ -604,7 +648,8 @@ tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level, uns
       if (!res->alt.va) {
          simple_mtx_lock(&screen->lock);
          if (sgxws_bo_alloc(screen->dev, &res->alt, SGXWS_MEM_TEXTURE,
-                            align(MAX2(sgx_tex_size(&res->base), 1), 4096), 0x1000))
+                            align(MAX2(sgx_tex_size(&res->base), 1), 4096),
+                            0x1000))
             memset(&res->alt, 0, sizeof(res->alt));
          simple_mtx_unlock(&screen->lock);
          res->n_alt_dirty = SGX_ALT_ALL;
@@ -617,14 +662,17 @@ tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level, uns
       }
       if (res->alt.va) {
          b = res->bo, res->bo = res->alt, res->alt = b;
-         u = res->use_seq, res->use_seq = res->alt_use_seq, res->alt_use_seq = u;
+         u = res->use_seq, res->use_seq = res->alt_use_seq,
+         res->alt_use_seq = u;
          if (res->n_alt_dirty == SGX_ALT_ALL) {
             for (unsigned l = 0; l <= res->base.last_level; l++)
                sgx_tex_encode_level(res, l);
          } else {
             for (unsigned i = 0; i < res->n_alt_dirty; i++)
-               sgx_tex_encode_box(res, res->alt_dirty[i].level, res->alt_dirty[i].layer, res->alt_dirty[i].x0,
-                                     res->alt_dirty[i].y0, res->alt_dirty[i].x1, res->alt_dirty[i].y1);
+               sgx_tex_encode_box(res, res->alt_dirty[i].level,
+                                  res->alt_dirty[i].layer, res->alt_dirty[i].x0,
+                                  res->alt_dirty[i].y0, res->alt_dirty[i].x1,
+                                  res->alt_dirty[i].y1);
          }
          res->n_alt_dirty = 0;
       }
@@ -657,7 +705,8 @@ sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res)
    if (res->rendered & 1) {
       sgx_flush_resource_writes(ctx, res);
       if (sgxws_bo_wait(&res->bo, 2000))
-         fprintf(stderr, "sgx: a render into a sampled cube map did not finish\n");
+         fprintf(stderr,
+                 "sgx: a render into a sampled cube map did not finish\n");
       sgx_tex_decode_level(res, 0);
       res->rendered &= ~1u;
    }
@@ -682,16 +731,18 @@ sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
 
       for (int z = ptrans->box.z; z < ptrans->box.z + ptrans->box.depth; z++)
          tex_write(ctx, res, ptrans->level, z, ptrans->box.x, ptrans->box.y,
-                   ptrans->box.x + ptrans->box.width, ptrans->box.y + ptrans->box.height);
+                   ptrans->box.x + ptrans->box.width,
+                   ptrans->box.y + ptrans->box.height);
       if (ctx->stats.on) {
          ctx->stats.tex_ns += os_time_get_nano() - t;
          ctx->stats.tex_writes++;
       }
    }
 
-   if (ptrans->resource->target == PIPE_BUFFER && (ptrans->usage & PIPE_MAP_WRITE) && res->vbo.map)
-      memcpy((uint8_t *)res->vbo.map + ptrans->box.x, (const uint8_t *)res->data + ptrans->box.x,
-             ptrans->box.width);
+   if (ptrans->resource->target == PIPE_BUFFER &&
+       (ptrans->usage & PIPE_MAP_WRITE) && res->vbo.map)
+      memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
+             (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);
 }
@@ -713,16 +764,18 @@ sgx_resource_screen_init(struct sgx_screen *screen)
  * CPU through a map: rare, and the map already decodes what a render left */
 static void
 sgx_clear_render_target(struct pipe_context *pctx, struct pipe_surface *dst,
-                           const union pipe_color_union *color, unsigned x, unsigned y, unsigned w,
-                           unsigned h, bool render_condition_enabled)
+                        const union pipe_color_union *color, unsigned x,
+                        unsigned y, unsigned w, unsigned h,
+                        bool render_condition_enabled)
 {
    util_clear_render_target(pctx, dst, color, x, y, w, h);
 }
 
 static void
-sgx_clear_depth_stencil(struct pipe_context *pctx, struct pipe_surface *dst, unsigned flags,
-                           double depth, unsigned stencil, unsigned x, unsigned y, unsigned w, unsigned h,
-                           bool render_condition_enabled)
+sgx_clear_depth_stencil(struct pipe_context *pctx, struct pipe_surface *dst,
+                        unsigned flags, double depth, unsigned stencil,
+                        unsigned x, unsigned y, unsigned w, unsigned h,
+                        bool render_condition_enabled)
 {
    util_clear_depth_stencil(pctx, dst, flags, depth, stencil, x, y, w, h);
 }

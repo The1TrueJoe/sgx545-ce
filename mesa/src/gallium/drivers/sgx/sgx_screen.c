@@ -7,11 +7,11 @@
 #include <unistd.h>
 
 #include "drm-uapi/drm.h"
+#include "renderonly/renderonly.h"
 #include "util/format/u_format.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_screen.h"
-#include "renderonly/renderonly.h"
 
 #include "sgx_context.h"
 #include "sgx_program.h"
@@ -22,29 +22,39 @@
 uint32_t sgx_drv_debug;
 
 static const struct debug_named_value sgx_drv_debug_options[] = {
-   { "frame", SGX_DEBUG_FRAME, "print every frame the winsys submits" },
-   { "nir", SGX_DEBUG_NIR, "print every shader's NIR" },
-   { "draw", SGX_DEBUG_DRAW, "print every draw" },
-   { "sync", SGX_DEBUG_SYNC, "print allocations and waits" },
-   { "stats", SGX_DEBUG_STATS, "print where the time goes, every 2 s" },
-   { "serial", SGX_DEBUG_SERIAL, "wait for every render after submitting it (no overlap)" },
-   { "hangabort", SGX_DEBUG_HANG_ABORT, "abort at the first render that does not finish" },
-   { "flushall", SGX_DEBUG_FLUSH_ALL, "submit at every flush (none deferred)" },
-   { "novcache", SGX_DEBUG_NO_VCACHE, "no vertex cache" },
-   { "nof16", SGX_DEBUG_NO_F16, "no F16/C10 fragment arithmetic" },
-   { "nodrvconsts", SGX_DEBUG_NO_DRV_CONSTS, "no driver constant formats (lowp as F16, literals)" },
-   { "fsconst", SGX_DEBUG_FS_CONST, "every fragment shader a constant colour per program (measuring)" },
-   { "attrs", SGX_DEBUG_ATTRS, "describe the first draws with 5 or more vertex inputs, and clears" },
-   { "blits", SGX_DEBUG_BLITS, "describe every 255th blit and its caller" },
-   { "novs", SGX_DEBUG_NO_VS_COMPILER, "the fixed vertex programs instead of the compiler" },
-   { "nofs", SGX_DEBUG_NO_FS_COMPILER, "the fixed fragment programs instead of the compiler" },
-   { "ffmediump", SGX_DEBUG_FF_MEDIUMP, "fixed-function fragment programs at mediump (F16; texture coordinates F32)" },
-   { "zerocopy", SGX_DEBUG_ZERO_COPY, "f32 vertex inputs DMAed where they are: buffers in place, client arrays copied as they are" },
-   { "flushrt", SGX_DEBUG_FLUSH_RT, "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)" },
-   DEBUG_NAMED_VALUE_END
-};
+   {"frame", SGX_DEBUG_FRAME, "print every frame the winsys submits"},
+   {"nir", SGX_DEBUG_NIR, "print every shader's NIR"},
+   {"draw", SGX_DEBUG_DRAW, "print every draw"},
+   {"sync", SGX_DEBUG_SYNC, "print allocations and waits"},
+   {"stats", SGX_DEBUG_STATS, "print where the time goes, every 2 s"},
+   {"serial", SGX_DEBUG_SERIAL,
+    "wait for every render after submitting it (no overlap)"},
+   {"hangabort", SGX_DEBUG_HANG_ABORT,
+    "abort at the first render that does not finish"},
+   {"flushall", SGX_DEBUG_FLUSH_ALL, "submit at every flush (none deferred)"},
+   {"novcache", SGX_DEBUG_NO_VCACHE, "no vertex cache"},
+   {"nof16", SGX_DEBUG_NO_F16, "no F16/C10 fragment arithmetic"},
+   {"nodrvconsts", SGX_DEBUG_NO_DRV_CONSTS,
+    "no driver constant formats (lowp as F16, literals)"},
+   {"fsconst", SGX_DEBUG_FS_CONST,
+    "every fragment shader a constant colour per program (measuring)"},
+   {"attrs", SGX_DEBUG_ATTRS,
+    "describe the first draws with 5 or more vertex inputs, and clears"},
+   {"blits", SGX_DEBUG_BLITS, "describe every 255th blit and its caller"},
+   {"novs", SGX_DEBUG_NO_VS_COMPILER,
+    "the fixed vertex programs instead of the compiler"},
+   {"nofs", SGX_DEBUG_NO_FS_COMPILER,
+    "the fixed fragment programs instead of the compiler"},
+   {"ffmediump", SGX_DEBUG_FF_MEDIUMP,
+    "fixed-function fragment programs at mediump (F16; texture coordinates F32)"},
+   {"zerocopy", SGX_DEBUG_ZERO_COPY,
+    "f32 vertex inputs DMAed where they are: buffers in place, client arrays copied as they are"},
+   {"flushrt", SGX_DEBUG_FLUSH_RT,
+    "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)"},
+   DEBUG_NAMED_VALUE_END};
 
-DEBUG_GET_ONCE_FLAGS_OPTION(sgx_drv_debug, "SGX_DEBUG", sgx_drv_debug_options, 0)
+DEBUG_GET_ONCE_FLAGS_OPTION(sgx_drv_debug, "SGX_DEBUG", sgx_drv_debug_options,
+                            0)
 DEBUG_GET_ONCE_OPTION(sgx_dump_code, "SGX_DUMP_CODE", NULL)
 /* the winsys's debugging aids: a pvrtrace log of this client (and memory
  * copies for its first n kicks), frames built but never sent from the n-th
@@ -60,7 +70,6 @@ sgx_dump_code_dir(void)
 {
    return debug_get_option_sgx_dump_code();
 }
-
 
 static const char *
 sgx_get_name(struct pipe_screen *pscreen)
@@ -89,10 +98,13 @@ sgx_get_screen_fd(struct pipe_screen *pscreen)
 static void
 sgx_init_shader_caps(struct pipe_screen *pscreen)
 {
-   for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT; s += MESA_SHADER_FRAGMENT) {
-      struct pipe_shader_caps *caps = (struct pipe_shader_caps *)&pscreen->shader_caps[s];
+   for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT;
+        s += MESA_SHADER_FRAGMENT) {
+      struct pipe_shader_caps *caps =
+         (struct pipe_shader_caps *)&pscreen->shader_caps[s];
 
-      caps->max_instructions = caps->max_alu_instructions = caps->max_tex_instructions = 16384;
+      caps->max_instructions = caps->max_alu_instructions =
+         caps->max_tex_instructions = 16384;
       /* 8: st then doesn't pack varyings (st_extensions.c), so every varying
        * keeps a texture coordinate set of its own, as the DDK's compiler
        * allocates them; a projected or plain read of a whole varying is then
@@ -122,7 +134,8 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
           * clipping A/B cases are byte-identical to the DDK with it
           * (sgx_varyab.sh, _texproj, _texshape, _nearclip), and the bench
           * world runs 24-28 FPS against 20-27 in F32.  SGX_F16=0 keeps F32 */
-         caps->fp16 = caps->glsl_16bit_consts = !(sgx_drv_debug & SGX_DEBUG_NO_F16);
+         caps->fp16 = caps->glsl_16bit_consts =
+            !(sgx_drv_debug & SGX_DEBUG_NO_F16);
       }
    }
 }
@@ -177,35 +190,42 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
 
 static bool
 sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
-                           enum pipe_texture_target target, unsigned sample_count,
-                           unsigned storage_sample_count, unsigned usage)
+                        enum pipe_texture_target target, unsigned sample_count,
+                        unsigned storage_sample_count, unsigned usage)
 {
-   if (sample_count > 1 || MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+   if (sample_count > 1 ||
+       MAX2(1, sample_count) != MAX2(1, storage_sample_count))
       return false;
 
-   if (usage & (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) {
+   if (usage &
+       (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) {
       /* windows and pbuffers: the PBE's BGRA8888 (STATE.md section 4) */
-      if (format != PIPE_FORMAT_B8G8R8A8_UNORM && format != PIPE_FORMAT_B8G8R8X8_UNORM)
+      if (format != PIPE_FORMAT_B8G8R8A8_UNORM &&
+          format != PIPE_FORMAT_B8G8R8X8_UNORM)
          return false;
    }
    if (usage & PIPE_BIND_RENDER_TARGET) {
       /* the PBE's formats (sgx_resource_target).  Not 565: st would then
        * pick it for GL_RGB565 textures, and T1 0x05 hands the compiler's
        * unpack R and B swapped; RGBA8 stands in */
-      if (format != PIPE_FORMAT_B8G8R8A8_UNORM && format != PIPE_FORMAT_B8G8R8X8_UNORM &&
-          format != PIPE_FORMAT_R8G8B8A8_UNORM && format != PIPE_FORMAT_R8G8B8X8_UNORM)
+      if (format != PIPE_FORMAT_B8G8R8A8_UNORM &&
+          format != PIPE_FORMAT_B8G8R8X8_UNORM &&
+          format != PIPE_FORMAT_R8G8B8A8_UNORM &&
+          format != PIPE_FORMAT_R8G8B8X8_UNORM)
          return false;
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
       /* The ISP keeps depth and stencil per tile and no buffer is loaded or
        * stored (no ZLS yet), so they are good within one render. */
-      if (format != PIPE_FORMAT_Z16_UNORM && format != PIPE_FORMAT_Z24X8_UNORM &&
+      if (format != PIPE_FORMAT_Z16_UNORM &&
+          format != PIPE_FORMAT_Z24X8_UNORM &&
           format != PIPE_FORMAT_Z24_UNORM_S8_UINT)
          return false;
    }
    if (usage & PIPE_BIND_VERTEX_BUFFER) {
       /* gathered on the CPU, so anything util_format can unpack */
-      const struct util_format_description *desc = util_format_description(format);
+      const struct util_format_description *desc =
+         util_format_description(format);
 
       if (!desc || desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
          return false;
@@ -223,7 +243,8 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
       return false;
    switch (target) {
    case PIPE_BUFFER:
-   case PIPE_TEXTURE_1D:      /* a 2D texture a texel high, sampled on that row (sgx_program.c) */
+   case PIPE_TEXTURE_1D: /* a 2D texture a texel high, sampled on that row
+                            (sgx_program.c) */
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_RECT:
    case PIPE_TEXTURE_CUBE:
@@ -238,7 +259,7 @@ static struct {
    int fd;
    struct sgxws_dev *dev;
    struct sgxws_ctx *hw;
-} kept = { .fd = -1 };
+} kept = {.fd = -1};
 static simple_mtx_t kept_lock = SIMPLE_MTX_INITIALIZER;
 
 static void
@@ -278,7 +299,8 @@ sgx_screen_destroy(struct pipe_screen *pscreen)
 }
 
 struct pipe_screen *
-sgx_screen_create(int fd, const struct pipe_screen_config *config, struct renderonly *ro)
+sgx_screen_create(int fd, const struct pipe_screen_config *config,
+                  struct renderonly *ro)
 {
    struct sgx_screen *screen = CALLOC_STRUCT(sgx_screen);
 

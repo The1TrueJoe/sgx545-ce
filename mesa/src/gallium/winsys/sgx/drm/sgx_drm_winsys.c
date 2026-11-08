@@ -11,7 +11,8 @@
 #include "sgx_drm_public.h"
 
 static struct pipe_screen *
-create_screen(int fd, const struct pipe_screen_config *config, struct renderonly *ro)
+create_screen(int fd, const struct pipe_screen_config *config,
+              struct renderonly *ro)
 {
    return sgx_screen_create(fd, config, ro);
 }
@@ -20,12 +21,15 @@ create_screen(int fd, const struct pipe_screen_config *config, struct renderonly
 struct pipe_screen *
 sgx_drm_screen_create(int fd, const struct pipe_screen_config *config)
 {
-   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), config, NULL, create_screen);
+   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), config, NULL,
+                                         create_screen);
 }
 
 /* fd: powervr_sgx's render node; scanout buffers come from ro's display device */
 struct pipe_screen *
-sgx_drm_screen_create_renderonly(int fd, struct renderonly *ro, const struct pipe_screen_config *config)
+sgx_drm_screen_create_renderonly(int fd, struct renderonly *ro,
+                                 const struct pipe_screen_config *config)
 {
-   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), config, ro, create_screen);
+   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), config, ro,
+                                         create_screen);
 }

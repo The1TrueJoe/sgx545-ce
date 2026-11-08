@@ -37,16 +37,16 @@ extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */
 const char *sgx_dump_code_dir(void);
 
-#define SGX_DBG(flag, ...)                                                  \
+#define SGX_DBG(flag, ...)                                                     \
    do {                                                                        \
-      if (sgx_drv_debug & SGX_DEBUG_##flag)                                  \
-         fprintf(stderr, "sgx: " __VA_ARGS__);                              \
+      if (sgx_drv_debug & SGX_DEBUG_##flag)                                    \
+         fprintf(stderr, "sgx: " __VA_ARGS__);                                 \
    } while (0)
 
 struct sgx_screen {
    struct pipe_screen base;
-   int fd;                      /* the fd the screen was created on (its key) */
-   int dev_fd;                  /* the fd the services connection lives on */
+   int fd;     /* the fd the screen was created on (its key) */
+   int dev_fd; /* the fd the services connection lives on */
 
    /* the services connection; one per screen, used under lock */
    struct sgxws_dev *dev;
@@ -63,7 +63,10 @@ struct sgx_screen {
    struct slab_parent_pool transfer_pool;
 
    /* buffers' device copies a render may still read: freed once it's done */
-   struct { struct sgxws_bo bo; uint32_t seq; } retired[32];
+   struct {
+      struct sgxws_bo bo;
+      uint32_t seq;
+   } retired[32];
    unsigned n_retired;
 
    /* kmsro: the display device scanout buffers are allocated on */
@@ -78,9 +81,11 @@ sgx_screen(struct pipe_screen *pscreen)
 
 struct renderonly;
 
-/* ro: a KMS-only display device that scanout buffers come from (kmsro), or NULL */
-struct pipe_screen *sgx_screen_create(int fd, const struct pipe_screen_config *config,
-                                         struct renderonly *ro);
+/* ro: a KMS-only display device that scanout buffers come from (kmsro), or NULL
+ */
+struct pipe_screen *sgx_screen_create(int fd,
+                                      const struct pipe_screen_config *config,
+                                      struct renderonly *ro);
 void sgx_fence_screen_init(struct sgx_screen *screen);
 
 #endif
