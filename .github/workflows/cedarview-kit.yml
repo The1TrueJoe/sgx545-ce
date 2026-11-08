@@ -36,8 +36,10 @@ jobs:
           # workflow on the default branch): wait for it, up to 50 minutes
           for i in $(seq 1 50); do
             [ -n "$id" ] && break
-            id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=20" \
-              -q '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+            # the API's order is arbitrary: the newest unexpired one from m2-drm
+            id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=100" \
+              -q '[.artifacts[] | select((.expired | not) and .workflow_run.head_branch == "m2-drm")]
+                  | sort_by(.created_at) | last | .workflow_run.id // empty')
             [ -n "$id" ] || { echo "no powervr-sgx-cedarview artifact yet ($i)"; sleep 60; }
           done
           [ -n "$id" ] || { echo "::error::no powervr-sgx-cedarview artifact: run powervr-sgx.yml on m2-drm first"; exit 1; }
