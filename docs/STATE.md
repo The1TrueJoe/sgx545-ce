@@ -904,7 +904,7 @@ constant):
 | 0-11 | height - 1 | D |
 | 12-23 | width - 1 | D |
 | 24-28 | format: 0x02 RGBA4444 (stored ARGB4444), 0x04 RGBA5551 (stored ARGB1555), 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | D |
-| 29-31 | layout: 2 cube map (`cube`, T1 `4d00f00f`, 2026-11-02), 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch in texels - 1) low 3 bits in b9-11, the rest in b17-26 [D], `docs/TEX.md` section 3). Memory layouts 0 and 3 are in `docs/TEX.md` section 1 | D |
+| 29-31 | layout: 2 cube map (`cube`, T1 `4d00f00f`, 2026-11-02), 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch - 1) low 3 bits in b9-11, the rest in b17-26 [D], `docs/TEX.md` section 3; counted in 32-bit words, the same as texels for 32-bit formats, see §5 background). Memory layouts 0 and 3 are in `docs/TEX.md` section 1 | D |
 
 **T2:** the base address. The mip levels follow the base level; the chain
 length is implied by the size, since no word changed with the level count.
@@ -1143,6 +1143,131 @@ The words past +0xd0 are set at kick time, and the microkernel reads them:
 
 All from the DDK microkernel (`ddk-uk.bin`) and its memory trace over a
 generated frame (`tools/ukernel/run.py`).
+
+## Field layouts for packing
+
+The words above as bit fields, for a packer (csbgen). Status:
+- **K**: the field and its meaning are known (the section named has the evidence);
+- **O**: only constant values have been seen; pack the value given;
+- **U**: unknown; pack the value given, or 0 where the column says so.
+
+Widths are only as wide as the evidence shows. "≤" marks an upper bound from
+the neighbouring fields, not a measured width. Observed values are from the
+DDK captures on disk (36, `caps-ddk/` 2026-10-28 and 2026-11-08).
+
+### VDM state-program words (§2)
+
+Word 0: `type<<28 | (addr - heap)>>4`, type 4 (state) or 6 (terminate) [K].
+
+Info word:
+
+| bits | field | status |
+|---|---|---|
+| 26-31 | PDS data rows (16 B each) | K |
+| 0-? | a size in 4-dword units. It fits the dwords the state task *forwards*: 12 → 3, 15 → 4, 18 → 5, 2 (terminate) → 1, 0 (empty update) → 0 [O]. It is not the DMA's own count (the 25-dword triangle DMA gives 5). The rotating "counter 0-3" STATE.md §2 mentions has never been seen nonzero: every block with the same contents has the same word. Width ≤ 8 bits (b8 is set in the other form) | U (rule fits) |
+| rest, TA-block form | `0x2022400` (b10, b13, b17, b25) | O |
+| rest, secondary-DMA form | `0xe100` (b8, b13-15). Seen: 10 dwords → 3, 27 dwords → 6, which doesn't fit ceil(n/4): the size rule for this form is U | O |
+| type 6 (terminate) | `0x0e022401` | O |
+| empty update | `0x0400e100` | O |
+
+What b8, b10, b13-15, b17 and b25 mean is U.
+
+### VDM draw (§2)
+
+| word | bits | field | status |
+|---|---|---|---|
+| 0 | 31 | draw marker (1) | K |
+| 0 | 26-27 | primitive: 0 triangles, 1 lines, 2 points, 3 strip | K |
+| 0 | 28 | fan (with primitive 0) | K |
+| 0 | 22-23 | 3 in every draw | O |
+| 0 | 0-? | index count; ≤ 22 bits (b0-21); seen up to 192 | K (width U) |
+| 1 | 0-31 | index buffer address; b0 clear for 16-bit, b0-1 for 32-bit indices | K |
+| 2 | 28-31 | batch − 1: 15 in every draw | O |
+| 2 | 24 | 32-bit indices (from libGLESv2's code; no 32-bit capture) | K (D) |
+| 2 | 0-23 | index offset; 0 in every draw; width ≤ 24 bits | K (width U) |
+| 3 | 0-21 | max index: `0x3fffff` in every draw; width ≥ 22 bits | O |
+| 4 | 28-31 | vertices per USSE task − 1 (rule in §2) | K |
+| 4 | 0-27 | vertex PDS program `addr>>4` | K |
+| 5 | 0-6 | PDS data rows | K |
+| 5 | 7-21 | ceil(input attribute bytes / 16) | K |
+| 5 | 22-23 | 3 in every draw. Vertices per task − 1 is ≥ 7 in every capture, so "min(n, 3)" with n = vertices per task − 1 can't be told from a constant 3 | O |
+| 5 | 24-31 | ceil(output dwords / 4) | K |
+
+### TA state block (§3)
+
+| word | bits | field | status |
+|---|---|---|---|
+| region clip 0 | 31 | set on every region clip seen; 0 on the scissor objects' "no clip" words | K (as enable: G) |
+| region clip 0 | 16-? / 0-? | xmin, xmax in 32-px tiles; seen up to 0x16; ≤ 15 bits each | K (width U) |
+| region clip 1 | 16-? / 0-? | ymin, ymax in 16-px tiles; seen up to 0x1d | K (width U) |
+| output select | 16-? | output dwords per vertex; seen up to 24; ≤ 16 bits | K (width U) |
+| output select | 8 | the shader writes the point size | K |
+| output select | 11-13 | `0x3000` (b12-13) on every draw, `0x1800` (b11-12) on the clear, 0 on scissor objects (`0x00040000`) | U: pack per kind |
+| MTE control | 0-1 | cull (§3) | K |
+| MTE control | rest | `0x01555620` on every draw (one ES1 capture: `0x15555620`); `0x40` on the clear | U: pack per kind |
+| TSP word 0 | 3n..3n+2 | set n's size: 1, 2, 3, or 5 for 4 components; seen up to 5 sets. 10 sets fit in 30 bits; the hardware maximum is U | K |
+| TSP word 1 | n | set n is F16 (precision value ≤ 2); one bit per set | K |
+| PDS word 1 | 0-15 | primary attribute units of 4 dwords | K (width: the field ends at b15) |
+| PDS word 1 | 16-17 | 3 in every capture | O |
+| PDS word 1 | 18-24 | (secondary attribute dwords + 3)>>2; 7 bits | K |
+| PDS word 1 | 25-28 | the rule in §3 "PDS words"; 4 bits | K (partly) |
+| PDS word 1 | 29-31 | 0 in every capture | U (0) |
+
+**ISPA / ISPB.** Values seen: ISPA `01d00200`, `03d00200`, `07e00100`,
+`01d08200`, `01d00000`; ISPB `000010f0` and `000000f0`. Every set bit is in
+the fields the §3 tables name. No untabled bit has been seen set, so pack
+untabled bits as 0 [O].
+
+**Header.** Values seen: `d4c3`, `df43`, `dfc3`, `d485`, `d583`, `d4c1`.
+- The header names the groups that follow (§3).
+- 0x2000 is clear in every header seen. Which group it would name is U;
+  pack it as 0.
+
+**TA terminate.** The DOUTA words `0x00002000` (ctrl 0) and `0x0016000e`
+(ctrl 0x100, three times) are forwarded as pa0/pa1 by a 2-dword state emit
+(§2). They are state words to the MTE, but their fields are U. Pack them as
+constants.
+
+### PBE (§4)
+
+| word | bits | field | status |
+|---|---|---|---|
+| 0, 1 | 16-? / 0-? | clip y / x in pixels; seen up to 479 / 719; ≤ 16 bits each | K (width U) |
+| 2 | 16-27 | pitch / 2 − 1 | K |
+| 2 | 15 | set on every surface (name U; with it clear the PBE writes nothing, per the TEX.md §6 replay) | K (meaning G) |
+| 2 | 28-29 | rotation, 0x10000000 × k (libGLESv2; only 0 captured) | K (values U) |
+| 2 | 30-31 | downscale / AA, 0x40000000 × k (libGLESv2; only 0 captured) | K (values U) |
+| 2 | 0-14 | 0 in every capture | U (0) |
+| 3 | 0-31 | address & ~3 | K |
+| sideband | 0-5 | PBE format code | K |
+| sideband | 9 | always set | O |
+| sideband | 10 | dither | K |
+| sideband | 12 | libGLESv2's `param 7` | U |
+| sideband | 13 | twiddled destination | K |
+| sideband | 6-8, 11 | `param_2[5]<<6` is added for format codes 3-14; 0 in every capture (codes 0 and 3 seen) | U (0) |
+
+### Texture words (§5)
+
+**T0**, beyond the §5 table:
+- b17-26 holds the pitch for layout 6 (strided). The 2026-11-08 captures say
+  the pitch is counted in 32-bit words; they agree with texels only for
+  32-bit formats.
+- For the other layouts:
+  - b17-20 is 0xf without mipmaps and 0xd with them;
+  - b21-26 is 0x3f in every capture [O];
+  - which of b17-20 is "mipmapping off" beyond b18 is U.
+- b0-2, b11, b13-16 and b27-29 are 0 in every capture [U: 0].
+- b30 is the L8/A8/LA88 bit.
+- b31 is 0 in every capture [U: 0].
+
+**T3**: values seen:
+- `00800800`: `tex1`;
+- `01028800`: `tex2`;
+- `00800000`: the background load.
+
+The §5 text has T3 as the shader's half of `(state & mask) | override`, set
+by the sample instruction. Its fields are U, so pack the value the sample
+form calls for.
 
 ## Captures
 
