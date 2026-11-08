@@ -120,6 +120,8 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm 
 			      vm);
 	err = err ?: pvrsgx_kobj_new(sdev, &pb->desc, PVRSGX_KRANGE_KDATA,
 				     sizeof(struct pvrsgx_fw_pb_desc), 0, NULL);
+	if (pb->desc)
+		pb->desc->until_restart = true;
 	err = err ?: pvrsgx_kobj_new(sdev, &pb->blocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
 	if (err)
 		goto fail;

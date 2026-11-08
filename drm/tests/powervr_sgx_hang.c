@@ -22,6 +22,10 @@
  * -E runs only E1's second half: a frame whose PBE target is a code object
  * (mapped read-only). Exit 0 if the object is unchanged afterwards.
  *
+ * queued B again, with four more renders queued behind the faulting one in the
+ *        same SUBMIT_JOBS: one timeout and one reset in all; the queued jobs are
+ *        cancelled, not run into the same hang one by one.
+ *
  * -H skips the hang case. Exit 0 when everything is right; 77 when there is
  * no powervr_sgx device.
  */
@@ -33,6 +37,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 
 #include "sgxgen.h"
 #include "sgxtex.h"
@@ -195,7 +201,7 @@ static void transfer_job(struct xjob *x, const struct sgx_surface *s, uint32_t w
 
 static int submit(struct drm_powervr_sgx_job *j, uint32_t n)
 {
-	struct drm_powervr_sgx_job a[2];
+	struct drm_powervr_sgx_job a[8];
 	struct drm_powervr_sgx_ioctl_submit_jobs_args sj = { .jobs = OBJ_ARRAY(n, a) };
 
 	memcpy(a, j, n * sizeof(*j));
@@ -370,10 +376,23 @@ static long coredump_take(void)
 	return size;
 }
 
-/* power/runtime_status of the GPU's PCI function. */
+/* The GPU's device in sysfs, from the open node: a PCI function or gma500's auxiliary device. */
+static FILE *power_file(const char *name)
+{
+	char path[128];
+	struct stat st;
+
+	if (fstat(dev.fd, &st))
+		return NULL;
+	snprintf(path, sizeof(path), "/sys/dev/char/%u:%u/device/power/%s", major(st.st_rdev),
+		 minor(st.st_rdev), name);
+	return fopen(path, "r");
+}
+
+/* power/runtime_status of the GPU's device. */
 static int rpm_status(char *buf, size_t n)
 {
-	FILE *fp = fopen("/sys/bus/pci/devices/0000:01:02.0/power/runtime_status", "r");
+	FILE *fp = power_file("runtime_status");
 	int ok;
 
 	if (!fp)
@@ -388,10 +407,10 @@ static int rpm_status(char *buf, size_t n)
 /* 1 once suspended, 0 if not within ms, -1 without runtime PM. */
 static int rpm_wait_suspended(unsigned ms)
 {
-	FILE *fp = fopen("/sys/bus/pci/devices/0000:01:02.0/power/control", "r");
+	FILE *fp = power_file("control");
 	char st[32] = "";
 
-	/* "on": runtime PM forbidden (powervr_sgx.runtime_pm=0) */
+	/* "on": runtime PM forbidden */
 	if (fp) {
 		if (!fgets(st, sizeof(st), fp))
 			st[0] = 0;
@@ -449,6 +468,46 @@ static int hang(struct rc *a, unsigned f)
 	CHECK(mixed(a, f + 1));
 	sgx_surface_destroy(c.c, c.s);
 	sgx_ctx_destroy(c.c);
+	sgx_surface_destroy(b.c, b.s);
+	sgx_ctx_destroy(b.c);
+	return !bad;
+}
+
+/* A faulting render with QUEUED renders behind it on the same context. */
+#define QUEUED	4
+
+static int hang_queued(struct rc *a, unsigned f)
+{
+	struct drm_powervr_sgx_ioctl_get_context_state_args s0, sb;
+	static struct sgx_job j[QUEUED + 1];
+	struct drm_powervr_sgx_job jj[QUEUED + 1];
+	struct rc b;
+	int bad = 0, e;
+	int64_t t0;
+
+	coredump_take();
+	rc_create(&b);
+	s0 = state(b.c->ctx);
+	setenv("SGXGEN_FAULT", "1", 1);
+	record(&b, f);
+	unsetenv("SGXGEN_FAULT");
+	for (int i = 0; i <= QUEUED; i++) {
+		sgx_render_job(b.c, &j[i]);
+		jj[i] = j[i].job;
+	}
+	t0 = deadline(0);
+	e = submit(jj, QUEUED + 1);
+	CHECK(!e);
+	e = wait_syncobj(b.c->syncobj, 20000);
+	sb = state(b.c->ctx);
+	printf("  faulting render + %d queued: wait %d after %lld ms, B state %u, resets %u -> %u\n",
+	       QUEUED, e, (long long)(deadline(0) - t0) / 1000000, sb.state, s0.reset_count,
+	       sb.reset_count);
+	CHECK(sb.state == DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
+	CHECK(sb.reset_count == s0.reset_count + 1);
+	CHECK(state(a->c->ctx).state == DRM_POWERVR_SGX_CONTEXT_STATE_OK);
+	coredump_take();
+	CHECK(render(a, f));
 	sgx_surface_destroy(b.c, b.s);
 	sgx_ctx_destroy(b.c);
 	return !bad;
@@ -576,6 +635,9 @@ int main(int argc, char **argv)
 		if (do_hang) {
 			ok = hang(&a, f);
 			printf("round %u: hang recovery %s\n", r, ok ? "right" : "WRONG");
+			bad += !ok;
+			ok = hang_queued(&a, f);
+			printf("round %u: queued behind a hang %s\n", r, ok ? "right" : "WRONG");
 			bad += !ok;
 		}
 	}

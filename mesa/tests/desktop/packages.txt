@@ -1,0 +1,20 @@
+# The desktop test root (Debian 13 trixie amd64, the current stable), built by .github/workflows/desktop-root.yml.
+# One package per line; Debian's own Mesa comes along as glvnd's fallback, ours is chosen
+# by desktop-up.sh's environment.
+xserver-xorg-core
+xserver-xorg-input-libinput
+xinit
+x11-xserver-utils
+xfce4
+xfce4-terminal
+xfce4-taskmanager
+dbus-x11
+at-spi2-core
+fonts-dejavu-core
+firefox-esr
+epiphany-browser
+mesa-utils
+glmark2-x11
+xdotool
+procps
+less

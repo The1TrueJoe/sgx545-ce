@@ -38,7 +38,7 @@ static void dump_file(const char *name, const char *title, unsigned f)
 	char path[128], line[512];
 	FILE *fp;
 
-	snprintf(path, sizeof path, "/sys/kernel/debug/dri/0000:01:02.0/%s", name);
+	snprintf(path, sizeof path, "/sys/kernel/debug/dri/128/%s", name);
 	fp = fopen(path, "r");
 	if (!fp)
 		return;

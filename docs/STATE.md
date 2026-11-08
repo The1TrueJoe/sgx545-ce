@@ -938,7 +938,7 @@ constant):
 | 10 | min filter linear | D |
 | 12 | mag filter linear | C |
 | 17-20 | 0xf without mipmaps, 0xd with (b18 = mipmapping off) | D |
-| 21-26 | 0x3f in every capture (an LOD clamp?) | G |
+| 21-26 | 0x3f in every capture (an LOD clamp?). On a CE5300 board (32×32, 6 levels, NEAREST_MIPMAP_NEAREST, open driver): b21-22 change nothing; b23-26 = 14 or 15 samples normally; b23-26 = 0..13 samples every level ≥ 1 as level 0. So it is not a max level counted in levels | G, C |
 | 30 | set for L8, A8 and LA88 (channel replication?) | D |
 
 **T1:**

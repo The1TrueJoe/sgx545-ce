@@ -252,6 +252,8 @@ static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (err)
 		return err;
+	/* The GPU's MMU maps page by page: any segment length will do. */
+	dma_set_max_seg_size(&pdev->dev, UINT_MAX);
 
 	sdev = pvrsgx_alloc(&pdev->dev);
 	if (IS_ERR(sdev))

@@ -1197,6 +1197,27 @@ memory matching. Only then does it go to the box `srvinit` loads it on
     written at every 3D start.
   - Results: 600 frames with 0 differing, and a second process's 100 frames
     with 0 differing, no OOM.
+  - **Corrected 2026-11-08.** Resetting the markers on every cleanup was too
+    broad. A render-target or render-context cleanup, sent while the PB lives
+    on, reloaded the free list from a descriptor last saved at the first
+    frame's 3D start. In a CE5300 register sample of Minecraft, 0x61c and 0x638
+    snap back to their first-frame values after a 30 ms idle. The TA head
+    (0x700) then runs to 0xffff within one scene. In the DDK's 120 s sample,
+    0x61c, 0x604, 0x638 and 0x660 never change. The DDK clears the markers in
+    three places:
+    - a cleanup whose PB descriptor equals the marker (pc 0x03a5-0x03b2, when
+      cleanup data word 0 b5 is set and data word 6 matches; pc 0x0475-0x047b);
+    - the power-off path (pc 0x04e7-0x051f, r6 b0). It first saves the TA's
+      live counters into the +0xb8 descriptor (pc 0x168d: pb[6] = 0x700,
+      pb[7] = 0x710 << 16, pb[8] = 0x724 >> 16, pb[9] = 0x72c >> 16). When
+      +0xbc is set and differs from +0xb8, it saves the 3D's into the +0xbc
+      descriptor (pc 0x16d4: 0x70c, 0x71c << 16, 0x728 & 0xffff,
+      0x730 & 0xffff). Only then does it clear both markers;
+    - a reset path (pc 0x0292-0x02aa), unconditionally.
+  - The open microkernel (39c2de6) no longer clears the markers at a cleanup.
+    Init resets them, and the host never reallocates a PB descriptor at the
+    same address within a session. A power-off that loses the DPM registers
+    would still need the DDK's save-then-clear.
 - The timer / active-power / lockup-detection path is read structurally but
   not run (no timer event in an offline frame).
 - The recovery rescan (section 5a) is understood from the init path and the

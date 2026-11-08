@@ -1,6 +1,8 @@
 # The EA test kernel with the kernel's debug checks, for running the uAPI and
 # frame tests under them (docs/UPSTREAM-READINESS.md). RAM boot only.
 CONFIG_LOCALVERSION="-m2drm-debug"
+# The board config leaves this off; lockdep, kmemleak and debug objects need it.
+CONFIG_DEBUG_KERNEL=y
 CONFIG_PROVE_LOCKING=y
 CONFIG_DEBUG_ATOMIC_SLEEP=y
 CONFIG_DEBUG_LIST=y

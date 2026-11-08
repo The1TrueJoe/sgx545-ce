@@ -9,6 +9,7 @@
 #include <drm/drm_mm.h>
 #include <drm/gpu_scheduler.h>
 
+#include <linux/device.h>
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -116,6 +117,8 @@ struct pvrsgx_device {
 	struct drm_device base;
 	/** @pdev: The SGX PCI function (CE5300), or NULL behind gma500 (Cedarview). */
 	struct pci_dev *pdev;
+	/** @dma_parms: DMA parameters of the gma500 auxiliary device. */
+	struct device_dma_parameters dma_parms;
 	/** @gma_sgx: The gma500 auxiliary device behind which the SGX sits, or NULL. */
 	struct gma500_sgx_device *gma_sgx;
 	/** @irq_work: The interrupt's bottom half behind gma500, which owns the line. */
