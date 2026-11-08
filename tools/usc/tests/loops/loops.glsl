@@ -30,3 +30,8 @@ void main() { gl_FragColor = getColor(); }
 @frag ret_write_m
 varying mediump vec4 v_coords;
 void main() { gl_FragColor = vec4(v_coords.xyz, 1.0); if (v_coords.x + v_coords.y >= 0.0) return; gl_FragColor = vec4(v_coords.wzy, 1.0); }
+@frag sel_iter_m
+precision mediump float;
+varying mediump vec4 v_coords;
+uniform bool ub_true;
+void main() { mediump vec4 res = v_coords; for (int i = 0; i < (ub_true ? 3 : 0); i++) res = res.yzwx; gl_FragColor = vec4(res.rgb, 1.0); }
