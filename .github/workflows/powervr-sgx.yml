@@ -43,10 +43,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: The board tree is configured
+        env:
+          BOARD_TREE_REPO: ${{ vars.BOARD_TREE_REPO }}
+        run: |
+          [ -n "$BOARD_TREE_REPO" ] || {
+            echo "::error::set the BOARD_TREE_REPO repository variable (owner/name of the board tree)"
+            exit 1
+          }
+
       - name: The board tree (board config, patches, drivers)
         uses: actions/checkout@v4
         with:
-          repository: The1TrueJoe/openHC
+          repository: ${{ vars.BOARD_TREE_REPO }}
           ref: ${{ env.DIST_REF }}
           path: dist
           sparse-checkout: |
