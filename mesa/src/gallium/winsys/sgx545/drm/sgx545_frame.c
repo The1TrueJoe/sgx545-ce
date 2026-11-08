@@ -23,6 +23,7 @@
 
 #include "util/macros.h"
 
+#include "sgx545_csb.h"
 #include "sgx545_frame.h"
 #include "sgx545_pds.h"
 #include "sgx545_usse_progs.h"
@@ -398,11 +399,32 @@ static const struct sgx545_pds_douti clear_douti = {
    .src = 0x20, .comps = 4, .iterate = true, .last_iter = true,
 };
 
-/* TA/3D state word for a pixel PDS program: rows<<26 | offset in the PDS pixel heap >> 4 */
+/* TA/3D state word for a pixel PDS program */
 static uint32_t
 pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
 {
-   return rows << 26 | (va - c->dev->heap_base[H_PDSPIXEL]) >> 4;
+   uint32_t w;
+
+   sgx545_pack(&w, TA_STATE_PDS_PROGRAM, pds) {
+      pds.data_rows = rows;
+      pds.offset = (va - c->dev->heap_base[H_PDSPIXEL]) >> 4;
+   }
+   return w;
+}
+
+/* TA/3D PDS word 1: the primary attributes in units of 4 dwords, the
+ * secondary attribute dwords, b25-28 */
+static uint32_t
+pds_sizeinfo(uint32_t units, uint32_t sec_dwords, uint32_t b25_28)
+{
+   uint32_t w;
+
+   sgx545_pack(&w, TA_STATE_PDS_SIZEINFO, si) {
+      si.primary_units = units;
+      si.secondary_size = (sec_dwords + 3) >> 2;
+      si.unknown_25_28 = b25_28;
+   }
+   return w;
 }
 
 /*
@@ -795,12 +817,23 @@ eot_program(struct sgxws_ctx *c)
    }
 
    p = ring_alloc(pool, 7 * 8, USSE_ALIGN);
-   pbe[0] = 0;                                             /* clip min y<<16 | x [D] */
-   pbe[1] = (s->h - 1) << 16 | (s->w - 1);                 /* clip max [C] */
-   pbe[2] = ((t->stride - 1) >> 1) << 16 | 0x8000;         /* stride/2-1 [C]; b15 [D] */
-   pbe[3] = t->va & ~3u;                                   /* address [D] */
-   /* format, b9, dither, b13: twiddled */
-   side = 0x200 | t->pbe_format | 0x400 | (t->t1_layout == 0 ? 0x2000 : 0);
+   sgx545_pack(&pbe[0], PBE_STATE_WORD0, w0) {             /* clip min [D] */
+      w0.x_min = 0;
+      w0.y_min = 0;
+   }
+   sgx545_pack(&pbe[1], PBE_STATE_WORD1, w1) {             /* clip max [C] */
+      w1.x_max = s->w - 1;
+      w1.y_max = s->h - 1;
+   }
+   sgx545_pack(&pbe[2], PBE_STATE_WORD2, w2)               /* b15 [D] */
+      w2.pitch = (t->stride - 1) >> 1;                     /* [C] */
+   sgx545_pack(&pbe[3], PBE_STATE_WORD3, w3)               /* [D] */
+      w3.address = SGX545_DEV_ADDR(t->va);
+   sgx545_pack(&side, PBE_SIDEBAND, sb) {
+      sb.format = t->pbe_format;
+      sb.dither = true;
+      sb.twiddled = t->t1_layout == SGX545_TEXSTATE_LAYOUT_TWIDDLED;
+   }
    p.p[0] = 0;                                             /* phas.i #0, #0 [wait=7] */
    p.p[1] = 0xfa440700;
    for (uint32_t r = 0; r < 4; r++)
@@ -884,7 +917,7 @@ background(struct sgxws_ctx *c)
 {
    const struct sgxws_rt *s = c->rt;
    struct pds p = { 0 };
-   uint32_t rows, va;
+   uint32_t rows, va, tex[4];
 
    pds_d0(&p, 0, doutu_w0(c, c->copy_fs, false, 0));
    pds_d0(&p, 1, doutu_w1_pixel(false, true));
@@ -894,25 +927,42 @@ background(struct sgxws_ctx *c)
                     .sample_set = 1, .src = 0x24, .last_sample = true }));
    pds_d0(&p, 2, 0);
    pds_d0(&p, 3, 0);
-   /* DOUTT: T0 = 0x90 (clamp S/T b7/b4) and, strided, the pitch (pitch-1 split
-    * over b9-11 and b17-26, TEX.md; 0x20e00 at 736), else T0's nearest, no
-    * mipmaps; T1 = the target's layout | format | w-1 | h-1; T2 = address; T3 [G] */
-   {
-      uint32_t pm1 = c->target.stride - 1;
-
-      pds_d1(&p, 2, c->target.t1_layout == 6 ? (pm1 & 7) << 9 | (pm1 >> 3) << 17 | 0x90 : 0x07fe0090);
+   /* DOUTT: T0 clamps S and T and, strided, holds the pitch (TEX.md), else
+    * nearest, no mipmaps; T1 = the target's layout, format and size; T2 =
+    * address; T3 [G] */
+   if (c->target.t1_layout == SGX545_TEXSTATE_LAYOUT_STRIDED) {
+      sgx545_pack(&tex[0], TEXSTATE_STRIDED_WORD0, t0) {
+         t0.wrap_s = t0.wrap_t = SGX545_TEXSTATE_WRAP_CLAMP;
+         t0.pitch_lo = (c->target.stride - 1) & 7;
+         t0.pitch_hi = (c->target.stride - 1) >> 3;
+      }
+   } else {
+      sgx545_pack(&tex[0], TEXSTATE_WORD0, t0) {
+         t0.wrap_s = t0.wrap_t = SGX545_TEXSTATE_WRAP_CLAMP;
+         t0.no_mipmaps = true;
+      }
    }
-   pds_d1(&p, 3, (uint32_t)c->target.t1_layout << 29 | (uint32_t)c->target.t1_format << 24 |
-                 (s->w - 1) << 12 | (s->h - 1));
-   pds_d0(&p, 4, c->target.va);
-   pds_d0(&p, 5, 0x00800000);
+   sgx545_pack(&tex[1], TEXSTATE_WORD1, t1) {
+      t1.layout = c->target.t1_layout;
+      t1.format = c->target.t1_format;
+      t1.width = s->w - 1;
+      t1.height = s->h - 1;
+   }
+   sgx545_pack(&tex[2], TEXSTATE_WORD2, t2)
+      t2.address = SGX545_DEV_ADDR(c->target.va);
+   sgx545_pack(&tex[3], TEXSTATE_WORD3, t3) {
+   }
+   pds_d1(&p, 2, tex[0]);
+   pds_d1(&p, 3, tex[1]);
+   pds_d0(&p, 4, tex[2]);
+   pds_d0(&p, 5, tex[3]);
    CODE(&p, pds_movs(MV, 0, 0, 0, 1, 2, 3, DOUTU));
    CODE(&p, pds_movs(MV, 1, 0, 3, 0, 1, 1, DOUTI));
    CODE(&p, pds_movs(MV, 2, 1, 2, 3, 0, 1, DOUTT));
    CODE(&p, pds_halt());
    va = pds_emit(&c->pds_pix, &p, &rows);
    c->bg_pds[0] = pds_word(c, c->pds_empty_p, 1);
-   c->bg_pds[1] = 0x00030001;       /* [G] */
+   c->bg_pds[1] = pds_sizeinfo(1, 0, 0);
    c->bg_pds[2] = pds_word(c, va, rows);
 }
 
@@ -955,10 +1005,28 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target 
    return 0;
 }
 
-static void
-vdm(struct sgxws_ctx *c, uint32_t w)
+static uint32_t *
+vdm_slot(struct sgxws_ctx *c)
 {
-   *ring_alloc(&c->vdm, 4, 4).p = w;
+   return ring_alloc(&c->vdm, 4, 4).p;
+}
+
+/* a state program in the VDM stream (STATE.md section 2): the program, then
+ * its data rows and what it DMAs */
+static void
+vdm_state(struct sgxws_ctx *c, enum SGX545_VDMCTRL_BLOCK_TYPE type, uint32_t va, uint32_t rows,
+          enum SGX545_VDMCTRL_STATE_KIND kind, uint32_t dwords, uint32_t buffer_index)
+{
+   sgx545_pack(vdm_slot(c), VDMCTRL_PDS_STATE0, s0) {
+      s0.block_type = type;
+      s0.pds_addr = SGX545_DEV_ADDR(va);
+   }
+   sgx545_pack(vdm_slot(c), VDMCTRL_PDS_STATE1, s1) {
+      s1.data_rows = rows;
+      s1.kind = kind;
+      s1.attr_size = (dwords + 3) >> 2;
+      s1.buffer_index = buffer_index;
+   }
 }
 
 /* A TA state block goes to the MTE through a VDM state program: DMA the block
@@ -989,9 +1057,8 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_d
    CODE(&p, pds_movs(MV, 2, 0, 0, 1, 2, 0, DOUTU));
    CODE(&p, pds_halt());
    va = pds_emit(&c->pds_vtx, &p, &rows);
-   vdm(c, 0x40000000 | va >> 4);
-   /* info (STATE.md section 2): rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
-   vdm(c, rows << 26 | ((c->vdm_counter + 0x2000) | 0x2020400 | ((n + 3) >> 2)));
+   vdm_state(c, SGX545_VDMCTRL_BLOCK_TYPE_PDS_STATE, va, rows, SGX545_VDMCTRL_STATE_KIND_TA_BLOCK, n,
+             c->vdm_counter);
    c->vdm_counter = (c->vdm_counter + 1) & 3;
 }
 
@@ -1041,13 +1108,26 @@ vdm_fetch(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, cons
    CODE(&p, pds_movs(MV_CC3, row, 0, 0, 1, 3, 3, DOUTU));
    CODE(&p, pds_halt());
    va = pds_emit(&c->pds_vtx, &p, &rows);
-   vdm(c, 0x80000000 | 0x00c00000 | prim << 26 | count);
-   vdm(c, idx & ~1u);                /* 16-bit indices */
-   vdm(c, (batch - 1) << 28);
-   vdm(c, 0x003fffff);
-   vdm(c, (vpt - 1) << 28 | va >> 4);
-   vdm(c, (out_dwords + 3) >> 2 << 24 | ((in_dwords * 4 + 0xf) >> 4) << 7 |
-          (vpt - 1 < 3 ? vpt - 1 : 3) << 22 | rows);
+   sgx545_pack(vdm_slot(c), VDMCTRL_INDEX_LIST0, w0) {
+      w0.prim = prim;
+      w0.index_count = count;
+   }
+   sgx545_pack(vdm_slot(c), VDMCTRL_INDEX_LIST1, w1)
+      w1.index_addr = SGX545_DEV_ADDR(idx);              /* 16-bit indices */
+   sgx545_pack(vdm_slot(c), VDMCTRL_INDEX_LIST2, w2)
+      w2.batch = batch - 1;
+   sgx545_pack(vdm_slot(c), VDMCTRL_INDEX_LIST3, w3) {
+   }
+   sgx545_pack(vdm_slot(c), VDMCTRL_INDEX_LIST4, w4) {
+      w4.vertices_per_task = vpt - 1;
+      w4.pds_addr = SGX545_DEV_ADDR(va);
+   }
+   sgx545_pack(vdm_slot(c), VDMCTRL_INDEX_LIST5, w5) {
+      w5.out_size = (out_dwords + 3) >> 2;
+      w5.n_min3 = vpt - 1 < 3 ? vpt - 1 : 3;
+      w5.in_size = (in_dwords * 4 + 0xf) >> 4;
+      w5.data_rows = rows;
+   }
 }
 
 /* the vertices packed, attr_dwords apart at vb: DMAs of at most 16 dwords,
@@ -1098,6 +1178,20 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
 }
 
+/* TA state region clip, in tiles, inclusive */
+static void
+region_clip(uint32_t *w, uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1)
+{
+   sgx545_pack(&w[0], TA_STATE_REGION_CLIP0, r0) {
+      r0.x_min = x0;
+      r0.x_max = x1;
+   }
+   sgx545_pack(&w[1], TA_STATE_REGION_CLIP1, r1) {
+      r1.y_min = y0;
+      r1.y_max = y1;
+   }
+}
+
 /* A pass-type-3 object: writes the visible bits under it and draws nothing
  * (ISPC b25-27: 1 sets, 0 resets), with its region clip */
 static void
@@ -1108,15 +1202,26 @@ vpgen_object(struct sgxws_ctx *c, bool set, const struct sgxws_rect *tiles, cons
    uint32_t blk[9];
 
    memcpy(v.p, xy, count * 8);
-   blk[0] = 0x1 | 0x4 | 0x80 | 0x400 | 0x1000 | 0x4000 | 0x8000;    /* d485 */
-   blk[1] = 0x07e00100;             /* pass type 3, no colour, always + write, ISPC follows */
-   blk[2] = set ? 0x02000000 : 0;
-   blk[3] = 0x80000000 | (tiles->x0 / 32) << 16 | (tiles->x1 - 1) / 32;
-   blk[4] = (tiles->y0 / 16) << 16 | (tiles->y1 - 1) / 16;
-   blk[5] = 4 << 16;                /* output select: 4 dwords per vertex */
-   blk[6] = 0x40;                   /* MTE control, as the clear's */
-   blk[7] = 0;
-   blk[8] = 0;
+   sgx545_pack(&blk[0], TA_STATE_HEADER, h) {             /* d485 */
+      h.ispa = h.ispc = h.region_clip = h.outselect = h.mte = h.tsp0 = h.tsp1 = true;
+   }
+   sgx545_pack(&blk[1], TA_STATE_ISPA, a) {               /* 07e00100 */
+      a.pass_type = SGX545_TA_PASSTYPE_VIEWPORT_GENERATE;
+      a.no_color_write = true;
+      a.depth_func = SGX545_TA_CMP_ALWAYS;
+      a.ispc_present = true;
+   }
+   sgx545_pack(&blk[2], TA_STATE_ISPC, ispc)
+      ispc.func = set;
+   region_clip(&blk[3], tiles->x0 / 32, (tiles->x1 - 1) / 32, tiles->y0 / 16, (tiles->y1 - 1) / 16);
+   sgx545_pack(&blk[5], TA_STATE_OUTSELECT, os)          /* 4 dwords per vertex */
+      os.out_dwords = 4;
+   sgx545_pack(&blk[6], TA_STATE_MTE, mte)               /* as the clear's */
+      mte.unknown_2_31 = SGX545_TA_STATE_MTE_UNKNOWN_2_31_CLEAR;
+   sgx545_pack(&blk[7], TA_STATE_TSP0, tsp0) {
+   }
+   sgx545_pack(&blk[8], TA_STATE_TSP1, tsp1) {
+   }
    state_block(c, blk, 9, 9, 0);
    vdm_draw(c, prim, count, c->idx, v.va, 8, 2, c->vpgen_vs, 2, 4, 0, vertices_per_task(4));
 }
@@ -1173,28 +1278,47 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
       v.p[4 * i + 3] = argb;
    }
    /* TA state block: ISPA ISPB PDS region-clip output-select MTE TSP (header 0xd4c3) */
-   blk[n++] = 0x1 | 0x2 | (stencil >= 0 ? 0x4 : 0) | 0x40 | 0x80 | 0x400 | 0x1000 | 0x4000 | 0x8000;
+   sgx545_pack(&blk[n++], TA_STATE_HEADER, h) {
+      h.ispa = h.ispb = h.pds = h.region_clip = h.outselect = h.mte = h.tsp0 = h.tsp1 = true;
+      h.ispc = stencil >= 0;
+   }
    /* always; depth write for a depth clear, except to the background depth
     * (1.0) before anything was drawn: every render starts there */
-   blk[n] = zwrite ? 0x01c00200 : 0x01d00200;
-   if (!(wmask & 0xf))
-      blk[n] |= 1u << 21;                                /* no colour write (STATE.md ISPA b21) */
-   if (stencil >= 0)
-      blk[n] |= 0x100 | (stencil & 0xff);                /* ISPC follows, the reference */
-   n++;
+   sgx545_pack(&blk[n++], TA_STATE_ISPA, a) {
+      a.depth_func = SGX545_TA_CMP_ALWAYS;
+      a.depth_write_disable = !zwrite;
+      a.no_color_write = !(wmask & 0xf);
+      a.ispb_present = true;
+      if (stencil >= 0) {
+         a.ispc_present = true;
+         a.stencil_ref = stencil & 0xff;
+      }
+   }
    /* ISPB: colour mask (R8 G4 B2 A1, from the byte mask) */
-   blk[n++] = ((wmask & 4 ? 8 : 0) | (wmask & 2 ? 4 : 0) | (wmask & 1 ? 2 : 0) | (wmask & 8 ? 1 : 0)) << 4;
-   if (stencil >= 0)
-      blk[n++] = 0x0e0200ff;
+   sgx545_pack(&blk[n++], TA_STATE_ISPB, b)
+      b.color_mask = (wmask & 4 ? 8 : 0) | (wmask & 2 ? 4 : 0) | (wmask & 1 ? 2 : 0) | (wmask & 8 ? 1 : 0);
+   if (stencil >= 0) {
+      sgx545_pack(&blk[n++], TA_STATE_ISPC, ispc) {      /* 0e0200ff */
+         ispc.func = SGX545_TA_CMP_ALWAYS;
+         ispc.zpass = SGX545_TA_STENCILOP_REPLACE;
+         ispc.write_mask = 0xff;
+      }
+   }
    blk[n++] = pds_word(c, c->pds_empty_p, 1);
-   blk[n++] = 0x00030001;                                /* [G] */
+   blk[n++] = pds_sizeinfo(1, 0, 0);
    blk[n++] = pds_word(c, (wmask & 0xf) == 0xf ? c->clear_pds : clear_pds_masked(c, wmask & 0xf), 2);
-   blk[n++] = 0x80000000 | 0 << 16 | (s->n.xt - 1);      /* region clip: whole surface, in tiles */
-   blk[n++] = 0 << 16 | (s->n.yt - 1);
-   blk[n++] = 8 << 16 | 0x1800;                          /* 8 output dwords [D], 0x1800 [G] */
-   blk[n++] = 0x40;                                      /* MTE ctrl of the clear [G] */
-   blk[n++] = 5;                                         /* one 4-component set */
-   blk[n++] = 0;
+   region_clip(&blk[n], 0, s->n.xt - 1, 0, s->n.yt - 1);  /* the whole surface */
+   n += 2;
+   sgx545_pack(&blk[n++], TA_STATE_OUTSELECT, os) {
+      os.out_dwords = 8;                                 /* [D] */
+      os.unknown_11_13 = SGX545_TA_STATE_OUTSELECT_UNKNOWN_11_13_CLEAR;
+   }
+   sgx545_pack(&blk[n++], TA_STATE_MTE, mte)
+      mte.unknown_2_31 = SGX545_TA_STATE_MTE_UNKNOWN_2_31_CLEAR;
+   sgx545_pack(&blk[n++], TA_STATE_TSP0, tsp0)           /* one 4-component set */
+      tsp0.set0 = 5;
+   sgx545_pack(&blk[n++], TA_STATE_TSP1, tsp1) {
+   }
    state_block(c, blk, n, n, (n - 1) & 3);
    vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0, 8);
    c->draws++;
@@ -1204,24 +1328,26 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_de
 static uint32_t
 ispa(const struct sgxws_state *st, uint32_t prim, unsigned face)
 {
-   uint32_t v = 0x200;              /* b9: ISPB follows */
+   uint32_t w;
 
-   v |= (st->pass_type & 7) << 25;  /* pass type */
-   /* object type: 0 triangles, 1 lines, 3 points (a line list as type 0 draws nothing) */
-   if (prim == SGXWS_LINES)
-      v |= 1u << 15;
-   else if (prim == SGXWS_POINTS)
-      v |= (st->sprite ? 4u : 3u) << 15;
-   if (st->stencil)
-      v |= 0x100 | st->stencil_ref[face];   /* ISPC follows, the reference */
-   if (st->stencil && st->two_sided)
-      v |= 0x800;
-
-   if (!st->depth_func)
-      v |= 7u << 22 | 0x100000;     /* always, no write */
-   else
-      v |= (st->depth_func - 0x200) << 22 | (st->depth_write ? 0 : 0x100000);
-   return v;
+   sgx545_pack(&w, TA_STATE_ISPA, a) {
+      a.ispb_present = true;
+      a.pass_type = st->pass_type & 7;
+      /* a line list as a triangle object draws nothing */
+      if (prim == SGXWS_LINES)
+         a.objtype = SGX545_TA_OBJTYPE_LINE;
+      else if (prim == SGXWS_POINTS)
+         a.objtype = st->sprite ? SGX545_TA_OBJTYPE_SPRITE : SGX545_TA_OBJTYPE_POINT;
+      if (st->stencil) {
+         a.ispc_present = true;
+         a.stencil_ref = st->stencil_ref[face];
+         a.two_sided = st->two_sided;
+      }
+      /* depth off: always, no write */
+      a.depth_func = st->depth_func ? st->depth_func - 0x200 : SGX545_TA_CMP_ALWAYS;
+      a.depth_write_disable = !st->depth_func || !st->depth_write;
+   }
+   return w;
 }
 
 /* MTE cull (STATE.md section 3): with gallium's front_ccw (st flips it for a
@@ -1231,13 +1357,17 @@ ispa(const struct sgxws_state *st, uint32_t prim, unsigned face)
 static uint32_t
 mte_ctrl(const struct sgxws_state *st)
 {
-   uint32_t k = 0;
 
-   if (st->cull == SGXWS_BACK)
-      k = st->front_ccw ? 1 : 2;
-   else if (st->cull == SGXWS_FRONT)
-      k = st->front_ccw ? 2 : 1;
-   return 0x1555620 | k;
+   uint32_t w;
+
+   sgx545_pack(&w, TA_STATE_MTE, mte) {
+      if (st->cull == SGXWS_BACK)
+         mte.cull = st->front_ccw ? SGX545_TA_CULL_CW : SGX545_TA_CULL_CCW;
+      else if (st->cull == SGXWS_FRONT)
+         mte.cull = st->front_ccw ? SGX545_TA_CULL_CCW : SGX545_TA_CULL_CW;
+      mte.unknown_2_31 = SGX545_TA_STATE_MTE_UNKNOWN_2_31_DRAW;
+   }
+   return w;
 }
 
 int
@@ -1356,10 +1486,14 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       rows = 1;
    }
    apply_clip(c, &st->clip);
-   /* ISPB: line width * 16 at b8-15 (1.0 when the draw doesn't say), colour mask */
-   ispb = (st->line_width > 15.9f ? 255u : st->line_width > 1.0f ? (uint32_t)(st->line_width * 16.0f) : 16u) << 8 |
-          (st->color_mask & 0xf) << 4;
-   blk[n++] = 0;
+   /* ISPB: line width * 16 (1.0 when the draw doesn't say), colour mask */
+   sgx545_pack(&ispb, TA_STATE_ISPB, b) {
+      b.line_width = st->line_width > 15.9f  ? 255u
+                     : st->line_width > 1.0f ? (uint32_t)(st->line_width * 16.0f)
+                                             : 16u;
+      b.color_mask = st->color_mask & 0xf;
+   }
+   n++;                                                   /* the header, below */
    blk[n++] = ispa(st, d->prim, 0);
    blk[n++] = ispb;
    if (st->stencil) {
@@ -1371,19 +1505,17 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       }
    }
    blk[n++] = pds_word(c, sec, rows);
-   /* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; b0-15 = the
-    * fragment program's primary attributes in units of 4 dwords, b25-28 = 12
-    * divided by that (EA3, DDK captures with 0-5 vec4 varyings: units 1 1 1 2
-    * 2 3, b25-28 12 12 6 6 4; 0xb with one unit, as the DDK's uniform shader
-    * and every draw before had it); b16-17 = 3 [G]. A program with more
-    * attributes than the word declares locks the GPU up (two F32 vec4
-    * varyings, EA3). */
+   /* PDS middle word: the fragment program's primary attributes in units
+    * of 4 dwords, the secondaries [D]; b25-28 = 12 divided by the units (EA3,
+    * DDK captures with 0-5 vec4 varyings: units 1 1 1 2 2 3, b25-28 12 12 6 6
+    * 4; 0xb with one unit, as the DDK's uniform shader and every draw before
+    * had it). A program with more attributes than the word declares locks
+    * the GPU up (two F32 vec4 varyings, EA3). */
    {
       unsigned units = fs->pa_dwords > 4 ? (fs->pa_dwords + 3) / 4 : 1, per = 12 / units;
 
       blk[n++] = fs->pds_middle ? fs->pds_middle
-                                : units | 3u << 16 | ((fs->sec_dwords + 3) >> 2) << 18 |
-                                  (per < 0xb ? per : 0xbu) << 25;
+                                : pds_sizeinfo(units, fs->sec_dwords, per < 0xb ? per : 0xbu);
    }
    /* DOUTU word 1: the program has plain iterations, samples (PDS.md) */
    {
@@ -1397,22 +1529,33 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
                        fs->douti_tex, fs->n_douti, d->tex, &rows);
    }
    blk[n++] = pds_word(c, prim, rows);
-   /* viewport (6 floats): offset/scale for x, y, z, as gallium's transform [C x offset, D rest] */
-   blk[n++] = f32(st->vp_translate[0]);
-   blk[n++] = f32(st->vp_scale[0]);
-   blk[n++] = f32(st->vp_translate[1]);
-   blk[n++] = f32(st->vp_scale[1]);
-   blk[n++] = f32(st->vp_translate[2]);
-   blk[n++] = f32(st->vp_scale[2]);
+   /* viewport: gallium's transform [C x offset, D rest] */
+   sgx545_pack(&blk[n], TA_STATE_VIEWPORT, vp) {
+      vp.x_offset = st->vp_translate[0];
+      vp.x_scale = st->vp_scale[0];
+      vp.y_offset = st->vp_translate[1];
+      vp.y_scale = st->vp_scale[1];
+      vp.z_offset = st->vp_translate[2];
+      vp.z_scale = st->vp_scale[2];
+   }
+   n += SGX545_TA_STATE_VIEWPORT_length;
    blk[n++] = 0;                                          /* header 0x200 */
-   /* output select: + 0x100 when the last output dword is the point size */
-   blk[n++] = vs->out_dwords << 16 | 0x3000 | (vs->point_size ? 0x100 : 0);
-   blk[n++] = 0x3727c5ac;                                 /* W clamp 1e-5 */
+   sgx545_pack(&blk[n++], TA_STATE_OUTSELECT, os) {
+      os.out_dwords = vs->out_dwords;
+      os.unknown_11_13 = SGX545_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
+      os.point_size = vs->point_size;
+   }
+   sgx545_pack(&blk[n++], TA_STATE_WCLAMP, wc)
+      wc.value = 1e-5f;
    blk[n++] = mte_ctrl(st);
-   blk[n++] = vs->tsp_sizes;                              /* TSP: texcoord sizes */
+   blk[n++] = vs->tsp_sizes;                              /* TSP0, TSP1: the vertex program's */
    blk[n++] = vs->tsp_prec;
-   blk[0] = 0x1 | 0x2 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000 |
-            (st->stencil ? 0x4 : 0) | (st->stencil && st->two_sided ? 0x38 : 0);
+   sgx545_pack(&blk[0], TA_STATE_HEADER, h) {
+      h.ispa = h.ispb = h.pds = h.viewport = h.unknown_word = h.outselect = h.wclamp = h.mte = true;
+      h.tsp0 = h.tsp1 = true;
+      h.ispc = st->stencil;
+      h.ispa2 = h.ispb2 = h.ispc2 = st->stencil && st->two_sided;
+   }
    /* the DDK DMAs 25 dwords for a draw's block (kind 0) and 27 (kind 2) for the
     * 22-word two-sided one; the header says where it ends. 25 for the two-sided
     * block draws nothing or the wrong colours from run to run (dEQP
@@ -1438,8 +1581,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    for (unsigned j = 0; j < d->vs_mem.n_bases && d->vs_mem.dwords; j++)
       vsec.p[10 + d->vs_mem.base[j]] = vmem.va + 512 * j;
    sec = pds_dma_task(&c->pds_vtx, vsec.va, vsec_dwords, doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
-   vdm(c, 0x40000000 | sec >> 4);
-   vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
+   vdm_state(c, SGX545_VDMCTRL_BLOCK_TYPE_PDS_STATE, sec, vrows, SGX545_VDMCTRL_STATE_KIND_DMA, vsec_dwords, 0);
 
    c->gpu_indices += n_idx;
    c->gpu_verts += d->count;
@@ -1459,11 +1601,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 void
 sgxws_vdm_end(struct sgxws_ctx *c)
 {
-   vdm(c, 0x40000000 | c->empty_state >> 4);
-   vdm(c, 1u << 26 | 0xe100);
-   vdm(c, 0x60000000 | c->terminate >> 4);
-   vdm(c, 3u << 26 | 0x2022401);
-   vdm(c, 0xc0000000);
+   vdm_state(c, SGX545_VDMCTRL_BLOCK_TYPE_PDS_STATE, c->empty_state, 1, SGX545_VDMCTRL_STATE_KIND_DMA, 0, 0);
+   /* the TA terminate's 2 attributes */
+   vdm_state(c, SGX545_VDMCTRL_BLOCK_TYPE_PDS_STATE_TERMINATE, c->terminate, 3,
+             SGX545_VDMCTRL_STATE_KIND_TA_BLOCK, 2, 0);
+   sgx545_pack(vdm_slot(c), VDMCTRL_STREAM_TERMINATE0, t) {
+   }
 }
 
 void

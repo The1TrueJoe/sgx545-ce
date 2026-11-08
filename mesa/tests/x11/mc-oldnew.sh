@@ -6,7 +6,8 @@
 # way for both:
 #
 #   old  the openhc-minecraft install as mc-session runs it: i386 Zulu 8, gl4es,
-#        the DDK's GLES2 on pvrsrvkm, Xvfb (the normal boot)
+#        the DDK's GLES2 on pvrsrvkm, Xvfb (the normal boot); MC_GL=sgx545: the
+#        same with our i386 Mesa in its place (the same-binary head-to-head)
 #   new  mc-x64.sh: x64 Zulu 8, LWJGL's amd64 natives, GLX/DRI3 on Xorg, our Mesa
 #        on powervr_sgx (a RAM boot, x11-up.sh's root at /opt/x64root)
 #
@@ -26,7 +27,7 @@
 # "HWRecoveryResetSGX"/"Recovery triggered", powervr_sgx's "job timed out");
 # any recovery voids the run. A screenshot with F3's overlay at the end of
 # the standing view: /root/mcbench/<who>-<run>.raw (BGRX, see the .txt).
-# Results go to /root/mcbench/<who>-<run>.txt.
+# Results go to /root/mcbench/<who>-<run>.txt, the game's log to <who>-<run>.log.
 set -u
 WHO=$1 RUN=$2 WARM=${3:-30} STAND=${4:-60} WALK=${5:-60}
 OUT=/root/mcbench
@@ -39,7 +40,7 @@ old)
 	;;
 new)
 	R=/opt/x64root GIN=/opt/mc-x64 G=$R$GIN LOG=$G/logs/oldnew.log
-	REC="job timed out"
+	REC="job timed out|device lost|did not restart"
 	;;
 *) echo "old or new" >&2; exit 2 ;;
 esac
@@ -96,7 +97,7 @@ if [ $WHO = old ]; then
 	X() { X64=/opt/x64root; env -i DISPLAY=:0 $X64/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 \
 		--library-path $X64/usr/lib/x86_64-linux-gnu:$X64/lib/x86_64-linux-gnu $X64/usr/bin/xdotool "$@"; }
 	chroot $R /usr/bin/env -i HOME=/root TERM=linux DISPLAY=:0 PATH=/usr/local/bin:/usr/bin:/bin \
-		MC_GL=ddk MC_DIR=$GIN MC_TWEAKS=0 MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 MC_LINEBUF=1 \
+		MC_GL=${MC_GL:-ddk} SGX545_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} LIBGL_NOTEST=1 MC_DIR=$GIN MC_TWEAKS=0 MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 MC_LINEBUF=1 \
 		LD_PRELOAD=/usr/lib/sgx/sgx-busidshim.so /usr/local/bin/minecraft-ab Player > "$LOG" 2>&1 &
 	READY="foliage.png|textures/items-atlas"
 	fps() { grep -o 'fps: [0-9.]*' | awk '{print $2}'; }
@@ -131,17 +132,24 @@ window() {   # SECS: FPS mean and java CPU % over the next SECS seconds
 	echo "$f fps, java CPU $(( (c1 - c0) * 100 / (100 * $1) ))%"
 }
 # MC_DEBUG=flags (new stack): more SGX545_DEBUG flags, e.g. nir (the game's log keeps them)
-# MC_PROFILE=SECS (new stack): perf record of java for SECS of the standing view,
-# its report in /root/mcbench/new-<run>.perf.txt
-if [ -n "${MC_PROFILE:-}" ] && [ $WHO = new ]; then
-	chroot $R /usr/bin/perf record -q -F 499 -g -p "$(jpid)" -o /tmp/perf-mc.data -- sleep "$MC_PROFILE" \
-		> /dev/null 2>&1 &
-fi
+# MC_PROFILE=SECS (new stack): perf record (-g, 499 Hz) of the java process for
+# the first SECS of the standing view, report in /root/mcbench/new-<run>.perf.txt;
+# MC_PROFILE_WALK=SECS: the same for the walking view, in new-<run>-walk.perf.txt
+prof_start() {   # SECS NAME
+	PROF_PID=
+	[ -n "$1" ] && [ $WHO = new ] || return 0
+	chroot $R /usr/bin/perf record -q -F 499 -g -p "$(jpid)" -o "/tmp/perf-mc-$2.data" -- sleep "$1" > /dev/null 2>&1 &
+	PROF_PID=$!
+}
+prof_report() {   # NAME SUFFIX (after the window, which outlasts SECS)
+	[ -n "$PROF_PID" ] || return 0
+	wait "$PROF_PID"
+	chroot $R /usr/bin/perf report -i "/tmp/perf-mc-$1.data" --stdio --no-children --sort dso,symbol \
+		--percent-limit 0.5 2>/dev/null | grep -v '^$' | head -80 > "$OUT/$WHO-$RUN$2.perf.txt"
+}
+prof_start "${MC_PROFILE:-}" stand
 stand=$(window "$STAND")
-if [ -n "${MC_PROFILE:-}" ] && [ $WHO = new ]; then
-	chroot $R /usr/bin/perf report -i /tmp/perf-mc.data --stdio --no-children --sort dso,symbol \
-		--percent-limit 0.5 2>/dev/null | grep -v '^$' | head -80 > "$OUT/$WHO-$RUN.perf.txt"
-fi
+prof_report stand ""
 X key F3
 sleep 3
 if [ $WHO = old ]; then
@@ -153,9 +161,21 @@ else
 fi
 X key F3
 X keydown w
+prof_start "${MC_PROFILE_WALK:-}" walk
 walk=$(window "$WALK")
+prof_report walk -walk
 X keyup w
 rec=$(( $(dmesg | grep -c -E "$REC") - rec0 ))
+cp "$LOG" "$OUT/$WHO-$RUN.log"   # the game's log, with the driver's stats lines
+# a lost device logs no more timeouts: failed submits void the run too
+if [ $WHO = new ] && grep -qE "SUBMIT_JOBS failed|did not finish" "$LOG"; then
+	rec="$rec, $(grep -cE 'SUBMIT_JOBS failed|did not finish' "$LOG") failed submits"
+fi
+# devcoredumps expire after 5 minutes: keep them with the run
+i=0; for d in /sys/class/devcoredump/devcd*/data; do
+	[ -e "$d" ] || continue
+	cat "$d" > "$OUT/$WHO-$RUN-devcd$i.bin"; i=$((i+1))
+done
 
 for p in $(ps | grep '[b]in/java' | awk '{print $1}'); do kill $p; done
 sleep 5
