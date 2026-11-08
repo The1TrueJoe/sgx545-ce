@@ -30,5 +30,5 @@ The technical write-ups the log draws on:
 
 **Edited data (2026-11-08).** In the files under `data/` the boards' host names
 became `ce5300-board`, the session scratch paths became `<scratch>/`, and the
-open microkernel's file names follow its current naming (`sgx545-ukernel.bin`).
+open microkernel's file names follow its current naming (`sgx545_ukernel.bin`).
 The measurements themselves are unchanged.

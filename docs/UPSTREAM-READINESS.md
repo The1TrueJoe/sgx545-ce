@@ -283,15 +283,13 @@ Decided (main, 2026-11-08):
   `Documentation/gpu`, Mesa's `docs/drivers`, the uAPI header's kernel-doc,
   and anything copied from UAPI.md or DRM-DRIVER.md. Such text states the
   facts and their evidence directly. Our own `docs/` may keep the pointers.
-- **Firmware file names follow the per-core naming** (dcd50df).
-  - The build writes `<core>-ukernel.bin`, now
-    `sgx545-ukernel.bin`. SRVINIT.md's `srvinit -o` example uses it.
-  - The driver requests the packaged image as
-    `powervr_sgx/sgx545-ukernel.bin`; UKERNEL.md §4a uses it.
-  - Both match the code (`ukernel/build.py`, `pvrsgx_fw.c`), so no rename was
-    needed.
-  - The WHENCE draft's `powervr/` directory differs from the driver's
-    `powervr_sgx/`. The firmware section already lists it as open.
+- **Firmware file names follow the per-core naming, without a project name**
+  (open-ukernel 69b4427, m2's next driver commit).
+  - The build writes `<core>_ukernel.bin`, i.e. `sgx545_ukernel.bin`, plus
+    `.bin.pat` and `.json`. SRVINIT.md's `srvinit -o` example uses it.
+  - The driver requests `powervr_sgx/sgx545_ukernel.bin`, the same name in
+    the driver's directory; UKERNEL.md §4a uses it.
+  - The DDK image keeps its own name, `sgx545-ukernel-1.7.862890.bin`.
 
 Later and optional: the inline hardware-provenance comments in
 `ukernel/ukernel.py` (see the firmware section).

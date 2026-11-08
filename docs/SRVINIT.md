@@ -316,7 +316,7 @@ the trace, and the third hardware run used that build.
 
 ## Loading the open microkernel (`-o`)
 
-`srvinit -o ukernel/sgx545-ukernel.bin` loads the open microkernel
+`srvinit -o ukernel/sgx545_ukernel.bin` loads the open microkernel
 (`ukernel/`) instead of the DDK's. It differs from the `-f` path in three
 ways, and nothing else — the allocations, control block, signature lists,
 init scripts and `SGX_BRIDGE_INIT_INFO` are the same:
