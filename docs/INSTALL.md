@@ -102,6 +102,9 @@ powervr_sgx ...: powervr_sgx/sgx545_ukernel.bin: open microkernel ..., features 
 powervr_sgx ...: microkernel started
 ```
 
+On Cedarview, `ls /sys/bus/auxiliary/devices/` should also list `gma500_gfx.sgx.0`. That
+shows the kernel has the change that hands the GPU over.
+
 If it says `no microkernel`, the firmware file isn't in the right place. If it says
 `is not one this driver knows`, please report the two numbers on that line to us.
 
@@ -146,4 +149,13 @@ Please include:
 - the output of `glxinfo -B`;
 - what you were doing when it went wrong.
 
-If the screen froze, the line `job timed out` in `dmesg` after a restart helps us most.
+If the screen froze, the kernel log from that session helps us most. After the restart,
+run:
+
+```bash
+sudo journalctl -k -b -1 | grep -i -E 'powervr|gma500|drm'
+```
+
+That shows the previous boot's kernel messages. It only works if the journal is kept on
+disk, so turn that on once with `sudo mkdir -p /var/log/journal` and a restart. If you can
+reach the computer over the network while it is frozen, run `sudo dmesg` there instead.
