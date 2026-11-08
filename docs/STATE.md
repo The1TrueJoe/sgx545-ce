@@ -1157,14 +1157,21 @@ DDK captures on disk (36, `caps-ddk/` 2026-10-28 and 2026-11-08).
 
 ### VDM state-program words (§2)
 
-Word 0: `type<<28 | (addr - heap)>>4`, type 4 (state) or 6 (terminate) [K].
+**Block type** (every VDM word 0): b29-31 = 2 state program, 3 state program
+of the terminate form, 4 draw, 6 end of stream (the nibbles 4, 6, 8 and c
+read as b28-31). This is consistent with every word seen. b28 is the fan flag
+in a draw, and 0 in every state-program word: their addresses, `addr>>4`,
+end below b26 for the PDS heaps. So the type is not proven to stop at b29,
+but nothing contradicts it [O].
+
+State-program word 0: `type | (addr - heap)>>4` [K].
 
 Info word:
 
 | bits | field | status |
 |---|---|---|
 | 26-31 | PDS data rows (16 B each) | K |
-| 0-? | a size in 4-dword units. It fits the dwords the state task *forwards*: 12 → 3, 15 → 4, 18 → 5, 2 (terminate) → 1, 0 (empty update) → 0 [O]. It is not the DMA's own count (the 25-dword triangle DMA gives 5). The rotating "counter 0-3" STATE.md §2 mentions has never been seen nonzero: every block with the same contents has the same word. Width ≤ 8 bits (b8 is set in the other form) | U (rule fits) |
+| 0-? | a size in 4-dword units. It fits the dwords the state task *forwards*: 12 → 3, 15 → 4, 18 → 5, 2 (terminate) → 1, 0 (empty update) → 0 [O]. It is not the DMA's own count (the 25-dword triangle DMA gives 5). The rotating "counter 0-3" STATE.md §2 mentions has never been seen nonzero in the DDK's words. Its 8-draw capture emits the TA block once. vp5's three different TA blocks, at 0x3040e100/e180/e200, carry sizes 3, 3, 4 and nothing more. So whether a counter is ORed or added can't be told; the DDK packs 0 there. Width ≤ 8 bits (b8 is set in the other form) | U (rule fits) |
 | rest, TA-block form | `0x2022400` (b10, b13, b17, b25) | O |
 | rest, secondary-DMA form | `0xe100` (b8, b13-15). Seen: 10 dwords → 3, 27 dwords → 6, which doesn't fit ceil(n/4): the size rule for this form is U | O |
 | type 6 (terminate) | `0x0e022401` | O |
@@ -1210,7 +1217,7 @@ What b8, b10, b13-15, b17 and b25 mean is U.
 | PDS word 1 | 0-15 | primary attribute units of 4 dwords | K (width: the field ends at b15) |
 | PDS word 1 | 16-17 | 3 in every capture | O |
 | PDS word 1 | 18-24 | (secondary attribute dwords + 3)>>2; 7 bits | K |
-| PDS word 1 | 25-28 | the rule in §3 "PDS words"; 4 bits | K (partly) |
+| PDS word 1 | 25-28 | the rule in §3 "PDS words"; 4 bits. For one unit with no secondary attributes the DDK writes 12 (`18030001`; captures var1, var2, var2low and the one-sample shader). A winsys that writes 0xb there (`16030001`) works, but it is not the DDK's word | K (partly) |
 | PDS word 1 | 29-31 | 0 in every capture | U (0) |
 
 **ISPA / ISPB.** Values seen: ISPA `01d00200`, `03d00200`, `07e00100`,
@@ -1259,6 +1266,19 @@ constants.
 - b0-2, b11, b13-16 and b27-29 are 0 in every capture [U: 0].
 - b30 is the L8/A8/LA88 bit.
 - b31 is 0 in every capture [U: 0].
+
+**T1 format codes 0x0c and 0x0d: which byte order each reads is U.**
+The DDK's own uses:
+- 0x0d for an RGBA8888 texture upload (`t8888`) and for sampling an
+  RGBA8888 FBO that the PBE rendered with format code 0 (`fbo64`);
+- 0x0c for the background's reload of the window back buffer, also written
+  with PBE format code 0.
+
+STATE.md's names ("0x0c BGRA8888 render target", "0x0d RGBA8888") come
+from those uses, not from a measured byte order. The DDK may also swizzle
+on upload. A one-change test would settle it: a `PROBE_TEXPAT=1` RGBA8888
+texture sampled under each code, with the texture memory and the readback
+compared.
 
 **T3**: values seen:
 - `00800800`: `tex1`;
