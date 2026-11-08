@@ -4,9 +4,9 @@
 #
 # The Cedarview test run (kit/cedarview/README.md). Plain progress on the
 # screen; everything into one results-*.tar.gz on the stick's SGXKIT partition.
-#   1 system facts   2 gma500   3 powervr_sgx identity (probe_only)
-#   4 GPU tests, only for a core the driver knows and when the kit has a
-#     microkernel   5 the results file
+#   1 system facts   2 gma500   3 powervr_sgx: the core's identity, and for a
+#   known core the open microkernel   4 the uAPI, frame and blit tests, then a
+#   deliberate hang and its recovery   5 the results file
 # A step that fails or hangs is logged and the run goes on; any GPU job
 # timeout ends the GPU tests. No serial numbers or network addresses leave.
 . /etc/kit-release
@@ -33,7 +33,7 @@ cat <<EOF
   SGX545 test for Intel Cedarview (GMA 3600/3650), kit $KIT_VERSION
   ------------------------------------------------------------------
   This only reads from your computer. Your internal disk is set to
-  read-only and nothing is installed. It takes about two minutes.
+  read-only and nothing is installed. It takes a few minutes.
 EOF
 /usr/local/sbin/kit-protect
 STICK=$(/usr/local/bin/kit-stick)
@@ -65,41 +65,56 @@ else
 	note "gma500 did not offer the GPU (this is useful to know too)."
 fi
 
-step 3 "Asking the GPU what it is (no drawing yet)"
+step 3 "Starting the GPU driver"
+# powervr_sgx reads the core's identity first and refuses a core it doesn't
+# know before writing any register; a known core gets the open microkernel.
 /usr/local/sbin/kit-protect
-dmesg > "$R/dmesg-before-probe.txt"
-run modprobe-probe.txt 60 modprobe powervr_sgx probe_only=1
-modprobe -r powervr_sgx 2>/dev/null
+dmesg > "$R/dmesg-before-sgx.txt"
+FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
+[ -f "$FW" ] || note "This kit has no GPU firmware; the driver can only identify the GPU."
+run modprobe-sgx.txt 60 modprobe powervr_sgx
 ident=$(dmesg | grep -o 'SGX core id 0x[0-9a-f]* revision 0x[0-9a-f]*[^.]*' | tail -1)
 note "${ident:-the driver did not report the GPU}"
 KNOWN=
 echo "$ident" | grep -qE 'revision 0x[0-9a-f]+: ' && KNOWN=1
+STARTED=
+dmesg | grep -q 'powervr_sgx.*microkernel started' && [ -n "$(compgen -G '/dev/dri/renderD*')" ] && STARTED=1
+[ -n "$STARTED" ] && note "The driver started the GPU's microkernel."
+cat /sys/kernel/debug/dri/*/status > "$R/status-after-start.txt" 2>/dev/null
 
 step 4 "Drawing on the GPU"
-FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
 T=/usr/local/lib/kit
 if [ -z "$ident" ]; then
 	note "Skipped: the driver found no SGX GPU here (the results say why)."
 elif [ -z "$KNOWN" ]; then
 	note "Skipped: this driver doesn't know this GPU yet. The file this test"
 	note "saves tells us what it is, so the next kit can draw on it."
-elif [ ! -f "$FW" ]; then
-	note "Skipped: this kit has no GPU firmware."
+elif [ -z "$STARTED" ]; then
+	note "Skipped: the GPU didn't start (the results say why)."
 else
 	/usr/local/sbin/kit-protect
 	t0=$(timeouts)
-	run modprobe-sgx.txt 60 modprobe powervr_sgx
-	for t in "powervr_sgx_test" "powervr_sgx_frame -n 10" "powervr_sgx_blit"; do
+	for t in "powervr_sgx_test" "powervr_sgx_frame -n 10" "powervr_sgx_blit -n 4"; do
 		# shellcheck disable=SC2086 # the test and its arguments
 		set -- $t
 		[ -x "$T/$1" ] || { note "$1: not in this kit"; continue; }
-		if run "$1.txt" 120 "$T/$1" "${@:2}"; then note "$1: passed"; else note "$1: FAILED (exit $?)"; fi
+		if run "$1.txt" 180 "$T/$1" "${@:2}"; then note "$1: passed"; else note "$1: FAILED (exit $?)"; fi
 		cat /sys/kernel/debug/dri/*/status > "$R/$1-status.txt" 2>/dev/null
 		if [ "$(timeouts)" != "$t0" ]; then
 			note "The GPU stopped responding; ending the GPU tests here."
 			break
 		fi
 	done
+	# last: a render that faults on purpose, and the recovery from it (the
+	# test checks there is exactly one reset); only on a GPU that was fine
+	if [ "$(timeouts)" = "$t0" ] && [ -x "$T/powervr_sgx_hang" ]; then
+		if run powervr_sgx_hang.txt 240 "$T/powervr_sgx_hang"; then
+			note "powervr_sgx_hang: passed (a deliberate GPU hang and its recovery)"
+		else
+			note "powervr_sgx_hang: FAILED (exit $?)"
+		fi
+		cat /sys/kernel/debug/dri/*/status > "$R/powervr_sgx_hang-status.txt" 2>/dev/null
+	fi
 	i=0; for d in /sys/class/devcoredump/devcd*/data; do
 		[ -e "$d" ] || continue
 		cat "$d" > "$R/devcoredump-$i.bin"; i=$((i+1))
@@ -108,7 +123,7 @@ fi
 
 step 5 "Saving the results to the stick"
 dmesg | scrub > "$R/dmesg.txt"
-for f in "$R"/lspci*.txt "$R"/dmesg-before-probe.txt; do scrub < "$f" > "$f.s" && mv "$f.s" "$f"; done
+for f in "$R"/lspci*.txt "$R"/dmesg-before-sgx.txt; do scrub < "$f" > "$f.s" && mv "$f.s" "$f"; done
 cp /proc/interrupts "$R/interrupts.txt"
 cp /proc/iomem "$R/iomem.txt"
 prod=$(sed -n 's/^product_name: //p' "$R/system.txt" | tr -c 'A-Za-z0-9.\n-' '_' | cut -c1-32)

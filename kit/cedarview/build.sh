@@ -37,7 +37,7 @@ cp -a "$K/modroot/lib/modules" "$ROOT/lib/"
 rm -rf "${ROOT:?}/lib/modules/$KVER/build" "${ROOT:?}/lib/modules/$KVER/source"
 depmod -b "$ROOT" "$KVER"
 install -d "$ROOT/usr/local/lib/kit" "$ROOT/usr/local/sbin" "$ROOT/usr/local/bin"
-for t in powervr_sgx_test powervr_sgx_frame powervr_sgx_blit; do
+for t in powervr_sgx_test powervr_sgx_frame powervr_sgx_blit powervr_sgx_hang; do
 	[ -f "$K/$t" ] && install -m 0755 "$K/$t" "$ROOT/usr/local/lib/kit/"
 done
 if [ -n "$FW" ]; then

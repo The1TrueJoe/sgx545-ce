@@ -31,14 +31,17 @@ the image carries its own copy of the kernel.
 1. System facts: DMI names (no serial numbers), CPU, `lspci -nnvvv -s 00:02.0`.
 2. `modprobe gma500_gfx`, and whether it published `gma500_gfx.sgx.*` on the auxiliary
    bus.
-3. `modprobe powervr_sgx probe_only=1`: the core id and revision, nothing written.
-4. Only for a core the driver knows, and when the image has a microkernel: powervr_sgx
-   with its firmware, then `powervr_sgx_test`, `powervr_sgx_frame -n 10` and
-   `powervr_sgx_blit`. The first job timeout ends this step.
+3. `modprobe powervr_sgx`. The driver reads the core id and revision and refuses a core it
+   doesn't know before writing any register. A known core gets the open microkernel
+   (`sgx545_ukernel.bin`, built in CI from `ukernel/`, secure mode), never Intel's.
+4. Only when the microkernel started: `powervr_sgx_test` (the uAPI tests),
+   `powervr_sgx_frame -n 10` and `powervr_sgx_blit -n 4`. The first job timeout ends this
+   step. Last, on a GPU that was fine, `powervr_sgx_hang`: a deliberate fault and the
+   recovery from it, with exactly one reset.
 5. `results-<model>-<date>.tar.gz` on `SGXKIT`, with dmesg, lspci, /proc/iomem,
    /proc/interrupts and the driver's status and devcoredumps. MAC addresses and serial
    numbers are removed.
 
-v1 stops at step 3 on Cedarview: the driver refuses cores it doesn't know, and Cedarview's
-revision isn't known yet. With the reported revision added, v2 adds the open microkernel
-(never Intel's), our Mesa, kmscube, glmark2, Xorg and a dEQP subset.
+- **v1** stopped at step 3: Cedarview's core (SGX545 1.0.13) wasn't known yet.
+- **v2** knows it and runs steps 3 and 4 on the open microkernel.
+- **Later:** our Mesa, kmscube, glmark2, Xorg and a dEQP subset.

@@ -1,6 +1,6 @@
 # The Cedarview test stick (kit/cedarview): m2-drm's powervr-sgx-cedarview
-# kernel + a small Debian root + the test run, as one USB image. Open code
-# only: no Intel binaries go into the image.
+# kernel + the open microkernel built from ukernel/ + a small Debian root +
+# the test run, as one USB image. Open code only: no Intel binaries go in.
 name: cedarview-kit
 
 on:
@@ -48,6 +48,16 @@ jobs:
           cat kernel/version
           echo "KERNEL_RUN=$id" >> "$GITHUB_ENV"
 
+      - name: The open microkernel (ukernel/, secure mode, any core revision)
+        run: |
+          set -eux
+          mkdir -p fw
+          python3 ukernel/build.py fw/uk.bin fw/uk.json
+          python3 drm/tools/mkukfw.py fw/uk.bin -o fw/sgx545_ukernel.bin --manifest fw/uk.json \
+            --core-rev 0 --build-id "ukernel-$(git rev-parse --short HEAD)"
+          python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel.bin | tee fw/check.txt
+          grep -q 'features 0x2' fw/check.txt
+
       - name: Host tools
         run: |
           sudo apt-get update -qq
@@ -60,11 +70,11 @@ jobs:
           set -eux
           v=$(git rev-parse --short HEAD)
           [ "${{ github.event_name }}" != release ] || v=${GITHUB_REF_NAME#cedarview-kit-}
-          sudo sh kit/cedarview/build.sh kernel out "$v"
+          sudo sh kit/cedarview/build.sh kernel out "$v" fw/sgx545_ukernel.bin
           {
             echo "kit $v from ${GITHUB_SHA}"
             echo "kernel: powervr-sgx run $KERNEL_RUN: $(cat kernel/version)"
-            echo "microkernel: none (v1 stops at the GPU's identity)"
+            echo "microkernel: $(head -1 fw/check.txt)"
           } | tee out/BUILD-INFO.txt
 
       - name: Boot it in QEMU, BIOS and UEFI (a results file; the other disk untouched)

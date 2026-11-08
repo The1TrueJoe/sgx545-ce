@@ -1,7 +1,7 @@
 # Testing the new GPU driver on a Cedarview computer
 
 Thank you for helping! This test checks whether our new open-source graphics driver
-recognizes the graphics chip in your computer. You don't need to know anything about
+recognizes and runs the graphics chip in your computer. You don't need to know anything about
 Linux, and you don't need to install anything.
 
 ## Will this work on my computer?
@@ -60,7 +60,7 @@ If the computer starts its normal system instead, restart it and try another key
 computers you have to turn on "Boot from USB" in the BIOS setup first (often **F2** or
 **Del**).
 
-## 4. Wait about two minutes
+## 4. Wait a few minutes
 
 The screen shows five steps as they run. You don't have to do anything. At the end you
 see **DONE. Thank you!** and the name of the results file.
@@ -94,6 +94,7 @@ ever read.
 
 ## What happens next
 
-This first test only asks the graphics chip what exactly it is. The driver doesn't draw
-anything yet. With your results we add support for your chip, and the next test kit
-will draw on it.
+The test first asks the graphics chip what it is. If our driver knows the chip, it then
+starts it and draws a few small test images, and checks that it recovers from a
+deliberate error. Nothing is shown on the screen while it does this. Each kit you test
+lets us support more of your computer. The next ones will run desktop graphics.
