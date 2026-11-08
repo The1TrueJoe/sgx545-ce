@@ -18,6 +18,7 @@ on:
       - drm/ci/deb-kernel.sh
       - drm/ci/deb.fragment
       - drm/gma500/**
+      - drm/powervr_sgx/**
       - .github/workflows/powervr-sgx-deb.yml
 
 concurrency:
