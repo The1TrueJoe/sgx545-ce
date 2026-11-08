@@ -92,6 +92,8 @@ jobs:
           cp $L/arch/x86/boot/bzImage out/bzImage
           cp $L/.config out/config
           make -C $L ARCH=x86_64 INSTALL_MOD_PATH=$PWD/out/modroot INSTALL_MOD_STRIP=1 modules_install
+          # upload-artifact follows these links into the whole tree.
+          rm -f out/modroot/lib/modules/*/build out/modroot/lib/modules/*/source
           for m in gma500_gfx powervr_sgx gpu-sched drm_exec drm_gpuvm drm_shmem_helper; do
             find $L -name "$m.ko" -exec cp {} out/modules/ \;
           done
