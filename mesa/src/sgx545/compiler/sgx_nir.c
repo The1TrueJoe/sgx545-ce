@@ -516,6 +516,8 @@ narrow16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 static void
 narrow16(nir_shader *s)
 {
+   if (sgx_disabled("narrow16"))
+      return;
    bool progress = true;
    for (unsigned round = 0; progress && round < 64; round++) {
       progress = false;
@@ -1548,7 +1550,7 @@ sgx_lower(struct sgx_ctx *c)
 
    s->options = &options;
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr, nir_metadata_control_flow, NULL);
-   if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT)
+   if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT && (c->opts->fs_mediump || !sgx_disabled("mediump")))
       mediump_fs(c, c->opts->fs_mediump);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(s), nir_var_shader_out);
@@ -1605,7 +1607,7 @@ sgx_lower(struct sgx_ctx *c)
       }
    } while (progress);
 
-   if (c->p16) {
+   if (c->p16 && !sgx_disabled("minmax32")) {
       NIR_PASS(_, s, nir_shader_alu_pass, minmax32_instr, nir_metadata_control_flow, NULL);
       NIR_PASS(_, s, nir_opt_dce);
    }
