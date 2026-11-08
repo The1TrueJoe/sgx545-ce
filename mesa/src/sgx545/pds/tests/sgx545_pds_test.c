@@ -38,7 +38,8 @@ check_line(const char *line, bool table)
    size_t n = semi ? (size_t)(semi - line) : strlen(line);
    struct sgx545_pds_instr in;
 
-   while (n && (line[n - 1] == ' ' || line[n - 1] == '\t' || line[n - 1] == '\n'))
+   while (n &&
+          (line[n - 1] == ' ' || line[n - 1] == '\t' || line[n - 1] == '\n'))
       n--;
    memcpy(text, line, n);
    text[n] = '\0';
@@ -83,71 +84,132 @@ static void
 check_data_words(void)
 {
    /* DOUTI */
-   check_word("37c00800: tc0 x4, f16, last",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .src = 1, .comps = 4, .iterate = true, .b25_26 = 3, .prec1 = true, .last_iter = true }),
-              0x37c00800);
+   check_word(
+      "37c00800: tc0 x4, f16, last",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.src = 1,
+                                                     .comps = 4,
+                                                     .iterate = true,
+                                                     .b25_26 = 3,
+                                                     .prec1 = true,
+                                                     .last_iter = true}),
+      0x37c00800);
    check_word("17c00800: tc0 x4, f16",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .src = 1, .comps = 4, .iterate = true, .b25_26 = 3, .prec1 = true }),
+              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.src = 1,
+                                                             .comps = 4,
+                                                             .iterate = true,
+                                                             .b25_26 = 3,
+                                                             .prec1 = true}),
               0x17c00800);
-   check_word("37401000: tc1 x2, f16, last",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .src = 2, .comps = 2, .iterate = true, .b25_26 = 3, .prec1 = true, .last_iter = true }),
-              0x37401000);
-   check_word("37c00a02: tc0 x4 merged with a 2-D sample of tc1",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .sample_set = 2, .dim2 = true, .src = 1, .comps = 4, .iterate = true, .b25_26 = 3,
-                 .prec1 = true, .last_iter = true }),
-              0x37c00a02);
-   check_word("46012203: a pure 2-D sample of tc2, last sample",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .sample_set = 3, .dim2 = true, .src = 0x24, .b25_26 = 3, .last_sample = true }),
-              0x46012203);
-   check_word("21c10000: the clear's colour x4",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .src = 0x20, .comps = 4, .iterate = true, .last_iter = true }),
-              0x21c10000);
-   check_word("40012001: background object, sample tc0",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .sample_set = 1, .src = 0x24, .last_sample = true }),
-              0x40012001);
-   check_word("27800000: gl_FragCoord x3",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .src = 0, .comps = 3, .iterate = true, .b25_26 = 3, .last_iter = true }),
-              0x27800000);
-   check_word("37400800 + w1 0x10: sprite gl_PointCoord",
-              sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
-                 .src = 1, .comps = 2, .iterate = true, .b25_26 = 3, .prec1 = true, .last_iter = true }),
-              0x37400800);
-   check_word("douti w1 0x10", sgx545_pds_douti_w1(&(struct sgx545_pds_douti){ .w1 = 0x10 }), 0x10);
+   check_word(
+      "37401000: tc1 x2, f16, last",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.src = 2,
+                                                     .comps = 2,
+                                                     .iterate = true,
+                                                     .b25_26 = 3,
+                                                     .prec1 = true,
+                                                     .last_iter = true}),
+      0x37401000);
+   check_word(
+      "37c00a02: tc0 x4 merged with a 2-D sample of tc1",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.sample_set = 2,
+                                                     .dim2 = true,
+                                                     .src = 1,
+                                                     .comps = 4,
+                                                     .iterate = true,
+                                                     .b25_26 = 3,
+                                                     .prec1 = true,
+                                                     .last_iter = true}),
+      0x37c00a02);
+   check_word(
+      "46012203: a pure 2-D sample of tc2, last sample",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.sample_set = 3,
+                                                     .dim2 = true,
+                                                     .src = 0x24,
+                                                     .b25_26 = 3,
+                                                     .last_sample = true}),
+      0x46012203);
+   check_word(
+      "21c10000: the clear's color x4",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.src = 0x20,
+                                                     .comps = 4,
+                                                     .iterate = true,
+                                                     .last_iter = true}),
+      0x21c10000);
+   check_word(
+      "40012001: background object, sample tc0",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.sample_set = 1,
+                                                     .src = 0x24,
+                                                     .last_sample = true}),
+      0x40012001);
+   check_word(
+      "27800000: gl_FragCoord x3",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.src = 0,
+                                                     .comps = 3,
+                                                     .iterate = true,
+                                                     .b25_26 = 3,
+                                                     .last_iter = true}),
+      0x27800000);
+   check_word(
+      "37400800 + w1 0x10: sprite gl_PointCoord",
+      sgx545_pds_douti_w0(&(struct sgx545_pds_douti){.src = 1,
+                                                     .comps = 2,
+                                                     .iterate = true,
+                                                     .b25_26 = 3,
+                                                     .prec1 = true,
+                                                     .last_iter = true}),
+      0x37400800);
+   check_word("douti w1 0x10",
+              sgx545_pds_douti_w1(&(struct sgx545_pds_douti){.w1 = 0x10}),
+              0x10);
 
    /* DOUTU word 1 */
-   check_word("02000004: tex1", sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .pixel = true, .samples = true }),
+   check_word("02000004: tex1",
+              sgx545_pds_doutu_w1(
+                 &(struct sgx545_pds_doutu){.pixel = true, .samples = true}),
               0x02000004);
    check_word("01000004: vary2",
-              sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .pixel = true, .iterations = true }), 0x01000004);
+              sgx545_pds_doutu_w1(
+                 &(struct sgx545_pds_doutu){.pixel = true, .iterations = true}),
+              0x01000004);
    check_word("03000004: tex2",
-              sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .pixel = true, .iterations = true, .samples = true }),
+              sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){.pixel = true,
+                                                             .iterations = true,
+                                                             .samples = true}),
               0x03000004);
-   check_word("00000002: microkernel", sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b1 = true }), 2);
-   check_word("00c00000: pixel event", sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b22 = true, .b23 = true }),
-              0x00c00000);
+   check_word("00000002: microkernel",
+              sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){.b1 = true}), 2);
+   check_word(
+      "00c00000: pixel event",
+      sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){.b22 = true, .b23 = true}),
+      0x00c00000);
 
    /* DOUTU word 0: base 3, offset 0x1230, 8 temporaries */
-   check_word("doutu w0", sgx545_pds_doutu_w0(&(struct sgx545_pds_doutu){ .base = 3, .offset = 0x1230, .temps4 = 2 }),
-              0x02000000 | 0x1230 >> 3 << 4 | 3);
+   check_word(
+      "doutu w0",
+      sgx545_pds_doutu_w0(
+         &(struct sgx545_pds_doutu){.base = 3, .offset = 0x1230, .temps4 = 2}),
+      0x02000000 | 0x1230 >> 3 << 4 | 3);
 
    /* DOUTD word 1: attr3's streams (vec3 at register 4), a state DMA */
-   check_word("doutd vec3 -> 4", sgx545_pds_doutd_ctrl(&(struct sgx545_pds_doutd){ .dwords = 3, .reg = 4 }),
-              0x00000402);
-   check_word("doutd state", sgx545_pds_doutd_ctrl(&(struct sgx545_pds_doutd){
-                                .dwords = 10, .reg = 0, .kind = 1, .secondary = true }),
-              0x02400009);
+   check_word(
+      "doutd vec3 -> 4",
+      sgx545_pds_doutd_ctrl(&(struct sgx545_pds_doutd){.dwords = 3, .reg = 4}),
+      0x00000402);
+   check_word(
+      "doutd state",
+      sgx545_pds_doutd_ctrl(&(struct sgx545_pds_doutd){.dwords = 10,
+                                                       .reg = 0,
+                                                       .kind = 1,
+                                                       .secondary = true}),
+      0x02400009);
 
    /* DOUTA word 1: pds3's (in2, 0x100) */
-   check_word("douta pa1", sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){ .reg = 1 }), 0x100);
-   check_word("douta pa2", sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){ .reg = 2 }), 0x200);
+   check_word("douta pa1",
+              sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){.reg = 1}),
+              0x100);
+   check_word("douta pa2",
+              sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){.reg = 2}),
+              0x200);
 }
 
 static void
@@ -163,7 +225,8 @@ fuzz(unsigned n)
       x ^= x << 13;
       x ^= x >> 17;
       x ^= x << 5;
-      /* bias toward valid opcodes: keep the top byte random, clear some low bits */
+      /* bias toward valid opcodes: keep the top byte random, clear some low
+       * bits */
       uint32_t w = i & 1 ? x : x & 0xff00ffff;
 
       if (!sgx545_pds_disasm_one(w, text, sizeof(text)))
@@ -173,7 +236,8 @@ fuzz(unsigned n)
       const char *err = sgx545_pds_asm(text, &in);
       uint32_t got = err ? 0 : sgx545_pds_encode(&in);
       if (err || got != w) {
-         snprintf(back, sizeof(back), "%08x -> %s -> %08x", w, err ? err : "", got);
+         snprintf(back, sizeof(back), "%08x -> %s -> %08x", w, err ? err : "",
+                  got);
          fail("fuzz", text, back);
       }
    }

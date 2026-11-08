@@ -1,3 +1,6 @@
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
 # PDS instructions in the disassembler's notation, `<text> [; <word>]`.
 # The words are the ones docs/PDS.md quotes (including its "Text notation"
 # examples); the rest only round-trip.

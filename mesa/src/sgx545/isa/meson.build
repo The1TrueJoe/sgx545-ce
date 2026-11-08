@@ -51,15 +51,5 @@ idep_sgx545_isa = declare_dependency(
 )
 
 if with_tests
-  test(
-    'sgx545_isa',
-    executable(
-      'sgx545_isa_test',
-      'tests/sgx545_isa_test.c',
-      include_directories : [inc_include, inc_src],
-      dependencies : [idep_sgx545_isa, idep_mesautil],
-    ),
-    args : files('tests/gles2.txt', 'tests/int.txt', 'tests/coissue.txt'),
-    suite : ['sgx545'],
-  )
+  subdir('tests')
 endif

@@ -70,7 +70,8 @@ STATE.md gives a value but no meaning; its default is that value.
   </struct>
 
   <!-- the sample instruction's half: 00800800 for a 2-D sample (tex1),
-       01028800 for tex2, 00800000 for the background object's load -->
+       01028800 for tex2 (b23 clear), 00800000 for the background object's
+       load -->
   <struct name="WORD3" length="1">
     <field name="unknown_24" start="24" end="24" type="bool"/>
     <field name="unknown_23" start="23" end="23" type="bool" default="1"/>

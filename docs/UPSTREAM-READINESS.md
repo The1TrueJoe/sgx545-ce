@@ -23,6 +23,8 @@ a new section at the end of the file, never in the middle.
 | Firmware | open-ukernel |
 | Mesa winsys and platform | uapi-stream |
 | Docs: neutral platform wording | ta3d-state |
+| Kernel driver (powervr_sgx) | m2-kernel-driver |
+| Clean-room trees (isa, pds, csbgen) | cleanroom-isa |
 
 ## Mesa pipe driver and compiler
 
@@ -40,7 +42,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 |---|---|---|---|
 | M1 | upstream build is powervr_sgx only | mostly there | uapi-stream |
 | M2 | features from DEV_QUERY and a core table | not started | mesa-gallium (table), uapi-stream (queries) |
-| M3 | driver name for the family | decision needed | Joseph |
+| M3 | driver name for the family | decided: `sgx` (Joseph, 2026-11-08) | mesa-gallium |
 | M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
 | M6 | debug options and experiment code | partly | mesa-gallium, usse-compiler |
@@ -152,9 +154,10 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
   - `nodrvconsts`;
   - `SGX545_FRAME_GAP_US`;
   - `SGX545_SLOTS`: pick the default and drop the knob.
-- **The compiler** has raw `getenv`: `SGX_DISABLE`, `SGX_F16_CONST`,
-  `SGX_F16_ITER`, `SGX_PRINT_PRE_I2F`. Route them through `debug_get_option`
-  in a named table (usse-compiler).
+- **The compiler: done (1ba7774).** `SGX_DISABLE`, `SGX_F16_CONST` and
+  `SGX_F16_ITER` are one `SGX545_COMPILER_DEBUG` flag table (`nopa`, `noout`,
+  ..., `nocoissue`, `nof16const`, `nof16iter`), read once per compile.
+  `SGX_PRINT_PRE_I2F` is dropped. See C1.
 
 ### M7. Tests in Mesa's format
 
@@ -188,6 +191,88 @@ Write it for Mesa's docs tree. It covers:
 Upstream, the fixed programs are assembled by the compiler's encoder at build
 time (DRIVER-UPSTREAM.md §5.2, COMPILER-UPSTREAM.md).
 
+### Compiler (usse-compiler)
+
+Scope: `mesa/src/sgx545/compiler`. Status as of 2026-11-08, um-re 0507229
+plus the compiler commits after it. Every step below was checked
+byte-identical on the corpus, glmark2 and the Minecraft gl4es set (11,868
+programs, F32, F16 and driver mode). `docs/COMPILER-UPSTREAM.md` is the
+earlier licensing and provenance audit.
+
+| # | item | status |
+|---|---|---|
+| C1 | debug options in a `debug_named_value` table | done (1ba7774) |
+| C2 | clang-format | done (31f6f18) |
+| C3 | NIR passes in Mesa's shape | done (69923e0); one item left |
+| C4 | unit tests under `meson test` | done (7e0421a); coverage to grow |
+| C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
+| C6 | no global mutable state | done (`hw_const`) |
+| C7 | comments cite `docs/`, not libusc or the DDK | not started |
+| C8 | DDK-compatibility code out of the compiler | partly |
+| C9 | file size | open (optional) |
+
+- **C1. Debug options.**
+  - `SGX545_COMPILER_DEBUG` replaces `SGX_DISABLE` and the two F16 switches.
+    It uses `DEBUG_GET_ONCE_FLAGS_OPTION` and is stored in the compile
+    context, so there is no raw `getenv` and no global state.
+  - The flags are listed in `compiler/README.md`.
+  - The dead `SGX_PRINT_PRE_I2F` dump and an unused helper are gone.
+  - The compiler now builds without `-Wno-missing-prototypes`.
+- **C2. clang-format.**
+  - `mesa/src/sgx545/.clang-format`: `InheritParentConfig` from Mesa's
+    `src/.clang-format`, `DisableFormat: false`, 80 columns, as `src/asahi`
+    and `src/freedreno` have it.
+  - It sits above `compiler/`, `isa/`, `pds/` and `csbgen/`; formatting
+    those three is cleanroom-isa's.
+  - Trailing comments that wrapped were moved above their fields.
+  - Still to do: Mesa's `.clang-format-include` needs a `src/sgx545/**/*`
+    line (a patch item) so CI enforces it.
+- **C3. NIR passes.**
+  - The backend's own passes take the shader, return progress and run
+    through `NIR_PASS`: `lower_mediump`, `narrow16`, `uniform_formats`,
+    `lower_tex_derefs`, `lower_uniforms`.
+  - Rewrites are `nir_shader_{instructions,alu,intrinsics}_pass` callbacks;
+    the block walks left are analyses.
+  - Still to do: `sgx_lower()` sets `s->options` to its own options. The
+    driver and sgxc should create the shader with `sgx_nir_options()`
+    instead, and the compiler should assert that they did.
+- **C4. Tests.**
+  - `meson test --suite sgx545` runs `sgx545_compiler` (gtest) beside
+    cleanroom-isa's `sgx545_isa`.
+  - Shaders are built with `nir_builder` and compiled; every word must
+    decode through the isaspec disassembler.
+  - Cases: a fragment varying to colour, a vertex position, efo co-issue on
+    mat4 * v, and the int-select loop bound (d3adad7).
+  - Each case was checked to fail on the bug it guards.
+  - To grow: F16 and C10 paths, textures, discard, constants in memory.
+  - The DDK corpus harness (`tools/usc`) stays in this repository.
+- **C5. Structure doc.** `compiler/README.md` covers the files, the pipeline
+  (lowering, analysis, selection, backend passes, allocation, encoding), the
+  debug flags and the tests. Mesa's `docs/drivers/sgx545.rst` (M8) can link
+  it or take a section from it.
+- **C6. Global state.** `hw_const()` built a static table on first use (a
+  race between two contexts compiling at once). It is now a const table.
+  This also fixes a latent bug: a literal equal to the old filler value
+  0xdeadbeef no longer matches hardware constant 0.
+- **C7. Comments.**
+  - About 58 comments say "as libusc does" or "as the DDK does" (27 in
+    `sgx_compile.c`, 16 in `sgx_nir.c`, 12 in `sgx_compiler.h`).
+  - Rewrite each to cite the `docs/` section and the test that fixed the
+    behaviour (COMPILER-UPSTREAM.md §2.2).
+  - Box and application names: none left in the compiler.
+- **C8. DDK-compatibility code** (COMPILER-UPSTREAM.md §3).
+  - Still in the compiler: the varying-to-set allocation, first-use sampler
+    numbering, the USP label numbers 3/4/5, and the placeholder colour
+    iteration's PA count.
+  - Upstream, the driver owns layouts. Move these behind
+    `struct sgx_layout`, or into sgxc.
+- **C9. File size.** `sgx_compile.c` is 5.8k lines, the size of
+  `ir3_compiler_nir.c`.
+  - Splitting it into selection, register allocation and encoding files means
+    exporting about 64 of its 128 functions (prefixed, with prototypes in
+    `sgx_priv.h`).
+  - Worth it only if review asks.
+
 ## Firmware (the open SGX microkernel, `ukernel/`)
 
 The microkernel is MIT-licensed source (`ukernel/ukernel.py`) assembled to a
@@ -218,17 +303,22 @@ requests (header + feature bits applied by the driver's packaging tool over the
 Driver: powervr_sgx — PowerVR SGX5xx (e.g. SGX545 on the Intel Atom CE5300)
 
 File: powervr/sgx545-ukernel.bin
+File: powervr_sgx/sgx545_ukernel.bin
 Version: 1.0
 Source: <source-repository-url>/ukernel   (ukernel.py + build.py; the DRM
         driver's packaging tool applies the header/feature bits)
 License: MIT.  See LICENSE.<id> for details.
 ```
 
-Open before this is real: the `powervr/` subdirectory name and the exact file
-name are the DRM driver's to settle (it owns the `firmware=` request path); the
-MIT text must be added to linux-firmware's licence set; `Source` needs the
-public repository URL. The source and the built binary are versioned together
-by the manifest `version` + `build_id`.
+Naming (no project name upstream; per core; the driver's own subdirectory):
+`powervr_sgx/<core>_ukernel.bin`, so `powervr_sgx/sgx545_ukernel.bin` here and
+`powervr_sgx/sgx540_ukernel.bin` for another core. The directory matches the DRM
+driver's module/request path (`powervr_sgx/`, not `powervr/`). build.py emits
+`<core>_ukernel.bin`; the driver's `firmware=` request and its packaging tool
+must use the same name — kept in sync across build.py, the driver, the docs and
+the test scripts. Open before this is real: the MIT text must be added to
+linux-firmware's licence set, and `Source` needs the public repository URL. The
+source and the built binary are versioned together by `version` + `build_id`.
 
 ### Not a blocker, noted
 - The microkernel source carries inline hardware-provenance comments (which
@@ -293,3 +383,68 @@ Decided (main, 2026-11-08):
 
 Later and optional: the inline hardware-provenance comments in
 `ukernel/ukernel.py` (see the firmware section).
+
+## Clean-room trees: `mesa/src/sgx545/isa`, `pds`, `csbgen`
+
+Owner: the clean-room implementation session. The USSE instruction set and
+the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
+2026-11-08, branch upstream-ready on um-re.
+
+### Done
+
+| item | state |
+|---|---|
+| Layout like Mesa's other isaspec users | `isa/` and `pds/` follow `src/etnaviv/isa`: the XML, the `isa.h` the generated decoder includes, custom targets for the decoder (`<name>-isa.c/.h`), the encoder (`-encode.h`) and the enums, a static library and an `idep_`, and `tests/meson.build` |
+| Layout like Mesa's csbgen users | `csbgen/` follows `src/imagination/csbgen/rogue`: `<name>.xml` -> `csbgen/<name>.h` through the shared `gen_pack_header.py`, and the per-file loop is the same. `sgx545_csb.h` plays the part of the Vulkan driver's `pvr_csb.h` (address type, includes, the pack-in-place macro). The XML files are renamed `vdm.xml`, `ta.xml`, `pbe.xml`, `tex.xml` |
+| Tests under `meson test` | `meson test --suite sgx545` runs `sgx545_isa` (assemble -> encode -> disassemble over three lists; a line's given words must match), `sgx545_pds` (the same for PDS, plus the DOUT data words), and the new `sgx545_csb` (66 state words the documentation quotes, packed and unpacked). It passes 3/3 on a native host build with `-Dbuild-tests=true`. The csb test found an XML default that was wrong for one T3 form (tex2 clears b23); the test case now sets it. |
+| Nothing outside `meson test` in the Mesa tree | `isa/tests/standalone.sh` (a library build without Mesa, which `tools/usc/check_enc.py` and `drm/tools/gen_usse_corpus.py` use) moved to `mesa/tests/isa-standalone/`, which isn't copied into Mesa. Its `.gitignore` went with it |
+| Mesa style | one `mesa/src/sgx545/.clang-format` for all of `src/sgx545` (shared with the compiler): `InheritParentConfig`, `DisableFormat: false`, column limit 80, as `src/asahi` and `src/freedreno`. Every C file here is formatted with it. One macro list, the assembler's flag table, is hand-wrapped between `clang-format off/on`. Comments are in American English (`colour` -> `color`). A `src/sgx545/**/*` line in Mesa's `.clang-format-include` belongs to the MR |
+| Licence headers | every source file, XML, meson file, script and test list has `Copyright © 2026 Joseph Telaak` and `SPDX-License-Identifier: MIT` (the test lists as `#` comments). The READMEs carry none, as Mesa's don't |
+| A README per tree | `isa/README.md` and `pds/README.md` now describe the tree rather than its history: what it is, the files, the generated files, the tests, the isaspec patch, what isaspec can't express, and who uses it. The answered-gap lists and the old encoder's story stay in `docs/log`. `csbgen/README.md` is new: files, use, conventions, tests |
+| No DDK inputs | the build and the tests read only the XML, the test lists and Mesa. The test lists' words are the ones the ISA/PDS/state documentation quotes. Comments no longer name the DDK, a capture rig or USEASM, and the `#i16-fmt` enum nothing used (an unused-variable warning in the generated decoder) is gone |
+| Unchanged output | after the restructure, the offline winsys harness (clears, draws, scissors, end-of-tile, over 60 frames) is still byte-identical to um-re 9145c84 (66.9 MB of rings). `mesa/tests/isa-standalone` runs the ISA lists: 317 instructions, 0 failures |
+| Warnings | no warnings from the three trees on the host build (clang) or the zig x86_64 build. The PDS library keeps `-Wno-unused-variable` for isaspec's tables of encode-only roots (below) |
+
+### Open
+
+1. **Where the trees go.**
+   - `src/sgx545/` is a vendor-neutral top-level directory, like
+     `src/etnaviv`. Imagination's code lives in `src/imagination/`, so
+     reviewers may want `src/imagination/sgx545/` (or `sgx/`).
+   - The state XML could then join `src/imagination/csbgen/` beside `rogue/`
+     and `volcanic/`. That needs `src/imagination/meson.build` to enter
+     `csbgen` for the gallium driver too, not only for the Vulkan driver and
+     tools.
+   - A decision for the MR series, not for the code.
+2. **The isaspec change** (`mesa/patches/0004`) goes upstream first, as two
+   commits:
+   - `<param>`s on a derived field of bitset type;
+   - the encoder's handling of several `<override>`s defining one field.
+   - isaspec has no test suite. The SGX545 ISA test is the first user of
+     both, so the commits should point at it, or bring a minimal XML case.
+3. **The PDS decoder's unused tables.** The DOUT data words are encode-only
+   roots, and isaspec emits decode tables nothing uses for them, so
+   `-Wno-unused-variable` is needed. Options:
+   - isaspec skips decode tables for roots no `#instruction` reaches;
+   - the data words move to a second XML that only the encoder reads.
+4. **The documentation the comments cite.** `docs/ISA.md`, `docs/PDS.md`
+   and `docs/STATE.md` live in sgx545-ce. Upstream needs them either as
+   `docs/drivers/sgx545/*.rst` in Mesa or behind a stable link from each
+   README. The comments cite them by section name.
+5. **A disassembler tool.** `etnaviv-disasm` is built with
+   `-Dtools=etnaviv`. Ours is `sgx545_pds_test -d` and the ISA test's text
+   output. A `sgx545-disasm` (USSE and PDS) behind `-Dtools=sgx545` needs a
+   `meson.options` entry.
+6. **csbgen's unknown bits.** Constant bits of unknown meaning are
+   `unknown_<bits>` fields with defaults. csbgen also has `mbo`
+   (must-be-one), which fits only bits that are always 1. A reviewer may
+   prefer fewer named unknowns. The spec side tags each field known,
+   only-constants-seen, or unknown (STATE.md "Field layouts for packing").
+7. **PDS word 1 for one unit with no secondaries.** The winsys writes 0xb,
+   but the documented value is 12 (`18030001`). The packers keep the
+   winsys's bytes. Settling it is a driver change: winsys/driver owners.
+8. **`src/sgx545/compiler`** isn't covered by this pass (the compiler
+   session's tree): no `.clang-format`, and it has its own tests.
+9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`) become part of
+   the driver's MR series. Nothing in these three trees depends on them
+   beyond `with_gallium_sgx545` entering `src/sgx545`.

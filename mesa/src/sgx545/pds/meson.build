@@ -54,15 +54,5 @@ idep_sgx545_pds = declare_dependency(
 )
 
 if with_tests
-  test(
-    'sgx545_pds',
-    executable(
-      'sgx545_pds_test',
-      'tests/sgx545_pds_test.c',
-      include_directories : [inc_include, inc_src],
-      dependencies : [idep_sgx545_pds, idep_mesautil],
-    ),
-    args : files('tests/pds.txt'),
-    suite : ['sgx545'],
-  )
+  subdir('tests')
 endif

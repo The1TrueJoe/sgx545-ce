@@ -31,16 +31,25 @@ static inline enum sgx_isa_case_dst
 __dst_case(struct encode_state *s, const struct sgx_isa_src *o)
 {
    switch (o->file) {
-   case SGX_ISA_FILE_R:   return SGX_DST_R;
-   case SGX_ISA_FILE_O:   return SGX_DST_O;
-   case SGX_ISA_FILE_PA:  return SGX_DST_PA;
-   case SGX_ISA_FILE_SA:  return SGX_DST_SA;
-   case SGX_ISA_FILE_IX:  return SGX_DST_IX;
+   case SGX_ISA_FILE_R:
+      return SGX_DST_R;
+   case SGX_ISA_FILE_O:
+      return SGX_DST_O;
+   case SGX_ISA_FILE_PA:
+      return SGX_DST_PA;
+   case SGX_ISA_FILE_SA:
+      return SGX_DST_SA;
+   case SGX_ISA_FILE_IX:
+      return SGX_DST_IX;
    case SGX_ISA_FILE_C:
-   case SGX_ISA_FILE_G:   return SGX_DST_G;
-   case SGX_ISA_FILE_IDX: return SGX_DST_IDX;
-   case SGX_ISA_FILE_I:   return SGX_DST_I;
-   default:               return SGX_DST__NONE;
+   case SGX_ISA_FILE_G:
+      return SGX_DST_G;
+   case SGX_ISA_FILE_IDX:
+      return SGX_DST_IDX;
+   case SGX_ISA_FILE_I:
+      return SGX_DST_I;
+   default:
+      return SGX_DST__NONE;
    }
 }
 
@@ -48,16 +57,25 @@ static inline enum sgx_isa_case_src
 __src_case(struct encode_state *s, const struct sgx_isa_src *o)
 {
    switch (o->file) {
-   case SGX_ISA_FILE_R:   return SGX_SRC_R;
-   case SGX_ISA_FILE_O:   return SGX_SRC_O;
-   case SGX_ISA_FILE_PA:  return SGX_SRC_PA;
-   case SGX_ISA_FILE_SA:  return SGX_SRC_SA;
-   case SGX_ISA_FILE_IX:  return SGX_SRC_IX;
+   case SGX_ISA_FILE_R:
+      return SGX_SRC_R;
+   case SGX_ISA_FILE_O:
+      return SGX_SRC_O;
+   case SGX_ISA_FILE_PA:
+      return SGX_SRC_PA;
+   case SGX_ISA_FILE_SA:
+      return SGX_SRC_SA;
+   case SGX_ISA_FILE_IX:
+      return SGX_SRC_IX;
    case SGX_ISA_FILE_C:
-   case SGX_ISA_FILE_G:   return SGX_SRC_C;
-   case SGX_ISA_FILE_IMM: return SGX_SRC_IMM;
-   case SGX_ISA_FILE_I:   return SGX_SRC_I;
-   default:               return SGX_SRC__NONE;
+   case SGX_ISA_FILE_G:
+      return SGX_SRC_C;
+   case SGX_ISA_FILE_IMM:
+      return SGX_SRC_IMM;
+   case SGX_ISA_FILE_I:
+      return SGX_SRC_I;
+   default:
+      return SGX_SRC__NONE;
    }
 }
 
@@ -67,11 +85,16 @@ __src0_case(struct encode_state *s, const struct sgx_isa_src *o)
 {
    switch (o->file) {
    case SGX_ISA_FILE_R:
-   case SGX_ISA_FILE_I:   return SGX_SRC0_R;
-   case SGX_ISA_FILE_O:   return SGX_SRC0_O;
-   case SGX_ISA_FILE_PA:  return SGX_SRC0_PA;
-   case SGX_ISA_FILE_SA:  return SGX_SRC0_SA;
-   default:               return SGX_SRC0__NONE;
+   case SGX_ISA_FILE_I:
+      return SGX_SRC0_R;
+   case SGX_ISA_FILE_O:
+      return SGX_SRC0_O;
+   case SGX_ISA_FILE_PA:
+      return SGX_SRC0_PA;
+   case SGX_ISA_FILE_SA:
+      return SGX_SRC0_SA;
+   default:
+      return SGX_SRC0__NONE;
    }
 }
 
@@ -80,9 +103,12 @@ __dst1_case(struct encode_state *s, const struct sgx_isa_src *o)
 {
    switch (o->file) {
    case SGX_ISA_FILE_R:
-   case SGX_ISA_FILE_I:   return SGX_DST1_R;
-   case SGX_ISA_FILE_PA:  return SGX_DST1_PA;
-   default:               return SGX_DST1__NONE;
+   case SGX_ISA_FILE_I:
+      return SGX_DST1_R;
+   case SGX_ISA_FILE_PA:
+      return SGX_DST1_PA;
+   default:
+      return SGX_DST1__NONE;
    }
 }
 
@@ -95,9 +121,12 @@ static inline uint32_t
 sgx_isa_opnd_num(const struct sgx_isa_src *o)
 {
    switch (o->file) {
-   case SGX_ISA_FILE_G:   return o->num + 0x40;
-   case SGX_ISA_FILE_IMM: return (int32_t)o->num < 0 ? o->num & 0x7f : o->num;
-   default:               return o->num;
+   case SGX_ISA_FILE_G:
+      return o->num + 0x40;
+   case SGX_ISA_FILE_IMM:
+      return (int32_t)o->num < 0 ? o->num & 0x7f : o->num;
+   default:
+      return o->num;
    }
 }
 
@@ -128,23 +157,28 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
  * Operand helpers for the <map>s: encode an operand through its slot's
  * hierarchy and return NUM | BANK << 7 | EXT << 9 (src0: EXT << 8).
  */
-#define SGX_OPND(root, m, o) \
-   ((uint32_t)bitmask_to_uint64_t(encode_##root(s, &(struct bitset_params){ .MODE = (m) }, (o))))
-#define SGX_DST(m)     SGX_OPND(_dst, m, &src->dst)
-#define SGX_SRC(n, m)  SGX_OPND(_src, m, &src->src[n])
-#define SGX_SRC0(m)    SGX_OPND(_src0, m, &src->src[0])
-#define SGX_DST1()     SGX_OPND(_dst1, 0, &src->dst)
+#define SGX_OPND(root, m, o)                                                   \
+   ((uint32_t)bitmask_to_uint64_t(                                             \
+      encode_##root(s, &(struct bitset_params){.MODE = (m)}, (o))))
+#define SGX_DST(m)    SGX_OPND(_dst, m, &src->dst)
+#define SGX_SRC(n, m) SGX_OPND(_src, m, &src->src[n])
+#define SGX_SRC0(m)   SGX_OPND(_src0, m, &src->src[0])
+#define SGX_DST1()    SGX_OPND(_dst1, 0, &src->dst)
 /* Slots without an extension bit: i<n> is r(124 + n) there. */
-#define SGX_DSTX(m)    SGX_OPND(_dst, m, sgx_isa_noext(&src->dst, &(struct sgx_isa_src){ 0 }))
-#define SGX_SRCX(n, m) SGX_OPND(_src, m, sgx_isa_noext(&src->src[n], &(struct sgx_isa_src){ 0 }))
-#define SGX_IS_IMM(n)  (src->src[n].file == SGX_ISA_FILE_IMM)
+#define SGX_DSTX(m)                                                            \
+   SGX_OPND(_dst, m, sgx_isa_noext(&src->dst, &(struct sgx_isa_src){0}))
+#define SGX_SRCX(n, m)                                                         \
+   SGX_OPND(_src, m, sgx_isa_noext(&src->src[n], &(struct sgx_isa_src){0}))
+#define SGX_IS_IMM(n) (src->src[n].file == SGX_ISA_FILE_IMM)
 /* Without a destination, test's dst field holds nodst (default 0x280). */
-#define SGX_TDST(m) \
-   (src->dst.file != SGX_ISA_FILE_NONE ? SGX_DST(m) : (src->has_nodst ? src->nodst : 0x280))
+#define SGX_TDST(m)                                                            \
+   (src->dst.file != SGX_ISA_FILE_NONE                                         \
+       ? SGX_DST(m)                                                            \
+       : (src->has_nodst ? src->nodst : 0x280))
 /* rlp's src2 slot as one 10-bit value (default 0x300, the unused pattern) */
-#define SGX_UNUSED2()  (src->has_unused2 ? src->unused2 : 0x300)
-/* A named <expr> of the #instruction hierarchy, e.g. SGX_EXPR(__float_smode). */
-#define SGX_EXPR(n)    __instruction_expr_##n(s, p, src)
+#define SGX_UNUSED2() (src->has_unused2 ? src->unused2 : 0x300)
+/* A named <expr> of the #instruction hierarchy: SGX_EXPR(__float_smode). */
+#define SGX_EXPR(n) __instruction_expr_##n(s, p, src)
 
 #include "sgx545-isa-encode.h"
 
@@ -157,5 +191,6 @@ sgx545_isa_encode(const struct sgx_isa_instr *instr,
       .gen = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
    };
 
-   return bitmask_to_uint64_t(encode__instruction(&s, NULL, (struct sgx_isa_instr *)instr));
+   return bitmask_to_uint64_t(
+      encode__instruction(&s, NULL, (struct sgx_isa_instr *)instr));
 }

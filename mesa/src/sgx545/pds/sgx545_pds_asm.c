@@ -84,24 +84,19 @@ static const struct {
    const char *name;
    enum sgx545_pds_opc opc;
 } ops[] = {
-   { "op0xd.s1", SGX545_PDS_OPC_OP0XD_S1 },
-   { "op0x4.s1", SGX545_PDS_OPC_OP0X4_S1 },
-   { "op0x6.s1", SGX545_PDS_OPC_OP0X6_S1 },
-   { "add", SGX545_PDS_OPC_ADD },
-   { "mul16", SGX545_PDS_OPC_MUL16 },
-   { "or", SGX545_PDS_OPC_OR },
-   { "and", SGX545_PDS_OPC_AND },
-   { "xor", SGX545_PDS_OPC_XOR },
-   { "tst", SGX545_PDS_OPC_TST },
-   { "bra", SGX545_PDS_OPC_BRA },
-   { "shl", SGX545_PDS_OPC_SHL },
-   { "shr", SGX545_PDS_OPC_SHR },
-   { "halt", SGX545_PDS_OPC_HALT },
+   {"op0xd.s1", SGX545_PDS_OPC_OP0XD_S1}, {"op0x4.s1", SGX545_PDS_OPC_OP0X4_S1},
+   {"op0x6.s1", SGX545_PDS_OPC_OP0X6_S1}, {"add", SGX545_PDS_OPC_ADD},
+   {"mul16", SGX545_PDS_OPC_MUL16},       {"or", SGX545_PDS_OPC_OR},
+   {"and", SGX545_PDS_OPC_AND},           {"xor", SGX545_PDS_OPC_XOR},
+   {"tst", SGX545_PDS_OPC_TST},           {"bra", SGX545_PDS_OPC_BRA},
+   {"shl", SGX545_PDS_OPC_SHL},           {"shr", SGX545_PDS_OPC_SHR},
+   {"halt", SGX545_PDS_OPC_HALT},
 };
 
 static const char *const douts[] = {
-   [SGX545_PDS_DOUTI] = "douti", [SGX545_PDS_DOUTD] = "doutd", [SGX545_PDS_DOUTT] = "doutt",
-   [SGX545_PDS_DOUTU] = "doutu", [SGX545_PDS_DOUTA] = "douta",
+   [SGX545_PDS_DOUTI] = "douti", [SGX545_PDS_DOUTD] = "doutd",
+   [SGX545_PDS_DOUTT] = "doutt", [SGX545_PDS_DOUTU] = "doutu",
+   [SGX545_PDS_DOUTA] = "douta",
 };
 
 static const char *
@@ -143,7 +138,7 @@ static const char *operands(struct cursor *c, struct sgx545_pds_instr *in);
 const char *
 sgx545_pds_asm(const char *text, struct sgx545_pds_instr *in)
 {
-   struct cursor c = { text };
+   struct cursor c = {text};
 
    memset(in, 0, sizeof(*in));
    in->cc = SGX545_PDS_CC_ALWAYS;
@@ -233,7 +228,8 @@ operands(struct cursor *c, struct sgx545_pds_instr *in)
    case SGX545_PDS_OPC_OP0XD_S1:
    case SGX545_PDS_OPC_OP0X4_S1:
    case SGX545_PDS_OPC_OP0X6_S1:
-      if (!word(c, &in->dst) || in->dst.file == SGX545_PDS_FILE_IN || in->dst.hi)
+      if (!word(c, &in->dst) || in->dst.file == SGX545_PDS_FILE_IN ||
+          in->dst.hi)
          return "bad destination";
       if (!word(c, &in->src1) || in->src1.file == SGX545_PDS_FILE_DS1)
          return "src1 is ds0 or an input";
@@ -246,7 +242,7 @@ operands(struct cursor *c, struct sgx545_pds_instr *in)
       if (in->src1.file == SGX545_PDS_FILE_DS1) {
          in->opc = SGX545_PDS_OPC_TST_S2;
          in->src2 = in->src1;
-         in->src1 = (struct sgx545_pds_reg){ 0 };
+         in->src1 = (struct sgx545_pds_reg){0};
       }
       return NULL;
    case SGX545_PDS_OPC_BRA:
@@ -256,7 +252,8 @@ operands(struct cursor *c, struct sgx545_pds_instr *in)
       return NULL;
    case SGX545_PDS_OPC_SHL:
    case SGX545_PDS_OPC_SHR:
-      if (!word(c, &in->dst) || in->dst.hi || !word(c, &in->src1) || in->src1.hi)
+      if (!word(c, &in->dst) || in->dst.hi || !word(c, &in->src1) ||
+          in->src1.hi)
          return "bad operands";
       if (!eat(c, "#") || !number(c, &n))
          return "expected #amount";

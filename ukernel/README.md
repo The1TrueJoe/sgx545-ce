@@ -86,7 +86,7 @@ The build is **reproducible**: the assembler is pure Python with no timestamps,
 host paths or randomness, so the same source produces byte-identical `.bin` and
 `.json` on any machine and any supported Python. `UK_BUILD_ID` sets the manifest
 `build_id` (default `openhc`); set it to the commit for a release. The outputs
-(`<core>-ukernel-openhc.bin`, its `.bin.pat`, and the `.json` manifest) are
+(`<core>_ukernel.bin`, its `.bin.pat`, and the `.json` manifest) are
 generated, not committed.
 
 ## Per-core images

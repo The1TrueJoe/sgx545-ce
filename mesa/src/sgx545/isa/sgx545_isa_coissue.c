@@ -35,11 +35,12 @@ read_sel(struct sgx545_isa_fdual_use *u, unsigned sel, unsigned slot)
 }
 
 bool
-sgx545_isa_fdual_use(const struct sgx_isa_instr *instr, struct sgx545_isa_fdual_use *u)
+sgx545_isa_fdual_use(const struct sgx_isa_instr *instr,
+                     struct sgx545_isa_fdual_use *u)
 {
    unsigned sd = instr->sd & 3;
 
-   *u = (struct sgx545_isa_fdual_use){ .settled = true };
+   *u = (struct sgx545_isa_fdual_use){.settled = true};
    if (instr->opc != SGX_ISA_OPC_FDUAL)
       return false;
 
@@ -47,9 +48,9 @@ sgx545_isa_fdual_use(const struct sgx_isa_instr *instr, struct sgx545_isa_fdual_
    u->sec_writes_i = 1u << (sd == 3 ? 0 : sd);
 
    switch (instr->sec) {
-   case 0:  /* fmad: sd * sb + sc */
-   case 2:  /* fmsa: sd * sd + sb * sc */
-   case 4:  /* fmaxmin: sb and sc, and maybe sd (not drawn yet) */
+   case 0: /* fmad: sd * sb + sc */
+   case 2: /* fmsa: sd * sd + sb * sc */
+   case 4: /* fmaxmin: sb and sc, and maybe sd (not drawn yet) */
       if (sd == 3)
          u->sec_reads_slots |= SLOT(0);
       else
@@ -58,12 +59,19 @@ sgx545_isa_fdual_use(const struct sgx_isa_instr *instr, struct sgx545_isa_fdual_
       read_sel(u, instr->sc, 2);
       u->settled = instr->sec != 4;
       break;
-   case 3:  /* fsubflr: sb - floor(sc) */
-   case 11: case 12: case 13:   /* fadd, fsub, fmul: sb op sc */
+   case 3: /* fsubflr: sb - floor(sc) */
+   case 11:
+   case 12:
+   case 13: /* fadd, fsub, fmul: sb op sc */
       read_sel(u, instr->sb, 1);
       read_sel(u, instr->sc, 2);
       break;
-   case 5: case 6: case 7: case 8: case 9: case 10:   /* op(sb) */
+   case 5:
+   case 6:
+   case 7:
+   case 8:
+   case 9:
+   case 10: /* op(sb) */
       read_sel(u, instr->sb, 1);
       break;
    case 15: /* mov: msrc (0-2 i0-i2, 4-6 the src0-src2 slot) */
@@ -86,14 +94,14 @@ sgx545_isa_fdual_use(const struct sgx_isa_instr *instr, struct sgx545_isa_fdual_
    }
 
    switch (instr->pri) {
-   case 1:  /* mov: src1 */
+   case 1: /* mov: src1 */
       u->pri_reads_slots = SLOT(1);
       break;
-   case 7:  /* fssq: src1^2 + src2^2 */
+   case 7: /* fssq: src1^2 + src2^2 */
       u->pri_reads_slots = SLOT(1) | SLOT(2);
       break;
-   case 4:  /* fddp: also leaves src0 * src2 in an internal register (i0
-             * seen; whether it follows sd is not drawn) */
+   case 4: /* fddp: also leaves src0 * src2 in an internal register (i0
+            * seen; whether it follows sd is not drawn) */
       u->pri_reads_slots = SLOT(0) | SLOT(1) | SLOT(2);
       u->pri_writes_i = 1u << 0;
       u->settled = false;
@@ -124,12 +132,14 @@ sgx545_isa_coissue_hazard(const struct sgx_isa_instr *instr)
       /* the secondary reads before the primary writes (fine); the primary
        * reading what the secondary writes is a race */
       if (u.pri_reads_i & u.sec_writes_i)
-         return "the primary reads an internal register the secondary writes in the same word";
+         return "the primary reads an internal register the secondary "
+                "writes in the same word";
       return NULL;
    }
    if (instr->opc == SGX_ISA_OPC_EFO) {
       /* d naming an internal register the word writes is a race */
-      if ((instr->efo_d == 0 && instr->wi0) || (instr->efo_d == 1 && instr->wi1))
+      if ((instr->efo_d == 0 && instr->wi0) ||
+          (instr->efo_d == 1 && instr->wi1))
          return "efo's d names an internal register the same word writes";
       return NULL;
    }

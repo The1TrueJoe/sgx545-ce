@@ -28,8 +28,8 @@ lookup(const char *const *names, unsigned n, const char *s)
 
 /* A select: a name from the table, or "1-name" (one = 1-zero, zero = 1-one). */
 static bool
-parse_sel(const char *const *names, unsigned n, const char *s,
-          uint8_t *v, bool *comp)
+parse_sel(const char *const *names, unsigned n, const char *s, uint8_t *v,
+          bool *comp)
 {
    int i;
    char *end;
@@ -67,40 +67,49 @@ parse_sel(const char *const *names, unsigned n, const char *s,
 
 #define SEL(tbl, s, v, c) parse_sel(tbl, ARRAY_LEN(tbl), s, v, c)
 
-static const char *const sop2_c1[] = { "zero", "s1", "s2", "s1a", "s2a", "asat", "k18", NULL };
-static const char *const sop2_c2[] = { "zero", "s1", "s2", "s1a", "s2a", "asat", "k19", NULL };
-static const char *const sop2_a1[] = { "zero", "s1a", "s2a", "k18" };
-static const char *const sop2_a2[] = { "zero", "s1a", "s2a", "k19" };
-static const char *const sopwm_c[] = { "zero", "asat", "s1", "s1a", NULL, NULL, "s2", "s2a" };
-static const char *const sop3_c[] = { "zero", "asat", "s1", "s1a", "s0", "s0a", "s2", "s2a" };
-static const char *const sop3_a[] = { "zero", "s0a", "s1a", "s2a" };
-static const char *const sop3_a1[] = { "zero", "s1a" };
-static const char *const sop3_a2[] = { "zero", "s2a" };
-static const char *const lrp1_l1[] = { "zero", "s1" };
-static const char *const lrp1_l2[] = { "zero", "s2" };
-static const char *const lrp1_cs[] = { "s0", "s0a" };
-static const char *const sop3x_p[] = { "s1.s2", "s1.1-s2", "one.s2", "1-s1.s2" };
-static const char *const dot_a[] = { "zero", "s1a", "s2a", "x3" };
-static const char *const dot_scale[] = { "x1", "x2", "x4", "x8" };
-static const char *const ima8_c0[] = { "s0", "s1", "s0a", "s1a" };
-static const char *const ima8_c1[] = { "s1", "s1a" };
-static const char *const ima8_c2[] = { "s2", "s2a" };
-static const char *const ima8_a0[] = { "s0a", "s1a" };
-static const char *const ops4[] = { "add", "sub", "min", "max" };
-static const char *const efo_d[] = { "i0", "i1", "a0", "a1" };
-static const char *const efo_i[] = { "a0/a1", "a1/a0", "m0/m1", "a0/m1" };
-static const char *const efo_a[] = { "m0+m1/i1+i0", "m0+s0/i1+i0", "m0+i0/i1+m1", "s0+s2/s1+s2" };
-static const char *const efo_m[] = { "s0*s2/s1*s2", "s2*s1/s2*s2", "s1*s0/s2*s2", "s1*i0/s2*i1" };
-static const char *const fmt8[] = { "u8", "s8", "o8", "x3" };
-static const char *const imae_t2[] = { "u16", "s16", "u32", "x3" };
-static const char *const ii01[] = { "i0", "i1" };
-static const char *const fdual_pri[] = { "fmad", "mov", "fadm", "fmsa", "fddp", "fminmax", "ima32", "fssq" };
-static const char *const fdual_sec[] = { "fmad", "fmad16", "fmsa", "fsubflr", "fmaxmin", "frcp", "frsq", "fexp2",
-                                         "flog2", "fsin", "fcos", "fadd", "fsub", "fmul", "ima32", "mov" };
-static const char *const fdual_sd[] = { "i0", "i1", "i2", "i0s0" };
-static const char *const fdual_sb[] = { "i0", "i1", "i2", "src1" };
-static const char *const fdual_sc[] = { "i0", "i1", "i2", "src2" };
-static const char *const fdual_msrc[] = { "i0", "i1", "i2", "x3", "src0", "src1", "src2", "x7" };
+static const char *const sop2_c1[] = {"zero", "s1",   "s2",  "s1a",
+                                      "s2a",  "asat", "k18", NULL};
+static const char *const sop2_c2[] = {"zero", "s1",   "s2",  "s1a",
+                                      "s2a",  "asat", "k19", NULL};
+static const char *const sop2_a1[] = {"zero", "s1a", "s2a", "k18"};
+static const char *const sop2_a2[] = {"zero", "s1a", "s2a", "k19"};
+static const char *const sopwm_c[] = {"zero", "asat", "s1", "s1a",
+                                      NULL,   NULL,   "s2", "s2a"};
+static const char *const sop3_c[] = {"zero", "asat", "s1", "s1a",
+                                     "s0",   "s0a",  "s2", "s2a"};
+static const char *const sop3_a[] = {"zero", "s0a", "s1a", "s2a"};
+static const char *const sop3_a1[] = {"zero", "s1a"};
+static const char *const sop3_a2[] = {"zero", "s2a"};
+static const char *const lrp1_l1[] = {"zero", "s1"};
+static const char *const lrp1_l2[] = {"zero", "s2"};
+static const char *const lrp1_cs[] = {"s0", "s0a"};
+static const char *const sop3x_p[] = {"s1.s2", "s1.1-s2", "one.s2", "1-s1.s2"};
+static const char *const dot_a[] = {"zero", "s1a", "s2a", "x3"};
+static const char *const dot_scale[] = {"x1", "x2", "x4", "x8"};
+static const char *const ima8_c0[] = {"s0", "s1", "s0a", "s1a"};
+static const char *const ima8_c1[] = {"s1", "s1a"};
+static const char *const ima8_c2[] = {"s2", "s2a"};
+static const char *const ima8_a0[] = {"s0a", "s1a"};
+static const char *const ops4[] = {"add", "sub", "min", "max"};
+static const char *const efo_d[] = {"i0", "i1", "a0", "a1"};
+static const char *const efo_i[] = {"a0/a1", "a1/a0", "m0/m1", "a0/m1"};
+static const char *const efo_a[] = {"m0+m1/i1+i0", "m0+s0/i1+i0", "m0+i0/i1+m1",
+                                    "s0+s2/s1+s2"};
+static const char *const efo_m[] = {"s0*s2/s1*s2", "s2*s1/s2*s2", "s1*s0/s2*s2",
+                                    "s1*i0/s2*i1"};
+static const char *const fmt8[] = {"u8", "s8", "o8", "x3"};
+static const char *const imae_t2[] = {"u16", "s16", "u32", "x3"};
+static const char *const ii01[] = {"i0", "i1"};
+static const char *const fdual_pri[] = {"fmad", "mov",     "fadm",  "fmsa",
+                                        "fddp", "fminmax", "ima32", "fssq"};
+static const char *const fdual_sec[] = {
+   "fmad",  "fmad16", "fmsa", "fsubflr", "fmaxmin", "frcp", "frsq",  "fexp2",
+   "flog2", "fsin",   "fcos", "fadd",    "fsub",    "fmul", "ima32", "mov"};
+static const char *const fdual_sd[] = {"i0", "i1", "i2", "i0s0"};
+static const char *const fdual_sb[] = {"i0", "i1", "i2", "src1"};
+static const char *const fdual_sc[] = {"i0", "i1", "i2", "src2"};
+static const char *const fdual_msrc[] = {"i0",   "i1",   "i2",   "x3",
+                                         "src0", "src1", "src2", "x7"};
 
 static const struct {
    const char *name;
@@ -108,31 +117,31 @@ static const struct {
    const char *ops;
    uint8_t mask;
 } forms[] = {
-   { "efo", SGX_ISA_OPC_EFO, "D012" },
-   { "sop2", SGX_ISA_OPC_SOP2, "D12" },
-   { "sopwm", SGX_ISA_OPC_SOPWM, "D12", 15 },
-   { "sop3", SGX_ISA_OPC_SOP3, "D012" },
-   { "sop3l", SGX_ISA_OPC_SOP3L, "D012" },
-   { "lrp1", SGX_ISA_OPC_LRP1, "D012" },
-   { "sop3x", SGX_ISA_OPC_SOP3X, "D012" },
-   { "dot3", SGX_ISA_OPC_DOT3, "D12" },
-   { "dot4", SGX_ISA_OPC_DOT4, "D12" },
-   { "dot3s", SGX_ISA_OPC_DOT3S, "D012" },
-   { "dot4s", SGX_ISA_OPC_DOT4S, "D012" },
-   { "ima8", SGX_ISA_OPC_IMA8, "D012" },
-   { "fpma", SGX_ISA_OPC_FPMA, "D012" },
-   { "ima16", SGX_ISA_OPC_IMA16, "D012" },
-   { "imae", SGX_ISA_OPC_IMAE, "D012" },
-   { "ima32", SGX_ISA_OPC_IMA32, "D012" },
-   { "op1adrc", SGX_ISA_OPC_OP1ADRC, "D12" },
-   { "adif", SGX_ISA_OPC_ADIF, "D12" },
-   { "adifsum", SGX_ISA_OPC_ADIFSUM, "D012" },
-   { "op16s1", SGX_ISA_OPC_OP16S1, "D012" },
-   { "bilin", SGX_ISA_OPC_BILIN, "D012" },
-   { "ssum16", SGX_ISA_OPC_SSUM16, "D012" },
-   { "ssum16i", SGX_ISA_OPC_SSUM16I, "D02" },
-   { "firv", SGX_ISA_OPC_FIRV, "D012" },
-   { "firh", SGX_ISA_OPC_FIRH, "D012" },
+   {"efo", SGX_ISA_OPC_EFO, "D012"},
+   {"sop2", SGX_ISA_OPC_SOP2, "D12"},
+   {"sopwm", SGX_ISA_OPC_SOPWM, "D12", 15},
+   {"sop3", SGX_ISA_OPC_SOP3, "D012"},
+   {"sop3l", SGX_ISA_OPC_SOP3L, "D012"},
+   {"lrp1", SGX_ISA_OPC_LRP1, "D012"},
+   {"sop3x", SGX_ISA_OPC_SOP3X, "D012"},
+   {"dot3", SGX_ISA_OPC_DOT3, "D12"},
+   {"dot4", SGX_ISA_OPC_DOT4, "D12"},
+   {"dot3s", SGX_ISA_OPC_DOT3S, "D012"},
+   {"dot4s", SGX_ISA_OPC_DOT4S, "D012"},
+   {"ima8", SGX_ISA_OPC_IMA8, "D012"},
+   {"fpma", SGX_ISA_OPC_FPMA, "D012"},
+   {"ima16", SGX_ISA_OPC_IMA16, "D012"},
+   {"imae", SGX_ISA_OPC_IMAE, "D012"},
+   {"ima32", SGX_ISA_OPC_IMA32, "D012"},
+   {"op1adrc", SGX_ISA_OPC_OP1ADRC, "D12"},
+   {"adif", SGX_ISA_OPC_ADIF, "D12"},
+   {"adifsum", SGX_ISA_OPC_ADIFSUM, "D012"},
+   {"op16s1", SGX_ISA_OPC_OP16S1, "D012"},
+   {"bilin", SGX_ISA_OPC_BILIN, "D012"},
+   {"ssum16", SGX_ISA_OPC_SSUM16, "D012"},
+   {"ssum16i", SGX_ISA_OPC_SSUM16I, "D02"},
+   {"firv", SGX_ISA_OPC_FIRV, "D012"},
+   {"firh", SGX_ISA_OPC_FIRH, "D012"},
 };
 
 bool
@@ -142,8 +151,10 @@ sgx545_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
    if (!strcmp(parts[0], "fdual")) {
       int p = nparts == 3 ? LOOKUP(fdual_pri, parts[1]) : -1;
       int s = nparts == 3 ? LOOKUP(fdual_sec, parts[2]) : -1;
-      /* sec 3 is fsubflr; USEASM's fadm and ffrc encode as it (ISA.md "Dual issue") */
-      if (nparts == 3 && (!strcmp(parts[2], "fadm") || !strcmp(parts[2], "ffrc")))
+      /* sec 3 is fsubflr; fadm and ffrc are other names for it (ISA.md "Dual
+       * issue") */
+      if (nparts == 3 &&
+          (!strcmp(parts[2], "fadm") || !strcmp(parts[2], "ffrc")))
          s = 3;
       if (p < 0 || s < 0)
          return false;
@@ -161,12 +172,13 @@ sgx545_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
       bool fmtx = opc == SGX_ISA_OPC_BILIN || opc == SGX_ISA_OPC_SSUM16 ||
                   opc == SGX_ISA_OPC_FIRV || opc == SGX_ISA_OPC_FIRH;
       if (nparts == 2 && !strcmp(parts[1], "sgn") &&
-          (opc == SGX_ISA_OPC_IMA16 || opc == SGX_ISA_OPC_IMAE || opc == SGX_ISA_OPC_IMA32)) {
+          (opc == SGX_ISA_OPC_IMA16 || opc == SGX_ISA_OPC_IMAE ||
+           opc == SGX_ISA_OPC_IMA32)) {
          I->sgn = true;
       } else if (nparts == 2 && fmtx) {
          /* the format as a suffix: bilin.s8, ssum16.o8, firh.s8 (ISA.md
           * "hw 16 / 17 / 1a"); ssum16's picks the form */
-         static const char *const sfx[] = { "u8", "s8", "o8", "fmt3" };
+         static const char *const sfx[] = {"u8", "s8", "o8", "fmt3"};
          int f = LOOKUP(sfx, parts[1]);
          if (f <= 0 || (f == 3 && opc == SGX_ISA_OPC_SSUM16))
             return false;
@@ -185,12 +197,14 @@ sgx545_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
 }
 
 static bool
-set_sel(const char *const *tbl, unsigned n, const char *v, uint8_t *sel, bool *comp)
+set_sel(const char *const *tbl, unsigned n, const char *v, uint8_t *sel,
+        bool *comp)
 {
    return v && parse_sel(tbl, n, v, sel, comp);
 }
 
-#define SET_SEL(tbl, sel, comp) set_sel(tbl, ARRAY_LEN(tbl), value, &I->sel, &I->comp)
+#define SET_SEL(tbl, sel, comp)                                                \
+   set_sel(tbl, ARRAY_LEN(tbl), value, &I->sel, &I->comp)
 
 static bool
 set_enum(const char *const *tbl, unsigned n, const char *v, uint8_t *out)
@@ -258,16 +272,21 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
    bool dummy;
 
    /* plain flags */
-   static const struct { const char *name; size_t off; } flags[] = {
-#define F(n) { #n, offsetof(struct sgx_isa_instr, n) }
-      F(cs1c), F(as1c), F(aneg), F(arev), F(cneg), F(f4), F(f6), F(s1c), F(s2c),
-      F(s1ac), F(sat), F(dflag1), F(s0hi), F(s1hi), F(s2hi), F(cout), F(negp),
-      F(ileave), F(src23), F(dst23), F(x1b), F(x1c), F(x1d), F(nf16), F(s8),
-      F(x38), F(s0f13), F(f2_27), F(wi0), F(wi1), F(a0lneg), F(a0rneg), F(f3_10),
+   static const struct {
+      const char *name;
+      size_t off;
+   } flags[] = {
+#define F(n) {#n, offsetof(struct sgx_isa_instr, n)}
+      F(cs1c), F(as1c), F(aneg),   F(arev),   F(cneg),   F(f4),    F(f6),
+      F(s1c),  F(s2c),  F(s1ac),   F(sat),    F(dflag1), F(s0hi),  F(s1hi),
+      F(s2hi), F(cout), F(negp),   F(ileave), F(src23),  F(dst23), F(x1b),
+      F(x1c),  F(x1d),  F(nf16),   F(s8),     F(x38),    F(s0f13), F(f2_27),
+      F(wi0),  F(wi1),  F(a0lneg), F(a0rneg), F(f3_10),
 #undef F
    };
    /* fdual's src1 / src2 negates as bracket flags (or -x on the operand) */
-   if (o == SGX_ISA_OPC_FDUAL && !value && (!strcmp(name, "neg1") || !strcmp(name, "neg2"))) {
+   if (o == SGX_ISA_OPC_FDUAL && !value &&
+       (!strcmp(name, "neg1") || !strcmp(name, "neg2"))) {
       I->src[name[3] - '0'].neg = true;
       return true;
    }
@@ -290,30 +309,44 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
    }
 
    if (!strcmp(name, "c1")) {
-      if (sop2) return SET_SEL(sop2_c1, c1, c1c);
-      if (sopwm) return SET_SEL(sopwm_c, c1, c1c);
-      if (sop3) return SET_SEL(sop3_c, c1, c1c);
-      if (ima8) return SET_SEL(ima8_c1, c1, c1c);
+      if (sop2)
+         return SET_SEL(sop2_c1, c1, c1c);
+      if (sopwm)
+         return SET_SEL(sopwm_c, c1, c1c);
+      if (sop3)
+         return SET_SEL(sop3_c, c1, c1c);
+      if (ima8)
+         return SET_SEL(ima8_c1, c1, c1c);
    }
    if (!strcmp(name, "c2")) {
-      if (sop2) return SET_SEL(sop2_c2, c2, c2c);
-      if (sopwm) return SET_SEL(sopwm_c, c2, c2c);
-      if (sop3) return SET_SEL(sop3_c, c2, c2c);
-      if (ima8) return SET_SEL(ima8_c2, c2, c2c);
+      if (sop2)
+         return SET_SEL(sop2_c2, c2, c2c);
+      if (sopwm)
+         return SET_SEL(sopwm_c, c2, c2c);
+      if (sop3)
+         return SET_SEL(sop3_c, c2, c2c);
+      if (ima8)
+         return SET_SEL(ima8_c2, c2, c2c);
    }
    if (!strcmp(name, "c0") && ima8)
       return SET_SEL(ima8_c0, c0, c0c);
    if (!strcmp(name, "a0") && ima8)
       return SET_SEL(ima8_a0, a0, a0c);
    if (!strcmp(name, "a1")) {
-      if (sop2) return SET_SEL(sop2_a1, a1, a1c);
-      if (sop3) return SET_SEL(sop3_a1, a1, a1c);
-      if (dot) return SET_SEL(dot_a, a1, a1c);
+      if (sop2)
+         return SET_SEL(sop2_a1, a1, a1c);
+      if (sop3)
+         return SET_SEL(sop3_a1, a1, a1c);
+      if (dot)
+         return SET_SEL(dot_a, a1, a1c);
    }
    if (!strcmp(name, "a2")) {
-      if (sop2) return SET_SEL(sop2_a2, a2, a2c);
-      if (sop3) return SET_SEL(sop3_a2, a2, a2c);
-      if (dot) return SET_SEL(dot_a, a2, a2c);
+      if (sop2)
+         return SET_SEL(sop2_a2, a2, a2c);
+      if (sop3)
+         return SET_SEL(sop3_a2, a2, a2c);
+      if (dot)
+         return SET_SEL(dot_a, a2, a2c);
    }
    if (!strcmp(name, "a") && sop3)
       return SET_SEL(sop3_a, asel, aselc);
@@ -322,10 +355,13 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
    if (!strcmp(name, "l2"))
       return SET_SEL(lrp1_l2, l2, l2c);
    if (!strcmp(name, "cs")) {
-      if (o == SGX_ISA_OPC_LRP1) return SET_ENUM(lrp1_cs, lcs);
+      if (o == SGX_ISA_OPC_LRP1)
+         return SET_ENUM(lrp1_cs, lcs);
       /* dot's scales: x4, or cx4 / ax2 (ISA.md "Other spellings") */
-      if (dot && value && value[0] == 'c' && value[1] == 'x') value++;
-      if (dot) return SET_ENUM(dot_scale, dcs);
+      if (dot && value && value[0] == 'c' && value[1] == 'x')
+         value++;
+      if (dot)
+         return SET_ENUM(dot_scale, dcs);
    }
    if (!strcmp(name, "as") && dot) {
       if (value && value[0] == 'a' && value[1] == 'x')
@@ -340,7 +376,8 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       return SET_ENUM(ops4, aop);
    if (!strcmp(name, "d") && o == SGX_ISA_OPC_EFO)
       return SET_ENUM(efo_d, efo_d);
-   if (o == SGX_ISA_OPC_EFO && (!strcmp(name, "i") || !strcmp(name, "a") || !strcmp(name, "m"))) {
+   if (o == SGX_ISA_OPC_EFO &&
+       (!strcmp(name, "i") || !strcmp(name, "a") || !strcmp(name, "m"))) {
       char buf[64];
       const char *pair = efo_pair(value, buf, sizeof(buf));
 
@@ -373,17 +410,18 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       return true;
    }
    if (!strcmp(name, "hi") && o == SGX_ISA_OPC_IMA32) {
-      static const char *const hi[] = { NULL, NULL, NULL, NULL, "i0", "i1", "i2" };
+      static const char *const hi[] = {NULL, NULL, NULL, NULL,
+                                       "i0", "i1", "i2"};
       return SET_ENUM(hi, hi) || set_num(value, &I->hi);
    }
    if (!strcmp(name, "cin") && o == SGX_ISA_OPC_IMA32) {
-      static const char *const cin[] = { NULL, "i0", "i1", "i2" };
+      static const char *const cin[] = {NULL, "i0", "i1", "i2"};
       return SET_ENUM(cin, cin3);
    }
    if (!strcmp(name, "fmt") && o == SGX_ISA_OPC_SSUM16) {
       /* ssum16's format picks the form (fmt 3 is ssum16i) */
-      static const enum sgx_isa_opc f[] = { SGX_ISA_OPC_SSUM16, SGX_ISA_OPC_SSUM16_S8,
-                                            SGX_ISA_OPC_SSUM16_O8 };
+      static const enum sgx_isa_opc f[] = {
+         SGX_ISA_OPC_SSUM16, SGX_ISA_OPC_SSUM16_S8, SGX_ISA_OPC_SSUM16_O8};
       if (!set_enum(fmt8, 3, value, &I->ifmt))
          return false;
       I->opc = f[I->ifmt];
@@ -419,15 +457,33 @@ bool
 sgx545_isa_asm_pred2_int(enum sgx_isa_opc opc)
 {
    switch (opc) {
-   case SGX_ISA_OPC_EFO: case SGX_ISA_OPC_FDUAL: case SGX_ISA_OPC_SOP2:
-   case SGX_ISA_OPC_SOPWM: case SGX_ISA_OPC_SOP3: case SGX_ISA_OPC_SOP3L:
-   case SGX_ISA_OPC_LRP1: case SGX_ISA_OPC_SOP3X: case SGX_ISA_OPC_DOT3:
-   case SGX_ISA_OPC_DOT4: case SGX_ISA_OPC_DOT3S: case SGX_ISA_OPC_DOT4S:
-   case SGX_ISA_OPC_IMA8: case SGX_ISA_OPC_FPMA: case SGX_ISA_OPC_IMA16:
-   case SGX_ISA_OPC_IMAE: case SGX_ISA_OPC_IMA32: case SGX_ISA_OPC_OP1ADRC:
-   case SGX_ISA_OPC_ADIF: case SGX_ISA_OPC_ADIFSUM: case SGX_ISA_OPC_OP16S1:
-   case SGX_ISA_OPC_BILIN: case SGX_ISA_OPC_SSUM16: case SGX_ISA_OPC_SSUM16_S8:
-   case SGX_ISA_OPC_SSUM16_O8: case SGX_ISA_OPC_SSUM16I: case SGX_ISA_OPC_FIRV:
+   case SGX_ISA_OPC_EFO:
+   case SGX_ISA_OPC_FDUAL:
+   case SGX_ISA_OPC_SOP2:
+   case SGX_ISA_OPC_SOPWM:
+   case SGX_ISA_OPC_SOP3:
+   case SGX_ISA_OPC_SOP3L:
+   case SGX_ISA_OPC_LRP1:
+   case SGX_ISA_OPC_SOP3X:
+   case SGX_ISA_OPC_DOT3:
+   case SGX_ISA_OPC_DOT4:
+   case SGX_ISA_OPC_DOT3S:
+   case SGX_ISA_OPC_DOT4S:
+   case SGX_ISA_OPC_IMA8:
+   case SGX_ISA_OPC_FPMA:
+   case SGX_ISA_OPC_IMA16:
+   case SGX_ISA_OPC_IMAE:
+   case SGX_ISA_OPC_IMA32:
+   case SGX_ISA_OPC_OP1ADRC:
+   case SGX_ISA_OPC_ADIF:
+   case SGX_ISA_OPC_ADIFSUM:
+   case SGX_ISA_OPC_OP16S1:
+   case SGX_ISA_OPC_BILIN:
+   case SGX_ISA_OPC_SSUM16:
+   case SGX_ISA_OPC_SSUM16_S8:
+   case SGX_ISA_OPC_SSUM16_O8:
+   case SGX_ISA_OPC_SSUM16I:
+   case SGX_ISA_OPC_FIRV:
    case SGX_ISA_OPC_FIRH:
       return true;
    default:

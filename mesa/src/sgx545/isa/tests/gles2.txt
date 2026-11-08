@@ -1,3 +1,6 @@
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
 # GLES2-relevant USSE forms in docs/ISA.md's text notation, for the
 # clean-room isaspec encoder (mesa/src/sgx545/isa). A line may end with
 # "; <lo> <hi>": words docs/ISA.md quotes for it. The rest are checked
