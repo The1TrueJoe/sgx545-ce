@@ -105,11 +105,12 @@ jobs:
       - name: clang W=1 (upstream configuration)
         run: |
           set -eux
-          L=linux-$LINUX_VERSION
-          mkdir -p build-clang
-          cp $L/.config build-clang/.config
-          make -C $L O=$PWD/build-clang ARCH=x86_64 LLVM=1 olddefconfig prepare >/dev/null
-          make -C $L O=$PWD/build-clang ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 \
+          # A copy of the laid-out tree: O= needs a clean source tree.
+          C=linux-clang
+          cp -a linux-$LINUX_VERSION $C
+          make -C $C ARCH=x86_64 LLVM=1 olddefconfig >/dev/null
+          make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" prepare >/dev/null
+          make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 \
             drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/ 2>&1 | tee clang.log
           ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' clang.log
 
