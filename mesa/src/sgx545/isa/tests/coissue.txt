@@ -101,3 +101,6 @@ test.fdsx.s0z2o p0, idx16.f16, pa0.f16.hi, r[idx2+1].f16 [nosched chan=2 fmt f2_
 # any format suffix sets fmt
 test.fdsx.s0z2o p0, idx16.f16, pa0.f16.hi, r[idx2+1].f16 [nosched f2_0 chan=2] == test.fdsx.s0z2o p0, idx16.f16, pa0.f16.hi, r[idx2+1].f16 [nosched f2_0 fmt chan=2]
 fmad r0, pa0.f16.lo, c52, c48 == fmad r0, pa0.f16.lo, c52, c48 [fmt]
+
+# testmask's unnamed type 3 is .tm3 (ISA.md "test vs testmask")
+testmask.fsubflr.s3z1o.tm3 r0, r1, r2

@@ -220,7 +220,7 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="0" display=".byte"/>
 	<value val="1" display=".word"/>
 	<value val="2" display=".dword"/>
-	<value val="3" display=".type3"/>
+	<value val="3" display=".tm3"/>
 </enum>
 
 <enum name="#smp-dim">
