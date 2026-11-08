@@ -275,6 +275,8 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
   `name=v` is the field's value, except `rpt=n`, which is the repeat count:
   every class stores n - 1.
 - A field the text doesn't show holds its default. The default is 0, except:
+  - rlp's `unused2` (the src2 slot as one 10-bit value): 0x300, the unused
+    pattern. Any other value is written `unused2=v` in the brackets.
   - `mask` (when there is no repeat count): 1 in smp, pck, test, testmask
     and the bitwise classes; 15 in sopwm; 0 elsewhere;
   - `dmask` in pck: 15;
@@ -947,8 +949,8 @@ no rotate. The text shows n, rot and inv separately (lossless):
 `rlp dst, src1, pN` (hw 0e): USEASM arg2 must be a predicate (type 0xc, p0-p3)
 -> l14-15; src2's slot is encoded as unused (#0: l28-29 = 2, h16 = 1; field
 `unused2` = 0x300: the src2 slot's number, bank and extension read as one
-10-bit value, number in bits 0-6, bank in 7-8, extension in 9); h3, h4-11
-never set. Rotate-left-through-predicate is a
+10-bit value, number in bits 0-6, bank in 7-8, extension in 9; the text
+shows it only when it isn't 0x300, as `unused2=v`); h3, h4-11 never set. Rotate-left-through-predicate is a
 **guess** from the name.
 
 ### Open questions
