@@ -15,6 +15,9 @@ mkdir -p "$R"
 LOG=$R/run.log
 step() { printf '\n  [%s/5] %s\n' "$1" "$2"; echo "== step $1: $2 ($(date -u +%T))" >> "$LOG"; }
 note() { printf '        %s\n' "$*"; echo "$*" >> "$LOG"; }
+SUM=/tmp/summary
+: > "$SUM"
+result() { printf '    %-5s %s\n' "$1" "$2" >> "$SUM"; }   # PASS|FAIL|SKIP what
 run() {   # NAME SECS CMD...: CMD's output into NAME, at most SECS
 	local n=$1 t=$2; shift 2
 	echo "\$ $*" >> "$LOG"
@@ -30,7 +33,7 @@ timeouts() { dmesg | grep -c 'job timed out'; }
 clear
 cat <<EOF
 
-  SGX545 test for Intel Cedarview (GMA 3600/3650), kit $KIT_VERSION
+  SGX545 test for Intel Cedarview (GMA 3600/3650), kit $KIT_SERIES ($KIT_VERSION)
   ------------------------------------------------------------------
   This only reads from your computer. Your internal disk is set to
   read-only and nothing is installed. It takes a few minutes.
@@ -61,8 +64,10 @@ run modprobe-gma500.txt 60 modprobe gma500_gfx
 ls -l /sys/bus/auxiliary/devices/ > "$R/auxiliary.txt" 2>&1
 if [ -n "$(compgen -G '/sys/bus/auxiliary/devices/gma500_gfx.sgx.*')" ]; then
 	note "gma500 is up and offers the GPU to the new driver."
+	result PASS "display driver hands the GPU over"
 else
 	note "gma500 did not offer the GPU (this is useful to know too)."
+	result FAIL "display driver hands the GPU over"
 fi
 
 step 3 "Starting the GPU driver"
@@ -80,6 +85,10 @@ echo "$ident" | grep -qE 'revision 0x[0-9a-f]+: ' && KNOWN=1
 STARTED=
 dmesg | grep -q 'powervr_sgx.*microkernel started' && [ -n "$(compgen -G '/dev/dri/renderD*')" ] && STARTED=1
 [ -n "$STARTED" ] && note "The driver started the GPU's microkernel."
+if [ -z "$ident" ]; then result FAIL "GPU identified"
+elif [ -z "$KNOWN" ]; then result SKIP "GPU known to this driver (not yet)"
+elif [ -n "$STARTED" ]; then result PASS "GPU identified and started"
+else result FAIL "GPU started"; fi
 cat /sys/kernel/debug/dri/*/status > "$R/status-after-start.txt" 2>/dev/null
 
 step 4 "Drawing on the GPU"
@@ -98,10 +107,12 @@ else
 		# shellcheck disable=SC2086 # the test and its arguments
 		set -- $t
 		[ -x "$T/$1" ] || { note "$1: not in this kit"; continue; }
-		if run "$1.txt" 180 "$T/$1" "${@:2}"; then note "$1: passed"; else note "$1: FAILED (exit $?)"; fi
+		if run "$1.txt" 180 "$T/$1" "${@:2}"; then note "$1: passed"; result PASS "$1"
+		else note "$1: FAILED (exit $?)"; result FAIL "$1"; fi
 		cat /sys/kernel/debug/dri/*/status > "$R/$1-status.txt" 2>/dev/null
 		if [ "$(timeouts)" != "$t0" ]; then
 			note "The GPU stopped responding; ending the GPU tests here."
+			result FAIL "the GPU stopped responding; later tests skipped"
 			break
 		fi
 	done
@@ -110,8 +121,10 @@ else
 	if [ "$(timeouts)" = "$t0" ] && [ -x "$T/powervr_sgx_hang" ]; then
 		if run powervr_sgx_hang.txt 240 "$T/powervr_sgx_hang"; then
 			note "powervr_sgx_hang: passed (a deliberate GPU hang and its recovery)"
+			result PASS "powervr_sgx_hang (recovery from a deliberate hang)"
 		else
 			note "powervr_sgx_hang: FAILED (exit $?)"
+			result FAIL "powervr_sgx_hang (recovery from a deliberate hang)"
 		fi
 		cat /sys/kernel/debug/dri/*/status > "$R/powervr_sgx_hang-status.txt" 2>/dev/null
 	fi
@@ -127,7 +140,8 @@ for f in "$R"/lspci*.txt "$R"/dmesg-before-sgx.txt; do scrub < "$f" > "$f.s" && 
 cp /proc/interrupts "$R/interrupts.txt"
 cp /proc/iomem "$R/iomem.txt"
 prod=$(sed -n 's/^product_name: //p' "$R/system.txt" | tr -c 'A-Za-z0-9.\n-' '_' | cut -c1-32)
-NAME=results-${prod:-unknown}-$(date -u +%Y%m%d-%H%M).tar.gz
+NAME=results-kit${KIT_SERIES}-${prod:-unknown}-$(date -u +%Y%m%d-%H%M).tar.gz
+cp "$SUM" "$R/summary.txt"
 OK=
 p=$(blkid -t PARTUUID="$DISKID-01" -o device 2>/dev/null | head -1)
 # only the stick's own partition, never anything else
@@ -156,6 +170,9 @@ if [ -n "$OK" ]; then
     3. Send us that file, as the guide says.
 
     GPU: ${ident:-not reported}
+
+    Kit $KIT_SERIES results:
+$(cat "$SUM")
 
 EOF
 else
