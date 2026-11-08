@@ -79,3 +79,9 @@ ssum16.s8 r0, r1, r2, r3
 bilin r0, r1, r2, r3 [fmt=s8 ileave] == bilin.s8 r0, r1, r2, r3 [ileave]
 firh i1, r1, r2, r3 [fmt=o8] == firh.o8 i1, r1, r2, r3
 ssum16 r0, sa4, sa5, r3 [fmt=o8] == ssum16.o8 r0, sa4, sa5, r3
+
+# rlp's src2 slot as one 10-bit value: unused2, written when it isn't 0x300
+# (ISA.md "Text notation and defaults", "hw 0a-0e")
+rlp r0, r1, p2 [unused2=5]
+rlp r0, r1, p2 [unused2=768] == rlp r0, r1, p2
+rlp r0, r1, p2 [unused2=0x3ff] == rlp r0, r1, p2 [unused2=1023]
