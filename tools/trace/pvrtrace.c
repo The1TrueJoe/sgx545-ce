@@ -12,6 +12,9 @@
  *   - and before each SGX_SUBMITTRANSFER (numbered by its own counter), so the
  *     transfer command and its source are captured as the GPU will see them.
  * PVRTRACE_SNAPKICKS=n stops the copies after the n-th kick (long clients).
+ * A "%p" in PVRTRACE_OUT becomes the process id, so a client that starts
+ * other processes with the preload inherited (a Java launcher, a GL probe)
+ * gets one log per process instead of each truncating the last one's.
  * PVRTRACE_SNAPFILE=path takes no kick/transfer copies until that file exists,
  * then PVRTRACE_SNAPN of them (default 16): a steady frame of a long client
  * (touch the file once it is running). Calls and mappings are always logged.
@@ -152,6 +155,13 @@ __attribute__((constructor)) static void init(void)
 	if ((e = getenv("PVRTRACE_SNAPN")))
 		snap_n = strtoul(e, NULL, 0);
 
+	if (path && strstr(path, "%p")) {
+		static char named[512];
+		const char *p = strstr(path, "%p");
+
+		snprintf(named, sizeof named, "%.*s%d%s", (int)(p - path), path, getpid(), p + 2);
+		path = named;
+	}
 	log_fd = open(path ? path : "/tmp/pvrtrace.bin",
 		      O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 	if (log_fd < 0)
