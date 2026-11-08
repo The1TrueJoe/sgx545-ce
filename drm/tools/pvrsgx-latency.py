@@ -8,7 +8,7 @@
 Stages, per job (drm_sched's events and the driver's own):
     queue -> run        the scheduler: dependencies, the entity's turn, its worker
     run -> kick         the driver: commands built, imports flushed, the CCB doorbell
-    kick -> irq         the GPU and the microkernel (the first interrupt after the kick)
+    kick -> irq         the GPU and the microkernel, to the job's last interrupt
     irq -> done         the interrupt thread finding the job done (imports flushed again)
     done -> finished    the hardware fence's callback to the scheduler's finished fence
 """
@@ -90,9 +90,12 @@ def main():
             d["q-run"].append(run_at[sf] - queued[sf])
         if sf in run_at:
             d["run-kick"].append(kts - run_at[sf])
-        irq = next((i for i in irqs if i >= kts), None)
         if s in done:
-            if irq is not None and irq <= done[s]:
+            # the job's last interrupt: earlier ones (TA done, ...) don't complete it
+            irq = max((i for i in irqs if kts <= i <= done[s]), default=None)
+            n_irq = sum(1 for i in irqs if kts <= i <= done[s])
+            d.setdefault("irqs", []).append(n_irq)
+            if irq is not None:
                 d["kick-irq"].append(irq - kts)
                 d["irq-done"].append(done[s] - irq)
             if sf in finished:
@@ -105,6 +108,8 @@ def main():
                          ("kick-irq", "kick -> irq"), ("irq-done", "irq -> done"),
                          ("done-fin", "done -> finished"), ("total", "queue -> finished")):
             stats(label, d[k])
+        if d.get("irqs"):
+            print(f"  interrupts per job  median {statistics.median(d['irqs'])}")
     if flush_bytes:
         print(f"import flushes: {len(flush_bytes)}, {statistics.median(flush_bytes) / 1024:.0f} KiB median")
         stats("flush before", flush["before"])

@@ -1,0 +1,65 @@
+# EA3 (ea3-v2), RAM boot of 46c8212 (run 42508386182), 2026-11-08 ~18:15 UTC
+# DDK microkernel (firmware=powervr_sgx/sgx545-ukernel-1.7.862890.bin), then the open one, um-re 0e7eb7a (md5 da12e469 wrapped)
+
+# ---- DDK microkernel: uAPI 39/39, 3/3 frames, all blits right (copy, down, mipl)
+
+# ---- open 0e7eb7a: blit
+copy  TIMED OUT, 4096/4096 pixels right
+devcoredump: ccb wo 2 ro 2; xfer_ccbctl 000001c0 00000000; xfer_done @0x2d000000 = 00000001 00000000 (pending 1, write-complete 0)
+            command 0x130 = 1 (dst syncs), 0x13c = 0 (write pending), 0x140 = 0x2d000004 (write-complete address)
+            BIF_INT_STAT 0x000d0400 BIF_FAULT 0x0000000f BIF_BANK0 0x0000101f EVENT_STATUS 0x20000000
+
+# ---- open 0e7eb7a, share_kernel_heaps=0: every render times out (frame 0/1, 0/10 on 2 contexts, 0/3 at 720x480, 0/5 processes, 0/5 new contexts); uAPI 39/39
+devcoredump (render): BIF_INT_STAT 0x000d1000 BIF_FAULT 0x300020d1 BIF_BANK0 0x00001011 DIR_LIST_BASE0 0x0a689000 DIR_LIST_BASE15 0x1133f000
+
+# ---- latency (drm/tools/pvrsgx-latency.py)
+### ddk-null
+NULL jobs:
+  queue -> run        n=   5  median     71.0 us  p90     79.0  min     61.0  max     79.0
+  run -> kick         n=   5  median     18.0 us  p90     43.0  min     12.0  max     43.0
+  kick -> irq         -
+  irq -> done         -
+  done -> finished    n=   5  median      5.0 us  p90      5.0  min      4.0  max      5.0
+  queue -> finished   n=   5  median    132.0 us  p90    168.0  min    129.0  max    168.0
+  interrupts per job  median 0
+interrupt-thread wakeups: 15 for 5 jobs, 0 interrupts
+### ddk-frame
+render jobs:
+  queue -> run        n=  30  median     40.0 us  p90     84.0  min     37.0  max    104.0
+  run -> kick         n=  30  median     15.5 us  p90     23.0  min     14.0  max     35.0
+  kick -> irq         n=  30  median    268.0 us  p90    271.0  min    263.0  max    295.0
+  irq -> done         n=  30  median     16.0 us  p90     31.0  min     15.0  max     56.0
+  done -> finished    n=  30  median      2.0 us  p90      3.0  min      2.0  max      5.0
+  queue -> finished   n=  30  median    344.0 us  p90    412.0  min    332.0  max    423.0
+  interrupts per job  median 3.0
+interrupt-thread wakeups: 119 for 30 jobs, 90 interrupts
+### ddk-blit
+transfer jobs:
+  queue -> run        n=   4  median     56.0 us  p90     79.0  min     36.0  max     79.0
+  run -> kick         n=   4  median     10.0 us  p90     20.0  min      8.0  max     20.0
+  kick -> irq         n=   4  median     51.5 us  p90     59.0  min     44.0  max     59.0
+  irq -> done         n=   4  median     22.0 us  p90     33.0  min     19.0  max     33.0
+  done -> finished    n=   4  median      2.5 us  p90      3.0  min      2.0  max      3.0
+  queue -> finished   n=   4  median    141.5 us  p90    179.0  min    125.0  max    179.0
+  interrupts per job  median 1.0
+interrupt-thread wakeups: 8 for 4 jobs, 4 interrupts
+### uk-null
+NULL jobs:
+  queue -> run        n=   5  median     65.0 us  p90     81.0  min     61.0  max     81.0
+  run -> kick         n=   5  median     18.0 us  p90     18.0  min     16.0  max     18.0
+  kick -> irq         n=   5  median     21.0 us  p90     37.0  min     18.0  max     37.0
+  irq -> done         n=   5  median     21.0 us  p90     26.0  min     13.0  max     26.0
+  done -> finished    n=   5  median     32.0 us  p90     36.0  min     25.0  max     36.0
+  queue -> finished   n=   5  median    155.0 us  p90    177.0  min    149.0  max    177.0
+  interrupts per job  median 1
+interrupt-thread wakeups: 20 for 5 jobs, 5 interrupts
+### uk-frame
+render jobs:
+  queue -> run        n=  30  median     43.0 us  p90     51.0  min     33.0  max     62.0
+  run -> kick         n=  30  median     19.0 us  p90     23.0  min     14.0  max     65.0
+  kick -> irq         n=  30  median    214.0 us  p90    227.0  min    194.0  max    235.0
+  irq -> done         n=  30  median     29.5 us  p90     52.0  min     19.0  max     76.0
+  done -> finished    n=  30  median      3.0 us  p90      4.0  min      2.0  max      5.0
+  queue -> finished   n=  30  median    315.0 us  p90    355.0  min    282.0  max    363.0
+  interrupts per job  median 1.0
+interrupt-thread wakeups: 60 for 30 jobs, 30 interrupts
