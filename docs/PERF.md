@@ -115,6 +115,9 @@ is higher on ours too.
    - Interim: 2 `pck.u8.u8` lane picks.
 3. **Per-frame fixed cost and vertices (0.46).** Not found yet.
    - Measure submit -> kick -> done with the powervr_sgx tracepoints (m2).
+     m2's first suspect on that stack: the kernel clflushes every imported
+     dma-buf around every job, under X the full-screen scanout
+     (`pvrsgx_flush_imports`).
    - Measure the PDS vertex fetch against the DDK's.
 
 ### Order
