@@ -31,7 +31,7 @@ struct seq_buf;
 #define PVRSGX_USSE_VERTEX_BASE_INDEX	10
 #define PVRSGX_USSE_UKERNEL_BASE_INDEX	15
 
-/* Host control block words (SGXMKIF_HOST_CTL as this microkernel builds it). */
+/* Host control block words (docs/UKERNEL.md section 1, "The TA3D control block"). */
 #define HOSTCTL_INIT_STATUS		0
 #define HOSTCTL_POWER_STATUS		1
 #define HOSTCTL_CLEANUP_STATUS		2

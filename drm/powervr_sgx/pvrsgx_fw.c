@@ -74,11 +74,11 @@ enum ukfw_patch_value {
 	UKFW_MISC,
 };
 
-/* SGXMKIF_MISCINFO: the request and answer flags in word 0. */
+/* GETMISCINFO: the request and answer flags in word 0. */
 #define MISCINFO_READY			BIT(0)
 #define MISCINFO_GET_STRUCT_SIZES	BIT(1)
 
-/* SGXMKIF_CMD_POWER: data word 1. */
+/* The POWER command: data word 1. */
 #define POWER_OFF			1
 
 /* Microkernel timer at 1 kHz, its lockup check at 100 Hz. */
@@ -512,7 +512,7 @@ static int fw_check(struct pvrsgx_device *sdev)
 }
 
 /*
- * SGXInitialise: clocks, part 1, reset, part 2, then the first event kick,
+ * Start: clocks, init script part 1, reset, part 2, then the first event kick,
  * and the microkernel's init entry sets INIT_COMPLETE.
  */
 int pvrsgx_fw_start(struct pvrsgx_device *sdev)
@@ -561,7 +561,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_UK_TIMER_CLOCK] = sdev->core->clock_hz / UKERNEL_TIMER_HZ;
 	hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
 	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
-	/* SGXPostPowerState clears the power status before every start. */
+	/* The power status starts clear at every start. */
 	hc[HOSTCTL_POWER_STATUS] = 0;
 	pvrsgx_ccb_reset(sdev);
 	ta3dctl_fill(sdev);
@@ -610,7 +610,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	return err;
 }
 
-/* SGXPrePowerState(OFF), then hold the cores in reset. */
+/* Ask the microkernel to power off, then hold the cores in reset. */
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 {
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);

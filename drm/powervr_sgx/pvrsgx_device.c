@@ -121,7 +121,7 @@ static void inval_dc(struct pvrsgx_device *sdev)
 }
 
 /*
- * SGXReset for a single-core SGX545: reset everything, clear the directory
+ * The reset sequence for a single-core SGX5xx: reset everything, clear the directory
  * lists, take the cores out of reset with list 0 on a scratch directory that
  * absorbs faults left over from before, then give the microkernel its own
  * directory on list 15.

@@ -41,7 +41,7 @@ struct pvrsgx_render_ctx {
 
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 
-/* SGXAddRenderTarget's numbers (STATE.md section 6). */
+/* A render target's tiling numbers (docs/STATE.md section 6). */
 struct pvrsgx_rt_numbers {
 	u32 xt, yt, mx, my, padx, pady;
 	u32 mtile1, mtile2, te_screen, mt_tiles, region_bytes, tailptr_bytes;
