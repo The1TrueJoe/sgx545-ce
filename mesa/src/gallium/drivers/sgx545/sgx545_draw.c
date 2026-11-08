@@ -20,6 +20,7 @@
 #include "util/u_prim.h"
 
 #include "sgx545_context.h"
+#include "sgx545_csb.h"
 #include "sgx545_program.h"
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
@@ -150,13 +151,26 @@ static uint32_t
 stencil_word(const struct pipe_stencil_state *s)
 {
    static const uint8_t op[] = {
-      [PIPE_STENCIL_OP_KEEP] = 0, [PIPE_STENCIL_OP_ZERO] = 1, [PIPE_STENCIL_OP_REPLACE] = 2,
-      [PIPE_STENCIL_OP_INCR] = 3, [PIPE_STENCIL_OP_DECR] = 4, [PIPE_STENCIL_OP_INVERT] = 5,
-      [PIPE_STENCIL_OP_INCR_WRAP] = 6, [PIPE_STENCIL_OP_DECR_WRAP] = 7,
+      [PIPE_STENCIL_OP_KEEP] = SGX545_TA_STENCILOP_KEEP,
+      [PIPE_STENCIL_OP_ZERO] = SGX545_TA_STENCILOP_ZERO,
+      [PIPE_STENCIL_OP_REPLACE] = SGX545_TA_STENCILOP_REPLACE,
+      [PIPE_STENCIL_OP_INCR] = SGX545_TA_STENCILOP_INCR,
+      [PIPE_STENCIL_OP_DECR] = SGX545_TA_STENCILOP_DECR,
+      [PIPE_STENCIL_OP_INVERT] = SGX545_TA_STENCILOP_INVERT,
+      [PIPE_STENCIL_OP_INCR_WRAP] = SGX545_TA_STENCILOP_INCR_WRAP,
+      [PIPE_STENCIL_OP_DECR_WRAP] = SGX545_TA_STENCILOP_DECR_WRAP,
    };
+   uint32_t w;
 
-   return (uint32_t)s->writemask | (uint32_t)s->valuemask << 8 | (uint32_t)op[s->zpass_op] << 16 |
-          (uint32_t)op[s->zfail_op] << 19 | (uint32_t)op[s->fail_op] << 22 | (uint32_t)s->func << 25;
+   sgx545_pack(&w, TA_STATE_ISPC, ispc) {
+      ispc.write_mask = s->writemask;
+      ispc.compare_mask = s->valuemask;
+      ispc.zpass = op[s->zpass_op];
+      ispc.zfail = op[s->zfail_op];
+      ispc.sfail = op[s->fail_op];
+      ispc.func = s->func;                  /* PIPE_FUNC_* is GL's order */
+   }
+   return w;
 }
 
 static void

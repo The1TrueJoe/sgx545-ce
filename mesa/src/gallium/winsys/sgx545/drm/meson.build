@@ -8,7 +8,7 @@ fs = import('fs')
 # gallium driver (AGENTS.md section 3.5).
 idep_sgx545_ws = declare_dependency(
   include_directories : include_directories('.'),
-  dependencies : idep_sgx545_pds,
+  dependencies : [idep_sgx545_pds, idep_sgx545_csb],
 )
 
 # The powervr_sgx backend: the uAPI header (include/drm-uapi) and the stream
@@ -70,7 +70,7 @@ libsgx545winsys = static_library(
   ],
   c_args : sgx545_ws_args,
   objects : sgx545_ws_pvr,
-  dependencies : [idep_mesautil, dep_libdrm, idep_sgx545_pds],
+  dependencies : [idep_mesautil, dep_libdrm, idep_sgx545_pds, idep_sgx545_csb],
   gnu_symbol_visibility : 'hidden',
 )
 
@@ -81,7 +81,7 @@ sgx545_frame_test = executable(
   include_directories : [sgx545_ws_inc, inc_src, inc_include],
   c_args : sgx545_ws_args,
   objects : sgx545_ws_pvr,
-  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx545_pds],
+  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx545_pds, idep_sgx545_csb],
   build_by_default : true,
   install : false,
 )

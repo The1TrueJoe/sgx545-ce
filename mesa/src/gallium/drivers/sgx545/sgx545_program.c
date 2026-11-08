@@ -28,6 +28,7 @@
 #include "util/u_memory.h"
 
 #include "sgx545_context.h"
+#include "sgx545_csb.h"
 #include "sgx545_screen.h"
 #include "sgx545_program.h"
 #include "sgx_compiler.h"
@@ -632,7 +633,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    memset(&so->prog, 0, sizeof(so->prog));
    simple_mtx_lock(&screen->lock);
    if (vertex) {
-      unsigned dwords = 4;
+      unsigned dwords = 4, tsp[SGX_MAX_SETS] = { 0 };
 
       so->prog.vertex = true;
       so->prog.code = sgxws_upload_vs(ctx->hw, out.code, out.n_code, out.n_temps);
@@ -643,16 +644,28 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
          if (!n)
             continue;
          dwords += n;
-         /* TSP: 3 bits per set (1, 2, 3, or 5 for 4 components) (STATE.md
-          * section 3).  TSP word 1 stays 0, as the DDK's for a sampled set:
-          * with a set's bit in it, the TPU samples at a constant coordinate */
-         so->prog.tsp_sizes |= (n == 4 ? 5 : n) << (3 * s);
-
+         /* TSP word 0: 1, 2, 3, or 5 for 4 components (STATE.md section 3) */
+         tsp[s] = n == 4 ? 5 : n;
+      }
+      STATIC_ASSERT(SGX_MAX_SETS == 10);
+      sgx545_pack(&so->prog.tsp_sizes, TA_STATE_TSP0, t0) {
+         t0.set0 = tsp[0];
+         t0.set1 = tsp[1];
+         t0.set2 = tsp[2];
+         t0.set3 = tsp[3];
+         t0.set4 = tsp[4];
+         t0.set5 = tsp[5];
+         t0.set6 = tsp[6];
+         t0.set7 = tsp[7];
+         t0.set8 = tsp[8];
+         t0.set9 = tsp[9];
       }
       so->prog.point_size = vary.point_size;
-      /* the DDK's TSP word 1 for a sprite's coordinate set (`sprite`) */
-      if (sprite)
-         so->prog.tsp_prec |= 1;
+      /* TSP word 1 stays 0, as the DDK's for a sampled set: with a set's bit
+       * in it, the TPU samples at a constant coordinate; the DDK's for a
+       * sprite's coordinate set (`sprite`) is 1 */
+      sgx545_pack(&so->prog.tsp_prec, TA_STATE_TSP1, t1)
+         t1.low_precision = sprite ? 1 : 0;
       so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0);
       so->prog.const_dwords = so->const_dwords;
    } else {
