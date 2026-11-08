@@ -167,3 +167,47 @@ Write it for Mesa's docs tree. It covers:
 `mesa/build.sh` generates `sgx545_usse_progs.h` with `tools/gen/mkusse.py`.
 Upstream, the fixed programs are assembled by the compiler's encoder at build
 time (DRIVER-UPSTREAM.md §5.2, COMPILER-UPSTREAM.md).
+
+## Docs: neutral platform wording
+
+Text that will go upstream names the platform and GPU neutrally: the Intel
+Atom CE5300, the PowerVR SGX545 and the SGX5xx family. The dev-board history
+moves to `docs/log/`. The replacements:
+- the dev-board names (EA1, EA3, HC-800) become "a CE5300 board", or a plain
+  dated hardware tag;
+- "openHC's microkernel" becomes "the open microkernel";
+- IP addresses, box workspaces and product names go.
+
+Long bring-up narratives move to a dated `docs/log/entries/` file, with a
+pointer left in their place.
+
+Remaining box-specific references, counted on 2026-11-08 by
+`grep -E 'Control4|\bEA[0-9]\b|EA-[0-9]|HC-800|10\.0\.0\.|openHC|Bench plug'`.
+The last column is the count of lines naming a branch, commit or log entry.
+
+| doc | box refs | branch/log refs | status | owner |
+|---|---|---|---|---|
+| UKERNEL.md | 0 | 5 | done 1621077 (two narratives moved to `log/entries/2026-11-08-ukernel-bringup-history.md`) | ta3d-state |
+| UKERNEL-DECISIONS.md | 0 | 0 | done 6e71335 | ta3d-state |
+| SRVINIT.md | 0 | 0 | done 6e71335 | ta3d-state |
+| STATE.md | 0 | 1 | done 6e71335 | ta3d-state |
+| TEX.md | 0 | 0 | done 6e71335 | ta3d-state |
+| PDS.md | 0 | 0 | done 6e71335 | ta3d-state |
+| ISA.md | 12 | 0 | not started | usse-compiler / cleanroom-isa |
+| DRM-DRIVER.md | 9 | 16 | not started | m2-kernel-driver |
+| UAPI.md | 9 | 1 | not started | uapi-stream |
+| GEN.md, WINSYS.md | 5, 4 | 0 | not started | mesa-gallium |
+| COMPILER-UPSTREAM.md, DRIVER-UPSTREAM.md | 2, 2 | 1, 1 | not started | usse-compiler, mesa-gallium |
+| NOTES.md, PERF.md, PIGLIT.md, CLEANROOM-COVERAGE.md, README.md | 11, 2, 7, 17, 1 | — | internal working notes; neutralise only if they go upstream | main |
+
+Still to decide for all docs:
+- **Commit hashes, branch names (`um-re`) and `docs/log` paths in the prose.**
+  They are evidence pointers, but they mean nothing outside this repository.
+  Either drop them from upstream copies, or keep the docs out of the upstream
+  trees and send only Mesa's `docs/drivers/*.rst` and the kernel's
+  `Documentation/` text.
+- **Firmware file names** in SRVINIT.md and UKERNEL.md (`sgx545-ukernel-openhc.bin`)
+  follow the firmware's naming, which dcd50df changed to a per-core name.
+  Update them when that lands.
+- **The inline hardware-provenance comments in `ukernel/ukernel.py`**: a later,
+  optional pass (see the firmware section).
