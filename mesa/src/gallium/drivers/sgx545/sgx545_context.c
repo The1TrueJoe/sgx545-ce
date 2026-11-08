@@ -125,9 +125,9 @@ sgx545_stats_report(struct sgx545_context *ctx)
            (unsigned)(ctx->vcache_bytes >> 10), ws.ns_fence_wait * ms,
            ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
            ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout : 0, ws.n_latency_scanout);
-   fprintf(stderr, "sgx545 stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms)\n", ctx->stats.blit_gpu,
-           ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
-           ctx->stats.blit_cpu_ns * ms);
+   fprintf(stderr, "sgx545 stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms); textures read back %.0f ms (%llu KB)\n",
+           ctx->stats.blit_gpu, ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
+           ctx->stats.blit_cpu_ns * ms, ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
            dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ws.room_flushes,
@@ -158,9 +158,11 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
     * same target (the openhc-minecraft overlay's, after the game's glFlush)
     * waited for the whole render.  The frame still goes at a fence, a
     * readback, another target or the end of the frame; renders into the
-    * scanout buffer (the swap's copy) go now. */
+    * scanout buffer (the swap's copy) or a shared one (a dma-buf another
+    * process or device reads: Xorg's glamor flushes its screen pixmap so)
+    * go now. */
    if (sgx545_recording(ctx) && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) && !ctx->recording->wrapped &&
-       !(sgx545_debug & SGX545_DEBUG_FLUSH_ALL)) {
+       !ctx->recording->shared && !(sgx545_debug & SGX545_DEBUG_FLUSH_ALL)) {
       ctx->stats.fl_deferred++;
       return;
    }

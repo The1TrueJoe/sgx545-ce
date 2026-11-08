@@ -74,6 +74,25 @@ struct sgx_compile_options {
     * to F16 and literal constants, where libusc converts once per draw in its
     * secondary program and keeps literals with the uniforms */
    bool driver_consts;
+   /* (with f16) every float of a fragment program is mediump, texture
+    * coordinates excepted: for programs without precision qualifiers whose
+    * results only need the framebuffer's precision (st's fixed-function
+    * fragment programs); off by default */
+   bool fs_mediump;
+   /* vertex shader: what the PDS leaves in PA[4 * driver_location] for each
+    * attribute (enum sgx_vtx_fmt); 0, f32 x 4, is the default */
+   uint8_t vtx_fmt[16];
+};
+
+/* a vertex attribute's raw format in PA, unpacked by the shader. Components
+ * a format doesn't hold read as 0, 0, 1 (y, z, w) */
+enum sgx_vtx_fmt {
+   SGX_VF_F32_4 = 0,
+   SGX_VF_F32_1,
+   SGX_VF_F32_2,
+   SGX_VF_F32_3,
+   SGX_VF_UNORM8_4,     /* one dword, x in the low byte, each / 255 */
+   SGX_VF_SSCALED16_2,  /* one dword, x the signed low half, y the high one, not normalised */
 };
 
 /* varying -> texture coordinate set (sgx_assign_varyings) */

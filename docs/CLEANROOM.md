@@ -38,7 +38,7 @@ the spec side for that subsystem.
 
 | Component | Today | Clean-room plan |
 |---|---|---|
-| Compiler ISA (`mesa/src/sgx545/compiler`, `usse_forms.h`) | Generated from `tools/isa/hw.py`, which was written while reading libusc decompiles and later confirmed black-box (`docs/COMPILER-UPSTREAM.md` §2) | Rewritten from `docs/ISA.md` only, as a Mesa isaspec XML, by a session that never saw `hw.py` or the decompiles. Validated black-box against the encoder oracle and hardware. `hw.py` stays in `tools/` as a test oracle. |
+| Compiler ISA (`mesa/src/sgx545/isa`, `compiler/sgx_forms.c`) | Done: `sgx545.xml` was written from `docs/ISA.md` only, by a session that never saw `hw.py` or the decompiles, and validated black-box against the encoder oracle. The compiler encodes through it; its output is byte-identical to the old `hw.py`-generated encoder's on the whole corpus, and that encoder is deleted. `hw.py` stays in `tools/` as a test oracle. | Done |
 | Mesa gallium driver (`mesa/src/gallium/drivers/sgx545`) | Written from `docs/STATE.md`, `PDS.md`, `TEX.md`, `GEN.md`, partly by sessions that also read DDK decompiles | Provenance audit; anything written from decompiles rather than docs gets rewritten from the docs |
 | Open microkernel (`ukernel/`) | Written from `docs/UKERNEL.md`, by the session that also produced the spec from disassembly | Before linux-firmware submission, re-implementation or review from `UKERNEL.md` alone by a fresh session |
 | Kernel driver (M2) | Not started | Implementation side from day one |

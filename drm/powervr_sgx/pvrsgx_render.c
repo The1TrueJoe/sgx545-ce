@@ -100,6 +100,18 @@ static void pb_init(struct pvrsgx_pb *pb)
 	pd[14] = kobj_va(pb->blocks);
 }
 
+/* A kernel object into *dst, which stays NULL on failure. */
+static int kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst, enum pvrsgx_krange range,
+		    u32 size, u32 min, struct pvrsgx_vm *vm)
+{
+	struct pvrsgx_kobj *o = pvrsgx_kobj_create(sdev, range, size, min, vm);
+
+	if (IS_ERR(o))
+		return PTR_ERR(o);
+	*dst = o;
+	return 0;
+}
+
 /*
  * The VM's parameter buffer: PB, free list, PB descriptor and block list. One
  * per VM, shared by its render contexts, as the DDK shares one PB descriptor
@@ -118,18 +130,16 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm 
 	kref_init(&pb->ref);
 	pb->sdev = sdev;
 
-#define KOBJ(dst, range, size, min, v) do { \
-		(dst) = pvrsgx_kobj_create(sdev, range, size, min, v); \
-		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
-	} while (0)
-
 	/* The PB, and what is addressed from its 1 MiB-aligned base, in the VM. */
-	KOBJ(pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, vm);
+	err = kobj_new(sdev, &pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, vm);
+	if (err)
+		goto fail;
 	pb->base = kobj_va(pb->buf) & 0xfff00000;
-	KOBJ(pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base, vm);
-	KOBJ(pb->desc, PVRSGX_KRANGE_KDATA, 0x3c, 0, NULL);
-	KOBJ(pb->blocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
-#undef KOBJ
+	err = kobj_new(sdev, &pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base, vm);
+	err = err ?: kobj_new(sdev, &pb->desc, PVRSGX_KRANGE_KDATA, 0x3c, 0, NULL);
+	err = err ?: kobj_new(sdev, &pb->blocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
+	if (err)
+		goto fail;
 
 	pb->pages = pages;
 	pb_init(pb);
@@ -199,17 +209,13 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 		goto fail;
 	}
 
-#define KOBJ(dst, range, size, min, v) do { \
-		(dst) = pvrsgx_kobj_create(sdev, range, size, min, v); \
-		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
-	} while (0)
-
-	KOBJ(r->scratch, PVRSGX_KRANGE_3DPARAMS, 0x40, r->pb->base, vm);
-	KOBJ(r->ccb, PVRSGX_KRANGE_KDATA, CCB_BYTES, 0, NULL);
-	KOBJ(r->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
-	KOBJ(r->sync3d, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
-	KOBJ(r->hwctx, PVRSGX_KRANGE_KCODE, 0x44, 0, NULL);
-#undef KOBJ
+	err = kobj_new(sdev, &r->scratch, PVRSGX_KRANGE_3DPARAMS, 0x40, r->pb->base, vm);
+	err = err ?: kobj_new(sdev, &r->ccb, PVRSGX_KRANGE_KDATA, CCB_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &r->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &r->sync3d, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &r->hwctx, PVRSGX_KRANGE_KCODE, 0x44, 0, NULL);
+	if (err)
+		goto fail;
 
 	/* HW render context: the microkernel points list 0 at word 2's directory. */
 	hw = kobj_cpu(r->hwctx);
@@ -406,31 +412,28 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 	s->h = h;
 	rt_numbers(&s->n, w, h);
 
-#define KOBJ(dst, range, size, min, v) do { \
-		(dst) = pvrsgx_kobj_create(sdev, range, size, min, v); \
-		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
-	} while (0)
-
-	KOBJ(s->rd, PVRSGX_KRANGE_KDATA, 0x1ec, 0, NULL);
-	KOBJ(s->rd_w8, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
-	KOBJ(s->rd_w4, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
-	KOBJ(s->hwsync, PVRSGX_KRANGE_KDATA, 0x28, 0, NULL);
-	KOBJ(s->rtword, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
-	KOBJ(s->rtdata, PVRSGX_KRANGE_KDATA, 2 * 0x38 + 0x18, 0, NULL);
-	KOBJ(s->rd_sync, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
-	KOBJ(s->hwsync_access, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
-	KOBJ(s->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
+	err = kobj_new(sdev, &s->rd, PVRSGX_KRANGE_KDATA, 0x1ec, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rd_w8, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rd_w4, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->hwsync, PVRSGX_KRANGE_KDATA, 0x28, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rtword, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rtdata, PVRSGX_KRANGE_KDATA, 2 * 0x38 + 0x18, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->rd_sync, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->hwsync_access, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &s->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
 	/* What the TA writes and the 3D reads, under the VM's directory too. */
-	KOBJ(s->tailptr, PVRSGX_KRANGE_TADATA, s->n.tailptr_bytes, 0, vm);
-	KOBJ(s->ta40, PVRSGX_KRANGE_TADATA, 0x40, 0, vm);
-	KOBJ(s->ta50, PVRSGX_KRANGE_TADATA, 0x50, 0, vm);
-	KOBJ(s->bgblock, PVRSGX_KRANGE_3DPARAMS, 0x200, r->pb->base, vm);
+	err = err ?: kobj_new(sdev, &s->tailptr, PVRSGX_KRANGE_TADATA, s->n.tailptr_bytes, 0, vm);
+	err = err ?: kobj_new(sdev, &s->ta40, PVRSGX_KRANGE_TADATA, 0x40, 0, vm);
+	err = err ?: kobj_new(sdev, &s->ta50, PVRSGX_KRANGE_TADATA, 0x50, 0, vm);
+	err = err ?: kobj_new(sdev, &s->bgblock, PVRSGX_KRANGE_3DPARAMS, 0x200, r->pb->base, vm);
 	for (int i = 0; i < 2; i++) {
-		KOBJ(s->rgn[i], PVRSGX_KRANGE_TADATA, s->n.region_bytes, 0, vm);
-		KOBJ(s->ta88[i], PVRSGX_KRANGE_TADATA, 0x88, 0, vm);
-		KOBJ(s->entword[i], PVRSGX_KRANGE_KDATA, 4, 0, NULL);
+		err = err ?: kobj_new(sdev, &s->rgn[i], PVRSGX_KRANGE_TADATA, s->n.region_bytes, 0,
+				      vm);
+		err = err ?: kobj_new(sdev, &s->ta88[i], PVRSGX_KRANGE_TADATA, 0x88, 0, vm);
+		err = err ?: kobj_new(sdev, &s->entword[i], PVRSGX_KRANGE_KDATA, 4, 0, NULL);
 	}
-#undef KOBJ
+	if (err)
+		goto fail;
 
 	rtds_init(s);
 	return s;
@@ -578,7 +581,8 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		return -EOPNOTSUPP;
 
 	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
-	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size = PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
+	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size =
+		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
 	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
 	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
 	sctx.has_quirk = no_quirk;
@@ -687,8 +691,10 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	if (first) {
 		/* Render details (STATE.md 6; UAPI.md 4.2). */
 		if (in->depth_addr || in->stencil_addr) {
-			u64 lo = in->depth_addr && in->stencil_addr ?
-				 min(in->depth_addr, in->stencil_addr) : in->depth_addr ?: in->stencil_addr;
+			u64 lo = in->depth_addr ?: in->stencil_addr;
+
+			if (in->depth_addr && in->stencil_addr)
+				lo = min(in->depth_addr, in->stencil_addr);
 
 			zls_base = (u32)lo & 0xfff00000;
 		}
@@ -777,6 +783,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	t[0x6c / 4] = 0x88;
 
 	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
+	/* The command is in memory before the write offset that hands it over. */
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
 	if (last)
@@ -824,16 +831,12 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 		return -ENOMEM;
 	ctx->transfer = x;
 
-#define KOBJ(dst, range, size) do { \
-		(dst) = pvrsgx_kobj_create(sdev, range, size, 0, NULL); \
-		if (IS_ERR(dst)) { err = PTR_ERR(dst); (dst) = NULL; goto fail; } \
-	} while (0)
-
-	KOBJ(x->ccb, PVRSGX_KRANGE_KDATA, XFER_CCB_BYTES);
-	KOBJ(x->ccbctl, PVRSGX_KRANGE_KDATA, 8);
-	KOBJ(x->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES);
-	KOBJ(x->hwctx, PVRSGX_KRANGE_KCODE, XFER_HWCTX_BYTES);
-#undef KOBJ
+	err = kobj_new(sdev, &x->ccb, PVRSGX_KRANGE_KDATA, XFER_CCB_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &x->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
+	err = err ?: kobj_new(sdev, &x->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
+	err = err ?: kobj_new(sdev, &x->hwctx, PVRSGX_KRANGE_KCODE, XFER_HWCTX_BYTES, 0, NULL);
+	if (err)
+		goto fail;
 
 	/* SGXCreateTransferContext's words; the rest stays zero. */
 	hw = kobj_cpu(x->hwctx);
@@ -880,7 +883,8 @@ int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	tj->dst_twiddled = in->flags & DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED;
 
 	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
-	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size = PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
+	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size =
+		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
 	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_X] = XFER_TILES_X_MAX;
 	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_Y] = XFER_TILES_Y_MAX;
 	sctx.has_quirk = no_quirk;
@@ -936,6 +940,7 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	job->done_val = sh[0x90 / 4] + 1;
 
 	x->ccb_woff = (woff + XFER_CMD_BYTES) & (CCB_RING - 1);
+	/* The command is in memory before the write offset that hands it over. */
 	wmb();
 	kobj_cpu(x->ccbctl)[0] = x->ccb_woff;
 
@@ -991,9 +996,10 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	dump(sb, "ta50", s->ta50, 0, 0x50);
 	dump(sb, "ta88[0]", s->ta88[0], 0, 0x88);
 	dump(sb, "ta88[1]", s->ta88[1], 0, 0x88);
-	seq_buf_printf(sb, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x ta88 0x%08x 0x%08x\n",
-		       kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr), kobj_va(s->ta40),
-		       kobj_va(s->ta50), kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
+	seq_buf_printf(sb, "rgn 0x%08x 0x%08x tailptr 0x%08x ta40 0x%08x ta50 0x%08x\n",
+		       kobj_va(s->rgn[0]), kobj_va(s->rgn[1]), kobj_va(s->tailptr),
+		       kobj_va(s->ta40), kobj_va(s->ta50));
+	seq_buf_printf(sb, "ta88 0x%08x 0x%08x\n", kobj_va(s->ta88[0]), kobj_va(s->ta88[1]));
 	pvrsgx_fw_dump(sb, sdev, PVRSGX_FW_TA3DCTL, "ta3dctl");
 }
 

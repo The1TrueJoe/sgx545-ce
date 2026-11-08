@@ -22,4 +22,8 @@ uint32_t sgx545_fs_program(struct sgx545_context *ctx, struct sgx545_shader *so,
 struct sgx545_shader *sgx545_vs_for(struct sgx545_context *ctx, struct sgx545_shader *vs,
                                     const struct sgx545_shader *fs);
 
+/* the bound fragment shader as the draw samples its textures: itself, or a
+ * variant decoding the sRGB views it samples; NULL if it can't */
+struct sgx545_shader *sgx545_fs_for(struct sgx545_context *ctx, struct sgx545_shader *fs);
+
 #endif

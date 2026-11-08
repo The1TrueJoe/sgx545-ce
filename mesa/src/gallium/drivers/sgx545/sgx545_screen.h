@@ -59,6 +59,9 @@ struct sgx545_screen {
    struct sgxws_ctx *hw;
 
    struct slab_parent_pool transfer_pool;
+
+   /* kmsro: the display device scanout buffers are allocated on */
+   struct renderonly *ro;
 };
 
 static inline struct sgx545_screen *
@@ -67,7 +70,11 @@ sgx545_screen(struct pipe_screen *pscreen)
    return (struct sgx545_screen *)pscreen;
 }
 
-struct pipe_screen *sgx545_screen_create(int fd, const struct pipe_screen_config *config);
+struct renderonly;
+
+/* ro: a KMS-only display device that scanout buffers come from (kmsro), or NULL */
+struct pipe_screen *sgx545_screen_create(int fd, const struct pipe_screen_config *config,
+                                         struct renderonly *ro);
 void sgx545_fence_screen_init(struct sgx545_screen *screen);
 
 #endif

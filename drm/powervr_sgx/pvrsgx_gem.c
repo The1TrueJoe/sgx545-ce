@@ -25,6 +25,15 @@ static struct dma_buf *pvrsgx_gem_export(struct drm_gem_object *obj, int flags)
 	return drm_gem_prime_export(obj, flags);
 }
 
+/* Every CPU mapping, the dma-buf's included, needs ALLOW_CPU_ACCESS. */
+static int pvrsgx_gem_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma)
+{
+	if (!drm_gem_is_imported(obj) &&
+	    !(to_pvrsgx_bo(obj)->flags & DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS))
+		return -EINVAL;
+	return drm_gem_shmem_object_mmap(obj, vma);
+}
+
 static const struct drm_gem_object_funcs pvrsgx_gem_funcs = {
 	.free = drm_gem_shmem_object_free,
 	.export = pvrsgx_gem_export,
@@ -34,7 +43,7 @@ static const struct drm_gem_object_funcs pvrsgx_gem_funcs = {
 	.get_sg_table = drm_gem_shmem_object_get_sg_table,
 	.vmap = drm_gem_shmem_object_vmap,
 	.vunmap = drm_gem_shmem_object_vunmap,
-	.mmap = drm_gem_shmem_object_mmap,
+	.mmap = pvrsgx_gem_mmap,
 	.vm_ops = &drm_gem_shmem_vm_ops,
 };
 
@@ -68,7 +77,8 @@ int pvrsgx_ioctl_create_bo(struct drm_device *drm, void *data, struct drm_file *
 		return PTR_ERR(shmem);
 	to_pvrsgx_bo(&shmem->base)->flags = args->flags;
 	/* Pages the GPU can address. */
-	mapping_set_gfp_mask(shmem->base.filp->f_mapping, (GFP_HIGHUSER & ~__GFP_HIGHMEM) | __GFP_DMA32);
+	mapping_set_gfp_mask(shmem->base.filp->f_mapping,
+			     (GFP_HIGHUSER & ~__GFP_HIGHMEM) | __GFP_DMA32);
 
 	err = drm_gem_handle_create(file, &shmem->base, &args->handle);
 	drm_gem_object_put(&shmem->base);

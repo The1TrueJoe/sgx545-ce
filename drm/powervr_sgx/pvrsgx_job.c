@@ -11,9 +11,11 @@
  */
 
 #include <drm/drm_auth.h>
+#include <drm/drm_cache.h>
 #include <drm/drm_exec.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
+#include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_print.h>
 #include <drm/drm_syncobj.h>
 
@@ -32,6 +34,7 @@
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
+#include "pvrsgx_trace.h"
 #include "pvrsgx_validate.h"
 #include "pvrsgx_vm.h"
 
@@ -88,30 +91,75 @@ static bool job_done(struct pvrsgx_job *job, u64 consumed)
 }
 
 /* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
+/*
+ * The GPU's accesses don't snoop the CPU caches (log 2026-11-04-0100). Our own
+ * objects are write-combined on the CPU; an import may be cached, so flush
+ * every import mapped in the job's VM before it runs (no dirty line lands on
+ * its output later) and after (no stale line hides it). Which of them the job
+ * touches is not known: a BO list is optional, and explicit sync names none.
+ */
+static void job_flush_imports(struct pvrsgx_job *job, bool after)
+{
+	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
+
+	for (u32 i = 0; i < job->nimports; i++) {
+		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);
+
+		if (shmem->sgt) {
+			drm_clflush_sg(shmem->sgt);
+			bytes += shmem->base.size;
+		}
+	}
+	if (job->nimports)
+		trace_pvrsgx_flush_imports(job->hw_fence ? job->hw_fence->seqno : 0,
+					   job->nimports, bytes,
+					   t0 ? ktime_get_ns() - t0 : 0, after);
+}
+
+static void job_put_imports(struct pvrsgx_job *job)
+{
+	for (u32 i = 0; i < job->nimports; i++)
+		drm_gem_object_put(job->imports[i]);
+	kfree(job->imports);
+}
+
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_job *job, *tmp;
 	u64 consumed = pvrsgx_ccb_consumed(sdev);
 	unsigned long flags;
 	bool more, reap = false;
-	bool cookie = dma_fence_begin_signalling();
+	LIST_HEAD(finished);
 	u32 done = 0;
+	bool cookie;
 
+	mutex_lock(&sdev->done_lock);
+	cookie = dma_fence_begin_signalling();
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		if (!job_done(job, consumed))
 			break;
-		list_del_init(&job->node);
+		list_move_tail(&job->node, &finished);
 		done++;
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 			sdev->renders_done++;
 			reap = true;
 		}
-		dma_fence_signal_locked(job->hw_fence);
 	}
 	more = !list_empty(&sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+
+	list_for_each_entry(job, &finished, node)
+		job_flush_imports(job, true);
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	list_for_each_entry_safe(job, tmp, &finished, node) {
+		list_del_init(&job->node);
+		trace_pvrsgx_job_done(job->type, job->hw_fence->seqno);
+		dma_fence_signal_locked(job->hw_fence);
+	}
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
+	mutex_unlock(&sdev->done_lock);
 	pvrsgx_power_put(sdev, done);
 
 	if (reap)
@@ -134,7 +182,10 @@ static void reap_work_fn(struct work_struct *work)
 
 static void poll_work_fn(struct work_struct *work)
 {
-	pvrsgx_job_process_done(container_of(to_delayed_work(work), struct pvrsgx_device, poll_work));
+	struct pvrsgx_device *sdev = container_of(to_delayed_work(work), struct pvrsgx_device,
+						  poll_work);
+
+	pvrsgx_job_process_done(sdev);
 }
 
 static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
@@ -169,6 +220,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		return fence;
 	}
 
+	job_flush_imports(job, false);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
@@ -186,12 +238,14 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_PROCESS_QUEUES, data, &job->ccb_seq);
 	}
 	if (err) {
+		drm_err_ratelimited(&sdev->base, "job not sent to the microkernel (%d)\n", err);
 		pvrsgx_power_put(sdev, 1);
 		dma_fence_set_error(fence, err);
 		dma_fence_signal(fence);
 		return fence;
 	}
 
+	trace_pvrsgx_kick(job->type, job->ccb_seq, fence->seqno);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_add_tail(&job->node, &sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
@@ -217,6 +271,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
 	pvrsgx_coredump(sdev, bad);
 
+	mutex_lock(&sdev->done_lock);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
@@ -227,6 +282,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		dma_fence_signal_locked(job->hw_fence);
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	mutex_unlock(&sdev->done_lock);
 
 	/*
 	 * As the DDK's hardware recovery: no power-off handshake with a hung
@@ -250,6 +306,11 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 
 	drm_sched_job_cleanup(sched_job);
 	dma_fence_put(job->hw_fence);
+	for (u32 b = 0; b < job->nbos; b++)
+		drm_gem_object_put(job->bos[b]);
+	kvfree(job->bos);
+	kvfree(job->bo_flags);
+	job_put_imports(job);
 	pvrsgx_render_job_fini(job);
 	context_put(job->ctx);
 	kfree(job);
@@ -446,6 +507,7 @@ static void job_args_fini(struct job_args *ja)
 	if (ja->job) {
 		if (ja->inited)
 			drm_sched_job_cleanup(&ja->job->base);
+		job_put_imports(ja->job);
 		pvrsgx_render_job_fini(ja->job);
 		context_put(ja->job->ctx);
 		kfree(ja->job);
@@ -457,7 +519,8 @@ static int intra_signaller(const struct job_args *prev, u32 nprev, u32 handle, u
 {
 	for (int k = nprev - 1; k >= 0; k--) {
 		for (u32 s = 0; s < prev[k].nsignals; s++) {
-			if (prev[k].signals[s].handle == handle && prev[k].signals[s].point == point)
+			if (prev[k].signals[s].handle == handle &&
+			    prev[k].signals[s].point == point)
 				return k;
 		}
 	}
@@ -659,6 +722,9 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 
 	for (u32 i = 0; i < n; i++) {
 		err = job_create(file, &in[i], &ja[i], ja, i);
+		/* Before the reservations: VM_MAP takes vm->lock, then them. */
+		err = err ?: pvrsgx_vm_imports(ja[i].job->ctx->vm, &ja[i].job->imports,
+					       &ja[i].job->nimports);
 		if (err) {
 			args->failed_index = i;
 			goto out;
@@ -668,7 +734,9 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	drm_exec_init(&exec, DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES, 0);
 	drm_exec_until_all_locked(&exec) {
 		for (u32 i = 0; i < n; i++) {
-			err = drm_exec_prepare_obj(&exec, drm_gpuvm_resv_obj(&ja[i].job->ctx->vm->gpuvm), n);
+			struct drm_gpuvm *gpuvm = &ja[i].job->ctx->vm->gpuvm;
+
+			err = drm_exec_prepare_obj(&exec, drm_gpuvm_resv_obj(gpuvm), n);
 			drm_exec_retry_on_contention(&exec);
 			if (err)
 				goto out_exec;
@@ -683,8 +751,10 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 
 	for (u32 i = 0; i < n; i++) {
 		for (u32 b = 0; b < ja[i].nbos; b++) {
-			err = drm_sched_job_add_implicit_dependencies(&ja[i].job->base, ja[i].bos[b],
-								      ja[i].bo_flags[b] & DRM_POWERVR_SGX_BO_REF_FLAG_WRITE);
+			bool write = ja[i].bo_flags[b] & DRM_POWERVR_SGX_BO_REF_FLAG_WRITE;
+
+			err = drm_sched_job_add_implicit_dependencies(&ja[i].job->base,
+								      ja[i].bos[b], write);
 			if (err) {
 				args->failed_index = i;
 				goto out_exec;
@@ -727,6 +797,13 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 				drm_syncobj_replace_fence(sig->syncobj, done);
 			}
 		}
+		/* The job keeps its list: run_job and completion flush the imports. */
+		job->bos = ja[i].bos;
+		job->bo_flags = ja[i].bo_flags;
+		job->nbos = ja[i].nbos;
+		ja[i].bos = NULL;
+		ja[i].bo_flags = NULL;
+		ja[i].nbos = 0;
 		drm_sched_entity_push_job(&job->base);
 		ja[i].job = NULL;	/* the scheduler owns it now */
 	}

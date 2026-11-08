@@ -311,7 +311,10 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
    }
    if ((!strcmp(item, "f16") || !strcmp(item, "c10")) && !eq) {
       /* hw 1: the source's format */
-      I->src[1].fmt = item[0] == 'f' ? SGX_ISA_FMT_F16 : SGX_ISA_FMT_C10;
+      if (item[0] == 'f')
+         I->sf16 = true;
+      else
+         I->sc10 = true;
       return true;
    }
    return sgx545_isa_asm_item_int(I, item, val) ? true :

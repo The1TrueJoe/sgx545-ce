@@ -9,9 +9,9 @@
  * Everything here is GL-level state and the hardware's own words as docs/
  * describes them (STATE.md, PDS.md, ISA.md): nothing from the kernel's
  * services headers.  How a buffer, a context or a submission reaches the
- * kernel is the winsys's business (sgx545_frame.h, over libpvr today); the
- * driver sees opaque handles, so a winsys over another kernel interface
- * can take its place.
+ * kernel is the winsys's business (sgx545_frame.h: the powervr_sgx DRM
+ * driver, or the DDK's services through libpvr); the driver sees opaque
+ * handles.
  */
 
 #ifndef SGXWS_H
@@ -19,6 +19,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "sgx545_pds.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -91,9 +93,8 @@ struct sgxws_prog {
    bool point_size;                 /* vertex: the last output dword is the point size */
    /* fragment: */
    uint32_t sec_dwords;             /* constant dwords DMA'd for the secondary program */
-   uint32_t douti[10];              /* DOUTI words, one per iterated input or sample */
+   struct sgx545_pds_douti douti[10];   /* DOUTIs, one per iterated input or sample */
    uint8_t douti_tex[10];           /* 0, or the sampler unit + 1 whose DOUTT follows it */
-   uint8_t douti_w1[10];   /* each DOUTI's second word: 0x10 for a sprite's gl_PointCoord */
    uint32_t n_douti;
    uint32_t pds_middle;             /* TA state PDS middle word (0: the default) */
    uint32_t pa_dwords;              /* fragment: primary attribute registers the program uses */
@@ -233,9 +234,21 @@ void sgxws_dev_destroy(struct sgxws_dev *d);
 
 int sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem, uint32_t size,
                    uint32_t align);
-/* a CPU mapping (the fbdev framebuffer) made a render target */
+/* a CPU mapping (the fbdev framebuffer) made a render target; services only (-ENOTSUP) */
 int sgxws_bo_wrap(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu, uint32_t size);
 void sgxws_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo);
+
+/* Sharing (powervr_sgx only; -ENOTSUP otherwise).  A buffer imported or
+ * exported is shared: renders that read or write it are ordered against
+ * other users through its dma-buf's fences (implicit sync), when the frame
+ * names it (sgxws_use_bo; a frame's target is named by sgxws_begin). */
+bool sgxws_dev_has_dmabuf(const struct sgxws_dev *d);
+/* a dma-buf (linear; the GPU reads and writes it in place, the CPU through its mapping) */
+int sgxws_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int dmabuf_fd, uint32_t size);
+/* a new dma-buf fd of the buffer (the caller closes it) */
+int sgxws_bo_export(struct sgxws_dev *d, const struct sgxws_bo *bo, int *dmabuf_fd);
+/* its GEM handle on the device's fd */
+int sgxws_bo_kms_handle(const struct sgxws_bo *bo, uint32_t *handle);
 static inline bool
 sgxws_bo_valid(const struct sgxws_bo *bo)
 {
@@ -287,6 +300,9 @@ uint32_t sgxws_f16(float x);
  * Recording into another target first flushes the current frame. */
 int sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target *t);
 bool sgxws_recording(struct sgxws_ctx *c);
+
+/* a shared buffer the frame being recorded reads (a texture) or writes */
+void sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write);
 
 /* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md "Clear") */
 int sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth, bool write_depth, unsigned wmask,

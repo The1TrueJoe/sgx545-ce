@@ -1,0 +1,8 @@
+DRM DRIVER FOR POWERVR SGX545
+M:	Joseph Telaak <joseph@telaak.dev>
+L:	dri-devel@lists.freedesktop.org
+S:	Maintained
+T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
+F:	Documentation/gpu/powervr_sgx/
+F:	drivers/gpu/drm/powervr_sgx/
+F:	include/uapi/drm/powervr_sgx_drm.h

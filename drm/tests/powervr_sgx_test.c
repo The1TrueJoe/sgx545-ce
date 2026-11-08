@@ -745,6 +745,56 @@ static void t_code_bo(int fd)
 	assert_eq(vm_map(fd, vm, code, 0x3c000000, 0, PAGE), 0);
 }
 
+/*
+ * PRIME: an object's dma-buf maps on the CPU only with ALLOW_CPU_ACCESS, and an
+ * import goes where any data object goes (powervr_sgx_prime: a KMS device's).
+ */
+static void t_prime(int fd)
+{
+	struct drm_prime_handle ph = { .flags = DRM_CLOEXEC | DRM_RDWR }, im = {};
+	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
+	uint32_t plain = create_bo(fd, 2 * PAGE, 0);
+	uint32_t cpu = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS);
+	int fd2 = open_dev(), dfd;
+	uint32_t vm2, *p, *q;
+
+	assert_true(fd2 >= 0);
+	ph.handle = plain;
+	do_ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph);
+	assert_true(mmap(NULL, PAGE, PROT_READ, MAP_SHARED, ph.fd, 0) == MAP_FAILED);
+	assert_eq(errno, EINVAL);
+	close(ph.fd);
+
+	ph.handle = cpu;
+	do_ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph);
+	dfd = ph.fd;
+	p = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, dfd, 0);
+	assert_true(p != MAP_FAILED);
+	p[0] = 0x5a5a1234;
+
+	/* into the same file: the handle it already has */
+	im.fd = dfd;
+	do_ioctl(fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &im);
+	assert_eq(im.handle, cpu);
+
+	/* into another file: a data object there */
+	im = (struct drm_prime_handle){ .fd = dfd };
+	do_ioctl(fd2, DRM_IOCTL_PRIME_FD_TO_HANDLE, &im);
+	vm2 = create_vm(fd2);
+	assert_eq(vm_map(fd2, vm2, im.handle, 0x37000000, 0, PAGE), -EINVAL);	/* USSE: code only */
+	assert_eq(vm_map(fd2, vm2, im.handle, 0x3e000000, 0, 2 * PAGE), -EINVAL);	/* past its end */
+	assert_eq(vm_map(fd2, vm2, im.handle, 0x3e000000, 0, PAGE), 0);
+	mo.handle = im.handle;
+	do_ioctl(fd2, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo);
+	q = mmap(NULL, PAGE, PROT_READ, MAP_SHARED, fd2, mo.offset);
+	assert_true(q != MAP_FAILED);
+	assert_eq(q[0], 0x5a5a1234);
+	munmap(q, PAGE);
+	munmap(p, PAGE);
+	close(dfd);
+	close(fd2);
+}
+
 /* Every corpus instruction passes, at the middle of a 4-page object. */
 static void t_upload_code_corpus(int fd)
 {
@@ -1251,6 +1301,7 @@ static const struct {
 	{ "submit-transfer-invalid", t_submit_transfer_invalid },
 	{ "reserved-bits", t_reserved_bits },
 	{ "code-bo", t_code_bo },
+	{ "prime", t_prime },
 	{ "upload-code-corpus", t_upload_code_corpus },
 	{ "upload-code-reject", t_upload_code_reject },
 	{ "upload-code-invalid", t_upload_code_invalid },

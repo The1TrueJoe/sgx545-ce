@@ -4,6 +4,7 @@
 # Out of tree: make -C <kernel build dir> M=$PWD CONFIG_DRM_POWERVR_SGX=m
 ifneq ($(KERNELRELEASE),)
 ccflags-y += -I$(src)/include -I$(srctree)/include/uapi/drm
+CFLAGS_pvrsgx_trace.o := -I$(src)
 
 powervr_sgx-y := \
 	pvrsgx_ccb.o \
@@ -16,6 +17,7 @@ powervr_sgx-y := \
 	pvrsgx_kobj.o \
 	pvrsgx_mmu.o \
 	pvrsgx_render.o \
+	pvrsgx_trace.o \
 	pvrsgx_validate.o \
 	pvrsgx_vm.o \
 	powervr_sgx_cmd_checks.o \

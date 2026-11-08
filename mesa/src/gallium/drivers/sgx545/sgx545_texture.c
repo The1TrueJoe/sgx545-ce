@@ -26,20 +26,33 @@ unsigned
 sgx545_tex_format(enum pipe_format format)
 {
    switch (format) {
+   /* an sRGB format is its linear twin here: the fragment shader decodes
+    * what it samples (lower_srgb, sgx545_fs_for) */
    case PIPE_FORMAT_R8G8B8A8_UNORM:
    case PIPE_FORMAT_R8G8B8X8_UNORM:
+   case PIPE_FORMAT_R8G8B8A8_SRGB:
+   case PIPE_FORMAT_R8G8B8X8_SRGB:
       /* R, G, B, A bytes in memory.  The DDK tags them 0x0d and libusc folds a
        * zyxw reorder into the sample; our compiler unpacks xyzw, and with 0x0c
        * (BGRA8888) the texels come out GL's way: byte-identical to the DDK
        * on the EA3 (16x16, 64x64, NPOT, nearest and linear) */
       return 0x0c;
+   case PIPE_FORMAT_B8G8R8A8_UNORM:
+   case PIPE_FORMAT_B8G8R8X8_UNORM:
+   case PIPE_FORMAT_B8G8R8A8_SRGB:
+   case PIPE_FORMAT_B8G8R8X8_SRGB:
+      /* B, G, R, A bytes in memory: the format that swaps R and B against
+       * 0x0c, as a strided back buffer is sampled (sgx545_tex_words) */
+      return 0x0d;
    case PIPE_FORMAT_B5G6R5_UNORM:
       return 0x05;
    case PIPE_FORMAT_A8_UNORM:
       return 0x19;
    case PIPE_FORMAT_L8_UNORM:
+   case PIPE_FORMAT_L8_SRGB:
       return 0x1a;
    case PIPE_FORMAT_L8A8_UNORM:
+   case PIPE_FORMAT_L8A8_SRGB:
       return 0x1b;
    default:
       return 0;
@@ -211,44 +224,68 @@ sgx545_tex_encode_level(struct sgx545_resource *res, unsigned level)
       sgx545_tex_encode_box(res, level, layer, 0, 0, ~0u, ~0u);
 }
 
-/* what a render left in a level, into the CPU copy (uncached reads: only for a
- * transfer of a texture rendered into) */
+/* what a render left in a box of a level, into the CPU copy (the heap is read
+ * across the bus: only for a transfer of a texture rendered into, and only
+ * what it covers) */
 void
-sgx545_tex_decode_level(struct sgx545_resource *res, unsigned level)
+sgx545_tex_decode_box(struct sgx545_resource *res, unsigned level, unsigned layer, unsigned x0,
+                      unsigned y0, unsigned x1, unsigned y1)
 {
    struct pipe_resource *prsc = &res->base;
    unsigned w = u_minify(prsc->width0, level), h = u_minify(prsc->height0, level);
    unsigned bpp = util_format_get_blocksize(prsc->format);
    unsigned stride = util_format_get_stride(prsc->format, w);
+   uint8_t *dst = (uint8_t *)res->data + res->level_offset[level] + (size_t)layer * stride * h;
+   const uint8_t *src = (const uint8_t *)res->bo.map + sgx545_tex_offset(prsc, level, layer);
 
-   for (unsigned layer = 0; layer < prsc->array_size; layer++) {
-      uint8_t *dst = (uint8_t *)res->data + res->level_offset[level] + (size_t)layer * stride * h;
-      const uint8_t *src = (const uint8_t *)res->bo.map + sgx545_tex_offset(prsc, level, layer);
+   x1 = MIN2(x1, w);
+   y1 = MIN2(y1, h);
+   if (x0 >= x1 || y0 >= y1)
+      return;
+   if (!twiddled(w, h)) {
+      size_t pitch = (size_t)align(w, 8) * bpp;
 
-      if (!twiddled(w, h)) {
-         size_t pitch = (size_t)align(w, 8) * bpp;
+      for (unsigned y = y0; y < y1; y++)
+         memcpy(dst + y * stride + (size_t)x0 * bpp, src + y * pitch + (size_t)x0 * bpp,
+                (size_t)(x1 - x0) * bpp);
+      return;
+   }
+   /* a row of tiles in one sequential copy, then reordered in cached memory
+    * (a texel at a time from the heap is a bus read each) */
+   unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)), t = 1u << n;
+   unsigned tx0 = x0 >> n, tx1 = (x1 - 1) >> n;
+   size_t tile_bytes = (size_t)t * t * bpp, span = (tx1 - tx0 + 1) * tile_bytes;
+   uint32_t spread[TILE];
+   uint8_t *tmp = malloc(span);
 
-         for (unsigned y = 0; y < h; y++)
-            memcpy(dst + y * stride, src + y * pitch, stride);
-         continue;
+   for (unsigned i = 0; i < t; i++) {
+      spread[i] = 0;
+      for (unsigned b = 0; b < n; b++)
+         spread[i] |= (i >> b & 1) << (2 * b);
+   }
+   for (unsigned ty = y0 >> n; ty <= (y1 - 1) >> n; ty++) {
+      const uint8_t *s = src + ((size_t)ty * (w >> n) + tx0) * tile_bytes;
+
+      if (tmp) {
+         memcpy(tmp, s, span);
+         s = tmp;
       }
-      unsigned n = MIN3(util_logbase2(w), util_logbase2(h), util_logbase2(TILE)), t = 1u << n;
-      uint32_t spread[TILE];
+      for (unsigned y = MAX2(ty << n, y0); y < MIN2((ty + 1) << n, y1); y++) {
+         for (unsigned x = x0; x < x1; x++) {
+            size_t at = ((x >> n) - tx0) * tile_bytes + (size_t)(spread[y & (t - 1)] | spread[x & (t - 1)] << 1) * bpp;
 
-      for (unsigned i = 0; i < t; i++) {
-         spread[i] = 0;
-         for (unsigned b = 0; b < n; b++)
-            spread[i] |= (i >> b & 1) << (2 * b);
-      }
-      for (unsigned y = 0; y < h; y++) {
-         for (unsigned x = 0; x < w; x++) {
-            size_t tile = (size_t)(y >> n) * (w >> n) + (x >> n);
-            size_t at = tile * t * t + (spread[y & (t - 1)] | spread[x & (t - 1)] << 1);
-
-            memcpy(dst + y * stride + (size_t)x * bpp, src + at * bpp, bpp);
+            memcpy(dst + y * stride + (size_t)x * bpp, s + at, bpp);
          }
       }
    }
+   free(tmp);
+}
+
+void
+sgx545_tex_decode_level(struct sgx545_resource *res, unsigned level)
+{
+   for (unsigned layer = 0; layer < res->base.array_size; layer++)
+      sgx545_tex_decode_box(res, level, layer, 0, 0, ~0u, ~0u);
 }
 
 static unsigned

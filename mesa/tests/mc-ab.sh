@@ -7,6 +7,7 @@
 # (MC_BURST=n: and n more, mc-<who>-<k>.fb) and the game stopped. xdotool steps (sent through Xvfb) drive the menus: at
 # second `at`, run `xdotool cmd args`. MC_DIR (in MC_ENV): another game
 # directory in the root, so a test world leaves the player's saves alone.
+# MC_LAUNCHER: another launcher in the root's /usr/local/bin (minecraft-trace, for apitrace).
 R=/opt/minecraft/rootfs
 WHO=$1 SECS=$2; shift 2
 D=$(dirname "$0")
@@ -33,7 +34,7 @@ i=0; while [ ! -S /tmp/.X11-unix/X0 ] && [ $i -lt 50 ]; do sleep 0.2; i=$((i+1))
 pre=; [ "$WHO" = ddk ] && pre=LD_PRELOAD=/usr/lib/sgx/sgx-busidshim.so
 $D/gpuwatch.sh chroot $R /usr/bin/env -i HOME=/root TERM=linux DISPLAY=:0 PATH=/usr/local/bin:/usr/bin:/bin \
 	MC_GL=$WHO MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 $MC_ENV $pre \
-	/usr/local/bin/minecraft-ab Player > $R/ctest/out/mc-$WHO.log 2>&1 &
+	/usr/local/bin/${MC_LAUNCHER:-minecraft-ab} Player > $R/ctest/out/mc-$WHO.log 2>&1 &
 game=$!
 # MC_READY=regex: the clock (SECONDS and the steps) starts when the game's
 # log first matches it, as loading times differ by stack and box

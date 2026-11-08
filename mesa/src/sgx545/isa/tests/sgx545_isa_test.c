@@ -8,8 +8,9 @@
  * input is an instruction in ISA.md's text notation, optionally followed
  * by "; <lo> <hi>", the expected words. The line is assembled, encoded,
  * compared with the expected words, disassembled, and the text compared
- * with the line. setfc lines update the format-control state the later
- * lines are encoded and decoded with.
+ * with the line. A line "<a> == <b>" checks another spelling instead: a and
+ * b must assemble to the same words. setfc lines update the format-control
+ * state the later lines are encoded and decoded with.
  *
  *    sgx545_isa_test [-t] [-f N] file...
  *
@@ -34,6 +35,27 @@ trim(char *s)
    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n' || e[-1] == '\r'))
       *--e = '\0';
    return s;
+}
+
+/* a == b up to runs of whitespace (ISA.md allows any whitespace before "[") */
+static bool
+same_text(const char *a, const char *b)
+{
+   for (;;) {
+      bool sa = *a == ' ' || *a == '\t', sb = *b == ' ' || *b == '\t';
+      if (sa != sb)
+         return false;
+      while (*a == ' ' || *a == '\t')
+         a++;
+      while (*b == ' ' || *b == '\t')
+         b++;
+      if (*a != *b)
+         return false;
+      if (!*a)
+         return true;
+      a++;
+      b++;
+   }
 }
 
 static unsigned
@@ -69,6 +91,24 @@ run_file(const char *path, bool table, unsigned *count)
 
       struct sgx_isa_instr I;
       char err[256], dis[512];
+      char *eq = strstr(text, " == ");
+      if (eq) {
+         struct sgx_isa_instr J;
+         *eq = '\0';
+         char *alt = trim(text), *canon = trim(eq + 4);
+         if (!sgx545_isa_asm_line(alt, &I, err, sizeof(err)) ||
+             !sgx545_isa_asm_line(canon, &J, err, sizeof(err))) {
+            fprintf(stderr, "%s:%u: %s == %s: %s\n", path, lineno, alt, canon, err);
+            fails++;
+            continue;
+         }
+         (*count)++;
+         if (sgx545_isa_encode(&I, &fc) != sgx545_isa_encode(&J, &fc)) {
+            fprintf(stderr, "%s:%u: %s and %s encode differently\n", path, lineno, alt, canon);
+            fails++;
+         }
+         continue;
+      }
       if (!sgx545_isa_asm_line(text, &I, err, sizeof(err))) {
          fprintf(stderr, "%s:%u: %s: %s\n", path, lineno, text, err);
          fails++;
@@ -85,7 +125,7 @@ run_file(const char *path, bool table, unsigned *count)
                  path, lineno, text, lo, hi, want[0], want[1]);
          ok = false;
       }
-      if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)) || strcmp(dis, text)) {
+      if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)) || !same_text(dis, text)) {
          fprintf(stderr, "%s:%u: %s: %08x %08x disassembles as: %s\n",
                  path, lineno, text, lo, hi, dis);
          ok = false;
@@ -122,8 +162,11 @@ fuzz(unsigned n, unsigned *count)
 
    for (unsigned i = 0; i < n; i++) {
       uint64_t w = rnd64(&seed);
-      /* bias towards valid words: clear a random set of low-probability bits */
+      /* bias towards valid words: clear a random set of low-probability bits;
+       * every other word gets a random class, so rare classes are reached */
       w &= rnd64(&seed) | rnd64(&seed);
+      if (i & 4)
+         w = (w & ~(0x1full << 59)) | (rnd64(&seed) & 0x1full) << 59;
       struct sgx545_isa_fc fc = { .c10 = i & 1, .f16 = (i >> 1) & 1 };
       char dis[512], err[256], dis2[512];
       struct sgx_isa_instr I;

@@ -106,8 +106,9 @@ PRI = {0: "fmad", 1: "mov", 2: "fadm", 3: "fmsa", 4: "fddp", 5: "fminmax", 6: "i
 #   (libusc's channel-use code treats it like mov with two sources); c2 v_norm
 #   uses it as x*x + y*y, so `fssq` (sum of squares; corpus). 6 = USEASM 0x65
 #   (ima32, see the Integer section).
-#   secondary op (h6-9); fadm, fsubflr and ffrc all encode as 3
-SEC = {0: "fmad", 1: "fmad16", 2: "fmsa", 3: "fadm", 4: "fmaxmin", 5: "frcp", 6: "frsq", 7: "fexp2",
+#   secondary op (h6-9); fadm, fsubflr and ffrc all encode as 3, and it computes
+#   fsubflr (sb - floor(sc); hwt_p12), so that is its name
+SEC = {0: "fmad", 1: "fmad16", 2: "fmsa", 3: "fsubflr", 4: "fmaxmin", 5: "frcp", 6: "frsq", 7: "fexp2",
        8: "flog2", 9: "fsin", 10: "fcos", 11: "fadd", 12: "fsub", 13: "fmul", 14: "ima32", 15: "mov"}
 #   secondary destination and first source (h5 + h13): i1 / i2 / i0 (the
 #   first source is then the same internal register), or 3: destination i0,

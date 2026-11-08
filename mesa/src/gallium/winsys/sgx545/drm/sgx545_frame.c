@@ -19,7 +19,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <xf86drm.h>
+
+#include "util/macros.h"
+
 #include "sgx545_frame.h"
+#include "sgx545_pds.h"
 #include "sgx545_usse_progs.h"
 
 /* Placement: every PDS program the DDK makes starts on 32 bytes, every USSE
@@ -29,25 +34,17 @@
 #define USSE_ALIGN 0x80
 #define DMA_ALIGN 0x20
 
-/* the CCB is a 64 KB ring with room for one command past its end [G] */
-#define CCB_RING 0x10000
-#define CCB_SIZE 0x10420
-#define TA_CMD_SIZE 0x2c0
-
 #define H_GENERAL SGX545_HEAP_GENERAL
-#define H_TADATA SGX545_HEAP_TADATA
-#define H_KDATA SGX545_HEAP_KDATA
 #define H_PIXSHADER SGX545_HEAP_PIXSHADER
 #define H_VTXSHADER SGX545_HEAP_VTXSHADER
 #define H_PDSPIXEL SGX545_HEAP_PDSPIXEL
 #define H_PDSVERTEX SGX545_HEAP_PDSVERTEX
-#define H_SYNC SGX545_HEAP_SYNC
-#define H_3DPARAMS SGX545_HEAP_3DPARAMS
 
-#define ws_err(...) fprintf(stderr, "sgx545: " __VA_ARGS__)
+#define ws_err sgxws_err
+#define f32 sgxws_f32
 
-static uint32_t
-f32(float x)
+uint32_t
+sgxws_f32(float x)
 {
    uint32_t u;
 
@@ -94,43 +91,14 @@ int
 sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx545_heap heap, uint32_t attribs,
                     uint32_t size, uint32_t align)
 {
-   struct sgxws_bo_impl *impl = calloc(1, sizeof(*impl));
-   int e;
-
-   if (!impl)
-      return -ENOMEM;
-   if ((e = pvr_alloc(&d->pvr, &impl->b, heap, attribs, size, align))) {
-      ws_err("ALLOC_DEVICEMEM heap %u size %#x failed: %d\n", heap, size, e);
-      free(impl);
-      return e;
-   }
-   if ((e = pvr_map(&d->pvr, &impl->b))) {
-      ws_err("map of %#x failed: %d\n", impl->b.devva, e);
-      pvr_free(&d->pvr, &impl->b);
-      free(impl);
-      return e;
-   }
-   bo->impl = impl;
-   bo->va = impl->b.devva;
-   bo->map = impl->b.cpu;
-   memset(bo->map, 0, size);
-   if (d->verbose)
-      ws_err("heap %2u %#010x +%#x\n", heap, bo->va, size);
-   return 0;
-}
-
-/* a render target's sync data, mapped once: the CPU waits on it before reading */
-static void
-bo_map_sync(struct sgxws_dev *d, struct sgxws_bo *bo)
-{
-   bo->impl->sd = pvr_sync_data(&d->pvr, bo->impl->b.sync, &bo->impl->sync_map);
+   return d->kif->bo_alloc(d, bo, heap, attribs, size, align);
 }
 
 void
 sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo)
 {
-   if (!bo->impl->sd)
-      bo_map_sync(d, bo);
+   if (d->kif->bo_prepare_target)
+      d->kif->bo_prepare_target(d, bo);
 }
 
 int
@@ -142,7 +110,7 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem, uin
    switch (mem) {
    case SGXWS_MEM_RENDER_TARGET:
       if (!(e = sgxws_bo_alloc_heap(d, bo, SGX545_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR, size, align)))
-         bo_map_sync(d, bo);
+         sgxws_bo_prepare_target(d, bo);
       return e;
    case SGXWS_MEM_TEXTURE:
       return sgxws_bo_alloc_heap(d, bo, SGX545_HEAP_TEXTURE, 0x3, size, align);
@@ -155,21 +123,31 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem, uin
 int
 sgxws_bo_wrap(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu, uint32_t size)
 {
-   struct sgxws_bo_impl *impl = calloc(1, sizeof(*impl));
-   int e;
+   return d->kif->bo_wrap ? d->kif->bo_wrap(d, bo, cpu, size) : -ENOTSUP;
+}
 
-   if (!impl)
-      return -ENOMEM;
-   if ((e = pvr_wrap(&d->pvr, &impl->b, cpu, size))) {
-      ws_err("WRAP_EXT_MEMORY of %u bytes failed: %d\n", size, e);
-      free(impl);
-      return e;
-   }
-   bo->impl = impl;
-   bo->va = impl->b.devva;
-   bo->map = impl->b.cpu;
-   bo_map_sync(d, bo);
-   return 0;
+bool
+sgxws_dev_has_dmabuf(const struct sgxws_dev *d)
+{
+   return d->kif->bo_import != NULL;
+}
+
+int
+sgxws_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int dmabuf_fd, uint32_t size)
+{
+   return d->kif->bo_import ? d->kif->bo_import(d, bo, dmabuf_fd, size) : -ENOTSUP;
+}
+
+int
+sgxws_bo_export(struct sgxws_dev *d, const struct sgxws_bo *bo, int *dmabuf_fd)
+{
+   return d->kif->bo_export ? d->kif->bo_export(d, bo, dmabuf_fd) : -ENOTSUP;
+}
+
+int
+sgxws_bo_kms_handle(const struct sgxws_bo *bo, uint32_t *handle)
+{
+   return bo->impl && bo->impl->kif->bo_kms_handle ? bo->impl->kif->bo_kms_handle(bo, handle) : -ENOTSUP;
 }
 
 void
@@ -177,10 +155,7 @@ sgxws_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo)
 {
    if (!bo->impl)
       return;
-   if (bo->impl->sd)
-      pvr_unmap(&d->pvr, &bo->impl->sync_map);
-   pvr_free(&d->pvr, &bo->impl->b);
-   free(bo->impl);
+   d->kif->bo_free(d, bo);
    bo->impl = NULL;
    bo->va = 0;
    bo->map = NULL;
@@ -189,23 +164,15 @@ sgxws_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo)
 int
 sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms)
 {
-   return bo->impl && bo->impl->sd ? sgxws_wait_sync(bo->impl->sd, timeout_ms) : 0;
+   return bo->impl ? bo->impl->kif->bo_wait(bo, timeout_ms) : 0;
 }
-
-/* For the structures whose placement matters (the kernel-data and sync heap
- * order, see sgxws_ctx_create), a failed allocation leaves nothing to fall
- * back to. */
-#define BO(d, bo, heap, attribs, size, align)                                   \
-   do {                                                                         \
-      if (sgxws_bo_alloc_heap(d, bo, heap, attribs, size, align))               \
-         goto fail;                                                             \
-   } while (0)
 
 static int
 ring_init(struct sgxws_dev *d, struct sgxws_ring *r, enum sgx545_heap heap, uint32_t size)
 {
    int e = sgxws_bo_alloc_heap(d, &r->bo, heap, 0x1, size, 0x1000);
 
+   r->size = size;
    /* nothing at a heap's first byte: a PDS state word or DOUTU word of 0 would name it */
    r->used = r->mark = 0x100;
    return e;
@@ -215,7 +182,7 @@ static void
 ring_mark(struct sgxws_ring *r)
 {
    r->mark = r->used;
-   r->part = ((r->bo.impl->b.size - r->mark) / SGXWS_SLOTS) & ~0xffu;
+   r->part = ((r->size - r->mark) / SGXWS_SLOTS) & ~0xffu;
    r->hi = r->mark + r->part;
 }
 
@@ -230,7 +197,7 @@ ring_use_slot(struct sgxws_ring *r, unsigned k)
 static uint32_t
 ring_room(const struct sgxws_ring *r)
 {
-   return (r->hi ? r->hi : r->bo.impl->b.size) - r->used;
+   return (r->hi ? r->hi : r->size) - r->used;
 }
 
 /* where something landed: device address and CPU pointer */
@@ -245,7 +212,7 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
    struct sgxws_ptr p;
    uint32_t o = (r->used + align - 1) & ~(align - 1);
 
-   if (o + size > (r->hi ? r->hi : r->bo.impl->b.size)) {
+   if (o + size > (r->hi ? r->hi : r->size)) {
       /* sgxws_draw keeps the frame rings from filling; this is a bug */
       ws_err("ring at %#x full (%#x + %#x)\n", r->bo.va, o, size);
       abort();
@@ -279,14 +246,27 @@ usse_load(struct sgxws_ctx *c, const struct usse_prog *pr, bool vertex)
    return sgxws_usse_upload(c, vertex, pr->w, pr->n, pr->reloc, pr->nreloc);
 }
 
-/* DOUTU word 0 (PDS.md): code base register (pixel 0-9 at the pixel heap +
- * n*512K, vertex 10+), offset/8 in that window at b4, temporaries in fours at b24 */
+/* DOUTU word 0 (PDS.md): the code base register (pixel 0-9 at the pixel heap +
+ * n*512K, vertex 10+: from the device's heap layout), the offset in its window,
+ * temporaries in fours */
 static uint32_t
 doutu_w0(struct sgxws_ctx *c, uint32_t va, bool vertex, uint32_t temps)
 {
    uint32_t off = va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
 
-   return ((temps + 3) >> 2) << 24 | ((off >> 19) + (vertex ? 10 : 0)) | ((off & 0x7ffff) >> 3) << 4;
+   return sgx545_pds_doutu_w0(&(struct sgx545_pds_doutu){
+      .base = (off >> 19) + c->dev->usse_base_index[vertex],
+      .offset = off & 0x7ffff,
+      .temps4 = (temps + 3) >> 2,
+   });
+}
+
+/* DOUTU word 1 of a pixel task (PDS.md) */
+static uint32_t
+doutu_w1_pixel(bool iterations, bool samples)
+{
+   return sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){
+      .pixel = true, .iterations = iterations, .samples = samples });
 }
 
 /* LIMM rN, #v (STATE.md, from the DDK's end-of-tile generator) */
@@ -306,36 +286,75 @@ struct pds {
    unsigned nc;
 };
 
-/* MOVS (DOUT): src1 = DS0 pair row, src2 = DS1 pair row; selects 0 s1.lo, 1 s1.hi, 2 s2.lo, 3 s2.hi */
-#define MOVS(top, r1, r2, a, b, c_, d_, dest)                                                     \
-   ((uint32_t)(top) << 24 | (uint32_t)(r1) << 18 | (uint32_t)(r2) << 13 | (a) << 11 | (b) << 9 | \
-    (c_) << 7 | (d_) << 5 | (dest))
-#define DOUTI 2
-#define DOUTD 3
-#define DOUTT 4
-#define DOUTU 5
-#define DOUTA 6
-#define MV 0x07                     /* always */
-#define MV_X 0x2f                   /* .x2.s27: DOUTD adds word 2 to its address */
-#define MV_CC3 0x03                 /* the vertex-fetch DOUTU form */
-/* ALU: op, sub-op, src1 (S1: 16-bit units, DS0 then inputs), src2 (S2: DS1, 16-bit units), dst (U) */
-#define ALU(op, s, s1, s2, dst) \
-   (0x07000000u | (uint32_t)(op) << 28 | (uint32_t)(s) << 27 | (s1) << 16 | (s2) << 9 | (dst))
-#define S1_DS0(w) (2 * (w))
-#define S1_IN(n) (2 * (0x40 + (n)))
-#define S2_DS1(w) (2 * (w))
-#define U_DS0(w) (w)
-#define U_DS1(w) (0x40 + (w))
-#define U_IN(n) (0x80 + (n))
-#define OP_ADD 4
-#define OP_MUL16 6
-#define OP_ANDOR 0xc                /* s 1 AND, s 0 OR */
-#define OP_XOR 0xd
-#define SHL(src, n, dst) (0xf7000000u | (src) << 16 | (n) << 8 | (dst))
-#define TST1(s1) (0x87000000u | (s1) << 16)          /* p0 = src1 == 0 */
-#define TST2(s2) (0x87000000u | (s2) << 9 | 0x100)   /* p0 = src2 == 0 */
-#define BRA_P0(t) (0x90000000u | (t))
-#define HALT 0xaf000000u
+/* The instructions, through the PDS encoder (src/sgx545/pds). */
+#define DOUTI SGX545_PDS_DOUTI
+#define DOUTD SGX545_PDS_DOUTD
+#define DOUTT SGX545_PDS_DOUTT
+#define DOUTU SGX545_PDS_DOUTU
+#define DOUTA SGX545_PDS_DOUTA
+enum { MV, MV_X, MV_CC3 };          /* always; .x2.s27 (DOUTD adds word 2); the vertex-fetch DOUTU */
+#define DS0 SGX545_PDS_DS0
+#define DS1 SGX545_PDS_DS1
+#define IN SGX545_PDS_IN
+
+/* MOVS (DOUT): r1 = DS0 pair row, r2 = DS1 pair row; selects 0 s1.lo, 1 s1.hi, 2 s2.lo, 3 s2.hi */
+static uint32_t
+pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b, unsigned c, unsigned d,
+         enum sgx545_pds_dout dest)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = SGX545_PDS_OPC_MOVS,
+      .cc = form == MV_CC3 ? SGX545_PDS_CC_3 : SGX545_PDS_CC_ALWAYS,
+      .x2 = form == MV_X,
+      .s27 = form == MV_X,
+      .dest = dest,
+      .r1 = r1,
+      .r2 = r2,
+      .sel = { a, b, c, d },
+   });
+}
+
+/* dst = src1 op src2: add, mul16, and, or, xor, op0xd.s1 */
+static uint32_t
+pds_alu(enum sgx545_pds_opc op, struct sgx545_pds_reg src1, struct sgx545_pds_reg src2, struct sgx545_pds_reg dst)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = op, .cc = SGX545_PDS_CC_ALWAYS, .dst = dst, .src1 = src1, .src2 = src2 });
+}
+
+static uint32_t
+pds_shl(struct sgx545_pds_reg src, unsigned n, struct sgx545_pds_reg dst)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = SGX545_PDS_OPC_SHL, .cc = SGX545_PDS_CC_ALWAYS, .dst = dst, .src1 = src, .amount = n });
+}
+
+/* p0 = src == 0 */
+static uint32_t
+pds_tst(struct sgx545_pds_reg src)
+{
+   bool ds1 = src.file == SGX545_PDS_FILE_DS1;
+
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = ds1 ? SGX545_PDS_OPC_TST_S2 : SGX545_PDS_OPC_TST,
+      .cc = SGX545_PDS_CC_ALWAYS,
+      .src1 = ds1 ? (struct sgx545_pds_reg){ 0 } : src,
+      .src2 = ds1 ? src : (struct sgx545_pds_reg){ 0 },
+   });
+}
+
+static uint32_t
+pds_bra_p0(unsigned target)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){
+      .opc = SGX545_PDS_OPC_BRA, .cc = SGX545_PDS_CC_P0, .target = target });
+}
+
+static uint32_t
+pds_halt(void)
+{
+   return sgx545_pds_encode(&(struct sgx545_pds_instr){ .opc = SGX545_PDS_OPC_HALT, .cc = SGX545_PDS_CC_ALWAYS });
+}
 
 static void
 pds_d0(struct pds *p, unsigned i, uint32_t v)
@@ -374,6 +393,11 @@ pds_emit(struct sgxws_ring *r, const struct pds *p, uint32_t *rows_out)
 
 #define CODE(p, w) ((p)->code[(p)->nc++] = (w))
 
+/* the clear's DOUTI: iterate the colour, 4 components, the last plain iteration [D] */
+static const struct sgx545_pds_douti clear_douti = {
+   .src = 0x20, .comps = 4, .iterate = true, .last_iter = true,
+};
+
 /* TA/3D state word for a pixel PDS program: rows<<26 | offset in the PDS pixel heap >> 4 */
 static uint32_t
 pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
@@ -389,9 +413,8 @@ pds_word(struct sgxws_ctx *c, uint32_t va, uint32_t rows)
  * DS1 pair and T2, T3 from a DS0 pair, as the background object's does.
  */
 static uint32_t
-pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_t *douti,
-          const uint8_t *douti_tex, const uint8_t *douti_w1, unsigned n_douti, const uint32_t (*tex)[4],
-          uint32_t *rows)
+pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const struct sgx545_pds_douti *douti,
+          const uint8_t *douti_tex, unsigned n_douti, const uint32_t (*tex)[4], uint32_t *rows)
 {
    struct pds p = { 0 };
    unsigned d0 = 1, d1 = 1;
@@ -399,19 +422,19 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_
    pds_d0(&p, 0, task_w0);
    pds_d0(&p, 1, task_w1);
    pds_d1(&p, 0, 0);
-   pds_d1(&p, 1, n_douti ? douti[0] : 0);
-   CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 3, DOUTU));
+   pds_d1(&p, 1, n_douti ? sgx545_pds_douti_w0(&douti[0]) : 0);
+   CODE(&p, pds_movs(MV, 0, 0, 0, 1, 2, 3, DOUTU));
    for (unsigned i = 0; i < n_douti; i++) {
       unsigned r1 = d0++, r2 = 0;
 
       if (i) {
          r2 = d1++;
          pds_d1(&p, 2 * r2, 0);
-         pds_d1(&p, 2 * r2 + 1, douti[i]);
+         pds_d1(&p, 2 * r2 + 1, sgx545_pds_douti_w0(&douti[i]));
       }
-      pds_d0(&p, 2 * r1, douti_w1 ? douti_w1[i] : 0);
+      pds_d0(&p, 2 * r1, sgx545_pds_douti_w1(&douti[i]));
       pds_d0(&p, 2 * r1 + 1, 0);
-      CODE(&p, MOVS(MV, r1, r2, 3, 0, 1, 1, DOUTI));
+      CODE(&p, pds_movs(MV, r1, r2, 3, 0, 1, 1, DOUTI));
       if (douti_tex && douti_tex[i] && tex) {
          const uint32_t *t = tex[douti_tex[i] - 1];
          unsigned a = d1++, b = d0++;
@@ -420,10 +443,10 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1, const uint32_
          pds_d1(&p, 2 * a + 1, t[1]);
          pds_d0(&p, 2 * b, t[2]);
          pds_d0(&p, 2 * b + 1, t[3]);
-         CODE(&p, MOVS(MV, b, a, 2, 3, 0, 1, DOUTT));
+         CODE(&p, pds_movs(MV, b, a, 2, 3, 0, 1, DOUTT));
       }
    }
-   CODE(&p, HALT);
+   CODE(&p, pds_halt());
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
@@ -440,22 +463,23 @@ pds_secondary(struct sgxws_ring *r, uint32_t src, uint32_t dma_ctrl, uint32_t ta
       pds_d1(&p, 0, 0);
       pds_d0(&p, 2, task_w0);
       pds_d0(&p, 3, task_w1);
-      CODE(&p, MOVS(MV, 0, 0x18, 0, 1, 0, 1, DOUTD));
-      CODE(&p, MOVS(MV, 1, 0, 0, 1, 2, 2, DOUTU));
+      CODE(&p, pds_movs(MV, 0, 0x18, 0, 1, 0, 1, DOUTD));
+      CODE(&p, pds_movs(MV, 1, 0, 0, 1, 2, 2, DOUTU));
    } else {
       pds_d0(&p, 0, task_w0);
       pds_d0(&p, 1, task_w1);
-      CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 2, DOUTU));
+      CODE(&p, pds_movs(MV, 0, 0, 0, 1, 2, 2, DOUTU));
    }
-   CODE(&p, HALT);
+   CODE(&p, pds_halt());
    return pds_emit(r, &p, rows);
 }
 
-/* DOUTD control: dwords-1, attribute register at b8, b22-24 [G], b25 = secondary attributes [G] */
+/* DOUTD control: dwords, attribute register, b22-24 [G], b25 = secondary attributes [G] */
 static uint32_t
 dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secondary)
 {
-   return (dwords - 1) | reg << 8 | kind << 22 | (secondary ? 0x2000000 : 0);
+   return sgx545_pds_doutd_ctrl(&(struct sgx545_pds_doutd){
+      .dwords = dwords, .reg = reg, .kind = kind, .secondary = secondary });
 }
 
 /*
@@ -480,167 +504,86 @@ pds_dma_task(struct sgxws_ring *r, uint32_t src, uint32_t dwords, uint32_t task_
 
       pds_d0(&p, 2 * row, src + off * 4);
       pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, (n - 1) & 3, 1));
-      CODE(&p, MOVS(MV, row, 0x18, 0, 1, 0, 1, DOUTD));
+      CODE(&p, pds_movs(MV, row, 0x18, 0, 1, 0, 1, DOUTD));
    }
    pds_d1(&p, 0, 0);
    pds_d0(&p, 2 * row, task_w0);
    pds_d0(&p, 2 * row + 1, task_w1);
-   CODE(&p, MOVS(MV, row, 0, 0, 1, 2, 2, DOUTU));
-   CODE(&p, HALT);
+   CODE(&p, pds_movs(MV, row, 0, 0, 1, 2, 2, DOUTU));
+   CODE(&p, pds_halt());
    return pds_emit(r, &p, rows);
 }
 
 /* ------------------------------------------------------------------ device */
 
-int
-sgxws_dev_init(struct sgxws_dev *d, int fd, const struct sgxws_dev_options *opts)
+struct sgxws_dev *
+sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
 {
    const struct sgxws_dev_options none = { .dry_run = -1 };
-   int e;
+   struct sgxws_dev *d = NULL;
+   drmVersionPtr v = drmGetVersion(fd);
+   int e = -ENODEV;
 
    if (!opts)
       opts = &none;
-   memset(d, 0, sizeof(*d));
+   if (v && !strcmp(v->name, "powervr_sgx"))
+      e = sgxws_powervr_sgx_dev_create(fd, opts, &d);
+#ifdef SGX545_PVRSRVKM
+   else if (v && !strcmp(v->name, "pvrsrvkm"))
+      e = sgxws_pvr_dev_create(fd, opts, &d);
+#endif
+   if (e)
+      ws_err("no SGX545 kernel driver on fd %d (%s): %d\n", fd, v ? v->name : "?", e);
+   drmFreeVersion(v);
+   if (e)
+      return NULL;
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
    d->dry_run = opts->dry_run;
-   pvr_open_fd(&d->pvr, fd);
-   if (opts->trace && (e = pvr_trace_open(&d->pvr, opts->trace)))
-      return e;
-   if (opts->trace_kicks)
-      d->pvr.trace_kicks = opts->trace_kicks;
-   if ((e = pvr_init(&d->pvr)))
-      return e;
-   for (unsigned i = 0; i < d->pvr.nheaps; i++)
-      d->heap_base[d->pvr.heaps[i].ui32HeapID & 0xf] = d->pvr.heaps[i].sDevVAddrBase.uiAddr;
-   return 0;
-}
-
-void
-sgxws_dev_fini(struct sgxws_dev *d)
-{
-   pvr_disconnect(&d->pvr);
-   pvr_trace_close(&d->pvr);
-}
-
-struct sgxws_dev *
-sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
-{
-   struct sgxws_dev *d = calloc(1, sizeof(*d));
-   int e;
-
-   if (!d)
-      return NULL;
-   if ((e = sgxws_dev_init(d, fd, opts))) {
-      ws_err("no PVR services on fd %d: %d\n", fd, e);
-      free(d);
-      return NULL;
-   }
    return d;
 }
 
 void
 sgxws_dev_destroy(struct sgxws_dev *d)
 {
-   sgxws_dev_fini(d);
-   free(d);
+   d->kif->dev_destroy(d);
 }
 
 /* ------------------------------------------------------------------ context */
-
-/* The parameter buffer (STATE.md section 6, "PB descriptor"). */
-static int
-ctx_pb(struct sgxws_ctx *c, uint32_t bytes)
-{
-   struct sgxws_dev *d = c->dev;
-   uint32_t pages = (bytes + 0x22000) >> 12, first, last, *fl, *pd;
-
-   BO(d, &c->pbdesc, H_KDATA, 0xf, 0x3c, 0x20);
-   BO(d, &c->pbblocks, H_KDATA, 0xf, 0x10, 4);
-   BO(d, &c->pb, H_3DPARAMS, 0xb, pages << 12, 0x1000);
-   first = (c->pb.va - d->heap_base[H_3DPARAMS]) >> 12;
-   last = first + pages - 1;
-   /* the free list is indexed by page number from the heap base: prev<<16 | next;
-    * the DDK always allocates 0x40000, one u32 per page of the whole 256 MB heap */
-   BO(d, &c->freelist, H_3DPARAMS, 0xb, (last + 1) * 4 > 0x40000 ? (last + 1) * 4 : 0x40000, 0x10);
-   fl = c->freelist.map;
-   for (uint32_t i = first; i <= last; i++)
-      fl[i] = (i == first ? 0xffffu : i - 1) << 16 | (i == last ? 0xffffu : i + 1);
-   /* block list: {pages, first | last<<16, PB descriptor, 0} */
-   c->pbblocks.map[0] = pages;
-   c->pbblocks.map[1] = first | last << 16;
-   c->pbblocks.map[2] = c->pbdesc.va;
-   pd = c->pbdesc.map;
-   uint32_t zls = (pages - 0x22) & 0xfffff, ta = pages + 0x10, pds = zls < ta ? zls : ta;
-
-   pd[1] = pages;
-   pd[2] = last << 16 | first;      /* free list head */
-   pd[3] = (last - 1) << 16;
-   pd[4] = c->freelist.va;
-   pd[6] = pd[2];
-   pd[7] = pd[3];
-   pd[10] = ta;                     /* TA threshold */
-   pd[11] = zls;                    /* ZLS threshold */
-   pd[12] = zls;                    /* global threshold */
-   pd[13] = pds > 0x100 ? pds - 0x100 : 0;  /* PDS threshold */
-   pd[14] = c->pbblocks.va;
-   c->pb_pages = pages;
-   return 0;
-fail:
-   return -ENOMEM;
-}
 
 #define IDX_COUNT 0x10000
 
 static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
 
+static void
+ctx_free(struct sgxws_ctx *c)
+{
+   struct sgxws_ring *rings[] = { &c->usse_pix, &c->usse_vtx, &c->pds_pix, &c->pds_vtx, &c->gen,
+                                  &c->vdm, &c->eot_pool[0], &c->eot_pool[1] };
+
+   for (unsigned i = 0; i < sizeof(rings) / sizeof(rings[0]); i++)
+      sgxws_bo_free(c->dev, &rings[i]->bo);
+   c->dev->kif->ctx_fini(c);
+   free(c);
+}
+
 struct sgxws_ctx *
 sgxws_ctx_create(struct sgxws_dev *d)
 {
    struct sgxws_ctx *c = calloc(1, sizeof(*c));
-   struct sgxws_bo dummy;
-   uint32_t hw[17] = { 0 }, rows;
+   uint32_t rows;
    struct sgxws_ptr p;
    struct pds t = { 0 };
-   int e;
 
    if (!c)
       return NULL;
    c->dev = d;
-   if (ctx_pb(c, 0x400000))
-      goto fail;
-   BO(d, &c->ccb, H_KDATA, 0x4f, CCB_SIZE, 0x1000);
-   BO(d, &c->ccbctl, H_KDATA, 0x4f, 8, 0x20);
-   BO(d, &dummy, H_SYNC, 0x3, 4, 0x10);           /* SGXCreateRenderContext's own sync word */
-   BO(d, &c->scratch, H_3DPARAMS, 0xb, 0x40, 0x40);
-   BO(d, &dummy, H_SYNC, 0x4b, 0x80, 0x20);       /* and its 0x80-byte buffer for GL */
-   /*
-    * The kernel-data and sync allocations of the DDK's two transfer contexts,
-    * which we don't use: they keep every later structure at the address the
-    * DDK gives it.  The microkernel keeps pointers to the previous client's
-    * render details and RT data and reads them when the next client's TA
-    * starts; after a DDK client, a frame with any other layout hangs the TA
-    * (docs/GEN.md, "Layout").
-    */
-   for (int i = 0; i < 2; i++) {
-      BO(d, &dummy, H_KDATA, 0x4f, 0x104c8, 0x1000);
-      BO(d, &dummy, H_KDATA, 0x4f, 8, 0x20);
-      BO(d, &dummy, H_SYNC, 0x3, 4, 0x10);
-      BO(d, i ? &dummy : &c->sync3d, H_SYNC, 0x3, 4, 0x10);    /* the DDK's 3D sync */
-      BO(d, &dummy, H_KDATA, 0x4f, 4, 4);
-   }
-
-   /* HW render context (SGXCreateRenderContext): the kernel fills the PD at word 2 */
-   hw[0] = 0x21;                    /* b0, b5 = per-context PB [D] */
-   hw[3] = c->ccb.va;
-   hw[4] = c->ccbctl.va;
-   hw[6] = c->pbdesc.va;
-   hw[7] = c->scratch.va;
-   hw[16] = (uint32_t)getpid();
-   if ((e = pvr_register_render_ctx(&d->pvr, hw, sizeof(hw), 8, &c->hwctx, &c->hwctx_va))) {
-      ws_err("SGX_REGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
-      goto fail;
+   /* the kernel side first: under services, the kernel-data and sync
+    * allocations keep the DDK's order */
+   if (d->kif->ctx_init(c)) {
+      free(c);
+      return NULL;
    }
 
    /* pixel programs are never freed (blend variants included): 1 MB of the
@@ -654,7 +597,8 @@ sgxws_ctx_create(struct sgxws_dev *d)
        ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000 + SGXWS_SLOTS * 0x200000) ||
        ring_init(d, &c->gen, H_GENERAL, 0x80000 + SGXWS_SLOTS * 0x1000000) ||
        ring_init(d, &c->vdm, H_GENERAL, SGXWS_SLOTS * 0x80000 + 0x1000) ||
-       ring_init(d, &c->usse_frame, H_PIXSHADER, SGXWS_SLOTS * 0x4000 + 0x1000))
+       ring_init(d, &c->eot_pool[0], H_PIXSHADER, SGXWS_EOT_CACHE * 0x80 + 0x100) ||
+       ring_init(d, &c->eot_pool[1], H_PIXSHADER, SGXWS_EOT_CACHE * 0x80 + 0x100))
       goto fail;
 
    /* fixed USSE programs */
@@ -685,27 +629,23 @@ sgxws_ctx_create(struct sgxws_dev *d)
    /* TA terminate (VDM type 6, PDS.md "DOUTA"): DOUTA (0x2000, 0), 3 x (0x16000e, 0x100), then
     * a state-emit task for the two attributes [D; the values' meaning G] */
    pds_d0(&t, 0, 0x2000);
-   pds_d0(&t, 1, 0);
+   pds_d0(&t, 1, sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){ .reg = 0 }));
    pds_d0(&t, 2, 0x0016000e);
-   pds_d0(&t, 3, 0x100);
+   pds_d0(&t, 3, sgx545_pds_douta_ctrl(&(struct sgx545_pds_douta){ .reg = 1 }));
    pds_d0(&t, 4, doutu_w0(c, c->state_emit[2], true, 0));
    pds_d0(&t, 5, 0);
-   CODE(&t, MOVS(MV, 0, 0x18, 0, 1, 2, 2, DOUTA));
+   CODE(&t, pds_movs(MV, 0, 0x18, 0, 1, 2, 2, DOUTA));
    for (int i = 0; i < 3; i++)
-      CODE(&t, MOVS(MV, 1, 0x18, 0, 1, 2, 2, DOUTA));
-   CODE(&t, MOVS(MV, 2, 0, 0, 1, 2, 2, DOUTU));
-   CODE(&t, HALT);
+      CODE(&t, pds_movs(MV, 1, 0x18, 0, 1, 2, 2, DOUTA));
+   CODE(&t, pds_movs(MV, 2, 0, 0, 1, 2, 2, DOUTU));
+   CODE(&t, pds_halt());
    c->terminate = pds_emit(&c->pds_vtx, &t, &rows);
 
    /* pixel programs shared by every object without inputs, and the clear's */
    c->pds_empty_p = pds_secondary(&c->pds_pix, 0, 0, doutu_w0(c, c->empty_p, false, 0), 0, NULL);
-   /* DOUTI: iterate the colour (source 0x20 at b11), 4 components, plain iteration, last [D] */
-   {
-      uint32_t douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29;
-
-      c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), 0x01000004, &douti, NULL, NULL, 1,
-                               NULL, NULL);
-   }
+   /* DOUTI: iterate the colour (source 0x20), 4 components, plain iteration, last [D] */
+   c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0), doutu_w1_pixel(true, false), &clear_douti,
+                            NULL, 1, NULL, NULL);
 
    /* identity index buffer: glDrawArrays draws through it (STATE.md section 2) */
    p = ring_alloc(&c->gen, IDX_COUNT * 2, 4);
@@ -726,26 +666,20 @@ sgxws_ctx_create(struct sgxws_dev *d)
    ring_mark(&c->pds_vtx);
    ring_mark(&c->gen);
    ring_mark(&c->vdm);
-   ring_mark(&c->usse_frame);
    return c;
 
 fail:
    ws_err("context creation failed\n");
-   free(c);
+   ctx_free(c);
    return NULL;
 }
 
 void
 sgxws_ctx_destroy(struct sgxws_ctx *c)
 {
-   int e;
-
    sgxws_flush(c, 0);
    sgxws_wait_idle(c, 2000);
-   if ((e = pvr_unregister_render_ctx(&c->dev->pvr, c->hwctx)))
-      ws_err("SGX_UNREGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
-   /* the rest of the device memory goes with the services connection (resman) */
-   free(c);
+   ctx_free(c);
 }
 
 /* ------------------------------------------------------------------ render target */
@@ -787,163 +721,77 @@ rt_numbers(struct sgxws_rt_numbers *r, uint32_t w, uint32_t h)
 struct sgxws_rt *
 sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h)
 {
-   struct sgxws_dev *d = c->dev;
    struct sgxws_rt *s = calloc(1, sizeof(*s));
-   struct sgxws_rt_numbers *r;
-   uint32_t *rd, *rt;
 
    if (!s)
       return NULL;
-   r = &s->n;
    s->w = w;
    s->h = h;
-   rt_numbers(r, w, h);
-
-   /* SGXAddRenderTarget: three render-details sets as the DDK makes them (the
-    * third renders: this keeps the DDK's kernel-data addresses), RT data (2
-    * entries), tail pointers, region headers (double buffered), TA data
-    * blocks, the background object block */
-   for (int i = 0; i < 3; i++) {
-      BO(d, &s->rd, H_KDATA, 0xf, 0x1ec, 0x20);
-      BO(d, &s->rd_sync, H_SYNC, 0xf, 8, 4);
-      BO(d, &s->rd_w8, H_KDATA, 0xf, 8, 0x20);
-      BO(d, &s->rd_w4, H_KDATA, 0xf, 4, 0x20);
-      BO(d, &s->hwsync, H_KDATA, 0xf, 0x28, 0x20);
-      BO(d, &s->hwsync_access, H_SYNC, 0xf, 8, 4);
+   rt_numbers(&s->n, w, h);
+   if (c->dev->kif->rt_init(c, s)) {
+      free(s);
+      return NULL;
    }
-   BO(d, &s->rtword, H_KDATA, 0x4f, 4, 0x20);
-   BO(d, &s->rtdata, H_KDATA, 0x4f, 2 * 0x38 + 0x18, 0x20);
-   BO(d, &s->tailptr, H_TADATA, 0xb, r->tailptr_bytes, 0x40);
-   BO(d, &s->ta40, H_TADATA, 0xb, 0x40, 0x10);
-   BO(d, &s->ta50, H_TADATA, 0xb, 0x50, 0x1000);
-   BO(d, &s->bgblock, H_3DPARAMS, 0x4b, 0x200, 0x1000);
-   for (int i = 0; i < 2; i++) {
-      BO(d, &s->rgn[i], H_TADATA, 0xb, r->region_bytes, 0x40);
-      BO(d, &s->ta88[i], H_TADATA, 0xb, 0x88, 0x10);
-      BO(d, &s->entword[i], H_KDATA, 0x4f, 4, 0x20);
-   }
-
-   /* RT data: header, then per entry {HW ctx, render details in flight (the
-    * microkernel fills it), tiles/16, tiles*12, bg block, TA data
-    * 0x88/0x40/0x50, tail pointers and size, RTs, 0, kdata word, 0x10} */
-   s->rtword.map[0] = 1;            /* the frame counter: entry (1 & 1) renders first */
-   rt = s->rtdata.map;
-   rt[0] = s->rtword.va;
-   rt[2] = r->padx;
-   rt[5] = 2;
-   for (int i = 0; i < 2; i++) {
-      uint32_t *e = rt + 6 + 14 * i;
-
-      e[0] = c->hwctx_va;
-      e[2] = r->mt_tiles >> 4;
-      e[3] = r->mt_tiles * 0xc;
-      e[4] = s->bgblock.va;
-      e[5] = s->ta88[i].va;
-      e[6] = s->ta40.va;
-      e[7] = s->ta50.va;
-      e[8] = s->tailptr.va;
-      e[9] = r->tailptr_bytes;
-      e[10] = 1;
-      e[12] = s->entword[i].va;
-      e[13] = 0x10;
-   }
-
-   /* the background object's vertices in the PB (STATE.md section 6, "Background object
-    * block"): fixed point, offset 0x1000 */
-   {
-      uint32_t *b = s->bgblock.map;
-
-      b[5] = f32(1.0f);
-      b[8] = f32(1.0f);
-      b[10] = 0x202;
-      b[15] = 0x100000;
-      b[16] = 0x1000;
-      b[17] = 0x3f80;
-      b[18] = ((w + 0x1000) * 0x100) << 8 | 0x10;
-      b[19] = f32(1.0f);
-      b[20] = (h + 0x1000) * 0x100;
-      b[21] = 0x1000;
-      b[22] = 0x3f80;
-   }
-
-   /* render details (STATE.md section 6); +0x20/+0x28 and the pixel event
-    * program are set per frame */
-   rd = s->rd.map;
-   rd[0x00 / 4] = c->pb.va & 0xfff00000;  /* 3D request base */
-   rd[0x08 / 4] = 0x80;                   /* [G] */
-   rd[0x0c / 4] = 0x000f0000;             /* [G] */
-   rd[0x10 / 4] = 0x80000000;
-   rd[0x38 / 4] = 0x80000000;             /* no depth load */
-   rd[0x3c / 4] = 0x80000000;             /* no stencil load */
-   rd[0x40 / 4] = f32(1.0f);              /* ISP background depth [C] */
-   rd[0x44 / 4] = 0x300;                  /* [G] */
-   rd[0x48 / 4] = 0x2000000 | (s->bgblock.va - (c->pb.va & 0xfff00000)) >> 4;
-   rd[0x50 / 4] = 0x88;
-   rd[0x58 / 4] = 0x30;
-   rd[0x64 / 4] = 1;                      /* [G] */
-   rd[0x68 / 4] = 1;
-   rd[0xcc / 4] = 0x100;
-   rd[0xd0 / 4] = s->rd_sync.va;
-   rd[0xd8 / 4] = s->rtdata.va;
-   rd[0x104 / 4] = 1;                     /* [G] */
-   rd[0x110 / 4] = s->rd_w8.va;
-   rd[0x114 / 4] = s->rd_w4.va;
-   rd[0x13c / 4] = 0x07c00000;            /* [G] */
-   s->rd_sync.map[0] = 1;
-   s->hwsync.map[0] = s->hwsync_access.va; /* SGXMKIF_HWDEVICE_SYNC_LIST.sAccessDevAddr */
-   s->hwsync_access.map[0] = 1;
    return s;
-
-fail:
-   free(s);
-   return NULL;
 }
 
 void
 sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *s)
 {
-   /* SGX_FLUSH_HW_RENDER_TARGET is what the DDK sends here.  It times out on a
-    * srvinit-started microkernel and the GPU locks up after it (docs/GEN.md),
-    * so only on request. */
-   if (c->dev->flush_rt) {
-      int e = pvr_flush_rt(&c->dev->pvr, s->rtdata.va);
-
-      if (e)
-         ws_err("SGX_FLUSH_HW_RENDER_TARGET %#x failed: %d\n", s->rtdata.va, e);
-   }
    if (c->rt == s)
       sgxws_flush(c, 0);
    sgxws_wait_idle(c, 2000);
-   /* The kernel-data structures stay allocated: the microkernel may still
-    * hold pointers into them (docs/GEN.md, "Layout"). */
-   sgxws_bo_free(c->dev, &s->tailptr);
-   sgxws_bo_free(c->dev, &s->ta40);
-   sgxws_bo_free(c->dev, &s->ta50);
-   sgxws_bo_free(c->dev, &s->bgblock);
-   for (int i = 0; i < 2; i++) {
-      sgxws_bo_free(c->dev, &s->rgn[i]);
-      sgxws_bo_free(c->dev, &s->ta88[i]);
-   }
+   c->dev->kif->rt_fini(c, s);
    free(s);
 }
 
 /* ------------------------------------------------------------------ per-frame programs */
 
 /* The end-of-tile program (STATE.md section 4): LIMM r0-r3 = the four PBE words,
- * EMITPIX them, EMITPIX the sideband word (STATE.md section 4) */
+ * EMITPIX them, EMITPIX the sideband word (STATE.md section 4).  It is the
+ * target's, so it is made once per target and kept while its pool is in
+ * use: code is never rewritten under a render that may run it. */
 static uint32_t
 eot_program(struct sgxws_ctx *c)
 {
-   struct sgxws_ptr p = ring_alloc(&c->usse_frame, 7 * 8, USSE_ALIGN);
    const struct sgxws_rt *s = c->rt;
+   const struct sgxws_target *t = &c->target;
+   struct sgxws_ring *pool = &c->eot_pool[c->eot_cur];
    uint32_t pbe[4], side;
+   struct sgxws_ptr p;
 
+   for (unsigned i = 0; i < c->n_eot; i++) {
+      const struct sgxws_eot *e = &c->eot[i];
+
+      if (e->va == t->va && e->stride == t->stride && e->w == s->w && e->h == s->h &&
+          e->pbe_format == t->pbe_format && e->t1_layout == t->t1_layout) {
+         pool->last_seq = sgxws_next_seq(c);
+         return e->code;
+      }
+   }
+   if (c->n_eot == SGXWS_EOT_CACHE || ring_room(pool) < 7 * 8 + USSE_ALIGN) {
+      /* the other pool, emptied once the last render that ran code from it is done */
+      unsigned other = !c->eot_cur;
+
+      pool = &c->eot_pool[other];
+      if (sgxws_seq_after(pool->last_seq, c->done_seq) && sgxws_wait_seq(c, pool->last_seq, 2000))
+         ws_err("a render with the end-of-tile pool's code did not finish\n");
+      if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &pool->bo))
+         ws_err("end-of-tile pool reset failed\n");
+      memset(pool->bo.map, 0, pool->size);
+      pool->used = 0x100;
+      pool->uploaded = 0;
+      c->eot_cur = other;
+      c->n_eot = 0;
+   }
+
+   p = ring_alloc(pool, 7 * 8, USSE_ALIGN);
    pbe[0] = 0;                                             /* clip min y<<16 | x [D] */
    pbe[1] = (s->h - 1) << 16 | (s->w - 1);                 /* clip max [C] */
-   pbe[2] = ((c->target.stride - 1) >> 1) << 16 | 0x8000;  /* stride/2-1 [C]; b15 [D] */
-   pbe[3] = c->target.va & ~3u;                            /* address [D] */
+   pbe[2] = ((t->stride - 1) >> 1) << 16 | 0x8000;         /* stride/2-1 [C]; b15 [D] */
+   pbe[3] = t->va & ~3u;                                   /* address [D] */
    /* format, b9, dither, b13: twiddled */
-   side = 0x200 | c->target.pbe_format | 0x400 | (c->target.t1_layout == 0 ? 0x2000 : 0);
+   side = 0x200 | t->pbe_format | 0x400 | (t->t1_layout == 0 ? 0x2000 : 0);
    p.p[0] = 0;                                             /* phas.i #0, #0 [wait=7] */
    p.p[1] = 0xfa440700;
    for (uint32_t r = 0; r < 4; r++)
@@ -952,6 +800,11 @@ eot_program(struct sgxws_ctx *c)
    p.p[11] = 0xfb200100;
    p.p[12] = (side & 0x3f) << 22 | 0x00208180;             /* emit the sideband word, end */
    p.p[13] = 0xfb240000 | (side & 0x3000) << 10 | ((side >> 3) & 0x1f8);
+   c->eot[c->n_eot++] = (struct sgxws_eot){
+      .va = t->va, .stride = t->stride, .w = s->w, .h = s->h,
+      .pbe_format = t->pbe_format, .t1_layout = t->t1_layout, .code = p.va,
+   };
+   pool->last_seq = sgxws_next_seq(c);
    return p.va;
 }
 
@@ -968,50 +821,50 @@ pixel_event(struct sgxws_ctx *c, uint32_t eot, uint32_t *rows)
    pds_d1(&p, 0, 0);
    pds_d1(&p, 1, doutu_w0(c, eot, false, 4));
    pds_d0(&p, 2, doutu_w0(c, c->pe_emit, false, 4));
-   pds_d0(&p, 3, 0x00c00000);
+   pds_d0(&p, 3, sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b22 = true, .b23 = true }));
    pds_d1(&p, 2, 8);
    pds_d1(&p, 3, 2);
    pds_d0(&p, 4, 0x100);
    pds_d0(&p, 5, 0xff8);
    pds_d1(&p, 4, 4);
    pds_d1(&p, 5, 0);
-   pds_d0(&p, 6, 0x00800000);
+   pds_d0(&p, 6, sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b23 = true }));
    pds_d0(&p, 7, 0x003ff000);
    pds_d1(&p, 6, 0);
    pds_d1(&p, 7, 0);
-   pds_d0(&p, 8, 0x00400000);
+   pds_d0(&p, 8, sgx545_pds_doutu_w1(&(struct sgx545_pds_doutu){ .b22 = true }));
    pds_d0(&p, 9, 0);
    pds_d1(&p, 8, 0);
    pds_d1(&p, 9, 0);
-   /*  0 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(2), U_DS1(0x30)));
-   /*  1 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /*  2 */ CODE(&p, BRA_P0(5));
-   /*  3 */ CODE(&p, MOVS(MV, 0, 0, 0, 1, 0, 0, DOUTU));
-   /*  4 */ CODE(&p, HALT);
-   /*  5 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(3), U_DS1(0x30)));
-   /*  6 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /*  7 */ CODE(&p, BRA_P0(24));
-   /*  8 */ CODE(&p, ALU(OP_XOR, 1, S1_IN(1), S2_DS1(0), U_DS1(0x30)));
-   /*  9 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(4), S2_DS1(0x30), U_DS1(0x30)));
-   /* 10 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /* 11 */ CODE(&p, BRA_P0(27));
-   /* 12 */ CODE(&p, MOVS(MV, 0x21, 0, 0, 2, 0, 0, DOUTA));  /* (in2, ds1[0]) */
-   /* 13 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
-   /* 14 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)));
-   /* 15 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(6), S2_DS1(0x30), U_DS0(0x30)));
-   /* 16 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
-   /* 17 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(7), S2_DS1(0x30), U_DS1(0x30)));
-   /* 18 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
-   /* 19 */ CODE(&p, SHL(U_IN(1), 20, U_DS1(0x30)));
-   /* 20 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(8), S2_DS1(0x30), U_DS1(0x30)));
-   /* 21 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
-   /* 22 */ CODE(&p, MOVS(MV, 0x18, 0, 3, 0, 0, 0, DOUTU));  /* (ds1[1], ds0[0x30], ...) */
-   /* 23 */ CODE(&p, HALT);
-   /* 24 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(4), U_DS1(0x30)));
-   /* 25 */ CODE(&p, TST2(S2_DS1(0x30)));
-   /* 26 */ CODE(&p, BRA_P0(28));
-   /* 27 */ CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTU));
-   /* 28 */ CODE(&p, HALT);
+   /*  0 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, IN(1), DS1(2), DS1(0x30)));
+   /*  1 */ CODE(&p, pds_tst(DS1(0x30)));
+   /*  2 */ CODE(&p, pds_bra_p0(5));
+   /*  3 */ CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTU));
+   /*  4 */ CODE(&p, pds_halt());
+   /*  5 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, IN(1), DS1(3), DS1(0x30)));
+   /*  6 */ CODE(&p, pds_tst(DS1(0x30)));
+   /*  7 */ CODE(&p, pds_bra_p0(24));
+   /*  8 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OP0XD_S1, IN(1), DS1(0), DS1(0x30)));
+   /*  9 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(4), DS1(0x30), DS1(0x30)));
+   /* 10 */ CODE(&p, pds_tst(DS1(0x30)));
+   /* 11 */ CODE(&p, pds_bra_p0(27));
+   /* 12 */ CODE(&p, pds_movs(MV, 0x21, 0, 0, 2, 0, 0, DOUTA));  /* (in2, ds1[0]) */
+   /* 13 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
+   /* 14 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(5), DS1(0x30), DS1(0x30)));
+   /* 15 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OR, DS0(6), DS1(0x30), DS0(0x30)));
+   /* 16 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
+   /* 17 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(7), DS1(0x30), DS1(0x30)));
+   /* 18 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
+   /* 19 */ CODE(&p, pds_shl(IN(1), 20, DS1(0x30)));
+   /* 20 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, DS0(8), DS1(0x30), DS1(0x30)));
+   /* 21 */ CODE(&p, pds_alu(SGX545_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
+   /* 22 */ CODE(&p, pds_movs(MV, 0x18, 0, 3, 0, 0, 0, DOUTU));  /* (ds1[1], ds0[0x30], ...) */
+   /* 23 */ CODE(&p, pds_halt());
+   /* 24 */ CODE(&p, pds_alu(SGX545_PDS_OPC_AND, IN(1), DS1(4), DS1(0x30)));
+   /* 25 */ CODE(&p, pds_tst(DS1(0x30)));
+   /* 26 */ CODE(&p, pds_bra_p0(28));
+   /* 27 */ CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTU));
+   /* 28 */ CODE(&p, pds_halt());
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
@@ -1025,10 +878,11 @@ background(struct sgxws_ctx *c)
    uint32_t rows, va;
 
    pds_d0(&p, 0, doutu_w0(c, c->copy_fs, false, 0));
-   pds_d0(&p, 1, 0x02000004);       /* DOUTU w1: samples (b25), b2 */
+   pds_d0(&p, 1, doutu_w1_pixel(false, true));
    pds_d1(&p, 0, 0);
-   /* DOUTI: sample texcoord set 0 (b0-4 = set+1), pure sample (b13, b16), last sample (b30) */
-   pds_d1(&p, 1, 1u | 0x12000u | 1u << 30);
+   /* DOUTI: sample texture coordinate set 0, a pure sample (source 0x24), the last */
+   pds_d1(&p, 1, sgx545_pds_douti_w0(&(struct sgx545_pds_douti){
+                    .sample_set = 1, .src = 0x24, .last_sample = true }));
    pds_d0(&p, 2, 0);
    pds_d0(&p, 3, 0);
    /* DOUTT: T0 = 0x90 (clamp S/T b7/b4) and, strided, the pitch (pitch-1 split
@@ -1043,10 +897,10 @@ background(struct sgxws_ctx *c)
                  (s->w - 1) << 12 | (s->h - 1));
    pds_d0(&p, 4, c->target.va);
    pds_d0(&p, 5, 0x00800000);
-   CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 3, DOUTU));
-   CODE(&p, MOVS(MV, 1, 0, 3, 0, 1, 1, DOUTI));
-   CODE(&p, MOVS(MV, 2, 1, 2, 3, 0, 1, DOUTT));
-   CODE(&p, HALT);
+   CODE(&p, pds_movs(MV, 0, 0, 0, 1, 2, 3, DOUTU));
+   CODE(&p, pds_movs(MV, 1, 0, 3, 0, 1, 1, DOUTI));
+   CODE(&p, pds_movs(MV, 2, 1, 2, 3, 0, 1, DOUTT));
+   CODE(&p, pds_halt());
    va = pds_emit(&c->pds_pix, &p, &rows);
    c->bg_pds[0] = pds_word(c, c->pds_empty_p, 1);
    c->bg_pds[1] = 0x00030001;       /* [G] */
@@ -1082,6 +936,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt, const struct sgxws_target 
    c->target = *t;
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
+   c->n_use = 0;
    c->clip = (struct sgxws_rect){ 0, 0, rt->w, rt->h };
 
    /* the render details are the target's: written at the kick, once its
@@ -1116,14 +971,14 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_d
    pds_d0(&p, 3, 0);
    pds_d0(&p, 4, doutu_w0(c, c->state_emit[n], true, 0));
    pds_d0(&p, 5, 0);
-   CODE(&p, TST1(S1_DS0(0)));
-   CODE(&p, BRA_P0(6));
-   CODE(&p, MOVS(MV, 0, 0, 0, 1, 0, 0, DOUTD));
-   CODE(&p, TST1(S1_DS0(2)));
-   CODE(&p, BRA_P0(6));
-   CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTD));
-   CODE(&p, MOVS(MV, 2, 0, 0, 1, 2, 0, DOUTU));
-   CODE(&p, HALT);
+   CODE(&p, pds_tst(DS0(0)));
+   CODE(&p, pds_bra_p0(6));
+   CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTD));
+   CODE(&p, pds_tst(DS0(2)));
+   CODE(&p, pds_bra_p0(6));
+   CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTD));
+   CODE(&p, pds_movs(MV, 2, 0, 0, 1, 2, 0, DOUTU));
+   CODE(&p, pds_halt());
    va = pds_emit(&c->pds_vtx, &p, &rows);
    vdm(c, 0x40000000 | va >> 4);
    /* info (STATE.md section 2): rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
@@ -1155,7 +1010,7 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
 
    pds_d1(&p, 0, stride);
    pds_d1(&p, 1, 0);
-   CODE(&p, ALU(OP_MUL16, 0, S1_IN(0), S2_DS1(0), U_DS1(0x32)));  /* index * stride */
+   CODE(&p, pds_alu(SGX545_PDS_OPC_MUL16, IN(0), DS1(0), DS1(0x32)));  /* index * stride */
    /* The vertex in DMAs of at most 16 dwords, as the secondary DMAs (a
     * longer one lost what came after: a lit vertex of 5 attributes, 20
     * dwords, got garbage in its last one, Minecraft's first-person arm).
@@ -1164,13 +1019,13 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
       uint32_t n = attr_dwords - off < 16 ? attr_dwords - off : 16;
 
       pds_d0(&p, 2 * row, vb + off * 4);
-      pds_d0(&p, 2 * row + 1, (n - 1) | off << 8);   /* DOUTD: dwords-1, attribute register */
-      CODE(&p, MOVS(MV_X, row, 0x19, 0, 1, 2, 2, DOUTD));          /* + ds1[0x32] */
+      pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, 0, 0));
+      CODE(&p, pds_movs(MV_X, row, 0x19, 0, 1, 2, 2, DOUTD));          /* + ds1[0x32] */
    }
    pds_d0(&p, 2 * row, doutu_w0(c, vs, true, temps));
    pds_d0(&p, 2 * row + 1, 0);
-   CODE(&p, MOVS(MV_CC3, row, 0, 0, 1, 3, 3, DOUTU));
-   CODE(&p, HALT);
+   CODE(&p, pds_movs(MV_CC3, row, 0, 0, 1, 3, 3, DOUTU));
+   CODE(&p, pds_halt());
    va = pds_emit(&c->pds_vtx, &p, &rows);
    vdm(c, 0x80000000 | 0x00c00000 | prim << 26 | count);
    vdm(c, idx & ~1u);                /* 16-bit indices */
@@ -1455,19 +1310,16 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
                                 : units | 3u << 16 | ((fs->sec_dwords + 3) >> 2) << 18 |
                                   (per < 0xb ? per : 0xbu) << 25;
    }
-   /* DOUTU word 1: b24 = the program has plain iterations, b25 samples (PDS.md) */
+   /* DOUTU word 1: the program has plain iterations, samples (PDS.md) */
    {
-      uint32_t w1 = 4;
+      bool iter = false, smp = false;
 
-      /* from each DOUTI's own halves: b24 = plain iteration, a sample half */
       for (unsigned i = 0; i < fs->n_douti; i++) {
-         if (fs->douti[i] & (1u << 24))
-            w1 |= 0x01000000;
-         if (fs->douti_tex[i])
-            w1 |= 0x02000000;
+         iter |= fs->douti[i].iterate;
+         smp |= fs->douti_tex[i] != 0;
       }
-      prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), w1, fs->douti, fs->douti_tex, fs->douti_w1,
-                       fs->n_douti, d->tex, &rows);
+      prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps), doutu_w1_pixel(iter, smp), fs->douti,
+                       fs->douti_tex, fs->n_douti, d->tex, &rows);
    }
    blk[n++] = pds_word(c, prim, rows);
    /* viewport (6 floats): offset/scale for x, y, z, as gallium's transform [C x offset, D rest] */
@@ -1523,8 +1375,8 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 /* ------------------------------------------------------------------ submission */
 
 /* the end of the stream: an empty secondary update, the TA terminate, VDM terminate */
-static void
-vdm_end(struct sgxws_ctx *c)
+void
+sgxws_vdm_end(struct sgxws_ctx *c)
 {
    vdm(c, 0x40000000 | c->empty_state >> 4);
    vdm(c, 1u << 26 | 0xe100);
@@ -1533,76 +1385,23 @@ vdm_end(struct sgxws_ctx *c)
    vdm(c, 0xc0000000);
 }
 
-/*
- * SGXMKIF_CMDTA, client part (STATE.md section 1), for frame f of the render
- * target as the DDK's swaps do it (3- and 6-frame captures of probe-st with
- * PROBE_FRAMES): one kick, first and last in scene; TA flags 0x63, plus 0x10
- * on the target's first frame; the frame number at +0x20 and at b14 of the 3D
- * flags; the RT data entry (in the command and in render details +0xdc) and
- * the region headers alternate, frame 0 taking entry 1 and the second
- * region-header array.
- */
-static void
-ta_command(struct sgxws_ctx *c, uint32_t *cmd)
+void
+sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write)
 {
-   struct sgxws_rt *s = c->rt;
-   uint32_t f = s->frames, odd = f & 1, *t = cmd + 0x238 / 4, *rd = s->rd.map;
-   uint32_t rgn_this = s->rgn[odd ? 0 : 1].va, rgn_next = s->rgn[odd ? 1 : 0].va;
-   uint32_t entry = s->rtdata.va + 0x18 + 0x38 * (odd ? 0 : 1);
-
-   memset(cmd, 0, TA_CMD_SIZE);
-   cmd[0x00 / 4] = TA_CMD_SIZE;                     /* size, rounded to 64 */
-   cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10);           /* TA flags [D] */
-   cmd[0x08 / 4] = c->bg_pds[0];
-   cmd[0x0c / 4] = c->bg_pds[1];
-   cmd[0x10 / 4] = c->bg_pds[2];
-   cmd[0x14 / 4] = 0x50000000;
-   cmd[0x18 / 4] = 0x50000000;
-   cmd[0x1c / 4] = 0x400 | f << 14;                 /* 3D flags: render, frame [D] */
-   cmd[0x20 / 4] = f;                               /* the target's frame number [D] */
-   cmd[0x24 / 4] = c->pbdesc.va;
-   cmd[0x38 / 4] = s->rd.va;
-   cmd[0x3c / 4] = s->hwsync.va;
-   cmd[0x40 / 4] = s->rtdata.va;
-   cmd[0x44 / 4] = entry;
-   t[0x00 / 4] = 0x20000000;                        /* TE AA */
-   t[0x04 / 4] = s->n.mtile1;
-   t[0x08 / 4] = s->n.mtile2;
-   t[0x0c / 4] = s->n.te_screen;
-   t[0x10 / 4] = s->n.mt_tiles;
-   t[0x14 / 4] = 0x400000;                          /* TA flags 2: this kick renders */
-   t[0x18 / 4] = c->vdm_start;
-   t[0x1c / 4] = 0xa2;                              /* [G] */
-   t[0x20 / 4] = rgn_this;
-   t[0x24 / 4] = s->tailptr.va;
-   t[0x28 / 4] = f32(1e-6f);
-   t[0x2c / 4] = f32(1e-6f);
-   t[0x30 / 4] = (s->h - 1) << 16 | (s->w - 1);
-   t[0x3c / 4] = c->pb.va & 0xfff00000;
-   t[0x6c / 4] = 0x88;
-
-   rd[0x20 / 4] = rgn_this;                         /* region headers of this render */
-   rd[0x28 / 4] = rgn_next;                         /* and of the next */
-   /* The RT data entry this render retires.  It must follow cmd+0x44: left
-    * at entry 1 (as one frame needs), the microkernel retires the wrong entry
-    * on odd frames, their PB pages are never freed, and the 3D locks up on
-    * the fourth frame (EA3, 2026-10-28). */
-   rd[0xdc / 4] = entry;
-
-   /* What the DDK's client writes before every kick (a word-by-word diff of
-    * its 6-frame capture against ours): the frame counter in the RT data
-    * header's word, which picks the entry that renders (counter & 1), and the
-    * render-details and HW sync-list access words, which the microkernel
-    * clears.  Left alone, the counter stays at 1, odd frames retire the
-    * wrong entry, their PB pages are never freed, and the 3D locks up on the
-    * fourth frame (EA3, 2026-10-28). */
-   s->rtword.map[0] = f + 1;
-   s->rd_sync.map[0] = 1;
-   s->hwsync_access.map[0] = 1;
+   for (unsigned i = 0; i < c->n_use; i++) {
+      if (c->use[i].bo == bo) {
+         c->use[i].write |= write;
+         return;
+      }
+   }
+   if (c->n_use < ARRAY_SIZE(c->use))
+      c->use[c->n_use++] = (__typeof__(c->use[0])){ bo, write };
+   else
+      ws_err("a frame uses more than %u shared buffers\n", (unsigned)ARRAY_SIZE(c->use));
 }
 
-static uint64_t
-now_ns(void)
+uint64_t
+sgxws_now_ns(void)
 {
    struct timespec ts;
 
@@ -1610,62 +1409,41 @@ now_ns(void)
    return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
 }
 
-static bool
-token_done(const struct sgxws_token *t)
-{
-   return !t->sd || (int32_t)(t->sd->ui32WriteOpsComplete - t->value) >= 0;
-}
-
-/* poll a render's completion: 50 us steps doubling to 1 ms (a frame's wait
- * at 0.1 ms steps was thousands of wakeups, a quarter of the render
- * thread's CPU time in the kernel) */
-static int
-token_wait(struct sgxws_token *t, unsigned ms)
-{
-   uint64_t waited = 0, step = 50000, limit = (uint64_t)ms * 1000000;
-
-   while (!token_done(t) && waited < limit) {
-      struct timespec ts = { 0, (long)step };
-
-      nanosleep(&ts, NULL);
-      waited += step;
-      step = step * 2 < 1000000 ? step * 2 : 1000000;
-   }
-   if (!token_done(t))
-      return -ETIMEDOUT;
-   t->sd = NULL;
-   return 0;
-}
-
-/* wait for the render that last used ring slot i */
+/* wait for the kick that last used ring slot i */
 static int
 slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
 {
-   struct sgxws_token *t = &c->slot_token[i];
+   uint32_t seq = c->slot_kick[i].seq;
 
-   bool pending = t->sd != NULL;
-
-   if (token_wait(t, ms))
+   if (!sgxws_seq_after(seq, c->done_seq))
+      return 0;
+   if (c->dev->kif->wait_seq(c, seq, ms))
       return -ETIMEDOUT;
-   if (pending && t->kicked_ns) {
-      c->ns_latency += now_ns() - t->kicked_ns;
+   if (c->slot_kick[i].kicked_ns) {
+      uint64_t ns = sgxws_now_ns() - c->slot_kick[i].kicked_ns;
+
+      c->ns_latency += ns;
       c->n_latency++;
-      if (t->scanout) {
-         c->ns_latency_scanout += now_ns() - t->kicked_ns;
+      if (c->slot_kick[i].scanout) {
+         c->ns_latency_scanout += ns;
          c->n_latency_scanout++;
       }
    }
-   if ((int32_t)(t->seq - c->done_seq) > 0)
-      c->done_seq = t->seq;
+   /* renders finish in kick order */
+   c->done_seq = seq;
    return 0;
 }
 
 uint32_t
 sgxws_done_seq(struct sgxws_ctx *c)
 {
-   for (unsigned i = 0; i < SGXWS_SLOTS; i++)
-      if (token_done(&c->slot_token[i]))
-         slot_wait(c, i, 0);
+   /* oldest first: each one done moves done_seq on */
+   for (unsigned n = 1; n <= SGXWS_SLOTS; n++) {
+      unsigned i = (c->slot + n) % SGXWS_SLOTS;
+
+      if (slot_wait(c, i, 0))
+         break;
+   }
    return c->done_seq;
 }
 
@@ -1674,23 +1452,22 @@ static int sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_m
 int
 sgxws_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 {
-   uint64_t t0 = now_ns();
+   uint64_t t0 = sgxws_now_ns();
    int e = sgxws_wait_seq_(c, seq, timeout_ms);
 
-   c->ns_fence_wait += now_ns() - t0;
+   c->ns_fence_wait += sgxws_now_ns() - t0;
    return e;
 }
 
 static int
 sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 {
-   /* a kick no longer in its slot's token was waited for when the slot was
-    * used again; the others up to seq are waited for here */
-   for (unsigned i = 0; i < SGXWS_SLOTS; i++) {
-      struct sgxws_token *t = &c->slot_token[i];
+   /* the kicks still in the slots, up to seq; the older ones were waited
+    * for when their slot was used again */
+   for (unsigned n = 1; n <= SGXWS_SLOTS; n++) {
+      unsigned i = (c->slot + n) % SGXWS_SLOTS;
 
-      if (sgxws_seq_after(t->seq, c->done_seq) && !sgxws_seq_after(t->seq, seq) &&
-          slot_wait(c, i, timeout_ms))
+      if (!sgxws_seq_after(c->slot_kick[i].seq, seq) && slot_wait(c, i, timeout_ms))
          return -ETIMEDOUT;
    }
    return 0;
@@ -1699,20 +1476,28 @@ sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 int
 sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms)
 {
-   int e = 0;
-
-   for (unsigned i = 0; i < SGXWS_SLOTS; i++)
-      if (slot_wait(c, i, timeout_ms))
-         e = -ETIMEDOUT;
-   return e;
+   return sgxws_wait_seq_(c, c->kicks, timeout_ms);
 }
 
-int
-sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms)
+/* code written since the last kick, to the GPU */
+static int
+code_sync(struct sgxws_ctx *c)
 {
-   struct sgxws_token t = { sd, sd ? sd->ui32WriteOpsPending : 0 };
+   struct sgxws_ring *rs[] = { &c->usse_pix, &c->usse_vtx, &c->eot_pool[0], &c->eot_pool[1] };
+   int e;
 
-   return token_wait(&t, timeout_ms);
+   if (!c->dev->kif->code_upload)
+      return 0;
+   for (unsigned i = 0; i < ARRAY_SIZE(rs); i++) {
+      uint32_t end = (rs[i]->used + 7) & ~7u;
+
+      if (end <= rs[i]->uploaded)
+         continue;
+      if ((e = c->dev->kif->code_upload(c->dev, &rs[i]->bo, rs[i]->uploaded, end - rs[i]->uploaded)))
+         return e;
+      rs[i]->uploaded = end;
+   }
+   return 0;
 }
 
 /*
@@ -1721,9 +1506,9 @@ sgxws_wait_sync(volatile PVRSRV_SYNC_DATA *sd, unsigned timeout_ms)
  * the GPU's last.  What the CPU must not touch while a render runs:
  *  - the ring slot it was recorded in, until it is done (the slot is used
  *    again SGXWS_SLOTS submissions later);
- *  - its render target's structures (render details, region headers, sync
- *    lists): the next frame into the same target is kicked once the one
- *    before is done, so a target has one render in flight.
+ *  - under services, its render target's structures (render details, region
+ *    headers, sync lists): the next frame into the same target is kicked
+ *    once the one before is done, so a target has one render in flight.
  * Different targets (the back buffer, then the swap's copy to fb0) are in
  * flight together; the microkernel runs them in order.
  */
@@ -1732,101 +1517,61 @@ static int sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms);
 int
 sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
 {
-   uint64_t t0 = now_ns();
+   uint64_t t0 = sgxws_now_ns();
    int e = sgxws_flush_(c, timeout_ms);
 
-   c->ns_flush += now_ns() - t0;
+   c->ns_flush += sgxws_now_ns() - t0;
    return e;
 }
 
 static int
 sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
 {
+   const struct sgxws_kif *kif = c->dev->kif;
    struct sgxws_rt *s = c->rt;
-   struct sgxws_token done = { NULL, 0 };
-   SGX_CCB_KICK k;
-   IMG_HANDLE dst[1];
-   uint32_t woff = c->ccb_woff, *rd;
+   uint32_t seq = c->kicks + 1;
    int e;
 
    if (!s)
       return 0;
 
-   vdm_end(c);
-   /* the target's previous render reads its render details until it is
-    * done; its slot's token is that render's until the slot is used again,
-    * which waits for it */
-   {
-      uint64_t t0 = now_ns();
+   sgxws_vdm_end(c);
+   if (kif->rt_one_in_flight) {
+      uint64_t t0 = sgxws_now_ns();
 
-      if ((int32_t)(s->seq - c->done_seq) > 0 && c->slot_token[s->seq_slot].seq == s->seq &&
+      if (sgxws_seq_after(s->seq, c->done_seq) && c->slot_kick[s->seq_slot].seq == s->seq &&
           slot_wait(c, s->seq_slot, 2000))
          ws_err("the target's last render did not finish\n");
-      c->ns_target_wait += now_ns() - t0;
+      c->ns_target_wait += sgxws_now_ns() - t0;
    }
-   rd = s->rd.map;
-   rd[0x5c / 4] = c->pixev;
-   rd[0x60 / 4] = c->pixev_rows;
-   s->rd_w4.map[0] = c->bg_pds[2];
-   {
-      uint64_t t0 = now_ns();
-
-      ta_command(c, c->ccb.map + woff / 4);
-      c->ns_cmd += now_ns() - t0;
-   }
-
-   memset(&k, 0, sizeof(k));
-   dst[0] = c->target.bo->impl->b.sync;
-   k.hDevMemContext = c->dev->pvr.memctx;
-   k.hCCBKernelMemInfo = c->ccb.impl->b.mem;
-   k.ui32CCBOffset = woff + 0x58;
-   k.sCommand.ui32Data[1] = c->hwctx_va;
-   k.hKernelHWSyncListMemInfo = s->hwsync.impl->b.mem;
-   k.ui32NumDstSyncObjects = 1;
-   k.pahDstSyncHandles = dst;
-   k.bFirstKickOrResume = IMG_TRUE;
-   k.bLastInScene = IMG_TRUE;
-   k.h3DSyncInfo = c->sync3d.impl->b.sync;
-   c->ccb_woff = (woff + TA_CMD_SIZE) & (CCB_RING - 1);
-   c->ccbctl.map[0] = c->ccb_woff;                  /* CCB write offset */
-   __sync_synchronize();
-   if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
-      e = pvr_kick_traced(&c->dev->pvr, &k, 0);     /* traced, not sent */
-   } else {
-      uint64_t t0 = now_ns();
-
-      e = pvr_kick(&c->dev->pvr, &k);
-      c->ns_kick += now_ns() - t0;
-      if (e) {
-         ws_err("SGX_DOKICK failed: %d\n", e);
-      } else if (c->target.bo->impl->sd) {
-         /* the kick counted one more pending write on the target */
-         done.sd = c->target.bo->impl->sd;
-         done.value = done.sd->ui32WriteOpsPending;
-      }
-   }
-   done.seq = ++c->kicks;
-   done.kicked_ns = now_ns();
-   done.scanout = c->target.scanout;
-   if (!done.sd && (int32_t)(done.seq - c->done_seq) > 0)
-      c->done_seq = done.seq;             /* nothing to wait for */
-   s->seq = done.seq;
+   if ((e = code_sync(c)))
+      ws_err("shader upload refused: %d\n", e);
+   else
+      e = kif->kick(c, seq);
+   c->kicks = seq;
+   c->slot_kick[c->slot].seq = seq;
+   c->slot_kick[c->slot].kicked_ns = sgxws_now_ns();
+   c->slot_kick[c->slot].scanout = c->target.scanout;
+   s->seq = seq;
    s->seq_slot = c->slot;
-   c->slot_token[c->slot] = done;
    if (!e && timeout_ms) {
-      uint64_t t0 = now_ns();
+      uint64_t t0 = sgxws_now_ns();
 
       e = slot_wait(c, s->seq_slot, timeout_ms);
-      c->ns_sync_wait += now_ns() - t0;
+      c->ns_sync_wait += sgxws_now_ns() - t0;
    }
    if (!e && c->dev->frame_gap_us) {
       struct timespec ts = { 0, (long)c->dev->frame_gap_us * 1000 };
 
       nanosleep(&ts, NULL);
    }
-   if (c->dev->verbose || e)
-      ws_err("frame %u (target %u): %u objects, PB pages in use %#x, RT frames %u, rc %d\n",
-             c->frames, s->frames, c->draws, c->pbdesc.map[5], s->rtdata.map[1], e);
+   if (c->dev->verbose || e) {
+      char info[96] = "";
+
+      if (kif->frame_info)
+         kif->frame_info(c, info, sizeof(info));
+      ws_err("frame %u (target %u): %u objects, %s, rc %d\n", c->frames, s->frames, c->draws, info, e);
+   }
 
    s->frames++;
    c->frames++;
@@ -1834,17 +1579,16 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    /* the next frame records into the next slot, once the render there is done */
    c->slot = (c->slot + 1) % SGXWS_SLOTS;
    {
-      uint64_t t0 = now_ns();
+      uint64_t t0 = sgxws_now_ns();
 
       if (slot_wait(c, c->slot, 2000) && !e)
          e = -ETIMEDOUT;
-      c->ns_slot_wait += now_ns() - t0;
+      c->ns_slot_wait += sgxws_now_ns() - t0;
    }
    ring_use_slot(&c->pds_pix, c->slot);
    ring_use_slot(&c->pds_vtx, c->slot);
    ring_use_slot(&c->gen, c->slot);
    ring_use_slot(&c->vdm, c->slot);
-   ring_use_slot(&c->usse_frame, c->slot);
    return e;
 }
 
@@ -2124,14 +1868,14 @@ static uint32_t
 clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
 {
    if (!c->clear_pds_masked[wmask]) {
-      uint32_t w[4], douti = 0x20u << 11 | 3u << 22 | 1u << 24 | 1u << 29, fs;
+      uint32_t w[4], fs;
 
       w[0] = 0;
       w[1] = PHAS_HI | 0x700;                            /* phas.i #0, #0 [wait=7] */
       wmask_words(wmask, 0, w + 2);
       fs = sgxws_usse_upload(c, false, w, 2, NULL, 0);
-      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), 0x01000004, &douti, NULL, NULL, 1,
-                                             NULL, NULL);
+      c->clear_pds_masked[wmask] = pds_pixel(c, doutu_w0(c, fs, false, 0), doutu_w1_pixel(true, false),
+                                             &clear_douti, NULL, 1, NULL, NULL);
    }
    return c->clear_pds_masked[wmask];
 }

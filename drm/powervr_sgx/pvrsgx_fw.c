@@ -7,13 +7,15 @@
  * buffer, constant, PDS program and script value here, and docs/UKERNEL.md for
  * how the microkernel uses them.
  *
- * This is the DDK 1.7.862890 microkernel's interface (SGXMKIF, decision D8).
- * Its entry points, patch sites and struct sizes belong to that build; the
- * open microkernel (ukernel/) will bring its own.
+ * The host interface is SGXMKIF as of DDK 1.7 (decision D8). Two images speak
+ * it: the DDK 1.7.862890 build, whose entry points and patch sites are fixed
+ * here, and the open microkernel (ukernel/), whose file header lists its own
+ * (docs/UKERNEL.md 4a).
  */
 
 #include <drm/drm_print.h>
 
+#include <linux/crc32.h>
 #include <linux/delay.h>
 #include <linux/firmware.h>
 #include <linux/interrupt.h>
@@ -35,19 +37,24 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_vm.h"
 
-static char *firmware = "powervr_sgx/sgx545-ukernel-1.7.862890.bin";
+#define FW_OPEN		"powervr_sgx/sgx545-openhc-ukernel.bin"
+#define FW_DDK		"powervr_sgx/sgx545-ukernel-1.7.862890.bin"
+
+static char *firmware;
 module_param(firmware, charp, 0444);
-MODULE_PARM_DESC(firmware, "Microkernel image under /lib/firmware");
-MODULE_FIRMWARE("powervr_sgx/sgx545-ukernel-1.7.862890.bin");
+MODULE_PARM_DESC(firmware,
+		 "Microkernel image under /lib/firmware (default: " FW_OPEN ", then " FW_DDK ")");
+MODULE_FIRMWARE(FW_OPEN);
+MODULE_FIRMWARE(FW_DDK);
 
 static unsigned int core_clock = 400000000;
 module_param(core_clock, uint, 0444);
 MODULE_PARM_DESC(core_clock, "SGX core clock in Hz; sets the microkernel timer (default 400 MHz)");
 
-/* Off: on the DDK microkernel RT and PB cleanups never complete and stall the CCB. */
-static bool cleanup;
-module_param(cleanup, bool, 0644);
-MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (debug; default off)");
+/* -1: only with cleanup v2; on the DDK microkernel RT and PB cleanups never complete. */
+static int cleanup = -1;
+module_param(cleanup, int, 0644);
+MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (-1: when it speaks cleanup v2, 0 never, 1 always)");
 
 static bool restart_quiesce = true;
 module_param(restart_quiesce, bool, 0644);
@@ -55,6 +62,42 @@ MODULE_PARM_DESC(restart_quiesce, "Before a restart, run the deinit script, hold
 
 /* The DDK microkernel: libsrv_init's .rodata 0x2000..0xef68. */
 #define UKERNEL_SIZE		0xcf68
+
+/* The open microkernel's file (docs/UKERNEL.md 4a). */
+#define UKFW_MAGIC0		0x35584753	/* "SGX5" */
+#define UKFW_MAGIC1		0x4e524b55	/* "UKRN" */
+#define UKFW_HEADER_MIN		0x60
+#define UKFW_IF_MAJOR		1
+#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE)
+#define UKFW_MAX_IMAGE		(CODE_ARENA_SIZE - PDS_BYTES - 0x10)
+
+struct ukfw_header {
+	__le32 magic[2];
+	__le32 header_size;
+	__le32 interface;
+	__le32 features;
+	__le32 image_size;
+	__le32 image_crc32;
+	__le32 n_entries;
+	__le32 entries_off;
+	__le32 n_patches;
+	__le32 patches_off;
+	__le32 core_rev;
+	__le32 reserved[4];
+	char build_id[32];
+};
+
+struct ukfw_pair {
+	__le32 a, b;
+};
+
+enum ukfw_patch_value {
+	UKFW_TA3DCTL = 1,
+	UKFW_HOSTCTL,
+	UKFW_CCBCTL,
+	UKFW_CCB,
+	UKFW_MISC,
+};
 
 /* Microkernel timer at 1 kHz, its lockup check at 100 Hz. */
 #define UKERNEL_TIMER_HZ	1000
@@ -106,13 +149,16 @@ static const struct {
 	[PVRSGX_FW_HWPERF] = { false, 0x4000, 0x640c },
 	[PVRSGX_FW_TASIG] = { false, 0xa420, 0x620 },
 	[PVRSGX_FW_3DSIG] = { false, 0xb000, 0x2088 },
-	[PVRSGX_FW_UKERNEL] = { true, 0x0000, UKERNEL_SIZE },
-	[PVRSGX_FW_PDS0] = { true, 0xcf70, 0x18 },
-	[PVRSGX_FW_PDS1] = { true, 0xcf90, 0x38 },
-	[PVRSGX_FW_PDS2] = { true, 0xcfd0, 0x18 },
-	[PVRSGX_FW_PDS3] = { true, 0xd000, 0x100 },
-	[PVRSGX_FW_PDS4] = { true, 0xd100, 0x68 },
+	/* The image at 0, then the PDS programs from its end (0xcf70 for the DDK's). */
+	[PVRSGX_FW_UKERNEL] = { true, 0x0000, 0 },
+	[PVRSGX_FW_PDS0] = { true, 0x000, 0x18 },
+	[PVRSGX_FW_PDS1] = { true, 0x020, 0x38 },
+	[PVRSGX_FW_PDS2] = { true, 0x060, 0x18 },
+	[PVRSGX_FW_PDS3] = { true, 0x090, 0x100 },
+	[PVRSGX_FW_PDS4] = { true, 0x190, 0x68 },
 };
+
+#define PDS_BYTES	0x200
 
 #define DATA_ARENA_SIZE	0xe000
 #define CODE_ARENA_SIZE	0xe000
@@ -132,7 +178,8 @@ static u32 *fw_words(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 }
 
 /* The TA3D control block as the microkernel left it (in-flight slot, PB state). */
-void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b, const char *name)
+void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
+		    const char *name)
 {
 	const u32 *w = fw_words(sdev, b);
 
@@ -160,16 +207,18 @@ static u32 doutu(u32 a)
 }
 
 /*
- * Fill one of the microkernel's limm placeholders (word 0 0x?dbeef, word 1
- * 0xfc237150): bits 0-20 to word 0, 21-25 to word 1 bits 4-8, 26-31 to word 1
- * bits 12-17.
+ * Fill one of the microkernel's limm placeholders (word 0 0x?dbeef, the value
+ * bits of word 1 clear; 0xfc237150 in the DDK's): bits 0-20 to word 0, 21-25 to
+ * word 1 bits 4-8, 26-31 to word 1 bits 12-17.
  */
 static int limm(struct pvrsgx_device *sdev, u32 off, u32 v)
 {
 	u32 *i = (u32 *)((u8 *)sdev->fw.cpu[PVRSGX_FW_UKERNEL] + off);
+	bool ok = (i[0] & 0x1fffff) == 0xdbeef &&
+		  (sdev->fw.ddk ? i[1] == 0xfc237150 : !(i[1] & 0x0003f1f0));
 
-	if ((i[0] & 0x1fffff) != 0xdbeef || i[1] != 0xfc237150) {
-		drm_err(&sdev->base, "%s: no limm placeholder at +0x%x\n", firmware, off);
+	if (off > sdev->fw.image_size - 8 || !ok) {
+		drm_err(&sdev->base, "%s: no patch placeholder at +0x%x\n", sdev->fw.name, off);
 		return -EINVAL;
 	}
 	i[0] = (i[0] & 0xffe00000) | (v & 0x1fffff);
@@ -407,6 +456,43 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 	t[0x2d] = f->addr[PVRSGX_FW_3DSIG];
 }
 
+/*
+ * The open microkernel's entry programs and patches, from its file header.
+ * A PDS program it doesn't list enters where program 0 does: its event entry
+ * dispatches every event itself.
+ */
+static int fw_build_open(struct pvrsgx_device *sdev)
+{
+	static const enum pvrsgx_fw_buf value_buf[] = {
+		[UKFW_TA3DCTL] = PVRSGX_FW_TA3DCTL,
+		[UKFW_HOSTCTL] = PVRSGX_FW_HOSTCTL,
+		[UKFW_CCBCTL] = PVRSGX_FW_CCBCTL,
+		[UKFW_CCB] = PVRSGX_FW_CCB,
+		[UKFW_MISC] = PVRSGX_FW_MISC,
+	};
+	struct pvrsgx_fw *f = &sdev->fw;
+	u32 entry[5];
+	int err = 0;
+
+	/* The header check guarantees program 0 is listed. */
+	for (u32 i = 0; i < f->n_entries; i++)
+		if (!f->entries[i][0])
+			memset32(entry, f->entries[i][1], ARRAY_SIZE(entry));
+	for (u32 i = 0; i < f->n_entries; i++)
+		entry[f->entries[i][0]] = f->entries[i][1];
+	for (u32 p = 0; p < ARRAY_SIZE(entry); p++)
+		pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
+
+	for (u32 i = 0; i < f->n_patches && !err; i++)
+		err = limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
+	if (err)
+		return err;
+
+	for (u32 t = 0; t < PVRSGX_CMD_MAX; t++)
+		f->host_kick[t] = t;
+	return 0;
+}
+
 /* Upload and patch the microkernel, assemble its entry programs, fill the signature lists. */
 static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 {
@@ -414,7 +500,7 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 	u32 *t;
 	int err;
 
-	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, UKERNEL_SIZE);
+	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, f->image_size);
 
 	t = fw_words(sdev, PVRSGX_FW_TASIG);
 	t[0] = ARRAY_SIZE(ta_sig);
@@ -422,6 +508,9 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 	t = fw_words(sdev, PVRSGX_FW_3DSIG);
 	t[0] = ARRAY_SIZE(sig_3d);
 	memcpy(t + 2, sig_3d, sizeof(sig_3d));
+
+	if (!f->ddk)
+		return fw_build_open(sdev);
 
 	pds_entry(sdev, PVRSGX_FW_PDS0, 0xd60);	/* the event program */
 	pds_ta3d(sdev);
@@ -442,9 +531,35 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 		return err;
 
 	memcpy(f->host_kick, host_kick, sizeof(host_kick));
-	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
-	f->ddk = true;		/* the only image with these patch sites */
 	return 0;
+}
+
+/* One cleanup command and its outcome (UKERNEL.md 3, cleanup v2). */
+static int cleanup_v2(struct pvrsgx_device *sdev, u32 type, u32 addr)
+{
+	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
+	ktime_t give_up = ktime_add_ms(ktime_get(), 1000);
+	u32 data[6] = { type, addr };
+	u32 v;
+	int err;
+
+	do {
+		data[2] = ++sdev->cleanup_seq ?: ++sdev->cleanup_seq;
+		WRITE_ONCE(hc[HOSTCTL_CLEANUP_STATUS], 0);
+		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_CLEANUP, data, NULL);
+		if (err)
+			return err;
+		err = read_poll_timeout(READ_ONCE, v,
+					(v & HOSTCTL_CLEANUP_COMPLETE) &&
+					READ_ONCE(hc[HOSTCTL_CLEANUP_SEQ]) == data[2],
+					1000, 5 * USEC_PER_SEC, false, hc[HOSTCTL_CLEANUP_STATUS]);
+		if (err)
+			return err;
+		if (v & HOSTCTL_CLEANUP_DONE)
+			return 0;
+		fsleep(1000);
+	} while (ktime_before(ktime_get(), give_up));
+	return -EBUSY;
 }
 
 /*
@@ -454,12 +569,13 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
  */
 int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
 {
+	bool v2 = sdev->fw.features & PVRSGX_UKFW_CLEANUP_V2;
 	u32 data[6] = { type, addr };
 	u32 *status;
 	u32 v;
 	int err, pm;
 
-	if (!cleanup || !addr)
+	if (!(cleanup < 0 ? v2 : cleanup) || !addr)
 		return 0;
 	/* A suspended microkernel holds nothing; the next start is a fresh one. */
 	pm = pm_runtime_get_if_active(&sdev->pdev->dev);
@@ -470,15 +586,21 @@ int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
 		err = 0;
 		goto out;
 	}
+	if (v2) {
+		err = cleanup_v2(sdev, type, addr);
+		goto done;
+	}
 	status = &fw_words(sdev, PVRSGX_FW_HOSTCTL)[HOSTCTL_CLEANUP_STATUS];
 	err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_CLEANUP, data, NULL);
 	if (err)
 		goto out;
 	err = read_poll_timeout(READ_ONCE, v, v & HOSTCTL_CLEANUP_COMPLETE, 1000, 5 * USEC_PER_SEC,
 				false, *status);
-	if (err)
-		drm_err(&sdev->base, "cleanup %u of 0x%08x did not complete\n", type, addr);
 	WRITE_ONCE(*status, *status & ~HOSTCTL_CLEANUP_COMPLETE);
+done:
+	if (err)
+		drm_err(&sdev->base, "cleanup %u of 0x%08x did not complete (%d)\n",
+			type, addr, err);
 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
 out:
 	mutex_unlock(&sdev->cleanup_lock);
@@ -487,49 +609,185 @@ out:
 	return err;
 }
 
+/* Copy n pairs at off of the file, or NULL if they run past its end. */
+static u32 (*ukfw_table(const u8 *data, size_t size, u32 off, u32 n))[2]
+{
+	const struct ukfw_pair *src = (const void *)(data + off);
+	u32 (*t)[2];
+
+	if (!n || n > 64 || off > size || n * sizeof(*src) > size - off || !IS_ALIGNED(off, 4))
+		return NULL;
+	t = kmalloc_array(n, sizeof(*t), GFP_KERNEL);
+	if (!t)
+		return NULL;
+	for (u32 i = 0; i < n; i++) {
+		t[i][0] = le32_to_cpu(src[i].a);
+		t[i][1] = le32_to_cpu(src[i].b);
+	}
+	return t;
+}
+
+/*
+ * The open microkernel's file: check the header (docs/UKERNEL.md 4a) and take
+ * its image and tables into f. -ENOENT if data is not one; on -EINVAL, *why
+ * says what is wrong. f's tables and image are the caller's to free either way.
+ */
+static int ukfw_parse(const u8 *data, size_t size, struct pvrsgx_fw *f, const char **why)
+{
+	const struct ukfw_header *h = (const void *)data;
+	u32 hsize, isize, iface;
+	bool entry0 = false;
+
+	if (size < UKFW_HEADER_MIN || le32_to_cpu(h->magic[0]) != UKFW_MAGIC0 ||
+	    le32_to_cpu(h->magic[1]) != UKFW_MAGIC1)
+		return -ENOENT;
+	hsize = le32_to_cpu(h->header_size);
+	isize = le32_to_cpu(h->image_size);
+	iface = le32_to_cpu(h->interface);
+	f->features = le32_to_cpu(h->features);
+	*why = "bad sizes";
+	if (hsize < UKFW_HEADER_MIN || !IS_ALIGNED(hsize, 8) || hsize > size ||
+	    !isize || !IS_ALIGNED(isize, 8) || isize > size - hsize || isize > UKFW_MAX_IMAGE)
+		return -EINVAL;
+	*why = "interface or features not supported";
+	if (iface >> 16 != UKFW_IF_MAJOR || (f->features & ~UKFW_FEATURES))
+		return -EINVAL;
+	*why = "image CRC mismatch";
+	if (crc32_le(~0, data + hsize, isize) != ~le32_to_cpu(h->image_crc32))
+		return -EINVAL;
+
+	*why = "bad entry or patch table";
+	f->n_entries = le32_to_cpu(h->n_entries);
+	f->n_patches = le32_to_cpu(h->n_patches);
+	f->entries = ukfw_table(data, size, le32_to_cpu(h->entries_off), f->n_entries);
+	if (f->n_patches)
+		f->patches = ukfw_table(data, size, le32_to_cpu(h->patches_off), f->n_patches);
+	if (!f->entries || (f->n_patches && !f->patches))
+		return -EINVAL;
+	for (u32 i = 0; i < f->n_entries; i++) {
+		if (f->entries[i][0] > 4 || f->entries[i][1] >= isize ||
+		    !IS_ALIGNED(f->entries[i][1], 8))
+			return -EINVAL;
+		entry0 |= !f->entries[i][0];
+	}
+	for (u32 i = 0; i < f->n_patches; i++) {
+		if (f->patches[i][0] > isize - 8 || !IS_ALIGNED(f->patches[i][0], 8) ||
+		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_MISC)
+			return -EINVAL;
+	}
+	if (!entry0)
+		return -EINVAL;
+
+	f->image_size = isize;
+	f->image = kmemdup(data + hsize, isize, GFP_KERNEL);
+	return f->image ? 0 : -ENOMEM;
+}
+
+static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+{
+	const struct ukfw_header *h = (const void *)fw->data;
+	struct pvrsgx_fw *f = &sdev->fw;
+	const char *why = "";
+	u32 iface;
+	int err;
+
+	err = ukfw_parse(fw->data, fw->size, f, &why);
+	if (err == -EINVAL)
+		drm_err(&sdev->base, "%s: %s\n", f->name, why);
+	if (err)
+		return err;
+	iface = le32_to_cpu(h->interface);
+	if (h->core_rev && le32_to_cpu(h->core_rev) != sdev->core_rev)
+		drm_warn(&sdev->base, "%s: validated on core revision 0x%x, this is 0x%x\n",
+			 f->name, le32_to_cpu(h->core_rev), sdev->core_rev);
+	drm_info(&sdev->base, "%s: open microkernel %.32s, interface %u.%u, features 0x%x\n",
+		 f->name, h->build_id, iface >> 16, iface & 0xffff, f->features);
+	return 0;
+}
+
+static int ddk_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+{
+	struct pvrsgx_fw *f = &sdev->fw;
+
+	if (fw->size != UKERNEL_SIZE) {
+		drm_err(&sdev->base, "%s: %zu bytes, expected %u\n", f->name, fw->size,
+			UKERNEL_SIZE);
+		return -EINVAL;
+	}
+	f->image_size = UKERNEL_SIZE;
+	f->image = kmemdup(fw->data, UKERNEL_SIZE, GFP_KERNEL);
+	if (!f->image)
+		return -ENOMEM;
+	f->ddk = true;		/* the only other image this driver knows */
+	return 0;
+}
+
+static int fw_request(struct pvrsgx_device *sdev, const struct firmware **fw)
+{
+	static const char *const names[] = { FW_OPEN, FW_DDK };
+	int err = -ENOENT;
+
+	if (firmware) {
+		sdev->fw.name = firmware;
+		return request_firmware(fw, firmware, sdev->base.dev);
+	}
+	for (u32 i = 0; i < ARRAY_SIZE(names) && err; i++) {
+		sdev->fw.name = names[i];
+		err = firmware_request_nowarn(fw, names[i], sdev->base.dev);
+	}
+	return err;
+}
+
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
 	const struct firmware *fw;
+	u32 pds_base;
 	int err;
 
-	err = request_firmware(&fw, firmware, sdev->base.dev);
+	err = fw_request(sdev, &fw);
 	if (err) {
-		drm_err(&sdev->base, "no microkernel: %s (%d)\n", firmware, err);
+		drm_err(&sdev->base, "no microkernel: %s (%d)\n", firmware ?: FW_OPEN " or " FW_DDK,
+			err);
 		return err;
 	}
-	if (fw->size != UKERNEL_SIZE) {
-		drm_err(&sdev->base, "%s: %zu bytes, expected %u\n", firmware, fw->size, UKERNEL_SIZE);
-		err = -EINVAL;
-		goto out;
-	}
+	err = ukfw_load(sdev, fw);
+	if (err == -ENOENT)
+		err = ddk_load(sdev, fw);
+	release_firmware(fw);
+	if (err)
+		return err;
+	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 
 	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
 				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
 	if (err)
-		goto out;
+		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE,
 				SGX_MMU_PTE_READONLY);
 	if (err)
-		goto out;
+		return err;
 
+	pds_base = ALIGN(f->image_size, 0x10);
 	for (int b = 0; b < PVRSGX_FW_NBUF; b++) {
 		struct pvrsgx_kmem *km = layout[b].code ? &f->code : &f->data;
+		u32 off = layout[b].offset;
 
-		f->addr[b] = km->dev_addr + layout[b].offset;
-		f->cpu[b] = (u8 *)km->cpu + layout[b].offset;
+		if (b >= PVRSGX_FW_PDS0 && b <= PVRSGX_FW_PDS4)
+			off += pds_base;
+		f->addr[b] = km->dev_addr + off;
+		f->cpu[b] = (u8 *)km->cpu + off;
 	}
-
-	f->image = kmemdup(fw->data, UKERNEL_SIZE, GFP_KERNEL);
-	err = f->image ? fw_build(sdev, f->image) : -ENOMEM;
-out:
-	release_firmware(fw);
-	return err;
+	return fw_build(sdev, f->image);
 }
 
 void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 {
+	kfree(sdev->fw.entries);
+	kfree(sdev->fw.patches);
+	sdev->fw.entries = NULL;
+	sdev->fw.patches = NULL;
 	kfree(sdev->fw.image);
 	sdev->fw.image = NULL;
 	pvrsgx_kmem_free(sdev, &sdev->fw.code);
@@ -653,10 +911,11 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		if (restart_quiesce && was_powered) {
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
-			wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+			wr(sdev, SGX_CR_SOFT_RESET,
+			   SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
 			sgx_rd(sdev, SGX_CR_SOFT_RESET);
 			pci_clear_master(sdev->pdev);
-			msleep(10);
+			fsleep(10000);
 			pci_set_master(sdev->pdev);
 		}
 		memset(sdev->fw.data.cpu, 0, sdev->fw.data.size);
@@ -690,6 +949,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 
 	hc[HOSTCTL_HOST_CLOCK] = (u32)ktime_to_us(ktime_get());
 	hc[HOSTCTL_INIT_STATUS] = 0;
+	/* The image and the host control block are in memory before the kick. */
 	wmb();
 	wr(sdev, SGX_CR_EVENT_KICK2, SGX_CR_EVENT_KICK_NOW);
 
@@ -708,7 +968,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	}
 	if (first && pvrsgx_vm_shares_kernel_heaps(sdev))
 		drm_warn(&sdev->base,
-			 "every VM maps the firmware's heaps (DDK microkernel): clients are not isolated from the firmware (docs/UAPI.md 7.2, P2/P3)\n");
+			 "every VM maps the firmware's heaps: clients are not isolated from the firmware\n");
 
 	err = fw_check(sdev);
 	if (err)
@@ -743,3 +1003,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_fw_test.c"
+#endif

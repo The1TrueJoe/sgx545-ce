@@ -58,10 +58,10 @@ emit/DMA must not touch `sa`; openHC instead carries the control-block base in
 a reserved temp from the loader-patched `limm` (`srvinit`'s `-o`) and derives
 the host-control / CCB pointers from it.
 
-The host raises its own events through `EUR_CR_EVENT_KICK2` (the
-multi-event-kick path this core uses): writing it makes the EDM run the event
-program, which is how `SGXInitialise` and every `SGXScheduleCCBCommand` reach
-the microkernel.
+The host raises its own events through the kick registers: writing one makes
+the EDM run the event program. `SGXInitialise` writes `EUR_CR_EVENT_KICK2`
+(0xae8; SGX545 has `SGX_FEATURE_MULTI_EVENT_KICK`), and every
+`SGXScheduleCCBCommand` writes `EUR_CR_EVENT_KICK` (0xac8), section 3.
 
 ### The five entry PDS programs
 
@@ -110,6 +110,39 @@ polls: `ui32InitStatus`, `ui32PowerStatus`, `ui32CleanupStatus`,
 `ui32InterruptFlags`/`ClearFlags`, lockup counters and the assert word
 (`sgx_mkif_km.h`). The microkernel writes these; the host reads them in
 `PollForValueKM` loops.
+
+Its words, for this build's configuration (`SUPPORT_HW_RECOVERY` on; no
+EDM breakpoints, no `FIX_HW_BRN_28889`, no extended perf counters):
+
+| word | field | who writes it |
+|---|---|---|
+| 0 | `ui32InitStatus`: INIT_COMPLETE = b0 | microkernel |
+| 1 | `ui32PowerStatus`: IDLE_COMPLETE b2, POWEROFF_COMPLETE b3, POWEROFF_RESTART_IMMEDIATE b4, NO_WORK b5 | microkernel |
+| 2 | `ui32CleanupStatus`: CLEANUPCMD_COMPLETE b0 (open microkernel: BUSY b1, DONE b2; section 3) | microkernel; the host clears it before a cleanup |
+| 3 | `ui32uKernelDetectedLockups` | microkernel |
+| 4 | `ui32HostDetectedLockups` | host |
+| 5 | `ui32HWRecoverySampleRate`: timer ticks per lockup check, uKernelFreq / HWRecoveryFreq = 1000 / 100 = 10 | host |
+| 6 | `ui32uKernelTimerClock`: core clock / uKernelFreq = 400 MHz / 1000 = 400000 (0x61a80); the microkernel loads it into `EUR_CR_EVENT_TIMER` | host |
+| 7 | `ui32ActivePowManSampleRate`: idle ticks before an active-power request, uKernelFreq × 5 ms / 1000 + 1 = 6 | host |
+| 8 | `ui32InterruptFlags`: HWR b0 (a lockup the microkernel detected), ACTIVE_POWER b1 (idle, the host may power off) | microkernel |
+| 9 | `ui32InterruptClearFlags`: the same bits. The host acts on a flag only while its clear bit is 0, and sets the clear bit while it handles the request (`sgxinit.c` HWR, `sgxutils.c` active power) | host |
+| 10 | `ui32BPSetClearSignal` | |
+| 11 | `ui32NumActivePowerEvents` | microkernel |
+| 12 | `ui32TimeWraps` | microkernel |
+| 13 | `ui32HostClock`: the host's clock in µs, written at start | host |
+| 14 | `ui32AssertFail` | microkernel |
+| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_OPENHC_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
+| 16 | `ui32BRN31939Mem` (present because the build is for core revision 1013, which carries `FIX_HW_BRN_31939`; the host never touches it). The open microkernel reuses the word for its cleanup v2 sequence echo (section 3) | microkernel |
+| 17 | `ui32OpenCLDelayCount` | |
+
+The timer values come from `sgxpower.c` with the CE5300 `sysconfig.c` constants:
+`SYS_SGX_PDS_TIMER_FREQ` 1000 Hz, `SYS_SGX_HWRECOVERY_TIMEOUT_FREQ` 100 Hz and
+`SYS_SGX_ACTIVE_POWER_LATENCY_MS` 5. The core clock is the one value that
+comes from the platform (`sgx_core_clock`); the Cedarview `unified`
+sysconfig and powervr_sgx both assume 400 MHz. The DDK microkernel's 1 ms
+wake-ups in the EA1 register sample are 1.2 M TSC cycles apart, which is
+consistent with 400 MHz if the TSC runs at 1.2 GHz. Gap: the TSC rate is
+unmeasured, so the real core clock is not yet confirmed.
 
 ## 2. The event dispatcher (pds3)
 
@@ -181,6 +214,24 @@ The host leaves commands in the **kernel CCB**, an array of 256
 `ui32CacheControl`, then six data words. `PVRSRV_SGX_CCB_CTL` (a separate
 2-word buffer) holds the write offset (advanced by the host in
 `SGXScheduleCCBCommand`) and the read offset (advanced by the microkernel).
+
+The host rings the doorbell for each command:
+1. It adds 1 to the 32-bit **event kicker** word, `(kicker + 1) & 0xff`.
+   `EUR_CR_EVENT_KICKER` (0xac4, address in b4-31) points at that word, and
+   the host zeroes it at start.
+2. It writes 1 (`NOW`, b0) to `EUR_CR_EVENT_KICK` (0xac8)
+   (`sgxutils.c SGXScheduleCCBCommand`).
+
+`EUR_CR_EVENT_KICK2` (0xae8) takes its place for CCB commands only on core
+revision 100 (`FIX_HW_BRN_26620`) with a system cache. The init kick in
+`SGXInitialise` uses KICK2, because SGX545 has
+`SGX_FEATURE_MULTI_EVENT_KICK`.
+
+`ui32CacheControl` bits (`SGXMKIF_CC_*`): INVAL_BIF_PT 0x1, INVAL_BIF_PD 0x2,
+INVAL_BIF_SL 0x4, INVAL_DATA 0x8. The host ORs in what it owes since its
+last command (`sPDContext.ui32CacheControl`, cleared once sent). That makes
+the first command after a page-directory change carry 0x2, which is
+SRVINIT.md's `ui32CacheControl` 2.
 
 On a host-kick event the microkernel:
 
@@ -279,7 +330,7 @@ increment. 2D is unused on this build (its host-kick entry is 0).
 
 ### Power (type 3)
 
-data[1] is `PVRSRV_POWERCMD_POWEROFF` / `IDLE` / `RESUME`. The handler clears
+data[1] is `PVRSRV_POWERCMD_POWEROFF` (1) / `IDLE` (2) / `RESUME` (3). The handler clears
 or sets the relevant enable bits, runs the deinit register sequence for a
 power-off (zero the clock-gating and event-enable registers,
 `docs/SRVINIT.md` "Deinit"), and reports completion by writing the matching
@@ -294,9 +345,9 @@ resume, re-queues its pending work.
 
 ### Cleanup (type 5)
 
-data[0] is the cleanup type (`PVRSRV_CLEANUPCMD_RT`/`RC`/`TC`/`2DC`/`PB` —
-render target, render context, transfer context, 2D context, parameter
-buffer) and data[1] the resource's device address. The handler removes the
+data[0] is the cleanup type (`PVRSRV_CLEANUPCMD_RT` 1 / `RC` 2 / `TC` 3 /
+`2DC` 4 / `PB` 5 — render target, render context, transfer context, 2D
+context, parameter buffer) and data[1] the resource's device address. The handler removes the
 resource from the microkernel's lists **only when it is safe** (no render of
 that context in flight; the free list not mid-use), unlinking it from the
 doubly-linked render-in-flight list kept in the control block and the
@@ -340,13 +391,54 @@ What the open microkernel must do (the list for `ukernel/`):
 - leave nothing of a cleaned-up context where the next context's renders read
   it (the in-flight slot +0x50, the RT-data entry state).
 
+#### Cleanup v2 (open microkernel, feature bit 0 of the firmware header)
+
+Agreed between `powervr_sgx` and `ukernel/` (2026-11-04). The type values and
+data[1] are as above. In addition:
+
+- data[2] is a nonzero sequence number the host picks. The host sends one
+  cleanup at a time, and only after every job of the resource's context has
+  signalled. It clears `ui32CleanupStatus` before each send.
+- The microkernel always consumes the command (advances the read offset), so
+  later commands never wait behind a cleanup.
+- It writes the outcome once, when it processes the command:
+  `COMPLETE | DONE` (bits 0 and 2) when the resource is gone and nothing will
+  read it again, or `COMPLETE | BUSY` (bits 0 and 1) while a render or page
+  release that uses it is still in flight. Then it echoes data[2] into host
+  control +0x40 (word 16).
+- On `BUSY` the host sends the same command again after about 1 ms. After 1 s
+  it gives up and keeps the memory until the next firmware restart. It never
+  resets for a cleanup.
+- The microkernel keeps a bound of its own as a backstop.
+
+`powervr_sgx` shares one PB per VM between its render contexts, and sends the
+PB cleanup (5) when the VM's PB goes, after its contexts' render-context
+cleanups (2). A render-context cleanup must therefore not free the PB.
+
+Without the feature bit the host speaks the contract above this heading: one
+command, `COMPLETE` polled for 5 s, memory kept on a timeout.
+
 ### Get misc info (type 6)
 
 data[1] is the misc-info buffer. The handler writes the core identity and,
 when the request word asks for it (`PVRSRV_USSE_MISCINFO_GET_STRUCT_SIZES`),
 the microkernel's own `SGX_MISCINFO_STRUCT_SIZES` (the same sizes
 `srvinit` passed in `SGX_BRIDGE_INIT_INFO`, so the kernel can check they
-agree), then sets `PVRSRV_USSE_MISCINFO_READY`. The core identity comes from
+agree), then sets `PVRSRV_USSE_MISCINFO_READY`. The buffer is
+`PVRSRV_SGX_MISCINFO_INFO`:
+
+| word | field |
+|---|---|
+| 0 | `ui32MiscInfoFlags`: the request (GET_STRUCT_SIZES 0x2) in, READY (0x1) out |
+| 1 | `ui32CoreRev` |
+| 2 | `ui32CoreID` |
+| 3 | `ui32DDKVersion` |
+| 4 | `ui32DDKBuild` |
+| 5, 6 | `ui32CoreIdSW`, `ui32CoreRevSW` |
+| 7 | `ui32BuildOptions` |
+| 8-20 | the 13 `SGX_MISCINFO_STRUCT_SIZES` words, in `srvinit`'s order (no 2D-hardware sizes on this core) |
+
+The core identity comes from
 reading `EUR_CR_CORE_ID` and `EUR_CR_CORE_REVISION` and from constants baked
 into this build (the DDK version 862890, core 545, revision 1.0.14).
 
@@ -436,6 +528,57 @@ Full evidence and next steps:
 `docs/log/entries/2026-11-02-2015-ukernel-ea1-dcu-invalid.md`, then
 `docs/log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md` (the earlier
 EA3 run, whose "never re-entered" reading the EA1 counter corrected).
+
+## 4a. The firmware file
+
+`powervr_sgx` loads the microkernel with `request_firmware()`. It tries
+`powervr_sgx/sgx545-openhc-ukernel.bin` first, then the DDK image under its own
+name. A file that starts with the magic below is an open microkernel and is
+loaded from its header alone. Anything else must be the one DDK build the
+driver knows (size and patch placeholders checked).
+
+All words are little-endian u32. Offsets are from the start of the file.
+
+| offset | field | meaning |
+|---|---|---|
+| 0x00 | magic | `SGX5` `UKRN` (0x35584753, 0x4e524b55) |
+| 0x08 | header_size | bytes before the image; a multiple of 8 |
+| 0x0c | interface | host interface version, major << 16 \| minor. 1.0: SGXMKIF as in §3 (the DDK 1.7 command set and host control block) |
+| 0x10 | features | bit 0: cleanup v2 (§3, Cleanup). Bit 1: secure mode, the microkernel needs no kernel heap in a client page directory. Other bits must be 0 |
+| 0x14 | image_size | bytes of USSE code after the header; a multiple of 8 |
+| 0x18 | image_crc32 | CRC-32 (IEEE, as `crc32_le(~0, ...) ^ ~0`) of the image |
+| 0x1c | n_entries | entries in the entry table |
+| 0x20 | entries_off | offset of the entry table |
+| 0x24 | n_patches | entries in the patch table |
+| 0x28 | patches_off | offset of the patch table |
+| 0x2c | core_rev | SGX core revision it was validated on (`SGX_CR_CORE_REVISION`), 0 for any |
+| 0x30 | reserved | 4 words, 0 |
+| 0x40 | build_id | 32 bytes, NUL-padded text (for example `git describe`) |
+
+The entry table holds `{ u32 program, u32 offset }` pairs. `program` names the
+PDS program the driver builds to enter the microkernel. 0 is the event
+program, a bare `DOUTU` with bit 27 to `offset`. 1 to 4 are reserved for
+programs with the DDK's roles (§1, "The five entry PDS programs"). The open
+microkernel uses only 0. `offset` is in bytes from the start of the image.
+
+The patch table holds `{ u32 offset, u32 value }` pairs. Each one names an
+`limm` placeholder at `offset` in the image (the two-word form with
+`0x000dbeef` in its low 21 bits). The driver writes into it the value
+`value` names:
+
+| value | written |
+|---|---|
+| 1 | device address of the TA3D control block |
+| 2 | device address of the host control block |
+| 3 | device address of the kernel CCB control (write and read offsets) |
+| 4 | device address of the kernel CCB |
+| 5 | device address of the misc-info buffer |
+
+Host-kick table: identity. The `ServiceAddress` of a command is its type.
+
+The driver refuses a file whose sizes or offsets run past its end, whose CRC
+doesn't match, whose interface major it doesn't know, or that sets an unknown
+feature bit or table value.
 
 ## 5a. Hardware recovery and re-initialisation
 
@@ -529,10 +672,92 @@ first kick, a client that submits a render and then does not let it complete
 (or whose sync counts are wrong) leaves the 3D waiting forever — the trap
 `docs/TEX.md` and `docs/NOTES.md` describe.
 
+### Where the DDK microkernel raises the host interrupt
+
+Each site writes `EUR_CR_EVENT_STATUS` (0x12c) = SW_EVENT (0x4000)
+(`ddk-uk.bin`). A normal completion sets no `ui32InterruptFlags` bit: only HWR
+and ACTIVE_POWER use the flags.
+
+| pc | path | runs on |
+|---|---|---|
+| 0x066b | TA finished, after the TA status values are written | TA_FINISHED (0x2000), **every** TA, including the kicks that don't end the scene |
+| 0x086c | the kick path, after its status-value copy | a host kick |
+| 0x0fce | render completion | the second of PIXELBE_END_RENDER (0x40000; handler 0x0ebb) and DPM_3D_MEM_FREE (0x1; handler 0x0eb4). The 3D start arms both halves in sa9 (b4, b5). With render details +0xd4 b3 it arms only the 3D end, and that completes alone |
+| 0x14f7 | transfer completion (0x1461, taken at the 3D end when sa9 b2 marks a transfer) | PIXELBE_END_RENDER alone: a transfer doesn't wait for a DPM free |
+| 0x0397, 0x04d4 | cleanup completion | the cleanup command, or its retry |
+
+**No completion waits for the timer.** The only wait inside a completion
+handler is the ISP clock poll in the 3D-end handler (pc 0x0ec3-0x0ec6):
+- it runs when `CLKGATECTL & 3 == 2` (the ISP clock on demand);
+- it spins on `CLKGATESTATUS` (0x008) b0 until it reads 0.
+
+The DDK's timer path does only active-power sampling and the lockup sample.
+It never completes work and never reads a CCB.
+
+The EA1 register sample of the DDK microkernel (2026-11-04) shows how long
+completion takes. The measure is the time from the end of the hardware work
+(`CLKGATESTATUS` back to idle) to the SW_EVENT edge:
+- TA: 13 k TSC cycles (median), 42 k at most;
+- 3D: 70 k TSC cycles (median), 77 k at most.
+
+That is tens of µs at the EA's TSC rate, so any latency of milliseconds is
+elsewhere: in the host's completion path or in the GPU work itself.
+
+The open microkernel differs (`ukernel/`, um-re 1486d98):
+- it raises no host interrupt at TA finish;
+- a kick it defers while a TA runs is relaunched only from `ta_finished`;
+- `render_complete` and `xfer_done` end without re-entering `kick`. So a
+  command left in the CCB while the render ran (a deferred cleanup, say)
+  waits for the next 1 kHz tick (`tmr_tick_check`, WO != RO), up to 1 ms. The
+  timer can't be stopped meanwhile: `k_power` is itself a CCB command and
+  runs only after what is queued ahead of it.
+
+These cost throughput, not correctness: powervr_sgx's uAPI tests (39/39) and
+multi-process renders pass without them.
+
 ## 6. Register sequences the microkernel runs
 
 These are the fixed `EUR_CR_*` sequences the handlers perform, named by what
 they accomplish. Offsets are from `sgx545defs.h` where it names them.
+
+### The register map
+
+The core registers the microkernel and a kernel driver use, from
+`sgx545defs.h` (the GPL kernel's SGX545 header), with what the EA boxes show.
+
+| reg | name | fields |
+|---|---|---|
+| 0x000 | `CLKGATECTL` | 2-bit modes per unit: ISP b0-1, ISP2 b2-3, TSP b4-5, TE b6-7, MTE b8-9, DPM b10-11, VDM b12-13, PDS0 b14-15; AUTO_MAN_REG b24. Mode 2 is clock on demand (the 3D-end ISP poll tests `& 3 == 2`) |
+| 0x004 | `CLKGATECTL2` | the same for PBE b0-1, CACHEL2, UCACHEL2, USE0, ITR0, TEX0, MADD0, USE1, ITR1, TEX1, MADD1, PDS1 b22-23 |
+| 0x008 | `CLKGATESTATUS` | 1 per running clock: ISP b0, ISP2 b1, TSP b2, TE b3, MTE b4, DPM b5, VDM b6, PDS0 b7, PBE b8, then the CLKGATECTL2 units from b9. An idle EA1 reads 0x20 (only the DPM's), so "all gated" is `& ~0x20 == 0` |
+| 0x01c | `CORE_ID` | CONFIG b0-15, ID b16-31 |
+| 0x020 | `CORE_REVISION` | MAINTENANCE b0-7, MINOR b8-15, MAJOR b16-23, DESIGNER b24-31 (the EA's 1.0.14 reads 0x1000e) |
+| 0x080 | `SOFT_RESET` | BIF b0, DPM b1, TA b2, USE b3, ISP b4, TSP b5; 1 holds the unit in reset, 0 releases |
+| 0x110 | `EVENT_HOST_ENABLE2` | enables for `EVENT_STATUS2` |
+| 0x114 | `EVENT_HOST_CLEAR2` | write 1s to clear `EVENT_STATUS2` bits |
+| 0x118 | `EVENT_STATUS2` | DPM_TA_FREE_LOAD b0, DPM_3D_FREE_LOAD b1, DPM_HOST_FREE_LOAD b2, DPM_DHOST_FREE_LOAD b3, TRIG_DL b5, TRIG_3D b6, TRIG_TA b7, GSG_LOADED b8, GSG_FLUSHED b9, DCU_INVALCOMPLETE b10, OTPM_FLUSHED_INV b11, OTPM_MEM_CLEARED b12, VDM_TASK_KICKED b13, VDM_CONTEXT_LOAD b14, MTE_STATE_FLUSHED b15 |
+| 0x12c | `EVENT_STATUS` | DPM_3D_MEM_FREE b0, DPM_OUT_OF_MEMORY_MT b1, _GBL b2, DPM_REACHED_MEM_THRESH b3, DPM_STATE_STORE b4, _LOAD b5, _CLEAR b6, DPM_CONTROL_STORE b7, _LOAD b8, _CLEAR b9, TPC_FLUSH b10, TPC_CLEAR b11, TA_TERMINATE b12, TA_FINISHED b13, SW_EVENT b14, BREAKPOINT b15, ISP_VISIBILITY_FAIL b16, PIXELBE_END_RENDER b18, OTPM_FLUSHED b19, OTPM_INV b20, ISP2_ZLS_CSW_FINISHED b21, DPM_INITEND b22, ISP_END_TILE b23, DPM_TA_MEM_FREE b24, DPM_OUT_OF_MEMORY_ZLS b25, MADD_CACHE_INVALCOMPLETE b26, TA_DPM_FAULT b28, TIMER b29, MASTER_INTERRUPT b31 |
+| 0x130 | `EVENT_HOST_ENABLE` | enables for `EVENT_STATUS` |
+| 0x134 | `EVENT_HOST_CLEAR` | write 1s to clear `EVENT_STATUS` bits, including MASTER_INTERRUPT b31 and SW_EVENT b14 (what the host's ISR writes) |
+| 0x144 | `TIMER` | a free-running 32-bit counter |
+| 0xac4 | `EVENT_KICKER` | address of the event-kicker word, b4-31 (section 3) |
+| 0xac8 | `EVENT_KICK` | write NOW (b0) = 1: a CCB command is waiting |
+| 0xacc | `EVENT_TIMER` | VALUE b0-23 (the period, host control word 6), ENABLE b24 |
+| 0xae8 | `EVENT_KICK2` | write NOW (b0) = 1: the init kick |
+| 0xc00 | `BIF_CTRL` | NOREORDER b0, PAUSE b1, FLUSH b2, INVALDC b3 (pulse 1 then 0), CLEAR_FAULT b4, MMU_BYPASS_* b8-15 (CACHE, VDM, TE, PBE, TSPP, ISP, USE, HOST) |
+| 0xc04 | `BIF_INT_STAT` | FAULT_REQ b0-15 (the requestors that faulted), FAULT_TYPE b16-18, FLUSH_COMPLETE b19 |
+| 0xc08 | `BIF_FAULT` | CID b0-3 (the requestor's context: faults by the EDM on list 15 read 0xf, EA1 2026-11-03), SB b4-8, ADDR b12-31 (the faulting page) |
+| 0xc38 + 4(n - 1) | `BIF_DIR_LIST_BASE1`..`15` | the page directory's physical address for list n (list 15 = 0xc70). ADDR b8-31; SGX545 has no 36-bit MMU, so the value is the page-aligned physical address itself, unshifted (`SGX_MMU_PDE_ADDR_ALIGNSHIFT` 0, as `sgxreset.c` writes it) |
+| 0xc74 | `BIF_BANK_SET` | SELECT_2D b0, SELECT_3D b2-3, SELECT_HOST b4, SELECT_TA b6-7, SELECT_EDM b8, SELECT_DPM_LSS b9; the DDK's reset writes 0 |
+| 0xc78 | `BIF_BANK0` | directory-list index per requestor: EDM b0-3, TA b4-7, HOST b8-11, 3D b12-15, 2D b16-19 |
+| 0xc84 | `BIF_DIR_LIST_BASE0` | list 0, same format |
+| 0xca8 | `BIF_MEM_REQ_STAT` | READS b0-10: memory reads outstanding |
+
+The DDK's reset (`sgxreset.c`) zeroes `BIF_CTRL`, `BIF_BANK_SET`, `BIF_BANK0` and all 16
+list bases, then sets `BIF_BANK0` EDM = `SGX_BIF_DIR_LIST_INDEX_EDM` (15 =
+`SGX_FEATURE_BIF_NUM_DIRLISTS` - 1) and writes the kernel PD into list 15.
+Gap: which registers are safe to read on a core that hasn't been reset is
+in the kernel driver's notes (DRM-DRIVER.md), not here.
 
 **BIF cache invalidate** (honouring a command's `ui32CacheControl`, and after
 a page-directory change). Pulse the invalidate request — `EUR_CR_BIF_CTRL`
@@ -546,7 +771,7 @@ invalidate request makes the matching done bits appear, and the acknowledge
 register clears them.
 
 **Point the BIF at a context — and keep the EDM on its own directory list.**
-Load the context's page-directory address (shifted) into **directory-list 0**
+Load the context's page-directory address into **directory-list 0**
 (`EUR_CR_BIF_DIR_LIST_BASE0 = 0xc84`) and route the **TA/3D** requestors to list
 0 through `EUR_CR_BIF_BANK0 = 0xc78 = 0x0f` (b0-3 = EDM → list **15**, b4-7 = TA →
 list 0), so the cores that run the client's geometry/pixels translate through the
@@ -566,15 +791,88 @@ EDM isolated on list 15 is a deliberate divergence, verified on EA1 HW (the TA
 reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
 dir-list with a client requestor.
 
-**Parameter-buffer / DPM setup** (first kick of a render). Load the free-list
-head and limit registers (`EUR_CR_*` 0x600, 0x618, 0x61c, 0x648, 0x620-0x668)
-from the PB descriptor words, then run the DPM **state load** and **control
-load**: write the region-header and tail-pointer bases, pulse
-`EUR_CR_*` 0x694 (DPM state) and 0x698 (DPM control) with the load bit, and
-wait for the DPM load events in `EUR_CR_EVENT_STATUS` (bits in the 0x20-0x200
-range). An OTPM clear (`EUR_CR_*` 0x24c) with its two done bits follows.
+**How the DDK reaches client memory from the EDM.** It never uses a second
+bank or a separate data requestor. A subroutine (pc 0x1864) copies the TA's
+nibble (r16 = 0) or the 3D's (r16 = 1) of `BIF_BANK0` into the EDM nibble,
+and r16 = 2 puts the EDM back on list 15. Its callers bracket every EDM
+access to client memory:
 
-**TA start.** After the layout registers (0x204-0x248) and the PDS/USE code
+| set (pc) | restore (pc) | list | what runs inside | when (DDK traces) |
+|---|---|---|---|---|
+| 0x128b | 0x129b | 3D | the background-block write ([0..2]) | **every 3D start** |
+| 0x0941 | 0x094d | TA | the PB setup (0x170d) and the TA free-list load (0x16a2). They read the PB descriptor and TA3D words (kernel data) and write DPM registers. Client memory is touched only when PB descriptor +0x00 b0 is set: then 0x170d walks the PB block list and rewrites the free list | the first kick after the PB changes |
+| 0x190c | 0x1918 | TA | `save_ta_state` (0x168d), then the same PB setup and TA load | a PB switch mid-scene; not in any trace |
+| 0x0835 | 0x0843 | TA | zeroes the RT data entry's tail-pointer array (entry words 8/9) | a kick path; not in any trace |
+| 0x0d90 | 0x0da0 | 3D | a second copy of the background-block write, on another 3D-start path | not in any trace |
+| 0x1234 | 0x123a | 3D | copies a 2-word pair indexed by the pass cursor (+0x108) | multi-pass renders only; not in any trace |
+| 0x13ae | 0x13be | 3D | writes (address, value) pairs from +0x1a0 (count at +0x19c of the same object) | only with a nonzero count; not in any trace |
+| 0x1517 | 0x1527 | 3D | the same pair loop, on the transfer side | only with a nonzero count; not in the trace's transfer |
+| 0x0ed5 | 0x0f34 | 3D | a 3D-end branch taken when the ISP clock check fails | not in any trace |
+
+In all four DDK microkernel traces (one-, two- and four-frame runs) only two
+windows run. 0x128b runs at every 3D start. 0x0941 runs once, on the first
+kick of a new PB.
+
+The open microkernel opens none of these windows: its EDM stays on list 15.
+Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
+`do_3d`), and with `HOSTCTL_OPENHC_HOST_BGBLOCK` set the host writes that
+block instead. Everything else the EDM reads or writes is in kernel code,
+kernel data or the sync heap, all mapped in the kernel PD.
+
+The background-block write at 3D start (pc 0x128d-0x1296; `docs/STATE.md`
+§6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
+inside it. While a window is open, the EDM fetches its instructions and reads
+kernel data through the client's page directory. The DDK therefore needs the
+kernel code and kernel-data heaps mapped in every client PD; it has no mode
+that works without them.
+
+`EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
+SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only
+BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (pc 0x0c6e,
+0x1778, 0x17be). The header doesn't separate the EDM's instruction fetch from
+its data accesses in either bank. [D, code and trace]
+
+**Parameter-buffer / DPM setup.** `pb[n]` is word n of the PB descriptor
+(`docs/STATE.md` section 6).
+
+- **The TA free-list load** (pc 0x16a2-0x16d3) runs only when the PB changes.
+  The microkernel remembers the loaded PB in TA3D +0xb8 (TA) and +0xbc (3D),
+  and compares it at the kick (pc 0x091f-0x092e). It writes:
+  - 0x618 = `pb[4] & ~0xf`, 0x61c = `pb[6]`, 0x648 = `pb[7]`;
+  - 0x638 = `pb[8] | pb[9] << 16`, 0x620 = `pb[10]`, 0x668 = `pb[13]`;
+  - 0x624 = `pb[11]`, 0x628 = `(pb[12] & 0xffff) | 0x10000`;
+  - 0x664 = a mask computed from TA3D +0xb4/+0xb8/+0xbc;
+  - then 0x684 = 1, and waits for `EVENT_STATUS2` b0.
+- **The 3D free-list load** (pc 0x16e9) runs the same way. It writes:
+  - 0x600 = `pb[4] & ~0xf`, 0x604 = `pb[6]`, 0x64c = `pb[7]`;
+  - 0x660 = `pb[8] | pb[9] << 16`;
+  - 0x664 = the mask (5 on a first frame);
+  - then 0x680 = 1, and waits for `EVENT_STATUS2` b1.
+- **Saving the TA's counters.** Before a 3D start the microkernel saves the
+  live counters into the descriptor (`save_ta_state`, pc 0x168d-0x16a1):
+  - `pb[6]` = 0x700, `pb[7]` = 0x710 << 16;
+  - `pb[8]` = the high half of 0x724, `pb[9]` = the high half of 0x72c.
+- **Arming the page release.** The 3D start writes 0x63c = 3 (0 with render
+  details +0xd4 b3). The pages the TA allocated are then freed by the
+  hardware while the 3D runs: the EA1 register sample shows 0x724 counting
+  down from 0x190019 during the 3D, and DPM_3D_MEM_FREE follows. Nothing is
+  written after the 3D end to start it.
+- **DPM state/control (0x694/0x698) take a mode:** 1 store (waits for
+  `EVENT_STATUS` 0x90), 2 clear (waits for 0x240), 4 load (waits for 0x20 /
+  0x100100).
+  - A fresh scene runs the **clear** (pc 0x0a1d-0x0a4a).
+  - The load (pc 0x17be) only resumes a stored scene (kick pc 0x09f7-0x0a0d;
+    3D start pc 0x1166-0x1181, after the store at 0x1778).
+  - The EA1 register sample shows 0x694 never at 4 over a run of frames.
+- **The OTPM clear** (0x24c), with its two done bits, follows.
+
+All [D] from the DDK microkernel's code and trace; the release behaviour is
+from the hardware register sample.
+
+**TA start.** The first kick of a scene (TA flags b0) pulses `SOFT_RESET`'s
+TA bit (0x80 = 4, then 0; pc 0x091d). The kick's cache bits follow (TA
+flags b4-b6, `docs/STATE.md` section 1). After the layout registers
+(0x204-0x218 and 0x238/0x23c, loaded from cmd+0x238..+0x254) and the PDS/USE code
 bases, kick the VDM so it begins fetching the control stream.
 
 **3D start.** Load the ISP and PBE registers from the render-details block
@@ -690,8 +988,22 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   decomposition is inferred, not confirmed on hardware.
 - The precise contents of the per-context scratch area (control block words
   0x18-0x37) across multiple concurrent render contexts — the single-context
-  single-render path (es2gears, one Minecraft frame) is covered; multiple
-  contexts in flight are not yet exercised.
+  single-render path (es2gears, one Minecraft frame) is covered.
+  - Two render contexts that share one PB render 10/10 on the open
+    microkernel under powervr_sgx (EA1, 2026-11-04).
+  - Under the DDK microkernel, a second HW render context with a PB of its
+    own (two pipe contexts under services) made renders slow and then locked
+    up. Placing the PB away from the 3D-params heap base was found to cause
+    one such hang (UAPI.md G15).
+  - Gap: whether a second, correctly placed PB per context works on either
+    microkernel. One shared render context or PB is the configuration known
+    to work.
+- The multi-frame "PB never drains" result of 2026-11-04 (0x724 stuck at
+  0x190019) happens only under the srvinit frame-dump harness, which gives
+  each process its own PB with no fixed base. Under powervr_sgx (one PB per
+  VM at a fixed base) the same microkernel renders 10/10 consecutive frames,
+  5/5 frames each from a new process, and drains normally. Debug the DPM
+  drain only under a driver that keeps the PB.
 - The timer / active-power / lockup-detection path is read structurally but
   not run (no timer event in an offline frame).
 - The recovery rescan (section 5a) is understood from the init path and the

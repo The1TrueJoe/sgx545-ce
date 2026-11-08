@@ -44,8 +44,16 @@ struct seq_buf;
 #define HOSTCTL_HOST_CLOCK		13
 #define HOSTCTL_ASSERT_FAIL		14
 
+#define HOSTCTL_CLEANUP_SEQ		16
+
+/* Feature bits of the open microkernel's file header (docs/UKERNEL.md 4a). */
+#define PVRSGX_UKFW_CLEANUP_V2		BIT(0)
+#define PVRSGX_UKFW_SECURE		BIT(1)
+
 #define HOSTCTL_INIT_COMPLETE		BIT(0)
 #define HOSTCTL_CLEANUP_COMPLETE	BIT(0)
+#define HOSTCTL_CLEANUP_BUSY		BIT(1)
+#define HOSTCTL_CLEANUP_DONE		BIT(2)
 
 /* Cleanup command (type 5) data[0]: the resource data[1] addresses. */
 #define PVRSGX_CLEANUP_RT		1	/* HW RT dataset */
@@ -62,7 +70,8 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev);
 int pvrsgx_fw_start(struct pvrsgx_device *sdev);
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev);
 u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word);
-void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b, const char *name);
+void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
+		    const char *name);
 int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr);
 
 #endif /* PVRSGX_FW_H */

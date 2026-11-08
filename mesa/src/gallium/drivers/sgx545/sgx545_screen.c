@@ -6,10 +6,12 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include "drm-uapi/drm.h"
 #include "util/format/u_format.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_screen.h"
+#include "renderonly/renderonly.h"
 
 #include "sgx545_context.h"
 #include "sgx545_program.h"
@@ -166,6 +168,9 @@ sgx545_init_screen_caps(struct pipe_screen *pscreen)
     * needn't be copied into upload buffers first (u_vbuf's copy was a
     * second memcpy of every gl4es draw) */
    caps->user_vertex_buffers = true;
+   /* linear render targets, over powervr_sgx */
+   if (sgxws_dev_has_dmabuf(sgx545_screen(pscreen)->dev))
+      caps->dmabuf = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;
 }
 
 static bool
@@ -208,8 +213,9 @@ sgx545_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
           format != PIPE_FORMAT_R32_UINT)
          return false;
    }
-   /* textures: the formats with a T1 code (docs/TEX.md); render targets are
-    * BGRA8888, sampled through the strided layout only (not yet) */
+   /* textures: the formats with a T1 code (docs/TEX.md); render targets
+    * (an imported dma-buf among them: EGLImage, glamor's screen pixmap) are
+    * sampled in place through the strided layout */
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx545_tex_format(format) &&
        !(usage & PIPE_BIND_RENDER_TARGET))
       return false;
@@ -261,13 +267,15 @@ sgx545_screen_destroy(struct pipe_screen *pscreen)
    simple_mtx_unlock(&kept_lock);
    if (screen->fd != screen->dev_fd)
       close(screen->fd);
+   if (screen->ro)
+      screen->ro->destroy(screen->ro);
    slab_destroy_parent(&screen->transfer_pool);
    simple_mtx_destroy(&screen->lock);
    FREE(screen);
 }
 
 struct pipe_screen *
-sgx545_screen_create(int fd, const struct pipe_screen_config *config)
+sgx545_screen_create(int fd, const struct pipe_screen_config *config, struct renderonly *ro)
 {
    struct sgx545_screen *screen = CALLOC_STRUCT(sgx545_screen);
 
@@ -306,6 +314,7 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config)
       FREE(screen);
       return NULL;
    }
+   screen->ro = ro;
    simple_mtx_init(&screen->lock, mtx_plain);
    slab_create_parent(&screen->transfer_pool, sizeof(struct sgx545_transfer), 16);
 

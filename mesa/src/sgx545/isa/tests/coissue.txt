@@ -1,0 +1,49 @@
+# efo and fdual (ISA.md "efo", "Dual issue", "Text notation and defaults").
+# The efo lines are ISA.md's corpus control words (its efo table) on r0-r3:
+# the low word is the operands, the high word 0x38000000 | the control word.
+
+efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1] ; 00004103 382b0600
+efo r0, r1, r2, r3 [d=a0 a=s0+s2/s1+s2 wi0 wi1] ; 00004103 38230600
+efo r0, r1, r2, r3 [d=i1 i=m0/m1 wi0 wi1] ; 00004103 38180600
+efo r0, r1, r2, r3 [a=m0+i0/i1+m1 wi0 wi1] ; 00004103 38020600
+efo r0, r1, r2, r3 [d=a0 a=m0+i0/i1+m1 wi1] ; 00004103 38220200
+efo r0, r1, r2, r3 [d=a0 i=a0/m1 a=m0+s0/i1+i0 wi0 wi1 a0rneg] ; 00004103 3c2d0600
+efo r0, r1, r2, r3 [d=a1 i=a0/m1 a=m0+s0/i1+i0 wi0 wi1 a0rneg] ; 00004103 3c3d0600
+efo r0, r1, r2, r3 [a=m0+s0/i1+i0 m=s2*s1/s2*s2 wi0 wi1] ; 00004103 38014600
+efo r0, r1, r2, r3 [d=a0] ; 00004103 38200000
+efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 m=s1*s0/s2*s2 wi0 wi1] ; 00004103 382b8600
+
+# efo's i, a and m as dis.py prints them, and the enum fields at 0 written out
+efo r0, r1, r2, r3 [d=a0 i=i0=m0,i1=m1 a=a0=s0+s2,a1=s1+s2 wi0 wi1] == efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1]
+efo r0, r1, r2, r3 [d=i0 i=i0=a0,i1=a1 a=a0=m0+m1,a1=i1+i0 m=m0=s0*s2,m1=s1*s2] == efo r0, r1, r2, r3
+efo r0, r1, r2, r3 [m=m0=s1*s0,m1=s2*s2] == efo r0, r1, r2, r3 [m=s1*s0/s2*s2]
+efo r0, r1, r2, r3 [d=2 i=2 a=3 m=0] == efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2]
+
+# fdual: ISA.md's v_norm pair, every select, and the other spellings
+fdual.fssq.mov o0, pa2, pa0, pa1 [sd=i2 msrc=src0]
+fdual.mov.fmad o3, r0, c52, o0 [sd=i2 sb=i2 sc=src2]
+fdual.fmad.fsub r0, r1, r2, r3 [sd=i0s0 sb=i1 sc=i2]
+fdual.fadm.frsq r4, pa1, pa2, sa3 [sd=i1 sb=src1 sc=i0]
+fdual.fmsa.fmad16 r0, r1, r2, r3 [sd=i2 sb=i0 sc=src2]
+fdual.fddp.fmaxmin r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1]
+fdual.mov.mov r0, r1, r2, r3 [sd=i1 msrc=src2]
+fdual.mov.mov r0, r1, r2, r3 [sd=i1 msrc=src1]
+fdual.mov.mov r0, r1, r2, r3 [sd=i0 msrc=i2]
+fdual.fmad.fexp2 r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.flog2 r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.fsin r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.fcos r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.fmul r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.ima32.ima32 r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+(p1) fdual.fmad.fadd r0, r1, -r2, -r3 [skipinv rpt=2 sd=i0 sb=src1 sc=i1]
+fdual.fmad.fadd r0, r1, r2, r3 [neg1 neg2 sd=i0 sb=src1 sc=i1] == fdual.fmad.fadd r0, r1, -r2, -r3 [sd=i0 sb=src1 sc=i1]
+fdual.fmad.fadd r0, r1, r2, r3 [sd=3 sb=3 sc=3] == fdual.fmad.fadd r0, r1, r2, r3 [sd=i0s0 sb=src1 sc=src2]
+fdual.mov.mov r0, r1, r2, r3 [msrc=4] == fdual.mov.mov r0, r1, r2, r3 [msrc=src0]
+
+# dot's scales as cx<n> / ax<n> (ISA.md "Other spellings asm.py takes")
+dot3 r0, r1, r2 [cs=cx4 as=ax2] == dot3 r0, r1, r2 [cs=x4 as=x2]
+
+# hw 1's f16 (h7) and c10 (h8) are separate bits; both may be set
+frcp r0, r1 [f16 c10 chan=2] ; 00000080 08000190
+fsin r0, r1 [c10 chan=1 f16d]
+fsin r0, r1  [c10 chan=1 f16d]

@@ -37,6 +37,8 @@ Environment:
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
   BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
+  CHUNK_HOOK  a command on the box after every chunk (e.g. a debugfs status), its
+              output kept in run-NAME/chunk-hook.txt
 """
 import argparse
 import os
@@ -112,8 +114,12 @@ def result_line(line):
     return None
 
 
+# the DDK's services driver, and powervr_sgx's job timeout
+RECOVERY_GREP = "grep -c -e 'Recovery triggered' -e 'job timed out'"
+
+
 def recoveries(box):
-    rc, out = box.ssh("dmesg | grep -c 'Recovery triggered'")
+    rc, out = box.ssh(f"dmesg | {RECOVERY_GREP}")
     return int(out.strip() or 0) if rc in (0, 1) else None
 
 
@@ -336,6 +342,19 @@ def run_chunk(box, who, name, tests):
     r1 = recoveries(box) if not wedged else None
     if r0 is not None and r1 is not None and r1 != r0:
         log(f"chunk of {len(tests)}: {r1 - r0} SGX recoveries")
+        # what the kernel said about them (and powervr_sgx's devcoredump, which expires)
+        rc4, out4 = box.ssh("dmesg | grep -E 'job timed out|Recovery|powervr_sgx' | tail -40; "
+                            "for d in /sys/class/devcoredump/devcd*; do [ -e $d/data ] && cat $d/data > /tmp/devcd-$(date +%s).bin; done; "
+                            "ls /tmp/devcd-*.bin 2>/dev/null", timeout=60)
+        if rc4 is not None:
+            with open(os.path.join(RUN_DIR, "recoveries.txt"), "ab") as f:
+                f.write(f"== after chunk starting {tests[0]}\n".encode() + out4)
+    if os.environ.get("CHUNK_HOOK") and not wedged:
+        # CHUNK_HOOK: a command on the box after every chunk, its output kept in chunk-hook.txt
+        rc5, out5 = box.ssh(os.environ["CHUNK_HOOK"], timeout=60)
+        if rc5 is not None:
+            with open(os.path.join(RUN_DIR, "chunk-hook.txt"), "ab") as f:
+                f.write(f"== after chunk starting {tests[0]}\n".encode() + out5)
     if not wedged and not canary(box, who, name):
         log("the canary didn't pass after this chunk")
         wedged = True
@@ -439,7 +458,7 @@ def main():
 def box_state(box):
     """(the run's boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
     rc, out = box.ssh("cat /proc/cmdline; cat /proc/sys/kernel/random/boot_id; "
-                      f"dmesg | grep -c 'Recovery triggered'; test -f {RAMBOOT_MARK} && echo marked")
+                      f"dmesg | {RECOVERY_GREP}; test -f {RAMBOOT_MARK} && echo marked")
     lines = out.decode(errors="replace").split("\n")
     if rc not in (0, 1) or len(lines) < 3:
         return None
