@@ -32,6 +32,8 @@ rm -rf "$ROOT"/var/cache/apt/* "$ROOT"/var/lib/apt/lists/*
 
 KVER=$(ls "$K/modroot/lib/modules")
 cp -a "$K/modroot/lib/modules" "$ROOT/lib/"
+# modules_install's build/source links arrive as the whole kernel tree
+rm -rf "${ROOT:?}/lib/modules/$KVER/build" "${ROOT:?}/lib/modules/$KVER/source"
 depmod -b "$ROOT" "$KVER"
 install -d "$ROOT/usr/local/lib/kit" "$ROOT/usr/local/sbin" "$ROOT/usr/local/bin"
 for t in powervr_sgx_test powervr_sgx_frame powervr_sgx_blit; do
@@ -77,5 +79,6 @@ trap - EXIT
 NAME=sgx545-cedarview-kit-$VER.img
 gzip -9 -n -c "$IMG" > "$OUT/$NAME.gz"
 (cd "$OUT" && sha256sum "$NAME.gz" > "$NAME.gz.sha256")
+[ -n "${SUDO_UID:-}" ] && chown -R "$SUDO_UID:$SUDO_GID" "$OUT"
 ls -l "$OUT"
-rm -rf "$W"
+rm -rf "${W:?}"
