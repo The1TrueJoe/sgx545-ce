@@ -1690,14 +1690,21 @@ def build(a):
     a.i("ld.a.d r3, r2, #1 [moe]")                       # read offset (this command)
     a.i("wdf")
     a.i("imae r6, r3, #1, r5 [t2=u32]")                  # r6 = transfer command base
-    # destination sync: write the write-ops-complete value the kernel put in the
-    # command (word 0x16c) to the sync's complete-address (word 0x168), so the
-    # client sees the blit done (docs/TEX.md). (The transfer's other sync-heap
-    # objects come from the kick's sync-handle list -- the next increment.)
-    a.i("ld.a.d r7, r6, #%d [moe]" % XFER_SYNC_ADDR)     # destination sync address
-    a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # write-ops-complete value
+    # status word (sCtlStatusInfo: command 0x168 = address, 0x16c = value). Write it when
+    # present. This is NOT the transfer's done signal -- that's asDstSyncs[0] below (§10) --
+    # it's optional and a blit can leave 0x168 = 0. GUARD it: writing to a null status
+    # address faults at ~0 and never reaches the dst-sync write (m2 2026-11-08: BIF_FAULT
+    # 0x0f, transfer CCB not advanced, dst sync unwritten -- the status write was the null
+    # deref; the blit's 0x168 was 0 while its real sync is 0x140 = 0x2d000004).
+    a.i("ld.a.d r7, r6, #%d [moe]" % XFER_SYNC_ADDR)     # status address (cmd+0x168)
+    a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # status value (cmd+0x16c)
     a.i("wdf")
+    a.i("test.and.eq p0, r7, r7")                        # null status address -> skip
+    a.i("(p0) ba xfer_status_done")
     a.i("st.a.d r7, #0, r8 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.label("xfer_status_done")
     # asDstSyncs[0] (SGXMKIF_TRANSFERCMD_SHARED word 0x134): set its write-ops-complete to
     # write-ops-pending + 1, the done signal powervr_sgx (and the DDK) actually poll for a
     # transfer -- the status word above (0x168/0x16c) is NOT it (UKERNEL.md §10). Layout:
