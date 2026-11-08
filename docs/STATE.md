@@ -30,7 +30,7 @@ With `--check CAPTURE` it compares them with what the DDK wrote:
 Every field is tagged:
 
 - **[C] confirmed by a replay:** flipped in the blob-free replay
-  (`tools/decode/mkreplay.py --poke`) on the EA3, and the pixels changed as
+  (`tools/decode/mkreplay.py --poke`) on a CE5300 board, and the pixels changed as
   predicted. The runs are listed under "Hardware proof" at the end.
 - **[D] confirmed by a diff:** two probe captures that differ in one GL call
   differ in exactly this field. Also used for a field read straight from the
@@ -63,7 +63,7 @@ Every field is tagged:
   - `FUN_0001e980`: the PB descriptor and the free list.
   - `FUN_000301d0` (srv_pds.c): the end-of-tile USSE program.
 - **Captures.** `tools/probe/probe.c` has a knob for each piece of state (see
-  its header). One-change captures were taken on the EA3 on 2026-10-28 and
+  its header). One-change captures were taken on a CE5300 board on 2026-10-28 and
   are listed under "Captures".
 
 The GPL kernel's `sgx545defs.h` names only the BIF, USE code-base, PDS
@@ -171,7 +171,7 @@ bit (`ddk-uk.bin`; pc = the test):
 | bit | DDK microkernel | tag |
 |---|---|---|
 | 0 (0x1) | first kick of the scene: pulses SOFT_RESET's TA bit (0x80 = 4, then 0) before the PB check (pc 0x091b). Also tested with b2 (mask 0x5) at TA finish (0x0673), scene setup (0x0755) and 0x0a77 | D (code) |
-| 1 (0x2) | last kick of the scene: the TA-finished handler starts the 3D (pc 0x0676) | D (code; openHC's `do_3d` gates on it, EA1 2026-11-03) |
+| 1 (0x2) | last kick of the scene: the TA-finished handler starts the 3D (pc 0x0676) | D (code; the open microkernel's `do_3d` gates on it, 2026-11-03) |
 | 2 (0x4) | only ever tested with b0 (mask 0x5); no client sets it | G (resume) |
 | 3 (0x8) | tested with b0 (mask 0x9) before the stored-scene DPM load (pc 0x09fa); no client sets it | G |
 | 4 (0x10) | writes 0xa08 = 1, once per kick: the USE code-cache invalidate (pc 0x09b1) | D (code) |
@@ -182,7 +182,7 @@ bit (`ddk-uk.bin`; pc = the test):
 
 One kick with both b0 and b1 set (0x63) renders: the services backend and
 powervr_sgx send every frame that way, and m2's smoke tests pass with it
-(10/10 frames on the EA1, 2026-11-04; hardware, not a replay poke).
+(10/10 frames on a CE5300 board, 2026-11-04; hardware, not a replay poke).
 
 ### Tail, cmd+0x238 to +0x2a8
 
@@ -242,7 +242,7 @@ counts from `FUN_00017c20`:
 | 1 | 3e517004 | index buffer address; bit 0 is cleared for 16-bit indices, bits 0-1 for 32-bit [D] |
 | 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D]. The batch is 16 in every DDK draw: triangles, lines, strips and fans, 3 to 192 indices, 1 to 8 draws a frame (2026-11-08 captures). What it batches is G |
 | 3 | 003fffff | max index (constant) [D] |
-| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. For compiled shaders the DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords, log `2026-10-28-1530-gl4es-ctest`; the e1tex capture's 12-output shader runs 10]. `64 / output dwords` hung the GPU at 12 output dwords (EA3, 2026-10-28; hardware, not a replay poke). The DDK's built-in clear programs don't follow the rule: they run 8 per task at 8 and at 4 output dwords (`0x3c008080` and `0x3c008100` in the base4 and vp5 captures), while a 4-output compiled shader in the same captures runs 16. Why the clear uses 8 is G |
+| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. For compiled shaders the DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords, log `2026-10-28-1530-gl4es-ctest`; the e1tex capture's 12-output shader runs 10]. `64 / output dwords` hung the GPU at 12 output dwords (2026-10-28; hardware, not a replay poke). The DDK's built-in clear programs don't follow the rule: they run 8 per task at 8 and at 4 output dwords (`0x3c008080` and `0x3c008100` in the base4 and vp5 captures), while a 4-output compiled shader in the same captures runs 16. Why the clear uses 8 is G |
 | 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D]. b22-23 is 3 in every DDK draw, over the same range as word 2; what n is stays G |
 
 `glDrawArrays` draws through a static 16-bit identity index buffer.
@@ -328,7 +328,7 @@ with the context dirty bits in parentheses:
   (`stencil2`), and the VDM info word gives it 7, not `(22+3)>>2` = 6. The
   DMA length is the part that matters: at 25 or 24 dwords the two-sided
   draws come out blank or with wrong channels, differently from run to run;
-  at 27 or 28 they draw, whatever the info word says (EA3, dEQP
+  at 27 or 28 they draw, whatever the info word says (dEQP
   `fragment_ops.random`, 2026-11-02). The driver reads `max(25, words + 5)`.
 
 ### ISPA (ctx+0x780)
@@ -389,7 +389,7 @@ reference (`cstencil`).
   - b18-24 = (secondary attribute dwords + 3)>>2 [D].
   - b0-15 = the primary attributes in units of 4 dwords, at least 1. A
     program that reads more attributes than the word declares locks the GPU:
-    two F32 vec4 varyings under a constant `…0001` (EA3, 2026-10-28, log
+    two F32 vec4 varyings under a constant `…0001` (2026-10-28, log
     `2026-10-28-1530-gl4es-ctest`; hardware).
   - b16-17 = 3 in every capture [D].
   - b25-28 = `12 / units` (integer) when the program has no secondary
@@ -487,7 +487,7 @@ setting a state word.
   full-screen object that samples the previous buffer instead (a masked
   clear changes nothing).
 
-**Decoded on the EA3** (`b1`, `cm1`-`cm3` captures of probe-st; the Mesa
+**Decoded on a CE5300 board** (`b1`, `cm1`-`cm3` captures of probe-st; the Mesa
 driver draws them the same way, byte-identical to the DDK):
 
 - **The blend** is one `sop2` after the colour:
@@ -1049,7 +1049,7 @@ For w × h, no multisampling:
   entry's state word (+0x34) to `0x10 | (render details +0xd4 >> 14) << 12`
   (pc 0x0fa1-0x0fab). If the alternation and the frame word disagree, the
   frames retire the wrong entry: their PB pages are never freed, and the 3D
-  locks up on the fourth frame (EA3, 2026-10-28).
+  locks up on the fourth frame (2026-10-28).
 - **Renders in flight.** The microkernel tracks two renders in flight in
   the TA3D control block (+0x50 and +0x54; the kick picks a free slot at
   pc 0x09b7-0x09d3, and the render's end clears its slot at 0x0fbe-0x0fc5).
@@ -1291,7 +1291,7 @@ form calls for.
 
 ## Captures
 
-These were taken on the EA3 with `probe-st` (`tools/probe/probe.c`) under
+These were taken on a CE5300 board with `probe-st` (`tools/probe/probe.c`) under
 pvrtrace on 2026-10-28, all rc=0. Unless noted, each differs from its base
 in exactly one GL call.
 
@@ -1357,8 +1357,8 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 
 ## Hardware proof (blob-free replays)
 
-- **Setup:** `tools/decode/mkreplay.py <capture> --poke VA:word` on the EA3
-  (10.0.0.113), with the static x86_64 `tools/replay/replay`, no DDK loaded,
+- **Setup:** `tools/decode/mkreplay.py <capture> --poke VA:word` on a CE5300 board
+  with the static x86_64 `tools/replay/replay`, no DDK loaded,
   2026-10-28.
 - **The check:** each result is compared with a prediction computed from
   the capture's own glReadPixels output (scratchpad `w/pred.py`).
@@ -1414,7 +1414,7 @@ texture, so only mag is proven by the pixels; min stays [D].
 ## Building a frame from scratch
 
 Done in `tools/gen` (see `docs/GEN.md`): a frame built from these formulas
-alone is pixel-exact on the EA3. Two things it needed that this file didn't
+alone is pixel-exact on a CE5300 board. Two things it needed that this file didn't
 say:
 
 - every vertex program ends with an epilogue phase;
