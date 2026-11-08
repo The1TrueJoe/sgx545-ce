@@ -33,8 +33,9 @@ writes against the DDK's.
 import os
 
 DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+0xE8
-RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector: flag ctlblk+0xf0 (word 0x3c)
-                                             # = 0x1217 when a first kick starts a scene on a
+RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector: flag ctlblk+0xe0 (word 0x38,
+                                             # inside the driver's devcd dump) = 0x1217 when a
+                                             # first kick starts a scene on a
                                              # different RT while a render is still in flight (the
                                              # render-to-texture case the DDK's 2nd DPM slot
                                              # covers and ours does not). Default off -> no bytes.
@@ -1064,7 +1065,9 @@ def build(a):
         a.i("test.xor.eq p0, r5, r6")               # same RT -> not an interleave
         a.i("(p0) ba rtlog_done")
         a.i("limm r6, #0x1217")
-        a.st_sa(SA_SELF, 0x3c, 6)                   # seen an interleaved scene
+        a.st_sa(SA_SELF, 0x38, 6)                   # seen an interleaved scene (word 0x38 is
+                                                    # inside the driver's ta3dctl devcd dump,
+                                                    # which stops at 0x3a; sticky once set)
         a.label("rtlog_done")
     if WAIT_LOG:
         # stage marker: RESET to 1 only on the FIRST kick of a scene (r13!=0), so
