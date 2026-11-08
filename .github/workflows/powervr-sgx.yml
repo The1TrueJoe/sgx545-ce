@@ -12,6 +12,10 @@ on:
       board:
         description: openHC EA board (ea1-v1, ea3-v2, ...)
         default: ea1-v1
+      debug:
+        description: Lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (drm/ci/debug.fragment)
+        type: boolean
+        default: false
   push:
     branches: [m2-drm]
     paths:
@@ -23,13 +27,14 @@ on:
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
-  group: powervr-sgx-${{ github.ref }}-${{ inputs.board || 'ea1-v1' }}
+  group: powervr-sgx-${{ github.ref }}-${{ inputs.board || 'ea1-v1' }}-${{ inputs.debug && 'debug' || 'plain' }}
   cancel-in-progress: true
 
 env:
   LINUX_VERSION: 7.1.8
   OPENHC_REF: main
   BOARD: ${{ inputs.board || 'ea1-v1' }}
+  SET: ${{ inputs.board || 'ea1-v1' }}${{ inputs.debug && '-debug' || '' }}
 
 jobs:
   build:
@@ -77,6 +82,7 @@ jobs:
           [ -f linux-$LINUX_VERSION.tar.xz ] ||
             curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
           tar xf linux-$LINUX_VERSION.tar.xz
+          ${{ inputs.debug && 'export EXTRA_FRAGMENTS=$PWD/drm/ci/debug.fragment' || 'true' }}
           sh drm/ci/openhc-ea-kernel.sh "$PWD/openhc" "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
 
       - name: Build the kernel and modules
@@ -165,7 +171,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: powervr-sgx-${{ env.BOARD }}
+          name: powervr-sgx-${{ env.SET }}
           path: out/
           retention-days: 14
 

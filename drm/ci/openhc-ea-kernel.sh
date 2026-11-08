@@ -14,7 +14,8 @@
 # come from build.sh itself (OHC_DEFCONFIG_ONLY), so the board/ea/<model>/<board>
 # layers are followed as openHC follows them. On top: the vendor driver
 # (SGX545_CE) out and powervr_sgx in as a module (powervr-sgx.fragment).
-# BOARD picks the board (default ea1-v1).
+# BOARD picks the board (default ea1-v1); EXTRA_FRAGMENTS adds fragments last
+# (debug.fragment for the lockdep/KASAN/UBSAN kernel).
 set -eu
 
 OHC=$1
@@ -63,7 +64,7 @@ grep -q powervr_sgx "$SRC/drivers/gpu/drm/Makefile" ||
 
 frags="$(val BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES)"
 [ -n "$frags" ] || { echo "openhc-ea-kernel: build.sh gave no fragments for $BOARD" >&2; exit 1; }
-frags="$frags $B/ea/common/linux/real-kernel.fragment $DRM/ci/powervr-sgx.fragment"
+frags="$frags $B/ea/common/linux/real-kernel.fragment $DRM/ci/powervr-sgx.fragment ${EXTRA_FRAGMENTS:-}"
 echo ">> fragments:"
 printf '   %s\n' $frags
 
