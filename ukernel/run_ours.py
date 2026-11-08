@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright © 2026 Joseph Telaak
-"""Run openHC's microkernel (ukernel/) through a frame in the emulator and
+"""Run the open microkernel (ukernel/) through a frame in the emulator and
 diff the core registers it programs against the DDK's.
 
     python3 ukernel/run_ours.py TRACE [--ddk FW]
@@ -52,8 +52,8 @@ TRANSFERCMD_SHARED = 0xac
 
 
 def ours():
-    binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel-openhc.json")
+    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+    manp = os.path.join(HERE, "sgx545_ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     return open(binp, "rb").read(), json.load(open(manp))
 
@@ -299,7 +299,7 @@ def main():
         if r not in PLUMBING:
             ours_ph.setdefault(ph, {})[r] = v
     tot = sum(len(d) for ph, d in ours_ph.items() if ph in PHASE_MAP)
-    print(f"openHC microkernel: {len(out)} register writes; {tot} struct-sourced "
+    print(f"microkernel: {len(out)} register writes; {tot} struct-sourced "
           f"across phases {sorted(ours_ph)}")
     if not a.ddk:
         for ph in sorted(ours_ph):
@@ -323,7 +323,7 @@ def main():
     # during the teardown, with the same value (sync objects, render/RT/context
     # slot free). EXTRA = a write ours makes that the DDK does not.
     ddk_done = run_ddk_done(a.ddk, a.trace)
-    # openHC-internal control-block scratch (rendezvous WAIT_3D/WAIT_FREE 0x1d/0x1e,
+    # microkernel-internal control-block scratch (rendezvous WAIT_3D/WAIT_FREE 0x1d/0x1e,
     # cleanup defer counter 0x1c): bookkeeping the DDK keeps at its own offsets, not part
     # of the render teardown the DDK writes. Exclude from the done comparison.
     OHC_SCRATCH = {A["ta3d"] + 4 * w for w in (0x1c, 0x1d, 0x1e)}
