@@ -326,7 +326,19 @@ at +0xac, that is `sCtlStatusInfo[0]`; the count is at 0x164), clears the transf
 the context's CCB past the 0x1c0-byte command, and raises the host interrupt.
 The transfer also updates two sync-heap objects named by the kick's
 sync-handle list (not the shared command); reproducing those is the remaining
-increment. 2D is unused on this build (its host-kick entry is 0).
+increment.
+
+**When the DDK starts a transfer.**
+- A host kick only queues it.
+- The 3D scheduler (pc 0x1035-0x1047) starts one only while the 3D is free,
+  testing the sa9 3D-busy bits.
+- It then walks the transfer queue (pc 0x12dc-0x1351) and skips a transfer
+  whose sync objects still have ops pending.
+- The only DPM register a transfer writes is 0x63c = 0 (pc 0x13c4): no DPM
+  clear, store or load, and no free-list load.
+- A transfer started under a running render's 3D would therefore disarm that
+  render's page release, and its pages would never return to the free list.
+  So a microkernel must hold a transfer while a 3D is in flight. 2D is unused on this build (its host-kick entry is 0).
 
 ### Power (type 3)
 
