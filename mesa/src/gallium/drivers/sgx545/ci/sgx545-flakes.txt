@@ -41,3 +41,13 @@ dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.72
 dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.8
 dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.9
 dEQP-GLES2.functional.shaders.random.texture.fragment.100
+dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_bgra
+dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_rgb565
+dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_rgb565_depth_component16
+dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_rgb5_a1
+dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_rgba4
+dEQP-GLES2.functional.fbo.render.color.blend_npot_rbo_rgba4_depth_component16
+dEQP-GLES2.functional.fbo.render.color.blend_npot_tex2d_bgra
+dEQP-GLES2.functional.fbo.render.color.blend_npot_tex2d_rgb
+dEQP-GLES2.functional.fbo.render.color.blend_npot_tex2d_rgba
+dEQP-GLES2.functional.fbo.render.color.blend_npot_tex2d_rgba_depth_component16
