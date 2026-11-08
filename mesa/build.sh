@@ -73,9 +73,14 @@ for arch in $ARCHES; do
 		-e "s|@CPU@|$cpu|" "$HERE/cross/cross.ini.in" > "$O/cross.ini"
 	api="-Dopengl=false -Dglvnd=disabled"
 	if [ "$arch" = x86_64-gl ]; then
-		[ -f "${GLVND_SYSROOT:-/nonexistent}/usr/lib/pkgconfig/libglvnd.pc" ] || {
+		# a plain sysroot (usr/lib/pkgconfig) or a Debian one (multiarch)
+		pc=
+		for d in usr/lib/pkgconfig usr/lib/x86_64-linux-gnu/pkgconfig; do
+			[ -f "${GLVND_SYSROOT:-/nonexistent}/$d/libglvnd.pc" ] && pc="$GLVND_SYSROOT/$d"
+		done
+		[ -n "$pc" ] || {
 			echo "build.sh: x86_64-gl needs libglvnd in \$GLVND_SYSROOT" >&2; exit 1; }
-		sed -i.bak "s|^pkg_config_libdir = .*|pkg_config_libdir = ['$GLVND_SYSROOT/usr/lib/pkgconfig', '$GLVND_SYSROOT/usr/share/pkgconfig']\nsys_root = '$GLVND_SYSROOT'|" "$O/cross.ini"
+		sed -i.bak "s|^pkg_config_libdir = .*|pkg_config_libdir = ['$pc', '$GLVND_SYSROOT/usr/share/pkgconfig']\nsys_root = '$GLVND_SYSROOT'|" "$O/cross.ini"
 		api="-Dopengl=true -Dglvnd=enabled"
 	fi
 	platforms="-Dplatforms=fbdev -Degl-native-platform=fbdev -Dglx=disabled"

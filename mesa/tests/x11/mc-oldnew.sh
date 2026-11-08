@@ -119,6 +119,11 @@ w=0; while ! grep -q -E "$READY" "$LOG" 2>/dev/null && [ $w -lt 300 ]; do sleep 
 # LWJGL samples the mouse once a frame: a press and release need time between them
 click() { X mousemove "$1" "$2"; sleep 1; X mousedown 1; sleep 1; X mouseup 1; sleep 2; }
 sleep 10
+# MC_TITLE_SHOT=1: the title screen too, in <who>-<run>-title.raw
+if [ -n "${MC_TITLE_SHOT:-}" ]; then
+	if [ $WHO = old ]; then cat /dev/fb0 > "$OUT/$WHO-$RUN-title.raw"
+	else "$here/memdump" 0x7fc00000 $((736 * 480 * 4)) > "$OUT/$WHO-$RUN-title.raw"; fi
+fi
 click 360 236     # Singleplayer
 click 360 205     # the world
 click 202 396     # Play Selected World
