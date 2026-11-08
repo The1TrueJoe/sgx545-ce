@@ -2,7 +2,7 @@
 # Build Mesa with the sgx gallium driver (over powervr_sgx, or pvrsrvkm
 # through libpvr), the EGL fbdev platform, and GBM.
 #
-#   mesa/build.sh [x86_64] [i386] [x86_64-gl]       (default: x86_64 i386)
+#   mesa/build.sh [x86_64] [i386] [x86_64-gl] [x86_64-x11] [debian]   (default: x86_64 i386)
 #
 # Fetches the release in mesa/VERSION (checked against its sha256), unpacks
 # it under $SGX_MESA_BUILD (default build/mesa in the repo), applies
@@ -17,6 +17,7 @@
 #   x86_64-x11 x86_64 with desktop GL, GLX and the X11 platform through
 #           libglvnd, for an X server (DRI3 + Present) on the EA; compiles
 #           against the Debian root in $X11_SYSROOT (mesa/tests/x11/mkroot.py).
+#   debian  a native build on Debian (mesa/debian: CI) for /opt/sgx, for users.
 # Installs into $SGX_MESA_BUILD/<arch>/install (lib/libEGL.so.1,
 # lib/libGLESv2.so.2, lib/libgallium-<ver>.so, ...), and copies the winsys
 # test (sgx_frame_test) next to it.
@@ -65,8 +66,26 @@ for arch in $ARCHES; do
 	case $arch in
 	x86_64|x86_64-gl|x86_64-x11) target=x86_64-linux-gnu.2.36; family=x86_64; cpu=x86_64 ;;
 	i386) target=x86-linux-gnu.2.36; family=x86; cpu=i686 ;;
+	debian) ;;
 	*) echo "build.sh: unknown arch $arch" >&2; exit 1 ;;
 	esac
+	if [ "$arch" = debian ]; then
+		# Native, on a Debian system with Mesa's build dependencies, for /opt/sgx:
+		# GLX and EGL through glvnd, GBM, X11 and Wayland; powervr_sgx only.
+		O=$B/debian
+		[ -f "$O/build/build.ninja" ] ||
+			meson setup "$O/build" "$TREE" --buildtype=release --prefix=/opt/sgx --libdir=lib \
+				-Dplatforms=x11,wayland -Degl-native-platform=x11 -Dglx=dri -Dglvnd=enabled \
+				-Dgallium-drivers=sgx -Dvulkan-drivers= -Dopengl=true \
+				-Dgles1=enabled -Dgles2=enabled -Degl=enabled -Dgbm=enabled -Dllvm=disabled \
+				-Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled
+		ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test
+		rm -rf "$O/install"
+		DESTDIR="$O/install" meson install -C "$O/build" --no-rebuild --quiet
+		cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/install/opt/sgx/lib/"
+		echo "build.sh: debian -> $O/install/opt/sgx"
+		continue
+	fi
 	O=$B/$arch
 	mkdir -p "$O"
 	sed -e "s|@ZIGCC@|$HERE/cross/zigcc|" -e "s|@TARGET@|$target|" -e "s|@FAMILY@|$family|" \

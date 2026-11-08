@@ -1,0 +1,66 @@
+# Mesa with the sgx driver for Debian 13 (trixie) users: built natively in a
+# trixie container (mesa/build.sh debian) for /opt/sgx, packed with the two files
+# that put it ahead of Debian's Mesa (mesa/debian/etc). docs/INSTALL.md.
+name: mesa-debian
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [um-re]
+    paths:
+      - mesa/**
+      - drm/powervr_sgx/include/uapi/**
+      - docs/uapi/**
+      - tools/gen/**
+      - .github/workflows/mesa-debian.yml
+
+permissions:
+  contents: read
+
+jobs:
+  mesa:
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 90
+    steps:
+      - name: Build dependencies
+        run: |
+          set -eux
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git perl patch xz-utils python3 python3-mako python3-yaml python3-packaging \
+            meson ninja-build pkg-config bison flex gcc g++ glslang-tools \
+            libdrm-dev libglvnd-dev libx11-dev libxext-dev libxfixes-dev libxdamage-dev libxrandr-dev \
+            libxxf86vm-dev libxshmfence-dev libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-dri3-dev \
+            libxcb-present-dev libxcb-sync-dev libxcb-glx0-dev libxcb-randr0-dev libxcb-xfixes0-dev \
+            libxcb-shm0-dev libxcb-keysyms1-dev libwayland-dev wayland-protocols libwayland-egl-backend-dev \
+            libexpat1-dev zlib1g-dev libzstd-dev libudev-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          set -eux
+          SGX_MESA_BUILD=$PWD/build/mesa sh mesa/build.sh debian
+
+      - name: Package
+        run: |
+          set -eux
+          v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          P=$PWD/pkg
+          mkdir -p $P
+          cp -a build/mesa/debian/install/opt $P/
+          cp -a mesa/debian/etc $P/
+          { echo "Mesa with the sgx driver, um-re $v, built on Debian 13 (trixie)";
+            echo "install:   sudo tar -xzf mesa-sgx-trixie-$v.tar.gz -C / && sudo ldconfig";
+            echo "uninstall: sudo rm -rf /opt/sgx /etc/ld.so.conf.d/00-sgx.conf /etc/glvnd/egl_vendor.d/10_sgx.json && sudo ldconfig";
+          } > $P/opt/sgx/README
+          tar -C $P --owner=0 --group=0 -czf mesa-sgx-trixie-$v.tar.gz opt etc
+          tar -tzf mesa-sgx-trixie-$v.tar.gz | head -40
+          sha256sum mesa-sgx-trixie-$v.tar.gz > mesa-sgx-trixie-$v.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-sgx-trixie
+          path: mesa-sgx-trixie-*.tar.gz*
+          retention-days: 90
