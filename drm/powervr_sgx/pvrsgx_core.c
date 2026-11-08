@@ -21,12 +21,12 @@ static const struct pvrsgx_core_info cores[] = {
 			    PVRSGX_FEATURE_MULTI_EVENT_KICK,
 		.num_dir_lists = 16,
 		.clock_hz = 400000000,
-		.fw_name = "powervr_sgx/sgx545-openhc-ukernel.bin",
+		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
 		.ddk_fw_name = "powervr_sgx/sgx545-ukernel-1.7.862890.bin",
 	},
 };
 
-MODULE_FIRMWARE("powervr_sgx/sgx545-openhc-ukernel.bin");
+MODULE_FIRMWARE("powervr_sgx/sgx545_ukernel.bin");
 
 /* The entry for this core, or NULL if the driver doesn't know it or can't drive it. */
 const struct pvrsgx_core_info *pvrsgx_core_lookup(u32 core_id, u32 core_rev)

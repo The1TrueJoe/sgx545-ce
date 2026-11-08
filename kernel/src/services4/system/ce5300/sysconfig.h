@@ -1,7 +1,7 @@
 /**********************************************************************
  *
  * Copyright (C) Imagination Technologies Ltd. All rights reserved.
- * Copyright (C) 2026 openHC contributors.
+ * Copyright (C) 2026 Joseph Telaak
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,

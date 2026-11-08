@@ -63,7 +63,7 @@ tests.
 | `pvrsgx_debugfs.c` | `status`; `render` (the last render's structures); `render_before` (with `snapshot=1`: as its last kick was written) |
 | `drm/tests/powervr_sgx_test.c` | uAPI tests, IGT style: every ioctl, every reserved bit, streams, VAs outside the VM |
 | `drm/tests/powervr_sgx_frame.c`, `_blit.c`, `_hang.c` | frames, blits, mixed submits and hang recovery on the GPU |
-| `drm/ci/` | the openHC EA kernel with this driver, for CI and RAM boots |
+| `drm/ci/` | the CE5300 board kernel with this driver, for CI and RAM boots |
 
 ## 3. Bringing the GPU up
 
@@ -93,7 +93,7 @@ value is the one `docs/SRVINIT.md` lists.
 
 Stopping is the DDK's power-off: a `POWER` command with `POWEROFF`, a poll for
 `POWEROFF_COMPLETE`, a wait for the clocks to gate, the deinit script, and the cores held in
-reset (as openHC's `ce5300-sgx-quiesce` does at handoff).
+reset (as the board's `ce5300-sgx-quiesce` service does at handoff).
 
 ## 4. Address translation
 
@@ -297,7 +297,7 @@ builds as a static binary and runs on an EA. The subtests map one to one onto an
 suite.
 
 The test kernel is built in CI (`.github/workflows/powervr-sgx.yml`): kernel.org 7.1.8
-with openHC's EA patches, drivers and config (`drm/ci/openhc-ea-kernel.sh`), the vendor
+with the CE5300 board's patches, drivers and config (`drm/ci/ce5300-kernel.sh`), the vendor
 driver out and this one in as a module. It is booted from RAM through a one-shot
 `S00aramboot` before anything has touched the GPU, and never flashed.
 

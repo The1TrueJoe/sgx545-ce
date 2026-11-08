@@ -92,7 +92,7 @@ typedef IMG_INT32       IMG_RESULT;
 	typedef IMG_UINT64			IMG_SIZE_T;
 #elif defined(__LP64__) || defined(__x86_64__) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 8)
 	/*
-	 * openHC: 64-bit Linux (x86_64). The upstream DDK only widened IMG_UINTPTR_T
+	 * 64-bit Linux (x86_64). The upstream DDK only widened IMG_UINTPTR_T
 	 * for _WIN64, so on a 64-bit Linux kernel it fell through to `unsigned int`
 	 * and TRUNCATED every pointer stored through it. The services hash (per-process
 	 * data) and the handle-table keys (HAND_KEY) hold kernel pointers this way, so

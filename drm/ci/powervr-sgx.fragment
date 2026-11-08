@@ -1,4 +1,4 @@
-# The openHC EA real kernel with powervr_sgx in place of the vendor driver.
+# The CE5300 board kernel with powervr_sgx in place of the vendor driver.
 # RAM-boot test kernel only: never flash it.
 CONFIG_LOCALVERSION="-m2drm"
 CONFIG_MODULES=y
