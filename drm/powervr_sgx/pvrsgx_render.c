@@ -42,6 +42,8 @@
 #define CCB_RING		0x10000
 #define CCB_BYTES		0x10420
 #define TA_CMD_BYTES		0x2c0	/* 0x2b0 rounded up to 64 */
+/* The background object's middle PDS word, a constant. */
+#define BG_PDS_MIDDLE		0x00030001
 #define TA_CMD_SHARED		0x58
 #define TA_CMD_TAIL		0x238
 #define RT_MAX_DIM		2048
@@ -675,7 +677,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_rt_dataset *s = rj->rtds;
 	const struct powervr_sgx_stream_render *in = &rj->render;
 	bool first = k == 0, last = k == rj->nkicks - 1;
-	u32 f, odd, rgn_this, rgn_next, entry, *cmd, *sh, *t, *rd, *sl, *s3d, *done;
+	u32 f, odd, rgn_this, rgn_next, entry, *cmd, *sh, *t, *rd, *sl, *s3d, *done, *b;
 	u32 woff = r->ccb_woff, zls_base = 0;
 
 	if (last && k && snap_gap_ms)
@@ -714,6 +716,16 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		rd[0xdc / 4] = entry;
 		kobj_cpu(s->rd_w4)[0] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
 
+		/*
+		 * The background object's PDS words, as the DDK microkernel copies them
+		 * at the 3D start (secondary, middle, primary): the open microkernel
+		 * leaves them to the host, so it never runs on the job's directory.
+		 */
+		b = kobj_cpu(s->bgblock);
+		b[0] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
+		b[1] = BG_PDS_MIDDLE;
+		b[2] = kobj_cpu(s->rd_w4)[0];
+
 		/* What the microkernel clears and the client sets before a scene. */
 		kobj_cpu(s->rtword)[0] = f + 1;
 		kobj_cpu(s->rd_sync)[0] = 1;
@@ -730,7 +742,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		/* 0x10 on the dataset's first render only, as for one kick */
 		cmd[0x04 / 4] = first ? 0x61 | (f ? 0 : 0x10) : last ? 0x62 : 0x60;
 	cmd[0x08 / 4] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
-	cmd[0x0c / 4] = 0x00030001;
+	cmd[0x0c / 4] = BG_PDS_MIDDLE;
 	cmd[0x10 / 4] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
 	cmd[0x14 / 4] = 0x50000000;
 	cmd[0x18 / 4] = 0x50000000;

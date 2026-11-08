@@ -511,6 +511,13 @@ The patch table holds `{ u32 offset, u32 value }` pairs. Each one names an
 
 Host-kick table: identity. The `ServiceAddress` of a command is its type.
 
+Host control word 15 (+0x3c) carries flags for the open microkernel only. The driver
+never sets it for the DDK image.
+
+| bit | meaning |
+|---|---|
+| 0 | the host has already written the background object's three PDS words (secondary, middle, primary, at the RT entry's background block +0x00/+0x04/+0x08) for every render; skip the 3D start's copy and its EDM-on-the-job's-directory window |
+
 The driver refuses a file whose sizes or offsets run past its end, whose CRC
 doesn't match, whose interface major it doesn't know, or that sets an unknown
 feature bit or table value.

@@ -929,6 +929,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
 	hc[HOSTCTL_HWR_SAMPLE_RATE] = UKERNEL_TIMER_HZ / HWR_CHECK_HZ;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = core_clock / UKERNEL_TIMER_HZ;
+	if (!sdev->fw.ddk)
+		hc[HOSTCTL_OPENHC_FLAGS] = HOSTCTL_OPENHC_HOST_BGBLOCK;
 	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
 	/* SGXPostPowerState clears the power status before every start. */
 	hc[HOSTCTL_POWER_STATUS] = 0;
