@@ -19,6 +19,7 @@ powervr_sgx-y := \
 	pvrsgx_mmu.o \
 	pvrsgx_pds.o \
 	pvrsgx_render.o \
+	pvrsgx_transfer.o \
 	pvrsgx_trace.o \
 	pvrsgx_validate.o \
 	pvrsgx_vm.o \

@@ -16,6 +16,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/seq_buf.h>
 
 static bool reap_after_render;
 module_param(reap_after_render, bool, 0444);
@@ -158,3 +159,33 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 		drm_mm_takedown(&sdev->krange[r]);
 	mutex_destroy(&sdev->kobj_lock);
 }
+
+void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
+{
+	pvrsgx_kobj_release(sdev, *o);
+	*o = NULL;
+}
+
+/* A kernel object into *dst, which stays NULL on failure. */
+int pvrsgx_kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst,
+		    enum pvrsgx_krange range, u32 size, u32 min, struct pvrsgx_vm *vm)
+{
+	struct pvrsgx_kobj *o = pvrsgx_kobj_create(sdev, range, size, min, vm);
+
+	if (IS_ERR(o))
+		return PTR_ERR(o);
+	*dst = o;
+	return 0;
+}
+
+void pvrsgx_kobj_dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off,
+		      u32 bytes)
+{
+	const u32 *w = (const u32 *)((const u8 *)kobj_cpu(o) + off);
+
+	seq_buf_printf(sb, "%s @ 0x%08x:", name, kobj_va(o) + off);
+	for (u32 i = 0; i < bytes / 4; i++)
+		seq_buf_printf(sb, "%s%08x", i % 8 ? " " : "\n  ", READ_ONCE(w[i]));
+	seq_buf_puts(sb, "\n");
+}
+

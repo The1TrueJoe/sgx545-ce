@@ -11,6 +11,7 @@
 #include <linux/types.h>
 
 #include "pvrsgx_render.h"
+#include "pvrsgx_transfer.h"
 
 struct drm_device;
 struct drm_file;
