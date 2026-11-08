@@ -131,7 +131,7 @@ EDM breakpoints, no `FIX_HW_BRN_28889`, no extended perf counters):
 | 12 | `ui32TimeWraps` | microkernel |
 | 13 | `ui32HostClock`: the host's clock in µs, written at start | host |
 | 14 | `ui32AssertFail` | microkernel |
-| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
+| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses the word as flags (powervr_sgx's `HOSTCTL_FLAGS`), b0 = `HOSTCTL_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
 | 16 | `ui32BRN31939Mem` (present because the build is for core revision 1013, which carries `FIX_HW_BRN_31939`; the host never touches it). The open microkernel reuses the word for its cleanup v2 sequence echo (section 3) | microkernel |
 | 17 | `ui32OpenCLDelayCount` | |
 
