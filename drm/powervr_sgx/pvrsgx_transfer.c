@@ -12,6 +12,7 @@
 #include "powervr_sgx_stream.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_fwif.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
@@ -26,17 +27,14 @@
  * kernel owns the HW transfer context, its command ring and the completion
  * sync, and writes the command from the client's CMD_TRANSFER stream.
  */
-#define XFER_HWCTX_BYTES	0xb4
 #define XFER_CCB_BYTES		0x104c8	/* 0x10000 ring + slack for a command that wraps */
-#define XFER_CMD_BYTES		0x1c0
-#define XFER_SHARED		0xac	/* the shared part of the command */
 #define XFER_TILES_X_MAX	127	/* 4096 pixels: G14 has the real limit */
 #define XFER_TILES_Y_MAX	255
 
 int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
 {
 	struct pvrsgx_transfer_ctx *x = kzalloc_obj(*x);
-	u32 *hw;
+	struct pvrsgx_fw_hw_transfer_ctx *hw;
 	int err;
 
 	if (!x)
@@ -46,18 +44,18 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 	err = pvrsgx_kobj_new(sdev, &x->ccb, PVRSGX_KRANGE_KDATA, XFER_CCB_BYTES, 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &x->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &x->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
-	err = err ?: pvrsgx_kobj_new(sdev, &x->hwctx, PVRSGX_KRANGE_KCODE, XFER_HWCTX_BYTES, 0,
-				     NULL);
+	err = err ?: pvrsgx_kobj_new(sdev, &x->hwctx, PVRSGX_KRANGE_KCODE,
+				     sizeof(struct pvrsgx_fw_hw_transfer_ctx), 0, NULL);
 	if (err)
 		goto fail;
 
 	/* SGXCreateTransferContext's words; the rest stays zero. */
-	hw = kobj_cpu(x->hwctx);
-	hw[0] = 1;
-	hw[2] = pvrsgx_mmu_pd_addr(ctx->vm->mmu);
-	hw[3] = kobj_va(x->ccb);
-	hw[4] = kobj_va(x->ccbctl);
-	hw[0x2a] = task_tgid_nr(current);
+	hw = (void *)kobj_cpu(x->hwctx);
+	hw->flags = 1;
+	hw->page_dir = pvrsgx_mmu_pd_addr(ctx->vm->mmu);
+	hw->ccb = kobj_va(x->ccb);
+	hw->ccb_ctl = kobj_va(x->ccbctl);
+	hw->pid = task_tgid_nr(current);
 	return 0;
 
 fail:
@@ -115,42 +113,41 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	struct pvrsgx_transfer_ctx *x = job->ctx->transfer;
 	const struct powervr_sgx_stream_transfer *in = &job->transfer.xfer;
 	u32 woff = x->ccb_woff, base = (u32)in->bg_block_addr & 0xfff00000;
-	u32 *cmd = (u32 *)((u8 *)kobj_cpu(x->ccb) + woff), *sh, *done;
+	struct pvrsgx_fw_transfer_cmd *cmd = (void *)((u8 *)kobj_cpu(x->ccb) + woff);
+	u32 *done = kobj_cpu(x->done);
 
 	job->transfer.cmd_off = woff;
-	memset(cmd, 0, XFER_CMD_BYTES);
-	cmd[0] = 1u << 25 | ((u32)in->bg_block_addr - base) >> 4;
-	cmd[1] = 0x200;
-	cmd[2] = in->bg_depth;
-	cmd[3] = 3;
-	cmd[5] = 0x100;
-	cmd[6] = base;
-	cmd[7] = 0x80000000;
-	cmd[8] = 0x88;
-	cmd[9] = (u32)in->pixel_event_pds_addr;
-	cmd[10] = in->pixel_event_pds_rows;
-	cmd[11] = 1;
-	cmd[12] = in->first_tile_x << 16 | in->first_tile_y;
-	cmd[13] = in->last_tile_x << 16 | in->last_tile_y;
-	cmd[14] = 0x80;
-	cmd[15] = PVRSGX_HEAP_PDS_PIXEL;	/* EUR_CR_PDS_EXEC_BASE: never the client's */
-	cmd[0xa4 / 4] = XFER_CMD_BYTES;
-	cmd[0xa8 / 4] = job->transfer.dst_twiddled ? 8 : 0;
-	cmd[0x194 / 4] = 0x07c00000;
+	memset(cmd, 0, sizeof(*cmd));
+	cmd->bg_object = 0x2000000 | ((u32)in->bg_block_addr - base) >> 4;
+	cmd->unk_04 = 0x200;
+	cmd->bg_depth = in->bg_depth;
+	cmd->unk_0c = 3;
+	cmd->unk_14 = 0x100;
+	cmd->req_base_3d = base;
+	cmd->rt_ctl = BIT(31);
+	cmd->rt_flags = 0x88;
+	cmd->pixel_event_pds = (u32)in->pixel_event_pds_addr;
+	cmd->pixel_event_rows = in->pixel_event_pds_rows;
+	cmd->unk_2c = 1;
+	cmd->first_tile = in->first_tile_x << 16 | in->first_tile_y;
+	cmd->last_tile = in->last_tile_x << 16 | in->last_tile_y;
+	cmd->unk_38 = 0x80;
+	cmd->pds_exec_base = PVRSGX_HEAP_PDS_PIXEL;	/* never the client's */
+	cmd->size = sizeof(*cmd);
+	cmd->flags = job->transfer.dst_twiddled ? PVRSGX_TRANSFER_DST_TWIDDLED : 0;
+	cmd->unk_194 = 0x07c00000;
 
 	/* No source syncs; one destination, the kernel's completion sync. */
-	sh = cmd + XFER_SHARED / 4;
-	done = kobj_cpu(x->done);
-	sh[0x84 / 4] = 1;			/* ui32NumDstSyncs */
-	sh[0x88 / 4] = done[SYNC_READ_PENDING];
-	sh[0x8c / 4] = kobj_va(x->done) + SYNC_READ_COMPLETE * 4;
-	sh[0x90 / 4] = done[SYNC_WRITE_PENDING]++;
-	sh[0x94 / 4] = kobj_va(x->done) + SYNC_WRITE_COMPLETE * 4;
+	cmd->num_dst = 1;
+	cmd->dst_read_pending = done[SYNC_READ_PENDING];
+	cmd->dst_read_complete = kobj_va(x->done) + SYNC_READ_COMPLETE * 4;
+	cmd->dst_write_pending = done[SYNC_WRITE_PENDING]++;
+	cmd->dst_write_complete = kobj_va(x->done) + SYNC_WRITE_COMPLETE * 4;
 	/* The microkernel sets write-complete to the pending value plus one. */
 	job->done_cpu = &done[SYNC_WRITE_COMPLETE];
-	job->done_val = sh[0x90 / 4] + 1;
+	job->done_val = cmd->dst_write_pending + 1;
 
-	x->ccb_woff = (woff + XFER_CMD_BYTES) & (CCB_RING - 1);
+	x->ccb_woff = (woff + sizeof(*cmd)) & (CCB_RING - 1);
 	/* The command is in memory before the write offset that hands it over. */
 	wmb();
 	kobj_cpu(x->ccbctl)[0] = x->ccb_woff;
@@ -166,8 +163,9 @@ void pvrsgx_transfer_dump(struct seq_buf *sb, struct pvrsgx_job *job)
 
 	if (!x)
 		return;
-	pvrsgx_kobj_dump(sb, "xfer_hwctx", x->hwctx, 0, XFER_HWCTX_BYTES);
+	pvrsgx_kobj_dump(sb, "xfer_hwctx", x->hwctx, 0, sizeof(struct pvrsgx_fw_hw_transfer_ctx));
 	pvrsgx_kobj_dump(sb, "xfer_ccbctl", x->ccbctl, 0, 8);
-	pvrsgx_kobj_dump(sb, "xfer_cmd", x->ccb, job->transfer.cmd_off, XFER_CMD_BYTES);
+	pvrsgx_kobj_dump(sb, "xfer_cmd", x->ccb, job->transfer.cmd_off,
+			 sizeof(struct pvrsgx_fw_transfer_cmd));
 	pvrsgx_kobj_dump(sb, "xfer_done", x->done, 0, SYNC_DATA_BYTES);
 }

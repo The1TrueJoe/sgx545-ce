@@ -348,4 +348,143 @@ static_assert(offsetof(struct pvrsgx_fw_render_details, unk_104) == 0x104);
 static_assert(offsetof(struct pvrsgx_fw_render_details, unk_13c) == 0x13c);
 static_assert(sizeof(struct pvrsgx_fw_render_details) == 0x1ec);
 
+/* struct pvrsgx_fw_hw_render_ctx.flags */
+#define PVRSGX_HW_RENDER_CTX_VALID	BIT(0)
+#define PVRSGX_HW_RENDER_CTX_OWN_PB	BIT(5)
+
+/**
+ * struct pvrsgx_fw_hw_render_ctx - A render context, as the microkernel sees it
+ */
+struct pvrsgx_fw_hw_render_ctx {
+	/** @flags: PVRSGX_HW_RENDER_CTX_*. */
+	u32 flags;
+	/* private: */
+	u32 pad_04;
+	/* public: */
+	/** @page_dir: Physical address of the context's page directory. */
+	u32 page_dir;
+	/** @ccb: Device address of the context's command ring. */
+	u32 ccb;
+	/** @ccb_ctl: Device address of its write and read offsets. */
+	u32 ccb_ctl;
+	/* private: */
+	u32 pad_14;
+	/* public: */
+	/** @pb_desc: Device address of the PB descriptor. */
+	u32 pb_desc;
+	/** @scratch: Device address of the microkernel's per-context scratch block. */
+	u32 scratch;
+	/* private: */
+	u32 pad_20[8];
+	/* public: */
+	/** @pid: The creating process. */
+	u32 pid;
+};
+
+static_assert(sizeof(struct pvrsgx_fw_hw_render_ctx) == 0x44);
+
+/**
+ * struct pvrsgx_fw_hw_transfer_ctx - A transfer context, as the microkernel sees it
+ */
+struct pvrsgx_fw_hw_transfer_ctx {
+	/** @flags: 1. */
+	u32 flags;
+	/* private: */
+	u32 pad_04;
+	/* public: */
+	/** @page_dir: Physical address of the context's page directory. */
+	u32 page_dir;
+	/** @ccb: Device address of the context's command ring. */
+	u32 ccb;
+	/** @ccb_ctl: Device address of its write and read offsets. */
+	u32 ccb_ctl;
+	/* private: */
+	u32 pad_14[37];
+	/* public: */
+	/** @pid: The creating process. */
+	u32 pid;
+	/* private: */
+	u32 pad_ac[2];
+};
+
+static_assert(offsetof(struct pvrsgx_fw_hw_transfer_ctx, pid) == 0xa8);
+static_assert(sizeof(struct pvrsgx_fw_hw_transfer_ctx) == 0xb4);
+
+/* struct pvrsgx_fw_transfer_cmd.flags */
+#define PVRSGX_TRANSFER_DST_TWIDDLED	BIT(3)
+
+/**
+ * struct pvrsgx_fw_transfer_cmd - One transfer: a 3D render of a background object
+ *
+ * docs/TEX.md sections 3 and 10. The first words are 3D registers in the
+ * render details' encoding; the shared part carries the destination sync.
+ */
+struct pvrsgx_fw_transfer_cmd {
+	/** @bg_object: 0x2000000 | (background block - @req_base_3d) >> 4. */
+	u32 bg_object;
+	/** @unk_04: 0x200. */
+	u32 unk_04;
+	/** @bg_depth: Depth every tile starts from, a float. */
+	u32 bg_depth;
+	/** @unk_0c: 3. */
+	u32 unk_0c;
+	/* private: */
+	u32 pad_10;
+	/* public: */
+	/** @unk_14: 0x100. */
+	u32 unk_14;
+	/** @req_base_3d: 3D request base, 1 MiB aligned. */
+	u32 req_base_3d;
+	/** @rt_ctl: Bit 31. */
+	u32 rt_ctl;
+	/** @rt_flags: 0x88. */
+	u32 rt_flags;
+	/** @pixel_event_pds: End-of-tile PDS program. */
+	u32 pixel_event_pds;
+	/** @pixel_event_rows: Its data rows. */
+	u32 pixel_event_rows;
+	/** @unk_2c: 1. */
+	u32 unk_2c;
+	/** @first_tile: First tile, x << 16 | y. */
+	u32 first_tile;
+	/** @last_tile: Last tile, x << 16 | y. */
+	u32 last_tile;
+	/** @unk_38: 0x80. */
+	u32 unk_38;
+	/** @pds_exec_base: PDS execution base: the pixel PDS heap. */
+	u32 pds_exec_base;
+	/* private: */
+	u32 pad_40[25];
+	/* public: */
+	/** @size: The command's size in bytes. */
+	u32 size;
+	/** @flags: PVRSGX_TRANSFER_*. */
+	u32 flags;
+	/* private: */
+	u32 pad_ac[33];
+	/* public: */
+	/** @num_dst: Destination syncs, 1. */
+	u32 num_dst;
+	/** @dst_read_pending: The destination sync's read-ops-pending value. */
+	u32 dst_read_pending;
+	/** @dst_read_complete: Its read-ops-complete address. */
+	u32 dst_read_complete;
+	/** @dst_write_pending: Its write-ops-pending value. */
+	u32 dst_write_pending;
+	/** @dst_write_complete: Its write-ops-complete address. */
+	u32 dst_write_complete;
+	/* private: */
+	u32 pad_144[20];
+	/* public: */
+	/** @unk_194: 0x7c00000. */
+	u32 unk_194;
+	/* private: */
+	u32 pad_198[10];
+};
+
+static_assert(offsetof(struct pvrsgx_fw_transfer_cmd, size) == 0xa4);
+static_assert(offsetof(struct pvrsgx_fw_transfer_cmd, num_dst) == 0x130);
+static_assert(offsetof(struct pvrsgx_fw_transfer_cmd, unk_194) == 0x194);
+static_assert(sizeof(struct pvrsgx_fw_transfer_cmd) == 0x1c0);
+
 #endif /* PVRSGX_FWIF_H */

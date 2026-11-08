@@ -176,7 +176,7 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 {
 	struct pvrsgx_render_ctx *r = kzalloc_obj(*r);
 	struct pvrsgx_vm *vm = ctx->vm;
-	u32 *hw;
+	struct pvrsgx_fw_hw_render_ctx *hw;
 	int err = -ENOMEM;
 
 	if (!r)
@@ -195,19 +195,20 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 	err = err ?: pvrsgx_kobj_new(sdev, &r->ccbctl, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &r->sync3d, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0,
 				     NULL);
-	err = err ?: pvrsgx_kobj_new(sdev, &r->hwctx, PVRSGX_KRANGE_KCODE, 0x44, 0, NULL);
+	err = err ?: pvrsgx_kobj_new(sdev, &r->hwctx, PVRSGX_KRANGE_KCODE,
+				     sizeof(struct pvrsgx_fw_hw_render_ctx), 0, NULL);
 	if (err)
 		goto fail;
 
 	/* HW render context: the microkernel points list 0 at word 2's directory. */
-	hw = kobj_cpu(r->hwctx);
-	hw[0] = 0x21;			/* b0, b5 = per-context PB */
-	hw[2] = pvrsgx_mmu_pd_addr(vm->mmu);
-	hw[3] = kobj_va(r->ccb);
-	hw[4] = kobj_va(r->ccbctl);
-	hw[6] = kobj_va(r->pb->desc);
-	hw[7] = kobj_va(r->scratch);
-	hw[16] = task_tgid_nr(current);
+	hw = (void *)kobj_cpu(r->hwctx);
+	hw->flags = PVRSGX_HW_RENDER_CTX_VALID | PVRSGX_HW_RENDER_CTX_OWN_PB;
+	hw->page_dir = pvrsgx_mmu_pd_addr(vm->mmu);
+	hw->ccb = kobj_va(r->ccb);
+	hw->ccb_ctl = kobj_va(r->ccbctl);
+	hw->pb_desc = kobj_va(r->pb->desc);
+	hw->scratch = kobj_va(r->scratch);
+	hw->pid = task_tgid_nr(current);
 	return 0;
 
 fail:
@@ -780,7 +781,7 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	seq_buf_printf(sb, "PB 0x%08x pages 0x%x base 0x%08x; free list 0x%08x; scratch 0x%08x\n",
 		       kobj_va(r->pb->buf), r->pb->pages, r->pb->base, kobj_va(r->pb->freelist),
 		       kobj_va(r->scratch));
-	pvrsgx_kobj_dump(sb, "hwctx", r->hwctx, 0, 0x44);
+	pvrsgx_kobj_dump(sb, "hwctx", r->hwctx, 0, sizeof(struct pvrsgx_fw_hw_render_ctx));
 	pvrsgx_kobj_dump(sb, "ccbctl", r->ccbctl, 0, 8);
 	pvrsgx_kobj_dump(sb, "pbdesc", r->pb->desc, 0, sizeof(struct pvrsgx_fw_pb_desc));
 	pvrsgx_kobj_dump(sb, "pbblocks", r->pb->blocks, 0, 0x10);
