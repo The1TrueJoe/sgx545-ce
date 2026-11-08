@@ -303,7 +303,6 @@ requests (header + feature bits applied by the driver's packaging tool over the
 Driver: powervr_sgx — PowerVR SGX5xx (e.g. SGX545 on the Intel Atom CE5300)
 
 File: powervr_sgx/sgx545_ukernel.bin
-File: powervr_sgx/sgx545_ukernel.bin
 Version: 1.0
 Source: <source-repository-url>/ukernel   (ukernel.py + build.py; the DRM
         driver's packaging tool applies the header/feature bits)
