@@ -453,3 +453,196 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
 9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`) become part of
    the driver's MR series. Nothing in these three trees depends on them
    beyond `with_gallium_sgx` entering `src/sgx`.
+
+## Kernel (powervr_sgx)
+
+Owner: powervr_sgx. `drm/powervr_sgx`, the gma500 patch in `drm/gma500`, the
+uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
+
+### Design
+
+- [x] **One driver for the SGX5xx family.** `pvrsgx_core.c` has one entry per
+  supported core: ID and revision, the features the driver relies on (as
+  `SGX_FEATURE_*` in the GPL DDK's `sgxfeaturedefs.h`), the number of BIF
+  directory lists, the core clock and the firmware file. A core that isn't
+  listed, or lacks a required feature, is refused before any register write.
+  The SGX535 (also 16 directory lists, multiple memory contexts, plus a 2D core)
+  would be a new entry and a check of the features it lacks.
+- [x] **No vendor microkernel.** The driver knows only the open microkernel,
+  and loads it only if it declares secure mode (no client directory maps the
+  firmware's heaps). The vendor image, its entry programs and patch sites, and
+  the shared-kernel-heap mode it needs are an out-of-tree patch
+  (`drm/ci/ddk-compat.patch`, about 400 lines) that only the CE5300 test
+  kernels apply.
+- [x] **Fail closed on unknown hardware.** Core table above; the gma500
+  auxiliary-device probe checks the BAR size and parent.
+- [ ] **Cedarview entry.** Needs the core revision from the tester's kit v1
+  report (`probe_only=1`).
+- [x] **Firmware name.** The CE5300 entry names
+  `powervr_sgx/sgx545_ukernel.bin`, the name agreed with the firmware section
+  (one file per core under the module's directory).
+- [ ] **Upstream tree layout.** The uAPI header moves to
+  `include/uapi/drm/powervr_sgx_drm.h` (now a symlink under the driver);
+  `drm/MAINTAINERS.fragment` and `drm/Documentation/gpu/powervr_sgx/` are
+  ready to move.
+- [ ] **Debug module parameters.** Reviewers will ask which parameters a user
+  needs. Keep: `runtime_pm`, `job_timeout_ms`, `firmware`. Developer-only,
+  to move behind debugfs or drop: `idle_kernel_pd`, `probe_only`, `core_clock`,
+  `cleanup`, `hwr_check`, `restart_quiesce`, `single_entry`, `snapshot`,
+  `snap_gap_ms`, `reap_after_render`. `share_kernel_heaps` goes with DDK
+  compat.
+
+### Tools (CI)
+
+`.github/workflows/powervr-sgx.yml` (the EA kernel) and
+`.github/workflows/powervr-sgx-upstream.yml` (mainline with the gma500 patch,
+both configurations).
+
+- [x] `checkpatch.pl --strict` on every driver file, the tests and the uAPI
+  header: clean.
+- [x] `kernel-doc -Wall -Werror` on the uAPI header and every driver file.
+- [x] sparse (`C=2`), driver and gma500.
+- [x] gcc `W=1`, in tree and out of tree; the CE5300 test kernels also build the DDK-compat patch.
+- [x] clang `W=1` (`LLVM=1`), upstream configuration.
+- [x] smatch (`-p=kernel`).
+- [x] coccinelle (`make coccicheck MODE=report`).
+- [x] uAPI layout: `docs/uapi/check_layout.c` built `-m32` and `-m64` with
+  `-Wpadded -Werror` (one layout, no implicit padding), and its negative case
+  must fail.
+- [x] KUnit: the firmware file checks, under QEMU.
+- [ ] **Runtime checkers on the EA.** The EA workflow's `debug` input builds the
+  RAM-boot kernel with lockdep (`PROVE_LOCKING`), KASAN, UBSAN, DMA-API debug,
+  kmemleak and debug objects (`drm/ci/debug.fragment`). To run: the uAPI
+  suite, the frame, blit, hang and PRIME tests on both microkernels, then
+  `dmesg` and `/sys/kernel/debug/kmemleak`. Findings get fixed and listed here.
+- [ ] **IGT.** The uAPI tests are IGT-shaped C (`drm/tests`); upstream will
+  want them as an IGT `powervr_sgx` test binary.
+
+### Idioms
+
+- [x] `devm_drm_dev_alloc`, `pcim_enable_device`, `pcim_iomap_region`.
+- [x] Runtime PM is set up before `drm_dev_register`, and torn down if it fails.
+- [x] `drm_sched` (one entity per context, credit 1), `drm_exec` for the
+  submit's reservations, `drm_gpuvm` for VMs and their shared reservation.
+- [x] **dma-fence signalling rules.** The hardware fence is allocated at
+  submit and only initialised in `run_job`; the timeout's devcoredump
+  allocates with `GFP_NOWAIT`; completions run inside
+  `dma_fence_begin_signalling()`. To confirm under lockdep (above).
+- [ ] **`run_job` resumes the GPU.** `pvrsgx_power_get()` can runtime-resume
+  from `run_job`, as panthor does. The resume path allocates nothing, but
+  the debug run must show lockdep accepts it.
+- [x] **Named registers.** Names from the GPL `sgx545defs.h` (soft-reset bits,
+  clock-gating fields, BIF, event kick); our names for the event-program
+  registers the header leaves out; the vendor init script's unnamed
+  registers as one table pointing at `docs/SRVINIT.md`.
+- [ ] **Firmware structure layouts.** `pvrsgx_render.c` still writes the
+  microkernel's command and render structures by word offset (`cmd[0x1c / 4]`
+  and the like, 78 places). They should become C structures with named
+  fields, from `docs/UKERNEL.md` and `docs/STATE.md`. This is the largest
+  remaining item.
+- [ ] **PDS encodings.** `pvrsgx_pds.c` builds instruction words from shifts
+  that `docs/PDS.md` explains; named fields would make review easier.
+- [x] Fixed in this pass: cleanup took a runtime-PM reference through
+  `sdev->pdev`, which is NULL behind gma500.
+
+### Minimal first series (plan, 2026-11-08)
+
+Today the driver is 7,639 lines (`drm/powervr_sgx`, including 640 lines of
+stream decoder shared with Mesa and the 168-line KUnit test). The tree keeps
+everything, but it is layered so that v1 builds and runs on its own, and each
+follow-up is a self-contained addition: its own file(s) plus a few clearly
+marked call sites. CI builds v1 alone (the follow-up files removed) as well
+as the whole driver.
+
+**v1, about 5,900 lines:** probe and the core table, firmware boot (open
+microkernel only, secure mode), MMU and VMs (`drm_gpuvm`, `VM_MAP`/`VM_UNMAP`),
+GEM, `DEV_QUERY`, contexts, render job submit with syncobjs, the command-stream
+and shader validator (the security model), timeout reset and recovery with
+guilty/innocent reporting, and the minimum uAPI.
+
+| follow-up | what | lines it takes out of v1 |
+|---|---|---|
+| F1 transfer | transfer contexts and jobs, their uAPI job type | ~150 |
+| F2 PRIME import | importing foreign dma-bufs, the cache flush around jobs, the 4 GiB check (v1 imports only its own BOs) | ~100 |
+| F3 runtime PM | autosuspend; v1 keeps the GPU on while the device is open | ~90 |
+| F4 devcoredump | the hang dump | ~125 |
+| F5 debugfs | `status`, `render`, `render_before` and the snapshot parameters | ~180 |
+| F6 tracepoints | `pvrsgx_kick/irq/job_done/flush_imports` | ~100 |
+| F7 gma500 host | the auxiliary-device binding (with the gma500 patch) | ~150 |
+
+**Out of the upstream driver entirely:**
+- DDK compat (vendor firmware, entry programs, shared kernel heaps): done,
+  the tree lost 384 lines to `drm/ci/ddk-compat.patch`, which only the CE5300
+  test kernels apply.
+- Microkernel cleanup commands (v1 and v2): ~70 lines. The open microkernel
+  doesn't use them; freed objects wait in the graveyard until the next
+  render.
+- Developer parameters `single_entry`, `idle_kernel_pd`, `restart_quiesce`,
+  `hwr_check`, `probe_only`, `reap_after_render`, `core_clock`, `cleanup`
+  and their code paths: ~60 lines.
+
+**While cutting, in this order:**
+1. Delete: DDK compat out to the patch, cleanup commands, developer
+   parameters, anything the open microkernel no longer reads (to confirm with
+   it: the TA/3D signature lists, HWPerf buffer, `GETMISCINFO` struct-size
+   check).
+2. Layer: move F1-F7 into their own files behind stubs in their headers.
+3. Kernel style:
+   - Firmware structures as C structs with kernel-doc and `static_assert`
+     offsets, in place of word offsets (`cmd[0x1c / 4]`, 78 sites in
+     `pvrsgx_render.c`).
+   - Registers generated from the GPL `sgx545defs.h` into `pvrsgx_regs.h`, with
+     `BIT()`/`GENMASK()`, only the registers the driver uses.
+   - No DDK names (`SGXMKIF_*`, `ui32*`: 17 places).
+   - One prefix, `pvrsgx_`: the five `powervr_sgx_stream*` files become
+     `pvrsgx_stream*` (shared with Mesa, so agreed with uapi-stream first).
+4. Generic: an ISA generation in the core table for the validator's tables;
+   no SGX545 or CE5300 constants outside the table and the platform glue.
+5. Prove it: the checker CI on v1 and the whole; the lockdep/KASAN/UBSAN run
+   on the CE5300 with the uAPI suite and frame tests; then full dEQP through
+   Mesa.
+
+**Status (m2-drm 7eaa5f5, 2026-11-08).** The driver is 7,482 lines; the
+follow-up files hold 690 of them, leaving 6,792 for v1. That includes the
+690-line stream decoder shared with Mesa and 533 lines of firmware-structure
+definitions with kernel-doc, which replaced word offsets.
+
+| step | state |
+|---|---|
+| DDK compat out | done: `drm/ci/ddk-compat.patch`, applied only by the CE5300 test kernels |
+| cleanup commands, 7 developer parameters, the render snapshot and last-render debugfs | deleted |
+| F1 transfer | own file (`pvrsgx_transfer.c`, 209 lines) |
+| F3 runtime PM | own file (`pvrsgx_pm.c`, 126 lines), built with `CONFIG_PM`, stubs otherwise; no `runtime_pm` parameter |
+| F4 coredump, F5 debugfs, F6 tracepoints, F7 gma500 | already separate files; their call sites are still in v1 code |
+| F2 PRIME import | not split yet (in `pvrsgx_job.c` and `pvrsgx_vm.c`) |
+| firmware structures | done: TA command, dependency block, render details, RT data, PB descriptor, HW render and transfer contexts, transfer command, control block (`pvrsgx_fwif.h`, offsets checked by `static_assert`); no firmware word is written by offset any more |
+| DDK names in comments | gone (the uAPI's `DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7` is left for uapi-stream) |
+| generated register header | not started |
+| one `pvrsgx_` prefix | waiting on uapi-stream (the shared stream files) |
+| runtime checkers on the CE5300 | debug kernel built; waiting for a free box |
+
+**uAPI effect.** v1's header leaves out the transfer job type and its
+structures (F1 appends them; the enum is append-only). Mesa must then work
+without transfer jobs on a v1 kernel, which needs mesa-gallium's answer
+first. Nothing else in the uAPI changes.
+
+### The series
+
+The m2-drm history is a development log with fixes on fixes; nothing upstream
+will see it. The series gets cut from the final tree by area, each patch
+building on its own:
+
+1. uAPI header and documentation.
+2. Core table, registers, MMU, kernel memory, device bring-up (no firmware).
+3. Open-microkernel loader and start, PDS programs.
+4. GEM, VMs (`drm_gpuvm`), `VM_MAP`/`VM_UNMAP`.
+5. Contexts, scheduler, fences, NULL jobs, `SUBMIT_JOBS`.
+6. Render: PB, RT datasets, the TA command; stream validation (D9).
+7. Transfer jobs.
+8. Hang recovery, devcoredump, runtime PM.
+9. debugfs, tracepoints.
+10. gma500: the SGX as an auxiliary device; powervr_sgx binds to it.
+11. (Not for upstream) DDK compat.
+
+The files already split along these lines; cutting the series will show where
+one patch reaches into a later one.

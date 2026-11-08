@@ -28,8 +28,9 @@ gma500 auxiliary device first.
 | shader validator (D9) | written; HW-verified on the EA3: every frame, blit and hang test runs its shaders from validated read-only code objects, and the PBE can't write into one (log `2026-11-03-0730-drm-d9-validator`) |
 | devcoredump on a hang | written; HW-verified (log `2026-11-03-0600-drm-rearm-bisect`) |
 | PRIME | export and import (shmem helpers); a dma-buf maps on the CPU only with `ALLOW_CPU_ACCESS`; imports flushed around the jobs that list them (the SGX doesn't snoop the CPU caches); HW-verified with simpledrm both ways (log `2026-11-04-0100-drm-prime-ea1`) |
-| open microkernel file (UKERNEL.md 4a), cleanup v2, secure mode | the loader works on hardware: frames render on the open microkernel (um-re e78a17c), with runtime PM, hang recovery and the RT/RC/PB cleanups. Transfers wait on its destination sync (log `2026-11-04-0330-drm-open-ukernel`). KUnit covers the file checks. Cleanup v2 and secure mode are written; no image declares them yet |
+| open microkernel file (UKERNEL.md 4a), cleanup v2, secure mode | the loader works on hardware: frames render on the open microkernel (um-re e78a17c), with runtime PM, hang recovery and the RT/RC/PB cleanups. Transfers wait on its destination sync (log `2026-11-04-0330-drm-open-ukernel`). KUnit covers the file checks. secure mode HW-verified with the open microkernel f36ddd2: no firmware heap in any client VM, every test right (log `2026-11-08-1858-drm-secure-mode`); cleanup v2 written, no image declares it yet |
 | checkpatch `--strict`, sparse, kernel-doc, `Documentation/gpu/powervr_sgx` | clean, checked in CI |
+| Cedarview (GMA3600/3650) | written, untested on hardware: gma500 publishes the SGX as the auxiliary device `gma500_gfx.sgx` (drm/gma500/0001) and hands over its interrupt; powervr_sgx binds to it (`CONFIG_DRM_POWERVR_SGX_GMA500`). Any core but the CE5300's is refused before a register is written; `probe_only=1` reports the identity and stops |
 | runtime PM | on by default (`runtime_pm=0` turns it off); HW-verified on the EA3 and the EA1 (logs `2026-11-03-0630-drm-runtime-pm-ea3`, `2026-11-03-1700-drm-runtime-pm-ea1`); the first try froze the EA1 (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
 
 First frames (2026-11-03, `docs/log/entries/2026-11-03-0210-drm-first-frame.md`): a clear and a
@@ -47,7 +48,10 @@ tests.
 |---|---|
 | `pvrsgx_drv.c` | `drm_driver`, PCI driver, ioctl table, `DEV_QUERY`, `obj_array` copy rules |
 | `pvrsgx_device.c` | kernel-owned memory, reset and BIF set-up, interrupt |
-| `pvrsgx_fw.c` | the microkernel: load, patch, PDS programs, control blocks, init scripts, start, stop |
+| `pvrsgx_core.c` | the cores the driver knows: ID, revision, features, clock, firmware file |
+| `pvrsgx_fw.c` | the microkernel: load, patch, control blocks, init scripts, start, stop |
+| `pvrsgx_pds.c` | the PDS assembler for the programs that enter the microkernel |
+| `drm/ci/ddk-compat.patch` | out of tree, CE5300 test kernels only: the vendor microkernel for A/B runs (entry programs, patch sites, shared kernel heaps) |
 | `pvrsgx_ccb.c` | kernel CCB writer and completion count |
 | `pvrsgx_mmu.c` | page directories and tables |
 | `pvrsgx_gem.c` | shmem objects |
@@ -89,7 +93,7 @@ value is the one `docs/SRVINIT.md` lists.
 
 Stopping is the DDK's power-off: a `POWER` command with `POWEROFF`, a poll for
 `POWEROFF_COMPLETE`, a wait for the clocks to gate, the deinit script, and the cores held in
-reset (as the boot image's `ce5300-sgx-quiesce` does at handoff).
+reset (as the board's `ce5300-sgx-quiesce` service does at handoff).
 
 ## 4. Address translation
 
@@ -174,7 +178,7 @@ VM so far before it lets go of the pages.
 - A NULL job is a `PROCESS_QUEUES` command: no GPU work, ordered with the context's other
   jobs. It exists to test the fence, syncobj and scheduler plumbing before the streams.
 - Timeout (2 s): the context is guilty, everything on the GPU fails (`-ETIME` for the
-  guilty job, `-ECANCELED` otherwise), and the microkernel is stopped and started from a
+  guilty job, `-ECANCELED` otherwise, and for that context's queued jobs, which never run), and the microkernel is stopped and started from a
   clean control block and an empty CCB. This is the "discard" recovery of UKERNEL.md 5a.
   If it does not start again, the device is lost and every later job fails with `-EIO`.
   Before the restart the driver does what an unload does: deinit script, cores held in
@@ -250,7 +254,7 @@ faults.
 3. Validation scans every 8-byte word of the upload, not just the paths a program's
    branches reach: a DOUTU can enter at any instruction. The table is one (mask,
    match) pair per form, generated from the clean-room isaspec description
-   (`mesa/src/sgx/isa/sgx.xml`) by `drm/tools/gen_usse_table.py`. That gives 109
+   (`mesa/src/sgx545/isa/sgx545.xml`) by `drm/tools/gen_usse_table.py`. That gives 109
    forms, and the generator refuses any two that could match one word. CI checks the
    committed table is current. A word fails if it matches no form (so a later ISA
    discovery can't open a hole), or if it is `ldr` or `str` (P1), `setl` or `savl` (link
@@ -293,7 +297,7 @@ builds as a static binary and runs on an EA. The subtests map one to one onto an
 suite.
 
 The test kernel is built in CI (`.github/workflows/powervr-sgx.yml`): kernel.org 7.1.8
-with the boot image's CE5300 patches, drivers and config (`drm/ci/ce5300-kernel.sh`), the vendor
+with the CE5300 board's patches, drivers and config (`drm/ci/ce5300-kernel.sh`), the vendor
 driver out and this one in as a module. It is booted from RAM through a one-shot
 `S00aramboot` before anything has touched the GPU, and never flashed.
 

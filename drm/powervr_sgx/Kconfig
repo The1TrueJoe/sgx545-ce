@@ -2,7 +2,7 @@
 # Copyright © 2026 Joseph Telaak
 
 config DRM_POWERVR_SGX
-	tristate "PowerVR SGX545 (Intel CE5300/CE5310)"
+	tristate "PowerVR SGX5xx (SGX545: Intel CE5300, Cedarview)"
 	depends on DRM && PCI && MMU && X86
 	select DRM_EXEC
 	select DRM_GEM_SHMEM_HELPER
@@ -12,19 +12,36 @@ config DRM_POWERVR_SGX
 	select FW_LOADER
 	select WANT_DEV_COREDUMP
 	help
-	  Render-only DRM driver for the PowerVR SGX545 in the Intel CE5300
-	  family (Control4 EA-1/EA-3), where the GPU is its own PCI function
-	  (8086:089b). The GPU runs a microkernel loaded with request_firmware().
+	  Render-only DRM driver for PowerVR SGX5xx GPUs. It supports the
+	  SGX545 of the Intel Atom CE5300 media processors, where the GPU is
+	  its own PCI function (8086:089b), and of Cedarview (GMA3600/3650,
+	  with DRM_POWERVR_SGX_GMA500). The GPU runs a microkernel loaded
+	  with request_firmware().
 
 	  Not compatible with the vendor services driver (SGX545_CE): bind one
 	  or the other.
 
 	  If M is selected the module will be called powervr_sgx.
 
+config DRM_POWERVR_SGX_GMA500
+	bool "Cedarview SGX545, behind gma500"
+	depends on DRM_POWERVR_SGX && DRM_GMA500
+	select AUXILIARY_BUS
+	help
+	  Bind to the SGX545 of the Atom D2000/N2000 (Cedarview) GPU. There
+	  the SGX shares a PCI function with the display, which gma500
+	  drives; gma500 publishes the SGX as an auxiliary device, hands it
+	  the register mapping and forwards its interrupt.
+
+	  Say Y if this kernel runs on a Cedarview machine.
+
 config DRM_POWERVR_SGX_KUNIT_TEST
-	tristate "KUnit tests for the PowerVR SGX545 driver" if !KUNIT_ALL_TESTS
+	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
 	depends on DRM_POWERVR_SGX && KUNIT
 	default KUNIT_ALL_TESTS
 	help
-	  Unit tests of the driver's firmware file checks. For developers;
-	  if unsure, say N.
+	  Unit tests of the driver's firmware file checks: a well-formed
+	  image is accepted, and every malformed header, table and checksum
+	  is refused. The tests need no GPU.
+
+	  For developers; if unsure, say N.

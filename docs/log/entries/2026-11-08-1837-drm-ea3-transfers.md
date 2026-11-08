@@ -1,0 +1,35 @@
+# The open microkernel's transfers complete; the IRQ trim and the CPU-written background block hold
+
+EA3 (ea3-v2) RAM boot of 3d0604b, 2026-11-08 ~18:37 UTC. First the open microkernel
+(um-re 8158141), then the DDK microkernel on the same boot. Nothing flashed, and p1
+was clean afterwards.
+
+## Transfers on the open microkernel
+
+8158141 null-guards the transfer's optional status word. A blit leaves it zero, and
+writing it faulted before the destination sync was reached (log 1815). With that:
+
+| run | result |
+|---|---|
+| blits: copy, downsample, box mip | all right, every job completes |
+| `powervr_sgx_hang -n 2`: render, mixed render + transfer, runtime-PM idle, forced hang | all right; two resets and restarts |
+| frames: 10, 10 on two contexts, 3 at 720x480 | all right |
+| uAPI suite | 39/39 |
+
+Every job type now completes on the open microkernel under powervr_sgx.
+
+## The driver's two changes
+
+- **The IRQ wake (1a40636).** The hard handler wakes the thread only when the oldest
+  job is done. On the DDK microkernel that halves the thread wakeups, from 119 to 60
+  for 30 renders: its TA-done and 3D-done interrupts no longer wake it. Latency is
+  within run-to-run noise (render queue → finished 372 us against 344 us in log
+  1815, with every stage up a little, including the ones the change doesn't touch).
+- **The background block (3d0604b).** The driver writes the background object's three
+  PDS words from the CPU at each render, and sets host control word 15 bit 0 for an
+  open image. Frames, blits, hangs and the uAPI suite are right on both microkernels.
+  So the DDK microkernel's own copy of the same words changes nothing. Secure mode now
+  waits only on the open microkernel skipping its EDM window when the flag is set
+  (and on any other such window in the render path).
+
+Data: `docs/log/data/2026-11-08-1837-drm-ea3-transfers.txt`.

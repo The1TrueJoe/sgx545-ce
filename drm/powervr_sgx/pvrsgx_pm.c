@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright © 2026 Joseph Telaak */
+
+#include <drm/drm_print.h>
+
+#include <linux/pm_runtime.h>
+
+#include "pvrsgx_device.h"
+#include "pvrsgx_fw.h"
+#include "pvrsgx_pm.h"
+
+/*
+ * Runtime PM. The SGX function has no PCI PM capability, so the PCI core keeps
+ * it in D0: suspend is the microkernel's power-off (pvrsgx_fw_stop), resume
+ * the same full start a reset does. A job on the GPU holds a reference from
+ * run_job until it leaves the active list.
+ */
+#define AUTOSUSPEND_MS	500
+
+int pvrsgx_power_get(struct pvrsgx_device *sdev)
+{
+	return pm_runtime_resume_and_get(sdev->base.dev);
+}
+
+void pvrsgx_power_put(struct pvrsgx_device *sdev, u32 n)
+{
+	if (!n)
+		return;
+	pm_runtime_mark_last_busy(sdev->base.dev);
+	while (n--)
+		pm_runtime_put_autosuspend(sdev->base.dev);
+}
+
+/*
+ * After probe. The PCI core holds a reference over probe and forbids runtime
+ * PM by default; an auxiliary device starts with runtime PM disabled, and its
+ * parent (gma500, which powers the graphics island) stays up while it runs.
+ */
+void pvrsgx_power_init(struct pvrsgx_device *sdev)
+{
+	struct device *dev = sdev->base.dev;
+
+	pm_runtime_set_autosuspend_delay(dev, AUTOSUSPEND_MS);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_mark_last_busy(dev);
+	if (sdev->pdev) {
+		pm_runtime_put_autosuspend(dev);
+		pm_runtime_allow(dev);
+	} else {
+		pm_runtime_set_active(dev);
+		pm_runtime_enable(dev);
+	}
+}
+
+/* Before remove: undo pvrsgx_power_init, with the device awake. */
+void pvrsgx_power_fini(struct pvrsgx_device *sdev)
+{
+	struct device *dev = sdev->base.dev;
+
+	if (sdev->pdev) {
+		pm_runtime_forbid(dev);
+		pm_runtime_dont_use_autosuspend(dev);
+		pm_runtime_get_noresume(dev);
+	} else {
+		pm_runtime_get_sync(dev);
+		pm_runtime_dont_use_autosuspend(dev);
+		pm_runtime_disable(dev);
+		pm_runtime_set_suspended(dev);
+		pm_runtime_put_noidle(dev);
+	}
+}
+
+static int pvrsgx_runtime_suspend(struct device *dev)
+{
+	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev->lost)
+		pvrsgx_fw_stop(sdev);
+	return 0;
+}
+
+static int pvrsgx_runtime_resume(struct device *dev)
+{
+	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
+
+	/* A failed start loses the device: run_job then fails every job with -EIO. */
+	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
+		drm_err(&sdev->base, "microkernel did not start on resume: device lost\n");
+		sdev->lost = true;
+	}
+	return 0;
+}
+
+const struct dev_pm_ops pvrsgx_pm_ops = {
+	RUNTIME_PM_OPS(pvrsgx_runtime_suspend, pvrsgx_runtime_resume, NULL)
+};

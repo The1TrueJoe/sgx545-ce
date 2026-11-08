@@ -19,13 +19,29 @@
  */
 #define SGX_CR_CLKGATECTL			0x0000
 #define SGX_CR_CLKGATECTL2			0x0004
+/* Both hold a 2-bit gating mode per unit: CLKGATECTL ISP..PDS0, CLKGATECTL2 PBE..PDS1. */
+#define   SGX_CR_CLKGATECTL_UNITS		GENMASK(15, 0)
+#define   SGX_CR_CLKGATECTL_DPM			GENMASK(11, 10)
+#define   SGX_CR_CLKGATECTL2_UNITS		GENMASK(23, 0)
+#define   SGX_CLKG_ON				1
+#define   SGX_CLKG_AUTO				2
+/* The same mode in every 2-bit field of mask. */
+#define   SGX_CLKG_ALL(mask, mode)		((mask) / 3 * (mode))
 #define SGX_CR_CLKGATESTATUS			0x0008
+#define   SGX_CR_CLKGATESTATUS_DPM		BIT(5)
 #define SGX_CR_CORE_ID				0x001c
 #define SGX_CR_CORE_REVISION			0x0020
 
 #define SGX_CR_SOFT_RESET			0x0080
 #define   SGX_CR_SOFT_RESET_BIF			BIT(0)
-#define   SGX_CR_SOFT_RESET_CORES		0x3e	/* DPM TA USE ISP TSP */
+#define   SGX_CR_SOFT_RESET_DPM			BIT(1)
+#define   SGX_CR_SOFT_RESET_TA			BIT(2)
+#define   SGX_CR_SOFT_RESET_USE			BIT(3)
+#define   SGX_CR_SOFT_RESET_ISP			BIT(4)
+#define   SGX_CR_SOFT_RESET_TSP			BIT(5)
+#define   SGX_CR_SOFT_RESET_CORES		(SGX_CR_SOFT_RESET_DPM | SGX_CR_SOFT_RESET_TA | \
+						 SGX_CR_SOFT_RESET_USE | SGX_CR_SOFT_RESET_ISP | \
+						 SGX_CR_SOFT_RESET_TSP)
 
 #define SGX_CR_EVENT_HOST_ENABLE2		0x0110
 #define SGX_CR_EVENT_HOST_CLEAR2		0x0114
@@ -46,6 +62,16 @@
 #define SGX_CR_EVENT_KICK			0x0ac8
 #define SGX_CR_EVENT_TIMER			0x0acc
 #define SGX_CR_EVENT_KICK2			0x0ae8
+
+/*
+ * Not in the GPL header; the names are ours, from what the microkernel and
+ * the vendor init script do with them (docs/SRVINIT.md, docs/UKERNEL.md).
+ */
+#define SGX_CR_EVENT_PDS_ENABLE			0x0a58	/* host events start the event program */
+#define   SGX_CR_EVENT_PDS_ENABLE_ALL		0x2204b00f
+#define SGX_CR_EVENT_PDS_BASE			0x0a68	/* the event PDS program, 16-byte aligned */
+#define SGX_CR_EVENT_PDS_DATA0			0x0a6c
+#define SGX_CR_EVENT_PDS_DATA1			0x0a70
 #define   SGX_CR_EVENT_KICK_NOW			BIT(0)
 
 #define SGX_CR_BIF_CTRL				0x0c00

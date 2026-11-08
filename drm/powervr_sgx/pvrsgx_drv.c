@@ -12,7 +12,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -21,6 +20,7 @@
 #include "pvrsgx_debugfs.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
+#include "pvrsgx_pm.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_gem.h"
 #include "pvrsgx_job.h"
@@ -209,6 +209,37 @@ static const struct drm_driver pvrsgx_drm_driver = {
 	.minor = PVRSGX_DRIVER_MINOR,
 };
 
+struct pvrsgx_device *pvrsgx_alloc(struct device *dev)
+{
+	return devm_drm_dev_alloc(dev, &pvrsgx_drm_driver, struct pvrsgx_device, base);
+}
+
+/* What both buses do once the registers are mapped and the interrupt source known. */
+int pvrsgx_probe_common(struct pvrsgx_device *sdev)
+{
+	int err;
+
+	err = pvrsgx_device_init(sdev);
+	if (err)
+		return err;
+
+	/* Runtime PM is set up before userspace can reach the device. */
+	pvrsgx_power_init(sdev);
+	err = drm_dev_register(&sdev->base, 0);
+	if (err) {
+		pvrsgx_power_fini(sdev);
+		pvrsgx_device_fini(sdev);
+	}
+	return err;
+}
+
+void pvrsgx_remove_common(struct pvrsgx_device *sdev)
+{
+	pvrsgx_power_fini(sdev);
+	drm_dev_unplug(&sdev->base);
+	pvrsgx_device_fini(sdev);
+}
+
 static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct pvrsgx_device *sdev;
@@ -222,38 +253,25 @@ static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (err)
 		return err;
 
-	sdev = devm_drm_dev_alloc(&pdev->dev, &pvrsgx_drm_driver, struct pvrsgx_device, base);
+	sdev = pvrsgx_alloc(&pdev->dev);
 	if (IS_ERR(sdev))
 		return PTR_ERR(sdev);
 	sdev->pdev = pdev;
+	sdev->irq = pdev->irq;
 	pci_set_drvdata(pdev, sdev);
 
-	if (pci_resource_len(pdev, 0) < 0x4000)
+	if (pci_resource_len(pdev, 0) < PVRSGX_REGS_MIN)
 		return -ENODEV;
 	sdev->regs = pcim_iomap_region(pdev, 0, PVRSGX_DRIVER_NAME);
 	if (IS_ERR(sdev->regs))
 		return PTR_ERR(sdev->regs);
 
-	err = pvrsgx_device_init(sdev);
-	if (err)
-		return err;
-
-	err = drm_dev_register(&sdev->base, 0);
-	if (err) {
-		pvrsgx_device_fini(sdev);
-		return err;
-	}
-	pvrsgx_power_init(sdev);
-	return 0;
+	return pvrsgx_probe_common(sdev);
 }
 
 static void pvrsgx_remove(struct pci_dev *pdev)
 {
-	struct pvrsgx_device *sdev = pci_get_drvdata(pdev);
-
-	pvrsgx_power_fini(sdev);
-	drm_dev_unplug(&sdev->base);
-	pvrsgx_device_fini(sdev);
+	pvrsgx_remove_common(pci_get_drvdata(pdev));
 }
 
 static void pvrsgx_shutdown(struct pci_dev *pdev)
@@ -263,10 +281,6 @@ static void pvrsgx_shutdown(struct pci_dev *pdev)
 	/* Leave the GPU quiet for whatever runs next. */
 	pvrsgx_fw_stop(sdev);
 }
-
-static const struct dev_pm_ops pvrsgx_pm_ops = {
-	RUNTIME_PM_OPS(pvrsgx_runtime_suspend, pvrsgx_runtime_resume, NULL)
-};
 
 static const struct pci_device_id pvrsgx_pci_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x089b) },	/* CE5300 family */
@@ -282,9 +296,28 @@ static struct pci_driver pvrsgx_pci_driver = {
 	.shutdown = pvrsgx_shutdown,
 	.driver.pm = pm_ptr(&pvrsgx_pm_ops),
 };
-module_pci_driver(pvrsgx_pci_driver);
+
+static int __init pvrsgx_init(void)
+{
+	int err = pci_register_driver(&pvrsgx_pci_driver);
+
+	if (err)
+		return err;
+	err = pvrsgx_aux_register();
+	if (err)
+		pci_unregister_driver(&pvrsgx_pci_driver);
+	return err;
+}
+module_init(pvrsgx_init);
+
+static void __exit pvrsgx_exit(void)
+{
+	pvrsgx_aux_unregister();
+	pci_unregister_driver(&pvrsgx_pci_driver);
+}
+module_exit(pvrsgx_exit);
 
 MODULE_AUTHOR("Joseph Telaak");
-MODULE_DESCRIPTION("PowerVR SGX545 DRM driver");
+MODULE_DESCRIPTION("PowerVR SGX5xx DRM driver");
 MODULE_LICENSE("GPL");
 MODULE_IMPORT_NS("DMA_BUF");

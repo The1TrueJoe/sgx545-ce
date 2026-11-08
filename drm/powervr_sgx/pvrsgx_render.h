@@ -18,6 +18,7 @@ struct pvrsgx_device;
 struct pvrsgx_file;
 struct pvrsgx_job;
 struct pvrsgx_kobj;
+struct pvrsgx_vm;
 
 /* The firmware half of a render context (STATE.md section 6). */
 /* A VM's parameter buffer, shared by its render contexts (pvrsgx_render.c). */
@@ -40,7 +41,7 @@ struct pvrsgx_render_ctx {
 
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 
-/* SGXAddRenderTarget's numbers (STATE.md section 6). */
+/* A render target's tiling numbers (docs/STATE.md section 6). */
 struct pvrsgx_rt_numbers {
 	u32 xt, yt, mx, my, padx, pady;
 	u32 mtile1, mtile2, te_screen, mt_tiles, region_bytes, tailptr_bytes;
@@ -58,6 +59,16 @@ struct pvrsgx_rt_dataset {
 	u32 frames;
 };
 
+/* Each context's command ring. */
+#define CCB_RING		0x10000
+
+/* A firmware sync object: pending and complete counts for writes and reads. */
+#define SYNC_WRITE_PENDING	0
+#define SYNC_WRITE_COMPLETE	1
+#define SYNC_READ_PENDING	2
+#define SYNC_READ_COMPLETE	3
+#define SYNC_DATA_BYTES		0x18
+
 #define PVRSGX_MAX_TA_KICKS	2
 
 /* What a render job carries from SUBMIT_JOBS to run_job. */
@@ -67,18 +78,6 @@ struct pvrsgx_render_job {
 	struct powervr_sgx_stream_ta_kick kick[PVRSGX_MAX_TA_KICKS];
 	u32 nkicks;
 	/** @cmd_off: Where the last kick's TA command went in the context's ring. */
-	u32 cmd_off;
-};
-
-/* A transfer context's firmware half: HW transfer context, command ring, completion sync. */
-struct pvrsgx_transfer_ctx {
-	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *done;
-	u32 ccb_woff;
-};
-
-struct pvrsgx_transfer_job {
-	struct powervr_sgx_stream_transfer xfer;
-	bool dst_twiddled;
 	u32 cmd_off;
 };
 
@@ -94,15 +93,15 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in);
 void pvrsgx_render_job_fini(struct pvrsgx_job *job);
 
-int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
-void pvrsgx_transfer_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
-int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
-			     const struct drm_powervr_sgx_job *in);
-void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6]);
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
-struct seq_file;
-void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev, bool before);
 struct seq_buf;
 void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job);
+
+/* The stream decoder's hooks, shared with transfer jobs. */
+bool pvrsgx_stream_mapped(const void *priv, u64 addr, u64 size);
+bool pvrsgx_stream_no_quirk(const void *priv, u32 quirk);
+int pvrsgx_stream_take(const struct powervr_sgx_stream_cmd_defs *defs,
+		       struct powervr_sgx_stream_ctx *sctx, struct pvrsgx_vm *vm,
+		       u64 uptr, u32 len, void *dest);
 
 #endif /* PVRSGX_RENDER_H */

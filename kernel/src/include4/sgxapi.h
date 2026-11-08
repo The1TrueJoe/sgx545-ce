@@ -1,5 +1,5 @@
 /*
- * openHC shim for the Cedarview DDK 1.7 extraction.
+ * Shim for the Cedarview DDK 1.7 extraction.
  *
  * sgx_bridge.h pulls in "sgxapi.h" ONLY under SUPPORT_SID_INTERFACE (it uses
  * "sgxapi_km.h" otherwise). The upstream DDK's userspace sgxapi.h was not kept

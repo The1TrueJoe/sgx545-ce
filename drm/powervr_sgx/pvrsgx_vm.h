@@ -48,7 +48,6 @@ struct dma_resv *pvrsgx_vm_resv(struct pvrsgx_vm *vm);
 struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
 void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);
 int pvrsgx_heap_find(u64 addr, u64 size);
-bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev);
 
 int pvrsgx_ioctl_create_vm_context(struct drm_device *drm, void *data, struct drm_file *file);
 int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct drm_file *file);
