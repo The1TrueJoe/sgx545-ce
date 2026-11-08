@@ -43,6 +43,17 @@ static const struct { const char *name; unsigned off; } REGS[] = {
     {"dealloc660",    0x660},   // 3D dealloc = pb+0x20 | pb+0x24<<16
     {"DPM_3D_FL",     0x680},   // 3D free-list load selector readback
     {"BIF_BANK0",     0xC78},   // EUR_CR_BIF_BANK0
+    // out-of-memory path (UKERNEL.md "Out of memory"): which branch the DDK's handler takes
+    {"r734",          0x734},   // DPM status the handler tests (& 3 == 1, pc 0x0b90)
+    {"r69c",          0x69C},   // written 1 (resume) / 4 (partial render) by the handler
+    {"thrTA620",      0x620},   // TA threshold (pb+0x28)
+    {"thrZLS624",     0x624},   // ZLS threshold (pb+0x2c); +32 on the partial-render branch
+    {"thrGBL628",     0x628},   // global threshold; := pages in use on the reload branch
+    {"thrPDS668",     0x668},   // PDS threshold (pb+0x34)
+    {"head61c",       0x61C},   // TA free-list head, reloaded from 0x700
+    {"r648",          0x648},   // TA free-list state, reloaded from 0x710<<16
+    {"r638",          0x638},   // TA free-list state, reloaded from 0x724/0x72c
+    {"a74",           0xA74},   // b0 = TA paused by the handler
 };
 #define NREG (sizeof(REGS) / sizeof(REGS[0]))
 
