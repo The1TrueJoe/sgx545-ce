@@ -4,7 +4,7 @@ gl_FragColor / gl_Position) and compile each variant with sgxc the way the
 gallium driver does (-p -L -D -F). Prints error counts and examples."""
 import os, re, subprocess, sys, collections
 T = os.path.expanduser("~/.cache/sgx545/deqp/out/gles2/shaders")
-S = os.path.expanduser("~/.cache/sgx545/usc/mesa262/build/src/sgx545/sgxc/sgxc")
+S = os.path.expanduser("~/.cache/sgx545/usc/mesa262/build/src/sgx/sgxc/sgxc")
 W = os.path.expanduser("~/.cache/sgx545/usc/dq/w")
 os.makedirs(W, exist_ok=True)
 CASE = re.compile(r'^\s*case\s+(\S+)(.*?)^\s*end\s*$', re.S | re.M)

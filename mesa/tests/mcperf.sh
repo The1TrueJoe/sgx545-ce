@@ -1,6 +1,6 @@
 #!/bin/sh
 # EA1: profile WHO in the bench world: perf on the game's java for 20 s, ~85 s after the menu
-WHO=${1:-sgx545}
+WHO=${1:-sgx}
 R=/opt/minecraft/rootfs
 rm -f $R/ctest/out/mc-$WHO.log $R/ctest/perf-$WHO.data
 sh /tmp/mesa/mcbench.sh $WHO 140 > /tmp/mesa/mcperf-bench.txt 2>&1 &

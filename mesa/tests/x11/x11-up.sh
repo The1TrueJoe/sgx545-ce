@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 #
 # On the EA (powervr_sgx loaded, simpledrm on card0): Xorg with modesetting +
-# glamor in the Debian root ROOT (mkroot.py), on our Mesa in ROOT/opt/sgx545.
+# glamor in the Debian root ROOT (mkroot.py), on our Mesa in ROOT/opt/sgx.
 #
 #   x11-up.sh ROOT start|stop|run CMD...
 #
@@ -11,9 +11,9 @@
 # vendor "mesa").
 set -eu
 R=$1; shift
-env_mesa="LD_LIBRARY_PATH=/opt/sgx545/lib GBM_BACKENDS_PATH=/opt/sgx545/lib/gbm \
-__EGL_VENDOR_LIBRARY_DIRS=/opt/sgx545/share/glvnd/egl_vendor.d __GLX_VENDOR_LIBRARY_NAME=mesa \
-LIBGL_DRIVERS_PATH=/opt/sgx545/lib/dri"
+env_mesa="LD_LIBRARY_PATH=/opt/sgx/lib GBM_BACKENDS_PATH=/opt/sgx/lib/gbm \
+__EGL_VENDOR_LIBRARY_DIRS=/opt/sgx/share/glvnd/egl_vendor.d __GLX_VENDOR_LIBRARY_NAME=mesa \
+LIBGL_DRIVERS_PATH=/opt/sgx/lib/dri"
 # The root's dev, proc, sys and tmp are the box's own, bound in: while they are
 # mounted, removing the root removes the box's /dev and /tmp. stop (and a start
 # that fails) unmounts them.

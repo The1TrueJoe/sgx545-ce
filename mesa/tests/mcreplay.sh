@@ -14,7 +14,7 @@ R=/opt/minecraft/rootfs; who=$1
 for m in dev proc sys tmp; do mountpoint -q $R/$m || case $m in proc) mount -t proc proc $R/proc;; sys) mount -t sysfs sys $R/sys;; *) mount --bind /$m $R/$m;; esac; done
 mkdir -p /tmp/.X11-unix
 [ -S /tmp/.X11-unix/X1 ] || { chroot $R /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/Xvfb :1 -screen 0 1024x768x24 -nolisten tcp >/tmp/x1.log 2>&1 & sleep 3; }
-case $who in ddk) lib=/usr/lib/sgx pre=LD_PRELOAD=/usr/lib/sgx/sgx-busidshim.so ;; *) lib=/usr/lib/sgx545 pre= ;; esac
+case $who in ddk) lib=/usr/lib/sgx pre=LD_PRELOAD=/usr/lib/sgx/sgx-busidshim.so ;; *) lib=/usr/lib/sgx pre= ;; esac
 rm -f $R/ctest/out/mcw-$who-*.png
 /opt/minecraft/gpuwatch.sh chroot $R /usr/bin/env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin DISPLAY=:1 \
 	LIBGL_FB=3 LIBGL_ES=2 LIBGL_GL=21 LIBGL_NOTEST=1 LIBGL_SILENTSTUB=1 LIBGL_NOBANNER=1 LIBGL_NOERROR=1 LIBGL_DEEPBIND=0 \

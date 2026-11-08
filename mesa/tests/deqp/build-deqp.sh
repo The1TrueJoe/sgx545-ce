@@ -24,7 +24,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../.." && pwd)
 . "$REPO/mesa/VERSION"
 W=${DEQP_WORK:-$HOME/.cache/sgx545/deqp}
-B=${SGX545_MESA_BUILD:-$REPO/build/mesa}
+B=${SGX_MESA_BUILD:-$REPO/build/mesa}
 ARCH=${1:-x86_64}
 MESA=$B/$ARCH/install/usr
 CI=$B/mesa-$MESA_VERSION/.gitlab-ci
@@ -45,7 +45,7 @@ GLES_PATCHES=$(sed -n '/^gles_cts_patch_files=(/,/^)/p' "$CI/container/build-deq
 mkdir -p "$W"
 
 # ---- the CTS, as Mesa's CI patches it
-if [ ! -f "$W/src/.sgx545-patched" ]; then
+if [ ! -f "$W/src/.sgx-patched" ]; then
 	rm -rf "$W/src"
 	git clone --depth 1 --branch "opengl-es-cts-$DEQP_GLES_VERSION" \
 		https://github.com/KhronosGroup/VK-GL-CTS.git "$W/src"
@@ -66,7 +66,7 @@ if [ ! -f "$W/src/.sgx545-patched" ]; then
 		done
 		python3 external/fetch_sources.py
 	)
-	touch "$W/src/.sgx545-patched"
+	touch "$W/src/.sgx-patched"
 fi
 
 # ---- deqp-gles2 for the EA
@@ -126,7 +126,8 @@ fi
 
 # ---- the rest of what goes to the box
 cp "$HERE/run-deqp.sh" "$W/out/"
-rm -rf "$W/out/ci" && cp -R "$REPO/mesa/src/gallium/drivers/sgx545/ci" "$W/out/ci"
+rm -rf "$W/out/ci" && cp -R "$REPO/mesa/src/gallium/drivers/sgx/ci" "$W/out/ci" &&
+	cp "$HERE"/ddk/ddk-*.txt "$W/out/ci/"
 cp "$W/deqp-runner/target/x86_64-unknown-linux-gnu/release/deqp-runner" "$W/out/"
 {
 	echo "dEQP GLES opengl-es-cts-$DEQP_GLES_VERSION (Mesa $MESA_VERSION CI's backports and patches)"

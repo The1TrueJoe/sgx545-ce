@@ -16,7 +16,7 @@
  * half-drawn frame (Minecraft's title screen draws its panorama small,
  * copies and blurs it several times, then stretches it over the screen).
  * fb0 is simplefb, which can't pan, so there is no flipping.
- * SGX545_FBDEV_DIRECT=1 renders into fb0 as before (no copy).  Single-
+ * SGX_FBDEV_DIRECT=1 renders into fb0 as before (no copy).  Single-
  * buffered configs draw into fb0.  Pbuffers are as on the surfaceless
  * platform.
  *
@@ -72,7 +72,7 @@ fbdev_surface(struct dri2_egl_surface *dri2_surf)
 static bool
 fbdev_direct(void)
 {
-   const char *e = getenv("SGX545_FBDEV_DIRECT");
+   const char *e = getenv("SGX_FBDEV_DIRECT");
 
    return e && atoi(e);
 }

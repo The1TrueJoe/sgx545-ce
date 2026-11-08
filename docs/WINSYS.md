@@ -1,23 +1,23 @@
 # The Mesa winsys: one recorder, two kernel drivers
 
-The gallium driver (`mesa/src/gallium/drivers/sgx545`) sees the winsys only through
-`sgxws.h`. Below that, `sgx545_frame.c` records frames the same way for every
+The gallium driver (`mesa/src/gallium/drivers/sgx`) sees the winsys only through
+`sgxws.h`. Below that, `sgx_frame.c` records frames the same way for every
 kernel driver: rings, PDS programs, USSE finalising, TA state, the VDM stream.
 How memory is allocated and how a recorded frame reaches the GPU belongs to a
-backend, `struct sgxws_kif` in `sgx545_frame.h`:
+backend, `struct sgxws_kif` in `sgx_frame.h`:
 
 | backend | file | kernel driver | who builds the firmware structures | ships in |
 |---|---|---|---|---|
-| powervr_sgx | `sgx545_powervr_sgx.c` | `powervr_sgx` (`drm/powervr_sgx`, docs/UAPI.md) | the kernel | upstream Mesa (M5); the boot image once powervr_sgx replaces pvrsrvkm |
-| services | `sgx545_pvr.c` + `libpvr/` | `pvrsrvkm` (`kernel/`) | the client, as the DDK's GL driver does | a downstream overlay only |
+| powervr_sgx | `sgx_powervr_sgx.c` | `powervr_sgx` (`drm/powervr_sgx`, docs/UAPI.md) | the kernel | upstream Mesa (M5); the boot image once powervr_sgx replaces pvrsrvkm |
+| services | `sgx_pvr.c` + `libpvr/` | `pvrsrvkm` (`kernel/`) | the client, as the DDK's GL driver does | a downstream overlay only |
 
 ## Selecting the backend
 
 There is nothing to configure: the device decides.
 
-- **The loader.** `mesa/patches/0005` makes the loader's `sgx545` predicate accept
+- **The loader.** `mesa/patches/0005` makes the loader's `sgx` predicate accept
   either kernel driver name (`drmGetVersion`), so EGL, GBM and DRI open the
-  `sgx545` gallium driver on `powervr_sgx` and on `pvrsrvkm`.
+  `sgx` gallium driver on `powervr_sgx` and on `pvrsrvkm`.
 - **The winsys.** `sgxws_dev_create` reads the same name and creates the matching
   backend. A build without the services backend fails to create a screen on
   `pvrsrvkm` and says so.
@@ -28,7 +28,7 @@ There is nothing to configure: the device decides.
   same Mesa build runs on either: on pvrsrvkm the boot images today, on powervr_sgx
   a RAM-booted kernel with the module loaded (`drm/ci/ea-ramboot`).
 
-`sgx545_frame_test -d <node>` runs the winsys without Mesa on either driver. On the EA1 under
+`sgx_frame_test -d <node>` runs the winsys without Mesa on either driver. On the EA1 under
 powervr_sgx (2026-11-04, kernel c95e32d) it draws the probe's clear and triangle at 720x480,
 pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 
@@ -59,7 +59,7 @@ pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 | completion | each job signals the next point of one timeline syncobj per device; waits are syncobj waits | the target's sync object, polled |
 | shared buffers | dma-buf import and export; a shared buffer is named in each job's BO list (the frame's target as written, sampled ones as read), so the kernel orders the job against its other users (implicit sync) and flushes the CPU cache of an imported one, which the SGX doesn't snoop | not supported (`-ENOTSUP`); the fbdev framebuffer is wrapped user memory |
 | scanout (kmsro) | the render target is ours, exported to the display device (simpledrm on the EA, card0; `mesa/patches/0006`) | the fbdev platform |
-| debugging aids | `SGX545_DRY_RUN` (a dry-run frame's point is signalled from the CPU) | also `SGX545_TRACE` (pvrtrace) and `SGX545_DEBUG=flushrt` |
+| debugging aids | `SGX_DRY_RUN` (a dry-run frame's point is signalled from the CPU) | also `SGX_TRACE` (pvrtrace) and `SGX_DEBUG=flushrt` |
 
 Kick numbers stay per context in both, so the driver's fences, the ring slots and
 the texture ghosting don't know which backend they run on.

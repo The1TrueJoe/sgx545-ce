@@ -1,0 +1,44 @@
+# mkexpect.py --reasons for piglit's gpu profile on our driver: REGEX<tab>why, first match wins
+(interpolation-none-.*-vertex$)	interpolation through gl_ClipVertex: user clip planes not implemented (M6); the flat ones need flat shading too
+(glsl-bug-22603|depthstencil-default_fb-(copypixels|drawpixels-float-and-ushort)|@draw-pixels$|drawpix-z|copy-pixels|early-z|fbo-depth(stencil)?-gl_depth[0-9a-z_]*-(copypixels|drawpixels)|glsl-1\.10-fragdepth)	gl_FragDepth isn't written yet: the compiler leaves it for a depthf whose form isn't traced, so the triangle's depth is used (st draws and copies depth pixels with gl_FragDepth too)
+(varying-packing@simple|texrect-many)	varyings: more components than ten sets of four hold (varying-packing: sgx_pack_varyings can't place them); texrect-many not diagnosed
+@(read-front|masked-clear|gl-1\.0-drawbuffer-modes|gl-1\.0-front-invalidate-back|gl-1\.0-swapbuffers-behavior|fcc-front-buffer-distraction|fbo-sys-(sub-)?blit|hiz-.*-window-|depthstencil-default_fb-)	the window's buffers on the surfaceless platform: these read, draw or blit the front buffer or the window's depth/stencil, which a surfaceless context doesn't have (piglit aborts or reads nothing)
+waffle_context_create|@400 combinations by location|@depth_stencil texture$	no context of the kind the test asks for (waffle_context_create fails)
+(shadow|depth-tex|texdepth|depth-level-clamp|depth-formats|getteximage-depth|teximage-errors|arb_clear_texture-(depth|error)|fbo-depthtex|ext_packed_depth_stencil@(errors|getteximage|texsubimage|texwrap)|arb_depth_texture@(fbo-generatemipmap-formats|texwrap)|copyteximage (1d|2d|cube|rect)$)	depth textures: no sampler format for a depth format (sgx_tex_format has the five 8-bit T1 codes), so a GL_DEPTH_COMPONENT texture crashes; the T1 codes need a DDK capture (probe depth16/depth32/d24s8)
+(fbo-(depth|stencil|depthstencil)-gl_|fbo-blit-d24s8|readpixels-24_8|drawpix-z|readpix-z|stencil-drawpixels|drawpixels-stencil-test|copy-pixels|z-write|glsl-1\.10-fragdepth|glsl-fs-discard-only|early-z|fragcoord-zw|gl-1\.4-polygon-offset)	depth and stencil read back, copied, drawn or blitted, and depth written by the shader: no depth/stencil buffer is loaded or stored yet (no ZLS), so they live only within one render
+(clipflat|flat-color|-flat-|provoking-vertex|dlist-shademodel)	flat shading: the rasterizer's flatshade and flat varyings are ignored, the hardware's shade-mode state is not known yet (needs a GLES1 DDK glShadeModel capture)
+(two-side|two-sided|gl_back)	two-sided stencil: the back-face stencil state, not diagnosed
+(user-clip|clip-plane|clipping@|clip-vertex|fixed-clip-enables)	user clip planes: not implemented (M6)
+(polygon-mode|point-line-no-cull|edgeflag|polygon-line-aa|polygon-offset)	polygon modes and edge flags: not implemented (M6); points and lines culled as triangles
+(linestipple|line-smooth-stipple)	line stipple: not implemented
+(gl-1\.1-xor|logicop)	logic ops: not implemented
+(fog)	fog: fixed-function and ARB-program fog colours wrong, not diagnosed
+(cubemap|texturecube|fbo-cubemap)	cube maps: NPOT ones of 16 texels or more, or mipmapped, aren't drawn (a stopgap: no layout is known for NPOT faces and they locked the 3D, PIGLIT.md), POT faces fail the probes, not diagnosed
+(tex3d|texture3d|texwrap 3d|copyteximage 3d|targets 3d|clear_texture-3d|fbo-3d|direct_state_access@textures)	3D textures: not implemented (GL_MAX_3D_TEXTURE_SIZE reads back as INT_MIN)
+(texwrap|bordercolor|tex-border|tex1d-2dborder|copyteximage-border)	wrap modes and border colour: GL_CLAMP and CLAMP_TO_BORDER are drawn as CLAMP_TO_EDGE (no border colour); texwrap also fails NEAREST/REPEAT on GL_RGBA8, not diagnosed
+(-formats|texture_compression|s3tc|3dc|sized-texture-format-channels|texture-packed-formats|gl-1\.3-texture-env|texture-al$|texsubimage-unpack|getteximage-formats|internalformat_query2|texture-storage|get_texture_sub_image)	texture formats: only five sampler formats (RGBA8, 565, A8, L8, LA88), so other sized and compressed formats fall back or are refused
+(levelclamp|lodclamp|lodbias|base-level|mipmap|generatemipmap|const-bias|txb-2d|gen-texsubimage|fbo-clearmipmap)	mipmaps: LOD clamps, base level and LOD bias aren't programmed (M6), generated mipmaps of non-RGBA8 formats
+(texture2drect|texrect|texture_rectangle|texture1d|fbo-1d|targets 1d)	rectangle and 1D textures: wrong texels, not diagnosed
+(derivs|fwidth|dfdx|dfdy)	derivatives: dFdx/dFdy/fwidth compile (fdsx/fdsy) but give wrong values, not diagnosed
+(point|gl_points)	points: fixed-function point sprites (coordinate replacement) not implemented (M6), large and zero-size points, not diagnosed
+(varying|texcoord|routing|literal-varyings|variable-indexing|mat-attribute|attriblocation|novertexdata|rendezvous|explicit and non-explicit)	varyings and attributes: gl_TexCoord arrays, packed and indexed varyings, attribute locations, not diagnosed
+(nan-builtin)	min/max with a NaN operand: wrong result, not diagnosed
+(uniform-array|big-param|array-of-struct-of-array|built-in constants)	uniform limits: arrays larger than the 120-vec4 vertex limit (ARB vp params 1021 > 119; GLSL arrays not found after linking)
+(occlusion_query)	occlusion queries: GetObjivAval_multi2 (several queries in flight) fails, not diagnosed
+(arb_fragment_program|ati_fragment_shader|fp-)	ARB and ATI fragment programs: wrong colours, not diagnosed
+(fbo-copypix|readdrawpix|fbo-copyteximage|drawpixels|draw-pixels|bitmap|@pbo|pbo-|copytexsubimage|readpixsanity|rastercolor|ortho-pos|no-op-paths|read-pixels-after-display-list|texredefine|clear_texture-simple|texsubimage)	pixel paths: glDrawPixels, glBitmap, raster position, PBO and sub-image uploads and copies give wrong pixels, not diagnosed
+(texgen)	texture coordinate generation: wrong, not diagnosed
+(tex-skipped-unit|sampler-objects|sampler-numbering|texturematrix)	texture units and samplers: another unit's texture or sampler is read (red where green is expected), not diagnosed
+(fbo-fragcoord)	gl_FragCoord in an FBO: wrong values, not diagnosed
+(post-increment-01|loop-unrolled-divide-by-zero|array-bounds-09)	shader tests that crash (SIGSEGV, nothing printed), not diagnosed
+(ppgtt_memory_alignment|gl30basic|fbo-blit-check-limits)	abort with nothing printed (as the surfaceless window-buffer tests do), not diagnosed
+(triangle-rasterization)	triangle rasterization: edge pixels differ from piglit's reference rasterizer, not diagnosed
+(gl-1\.0-blend-func)	blend factors: wrong blended colours, not diagnosed
+(gl_rgba8-render-sanity|glsl-clamp-vertex-color)	vertex colour clamping: wrong colours, not diagnosed
+(ext_framebuffer_object-error-handling)	FBO completeness: renderbuffers of different sizes aren't reported incomplete
+(fbo-maxsize)	a 2048x2048 render target draws wrong, not diagnosed
+(gl-1\.0-dlist-materials)	materials in display lists: wrong lighting, not diagnosed
+(gl-2\.0-link-empty-prog)	a linked program with no shaders draws black, not diagnosed
+(glsl-fs-bug25902|glsl-kwin-blur-1|glsl-orangebook-ch06-bump)	GLSL programs drawing wrong colours, not diagnosed
+(arb_robustness_client-mem-bounds|intel_performance_query)	API checks that fail (client memory bounds; an Intel query), not diagnosed
+(max-texture-size|streaming-texture-leak)	slow: over the 60 s timeout

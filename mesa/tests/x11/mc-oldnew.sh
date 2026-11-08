@@ -6,7 +6,7 @@
 # way for both:
 #
 #   old  the openhc-minecraft install as mc-session runs it: i386 Zulu 8, gl4es,
-#        the DDK's GLES2 on pvrsrvkm, Xvfb (the normal boot); MC_GL=sgx545: the
+#        the DDK's GLES2 on pvrsrvkm, Xvfb (the normal boot); MC_GL=sgx: the
 #        same with our i386 Mesa in its place (the same-binary head-to-head);
 #        MC_ENV: more VAR=value words for the game (e.g. MC_PRELOAD, PVRTRACE_*)
 #   new  mc-x64.sh: x64 Zulu 8, LWJGL's amd64 natives, GLX/DRI3 on Xorg, our Mesa
@@ -22,7 +22,7 @@
 #
 # FPS: frames presented per second, as each stack counts its swaps: gl4es'
 # LIBGL_FPS line on the old (MC_LINEBUF=1: unbuffered), the driver's
-# SGX545_DEBUG=stats line on the new; the mean of the intervals inside a
+# SGX_DEBUG=stats line on the new; the mean of the intervals inside a
 # window. CPU: the java process's user+system time over the window. GPU
 # recoveries: the kernel log's count over the whole run (pvrsrvkm's
 # "HWRecoveryResetSGX"/"Recovery triggered", powervr_sgx's "job timed out");
@@ -98,7 +98,7 @@ if [ $WHO = old ]; then
 	X() { X64=/opt/x64root; env -i DISPLAY=:0 $X64/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 \
 		--library-path $X64/usr/lib/x86_64-linux-gnu:$X64/lib/x86_64-linux-gnu $X64/usr/bin/xdotool "$@"; }
 	chroot $R /usr/bin/env -i HOME=/root TERM=linux DISPLAY=:0 PATH=/usr/local/bin:/usr/bin:/bin \
-		${MC_ENV:-} MC_GL=${MC_GL:-ddk} SGX545_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} ${MC_NOTEST:+LIBGL_NOTEST=1} MC_DIR=$GIN MC_TWEAKS=0 MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 MC_LINEBUF=1 \
+		${MC_ENV:-} MC_GL=${MC_GL:-ddk} SGX_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} ${MC_NOTEST:+LIBGL_NOTEST=1} MC_DIR=$GIN MC_TWEAKS=0 MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 MC_LINEBUF=1 \
 		LD_PRELOAD=/usr/lib/sgx/sgx-busidshim.so /usr/local/bin/minecraft-ab Player > "$LOG" 2>&1 &
 	READY="foliage.png|textures/items-atlas"
 	fps() { grep -o 'fps: [0-9.]*' | awk '{print $2}'; }
@@ -106,9 +106,9 @@ else
 	[ -S /tmp/.X11-unix/X0 ] || "$here/x11-up.sh" $R start
 	X() { "$here/x11-up.sh" $R run xdotool "$@"; }
 	"$here/x11-up.sh" $R run env -u MESA_GL_VERSION_OVERRIDE -u MESA_GLSL_VERSION_OVERRIDE \
-		SGX545_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} MC_OPTIFINE=0 MC_TWEAKS=0 MC_DIR=$GIN $GIN/mc-x64.sh Player > "$LOG" 2>&1 &
+		SGX_DEBUG=stats${MC_DEBUG:+,$MC_DEBUG} MC_OPTIFINE=0 MC_TWEAKS=0 MC_DIR=$GIN $GIN/mc-x64.sh Player > "$LOG" 2>&1 &
 	READY="textures/items-atlas"
-	fps() { grep -o 'sgx545 stats [0-9.]* s: [0-9.]* FPS' | awk '{print $5}'; }
+	fps() { grep -o 'sgx stats [0-9.]* s: [0-9.]* FPS' | awk '{print $5}'; }
 fi
 jpid() { ps | grep '[b]in/java' | awk '{print $1}' | head -1; }
 ticks() { awk '{print $14 + $15}' /proc/$1/stat 2>/dev/null || echo 0; }
@@ -132,7 +132,7 @@ window() {   # SECS: FPS mean and java CPU % over the next SECS seconds
 	f=$(tail -n +$((l0 + 1)) "$LOG" | fps | mean)
 	echo "$f fps, java CPU $(( (c1 - c0) * 100 / (100 * $1) ))%"
 }
-# MC_DEBUG=flags (new stack): more SGX545_DEBUG flags, e.g. nir (the game's log keeps them)
+# MC_DEBUG=flags (new stack): more SGX_DEBUG flags, e.g. nir (the game's log keeps them)
 # MC_PROFILE=SECS (new stack): perf record (-g, 499 Hz) of the java process for
 # the first SECS of the standing view, report in /root/mcbench/new-<run>.perf.txt;
 # MC_PROFILE_WALK=SECS: the same for the walking view, in new-<run>-walk.perf.txt

@@ -95,7 +95,7 @@ vec4_slots(const struct glsl_type *type, bool bindless)
    return glsl_count_vec4_slots(type, false, bindless);
 }
 
-/* the gallium driver's (sgx545_program.c): load_uniform base and offset from
+/* the gallium driver's (sgx_program.c): load_uniform base and offset from
  * vec4 slots to components */
 static bool
 rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)

@@ -1,0 +1,193 @@
+/*
+ * Copyright © 2026 Joseph Telaak
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
+ * End-to-end tests of the compiler: shaders built with nir_builder,
+ * compiled, and the program checked through the isaspec disassembler
+ * (every word decodes) and through what struct sgx_shader reports.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <gtest/gtest.h>
+
+#include "compiler/glsl_types.h"
+#include "nir.h"
+#include "nir_builder.h"
+#include "sgx_isa.h"
+#include "sgx_compiler.h"
+
+namespace {
+
+class sgx_compile_test : public ::testing::Test {
+ protected:
+   sgx_compile_test()
+   {
+      glsl_type_singleton_init_or_ref();
+   }
+
+   ~sgx_compile_test()
+   {
+      if (compiled)
+         sgx_shader_free(&out);
+      ralloc_free(b.shader);
+      glsl_type_singleton_decref();
+   }
+
+   void start(mesa_shader_stage stage)
+   {
+      b = nir_builder_init_simple_shader(stage, sgx_nir_options(), "test");
+   }
+
+   nir_variable *var(nir_variable_mode mode, const glsl_type *type,
+                     const char *name, int location)
+   {
+      nir_variable *v = nir_variable_create(b.shader, mode, type, name);
+      v->data.location = location;
+      return v;
+   }
+
+   /* compile with the compiler's own layout; false on a compile error */
+   bool compile(bool f16 = false)
+   {
+      struct sgx_compile_options opts = {};
+      struct sgx_varyings vary = {};
+
+      opts.f16 = f16;
+      opts.driver_consts = true;
+      sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
+                          &vary);
+      compiled = true;
+      return sgx_compile(b.shader, &opts, &vary, &out) == 0;
+   }
+
+   /* the program as text, one instruction a line */
+   std::string disasm()
+   {
+      char *text = NULL;
+      size_t len = 0;
+      FILE *f = open_memstream(&text, &len);
+      std::vector<uint32_t> w;
+      for (unsigned i = 0; i < out.n_code; i++) {
+         w.push_back((uint32_t)out.code[i]);
+         w.push_back((uint32_t)(out.code[i] >> 32));
+      }
+      sgx_disasm(w.data(), out.n_code, f, NULL);
+      fclose(f);
+      std::string s(text, len);
+      free(text);
+      return s;
+   }
+
+   /* every word decodes to a known form with no stray bits */
+   void expect_decodes()
+   {
+      std::string s = disasm();
+      EXPECT_EQ(s.find("no match"), std::string::npos) << s;
+      EXPECT_EQ(s.find("unexpected bits"), std::string::npos) << s;
+      EXPECT_EQ(s.find("dontcare"), std::string::npos) << s;
+   }
+
+   nir_builder b = {};
+   struct sgx_shader out = {};
+   bool compiled = false;
+};
+
+TEST_F(sgx_compile_test, fragment_varying_to_colour)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v_coords", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, in), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   EXPECT_GT(out.n_code, 0u);
+   EXPECT_EQ(out.n_iters, 1u);
+   EXPECT_EQ(out.n_flow, 0u);
+   expect_decodes();
+}
+
+TEST_F(sgx_compile_test, vertex_position)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *in = var(nir_var_shader_in, glsl_vec4_type(), "a_position",
+                          VERT_ATTRIB_GENERIC0);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
+                           VARYING_SLOT_POS);
+   nir_store_var(&b, pos, nir_load_var(&b, in), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   EXPECT_GT(out.n_code, 0u);
+   EXPECT_GE(out.n_out_regs, 4u);
+   expect_decodes();
+}
+
+/* mat4 * v from a uniform and an attribute: co-issued as efo (two result
+ * lanes an instruction) */
+TEST_F(sgx_compile_test, vertex_mat4_efo)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *m = var(nir_var_uniform,
+                         glsl_matrix_type(GLSL_TYPE_FLOAT, 4, 4), "u_mvp", -1);
+   nir_variable *in = var(nir_var_shader_in, glsl_vec4_type(), "a_position",
+                          VERT_ATTRIB_GENERIC0);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
+                           VARYING_SLOT_POS);
+   nir_deref_instr *md = nir_build_deref_var(&b, m);
+   nir_def *v = nir_load_var(&b, in);
+   nir_def *r = NULL;
+   for (unsigned c = 0; c < 4; c++) {
+      nir_def *col = nir_load_deref(&b, nir_build_deref_array_imm(&b, md, c));
+      nir_def *t = nir_fmul(&b, col, nir_channel(&b, v, c));
+      r = r ? nir_fadd(&b, r, t) : t;
+   }
+   nir_store_var(&b, pos, r, 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_NE(disasm().find("efo"), std::string::npos) << disasm();
+}
+
+/* A loop bounded by bool ? 3 : 0 over 32-bit ints, with mediump in F16: the
+ * select must stay an integer one. Demoting it to F16 turned the bound into
+ * 0.0 and folded the loop away (dEQP select_iteration_count_fragment). */
+TEST_F(sgx_compile_test, fragment_int_select_loop_bound)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v_coords", VARYING_SLOT_VAR0);
+   in->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *ub = var(nir_var_uniform, glsl_bool_type(), "ub_true", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_variable *i = nir_local_variable_create(b.impl, glsl_int_type(), "i");
+   nir_variable *res =
+      nir_local_variable_create(b.impl, glsl_vec4_type(), "res");
+
+   nir_store_var(&b, res, nir_load_var(&b, in), 0xf);
+   nir_store_var(&b, i, nir_imm_int(&b, 0), 1);
+   nir_loop *loop = nir_push_loop(&b);
+   {
+      nir_def *iv = nir_load_var(&b, i);
+      nir_def *bound = nir_bcsel(&b, nir_load_var(&b, ub), nir_imm_int(&b, 3),
+                                 nir_imm_int(&b, 0));
+      nir_break_if(&b, nir_ige(&b, iv, bound));
+      static const unsigned yzwx[] = {1, 2, 3, 0};
+      nir_store_var(&b, res, nir_swizzle(&b, nir_load_var(&b, res), yzwx, 4),
+                    0xf);
+      nir_store_var(&b, i, nir_iadd_imm(&b, iv, 1), 1);
+   }
+   nir_pop_loop(&b, loop);
+   nir_store_var(&b, col, nir_load_var(&b, res), 0xf);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << "the loop was folded away\n" << disasm();
+}
+
+} /* namespace */

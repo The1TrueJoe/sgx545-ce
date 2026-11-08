@@ -5,8 +5,8 @@ and which facts no doc states yet. The goal is that every fact can be checked
 against the docs alone: the spec side fills the gaps listed here, then the
 code is checked against the docs.
 
-Scope (um-re 1900475, 2026-11-04): `mesa/src/gallium/drivers/sgx545`,
-`mesa/src/gallium/winsys/sgx545`, `mesa/src/sgx545` (isa, pds, compiler) and
+Scope (um-re 1900475, 2026-11-04): `mesa/src/gallium/drivers/sgx`,
+`mesa/src/gallium/winsys/sgx`, `mesa/src/sgx` (isa, pds, compiler) and
 `drm/` (the powervr_sgx kernel driver and its tools; tests get one row each).
 
 A **hardware fact** is any of these:
@@ -32,11 +32,11 @@ Counts are rows of the tables below (one row per file or block of facts).
 
 | area | covered | partial | missing | n/a |
 |---|---|---|---|---|
-| gallium driver (`drivers/sgx545`) | 44 | 27 | 2 | 12 |
-| winsys (`winsys/sgx545`) | 44 | 34 | 2 | 3 |
-| compiler (`sgx545/compiler`) | 33 | 26 | 0 | 5 |
-| USSE instruction set (`sgx545/isa`) | 5 | 0 | 0 | 1 |
-| PDS (`sgx545/pds`) | 4 | 0 | 0 | 1 |
+| gallium driver (`drivers/sgx`) | 44 | 27 | 2 | 12 |
+| winsys (`winsys/sgx`) | 44 | 34 | 2 | 3 |
+| compiler (`sgx/compiler`) | 33 | 26 | 0 | 5 |
+| USSE instruction set (`sgx/isa`) | 5 | 0 | 0 | 1 |
+| PDS (`sgx/pds`) | 4 | 0 | 0 | 1 |
 | kernel driver (`drm/`) | 33 | 44 | 5 | 2 (+ 7 test rows) |
 | **total** | **163** | **131** | **9** | **24** |
 
@@ -82,7 +82,7 @@ and are covered. The gaps are in the state around them:
    - the firmware file's limits.
 
    Home: UKERNEL.md, UAPI.md §4, STATE.md §1.
-4. **The services bridge ABI** that `winsys/sgx545_pvr.c` uses:
+4. **The services bridge ABI** that `winsys/sgx_pvr.c` uses:
    - the calls and structures: `ALLOC_DEVICEMEM`, `WRAP_EXT_MEMORY`,
      `SGX_DOKICK` with its `SGX_CCB_KICK` fields,
      `SGX_FLUSH_HW_RENDER_TARGET`, `PVRSRV_SYNC_DATA`;
@@ -185,9 +185,9 @@ fixing.
 - **Discard phase-0 `phas.i`:** ISA.md lists `fa440800|t`; the winsys's phase
   word is `[wait=1]`.
 - **Code comments behind the docs:**
-  - `sgx545_draw.c:244` says the hardware has no fans; STATE.md has VDM prim 0
+  - `sgx_draw.c:244` says the hardware has no fans; STATE.md has VDM prim 0
     + b28.
-  - `sgx545_draw.c:1009` tags sa4 as a guess; STATE.md confirms ALWAYS (a7).
+  - `sgx_draw.c:1009` tags sa4 as a guess; STATE.md confirms ALWAYS (a7).
 - **DRIVER-UPSTREAM.md §2 behind the docs:** it still lists gl_FragCoord,
   gl_PointCoord, the pass types and sa3/sa4 as gaps.
 
@@ -218,7 +218,7 @@ re-read these rows against the sections named:
   (STATE.md §6). The allocation order is not.
 - **Gallium: `get_rt`**: STATE.md §6 "Renders in flight", with what a third
   kick does still open.
-- **Gallium: `sgx545_screen.h:52-59`**: UKERNEL.md §9 (two contexts sharing a
+- **Gallium: `sgx_screen.h:52-59`**: UKERNEL.md §9 (two contexts sharing a
   PB work; a second PB per context is still a gap).
 - **Winsys: "Vertices per task", "Vertex secondary attributes"**: STATE.md §2
   (the rule, the capture table, the hang, the slot layout and the constants).
@@ -286,7 +286,7 @@ pass that follows; nothing is changed here.
 
 ## By area
 
-### gallium driver: `mesa/src/gallium/drivers/sgx545`
+### gallium driver: `mesa/src/gallium/drivers/sgx`
 
 Facts that live behind `sgxws.h` (winsys words) are in the winsys section;
 `ci/` (test expectations) is not audited.
@@ -296,162 +296,162 @@ Facts that live behind `sgxws.h` (winsys words) are in the winsys section;
 | file (lines) / area | what it encodes | doc section(s) | status |
 |---|---|---|---|
 | `meson.build` | build list | | n/a: no hardware facts |
-| `sgx545_public.h` | screen entry point | | n/a: no hardware facts |
-| `sgx545_program.h` | prototypes | | n/a: no hardware facts |
-| `sgx545_texture.h` | prototypes (cites TEX.md §1, STATE.md §5; the facts are in `sgx545_texture.c`) | | n/a: no hardware facts |
-| `sgx545_screen.h:15-42` | debug flags | | n/a: no hardware facts |
-| `sgx545_screen.h:52-59` | one HW render context per process: a second render context with its own parameter buffer makes the microkernel's renders slow, then lock up | UAPI.md §2 "CREATE_CONTEXT" (one render context per VM until tested, G15), UAPI.md §10 gap table G15 (a PB away from the 3D-params heap base hangs; one shared PB per VM), UKERNEL.md §3 "Cleanup (type 5)" | partial |
-| `sgx545_context.h:30-40, 57-60` | constants in SA from a base slot, `SGX545_MAX_CONSTS` (sa127 ends them); memory block per draw, base register for block j = address + 512·j | ISA.md "What a compiler needs" → "Constants past sa127"; ISA.md "hw 1d: ld" → **Address** (`ld.a.d #i` = base + 4·(i+1), 128 dwords per base) | covered |
-| `sgx545_context.h:32-34` `struct sgx545_const` fmt codes 1/2/3/0x10/0x11 | constant kinds (compiler interface) | COMPILER-UPSTREAM.md §3 | n/a: compiler ABI (encodings are in `fill_consts`, below) |
-| `sgx545_context.h:44-46`, `sgx545_draw.c:1002-1005`, `sgx545_program.c:563` | `SGX545_SA_FRONT` = sa5; value `!front_ccw` (bit 0 clear when gallium's front_ccw) for the compiler's gl_FrontFacing | ISA.md "What a compiler needs" → "Fragment shaders" (g16 bit 0 = CW in memory; `xor r, g16, sa[front_sa]`; "Not yet drawn by our own programs") | partial |
-| `sgx545_context.c:20-50, 176-184` | fences by kick number: renders on the one render context finish in kick order | TEX.md §4 "Render to texture" (the microkernel runs 3D renders in kick order on the context) | covered |
-| `sgx545_context.c:82-85` | hangabort: stop before "the recovery loop wedges the GPU" | UAPI.md §8 "Hardware recovery as userspace sees it" (device lost; TEX.md §7's failed recovery needing a power cycle), PDS.md "Open questions" (a failed recovery needs a reboot) | partial |
-| `sgx545_resource.h:36`, `sgx545_resource.c:26-47, 112, 120, 137, 211, 237` | render targets that aren't textures: rows of a multiple of 32 px (`align(width0, 32)`); scanout dumb buffers widened to 32 px "rows of whole tiles"; imported/dumb stride must be a multiple of 128 bytes | STATE.md §4 "PBE words" (stride field (pixels)/2 − 1; window pitch 720 → 736), "Screen and tiles" (pbuffer PBE stride = width rounded up to 32; TE tile 32×16) | partial |
-| `sgx545_resource.c:140-141, 174-175, 520-521, 559-560`; `sgx545_draw.c:659` | BO alignment 0x1000, sizes rounded to 4096 | UAPI.md §5 "Heap layout" (page size 4 KiB; T2 and PBE address are full addresses), STATE.md §4 "PBE words" word 3 (`& ~3`) | covered |
-| `sgx545_resource.c:102-132` | cached dumb buffer as target: kernel flushes the CPU cache around every job that lists it (SGX doesn't snoop) | UAPI.md §2 "CREATE_BO, GET_BO_MMAP_OFFSET", WINSYS.md "What each backend does" (shared buffers) | covered |
-| `sgx545_resource.c:169-184` | textures in the texture heap; a 4-byte format without alpha has its X byte read as alpha, so the device copy starts all 0xff | TEX.md §1 "Texel formats" (RGB uploaded as R,G,B,0xff under 0x0d), STATE.md §5 T1 (0x0d "RGB888 is uploaded as 8888") | covered |
-| `sgx545_resource.c:193-224` | fbdev wrap: page-aligned BGRA mapping, pitch 32 px | TEX.md §6 "Presentation" (fb0 wrapped, pitch 736 = 720 rounded to 32), §12 | partial (as the 32-px row above) |
-| `sgx545_resource.c:368-407` `sgx545_resource_target` | BGRA8 target: PBE format 0, load-object T1 format 0x0c; RGBA8: PBE format 1, T1 0x0d ("swaps R and B against 0x0c: the PBE's order back"); a texture as target: `va` = the level/face offset, stride = w (twiddled, T1 layout 0) or align(w, 8) (linear, layout 3); other targets: strided T1 layout 6 at the RT's pitch, level 0 only, 4-byte formats only | STATE.md §4 "PBE words", "Format codes"; TEX.md §4 "Render to texture", §11 "Render targets the sampler reads directly"; STATE.md §3 "Scissor and partial viewports" (load object T1 layout 6, format 0xc) | partial |
-| `sgx545_resource.c:345-353` | a texture freed while a recorded frame still samples it: that frame reaching the GPU after the free locks up the 3D, so the frame is flushed and the GPU idled before the free | none | missing |
-| `sgx545_resource.c:409-608` transfers, ghosting, `tex_write`, `alt_dirty` | CPU-copy bookkeeping | | n/a: no hardware facts |
-| `sgx545_resource.c:552-584` `sgx545_resource_cube0` | level-0 face copy for cube maps sampled without mipmapping | TEX.md §8 "Cube maps" → "Mip levels sampled without mipmapping" | covered |
-| `sgx545_texture.c:25-60` `sgx545_tex_format` | T1 codes: RGBA8/RGBX8 (+sRGB) → 0x0c, BGRA8/BGRX8 (+sRGB) → 0x0d, B5G6R5 → 0x05, A8 → 0x19, L8 → 0x1a, L8A8 → 0x1b; 0x0c over R,G,B,A bytes gives texels in GL order through the compiler's xyzw unpack; 0x0d swaps R and B against 0x0c | TEX.md §1 "Texel formats"; STATE.md §5 T1 b24-28 | partial |
-| `sgx545_texture.c:62-72, 145-156, 241-246` | linear layout for non-power-of-two sizes: rows padded to 8 texels | TEX.md §1 "Linear: sizes that are not powers of two, T1 layout 3" | covered |
-| `sgx545_texture.c:23, 130-191, 248-264` `encode_box`, `sgx545_tex_decode_level` | twiddled layout: square tiles of t = min(w, h, 16), Morton order inside with y in bit 0, tiles row-major; level bytes = w·h·bpp | TEX.md §1 "Twiddled: power-of-two sizes, T1 layout 0" | covered |
-| `sgx545_texture.c:74-84, 114-124` `chain_offset`, `sgx545_tex_offset`, `sgx545_tex_size` | mip level n+1 right after level n, no padding, each level by its own size | TEX.md §1 "Mipmaps" | covered |
-| `sgx545_texture.c:86-112` `face_stride_levels` | cube faces in GL order; packed when width < 16; with levels > 1 each face's chain aligned to 0x800 in every format; one level and width ≥ 16: aligned to one tile's bytes (16·16·bpp; RGBA8888 16×16 = 0x400 measured, other formats [G]) | TEX.md §8 "Cube maps" | partial |
-| `sgx545_texture.c:86-124` with `sgx545_draw.c:892-904` | NPOT cube faces: laid out as linear faces (pitch 8) at the same strides, sampled as T1 layout 2; sizes ≥ 16 texels or mipmapped are not drawn because they lock the 3D | TEX.md §8 "NPOT faces" (no NPOT form of layout 2 known); PIGLIT.md "Open bug: NPOT cube maps lock the 3D" | partial (lock-up covered; the layout below 16 texels is missing) |
-| `sgx545_texture.c:139, 151-153, 183-184` | RGBX8 uploads get 0xff in byte 3 | TEX.md §1 "Texel formats" | covered |
-| `sgx545_texture.c:210-218` `sgx545_tex_uses_cube0` | a cube with levels sampled with no mip filter reads faces spaced by level 0 alone | TEX.md §8 → "Mip levels sampled without mipmapping" (T0 b18) | covered |
-| `sgx545_texture.c:267-280` `wrap` | 0 repeat, 1 mirror, 2 clamp (CLAMP, CLAMP_TO_EDGE, CLAMP_TO_BORDER all 2) | STATE.md §5 T0 b3-5 / b6-8 | covered |
-| `sgx545_texture.c:289-293` | view from a later base level of a 2-D texture: T2 = that level's offset, T1 size = that level's size | TEX.md §1 "Mipmaps" (T2 is the base; chain length implied by the size); STATE.md §5 T2 | partial |
-| `sgx545_texture.c:294-298` | no mipmapping on a linear (NPOT) texture: it locks the 3D | PIGLIT.md "Results (EA3, 2026-11-03)" (NPOT 2D textures sampled through their mipmaps lock the 3D) | covered |
-| `sgx545_texture.c:300-312` T0 | wrap T b3-5, wrap S b6-8, mip linear b9, min linear b10, mag linear b12, b17-20 0xf / 0xd with mipmaps, b21-26 0x3f, b30 for L8/A8/LA88 | STATE.md §5 "Texture words, measured" (T0 table; b21-26 [G]) | covered |
-| `sgx545_texture.c:313-318` T1, T2 | T1 = layout (2 cube, 0 twiddled, 3 linear) << 29 \| format << 24 \| (w−1) << 12 \| (h−1); T2 = base (or the cube0 copy) | STATE.md §5 T1, T2; PDS.md "DOUTT" | covered |
-| `sgx545_texture.c:319-335` strided render target | T1 layout 6, format 0x0d for B,G,R,A memory and 0x0c for R,G,B,A; T0 = (pitch−1) low 3 bits in b9-11, the rest in b17-26, wraps, mag linear b12 | STATE.md §5 T1 layout 6; TEX.md §3 "The transfer queue" (pitch split), §10 "Sources and filters" (strided sources sample nearest) | partial |
-| `sgx545_texture.c:336-337` T3 | 0x00800800 for every sample (2-D, cube, projected, merged, dependent) | STATE.md §5 T3 (depends on the sample instruction: tex1 00800800, tex2 01028800) | partial |
-| `sgx545_state.c:30-56` `blend_sel` | GL factors as sop2 selectors zero/s1/s2/s1a/s2a/asat + complement; s1 = shader colour, s2 = tile; SRC_ALPHA_SATURATE = asat when the buffer has alpha | STATE.md §3 "Blending and the colour mask are shader code"; ISA.md "sop2 (hw 10 …)" | partial |
-| `sgx545_state.c:58-67` `blend_swap_sel`, `:153-168` | reverse subtract by trading sources (`sop2 o0, o0, pa<c>`) and renaming selectors; asat not swappable | STATE.md §3 "Blending …" (Reverse subtract) | covered |
-| `sgx545_state.c:69-80, 124-126` `blend_op` | ops add/sub/min/max; min and max run with both factors one | ISA.md "sop2" (cop/aop 0 add 1 sub 2 min 3 max; `dst = (src1*c1) cop (src2*c2)`), STATE.md §3 | covered |
-| `sgx545_state.c:89-146` `blend_bfactor`, sopwm form | constant factors: the sopwm products and an add; reverse subtract / subtract with constants by `swap` and `atrade`; SRC_ALPHA_SATURATE alpha factor 1 | STATE.md §3 "Constant-colour blending" | partial |
-| `sgx545_state.c:177-197` | blend state object | | n/a: no hardware facts |
-| `sgx545_state.c:206-447, 449-553, 602-697` | CSOs, queries, CPU blit | | n/a: no hardware facts |
-| `sgx545_state.c:558-600` `sgx545_blit_gpu` | GPU blit needs: a sampleable source, a destination that is a 4-byte linear render target | TEX.md §3, §11; STATE.md §4 | covered |
-| `sgx545_draw.c:28-49` `get_rt` | a target's TA/3D structures have one render in flight, so two targets rendered back to back need a set each | STATE.md §6 "RT data" (nbuf = 2 entries) | missing |
-| `sgx545_draw.c:103-118` clear mask | colour bytes written: B b0, G b1, R b2, A b3 of packed BGRA8 | STATE.md §3 "Blending …" (colour mask sopwm, one bit per byte) | covered |
-| `sgx545_draw.c:123-124` | every render starts at depth 1.0 (render details +0x40), so a clear to 1.0 draws nothing for depth | STATE.md §6 "Render details" +0x40 | covered |
-| `sgx545_draw.c:125-130, 925-945` | a buffer without alpha: its X byte is read as alpha wherever it is sampled; clears write 1.0 there; draws into such a texture keep the tile's alpha | TEX.md §1 "Texel formats" | covered |
-| `sgx545_draw.c:137-146` `depth_func` | ISPA depth compare = GL enum − 0x200 (PIPE_FUNC order = GL order); 0 when off | STATE.md §3 "ISPA" b22-24 | covered |
-| `sgx545_draw.c:148-160` `stencil_word` | ISPC: write mask b0-7, compare mask b8-15, zpass b16-18, zfail b19-21, sfail b22-24, func b25-27; op codes 0 keep … 7 decr_wrap | STATE.md §3 "ISPC: stencil" | covered |
-| `sgx545_draw.c:162-182` `build_stencil` | two-sided: the first group is the faces CCW in the target's memory (GL's back face with front_ccw in a y-flipped target) | STATE.md §3 TA state block header bits 0x8/0x10/0x20 | covered |
-| `sgx545_draw.c:184-205` `build_state` | ISPB colour mask R 8, G 4, B 2, A 1; cull, front_ccw, viewport scale/translate, line width (the winsys words) | STATE.md §3 "ISPB", "MTE control", "Viewport", "Lines and points" | covered |
-| `sgx545_draw.c:207-230` `build_clip` | the hardware clips to the guard band, not to the viewport; the viewport rectangle ∩ scissor is what the draw may reach | STATE.md §3 "Scissor and partial viewports: pass type 3 objects" (item 8: a partial viewport gets reset + set objects) | partial |
-| `sgx545_draw.c:244-298, 1090-1119` primitives | hardware prims used: triangles, triangle strip, lines, points; fans, line strips/loops, quads, polygons drawn as lists; comment: "primitives the hardware doesn't have" includes the fan; points need a vertex-program size (else nothing) | STATE.md §2 draw word 0, §3 "Lines and points" (prim 0 + b28 is a fan; no line strip or loop; pt1 draws nothing) | covered (the code comment contradicts STATE.md on fans) |
-| `sgx545_draw.c:488-544` `fill_consts` | constant encodings: f32; F16 half at a shift; C10 = clamp(lrint(clamp(v, −2, 2)·255 in double), −512, 511) & 0x3ff at a shift; kind 0x10 = F16 of c/255; F16 and C10 values sharing an SA word | ISA.md "Float classes" (h8 C10: signed 10-bit channel at 10·chan, read as clamp(v/255, ±2)); ISA.md "Hardware checks" (hwt_p3, hwt_p4); ISA.md "sop2" (C10 channel layout in a register) | partial |
-| `sgx545_draw.c:546-566` `mem_consts` | constants past SA in a per-draw block, n base registers | ISA.md "Constants past sa127", "hw 1d: ld" Address | covered |
-| `sgx545_draw.c:568-593, 1178-1185` `varyings_match` | DOUTI source 0 = gl_FragCoord, set + 1 = a varying, ≥ 0x20 not a varying (0x22 the discard's depth plane); sample half = coordinate set + 1, 2 comps for 2-D, 3 for projected; TSP sizes 3 bits per set, 5 = 4 components, sets < 10; iterating a set the vertex program doesn't output (or with more components) locks the GPU (EA3) | PDS.md "DOUTI"; STATE.md §3 "Output select … and TSP words"; ISA.md "Vertex shaders" (10 sets) | partial |
-| `sgx545_draw.c:596-838` vertex cache | 16-bit indices rebased into a < 65536 range; vertices aligned to 64 bytes, indices to 16; 2 MB chunks | STATE.md §2 draw word 1 (16-bit indices: bit 0 clear); UAPI.md §5 constraints (index buffer 2- or 4-byte aligned; DMA sources on 32, G10) | covered |
-| `sgx545_draw.c:738, 1218-1250` index limit, whole primitives | draws split at `SGXWS_MAX_INDICES` (strips longer than it become lists; lists in pieces of whole primitives); counts trimmed to whole primitives because "the VDM takes the count as it is" | STATE.md §2 draw word 0 (`… \| prim<<26 \| index count`) | partial |
-| `sgx545_draw.c:887-908` | NPOT cube maps of ≥ 16 texels, or mipmapped, lock the 3D: not drawn | PIGLIT.md "Open bug: NPOT cube maps lock the 3D" | covered |
-| `sgx545_draw.c:916-951` colour epilogue | blend, then the colour mask as bytes of packed BGRA8 (B b0 G b1 R b2 A b3); for a texture target without alpha the blend's alpha is the tile's (tile·1 + colour·0) | STATE.md §3 "Blending …" (sop2, sopwm mask), ISA.md "sop2" | covered |
-| `sgx545_draw.c:986-987` pass type | blend 1; discard 4; discard + blend 2; else 0 | STATE.md §3 "ISPA" b25-27; ISA.md "Phases, visibility feedback and discard" → "The draw state" | covered |
-| `sgx545_draw.c:989-1001`, `sgx545_program.c:714, 785` fragment SA block | fragment constants from sa9 (`fsk + 9`); `sec_dwords` = 9 + constants, at least 9 when a driver word is used; blend colour in sa2 as A<<24 \| R<<16 \| G<<8 \| B; temps ≥ 2 for the constant blend | STATE.md §3 "Constant-colour blending" (sa2, packed BGRA8, `604080bf`); ISA.md "Constants past sa127" (from sa9/sa10) | partial |
-| `sgx545_draw.c:1006-1013` discard words | sa3 = 0xe000 \| (GL depth func − 0x200, 7 with the test off) \| 8 without depth writes; sa4 = 0xee00 (code tags it [G]) | STATE.md §3 "Alpha test (ES1)" (sa0/sa1 word formats; "the Mesa driver's discard atst8 (`f9340406`, sa3/sa4) carries these same two words with the alpha function ALWAYS (`0xee00`)"; ALWAYS [C, a7]); ISA.md "Phases …" (atst8 src1 = 3, src2 = 4) | covered |
-| `sgx545_draw.c:1014-1031` dependent samples | the 4 DOUTT words of a dependent sample in 4 consecutive SA registers | ISA.md "The texture-sample sequence a compiler must emit" | covered |
-| `sgx545_draw.c:1039-1053` | one DOUTT (4 words) after each sampling DOUTI | PDS.md "DOUTT", STATE.md §5 | covered |
-| `sgx545_draw.c:1085-1088` fixed uniform-colour program | colour as two F16 pairs at `SGXWS_FS_UNIFORM_OFF` of its SA block | GEN.md "The API" (a fragment shader that writes a mediump uniform vec4), "What a frame is made of" (fragment uniforms FP16) | partial |
-| `sgx545_draw.c:1120-1133` | compiled programs: 4 dwords per attribute slot; fixed position programs: 2 (x, y) or 3 (x, y, z) dwords | PDS.md "DOUTD"; GEN.md "The API" (xy or xyz position shader) | covered |
-| `sgx545_draw.c:340-460, 462-486, 1189-1325` | CPU vertex gathering, staging, sparse expansion | | n/a: no hardware facts |
-| `sgx545_program.c:35-261, 353-367, 433-516, 805-1010` | NIR plumbing, legacy varying remap, variants, fixed-program matching | | n/a: no hardware facts |
-| `sgx545_program.c:273-351` `assign_varyings` | a set per slot in slot order; gl_PointCoord is set 0 (2 components) of a sprite and everything else moves up one; the point size is the output dword after the sets; ten sets of four components | STATE.md §3 "Lines and points"; ISA.md "Vertex shaders" (output buffer, varyings to sets, gl_PointSize) | covered |
-| `sgx545_program.c:383-416` `insert_samples` (smp, wdf) | smp template patched: dst l21-27 = raw texel temp, h7 clear (r); src1 l7-13 = the state SA, bank l30-31 = 3 (sa), h17 clear; then `wdf` = hi `0xf9200000 \| drc`, lo 0 | ISA.md "Operand slots and bank codes", "hw 1c: smp", "The smp instruction …", "The texture-sample sequence …", "hw 1f: the special class" → "other" (op 1 wdf, h0 DRC; h20-21 = 2) | covered |
-| `sgx545_program.c:417-427` | branch relative offsets in l0-17, signed, in instructions, moved when samples go in | ISA.md "hw 1f" → "flow control" (`br`), "Program structure and calling conventions" | covered |
-| `sgx545_program.c:613-630` | an instruction names SA in 7 bits; vertex constants from sa10, fragment from sa9, plus 4 per dependent sample, must end at sa127; past it the numbers wrap and the 3D locks up | ISA.md "Registers", "Constants past sa127"; PIGLIT.md "Uniforms past sa127" | covered |
-| `sgx545_program.c:634-657` vertex program words | `in_dwords` = 4·attribute slots; `out_dwords` = 4 + set sizes + 1 with a point size; TSP sizes 3 bits per set (1, 2, 3, 5 for 4); TSP word 1 = 0 except bit 0 for a sprite's coordinate set ("with a set's bit in it, the TPU samples at a constant coordinate") | STATE.md §3 "Output select … and TSP words", "Lines and points" (ES2 point draws: TSP words 2 and 1); ISA.md "Vertex shaders" | partial |
-| `sgx545_program.c:659-691` | dependent samples' state words in SA after the constants: sa(9 + constants + 4j) | ISA.md "Constants past sa127", "The texture-sample sequence …" | covered |
-| `sgx545_program.c:692-702` | a discarding program must end in the feedback `nop` (hi `0xf8000140`, lo 0) | ISA.md "hw 1f" → "flow control" (`nop` h6-8 = 5), "Phases, visibility feedback and discard" (USP's discard `nop` at the feedback label) | covered |
-| `sgx545_program.c:715-759` DOUTI building | one DOUTI per iteration in PA order; varying source = set + 1; gl_FragCoord (iterator 14) → source 0; sample half merged into the previous plain DOUTI when it iterates the same set; a separate DOUTI sampling a set already iterated samples at coordinate 0 (EA3); otherwise a pure sample (source 0x24 = 0x12000); b25-26 = 3; F16 iteration (`prec1`, b28); w1 0x10 for gl_PointCoord; no placeholder colour iteration (source 0x20): it hangs the GPU when the vertex program outputs no colour | PDS.md "DOUTI"; ISA.md "Lists and blocks" (list A); ISA.md "What a compiler needs" → "Fragment shaders" | partial |
-| `sgx545_program.c:760-787` | discard: one more plain DOUTI, source 0x22, 3 components, after the inputs; pa index = registers the iterations fill (an F32 component 1, an F16 pair 1, a sampled texel 1); `pa_dwords` ≥ that + 3 | ISA.md "Phases, visibility feedback and discard" (`0x7811000`, pcoeff pa<n>), "What a compiler must emit to discard"; ISA.md "Lists and blocks" (registers per list-A entry); ISA.md "The texture-sample sequence …" (one chunk for any ≤ 32-bit texel) | covered |
-| `sgx545_program.c:790-793` | last plain iteration b29, last sample b30 | PDS.md "DOUTI" | covered |
-| `sgx545_program.c:703-708` | gl_FragDepth not written (depthf form not traced) | ISA.md "Program structure …" (gl_FragDepth guess) | n/a: no fact used (warning only) |
-| `sgx545_screen.c:24-53` debug options | flushrt: `SGX_FLUSH_HW_RENDER_TARGET` hangs a srvinit-started microkernel | GEN.md "Layout: the microkernel reads the previous client's render"; NOTES.md "A frame from code alone" | covered |
-| `sgx545_screen.c:87-126` shader caps | VS 16 inputs, FS 10 inputs (sets), VS 11 outputs, 64 temps, 8 samplers, 16384 instructions, constants sa9 (sa10 vertex) to sa127, mediump two to a register | ISA.md "Registers", "Constants past sa127", "Vertex shaders" (10 sets) | partial |
-| `sgx545_screen.c:93-98, 285-292` | a non-dependent (PDS) read needs the coordinate to be a whole varying of its own set; a projected one a whole vec4 at component 0 | ISA.md "The texture-sample sequence …" (non-dependent fragment read: coordinate = an untouched varying); PDS.md "DOUTI" sample half | partial |
-| `sgx545_screen.c:129-174` screen caps | max 2-D texture 2048, cube levels 12, no 3-D textures, 1 render target, line width 1-16, point size 1-511, granularity 0.1, LOD bias 16, fragment coord origin upper left at half-integer centres, PCI 8086:089b, no fixed-function blender | STATE.md §3 "Lines and points" (line width clamp [1, 16], ISPB `ff`; points clamped to 511), §3 "Blending …"; PDS.md "DOUTI" (gl_FragCoord at pixel centres in memory order); STATE.md §4 "PBE words" (top row first); DRM-DRIVER.md (8086:089b) | partial |
-| `sgx545_screen.c:177-232` `is_format_supported` | windows/scanout: BGRA8 only (PBE code 0); render targets: BGRA8/RGBA8 (codes 0/1), not 565 because T1 0x05 hands the compiler's unpack R and B swapped; depth Z16/Z24X8/Z24S8, kept per tile by the ISP within one render (no ZLS); sampler formats = those with a T1 code, plus render targets sampled strided; 1D/2D/RECT/CUBE targets | STATE.md §4 "Format codes"; TEX.md §1, §3, §4, §7 "Depth and stencil across renders (ZLS)"; PIGLIT.md "Results" (no ZLS) | partial |
-| `sgx545_screen.c:243-275` `sgx545_screen_destroy` | under a srvinit-started microkernel a render context's cleanup never completes (bridge −EINVAL after its wait); the next connection's TA then runs against a parameter buffer the microkernel doesn't use: no pages allocated, nothing drawn, ~270 ms renders, then lockups | UKERNEL.md §3 "Cleanup (type 5)" (RT/PB cleanups not completing; a busy resource leaves the status clear) | partial |
+| `sgx_public.h` | screen entry point | | n/a: no hardware facts |
+| `sgx_program.h` | prototypes | | n/a: no hardware facts |
+| `sgx_texture.h` | prototypes (cites TEX.md §1, STATE.md §5; the facts are in `sgx_texture.c`) | | n/a: no hardware facts |
+| `sgx_screen.h:15-42` | debug flags | | n/a: no hardware facts |
+| `sgx_screen.h:52-59` | one HW render context per process: a second render context with its own parameter buffer makes the microkernel's renders slow, then lock up | UAPI.md §2 "CREATE_CONTEXT" (one render context per VM until tested, G15), UAPI.md §10 gap table G15 (a PB away from the 3D-params heap base hangs; one shared PB per VM), UKERNEL.md §3 "Cleanup (type 5)" | partial |
+| `sgx_context.h:30-40, 57-60` | constants in SA from a base slot, `SGX_MAX_CONSTS` (sa127 ends them); memory block per draw, base register for block j = address + 512·j | ISA.md "What a compiler needs" → "Constants past sa127"; ISA.md "hw 1d: ld" → **Address** (`ld.a.d #i` = base + 4·(i+1), 128 dwords per base) | covered |
+| `sgx_context.h:32-34` `struct sgx_const` fmt codes 1/2/3/0x10/0x11 | constant kinds (compiler interface) | COMPILER-UPSTREAM.md §3 | n/a: compiler ABI (encodings are in `fill_consts`, below) |
+| `sgx_context.h:44-46`, `sgx_draw.c:1002-1005`, `sgx_program.c:563` | `SGX_SA_FRONT` = sa5; value `!front_ccw` (bit 0 clear when gallium's front_ccw) for the compiler's gl_FrontFacing | ISA.md "What a compiler needs" → "Fragment shaders" (g16 bit 0 = CW in memory; `xor r, g16, sa[front_sa]`; "Not yet drawn by our own programs") | partial |
+| `sgx_context.c:20-50, 176-184` | fences by kick number: renders on the one render context finish in kick order | TEX.md §4 "Render to texture" (the microkernel runs 3D renders in kick order on the context) | covered |
+| `sgx_context.c:82-85` | hangabort: stop before "the recovery loop wedges the GPU" | UAPI.md §8 "Hardware recovery as userspace sees it" (device lost; TEX.md §7's failed recovery needing a power cycle), PDS.md "Open questions" (a failed recovery needs a reboot) | partial |
+| `sgx_resource.h:36`, `sgx_resource.c:26-47, 112, 120, 137, 211, 237` | render targets that aren't textures: rows of a multiple of 32 px (`align(width0, 32)`); scanout dumb buffers widened to 32 px "rows of whole tiles"; imported/dumb stride must be a multiple of 128 bytes | STATE.md §4 "PBE words" (stride field (pixels)/2 − 1; window pitch 720 → 736), "Screen and tiles" (pbuffer PBE stride = width rounded up to 32; TE tile 32×16) | partial |
+| `sgx_resource.c:140-141, 174-175, 520-521, 559-560`; `sgx_draw.c:659` | BO alignment 0x1000, sizes rounded to 4096 | UAPI.md §5 "Heap layout" (page size 4 KiB; T2 and PBE address are full addresses), STATE.md §4 "PBE words" word 3 (`& ~3`) | covered |
+| `sgx_resource.c:102-132` | cached dumb buffer as target: kernel flushes the CPU cache around every job that lists it (SGX doesn't snoop) | UAPI.md §2 "CREATE_BO, GET_BO_MMAP_OFFSET", WINSYS.md "What each backend does" (shared buffers) | covered |
+| `sgx_resource.c:169-184` | textures in the texture heap; a 4-byte format without alpha has its X byte read as alpha, so the device copy starts all 0xff | TEX.md §1 "Texel formats" (RGB uploaded as R,G,B,0xff under 0x0d), STATE.md §5 T1 (0x0d "RGB888 is uploaded as 8888") | covered |
+| `sgx_resource.c:193-224` | fbdev wrap: page-aligned BGRA mapping, pitch 32 px | TEX.md §6 "Presentation" (fb0 wrapped, pitch 736 = 720 rounded to 32), §12 | partial (as the 32-px row above) |
+| `sgx_resource.c:368-407` `sgx_resource_target` | BGRA8 target: PBE format 0, load-object T1 format 0x0c; RGBA8: PBE format 1, T1 0x0d ("swaps R and B against 0x0c: the PBE's order back"); a texture as target: `va` = the level/face offset, stride = w (twiddled, T1 layout 0) or align(w, 8) (linear, layout 3); other targets: strided T1 layout 6 at the RT's pitch, level 0 only, 4-byte formats only | STATE.md §4 "PBE words", "Format codes"; TEX.md §4 "Render to texture", §11 "Render targets the sampler reads directly"; STATE.md §3 "Scissor and partial viewports" (load object T1 layout 6, format 0xc) | partial |
+| `sgx_resource.c:345-353` | a texture freed while a recorded frame still samples it: that frame reaching the GPU after the free locks up the 3D, so the frame is flushed and the GPU idled before the free | none | missing |
+| `sgx_resource.c:409-608` transfers, ghosting, `tex_write`, `alt_dirty` | CPU-copy bookkeeping | | n/a: no hardware facts |
+| `sgx_resource.c:552-584` `sgx_resource_cube0` | level-0 face copy for cube maps sampled without mipmapping | TEX.md §8 "Cube maps" → "Mip levels sampled without mipmapping" | covered |
+| `sgx_texture.c:25-60` `sgx_tex_format` | T1 codes: RGBA8/RGBX8 (+sRGB) → 0x0c, BGRA8/BGRX8 (+sRGB) → 0x0d, B5G6R5 → 0x05, A8 → 0x19, L8 → 0x1a, L8A8 → 0x1b; 0x0c over R,G,B,A bytes gives texels in GL order through the compiler's xyzw unpack; 0x0d swaps R and B against 0x0c | TEX.md §1 "Texel formats"; STATE.md §5 T1 b24-28 | partial |
+| `sgx_texture.c:62-72, 145-156, 241-246` | linear layout for non-power-of-two sizes: rows padded to 8 texels | TEX.md §1 "Linear: sizes that are not powers of two, T1 layout 3" | covered |
+| `sgx_texture.c:23, 130-191, 248-264` `encode_box`, `sgx_tex_decode_level` | twiddled layout: square tiles of t = min(w, h, 16), Morton order inside with y in bit 0, tiles row-major; level bytes = w·h·bpp | TEX.md §1 "Twiddled: power-of-two sizes, T1 layout 0" | covered |
+| `sgx_texture.c:74-84, 114-124` `chain_offset`, `sgx_tex_offset`, `sgx_tex_size` | mip level n+1 right after level n, no padding, each level by its own size | TEX.md §1 "Mipmaps" | covered |
+| `sgx_texture.c:86-112` `face_stride_levels` | cube faces in GL order; packed when width < 16; with levels > 1 each face's chain aligned to 0x800 in every format; one level and width ≥ 16: aligned to one tile's bytes (16·16·bpp; RGBA8888 16×16 = 0x400 measured, other formats [G]) | TEX.md §8 "Cube maps" | partial |
+| `sgx_texture.c:86-124` with `sgx_draw.c:892-904` | NPOT cube faces: laid out as linear faces (pitch 8) at the same strides, sampled as T1 layout 2; sizes ≥ 16 texels or mipmapped are not drawn because they lock the 3D | TEX.md §8 "NPOT faces" (no NPOT form of layout 2 known); PIGLIT.md "Open bug: NPOT cube maps lock the 3D" | partial (lock-up covered; the layout below 16 texels is missing) |
+| `sgx_texture.c:139, 151-153, 183-184` | RGBX8 uploads get 0xff in byte 3 | TEX.md §1 "Texel formats" | covered |
+| `sgx_texture.c:210-218` `sgx_tex_uses_cube0` | a cube with levels sampled with no mip filter reads faces spaced by level 0 alone | TEX.md §8 → "Mip levels sampled without mipmapping" (T0 b18) | covered |
+| `sgx_texture.c:267-280` `wrap` | 0 repeat, 1 mirror, 2 clamp (CLAMP, CLAMP_TO_EDGE, CLAMP_TO_BORDER all 2) | STATE.md §5 T0 b3-5 / b6-8 | covered |
+| `sgx_texture.c:289-293` | view from a later base level of a 2-D texture: T2 = that level's offset, T1 size = that level's size | TEX.md §1 "Mipmaps" (T2 is the base; chain length implied by the size); STATE.md §5 T2 | partial |
+| `sgx_texture.c:294-298` | no mipmapping on a linear (NPOT) texture: it locks the 3D | PIGLIT.md "Results (EA3, 2026-11-03)" (NPOT 2D textures sampled through their mipmaps lock the 3D) | covered |
+| `sgx_texture.c:300-312` T0 | wrap T b3-5, wrap S b6-8, mip linear b9, min linear b10, mag linear b12, b17-20 0xf / 0xd with mipmaps, b21-26 0x3f, b30 for L8/A8/LA88 | STATE.md §5 "Texture words, measured" (T0 table; b21-26 [G]) | covered |
+| `sgx_texture.c:313-318` T1, T2 | T1 = layout (2 cube, 0 twiddled, 3 linear) << 29 \| format << 24 \| (w−1) << 12 \| (h−1); T2 = base (or the cube0 copy) | STATE.md §5 T1, T2; PDS.md "DOUTT" | covered |
+| `sgx_texture.c:319-335` strided render target | T1 layout 6, format 0x0d for B,G,R,A memory and 0x0c for R,G,B,A; T0 = (pitch−1) low 3 bits in b9-11, the rest in b17-26, wraps, mag linear b12 | STATE.md §5 T1 layout 6; TEX.md §3 "The transfer queue" (pitch split), §10 "Sources and filters" (strided sources sample nearest) | partial |
+| `sgx_texture.c:336-337` T3 | 0x00800800 for every sample (2-D, cube, projected, merged, dependent) | STATE.md §5 T3 (depends on the sample instruction: tex1 00800800, tex2 01028800) | partial |
+| `sgx_state.c:30-56` `blend_sel` | GL factors as sop2 selectors zero/s1/s2/s1a/s2a/asat + complement; s1 = shader colour, s2 = tile; SRC_ALPHA_SATURATE = asat when the buffer has alpha | STATE.md §3 "Blending and the colour mask are shader code"; ISA.md "sop2 (hw 10 …)" | partial |
+| `sgx_state.c:58-67` `blend_swap_sel`, `:153-168` | reverse subtract by trading sources (`sop2 o0, o0, pa<c>`) and renaming selectors; asat not swappable | STATE.md §3 "Blending …" (Reverse subtract) | covered |
+| `sgx_state.c:69-80, 124-126` `blend_op` | ops add/sub/min/max; min and max run with both factors one | ISA.md "sop2" (cop/aop 0 add 1 sub 2 min 3 max; `dst = (src1*c1) cop (src2*c2)`), STATE.md §3 | covered |
+| `sgx_state.c:89-146` `blend_bfactor`, sopwm form | constant factors: the sopwm products and an add; reverse subtract / subtract with constants by `swap` and `atrade`; SRC_ALPHA_SATURATE alpha factor 1 | STATE.md §3 "Constant-colour blending" | partial |
+| `sgx_state.c:177-197` | blend state object | | n/a: no hardware facts |
+| `sgx_state.c:206-447, 449-553, 602-697` | CSOs, queries, CPU blit | | n/a: no hardware facts |
+| `sgx_state.c:558-600` `sgx_blit_gpu` | GPU blit needs: a sampleable source, a destination that is a 4-byte linear render target | TEX.md §3, §11; STATE.md §4 | covered |
+| `sgx_draw.c:28-49` `get_rt` | a target's TA/3D structures have one render in flight, so two targets rendered back to back need a set each | STATE.md §6 "RT data" (nbuf = 2 entries) | missing |
+| `sgx_draw.c:103-118` clear mask | colour bytes written: B b0, G b1, R b2, A b3 of packed BGRA8 | STATE.md §3 "Blending …" (colour mask sopwm, one bit per byte) | covered |
+| `sgx_draw.c:123-124` | every render starts at depth 1.0 (render details +0x40), so a clear to 1.0 draws nothing for depth | STATE.md §6 "Render details" +0x40 | covered |
+| `sgx_draw.c:125-130, 925-945` | a buffer without alpha: its X byte is read as alpha wherever it is sampled; clears write 1.0 there; draws into such a texture keep the tile's alpha | TEX.md §1 "Texel formats" | covered |
+| `sgx_draw.c:137-146` `depth_func` | ISPA depth compare = GL enum − 0x200 (PIPE_FUNC order = GL order); 0 when off | STATE.md §3 "ISPA" b22-24 | covered |
+| `sgx_draw.c:148-160` `stencil_word` | ISPC: write mask b0-7, compare mask b8-15, zpass b16-18, zfail b19-21, sfail b22-24, func b25-27; op codes 0 keep … 7 decr_wrap | STATE.md §3 "ISPC: stencil" | covered |
+| `sgx_draw.c:162-182` `build_stencil` | two-sided: the first group is the faces CCW in the target's memory (GL's back face with front_ccw in a y-flipped target) | STATE.md §3 TA state block header bits 0x8/0x10/0x20 | covered |
+| `sgx_draw.c:184-205` `build_state` | ISPB colour mask R 8, G 4, B 2, A 1; cull, front_ccw, viewport scale/translate, line width (the winsys words) | STATE.md §3 "ISPB", "MTE control", "Viewport", "Lines and points" | covered |
+| `sgx_draw.c:207-230` `build_clip` | the hardware clips to the guard band, not to the viewport; the viewport rectangle ∩ scissor is what the draw may reach | STATE.md §3 "Scissor and partial viewports: pass type 3 objects" (item 8: a partial viewport gets reset + set objects) | partial |
+| `sgx_draw.c:244-298, 1090-1119` primitives | hardware prims used: triangles, triangle strip, lines, points; fans, line strips/loops, quads, polygons drawn as lists; comment: "primitives the hardware doesn't have" includes the fan; points need a vertex-program size (else nothing) | STATE.md §2 draw word 0, §3 "Lines and points" (prim 0 + b28 is a fan; no line strip or loop; pt1 draws nothing) | covered (the code comment contradicts STATE.md on fans) |
+| `sgx_draw.c:488-544` `fill_consts` | constant encodings: f32; F16 half at a shift; C10 = clamp(lrint(clamp(v, −2, 2)·255 in double), −512, 511) & 0x3ff at a shift; kind 0x10 = F16 of c/255; F16 and C10 values sharing an SA word | ISA.md "Float classes" (h8 C10: signed 10-bit channel at 10·chan, read as clamp(v/255, ±2)); ISA.md "Hardware checks" (hwt_p3, hwt_p4); ISA.md "sop2" (C10 channel layout in a register) | partial |
+| `sgx_draw.c:546-566` `mem_consts` | constants past SA in a per-draw block, n base registers | ISA.md "Constants past sa127", "hw 1d: ld" Address | covered |
+| `sgx_draw.c:568-593, 1178-1185` `varyings_match` | DOUTI source 0 = gl_FragCoord, set + 1 = a varying, ≥ 0x20 not a varying (0x22 the discard's depth plane); sample half = coordinate set + 1, 2 comps for 2-D, 3 for projected; TSP sizes 3 bits per set, 5 = 4 components, sets < 10; iterating a set the vertex program doesn't output (or with more components) locks the GPU (EA3) | PDS.md "DOUTI"; STATE.md §3 "Output select … and TSP words"; ISA.md "Vertex shaders" (10 sets) | partial |
+| `sgx_draw.c:596-838` vertex cache | 16-bit indices rebased into a < 65536 range; vertices aligned to 64 bytes, indices to 16; 2 MB chunks | STATE.md §2 draw word 1 (16-bit indices: bit 0 clear); UAPI.md §5 constraints (index buffer 2- or 4-byte aligned; DMA sources on 32, G10) | covered |
+| `sgx_draw.c:738, 1218-1250` index limit, whole primitives | draws split at `SGXWS_MAX_INDICES` (strips longer than it become lists; lists in pieces of whole primitives); counts trimmed to whole primitives because "the VDM takes the count as it is" | STATE.md §2 draw word 0 (`… \| prim<<26 \| index count`) | partial |
+| `sgx_draw.c:887-908` | NPOT cube maps of ≥ 16 texels, or mipmapped, lock the 3D: not drawn | PIGLIT.md "Open bug: NPOT cube maps lock the 3D" | covered |
+| `sgx_draw.c:916-951` colour epilogue | blend, then the colour mask as bytes of packed BGRA8 (B b0 G b1 R b2 A b3); for a texture target without alpha the blend's alpha is the tile's (tile·1 + colour·0) | STATE.md §3 "Blending …" (sop2, sopwm mask), ISA.md "sop2" | covered |
+| `sgx_draw.c:986-987` pass type | blend 1; discard 4; discard + blend 2; else 0 | STATE.md §3 "ISPA" b25-27; ISA.md "Phases, visibility feedback and discard" → "The draw state" | covered |
+| `sgx_draw.c:989-1001`, `sgx_program.c:714, 785` fragment SA block | fragment constants from sa9 (`fsk + 9`); `sec_dwords` = 9 + constants, at least 9 when a driver word is used; blend colour in sa2 as A<<24 \| R<<16 \| G<<8 \| B; temps ≥ 2 for the constant blend | STATE.md §3 "Constant-colour blending" (sa2, packed BGRA8, `604080bf`); ISA.md "Constants past sa127" (from sa9/sa10) | partial |
+| `sgx_draw.c:1006-1013` discard words | sa3 = 0xe000 \| (GL depth func − 0x200, 7 with the test off) \| 8 without depth writes; sa4 = 0xee00 (code tags it [G]) | STATE.md §3 "Alpha test (ES1)" (sa0/sa1 word formats; "the Mesa driver's discard atst8 (`f9340406`, sa3/sa4) carries these same two words with the alpha function ALWAYS (`0xee00`)"; ALWAYS [C, a7]); ISA.md "Phases …" (atst8 src1 = 3, src2 = 4) | covered |
+| `sgx_draw.c:1014-1031` dependent samples | the 4 DOUTT words of a dependent sample in 4 consecutive SA registers | ISA.md "The texture-sample sequence a compiler must emit" | covered |
+| `sgx_draw.c:1039-1053` | one DOUTT (4 words) after each sampling DOUTI | PDS.md "DOUTT", STATE.md §5 | covered |
+| `sgx_draw.c:1085-1088` fixed uniform-colour program | colour as two F16 pairs at `SGXWS_FS_UNIFORM_OFF` of its SA block | GEN.md "The API" (a fragment shader that writes a mediump uniform vec4), "What a frame is made of" (fragment uniforms FP16) | partial |
+| `sgx_draw.c:1120-1133` | compiled programs: 4 dwords per attribute slot; fixed position programs: 2 (x, y) or 3 (x, y, z) dwords | PDS.md "DOUTD"; GEN.md "The API" (xy or xyz position shader) | covered |
+| `sgx_draw.c:340-460, 462-486, 1189-1325` | CPU vertex gathering, staging, sparse expansion | | n/a: no hardware facts |
+| `sgx_program.c:35-261, 353-367, 433-516, 805-1010` | NIR plumbing, legacy varying remap, variants, fixed-program matching | | n/a: no hardware facts |
+| `sgx_program.c:273-351` `assign_varyings` | a set per slot in slot order; gl_PointCoord is set 0 (2 components) of a sprite and everything else moves up one; the point size is the output dword after the sets; ten sets of four components | STATE.md §3 "Lines and points"; ISA.md "Vertex shaders" (output buffer, varyings to sets, gl_PointSize) | covered |
+| `sgx_program.c:383-416` `insert_samples` (smp, wdf) | smp template patched: dst l21-27 = raw texel temp, h7 clear (r); src1 l7-13 = the state SA, bank l30-31 = 3 (sa), h17 clear; then `wdf` = hi `0xf9200000 \| drc`, lo 0 | ISA.md "Operand slots and bank codes", "hw 1c: smp", "The smp instruction …", "The texture-sample sequence …", "hw 1f: the special class" → "other" (op 1 wdf, h0 DRC; h20-21 = 2) | covered |
+| `sgx_program.c:417-427` | branch relative offsets in l0-17, signed, in instructions, moved when samples go in | ISA.md "hw 1f" → "flow control" (`br`), "Program structure and calling conventions" | covered |
+| `sgx_program.c:613-630` | an instruction names SA in 7 bits; vertex constants from sa10, fragment from sa9, plus 4 per dependent sample, must end at sa127; past it the numbers wrap and the 3D locks up | ISA.md "Registers", "Constants past sa127"; PIGLIT.md "Uniforms past sa127" | covered |
+| `sgx_program.c:634-657` vertex program words | `in_dwords` = 4·attribute slots; `out_dwords` = 4 + set sizes + 1 with a point size; TSP sizes 3 bits per set (1, 2, 3, 5 for 4); TSP word 1 = 0 except bit 0 for a sprite's coordinate set ("with a set's bit in it, the TPU samples at a constant coordinate") | STATE.md §3 "Output select … and TSP words", "Lines and points" (ES2 point draws: TSP words 2 and 1); ISA.md "Vertex shaders" | partial |
+| `sgx_program.c:659-691` | dependent samples' state words in SA after the constants: sa(9 + constants + 4j) | ISA.md "Constants past sa127", "The texture-sample sequence …" | covered |
+| `sgx_program.c:692-702` | a discarding program must end in the feedback `nop` (hi `0xf8000140`, lo 0) | ISA.md "hw 1f" → "flow control" (`nop` h6-8 = 5), "Phases, visibility feedback and discard" (USP's discard `nop` at the feedback label) | covered |
+| `sgx_program.c:715-759` DOUTI building | one DOUTI per iteration in PA order; varying source = set + 1; gl_FragCoord (iterator 14) → source 0; sample half merged into the previous plain DOUTI when it iterates the same set; a separate DOUTI sampling a set already iterated samples at coordinate 0 (EA3); otherwise a pure sample (source 0x24 = 0x12000); b25-26 = 3; F16 iteration (`prec1`, b28); w1 0x10 for gl_PointCoord; no placeholder colour iteration (source 0x20): it hangs the GPU when the vertex program outputs no colour | PDS.md "DOUTI"; ISA.md "Lists and blocks" (list A); ISA.md "What a compiler needs" → "Fragment shaders" | partial |
+| `sgx_program.c:760-787` | discard: one more plain DOUTI, source 0x22, 3 components, after the inputs; pa index = registers the iterations fill (an F32 component 1, an F16 pair 1, a sampled texel 1); `pa_dwords` ≥ that + 3 | ISA.md "Phases, visibility feedback and discard" (`0x7811000`, pcoeff pa<n>), "What a compiler must emit to discard"; ISA.md "Lists and blocks" (registers per list-A entry); ISA.md "The texture-sample sequence …" (one chunk for any ≤ 32-bit texel) | covered |
+| `sgx_program.c:790-793` | last plain iteration b29, last sample b30 | PDS.md "DOUTI" | covered |
+| `sgx_program.c:703-708` | gl_FragDepth not written (depthf form not traced) | ISA.md "Program structure …" (gl_FragDepth guess) | n/a: no fact used (warning only) |
+| `sgx_screen.c:24-53` debug options | flushrt: `SGX_FLUSH_HW_RENDER_TARGET` hangs a srvinit-started microkernel | GEN.md "Layout: the microkernel reads the previous client's render"; NOTES.md "A frame from code alone" | covered |
+| `sgx_screen.c:87-126` shader caps | VS 16 inputs, FS 10 inputs (sets), VS 11 outputs, 64 temps, 8 samplers, 16384 instructions, constants sa9 (sa10 vertex) to sa127, mediump two to a register | ISA.md "Registers", "Constants past sa127", "Vertex shaders" (10 sets) | partial |
+| `sgx_screen.c:93-98, 285-292` | a non-dependent (PDS) read needs the coordinate to be a whole varying of its own set; a projected one a whole vec4 at component 0 | ISA.md "The texture-sample sequence …" (non-dependent fragment read: coordinate = an untouched varying); PDS.md "DOUTI" sample half | partial |
+| `sgx_screen.c:129-174` screen caps | max 2-D texture 2048, cube levels 12, no 3-D textures, 1 render target, line width 1-16, point size 1-511, granularity 0.1, LOD bias 16, fragment coord origin upper left at half-integer centres, PCI 8086:089b, no fixed-function blender | STATE.md §3 "Lines and points" (line width clamp [1, 16], ISPB `ff`; points clamped to 511), §3 "Blending …"; PDS.md "DOUTI" (gl_FragCoord at pixel centres in memory order); STATE.md §4 "PBE words" (top row first); DRM-DRIVER.md (8086:089b) | partial |
+| `sgx_screen.c:177-232` `is_format_supported` | windows/scanout: BGRA8 only (PBE code 0); render targets: BGRA8/RGBA8 (codes 0/1), not 565 because T1 0x05 hands the compiler's unpack R and B swapped; depth Z16/Z24X8/Z24S8, kept per tile by the ISP within one render (no ZLS); sampler formats = those with a T1 code, plus render targets sampled strided; 1D/2D/RECT/CUBE targets | STATE.md §4 "Format codes"; TEX.md §1, §3, §4, §7 "Depth and stencil across renders (ZLS)"; PIGLIT.md "Results" (no ZLS) | partial |
+| `sgx_screen.c:243-275` `sgx_screen_destroy` | under a srvinit-started microkernel a render context's cleanup never completes (bridge −EINVAL after its wait); the next connection's TA then runs against a parameter buffer the microkernel doesn't use: no pages allocated, nothing drawn, ~270 ms renders, then lockups | UKERNEL.md §3 "Cleanup (type 5)" (RT/PB cleanups not completing; a busy resource leaves the status clear) | partial |
 
 Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 rows n/a.
 
 #### Facts the docs need
 
-##### `sgx545_screen.h:52-59` (partial) — UAPI.md §2 "CREATE_CONTEXT" / UKERNEL.md §9
+##### `sgx_screen.h:52-59` (partial) — UAPI.md §2 "CREATE_CONTEXT" / UKERNEL.md §9
 - Under the DDK microkernel, a second HW render context with a parameter buffer of its own (two pipe contexts, gl4es under glretrace) makes renders slow and then locks up. The docs attribute the second-context hang to PB placement (G15: a PB away from the 3D-params heap base); they don't say whether a second, correctly placed PB per context works, or that one shared render context is the safe choice.
 
-##### `sgx545_context.h:44-46` / `sgx545_draw.c:1002-1005` (partial) — ISA.md "Fragment shaders"
+##### `sgx_context.h:44-46` / `sgx_draw.c:1002-1005` (partial) — ISA.md "Fragment shaders"
 - The sense of the front-face SA word in a stated coordinate space: driver writes bit 0 = `!front_ccw` (gallium/GL window winding), i.e. bit 0 = 0 when GL-CCW is front for a y-flipped target. ISA.md says "bit 0 = 1 when counter-clockwise is front" without naming memory vs GL space, and says it is not yet drawn by our programs; the driver comment says it is A/B-checked against the DDK. State the A/B result and the space.
 - That sa5 is the driver/compiler convention (`front_sa`), and the fragment driver block's register map (see the SA block row).
 
-##### `sgx545_context.c:82-85` (partial) — UAPI.md §8
+##### `sgx_context.c:82-85` (partial) — UAPI.md §8
 - Repeated SGX recoveries in a loop (a client that keeps submitting after a hang) end with the GPU wedged; the docs record a single failed recovery needing a power cycle, not the loop.
 
 ##### Render-target pitch (partial) — STATE.md §4 "PBE words" / "Screen and tiles"
 - Whether rows of a multiple of 32 px (128 bytes at 4 bpp) are a hardware requirement of the PBE (or of the strided sampler) or only the DDK's choice. The PBE stride field ((pixels)/2 − 1) only forces an even pixel count. The driver rejects imported dma-bufs whose stride is not a multiple of 128 bytes and widens dumb buffers to 32 px "rows of whole tiles".
 
-##### `sgx545_resource.c:368-407` `sgx545_resource_target` (partial) — TEX.md §4 / §11, STATE.md §5 T1
+##### `sgx_resource.c:368-407` `sgx_resource_target` (partial) — TEX.md §4 / §11, STATE.md §5 T1
 - What raw order T1 0x0c and 0x0d deliver: the load object and the strided sampling read a BGRA8 target with 0x0c (identity, the tile's own byte order) and an RGBA8 (PBE code 1) target with 0x0d, while sampled through the compiler's unpack the choice is the reverse. One table: memory byte order × T1 code → channel order seen by `smp`/DOUTT raw and after `pck` unpack.
 - Rendering into a mip level other than 0 and into a cube face: PBE address = that level/face's offset in the texture layout, PBE pitch = that level's width (twiddled) or align(w, 8) (linear), sideband b13 by that level's layout. TEX.md §11 shows level-0 2-D FBOs only.
 - That only 4-byte formats can be strided targets (T1 layout 6) and only at level 0.
 
-##### `sgx545_resource.c:345-353` (missing) — UAPI.md §7.5 or §8, or TEX.md
+##### `sgx_resource.c:345-353` (missing) — UAPI.md §7.5 or §8, or TEX.md
 - A frame that samples a texture whose memory was freed before the frame reached the GPU locks up the 3D (st's bitmap cache freed at teardown). State it as hardware behaviour (no fault reported / a 3D lockup), so a driver keeps sampled buffers alive until the render is done.
 
-##### `sgx545_texture.c:25-60` `sgx545_tex_format` (partial) — TEX.md §1 "Texel formats"
+##### `sgx_texture.c:25-60` `sgx_tex_format` (partial) — TEX.md §1 "Texel formats"
 - RGBA8 textures (R, G, B, A bytes) sampled with T1 0x0c give GL-order texels through an xyzw unpack (byte-identical to the DDK on the EA3: 16×16, 64×64, NPOT, nearest and linear); 0x0d is "0x0c with R and B swapped". TEX.md lists 0x0d for RGBA uploads (the DDK's choice, with libusc's zyxw reorder folded into the sample) and doesn't say what each code returns to the shader.
-- T1 0x05 (RGB565): the channel order it hands the compiler's unpack (R and B swapped against GL, per `sgx545_screen.c:190-192`).
+- T1 0x05 (RGB565): the channel order it hands the compiler's unpack (R and B swapped against GL, per `sgx_screen.c:190-192`).
 - sRGB: no T1 code decodes sRGB (the driver maps each sRGB format to its linear twin and decodes in the shader); say so with the formats probed.
 
-##### `sgx545_texture.c:86-112` `face_stride_levels` (partial) — TEX.md §8
+##### `sgx_texture.c:86-112` `face_stride_levels` (partial) — TEX.md §8
 - Face stride of a one-level cube map ≥ 16 texels: one tile's bytes alignment (16·16·bpp) is measured only for RGBA8888 16×16 (0x400); L8, LA88, RGBA4444 and RGB565 one-level cubes and larger sizes are unmeasured.
 - Face stride when only part of the mip chain is allocated (last_level < full chain): measured only for full chains.
 
 ##### NPOT cube faces (partial) — TEX.md §8 "NPOT faces"
 - The layout the TPU expects for a T1 layout-2 cube whose faces are not powers of two (the driver lays out linear faces at an 8-texel pitch, packed as for POT faces < 16, and draws only those < 16 texels without mipmaps). TEX.md says no NPOT form of layout 2 is known; a capture of the DDK's NPOT cube (or a hardware sweep) is needed.
 
-##### `sgx545_texture.c:289-293` base level (partial) — TEX.md §1 "Mipmaps"
+##### `sgx_texture.c:289-293` base level (partial) — TEX.md §1 "Mipmaps"
 - That T2 may point at any level of a chain and T1 carry that level's size, with the levels after it read as that texture's mips (GL_TEXTURE_BASE_LEVEL). TEX.md implies it (chain implied by the size) but doesn't state or test it.
 
-##### `sgx545_texture.c:319-335` strided T0 (partial) — TEX.md §10 "Sources and filters"
+##### `sgx_texture.c:319-335` strided T0 (partial) — TEX.md §10 "Sources and filters"
 - Whether mag-filter LINEAR (T0 b12) works on a layout-6 (strided) source: TEX.md says strided sources "sample nearest" because the pitch occupies the min-filter bit; the driver sets b12 for a linear mag filter.
 - Maximum strided pitch: (pitch − 1) >> 3 must fit b17-26 (pitch ≤ 8192 texels).
 
-##### `sgx545_texture.c:336-337` T3 (partial) — STATE.md §5 T3
+##### `sgx_texture.c:336-337` T3 (partial) — STATE.md §5 T3
 - The T3 word for: a cube sample (smp dim 3), a projected PDS sample (DOUTI 0x400), a sample merged into an iteration, and a dependent `smp` reading the words from SA. Only `tex1` (single 2-D sample: 0x00800800) and `tex2` (0x01028800, not decoded) are measured; the driver uses 0x00800800 for all.
 
-##### `sgx545_state.c:30-56` `blend_sel` (partial) — ISA.md "sop2"
+##### `sgx_state.c:30-56` `blend_sel` (partial) — ISA.md "sop2"
 - The asat selector's value: min(s1.a, 1 − s2.a) (GL SRC_ALPHA_SATURATE), and that it can't be expressed with the sources traded. ISA.md names it "src alpha saturate" only.
 
-##### `sgx545_state.c:89-146` sopwm constant blending (partial) — STATE.md §3 "Constant-colour blending"
+##### `sgx_state.c:89-146` sopwm constant blending (partial) — STATE.md §3 "Constant-colour blending"
 - Subtract and reverse subtract with constant factors: the final sop2's op and the trade of products (`swap`, `atrade`: a subtract on the other channel that runs the other way gets its products in r0 and r1 traded). STATE.md: "Subtract and reverse subtract with constant factors are untested".
 - MIN/MAX on one channel with constant factors on the other (factors forced to ONE on the MIN/MAX channel).
 - The sopwm selector numbering (1 asat, 2 s1, 3 s1a, 6 s2, 7 s2a) is in ISA.md; the mapping from GL constant factors to the five-instruction form's X/Y operands should be a table.
 
-##### `sgx545_draw.c:28-49` `get_rt` (missing) — STATE.md §6 "RT data" or UAPI.md §2 "CREATE_RT_DATASET"
+##### `sgx_draw.c:28-49` `get_rt` (missing) — STATE.md §6 "RT data" or UAPI.md §2 "CREATE_RT_DATASET"
 - One render target's TA/3D structures (RT data, render details, region headers) support one render in flight; two targets rendered back to back (back buffer, then the swap's fb0) need a set each to avoid waiting. STATE.md has nbuf = 2 entries without saying what a second render in flight on the same set does.
 
-##### `sgx545_draw.c:207-230` `build_clip` (partial) — STATE.md §3 "Scissor and partial viewports"
+##### `sgx_draw.c:207-230` `build_clip` (partial) — STATE.md §3 "Scissor and partial viewports"
 - The hardware's clipping: geometry is clipped to a guard band, not to the viewport, so pixels outside a partial viewport are reached unless pass-type-3 objects (or the region clip) bound them. Item 8 of that section shows the DDK's objects but not the guard-band fact or its size.
 
-##### `sgx545_draw.c:244-298` primitives (covered; code comment out of step)
+##### `sgx_draw.c:244-298` primitives (covered; code comment out of step)
 - No doc fact missing. The comment "primitives the hardware doesn't have" lists the triangle fan, which STATE.md "Lines and points" has as VDM prim 0 + b28 [D]. Either the comment changes or the doc notes why fans aren't used.
 
-##### `sgx545_draw.c:488-544` `fill_consts` (partial) — ISA.md "Float classes" / "Hardware checks", or COMPILER-UPSTREAM.md §3
+##### `sgx_draw.c:488-544` `fill_consts` (partial) — ISA.md "Float classes" / "Hardware checks", or COMPILER-UPSTREAM.md §3
 - C10 encoding from a float: c = round-to-nearest-even of clamp(v, −2, 2)·255 computed in double (0.3·255 = 76.500003 → 77), clamped to −512..511, stored as the low 10 bits at bit 10·chan. ISA.md gives the read side (clamp(v/255, ±2)) but not the rounding a writer must use to match.
 - F16 constant encoding: IEEE binary16, round to nearest even from f32 (ISA.md states pck's f32 → f16 truncates; the driver's constants round).
 - Kind 0x10: the F16 of a C10 value = c/255 rounded to nearest, as `pck.f16.c10` gives it (ISA.md has `pck.f16.c10` but not its rounding).
 - Several F16 halves / C10 channels share one SA word (OR'd at their shifts; the word zeroed first).
 
-##### `sgx545_draw.c:568-593` `varyings_match` (partial) — PDS.md "DOUTI" or STATE.md §3 "Output select … and TSP words"
+##### `sgx_draw.c:568-593` `varyings_match` (partial) — PDS.md "DOUTI" or STATE.md §3 "Output select … and TSP words"
 - A fragment DOUTI that iterates or samples a set the vertex program doesn't output (TSP size 0), or with more components than it outputs, locks up the GPU (EA3; colour placeholder, gl4es neverball shaders).
 - DOUTI sources from 0x20 on are not varyings (0x20 colour, 0x22 depth plane, 0x24 = the pure-sample pattern); PDS.md lists 0x20 and 0x22 but not the range rule.
 
@@ -463,13 +463,13 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 - A register map of the fragment driver block sa0-sa8: sa2 blend colour (STATE.md), sa3/sa4 discard visibility words, sa5 front face (ours), the rest unused; constants from sa9; the secondary DMA covers sa0..sa(8 + constants) whenever any driver word is used.
 - Vertex block: constants from sa10 (what sa0-sa9 hold for our programs: the block's own address, the driver constants 2/255, 1/255, 2/65535, 1/65535 per STATE.md §2 and GEN.md "Smaller things", and sa10's point-size word).
 
-##### `sgx545_draw.c:1085-1088` fixed uniform-colour program (partial) — GEN.md
+##### `sgx_draw.c:1085-1088` fixed uniform-colour program (partial) — GEN.md
 - The fixed fragment program's text and its SA layout: the colour as F16 pairs (R | G << 16, B | A << 16) at `SGXWS_FS_UNIFORM_OFF`.
 
-##### `sgx545_program.c:634-657` TSP word 1 (partial) — STATE.md §3 "Output select … and TSP words"
+##### `sgx_program.c:634-657` TSP word 1 (partial) — STATE.md §3 "Output select … and TSP words"
 - The effect of a set's bit in TSP word 1: with it set for a set the pixel program samples (PDS sample), the TPU samples at a constant coordinate; the driver leaves word 1 = 0 for every set except a sprite's coordinate set 0 (bit 0). STATE.md states the DDK's rule (precision ≤ 2) but not what the bit does.
 
-##### `sgx545_program.c:715-759` DOUTI building (partial) — PDS.md "DOUTI"
+##### `sgx_program.c:715-759` DOUTI building (partial) — PDS.md "DOUTI"
 - A separate (unmerged) sample DOUTI of a set that an earlier plain DOUTI already iterates samples at coordinate 0 (EA3); merge it into that DOUTI instead.
 - The DDK's placeholder colour iteration (source 0x20) in a shader without varyings hangs the GPU when the vertex program outputs no colour.
 - Projected samples (0x400): PDS.md says "captures only show 2-D"; hardware-check `texture2DProj` through the PDS.
@@ -494,22 +494,22 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 - Which depth formats the ISP supports per tile, and that within one render the format doesn't matter (the stored depth is float32 whatever GL asked; TEX.md §7 shows it for ZLS store only).
 - RGB565 as a render target: the PBE code 3 path is proven (TEX.md §4); what keeps it out is the sampling order of T1 0x05 (above), which TEX.md should state.
 
-##### `sgx545_screen_destroy` (partial) — UKERNEL.md §3 "Cleanup (type 5)" or SRVINIT.md
+##### `sgx_screen_destroy` (partial) — UKERNEL.md §3 "Cleanup (type 5)" or SRVINIT.md
 - With a srvinit-started DDK microkernel, a render context's cleanup never completes (the bridge returns −EINVAL after its wait); a new services connection's TA then runs against a parameter buffer the microkernel doesn't use (no pages allocated, nothing drawn, ~270 ms per render, then lockups). The connection and HW context must be kept for the process's next screen.
 
 #### Notes for spec-side sessions
 
 - DRIVER-UPSTREAM.md §2 still lists as gaps several facts the docs now state: gl_FragCoord (PDS.md "DOUTI" source 0, capture 2026-11-02), gl_PointCoord (PDS.md w1 0x10, STATE.md "Lines and points"), pass types 1/2/4 (STATE.md ISPA b25-27), the discard sa3/sa4 table (STATE.md "Alpha test (ES1)").
-- `sgx545_draw.c:1009` tags sa4 = 0xee00 [G]; STATE.md "Alpha test (ES1)" has ALWAYS confirmed [C, a7] (with reference byte 0x80; the driver's word has reference 0).
-- `sgx545_draw.c:244` comment vs STATE.md on fans (above).
+- `sgx_draw.c:1009` tags sa4 = 0xee00 [G]; STATE.md "Alpha test (ES1)" has ALWAYS confirmed [C, a7] (with reference byte 0x80; the driver's word has reference 0).
+- `sgx_draw.c:244` comment vs STATE.md on fans (above).
 - No row uses a fact that a doc contradicts, apart from the fan comment and the front-face wording.
 
-### winsys: `mesa/src/gallium/winsys/sgx545`
+### winsys: `mesa/src/gallium/winsys/sgx`
 
-PDS instruction words built through `mesa/src/sgx545/pds` count as covered
+PDS instruction words built through `mesa/src/sgx/pds` count as covered
 by PDS.md. Checked here: the data values, masks, task words and VDM/TA
 referrer words around them, and the programs `tools/gen/mkusse.py` emits
-into `sgx545_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
+into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 (an audit table, not a specification) counts as not specified.
 
 #### Table
@@ -523,49 +523,49 @@ into `sgx545_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | sgxws.h:157-180 `sgxws_state` | ISPB colour mask R8 G4 B2 A1; pass types 0/1/2/4; sprite = object type 4; ISPC words; face 0 = CCW-in-memory group | STATE.md §3 ISPA, ISPB, ISPC tables; header bits 0x8/0x10/0x20 row; "Lines and points" | covered |
 | sgxws.h:182-209 `sgxws_draw` | 16-bit indices, `SGXWS_MAX_INDICES` 0xffff; `verts_va` 16-byte aligned, `idx_va` even; constant blocks at base + 512·j into an SA base register | UAPI.md §5 "Index buffer: 2 or 4-byte aligned"; ISA.md "Constants past sa127", "hw 1d: ld" "Address" | partial |
 | sgxws.h:270-297 program wrapping summary, builtins | vertex phases + epilogue; fragment `phas`, shader, colour out; secondary `phas`, code, `nop [end]`; FS_UNIFORM FP16 at fs_consts[9..10], 11 dwords | ISA.md "Phases, visibility feedback and discard", "Program structure and calling conventions"; GEN.md "Vertex programs end with an extra phase"; NOTES.md "Findings" (FP16 uniforms); STATE.md "Constant-colour blending" (11-dword DMA) | covered (details in the frame.c rows) |
-| sgx545_frame.h:46-59 `enum sgx545_heap` | heap ids 0 general, 1 TA data, 3 kernel data, 4 pixel shader, 5 vertex shader, 6 PDS pixel, 7 PDS vertex, 8 sync, 10 3D params, 14 texture (0xf0000000) as the low byte of the services heap ID | NOTES.md "Findings" ("Heaps (id low byte = SGX_*_HEAP_ID)", bases only); TEX.md §10 setup table (ids 0, 3, 4, 6); NOTES.md "Blob-free replay" (heaps 1, 8, 10 unnamed); STATE.md §5 T2 (texture heap 0xf0000000) | partial |
-| sgx545_frame.h:68-76 `heap_base[]`, `usse_base_index[]` | per-heap device base; first code base register of the pixel / vertex USSE heap | UAPI.md §5 "Heap layout" (code bases 0-9, 10-13; `usse_base_index`); SRVINIT.md "Init scripts" | covered |
-| sgx545_frame.h:223 `SGXWS_ATTRIBS_COLOR` | services allocation attributes 0x10000003 for a colour buffer | none (SRVINIT.md "Allocations" names 0x4f / 9 only; TEX.md §10 "allocate them without attribs b3") | missing |
-| sgx545_frame.c:30-35 `PDS_ALIGN` 0x40, `USSE_ALIGN` 0x80, `DMA_ALIGN` 0x20 | placement of PDS programs, USSE programs, DMA sources | GEN.md "Smaller things" ("Placement"); UAPI.md §5 (G10; code base `addr>>7`) | partial |
-| sgx545_frame.c:56-80 `sgxws_f16` | constants as IEEE half, round to nearest even | ISA.md "Hardware checks" (hwt_p1/p4 F16 values), "Hardware constants" (c45 = 0x3c00 pair) | covered |
-| sgx545_frame.c:104-121, 170-179 `sgxws_bo_alloc`, `ring_init` | heap per use (render target general, texture heap 14, vertex general); attribs 0x10000003 / 0x3 / 0x1; rings 0x1000-aligned, first 0x100 bytes unused | TEX.md §2 (texture heap, attribs 0x3); SRVINIT.md "Allocations" (attribute names); GEN.md "Smaller things" ("Rings start 0x100 in") | partial |
-| sgx545_frame.c:228-241 `sgxws_usse_upload` | `phas.i` targets relocated by (va - USSE heap base)/8: absolute instruction index from the heap base | ISA.md "phase / 0xfe-0x100" (pc l0-17, absolute); ISA.md "What the draw-time builder emits" ("byte address relative to the code heap, /8"); UAPI.md "UPLOAD_CODE" ("absolute from the code base the task runs from") | partial |
-| sgx545_frame.c:249-270 `doutu_w0`, `doutu_w1_pixel` | w0 base = (off>>19) + base index, offset in the 512 KB window, temps4 = (t+3)>>2; w1 pixel b2, b24 iterations, b25 samples | PDS.md "DOUTU: start a USSE task (3 words)" | covered |
-| sgx545_frame.c:272-278 `usse_limm` | LIMM lo/hi word formula | STATE.md §4 "The end-of-tile program"; ISA.md "other (h20-21 = 2)" op 4 `limm` | covered |
-| sgx545_frame.c:282-406 PDS helpers, `pds_emit`, `pds_word` | MOVS/ALU/TST/BRA/SHL/HALT via the encoder; rows of DS0 DS0 DS1 DS1 then code; TA/3D state word `rows<<26 \| (va - PDS pixel base)>>4` | PDS.md "Program layout", "Instruction encoding", "How programs are referenced"; STATE.md §3 "PDS words" | covered |
-| sgx545_frame.c:396-399 `clear_douti` | DOUTI iterate source 0x20 (colour), 4 components, plain, last | PDS.md "DOUTI" iterate half (0x20 colour, `21c10000`) | covered |
-| sgx545_frame.c:415-451 `pds_pixel` | DOUTU, a DOUTI per input, DOUTT (T0,T1 from a DS1 pair, T2,T3 from a DS0 pair) after a sampling DOUTI | PDS.md "What the DDK generates" (0x1e970), "MOVS" swizzle, "DOUTT" | covered |
-| sgx545_frame.c:453-475 `pds_secondary` | optional DOUTD then DOUTU | PDS.md "What the DDK generates" (0x1ed20/0x1ee40); STATE.md §2 "The state programs and what they DMA" | covered |
-| sgx545_frame.c:477-515 `dma_ctrl`, `pds_dma_task` | DOUTD ctrl: dwords-1, register, b22-24 = (n-1)&3, b25 secondary; one DOUTD per 16 dwords; consecutive registers | PDS.md "DOUTD" (fields; b22-24 "unknown"); STATE.md §2 table (kinds 3/0/1 for 12/25/10 dwords); GEN.md source table [G] list | partial |
-| sgx545_frame.c:589-602 ring sizes | pixel code 1 MB of the 5 MB ten code bases reach; PDS pixel 32 MB, PDS vertex 28 MB, general ~2.8 GB | UAPI.md §5 "Heap layout" | covered |
-| sgx545_frame.c:612-622, 1275-1278 `sec_wait` | phas.i #0,#0 [wait=7] (0, 0xfa440700); secondary prologue up to `wdf`; `nop [end]` (0, 0xf8040140); a pixel secondary DMA task that ends without waiting for its DMA locks the GPU (EA3) | ISA.md "flow control" (`nop`), "phase" (`phas.i`), "Program structure and calling conventions" (prologue), "What the draw-time builder emits" (word values) | partial |
-| sgx545_frame.c:623-625 + mkusse.py:45-54 `state_emit[1..32]` | phas; prologue; `mov o<r>, pa<r> [rcnt rpt<=16]`; `emit.t3 r0,#0,#0`; `op0xd6 #0`; `emit.t1 o0,#0,#0 [end f3_20]` | STATE.md §2 ("The state-emit USSE programs are just emit instructions"); ISA.md "other" (emit, op0xd6 encodings), "Moves" (rpt up to 16) | partial |
-| sgx545_frame.c:627-642 `empty_state`, `terminate` | empty secondary update; VDM type-6 TA terminate: DOUTA (0x2000, reg 0), 3 × DOUTA (0x0016000e, reg 1), DOUTU of `state_emit[2]` | STATE.md §2 state-program table (`63040000 0e022401`, `43040006 0400e100`); PDS.md "DOUTA", "What the DDK generates" (0x1fd60) | partial |
-| sgx545_frame.c:644-648 `pds_empty_p`, `clear_pds` | empty pixel task; clear pixel program (copy_fs + colour DOUTI) | STATE.md §1 header +0x08 (background secondary `04001800`); §3 "PDS words" (clear `04001800 00030001 ...`) | covered |
-| sgx545_frame.c:650-655 identity index buffer | glDrawArrays through 16-bit identity indices | STATE.md §2 ("a static 16-bit identity index buffer") | covered |
-| sgx545_frame.c:687-719 `rt_numbers` | xt, yt; mode threshold 0x4b000; mx/my per mode; MTILE1/2 (b31 in mode 1); TE screen; tiles per macrotile; padded tiles mx·2 or mx·4; region headers padx·pady·12; tail pointers next-pow2(max(padx,pady))²·4 | STATE.md §6 "Render target", "RT data", "Region headers and tail pointers"; §1 tail +0x23c..+0x248; UAPI.md "CREATE_RT_DATASET" (region and tail-pointer formulas, G14) | covered (UAPI.md; STATE.md §6 conflicts, see §3) |
-| sgx545_frame.c:750-809 `eot_program` | 7 instructions: phas.i [wait=7], LIMM r0-r3 = PBE words, EMITPIX ×2; PBE words clip min 0, clip max (h-1)<<16\|(w-1), ((stride-1)>>1)<<16 \| b15, address & ~3; sideband b9 \| format \| b10 dither \| b13 twiddled (layout 0); DOUTU temps 4 | STATE.md §4 "The end-of-tile program", "PBE words", "Format codes"; TEX.md §3 table (program = phas, 4 × limm, 2 × emitpix); TEX.md §11 | partial |
-| sgx545_frame.c:811-869 `pixel_event` | 29-instruction program: tests in1 & 8 / & 2 / & 4, `(in1 op0xd.s1 ds1[0]) & 0x100`, DOUTA (in2, ds1[0]), EOT task word built from in0<<3 & 0xff8 \| 0x800000, in0<<3 & 0x3ff000, in1<<20 & 0x400000; data ds0[1] = 0, ds1[1] = EOT DOUTU w0 (temps 4), ds0[2] = pe_emit DOUTU w0, ds0[3] = DOUTU w1 b22\|b23, ds1[2..4] = 8, 2, 4, ds0[4..8] = 0x100, 0xff8, b23, 0x003ff000, b22 | PDS.md "What the DDK generates" (pixel-event program decoded), "DOUTU" word 1 ("an OR of the tile position fields, 0x00800000 and 0x00400000"), "Arithmetic and logic" (AND masks 8, 2, 4, 0x100, 0xff8, 0x3ff000), text examples (`shl ... #0x14`) | partial |
+| sgx_frame.h:46-59 `enum sgx_heap` | heap ids 0 general, 1 TA data, 3 kernel data, 4 pixel shader, 5 vertex shader, 6 PDS pixel, 7 PDS vertex, 8 sync, 10 3D params, 14 texture (0xf0000000) as the low byte of the services heap ID | NOTES.md "Findings" ("Heaps (id low byte = SGX_*_HEAP_ID)", bases only); TEX.md §10 setup table (ids 0, 3, 4, 6); NOTES.md "Blob-free replay" (heaps 1, 8, 10 unnamed); STATE.md §5 T2 (texture heap 0xf0000000) | partial |
+| sgx_frame.h:68-76 `heap_base[]`, `usse_base_index[]` | per-heap device base; first code base register of the pixel / vertex USSE heap | UAPI.md §5 "Heap layout" (code bases 0-9, 10-13; `usse_base_index`); SRVINIT.md "Init scripts" | covered |
+| sgx_frame.h:223 `SGXWS_ATTRIBS_COLOR` | services allocation attributes 0x10000003 for a colour buffer | none (SRVINIT.md "Allocations" names 0x4f / 9 only; TEX.md §10 "allocate them without attribs b3") | missing |
+| sgx_frame.c:30-35 `PDS_ALIGN` 0x40, `USSE_ALIGN` 0x80, `DMA_ALIGN` 0x20 | placement of PDS programs, USSE programs, DMA sources | GEN.md "Smaller things" ("Placement"); UAPI.md §5 (G10; code base `addr>>7`) | partial |
+| sgx_frame.c:56-80 `sgxws_f16` | constants as IEEE half, round to nearest even | ISA.md "Hardware checks" (hwt_p1/p4 F16 values), "Hardware constants" (c45 = 0x3c00 pair) | covered |
+| sgx_frame.c:104-121, 170-179 `sgxws_bo_alloc`, `ring_init` | heap per use (render target general, texture heap 14, vertex general); attribs 0x10000003 / 0x3 / 0x1; rings 0x1000-aligned, first 0x100 bytes unused | TEX.md §2 (texture heap, attribs 0x3); SRVINIT.md "Allocations" (attribute names); GEN.md "Smaller things" ("Rings start 0x100 in") | partial |
+| sgx_frame.c:228-241 `sgxws_usse_upload` | `phas.i` targets relocated by (va - USSE heap base)/8: absolute instruction index from the heap base | ISA.md "phase / 0xfe-0x100" (pc l0-17, absolute); ISA.md "What the draw-time builder emits" ("byte address relative to the code heap, /8"); UAPI.md "UPLOAD_CODE" ("absolute from the code base the task runs from") | partial |
+| sgx_frame.c:249-270 `doutu_w0`, `doutu_w1_pixel` | w0 base = (off>>19) + base index, offset in the 512 KB window, temps4 = (t+3)>>2; w1 pixel b2, b24 iterations, b25 samples | PDS.md "DOUTU: start a USSE task (3 words)" | covered |
+| sgx_frame.c:272-278 `usse_limm` | LIMM lo/hi word formula | STATE.md §4 "The end-of-tile program"; ISA.md "other (h20-21 = 2)" op 4 `limm` | covered |
+| sgx_frame.c:282-406 PDS helpers, `pds_emit`, `pds_word` | MOVS/ALU/TST/BRA/SHL/HALT via the encoder; rows of DS0 DS0 DS1 DS1 then code; TA/3D state word `rows<<26 \| (va - PDS pixel base)>>4` | PDS.md "Program layout", "Instruction encoding", "How programs are referenced"; STATE.md §3 "PDS words" | covered |
+| sgx_frame.c:396-399 `clear_douti` | DOUTI iterate source 0x20 (colour), 4 components, plain, last | PDS.md "DOUTI" iterate half (0x20 colour, `21c10000`) | covered |
+| sgx_frame.c:415-451 `pds_pixel` | DOUTU, a DOUTI per input, DOUTT (T0,T1 from a DS1 pair, T2,T3 from a DS0 pair) after a sampling DOUTI | PDS.md "What the DDK generates" (0x1e970), "MOVS" swizzle, "DOUTT" | covered |
+| sgx_frame.c:453-475 `pds_secondary` | optional DOUTD then DOUTU | PDS.md "What the DDK generates" (0x1ed20/0x1ee40); STATE.md §2 "The state programs and what they DMA" | covered |
+| sgx_frame.c:477-515 `dma_ctrl`, `pds_dma_task` | DOUTD ctrl: dwords-1, register, b22-24 = (n-1)&3, b25 secondary; one DOUTD per 16 dwords; consecutive registers | PDS.md "DOUTD" (fields; b22-24 "unknown"); STATE.md §2 table (kinds 3/0/1 for 12/25/10 dwords); GEN.md source table [G] list | partial |
+| sgx_frame.c:589-602 ring sizes | pixel code 1 MB of the 5 MB ten code bases reach; PDS pixel 32 MB, PDS vertex 28 MB, general ~2.8 GB | UAPI.md §5 "Heap layout" | covered |
+| sgx_frame.c:612-622, 1275-1278 `sec_wait` | phas.i #0,#0 [wait=7] (0, 0xfa440700); secondary prologue up to `wdf`; `nop [end]` (0, 0xf8040140); a pixel secondary DMA task that ends without waiting for its DMA locks the GPU (EA3) | ISA.md "flow control" (`nop`), "phase" (`phas.i`), "Program structure and calling conventions" (prologue), "What the draw-time builder emits" (word values) | partial |
+| sgx_frame.c:623-625 + mkusse.py:45-54 `state_emit[1..32]` | phas; prologue; `mov o<r>, pa<r> [rcnt rpt<=16]`; `emit.t3 r0,#0,#0`; `op0xd6 #0`; `emit.t1 o0,#0,#0 [end f3_20]` | STATE.md §2 ("The state-emit USSE programs are just emit instructions"); ISA.md "other" (emit, op0xd6 encodings), "Moves" (rpt up to 16) | partial |
+| sgx_frame.c:627-642 `empty_state`, `terminate` | empty secondary update; VDM type-6 TA terminate: DOUTA (0x2000, reg 0), 3 × DOUTA (0x0016000e, reg 1), DOUTU of `state_emit[2]` | STATE.md §2 state-program table (`63040000 0e022401`, `43040006 0400e100`); PDS.md "DOUTA", "What the DDK generates" (0x1fd60) | partial |
+| sgx_frame.c:644-648 `pds_empty_p`, `clear_pds` | empty pixel task; clear pixel program (copy_fs + colour DOUTI) | STATE.md §1 header +0x08 (background secondary `04001800`); §3 "PDS words" (clear `04001800 00030001 ...`) | covered |
+| sgx_frame.c:650-655 identity index buffer | glDrawArrays through 16-bit identity indices | STATE.md §2 ("a static 16-bit identity index buffer") | covered |
+| sgx_frame.c:687-719 `rt_numbers` | xt, yt; mode threshold 0x4b000; mx/my per mode; MTILE1/2 (b31 in mode 1); TE screen; tiles per macrotile; padded tiles mx·2 or mx·4; region headers padx·pady·12; tail pointers next-pow2(max(padx,pady))²·4 | STATE.md §6 "Render target", "RT data", "Region headers and tail pointers"; §1 tail +0x23c..+0x248; UAPI.md "CREATE_RT_DATASET" (region and tail-pointer formulas, G14) | covered (UAPI.md; STATE.md §6 conflicts, see §3) |
+| sgx_frame.c:750-809 `eot_program` | 7 instructions: phas.i [wait=7], LIMM r0-r3 = PBE words, EMITPIX ×2; PBE words clip min 0, clip max (h-1)<<16\|(w-1), ((stride-1)>>1)<<16 \| b15, address & ~3; sideband b9 \| format \| b10 dither \| b13 twiddled (layout 0); DOUTU temps 4 | STATE.md §4 "The end-of-tile program", "PBE words", "Format codes"; TEX.md §3 table (program = phas, 4 × limm, 2 × emitpix); TEX.md §11 | partial |
+| sgx_frame.c:811-869 `pixel_event` | 29-instruction program: tests in1 & 8 / & 2 / & 4, `(in1 op0xd.s1 ds1[0]) & 0x100`, DOUTA (in2, ds1[0]), EOT task word built from in0<<3 & 0xff8 \| 0x800000, in0<<3 & 0x3ff000, in1<<20 & 0x400000; data ds0[1] = 0, ds1[1] = EOT DOUTU w0 (temps 4), ds0[2] = pe_emit DOUTU w0, ds0[3] = DOUTU w1 b22\|b23, ds1[2..4] = 8, 2, 4, ds0[4..8] = 0x100, 0xff8, b23, 0x003ff000, b22 | PDS.md "What the DDK generates" (pixel-event program decoded), "DOUTU" word 1 ("an OR of the tile position fields, 0x00800000 and 0x00400000"), "Arithmetic and logic" (AND masks 8, 2, 4, 0x100, 0xff8, 0x3ff000), text examples (`shl ... #0x14`) | partial |
 | mkusse.py:134-143 `pe_ptoff`, `pe_emit` | in1 & 8 task: `phas.i; ptoff [end]`; ds0[2] task: `phas.i; limm r0,#0; emit.t0 r0,#0,r0 [end f3_20 imm=512]` | ISA.md "visibility test" (`ptoff` encoding, name a guess), "other" (`emit` fields, targets unknown); GEN.md "What a frame is made of" (lists "the two pixel-event tasks") | partial |
-| sgx545_frame.c:871-908 `background` | DOUTU copy_fs, w1 samples; DOUTI sample set 1, the 0x12000 pure-sample bits, last; T0 strided = (p-1)&7<<9 \| (p-1)>>3<<17 \| 0x90, else 0x07fe0090; T1 layout<<29 \| format<<24 \| w-1<<12 \| h-1; T2 = target; T3 = 0x00800000; bg words {empty secondary rows 1, 0x00030001, primary} | STATE.md §1 +0x08..+0x10; §5 T0/T1 tables; TEX.md §11; PDS.md "DOUTI" (`40012001`); STATE.md §3 "Scissor ..." (load object T0 `00b60e90`, T1 `cc2cf1df`) | partial |
-| sgx545_frame.c:955-987 `state_block` | `tst; bra; doutd; tst; bra; doutd; doutu` program; VDM `0x40000000 \| va>>4`; info `rows<<26 \| (n+0x2000) \| 0x2020400 \| (dwords+3)>>2` with rotating n | STATE.md §2 (state words, static state program); PDS.md "What the DDK generates" (static VDM state); GEN.md source table | covered (low bits [G] there) |
-| sgx545_frame.c:989-1000 `vertices_per_task` | 128 / round4(output dwords), at most 16; 64 / output dwords hung at 12 output dwords | STATE.md §2 draw word 4 (top nibble = vertices per task - 1); GEN.md source table [G] ("64 / output dwords, at most 16"); stated only in DRIVER-UPSTREAM.md §3 audit | partial |
-| sgx545_frame.c:1002-1037 `vdm_draw` | MUL16 in0 × stride → ds1[0x32]; DOUTD.x2.s27 per ≤16 dwords, kind 0, primary; DOUTU.cc3; VDM words `0x80c00000\|prim<<26\|count`, idx & ~1, `(16-1)<<28`, 0x003fffff, `(vpt-1)<<28\|va>>4`, info `ceil(out/4)<<24 \| ceil(in bytes/16)<<7 \| min(vpt-1,3)<<22 \| rows` | STATE.md §2 draw table; PDS.md "MOVS" (`.x2.s27`, `.cc3`), "What the DDK generates" (0x1f3d0), "How programs are referenced" (VDM type 7/f info) | partial |
-| sgx545_frame.c:1069-1109 `vpgen_object`, `apply_clip` | header d485, ISPA 0x07e00100, ISPC 0 / 0x02000000, region clip words, output select 0x40000, MTE 0x40, TSP 0, 9 dwords kind 0, reset triangle / set strip geometry | STATE.md §3 "Scissor and partial viewports: pass type 3 objects" | covered |
-| sgx545_frame.c:1111-1170 `sgxws_clear` | vertices x,y,z,ARGB (16 B) at (0,0),(2w,0),(0,2h); header d4c3 (+ISPC); ISPA 0x01c00200/0x01d00200, b21, stencil ref; ISPB mask; ISPC 0x0e0200ff; PDS words (rows 1, 0x00030001, rows 2); whole-target region clip; output select 0x81800; MTE 0x40; TSP 5, 0; DMA n dwords kind (n-1)&3; 8 vertices per task; depth write skipped for depth 1.0 before any draw | STATE.md §3 header/ISPA/ISPB/ISPC/"PDS words"/"Output select"/"MTE control"/glClearStencil; §2 (12 dw, kind 3; clear draw `73040104 02c00082` in "A frame, end to end"); §6 render details +0x40; NOTES.md "Findings" (clear vertices) | covered |
-| sgx545_frame.c:1172-1209 `ispa`, `mte_ctrl` | ISPA b9, pass type b25-27, object type b15-18 (1 lines, 3 points, 4 sprites), stencil b8 + ref, b11 two-sided, depth compare / write; MTE 0x1555620 \| cull 1/2 by winding | STATE.md §3 "ISPA", "MTE control (ctx+0x798)" | covered |
-| sgx545_frame.c:1284-1349 `sgxws_draw` TA block | header bits (df43, +4, +0x38); ISPB line width ×16 at b8-15, max 0xff; PDS middle word `units \| 3<<16 \| ((sec+3)>>2)<<18 \| min(12/units, 0xb)<<25`, units = pa dwords / 4 (min 1); viewport 6 floats; 0x200 word; output select; W clamp 0x3727c5ac; MTE; TSP; DMA max(25, n+5) with kind (dma-1)&3 | STATE.md §3 header table, ISPB, "PDS words", "Viewport (6 floats)", "Output select", "MTE control"; §3 notes on the 25/27-dword DMA | partial |
-| sgx545_frame.c:1268-1282 fragment secondary DMA | constants in the PDS pixel ring; DOUTD chunks; DOUTU w1 = 4 (pixel b2); memory-block bases patched into SA words | PDS.md "DOUTU" word 1 b2; STATE.md §3 "PDS words" | covered |
-| sgx545_frame.c:1351-1367 vertex secondary attributes | sa0 = block address, sa1 = 0, sa2-5 = 2/255, 1/255, 2/65535, 1/65535, sa6-9 = 0, shader constants from sa10; DMA task with the empty task; VDM info `rows<<26 \| 0xe100 \| (n+3)>>2` | STATE.md §2 table (row 0x30401120); GEN.md "Smaller things" ("The DMA constants"); ISA.md "Constants past sa127" (constants from sa9/sa10) | partial |
-| sgx545_frame.c:1377-1386 `sgxws_vdm_end` | `4\|empty_state>>4`, `1<<26\|0xe100`, `6\|terminate>>4`, `3<<26\|0x2022401`, `0xc0000000` | STATE.md §1 "A frame, end to end" (kick 2 words), §2 table | covered |
-| sgx545_frame.c:1620-1667 `sgxws_upload_vs` | phase 0: `phas.i #p1, #temps/4` (0xfa440000\|t, no wait), prologue, `nop [end]`; phase 1: `phas.i #p2 [wait=2]`, shader, `emit.t3 r0,#0,#0 [end f12 f10]`; epilogue `phas.i #0,#0 [wait=7]`, `emit.t1 r0,#0,#0 [end f12 f10 f3_20]` | GEN.md "Vertex programs end with an extra phase"; ISA.md "phase" (phas.i fields), "other" (emit), "flow control" (nop) | partial |
-| sgx545_frame.c:1669-1696 `sgxws_blend_words` | sop2 hi base 0x80800000 (class + skipinv), c1 h6-8/h24, c2 h3-5/h15, a1 h20-21/h11, a2 h9-10/h2, cop l18-19, aop l16-17, end h18, dst l21-27 bank h0-1, src banks; swap form | ISA.md "sop2 (hw 10 ...)", "Operand slots and bank codes", "Common fields"; STATE.md §3 "Blending ..." | covered |
-| sgx545_frame.c:1698-1755 `blend_const_words` | 4 × sopwm (hi 0x90807800 / 0x90800800 + selector tables) + sop2 0x81808804; X/Y operand per factor; swap; `atrade` reordering for alpha subtract | STATE.md §3 "Constant-colour blending"; ISA.md "sopwm (hw 12 ...)", "sop2" | partial |
-| sgx545_frame.c:1775-1783 `wmask_words` | `sopwm o0, pa<c>, pa<c> [skipinv end mask=m c1=c2=zero cop=aop=max]` = lo 0xa0000000\|c<<7\|c, hi 0x90b40601 with mask bits h12 h13 h14 h11 | ISA.md "sopwm" (mask order h12,h13,h14,h11), "Text notation and defaults"; STATE.md §3 colour-mask bullet | covered (STATE.md's `mask<<11` form conflicts, see §3) |
-| sgx545_frame.c:1798-1830 discard program | `phas.i #phase1, #t [wait=1]` (0xfa440100\|t); pcoeff (0xb0000004\|n<<14\|(n+1)<<7, 0xf8300004); shader minus its feedback nop; atst8 [end] (0xf0000184\|c<<21\|c<<14, 0xf9340406); `nop` (0, 0xf8000140) so phase 1 starts on an even instruction; blend / mask without end, or `mov o0, pa<c> [skipinv rcnt]` (0x28a10001); `phas.i #0,#0 [end wait=7]` (0xfa4c0700) | ISA.md "What the draw-time builder emits", "What a compiler must emit to discard", "visibility test" | partial |
-| sgx545_frame.c:1831-1846 single-phase fragment program | `phas.i #0,#0 [wait=7]`; shader; blend/mask, or `mov o0, pa<c> [skipinv end mask=1]` (0xa0000000\|c<<7, 0x28851001); the same mov without the mask locks the GPU (EA3) | ISA.md "What the draw-time builder emits" (single phase), "Moves (hw 5)", "Text notation and defaults" (mask default) | partial |
-| sgx545_frame.c:1848-1862 `sgxws_upload_fs_secondary` | phas.i [wait=7], code, `nop [end]` | ISA.md "Phases" bullet in "Program structure", "flow control" (`nop`) | covered |
-| sgx545_frame.c:1864-1881 `clear_pds_masked` | masked clear = colour DOUTI + phas + colour-mask sopwm on pa0 | STATE.md §3 colour-mask bullets ("a different clear shader"); ISA.md "sopwm" | covered |
+| sgx_frame.c:871-908 `background` | DOUTU copy_fs, w1 samples; DOUTI sample set 1, the 0x12000 pure-sample bits, last; T0 strided = (p-1)&7<<9 \| (p-1)>>3<<17 \| 0x90, else 0x07fe0090; T1 layout<<29 \| format<<24 \| w-1<<12 \| h-1; T2 = target; T3 = 0x00800000; bg words {empty secondary rows 1, 0x00030001, primary} | STATE.md §1 +0x08..+0x10; §5 T0/T1 tables; TEX.md §11; PDS.md "DOUTI" (`40012001`); STATE.md §3 "Scissor ..." (load object T0 `00b60e90`, T1 `cc2cf1df`) | partial |
+| sgx_frame.c:955-987 `state_block` | `tst; bra; doutd; tst; bra; doutd; doutu` program; VDM `0x40000000 \| va>>4`; info `rows<<26 \| (n+0x2000) \| 0x2020400 \| (dwords+3)>>2` with rotating n | STATE.md §2 (state words, static state program); PDS.md "What the DDK generates" (static VDM state); GEN.md source table | covered (low bits [G] there) |
+| sgx_frame.c:989-1000 `vertices_per_task` | 128 / round4(output dwords), at most 16; 64 / output dwords hung at 12 output dwords | STATE.md §2 draw word 4 (top nibble = vertices per task - 1); GEN.md source table [G] ("64 / output dwords, at most 16"); stated only in DRIVER-UPSTREAM.md §3 audit | partial |
+| sgx_frame.c:1002-1037 `vdm_draw` | MUL16 in0 × stride → ds1[0x32]; DOUTD.x2.s27 per ≤16 dwords, kind 0, primary; DOUTU.cc3; VDM words `0x80c00000\|prim<<26\|count`, idx & ~1, `(16-1)<<28`, 0x003fffff, `(vpt-1)<<28\|va>>4`, info `ceil(out/4)<<24 \| ceil(in bytes/16)<<7 \| min(vpt-1,3)<<22 \| rows` | STATE.md §2 draw table; PDS.md "MOVS" (`.x2.s27`, `.cc3`), "What the DDK generates" (0x1f3d0), "How programs are referenced" (VDM type 7/f info) | partial |
+| sgx_frame.c:1069-1109 `vpgen_object`, `apply_clip` | header d485, ISPA 0x07e00100, ISPC 0 / 0x02000000, region clip words, output select 0x40000, MTE 0x40, TSP 0, 9 dwords kind 0, reset triangle / set strip geometry | STATE.md §3 "Scissor and partial viewports: pass type 3 objects" | covered |
+| sgx_frame.c:1111-1170 `sgxws_clear` | vertices x,y,z,ARGB (16 B) at (0,0),(2w,0),(0,2h); header d4c3 (+ISPC); ISPA 0x01c00200/0x01d00200, b21, stencil ref; ISPB mask; ISPC 0x0e0200ff; PDS words (rows 1, 0x00030001, rows 2); whole-target region clip; output select 0x81800; MTE 0x40; TSP 5, 0; DMA n dwords kind (n-1)&3; 8 vertices per task; depth write skipped for depth 1.0 before any draw | STATE.md §3 header/ISPA/ISPB/ISPC/"PDS words"/"Output select"/"MTE control"/glClearStencil; §2 (12 dw, kind 3; clear draw `73040104 02c00082` in "A frame, end to end"); §6 render details +0x40; NOTES.md "Findings" (clear vertices) | covered |
+| sgx_frame.c:1172-1209 `ispa`, `mte_ctrl` | ISPA b9, pass type b25-27, object type b15-18 (1 lines, 3 points, 4 sprites), stencil b8 + ref, b11 two-sided, depth compare / write; MTE 0x1555620 \| cull 1/2 by winding | STATE.md §3 "ISPA", "MTE control (ctx+0x798)" | covered |
+| sgx_frame.c:1284-1349 `sgxws_draw` TA block | header bits (df43, +4, +0x38); ISPB line width ×16 at b8-15, max 0xff; PDS middle word `units \| 3<<16 \| ((sec+3)>>2)<<18 \| min(12/units, 0xb)<<25`, units = pa dwords / 4 (min 1); viewport 6 floats; 0x200 word; output select; W clamp 0x3727c5ac; MTE; TSP; DMA max(25, n+5) with kind (dma-1)&3 | STATE.md §3 header table, ISPB, "PDS words", "Viewport (6 floats)", "Output select", "MTE control"; §3 notes on the 25/27-dword DMA | partial |
+| sgx_frame.c:1268-1282 fragment secondary DMA | constants in the PDS pixel ring; DOUTD chunks; DOUTU w1 = 4 (pixel b2); memory-block bases patched into SA words | PDS.md "DOUTU" word 1 b2; STATE.md §3 "PDS words" | covered |
+| sgx_frame.c:1351-1367 vertex secondary attributes | sa0 = block address, sa1 = 0, sa2-5 = 2/255, 1/255, 2/65535, 1/65535, sa6-9 = 0, shader constants from sa10; DMA task with the empty task; VDM info `rows<<26 \| 0xe100 \| (n+3)>>2` | STATE.md §2 table (row 0x30401120); GEN.md "Smaller things" ("The DMA constants"); ISA.md "Constants past sa127" (constants from sa9/sa10) | partial |
+| sgx_frame.c:1377-1386 `sgxws_vdm_end` | `4\|empty_state>>4`, `1<<26\|0xe100`, `6\|terminate>>4`, `3<<26\|0x2022401`, `0xc0000000` | STATE.md §1 "A frame, end to end" (kick 2 words), §2 table | covered |
+| sgx_frame.c:1620-1667 `sgxws_upload_vs` | phase 0: `phas.i #p1, #temps/4` (0xfa440000\|t, no wait), prologue, `nop [end]`; phase 1: `phas.i #p2 [wait=2]`, shader, `emit.t3 r0,#0,#0 [end f12 f10]`; epilogue `phas.i #0,#0 [wait=7]`, `emit.t1 r0,#0,#0 [end f12 f10 f3_20]` | GEN.md "Vertex programs end with an extra phase"; ISA.md "phase" (phas.i fields), "other" (emit), "flow control" (nop) | partial |
+| sgx_frame.c:1669-1696 `sgxws_blend_words` | sop2 hi base 0x80800000 (class + skipinv), c1 h6-8/h24, c2 h3-5/h15, a1 h20-21/h11, a2 h9-10/h2, cop l18-19, aop l16-17, end h18, dst l21-27 bank h0-1, src banks; swap form | ISA.md "sop2 (hw 10 ...)", "Operand slots and bank codes", "Common fields"; STATE.md §3 "Blending ..." | covered |
+| sgx_frame.c:1698-1755 `blend_const_words` | 4 × sopwm (hi 0x90807800 / 0x90800800 + selector tables) + sop2 0x81808804; X/Y operand per factor; swap; `atrade` reordering for alpha subtract | STATE.md §3 "Constant-colour blending"; ISA.md "sopwm (hw 12 ...)", "sop2" | partial |
+| sgx_frame.c:1775-1783 `wmask_words` | `sopwm o0, pa<c>, pa<c> [skipinv end mask=m c1=c2=zero cop=aop=max]` = lo 0xa0000000\|c<<7\|c, hi 0x90b40601 with mask bits h12 h13 h14 h11 | ISA.md "sopwm" (mask order h12,h13,h14,h11), "Text notation and defaults"; STATE.md §3 colour-mask bullet | covered (STATE.md's `mask<<11` form conflicts, see §3) |
+| sgx_frame.c:1798-1830 discard program | `phas.i #phase1, #t [wait=1]` (0xfa440100\|t); pcoeff (0xb0000004\|n<<14\|(n+1)<<7, 0xf8300004); shader minus its feedback nop; atst8 [end] (0xf0000184\|c<<21\|c<<14, 0xf9340406); `nop` (0, 0xf8000140) so phase 1 starts on an even instruction; blend / mask without end, or `mov o0, pa<c> [skipinv rcnt]` (0x28a10001); `phas.i #0,#0 [end wait=7]` (0xfa4c0700) | ISA.md "What the draw-time builder emits", "What a compiler must emit to discard", "visibility test" | partial |
+| sgx_frame.c:1831-1846 single-phase fragment program | `phas.i #0,#0 [wait=7]`; shader; blend/mask, or `mov o0, pa<c> [skipinv end mask=1]` (0xa0000000\|c<<7, 0x28851001); the same mov without the mask locks the GPU (EA3) | ISA.md "What the draw-time builder emits" (single phase), "Moves (hw 5)", "Text notation and defaults" (mask default) | partial |
+| sgx_frame.c:1848-1862 `sgxws_upload_fs_secondary` | phas.i [wait=7], code, `nop [end]` | ISA.md "Phases" bullet in "Program structure", "flow control" (`nop`) | covered |
+| sgx_frame.c:1864-1881 `clear_pds_masked` | masked clear = colour DOUTI + phas + colour-mask sopwm on pa0 | STATE.md §3 colour-mask bullets ("a different clear shader"); ISA.md "sopwm" | covered |
 | mkusse.py:24-32 `PROLOGUE` | `nop [nosched]`, `test.and.ne p0,#0,#0 [skipinv nodst=0]`, `(p0) ld.a.d pa0,pa0,#0 [skipinv rpt=4]`, `wdf` at the start of every vertex/state task | ISA.md "How the corpus builds control flow" / "Program structure" (stated for secondary programs only) | partial |
 | mkusse.py:35-42 `VS_EPILOGUE` | `phas.i #0,#0 [wait=7]`, `emit.t1 r0,#0,#0 [end f12 f10 f3_20]` | GEN.md "Vertex programs end with an extra phase" | covered |
 | mkusse.py:59 `empty` | `phas.i #0,#0 [end wait=7]` | ISA.md "phase" (encoding) | covered |
@@ -574,30 +574,30 @@ into `sgx545_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | mkusse.py:87-90 `copy_fs` | `mov o0, pa0 [skipinv end rcnt]`: the colour iterator / background sample already the packed pixel | TEX.md §3 table (copy shader `phas.i; mov o0, pa0 [end]`); PDS.md "DOUTI" (0x20 colour, 4 components) | partial |
 | mkusse.py:94-115 `vs_xy`, `vs_xyz` | phase 0 (prologue, `limm pa3,#1.0`, `limm pa2,#0 [end]`), phase 1 `[wait=2]` copies pa0-3 to o0-3 | GEN.md "The API" / "Vertex programs end with an extra phase"; ISA.md `limm`, `phas.i` | partial |
 | mkusse.py:120-132 `fs_uniform_sec`, `fs_uniform` | secondary packs FP16 pa9/pa10 to BGRA8 in pa9 (`pck.u8.f16 dmask=6/9 scale`); main `mov o0, sa9 [skipinv end mask=1]` | NOTES.md "Findings" (FP16 uniform pairs); ISA.md "pck" (dmask lanes), "Program structure" (secondary pa = main sa), "What the draw-time builder emits" (probe's `mov o0, sa9 [end]`) | covered |
-| sgx545_powervr_sgx.c:49-61 `TA_KICKS`, `heap_ids[]` | a scene = 2 TA kicks (stream, then terminate words); uAPI heap index → heap id | UAPI.md "SUBMIT_JOBS" (two elements, G9), §5; docs/uapi/powervr_sgx_drm.h | covered |
-| sgx545_powervr_sgx.c:198-316 `va_alloc`, `create_bo`, `psgx_bo_alloc` | BO_CODE for USSE heaps (CPU copy, no mapping), ALLOW_CPU_ACCESS + GET_BO_MMAP_OFFSET otherwise; page-rounded, ≥0x1000-aligned VM_MAP; texture → general when there is no texture heap | UAPI.md "CREATE_BO, GET_BO_MMAP_OFFSET", "VM contexts, VM_MAP, VM_UNMAP", §5 (texture heap is convention) | covered |
-| sgx545_powervr_sgx.c:371-496 import / export / KMS handle / wait | imported dma-buf in the general heap, mapped through the dma-buf; export refuses code objects; CPU wait = timeline point + dma-buf poll | UAPI.md "CREATE_BO, GET_BO_MMAP_OFFSET" (imports, PRIME), "SUBMIT_JOBS" (fences); WINSYS.md "What each backend does" | covered |
-| sgx545_powervr_sgx.c:498-531 `psgx_code_upload`, `psgx_code_reset` | UPLOAD_CODE of [off, off+size), multiples of 8, `bad_offset`; append-only while mapped, so a reset is a new object at the same address | UAPI.md "UPLOAD_CODE", "D12. Code objects and the upload ioctl" | covered |
-| sgx545_powervr_sgx.c:535-596 contexts, RT datasets | CREATE_CONTEXT render/normal in the VM; CREATE_RT_DATASET w, h, samples = 1 | UAPI.md "CREATE_CONTEXT", "CREATE_RT_DATASET" | covered |
-| sgx545_powervr_sgx.c:618-703 `psgx_kick` | CMD_RENDER: pixel event addr/rows, bg secondary/primary addr = PDS base + (word & 0x3ffffff)<<4, rows = word>>26, bg_depth 1.0; CMD_TA_KICK vdm_base per kick; one timeline signal op; BO refs with WRITE; rt_dataset_handle | UAPI.md "SUBMIT_JOBS", §3.2 stream table, §3.3, §3.4 (cmd+0x08/+0x10 packing) | covered |
-| sgx545_powervr_sgx.c:754-841 `sgxws_powervr_sgx_dev_create` | timeline syncobj cap; DEV_QUERY GPU_INFO / HEAP_INFO; heaps above 4 GiB skipped; first page of each heap unused; `usse_base_index` from HEAP_INFO; required heaps | UAPI.md "DEV_QUERY", §5 ("usse_base_index", below 4 GiB, rings 0x100 in) | covered |
-| sgx545_pvr.c:27-30 CCB constants | ring 0x10000, CCB buffer 0x10420, TA command 0x2c0 | STATE.md §6 HW render context word 3 ("0x10420 bytes = 0x10000 + 0x420 of control"); §1 header +0x00 (0x2c0) | partial |
-| sgx545_pvr.c (all) + meson.build:20-62 services bridge ABI | libpvr calls: ALLOC_DEVICEMEM, map, WRAP_EXT_MEMORY, SGX_REGISTER/UNREGISTER_HW_RENDER_CONTEXT, SGX_DOKICK with `SGX_CCB_KICK`, SGX_FLUSH_HW_RENDER_TARGET; `PVRSRV_SYNC_DATA` layout; heap info `ui32HeapID`, `sDevVAddrBase`; the kernel defines the headers need (`SGX_CORE_REV=1013`, `SUPPORT_SGX545`, `SUPPORT_PERCONTEXT_PB`, `SUPPORT_SGX_NEW_STATUS_VALS`, `TRANSFER_QUEUE`, `PVR_SECURE_HANDLES`, ...) | none (NOTES.md "Blob-free replay" names the calls; SRVINIT.md "The bridge sequence" covers srvinit's calls only; DRIVER-UPSTREAM.md §4 lists it as "— (services)") | missing |
-| sgx545_pvr.c:118-196 sync data, `token_wait`, `pvr_bo_wait` | a render target's sync data mapped once; a kick adds one pending write on the target; done when `ui32WriteOpsComplete - value >= 0` | TEX.md §5 "HW sync lists"; UKERNEL.md §5 (complete set to the pending value); NOTES.md "Blob-free replay" (poll the back buffer's sync data); TEX.md §10 (sync object mmapped once) | partial |
-| sgx545_pvr.c:209-249 `ctx_pb` | pages = (bytes + 0x22000)>>12; free list `prev<<16\|next`, 0xffff ends, ≥0x40000 bytes indexed from the heap base; block list {pages, first\|last<<16, descriptor, 0}; descriptor words 1-4, 6-7, 10-14 (TA = pages+0x10, ZLS = global = pages-0x22, PDS = min-0x100) | STATE.md §6 "PB descriptor", free list; GEN.md "Smaller things" (block list word 2, free list size) | covered |
-| sgx545_pvr.c:251-303 `pvr_ctx_init` | allocation order/heap/attribs/size/align: PB desc (kdata 0xf 0x3c/0x20), block list, PB (3D 0xb), free list, CCB (kdata 0x4f 0x10420/0x1000), CCB ctl (8/0x20), render-context sync word (sync 0x3, 4/0x10), scratch (3D 0xb 0x40/0x40), a 0x80-byte buffer (sync 0x4b), ×2 transfer-context dummies (kdata 0x4f 0x104c8/0x1000, 8/0x20, sync 4, sync 4 = the 3D sync for i = 0, kdata 4/4); HW render context words 0 = 0x21, 3, 4, 6, 7, 16 = pid, PD at byte 8 | STATE.md §6 "HW render context"; GEN.md "Layout: the microkernel reads the previous client's render"; TEX.md §10 setup table (transfer CCB 0x10000 + 0x4c8, control 8); UAPI.md "CREATE_CONTEXT" | partial |
-| sgx545_pvr.c:319-353 `pvr_rt_init` allocations | 3 × {render details 0x1ec, rd sync (sync 8), kdata 8, kdata 4, HW sync list 0x28, its access word (sync 8)}; RT word, RT data 2·0x38+0x18; tail pointers; TA blocks 0x40, 0x50, 2 × 0x88; background block 0x200; 2 × region headers; 2 entry words | STATE.md §6 "RT data", "Region headers ...", "Render details" (0x1ec), §1 +0x3c (0x28 block); GEN.md "Layout" (three render-details sets) | partial |
-| sgx545_pvr.c:355-378 RT data contents | header [0] = RT word, [2] = padded tiles X, [5] = 2; per entry HW ctx, (mx·my)>>4, ·0xc, bg block, TA blocks, tail pointers + size, 1, entry word, 0x10; RT word starts at 1 | STATE.md §6 "RT data" | partial |
-| sgx545_pvr.c:380-396 background object block | [5] = [8] = 1.0, [10] = 0x202, [15] = 0x100000, [16] = 0x1000, [17] = 0x3f80, [18] = ((w+0x1000)·0x100)<<8\|0x10, [19] = 1.0, [20] = (h+0x1000)·0x100, [21] = 0x1000, [22] = 0x3f80 | STATE.md §6 "Background object block"; TEX.md §10 ("Block words 3-8 are the texture coordinates ... (0,0), (1,0), (0,1)") | covered |
-| sgx545_pvr.c:398-423 render details | +0x00 3D request base, 0x08 0x80, 0x0c 0xf0000, 0x10 b31, 0x38/0x3c 0x80000000, 0x40 1.0, 0x44 0x300, 0x48 bg block word, 0x50 0x88, 0x58 0x30, 0x64 1, 0x68 1, 0xcc 0x100, 0xd0 rd sync, 0xd8 RT data, 0x104 1, 0x110 kdata 8, 0x114 kdata 4, 0x13c 0x07c00000; HW sync list [0] = access address, access = 1, rd sync = 1 | STATE.md §6 "Render details" table; UAPI.md §4.2; TEX.md §5 (sync list layout) | partial |
-| sgx545_pvr.c:461-529 `ta_command` | header: size 0x2c0, TA flags 0x63 \| 0x10 on the first frame, bg PDS words, 0x50000000 ×2, 3D flags 0x400 \| f<<14, +0x20 = f, PB desc, rd, HW sync list, RT data, entry; tail: TE AA, MTILE1/2, TE screen, tiles, +0x24c = 0x400000, VDM base, +0x254 0xa2, region headers, tail pointers, 1e-6 ×2, screen size, PB base, +0x2a4 0x88; rd+0x20/+0x28 alternate; rd+0xdc = entry; RT word = f+1, rd sync = 1, access = 1 before each kick | STATE.md §1 header and tail tables; §6 render details +0x20/+0x28; GEN.md "Running it" (`-R N`, SGXGEN_ALTERNATE: entry/region alternation, frame 2 values); UAPI.md §4.1 | partial |
-| sgx545_pvr.c:531-586 `pvr_kick_frame` | rd+0x5c/+0x60 = pixel event; kdata word +0x114 target = bg primary word; CCB offset = woff + 0x58; `sCommand.ui32Data[1]` = HW ctx; HW sync list mem; one destination sync (the target); first and last in scene in one kick; `h3DSyncInfo` = the context's 3D sync; write offset (woff + 0x2c0) & 0xffff into CCB control word 0 | STATE.md §1 (0x58 before `ui32CCBOffset`), §6 word 4 (CCB control), "Building a frame from scratch" step 4/7; NOTES.md "Blob-free replay"; TEX.md §5 | partial |
-| sgx545_pvr.c:433-456 `pvr_rt_fini` | no SGX_FLUSH_HW_RENDER_TARGET by default (times out, then the GPU locks up); kernel-data structures never freed | GEN.md "Layout: the microkernel reads the previous client's render" | covered |
-| sgx545_pvr.c:596-603 `pvr_frame_info` | PB descriptor +0x14 (pages in use), RT data [1] | STATE.md §6 PB descriptor 0x14 [G], RT data header | covered (debug only) |
-| sgx545_pvr.c:633-664 `sgxws_pvr_dev_create` | heap id = `ui32HeapID & 0xf`; code bases 0-9 pixel, 10-13 vertex | NOTES.md "Findings" (id low byte); SRVINIT.md "Init scripts"; UAPI.md §5 | covered |
-| sgx545_frame_test.c | 720×480, stride 736, BGRA8888: PBE format 0, T1 format 0x0c, layout 6; viewport scale/offset with y scale -h/2 | STATE.md §4 "PBE words" (736 px pitch), "Format codes"; §5 T1 table; TEX.md §11; STATE.md §3 "Viewport" | covered |
-| sgx545_drm_winsys.c | screen creation glue | | n/a: no hardware facts |
-| sgx545_drm_public.h | kmsro entry point | | n/a: no hardware facts |
+| sgx_powervr_sgx.c:49-61 `TA_KICKS`, `heap_ids[]` | a scene = 2 TA kicks (stream, then terminate words); uAPI heap index → heap id | UAPI.md "SUBMIT_JOBS" (two elements, G9), §5; docs/uapi/powervr_sgx_drm.h | covered |
+| sgx_powervr_sgx.c:198-316 `va_alloc`, `create_bo`, `psgx_bo_alloc` | BO_CODE for USSE heaps (CPU copy, no mapping), ALLOW_CPU_ACCESS + GET_BO_MMAP_OFFSET otherwise; page-rounded, ≥0x1000-aligned VM_MAP; texture → general when there is no texture heap | UAPI.md "CREATE_BO, GET_BO_MMAP_OFFSET", "VM contexts, VM_MAP, VM_UNMAP", §5 (texture heap is convention) | covered |
+| sgx_powervr_sgx.c:371-496 import / export / KMS handle / wait | imported dma-buf in the general heap, mapped through the dma-buf; export refuses code objects; CPU wait = timeline point + dma-buf poll | UAPI.md "CREATE_BO, GET_BO_MMAP_OFFSET" (imports, PRIME), "SUBMIT_JOBS" (fences); WINSYS.md "What each backend does" | covered |
+| sgx_powervr_sgx.c:498-531 `psgx_code_upload`, `psgx_code_reset` | UPLOAD_CODE of [off, off+size), multiples of 8, `bad_offset`; append-only while mapped, so a reset is a new object at the same address | UAPI.md "UPLOAD_CODE", "D12. Code objects and the upload ioctl" | covered |
+| sgx_powervr_sgx.c:535-596 contexts, RT datasets | CREATE_CONTEXT render/normal in the VM; CREATE_RT_DATASET w, h, samples = 1 | UAPI.md "CREATE_CONTEXT", "CREATE_RT_DATASET" | covered |
+| sgx_powervr_sgx.c:618-703 `psgx_kick` | CMD_RENDER: pixel event addr/rows, bg secondary/primary addr = PDS base + (word & 0x3ffffff)<<4, rows = word>>26, bg_depth 1.0; CMD_TA_KICK vdm_base per kick; one timeline signal op; BO refs with WRITE; rt_dataset_handle | UAPI.md "SUBMIT_JOBS", §3.2 stream table, §3.3, §3.4 (cmd+0x08/+0x10 packing) | covered |
+| sgx_powervr_sgx.c:754-841 `sgxws_powervr_sgx_dev_create` | timeline syncobj cap; DEV_QUERY GPU_INFO / HEAP_INFO; heaps above 4 GiB skipped; first page of each heap unused; `usse_base_index` from HEAP_INFO; required heaps | UAPI.md "DEV_QUERY", §5 ("usse_base_index", below 4 GiB, rings 0x100 in) | covered |
+| sgx_pvr.c:27-30 CCB constants | ring 0x10000, CCB buffer 0x10420, TA command 0x2c0 | STATE.md §6 HW render context word 3 ("0x10420 bytes = 0x10000 + 0x420 of control"); §1 header +0x00 (0x2c0) | partial |
+| sgx_pvr.c (all) + meson.build:20-62 services bridge ABI | libpvr calls: ALLOC_DEVICEMEM, map, WRAP_EXT_MEMORY, SGX_REGISTER/UNREGISTER_HW_RENDER_CONTEXT, SGX_DOKICK with `SGX_CCB_KICK`, SGX_FLUSH_HW_RENDER_TARGET; `PVRSRV_SYNC_DATA` layout; heap info `ui32HeapID`, `sDevVAddrBase`; the kernel defines the headers need (`SGX_CORE_REV=1013`, `SUPPORT_SGX545`, `SUPPORT_PERCONTEXT_PB`, `SUPPORT_SGX_NEW_STATUS_VALS`, `TRANSFER_QUEUE`, `PVR_SECURE_HANDLES`, ...) | none (NOTES.md "Blob-free replay" names the calls; SRVINIT.md "The bridge sequence" covers srvinit's calls only; DRIVER-UPSTREAM.md §4 lists it as "— (services)") | missing |
+| sgx_pvr.c:118-196 sync data, `token_wait`, `pvr_bo_wait` | a render target's sync data mapped once; a kick adds one pending write on the target; done when `ui32WriteOpsComplete - value >= 0` | TEX.md §5 "HW sync lists"; UKERNEL.md §5 (complete set to the pending value); NOTES.md "Blob-free replay" (poll the back buffer's sync data); TEX.md §10 (sync object mmapped once) | partial |
+| sgx_pvr.c:209-249 `ctx_pb` | pages = (bytes + 0x22000)>>12; free list `prev<<16\|next`, 0xffff ends, ≥0x40000 bytes indexed from the heap base; block list {pages, first\|last<<16, descriptor, 0}; descriptor words 1-4, 6-7, 10-14 (TA = pages+0x10, ZLS = global = pages-0x22, PDS = min-0x100) | STATE.md §6 "PB descriptor", free list; GEN.md "Smaller things" (block list word 2, free list size) | covered |
+| sgx_pvr.c:251-303 `pvr_ctx_init` | allocation order/heap/attribs/size/align: PB desc (kdata 0xf 0x3c/0x20), block list, PB (3D 0xb), free list, CCB (kdata 0x4f 0x10420/0x1000), CCB ctl (8/0x20), render-context sync word (sync 0x3, 4/0x10), scratch (3D 0xb 0x40/0x40), a 0x80-byte buffer (sync 0x4b), ×2 transfer-context dummies (kdata 0x4f 0x104c8/0x1000, 8/0x20, sync 4, sync 4 = the 3D sync for i = 0, kdata 4/4); HW render context words 0 = 0x21, 3, 4, 6, 7, 16 = pid, PD at byte 8 | STATE.md §6 "HW render context"; GEN.md "Layout: the microkernel reads the previous client's render"; TEX.md §10 setup table (transfer CCB 0x10000 + 0x4c8, control 8); UAPI.md "CREATE_CONTEXT" | partial |
+| sgx_pvr.c:319-353 `pvr_rt_init` allocations | 3 × {render details 0x1ec, rd sync (sync 8), kdata 8, kdata 4, HW sync list 0x28, its access word (sync 8)}; RT word, RT data 2·0x38+0x18; tail pointers; TA blocks 0x40, 0x50, 2 × 0x88; background block 0x200; 2 × region headers; 2 entry words | STATE.md §6 "RT data", "Region headers ...", "Render details" (0x1ec), §1 +0x3c (0x28 block); GEN.md "Layout" (three render-details sets) | partial |
+| sgx_pvr.c:355-378 RT data contents | header [0] = RT word, [2] = padded tiles X, [5] = 2; per entry HW ctx, (mx·my)>>4, ·0xc, bg block, TA blocks, tail pointers + size, 1, entry word, 0x10; RT word starts at 1 | STATE.md §6 "RT data" | partial |
+| sgx_pvr.c:380-396 background object block | [5] = [8] = 1.0, [10] = 0x202, [15] = 0x100000, [16] = 0x1000, [17] = 0x3f80, [18] = ((w+0x1000)·0x100)<<8\|0x10, [19] = 1.0, [20] = (h+0x1000)·0x100, [21] = 0x1000, [22] = 0x3f80 | STATE.md §6 "Background object block"; TEX.md §10 ("Block words 3-8 are the texture coordinates ... (0,0), (1,0), (0,1)") | covered |
+| sgx_pvr.c:398-423 render details | +0x00 3D request base, 0x08 0x80, 0x0c 0xf0000, 0x10 b31, 0x38/0x3c 0x80000000, 0x40 1.0, 0x44 0x300, 0x48 bg block word, 0x50 0x88, 0x58 0x30, 0x64 1, 0x68 1, 0xcc 0x100, 0xd0 rd sync, 0xd8 RT data, 0x104 1, 0x110 kdata 8, 0x114 kdata 4, 0x13c 0x07c00000; HW sync list [0] = access address, access = 1, rd sync = 1 | STATE.md §6 "Render details" table; UAPI.md §4.2; TEX.md §5 (sync list layout) | partial |
+| sgx_pvr.c:461-529 `ta_command` | header: size 0x2c0, TA flags 0x63 \| 0x10 on the first frame, bg PDS words, 0x50000000 ×2, 3D flags 0x400 \| f<<14, +0x20 = f, PB desc, rd, HW sync list, RT data, entry; tail: TE AA, MTILE1/2, TE screen, tiles, +0x24c = 0x400000, VDM base, +0x254 0xa2, region headers, tail pointers, 1e-6 ×2, screen size, PB base, +0x2a4 0x88; rd+0x20/+0x28 alternate; rd+0xdc = entry; RT word = f+1, rd sync = 1, access = 1 before each kick | STATE.md §1 header and tail tables; §6 render details +0x20/+0x28; GEN.md "Running it" (`-R N`, SGXGEN_ALTERNATE: entry/region alternation, frame 2 values); UAPI.md §4.1 | partial |
+| sgx_pvr.c:531-586 `pvr_kick_frame` | rd+0x5c/+0x60 = pixel event; kdata word +0x114 target = bg primary word; CCB offset = woff + 0x58; `sCommand.ui32Data[1]` = HW ctx; HW sync list mem; one destination sync (the target); first and last in scene in one kick; `h3DSyncInfo` = the context's 3D sync; write offset (woff + 0x2c0) & 0xffff into CCB control word 0 | STATE.md §1 (0x58 before `ui32CCBOffset`), §6 word 4 (CCB control), "Building a frame from scratch" step 4/7; NOTES.md "Blob-free replay"; TEX.md §5 | partial |
+| sgx_pvr.c:433-456 `pvr_rt_fini` | no SGX_FLUSH_HW_RENDER_TARGET by default (times out, then the GPU locks up); kernel-data structures never freed | GEN.md "Layout: the microkernel reads the previous client's render" | covered |
+| sgx_pvr.c:596-603 `pvr_frame_info` | PB descriptor +0x14 (pages in use), RT data [1] | STATE.md §6 PB descriptor 0x14 [G], RT data header | covered (debug only) |
+| sgx_pvr.c:633-664 `sgxws_pvr_dev_create` | heap id = `ui32HeapID & 0xf`; code bases 0-9 pixel, 10-13 vertex | NOTES.md "Findings" (id low byte); SRVINIT.md "Init scripts"; UAPI.md §5 | covered |
+| sgx_frame_test.c | 720×480, stride 736, BGRA8888: PBE format 0, T1 format 0x0c, layout 6; viewport scale/offset with y scale -h/2 | STATE.md §4 "PBE words" (736 px pitch), "Format codes"; §5 T1 table; TEX.md §11; STATE.md §3 "Viewport" | covered |
+| sgx_drm_winsys.c | screen creation glue | | n/a: no hardware facts |
+| sgx_drm_public.h | kmsro entry point | | n/a: no hardware facts |
 | meson.build (outside the services block) | build wiring | | n/a: no hardware facts |
 
 Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
@@ -610,7 +610,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 **sgxws.h `sgxws_draw` (partial)**
 - PDS.md "DOUTD": the required alignment of a DOUTD source address. The code assumes 16 bytes for vertex buffers (`verts_va`) and 32 for its own DMA sources; GEN.md only records the DDK's 32-byte habit.
 
-**sgx545_frame.h heap ids (partial)**
+**sgx_frame.h heap ids (partial)**
 - NOTES.md "Findings" (or UAPI.md §5): the heap-id numbers next to the bases: 0 general, 1 TA data, 3 kernel data, 4 pixel shader, 5 vertex shader, 6 PDS pixel, 7 PDS vertex, 8 sync, 10 3D params, 14 texture. Also that the winsys takes `ui32HeapID & 0xf`. Kernel code (2?) is not used.
 
 **`SGXWS_ATTRIBS_COLOR` 0x10000003 (missing); `sgxws_bo_alloc`/`ring_init` attribs (partial)**
@@ -785,7 +785,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 - RT data header [1]: STATE.md §6 says 1; the client leaves it 0.
 - phas.i target origin: ISA.md's builder table says "relative to the code heap". UAPI.md and ISA.md `ba` say "the code base the task runs from".
 
-### compiler: `mesa/src/sgx545/compiler`
+### compiler: `mesa/src/sgx/compiler`
 
 Bit-level encoding is covered by ISA.md through the generated encoder. The
 slot capabilities in `sgx_forms.c` are checked against ISA.md's class
@@ -1041,27 +1041,27 @@ The target doc is named.
 - PDS.md "DOUTI": bits 27/28 -> F16 iteration is a guess now; the compiler's
   F16 PA layout depends on it.
 
-### instruction sets: `mesa/src/sgx545/isa`, `mesa/src/sgx545/pds`
+### instruction sets: `mesa/src/sgx/isa`, `mesa/src/sgx/pds`
 
-#### USSE instruction set: `mesa/src/sgx545/isa`
-
-| file (lines) / area | what it encodes | doc section(s) | status |
-|---|---|---|---|
-| `sgx545.xml` (4261): classes hw 00-1f, every leaf's fields and fixed patterns | the 64-bit USSE instruction words | ISA.md "Encoding conventions" (operand slots, bank codes, number field, format select/control, unused slots), "Instruction classes", each class section ("Float classes", "Moves", "Dual issue", "Pack/unpack, test, testmask, bitwise", "Integer, fixed-point and multi-unit ops", "smp, ld/st, and the special class") | covered |
-| `sgx545.xml` displays, `sgx545_isa_asm*.c` | the text notation | ISA.md "Text notation and defaults" | covered (the assembler doesn't take all of it yet: efo `i=`, dot `cs=`/`as=`, `firh.s8`, st `am3` `.q`, rlp `unused2=`, fdual `sd=`/`sb=`/`sc=`; a code gap, not a doc gap) |
-| `sgx545_isa_encode.c`: `sgx_isa_opnd_num`, `sgx_isa_noext`, `SGX_TDST` | g<n> = n + 0x40; i<n> in a slot without the i bank = r(124 + n); test's dst field 0x280 without a destination | ISA.md "The number field"; "hw 09 test, hw 0f testmask" (l20 row) | covered |
-| `sgx545_isa_encode.c`, `sgx545_isa_disasm.c`: format control through `ISA_GPU_ID()`; `is_setfc` | setfc's arguments (a0 efo F16, a1 C10), program-start state C10 on / F16 off | ISA.md "Format select and format control"; "Fields shared by hw 10-19 and 1a"; "MOE control" | covered |
-| `sgx545_isa.h` `struct sgx545_isa_fc` | one operand format per slot | ISA.md "hw 1" source format (h7 F16 / h8 C10) | covered; the struct can't hold h7 and h8 set together (an fcos with both encodes h7 wrong): a code gap |
-| `sgx545_isa_enums.py`, `meson.build`, `isa.h`, `tests/*` | build glue, tests | - | n/a: no hardware facts |
-
-#### PDS programs: `mesa/src/sgx545/pds`
+#### USSE instruction set: `mesa/src/sgx/isa`
 
 | file (lines) / area | what it encodes | doc section(s) | status |
 |---|---|---|---|
-| `sgx545_pds.xml` `#instruction` leaves | MOVS, ADD/MUL16/OR/AND/XOR and the unnamed s=1 forms, TST, BRA, SHL/SHR, HALT; U/S1/S2 operand numberings | PDS.md "Instruction encoding" and its subsections; "Bits no field names" | covered |
-| `sgx545_pds.xml` data-word roots | DOUTU w0/w1, DOUTD control, DOUTI w0/w1, DOUTA control | PDS.md "DOUT word layouts" (DOUTU, DOUTD, DOUTI, DOUTA); "Bits no field names" | covered (meanings of DOUTD b22-25, DOUTU w1 b2/b22/b23, DOUTI b25-26 and the precision values are open questions in PDS.md; the values used are stated) |
-| displays, `sgx545_pds_asm.c`, `sgx545_pds_disasm.c` | the text notation | PDS.md "Text notation" | covered |
-| `sgx545_pds.h` `sgx545_pds_ds0_at`/`ds1_at` | data-segment interleave of DS0/DS1 | PDS.md "Program layout" | covered |
+| `sgx.xml` (4261): classes hw 00-1f, every leaf's fields and fixed patterns | the 64-bit USSE instruction words | ISA.md "Encoding conventions" (operand slots, bank codes, number field, format select/control, unused slots), "Instruction classes", each class section ("Float classes", "Moves", "Dual issue", "Pack/unpack, test, testmask, bitwise", "Integer, fixed-point and multi-unit ops", "smp, ld/st, and the special class") | covered |
+| `sgx.xml` displays, `sgx_isa_asm*.c` | the text notation | ISA.md "Text notation and defaults" | covered (the assembler doesn't take all of it yet: efo `i=`, dot `cs=`/`as=`, `firh.s8`, st `am3` `.q`, rlp `unused2=`, fdual `sd=`/`sb=`/`sc=`; a code gap, not a doc gap) |
+| `sgx_isa_encode.c`: `sgx_isa_opnd_num`, `sgx_isa_noext`, `SGX_TDST` | g<n> = n + 0x40; i<n> in a slot without the i bank = r(124 + n); test's dst field 0x280 without a destination | ISA.md "The number field"; "hw 09 test, hw 0f testmask" (l20 row) | covered |
+| `sgx_isa_encode.c`, `sgx_isa_disasm.c`: format control through `ISA_GPU_ID()`; `is_setfc` | setfc's arguments (a0 efo F16, a1 C10), program-start state C10 on / F16 off | ISA.md "Format select and format control"; "Fields shared by hw 10-19 and 1a"; "MOE control" | covered |
+| `sgx_isa.h` `struct sgx_isa_fc` | one operand format per slot | ISA.md "hw 1" source format (h7 F16 / h8 C10) | covered; the struct can't hold h7 and h8 set together (an fcos with both encodes h7 wrong): a code gap |
+| `sgx_isa_enums.py`, `meson.build`, `isa.h`, `tests/*` | build glue, tests | - | n/a: no hardware facts |
+
+#### PDS programs: `mesa/src/sgx/pds`
+
+| file (lines) / area | what it encodes | doc section(s) | status |
+|---|---|---|---|
+| `sgx_pds.xml` `#instruction` leaves | MOVS, ADD/MUL16/OR/AND/XOR and the unnamed s=1 forms, TST, BRA, SHL/SHR, HALT; U/S1/S2 operand numberings | PDS.md "Instruction encoding" and its subsections; "Bits no field names" | covered |
+| `sgx_pds.xml` data-word roots | DOUTU w0/w1, DOUTD control, DOUTI w0/w1, DOUTA control | PDS.md "DOUT word layouts" (DOUTU, DOUTD, DOUTI, DOUTA); "Bits no field names" | covered (meanings of DOUTD b22-25, DOUTU w1 b2/b22/b23, DOUTI b25-26 and the precision values are open questions in PDS.md; the values used are stated) |
+| displays, `sgx_pds_asm.c`, `sgx_pds_disasm.c` | the text notation | PDS.md "Text notation" | covered |
+| `sgx_pds.h` `sgx_pds_ds0_at`/`ds1_at` | data-segment interleave of DS0/DS1 | PDS.md "Program layout" | covered |
 | `isa.h`, `meson.build`, `tests/*` | build glue, tests | - | n/a: no hardware facts |
 
 ### kernel driver: `drm/`

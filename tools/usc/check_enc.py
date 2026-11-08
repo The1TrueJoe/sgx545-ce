@@ -1,10 +1,10 @@
-"""Check the compiler's encoder (mesa/src/sgx545/isa, isaspec) against hw.py:
+"""Check the compiler's encoder (mesa/src/sgx/isa, isaspec) against hw.py:
 every instruction of the corpora (tools/isa/corpus/c1..c3), decoded by
 hw.decode() and printed in dis.py's notation, is assembled and encoded by
-sgx545_isa_test -t and must come back as the same 64 bits.
+sgx_isa_test -t and must come back as the same 64 bits.
 
-    mesa/tests/isa-standalone/standalone.sh <mesa-tree>    (or a Mesa build's sgx545_isa_test)
-    python3 -I tools/usc/check_enc.py [mesa/src/sgx545/isa/tests/build/sgx545_isa_test]
+    mesa/tests/isa-standalone/standalone.sh <mesa-tree>    (or a Mesa build's sgx_isa_test)
+    python3 -I tools/usc/check_enc.py [mesa/src/sgx/isa/tests/build/sgx_isa_test]
 """
 import os
 import re
@@ -59,7 +59,7 @@ def corpus_words():
 
 def main():
     exe = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        HERE, "..", "..", "mesa", "src", "sgx545", "isa", "tests", "build", "sgx545_isa_test")
+        HERE, "..", "..", "mesa", "src", "sgx", "isa", "tests", "build", "sgx_isa_test")
     lines, todo, plain = [], [], []
     for w in corpus_words():
         if w is None:

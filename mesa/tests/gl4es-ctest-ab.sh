@@ -7,7 +7,7 @@
 # /opt/minecraft/rootfs. Needs, inside the root:
 #   /usr/lib/gl4es/libGL.so.1     the runtime's gl4es (unmodified)
 #   /usr/lib/sgx/                 the DDK (mc-session's ddk_sync puts it there)
-#   /usr/lib/sgx545/              our Mesa build (mesa/build.sh i386)
+#   /usr/lib/sgx/              our Mesa build (mesa/build.sh i386)
 #   /usr/bin/glretrace, Xvfb      apitrace's replayer and the X server
 #   /ctest/traces, /ctest/refs    gl4es' tests/../traces and refs
 # Each test replays its trace with gl4es in pbuffer mode (LIBGL_FB=3, as
@@ -58,7 +58,7 @@ replay() {	# who name call es
 	case $who in
 	ddk)	lib=/usr/lib/sgx pre=/usr/lib/sgx/sgx-busidshim.so
 		gles=$lib/libGLESv2.so.2; [ $es = 1 ] && gles=$lib/libGLES_CM.so.1 ;;
-	ours)	lib=/usr/lib/sgx545 pre=
+	ours)	lib=/usr/lib/sgx pre=
 		gles=$lib/libGLESv2.so.2; [ $es = 1 ] && gles=$lib/libGLESv1_CM.so.1 ;;
 	esac
 	[ -f $R/ctest/$name.trace ] || (cd $R/ctest && gunzip -c traces/$name.tgz | tar xf -)

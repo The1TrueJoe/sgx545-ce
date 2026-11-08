@@ -1,6 +1,6 @@
 # The shader compiler: upstream readiness (audit, 2026-11-01)
 
-This checks `mesa/src/sgx545/compiler` against AGENTS.md §3.5-§3.7: licensing,
+This checks `mesa/src/sgx/compiler` against AGENTS.md §3.5-§3.7: licensing,
 clean-room provenance and Mesa's expectations. It covers what the compiler
 contains today (`um-re` 96d60cd plus the compiler commits after it). It also says
 what has to change before the code is offered to Mesa.
@@ -35,7 +35,7 @@ The compiler depends on three kinds of knowledge.
 ### 2.1 Instruction encodings: `usse_forms.h`
 
 **Since 2026-11-03** the compiler encodes through the isaspec encoder generated
-from `mesa/src/sgx545/isa/sgx545.xml` (written from docs/ISA.md alone), via
+from `mesa/src/sgx/isa/sgx.xml` (written from docs/ISA.md alone), via
 `sgx_forms.c`. `usse_forms.h`, `usse.c`, `usse.h` and `gen_forms.py` are
 deleted; the output was byte-identical on the whole corpus before they went.
 The rest of this section describes the encoder as audited.
@@ -159,7 +159,7 @@ which is what makes the A/B harness possible. An upstream driver doesn't need it
   code runs, labels, branches, the discard feedback point, samples; dependent
   samples with their smp template; SA slots). `tools/usc/sgx_usp.c` builds the
   USP from that for sgxc, and the gallium driver reads the fields instead of
-  parsing a USP (`SGX545_DUMP_USP` became `SGX545_DUMP_CODE`). Every corpus
+  parsing a USP (`SGX_DUMP_USP` became `SGX_DUMP_CODE`). Every corpus
   and test set compiles to byte-identical USPs and code before and after
   (6841 files, F32 and F16).
 - **glslcompiler's numbering.** This covers the pins, the varying-to-set
@@ -222,11 +222,11 @@ Status: docs/UPSTREAM-READINESS.md, "Compiler" (C1-C9), tracks these now.
 - **Style:** C11, Mesa formatting, no global state (`hw_const`'s static table
   should become a const table).
 - **Debug options:** `opts.verbose`, `SGX_PRINT_PRE_I2F` and sgxc's `-v`
-  belong in the driver's debug-option table (`SGX545_DEBUG=nir,...`), not in
+  belong in the driver's debug-option table (`SGX_DEBUG=nir,...`), not in
   environment variables read by the compiler.
 - **Tests in Mesa:** an encoder round-trip unit test (meson `test`) over
   programs the compiler itself emits (not DDK corpus words), plus dEQP-GLES2
   through the driver. The DDK corpus and libusc oracle stay here.
-- **Placement and naming:** `src/gallium/drivers/sgx545` with the compiler in
+- **Placement and naming:** `src/gallium/drivers/sgx` with the compiler in
   it, or `src/imagination/sgx/...`. This is AGENTS.md §7.2, for the Rogue
   maintainers. The compiler has no dependency on that choice.

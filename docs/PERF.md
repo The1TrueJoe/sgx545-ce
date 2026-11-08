@@ -26,7 +26,7 @@ fakes frames.
 |---|---|---|
 | `minecraft-standing`, `-walking` | Minecraft 1.7.10 vanilla, 720x480, RD 4, Fast, no clouds or smooth lighting, VSync off, unlimited FPS, `-Xmx768M`; the A/B rig's benchmark world, a fresh copy each run; 30 s warm-up, 60 s standing, 60 s holding W (`mesa/tests/x11/mc-oldnew.sh`) | frames presented per second |
 | `glmark2-window`, `-offscreen` | glmark2 2023.01 (Debian), its default scenes, desktop GL, `-s 720x480`, in a window and with `--off-screen` | glmark2's score |
-| `micro-fill`, `-fill-blend`, `-tex`, `-verts` | `sgx545_perfmicro` on a 720x480 pbuffer: 8 full-target quads a frame opaque, blended and textured (Mpix/s), and a 32,258-triangle indexed mesh (Mtri/s); a glFinish per frame | rates; GPU-bound by design |
+| `micro-fill`, `-fill-blend`, `-tex`, `-verts` | `sgx_perfmicro` on a 720x480 pbuffer: 8 full-target quads a frame opaque, blended and textured (Mpix/s), and a 32,258-triangle indexed mesh (Mtri/s); a glFinish per frame | rates; GPU-bound by design |
 | `glmark2-es2-window`, `glmark2-es2-drm` | new stack only: glmark2's ES2 build in a window, and straight to the display through GBM (Xorg stopped) | glmark2's score |
 
 How each stack runs the shared measures:
@@ -46,7 +46,7 @@ How each stack runs the shared measures:
 ## Where the time goes on the new stack
 
 `mesa/tests/perf/profile-new.sh` runs glmark2 and the microbenchmark under `perf record` on the
-box, with `SGX545_DEBUG=stats`. `mc-oldnew.sh new` with `MC_PROFILE=SECS` profiles Minecraft's
+box, with `SGX_DEBUG=stats`. `mc-oldnew.sh new` with `MC_PROFILE=SECS` profiles Minecraft's
 java over part of the standing view. Java's JIT frames show as unresolved addresses; Mesa and
 the kernel are symbolised.
 
@@ -237,7 +237,7 @@ What still holds temporaries:
   - We emit `efo` for a sum of vector × scalar terms (`mat4 * v`, `mat3 * n`) whose vectors
     sit in a bank (uniforms, attributes, varyings), as libusc's `v_mvp`: per lane pair one
     `efo` per term with the partials in i0/i1, then `mov` from i1. A `mat4 * v` is 10 issue
-    slots instead of 16. `SGX545_COMPILER_DEBUG=nocoissue` turns it off. 32 `efo` in c2+c3.
+    slots instead of 16. `SGX_COMPILER_DEBUG=nocoissue` turns it off. 32 `efo` in c2+c3.
   - Driver mode, issue slots: corpus 7791 → 7726, glmark2 2080 → 1826 (temporaries 195 →
     157), gl4es Minecraft 180 → 150. Instructions go up (glmark2 1211 → 1470): a repeat is one
     instruction, its `efo`s are several.
