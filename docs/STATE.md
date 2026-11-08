@@ -240,10 +240,10 @@ counts from `FUN_00017c20`:
 |---|---|---|
 | 0 | 80c00003 | `0x80000000 \| 0x00c00000 \| prim<<26 \| index count`. prim from libGLESv2's table: triangles 0, lines 1, points 2, strip 3, fan 4 (the bits are `0x4000000·k`) [D] |
 | 1 | 3e517004 | index buffer address; bit 0 is cleared for 16-bit indices, bits 0-1 for 32-bit [D] |
-| 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D] |
+| 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D]. The batch is 16 in every DDK draw: triangles, lines, strips and fans, 3 to 192 indices, 1 to 8 draws a frame (2026-11-08 captures). What it batches is G |
 | 3 | 003fffff | max index (constant) [D] |
 | 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. For compiled shaders the DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords, log `2026-10-28-1530-gl4es-ctest`; the e1tex capture's 12-output shader runs 10]. `64 / output dwords` hung the GPU at 12 output dwords (EA3, 2026-10-28; hardware, not a replay poke). The DDK's built-in clear programs don't follow the rule: they run 8 per task at 8 and at 4 output dwords (`0x3c008080` and `0x3c008100` in the base4 and vp5 captures), while a 4-output compiled shader in the same captures runs 16. Why the clear uses 8 is G |
-| 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D] |
+| 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D]. b22-23 is 3 in every DDK draw, over the same range as word 2; what n is stays G |
 
 `glDrawArrays` draws through a static 16-bit identity index buffer.
 
@@ -392,13 +392,22 @@ reference (`cstencil`).
     two F32 vec4 varyings under a constant `…0001` (EA3, 2026-10-28, log
     `2026-10-28-1530-gl4es-ctest`; hardware).
   - b16-17 = 3 in every capture [D].
-  - b25-28: the same log reports `12 / units`, capped at 0xb, from the DDK's
-    captures with 0-5 vec4 varyings (those captures are not in the tree).
-    The captures on disk all have units = 1, and show 0 for the clear
-    (`00030001`, colour iterated), 0xb when there are secondary attributes
-    (`160f0001`, `16130001`) and 12 without (`18030001`, one texture sample).
-    So b25-28 also depends on something besides the units. Gap: which inputs
-    set it.
+  - b25-28 = `12 / units` (integer) when the program has no secondary
+    attributes (b18-24 = 0), and 0xb when it has some. The DDK's built-in
+    clear program has 0. From the 2026-11-08 captures, with n vec4 varyings
+    fed straight to gl_FragColor:
+
+    | varyings | word 1 | units | b18-24 | b25-28 |
+    |---|---|---|---|---|
+    | 0 (uniform colour) | `160f0001` | 1 | 3 | 0xb |
+    | 1, 2 mediump (or lowp) | `18030001` | 1 | 0 | 12 |
+    | 3, 4 mediump | `0c030002` | 2 | 0 | 6 |
+    | 5 mediump | `08030003` | 3 | 0 | 4 |
+    | 2 highp | `0c030002` | 2 | 0 | 6 |
+
+    A mediump or lowp vec4 varying takes 2 dwords (F16) and a highp one 4,
+    so units = ceil(attribute dwords / 4). [D, captures]. Gap: the rule with
+    both secondaries and more than one unit.
 
 ### Viewport (6 floats)
 
@@ -450,6 +459,11 @@ z scale.
 - **TSP word 0:** 3 bits per texcoord set: 1, 2, 3 components, or 5 for 4
   components [D].
 - **TSP word 1:** a bitmask of the sets whose precision value is at most 2 (libGLESv2 0x203bc: `cmpl $0x2, 0x4c(set)`, `ja` skips) [D].
+  - In the 2026-11-08 captures, 1-5 mediump vec4 varyings give 0x1, 0x3, 0x7,
+    0xf and 0x1f, two lowp give 0x3, and two highp give 0.
+  - TSP word 0 is 5 per set throughout (`2d`, `16d`, `b6d`, `5b6d`).
+  - The output select is `(4 + 4n)<<16 | 0x3000` whatever the precision: the
+    vertex outputs stay 32-bit. [D, captures]
 
 ### Blending and the colour mask are shader code
 
@@ -519,8 +533,15 @@ multiplies each side out with sopwm and adds the halves:
 - Products round to nearest: 204 × 64/255 = 51.2 gives 51 (`k1`) [D].
 - Turning k1's src-RGB sopwm into 1-s2 or s2a reproduces the DDK's own
   ONE_MINUS_CONSTANT_COLOR and CONSTANT_ALPHA frames [C, b2 b3].
-- The DDK's final sop2 is always an add (`FUN_00045270(1,1,1,1,0,1,..)`).
-  Subtract and reverse subtract with constant factors are untested.
+- The final sop2 carries the blend equation (2026-11-08 captures, src
+  CONSTANT_COLOR, dst ONE_MINUS_CONSTANT_COLOR):
+  - FUNC_ADD: `sop2 o0, r0, r1 [... cop=add aop=add]` (`81848805 00000001`);
+  - FUNC_SUBTRACT: `sop2 o0, r0, r1 [... cop=sub aop=sub]` (`81848805 00050001`);
+  - FUNC_REVERSE_SUBTRACT: the same ops with the sources swapped,
+    `sop2 o0, r1, r0` (`81848805 00050080`).
+
+  The four sopwm products are the same in all three. With CONSTANT_ALPHA /
+  ONE_MINUS_CONSTANT_ALPHA the factors become `s2a` / `1-s1a`. [D, captures]
 
 **k18/k19 are not a constant.** In `kb0` (ONE, ZERO) the sop2 was turned
 into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery):
@@ -779,7 +800,7 @@ what in0 and in2 carry, is G. `docs/PDS.md` has the instruction encodings.
 |---|---|---|---|
 | 0 | 00000000 | clip min `y0<<16 \| x0` | D |
 | 1 | 01df02cf | clip max `y1<<16 \| x1` (719, 479) | C |
-| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px); b15 = set unless the surface's `param_1[6]` is non-zero: set for the back buffer *and* for fb0 (the swap), and with it cleared the PBE writes nothing at the address (replay, `docs/TEX.md` section 6), so it is not a scanout flag; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
+| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px). The DDK pads a pbuffer's or FBO's pitch to a multiple of 8 pixels, at least 8, and a window's to 32: widths 1, 2, 3 → 8 (field 3), 16 → 16, 17 → 24, 33 → 40, FBO 64 → 64, FBO 65 → 72, window 720 → 736. So the field is always odd, and a pitch of 1 or 2 pixels is never encoded [D, 2026-11-08 captures]; b15 = set unless the surface's `param_1[6]` is non-zero: set for the back buffer *and* for fb0 (the swap), and with it cleared the PBE writes nothing at the address (replay, `docs/TEX.md` section 6), so it is not a scanout flag. It is set on every surface the 2026-11-08 captures render to: window, pbuffers and both FBOs; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
 | 3 | 3e265000 | address, & ~3 (moved for rotated surfaces) | D |
 | side | 0x600 | b0-5 = PBE format code (format table +0x84: 0 BGRA8888, 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, see `docs/TEX.md`); b9 = always; b10 = dither (GL_DITHER); b12 = `param 7`; **b13 = twiddled destination** (table `DAT_0006d5bc` = {0, 0x2000} by memory layout; the transfer queue's texture uploads set it) [C]; b6-11 += `param_2[5]<<6` for format codes 3-14 | D |
 
@@ -895,6 +916,22 @@ sample instruction, not the texture: `tex1` gives `00800800` and `tex2`
 DOUTT) gives `00800000`, with T0 `00b60e90`, T1 `cc2cf1df` and T2 = the render
 target's address [D, capture]. Gap: what the 0x800 part that the shader
 samples add, and the background lacks, does.
+
+**The background's T0 and T1 follow the surface**, from the 2026-11-08
+pbuffer and FBO captures:
+- **T1** = `layout<<29 | format<<24 | (w-1)<<12 | (h-1)`. Window and pbuffer
+  surfaces read `cc…` (layout 6 strided, format 0xc). A 64×64 RGBA8888
+  FBO texture reads `0d03f03f` (layout 0 twiddled, format 0xd), and a 65×64
+  RGB565 one `c504003f`.
+- **T0**, strided: `0x90` plus the pitch as (pitch − 1), with the low 3 bits
+  in b9-11 and the rest in b17-26:
+  - 8 px → `00000e90`, 16 → `00020e90`, 24 → `00040e90`, 40 → `00080e90`,
+    736 → `00b60e90`;
+  - the 65-px RGB565 FBO (pitch 72 px = 144 bytes) gives `00080690` = 35,
+    which is pitch − 1 in 32-bit words, not texels.
+
+  So the pitch field counts 32-bit words; for the 32-bit surfaces the two
+  are the same. One 16-bit data point. [D, captures]
 
 ## 6. HW render context, render details, parameter buffer
 
