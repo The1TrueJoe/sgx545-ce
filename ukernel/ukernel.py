@@ -1717,7 +1717,20 @@ def build(a):
     a.i("wdf")
     a.label("raise_host_irq")
     a.i(f"limm r0, #{SW_EVENT}")
-    a.i(f"str #{CR_EVENT_STATUS // 4}, r0")
+    a.i(f"str #{CR_EVENT_STATUS // 4}, r0")        # raise the host IRQ
+    # After a completion (render_complete/xfer_done just cleared SC_INFLIGHT/SC_XFER),
+    # service a command the host left queued in the kernel CCB right now instead of waiting
+    # for the next 1 kHz timer tick (ta3d-state: the DDK re-enters kick after completion).
+    # Safe here, NOT in kick_end: the completion cleared the in-flight markers, so k_ta
+    # won't defer the queued kick and there is no defer-loop; and the idle/active-power
+    # path reaches this label only with an empty CCB (WO == RO), so it is a no-op there.
+    a.i(f"ld.a.d r5, r17, #{SA_KCCBCTL} [moe]")
+    a.i("wdf")
+    a.i("ld.a.d r6, r5, #0 [moe]")                 # kernel CCB write offset
+    a.i("ld.a.d r7, r5, #1 [moe]")                 # read offset
+    a.i("wdf")
+    a.i("test.xor.ne p0, r6, r7")                  # WO != RO -> a command is queued
+    a.i("(p0) ba kick")                            # drain it now, don't wait a tick
     a.end()
 
     return a
