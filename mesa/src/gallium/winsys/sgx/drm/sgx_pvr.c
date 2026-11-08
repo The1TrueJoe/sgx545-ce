@@ -523,6 +523,8 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    t[0x3c / 4] = k->pb.va & 0xfff00000;
    t[0x6c / 4] = 0x88;
 
+   rd[0x14 / 4] = (uint32_t)c->bias_units; /* depth bias */
+   rd[0x18 / 4] = sgxws_f32(c->bias_factor);
    rd[0x20 / 4] = rgn_this; /* region headers of this render */
    rd[0x28 / 4] = rgn_next; /* and of the next */
    /* The RT data entry this render retires.  It must follow cmd+0x44: left

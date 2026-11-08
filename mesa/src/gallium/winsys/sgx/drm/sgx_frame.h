@@ -155,6 +155,11 @@ struct sgxws_ctx {
    uint32_t bg_pds[3];
    uint32_t pixev, pixev_rows; /* its pixel event program */
    unsigned draws;             /* objects recorded in this frame */
+   /* the frame's depth bias (render details +0x14, +0x18), once a draw
+    * with it is recorded */
+   bool bias_set;
+   int32_t bias_units;
+   float bias_factor;
    struct sgxws_rect
       clip; /* what the visible bits and the region clip are now */
    /* shared buffers it reads or writes (sgxws_use_bo) */

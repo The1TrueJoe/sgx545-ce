@@ -7,7 +7,7 @@ functional\.texture\.(mipmap|completeness|format|size)	texture sampling: LOD bia
 functional\.shaders\.texture_functions	texture2D's bias argument
 functional\.fbo\.render	render to texture: shared and recreated colour buffers, resizes; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared/recreate cases too
 functional\.shaders\.(random|operator|functions|struct)	compiler: random combinations that fail with F16 off too; with the compiler session
-functional\.polygon_offset	polygon offset units
+functional\.polygon_offset	polygon offset: the units and factor are per render, so a draw with others ends it, and depth doesn't carry over to the next render (no ZLS)
 functional\.rasterization\.primitives	wide lines: the hardware's line quads against GL's rule; the DDK fails these too
 functional\.draw\.draw_elements\.points	points from glDrawElements; the DDK fails these too
 functional\.(implementation_limits|state_query\.integers)\.max_vertex_uniform_vectors	GL_MAX_VERTEX_UNIFORM_VECTORS 120: st keeps 8 for clip planes; a 136-vec4 buffer gave 128 but broke dynamic reads of constant arrays (shaders.indexing.tmp_array)

@@ -659,6 +659,8 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       .bg_pds_primary_addr = pds + ((c->bg_pds[2] & 0x3ffffff) << 4),
       .bg_pds_primary_rows = c->bg_pds[2] >> 26,
       .bg_depth = sgxws_f32(1.0f),
+      .depth_bias_units = c->bias_units,
+      .depth_bias_factor = sgxws_f32(c->bias_factor),
    };
    uint64_t render_buf[SGX_KMD_STREAM_CMD_RENDER_length / 8];
    uint64_t kick_buf[TA_KICKS][(SGX_KMD_STREAM_CMD_TA_KICK_length + 7) / 8];

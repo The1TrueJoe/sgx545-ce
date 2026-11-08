@@ -45,6 +45,8 @@ Known limitations
   not drawn yet.
 - Depth and stencil are kept per tile within one render and not stored, so
   their contents do not carry over from one render to the next.
+- ``glPolygonOffset``'s units and factor are one pair per render: a draw
+  with another pair ends the render, so depth does not carry over to it.
 
 Environment variables
 ---------------------
