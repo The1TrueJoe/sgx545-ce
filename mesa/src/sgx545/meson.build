@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: MIT
 
 # Shared SGX545 code below the gallium driver: the USSE instruction set and
-# the PDS programs (isaspec), and the NIR -> USSE compiler.
+# the PDS programs (isaspec), the TA/3D state words (csbgen), and the NIR ->
+# USSE compiler.
+subdir('csbgen')
 subdir('isa')
 subdir('pds')
 subdir('compiler')

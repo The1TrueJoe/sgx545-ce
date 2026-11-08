@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2026 Joseph Telaak
+SPDX-License-Identifier: MIT
+
+Texture state: the four words a DOUTT sends per sample (docs/STATE.md
+section 5), for Mesa's csbgen. A field named unknown_<bits> holds bits
+STATE.md gives a value but no meaning; its default is that value.
+-->
+
+<csbgen name="SGX545" prefix="TEXSTATE">
+
+  <enum name="WRAP">
+    <value name="REPEAT" value="0"/>
+    <value name="MIRROR" value="1"/>
+    <value name="CLAMP"  value="2"/>
+  </enum>
+
+  <enum name="FORMAT">
+    <value name="RGBA4444" value="0x02"/>  <!-- stored ARGB4444 -->
+    <value name="RGBA5551" value="0x04"/>  <!-- stored ARGB1555 -->
+    <value name="RGB565"   value="0x05"/>
+    <value name="BGRA8888" value="0x0c"/>
+    <value name="RGBA8888" value="0x0d"/>
+    <value name="A8"       value="0x19"/>
+    <value name="L8"       value="0x1a"/>
+    <value name="LA88"     value="0x1b"/>
+  </enum>
+
+  <enum name="LAYOUT">
+    <value name="TWIDDLED" value="0"/>
+    <value name="CUBE"     value="2"/>
+    <value name="LINEAR"   value="3"/>
+    <value name="STRIDED"  value="6"/>  <!-- the pitch is in STRIDED_WORD0 -->
+  </enum>
+
+  <struct name="WORD0" length="1">
+    <field name="unknown_30" start="30" end="30" type="bool"/>  <!-- set for L8, A8 and LA88 -->
+    <field name="unknown_21_26" start="21" end="26" type="uint" default="0x3f"/>
+    <field name="unknown_19_20" start="19" end="20" type="uint" default="3"/>
+    <field name="no_mipmaps" start="18" end="18" type="bool"/>
+    <field name="unknown_17" start="17" end="17" type="bool" default="1"/>
+    <field name="mag_linear" start="12" end="12" type="bool"/>
+    <field name="min_linear" start="10" end="10" type="bool"/>
+    <field name="mip_linear" start="9" end="9" type="bool"/>
+    <field name="wrap_s" start="6" end="8" type="WRAP"/>
+    <field name="wrap_t" start="3" end="5" type="WRAP"/>
+  </struct>
+
+  <!-- WORD0 of a LAYOUT_STRIDED surface: the pitch - 1, in 32-bit words,
+       split over b9-11 (low 3 bits) and b17-26 -->
+  <struct name="STRIDED_WORD0" length="1">
+    <field name="pitch_hi" start="17" end="26" type="uint"/>
+    <field name="mag_linear" start="12" end="12" type="bool"/>
+    <field name="pitch_lo" start="9" end="11" type="uint"/>
+    <field name="wrap_s" start="6" end="8" type="WRAP"/>
+    <field name="wrap_t" start="3" end="5" type="WRAP"/>
+  </struct>
+
+  <struct name="WORD1" length="1">
+    <field name="layout" start="29" end="31" type="LAYOUT"/>
+    <field name="format" start="24" end="28" type="FORMAT"/>
+    <field name="width" start="12" end="23" type="uint"/>   <!-- - 1 -->
+    <field name="height" start="0" end="11" type="uint"/>   <!-- - 1 -->
+  </struct>
+
+  <struct name="WORD2" length="1">
+    <field name="address" start="0" end="31" type="address" shift="0"/>
+  </struct>
+
+  <!-- the sample instruction's half: 00800800 for a 2-D sample (tex1),
+       01028800 for tex2, 00800000 for the background object's load -->
+  <struct name="WORD3" length="1">
+    <field name="unknown_24" start="24" end="24" type="bool"/>
+    <field name="unknown_23" start="23" end="23" type="bool" default="1"/>
+    <field name="unknown_17" start="17" end="17" type="bool"/>
+    <field name="unknown_15" start="15" end="15" type="bool"/>
+    <field name="unknown_11" start="11" end="11" type="bool"/>
+  </struct>
+
+</csbgen>

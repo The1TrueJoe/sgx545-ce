@@ -17,6 +17,7 @@
 #include "util/format/u_format.h"
 #include "util/u_math.h"
 
+#include "sgx545_csb.h"
 #include "sgx545_resource.h"
 #include "sgx545_texture.h"
 
@@ -321,25 +322,33 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
    bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE && view->u.tex.last_level > base &&
                (prsc->target == PIPE_TEXTURE_CUBE || twiddled(w, h));
 
-   /* T0: wrap T b3-5, wrap S b6-8, mip linear b9, min linear b10, mag linear
-    * b12, b17-20 0xf (0xd with mipmaps), b21-26 0x3f, b30 for L8/A8/LA88 */
-   t[0] = 0x3fu << 21 | (mips ? 0xdu : 0xfu) << 17 |
-          (fmt == 0x19 || fmt == 0x1a || fmt == 0x1b ? 1u << 30 : 0);
-   if (sampler) {
-      t[0] |= wrap(sampler->wrap_t) << 3 | wrap(sampler->wrap_s) << 6;
-      if (mips && sampler->min_mip_filter == PIPE_TEX_MIPFILTER_LINEAR)
-         t[0] |= 1u << 9;
-      if (sampler->min_img_filter == PIPE_TEX_FILTER_LINEAR)
-         t[0] |= 1u << 10;
-      if (sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR)
-         t[0] |= 1u << 12;
+   sgx545_pack(&t[0], TEXSTATE_WORD0, t0) {
+      t0.no_mipmaps = !mips;
+      t0.unknown_30 = fmt == SGX545_TEXSTATE_FORMAT_A8 || fmt == SGX545_TEXSTATE_FORMAT_L8 ||
+                      fmt == SGX545_TEXSTATE_FORMAT_LA88;
+      if (sampler) {
+         t0.wrap_t = wrap(sampler->wrap_t);
+         t0.wrap_s = wrap(sampler->wrap_s);
+         t0.mip_linear = mips && sampler->min_mip_filter == PIPE_TEX_MIPFILTER_LINEAR;
+         t0.min_linear = sampler->min_img_filter == PIPE_TEX_FILTER_LINEAR;
+         t0.mag_linear = sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR;
+      }
    }
-   /* T1: layout (0 twiddled, 3 linear, 2 a cube map: DDK capture) | format | width-1 | height-1 */
-   t[1] = (prsc->target == PIPE_TEXTURE_CUBE ? 2u : twiddled(w, h) ? 0u : 3u) << 29 | fmt << 24 |
-          (w - 1) << 12 | (h - 1);
+   /* T1: a cube map's layout from a DDK capture */
+   sgx545_pack(&t[1], TEXSTATE_WORD1, t1) {
+      t1.layout = prsc->target == PIPE_TEXTURE_CUBE ? SGX545_TEXSTATE_LAYOUT_CUBE
+                  : twiddled(w, h)                  ? SGX545_TEXSTATE_LAYOUT_TWIDDLED
+                                                    : SGX545_TEXSTATE_LAYOUT_LINEAR;
+      t1.format = fmt;
+      t1.width = w - 1;
+      t1.height = h - 1;
+   }
    /* (the draw brought the level-0 copy up to date: sgx545_resource_cube0) */
-   t[2] = sgx545_tex_uses_cube0(view, sampler) && res->cube0.va ? res->cube0.va
-                                                               : res->bo.va + chain_offset(prsc, base);
+   sgx545_pack(&t[2], TEXSTATE_WORD2, t2) {
+      t2.address = SGX545_DEV_ADDR(sgx545_tex_uses_cube0(view, sampler) && res->cube0.va
+                                      ? res->cube0.va
+                                      : res->bo.va + chain_offset(prsc, base));
+   }
    if (!res->texture) {
       /* A render target, read where it is: strided (T1 layout 6), the pitch
        * - 1 in T0 b9-11 and b17-26 in place of the mipmap and min filter
@@ -349,14 +358,23 @@ sgx545_tex_words(const struct pipe_sampler_view *view, const struct pipe_sampler
       unsigned p = res->pitch - 1;
       bool bgra = prsc->format == PIPE_FORMAT_B8G8R8A8_UNORM || prsc->format == PIPE_FORMAT_B8G8R8X8_UNORM;
 
-      t[0] = (p & 7) << 9 | (p >> 3) << 17;
-      if (sampler) {
-         t[0] |= wrap(sampler->wrap_t) << 3 | wrap(sampler->wrap_s) << 6;
-         if (sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR)
-            t[0] |= 1u << 12;
+      sgx545_pack(&t[0], TEXSTATE_STRIDED_WORD0, t0) {
+         t0.pitch_lo = p & 7;
+         t0.pitch_hi = p >> 3;
+         if (sampler) {
+            t0.wrap_t = wrap(sampler->wrap_t);
+            t0.wrap_s = wrap(sampler->wrap_s);
+            t0.mag_linear = sampler->mag_img_filter == PIPE_TEX_FILTER_LINEAR;
+         }
       }
-      t[1] = 6u << 29 | (bgra ? 0x0du : 0x0cu) << 24 | (prsc->width0 - 1) << 12 | (prsc->height0 - 1);
+      sgx545_pack(&t[1], TEXSTATE_WORD1, t1) {
+         t1.layout = SGX545_TEXSTATE_LAYOUT_STRIDED;
+         t1.format = bgra ? 0x0d : 0x0c;
+         t1.width = prsc->width0 - 1;
+         t1.height = prsc->height0 - 1;
+      }
    }
    /* T3: the sample instruction's half; 00800800 for a single 2-D sample [D] */
-   t[3] = 0x00800800;
+   sgx545_pack(&t[3], TEXSTATE_WORD3, t3)
+      t3.unknown_11 = true;
 }

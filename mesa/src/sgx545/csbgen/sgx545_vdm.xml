@@ -1,0 +1,95 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2026 Joseph Telaak
+SPDX-License-Identifier: MIT
+
+The VDM control stream (docs/STATE.md section 2), for Mesa's csbgen
+(src/imagination/csbgen/gen_pack_header.py). A field named unknown_<bits>
+holds bits STATE.md gives a value but no meaning; its default is that value.
+Widths STATE.md doesn't give are taken up to the next known field.
+-->
+
+<csbgen name="SGX545" prefix="VDMCTRL">
+
+  <!-- b29-31 of a block's first word: STATE.md writes the words as a top
+       nibble (4, 6, 8, c), but a draw's b28 is the fan bit, so the type is
+       the top three bits -->
+  <enum name="BLOCK_TYPE">
+    <value name="PDS_STATE"           value="2"/>
+    <value name="PDS_STATE_TERMINATE" value="3"/>
+    <value name="INDEX_LIST"          value="4"/>
+    <value name="STREAM_TERMINATE"    value="6"/>
+  </enum>
+
+  <enum name="PRIM">
+    <value name="TRIANGLES"      value="0"/>
+    <value name="LINES"          value="1"/>
+    <value name="POINTS"         value="2"/>
+    <value name="TRIANGLE_STRIP" value="3"/>
+  </enum>
+
+  <!-- the low bits of a state program's info word, by what the program does -->
+  <enum name="STATE_KIND">
+    <value name="TA_BLOCK" value="0x20224"/>  <!-- 0x2022400: DMA a TA state block, emit it -->
+    <value name="DMA"      value="0xe1"/>     <!-- 0xe100: a plain state/secondary DMA -->
+  </enum>
+
+  <!-- a state program: the PDS vertex program that DMAs state -->
+  <struct name="PDS_STATE0" length="1">
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="PDS_STATE"/>
+    <field name="pds_addr" start="0" end="27" type="address" shift="4"/>
+  </struct>
+
+  <struct name="PDS_STATE1" length="1">
+    <field name="data_rows" start="26" end="31" type="uint"/>  <!-- 16-byte rows -->
+    <field name="kind" start="8" end="25" type="STATE_KIND"/>
+    <!-- (dwords the state task forwards + 3) >> 2 -->
+    <field name="attr_size" start="0" end="7" type="uint"/>
+    <!-- a TA block's rotating buffer index (0-3), ORed into attr_size; the
+         DDK's is always 0 -->
+    <field name="buffer_index" start="0" end="1" type="uint"/>
+  </struct>
+
+  <!-- a draw: six words -->
+  <struct name="INDEX_LIST0" length="1">
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="INDEX_LIST"/>
+    <field name="fan" start="28" end="28" type="bool"/>  <!-- with TRIANGLES -->
+    <field name="prim" start="26" end="27" type="PRIM"/>
+    <field name="unknown_22_23" start="22" end="23" type="uint" default="3"/>
+    <field name="index_count" start="0" end="21" type="uint"/>
+  </struct>
+
+  <!-- 16-bit indices: b0 clear (32-bit: b0-1) -->
+  <struct name="INDEX_LIST1" length="1">
+    <field name="index_addr" start="1" end="31" type="address" shift="1"/>
+  </struct>
+
+  <struct name="INDEX_LIST2" length="1">
+    <field name="batch" start="28" end="31" type="uint"/>  <!-- batch - 1; the DDK's is 16 -->
+    <field name="index_32bit" start="24" end="24" type="bool"/>
+    <field name="index_offset" start="0" end="23" type="uint"/>
+  </struct>
+
+  <struct name="INDEX_LIST3" length="1">
+    <field name="max_index" start="0" end="21" type="uint" default="0x3fffff"/>
+  </struct>
+
+  <!-- the vertex PDS program -->
+  <struct name="INDEX_LIST4" length="1">
+    <field name="vertices_per_task" start="28" end="31" type="uint"/>  <!-- - 1 -->
+    <field name="pds_addr" start="0" end="27" type="address" shift="4"/>
+  </struct>
+
+  <struct name="INDEX_LIST5" length="1">
+    <field name="out_size" start="24" end="31" type="uint"/>       <!-- ceil(output dwords / 4) -->
+    <field name="n_min3" start="22" end="23" type="uint"/>         <!-- min(n, 3); 3 in every DDK draw -->
+    <field name="in_size" start="7" end="21" type="uint"/>         <!-- ceil(input attribute bytes / 16) -->
+    <field name="data_rows" start="0" end="6" type="uint"/>        <!-- PDS data rows -->
+  </struct>
+
+  <struct name="STREAM_TERMINATE0" length="1">
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="STREAM_TERMINATE"/>
+  </struct>
+
+</csbgen>
