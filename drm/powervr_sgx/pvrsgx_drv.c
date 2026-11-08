@@ -319,7 +319,7 @@ static void __exit pvrsgx_exit(void)
 }
 module_exit(pvrsgx_exit);
 
-MODULE_AUTHOR("Joseph Telaak");
+MODULE_AUTHOR("Joseph Telaak <joseph@telaak.dev>");
 MODULE_DESCRIPTION("PowerVR SGX5xx DRM driver");
 MODULE_LICENSE("GPL");
 MODULE_IMPORT_NS("DMA_BUF");

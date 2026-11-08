@@ -56,6 +56,9 @@ jobs:
           sh drm/ci/deb-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
 
       - name: Build the packages
+        env:
+          DEBEMAIL: joseph@telaak.dev
+          DEBFULLNAME: Joseph Telaak
         run: |
           set -eux
           make -C linux-$LINUX_VERSION ARCH=x86_64 -j"$(nproc)" LOCALVERSION=-sgx \
