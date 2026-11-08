@@ -78,6 +78,11 @@ begin_frame(struct sgx_context *ctx)
    if (!rt)
       return false;
    if (sgx_recording(ctx) && ctx->recording != res) {
+      SGX_DBG(SYNC, "target switch: %s %ux%u -> %s %ux%u\n",
+              util_format_short_name(ctx->recording->base.format),
+              ctx->recording->base.width0, ctx->recording->base.height0,
+              util_format_short_name(res->base.format), res->base.width0,
+              res->base.height0);
       ctx->recording = NULL; /* sgxws_begin flushes the other frame */
       ctx->stats.fl_switch++;
    }

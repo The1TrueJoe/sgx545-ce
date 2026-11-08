@@ -515,6 +515,12 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
     * driver waits for every render). */
    if (res->bo.va && !res->texture && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
       ctx->stats.fl_read += ctx->recording == res;
+      if (ctx->recording == res)
+         SGX_DBG(
+            SYNC,
+            "readback ends the render into %s %ux%u (map usage %#x, box %d,%d %dx%d)\n",
+            util_format_short_name(prsc->format), prsc->width0, prsc->height0,
+            usage, box->x, box->y, box->width, box->height);
       sgx_flush_resource_writes(ctx, res);
       /* and the renders already submitted into it */
       if (sgxws_bo_wait(&res->bo, 2000))
@@ -529,6 +535,12 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
       uint64_t t;
 
       ctx->stats.fl_read += ctx->recording == res;
+      if (ctx->recording == res)
+         SGX_DBG(
+            SYNC,
+            "readback ends the render into %s %ux%u (map usage %#x, box %d,%d %dx%d)\n",
+            util_format_short_name(prsc->format), prsc->width0, prsc->height0,
+            usage, box->x, box->y, box->width, box->height);
       sgx_flush_resource_writes(ctx, res);
       if (sgxws_bo_wait(&res->bo, 2000))
          fprintf(stderr,
