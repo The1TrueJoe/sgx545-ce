@@ -36,7 +36,7 @@ jobs:
             libxxf86vm-dev libxshmfence-dev libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-dri3-dev \
             libxcb-present-dev libxcb-sync-dev libxcb-glx0-dev libxcb-randr0-dev libxcb-xfixes0-dev \
             libxcb-shm0-dev libxcb-keysyms1-dev libwayland-dev wayland-protocols libwayland-egl-backend-dev \
-            libexpat1-dev zlib1g-dev libzstd-dev libudev-dev
+            libexpat1-dev zlib1g-dev libzstd-dev libudev-dev llvm-19-dev libclang-cpp19-dev libelf-dev
 
       - uses: actions/checkout@v4
 
@@ -73,7 +73,7 @@ jobs:
           Version: $mv+sgx$d.$v
           Architecture: amd64
           Maintainer: Joseph Telaak <joseph@telaak.dev>
-          Depends: libc6, libdrm2, libglvnd0, libgl1, libegl1, libgles2, libx11-6, libx11-xcb1, libxcb1, libxcb-dri3-0, libxcb-present0, libxcb-sync1, libxcb-xfixes0, libxcb-randr0, libxshmfence1, libxxf86vm1, libwayland-client0, libwayland-server0, libexpat1, zlib1g, libzstd1
+          Depends: libc6, libllvm19, libelf1t64, libdrm2, libglvnd0, libgl1, libegl1, libgles2, libx11-6, libx11-xcb1, libxcb1, libxcb-dri3-0, libxcb-present0, libxcb-sync1, libxcb-xfixes0, libxcb-randr0, libxshmfence1, libxxf86vm1, libwayland-client0, libwayland-server0, libexpat1, zlib1g, libzstd1
           Section: libs
           Priority: optional
           Description: Mesa with the sgx driver for the PowerVR SGX545
