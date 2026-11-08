@@ -65,9 +65,10 @@ safe fdual.fmad.fadd r3, r0, r1, r2 [sd=i1 sb=i0 sc=i2]
 safe efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1]
 safe efo r0, r1, r2, r3 [d=i1 wi0]
 
-# sec 3 is fsubflr (ffrc is it with sb = sc); the table's name fadm stays the text
-fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2] == fdual.mov.fadm r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
-fdual.mov.ffrc r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1] == fdual.mov.fadm r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1]
+# sec 3 is fsubflr; USEASM's fadm and ffrc encode as it (ISA.md "Dual issue")
+fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
+fdual.mov.fadm r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2] == fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
+fdual.mov.ffrc r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1] == fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1]
 
 # bilin/ssum16/firv/firh's fmt is a mnemonic suffix; [fmt=s8] means the same
 # (ISA.md "hw 16 / 17 / 1a")

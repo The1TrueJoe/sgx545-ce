@@ -95,7 +95,7 @@ static const char *const fmt8[] = { "u8", "s8", "o8", "x3" };
 static const char *const imae_t2[] = { "u16", "s16", "u32", "x3" };
 static const char *const ii01[] = { "i0", "i1" };
 static const char *const fdual_pri[] = { "fmad", "mov", "fadm", "fmsa", "fddp", "fminmax", "ima32", "fssq" };
-static const char *const fdual_sec[] = { "fmad", "fmad16", "fmsa", "fadm", "fmaxmin", "frcp", "frsq", "fexp2",
+static const char *const fdual_sec[] = { "fmad", "fmad16", "fmsa", "fsubflr", "fmaxmin", "frcp", "frsq", "fexp2",
                                          "flog2", "fsin", "fcos", "fadd", "fsub", "fmul", "ima32", "mov" };
 static const char *const fdual_sd[] = { "i0", "i1", "i2", "i0s0" };
 static const char *const fdual_sb[] = { "i0", "i1", "i2", "src1" };
@@ -142,8 +142,8 @@ sgx545_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
    if (!strcmp(parts[0], "fdual")) {
       int p = nparts == 3 ? LOOKUP(fdual_pri, parts[1]) : -1;
       int s = nparts == 3 ? LOOKUP(fdual_sec, parts[2]) : -1;
-      /* sec 3 computes fsubflr (ffrc is it with sb = sc): ISA.md "fdual for a compiler" */
-      if (nparts == 3 && (!strcmp(parts[2], "fsubflr") || !strcmp(parts[2], "ffrc")))
+      /* sec 3 is fsubflr; USEASM's fadm and ffrc encode as it (ISA.md "Dual issue") */
+      if (nparts == 3 && (!strcmp(parts[2], "fadm") || !strcmp(parts[2], "ffrc")))
          s = 3;
       if (p < 0 || s < 0)
          return false;

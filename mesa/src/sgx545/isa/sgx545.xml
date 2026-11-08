@@ -3317,7 +3317,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	<value val="0" display=".fmad"/>
 	<value val="1" display=".fmad16"/>
 	<value val="2" display=".fmsa"/>
-	<value val="3" display=".fadm"/>
+	<value val="3" display=".fsubflr"/>
 	<value val="4" display=".fmaxmin"/>
 	<value val="5" display=".frcp"/>
 	<value val="6" display=".frsq"/>
