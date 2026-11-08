@@ -1,11 +1,13 @@
 """Replay a two-surface trace (tools/gen v2s: two RT datasets, one context and PB)
 through a microkernel in the emulator, with the two scenes interleaved.
 
-    python3 tools/ukernel/interleave.py FW TRACE [--order interleave|overlap]
+    python3 tools/ukernel/interleave.py FW TRACE [--order interleave|overlap|serial] [--rounds N]
 
 interleave: A first, B first (A's scene open, not rendered), A last, B last.
 overlap:    A first, A last (A's 3D starts), B first while A's 3D runs, A's 3D
             ends, B last.
+serial:     A first, A last, A's render ends, then B the same way: one scene at a
+            time, the two surfaces alternating, N rounds (A B A B ...).
 The commands are rewritten into the context CCB in that order. Prints every
 event's register and memory writes, as tools/ukernel/run.py does.
 """
@@ -23,7 +25,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("fw")
     ap.add_argument("trace")
-    ap.add_argument("--order", choices=("interleave", "overlap"), default="interleave")
+    ap.add_argument("--order", choices=("interleave", "overlap", "serial"), default="interleave")
+    ap.add_argument("--rounds", type=int, default=2, help="serial: A/B pairs")
     a = ap.parse_args()
     out = io.StringIO()
     r = RUN.Runner(open(a.fw, "rb").read(), a.trace, out=out)
@@ -61,6 +64,8 @@ def main():
             mem.load(dst + 0x58, sh)
         mem.wr(dst + 0x58, mem.rd(dst + 0x58) | 1)
         slot[0] += 1
+        if slot[0] * 0x2C0 + 0x2C0 > 0x10000:
+            sys.exit("too many kicks for the context CCB")
         mem.wr(ctl, slot[0] * 0x2C0)
         r.step(f"kick {name}", r.m.kick, 0, k.data)
         r.event(f"TA finished {name}", RUN.EV_TA_FINISHED)
@@ -76,6 +81,12 @@ def main():
         render_end("A")
         kick("B last", b2)
         render_end("B")
+    elif a.order == "serial":
+        for n in range(a.rounds):
+            for name, f, l in (("A", a1, a2), ("B", b1, b2)):
+                kick(f"{name}{n} first", f)
+                kick(f"{name}{n} last", l)
+                render_end(f"{name}{n}")
     else:
         kick("A first", a1)
         kick("A last", a2)
