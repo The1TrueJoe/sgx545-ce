@@ -226,6 +226,39 @@ re-read these rows against the sections named:
 - **Winsys: "`sgxws_draw` TA block", word 1**: partly. STATE.md §3 "PDS words"
   has b0-15, b16-17 and the lockup. b25-28 is still a gap: the captures on
   disk don't fit the reported `12 / units` rule.
+- **Winsys, from the three DDK captures still on disk (base4, e1tex, vp5;
+  2026-11-08):**
+  - "State-emit programs" (the program text) and "TA terminate" (its task is
+    the 2-dword state emit; the DOUTA values' meaning stays G): STATE.md §2.
+  - "DOUTD control and chunking": b22-23 = (dwords - 1) & 3 holds for every
+    secondary DMA in the captures, so it is a field of the DMA, not a DDK
+    habit (STATE.md §2). The 16-dword limit stays in PDS.md's list.
+  - "End-of-tile program" (`phas.i [wait=7]`, temps 4) and "Pixel-event
+    program" (data, code and its three tasks): STATE.md §4. What each in1 bit
+    is stays G.
+  - "Background object" T3 `00800000`: STATE.md §5.
+  - "Vertices per task": corrected. The rule holds for compiled shaders;
+    the DDK's built-in clear programs run 8 per task (STATE.md §2).
+- **From new DDK captures (EA1, 2026-11-08; 33 one-change probes in
+  `~/Documents/GitHub/sgx545-work/caps-ddk/2026-11-08/`):**
+  - PDS word 1 b25-28 (STATE.md §3 "PDS words");
+  - TSP word 1 by precision (§3 "Output select … and TSP words");
+  - constant-colour subtract and reverse subtract (§3);
+  - the PBE pitch padding and word 2 b15 (§4);
+  - the background's T0/T1 (§5);
+  - VDM draw words 2 and 5 (§2): constant, meaning still G;
+  - the clear's vertex program (§3, from base4).
+- **Still open in STATE.md §2-§5:**
+  - PBE word 2 b15's effect when clear (it is never clear in a capture;
+    needs a replay poke);
+  - the meanings of the VDM batch and n;
+  - PDS word 1 b25-28 with both secondaries and more than one unit;
+  - background T0 b21-26 in a texture's twiddled layout;
+  - the PDS middle word `00030001`;
+  - the terminate's DOUTA meanings;
+  - the pixel-event in1 bits;
+  - where vertex uniforms start (the probe's vertex override didn't take);
+  - points without gl_PointSize (the DDK drops the draw).
 - **New:** UKERNEL.md §5 "Where the DDK microkernel raises the host
   interrupt": every SW_EVENT site and what triggers it, the fact that no
   completion waits for the timer, the hardware-done to IRQ times, and where

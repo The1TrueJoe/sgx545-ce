@@ -86,13 +86,18 @@ __dst1_case(struct encode_state *s, const struct sgx_isa_src *o)
    }
 }
 
-/* The number field: g<n> is n + 0x40 on the c/g bank, i<n> in an r slot is 124 + n. */
+/*
+ * The number field: g<n> is n + 0x40 on the c/g bank, i<n> in an r slot is
+ * 124 + n, a negative immediate its 7-bit two's complement (the signed
+ * immediates of ima16, imae, ...: ISA.md "imae").
+ */
 static inline uint32_t
 sgx_isa_opnd_num(const struct sgx_isa_src *o)
 {
    switch (o->file) {
-   case SGX_ISA_FILE_G: return o->num + 0x40;
-   default:             return o->num;
+   case SGX_ISA_FILE_G:   return o->num + 0x40;
+   case SGX_ISA_FILE_IMM: return (int32_t)o->num < 0 ? o->num & 0x7f : o->num;
+   default:               return o->num;
    }
 }
 
@@ -136,6 +141,8 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
 /* Without a destination, test's dst field holds nodst (default 0x280). */
 #define SGX_TDST(m) \
    (src->dst.file != SGX_ISA_FILE_NONE ? SGX_DST(m) : (src->has_nodst ? src->nodst : 0x280))
+/* rlp's src2 slot as one 10-bit value (default 0x300, the unused pattern) */
+#define SGX_UNUSED2()  (src->has_unused2 ? src->unused2 : 0x300)
 /* A named <expr> of the #instruction hierarchy, e.g. SGX_EXPR(__float_smode). */
 #define SGX_EXPR(n)    __instruction_expr_##n(s, p, src)
 

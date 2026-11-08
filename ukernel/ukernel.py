@@ -71,6 +71,18 @@ TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
 # 0x38 = EVENT_STATUS2, 0x39 = 0x008 CLKGATESTATUS, 0x3a = stage counters (byte each:
 # do_ta/ta_finished/do_3d/render_done), 0x3b = tick counter.
 WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
+# EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
+# alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
+# host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
+TIMER_DIV = int(os.environ.get("UK_TIMERDIV", "1"))
+
+# M1-exit experiment (uapi-stream frame-40 hang, devcd int 0x2/0x0): the idle ACTIVE_POWER
+# raise in kick_end strands the NEXT host doorbell after the CCB drains on a single context
+# (per-context, idle-timer driven; 20 processes never idle long enough; DDK clean). Set
+# UK_NO_IDLE_AP=1 to skip the raise (keep only the EVENT_TIMER keep-alive) and A/B it on HW
+# -- pair with a lengthened/disabled SGXOSTimer watchdog driver-side. Default 0 is
+# byte-identical (the raise is still emitted).
+NO_IDLE_AP = int(os.environ.get("UK_NO_IDLE_AP", "0"))
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -127,6 +139,17 @@ SC_TAFLIGHT = 0x36   # control block +0xd8: 1 while a TA is in flight. Serialise
                      # pattern). Without it a fast host (EA3 p1) delivers kick 2
                      # while TA 1 runs, re-kicking the TA mid-run (lockup_TA) and
                      # making ta_finished act on the wrong command (ta3d-state race).
+PB_TA_LOADED = 0x2e  # control block +0xb8 (the DDK's loaded-PB marker, ta3d+0xb8): the PB
+                     # descriptor whose TA free list is currently loaded (0 = none). do_ta
+                     # loads the TA free list ONLY when the kick's PB differs -- the DDK loads
+                     # once per PB and lets the hardware keep the ring in sync (ta3d-state
+                     # 2026-11-08). Reloading every frame re-seeds the head from pb+0x18 (last
+                     # frame's snapshot), skipping the ~25 pages the 3D freed -> DPM_OUT_OF_MEM
+                     # at ~frame 40 (uapi-stream M1 exit). Reset at init (post-HWR the HW DPM is
+                     # wiped) and at cleanup (so a same-address PB realloc reloads).
+PB_3D_LOADED = 0x2f  # control block +0xbc (the DDK's ta3d+0xbc): the PB whose 3D free list +
+                     # save_ta_state are loaded. do_3d gates those on it the same way; 0x63c=3
+                     # and the ISP/PBE state (D3_RD) still run every 3D start.
 SC_VERSION = 0x18    # control block +0x60: openHC microkernel version, written
                      # at init. Advisory (the DDK driver does not read it); an
                      # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
@@ -163,6 +186,12 @@ HC_CLEANUP = 2       # ui32CleanupStatus
 HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_POWER
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 HC_TIMERCLK = 6      # ui32uKernelTimerClock (host-set EVENT_TIMER period)
+HC_BGBLOCK = 15      # word +0x3c: bit 0 = HOSTCTL_OPENHC_HOST_BGBLOCK -- the host wrote the
+                     # background block on the CPU, so do_3d skips its EDM pulse (§4a / m2).
+                     # This word is the DDK's ui32PerfGroup (HWPerf counter group); reusing it
+                     # is safe because powervr_sgx has no HWPerf and the driver sets it only for
+                     # open images (never the DDK one), and our uK never reads it as PerfGroup
+                     # (ta3d-state 2026-11-08).
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
 EDM_INTERRUPT_ACTIVE_POWER = 2   # host control ui32InterruptFlags bit 1: the
@@ -629,6 +658,8 @@ def build(a):
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r0 [moe]")      # cleanup defer counter clear
     a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
+    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r0 [moe]")         # no PB free list loaded yet: an HWR
+    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r0 [moe]")         # wiped the HW DPM, so force a reload
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
     # at init/RESUME (pc 0x01f9). A periodic timer task keeps the EDM running
     # (EDMTaskReg0 0xb14 moves), so the host watchdog (SGXOSTimer: 30 ms of no
@@ -646,6 +677,8 @@ def build(a):
     a.i("wdf")
     a.i(f"ld.a.d r0, r1, #{HC_TIMERCLK} [moe]")   # host ui32uKernelTimerClock (period)
     a.i("wdf")
+    if TIMER_DIV != 1:
+        a.i(f"imae r0, r0, #{TIMER_DIV}, #0 [t2=u32]")   # UK_TIMERDIV: slow the keep-alive timer
     a.i(f"limm r1, #{EVENT_TIMER_ENABLE}")
     a.i("or r0, r0, r1")
     a.i(f"str #{CR_EVENT_TIMER // 4}, r0")        # EUR_CR_EVENT_TIMER = period | ENABLE
@@ -792,6 +825,8 @@ def build(a):
     a.label("k_power_resume")
     a.i(f"ld.a.d r4, r2, #{HC_TIMERCLK} [moe]")      # host timer period
     a.i("wdf")
+    if TIMER_DIV != 1:
+        a.i(f"imae r4, r4, #{TIMER_DIV}, #0 [t2=u32]")   # UK_TIMERDIV: match init's slowed timer
     a.i(f"limm r5, #{EVENT_TIMER_ENABLE}")
     a.i("or r4, r4, r5")
     a.i(f"str #{CR_EVENT_TIMER // 4}, r4")           # 0xacc = period | ENABLE
@@ -841,7 +876,9 @@ def build(a):
     a.label("k_cleanup_complete")
     a.i("limm r4, #0")
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r4 [moe]")   # reset the defer counter
-    a.i("idf")
+    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r4 [moe]")       # a cleaned-up PB may be freed and a new
+    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r4 [moe]")       # one reallocated at the same address: force
+    a.i("idf")                                          # a reload (the DDK clears these on cleanup)
     a.i("wdf")
     a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
@@ -926,27 +963,28 @@ def build(a):
         a.st_sa(SA_SELF, 0x3a, 2)                  # kernel CCB write offset
         a.st_sa(SA_SELF, 0x3b, 3)                  # kernel CCB read offset
         a.i("idf"); a.i("wdf")
-    a.i("test.xor.eq p0, r2, r3")                  # queue empty?
-    a.i("(!p0) ba kick_idle_done")
-    a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")   # a render in flight?
-    a.i("wdf")
-    a.i("test.and.eq p0, r2, r2")
-    a.i("(!p0) ba kick_idle_done")
-    a.i(f"ld.a.d r2, r17, #{SC_XFER} [moe]")        # a transfer in flight?
-    a.i("wdf")
-    a.i("test.and.eq p0, r2, r2")
-    a.i("(!p0) ba kick_idle_done")
-    # idle: raise ACTIVE_POWER in host control, then the host IRQ
-    a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")
-    a.i("wdf")
-    a.i(f"ld.a.d r2, r1, #{HC_INTFLAGS} [moe]")
-    a.i("wdf")
-    a.i(f"or r2, r2, #{EDM_INTERRUPT_ACTIVE_POWER}")
-    a.i(f"st.a.d r1, #{HC_INTFLAGS}, r2 [moe]")
-    a.i("idf")
-    a.i("wdf")
-    a.i(f"limm r0, #{SW_EVENT}")
-    a.i("ba raise_host_irq")                        # write SW_EVENT to EVENT_STATUS
+    if not NO_IDLE_AP:
+        a.i("test.xor.eq p0, r2, r3")                  # queue empty?
+        a.i("(!p0) ba kick_idle_done")
+        a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")   # a render in flight?
+        a.i("wdf")
+        a.i("test.and.eq p0, r2, r2")
+        a.i("(!p0) ba kick_idle_done")
+        a.i(f"ld.a.d r2, r17, #{SC_XFER} [moe]")        # a transfer in flight?
+        a.i("wdf")
+        a.i("test.and.eq p0, r2, r2")
+        a.i("(!p0) ba kick_idle_done")
+        # idle: raise ACTIVE_POWER in host control, then the host IRQ
+        a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")
+        a.i("wdf")
+        a.i(f"ld.a.d r2, r1, #{HC_INTFLAGS} [moe]")
+        a.i("wdf")
+        a.i(f"or r2, r2, #{EDM_INTERRUPT_ACTIVE_POWER}")
+        a.i(f"st.a.d r1, #{HC_INTFLAGS}, r2 [moe]")
+        a.i("idf")
+        a.i("wdf")
+        a.i(f"limm r0, #{SW_EVENT}")
+        a.i("ba raise_host_irq")                        # write SW_EVENT to EVENT_STATUS
     a.label("kick_idle_done")
     a.end()
 
@@ -1137,8 +1175,21 @@ def build(a):
     # (the DDK skips them, ddk-ref "TA kick 2").
     a.i("test.and.eq p0, r13, r13")             # render kick? skip PB + free list
     a.i("(p0) ba skip_pb_fl")
+    # Load the TA free list only when the PB changed. The DDK loads it ONCE PER PB and
+    # lets the hardware keep the free-list ring in sync; we reloaded on every scene's
+    # first kick, which re-seeds the head from pb+0x18 (last frame's saved 0x700) and
+    # skips the ~25 pages the 3D freed, exhausting the PB at ~frame 40 (DPM_OUT_OF_MEM_MT;
+    # uapi-stream M1 exit 2026-11-08, ta3d-state decode). PB_TA_LOADED is the DDK's own
+    # ta3d+0xb8 marker; init and cleanup reset it so an HWR or a same-address realloc reloads.
+    a.i(f"ld.a.d r5, r17, #{PB_TA_LOADED} [moe]")
+    a.i("wdf")
+    a.i("test.xor.eq p0, r5, r11")              # same PB already loaded -> skip the reload
+    a.i("(p0) ba skip_pb_fl")
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
+    a.i(f"st.a.d r17, #{PB_TA_LOADED}, r11 [moe]")   # remember the loaded PB
+    a.i("idf")
+    a.i("wdf")
     if DPM_LOG:                                 # point A: 0x700 after the free-list load (kick 1)
         a.i(f"ldr r5, #{0x700 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x35, 5)
     a.label("skip_pb_fl")
@@ -1388,6 +1439,13 @@ def build(a):
     # allocated-page counters (EUR_CR 0x700/0x710/0x724/0x72c) go through the PB
     # descriptor into the 3D's free/dealloc registers (0x604/0x64c/0x660), so the
     # 3D frees the right pages; do_3d wrote only 0x600 before.
+    # Load the 3D free list + save_ta_state only when the PB changed (the per-PB rule, same
+    # as the TA side: the DDK loads once per PB and the HW keeps the ring in sync). When it
+    # is unchanged, 0x63c=3 and the ISP/PBE state (D3_CONST/D3_RD) below still run every 3D.
+    a.i(f"ld.a.d r4, r17, #{PB_3D_LOADED} [moe]")
+    a.i("wdf")
+    a.i("test.xor.eq p0, r4, r11")                    # same PB already loaded -> skip
+    a.i("(p0) ba skip_3d_fl")
     # save_ta_state: stash the TA page counters in the PB descriptor, shifted.
     a.i(f"ldr r4, #{0x700 // 4}")
     a.i(f"ldr r5, #{0x710 // 4}")
@@ -1420,6 +1478,10 @@ def build(a):
     a.i("or r6, r6, r7")                              # pb+0x20 | (pb+0x24 << 16)
     a.i(f"str #{0x660 // 4}, r6")                     # 0x660
     a.dpm_freelist(5, CR_DPM_3D_FL, 0x2)             # 0x664=5, 0x680=1, wait: load the 3D free list
+    a.i(f"st.a.d r17, #{PB_3D_LOADED}, r11 [moe]")   # remember the loaded PB
+    a.i("idf")
+    a.i("wdf")
+    a.label("skip_3d_fl")
     a.consts(D3_CONST)
     a.program(10, D3_RD)
     # D (ta3d-state): 3D flags. 0xa74's 3D field (b22-26) = the render details'
@@ -1449,6 +1511,27 @@ def build(a):
     # client-PD bgblock, and back to 0x101f (EDM=15), with an idf/wdf fence so the
     # writes land before the EDM returns to list 15. HW baseline: DDK c78 at 3D =
     # 0x101f, bg pulse 0x1011->0x101f, c84 never touched.
+    # BANK0: route the 3D requestor to list 1 (the client PD) -- the render needs this
+    # whether or not the EDM writes the bgblock below.
+    a.i("limm r5, #0x101f")                           # BANK0: EDM=15, TA=1, 3D -> list 1
+    a.i(f"str #{0xc78 // 4}, r5")
+    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
+    a.i("wdf")
+    # Background-object PDS block. The EDM writes bgblock[0..2] into the CLIENT PD, which
+    # needs a transient EDM->list-1 pulse (0x1011) -- but that routes the EDM's own
+    # instruction fetch onto the client PD and faults it under secure/no-share (m2
+    # 2026-11-08, KERNEL_CODE+0x20d0). When the host wrote the block on the CPU it sets
+    # HOSTCTL_OPENHC_HOST_BGBLOCK (hostctl word 15 bit 0, UKERNEL.md §4a); skip the whole
+    # pulse + write then (its three words are known at submit). The DDK/srvinit path has
+    # the flag clear and does the pulse. Skipping also avoids the kernel-value loads below,
+    # which the EDM would otherwise read while routed to the client PD.
+    a.i(f"ld.a.d r5, r17, #{SA_HOSTCTL} [moe]")
+    a.i("wdf")
+    a.i(f"ld.a.d r5, r5, #{HC_BGBLOCK} [moe]")        # hostctl word 15 (+0x3c)
+    a.i("wdf")
+    a.i("and r5, r5, #1")                             # bit 0 = HOSTCTL_OPENHC_HOST_BGBLOCK
+    a.i("test.and.ne p0, r5, r5")
+    a.i("(p0) ba skip_bgblock")                       # host wrote it -> skip the EDM pulse
     a.i(f"ld.a.d r12, r17, #{SC_RTENTRY} [moe]")      # RT-data entry
     a.i(f"ld.a.d r9, r17, #{SC_CMD} [moe]")           # TA command base
     a.i("wdf")
@@ -1460,10 +1543,6 @@ def build(a):
     a.i("wdf")
     a.i("imae r6, r7, #4, r6 [t2=u32]")               # list base + 4*index
     a.i("ld.a.d r6, r6, #0 [moe]")                    # word2 (bg PDS primary)
-    a.i("wdf")
-    a.i("limm r5, #0x101f")                           # BANK0: 3D -> list 1 (client PD)
-    a.i(f"str #{0xc78 // 4}, r5")
-    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
     a.i("wdf")
     a.i("limm r5, #0x1011")                           # BANK0: EDM -> list 1 for the bg stores
     a.i(f"str #{0xc78 // 4}, r5")
@@ -1478,6 +1557,7 @@ def build(a):
     a.i(f"str #{0xc78 // 4}, r5")
     a.i(f"ldr r5, #{0xc78 // 4}")
     a.i("wdf")
+    a.label("skip_bgblock")
     # arm the completion rendezvous: this render is not done until BOTH the 3D writeout
     # (pixel_done, 0x40000 + ISP idle) and the DPM free (free_done, 0x1) have happened.
     a.i("limm r5, #1")
@@ -1682,14 +1762,21 @@ def build(a):
     a.i("ld.a.d r3, r2, #1 [moe]")                       # read offset (this command)
     a.i("wdf")
     a.i("imae r6, r3, #1, r5 [t2=u32]")                  # r6 = transfer command base
-    # destination sync: write the write-ops-complete value the kernel put in the
-    # command (word 0x16c) to the sync's complete-address (word 0x168), so the
-    # client sees the blit done (docs/TEX.md). (The transfer's other sync-heap
-    # objects come from the kick's sync-handle list -- the next increment.)
-    a.i("ld.a.d r7, r6, #%d [moe]" % XFER_SYNC_ADDR)     # destination sync address
-    a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # write-ops-complete value
+    # status word (sCtlStatusInfo: command 0x168 = address, 0x16c = value). Write it when
+    # present. This is NOT the transfer's done signal -- that's asDstSyncs[0] below (§10) --
+    # it's optional and a blit can leave 0x168 = 0. GUARD it: writing to a null status
+    # address faults at ~0 and never reaches the dst-sync write (m2 2026-11-08: BIF_FAULT
+    # 0x0f, transfer CCB not advanced, dst sync unwritten -- the status write was the null
+    # deref; the blit's 0x168 was 0 while its real sync is 0x140 = 0x2d000004).
+    a.i("ld.a.d r7, r6, #%d [moe]" % XFER_SYNC_ADDR)     # status address (cmd+0x168)
+    a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # status value (cmd+0x16c)
     a.i("wdf")
+    a.i("test.and.eq p0, r7, r7")                        # null status address -> skip
+    a.i("(p0) ba xfer_status_done")
     a.i("st.a.d r7, #0, r8 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.label("xfer_status_done")
     # asDstSyncs[0] (SGXMKIF_TRANSFERCMD_SHARED word 0x134): set its write-ops-complete to
     # write-ops-pending + 1, the done signal powervr_sgx (and the DDK) actually poll for a
     # transfer -- the status word above (0x168/0x16c) is NOT it (UKERNEL.md §10). Layout:
@@ -1717,7 +1804,20 @@ def build(a):
     a.i("wdf")
     a.label("raise_host_irq")
     a.i(f"limm r0, #{SW_EVENT}")
-    a.i(f"str #{CR_EVENT_STATUS // 4}, r0")
+    a.i(f"str #{CR_EVENT_STATUS // 4}, r0")        # raise the host IRQ
+    # After a completion (render_complete/xfer_done just cleared SC_INFLIGHT/SC_XFER),
+    # service a command the host left queued in the kernel CCB right now instead of waiting
+    # for the next 1 kHz timer tick (ta3d-state: the DDK re-enters kick after completion).
+    # Safe here, NOT in kick_end: the completion cleared the in-flight markers, so k_ta
+    # won't defer the queued kick and there is no defer-loop; and the idle/active-power
+    # path reaches this label only with an empty CCB (WO == RO), so it is a no-op there.
+    a.i(f"ld.a.d r5, r17, #{SA_KCCBCTL} [moe]")
+    a.i("wdf")
+    a.i("ld.a.d r6, r5, #0 [moe]")                 # kernel CCB write offset
+    a.i("ld.a.d r7, r5, #1 [moe]")                 # read offset
+    a.i("wdf")
+    a.i("test.xor.ne p0, r6, r7")                  # WO != RO -> a command is queued
+    a.i("(p0) ba kick")                            # drain it now, don't wait a tick
     a.end()
 
     return a

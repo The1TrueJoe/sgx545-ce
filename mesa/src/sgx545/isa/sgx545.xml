@@ -220,7 +220,7 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="0" display=".byte"/>
 	<value val="1" display=".word"/>
 	<value val="2" display=".dword"/>
-	<value val="3" display=".type3"/>
+	<value val="3" display=".tm3"/>
 </enum>
 
 <enum name="#smp-dim">
@@ -269,7 +269,7 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="0" display=".d"/>
 	<value val="1" display=".w"/>
 	<value val="2" display=".b"/>
-	<value val="3" display=".size3"/>
+	<value val="3" display=".q"/>
 </enum>
 
 <enum name="#eld-size">
@@ -647,6 +647,20 @@ bank h0-1, extension h19, rebuilt as NUM | BANK << 7 | EXT << 9.
 </bitset>
 
 <bitset name="#dst.idx" extends="#dst">
+	<doc>
+		Not halved under format select: a bare .f16 (or .c10) only sets
+		bit 6 (ISA.md "Format select and format control": idx16.f16).
+	</doc>
+	<override expr="#m-sel-f16">
+		<display>idx{LNUM}.f16</display>
+		<field name="LNUM" low="0" high="5" type="uint"/>
+		<field name="F" pos="6" type="bool"/>
+	</override>
+	<override expr="#m-sel-c10">
+		<display>idx{LNUM}.c10</display>
+		<field name="LNUM" low="0" high="5" type="uint"/>
+		<field name="F" pos="6" type="bool"/>
+	</override>
 	<display>idx{NUM}</display>
 	<field name="NUM" low="0" high="6" type="uint"/>
 	<pattern low="7" high="9">110</pattern>
@@ -1224,8 +1238,8 @@ NUM | BANK << 7 | EXT << 8.
 	<encode>
 		<map name="F16D">src->f16d</map>
 		<map name="CHAN">src->chan</map>
-		<map name="F16">src->src[1].fmt == SGX_ISA_FMT_F16</map>
-		<map name="C10">src->src[1].fmt == SGX_ISA_FMT_C10</map>
+		<map name="F16">src->sf16</map>
+		<map name="C10">src->sc10</map>
 	</encode>
 </bitset>
 
@@ -1747,22 +1761,25 @@ NUM | BANK << 7 | EXT << 8.
 </bitset>
 
 <bitset name="rlp" extends="#instruction">
-	<doc>rlp dst, src1, pN: the predicate in l14-15, src2 the unused pattern.</doc>
+	<doc>
+		rlp dst, src1, pN: the predicate in l14-15. src2's slot read as one
+		10-bit value is unused2, 0x300 (the unused pattern) by default.
+	</doc>
 	<display>
-		{PRED}{NAME} {DST}, {SRC1}, {PN} [{SKIPINV} {NOSCHED} {SYNCS} {END} {RM} {PARTIAL}]
+		{PRED}{NAME} {DST}, {SRC1}, {PN} [{SKIPINV} {NOSCHED} {SYNCS} {END} {RM} {PARTIAL} {UNUSED2}]
 	</display>
-	<pattern low="0" high="6">0000000</pattern>
+	<field name="U2N" low="0" high="6" type="uint"/>
 	<field name="S1N" low="7" high="13" type="uint"/>
 	<field name="PN" low="14" high="15" type="#pn"/>
 	<pattern low="16" high="20">00000</pattern>
 	<field name="DN" low="21" high="27" type="uint"/>
-	<pattern low="28" high="29">10</pattern>
+	<field name="U2B" low="28" high="29" type="uint"/>
 	<field name="S1B" low="30" high="31" type="uint"/>
 	<field name="DB" low="32" high="33" type="uint"/>
 	<field name="PARTIAL" pos="34" type="bool" display=" partial"/>
 	<pattern low="35" high="43">000000000</pattern>
 	<field name="RPTMASK" low="44" high="47" type="uint"/>
-	<pattern pos="48">1</pattern>
+	<field name="U2E" pos="48" type="uint"/>
 	<field name="S1E" pos="49" type="uint"/>
 	<field name="END" pos="50" type="bool" display=" end"/>
 	<field name="DE" pos="51" type="uint"/>
@@ -1774,6 +1791,9 @@ NUM | BANK << 7 | EXT << 8.
 	<pattern low="59" high="63">01110</pattern>
 	<derived name="RM" type="#rm1">
 		<expr>{RPTMASK} | ({RCNT} &lt;&lt; 4)</expr>
+	</derived>
+	<derived name="UNUSED2" type="custom" width="10">
+		<expr>{U2N} | ({U2B} &lt;&lt; 7) | ({U2E} &lt;&lt; 9)</expr>
 	</derived>
 	<derived name="MODE0" expr="#zero" type="uint"/>
 	<derived name="DST" type="#dst" width="10">
@@ -1787,6 +1807,9 @@ NUM | BANK << 7 | EXT << 8.
 	<encode>
 		<map name="PN">src->pdst</map>
 		<map name="PARTIAL">src->partial</map>
+		<map name="U2N">SGX_UNUSED2() &amp; 0x7f</map>
+		<map name="U2B">(SGX_UNUSED2() &gt;&gt; 7) &amp; 3</map>
+		<map name="U2E">SGX_UNUSED2() &gt;&gt; 9</map>
 	</encode>
 </bitset>
 
@@ -3277,10 +3300,11 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 </enum>
 
 <enum name="#fmt-u8">
+	<doc>A mnemonic suffix (ISA.md "hw 16 / 17 / 1a": bilin.s8, firh.s8).</doc>
 	<value val="0" display=""/>
-	<value val="1" display=" fmt=s8"/>
-	<value val="2" display=" fmt=o8"/>
-	<value val="3" display=" fmt=x3"/>
+	<value val="1" display=".s8"/>
+	<value val="2" display=".o8"/>
+	<value val="3" display=".fmt3"/>
 </enum>
 
 <enum name="#ima32-hi">
@@ -3316,7 +3340,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	<value val="0" display=".fmad"/>
 	<value val="1" display=".fmad16"/>
 	<value val="2" display=".fmsa"/>
-	<value val="3" display=".fadm"/>
+	<value val="3" display=".fsubflr"/>
 	<value val="4" display=".fmaxmin"/>
 	<value val="5" display=".frcp"/>
 	<value val="6" display=".frsq"/>
@@ -3884,7 +3908,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 
 <bitset name="bilin" extends="#hw16">
 	<display>
-		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {FMTX} {ILEAVE} {SRC23} {DST23} {IRND}]
+		{PRED}{NAME}{FMTX} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {ILEAVE} {SRC23} {DST23} {IRND}]
 	</display>
 	<field name="S0N" low="14" high="20" type="uint"/>
 	<field name="S0B" pos="34" type="uint"/>
@@ -3908,7 +3932,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 		src1 has no extension bit.
 	</doc>
 	<display>
-		{PRED}ssum16 {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {FMTX} {X1B} {X1C} {X1D} {NF16}]
+		{PRED}ssum16{FMTX} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {X1B} {X1C} {X1D} {NF16}]
 	</display>
 	<field name="S0N" low="14" high="20" type="uint"/>
 	<pattern low="34" high="38">00000</pattern>
@@ -3995,7 +4019,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 		0-1 h10-11, 2-3 h14-15, 4 h24 (printed raw). Repeat h12-13.
 	</doc>
 	<display>
-		{PRED}{NAME} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {FMTX} {A5} {COEF} {SHIFT} {A8}]
+		{PRED}{NAME}{FMTX} {DST}, {SRC0}, {SRC1}, {SRC2} [{INT_FLAGS} {RPT} {A5} {COEF} {SHIFT} {A8}]
 	</display>
 	<field name="S0N" low="14" high="20" type="uint"/>
 	<pattern pos="34">0</pattern>
@@ -4026,7 +4050,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 		bits 2-3 move to h0-1; repeat h12-14; h19 = f2_27.
 	</doc>
 	<display>
-		{PRED}{NAME} i{DN}, {SRC0}, {SRC1}, {SRC2} [{SKIPINV} {NOSCHED} {END} {RPT} {FMTX} {A5} {COEF} {SHIFT} {A8} {F2_27}]
+		{PRED}{NAME}{FMTX} i{DN}, {SRC0}, {SRC1}, {SRC2} [{SKIPINV} {NOSCHED} {END} {RPT} {A5} {COEF} {SHIFT} {A8} {F2_27}]
 	</display>
 	<field name="S2N" low="0" high="6" type="uint"/>
 	<field name="S1N" low="7" high="13" type="uint"/>

@@ -6,6 +6,7 @@
 /* Text notation of the integer / fixed-point / dual-issue classes. */
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -94,7 +95,7 @@ static const char *const fmt8[] = { "u8", "s8", "o8", "x3" };
 static const char *const imae_t2[] = { "u16", "s16", "u32", "x3" };
 static const char *const ii01[] = { "i0", "i1" };
 static const char *const fdual_pri[] = { "fmad", "mov", "fadm", "fmsa", "fddp", "fminmax", "ima32", "fssq" };
-static const char *const fdual_sec[] = { "fmad", "fmad16", "fmsa", "fadm", "fmaxmin", "frcp", "frsq", "fexp2",
+static const char *const fdual_sec[] = { "fmad", "fmad16", "fmsa", "fsubflr", "fmaxmin", "frcp", "frsq", "fexp2",
                                          "flog2", "fsin", "fcos", "fadd", "fsub", "fmul", "ima32", "mov" };
 static const char *const fdual_sd[] = { "i0", "i1", "i2", "i0s0" };
 static const char *const fdual_sb[] = { "i0", "i1", "i2", "src1" };
@@ -141,6 +142,9 @@ sgx545_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
    if (!strcmp(parts[0], "fdual")) {
       int p = nparts == 3 ? LOOKUP(fdual_pri, parts[1]) : -1;
       int s = nparts == 3 ? LOOKUP(fdual_sec, parts[2]) : -1;
+      /* sec 3 is fsubflr; USEASM's fadm and ffrc encode as it (ISA.md "Dual issue") */
+      if (nparts == 3 && (!strcmp(parts[2], "fadm") || !strcmp(parts[2], "ffrc")))
+         s = 3;
       if (p < 0 || s < 0)
          return false;
       I->opc = SGX_ISA_OPC_FDUAL;
@@ -153,14 +157,26 @@ sgx545_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
    for (unsigned i = 0; i < ARRAY_LEN(forms); i++) {
       if (strcmp(parts[0], forms[i].name))
          continue;
+      enum sgx_isa_opc opc = forms[i].opc;
+      bool fmtx = opc == SGX_ISA_OPC_BILIN || opc == SGX_ISA_OPC_SSUM16 ||
+                  opc == SGX_ISA_OPC_FIRV || opc == SGX_ISA_OPC_FIRH;
       if (nparts == 2 && !strcmp(parts[1], "sgn") &&
-          (forms[i].opc == SGX_ISA_OPC_IMA16 || forms[i].opc == SGX_ISA_OPC_IMAE ||
-           forms[i].opc == SGX_ISA_OPC_IMA32)) {
+          (opc == SGX_ISA_OPC_IMA16 || opc == SGX_ISA_OPC_IMAE || opc == SGX_ISA_OPC_IMA32)) {
          I->sgn = true;
+      } else if (nparts == 2 && fmtx) {
+         /* the format as a suffix: bilin.s8, ssum16.o8, firh.s8 (ISA.md
+          * "hw 16 / 17 / 1a"); ssum16's picks the form */
+         static const char *const sfx[] = { "u8", "s8", "o8", "fmt3" };
+         int f = LOOKUP(sfx, parts[1]);
+         if (f <= 0 || (f == 3 && opc == SGX_ISA_OPC_SSUM16))
+            return false;
+         I->ifmt = f;
+         if (opc == SGX_ISA_OPC_SSUM16)
+            opc = f == 1 ? SGX_ISA_OPC_SSUM16_S8 : SGX_ISA_OPC_SSUM16_O8;
       } else if (nparts != 1) {
          return false;
       }
-      I->opc = forms[i].opc;
+      I->opc = opc;
       I->mask = forms[i].mask;
       *pat = forms[i].ops;
       return true;
@@ -211,6 +227,23 @@ set_num(const char *v, uint8_t *out)
    return true;
 }
 
+/*
+ * efo's i, a and m as dis.py prints them, "i0=m0,i1=m1", into the table's
+ * "m0/m1" (ISA.md "Other spellings asm.py takes"); NULL if it isn't that form.
+ */
+static const char *
+efo_pair(const char *v, char *buf, size_t size)
+{
+   const char *comma = v ? strchr(v, ',') : NULL;
+   const char *e0 = v ? strchr(v, '=') : NULL;
+   const char *e1 = comma ? strchr(comma, '=') : NULL;
+
+   if (!comma || !e0 || e0 > comma || !e1)
+      return NULL;
+   snprintf(buf, size, "%.*s/%s", (int)(comma - e0 - 1), e0 + 1, e1 + 1);
+   return buf;
+}
+
 bool
 sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
                         const char *value)
@@ -233,6 +266,11 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       F(x38), F(s0f13), F(f2_27), F(wi0), F(wi1), F(a0lneg), F(a0rneg), F(f3_10),
 #undef F
    };
+   /* fdual's src1 / src2 negates as bracket flags (or -x on the operand) */
+   if (o == SGX_ISA_OPC_FDUAL && !value && (!strcmp(name, "neg1") || !strcmp(name, "neg2"))) {
+      I->src[name[3] - '0'].neg = true;
+      return true;
+   }
    if (!value) {
       for (unsigned i = 0; i < ARRAY_LEN(flags); i++) {
          if (!strcmp(name, flags[i].name)) {
@@ -285,10 +323,15 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       return SET_SEL(lrp1_l2, l2, l2c);
    if (!strcmp(name, "cs")) {
       if (o == SGX_ISA_OPC_LRP1) return SET_ENUM(lrp1_cs, lcs);
+      /* dot's scales: x4, or cx4 / ax2 (ISA.md "Other spellings") */
+      if (dot && value && value[0] == 'c' && value[1] == 'x') value++;
       if (dot) return SET_ENUM(dot_scale, dcs);
    }
-   if (!strcmp(name, "as") && dot)
+   if (!strcmp(name, "as") && dot) {
+      if (value && value[0] == 'a' && value[1] == 'x')
+         value++;
       return SET_ENUM(dot_scale, das);
+   }
    if (!strcmp(name, "p") && o == SGX_ISA_OPC_SOP3X)
       return SET_ENUM(sop3x_p, p);
    if (!strcmp(name, "cop"))
@@ -297,12 +340,18 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       return SET_ENUM(ops4, aop);
    if (!strcmp(name, "d") && o == SGX_ISA_OPC_EFO)
       return SET_ENUM(efo_d, efo_d);
-   if (!strcmp(name, "i") && o == SGX_ISA_OPC_EFO)
-      return SET_ENUM(efo_i, efo_i);
-   if (!strcmp(name, "a") && o == SGX_ISA_OPC_EFO)
-      return SET_ENUM(efo_a, efo_a);
-   if (!strcmp(name, "m") && o == SGX_ISA_OPC_EFO)
+   if (o == SGX_ISA_OPC_EFO && (!strcmp(name, "i") || !strcmp(name, "a") || !strcmp(name, "m"))) {
+      char buf[64];
+      const char *pair = efo_pair(value, buf, sizeof(buf));
+
+      if (pair)
+         value = pair;
+      if (!strcmp(name, "i"))
+         return SET_ENUM(efo_i, efo_i);
+      if (!strcmp(name, "a"))
+         return SET_ENUM(efo_a, efo_a);
       return SET_ENUM(efo_m, efo_m);
+   }
    if (!strcmp(name, "f1"))
       return set_enum(fmt8, 3, value, &I->f1) && ++I->f1;
    if (!strcmp(name, "f2"))

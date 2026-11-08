@@ -1355,9 +1355,260 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
 }
 
 
+/* ------------------------------------------------------------------------
+ * co-issue: a sum of vector * scalar terms (mat4 * v: columns times v's
+ * components, plus a translation) as efos, two result lanes per instruction,
+ * as libusc compiles it (v_mvp). Per lane pair (l0, l1) and term t:
+ *    efo d, M_t[l0], M_t[l1], s_t   m0 = s0*s2, m1 = s1*s2
+ * the first with I0/I1 = m0/m1, the others with a0 = m0 + i0, a1 = i1 + m1
+ * into I0/I1; the last one's d = a0 is lane l0, and lane l1 is I1, moved out
+ * by the next instruction. All but the last efo are nosched (internal
+ * registers don't survive a deschedule), and no instruction reads an internal
+ * register the same word writes (ISA.md "efo", hwt_p12). */
+
+struct efo_term {
+   nir_alu_instr *alu;
+   int m, s;            /* the vector source, the scalar (-1: the constant 1) */
+};
+
+struct efo_chain {
+   unsigned n;
+   struct efo_term t[8];    /* innermost first */
+};
+
+/* the odd lane's fmads: one per product, an addend on the first, any other
+ * addend one more */
+static unsigned
+efo_odd(const struct efo_chain *ch)
+{
+   unsigned nmul = 0, nadd = 0;
+   for (unsigned k = 0; k < ch->n; k++)
+      if (ch->t[k].s >= 0)
+         nmul++;
+      else
+         nadd++;
+   return nmul + (nadd > 1 ? nadd - 1 : 0);
+}
+
+static nir_alu_instr *
+alu_def(nir_src *src)
+{
+   nir_instr *i = nir_def_instr(src->ssa);
+   return i->type == nir_instr_type_alu ? nir_instr_as_alu(i) : NULL;
+}
+
+/* a source the same component of in every lane */
+static bool
+efo_splat(nir_alu_instr *alu, unsigned j)
+{
+   for (unsigned k = 1; k < alu->def.num_components; k++)
+      if (alu->src[j].swizzle[k] != alu->src[j].swizzle[0])
+         return false;
+   return true;
+}
+
+/* the next node of a chain below cur: an f32 fmul / ffma / fadd of the same
+ * width that only cur reads */
+static nir_alu_instr *
+efo_node(nir_alu_instr *cur, unsigned j)
+{
+   nir_alu_instr *a = alu_def(&cur->src[j].src);
+   if (!a || a->def.bit_size != 32 || a->def.num_components != cur->def.num_components ||
+       !list_is_singular(&a->def.uses))
+      return NULL;
+   for (unsigned k = 0; k < cur->def.num_components; k++)
+      if (cur->src[j].swizzle[k] != k)
+         return NULL;
+   if (a->op != nir_op_fmul && a->op != nir_op_ffma && a->op != nir_op_fmad && a->op != nir_op_fadd)
+      return NULL;
+   return a;
+}
+
+/* a vector operand that sits in a bank already (a uniform at a constant
+ * offset, an attribute, a varying): the efos read every term once per lane
+ * pair, so a computed one would stay live in temporaries over all of them */
+static bool
+efo_banked(nir_alu_instr *alu, unsigned j)
+{
+   nir_instr *i = nir_def_instr(alu->src[j].src.ssa);
+   if (i->type != nir_instr_type_intrinsic)
+      return false;
+   nir_intrinsic_instr *in = nir_instr_as_intrinsic(i);
+   switch (in->intrinsic) {
+   case nir_intrinsic_load_uniform:
+      return nir_src_is_const(*nir_get_io_offset_src(in));
+   case nir_intrinsic_load_input:
+   case nir_intrinsic_load_interpolated_input:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static bool
+efo_match(nir_alu_instr *root, struct efo_chain *ch)
+{
+   struct efo_term rev[8];
+   unsigned n = 0;
+   nir_alu_instr *cur = root;
+   while (cur && n < 8) {
+      nir_alu_instr *next = NULL;
+      if (cur->op == nir_op_fmul || cur->op == nir_op_ffma || cur->op == nir_op_fmad) {
+         int sp = efo_splat(cur, 1) ? 1 : efo_splat(cur, 0) ? 0 : -1;
+         if (sp < 0)
+            return false;
+         rev[n++] = (struct efo_term){ cur, 1 - sp, sp };
+         if (cur->op != nir_op_fmul) {
+            next = efo_node(cur, 2);
+            if (!next) {
+               if (n >= 8)
+                  return false;
+               rev[n++] = (struct efo_term){ cur, 2, -1 };   /* + src2 */
+            }
+         }
+      } else if (cur->op == nir_op_fadd) {
+         nir_alu_instr *a = efo_node(cur, 0), *b = efo_node(cur, 1);
+         if (a && (a->op == nir_op_fmul || a->op == nir_op_ffma || a->op == nir_op_fmad)) {
+            rev[n++] = (struct efo_term){ cur, 1, -1 };
+            next = a;
+         } else if (b && (b->op == nir_op_fmul || b->op == nir_op_ffma || b->op == nir_op_fmad)) {
+            rev[n++] = (struct efo_term){ cur, 0, -1 };
+            next = b;
+         } else {
+            return false;
+         }
+      } else {
+         return false;
+      }
+      cur = next;
+   }
+   if (cur || n < 2)
+      return false;
+   for (unsigned k = 0; k < n; k++)
+      if (!efo_banked(rev[k].alu, rev[k].m))
+         return false;
+   ch->n = n;
+   for (unsigned k = 0; k < n; k++)
+      ch->t[k] = rev[n - 1 - k];
+   return true;
+}
+
+static void
+find_efo(struct sgx_ctx *c, nir_function_impl *impl)
+{
+   nir_foreach_block(b, impl) {
+      nir_foreach_instr_reverse(instr, b) {
+         if (instr->type != nir_instr_type_alu || _mesa_set_search(c->skip, instr))
+            continue;
+         nir_alu_instr *root = nir_instr_as_alu(instr);
+         if (root->def.bit_size != 32 || root->def.num_components < 2 ||
+             (root->op != nir_op_ffma && root->op != nir_op_fmad && root->op != nir_op_fadd))
+            continue;
+         nir_legacy_alu_dest ld = nir_legacy_chase_alu_dest(&root->def);
+         if (!ld.dest.is_ssa || ld.fsat)
+            continue;
+         struct efo_chain *ch = rzalloc(c, struct efo_chain);
+         if (!efo_match(root, ch))
+            continue;
+         /* only where it saves slots: the fmads it replaces repeat nc times
+          * each, the efos take n + 1 per lane pair */
+         unsigned nc = root->def.num_components, odd = efo_odd(ch);
+         if ((nc / 2) * (ch->n + 1) + (nc & 1) * odd >= odd * nc)
+            continue;
+         for (unsigned k = 0; k < ch->n; k++)
+            if (ch->t[k].alu != root)
+               _mesa_set_add(c->skip, &ch->t[k].alu->instr);
+         _mesa_hash_table_insert(c->efo, root, ch);
+      }
+   }
+}
+
+/* a term's operand for lane l (its scalar is lane-independent) */
+static struct sgx_ref
+efo_opd(struct sgx_ctx *c, const struct efo_term *t, bool scalar, unsigned l)
+{
+   if (scalar && t->s < 0)
+      return ref(SGX_F_K, 0x3f800000);
+   return const_f32(alu_src(c, t->alu, scalar ? t->s : t->m, scalar ? 0 : l));
+}
+
+static bool
+emit_efo(struct sgx_ctx *c, nir_alu_instr *root, const struct efo_chain *ch)
+{
+   unsigned nc = root->def.num_components;
+   /* every operand plain f32 (efo's F16 enable is off) */
+   for (unsigned k = 0; k < ch->n; k++) {
+      for (unsigned l = 0; l < nc; l++) {
+         struct sgx_ref a = efo_opd(c, &ch->t[k], false, l), b = efo_opd(c, &ch->t[k], true, l);
+         if (a.h16 || b.h16 || a.abs || b.abs || a.neg || b.neg || a.file == SGX_F_K)
+            return false;
+      }
+   }
+   unsigned odd = efo_odd(ch), w = new_vreg(c, nc);
+   for (unsigned l0 = 0; l0 + 1 < nc; l0 += 2) {
+      unsigned l1 = l0 + 1;
+      for (unsigned k = 0; k < ch->n; k++) {
+         struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_EFO);
+         i->nops = 4;
+         i->op[0] = vref(w, l0);
+         i->op[1] = efo_opd(c, &ch->t[k], false, l0);
+         i->op[2] = efo_opd(c, &ch->t[k], false, l1);
+         i->op[3] = efo_opd(c, &ch->t[k], true, 0);
+         fld(i, SGX_FLD_EFO_D, 2);                 /* d = a0 */
+         fld(i, SGX_FLD_EFO_M, 0);                 /* m0 = s0*s2, m1 = s1*s2 */
+         fld(i, SGX_FLD_EFO_I, k ? 0 : 2);         /* I0/I1 = a0/a1, first m0/m1 */
+         fld(i, SGX_FLD_EFO_A, k ? 2 : 3);         /* a0 = m0 + i0, a1 = i1 + m1 */
+         fld(i, SGX_FLD_WI0, 1);
+         fld(i, SGX_FLD_WI1, 1);
+         if (k + 1 < ch->n)
+            fld(i, SGX_FLD_NOSCHED, 1);
+         emit(c, i);
+      }
+      struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, SGX_OP_MOV);
+      m->nops = 2;
+      m->op[0] = vref(w, l1);
+      m->op[1] = ref(SGX_F_I, 1);
+      emit(c, m);
+   }
+   if (nc & 1) {
+      /* the odd lane: fmads summed in a temporary, the first on an addend */
+      unsigned l = nc - 1, t = new_vreg(c, 1), left = odd;
+      int first_add = -1;
+      for (unsigned k = 0; k < ch->n && first_add < 0; k++)
+         if (ch->t[k].s < 0)
+            first_add = k;
+      struct sgx_ref acc = first_add >= 0 ? efo_opd(c, &ch->t[first_add], false, l) : ref(SGX_F_K, 0);
+      for (unsigned k = 0; k < ch->n; k++) {
+         if ((int)k == first_add)
+            continue;
+         bool mul = ch->t[k].s >= 0;
+         struct sgx_ref d[4] = { --left ? vref(t, 0) : vref(w, l) },
+                        s3[3][4] = { { mul ? efo_opd(c, &ch->t[k], true, 0) : efo_opd(c, &ch->t[k], false, l) },
+                                     { mul ? efo_opd(c, &ch->t[k], false, l) : ref(SGX_F_K, 0x3f800000) },
+                                     { acc } };
+         emit_runs(c, SGX_OP_FMAD, 1, d, 3, s3, &NOF, 0);
+         acc = vref(t, 0);
+      }
+   }
+   c->vals[root->def.index].kind = VAL_V;
+   c->vals[root->def.index].n = w;
+   c->vals[root->def.index].comp = 0;
+   return true;
+}
+
 static void
 emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
 {
+   struct hash_entry *he = _mesa_hash_table_search(c->efo, alu);
+   if (he) {
+      if (emit_efo(c, alu, he->data))
+         return;
+      /* not as efos after all: the chain's skipped nodes, innermost first */
+      const struct efo_chain *ch = he->data;
+      for (unsigned k = 0; k < ch->n; k++)
+         if (ch->t[k].alu != alu && (k == 0 || ch->t[k].alu != ch->t[k - 1].alu))
+            emit_alu(c, ch->t[k].alu);
+   }
    if ((alu->op == nir_op_fneg || alu->op == nir_op_fabs) && nir_legacy_float_mod_folds(alu))
       return;
    /* (the F16 path doesn't take a folded fsat on its destination) */
@@ -3739,6 +3990,42 @@ reg_of(const struct sgx_ctx *c, const struct sgx_ref *r, unsigned *file, unsigne
 
 /* a mov whose source and destination landed in the same registers (a value
  * placed where its output goes) */
+static int32_t
+fld_of(const struct sgx_ins *i, enum sgx_field id)
+{
+   for (unsigned k = 0; k < i->nfld; k++)
+      if (i->fld[k].id == id)
+         return i->fld[k].v;
+   return 0;
+}
+
+/* an efo run's internal registers don't survive a deschedule: whatever got
+ * put between its efos (an operand's copy, a uniform's load) goes in front of
+ * the run, so only nosched efos sit between the first and the last */
+static void
+efo_runs(struct sgx_ctx *c)
+{
+   struct list_head *l = c->ins.next;
+   while (l != &c->ins) {
+      struct sgx_ins *first = list_entry(l, struct sgx_ins, link);
+      l = l->next;
+      if (first->kind != SGX_INS_ALU || first->form != SGX_OP_EFO || !fld_of(first, SGX_FLD_NOSCHED))
+         continue;
+      while (l != &c->ins) {
+         struct sgx_ins *n = list_entry(l, struct sgx_ins, link);
+         l = l->next;
+         if (n->kind == SGX_INS_ALU && n->form == SGX_OP_EFO) {
+            if (!fld_of(n, SGX_FLD_NOSCHED))
+               break;
+            continue;
+         }
+         assert(n->kind == SGX_INS_ALU);
+         list_del(&n->link);
+         insert_before(first, n);
+      }
+   }
+}
+
 static void
 drop_self_moves(struct sgx_ctx *c)
 {
@@ -3954,6 +4241,53 @@ struct loop_span {
    int head, tail;
 };
 
+/* place_in_o's candidates: ok[v], every reference of v can name O;
+ * inplace[v], the output register an explicit output write reading v, aligned,
+ * where v dies, puts it in (-1: none) */
+static void
+o_candidates(struct sgx_ctx *c, unsigned nv, int *inplace, bool *ok)
+{
+   /* the in-place step: an explicit output write reading, aligned, a vreg
+    * that dies there */
+   for (unsigned v = 0; v < nv; v++)
+      inplace[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      const struct sgx_ref *d = &i->op[0];
+      if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred || d->file != SGX_F_O || !d->step ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      for (unsigned k = 1; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || r->h16 || (i->rpt > 1 && !r->step) || r->comp > d->n ||
+             sgx_vreg(c, r->n)->last != (int)(2 * i->ip))
+            continue;
+         bool good = true;
+         for (unsigned j = 1; j < i->nops && good; j++)
+            if (j != k && i->op[j].file == SGX_F_V && i->op[j].n == r->n)
+               good = i->op[j].comp == r->comp && i->op[j].step == r->step && !i->op[j].h16;
+         if (good)
+            inplace[r->n] = d->n - r->comp;
+         break;
+      }
+   }
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      ok[v] = r->first >= 0 && !r->pa && !r->half && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
+              (int)v != c->face_f32;
+   }
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv)
+            continue;
+         struct sgx_ref x = *r;
+         x.file = SGX_F_O;
+         if (i->kind != SGX_INS_ALU || r->h16 || !slot_ok(i->form, k, &x))
+            ok[r->n] = false;
+      }
+   }
+}
+
 /* Vertex shader: temporaries in output registers before the program's
  * first write of them (a mat4 * v accumulator in the o0-o3 it ends in, in
  * place at the last step, as coalesce_repeats). Outputs are read back like
@@ -3987,47 +4321,9 @@ place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       for (unsigned l = 0; l < nloops; l++)
          if (from[p] > loops[l].head && from[p] <= loops[l].tail)
             from[p] = loops[l].head;
-   /* the in-place step: an explicit output write reading, aligned, a vreg
-    * that dies there */
    int *inplace = malloc(nv * sizeof(int));
-   for (unsigned v = 0; v < nv; v++)
-      inplace[v] = -1;
-   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
-      const struct sgx_ref *d = &i->op[0];
-      if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred || d->file != SGX_F_O || !d->step ||
-          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
-         continue;
-      for (unsigned k = 1; k < i->nops; k++) {
-         const struct sgx_ref *r = &i->op[k];
-         if (r->file != SGX_F_V || r->n >= nv || r->h16 || (i->rpt > 1 && !r->step) || r->comp > d->n ||
-             sgx_vreg(c, r->n)->last != (int)(2 * i->ip))
-            continue;
-         bool good = true;
-         for (unsigned j = 1; j < i->nops && good; j++)
-            if (j != k && i->op[j].file == SGX_F_V && i->op[j].n == r->n)
-               good = i->op[j].comp == r->comp && i->op[j].step == r->step && !i->op[j].h16;
-         if (good)
-            inplace[r->n] = d->n - r->comp;
-         break;
-      }
-   }
    bool *ok = calloc(nv, sizeof(bool));
-   for (unsigned v = 0; v < nv; v++) {
-      struct sgx_vreg *r = sgx_vreg(c, v);
-      ok[v] = r->first >= 0 && !r->pa && !r->half && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
-              (int)v != c->face_f32;
-   }
-   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
-      for (unsigned k = 0; k < i->nops; k++) {
-         const struct sgx_ref *r = &i->op[k];
-         if (r->file != SGX_F_V || r->n >= nv)
-            continue;
-         struct sgx_ref x = *r;
-         x.file = SGX_F_O;
-         if (i->kind != SGX_INS_ALU || r->h16 || !slot_ok(i->form, k, &x))
-            ok[r->n] = false;
-      }
-   }
+   o_candidates(c, nv, inplace, ok);
    /* what the placed vregs hold, per register */
    BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, MAX2(no, 1) * BITSET_WORDS(end));
 #define OBUSY(p) (busy + (p) * BITSET_WORDS(end))
@@ -4157,11 +4453,22 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       if (first_w[p] >= 0)
          BITSET_SET_RANGE(BUSY(p), first_w[p], end - 1);
    }
-   /* a vreg every reference of which can name PA */
+   /* a vreg every reference of which can name PA, but not one an output
+    * write would put in place (place_in_o) */
    bool *ok = rzalloc_array(c, bool, nv);
    for (unsigned v = 0; v < nv; v++)
       ok[v] = sgx_vreg(c, v)->first >= 0 && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
               (int)v != c->face_f32;
+   if (c->stage == MESA_SHADER_VERTEX && !sgx_disabled("o")) {
+      int *oin = malloc(nv * sizeof(int));
+      bool *ook = calloc(nv, sizeof(bool));
+      o_candidates(c, nv, oin, ook);
+      for (unsigned v = 0; v < nv; v++)
+         if (oin[v] >= 0 && ook[v])
+            ok[v] = false;
+      free(oin);
+      free(ook);
+   }
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       for (unsigned k = 0; k < i->nops; k++) {
          const struct sgx_ref *r = &i->op[k];
@@ -4927,7 +5234,7 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
       }
    } else if (cls == CLS_TESTMASK) {
       x.mask = (1 << i->rpt) - 1;
-   } else if (form == SGX_OP_FMAD16) {
+   } else if (form == SGX_OP_FMAD16 || form == SGX_OP_EFO || form == SGX_OP_FDUAL) {
       x.rpt = 1;
    }
    if (f16_chan >= 0) {
@@ -4936,6 +5243,11 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
    }
    if (fmt)
       x.fmt = true;
+   const char *hz = sgx545_isa_coissue_hazard(&x);
+   if (hz) {
+      sgx_fail(c, "%s: %s", sgx_form_name(form), hz);
+      return -1;
+   }
    *w = sgx545_isa_encode(&x, NULL);
    return 0;
 }
@@ -4971,6 +5283,9 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
    c->vals = rzalloc_array(c, struct sgx_val, impl->ssa_alloc + 1);
    c->skip = _mesa_pointer_set_create(c);
    c->proj = _mesa_pointer_hash_table_create(c);
+   c->efo = _mesa_pointer_hash_table_create(c);
+   if (!sgx_disabled("coissue"))
+      find_efo(c, impl);
    if (c->stage == MESA_SHADER_FRAGMENT) {
       find_projected(c, impl);
       find_discard(c, impl);
@@ -4993,6 +5308,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts, const struc
       mem_uniforms(c);
    if (!c->failed && c->stage == MESA_SHADER_FRAGMENT)
       mark_helpers(c);
+   if (!c->failed)
+      efo_runs(c);
    if (!c->failed)
       allocate(c);
    if (!c->failed)

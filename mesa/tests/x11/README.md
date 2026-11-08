@@ -10,19 +10,21 @@ gl4es and no shims in the clients. Logs: `docs/log/entries/2026-11-04-0250-*` an
 | `x11-up.sh ROOT start\|stop\|run CMD` | the EA | Xorg in the root (its dev, proc, sys and tmp bound in) and clients against `:0` on our Mesa |
 | `mc-x64-stage.sh ROOT` | the EA | copies Minecraft from the openhc-minecraft install into `ROOT/opt/mc-x64`, read-only on the install's side |
 | `mc-x64.sh` | the EA, in the root | Minecraft 1.7.10 on a 64-bit JVM, as the install's `minecraft-ab` |
+| `ea1-ramboot.sh KERNDIR [ddk\|open]` | the host | RAM-boots an m2-drm `powervr-sgx-ea1-v1` artifact on the EA1 and loads powervr_sgx with the named microkernel |
+| `memdump.c` | the EA | physical memory through `/dev/mem`: the scanout at 0x7fc00000, stride 2944 |
 | `mc-x64-bench.sh ROOT [SECS]` | the EA | `mcbench.sh`'s benchmark world and clicks on this path, FPS and job timeouts |
 
 ## From nothing to a run
 
 1. **Build**, on the Mac:
-   - `python3 -I mesa/tests/x11/mkroot.py ~/.cache/sgx545/x64/root <packages>`, with the
+   - `python3 -I mesa/tests/x11/mkroot.py ~/Documents/GitHub/sgx545-work/<session>/build/x64/root <packages>`, with the
      packages listed in the 0250 log entry, plus `xdotool` for the benchmark's clicks.
    - `X11_SYSROOT=<root> mesa/build.sh x86_64-x11`.
    - Put the build's `lib` and `share` in `<root>/opt/sgx545`. Point
      `share/glvnd/egl_vendor.d/50_mesa.json` at `/opt/sgx545/lib/libEGL_mesa.so.0`.
    - Put a Zulu 8 x64 JRE in `<root>/opt/java/jre8-x64`; check its sha256 against Azul's
      metadata API.
-2. **Boot**: hold `~/.cache/sgx545/locks/ea1.lock`. RAM-boot an m2-drm `powervr-sgx-ea1-v1`
+2. **Boot**: hold `~/Documents/GitHub/sgx545-work/locks/ea1.lock`. RAM-boot an m2-drm `powervr-sgx-ea1-v1`
    artifact with the one-shot `drm/ci/ea-ramboot/S00aramboot`. Load its modules, and load
    `powervr_sgx` with `firmware=powervr_sgx/sgx545-ukernel-1.7.862890.bin` unless the run
    is meant to use the open microkernel: the driver prefers `sgx545-openhc-ukernel.bin`

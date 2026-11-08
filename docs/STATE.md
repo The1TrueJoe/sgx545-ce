@@ -240,10 +240,10 @@ counts from `FUN_00017c20`:
 |---|---|---|
 | 0 | 80c00003 | `0x80000000 \| 0x00c00000 \| prim<<26 \| index count`. prim from libGLESv2's table: triangles 0, lines 1, points 2, strip 3, fan 4 (the bits are `0x4000000·k`) [D] |
 | 1 | 3e517004 | index buffer address; bit 0 is cleared for 16-bit indices, bits 0-1 for 32-bit [D] |
-| 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D] |
+| 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D]. The batch is 16 in every DDK draw: triangles, lines, strips and fans, 3 to 192 indices, 1 to 8 draws a frame (2026-11-08 captures). What it batches is G |
 | 3 | 003fffff | max index (constant) [D] |
-| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. The DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords]. `64 / output dwords` hung the GPU at 12 output dwords (EA3, 2026-10-28, log `2026-10-28-1530-gl4es-ctest`; hardware, not a replay poke) |
-| 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D] |
+| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. For compiled shaders the DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords, log `2026-10-28-1530-gl4es-ctest`; the e1tex capture's 12-output shader runs 10]. `64 / output dwords` hung the GPU at 12 output dwords (EA3, 2026-10-28; hardware, not a replay poke). The DDK's built-in clear programs don't follow the rule: they run 8 per task at 8 and at 4 output dwords (`0x3c008080` and `0x3c008100` in the base4 and vp5 captures), while a 4-output compiled shader in the same captures runs 16. Why the clear uses 8 is G |
+| 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D]. b22-23 is 3 in every DDK draw, over the same range as word 2; what n is stays G |
 
 `glDrawArrays` draws through a static 16-bit identity index buffer.
 
@@ -263,8 +263,39 @@ counts from `FUN_00017c20`:
   picks one of four copies.
 - **The state-emit USSE programs are just `emit` instructions.** They copy
   the DMA'd attributes to the MTE (macro tiling engine). The block is the
-  state; the program only forwards it. (The emit/LIMM opcode class `0x1f`
-  is not in `tools/isa` yet.)
+  state; the program only forwards it. The DDK's, from the base4 capture
+  (`0x3c008700` for 12 dwords, `0x3c008a00` for 18):
+
+      phas.i #0, #0 [wait=7]                         fa440700 00000000
+      nop [nosched]                                  f8000940 00000000
+      test.and.ne p0, #0, #0 [skipinv]               48831280 a00c0000
+      (p0) ld.a.d pa0, pa0, #0 [skipinv rpt=4]       e9833084 a0000000
+      wdf                                            f9200000 00000000
+      mov o0, pa0 [skipinv rcnt rpt=n]               rpt at most 16 per mov: 18 dwords
+                                                     are `rpt=16` then `mov o16, pa16 rpt=2`
+      emit.t3 r0, #0, #0                             fb23c000 a0000000
+      op0xd6 #0                                      ff200000 00000000
+      emit.t1 o0, #0, #0 [end f3_20]                 fb2f4000 a0200000
+
+  [D, capture]. The triangle's block is DMAed as 25 dwords, but its program
+  forwards 18 (pa0-pa17). The clear's DMA and program both cover 12.
+- **The TA terminate's USSE task (`0x3c000000`) is the same program for two
+  dwords** (`mov o0, pa0 [rcnt rpt=2]`). It forwards the two attributes the
+  terminate's DOUTAs wrote: pa0 = 0x2000 (ctrl 0) and pa1 = 0x0016000e
+  (ctrl 0x100, written three times). What those two words mean, and whether
+  the three repeats are needed, is G.
+- **The vertex secondary task (`0x3c000080`) is one instruction,**
+  `phas.i #0, #0 [end wait=7]` (`fa4c0700 00000000`): the DMA itself loads
+  the secondary attributes, and nothing is forwarded.
+- **DOUTD control word** (the DMA's second word), over every DOUTD in the
+  three captures:
+  - b25 is set for a DMA into secondary attributes, clear for a vertex
+    stream;
+  - with b25 set, b22-23 = (dwords - 1) & 3. This holds for all 14 such DMAs
+    (9, 10, 11, 12, 15, 25 and 27 dwords). This is the "kind" in the table above;
+  - with b25 clear it is 0;
+  - b24 was set once, on a 15-dword TA state block in vp5 (`0x0380000e`);
+    its meaning is G. [D, capture]
 
 ## 3. The TA state block (ISP/TSP/MTE)
 
@@ -361,13 +392,22 @@ reference (`cstencil`).
     two F32 vec4 varyings under a constant `…0001` (EA3, 2026-10-28, log
     `2026-10-28-1530-gl4es-ctest`; hardware).
   - b16-17 = 3 in every capture [D].
-  - b25-28: the same log reports `12 / units`, capped at 0xb, from the DDK's
-    captures with 0-5 vec4 varyings (those captures are not in the tree).
-    The captures on disk all have units = 1, and show 0 for the clear
-    (`00030001`, colour iterated), 0xb when there are secondary attributes
-    (`160f0001`, `16130001`) and 12 without (`18030001`, one texture sample).
-    So b25-28 also depends on something besides the units. Gap: which inputs
-    set it.
+  - b25-28 = `12 / units` (integer) when the program has no secondary
+    attributes (b18-24 = 0), and 0xb when it has some. The DDK's built-in
+    clear program has 0. From the 2026-11-08 captures, with n vec4 varyings
+    fed straight to gl_FragColor:
+
+    | varyings | word 1 | units | b18-24 | b25-28 |
+    |---|---|---|---|---|
+    | 0 (uniform colour) | `160f0001` | 1 | 3 | 0xb |
+    | 1, 2 mediump (or lowp) | `18030001` | 1 | 0 | 12 |
+    | 3, 4 mediump | `0c030002` | 2 | 0 | 6 |
+    | 5 mediump | `08030003` | 3 | 0 | 4 |
+    | 2 highp | `0c030002` | 2 | 0 | 6 |
+
+    A mediump or lowp vec4 varying takes 2 dwords (F16) and a highp one 4,
+    so units = ceil(attribute dwords / 4). [D, captures]. Gap: the rule with
+    both secondaries and more than one unit.
 
 ### Viewport (6 floats)
 
@@ -397,10 +437,33 @@ z scale.
   when the shader writes the point size.
   - 4 dwords are the position. Each texcoord set adds its size.
   - The clear's own value is `0x00081800` (8 dwords: position and colour).
+    Its texcoord-size word is 5 (one 4-component set: the colour) and its
+    MTE control 0x40.
   - Status: D.
+- **The clear's vertex program** (the DDK's built-in, `0x3c008080` in the
+  base4 capture; 4 input dwords from one vertex stream, 8 output dwords):
+
+      phas.i #<phase 1>, #0 [wait=2]; then the prologue (nop / test / ld pa / wdf)
+      mov o0, pa0 [skipinv rcnt rpt=3]                o0-o2 = x, y, z
+      mov o3, c3 [skipinv rcnt]                       o3 = 1.0 (w)
+      pck.f32.u8 o4, pa3.l2, pa3.l2 [skipinv rcnt scale]   R = byte 2 of the ARGB8888 word
+      pck.f32.u8 o5, pa3.l1, pa3.l1 [...]                  G = byte 1
+      pck.f32.u8 o6, pa3,    pa3    [...]                  B = byte 0
+      pck.f32.u8 o7, pa3.l3, pa3.l3 [...]                  A = byte 3
+      emit.t3 r0, #0, #0 [end f12 f10]
+      phas.i #0, #0 [wait=7]; emit.t1 r0, #0, #0 [end f12 f10 f3_20]
+
+  So the vertex stream is x, y, z (floats) and the colour as one ARGB8888
+  word, and the outputs are position (4) then colour as 4 floats in 0-1
+  [D, capture].
 - **TSP word 0:** 3 bits per texcoord set: 1, 2, 3 components, or 5 for 4
   components [D].
 - **TSP word 1:** a bitmask of the sets whose precision value is at most 2 (libGLESv2 0x203bc: `cmpl $0x2, 0x4c(set)`, `ja` skips) [D].
+  - In the 2026-11-08 captures, 1-5 mediump vec4 varyings give 0x1, 0x3, 0x7,
+    0xf and 0x1f, two lowp give 0x3, and two highp give 0.
+  - TSP word 0 is 5 per set throughout (`2d`, `16d`, `b6d`, `5b6d`).
+  - The output select is `(4 + 4n)<<16 | 0x3000` whatever the precision: the
+    vertex outputs stay 32-bit. [D, captures]
 
 ### Blending and the colour mask are shader code
 
@@ -470,8 +533,15 @@ multiplies each side out with sopwm and adds the halves:
 - Products round to nearest: 204 × 64/255 = 51.2 gives 51 (`k1`) [D].
 - Turning k1's src-RGB sopwm into 1-s2 or s2a reproduces the DDK's own
   ONE_MINUS_CONSTANT_COLOR and CONSTANT_ALPHA frames [C, b2 b3].
-- The DDK's final sop2 is always an add (`FUN_00045270(1,1,1,1,0,1,..)`).
-  Subtract and reverse subtract with constant factors are untested.
+- The final sop2 carries the blend equation (2026-11-08 captures, src
+  CONSTANT_COLOR, dst ONE_MINUS_CONSTANT_COLOR):
+  - FUNC_ADD: `sop2 o0, r0, r1 [... cop=add aop=add]` (`81848805 00000001`);
+  - FUNC_SUBTRACT: `sop2 o0, r0, r1 [... cop=sub aop=sub]` (`81848805 00050001`);
+  - FUNC_REVERSE_SUBTRACT: the same ops with the sources swapped,
+    `sop2 o0, r1, r0` (`81848805 00050080`).
+
+  The four sopwm products are the same in all three. With CONSTANT_ALPHA /
+  ONE_MINUS_CONSTANT_ALPHA the factors become `s2a` / `1-s1a`. [D, captures]
 
 **k18/k19 are not a constant.** In `kb0` (ONE, ZERO) the sop2 was turned
 into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery):
@@ -681,13 +751,48 @@ largest point size [D; no draw of ours has run this yet].
   from libsrv_um's static template).
 - Its ds1[1] is a DOUTU word for the end-of-tile USSE program, here
   0x37004000.
+- The program starts with `phas.i #0, #0 [wait=7]` (`fa440700 00000000`).
+  The pixel event's DOUTU starts it with w0 = ds1[1] = `0x01008000`
+  (w0[31:22] = 4, the temporaries for r0-r3) [D, capture].
 - `FUN_000301d0` builds that program as four LIMMs that load the PBE words
-  into r0-r3, then two EMITPIX:
+  into r0-r3, then two EMITPIX. The disassembler shows them as
+  `emit.t0 r0, r1, r0 [f3_20 imm=2048]` and
+  `emit.t0 r2, r3, r0 [end f3_20 imm=1536]`, the second imm being the
+  sideband word (0x600):
 
       LIMM  lo = v & 0x1fffff | reg<<21,  hi = 0xfca00000 | (v>>21 & 0x1f)<<4 | (v>>26)<<12
       EMITPIX lo 0x00200080, hi 0xfb200100                        (the four PBE words)
       EMITPIX lo (side & 0x3f)<<22 | 0x00208180,
               hi 0xfb240000 | (side & 0x3000)<<10 | (side>>3 & 0x1f8)   (the sideband word)
+
+### The pixel event program (render details +0x5c)
+
+The DDK's, from the base4 capture (0x2e006000, data 0x50 bytes, 29
+instructions). The data rows:
+
+| word | value | what |
+|---|---|---|
+| ds0[0], ds0[1] | `00010400`, 0 | DOUTU of the ptoff task (`0x37008200`) |
+| ds1[0] | 0 | compare operand for in1's b8 test |
+| ds1[1] | `01008000` | DOUTU w0 of the end-of-tile task (`0x37004000`, temps 4) |
+| ds0[2], ds0[3] | `01010500`, `00c00000` | DOUTU of the pixel-event emit task (`0x37008280`, temps 4), w1 = b22 \| b23 |
+| ds1[2], ds1[3], ds1[4] | 8, 2, 4 | the in1 bit masks |
+| ds0[4]..ds0[8] | `00000100 00000ff8 00800000 003ff000 00400000` | masks for building the end-of-tile DOUTU w1 |
+
+The code, by in1 (the event word the hardware passes):
+
+- in1 & 8 → DOUTU the **ptoff** task, then halt. That task is
+  `phas.i #0, #0 [wait=7]; ptoff [end]`.
+- else in1 & 2 → test `op0xd(in1, ds1[0]) & 0x100`:
+  - if set → `douta in2 → attr 0`, then DOUTU the **end-of-tile** task with
+    w1 = `(in0<<3 & 0xff8) | 0x00800000 | (in0<<3 & 0x3ff000) | (in1<<20 & 0x400000)`;
+  - else → the emit task below.
+- else in1 & 4 → DOUTU the **pixel-event emit** task, which is
+  `phas.i #0, #0 [wait=7]; limm r0, #0; emit.t0 r0, #0, r0 [end f3_20 imm=512]`.
+- else halt.
+
+[D, capture]. What each in1 bit is (end of tile, end of render, …), and
+what in0 and in2 carry, is G. `docs/PDS.md` has the instruction encodings.
 
 ### PBE words (`FUN_0004e7a0`)
 
@@ -695,7 +800,7 @@ largest point size [D; no draw of ours has run this yet].
 |---|---|---|---|
 | 0 | 00000000 | clip min `y0<<16 \| x0` | D |
 | 1 | 01df02cf | clip max `y1<<16 \| x1` (719, 479) | C |
-| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px); b15 = set unless the surface's `param_1[6]` is non-zero: set for the back buffer *and* for fb0 (the swap), and with it cleared the PBE writes nothing at the address (replay, `docs/TEX.md` section 6), so it is not a scanout flag; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
+| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px). The DDK pads a pbuffer's or FBO's pitch to a multiple of 8 pixels, at least 8, and a window's to 32: widths 1, 2, 3 → 8 (field 3), 16 → 16, 17 → 24, 33 → 40, FBO 64 → 64, FBO 65 → 72, window 720 → 736. So the field is always odd, and a pitch of 1 or 2 pixels is never encoded [D, 2026-11-08 captures]; b15 = set unless the surface's `param_1[6]` is non-zero: set for the back buffer *and* for fb0 (the swap), and with it cleared the PBE writes nothing at the address (replay, `docs/TEX.md` section 6), so it is not a scanout flag. It is set on every surface the 2026-11-08 captures render to: window, pbuffers and both FBOs; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
 | 3 | 3e265000 | address, & ~3 (moved for rotated surfaces) | D |
 | side | 0x600 | b0-5 = PBE format code (format table +0x84: 0 BGRA8888, 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, see `docs/TEX.md`); b9 = always; b10 = dither (GL_DITHER); b12 = `param 7`; **b13 = twiddled destination** (table `DAT_0006d5bc` = {0, 0x2000} by memory layout; the transfer queue's texture uploads set it) [C]; b6-11 += `param_2[5]<<6` for format codes 3-14 | D |
 
@@ -806,7 +911,27 @@ length is implied by the size, since no word changed with the level count.
 
 **T3:** the shader half of `(state & mask) | override`. It depends on the
 sample instruction, not the texture: `tex1` gives `00800800` and `tex2`
-`01028800` [D].
+`01028800` [D]. The background object's load of the render target (its pixel program
+`0x2e0060e0` in the base4 capture: DOUTU, one DOUTI sampling tc0, then
+DOUTT) gives `00800000`, with T0 `00b60e90`, T1 `cc2cf1df` and T2 = the render
+target's address [D, capture]. Gap: what the 0x800 part that the shader
+samples add, and the background lacks, does.
+
+**The background's T0 and T1 follow the surface**, from the 2026-11-08
+pbuffer and FBO captures:
+- **T1** = `layout<<29 | format<<24 | (w-1)<<12 | (h-1)`. Window and pbuffer
+  surfaces read `cc…` (layout 6 strided, format 0xc). A 64×64 RGBA8888
+  FBO texture reads `0d03f03f` (layout 0 twiddled, format 0xd), and a 65×64
+  RGB565 one `c504003f`.
+- **T0**, strided: `0x90` plus the pitch as (pitch − 1), with the low 3 bits
+  in b9-11 and the rest in b17-26:
+  - 8 px → `00000e90`, 16 → `00020e90`, 24 → `00040e90`, 40 → `00080e90`,
+    736 → `00b60e90`;
+  - the 65-px RGB565 FBO (pitch 72 px = 144 bytes) gives `00080690` = 35,
+    which is pitch − 1 in 32-bit words, not texels.
+
+  So the pitch field counts 32-bit words; for the 32-bit surfaces the two
+  are the same. One 16-bit data point. [D, captures]
 
 ## 6. HW render context, render details, parameter buffer
 

@@ -36,7 +36,7 @@ libsgx545_isa = static_library(
   'sgx545_isa',
   [sgx545_isa_decode, sgx545_isa_encode_h, sgx545_isa_enums_h,
    'sgx545_isa_encode.c', 'sgx545_isa_disasm.c', 'sgx545_isa_asm.c',
-   'sgx545_isa_asm_int.c'],
+   'sgx545_isa_asm_int.c', 'sgx545_isa_coissue.c'],
   include_directories : [inc_include, inc_src, include_directories('.')],
   dependencies : [idep_mesautil, idep_isaspec_decode],
   link_with : [libisaspec],
@@ -59,7 +59,7 @@ if with_tests
       include_directories : [inc_include, inc_src],
       dependencies : [idep_sgx545_isa, idep_mesautil],
     ),
-    args : files('tests/gles2.txt', 'tests/int.txt'),
+    args : files('tests/gles2.txt', 'tests/int.txt', 'tests/coissue.txt'),
     suite : ['sgx545'],
   )
 endif

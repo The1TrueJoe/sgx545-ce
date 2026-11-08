@@ -189,6 +189,7 @@ struct sgx_ctx {
    struct nir_def *c10_root;     /* the colour as a lowp C10 expression (emit_c10) */
    struct nir_alu_instr *discard_cmp; /* the one discard's comparison (p1 directly) */
    struct hash_table *proj;      /* nir_tex_instr -> its projected varying load */
+   struct hash_table *efo;       /* nir_alu_instr (a chain's root) -> its efo_chain */
 
    /* results */
    unsigned n_temps, n_pa;
@@ -210,7 +211,7 @@ sgx_vreg(struct sgx_ctx *c, unsigned i)
 /* the SA register of uniform constant k / literal i (kept in SA) */
 /* SGX_DISABLE=a,b,...: turn optimisation passes off by name (a debugging
  * bisect without rebuilding): pa o coalesce split fold selfmov lit32
- * narrow16 mediump minmax32 condmask csel1 csel32 */
+ * narrow16 mediump minmax32 condmask csel1 csel32 coissue */
 bool sgx_disabled(const char *pass);
 
 static inline unsigned

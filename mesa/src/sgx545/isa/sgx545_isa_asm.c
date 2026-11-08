@@ -57,8 +57,8 @@ static const char *const smp_cfmt[] = { NULL, "f16", "c10", "cfmt3" };
 static const char *const smp_pcf[] = { NULL, "pcf", "pcf16", "pcf3" };
 static const char *const smp_ret[] = { NULL, "rdata", "rinfo", "ret3" };
 static const char *const ld_am[] = { "a", "l", "t", "am3" };
-static const char *const ld_size[] = { "d", "w", "b", "size3" };
-static const char *const tm_type[] = { "byte", "word", "dword", "type3" };
+static const char *const ld_size[] = { "d", "w", "b", "q" };
+static const char *const tm_type[] = { "byte", "word", "dword", "tm3" };
 static const char *const emit_tgt[] = { "t0", "t1", "t2", "t3" };
 static const char *const rnd_names[] = { "ne", "down", "up", "zero" };
 static const char *const f16swz[] = { NULL, "ll", "hh", "f32" };
@@ -281,6 +281,11 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
 #undef FLAG
 #undef VAL
 
+   if (!strcmp(item, "unused2") && eq && v >= 0 && I->opc == SGX_ISA_OPC_RLP) {
+      I->has_unused2 = true;
+      I->unused2 = v;
+      return true;
+   }
    if (!strcmp(item, "nodst") && eq && v >= 0) {
       I->has_nodst = true;
       I->nodst = v;
@@ -311,7 +316,10 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
    }
    if ((!strcmp(item, "f16") || !strcmp(item, "c10")) && !eq) {
       /* hw 1: the source's format */
-      I->src[1].fmt = item[0] == 'f' ? SGX_ISA_FMT_F16 : SGX_ISA_FMT_C10;
+      if (item[0] == 'f')
+         I->sf16 = true;
+      else
+         I->sc10 = true;
       return true;
    }
    return sgx545_isa_asm_item_int(I, item, val) ? true :
@@ -717,6 +725,11 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I,
 
    if (!parse_operands(&c, I, pat, ops, nops))
       return false;
+   /* any format suffix sets format select (ISA.md "Text notation and
+    * defaults"; classes without the field ignore it) */
+   for (unsigned k = 0; k < 3; k++)
+      I->fmt |= I->src[k].fmt != SGX_ISA_FMT_NONE;
+   I->fmt |= I->dst.fmt != SGX_ISA_FMT_NONE;
 
    /* ldr/str: a 14-bit immediate address is fine; atst8 writes its pdst unless .nw */
    if (items) {
@@ -732,6 +745,23 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I,
          I->rpt = 1;
    } else if (I->rcnt) {
       return fail(&c, "'%s' has no rcnt", mnem);
+   }
+   /* a source immediate is 7 bits, unsigned or (in the forms ISA.md says)
+    * two's complement: -64..127; the bitwise classes' src2 takes 16 bits,
+    * ldr/str's address 14 (ISA.md "MOE control", op 6) */
+   for (unsigned k = 0; k < 3; k++) {
+      bool wide = k == 2 && (I->opc == SGX_ISA_OPC_AND || I->opc == SGX_ISA_OPC_OR ||
+                             I->opc == SGX_ISA_OPC_XOR || I->opc == SGX_ISA_OPC_SHL ||
+                             I->opc == SGX_ISA_OPC_SHR || I->opc == SGX_ISA_OPC_ROL ||
+                             I->opc == SGX_ISA_OPC_ASR);
+      bool addr = k == 2 && (I->opc == SGX_ISA_OPC_LDR || I->opc == SGX_ISA_OPC_STR);
+      int32_t n = (int32_t)I->src[k].num;
+      if (I->src[k].file == SGX_ISA_FILE_IMM && !wide &&
+          (addr ? n < 0 || n > 0x3fff : n < -64 || n > 127)) {
+         char num[16];
+         snprintf(num, sizeof(num), "#%d", n);
+         return fail(&c, "immediate %s doesn't fit its field", num);
+      }
    }
    return true;
 }

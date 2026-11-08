@@ -20,6 +20,7 @@ G=$R/opt/mc-x64
 here=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$G"
 for d in libraries versions assets natives optifine; do
+	[ -e "$M/$d" ] || continue     # OptiFine only when installed
 	[ -e "$G/$d" ] || cp -a "$M/$d" "$G/"
 done
 cp "$M/1.7.10.launch" "$G/"

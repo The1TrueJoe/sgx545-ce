@@ -234,7 +234,15 @@ What still holds temporaries:
   - Desktop GLSL without qualifiers would be an opt-in beyond the spec.
 - **Co-issue.**
   - libusc pairs operations with `efo` and `fdual`: 134 and 36 instructions in c2+c3.
-  - We emit neither, and the isaspec encoder doesn't assemble them yet.
+  - We emit `efo` for a sum of vector × scalar terms (`mat4 * v`, `mat3 * n`) whose vectors
+    sit in a bank (uniforms, attributes, varyings), as libusc's `v_mvp`: per lane pair one
+    `efo` per term with the partials in i0/i1, then `mov` from i1. A `mat4 * v` is 10 issue
+    slots instead of 16. `SGX_DISABLE=coissue` turns it off. 32 `efo` in c2+c3.
+  - Driver mode, issue slots: corpus 7791 → 7726, glmark2 2080 → 1826 (temporaries 195 →
+    157), gl4es Minecraft 180 → 150. Instructions go up (glmark2 1211 → 1470): a repeat is one
+    instruction, its `efo`s are several.
+  - Not done: `fdual`. Only 75 scalar f32 ops in the corpus could pair, and fmaxmin as a
+    secondary is still open (ISA.md "Dual issue").
 - **In-place repeats.**
   - libusc writes `fmad pa0, pa0, pa4, pa8 rpt=4`. We keep a repeated instruction's
     destination apart from its sources, which is safe but costs registers.

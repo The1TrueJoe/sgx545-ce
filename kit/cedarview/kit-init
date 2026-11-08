@@ -1,0 +1,35 @@
+#!/bin/sh
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# PID 1 on the Cedarview test stick (kernel cmdline init=/sbin/kit-init).
+# The root is the stick's read-only squashfs; everything writable is tmpfs.
+# Every other disk is set read-only before anything runs, then kit-run does
+# the tests and leaves its results on the stick's SGXKIT partition.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root TERM=linux LANG=C.UTF-8
+
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+for d in /tmp /run /var/log /var/tmp /root /mnt; do mount -t tmpfs tmpfs "$d"; done
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+dmesg -n 1
+hostname cedarview-kit
+
+exec </dev/tty1 >/dev/tty1 2>&1
+/usr/local/sbin/kit-protect
+/usr/local/bin/kit-run
+# CI (qemu-test.sh) powers off once the run is done
+grep -qw kit.poweroff=1 /proc/cmdline && { sync; echo o > /proc/sysrq-trigger; sleep 30; }
+
+# kit-run ends on the done screen; afterwards a shell, or power off
+while :; do
+	printf '\n  Type  s  and Enter for a command shell, or  p  and Enter to power off.\n  > '
+	read -r a
+	case $a in
+	s|S) setsid -c /bin/bash -l ;;
+	p|P) sync; echo o > /proc/sysrq-trigger; sleep 10 ;;
+	esac
+done

@@ -82,9 +82,17 @@ def main():
     data = b"".join(struct.pack("<II", lo, hi) for lo, hi in words)
     with open(out, "wb") as f:
         f.write(data)
+    # features: the image's declared capability bits (PVRSGX_UKFW_*). Bit 1 = SECURE
+    # (the bgblock is CPU-written, so powervr_sgx drops kernel-heap sharing). Default 2:
+    # secure mode is HW-proven and the open default (m2 2026-11-08). NOT bit 0 (cleanup-v2):
+    # ours is defer-and-hold. build_id names the build. mkukfw --manifest reads both.
+    features = int(os.environ.get("UK_FEATURES", "2"), 0)
+    build_id = os.environ.get("UK_BUILD_ID", "openhc")
     manifest = {
         "bytes": len(data),
         "instructions": len(words),
+        "features": features,
+        "build_id": build_id,
         "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }

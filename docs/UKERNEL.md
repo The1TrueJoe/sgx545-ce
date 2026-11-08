@@ -131,7 +131,7 @@ EDM breakpoints, no `FIX_HW_BRN_28889`, no extended perf counters):
 | 12 | `ui32TimeWraps` | microkernel |
 | 13 | `ui32HostClock`: the host's clock in µs, written at start | host |
 | 14 | `ui32AssertFail` | microkernel |
-| 15 | `ui32PerfGroup` | host |
+| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_OPENHC_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
 | 16 | `ui32BRN31939Mem` (present because the build is for core revision 1013, which carries `FIX_HW_BRN_31939`; the host never touches it). The open microkernel reuses the word for its cleanup v2 sequence echo (section 3) | microkernel |
 | 17 | `ui32OpenCLDelayCount` | |
 
@@ -647,9 +647,31 @@ into the sync-object updates the host and the next client wait on.
   normal completion. The render details carry the destination sync objects at
   words 0x34 and 0x90 (a colour and a depth destination for a one-context
   frame); their ops-pending word is cleared as the 3D drains.
-- **DPM 3D memory free.** After a render the parameter-buffer pages it used
-  are returned to the free list; the handler runs the DPM free-list store and
-  updates the PB descriptor's in-use count. It also **tears the render down**:
+- **DPM 3D memory free.** The hardware has already returned the render's
+  parameter-buffer pages to the free list: the 3D start armed the release
+  (0x63c = 3, section 6), and 0x724 counts down while the 3D runs. The DDK's
+  handler writes **no DPM register and no PB-descriptor word**. In every
+  trace its only register write is the ack (`EVENT_HOST_CLEAR` = 0x1, pc
+  0x0e1e), then the rendezvous (pc 0x0eb4), then the completion below and
+  SW_EVENT. It waits on nothing. The only PB-descriptor words the DDK writes
+  during a frame:
+  - +0x14 = the high half of 0x724 (the TA's allocated pages) at every TA
+    finish (pc 0x0656-0x065c), a snapshot, not a running count;
+  - +0x18..+0x24 = the live counters, by `save_ta_state` before each 3D
+    start.
+
+  Per scene the DDK also runs the DPM **clear** at the kick (pc
+  0x0a1d-0x0a4a):
+  - 0x694 = 0x698 = `2 | i<<3` for each RT data entry i up to entry word 10;
+  - it waits for `EVENT_STATUS` & 0x240 (STATE_CLEAR b6, CONTROL_CLEAR b9)
+    and acks 0x134 = 0x240;
+  - a store/load follows only when `0x740 & 0x1ff` is nonzero, and 0x740
+    reads 0 throughout the EA1 register sample.
+
+  The TA and 3D free-list **loads** run once per PB, not per frame (TA3D
+  +0xb8/+0xbc markers; one each over the two-frame trace).
+
+  The completion also **tears the render down**:
   the render-details state word (+0x2a4) moves to freed (2), its active flag
   (+0x12c) and write-ops word (+0x108) clear, the RT-data entry is released
   (its render back-pointer +0x4 → 0, state +0x34 → idle 0x10, and the RT-data
@@ -790,6 +812,47 @@ every client PD to carry the kernel heaps. openHC must not copy that; keeping th
 EDM isolated on list 15 is a deliberate divergence, verified on EA1 HW (the TA
 reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
 dir-list with a client requestor.
+
+**How the DDK reaches client memory from the EDM.** It never uses a second
+bank or a separate data requestor. A subroutine (pc 0x1864) copies the TA's
+nibble (r16 = 0) or the 3D's (r16 = 1) of `BIF_BANK0` into the EDM nibble,
+and r16 = 2 puts the EDM back on list 15. Its callers bracket every EDM
+access to client memory:
+
+| set (pc) | restore (pc) | list | what runs inside | when (DDK traces) |
+|---|---|---|---|---|
+| 0x128b | 0x129b | 3D | the background-block write ([0..2]) | **every 3D start** |
+| 0x0941 | 0x094d | TA | the PB setup (0x170d) and the TA free-list load (0x16a2). They read the PB descriptor and TA3D words (kernel data) and write DPM registers. Client memory is touched only when PB descriptor +0x00 b0 is set: then 0x170d walks the PB block list and rewrites the free list | the first kick after the PB changes |
+| 0x190c | 0x1918 | TA | `save_ta_state` (0x168d), then the same PB setup and TA load | a PB switch mid-scene; not in any trace |
+| 0x0835 | 0x0843 | TA | zeroes the RT data entry's tail-pointer array (entry words 8/9) | a kick path; not in any trace |
+| 0x0d90 | 0x0da0 | 3D | a second copy of the background-block write, on another 3D-start path | not in any trace |
+| 0x1234 | 0x123a | 3D | copies a 2-word pair indexed by the pass cursor (+0x108) | multi-pass renders only; not in any trace |
+| 0x13ae | 0x13be | 3D | writes (address, value) pairs from +0x1a0 (count at +0x19c of the same object) | only with a nonzero count; not in any trace |
+| 0x1517 | 0x1527 | 3D | the same pair loop, on the transfer side | only with a nonzero count; not in the trace's transfer |
+| 0x0ed5 | 0x0f34 | 3D | a 3D-end branch taken when the ISP clock check fails | not in any trace |
+
+In all four DDK microkernel traces (one-, two- and four-frame runs) only two
+windows run. 0x128b runs at every 3D start. 0x0941 runs once, on the first
+kick of a new PB.
+
+The open microkernel opens none of these windows: its EDM stays on list 15.
+Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
+`do_3d`), and with `HOSTCTL_OPENHC_HOST_BGBLOCK` set the host writes that
+block instead. Everything else the EDM reads or writes is in kernel code,
+kernel data or the sync heap, all mapped in the kernel PD.
+
+The background-block write at 3D start (pc 0x128d-0x1296; `docs/STATE.md`
+§6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
+inside it. While a window is open, the EDM fetches its instructions and reads
+kernel data through the client's page directory. The DDK therefore needs the
+kernel code and kernel-data heaps mapped in every client PD; it has no mode
+that works without them.
+
+`EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
+SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only
+BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (pc 0x0c6e,
+0x1778, 0x17be). The header doesn't separate the EDM's instruction fetch from
+its data accesses in either bank. [D, code and trace]
 
 **Parameter-buffer / DPM setup.** `pb[n]` is word n of the PB descriptor
 (`docs/STATE.md` section 6).
@@ -957,12 +1020,28 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   - Gap: whether a second, correctly placed PB per context works on either
     microkernel. One shared render context or PB is the configuration known
     to work.
-- The multi-frame "PB never drains" result of 2026-11-04 (0x724 stuck at
-  0x190019) happens only under the srvinit frame-dump harness, which gives
-  each process its own PB with no fixed base. Under powervr_sgx (one PB per
-  VM at a fixed base) the same microkernel renders 10/10 consecutive frames,
-  5/5 frames each from a new process, and drains normally. Debug the DPM
-  drain only under a driver that keeps the PB.
+- **Re-opened 2026-11-08:** the 2026-11-04 multi-frame "PB never drains"
+  result (0x724 stuck at 0x190019) was put down to the srvinit frame-dump
+  harness, because powervr_sgx rendered 10/10 frames.
+  - The M1-exit run then hit `DPM_OUT_OF_MEMORY_MT` at about frame 40 on
+    powervr_sgx.
+  - 25 pages a frame × 40 frames ≈ 0x400, the PB's global threshold. That is
+    what a 3D that never releases its TA's pages would do.
+  - So the drain failure is probably real, and the 10/10 runs were simply
+    shorter than the PB.
+  - The DDK drains 0x724 to 0 during every 3D (EA1 register sample).
+  - **Fixed (um-re f0dc24d, EA3 2026-11-08).** The cause: the DDK runs the
+    TA free-list load, `save_ta_state` and the 3D free-list load only when
+    the PB changes, and the open microkernel ran them every scene. Each TA
+    load then re-seeded the free-list head from the descriptor and skipped
+    the pages the last 3D had freed.
+  - The fix gates both loads on per-PB markers (control block +0xb8/+0xbc,
+    as the DDK's TA3D +0xb8/+0xbc). It resets both markers at init and on
+    cleanup, as the DDK does on context and PB cleanup; without the reset, a
+    PB reallocated at the same address skipped its load. 0x63c = 3 is still
+    written at every 3D start.
+  - Results: 600 frames with 0 differing, and a second process's 100 frames
+    with 0 differing, no OOM.
 - The timer / active-power / lockup-detection path is read structurally but
   not run (no timer event in an offline frame).
 - The recovery rescan (section 5a) is understood from the init path and the

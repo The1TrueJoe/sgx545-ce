@@ -78,6 +78,9 @@ enum sgx_form {
    SGX_OP_WDF,
    SGX_OP_BR,
    SGX_OP_NOP,
+   /* hw 07, 1b: co-issue */
+   SGX_OP_EFO,
+   SGX_OP_FDUAL,
    SGX_OP_COUNT,
 };
 
@@ -123,6 +126,20 @@ enum sgx_field {
    SGX_FLD_DIM,        /* smp */
    SGX_FLD_LOD,
    SGX_FLD_CFMT,
+   SGX_FLD_EFO_D,      /* efo: what the destination gets, the internal */
+   SGX_FLD_EFO_I,      /* writes, the adder and multiplier inputs */
+   SGX_FLD_EFO_A,
+   SGX_FLD_EFO_M,
+   SGX_FLD_WI0,        /* efo: write i0 / i1 */
+   SGX_FLD_WI1,
+   SGX_FLD_A0LNEG,     /* efo: negate A0's left / right input */
+   SGX_FLD_A0RNEG,
+   SGX_FLD_PRI,        /* fdual: the primary and secondary ops */
+   SGX_FLD_SEC,
+   SGX_FLD_SD,         /* fdual: the secondary's selects */
+   SGX_FLD_SB,
+   SGX_FLD_SC,
+   SGX_FLD_MSRC,
    SGX_FLD_COUNT,
 };
 

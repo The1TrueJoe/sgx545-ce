@@ -1066,8 +1066,8 @@ scheduler tests without a GPU workload. It can be dropped before the RFC if revi
 
 ### D12. Code objects and the upload ioctl
 
-**Recommendation, to confirm (2026-11-03): USSE code goes only through
-`UPLOAD_CODE` into `BO_CODE` objects, as section 2 describes.** This is D9 option 1
+**Decided (Joseph, 2026-11-08): USSE code goes only through `UPLOAD_CODE` into
+`BO_CODE` objects, as section 2 describes.** This is D9 option 1
 made concrete, and it closes some options:
 
 - The winsys can no longer write shaders into a mapped buffer. Mesa's code heap becomes
