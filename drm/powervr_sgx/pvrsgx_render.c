@@ -29,6 +29,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_fwif.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
@@ -40,11 +41,14 @@
 #define PB_EXTRA_PAGES		0x22
 #define FREELIST_BYTES		0x40000	/* one word per page of the 256 MiB range */
 #define CCB_BYTES		0x10420
-#define TA_CMD_BYTES		0x2c0	/* 0x2b0 rounded up to 64 */
 /* The background object's middle PDS word, a constant. */
 #define BG_PDS_MIDDLE		0x00030001
-#define TA_CMD_SHARED		0x58
-#define TA_CMD_TAIL		0x238
+/* Constant TA command words (docs/STATE.md section 1). */
+#define TA_CTL			0x50000000
+#define TE_AA			0x20000000
+#define VDM_CTL			0xa2
+#define F32_1E_6		0x358637bd
+#define RT_FLAGS		0x88
 #define RT_MAX_DIM		2048
 
 static u32 f32_one(void)
@@ -632,7 +636,9 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_rt_dataset *s = rj->rtds;
 	const struct powervr_sgx_stream_render *in = &rj->render;
 	bool first = k == 0, last = k == rj->nkicks - 1;
-	u32 f, odd, rgn_this, rgn_next, entry, *cmd, *sh, *t, *rd, *sl, *s3d, *done, *b;
+	struct pvrsgx_fw_ta_cmd *cmd;
+	struct pvrsgx_fw_rt_deps *deps;
+	u32 f, odd, rgn_this, rgn_next, entry, *rd, *s3d, *done, *b;
 	u32 woff = r->ccb_woff, zls_base = 0;
 
 	if (first)
@@ -686,68 +692,65 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	}
 
 	/* The TA command, in the context's ring. */
-	cmd = (u32 *)((u8 *)kobj_cpu(r->ccb) + woff);
-	memset(cmd, 0, TA_CMD_BYTES);
-	cmd[0x00 / 4] = TA_CMD_BYTES;
-	if (rj->nkicks == 1)
-		cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10);	/* first and last kick; first render */
-	else
-		/* 0x10 on the dataset's first render only, as for one kick */
-		cmd[0x04 / 4] = first ? 0x61 | (f ? 0 : 0x10) : last ? 0x62 : 0x60;
-	cmd[0x08 / 4] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
-	cmd[0x0c / 4] = BG_PDS_MIDDLE;
-	cmd[0x10 / 4] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
-	cmd[0x14 / 4] = 0x50000000;
-	cmd[0x18 / 4] = 0x50000000;
-	cmd[0x1c / 4] = last ? in->flags_3d | BIT(10) | f << 14 : 0;
-	cmd[0x20 / 4] = f;
-	cmd[0x24 / 4] = kobj_va(r->pb->desc);
-	cmd[0x38 / 4] = kobj_va(s->rd);
-	cmd[0x3c / 4] = kobj_va(s->hwsync);
-	cmd[0x40 / 4] = kobj_va(s->rtdata);
-	cmd[0x44 / 4] = entry;
+	cmd = (struct pvrsgx_fw_ta_cmd *)((u8 *)kobj_cpu(r->ccb) + woff);
+	memset(cmd, 0, sizeof(*cmd));
+	cmd->size = sizeof(*cmd);
+	cmd->ta_flags = PVRSGX_TA_FLAGS_BASE | (first ? PVRSGX_TA_FIRST_KICK : 0) |
+			(last ? PVRSGX_TA_LAST_KICK : 0) |
+			(first && !f ? PVRSGX_TA_FIRST_RENDER : 0);
+	cmd->bg_pds[0] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
+	cmd->bg_pds[1] = BG_PDS_MIDDLE;
+	cmd->bg_pds[2] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
+	cmd->ta_ctl[0] = TA_CTL;
+	cmd->ta_ctl[1] = TA_CTL;
+	if (last)
+		cmd->flags_3d = in->flags_3d | PVRSGX_3D_RENDER | f << PVRSGX_3D_FRAME_SHIFT;
+	cmd->frame = f;
+	cmd->pb_desc = kobj_va(r->pb->desc);
+	cmd->render_details = kobj_va(s->rd);
+	cmd->rt_deps = kobj_va(s->hwsync);
+	cmd->rt_data = kobj_va(s->rtdata);
+	cmd->rt_data_entry = entry;
 
-	/* CMDTA_SHARED: ready; the 3D sync on the last kick; the completion word on the first. */
-	sh = cmd + TA_CMD_SHARED / 4;
-	sh[0x00 / 4] = 1;				/* SGXMKIF_CMDTA_CTRLFLAGS_READY */
+	/* Ready; the 3D sync on the last kick; the completion word on the first. */
+	cmd->ready = 1;
 	if (last) {
 		s3d = kobj_cpu(r->sync3d);
-		sh[0x1c / 4] = s3d[SYNC_WRITE_PENDING];
-		sh[0x20 / 4] = kobj_va(r->sync3d) + SYNC_WRITE_COMPLETE * 4;
-		sh[0x24 / 4] = s3d[SYNC_READ_PENDING]++;
-		sh[0x28 / 4] = kobj_va(r->sync3d) + SYNC_READ_COMPLETE * 4;
+		cmd->sync3d_write_pending = s3d[SYNC_WRITE_PENDING];
+		cmd->sync3d_write_complete = kobj_va(r->sync3d) + SYNC_WRITE_COMPLETE * 4;
+		cmd->sync3d_read_pending = s3d[SYNC_READ_PENDING]++;
+		cmd->sync3d_read_complete = kobj_va(r->sync3d) + SYNC_READ_COMPLETE * 4;
 	}
 	if (first) {
 		done = kobj_cpu(s->done);
-		sl = kobj_cpu(s->hwsync);
-		sl[1] = 1;				/* one destination */
-		sl[2] = done[SYNC_READ_PENDING];
-		sl[3] = kobj_va(s->done) + SYNC_READ_COMPLETE * 4;
-		sl[4] = done[SYNC_WRITE_PENDING]++;
-		sl[5] = kobj_va(s->done) + SYNC_WRITE_COMPLETE * 4;
+		deps = (struct pvrsgx_fw_rt_deps *)kobj_cpu(s->hwsync);
+		deps->num_dst = 1;
+		deps->read_pending = done[SYNC_READ_PENDING];
+		deps->read_complete = kobj_va(s->done) + SYNC_READ_COMPLETE * 4;
+		deps->write_pending = done[SYNC_WRITE_PENDING]++;
+		deps->write_complete = kobj_va(s->done) + SYNC_WRITE_COMPLETE * 4;
 		/* The microkernel sets write-complete to the pending value plus one. */
 		job->done_cpu = &done[SYNC_WRITE_COMPLETE];
-		job->done_val = sl[4] + 1;
+		job->done_val = deps->write_pending + 1;
 	}
 
-	t = cmd + TA_CMD_TAIL / 4;
-	t[0x00 / 4] = 0x20000000;			/* TE AA */
-	t[0x04 / 4] = s->n.mtile1;
-	t[0x08 / 4] = s->n.mtile2;
-	t[0x0c / 4] = s->n.te_screen;
-	t[0x10 / 4] = s->n.mt_tiles;
-	t[0x14 / 4] = rj->kick[k].ta_flags2 | (last ? BIT(22) : 0);	/* b22: this kick renders */
-	t[0x18 / 4] = (u32)rj->kick[k].vdm_base;
-	t[0x1c / 4] = 0xa2;
-	t[0x20 / 4] = rgn_this;
-	t[0x24 / 4] = kobj_va(s->tailptr);
-	t[0x28 / 4] = 0x358637bd;			/* 1e-6 */
-	t[0x2c / 4] = 0x358637bd;
-	t[0x30 / 4] = (s->h - 1) << 16 | (s->w - 1);
-	t[0x3c / 4] = r->pb->base;
-	t[0x6c / 4] = 0x88;
+	cmd->te_aa = TE_AA;
+	cmd->te_mtile[0] = s->n.mtile1;
+	cmd->te_mtile[1] = s->n.mtile2;
+	cmd->te_screen = s->n.te_screen;
+	cmd->mt_tiles = s->n.mt_tiles;
+	cmd->ta_flags2 = rj->kick[k].ta_flags2 | (last ? PVRSGX_TA2_RENDER : 0);
+	cmd->vdm_base = (u32)rj->kick[k].vdm_base;
+	cmd->vdm_ctl = VDM_CTL;
+	cmd->region_headers = rgn_this;
+	cmd->tail_pointers = kobj_va(s->tailptr);
+	cmd->eps[0] = F32_1E_6;
+	cmd->eps[1] = F32_1E_6;
+	cmd->screen_size = (s->h - 1) << 16 | (s->w - 1);
+	cmd->params_base = r->pb->base;
+	cmd->rt_flags = RT_FLAGS;
 
-	r->ccb_woff = (woff + TA_CMD_BYTES) & (CCB_RING - 1);
+	r->ccb_woff = (woff + sizeof(*cmd)) & (CCB_RING - 1);
 	/* The command is in memory before the write offset that hands it over. */
 	wmb();
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
@@ -780,7 +783,7 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 			 ((kobj_va(r->pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
 	pvrsgx_kobj_dump(sb, "scratch", r->scratch, 0, 0x40);
 	pvrsgx_kobj_dump(sb, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
-	pvrsgx_kobj_dump(sb, "ta_cmd", r->ccb, cmd_off, TA_CMD_BYTES);
+	pvrsgx_kobj_dump(sb, "ta_cmd", r->ccb, cmd_off, sizeof(struct pvrsgx_fw_ta_cmd));
 	pvrsgx_kobj_dump(sb, "render_details", s->rd, 0, 0x1ec & ~3u);
 	pvrsgx_kobj_dump(sb, "rd_w4", s->rd_w4, 0, 4);
 	pvrsgx_kobj_dump(sb, "rd_w8", s->rd_w8, 0, 8);

@@ -14,6 +14,7 @@
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_kobj.h"
+#include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
 #include "pvrsgx_transfer.h"
 #include "pvrsgx_vm.h"
