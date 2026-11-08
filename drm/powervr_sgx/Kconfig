@@ -28,8 +28,12 @@ config DRM_POWERVR_SGX_GMA500
 	depends on DRM_POWERVR_SGX && DRM_GMA500
 	select AUXILIARY_BUS
 	help
-	  Bind to the SGX545 of the Atom D2000/N2000 (Cedarview) GPU, which
-	  gma500 publishes as an auxiliary device next to its display driver.
+	  Bind to the SGX545 of the Atom D2000/N2000 (Cedarview) GPU. There
+	  the SGX shares a PCI function with the display, which gma500
+	  drives; gma500 publishes the SGX as an auxiliary device, hands it
+	  the register mapping and forwards its interrupt.
+
+	  Say Y if this kernel runs on a Cedarview machine.
 
 config DRM_POWERVR_SGX_DDK_COMPAT
 	bool "Run the vendor microkernel too (testing)"
@@ -44,9 +48,12 @@ config DRM_POWERVR_SGX_DDK_COMPAT
 	  If unsure, say N.
 
 config DRM_POWERVR_SGX_KUNIT_TEST
-	tristate "KUnit tests for the PowerVR SGX545 driver" if !KUNIT_ALL_TESTS
+	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
 	depends on DRM_POWERVR_SGX && KUNIT
 	default KUNIT_ALL_TESTS
 	help
-	  Unit tests of the driver's firmware file checks. For developers;
-	  if unsure, say N.
+	  Unit tests of the driver's firmware file checks: a well-formed
+	  image is accepted, and every malformed header, table and checksum
+	  is refused. The tests need no GPU.
+
+	  For developers; if unsure, say N.
