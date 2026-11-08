@@ -207,7 +207,14 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR,
 	       SGX_CR_EVENT_HOST_CLEAR_SW_EVENT | SGX_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT);
 	atomic_inc(&sdev->irq_count);
-	return IRQ_WAKE_THREAD;
+	/*
+	 * The DDK microkernel interrupts at TA and 3D completion too: wake the
+	 * thread only for a finished job or a lockup report.
+	 */
+	if (!sdev->fw_running || pvrsgx_job_oldest_done(sdev) ||
+	    (pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS) & HOSTCTL_INTERRUPT_HWR))
+		return IRQ_WAKE_THREAD;
+	return IRQ_HANDLED;
 }
 
 static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)

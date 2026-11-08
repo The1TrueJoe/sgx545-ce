@@ -90,7 +90,20 @@ static bool job_done(struct pvrsgx_job *job, u64 consumed)
 	return job->ccb_seq <= consumed;
 }
 
-/* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
+/* Whether the oldest job on the GPU is done; for the hard IRQ handler. */
+bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_job *job;
+	unsigned long flags;
+	bool done;
+
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	job = list_first_entry_or_null(&sdev->active, struct pvrsgx_job, node);
+	done = job && job_done(job, pvrsgx_ccb_consumed(sdev));
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	return done;
+}
+
 /*
  * The GPU's accesses don't snoop the CPU caches (log 2026-11-04-0100). Our own
  * objects are write-combined on the CPU; an import may be cached, so flush
@@ -123,6 +136,7 @@ static void job_put_imports(struct pvrsgx_job *job)
 	kfree(job->imports);
 }
 
+/* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_job *job, *tmp;

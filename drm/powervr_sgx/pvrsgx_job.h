@@ -97,6 +97,7 @@ struct pvrsgx_job {
 int pvrsgx_job_init(struct pvrsgx_device *sdev);
 void pvrsgx_job_fini(struct pvrsgx_device *sdev);
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev);
+bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev);
 void pvrsgx_context_destroy_all(struct pvrsgx_file *sfile);
 struct pvrsgx_context *pvrsgx_context_lookup(struct pvrsgx_file *sfile, u32 handle);
 void pvrsgx_context_put(struct pvrsgx_context *ctx);
