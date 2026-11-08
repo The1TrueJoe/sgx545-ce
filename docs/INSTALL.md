@@ -16,11 +16,11 @@ Everything here is open source. No Intel or Imagination software is installed.
 
 There are three pieces, and each one is easy to remove again:
 
-1. **A Linux kernel** that has the GPU driver (`powervr_sgx`). It installs next to Debian's
-   own kernel, which stays on your computer and in the boot menu.
-2. **The GPU firmware**, one small file: `/lib/firmware/powervr_sgx/sgx545_ukernel.bin`.
-3. **Mesa with the `sgx` driver** (OpenGL, OpenGL ES, EGL, GBM) in `/opt/sgx`. Debian's own
-   Mesa stays installed; ours is used first.
+1. **A Linux kernel** with the GPU driver (`powervr_sgx`), as a Debian package. It installs
+   next to Debian's own kernel, which stays on your computer and in the boot menu.
+2. **The GPU firmware**, as the package `sgx545-firmware`.
+3. **Mesa with the `sgx` driver** (OpenGL, OpenGL ES, EGL, GBM), as the package `mesa-sgx`,
+   in `/opt/sgx`. Debian's own Mesa stays installed; ours is used first.
 
 You need Debian 13 already installed, an internet connection, and a user that can run
 `sudo`. Download everything from the CI run linked in the announcement. You need to be
@@ -45,24 +45,24 @@ The driver needs Linux 7.1 or newer. Debian 13 ships 6.12, so install our kernel
 ### Cedarview
 
 On Cedarview, the GPU shares its PCI device with the display driver (`gma500`). Our kernel
-has a small change to `gma500` that hands the GPU to `powervr_sgx`.
+has a small change to `gma500` that hands the GPU to `powervr_sgx`. It is Debian's own
+kernel configuration with that change added.
 
-1. From the CI download, take the Cedarview kernel package (`linux-image-…-sgx_….deb`).
+1. From the CI download, take `linux-image-7.1.8-sgx_7.1.8-sgx1_amd64.deb`.
 2. Install it:
 
    ```bash
-   sudo apt install ./linux-image-*-sgx_*.deb
+   sudo apt install ./linux-image-7.1.8-sgx_*.deb
    ```
 
-3. Restart. In the boot menu, the new kernel is the default. Debian's kernel stays under
+3. Restart. The new kernel is the default in the boot menu. Debian's kernel stays under
    "Advanced options".
 
 ### CE5300
 
-Install the CE5300 kernel package the same way as the Cedarview one above.
-
-If your system already runs Linux 7.1 or newer, you can build only the driver with DKMS
-instead. From a copy of this repository:
+There is no kernel package for CE5300 boards, because their kernels need board-specific
+changes. Use a Linux 7.1 or newer kernel for your board, and build only the driver with
+DKMS. From a copy of this repository:
 
 ```bash
 sudo apt install dkms build-essential linux-headers-$(uname -r)
@@ -78,15 +78,14 @@ echo 'blacklist pvrsrvkm' | sudo tee /etc/modprobe.d/sgx-no-pvrsrvkm.conf
 
 ## 3. The firmware
 
-From the CI download, take `sgx545_ukernel.bin` and copy it into place:
+From the CI download, take `sgx545-firmware_….deb` and install it:
 
 ```bash
-sudo mkdir -p /lib/firmware/powervr_sgx
-sudo cp sgx545_ukernel.bin /lib/firmware/powervr_sgx/
-sudo update-initramfs -u
+sudo apt install ./sgx545-firmware_*.deb
 ```
 
-Restart, or load the driver now with `sudo modprobe powervr_sgx`.
+It puts the file `/lib/firmware/powervr_sgx/sgx545_ukernel.bin` in place. Restart, or load
+the driver now with `sudo modprobe powervr_sgx`.
 
 ### Check it
 
@@ -108,15 +107,14 @@ If it says `no microkernel`, the firmware file isn't in the right place. If it s
 
 ## 4. Mesa
 
-From the CI download, take `mesa-sgx-trixie-….tar.gz` and install it:
+From the CI download, take `mesa-sgx_….deb` and install it:
 
 ```bash
-sudo tar -xzf mesa-sgx-trixie-*.tar.gz -C /
-sudo ldconfig
+sudo apt install ./mesa-sgx_*.deb
 ```
 
-This adds `/opt/sgx` and two small settings files, which tell programs to use our Mesa
-before Debian's. Log out and back in, or restart.
+It installs into `/opt/sgx`, with two small settings files that tell programs to use it
+before Debian's Mesa. Log out and back in, or restart.
 
 ### Check it
 
@@ -132,17 +130,10 @@ Mesa is still in use: check that steps 2 to 4 worked.
 
 You can undo each piece on its own.
 
-- **Mesa:**
-
-  ```bash
-  sudo rm -rf /opt/sgx /etc/ld.so.conf.d/00-sgx.conf /etc/glvnd/egl_vendor.d/10_sgx.json
-  sudo ldconfig
-  ```
-
-- **The firmware:** it does nothing without the driver, but to remove it, run
-  `sudo rm -r /lib/firmware/powervr_sgx && sudo update-initramfs -u`.
-- **The kernel:** pick Debian's kernel under "Advanced options" in the boot menu. To
-  uninstall ours, run `sudo apt remove 'linux-image-*-sgx'`.
+- **Mesa:** `sudo apt remove mesa-sgx`. Programs use Debian's Mesa again.
+- **The firmware:** `sudo apt remove sgx545-firmware`. On its own, it does nothing anyway.
+- **The kernel (Cedarview):** pick Debian's kernel under "Advanced options" in the boot menu.
+  To uninstall ours, run `sudo apt remove linux-image-7.1.8-sgx`.
 - **DKMS (CE5300):** run `sudo dkms remove powervr_sgx/0.1 --all`. If you blocked
   `pvrsrvkm` and want it back, delete `/etc/modprobe.d/sgx-no-pvrsrvkm.conf`.
 
