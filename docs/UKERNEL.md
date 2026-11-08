@@ -793,6 +793,22 @@ Gaps:
 
 None of the DDK traces has an out-of-memory event; their scenes are small.
 
+The thresholds are signals, not stops. Nothing in the DDK masks the page
+index or programs a hard limit at the free list's end (0x648 holds the
+initial `(last page - 1)<<16`, 0x61c the head). The microkernel's handler
+pauses the TA (`0xa74` b0) while the 0x22 reserve pages last. Without a
+handler the DPM keeps allocating, and it consumes the end-of-list value
+0xffff as a page index.
+
+**BIF faults.** The DDK microkernel never reads or writes `BIF_INT_STAT`
+(0xc04) or `BIF_FAULT` (0xc08). It writes `BIF_CTRL` only to pulse an
+invalidate: INVALDC (8) or FLUSH (4), then the old value back, at pc 0x158a
+(for a command's cache control) and pc 0x181a (after loading a directory
+list at 0xc34 + 4n). Fault recovery is the host's: `sgxreset.c` drains
+faults by mapping each faulting page to a dummy page under a reset PD and
+acking the event status. The PAUSE | CLEAR_FAULT pulse in `SGXReset` is
+compiled only with `FIX_HW_BRN_23944`, which the SGX545 errata don't define.
+
 ## 6. Register sequences the microkernel runs
 
 These are the fixed `EUR_CR_*` sequences the handlers perform, named by what
