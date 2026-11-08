@@ -110,7 +110,7 @@ the deferred updates.
 | 0x10 | 0c00060e | background object, PDS primary (0x2e0060e0: samples the render target itself, i.e. "load the old contents") | D |
 | 0x14 | 0x50000000 | `0x40000000 + 0x10000000` if kick flag 0x2000000 is clear; else `n<<27` from the render context +0x40 | D |
 | 0x18 | 0x50000000 | constant | D |
-| 0x1c | 0 / 0x400 / 0x580 | 3D flags: b0 = !kick.b1, b1 = kick.b11, b3 = kick.b12-13, b4, b7 = kick.b19, b8 = kick.b20, b10 = kick.b10/b9 (render), b12 = kick.b10; b14 and up = the RT dataset's frame index on the kick that renders (0x4400 on frame 2, GEN.md). The microkernel copies it to render details +0xd4 at every kick (pc 0x07b1-0x07b5) and acts on it there (section 6, "Render details") | D |
+| 0x1c | 0 / 0x400 / 0x580 | 3D flags: b0 = !kick.b1, b1 = kick.b11, b3 = kick.b12-13, b4, b7 = kick.b19, b8 = kick.b20 (b7 \| b8 are needed for a ZLS store or load to happen, `docs/TEX.md` section 7), b10 = kick.b10/b9 (render), b12 = kick.b10; b14 and up = the RT dataset's frame index on the kick that renders (0x4400 on frame 2, GEN.md). The microkernel copies it to render details +0xd4 at every kick (pc 0x07b1-0x07b5) and acts on it there (section 6, "Render details") | D |
 | 0x20 | 0 | the RT dataset's frame index (1 on frame 2, GEN.md). The microkernel copies it to TA3D +0xa4 and render details +0x140 at every kick (pc 0x07bc-0x07bf) | D |
 | 0x24 | 3200e000 | **PB descriptor** (kdata) | D |
 | 0x38 | 3200e560 | **render details** (kdata, 0x1ec) | D |
