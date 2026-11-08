@@ -64,10 +64,7 @@ enum pvrsgx_fw_buf {
 	PVRSGX_FW_KICKER,	/* EUR_CR_EVENT_KICKER target */
 	PVRSGX_FW_TA3DCTL,	/* the microkernel's control block */
 	PVRSGX_FW_HOSTCTL,	/* host control block */
-	PVRSGX_FW_MISC,		/* misc info, filled by GETMISCINFO */
-	PVRSGX_FW_HWPERF,	/* HWPerf circular buffer */
-	PVRSGX_FW_TASIG,	/* TA signature register list */
-	PVRSGX_FW_3DSIG,	/* 3D signature register list */
+	PVRSGX_FW_MISC,		/* misc info the microkernel may fill */
 	PVRSGX_FW_UKERNEL,	/* USSE microkernel */
 	PVRSGX_FW_PDS0,		/* PDS programs that enter it */
 	PVRSGX_FW_PDS1,
@@ -109,10 +106,6 @@ struct pvrsgx_fw {
 	u32 (*patches)[2];
 	/** @n_patches: Entries in @patches. */
 	u32 n_patches;
-	/** @ddk_version: Version the microkernel reports through GETMISCINFO. */
-	u32 ddk_version;
-	/** @ddk_build: Build number it reports with it. */
-	u32 ddk_build;
 };
 
 /**

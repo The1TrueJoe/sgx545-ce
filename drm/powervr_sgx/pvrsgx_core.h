@@ -16,6 +16,11 @@
 /* EUR_CR_EVENT_KICK1..3 next to EUR_CR_EVENT_KICK. */
 #define PVRSGX_FEATURE_MULTI_EVENT_KICK		BIT(1)
 
+/* The USSE instruction set, for the shader validator's tables. */
+enum pvrsgx_isa {
+	PVRSGX_ISA_SGX545,
+};
+
 /* What this driver needs: a directory per VM, and the second kick for the microkernel's start. */
 #define PVRSGX_FEATURES_REQUIRED \
 	(PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS | PVRSGX_FEATURE_MULTI_EVENT_KICK)
@@ -36,6 +41,8 @@ struct pvrsgx_core_info {
 	u32 core_rev;
 	/** @features: PVRSGX_FEATURE_*. */
 	u32 features;
+	/** @isa: Its USSE instruction set. */
+	enum pvrsgx_isa isa;
 	/** @num_dir_lists: BIF directory lists (SGX_FEATURE_BIF_NUM_DIRLISTS). */
 	u32 num_dir_lists;
 	/** @clock_hz: Core clock, for the microkernel's timer. */
