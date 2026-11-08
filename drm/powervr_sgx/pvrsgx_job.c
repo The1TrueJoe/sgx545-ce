@@ -216,6 +216,9 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 
 	if (sched_job->s_fence->finished.error)
 		return NULL;
+	/* A reset context's queued jobs build on work that never finished. */
+	if (READ_ONCE(job->ctx->state) != DRM_POWERVR_SGX_CONTEXT_STATE_OK)
+		return ERR_PTR(-ECANCELED);
 
 	fence = kzalloc_obj(*fence);
 	if (!fence)

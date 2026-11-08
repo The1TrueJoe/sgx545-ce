@@ -175,7 +175,7 @@ VM so far before it lets go of the pages.
 - A NULL job is a `PROCESS_QUEUES` command: no GPU work, ordered with the context's other
   jobs. It exists to test the fence, syncobj and scheduler plumbing before the streams.
 - Timeout (2 s): the context is guilty, everything on the GPU fails (`-ETIME` for the
-  guilty job, `-ECANCELED` otherwise), and the microkernel is stopped and started from a
+  guilty job, `-ECANCELED` otherwise, and for that context's queued jobs, which never run), and the microkernel is stopped and started from a
   clean control block and an empty CCB. This is the "discard" recovery of UKERNEL.md 5a.
   If it does not start again, the device is lost and every later job fails with `-EIO`.
   Before the restart the driver does what an unload does: deinit script, cores held in

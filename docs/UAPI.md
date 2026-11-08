@@ -852,6 +852,7 @@ restarts the scheduler. The kernel rebuilds the affected context's free list and
 | the job that timed out, or faulted if the MMU reports faults (G3) | `-ETIME` (fault: `-EFAULT`) | `GUILTY` | `-ECANCELED` |
 | a job on the hardware when another's job reset it | `-ECANCELED` | `INNOCENT` | `-ECANCELED` |
 | jobs queued but not started | none: they run after the reset | `OK` | accepted |
+| jobs queued behind a guilty or innocent context's job | `-ECANCELED`, without running | as that context | `-ECANCELED` |
 | nothing | | `OK` | accepted |
 
 - Error codes follow `dma_fence_set_error()`'s conventions, and `drm-uapi.rst` asks for
