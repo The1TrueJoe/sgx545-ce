@@ -1030,11 +1030,18 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   - So the drain failure is probably real, and the 10/10 runs were simply
     shorter than the PB.
   - The DDK drains 0x724 to 0 during every 3D (EA1 register sample).
-  - Likely cause: the DDK runs the TA free-list load, `save_ta_state` and the
-    3D free-list load only when the PB changes (once in a two-frame trace).
-    The open microkernel ran them every scene, so each TA load re-seeded the
-    free-list head from the descriptor and skipped the pages the last 3D had
-    freed.
+  - **Fixed (um-re f0dc24d, EA3 2026-11-08).** The cause: the DDK runs the
+    TA free-list load, `save_ta_state` and the 3D free-list load only when
+    the PB changes, and the open microkernel ran them every scene. Each TA
+    load then re-seeded the free-list head from the descriptor and skipped
+    the pages the last 3D had freed.
+  - The fix gates both loads on per-PB markers (control block +0xb8/+0xbc,
+    as the DDK's TA3D +0xb8/+0xbc). It resets both markers at init and on
+    cleanup, as the DDK does on context and PB cleanup; without the reset, a
+    PB reallocated at the same address skipped its load. 0x63c = 3 is still
+    written at every 3D start.
+  - Results: 600 frames with 0 differing, and a second process's 100 frames
+    with 0 differing, no OOM.
 - The timer / active-power / lockup-detection path is read structurally but
   not run (no timer event in an offline frame).
 - The recovery rescan (section 5a) is understood from the init path and the
