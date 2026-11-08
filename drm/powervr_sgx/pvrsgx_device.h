@@ -208,15 +208,6 @@ struct pvrsgx_device {
 	/** @reap_work: Frees @graveyard entries a later render made safe. */
 	struct work_struct reap_work;
 
-	/** @last_lock: Protects @last_rtds and @last_cmd_off. */
-	struct mutex last_lock;
-	/** @last_rtds: RT dataset of the last render job, for debugfs. */
-	struct pvrsgx_rt_dataset *last_rtds;
-	/** @last_cmd_off: Its command's offset in the render context CCB. */
-	u32 last_cmd_off;
-	/** @render_snap: Text dump taken as a last kick was written (debugfs). */
-	char *render_snap;
-
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
 };

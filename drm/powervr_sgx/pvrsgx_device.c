@@ -305,7 +305,6 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 
 	mutex_init(&sdev->ccb_lock);
 	mutex_init(&sdev->done_lock);
-	mutex_init(&sdev->last_lock);
 	spin_lock_init(&sdev->ccb_spin);
 
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
@@ -360,9 +359,6 @@ err_mmu:
 void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 {
 	pvrsgx_job_fini(sdev);
-	pvrsgx_rtds_put(sdev->last_rtds);
-	sdev->last_rtds = NULL;
-	kvfree(sdev->render_snap);
 	pvrsgx_fw_stop(sdev);
 	irq_teardown(sdev);
 	pvrsgx_kobj_fini(sdev);

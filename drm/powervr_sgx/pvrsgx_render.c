@@ -20,7 +20,6 @@
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/seq_buf.h>
-#include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -645,16 +644,6 @@ static void pb_rearm(struct pvrsgx_device *sdev, struct pvrsgx_pb *pb)
 	}
 }
 
-/* Debug: snapshot the structures as the last kick is written (debugfs render_before). */
-static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s, u32 cmd_off);
-static bool snapshot;
-module_param(snapshot, bool, 0644);
-MODULE_PARM_DESC(snapshot, "Keep the structures as written for the last kick (debugfs render_before)");
-
-static uint snap_gap_ms;
-module_param(snap_gap_ms, uint, 0644);
-MODULE_PARM_DESC(snap_gap_ms, "Wait this long before writing a scene's last kick, so the snapshot follows the first kick's TA");
-
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 {
 	struct pvrsgx_render_job *rj = &job->render;
@@ -665,8 +654,6 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	u32 f, odd, rgn_this, rgn_next, entry, *cmd, *sh, *t, *rd, *sl, *s3d, *done, *b;
 	u32 woff = r->ccb_woff, zls_base = 0;
 
-	if (last && k && snap_gap_ms)
-		msleep(snap_gap_ms);
 	if (first)
 		pb_rearm(job->ctx->sdev, r->pb);
 	f = s->frames;
@@ -785,20 +772,11 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
 	if (last)
 		rj->cmd_off = woff;
-	if (last && snapshot)
-		render_snapshot(job->ctx->sdev, s, woff);
 	if (last)
 		s->frames++;
 
 	memset(data, 0, 6 * sizeof(u32));
 	data[1] = kobj_va(r->hwctx);
-
-	mutex_lock(&job->ctx->sdev->last_lock);
-	kref_get(&s->ref);
-	swap(job->ctx->sdev->last_rtds, s);
-	job->ctx->sdev->last_cmd_off = woff;
-	mutex_unlock(&job->ctx->sdev->last_lock);
-	pvrsgx_rtds_put(s);
 	return 0;
 }
 
@@ -953,7 +931,7 @@ static void dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u3
 	seq_buf_puts(sb, "\n");
 }
 
-/* The structures of a render, word by word, for A/B against the DDK. Under last_lock. */
+/* The structures of a render, word by word. */
 static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s,
 			u32 cmd_off)
 {
@@ -998,64 +976,13 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	pvrsgx_fw_dump(sb, sdev, PVRSGX_FW_TA3DCTL, "ta3dctl");
 }
 
-#define DUMP_BYTES	SZ_16K
-
-/*
- * The last render job's structures now, or (before) as they were when its last
- * kick was written: after snap_gap_ms that is after the first kick's TA and
- * before the 3D.
- */
-void pvrsgx_render_debugfs_show(struct seq_file *m, struct pvrsgx_device *sdev, bool before)
-{
-	struct seq_buf sb;
-	char *buf;
-
-	mutex_lock(&sdev->last_lock);
-	if (before) {
-		seq_puts(m, sdev->render_snap ?: "no snapshot (powervr_sgx.snapshot=1)\n");
-		mutex_unlock(&sdev->last_lock);
-		return;
-	}
-	if (!sdev->last_rtds) {
-		mutex_unlock(&sdev->last_lock);
-		seq_puts(m, "no render yet\n");
-		return;
-	}
-	buf = kvmalloc(DUMP_BYTES, GFP_KERNEL);
-	if (buf) {
-		seq_buf_init(&sb, buf, DUMP_BYTES);
-		render_dump(&sb, sdev, sdev->last_rtds, sdev->last_cmd_off);
-		seq_puts(m, seq_buf_str(&sb));
-		kvfree(buf);
-	}
-	mutex_unlock(&sdev->last_lock);
-}
-
-/* Called with the last kick written and not yet sent. */
-static void render_snapshot(struct pvrsgx_device *sdev, struct pvrsgx_rt_dataset *s, u32 cmd_off)
-{
-	struct seq_buf sb;
-
-	mutex_lock(&sdev->last_lock);
-	if (!sdev->render_snap)
-		sdev->render_snap = kvmalloc(DUMP_BYTES, GFP_NOWAIT | __GFP_NOWARN);
-	if (sdev->render_snap) {
-		seq_buf_init(&sb, sdev->render_snap, DUMP_BYTES);
-		render_dump(&sb, sdev, s, cmd_off);
-		seq_buf_str(&sb);
-	}
-	mutex_unlock(&sdev->last_lock);
-}
-
 /* A job's command and the structures it names, for a devcoredump. */
 void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job)
 {
 	struct pvrsgx_device *sdev = job->ctx->sdev;
 
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER && job->render.rtds) {
-		mutex_lock(&sdev->last_lock);
 		render_dump(sb, sdev, job->render.rtds, job->render.cmd_off);
-		mutex_unlock(&sdev->last_lock);
 	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER && job->ctx->transfer) {
 		struct pvrsgx_transfer_ctx *x = job->ctx->transfer;
 
