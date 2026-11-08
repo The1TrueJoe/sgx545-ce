@@ -51,7 +51,7 @@ own words, from behaviour — no listings, no bytes.
 
 ## Open microkernel
 
-`ukernel/` is openHC's own microkernel, in USSE assembly, built by `asm.py`
+`ukernel/` is the open microkernel, in USSE assembly, built by `asm.py`
 into the binary srvinit will load plus a manifest of entry offsets. The first
 version is the init handshake (sets `ui32InitStatus =
 PVRSRV_USSE_EDM_INIT_COMPLETE`) and the host-interrupt tail; both pass in the

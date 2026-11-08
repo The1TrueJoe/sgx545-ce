@@ -131,7 +131,7 @@ EDM breakpoints, no `FIX_HW_BRN_28889`, no extended perf counters):
 | 12 | `ui32TimeWraps` | microkernel |
 | 13 | `ui32HostClock`: the host's clock in µs, written at start | host |
 | 14 | `ui32AssertFail` | microkernel |
-| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_OPENHC_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
+| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
 | 16 | `ui32BRN31939Mem` (present because the build is for core revision 1013, which carries `FIX_HW_BRN_31939`; the host never touches it). The open microkernel reuses the word for its cleanup v2 sequence echo (section 3) | microkernel |
 | 17 | `ui32OpenCLDelayCount` | |
 
@@ -496,7 +496,7 @@ DCU-invalidate and TA/3D acks; the host kick found by the CCB offsets) and §4
 ## 4a. The firmware file
 
 `powervr_sgx` loads the microkernel with `request_firmware()`. It tries
-`powervr_sgx/sgx545-openhc-ukernel.bin` first, then the DDK image under its own
+`powervr_sgx/sgx545-ukernel.bin` first, then the DDK image under its own
 name. A file that starts with the magic below is an open microkernel and is
 loaded from its header alone. Anything else must be the one DDK build the
 driver knows (size and patch placeholders checked).
@@ -873,7 +873,7 @@ kick of a new PB.
 
 The open microkernel opens none of these windows: its EDM stays on list 15.
 Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
-`do_3d`), and with `HOSTCTL_OPENHC_HOST_BGBLOCK` set the host writes that
+`do_3d`), and with `HOSTCTL_HOST_BGBLOCK` set the host writes that
 block instead. Everything else the EDM reads or writes is in kernel code,
 kernel data or the sync heap, all mapped in the kernel PD.
 

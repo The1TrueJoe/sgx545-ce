@@ -27,3 +27,8 @@ The technical write-ups the log draws on:
 | `docs/ISA.md` | the USSE instruction set, hardware constants, USP container |
 | `docs/SRVINIT.md` | microkernel bring-up without libsrv_init |
 | `docs/TEX.md` | texture memory layout, uploads, render to texture, ZLS, presentation |
+
+**Edited data (2026-11-08).** In the files under `data/` the boards' host names
+became `ce5300-board`, the session scratch paths became `<scratch>/`, and the
+open microkernel's file names follow its current naming (`sgx545-ukernel.bin`).
+The measurements themselves are unchanged.

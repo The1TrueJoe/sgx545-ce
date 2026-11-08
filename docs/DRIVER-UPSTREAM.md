@@ -156,6 +156,6 @@ STATE.md §1/§6 and UKERNEL.md.
 ## 6. Not covered
 
 - `src/egl/drivers/dri2/platform_fbdev.c` is EGL plumbing with no hardware
-  knowledge. Mesa has no fbdev platform, so it stays openHC's.
+  knowledge. Mesa has no fbdev platform, so it stays downstream.
 - The tests (`mesa/tests`) and the dEQP rig: `run-deqp.sh ddk` runs the DDK
   for comparison. No shipping test depends on it.

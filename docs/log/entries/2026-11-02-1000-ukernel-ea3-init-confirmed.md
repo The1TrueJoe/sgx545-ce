@@ -13,7 +13,7 @@ cold boot. The kernel's SGX debug dump after the run shows init ran to the end:
 | evidence | value | meaning |
 |---|---|---|
 | Host control HC-0 | `0x00000001` | `ui32InitStatus` = INIT_COMPLETE (was `0x0` in the 0630 stall) |
-| TA/3D control T3C-50 word 2 (ctlblk+0x58) | `0x00010000` | the advisory openHC version word `init` writes last |
+| TA/3D control T3C-50 word 2 (ctlblk+0x58) | `0x00010000` | the advisory open-microkernel version word `init` writes last |
 | HC-10/HC-20 | populated | host-control block filled by the microkernel |
 
 So in the bare-`DOUTU` event context, r17 is allocated and usable, and the
@@ -83,18 +83,18 @@ the common block after the `if (s->ours)` branch): the event PDS program address
 DOUTU vs the DDK's) and the host-kick table differ. So for `-o` the event program
 is armed and SW_EVENT is enabled exactly as for the working DDK path — the
 re-trigger is set up. The blocker is therefore in the **microkernel's own
-behaviour after init**, not srvinit registration: openHC's init task ends but the
+behaviour after init**, not srvinit registration: the open microkernel's init task ends but the
 core does not return to the event-wait state to re-run B_PDS0 on the next
 SW_EVENT (it locks up with 2 tasks pending, `dcu_invalid`). This implicates the
 init task's exit / task-phase handling (the `phas.i`/`nop [end]` wrapper, or
-something the DDK's init task does at exit that openHC omits).
+something the DDK's init task does at exit that the open microkernel omits).
 
 ## Next step (for the next EA3 slot)
 
 Add a sentinel at the very top of the event entry (before the init check): does
 B_PDS0 re-run at all on the next SW_EVENT? If it never fires, init's exit left the
 core wedged (the 2-task lockup) and the fix is in the init task's phase/exit
-sequence — compare the DDK init task's exit (its disasm/trace) against openHC's
+sequence — compare the DDK init task's exit (its disasm/trace) against the open microkernel's
 `phas()`/`end()`. If it fires but branches back into `init`, the post-init
 InitStatus read is wrong in the re-entered context. Either way the work is in the
 microkernel, not srvinit.

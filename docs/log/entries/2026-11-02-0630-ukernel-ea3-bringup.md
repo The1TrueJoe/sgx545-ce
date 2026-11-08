@@ -37,7 +37,7 @@ indexed `mov sa[idx]`) and runs on hardware. The difference is *when*. The DDK's
 event program is a bare `DOUTU` (pds0) that enters the microkernel; the
 microkernel **emits** to trigger pds1, whose `DOUTD` DMAs the control block into
 `sa` and re-enters it — only in that re-entered context does the DDK write/read
-`sa`. openHC skipped the emit/DMA and wrote `sa` immediately in the initial
+`sa`. The open microkernel skipped the emit/DMA and wrote `sa` immediately in the initial
 bare-`DOUTU` context, where it faults. (Corrected 2026-11-02: an earlier note
 here mis-stated this as "tasks cannot write `sa`"; the emulator modelled `mov
 sa` as a plain register write, so the suite passed offline.)

@@ -1,6 +1,6 @@
 # EA1: the post-init event program storms on an unacknowledged DCU-invalidate; the host kick is still not serviced
 
-First M1 hardware session on the **EA1** (`openhc-ea1-000FFF1AFCA9`, kernel
+First M1 hardware session on the **EA1** (`ce5300-board`, kernel
 7.1.8, CE5300 core rev 1.0.14), after GPU testing moved off the EA3. `srvinit
 -o` with the option-B microkernel. Two findings, both hardware-confirmed: a
 real post-init bug (fixed this session), and the precise shape of the blocker
@@ -51,7 +51,7 @@ So â€” revising the EA3 "init exit wedges the core, never re-entered" reading â€
 the event program **is** re-entered after init and **does** reach the post-init
 dispatch (POST set). The storm source is **`dcu_invalid` (EUR_CR_EVENT_STATUS2
 bit 0x400)**: a data-cache-unit invalidate the kernel leaves pending after
-`SysFinalise`. openHC's dispatch only read `EUR_CR_EVENT_STATUS` (0x12C) and
+`SysFinalise`. the open microkernel's dispatch only read `EUR_CR_EVENT_STATUS` (0x12C) and
 dispatched four STATUS bits; it never read `STATUS2` (0x118) or acknowledged
 `dcu_invalid`, so the event re-triggered and the SW_EVENT host kick was
 starved. (The offline emulator models neither STATUS2 nor event re-entry, so

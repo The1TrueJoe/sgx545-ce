@@ -59,19 +59,19 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
   - `sgx545_frame.c` has no services structure layouts left.
 - **To do.**
   - Make the pvrsrvkm backend an explicit meson option,
-    `-Dgallium-sgx545-pvrsrvkm=disabled` by default and openHC-only. Today
+    `-Dgallium-sgx545-pvrsrvkm=disabled` by default and downstream-only. Today
     the build switches on whether `libpvr/pvr.c` exists (`fs.exists`), while
     `sgx545_frame.h` already talks of a meson option.
   - `sgx545_pvr.c`, `libpvr/` and the `include/sgx545-kernel` link are built
     from the GPL kernel's headers. They stay out of the upstream tree: an
-    openHC patch on top, deleted by removing two files and one meson block.
+    downstream patch on top, deleted by removing two files and one meson block.
   - Backend-specific debug knobs move into that backend: `flushrt`, which
     sends `SGX_FLUSH_HW_RENDER_TARGET`.
   - `SGX545_TRACE`/`SGX545_DRY_RUN` write a pvrtrace log for
     `tools/decode`. It is a development aid either way: decide whether it
-    stays as a documented debug option or becomes openHC-only.
+    stays as a documented debug option or becomes downstream-only.
   - `resource_from_user_memory` (the fbdev framebuffer, services only) and
-    the EGL fbdev platform stay openHC's.
+    the EGL fbdev platform stay downstream.
 
 ### M2. Features from DEV_QUERY and a core table
 
@@ -108,7 +108,7 @@ Plan:
 
 `sgx545` names one core. A family driver would be `sgx`: `drivers/sgx`,
 `winsys/sgx`, `SGX_DEBUG`, `sgx_dri.so`. Renaming touches every file, the
-loader patch (0005), kmsro (0006), the openHC packaging and every session's
+loader patch (0005), kmsro (0006), the downstream packaging and every session's
 scripts. It is cheap once, now, and expensive after upstream review starts.
 
 ### M4. clang-format
@@ -127,8 +127,8 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 
 ### M5. Comments and naming
 
-- About 50 comments in the driver, winsys and compiler name the openHC
-  application, the bench box or game titles ("the openhc-minecraft overlay",
+- About 50 comments in the driver, winsys and compiler name the boot
+  image's application, the bench box or game titles (the Minecraft overlay,
   "EA1"). Rewrite each to say what GL usage triggers the behaviour and which
   test covers it (dEQP/piglit name), and move the history to `docs/log`.
 - "as the DDK does" comments: cite the `docs/` section instead
@@ -217,7 +217,7 @@ requests (header + feature bits applied by the driver's packaging tool over the
 ```
 Driver: powervr_sgx — PowerVR SGX5xx (e.g. SGX545 on the Intel Atom CE5300)
 
-File: powervr/sgx545-openhc-ukernel.bin
+File: powervr/sgx545-ukernel.bin
 Version: 1.0
 Source: <source-repository-url>/ukernel   (ukernel.py + build.py; the DRM
         driver's packaging tool applies the header/feature bits)
@@ -247,14 +247,16 @@ Atom CE5300, the PowerVR SGX545 and the SGX5xx family. The dev-board history
 moves to `docs/log/`. The replacements:
 - the dev-board names (EA1, EA3, HC-800) become "a CE5300 board", or a plain
   dated hardware tag;
-- "openHC's microkernel" becomes "the open microkernel";
+- "the open microkernel" becomes "the open microkernel";
 - IP addresses, box workspaces and product names go.
 
 Long bring-up narratives move to a dated `docs/log/entries/` file, with a
 pointer left in their place.
 
 Remaining box-specific references, counted on 2026-11-08 by
-`grep -E 'Control4|\bEA[0-9]\b|EA-[0-9]|HC-800|10\.0\.0\.|openHC|Bench plug'`.
+`grep -E 'Control4|\bEA[0-9]\b|EA-[0-9]|HC-800|10\.0\.0\.|Bench plug'` plus the
+downstream distribution's name (which must not appear anywhere in this
+repository, 2026-11-08).
 The last column is the count of lines naming a branch, commit or log entry.
 
 | doc | box refs | branch/log refs | status | owner |
@@ -282,10 +284,10 @@ Decided (main, 2026-11-08):
   and anything copied from UAPI.md or DRM-DRIVER.md. Such text states the
   facts and their evidence directly. Our own `docs/` may keep the pointers.
 - **Firmware file names follow the per-core naming** (dcd50df).
-  - The build writes `<core>-ukernel-openhc.bin`, now
-    `sgx545-ukernel-openhc.bin`. SRVINIT.md's `srvinit -o` example uses it.
+  - The build writes `<core>-ukernel.bin`, now
+    `sgx545-ukernel.bin`. SRVINIT.md's `srvinit -o` example uses it.
   - The driver requests the packaged image as
-    `powervr_sgx/sgx545-openhc-ukernel.bin`; UKERNEL.md §4a uses it.
+    `powervr_sgx/sgx545-ukernel.bin`; UKERNEL.md §4a uses it.
   - Both match the code (`ukernel/build.py`, `pvrsgx_fw.c`), so no rename was
     needed.
   - The WHENCE draft's `powervr/` directory differs from the driver's

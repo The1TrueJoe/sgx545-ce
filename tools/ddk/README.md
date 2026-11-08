@@ -81,7 +81,7 @@ the DDK version check against this 1.7 tree.
 
 ### Running it
 
-The DDK blobs are 32-bit glibc; openHC is musl. Rather than fight that during
+The DDK blobs are 32-bit glibc; the boot image is musl. Rather than fight that during
 bring-up, run them against a private glibc sysroot:
 
 ```sh

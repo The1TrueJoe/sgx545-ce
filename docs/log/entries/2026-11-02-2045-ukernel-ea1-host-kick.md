@@ -34,7 +34,7 @@ doorbell is only the trigger, the CCB offsets are the queue.
 `SW_EVENT` (0x4000) in `EUR_CR_EVENT_STATUS` is the *opposite* direction: the
 microkernel sets it (`raise_host_irq`) to raise the host interrupt, and the
 host's ISR clears it (docs/UKERNEL.md §2, confirmed by `test_emu`
-`raise_host_irq`). openHC's dispatch gated the host kick on this bit, so the
+`raise_host_irq`). the open microkernel's dispatch gated the host kick on this bit, so the
 kick could never fire — matching the EA1 dump exactly (`EVENT_STATUS = 0`,
 `sw_event: no`, while the command sat unconsumed).
 

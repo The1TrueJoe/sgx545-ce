@@ -2,7 +2,7 @@
 # EA1 RAM boot of b24d0aa (run 41757864040), 2026-11-04 ~03:33 UTC
 
 # ---- load
-[   22.449368] powervr_sgx 0000:01:02.0: [drm] powervr_sgx/sgx545-openhc-ukernel.bin: open microkernel ukernel-273225c, interface 1.0, features 0x0
+[   22.449368] powervr_sgx 0000:01:02.0: [drm] powervr_sgx/sgx545-ukernel.bin: open microkernel ukernel-273225c, interface 1.0, features 0x0
 [   22.462105] powervr_sgx 0000:01:02.0: [drm] microkernel started
 [   22.466514] powervr_sgx 0000:01:02.0: [drm] every VM maps the firmware's heaps: clients are not isolated from the firmware
 [   22.477584] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
@@ -38,7 +38,7 @@ ccb wo 97 ro 97 issued 609 consumed 609
 
 # ==== second run: RAM boot of 3298009 (run 41767480520), open microkernel um-re e78a17c
 # (ukernel md5 d28972ee, 9768 bytes; k_transfer now sets BIF_BANK0), features 0, 2026-11-04 ~04:50 UTC
-[    8.503862] powervr_sgx 0000:01:02.0: [drm] powervr_sgx/sgx545-openhc-ukernel.bin: open microkernel ukernel-e78a17c, interface 1.0, features 0x0
+[    8.503862] powervr_sgx 0000:01:02.0: [drm] powervr_sgx/sgx545-ukernel.bin: open microkernel ukernel-e78a17c, interface 1.0, features 0x0
 [    8.515711] powervr_sgx 0000:01:02.0: [drm] microkernel started
 
 # ---- one frame, one kick

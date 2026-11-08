@@ -1,4 +1,4 @@
-# srvinit -o (openHC microkernel) on the EA3, 2026-10-29 ~03:47 UTC. Clean boot,
+# srvinit -o (open microkernel) on the EA3, 2026-10-29 ~03:47 UTC. Clean boot,
 # GPU not yet initialised, init-process slot free. srvinit rc=1.
 PVR_K:(Error): pvr: invalid param size for IOCTL#99: kern/user in,out: 2192/2192,16/8   # DEVINITPART2 8-byte OUT; srvinit retried with 16 (expected on this driver)
 PVR: Installing MISR

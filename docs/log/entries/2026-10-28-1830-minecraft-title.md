@@ -5,7 +5,7 @@ Next for milestone (e), after the first light: the game's own frames.
 ## The title screen
 
 Ours drew the title screen's panorama, but the panel stayed black. The cause
-was the openhc-minecraft overlay's alpha-only clear at every swap
+was the Minecraft runtime's alpha-only clear at every swap
 (`glColorMask(0, 0, 0, 1)`, then `glClear`). Mesa 26 hands that to the
 driver as a clear with a per-target colour mask, and the driver ignored the
 mask, so it cleared RGB to black after every frame. Clears now honour it

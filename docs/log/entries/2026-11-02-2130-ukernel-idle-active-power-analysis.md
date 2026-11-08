@@ -16,7 +16,7 @@ fix is proposed, with one design choice for the next step.
   declares `SGX lockup (0x%x tasks)` and triggers HWR. "0x2 tasks" is just that
   frozen value.
 
-openHC's microkernel is purely event-driven: each event program run ends
+the open microkernel is purely event-driven: each event program run ends
 (`nop [end]`) and the EDM halts until the next event. Idle with no client, it
 runs nothing, so 0xb14/0xb20 never change → every 3 ticks → HWR. (Host commands
 still drain — the APM keeps poking it — so `WO == RO` keeps advancing even as the
@@ -41,15 +41,15 @@ the GPU sat powered and idle, the one state the watchdog punishes.
 
 `PVRSRV_USSE_EDM_INTERRUPT_ACTIVE_POWER = (1<<1) = 0x2` (`sgx_mkif_km.h:230`).
 `ui32InterruptFlags` is **host-control word 8** (ClearFlags is word 9 =
-openHC's `HC_INTCLEAR`, so no `BRN_28889` shift). So the **microkernel** tells
+the open microkernel's `HC_INTCLEAR`, so no `BRN_28889` shift). So the **microkernel** tells
 the host "I'm idle, power me down" by setting bit 1 of host-control word 8 and
 raising the host IRQ; the host's MISR then calls `SGXTestActivePowerEvent`,
-powers off, and the watchdog goes quiet. **openHC never sets this flag**, so the
+powers off, and the watchdog goes quiet. **the open microkernel never sets this flag**, so the
 host never powers down the idle GPU. That is the whole bug.
 
 (The DDK drives this from its TIMER-event handler using
 `ui32ActivePowManSampleRate` / `ui32ActivePowManLatencyms` — raise ACTIVE_POWER
-after the GPU has been idle for the configured latency. openHC implements no
+after the GPU has been idle for the configured latency. the open microkernel implements no
 TIMER handler and no active-power at all; docs/UKERNEL.md §4 already flagged the
 timer/active-power path as "read structurally but not implemented".)
 

@@ -22,7 +22,7 @@ PDS programs, USSE finalising, TA state, VDM) over a kernel backend, `struct sgx
   - completion on one timeline syncobj per device;
   - dma-buf import and export.
 - `sgx545_pvr.c`, the libpvr code that was there before, moved out unchanged. It is built only
-  where `mesa/build.sh` links libpvr in, so openHC keeps its stack.
+  where `mesa/build.sh` links libpvr in, so a downstream distribution can keep its stack.
 
 `docs/WINSYS.md` says how the backend is picked (the kernel driver's name) and what each
 does.

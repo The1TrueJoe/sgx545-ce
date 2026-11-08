@@ -17,7 +17,7 @@ one fixed:
 
 1. **Fixed — `dcu_invalid` storm.** A data-cache-unit invalidate the kernel
    leaves pending in `EUR_CR_EVENT_STATUS2` (0x400) after `SysFinalise`
-   re-triggered the event program forever, because openHC read only
+   re-triggered the event program forever, because the open microkernel read only
    `EUR_CR_EVENT_STATUS`. The dispatch now acknowledges it (§2). HW-confirmed:
    STATUS2 `0x400`→`0`.
 2. **Fixed, HW-CONFIRMED — the host kick is serviced.** Two fixes: (a) the host
@@ -37,7 +37,7 @@ one fixed:
    (`0xb14^0xb20` frozen). The microkernel must raise the active-power idle
    signal: `ui32InterruptFlags |= EDM_INTERRUPT_ACTIVE_POWER` (host-control word
    8, bit 1) + the host IRQ, which `SGXTestActivePowerEvent` turns into a
-   power-down. openHC now does this at `kick_end` when the CCB is empty and
+   power-down. the open microkernel now does this at `kick_end` when the CCB is empty and
    nothing is in flight. On the EA1: **0 lockups / 0 HWR over ~60 s idle** (was
    6+ in 20 s); `srvinit` still rc=0. Later refinements: the same signal at the
    end of `render_done` (render-idle), and the DDK-style timer-based active-power
@@ -57,7 +57,7 @@ and executes, but init stalls: the event entry dies when it writes `sa` (`mov
 sa1`) directly in the initial bare-`DOUTU` context, so InitStatus is never set
 and `SGXInitialise` times out. `sa` is not a general "tasks can't write it"
 limit — the DDK microkernel writes `sa` (e.g. `mov sa9`) and runs — but only
-after it emits to trigger the pds1 DMA that establishes `sa`; openHC wrote `sa`
+after it emits to trigger the pds1 DMA that establishes `sa`; the open microkernel wrote `sa`
 before any such setup (`docs/log/entries/2026-11-02-0630-ukernel-ea3-bringup.md`).
 The emulator modelled `mov sa` as a plain register write, so the suite passed
 offline. **Fix (option B, offline-validated):** drop `sa` entirely — carry the

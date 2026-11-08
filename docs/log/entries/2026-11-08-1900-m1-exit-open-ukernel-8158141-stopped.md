@@ -1,7 +1,7 @@
 # M1 exit on the open microkernel 8158141: stopped in the first chunk
 
 EA3 RAM boot of m2-drm 3d0604b (CI run 42510583614), 2026-11-08 18:44 to 19:00 UTC, nothing
-flashed, no power cycle. powervr_sgx loaded with `firmware=powervr_sgx/sgx545-openhc-ukernel.bin`,
+flashed, no power cycle. powervr_sgx loaded with `firmware=powervr_sgx/sgx545-ukernel.bin`,
 dmesg "open microkernel ukernel-8158141". Mesa: um-re d2357fd with the compiler from 868b2eb,
 EGL surfaceless on `renderD128`.
 

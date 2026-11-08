@@ -18,10 +18,10 @@ Still open: a transfer also updates two sync-heap objects whose addresses come
 from the kick's sync-handle list (not the shared command); those are not
 reproduced yet. Flagged in §10.
 
-## Advisory openHC version word
+## Advisory version word
 
 `init` now writes `0x00010000` (1.0) to control-block `+0x58`, per
-UKERNEL-DECISIONS.md: advisory (the DDK driver ignores it), for an openHC-aware
+UKERNEL-DECISIONS.md: advisory (the DDK driver ignores it), for a version-aware
 kernel to log which build is running. The authoritative compatibility gate
 stays the SGXMKIF build-options and struct-size checks.
 
