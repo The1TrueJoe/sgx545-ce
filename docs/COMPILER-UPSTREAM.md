@@ -54,7 +54,7 @@ How the tables were established (ISA.md "How each fact was established"):
   of every form through it. `hw.py` must decode each result with no
   unexplained bit and re-encode it from text. 5045 instruction words logged
   from real DDK compiles round-trip.
-- **Hardware experiments** (`hwt_*`, 11 suites, 76 tests on the EA3) fixed the
+- **Hardware experiments** (`hwt_*`, 11 suites, 76 tests on a CE5300 board) fixed the
   *meaning* of fields the encoder alone can't give: F16 numbering, rounding,
   C10, setfc, repeats, swizzles, and so on.
 
@@ -101,7 +101,7 @@ checks", so it's indicative, not exhaustive.)
 - `fcos`: hwt_p3 confirms its value on hardware. No A/B shader uses cos yet.
 - `fadm`, `fmsa`: hwt_p1/p5 confirm them. Selected only for some fmad shapes.
 - `fdsx`, `fdsy` (derivatives): ours match the DDK's words for corpus c3
-  dsx/dsy. piglit on the EA3 showed that their sources must run on helper
+  dsx/dsy. piglit on a CE5300 board showed that their sources must run on helper
   instances (skipinv clear) and that the destination must not share the
   source's register. Retest after the register fix; they also need an hwt
   test before upstream.
@@ -216,6 +216,8 @@ Recommendation (all four done, see §2.1): do it, in this order:
    every word the compiler emits in the suites, and on the corpus.
 
 ## 5. Other Mesa expectations (§3.7)
+
+Status: docs/UPSTREAM-READINESS.md, "Compiler" (C1-C9), tracks these now.
 
 - **Style:** C11, Mesa formatting, no global state (`hw_const`'s static table
   should become a const table).
