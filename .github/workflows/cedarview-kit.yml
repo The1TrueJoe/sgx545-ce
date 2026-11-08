@@ -25,7 +25,7 @@ jobs:
   image:
     if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'cedarview-kit-')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -35,8 +35,14 @@ jobs:
         run: |
           set -eux
           id=${{ inputs.kernel_run }}
-          [ -n "$id" ] || id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=20" \
-            -q '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+          # m2-drm's run may still be building it (workflow_run would only fire for a
+          # workflow on the default branch): wait for it, up to 50 minutes
+          for i in $(seq 1 50); do
+            [ -n "$id" ] && break
+            id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=20" \
+              -q '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+            [ -n "$id" ] || { echo "no powervr-sgx-cedarview artifact yet ($i)"; sleep 60; }
+          done
           [ -n "$id" ] || { echo "::error::no powervr-sgx-cedarview artifact: run powervr-sgx.yml on m2-drm first"; exit 1; }
           gh run download "$id" -R "$GITHUB_REPOSITORY" -n powervr-sgx-cedarview -D kernel
           cat kernel/version
