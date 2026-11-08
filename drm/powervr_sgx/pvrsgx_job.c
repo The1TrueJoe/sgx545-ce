@@ -30,6 +30,7 @@
 
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
+#include "pvrsgx_pm.h"
 #include "pvrsgx_drv.h"
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"

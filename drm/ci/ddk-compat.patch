@@ -28,9 +28,9 @@ diff -ruN powervr_sgx.orig/Makefile powervr_sgx/Makefile
 --- a/drm/powervr_sgx/Makefile	2026-11-08 17:14:42
 +++ b/drm/powervr_sgx/Makefile	2026-11-08 17:14:42
 @@ -27,6 +27,7 @@
- 	powervr_sgx_stream_defs.o
  
  powervr_sgx-$(CONFIG_DEBUG_FS) += pvrsgx_debugfs.o
+ powervr_sgx-$(CONFIG_PM) += pvrsgx_pm.o
 +powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) += pvrsgx_fw_ddk.o
  powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_GMA500) += pvrsgx_aux.o
  

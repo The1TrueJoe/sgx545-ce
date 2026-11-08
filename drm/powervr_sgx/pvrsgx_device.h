@@ -127,8 +127,6 @@ struct pvrsgx_device {
 	struct gma500_sgx_device *gma_sgx;
 	/** @irq_work: The interrupt's bottom half behind gma500, which owns the line. */
 	struct work_struct irq_work;
-	/** @parent_held: A runtime-PM reference on gma500 held while bound (runtime_pm=0). */
-	bool parent_held;
 
 	/** @regs: The core registers (BAR 0). */
 	void __iomem *regs;
@@ -249,12 +247,6 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_fini(struct pvrsgx_device *sdev);
-int pvrsgx_power_get(struct pvrsgx_device *sdev);
-void pvrsgx_power_put(struct pvrsgx_device *sdev, u32 n);
-void pvrsgx_power_init(struct pvrsgx_device *sdev);
-void pvrsgx_power_fini(struct pvrsgx_device *sdev);
-int pvrsgx_runtime_suspend(struct device *dev);
-int pvrsgx_runtime_resume(struct device *dev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);

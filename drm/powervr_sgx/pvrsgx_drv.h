@@ -24,8 +24,6 @@ struct dev_pm_ops;
 struct drm_powervr_sgx_obj_array;
 struct pvrsgx_device;
 
-extern const struct dev_pm_ops pvrsgx_pm_ops;
-
 struct pvrsgx_device *pvrsgx_alloc(struct device *dev);
 int pvrsgx_probe_common(struct pvrsgx_device *sdev);
 void pvrsgx_remove_common(struct pvrsgx_device *sdev);

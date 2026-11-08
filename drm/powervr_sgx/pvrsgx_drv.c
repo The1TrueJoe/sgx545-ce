@@ -12,7 +12,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -21,6 +20,7 @@
 #include "pvrsgx_debugfs.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
+#include "pvrsgx_pm.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_gem.h"
 #include "pvrsgx_job.h"
@@ -281,10 +281,6 @@ static void pvrsgx_shutdown(struct pci_dev *pdev)
 	/* Leave the GPU quiet for whatever runs next. */
 	pvrsgx_fw_stop(sdev);
 }
-
-const struct dev_pm_ops pvrsgx_pm_ops = {
-	RUNTIME_PM_OPS(pvrsgx_runtime_suspend, pvrsgx_runtime_resume, NULL)
-};
 
 static const struct pci_device_id pvrsgx_pci_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x089b) },	/* CE5300 family */

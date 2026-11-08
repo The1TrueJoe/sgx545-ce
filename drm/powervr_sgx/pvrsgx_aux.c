@@ -17,6 +17,7 @@
 #include <drm/gma500_sgx.h>
 
 #include "pvrsgx_device.h"
+#include "pvrsgx_pm.h"
 #include "pvrsgx_drv.h"
 
 static int pvrsgx_aux_probe(struct auxiliary_device *adev, const struct auxiliary_device_id *id)
