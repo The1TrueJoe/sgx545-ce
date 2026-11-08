@@ -314,10 +314,10 @@ lower_tex_derefs_instr(nir_builder *b, nir_instr *instr, void *data)
 }
 
 static bool
-lower_tex_derefs(struct sgx_ctx *c)
+lower_tex_derefs(nir_shader *s, struct sgx_ctx *c)
 {
    struct tex_ctx t = { .c = c };
-   return nir_shader_instructions_pass(c->nir, lower_tex_derefs_instr, nir_metadata_control_flow, &t);
+   return nir_shader_instructions_pass(s, lower_tex_derefs_instr, nir_metadata_control_flow, &t);
 }
 
 /* gl_FrontFacing as the constant true (see sgx_compile_options.front_sa) */
@@ -513,22 +513,21 @@ narrow16_instr(nir_builder *b, nir_alu_instr *alu, void *data)
    return true;
 }
 
-static void
-narrow16(struct sgx_ctx *c)
+static bool
+narrow16(nir_shader *s)
 {
-   nir_shader *s = c->nir;
-   if (sgx_debug(c, SGX_DBG_NO_NARROW16))
-      return;
-   bool progress = true;
-   for (unsigned round = 0; progress && round < 64; round++) {
-      progress = false;
-      NIR_PASS(progress, s, nir_shader_alu_pass, narrow16_instr, nir_metadata_control_flow, NULL);
-      if (progress) {
+   bool progress = false, p = true;
+   for (unsigned round = 0; p && round < 64; round++) {
+      p = false;
+      NIR_PASS(p, s, nir_shader_alu_pass, narrow16_instr, nir_metadata_control_flow, NULL);
+      if (p) {
          NIR_PASS(_, s, nir_opt_algebraic);
          NIR_PASS(_, s, nir_opt_constant_folding);
          NIR_PASS(_, s, nir_opt_dce);
       }
+      progress |= p;
    }
+   return progress;
 }
 
 static nir_alu_instr *
@@ -753,81 +752,98 @@ float_value(nir_instr *instr)
           nir_alu_type_get_base_type(nir_intrinsic_dest_type(in)) == nir_type_float;
 }
 
+struct mediump_ctx {
+   bool all;
+   struct set *coord; /* input variables a texture coordinate reads */
+};
+
+/* a load or texel mediump makes F16: f2f16 at its definition */
+static bool
+mediump_seed_instr(nir_builder *b, nir_instr *instr, void *data)
+{
+   const struct mediump_ctx *m = data;
+   bool progress = false;
+   nir_def *d = NULL;
+   if (instr->type == nir_instr_type_tex) {
+      nir_tex_instr *t = nir_instr_as_tex(instr);
+      if ((t->op == nir_texop_tex || t->op == nir_texop_txb || t->op == nir_texop_txl) &&
+          (m->all || low_prec(tex_prec(t))))
+         d = &t->def;
+   } else if (instr->type == nir_instr_type_intrinsic) {
+      nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+      if (in->intrinsic == nir_intrinsic_load_deref) {
+         nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
+         if (v && v->data.mode == nir_var_shader_in && v->data.location >= VARYING_SLOT_VAR0 &&
+             (m->all ? !_mesa_set_search(m->coord, v) : low_prec(v->data.precision)))
+            d = &in->def;
+         else if (v && v->data.mode == nir_var_uniform && (m->all || low_prec(v->data.precision)))
+            d = &in->def;
+      } else if ((in->intrinsic == nir_intrinsic_load_interpolated_input ||
+                  in->intrinsic == nir_intrinsic_load_input) &&
+                 nir_intrinsic_io_semantics(in).location >= VARYING_SLOT_VAR0) {
+         nir_io_semantics sem = nir_intrinsic_io_semantics(in);
+         if (m->all && !feeds_coord(&in->def, 0) && !sem.medium_precision) {
+            sem.medium_precision = 1;
+            nir_intrinsic_set_io_semantics(in, sem);
+            progress = true;
+         }
+         if (sem.medium_precision)
+            d = &in->def;
+      } else if (in->intrinsic == nir_intrinsic_load_uniform && m->all) {
+         d = &in->def;
+      }
+   }
+   if (d && d->bit_size == 32 && !list_is_empty(&d->uses) && float_value(instr) &&
+       (instr->type != nir_instr_type_tex || !feeds_coord(d, 0))) {
+      seed16(b, d);
+      progress = true;
+   }
+   return progress;
+}
+
 /* all: fs_mediump, every input, texel and uniform no coordinate needs (and
  * their variables become mediump); otherwise those the program declares
  * mediump or lowp. Ops whose operands are all F16 then run in F16: GLSL ES
  * gives an operation its operands' highest precision. */
-static void
-mediump_fs(struct sgx_ctx *c, bool all)
+static bool
+lower_mediump(nir_shader *s, bool all)
 {
-   nir_shader *s = c->nir;
-   nir_function_impl *impl = nir_shader_get_entrypoint(s);
-   nir_builder b = nir_builder_create(impl);
-   struct set *coord = _mesa_pointer_set_create(c);
+   struct mediump_ctx m = { .all = all, .coord = _mesa_pointer_set_create(NULL) };
    if (all) {
       /* inputs: a variable none of whose loads is a coordinate is mediump */
-      nir_foreach_block(blk, impl) {
-         nir_foreach_instr(instr, blk) {
-            if (instr->type != nir_instr_type_intrinsic)
-               continue;
-            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
-            if (in->intrinsic == nir_intrinsic_load_deref) {
-               nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
-               if (v && v->data.mode == nir_var_shader_in && feeds_coord(&in->def, 0))
-                  _mesa_set_add(coord, v);
+      nir_foreach_function_impl(impl, s) {
+         nir_foreach_block(blk, impl) {
+            nir_foreach_instr(instr, blk) {
+               if (instr->type != nir_instr_type_intrinsic)
+                  continue;
+               nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+               if (in->intrinsic == nir_intrinsic_load_deref) {
+                  nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
+                  if (v && v->data.mode == nir_var_shader_in && feeds_coord(&in->def, 0))
+                     _mesa_set_add(m.coord, v);
+               }
             }
          }
       }
       nir_foreach_shader_in_variable(var, s)
-         if (var->data.location >= VARYING_SLOT_VAR0 && !_mesa_set_search(coord, var))
+         if (var->data.location >= VARYING_SLOT_VAR0 && !_mesa_set_search(m.coord, var))
             var->data.precision = GLSL_PRECISION_MEDIUM;
       nir_foreach_variable_with_modes(var, s, nir_var_uniform)
          if (!glsl_type_is_sampler(glsl_without_array(var->type)))
             var->data.precision = GLSL_PRECISION_MEDIUM;
    }
-   nir_foreach_block(blk, impl) {
-      nir_foreach_instr_safe(instr, blk) {
-         nir_def *d = NULL;
-         if (instr->type == nir_instr_type_tex) {
-            nir_tex_instr *t = nir_instr_as_tex(instr);
-            if ((t->op == nir_texop_tex || t->op == nir_texop_txb || t->op == nir_texop_txl) &&
-                (all || low_prec(tex_prec(t))))
-               d = &t->def;
-         } else if (instr->type == nir_instr_type_intrinsic) {
-            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
-            if (in->intrinsic == nir_intrinsic_load_deref) {
-               nir_variable *v = nir_deref_instr_get_variable(nir_src_as_deref(in->src[0]));
-               if (v && v->data.mode == nir_var_shader_in && v->data.location >= VARYING_SLOT_VAR0 &&
-                   (all ? !_mesa_set_search(coord, v) : low_prec(v->data.precision)))
-                  d = &in->def;
-               else if (v && v->data.mode == nir_var_uniform && (all || low_prec(v->data.precision)))
-                  d = &in->def;
-            } else if ((in->intrinsic == nir_intrinsic_load_interpolated_input ||
-                        in->intrinsic == nir_intrinsic_load_input) &&
-                       nir_intrinsic_io_semantics(in).location >= VARYING_SLOT_VAR0) {
-               nir_io_semantics sem = nir_intrinsic_io_semantics(in);
-               if (all && !feeds_coord(&in->def, 0)) {
-                  sem.medium_precision = 1;
-                  nir_intrinsic_set_io_semantics(in, sem);
-               }
-               if (sem.medium_precision)
-                  d = &in->def;
-            } else if (in->intrinsic == nir_intrinsic_load_uniform && all) {
-               d = &in->def;
-            }
-         }
-         if (d && d->bit_size == 32 && !list_is_empty(&d->uses) && float_value(instr) &&
-             (instr->type != nir_instr_type_tex || !feeds_coord(d, 0)))
-            seed16(&b, d);
-      }
+   bool progress = false;
+   NIR_PASS(progress, s, nir_shader_instructions_pass, mediump_seed_instr, nir_metadata_control_flow, &m);
+   _mesa_set_destroy(m.coord, NULL);
+   bool p = true;
+   for (unsigned round = 0; p && round < 64; round++) {
+      p = false;
+      NIR_PASS(p, s, nir_shader_alu_pass, demote_instr, nir_metadata_control_flow, NULL);
+      progress |= p;
    }
-   bool progress = true;
-   for (unsigned round = 0; progress && round < 64; round++) {
-      progress = false;
-      NIR_PASS(progress, s, nir_shader_alu_pass, demote_instr, nir_metadata_control_flow, NULL);
-   }
-   NIR_PASS(_, s, nir_opt_constant_folding);
-   NIR_PASS(_, s, nir_opt_dce);
+   NIR_PASS(progress, s, nir_opt_constant_folding);
+   NIR_PASS(progress, s, nir_opt_dce);
+   return progress;
 }
 
 /* A 16-bit min / max / saturate of values that are f32 underneath (an f2f16,
@@ -1110,10 +1126,10 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 }
 
 static bool
-lower_uniforms(struct sgx_ctx *c)
+lower_uniforms(nir_shader *s, struct sgx_ctx *c)
 {
    struct unif_ctx u = { c, false };
-   bool p = nir_shader_intrinsics_pass(c->nir, lower_uniform_instr, nir_metadata_control_flow, &u);
+   bool p = nir_shader_intrinsics_pass(s, lower_uniform_instr, nir_metadata_control_flow, &u);
    if (u.failed)
       sgx_fail(c, "indirectly indexed uniform (not supported yet)");
    return p;
@@ -1168,94 +1184,94 @@ uniform_prec(struct sgx_ctx *c, unsigned k)
  * (converted where read with pck.f16.f32, truncating as libusc's own
  * conversion does). sgxc's frontend loads mediump uniforms 16-bit already;
  * the gallium driver's arrive as f32 load_uniform. */
-static void
-uniform_formats(struct sgx_ctx *c)
+static bool
+uniform_format_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
-   nir_function_impl *impl = nir_shader_get_entrypoint(c->nir);
+   struct sgx_ctx *c = data;
    bool no_const = sgx_debug(c, SGX_DBG_NO_F16_CONST);
-   nir_foreach_block(b, impl) {
-      nir_foreach_instr_safe(instr, b) {
-         if (instr->type != nir_instr_type_intrinsic)
-            continue;
-         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
-         if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16 && no_const) {
-            /* (nof16const: an f32 load converted in the shader) */
-            nir_builder bb = nir_builder_at(nir_before_instr(instr));
-            nir_def *v = nir_load_uniform(&bb, in->def.num_components, 32, in->src[0].ssa,
-                                          .base = nir_intrinsic_base(in), .range = nir_intrinsic_range(in),
-                                          .dest_type = nir_type_float32);
-            unsigned k = nir_intrinsic_base(in);
-            unsigned range = nir_src_is_const(in->src[0]) ? in->def.num_components : nir_intrinsic_range(in);
-            for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_fmt); j++)
-               c->const_fmt[k + j] = 1;
-            nir_def_replace(&in->def, nir_f2f16(&bb, v));
-            continue;
-         }
-         if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16) {
-            /* a 16-bit load the frontend made (a driver with 16-bit loads):
-             * F16 constants */
-            unsigned k = nir_intrinsic_base(in);
-            unsigned range = nir_src_is_const(in->src[0]) ? in->def.num_components : nir_intrinsic_range(in);
-            for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_fmt); j++)
-               if (!c->const_fmt[k + j])
-                  c->const_fmt[k + j] = 2;
-            continue;
-         }
-         if (no_const || in->intrinsic != nir_intrinsic_load_uniform || in->def.bit_size != 32 ||
-             !nir_src_is_const(in->src[0]) || nir_src_as_uint(in->src[0]) != 0 ||
-             nir_alu_type_get_base_type(nir_intrinsic_dest_type(in)) != nir_type_float)
-            continue;
-         unsigned k = nir_intrinsic_base(in), n = in->def.num_components;
-         if (k + n > ARRAY_SIZE(c->const_fmt))
-            continue;
-         bool ok = true;
-         unsigned read = 0;
-         for (unsigned j = 0; j < n; j++)
-            ok &= c->const_fmt[k + j] <= 1;
-         nir_foreach_use_including_if(use, &in->def) {
-            nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
-            if (!u || u->type != nir_instr_type_alu ||
-                (nir_instr_as_alu(u)->op != nir_op_f2f16 && nir_instr_as_alu(u)->op != nir_op_f2fmp)) {
-               ok = false;
-               break;
-            }
-            nir_alu_instr *cv = nir_instr_as_alu(u);
-            unsigned r16 = nir_def_components_read(&cv->def);
-            for (unsigned j = 0; j < cv->def.num_components; j++)
-               if (r16 >> j & 1)
-                  read |= 1u << cv->src[0].swizzle[j];
-         }
-         if (!ok)
-            continue;
-         unsigned prec = uniform_prec(c, k);
-         bool c10 = prec == GLSL_PRECISION_LOW && !(k & 3) && !(read & ~7u);
-         if (c10 && !c->opts->driver_consts) {
-            for (unsigned j = 0; j < n; j++)
-               c->const_fmt[k + j] = j == 3 ? 1 : 3;
-            continue;
-         }
-         if (prec != GLSL_PRECISION_MEDIUM && prec != GLSL_PRECISION_LOW)
-            continue;
-         /* F16 constants; a C10 vector's xyz as the F16 of its C10 value (the
-          * driver converts at upload what libusc's secondary program does) */
-         nir_builder bb = nir_builder_at(nir_after_instr(instr));
-         nir_def *h = nir_load_uniform(&bb, n, 16, in->src[0].ssa, .base = k, .range = n,
-                                       .dest_type = nir_type_float16);
-         nir_foreach_use_safe(use, &in->def) {
-            nir_alu_instr *cv = nir_instr_as_alu(nir_src_use_instr(use));
-            bb.cursor = nir_before_instr(&cv->instr);
-            unsigned swz[NIR_MAX_VEC_COMPONENTS];
-            for (unsigned j = 0; j < cv->def.num_components; j++)
-               swz[j] = cv->src[0].swizzle[j];
-            nir_def_rewrite_uses(&cv->def, nir_swizzle(&bb, h, swz, cv->def.num_components));
-         }
-         for (unsigned j = 0; j < n; j++)
-            c->const_fmt[k + j] = c10 && j < 3 ? 5 : 2;
-         /* a whole lowp vec4: a C10 expression may read it (find_c10) */
-         if (prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3))
-            c->const_lowp[k] = 1;
-      }
+   if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16 && no_const) {
+      /* (nof16const: an f32 load converted in the shader) */
+      b->cursor = nir_before_instr(&in->instr);
+      nir_def *v = nir_load_uniform(b, in->def.num_components, 32, in->src[0].ssa,
+                                    .base = nir_intrinsic_base(in), .range = nir_intrinsic_range(in),
+                                    .dest_type = nir_type_float32);
+      unsigned k = nir_intrinsic_base(in);
+      unsigned range = nir_src_is_const(in->src[0]) ? in->def.num_components : nir_intrinsic_range(in);
+      for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_fmt); j++)
+         c->const_fmt[k + j] = 1;
+      nir_def_replace(&in->def, nir_f2f16(b, v));
+      return true;
    }
+   if (in->intrinsic == nir_intrinsic_load_uniform && in->def.bit_size == 16) {
+      /* a 16-bit load the frontend made (a driver with 16-bit loads):
+       * F16 constants */
+      unsigned k = nir_intrinsic_base(in);
+      unsigned range = nir_src_is_const(in->src[0]) ? in->def.num_components : nir_intrinsic_range(in);
+      for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_fmt); j++)
+         if (!c->const_fmt[k + j])
+            c->const_fmt[k + j] = 2;
+      return false;
+   }
+   if (no_const || in->intrinsic != nir_intrinsic_load_uniform || in->def.bit_size != 32 ||
+       !nir_src_is_const(in->src[0]) || nir_src_as_uint(in->src[0]) != 0 ||
+       nir_alu_type_get_base_type(nir_intrinsic_dest_type(in)) != nir_type_float)
+      return false;
+   unsigned k = nir_intrinsic_base(in), n = in->def.num_components;
+   if (k + n > ARRAY_SIZE(c->const_fmt))
+      return false;
+   bool ok = true;
+   unsigned read = 0;
+   for (unsigned j = 0; j < n; j++)
+      ok &= c->const_fmt[k + j] <= 1;
+   nir_foreach_use_including_if(use, &in->def) {
+      nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
+      if (!u || u->type != nir_instr_type_alu ||
+          (nir_instr_as_alu(u)->op != nir_op_f2f16 && nir_instr_as_alu(u)->op != nir_op_f2fmp)) {
+         ok = false;
+         break;
+      }
+      nir_alu_instr *cv = nir_instr_as_alu(u);
+      unsigned r16 = nir_def_components_read(&cv->def);
+      for (unsigned j = 0; j < cv->def.num_components; j++)
+         if (r16 >> j & 1)
+            read |= 1u << cv->src[0].swizzle[j];
+   }
+   if (!ok)
+      return false;
+   unsigned prec = uniform_prec(c, k);
+   bool c10 = prec == GLSL_PRECISION_LOW && !(k & 3) && !(read & ~7u);
+   if (c10 && !c->opts->driver_consts) {
+      for (unsigned j = 0; j < n; j++)
+         c->const_fmt[k + j] = j == 3 ? 1 : 3;
+      return false;
+   }
+   if (prec != GLSL_PRECISION_MEDIUM && prec != GLSL_PRECISION_LOW)
+      return false;
+   /* F16 constants; a C10 vector's xyz as the F16 of its C10 value (the
+    * driver converts at upload what libusc's secondary program does) */
+   b->cursor = nir_after_instr(&in->instr);
+   nir_def *h = nir_load_uniform(b, n, 16, in->src[0].ssa, .base = k, .range = n,
+                                 .dest_type = nir_type_float16);
+   nir_foreach_use_safe(use, &in->def) {
+      nir_alu_instr *cv = nir_instr_as_alu(nir_src_use_instr(use));
+      b->cursor = nir_before_instr(&cv->instr);
+      unsigned swz[NIR_MAX_VEC_COMPONENTS];
+      for (unsigned j = 0; j < cv->def.num_components; j++)
+         swz[j] = cv->src[0].swizzle[j];
+      nir_def_rewrite_uses(&cv->def, nir_swizzle(b, h, swz, cv->def.num_components));
+   }
+   for (unsigned j = 0; j < n; j++)
+      c->const_fmt[k + j] = c10 && j < 3 ? 5 : 2;
+   /* a whole lowp vec4: a C10 expression may read it (find_c10) */
+   if (prec == GLSL_PRECISION_LOW && n == 4 && !(k & 3))
+      c->const_lowp[k] = 1;
+   return true;
+}
+
+static bool
+uniform_formats(nir_shader *s, struct sgx_ctx *c)
+{
+   return nir_shader_intrinsics_pass(s, uniform_format_instr, nir_metadata_control_flow, c);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1312,6 +1328,22 @@ optimize(nir_shader *s)
       NIR_PASS(progress, s, nir_opt_undef);
       NIR_PASS(progress, s, nir_opt_loop_unroll);
       NIR_PASS(progress, s, nir_opt_if, nir_opt_if_optimize_phi_true_false);
+   } while (progress);
+}
+
+static void
+optimize_late(nir_shader *s)
+{
+   bool progress;
+   do {
+      progress = false;
+      NIR_PASS(progress, s, nir_opt_algebraic_late);
+      if (progress) {
+         NIR_PASS(_, s, nir_opt_constant_folding);
+         NIR_PASS(_, s, nir_opt_copy_prop);
+         NIR_PASS(_, s, nir_opt_dce);
+         NIR_PASS(_, s, nir_opt_cse);
+      }
    } while (progress);
 }
 
@@ -1614,7 +1646,7 @@ sgx_lower(struct sgx_ctx *c)
    s->options = &options;
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr, nir_metadata_control_flow, NULL);
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT && (c->opts->fs_mediump || !sgx_debug(c, SGX_DBG_NO_MEDIUMP)))
-      mediump_fs(c, c->opts->fs_mediump);
+      NIR_PASS(_, s, lower_mediump, c->opts->fs_mediump);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries, nir_shader_get_entrypoint(s), nir_var_shader_out);
    NIR_PASS(_, s, nir_lower_global_vars_to_local);
@@ -1637,12 +1669,12 @@ sgx_lower(struct sgx_ctx *c)
     * variables, they name the varyings) */
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
-   lower_tex_derefs(c);
+   NIR_PASS(_, s, lower_tex_derefs, c);
    if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_sa)
       NIR_PASS(_, s, nir_shader_intrinsics_pass, front_true_instr, nir_metadata_control_flow, NULL);
 
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, 0);
-   lower_uniforms(c);
+   NIR_PASS(_, s, lower_uniforms, c);
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT) {
       /* a mediump read of a texel: the texture's result in F16 (the
        * finalizer's unpack, pck.f16.u8), not f32 then converted */
@@ -1651,24 +1683,15 @@ sgx_lower(struct sgx_ctx *c)
          .opt_tex_dest_types = nir_type_float,
       };
       NIR_PASS(_, s, nir_opt_16bit_tex_image, &t16);
-      narrow16(c);
-      uniform_formats(c);
+      if (!sgx_debug(c, SGX_DBG_NO_NARROW16))
+         NIR_PASS(_, s, narrow16);
+      NIR_PASS(_, s, uniform_formats, c);
    }
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, lower_sincos);
    optimize(s);
 
-   bool progress;
-   do {
-      progress = false;
-      NIR_PASS(progress, s, nir_opt_algebraic_late);
-      if (progress) {
-         NIR_PASS(_, s, nir_opt_constant_folding);
-         NIR_PASS(_, s, nir_opt_copy_prop);
-         NIR_PASS(_, s, nir_opt_dce);
-         NIR_PASS(_, s, nir_opt_cse);
-      }
-   } while (progress);
+   optimize_late(s);
 
    if (c->p16 && !sgx_debug(c, SGX_DBG_NO_MINMAX32)) {
       NIR_PASS(_, s, nir_shader_alu_pass, minmax32_instr, nir_metadata_control_flow, NULL);
