@@ -1281,7 +1281,7 @@ The common fields are as above. firv and op16s1 have only h12-13 for the repeat 
 - h15 = s0f13 (src0 arg flag b13, unknown).
 - Probably |src1 - src2| (+ src0) (**guess**).
 
-Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unless an entry says otherwise. `fmt` (h8-9) in bilin, ssum16 and firv: 0 u8 (no suffix), 1 s8, 2 o8 (ssum16i is the separate form with h8-9 = 3). Fields given as USEASM values (op16s1's `x39`) print as the stored field value.
+Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unless an entry says otherwise. `fmt` (h8-9) in bilin, ssum16, firv and firh: 0 u8, 1 s8, 2 o8 (ssum16i is the separate form with h8-9 = 3). It is written as a mnemonic suffix, `bilin.s8`, `ssum16.o8`, `firh.s8`; u8 has none. `[fmt=s8]` in the brackets means the same. Fields given as USEASM values (op16s1's `x39`) print as the stored field value.
 
 **op16s1** (16, h20-21=1, 0x6e, FUN_00118bf0, patched):
 - f2_15 h3-6 (flags2 b15-18).
