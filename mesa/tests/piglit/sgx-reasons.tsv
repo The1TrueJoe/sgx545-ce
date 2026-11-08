@@ -9,7 +9,7 @@ waffle_context_create|@400 combinations by location|@depth_stencil texture$	no c
 (clipflat|flat-color|-flat-|provoking-vertex|dlist-shademodel)	flat shading: the rasterizer's flatshade and flat varyings are ignored, the hardware's shade-mode state is not known yet (needs a GLES1 DDK glShadeModel capture)
 (two-side|two-sided|gl_back)	two-sided stencil: the back-face stencil state, not diagnosed
 (user-clip|clip-plane|clipping@|clip-vertex|fixed-clip-enables)	user clip planes: not implemented (M6)
-(polygon-mode|point-line-no-cull|edgeflag|polygon-line-aa|polygon-offset)	polygon modes and edge flags: not implemented (M6); points and lines culled as triangles
+(polygon-mode|point-line-no-cull|edgeflag|polygon-line-aa)	polygon modes and edge flags: not implemented (M6); points and lines culled as triangles
 (linestipple|line-smooth-stipple)	line stipple: not implemented
 (gl-1\.1-xor|logicop)	logic ops: not implemented
 (fog)	fog: fixed-function and ARB-program fog colours wrong, not diagnosed

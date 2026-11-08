@@ -194,6 +194,11 @@ struct sgxws_state {
    bool stencil, two_sided;
    uint32_t ispc[2];
    uint8_t stencil_ref[2];
+   /* glPolygonOffset (STATE.md "polyoff"): on per object (ISPB b23), its
+    * units and factor the render's, so a draw with others ends the render */
+   bool depth_bias;
+   int32_t bias_units;
+   float bias_factor;
 };
 
 #define SGXWS_MAX_INDICES 0xffff

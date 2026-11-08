@@ -1200,6 +1200,17 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
          return;
    }
    build_state(ctx, &st);
+   if (ctx->rasterizer) {
+      const struct pipe_rasterizer_state *rs = &ctx->rasterizer->base;
+      enum mesa_prim r = u_reduced_prim(info->mode);
+
+      st.depth_bias = (r == MESA_PRIM_TRIANGLES ? rs->offset_tri
+                       : r == MESA_PRIM_LINES   ? rs->offset_line
+                                                : rs->offset_point) &&
+                      (rs->offset_units != 0.0f || rs->offset_scale != 0.0f);
+      st.bias_units = st.depth_bias ? lrintf(rs->offset_units) : 0;
+      st.bias_factor = st.depth_bias ? rs->offset_scale : 0.0f;
+   }
    if (!build_clip(ctx, &st.clip))
       return; /* nothing visible: a zero-area scissor or viewport */
    /* both faces culled: no triangle survives (lines and points aren't culled) */

@@ -1081,6 +1081,9 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
    c->n_use = 0;
+   c->bias_set = false;
+   c->bias_units = 0;
+   c->bias_factor = 0.0f;
    c->clip = (struct sgxws_rect){0, 0, rt->w, rt->h};
 
    /* the render details are the target's: written at the kick, once its
@@ -1275,6 +1278,30 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    if ((e = sgxws_begin(c, rt, &t)))
       return e;
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
+}
+
+/* A depth-biased draw: the frame takes its units and factor, or, when it
+ * has others, is submitted and the draw starts the next */
+static int
+depth_bias(struct sgxws_ctx *c, const struct sgxws_state *st)
+{
+   struct sgxws_rt *rt = c->rt;
+   struct sgxws_target t = c->target;
+   int e;
+
+   if (!st->depth_bias)
+      return 0;
+   if (c->bias_set &&
+       (c->bias_units != st->bias_units || c->bias_factor != st->bias_factor)) {
+      if ((e = sgxws_flush(c, 0)))
+         return e;
+      if ((e = sgxws_begin(c, rt, &t)))
+         return e;
+   }
+   c->bias_set = true;
+   c->bias_units = st->bias_units;
+   c->bias_factor = st->bias_factor;
+   return 0;
 }
 
 /* TA state region clip, in tiles, inclusive */
@@ -1505,6 +1532,8 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    struct sgxws_fetch fetch[SGXWS_MAX_FETCH];
    int e;
 
+   if ((e = depth_bias(c, st)))
+      return e;
    if (d->n_fetch) {
       uint32_t block_bytes = 0, block_va[8];
       unsigned nd = 0;
@@ -1613,9 +1642,11 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       rows = 1;
    }
    apply_clip(c, &st->clip);
-   /* ISPB: line width * 16 (1.0 when the draw doesn't say), colour mask */
+   /* ISPB: line width * 16 (1.0 when the draw doesn't say), colour mask,
+    * depth bias */
    sgx_pack(&ispb, TA_STATE_ISPB, b)
    {
+      b.depth_bias = st->depth_bias;
       b.line_width = st->line_width > 15.9f ? 255u
                      : st->line_width > 1.0f
                         ? (uint32_t)(st->line_width * 16.0f)
