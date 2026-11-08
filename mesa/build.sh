@@ -71,12 +71,13 @@ for arch in $ARCHES; do
 	esac
 	if [ "$arch" = debian ]; then
 		# Native, on a Debian system with Mesa's build dependencies, for /opt/sgx:
-		# GLX and EGL through glvnd, GBM, X11 and Wayland; powervr_sgx only.
+		# GLX and EGL through glvnd, GBM, X11 and Wayland; sgx on powervr_sgx, and
+		# softpipe so a machine without the GPU (or its driver) keeps working GL.
 		O=$B/debian
 		[ -f "$O/build/build.ninja" ] ||
 			meson setup "$O/build" "$TREE" --buildtype=release --prefix=/opt/sgx --libdir=lib \
 				-Dplatforms=x11,wayland -Degl-native-platform=x11 -Dglx=dri -Dglvnd=enabled \
-				-Dgallium-drivers=sgx -Dvulkan-drivers= -Dopengl=true \
+				-Dgallium-drivers=sgx,softpipe -Dvulkan-drivers= -Dopengl=true \
 				-Dgles1=enabled -Dgles2=enabled -Degl=enabled -Dgbm=enabled -Dllvm=disabled \
 				-Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled
 		ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test
