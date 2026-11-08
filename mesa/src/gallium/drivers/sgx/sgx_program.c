@@ -471,7 +471,8 @@ read_program(const struct sgx_shader *out, struct sgx_pipe_shader *so,
              struct prog_info *info)
 {
    /* list C, decoded: kind 1 f32, 2 F16 half, 3 a C10 channel; ours
-    * (opts.driver_consts): 0x10 an F16 half of the C10 value, 0x11 a literal */
+    * (opts.driver_consts): 0x10 an F16 half of the C10 value, 0x11 a literal,
+    * 0x12 a vec4 packed as the BGRA8 colour */
    for (unsigned i = 0; i < out->n_consts; i++) {
       const struct sgx_const_map *m = &out->consts[i];
       struct sgx_const *k = &so->consts[so->n_consts];

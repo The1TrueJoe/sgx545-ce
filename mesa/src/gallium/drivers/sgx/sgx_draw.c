@@ -605,6 +605,20 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
             bits = (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
       } else if (k->fmt == 0x11) {
          bits = k->value << k->shift;
+      } else if (k->fmt == 0x12) {
+         /* the vec4 at k as the BGRA8 colour output, packed once a draw
+          * instead of every pixel (the blend constant's packing, sa2) */
+         float c[4];
+
+         for (unsigned j = 0; j < 4; j++)
+            c[j] = cb && k->k + j < avail ? cb[k->k + j] : 0.0f;
+         bits = (uint32_t)float_to_ubyte(c[3]) << 24 |
+                (uint32_t)float_to_ubyte(c[0]) << 16 |
+                (uint32_t)float_to_ubyte(c[1]) << 8 | float_to_ubyte(c[2]);
+         for (unsigned j = 0; j < 2; j++)
+            if (at[j])
+               *at[j] = bits;
+         continue;
       } else {
          memcpy(&bits, &v, 4);
          for (unsigned j = 0; j < 2; j++)
