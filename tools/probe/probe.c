@@ -42,6 +42,8 @@
  *   PROBE_FLUSHMID=n           before every draw after the first: 1 glFlush, 2 glFinish,
  *                              3 glReadPixels of one pixel (a render split mid-frame)
  *   PROBE_SECOND="z r g b a"   every draw after the first at clip z, in this colour (needs PROBE_Z)
+ *   PROBE_DEPTH2="func mask"   glDepthFunc, glDepthMask before every draw after the first (GL enum, 0/1)
+ *   PROBE_BLEND2="src dst"     glEnable(BLEND), glBlendFunc likewise
  * Textures (PROBE_TEX >= 1; all units the same):
  *   PROBE_TEXFMT=name          rgba8888 rgb565 rgba4444 rgba5551 rgb888 l8 a8 la88   (rgba8888)
  *                              OES_depth_texture / packed_depth_stencil: depth16 depth32 d24s8;
@@ -815,6 +817,14 @@ int main(void)
 				verts[pos * k + 2] = f[0];
 			if (loc >= 0)
 				glUniform4f(loc, f[1], f[2], f[3], f[4]);
+		}
+		if (i == 1 && ints("PROBE_DEPTH2", v, 2, NULL) == 2) {
+			glDepthFunc((GLenum)v[0]);
+			glDepthMask((GLboolean)v[1]);
+		}
+		if (i == 1 && ints("PROBE_BLEND2", v, 2, NULL) == 2) {
+			glEnable(GL_BLEND);
+			glBlendFunc((GLenum)v[0], (GLenum)v[1]);
 		}
 		if (i >= 1 && getenv("PROBE_FLUSHMID")) {
 			int m = atoi(getenv("PROBE_FLUSHMID"));
