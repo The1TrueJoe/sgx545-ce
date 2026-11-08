@@ -56,6 +56,10 @@ static int cleanup = -1;
 module_param(cleanup, int, 0644);
 MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (-1: when it speaks cleanup v2, 0 never, 1 always)");
 
+static bool hwr_check = true;
+module_param(hwr_check, bool, 0444);
+MODULE_PARM_DESC(hwr_check, "Let the microkernel check for core lockups on its timer (debug; default on)");
+
 static bool restart_quiesce = true;
 module_param(restart_quiesce, bool, 0644);
 MODULE_PARM_DESC(restart_quiesce, "Before a restart, run the deinit script, hold the cores in reset and drop bus mastering, as an unload does (default on)");
@@ -935,7 +939,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		pvrsgx_kobj_reap(sdev, U64_MAX);
 	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
-	hc[HOSTCTL_HWR_SAMPLE_RATE] = UKERNEL_TIMER_HZ / HWR_CHECK_HZ;
+	hc[HOSTCTL_HWR_SAMPLE_RATE] = hwr_check ? UKERNEL_TIMER_HZ / HWR_CHECK_HZ : 0;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = core_clock / UKERNEL_TIMER_HZ;
 	if (!sdev->fw.ddk)
 		hc[HOSTCTL_OPENHC_FLAGS] = HOSTCTL_OPENHC_HOST_BGBLOCK;
