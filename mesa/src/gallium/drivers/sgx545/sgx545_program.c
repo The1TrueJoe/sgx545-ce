@@ -665,7 +665,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
        * in it, the TPU samples at a constant coordinate; the DDK's for a
        * sprite's coordinate set (`sprite`) is 1 */
       sgx545_pack(&so->prog.tsp_prec, TA_STATE_TSP1, t1)
-         t1.low_precision = sprite ? 1 : 0;
+         t1.f16 = sprite ? 1 : 0;
       so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0);
       so->prog.const_dwords = so->const_dwords;
    } else {

@@ -126,12 +126,12 @@ STATE.md doesn't give are taken up to the next known field.
   <struct name="STATE_REGION_CLIP0" length="1">
     <field name="unknown_31" start="31" end="31" type="bool" default="1"/>
     <field name="x_min" start="16" end="30" type="uint"/>
-    <field name="x_max" start="0" end="15" type="uint"/>
+    <field name="x_max" start="0" end="14" type="uint"/>
   </struct>
 
   <struct name="STATE_REGION_CLIP1" length="1">
-    <field name="y_min" start="16" end="31" type="uint"/>
-    <field name="y_max" start="0" end="15" type="uint"/>
+    <field name="y_min" start="16" end="30" type="uint"/>
+    <field name="y_max" start="0" end="14" type="uint"/>
   </struct>
 
   <struct name="STATE_VIEWPORT" length="6">
@@ -179,9 +179,9 @@ STATE.md doesn't give are taken up to the next known field.
     <field name="set0" start="0" end="2" type="uint"/>
   </struct>
 
-  <!-- TSP word 1: the sets whose precision value is at most 2 -->
+  <!-- TSP word 1: the sets iterated as F16 (precision value at most 2) -->
   <struct name="STATE_TSP1" length="1">
-    <field name="low_precision" start="0" end="9" type="uint"/>
+    <field name="f16" start="0" end="9" type="uint"/>
   </struct>
 
 </csbgen>
