@@ -269,7 +269,7 @@ What isaspec cannot express directly, and how it is handled here:
 	<value val="0" display=".d"/>
 	<value val="1" display=".w"/>
 	<value val="2" display=".b"/>
-	<value val="3" display=".size3"/>
+	<value val="3" display=".q"/>
 </enum>
 
 <enum name="#eld-size">
@@ -647,6 +647,20 @@ bank h0-1, extension h19, rebuilt as NUM | BANK << 7 | EXT << 9.
 </bitset>
 
 <bitset name="#dst.idx" extends="#dst">
+	<doc>
+		Not halved under format select: a bare .f16 (or .c10) only sets
+		bit 6 (ISA.md "Format select and format control": idx16.f16).
+	</doc>
+	<override expr="#m-sel-f16">
+		<display>idx{LNUM}.f16</display>
+		<field name="LNUM" low="0" high="5" type="uint"/>
+		<field name="F" pos="6" type="bool"/>
+	</override>
+	<override expr="#m-sel-c10">
+		<display>idx{LNUM}.c10</display>
+		<field name="LNUM" low="0" high="5" type="uint"/>
+		<field name="F" pos="6" type="bool"/>
+	</override>
 	<display>idx{NUM}</display>
 	<field name="NUM" low="0" high="6" type="uint"/>
 	<pattern low="7" high="9">110</pattern>
