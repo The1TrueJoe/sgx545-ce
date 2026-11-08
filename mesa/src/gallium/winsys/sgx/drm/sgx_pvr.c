@@ -475,12 +475,11 @@ pvr_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
 
 /*
  * SGXMKIF_CMDTA, client part (STATE.md section 1), for frame f of the render
- * target as the DDK's swaps do it (3- and 6-frame captures of probe-st with
- * PROBE_FRAMES): one kick, first and last in scene; TA flags 0x63, plus 0x10
- * on the target's first frame; the frame number at +0x20 and at b14 of the 3D
- * flags; the RT data entry (in the command and in render details +0xdc) and
- * the region headers alternate, frame 0 taking entry 1 and the second
- * region-header array.
+ * target as the DDK's swaps do it (3- and 6-frame captures of a test client):
+ * one kick, first and last in scene; TA flags 0x63, plus 0x10 on the target's
+ * first frame; the frame number at +0x20 and at b14 of the 3D flags; the RT
+ * data entry (in the command and in render details +0xdc) and the region
+ * headers alternate, frame 0 taking entry 1 and the second region-header array.
  */
 static void
 ta_command(struct sgxws_ctx *c, uint32_t *cmd)
@@ -529,7 +528,7 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    /* The RT data entry this render retires.  It must follow cmd+0x44: left
     * at entry 1 (as one frame needs), the microkernel retires the wrong entry
     * on odd frames, their PB pages are never freed, and the 3D locks up on
-    * the fourth frame (EA3, 2026-10-28). */
+    * the fourth frame. */
    rd[0xdc / 4] = entry;
 
    /* What the DDK's client writes before every kick (a word-by-word diff of
@@ -538,7 +537,7 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
     * render-details and HW sync-list access words, which the microkernel
     * clears.  Left alone, the counter stays at 1, odd frames retire the
     * wrong entry, their PB pages are never freed, and the 3D locks up on the
-    * fourth frame (EA3, 2026-10-28). */
+    * fourth frame. */
    s->rtword.map[0] = f + 1;
    s->rd_sync.map[0] = 1;
    s->hwsync_access.map[0] = 1;
@@ -673,6 +672,14 @@ sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
    /* code bases 0-9 cover the pixel heap, 10-13 the vertex heap (SRVINIT.md) */
    d->usse_base_index[0] = 0;
    d->usse_base_index[1] = 10;
+   /* The services driver exists only for the CE5300's SGX545 (its system
+    * layer), so its identity is that core's; the limits are powervr_sgx's
+    * LIMITS for the same core. */
+   d->info.core_id = 0x01150000;
+   d->info.core_revision = 0x0001000e;
+   d->info.rt_max_width = 2048;
+   d->info.rt_max_height = 2048;
+   d->info.rt_max_samples = 1;
    *out = d;
    return 0;
 

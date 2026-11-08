@@ -2,7 +2,7 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# On the EA: the old stack's benchmark launchers in a fresh openhc-minecraft
+# On the box: the old stack's benchmark launchers in a fresh Minecraft
 # install, next to the install's own (which stay untouched):
 #   minecraft-ab   the runtime's `minecraft` with MC_DIR (a game directory of
 #                  its own) and MC_GL=ddk (gl4es-run-ddk)

@@ -8,9 +8,9 @@ gl4es and no shims in the clients. Logs: `docs/log/entries/2026-11-04-0250-*` an
 | `mkroot.py` | the Mac | a Debian bookworm amd64 root from the package index (no debootstrap, no Debian Mesa): Xorg, xkb, glxinfo/glxgears, the X11 and glvnd development files |
 | `xorg.conf` | the EA, in the root | modesetting on simpledrm (card0) with glamor; no input devices |
 | `x11-up.sh ROOT start\|stop\|run CMD` | the EA | Xorg in the root (its dev, proc, sys and tmp bound in) and clients against `:0` on our Mesa |
-| `mc-x64-stage.sh ROOT` | the EA | copies Minecraft from the openhc-minecraft install into `ROOT/opt/mc-x64`, read-only on the install's side |
+| `mc-x64-stage.sh ROOT` | the EA | copies Minecraft from the box's Minecraft install into `ROOT/opt/mc-x64`, read-only on the install's side |
 | `mc-x64.sh` | the EA, in the root | Minecraft 1.7.10 on a 64-bit JVM, as the install's `minecraft-ab` |
-| `ea1-ramboot.sh KERNDIR [ddk\|open]` | the host | RAM-boots an m2-drm `powervr-sgx-ea1-v1` artifact on the EA1 and loads powervr_sgx with the named microkernel |
+| `ce5300-ramboot.sh KERNDIR [ddk\|open]` | the host | RAM-boots an m2-drm `powervr-sgx-ea1-v1` artifact on the EA1 and loads powervr_sgx with the named microkernel |
 | `memdump.c` | the EA | physical memory through `/dev/mem`: the scanout at 0x7fc00000, stride 2944 |
 | `mc-x64-bench.sh ROOT [SECS]` | the EA | `mcbench.sh`'s benchmark world and clicks on this path, FPS and job timeouts |
 
@@ -27,7 +27,7 @@ gl4es and no shims in the clients. Logs: `docs/log/entries/2026-11-04-0250-*` an
 2. **Boot**: hold `~/Documents/GitHub/sgx545-work/locks/ea1.lock`. RAM-boot an m2-drm `powervr-sgx-ea1-v1`
    artifact with the one-shot `drm/ci/ea-ramboot/S00aramboot`. Load its modules, and load
    `powervr_sgx` with `firmware=powervr_sgx/sgx545-ukernel-1.7.862890.bin` unless the run
-   is meant to use the open microkernel: the driver prefers `sgx545-openhc-ukernel.bin`
+   is meant to use the open microkernel: the driver prefers `sgx545_ukernel.bin`
    whenever it's present.
 3. **Copy the root** to the box with `gunzip -c | tar -xof -` into `/opt/x64root`. Busybox
    tar has no `-z`, and `-o` keeps root ownership. Never remove `/opt/x64root` while

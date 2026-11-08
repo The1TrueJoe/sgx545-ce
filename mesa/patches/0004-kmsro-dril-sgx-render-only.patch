@@ -1,0 +1,148 @@
+kmsro, dril: sgx as a render-only GPU
+
+kmsro pairs a KMS-only display device with the SGX545 under powervr_sgx: a
+scanout buffer is a dumb buffer of the display device, imported into the
+GPU.
+
+powervr_sgx is a PCI device (the CE5300's SGX is its own PCI function;
+Cedarview's sits behind gma500's), so a platform display device such as
+simpledrm on a boot framebuffer has to find its render node off the
+platform bus: render nodes of PCI devices are taken when their driver is
+powervr_sgx.
+
+An X server's GLX (AIGLX) loads <display driver>_dri.so: dril stubs for
+simpledrm and sgx.
+
+diff --git a/meson.build b/meson.build
+index 916b72b..c1d56a0 100644
+--- a/meson.build
++++ b/meson.build
+@@ -266,6 +266,7 @@ with_gallium_drm = system_has_kms_drm and [
+   with_gallium_panfrost,
+   with_gallium_v3d,
+   with_gallium_vc4,
++  with_gallium_sgx,
+ ].contains(true)
+ 
+ _vulkan_drivers = get_option('vulkan-drivers')
+diff --git a/src/gallium/auxiliary/pipe-loader/meson.build b/src/gallium/auxiliary/pipe-loader/meson.build
+index a4a13c0..4faf414 100644
+--- a/src/gallium/auxiliary/pipe-loader/meson.build
++++ b/src/gallium/auxiliary/pipe-loader/meson.build
+@@ -45,6 +45,9 @@ endif
+ if with_gallium_ethosu
+   renderonly_drivers_c_args += '-DGALLIUM_ETHOSU'
+ endif
++if with_gallium_sgx
++  renderonly_drivers_c_args += '-DGALLIUM_SGX'
++endif
+ if with_gallium_zink
+   renderonly_drivers_c_args += '-DGALLIUM_ZINK'
+ endif
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+index 7d19303..e07902f 100644
+--- a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+@@ -397,6 +397,9 @@ pipe_loader_get_compatible_render_capable_device_fds(int kms_only_fd, unsigned i
+ #if defined GALLIUM_VC4
+       "vc4",
+ #endif
++#if defined GALLIUM_SGX
++      "powervr_sgx",
++#endif
+ #if defined GALLIUM_ZINK
+       "zink",
+ #endif
+diff --git a/src/gallium/targets/dril/dril_target.c b/src/gallium/targets/dril/dril_target.c
+index b5ba518..9a75dc7 100644
+--- a/src/gallium/targets/dril/dril_target.c
++++ b/src/gallium/targets/dril/dril_target.c
+@@ -676,6 +676,7 @@ DEFINE_LOADER_DRM_ENTRYPOINT(rcar_du)
+ DEFINE_LOADER_DRM_ENTRYPOINT(repaper)
+ DEFINE_LOADER_DRM_ENTRYPOINT(rockchip)
+ DEFINE_LOADER_DRM_ENTRYPOINT(rzg2l_du)
++DEFINE_LOADER_DRM_ENTRYPOINT(simpledrm)
+ DEFINE_LOADER_DRM_ENTRYPOINT(ssd130x)
+ DEFINE_LOADER_DRM_ENTRYPOINT(st7586)
+ DEFINE_LOADER_DRM_ENTRYPOINT(st7735r)
+@@ -687,3 +688,4 @@ DEFINE_LOADER_DRM_ENTRYPOINT(zynqmp_dpsub)
+ DEFINE_LOADER_DRM_ENTRYPOINT(lima)
+ DEFINE_LOADER_DRM_ENTRYPOINT(d3d12)
+ DEFINE_LOADER_DRM_ENTRYPOINT(zink)
++DEFINE_LOADER_DRM_ENTRYPOINT(sgx)
+diff --git a/src/gallium/targets/dril/meson.build b/src/gallium/targets/dril/meson.build
+index 55f10dc..b5b4922 100644
+--- a/src/gallium/targets/dril/meson.build
++++ b/src/gallium/targets/dril/meson.build
+@@ -91,6 +91,7 @@ foreach d : [[with_gallium_kmsro, [
+                'repaper',
+                'rockchip',
+                'rzg2l-du',
++               'simpledrm',
+                'ssd130x',
+                'st7586',
+                'st7735r',
+@@ -124,6 +125,7 @@ foreach d : [[with_gallium_kmsro, [
+              [with_gallium_lima, ['lima']],
+              [with_gallium_d3d12, ['d3d12']],
+              [with_gallium_zink, ['zink']],
++             [with_gallium_sgx, ['sgx']],
+              [with_gallium_asahi, ['asahi']]]
+   if d[0]
+     foreach name : d[1]
+diff --git a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
+index 2ead5db..a406a34 100644
+--- a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
++++ b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
+@@ -33,6 +33,7 @@
+ #include "panfrost/drm/panfrost_drm_public.h"
+ #include "lima/drm/lima_drm_public.h"
+ #include "asahi/drm/asahi_drm_public.h"
++#include "sgx/drm/sgx_drm_public.h"
+ #include "zink/drm/zink_drm_public.h"
+ #include "xf86drm.h"
+ 
+@@ -126,6 +127,13 @@ struct pipe_screen *kmsro_drm_screen_create(int kms_fd,
+          */
+          ro->create_for_resource = renderonly_create_gpu_import_for_resource;
+          screen = vc4_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
++#endif
++      } else if (strcmp(render_dev_name, "powervr_sgx") == 0) {
++#if defined(GALLIUM_SGX)
++         /* the display's dumb buffer, imported (simpledrm reads it with the
++          * CPU: cached pages; powervr_sgx flushes them around each job) */
++         ro->create_for_resource = renderonly_create_kms_dumb_buffer_for_resource;
++         screen = sgx_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
+ #endif
+       }
+ 
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index fcaa6be..c63cb69 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -272,7 +272,8 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+       device = devices[i];
+ 
+       if ((device->available_nodes & (1 << DRM_NODE_RENDER)) &&
+-          (device->bustype == DRM_BUS_PLATFORM)) {
++          (device->bustype == DRM_BUS_PLATFORM ||
++           device->bustype == DRM_BUS_PCI)) {
+          drmVersionPtr version;
+          bool found = false;
+ 
+@@ -286,6 +287,15 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+             continue;
+          }
+ 
++         /* a PCI render node only for the SGX545's DRM driver, which pairs
++          * with a display device of its own (kmsro) */
++         if (device->bustype == DRM_BUS_PCI &&
++             strcmp(version->name, "powervr_sgx") != 0) {
++            drmFreeVersion(version);
++            close(fd);
++            continue;
++         }
++
+          for (j = 0; j < n_drivers; j++) {
+             /* Always try to open the render device with Zink if requested */
+             if (strcmp("zink", drivers[j]) == 0 ||

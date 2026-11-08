@@ -5,13 +5,14 @@
 # Minecraft 1.7.10, offline, on a 64-bit JVM inside the Debian root
 # (x11-up.sh run), on the X server there: LWJGL 2's amd64 natives open a GLX
 # window through libglvnd's libGL, which dispatches to our Mesa. No gl4es, no
-# shims. The game files are mc-x64-stage.sh's copy of the box's
-# openhc-minecraft install in $G (default /opt/mc-x64), never the install.
+# shims. The game files are mc-x64-stage.sh's copy of the box's Minecraft
+# install in $G (default /opt/mc-x64), never the install.
 #
 #   x11-up.sh ROOT run /opt/mc-x64/mc-x64.sh [USERNAME]
 #
-# As the install's minecraft-ab: OptiFine when staged (MC_OPTIFINE=0 leaves it
-# out) and openHC's tweaker (MC_TWEAKS=0), through Mojang's launchwrapper.
+# OptiFine when staged (MC_OPTIFINE=0 leaves it out), and a launchwrapper
+# tweaker when MC_TWEAK_JAR and MC_TWEAK_CLASS name one (MC_TWEAKS=0 leaves it
+# out), through Mojang's launchwrapper.
 G=${MC_DIR:-/opt/mc-x64}
 V=1.7.10
 . "$G/$V.launch" || exit 1
@@ -39,8 +40,8 @@ OF=$(ls "$G"/optifine/OptiFine_"$V"_*_MOD.jar 2>/dev/null | tail -n 1)
 if [ -n "$OF" ] && [ "${MC_OPTIFINE:-1}" != 0 ]; then
 	CPA="$OF:$CPA" TWEAK="--tweakClass optifine.OptiFineTweaker"
 fi
-if [ -f "$G/openhc-mc.jar" ] && [ "${MC_TWEAKS:-1}" != 0 ]; then
-	CPA="$G/openhc-mc.jar:$G/$ASM:$CPA" TWEAK="$TWEAK --tweakClass openhc.mc.Tweaker"
+if [ -n "${MC_TWEAK_JAR:-}" ] && [ -f "$MC_TWEAK_JAR" ] && [ "${MC_TWEAKS:-1}" != 0 ]; then
+	CPA="$MC_TWEAK_JAR:$G/$ASM:$CPA" TWEAK="$TWEAK --tweakClass $MC_TWEAK_CLASS"
 fi
 [ -n "$TWEAK" ] && CPA="$G/$LW:$CPA" MAIN=net.minecraft.launchwrapper.Launch
 exec /opt/java/jre8-x64/bin/java -server -Xss1M -Xms256M -Xmx"${MC_XMX:-768M}" \

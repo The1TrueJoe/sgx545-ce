@@ -1,17 +1,26 @@
+egl/surfaceless: a device with only a primary node (not for upstream)
+
+EGL's device list holds devices with a render node; pvrsrvkm has none. When
+no render-node device loads, try the first device that has only a primary
+node and whose driver loads on it. A device with a render node is always
+tried first.
+
+diff --git a/src/egl/drivers/dri2/platform_surfaceless.c b/src/egl/drivers/dri2/platform_surfaceless.c
+index 8fbb9a6..47a9e91 100644
 --- a/src/egl/drivers/dri2/platform_surfaceless.c
 +++ b/src/egl/drivers/dri2/platform_surfaceless.c
-@@ -339,7 +339,52 @@
+@@ -339,6 +339,51 @@ surfaceless_probe_device(_EGLDisplay *disp, bool swrast, bool zink)
     return true;
  }
  
 +/*
-+ * sgx545-ce (openHC): the first DRM device whose primary node a hardware
++ * The first DRM device whose primary node a hardware
 + * driver loads on.  EGL's device list only has devices with a render node,
 + * and the PowerVR services driver (pvrsrvkm) has none; its pbuffers are what
 + * dEQP's surfaceless target renders to.  A device with a render node is
 + * always tried first (surfaceless_probe_device).
 + */
- static bool
++static bool
 +surfaceless_probe_primary(_EGLDisplay *disp)
 +{
 +   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
@@ -49,11 +58,10 @@
 +   return found;
 +}
 +
-+static bool
+ static bool
  surfaceless_probe_device_sw(_EGLDisplay *disp)
  {
-    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
-@@ -389,6 +434,8 @@
+@@ -389,6 +434,8 @@ dri2_initialize_surfaceless(_EGLDisplay *disp)
      */
     driver_loaded = surfaceless_probe_device(disp, disp->Options.ForceSoftware,
                                              disp->Options.Zink);

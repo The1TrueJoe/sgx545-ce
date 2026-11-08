@@ -4,7 +4,7 @@
 #
 # The performance suite, on the EA, for one stack (docs/PERF.md):
 #
-#   old  the openhc-minecraft install's stack: gl4es on the DDK's GLES2 (pvrsrvkm,
+#   old  the Minecraft install's stack: gl4es on the DDK's GLES2 (pvrsrvkm,
 #        the normal boot), Xvfb; the DDK's own EGL for the microbenchmark
 #   new  our Mesa on powervr_sgx (a RAM boot): GLX/DRI3 on Xorg in /opt/x64root,
 #        EGL surfaceless for the microbenchmark

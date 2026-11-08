@@ -73,11 +73,20 @@ send the results file if there is one on the stick.
 
 ## 5. Send us the results
 
-1. Plug the USB stick into your other computer. It shows up as a drive named
-   **SGXKIT**.
-2. On it, find the file that starts with **`results-`** and ends with **`.tar.gz`**.
-3. Attach it to a comment on the GitHub issue where you were asked to test: drag the file
-   into the comment box. Please also say which computer model you used.
+1. Plug the USB stick into your other computer.
+2. Find the drive named **SGXKIT**. It is small, under 100 MB. The stick has a second part
+   that only Linux can read, so on Windows SGXKIT is the only drive you will see from it.
+   - **On Windows, if no SGXKIT drive shows up:** unplug the stick and plug it in again.
+     If it still doesn't show, open **Disk Management** (right-click the Start button),
+     right-click the small FAT32 partition on the USB stick, choose **Change Drive Letter
+     and Paths**, and give it a letter.
+   - **If Windows asks to format a drive or a disk, click Cancel.** That's the part of the
+     stick Windows can't read. Formatting it would erase the test, and you don't need it.
+3. On SGXKIT, find the file whose name starts with **`results-`** and ends with
+   **`.tar.gz`**.
+4. Attach it to a comment on the GitHub issue where you were asked to test. You can drag it
+   straight from the SGXKIT drive into the comment box. You don't need to copy or unzip it
+   first. Please also say which computer model you used.
 
 The file contains only technical information about your computer's hardware and what the
 driver reported. Serial numbers and network addresses are removed. No personal files are

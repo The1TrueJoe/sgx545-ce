@@ -55,6 +55,7 @@ WORK = os.environ.get("DEQP_WORK", os.path.expanduser("~/.cache/sgx545/deqp"))
 PIGLIT_WORK = os.environ.get("PIGLIT_WORK", os.path.expanduser("~/.cache/sgx545/piglit"))
 BOX_DIR = os.environ.get("BOX_DIR", "/root/deqp")    # /root/piglit for piglit (main)
 DDK_ROOT = os.environ.get("DDK_ROOT", "/opt/sgx-i386")
+BOX_PASS = os.environ.get("BOX_PASS", "")  # the box's root password (sshpass)
 BOX_ENV = os.environ.get("BOX_ENV", "")
 CONFIG = "rgba8888d24s8ms0"
 TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
@@ -76,7 +77,7 @@ class Box:
 
     def ssh(self, cmd, timeout=SSH_TIMEOUT, stdin=None):
         """(returncode, output); returncode None when the box didn't answer in time."""
-        args = ["sshpass", "-p", "openhc", "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
+        args = ["sshpass", "-p", BOX_PASS, "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + self.host, cmd]
         for attempt in range(4):
             t0 = time.time()
@@ -431,7 +432,7 @@ def main():
         global LOCK
         LOCK = ""
         box.ssh("touch /tmp/deqp-job")
-        holder = subprocess.Popen(["sshpass", "-p", "openhc", "ssh", "-o", "StrictHostKeyChecking=no",
+        holder = subprocess.Popen(["sshpass", "-p", BOX_PASS, "ssh", "-o", "StrictHostKeyChecking=no",
                                    "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + a.box,
                                    "flock -n /tmp/gpu.lock sh -c 'echo locked; while [ -e /tmp/deqp-job ]; do sleep 2; done' "
                                    "|| echo busy"],

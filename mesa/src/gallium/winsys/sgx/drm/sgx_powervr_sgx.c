@@ -807,6 +807,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
                 .array = (uintptr_t)heaps},
    };
    struct drm_powervr_sgx_dev_query_gpu_info gi = {0};
+   struct drm_powervr_sgx_dev_query_limits li = {0};
    struct drm_powervr_sgx_ioctl_create_vm_context_args vm = {0};
    struct psgx_dev *dd = calloc(1, sizeof(*dd));
    struct sgxws_dev *d = &dd->base;
@@ -826,11 +827,18 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    }
    if ((e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_GPU_INFO_GET, &gi,
                       sizeof(gi))) ||
+       (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &li,
+                      sizeof(li))) ||
        (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET, &hi,
                       sizeof(hi)))) {
       sgxws_err("DEV_QUERY failed: %d\n", e);
       goto fail;
    }
+   d->info.core_id = gi.core_id;
+   d->info.core_revision = gi.core_revision;
+   d->info.rt_max_width = li.rt_max_width;
+   d->info.rt_max_height = li.rt_max_height;
+   d->info.rt_max_samples = li.rt_max_samples;
    for (unsigned i = 0; i < DRM_POWERVR_SGX_HEAP_COUNT && i < hi.heaps.count;
         i++) {
       enum sgx_heap id = heap_ids[i];
