@@ -54,6 +54,77 @@ the kernel are symbolised.
 |---|---|---|---|
 | 2026-11-04 | Minecraft (aee60b3) | not profiled yet | ~250 k vertices a frame; vertex cache 0 hits; the draw path ~40% of the render thread, ring-slot waits ~25%, render latency ~100-125 ms |
 
+## The driver against the DDK, same binary (2026-11-08), and the plan for after
+
+Parked on 2026-11-08: Minecraft running correctly on the open stack comes
+first, speed straight after. These are the measurements and the order to work
+in.
+
+### Measurements
+
+- **Minecraft, same JVM** (uapi-stream: i386 gl4es + 32-bit Zulu 8 on both
+  GLES2 drivers, EA1 normal boot, medians of 3): DDK 10.7/13.2 FPS
+  standing/walking, ours 6.6/6.5. The gap is the driver, not the JVM. Ours
+  gives the GPU ~300-335 k indices into 195-225 k vertices a frame. The DDK
+  has the same 1.5 indices per vertex, batch 16 and vertices-per-task formula
+  (ta3d-state's VDM capture), so it doesn't shade fewer duplicates.
+- **perfmicro** (`mesa/tests/perf/sgx_perfmicro.c`, EA1 normal boot, same
+  source on both; frames a second):
+
+| 1440x960 | DDK | ours | ours/DDK |
+|---|---|---|---|
+| fill | 354 | 189 | 0.53 |
+| fill-depth (`-d`) | 327 | 187 | 0.57 |
+| fill-blend | 60.1 | 34.6 | 0.58 |
+| tex (`-c`) | 421.6 | 104.6 | 0.25 |
+| verts (`-c`) | 245 | 112 | 0.46 |
+
+At 720x480 fill is 0.32 and at 360x240 also 0.32, so a fixed per-frame cost
+is higher on ours too.
+
+### Ruled out
+
+- **Hidden surface removal.** Ours removes hidden surfaces: 2.1 Gpix/s over 8
+  layers at 1440x960, more than the pipes can shade.
+  - Depth writes with depth test off (an experiment) change nothing.
+  - fill-depth equals fill.
+- **Reloading the last frame.** No clear, so a background load each frame;
+  `-c` changes nothing on ours.
+- **Texture layout.** POT textures are twiddled on both.
+- **Vertex shader length.** One instruction more than the DDK's.
+
+### Found (ta3d-state's DDK capture; STATE.md "The DDK's fragment programs for a flat colour and one sample")
+
+1. **Flat colour.**
+   - The DDK packs the colour to U8 once a draw in its secondary program, and
+     the pixel program is `mov pa0, sa9` (+ the blend).
+   - Ours packs f32 -> U8 every pixel (2 `pck.u8.f32`).
+   - Fix: constant kind 0x12. The CPU packs the vec4 as BGRA8 at upload
+     (driver side done, 7070f2b) and the compiler emits one mov
+     (usse-compiler).
+2. **One texture sample to the colour.**
+   - The DDK samples RGBA8 with T1 format 0x0d, so the texel arrives in the
+     output's byte order, and the program is `mov o0, pa0`.
+   - Ours uses 0x0c and unpacks to f32 and repacks: 6 instructions, 2 temps.
+   - Fix:
+     - map RGBA8/RGBX8 to 0x0d;
+     - add a per-sampler "BGRA-ordered" mask as a fragment-shader variant,
+       like the sRGB one;
+     - the compiler unpacks those samplers zyxw, and emits a plain mov when
+       the texel goes to the colour unchanged.
+   - Interim: 2 `pck.u8.u8` lane picks.
+3. **Per-frame fixed cost and vertices (0.46).** Not found yet.
+   - Measure submit -> kick -> done with the powervr_sgx tracepoints (m2).
+   - Measure the PDS vertex fetch against the DDK's.
+
+### Order
+
+1. Items 1 and 2 (compiler + driver), then measure perfmicro and Minecraft.
+2. Item 3, from the traces.
+3. `SGX_DEBUG=zerocopy` as the default. It gave +6% walking and -4% standing
+   in single runs: take medians first.
+4. Ring depth (`SGX_SLOTS`), once the SLOTS=6 hang is understood.
+
 ## Shader code against libusc
 
 The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with
