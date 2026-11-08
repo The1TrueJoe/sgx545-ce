@@ -111,7 +111,10 @@ from it) declares the capabilities the loader must assume. Bits:
 | 1 (0x2) | `SECURE` | the background-object PDS block is written by the host (CPU) at submit, not by the microkernel's event-driven module, so the loader can isolate each client address space from the firmware's own heaps instead of mapping them into every context. Set by default (`UK_FEATURES`, default 2). |
 
 A loader keys its behaviour on these bits, not on the build id, so an image can
-state exactly which protocol it implements.
+state exactly which protocol it implements. The upstream DRM driver loads only
+images that declare `SECURE` (bit 1) unless a compat config is set, so a
+feature-0 image is a dev/test-only build; `UK_FEATURES` defaults to 2 so the
+default build is the upstream-loadable one.
 
 ## Manifest fields
 
