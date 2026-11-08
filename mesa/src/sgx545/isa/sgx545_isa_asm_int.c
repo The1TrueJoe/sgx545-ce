@@ -142,6 +142,9 @@ sgx545_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
    if (!strcmp(parts[0], "fdual")) {
       int p = nparts == 3 ? LOOKUP(fdual_pri, parts[1]) : -1;
       int s = nparts == 3 ? LOOKUP(fdual_sec, parts[2]) : -1;
+      /* sec 3 computes fsubflr (ffrc is it with sb = sc): ISA.md "fdual for a compiler" */
+      if (nparts == 3 && (!strcmp(parts[2], "fsubflr") || !strcmp(parts[2], "ffrc")))
+         s = 3;
       if (p < 0 || s < 0)
          return false;
       I->opc = SGX_ISA_OPC_FDUAL;

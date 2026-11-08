@@ -178,6 +178,30 @@ void sgx545_disasm(const uint32_t *words, unsigned n, FILE *out,
 bool sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc,
                        char *buf, size_t size);
 
+/*
+ * Co-issue (ISA.md "fdual for a compiler", "efo"). What an fdual's two
+ * halves read and write: bit n of an _i mask is i<n> (r124+n counts as
+ * i<n>), bit k of a _slots mask the src<k> slot. settled is false where
+ * ISA.md leaves the op's operands open (fmaxmin, fmad16 and ima32 as the
+ * secondary, fddp and ima32 as the primary); the masks then assume the most.
+ */
+struct sgx545_isa_fdual_use {
+   uint8_t sec_reads_i, sec_writes_i, sec_reads_slots;
+   uint8_t pri_reads_i, pri_writes_i, pri_reads_slots;
+   bool settled;
+};
+
+bool sgx545_isa_fdual_use(const struct sgx_isa_instr *instr, struct sgx545_isa_fdual_use *use);
+
+/*
+ * A same-word race the hardware shows (an fdual primary reading an internal
+ * register its secondary writes; efo's d naming one the word writes): a
+ * reason, or NULL. Not hazards, by ISA.md: both halves reading one slot, the
+ * secondary reading an internal register the primary writes, the next
+ * instruction reading the secondary's result.
+ */
+const char *sgx545_isa_coissue_hazard(const struct sgx_isa_instr *instr);
+
 #ifdef __cplusplus
 }
 #endif
