@@ -76,7 +76,7 @@ def assemble():
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), f"{ukernel.CORE_NAME}-ukernel-openhc.bin")
+        os.path.dirname(os.path.abspath(__file__)), f"{ukernel.CORE_NAME}_ukernel.bin")
     man = sys.argv[2] if len(sys.argv) > 2 else out.rsplit(".", 1)[0] + ".json"
     words, offset, patches = assemble()
     data = b"".join(struct.pack("<II", lo, hi) for lo, hi in words)

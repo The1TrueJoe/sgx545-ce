@@ -39,18 +39,22 @@ requests (header + feature bits applied by the driver's packaging tool over the
 ```
 Driver: powervr_sgx — PowerVR SGX5xx (e.g. SGX545 on the Intel Atom CE5300)
 
-File: powervr/sgx545-openhc-ukernel.bin
+File: powervr_sgx/sgx545_ukernel.bin
 Version: 1.0
 Source: <source-repository-url>/ukernel   (ukernel.py + build.py; the DRM
         driver's packaging tool applies the header/feature bits)
 License: MIT.  See LICENSE.<id> for details.
 ```
 
-Open before this is real: the `powervr/` subdirectory name and the exact file
-name are the DRM driver's to settle (it owns the `firmware=` request path); the
-MIT text must be added to linux-firmware's licence set; `Source` needs the
-public repository URL. The source and the built binary are versioned together
-by the manifest `version` + `build_id`.
+Naming (no project name upstream; per core; the driver's own subdirectory):
+`powervr_sgx/<core>_ukernel.bin`, so `powervr_sgx/sgx545_ukernel.bin` here and
+`powervr_sgx/sgx540_ukernel.bin` for another core. The directory matches the DRM
+driver's module/request path (`powervr_sgx/`, not `powervr/`). build.py emits
+`<core>_ukernel.bin`; the driver's `firmware=` request and its packaging tool
+must use the same name — kept in sync across build.py, the driver, the docs and
+the test scripts. Open before this is real: the MIT text must be added to
+linux-firmware's licence set, and `Source` needs the public repository URL. The
+source and the built binary are versioned together by `version` + `build_id`.
 
 ### Not a blocker, noted
 - The microkernel source carries inline hardware-provenance comments (which
