@@ -8,8 +8,9 @@
  * input is an instruction in ISA.md's text notation, optionally followed
  * by "; <lo> <hi>", the expected words. The line is assembled, encoded,
  * compared with the expected words, disassembled, and the text compared
- * with the line. setfc lines update the format-control state the later
- * lines are encoded and decoded with.
+ * with the line. A line "<a> == <b>" checks another spelling instead: a and
+ * b must assemble to the same words. setfc lines update the format-control
+ * state the later lines are encoded and decoded with.
  *
  *    sgx545_isa_test [-t] [-f N] file...
  *
@@ -69,6 +70,24 @@ run_file(const char *path, bool table, unsigned *count)
 
       struct sgx_isa_instr I;
       char err[256], dis[512];
+      char *eq = strstr(text, " == ");
+      if (eq) {
+         struct sgx_isa_instr J;
+         *eq = '\0';
+         char *alt = trim(text), *canon = trim(eq + 4);
+         if (!sgx545_isa_asm_line(alt, &I, err, sizeof(err)) ||
+             !sgx545_isa_asm_line(canon, &J, err, sizeof(err))) {
+            fprintf(stderr, "%s:%u: %s == %s: %s\n", path, lineno, alt, canon, err);
+            fails++;
+            continue;
+         }
+         (*count)++;
+         if (sgx545_isa_encode(&I, &fc) != sgx545_isa_encode(&J, &fc)) {
+            fprintf(stderr, "%s:%u: %s and %s encode differently\n", path, lineno, alt, canon);
+            fails++;
+         }
+         continue;
+      }
       if (!sgx545_isa_asm_line(text, &I, err, sizeof(err))) {
          fprintf(stderr, "%s:%u: %s: %s\n", path, lineno, text, err);
          fails++;

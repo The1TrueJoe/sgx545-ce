@@ -6,6 +6,7 @@
 /* Text notation of the integer / fixed-point / dual-issue classes. */
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -211,6 +212,23 @@ set_num(const char *v, uint8_t *out)
    return true;
 }
 
+/*
+ * efo's i, a and m as dis.py prints them, "i0=m0,i1=m1", into the table's
+ * "m0/m1" (ISA.md "Other spellings asm.py takes"); NULL if it isn't that form.
+ */
+static const char *
+efo_pair(const char *v, char *buf, size_t size)
+{
+   const char *comma = v ? strchr(v, ',') : NULL;
+   const char *e0 = v ? strchr(v, '=') : NULL;
+   const char *e1 = comma ? strchr(comma, '=') : NULL;
+
+   if (!comma || !e0 || e0 > comma || !e1)
+      return NULL;
+   snprintf(buf, size, "%.*s/%s", (int)(comma - e0 - 1), e0 + 1, e1 + 1);
+   return buf;
+}
+
 bool
 sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
                         const char *value)
@@ -233,6 +251,11 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       F(x38), F(s0f13), F(f2_27), F(wi0), F(wi1), F(a0lneg), F(a0rneg), F(f3_10),
 #undef F
    };
+   /* fdual's src1 / src2 negates as bracket flags (or -x on the operand) */
+   if (o == SGX_ISA_OPC_FDUAL && !value && (!strcmp(name, "neg1") || !strcmp(name, "neg2"))) {
+      I->src[name[3] - '0'].neg = true;
+      return true;
+   }
    if (!value) {
       for (unsigned i = 0; i < ARRAY_LEN(flags); i++) {
          if (!strcmp(name, flags[i].name)) {
@@ -285,10 +308,15 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       return SET_SEL(lrp1_l2, l2, l2c);
    if (!strcmp(name, "cs")) {
       if (o == SGX_ISA_OPC_LRP1) return SET_ENUM(lrp1_cs, lcs);
+      /* dot's scales: x4, or cx4 / ax2 (ISA.md "Other spellings") */
+      if (dot && value && value[0] == 'c' && value[1] == 'x') value++;
       if (dot) return SET_ENUM(dot_scale, dcs);
    }
-   if (!strcmp(name, "as") && dot)
+   if (!strcmp(name, "as") && dot) {
+      if (value && value[0] == 'a' && value[1] == 'x')
+         value++;
       return SET_ENUM(dot_scale, das);
+   }
    if (!strcmp(name, "p") && o == SGX_ISA_OPC_SOP3X)
       return SET_ENUM(sop3x_p, p);
    if (!strcmp(name, "cop"))
@@ -297,12 +325,18 @@ sgx545_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
       return SET_ENUM(ops4, aop);
    if (!strcmp(name, "d") && o == SGX_ISA_OPC_EFO)
       return SET_ENUM(efo_d, efo_d);
-   if (!strcmp(name, "i") && o == SGX_ISA_OPC_EFO)
-      return SET_ENUM(efo_i, efo_i);
-   if (!strcmp(name, "a") && o == SGX_ISA_OPC_EFO)
-      return SET_ENUM(efo_a, efo_a);
-   if (!strcmp(name, "m") && o == SGX_ISA_OPC_EFO)
+   if (o == SGX_ISA_OPC_EFO && (!strcmp(name, "i") || !strcmp(name, "a") || !strcmp(name, "m"))) {
+      char buf[64];
+      const char *pair = efo_pair(value, buf, sizeof(buf));
+
+      if (pair)
+         value = pair;
+      if (!strcmp(name, "i"))
+         return SET_ENUM(efo_i, efo_i);
+      if (!strcmp(name, "a"))
+         return SET_ENUM(efo_a, efo_a);
       return SET_ENUM(efo_m, efo_m);
+   }
    if (!strcmp(name, "f1"))
       return set_enum(fmt8, 3, value, &I->f1) && ++I->f1;
    if (!strcmp(name, "f2"))

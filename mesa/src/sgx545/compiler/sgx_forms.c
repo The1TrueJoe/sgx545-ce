@@ -43,6 +43,17 @@
 #define PD   { SGX_ROLE_PDST, SGX_FILE_BIT(SGX_FILE_PRED) }
 /* ima16's src2 negate */
 #define S2N  { SGX_ROLE_SRC2, SRC_FILES, true }
+/* efo (ISA.md "efo"): no extension bit on dst and src1; i<n> in dst, src0 and
+ * src1 is r(124 + n); negates on all three sources, no format select */
+#define EFO_D  { SGX_ROLE_DST, F(R) | F(O) | F(PA) | F(IX) | F(I) }
+#define EFO_S0 { SGX_ROLE_SRC0, SRC0X_FILES | F(I), true }
+#define EFO_S1 { SGX_ROLE_SRC1, F(R) | F(O) | F(PA) | F(SA) | F(I), true }
+#define EFO_S2 { SGX_ROLE_SRC2, SRC_FILES, true }
+/* fdual (ISA.md "Dual issue"): dst without extension bit, the float classes'
+ * src0, src1/src2 negates; format select as in the float classes */
+#define FD_S0  { SGX_ROLE_SRC0, SRC0_FILES | F(I), false, false, true }
+#define FD_S1  { SGX_ROLE_SRC1, SRC_FILES, true, false, true }
+#define FD_S2  { SGX_ROLE_SRC2, SRC_FILES, true, false, true }
 
 #define FLOAT3(op)  [SGX_OP_##op] = { #op, SGX_ISA_OPC_##op, 4, { D, S0A, S1M, S2M } }
 #define FLOAT2(op)  [SGX_OP_##op] = { #op, SGX_ISA_OPC_##op, 3, { D, S1M, S2M } }
@@ -83,6 +94,8 @@ static const struct sgx_form_info {
    [SGX_OP_WDF] = { "WDF", SGX_ISA_OPC_WDF, 0 },
    [SGX_OP_BR] = { "BR", SGX_ISA_OPC_BR, 1, { IMM } },
    [SGX_OP_NOP] = { "NOP", SGX_ISA_OPC_NOP, 0 },
+   [SGX_OP_EFO] = { "EFO", SGX_ISA_OPC_EFO, 4, { EFO_D, EFO_S0, EFO_S1, EFO_S2 } },
+   [SGX_OP_FDUAL] = { "FDUAL", SGX_ISA_OPC_FDUAL, 4, { EFO_D, FD_S0, FD_S1, FD_S2 } },
 };
 
 const struct sgx_slot *
@@ -168,6 +181,20 @@ sgx_form_set(struct sgx_isa_instr *instr, unsigned form, unsigned id, int32_t v)
    case SGX_FLD_DIM:     instr->dim = v; break;
    case SGX_FLD_LOD:     instr->lod = v; break;
    case SGX_FLD_CFMT:    instr->cfmt = v; break;
+   case SGX_FLD_EFO_D:   instr->efo_d = v; break;
+   case SGX_FLD_EFO_I:   instr->efo_i = v; break;
+   case SGX_FLD_EFO_A:   instr->efo_a = v; break;
+   case SGX_FLD_EFO_M:   instr->efo_m = v; break;
+   case SGX_FLD_WI0:     instr->wi0 = v; break;
+   case SGX_FLD_WI1:     instr->wi1 = v; break;
+   case SGX_FLD_A0LNEG:  instr->a0lneg = v; break;
+   case SGX_FLD_A0RNEG:  instr->a0rneg = v; break;
+   case SGX_FLD_PRI:     instr->pri = v; break;
+   case SGX_FLD_SEC:     instr->sec = v; break;
+   case SGX_FLD_SD:      instr->sd = v; break;
+   case SGX_FLD_SB:      instr->sb = v; break;
+   case SGX_FLD_SC:      instr->sc = v; break;
+   case SGX_FLD_MSRC:    instr->msrc = v; break;
    default:
       UNREACHABLE("unknown field");
    }
