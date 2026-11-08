@@ -42,7 +42,6 @@ struct pvrsgx_vm {
 };
 
 struct pvrsgx_vm *pvrsgx_vm_get(struct pvrsgx_vm *vm);
-int pvrsgx_vm_imports(struct pvrsgx_vm *vm, struct drm_gem_object ***out, u32 *n);
 void pvrsgx_vm_put(struct pvrsgx_vm *vm);
 struct dma_resv *pvrsgx_vm_resv(struct pvrsgx_vm *vm);
 struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);

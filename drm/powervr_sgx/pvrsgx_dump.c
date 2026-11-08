@@ -42,9 +42,9 @@ static const struct {
 	{ "BIF_FAULT", SGX_CR_BIF_FAULT },
 	{ "BIF_BANK0", SGX_CR_BIF_BANK0 },
 	{ "BIF_DIR_LIST_BASE0", SGX_CR_BIF_DIR_LIST_BASE0 },
-	{ "BIF_DIR_LIST_BASE15", SGX_CR_BIF_DIR_LIST_BASE15 },
-	{ "EDM_TASK_REG0", 0xb14 },
-	{ "EDM_TASK_REG1", 0xb20 },
+	{ "BIF_DIR_LIST_BASE15", SGX_CR_BIF_DIR_LIST_BASE1 + 4 * (SGX_BIF_DIRLIST_EDM - 1) },
+	{ "EDM_TASK_REG0", SGX_CR_EDM_TASK_REG0 },
+	{ "EDM_TASK_REG1", SGX_CR_EDM_TASK_REG1 },
 };
 
 void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)

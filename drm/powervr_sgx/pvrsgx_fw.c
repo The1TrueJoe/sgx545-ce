@@ -20,7 +20,6 @@
 #include <linux/firmware.h>
 #include <linux/interrupt.h>
 #include <linux/iopoll.h>
-#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/seq_buf.h>
@@ -74,33 +73,11 @@ enum ukfw_patch_value {
 	UKFW_MISC,
 };
 
-/* GETMISCINFO: the request and answer flags in word 0. */
-#define MISCINFO_READY			BIT(0)
-#define MISCINFO_GET_STRUCT_SIZES	BIT(1)
-
 /* The POWER command: data word 1. */
 #define POWER_OFF			1
 
-/* Microkernel timer at 1 kHz, its lockup check at 100 Hz. */
+/* The microkernel's timer runs at 1 kHz. */
 #define UKERNEL_TIMER_HZ	1000
-#define HWR_CHECK_HZ		100
-
-/* SGX_MISCINFO_STRUCT_SIZES this build was made with. */
-static const u32 struct_sizes[] = {
-	0x2b0,	/* CMDTA */
-	0x1e0,	/* CMDTA_SHARED */
-	0x4c8,	/* TRANSFERCMD */
-	0xdc,	/* TRANSFERCMD_SHARED */
-	0xd0,	/* 3DREGISTERS */
-	0x3c,	/* HWPBDESC */
-	0x44,	/* HWRENDERCONTEXT */
-	0x1ec,	/* HWRENDERDETAILS */
-	0x38,	/* HWRTDATA */
-	0x50,	/* HWRTDATASET */
-	0xb4,	/* HWTRANSFERCONTEXT */
-	0x44,	/* HOST_CTL */
-	0x20,	/* COMMAND */
-};
 
 /*
  * Where each buffer lives: the addresses the DDK's allocator gave on an EA3,
@@ -116,9 +93,6 @@ static const struct {
 	[PVRSGX_FW_TA3DCTL] = { false, 0x3000, sizeof(struct pvrsgx_fw_ta3d_ctl) },
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
-	[PVRSGX_FW_HWPERF] = { false, 0x4000, 0x640c },
-	[PVRSGX_FW_TASIG] = { false, 0xa420, 0x620 },
-	[PVRSGX_FW_3DSIG] = { false, 0xb000, 0x2088 },
 	/* The image at 0, then the PDS programs from its end (0xcf70 for the DDK's). */
 	[PVRSGX_FW_UKERNEL] = { true, 0x0000, 0 },
 	[PVRSGX_FW_PDS0] = { true, 0x000, 0x18 },
@@ -132,15 +106,6 @@ static const struct {
 
 #define DATA_ARENA_SIZE	0xe000
 #define CODE_ARENA_SIZE	0xe000
-
-/* Registers the microkernel samples to tell a hung core from a busy one. */
-static const u32 ta_sig[] = { 0x304, 0x26c, 0x270, 0x2a0, 0x2a4, 0x378 };
-static const u32 sig_3d[] = {
-	0x438, 0x4cc, 0x4d0, 0x4d4, 0x4d8, 0x510, 0x514, 0x518,
-	0x51c, 0x524, 0x528, 0x52c, 0x530, 0x534, 0x538, 0x53c,
-	0x540, 0x544, 0x550, 0x554, 0x558, 0x55c, 0x84c, 0x850,
-	0x854, 0x858, 0x560, 0x564, 0x568, 0x56c, 0x308, 0x30c,
-};
 
 static u32 *fw_words(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 {
@@ -203,9 +168,6 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 	t->ccb_ctl = f->addr[PVRSGX_FW_CCBCTL];
 	t->ccb = f->addr[PVRSGX_FW_CCB];
 	t->kernel_pd = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
-	t->hwperf = f->addr[PVRSGX_FW_HWPERF];
-	t->ta_sig = f->addr[PVRSGX_FW_TASIG];
-	t->sig_3d = f->addr[PVRSGX_FW_3DSIG];
 }
 
 /*
@@ -249,13 +211,6 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 	u32 *t;
 
 	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, f->image_size);
-
-	t = fw_words(sdev, PVRSGX_FW_TASIG);
-	t[0] = ARRAY_SIZE(ta_sig);
-	memcpy(t + 2, ta_sig, sizeof(ta_sig));
-	t = fw_words(sdev, PVRSGX_FW_3DSIG);
-	t[0] = ARRAY_SIZE(sig_3d);
-	memcpy(t + 2, sig_3d, sizeof(sig_3d));
 
 	return fw_build_open(sdev);
 }
@@ -478,39 +433,6 @@ static void deinit_script(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, SGX_CR_CLKGATECTL2, 0);
 }
 
-/* GETMISCINFO: the microkernel reports its identity and struct sizes. */
-static int fw_check(struct pvrsgx_device *sdev)
-{
-	u32 *misc = fw_words(sdev, PVRSGX_FW_MISC);
-	u32 data[6] = { 0, sdev->fw.addr[PVRSGX_FW_MISC] };
-	int err;
-
-	memset(misc, 0, layout[PVRSGX_FW_MISC].size);
-	misc[0] = MISCINFO_GET_STRUCT_SIZES;
-	err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_GETMISCINFO, data, NULL);
-	if (err)
-		return err;
-	err = pvrsgx_poll(sdev, &misc[0], MISCINFO_READY, MISCINFO_READY, 500000);
-	if (err) {
-		drm_err(&sdev->base, "GETMISCINFO: no answer\n");
-		return err;
-	}
-
-	sdev->fw.ddk_version = misc[3];
-	sdev->fw.ddk_build = misc[4];
-	drm_info(&sdev->base,
-		 "microkernel: core rev 0x%x id 0x%x, DDK 0x%x build %u, build options 0x%x\n",
-		 misc[1], misc[2], misc[3], misc[4], misc[7]);
-	for (int i = 0; i < ARRAY_SIZE(struct_sizes); i++) {
-		if (misc[8 + i] != struct_sizes[i]) {
-			drm_err(&sdev->base, "microkernel struct %d is 0x%x, expected 0x%x\n",
-				i, misc[8 + i], struct_sizes[i]);
-			return -EPROTO;
-		}
-	}
-	return 0;
-}
-
 /*
  * Start: clocks, init script part 1, reset, part 2, then the first event kick,
  * and the microkernel's init entry sets INIT_COMPLETE.
@@ -539,7 +461,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
 			sgx_wr(sdev, SGX_CR_SOFT_RESET,
-			       SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+			       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
 			sgx_rd(sdev, SGX_CR_SOFT_RESET);
 			/* Behind gma500 bus mastering is the display's too: leave it. */
 			if (sdev->pdev)
@@ -557,10 +479,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		pvrsgx_kobj_reap(sdev, U64_MAX);
 	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
-	hc[HOSTCTL_HWR_SAMPLE_RATE] = UKERNEL_TIMER_HZ / HWR_CHECK_HZ;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = sdev->core->clock_hz / UKERNEL_TIMER_HZ;
 	hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
-	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
 	/* The power status starts clear at every start. */
 	hc[HOSTCTL_POWER_STATUS] = 0;
 	pvrsgx_ccb_reset(sdev);
@@ -570,8 +490,9 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 
 	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
-	       (SGX_CLKG_ALL(SGX_CR_CLKGATECTL_UNITS, SGX_CLKG_AUTO) & ~SGX_CR_CLKGATECTL_DPM) |
-	       FIELD_PREP(SGX_CR_CLKGATECTL_DPM, SGX_CLKG_ON));
+	       (SGX_CLKG_ALL(SGX_CR_CLKGATECTL_UNITS, SGX_CLKG_AUTO) &
+		~SGX_CR_CLKGATECTL_DPM_CLKG) |
+	       FIELD_PREP(SGX_CR_CLKGATECTL_DPM_CLKG, SGX_CLKG_ON));
 	sgx_wr(sdev, SGX_CR_CLKGATECTL2, SGX_CLKG_ALL(SGX_CR_CLKGATECTL2_UNITS, SGX_CLKG_AUTO));
 	sgx_wr(sdev, SGX_CR_EVENT_PDS_ENABLE, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
@@ -581,11 +502,10 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
 	init_script_part2(sdev);
 
-	hc[HOSTCTL_HOST_CLOCK] = (u32)ktime_to_us(ktime_get());
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
-	sgx_wr(sdev, SGX_CR_EVENT_KICK2, SGX_CR_EVENT_KICK_NOW);
+	sgx_wr(sdev, SGX_CR_EVENT_KICK2, SGX_CR_EVENT_KICK2_NOW);
 
 	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
 			  HOSTCTL_INIT_COMPLETE, 500000);
@@ -603,11 +523,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
 		sdev->reset_logged = sdev->reset_count;
 	}
-
-	err = fw_check(sdev);
-	if (err)
-		sdev->fw_running = false;
-	return err;
+	return 0;
 }
 
 /* Ask the microkernel to power off, then hold the cores in reset. */
@@ -623,7 +539,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			drm_warn(&sdev->base, "microkernel did not power off\n");
 		/* Wait for the clocks to gate; the DPM's stays on. */
 		for (int i = 0; i < 500; i++) {
-			if (!(sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & ~SGX_CR_CLKGATESTATUS_DPM))
+			if (!(sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & ~SGX_CR_CLKGATESTATUS_DPM_CLKS))
 				break;
 			usleep_range(100, 200);
 		}
@@ -631,13 +547,15 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		synchronize_irq(sdev->irq);
 		deinit_script(sdev);
 		sdev->fw_running = false;
-		sgx_wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET,
+		       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	} else if (READ_ONCE(sdev->powered)) {
 		/* A failed start: the clocks are on, the microkernel isn't. */
 		WRITE_ONCE(sdev->powered, false);
 		synchronize_irq(sdev->irq);
-		sgx_wr(sdev, SGX_CR_SOFT_RESET, SGX_CR_SOFT_RESET_BIF | SGX_CR_SOFT_RESET_CORES);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET,
+		       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
 }

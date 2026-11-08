@@ -190,7 +190,7 @@ def ctype(f):
 def kernel_h(streams, xml, prefix):
     guard = f"{prefix.upper()}_STREAM_DEFS_H"
     out = [SPDX_C, f"/* {GENERATED.format(xml=xml)} */", "", f"#ifndef {guard}", f"#define {guard}", ""]
-    out += [f'#include "powervr_sgx_stream.h"', ""]
+    out += [f'#include "pvrsgx_stream.h"', ""]
     for s in streams:
         for t, bits in sorted(s.exthdr.items()):
             mask = 0
@@ -211,7 +211,7 @@ def kernel_h(streams, xml, prefix):
         out.append("};")
         out.append("")
     for s in streams:
-        out.append(f"extern const struct powervr_sgx_stream_cmd_defs {prefix}_stream_{s.kind.lower()}_defs;")
+        out.append(f"extern const struct pvrsgx_stream_cmd_defs {prefix}_stream_{s.kind.lower()}_defs;")
     out += ["", f"#endif /* {guard} */", ""]
     return "\n".join(out)
 
@@ -221,24 +221,24 @@ def def_entry(prefix, s, f):
     lines = [f"\t{{ .name = \"{f.name}\",",
              f"\t  .offset = offsetof(struct {st}, {f.name}),",
              f"\t  .size = {f.bytes},",
-             f"\t  .check = POWERVR_SGX_STREAM_CHECK_{f.check.upper()},"]
+             f"\t  .check = PVRSGX_STREAM_CHECK_{f.check.upper()},"]
     if f.check == "range":
         lines.append(f"\t  .min = {f.min:#x}, .max = {f.max:#x},")
         if f.limit:
-            lines.append(f"\t  .limit = POWERVR_SGX_STREAM_LIMIT_{LIMITS[f.limit]},")
+            lines.append(f"\t  .limit = PVRSGX_STREAM_LIMIT_{LIMITS[f.limit]},")
     if f.check == "mask":
         lines.append(f"\t  .mask = {f.mask:#010x},")
     if f.check == "addr":
-        lines.append(f"\t  .heap = POWERVR_SGX_STREAM_HEAP_{HEAPS[f.heap]},")
+        lines.append(f"\t  .heap = PVRSGX_STREAM_HEAP_{HEAPS[f.heap]},")
         lines.append(f"\t  .align = {f.align},")
         if f.optional:
             lines.append("\t  .optional = true,")
         if f.extent in EXTENTS:
-            lines.append(f"\t  .extent = POWERVR_SGX_STREAM_EXTENT_{EXTENTS[f.extent]},")
+            lines.append(f"\t  .extent = PVRSGX_STREAM_EXTENT_{EXTENTS[f.extent]},")
             if f.extent_field:
                 lines.append(f"\t  .extent_field = offsetof(struct {st}, {f.extent_field}),")
         elif f.extent is not None:
-            lines.append("\t  .extent = POWERVR_SGX_STREAM_EXTENT_BYTES,")
+            lines.append("\t  .extent = PVRSGX_STREAM_EXTENT_BYTES,")
             lines.append(f"\t  .extent_bytes = {num(f.extent):#x},")
     lines[-1] = lines[-1] + " },"
     return lines
@@ -251,20 +251,20 @@ def kernel_c(streams, xml, prefix):
     for s in streams:
         k = s.kind.lower()
         P = prefix.upper()
-        out.append(f"static const struct powervr_sgx_stream_def {prefix}_stream_{k}_main[] = {{")
+        out.append(f"static const struct pvrsgx_stream_def {prefix}_stream_{k}_main[] = {{")
         for f in s.fields:
             out += def_entry(prefix, s, f)
         out += ["};", ""]
         for e in s.ext:
             name = e.name.split("_EXT_")[1].lower()
-            out.append(f"static const struct powervr_sgx_stream_def {prefix}_stream_{k}_ext_{name}[] = {{")
+            out.append(f"static const struct pvrsgx_stream_def {prefix}_stream_{k}_ext_{name}[] = {{")
             for f in e.fields:
                 out += def_entry(prefix, s, f)
             out += ["};", ""]
         for t in sorted(s.exthdr):
             exts = [e for e in s.ext if e.hdr_type == t]
             if exts:
-                out.append(f"static const struct powervr_sgx_stream_ext_def {prefix}_stream_{k}_ext{t}[] = {{")
+                out.append(f"static const struct pvrsgx_stream_ext_def {prefix}_stream_{k}_ext{t}[] = {{")
                 for e in exts:
                     name = e.name.split("_EXT_")[1].lower()
                     out += [f"\t{{ .fields = {prefix}_stream_{k}_ext_{name},",
@@ -272,7 +272,7 @@ def kernel_c(streams, xml, prefix):
                             f"\t  .header_mask = {P}_STREAM_EXTHDR_{s.kind}{t}_{name.upper()},",
                             f"\t  .quirk = {e.quirk} }},"]
                 out += ["};", ""]
-        out.append(f"static const struct powervr_sgx_stream_ext_header {prefix}_stream_{k}_ext_headers[] = {{")
+        out.append(f"static const struct pvrsgx_stream_ext_header {prefix}_stream_{k}_ext_headers[] = {{")
         for t in sorted(s.exthdr):
             if any(e.hdr_type == t for e in s.ext):
                 out += [f"\t{{ .ext_streams = {prefix}_stream_{k}_ext{t},",
@@ -281,7 +281,7 @@ def kernel_c(streams, xml, prefix):
             else:
                 out.append(f"\t{{ .valid_mask = {P}_STREAM_EXTHDR_{s.kind}{t}_VALID }},")
         out += ["};", ""]
-        out += [f"const struct powervr_sgx_stream_cmd_defs {prefix}_stream_{k}_defs = {{",
+        out += [f"const struct pvrsgx_stream_cmd_defs {prefix}_stream_{k}_defs = {{",
                 f"\t.name = \"CMD_{s.kind}\",",
                 f"\t.main = {prefix}_stream_{k}_main,",
                 f"\t.nr_main = ARRAY_SIZE({prefix}_stream_{k}_main),",

@@ -9,7 +9,7 @@
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
-#include "powervr_sgx_stream.h"
+#include "pvrsgx_stream.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_fwif.h"
@@ -81,7 +81,7 @@ int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			     const struct drm_powervr_sgx_job *in)
 {
 	struct pvrsgx_transfer_job *tj = &job->transfer;
-	struct powervr_sgx_stream_ctx sctx = {};
+	struct pvrsgx_stream_ctx sctx = {};
 	struct pvrsgx_vm *vm = job->ctx->vm;
 	int err;
 
@@ -91,27 +91,27 @@ int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		return -EINVAL;
 	tj->dst_twiddled = in->flags & DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED;
 
-	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
-	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size =
+	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
+	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].size =
 		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
-	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_X] = XFER_TILES_X_MAX;
-	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_Y] = XFER_TILES_Y_MAX;
+	sctx.limits[PVRSGX_STREAM_LIMIT_TILES_X] = XFER_TILES_X_MAX;
+	sctx.limits[PVRSGX_STREAM_LIMIT_TILES_Y] = XFER_TILES_Y_MAX;
 	sctx.has_quirk = pvrsgx_stream_no_quirk;
 	sctx.mapped = pvrsgx_stream_mapped;
 	sctx.priv = vm;
 
-	err = pvrsgx_stream_take(&powervr_sgx_stream_transfer_defs, &sctx, vm, in->cmd_stream,
+	err = pvrsgx_stream_take(&pvrsgx_stream_transfer_defs, &sctx, vm, in->cmd_stream,
 				 in->cmd_stream_len, &tj->xfer);
 	if (err)
 		return err;
-	return powervr_sgx_check_transfer(&tj->xfer);
+	return pvrsgx_check_transfer(&tj->xfer);
 }
 
 /* Write the 0x1c0-byte transfer command into the context's ring (UAPI.md 3.5). */
 void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 {
 	struct pvrsgx_transfer_ctx *x = job->ctx->transfer;
-	const struct powervr_sgx_stream_transfer *in = &job->transfer.xfer;
+	const struct pvrsgx_stream_transfer *in = &job->transfer.xfer;
 	u32 woff = x->ccb_woff, base = (u32)in->bg_block_addr & 0xfff00000;
 	struct pvrsgx_fw_transfer_cmd *cmd = (void *)((u8 *)kobj_cpu(x->ccb) + woff);
 	u32 *done = kobj_cpu(x->done);

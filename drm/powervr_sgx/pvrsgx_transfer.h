@@ -6,7 +6,7 @@
 
 #include <linux/types.h>
 
-#include "powervr_sgx_stream.h"
+#include "pvrsgx_stream.h"
 
 struct drm_file;
 struct drm_powervr_sgx_job;
@@ -23,7 +23,7 @@ struct pvrsgx_transfer_ctx {
 };
 
 struct pvrsgx_transfer_job {
-	struct powervr_sgx_stream_transfer xfer;
+	struct pvrsgx_stream_transfer xfer;
 	bool dst_twiddled;
 	u32 cmd_off;
 };

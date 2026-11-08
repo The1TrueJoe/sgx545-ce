@@ -19,6 +19,24 @@ static const struct pvrsgx_core_info cores[] = {
 		.core_rev = 0x0001000e,
 		.features = PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS |
 			    PVRSGX_FEATURE_MULTI_EVENT_KICK,
+		.isa = PVRSGX_ISA_SGX545,
+		.num_dir_lists = 16,
+		.clock_hz = 400000000,
+		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
+	},
+	{
+		/*
+		 * The same core one revision earlier (docs/UKERNEL.md, "SGX545
+		 * core revisions"): same features and instruction set, the same
+		 * microkernel. Its clock depends on the part (400 or 640 MHz);
+		 * the microkernel's timer only needs the order of magnitude.
+		 */
+		.name = "Intel Cedarview (SGX545 1.0.13)",
+		.core_id = 0x01150000,
+		.core_rev = 0x0001000d,
+		.features = PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS |
+			    PVRSGX_FEATURE_MULTI_EVENT_KICK,
+		.isa = PVRSGX_ISA_SGX545,
 		.num_dir_lists = 16,
 		.clock_hz = 400000000,
 		.fw_name = "powervr_sgx/sgx545_ukernel.bin",

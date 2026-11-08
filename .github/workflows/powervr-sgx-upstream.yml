@@ -14,6 +14,7 @@ on:
       - drm/powervr_sgx/**
       - drm/gma500/**
       - drm/ci/cedarview*
+      - drm/tools/gen_regs.py
       - docs/uapi/**
       - .github/workflows/powervr-sgx-upstream.yml
 
@@ -44,6 +45,11 @@ jobs:
         with:
           path: linux-${{ env.LINUX_VERSION }}.tar.xz
           key: linux-${{ env.LINUX_VERSION }}
+
+      - name: Generated register header is current
+        run: |
+          python3 drm/tools/gen_regs.py kernel/src/services4/srvkm/hwdefs/sgx545defs.h |
+            diff -u drm/powervr_sgx/pvrsgx_regs.h -
 
       - name: uAPI header, one layout on i386 and x86_64
         run: |

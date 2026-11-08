@@ -30,33 +30,17 @@ struct pvrsgx_fw_ta3d_ctl {
 	/** @ccb_ctl: Device address of the kernel CCB's write and read offsets. */
 	u32 ccb_ctl;
 	/* private: */
-	u32 pad_0c[16];
-	/* public: */
-	/** @hwperf_flags: 0. */
-	u32 hwperf_flags;
-	/* private: */
-	u32 pad_50[2];
+	u32 pad_0c[19];
 	/* public: */
 	/** @ccb: Device address of the kernel CCB. */
 	u32 ccb;
 	/** @kernel_pd: Physical address of the firmware's page directory. */
 	u32 kernel_pd;
 	/* private: */
-	u32 pad_60[19];
-	/* public: */
-	/** @hwperf: Device address of the HWPerf buffer. */
-	u32 hwperf;
-	/** @ta_sig: Device address of the TA signature register list. */
-	u32 ta_sig;
-	/** @sig_3d: Device address of the 3D signature register list. */
-	u32 sig_3d;
-	/* private: */
-	u32 pad_b8[13];
+	u32 pad_60[35];
 };
 
-static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, hwperf_flags) == 0x4c);
-static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, kernel_pd) == 0x5c);
-static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, sig_3d) == 0xb4);
+static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, ccb) == 0x58);
 static_assert(sizeof(struct pvrsgx_fw_ta3d_ctl) == 0xec);
 
 /* struct pvrsgx_fw_ta_cmd.ta_flags */

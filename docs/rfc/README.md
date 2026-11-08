@@ -4,8 +4,9 @@ A draft for Joseph to read. **Not sent, and not to be sent from here.** Joseph
 signs and sends it himself (`b4 send` or `git send-email`).
 
 - `0000-cover-letter.txt`: the cover letter, with To and Cc.
-- The patches don't exist yet as a series. The cover letter lists the planned
-  split; `docs/UPSTREAM-READINESS.md` (Kernel, "The series") has the order.
+- The patches don't exist yet as a series. The cover letter lists the v1
+  split (8 patches, the core only) and the follow-ups to come;
+  `docs/UPSTREAM-READINESS.md` (Kernel, "Minimal first series") has the plan.
 
 ## Standards checklist (2026-11-08)
 
@@ -19,7 +20,7 @@ MAINTAINERS, Kconfig), committed as one patch and run through
 
 | item | status |
 |---|---|
-| Subject `[RFC PATCH 00/12] drm/powervr_sgx: ...`, imperative patch subjects with the subsystem prefix | pass |
+| Subject `[RFC PATCH 0/8] drm/powervr_sgx: ...` (v1 core only; the follow-ups listed as to follow), imperative patch subjects with the subsystem prefix | pass |
 | Cover letter says what, why and what is asked; RFC status explicit | pass |
 | Plain text, wrapped under 75 columns, no attachments | pass |
 | One logical change per patch, each one building | **open**: the series isn't cut yet |
@@ -124,4 +125,6 @@ archive refuse automated reads; not bypassed).
    without DDK compat.
 2. Mesa merge request open, and the uAPI questions above settled.
 3. Port the uAPI tests to IGT.
-4. Joseph signs off and sends, with a lore-checked To/Cc list on the day.
+4. Recheck To/Cc against MAINTAINERS and `get_maintainer.pl` on the day
+   (the drm/imagination maintainers changed twice in 2026), then Joseph
+   signs off and sends.

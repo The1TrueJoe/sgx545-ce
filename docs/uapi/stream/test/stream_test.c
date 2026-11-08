@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "powervr_sgx_stream_defs.h"
+#include "pvrsgx_stream_defs.h"
 #include "fixture_stream_defs.h"
 #include "sgx_kmd_stream_pack.h"
 
@@ -46,12 +46,12 @@ static bool has_quirk(const void *priv, u32 quirk)
 	return priv && quirk == 1234;
 }
 
-static struct powervr_sgx_stream_ctx ctx(void)
+static struct pvrsgx_stream_ctx ctx(void)
 {
-	struct powervr_sgx_stream_ctx c = {
-		.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL] = { 0x2e000000, 0x2000000 },
-		.limits[POWERVR_SGX_STREAM_LIMIT_TILES_X] = 63,
-		.limits[POWERVR_SGX_STREAM_LIMIT_TILES_Y] = 127,
+	struct pvrsgx_stream_ctx c = {
+		.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL] = { 0x2e000000, 0x2000000 },
+		.limits[PVRSGX_STREAM_LIMIT_TILES_X] = 63,
+		.limits[PVRSGX_STREAM_LIMIT_TILES_Y] = 127,
 		.rt_pad_width = 736,
 		.rt_pad_height = 480,
 		.mapped = mapped,
@@ -76,24 +76,24 @@ static const struct SGX_KMD_STREAM_CMD_RENDER good_render = {
 	.depth_bias_factor = 0x3f000000,
 };
 
-static int render(const struct SGX_KMD_STREAM_CMD_RENDER *v, const struct powervr_sgx_stream_ctx *c,
-		  struct powervr_sgx_stream_render *out)
+static int render(const struct SGX_KMD_STREAM_CMD_RENDER *v, const struct pvrsgx_stream_ctx *c,
+		  struct pvrsgx_stream_render *out)
 {
 	u8 buf[SGX_KMD_STREAM_CMD_RENDER_length];
 	u32 len = SGX_KMD_STREAM_CMD_RENDER_pack(buf, v);
-	int err = powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, c, buf, len, out);
+	int err = pvrsgx_stream_process(&pvrsgx_stream_render_defs, c, buf, len, out);
 
 	if (!err)
-		err = powervr_sgx_stream_check_mapped(&powervr_sgx_stream_render_defs, c, out);
+		err = pvrsgx_stream_check_mapped(&pvrsgx_stream_render_defs, c, out);
 	if (!err)
-		err = powervr_sgx_check_render(out);
+		err = pvrsgx_check_render(out);
 	return err;
 }
 
 static void test_render(void)
 {
-	struct powervr_sgx_stream_ctx c = ctx();
-	struct powervr_sgx_stream_render out;
+	struct pvrsgx_stream_ctx c = ctx();
+	struct pvrsgx_stream_render out;
 	struct SGX_KMD_STREAM_CMD_RENDER v;
 	u8 buf[SGX_KMD_STREAM_CMD_RENDER_length + 16] = { 0 };
 	u32 len;
@@ -108,39 +108,39 @@ static void test_render(void)
 
 	/* Framing. */
 	len = SGX_KMD_STREAM_CMD_RENDER_pack(buf, &good_render);
-	EXPECT(len == powervr_sgx_stream_render_defs.main_len, "writer and decoder agree on the length");
+	EXPECT(len == pvrsgx_stream_render_defs.main_len, "writer and decoder agree on the length");
 	buf[4] = 1;
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len, &out),
 	       "header word 1 must be zero");
 	buf[4] = 0;
 	buf[0] = len + 4;
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 4, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 4, &out),
 	       "a longer main stream is refused (it is frozen)");
 	buf[0] = len;
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len - 4, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len - 4, &out),
 	       "a truncated stream is refused");
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 2, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 2, &out),
 	       "trailing bytes that are not an extension header are refused");
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 4, &out) == 0,
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 4, &out) == 0,
 	       "an empty extension header of a known type is accepted");
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 8, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 8, &out),
 	       "bytes after the last extension stream are refused");
 	buf[len + 3] = 1 << 5; /* type 1 */
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 4, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 4, &out),
 	       "an unknown extension header type is refused");
 	buf[len + 3] = 0;
 	buf[len] = 1;
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 4, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 4, &out),
 	       "an extension bit outside the valid mask is refused");
 	buf[len] = 0;
 	buf[len + 3] = 1 << 4; /* continuation */
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 4, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 4, &out),
 	       "a continuation with no next header is refused");
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, len + 8, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, len + 8, &out),
 	       "the same extension header type twice is refused");
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, 4097, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, 4097, &out),
 	       "a stream over 4 KiB is refused");
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_render_defs, &c, buf, 0, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_render_defs, &c, buf, 0, &out),
 	       "an empty stream is refused");
 
 	/* Per field. */
@@ -199,40 +199,40 @@ static void test_render(void)
 
 static void test_ta_kick(void)
 {
-	struct powervr_sgx_stream_ctx c = ctx();
-	struct powervr_sgx_stream_ta_kick out;
+	struct pvrsgx_stream_ctx c = ctx();
+	struct pvrsgx_stream_ta_kick out;
 	struct SGX_KMD_STREAM_CMD_TA_KICK v = { .vdm_base = 0x3e018000, .ta_flags2 = 0x2c80000 };
 	u8 buf[SGX_KMD_STREAM_CMD_TA_KICK_length];
 	u32 len = SGX_KMD_STREAM_CMD_TA_KICK_pack(buf, &v);
 
 	EXPECT(len == 20, "TA kick stream is 20 bytes");
-	EXPECT(!powervr_sgx_stream_process(&powervr_sgx_stream_ta_kick_defs, &c, buf, len, &out) &&
-	       !powervr_sgx_stream_check_mapped(&powervr_sgx_stream_ta_kick_defs, &c, &out) &&
+	EXPECT(!pvrsgx_stream_process(&pvrsgx_stream_ta_kick_defs, &c, buf, len, &out) &&
+	       !pvrsgx_stream_check_mapped(&pvrsgx_stream_ta_kick_defs, &c, &out) &&
 	       out.vdm_base == 0x3e018000 && out.ta_flags2 == 0x2c80000, "a good TA kick decodes");
 	v.ta_flags2 = 1;
 	SGX_KMD_STREAM_CMD_TA_KICK_pack(buf, &v);
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_ta_kick_defs, &c, buf, len, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_ta_kick_defs, &c, buf, len, &out),
 	       "ta_flags2 bit 0");
 	v.ta_flags2 = 0;
 	v.vdm_base = 0x3e018002;
 	SGX_KMD_STREAM_CMD_TA_KICK_pack(buf, &v);
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_ta_kick_defs, &c, buf, len, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_ta_kick_defs, &c, buf, len, &out),
 	       "vdm_base not 4-byte aligned");
 	v.vdm_base = 0x13e018000ULL;
 	SGX_KMD_STREAM_CMD_TA_KICK_pack(buf, &v);
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_ta_kick_defs, &c, buf, len, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_ta_kick_defs, &c, buf, len, &out),
 	       "vdm_base above 4 GiB");
 	v.vdm_base = 0x3f000000;
 	SGX_KMD_STREAM_CMD_TA_KICK_pack(buf, &v);
-	EXPECT(!powervr_sgx_stream_process(&powervr_sgx_stream_ta_kick_defs, &c, buf, len, &out) &&
-	       powervr_sgx_stream_check_mapped(&powervr_sgx_stream_ta_kick_defs, &c, &out),
+	EXPECT(!pvrsgx_stream_process(&pvrsgx_stream_ta_kick_defs, &c, buf, len, &out) &&
+	       pvrsgx_stream_check_mapped(&pvrsgx_stream_ta_kick_defs, &c, &out),
 	       "vdm_base not mapped");
 }
 
 static void test_transfer(void)
 {
-	struct powervr_sgx_stream_ctx c = ctx();
-	struct powervr_sgx_stream_transfer out;
+	struct pvrsgx_stream_ctx c = ctx();
+	struct pvrsgx_stream_transfer out;
 	struct SGX_KMD_STREAM_CMD_TRANSFER v = {
 		.bg_block_addr = 0x3e000200,
 		.pixel_event_pds_addr = 0x2e000020,
@@ -246,23 +246,23 @@ static void test_transfer(void)
 
 	c.rt_pad_width = c.rt_pad_height = 0;
 	len = SGX_KMD_STREAM_CMD_TRANSFER_pack(buf, &v);
-	EXPECT(!powervr_sgx_stream_process(&powervr_sgx_stream_transfer_defs, &c, buf, len, &out) &&
-	       !powervr_sgx_stream_check_mapped(&powervr_sgx_stream_transfer_defs, &c, &out) &&
-	       !powervr_sgx_check_transfer(&out) && out.last_tile_y == 29, "a good transfer decodes");
+	EXPECT(!pvrsgx_stream_process(&pvrsgx_stream_transfer_defs, &c, buf, len, &out) &&
+	       !pvrsgx_stream_check_mapped(&pvrsgx_stream_transfer_defs, &c, &out) &&
+	       !pvrsgx_check_transfer(&out) && out.last_tile_y == 29, "a good transfer decodes");
 	v.first_tile_x = 23;
 	SGX_KMD_STREAM_CMD_TRANSFER_pack(buf, &v);
-	EXPECT(!powervr_sgx_stream_process(&powervr_sgx_stream_transfer_defs, &c, buf, len, &out) &&
-	       powervr_sgx_check_transfer(&out), "first tile after last");
+	EXPECT(!pvrsgx_stream_process(&pvrsgx_stream_transfer_defs, &c, buf, len, &out) &&
+	       pvrsgx_check_transfer(&out), "first tile after last");
 	v.first_tile_x = 0;
 	v.last_tile_x = 64;
 	SGX_KMD_STREAM_CMD_TRANSFER_pack(buf, &v);
-	EXPECT(powervr_sgx_stream_process(&powervr_sgx_stream_transfer_defs, &c, buf, len, &out),
+	EXPECT(pvrsgx_stream_process(&pvrsgx_stream_transfer_defs, &c, buf, len, &out),
 	       "tile past the device limit");
 	v.last_tile_x = 22;
 	v.bg_block_addr = 0x3e3fff00;
 	SGX_KMD_STREAM_CMD_TRANSFER_pack(buf, &v);
-	EXPECT(!powervr_sgx_stream_process(&powervr_sgx_stream_transfer_defs, &c, buf, len, &out) &&
-	       powervr_sgx_stream_check_mapped(&powervr_sgx_stream_transfer_defs, &c, &out),
+	EXPECT(!pvrsgx_stream_process(&pvrsgx_stream_transfer_defs, &c, buf, len, &out) &&
+	       pvrsgx_stream_check_mapped(&pvrsgx_stream_transfer_defs, &c, &out),
 	       "background block runs past the mapping");
 }
 
@@ -274,9 +274,9 @@ static void put32(u8 *p, u32 v)
 
 static void test_extensions(void)
 {
-	struct powervr_sgx_stream_ctx c = ctx();
+	struct pvrsgx_stream_ctx c = ctx();
 	struct fixture_stream_demo out;
-	const struct powervr_sgx_stream_cmd_defs *d = &fixture_stream_demo_defs;
+	const struct pvrsgx_stream_cmd_defs *d = &fixture_stream_demo_defs;
 	u32 musthave[2] = { FIXTURE_STREAM_EXTHDR_DEMO0_EXTRA, 0 };
 	u8 s[64] = { 0 };
 	u64 addr = 0x3e000040;
@@ -284,32 +284,32 @@ static void test_extensions(void)
 	put32(s, 12);
 	put32(s + 8, 2);
 	EXPECT(d->main_len == 12, "fixture main stream is 12 bytes");
-	EXPECT(!powervr_sgx_stream_process(d, &c, s, 12, &out) && out.extra_addr == 0 &&
-	       !powervr_sgx_stream_check_mapped(d, &c, &out), "no extension: its fields are zero");
+	EXPECT(!pvrsgx_stream_process(d, &c, s, 12, &out) && out.extra_addr == 0 &&
+	       !pvrsgx_stream_check_mapped(d, &c, &out), "no extension: its fields are zero");
 
 	/* ext0 EXTRA: header at 12, extra_bits at 16, a zero gap at 20, extra_addr at 24. */
 	put32(s + 12, FIXTURE_STREAM_EXTHDR_DEMO0_EXTRA);
 	put32(s + 16, 0x30);
 	memcpy(s + 24, &addr, 8);
-	EXPECT(!powervr_sgx_stream_process(d, &c, s, 32, &out) && out.extra_bits == 0x30 &&
-	       out.extra_addr == addr && !powervr_sgx_stream_check_mapped(d, &c, &out),
+	EXPECT(!pvrsgx_stream_process(d, &c, s, 32, &out) && out.extra_bits == 0x30 &&
+	       out.extra_addr == addr && !pvrsgx_stream_check_mapped(d, &c, &out),
 	       "extension stream decodes after an aligned gap");
 	s[21] = 1;
-	EXPECT(powervr_sgx_stream_process(d, &c, s, 32, &out), "non-zero gap byte");
+	EXPECT(pvrsgx_stream_process(d, &c, s, 32, &out), "non-zero gap byte");
 	s[21] = 0;
 	addr = 0x3f000000;
 	memcpy(s + 24, &addr, 8);
-	EXPECT(!powervr_sgx_stream_process(d, &c, s, 32, &out) &&
-	       powervr_sgx_stream_check_mapped(d, &c, &out), "extension address not mapped");
+	EXPECT(!pvrsgx_stream_process(d, &c, s, 32, &out) &&
+	       pvrsgx_stream_check_mapped(d, &c, &out), "extension address not mapped");
 	addr = 0x3e000040;
 	memcpy(s + 24, &addr, 8);
 
 	/* must-have: the device requires EXTRA. */
 	c.musthave = musthave;
-	EXPECT(powervr_sgx_stream_process(d, &c, s, 12, &out), "a must-have extension is missing");
-	EXPECT(!powervr_sgx_stream_process(d, &c, s, 32, &out), "a must-have extension is present");
+	EXPECT(pvrsgx_stream_process(d, &c, s, 12, &out), "a must-have extension is missing");
+	EXPECT(!pvrsgx_stream_process(d, &c, s, 32, &out), "a must-have extension is present");
 	put32(s + 12, 0);
-	EXPECT(powervr_sgx_stream_process(d, &c, s, 16, &out),
+	EXPECT(pvrsgx_stream_process(d, &c, s, 16, &out),
 	       "an extension header without the must-have bit");
 	put32(s + 12, FIXTURE_STREAM_EXTHDR_DEMO0_EXTRA);
 	c.musthave = NULL;
@@ -317,21 +317,21 @@ static void test_extensions(void)
 	/* ext0 QUIRKY needs quirk 1234. */
 	put32(s + 12, FIXTURE_STREAM_EXTHDR_DEMO0_QUIRKY);
 	put32(s + 16, 7);
-	EXPECT(powervr_sgx_stream_process(d, &c, s, 20, &out), "quirk extension without the quirk");
+	EXPECT(pvrsgx_stream_process(d, &c, s, 20, &out), "quirk extension without the quirk");
 	c.priv = &c;
-	EXPECT(!powervr_sgx_stream_process(d, &c, s, 20, &out) && out.quirky == 7,
+	EXPECT(!pvrsgx_stream_process(d, &c, s, 20, &out) && out.quirky == 7,
 	       "quirk extension with the quirk");
 
 	/* ext0 then ext1 MORE, through a continuation. */
-	put32(s + 12, FIXTURE_STREAM_EXTHDR_DEMO0_EXTRA | POWERVR_SGX_STREAM_EXTHDR_CONTINUATION);
+	put32(s + 12, FIXTURE_STREAM_EXTHDR_DEMO0_EXTRA | PVRSGX_STREAM_EXTHDR_CONTINUATION);
 	put32(s + 16, 0x30);
 	put32(s + 32, (1U << 29) | FIXTURE_STREAM_EXTHDR_DEMO1_MORE);
 	put32(s + 36, 63);
-	EXPECT(!powervr_sgx_stream_process(d, &c, s, 40, &out) && out.more == 63, "two extension headers");
+	EXPECT(!pvrsgx_stream_process(d, &c, s, 40, &out) && out.more == 63, "two extension headers");
 	put32(s + 36, 64);
-	EXPECT(powervr_sgx_stream_process(d, &c, s, 40, &out), "extension field past its limit");
+	EXPECT(pvrsgx_stream_process(d, &c, s, 40, &out), "extension field past its limit");
 	put32(s + 32, FIXTURE_STREAM_EXTHDR_DEMO0_EXTRA);
-	EXPECT(powervr_sgx_stream_process(d, &c, s, 40, &out), "extension header type 0 twice");
+	EXPECT(pvrsgx_stream_process(d, &c, s, 40, &out), "extension header type 0 twice");
 }
 
 int main(void)
