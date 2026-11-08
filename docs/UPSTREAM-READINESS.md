@@ -41,7 +41,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | # | item | status | owner |
 |---|---|---|---|
 | M1 | upstream build is powervr_sgx only | mostly there | uapi-stream |
-| M2 | features from DEV_QUERY and a core table | not started | mesa-gallium (table), uapi-stream (queries) |
+| M2 | features from DEV_QUERY and a core table | done: sgx_device.c on sgxws_dev_info | mesa-gallium (table), uapi-stream (queries) |
 | M3 | driver name for the family | decided: `sgx` (Joseph, 2026-11-08) | mesa-gallium |
 | M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |

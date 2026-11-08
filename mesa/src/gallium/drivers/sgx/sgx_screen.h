@@ -43,6 +43,8 @@ const char *sgx_dump_code_dir(void);
          fprintf(stderr, "sgx: " __VA_ARGS__);                                 \
    } while (0)
 
+struct sgx_device_features;
+
 struct sgx_screen {
    struct pipe_screen base;
    int fd;     /* the fd the screen was created on (its key) */
@@ -71,6 +73,11 @@ struct sgx_screen {
 
    /* kmsro: the display device scanout buffers are allocated on */
    struct renderonly *ro;
+
+   /* the core: what the kernel reports, and what its entry adds */
+   const struct sgxws_device_info *info;
+   const struct sgx_device_features *features;
+   char name[48];
 };
 
 static inline struct sgx_screen *

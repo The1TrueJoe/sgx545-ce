@@ -9,7 +9,7 @@ our compiler, and the GPU is started by `srvinit/`.
 
 Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 
-- `eglinfo` lists `PowerVR SGX545 (sgx545-ce)`, OpenGL ES 2.0, Mesa 26.2.5.
+- `eglinfo` lists `PowerVR SGX545`, OpenGL ES 2.0, Mesa 26.2.5.
 - Clear + triangle through GLES2 are byte-identical to the DDK.
 - es2gears' shaders run on the GPU at ~400 FPS on fb0.
 
