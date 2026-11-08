@@ -14,7 +14,7 @@ text assembler.
 | `sgx545_isa_asm.c`, `sgx545_isa_asm_int.c` | ISA.md's text notation into `struct sgx_isa_instr` |
 | `sgx545_isa_enums.py` | generates `sgx545-isa-enums.h`: the opcode and operand-kind enums the encoder switches on, and the field-value enums |
 | `tests/sgx545_isa_test.c` | text -> struct -> words -> text round trip; checks expected words where a line gives them |
-| `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes) |
+| `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: ISA.md's efo control words and the other spellings of efo and fdual, as `a == b` lines) |
 | `tests/standalone.sh` | builds the library and the test against an unpacked Mesa tree, without a Mesa build |
 
 `mesa/patches/0004-isaspec-derived-bitset-params-and-override-fields.patch`
