@@ -71,6 +71,10 @@ TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
 # 0x38 = EVENT_STATUS2, 0x39 = 0x008 CLKGATESTATUS, 0x3a = stage counters (byte each:
 # do_ta/ta_finished/do_3d/render_done), 0x3b = tick counter.
 WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
+# EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
+# alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
+# host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
+TIMER_DIV = int(os.environ.get("UK_TIMERDIV", "1"))
 
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
@@ -646,6 +650,8 @@ def build(a):
     a.i("wdf")
     a.i(f"ld.a.d r0, r1, #{HC_TIMERCLK} [moe]")   # host ui32uKernelTimerClock (period)
     a.i("wdf")
+    if TIMER_DIV != 1:
+        a.i(f"imae r0, r0, #{TIMER_DIV}, #0 [t2=u32]")   # UK_TIMERDIV: slow the keep-alive timer
     a.i(f"limm r1, #{EVENT_TIMER_ENABLE}")
     a.i("or r0, r0, r1")
     a.i(f"str #{CR_EVENT_TIMER // 4}, r0")        # EUR_CR_EVENT_TIMER = period | ENABLE
@@ -792,6 +798,8 @@ def build(a):
     a.label("k_power_resume")
     a.i(f"ld.a.d r4, r2, #{HC_TIMERCLK} [moe]")      # host timer period
     a.i("wdf")
+    if TIMER_DIV != 1:
+        a.i(f"imae r4, r4, #{TIMER_DIV}, #0 [t2=u32]")   # UK_TIMERDIV: match init's slowed timer
     a.i(f"limm r5, #{EVENT_TIMER_ENABLE}")
     a.i("or r4, r4, r5")
     a.i(f"str #{CR_EVENT_TIMER // 4}, r4")           # 0xacc = period | ENABLE
