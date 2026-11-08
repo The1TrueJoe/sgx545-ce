@@ -1,0 +1,63 @@
+From a4dc92b3061ce3e088d9d1aef4437e33827adee1 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Sun, 8 Nov 2026 18:17:26 -0500
+Subject: [PATCH] drm/gma500: Wait longer for the Cedarview graphics island
+
+cdv_init_pm() turns the graphics power island on and polls for it for
+only 5 x 10 us. On an Atom N2600 that is too short: the driver logs
+"GPU: power management timed out" at every boot, although the island
+comes up a moment later and the GPU works.
+
+Poll for up to 10 ms instead, so the message only appears when the
+island really fails to power up.
+
+Assisted-by: Claude:claude-opus-5-5
+---
+ drivers/gpu/drm/gma500/cdv_device.c | 16 ++++++----------
+ 1 file changed, 6 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/gpu/drm/gma500/cdv_device.c b/drivers/gpu/drm/gma500/cdv_device.c
+index e73ea2b..f70f8bf 100644
+--- a/drivers/gpu/drm/gma500/cdv_device.c
++++ b/drivers/gpu/drm/gma500/cdv_device.c
+@@ -6,6 +6,7 @@
+  **************************************************************************/
+ 
+ #include <linux/delay.h>
++#include <linux/iopoll.h>
+ 
+ #include <drm/drm.h>
+ #include <drm/drm_crtc_helper.h>
+@@ -177,9 +178,8 @@ static void cdv_init_pm(struct drm_device *dev)
+ {
+ 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
+ 	struct pci_dev *pdev = to_pci_dev(dev->dev);
+-	u32 pwr_cnt;
++	u32 pwr_cnt, pwr_sts;
+ 	int domain = pci_domain_nr(pdev->bus);
+-	int i;
+ 
+ 	dev_priv->apm_base = CDV_MSG_READ32(domain, PSB_PUNIT_PORT,
+ 							PSB_APMBA) & 0xFFFF;
+@@ -194,14 +194,10 @@ static void cdv_init_pm(struct drm_device *dev)
+ 	pwr_cnt |= PSB_PWRGT_GFX_ON;
+ 	outl(pwr_cnt, dev_priv->apm_base + PSB_APM_CMD);
+ 
+-	/* Wait for the GPU power */
+-	for (i = 0; i < 5; i++) {
+-		u32 pwr_sts = inl(dev_priv->apm_base + PSB_APM_STS);
+-		if ((pwr_sts & PSB_PWRGT_GFX_MASK) == 0)
+-			return;
+-		udelay(10);
+-	}
+-	dev_err(dev->dev, "GPU: power management timed out.\n");
++	/* Wait for the GPU power: the island can take well over 50 us to come up. */
++	if (read_poll_timeout(inl, pwr_sts, !(pwr_sts & PSB_PWRGT_GFX_MASK), 10, 10000,
++			      false, dev_priv->apm_base + PSB_APM_STS))
++		dev_err(dev->dev, "GPU: power management timed out.\n");
+ }
+ 
+ static void cdv_errata(struct drm_device *dev)
+-- 
+2.50.1 (Apple Git-155)
+
