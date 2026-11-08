@@ -242,7 +242,7 @@ counts from `FUN_00017c20`:
 | 1 | 3e517004 | index buffer address; bit 0 is cleared for 16-bit indices, bits 0-1 for 32-bit [D] |
 | 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D] |
 | 3 | 003fffff | max index (constant) [D] |
-| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. The DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords]. `64 / output dwords` hung the GPU at 12 output dwords (EA3, 2026-10-28, log `2026-10-28-1530-gl4es-ctest`; hardware, not a replay poke) |
+| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. For compiled shaders the DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords, log `2026-10-28-1530-gl4es-ctest`; the e1tex capture's 12-output shader runs 10]. `64 / output dwords` hung the GPU at 12 output dwords (EA3, 2026-10-28; hardware, not a replay poke). The DDK's built-in clear programs don't follow the rule: they run 8 per task at 8 and at 4 output dwords (`0x3c008080` and `0x3c008100` in the base4 and vp5 captures), while a 4-output compiled shader in the same captures runs 16. Why the clear uses 8 is G |
 | 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D] |
 
 `glDrawArrays` draws through a static 16-bit identity index buffer.
@@ -263,8 +263,39 @@ counts from `FUN_00017c20`:
   picks one of four copies.
 - **The state-emit USSE programs are just `emit` instructions.** They copy
   the DMA'd attributes to the MTE (macro tiling engine). The block is the
-  state; the program only forwards it. (The emit/LIMM opcode class `0x1f`
-  is not in `tools/isa` yet.)
+  state; the program only forwards it. The DDK's, from the base4 capture
+  (`0x3c008700` for 12 dwords, `0x3c008a00` for 18):
+
+      phas.i #0, #0 [wait=7]                         fa440700 00000000
+      nop [nosched]                                  f8000940 00000000
+      test.and.ne p0, #0, #0 [skipinv]               48831280 a00c0000
+      (p0) ld.a.d pa0, pa0, #0 [skipinv rpt=4]       e9833084 a0000000
+      wdf                                            f9200000 00000000
+      mov o0, pa0 [skipinv rcnt rpt=n]               rpt at most 16 per mov: 18 dwords
+                                                     are `rpt=16` then `mov o16, pa16 rpt=2`
+      emit.t3 r0, #0, #0                             fb23c000 a0000000
+      op0xd6 #0                                      ff200000 00000000
+      emit.t1 o0, #0, #0 [end f3_20]                 fb2f4000 a0200000
+
+  [D, capture]. The triangle's block is DMAed as 25 dwords, but its program
+  forwards 18 (pa0-pa17). The clear's DMA and program both cover 12.
+- **The TA terminate's USSE task (`0x3c000000`) is the same program for two
+  dwords** (`mov o0, pa0 [rcnt rpt=2]`). It forwards the two attributes the
+  terminate's DOUTAs wrote: pa0 = 0x2000 (ctrl 0) and pa1 = 0x0016000e
+  (ctrl 0x100, written three times). What those two words mean, and whether
+  the three repeats are needed, is G.
+- **The vertex secondary task (`0x3c000080`) is one instruction,**
+  `phas.i #0, #0 [end wait=7]` (`fa4c0700 00000000`): the DMA itself loads
+  the secondary attributes, and nothing is forwarded.
+- **DOUTD control word** (the DMA's second word), over every DOUTD in the
+  three captures:
+  - b25 is set for a DMA into secondary attributes, clear for a vertex
+    stream;
+  - with b25 set, b22-23 = (dwords - 1) & 3. This holds for all 14 such DMAs
+    (9, 10, 11, 12, 15, 25 and 27 dwords). This is the "kind" in the table above;
+  - with b25 clear it is 0;
+  - b24 was set once, on a 15-dword TA state block in vp5 (`0x0380000e`);
+    its meaning is G. [D, capture]
 
 ## 3. The TA state block (ISP/TSP/MTE)
 
@@ -681,13 +712,48 @@ largest point size [D; no draw of ours has run this yet].
   from libsrv_um's static template).
 - Its ds1[1] is a DOUTU word for the end-of-tile USSE program, here
   0x37004000.
+- The program starts with `phas.i #0, #0 [wait=7]` (`fa440700 00000000`).
+  The pixel event's DOUTU starts it with w0 = ds1[1] = `0x01008000`
+  (w0[31:22] = 4, the temporaries for r0-r3) [D, capture].
 - `FUN_000301d0` builds that program as four LIMMs that load the PBE words
-  into r0-r3, then two EMITPIX:
+  into r0-r3, then two EMITPIX. The disassembler shows them as
+  `emit.t0 r0, r1, r0 [f3_20 imm=2048]` and
+  `emit.t0 r2, r3, r0 [end f3_20 imm=1536]`, the second imm being the
+  sideband word (0x600):
 
       LIMM  lo = v & 0x1fffff | reg<<21,  hi = 0xfca00000 | (v>>21 & 0x1f)<<4 | (v>>26)<<12
       EMITPIX lo 0x00200080, hi 0xfb200100                        (the four PBE words)
       EMITPIX lo (side & 0x3f)<<22 | 0x00208180,
               hi 0xfb240000 | (side & 0x3000)<<10 | (side>>3 & 0x1f8)   (the sideband word)
+
+### The pixel event program (render details +0x5c)
+
+The DDK's, from the base4 capture (0x2e006000, data 0x50 bytes, 29
+instructions). The data rows:
+
+| word | value | what |
+|---|---|---|
+| ds0[0], ds0[1] | `00010400`, 0 | DOUTU of the ptoff task (`0x37008200`) |
+| ds1[0] | 0 | compare operand for in1's b8 test |
+| ds1[1] | `01008000` | DOUTU w0 of the end-of-tile task (`0x37004000`, temps 4) |
+| ds0[2], ds0[3] | `01010500`, `00c00000` | DOUTU of the pixel-event emit task (`0x37008280`, temps 4), w1 = b22 \| b23 |
+| ds1[2], ds1[3], ds1[4] | 8, 2, 4 | the in1 bit masks |
+| ds0[4]..ds0[8] | `00000100 00000ff8 00800000 003ff000 00400000` | masks for building the end-of-tile DOUTU w1 |
+
+The code, by in1 (the event word the hardware passes):
+
+- in1 & 8 → DOUTU the **ptoff** task, then halt. That task is
+  `phas.i #0, #0 [wait=7]; ptoff [end]`.
+- else in1 & 2 → test `op0xd(in1, ds1[0]) & 0x100`:
+  - if set → `douta in2 → attr 0`, then DOUTU the **end-of-tile** task with
+    w1 = `(in0<<3 & 0xff8) | 0x00800000 | (in0<<3 & 0x3ff000) | (in1<<20 & 0x400000)`;
+  - else → the emit task below.
+- else in1 & 4 → DOUTU the **pixel-event emit** task, which is
+  `phas.i #0, #0 [wait=7]; limm r0, #0; emit.t0 r0, #0, r0 [end f3_20 imm=512]`.
+- else halt.
+
+[D, capture]. What each in1 bit is (end of tile, end of render, …), and
+what in0 and in2 carry, is G. `docs/PDS.md` has the instruction encodings.
 
 ### PBE words (`FUN_0004e7a0`)
 
@@ -806,7 +872,11 @@ length is implied by the size, since no word changed with the level count.
 
 **T3:** the shader half of `(state & mask) | override`. It depends on the
 sample instruction, not the texture: `tex1` gives `00800800` and `tex2`
-`01028800` [D].
+`01028800` [D]. The background object's load of the render target (its pixel program
+`0x2e0060e0` in the base4 capture: DOUTU, one DOUTI sampling tc0, then
+DOUTT) gives `00800000`, with T0 `00b60e90`, T1 `cc2cf1df` and T2 = the render
+target's address [D, capture]. Gap: what the 0x800 part that the shader
+samples add, and the background lacks, does.
 
 ## 6. HW render context, render details, parameter buffer
 
