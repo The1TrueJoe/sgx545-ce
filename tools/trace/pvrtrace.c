@@ -12,6 +12,9 @@
  *   - and before each SGX_SUBMITTRANSFER (numbered by its own counter), so the
  *     transfer command and its source are captured as the GPU will see them.
  * PVRTRACE_SNAPKICKS=n stops the copies after the n-th kick (long clients).
+ * PVRTRACE_SNAPFILE=path takes no kick/transfer copies until that file exists,
+ * then PVRTRACE_SNAPN of them (default 16): a steady frame of a long client
+ * (touch the file once it is running). Calls and mappings are always logged.
  *
  * The tracer stays dumb on purpose: no struct knowledge lives here, only the
  * outer bridge package. tools/decode/ does the interpretation, so a wrong guess
@@ -77,6 +80,9 @@ static unsigned long max_snap = 64u << 20;	/* skip mappings bigger than this */
 static int kick_nr = -1;			/* bridge index of SGX_DOKICK */
 static int snap_on_kick = 1;
 static unsigned snap_kicks;			/* PVRTRACE_SNAPKICKS: copies only up to this kick */
+static const char *snap_file;			/* PVRTRACE_SNAPFILE: copies only once it exists */
+static unsigned snap_n = 16, snap_taken;	/* PVRTRACE_SNAPN: then this many copies */
+static int snap_armed;
 static pthread_mutex_t lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 
 static int (*real_ioctl)(int, unsigned long, void *);
@@ -142,6 +148,9 @@ __attribute__((constructor)) static void init(void)
 		snap_on_kick = 0;
 	if ((e = getenv("PVRTRACE_SNAPKICKS")))
 		snap_kicks = strtoul(e, NULL, 0);
+	snap_file = getenv("PVRTRACE_SNAPFILE");
+	if ((e = getenv("PVRTRACE_SNAPN")))
+		snap_n = strtoul(e, NULL, 0);
 
 	log_fd = open(path ? path : "/tmp/pvrtrace.bin",
 		      O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
@@ -192,6 +201,15 @@ static void snap_all(uint32_t why)
 {
 	if (snap_kicks && kicks > snap_kicks && why != SNAP_INIT)
 		return;
+	if (snap_file && why != SNAP_INIT) {
+		if (why != SNAP_KICK && why != SNAP_XFER)
+			return;
+		if (!snap_armed && access(snap_file, F_OK) != 0)
+			return;
+		snap_armed = 1;
+		if (snap_taken++ >= snap_n)
+			return;
+	}
 	for (int i = 0; i < nmaps; i++)
 		snap_one(why, maps[i].addr, maps[i].len);
 }
@@ -358,7 +376,8 @@ static void forget_map(void *a, size_t len)
 	for (int i = 0; i < nmaps; i++) {
 		if (maps[i].addr != (uintptr_t)a)
 			continue;
-		snap_one(SNAP_UNMAP, maps[i].addr, maps[i].len);
+		if (!snap_file || (snap_armed && snap_taken <= snap_n))
+			snap_one(SNAP_UNMAP, maps[i].addr, maps[i].len);
 		maps[i] = maps[--nmaps];
 		{
 			uint64_t h[2] = { (uintptr_t)a, len };
