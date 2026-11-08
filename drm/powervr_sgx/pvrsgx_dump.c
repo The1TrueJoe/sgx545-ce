@@ -8,6 +8,7 @@
 
 #include <drm/drm_print.h>
 
+#include <linux/bitfield.h>
 #include <linux/devcoredump.h>
 #include <linux/seq_buf.h>
 #include <linux/vmalloc.h>
@@ -21,6 +22,7 @@
 #include "pvrsgx_job.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
+#include "pvrsgx_vm.h"
 
 /* Registers safe to read while the clocks are on. */
 static const struct {
@@ -77,6 +79,49 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
 
 #define COREDUMP_BYTES	SZ_128K
 
+static void dump_lookup(struct seq_buf *sb, const char *name, struct pvrsgx_mmu *mmu, u32 addr)
+{
+	u32 pde, pte;
+
+	if (!mmu)
+		return;
+	if (pvrsgx_mmu_lookup(mmu, addr, &pde, &pte))
+		seq_buf_printf(sb, "  %s directory 0x%08x: pde 0x%08x pte 0x%08x\n", name,
+			       pvrsgx_mmu_pd_addr(mmu), pde, pte);
+	else
+		seq_buf_printf(sb, "  %s directory 0x%08x: busy\n", name, pvrsgx_mmu_pd_addr(mmu));
+}
+
+/*
+ * What the BIF was set to, and how each directory the job could have used
+ * translates the faulting address. After a start, so every register is safe
+ * to read.
+ */
+static void dump_bif(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
+{
+	u32 stat = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+	u32 addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK;
+
+	seq_buf_printf(sb, "BIF: bank set 0x%08x bank0 0x%08x mem req 0x%08x\n",
+		       sgx_rd(sdev, SGX_CR_BIF_BANK_SET), sgx_rd(sdev, SGX_CR_BIF_BANK0),
+		       sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
+	for (unsigned int i = 0; i < SGX_BIF_NUM_DIRLISTS; i++)
+		seq_buf_printf(sb, "  dir list %2u: 0x%08x\n", i,
+			       sgx_rd(sdev, sgx_cr_bif_dir_list_base(i)));
+	for (unsigned int i = 0; i < 16; i++)
+		seq_buf_printf(sb, "  use code base %2u: 0x%08x\n", i,
+			       sgx_rd(sdev, SGX_CR_USE_CODE_BASE(i)));
+	seq_buf_printf(sb, "  pds exec base: 0x%08x\n", sgx_rd(sdev, SGX_CR_PDS_EXEC_BASE));
+	if (!(stat & SGX_CR_BIF_INT_STAT_FAULT_REQ))
+		return;
+	seq_buf_printf(sb, "fault at 0x%08x: requestor 0x%04lx type %lu\n", addr,
+		       FIELD_GET(SGX_CR_BIF_INT_STAT_FAULT_REQ, stat),
+		       FIELD_GET(SGX_CR_BIF_INT_STAT_FAULT_TYPE, stat));
+	dump_lookup(sb, "job's", bad->ctx->vm->mmu, addr);
+	dump_lookup(sb, "firmware's", sdev->kernel_mmu, addr);
+	dump_lookup(sb, "idle", sdev->idle_mmu, addr);
+}
+
 /*
  * Called from the timeout handler with the scheduler stopped, before the
  * restart: what the microkernel and the hung job left behind.
@@ -100,6 +145,8 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 		       bad->type < ARRAY_SIZE(types) ? types[bad->type] : "?", bad->ccb_seq,
 		       sdev->reset_count + 1);
 	pvrsgx_dump_status(&sb, sdev);
+	if (sdev->fw_running)
+		dump_bif(&sb, sdev, bad);
 	pvrsgx_fw_dump(&sb, sdev, PVRSGX_FW_HOSTCTL, "hostctl");
 	pvrsgx_fw_dump(&sb, sdev, PVRSGX_FW_TA3DCTL, "ta3dctl");
 	pvrsgx_fw_dump(&sb, sdev, PVRSGX_FW_CCBCTL, "ccbctl");
