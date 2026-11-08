@@ -33,9 +33,9 @@ writes against the DDK's.
 import os
 
 DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+0xE8
-RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector: flag ctlblk+0xe0 (word 0x38,
-                                             # inside the driver's devcd dump) = 0x1217 when a
-                                             # first kick starts a scene on a
+RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector (both words inside the devcd
+                                             # dump): word 0x37 = the open scene's RT, word 0x3a
+                                             # = 0x1217 when a first kick opens a scene on a
                                              # different RT while a render is still in flight (the
                                              # render-to-texture case the DDK's 2nd DPM slot
                                              # covers and ours does not). Default off -> no bytes.
@@ -1055,19 +1055,24 @@ def build(a):
         # a scene on a different RT entry while a render is still in flight means two scenes share
         # our single DPM context, so this kick's dpm_load clear corrupts the in-flight scene's
         # free list (ta3d-state fbo64; the DDK uses a 2nd DPM slot). Flag it in word 0x3c.
+        # Track the OPEN scene's RT in ctlblk word 0x37, set at a FIRST kick and cleared at
+        # render completion. The interleave corrupts at the TA level (B's first kick runs its
+        # dpm_load clear while A's scene is open but A's 3D has not started, so SC_INFLIGHT is
+        # still 0 — my earlier SC_INFLIGHT check missed it). Flag 0x3a when a first kick's RT
+        # differs from the already-open one. Both words are inside the devcd dump (<=0x3a).
         a.i("test.and.eq p0, r13, r13")             # not a first kick -> skip
         a.i("(p0) ba rtlog_done")
         a.i(f"ld.a.d r5, r9, #{CMDTA_RTENTRY} [moe]")   # this kick's RT-data entry (cmd+0x44)
-        a.i(f"ld.a.d r6, r17, #{SC_INFLIGHT} [moe]")    # in-flight render's RT entry (0 = none)
+        a.i("ld.a.d r6, r17, #0x37 [moe]")          # OPEN_RT: the open scene's RT (0 = none open)
         a.i("wdf")
-        a.i("test.and.eq p0, r6, r6")               # nothing in flight -> not an interleave
+        a.i("st.a.d r17, #0x37, r5 [moe]")          # this scene is now the open one
+        a.i("idf"); a.i("wdf")
+        a.i("test.and.eq p0, r6, r6")               # none open -> not an interleave
         a.i("(p0) ba rtlog_done")
         a.i("test.xor.eq p0, r5, r6")               # same RT -> not an interleave
         a.i("(p0) ba rtlog_done")
         a.i("limm r6, #0x1217")
-        a.st_sa(SA_SELF, 0x38, 6)                   # seen an interleaved scene (word 0x38 is
-                                                    # inside the driver's ta3dctl devcd dump,
-                                                    # which stops at 0x3a; sticky once set)
+        a.st_sa(SA_SELF, 0x3a, 6)                   # a first kick opened a 2nd scene on a diff RT
         a.label("rtlog_done")
     if WAIT_LOG:
         # stage marker: RESET to 1 only on the FIRST kick of a scene (r13!=0), so
@@ -1686,6 +1691,10 @@ def build(a):
     # Walk the render's HW device sync list, set each destination's write-ops-complete
     # to pending+1 (docs/UKERNEL.md §5), tear the render down, and interrupt the host.
     a.label("render_complete")
+    if RT_LOG:
+        a.i("limm r0, #0")                    # a scene closed -> clear OPEN_RT so the next
+        a.i("st.a.d r17, #0x37, r0 [moe]")    # first kick on a fresh scene isn't a false interleave
+        a.i("idf"); a.i("wdf")
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
