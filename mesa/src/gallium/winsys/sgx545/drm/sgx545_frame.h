@@ -72,6 +72,7 @@ struct sgxws_dev {
    int verbose;
    bool flush_rt;                   /* sgxws_dev_options */
    unsigned frame_gap_us;
+   unsigned slots;
    int dry_run;
 };
 
@@ -81,17 +82,17 @@ struct sgxws_bo_impl {
    uint32_t size;
 };
 
-/* A ring: the persistent part up to mark, then SGXWS_SLOTS equal parts,
- * one per frame in flight; a frame records into the part [lo, hi).  A ring
+/* A ring: the persistent part up to mark, then one equal part per frame in
+ * flight (the context's slots); a frame records into the part [lo, hi).  A ring
  * of USSE code may have no CPU mapping (the kernel scans what it runs): map
  * is then a copy the backend uploads, [0, uploaded) on the GPU already. */
-#define SGXWS_SLOTS 3
+#define SGXWS_MAX_SLOTS 8
 
 struct sgxws_ring {
    struct sgxws_bo bo;
    uint32_t size;
    uint32_t used, mark;
-   uint32_t part, hi;
+   uint32_t part, hi, parts;
    uint32_t uploaded;
    uint32_t last_seq;               /* the last kick that runs code from it (code pools) */
 };
@@ -155,12 +156,12 @@ struct sgxws_ctx {
    unsigned room_flushes;            /* frames submitted early because a ring filled */
    /* frames in flight: the ring slot recording now, and the kick that last
     * used each slot */
-   unsigned slot;
+   unsigned slot, slots;
    struct {
       uint32_t seq;
       uint64_t kicked_ns;
       bool scanout;
-   } slot_kick[SGXWS_SLOTS];
+   } slot_kick[SGXWS_MAX_SLOTS];
    uint32_t kicks, done_seq;         /* kicks submitted, the last one known done */
    uint64_t ns_kick, ns_target_wait, ns_slot_wait;   /* where sgxws_flush's time goes (stats) */
    uint64_t ns_fence_wait;           /* fences waited for (sgxws_wait_seq) */
@@ -172,8 +173,8 @@ struct sgxws_ctx {
 
 /*
  * A backend.  Kick numbers are the context's: 1 for its first kick, then
- * one more each; renders finish in kick order.  At most SGXWS_SLOTS kicks of
- * a context are unfinished at a time, so seq % SGXWS_SLOTS names one.
+ * one more each; renders finish in kick order.  At most c->slots kicks of a
+ * context are unfinished at a time, so seq % c->slots names one.
  */
 struct sgxws_kif {
    const char *name;

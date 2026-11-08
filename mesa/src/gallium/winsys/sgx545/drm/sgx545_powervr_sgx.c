@@ -100,7 +100,7 @@ struct psgx_bo {
 
 struct psgx_ctx {
    uint32_t handle;
-   uint64_t point[SGXWS_SLOTS];     /* by kick number % SGXWS_SLOTS */
+   uint64_t point[SGXWS_MAX_SLOTS];     /* by kick number % c->slots */
 };
 
 static const struct sgxws_kif psgx_kif;
@@ -693,7 +693,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       drmSyncobjTimelineSignal(dd->fd, &dd->timeline, &point, 1);
    simple_mtx_unlock(&dd->lock);
 
-   k->point[seq % SGXWS_SLOTS] = point;
+   k->point[seq % c->slots] = point;
    if (c->target.bo && c->target.bo->impl)
       dbo(c->target.bo)->write_point = point;
    for (unsigned i = 0; i < c->n_use; i++)
@@ -707,7 +707,7 @@ psgx_wait_seq(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 {
    struct psgx_ctx *k = c->k;
 
-   return timeline_wait(ddev(c->dev), k->point[seq % SGXWS_SLOTS], timeout_ms);
+   return timeline_wait(ddev(c->dev), k->point[seq % c->slots], timeout_ms);
 }
 
 /* ------------------------------------------------------------------ device */

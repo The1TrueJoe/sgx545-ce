@@ -51,6 +51,7 @@ DEBUG_GET_ONCE_OPTION(sgx545_trace, "SGX545_TRACE", NULL)
 DEBUG_GET_ONCE_NUM_OPTION(sgx545_trace_kicks, "SGX545_TRACE_KICKS", 0)
 DEBUG_GET_ONCE_NUM_OPTION(sgx545_dry_run, "SGX545_DRY_RUN", -1)
 DEBUG_GET_ONCE_NUM_OPTION(sgx545_frame_gap_us, "SGX545_FRAME_GAP_US", 0)
+DEBUG_GET_ONCE_NUM_OPTION(sgx545_slots, "SGX545_SLOTS", 0)
 
 const char *
 sgx545_dump_code_dir(void)
@@ -308,6 +309,7 @@ sgx545_screen_create(int fd, const struct pipe_screen_config *config, struct ren
       .trace_kicks = debug_get_option_sgx545_trace_kicks(),
       .dry_run = debug_get_option_sgx545_dry_run(),
       .frame_gap_us = debug_get_option_sgx545_frame_gap_us(),
+      .slots = debug_get_option_sgx545_slots(),
    };
 
    if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {

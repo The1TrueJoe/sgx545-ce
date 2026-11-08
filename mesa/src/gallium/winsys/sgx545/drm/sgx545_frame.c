@@ -182,7 +182,7 @@ static void
 ring_mark(struct sgxws_ring *r)
 {
    r->mark = r->used;
-   r->part = ((r->size - r->mark) / SGXWS_SLOTS) & ~0xffu;
+   r->part = ((r->size - r->mark) / r->parts) & ~0xffu;
    r->hi = r->mark + r->part;
 }
 
@@ -540,6 +540,7 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
+   d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 3;
    d->dry_run = opts->dry_run;
    return d;
 }
@@ -579,6 +580,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    if (!c)
       return NULL;
    c->dev = d;
+   c->slots = d->slots;
    /* the kernel side first: under services, the kernel-data and sync
     * allocations keep the DDK's order */
    if (d->kif->ctx_init(c)) {
@@ -593,10 +595,10 @@ sgxws_ctx_create(struct sgxws_dev *d)
        /* the frame rings hold a whole frame of Minecraft (~1500 draws, ~100K
         * vertices): a ring that fills submits the frame so far and waits for
         * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
-       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + SGXWS_SLOTS * 0x200000) ||
-       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000 + SGXWS_SLOTS * 0x200000) ||
-       ring_init(d, &c->gen, H_GENERAL, 0x80000 + SGXWS_SLOTS * 0x1000000) ||
-       ring_init(d, &c->vdm, H_GENERAL, SGXWS_SLOTS * 0x80000 + 0x1000) ||
+       ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + d->slots * 0x200000) ||
+       ring_init(d, &c->pds_vtx, H_PDSVERTEX, 0x40000 + d->slots * 0x200000) ||
+       ring_init(d, &c->gen, H_GENERAL, 0x80000 + d->slots * 0x1000000) ||
+       ring_init(d, &c->vdm, H_GENERAL, d->slots * 0x80000 + 0x1000) ||
        ring_init(d, &c->eot_pool[0], H_PIXSHADER, SGXWS_EOT_CACHE * 0x80 + 0x100) ||
        ring_init(d, &c->eot_pool[1], H_PIXSHADER, SGXWS_EOT_CACHE * 0x80 + 0x100))
       goto fail;
@@ -662,6 +664,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    for (unsigned m = 0; m < 16; m++)
       clear_pds_masked(c, m);
 
+   c->pds_pix.parts = c->pds_vtx.parts = c->gen.parts = c->vdm.parts = c->slots;
    ring_mark(&c->pds_pix);
    ring_mark(&c->pds_vtx);
    ring_mark(&c->gen);
@@ -1438,8 +1441,8 @@ uint32_t
 sgxws_done_seq(struct sgxws_ctx *c)
 {
    /* oldest first: each one done moves done_seq on */
-   for (unsigned n = 1; n <= SGXWS_SLOTS; n++) {
-      unsigned i = (c->slot + n) % SGXWS_SLOTS;
+   for (unsigned n = 1; n <= c->slots; n++) {
+      unsigned i = (c->slot + n) % c->slots;
 
       if (slot_wait(c, i, 0))
          break;
@@ -1464,8 +1467,8 @@ sgxws_wait_seq_(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms)
 {
    /* the kicks still in the slots, up to seq; the older ones were waited
     * for when their slot was used again */
-   for (unsigned n = 1; n <= SGXWS_SLOTS; n++) {
-      unsigned i = (c->slot + n) % SGXWS_SLOTS;
+   for (unsigned n = 1; n <= c->slots; n++) {
+      unsigned i = (c->slot + n) % c->slots;
 
       if (!sgxws_seq_after(c->slot_kick[i].seq, seq) && slot_wait(c, i, timeout_ms))
          return -ETIMEDOUT;
@@ -1505,7 +1508,7 @@ code_sync(struct sgxws_ctx *c)
  * the next ring slot meanwhile, as the DDK overlaps the CPU's next frame with
  * the GPU's last.  What the CPU must not touch while a render runs:
  *  - the ring slot it was recorded in, until it is done (the slot is used
- *    again SGXWS_SLOTS submissions later);
+ *    again c->slots submissions later);
  *  - under services, its render target's structures (render details, region
  *    headers, sync lists): the next frame into the same target is kicked
  *    once the one before is done, so a target has one render in flight.
@@ -1577,7 +1580,7 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    c->frames++;
    c->rt = NULL;
    /* the next frame records into the next slot, once the render there is done */
-   c->slot = (c->slot + 1) % SGXWS_SLOTS;
+   c->slot = (c->slot + 1) % c->slots;
    {
       uint64_t t0 = sgxws_now_ns();
 
