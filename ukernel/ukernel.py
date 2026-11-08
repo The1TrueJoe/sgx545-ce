@@ -33,6 +33,11 @@ writes against the DDK's.
 import os
 
 DEBUG_SENTINEL = os.environ.get("UK_SENTINEL") == "1"   # chain markers +0xDC..+0xE8
+RT_LOG = os.environ.get("UK_RTLOG") == "1"   # interleave detector: flag ctlblk+0xf0 (word 0x3c)
+                                             # = 0x1217 when a first kick starts a scene on a
+                                             # different RT while a render is still in flight (the
+                                             # render-to-texture case the DDK's 2nd DPM slot
+                                             # covers and ours does not). Default off -> no bytes.
 # CCB-trace diagnostic (ta3d-state): split lost-wakeup vs TA2-hangs-valid. Words
 # that reach the T3C dump (0x00-0x3b) and don't collide with live state (0x36 =
 # SC_TAFLIGHT): 0x35 do_ta count, 0x37 last do_ta client RO, 0x38 last cmd+0x04,
@@ -1044,6 +1049,23 @@ def build(a):
     a.i("ld.a.d r13, r9, #1 [moe]")                 # cmd+0x04 (word 1)
     a.i("wdf")
     a.i("and r13, r13, #1")                         # r13 = bFirstKickOrResume
+    if RT_LOG:
+        # interleave detector (render-to-texture / Minecraft): a FIRST kick (r13!=0) that starts
+        # a scene on a different RT entry while a render is still in flight means two scenes share
+        # our single DPM context, so this kick's dpm_load clear corrupts the in-flight scene's
+        # free list (ta3d-state fbo64; the DDK uses a 2nd DPM slot). Flag it in word 0x3c.
+        a.i("test.and.eq p0, r13, r13")             # not a first kick -> skip
+        a.i("(p0) ba rtlog_done")
+        a.i(f"ld.a.d r5, r9, #{CMDTA_RTENTRY} [moe]")   # this kick's RT-data entry (cmd+0x44)
+        a.i(f"ld.a.d r6, r17, #{SC_INFLIGHT} [moe]")    # in-flight render's RT entry (0 = none)
+        a.i("wdf")
+        a.i("test.and.eq p0, r6, r6")               # nothing in flight -> not an interleave
+        a.i("(p0) ba rtlog_done")
+        a.i("test.xor.eq p0, r5, r6")               # same RT -> not an interleave
+        a.i("(p0) ba rtlog_done")
+        a.i("limm r6, #0x1217")
+        a.st_sa(SA_SELF, 0x3c, 6)                   # seen an interleaved scene
+        a.label("rtlog_done")
     if WAIT_LOG:
         # stage marker: RESET to 1 only on the FIRST kick of a scene (r13!=0), so
         # 0x3a tracks the CURRENT scene's furthest stage (a terminate-kick reset
