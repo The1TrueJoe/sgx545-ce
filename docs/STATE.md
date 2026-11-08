@@ -409,6 +409,50 @@ reference (`cstencil`).
     so units = ceil(attribute dwords / 4). [D, captures]. Gap: the rule with
     both secondaries and more than one unit.
 
+### The DDK's fragment programs for a flat colour and one sample
+
+From the DDK running `sgx_perfmicro` (a 2026-11-08 capture; 720x480, eight
+full-screen quads a frame):
+
+**Flat colour with blending** (`gl_FragColor = color`, a mediump vec4
+uniform; SRC_ALPHA, ONE_MINUS_SRC_ALPHA).
+- **Per draw: the secondary program packs the colour once.** The PDS
+  secondary DMAs 11 dwords of uniforms and runs it:
+
+      pck.u8.f16 pa9, pa9.l2, pa9  [skipinv dmask=6 scale]
+      pck.u8.f16 pa9, pa10, pa10.l2  [skipinv end dmask=9 scale]
+
+  This leaves the colour as one packed U8 dword in sa9.
+- **Per pixel: two instructions, 0 temporaries:**
+
+      phas.i #0, #0 [wait=7]
+      mov pa0, sa9  [skipinv mask=1]
+      sop2 o0, pa0, o0  [skipinv end c1=s1a c2=1-s1a cop=add a1=s1a a2=1-s1a aop=add]
+
+- **The words:** ISPA `03d00200` (pass type 1, translucent), PDS word 1
+  `160f0001`, and a primary program that is one DOUTU (temps 0, no
+  iterations, no samples). Without blending the per-pixel program is the
+  `mov` alone.
+
+**One texture sample, output unchanged** (`gl_FragColor = texture2D(t, uv)`,
+256x256 RGBA8888, LINEAR, REPEAT).
+- **The PDS primary:**
+  - DOUTU (temps 0, w1 `02000004`: one sample);
+  - DOUTI `46012201` (sample tc0, 2D);
+  - DOUTT `07fe1400 0d0ff0ff f0001000 00800800` (twiddled, layout 0).
+- **The sample lands in pa0 already packed as U8**, and the per-pixel program
+  is one instruction:
+
+      phas.i #0, #0 [wait=7]
+      mov o0, pa0  [skipinv end rcnt]
+
+- **The words:** PDS word 1 `18030001` (one unit, no secondaries) and ISPA
+  `01d00200`.
+
+So for these two cases the DDK does no per-pixel format conversion. The
+colour is packed per draw, and the texel stays in the U8 format the sampler
+delivers. [D, capture]
+
 ### Viewport (6 floats)
 
 The words are, in order: x offset, x scale, y offset, y scale, z offset and
