@@ -87,6 +87,10 @@ def main():
     # secure mode is HW-proven and the open default (m2 2026-11-08). NOT bit 0 (cleanup-v2):
     # ours is defer-and-hold. build_id names the build. mkukfw --manifest reads both.
     features = int(os.environ.get("UK_FEATURES", "2"), 0)
+    # Feature bits 0-15 are host-visible and must be known to the driver; bits 16-31 are the
+    # microkernel's own build variants, which the driver accepts and ignores (m2-drm 25f9d54).
+    if ukernel.XFER_BANK_ALL:
+        features |= 1 << 16   # bit 16 = all-data-master transfer bank routing (Cedarview 1.0.13 B)
     build_id = os.environ.get("UK_BUILD_ID", "dev")
     version = "%d.%d" % (ukernel.UK_VERSION >> 16, ukernel.UK_VERSION & 0xffff)
     manifest = {
