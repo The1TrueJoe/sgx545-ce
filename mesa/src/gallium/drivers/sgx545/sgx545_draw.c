@@ -304,8 +304,9 @@ struct fetch {
    enum pipe_format format;
    unsigned dwords;             /* dwords it fills in the vertex */
    bool defaults;               /* missing components 0, 0, 0, 1 (compiled shaders) */
-   const struct sgx545_resource *res;   /* the buffer, NULL for client memory */
+   struct sgx545_resource *res; /* the buffer, NULL for client memory */
    uint32_t offset;             /* where in it */
+   unsigned vb;                 /* its vertex buffer binding */
 };
 
 static bool
@@ -320,6 +321,7 @@ setup_fetch(struct sgx545_context *ctx, unsigned e, struct fetch *f)
    if (ve->vertex_buffer_index >= ctx->num_vertex_buffers)
       return false;
    vb = &ctx->vertex_buffers[ve->vertex_buffer_index];
+   f->vb = ve->vertex_buffer_index;
    f->res = NULL;
    if (vb->is_user_buffer) {
       f->base = vb->buffer.user;
@@ -842,6 +844,137 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    return true;
 }
 
+/* f32 inputs DMAed where they are (SGX545_DEBUG=zerocopy): a buffer's device
+ * copy in place, a client array's bytes copied as they are, one block per
+ * binding; the missing components are the PDS's (sgxws_fetch defaults).
+ * Draws up to the index limit; the rest take the gather. */
+static bool
+zc_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
+        const struct pipe_draw_start_count_bias *draw, const void *indices, const struct fetch *f,
+        unsigned n_fetch, struct sgxws_draw *d)
+{
+   struct sgxws_fetch zf[PIPE_MAX_ATTRIBS];
+   struct sgxws_block blocks[8];
+   const uint8_t *block_lo[8];
+   unsigned block_vb[8], n_blocks = 0;
+   bool list = expanded_prim(info->mode);
+   unsigned count = draw->count, out_count, lo = ~0u, hi = 0;
+   uint16_t *ix = NULL;
+
+   if (!u_trim_pipe_prim(info->mode, &count))
+      return false;
+   if (info->mode == MESA_PRIM_TRIANGLE_STRIP && count > SGXWS_MAX_INDICES)
+      return false;
+   out_count = list ? expanded_count(info->mode, count) : count;
+   if (!out_count || out_count > SGXWS_MAX_INDICES || n_fetch > PIPE_MAX_ATTRIBS)
+      return false;
+   for (unsigned e = 0; e < n_fetch; e++) {
+      unsigned n = util_format_get_nr_components(f[e].format);
+
+      if (f[e].format != PIPE_FORMAT_R32_FLOAT && f[e].format != PIPE_FORMAT_R32G32_FLOAT &&
+          f[e].format != PIPE_FORMAT_R32G32B32_FLOAT && f[e].format != PIPE_FORMAT_R32G32B32A32_FLOAT)
+         return false;
+      if (!f[e].defaults || f[e].dwords != 4 || n > 4 || (f[e].stride & 3) || f[e].stride > 0xffff)
+         return false;
+   }
+   /* the vertices the draw uses: in order, or through 16-bit indices from lo */
+   if (info->index_size || list) {
+      uint32_t *ix32 = staging(ctx, out_count);
+
+      if (!ix32 || !(ix = index_staging(ctx, out_count)))
+         return false;
+      for (unsigned i = 0; i < out_count; i++) {
+         unsigned k = list ? expanded_vertex(info->mode, i, out_count) : i;
+
+         ix32[i] = info->index_size ? get_index(info, indices, draw->start + k) + draw->index_bias
+                                    : draw->start + k;
+         lo = MIN2(lo, ix32[i]);
+         hi = MAX2(hi, ix32[i]);
+      }
+      if (hi - lo >= 65536)
+         return false;
+      for (unsigned i = 0; i < out_count; i++)
+         ix[i] = (uint16_t)(ix32[i] - lo);
+   } else {
+      lo = draw->start;
+      hi = draw->start + count - 1;
+   }
+   for (unsigned e = 0; e < n_fetch; e++) {
+      unsigned n = util_format_get_nr_components(f[e].format);
+
+      zf[e] = (struct sgxws_fetch){ .stride = f[e].stride, .dwords = n, .reg = 4 * e, .defaults = true };
+      if (f[e].res) {
+         if (!sgx545_buffer_vbo(ctx, f[e].res))
+            return false;
+         zf[e].va = f[e].res->vbo.va + f[e].offset + lo * f[e].stride;
+         if (zf[e].va & 3)
+            return false;
+         continue;
+      }
+      /* a client array: its binding's bytes from vertex lo to the end of vertex hi */
+      unsigned b;
+      const uint8_t *first = f[e].base + (size_t)lo * f[e].stride;
+      const uint8_t *end = f[e].base + (size_t)hi * f[e].stride + n * 4;
+
+      for (b = 0; b < n_blocks && block_vb[b] != f[e].vb; b++)
+         ;
+      if (b == n_blocks) {
+         if (n_blocks == ARRAY_SIZE(blocks))
+            return false;
+         block_vb[n_blocks] = f[e].vb;
+         block_lo[n_blocks] = first;
+         blocks[n_blocks].cpu = first;
+         blocks[n_blocks++].bytes = end - first;
+      } else {
+         const uint8_t *bend = (const uint8_t *)blocks[b].cpu + blocks[b].bytes;
+
+         if (first < block_lo[b]) {
+            blocks[b].cpu = block_lo[b] = first;
+         }
+         blocks[b].bytes = MAX2(end, bend) - block_lo[b];
+      }
+      zf[e].block = b + 1;
+   }
+   /* offsets into the blocks, now that each block's start is known (a
+    * frame's ring part holds 16 MB: blocks past 4 MB take the gather) */
+   uint32_t total = 0;
+
+   for (unsigned b = 0; b < n_blocks; b++)
+      total += blocks[b].bytes;
+   if (total > 4u << 20)
+      return false;
+   for (unsigned e = 0; e < n_fetch; e++) {
+      if (!zf[e].block)
+         continue;
+      zf[e].va = (f[e].base + (size_t)lo * f[e].stride) - block_lo[zf[e].block - 1];
+      if (zf[e].va & 3)
+         return false;
+   }
+   for (unsigned e = 0; e < n_fetch; e++)
+      if (f[e].res)
+         f[e].res->vbo_seq = sgxws_next_seq(ctx->hw);
+   d->fetch = zf;
+   d->n_fetch = n_fetch;
+   d->blocks = blocks;
+   d->n_blocks = n_blocks;
+   d->indices = ix;
+   d->n_indices = ix ? out_count : 0;
+   d->count = ix ? hi - lo + 1 : count;
+   d->verts = NULL;
+   d->verts_va = 0;
+   SGX545_DBG(DRAW, "zero-copy draw %s x%u (%u vertices, %u blocks)\n", u_prim_name(info->mode), out_count,
+              d->count, n_blocks);
+   if (sgxws_draw(ctx->hw, d))
+      fprintf(stderr, "sgx545: zero-copy draw of %u vertices dropped\n", out_count);
+   ctx->stats.zc_draws++;
+   d->fetch = NULL;
+   d->n_fetch = 0;
+   d->blocks = NULL;
+   d->n_blocks = 0;
+   d->indices = NULL;
+   return true;
+}
+
 void
 sgx545_draw_fini(struct sgx545_context *ctx)
 {
@@ -1232,6 +1365,9 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       }
       out_count = list ? expanded_count(info->mode, count) : count;
       if (!out_count)
+         continue;
+      if (compiled && (sgx545_debug & SGX545_DEBUG_ZERO_COPY) &&
+          zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
          continue;
       if (compiled && (prim == SGXWS_TRIANGLES) && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
          continue;

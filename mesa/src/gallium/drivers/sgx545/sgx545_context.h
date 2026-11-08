@@ -143,7 +143,7 @@ struct sgx545_context {
       uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns, rb_ns, rb_bytes;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read, fl_deferred;   /* flushes by cause */
-      unsigned vc_hits, vc_misses, vc_uncacheable;
+      unsigned vc_hits, vc_misses, vc_uncacheable, zc_draws;
       unsigned blit_gpu, blit_copy, blit_cpu;
       uint64_t blit_cpu_px, blit_cpu_ns;
    } stats;

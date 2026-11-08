@@ -31,6 +31,7 @@
 #define SGX545_DEBUG_NO_FS_COMPILER (1 << 15)
 #define SGX545_DEBUG_FLUSH_RT       (1 << 16)
 #define SGX545_DEBUG_NO_FF_MEDIUMP  (1 << 17)
+#define SGX545_DEBUG_ZERO_COPY      (1 << 18)
 
 extern uint32_t sgx545_debug;
 /* SGX545_DUMP_CODE=dir: every compiled program's instructions written there */
@@ -60,6 +61,10 @@ struct sgx545_screen {
    struct sgxws_ctx *hw;
 
    struct slab_parent_pool transfer_pool;
+
+   /* buffers' device copies a render may still read: freed once it's done */
+   struct { struct sgxws_bo bo; uint32_t seq; } retired[32];
+   unsigned n_retired;
 
    /* kmsro: the display device scanout buffers are allocated on */
    struct renderonly *ro;

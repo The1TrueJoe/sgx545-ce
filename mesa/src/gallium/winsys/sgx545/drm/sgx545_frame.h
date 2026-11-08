@@ -140,6 +140,7 @@ struct sgxws_ctx {
    uint32_t clear_pds;               /* pixel PDS program: iterate colour, copy_fs */
    uint32_t clear_pds_masked[16];    /* the same with a colour mask (by byte mask) */
    uint32_t idx;                     /* identity 16-bit index buffer */
+   uint32_t defaults;                /* what a fetch leaves out (vdm_fetch) */
    uint32_t idx_count;
    uint32_t vdm_counter;             /* the DDK's rotating TA-state buffer index */
    /* the frame being recorded */

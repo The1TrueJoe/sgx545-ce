@@ -655,6 +655,12 @@ sgxws_ctx_create(struct sgxws_dev *d)
       p.p[i / 2] = (uint32_t)i | (uint32_t)(i + 1) << 16;
    c->idx = p.va;
    c->idx_count = IDX_COUNT;
+   /* what a fetch of n dwords leaves out, at + 16 n: (0, 0, 1), (0, 1), (1),
+    * each 16-byte aligned like every DMA source the DDK uses */
+   p = ring_alloc(&c->gen, 64, DMA_ALIGN);
+   memset(p.p, 0, 64);
+   p.p[3] = p.p[6] = p.p[9] = p.p[12] = f32(1.0f);
+   c->defaults = p.va;
 
    /* The clear's programs for every colour mask, made now: the persistent
     * part of the rings ends at the mark.  Made on demand they landed in the
@@ -1002,28 +1008,33 @@ vertices_per_task(uint32_t out_dwords)
    return v > 16 ? 16 : v;
 }
 
-/* a draw: index list + vertex fetch program (STATE.md section 2; PDS.md "What the DDK generates") */
+/* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md
+ * "What the DDK generates"): per stride a MUL16 of the index into ds1[0x32],
+ * then each DMA adds it to its address; the defaults DMA plainly. */
 static void
-vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
-         uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords,
-         uint32_t temps, uint32_t vpt)
+vdm_fetch(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, const struct sgxws_fetch *f,
+          unsigned nf, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords, uint32_t temps, uint32_t vpt)
 {
    struct pds p = { 0 };
-   uint32_t rows, va, batch = 16, row = 0;
+   uint32_t rows, va, batch = 16, row = 0, nstride = 0, last = ~0u;
 
-   pds_d1(&p, 0, stride);
-   pds_d1(&p, 1, 0);
-   CODE(&p, pds_alu(SGX545_PDS_OPC_MUL16, IN(0), DS1(0), DS1(0x32)));  /* index * stride */
-   /* The vertex in DMAs of at most 16 dwords, as the secondary DMAs (a
-    * longer one lost what came after: a lit vertex of 5 attributes, 20
-    * dwords, got garbage in its last one, Minecraft's first-person arm).
-    * The DDK DMAs per stream. */
-   for (uint32_t off = 0; off < attr_dwords; off += 16, row++) {
-      uint32_t n = attr_dwords - off < 16 ? attr_dwords - off : 16;
-
-      pds_d0(&p, 2 * row, vb + off * 4);
-      pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, 0, 0));
+   for (unsigned i = 0; i < nf; i++, row++) {
+      if (f[i].stride != last) {
+         pds_d1(&p, 2 * nstride, f[i].stride);
+         pds_d1(&p, 2 * nstride + 1, 0);
+         CODE(&p, pds_alu(SGX545_PDS_OPC_MUL16, IN(0), DS1(2 * nstride), DS1(0x32)));  /* index * stride */
+         nstride++;
+         last = f[i].stride;
+      }
+      pds_d0(&p, 2 * row, f[i].va);
+      pds_d0(&p, 2 * row + 1, dma_ctrl(f[i].dwords, f[i].reg, 0, 0));
       CODE(&p, pds_movs(MV_X, row, 0x19, 0, 1, 2, 2, DOUTD));          /* + ds1[0x32] */
+      if (f[i].defaults && f[i].dwords < 4) {
+         row++;
+         pds_d0(&p, 2 * row, c->defaults + f[i].dwords * 16);
+         pds_d0(&p, 2 * row + 1, dma_ctrl(4 - f[i].dwords, f[i].reg + f[i].dwords, 0, 0));
+         CODE(&p, pds_movs(MV, row, 0, 0, 1, 2, 2, DOUTD));
+      }
    }
    pds_d0(&p, 2 * row, doutu_w0(c, vs, true, temps));
    pds_d0(&p, 2 * row + 1, 0);
@@ -1037,6 +1048,24 @@ vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint3
    vdm(c, (vpt - 1) << 28 | va >> 4);
    vdm(c, (out_dwords + 3) >> 2 << 24 | ((in_dwords * 4 + 0xf) >> 4) << 7 |
           (vpt - 1 < 3 ? vpt - 1 : 3) << 22 | rows);
+}
+
+/* the vertices packed, attr_dwords apart at vb: DMAs of at most 16 dwords,
+ * as the secondary DMAs (a longer one lost what came after: a lit vertex of
+ * 5 attributes, 20 dwords, got garbage in its last one, Minecraft's
+ * first-person arm) */
+static void
+vdm_draw(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx, uint32_t vb,
+         uint32_t stride, uint32_t attr_dwords, uint32_t vs, uint32_t in_dwords, uint32_t out_dwords,
+         uint32_t temps, uint32_t vpt)
+{
+   struct sgxws_fetch f[8];
+   unsigned nf = 0;
+
+   for (uint32_t off = 0; off < attr_dwords && nf < 8; off += 16)
+      f[nf++] = (struct sgxws_fetch){ .va = vb + off * 4, .stride = stride,
+                                      .dwords = attr_dwords - off < 16 ? attr_dwords - off : 16, .reg = off };
+   vdm_fetch(c, prim, count, idx, f, nf, vs, in_dwords, out_dwords, temps, vpt);
 }
 
 /* headroom one object needs in the frame rings, beyond its vertices */
@@ -1220,10 +1249,53 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    uint32_t vw = vs->attr_dwords * 4, vsec_dwords = 10 + vs->const_dwords;
    uint32_t idx = c->idx, n_idx = d->count, idx_bytes = 0;
    uint32_t mem_bytes = ((d->vs_mem.dwords * 4 + 15) & ~15u) + ((d->fs_mem.dwords * 4 + 15) & ~15u);
-   struct sgxws_ptr v, u, vsec, vmem = { 0 }, fmem = { 0 };
+   struct sgxws_ptr v = { 0 }, u, vsec, vmem = { 0 }, fmem = { 0 };
+   struct sgxws_fetch fetch[SGXWS_MAX_FETCH];
    int e;
 
-   if (d->verts_va) {
+   if (d->n_fetch) {
+      uint32_t block_bytes = 0, block_va[8];
+      unsigned nd = 0;
+
+      if (d->n_fetch > SGXWS_MAX_FETCH || d->n_blocks > 8)
+         return -E2BIG;
+      for (unsigned i = 0; i < d->n_fetch; i++)
+         nd += 1 + (d->fetch[i].defaults && d->fetch[i].dwords < 4);
+      if (nd > SGXWS_MAX_FETCH)
+         return -E2BIG;
+      for (unsigned b = 0; b < d->n_blocks; b++)
+         block_bytes += (d->blocks[b].bytes + DMA_ALIGN - 1) & ~(DMA_ALIGN - 1);
+      if (d->indices) {
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx_bytes = (n_idx * 2 + 15) & ~15u;
+      } else if (d->count > c->idx_count) {
+         return -E2BIG;
+      }
+      if ((e = make_room(c, block_bytes + vsec_dwords * 4 + idx_bytes + mem_bytes + DMA_ALIGN)))
+         return e;
+      for (unsigned b = 0; b < d->n_blocks; b++) {
+         struct sgxws_ptr bp = ring_alloc(&c->gen, d->blocks[b].bytes ? d->blocks[b].bytes : 4, DMA_ALIGN);
+
+         memcpy(bp.p, d->blocks[b].cpu, d->blocks[b].bytes);
+         block_va[b] = bp.va;
+      }
+      for (unsigned i = 0; i < d->n_fetch; i++) {
+         fetch[i] = d->fetch[i];
+         if (fetch[i].block) {
+            if (fetch[i].block > d->n_blocks)
+               return -EINVAL;
+            fetch[i].va += block_va[fetch[i].block - 1];
+         }
+      }
+      if (d->indices) {
+         struct sgxws_ptr ip = ring_alloc(&c->gen, idx_bytes, 16);
+
+         memcpy(ip.p, d->indices, n_idx * 2);
+         idx = ip.va;
+      }
+   } else if (d->verts_va) {
       if (d->idx_va) {
          if (d->n_indices > SGXWS_MAX_INDICES)
             return -E2BIG;
@@ -1369,8 +1441,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vdm(c, 0x40000000 | sec >> 4);
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
 
-   vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
-            vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
+   if (d->n_fetch)
+      vdm_fetch(c, d->prim, n_idx, idx, fetch, d->n_fetch, vs->code, vs->in_dwords, vs->out_dwords, vs->temps,
+                vertices_per_task(vs->out_dwords));
+   else
+      vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code, vs->in_dwords,
+               vs->out_dwords, vs->temps, vertices_per_task(vs->out_dwords));
    c->draws++;
    return 0;
 }
