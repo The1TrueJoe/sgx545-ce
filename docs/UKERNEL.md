@@ -923,6 +923,32 @@ its data accesses in either bank. [D, code and trace]
     3D start pc 0x1166-0x1181, after the store at 0x1778).
   - A CE5300 register sample shows 0x694 never at 4 over a run of frames.
 - **The OTPM clear** (0x24c), with its two done bits, follows.
+- **Two scenes on one PB: two DPM context slots.** A client that renders to
+  an FBO and then samples it can have two scenes open on the same PB. In the
+  2026-11-08 `fbo64` capture the window scene's first kick comes before the
+  FBO scene's last. The DDK keeps two slots: TA3D +0x50 and +0x54 each hold
+  the RT data entry whose scene owns that slot. At a kick (pc 0x09b7-0x0a1c):
+  1. **Pick the slot.** The entry's own slot if it already has one, else a
+     free slot. If both are taken, the slot the running 3D is not using:
+     `!(0x630 b1)`. So r5 = 0 or 4.
+  2. **Select it for the TA:** `0x630 = (0x630 & ~4) | r5` (b2 = the TA's
+     slot; pc 0x09d6).
+  3. **Evict.** If the slot held another entry with an open scene, the DDK
+     points the BIF at that scene's context and stores its DPM state (pc
+     0x1778, `0x694`/`0x698` mode 1), then points the BIF back. Eviction,
+     not serialisation, so a third open scene works too.
+  4. **First kick of a scene (TA flags b0 or b3):**
+     - `0x630 = (0x630 & ~1) | slot` (b0);
+     - the slot's TA data block, RT data entry word 5, goes to 0x62c for
+       slot 0 or 0x674 for slot 1, and word 6 to 0x634;
+     - then the per-scene DPM clear (pc 0x0a1d).
+  5. **Later kick whose entry was evicted:** the DDK loads its DPM state back
+     (pc 0x17be, mode 4) before the TA continues.
+
+  The 3D start selects its slot in 0x630 b1 (pc 0x1156), and stores/loads
+  the same way when its entry was evicted (pc 0x1166-0x1181). [D, code; the
+  interleave is from the capture. The store/load path is not in any trace:
+  0x740 read 0 throughout the DDK Minecraft register sample.]
 
 All [D] from the DDK microkernel's code and trace; the release behaviour is
 from the hardware register sample.
