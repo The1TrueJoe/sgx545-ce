@@ -125,12 +125,14 @@ main(int argc, char **argv)
 
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false, driver_uniforms = false;
-   while ((c = getopt(argc, argv, "vpFLDMu:a:s:o:V:")) != -1) {
+   unsigned glsl_version = 100;
+   while ((c = getopt(argc, argv, "vpFLDMG:u:a:s:o:V:")) != -1) {
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
       case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
       case 'M': opts.fs_mediump = true; break;      /* fragment floats mediump (st's fixed function) */
+      case 'G': glsl_version = atoi(optarg); break; /* GLSL version: 100 ES (default), 110-130 desktop compat */
       case 'V': {                                   /* -V slot=fmt: attribute slot's raw format (sgx_vtx_fmt) */
          unsigned slot, fmt;
          if (sscanf(optarg, "%u=%u", &slot, &fmt) == 2 && slot < 16)
@@ -144,14 +146,14 @@ main(int argc, char **argv)
       case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
 
    struct standalone_options so;
    memset(&so, 0, sizeof(so));
-   so.glsl_version = 100;
+   so.glsl_version = glsl_version;
    so.do_link = 0;
    so.lower_precision = lowp16;   /* -p: mediump/lowp arithmetic in float16 */
 
