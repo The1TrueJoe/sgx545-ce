@@ -206,7 +206,7 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
  * packed varying "packed:a,b", one name per varying it holds.
  */
 /* Desktop GL's built-in varyings (colours, back colours, fog, texture
- * coordinates; also st's fixed-function shaders and ES1 through gl4es) are in
+ * coordinates; also st's fixed-function shaders and GLES1 translation layers) are in
  * the legacy slots, which the compiler doesn't assign: move them to VAR slots
  * the program's own varyings leave free, each built-in its own whether this
  * stage has it or not, so that two stages with the same varyings (a linked
@@ -322,8 +322,8 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
       set = (sprite ? 1 : 0) + util_bitcount64(rows_used & BITFIELD64_MASK(slot));
       /* The compiler finds a varying's set by name.  st's packed slots are
        * named after what they hold ("packed:a,b"), and a varying split over
-       * two slots names both: Minecraft's terrain (two vec3 texture
-       * coordinates and the fog) had its second slot written over the first.
+       * two slots names both: two vec3 texture coordinates and the fog had
+       * the second slot written over the first.
        * Each variable is named after its slot instead, the same in both
        * stages. */
       if (legacy)
@@ -748,7 +748,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             /* sample half: coordinate set + 1, 2-D or projected (docs/PDS.md).
              * A sample of the set the previous plain DOUTI iterates is merged
              * into it, as the DDK's generator does; a separate one samples at
-             * coordinate 0 (EA3).  Otherwise a pure sample (source 0x24). */
+             * coordinate 0.  Otherwise a pure sample (source 0x24). */
             bool proj = out.iters[i].proj;
             unsigned prev = so->prog.n_douti - 1;
             struct sgx545_pds_douti *d = so->prog.n_douti ? &so->prog.douti[prev] : NULL;
@@ -769,7 +769,7 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
             continue;
          }
          /* gl_FragCoord (the compiler's set 13) is source 0: x and y at pixel
-          * centres in the target's memory order, z, 1/w (DDK capture, EA-1) */
+          * centres in the target's memory order, z, 1/w (docs/PDS.md "DOUTI") */
          if (it == SGX545_ITER_FRAGCOORD)
             it = 0;
          last_plain = so->prog.n_douti;

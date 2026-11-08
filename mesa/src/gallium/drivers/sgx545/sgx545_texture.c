@@ -35,8 +35,7 @@ sgx545_tex_format(enum pipe_format format)
    case PIPE_FORMAT_R8G8B8X8_SRGB:
       /* R, G, B, A bytes in memory.  The DDK tags them 0x0d and libusc folds a
        * zyxw reorder into the sample; our compiler unpacks xyzw, and with 0x0c
-       * (BGRA8888) the texels come out GL's way: byte-identical to the DDK
-       * on the EA3 (16x16, 64x64, NPOT, nearest and linear) */
+       * (BGRA8888) the texels come out GL's way (docs/TEX.md §1) */
       return 0x0c;
    case PIPE_FORMAT_B8G8R8A8_UNORM:
    case PIPE_FORMAT_B8G8R8X8_UNORM:
@@ -86,8 +85,8 @@ chain_offset(const struct pipe_resource *prsc, unsigned level)
 
 /* Cube faces follow one another, each a complete chain of the levels the
  * sampler sees: packed when level 0 is smaller than one 16x16 tile; a chain
- * of mip levels on 0x800 bytes whatever the format (the DDK's cube storage,
- * EA1: L8 16/32/64 0x800/0x800/0x1800 a face, LA88 and RGBA4444
+ * of mip levels on 0x800 bytes whatever the format (docs/TEX.md: L8
+ * 16/32/64 0x800/0x800/0x1800 a face, LA88 and RGBA4444
  * 0x800/0x1000/0x3000, RGBA8888 0x800/0x1800/0x5800); level 0 alone on a
  * tile's bytes (RGBA8888 16x16: 0x400; the other formats unmeasured, [G]) */
 static size_t

@@ -159,8 +159,8 @@ sgx545_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence, unsign
       ctx->stats.frames++;
    /* A plain flush (glFlush) of an off-screen frame is deferred, as GL
     * allows: submitting it split the frame, and the draws after it into the
-    * same target (the openhc-minecraft overlay's, after the game's glFlush)
-    * waited for the whole render.  The frame still goes at a fence, a
+    * same target (an application that flushes, then draws an overlay) waited
+    * for the whole render.  The frame still goes at a fence, a
     * readback, another target or the end of the frame; renders into the
     * scanout buffer (the swap's copy) or a shared one (a dma-buf another
     * process or device reads: Xorg's glamor flushes its screen pixmap so)

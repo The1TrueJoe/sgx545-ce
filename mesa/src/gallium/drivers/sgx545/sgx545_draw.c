@@ -105,7 +105,7 @@ sgx545_clear(struct pipe_context *pctx, unsigned buffers, uint32_t color_clear_m
    /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
     * b3); a buffer without alpha keeps its X byte written. A colour clear
     * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
-    * clear (the openhc-minecraft overlay, every frame) must not touch RGB. */
+    * clear must not touch RGB. */
    unsigned cm = buffers & PIPE_CLEAR_COLOR0 ? color_clear_mask & 0xf : 0, wmask;
    bool clear_stencil = have_depth && (buffers & PIPE_CLEAR_STENCIL) &&
                         util_format_has_stencil(util_format_description(ctx->framebuffer.zsbuf.format));
@@ -404,8 +404,8 @@ get_index(const struct pipe_draw_info *info, const void *indices, unsigned i)
 }
 
 /* element f of vertices first .. first + n - 1 into dst, vertex_dwords
- * apart: the formats Minecraft's terrain and gl4es use go without a call
- * per vertex (they took most of a frame's CPU time) */
+ * apart: the common formats (f32 x 1-4, u8 x 4 unorm, s16 x 2 scaled) go
+ * without a call per vertex */
 static void
 fetch_range(const struct fetch *f, unsigned first, unsigned n, uint32_t *dst, unsigned vertex_dwords)
 {
@@ -598,8 +598,7 @@ mem_consts(struct sgx545_context *ctx, mesa_shader_stage stage, const struct sgx
 
 /* Every set the fragment program iterates or samples with must be one the
  * vertex program outputs, with as many components: iterating a set the vertex
- * program doesn't write locks the GPU up (EA3; first seen with the colour
- * placeholder, then with gl4es' neverball shaders). */
+ * program doesn't write locks the GPU up. */
 static bool
 varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
 {
@@ -627,9 +626,9 @@ varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
 /* ------------------------------------------------------------- vertex cache */
 
 /*
- * gl4es draws its display lists (Minecraft's chunks) from buffers that don't
+ * Display lists and static vertex buffers are drawn from buffers that don't
  * change between frames, and every frame the draw gathered, converted and
- * copied the same vertices again: a third of the render thread's time.  A
+ * copied the same vertices again.  A
  * draw whose vertices all come from buffers (or are constant) keeps its
  * gathered vertices and rebased 16-bit indices in device memory, found again
  * by what they were made from: the buffers (by id and write count), where in
@@ -754,8 +753,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    struct hash_entry *he;
    struct vcache_entry *v;
    /* triangle lists, and what is drawn as one: fans, and desktop GL's quads,
-    * quad strips and polygons (Minecraft's chunks are display lists of
-    * quads, drawn again every frame) */
+    * quad strips and polygons (display lists of quads, drawn every frame) */
    bool expand = expanded_prim(info->mode) && u_reduced_prim(info->mode) == MESA_PRIM_TRIANGLES;
    unsigned count = draw->count, out_count;
    uint64_t now = os_time_get_nano();
@@ -1193,8 +1191,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
          fsk[SGX545_SA_FRONT] = !(ctx->rasterizer && ctx->rasterizer->base.front_ccw);
          fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
       }
-      /* a discard's visibility test (atst8 and pcoeff read sa3, sa4), as the
-       * DDK writes them (EA3): sa3 = 0xe000 | ISPA's depth compare (7 with the
+      /* a discard's visibility test (atst8 and pcoeff read sa3, sa4; ISA.md
+       * "Phases, visibility feedback and discard"): sa3 = 0xe000 | ISPA's depth compare (7 with the
        * test off) | 8 without depth writes (always 0xe00f, LESS 0xe001,
        * LEQUAL no write 0xe00b); sa4 = 0xee00 [G] */
       if (fs->discard_pa >= 0) {
@@ -1423,7 +1421,7 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       /* the vertex cache first: a display list drawn every frame is one DMA
        * a vertex from its cached gather and its quads' indices expanded
        * once, where zero-copy DMAs each input and expands them every draw
-       * (Minecraft on the EA1: 9.4 FPS cached, 7.6 zero-copy first) */
+       * (docs/PERF.md) */
       if (compiled && (prim == SGXWS_TRIANGLES) && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
          continue;
       if (compiled && (sgx545_debug & SGX545_DEBUG_ZERO_COPY) &&

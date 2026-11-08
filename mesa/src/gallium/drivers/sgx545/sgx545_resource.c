@@ -583,10 +583,10 @@ alt_dirty_add(struct sgx545_resource *res, unsigned level, unsigned layer, unsig
 
 /*
  * A write to a texture's level box (already in the CPU copy) onto the device
- * copy.  Minecraft animates sprites of its block atlas every tick (water,
- * lava, fire) while the frames before still sample the atlas: writing under
- * a render in flight would show half-updated sprites, and waiting for the GPU
- * at every tick threw the CPU/GPU overlap away.  So a busy copy is left to
+ * copy.  An application that animates sprites of a texture atlas updates it
+ * while the frames before still sample it: writing under a render in flight
+ * would show half-updated sprites, and waiting for the GPU at every update
+ * threw the CPU/GPU overlap away.  So a busy copy is left to
  * its renders and the other copy takes over, brought up to date from the
  * CPU copy first.
  */
@@ -675,8 +675,8 @@ sgx545_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    struct sgx545_context *ctx = sgx545_context(pctx);
    struct sgx545_resource *res = sgx545_resource(ptrans->resource);
 
-   /* only what the transfer covers: the game updates 16x16 sprites of a
-    * 1024x512 atlas, and the whole level each time took a minute to load */
+   /* only what the transfer covers: 16x16 updates of a 1024x512 atlas
+    * re-encoding the whole level each time were far too slow */
    if (res->texture && (ptrans->usage & PIPE_MAP_WRITE)) {
       uint64_t t = ctx->stats.on ? os_time_get_nano() : 0;
 

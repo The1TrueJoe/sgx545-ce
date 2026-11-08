@@ -51,8 +51,8 @@ struct sgx545_resource {
 
    /* A cube map with mip levels sampled without mipmapping: the TPU then
     * spaces the faces by level 0 alone, so it samples a copy of the six
-    * level-0 faces laid out that way (the DDK's storage for that case: 0x1800
-    * bytes for a 16x16 RGBA cube with 5 levels, 0x3000 with mipmapping, EA1).
+    * level-0 faces laid out that way (docs/TEX.md: 0x1800 bytes for a 16x16
+    * RGBA cube with 5 levels, 0x3000 with mipmapping).
     * level0_gen counts the writes to level 0; cube0_gen is the one cube0 has. */
    struct sgxws_bo cube0;
    uint32_t level0_gen, cube0_gen;

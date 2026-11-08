@@ -55,7 +55,7 @@ struct sgx545_screen {
     * shared by every pipe context and serialised by the lock, as the DDK runs a
     * GL client on one render context: a second render context with a parameter
     * buffer of its own makes the microkernel's renders slow and then lock up
-    * (gl4es under glretrace, which creates two pipe contexts).  A frame being
+    * (an application with two GL contexts).  A frame being
     * recorded is flushed when another target or context starts one
     * (sgxws_begin). */
    struct sgxws_ctx *hw;
