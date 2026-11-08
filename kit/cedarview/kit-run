@@ -78,7 +78,9 @@ echo "$ident" | grep -qE 'revision 0x[0-9a-f]+: ' && KNOWN=1
 step 4 "Drawing on the GPU"
 FW=/lib/firmware/powervr_sgx/sgx545-openhc-ukernel.bin
 T=/usr/local/lib/kit
-if [ -z "$KNOWN" ]; then
+if [ -z "$ident" ]; then
+	note "Skipped: the driver found no SGX GPU here (the results say why)."
+elif [ -z "$KNOWN" ]; then
 	note "Skipped: this driver doesn't know this GPU yet. The file this test"
 	note "saves tells us what it is, so the next kit can draw on it."
 elif [ ! -f "$FW" ]; then
