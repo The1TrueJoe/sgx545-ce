@@ -72,7 +72,7 @@ dEQP-GLES2.functional.texture.mipmap.2d.bias.nearest_nearest,Fail
 # texture2D's bias argument
 dEQP-GLES2.functional.shaders.texture_functions.fragment.texture2dproj_vec4_bias,Fail
 
-# render to texture: shared and recreated colour buffers, resizes; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared/recreate cases too
+# render to texture: shared and recreated colour buffers; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared/recreate cases too
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_bgra_depth_component16,Fail
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_bgra_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgb565_depth_component16,Fail
@@ -87,27 +87,6 @@ dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgb_depth_com
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgb_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgba_depth_component16,Fail
 dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgba_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_bgra,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_bgra_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgb565,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgb565_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgb565_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgb5_a1,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgb5_a1_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgb5_a1_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgba4,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgba4_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.resize.rbo_rgba4_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_bgra,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_bgra_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_rgb,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_rgb_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_rgb_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_rgba,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_rgba_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.resize.tex2d_rgba_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_bgra_depth_component16,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_bgra_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgb565_depth_component16,Fail

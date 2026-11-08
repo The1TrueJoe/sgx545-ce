@@ -30,24 +30,45 @@
 /* A target's TA/3D structures, one set per target address while there are
  * few: a target has one render in flight, so the back buffer and fb0 (the
  * swap's copy) need sets of their own to render one after the other without
- * waiting.  Past SGX_MAX_RTS targets share by size. */
+ * waiting.  Past SGX_MAX_RTS targets share by size, and a size none has
+ * takes the place of the set used longest ago (never the frame being
+ * recorded, which was taken last). */
 static struct sgxws_rt *
 get_rt(struct sgx_context *ctx, uint32_t w, uint32_t h, uint32_t va)
 {
-   for (unsigned i = 0; i < ctx->num_rts; i++)
+   unsigned i, n = ctx->num_rts;
+
+   for (i = 0; i < n; i++)
       if (ctx->rt_w[i] == w && ctx->rt_h[i] == h && ctx->rt_va[i] == va)
-         return ctx->rts[i];
-   if (ctx->num_rts == SGX_MAX_RTS) {
-      for (unsigned i = 0; i < ctx->num_rts; i++)
+         goto found;
+   if (n == SGX_MAX_RTS) {
+      for (i = 0; i < n; i++)
          if (ctx->rt_w[i] == w && ctx->rt_h[i] == h)
-            return ctx->rts[i];
+            goto found;
+      i = 0;
+      for (unsigned j = 1; j < n; j++)
+         if (ctx->rt_used[j] < ctx->rt_used[i])
+            i = j;
+      sgxws_rt_destroy(ctx->hw, ctx->rts[i]); /* waits for its renders */
+   } else {
+      i = ctx->num_rts++;
+   }
+   ctx->rts[i] = sgxws_rt_create(ctx->hw, w, h);
+   ctx->rt_va[i] = va;
+   ctx->rt_w[i] = w;
+   ctx->rt_h[i] = h;
+   if (!ctx->rts[i]) {
+      /* none made: the place goes (the last set moves into it) */
+      ctx->rts[i] = ctx->rts[--ctx->num_rts];
+      ctx->rt_va[i] = ctx->rt_va[ctx->num_rts];
+      ctx->rt_w[i] = ctx->rt_w[ctx->num_rts];
+      ctx->rt_h[i] = ctx->rt_h[ctx->num_rts];
+      ctx->rt_used[i] = ctx->rt_used[ctx->num_rts];
       return NULL;
    }
-   ctx->rts[ctx->num_rts] = sgxws_rt_create(ctx->hw, w, h);
-   ctx->rt_va[ctx->num_rts] = va;
-   ctx->rt_w[ctx->num_rts] = w;
-   ctx->rt_h[ctx->num_rts] = h;
-   return ctx->rts[ctx->num_rts] ? ctx->rts[ctx->num_rts++] : NULL;
+found:
+   ctx->rt_used[i] = ++ctx->rt_clock;
+   return ctx->rts[i];
 }
 
 /* start (or continue) the frame into colour buffer 0; called with the lock held

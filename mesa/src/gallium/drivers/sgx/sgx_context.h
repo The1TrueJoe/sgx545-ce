@@ -127,6 +127,7 @@ struct sgx_context {
    struct sgxws_rt *rts[SGX_MAX_RTS];
    uint32_t rt_va[SGX_MAX_RTS]; /* the target each was made for */
    uint32_t rt_w[SGX_MAX_RTS], rt_h[SGX_MAX_RTS]; /* and its size */
+   uint64_t rt_used[SGX_MAX_RTS], rt_clock;       /* when each was last taken */
    unsigned num_rts;
    struct sgx_resource *recording; /* the target of the frame being recorded */
 

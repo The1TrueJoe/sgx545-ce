@@ -109,14 +109,25 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
 {
    int e;
 
+   /* Whatever the texture unit samples lives in the texture heap: render
+    * targets are sampled too (FBO textures, the back buffer a blit reads).
+    * Sampling from elsewhere hangs some SGX545 revisions (the sample cache
+    * erratum); the general heap only when the texture heap is full. */
    switch (mem) {
    case SGXWS_MEM_RENDER_TARGET:
-      if (!(e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL,
-                                    SGXWS_ATTRIBS_COLOR, size, align)))
+      e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
+                              size, align);
+      if (e)
+         e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR,
+                                 size, align);
+      if (!e)
          sgxws_bo_prepare_target(d, bo);
       return e;
    case SGXWS_MEM_TEXTURE:
-      return sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, 0x3, size, align);
+      e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, 0x3, size, align);
+      if (e)
+         e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x3, size, align);
+      return e;
    case SGXWS_MEM_VERTEX:
       return sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x1, size, align);
    }
