@@ -77,7 +77,7 @@ for run in $(seq 1 $RUNS); do
 	$M/mc-oldnew.sh $WHO $run > /dev/null 2>&1
 	flock -n 9 || { echo "run-suite: lost /tmp/gpu.lock" >&2; exit 1; }
 	f=/root/mcbench/$WHO-$run.txt
-	v=$(grep -c 'gpu recoveries: 0' $f 2>/dev/null)
+	v=$(grep -cx 'gpu recoveries: 0' $f 2>/dev/null)
 	put minecraft-standing $run "$([ "$v" = 1 ] && awk '/standing/{print $2}' $f || echo void)"
 	put minecraft-walking $run "$([ "$v" = 1 ] && awk '/walking/{print $2}' $f || echo void)"
 	put minecraft-java-cpu-standing $run "$(awk -F'CPU ' '/standing/{print $2}' $f)"
