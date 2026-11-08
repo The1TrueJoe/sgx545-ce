@@ -5,6 +5,8 @@
 
     mkukfw.py IMAGE -o OUT [--entry PROG:OFF]... [--patch OFF:VALUE]...
               [--features N] [--interface MAJOR.MINOR] [--core-rev N] [--build-id TEXT]
+    mkukfw.py IMAGE -o OUT --manifest JSON    the same, from ukernel/build.py's manifest:
+              entries.event, patches.ctlblk and, if present, "features" and "build_id"
     mkukfw.py --check FILE      print and check a file as the driver does
 
 VALUE is a number or one of ta3dctl, hostctl, ccbctl, ccb, misc.
@@ -104,6 +106,7 @@ def main():
     ap.add_argument("--interface", default="1.0")
     ap.add_argument("--core-rev", type=num, default=0)
     ap.add_argument("--build-id", default="")
+    ap.add_argument("--manifest")
     a = ap.parse_args()
     if a.check:
         errs = check(open(a.file, "rb").read())
@@ -112,6 +115,13 @@ def main():
         return 1 if errs else 0
     if not a.out:
         ap.error("-o is required")
+    if a.manifest:
+        import json
+        m = json.load(open(a.manifest))
+        a.entry = a.entry or [f"0:{m['entries']['event']}"]
+        a.patch = a.patch or [f"{m['patches']['ctlblk']}:ta3dctl"]
+        a.features = m.get("features", a.features)
+        a.build_id = a.build_id or m.get("build_id", "")
     major, minor = (int(x) for x in a.interface.split("."))
     data = build(open(a.file, "rb").read(), [pair(e) for e in a.entry or ["0:0"]],
                  [pair(p, VALUES) for p in a.patch], a.features, major << 16 | minor,
