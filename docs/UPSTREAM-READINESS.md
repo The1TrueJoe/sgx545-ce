@@ -23,6 +23,8 @@ a new section at the end of the file, never in the middle.
 | Firmware | open-ukernel |
 | Mesa winsys and platform | uapi-stream |
 | Docs: neutral platform wording | ta3d-state |
+| Kernel driver (powervr_sgx) | m2-kernel-driver |
+| Clean-room trees (isa, pds, csbgen) | cleanroom-isa |
 
 ## Mesa pipe driver and compiler
 
@@ -40,7 +42,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 |---|---|---|---|
 | M1 | upstream build is powervr_sgx only | mostly there | uapi-stream |
 | M2 | features from DEV_QUERY and a core table | not started | mesa-gallium (table), uapi-stream (queries) |
-| M3 | driver name for the family | decision needed | Joseph |
+| M3 | driver name for the family | decided: `sgx` (Joseph, 2026-11-08) | mesa-gallium |
 | M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
 | M6 | debug options and experiment code | partly | mesa-gallium, usse-compiler |
