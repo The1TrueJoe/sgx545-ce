@@ -7,7 +7,9 @@
  * memory, and one SUBMIT_JOBS transfer job with a CMD_TRANSFER stream runs each
  * blit (docs/TEX.md 3 and 10). Every destination byte is checked.
  *
- *   powervr_sgx_blit [-v] [-n rounds]
+ *   powervr_sgx_blit [-v] [-n rounds] [-T]
+ *
+ * -T puts the sampled source in the texture heap instead of the general heap.
  *
  * Cases, 64x64 BGRA8888 from a CPU-written pattern:
  *   copy   strided  -> strided            exact copy
@@ -40,6 +42,8 @@ int ioctl(int fd, unsigned long req, ...);
 static int fd, verbose;
 static uint32_t vm, ctx, syncobj;
 static uint64_t heap_base[DRM_POWERVR_SGX_HEAP_COUNT], heap_next[DRM_POWERVR_SGX_HEAP_COUNT];
+/* -T: the sampled source in the texture heap, as the sample-cache erratum wants. */
+static int src_heap = DRM_POWERVR_SGX_HEAP_GENERAL;
 
 static int xioctl(unsigned long req, void *arg)
 {
@@ -282,12 +286,13 @@ int main(int argc, char **argv)
 	unsigned rounds = 1;
 	int opt, e, bad = 0;
 
-	while ((opt = getopt(argc, argv, "vn:")) != -1) {
+	while ((opt = getopt(argc, argv, "vn:T")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
+		case 'T': src_heap = DRM_POWERVR_SGX_HEAP_TEXTURE; break;
 		case 'n': rounds = (unsigned)strtoul(optarg, NULL, 0); break;
 		default:
-			fprintf(stderr, "usage: powervr_sgx_blit [-v] [-n rounds]\n");
+			fprintf(stderr, "usage: powervr_sgx_blit [-v] [-n rounds] [-T]\n");
 			return 2;
 		}
 	}
@@ -306,7 +311,7 @@ int main(int argc, char **argv)
 	syncobj = sc.handle;
 	programs();
 
-	src = bo(DRM_POWERVR_SGX_HEAP_GENERAL, 64 * 64 * 4);
+	src = bo(src_heap, 64 * 64 * 4);
 	sb = bo(DRM_POWERVR_SGX_HEAP_GENERAL, 64 * 64 * 4);
 	tw = bo(DRM_POWERVR_SGX_HEAP_TEXTURE, 64 * 64 * 4);
 	lin = bo(DRM_POWERVR_SGX_HEAP_GENERAL, 64 * 64 * 4);
