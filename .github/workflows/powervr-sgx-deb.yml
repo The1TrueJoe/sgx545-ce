@@ -12,6 +12,12 @@ on:
       suite:
         description: Debian suite whose kernel config to start from
         default: trixie
+  push:
+    branches: [m2-drm]
+    paths:
+      - drm/ci/deb-kernel.sh
+      - drm/ci/deb.fragment
+      - .github/workflows/powervr-sgx-deb.yml
 
 concurrency:
   group: powervr-sgx-deb-${{ github.ref }}
@@ -41,7 +47,7 @@ jobs:
 
       - name: Lay out the kernel
         env:
-          DEB_SUITE: ${{ inputs.suite }}
+          DEB_SUITE: ${{ inputs.suite || 'trixie' }}
         run: |
           set -eux
           [ -f linux-$LINUX_VERSION.tar.xz ] ||
