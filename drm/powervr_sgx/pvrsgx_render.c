@@ -25,7 +25,7 @@
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
-#include "powervr_sgx_stream.h"
+#include "pvrsgx_stream.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
 #include "pvrsgx_fw.h"
@@ -517,24 +517,24 @@ bool pvrsgx_stream_no_quirk(const void *priv, u32 quirk)
 }
 
 /* Copy one stream in, decode and check it field by field, then against the VM. */
-int pvrsgx_stream_take(const struct powervr_sgx_stream_cmd_defs *defs,
-		       struct powervr_sgx_stream_ctx *sctx, struct pvrsgx_vm *vm,
+int pvrsgx_stream_take(const struct pvrsgx_stream_cmd_defs *defs,
+		       struct pvrsgx_stream_ctx *sctx, struct pvrsgx_vm *vm,
 		       u64 uptr, u32 len, void *dest)
 {
 	void *buf;
 	int err;
 
-	if (!len || len > POWERVR_SGX_STREAM_MAX_SIZE || (uptr & 7))
+	if (!len || len > PVRSGX_STREAM_MAX_SIZE || (uptr & 7))
 		return -EINVAL;
 	buf = memdup_user(u64_to_user_ptr(uptr), len);
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
-	err = powervr_sgx_stream_process(defs, sctx, buf, len, dest);
+	err = pvrsgx_stream_process(defs, sctx, buf, len, dest);
 	kfree(buf);
 	if (err)
 		return err;
 	mutex_lock(&vm->lock);
-	err = powervr_sgx_stream_check_mapped(defs, sctx, dest);
+	err = pvrsgx_stream_check_mapped(defs, sctx, dest);
 	mutex_unlock(&vm->lock);
 	return err;
 }
@@ -543,7 +543,7 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in)
 {
 	struct pvrsgx_render_job *rj = &job->render;
-	struct powervr_sgx_stream_ctx sctx = {};
+	struct pvrsgx_stream_ctx sctx = {};
 	struct drm_powervr_sgx_ta_kick *kicks;
 	struct pvrsgx_vm *vm = job->ctx->vm;
 	int err;
@@ -563,22 +563,22 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	if (in->ta_kicks.count > PVRSGX_MAX_TA_KICKS)
 		return -EOPNOTSUPP;
 
-	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
-	sctx.heaps[POWERVR_SGX_STREAM_HEAP_PDS_PIXEL].size =
+	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
+	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].size =
 		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
-	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
-	sctx.limits[POWERVR_SGX_STREAM_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
+	sctx.limits[PVRSGX_STREAM_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
+	sctx.limits[PVRSGX_STREAM_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
 	sctx.has_quirk = pvrsgx_stream_no_quirk;
 	sctx.rt_pad_width = rj->rtds->n.xt * 32;
 	sctx.rt_pad_height = rj->rtds->n.yt * 16;
 	sctx.mapped = pvrsgx_stream_mapped;
 	sctx.priv = vm;
 
-	err = pvrsgx_stream_take(&powervr_sgx_stream_render_defs, &sctx, vm, in->cmd_stream,
+	err = pvrsgx_stream_take(&pvrsgx_stream_render_defs, &sctx, vm, in->cmd_stream,
 				 in->cmd_stream_len, &rj->render);
 	if (err)
 		return err;
-	err = powervr_sgx_check_render(&rj->render);
+	err = pvrsgx_check_render(&rj->render);
 	if (err)
 		return err;
 
@@ -588,7 +588,7 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	rj->nkicks = in->ta_kicks.count;
 	for (u32 k = 0; k < rj->nkicks && !err; k++)
 		err = kicks[k].flags ? -EINVAL :
-		      pvrsgx_stream_take(&powervr_sgx_stream_ta_kick_defs, &sctx, vm,
+		      pvrsgx_stream_take(&pvrsgx_stream_ta_kick_defs, &sctx, vm,
 					 kicks[k].cmd_stream, kicks[k].cmd_stream_len,
 					 &rj->kick[k]);
 	kvfree(kicks);
@@ -638,7 +638,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_render_job *rj = &job->render;
 	struct pvrsgx_render_ctx *r = job->ctx->render;
 	struct pvrsgx_rt_dataset *s = rj->rtds;
-	const struct powervr_sgx_stream_render *in = &rj->render;
+	const struct pvrsgx_stream_render *in = &rj->render;
 	bool first = k == 0, last = k == rj->nkicks - 1;
 	struct pvrsgx_fw_ta_cmd *cmd;
 	struct pvrsgx_fw_rt_deps *deps;

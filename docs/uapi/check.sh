@@ -58,9 +58,9 @@ echo "ok   docs: the layout table in UAPI.md matches layout.inc"
 xml="$here/powervr_sgx_kmd_stream.xml"
 st="$here/stream"
 gen="python3 $here/gen_stream.py"
-$gen kernel-h "$xml" powervr_sgx > "$out/powervr_sgx_stream_defs.h"
-$gen kernel-c "$xml" powervr_sgx > "$out/powervr_sgx_stream_defs.c"
-for f in powervr_sgx_stream_defs.h powervr_sgx_stream_defs.c; do
+$gen kernel-h "$xml" pvrsgx > "$out/pvrsgx_stream_defs.h"
+$gen kernel-c "$xml" pvrsgx > "$out/pvrsgx_stream_defs.c"
+for f in pvrsgx_stream_defs.h pvrsgx_stream_defs.c; do
 	cmp -s "$out/$f" "$st/$f" || {
 		echo "FAIL stream/$f is stale: rerun gen_stream.py kernel-${f##*.} (see its header)" >&2
 		exit 1
@@ -74,7 +74,7 @@ $gen user "$xml" > "$out/sgx_kmd_stream_pack.h"
 
 kwarn="-Wall -Wextra -Wpedantic -Werror"
 for target in x86-linux-gnu x86_64-linux-gnu; do
-	for c in powervr_sgx_stream.c powervr_sgx_cmd_checks.c powervr_sgx_stream_defs.c; do
+	for c in pvrsgx_stream.c pvrsgx_cmd_checks.c pvrsgx_stream_defs.c; do
 		# shellcheck disable=SC2086
 		zig cc -target "$target" -std=gnu11 $kwarn -I "$st/test/shim" -I "$st" \
 			-c "$st/$c" -o "$out/$target-${c%.c}.o"
@@ -84,8 +84,8 @@ done
 
 # shellcheck disable=SC2086
 cc -std=gnu11 $kwarn -I "$st/test/shim" -I "$st" -I "$out" -o "$out/stream_test" \
-	"$st/test/stream_test.c" "$st/powervr_sgx_stream.c" "$st/powervr_sgx_cmd_checks.c" \
-	"$st/powervr_sgx_stream_defs.c" "$out/fixture_stream_defs.c"
+	"$st/test/stream_test.c" "$st/pvrsgx_stream.c" "$st/pvrsgx_cmd_checks.c" \
+	"$st/pvrsgx_stream_defs.c" "$out/fixture_stream_defs.c"
 "$out/stream_test"
 echo "ok   stream: decoder test passes on this host"
 

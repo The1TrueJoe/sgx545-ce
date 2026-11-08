@@ -488,8 +488,8 @@ texture words, and the end-of-tile program with the destination's PBE words (TEX
 | Mesa's `gen_pack_header.py` | reads the XML; emits the defines and the `HDR` and `EXTHDR_*` packers. It parses `<stream>` and emits nothing for it, as for Rogue | Mesa |
 | `uapi/gen_stream.py user` | a writer per main stream (`SGX_KMD_STREAM_CMD_*_pack()`) with each field's offset | Mesa (G26) |
 | `uapi/gen_stream.py kernel-h`, `kernel-c` | the decoded structs and the tables: order, size, check, heap, extent | the kernel; generated copies in `uapi/stream/` |
-| `uapi/stream/powervr_sgx_stream.c` | the decoder: framing, per-field checks, the mapped check | reference for the kernel driver |
-| `uapi/stream/powervr_sgx_cmd_checks.c` | the cross-field rules of sections 3.4 and 3.5 | reference for the kernel driver (G27) |
+| `uapi/stream/pvrsgx_stream.c` | the decoder: framing, per-field checks, the mapped check | reference for the kernel driver |
+| `uapi/stream/pvrsgx_cmd_checks.c` | the cross-field rules of sections 3.4 and 3.5 | reference for the kernel driver (G27) |
 | `uapi/stream/test/` | host test: every stream written by the generated writer decodes to the same values, and each rule rejects the stream that breaks it; a fixture exercises extension streams, quirks and must-have bits | `check.sh` |
 
 csbgen ignores attributes it doesn't know, which is how `rogue/kmd_stream.xml` already
@@ -1117,4 +1117,4 @@ Facts the design needs that `docs/` doesn't have.
 | G24 | Per-context firmware state beyond the HW context: words 8-15 and the fields at +0x3c and +0x40 that the commands use | `CREATE_CONTEXT` | STATE.md 6 |
 | G25 | Cedarview: `EUR_CR_CORE_REVISION` for 10131, errata, heap layout, microkernel differences; documented errata for 1014 | quirks, M4 | STATE.md, NOTES.md |
 | G26 | Stream tooling in Mesa (from D2). csbgen parses `<stream>` but emits nothing for it; Rogue writes its streams by hand in the XML's order. Our writer comes from `gen_stream.py`, and the XML carries validation attributes csbgen ignores. Whether Mesa takes `gen_stream.py` beside csbgen (or a `<stream>` emitter in csbgen), and the attributes in its XML, is the Mesa maintainers' call. The kernel's tables are generated from that file and committed; kernel reviewers may want the source in the kernel tree instead | M3 winsys, M5 | `AGENTS.md` 3.7, DRIVER-UPSTREAM.md |
-| G27 | Cross-field rules (from D2). csbgen refuses unknown tags, so rules that join fields (section 3.4's depth and stencil requirements and ZLS offset limit, section 3.5's tile order) are hand-written in the kernel's per-command check, not generated. They are the one part of the validation with two copies, section 3 and `powervr_sgx_cmd_checks.c`, so a rule added to one can be missed in the other | validators | UAPI.md 3, `uapi/stream/` |
+| G27 | Cross-field rules (from D2). csbgen refuses unknown tags, so rules that join fields (section 3.4's depth and stencil requirements and ZLS offset limit, section 3.5's tile order) are hand-written in the kernel's per-command check, not generated. They are the one part of the validation with two copies, section 3 and `pvrsgx_cmd_checks.c`, so a rule added to one can be missed in the other | validators | UAPI.md 3, `uapi/stream/` |

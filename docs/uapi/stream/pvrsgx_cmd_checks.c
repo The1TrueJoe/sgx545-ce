@@ -3,12 +3,12 @@
 
 /*
  * The cross-field rules of docs/UAPI.md section 3, run after
- * powervr_sgx_stream_process() has checked each field on its own.
+ * pvrsgx_stream_process() has checked each field on its own.
  */
 
 #include <linux/errno.h>
 
-#include "powervr_sgx_stream_defs.h"
+#include "pvrsgx_stream_defs.h"
 
 /* ZLS control bits that use the stencil address (UAPI.md 3.3). */
 #define ZLS_STENCIL_BITS 0x3U
@@ -18,7 +18,7 @@
 #define ZLS_BASE_MASK 0xfff00000U
 #define ZLS_OFFSET_LIMIT BIT(30)
 
-int powervr_sgx_check_render(const struct powervr_sgx_stream_render *r)
+int pvrsgx_check_render(const struct pvrsgx_stream_render *r)
 {
 	u64 base;
 
@@ -45,7 +45,7 @@ int powervr_sgx_check_render(const struct powervr_sgx_stream_render *r)
 	return 0;
 }
 
-int powervr_sgx_check_transfer(const struct powervr_sgx_stream_transfer *t)
+int pvrsgx_check_transfer(const struct pvrsgx_stream_transfer *t)
 {
 	if (t->first_tile_x > t->last_tile_x || t->first_tile_y > t->last_tile_y)
 		return -EINVAL;
