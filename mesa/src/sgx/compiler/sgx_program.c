@@ -244,13 +244,14 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    }
    for (unsigned i = 0; i < c->n_lits; i++) {
       struct sgx_const_map *m = &out->consts[out->n_consts++];
-      m->k = 0xffff;
+      bool packed = c->lit_packed_k[i] >= 0;
+      m->k = packed ? c->lit_packed_k[i] : 0xffff;
       m->slot = c->slot_sa[c->lit_slot[i]] < 0 ? SGX_SLOT_NONE
                                                : c->slot_sa[c->lit_slot[i]];
       m->mem = c->mem_dwords ? c->lit_slot[i] + 1 : 0;
       m->shift = 0;
-      m->fmt = 0x11;
-      m->value = c->lit_bits[i];
+      m->fmt = packed ? 0x12 : 0x11;
+      m->value = packed ? 0 : c->lit_bits[i];
    }
    out->n_iters = frag ? MIN2(c->n_iters, ARRAY_SIZE(out->iters)) : 0;
    for (unsigned i = 0; i < out->n_iters; i++) {

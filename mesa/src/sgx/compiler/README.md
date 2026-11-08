@@ -74,6 +74,8 @@ one optimization, so a miscompile can be bisected without rebuilding.
 | `nocoissue` | efo co-issue |
 | `nof16const` | mediump uniforms loaded as F16 (loads F32 and converts) |
 | `nof16iter` | F16 varying iteration |
+| `notexcolor` | writing a texel that is the color with byte moves (unpacks and repacks it instead) |
+| `nopackedcolor` | a uniform color packed to BGRA8 by the driver (packs it in the shader instead) |
 
 `sgx_compile_options.verbose` prints the lowered NIR, the uniform layout and
 the code words to stderr. The gallium driver sets it from its own debug

@@ -205,4 +205,53 @@ TEST_F(sgx_compile_test, fragment_partial_colour)
    expect_decodes();
 }
 
+/* A texel as the colour: its bytes moved into BGRA order (two pck.u8.u8),
+ * not unpacked to floats and packed again */
+TEST_F(sgx_compile_test, fragment_texel_to_colour)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_store_var(&b, col, nir_build_tex_struct(&b, nir_texop_tex, tb), 0xf);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   EXPECT_EQ(out.n_code, 2u) << s;
+   EXPECT_EQ(out.n_temps, 0u) << s;
+   EXPECT_NE(s.find("pck.u8.u8"), std::string::npos) << s;
+}
+
+/* A uniform vec4 as the colour: one mov from a slot the driver fills with
+ * the colour packed to BGRA8 (constant map format 0x12) */
+TEST_F(sgx_compile_test, fragment_uniform_colour_packed)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *u = var(nir_var_uniform, glsl_vec4_type(), "color", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, u), 0xf);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.n_code, 1u) << disasm();
+   bool packed = false;
+   for (unsigned i = 0; i < out.n_consts; i++)
+      packed |= out.consts[i].fmt == 0x12 && out.consts[i].k == 0;
+   EXPECT_TRUE(packed);
+}
+
 } /* namespace */

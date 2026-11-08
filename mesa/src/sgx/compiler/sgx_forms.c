@@ -100,6 +100,7 @@ static const struct sgx_form_info {
    PCK(F32, U8),
    PCK(U8, F32),
    PCK(U8, F16),
+   PCK(U8, U8),
    PCK(S16, F32),
    PCK(C10, F32),
    PCK(C10, C10),

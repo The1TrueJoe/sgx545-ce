@@ -191,7 +191,8 @@ sgx_write_usp(const struct sgx_shader *s, uint8_t **usp, size_t *size)
    /* list C: constant k -> sa slot: kind 1 f32, 2 F16 half (shift 0/16),
     * 3 C10 channel (10-byte record: kind, k, 0, slot, shift); ours: 0x10
     * F16 of a C10 value (kind 2's record), 0x11 a literal (kind, value low,
-    * value high, slot, shift) */
+    * value high, slot, shift), 0x12 a vec4 packed to BGRA8 (kind 2's record,
+    * k its first constant) */
    for (unsigned i = 0; i < s->n_consts; i++) {
       const struct sgx_const_map *m = &s->consts[i];
       if (m->fmt == 3) {

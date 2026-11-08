@@ -840,7 +840,7 @@ lit_run(struct sgx_ctx *c, const uint32_t *w, unsigned n)
 {
    for (unsigned s = 0; s + n <= c->n_lits; s++) {
       unsigned j = 0;
-      while (j < n && c->lit_bits[s + j] == w[j])
+      while (j < n && c->lit_packed_k[s + j] < 0 && c->lit_bits[s + j] == w[j])
          j++;
       if (j == n)
          return s;
@@ -878,7 +878,9 @@ pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz)
       if (c->opts->driver_consts && !c->lit_off) {
          /* a literal in SA, as libusc keeps them beside the uniforms */
          unsigned n;
-         for (n = 0; n < c->n_lits && c->lit_bits[n] != w; n++)
+         for (n = 0;
+              n < c->n_lits && (c->lit_packed_k[n] >= 0 || c->lit_bits[n] != w);
+              n++)
             ;
          if (n < ARRAY_SIZE(c->lit_bits)) {
             if (n == c->n_lits)
@@ -2630,12 +2632,17 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
             sgx_fail(c, "fragment output %u", sem.location);
             return;
          }
+         c->has_color = true;
+         if (in->src[0].ssa == c->colour_end &&
+             (c->has_colour_raw || c->colour_k >= 0)) {
+            c->has_colour_packed = !c->has_colour_raw;
+            return;
+         }
          nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
          for (unsigned k = 0; k < 4; k++)
             if (wmask & (1u << k))
                c->color[k] = src_comp(c, &ls, k - nir_intrinsic_component(in));
          c->color_mask |= wmask & 0xf;
-         c->has_color = true;
          return;
       }
       /* per component: a varying the fragment shader doesn't read, or the
@@ -3298,6 +3305,19 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       i->op[2].step = 0;
    }
 
+   if (tex == c->colour_tex && !s->dependent) {
+      /* the colour is this texel: emit_color moves its bytes, so neither the
+       * unpack nor the conversions to the store are emitted */
+      c->has_colour_raw = true;
+      c->colour_raw = raw;
+      for (nir_def *d = &tex->def; d != c->colour_end;) {
+         nir_instr *u =
+            nir_src_use_instr(list_first_entry(&d->uses, nir_src, use_link));
+         _mesa_set_add(c->skip, u);
+         d = &nir_instr_as_alu(u)->def;
+      }
+      return;
+   }
    if (tex->def.bit_size == 16) {
       /* to F16, two channels per instruction: the finalizer's own unpack */
       unsigned w = new_vreg16(c, 4);
@@ -3448,6 +3468,90 @@ c10_tree(struct sgx_ctx *c, nir_def *d, struct set *set)
 }
 
 /* the colour's value as a C10 tree that nothing else reads */
+/* the fragment colour as a texel or a vec4 uniform as it is: a store of all
+ * four channels whose source is one, through value-preserving conversions
+ * with no other uses. The texel is then written to the colour with byte
+ * moves (emit_tex decides: a non-dependent sample only), the uniform from a
+ * constant slot the driver packs to BGRA8 (driver_consts) */
+static bool
+plain_vec4(const nir_alu_instr *a)
+{
+   if (a->def.num_components != 4)
+      return false;
+   for (unsigned k = 0; k < 4; k++)
+      if (a->src[0].swizzle[k] != k)
+         return false;
+   return a->op == nir_op_f2f32 || a->op == nir_op_f2f16 ||
+          a->op == nir_op_f2fmp || a->op == nir_op_mov;
+}
+
+static void
+find_colour_source(struct sgx_ctx *c, nir_function_impl *impl)
+{
+   nir_intrinsic_instr *st = NULL;
+   unsigned n = 0;
+   nir_foreach_block (b, impl) {
+      nir_foreach_instr (instr, b) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+         if (in->intrinsic != nir_intrinsic_store_output)
+            continue;
+         n++;
+         st = in;
+      }
+   }
+   if (n != 1 || nir_intrinsic_write_mask(st) != 0xf ||
+       nir_intrinsic_component(st) != 0 ||
+       (nir_intrinsic_io_semantics(st).location != FRAG_RESULT_COLOR &&
+        nir_intrinsic_io_semantics(st).location != FRAG_RESULT_DATA0))
+      return;
+   nir_def *end = st->src[0].ssa, *d = end;
+   nir_alu_instr *conv[4];
+   unsigned nconv = 0;
+   while (list_is_singular(&d->uses) && !nir_def_used_by_if(d)) {
+      nir_instr *p = nir_def_instr(d);
+      if (p->type == nir_instr_type_tex) {
+         nir_tex_instr *tex = nir_instr_as_tex(p);
+         if (tex->op == nir_texop_tex && tex->def.num_components == 4 &&
+             !sgx_debug(c, SGX_DBG_NO_TEX_COLOR)) {
+            c->colour_end = end;
+            c->colour_tex = tex;
+         }
+         return;
+      }
+      if (p->type == nir_instr_type_intrinsic) {
+         nir_intrinsic_instr *in = nir_instr_as_intrinsic(p);
+         if (in->intrinsic != nir_intrinsic_load_uniform ||
+             !nir_src_is_const(in->src[0]) || in->def.num_components != 4 ||
+             !c->opts->driver_consts || sgx_debug(c, SGX_DBG_NO_PACKED_COLOR))
+            return;
+         uint32_t off = nir_src_as_uint(in->src[0]);
+         if (off >= 0x10000)
+            off = (uint32_t)uif(off);
+         unsigned k = nir_intrinsic_base(in) + off;
+         if (k + 4 > ARRAY_SIZE(c->const_fmt))
+            return;
+         for (unsigned j = 0; j < 4; j++)
+            if (c->const_fmt[k + j] == 3)
+               return; /* (a C10 load emits its own conversion) */
+         c->colour_end = end;
+         c->colour_k = k;
+         _mesa_set_add(c->skip, p);
+         for (unsigned j = 0; j < nconv; j++)
+            _mesa_set_add(c->skip, &conv[j]->instr);
+         return;
+      }
+      if (p->type != nir_instr_type_alu || nconv == ARRAY_SIZE(conv))
+         return;
+      nir_alu_instr *a = nir_instr_as_alu(p);
+      if (!plain_vec4(a))
+         return;
+      conv[nconv++] = a;
+      d = a->src[0].src.ssa;
+   }
+}
+
 static void
 find_c10(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -3967,6 +4071,46 @@ emit_color(struct sgx_ctx *c)
       for (struct list_head *l = before->next; n > 2; l = l->next, n--)
          fld(list_entry(l, struct sgx_ins, link), SGX_FLD_NOSCHED, 1);
       emit_feedback(c);
+      return;
+   }
+   if (c->has_colour_raw) {
+      /* the texel's bytes in BGRA order: (B, G) then (R, A), into a
+       * register other than the texel's (the second reads it) */
+      unsigned d = c->colour_raw.file == SGX_F_PA && c->colour_raw.n == 0
+                      ? MAX2(c->n_pa_inputs, 1)
+                      : 0;
+      static const uint8_t lane[2][2] = {{2, 1}, {0, 3}};
+      c->colour_pa = d;
+      for (unsigned h = 0; h < 2; h++) {
+         struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_U8_U8);
+         p->nops = 3;
+         p->op[0] = ref(SGX_F_PA, d);
+         for (unsigned j = 0; j < 2; j++) {
+            p->op[1 + j] = c->colour_raw;
+            p->op[1 + j].lane = lane[h][j];
+         }
+         fld(p, SGX_FLD_DMASK, h ? 12 : 3);
+         emit(c, p);
+      }
+      emit_feedback(c);
+      return;
+   }
+   if (c->has_colour_packed && c->n_lits < ARRAY_SIZE(c->lit_bits)) {
+      /* the uniform packed to BGRA8 by the driver (const map 0x12) */
+      unsigned l = c->n_lits++;
+      c->lit_bits[l] = 0;
+      c->lit_packed_k[l] = c->colour_k;
+      c->colour_pa = 0;
+      struct sgx_ins *m = ins_alloc(c, SGX_INS_ALU, SGX_OP_MOV);
+      m->nops = 2;
+      m->op[0] = ref(SGX_F_PA, 0);
+      m->op[1] = ref(SGX_F_LIT, l);
+      emit(c, m);
+      emit_feedback(c);
+      return;
+   }
+   if (c->has_colour_packed) {
+      sgx_fail(c, "no literal slot left for the packed colour");
       return;
    }
    struct sgx_ref col[4];
@@ -5731,6 +5875,10 @@ static const struct debug_named_value sgx_debug_options[] = {
    {"nof16const", SGX_DBG_NO_F16_CONST,
     "Load mediump uniforms as F32 and convert in the shader"},
    {"nof16iter", SGX_DBG_NO_F16_ITER, "Iterate every varying in F32"},
+   {"notexcolor", SGX_DBG_NO_TEX_COLOR,
+    "Unpack a texel that is the colour instead of moving its bytes"},
+   {"nopackedcolor", SGX_DBG_NO_PACKED_COLOR,
+    "Pack a uniform colour in the shader, not at upload"},
    DEBUG_NAMED_VALUE_END,
 };
 
@@ -5752,6 +5900,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    c->keep_vreg = -1;
    c->face_vreg = -1;
    c->face_f32 = -1;
+   c->colour_k = -1;
+   memset(c->lit_packed_k, 0xff, sizeof(c->lit_packed_k));
    c->p16 = opts->f16;
    c->n_labels = 6; /* 3 start, 4 feedback, 5 phase 1: as libusc numbers them */
    c->sa_base = c->stage == MESA_SHADER_FRAGMENT ? 9 : 10;
@@ -5774,6 +5924,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       find_projected(c, impl);
       find_discard(c, impl);
       find_c10(c, impl);
+      if (!c->c10_root)
+         find_colour_source(c, impl);
    }
    c->shadow_regs = _mesa_pointer_set_create(c);
    find_shadow_regs(c, impl);
