@@ -122,7 +122,6 @@ static void dump_bif(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrs
 	dump_lookup(sb, "idle", sdev->idle_mmu, addr);
 }
 
-
 /*
  * Called from the timeout handler with the scheduler stopped, before the
  * restart: what the microkernel and the hung job left behind.
