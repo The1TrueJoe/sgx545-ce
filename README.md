@@ -17,6 +17,7 @@ userspace code. It replaces the closed i386 Cedarview DDK in
 | [`mesa/`](mesa/) | The GL driver: a Mesa gallium driver (EGL + GLES2), kept as an overlay on a pinned Mesa release. |
 | [`libpvr/`](libpvr/) | The PVR services client (bridge ioctls, memory, kicks) shared by srvinit, the Mesa winsys and the tools. `abi/` holds the struct layouts and bridge IDs generated from the kernel headers. |
 | [`docs/`](docs/) | Hardware reference written from the reverse engineering, and the [build log](docs/log/BUILDLOG.md). |
+| [`kit/`](kit/) | Test sticks for testers: [`kit/cedarview`](kit/cedarview/) builds a USB image that checks the driver on a Cedarview computer ([guide](docs/TESTING-CEDARVIEW.md)). |
 | [`tools/`](tools/) | Reverse-engineering and test tooling: tracer, decoders, (dis)assemblers, frame generator, hardware tests, and DDK-side helpers for A/B testing. |
 
 **Status.** On an EA-3 the GPU is started by `srvinit` and draws frames generated
