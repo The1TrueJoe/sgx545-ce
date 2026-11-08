@@ -31,3 +31,15 @@ CONFIG_SQUASHFS=y
 CONFIG_SQUASHFS_XZ=y
 CONFIG_SQUASHFS_ZSTD=y
 CONFIG_EFI_PARTITION=y
+# Root = squashfs + a tmpfs overlay on the stick; console on the firmware
+# framebuffer (simpledrm) until gma500 takes over; never resume from a disk.
+CONFIG_BLK_DEV_LOOP=y
+CONFIG_OVERLAY_FS=y
+CONFIG_TMPFS=y
+CONFIG_EFI=y
+CONFIG_EFI_STUB=y
+CONFIG_SYSFB_SIMPLEFB=y
+CONFIG_DRM_SIMPLEDRM=y
+CONFIG_VT=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+# CONFIG_HIBERNATION is not set

@@ -30,6 +30,11 @@ make -C "$SRC" ARCH=x86_64 x86_64_defconfig
 make -C "$SRC" ARCH=x86_64 olddefconfig
 
 for want in CONFIG_DRM_GMA500=m CONFIG_DRM_POWERVR_SGX=m CONFIG_DRM_POWERVR_SGX_GMA500=y \
-	    CONFIG_AUXILIARY_BUS=y CONFIG_MODULES=y; do
+	    CONFIG_AUXILIARY_BUS=y CONFIG_MODULES=y CONFIG_USB_STORAGE=y CONFIG_SQUASHFS=y \
+	    CONFIG_OVERLAY_FS=y CONFIG_DRM_SIMPLEDRM=y CONFIG_FRAMEBUFFER_CONSOLE=y; do
 	grep -qx "$want" "$SRC/.config" || { echo "cedarview-kernel: $want missing" >&2; exit 1; }
 done
+if grep -q '^CONFIG_HIBERNATION=y' "$SRC/.config"; then
+	echo "cedarview-kernel: hibernation must stay off (the kit never resumes from a disk)" >&2
+	exit 1
+fi
