@@ -148,8 +148,9 @@ Two different things change how numbers read.
   following it has a 6-bit number (bits 0-5)
   and bit 6 says that operand is F16. An F16 r, o, pa or sa operand's number
   counts 16-bit halves: `r3.f16.lo` is 6, `r3.f16.hi` is 7 (**hardware**,
-  hwt_p1 / hwt_p10). Indexed, immediate and constant operands are not
-  halved; a bare `.f16` on them only sets bit 6.
+  hwt_p1 / hwt_p10). Indexed, immediate, constant and idx operands are not
+  halved; a bare `.f16` on them only sets bit 6. For example, a test's
+  `idx16.f16` destination has number 16 with bit 6 set.
 - **Format control** is program state, set by `setfc` (MOE control, op 5)
   and at the start of a program C10 on, F16 off (**hardware**, hwt_p6 /
   hwt_p8). It applies only to these classes: sop2, sopwm, the sop3 family,
@@ -1563,7 +1564,7 @@ placeholder), DRC.
 | h9 | postinc | f1 b28 (not both) | encoder; name guess |
 | h7 | dst bank | 0 r, 1 pa | encoder |
 | h6 | range | f1 b29: src2 holds a 4th source | encoder; name guess |
-| h4-5 | size | 0 d (dword: 0x7d...), 1 w (0x7c...), 2 b (0x7b...); 3 (0x7e... "q") rejected | encoder, corpus (d); b/w from libusc's internal opcode order (byte, word, dword groups) |
+| h4-5 | size | 0 d (dword: 0x7d...), 1 w (0x7c...), 2 b (0x7b...), 3 `q` (0x7e...: libusc's encoder rejects it, but the field holds it; the text is `ld.<mode>.q` and it encodes as 3) | encoder, corpus (d); b/w from libusc's internal opcode order (byte, word, dword groups) |
 | h3 | f2_9 | f2 b9 | encoder; unknown |
 | h1 | f2_2 | f2 b2 | encoder; data-cache control (guess) |
 | h0 | drc | DRC the loaded data signals | encoder, corpus (ix_tmp*: loads alternate drc 0/1, each followed later by `wdf`) |
