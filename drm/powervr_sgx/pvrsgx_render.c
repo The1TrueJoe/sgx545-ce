@@ -61,7 +61,8 @@ static u32 f32_one(void)
 /* The PB's free list and descriptor as new: at creation, and after a reset (pb_rearm). */
 static void pb_init(struct pvrsgx_pb *pb)
 {
-	u32 pages = pb->pages, first, last, zls, ta, pds, *fl, *pd;
+	u32 pages = pb->pages, first, last, zls, ta, pds, *fl;
+	struct pvrsgx_fw_pb_desc *pd;
 
 	/* Free list: prev<<16 | next per page, indexed from the range's base. */
 	first = (kobj_va(pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT;
@@ -77,19 +78,19 @@ static void pb_init(struct pvrsgx_pb *pb)
 	zls = pages - PB_EXTRA_PAGES;
 	ta = pages + 0x10;
 	pds = min(zls, ta);
-	pd = kobj_cpu(pb->desc);
-	memset(pd, 0, 0x3c);
-	pd[1] = pages;
-	pd[2] = last << 16 | first;	/* free list head */
-	pd[3] = (last - 1) << 16;
-	pd[4] = kobj_va(pb->freelist);
-	pd[6] = pd[2];
-	pd[7] = pd[3];
-	pd[10] = ta;			/* TA threshold */
-	pd[11] = zls;			/* ZLS threshold */
-	pd[12] = zls;			/* global threshold */
-	pd[13] = pds > 0x100 ? pds - 0x100 : 0;	/* PDS threshold */
-	pd[14] = kobj_va(pb->blocks);
+	pd = (struct pvrsgx_fw_pb_desc *)kobj_cpu(pb->desc);
+	memset(pd, 0, sizeof(*pd));
+	pd->pages = pages;
+	pd->free_head = last << 16 | first;
+	pd->free_tail = (last - 1) << 16;
+	pd->free_list = kobj_va(pb->freelist);
+	pd->free_head_copy = pd->free_head;
+	pd->free_tail_copy = pd->free_tail;
+	pd->ta_threshold = ta;
+	pd->zls_threshold = zls;
+	pd->global_threshold = zls;
+	pd->pds_threshold = pds > 0x100 ? pds - 0x100 : 0;
+	pd->blocks = kobj_va(pb->blocks);
 }
 
 /*
@@ -117,7 +118,8 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm 
 	pb->base = kobj_va(pb->buf) & 0xfff00000;
 	err = pvrsgx_kobj_new(sdev, &pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base,
 			      vm);
-	err = err ?: pvrsgx_kobj_new(sdev, &pb->desc, PVRSGX_KRANGE_KDATA, 0x3c, 0, NULL);
+	err = err ?: pvrsgx_kobj_new(sdev, &pb->desc, PVRSGX_KRANGE_KDATA,
+				     sizeof(struct pvrsgx_fw_pb_desc), 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &pb->blocks, PVRSGX_KRANGE_KDATA, 0x10, 0, NULL);
 	if (err)
 		goto fail;
@@ -298,36 +300,36 @@ void pvrsgx_rtds_put(struct pvrsgx_rt_dataset *rtds)
 static void rtds_init(struct pvrsgx_rt_dataset *s)
 {
 	struct pvrsgx_render_ctx *r = s->ctx->render;
-	u32 w = s->w, h = s->h, *rt, *b, *rd;
+	struct pvrsgx_fw_render_details *rd = (void *)kobj_cpu(s->rd);
+	struct pvrsgx_fw_rt_data *rt = (void *)kobj_cpu(s->rtdata);
+	u32 w = s->w, h = s->h, *b;
 
-	memset(kobj_cpu(s->rtdata), 0, 2 * 0x38 + 0x18);
+	memset(rt, 0, sizeof(*rt));
 	memset(kobj_cpu(s->bgblock), 0, 0x60);
-	memset(kobj_cpu(s->rd), 0, 0x1ec);
+	memset(rd, 0, sizeof(*rd));
 	for (int i = 0; i < 2; i++)
 		kobj_cpu(s->entword[i])[0] = 0;
 	s->frames = 0;
 
-	/* RT data: header, then two entries of 14 words. */
 	kobj_cpu(s->rtword)[0] = 1;
-	rt = kobj_cpu(s->rtdata);
-	rt[0] = kobj_va(s->rtword);
-	rt[2] = s->n.padx;
-	rt[5] = 2;
-	for (int i = 0; i < 2; i++) {
-		u32 *e = rt + 6 + 14 * i;
+	rt->rt_word = kobj_va(s->rtword);
+	rt->padded_tiles_x = s->n.padx;
+	rt->num_entries = ARRAY_SIZE(rt->entry);
+	for (int i = 0; i < ARRAY_SIZE(rt->entry); i++) {
+		struct pvrsgx_fw_rt_entry *e = &rt->entry[i];
 
-		e[0] = kobj_va(r->hwctx);
-		e[2] = s->n.mt_tiles >> 4;
-		e[3] = s->n.mt_tiles * 0xc;
-		e[4] = kobj_va(s->bgblock);
-		e[5] = kobj_va(s->ta88[i]);
-		e[6] = kobj_va(s->ta40);
-		e[7] = kobj_va(s->ta50);
-		e[8] = kobj_va(s->tailptr);
-		e[9] = s->n.tailptr_bytes;
-		e[10] = 1;
-		e[12] = kobj_va(s->entword[i]);
-		e[13] = 0x10;
+		e->hw_render_ctx = kobj_va(r->hwctx);
+		e->mt_units = s->n.mt_tiles >> 4;
+		e->mt_bytes = s->n.mt_tiles * 0xc;
+		e->bg_block = kobj_va(s->bgblock);
+		e->ta_data[0] = kobj_va(s->ta88[i]);
+		e->ta_data[1] = kobj_va(s->ta40);
+		e->ta_data[2] = kobj_va(s->ta50);
+		e->tail_pointers = kobj_va(s->tailptr);
+		e->tail_pointers_size = s->n.tailptr_bytes;
+		e->num_rts = 1;
+		e->entry_word = kobj_va(s->entword[i]);
+		e->unk_34 = 0x10;
 	}
 
 	/* Background object: screen-space vertices, fixed point offset by 0x1000. */
@@ -345,27 +347,26 @@ static void rtds_init(struct pvrsgx_rt_dataset *s)
 	b[22] = 0x3f80;
 
 	/* Render details; the per-render words are written at each job. */
-	rd = kobj_cpu(s->rd);
-	rd[0x00 / 4] = r->pb->base;
-	rd[0x08 / 4] = 0x80;
-	rd[0x0c / 4] = 0x000f0000;
-	rd[0x10 / 4] = 0x80000000;
-	rd[0x38 / 4] = 0x80000000;
-	rd[0x3c / 4] = 0x80000000;
-	rd[0x40 / 4] = f32_one();
-	rd[0x44 / 4] = 0x300;
-	rd[0x48 / 4] = 0x2000000 | (kobj_va(s->bgblock) - r->pb->base) >> 4;
-	rd[0x50 / 4] = 0x88;
-	rd[0x58 / 4] = 0x30;
-	rd[0x64 / 4] = 1;
-	rd[0x68 / 4] = 1;
-	rd[0xcc / 4] = 0x100;
-	rd[0xd0 / 4] = kobj_va(s->rd_sync);
-	rd[0xd8 / 4] = kobj_va(s->rtdata);
-	rd[0x104 / 4] = 1;
-	rd[0x110 / 4] = kobj_va(s->rd_w8);
-	rd[0x114 / 4] = kobj_va(s->rd_w4);
-	rd[0x13c / 4] = 0x07c00000;
+	rd->req_base_3d = r->pb->base;
+	rd->unk_08 = 0x80;
+	rd->unk_0c = 0x000f0000;
+	rd->rt_ctl = BIT(31);
+	rd->stencil[0] = BIT(31);
+	rd->stencil[1] = BIT(31);
+	rd->bg_depth = f32_one();
+	rd->unk_44 = 0x300;
+	rd->bg_object = 0x2000000 | (kobj_va(s->bgblock) - r->pb->base) >> 4;
+	rd->rt_flags = RT_FLAGS;
+	rd->unk_58 = 0x30;
+	rd->unk_64 = 1;
+	rd->unk_68 = 1;
+	rd->unk_cc = 0x100;
+	rd->sync = kobj_va(s->rd_sync);
+	rd->rt_data = kobj_va(s->rtdata);
+	rd->unk_104 = 1;
+	rd->word8 = kobj_va(s->rd_w8);
+	rd->bg_pds_word = kobj_va(s->rd_w4);
+	rd->unk_13c = 0x07c00000;
 	kobj_cpu(s->rd_sync)[0] = 1;
 	kobj_cpu(s->hwsync)[0] = kobj_va(s->hwsync_access);
 	kobj_cpu(s->hwsync_access)[0] = 1;
@@ -388,13 +389,15 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 	s->h = h;
 	rt_numbers(&s->n, w, h);
 
-	err = pvrsgx_kobj_new(sdev, &s->rd, PVRSGX_KRANGE_KDATA, 0x1ec, 0, NULL);
+	err = pvrsgx_kobj_new(sdev, &s->rd, PVRSGX_KRANGE_KDATA,
+			      sizeof(struct pvrsgx_fw_render_details), 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->rd_w8, PVRSGX_KRANGE_KDATA, 8, 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->rd_w4, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
-	err = err ?: pvrsgx_kobj_new(sdev, &s->hwsync, PVRSGX_KRANGE_KDATA, 0x28, 0, NULL);
+	err = err ?: pvrsgx_kobj_new(sdev, &s->hwsync, PVRSGX_KRANGE_KDATA,
+				     sizeof(struct pvrsgx_fw_rt_deps), 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->rtword, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
-	err = err ?: pvrsgx_kobj_new(sdev, &s->rtdata, PVRSGX_KRANGE_KDATA, 2 * 0x38 + 0x18, 0,
-				     NULL);
+	err = err ?: pvrsgx_kobj_new(sdev, &s->rtdata, PVRSGX_KRANGE_KDATA,
+				     sizeof(struct pvrsgx_fw_rt_data), 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->rd_sync, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->hwsync_access, PVRSGX_KRANGE_SYNC, 8, 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->done, PVRSGX_KRANGE_SYNC, SYNC_DATA_BYTES, 0, NULL);
@@ -638,7 +641,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	bool first = k == 0, last = k == rj->nkicks - 1;
 	struct pvrsgx_fw_ta_cmd *cmd;
 	struct pvrsgx_fw_rt_deps *deps;
-	u32 f, odd, rgn_this, rgn_next, entry, *rd, *s3d, *done, *b;
+	struct pvrsgx_fw_render_details *rd;
+	u32 f, odd, rgn_this, rgn_next, entry, *s3d, *done, *b;
 	u32 woff = r->ccb_woff, zls_base = 0;
 
 	if (first)
@@ -648,7 +652,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	rgn_this = kobj_va(s->rgn[odd ? 0 : 1]);
 	rgn_next = kobj_va(s->rgn[odd ? 1 : 0]);
 	entry = kobj_va(s->rtdata) + 0x18 + 0x38 * (odd ? 0 : 1);
-	rd = kobj_cpu(s->rd);
+	rd = (struct pvrsgx_fw_render_details *)kobj_cpu(s->rd);
 	if (first) {
 		/* Render details (STATE.md 6; UAPI.md 4.2). */
 		if (in->depth_addr || in->stencil_addr) {
@@ -659,20 +663,21 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 
 			zls_base = (u32)lo & 0xfff00000;
 		}
-		rd[0x04 / 4] = zls_base;
-		rd[0x14 / 4] = in->depth_bias_units;
-		rd[0x18 / 4] = in->depth_bias_factor;
-		rd[0x20 / 4] = rgn_this;
-		rd[0x28 / 4] = rgn_next;
-		rd[0x2c / 4] = in->zls_control ? in->zls_control | (s->n.xt - 1) << 3 : 0;
-		rd[0x30 / 4] = in->depth_addr ? (u32)in->depth_addr - zls_base : 0;
-		rd[0x34 / 4] = rd[0x30 / 4];
-		rd[0x38 / 4] = BIT(31) | (in->stencil_addr ? (u32)in->stencil_addr - zls_base : 0);
-		rd[0x3c / 4] = rd[0x38 / 4];
-		rd[0x40 / 4] = in->bg_depth;
-		rd[0x5c / 4] = (u32)in->pixel_event_pds_addr;
-		rd[0x60 / 4] = in->pixel_event_pds_rows;
-		rd[0xdc / 4] = entry;
+		rd->zls_base = zls_base;
+		rd->depth_bias_units = in->depth_bias_units;
+		rd->depth_bias_factor = in->depth_bias_factor;
+		rd->region_headers = rgn_this;
+		rd->region_headers_next = rgn_next;
+		rd->zls_ctl = in->zls_control ? in->zls_control | (s->n.xt - 1) << 3 : 0;
+		rd->depth[0] = in->depth_addr ? (u32)in->depth_addr - zls_base : 0;
+		rd->depth[1] = rd->depth[0];
+		rd->stencil[0] = BIT(31) |
+				 (in->stencil_addr ? (u32)in->stencil_addr - zls_base : 0);
+		rd->stencil[1] = rd->stencil[0];
+		rd->bg_depth = in->bg_depth;
+		rd->pixel_event_pds = (u32)in->pixel_event_pds_addr;
+		rd->pixel_event_rows = in->pixel_event_pds_rows;
+		rd->rt_data_entry = entry;
 		kobj_cpu(s->rd_w4)[0] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
 
 		/*
@@ -777,22 +782,22 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 		       kobj_va(r->scratch));
 	pvrsgx_kobj_dump(sb, "hwctx", r->hwctx, 0, 0x44);
 	pvrsgx_kobj_dump(sb, "ccbctl", r->ccbctl, 0, 8);
-	pvrsgx_kobj_dump(sb, "pbdesc", r->pb->desc, 0, 0x3c);
+	pvrsgx_kobj_dump(sb, "pbdesc", r->pb->desc, 0, sizeof(struct pvrsgx_fw_pb_desc));
 	pvrsgx_kobj_dump(sb, "pbblocks", r->pb->blocks, 0, 0x10);
 	pvrsgx_kobj_dump(sb, "freelist[first..]", r->pb->freelist,
 			 ((kobj_va(r->pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
 	pvrsgx_kobj_dump(sb, "scratch", r->scratch, 0, 0x40);
 	pvrsgx_kobj_dump(sb, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
 	pvrsgx_kobj_dump(sb, "ta_cmd", r->ccb, cmd_off, sizeof(struct pvrsgx_fw_ta_cmd));
-	pvrsgx_kobj_dump(sb, "render_details", s->rd, 0, 0x1ec & ~3u);
+	pvrsgx_kobj_dump(sb, "render_details", s->rd, 0, sizeof(struct pvrsgx_fw_render_details));
 	pvrsgx_kobj_dump(sb, "rd_w4", s->rd_w4, 0, 4);
 	pvrsgx_kobj_dump(sb, "rd_w8", s->rd_w8, 0, 8);
 	pvrsgx_kobj_dump(sb, "rd_sync", s->rd_sync, 0, 4);
-	pvrsgx_kobj_dump(sb, "rtdata", s->rtdata, 0, 2 * 0x38 + 0x18);
+	pvrsgx_kobj_dump(sb, "rtdata", s->rtdata, 0, sizeof(struct pvrsgx_fw_rt_data));
 	pvrsgx_kobj_dump(sb, "rtword", s->rtword, 0, 4);
 	pvrsgx_kobj_dump(sb, "entword0", s->entword[0], 0, 4);
 	pvrsgx_kobj_dump(sb, "entword1", s->entword[1], 0, 4);
-	pvrsgx_kobj_dump(sb, "hwsync", s->hwsync, 0, 0x28);
+	pvrsgx_kobj_dump(sb, "hwsync", s->hwsync, 0, sizeof(struct pvrsgx_fw_rt_deps));
 	pvrsgx_kobj_dump(sb, "hwsync_access", s->hwsync_access, 0, 4);
 	pvrsgx_kobj_dump(sb, "done", s->done, 0, SYNC_DATA_BYTES);
 	pvrsgx_kobj_dump(sb, "bgblock", s->bgblock, 0, 0x60);

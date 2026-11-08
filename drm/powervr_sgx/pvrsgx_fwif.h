@@ -149,4 +149,203 @@ struct pvrsgx_fw_rt_deps {
 
 static_assert(sizeof(struct pvrsgx_fw_rt_deps) == 0x28);
 
+/**
+ * struct pvrsgx_fw_rt_entry - One of an RT dataset's two render slots
+ *
+ * Frames alternate between the two (docs/STATE.md section 6, "RT data").
+ */
+struct pvrsgx_fw_rt_entry {
+	/** @hw_render_ctx: Device address of the HW render context. */
+	u32 hw_render_ctx;
+	/** @render_details: The render in flight; the microkernel's. */
+	u32 render_details;
+	/** @mt_units: Tiles per macrotile >> 4. */
+	u32 mt_units;
+	/** @mt_bytes: Tiles per macrotile * 0xc. */
+	u32 mt_bytes;
+	/** @bg_block: Device address of the background object block. */
+	u32 bg_block;
+	/** @ta_data: The 0x88-, 0x40- and 0x50-byte TA data blocks. */
+	u32 ta_data[3];
+	/** @tail_pointers: The tail pointer array. */
+	u32 tail_pointers;
+	/** @tail_pointers_size: Its size in bytes. */
+	u32 tail_pointers_size;
+	/** @num_rts: Render targets, 1. */
+	u32 num_rts;
+	/* private: */
+	u32 pad_2c;
+	/* public: */
+	/** @entry_word: Device address of the slot's status word. */
+	u32 entry_word;
+	/** @unk_34: 0x10. */
+	u32 unk_34;
+};
+
+static_assert(sizeof(struct pvrsgx_fw_rt_entry) == 0x38);
+
+/**
+ * struct pvrsgx_fw_rt_data - An RT dataset's RT data
+ */
+struct pvrsgx_fw_rt_data {
+	/** @rt_word: Device address of the dataset's status word. */
+	u32 rt_word;
+	/* private: */
+	u32 pad_04;
+	/* public: */
+	/** @padded_tiles_x: Tiles in X, padded to whole macrotiles. */
+	u32 padded_tiles_x;
+	/* private: */
+	u32 pad_0c[2];
+	/* public: */
+	/** @num_entries: Render slots, 2. */
+	u32 num_entries;
+	/** @entry: The render slots. */
+	struct pvrsgx_fw_rt_entry entry[2];
+};
+
+static_assert(sizeof(struct pvrsgx_fw_rt_data) == 0x88);
+
+/**
+ * struct pvrsgx_fw_pb_desc - Parameter buffer descriptor
+ *
+ * docs/STATE.md section 6. Page numbers count from the 3D parameters heap.
+ */
+struct pvrsgx_fw_pb_desc {
+	/* private: */
+	u32 pad_00;
+	/* public: */
+	/** @pages: Pages in the PB. */
+	u32 pages;
+	/** @free_head: Free list head: last page << 16 | first page. */
+	u32 free_head;
+	/** @free_tail: (last page - 1) << 16. */
+	u32 free_tail;
+	/** @free_list: Device address of the free list. */
+	u32 free_list;
+	/* private: */
+	u32 pad_14;
+	/* public: */
+	/** @free_head_copy: The free list head again. */
+	u32 free_head_copy;
+	/** @free_tail_copy: The tail word again. */
+	u32 free_tail_copy;
+	/* private: */
+	u32 pad_20[2];
+	/* public: */
+	/** @ta_threshold: Pages the TA may use: pages + 0x10. */
+	u32 ta_threshold;
+	/** @zls_threshold: Pages for depth/stencil load/store: the request. */
+	u32 zls_threshold;
+	/** @global_threshold: The request. */
+	u32 global_threshold;
+	/** @pds_threshold: min(ZLS, TA) - 0x100. */
+	u32 pds_threshold;
+	/** @blocks: Device address of the PB block list. */
+	u32 blocks;
+};
+
+static_assert(sizeof(struct pvrsgx_fw_pb_desc) == 0x3c);
+
+/**
+ * struct pvrsgx_fw_render_details - Per-dataset render details
+ *
+ * docs/STATE.md section 6. Fields named unk_* hold values captured from the
+ * vendor stack whose meaning isn't known.
+ */
+struct pvrsgx_fw_render_details {
+	/** @req_base_3d: 3D request base: the PB's 1 MiB-aligned base. */
+	u32 req_base_3d;
+	/** @zls_base: Depth/stencil request base, 1 MiB aligned. */
+	u32 zls_base;
+	/** @unk_08: 0x80. */
+	u32 unk_08;
+	/** @unk_0c: 0xf0000. */
+	u32 unk_0c;
+	/** @rt_ctl: Bit 31. */
+	u32 rt_ctl;
+	/** @depth_bias_units: glPolygonOffset units. */
+	u32 depth_bias_units;
+	/** @depth_bias_factor: glPolygonOffset factor, a float. */
+	u32 depth_bias_factor;
+	/* private: */
+	u32 pad_1c;
+	/* public: */
+	/** @region_headers: This render's region header array. */
+	u32 region_headers;
+	/* private: */
+	u32 pad_24;
+	/* public: */
+	/** @region_headers_next: The next render's. */
+	u32 region_headers_next;
+	/** @zls_ctl: Depth/stencil load and store control. */
+	u32 zls_ctl;
+	/** @depth: Depth buffer address - @zls_base, twice. */
+	u32 depth[2];
+	/** @stencil: Bit 31 | stencil buffer address - @zls_base, twice. */
+	u32 stencil[2];
+	/** @bg_depth: Depth every tile starts from, a float. */
+	u32 bg_depth;
+	/** @unk_44: 0x300. */
+	u32 unk_44;
+	/** @bg_object: 0x2000000 | (background block - PB base) >> 4. */
+	u32 bg_object;
+	/* private: */
+	u32 pad_4c;
+	/* public: */
+	/** @rt_flags: RT flags, 0x88. */
+	u32 rt_flags;
+	/* private: */
+	u32 pad_54;
+	/* public: */
+	/** @unk_58: 0x30. */
+	u32 unk_58;
+	/** @pixel_event_pds: End-of-tile PDS program. */
+	u32 pixel_event_pds;
+	/** @pixel_event_rows: Its data rows. */
+	u32 pixel_event_rows;
+	/** @unk_64: 1. */
+	u32 unk_64;
+	/** @unk_68: 1. */
+	u32 unk_68;
+	/* private: */
+	u32 pad_6c[24];
+	/* public: */
+	/** @unk_cc: 0x100. */
+	u32 unk_cc;
+	/** @sync: Device address of the render-details sync word. */
+	u32 sync;
+	/* private: */
+	u32 pad_d4;
+	/* public: */
+	/** @rt_data: Device address of the RT data. */
+	u32 rt_data;
+	/** @rt_data_entry: This render's RT data entry. */
+	u32 rt_data_entry;
+	/* private: */
+	u32 pad_e0[9];
+	/* public: */
+	/** @unk_104: 1. */
+	u32 unk_104;
+	/* private: */
+	u32 pad_108[2];
+	/* public: */
+	/** @word8: Device address of an 8-byte kernel word. */
+	u32 word8;
+	/** @bg_pds_word: Device address of the background object's primary PDS word. */
+	u32 bg_pds_word;
+	/* private: */
+	u32 pad_118[9];
+	/* public: */
+	/** @unk_13c: 0x7c00000. */
+	u32 unk_13c;
+	/* private: */
+	u32 pad_140[43];
+};
+
+static_assert(offsetof(struct pvrsgx_fw_render_details, unk_cc) == 0xcc);
+static_assert(offsetof(struct pvrsgx_fw_render_details, unk_104) == 0x104);
+static_assert(offsetof(struct pvrsgx_fw_render_details, unk_13c) == 0x13c);
+static_assert(sizeof(struct pvrsgx_fw_render_details) == 0x1ec);
+
 #endif /* PVRSGX_FWIF_H */
