@@ -88,7 +88,8 @@ void sgx545_pds_disasm(const uint32_t *code, unsigned n, FILE *out);
  * A whole program as it sits in memory (data rows of DS0 DS0 DS1 DS1, then
  * code): the data words by store, then the code to the last HALT.
  */
-void sgx545_pds_disasm_program(const uint32_t *words, unsigned rows, unsigned n_code, FILE *out);
+void sgx545_pds_disasm_program(const uint32_t *words, unsigned rows,
+                               unsigned n_code, FILE *out);
 
 /* Text (the disassembler's notation) to an instruction; NULL or an error. */
 const char *sgx545_pds_asm(const char *text, struct sgx545_pds_instr *instr);
@@ -97,9 +98,10 @@ const char *sgx545_pds_asm(const char *text, struct sgx545_pds_instr *instr);
 
 struct sgx545_pds_doutu {
    /* word 0 */
-   uint8_t base;    /* USE code base register */
-   uint32_t offset; /* code offset in its 512 KB window, bytes (multiple of 8) */
-   uint8_t temps4;  /* bits 24-31: temporaries in fours */
+   uint8_t base; /* USE code base register */
+   /* code offset in its 512 KB window, bytes (multiple of 8) */
+   uint32_t offset;
+   uint8_t temps4; /* bits 24-31: temporaries in fours */
    /* word 1 */
    bool b1;    /* microkernel tasks */
    bool pixel; /* pixel tasks (b2) */
@@ -127,11 +129,13 @@ struct sgx545_pds_douti {
    bool dim2, proj;
    bool last_sample;
    /* iterate half */
-   uint8_t src;       /* set + 1; 0 position, 0x20 color, 0x22 depth plane, 0x24 pure sample */
-   bool color_prec;  /* b21 */
+   uint8_t src; /* set + 1; 0 position, 0x20 color, 0x22 depth plane, 0x24 pure
+                   sample */
+   bool color_prec;   /* b21 */
    uint8_t comps;     /* 1-4 */
    bool iterate;      /* plain iteration enabled */
-   uint8_t b25_26;    /* 3 from GL's builder, 0 on the clear's color and the background's sample */
+   uint8_t b25_26;    /* 3 from GL's builder, 0 on the clear's color and the
+                         background's sample */
    bool prec2, prec1; /* b27, b28 (mediump: prec1) */
    bool last_iter;
    /* word 1 */

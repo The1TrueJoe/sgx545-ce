@@ -10,8 +10,8 @@
  * compared with the expected words, disassembled, and the text compared
  * with the line. A line "<a> == <b>" checks another spelling instead: a and
  * b must assemble to the same words. "hazard <text>" / "safe <text>" check
- * sgx545_isa_coissue_hazard() on the instruction. setfc lines update the format-control
- * state the later lines are encoded and decoded with.
+ * sgx545_isa_coissue_hazard() on the instruction. setfc lines update the
+ * format-control state the later lines are encoded and decoded with.
  *
  *    sgx545_isa_test [-t] [-f N] file...
  *
@@ -33,7 +33,8 @@ trim(char *s)
    while (*s == ' ' || *s == '\t')
       s++;
    char *e = s + strlen(s);
-   while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n' || e[-1] == '\r'))
+   while (e > s &&
+          (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n' || e[-1] == '\r'))
       *--e = '\0';
    return s;
 }
@@ -103,8 +104,8 @@ run_file(const char *path, bool table, unsigned *count)
          (*count)++;
          const char *why = sgx545_isa_coissue_hazard(&I);
          if (!why != !want_hazard) {
-            fprintf(stderr, "%s:%u: %s: hazard %s, expected %s\n", path, lineno, t,
-                    why ? why : "none", want_hazard ? "one" : "none");
+            fprintf(stderr, "%s:%u: %s: hazard %s, expected %s\n", path, lineno,
+                    t, why ? why : "none", want_hazard ? "one" : "none");
             fails++;
          }
          continue;
@@ -116,13 +117,15 @@ run_file(const char *path, bool table, unsigned *count)
          char *alt = trim(text), *canon = trim(eq + 4);
          if (!sgx545_isa_asm_line(alt, &I, err, sizeof(err)) ||
              !sgx545_isa_asm_line(canon, &J, err, sizeof(err))) {
-            fprintf(stderr, "%s:%u: %s == %s: %s\n", path, lineno, alt, canon, err);
+            fprintf(stderr, "%s:%u: %s == %s: %s\n", path, lineno, alt, canon,
+                    err);
             fails++;
             continue;
          }
          (*count)++;
          if (sgx545_isa_encode(&I, &fc) != sgx545_isa_encode(&J, &fc)) {
-            fprintf(stderr, "%s:%u: %s and %s encode differently\n", path, lineno, alt, canon);
+            fprintf(stderr, "%s:%u: %s and %s encode differently\n", path,
+                    lineno, alt, canon);
             fails++;
          }
          continue;
@@ -139,13 +142,14 @@ run_file(const char *path, bool table, unsigned *count)
       bool ok = true;
 
       if (have_want && (lo != want[0] || hi != want[1])) {
-         fprintf(stderr, "%s:%u: %s: encoded %08x %08x, expected %08x %08x\n", path, lineno, text,
-                 lo, hi, want[0], want[1]);
+         fprintf(stderr, "%s:%u: %s: encoded %08x %08x, expected %08x %08x\n",
+                 path, lineno, text, lo, hi, want[0], want[1]);
          ok = false;
       }
-      if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)) || !same_text(dis, text)) {
-         fprintf(stderr, "%s:%u: %s: %08x %08x disassembles as: %s\n", path, lineno, text, lo, hi,
-                 dis);
+      if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)) ||
+          !same_text(dis, text)) {
+         fprintf(stderr, "%s:%u: %s: %08x %08x disassembles as: %s\n", path,
+                 lineno, text, lo, hi, dis);
          ok = false;
       }
       if (!ok)
@@ -194,16 +198,17 @@ fuzz(unsigned n, unsigned *count)
       decoded++;
       if (!sgx545_isa_asm_line(dis, &I, err, sizeof(err))) {
          if (fails++ < 40)
-            fprintf(stderr, "fuzz: %08x %08x: %s: %s\n", (uint32_t)w, (uint32_t)(w >> 32), dis,
-                    err);
+            fprintf(stderr, "fuzz: %08x %08x: %s: %s\n", (uint32_t)w,
+                    (uint32_t)(w >> 32), dis, err);
          continue;
       }
       uint64_t w2 = sgx545_isa_encode(&I, &fc);
       if (w2 != w) {
          sgx545_disasm_one(w2, &fc, dis2, sizeof(dis2));
          if (fails++ < 40)
-            fprintf(stderr, "fuzz: %08x %08x: %s -> %08x %08x %s\n", (uint32_t)w,
-                    (uint32_t)(w >> 32), dis, (uint32_t)w2, (uint32_t)(w2 >> 32), dis2);
+            fprintf(stderr, "fuzz: %08x %08x: %s -> %08x %08x %s\n",
+                    (uint32_t)w, (uint32_t)(w >> 32), dis, (uint32_t)w2,
+                    (uint32_t)(w2 >> 32), dis2);
       }
    }
    *count += decoded;

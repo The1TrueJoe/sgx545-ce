@@ -38,7 +38,8 @@ __u_case(struct encode_state *s, const struct sgx545_pds_reg *r)
 static inline enum sgx545_pds_case_ud
 __ud_case(struct encode_state *s, const struct sgx545_pds_reg *r)
 {
-   return r->file == SGX545_PDS_FILE_DS1 ? SGX545_PDS_UD_DS1 : SGX545_PDS_UD_DS0;
+   return r->file == SGX545_PDS_FILE_DS1 ? SGX545_PDS_UD_DS1
+                                         : SGX545_PDS_UD_DS0;
 }
 
 static inline enum sgx545_pds_case_s1
@@ -60,14 +61,15 @@ sgx545_pds_encode(const struct sgx545_pds_instr *instr)
 {
    struct encode_state s = {0};
 
-   return bitmask_to_uint64_t(encode__instruction(&s, NULL, (struct sgx545_pds_instr *)instr));
+   return bitmask_to_uint64_t(
+      encode__instruction(&s, NULL, (struct sgx545_pds_instr *)instr));
 }
 
-#define DATA_WORD(fn, root, type)                                                                  \
-   uint32_t fn(const struct type *v)                                                               \
-   {                                                                                               \
-      struct encode_state s = {0};                                                                 \
-      return bitmask_to_uint64_t(encode__##root(&s, NULL, (struct type *)v));                      \
+#define DATA_WORD(fn, root, type)                                              \
+   uint32_t fn(const struct type *v)                                           \
+   {                                                                           \
+      struct encode_state s = {0};                                             \
+      return bitmask_to_uint64_t(encode__##root(&s, NULL, (struct type *)v));  \
    }
 
 DATA_WORD(sgx545_pds_doutu_w0, doutu_w0, sgx545_pds_doutu)

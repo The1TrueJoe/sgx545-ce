@@ -35,7 +35,8 @@ read_sel(struct sgx545_isa_fdual_use *u, unsigned sel, unsigned slot)
 }
 
 bool
-sgx545_isa_fdual_use(const struct sgx_isa_instr *instr, struct sgx545_isa_fdual_use *u)
+sgx545_isa_fdual_use(const struct sgx_isa_instr *instr,
+                     struct sgx545_isa_fdual_use *u)
 {
    unsigned sd = instr->sd & 3;
 
@@ -131,12 +132,14 @@ sgx545_isa_coissue_hazard(const struct sgx_isa_instr *instr)
       /* the secondary reads before the primary writes (fine); the primary
        * reading what the secondary writes is a race */
       if (u.pri_reads_i & u.sec_writes_i)
-         return "the primary reads an internal register the secondary writes in the same word";
+         return "the primary reads an internal register the secondary "
+                "writes in the same word";
       return NULL;
    }
    if (instr->opc == SGX_ISA_OPC_EFO) {
       /* d naming an internal register the word writes is a race */
-      if ((instr->efo_d == 0 && instr->wi0) || (instr->efo_d == 1 && instr->wi1))
+      if ((instr->efo_d == 0 && instr->wi0) ||
+          (instr->efo_d == 1 && instr->wi1))
          return "efo's d names an internal register the same word writes";
       return NULL;
    }

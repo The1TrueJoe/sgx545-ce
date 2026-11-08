@@ -115,7 +115,8 @@ tidy(char *s)
 }
 
 bool
-sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc, char *buf, size_t size)
+sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc, char *buf,
+                  size_t size)
 {
    struct sgx545_isa_fc f = fc ? *fc : SGX545_ISA_FC_START;
    uint32_t words[2] = {(uint32_t)word, (uint32_t)(word >> 32)};
@@ -135,15 +136,16 @@ sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc, char *buf, size
    fclose(out);
 
    tidy(text);
-   bool ok =
-      !strstr(text, "no match") && !strstr(text, "unexpected bits") && !strstr(text, "dontcare");
+   bool ok = !strstr(text, "no match") && !strstr(text, "unexpected bits") &&
+             !strstr(text, "dontcare");
    snprintf(buf, size, "%s", text);
    free(text);
    return ok;
 }
 
 void
-sgx545_disasm(const uint32_t *words, unsigned n, FILE *out, const struct sgx545_isa_fc *fc)
+sgx545_disasm(const uint32_t *words, unsigned n, FILE *out,
+              const struct sgx545_isa_fc *fc)
 {
    struct sgx545_isa_fc f = fc ? *fc : SGX545_ISA_FC_START;
    char line[512];

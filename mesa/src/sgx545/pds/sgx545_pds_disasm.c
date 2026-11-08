@@ -81,11 +81,12 @@ sgx545_pds_disasm(const uint32_t *code, unsigned n, FILE *out)
 }
 
 void
-sgx545_pds_disasm_program(const uint32_t *words, unsigned rows, unsigned n_code, FILE *out)
+sgx545_pds_disasm_program(const uint32_t *words, unsigned rows, unsigned n_code,
+                          FILE *out)
 {
    for (unsigned n = 0; n < 2 * rows; n++) {
-      fprintf(out, "ds0[%2u] = %08x   ds1[%2u] = %08x\n", n, words[sgx545_pds_ds0_at(n)], n,
-              words[sgx545_pds_ds1_at(n)]);
+      fprintf(out, "ds0[%2u] = %08x   ds1[%2u] = %08x\n", n,
+              words[sgx545_pds_ds0_at(n)], n, words[sgx545_pds_ds1_at(n)]);
    }
    sgx545_pds_disasm(words + 4 * rows, n_code, out);
 }

@@ -157,33 +157,40 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
  * Operand helpers for the <map>s: encode an operand through its slot's
  * hierarchy and return NUM | BANK << 7 | EXT << 9 (src0: EXT << 8).
  */
-#define SGX_OPND(root, m, o)                                                                       \
-   ((uint32_t)bitmask_to_uint64_t(encode_##root(s, &(struct bitset_params){.MODE = (m)}, (o))))
+#define SGX_OPND(root, m, o)                                                   \
+   ((uint32_t)bitmask_to_uint64_t(                                             \
+      encode_##root(s, &(struct bitset_params){.MODE = (m)}, (o))))
 #define SGX_DST(m)    SGX_OPND(_dst, m, &src->dst)
 #define SGX_SRC(n, m) SGX_OPND(_src, m, &src->src[n])
 #define SGX_SRC0(m)   SGX_OPND(_src0, m, &src->src[0])
 #define SGX_DST1()    SGX_OPND(_dst1, 0, &src->dst)
 /* Slots without an extension bit: i<n> is r(124 + n) there. */
-#define SGX_DSTX(m)    SGX_OPND(_dst, m, sgx_isa_noext(&src->dst, &(struct sgx_isa_src){0}))
-#define SGX_SRCX(n, m) SGX_OPND(_src, m, sgx_isa_noext(&src->src[n], &(struct sgx_isa_src){0}))
-#define SGX_IS_IMM(n)  (src->src[n].file == SGX_ISA_FILE_IMM)
+#define SGX_DSTX(m)                                                            \
+   SGX_OPND(_dst, m, sgx_isa_noext(&src->dst, &(struct sgx_isa_src){0}))
+#define SGX_SRCX(n, m)                                                         \
+   SGX_OPND(_src, m, sgx_isa_noext(&src->src[n], &(struct sgx_isa_src){0}))
+#define SGX_IS_IMM(n) (src->src[n].file == SGX_ISA_FILE_IMM)
 /* Without a destination, test's dst field holds nodst (default 0x280). */
-#define SGX_TDST(m)                                                                                \
-   (src->dst.file != SGX_ISA_FILE_NONE ? SGX_DST(m) : (src->has_nodst ? src->nodst : 0x280))
+#define SGX_TDST(m)                                                            \
+   (src->dst.file != SGX_ISA_FILE_NONE                                         \
+       ? SGX_DST(m)                                                            \
+       : (src->has_nodst ? src->nodst : 0x280))
 /* rlp's src2 slot as one 10-bit value (default 0x300, the unused pattern) */
 #define SGX_UNUSED2() (src->has_unused2 ? src->unused2 : 0x300)
-/* A named <expr> of the #instruction hierarchy, e.g. SGX_EXPR(__float_smode). */
+/* A named <expr> of the #instruction hierarchy: SGX_EXPR(__float_smode). */
 #define SGX_EXPR(n) __instruction_expr_##n(s, p, src)
 
 #include "sgx545-isa-encode.h"
 
 uint64_t
-sgx545_isa_encode(const struct sgx_isa_instr *instr, const struct sgx545_isa_fc *fc)
+sgx545_isa_encode(const struct sgx_isa_instr *instr,
+                  const struct sgx545_isa_fc *fc)
 {
    struct sgx545_isa_fc f = fc ? *fc : SGX545_ISA_FC_START;
    struct encode_state s = {
       .gen = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
    };
 
-   return bitmask_to_uint64_t(encode__instruction(&s, NULL, (struct sgx_isa_instr *)instr));
+   return bitmask_to_uint64_t(
+      encode__instruction(&s, NULL, (struct sgx_isa_instr *)instr));
 }

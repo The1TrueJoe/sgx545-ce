@@ -37,8 +37,10 @@ typedef struct {
  *       ispb.line_width = 0x10;
  *    }
  */
-#define sgx545_pack(dst, T, name)                                                                  \
-   for (struct SGX545_##T name = {SGX545_##T##_header}, *_sgx545_loop_##name = &name;              \
-        _sgx545_loop_##name != NULL; SGX545_##T##_pack((dst), &name), _sgx545_loop_##name = NULL)
+#define sgx545_pack(dst, T, name)                                              \
+   for (struct SGX545_##T name = {SGX545_##T##_header},                        \
+                          *_sgx545_loop_##name = &name;                        \
+        _sgx545_loop_##name != NULL;                                           \
+        SGX545_##T##_pack((dst), &name), _sgx545_loop_##name = NULL)
 
 #endif

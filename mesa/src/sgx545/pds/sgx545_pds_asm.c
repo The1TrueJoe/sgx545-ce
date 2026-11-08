@@ -94,8 +94,9 @@ static const struct {
 };
 
 static const char *const douts[] = {
-   [SGX545_PDS_DOUTI] = "douti", [SGX545_PDS_DOUTD] = "doutd", [SGX545_PDS_DOUTT] = "doutt",
-   [SGX545_PDS_DOUTU] = "doutu", [SGX545_PDS_DOUTA] = "douta",
+   [SGX545_PDS_DOUTI] = "douti", [SGX545_PDS_DOUTD] = "doutd",
+   [SGX545_PDS_DOUTT] = "doutt", [SGX545_PDS_DOUTU] = "doutu",
+   [SGX545_PDS_DOUTA] = "douta",
 };
 
 static const char *
@@ -227,7 +228,8 @@ operands(struct cursor *c, struct sgx545_pds_instr *in)
    case SGX545_PDS_OPC_OP0XD_S1:
    case SGX545_PDS_OPC_OP0X4_S1:
    case SGX545_PDS_OPC_OP0X6_S1:
-      if (!word(c, &in->dst) || in->dst.file == SGX545_PDS_FILE_IN || in->dst.hi)
+      if (!word(c, &in->dst) || in->dst.file == SGX545_PDS_FILE_IN ||
+          in->dst.hi)
          return "bad destination";
       if (!word(c, &in->src1) || in->src1.file == SGX545_PDS_FILE_DS1)
          return "src1 is ds0 or an input";
@@ -250,7 +252,8 @@ operands(struct cursor *c, struct sgx545_pds_instr *in)
       return NULL;
    case SGX545_PDS_OPC_SHL:
    case SGX545_PDS_OPC_SHR:
-      if (!word(c, &in->dst) || in->dst.hi || !word(c, &in->src1) || in->src1.hi)
+      if (!word(c, &in->dst) || in->dst.hi || !word(c, &in->src1) ||
+          in->src1.hi)
          return "bad operands";
       if (!eat(c, "#") || !number(c, &n))
          return "expected #amount";

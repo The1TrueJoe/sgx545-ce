@@ -48,7 +48,8 @@ lookup(const char *const *names, unsigned n, const char *s)
 
 #define LOOKUP(tbl, s) lookup(tbl, ARRAY_LEN(tbl), s)
 
-static const char *const pck_fmt[] = {"u8", "s8", "o8", "u16", "s16", "f16", "f32", "c10"};
+static const char *const pck_fmt[] = {"u8",  "s8",  "o8",  "u16",
+                                      "s16", "f16", "f32", "c10"};
 static const char *const movc_cond[] = {"z", "nz", "ltz", "gez"};
 static const char *const movc_type[] = {NULL, "u8", "i16", "i32", "f32", "c10"};
 static const char *const smp_dim[] = {"1d", "2d", "3d", "dim3"};
@@ -64,15 +65,18 @@ static const char *const rnd_names[] = {"ne", "down", "up", "zero"};
 static const char *const f16swz[] = {NULL, "ll", "hh", "f32"};
 
 static const char *const test_alu[64] = {
-   [0x00] = "fadd",    [0x03] = "fsubflr", [0x04] = "frcp",    [0x05] = "frsq",
-   [0x06] = "flog2",   [0x07] = "fexp2",   [0x08] = "fdp",     [0x09] = "fmin",
-   [0x0a] = "fmax",    [0x0b] = "fdsx",    [0x0c] = "fdsy",    [0x0d] = "fmul",
-   [0x0e] = "fsub",    [0x16] = "iadd16",  [0x17] = "isub16",  [0x18] = "imul16",
-   [0x19] = "iaddu16", [0x1a] = "isubu16", [0x1b] = "imulu16", [0x1c] = "iadd32",
-   [0x1d] = "iaddu32", [0x20] = "i8op0",   [0x21] = "i8op1",   [0x22] = "i8op2",
-   [0x23] = "i8op3",   [0x24] = "i8op4",   [0x25] = "i8op5",   [0x26] = "i8op6",
-   [0x27] = "fpadd8",  [0x28] = "fpsub8",  [0x30] = "and",     [0x31] = "or",
-   [0x32] = "xor",     [0x33] = "shl",     [0x34] = "shr",     [0x35] = "rol",
+   [0x00] = "fadd",    [0x03] = "fsubflr", [0x04] = "frcp",
+   [0x05] = "frsq",    [0x06] = "flog2",   [0x07] = "fexp2",
+   [0x08] = "fdp",     [0x09] = "fmin",    [0x0a] = "fmax",
+   [0x0b] = "fdsx",    [0x0c] = "fdsy",    [0x0d] = "fmul",
+   [0x0e] = "fsub",    [0x16] = "iadd16",  [0x17] = "isub16",
+   [0x18] = "imul16",  [0x19] = "iaddu16", [0x1a] = "isubu16",
+   [0x1b] = "imulu16", [0x1c] = "iadd32",  [0x1d] = "iaddu32",
+   [0x20] = "i8op0",   [0x21] = "i8op1",   [0x22] = "i8op2",
+   [0x23] = "i8op3",   [0x24] = "i8op4",   [0x25] = "i8op5",
+   [0x26] = "i8op6",   [0x27] = "fpadd8",  [0x28] = "fpsub8",
+   [0x30] = "and",     [0x31] = "or",      [0x32] = "xor",
+   [0x33] = "shl",     [0x34] = "shr",     [0x35] = "rol",
    [0x37] = "asr",
 };
 
@@ -100,7 +104,8 @@ parse_test_cond(const char *s)
          return named[i].v;
    }
    /* s<sign>z<zero><o|a> */
-   if (strlen(s) == 5 && s[0] == 's' && s[2] == 'z' && (s[4] == 'o' || s[4] == 'a'))
+   if (strlen(s) == 5 && s[0] == 's' && s[2] == 'z' &&
+       (s[4] == 'o' || s[4] == 'a'))
       return (s[1] - '0') | (s[3] - '0') << 2 | (s[4] == 'a') << 4;
    return -1;
 }
@@ -212,8 +217,8 @@ parse_operand(struct asm_ctx *c, char *s, struct sgx_isa_src *o)
 
    for (unsigned i = 0; i < ARRAY_LEN(files); i++) {
       size_t l = strlen(files[i].prefix);
-      if (!strncmp(base, files[i].prefix, l) && isdigit((unsigned char)base[l]) &&
-          parse_int(base + l, &v)) {
+      if (!strncmp(base, files[i].prefix, l) &&
+          isdigit((unsigned char)base[l]) && parse_int(base + l, &v)) {
          o->file = files[i].file;
          o->num = (uint32_t)v;
          return true;
@@ -242,7 +247,8 @@ parse_hash(struct asm_ctx *c, const char *s, long *v)
 static bool
 parse_pred(const char *s, bool short_form, uint8_t *pred)
 {
-   static const char *const p3[] = {NULL, "p0", "p1", "p2", "p3", "!p0", "!p1", "pn"};
+   static const char *const p3[] = {NULL, "p0",  "p1",  "p2",
+                                    "p3", "!p0", "!p1", "pn"};
    static const char *const p2[] = {NULL, "p0", "p1", "!p0"};
    int v = short_form ? LOOKUP(p2, s) : LOOKUP(p3, s);
    if (v < 0)
@@ -266,25 +272,30 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
    }
 
    /* clang-format off */
-#define FLAG(name, field) if (!strcmp(item, name) && !eq) { I->field = true; return true; }
-#define VAL(name, field)  if (!strcmp(item, name) && eq && v >= 0) { I->field = v; return true; }
+#define FLAG(name, field)                                                     \
+   if (!strcmp(item, name) && !eq) { I->field = true; return true; }
+#define VAL(name, field)                                                      \
+   if (!strcmp(item, name) && eq && v >= 0) { I->field = v; return true; }
    FLAG("skipinv", skipinv) FLAG("nosched", nosched) FLAG("syncs", syncs)
    FLAG("end", end) FLAG("fmt", fmt) FLAG("moe", moe)
    FLAG("inc0", inc[0]) FLAG("inc1", inc[1]) FLAG("inc2", inc[2])
-   FLAG("f16d", f16d) FLAG("f1_1", f1_1) FLAG("f1_26", f1_26) FLAG("f2_0", f2_0)
-   FLAG("partial", partial) FLAG("preinc", preinc) FLAG("postinc", postinc)
-   FLAG("range", range) FLAG("f2_2", f2_2) FLAG("f2_3", f2_3) FLAG("f2_9", f2_9)
-   FLAG("f3_13", f3_13) FLAG("syncend", syncend) FLAG("xsyncend", xsyncend)
-   FLAG("link", link) FLAG("f1_22", f1_22) FLAG("f2_26", f2_26) FLAG("f3_5", f3_5)
+   FLAG("f16d", f16d) FLAG("f1_1", f1_1) FLAG("f1_26", f1_26)
+   FLAG("f2_0", f2_0) FLAG("partial", partial) FLAG("preinc", preinc)
+   FLAG("postinc", postinc) FLAG("range", range) FLAG("f2_2", f2_2)
+   FLAG("f2_3", f2_3) FLAG("f2_9", f2_9) FLAG("f3_13", f3_13)
+   FLAG("syncend", syncend) FLAG("xsyncend", xsyncend) FLAG("link", link)
+   FLAG("f1_22", f1_22) FLAG("f2_26", f2_26) FLAG("f3_5", f3_5)
    FLAG("f10", f10) FLAG("f12", f12) FLAG("f13", f13) FLAG("f3_20", f3_20)
    FLAG("f3_6", f3_6) FLAG("f3_11", f3_11) FLAG("f3_12", f3_12)
-   FLAG("sel34", sel34) FLAG("sel36", sel36) FLAG("sel37", sel37) FLAG("sel43", sel43)
-   FLAG("f2_25", f2_25) FLAG("scale", scale) FLAG("rint", scale)
+   FLAG("sel34", sel34) FLAG("sel36", sel36) FLAG("sel37", sel37)
+   FLAG("sel43", sel43) FLAG("f2_25", f2_25) FLAG("scale", scale)
+   FLAG("rint", scale)
    VAL("mask", mask) VAL("drc", drc) VAL("chan", chan) VAL("a3f", a3f)
    VAL("dmask", dmask) VAL("rot", rot) VAL("path", path)
    VAL("n", n) VAL("imm", imm) VAL("rate", rate) VAL("wait", wait)
-   VAL("am0", am4[0]) VAL("am1", am4[1]) VAL("am2", am4[2]) VAL("am3", am4[3])
-   VAL("lim0", lim[0]) VAL("lim1", lim[1]) VAL("lim2", lim[2])
+   VAL("am0", am4[0]) VAL("am1", am4[1]) VAL("am2", am4[2])
+   VAL("am3", am4[3]) VAL("lim0", lim[0]) VAL("lim1", lim[1])
+   VAL("lim2", lim[2])
 #undef FLAG
 #undef VAL
       /* clang-format on */
@@ -300,7 +311,8 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
       I->nodst = v;
       return true;
    }
-   /* the classes with h21 rcnt write "rcnt" or "rcnt rpt=n" (checked at the end) */
+   /* the classes with h21 rcnt write "rcnt" or "rcnt rpt=n" (checked at the
+    * end) */
    if (!strcmp(item, "rcnt") && !eq) {
       I->rcnt = true;
       return true;
@@ -309,7 +321,9 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
       I->rpt = v;
       return true;
    }
-   if ((!strcmp(item, "swz0") || !strcmp(item, "swz1") || !strcmp(item, "swz2")) && eq) {
+   if ((!strcmp(item, "swz0") || !strcmp(item, "swz1") ||
+        !strcmp(item, "swz2")) &&
+       eq) {
       int sw = v >= 0 ? v : LOOKUP(f16swz, val);
       if (sw < 0 || sw > 3)
          return fail(c, "bad swizzle '%s'", val);
@@ -331,7 +345,9 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
          I->sc10 = true;
       return true;
    }
-   return sgx545_isa_asm_item_int(I, item, val) ? true : fail(c, "unknown item '%s'", item);
+   return sgx545_isa_asm_item_int(I, item, val)
+             ? true
+             : fail(c, "unknown item '%s'", item);
 }
 
 /*
@@ -341,8 +357,8 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
  * U #temps4 (phas.i).
  */
 static bool
-parse_operands(struct asm_ctx *c, struct sgx_isa_instr *I, const char *pat, char **ops,
-               unsigned nops)
+parse_operands(struct asm_ctx *c, struct sgx_isa_instr *I, const char *pat,
+               char **ops, unsigned nops)
 {
    unsigned vi = 0, ai = 0;
 
@@ -597,7 +613,8 @@ has_pred(enum sgx_isa_opc opc)
 static bool
 uses_pred2(enum sgx_isa_opc opc)
 {
-   return opc == SGX_ISA_OPC_ATST8 || opc == SGX_ISA_OPC_DEPTHF || sgx545_isa_asm_pred2_int(opc);
+   return opc == SGX_ISA_OPC_ATST8 || opc == SGX_ISA_OPC_DEPTHF ||
+          sgx545_isa_asm_pred2_int(opc);
 }
 
 /* Split "a, b, c" at top-level commas. */
@@ -619,7 +636,8 @@ split_operands(char *s, char **ops, unsigned max)
 }
 
 bool
-sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err, size_t errsize)
+sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
+                    size_t errsize)
 {
    struct asm_ctx c = {err, errsize};
    char buf[512], *s, *items = NULL;
@@ -662,7 +680,8 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err, size_t
    unsigned nparts = 0;
    char mbuf[64];
    snprintf(mbuf, sizeof(mbuf), "%s", mnem);
-   for (char *t = strtok(mbuf, "."); t && nparts < ARRAY_LEN(parts); t = strtok(NULL, "."))
+   for (char *t = strtok(mbuf, "."); t && nparts < ARRAY_LEN(parts);
+        t = strtok(NULL, "."))
       parts[nparts++] = t;
    if (!nparts)
       return fail(&c, "empty line%s", "");
@@ -683,8 +702,9 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err, size_t
 
    if (I->opc) {
       /* done */
-   } else if (!strcmp(base, "and") || !strcmp(base, "or") || !strcmp(base, "xor") ||
-              !strcmp(base, "shl") || !strcmp(base, "rol") || !strcmp(base, "shr") ||
+   } else if (!strcmp(base, "and") || !strcmp(base, "or") ||
+              !strcmp(base, "xor") || !strcmp(base, "shl") ||
+              !strcmp(base, "rol") || !strcmp(base, "shr") ||
               !strcmp(base, "asr")) {
       if (nparts != 2 || strcmp(parts[1], "inv"))
          return fail(&c, "bad bitwise mnemonic '%s'", mnem);
@@ -808,7 +828,8 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err, size_t
       I->fmt |= I->src[k].fmt != SGX_ISA_FMT_NONE;
    I->fmt |= I->dst.fmt != SGX_ISA_FMT_NONE;
 
-   /* ldr/str: a 14-bit immediate address is fine; atst8 writes its pdst unless .nw */
+   /* ldr/str: a 14-bit immediate address is fine; atst8 writes its pdst unless
+    * .nw */
    if (items) {
       for (char *t = strtok(items, " "); t; t = strtok(NULL, " ")) {
          if (!parse_item(&c, I, t))
@@ -827,11 +848,13 @@ sgx545_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err, size_t
     * two's complement: -64..127; the bitwise classes' src2 takes 16 bits,
     * ldr/str's address 14 (ISA.md "MOE control", op 6) */
    for (unsigned k = 0; k < 3; k++) {
-      bool wide = k == 2 && (I->opc == SGX_ISA_OPC_AND || I->opc == SGX_ISA_OPC_OR ||
-                             I->opc == SGX_ISA_OPC_XOR || I->opc == SGX_ISA_OPC_SHL ||
-                             I->opc == SGX_ISA_OPC_SHR || I->opc == SGX_ISA_OPC_ROL ||
-                             I->opc == SGX_ISA_OPC_ASR);
-      bool addr = k == 2 && (I->opc == SGX_ISA_OPC_LDR || I->opc == SGX_ISA_OPC_STR);
+      bool wide =
+         k == 2 && (I->opc == SGX_ISA_OPC_AND || I->opc == SGX_ISA_OPC_OR ||
+                    I->opc == SGX_ISA_OPC_XOR || I->opc == SGX_ISA_OPC_SHL ||
+                    I->opc == SGX_ISA_OPC_SHR || I->opc == SGX_ISA_OPC_ROL ||
+                    I->opc == SGX_ISA_OPC_ASR);
+      bool addr =
+         k == 2 && (I->opc == SGX_ISA_OPC_LDR || I->opc == SGX_ISA_OPC_STR);
       int32_t n = (int32_t)I->src[k].num;
       if (I->src[k].file == SGX_ISA_FILE_IMM && !wide &&
           (addr ? n < 0 || n > 0x3fff : n < -64 || n > 127)) {

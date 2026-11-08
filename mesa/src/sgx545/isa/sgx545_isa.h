@@ -47,8 +47,8 @@ enum sgx_isa_fmt {
 };
 
 struct sgx_isa_src {
-   uint8_t file;   /* enum sgx_isa_file */
-   uint8_t fmt;    /* enum sgx_isa_fmt: number bit 6 under format select/control */
+   uint8_t file; /* enum sgx_isa_file */
+   uint8_t fmt; /* enum sgx_isa_fmt: number bit 6 under format select/control */
    uint8_t half;   /* F16 half (0 lo, 1 hi) where F16 numbers count halves */
    uint8_t ixbank; /* IX: 0 r, 1 o, 2 pa, 3 sa */
    uint8_t ixreg;  /* IX: 1 or 2 */
@@ -61,7 +61,8 @@ struct sgx_isa_instr {
    enum sgx_isa_opc opc;
 
    /* Common */
-   uint8_t pred; /* the class's predicate field value (enum sgx_isa_pred3/pred2) */
+   uint8_t
+      pred; /* the class's predicate field value (enum sgx_isa_pred3/pred2) */
    bool skipinv, nosched, syncs, end;
    bool fmt; /* format select */
    bool moe, inc[3];
@@ -74,11 +75,12 @@ struct sgx_isa_instr {
 
    /* float */
    bool f16d;
-   bool sf16, sc10; /* hw 1: the source is F16 (h7) / C10 (h8); both may be set */
-   uint8_t chan;    /* hw1 chan, test chan */
-   uint8_t swz[3];  /* fmad16, enum sgx_isa_f16swz */
-   uint8_t cp[2];   /* fdpc / fddpc clip planes */
-   uint8_t idst;    /* fddp / fddpc second destination i0/i1 */
+   bool sf16,
+      sc10;      /* hw 1: the source is F16 (h7) / C10 (h8); both may be set */
+   uint8_t chan; /* hw1 chan, test chan */
+   uint8_t swz[3]; /* fmad16, enum sgx_isa_f16swz */
+   uint8_t cp[2];  /* fdpc / fddpc clip planes */
+   uint8_t idst;   /* fddp / fddpc second destination i0/i1 */
 
    /* moves */
    uint8_t cond; /* movc, enum sgx_isa_movc_cond */
@@ -99,7 +101,8 @@ struct sgx_isa_instr {
    bool has_nodst;   /* without a destination, the dst field holds nodst */
    uint16_t nodst;   /* (default 0x280 when has_nodst is false) */
    bool has_unused2; /* rlp: src2's slot as one 10-bit value is unused2 */
-   uint16_t unused2; /* (default 0x300, the unused pattern, when has_unused2 is false) */
+   uint16_t unused2; /* (default 0x300, the unused pattern, when has_unused2 is
+                        false) */
    bool f2_0;
 
    /* bitwise */
@@ -166,16 +169,19 @@ struct sgx545_isa_fc {
 #define SGX545_ISA_FC_START ((struct sgx545_isa_fc){.c10 = true, .f16 = false})
 
 /* Encode one instruction. fc may be NULL (program-start state). */
-uint64_t sgx545_isa_encode(const struct sgx_isa_instr *instr, const struct sgx545_isa_fc *fc);
+uint64_t sgx545_isa_encode(const struct sgx_isa_instr *instr,
+                           const struct sgx545_isa_fc *fc);
 
 /*
  * Disassemble n instructions (low word first) to out, one per line.
  * Format control is tracked through setfc from fc (NULL: program start).
  */
-void sgx545_disasm(const uint32_t *words, unsigned n, FILE *out, const struct sgx545_isa_fc *fc);
+void sgx545_disasm(const uint32_t *words, unsigned n, FILE *out,
+                   const struct sgx545_isa_fc *fc);
 
-/* One instruction to a string (no newline); returns false if nothing matched. */
-bool sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc, char *buf, size_t size);
+/* One instruction to a string (no newline); false if nothing matched. */
+bool sgx545_disasm_one(uint64_t word, const struct sgx545_isa_fc *fc, char *buf,
+                       size_t size);
 
 /*
  * Co-issue (ISA.md "fdual for a compiler", "efo"). What an fdual's two
@@ -190,7 +196,8 @@ struct sgx545_isa_fdual_use {
    bool settled;
 };
 
-bool sgx545_isa_fdual_use(const struct sgx_isa_instr *instr, struct sgx545_isa_fdual_use *use);
+bool sgx545_isa_fdual_use(const struct sgx_isa_instr *instr,
+                          struct sgx545_isa_fdual_use *use);
 
 /*
  * A same-word race the hardware shows (an fdual primary reading an internal
