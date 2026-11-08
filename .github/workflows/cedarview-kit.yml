@@ -35,8 +35,9 @@ jobs:
         run: |
           set -eux
           id=${{ inputs.kernel_run }}
-          [ -n "$id" ] || id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=1" \
-            -q '.artifacts[0].workflow_run.id')
+          [ -n "$id" ] || id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=20" \
+            -q '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+          [ -n "$id" ] || { echo "::error::no powervr-sgx-cedarview artifact: run powervr-sgx.yml on m2-drm first"; exit 1; }
           gh run download "$id" -R "$GITHUB_REPOSITORY" -n powervr-sgx-cedarview -D kernel
           cat kernel/version
           echo "KERNEL_RUN=$id" >> "$GITHUB_ENV"
