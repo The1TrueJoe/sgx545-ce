@@ -100,7 +100,7 @@ for arch in $ARCHES; do
 			-Dlibunwind=disabled -Dlmsensors=disabled \
 			-Dallow-fallback-for=libdrm -Dlibdrm:tests=false
 	fi
-	ninja -C "$O/build"
+	ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test
 	rm -rf "$O/install"
 	DESTDIR="$O/install" meson install -C "$O/build" --no-rebuild --quiet
 	cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/install/usr/lib/"

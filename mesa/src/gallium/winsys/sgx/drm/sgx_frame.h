@@ -67,9 +67,11 @@ struct sgxws_kif;
 /* the connection to the kernel driver; a backend's device embeds it first */
 struct sgxws_dev {
    const struct sgxws_kif *kif;
-   uint32_t heap_base[16];     /* device address of each heap, by heap id */
-   uint8_t usse_base_index[2]; /* the first code base register of the pixel,
-                                  vertex USSE heap */
+   struct sgxws_device_info info; /* filled by the backend; PCI ids by
+                                     sgxws_dev_create */
+   uint32_t heap_base[16];        /* device address of each heap, by heap id */
+   uint8_t usse_base_index[2];    /* the first code base register of the pixel,
+                                     vertex USSE heap */
    int verbose;
    bool flush_rt; /* sgxws_dev_options */
    unsigned frame_gap_us;

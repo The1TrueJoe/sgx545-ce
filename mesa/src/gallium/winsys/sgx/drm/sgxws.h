@@ -111,7 +111,7 @@ struct sgxws_prog {
  * dst.rgb = (s1 * c1) cop (s2 * c2), dst.a = (s1.a * a1) aop (s2.a * a2),
  * s1 the shader's colour, s2 the tile's; with swap the sources trade places
  * (sop2 o0, o0, pa<c>), for a reverse subtract.  The DDK's SRC_ALPHA,
- * ONE_MINUS_SRC_ALPHA draw is c1=a1=s1a, c2=a2=1-s1a, add (EA3). */
+ * ONE_MINUS_SRC_ALPHA draw is c1=a1=s1a, c2=a2=1-s1a, add. */
 enum sgxws_bsel {
    SGXWS_BS_ZERO,
    SGXWS_BS_S1,
@@ -126,7 +126,7 @@ enum sgxws_bop { SGXWS_BOP_ADD, SGXWS_BOP_SUB, SGXWS_BOP_MIN, SGXWS_BOP_MAX };
 /* The colour epilogue: blend (sop2), then the colour mask.  A colour mask is
  *    sopwm o0, pa<c>, pa<c> [skipinv end mask=wmask c1=zero c2=zero cop=max
  * aop=max] after the colour, a bit per byte of the packed BGRA8 (B b0, G b1, R
- * b2, A b3), as the DDK's glColorMask draws (EA3); with a blend before it, the
+ * b2, A b3), as the DDK's glColorMask draws; with a blend before it, the
  * sop2 writes pa<c> back and doesn't end the program. */
 struct sgxws_blend {
    uint8_t blend;          /* the sop2 below */
@@ -283,6 +283,16 @@ struct sgxws_dev_options {
 struct sgxws_dev *sgxws_dev_create(int fd,
                                    const struct sgxws_dev_options *opts);
 void sgxws_dev_destroy(struct sgxws_dev *d);
+
+/* What the GPU is and what it renders to, as its kernel driver reports it. */
+struct sgxws_device_info {
+   uint32_t core_id;       /* EUR_CR_CORE_ID */
+   uint32_t core_revision; /* EUR_CR_CORE_REVISION */
+   uint32_t rt_max_width, rt_max_height, rt_max_samples;
+   uint16_t pci_vendor, pci_device; /* 0 when the GPU is not a PCI function */
+};
+
+const struct sgxws_device_info *sgxws_dev_info(const struct sgxws_dev *d);
 
 int sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
                    uint32_t size, uint32_t align);

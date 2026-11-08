@@ -7,7 +7,7 @@
  * sgx_frame_test: the winsys on its own, no Mesa.  Draws the probe's
  * reference scene (clear (0, 0, 0.5, 1), a green triangle) for n frames in
  * one context and checks every frame's pixels against the first; frame k
- * clears with red = k/n when -r is given (probe-st's PROBE_FRAMES).
+ * clears with red = k/n when -r is given.
  *
  *   sgx_frame_test [-d node] [-n frames] [-r] [-c] [-f] [-v] [-T] [-o last.bin]
  *     -d   the kernel driver's node (default: /dev/dri/renderD128 if it is

@@ -73,7 +73,8 @@ libsgxwinsys = static_library(
   gnu_symbol_visibility : 'hidden',
 )
 
-# the winsys on its own, no Mesa: mesa/build.sh runs it on the EA
+# The winsys on its own, without the gallium driver: a hardware check of the
+# kernel interface, built only when asked for (ninja sgx_frame_test).
 sgx_frame_test = executable(
   'sgx_frame_test',
   files('sgx_frame_test.c'), sgx_ws_files,
@@ -81,6 +82,6 @@ sgx_frame_test = executable(
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
   dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb],
-  build_by_default : true,
+  build_by_default : false,
   install : false,
 )
