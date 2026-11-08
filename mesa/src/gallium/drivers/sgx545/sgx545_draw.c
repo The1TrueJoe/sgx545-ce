@@ -21,6 +21,7 @@
 
 #include "sgx545_context.h"
 #include "sgx545_program.h"
+#include "sgx_compiler.h"
 #include "sgx545_resource.h"
 #include "sgx545_screen.h"
 #include "sgx545_texture.h"
@@ -304,6 +305,10 @@ struct fetch {
    enum pipe_format format;
    unsigned dwords;             /* dwords it fills in the vertex */
    bool defaults;               /* missing components 0, 0, 0, 1 (compiled shaders) */
+   /* the bytes as they are, for a vertex shader that unpacks them
+    * (SGX545_DEBUG=zerocopy, sgx545_shader.vtx_fmt): raw_bytes of them */
+   bool raw;
+   unsigned raw_bytes;
    struct sgx545_resource *res; /* the buffer, NULL for client memory */
    uint32_t offset;             /* where in it */
    unsigned vb;                 /* its vertex buffer binding */
@@ -323,6 +328,7 @@ setup_fetch(struct sgx545_context *ctx, unsigned e, struct fetch *f)
    vb = &ctx->vertex_buffers[ve->vertex_buffer_index];
    f->vb = ve->vertex_buffer_index;
    f->res = NULL;
+   f->raw = false;
    if (vb->is_user_buffer) {
       f->base = vb->buffer.user;
    } else if (vb->buffer.resource) {
@@ -345,6 +351,10 @@ fetch_vertex(const struct fetch *f, unsigned index, uint32_t *out)
    const uint8_t *src = f->base + (size_t)index * f->stride;
    float v[4] = { 0, 0, 0, 1 };
 
+   if (f->raw) {
+      memcpy(out, src, f->raw_bytes);
+      return;
+   }
    if (!f->defaults && (f->format == PIPE_FORMAT_R32G32_FLOAT ||
                         f->format == PIPE_FORMAT_R32G32B32_FLOAT ||
                         f->format == PIPE_FORMAT_R32G32B32A32_FLOAT)) {
@@ -392,6 +402,11 @@ fetch_range(const struct fetch *f, unsigned first, unsigned n, uint32_t *dst, un
    if (!f->defaults) {
       for (unsigned i = 0; i < n; i++)
          fetch_vertex(f, first + i, dst + i * vertex_dwords);
+      return;
+   }
+   if (f->raw) {
+      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords)
+         memcpy(o, src, f->raw_bytes);
       return;
    }
    switch (f->format) {
@@ -756,7 +771,7 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    for (unsigned e = 0; e < n_fetch; e++) {
       if (!f[e].defaults)
          return false;
-      key.el[e].format = f[e].format;
+      key.el[e].format = f[e].format | (f[e].raw ? 0x80000000u : 0);
       key.el[e].stride = f[e].stride;
       if (!f[e].stride) {
          fetch_vertex(&f[e], 0, key.el[e].konst);
@@ -844,10 +859,26 @@ vcache_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    return true;
 }
 
-/* f32 inputs DMAed where they are (SGX545_DEBUG=zerocopy): a buffer's device
+/* an input format the compiler unpacks (sgx_compile_options.vtx_fmt), and
+ * the bytes a vertex has of it */
+static bool
+vtx_format(enum pipe_format format, uint8_t *fmt, unsigned *bytes)
+{
+   switch (format) {
+   case PIPE_FORMAT_R32_FLOAT: *fmt = SGX_VF_F32_1; *bytes = 4; return true;
+   case PIPE_FORMAT_R32G32_FLOAT: *fmt = SGX_VF_F32_2; *bytes = 8; return true;
+   case PIPE_FORMAT_R32G32B32_FLOAT: *fmt = SGX_VF_F32_3; *bytes = 12; return true;
+   case PIPE_FORMAT_R32G32B32A32_FLOAT: *fmt = SGX_VF_F32_4; *bytes = 16; return true;
+   case PIPE_FORMAT_R8G8B8A8_UNORM: *fmt = SGX_VF_UNORM8_4; *bytes = 4; return true;
+   case PIPE_FORMAT_R16G16_SSCALED: *fmt = SGX_VF_SSCALED16_2; *bytes = 4; return true;
+   default: return false;
+   }
+}
+
+/* raw inputs DMAed where they are (SGX545_DEBUG=zerocopy): a buffer's device
  * copy in place, a client array's bytes copied as they are, one block per
- * binding; the missing components are the PDS's (sgxws_fetch defaults).
- * Draws up to the index limit; the rest take the gather. */
+ * binding; the vertex shader unpacks them.  Draws up to the index limit; the
+ * rest take the gather, raw too. */
 static bool
 zc_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
         const struct pipe_draw_start_count_bias *draw, const void *indices, const struct fetch *f,
@@ -869,12 +900,7 @@ zc_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
    if (!out_count || out_count > SGXWS_MAX_INDICES || n_fetch > PIPE_MAX_ATTRIBS)
       return false;
    for (unsigned e = 0; e < n_fetch; e++) {
-      unsigned n = util_format_get_nr_components(f[e].format);
-
-      if (f[e].format != PIPE_FORMAT_R32_FLOAT && f[e].format != PIPE_FORMAT_R32G32_FLOAT &&
-          f[e].format != PIPE_FORMAT_R32G32B32_FLOAT && f[e].format != PIPE_FORMAT_R32G32B32A32_FLOAT)
-         return false;
-      if (!f[e].defaults || f[e].dwords != 4 || n > 4 || (f[e].stride & 3) || f[e].stride > 0xffff)
+      if (!f[e].raw || f[e].dwords != 4 || (f[e].stride & 3) || f[e].stride > 0xffff)
          return false;
    }
    /* the vertices the draw uses: in order, or through 16-bit indices from lo */
@@ -900,9 +926,9 @@ zc_draw(struct sgx545_context *ctx, const struct pipe_draw_info *info,
       hi = draw->start + count - 1;
    }
    for (unsigned e = 0; e < n_fetch; e++) {
-      unsigned n = util_format_get_nr_components(f[e].format);
+      unsigned n = f[e].raw_bytes / 4;
 
-      zf[e] = (struct sgxws_fetch){ .stride = f[e].stride, .dwords = n, .reg = 4 * e, .defaults = true };
+      zf[e] = (struct sgxws_fetch){ .stride = f[e].stride, .dwords = n, .reg = 4 * e };
       if (f[e].res) {
          if (!sgx545_buffer_vbo(ctx, f[e].res))
             return false;
@@ -1014,7 +1040,9 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    float color[4];
    uint32_t prim;
    uint32_t sampled = 0;        /* the sampler units this draw reads */
-   bool compiled;
+   bool compiled, raw = false;
+   uint8_t vfmt[16] = { 0 };
+   unsigned raw_bytes[16];
 
    if (indirect || !ctx->vs || !ctx->fs)
       return;
@@ -1091,16 +1119,26 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
    compiled = ctx->vs->kind == SGX545_SHADER_COMPILED;
    if (compiled) {
       struct sgx545_shader *vs = ctx->vs;
+      const struct sgx545_shader *vfs = fs->kind == SGX545_SHADER_COMPILED ? fs : NULL;
 
+      /* SGX545_DEBUG=zerocopy: inputs the vertex shader unpacks itself, when
+       * the compiler knows every format */
+      raw = (sgx545_debug & SGX545_DEBUG_ZERO_COPY) && ctx->velems && ctx->vs->n_attribs <= 16 &&
+            ctx->vs->n_attribs <= ctx->velems->num_elements;
+      for (unsigned e = 0; raw && e < ctx->vs->n_attribs; e++)
+         raw = vtx_format(ctx->velems->elements[e].src_format, &vfmt[e], &raw_bytes[e]);
       /* the fragment shader's sets (gl_PointCoord: the vertex shader's
        * varyings move up to leave set 0 free) */
-      if (fs->kind == SGX545_SHADER_COMPILED) {
-         if (fs->reads_pointcoord && !ctx->vs->prog.point_size)
+      if (vfs && fs->reads_pointcoord && !ctx->vs->prog.point_size)
+         return;
+      if (vfs || raw) {
+         if (raw && !(vs = sgx545_vs_for(ctx, ctx->vs, vfs, vfmt)))
+            raw = false;
+         if (!raw && !(vs = sgx545_vs_for(ctx, ctx->vs, vfs, NULL)))
             return;
-         if (!(vs = sgx545_vs_for(ctx, ctx->vs, fs)))
-            return;
-         st.sprite = fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       }
+      if (vfs)
+         st.sprite = fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       d.vs = &vs->prog;
       if (vs->mem_dwords)
          mem_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, &d.vs_mem);
@@ -1261,6 +1299,8 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       if (compiled) {
          f[e].dwords = 4;
          f[e].defaults = true;
+         f[e].raw = raw;
+         f[e].raw_bytes = raw ? raw_bytes[e] : 0;
       } else {
          /* gl_Position = attribute 0: two components fetched -> (x, y, 0, 1); more -> (x, y, z, 1) */
          f[e].dwords = util_format_get_nr_components(f[e].format) == 2 ? 2 : 3;

@@ -519,7 +519,7 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
  * samplers whose texels a fragment shader decodes from sRGB */
 static bool
 compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader *orig,
-               const struct sgx_varyings *fs_vary, unsigned srgb)
+               const struct sgx_varyings *fs_vary, unsigned srgb, const uint8_t *vtx_fmt)
 {
    struct sgx545_screen *screen = sgx545_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -534,6 +534,10 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
    opts.driver_consts = !(sgx545_debug & SGX545_DEBUG_NO_DRV_CONSTS);
+   if (vtx_fmt) {
+      memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
+      memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
+   }
    /* st's fixed-function fragment programs only owe the framebuffer's
     * precision: mediump (texture coordinates stay F32) */
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT && nir->info.name &&
@@ -828,7 +832,7 @@ sgx545_create_shader_state(struct pipe_context *pctx, const struct pipe_shader_s
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL, 0);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -900,16 +904,23 @@ sgx545_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 }
 
 struct sgx545_shader *
-sgx545_vs_for(struct sgx545_context *ctx, struct sgx545_shader *vs, const struct sgx545_shader *fs)
+sgx545_vs_for(struct sgx545_context *ctx, struct sgx545_shader *vs, const struct sgx545_shader *fs,
+              const uint8_t *vtx_fmt)
 {
+   static const uint8_t f32x4[16];
+   const struct sgx_varyings *vary = fs && fs->vary ? fs->vary : vs->vary;
    struct sgx545_shader **slot;
 
-   if (!vs->vary || !fs->vary || same_varyings(vs->vary, fs->vary))
+   if (!vtx_fmt)
+      vtx_fmt = f32x4;
+   if ((!vs->vary || !vary || same_varyings(vs->vary, vary)) && !memcmp(vtx_fmt, f32x4, sizeof(f32x4)))
       return vs;
    for (unsigned i = 0; i < ARRAY_SIZE(vs->variants_vs); i++) {
-      if (vs->variants_vs[i] && same_varyings(vs->variants_vs[i]->vary, fs->vary) &&
-          vs->variants_vs[i]->vary->point_size == fs->vary->point_size)
-         return vs->variants_vs[i];
+      struct sgx545_shader *v = vs->variants_vs[i];
+
+      if (v && (!vary || (same_varyings(v->vary, vary) && v->vary->point_size == vary->point_size)) &&
+          !memcmp(v->vtx_fmt, vtx_fmt, sizeof(v->vtx_fmt)))
+         return v;
    }
    if (!vs->nir)
       return NULL;
@@ -923,7 +934,7 @@ sgx545_vs_for(struct sgx545_context *ctx, struct sgx545_shader *vs, const struct
    if (!(*slot = CALLOC_STRUCT(sgx545_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
-   if (!compile_shader(ctx, *slot, vs->nir, fs->vary, 0) || !(*slot)->prog.code) {
+   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, vtx_fmt) || !(*slot)->prog.code) {
       FREE((*slot)->vary);
       FREE(*slot);
       *slot = NULL;
@@ -960,7 +971,7 @@ sgx545_fs_for(struct sgx545_context *ctx, struct sgx545_shader *fs)
       return NULL;
    (*slot)->discard_pa = -1;
    (*slot)->srgb = srgb;
-   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb) || !(*slot)->code) {
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, NULL) || !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);
       *slot = NULL;
