@@ -1406,10 +1406,14 @@ sgx545_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *inf
       out_count = list ? expanded_count(info->mode, count) : count;
       if (!out_count)
          continue;
+      /* the vertex cache first: a display list drawn every frame is one DMA
+       * a vertex from its cached gather and its quads' indices expanded
+       * once, where zero-copy DMAs each input and expands them every draw
+       * (Minecraft on the EA1: 9.4 FPS cached, 7.6 zero-copy first) */
+      if (compiled && (prim == SGXWS_TRIANGLES) && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
+         continue;
       if (compiled && (sgx545_debug & SGX545_DEBUG_ZERO_COPY) &&
           zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
-         continue;
-      if (compiled && (prim == SGXWS_TRIANGLES) && vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
          continue;
       /* glDrawArrays of a list or strip: the vertices in order */
       if (!info->index_size && !list && count <= SGXWS_MAX_INDICES) {
