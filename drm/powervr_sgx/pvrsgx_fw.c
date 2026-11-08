@@ -23,7 +23,6 @@
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/pm_runtime.h>
 #include <linux/seq_buf.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -37,27 +36,6 @@
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_pds.h"
-
-static char *firmware;
-module_param(firmware, charp, 0444);
-MODULE_PARM_DESC(firmware, "Microkernel image under /lib/firmware (default: the core's)");
-
-static unsigned int core_clock;
-module_param(core_clock, uint, 0444);
-MODULE_PARM_DESC(core_clock, "SGX core clock in Hz, for the microkernel timer (default: the core's)");
-
-/* -1: only with cleanup v2; on the DDK microkernel RT and PB cleanups never complete. */
-static int cleanup = -1;
-module_param(cleanup, int, 0644);
-MODULE_PARM_DESC(cleanup, "Ask the microkernel to drop RT datasets, render contexts and PBs before freeing them (-1: when it speaks cleanup v2, 0 never, 1 always)");
-
-static bool hwr_check = true;
-module_param(hwr_check, bool, 0444);
-MODULE_PARM_DESC(hwr_check, "Let the microkernel check for core lockups on its timer (debug; default on)");
-
-static bool restart_quiesce = true;
-module_param(restart_quiesce, bool, 0644);
-MODULE_PARM_DESC(restart_quiesce, "Before a restart, run the deinit script, hold the cores in reset and drop bus mastering, as an unload does (default on)");
 
 /* The open microkernel's file (docs/UKERNEL.md 4a). */
 #define UKFW_MAGIC0		0x35584753	/* "SGX5" */
@@ -261,9 +239,6 @@ static int fw_build_open(struct pvrsgx_device *sdev)
 		err = fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
 	if (err)
 		return err;
-
-	for (u32 t = 0; t < PVRSGX_CMD_MAX; t++)
-		f->host_kick[t] = t;
 	return 0;
 }
 
@@ -283,81 +258,6 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 	memcpy(t + 2, sig_3d, sizeof(sig_3d));
 
 	return fw_build_open(sdev);
-}
-
-/* One cleanup command and its outcome (UKERNEL.md 3, cleanup v2). */
-static int cleanup_v2(struct pvrsgx_device *sdev, u32 type, u32 addr)
-{
-	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
-	ktime_t give_up = ktime_add_ms(ktime_get(), 1000);
-	u32 data[6] = { type, addr };
-	u32 v;
-	int err;
-
-	do {
-		data[2] = ++sdev->cleanup_seq ?: ++sdev->cleanup_seq;
-		WRITE_ONCE(hc[HOSTCTL_CLEANUP_STATUS], 0);
-		err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_CLEANUP, data, NULL);
-		if (err)
-			return err;
-		err = read_poll_timeout(READ_ONCE, v,
-					(v & HOSTCTL_CLEANUP_COMPLETE) &&
-					READ_ONCE(hc[HOSTCTL_CLEANUP_SEQ]) == data[2],
-					1000, 5 * USEC_PER_SEC, false, hc[HOSTCTL_CLEANUP_STATUS]);
-		if (err)
-			return err;
-		if (v & HOSTCTL_CLEANUP_DONE)
-			return 0;
-		fsleep(1000);
-	} while (ktime_before(ktime_get(), give_up));
-	return -EBUSY;
-}
-
-/*
- * Tell the microkernel to forget a resource (UKERNEL.md 3, cleanup). It
- * completes only once nothing in flight uses it; the caller has waited for
- * its own jobs. On a timeout the memory is kept anyway (graveyard).
- */
-int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr)
-{
-	bool v2 = sdev->fw.features & PVRSGX_UKFW_CLEANUP_V2;
-	u32 data[6] = { type, addr };
-	u32 *status;
-	u32 v;
-	int err, pm;
-
-	if (!(cleanup < 0 ? v2 : cleanup) || !addr)
-		return 0;
-	/* A suspended microkernel holds nothing; the next start is a fresh one. */
-	pm = pm_runtime_get_if_active(sdev->base.dev);
-	if (pm == 0)
-		return 0;
-	mutex_lock(&sdev->cleanup_lock);
-	if (!sdev->fw_running || sdev->lost) {
-		err = 0;
-		goto out;
-	}
-	if (v2) {
-		err = cleanup_v2(sdev, type, addr);
-		goto done;
-	}
-	status = &fw_words(sdev, PVRSGX_FW_HOSTCTL)[HOSTCTL_CLEANUP_STATUS];
-	err = pvrsgx_ccb_send(sdev, PVRSGX_CMD_CLEANUP, data, NULL);
-	if (err)
-		goto out;
-	err = read_poll_timeout(READ_ONCE, v, v & HOSTCTL_CLEANUP_COMPLETE, 1000, 5 * USEC_PER_SEC,
-				false, *status);
-	WRITE_ONCE(*status, *status & ~HOSTCTL_CLEANUP_COMPLETE);
-done:
-	if (err)
-		drm_err(&sdev->base, "cleanup %u of 0x%08x did not complete (%d)\n",
-			type, addr, err);
-	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
-out:
-	mutex_unlock(&sdev->cleanup_lock);
-	if (pm > 0)
-		pm_runtime_put_autosuspend(sdev->base.dev);
-	return err;
 }
 
 /* Copy n pairs at off of the file, or NULL if they run past its end. */
@@ -461,7 +361,6 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 	return 0;
 }
 
-
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
@@ -469,7 +368,7 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 	u32 pds_base;
 	int err;
 
-	f->name = firmware ?: sdev->core->fw_name;
+	f->name = sdev->core->fw_name;
 	err = request_firmware(&fw, f->name, sdev->base.dev);
 	if (err) {
 		drm_err(&sdev->base, "no microkernel: %s (%d)\n", f->name, err);
@@ -636,7 +535,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		 * clean stop (runtime suspend) they are gated and quiet already, and
 		 * a register read there froze the EA3 (log 2026-11-03-0630).
 		 */
-		if (restart_quiesce && was_powered) {
+		if (was_powered) {
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
 			sgx_wr(sdev, SGX_CR_SOFT_RESET,
@@ -658,8 +557,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		pvrsgx_kobj_reap(sdev, U64_MAX);
 	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
-	hc[HOSTCTL_HWR_SAMPLE_RATE] = hwr_check ? UKERNEL_TIMER_HZ / HWR_CHECK_HZ : 0;
-	hc[HOSTCTL_UK_TIMER_CLOCK] = (core_clock ?: sdev->core->clock_hz) / UKERNEL_TIMER_HZ;
+	hc[HOSTCTL_HWR_SAMPLE_RATE] = UKERNEL_TIMER_HZ / HWR_CHECK_HZ;
+	hc[HOSTCTL_UK_TIMER_CLOCK] = sdev->core->clock_hz / UKERNEL_TIMER_HZ;
 	hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
 	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
 	/* SGXPostPowerState clears the power status before every start. */

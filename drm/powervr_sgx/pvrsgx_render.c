@@ -158,8 +158,6 @@ static void pb_release(struct kref *ref)
 	struct pvrsgx_pb *pb = container_of(ref, struct pvrsgx_pb, ref);
 	struct pvrsgx_device *sdev = pb->sdev;
 
-	if (pb->desc)
-		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_PB, kobj_va(pb->desc));
 	release(sdev, &pb->blocks);
 	release(sdev, &pb->desc);
 	release(sdev, &pb->freelist);
@@ -241,8 +239,6 @@ void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *c
 
 	if (!r)
 		return;
-	if (r->hwctx)
-		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_RC, kobj_va(r->hwctx));
 	release(sdev, &r->hwctx);
 	release(sdev, &r->sync3d);
 	release(sdev, &r->ccbctl);
@@ -290,8 +286,6 @@ static void rtds_release(struct kref *ref)
 	struct pvrsgx_rt_dataset *s = container_of(ref, struct pvrsgx_rt_dataset, ref);
 	struct pvrsgx_device *sdev = s->ctx->sdev;
 
-	if (s->rtdata)
-		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_RT, kobj_va(s->rtdata));
 	release(sdev, &s->rd);
 	release(sdev, &s->rd_w8);
 	release(sdev, &s->rd_w4);
@@ -636,15 +630,6 @@ static u32 pds_word(u64 addr, u32 rows)
  * starts the 3D.
  */
 /*
- * single_entry renders every frame as the dataset's first, on RT-data entry 1
- * and region array 1, as tools/gen's DDK path does (it runs any number of
- * frames and processes); otherwise frames alternate the two entries and count.
- */
-static bool single_entry;
-module_param(single_entry, bool, 0644);
-MODULE_PARM_DESC(single_entry, "Render every frame on RT-data entry 1 with frame counter 0 (debug)");
-
-/*
  * A restart (a reset, or a runtime resume) starts a fresh microkernel, but a
  * VM's PB lives through it. After a hang the pages the TA took are still off
  * its free list: the next render on any of the VM's contexts hangs, and the
@@ -684,7 +669,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		msleep(snap_gap_ms);
 	if (first)
 		pb_rearm(job->ctx->sdev, r->pb);
-	f = single_entry ? 0 : s->frames;
+	f = s->frames;
 	odd = f & 1;
 	rgn_this = kobj_va(s->rgn[odd ? 0 : 1]);
 	rgn_next = kobj_va(s->rgn[odd ? 1 : 0]);
@@ -870,8 +855,6 @@ void pvrsgx_transfer_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context 
 
 	if (!x)
 		return;
-	if (x->hwctx)
-		pvrsgx_fw_cleanup(sdev, PVRSGX_CLEANUP_TC, kobj_va(x->hwctx));
 	release(sdev, &x->hwctx);
 	release(sdev, &x->done);
 	release(sdev, &x->ccbctl);

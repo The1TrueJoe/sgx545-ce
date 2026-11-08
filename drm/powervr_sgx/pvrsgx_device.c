@@ -28,11 +28,6 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
 
-static bool idle_kernel_pd;
-module_param(idle_kernel_pd, bool, 0444);
-MODULE_PARM_DESC(idle_kernel_pd,
-		 "Point directory list 0 at the firmware's page directory while idle (debug; default: an empty one)");
-
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us)
 {
@@ -179,7 +174,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	sgx_wr(sdev, sgx_cr_bif_dir_list_base(SGX_BIF_DIRLIST_EDM),
 	       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
 	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
-	       pvrsgx_mmu_pd_addr(idle_kernel_pd ? sdev->kernel_mmu : sdev->idle_mmu));
+	       pvrsgx_mmu_pd_addr(sdev->idle_mmu));
 	inval_dc(sdev);
 
 	sgx_wr(sdev, SGX_CR_SOFT_RESET, 0);
@@ -236,10 +231,6 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static bool probe_only;
-module_param(probe_only, bool, 0444);
-MODULE_PARM_DESC(probe_only, "Report the SGX's identity and stop: no firmware, no device node");
-
 /*
  * Which core this is (pvrsgx_core.c). Anything else is refused before the
  * driver writes a register: its errata, clocks and microkernel are unknown.
@@ -259,7 +250,7 @@ static int identify(struct pvrsgx_device *sdev)
 	}
 	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x: %s\n",
 		 sdev->core_id, sdev->core_rev, sdev->core->name);
-	return probe_only ? -ENODEV : 0;
+	return 0;
 }
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
@@ -313,7 +304,6 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	int err;
 
 	mutex_init(&sdev->ccb_lock);
-	mutex_init(&sdev->cleanup_lock);
 	mutex_init(&sdev->done_lock);
 	mutex_init(&sdev->last_lock);
 	spin_lock_init(&sdev->ccb_spin);
