@@ -609,7 +609,7 @@ secondary computes into internal registers.
 |---|---|---|
 | h24-25 | pred | short predicate |
 | h18, h19, h26 | pri | 0 fmad, 1 mov, 2 fadm, 3 fmsa, 4 fddp, 5 fminmax, 6 ima32 (USEASM 0x65), 7 fssq (USEASM 0xa7) |
-| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fadm/fsubflr/ffrc, 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32 (USEASM 0x65), 15 mov |
+| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fsubflr (USEASM fadm and ffrc encode as it too), 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32 (USEASM 0x65), 15 mov |
 | h5, h13 | sd | secondary destination (and its first source): 0 i0, 1 i1, 2 i2, 3 `i0s0`: i0 with the first source taken from the src0 slot |
 | h14-15 | sb | secondary second source: i0, i1, i2, or 3 = the primary's src1 |
 | h10, h21 | sc | secondary third source: i0, i1, i2, or 3 = the src2 slot |
