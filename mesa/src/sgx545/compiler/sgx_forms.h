@@ -99,44 +99,44 @@ enum sgx_field {
    SGX_FLD_INC0,
    SGX_FLD_INC1,
    SGX_FLD_INC2,
-   SGX_FLD_FMT,        /* format select */
-   SGX_FLD_F16,        /* hw 1: F16 source */
-   SGX_FLD_C10,        /* hw 1: C10 source */
-   SGX_FLD_CHAN,       /* hw 1: half / channel */
-   SGX_FLD_F16D,       /* hw 1: F16 destination */
-   SGX_FLD_SWZ0,       /* fmad16 source swizzles */
+   SGX_FLD_FMT,  /* format select */
+   SGX_FLD_F16,  /* hw 1: F16 source */
+   SGX_FLD_C10,  /* hw 1: C10 source */
+   SGX_FLD_CHAN, /* hw 1: half / channel */
+   SGX_FLD_F16D, /* hw 1: F16 destination */
+   SGX_FLD_SWZ0, /* fmad16 source swizzles */
    SGX_FLD_SWZ1,
    SGX_FLD_SWZ2,
-   SGX_FLD_COND,       /* movc condition, test condition */
-   SGX_FLD_ALU,        /* test ALU op */
-   SGX_FLD_TYPE,       /* testmask width */
-   SGX_FLD_DMASK,      /* pck byte mask */
-   SGX_FLD_SCALE,      /* pck scale */
-   SGX_FLD_SGN,        /* ima16 / imae */
-   SGX_FLD_F1,         /* ima16 src1 / src2 formats */
+   SGX_FLD_COND,  /* movc condition, test condition */
+   SGX_FLD_ALU,   /* test ALU op */
+   SGX_FLD_TYPE,  /* testmask width */
+   SGX_FLD_DMASK, /* pck byte mask */
+   SGX_FLD_SCALE, /* pck scale */
+   SGX_FLD_SGN,   /* ima16 / imae */
+   SGX_FLD_F1,    /* ima16 src1 / src2 formats */
    SGX_FLD_F2,
-   SGX_FLD_T2,         /* imae src2 type */
-   SGX_FLD_COP,        /* sop colour / alpha ops and selects */
+   SGX_FLD_T2,  /* imae src2 type */
+   SGX_FLD_COP, /* sop colour / alpha ops and selects */
    SGX_FLD_AOP,
    SGX_FLD_C1,
    SGX_FLD_C2,
    SGX_FLD_A,
    SGX_FLD_A1,
    SGX_FLD_A2,
-   SGX_FLD_DIM,        /* smp */
+   SGX_FLD_DIM, /* smp */
    SGX_FLD_LOD,
    SGX_FLD_CFMT,
-   SGX_FLD_EFO_D,      /* efo: what the destination gets, the internal */
-   SGX_FLD_EFO_I,      /* writes, the adder and multiplier inputs */
+   SGX_FLD_EFO_D, /* efo: what the destination gets, the internal */
+   SGX_FLD_EFO_I, /* writes, the adder and multiplier inputs */
    SGX_FLD_EFO_A,
    SGX_FLD_EFO_M,
-   SGX_FLD_WI0,        /* efo: write i0 / i1 */
+   SGX_FLD_WI0, /* efo: write i0 / i1 */
    SGX_FLD_WI1,
-   SGX_FLD_A0LNEG,     /* efo: negate A0's left / right input */
+   SGX_FLD_A0LNEG, /* efo: negate A0's left / right input */
    SGX_FLD_A0RNEG,
-   SGX_FLD_PRI,        /* fdual: the primary and secondary ops */
+   SGX_FLD_PRI, /* fdual: the primary and secondary ops */
    SGX_FLD_SEC,
-   SGX_FLD_SD,         /* fdual: the secondary's selects */
+   SGX_FLD_SD, /* fdual: the secondary's selects */
    SGX_FLD_SB,
    SGX_FLD_SC,
    SGX_FLD_MSRC,
@@ -149,8 +149,8 @@ enum sgx_role {
    SGX_ROLE_SRC0,
    SGX_ROLE_SRC1,
    SGX_ROLE_SRC2,
-   SGX_ROLE_PDST,       /* test's predicate */
-   SGX_ROLE_IMM,        /* limm's value, br's target */
+   SGX_ROLE_PDST, /* test's predicate */
+   SGX_ROLE_IMM,  /* limm's value, br's target */
 };
 
 #define SGX_FILE_BIT(f) (1u << (f))
@@ -158,10 +158,10 @@ enum sgx_role {
 #define SGX_FILE_PRED 15
 
 struct sgx_slot {
-   uint8_t role;        /* enum sgx_role */
-   uint16_t files;      /* SGX_FILE_BIT(enum sgx_isa_file) the slot encodes */
+   uint8_t role;   /* enum sgx_role */
+   uint16_t files; /* SGX_FILE_BIT(enum sgx_isa_file) the slot encodes */
    bool neg, abs;
-   bool fmt;            /* follows format select (F16 numbers count halves) */
+   bool fmt; /* follows format select (F16 numbers count halves) */
 };
 
 static inline bool
@@ -177,7 +177,8 @@ const char *sgx_form_name(unsigned form);
 /* the instruction for form f with its fixed fields */
 void sgx_form_init(struct sgx_isa_instr *instr, unsigned form);
 /* set field id of form f's instruction */
-void sgx_form_set(struct sgx_isa_instr *instr, unsigned form, unsigned id, int32_t v);
+void sgx_form_set(struct sgx_isa_instr *instr, unsigned form, unsigned id,
+                  int32_t v);
 /* operand k of form f into its slot */
 void sgx_form_opd(struct sgx_isa_instr *instr, unsigned form, unsigned k,
                   const struct sgx_isa_src *o);
