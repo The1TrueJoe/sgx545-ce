@@ -47,7 +47,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
 | M6 | debug options and experiment code | partly | mesa-gallium, usse-compiler |
 | M7 | tests in Mesa's format (`ci/`) | partly (ddk files moved, mg-perf 1b86487) | mesa-gallium |
-| M8 | `docs/drivers/sgx.rst` | not started | mesa-gallium |
+| M8 | `docs/drivers/sgx.rst` | written: mesa/docs/drivers/sgx.rst | mesa-gallium |
 | M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
 
 ### M1. The upstream build is powervr_sgx only
