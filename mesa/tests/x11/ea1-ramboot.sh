@@ -4,7 +4,7 @@
 #
 # From the host: RAM-boot a powervr_sgx test kernel (an m2-drm CI artifact
 # powervr-sgx-ea1-v1) on the EA1 and load its modules. Hold
-# ~/.cache/sgx545/locks/ea1.lock first.
+# ~/Documents/GitHub/sgx545-work/locks/ea1.lock first.
 #
 #   ea1-ramboot.sh KERNDIR [ddk|open]
 #
@@ -12,12 +12,14 @@
 # powervr_sgx prefers the open image when it is present, so it is always named.
 # The kernel goes to /boot/once with drm/ci/ea-ramboot/S00aramboot, which
 # deletes itself on the next boot; restore with `rm -rf /boot/once` and a plain
-# reboot. The modules go to /root/m3/k.
+# reboot. The modules go to /root/m3/k. BOX names the box (the EA3 works too);
+# S00ARAMBOOT another boot hook than this tree's (m2-drm a7d3df1's carries the
+# bootstrap's ohc.* options over, which the EA3 needs for its network).
 set -e
 K=$1 FW=${2:-ddk}
 here=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$here/../../.." && pwd)
-BOX=${BOX:-10.0.0.110}
+BOX=${BOX:?the address of the EA1 (DHCP moves it: 10.0.0.110, then 10.0.0.115)}
 E() { sshpass -p openhc ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no \
 	-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$BOX "$@"; }
 retry() { for i in 1 2 3 4 5; do "$@" && return 0; sleep 3; done; return 1; }
@@ -29,7 +31,7 @@ esac
 retry E 'mkdir -p /boot/once /root/m3/k/modules'
 retry E 'cat > /boot/once/bzImage' < "$K/bzImage"
 for m in "$K"/modules/*.ko; do retry E "cat > /root/m3/k/modules/$(basename "$m")" < "$m"; done
-retry E 'cat > /etc/init.d/S00aramboot && chmod 755 /etc/init.d/S00aramboot' < "$REPO/drm/ci/ea-ramboot/S00aramboot"
+retry E 'cat > /etc/init.d/S00aramboot && chmod 755 /etc/init.d/S00aramboot' < "${S00ARAMBOOT:-$REPO/drm/ci/ea-ramboot/S00aramboot}"
 retry E 'sync; reboot' || true
 sleep 40
 v=

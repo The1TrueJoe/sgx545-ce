@@ -167,6 +167,8 @@ HC_CLEANUP = 2       # ui32CleanupStatus
 HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_POWER
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 HC_TIMERCLK = 6      # ui32uKernelTimerClock (host-set EVENT_TIMER period)
+HC_BGBLOCK = 15      # word +0x3c: bit 0 = HOSTCTL_OPENHC_HOST_BGBLOCK -- the host wrote the
+                     # background block on the CPU, so do_3d skips its EDM pulse (§4a / m2)
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
 EDM_INTERRUPT_ACTIVE_POWER = 2   # host control ui32InterruptFlags bit 1: the
@@ -1457,6 +1459,27 @@ def build(a):
     # client-PD bgblock, and back to 0x101f (EDM=15), with an idf/wdf fence so the
     # writes land before the EDM returns to list 15. HW baseline: DDK c78 at 3D =
     # 0x101f, bg pulse 0x1011->0x101f, c84 never touched.
+    # BANK0: route the 3D requestor to list 1 (the client PD) -- the render needs this
+    # whether or not the EDM writes the bgblock below.
+    a.i("limm r5, #0x101f")                           # BANK0: EDM=15, TA=1, 3D -> list 1
+    a.i(f"str #{0xc78 // 4}, r5")
+    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
+    a.i("wdf")
+    # Background-object PDS block. The EDM writes bgblock[0..2] into the CLIENT PD, which
+    # needs a transient EDM->list-1 pulse (0x1011) -- but that routes the EDM's own
+    # instruction fetch onto the client PD and faults it under secure/no-share (m2
+    # 2026-11-08, KERNEL_CODE+0x20d0). When the host wrote the block on the CPU it sets
+    # HOSTCTL_OPENHC_HOST_BGBLOCK (hostctl word 15 bit 0, UKERNEL.md §4a); skip the whole
+    # pulse + write then (its three words are known at submit). The DDK/srvinit path has
+    # the flag clear and does the pulse. Skipping also avoids the kernel-value loads below,
+    # which the EDM would otherwise read while routed to the client PD.
+    a.i(f"ld.a.d r5, r17, #{SA_HOSTCTL} [moe]")
+    a.i("wdf")
+    a.i(f"ld.a.d r5, r5, #{HC_BGBLOCK} [moe]")        # hostctl word 15 (+0x3c)
+    a.i("wdf")
+    a.i("and r5, r5, #1")                             # bit 0 = HOSTCTL_OPENHC_HOST_BGBLOCK
+    a.i("test.and.ne p0, r5, r5")
+    a.i("(p0) ba skip_bgblock")                       # host wrote it -> skip the EDM pulse
     a.i(f"ld.a.d r12, r17, #{SC_RTENTRY} [moe]")      # RT-data entry
     a.i(f"ld.a.d r9, r17, #{SC_CMD} [moe]")           # TA command base
     a.i("wdf")
@@ -1468,10 +1491,6 @@ def build(a):
     a.i("wdf")
     a.i("imae r6, r7, #4, r6 [t2=u32]")               # list base + 4*index
     a.i("ld.a.d r6, r6, #0 [moe]")                    # word2 (bg PDS primary)
-    a.i("wdf")
-    a.i("limm r5, #0x101f")                           # BANK0: 3D -> list 1 (client PD)
-    a.i(f"str #{0xc78 // 4}, r5")
-    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
     a.i("wdf")
     a.i("limm r5, #0x1011")                           # BANK0: EDM -> list 1 for the bg stores
     a.i(f"str #{0xc78 // 4}, r5")
@@ -1486,6 +1505,7 @@ def build(a):
     a.i(f"str #{0xc78 // 4}, r5")
     a.i(f"ldr r5, #{0xc78 // 4}")
     a.i("wdf")
+    a.label("skip_bgblock")
     # arm the completion rendezvous: this render is not done until BOTH the 3D writeout
     # (pixel_done, 0x40000 + ISP idle) and the DPM free (free_done, 0x1) have happened.
     a.i("limm r5, #1")
@@ -1690,14 +1710,21 @@ def build(a):
     a.i("ld.a.d r3, r2, #1 [moe]")                       # read offset (this command)
     a.i("wdf")
     a.i("imae r6, r3, #1, r5 [t2=u32]")                  # r6 = transfer command base
-    # destination sync: write the write-ops-complete value the kernel put in the
-    # command (word 0x16c) to the sync's complete-address (word 0x168), so the
-    # client sees the blit done (docs/TEX.md). (The transfer's other sync-heap
-    # objects come from the kick's sync-handle list -- the next increment.)
-    a.i("ld.a.d r7, r6, #%d [moe]" % XFER_SYNC_ADDR)     # destination sync address
-    a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # write-ops-complete value
+    # status word (sCtlStatusInfo: command 0x168 = address, 0x16c = value). Write it when
+    # present. This is NOT the transfer's done signal -- that's asDstSyncs[0] below (§10) --
+    # it's optional and a blit can leave 0x168 = 0. GUARD it: writing to a null status
+    # address faults at ~0 and never reaches the dst-sync write (m2 2026-11-08: BIF_FAULT
+    # 0x0f, transfer CCB not advanced, dst sync unwritten -- the status write was the null
+    # deref; the blit's 0x168 was 0 while its real sync is 0x140 = 0x2d000004).
+    a.i("ld.a.d r7, r6, #%d [moe]" % XFER_SYNC_ADDR)     # status address (cmd+0x168)
+    a.i("ld.a.d r8, r6, #%d [moe]" % XFER_SYNC_VAL)      # status value (cmd+0x16c)
     a.i("wdf")
+    a.i("test.and.eq p0, r7, r7")                        # null status address -> skip
+    a.i("(p0) ba xfer_status_done")
     a.i("st.a.d r7, #0, r8 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.label("xfer_status_done")
     # asDstSyncs[0] (SGXMKIF_TRANSFERCMD_SHARED word 0x134): set its write-ops-complete to
     # write-ops-pending + 1, the done signal powervr_sgx (and the DDK) actually poll for a
     # transfer -- the status word above (0x168/0x16c) is NOT it (UKERNEL.md §10). Layout:

@@ -131,7 +131,7 @@ EDM breakpoints, no `FIX_HW_BRN_28889`, no extended perf counters):
 | 12 | `ui32TimeWraps` | microkernel |
 | 13 | `ui32HostClock`: the host's clock in µs, written at start | host |
 | 14 | `ui32AssertFail` | microkernel |
-| 15 | `ui32PerfGroup` | host |
+| 15 | `ui32PerfGroup` (the HWPerf counter group). The open microkernel reuses b0 as `HOSTCTL_OPENHC_HOST_BGBLOCK`: when it is set, the host writes the background block at submit and `do_3d` skips its pulse (um-re f36ddd2) | host |
 | 16 | `ui32BRN31939Mem` (present because the build is for core revision 1013, which carries `FIX_HW_BRN_31939`; the host never touches it). The open microkernel reuses the word for its cleanup v2 sequence echo (section 3) | microkernel |
 | 17 | `ui32OpenCLDelayCount` | |
 
@@ -790,6 +790,47 @@ every client PD to carry the kernel heaps. openHC must not copy that; keeping th
 EDM isolated on list 15 is a deliberate divergence, verified on EA1 HW (the TA
 reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
 dir-list with a client requestor.
+
+**How the DDK reaches client memory from the EDM.** It never uses a second
+bank or a separate data requestor. A subroutine (pc 0x1864) copies the TA's
+nibble (r16 = 0) or the 3D's (r16 = 1) of `BIF_BANK0` into the EDM nibble,
+and r16 = 2 puts the EDM back on list 15. Its callers bracket every EDM
+access to client memory:
+
+| set (pc) | restore (pc) | list | what runs inside | when (DDK traces) |
+|---|---|---|---|---|
+| 0x128b | 0x129b | 3D | the background-block write ([0..2]) | **every 3D start** |
+| 0x0941 | 0x094d | TA | the PB setup (0x170d) and the TA free-list load (0x16a2). They read the PB descriptor and TA3D words (kernel data) and write DPM registers. Client memory is touched only when PB descriptor +0x00 b0 is set: then 0x170d walks the PB block list and rewrites the free list | the first kick after the PB changes |
+| 0x190c | 0x1918 | TA | `save_ta_state` (0x168d), then the same PB setup and TA load | a PB switch mid-scene; not in any trace |
+| 0x0835 | 0x0843 | TA | zeroes the RT data entry's tail-pointer array (entry words 8/9) | a kick path; not in any trace |
+| 0x0d90 | 0x0da0 | 3D | a second copy of the background-block write, on another 3D-start path | not in any trace |
+| 0x1234 | 0x123a | 3D | copies a 2-word pair indexed by the pass cursor (+0x108) | multi-pass renders only; not in any trace |
+| 0x13ae | 0x13be | 3D | writes (address, value) pairs from +0x1a0 (count at +0x19c of the same object) | only with a nonzero count; not in any trace |
+| 0x1517 | 0x1527 | 3D | the same pair loop, on the transfer side | only with a nonzero count; not in the trace's transfer |
+| 0x0ed5 | 0x0f34 | 3D | a 3D-end branch taken when the ISP clock check fails | not in any trace |
+
+In all four DDK microkernel traces (one-, two- and four-frame runs) only two
+windows run. 0x128b runs at every 3D start. 0x0941 runs once, on the first
+kick of a new PB.
+
+The open microkernel opens none of these windows: its EDM stays on list 15.
+Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
+`do_3d`), and with `HOSTCTL_OPENHC_HOST_BGBLOCK` set the host writes that
+block instead. Everything else the EDM reads or writes is in kernel code,
+kernel data or the sync heap, all mapped in the kernel PD.
+
+The background-block write at 3D start (pc 0x128d-0x1296; `docs/STATE.md`
+§6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
+inside it. While a window is open, the EDM fetches its instructions and reads
+kernel data through the client's page directory. The DDK therefore needs the
+kernel code and kernel-data heaps mapped in every client PD; it has no mode
+that works without them.
+
+`EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
+SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only
+BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (pc 0x0c6e,
+0x1778, 0x17be). The header doesn't separate the EDM's instruction fetch from
+its data accesses in either bank. [D, code and trace]
 
 **Parameter-buffer / DPM setup.** `pb[n]` is word n of the PB descriptor
 (`docs/STATE.md` section 6).
