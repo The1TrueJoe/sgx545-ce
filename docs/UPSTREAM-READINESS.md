@@ -442,6 +442,25 @@ guilty/innocent reporting, and the minimum uAPI.
    on the CE5300 with the uAPI suite and frame tests; then full dEQP through
    Mesa.
 
+**Status (m2-drm 7eaa5f5, 2026-11-08).** The driver is 7,482 lines; the
+follow-up files hold 690 of them, leaving 6,792 for v1. That includes the
+690-line stream decoder shared with Mesa and 533 lines of firmware-structure
+definitions with kernel-doc, which replaced word offsets.
+
+| step | state |
+|---|---|
+| DDK compat out | done: `drm/ci/ddk-compat.patch`, applied only by the CE5300 test kernels |
+| cleanup commands, 7 developer parameters, the render snapshot and last-render debugfs | deleted |
+| F1 transfer | own file (`pvrsgx_transfer.c`, 209 lines) |
+| F3 runtime PM | own file (`pvrsgx_pm.c`, 126 lines), built with `CONFIG_PM`, stubs otherwise; no `runtime_pm` parameter |
+| F4 coredump, F5 debugfs, F6 tracepoints, F7 gma500 | already separate files; their call sites are still in v1 code |
+| F2 PRIME import | not split yet (in `pvrsgx_job.c` and `pvrsgx_vm.c`) |
+| firmware structures | done: TA command, dependency block, render details, RT data, PB descriptor, HW render and transfer contexts, transfer command, control block (`pvrsgx_fwif.h`, offsets checked by `static_assert`); no firmware word is written by offset any more |
+| DDK names in comments | gone (the uAPI's `DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7` is left for uapi-stream) |
+| generated register header | not started |
+| one `pvrsgx_` prefix | waiting on uapi-stream (the shared stream files) |
+| runtime checkers on the CE5300 | debug kernel built; waiting for a free box |
+
 **uAPI effect.** v1's header leaves out the transfer job type and its
 structures (F1 appends them; the enum is append-only). Mesa must then work
 without transfer jobs on a v1 kernel, which needs mesa-gallium's answer
