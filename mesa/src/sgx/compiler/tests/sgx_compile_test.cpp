@@ -17,8 +17,8 @@
 #include "compiler/glsl_types.h"
 #include "nir.h"
 #include "nir_builder.h"
-#include "sgx_isa.h"
 #include "sgx_compiler.h"
+#include "sgx_isa.h"
 
 namespace {
 
@@ -188,6 +188,21 @@ TEST_F(sgx_compile_test, fragment_int_select_loop_bound)
    ASSERT_TRUE(compile(true)) << out.log;
    expect_decodes();
    EXPECT_GT(out.n_flow, 0u) << "the loop was folded away\n" << disasm();
+}
+
+/* gl_FragColor with only some channels written (piglit
+ * glsl-fs-post-increment-01): the others are undefined, not a crash */
+TEST_F(sgx_compile_test, fragment_partial_colour)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v_coords", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, in), 0x7);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
 }
 
 } /* namespace */
