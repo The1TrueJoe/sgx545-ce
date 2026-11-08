@@ -621,6 +621,17 @@ secondary computes into internal registers.
 A one-source secondary op reads sb; a two-source one sb and sc; mov reads
 msrc. All **encoder**.
 
+What hardware has not confirmed yet (`tools/isa/hwt_p12.py` draws each):
+- which sources a two-source secondary (fadd, fsub, fmul, fmaxmin) reads: sb
+  and sc, or sd and sb;
+- whether a three-source one (fmad, fmsa, fadm) reads sd, sb, sc in that order;
+- the src1/src2 slot values the secondary sees (`sb=src1`, `sc=src2`);
+- the primary's result beside a secondary;
+- the one-source secondaries' results.
+
+The encodings are settled: every corpus fdual word assembles from its text to
+the same bits (`check_enc.py`).
+
 `fssq` = USEASM 0xa7, libusc internal op 0x8e, exists only as a dual-issue
 primary: two sources in the src1/src2 slots, each source channel feeding the
 same destination channel (libusc's channel-use code treats it like a
@@ -1014,6 +1025,20 @@ Units:
 | h5 h4 h3 | src0/src1/src2 negate | arg flag b0 | encoder |
 
 efo has no end bit (h18-19 is `i`), so it can't be a program's last instruction.
+
+The unit wiring above (`d`, `i`, `a`, `m`, `wi0`/`wi1`, the negates) is read
+from usc's asm.c, not drawn. **hardware** so far: only the F16 operand
+numbering and one `d=a0 a=s0+s2` result (hwt_p7/p8).
+
+`tools/isa/hwt_p12.py` draws:
+- each `m` mode into I0/I1, including mode 2's m1, whose second operand is
+  only asserted to be s2;
+- each `a` and `i` mode, and each `d`;
+- whether I0/I1 keep their values without `wi0`/`wi1`;
+- `a0rneg`/`a0lneg`.
+
+The encodings are settled: every corpus efo word assembles from its text to
+the same bits.
 
 Operands:
 - dst: l21-27, bank h0-1 (r o pa ix), no ext.

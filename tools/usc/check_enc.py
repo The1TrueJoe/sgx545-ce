@@ -25,6 +25,25 @@ def norm(t):
     return re.sub(r"\s+", " ", t.strip())
 
 
+def compact(t):
+    """the same instruction in the spellings ISA.md lists as equivalent and
+    the isaspec assembler takes: efo's i=/a=/m= as x/y, fdual's neg1/neg2 as
+    -src1/-src2 ("Other spellings asm.py takes")"""
+    for f in "iam":
+        t = re.sub(r"\b%s=%s0=([^,\s\]]+),%s1=([^\s\]]+)" % (f, f if f != "a" else "a", f if f != "a" else "a"),
+                   lambda m, f=f: f"{f}={m.group(1)}/{m.group(2)}", t)
+    m = re.match(r"^(\([^)]*\) )?(fdual\.\S+) (.*?)(\s+\[(.*)\])?$", t)
+    if m and m.group(5) and re.search(r"\bneg[12]\b", m.group(5)):
+        ops = [o.strip() for o in m.group(3).split(",")]
+        items = m.group(5).split()
+        for j, flag in ((2, "neg1"), (3, "neg2")):
+            if flag in items:
+                items.remove(flag)
+                ops[j] = ops[j][1:] if ops[j].startswith("-") else "-" + ops[j]
+        t = (m.group(1) or "") + m.group(2) + " " + ", ".join(ops) + (f"  [{' '.join(items)}]" if items else "")
+    return t
+
+
 def corpus_words():
     for c in ("c1", "c2", "c3"):
         for s in usp.corpus(os.path.join(ISA, "corpus", c)):
@@ -41,13 +60,23 @@ def corpus_words():
 def main():
     exe = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         HERE, "..", "..", "mesa", "src", "sgx545", "isa", "tests", "build", "sgx545_isa_test")
-    lines, todo = [], []
+    lines, todo, plain = [], [], []
     for w in corpus_words():
         if w is None:
             lines.append(START)
+            plain.append(START)
         else:
-            lines.append(w[2])
-            todo.append(w)
+            lines.append(compact(w[2]))
+            plain.append(w[2])
+            todo.append((w[0], w[1], compact(w[2])))
+    # (dis.py's own spellings: ISA.md requires the assembler to take them too)
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write("\n".join(plain) + "\n")
+    try:
+        r0 = subprocess.run([exe, "-t", f.name], capture_output=True, text=True)
+    finally:
+        os.unlink(f.name)
+    n_plain = sum(1 for ln in r0.stdout.split("\n") if " ; " in ln and norm(ln.rsplit(" ; ", 1)[0]) != START)
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
         f.write("\n".join(lines) + "\n")
     try:
@@ -77,7 +106,7 @@ def main():
             if rejected <= 20:
                 print(f"REJECTED {hi:08x} {lo:08x} {txt}")
     print(f"{len(todo)} corpus instructions, {len(todo) - bad - rejected} encode identically, {bad} differ, "
-          f"{rejected} not assembled")
+          f"{rejected} not assembled; {len(todo) - n_plain} need the compact spelling (efo i=/a=/m=, fdual neg1/neg2)")
     sys.exit(1 if bad or rejected else 0)
 
 
