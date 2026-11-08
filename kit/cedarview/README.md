@@ -13,10 +13,11 @@ side is [docs/TESTING-CEDARVIEW.md](../../docs/TESTING-CEDARVIEW.md).
 | `kit-run` | the test run and the results file |
 | `grub.cfg`, `README-STICK.txt` | the boot menu, and the note on the stick's FAT partition |
 
-CI: `.github/workflows/cedarview-kit.yml` builds it on every push to `kit/cedarview/` and on
-a published release tagged `cedarview-kit-*`, which gets the image attached. By default it
-takes the newest `powervr-sgx-cedarview` artifact. That artifact is kept for 14 days, so
-the image carries its own copy of the kernel.
+CI: `.github/workflows/cedarview-kit.yml` builds it on every push to `kit/cedarview/`
+and keeps the image as the run's `sgx545-cedarview-kit` artifact for 90 days. Testers get
+a link to that artifact; there are no GitHub releases. By default it takes the newest
+`powervr-sgx-cedarview` artifact, which is kept for 14 days, so the image carries its
+own copy of the kernel.
 
 ## The image
 

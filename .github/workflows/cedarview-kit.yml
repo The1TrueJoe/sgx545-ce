@@ -14,8 +14,6 @@ on:
     paths:
       - kit/cedarview/**
       - .github/workflows/cedarview-kit.yml
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -23,7 +21,6 @@ permissions:
 
 jobs:
   image:
-    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'cedarview-kit-')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -69,7 +66,6 @@ jobs:
         run: |
           set -eux
           v=$(git rev-parse --short HEAD)
-          [ "${{ github.event_name }}" != release ] || v=${GITHUB_REF_NAME#cedarview-kit-}
           sudo sh kit/cedarview/build.sh kernel out "$v" fw/sgx545_ukernel.bin
           {
             echo "kit $v from ${GITHUB_SHA}"
@@ -88,19 +84,4 @@ jobs:
           name: sgx545-cedarview-kit
           path: out/
           compression-level: 0
-
-  release:
-    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'cedarview-kit-')
-    needs: image
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: sgx545-cedarview-kit
-          path: dist
-      - name: Attach to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber --repo "${{ github.repository }}"
+          retention-days: 90
