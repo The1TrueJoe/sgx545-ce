@@ -841,8 +841,26 @@ revision-exception pair (`sgxinit.c`, 0x1000e/0x1000d).
   doesn't implement the BRN 31939 watchdog loses nothing while no client
   sets TA flags b12.
 
-[D, from the kernel headers and the DDK microkernel's code. The Cedarview
-side is not yet run on hardware.]
+[D, from the kernel headers and the DDK microkernel's code.]
+
+**First run on a Cedarview part (N2600, 1.0.13, host bridge 8086:0bf1 rev 04,
+2026-11-08).**
+- The open microkernel in secure mode boots and renders 10/10 frames.
+- The first transfer job hangs: the 3D was triggered (`EVENT_STATUS2` 0x40)
+  but never completed. `BIF_INT_STAT` shows only FLUSH_COMPLETE (b19), so
+  the MMU did not fault.
+- The DDK's transfer path (the 3D end with sa9 b2, pc 0x1461, completing at
+  pc 0x14f7) has no revision branch. The only revision-gated microkernel
+  code is the BRN 31939 TA watchdog. So the microkernel holds no per-revision
+  transfer difference.
+- **Lead: `FIX_HW_BRN_SAMPLE_CACHE`.**
+  - That transfer was the first job on the part to sample a texture. The
+    frame and uAPI tests sample none.
+  - Its source lay in the general heap, not the 0xf0000000 texture heap.
+  - Intel probed the host bridge revision because only some Cedarview
+    steppings need the separate texture heap; which ones is the gap above.
+- **The test:** the same blit with its source in the texture heap. That is
+  safe on a CE5300, which samples from that heap anyway.
 
 ### The register map
 
