@@ -204,11 +204,10 @@ static int fw_build_open(struct pvrsgx_device *sdev)
 	return 0;
 }
 
-/* Upload and patch the microkernel, assemble its entry programs, fill the signature lists. */
+/* Upload and patch the microkernel and assemble its entry programs. */
 static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
-	u32 *t;
 
 	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, f->image_size);
 

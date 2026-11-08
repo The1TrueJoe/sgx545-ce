@@ -8,22 +8,16 @@
  * instead: the DPM numbers PB pages from the heap base, so a second context's PB
  * at a higher device-wide address hung its third render (EA1, 2026-11-03).
  *
- * Releasing one does not free it at once. The microkernel keeps pointers to
- * earlier renders' structures (docs/GEN.md, "Layout"; docs/UAPI.md 7.5), so
- * released objects stay until
- * the firmware restarts or the device goes away; reap_after_render frees them
- * once a later render is done.
+ * Releasing one does not free it at once: a render already handed to the
+ * microkernel may still read it. Released objects are freed once every render
+ * submitted before the release has completed. A PB descriptor waits for the
+ * next restart instead: the microkernel remembers the last PB's address to
+ * skip reloading its free list, so a new PB at a freed one's address must not
+ * appear while it runs.
  */
 
-#include <linux/module.h>
-#include <linux/seq_buf.h>
-
-static bool reap_after_render;
-module_param(reap_after_render, bool, 0444);
-MODULE_PARM_DESC(reap_after_render,
-		 "Free released kernel objects once a later render is done (debug; default: at firmware restart)");
-
 #include <linux/mm.h>
+#include <linux/seq_buf.h>
 #include <linux/slab.h>
 
 #include "pvrsgx_ccb.h"
@@ -136,15 +130,13 @@ void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 /* Free what was released before a render that has now finished. */
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 {
-	if (!reap_after_render && renders_done != U64_MAX)
-		return;
-
 	struct pvrsgx_kobj *o, *tmp;
+	bool restart = renders_done == U64_MAX;
 	LIST_HEAD(dead);
 
 	mutex_lock(&sdev->kobj_lock);
 	list_for_each_entry_safe(o, tmp, &sdev->graveyard, grave) {
-		if (o->grave_seq < renders_done)
+		if (o->grave_seq < renders_done && (restart || !o->until_restart))
 			list_move_tail(&o->grave, &dead);
 	}
 	mutex_unlock(&sdev->kobj_lock);

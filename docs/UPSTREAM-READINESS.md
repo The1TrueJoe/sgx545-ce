@@ -593,8 +593,8 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   kernels apply.
 - [x] **Fail closed on unknown hardware.** Core table above; the gma500
   auxiliary-device probe checks the BAR size and parent.
-- [ ] **Cedarview entry.** Needs the core revision from the tester's kit v1
-  report (`probe_only=1`).
+- [x] **Cedarview entry.** SGX545 1.0.13 (0x0001000d), from the first tester
+  report (an N2600): same features, ISA and microkernel as the CE5300.
 - [x] **Firmware name.** The CE5300 entry names
   `powervr_sgx/sgx545_ukernel.bin`, the name agreed with the firmware section
   (one file per core under the module's directory).
@@ -602,12 +602,11 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   `include/uapi/drm/powervr_sgx_drm.h` (now a symlink under the driver);
   `drm/MAINTAINERS.fragment` and `drm/Documentation/gpu/powervr_sgx/` are
   ready to move.
-- [ ] **Debug module parameters.** Reviewers will ask which parameters a user
-  needs. Keep: `runtime_pm`, `job_timeout_ms`, `firmware`. Developer-only,
-  to move behind debugfs or drop: `idle_kernel_pd`, `probe_only`, `core_clock`,
-  `cleanup`, `hwr_check`, `restart_quiesce`, `single_entry`, `snapshot`,
-  `snap_gap_ms`, `reap_after_render`. `share_kernel_heaps` goes with DDK
-  compat.
+- [x] **Module parameters.** Down to `job_timeout_ms` and `reap_after_render`
+  (the second waits on the graveyard policy below).
+- [ ] **Graveyard policy.** Released firmware objects are kept until the next
+  restart unless `reap_after_render`; to settle with open-ukernel whether a
+  later render's completion is enough, then drop the parameter.
 
 ### Tools (CI)
 
@@ -719,15 +718,18 @@ guilty/innocent reporting, and the minimum uAPI.
    on the CE5300 with the uAPI suite and frame tests; then full dEQP through
    Mesa.
 
-**Status (m2-drm 7eaa5f5, 2026-11-08).** The driver is 7,482 lines; the
-follow-up files hold 690 of them, leaving 6,792 for v1. That includes the
-690-line stream decoder shared with Mesa and 533 lines of firmware-structure
-definitions with kernel-doc, which replaced word offsets.
+**Status (m2-drm a8dff09, 2026-11-08).** The driver is 7,458 lines; the
+follow-up files hold 690, leaving about 6,800 for v1. That is above the
+5,900 first estimated: v1 keeps dma-buf import (X needs it), and it carries
+533 lines of firmware-structure definitions with kernel-doc, which replaced
+word offsets, plus the 690-line stream decoder shared with Mesa. The v1
+patch series also carries the 873-line uAPI header and 239 lines of
+Documentation.
 
 | step | state |
 |---|---|
 | DDK compat out | done: `drm/ci/ddk-compat.patch`, applied only by the CE5300 test kernels |
-| cleanup commands, 7 developer parameters, the render snapshot and last-render debugfs | deleted |
+| cleanup commands, 8 developer parameters, the render snapshot and last-render debugfs, the signature lists, HWPerf buffer and `GETMISCINFO` check the open microkernel never reads | deleted |
 | F1 transfer | own file (`pvrsgx_transfer.c`, 209 lines) |
 | F3 runtime PM | own file (`pvrsgx_pm.c`, 126 lines), built with `CONFIG_PM`, stubs otherwise; no `runtime_pm` parameter |
 | F4 coredump, F5 debugfs, F6 tracepoints, F7 gma500 | already separate files; their call sites are still in v1 code |
@@ -735,7 +737,7 @@ definitions with kernel-doc, which replaced word offsets.
 | firmware structures | done: TA command, dependency block, render details, RT data, PB descriptor, HW render and transfer contexts, transfer command, control block (`pvrsgx_fwif.h`, offsets checked by `static_assert`); no firmware word is written by offset any more |
 | DDK names in comments | gone (the uAPI's `DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7` is left for uapi-stream) |
 | generated register header | done: `pvrsgx_regs.h` comes from the GPL `sgx545defs.h` through `drm/tools/gen_regs.py` (CI diffs it); our names for the registers that header leaves out, and the MMU constants, are in `pvrsgx_hw.h` |
-| one `pvrsgx_` prefix | waiting on uapi-stream (the shared stream files) |
+| one `pvrsgx_` prefix | done (the shared stream files are now `pvrsgx_stream*`) |
 | ISA generation in the core table | done: the validator picks its USSE form table by the core's ISA |
 | runtime checkers on the CE5300 | debug kernel to rebuild on the trimmed driver; waiting for a free box |
 

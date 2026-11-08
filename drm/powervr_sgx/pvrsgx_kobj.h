@@ -33,6 +33,8 @@ struct pvrsgx_kobj {
 	enum pvrsgx_krange range;
 	/** @vm: Also mapped in this VM's directory, or NULL. */
 	struct pvrsgx_vm *vm;
+	/** @until_restart: Once released, kept until the next microkernel start. */
+	bool until_restart;
 	/** @grave: In pvrsgx_device.graveyard once released. */
 	struct list_head grave;
 	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
