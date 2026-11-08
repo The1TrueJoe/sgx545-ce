@@ -68,3 +68,13 @@ safe efo r0, r1, r2, r3 [d=i1 wi0]
 # sec 3 is fsubflr (ffrc is it with sb = sc); the table's name fadm stays the text
 fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2] == fdual.mov.fadm r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
 fdual.mov.ffrc r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1] == fdual.mov.fadm r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1]
+
+# bilin/ssum16/firv/firh's fmt is a mnemonic suffix; [fmt=s8] means the same
+# (ISA.md "hw 16 / 17 / 1a")
+firh.s8 i1, r1, r2, r3 [rpt=6 coef=1 shift=31]
+firh.o8 i2, r1, r2, r3
+firv.fmt3 r0, r1, r2, r3
+ssum16.s8 r0, r1, r2, r3
+bilin r0, r1, r2, r3 [fmt=s8 ileave] == bilin.s8 r0, r1, r2, r3 [ileave]
+firh i1, r1, r2, r3 [fmt=o8] == firh.o8 i1, r1, r2, r3
+ssum16 r0, sa4, sa5, r3 [fmt=o8] == ssum16.o8 r0, sa4, sa5, r3

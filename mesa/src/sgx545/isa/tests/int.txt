@@ -62,11 +62,11 @@ ima32 r0, o1, #5, r3 [rpt=8]
 adif r0, r1, r2
 adifsum r0, r1, r2, r3 [s0f13]
 op16s1 r0, r1, r2, r3 [f2_15=5 s8 x38 x1c x39=2 i=i1]
-bilin r0, r1, r2, r3 [fmt=s8 ileave src23 dst23 rnd]
+bilin.s8 r0, r1, r2, r3 [ileave src23 dst23 rnd]
 ssum16 r0, r1, r2, r3 [x1b x1c x1d nf16]
-ssum16 r0, sa4, sa5, r3 [fmt=o8]
+ssum16.o8 r0, sa4, sa5, r3
 ssum16i r0, i1, r3 [nf16]
-firv r0, r1, r2, r3 [fmt=s8 a5=2 coef=5 shift=21 a8=3]
+firv.s8 r0, r1, r2, r3 [a5=2 coef=5 shift=21 a8=3]
 firh i1, r1, r2, r3 [rpt=6 coef=1 shift=31 f2_27]
 op1adrc pa3, r1, r2 [drc=1]
 
