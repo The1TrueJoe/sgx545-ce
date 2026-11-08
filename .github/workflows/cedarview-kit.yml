@@ -1,0 +1,89 @@
+# The Cedarview test stick (kit/cedarview): m2-drm's powervr-sgx-cedarview
+# kernel + a small Debian root + the test run, as one USB image. Open code
+# only: no Intel binaries go into the image.
+name: cedarview-kit
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_run:
+        description: powervr-sgx run id whose powervr-sgx-cedarview artifact to use (default the newest)
+        default: ''
+  push:
+    branches: [um-re]
+    paths:
+      - kit/cedarview/**
+      - .github/workflows/cedarview-kit.yml
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  image:
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'cedarview-kit-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The kernel (m2-drm's cedarview job)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          id=${{ inputs.kernel_run }}
+          [ -n "$id" ] || id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=1" \
+            -q '.artifacts[0].workflow_run.id')
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -n powervr-sgx-cedarview -D kernel
+          cat kernel/version
+          echo "KERNEL_RUN=$id" >> "$GITHUB_ENV"
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends mmdebstrap squashfs-tools dosfstools \
+            grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin kmod fdisk \
+            qemu-system-x86 mtools ovmf
+
+      - name: Build the image
+        run: |
+          set -eux
+          v=$(git rev-parse --short HEAD)
+          [ "${{ github.event_name }}" != release ] || v=${GITHUB_REF_NAME#cedarview-kit-}
+          sudo sh kit/cedarview/build.sh kernel out "$v"
+          {
+            echo "kit $v from ${GITHUB_SHA}"
+            echo "kernel: powervr-sgx run $KERNEL_RUN: $(cat kernel/version)"
+            echo "microkernel: none (v1 stops at the GPU's identity)"
+          } | tee out/BUILD-INFO.txt
+
+      - name: Boot it in QEMU, BIOS and UEFI (a results file; the other disk untouched)
+        run: |
+          set -eux
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          for fw in bios uefi; do sh kit/cedarview/qemu-test.sh out/*.img.gz $fw; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgx545-cedarview-kit
+          path: out/
+          compression-level: 0
+
+  release:
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'cedarview-kit-')
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sgx545-cedarview-kit
+          path: dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber --repo "${{ github.repository }}"
