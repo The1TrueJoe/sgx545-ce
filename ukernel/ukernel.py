@@ -922,6 +922,19 @@ def build(a):
     # caches, program the 3D from the command, and kick it. Completion comes
     # back through the 3D-end event like any render.
     a.label("k_transfer")
+    # Defer while a render's 3D is in flight (SC_INFLIGHT). Starting the transfer's own 3D now
+    # would re-kick the busy 3D and overwrite its ISP/PBE state, and the transfer's 0x63c=0
+    # disarms the render's DPM page release mid-render -> those pages never return to the free
+    # list -> the TA walks to the 0xffff terminator and faults. The DDK never starts a transfer
+    # from the host kick; it queues it and the 3D scheduler starts it only when the 3D is free
+    # (ta3d-state, DDK pc 0x1035). Leave the command in the kernel CCB (ba kick_end, no RO
+    # advance); the completion path's re-dispatch and the timer tick relaunch it once SC_INFLIGHT
+    # clears -- exactly as k_ta serialises on SC_TAFLIGHT. A readback transfer depends on the
+    # render it follows, so deferring it until that render completes can't deadlock.
+    a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, r2")                   # a render in flight -> defer
+    a.i("(p0) ba kick_end")
     a.i("mov r16, r8 [mask=1]")                     # transfer context
     a.i("ld.a.d r1, r16, #%d [moe]" % CTX_CCB)      # client CCB base
     a.i("ld.a.d r2, r16, #%d [moe]" % CTX_CCBCTL)   # CCB control
