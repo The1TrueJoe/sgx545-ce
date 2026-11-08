@@ -70,3 +70,64 @@ destination-sync write a single replayed frame is polled on), transfers,
 cleanup, power, and the `srvinit --ours` loader. Nothing runs on hardware until
 a full frame's completion path is reproduced offline and the box + recovery
 method are chosen.
+
+## Building
+
+One command, no external dependencies — only CPython (3.7 or newer; dict
+insertion order, which the manifest relies on, is guaranteed from 3.7):
+
+    ukernel/build.sh                 # assemble + run the no-GPU emulator tests
+
+or just the assemble step:
+
+    python3 ukernel/build.py [OUT.bin] [MANIFEST.json]
+
+The build is **reproducible**: the assembler is pure Python with no timestamps,
+host paths or randomness, so the same source produces byte-identical `.bin` and
+`.json` on any machine and any supported Python. `UK_BUILD_ID` sets the manifest
+`build_id` (default `openhc`); set it to the commit for a release. The outputs
+(`<core>-ukernel-openhc.bin`, its `.bin.pat`, and the `.json` manifest) are
+generated, not committed.
+
+## Per-core images
+
+The microkernel programs the SGX core registers for one specific SGX5xx variant
+(the register-programming tables are docs/UKERNEL.md §7). `ukernel.py`'s
+`CORE_NAME` names that core — `sgx545`, the GPU in the Intel Atom CE5300 — and
+build.py names the output binary and the manifest `core` field from it, so a
+build for another core (e.g. `sgx540`, `sgx531`) produces a distinctly-named
+image and the two never collide. Porting to another SGX5xx core means a
+core-specific source and its own `CORE_NAME`; the loader selects the image by
+core.
+
+## Feature bits
+
+The manifest's `features` word (and the image header a packaging tool writes
+from it) declares the capabilities the loader must assume. Bits:
+
+| bit | name | meaning |
+|---|---|---|
+| 0 (0x1) | `CLEANUP_V2` | the DDK's two-phase resource cleanup. **This image does NOT set it** — openHC uses a simpler defer-and-hold cleanup, so the loader must not expect the v2 protocol. |
+| 1 (0x2) | `SECURE` | the background-object PDS block is written by the host (CPU) at submit, not by the microkernel's event-driven module, so the loader can isolate each client address space from the firmware's own heaps instead of mapping them into every context. Set by default (`UK_FEATURES`, default 2). |
+
+A loader keys its behaviour on these bits, not on the build id, so an image can
+state exactly which protocol it implements.
+
+## Manifest fields
+
+`build.py` writes a JSON manifest beside the binary:
+
+| field | meaning |
+|---|---|
+| `core` | the SGX core this image targets (see Per-core images) |
+| `version` | microkernel interface version, `major.minor` |
+| `features` | the feature-bit word (see Feature bits) |
+| `build_id` | a free-form build identifier (`UK_BUILD_ID`, default `openhc`) |
+| `bytes`, `instructions` | image size and instruction count |
+| `entries` | byte offset of each entry/label the loader points its PDS programs and host-kick table at |
+| `patches` | byte offset of each `limm` site the loader fills at load (e.g. `ctlblk`, the control-block base) |
+
+## Licence
+
+MIT (`LICENSE`); every source file carries an `SPDX-License-Identifier: MIT`
+header.
