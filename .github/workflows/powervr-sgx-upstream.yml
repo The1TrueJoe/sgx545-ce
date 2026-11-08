@@ -1,7 +1,6 @@
 # powervr_sgx as upstream would build it: mainline with the gma500 patch and
-# the driver in tree, without the vendor-microkernel compat, through the
-# checkers a DRM reviewer runs. Also the same with DDK compat, so neither
-# configuration rots. docs/UPSTREAM-READINESS.md lists what this covers.
+# the driver in tree, through the checkers a DRM reviewer runs.
+# docs/UPSTREAM-READINESS.md lists what this covers.
 name: powervr-sgx-upstream
 
 permissions:
@@ -70,12 +69,11 @@ jobs:
           set -eux
           sh drm/ci/cedarview-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
           L=linux-$LINUX_VERSION
-          ./$L/scripts/config --file $L/.config -d DRM_POWERVR_SGX_DDK_COMPAT -e DRM_POWERVR_SGX_KUNIT_TEST -e KUNIT
+          ./$L/scripts/config --file $L/.config -e DRM_POWERVR_SGX_KUNIT_TEST -e KUNIT
           make -C $L ARCH=x86_64 olddefconfig
-          grep -qx '# CONFIG_DRM_POWERVR_SGX_DDK_COMPAT is not set' $L/.config
           make -C $L ARCH=x86_64 -j"$(nproc)" prepare
 
-      - name: gcc W=1, sparse (upstream configuration)
+      - name: gcc W=1, sparse
         run: |
           set -eux
           L=linux-$LINUX_VERSION
@@ -102,7 +100,7 @@ jobs:
           make -C $L ARCH=x86_64 coccicheck MODE=report M=drivers/gpu/drm/powervr_sgx 2>&1 | tee cocci.log
           ! grep -E '^(\./)?drivers/gpu/drm/powervr_sgx/' cocci.log
 
-      - name: clang W=1 (upstream configuration)
+      - name: clang W=1
         run: |
           set -eux
           # A copy of the laid-out tree: O= needs a clean source tree.
@@ -113,15 +111,6 @@ jobs:
           make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 \
             drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/ 2>&1 | tee clang.log
           ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' clang.log
-
-      - name: gcc W=1 and sparse with DDK compat
-        run: |
-          set -eux
-          L=linux-$LINUX_VERSION
-          ./$L/scripts/config --file $L/.config -e DRM_POWERVR_SGX_DDK_COMPAT
-          make -C $L ARCH=x86_64 olddefconfig
-          make -C $L ARCH=x86_64 -j"$(nproc)" W=1 C=2 drivers/gpu/drm/powervr_sgx/ 2>&1 | tee compat.log
-          ! grep -E 'powervr_sgx/.*(warning|error):' compat.log
 
       - name: checkpatch --strict and kernel-doc
         run: |

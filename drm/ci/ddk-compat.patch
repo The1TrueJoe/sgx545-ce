@@ -1,0 +1,722 @@
+Out-of-tree: let powervr_sgx run the vendor (DDK 1.7) SGX545 microkernel too,
+for A/B tests on the CE5300 boards. Never upstream: that microkernel needs every
+client page directory to map the firmware's heaps. Applied by drm/ci/ce5300-kernel.sh.
+
+diff --git b/drm/powervr_sgx/Kconfig a/drm/powervr_sgx/Kconfig
+index b7f539e..ac1120d 100644
+--- b/drm/powervr_sgx/Kconfig
++++ a/drm/powervr_sgx/Kconfig
+@@ -35,6 +35,18 @@ config DRM_POWERVR_SGX_GMA500
+ 
+ 	  Say Y if this kernel runs on a Cedarview machine.
+ 
++config DRM_POWERVR_SGX_DDK_COMPAT
++	bool "Run the vendor microkernel too (testing)"
++	depends on DRM_POWERVR_SGX
++	help
++	  Also load the vendor (DDK 1.7) SGX545 microkernel, for A/B testing
++	  against the open one. That microkernel runs client work under the
++	  client's own page directory, so every client can then reach the
++	  firmware's memory. Without this option only an open microkernel that
++	  declares secure mode is loaded.
++
++	  If unsure, say N.
++
+ config DRM_POWERVR_SGX_KUNIT_TEST
+ 	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
+ 	depends on DRM_POWERVR_SGX && KUNIT
+diff --git b/drm/powervr_sgx/Makefile a/drm/powervr_sgx/Makefile
+index 828b6c7..fe59c42 100644
+--- b/drm/powervr_sgx/Makefile
++++ a/drm/powervr_sgx/Makefile
+@@ -27,6 +27,7 @@ powervr_sgx-y := \
+ 	powervr_sgx_stream_defs.o
+ 
+ powervr_sgx-$(CONFIG_DEBUG_FS) += pvrsgx_debugfs.o
++powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) += pvrsgx_fw_ddk.o
+ powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_GMA500) += pvrsgx_aux.o
+ 
+ obj-$(CONFIG_DRM_POWERVR_SGX) += powervr_sgx.o
+diff --git b/drm/powervr_sgx/pvrsgx_ccb.c a/drm/powervr_sgx/pvrsgx_ccb.c
+index d50122f..937ecb4 100644
+--- b/drm/powervr_sgx/pvrsgx_ccb.c
++++ a/drm/powervr_sgx/pvrsgx_ccb.c
+@@ -57,7 +57,7 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
+ 	unsigned long timeout = jiffies + msecs_to_jiffies(500);
+ 
+ 	/* The DDK image has no entry for some types; the open one's table is the identity. */
+-	if (type >= PVRSGX_CMD_MAX)
++	if (type >= PVRSGX_CMD_MAX || (pvrsgx_fw_is_ddk(sdev) && !sdev->fw.host_kick[type]))
+ 		return -EINVAL;
+ 
+ 	mutex_lock(&sdev->ccb_lock);
+@@ -73,7 +73,7 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
+ 	}
+ 
+ 	cmd = (u32 *)sdev->fw.cpu[PVRSGX_FW_CCB] + wo * PVRSGX_CCB_CMD_WORDS;
+-	cmd[0] = type;
++	cmd[0] = sdev->fw.host_kick[type];
+ 	cmd[1] = sdev->fw.cache_control;
+ 	memcpy(&cmd[2], data, 6 * sizeof(u32));
+ 	sdev->fw.cache_control = 0;
+diff --git b/drm/powervr_sgx/pvrsgx_core.c a/drm/powervr_sgx/pvrsgx_core.c
+index eb36fc4..940c730 100644
+--- b/drm/powervr_sgx/pvrsgx_core.c
++++ a/drm/powervr_sgx/pvrsgx_core.c
+@@ -22,6 +22,7 @@ static const struct pvrsgx_core_info cores[] = {
+ 		.num_dir_lists = 16,
+ 		.clock_hz = 400000000,
+ 		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
++		.ddk_fw_name = "powervr_sgx/sgx545-ukernel-1.7.862890.bin",
+ 	},
+ };
+ 
+diff --git b/drm/powervr_sgx/pvrsgx_core.h a/drm/powervr_sgx/pvrsgx_core.h
+index 786adb2..0c95818 100644
+--- b/drm/powervr_sgx/pvrsgx_core.h
++++ a/drm/powervr_sgx/pvrsgx_core.h
+@@ -42,6 +42,8 @@ struct pvrsgx_core_info {
+ 	u32 clock_hz;
+ 	/** @fw_name: The open microkernel under /lib/firmware. */
+ 	const char *fw_name;
++	/** @ddk_fw_name: The vendor microkernel (DRM_POWERVR_SGX_DDK_COMPAT), or NULL. */
++	const char *ddk_fw_name;
+ };
+ 
+ const struct pvrsgx_core_info *pvrsgx_core_lookup(u32 core_id, u32 core_rev);
+diff --git b/drm/powervr_sgx/pvrsgx_device.c a/drm/powervr_sgx/pvrsgx_device.c
+index 9a40e39..0943643 100644
+--- b/drm/powervr_sgx/pvrsgx_device.c
++++ a/drm/powervr_sgx/pvrsgx_device.c
+@@ -28,6 +28,16 @@
+ #include "pvrsgx_mmu.h"
+ #include "pvrsgx_render.h"
+ 
++/*
++ * The firmware's own heaps, each a whole number of 4 MiB directory entries: the
++ * kernel's directory maps them, and with share_kernel_heaps every VM's too.
++ */
++const struct pvrsgx_krange_span pvrsgx_kernel_heaps[3] = {
++	{ PVRSGX_HEAP_SYNC, PVRSGX_HEAP_PDS_PIXEL },
++	{ PVRSGX_HEAP_KERNEL_CODE, PVRSGX_HEAP_PDS_VERTEX },
++	{ PVRSGX_HEAP_KERNEL_DATA, PVRSGX_HEAP_USSE_PIXEL },
++};
++
+ static bool idle_kernel_pd;
+ module_param(idle_kernel_pd, bool, 0444);
+ MODULE_PARM_DESC(idle_kernel_pd,
+@@ -328,6 +338,13 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
+ 		goto err_mmu;
+ 	}
+ 
++	for (int i = 0; i < ARRAY_SIZE(pvrsgx_kernel_heaps); i++) {
++		err = pvrsgx_mmu_prealloc(sdev->kernel_mmu, pvrsgx_kernel_heaps[i].start,
++					  pvrsgx_kernel_heaps[i].end);
++		if (err)
++			goto err_mmu;
++	}
++
+ 	err = identify(sdev);
+ 	if (err)
+ 		goto err_mmu;
+diff --git b/drm/powervr_sgx/pvrsgx_device.h a/drm/powervr_sgx/pvrsgx_device.h
+index 423da6c..0404a89 100644
+--- b/drm/powervr_sgx/pvrsgx_device.h
++++ a/drm/powervr_sgx/pvrsgx_device.h
+@@ -89,10 +89,14 @@ struct pvrsgx_fw {
+ 	u32 addr[PVRSGX_FW_NBUF];
+ 	/** @cpu: CPU address of each buffer. */
+ 	void *cpu[PVRSGX_FW_NBUF];
++	/** @host_kick: Microkernel entry of each SGXMKIF command type. */
++	u32 host_kick[11];
+ 	/** @cache_control: Invalidates to request with the next command. */
+ 	u32 cache_control;
+ 	/** @interface: DRM_POWERVR_SGX_FW_IF_*. */
+ 	u32 interface;
++	/** @ddk: The vendor microkernel, which runs under the job's directory. */
++	bool ddk;
+ 	/** @name: Firmware file the image came from. */
+ 	const char *name;
+ 	/** @image: The microkernel as loaded, for restarts. */
+@@ -246,6 +250,12 @@ static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)
+ 	return file->driver_priv;
+ }
+ 
++/* Whether the vendor microkernel runs (CONFIG_DRM_POWERVR_SGX_DDK_COMPAT only). */
++static inline bool pvrsgx_fw_is_ddk(const struct pvrsgx_device *sdev)
++{
++	return IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) && sdev->fw.ddk;
++}
++
+ static inline u32 sgx_rd(struct pvrsgx_device *sdev, u32 reg)
+ {
+ 	return ioread32(sdev->regs + reg);
+@@ -256,6 +266,12 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
+ 	iowrite32(val, sdev->regs + reg);
+ }
+ 
++struct pvrsgx_krange_span {
++	u32 start, end;
++};
++
++extern const struct pvrsgx_krange_span pvrsgx_kernel_heaps[3];
++
+ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
+ 		      u32 dev_addr, u32 size, u32 pte_flags);
+ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
+diff --git b/drm/powervr_sgx/pvrsgx_fw.c a/drm/powervr_sgx/pvrsgx_fw.c
+index 8e87a36..4f490e3 100644
+--- b/drm/powervr_sgx/pvrsgx_fw.c
++++ a/drm/powervr_sgx/pvrsgx_fw.c
+@@ -7,8 +7,9 @@
+  * buffer, constant, PDS program and script value here, and docs/UKERNEL.md for
+  * how the microkernel uses them.
+  *
+- * The host interface is the vendor's as of DDK 1.7 (decision D8). The open
+- * microkernel's file header lists its entry points and patch sites
++ * The host interface is SGXMKIF as of DDK 1.7 (decision D8). Two images speak
++ * it: the DDK 1.7.862890 build, whose entry points and patch sites are fixed
++ * here, and the open microkernel (ukernel/), whose file header lists its own
+  * (docs/UKERNEL.md 4a).
+  */
+ 
+@@ -37,6 +38,7 @@
+ #include "pvrsgx_kobj.h"
+ #include "pvrsgx_mmu.h"
+ #include "pvrsgx_pds.h"
++#include "pvrsgx_vm.h"
+ 
+ static char *firmware;
+ module_param(firmware, charp, 0444);
+@@ -192,13 +194,14 @@ void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v)
+ 
+ /*
+  * Fill one of the microkernel's limm placeholders (word 0 0x?dbeef, the value
+- * bits of word 1 clear): bits 0-20 to word 0, 21-25 to word 1 bits 4-8, 26-31
+- * to word 1 bits 12-17.
++ * bits of word 1 clear; 0xfc237150 in the DDK's): bits 0-20 to word 0, 21-25 to
++ * word 1 bits 4-8, 26-31 to word 1 bits 12-17.
+  */
+-static int fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v)
++int pvrsgx_fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v)
+ {
+ 	u32 *i = (u32 *)((u8 *)sdev->fw.cpu[PVRSGX_FW_UKERNEL] + off);
+-	bool ok = (i[0] & 0x1fffff) == 0xdbeef && !(i[1] & 0x0003f1f0);
++	bool ok = (i[0] & 0x1fffff) == 0xdbeef &&
++		  (pvrsgx_fw_is_ddk(sdev) ? i[1] == 0xfc237150 : !(i[1] & 0x0003f1f0));
+ 
+ 	if (off > sdev->fw.image_size - 8 || !ok) {
+ 		drm_err(&sdev->base, "%s: no patch placeholder at +0x%x\n", sdev->fw.name, off);
+@@ -258,7 +261,7 @@ static int fw_build_open(struct pvrsgx_device *sdev)
+ 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
+ 
+ 	for (u32 i = 0; i < f->n_patches && !err; i++)
+-		err = fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
++		err = pvrsgx_fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
+ 	if (err)
+ 		return err;
+ 
+@@ -282,6 +285,8 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
+ 	t[0] = ARRAY_SIZE(sig_3d);
+ 	memcpy(t + 2, sig_3d, sizeof(sig_3d));
+ 
++	if (pvrsgx_fw_is_ddk(sdev))
++		return pvrsgx_fw_ddk_build(sdev);
+ 	return fw_build_open(sdev);
+ }
+ 
+@@ -447,7 +452,8 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+ 		drm_err(&sdev->base, "%s: %s\n", f->name, why);
+ 	if (err)
+ 		return err;
+-	if (!(f->features & PVRSGX_UKFW_SECURE)) {
++	if (!IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) &&
++	    !(f->features & PVRSGX_UKFW_SECURE)) {
+ 		drm_err(&sdev->base, "%s: not a secure-mode image; clients would reach the firmware\n",
+ 			f->name);
+ 		return -EINVAL;
+@@ -461,6 +467,27 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+ 	return 0;
+ }
+ 
++/* The core's open microkernel; with DDK compat, the vendor one if that is missing. */
++static int fw_request(struct pvrsgx_device *sdev, const struct firmware **fw)
++{
++	const char *ddk = IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) ?
++			  sdev->core->ddk_fw_name : NULL;
++	int err;
++
++	if (firmware) {
++		sdev->fw.name = firmware;
++		return request_firmware(fw, firmware, sdev->base.dev);
++	}
++	sdev->fw.name = sdev->core->fw_name;
++	if (!ddk)
++		return request_firmware(fw, sdev->fw.name, sdev->base.dev);
++	err = firmware_request_nowarn(fw, sdev->fw.name, sdev->base.dev);
++	if (err) {
++		sdev->fw.name = ddk;
++		err = firmware_request_nowarn(fw, ddk, sdev->base.dev);
++	}
++	return err;
++}
+ 
+ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
+ {
+@@ -469,15 +496,15 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
+ 	u32 pds_base;
+ 	int err;
+ 
+-	f->name = firmware ?: sdev->core->fw_name;
+-	err = request_firmware(&fw, f->name, sdev->base.dev);
++	err = fw_request(sdev, &fw);
+ 	if (err) {
+-		drm_err(&sdev->base, "no microkernel: %s (%d)\n", f->name, err);
++		drm_err(&sdev->base, "no microkernel: %s (%d)\n", firmware ?: sdev->core->fw_name,
++			err);
+ 		return err;
+ 	}
+ 	err = ukfw_load(sdev, fw);
+ 	if (err == -ENOENT)
+-		drm_err(&sdev->base, "%s: not a microkernel file\n", f->name);
++		err = pvrsgx_fw_ddk_load(sdev, fw);
+ 	release_firmware(fw);
+ 	if (err)
+ 		return err;
+@@ -660,7 +687,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
+ 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
+ 	hc[HOSTCTL_HWR_SAMPLE_RATE] = hwr_check ? UKERNEL_TIMER_HZ / HWR_CHECK_HZ : 0;
+ 	hc[HOSTCTL_UK_TIMER_CLOCK] = (core_clock ?: sdev->core->clock_hz) / UKERNEL_TIMER_HZ;
+-	hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
++	if (!pvrsgx_fw_is_ddk(sdev))
++		hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
+ 	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
+ 	/* SGXPostPowerState clears the power status before every start. */
+ 	hc[HOSTCTL_POWER_STATUS] = 0;
+@@ -704,6 +732,9 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
+ 		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
+ 		sdev->reset_logged = sdev->reset_count;
+ 	}
++	if (first && pvrsgx_vm_shares_kernel_heaps(sdev))
++		drm_warn(&sdev->base,
++			 "every VM maps the firmware's heaps: clients are not isolated from the firmware\n");
+ 
+ 	err = fw_check(sdev);
+ 	if (err)
+diff --git b/drm/powervr_sgx/pvrsgx_fw.h a/drm/powervr_sgx/pvrsgx_fw.h
+index 3dd1fb5..c1eb290 100644
+--- b/drm/powervr_sgx/pvrsgx_fw.h
++++ a/drm/powervr_sgx/pvrsgx_fw.h
+@@ -5,8 +5,11 @@
+ #define PVRSGX_FW_H
+ 
+ #include <linux/bits.h>
++#include <linux/errno.h>
++#include <linux/kconfig.h>
+ #include <linux/types.h>
+ 
++struct firmware;
+ struct pvrsgx_device;
+ struct seq_buf;
+ 
+@@ -45,7 +48,7 @@ struct seq_buf;
+ #define HOSTCTL_HOST_CLOCK		13
+ #define HOSTCTL_ASSERT_FAIL		14
+ 
+-#define HOSTCTL_FLAGS		15	/* UKERNEL.md 4a */
++#define HOSTCTL_FLAGS		15	/* open microkernel only (UKERNEL.md 4a) */
+ #define HOSTCTL_CLEANUP_SEQ		16
+ 
+ /* HOSTCTL_FLAGS: the host writes the background object's PDS words. */
+@@ -79,6 +82,21 @@ void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v)
+ void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
+ 		    const char *name);
+ int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr);
++int pvrsgx_fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v);
+ 
++#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT)
++int pvrsgx_fw_ddk_load(struct pvrsgx_device *sdev, const struct firmware *fw);
++int pvrsgx_fw_ddk_build(struct pvrsgx_device *sdev);
++#else
++static inline int pvrsgx_fw_ddk_load(struct pvrsgx_device *sdev, const struct firmware *fw)
++{
++	return -ENOENT;
++}
++
++static inline int pvrsgx_fw_ddk_build(struct pvrsgx_device *sdev)
++{
++	return -EINVAL;
++}
++#endif
+ 
+ #endif /* PVRSGX_FW_H */
+diff --git b/drm/powervr_sgx/pvrsgx_fw_ddk.c a/drm/powervr_sgx/pvrsgx_fw_ddk.c
+new file mode 100644
+index 0000000..f450108
+--- /dev/null
++++ a/drm/powervr_sgx/pvrsgx_fw_ddk.c
+@@ -0,0 +1,190 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Copyright © 2026 Joseph Telaak */
++
++/*
++ * The vendor (DDK 1.7.862890) microkernel, for A/B testing against the open
++ * one: its fixed size, host-kick entries, entry programs and patch sites
++ * (docs/SRVINIT.md). It needs every VM to map the firmware's heaps
++ * (pvrsgx_vm.c), so it is no use where clients must be isolated, and the
++ * whole file goes with CONFIG_DRM_POWERVR_SGX_DDK_COMPAT.
++ */
++
++#include <drm/drm_print.h>
++
++#include <linux/firmware.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++
++#include "pvrsgx_ccb.h"
++#include "pvrsgx_device.h"
++#include "pvrsgx_fw.h"
++#include "pvrsgx_pds.h"
++
++/* libsrv_init's .rodata 0x2000..0xef68. */
++#define DDK_UKERNEL_SIZE	0xcf68
++
++MODULE_FIRMWARE("powervr_sgx/sgx545-ukernel-1.7.862890.bin");
++
++/* Host-kick entries in instructions, per command type. */
++static const u32 host_kick[PVRSGX_CMD_MAX] = {
++	[PVRSGX_CMD_TA] = 0x11d,
++	[PVRSGX_CMD_TRANSFER] = 0x103,
++	[PVRSGX_CMD_POWER] = 0xd4,
++	[PVRSGX_CMD_CONTEXTSUSPEND] = 0xeb,
++	[PVRSGX_CMD_CLEANUP] = 0x13a,
++	[PVRSGX_CMD_GETMISCINFO] = 0x173,
++	[PVRSGX_CMD_PROCESS_QUEUES] = 0x156,
++	[PVRSGX_CMD_SETHWPERFSTATUS] = 0x157,
++};
++
++/* pds1: if in0 == 0, DMA the control block into sa first (DOUTD 0x3c0003f); then enter at 0xdf0. */
++static void pds_ta3d(struct pvrsgx_device *sdev)
++{
++	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, PVRSGX_FW_PDS1, 8);
++	u32 off = sdev->fw.addr[PVRSGX_FW_UKERNEL] + 0xdf0 - PVRSGX_HEAP_KERNEL_CODE;
++
++	pvrsgx_pds_ds(&p, PDS_D0(0), sdev->fw.addr[PVRSGX_FW_TA3DCTL]);
++	pvrsgx_pds_ds(&p, PDS_D0(1), 0x3c0003f);
++	/* No bit 27 and no segment subtracted here, unlike pvrsgx_doutu(). */
++	pvrsgx_pds_ds(&p, PDS_D0(2), ((off * 2) & 0xffff0) | (((off >> 19) + 15) & 15));
++	pvrsgx_pds_ds(&p, PDS_D0(3), 2);
++	pvrsgx_pds_tst(&p, PDS_CC_ALWAYS, PDS_IN(0));
++	pvrsgx_pds_bra(&p, PDS_CC_P0, 3);
++	pvrsgx_pds_bra(&p, PDS_CC_ALWAYS, 4);
++	pvrsgx_pds_movs(&p, PDS_DOUTD, PDS_D0(0), PDS_D0(1), PDS_D0(0), PDS_D0(0));
++	pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(2), PDS_D0(3), PDS_D1(0), PDS_D0(2));
++	pvrsgx_pds_halt(&p);
++}
++
++/*
++ * pds3, the event dispatcher: in0, in2, in4 to PA0-PA2; event bits in in1 pick
++ * the handler. Any of 0x100 -> 0x30. Otherwise the first of 0x400090, 0x200,
++ * 0x300400 with a bit set selects 0x7050, 0x2cd0 or 0x5670, if no other bit is
++ * set and in0 is 0. Anything else -> 0x30.
++ */
++static void pds_events(struct pvrsgx_device *sdev)
++{
++	static const struct { u32 mask, entry; } ev[3] = {
++		{ 0x400090, 0x7050 }, { 0x200, 0x2cd0 }, { 0x300400, 0x5670 },
++	};
++	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, PVRSGX_FW_PDS3, 24);
++	u32 uk = sdev->fw.addr[PVRSGX_FW_UKERNEL];
++
++	pvrsgx_pds_ds(&p, PDS_D0(0), 2);
++	pvrsgx_pds_ds(&p, PDS_D1(0), 0x000);
++	pvrsgx_pds_ds(&p, PDS_D1(1), 0x100);
++	pvrsgx_pds_ds(&p, PDS_D1(2), 0x200);
++	pvrsgx_pds_ds(&p, PDS_D1(6), pvrsgx_doutu(uk + 0x30));
++	pvrsgx_pds_ds(&p, PDS_D1(7), 0xffffff);
++	pvrsgx_pds_ds(&p, PDS_D1(8), 0x100);
++	for (int i = 0; i < 3; i++) {
++		pvrsgx_pds_ds(&p, PDS_D1(3 + i), pvrsgx_doutu(uk + ev[i].entry));
++		pvrsgx_pds_ds(&p, PDS_D1(9 + i), ev[i].mask);
++	}
++	pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_IN(0), PDS_D1(0), PDS_IN(0), PDS_IN(0));
++	pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_IN(2), PDS_D1(1), PDS_IN(2), PDS_IN(2));
++	pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_IN(4), PDS_D1(2), PDS_IN(4), PDS_IN(4));
++	pvrsgx_pds_alu(&p, PDS_CC_ALWAYS, PDS_ALU_AND, PDS_T0, PDS_IN(1), PDS_D1(7));
++	pvrsgx_pds_alu(&p, PDS_CC_ALWAYS, PDS_ALU_AND, PDS_T1, PDS_T0, PDS_D1(8));
++	pvrsgx_pds_tst(&p, PDS_CC_ALWAYS, PDS_T1);
++	pvrsgx_pds_bra(&p, PDS_CC_P0, 8);
++	pvrsgx_pds_bra(&p, PDS_CC_ALWAYS, 38);
++	for (int i = 0; i < 3; i++) {
++		unsigned int next = p.pc + 10;
++
++		pvrsgx_pds_alu(&p, PDS_CC_ALWAYS, PDS_ALU_AND, PDS_T1, PDS_T0, PDS_D1(9 + i));
++		pvrsgx_pds_tst(&p, PDS_CC_ALWAYS, PDS_T1);
++		pvrsgx_pds_bra(&p, PDS_CC_P0, i < 2 ? next : 38);
++		if (i == 0) {
++			pvrsgx_pds_alu(&p, PDS_CC_ALWAYS, PDS_ALU_XOR, PDS_T1, PDS_T0, PDS_T1);
++			pvrsgx_pds_tst(&p, PDS_CC_ALWAYS, PDS_T1);
++			pvrsgx_pds_tst(&p, PDS_CC_P0, PDS_IN(0));
++		} else {
++			pvrsgx_pds_tst(&p, PDS_CC_ALWAYS, PDS_IN(0));
++			pvrsgx_pds_alu(&p, PDS_CC_P0, PDS_ALU_XOR, PDS_T1, PDS_T0, PDS_T1);
++			pvrsgx_pds_tst(&p, PDS_CC_P0, PDS_T1);
++		}
++		pvrsgx_pds_bra(&p, PDS_CC_P0, p.pc + 2);
++		pvrsgx_pds_bra(&p, PDS_CC_ALWAYS, 38);
++		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D1(3 + i), PDS_D0(0), PDS_D0(1), PDS_D0(0));
++		pvrsgx_pds_halt(&p);
++	}
++	pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D1(6), PDS_D0(0), PDS_D0(1), PDS_D0(0));
++	pvrsgx_pds_halt(&p);
++}
++
++/* pds4: in0, in4 to PA0, PA2; in0 & 0x4000f -> 0x73a0, in0 & 0x120080 -> 0x2ea0, else 0x5740. */
++static void pds_events2(struct pvrsgx_device *sdev)
++{
++	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, PVRSGX_FW_PDS4, 12);
++	u32 uk = sdev->fw.addr[PVRSGX_FW_UKERNEL];
++
++	pvrsgx_pds_ds(&p, PDS_D0(0), pvrsgx_doutu(uk + 0x73a0));
++	pvrsgx_pds_ds(&p, PDS_D0(1), 2);
++	pvrsgx_pds_ds(&p, PDS_D0(2), pvrsgx_doutu(uk + 0x2ea0));
++	pvrsgx_pds_ds(&p, PDS_D0(3), 2);
++	pvrsgx_pds_ds(&p, PDS_D0(4), pvrsgx_doutu(uk + 0x5740));
++	pvrsgx_pds_ds(&p, PDS_D0(5), 2);
++	pvrsgx_pds_ds(&p, PDS_D1(0), 0x000);
++	pvrsgx_pds_ds(&p, PDS_D1(1), 0x200);
++	pvrsgx_pds_ds(&p, PDS_D1(3), 0x4000f);
++	pvrsgx_pds_ds(&p, PDS_D1(4), 0x120080);
++	pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_IN(0), PDS_D1(0), PDS_IN(0), PDS_IN(0));
++	pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_IN(4), PDS_D1(1), PDS_IN(4), PDS_IN(4));
++	for (int i = 0; i < 2; i++) {
++		pvrsgx_pds_alu(&p, PDS_CC_ALWAYS, PDS_ALU_AND, PDS_T0, PDS_IN(0), PDS_D1(3 + i));
++		pvrsgx_pds_tst(&p, PDS_CC_ALWAYS, PDS_T0);
++		pvrsgx_pds_bra(&p, PDS_CC_P0, p.pc + 3);
++		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(2 * i), PDS_D0(2 * i + 1), PDS_D1(2),
++				PDS_D0(2 * i));
++		pvrsgx_pds_halt(&p);
++	}
++	pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(4), PDS_D0(5), PDS_D1(2), PDS_D0(4));
++	pvrsgx_pds_halt(&p);
++}
++
++int pvrsgx_fw_ddk_load(struct pvrsgx_device *sdev, const struct firmware *fw)
++{
++	struct pvrsgx_fw *f = &sdev->fw;
++
++	if (fw->size != DDK_UKERNEL_SIZE) {
++		drm_err(&sdev->base, "%s: %zu bytes, expected %u\n", f->name, fw->size,
++			DDK_UKERNEL_SIZE);
++		return -EINVAL;
++	}
++	f->image_size = DDK_UKERNEL_SIZE;
++	f->image = kmemdup(fw->data, DDK_UKERNEL_SIZE, GFP_KERNEL);
++	if (!f->image)
++		return -ENOMEM;
++	f->ddk = true;
++	return 0;
++}
++
++/* Its entry programs and patches; the image is in place already. */
++int pvrsgx_fw_ddk_build(struct pvrsgx_device *sdev)
++{
++	struct pvrsgx_fw *f = &sdev->fw;
++	int err;
++
++	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, 0xd60);	/* the event program */
++	pds_ta3d(sdev);
++	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS2, 0xe20);
++	pds_events(sdev);
++	pds_events2(sdev);
++
++	err = pvrsgx_fw_limm(sdev, 0xbaf8, 0x1800100);
++	err = err ?: pvrsgx_fw_limm(sdev, 0xbb10, f->addr[PVRSGX_FW_PDS4] >> 4);
++	err = err ?: pvrsgx_fw_limm(sdev, 0x0d60, 0x1001000);
++	err = err ?: pvrsgx_fw_limm(sdev, 0x0d70, f->addr[PVRSGX_FW_PDS1] >> 4);
++	err = err ?: pvrsgx_fw_limm(sdev, 0x0d78, f->addr[PVRSGX_FW_TA3DCTL]);
++	err = err ?: pvrsgx_fw_limm(sdev, 0x0db0, 0x800100);
++	err = err ?: pvrsgx_fw_limm(sdev, 0x0dc0, f->addr[PVRSGX_FW_PDS2] >> 4);
++	err = err ?: pvrsgx_fw_limm(sdev, 0x0e40, f->addr[PVRSGX_FW_PDS3] & ~0xfu);
++	err = err ?: pvrsgx_fw_limm(sdev, 0x0e50, 6);
++	if (err)
++		return err;
++
++	memcpy(f->host_kick, host_kick, sizeof(host_kick));
++	return 0;
++}
+diff --git b/drm/powervr_sgx/pvrsgx_mmu.c a/drm/powervr_sgx/pvrsgx_mmu.c
+index ae1800f..b7101da 100644
+--- b/drm/powervr_sgx/pvrsgx_mmu.c
++++ a/drm/powervr_sgx/pvrsgx_mmu.c
+@@ -212,3 +212,29 @@ bool pvrsgx_mmu_range_empty(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size)
+ 	mutex_unlock(&mmu->lock);
+ 	return empty;
+ }
++
++/* Give [start, end) page tables of their own now, so their PDEs never change. */
++int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u32 end)
++{
++	int err = 0;
++
++	mutex_lock(&mmu->lock);
++	for (u64 a = start; a < end && !err; a += SGX_MMU_PDE_SPAN)
++		err = pte_get(mmu, a, true) ? 0 : -ENOMEM;
++	mutex_unlock(&mmu->lock);
++	return err;
++}
++
++/*
++ * Point dst's directory entries for [start, end) at src's page tables: src's
++ * mappings there show in dst too, and dst never maps anything there itself.
++ * Both ends 4 MiB aligned, src preallocated.
++ */
++void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u32 end)
++{
++	for (u64 a = start; a < end; a += SGX_MMU_PDE_SPAN) {
++		unsigned int i = a >> (SGX_MMU_PAGE_SHIFT + SGX_MMU_PT_SHIFT);
++
++		dst->pd[i] = src->pd[i];
++	}
++}
+diff --git b/drm/powervr_sgx/pvrsgx_mmu.h a/drm/powervr_sgx/pvrsgx_mmu.h
+index 930b0f7..851bd27 100644
+--- b/drm/powervr_sgx/pvrsgx_mmu.h
++++ a/drm/powervr_sgx/pvrsgx_mmu.h
+@@ -20,5 +20,7 @@ int pvrsgx_mmu_map_sgt(struct pvrsgx_mmu *mmu, u32 dev_addr,
+ 		       struct sg_table *sgt, u64 offset, u64 size, u32 flags);
+ void pvrsgx_mmu_unmap(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
+ bool pvrsgx_mmu_range_empty(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
++int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u32 end);
++void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u32 end);
+ 
+ #endif /* PVRSGX_MMU_H */
+diff --git b/drm/powervr_sgx/pvrsgx_pds.c a/drm/powervr_sgx/pvrsgx_pds.c
+index 9ed505b..889d69d 100644
+--- b/drm/powervr_sgx/pvrsgx_pds.c
++++ a/drm/powervr_sgx/pvrsgx_pds.c
+@@ -59,6 +59,27 @@ void pvrsgx_pds_movs(struct pvrsgx_pds *p, unsigned int dest, unsigned int a,
+ 	pds_emit(p, (u32)PDS_CC_ALWAYS << 24 | r1 << 18 | r2 << 13 | sel | dest);
+ }
+ 
++/* d = a (DS0 side) op b (DS1 side); sources in 16-bit units. */
++void pvrsgx_pds_alu(struct pvrsgx_pds *p, unsigned int cc, unsigned int op,
++		    unsigned int d, unsigned int a, unsigned int b)
++{
++	pds_emit(p, op << 24 | cc << 24 | ds0w(a) * 2 << 16 | (b - 0x40) * 2 << 9 | d);
++}
++
++/* p0 = (r == 0) */
++void pvrsgx_pds_tst(struct pvrsgx_pds *p, unsigned int cc, unsigned int r)
++{
++	if (r >= 0x40 && r < 0x80)
++		pds_emit(p, 0x80000000u | cc << 24 | (r - 0x40) * 2 << 9 | 1 << 8);
++	else
++		pds_emit(p, 0x80000000u | cc << 24 | ds0w(r) * 2 << 16);
++}
++
++void pvrsgx_pds_bra(struct pvrsgx_pds *p, unsigned int cc, unsigned int target)
++{
++	pds_emit(p, 0x90000000u | cc << 24 | target);
++}
++
+ void pvrsgx_pds_halt(struct pvrsgx_pds *p)
+ {
+ 	pds_emit(p, 0xaf000000u);
+diff --git b/drm/powervr_sgx/pvrsgx_pds.h a/drm/powervr_sgx/pvrsgx_pds.h
+index 8366ee2..f9d90d7 100644
+--- b/drm/powervr_sgx/pvrsgx_pds.h
++++ a/drm/powervr_sgx/pvrsgx_pds.h
+@@ -15,8 +15,16 @@
+  */
+ #define PDS_D0(n)		(n)
+ #define PDS_D1(n)		(0x40 + (n))
++#define PDS_IN(n)		(0x80 + (n))
++#define PDS_T0		PDS_D0(0x30)
++#define PDS_T1		PDS_D1(0x30)
++#define PDS_CC_P0		0
+ #define PDS_CC_ALWAYS	7
++#define PDS_DOUTD		3
+ #define PDS_DOUTU		5
++#define PDS_DOUTA		6
++#define PDS_ALU_AND		0xc8
++#define PDS_ALU_XOR		0xd0
+ 
+ /* A PDS program being assembled into a firmware buffer. */
+ struct pvrsgx_pds {
+@@ -29,6 +37,10 @@ u32 pvrsgx_doutu(u32 addr);
+ void pvrsgx_pds_ds(struct pvrsgx_pds *p, unsigned int r, u32 v);
+ void pvrsgx_pds_movs(struct pvrsgx_pds *p, unsigned int dest, unsigned int a,
+ 		     unsigned int b, unsigned int c, unsigned int d);
++void pvrsgx_pds_alu(struct pvrsgx_pds *p, unsigned int cc, unsigned int op,
++		    unsigned int d, unsigned int a, unsigned int b);
++void pvrsgx_pds_tst(struct pvrsgx_pds *p, unsigned int cc, unsigned int r);
++void pvrsgx_pds_bra(struct pvrsgx_pds *p, unsigned int cc, unsigned int target);
+ void pvrsgx_pds_halt(struct pvrsgx_pds *p);
+ struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b,
+ 				  unsigned int data);
+diff --git b/drm/powervr_sgx/pvrsgx_vm.c a/drm/powervr_sgx/pvrsgx_vm.c
+index 5a83fee..b6fbaf7 100644
+--- b/drm/powervr_sgx/pvrsgx_vm.c
++++ a/drm/powervr_sgx/pvrsgx_vm.c
+@@ -31,6 +31,35 @@
+ #include "pvrsgx_validate.h"
+ #include "pvrsgx_vm.h"
+ 
++/*
++ * The vendor microkernel handles a TA kick under the job's directory: it moves the
++ * EDM's BIF_BANK0 index onto the list it loads with the context's directory,
++ * then fetches its own code and reads its control blocks through it (EA1,
++ * 2026-11-03, docs/DRM-DRIVER.md section 4). So with it, every VM must map the
++ * firmware's heaps, which gives a client's shaders the reach into kernel memory
++ * that P2 and P3 describe (docs/UAPI.md 7.2). The open microkernel keeps the
++ * EDM on its own list and needs none of this.
++ */
++#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT)
++static int share_kernel_heaps = -1;
++module_param(share_kernel_heaps, int, 0444);
++MODULE_PARM_DESC(share_kernel_heaps,
++		 "Map the firmware's heaps in every VM: -1 unless the microkernel declares secure mode (default), 0 never, 1 always");
++
++bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
++{
++	if (share_kernel_heaps < 0)
++		return !(sdev->fw.features & PVRSGX_UKFW_SECURE);
++	return share_kernel_heaps;
++}
++#else
++/* Without DDK compat only secure-mode images load (pvrsgx_fw.c). */
++bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
++{
++	return false;
++}
++#endif
++
+ /* The client heaps, the same in every VM. */
+ static const struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {
+ 	[DRM_POWERVR_SGX_HEAP_GENERAL] = {
+@@ -185,6 +214,11 @@ static struct pvrsgx_vm *vm_create(struct pvrsgx_device *sdev)
+ 		kfree(vm);
+ 		return ERR_PTR(-ENOMEM);
+ 	}
++	if (pvrsgx_vm_shares_kernel_heaps(sdev)) {
++		for (int i = 0; i < ARRAY_SIZE(pvrsgx_kernel_heaps); i++)
++			pvrsgx_mmu_share(vm->mmu, sdev->kernel_mmu, pvrsgx_kernel_heaps[i].start,
++					 pvrsgx_kernel_heaps[i].end);
++	}
+ 	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
+ 		       0, SZ_4G, 0, 0, &pvrsgx_gpuvm_ops);
+ 	drm_gem_object_put(r_obj);
+diff --git b/drm/powervr_sgx/pvrsgx_vm.h a/drm/powervr_sgx/pvrsgx_vm.h
+index 43dc65c..82d52b6 100644
+--- b/drm/powervr_sgx/pvrsgx_vm.h
++++ a/drm/powervr_sgx/pvrsgx_vm.h
+@@ -48,6 +48,7 @@ struct dma_resv *pvrsgx_vm_resv(struct pvrsgx_vm *vm);
+ struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
+ void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);
+ int pvrsgx_heap_find(u64 addr, u64 size);
++bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev);
+ 
+ int pvrsgx_ioctl_create_vm_context(struct drm_device *drm, void *data, struct drm_file *file);
+ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct drm_file *file);

@@ -28,16 +28,6 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
 
-/*
- * The firmware's own heaps, each a whole number of 4 MiB directory entries: the
- * kernel's directory maps them, and with share_kernel_heaps every VM's too.
- */
-const struct pvrsgx_krange_span pvrsgx_kernel_heaps[3] = {
-	{ PVRSGX_HEAP_SYNC, PVRSGX_HEAP_PDS_PIXEL },
-	{ PVRSGX_HEAP_KERNEL_CODE, PVRSGX_HEAP_PDS_VERTEX },
-	{ PVRSGX_HEAP_KERNEL_DATA, PVRSGX_HEAP_USSE_PIXEL },
-};
-
 static bool idle_kernel_pd;
 module_param(idle_kernel_pd, bool, 0444);
 MODULE_PARM_DESC(idle_kernel_pd,
@@ -336,13 +326,6 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	    IS_ERR(sdev->reset_mmu) || !sdev->reset_page) {
 		err = -ENOMEM;
 		goto err_mmu;
-	}
-
-	for (int i = 0; i < ARRAY_SIZE(pvrsgx_kernel_heaps); i++) {
-		err = pvrsgx_mmu_prealloc(sdev->kernel_mmu, pvrsgx_kernel_heaps[i].start,
-					  pvrsgx_kernel_heaps[i].end);
-		if (err)
-			goto err_mmu;
 	}
 
 	err = identify(sdev);

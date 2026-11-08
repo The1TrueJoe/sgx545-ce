@@ -36,10 +36,6 @@ The driver only loads an image that declares secure mode, in which no client
 page directory maps the firmware's memory. After the start it asks the
 microkernel for its version and features.
 
-``CONFIG_DRM_POWERVR_SGX_DDK_COMPAT`` adds the vendor DDK 1.7 microkernel for
-A/B testing. That microkernel runs client work under the client's own page
-directory, so with it every client directory maps the firmware's heaps.
-
 Memory
 ======
 

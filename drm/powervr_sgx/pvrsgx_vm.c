@@ -31,35 +31,6 @@
 #include "pvrsgx_validate.h"
 #include "pvrsgx_vm.h"
 
-/*
- * The vendor microkernel handles a TA kick under the job's directory: it moves the
- * EDM's BIF_BANK0 index onto the list it loads with the context's directory,
- * then fetches its own code and reads its control blocks through it (EA1,
- * 2026-11-03, docs/DRM-DRIVER.md section 4). So with it, every VM must map the
- * firmware's heaps, which gives a client's shaders the reach into kernel memory
- * that P2 and P3 describe (docs/UAPI.md 7.2). The open microkernel keeps the
- * EDM on its own list and needs none of this.
- */
-#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT)
-static int share_kernel_heaps = -1;
-module_param(share_kernel_heaps, int, 0444);
-MODULE_PARM_DESC(share_kernel_heaps,
-		 "Map the firmware's heaps in every VM: -1 unless the microkernel declares secure mode (default), 0 never, 1 always");
-
-bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
-{
-	if (share_kernel_heaps < 0)
-		return !(sdev->fw.features & PVRSGX_UKFW_SECURE);
-	return share_kernel_heaps;
-}
-#else
-/* Without DDK compat only secure-mode images load (pvrsgx_fw.c). */
-bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
-{
-	return false;
-}
-#endif
-
 /* The client heaps, the same in every VM. */
 static const struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {
 	[DRM_POWERVR_SGX_HEAP_GENERAL] = {
@@ -213,11 +184,6 @@ static struct pvrsgx_vm *vm_create(struct pvrsgx_device *sdev)
 		pvrsgx_mmu_destroy(vm->mmu);
 		kfree(vm);
 		return ERR_PTR(-ENOMEM);
-	}
-	if (pvrsgx_vm_shares_kernel_heaps(sdev)) {
-		for (int i = 0; i < ARRAY_SIZE(pvrsgx_kernel_heaps); i++)
-			pvrsgx_mmu_share(vm->mmu, sdev->kernel_mmu, pvrsgx_kernel_heaps[i].start,
-					 pvrsgx_kernel_heaps[i].end);
 	}
 	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
 		       0, SZ_4G, 0, 0, &pvrsgx_gpuvm_ops);

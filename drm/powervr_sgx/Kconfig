@@ -35,18 +35,6 @@ config DRM_POWERVR_SGX_GMA500
 
 	  Say Y if this kernel runs on a Cedarview machine.
 
-config DRM_POWERVR_SGX_DDK_COMPAT
-	bool "Run the vendor microkernel too (testing)"
-	depends on DRM_POWERVR_SGX
-	help
-	  Also load the vendor (DDK 1.7) SGX545 microkernel, for A/B testing
-	  against the open one. That microkernel runs client work under the
-	  client's own page directory, so every client can then reach the
-	  firmware's memory. Without this option only an open microkernel that
-	  declares secure mode is loaded.
-
-	  If unsure, say N.
-
 config DRM_POWERVR_SGX_KUNIT_TEST
 	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
 	depends on DRM_POWERVR_SGX && KUNIT

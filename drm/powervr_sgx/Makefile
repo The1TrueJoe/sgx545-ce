@@ -27,7 +27,6 @@ powervr_sgx-y := \
 	powervr_sgx_stream_defs.o
 
 powervr_sgx-$(CONFIG_DEBUG_FS) += pvrsgx_debugfs.o
-powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) += pvrsgx_fw_ddk.o
 powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_GMA500) += pvrsgx_aux.o
 
 obj-$(CONFIG_DRM_POWERVR_SGX) += powervr_sgx.o

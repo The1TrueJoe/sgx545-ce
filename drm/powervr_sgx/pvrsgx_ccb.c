@@ -57,7 +57,7 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
 	unsigned long timeout = jiffies + msecs_to_jiffies(500);
 
 	/* The DDK image has no entry for some types; the open one's table is the identity. */
-	if (type >= PVRSGX_CMD_MAX || (pvrsgx_fw_is_ddk(sdev) && !sdev->fw.host_kick[type]))
+	if (type >= PVRSGX_CMD_MAX)
 		return -EINVAL;
 
 	mutex_lock(&sdev->ccb_lock);
@@ -73,7 +73,7 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
 	}
 
 	cmd = (u32 *)sdev->fw.cpu[PVRSGX_FW_CCB] + wo * PVRSGX_CCB_CMD_WORDS;
-	cmd[0] = sdev->fw.host_kick[type];
+	cmd[0] = type;
 	cmd[1] = sdev->fw.cache_control;
 	memcpy(&cmd[2], data, 6 * sizeof(u32));
 	sdev->fw.cache_control = 0;

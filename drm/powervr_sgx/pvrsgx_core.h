@@ -42,8 +42,6 @@ struct pvrsgx_core_info {
 	u32 clock_hz;
 	/** @fw_name: The open microkernel under /lib/firmware. */
 	const char *fw_name;
-	/** @ddk_fw_name: The vendor microkernel (DRM_POWERVR_SGX_DDK_COMPAT), or NULL. */
-	const char *ddk_fw_name;
 };
 
 const struct pvrsgx_core_info *pvrsgx_core_lookup(u32 core_id, u32 core_rev);

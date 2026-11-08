@@ -7,9 +7,8 @@
  * buffer, constant, PDS program and script value here, and docs/UKERNEL.md for
  * how the microkernel uses them.
  *
- * The host interface is SGXMKIF as of DDK 1.7 (decision D8). Two images speak
- * it: the DDK 1.7.862890 build, whose entry points and patch sites are fixed
- * here, and the open microkernel (ukernel/), whose file header lists its own
+ * The host interface is the vendor's as of DDK 1.7 (decision D8). The open
+ * microkernel's file header lists its entry points and patch sites
  * (docs/UKERNEL.md 4a).
  */
 
@@ -38,7 +37,6 @@
 #include "pvrsgx_kobj.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_pds.h"
-#include "pvrsgx_vm.h"
 
 static char *firmware;
 module_param(firmware, charp, 0444);
@@ -194,14 +192,13 @@ void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v)
 
 /*
  * Fill one of the microkernel's limm placeholders (word 0 0x?dbeef, the value
- * bits of word 1 clear; 0xfc237150 in the DDK's): bits 0-20 to word 0, 21-25 to
- * word 1 bits 4-8, 26-31 to word 1 bits 12-17.
+ * bits of word 1 clear): bits 0-20 to word 0, 21-25 to word 1 bits 4-8, 26-31
+ * to word 1 bits 12-17.
  */
-int pvrsgx_fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v)
+static int fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v)
 {
 	u32 *i = (u32 *)((u8 *)sdev->fw.cpu[PVRSGX_FW_UKERNEL] + off);
-	bool ok = (i[0] & 0x1fffff) == 0xdbeef &&
-		  (pvrsgx_fw_is_ddk(sdev) ? i[1] == 0xfc237150 : !(i[1] & 0x0003f1f0));
+	bool ok = (i[0] & 0x1fffff) == 0xdbeef && !(i[1] & 0x0003f1f0);
 
 	if (off > sdev->fw.image_size - 8 || !ok) {
 		drm_err(&sdev->base, "%s: no patch placeholder at +0x%x\n", sdev->fw.name, off);
@@ -261,7 +258,7 @@ static int fw_build_open(struct pvrsgx_device *sdev)
 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
 
 	for (u32 i = 0; i < f->n_patches && !err; i++)
-		err = pvrsgx_fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
+		err = fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
 	if (err)
 		return err;
 
@@ -285,8 +282,6 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 	t[0] = ARRAY_SIZE(sig_3d);
 	memcpy(t + 2, sig_3d, sizeof(sig_3d));
 
-	if (pvrsgx_fw_is_ddk(sdev))
-		return pvrsgx_fw_ddk_build(sdev);
 	return fw_build_open(sdev);
 }
 
@@ -452,8 +447,7 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 		drm_err(&sdev->base, "%s: %s\n", f->name, why);
 	if (err)
 		return err;
-	if (!IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) &&
-	    !(f->features & PVRSGX_UKFW_SECURE)) {
+	if (!(f->features & PVRSGX_UKFW_SECURE)) {
 		drm_err(&sdev->base, "%s: not a secure-mode image; clients would reach the firmware\n",
 			f->name);
 		return -EINVAL;
@@ -467,27 +461,6 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 	return 0;
 }
 
-/* The core's open microkernel; with DDK compat, the vendor one if that is missing. */
-static int fw_request(struct pvrsgx_device *sdev, const struct firmware **fw)
-{
-	const char *ddk = IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) ?
-			  sdev->core->ddk_fw_name : NULL;
-	int err;
-
-	if (firmware) {
-		sdev->fw.name = firmware;
-		return request_firmware(fw, firmware, sdev->base.dev);
-	}
-	sdev->fw.name = sdev->core->fw_name;
-	if (!ddk)
-		return request_firmware(fw, sdev->fw.name, sdev->base.dev);
-	err = firmware_request_nowarn(fw, sdev->fw.name, sdev->base.dev);
-	if (err) {
-		sdev->fw.name = ddk;
-		err = firmware_request_nowarn(fw, ddk, sdev->base.dev);
-	}
-	return err;
-}
 
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 {
@@ -496,15 +469,15 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 	u32 pds_base;
 	int err;
 
-	err = fw_request(sdev, &fw);
+	f->name = firmware ?: sdev->core->fw_name;
+	err = request_firmware(&fw, f->name, sdev->base.dev);
 	if (err) {
-		drm_err(&sdev->base, "no microkernel: %s (%d)\n", firmware ?: sdev->core->fw_name,
-			err);
+		drm_err(&sdev->base, "no microkernel: %s (%d)\n", f->name, err);
 		return err;
 	}
 	err = ukfw_load(sdev, fw);
 	if (err == -ENOENT)
-		err = pvrsgx_fw_ddk_load(sdev, fw);
+		drm_err(&sdev->base, "%s: not a microkernel file\n", f->name);
 	release_firmware(fw);
 	if (err)
 		return err;
@@ -687,8 +660,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
 	hc[HOSTCTL_HWR_SAMPLE_RATE] = hwr_check ? UKERNEL_TIMER_HZ / HWR_CHECK_HZ : 0;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = (core_clock ?: sdev->core->clock_hz) / UKERNEL_TIMER_HZ;
-	if (!pvrsgx_fw_is_ddk(sdev))
-		hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
+	hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
 	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
 	/* SGXPostPowerState clears the power status before every start. */
 	hc[HOSTCTL_POWER_STATUS] = 0;
@@ -732,9 +704,6 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
 		sdev->reset_logged = sdev->reset_count;
 	}
-	if (first && pvrsgx_vm_shares_kernel_heaps(sdev))
-		drm_warn(&sdev->base,
-			 "every VM maps the firmware's heaps: clients are not isolated from the firmware\n");
 
 	err = fw_check(sdev);
 	if (err)

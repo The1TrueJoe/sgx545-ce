@@ -308,13 +308,12 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   listed, or lacks a required feature, is refused before any register write.
   The SGX535 (also 16 directory lists, multiple memory contexts, plus a 2D core)
   would be a new entry and a check of the features it lacks.
-- [x] **The vendor microkernel is optional and easy to drop.**
-  `CONFIG_DRM_POWERVR_SGX_DDK_COMPAT` (default n) holds its fixed size, entry
-  programs, patch sites and host-kick table (`pvrsgx_fw_ddk.c`) and the
-  `share_kernel_heaps` path it needs. Without it, the driver loads only an open
-  microkernel that declares secure mode (no client directory maps the
-  firmware's heaps). Dropping it means deleting `pvrsgx_fw_ddk.c`, the Kconfig
-  entry, the two stubs in `pvrsgx_fw.h` and the `#if` in `pvrsgx_vm.c`.
+- [x] **No vendor microkernel.** The driver knows only the open microkernel,
+  and loads it only if it declares secure mode (no client directory maps the
+  firmware's heaps). The vendor image, its entry programs and patch sites, and
+  the shared-kernel-heap mode it needs are an out-of-tree patch
+  (`drm/ci/ddk-compat.patch`, about 400 lines) that only the CE5300 test
+  kernels apply.
 - [x] **Fail closed on unknown hardware.** Core table above; the gma500
   auxiliary-device probe checks the BAR size and parent.
 - [ ] **Cedarview entry.** Needs the core revision from the tester's kit v1
@@ -343,7 +342,7 @@ both configurations).
   header: clean.
 - [x] `kernel-doc -Wall -Werror` on the uAPI header and every driver file.
 - [x] sparse (`C=2`), driver and gma500.
-- [x] gcc `W=1`, upstream configuration, with DDK compat, and out of tree.
+- [x] gcc `W=1`, in tree and out of tree; the CE5300 test kernels also build the DDK-compat patch.
 - [x] clang `W=1` (`LLVM=1`), upstream configuration.
 - [x] smatch (`-p=kernel`).
 - [x] coccinelle (`make coccicheck MODE=report`).
@@ -412,9 +411,9 @@ guilty/innocent reporting, and the minimum uAPI.
 | F7 gma500 host | the auxiliary-device binding (with the gma500 patch) | ~150 |
 
 **Out of the upstream driver entirely:**
-- DDK compat (vendor firmware, entry programs, shared kernel heaps):
-  ~225 lines. It moves to an out-of-tree patch (`drm/ci/ddk-compat.patch`) that
-  only the CE5300 test kernels apply.
+- DDK compat (vendor firmware, entry programs, shared kernel heaps): done,
+  the tree lost 384 lines to `drm/ci/ddk-compat.patch`, which only the CE5300
+  test kernels apply.
 - Microkernel cleanup commands (v1 and v2): ~70 lines. The open microkernel
   doesn't use them; freed objects wait in the graveyard until the next
   render.

@@ -89,14 +89,10 @@ struct pvrsgx_fw {
 	u32 addr[PVRSGX_FW_NBUF];
 	/** @cpu: CPU address of each buffer. */
 	void *cpu[PVRSGX_FW_NBUF];
-	/** @host_kick: Microkernel entry of each SGXMKIF command type. */
-	u32 host_kick[11];
 	/** @cache_control: Invalidates to request with the next command. */
 	u32 cache_control;
 	/** @interface: DRM_POWERVR_SGX_FW_IF_*. */
 	u32 interface;
-	/** @ddk: The vendor microkernel, which runs under the job's directory. */
-	bool ddk;
 	/** @name: Firmware file the image came from. */
 	const char *name;
 	/** @image: The microkernel as loaded, for restarts. */
@@ -250,12 +246,6 @@ static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)
 	return file->driver_priv;
 }
 
-/* Whether the vendor microkernel runs (CONFIG_DRM_POWERVR_SGX_DDK_COMPAT only). */
-static inline bool pvrsgx_fw_is_ddk(const struct pvrsgx_device *sdev)
-{
-	return IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) && sdev->fw.ddk;
-}
-
 static inline u32 sgx_rd(struct pvrsgx_device *sdev, u32 reg)
 {
 	return ioread32(sdev->regs + reg);
@@ -265,12 +255,6 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 {
 	iowrite32(val, sdev->regs + reg);
 }
-
-struct pvrsgx_krange_span {
-	u32 start, end;
-};
-
-extern const struct pvrsgx_krange_span pvrsgx_kernel_heaps[3];
 
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags);

@@ -59,27 +59,6 @@ void pvrsgx_pds_movs(struct pvrsgx_pds *p, unsigned int dest, unsigned int a,
 	pds_emit(p, (u32)PDS_CC_ALWAYS << 24 | r1 << 18 | r2 << 13 | sel | dest);
 }
 
-/* d = a (DS0 side) op b (DS1 side); sources in 16-bit units. */
-void pvrsgx_pds_alu(struct pvrsgx_pds *p, unsigned int cc, unsigned int op,
-		    unsigned int d, unsigned int a, unsigned int b)
-{
-	pds_emit(p, op << 24 | cc << 24 | ds0w(a) * 2 << 16 | (b - 0x40) * 2 << 9 | d);
-}
-
-/* p0 = (r == 0) */
-void pvrsgx_pds_tst(struct pvrsgx_pds *p, unsigned int cc, unsigned int r)
-{
-	if (r >= 0x40 && r < 0x80)
-		pds_emit(p, 0x80000000u | cc << 24 | (r - 0x40) * 2 << 9 | 1 << 8);
-	else
-		pds_emit(p, 0x80000000u | cc << 24 | ds0w(r) * 2 << 16);
-}
-
-void pvrsgx_pds_bra(struct pvrsgx_pds *p, unsigned int cc, unsigned int target)
-{
-	pds_emit(p, 0x90000000u | cc << 24 | target);
-}
-
 void pvrsgx_pds_halt(struct pvrsgx_pds *p)
 {
 	pds_emit(p, 0xaf000000u);

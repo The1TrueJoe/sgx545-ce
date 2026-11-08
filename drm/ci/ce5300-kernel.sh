@@ -58,6 +58,8 @@ done
 
 rm -rf "$SRC/drivers/gpu/drm/powervr_sgx"
 cp -RL "$DRM/powervr_sgx" "$SRC/drivers/gpu/drm/powervr_sgx"
+# The vendor microkernel for A/B runs: an out-of-tree patch, never upstream.
+patch -d "$SRC/drivers/gpu/drm" -p2 --forward --batch < "$DRM/ci/ddk-compat.patch"
 grep -q powervr_sgx "$SRC/drivers/gpu/drm/Kconfig" ||
 	printf '\nsource "drivers/gpu/drm/powervr_sgx/Kconfig"\n' >> "$SRC/drivers/gpu/drm/Kconfig"
 grep -q powervr_sgx "$SRC/drivers/gpu/drm/Makefile" ||

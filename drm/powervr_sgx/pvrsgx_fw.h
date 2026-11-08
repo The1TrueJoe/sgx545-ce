@@ -5,11 +5,8 @@
 #define PVRSGX_FW_H
 
 #include <linux/bits.h>
-#include <linux/errno.h>
-#include <linux/kconfig.h>
 #include <linux/types.h>
 
-struct firmware;
 struct pvrsgx_device;
 struct seq_buf;
 
@@ -48,7 +45,7 @@ struct seq_buf;
 #define HOSTCTL_HOST_CLOCK		13
 #define HOSTCTL_ASSERT_FAIL		14
 
-#define HOSTCTL_FLAGS		15	/* open microkernel only (UKERNEL.md 4a) */
+#define HOSTCTL_FLAGS		15	/* UKERNEL.md 4a */
 #define HOSTCTL_CLEANUP_SEQ		16
 
 /* HOSTCTL_FLAGS: the host writes the background object's PDS words. */
@@ -82,21 +79,6 @@ void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v)
 void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
 		    const char *name);
 int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr);
-int pvrsgx_fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v);
 
-#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT)
-int pvrsgx_fw_ddk_load(struct pvrsgx_device *sdev, const struct firmware *fw);
-int pvrsgx_fw_ddk_build(struct pvrsgx_device *sdev);
-#else
-static inline int pvrsgx_fw_ddk_load(struct pvrsgx_device *sdev, const struct firmware *fw)
-{
-	return -ENOENT;
-}
-
-static inline int pvrsgx_fw_ddk_build(struct pvrsgx_device *sdev)
-{
-	return -EINVAL;
-}
-#endif
 
 #endif /* PVRSGX_FW_H */

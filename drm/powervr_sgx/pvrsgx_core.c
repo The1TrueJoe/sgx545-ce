@@ -22,7 +22,6 @@ static const struct pvrsgx_core_info cores[] = {
 		.num_dir_lists = 16,
 		.clock_hz = 400000000,
 		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
-		.ddk_fw_name = "powervr_sgx/sgx545-ukernel-1.7.862890.bin",
 	},
 };
 
