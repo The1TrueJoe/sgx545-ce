@@ -92,7 +92,9 @@ if [ $WHO = old ]; then
 	chroot $R /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/Xvfb :0 -screen 0 720x480x24 -nolisten tcp \
 		> /tmp/mc-oldnew-xvfb.log 2>&1 &
 	i=0; while [ ! -S /tmp/.X11-unix/X0 ] && [ $i -lt 50 ]; do sleep 0.2; i=$((i+1)); done
-	X() { chroot $R /usr/bin/env -i DISPLAY=:0 PATH=/usr/bin:/bin xdotool "$@"; }
+	# the clicks: the x64 root's xdotool through its own loader (the runtime has none)
+	X() { X64=/opt/x64root; env -i DISPLAY=:0 $X64/lib64/ld-linux-x86-64.so.2 \
+		--library-path $X64/usr/lib/x86_64-linux-gnu:$X64/lib/x86_64-linux-gnu $X64/usr/bin/xdotool "$@"; }
 	chroot $R /usr/bin/env -i HOME=/root TERM=linux DISPLAY=:0 PATH=/usr/local/bin:/usr/bin:/bin \
 		MC_GL=ddk MC_DIR=$GIN MC_TWEAKS=0 MC_WIDTH=720 MC_HEIGHT=480 LIBGL_FPS=1 MC_LINEBUF=1 \
 		LD_PRELOAD=/usr/lib/sgx/sgx-busidshim.so /usr/local/bin/minecraft-ab Player > "$LOG" 2>&1 &
