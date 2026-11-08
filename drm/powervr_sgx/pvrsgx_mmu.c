@@ -212,3 +212,20 @@ bool pvrsgx_mmu_range_empty(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size)
 	mutex_unlock(&mmu->lock);
 	return empty;
 }
+
+/*
+ * For a hang dump: the directory and table entries for dev_addr, or false if
+ * the directory is busy. Never allocates.
+ */
+bool pvrsgx_mmu_lookup(struct pvrsgx_mmu *mmu, u32 dev_addr, u32 *pde, u32 *pte)
+{
+	u32 *p;
+
+	if (!mutex_trylock(&mmu->lock))
+		return false;
+	*pde = mmu->pd[dev_addr >> (SGX_MMU_PAGE_SHIFT + SGX_MMU_PT_SHIFT)];
+	p = pte_get(mmu, dev_addr, false);
+	*pte = p ? *p : 0;
+	mutex_unlock(&mmu->lock);
+	return true;
+}
