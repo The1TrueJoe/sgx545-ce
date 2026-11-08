@@ -346,15 +346,44 @@ is b31 | b30 | 0x01b00000, an address past the end of the ZLS request base's
 range. Bits that make the 3D touch the stencil address then fault. **Point
 +0x38/+0x3c at valid memory before trying ZLS bits.**
 
-**Load: open.** No combination made the re-entry render start from the
-stored depth. TA-command 3D flag b8 (0x580, as the window depth capture has)
-on the re-entry render locked up once with the placeholder stencil words; with
-valid ones it runs normally and still doesn't load. What is known
-for a driver: the store works (`0x0017101c`, depth at ZLS base + +0x30);
-loading it back needs the remaining bit(s) of the ZLS control or a
-render-details/3D-flag combination not found yet. Until then a driver can
-avoid relying on ZLS loads: keep an FBO's scene in one render when it can,
-or redraw the depth-only geometry.
+**Load, from a split window frame** [D]. `zls-*` (2026-11-08) is a 720×480
+window with a 16-bit depth buffer, depth test LESS, clear depth 1. Draw 1 is
+a green triangle at depth 0.5. Draw 2 is the same triangle in red at depth
+0.75. Something runs between the two draws (probe `PROBE_FLUSHMID`). The
+DDK's frame is green in every variant: it keeps the depth.
+
+| between the draws | kicks (TA flags / 3D flags) | ZLS control of each render |
+|---|---|---|
+| nothing | 0x71 / 0, then 0x62 / 0x580 | `001710b4` (one render) |
+| glFlush, glFinish | 0x71 / 0, 0x60 / 0, then 0x62 / 0x580 | `001710b4` (one render) |
+| 1-pixel glReadPixels | 0x73 / 0x580, then 0x61 / 0x180, then 0x62 / 0x580 | `001710b4`, then `001770b6` |
+
+- **glFlush and glFinish don't split the render.** They kick the TA only
+  (3D flags 0) and the scene stays open, so a single render at the end sees
+  every draw's depth.
+- **Only a readback splits it.** The first render's ZLS control (`001710b4`)
+  stores depth. The second render's (`001770b6`, a deferred update at its
+  last kick) loads and stores it. The TA-only kick between them carries
+  `001170b2`, load only, in its render details.
+- **The bits.** The base is `0x111000 | (xtiles-1)<<3`.
+  - **Store** is b2 | b17 | b18 (`0x060004`). This matches the store proven
+    above.
+  - **Load** is b1 | b13 | b14 (`0x006002`). The section's earlier tries had
+    b1 only with the placeholder stencil words, which locked up; they had b14
+    without b1, which didn't load.
+- **The buffer and its addresses.**
+  - ZLS request base +0x04 = `3e500000`.
+  - Depth: +0x30 = +0x34 = `00081000`.
+  - Stencil: +0x38 = +0x3c = `801da000`.
+  - Stencil starts 0x159000 bytes after depth: 736 × 480 × 4 bytes, so one
+    float32 per pixel of the tile-padded width (23 tiles of 32 px). One
+    stencil byte per pixel follows.
+  - The same addresses serve the store and the load.
+- **Every DDK window render with a depth buffer stores depth** (`001710b4` at
+  the terminating kick), split or not.
+- **Not yet replayed natively.** An FBO replay with b1 | b13 | b14 and valid
+  stencil words on the re-entry render would prove it. Until then a driver can
+  avoid most splits by kicking only the TA at glFlush/glFinish, as the DDK does.
 
 ## 8. Cube maps [D]
 
