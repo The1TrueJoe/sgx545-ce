@@ -421,7 +421,10 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
    impl->base.size = (uint32_t)bytes;
    impl->dev = dd;
    impl->handle = handle;
-   impl->heap = SGX_HEAP_GENERAL;
+   /* an imported buffer may be sampled (a pixmap): the texture heap, as
+    * sgxws_bo_alloc's buffers */
+   impl->heap =
+      dd->has_heap[SGX_HEAP_TEXTURE] ? SGX_HEAP_TEXTURE : SGX_HEAP_GENERAL;
    impl->shared = true;
    impl->refs = 1;
    impl->dmabuf_fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
@@ -433,6 +436,10 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
    }
    simple_mtx_lock(&dd->lock);
    va = va_alloc(dd, impl->heap, bytes, 0x1000);
+   if (!va && impl->heap != SGX_HEAP_GENERAL) {
+      impl->heap = SGX_HEAP_GENERAL;
+      va = va_alloc(dd, impl->heap, bytes, 0x1000);
+   }
    simple_mtx_unlock(&dd->lock);
    if (!va) {
       e = -ENOMEM;
