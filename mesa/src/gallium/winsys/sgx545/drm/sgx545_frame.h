@@ -170,6 +170,7 @@ struct sgxws_ctx {
    uint64_t ns_latency; unsigned n_latency;   /* kick to seen done, renders that were waited for */
    uint64_t ns_latency_scanout; unsigned n_latency_scanout;   /* of those, the ones into the scanout buffer */
    unsigned frames;
+   uint64_t gpu_indices, gpu_verts;  /* stats: the VDM's indices and the vertices behind them */
 };
 
 /*

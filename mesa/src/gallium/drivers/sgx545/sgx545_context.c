@@ -128,6 +128,10 @@ sgx545_stats_report(struct sgx545_context *ctx)
    fprintf(stderr, "sgx545 stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms); textures read back %.0f ms (%llu KB)\n",
            ctx->stats.blit_gpu, ctx->stats.blit_copy, ctx->stats.blit_cpu, (unsigned long long)ctx->stats.blit_cpu_px,
            ctx->stats.blit_cpu_ns * ms, ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
+   fprintf(stderr, "sgx545 stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame)\n",
+           (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
+           ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
+           ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0);
    fprintf(stderr, "sgx545 stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
            "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
            dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes, ctx->stats.tex_flushes, ws.room_flushes,

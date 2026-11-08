@@ -1441,6 +1441,8 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    vdm(c, 0x40000000 | sec >> 4);
    vdm(c, vrows << 26 | 0xe100 | (vsec_dwords + 3) >> 2);
 
+   c->gpu_indices += n_idx;
+   c->gpu_verts += d->count;
    if (d->n_fetch)
       vdm_fetch(c, d->prim, n_idx, idx, fetch, d->n_fetch, vs->code, vs->in_dwords, vs->out_dwords, vs->temps,
                 vertices_per_task(vs->out_dwords));
@@ -1986,9 +1988,12 @@ sgxws_get_stats(struct sgxws_ctx *c, struct sgxws_stats *st, bool reset)
    st->n_latency = c->n_latency;
    st->n_latency_scanout = c->n_latency_scanout;
    st->room_flushes = c->room_flushes;
+   st->gpu_indices = c->gpu_indices;
+   st->gpu_verts = c->gpu_verts;
    if (reset) {
       c->ns_flush = c->ns_cmd = c->ns_kick = c->ns_target_wait = c->ns_slot_wait = 0;
       c->ns_sync_wait = c->ns_fence_wait = c->ns_latency = c->ns_latency_scanout = 0;
       c->n_latency = c->n_latency_scanout = c->room_flushes = 0;
+      c->gpu_indices = c->gpu_verts = 0;
    }
 }
