@@ -8,6 +8,7 @@ SGX
 Product   SoC          Core ID, rev     Status
 ========= ============ ================ ===========
 SGX545    Intel CE5300 0x0115, 1.0.14   Supported
+SGX545    Cedarview    0x0115, 1.0.13   In progress
 ========= ============ ================ ===========
 
 The SGX5xx cores differ in their USSE instruction set and state words: the
@@ -22,7 +23,10 @@ Kernel driver
 The driver runs on the ``powervr_sgx`` DRM driver. It reads the core's ID,
 revision and render-target limits with ``DRM_IOCTL_POWERVR_SGX_DEV_QUERY``
 and submits render jobs only. The SGX is a render-only device: scanout goes
-through a separate display driver, paired with ``kmsro``.
+through a separate display driver, paired with ``kmsro``: ``simpledrm`` on
+the CE5300, ``gma500`` on Cedarview, where ``powervr_sgx`` binds to an
+auxiliary device of the display's PCI function and the loader takes the
+render node of that child device.
 
 Supported APIs
 --------------

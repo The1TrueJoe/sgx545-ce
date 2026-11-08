@@ -45,6 +45,17 @@ jobs:
           set -eux
           SGX_MESA_BUILD=$PWD/build/mesa sh mesa/build.sh debian
 
+      # Cedarview: the display is gma500 (PCI) and powervr_sgx sits on an
+      # auxiliary device of its function. The loader's pick of that render
+      # node, on fake sysfs trees, and the stub an X server's GLX loads.
+      - name: Render-node pick and the gma500 stub
+        run: |
+          set -eux
+          test -e build/mesa/debian/install/opt/sgx/lib/dri/gma500_dri.so
+          meson configure build/mesa/debian/build -Dbuild-tests=true
+          ninja -C build/mesa/debian/build src/loader/loader_child_render_node_test
+          build/mesa/debian/build/src/loader/loader_child_render_node_test
+
       - name: The firmware (the open microkernel, secure mode)
         run: |
           set -eux
