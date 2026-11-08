@@ -12,8 +12,13 @@ case " $(cat /proc/cmdline) " in *" ohc_kexec="*) exit 0 ;; esac
 K=/boot/once/bzImage
 [ -f "$K" ] || exit 0
 [ -r /opt/ohc/board.env ] && . /opt/ohc/board.env
+# The bootstrap's ohc.* options (ohc.switch=1, ...), as S00kexec carries them.
+OHC_ARGS=
+for a in $(cat /proc/cmdline); do
+	case "$a" in ohc.*) OHC_ARGS="$OHC_ARGS $a" ;; esac
+done
 echo "S00aramboot: kexec $K"
-kexec -l "$K" --command-line="console=ttyS0,115200 pci=realloc,nocrs,routeirq intel_iommu=off root=/dev/mmcblk0p1 rootwait rw ohc_kexec=1 ohc.ramboot=1 ${OHC_KEXEC_CMDLINE_EXTRA:-}" &&
+kexec -l "$K" --command-line="console=ttyS0,115200 pci=realloc,nocrs,routeirq intel_iommu=off root=/dev/mmcblk0p1 rootwait rw ohc_kexec=1 ohc.ramboot=1 ${OHC_KEXEC_CMDLINE_EXTRA:-}${OHC_ARGS}" &&
 	sync && kexec -e
 echo "S00aramboot: kexec failed, booting normally" >&2
 exit 0
