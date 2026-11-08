@@ -480,6 +480,9 @@ def parse(text):
     t = t.strip()
     mnem, _, rest = t.partition(" ")
     parts = mnem.split(".")
+    # (fdual's secondary 3 is fsubflr; USEASM's fadm and ffrc encode as it too)
+    if parts[0] == "fdual" and len(parts) == 3 and parts[2] in ("fadm", "ffrc"):
+        parts[2] = "fsubflr"
     ops = [opd_parse(x) for x in _split_ops(rest)] if rest.strip() else []
     errs = []
     for f in FORMS:
