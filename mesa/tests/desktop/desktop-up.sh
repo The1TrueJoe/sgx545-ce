@@ -17,6 +17,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 env_mesa="LD_LIBRARY_PATH=/opt/sgx/lib GBM_BACKENDS_PATH=/opt/sgx/lib/gbm \
 __EGL_VENDOR_LIBRARY_DIRS=/opt/sgx/share/glvnd/egl_vendor.d __GLX_VENDOR_LIBRARY_NAME=mesa \
 LIBGL_DRIVERS_PATH=/opt/sgx/lib/dri"
+# mesa-sgx installed as a package (docs/INSTALL.md) needs no environment
+[ -e "$R/etc/ld.so.conf.d/00-sgx.conf" ] && env_mesa=
+# XENV: more environment for Xorg only (SGX_DEBUG=..., MESA_SHADER_CAPTURE_PATH=...)
+XENV=${XENV:-}
 binds="dev proc sys tmp run"
 mounts() {
 	for d in $binds; do
@@ -36,7 +40,7 @@ start)
 	mounts
 	mkdir -p "$R/etc/X11" "$R/var/log"
 	cp "$here/xorg.conf" "$R/etc/X11/xorg.conf"
-	chroot "$R" /usr/bin/env $env_mesa /usr/lib/xorg/Xorg :0 vt1 -nolisten tcp -noreset \
+	chroot "$R" /usr/bin/env $env_mesa $XENV /usr/lib/xorg/Xorg :0 vt1 -nolisten tcp -noreset \
 		-config /etc/X11/xorg.conf -logfile /var/log/Xorg.0.log > "$R/var/log/xorg.out" 2>&1 &
 	for i in $(seq 1 30); do [ -S /tmp/.X11-unix/X0 ] && break; sleep 1; done
 	[ -S /tmp/.X11-unix/X0 ] || {
@@ -62,6 +66,7 @@ stop)
 	;;
 run)
 	shift
-	chroot "$R" /usr/bin/env $env_mesa DISPLAY=:0 /usr/sbin/runuser -u desk -- "$@"
+	chroot "$R" /usr/bin/env $env_mesa DISPLAY=:0 HOME=/home/desk USER=desk XDG_RUNTIME_DIR=/tmp/desk-run \
+		/usr/sbin/runuser -u desk -- "$@"
 	;;
 esac
