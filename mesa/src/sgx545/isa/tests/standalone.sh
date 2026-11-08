@@ -29,7 +29,7 @@ CF=(-std=gnu11 -g -O1 -I $B -I $HERE -I $M/src -I $M/include -I $M/src/compiler/
     -DHAVE_PTHREAD -DHAVE_STRUCT_TIMESPEC -DHAVE_TIMESPEC_GET -DHAVE_STRNDUP)
 OBJS=()
 for f in $B/sgx545-isa.c $HERE/sgx545_isa_encode.c $HERE/sgx545_isa_disasm.c \
-         $HERE/sgx545_isa_asm.c $HERE/sgx545_isa_asm_int.c $HERE/tests/standalone_stubs.c \
+         $HERE/sgx545_isa_asm.c $HERE/sgx545_isa_asm_int.c $HERE/sgx545_isa_coissue.c $HERE/tests/standalone_stubs.c \
          $M/src/compiler/isaspec/isaspec.c $M/src/util/ralloc.c $M/src/util/hash_table.c; do
   o=$B/obj/$(basename $f .c).o
   ${CC:-cc} "${CF[@]}" -c $f -o $o

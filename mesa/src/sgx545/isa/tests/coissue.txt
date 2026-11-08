@@ -47,3 +47,35 @@ dot3 r0, r1, r2 [cs=cx4 as=ax2] == dot3 r0, r1, r2 [cs=x4 as=x2]
 frcp r0, r1 [f16 c10 chan=2] ; 00000080 08000190
 fsin r0, r1 [c10 chan=1 f16d]
 fsin r0, r1  [c10 chan=1 f16d]
+
+# Same-word hazards (ISA.md "fdual for a compiler", "efo"): an fdual primary
+# reading the internal register its secondary writes is a race, and so is
+# efo's d naming an internal register the word writes.
+hazard fdual.mov.fexp2 r3, r0, r124, r2 [sd=i0 sb=i1 sc=i0]
+hazard fdual.fmad.fsin pa1, r126, r1, r2 [sd=i2 sb=i1 sc=i0]
+hazard fdual.fssq.mov r3, r0, i1, r2 [sd=i1 msrc=i0]
+hazard efo r0, r1, r2, r3 [d=i0 wi0]
+hazard efo r0, r1, r2, r3 [d=i1 i=m0/m1 wi1]
+# not hazards: the secondary reads before the primary writes; both halves
+# read one slot; neg1/neg2 are the primary's; a slot the primary doesn't read
+safe fdual.fmad.mov r125, r0, r1, r2 [sd=i0 msrc=i1]
+safe fdual.fmad.fmad r3, r0, -r1, -r2 [sd=i0 sb=src1 sc=src2]
+safe fdual.mov.fexp2 r3, r124, r1, r2 [sd=i0 sb=i1 sc=i0]
+safe fdual.fmad.fadd r3, r0, r1, r2 [sd=i1 sb=i0 sc=i2]
+safe efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1]
+safe efo r0, r1, r2, r3 [d=i1 wi0]
+
+# sec 3 is fsubflr; USEASM's fadm and ffrc encode as it (ISA.md "Dual issue")
+fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
+fdual.mov.fadm r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2] == fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
+fdual.mov.ffrc r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1] == fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1]
+
+# bilin/ssum16/firv/firh's fmt is a mnemonic suffix; [fmt=s8] means the same
+# (ISA.md "hw 16 / 17 / 1a")
+firh.s8 i1, r1, r2, r3 [rpt=6 coef=1 shift=31]
+firh.o8 i2, r1, r2, r3
+firv.fmt3 r0, r1, r2, r3
+ssum16.s8 r0, r1, r2, r3
+bilin r0, r1, r2, r3 [fmt=s8 ileave] == bilin.s8 r0, r1, r2, r3 [ileave]
+firh i1, r1, r2, r3 [fmt=o8] == firh.o8 i1, r1, r2, r3
+ssum16 r0, sa4, sa5, r3 [fmt=o8] == ssum16.o8 r0, sa4, sa5, r3

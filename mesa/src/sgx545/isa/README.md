@@ -12,6 +12,7 @@ text assembler.
 | `sgx545_isa_encode.c` | leaf selection for the generated encoder, the helpers the XML's `<map>`s call |
 | `sgx545_isa_disasm.c` | the generated decoder plus custom fields, setfc tracking, bracket tidying |
 | `sgx545_isa_asm.c`, `sgx545_isa_asm_int.c` | ISA.md's text notation into `struct sgx_isa_instr` |
+| `sgx545_isa_coissue.c` | co-issue for a compiler: what an fdual's two halves read and write (`sgx545_isa_fdual_use()`), and the same-word races of fdual and efo (`sgx545_isa_coissue_hazard()`), from ISA.md "fdual for a compiler" and "efo" |
 | `sgx545_isa_enums.py` | generates `sgx545-isa-enums.h`: the opcode and operand-kind enums the encoder switches on, and the field-value enums |
 | `tests/sgx545_isa_test.c` | text -> struct -> words -> text round trip; checks expected words where a line gives them |
 | `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: ISA.md's efo control words and the other spellings of efo and fdual, as `a == b` lines) |
