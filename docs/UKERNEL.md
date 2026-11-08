@@ -791,6 +791,37 @@ EDM isolated on list 15 is a deliberate divergence, verified on EA1 HW (the TA
 reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
 dir-list with a client requestor.
 
+**How the DDK reaches client memory from the EDM.** It never uses a second
+bank or a separate data requestor. A subroutine (pc 0x1864) copies the TA's
+nibble (r16 = 0) or the 3D's (r16 = 1) of `BIF_BANK0` into the EDM nibble,
+and r16 = 2 puts the EDM back on list 15. Its callers bracket every EDM
+access to client memory:
+
+| set (pc) | restore (pc) | list |
+|---|---|---|
+| 0x0835 | 0x0843 | TA |
+| 0x0941 | 0x094d | TA |
+| 0x0d90 | 0x0da0 | 3D |
+| 0x0ed5 | 0x0f34 | 3D |
+| 0x1234 | 0x123a | 3D |
+| 0x128b | 0x129b | 3D |
+| 0x13ae | 0x13be | 3D |
+| 0x1517 | 0x1527 | 3D |
+| 0x190c | 0x1918 | TA |
+
+The background-block write at 3D start (pc 0x128d-0x1296; `docs/STATE.md`
+§6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
+inside it. While a window is open, the EDM fetches its instructions and reads
+kernel data through the client's page directory. The DDK therefore needs the
+kernel code and kernel-data heaps mapped in every client PD; it has no mode
+that works without them.
+
+`EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
+SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only
+BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (pc 0x0c6e,
+0x1778, 0x17be). The header doesn't separate the EDM's instruction fetch from
+its data accesses in either bank. [D, code and trace]
+
 **Parameter-buffer / DPM setup.** `pb[n]` is word n of the PB descriptor
 (`docs/STATE.md` section 6).
 
