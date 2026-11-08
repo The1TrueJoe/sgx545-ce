@@ -17,6 +17,7 @@ on:
     paths:
       - drm/ci/deb-kernel.sh
       - drm/ci/deb.fragment
+      - drm/gma500/**
       - .github/workflows/powervr-sgx-deb.yml
 
 concurrency:
@@ -66,6 +67,33 @@ jobs:
           mkdir -p out
           mv linux-image-*.deb linux-headers-*.deb out/
           ls -l out
+
+      - name: Check the packages
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          # The display stays with gma500 (KMS and fbdev), rendering goes to powervr_sgx.
+          for want in CONFIG_DRM_GMA500=m CONFIG_DRM_POWERVR_SGX=m CONFIG_DRM_POWERVR_SGX_GMA500=y \
+              CONFIG_DRM_FBDEV_EMULATION=y CONFIG_AUXILIARY_BUS=y; do
+            grep -qx "$want" $L/.config || { echo "missing $want"; exit 1; }
+          done
+          rm -rf root && mkdir root && dpkg-deb -x out/linux-image-*.deb root
+          M=$(ls -d root/lib/modules/*)
+          for m in gma500_gfx powervr_sgx; do
+            find $M -name "$m.ko*" | grep -q . || { echo "no $m module"; exit 1; }
+          done
+          P=$(find $M -name 'powervr_sgx.ko*')
+          modinfo $P | tee modinfo.txt
+          grep -q '^alias: *auxiliary:gma500_gfx.sgx' modinfo.txt
+          grep -q '^alias: *pci:v00008086d0000089B' modinfo.txt
+          grep -q '^firmware: *powervr_sgx/sgx545_ukernel.bin' modinfo.txt
+          # udev loads powervr_sgx when gma500 publishes the SGX.
+          depmod -b root "$(basename $M)"
+          grep -q 'gma500_gfx.sgx' $M/modules.alias
+          # gma500 can export scanout buffers (0002).
+          G=$(find $M -name 'gma500_gfx.ko*')
+          case $G in *.zst) zstd -dq $G -o g.ko ;; *.xz) xz -dc $G > g.ko ;; *) cp $G g.ko ;; esac
+          nm g.ko | grep -q psb_gem_prime_get_sg_table
 
       - uses: actions/upload-artifact@v4
         with:
