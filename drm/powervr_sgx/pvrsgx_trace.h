@@ -31,8 +31,10 @@ TRACE_EVENT(pvrsgx_kick,
 /* A render's last kick: the dataset and the per-frame values it was given. */
 TRACE_EVENT(pvrsgx_render_kick,
 	TP_PROTO(u32 rtdata, u32 w, u32 h, u32 frame, u32 entry, u32 rgn_this,
-		 u32 rgn_next, u32 cmd_off),
-	TP_ARGS(rtdata, w, h, frame, entry, rgn_this, rgn_next, cmd_off),
+		 u32 rgn_next, u32 cmd_off, u32 pb_desc, u32 te_screen,
+		 u32 te_mtile0, u32 te_mtile1, u32 mt_tiles, u32 screen_size),
+	TP_ARGS(rtdata, w, h, frame, entry, rgn_this, rgn_next, cmd_off, pb_desc,
+		te_screen, te_mtile0, te_mtile1, mt_tiles, screen_size),
 	TP_STRUCT__entry(
 		__field(u32, rtdata)
 		__field(u32, w)
@@ -42,6 +44,12 @@ TRACE_EVENT(pvrsgx_render_kick,
 		__field(u32, rgn_this)
 		__field(u32, rgn_next)
 		__field(u32, cmd_off)
+		__field(u32, pb_desc)
+		__field(u32, te_screen)
+		__field(u32, te_mtile0)
+		__field(u32, te_mtile1)
+		__field(u32, mt_tiles)
+		__field(u32, screen_size)
 	),
 	TP_fast_assign(
 		__entry->rtdata = rtdata;
@@ -52,11 +60,19 @@ TRACE_EVENT(pvrsgx_render_kick,
 		__entry->rgn_this = rgn_this;
 		__entry->rgn_next = rgn_next;
 		__entry->cmd_off = cmd_off;
+		__entry->pb_desc = pb_desc;
+		__entry->te_screen = te_screen;
+		__entry->te_mtile0 = te_mtile0;
+		__entry->te_mtile1 = te_mtile1;
+		__entry->mt_tiles = mt_tiles;
+		__entry->screen_size = screen_size;
 	),
-	TP_printk("rtdata=0x%08x %ux%u frame=%u entry=0x%08x rgn=0x%08x next=0x%08x cmd_off=0x%x",
+	TP_printk("rtdata=0x%08x %ux%u frame=%u entry=0x%08x rgn=0x%08x next=0x%08x cmd_off=0x%x pb=0x%08x te_screen=0x%08x mtile=0x%08x,0x%08x mt_tiles=0x%08x screen=0x%08x",
 		  __entry->rtdata, __entry->w, __entry->h, __entry->frame,
 		  __entry->entry, __entry->rgn_this, __entry->rgn_next,
-		  __entry->cmd_off)
+		  __entry->cmd_off, __entry->pb_desc, __entry->te_screen,
+		  __entry->te_mtile0, __entry->te_mtile1, __entry->mt_tiles,
+		  __entry->screen_size)
 );
 
 /* The microkernel's interrupt, in the hard handler. */
