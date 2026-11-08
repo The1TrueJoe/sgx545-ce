@@ -54,6 +54,7 @@ static const struct { const char *name; unsigned off; } REGS[] = {
     {"r648",          0x648},   // TA free-list state, reloaded from 0x710<<16
     {"r638",          0x638},   // TA free-list state, reloaded from 0x724/0x72c
     {"a74",           0xA74},   // b0 = TA paused by the handler
+    {"ctx630",        0x630},   // DPM context select: b1 the 3D's slot, b2 the TA's (two scenes on one PB)
 };
 #define NREG (sizeof(REGS) / sizeof(REGS[0]))
 
