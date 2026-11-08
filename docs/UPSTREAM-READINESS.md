@@ -386,6 +386,68 @@ both configurations).
 - [x] Fixed in this pass: cleanup took a runtime-PM reference through
   `sdev->pdev`, which is NULL behind gma500.
 
+### Minimal first series (plan, 2026-11-08)
+
+Today the driver is 7,639 lines (`drm/powervr_sgx`, including 640 lines of
+stream decoder shared with Mesa and the 168-line KUnit test). The tree keeps
+everything, but it is layered so that v1 builds and runs on its own, and each
+follow-up is a self-contained addition: its own file(s) plus a few clearly
+marked call sites. CI builds v1 alone (the follow-up files removed) as well
+as the whole driver.
+
+**v1, about 5,900 lines:** probe and the core table, firmware boot (open
+microkernel only, secure mode), MMU and VMs (`drm_gpuvm`, `VM_MAP`/`VM_UNMAP`),
+GEM, `DEV_QUERY`, contexts, render job submit with syncobjs, the command-stream
+and shader validator (the security model), timeout reset and recovery with
+guilty/innocent reporting, and the minimum uAPI.
+
+| follow-up | what | lines it takes out of v1 |
+|---|---|---|
+| F1 transfer | transfer contexts and jobs, their uAPI job type | ~150 |
+| F2 PRIME import | importing foreign dma-bufs, the cache flush around jobs, the 4 GiB check (v1 imports only its own BOs) | ~100 |
+| F3 runtime PM | autosuspend; v1 keeps the GPU on while the device is open | ~90 |
+| F4 devcoredump | the hang dump | ~125 |
+| F5 debugfs | `status`, `render`, `render_before` and the snapshot parameters | ~180 |
+| F6 tracepoints | `pvrsgx_kick/irq/job_done/flush_imports` | ~100 |
+| F7 gma500 host | the auxiliary-device binding (with the gma500 patch) | ~150 |
+
+**Out of the upstream driver entirely:**
+- DDK compat (vendor firmware, entry programs, shared kernel heaps):
+  ~225 lines. It moves to an out-of-tree patch (`drm/ci/ddk-compat.patch`) that
+  only the CE5300 test kernels apply.
+- Microkernel cleanup commands (v1 and v2): ~70 lines. The open microkernel
+  doesn't use them; freed objects wait in the graveyard until the next
+  render.
+- Developer parameters `single_entry`, `idle_kernel_pd`, `restart_quiesce`,
+  `hwr_check`, `probe_only`, `reap_after_render`, `core_clock`, `cleanup`
+  and their code paths: ~60 lines.
+
+**While cutting, in this order:**
+1. Delete: DDK compat out to the patch, cleanup commands, developer
+   parameters, anything the open microkernel no longer reads (to confirm with
+   it: the TA/3D signature lists, HWPerf buffer, `GETMISCINFO` struct-size
+   check).
+2. Layer: move F1-F7 into their own files behind stubs in their headers.
+3. Kernel style:
+   - Firmware structures as C structs with kernel-doc and `static_assert`
+     offsets, in place of word offsets (`cmd[0x1c / 4]`, 78 sites in
+     `pvrsgx_render.c`).
+   - Registers generated from the GPL `sgx545defs.h` into `pvrsgx_regs.h`, with
+     `BIT()`/`GENMASK()`, only the registers the driver uses.
+   - No DDK names (`SGXMKIF_*`, `ui32*`: 17 places).
+   - One prefix, `pvrsgx_`: the five `powervr_sgx_stream*` files become
+     `pvrsgx_stream*` (shared with Mesa, so agreed with uapi-stream first).
+4. Generic: an ISA generation in the core table for the validator's tables;
+   no SGX545 or CE5300 constants outside the table and the platform glue.
+5. Prove it: the checker CI on v1 and the whole; the lockdep/KASAN/UBSAN run
+   on the CE5300 with the uAPI suite and frame tests; then full dEQP through
+   Mesa.
+
+**uAPI effect.** v1's header leaves out the transfer job type and its
+structures (F1 appends them; the enum is append-only). Mesa must then work
+without transfer jobs on a v1 kernel, which needs mesa-gallium's answer
+first. Nothing else in the uAPI changes.
+
 ### The series
 
 The m2-drm history is a development log with fixes on fixes; nothing upstream

@@ -688,7 +688,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_HWR_SAMPLE_RATE] = hwr_check ? UKERNEL_TIMER_HZ / HWR_CHECK_HZ : 0;
 	hc[HOSTCTL_UK_TIMER_CLOCK] = (core_clock ?: sdev->core->clock_hz) / UKERNEL_TIMER_HZ;
 	if (!pvrsgx_fw_is_ddk(sdev))
-		hc[HOSTCTL_UKFW_FLAGS] = HOSTCTL_UKFW_HOST_BGBLOCK;
+		hc[HOSTCTL_FLAGS] = HOSTCTL_HOST_BGBLOCK;
 	hc[HOSTCTL_APM_SAMPLE_RATE] = 0;
 	/* SGXPostPowerState clears the power status before every start. */
 	hc[HOSTCTL_POWER_STATUS] = 0;

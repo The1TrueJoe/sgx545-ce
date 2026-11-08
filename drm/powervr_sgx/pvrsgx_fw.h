@@ -48,11 +48,11 @@ struct seq_buf;
 #define HOSTCTL_HOST_CLOCK		13
 #define HOSTCTL_ASSERT_FAIL		14
 
-#define HOSTCTL_UKFW_FLAGS		15	/* open microkernel only (UKERNEL.md 4a) */
+#define HOSTCTL_FLAGS		15	/* open microkernel only (UKERNEL.md 4a) */
 #define HOSTCTL_CLEANUP_SEQ		16
 
-/* HOSTCTL_UKFW_FLAGS: the host writes the background object's PDS words. */
-#define HOSTCTL_UKFW_HOST_BGBLOCK	BIT(0)
+/* HOSTCTL_FLAGS: the host writes the background object's PDS words. */
+#define HOSTCTL_HOST_BGBLOCK	BIT(0)
 
 /* Feature bits of the open microkernel's file header (docs/UKERNEL.md 4a). */
 #define PVRSGX_UKFW_CLEANUP_V2		BIT(0)
