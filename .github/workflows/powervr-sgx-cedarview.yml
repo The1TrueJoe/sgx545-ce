@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: MIT
+# Copyright © 2026 Joseph Telaak
+#
+# The Cedarview (GMA3600/3650) test kernel: mainline + drm/gma500 patches +
+# powervr_sgx, for the Cedarview tester kit. Its own workflow, so a push that
+# cancels the EA build never cancels this one: runs queue instead.
+name: powervr-sgx-cedarview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [m2-drm]
+    paths:
+      - drm/**
+      - docs/uapi/**
+      - tools/gen/sgxgen.*
+      - tools/tex/sgxtex.*
+      - .github/workflows/powervr-sgx-cedarview.yml
+
+concurrency:
+  group: powervr-sgx-cedarview-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LINUX_VERSION: 7.1.8
+
+jobs:
+  cedarview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev cpio ccache sparse musl-tools
+
+      - name: Restore the kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.LINUX_VERSION }}.tar.xz
+          key: linux-${{ env.LINUX_VERSION }}
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-cdv-${{ env.LINUX_VERSION }}-${{ github.sha }}
+          restore-keys: ccache-cdv-${{ env.LINUX_VERSION }}-
+
+      - name: Lay out the kernel
+        run: |
+          set -eux
+          [ -f linux-$LINUX_VERSION.tar.xz ] ||
+            curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
+          tar xf linux-$LINUX_VERSION.tar.xz
+          sh drm/ci/cedarview-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+
+      - name: The gma500 patches through checkpatch --strict
+        run: |
+          set -eux
+          for p in drm/gma500/*.patch; do
+            # On stdin, as a mailed patch; the author signs it when sending.
+            perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse \
+              --ignore FILE_PATH_CHANGES,MISSING_SIGN_OFF - < "$p" | tee -a gma-checkpatch.log
+          done
+          ! grep -E ': (ERROR|WARNING|CHECK):' gma-checkpatch.log
+
+      - name: Build the kernel and modules
+        run: |
+          set -eux
+          export CCACHE_DIR=~/.cache/ccache
+          ccache -M 2G
+          make -C linux-$LINUX_VERSION ARCH=x86_64 CC="ccache gcc" -j"$(nproc)" bzImage modules
+          ccache -s
+
+      - name: gma500 and powervr_sgx with W=1 and sparse
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          touch $L/drivers/gpu/drm/gma500/*.c $L/drivers/gpu/drm/powervr_sgx/*.c
+          make -C $L ARCH=x86_64 W=1 C=1 drivers/gpu/drm/gma500/ drivers/gpu/drm/powervr_sgx/ 2>&1 | tee w1.log
+          ! grep -E '(gma500|powervr_sgx)/.*(warning|error):' w1.log
+
+      - name: Collect the Cedarview set
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          mkdir -p out/modules
+          cp $L/arch/x86/boot/bzImage out/bzImage
+          cp $L/.config out/config
+          make -C $L ARCH=x86_64 INSTALL_MOD_PATH=$PWD/out/modroot INSTALL_MOD_STRIP=1 modules_install
+          for m in gma500_gfx powervr_sgx gpu-sched drm_exec drm_gpuvm drm_shmem_helper; do
+            find $L -name "$m.ko" -exec cp {} out/modules/ \;
+          done
+          cp drm/gma500/*.patch out/
+          # The uAPI tests, static, as the EA set has them.
+          make -C $L ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr
+          python3 tools/gen/mkusse.py > tools/gen/usse_progs.h
+          F="-static -O2 -fno-strict-aliasing -Wall -Wno-unused-function -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm"
+          musl-gcc $F -o out/powervr_sgx_test drm/tests/powervr_sgx_test.c
+          musl-gcc $F -DSGXGEN_DRM -I tools/gen -o out/powervr_sgx_frame drm/tests/powervr_sgx_frame.c tools/gen/sgxgen.c -lm
+          musl-gcc $F -I tools/tex -o out/powervr_sgx_blit drm/tests/powervr_sgx_blit.c tools/tex/sgxtex.c
+          musl-gcc $F -DSGXGEN_DRM -I tools/gen -I tools/tex -o out/powervr_sgx_hang drm/tests/powervr_sgx_hang.c tools/gen/sgxgen.c tools/tex/sgxtex.c -lm
+          strings $L/vmlinux | grep -m1 'Linux version' > out/version
+          ls -l out out/modules
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powervr-sgx-cedarview
+          path: out/
+          retention-days: 14
