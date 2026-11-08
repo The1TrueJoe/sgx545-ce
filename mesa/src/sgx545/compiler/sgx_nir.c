@@ -49,7 +49,7 @@ static const nir_shader_compiler_options options = {
                                   break became 125 instructions) */
    .lower_int64_options = ~0,
    /* (not lower_doubles_options = ~0: GLSL ES has no doubles, and with it
-    * 144 dEQP fragment loops came out wrong, EA3) */
+    * 144 dEQP fragment loops came out wrong on hardware) */
    .force_indirect_unrolling = nir_var_all,
    .force_indirect_unrolling_sampler = true,
 };

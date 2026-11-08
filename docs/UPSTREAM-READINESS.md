@@ -152,9 +152,10 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
   - `nodrvconsts`;
   - `SGX545_FRAME_GAP_US`;
   - `SGX545_SLOTS`: pick the default and drop the knob.
-- **The compiler** has raw `getenv`: `SGX_DISABLE`, `SGX_F16_CONST`,
-  `SGX_F16_ITER`, `SGX_PRINT_PRE_I2F`. Route them through `debug_get_option`
-  in a named table (usse-compiler).
+- **The compiler: done (1ba7774).** `SGX_DISABLE`, `SGX_F16_CONST` and
+  `SGX_F16_ITER` are one `SGX545_COMPILER_DEBUG` flag table (`nopa`, `noout`,
+  ..., `nocoissue`, `nof16const`, `nof16iter`), read once per compile.
+  `SGX_PRINT_PRE_I2F` is dropped. See C1.
 
 ### M7. Tests in Mesa's format
 
@@ -187,6 +188,88 @@ Write it for Mesa's docs tree. It covers:
 `mesa/build.sh` generates `sgx545_usse_progs.h` with `tools/gen/mkusse.py`.
 Upstream, the fixed programs are assembled by the compiler's encoder at build
 time (DRIVER-UPSTREAM.md §5.2, COMPILER-UPSTREAM.md).
+
+### Compiler (usse-compiler)
+
+Scope: `mesa/src/sgx545/compiler`. Status as of 2026-11-08, um-re 0507229
+plus the compiler commits after it. Every step below was checked
+byte-identical on the corpus, glmark2 and the Minecraft gl4es set (11,868
+programs, F32, F16 and driver mode). `docs/COMPILER-UPSTREAM.md` is the
+earlier licensing and provenance audit.
+
+| # | item | status |
+|---|---|---|
+| C1 | debug options in a `debug_named_value` table | done (1ba7774) |
+| C2 | clang-format | done (31f6f18) |
+| C3 | NIR passes in Mesa's shape | done (69923e0); one item left |
+| C4 | unit tests under `meson test` | done (7e0421a); coverage to grow |
+| C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
+| C6 | no global mutable state | done (`hw_const`) |
+| C7 | comments cite `docs/`, not libusc or the DDK | not started |
+| C8 | DDK-compatibility code out of the compiler | partly |
+| C9 | file size | open (optional) |
+
+- **C1. Debug options.**
+  - `SGX545_COMPILER_DEBUG` replaces `SGX_DISABLE` and the two F16 switches.
+    It uses `DEBUG_GET_ONCE_FLAGS_OPTION` and is stored in the compile
+    context, so there is no raw `getenv` and no global state.
+  - The flags are listed in `compiler/README.md`.
+  - The dead `SGX_PRINT_PRE_I2F` dump and an unused helper are gone.
+  - The compiler now builds without `-Wno-missing-prototypes`.
+- **C2. clang-format.**
+  - `mesa/src/sgx545/.clang-format`: `InheritParentConfig` from Mesa's
+    `src/.clang-format`, `DisableFormat: false`, 80 columns, as `src/asahi`
+    and `src/freedreno` have it.
+  - It sits above `compiler/`, `isa/`, `pds/` and `csbgen/`; formatting
+    those three is cleanroom-isa's.
+  - Trailing comments that wrapped were moved above their fields.
+  - Still to do: Mesa's `.clang-format-include` needs a `src/sgx545/**/*`
+    line (a patch item) so CI enforces it.
+- **C3. NIR passes.**
+  - The backend's own passes take the shader, return progress and run
+    through `NIR_PASS`: `lower_mediump`, `narrow16`, `uniform_formats`,
+    `lower_tex_derefs`, `lower_uniforms`.
+  - Rewrites are `nir_shader_{instructions,alu,intrinsics}_pass` callbacks;
+    the block walks left are analyses.
+  - Still to do: `sgx_lower()` sets `s->options` to its own options. The
+    driver and sgxc should create the shader with `sgx_nir_options()`
+    instead, and the compiler should assert that they did.
+- **C4. Tests.**
+  - `meson test --suite sgx545` runs `sgx545_compiler` (gtest) beside
+    cleanroom-isa's `sgx545_isa`.
+  - Shaders are built with `nir_builder` and compiled; every word must
+    decode through the isaspec disassembler.
+  - Cases: a fragment varying to colour, a vertex position, efo co-issue on
+    mat4 * v, and the int-select loop bound (d3adad7).
+  - Each case was checked to fail on the bug it guards.
+  - To grow: F16 and C10 paths, textures, discard, constants in memory.
+  - The DDK corpus harness (`tools/usc`) stays in this repository.
+- **C5. Structure doc.** `compiler/README.md` covers the files, the pipeline
+  (lowering, analysis, selection, backend passes, allocation, encoding), the
+  debug flags and the tests. Mesa's `docs/drivers/sgx545.rst` (M8) can link
+  it or take a section from it.
+- **C6. Global state.** `hw_const()` built a static table on first use (a
+  race between two contexts compiling at once). It is now a const table.
+  This also fixes a latent bug: a literal equal to the old filler value
+  0xdeadbeef no longer matches hardware constant 0.
+- **C7. Comments.**
+  - About 58 comments say "as libusc does" or "as the DDK does" (27 in
+    `sgx_compile.c`, 16 in `sgx_nir.c`, 12 in `sgx_compiler.h`).
+  - Rewrite each to cite the `docs/` section and the test that fixed the
+    behaviour (COMPILER-UPSTREAM.md §2.2).
+  - Box and application names: none left in the compiler.
+- **C8. DDK-compatibility code** (COMPILER-UPSTREAM.md §3).
+  - Still in the compiler: the varying-to-set allocation, first-use sampler
+    numbering, the USP label numbers 3/4/5, and the placeholder colour
+    iteration's PA count.
+  - Upstream, the driver owns layouts. Move these behind
+    `struct sgx_layout`, or into sgxc.
+- **C9. File size.** `sgx_compile.c` is 5.8k lines, the size of
+  `ir3_compiler_nir.c`.
+  - Splitting it into selection, register allocation and encoding files means
+    exporting about 64 of its 128 functions (prefixed, with prototypes in
+    `sgx_priv.h`).
+  - Worth it only if review asks.
 
 ## Firmware (the open SGX microkernel, `ukernel/`)
 

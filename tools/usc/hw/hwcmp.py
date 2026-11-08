@@ -9,7 +9,7 @@ built into usc/build (see glt.c / uspsub.c). Results go to OUTDIR/hw/:
 ddk/<name>.rgba, sub/<name>.rgba, ddk_usp/<tag>.usp (the DDK's binaries),
 and results.txt.
 
-Environment: EA3 (ssh helper script, default the main session's bin/ea3).
+Environment: EA3 (the box's ssh helper script, required).
 """
 import argparse
 import glob
@@ -42,8 +42,10 @@ A2 = [0.6, 0.1, 0.9, 0.3, 0.2, 0.7, 0.4, 0.8, 0.5, 0.5, 0.1, 0.9, 0.3, 0.95, 0.6
 
 
 def env_ea3():
-    return os.environ.get("EA3", "/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/"
-                                 "8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/bin/ea3")
+    p = os.environ.get("EA3")
+    if not p:
+        sys.exit("hwcmp: set EA3 to the box's ssh helper script")
+    return p
 
 
 def sh(cmd, inp=None, check=True):
