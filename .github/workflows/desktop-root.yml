@@ -32,15 +32,16 @@ jobs:
               grep -o 'debian-archive-keyring_[0-9.]*_all\.deb' | sort -V | tail -1)
           curl -sfLO "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/$d"
           dpkg-deb -x "$d" keyring
-          # its combined keyring (with trixie's keys) under a name apt takes as a keyring file
-          cp keyring/usr/share/keyrings/debian-archive-keyring.pgp debian-archive-keyring.gpg
+          # its combined keyring (with trixie's keys) as a .gpg file outside $HOME: apt checks
+          # signatures as _apt, which cannot read the runner's home
+          sudo install -D -m 0644 keyring/usr/share/keyrings/debian-archive-keyring.pgp /usr/local/share/keyrings/debian-archive-keyring.gpg
 
       - name: The root
         run: |
           set -eux
           pkgs=$(grep -v '^#' mesa/tests/desktop/packages.txt | grep . | paste -sd, -)
           sudo mmdebstrap --variant=apt --architectures=amd64 \
-            --keyring="$PWD/debian-archive-keyring.gpg" \
+            --keyring=/usr/local/share/keyrings/debian-archive-keyring.gpg \
             --include="$pkgs" \
             --dpkgopt='path-exclude=/usr/share/doc/*' --dpkgopt='path-exclude=/usr/share/man/*' \
             --dpkgopt='path-exclude=/usr/share/info/*' \
