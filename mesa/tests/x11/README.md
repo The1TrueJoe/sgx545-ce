@@ -10,6 +10,8 @@ gl4es and no shims in the clients. Logs: `docs/log/entries/2026-11-04-0250-*` an
 | `x11-up.sh ROOT start\|stop\|run CMD` | the EA | Xorg in the root (its dev, proc, sys and tmp bound in) and clients against `:0` on our Mesa |
 | `mc-x64-stage.sh ROOT` | the EA | copies Minecraft from the openhc-minecraft install into `ROOT/opt/mc-x64`, read-only on the install's side |
 | `mc-x64.sh` | the EA, in the root | Minecraft 1.7.10 on a 64-bit JVM, as the install's `minecraft-ab` |
+| `ea1-ramboot.sh KERNDIR [ddk\|open]` | the host | RAM-boots an m2-drm `powervr-sgx-ea1-v1` artifact on the EA1 and loads powervr_sgx with the named microkernel |
+| `memdump.c` | the EA | physical memory through `/dev/mem`: the scanout at 0x7fc00000, stride 2944 |
 | `mc-x64-bench.sh ROOT [SECS]` | the EA | `mcbench.sh`'s benchmark world and clicks on this path, FPS and job timeouts |
 
 ## From nothing to a run
