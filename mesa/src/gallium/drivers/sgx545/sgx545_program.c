@@ -540,9 +540,10 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
    }
    /* st's fixed-function fragment programs only owe the framebuffer's
-    * precision: mediump (texture coordinates stay F32) */
+    * precision: mediump (texture coordinates stay F32), opt-in until piglit's
+    * fixed-function tests have run on it */
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT && nir->info.name &&
-                     !strcmp(nir->info.name, "ff-fs") && !(sgx545_debug & SGX545_DEBUG_NO_FF_MEDIUMP);
+                     !strcmp(nir->info.name, "ff-fs") && (sgx545_debug & SGX545_DEBUG_FF_MEDIUMP);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    {
       /* a 1D texture is a 2D one a texel high (sgx545_resource): its samples

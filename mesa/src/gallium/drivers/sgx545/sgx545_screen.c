@@ -38,7 +38,7 @@ static const struct debug_named_value sgx545_debug_options[] = {
    { "blits", SGX545_DEBUG_BLITS, "describe every 255th blit and its caller" },
    { "novs", SGX545_DEBUG_NO_VS_COMPILER, "the fixed vertex programs instead of the compiler" },
    { "nofs", SGX545_DEBUG_NO_FS_COMPILER, "the fixed fragment programs instead of the compiler" },
-   { "noffmediump", SGX545_DEBUG_NO_FF_MEDIUMP, "fixed-function fragment programs at full precision" },
+   { "ffmediump", SGX545_DEBUG_FF_MEDIUMP, "fixed-function fragment programs at mediump (F16; texture coordinates F32)" },
    { "zerocopy", SGX545_DEBUG_ZERO_COPY, "f32 vertex inputs DMAed where they are: buffers in place, client arrays copied as they are" },
    { "flushrt", SGX545_DEBUG_FLUSH_RT, "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)" },
    DEBUG_NAMED_VALUE_END
