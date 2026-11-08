@@ -42,3 +42,8 @@ fdual.mov.mov r0, r1, r2, r3 [msrc=4] == fdual.mov.mov r0, r1, r2, r3 [msrc=src0
 
 # dot's scales as cx<n> / ax<n> (ISA.md "Other spellings asm.py takes")
 dot3 r0, r1, r2 [cs=cx4 as=ax2] == dot3 r0, r1, r2 [cs=x4 as=x2]
+
+# hw 1's f16 (h7) and c10 (h8) are separate bits; both may be set
+frcp r0, r1 [f16 c10 chan=2] ; 00000080 08000190
+fsin r0, r1 [c10 chan=1 f16d]
+fsin r0, r1  [c10 chan=1 f16d]

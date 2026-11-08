@@ -74,6 +74,7 @@ struct sgx_isa_instr {
 
    /* float */
    bool f16d;
+   bool sf16, sc10;     /* hw 1: the source is F16 (h7) / C10 (h8); both may be set */
    uint8_t chan;        /* hw1 chan, test chan */
    uint8_t swz[3];      /* fmad16, enum sgx_isa_f16swz */
    uint8_t cp[2];       /* fdpc / fddpc clip planes */

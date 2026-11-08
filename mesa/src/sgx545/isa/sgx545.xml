@@ -1224,8 +1224,8 @@ NUM | BANK << 7 | EXT << 8.
 	<encode>
 		<map name="F16D">src->f16d</map>
 		<map name="CHAN">src->chan</map>
-		<map name="F16">src->src[1].fmt == SGX_ISA_FMT_F16</map>
-		<map name="C10">src->src[1].fmt == SGX_ISA_FMT_C10</map>
+		<map name="F16">src->sf16</map>
+		<map name="C10">src->sc10</map>
 	</encode>
 </bitset>
 

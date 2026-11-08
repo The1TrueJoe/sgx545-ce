@@ -144,14 +144,8 @@ sgx_form_set(struct sgx_isa_instr *instr, unsigned form, unsigned id, int32_t v)
    case SGX_FLD_INC1:    instr->inc[1] = v; break;
    case SGX_FLD_INC2:    instr->inc[2] = v; break;
    case SGX_FLD_FMT:     instr->fmt = v; break;
-   case SGX_FLD_F16:
-      if (v)
-         instr->src[1].fmt = SGX_ISA_FMT_F16;
-      break;
-   case SGX_FLD_C10:
-      if (v)
-         instr->src[1].fmt = SGX_ISA_FMT_C10;
-      break;
+   case SGX_FLD_F16:     instr->sf16 = v; break;
+   case SGX_FLD_C10:     instr->sc10 = v; break;
    case SGX_FLD_CHAN:    instr->chan = v; break;
    case SGX_FLD_F16D:    instr->f16d = v; break;
    case SGX_FLD_SWZ0:    instr->swz[0] = v; break;
