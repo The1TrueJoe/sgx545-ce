@@ -58,6 +58,7 @@ enum sgx_form {
    SGX_OP_PCK_S16_F32,
    SGX_OP_PCK_C10_F32,
    SGX_OP_PCK_C10_C10,
+   SGX_OP_PCK_F32_S16,
    /* hw 9, f, a-b */
    SGX_OP_TEST,
    SGX_OP_TESTMASK,
