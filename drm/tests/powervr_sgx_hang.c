@@ -37,6 +37,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 
 #include "sgxgen.h"
 #include "sgxtex.h"
@@ -374,10 +376,23 @@ static long coredump_take(void)
 	return size;
 }
 
-/* power/runtime_status of the GPU's PCI function. */
+/* The GPU's device in sysfs, from the open node: a PCI function or gma500's auxiliary device. */
+static FILE *power_file(const char *name)
+{
+	char path[128];
+	struct stat st;
+
+	if (fstat(dev.fd, &st))
+		return NULL;
+	snprintf(path, sizeof(path), "/sys/dev/char/%u:%u/device/power/%s", major(st.st_rdev),
+		 minor(st.st_rdev), name);
+	return fopen(path, "r");
+}
+
+/* power/runtime_status of the GPU's device. */
 static int rpm_status(char *buf, size_t n)
 {
-	FILE *fp = fopen("/sys/bus/pci/devices/0000:01:02.0/power/runtime_status", "r");
+	FILE *fp = power_file("runtime_status");
 	int ok;
 
 	if (!fp)
@@ -392,10 +407,10 @@ static int rpm_status(char *buf, size_t n)
 /* 1 once suspended, 0 if not within ms, -1 without runtime PM. */
 static int rpm_wait_suspended(unsigned ms)
 {
-	FILE *fp = fopen("/sys/bus/pci/devices/0000:01:02.0/power/control", "r");
+	FILE *fp = power_file("control");
 	char st[32] = "";
 
-	/* "on": runtime PM forbidden (powervr_sgx.runtime_pm=0) */
+	/* "on": runtime PM forbidden */
 	if (fp) {
 		if (!fgets(st, sizeof(st), fp))
 			st[0] = 0;
