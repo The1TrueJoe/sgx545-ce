@@ -76,6 +76,14 @@ WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
 TIMER_DIV = int(os.environ.get("UK_TIMERDIV", "1"))
 
+# M1-exit experiment (uapi-stream frame-40 hang, devcd int 0x2/0x0): the idle ACTIVE_POWER
+# raise in kick_end strands the NEXT host doorbell after the CCB drains on a single context
+# (per-context, idle-timer driven; 20 processes never idle long enough; DDK clean). Set
+# UK_NO_IDLE_AP=1 to skip the raise (keep only the EVENT_TIMER keep-alive) and A/B it on HW
+# -- pair with a lengthened/disabled SGXOSTimer watchdog driver-side. Default 0 is
+# byte-identical (the raise is still emitted).
+NO_IDLE_AP = int(os.environ.get("UK_NO_IDLE_AP", "0"))
+
 # ---- control-block field word indices (as secondary attributes) -----------
 SA_SELF = 0          # the control block's own device address
 SA_HOSTCTL = 1       # SGXMKIF_HOST_CTL address
@@ -940,27 +948,28 @@ def build(a):
         a.st_sa(SA_SELF, 0x3a, 2)                  # kernel CCB write offset
         a.st_sa(SA_SELF, 0x3b, 3)                  # kernel CCB read offset
         a.i("idf"); a.i("wdf")
-    a.i("test.xor.eq p0, r2, r3")                  # queue empty?
-    a.i("(!p0) ba kick_idle_done")
-    a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")   # a render in flight?
-    a.i("wdf")
-    a.i("test.and.eq p0, r2, r2")
-    a.i("(!p0) ba kick_idle_done")
-    a.i(f"ld.a.d r2, r17, #{SC_XFER} [moe]")        # a transfer in flight?
-    a.i("wdf")
-    a.i("test.and.eq p0, r2, r2")
-    a.i("(!p0) ba kick_idle_done")
-    # idle: raise ACTIVE_POWER in host control, then the host IRQ
-    a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")
-    a.i("wdf")
-    a.i(f"ld.a.d r2, r1, #{HC_INTFLAGS} [moe]")
-    a.i("wdf")
-    a.i(f"or r2, r2, #{EDM_INTERRUPT_ACTIVE_POWER}")
-    a.i(f"st.a.d r1, #{HC_INTFLAGS}, r2 [moe]")
-    a.i("idf")
-    a.i("wdf")
-    a.i(f"limm r0, #{SW_EVENT}")
-    a.i("ba raise_host_irq")                        # write SW_EVENT to EVENT_STATUS
+    if not NO_IDLE_AP:
+        a.i("test.xor.eq p0, r2, r3")                  # queue empty?
+        a.i("(!p0) ba kick_idle_done")
+        a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")   # a render in flight?
+        a.i("wdf")
+        a.i("test.and.eq p0, r2, r2")
+        a.i("(!p0) ba kick_idle_done")
+        a.i(f"ld.a.d r2, r17, #{SC_XFER} [moe]")        # a transfer in flight?
+        a.i("wdf")
+        a.i("test.and.eq p0, r2, r2")
+        a.i("(!p0) ba kick_idle_done")
+        # idle: raise ACTIVE_POWER in host control, then the host IRQ
+        a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")
+        a.i("wdf")
+        a.i(f"ld.a.d r2, r1, #{HC_INTFLAGS} [moe]")
+        a.i("wdf")
+        a.i(f"or r2, r2, #{EDM_INTERRUPT_ACTIVE_POWER}")
+        a.i(f"st.a.d r1, #{HC_INTFLAGS}, r2 [moe]")
+        a.i("idf")
+        a.i("wdf")
+        a.i(f"limm r0, #{SW_EVENT}")
+        a.i("ba raise_host_irq")                        # write SW_EVENT to EVENT_STATUS
     a.label("kick_idle_done")
     a.end()
 
