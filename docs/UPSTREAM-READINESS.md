@@ -12,6 +12,18 @@ Other components track their own readiness in their own docs
 (`docs/DRIVER-UPSTREAM.md`, `docs/COMPILER-UPSTREAM.md`); this file collects the
 cross-cutting status and the firmware section.
 
+**Who edits what.** Each section has one owner, and only that session edits
+it. To change another session's section, message its owner. A new area gets
+a new section at the end of the file, never in the middle.
+
+| section | owner |
+|---|---|
+| this intro and note | main |
+| Mesa pipe driver and compiler | mesa-gallium (compiler items: usse-compiler) |
+| Firmware | open-ukernel |
+| Mesa winsys and platform | uapi-stream |
+| Docs: neutral platform wording | ta3d-state |
+
 ## Mesa pipe driver and compiler
 
 
@@ -258,16 +270,26 @@ The last column is the count of lines naming a branch, commit or log entry.
 | UAPI.md | 9 | 1 | not started | uapi-stream |
 | GEN.md, WINSYS.md | 5, 4 | 0 | not started | mesa-gallium |
 | COMPILER-UPSTREAM.md, DRIVER-UPSTREAM.md | 2, 2 | 1, 1 | not started | usse-compiler, mesa-gallium |
-| NOTES.md, PERF.md, PIGLIT.md, CLEANROOM-COVERAGE.md, README.md | 11, 2, 7, 17, 1 | — | internal working notes; neutralise only if they go upstream | main |
+| NOTES.md, PERF.md, PIGLIT.md, CLEANROOM-COVERAGE.md | 11, 2, 7, 17 | — | internal working notes, stay as they are (decided) | main |
+| README.md | 1 | — | not started | main |
 
-Still to decide for all docs:
-- **Commit hashes, branch names (`um-re`) and `docs/log` paths in the prose.**
-  They are evidence pointers, but they mean nothing outside this repository.
-  Either drop them from upstream copies, or keep the docs out of the upstream
-  trees and send only Mesa's `docs/drivers/*.rst` and the kernel's
-  `Documentation/` text.
-- **Firmware file names** in SRVINIT.md and UKERNEL.md (`sgx545-ukernel-openhc.bin`)
-  follow the firmware's naming, which dcd50df changed to a per-core name.
-  Update them when that lands.
-- **The inline hardware-provenance comments in `ukernel/ukernel.py`**: a later,
-  optional pass (see the firmware section).
+Decided (main, 2026-11-08):
+- **Internal notes stay as they are.** NOTES, PERF, PIGLIT,
+  CLEANROOM-COVERAGE and `docs/log/` are this repository's working records and
+  don't go upstream.
+- **Upstream text names no commits, branches or log paths.** That covers
+  `Documentation/gpu`, Mesa's `docs/drivers`, the uAPI header's kernel-doc,
+  and anything copied from UAPI.md or DRM-DRIVER.md. Such text states the
+  facts and their evidence directly. Our own `docs/` may keep the pointers.
+- **Firmware file names follow the per-core naming** (dcd50df).
+  - The build writes `<core>-ukernel-openhc.bin`, now
+    `sgx545-ukernel-openhc.bin`. SRVINIT.md's `srvinit -o` example uses it.
+  - The driver requests the packaged image as
+    `powervr_sgx/sgx545-openhc-ukernel.bin`; UKERNEL.md §4a uses it.
+  - Both match the code (`ukernel/build.py`, `pvrsgx_fw.c`), so no rename was
+    needed.
+  - The WHENCE draft's `powervr/` directory differs from the driver's
+    `powervr_sgx/`. The firmware section already lists it as open.
+
+Later and optional: the inline hardware-provenance comments in
+`ukernel/ukernel.py` (see the firmware section).
