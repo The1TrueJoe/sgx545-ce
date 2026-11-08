@@ -55,12 +55,14 @@ jobs:
           L=linux-$LINUX_VERSION
           make -C $L ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr >/dev/null
           cmp drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h docs/uapi/powervr_sgx_drm.h
+          # As docs/uapi/check.sh: the kernel's headers as system headers, our header checked.
           W="-std=c11 -Wall -Wextra -Wpedantic -Werror -Wpadded"
-          for m in -m32 -m64; do
-            gcc $m $W -I hdr/include -I hdr/include/drm -I docs/uapi -c docs/uapi/check_layout.c -o /dev/null
+          I="-isystem hdr/include -isystem hdr/include/drm -I docs/uapi"
+          for t in i386-linux-gnu x86_64-linux-gnu; do
+            clang --target=$t $W $I -c docs/uapi/check_layout.c -o /dev/null
           done
           # The asserts must catch a misplaced __u64.
-          ! gcc -m32 $W -DCHECK_NEGATIVE -I hdr/include -I hdr/include/drm -I docs/uapi \
+          ! clang --target=i386-linux-gnu $W $I -DCHECK_NEGATIVE \
             -c docs/uapi/check_layout.c -o /dev/null 2>/dev/null
 
       - name: Lay out mainline with the driver and gma500 patch in tree

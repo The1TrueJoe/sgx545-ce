@@ -1,4 +1,4 @@
-# powervr_sgx: the openHC EA real kernel with the new DRM driver in tree, the
+# powervr_sgx: the CE5300 board kernel with the new DRM driver in tree, the
 # driver again out of tree against it, and the uAPI tests. The artifact is a
 # RAM-boot test set for an EA (bzImage, modules, tests); never flash it.
 name: powervr-sgx
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       board:
-        description: openHC EA board (ea1-v1, ea3-v2, ...)
+        description: CE5300 board (ea1-v1, ea3-v2, ...)
         default: ea1-v1
       debug:
         description: Lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (drm/ci/debug.fragment)
@@ -32,7 +32,7 @@ concurrency:
 
 env:
   LINUX_VERSION: 7.1.8
-  OPENHC_REF: main
+  DIST_REF: main
   BOARD: ${{ inputs.board || 'ea1-v1' }}
   SET: ${{ inputs.board || 'ea1-v1' }}${{ inputs.debug && '-debug' || '' }}
 
@@ -43,12 +43,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: openHC (board config, patches, EA drivers)
+      - name: The board tree (board config, patches, drivers)
         uses: actions/checkout@v4
         with:
           repository: The1TrueJoe/openHC
-          ref: ${{ env.OPENHC_REF }}
-          path: openhc
+          ref: ${{ env.DIST_REF }}
+          path: dist
           sparse-checkout: |
             board
             build
@@ -83,7 +83,7 @@ jobs:
             curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
           tar xf linux-$LINUX_VERSION.tar.xz
           ${{ inputs.debug && 'export EXTRA_FRAGMENTS=$PWD/drm/ci/debug.fragment' || 'true' }}
-          sh drm/ci/openhc-ea-kernel.sh "$PWD/openhc" "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+          sh drm/ci/ce5300-kernel.sh "$PWD/dist" "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
 
       - name: Build the kernel and modules
         run: |
