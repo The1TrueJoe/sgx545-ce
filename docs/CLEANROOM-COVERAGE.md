@@ -239,16 +239,26 @@ re-read these rows against the sections named:
   - "Background object" T3 `00800000`: STATE.md §5.
   - "Vertices per task": corrected. The rule holds for compiled shaders;
     the DDK's built-in clear programs run 8 per task (STATE.md §2).
-- **Still open in STATE.md §2-§5, needing new captures or hardware pokes:**
-  - the PBE stride encoding (word 2 = 0 for stride 1) and word 2 b15;
-  - TSP word 1;
-  - VDM draw words 2 ("batch") and 5 (n);
-  - PDS word 1 b25-28;
-  - the background T0 b21-26 and PDS middle word `00030001`;
-  - the clear's vertex-program output order;
-  - the subtract modes of constant-colour blending;
+- **From new DDK captures (EA1, 2026-11-08; 33 one-change probes in
+  `~/Documents/GitHub/sgx545-work/caps-ddk/2026-11-08/`):**
+  - PDS word 1 b25-28 (STATE.md §3 "PDS words");
+  - TSP word 1 by precision (§3 "Output select … and TSP words");
+  - constant-colour subtract and reverse subtract (§3);
+  - the PBE pitch padding and word 2 b15 (§4);
+  - the background's T0/T1 (§5);
+  - VDM draw words 2 and 5 (§2): constant, meaning still G;
+  - the clear's vertex program (§3, from base4).
+- **Still open in STATE.md §2-§5:**
+  - PBE word 2 b15's effect when clear (it is never clear in a capture;
+    needs a replay poke);
+  - the meanings of the VDM batch and n;
+  - PDS word 1 b25-28 with both secondaries and more than one unit;
+  - background T0 b21-26 in a texture's twiddled layout;
+  - the PDS middle word `00030001`;
   - the terminate's DOUTA meanings;
-  - the in1 bits of the pixel event.
+  - the pixel-event in1 bits;
+  - where vertex uniforms start (the probe's vertex override didn't take);
+  - points without gl_PointSize (the DDK drops the draw).
 - **New:** UKERNEL.md §5 "Where the DDK microkernel raises the host
   interrupt": every SW_EVENT site and what triggers it, the fact that no
   completion waits for the timer, the hardware-done to IRQ times, and where
