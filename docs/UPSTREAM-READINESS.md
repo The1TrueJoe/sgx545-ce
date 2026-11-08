@@ -12,25 +12,29 @@ Other components track their own readiness in their own docs
 (`docs/DRIVER-UPSTREAM.md`, `docs/COMPILER-UPSTREAM.md`); this file collects the
 cross-cutting status and the firmware section.
 
-## Mesa: the gallium driver and winsys
+## Mesa pipe driver and compiler
 
-Scope: `mesa/src/gallium/drivers/sgx545` (driver) and
-`mesa/src/gallium/winsys/sgx545/drm` (winsys). The compiler
+
+Scope: `mesa/src/gallium/drivers/sgx545` (the pipe driver), the gallium half
+of patch 0001, 0002 and 0004, by mesa-gallium. The winsys, the EGL platform
+and the loader/kmsro patches are uapi-stream's section below; `sgxws.h` is the
+seam, kept stable during the pass. Items M1, M4 (winsys files) and M9 sit at
+the seam and are listed here for completeness. The compiler
 (`mesa/src/sgx545/compiler`) is covered by `docs/COMPILER-UPSTREAM.md`.
 `docs/DRIVER-UPSTREAM.md` (2026-11-01) is the earlier hardware-fact audit; its
 doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 
 | # | item | status | owner |
 |---|---|---|---|
-| M1 | upstream build is powervr_sgx only | mostly there | mesa-gallium, uapi-stream |
-| M2 | features from DEV_QUERY and a core table | not started | mesa-gallium, m2 |
+| M1 | upstream build is powervr_sgx only | mostly there | uapi-stream |
+| M2 | features from DEV_QUERY and a core table | not started | mesa-gallium (table), uapi-stream (queries) |
 | M3 | driver name for the family | decision needed | Joseph |
-| M4 | clang-format | not started | mesa-gallium |
-| M5 | comments and naming | not started | mesa-gallium |
+| M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
+| M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
 | M6 | debug options and experiment code | partly | mesa-gallium, usse-compiler |
-| M7 | tests in Mesa's format (`ci/`) | partly | mesa-gallium |
+| M7 | tests in Mesa's format (`ci/`) | partly (ddk files moved, mg-perf 1b86487) | mesa-gallium |
 | M8 | `docs/drivers/sgx545.rst` | not started | mesa-gallium |
-| M9 | build inputs from `tools/` | open | usse-compiler |
+| M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
 
 ### M1. The upstream build is powervr_sgx only
 
@@ -219,3 +223,7 @@ by the manifest `version` + `build_id`.
   behaviours were confirmed on which bring-up box). These are useful engineering
   history; a final upstream-source pass can thin them or move the box-specific
   ones to `docs/log/`, but they do not affect the binary and are low priority.
+
+## Mesa winsys and platform
+
+(uapi-stream)
