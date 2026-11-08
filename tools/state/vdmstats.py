@@ -42,6 +42,12 @@ def walk(mem, va, limit=1 << 20):
             draws.append(ws)
             va += 24
             continue
+        if t == 0 and w:
+            # link: the stream continues at (w & 0x0fffffff) << 2 (seen in a long
+            # Minecraft stream: 0x0f899400 -> 0x3e265000, general heap)
+            other["links"] += 1
+            va = (w & 0x0FFFFFFF) << 2
+            continue
         other[f"word {w:#010x}"] += 1
         break
     return draws, other

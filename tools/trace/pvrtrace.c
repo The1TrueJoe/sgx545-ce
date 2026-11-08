@@ -73,7 +73,7 @@ enum {
 #define SNAP_INIT 4
 #define SNAP_XFER 5
 
-#define MAX_MAPS 512
+#define MAX_MAPS 16384			/* a long GL client keeps ~2000 buffers mapped */
 
 static struct { uintptr_t addr; size_t len; uint64_t off; } maps[MAX_MAPS];
 static int nmaps;
