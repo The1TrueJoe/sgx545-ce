@@ -534,6 +534,10 @@ compile_shader(struct sgx545_context *ctx, struct sgx545_shader *so, nir_shader 
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
    opts.driver_consts = !(sgx545_debug & SGX545_DEBUG_NO_DRV_CONSTS);
+   /* st's fixed-function fragment programs only owe the framebuffer's
+    * precision: mediump (texture coordinates stay F32) */
+   opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT && nir->info.name &&
+                     !strcmp(nir->info.name, "ff-fs") && !(sgx545_debug & SGX545_DEBUG_NO_FF_MEDIUMP);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
    {
       /* a 1D texture is a 2D one a texel high (sgx545_resource): its samples
