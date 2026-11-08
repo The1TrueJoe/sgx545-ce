@@ -634,21 +634,73 @@ src16(nir_builder *b, nir_alu_instr *alu, unsigned j)
    return nir_swizzle(b, p->src[0].src.ssa, swz, nc);
 }
 
+/* every use reads d as a float (through moves, vecs and selects) */
+static bool
+float_uses(nir_def *d, unsigned depth)
+{
+   nir_foreach_use_including_if(use, d) {
+      if (nir_src_is_if(use))
+         return false;
+      nir_instr *u = nir_src_use_instr(use);
+      if (u->type == nir_instr_type_intrinsic) {
+         nir_intrinsic_instr *in = nir_instr_as_intrinsic(u);
+         if (in->intrinsic == nir_intrinsic_store_output &&
+             nir_alu_type_get_base_type(nir_intrinsic_src_type(in)) == nir_type_float)
+            continue;
+         return false;
+      }
+      if (u->type != nir_instr_type_alu)
+         return false;
+      nir_alu_instr *a = nir_instr_as_alu(u);
+      unsigned j = container_of(use, nir_alu_src, src) - a->src;
+      if (nir_op_is_vec_or_mov(a->op) || (a->op == nir_op_bcsel && j > 0)) {
+         if (depth >= 4 || !float_uses(&a->def, depth + 1))
+            return false;
+      } else if (nir_alu_type_get_base_type(nir_op_infos[a->op].input_types[j]) != nir_type_float) {
+         return false;
+      }
+   }
+   return true;
+}
+
+/* every constant operand (bcsel's condition aside) is an F16 value exactly */
+static bool
+consts_f16_exact(nir_alu_instr *alu)
+{
+   for (unsigned j = 0; j < nir_op_infos[alu->op].num_inputs; j++) {
+      if ((alu->op == nir_op_bcsel && j == 0) || !nir_src_is_const(alu->src[j].src))
+         continue;
+      for (unsigned k = 0; k < nir_ssa_alu_instr_src_components(alu, j); k++) {
+         float f = nir_src_comp_as_float(alu->src[j].src, alu->src[j].swizzle[k]);
+         if (_mesa_half_to_float(_mesa_float_to_half(f)) != f)
+            return false;
+      }
+   }
+   return true;
+}
+
 static bool
 demote_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 {
    nir_op op = alu->op;
    if (alu->def.bit_size != 32 || !demote_op(op) || feeds_coord(&alu->def, 0))
       return false;
-   unsigned n = nir_op_infos[op].num_inputs;
+   /* at least one operand F16 underneath, or constants that are F16 values
+    * read as floats: constants alone don't say the value is a float
+    * (bcsel(b, 3, 0) over ints, a 32-bit loop bound), nor that F16 holds
+    * them (a highp atan's -pi/2) */
+   unsigned n = nir_op_infos[op].num_inputs, f16 = 0;
    for (unsigned j = 0; j < n; j++) {
       if (op == nir_op_bcsel && j == 0)
          continue;
       nir_alu_instr *p = alu_of(alu->src[j].src);
-      if (!nir_src_is_const(alu->src[j].src) &&
-          !(p && p->op == nir_op_f2f32 && nir_src_bit_size(p->src[0].src) == 16))
+      if (p && p->op == nir_op_f2f32 && nir_src_bit_size(p->src[0].src) == 16)
+         f16++;
+      else if (!nir_src_is_const(alu->src[j].src))
          return false;
    }
+   if (!f16 && !(consts_f16_exact(alu) && float_uses(&alu->def, 0)))
+      return false;
    b->cursor = nir_before_instr(&alu->instr);
    nir_def *x[NIR_MAX_VEC_COMPONENTS];
    for (unsigned j = 0; j < n; j++)
