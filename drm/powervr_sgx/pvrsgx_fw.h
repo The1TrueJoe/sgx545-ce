@@ -74,6 +74,7 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev);
 int pvrsgx_fw_start(struct pvrsgx_device *sdev);
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev);
 u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word);
+void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v);
 void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
 		    const char *name);
 int pvrsgx_fw_cleanup(struct pvrsgx_device *sdev, u32 type, u32 addr);

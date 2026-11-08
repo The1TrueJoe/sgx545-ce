@@ -181,7 +181,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache sparse
+            bc bison flex libelf-dev libssl-dev cpio ccache sparse musl-tools
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
@@ -241,6 +241,14 @@ jobs:
             find $L -name "$m.ko" -exec cp {} out/modules/ \;
           done
           cp drm/gma500/*.patch out/
+          # The uAPI tests, static, as the EA set has them.
+          make -C $L ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr
+          python3 tools/gen/mkusse.py > tools/gen/usse_progs.h
+          F="-static -O2 -fno-strict-aliasing -Wall -Wno-unused-function -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm"
+          musl-gcc $F -o out/powervr_sgx_test drm/tests/powervr_sgx_test.c
+          musl-gcc $F -DSGXGEN_DRM -I tools/gen -o out/powervr_sgx_frame drm/tests/powervr_sgx_frame.c tools/gen/sgxgen.c -lm
+          musl-gcc $F -I tools/tex -o out/powervr_sgx_blit drm/tests/powervr_sgx_blit.c tools/tex/sgxtex.c
+          musl-gcc $F -DSGXGEN_DRM -I tools/gen -I tools/tex -o out/powervr_sgx_hang drm/tests/powervr_sgx_hang.c tools/gen/sgxgen.c tools/tex/sgxtex.c -lm
           strings $L/vmlinux | grep -m1 'Linux version' > out/version
           ls -l out out/modules
 

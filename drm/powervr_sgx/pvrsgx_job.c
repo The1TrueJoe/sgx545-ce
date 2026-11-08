@@ -22,6 +22,7 @@
 #include <linux/capability.h>
 #include <linux/dma-fence-chain.h>
 #include <linux/dma-resv.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -41,7 +42,9 @@
 #define PVRSGX_MAX_JOBS		64
 #define PVRSGX_MAX_SYNC_OPS	64
 #define PVRSGX_MAX_BO_REFS	256
-#define PVRSGX_JOB_TIMEOUT_MS	2000
+static unsigned int job_timeout_ms = 2000;
+module_param(job_timeout_ms, uint, 0444);
+MODULE_PARM_DESC(job_timeout_ms, "How long a job may run before the GPU is reset (default 2000 ms)");
 
 static struct pvrsgx_job *to_pvrsgx_job(struct drm_sched_job *sched_job)
 {
@@ -342,7 +345,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 		.ops = &pvrsgx_sched_ops,
 		.num_rqs = DRM_SCHED_PRIORITY_COUNT,
 		.credit_limit = 1,
-		.timeout = msecs_to_jiffies(PVRSGX_JOB_TIMEOUT_MS),
+		.timeout = msecs_to_jiffies(job_timeout_ms),
 		.name = "powervr_sgx",
 		.dev = sdev->base.dev,
 	};

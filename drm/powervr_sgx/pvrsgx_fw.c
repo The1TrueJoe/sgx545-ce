@@ -194,6 +194,11 @@ u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word)
 	return READ_ONCE(fw_words(sdev, PVRSGX_FW_HOSTCTL)[word]);
 }
 
+void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v)
+{
+	WRITE_ONCE(fw_words(sdev, PVRSGX_FW_HOSTCTL)[word], v);
+}
+
 /*
  * DOUTU word 0 for microkernel code at device address a: code base 15 plus the
  * 512 KiB segment, then the offset in the segment in 8-byte instructions, << 4.

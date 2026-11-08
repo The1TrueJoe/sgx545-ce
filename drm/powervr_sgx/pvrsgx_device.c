@@ -233,6 +233,13 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 	if ((flags & HOSTCTL_INTERRUPT_HWR) && !(clear & HOSTCTL_INTERRUPT_HWR))
 		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
 				    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
+	/*
+	 * The microkernel's idle notice: acknowledge it, as the DDK's host does.
+	 * Powering down is runtime PM's business, so nothing else happens here.
+	 */
+	if ((flags & ~clear) & HOSTCTL_INTERRUPT_ACTIVE_POWER)
+		pvrsgx_fw_hostctl_set(sdev, HOSTCTL_INTERRUPT_CLEAR,
+				      clear | HOSTCTL_INTERRUPT_ACTIVE_POWER);
 
 	pvrsgx_job_process_done(sdev);
 	return IRQ_HANDLED;
