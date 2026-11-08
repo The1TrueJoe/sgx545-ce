@@ -7,7 +7,7 @@
 #include <linux/types.h>
 
 #define PVRSGX_DRIVER_NAME	"powervr_sgx"
-#define PVRSGX_DRIVER_DESC	"PowerVR SGX545"
+#define PVRSGX_DRIVER_DESC	"PowerVR SGX5xx"
 #define PVRSGX_DRIVER_MAJOR	0
 #define PVRSGX_DRIVER_MINOR	1
 

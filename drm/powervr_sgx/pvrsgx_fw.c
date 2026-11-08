@@ -275,7 +275,6 @@ static int fw_build(struct pvrsgx_device *sdev, const u8 *image)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 *t;
-	int err;
 
 	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, f->image_size);
 

@@ -223,13 +223,14 @@ int pvrsgx_probe_common(struct pvrsgx_device *sdev)
 	if (err)
 		return err;
 
+	/* Runtime PM is set up before userspace can reach the device. */
+	pvrsgx_power_init(sdev);
 	err = drm_dev_register(&sdev->base, 0);
 	if (err) {
+		pvrsgx_power_fini(sdev);
 		pvrsgx_device_fini(sdev);
-		return err;
 	}
-	pvrsgx_power_init(sdev);
-	return 0;
+	return err;
 }
 
 void pvrsgx_remove_common(struct pvrsgx_device *sdev)
@@ -321,6 +322,6 @@ static void __exit pvrsgx_exit(void)
 module_exit(pvrsgx_exit);
 
 MODULE_AUTHOR("Joseph Telaak");
-MODULE_DESCRIPTION("PowerVR SGX545 DRM driver");
+MODULE_DESCRIPTION("PowerVR SGX5xx DRM driver");
 MODULE_LICENSE("GPL");
 MODULE_IMPORT_NS("DMA_BUF");
