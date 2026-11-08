@@ -8,6 +8,7 @@ CFLAGS_pvrsgx_trace.o := -I$(src)
 
 powervr_sgx-y := \
 	pvrsgx_ccb.o \
+	pvrsgx_core.o \
 	pvrsgx_device.o \
 	pvrsgx_drv.o \
 	pvrsgx_dump.o \
@@ -16,6 +17,7 @@ powervr_sgx-y := \
 	pvrsgx_job.o \
 	pvrsgx_kobj.o \
 	pvrsgx_mmu.o \
+	pvrsgx_pds.o \
 	pvrsgx_render.o \
 	pvrsgx_trace.o \
 	pvrsgx_validate.o \
@@ -25,6 +27,7 @@ powervr_sgx-y := \
 	powervr_sgx_stream_defs.o
 
 powervr_sgx-$(CONFIG_DEBUG_FS) += pvrsgx_debugfs.o
+powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) += pvrsgx_fw_ddk.o
 powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_GMA500) += pvrsgx_aux.o
 
 obj-$(CONFIG_DRM_POWERVR_SGX) += powervr_sgx.o

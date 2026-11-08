@@ -32,7 +32,7 @@
 #include "pvrsgx_vm.h"
 
 /*
- * The DDK microkernel handles a TA kick under the job's directory: it moves the
+ * The vendor microkernel handles a TA kick under the job's directory: it moves the
  * EDM's BIF_BANK0 index onto the list it loads with the context's directory,
  * then fetches its own code and reads its control blocks through it (EA1,
  * 2026-11-03, docs/DRM-DRIVER.md section 4). So with it, every VM must map the
@@ -40,6 +40,7 @@
  * that P2 and P3 describe (docs/UAPI.md 7.2). The open microkernel keeps the
  * EDM on its own list and needs none of this.
  */
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT)
 static int share_kernel_heaps = -1;
 module_param(share_kernel_heaps, int, 0444);
 MODULE_PARM_DESC(share_kernel_heaps,
@@ -51,6 +52,13 @@ bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
 		return !(sdev->fw.features & PVRSGX_UKFW_SECURE);
 	return share_kernel_heaps;
 }
+#else
+/* Without DDK compat only secure-mode images load (pvrsgx_fw.c). */
+bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev)
+{
+	return false;
+}
+#endif
 
 /* The client heaps, the same in every VM. */
 static const struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {

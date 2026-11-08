@@ -30,6 +30,7 @@ enum pvrsgx_krange {
 };
 
 struct firmware;
+struct pvrsgx_core_info;
 struct gma500_sgx_device;
 struct pci_dev;
 struct pvrsgx_mmu;
@@ -94,7 +95,7 @@ struct pvrsgx_fw {
 	u32 cache_control;
 	/** @interface: DRM_POWERVR_SGX_FW_IF_*. */
 	u32 interface;
-	/** @ddk: The DDK's microkernel, which runs under the job's directory. */
+	/** @ddk: The vendor microkernel, which runs under the job's directory. */
 	bool ddk;
 	/** @name: Firmware file the image came from. */
 	const char *name;
@@ -138,6 +139,8 @@ struct pvrsgx_device {
 	/** @irq: Its interrupt. */
 	int irq;
 
+	/** @core: What the driver knows about this core. */
+	const struct pvrsgx_core_info *core;
 	/** @core_id: SGX_CR_CORE_ID. */
 	u32 core_id;
 	/** @core_rev: SGX_CR_CORE_REVISION. */
@@ -245,6 +248,12 @@ struct pvrsgx_file {
 static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)
 {
 	return file->driver_priv;
+}
+
+/* Whether the vendor microkernel runs (CONFIG_DRM_POWERVR_SGX_DDK_COMPAT only). */
+static inline bool pvrsgx_fw_is_ddk(const struct pvrsgx_device *sdev)
+{
+	return IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) && sdev->fw.ddk;
 }
 
 static inline u32 sgx_rd(struct pvrsgx_device *sdev, u32 reg)

@@ -26,12 +26,19 @@ structures: the host control block, the command buffer, render and transfer
 contexts, render target datasets and parameter buffers. Userspace never writes
 them.
 
-The driver looks for ``powervr_sgx/sgx545-openhc-ukernel.bin`` first. That file
-starts with a header giving the host interface version, feature bits, the
-image's CRC, its entry points and the immediates the driver fills with buffer
-addresses. If the open image is missing, the driver loads the DDK 1.7 build
-under its own name; it knows that build's entry points and patch sites. After
-the start it asks the microkernel for its version and features.
+Each supported core has an entry in a table (``pvrsgx_core.c``): its ID and
+revision, the features the driver relies on, its clock and its firmware file.
+The driver refuses a core that isn't in the table before writing any register.
+For the CE5300 the file is ``powervr_sgx/sgx545-openhc-ukernel.bin``. It starts
+with a header giving the host interface version, feature bits, the image's CRC,
+its entry points and the immediates the driver fills with buffer addresses.
+The driver only loads an image that declares secure mode, in which no client
+page directory maps the firmware's memory. After the start it asks the
+microkernel for its version and features.
+
+``CONFIG_DRM_POWERVR_SGX_DDK_COMPAT`` adds the vendor DDK 1.7 microkernel for
+A/B testing. That microkernel runs client work under the client's own page
+directory, so with it every client directory maps the firmware's heaps.
 
 Memory
 ======

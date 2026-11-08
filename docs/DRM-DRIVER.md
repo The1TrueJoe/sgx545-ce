@@ -48,7 +48,10 @@ tests.
 |---|---|
 | `pvrsgx_drv.c` | `drm_driver`, PCI driver, ioctl table, `DEV_QUERY`, `obj_array` copy rules |
 | `pvrsgx_device.c` | kernel-owned memory, reset and BIF set-up, interrupt |
-| `pvrsgx_fw.c` | the microkernel: load, patch, PDS programs, control blocks, init scripts, start, stop |
+| `pvrsgx_core.c` | the cores the driver knows: ID, revision, features, clock, firmware file |
+| `pvrsgx_fw.c` | the microkernel: load, patch, control blocks, init scripts, start, stop |
+| `pvrsgx_pds.c` | the PDS assembler for the programs that enter the microkernel |
+| `pvrsgx_fw_ddk.c` | the vendor microkernel's entry programs and patch sites (`DRM_POWERVR_SGX_DDK_COMPAT`, testing only) |
 | `pvrsgx_ccb.c` | kernel CCB writer and completion count |
 | `pvrsgx_mmu.c` | page directories and tables |
 | `pvrsgx_gem.c` | shmem objects |

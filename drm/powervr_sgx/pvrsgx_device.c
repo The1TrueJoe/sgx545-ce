@@ -19,6 +19,7 @@
 #include <asm/set_memory.h>
 
 #include "pvrsgx_ccb.h"
+#include "pvrsgx_core.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_job.h"
@@ -148,7 +149,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	sgx_wr(sdev, SGX_CR_BIF_CTRL, 0);
 	sgx_wr(sdev, SGX_CR_BIF_BANK_SET, 0);
 	sgx_wr(sdev, SGX_CR_BIF_BANK0, 0);
-	for (unsigned int i = 0; i < SGX_BIF_NUM_DIRLISTS; i++)
+	for (unsigned int i = 0; i < sdev->core->num_dir_lists; i++)
 		sgx_wr(sdev, sgx_cr_bif_dir_list_base(i), 0);
 
 	if (recovery) {
@@ -250,33 +251,25 @@ module_param(probe_only, bool, 0444);
 MODULE_PARM_DESC(probe_only, "Report the SGX's identity and stop: no firmware, no device node");
 
 /*
- * The SGX cores this driver has run on. Anything else is refused before the
+ * Which core this is (pvrsgx_core.c). Anything else is refused before the
  * driver writes a register: its errata, clocks and microkernel are unknown.
  */
-static const struct {
-	u32 id, rev;
-	const char *where;
-} known_cores[] = {
-	{ 0x01150000, 0x0001000e, "Intel CE5300 (SGX545 1.0.14)" },
-};
-
 static int identify(struct pvrsgx_device *sdev)
 {
 	/* Safe on a core in any state. */
 	sdev->core_id = sgx_rd(sdev, SGX_CR_CORE_ID);
 	sdev->core_rev = sgx_rd(sdev, SGX_CR_CORE_REVISION);
 
-	for (u32 i = 0; i < ARRAY_SIZE(known_cores); i++) {
-		if (known_cores[i].id == sdev->core_id && known_cores[i].rev == sdev->core_rev) {
-			drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x: %s\n",
-				 sdev->core_id, sdev->core_rev, known_cores[i].where);
-			return probe_only ? -ENODEV : 0;
-		}
+	sdev->core = pvrsgx_core_lookup(sdev->core_id, sdev->core_rev);
+	if (!sdev->core) {
+		drm_err(&sdev->base,
+			"SGX core id 0x%08x revision 0x%08x is not one this driver knows; not touching it. Please report these two values.\n",
+			sdev->core_id, sdev->core_rev);
+		return -ENODEV;
 	}
-	drm_err(&sdev->base,
-		"SGX core id 0x%08x revision 0x%08x is not one this driver knows; not touching it. Please report these two values.\n",
-		sdev->core_id, sdev->core_rev);
-	return -ENODEV;
+	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x: %s\n",
+		 sdev->core_id, sdev->core_rev, sdev->core->name);
+	return probe_only ? -ENODEV : 0;
 }
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
