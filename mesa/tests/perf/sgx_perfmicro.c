@@ -8,12 +8,18 @@
  * GLES2 program for any driver (ours through EGL surfaceless, the DDK through
  * its own default display), so the GPU's limits can be told from the CPU's.
  *
- *   sgx_perfmicro [-s SECONDS] [-w W] [-h H]
+ *   sgx_perfmicro [-s SECONDS] [-w W] [-h H] [-d] [-c]
+ *
+ *   -c clears colour (and depth) at the start of every frame; without it every
+ *   frame starts from the last one's pixels
  *
  *   fill        N full-target quads per frame, opaque (depth test off)
  *   fill-blend  the same with SRC_ALPHA, ONE_MINUS_SRC_ALPHA blending
  *   tex         the same, each sampling a 256x256 RGBA8 texture
  *   verts       one indexed mesh of small triangles in a VBO, drawn per frame
+ *   fill-depth  (-d: a depth buffer) the quads back to front with depth test
+ *               LESS, each nearer than the last: every layer passes the test,
+ *               so only hidden surface removal keeps the covered ones unshaded
  *
  * Each test runs SECONDS (default 5) with a glFinish per frame and prints the
  * frame rate and what it amounts to (megapixels or megatriangles a second).
@@ -65,6 +71,8 @@ program(const char *vs, const char *fs)
    return p;
 }
 
+static int clear_frames;
+
 /* frames a second of draw() over secs, a glFinish per frame */
 static double
 run(double secs, void (*draw)(void))
@@ -76,6 +84,8 @@ run(double secs, void (*draw)(void))
    glFinish();
    t0 = now();
    do {
+      if (clear_frames)
+         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
       draw();
       glFinish();
       frames++;
@@ -87,7 +97,7 @@ run(double secs, void (*draw)(void))
 #define QUADS 8
 
 static GLuint p_flat, p_tex, quad_vbo, mesh_vbo, mesh_ibo, tex;
-static GLint u_color;
+static GLint u_color, u_z;
 static unsigned mesh_indices;
 
 static void
@@ -107,6 +117,25 @@ draw_fill(void)
    glUseProgram(p_flat);
    glDisable(GL_BLEND);
    draw_quads();
+}
+
+static void
+draw_fill_depth(void)
+{
+   glUseProgram(p_flat);
+   glDisable(GL_BLEND);
+   glEnable(GL_DEPTH_TEST);
+   glDepthFunc(GL_LESS);
+   glClear(GL_DEPTH_BUFFER_BIT);
+   glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+   for (int i = 0; i < QUADS; i++) {
+      glUniform4f(u_color, i / (float)QUADS, 0.5f, 0.25f, 0.5f);
+      glUniform1f(u_z, 0.9f - 1.8f * i / QUADS);
+      glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+   }
+   glUniform1f(u_z, 0.0f);
+   glDisable(GL_DEPTH_TEST);
 }
 
 static void
@@ -146,15 +175,17 @@ int
 main(int argc, char **argv)
 {
    double secs = 5;
-   int w = 720, h = 480, opt;
+   int w = 720, h = 480, opt, depth = 0;
    EGLDisplay dpy;
    EGLConfig cfg;
    EGLint n;
    EGLSurface surf;
    EGLContext ctx;
 
-   while ((opt = getopt(argc, argv, "s:w:h:")) != -1) {
+   while ((opt = getopt(argc, argv, "s:w:h:dc")) != -1) {
       switch (opt) {
+      case 'c': clear_frames = 1; break;
+      case 'd': depth = 1; break;
       case 's': secs = atof(optarg); break;
       case 'w': w = atoi(optarg); break;
       case 'h': h = atoi(optarg); break;
@@ -168,9 +199,9 @@ main(int argc, char **argv)
       return 1;
    }
    {
-      static const EGLint attr[] = { EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-                                     EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
-                                     EGL_NONE };
+      EGLint attr[] = { EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+                        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+                        EGL_DEPTH_SIZE, depth ? 16 : 0, EGL_NONE };
       static const EGLint cattr[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
       EGLint pattr[] = { EGL_WIDTH, w, EGL_HEIGHT, h, EGL_NONE };
 
@@ -188,9 +219,10 @@ main(int argc, char **argv)
    printf("renderer: %s (%s)\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
    glViewport(0, 0, w, h);
 
-   p_flat = program("attribute vec2 pos;\nvoid main() { gl_Position = vec4(pos, 0.0, 1.0); }\n",
+   p_flat = program("attribute vec2 pos;\nuniform float z;\nvoid main() { gl_Position = vec4(pos, z, 1.0); }\n",
                     "precision mediump float;\nuniform vec4 color;\nvoid main() { gl_FragColor = color; }\n");
    u_color = glGetUniformLocation(p_flat, "color");
+   u_z = glGetUniformLocation(p_flat, "z");
    p_tex = program("attribute vec2 pos;\nvarying vec2 uv;\n"
                    "void main() { uv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }\n",
                    "precision mediump float;\nuniform sampler2D t;\nvarying vec2 uv;\n"
@@ -249,6 +281,10 @@ main(int argc, char **argv)
 
       fps = run(secs, draw_fill);
       printf("fill: %.1f fps, %.0f Mpix/s\n", fps, fps * px);
+      if (depth) {
+         fps = run(secs, draw_fill_depth);
+         printf("fill-depth: %.1f fps, %.0f Mpix/s\n", fps, fps * px);
+      }
       fps = run(secs, draw_blend);
       printf("fill-blend: %.1f fps, %.0f Mpix/s\n", fps, fps * px);
       fps = run(secs, draw_tex);
