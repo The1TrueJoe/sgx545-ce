@@ -647,9 +647,31 @@ into the sync-object updates the host and the next client wait on.
   normal completion. The render details carry the destination sync objects at
   words 0x34 and 0x90 (a colour and a depth destination for a one-context
   frame); their ops-pending word is cleared as the 3D drains.
-- **DPM 3D memory free.** After a render the parameter-buffer pages it used
-  are returned to the free list; the handler runs the DPM free-list store and
-  updates the PB descriptor's in-use count. It also **tears the render down**:
+- **DPM 3D memory free.** The hardware has already returned the render's
+  parameter-buffer pages to the free list: the 3D start armed the release
+  (0x63c = 3, section 6), and 0x724 counts down while the 3D runs. The DDK's
+  handler writes **no DPM register and no PB-descriptor word**. In every
+  trace its only register write is the ack (`EVENT_HOST_CLEAR` = 0x1, pc
+  0x0e1e), then the rendezvous (pc 0x0eb4), then the completion below and
+  SW_EVENT. It waits on nothing. The only PB-descriptor words the DDK writes
+  during a frame:
+  - +0x14 = the high half of 0x724 (the TA's allocated pages) at every TA
+    finish (pc 0x0656-0x065c), a snapshot, not a running count;
+  - +0x18..+0x24 = the live counters, by `save_ta_state` before each 3D
+    start.
+
+  Per scene the DDK also runs the DPM **clear** at the kick (pc
+  0x0a1d-0x0a4a):
+  - 0x694 = 0x698 = `2 | i<<3` for each RT data entry i up to entry word 10;
+  - it waits for `EVENT_STATUS` & 0x240 (STATE_CLEAR b6, CONTROL_CLEAR b9)
+    and acks 0x134 = 0x240;
+  - a store/load follows only when `0x740 & 0x1ff` is nonzero, and 0x740
+    reads 0 throughout the EA1 register sample.
+
+  The TA and 3D free-list **loads** run once per PB, not per frame (TA3D
+  +0xb8/+0xbc markers; one each over the two-frame trace).
+
+  The completion also **tears the render down**:
   the render-details state word (+0x2a4) moves to freed (2), its active flag
   (+0x12c) and write-ops word (+0x108) clear, the RT-data entry is released
   (its render back-pointer +0x4 → 0, state +0x34 → idle 0x10, and the RT-data
@@ -998,12 +1020,16 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   - Gap: whether a second, correctly placed PB per context works on either
     microkernel. One shared render context or PB is the configuration known
     to work.
-- The multi-frame "PB never drains" result of 2026-11-04 (0x724 stuck at
-  0x190019) happens only under the srvinit frame-dump harness, which gives
-  each process its own PB with no fixed base. Under powervr_sgx (one PB per
-  VM at a fixed base) the same microkernel renders 10/10 consecutive frames,
-  5/5 frames each from a new process, and drains normally. Debug the DPM
-  drain only under a driver that keeps the PB.
+- **Re-opened 2026-11-08:** the 2026-11-04 multi-frame "PB never drains"
+  result (0x724 stuck at 0x190019) was put down to the srvinit frame-dump
+  harness, because powervr_sgx rendered 10/10 frames.
+  - The M1-exit run then hit `DPM_OUT_OF_MEMORY_MT` at about frame 40 on
+    powervr_sgx.
+  - 25 pages a frame × 40 frames ≈ 0x400, the PB's global threshold. That is
+    what a 3D that never releases its TA's pages would do.
+  - So the drain failure is probably real, and the 10/10 runs were simply
+    shorter than the PB.
+  - The DDK drains 0x724 to 0 during every 3D (EA1 register sample).
 - The timer / active-power / lockup-detection path is read structurally but
   not run (no timer event in an offline frame).
 - The recovery rescan (section 5a) is understood from the init path and the
