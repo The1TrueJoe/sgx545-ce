@@ -737,6 +737,62 @@ The open microkernel differs (`ukernel/`, um-re 1486d98):
 These cost throughput, not correctness: powervr_sgx's uAPI tests (39/39) and
 multi-process renders pass without them.
 
+### Out of memory: the DDK's parameter-buffer exhaustion path
+
+The DDK never asks the host for more pages: no SW_EVENT and no host-control
+write in this path, and the PB stays the size it was created with (requested
++ 0x22 reserve pages, `docs/STATE.md` §6). It handles exhaustion inside the
+microkernel.
+
+**Thresholds.** The TA load programs four thresholds from the PB descriptor:
+- 0x620 = TA (+0x28, pages + 0x10);
+- 0x624 = ZLS (+0x2c, pages − 0x22);
+- 0x628 = global (`(+0x30) & 0xffff | 0x10000`, pages − 0x22);
+- 0x668 = PDS (+0x34).
+
+DPM_OUT_OF_MEMORY_* fires at a threshold, while 0x22 pages are still free.
+
+**The handler.** The event word bits 0x100000 and 0x200000 (the pds3 word
+for MT and GBL) reach pc 0x0ad1. It acks `EVENT_HOST_CLEAR` = 0x6 (MT and
+GBL together) and records which one fired in a sa8 flag. It then runs 0x0b50
+(the same entry from pds4 at 0x0af0). Run in the emulator with an injected
+event (`oom.py` in the ta3d-state workspace), it does this:
+
+1. `rtdata` +0xc += 1 (an out-of-memory count), the RT data entry's state
+   word (+0x34) |= 0x80, TA3D +0xdc = 0;
+2. saves 0x628 in TA3D +0x84;
+3. pauses the TA: `0xa74` |= 1 (pc 0x1765);
+4. 0x628 = `(0x72c >> 16) | 0x10000`: the global threshold becomes the pages
+   in use now;
+5. reloads the TA free-list state from the live counters (pc 0x1676):
+   0x61c = 0x700, 0x648 = 0x710 << 16, 0x638 from 0x724/0x72c,
+   0x684 = 1, then waits for `EVENT_STATUS2` b0 and acks it;
+6. resumes: `0xa74` &= ~1 (pc 0x1773), then 0x69c = 1.
+
+Other branches depend on registers the emulator can't model (0x734 & 3 at
+pc 0x0b90, and a sa8 flag from an earlier pass). They:
+- raise 0x624 by 32 and 0x628 by 16 (pc 0x0bd6-0x0be9);
+- run an OTPM clear (0x24c = 1, then wait for and ack 0x100000);
+- write 0x69c = 4 and set `0xa74` b0 (pc 0x0bf6-0x0c22);
+- schedule a 3D: `sa9` |= 0x40 | 0x4000, the "out-of-memory render" flags
+  that the render completion clears at pc 0x157f, where it also writes
+  0x69c = 1.
+
+So the DDK renders the partly binned scene to free pages, then resumes the
+TA. What 0x69c's values 1 and 4 command is G.
+
+A parameter-buffer fault at `0x1ffff000` (the 3D-params heap base + page
+0xffff) is the free list's end-of-list sentinel: the TA allocated past the
+last page because nothing stopped it at the out-of-memory event.
+
+Gaps:
+- the hardware-side sequence for 0x734 and the second pass;
+- where DPM_OUT_OF_MEMORY_ZLS (b25) and DPM_REACHED_MEM_THRESH (b3) are
+  acked: both are enabled (`0xa58` = 0x2204b00f), but no ack of either was
+  found outside a combined mask.
+
+None of the DDK traces has an out-of-memory event; their scenes are small.
+
 ## 6. Register sequences the microkernel runs
 
 These are the fixed `EUR_CR_*` sequences the handlers perform, named by what
