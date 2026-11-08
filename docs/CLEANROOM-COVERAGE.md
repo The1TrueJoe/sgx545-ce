@@ -226,6 +226,29 @@ re-read these rows against the sections named:
 - **Winsys: "`sgxws_draw` TA block", word 1**: partly. STATE.md §3 "PDS words"
   has b0-15, b16-17 and the lockup. b25-28 is still a gap: the captures on
   disk don't fit the reported `12 / units` rule.
+- **Winsys, from the three DDK captures still on disk (base4, e1tex, vp5;
+  2026-11-08):**
+  - "State-emit programs" (the program text) and "TA terminate" (its task is
+    the 2-dword state emit; the DOUTA values' meaning stays G): STATE.md §2.
+  - "DOUTD control and chunking": b22-23 = (dwords - 1) & 3 holds for every
+    secondary DMA in the captures, so it is a field of the DMA, not a DDK
+    habit (STATE.md §2). The 16-dword limit stays in PDS.md's list.
+  - "End-of-tile program" (`phas.i [wait=7]`, temps 4) and "Pixel-event
+    program" (data, code and its three tasks): STATE.md §4. What each in1 bit
+    is stays G.
+  - "Background object" T3 `00800000`: STATE.md §5.
+  - "Vertices per task": corrected. The rule holds for compiled shaders;
+    the DDK's built-in clear programs run 8 per task (STATE.md §2).
+- **Still open in STATE.md §2-§5, needing new captures or hardware pokes:**
+  - the PBE stride encoding (word 2 = 0 for stride 1) and word 2 b15;
+  - TSP word 1;
+  - VDM draw words 2 ("batch") and 5 (n);
+  - PDS word 1 b25-28;
+  - the background T0 b21-26 and PDS middle word `00030001`;
+  - the clear's vertex-program output order;
+  - the subtract modes of constant-colour blending;
+  - the terminate's DOUTA meanings;
+  - the in1 bits of the pixel event.
 - **New:** UKERNEL.md §5 "Where the DDK microkernel raises the host
   interrupt": every SW_EVENT site and what triggers it, the fact that no
   completion waits for the timer, the hardware-done to IRQ times, and where
