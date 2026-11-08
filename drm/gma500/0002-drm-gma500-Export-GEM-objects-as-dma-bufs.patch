@@ -1,0 +1,75 @@
+From a9905bba4217d7b496414189441651c56e640d06 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Sun, 8 Nov 2026 18:10:44 -0500
+Subject: [PATCH] drm/gma500: Export GEM objects as dma-bufs
+
+A render GPU next to gma500 draws into gma500's scanout buffers: on
+Cedarview the SGX545, driven by powervr_sgx through gma500's auxiliary
+device, renders while gma500 scans out. Mesa's kmsro allocates the
+buffers on the display device and imports them into the render device,
+which needs gma500 to export them.
+
+Add the pin, unpin and get_sg_table hooks the PRIME helpers need. The
+pages are pinned into the GTT as for a framebuffer, so they stay put
+while shared. Objects in stolen memory have no struct pages and can't
+be exported.
+
+Assisted-by: Claude:claude-opus-5-5
+---
+ drivers/gpu/drm/gma500/gem.c | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/drivers/gpu/drm/gma500/gem.c b/drivers/gpu/drm/gma500/gem.c
+index 88f1e86..22eb869 100644
+--- a/drivers/gpu/drm/gma500/gem.c
++++ b/drivers/gpu/drm/gma500/gem.c
+@@ -16,6 +16,7 @@
+ #include <asm/set_memory.h>
+ 
+ #include <drm/drm.h>
++#include <drm/drm_prime.h>
+ #include <drm/drm_print.h>
+ #include <drm/drm_vma_manager.h>
+ 
+@@ -131,8 +132,38 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
+ 	.close = drm_gem_vm_close,
+ };
+ 
++/*
++ * PRIME export, for a render GPU to draw into scanout buffers. Only objects
++ * with pages can be shared: stolen memory has none.
++ */
++static int psb_gem_prime_pin(struct drm_gem_object *obj)
++{
++	struct psb_gem_object *pobj = to_psb_gem_object(obj);
++
++	if (pobj->stolen)
++		return -EINVAL;
++	return psb_gem_pin(pobj);
++}
++
++static void psb_gem_prime_unpin(struct drm_gem_object *obj)
++{
++	psb_gem_unpin(to_psb_gem_object(obj));
++}
++
++static struct sg_table *psb_gem_prime_get_sg_table(struct drm_gem_object *obj)
++{
++	struct psb_gem_object *pobj = to_psb_gem_object(obj);
++
++	if (!pobj->pages)
++		return ERR_PTR(-EINVAL);
++	return drm_prime_pages_to_sg(obj->dev, pobj->pages, obj->size >> PAGE_SHIFT);
++}
++
+ static const struct drm_gem_object_funcs psb_gem_object_funcs = {
+ 	.free = psb_gem_free_object,
++	.pin = psb_gem_prime_pin,
++	.unpin = psb_gem_prime_unpin,
++	.get_sg_table = psb_gem_prime_get_sg_table,
+ 	.vm_ops = &psb_gem_vm_ops,
+ };
+ 
+-- 
+2.50.1 (Apple Git-155)
+
