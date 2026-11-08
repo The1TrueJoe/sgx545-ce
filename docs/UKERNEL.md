@@ -797,17 +797,21 @@ nibble (r16 = 0) or the 3D's (r16 = 1) of `BIF_BANK0` into the EDM nibble,
 and r16 = 2 puts the EDM back on list 15. Its callers bracket every EDM
 access to client memory:
 
-| set (pc) | restore (pc) | list |
-|---|---|---|
-| 0x0835 | 0x0843 | TA |
-| 0x0941 | 0x094d | TA |
-| 0x0d90 | 0x0da0 | 3D |
-| 0x0ed5 | 0x0f34 | 3D |
-| 0x1234 | 0x123a | 3D |
-| 0x128b | 0x129b | 3D |
-| 0x13ae | 0x13be | 3D |
-| 0x1517 | 0x1527 | 3D |
-| 0x190c | 0x1918 | TA |
+| set (pc) | restore (pc) | list | what runs inside | when (DDK traces) |
+|---|---|---|---|---|
+| 0x128b | 0x129b | 3D | the background-block write ([0..2]) | **every 3D start** |
+| 0x0941 | 0x094d | TA | the PB setup (0x170d) and the TA free-list load (0x16a2). They read the PB descriptor and TA3D words (kernel data) and write DPM registers. Client memory is touched only when PB descriptor +0x00 b0 is set: then 0x170d walks the PB block list and rewrites the free list | the first kick after the PB changes |
+| 0x190c | 0x1918 | TA | `save_ta_state` (0x168d), then the same PB setup and TA load | a PB switch mid-scene; not in any trace |
+| 0x0835 | 0x0843 | TA | zeroes the RT data entry's tail-pointer array (entry words 8/9) | a kick path; not in any trace |
+| 0x0d90 | 0x0da0 | 3D | a second copy of the background-block write, on another 3D-start path | not in any trace |
+| 0x1234 | 0x123a | 3D | copies a 2-word pair indexed by the pass cursor (+0x108) | multi-pass renders only; not in any trace |
+| 0x13ae | 0x13be | 3D | writes (address, value) pairs from +0x1a0 (count at +0x19c of the same object) | only with a nonzero count; not in any trace |
+| 0x1517 | 0x1527 | 3D | the same pair loop, on the transfer side | only with a nonzero count; not in the trace's transfer |
+| 0x0ed5 | 0x0f34 | 3D | a 3D-end branch taken when the ISP clock check fails | not in any trace |
+
+In all four DDK microkernel traces (one-, two- and four-frame runs) only two
+windows run. 0x128b runs at every 3D start. 0x0941 runs once, on the first
+kick of a new PB.
 
 The background-block write at 3D start (pc 0x128d-0x1296; `docs/STATE.md`
 §6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
