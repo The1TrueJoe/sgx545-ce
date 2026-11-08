@@ -38,8 +38,8 @@ def patch_limm(code, off, v):
 
 
 def load():
-    binp = os.path.join(HERE, "sgx545-ukernel.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel.json")
+    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+    manp = os.path.join(HERE, "sgx545_ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     man = json.load(open(manp))
     # patch the control-block-base limm as srvinit -o does on the box

@@ -52,8 +52,8 @@ TRANSFERCMD_SHARED = 0xac
 
 
 def ours():
-    binp = os.path.join(HERE, "sgx545-ukernel.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel.json")
+    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+    manp = os.path.join(HERE, "sgx545_ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     return open(binp, "rb").read(), json.load(open(manp))
 

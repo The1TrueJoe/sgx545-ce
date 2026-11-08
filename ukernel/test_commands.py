@@ -28,8 +28,8 @@ CORE_ID, CORE_REV = 0x1000E, 0x10014
 
 def build_ours():
     import subprocess
-    binp = os.path.join(HERE, "sgx545-ukernel.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel.json")
+    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+    manp = os.path.join(HERE, "sgx545_ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     man = json.load(open(manp))
     code = bytearray(open(binp, "rb").read())
