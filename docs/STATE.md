@@ -428,7 +428,25 @@ z scale.
   when the shader writes the point size.
   - 4 dwords are the position. Each texcoord set adds its size.
   - The clear's own value is `0x00081800` (8 dwords: position and colour).
+    Its texcoord-size word is 5 (one 4-component set: the colour) and its
+    MTE control 0x40.
   - Status: D.
+- **The clear's vertex program** (the DDK's built-in, `0x3c008080` in the
+  base4 capture; 4 input dwords from one vertex stream, 8 output dwords):
+
+      phas.i #<phase 1>, #0 [wait=2]; then the prologue (nop / test / ld pa / wdf)
+      mov o0, pa0 [skipinv rcnt rpt=3]                o0-o2 = x, y, z
+      mov o3, c3 [skipinv rcnt]                       o3 = 1.0 (w)
+      pck.f32.u8 o4, pa3.l2, pa3.l2 [skipinv rcnt scale]   R = byte 2 of the ARGB8888 word
+      pck.f32.u8 o5, pa3.l1, pa3.l1 [...]                  G = byte 1
+      pck.f32.u8 o6, pa3,    pa3    [...]                  B = byte 0
+      pck.f32.u8 o7, pa3.l3, pa3.l3 [...]                  A = byte 3
+      emit.t3 r0, #0, #0 [end f12 f10]
+      phas.i #0, #0 [wait=7]; emit.t1 r0, #0, #0 [end f12 f10 f3_20]
+
+  So the vertex stream is x, y, z (floats) and the colour as one ARGB8888
+  word, and the outputs are position (4) then colour as 4 floats in 0-1
+  [D, capture].
 - **TSP word 0:** 3 bits per texcoord set: 1, 2, 3 components, or 5 for 4
   components [D].
 - **TSP word 1:** a bitmask of the sets whose precision value is at most 2 (libGLESv2 0x203bc: `cmpl $0x2, 0x4c(set)`, `ja` skips) [D].
