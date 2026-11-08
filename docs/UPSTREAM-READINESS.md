@@ -454,12 +454,13 @@ definitions with kernel-doc, which replaced word offsets.
 | F1 transfer | own file (`pvrsgx_transfer.c`, 209 lines) |
 | F3 runtime PM | own file (`pvrsgx_pm.c`, 126 lines), built with `CONFIG_PM`, stubs otherwise; no `runtime_pm` parameter |
 | F4 coredump, F5 debugfs, F6 tracepoints, F7 gma500 | already separate files; their call sites are still in v1 code |
-| F2 PRIME import | not split yet (in `pvrsgx_job.c` and `pvrsgx_vm.c`) |
+| F2 PRIME import | own file (`pvrsgx_prime.c`): the 4 GiB check, the import snapshot and the flushes around jobs |
 | firmware structures | done: TA command, dependency block, render details, RT data, PB descriptor, HW render and transfer contexts, transfer command, control block (`pvrsgx_fwif.h`, offsets checked by `static_assert`); no firmware word is written by offset any more |
 | DDK names in comments | gone (the uAPI's `DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7` is left for uapi-stream) |
-| generated register header | not started |
+| generated register header | done: `pvrsgx_regs.h` comes from the GPL `sgx545defs.h` through `drm/tools/gen_regs.py` (CI diffs it); our names for the registers that header leaves out, and the MMU constants, are in `pvrsgx_hw.h` |
 | one `pvrsgx_` prefix | waiting on uapi-stream (the shared stream files) |
-| runtime checkers on the CE5300 | debug kernel built; waiting for a free box |
+| ISA generation in the core table | done: the validator picks its USSE form table by the core's ISA |
+| runtime checkers on the CE5300 | debug kernel to rebuild on the trimmed driver; waiting for a free box |
 
 **uAPI effect.** v1's header leaves out the transfer job type and its
 structures (F1 appends them; the enum is append-only). Mesa must then work
