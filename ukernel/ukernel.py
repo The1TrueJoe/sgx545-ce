@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright © 2026 Joseph Telaak
-"""openHC's own SGX545 USSE microkernel, in assembly.
+"""An open SGX545 USSE microkernel, in assembly.
 
 The open replacement for Imagination's EDM microkernel, written from the
 behavioural spec in `docs/UKERNEL.md` — what the DDK microkernel *does*,
@@ -126,7 +126,7 @@ SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
                      # at the DDK's own offset so the A/B reference still matches.
 SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
                      # none). Lets the 3D-end handler tell a transfer's completion
-                     # from a render's. (openHC's own slot; a transfer and a
+                     # from a render's. (the microkernel.s own slot; a transfer and a
                      # render never overlap on one context.)
 SC_TAFLIGHT = 0x36   # control block +0xd8: 1 while a TA is in flight. Serialises
                      # host kicks. Must be a word srvinit never writes: +0x64
@@ -150,12 +150,12 @@ PB_TA_LOADED = 0x2e  # control block +0xb8 (the DDK's loaded-PB marker, ta3d+0xb
 PB_3D_LOADED = 0x2f  # control block +0xbc (the DDK's ta3d+0xbc): the PB whose 3D free list +
                      # save_ta_state are loaded. do_3d gates those on it the same way; 0x63c=3
                      # and the ISP/PBE state (D3_RD) still run every 3D start.
-SC_VERSION = 0x18    # control block +0x60: openHC microkernel version, written
-                     # at init. Advisory (the DDK driver does not read it); an
-                     # openHC-aware kernel logs it (docs/UKERNEL-DECISIONS.md).
+SC_VERSION = 0x18    # control block +0x60: microkernel version, written
+                     # at init. Advisory (the DDK driver does not read it); a
+                     # version-aware loader logs it (docs/UKERNEL-DECISIONS.md).
                      # A free slot: it was 0x16 before, which is the kernel CCB
                      # base — init overwrote that base with the version word.
-OPENHC_UK_VERSION = 0x00010000   # 1.0 (packed major<<16 | minor)
+UK_VERSION = 0x00010000   # 1.0 (packed major<<16 | minor)
 # The SGX core this image targets. The microkernel programs core registers for a
 # specific SGX5xx variant (register-programming tables = docs/UKERNEL.md §7), so
 # another core (e.g. SGX540/SGX531) needs its own image built from a core-specific
@@ -192,7 +192,7 @@ HC_CLEANUP = 2       # ui32CleanupStatus
 HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_POWER
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 HC_TIMERCLK = 6      # ui32uKernelTimerClock (host-set EVENT_TIMER period)
-HC_BGBLOCK = 15      # word +0x3c: bit 0 = HOSTCTL_OPENHC_HOST_BGBLOCK -- the host wrote the
+HC_BGBLOCK = 15      # word +0x3c: bit 0 = HOSTCTL_HOST_BGBLOCK -- the host wrote the
                      # background block on the CPU, so do_3d skips its EDM pulse (§4a / m2).
                      # This word is the DDK's ui32PerfGroup (HWPerf counter group); reusing it
                      # is safe because powervr_sgx has no HWPerf and the driver sets it only for
@@ -542,7 +542,7 @@ def build(a):
     a.i("wdf")
     # acknowledge a pending DCU-invalidate in EUR_CR_EVENT_STATUS2 first. The
     # dispatcher must read STATUS *and* STATUS2 and clear what it sees (docs
-    # §2); openHC only dispatched STATUS bits, so the invalidate-done the
+    # §2); an earlier version only dispatched STATUS bits, so the invalidate-done the
     # kernel leaves set after SysFinalise re-triggered the event program
     # forever — a storm that starved the SW_EVENT host kick and locked the
     # core (EA1 HW-confirmed 2026-11-02: STATUS2=0x400, event re-entered 16+
@@ -702,8 +702,8 @@ def build(a):
         a.i(f"ldr r4, #{0xb20 // 4}"); a.i("wdf")
         a.i("xor r3, r3, r4")
         a.st_sa(SA_SELF, 0x39, 3)                 # 0xb14 ^ 0xb20 at init
-    a.i(f"limm r0, #{OPENHC_UK_VERSION}")
-    a.i(f"st.a.d r17, #{SC_VERSION}, r0 [moe]")   # advisory openHC version word
+    a.i(f"limm r0, #{UK_VERSION}")
+    a.i(f"st.a.d r17, #{SC_VERSION}, r0 [moe]")   # advisory version word
     a.i(f"limm r0, #{EDM_INIT_COMPLETE}")
     a.i(f"ld.a.d r1, r17, #{SA_HOSTCTL} [moe]")   # host control = *(ctlblk+1)
     a.i("wdf")
@@ -1527,7 +1527,7 @@ def build(a):
     # needs a transient EDM->list-1 pulse (0x1011) -- but that routes the EDM's own
     # instruction fetch onto the client PD and faults it under secure/no-share (m2
     # 2026-11-08, KERNEL_CODE+0x20d0). When the host wrote the block on the CPU it sets
-    # HOSTCTL_OPENHC_HOST_BGBLOCK (hostctl word 15 bit 0, UKERNEL.md §4a); skip the whole
+    # HOSTCTL_HOST_BGBLOCK (hostctl word 15 bit 0, UKERNEL.md §4a); skip the whole
     # pulse + write then (its three words are known at submit). The DDK/srvinit path has
     # the flag clear and does the pulse. Skipping also avoids the kernel-value loads below,
     # which the EDM would otherwise read while routed to the client PD.
@@ -1535,7 +1535,7 @@ def build(a):
     a.i("wdf")
     a.i(f"ld.a.d r5, r5, #{HC_BGBLOCK} [moe]")        # hostctl word 15 (+0x3c)
     a.i("wdf")
-    a.i("and r5, r5, #1")                             # bit 0 = HOSTCTL_OPENHC_HOST_BGBLOCK
+    a.i("and r5, r5, #1")                             # bit 0 = HOSTCTL_HOST_BGBLOCK
     a.i("test.and.ne p0, r5, r5")
     a.i("(p0) ba skip_bgblock")                       # host wrote it -> skip the EDM pulse
     a.i(f"ld.a.d r12, r17, #{SC_RTENTRY} [moe]")      # RT-data entry

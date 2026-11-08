@@ -1,4 +1,4 @@
-# ukernel: openHC's own SGX545 microkernel
+# ukernel: an open SGX545 microkernel
 
 The open replacement for Imagination's USSE microkernel (the "EDM"). Written
 from the behavioural spec in `docs/UKERNEL.md` — what the DDK microkernel
@@ -85,7 +85,7 @@ or just the assemble step:
 The build is **reproducible**: the assembler is pure Python with no timestamps,
 host paths or randomness, so the same source produces byte-identical `.bin` and
 `.json` on any machine and any supported Python. `UK_BUILD_ID` sets the manifest
-`build_id` (default `openhc`); set it to the commit for a release. The outputs
+`build_id` (default `dev`); set it to the commit for a release. The outputs
 (`<core>_ukernel.bin`, its `.bin.pat`, and the `.json` manifest) are
 generated, not committed.
 
@@ -107,11 +107,14 @@ from it) declares the capabilities the loader must assume. Bits:
 
 | bit | name | meaning |
 |---|---|---|
-| 0 (0x1) | `CLEANUP_V2` | the DDK's two-phase resource cleanup. **This image does NOT set it** — openHC uses a simpler defer-and-hold cleanup, so the loader must not expect the v2 protocol. |
+| 0 (0x1) | `CLEANUP_V2` | the DDK's two-phase resource cleanup. **This image does NOT set it** — this microkernel uses a simpler defer-and-hold cleanup, so the loader must not expect the v2 protocol. |
 | 1 (0x2) | `SECURE` | the background-object PDS block is written by the host (CPU) at submit, not by the microkernel's event-driven module, so the loader can isolate each client address space from the firmware's own heaps instead of mapping them into every context. Set by default (`UK_FEATURES`, default 2). |
 
 A loader keys its behaviour on these bits, not on the build id, so an image can
-state exactly which protocol it implements.
+state exactly which protocol it implements. The upstream DRM driver loads only
+images that declare `SECURE` (bit 1) unless a compat config is set, so a
+feature-0 image is a dev/test-only build; `UK_FEATURES` defaults to 2 so the
+default build is the upstream-loadable one.
 
 ## Manifest fields
 
@@ -122,7 +125,7 @@ state exactly which protocol it implements.
 | `core` | the SGX core this image targets (see Per-core images) |
 | `version` | microkernel interface version, `major.minor` |
 | `features` | the feature-bit word (see Feature bits) |
-| `build_id` | a free-form build identifier (`UK_BUILD_ID`, default `openhc`) |
+| `build_id` | a free-form build identifier (`UK_BUILD_ID`, default `dev`) |
 | `bytes`, `instructions` | image size and instruction count |
 | `entries` | byte offset of each entry/label the loader points its PDS programs and host-kick table at |
 | `patches` | byte offset of each `limm` site the loader fills at load (e.g. `ctlblk`, the control-block base) |

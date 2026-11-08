@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright © 2026 Joseph Telaak
-"""Offline check of openHC's microkernel (ukernel/) in the emulator.
+"""Offline check of the open microkernel (ukernel/) in the emulator.
 
 Builds the image, then drives its entries through the USSE emulator
 (tools/ukernel/emu.py) and asserts the behaviour docs/UKERNEL.md requires.
@@ -38,8 +38,8 @@ def patch_limm(code, off, v):
 
 
 def load():
-    binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel-openhc.json")
+    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+    manp = os.path.join(HERE, "sgx545_ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     man = json.load(open(manp))
     # patch the control-block-base limm as srvinit -o does on the box
@@ -73,7 +73,7 @@ def test_init(code, man):
     mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 0)        # clean boot: HWR bit clear
     run_event(u, man, regs)
     assert mem.rd(HOSTCTL) == 1, "init must set ui32InitStatus = PVRSRV_USSE_EDM_INIT_COMPLETE"
-    assert mem.rd(CTLBLK + 4 * 0x18) == 0x00010000, "init must write the advisory openHC version word"
+    assert mem.rd(CTLBLK + 4 * 0x18) == 0x00010000, "init must write the advisory version word"
     print("  init (clean): ui32InitStatus = 1, version word written  OK")
 
 
@@ -167,7 +167,7 @@ def test_xfer_done(code, man):
 
 def main():
     code, man = load()
-    print("openHC microkernel offline tests:")
+    print("microkernel offline tests:")
     test_init(code, man)
     test_recovery_init(code, man)
     test_raise_irq(code, man)

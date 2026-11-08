@@ -1,7 +1,7 @@
 #!/bin/sh
 # Pull the SGX545 microkernel firmware out of your own copy of the Cedarview
 # DDK 1.7.862890, for srvinit/srvinit. Nothing of Imagination's is kept in
-# this repo: like openHC's sgx545-um package, we fetch (or reuse) the DDK and
+# this repo: we fetch (or reuse) the DDK and
 # take what we need from it.
 #
 # Usage: fetch-firmware.sh [source] [out]
