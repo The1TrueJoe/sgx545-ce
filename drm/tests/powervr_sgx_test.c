@@ -228,7 +228,9 @@ static void t_query_gpu_info(int fd)
 	printf("  core_id 0x%08x core_revision 0x%08x fw_interface %u\n",
 	       i.core_id, i.core_revision, i.fw_interface_version);
 	assert_eq(i.core_id >> 16, 0x0115);		/* SGX545 */
-	assert_eq(i.core_revision & 0xffffff, 0x1000e);	/* 1.0.14 on the CE5300 */
+	/* The cores in the driver's table: 1.0.14 (CE5300) or 1.0.13 (Cedarview). */
+	assert_true((i.core_revision & 0xffffff) == 0x1000e ||
+		    (i.core_revision & 0xffffff) == 0x1000d);
 	assert_eq(i.fw_interface_version, DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7);
 	assert_eq(i._padding_c, 0);
 }
