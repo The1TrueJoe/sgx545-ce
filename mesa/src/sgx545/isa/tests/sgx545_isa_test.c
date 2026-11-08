@@ -37,6 +37,27 @@ trim(char *s)
    return s;
 }
 
+/* a == b up to runs of whitespace (ISA.md allows any whitespace before "[") */
+static bool
+same_text(const char *a, const char *b)
+{
+   for (;;) {
+      bool sa = *a == ' ' || *a == '\t', sb = *b == ' ' || *b == '\t';
+      if (sa != sb)
+         return false;
+      while (*a == ' ' || *a == '\t')
+         a++;
+      while (*b == ' ' || *b == '\t')
+         b++;
+      if (*a != *b)
+         return false;
+      if (!*a)
+         return true;
+      a++;
+      b++;
+   }
+}
+
 static unsigned
 run_file(const char *path, bool table, unsigned *count)
 {
@@ -104,7 +125,7 @@ run_file(const char *path, bool table, unsigned *count)
                  path, lineno, text, lo, hi, want[0], want[1]);
          ok = false;
       }
-      if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)) || strcmp(dis, text)) {
+      if (!sgx545_disasm_one(w, &fc, dis, sizeof(dis)) || !same_text(dis, text)) {
          fprintf(stderr, "%s:%u: %s: %08x %08x disassembles as: %s\n",
                  path, lineno, text, lo, hi, dis);
          ok = false;
@@ -141,8 +162,11 @@ fuzz(unsigned n, unsigned *count)
 
    for (unsigned i = 0; i < n; i++) {
       uint64_t w = rnd64(&seed);
-      /* bias towards valid words: clear a random set of low-probability bits */
+      /* bias towards valid words: clear a random set of low-probability bits;
+       * every other word gets a random class, so rare classes are reached */
       w &= rnd64(&seed) | rnd64(&seed);
+      if (i & 4)
+         w = (w & ~(0x1full << 59)) | (rnd64(&seed) & 0x1full) << 59;
       struct sgx545_isa_fc fc = { .c10 = i & 1, .f16 = (i >> 1) & 1 };
       char dis[512], err[256], dis2[512];
       struct sgx_isa_instr I;
