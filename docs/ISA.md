@@ -621,6 +621,87 @@ secondary computes into internal registers.
 A one-source secondary op reads sb; a two-source one sb and sc; mov reads
 msrc. All **encoder**.
 
+What hardware has not confirmed yet (`tools/isa/hwt_p12.py` draws each):
+- which sources a two-source secondary (fadd, fsub, fmul, fmaxmin) reads: sb
+  and sc, or sd and sb;
+- whether a three-source one (fmad, fmsa, fadm) reads sd, sb, sc in that order;
+- the src1/src2 slot values the secondary sees (`sb=src1`, `sc=src2`);
+- the primary's result beside a secondary;
+- the one-source secondaries' results.
+
+The encodings are settled: every corpus fdual word assembles from its text to
+the same bits (`check_enc.py`).
+
+#### fdual for a compiler
+
+Each item below gives its evidence. "hwt_p12" means the suite draws it and
+the result is not in yet; don't rely on it until then.
+
+**Secondary operands.** The secondary writes the internal register `sd`
+names. `i0s0` writes i0.
+- One-source ops (frcp, frsq, fexp2, flog2, fsin, fcos) read `sb`:
+  `sd = op(sb)`. **corpus**: in fl_big,
+  `fdual.fmad.fsin pa8, r5, c38, c34 [sd=i2 sb=i0 sc=i0 neg2]` follows an efo
+  that left the angle in i0, and the next instruction reads the sine from i2.
+- Three-source ops (fmad, fmsa, fadm, fmad16) read `sd`, `sb`, `sc` in that
+  order, and `sd` is also the destination. `i0s0` takes the first source
+  from the src0 slot instead. **corpus**: in v_norm,
+  `fdual.mov.fmad o3, r0, c52, o0 [sd=i2 sb=i2 sc=src2]` computes
+  i2 = i2 * i2 + o0. The formula is the float class's op of the same name.
+- Two-source ops (fadd, fsub, fmul, fmaxmin): `sb` and `sc`, or `sd` and
+  `sb`. hwt_p12.
+- mov reads `msrc`.
+- sec 3 is one encoding for fadm, fsubflr and ffrc (**encoder**). What it
+  computes: hwt_p12 (`fdual_sec_fadm_*`).
+- ima32 as the secondary: no corpus use. hwt_p12.
+
+**Primary operands.**
+- fmad: `dst = src0 * src1 + src2` (**corpus**: the fdual.fmad.* words read
+  as fmad does).
+- mov reads src1 (**corpus** v_norm: `o3 = c52`).
+- fssq reads src1 and src2, `src1^2 + src2^2` (**corpus** v_norm).
+- fadm, fmsa, fminmax: as their float-class forms, slots src0-src2.
+  **encoder**; values: hwt_p12.
+- fddp: reads src0-src2. Where its second result goes: hwt_p12
+  (`fdual_fddp_*`).
+- ima32: hwt_p12.
+
+**Where a mov secondary's register source goes.** libusc puts it in a slot
+the primary doesn't read:
+- src0 when the primary is mov or fssq;
+- otherwise src2 when the primary doesn't read src2.
+
+The text names the slot with `msrc=src0|src1|src2`.
+
+**Sharing a slot.** `sb=src1`, `sc=src2` and `msrc=srcN` read the same slot
+the primary reads. Whether both ops then see the same value, negates included
+(`neg1`/`neg2` apply to the slot): hwt_p12 (`fdual_both`, `fdual_neg`). The
+corpus never shares a slot the primary reads.
+
+**Pairings.** The encoder takes any primary with any secondary. The corpus
+uses fmad with fadm, fexp2, frcp, fsin, fcos, fsub, fmul; mov with fmad;
+fssq with mov; fadm with fsub; fddp with fexp2. Whether others misbehave:
+hwt_p12 draws each secondary under a mov primary and each primary under a mov
+secondary.
+
+**Repeat.** `rpt=2`: whether both ops step: hwt_p12 (`fdual_rpt2_*`).
+
+**Timing.**
+- An internal register the secondary writes is read by the next instruction
+  with the new value (**corpus**: v_norm's `frsq o1, i2`, and fl_big).
+- In the same word, the primary reading that register sees the old value.
+  **corpus** fl_big:
+  `fdual.fmad.fsin pa1, r126, pa2, pa11 [sd=i2 sb=i1 sc=i0]` reads the
+  previous word's sine from r126 (i2) while writing the new one to i2. The
+  next fmad reads the new one.
+- Internal registers don't survive a deschedule. libusc puts `nosched` on
+  the words between an internal register's write and its last read.
+
+**Destination.** dst has no extension bit. r124-r127 name i0-i3 there as
+elsewhere (**corpus**: `fdual.fmad.fexp2 r124, pa1, pa5, c48`, read
+afterwards as i0). hwt_p12 (`fdual_dst_i1`) draws the primary writing an
+internal register while the secondary reads it.
+
 `fssq` = USEASM 0xa7, libusc internal op 0x8e, exists only as a dual-issue
 primary: two sources in the src1/src2 slots, each source channel feeding the
 same destination channel (libusc's channel-use code treats it like a
@@ -1014,6 +1095,25 @@ Units:
 | h5 h4 h3 | src0/src1/src2 negate | arg flag b0 | encoder |
 
 efo has no end bit (h18-19 is `i`), so it can't be a program's last instruction.
+
+The unit wiring above (`d`, `i`, `a`, `m`, `wi0`/`wi1`, the negates) is read
+from usc's asm.c, not drawn. **hardware** so far: only the F16 operand
+numbering and one `d=a0 a=s0+s2` result (hwt_p7/p8).
+
+`tools/isa/hwt_p12.py` draws:
+- each `m` mode into I0/I1, including mode 2's m1, whose second operand is
+  only asserted to be s2;
+- each `a` and `i` mode, and each `d`;
+- whether I0/I1 keep their values without `wi0`/`wi1`;
+- `a0rneg`/`a0lneg`.
+
+The encodings are settled: every corpus efo word assembles from its text to
+the same bits.
+
+For chaining efos as v_mvp does, whether `d=i0` / `d=i1` give the internal
+register's value before or after this word writes it (`wi0`/`wi1`) matters.
+hwt_p12 draws both (`efo_d_i0` against `efo_d_i0_wi`) and a two-efo chain
+(`efo_chain`).
 
 Operands:
 - dst: l21-27, bank h0-1 (r o pa ix), no ext.
