@@ -220,9 +220,9 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	if (READ_ONCE(job->ctx->state) != DRM_POWERVR_SGX_CONTEXT_STATE_OK)
 		return ERR_PTR(-ECANCELED);
 
-	fence = kzalloc_obj(*fence);
-	if (!fence)
-		return ERR_PTR(-ENOMEM);
+	/* Allocated at submit: nothing here may wait for memory (dma-fence signalling). */
+	fence = job->hw_fence_mem;
+	job->hw_fence_mem = NULL;
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	dma_fence_init(fence, &pvrsgx_fence_ops, &sdev->fence_lock, sdev->fence_context,
 		       ++sdev->fence_seqno);
@@ -326,6 +326,7 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 
 	drm_sched_job_cleanup(sched_job);
 	dma_fence_put(job->hw_fence);
+	kfree(job->hw_fence_mem);	/* never run */
 	for (u32 b = 0; b < job->nbos; b++)
 		drm_gem_object_put(job->bos[b]);
 	kvfree(job->bos);
@@ -530,6 +531,7 @@ static void job_args_fini(struct job_args *ja)
 		job_put_imports(ja->job);
 		pvrsgx_render_job_fini(ja->job);
 		context_put(ja->job->ctx);
+		kfree(ja->job->hw_fence_mem);
 		kfree(ja->job);
 	}
 }
@@ -689,6 +691,9 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 	job->type = in->type;
 	INIT_LIST_HEAD(&job->node);
 	ja->job = job;
+	job->hw_fence_mem = kzalloc_obj(*job->hw_fence_mem);
+	if (!job->hw_fence_mem)
+		return -ENOMEM;
 
 	err = drm_sched_job_init(&job->base, &ctx->entity, 1, sfile, file->client_id);
 	if (err)

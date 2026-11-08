@@ -62,6 +62,8 @@ struct pvrsgx_job {
 
 	/** @hw_fence: Signalled when the firmware has finished the job. */
 	struct dma_fence *hw_fence;
+	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initialises it. */
+	struct dma_fence *hw_fence_mem;
 	/** @ccb_seq: Kernel CCB command that carries the job. */
 	u64 ccb_seq;
 	/** @node: In pvrsgx_device.active while on the GPU. */

@@ -91,7 +91,8 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	struct seq_buf sb;
 	char *buf;
 
-	buf = __vmalloc(COREDUMP_BYTES, GFP_KERNEL | __GFP_NOWARN | __GFP_NORETRY);
+	/* The timeout handler signals fences: no reclaim, so a dump can be lost but never waits. */
+	buf = __vmalloc(COREDUMP_BYTES, GFP_NOWAIT | __GFP_NOWARN);
 	if (!buf)
 		return;
 	seq_buf_init(&sb, buf, COREDUMP_BYTES);
@@ -106,5 +107,5 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	pvrsgx_job_dump(&sb, bad);
 	if (seq_buf_has_overflowed(&sb))
 		drm_warn(&sdev->base, "coredump truncated\n");
-	dev_coredumpv(sdev->base.dev, buf, seq_buf_used(&sb), GFP_KERNEL);
+	dev_coredumpv(sdev->base.dev, buf, seq_buf_used(&sb), GFP_NOWAIT);
 }
