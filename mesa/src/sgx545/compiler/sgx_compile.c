@@ -3954,6 +3954,53 @@ struct loop_span {
    int head, tail;
 };
 
+/* place_in_o's candidates: ok[v], every reference of v can name O;
+ * inplace[v], the output register an explicit output write reading v, aligned,
+ * where v dies, puts it in (-1: none) */
+static void
+o_candidates(struct sgx_ctx *c, unsigned nv, int *inplace, bool *ok)
+{
+   /* the in-place step: an explicit output write reading, aligned, a vreg
+    * that dies there */
+   for (unsigned v = 0; v < nv; v++)
+      inplace[v] = -1;
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      const struct sgx_ref *d = &i->op[0];
+      if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred || d->file != SGX_F_O || !d->step ||
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+         continue;
+      for (unsigned k = 1; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv || r->h16 || (i->rpt > 1 && !r->step) || r->comp > d->n ||
+             sgx_vreg(c, r->n)->last != (int)(2 * i->ip))
+            continue;
+         bool good = true;
+         for (unsigned j = 1; j < i->nops && good; j++)
+            if (j != k && i->op[j].file == SGX_F_V && i->op[j].n == r->n)
+               good = i->op[j].comp == r->comp && i->op[j].step == r->step && !i->op[j].h16;
+         if (good)
+            inplace[r->n] = d->n - r->comp;
+         break;
+      }
+   }
+   for (unsigned v = 0; v < nv; v++) {
+      struct sgx_vreg *r = sgx_vreg(c, v);
+      ok[v] = r->first >= 0 && !r->pa && !r->half && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
+              (int)v != c->face_f32;
+   }
+   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
+      for (unsigned k = 0; k < i->nops; k++) {
+         const struct sgx_ref *r = &i->op[k];
+         if (r->file != SGX_F_V || r->n >= nv)
+            continue;
+         struct sgx_ref x = *r;
+         x.file = SGX_F_O;
+         if (i->kind != SGX_INS_ALU || r->h16 || !slot_ok(i->form, k, &x))
+            ok[r->n] = false;
+      }
+   }
+}
+
 /* Vertex shader: temporaries in output registers before the program's
  * first write of them (a mat4 * v accumulator in the o0-o3 it ends in, in
  * place at the last step, as coalesce_repeats). Outputs are read back like
@@ -3987,47 +4034,9 @@ place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       for (unsigned l = 0; l < nloops; l++)
          if (from[p] > loops[l].head && from[p] <= loops[l].tail)
             from[p] = loops[l].head;
-   /* the in-place step: an explicit output write reading, aligned, a vreg
-    * that dies there */
    int *inplace = malloc(nv * sizeof(int));
-   for (unsigned v = 0; v < nv; v++)
-      inplace[v] = -1;
-   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
-      const struct sgx_ref *d = &i->op[0];
-      if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred || d->file != SGX_F_O || !d->step ||
-          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
-         continue;
-      for (unsigned k = 1; k < i->nops; k++) {
-         const struct sgx_ref *r = &i->op[k];
-         if (r->file != SGX_F_V || r->n >= nv || r->h16 || (i->rpt > 1 && !r->step) || r->comp > d->n ||
-             sgx_vreg(c, r->n)->last != (int)(2 * i->ip))
-            continue;
-         bool good = true;
-         for (unsigned j = 1; j < i->nops && good; j++)
-            if (j != k && i->op[j].file == SGX_F_V && i->op[j].n == r->n)
-               good = i->op[j].comp == r->comp && i->op[j].step == r->step && !i->op[j].h16;
-         if (good)
-            inplace[r->n] = d->n - r->comp;
-         break;
-      }
-   }
    bool *ok = calloc(nv, sizeof(bool));
-   for (unsigned v = 0; v < nv; v++) {
-      struct sgx_vreg *r = sgx_vreg(c, v);
-      ok[v] = r->first >= 0 && !r->pa && !r->half && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
-              (int)v != c->face_f32;
-   }
-   list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
-      for (unsigned k = 0; k < i->nops; k++) {
-         const struct sgx_ref *r = &i->op[k];
-         if (r->file != SGX_F_V || r->n >= nv)
-            continue;
-         struct sgx_ref x = *r;
-         x.file = SGX_F_O;
-         if (i->kind != SGX_INS_ALU || r->h16 || !slot_ok(i->form, k, &x))
-            ok[r->n] = false;
-      }
-   }
+   o_candidates(c, nv, inplace, ok);
    /* what the placed vregs hold, per register */
    BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, MAX2(no, 1) * BITSET_WORDS(end));
 #define OBUSY(p) (busy + (p) * BITSET_WORDS(end))
@@ -4157,11 +4166,22 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       if (first_w[p] >= 0)
          BITSET_SET_RANGE(BUSY(p), first_w[p], end - 1);
    }
-   /* a vreg every reference of which can name PA */
+   /* a vreg every reference of which can name PA, but not one an output
+    * write would put in place (place_in_o) */
    bool *ok = rzalloc_array(c, bool, nv);
    for (unsigned v = 0; v < nv; v++)
       ok[v] = sgx_vreg(c, v)->first >= 0 && (int)v != c->keep_vreg && (int)v != c->face_vreg &&
               (int)v != c->face_f32;
+   if (c->stage == MESA_SHADER_VERTEX && !sgx_disabled("o")) {
+      int *oin = malloc(nv * sizeof(int));
+      bool *ook = calloc(nv, sizeof(bool));
+      o_candidates(c, nv, oin, ook);
+      for (unsigned v = 0; v < nv; v++)
+         if (oin[v] >= 0 && ook[v])
+            ok[v] = false;
+      free(oin);
+      free(ook);
+   }
    list_for_each_entry(struct sgx_ins, i, &c->ins, link) {
       for (unsigned k = 0; k < i->nops; k++) {
          const struct sgx_ref *r = &i->op[k];
