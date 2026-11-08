@@ -72,7 +72,7 @@ jobs:
           Package: mesa-sgx
           Version: $mv+sgx$d.$v
           Architecture: amd64
-          Maintainer: Joseph Telaak <jttelaak@hotmail.com>
+          Maintainer: Joseph Telaak <joseph@telaak.dev>
           Depends: libc6, libdrm2, libglvnd0, libgl1, libegl1, libgles2, libx11-6, libx11-xcb1, libxcb1, libxcb-dri3-0, libxcb-present0, libxcb-sync1, libxcb-xfixes0, libxcb-randr0, libxshmfence1, libxxf86vm1, libwayland-client0, libwayland-server0, libexpat1, zlib1g, libzstd1
           Section: libs
           Priority: optional
@@ -95,7 +95,7 @@ jobs:
           Package: sgx545-firmware
           Version: 0~git$d.$v
           Architecture: all
-          Maintainer: Joseph Telaak <jttelaak@hotmail.com>
+          Maintainer: Joseph Telaak <joseph@telaak.dev>
           Section: kernel
           Priority: optional
           Description: Open microkernel for the PowerVR SGX545 (powervr_sgx)
