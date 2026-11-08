@@ -1,0 +1,3 @@
+# The test stick never writes to the computer's own disks: every block device
+# that isn't on USB (the stick) is set read-only as it appears.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{ID_BUS}!="usb", KERNEL!="loop*|ram*|zram*|sr*|nbd*", RUN+="/usr/sbin/blockdev --setro /dev/%k"

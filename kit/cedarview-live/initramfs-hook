@@ -1,0 +1,7 @@
+#!/bin/sh
+# The read-only rule in the initramfs too, so it holds while live-boot looks for the stick.
+[ "$1" = prereqs ] && exit 0
+. /usr/share/initramfs-tools/hook-functions
+mkdir -p "$DESTDIR/etc/udev/rules.d"
+cp /etc/udev/rules.d/60-kit-readonly.rules "$DESTDIR/etc/udev/rules.d/"
+copy_exec /usr/sbin/blockdev

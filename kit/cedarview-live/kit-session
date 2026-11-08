@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# The X session kit-desktop starts (as root, the first client): lets "desk"
+# connect, starts Xfce as desk, runs the smoke test, then waits on Xfce so the
+# desktop stays for the tester.
+xhost +si:localuser:desk > /dev/null
+U="runuser -u desk -- env HOME=/home/desk USER=desk DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/desk-run"
+mkdir -p -m 700 /tmp/desk-run && chown desk /tmp/desk-run
+$U dbus-launch --exit-with-session startxfce4 > /tmp/results/xfce.txt 2>&1 &
+x=$!
+$U /usr/local/bin/kit-smoke /tmp/results > /tmp/results/smoke-log.txt 2>&1
+touch /tmp/kit-smoke.done
+wait $x

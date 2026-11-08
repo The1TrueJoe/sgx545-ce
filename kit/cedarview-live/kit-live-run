@@ -1,0 +1,215 @@
+#!/bin/bash
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# The live Debian test (kit/cedarview-live/README.md), on tty1 at boot:
+#   1 system facts   2 the GPU driver and its microkernel   3 the GPU tests
+#   4 the blit and its candidate fixes   5 the desktop (Xfce) and its smoke test
+#   6 the results file, then the desktop stays for the tester to try.
+# The results are saved after step 4 and again at the end, so a desktop that
+# freezes still leaves the GPU results on the stick. No serial numbers or
+# network addresses leave the machine.
+. /etc/kit-release
+R=/tmp/results
+mkdir -p "$R/screenshots"
+LOG=$R/run.log
+SUM=$R/summary.txt
+: > "$SUM"
+step() { printf '\n  [%s/6] %s\n' "$1" "$2"; echo "== step $1: $2 ($(date -u +%T))" >> "$LOG"; }
+note() { printf '        %s\n' "$*"; echo "$*" >> "$LOG"; }
+result() { printf '    %-5s %s\n' "$1" "$2" >> "$SUM"; note "$1: $2"; }
+run() {   # NAME SECS CMD...: CMD's output into NAME, at most SECS
+	local n=$1 t=$2; shift 2
+	echo "\$ $*" >> "$LOG"
+	timeout -k 5 "$t" "$@" > "$R/$n" 2>&1
+	local rc=$?
+	echo "  -> exit $rc" >> "$LOG"
+	return $rc
+}
+scrub() { sed -E -e 's/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g' \
+	-e 's/(SerialNumber|Serial Number|serial)([:=] *).*/\1\2(removed)/I'; }
+timeouts() { dmesg | grep -c 'job timed out'; }
+lost() { dmesg | grep -q 'device lost'; }
+dumps() {   # TAG: the devcoredumps and the driver's status, freed after reading
+	local i=0
+	for d in /sys/class/devcoredump/devcd*/data; do
+		[ -e "$d" ] || continue
+		cat "$d" > "$R/devcoredump-$1-$i.bin"; echo 1 > "$d"; i=$((i+1))
+	done
+	cat /sys/kernel/debug/dri/*/status > "$R/status-$1.txt" 2>/dev/null
+}
+save() {   # the results file on the stick's SGXKIT partition (live-boot mounts it read-only)
+	dmesg | scrub > "$R/dmesg.txt"
+	[ -f /var/log/Xorg.0.log ] && cp /var/log/Xorg.0.log "$R/Xorg.0.log"
+	journalctl -b --no-pager 2>/dev/null | scrub | tail -3000 > "$R/journal.txt"
+	cp /proc/interrupts "$R/interrupts.txt"
+	M=/run/live/medium
+	mount -o remount,rw "$M" 2>/dev/null || return 1
+	tar -C /tmp -czf "$M/$NAME" results && sync
+	local rc=$?
+	mount -o remount,ro "$M" 2>/dev/null
+	return $rc
+}
+
+T=/usr/local/lib/kit
+FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
+prod=$(tr -c 'A-Za-z0-9.\n-' '_' < /sys/class/dmi/id/product_name 2>/dev/null | cut -c1-32)
+NAME=results-kit${KIT_SERIES}-${prod:-unknown}-$(date -u +%Y%m%d-%H%M).tar.gz
+
+chvt 1 2>/dev/null
+clear
+cat <<EOF
+
+  SGX545 test for Intel Cedarview (GMA 3600/3650), kit $KIT_SERIES ($KIT_VERSION)
+  ------------------------------------------------------------------------
+  Debian 13 with the open driver, running from this USB stick. Your internal
+  disk is read-only and nothing is installed. It takes about 10 minutes; the
+  screen changes to a desktop on its own halfway.
+EOF
+
+step 1 "Reading what hardware this is"
+{
+	echo "kit $KIT_SERIES ($KIT_VERSION), kernel $(uname -r)"
+	for f in sys_vendor product_name product_version board_vendor board_name bios_vendor bios_version bios_date; do
+		printf '%s: %s\n' "$f" "$(cat /sys/class/dmi/id/$f 2>/dev/null)"
+	done
+	[ -d /sys/firmware/efi ] && echo "boot: UEFI" || echo "boot: BIOS"
+	dpkg-query -W linux-image-* sgx545-firmware mesa-sgx 2>/dev/null
+} > "$R/system.txt"
+cp /proc/cpuinfo "$R/cpuinfo.txt"
+cp /proc/meminfo "$R/meminfo.txt"
+lsblk -o NAME,SIZE,RO,TYPE,TRAN,MOUNTPOINT > "$R/disks.txt" 2>&1
+run lspci-gpu.txt 30 lspci -nnvvv -s 00:02.0
+run lspci.txt 30 lspci -nnk
+for f in "$R"/lspci*.txt; do scrub < "$f" > "$f.s" && mv "$f.s" "$f"; done
+note "$(sed -n 's/^product_name: //p' "$R/system.txt") / $(grep -m1 'model name' "$R/cpuinfo.txt" | cut -d: -f2)"
+rw=$(lsblk -dno NAME,RO,TRAN | awk '$3 != "usb" && $2 == "0" && $1 !~ /^(loop|ram|zram|sr)/ {print $1}' | xargs)
+if [ -z "$rw" ]; then result PASS "internal disks are read-only"; else result FAIL "internal disks are read-only ($rw is not)"; fi
+
+step 2 "The GPU driver and its microkernel"
+# Debian loads gma500_gfx and powervr_sgx at boot; load them if it didn't
+modprobe gma500_gfx 2>/dev/null
+modprobe powervr_sgx 2>/dev/null
+sleep 2
+ls -l /sys/bus/auxiliary/devices/ > "$R/auxiliary.txt" 2>&1
+if [ -n "$(compgen -G '/sys/bus/auxiliary/devices/gma500_gfx.sgx.*')" ]; then
+	result PASS "display driver hands the GPU over"
+else
+	result FAIL "display driver hands the GPU over"
+fi
+ident=$(dmesg | grep -o 'SGX core id 0x[0-9a-f]* revision 0x[0-9a-f]*[^.]*' | tail -1)
+note "${ident:-the driver did not report the GPU}"
+STARTED=
+dmesg | grep -q 'powervr_sgx.*microkernel started' && [ -n "$(compgen -G '/dev/dri/renderD*')" ] && STARTED=1
+if [ -n "$STARTED" ]; then result PASS "GPU identified and its microkernel started"
+elif [ -z "$ident" ]; then result FAIL "GPU identified"
+else result FAIL "GPU microkernel started"; fi
+dumps start
+
+step 3 "GPU tests"
+if [ -n "$STARTED" ]; then
+	t0=$(timeouts)
+	for t in "powervr_sgx_test" "powervr_sgx_frame -n 10"; do
+		# shellcheck disable=SC2086 # the test and its arguments
+		set -- $t
+		if run "$1.txt" 180 "$T/$1" "${@:2}"; then result PASS "$1"; else result FAIL "$1"; dumps "$1"; fi
+	done
+	[ "$(timeouts)" = "$t0" ] || note "a GPU job timed out during the tests"
+else
+	result SKIP "GPU tests (the GPU didn't start)"
+fi
+
+step 4 "The blit, and its candidate fixes"
+BLIT=
+if [ -n "$STARTED" ] && ! lost; then
+	try_blit() {   # NAME ARGS...
+		local n=$1; shift
+		if run "blit-$n.txt" 180 "$T/powervr_sgx_blit" -n 4 "$@"; then
+			result PASS "blit: $n"; BLIT=${BLIT:-$n}
+		else
+			result FAIL "blit: $n"; dumps "blit-$n"
+		fi
+	}
+	reload() {   # the microkernel image FILE
+		cp "$1" "$FW"
+		modprobe -r powervr_sgx && modprobe powervr_sgx
+		sleep 2
+		dmesg | grep 'open microkernel' | tail -1 >> "$LOG"
+	}
+	try_blit plain
+	lost || try_blit "texture-heap source (-T)" -T
+	if ! lost && [ -f "$T/sgx545_ukernel-xferbank.bin" ]; then
+		cp "$FW" /tmp/sgx545_ukernel-default.bin
+		reload "$T/sgx545_ukernel-xferbank.bin"
+		try_blit "transfer bank (microkernel variant B)"
+		reload /tmp/sgx545_ukernel-default.bin
+	fi
+	lost && result FAIL "the GPU was lost (later steps run without it)"
+	note "first blit that worked: ${BLIT:-none}"
+else
+	result SKIP "blit (no GPU)"
+fi
+cp "$SUM" "$R/summary.txt" 2>/dev/null
+save && note "GPU results saved to the stick ($NAME)" || note "could not save to the stick yet"
+
+step 5 "The desktop"
+note "The screen switches to a desktop now and back here at the end."
+DESK=
+if /usr/local/bin/kit-desktop "$R"; then DESK=1; fi
+chvt 1 2>/dev/null
+[ -n "$DESK" ] || result FAIL "the desktop (see Xorg.0.log)"
+dumps desktop
+
+step 6 "Saving the results to the stick"
+SAVED=
+save && SAVED=1
+
+# CI (qemu-test.sh) powers off once the results are saved
+grep -qw kit.poweroff=1 /proc/cmdline && { sync; systemctl poweroff; sleep 60; }
+
+clear
+if [ -n "$SAVED" ]; then
+	cat <<EOF
+
+
+  ======================================================================
+    DONE. Thank you!   (kit $KIT_SERIES)
+  ======================================================================
+
+    The results are on this USB stick, in the file
+
+        $NAME
+
+    Please attach that file to the GitHub issue. Plug the stick into any
+    other computer: it is the drive named SGXKIT.
+
+    GPU: ${ident:-not reported}
+
+    Results:
+$(cat "$SUM")
+
+    Press Alt+F7 to try the desktop, or type  p  and Enter below to turn
+    the computer off.
+EOF
+else
+	cat <<EOF
+
+  ======================================================================
+    The test ran, but the results could not be saved to the stick.
+  ======================================================================
+
+    Please take a photo of this screen and send it to us instead.
+
+    GPU: ${ident:-not reported}
+$(cat "$SUM")
+
+EOF
+fi
+while :; do
+	printf '\n  > '
+	read -r a
+	case $a in
+	p|P) sync; systemctl poweroff ;;
+	s|S) setsid -c /bin/bash -l ;;
+	esac
+done

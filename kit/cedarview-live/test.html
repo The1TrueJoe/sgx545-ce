@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SGX545 test page</title>
+<style>
+  body { margin: 0; font: 20px sans-serif; background: linear-gradient(135deg, #234, #4a7); color: #fff; }
+  h1 { margin: 24px; }
+  .box { width: 120px; height: 120px; margin: 24px; background: #e94; border-radius: 16px;
+         animation: spin 3s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  canvas { margin: 24px; background: #fff; }
+</style>
+</head>
+<body>
+<h1>SGX545 browser test</h1>
+<div class="box"></div>
+<canvas id="c" width="320" height="160"></canvas>
+<script>
+  const g = document.getElementById("c").getContext("2d");
+  let t = 0;
+  (function draw() {
+    g.clearRect(0, 0, 320, 160);
+    for (let i = 0; i < 12; i++) {
+      g.fillStyle = `hsl(${(i * 30 + t) % 360}, 70%, 50%)`;
+      g.fillRect(10 + i * 25, 80 + 50 * Math.sin((t + i * 20) / 20), 20, 20);
+    }
+    t++;
+    requestAnimationFrame(draw);
+  })();
+</script>
+</body>
+</html>

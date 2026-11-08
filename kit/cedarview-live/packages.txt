@@ -1,0 +1,16 @@
+# The live test system (Debian 13 trixie amd64), on top of mesa/tests/desktop/packages.txt.
+live-boot
+initramfs-tools
+systemd-sysv
+udev
+kmod
+pciutils
+usbutils
+dbus
+xdotool
+imagemagick
+zenity
+mesa-utils
+mesa-utils-bin
+glmark2-x11
+glmark2-es2-x11
