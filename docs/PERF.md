@@ -235,6 +235,30 @@ is ~33 ms a frame. So the world render is roughly 36 ms TA (258 k vertices,
 162 k triangles) and 28 ms 3D. The vertex path is the larger GPU bucket, and
 perfmicro verts is 0.46 of the DDK.
 
+### The vertex path against the DDK (perfmicro verts, 2026-11-09)
+
+ta3d-state diffed the DDK's and our state for perfmicro's verts test on the EA3
+(the same binary; captures kept outside the repos).
+- **The point size.** st gives every vertex program a point size and we output
+  it on triangles: 5 dwords a vertex into the parameter buffer, which the VDM
+  rounds up to an 8-dword output area. The DDK's position-only vertex is 4.
+  Fixed in 31f9341 (only points draws keep it). On the EA1 tex went up 11-13%
+  (1440x960 265 → 300 fps), and verts (120 → 121), fill and Minecraft (10.3/10.8
+  → 10.6/10.6) didn't move. Full dEQP-GLES2 unchanged.
+- **Matches:** ISPA, region clip, MTE control, W clamp, viewport, TE/tiling
+  words, batch 16, vertices per task 16, 16-bit indices. The DDK's index-list
+  count is wider than 16 bits (one list of 96,774 indices; we split at
+  65,535: negligible).
+- **The vertex DMA** is 2 dwords on the DDK (the VBO as it is) and 4 on ours
+  (gathered and widened to f32 x 4). `SGX_DEBUG=zerocopy` (2 dwords) changes
+  nothing: 110.6 → 108.7 fps on the EA3.
+- **Our frame** on the EA3 (`SGX_DEBUG=stats`, 110 fps, 9 ms): ~2.6 ms of CPU
+  in the draw (every index read, rebased to 16 bits and copied; the vertices
+  gathered), then ~6 ms kick to done. The DDK's whole frame is 4.1 ms. So the
+  GPU's vertex work is ~2x the DDK's, with the TA state matching; next are the
+  two vertex programs and their DOUTU words (the DDK sets 0x10000 on every
+  DOUTU, we never do).
+
 ## Shader code against libusc
 
 The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with
