@@ -4682,6 +4682,48 @@ fld_of(const struct sgx_ins *i, enum sgx_field id)
 /* an efo run's internal registers don't survive a deschedule: whatever got
  * put between its efos (an operand's copy, a uniform's load) goes in front of
  * the run, so only nosched efos sit between the first and the last */
+/* pds_samples_alone: a plain iteration whose registers nothing reads (its
+ * varying only feeds non-dependent samples, which the PDS takes from the set)
+ * goes; its registers stay unused rather than renumbering the others */
+static void
+drop_sample_only_iters(struct sgx_ctx *c)
+{
+   if (!c->opts->pds_samples_alone || c->stage != MESA_SHADER_FRAGMENT ||
+       sgx_debug(c, SGX_DBG_KEEP_COORD_ITERS))
+      return;
+   for (unsigned n = 0; n < c->n_iters;) {
+      struct sgx_iter *it = &c->iters[n];
+      unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
+      bool sampled = false, read = false;
+      for (unsigned s = 0; s < c->n_samples; s++)
+         sampled |=
+            !c->samples[s]->dependent && c->samples[s]->coord_pa == (int)it->pa;
+      if (it->sample || it->pointcoord || it->set >= SGX_MAX_SETS || !sampled) {
+         n++;
+         continue;
+      }
+      list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
+         for (unsigned k = i->ndst; k < i->nops && !read; k++) {
+            const struct sgx_ref *r = &i->op[k];
+            if (r->file != SGX_F_PA)
+               continue;
+            unsigned lo = r->h16 ? r->n / 2 : r->n;
+            unsigned cnt = r->step && i->rpt > 1 ? i->rpt : 1;
+            read = lo < it->pa + regs && lo + cnt > it->pa;
+         }
+      }
+      if (read) {
+         n++;
+         continue;
+      }
+      for (unsigned s = 0; s < c->n_samples; s++)
+         if (c->samples[s]->coord_pa == (int)it->pa)
+            c->samples[s]->coord_pa = -1;
+      memmove(it, it + 1, (c->n_iters - n - 1) * sizeof(*it));
+      c->n_iters--;
+   }
+}
+
 static void
 efo_runs(struct sgx_ctx *c)
 {
@@ -6118,6 +6160,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Keep or / and of comparisons as 1.0 / 0.0 floats, not test masks"},
    {"noiftest", SGX_DBG_NO_IF_TEST,
     "Branch on a comparison's value, not a test straight into p0"},
+   {"keepcoorditers", SGX_DBG_KEEP_COORD_ITERS,
+    "Keep a sampled varying's plain iteration though nothing reads it"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
     "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,
@@ -6194,6 +6238,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       mark_helpers(c);
    if (!c->failed)
       efo_runs(c);
+   if (!c->failed)
+      drop_sample_only_iters(c);
    if (!c->failed)
       allocate(c);
    if (!c->failed)

@@ -130,7 +130,7 @@ main(int argc, char **argv)
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
-      case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
+      case 'D': opts.driver_consts = opts.pds_samples_alone = true; break; /* our driver: its constant formats, PDS samples without the plain iteration */
       case 'M': opts.fs_mediump = true; break;      /* fragment floats mediump (st's fixed function) */
       case 'B': opts.tex_bgra = strtoul(optarg, NULL, 0); break; /* units whose texels arrive BGRA-ordered */
       case 'G': glsl_version = atoi(optarg); break; /* GLSL version: 100 ES (default), 110-130 desktop compat */
