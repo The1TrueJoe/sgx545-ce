@@ -74,6 +74,7 @@ one optimization, so a miscompile can be bisected without rebuilding.
 | `nocoissue` | efo co-issue |
 | `nof16const` | mediump uniforms loaded as F16 (loads F32 and converts) |
 | `nof16iter` | F16 varying iteration |
+| `nomaskbool` | or/and of comparisons kept as test masks (computes them as 1.0/0.0 floats instead) |
 | `unrollexits` | keeping loops that can exit early as loops (unrolls them into select trees instead) |
 | `notexcolor` | writing a texel that is the color with byte moves (unpacks and repacks it instead) |
 | `nopackedcolor` | a uniform color packed to BGRA8 by the driver (packs it in the shader instead) |

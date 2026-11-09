@@ -307,4 +307,26 @@ TEST_F(sgx_compile_test, fragment_ceil_one_instruction)
    EXPECT_EQ(out.n_temps, 0u) << disasm();
 }
 
+/* (a < b || c < d) ? x : y: the comparisons stay test masks and are or'ed
+ * bitwise, no 1.0 / 0.0 floats (glamor's gradient repeat tests) */
+TEST_F(sgx_compile_test, fragment_or_of_compares_as_masks)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, a);
+   nir_def *c1 = nir_flt(&b, nir_channel(&b, v, 0), nir_channel(&b, v, 1));
+   nir_def *c2 = nir_flt(&b, nir_channel(&b, v, 2), nir_channel(&b, v, 3));
+   nir_def *sel = nir_bcsel(&b, nir_ior(&b, c1, c2), v, nir_fneg(&b, v));
+   nir_store_var(&b, col, sel, 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   EXPECT_NE(s.find(" or "), std::string::npos) << s;
+   EXPECT_EQ(s.find("fmaxmin"), std::string::npos) << s;
+}
+
 } /* namespace */

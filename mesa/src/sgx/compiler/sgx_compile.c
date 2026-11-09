@@ -1171,6 +1171,68 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
    return true;
 }
 
+/* Booleans as test masks (0 or 0xffffffff, what testmask.dword writes and
+ * movc.nz takes as false / true): a comparison, or an or (fmax) / and
+ * (fmul) of two such, every reader of which is a select's condition or
+ * another such or / and. They stay masks, the or / and bitwise, instead of
+ * 1.0 / 0.0 floats (glamor's gradients: or chains of comparisons) */
+static bool mask_bool_def(nir_def *def, unsigned depth);
+
+static bool
+mask_bool_src(const nir_alu_instr *a, unsigned depth)
+{
+   return depth < 8 && mask_bool_def(a->src[0].src.ssa, depth + 1) &&
+          mask_bool_def(a->src[1].src.ssa, depth + 1);
+}
+
+static bool
+mask_bool_def(nir_def *def, unsigned depth)
+{
+   nir_instr *p = nir_def_instr(def);
+   if (p->type != nir_instr_type_alu || def->bit_size != 32)
+      return false;
+   nir_alu_instr *a = nir_instr_as_alu(p);
+   switch (a->op) {
+   case nir_op_slt:
+   case nir_op_sge:
+   case nir_op_seq:
+   case nir_op_sne:
+      return true;
+   case nir_op_fmax:
+   case nir_op_fmul:
+      return mask_bool_src(a, depth);
+   default:
+      return false;
+   }
+}
+
+static bool
+mask_bool_uses(nir_def *def, unsigned depth)
+{
+   if (depth > 8)
+      return false;
+   nir_foreach_use_including_if (u, def) {
+      nir_instr *ui = nir_src_is_if(u) ? NULL : nir_src_use_instr(u);
+      if (!ui || ui->type != nir_instr_type_alu)
+         return false;
+      nir_alu_instr *a = nir_instr_as_alu(ui);
+      if ((a->op == nir_op_fcsel || a->op == nir_op_b32csel) &&
+          u == &a->src[0].src)
+         continue;
+      if ((a->op == nir_op_fmax || a->op == nir_op_fmul) &&
+          mask_bool_src(a, 0) && mask_bool_uses(&a->def, depth + 1))
+         continue;
+      return false;
+   }
+   return true;
+}
+
+static bool
+mask_bool(nir_alu_instr *alu)
+{
+   return mask_bool_def(&alu->def, 0) && mask_bool_uses(&alu->def, 0);
+}
+
 /* every use of a 32-bit bool is a select's condition */
 static bool
 cond_only(nir_def *def)
@@ -1956,6 +2018,24 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       return;
    }
 
+   if ((alu->op == nir_op_fmax || alu->op == nir_op_fmul) && ld.dest.is_ssa &&
+       !ld.fsat && !c->def_dest && !sgx_debug(c, SGX_DBG_NO_MASK_BOOL) &&
+       !sgx_debug(c, SGX_DBG_NO_CONDMASK) && mask_bool(alu)) {
+      /* or / and of two test masks, bitwise */
+      unsigned t = new_vreg(c, 4);
+      struct sgx_ref td[4], ts[2][4];
+      for (unsigned k = 0; k < 4; k++) {
+         td[k] = vref(t, k);
+         for (unsigned j = 0; j < 2; j++)
+            ts[j][k] = k < nc ? alu_src(c, alu, j, k) : ref(SGX_F_C, 48);
+      }
+      emit_runs(c, alu->op == nir_op_fmax ? SGX_OP_OR : SGX_OP_AND,
+                nir_component_mask(nc), td, 2, ts, &NOF, 0);
+      c->vals[alu->def.index].kind = VAL_V;
+      c->vals[alu->def.index].n = t;
+      c->vals[alu->def.index].comp = 0;
+      return;
+   }
    if (alu->op == nir_op_ffloor && ld.dest.is_ssa && !ld.fsat && !c->def_dest &&
        negated_ok(&alu->def)) {
       /* fsubflr t, c48, x = -floor(x), one instruction (libusc's ceil is
@@ -2192,7 +2272,9 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
          3,
          {{SGX_FLD_ALU, 14}, {SGX_FLD_COND, cd}, {SGX_FLD_TYPE, 2}}};
       emit_runs(c, SGX_OP_TESTMASK, wmask, td, 2, ts, &tf, 0);
-      if (ld.dest.is_ssa && !ld.fsat && cond_only(&alu->def) &&
+      if (ld.dest.is_ssa && !ld.fsat &&
+          (cond_only(&alu->def) ||
+           (mask_bool(alu) && !sgx_debug(c, SGX_DBG_NO_MASK_BOOL))) &&
           !sgx_debug(c, SGX_DBG_NO_CONDMASK)) {
          /* only selects read it: the mask itself (a passing dword test
           * writes 0xffffffff, which movc.nz takes as true: ISA.md hwt_p2/p7) */
@@ -5946,6 +6028,8 @@ static const struct debug_named_value sgx_debug_options[] = {
    {"nof16const", SGX_DBG_NO_F16_CONST,
     "Load mediump uniforms as F32 and convert in the shader"},
    {"nof16iter", SGX_DBG_NO_F16_ITER, "Iterate every varying in F32"},
+   {"nomaskbool", SGX_DBG_NO_MASK_BOOL,
+    "Keep or / and of comparisons as 1.0 / 0.0 floats, not test masks"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
     "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,

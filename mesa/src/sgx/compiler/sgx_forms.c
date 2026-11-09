@@ -108,6 +108,7 @@ static const struct sgx_form_info {
    [SGX_OP_TEST] = {"TEST", SGX_ISA_OPC_TEST, 3, {PD, S1T, S2T}},
    [SGX_OP_TESTMASK] = {"TESTMASK", SGX_ISA_OPC_TESTMASK, 3, {D, S1T, S2T}},
    [SGX_OP_AND] = {"AND", SGX_ISA_OPC_AND, 3, {D, S1, S2}},
+   [SGX_OP_OR] = {"OR", SGX_ISA_OPC_OR, 3, {D, S1, S2}},
    [SGX_OP_XOR] = {"XOR", SGX_ISA_OPC_XOR, 3, {D, S1, S2}},
    [SGX_OP_SOPWM] = {"SOPWM", SGX_ISA_OPC_SOPWM, 3, {D, S1, S2}},
    [SGX_OP_SOP3] = {"SOP3", SGX_ISA_OPC_SOP3, 4, {D, S0, S1, S2}},

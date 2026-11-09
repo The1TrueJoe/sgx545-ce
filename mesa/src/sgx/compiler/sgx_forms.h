@@ -64,6 +64,7 @@ enum sgx_form {
    SGX_OP_TEST,
    SGX_OP_TESTMASK,
    SGX_OP_AND,
+   SGX_OP_OR,
    SGX_OP_XOR,
    /* hw 11, 12: colour */
    SGX_OP_SOPWM,
