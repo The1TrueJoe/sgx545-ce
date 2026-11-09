@@ -82,10 +82,14 @@ zls_target(struct sgx_context *ctx, struct sgx_resource *zs, uint32_t w,
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    uint32_t bytes = align(sgxws_zls_pixels(w, h) * 5, 4096);
 
-   if (!zs)
+   if (!zs || (sgx_drv_debug & SGX_DEBUG_NO_ZLS))
       return true;
    if (sgxws_bo_valid(&zs->zls) && zs->zls_bytes < bytes) {
-      sgxws_wait_idle(ctx->hw, 2000); /* renders that store into it */
+      /* renders that store into it: the frame being recorded (another
+       * target's, which begin_frame hasn't flushed yet) too */
+      sgxws_flush(ctx->hw, 0);
+      ctx->recording = NULL;
+      sgxws_wait_idle(ctx->hw, 2000);
       sgxws_bo_free(screen->dev, &zs->zls);
       zs->zls_w = zs->zls_h = 0;
    }
@@ -101,7 +105,6 @@ zls_target(struct sgx_context *ctx, struct sgx_resource *zs, uint32_t w,
            t->zls_load ? "load and store" : "store");
    zs->zls_w = w;
    zs->zls_h = h;
-   zs->use_seq = sgxws_next_seq(ctx->hw);
    return true;
 }
 
@@ -160,6 +163,11 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
       return false;
    ctx->recording = res;
    ctx->recording_zs = zs;
+   /* its ZLS buffer is stored into by this render: freeing it flushes and
+    * waits (sgx_resource_destroy).  After sgxws_begin, which may have
+    * flushed another target's frame: the next kick is this render's. */
+   if (zs && sgxws_bo_valid(&zs->zls))
+      zs->use_seq = sgxws_next_seq(ctx->hw);
    /* a write to the texture waits for this render, as for one that samples it */
    if (res->texture)
       res->use_seq = sgxws_next_seq(ctx->hw);

@@ -32,6 +32,7 @@
 #define SGX_DEBUG_FLUSH_RT       (1 << 16)
 #define SGX_DEBUG_FF_MEDIUMP     (1 << 17)
 #define SGX_DEBUG_ZERO_COPY      (1 << 18)
+#define SGX_DEBUG_NO_ZLS         (1 << 19)
 
 extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */

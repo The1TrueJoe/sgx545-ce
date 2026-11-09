@@ -51,6 +51,8 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "fixed-function fragment programs at mediump (F16; texture coordinates F32)"},
    {"zerocopy", SGX_DEBUG_ZERO_COPY,
     "f32 vertex inputs DMAed where they are: buffers in place, client arrays copied as they are"},
+   {"nozls", SGX_DEBUG_NO_ZLS,
+    "depth and stencil not kept across renders (no ZLS load or store)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
     "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)"},
    DEBUG_NAMED_VALUE_END};
