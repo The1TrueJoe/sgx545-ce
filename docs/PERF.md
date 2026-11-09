@@ -215,8 +215,13 @@ with `__DRI_IMAGE_USE_SCANOUT`, so kmsro makes each a cached simpledrm dumb
 buffer, imported and flushed around both small renders (~5 ms a frame). Only
 X's screen pixmap is scanned out (X copies the window: its 1.1 ms job a
 frame). Nothing tells the pipe driver that an image is a back buffer (dri2.c
-maps `__DRI_IMAGE_USE_BACKBUFFER` to no bind flag), so keeping back buffers
-on the SGX needs a frontend change. Parked behind the vertex path.
+maps `__DRI_IMAGE_USE_BACKBUFFER` to no bind flag). So on such a display a
+scanout render target now starts as the SGX's own buffer and becomes a dumb
+buffer, with its contents, only when a KMS handle is asked for: X's root
+pixmap does that, client back buffers never do. With m2's listed-import
+flushes, Minecraft's import flushes went 318 → 102 per 5 s (553 → 132 ms),
+one 1.4 MB import a frame (X's); the desktop smoke stayed clean, es2gears
+135 → 160 fps, glmark2 67 → 83.
 
 With both gone the frame is the GPU's 69.5 ms: 14.4 fps, past the DDK.
 
