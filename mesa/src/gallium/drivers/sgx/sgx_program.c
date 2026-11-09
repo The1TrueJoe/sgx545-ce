@@ -1064,6 +1064,20 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    return *slot;
 }
 
+/* the texture units a fragment shader samples (all, when it isn't known) */
+uint32_t
+sgx_fs_textures_used(const struct sgx_pipe_shader *fs)
+{
+   uint32_t mask = 0;
+   unsigned unit;
+
+   if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
+      return ~0u;
+   BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS)
+      mask |= 1u << unit;
+   return mask;
+}
+
 struct sgx_pipe_shader *
 sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 {

@@ -27,6 +27,9 @@ struct sgx_pipe_shader *sgx_vs_for(struct sgx_context *ctx,
                                    const struct sgx_pipe_shader *fs,
                                    const uint8_t *vtx_fmt);
 
+/* the texture units a fragment shader samples (all, when it isn't known) */
+uint32_t sgx_fs_textures_used(const struct sgx_pipe_shader *fs);
+
 /* the bound fragment shader as the draw samples its textures: itself, or a
  * variant decoding the sRGB views it samples; NULL if it can't */
 struct sgx_pipe_shader *sgx_fs_for(struct sgx_context *ctx,

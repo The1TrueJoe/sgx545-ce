@@ -1292,9 +1292,14 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    if (!fs)
       return;
    /* cube maps sampled without mipmapping, from their level-0 copy: brought
-    * up to date before anything of this draw is recorded (it may wait) */
+    * up to date before anything of this draw is recorded (it may wait).
+    * Only the units the shader samples: a view left bound to another unit
+    * is not this draw's */
+   uint32_t used = sgx_fs_textures_used(ctx->fs);
+
    for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
-      struct pipe_sampler_view *view = ctx->views[unit];
+      struct pipe_sampler_view *view =
+         used >> unit & 1 ? ctx->views[unit] : NULL;
 
       /* stopgap: no layout is known for NPOT cube faces, and sampling one of
        * 16 texels or more, or its mipmaps, locks the 3D (piglit cubemap
