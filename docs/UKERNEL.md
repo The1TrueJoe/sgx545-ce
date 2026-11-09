@@ -238,10 +238,17 @@ On a host-kick event the microkernel:
 1. reads the CCB control's write offset and compares it with its own read
    offset; if equal, there is nothing to do;
 2. reads the command at the read offset;
-3. **honours `ui32CacheControl`**: if it asks for a BIF cache invalidate
-   (data / page-table / page-directory / SLC bits, `SGXMKIF_CC_INVAL_*`), the
-   microkernel pulses the matching invalidate registers and waits for the
-   done bits (section 6);
+3. **honours `ui32CacheControl`** (command word 1). This runs here, for every
+   command, before the dispatch (pc 0x0098-0x00c2):
+   - INVAL_BIF_PD (0x2): pulse `BIF_CTRL` = old | 8 (INVALDC), then the old
+     value;
+   - else INVAL_BIF_PT (0x1): pulse `BIF_CTRL` = old | 4 (FLUSH), then the old
+     value. INVALDC already covers the page tables;
+   - INVAL_DATA (0x8): 0x804 |= 0x10000000 (MADD), wait for `EVENT_STATUS`
+     b26 (MADD_CACHE_INVALCOMPLETE), and ack it;
+   - INVAL_SL (0x4) is not tested: this core has no system-level cache.
+   The BIF pulses don't wait. The microkernel leaves the word as it is; the
+   host clears its own copy once the command is sent;
 4. **jumps to `ui32ServiceAddress`**. This word is not a general address: the
    host fills it from `aui32HostKickAddr[eCmdType]`, the table of microkernel
    entry instruction-indexes `srvinit` passed in `SGX_BRIDGE_INIT_INFO`
@@ -327,6 +334,22 @@ the context's CCB past the 0x1c0-byte command, and raises the host interrupt.
 The transfer also updates two sync-heap objects named by the kick's
 sync-handle list (not the shared command); reproducing those is the remaining
 increment.
+
+**The rest of the DDK's transfer start** (pc 0x1363-0x1424):
+- **The BIF switch.** pc 0x17ec loads the transfer context's PD into its
+  directory list. When that PD differs from the one loaded, it pulses
+  `BIF_CTRL` INVALDC (pc 0x181e/0x181f). Without the pulse, the BIF's cached
+  directory entries still belong to the previous client, and a transfer
+  reads that client's memory through the same device addresses.
+- **Three optional register groups.** Each is gated on a command word being
+  nonzero:
+  - word 98 (+0x188): words 17-27 go to 0x820-0x848;
+  - word 99 (+0x18c): words 28-30 go to 0x860-0x868;
+  - word 100 (+0x190): words 31-40 go to 0xa9c, 0xa84-0xa98 and 0xb24-0xb2c.
+  These are the registers a render loads from render details +0x6c..+0xc8.
+- **Cache invalidates, after the registers are programmed:** 0xad4 = 1,
+  0xae0 = 1, 0x43c = 1, then 0x804 |= 0x10000000 with a wait for
+  `EVENT_STATUS` b26, then 0xa08 = 1, then a wait for 0x138 & 0x4b.
 
 **When the DDK starts a transfer.**
 - A host kick only queues it.
@@ -1029,6 +1052,17 @@ its data accesses in either bank. [D, code and trace]
     counterparts of the TA's 0x700/0x710/0x724/0x72c. The 3D state includes
     the pages that render freed, so a PB reloaded without it loses one
     render's pages at every switch.
+  - **One shared PB** for every client, as the DDK kernel gives
+    (`SGXFindSharedPBDescKM`), makes all of this inert after the first
+    frame: T == D == P. Only the power-off save, the PB's own cleanup and a
+    reset remain live.
+    - After a reset the markers are 0, so the first kick loads from the
+      descriptor alone. The host must re-arm it first: +0x18 = +0x08,
+      +0x1c = +0x0c (not shifted again), +0x20 = +0x24 = 0, with the free
+      list rebuilt.
+    - Proven on a CE5300 board (2026-11-08): two forced hangs recovered, then
+      200 clean frames. 0x61c stayed at its initial value, 0x700 never reached
+      0xffff, and the two halves of 0x724 always matched.
   - **0x664.** Both loads write a mask of which markers differ:
     `(+0xb4 != +0xbc) | (+0xb4 != +0xb8) << 1 | (+0xb8 != +0xbc) << 2`. It is
     not a constant.
