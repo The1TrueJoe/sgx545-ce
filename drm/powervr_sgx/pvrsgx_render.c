@@ -170,6 +170,7 @@ static struct pvrsgx_pb *dev_pb_get(struct pvrsgx_device *sdev, u32 req_pages)
 			return pb;
 		}
 		sdev->pb = pb;
+		drm_info(&sdev->base, "parameter buffer: %#x pages\n", pb->pages);
 	}
 	pb = sdev->pb;
 	kref_get(&pb->ref);
