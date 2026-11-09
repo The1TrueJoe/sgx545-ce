@@ -42,7 +42,7 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
    5. the browser;
    6. a window being dragged.
 
-   A blank or one-colour screenshot is a FAIL.
+   A blank or one-color screenshot is a FAIL, and so is one that is the same as the one before (a frozen screen).
 6. `results-kitv3-<model>-<date>.tar.gz` on `SGXKIT`, with `summary.txt`, dmesg, the journal
    and the Xorg log. Then a "done, attach this file" screen on tty1, and the desktop stays
    on vt7.
