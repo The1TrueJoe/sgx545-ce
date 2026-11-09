@@ -32,6 +32,6 @@ Suspect = the kick-2 / ta_finished / terminate path (the kdiff TA-finish bookkee
 ours still omits: pb+0x14, rtentry+0x34, rtdata+0x4, cmd+0x58, and the read-offset
 advance TIMING — ours advances at the kick, the DDK at TA finish). Next: get
 ta3d-state's read on why ours' kick-2 TA doesn't terminate, then one EA3 slot to test
-against the DDK control. Data: data/2026-11-03-0700-ea3-ab-ddk-render.bb.bin (DDK),
+against the DDK control. Data: (the DDK render capture is not kept in the repository),
 2026-11-03-0700-ea3-ddk-arm1.dmesg.log, and 2026-11-03-0530-* (ours lockup_TA earlier,
 pre-restage; the ours arm this round is ea3-ours-dmesg.log in scratchpad).
