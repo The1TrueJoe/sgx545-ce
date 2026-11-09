@@ -340,6 +340,13 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   a PB per client with the microkernel storing and loading the DPM free-list
   state on a PB change (ta3d-state's rules, `UKERNEL.md` e2d08c2); the
   kernel side is the per-VM PB this replaced.
+- [ ] **F1: transfer state across clients.** A second client's first
+  transfer faults (PDS fetch outside its programs) after another client's
+  transfers ran, until a microkernel restart; `powervr_sgx_blit -2` repeats it.
+  The kernel side is ruled out: the job's own directory is loaded, its context
+  and command are fresh, and released contexts flush the data caches (8da962c,
+  as the DDK does after its cleanup). With open-ukernel; behind the render
+  path's out-of-memory handling, since Mesa submits no transfers.
 - [ ] **Graveyard policy.** Released firmware objects are kept until the next
   restart unless `reap_after_render`; to settle with open-ukernel whether a
   later render's completion is enough, then drop the parameter.
