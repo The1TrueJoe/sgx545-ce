@@ -62,14 +62,19 @@ static struct sgxtex_blit_ctx X;
 static struct sgx_bo usse, bgb, pdsc, pdsp, copy;
 static uint32_t emit, eot_next;
 
-static int xioctl(unsigned long req, void *arg)
+static int fd_ioctl(int fd, unsigned long req, void *arg)
 {
 	int r;
 
 	do
-		r = ioctl(dev.fd, req, arg);
+		r = ioctl(fd, req, arg);
 	while (r == -1 && (errno == EINTR || errno == EAGAIN));
 	return r == -1 ? -errno : 0;
+}
+
+static int xioctl(unsigned long req, void *arg)
+{
+	return fd_ioctl(dev.fd, req, arg);
 }
 
 static void die(const char *what, int e)
@@ -86,11 +91,16 @@ static int64_t deadline(unsigned ms)
 	return now.tv_sec * 1000000000ll + now.tv_nsec + ms * 1000000ll;
 }
 
-static int wait_syncobj(uint32_t h, unsigned ms)
+static int wait_syncobj_on(int fd, uint32_t h, unsigned ms)
 {
 	struct drm_syncobj_wait w = { .handles = (uintptr_t)&h, .count_handles = 1, .timeout_nsec = deadline(ms) };
 
-	return xioctl(DRM_IOCTL_SYNCOBJ_WAIT, &w);
+	return fd_ioctl(fd, DRM_IOCTL_SYNCOBJ_WAIT, &w);
+}
+
+static int wait_syncobj(uint32_t h, unsigned ms)
+{
+	return wait_syncobj_on(dev.fd, h, ms);
 }
 
 static void put(struct sgx_bo *b, uint32_t va, const uint32_t *w, uint32_t n)
@@ -199,13 +209,18 @@ static void transfer_job(struct xjob *x, const struct sgx_surface *s, uint32_t w
 	transfer_job_va(x, s->color.va, s->stride, wait);
 }
 
-static int submit(struct drm_powervr_sgx_job *j, uint32_t n)
+static int submit_on(int fd, struct drm_powervr_sgx_job *j, uint32_t n)
 {
 	struct drm_powervr_sgx_job a[8];
 	struct drm_powervr_sgx_ioctl_submit_jobs_args sj = { .jobs = OBJ_ARRAY(n, a) };
 
 	memcpy(a, j, n * sizeof(*j));
-	return xioctl(DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj);
+	return fd_ioctl(fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj);
+}
+
+static int submit(struct drm_powervr_sgx_job *j, uint32_t n)
+{
+	return submit_on(dev.fd, j, n);
 }
 
 /* One render context with its target and shaders. */
@@ -215,12 +230,17 @@ struct rc {
 	struct sgx_shader *vs, *fs;
 };
 
-static void rc_create(struct rc *r)
+static void rc_create_on(struct sgx_dev *d, struct rc *r)
 {
-	r->c = sgx_ctx_create(&dev);
+	r->c = sgx_ctx_create(d);
 	r->s = sgx_surface_create(r->c, W, H, 0);
 	r->vs = sgx_shader_builtin(r->c, SGX_VS_XY);
 	r->fs = sgx_shader_builtin(r->c, SGX_FS_UNIFORM);
+}
+
+static void rc_create(struct rc *r)
+{
+	rc_create_on(&dev, r);
 }
 
 static const uint32_t want_bg = 0xff000080;
@@ -319,14 +339,19 @@ static int blit_alone(struct rc *r)
 	return !wait_syncobj(xsync, 4000) && blit_ok(r->s);
 }
 
-static struct drm_powervr_sgx_ioctl_get_context_state_args state(uint32_t ctx)
+static struct drm_powervr_sgx_ioctl_get_context_state_args state_on(int fd, uint32_t ctx)
 {
 	struct drm_powervr_sgx_ioctl_get_context_state_args a = { .handle = ctx };
 	int e;
 
-	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &a)))
+	if ((e = fd_ioctl(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &a)))
 		die("GET_CONTEXT_STATE", e);
 	return a;
+}
+
+static struct drm_powervr_sgx_ioctl_get_context_state_args state(uint32_t ctx)
+{
+	return state_on(dev.fd, ctx);
 }
 
 /*
@@ -513,6 +538,56 @@ static int hang_queued(struct rc *a, unsigned f)
 	return !bad;
 }
 
+/*
+ * Another client (its own file, VM and context, as Xorg is to a game) keeps
+ * QUEUED renders queued while this one's render hangs the GPU: only the
+ * hanging context is to blame, and the other client's renders all run.
+ */
+static int hang_bystander(unsigned f)
+{
+	static struct sgx_job jb, jz[QUEUED];
+	struct drm_powervr_sgx_job jj[QUEUED];
+	struct sgx_dev d2 = {};
+	struct rc b, z;
+	int bad = 0, e, ez;
+
+	if ((e = sgx_dev_open(&d2, NULL, NULL))) {
+		printf("  second client: open %d\n", e);
+		return 0;
+	}
+	rc_create_on(&d2, &z);
+	CHECK(render(&z, f));
+	coredump_take();
+	rc_create(&b);
+	setenv("SGXGEN_FAULT", "1", 1);
+	record(&b, f);
+	unsetenv("SGXGEN_FAULT");
+	sgx_render_job(b.c, &jb);
+	CHECK(!submit(&jb.job, 1));
+	record(&z, f + 1);
+	for (int i = 0; i < QUEUED; i++) {
+		sgx_render_job(z.c, &jz[i]);
+		jj[i] = jz[i].job;
+	}
+	CHECK(!submit_on(d2.fd, jj, QUEUED));
+	e = wait_syncobj(b.c->syncobj, 20000);
+	ez = wait_syncobj_on(d2.fd, z.c->syncobj, 20000);
+	printf("  hang with another client's %d renders queued: wait %d / %d, states %u / %u\n",
+	       QUEUED, e, ez, state(b.c->ctx).state, state_on(d2.fd, z.c->ctx).state);
+	CHECK(state(b.c->ctx).state == DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
+	CHECK(state_on(d2.fd, z.c->ctx).state == DRM_POWERVR_SGX_CONTEXT_STATE_OK);
+	CHECK(!ez);
+	CHECK(frame_ok("other client's queued", z.s->color.map, z.s->stride, f + 1));
+	CHECK(render(&z, f));
+	coredump_take();
+	sgx_surface_destroy(b.c, b.s);
+	sgx_ctx_destroy(b.c);
+	sgx_surface_destroy(z.c, z.s);
+	sgx_ctx_destroy(z.c);
+	sgx_dev_close(&d2);
+	return !bad;
+}
+
 static int idle(struct rc *a, unsigned f)
 {
 	char st[32] = "";
@@ -638,6 +713,9 @@ int main(int argc, char **argv)
 			bad += !ok;
 			ok = hang_queued(&a, f);
 			printf("round %u: queued behind a hang %s\n", r, ok ? "right" : "WRONG");
+			bad += !ok;
+			ok = hang_bystander(f);
+			printf("round %u: another client through a hang %s\n", r, ok ? "right" : "WRONG");
 			bad += !ok;
 		}
 	}
