@@ -15,6 +15,11 @@ and an auxiliary device of gma500's PCI function on Cedarview:
   child through /sys/class/drm (loader_find_child_render_node, with a unit
   test on fake sysfs trees).
 
+EGL gives a display an EGLDevice from libdrm's device list. A display
+device whose render node libdrm can't describe (the auxiliary-bus SGX) goes
+with the software device's entry, as a primary-node-only device does;
+without it eglInitialize fails on gbm and X11 (Xorg's glamor on Cedarview).
+
 An X server's GLX (AIGLX) loads <display driver>_dri.so: dril stubs for
 simpledrm, gma500 and sgx.
 
@@ -30,6 +35,30 @@ index 916b72b..c1d56a0 100644
  ].contains(true)
  
  _vulkan_drivers = get_option('vulkan-drivers')
+diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
+--- a/src/egl/drivers/dri2/egl_dri2.c
++++ b/src/egl/drivers/dri2/egl_dri2.c
+@@ -848,7 +848,20 @@
+    }
+ 
+    dev = _eglFindDevice(render_fd, software);
++#ifdef HAVE_LIBDRM
++   /* A render node libdrm can't describe is in no EGLDevice: the Cedarview
++    * SGX, which gma500 publishes on the auxiliary bus.  The display goes
++    * with the software device's entry, as a primary-node-only device does. */
++   if (!dev && render_fd >= 0) {
++      drmDevicePtr drm_dev;
+ 
++      if (drmGetDevice2(render_fd, 0, &drm_dev) == 0)
++         drmFreeDevice(&drm_dev);
++      else
++         dev = _eglFindDevice(-1, true);
++   }
++#endif
++
+    if (render_fd >= 0 && render_fd != dri2_dpy->fd_render_gpu)
+       close(render_fd);
+ 
 diff --git a/src/gallium/auxiliary/pipe-loader/meson.build b/src/gallium/auxiliary/pipe-loader/meson.build
 index a4a13c0..4faf414 100644
 --- a/src/gallium/auxiliary/pipe-loader/meson.build
