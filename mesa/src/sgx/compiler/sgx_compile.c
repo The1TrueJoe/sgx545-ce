@@ -1212,8 +1212,11 @@ mask_bool_uses(nir_def *def, unsigned depth)
    if (depth > 8)
       return false;
    nir_foreach_use_including_if (u, def) {
-      nir_instr *ui = nir_src_is_if(u) ? NULL : nir_src_use_instr(u);
-      if (!ui || ui->type != nir_instr_type_alu)
+      /* (an if tests the mask bitwise: test.and.eq) */
+      if (nir_src_is_if(u))
+         continue;
+      nir_instr *ui = nir_src_use_instr(u);
+      if (ui->type != nir_instr_type_alu)
          return false;
       nir_alu_instr *a = nir_instr_as_alu(ui);
       if ((a->op == nir_op_fcsel || a->op == nir_op_b32csel) &&
@@ -1231,6 +1234,19 @@ static bool
 mask_bool(nir_alu_instr *alu)
 {
    return mask_bool_def(&alu->def, 0) && mask_bool_uses(&alu->def, 0);
+}
+
+/* d is held as a test mask, not 1.0 / 0.0 (the comparison and or / and
+ * paths of emit_alu decide the same way) */
+static bool
+held_as_mask(struct sgx_ctx *c, nir_def *d)
+{
+   nir_instr *p = nir_def_instr(d);
+   if (p->type != nir_instr_type_alu || sgx_debug(c, SGX_DBG_NO_CONDMASK) ||
+       sgx_debug(c, SGX_DBG_NO_MASK_BOOL))
+      return false;
+   nir_legacy_alu_dest ld = nir_legacy_chase_alu_dest(d);
+   return ld.dest.is_ssa && !ld.fsat && mask_bool(nir_instr_as_alu(p));
 }
 
 /* every use of a 32-bit bool is a select's condition */
@@ -3200,6 +3216,45 @@ emit_block(struct sgx_ctx *c, nir_block *b, struct loop_labels *loop)
    }
 }
 
+/* an if on a comparison only it reads, computed last in the block before
+ * it: test.fsub.<inverse> p0, a, b, as libusc branches, instead of a mask
+ * or 1.0 / 0.0 and a test of that */
+static void
+find_if_compares_cf(struct sgx_ctx *c, struct exec_list *list)
+{
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      if (node->type == nir_cf_node_loop) {
+         find_if_compares_cf(c, &nir_cf_node_as_loop(node)->body);
+         continue;
+      }
+      if (node->type != nir_cf_node_if)
+         continue;
+      nir_if *nif = nir_cf_node_as_if(node);
+      find_if_compares_cf(c, &nif->then_list);
+      find_if_compares_cf(c, &nif->else_list);
+      nir_def *d = nif->condition.ssa;
+      nir_instr *p = nir_def_instr(d);
+      nir_cf_node *prev = nir_cf_node_prev(node);
+      if (p->type != nir_instr_type_alu || !prev ||
+          prev->type != nir_cf_node_block ||
+          nir_block_last_instr(nir_cf_node_as_block(prev)) != p ||
+          !list_is_singular(&d->uses) || d->num_components != 1)
+         continue;
+      nir_alu_instr *cmp = nir_instr_as_alu(p);
+      if (cmp->op != nir_op_slt && cmp->op != nir_op_sge &&
+          cmp->op != nir_op_seq && cmp->op != nir_op_sne)
+         continue;
+      _mesa_set_add(c->skip, p);
+      _mesa_hash_table_insert(c->if_cmp, nif, cmp);
+   }
+}
+
+static void
+find_if_compares(struct sgx_ctx *c, nir_function_impl *impl)
+{
+   find_if_compares_cf(c, &impl->body);
+}
+
 static void
 emit_cf_list(struct sgx_ctx *c, struct exec_list *list,
              struct loop_labels *loop)
@@ -3213,8 +3268,22 @@ emit_cf_list(struct sgx_ctx *c, struct exec_list *list,
          nir_if *nif = nir_cf_node_as_if(node);
          nir_legacy_src ls = nir_legacy_chase_src(&nif->condition);
          unsigned l_else = new_label(c), l_end = new_label(c);
-         /* p0 = (cond == 0): skip the then-side */
-         emit_test(c, 0, src_comp(c, &ls, 0), ref(SGX_F_K, 0), 0, 20);
+         /* p0 = (cond == 0): skip the then-side (a test mask: bitwise) */
+         struct hash_entry *he = _mesa_hash_table_search(c->if_cmp, nif);
+         if (he) {
+            nir_alu_instr *cmp = he->data;
+            int inv = cmp->op == nir_op_sge   ? 25
+                      : cmp->op == nir_op_slt ? 6
+                      : cmp->op == nir_op_seq ? 24
+                                              : 20;
+            emit_test(c, 0, alu_src(c, cmp, 0, 0), alu_src(c, cmp, 1, 0), 14,
+                      inv);
+         } else if (ls.is_ssa && held_as_mask(c, ls.ssa)) {
+            struct sgx_ref m = src_comp(c, &ls, 0);
+            emit_test(c, 0, m, m, 0x30, 20);
+         } else {
+            emit_test(c, 0, src_comp(c, &ls, 0), ref(SGX_F_K, 0), 0, 20);
+         }
          emit_br(c, l_else, 1);
          emit_cf_list(c, &nif->then_list, loop);
          bool has_else =
@@ -6036,6 +6105,8 @@ static const struct debug_named_value sgx_debug_options[] = {
    {"nof16iter", SGX_DBG_NO_F16_ITER, "Iterate every varying in F32"},
    {"nomaskbool", SGX_DBG_NO_MASK_BOOL,
     "Keep or / and of comparisons as 1.0 / 0.0 floats, not test masks"},
+   {"noiftest", SGX_DBG_NO_IF_TEST,
+    "Branch on a comparison's value, not a test straight into p0"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
     "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,
@@ -6081,6 +6152,9 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    c->skip = _mesa_pointer_set_create(c);
    c->proj = _mesa_pointer_hash_table_create(c);
    c->efo = _mesa_pointer_hash_table_create(c);
+   c->if_cmp = _mesa_pointer_hash_table_create(c);
+   if (!sgx_debug(c, SGX_DBG_NO_IF_TEST))
+      find_if_compares(c, impl);
    if (!sgx_debug(c, SGX_DBG_NO_COISSUE))
       find_efo(c, impl);
    if (c->stage == MESA_SHADER_FRAGMENT) {

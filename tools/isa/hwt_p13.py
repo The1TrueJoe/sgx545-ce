@@ -27,3 +27,16 @@ TESTS.append(("pck_u8u8_rgba_to_bgra", load(SRC) + [
     "pck.u8.u8 r3, r0.l2, r0.l1  [skipinv dmask=3]",
     "pck.u8.u8 r3, r0, r0.l3  [skipinv dmask=12]",
     out("r3")], 0x44112233))
+
+# test masks as booleans: or / and of 0 and 0xffffffff, and test.and.eq into a
+# predicate (an if on a mask), each result read back
+MASKS = {"r0": 0xffffffff, "r1": 0x00000000, "r2": 0xffffffff, "r3": 0x5a5a5a5a}
+for op, a, b, want in (("or", "r0", "r1", 0xffffffff), ("or", "r1", "r1", 0),
+                       ("and", "r0", "r2", 0xffffffff), ("and", "r0", "r1", 0)):
+    TESTS.append((f"mask_{op}_{a}{b}", load(MASKS) + [f"{op} r3, {a}, {b}  [skipinv]", out("r3")], want))
+for m, want in (("r0", 0x22222222), ("r1", 0x11111111)):
+    TESTS.append((f"mask_test_and_eq_{m}", load(MASKS) + [
+        "limm r3, #0x22222222  [skipinv]",
+        f"test.and.eq p0, {m}, {m}  [skipinv]",
+        "(p0) limm r3, #0x11111111  [skipinv]",
+        out("r3")], want))

@@ -226,6 +226,8 @@ struct sgx_ctx {
    struct nir_alu_instr *discard_cmp;
    struct hash_table *proj; /* nir_tex_instr -> its projected varying load */
    struct hash_table *efo; /* nir_alu_instr (a chain's root) -> its efo_chain */
+   /* nir_if -> the comparison it alone reads, tested into p0 directly */
+   struct hash_table *if_cmp;
 
    /* results */
    unsigned n_temps, n_pa;
@@ -266,6 +268,7 @@ enum sgx_debug {
    SGX_DBG_NO_F16_ITER = BITFIELD64_BIT(15),
    SGX_DBG_UNROLL_EXITS = BITFIELD64_BIT(18),
    SGX_DBG_NO_MASK_BOOL = BITFIELD64_BIT(19),
+   SGX_DBG_NO_IF_TEST = BITFIELD64_BIT(20),
    SGX_DBG_NO_TEX_COLOR = BITFIELD64_BIT(16),
    SGX_DBG_NO_PACKED_COLOR = BITFIELD64_BIT(17),
 };
