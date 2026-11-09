@@ -130,7 +130,7 @@ is higher on ours too.
 
 ### Measured 2026-11-09: the colour fast paths
 
-usse-compiler's speed pass (its branch at 9ce70e2, not on dev yet: items 1 and 2's interim form, a
+usse-compiler's speed pass (9ce70e2: items 1 and 2's interim form, a
 uniform colour as one mov from a 0x12 slot and a texel as colour by two
 `pck.u8.u8`, plus 82f3f5c, 1ead616, 64d06e4, 729718d, 60eea0e). Measured on
 the EA3 under the DDK microkernel, with `-c`, 3 s a test, in frames a second.
@@ -154,6 +154,57 @@ EA1 table above (fill 187 against 189), so the boards compare.
 - **PDS sizeinfo b25-28.** The DDK's rule (12 / units, capped at 0xb only
   with secondaries: its textured draw 0x18030001) against ours (always
   capped) changed nothing: tex 316.4 against 316.9 fps. Not adopted.
+
+### Where a Minecraft frame goes (EA1, 2026-11-09)
+
+uapi-stream's profile of the bench world (720x480, render distance 4,
+standing, 60 s after joining), raw files in
+`sgx545-work/perf-mc-2026-11-09/`. Ours is the x64 JVM on our desktop GL under
+Xorg (dev 708a02e, powervr_sgx 535b5dc, open microkernel a57d578): 10.6 fps,
+94.4 ms a frame. The DDK is the i386 JVM through gl4es on Xvfb: 12.8 fps,
+78 ms.
+
+From 5 s of powervr_sgx tracepoints (kick, IRQ, job_done, flush_imports),
+a frame is four renders:
+
+| render | GPU (kick or previous IRQ → IRQ) |
+|---|---|
+| Minecraft's world | 64.0 ms |
+| Minecraft's two small 720x480 renders | 2 × 2.2 ms |
+| X's present (client 41) | 1.1 ms |
+| **GPU busy** | **69.5 ms (74%)** |
+| **GPU idle** | **24.8 ms** |
+
+The idle is two things:
+
+1. **The kernel's dma-buf flushes, ~12 ms a frame.** Every job clflushes its
+   1 or 2 imported buffers (1,413,120 bytes each) before the kick and after
+   the IRQ, 1.2-1.4 ms each: 424 flushes, 688 ms in 4.9 s. Between two jobs
+   the GPU waits IRQ → job_done 1.34 ms (flush), job_done → scheduler 0.16 ms,
+   scheduler → kick 1.44 ms (flush), medians. The kernel runs one job at a
+   time (credit limit 1), so nothing hides them. Sent to m2: skip the flush
+   for buffers no CPU wrote through a cached mapping, and allow more than one
+   job on the hardware.
+2. **The GPU starved by the CPU, ~13 ms a frame.** Minecraft kicks three
+   renders a frame into a 3-slot ring (`SGX_SLOTS`, default 3), so the next
+   world render records into the current world render's slot. The client
+   thread sleeps in the slot wait until that 64 ms render is done (the stats'
+   "slot wait": 500-1000 ms of every 2 s), then records the next world (~21 ms
+   of CPU) while the GPU has only the two small renders. Fix: a deeper ring,
+   so the world records while the last one renders; `SGX_SLOTS=4`/`5` runs
+   queued with uapi-stream.
+
+With both gone the frame is the GPU's 69.5 ms: 14.4 fps, past the DDK.
+
+CPU (perf, 20 s, the whole JVM): JIT 42%, libjvm 32%, libgallium 11%,
+kernel 10%. The client thread is 39% of samples (DDK 43%), the C2 compilers
+31% (still compiling at 60 s on the x64 JVM). Box idle 33% (DDK 40%). Mesa's
+CPU is not the bottleneck: the stats give the client thread 1.0-1.2 s of
+CPU in 2 s, draws 180-250 ms of it.
+
+Not split yet: the world render's 64 ms between the TA (258 k vertices,
+162 k triangles a frame; perfmicro verts is 0.46 of the DDK) and the 3D.
+Asked open-ukernel for per-phase timestamps.
 
 ## Shader code against libusc
 
