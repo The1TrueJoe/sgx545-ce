@@ -235,7 +235,8 @@ if [ -n "$SAVED" ]; then
 
     Could you see this screen on the computer's own display? Please say
     so in your comment on the issue: the test cannot tell whether the
-    panel lit up.
+    panel lit up. If it went dark, did it come back on by itself partway
+    through? Tell us that too.
 
     This run used menu entry ${ENTRY:-?}. If the screen went dark on an earlier
     try, attach that try's results file too: each try saves its own.

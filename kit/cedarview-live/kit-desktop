@@ -19,5 +19,6 @@ printf '    %-5s %s\n' PASS "X server started" >> "$R/summary.txt"
 # the smoke test signals when it is done; give it at most 10 minutes
 for i in $(seq 1 600); do [ -e /tmp/kit-smoke.done ] && break; sleep 1; done
 [ -e /tmp/kit-smoke.done ] || printf '    %-5s %s\n' FAIL "desktop smoke test (did not finish in 10 minutes)" >> "$R/summary.txt"
+[ -f "$R/modeset.txt" ] && cat "$R/modeset.txt" >> "$R/summary.txt"
 [ -f "$R/smoke.txt" ] && cat "$R/smoke.txt" >> "$R/summary.txt"
 exit 0
