@@ -28,7 +28,7 @@ State on 2026-11-09:
 | 9 | README current: the stack, the status, the hardware, how to install and test. | done (this change) |
 | 10 | `docs/INSTALL.md` checked on hardware, with the CI packages (below). | done for userspace; kernel steps partly |
 | 11 | No closed binaries: only the open microkernel is built and shipped; Intel's DDK image is never in the repository or a package. | done |
-| 12 | No mention of the board project in code or docs (CI workflows may name the board repository). | done (`git grep -i openhc` matches one workflow only) |
+| 12 | No mention of the board project in code or docs (CI workflows may name the board repository). | done (a case-insensitive grep for the board project's name matches one workflow only) |
 | 13 | American English in docs and kit text. British spellings (colour, behaviour, initialise, centre, ...) remain in 99 tracked `.md`/`.txt` files, mostly `docs/` and `docs/log/`. A careful pass is needed: leave code identifiers, register names and quoted text alone. The kit and the tester guide are clean. | open |
 
 ## Workflows
