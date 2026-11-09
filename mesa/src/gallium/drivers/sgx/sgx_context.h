@@ -93,6 +93,8 @@ struct sgx_pipe_shader {
     * stores in another, GL_R16 as RGBA8; 0: none) (sgx_fs_for) */
    unsigned srgb;
    uint16_t swz[PIPE_MAX_SAMPLERS];
+   uint32_t not_bgra; /* units bound to a texture not sampled B, G, R, A
+                         ordered (sgx_tex_bgra) */
    struct sgx_pipe_shader *variants_srgb[8];
    unsigned next_variant_srgb;
 };
