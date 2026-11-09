@@ -49,6 +49,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M7 | tests in Mesa's format (`ci/`) | partly (ddk files moved, mg-perf 1b86487) | mesa-gallium |
 | M8 | `docs/drivers/sgx.rst` | written: mesa/docs/drivers/sgx.rst | mesa-gallium |
 | M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
+| M10 | sRGB textures right (GL 2.1 is advertised) | must fix before the MR | mesa-gallium |
 
 ### M1. The upstream build is powervr_sgx only
 
@@ -196,6 +197,21 @@ Write it for Mesa's docs tree. It covers:
 `mesa/build.sh` generates `sgx_usse_progs.h` with `tools/gen/mkusse.py`.
 Upstream, the fixed programs are assembled by the compiler's encoder at build
 time (DRIVER-UPSTREAM.md §5.2, COMPILER-UPSTREAM.md).
+
+### M10. sRGB textures (must fix before the MR)
+
+The driver advertises desktop GL 2.1, so `EXT_texture_sRGB` is offered. 2.1
+is X's glamor minimum: under 2.0 glamor fell back to GLES2, and text drew as
+solid boxes (704f81a). Sampling decodes sRGB right, in the fragment shader,
+but piglit's `ext_texture_srgb` fails on:
+- mipmap generation of sRGB textures (`fbo-generatemipmap-formats`, s3tc too);
+- alpha test against an sRGB framebuffer (`fbo-alphatest-formats`, `fbo-srgb`);
+- mirrored-repeat and border-colour filtering (`texwrap formats`,
+  `texwrap formats bordercolor`).
+
+The 40 failures are in `ci/sgx-piglit-fails.txt` under their reason. A driver
+advertising 2.1 with these failing will be questioned, so they get fixed, not
+listed, before the MR.
 
 ### Compiler (usse-compiler)
 
@@ -441,8 +457,13 @@ on the CE5300 the display device (simpledrm) is a platform device and the GPU
 a PCI function.
 - **Cedarview.** The display (gma500) and the GPU sit on the same PCI
   function, and powervr_sgx binds to gma500's auxiliary device.
-- **Open.** Recheck the pick on Cedarview hardware (kit v2) before the MR.
-  The heuristic may become "the render node of the auxiliary device's parent".
+- **Done (782d399).** For a display device that isn't on the platform bus,
+  the loader takes the render node whose sysfs device's parent is the
+  display's own device, when its driver is in kmsro's list. It reads
+  `/sys/class/drm`, because libdrm's device list leaves out the auxiliary
+  bus. A unit test on fake sysfs trees runs in mesa-debian CI, and there's a
+  `gma500_dri.so` stub.
+- **Open.** Confirm on Cedarview hardware (stick v3) before the MR.
 
 ### W9. Test rigs
 
