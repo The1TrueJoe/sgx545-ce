@@ -238,10 +238,17 @@ On a host-kick event the microkernel:
 1. reads the CCB control's write offset and compares it with its own read
    offset; if equal, there is nothing to do;
 2. reads the command at the read offset;
-3. **honours `ui32CacheControl`**: if it asks for a BIF cache invalidate
-   (data / page-table / page-directory / SLC bits, `SGXMKIF_CC_INVAL_*`), the
-   microkernel pulses the matching invalidate registers and waits for the
-   done bits (section 6);
+3. **honours `ui32CacheControl`** (command word 1). This runs here, for every
+   command, before the dispatch (pc 0x0098-0x00c2):
+   - INVAL_BIF_PD (0x2): pulse `BIF_CTRL` = old | 8 (INVALDC), then the old
+     value;
+   - else INVAL_BIF_PT (0x1): pulse `BIF_CTRL` = old | 4 (FLUSH), then the old
+     value. INVALDC already covers the page tables;
+   - INVAL_DATA (0x8): 0x804 |= 0x10000000 (MADD), wait for `EVENT_STATUS`
+     b26 (MADD_CACHE_INVALCOMPLETE), and ack it;
+   - INVAL_SL (0x4) is not tested: this core has no system-level cache.
+   The BIF pulses don't wait. The microkernel leaves the word as it is; the
+   host clears its own copy once the command is sent;
 4. **jumps to `ui32ServiceAddress`**. This word is not a general address: the
    host fills it from `aui32HostKickAddr[eCmdType]`, the table of microkernel
    entry instruction-indexes `srvinit` passed in `SGX_BRIDGE_INIT_INFO`
