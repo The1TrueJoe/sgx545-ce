@@ -2302,7 +2302,7 @@ With feedback, ctx +0x7a0 = 1 (discard on triangles):
 [+0x14+1] pcoeff pa<n>, ...                   (PDS-iterated value, see below)
           ... the shader up to the discard test (writes p1 = keep) ...
 [+0x16]   atst8 pa<c>, p0.nw, pa<c>, ... [end] (replaces the USP's nop; h10 set)
-[+0x18]   phase 1: the rest of the shader (colour packing)
+[+0x18]   phase 1: the rest of the shader (color packing)
           phas.i #0, #0 [end wait=7]          (appended after the program)
 ```
 
@@ -2412,7 +2412,7 @@ backed above; this section only collects it.
   down, up, zero).
 - **Format control** (`setfc`, USP code block flags): while on (the
   compiler's default state is C10 on, EFO F16 off), number bit 6 of the
-  colour/integer classes' operands (efo, sop2/sop3/sopwm, dot, ima8, fpma)
+  color/integer classes' operands (efo, sop2/sop3/sopwm, dot, ima8, fpma)
   marks a C10 (F16 for efo) operand, so those instructions can only name
   registers 0-63. Emit `setfc` to change it; the state isn't in the
   instruction.

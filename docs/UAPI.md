@@ -842,7 +842,7 @@ P1 to P4 as positive tests from an actual shader. It can't be met by ioctl tests
 ## 8. Hardware recovery as userspace sees it
 
 The mechanism (UKERNEL.md 5a): a job that passes the `drm_sched` timeout triggers a soft
-reset of the cores. Device memory survives. The microkernel is re-initialised, and in the
+reset of the cores. Device memory survives. The microkernel is re-initialized, and in the
 open microkernel it discards the surviving CCB work and in-flight list. Then the kernel
 restarts the scheduler. The kernel rebuilds the affected context's free list and RT data
 (what exactly needs rebuilding is G21).

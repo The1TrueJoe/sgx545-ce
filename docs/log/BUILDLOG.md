@@ -117,7 +117,7 @@ writes hand-assembled shader instructions into the captured frame. The assembler
 - Two hand-written `pck.u8.f32` instructions made the triangle cyan.
 - One `fmad16 pa9, -pa9, c45, c45` in front of them computed `1 − c`.
 
-![Our inputs (orange), our constant-colour shader (cyan), our 1 − c shader. The last one also writes alpha 0, which the figure shows as opaque](img/story-02-own-frames.png)
+![Our inputs (orange), our constant-color shader (cyan), our 1 − c shader. The last one also writes alpha 0, which the figure shows as opaque](img/story-02-own-frames.png)
 
 ## 4. The PDS (03:14–05:56)
 

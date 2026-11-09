@@ -553,7 +553,7 @@ driver draws them the same way, byte-identical to the DDK):
   (0x00010700 → 0x01010700), perhaps a temporary count for that r0. The Mesa driver writes the blend
   back to pa<c> instead, with the same pixels.
 
-### Constant-colour blending
+### Constant-color blending
 
 `sgxs_blend_const` in `tools/state/sgxstate.h` builds the five
 instructions. They are bit-exact with the DDK's for k1-k5, k7 and k8.
@@ -603,7 +603,7 @@ So neither can carry a blend color. The sopwm form above is what to use.
 
 The ES1 driver (libGLES_CM, `tools/probe/probe1.c` captures `e1*`) needs
 no state words for it. The fragment program ends in one visibility-test
-instruction instead of its final `mov o0, colour`:
+instruction instead of its final `mov o0, color`:
 
     atst8 o0, p0.nw, pa0, sa0, sa1  [end]      f0000001 f934000d   (e1gt5)
 

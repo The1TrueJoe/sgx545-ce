@@ -38,7 +38,7 @@ on the DDK too), so the recorded frames have no world in them yet.
 ## In a world
 
 Live, ours gets into a world and draws its HUD (hotbar, hearts, the
-inventory hint) correctly. The world itself comes out sky-coloured with dark
+inventory hint) correctly. The world itself comes out sky-colored with dark
 fragments, in framebuffer and in pbuffer mode alike; the DDK draws trees,
 grass and a cow (`img/…-title-2.png` and `-3.png`, different worlds). Ruled
 out so far, each byte-identical or within 1 level against the DDK on the

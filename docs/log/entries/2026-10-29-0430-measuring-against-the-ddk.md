@@ -47,7 +47,7 @@ fixed (`9e34c55`). fog and c10scale are byte-identical to the DDK.
 | the swap's copy to fb0 | 3.0 ms |
 | the render thread on the CPU | ~24 ms |
 
-- **The GPU sets the pace.** With constant-colour fragment shaders
+- **The GPU sets the pace.** With constant-color fragment shaders
   (`SGX545_EXP_FS_CONST=1`), ours runs 40-43 FPS and the render thread is on
   the CPU 99% of the time. So the whole gap to the DDK is GPU time,
   specifically the fragment work.

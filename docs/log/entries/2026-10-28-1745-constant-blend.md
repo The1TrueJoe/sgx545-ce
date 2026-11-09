@@ -1,4 +1,4 @@
-# Constant-colour blending: the DDK multiplies it out
+# Constant-color blending: the DDK multiplies it out
 
 The Mesa driver blends with one `sop2` after the fragment color, its
 selectors standing in for GL's factors. GL_CONSTANT_COLOR and friends had no

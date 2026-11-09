@@ -1,6 +1,6 @@
 # Kick serialization works but does not change the 3D hang — the 3D execution is a separate frontier
 
-HW test of the kick-serialisation fix on the EA1 (process kick 2 only after kick 1's
+HW test of the kick-serialization fix on the EA1 (process kick 2 only after kick 1's
 TA finishes, via a new SC_TAFLIGHT "TA in flight" flag + ta_finished pulling the
 next kick).
 
@@ -15,7 +15,7 @@ dumps). do_ta runs again.
 ## Serialization runs, but the outcome is unchanged
 
 With SC_TAFLIGHT=0x19: T3C-D0 count 2 / flag 0 (kick 2 reads 0x62), T3C-E0 do_3d
-0x3DED reached — **identical** to the pre-serialisation bLastInScene run, and the
+0x3DED reached — **identical** to the pre-serialization bLastInScene run, and the
 same hang: `lockup_3d: yes`, `lockup_ta: no`, BIF_FAULT 0, EVENT_STATUS2 0x40, no
 OOM, render TIMED OUT, buffer zero. So the serialization fix (correct by DDK
 analogy, kick1 -> finished -> kick2 -> finished -> 3D) **does not change the HW

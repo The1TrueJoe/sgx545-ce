@@ -243,7 +243,7 @@ re-read these rows against the sections named:
   `~/Documents/GitHub/sgx545-work/caps-ddk/2026-11-08/`):**
   - PDS word 1 b25-28 (STATE.md §3 "PDS words");
   - TSP word 1 by precision (§3 "Output select … and TSP words");
-  - constant-colour subtract and reverse subtract (§3);
+  - constant-color subtract and reverse subtract (§3);
   - the PBE pitch padding and word 2 b15 (§4);
   - the background's T0/T1 (§5);
   - VDM draw words 2 and 5 (§2): constant, meaning still G;
@@ -333,7 +333,7 @@ Facts that live behind `sgxws.h` (winsys words) are in the winsys section;
 | `sgx_state.c:30-56` `blend_sel` | GL factors as sop2 selectors zero/s1/s2/s1a/s2a/asat + complement; s1 = shader color, s2 = tile; SRC_ALPHA_SATURATE = asat when the buffer has alpha | STATE.md §3 "Blending and the color mask are shader code"; ISA.md "sop2 (hw 10 …)" | partial |
 | `sgx_state.c:58-67` `blend_swap_sel`, `:153-168` | reverse subtract by trading sources (`sop2 o0, o0, pa<c>`) and renaming selectors; asat not swappable | STATE.md §3 "Blending …" (Reverse subtract) | covered |
 | `sgx_state.c:69-80, 124-126` `blend_op` | ops add/sub/min/max; min and max run with both factors one | ISA.md "sop2" (cop/aop 0 add 1 sub 2 min 3 max; `dst = (src1*c1) cop (src2*c2)`), STATE.md §3 | covered |
-| `sgx_state.c:89-146` `blend_bfactor`, sopwm form | constant factors: the sopwm products and an add; reverse subtract / subtract with constants by `swap` and `atrade`; SRC_ALPHA_SATURATE alpha factor 1 | STATE.md §3 "Constant-colour blending" | partial |
+| `sgx_state.c:89-146` `blend_bfactor`, sopwm form | constant factors: the sopwm products and an add; reverse subtract / subtract with constants by `swap` and `atrade`; SRC_ALPHA_SATURATE alpha factor 1 | STATE.md §3 "Constant-color blending" | partial |
 | `sgx_state.c:177-197` | blend state object | | n/a: no hardware facts |
 | `sgx_state.c:206-447, 449-553, 602-697` | CSOs, queries, CPU blit | | n/a: no hardware facts |
 | `sgx_state.c:558-600` `sgx_blit_gpu` | GPU blit needs: a sampleable source, a destination that is a 4-byte linear render target | TEX.md §3, §11; STATE.md §4 | covered |
@@ -355,11 +355,11 @@ Facts that live behind `sgxws.h` (winsys words) are in the winsys section;
 | `sgx_draw.c:887-908` | NPOT cube maps of ≥ 16 texels, or mipmapped, lock the 3D: not drawn | PIGLIT.md "Open bug: NPOT cube maps lock the 3D" | covered |
 | `sgx_draw.c:916-951` color epilogue | blend, then the color mask as bytes of packed BGRA8 (B b0 G b1 R b2 A b3); for a texture target without alpha the blend's alpha is the tile's (tile·1 + color·0) | STATE.md §3 "Blending …" (sop2, sopwm mask), ISA.md "sop2" | covered |
 | `sgx_draw.c:986-987` pass type | blend 1; discard 4; discard + blend 2; else 0 | STATE.md §3 "ISPA" b25-27; ISA.md "Phases, visibility feedback and discard" → "The draw state" | covered |
-| `sgx_draw.c:989-1001`, `sgx_program.c:714, 785` fragment SA block | fragment constants from sa9 (`fsk + 9`); `sec_dwords` = 9 + constants, at least 9 when a driver word is used; blend color in sa2 as A<<24 \| R<<16 \| G<<8 \| B; temps ≥ 2 for the constant blend | STATE.md §3 "Constant-colour blending" (sa2, packed BGRA8, `604080bf`); ISA.md "Constants past sa127" (from sa9/sa10) | partial |
+| `sgx_draw.c:989-1001`, `sgx_program.c:714, 785` fragment SA block | fragment constants from sa9 (`fsk + 9`); `sec_dwords` = 9 + constants, at least 9 when a driver word is used; blend color in sa2 as A<<24 \| R<<16 \| G<<8 \| B; temps ≥ 2 for the constant blend | STATE.md §3 "Constant-color blending" (sa2, packed BGRA8, `604080bf`); ISA.md "Constants past sa127" (from sa9/sa10) | partial |
 | `sgx_draw.c:1006-1013` discard words | sa3 = 0xe000 \| (GL depth func − 0x200, 7 with the test off) \| 8 without depth writes; sa4 = 0xee00 (code tags it [G]) | STATE.md §3 "Alpha test (ES1)" (sa0/sa1 word formats; "the Mesa driver's discard atst8 (`f9340406`, sa3/sa4) carries these same two words with the alpha function ALWAYS (`0xee00`)"; ALWAYS [C, a7]); ISA.md "Phases …" (atst8 src1 = 3, src2 = 4) | covered |
 | `sgx_draw.c:1014-1031` dependent samples | the 4 DOUTT words of a dependent sample in 4 consecutive SA registers | ISA.md "The texture-sample sequence a compiler must emit" | covered |
 | `sgx_draw.c:1039-1053` | one DOUTT (4 words) after each sampling DOUTI | PDS.md "DOUTT", STATE.md §5 | covered |
-| `sgx_draw.c:1085-1088` fixed uniform-colour program | color as two F16 pairs at `SGXWS_FS_UNIFORM_OFF` of its SA block | GEN.md "The API" (a fragment shader that writes a mediump uniform vec4), "What a frame is made of" (fragment uniforms FP16) | partial |
+| `sgx_draw.c:1085-1088` fixed uniform-color program | color as two F16 pairs at `SGXWS_FS_UNIFORM_OFF` of its SA block | GEN.md "The API" (a fragment shader that writes a mediump uniform vec4), "What a frame is made of" (fragment uniforms FP16) | partial |
 | `sgx_draw.c:1120-1133` | compiled programs: 4 dwords per attribute slot; fixed position programs: 2 (x, y) or 3 (x, y, z) dwords | PDS.md "DOUTD"; GEN.md "The API" (xy or xyz position shader) | covered |
 | `sgx_draw.c:340-460, 462-486, 1189-1325` | CPU vertex gathering, staging, sparse expansion | | n/a: no hardware facts |
 | `sgx_program.c:35-261, 353-367, 433-516, 805-1010` | NIR plumbing, legacy varying remap, variants, fixed-program matching | | n/a: no hardware facts |
@@ -431,7 +431,7 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 ##### `sgx_state.c:30-56` `blend_sel` (partial) — ISA.md "sop2"
 - The asat selector's value: min(s1.a, 1 − s2.a) (GL SRC_ALPHA_SATURATE), and that it can't be expressed with the sources traded. ISA.md names it "src alpha saturate" only.
 
-##### `sgx_state.c:89-146` sopwm constant blending (partial) — STATE.md §3 "Constant-colour blending"
+##### `sgx_state.c:89-146` sopwm constant blending (partial) — STATE.md §3 "Constant-color blending"
 - Subtract and reverse subtract with constant factors: the final sop2's op and the trade of products (`swap`, `atrade`: a subtract on the other channel that runs the other way gets its products in r0 and r1 traded). STATE.md: "Subtract and reverse subtract with constant factors are untested".
 - MIN/MAX on one channel with constant factors on the other (factors forced to ONE on the MIN/MAX channel).
 - The sopwm selector numbering (1 asat, 2 s1, 3 s1a, 6 s2, 7 s2a) is in ISA.md; the mapping from GL constant factors to the five-instruction form's X/Y operands should be a table.
@@ -463,7 +463,7 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 - A register map of the fragment driver block sa0-sa8: sa2 blend color (STATE.md), sa3/sa4 discard visibility words, sa5 front face (ours), the rest unused; constants from sa9; the secondary DMA covers sa0..sa(8 + constants) whenever any driver word is used.
 - Vertex block: constants from sa10 (what sa0-sa9 hold for our programs: the block's own address, the driver constants 2/255, 1/255, 2/65535, 1/65535 per STATE.md §2 and GEN.md "Smaller things", and sa10's point-size word).
 
-##### `sgx_draw.c:1085-1088` fixed uniform-colour program (partial) — GEN.md
+##### `sgx_draw.c:1085-1088` fixed uniform-color program (partial) — GEN.md
 - The fixed fragment program's text and its SA layout: the color as F16 pairs (R | G << 16, B | A << 16) at `SGXWS_FS_UNIFORM_OFF`.
 
 ##### `sgx_program.c:634-657` TSP word 1 (partial) — STATE.md §3 "Output select … and TSP words"
@@ -519,10 +519,10 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | sgxws.h:49-64 GL enums, VDM prim codes | depth/stencil compare = GL enum - 0x200; VDM prim 0 tri, 1 lines, 2 points, 3 strip | STATE.md §3 "ISPA (ctx+0x780)" (b22-24), §3 "ISPC: stencil"; §2 draw word 0; §3 "Lines and points" | covered |
 | sgxws.h:67-77 `sgxws_target` | BGRA8888 top-first; stride "even, or 1"; PBE format code; T1 format/layout 6 strided, 3 linear (pitch rounded to 8 texels), 0 twiddled with the PBE writing twiddled | STATE.md §4 "PBE words", "Format codes"; §5 T1 table; TEX.md §11 "Render targets the sampler reads directly", §4 "Render to texture" | partial |
 | sgxws.h:81-103 `sgxws_prog` | temporaries (DOUTU in fours), TSP sizes 3 bits per set, precision mask, point size as last output dword, up to 10 DOUTIs/sets | PDS.md "DOUTU" word 0 b24-31; STATE.md §3 "Output select ... and TSP words"; ISA.md "Vertex shaders" (sets 0-9) | covered |
-| sgxws.h:105-149 blend description, `sgxws_bsel`, `SGXWS_BLEND_CONST_SA` 2 | sop2 epilogue form, selector codes zero/s1/s2/s1a/s2a/asat, complement; sopwm color mask, byte order B b0 G b1 R b2 A b3; constant color in sa2 | STATE.md §3 "Blending and the color mask are shader code", "Constant-colour blending"; ISA.md "sop2 (hw 10 ...)" | covered |
+| sgxws.h:105-149 blend description, `sgxws_bsel`, `SGXWS_BLEND_CONST_SA` 2 | sop2 epilogue form, selector codes zero/s1/s2/s1a/s2a/asat, complement; sopwm color mask, byte order B b0 G b1 R b2 A b3; constant color in sa2 | STATE.md §3 "Blending and the color mask are shader code", "Constant-color blending"; ISA.md "sop2 (hw 10 ...)" | covered |
 | sgxws.h:157-180 `sgxws_state` | ISPB color mask R8 G4 B2 A1; pass types 0/1/2/4; sprite = object type 4; ISPC words; face 0 = CCW-in-memory group | STATE.md §3 ISPA, ISPB, ISPC tables; header bits 0x8/0x10/0x20 row; "Lines and points" | covered |
 | sgxws.h:182-209 `sgxws_draw` | 16-bit indices, `SGXWS_MAX_INDICES` 0xffff; `verts_va` 16-byte aligned, `idx_va` even; constant blocks at base + 512·j into an SA base register | UAPI.md §5 "Index buffer: 2 or 4-byte aligned"; ISA.md "Constants past sa127", "hw 1d: ld" "Address" | partial |
-| sgxws.h:270-297 program wrapping summary, builtins | vertex phases + epilogue; fragment `phas`, shader, color out; secondary `phas`, code, `nop [end]`; FS_UNIFORM FP16 at fs_consts[9..10], 11 dwords | ISA.md "Phases, visibility feedback and discard", "Program structure and calling conventions"; GEN.md "Vertex programs end with an extra phase"; NOTES.md "Findings" (FP16 uniforms); STATE.md "Constant-colour blending" (11-dword DMA) | covered (details in the frame.c rows) |
+| sgxws.h:270-297 program wrapping summary, builtins | vertex phases + epilogue; fragment `phas`, shader, color out; secondary `phas`, code, `nop [end]`; FS_UNIFORM FP16 at fs_consts[9..10], 11 dwords | ISA.md "Phases, visibility feedback and discard", "Program structure and calling conventions"; GEN.md "Vertex programs end with an extra phase"; NOTES.md "Findings" (FP16 uniforms); STATE.md "Constant-color blending" (11-dword DMA) | covered (details in the frame.c rows) |
 | sgx_frame.h:46-59 `enum sgx_heap` | heap ids 0 general, 1 TA data, 3 kernel data, 4 pixel shader, 5 vertex shader, 6 PDS pixel, 7 PDS vertex, 8 sync, 10 3D params, 14 texture (0xf0000000) as the low byte of the services heap ID | NOTES.md "Findings" ("Heaps (id low byte = SGX_*_HEAP_ID)", bases only); TEX.md §10 setup table (ids 0, 3, 4, 6); NOTES.md "Blob-free replay" (heaps 1, 8, 10 unnamed); STATE.md §5 T2 (texture heap 0xf0000000) | partial |
 | sgx_frame.h:68-76 `heap_base[]`, `usse_base_index[]` | per-heap device base; first code base register of the pixel / vertex USSE heap | UAPI.md §5 "Heap layout" (code bases 0-9, 10-13; `usse_base_index`); SRVINIT.md "Init scripts" | covered |
 | sgx_frame.h:223 `SGXWS_ATTRIBS_COLOR` | services allocation attributes 0x10000003 for a color buffer | none (SRVINIT.md "Allocations" names 0x4f / 9 only; TEX.md §10 "allocate them without attribs b3") | missing |
@@ -560,7 +560,7 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | sgx_frame.c:1377-1386 `sgxws_vdm_end` | `4\|empty_state>>4`, `1<<26\|0xe100`, `6\|terminate>>4`, `3<<26\|0x2022401`, `0xc0000000` | STATE.md §1 "A frame, end to end" (kick 2 words), §2 table | covered |
 | sgx_frame.c:1620-1667 `sgxws_upload_vs` | phase 0: `phas.i #p1, #temps/4` (0xfa440000\|t, no wait), prologue, `nop [end]`; phase 1: `phas.i #p2 [wait=2]`, shader, `emit.t3 r0,#0,#0 [end f12 f10]`; epilogue `phas.i #0,#0 [wait=7]`, `emit.t1 r0,#0,#0 [end f12 f10 f3_20]` | GEN.md "Vertex programs end with an extra phase"; ISA.md "phase" (phas.i fields), "other" (emit), "flow control" (nop) | partial |
 | sgx_frame.c:1669-1696 `sgxws_blend_words` | sop2 hi base 0x80800000 (class + skipinv), c1 h6-8/h24, c2 h3-5/h15, a1 h20-21/h11, a2 h9-10/h2, cop l18-19, aop l16-17, end h18, dst l21-27 bank h0-1, src banks; swap form | ISA.md "sop2 (hw 10 ...)", "Operand slots and bank codes", "Common fields"; STATE.md §3 "Blending ..." | covered |
-| sgx_frame.c:1698-1755 `blend_const_words` | 4 × sopwm (hi 0x90807800 / 0x90800800 + selector tables) + sop2 0x81808804; X/Y operand per factor; swap; `atrade` reordering for alpha subtract | STATE.md §3 "Constant-colour blending"; ISA.md "sopwm (hw 12 ...)", "sop2" | partial |
+| sgx_frame.c:1698-1755 `blend_const_words` | 4 × sopwm (hi 0x90807800 / 0x90800800 + selector tables) + sop2 0x81808804; X/Y operand per factor; swap; `atrade` reordering for alpha subtract | STATE.md §3 "Constant-color blending"; ISA.md "sopwm (hw 12 ...)", "sop2" | partial |
 | sgx_frame.c:1775-1783 `wmask_words` | `sopwm o0, pa<c>, pa<c> [skipinv end mask=m c1=c2=zero cop=aop=max]` = lo 0xa0000000\|c<<7\|c, hi 0x90b40601 with mask bits h12 h13 h14 h11 | ISA.md "sopwm" (mask order h12,h13,h14,h11), "Text notation and defaults"; STATE.md §3 color-mask bullet | covered (STATE.md's `mask<<11` form conflicts, see §3) |
 | sgx_frame.c:1798-1830 discard program | `phas.i #phase1, #t [wait=1]` (0xfa440100\|t); pcoeff (0xb0000004\|n<<14\|(n+1)<<7, 0xf8300004); shader minus its feedback nop; atst8 [end] (0xf0000184\|c<<21\|c<<14, 0xf9340406); `nop` (0, 0xf8000140) so phase 1 starts on an even instruction; blend / mask without end, or `mov o0, pa<c> [skipinv rcnt]` (0x28a10001); `phas.i #0,#0 [end wait=7]` (0xfa4c0700) | ISA.md "What the draw-time builder emits", "What a compiler must emit to discard", "visibility test" | partial |
 | sgx_frame.c:1831-1846 single-phase fragment program | `phas.i #0,#0 [wait=7]`; shader; blend/mask, or `mov o0, pa<c> [skipinv end mask=1]` (0xa0000000\|c<<7, 0x28851001); the same mov without the mask locks the GPU (EA3) | ISA.md "What the draw-time builder emits" (single phase), "Moves (hw 5)", "Text notation and defaults" (mask default) | partial |
@@ -695,8 +695,8 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 - ISA.md "Phases": that pa registers written in phase 0 (`limm pa2/pa3`) are what phase 1 reads.
 - ISA.md "Phases": that the temporaries in phase 0's `phas.i` are the count phase 1 runs with.
 
-**Constant-colour blending (partial)**
-- STATE.md §3 "Constant-colour blending": what happens with subtract and reverse subtract. The code trades the sop2 sources for reverse subtract, and with `atrade` puts the two alpha products in the other register after both whole-colour products. STATE.md says both are untested.
+**Constant-color blending (partial)**
+- STATE.md §3 "Constant-color blending": what happens with subtract and reverse subtract. The code trades the sop2 sources for reverse subtract, and with `atrade` puts the two alpha products in the other register after both whole-color products. STATE.md says both are untested.
 
 **Discard program (partial)**
 - ISA.md "What the draw-time builder emits":

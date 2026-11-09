@@ -37,7 +37,7 @@ same frame in the emulator and diffs, per phase, every core register each
 programs from a structure. They **match exactly** — 41 registers on the TA
 kick, 61 on the 3D start — for four frames: the reference DDK capture
 (`cap/ref.bin`) and three `tools/gen` `frame-fake` scenes (the default
-triangle, a 320×200 clear-and-colour, and a depth test). So for these frames
+triangle, a 320×200 clear-and-color, and a depth test). So for these frames
 the open microkernel sets the GPU up bit-for-bit as the DDK does.
 
 `ukernel/test_emu.py` adds the no-trace checks: clean init, recovery-discard

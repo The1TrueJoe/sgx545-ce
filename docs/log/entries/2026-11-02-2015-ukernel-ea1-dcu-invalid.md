@@ -14,7 +14,7 @@ word appears at the TA/3D control block +0x58 (dump `T3C-50` word 2 =
 
 ## Getting the srvinit window on the EA1 (init-model note)
 
-The EA1 is not a minimal rig: it auto-initialises SGX during boot. On a cold
+The EA1 is not a minimal rig: it auto-initializes SGX during boot. On a cold
 boot `/proc/pvr/version` reads `System Version String: None`; the first GPU
 client opens `/dev/dri/card0` and the kernel runs the full init-server
 sequence (`SysFinalise`/`SGXInit` at ~t=52s), after which `srvinit`'s

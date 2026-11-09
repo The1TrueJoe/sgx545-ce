@@ -60,7 +60,7 @@ In the bench world the DDK runs at **28-37 FPS**.
   A texture written while a render may still sample it switches to a second
   device copy, brought up to date from the CPU copy, as the DDK's ghosting
   does. Minecraft animates its block atlas every tick.
-- **Fragment shaders were half the GPU time.** With constant-colour shaders
+- **Fragment shaders were half the GPU time.** With constant-color shaders
   the GPU's time per frame halved. Both terrain texture reads were dependent
   samples (`frcp`, `fmad`, `smp`, `wdf`). Three things stood between them and
   the PDS (`81a4bb4`):

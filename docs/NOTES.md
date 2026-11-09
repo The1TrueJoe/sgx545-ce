@@ -162,7 +162,7 @@ with no unexplained bit, and `isa/asm.py` re-encodes all of them. Findings
 worth knowing outside the ISA: dependent texture reads are USP sample blocks
 too (the GLES finalizer writes the `smp`); the USP vertex bitmask is the set
 of live attribute registers; code-block flags are the format-control state
-that decides whether register bit 6 is a C10/F16 select in the colour/EFO
+that decides whether register bit 6 is a C10/F16 select in the color/EFO
 classes; GLSL ES ints compile to float code.
 
 ## Our own frame: authored inputs and hand-assembled shaders (EA3, 2026-10-27)

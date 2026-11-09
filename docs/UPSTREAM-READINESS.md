@@ -206,7 +206,7 @@ solid boxes (704f81a). Sampling decodes sRGB right, in the fragment shader,
 but piglit's `ext_texture_srgb` fails on:
 - mipmap generation of sRGB textures (`fbo-generatemipmap-formats`, s3tc too);
 - alpha test against an sRGB framebuffer (`fbo-alphatest-formats`, `fbo-srgb`);
-- mirrored-repeat and border-colour filtering (`texwrap formats`,
+- mirrored-repeat and border-color filtering (`texwrap formats`,
   `texwrap formats bordercolor`).
 
 The 40 failures are in `ci/sgx-piglit-fails.txt` under their reason. A driver

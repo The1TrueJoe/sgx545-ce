@@ -586,7 +586,7 @@ The driver refuses a file whose sizes or offsets run past its end, whose CRC
 doesn't match, whose interface major it doesn't know, or that sets an unknown
 feature bit or table value.
 
-## 5a. Hardware recovery and re-initialisation
+## 5a. Hardware recovery and re-initialization
 
 When a core locks up, the host's watchdog or MISR calls `HWRecoveryResetSGX`,
 which pulses `EUR_CR_SOFT_RESET` and re-runs `SGXInitialise`. **A soft reset
@@ -594,7 +594,7 @@ resets only the cores; all of device memory survives** — the host control
 block, the TA3D control block (including its render-in-flight list head), the
 kernel CCB and its read/write offsets, and every registered render context
 with its parameter-buffer free list. `HWRecoveryResetSGX` sets the HWR bit in
-`ui32InterruptClearFlags` before re-initialising, so the init task takes the
+`ui32InterruptClearFlags` before re-initializing, so the init task takes the
 recovery path above. That path, instead of starting clean:
 
 - **re-scans the surviving kernel CCB** from the read offset to the write

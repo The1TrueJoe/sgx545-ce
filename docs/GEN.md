@@ -251,7 +251,7 @@ entry and render details. It reads them when the next client's TA starts.
   target. On this srvinit-started EA3 that request timed out ("Wait for
   uKernel to clean up (1) failed"), and the GPU locked up right after. It is
   off by default (`SGXGEN_FLUSH_RT=1` sends it, as does `mkreplay.py
-  --flushrt`). Whether the blob-initialised microkernel handles it was not
+  --flushrt`). Whether the blob-initialized microkernel handles it was not
   tested.
 - **What a Mesa driver needs.** It must either reproduce this layout, or find
   the cleanup the microkernel accepts. Two different native clients would hit

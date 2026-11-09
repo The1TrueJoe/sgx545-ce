@@ -34,7 +34,7 @@ land on (it was in a compat ioctl, printing). It then sat in D state, holding
   `OSAddTimer`, and with `PVR_LINUX_TIMERS_USING_WORKQUEUES` unset in this
   build that is a plain kernel timer, so the callback runs in softirq context.
 - When it sees a lockup it calls `HWRecoveryResetSGX`. That function
-  re-initialises the SGX, then calls `SGXScheduleProcessQueuesKM` to restart
+  re-initializes the SGX, then calls `SGXScheduleProcessQueuesKM` to restart
   the queues.
 - That path ends in `SGXAcquireKernelCCBSlot` (sgxutils.c). It waits for a
   free kernel CCB slot with `OSSleepms(1)`, which is `msleep`.
