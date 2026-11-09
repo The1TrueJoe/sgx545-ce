@@ -346,8 +346,12 @@ Each step has its own `SGX_COMPILER_DEBUG` flag (`notexcolor`, `nopackedcolor`,
 `test.and.eq`) on a box; it has not run yet.
 
 Still open, in order:
-- uniform-only math per pixel or vertex (needs a per-draw secondary program or CPU
-  evaluation in the driver);
+- uniform-only math per pixel or vertex. Measured with `nir_opt_preamble` before
+  building it: glmark2 would lift 25 ALU ops over 7 programs (about 2% of its slots),
+  the gl4es Minecraft set 3, glamor's gradients 15-34 per program (about 15-20%), its
+  fills and glyphs none. The driver already runs a per-draw fragment secondary
+  (`fs->sec`), so the work is the compiler's: the preamble as a second program sharing
+  the main one's constant layout. Parked behind the items below;
 - fixed-function fragment programs in F16 (`fs_mediump` didn't apply to Minecraft's
   programs; the cause is being checked in the driver);
 - 8-bit colour math (`sopwm`, `sop2` on texels and lowp colours, as libusc does);
