@@ -9,8 +9,7 @@ R=$1
 chmod 1777 "$R" "$R/screenshots"
 rm -f /tmp/kit-smoke.done
 # the server's EGL and DRI loader explain themselves in xinit.txt (not the clients)
-xinit /usr/local/bin/kit-session -- /usr/bin/env EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose \
-	/usr/lib/xorg/Xorg :0 vt7 -nolisten tcp -logfile /var/log/Xorg.0.log > "$R/xinit.txt" 2>&1 &
+xinit /usr/local/bin/kit-session -- /usr/local/bin/kit-xorg :0 vt7 -nolisten tcp -logfile /var/log/Xorg.0.log > "$R/xinit.txt" 2>&1 &
 for i in $(seq 1 40); do [ -S /tmp/.X11-unix/X0 ] && break; sleep 1; done
 if [ ! -S /tmp/.X11-unix/X0 ]; then
 	printf '    %-5s %s\n' FAIL "X server started" >> "$R/summary.txt"

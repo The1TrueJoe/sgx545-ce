@@ -1,0 +1,5 @@
+#!/bin/sh
+# Xorg with EGL and DRI-loader debug output, so a GL setup failure explains itself in xinit.txt.
+# A wrapper because xinit puts the display right after the server program.
+export EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose
+exec /usr/lib/xorg/Xorg "$@"
