@@ -114,13 +114,16 @@ An imported dma-buf is a data object. It maps in every heap except the USSE ones
 `GET_BO_MMAP_OFFSET` refuses it, because its CPU mapping is the dma-buf's. The GPU
 addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an import
 with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
-GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, and an import's
-pages may be cached on the CPU side. So the kernel flushes every import mapped in the
-job's VM at submit, before the job and again once it is done. It doesn't use the BO
-list for this: the list is optional (D6), and a client on explicit sync names no
-buffers at all. The cost is a CPU cache flush of every mapped import, twice per job
-(about 1.4 MB per 720x480 buffer), which is small next to a frame. A mapping made
-after a submit is not flushed for that job. An object in a job's BO list gets the job's fence
+GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, not even through
+cache-consistent PTEs (EA1, 2026-11-09), and an import's pages may be cached on the CPU
+side. **So a job must list every import it reads or writes in its BO list** (`READ` or
+`WRITE`), on explicit sync too: the kernel flushes each listed import before the job and
+again once it is done, and only those. An unlisted import gets no coherence: the GPU may
+read stale data, and dirty CPU lines may later overwrite its output. Flushing every import
+mapped in the VM instead (the first version) cost Minecraft about 12 ms a frame, most of
+it for X jobs that never touched the scanout (2026-11-09); one 720x480 buffer is about
+1.4 MB, about 1.3 ms to flush on the CE5300. Our own objects, write-combined on the CPU,
+need no flush; they need listing only when shared, for implicit sync. An object in a job's BO list gets the job's fence
 in its reservation object (written: `WRITE`, else `READ`), and the job waits for the
 fences already there. That shared reservation is what makes a KMS commit of an imported
 buffer wait for the render (`powervr_sgx_prime`, the implicit frames).
@@ -980,6 +983,8 @@ VM's reservation object. Alternative: no list at all, with userspace using
 `DMA_BUF_IOCTL_EXPORT_SYNC_FILE` and `IMPORT_SYNC_FILE` around submits, which is the newer
 style and fits Wayland explicit sync. The list is cheaper for X11 and old Wayland paths, and
 matches what `AGENTS.md` section 5 asked for. **Closes nothing:** an empty list is valid.
+**Amended (2026-11-09):** the list is also how a job names the imports it touches, and
+it must name every one (CREATE_BO, GET_BO_MMAP_OFFSET, imports): the kernel flushes only listed imports.
 
 ### D7. VM contexts: explicit handles, or one per file
 
