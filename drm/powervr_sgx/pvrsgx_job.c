@@ -47,6 +47,15 @@ static unsigned int job_timeout_ms = 2000;
 module_param(job_timeout_ms, uint, 0444);
 MODULE_PARM_DESC(job_timeout_ms, "How long a job may run before the GPU is reset (default 2000 ms)");
 
+/*
+ * Two jobs on the GPU at once, so one render's TA runs while another's 3D
+ * finishes. Off until proven: it needs the microkernel to take a TA while a 3D
+ * is in flight. A reset then cancels both, and both contexts are refused.
+ */
+static bool overlap;
+module_param(overlap, bool, 0444);
+MODULE_PARM_DESC(overlap, "Run a render's TA while another's 3D finishes (default off)");
+
 static struct pvrsgx_job *to_pvrsgx_job(struct drm_sched_job *sched_job)
 {
 	return container_of(sched_job, struct pvrsgx_job, base);
@@ -325,7 +334,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	const struct drm_sched_init_args args = {
 		.ops = &pvrsgx_sched_ops,
 		.num_rqs = DRM_SCHED_PRIORITY_COUNT,
-		.credit_limit = 1,
+		.credit_limit = overlap ? 2 : 1,
 		.timeout = msecs_to_jiffies(job_timeout_ms),
 		.name = "powervr_sgx",
 		.dev = sdev->base.dev,
