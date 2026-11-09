@@ -38,6 +38,26 @@ dumps() {   # TAG: the devcoredumps and the driver's status, freed after reading
 	done
 	cat /sys/kernel/debug/dri/*/status > "$R/status-$1.txt" 2>/dev/null
 }
+display() {   # TAG: what the display side says (connectors, backlight, gma500), read-only
+	{
+		for c in /sys/class/drm/card*-*; do
+			[ -e "$c/status" ] || continue
+			echo "== ${c##*/}"
+			for f in status enabled dpms modes; do
+				[ -r "$c/$f" ] && printf '%s: %s\n' "$f" "$(tr '\n' ' ' < "$c/$f")"
+			done
+		done
+		for b in /sys/class/backlight/*; do
+			[ -d "$b" ] || continue
+			echo "== backlight ${b##*/}"
+			for f in type brightness max_brightness actual_brightness bl_power; do
+				[ -r "$b/$f" ] && printf '%s: %s\n' "$f" "$(cat "$b/$f")"
+			done
+		done
+		echo "== gma500 in the kernel log"
+		dmesg | grep -iE 'gma500|psb_gfx|cedarview|\[drm\].*(lvds|panel|backlight|connector)'
+	} > "$R/display-$1.txt" 2>&1
+}
 save() {   # the results file on the stick's SGXKIT partition (live-boot mounts it read-only)
 	dmesg | scrub > "$R/dmesg.txt"
 	[ -f /var/log/Xorg.0.log ] && cp /var/log/Xorg.0.log "$R/Xorg.0.log"
@@ -105,6 +125,7 @@ if [ -n "$STARTED" ]; then result PASS "GPU identified and its microkernel start
 elif [ -z "$ident" ]; then result FAIL "GPU identified"
 else result FAIL "GPU microkernel started"; fi
 dumps start
+display start
 
 step 3 "GPU tests"
 if [ -n "$STARTED" ]; then
@@ -168,6 +189,7 @@ chvt 1 2>/dev/null
 [ -n "$DESK" ] || result FAIL "the desktop (see Xorg.0.log)"
 lost && result FAIL "the GPU was lost during the desktop test: the desktop results after that are not valid"
 dumps desktop
+display after-desktop
 
 step 6 "Saving the results to the stick"
 SAVED=
@@ -196,6 +218,10 @@ if [ -n "$SAVED" ]; then
     Please attach that file to the GitHub issue. Plug the stick into any
     other computer: it is the drive named SGXKIT.
 
+    Could you see this screen on the computer's own display? Please say
+    so in your comment on the issue: the test cannot tell whether the
+    panel lit up.
+
     GPU: ${ident:-not reported}
 
     Results:
@@ -211,7 +237,8 @@ else
     The test ran, but the results could not be saved to the stick.
   ======================================================================
 
-    Please take a photo of this screen and send it to us instead.
+    Please take a photo of this screen and send it to us instead, and say
+    whether you could see it on the computer's own display.
 
     GPU: ${ident:-not reported}
 $(cat "$SUM")

@@ -24,7 +24,11 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
 ## The run
 
 1. System facts, and whether the internal disks are read-only.
-2. gma500 handing the GPU over, and powervr_sgx starting the open microkernel.
+2. gma500 handing the GPU over, and powervr_sgx starting the open microkernel. Then the
+   display state, read-only (`display-start.txt`, again as `display-after-desktop.txt`):
+   each DRM connector's status, enabled, dpms and modes; the backlight's values; gma500's
+   kernel lines. With `xrandr.txt` from inside X, this shows what the display side believes,
+   since the test cannot see whether the panel actually lit up.
 3. `powervr_sgx_test` and `powervr_sgx_frame -n 10`.
 4. The blit, then its candidates, stopping only if the GPU is lost:
    - plain;
@@ -49,5 +53,5 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
 
    A blank or one-color screenshot is a FAIL, and so is one that is the same as the one before (a frozen screen).
 6. `results-kitv3-<model>-<date>.tar.gz` on `SGXKIT`, with `summary.txt`, dmesg, the journal
-   and the Xorg log. Then a "done, attach this file" screen on tty1, and the desktop stays
-   on vt7.
+   and the Xorg log. Then a "done, attach this file" screen on tty1, which also asks the
+   tester to say whether they could see the screen; the desktop stays on vt7.
