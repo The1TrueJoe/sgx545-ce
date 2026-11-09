@@ -35,6 +35,7 @@ struct pvrsgx_core_info;
 struct gma500_sgx_device;
 struct pci_dev;
 struct pvrsgx_mmu;
+struct pvrsgx_pb;
 struct pvrsgx_vm;
 
 /**
@@ -188,6 +189,11 @@ struct pvrsgx_device {
 	u32 reset_count;
 	/** @reset_logged: @reset_count at the last "started" message (resumes are quiet). */
 	u32 reset_logged;
+
+	/** @pb: The parameter buffer every render context shares (pvrsgx_render.c). */
+	struct pvrsgx_pb *pb;
+	/** @pb_lock: Serializes @pb's creation. */
+	struct mutex pb_lock;
 
 	/** @kobj_lock: Protects @krange and @graveyard. */
 	struct mutex kobj_lock;

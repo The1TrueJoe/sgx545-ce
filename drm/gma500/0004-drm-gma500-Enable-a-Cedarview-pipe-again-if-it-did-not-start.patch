@@ -1,0 +1,217 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [PATCH] drm/gma500: Enable a Cedarview pipe again if it did not start
+
+On some Cedarview laptops (Atom N2600, D2500) the LVDS panel comes up
+lit but black on some boots: the backlight is on, and the LVDS link runs
+with its sync lanes idle, so the pipe never started running a mode. The
+kernel logs nothing; a later full modeset recovers it.
+
+gma_crtc_dpms() enables the DPLL, the plane and the pipe with fixed
+delays and never checks that the pipe started. On Cedarview, poll the
+DPLL lock after enabling the VCO, then poll the pipe's state bit after
+enabling the pipe; if it does not run within 50 ms, disable the plane,
+pipe and DPLL and enable them once more, and report it if it still does
+not start.
+
+Move the existing enable and disable sequences into helpers for this,
+without changing them for the other chips but for fsleep() in place of
+udelay(): the path already sleeps (vblank off, the vblank wait).
+
+Assisted-by: Claude:claude-opus-5-5
+---
+--- a/drivers/gpu/drm/gma500/gma_display.c
++++ b/drivers/gpu/drm/gma500/gma_display.c
+@@ -9,12 +9,14 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/highmem.h>
++#include <linux/iopoll.h>
+ 
+ #include <drm/drm_crtc.h>
+ #include <drm/drm_crtc_helper.h>
+ #include <drm/drm_fourcc.h>
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_modeset_helper_vtables.h>
++#include <drm/drm_print.h>
+ #include <drm/drm_vblank.h>
+ 
+ #include "framebuffer.h"
+@@ -194,6 +196,88 @@
+  * This code should probably grow support for turning the cursor off and back
+  * on appropriately at the same time as we're turning the pipe off/on.
+  */
++/* DPLL, then plane, then pipe, as the BIOS does. */
++static void gma_crtc_hw_enable(struct drm_device *dev, const struct psb_offset *map)
++{
++	u32 temp;
++
++	temp = REG_READ(map->dpll);
++	if ((temp & DPLL_VCO_ENABLE) == 0) {
++		REG_WRITE(map->dpll, temp);
++		REG_READ(map->dpll);
++		/* Wait for the clocks to stabilize. */
++		fsleep(150);
++		REG_WRITE(map->dpll, temp | DPLL_VCO_ENABLE);
++		REG_READ(map->dpll);
++		/* Wait for the clocks to stabilize. */
++		fsleep(150);
++		REG_WRITE(map->dpll, temp | DPLL_VCO_ENABLE);
++		REG_READ(map->dpll);
++		/* Wait for the clocks to stabilize. */
++		fsleep(150);
++		if (IS_CDV(dev) &&
++		    read_poll_timeout(REGISTER_READ, temp, temp & DPLL_LOCK, 10, 1000, false,
++				      dev, map->dpll))
++			drm_dbg_kms(dev, "DPLL 0x%x not locked\n", map->dpll);
++	}
++
++	temp = REG_READ(map->cntr);
++	if ((temp & DISPLAY_PLANE_ENABLE) == 0) {
++		REG_WRITE(map->cntr, temp | DISPLAY_PLANE_ENABLE);
++		/* Flush the plane changes */
++		REG_WRITE(map->base, REG_READ(map->base));
++	}
++
++	fsleep(150);
++
++	temp = REG_READ(map->conf);
++	if ((temp & PIPEACONF_ENABLE) == 0)
++		REG_WRITE(map->conf, temp | PIPEACONF_ENABLE);
++}
++
++/* Plane, then pipe, then DPLL. */
++static void gma_crtc_hw_disable(struct drm_device *dev, const struct psb_offset *map)
++{
++	u32 temp;
++
++	temp = REG_READ(map->cntr);
++	if ((temp & DISPLAY_PLANE_ENABLE) != 0) {
++		REG_WRITE(map->cntr, temp & ~DISPLAY_PLANE_ENABLE);
++		/* Flush the plane changes */
++		REG_WRITE(map->base, REG_READ(map->base));
++		REG_READ(map->base);
++	}
++
++	temp = REG_READ(map->conf);
++	if ((temp & PIPEACONF_ENABLE) != 0) {
++		REG_WRITE(map->conf, temp & ~PIPEACONF_ENABLE);
++		REG_READ(map->conf);
++	}
++
++	/* Wait for vblank for the disable to take effect. */
++	gma_wait_for_vblank(dev);
++
++	fsleep(150);
++
++	temp = REG_READ(map->dpll);
++	if ((temp & DPLL_VCO_ENABLE) != 0) {
++		REG_WRITE(map->dpll, temp & ~DPLL_VCO_ENABLE);
++		REG_READ(map->dpll);
++	}
++
++	/* Wait for the clocks to turn off. */
++	fsleep(150);
++}
++
++/* Whether the pipe is running: its state follows the enable bit within a frame. */
++static bool gma_crtc_running(struct drm_device *dev, const struct psb_offset *map)
++{
++	u32 conf;
++
++	return !read_poll_timeout(REGISTER_READ, conf, conf & PIPEACONF_PIPE_STATE, 100, 50000,
++				  false, dev, map->conf);
++}
++
+ void gma_crtc_dpms(struct drm_crtc *crtc, int mode)
+ {
+ 	struct drm_device *dev = crtc->dev;
+@@ -219,39 +303,19 @@
+ 
+ 		gma_crtc->active = true;
+ 
+-		/* Enable the DPLL */
+-		temp = REG_READ(map->dpll);
+-		if ((temp & DPLL_VCO_ENABLE) == 0) {
+-			REG_WRITE(map->dpll, temp);
+-			REG_READ(map->dpll);
+-			/* Wait for the clocks to stabilize. */
+-			udelay(150);
+-			REG_WRITE(map->dpll, temp | DPLL_VCO_ENABLE);
+-			REG_READ(map->dpll);
+-			/* Wait for the clocks to stabilize. */
+-			udelay(150);
+-			REG_WRITE(map->dpll, temp | DPLL_VCO_ENABLE);
+-			REG_READ(map->dpll);
+-			/* Wait for the clocks to stabilize. */
+-			udelay(150);
+-		}
+-
+-		/* Enable the plane */
+-		temp = REG_READ(map->cntr);
+-		if ((temp & DISPLAY_PLANE_ENABLE) == 0) {
+-			REG_WRITE(map->cntr,
+-				  temp | DISPLAY_PLANE_ENABLE);
+-			/* Flush the plane changes */
+-			REG_WRITE(map->base, REG_READ(map->base));
++		gma_crtc_hw_enable(dev, map);
++		/*
++		 * Cedarview: a pipe enabled before its clock settles can stay
++		 * stopped, and the panel lit but black. Enable it once more.
++		 */
++		if (IS_CDV(dev) && !gma_crtc_running(dev, map)) {
++			drm_dbg_kms(dev, "pipe %d did not start, enabling it again\n", pipe);
++			gma_crtc_hw_disable(dev, map);
++			gma_crtc_hw_enable(dev, map);
++			if (!gma_crtc_running(dev, map))
++				drm_err(dev, "pipe %d did not start\n", pipe);
+ 		}
+ 
+-		udelay(150);
+-
+-		/* Enable the pipe */
+-		temp = REG_READ(map->conf);
+-		if ((temp & PIPEACONF_ENABLE) == 0)
+-			REG_WRITE(map->conf, temp | PIPEACONF_ENABLE);
+-
+ 		temp = REG_READ(map->status);
+ 		temp &= ~(0xFFFF);
+ 		temp |= PIPE_FIFO_UNDERRUN;
+@@ -285,37 +349,7 @@
+ 		/* Wait for vblank for the disable to take effect */
+ 		gma_wait_for_vblank(dev);
+ 
+-		/* Disable plane */
+-		temp = REG_READ(map->cntr);
+-		if ((temp & DISPLAY_PLANE_ENABLE) != 0) {
+-			REG_WRITE(map->cntr,
+-				  temp & ~DISPLAY_PLANE_ENABLE);
+-			/* Flush the plane changes */
+-			REG_WRITE(map->base, REG_READ(map->base));
+-			REG_READ(map->base);
+-		}
+-
+-		/* Disable pipe */
+-		temp = REG_READ(map->conf);
+-		if ((temp & PIPEACONF_ENABLE) != 0) {
+-			REG_WRITE(map->conf, temp & ~PIPEACONF_ENABLE);
+-			REG_READ(map->conf);
+-		}
+-
+-		/* Wait for vblank for the disable to take effect. */
+-		gma_wait_for_vblank(dev);
+-
+-		udelay(150);
+-
+-		/* Disable DPLL */
+-		temp = REG_READ(map->dpll);
+-		if ((temp & DPLL_VCO_ENABLE) != 0) {
+-			REG_WRITE(map->dpll, temp & ~DPLL_VCO_ENABLE);
+-			REG_READ(map->dpll);
+-		}
+-
+-		/* Wait for the clocks to turn off. */
+-		udelay(150);
++		gma_crtc_hw_disable(dev, map);
+ 		break;
+ 	}
+ 

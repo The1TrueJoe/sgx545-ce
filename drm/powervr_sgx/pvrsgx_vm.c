@@ -144,8 +144,15 @@ static void vm_release(struct kref *ref)
 		drm_gpuva_remove(va);
 		va_release(vm, va);
 	}
+	if (vm->pb)
+		pvrsgx_pb_unmap(vm);
 	drm_mm_takedown(&vm->params);
 	pvrsgx_mmu_destroy(vm->mmu);
+	/* The directory and its pages may come back as another VM's. */
+	mutex_lock(&vm->sdev->ccb_lock);
+	vm->sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD |
+				      PVRSGX_CC_INVAL_DATA;
+	mutex_unlock(&vm->sdev->ccb_lock);
 	mutex_destroy(&vm->lock);
 	drm_gpuvm_put(&vm->gpuvm);
 }
@@ -209,18 +216,6 @@ struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle)
 	return vm;
 }
 
-/* The client let go of the VM: its contexts keep the PB, and nothing new can share it. */
-static void vm_close(struct pvrsgx_vm *vm)
-{
-	struct pvrsgx_pb *pb;
-
-	mutex_lock(&vm->lock);
-	pb = vm->pb;
-	vm->pb = NULL;
-	mutex_unlock(&vm->lock);
-	pvrsgx_pb_put(pb);
-}
-
 void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile)
 {
 	struct pvrsgx_vm *vm;
@@ -228,7 +223,6 @@ void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile)
 
 	xa_for_each(&sfile->vms, handle, vm) {
 		xa_erase(&sfile->vms, handle);
-		vm_close(vm);
 		pvrsgx_vm_put(vm);
 	}
 }
@@ -264,7 +258,6 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 	if (!vm)
 		return -EINVAL;
 	/* Contexts and jobs that use it keep it until they are done. */
-	vm_close(vm);
 	pvrsgx_vm_put(vm);
 	return 0;
 }

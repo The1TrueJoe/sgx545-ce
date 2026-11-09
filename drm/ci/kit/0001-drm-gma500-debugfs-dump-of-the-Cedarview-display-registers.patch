@@ -1,0 +1,94 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [PATCH] drm/gma500: debugfs dump of the Cedarview display registers
+
+Test kits only, never upstream: drm/ci/deb-kernel.sh applies it, and
+drm/ci/cedarview-kernel.sh when KIT=1. A read-only debugfs file,
+cdv_display_regs, with the registers that decide whether the LVDS panel
+shows a mode (DPLL, pipe config and status, timings, plane control and
+surface, LVDS port, panel power) for pipes A and B, read under gma500's
+power reference. For an intermittent black, backlit panel: read it on a
+dark boot and on a good one.
+
+Assisted-by: Claude:claude-opus-5-5
+---
+--- a/drivers/gpu/drm/gma500/cdv_device.c
++++ b/drivers/gpu/drm/gma500/cdv_device.c
+@@ -7,14 +7,17 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/iopoll.h>
++#include <linux/seq_file.h>
+ 
+ #include <drm/drm.h>
+ #include <drm/drm_crtc_helper.h>
++#include <drm/drm_debugfs.h>
+ #include <drm/drm_print.h>
+ 
+ #include "cdv_device.h"
+ #include "gma_device.h"
+ #include "intel_bios.h"
++#include "power.h"
+ #include "psb_drv.h"
+ #include "psb_intel_reg.h"
+ #include "psb_reg.h"
+@@ -541,8 +544,52 @@
+ 		.tileoff = DSPBTILEOFF,
+ 		.palette = PALETTE_B,
+ 	}
++};
++
++#ifdef CONFIG_DEBUG_FS
++/*
++ * Test kits only, not upstream: the display registers that decide whether a
++ * panel shows a mode, read-only, for an intermittent black LVDS panel.
++ */
++static const struct {
++	const char *name;
++	u32 reg;
++} cdv_display_regs[] = {
++	{ "DPLL_A", DPLL_A },		{ "DPLL_B", DPLL_B },
++	{ "PIPEACONF", PIPEACONF },	{ "PIPEBCONF", PIPEBCONF },
++	{ "PIPEASTAT", PIPEASTAT },	{ "PIPEBSTAT", PIPEBSTAT },
++	{ "HTOTAL_A", HTOTAL_A },	{ "HTOTAL_B", HTOTAL_B },
++	{ "VTOTAL_A", VTOTAL_A },	{ "VTOTAL_B", VTOTAL_B },
++	{ "PIPEASRC", PIPEASRC },	{ "PIPEBSRC", PIPEBSRC },
++	{ "DSPACNTR", DSPACNTR },	{ "DSPBCNTR", DSPBCNTR },
++	{ "DSPASURF", DSPASURF },	{ "DSPBSURF", DSPBSURF },
++	{ "LVDS", LVDS },		{ "PP_STATUS", PP_STATUS },
+ };
++
++static int cdv_display_regs_show(struct seq_file *m, void *unused)
++{
++	struct drm_debugfs_entry *entry = m->private;
++	struct drm_device *dev = entry->dev;
+ 
++	if (!gma_power_begin(dev, false)) {
++		seq_puts(m, "display powered off\n");
++		return 0;
++	}
++	for (int i = 0; i < ARRAY_SIZE(cdv_display_regs); i++)
++		seq_printf(m, "%-10s 0x%05x 0x%08x\n", cdv_display_regs[i].name,
++			   cdv_display_regs[i].reg, REG_READ(cdv_display_regs[i].reg));
++	gma_power_end(dev);
++	return 0;
++}
++
++static void cdv_debugfs_init(struct drm_device *dev)
++{
++	drm_debugfs_add_file(dev, "cdv_display_regs", cdv_display_regs_show, NULL);
++}
++#else
++static void cdv_debugfs_init(struct drm_device *dev) { }
++#endif
++
+ static int cdv_chip_setup(struct drm_device *dev)
+ {
+ 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
+@@ -554,6 +601,7 @@
+ 	psb_intel_opregion_init(dev);
+ 	psb_intel_init_bios(dev);
+ 	cdv_hotplug_enable(dev, false);
++	cdv_debugfs_init(dev);
+ 	return 0;
+ }
+ 

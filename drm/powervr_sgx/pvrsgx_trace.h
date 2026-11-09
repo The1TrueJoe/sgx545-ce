@@ -10,6 +10,8 @@
 #include <linux/tracepoint.h>
 #include <linux/types.h>
 
+#include "pvrsgx_fwif.h"
+
 /* A command handed to the microkernel (kernel CCB, doorbell rung). */
 TRACE_EVENT(pvrsgx_kick,
 	TP_PROTO(u32 type, u64 seq, u64 fence_seqno),
@@ -30,11 +32,8 @@ TRACE_EVENT(pvrsgx_kick,
 
 /* A render's last kick: the dataset and the per-frame values it was given. */
 TRACE_EVENT(pvrsgx_render_kick,
-	TP_PROTO(u32 rtdata, u32 w, u32 h, u32 frame, u32 rt_entry, u32 rgn_this,
-		 u32 rgn_next, u32 cmd_off, u32 pb_desc, u32 te_screen,
-		 u32 te_mtile0, u32 te_mtile1, u32 mt_tiles, u32 screen_size),
-	TP_ARGS(rtdata, w, h, frame, rt_entry, rgn_this, rgn_next, cmd_off, pb_desc,
-		te_screen, te_mtile0, te_mtile1, mt_tiles, screen_size),
+	TP_PROTO(const struct pvrsgx_fw_ta_cmd *cmd, u32 w, u32 h, u32 rgn_next, u32 cmd_off),
+	TP_ARGS(cmd, w, h, rgn_next, cmd_off),
 	TP_STRUCT__entry(
 		__field(u32, rtdata)
 		__field(u32, w)
@@ -52,20 +51,20 @@ TRACE_EVENT(pvrsgx_render_kick,
 		__field(u32, screen_size)
 	),
 	TP_fast_assign(
-		__entry->rtdata = rtdata;
+		__entry->rtdata = cmd->rt_data;
 		__entry->w = w;
 		__entry->h = h;
-		__entry->frame = frame;
-		__entry->rt_entry = rt_entry;
-		__entry->rgn_this = rgn_this;
+		__entry->frame = cmd->frame;
+		__entry->rt_entry = cmd->rt_data_entry;
+		__entry->rgn_this = cmd->region_headers;
 		__entry->rgn_next = rgn_next;
 		__entry->cmd_off = cmd_off;
-		__entry->pb_desc = pb_desc;
-		__entry->te_screen = te_screen;
-		__entry->te_mtile0 = te_mtile0;
-		__entry->te_mtile1 = te_mtile1;
-		__entry->mt_tiles = mt_tiles;
-		__entry->screen_size = screen_size;
+		__entry->pb_desc = cmd->pb_desc;
+		__entry->te_screen = cmd->te_screen;
+		__entry->te_mtile0 = cmd->te_mtile[0];
+		__entry->te_mtile1 = cmd->te_mtile[1];
+		__entry->mt_tiles = cmd->mt_tiles;
+		__entry->screen_size = cmd->screen_size;
 	),
 	TP_printk("rtdata=0x%08x %ux%u frame=%u entry=0x%08x rgn=0x%08x next=0x%08x cmd_off=0x%x pb=0x%08x te_screen=0x%08x mtile=0x%08x,0x%08x mt_tiles=0x%08x screen=0x%08x",
 		  __entry->rtdata, __entry->w, __entry->h, __entry->frame,

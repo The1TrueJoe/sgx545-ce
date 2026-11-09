@@ -70,9 +70,17 @@ static const struct dma_fence_ops pvrsgx_fence_ops = {
 static void context_release(struct kref *ref)
 {
 	struct pvrsgx_context *ctx = container_of(ref, struct pvrsgx_context, ref);
+	struct pvrsgx_device *sdev = ctx->sdev;
 
-	pvrsgx_render_ctx_fini(ctx->sdev, ctx);
-	pvrsgx_transfer_ctx_fini(ctx->sdev, ctx);
+	pvrsgx_render_ctx_fini(sdev, ctx);
+	pvrsgx_transfer_ctx_fini(sdev, ctx);
+	/*
+	 * As the DDK after a context's cleanup: the next command flushes the GPU's
+	 * data caches, or a later client at the same addresses reads this one's.
+	 */
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
+	mutex_unlock(&sdev->ccb_lock);
 	pvrsgx_vm_put(ctx->vm);
 	kfree(ctx);
 }

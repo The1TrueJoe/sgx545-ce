@@ -37,9 +37,15 @@ struct pvrsgx_render_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
 	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
+	/** @awake: Holds a runtime PM reference for the context's life. */
+	bool awake;
 };
 
+/* 16 MiB: the device's one PB holds every client's scenes (pvrsgx_render.c). */
+#define PVRSGX_PB_DEFAULT_PAGES	0x1000
+
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
+void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
 
 /* A render target's tiling numbers (docs/STATE.md section 6). */
 struct pvrsgx_rt_numbers {

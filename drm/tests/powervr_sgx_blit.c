@@ -7,9 +7,12 @@
  * memory, and one SUBMIT_JOBS transfer job with a CMD_TRANSFER stream runs each
  * blit (docs/TEX.md 3 and 10). Every destination byte is checked.
  *
- *   powervr_sgx_blit [-v] [-n rounds] [-T]
+ *   powervr_sgx_blit [-v] [-n rounds] [-T] [-2]
  *
  * -T puts the sampled source in the texture heap instead of the general heap.
+ * -2 first runs one round in a process of its own, to its exit, then the rounds
+ * in a new one: the second client's programs sit at the first's addresses, so
+ * the GPU's caches must not keep the first's (released-context invalidate).
  *
  * Cases, 64x64 BGRA8888 from a CPU-written pattern:
  *   copy   strided  -> strided            exact copy
@@ -26,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -284,17 +288,37 @@ int main(int argc, char **argv)
 					SGXPBE_FMT_BGRA8888 };
 	struct sgxtex_surface s_copy = s_src, s_tw = s_src, s_lin = s_src, s_mip = s_src;
 	unsigned rounds = 1;
-	int opt, e, bad = 0;
+	int opt, e, bad = 0, two = 0;
 
-	while ((opt = getopt(argc, argv, "vn:T")) != -1) {
+	while ((opt = getopt(argc, argv, "vn:T2")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
 		case 'T': src_heap = DRM_POWERVR_SGX_HEAP_TEXTURE; break;
 		case 'n': rounds = (unsigned)strtoul(optarg, NULL, 0); break;
+		case '2': two = 1; break;
 		default:
-			fprintf(stderr, "usage: powervr_sgx_blit [-v] [-n rounds] [-T]\n");
+			fprintf(stderr, "usage: powervr_sgx_blit [-v] [-n rounds] [-T] [-2]\n");
 			return 2;
 		}
+	}
+	if (two) {
+		char *args[] = { argv[0], "-n", "1",
+				 src_heap == DRM_POWERVR_SGX_HEAP_TEXTURE ? "-T" : NULL, NULL };
+		pid_t pid = fork();
+		int status;
+
+		if (pid < 0)
+			die("fork", -errno);
+		if (!pid) {
+			execv("/proc/self/exe", args);
+			_exit(127);
+		}
+		if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+			die("first client", -1);
+		if (WEXITSTATUS(status) == 77)
+			return 77;
+		printf("first client: %s\n", WEXITSTATUS(status) ? "FAILED" : "all blits right");
+		bad |= WEXITSTATUS(status) != 0;
 	}
 	fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
 	if (fd < 0 || xioctl(DRM_IOCTL_POWERVR_SGX_DEV_QUERY, &q))

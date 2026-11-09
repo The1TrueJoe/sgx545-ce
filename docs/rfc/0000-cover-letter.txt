@@ -34,8 +34,14 @@ Design
   directory maps the firmware's memory.
 - Command streams are validated in the kernel, and shader code is
   uploaded through an ioctl that checks every instruction.
-- Hang recovery with guilty/innocent context reporting, devcoredump,
-  runtime PM.
+- One parameter buffer (the tiler's output) for the device, shared by
+  every client, as Imagination's own driver does: the hardware keeps
+  one free-list state, and the microkernel doesn't switch it between
+  buffers. So one client's GPU work can address another client's
+  binned geometry; userspace can't map that range. A buffer per client,
+  with the microkernel switching the state, is planned.
+- Hang recovery that blames only the context whose job hung (one job
+  runs at a time), with guilty/innocent reporting.
 
 Userspace
 - A Gallium driver with a NIR compiler, in a Mesa fork for now
@@ -49,18 +55,24 @@ Questions for reviewers
    drivers/gpu/drm/imagination/ next to the Rogue driver? The two share
    no code or uAPI; the Rogue driver's firmware interface is different.
 2. Cedarview and Poulsbo: their SGX sits behind gma500. A follow-up
-   publishes it as an auxiliary device this driver binds to; on a
-   Cedarview N2600 it already probes and identifies the core. Is that
+   publishes it as an auxiliary device this driver binds to; on two
+   Cedarview laptops (Atom N2600, D2500) it starts the microkernel and
+   renders. Is that
    the right split between the display and render drivers? The SGX535
    render work in "[RFC] drm/gma500: SGX535 render ownership, MMU and
    failure handling" could use it too. We would rather work together
    than add a second SGX stack.
 3. The uAPI (patch 1): VM_MAP is synchronous and there is no VM_BIND
    queue. Is that acceptable for hardware this old?
+4. The shared parameter buffer above: acceptable for a first version,
+   or a blocker until the per-client buffer exists?
 
-Testing: CE5300, kernel 7.1.8, RAM-booted test kernels. CI runs
-checkpatch --strict, sparse, smatch, coccinelle, gcc and clang W=1,
-kernel-doc, KUnit, and an i386/x86_64 uAPI layout check.
+Testing: CE5300 on 7.1.8 and 7.3.3 RAM-booted test kernels, the uAPI
+and frame tests under lockdep, KASAN, UBSAN and DMA-API debug. The
+series is against drm-misc-next, where CI builds it with checkpatch
+--strict, sparse, smatch, coccinelle, gcc and clang W=1 (with BPF
+tracepoint events), kernel-doc, KUnit, and an i386/x86_64 uAPI layout
+check.
 
 I used an AI coding assistant for much of this work; each patch says so
 in an Assisted-by tag, and I have reviewed and tested what I send.

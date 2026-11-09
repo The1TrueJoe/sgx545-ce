@@ -625,6 +625,35 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   ready to move.
 - [x] **Module parameters.** Down to `job_timeout_ms` and `reap_after_render`
   (the second waits on the graveyard policy below).
+- [ ] **One parameter buffer per device (cross-client exposure).** Every
+  render context of every client shares the device's PB, mapped at the same
+  3D-params address in every VM (2c1f6ac), as the DDK shares one PB
+  descriptor (`pb.c`, `SGXFindSharedPBDescKM`). The DPM's free-list state is
+  one set of registers, and the open microkernel, like the DDK's, doesn't
+  switch it between PBs; two PBs ran each other's lists off their ends (bug
+  B). The cost: client A's GPU work can address client B's binned parameter
+  data, a cross-process read of geometry. Userspace can't reach the PB any
+  other way: the 3D-params range is outside every client heap, so `VM_MAP`
+  refuses it and no CPU mapping exists. Reviewers will ask. The follow-up is
+  a PB per client with the microkernel storing and loading the DPM free-list
+  state on a PB change (ta3d-state's rules, `UKERNEL.md` e2d08c2); the
+  kernel side is the per-VM PB this replaced.
+- [ ] **F1: transfer state across clients.** A second client's first
+  transfer faults (PDS fetch outside its programs) after another client's
+  transfers ran, until a microkernel restart; `powervr_sgx_blit -2` repeats it.
+  The kernel side is ruled out: the job's own directory is loaded, its context
+  and command are fresh, and released contexts flush the data caches (8da962c,
+  as the DDK does after its cleanup). With open-ukernel; behind the render
+  path's out-of-memory handling, since Mesa submits no transfers.
+- [ ] **Runtime PM while a client renders.** On the debug kernel (lockdep,
+  KASAN, kmemleak) the desktop got no frames with runtime suspend on and
+  rendered with it off: submitted work never resumed the GPU, with no timeout
+  (log mc-bench reset-desk-ab, 2026-11-09). The release kernel suspends and
+  resumes between frames at a 1 ms autosuspend delay and renders fine, so it is
+  not the window alone. Stopgap (535b5dc): a render context holds a runtime-PM
+  reference for its life, so the GPU stays powered while any GL client is open.
+  To find the debug-only path and drop the stopgap, so the GPU can power off
+  between frames again.
 - [ ] **Graveyard policy.** Released firmware objects are kept until the next
   restart unless `reap_after_render`; to settle with open-ukernel whether a
   later render's completion is enough, then drop the parameter.
@@ -690,8 +719,8 @@ Today the driver is 7,639 lines (`drm/powervr_sgx`, including 640 lines of
 stream decoder shared with Mesa and the 168-line KUnit test). The tree keeps
 everything, but it is layered so that v1 builds and runs on its own, and each
 follow-up is a self-contained addition: its own file(s) plus a few clearly
-marked call sites. CI builds v1 alone (the follow-up files removed) as well
-as the whole driver.
+marked call sites. CI builds the whole driver on drm-misc-next; building v1
+alone needs stubs for the follow-ups' call sites first (not done).
 
 **v1, about 5,900 lines:** probe and the core table, firmware boot (open
 microkernel only, secure mode), MMU and VMs (`drm_gpuvm`, `VM_MAP`/`VM_UNMAP`),
@@ -762,7 +791,21 @@ Documentation.
 | generated register header | done: `pvrsgx_regs.h` comes from the GPL `sgx545defs.h` through `drm/tools/gen_regs.py` (CI diffs it); our names for the registers that header leaves out, and the MMU constants, are in `pvrsgx_hw.h` |
 | one `pvrsgx_` prefix | done (the shared stream files are now `pvrsgx_stream*`) |
 | ISA generation in the core table | done: the validator picks its USSE form table by the core's ISA |
-| runtime checkers on the CE5300 | single-process tests clean under lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (3ca68ab, one finding fixed); a three-process soak lost the box's userspace, cause open |
+| runtime checkers on the CE5300 | single-process tests clean under lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (3ca68ab, one finding fixed; again on 57ca2d0); a three-process soak lost the box's userspace, cause open |
+
+**Since then (to fc2551b, 2026-11-09).** The driver is 7,706 lines, the
+follow-up files 814, so v1 is about 6,900, plus the 875-line uAPI header and
+239 lines of Documentation.
+
+| change | where it lands |
+|---|---|
+| one parameter buffer for the device, mapped into every VM (bug B; the DDK's design) | v1 (render); isolation cost in Design above and the cover letter |
+| a released context or VM flushes the GPU's data caches with the next command, as the DDK does after its cleanup | v1 |
+| the default parameter buffer is 16 MiB; the first render context sets its size | v1 |
+| `DRIVER_GEM_GPUVA` dropped (gone in 7.3); `drm/ci/compat.sh` puts it back for older test kernels | v1; compat out of tree |
+| a render context holds a runtime-PM reference (stopgap) | F3 runtime PM |
+| `pvrsgx_render_kick` tracepoint, 5 arguments (BPF caps an event at 12), `ctlblk` debugfs | F6, F5 |
+| CI on drm-misc-next with `BPF_EVENTS` | tooling |
 
 **uAPI effect.** v1's header leaves out the transfer context and job types
 and their structures (F1 appends them; the enums are append-only). Mesa
