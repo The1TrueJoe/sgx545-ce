@@ -124,8 +124,11 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
        * (dEQP's nested struct arrays of mat4 fit in a fragment program, and
        * failed at a limit of 24 vec4).  The constants that don't fit are
        * loaded from a block in memory (ld.a.d, sgxws_const_mem), so the
-       * limit is GLES2's vertex minimum, 128 vec4, in both stages */
-      caps->max_const_buffer0_size = 128 * 4 * sizeof(float);
+       * limit is GLES2's vertex minimum, 128 vec4, in both stages; a vertex
+       * program gets the 9 vec4 st keeps for lowered clip planes and point
+       * size on top, which leaves GL's 512 components to the application */
+      caps->max_const_buffer0_size =
+         (s == MESA_SHADER_VERTEX ? 128 + 9 : 128) * 4 * sizeof(float);
       caps->max_const_buffers = 1;
       /* u[i]: indexed from SA, or from the block when the array doesn't fit
        * (without it GLSL selects over the whole array, a load per element) */
@@ -249,12 +252,6 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
     * sampled in place through the strided layout */
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx_tex_format(format) &&
        !(usage & PIPE_BIND_RENDER_TARGET))
-      return false;
-   /* sRGB textures sample right (the fragment shader decodes them,
-    * sgx_fs_for), but piglit's ext_texture_srgb fails on mipmap generation,
-    * alpha test and mirrored-repeat filtering of them: not offered until it
-    * passes, so GL is 2.0 */
-   if (util_format_is_srgb(format))
       return false;
    switch (target) {
    case PIPE_BUFFER:

@@ -2324,3 +2324,49 @@ wgl@wgl-sanity,Missing
 
 # a 1024x1024 BGRX FBO reads back white where only a clear and lines were drawn: BGRA targets are twiddled textures since 868b2eb, and the clear does not land at this size (suspected twiddled render-target size limit, not checked); Minecraft's FBO is window-sized and linear
 spec@!opengl 1.0@gl-1.0-long-line-loop,Fail
+
+# sRGB textures (EXT_texture_sRGB, offered for GL 2.1, which X's glamor needs): sampling decodes right, but mipmap generation, alpha test against an sRGB FBO, mirrored-repeat and border-colour filtering of them fail
+spec@ext_texture_srgb@fbo-alphatest-formats,Fail
+spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB,Fail
+spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB8,Fail
+spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB8_ALPHA8,Fail
+spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB_ALPHA,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB NPOT,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB NPOT,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB8 NPOT,Fail
+spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB8,Fail
+spec@ext_texture_srgb@fbo-srgb,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor@GL_SLUMINANCE8- border color only,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor@GL_SLUMINANCE8_ALPHA8- border color only,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor@GL_SRGB8- border color only,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor@GL_SRGB8_ALPHA8- border color only,Fail
+spec@ext_texture_srgb@texwrap formats,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SLUMINANCE- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SLUMINANCE_ALPHA- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SRGB- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SRGB_ALPHA- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor@GL_COMPRESSED_SRGB_S3TC_DXT1_EXT- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc@GL_COMPRESSED_SRGB,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc@GL_COMPRESSED_SRGB- NPOT,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SLUMINANCE8,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SLUMINANCE8- NPOT,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SLUMINANCE8_ALPHA8,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SLUMINANCE8_ALPHA8- NPOT,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SRGB8,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SRGB8- NPOT,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SRGB8_ALPHA8,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SRGB8_ALPHA8- NPOT,Fail
+
+# GL 2.1 limits: no 3D textures (minmax reads GL_MAX_3D_TEXTURE_SIZE below 16); polygon stipple is not implemented
+spec@!opengl 2.1@minmax,Fail
+spec@!opengl 2.1@polygon-stipple-fs,Fail
