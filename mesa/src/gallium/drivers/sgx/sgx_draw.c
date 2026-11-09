@@ -1312,6 +1312,11 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
          ctx->warned_cube = true;
          return;
       }
+      /* sampled past its last level: the device tail from that level */
+      if (view && ctx->samplers[unit] &&
+          ctx->samplers[unit]->min_mip_filter != PIPE_TEX_MIPFILTER_NONE)
+         sgx_resource_tail(ctx, sgx_resource(view->texture),
+                           view->u.tex.last_level);
       if (view && sgx_tex_uses_cube0(view, ctx->samplers[unit]) &&
           !sgx_resource_cube0(ctx, sgx_resource(view->texture)))
          return;

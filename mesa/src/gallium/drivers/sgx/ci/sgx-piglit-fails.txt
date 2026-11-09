@@ -1778,6 +1778,7 @@ spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRE
 spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA_S3TC_DXT3_EXT- swizzled- border color only,Fail
 spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA_S3TC_DXT5_EXT- swizzled- border color only,Fail
 spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGB_S3TC_DXT1_EXT- swizzled- border color only,Fail
+spec@!opengl 1.1@texwrap formats@GL_R3_G3_B2- swizzled,Fail
 
 # texture formats: only five sampler formats (RGBA8, 565, A8, L8, LA88), so other sized and compressed formats fall back or are refused
 spec@!opengl 1.1@sized-texture-format-channels,Fail
@@ -1812,7 +1813,7 @@ spec@ext_framebuffer_object@fbo-generatemipmap-formats,Fail
 spec@ext_framebuffer_object@fbo-generatemipmap-formats@GL_R3_G3_B2,Fail
 spec@ext_framebuffer_object@fbo-generatemipmap-formats@GL_R3_G3_B2 NPOT,Fail
 
-# mipmaps: LOD clamps, base level and LOD bias aren't programmed (M6), generated mipmaps of non-RGBA8 formats
+# mipmaps: GL_TEXTURE_MIN_LOD/MAX_LOD and LOD bias aren't programmed (T0 b21-26 biases down only), a base level above 0 is ignored when magnifying, generated mipmaps of non-RGBA8 formats
 spec@!opengl 1.2@levelclamp,Fail
 spec@!opengl 1.2@lodclamp,Fail
 spec@!opengl 1.2@lodclamp-between,Fail
@@ -1820,7 +1821,6 @@ spec@!opengl 1.2@lodclamp-between-max,Fail
 spec@!opengl 1.2@mipmap-setup,Fail
 spec@arb_fragment_program@texturing@txb-2d,Fail
 spec@arb_point_sprite@arb_point_sprite-mipmap,Fail
-spec@ext_framebuffer_object@fbo-clearmipmap,Fail
 spec@ext_texture_lod_bias@lodbias,Fail
 spec@glsl-1.10@execution@glsl-fs-texture2d-mipmap-const-bias-01,Fail
 spec@glsl-1.10@execution@glsl-fs-texture2d-mipmap-const-bias-02.shader_test,Fail
@@ -2373,20 +2373,12 @@ wgl@wgl-sanity,Missing
 # a 1024x1024 BGRX FBO reads back white where only a clear and lines were drawn: BGRA targets are twiddled textures since 868b2eb, and the clear does not land at this size (suspected twiddled render-target size limit, not checked); Minecraft's FBO is window-sized and linear
 spec@!opengl 1.0@gl-1.0-long-line-loop,Fail
 
-# sRGB textures (EXT_texture_sRGB, offered for GL 2.1, which X's glamor needs): sampling decodes right, but mipmap generation, alpha test against an sRGB FBO, mirrored-repeat and border-colour filtering of them fail
+# sRGB textures (EXT_texture_sRGB, offered for GL 2.1, which X's glamor needs): the fragment shader decodes what the TPU returns, so LINEAR filtering mixes encoded values (a white texel next to a darker one reads 237 for 255), plus alpha test against an sRGB FBO and border colour
 spec@ext_texture_srgb@fbo-alphatest-formats,Fail
 spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB,Fail
 spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB8,Fail
 spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB8_ALPHA8,Fail
 spec@ext_texture_srgb@fbo-alphatest-formats@GL_SRGB_ALPHA,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB NPOT,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats-s3tc@GL_COMPRESSED_SRGB,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB NPOT,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB8 NPOT,Fail
-spec@ext_texture_srgb@fbo-generatemipmap-formats@GL_SRGB8,Fail
 spec@ext_texture_srgb@fbo-srgb,Fail
 spec@ext_texture_srgb@texwrap formats bordercolor,Fail
 spec@ext_texture_srgb@texwrap formats bordercolor@GL_SLUMINANCE8- border color only,Fail
@@ -2414,6 +2406,10 @@ spec@ext_texture_srgb@texwrap formats@GL_SRGB8,Fail
 spec@ext_texture_srgb@texwrap formats@GL_SRGB8- NPOT,Fail
 spec@ext_texture_srgb@texwrap formats@GL_SRGB8_ALPHA8,Fail
 spec@ext_texture_srgb@texwrap formats@GL_SRGB8_ALPHA8- NPOT,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SLUMINANCE8- swizzled,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SLUMINANCE8_ALPHA8- swizzled,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SRGB8- swizzled,Fail
+spec@ext_texture_srgb@texwrap formats@GL_SRGB8_ALPHA8- swizzled,Fail
 
 # GL 2.1 limits: no 3D textures (minmax reads GL_MAX_3D_TEXTURE_SIZE below 16); polygon stipple is not implemented
 spec@!opengl 2.1@minmax,Fail
