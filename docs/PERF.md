@@ -196,14 +196,17 @@ The idle is two things:
    time (credit limit 1), so nothing hides them. Sent to m2: skip the flush
    for buffers no CPU wrote through a cached mapping, and allow more than one
    job on the hardware.
-2. **The GPU starved by the CPU, ~13 ms a frame.** Minecraft kicks three
-   renders a frame into a 3-slot ring (`SGX_SLOTS`, default 3), so the next
-   world render records into the current world render's slot. The client
-   thread sleeps in the slot wait until that 64 ms render is done (the stats'
-   "slot wait": 500-1000 ms of every 2 s), then records the next world (~21 ms
-   of CPU) while the GPU has only the two small renders. Fix: a deeper ring,
-   so the world records while the last one renders; `SGX_SLOTS=4`/`5` runs
-   queued with uapi-stream.
+2. **The GPU starved by the CPU, ~13 ms a frame.** Every frame the client
+   thread flushes its second small render, then sleeps in the end-of-frame
+   wait (the stats' "slot wait": 500-1000 ms of every 2 s) until the world
+   render before it is done. Only then does it submit the next world, which it
+   recorded before the small renders. The GPU has only the small renders
+   meanwhile. A deeper ring doesn't change it: `SGX_SLOTS=4` gives 10.6 fps,
+   and the thread still sleeps until the world render's IRQ, although the slot
+   it reuses then held a render done long before. 749a8e4 logs every such wait
+   (`SGX_DEBUG=frame`) to find what it waits for. (`SGX_SLOTS=4` also met 5
+   GPU timeouts, all recovered, over 4 h of play. A 4 h run at the default has
+   not been done, so it isn't known to be the cause.)
 
 With both gone the frame is the GPU's 69.5 ms: 14.4 fps, past the DDK.
 
