@@ -321,6 +321,38 @@ What still holds temporaries:
   - libusc writes `fmad pa0, pa0, pa4, pa8 rpt=4`. We keep a repeated instruction's
     destination apart from its sources, which is safe but costs registers.
 
+### Speed pass, 2026-11-09 (not yet measured on hardware)
+
+Driver mode, against libusc (corpus c1/c2/c3, issue slots / temporaries). Each step was
+checked to make no shader worse in any mode (F32, F16, driver), and to change the
+encoding of nothing it doesn't intend to.
+
+| step | commit | what | effect |
+|---|---|---|---|
+| colour fast paths | 8f3d5f0 (merged fe15537) | a texel that is the colour as two `pck.u8.u8` byte picks; a uniform colour as one `mov` from a slot the driver packs to BGRA8 (constant map 0x12) | `texture2D` to colour 6 → 2 instructions, 0 temporaries; flat colour 2 → 1 |
+| early-exit loops | 82f3f5c | a loop whose trip count isn't exact (an early `break`) stays a loop | `loop_v` 31 → 4 temporaries (libusc 9); c2 temporaries 198 → 171 |
+| floor / in place | 1ead616 | `floor` as one `fsubflr d, c48, x` read negated (`ceil` becomes libusc's one instruction); split repeats write in place over the inputs they read last | c2 1647 / 171 → 1635 / 143, c1 797 / 280 → 785 / 276 |
+| mask booleans | 64d06e4 | or / and of comparisons stay test masks (bitwise `or` / `and`) | glamor radial gradient 225 → 205 instructions, linear 163 → 145; c3 slots −15, glmark2 −6 |
+| texel channels | 729718d | a texel unpacks only the channels something reads | glamor glyphs 7 → 4 |
+| branch tests | 60eea0e | an `if` on a comparison tests into `p0` directly; on a mask, `test.and.eq` | c3 slots 2489 → 2467 |
+
+Totals, driver mode: c1 797 → 783 slots (temps 280 → 276), c2 1696 → 1633 (198 → 143),
+c3 2507 → 2467 (264 → 263), glmark2 1302 → 1292 (99 → 98). libusc: c2 1391 / 101,
+c3 2277 / 219.
+
+Each step has its own `SGX_COMPILER_DEBUG` flag (`notexcolor`, `nopackedcolor`,
+`unrollexits`, `nomaskbool`, `noiftest`) for bisecting a hardware failure.
+`tools/isa/hwt_p13.py` checks the new instructions (`pck.u8.u8` lanes, mask `or` / `and`,
+`test.and.eq`) on a box; it has not run yet.
+
+Still open, in order:
+- uniform-only math per pixel or vertex (needs a per-draw secondary program or CPU
+  evaluation in the driver);
+- fixed-function fragment programs in F16 (`fs_mediump` didn't apply to Minecraft's
+  programs; the cause is being checked in the driver);
+- 8-bit colour math (`sopwm`, `sop2` on texels and lowp colours, as libusc does);
+- the texel's channel swizzle in the sample, so a texel colour is 0 instructions.
+
 ## Kernel driver (powervr_sgx)
 
 What a job costs on the CPU side, from a submit to its fence, measured with the
