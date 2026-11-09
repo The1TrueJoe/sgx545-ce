@@ -44,6 +44,7 @@ enum sgxws_mem {
                                may read */
    SGXWS_MEM_TEXTURE,       /* the texture heap (twiddled or strided texels) */
    SGXWS_MEM_VERTEX,        /* vertices and indices the VDM reads */
+   SGXWS_MEM_ZLS,           /* depth and stencil a render stores and loads */
 };
 
 /* GL enums the state takes */
@@ -76,7 +77,27 @@ struct sgxws_target {
     * 3 linear with the pitch rounded up to 8 texels, 0 twiddled, which the
     * PBE then writes twiddled too) */
    uint8_t pbe_format, t1_format, t1_layout;
+   /* Depth and stencil kept across renders (ZLS, TEX.md section 7): a buffer
+    * of float32 depth for every pixel of the render's tile-padded size, then
+    * a stencil byte each: 5 bytes per sgxws_zls_pixels.  The render stores both
+    * at its end, and with zls_load starts from them instead of depth 1.0.  0:
+    * depth and stencil live only within the render. */
+   uint32_t zls_va;
+   bool zls_load;
 };
+
+/* the pixels of a w x h render's tile-padded size (32 x 16 tiles) */
+static inline uint32_t
+sgxws_zls_pixels(uint32_t w, uint32_t h)
+{
+   return ((w + 31) & ~31u) * ((h + 15) & ~15u);
+}
+
+/* ZLS control (render details +0x2c, STATE.md section 6) without the tile
+ * count: the base word, store depth and stencil, and load them */
+#define SGXWS_ZLS_BASE  0x00111000u
+#define SGXWS_ZLS_STORE 0x00060004u
+#define SGXWS_ZLS_LOAD  0x00006002u
 
 /* A shader as the hardware runs it: USSE code plus what the PDS programs
  * need to know about it. */

@@ -130,6 +130,7 @@ struct sgx_context {
    uint64_t rt_used[SGX_MAX_RTS], rt_clock;       /* when each was last taken */
    unsigned num_rts;
    struct sgx_resource *recording; /* the target of the frame being recorded */
+   struct sgx_resource *recording_zs; /* and its depth/stencil buffer */
 
    struct pipe_framebuffer_state framebuffer;
    struct pipe_viewport_state viewport;

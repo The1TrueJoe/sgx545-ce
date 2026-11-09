@@ -658,7 +658,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    struct psgx_dev *dd = ddev(c->dev);
    struct psgx_ctx *k = c->k;
    uint32_t pds = c->dev->heap_base[SGX_HEAP_PDSPIXEL];
-   const struct SGX_KMD_STREAM_CMD_RENDER render = {
+   struct SGX_KMD_STREAM_CMD_RENDER render = {
       .pixel_event_pds_addr = c->pixev,
       .pixel_event_pds_rows = c->pixev_rows,
       .bg_pds_secondary_addr = pds + ((c->bg_pds[0] & 0x3ffffff) << 4),
@@ -669,6 +669,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       .depth_bias_units = c->bias_units,
       .depth_bias_factor = sgxws_f32(c->bias_factor),
    };
+   uint32_t pad = sgxws_zls_pixels(c->rt->w, c->rt->h);
    uint64_t render_buf[SGX_KMD_STREAM_CMD_RENDER_length / 8];
    uint64_t kick_buf[TA_KICKS][(SGX_KMD_STREAM_CMD_TA_KICK_length + 7) / 8];
    struct drm_powervr_sgx_ta_kick kicks[TA_KICKS];
@@ -695,6 +696,16 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
          .cmd_stream = (uintptr_t)kick_buf[i],
          .cmd_stream_len = SGX_KMD_STREAM_CMD_TA_KICK_pack(kick_buf[i], &ta),
       };
+   }
+   if (c->target.zls_va) {
+      /* the kernel adds the tile count and the ZLS base */
+      render.depth_addr = c->target.zls_va;
+      render.stencil_addr = c->target.zls_va + pad * 4;
+      render.zls_control = SGXWS_ZLS_BASE | SGXWS_ZLS_STORE |
+                           (c->target.zls_load ? SGXWS_ZLS_LOAD : 0);
+      /* the 3D flags the DDK's renders with a depth buffer carry (its kick
+       * b19-20) */
+      render.flags_3d = 0x180;
    }
    SGX_KMD_STREAM_CMD_RENDER_pack(render_buf, &render);
 

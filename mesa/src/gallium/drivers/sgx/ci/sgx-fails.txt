@@ -72,46 +72,17 @@ dEQP-GLES2.functional.texture.mipmap.2d.bias.nearest_nearest,Fail
 # texture2D's bias argument
 dEQP-GLES2.functional.shaders.texture_functions.fragment.texture2dproj_vec4_bias,Fail
 
-# render to texture: shared and recreated colour buffers; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared/recreate cases too
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_bgra_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgb565_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgb565_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgb5_a1_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgb5_a1_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgba4_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_rbo_rgba4_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_bgra_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgb_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgb_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgba_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.recreate_colorbuffer.rebind_tex2d_rgba_stencil_index8,Fail
+# render to texture: a colour buffer shared between framebuffers with a 16-bit depth buffer; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared cases too
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_bgra_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgb565_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgb565_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgb5_a1_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgb5_a1_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgba4_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgba4_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_bgra_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_rgb_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_rgb_stencil_index8,Fail
 dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_rgba_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_rgba_stencil_index8,Fail
-dEQP-GLES2.functional.fbo.render.shared_depthbuffer.rbo_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_depthbuffer.rbo_rgb565_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_depthbuffer.rbo_rgb5_a1_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_depthbuffer.rbo_rgba4_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_depthbuffer.tex2d_bgra_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_depthbuffer.tex2d_rgb_depth_component16,Fail
-dEQP-GLES2.functional.fbo.render.shared_depthbuffer.tex2d_rgba_depth_component16,Fail
 
-# polygon offset: the units and factor are per render, so a draw with others ends it, and depth doesn't carry over to the next render (no ZLS)
+# polygon offset: the offset is applied, but its size against GL's minimum resolvable difference isn't matched yet (displacement cases, and the factor with 16-bit depth)
 dEQP-GLES2.functional.polygon_offset.default_displacement_with_units,Fail
-dEQP-GLES2.functional.polygon_offset.default_render_with_factor,Fail
 dEQP-GLES2.functional.polygon_offset.fixed16_displacement_with_units,Fail
 dEQP-GLES2.functional.polygon_offset.fixed16_render_with_factor,Fail
 

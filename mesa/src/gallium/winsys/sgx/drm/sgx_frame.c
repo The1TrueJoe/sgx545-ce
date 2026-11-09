@@ -130,6 +130,8 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
       return e;
    case SGXWS_MEM_VERTEX:
       return sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x1, size, align);
+   case SGXWS_MEM_ZLS: /* the 3D writes it: read and write */
+      return sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x3, size, align);
    }
    return -EINVAL;
 }

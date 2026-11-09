@@ -47,10 +47,11 @@ Known limitations
 - One render target; no multisampling; no 3D textures.
 - Non-power-of-two cube maps of 16 texels or more, and mipmapped ones, are
   not drawn yet.
-- Depth and stencil are kept per tile within one render and not stored, so
-  their contents do not carry over from one render to the next.
+- Depth and stencil carry over from one render to the next (the 3D stores
+  them at the end of a render and the next one loads them), but they are not
+  read back: ``glReadPixels`` of depth or stencil returns no rendered values.
 - ``glPolygonOffset``'s units and factor are one pair per render: a draw
-  with another pair ends the render, so depth does not carry over to it.
+  with another pair ends the render.
 
 Environment variables
 ---------------------

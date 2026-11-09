@@ -63,6 +63,12 @@ struct sgx_resource {
     * level0_gen counts the writes to level 0; cube0_gen is the one cube0 has. */
    struct sgxws_bo cube0;
    uint32_t level0_gen, cube0_gen;
+
+   /* A depth/stencil buffer's contents between renders: the ZLS buffer its
+    * renders store and load (sgxws_target), and the render size they were
+    * last stored at (0: nothing stored yet, so nothing to load). */
+   struct sgxws_bo zls;
+   uint32_t zls_bytes, zls_w, zls_h;
 };
 
 static inline struct sgx_resource *
