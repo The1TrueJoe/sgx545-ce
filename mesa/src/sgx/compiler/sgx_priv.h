@@ -221,6 +221,7 @@ struct sgx_ctx {
    int colour_k;
    /* emit_color: the raw RGBA8 texel register / the packed literal slot */
    bool has_colour_raw, has_colour_packed;
+   bool colour_raw_bgra; /* ... already in the colour's byte order */
    struct sgx_ref colour_raw;
    /* the one discard's comparison (p1 directly) */
    struct nir_alu_instr *discard_cmp;

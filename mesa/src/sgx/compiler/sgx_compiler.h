@@ -82,6 +82,11 @@ struct sgx_compile_options {
    /* vertex shader: what the PDS leaves in PA[4 * driver_location] for each
     * attribute (enum sgx_vtx_fmt); 0, f32 x 4, is the default */
    uint8_t vtx_fmt[16];
+   /* fragment shader: bit n set, texture unit n's texels arrive with red and
+    * blue swapped (an RGBA8 view sampled as T1 0x0d, as the DDK binds it):
+    * byte 0 is blue, 2 red, the colour output's order. A texel that is the
+    * colour as it is then needs no instruction; other reads unpack zyxw */
+   uint32_t tex_bgra;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components

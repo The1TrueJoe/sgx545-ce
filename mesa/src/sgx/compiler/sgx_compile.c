@@ -3515,11 +3515,15 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       i->op[2].step = 0;
    }
 
+   /* the byte holding channel k (zyxw for a unit in tex_bgra) */
+   bool bgra = c->opts->tex_bgra >> s->sampler & 1;
+#define TEXEL_LANE(k) (bgra && !((k) & 1) ? 2 - (k) : (k))
    if (tex == c->colour_tex && !s->dependent) {
       /* the colour is this texel: emit_color moves its bytes, so neither the
        * unpack nor the conversions to the store are emitted */
       c->has_colour_raw = true;
       c->colour_raw = raw;
+      c->colour_raw_bgra = bgra;
       for (nir_def *d = &tex->def; d != c->colour_end;) {
          nir_instr *u =
             nir_src_use_instr(list_first_entry(&d->uses, nir_src, use_link));
@@ -3543,9 +3547,9 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          pk->nops = 3;
          pk->op[0] = href(w, 2 * p);
          pk->op[1] = raw;
-         pk->op[1].lane = 2 * p;
+         pk->op[1].lane = TEXEL_LANE(2 * p);
          pk->op[2] = raw;
-         pk->op[2].lane = 2 * p + 1;
+         pk->op[2].lane = TEXEL_LANE(2 * p + 1);
          fld(pk, SGX_FLD_SCALE, 1);
          emit(c, pk);
       }
@@ -3563,11 +3567,12 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       p->nops = 3;
       p->op[0] = vref(w, k);
       p->op[1] = raw;
-      p->op[1].lane = k;
+      p->op[1].lane = TEXEL_LANE(k);
       p->op[2] = ref(SGX_F_IMM, 0);
       fld(p, SGX_FLD_SCALE, 1);
       emit(c, p);
    }
+#undef TEXEL_LANE
 }
 
 /* ------------------------------------------------------------------------
@@ -4286,6 +4291,12 @@ emit_color(struct sgx_ctx *c)
          n++;
       for (struct list_head *l = before->next; n > 2; l = l->next, n--)
          fld(list_entry(l, struct sgx_ins, link), SGX_FLD_NOSCHED, 1);
+      emit_feedback(c);
+      return;
+   }
+   if (c->has_colour_raw && c->colour_raw_bgra) {
+      /* already in the colour's byte order: its register is the colour */
+      c->colour_pa = c->colour_raw.n;
       emit_feedback(c);
       return;
    }

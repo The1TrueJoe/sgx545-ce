@@ -51,12 +51,13 @@ class sgx_compile_test : public ::testing::Test {
    }
 
    /* compile with the compiler's own layout; false on a compile error */
-   bool compile(bool f16 = false)
+   bool compile(bool f16 = false, uint32_t tex_bgra = 0)
    {
       struct sgx_compile_options opts = {};
       struct sgx_varyings vary = {};
 
       opts.f16 = f16;
+      opts.tex_bgra = tex_bgra;
       opts.driver_consts = true;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
@@ -327,6 +328,66 @@ TEST_F(sgx_compile_test, fragment_or_of_compares_as_masks)
    std::string s = disasm();
    EXPECT_NE(s.find(" or "), std::string::npos) << s;
    EXPECT_EQ(s.find("fmaxmin"), std::string::npos) << s;
+}
+
+/* a texel whose unit arrives BGRA-ordered (tex_bgra) is the colour as it
+ * is: no instruction, the colour register is the sampled one */
+TEST_F(sgx_compile_test, fragment_bgra_texel_is_colour)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_store_var(&b, col, nir_build_tex_struct(&b, nir_texop_tex, tb), 0xf);
+
+   ASSERT_TRUE(compile(true, 1)) << out.log;
+   EXPECT_EQ(out.n_code, 0u) << disasm();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_EQ(out.colour_pa, (unsigned)out.samples[0].reg);
+}
+
+/* ... and read as a value, its red and blue come from bytes 2 and 0 */
+TEST_F(sgx_compile_test, fragment_bgra_texel_unpacks_zyxw)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_fmul_imm(&b, t, 0.5), 0xf);
+
+   ASSERT_TRUE(compile(false, 1)) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   /* channel 0 (red) unpacked from byte 2 */
+   size_t at = s.find("pck.f32.u8 r0, pa");
+   ASSERT_NE(at, std::string::npos) << s;
+   std::string line = s.substr(at, s.find('\n', at) - at);
+   EXPECT_NE(line.find(".l2,"), std::string::npos) << s;
 }
 
 } /* namespace */
