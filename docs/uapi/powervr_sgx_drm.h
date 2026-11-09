@@ -535,7 +535,9 @@ struct drm_powervr_sgx_ioctl_create_context_args {
 	 * @param_buffer_pages: [IN] Parameter buffer size for a render context,
 	 * in device pages, or 0 for the default in
 	 * &drm_powervr_sgx_dev_query_limits.pb_default_pages. Must be 0 for a transfer
-	 * context.
+	 * context. The device has one parameter buffer, shared by every render
+	 * context of every client: the first render context sets its size, and
+	 * later requests are ignored.
 	 */
 	__u32 param_buffer_pages;
 

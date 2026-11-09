@@ -39,6 +39,9 @@ struct pvrsgx_render_ctx {
 	u32 ccb_woff;
 };
 
+/* 16 MiB: the device's one PB holds every client's scenes (pvrsgx_render.c). */
+#define PVRSGX_PB_DEFAULT_PAGES	0x1000
+
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
 

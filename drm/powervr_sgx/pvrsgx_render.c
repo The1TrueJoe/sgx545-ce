@@ -39,7 +39,6 @@
 #include "pvrsgx_transfer.h"
 #include "pvrsgx_vm.h"
 
-#define PB_DEFAULT_PAGES	0x400
 #define PB_EXTRA_PAGES		0x22
 #define FREELIST_BYTES		0x40000	/* one word per page of the 256 MiB range */
 #define CCB_BYTES		0x10420
@@ -107,7 +106,7 @@ static void pb_init(struct pvrsgx_pb *pb)
 static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 {
 	struct pvrsgx_pb *pb = kzalloc_obj(*pb);
-	u32 pages = (req_pages ?: PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
+	u32 pages = (req_pages ?: PVRSGX_PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
 	int err;
 
 	if (!pb)
