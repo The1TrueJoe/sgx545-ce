@@ -1282,6 +1282,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    uint32_t prim;
    uint32_t sampled = 0; /* the sampler units this draw reads */
    bool compiled, raw = false;
+   bool points = info->mode == MESA_PRIM_POINTS;
    uint8_t vfmt[16] = {0};
    unsigned raw_bytes[16];
 
@@ -1401,12 +1402,12 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                           &raw_bytes[e]);
       /* the fragment shader's sets (gl_PointCoord: the vertex shader's
        * varyings move up to leave set 0 free) */
-      if (vfs && fs->reads_pointcoord && !ctx->vs->prog.point_size)
+      if (vfs && fs->reads_pointcoord && !ctx->vs->writes_psize)
          return;
-      if (vfs || raw) {
-         if (raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, vfmt)))
+      if (vfs || raw || points) {
+         if (raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, vfmt, points)))
             raw = false;
-         if (!raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, NULL)))
+         if (!raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, NULL, points)))
             return;
       }
       if (vfs)
@@ -1576,7 +1577,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    case MESA_PRIM_POINTS:
       /* the size comes from the vertex program; without one the DDK draws
        * nothing too */
-      if (!compiled || !ctx->vs->prog.point_size)
+      if (!compiled || !ctx->vs->writes_psize)
          return;
       prim = SGXWS_POINTS;
       break;
@@ -1687,6 +1688,26 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    simple_mtx_lock(&screen->lock);
    if (!begin_frame(ctx, false))
       goto out;
+   /* every shared texture it samples goes in the render's buffer list: a
+    * frame whose list is full is submitted first */
+   {
+      const struct sgxws_bo *shared[PIPE_MAX_SAMPLERS];
+      unsigned n_shared = 0;
+
+      u_foreach_bit (unit, sampled) {
+         struct sgx_resource *tex = sgx_resource(ctx->views[unit]->texture);
+
+         if (tex->shared)
+            shared[n_shared++] = &tex->bo;
+      }
+      if (!sgxws_use_bo_room(ctx->hw, shared, n_shared)) {
+         sgxws_flush(ctx->hw, 0);
+         ctx->recording = NULL;
+         ctx->stats.fl_other++;
+         if (!begin_frame(ctx, false))
+            goto out;
+      }
+   }
    /* The textures it samples were marked used by the next kick before
     * begin_frame, which flushes the previous target's frame when this draw
     * switches targets: mark them again with the frame they're now in (a

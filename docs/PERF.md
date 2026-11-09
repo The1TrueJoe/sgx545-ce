@@ -196,14 +196,27 @@ The idle is two things:
    time (credit limit 1), so nothing hides them. Sent to m2: skip the flush
    for buffers no CPU wrote through a cached mapping, and allow more than one
    job on the hardware.
-2. **The GPU starved by the CPU, ~13 ms a frame.** Minecraft kicks three
-   renders a frame into a 3-slot ring (`SGX_SLOTS`, default 3), so the next
-   world render records into the current world render's slot. The client
-   thread sleeps in the slot wait until that 64 ms render is done (the stats'
-   "slot wait": 500-1000 ms of every 2 s), then records the next world (~21 ms
-   of CPU) while the GPU has only the two small renders. Fix: a deeper ring,
-   so the world records while the last one renders; `SGX_SLOTS=4`/`5` runs
-   queued with uapi-stream.
+2. **The GPU waiting on the CPU, ~13 ms a frame.** A frame is Minecraft's
+   world render into its FBO, then a 2-object and a 1-object render into the
+   back buffer (`SGX_DEBUG=frame`, 749a8e4). With 3 ring slots the third
+   kick's end-of-frame wait lands on the world render kicked just before:
+   the thread sleeps ~20-50 ms, then records the next world while the GPU has
+   only the two small renders. With `SGX_SLOTS=4` the slots cycle 0-3 and the
+   waits move to the previous frame's small renders, which queue behind the
+   64 ms world render. So the frame is GPU-bound and a deeper ring only moves
+   the wait: 8-10 fps with the logging on. Both 4-slot runs also stalled the
+   session after the measured window (and one met 5 recovered GPU timeouts
+   over 4 h). Not adopted.
+
+The import flushes, after m2's "flush only listed imports" (m2-drm 30919fc):
+Minecraft 10.7 → 11.2 fps, flushes 424 → 318 per 5 s. What is left is
+Minecraft's own back buffers. The DRI3 loader asks for every back buffer
+with `__DRI_IMAGE_USE_SCANOUT`, so kmsro makes each a cached simpledrm dumb
+buffer, imported and flushed around both small renders (~5 ms a frame). Only
+X's screen pixmap is scanned out (X copies the window: its 1.1 ms job a
+frame). Nothing tells the pipe driver that an image is a back buffer (dri2.c
+maps `__DRI_IMAGE_USE_BACKBUFFER` to no bind flag), so keeping back buffers
+on the SGX needs a frontend change. Parked behind the vertex path.
 
 With both gone the frame is the GPU's 69.5 ms: 14.4 fps, past the DDK.
 
@@ -213,9 +226,37 @@ kernel 10%. The client thread is 39% of samples (DDK 43%), the C2 compilers
 CPU is not the bottleneck: the stats give the client thread 1.0-1.2 s of
 CPU in 2 s, draws 180-250 ms of it.
 
-Not split yet: the world render's 64 ms between the TA (258 k vertices,
-162 k triangles a frame; perfmicro verts is 0.46 of the DDK) and the 3D.
-Asked open-ukernel for per-phase timestamps.
+**TA against 3D** (open-ukernel's frame-profile microkernel 775b19a,
+`UK_FRAMEPROF=1`: running totals of TA and 3D busy ticks and their counts in
+the control block, the EDM's ~1 kHz tick; same scene with 31f9341's vertex
+change, ~9 fps in the window): over 5 s the TA is busy 37.6% (320 kicks, 2 a
+render) and the 3D 23.4% (160 renders). That is ~42 ms of TA and ~26 ms of 3D
+a frame, almost all of it the world render. The vertex path is the larger GPU
+bucket, and perfmicro verts is 0.46 of the DDK.
+
+### The vertex path against the DDK (perfmicro verts, 2026-11-09)
+
+ta3d-state diffed the DDK's and our state for perfmicro's verts test on the EA3
+(the same binary; captures kept outside the repos).
+- **The point size.** st gives every vertex program a point size and we output
+  it on triangles: 5 dwords a vertex into the parameter buffer, which the VDM
+  rounds up to an 8-dword output area. The DDK's position-only vertex is 4.
+  Fixed in 31f9341 (only points draws keep it). On the EA1 tex went up 11-13%
+  (1440x960 265 → 300 fps), and verts (120 → 121), fill and Minecraft (10.3/10.8
+  → 10.6/10.6) didn't move. Full dEQP-GLES2 unchanged.
+- **Matches:** ISPA, region clip, MTE control, W clamp, viewport, TE/tiling
+  words, batch 16, vertices per task 16, 16-bit indices. The DDK's index-list
+  count is wider than 16 bits (one list of 96,774 indices; we split at
+  65,535: negligible).
+- **The vertex DMA** is 2 dwords on the DDK (the VBO as it is) and 4 on ours
+  (gathered and widened to f32 x 4). `SGX_DEBUG=zerocopy` (2 dwords) changes
+  nothing: 110.6 → 108.7 fps on the EA3.
+- **Our frame** on the EA3 (`SGX_DEBUG=stats`, 110 fps, 9 ms): ~2.6 ms of CPU
+  in the draw (every index read, rebased to 16 bits and copied; the vertices
+  gathered), then ~6 ms kick to done. The DDK's whole frame is 4.1 ms. So the
+  GPU's vertex work is ~2x the DDK's, with the TA state matching; next are the
+  two vertex programs and their DOUTU words (the DDK sets 0x10000 on every
+  DOUTU, we never do).
 
 ## Shader code against libusc
 

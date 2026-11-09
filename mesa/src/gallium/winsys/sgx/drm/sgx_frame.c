@@ -11,6 +11,7 @@
  * unknown).
  */
 
+#include <assert.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -1814,11 +1815,28 @@ sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write)
          return;
       }
    }
+   /* (the caller made room: sgxws_use_bo_room) */
+   assert(c->n_use < ARRAY_SIZE(c->use));
    if (c->n_use < ARRAY_SIZE(c->use))
       c->use[c->n_use++] = (__typeof__(c->use[0])){bo, write};
-   else
-      ws_err("a frame uses more than %u shared buffers\n",
-             (unsigned)ARRAY_SIZE(c->use));
+}
+
+bool
+sgxws_use_bo_room(const struct sgxws_ctx *c, const struct sgxws_bo *const *bos,
+                  unsigned n)
+{
+   unsigned more = 0;
+
+   for (unsigned k = 0; k < n; k++) {
+      bool listed = false;
+
+      for (unsigned i = 0; i < c->n_use && !listed; i++)
+         listed = c->use[i].bo == bos[k];
+      for (unsigned j = 0; j < k && !listed; j++)
+         listed = bos[j] == bos[k];
+      more += !listed;
+   }
+   return c->n_use + more <= ARRAY_SIZE(c->use);
 }
 
 uint64_t
@@ -1996,8 +2014,10 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
 
       if (kif->frame_info)
          kif->frame_info(c, info, sizeof(info));
-      ws_err("frame %u (target %u): %u objects, %s, rc %d\n", c->frames,
-             s->frames, c->draws, info, e);
+      ws_err("frame %u (target %#x %ux%u frame %u, kick %u, slot %u, %.3f s): "
+             "%u objects, %s, rc %d\n",
+             c->frames, (unsigned)c->target.va, s->w, s->h, s->frames, seq,
+             c->slot, sgxws_now_ns() / 1e9, c->draws, info, e);
    }
 
    s->frames++;
@@ -2006,11 +2026,17 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    /* the next frame records into the next slot, once the render there is done */
    c->slot = (c->slot + 1) % c->slots;
    {
-      uint64_t t0 = sgxws_now_ns();
+      uint64_t t0 = sgxws_now_ns(), dt;
+      uint32_t waited = c->slot_kick[c->slot].seq, done = c->done_seq;
 
       if (slot_wait(c, c->slot, 2000) && !e)
          e = -ETIMEDOUT;
-      c->ns_slot_wait += sgxws_now_ns() - t0;
+      dt = sgxws_now_ns() - t0;
+      c->ns_slot_wait += dt;
+      if (c->dev->verbose && dt > 2000000)
+         ws_err("slot %u: waited %.1f ms for kick %u (last kick %u, done "
+                "%u)\n",
+                c->slot, dt / 1e6, waited, c->kicks, done);
    }
    ring_use_slot(&c->pds_pix, c->slot);
    ring_use_slot(&c->pds_vtx, c->slot);

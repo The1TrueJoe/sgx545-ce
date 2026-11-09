@@ -559,7 +559,7 @@ static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
                unsigned srgb, const uint16_t *swz, uint32_t not_bgra,
-               const uint8_t *vtx_fmt)
+               const uint8_t *vtx_fmt, bool points)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -570,6 +570,26 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    bool vertex = nir->info.stage == MESA_SHADER_VERTEX;
 
    opts.verbose = (sgx_drv_debug & SGX_DEBUG_NIR) != 0;
+   /* The point size (st gives every vertex program one) is an output only
+    * for points: elsewhere it costs a dword a vertex in the parameter buffer
+    * and rounds the vertex up to the next four (the DDK's triangles carry
+    * none) */
+   if (vertex && !points) {
+      bool demoted = false;
+
+      nir_foreach_shader_out_variable (var, nir) {
+         if (var->data.location == VARYING_SLOT_PSIZ) {
+            var->data.mode = nir_var_shader_temp;
+            demoted = true;
+         }
+      }
+      if (demoted) {
+         nir_fixup_deref_modes(nir);
+         NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+         NIR_PASS(_, nir, nir_opt_dce);
+         NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
+      }
+   }
    opts.f16 = ctx->base.screen->shader_caps[nir->info.stage].fp16;
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
@@ -939,6 +959,8 @@ sgx_create_shader_state(struct pipe_context *pctx,
    else
       nir = tgsi_to_nir(cso->tokens, pctx->screen, false);
    so->nir = nir;
+   nir_foreach_shader_out_variable (var, nir)
+      so->writes_psize |= var->data.location == VARYING_SLOT_PSIZ;
 
    /* SGX_DEBUG=novs / nofs: the fixed programs for that stage */
    bool fixed = sgx_drv_debug & (nir->info.stage == MESA_SHADER_VERTEX
@@ -947,7 +969,7 @@ sgx_create_shader_state(struct pipe_context *pctx,
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, 0, NULL);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, 0, NULL, false);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -1022,7 +1044,8 @@ sgx_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 
 struct sgx_pipe_shader *
 sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
-           const struct sgx_pipe_shader *fs, const uint8_t *vtx_fmt)
+           const struct sgx_pipe_shader *fs, const uint8_t *vtx_fmt,
+           bool points)
 {
    static const uint8_t f32x4[16];
    const struct sgx_varyings *vary = fs && fs->vary ? fs->vary : vs->vary;
@@ -1030,13 +1053,14 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
 
    if (!vtx_fmt)
       vtx_fmt = f32x4;
+   points = points && vs->writes_psize;
    if ((!vs->vary || !vary || same_varyings(vs->vary, vary)) &&
-       !memcmp(vtx_fmt, f32x4, sizeof(f32x4)))
+       !memcmp(vtx_fmt, f32x4, sizeof(f32x4)) && !points)
       return vs;
    for (unsigned i = 0; i < ARRAY_SIZE(vs->variants_vs); i++) {
       struct sgx_pipe_shader *v = vs->variants_vs[i];
 
-      if (v &&
+      if (v && v->points == points &&
           (!vary || (same_varyings(v->vary, vary) &&
                      v->vary->point_size == vary->point_size)) &&
           !memcmp(v->vtx_fmt, vtx_fmt, sizeof(v->vtx_fmt)))
@@ -1054,8 +1078,9 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
+   (*slot)->points = points;
    if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, NULL, 0,
-                       vtx_fmt) ||
+                       vtx_fmt, points) ||
        !(*slot)->prog.code) {
       FREE((*slot)->vary);
       FREE(*slot);
@@ -1129,7 +1154,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    (*slot)->srgb = srgb;
    memcpy((*slot)->swz, swz, sizeof(swz));
    (*slot)->not_bgra = not_bgra;
-   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, swz, not_bgra, NULL) ||
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, swz, not_bgra, NULL,
+                       false) ||
        !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);
