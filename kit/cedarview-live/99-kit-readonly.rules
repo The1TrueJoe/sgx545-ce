@@ -1,3 +1,4 @@
 # The test stick never writes to the computer's own disks: every block device
-# that isn't on USB (the stick) is set read-only as it appears.
+# that isn't on USB (the stick) is set read-only as it appears. 99-: after
+# 60-persistent-storage.rules sets ID_BUS (before it, the stick was read-only too).
 ACTION=="add|change", SUBSYSTEM=="block", ENV{ID_BUS}!="usb", KERNEL!="loop*|ram*|zram*|sr*|nbd*", RUN+="/usr/sbin/blockdev --setro /dev/%k"

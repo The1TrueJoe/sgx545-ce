@@ -42,7 +42,7 @@ done
 install -m 0755 "$HERE/kit-live-run" "$ROOT/usr/local/sbin/"
 install -m 0755 "$HERE/kit-desktop" "$HERE/kit-session" "$HERE/kit-smoke" "$ROOT/usr/local/bin/"
 install -m 0644 "$HERE/test.html" "$ROOT/usr/local/share/kit/"
-install -m 0644 "$HERE/60-kit-readonly.rules" "$ROOT/etc/udev/rules.d/"
+install -m 0644 "$HERE/99-kit-readonly.rules" "$ROOT/etc/udev/rules.d/"
 install -m 0755 "$HERE/initramfs-hook" "$ROOT/etc/initramfs-tools/hooks/kit-readonly"
 install -m 0644 "$HERE/kit.service" "$ROOT/etc/systemd/system/"
 ln -sf /etc/systemd/system/kit.service "$ROOT/etc/systemd/system/multi-user.target.wants/kit.service"

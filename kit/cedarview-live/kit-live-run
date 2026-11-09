@@ -164,8 +164,12 @@ step 6 "Saving the results to the stick"
 SAVED=
 save && SAVED=1
 
-# CI (qemu-test.sh) powers off once the results are saved
-grep -qw kit.poweroff=1 /proc/cmdline && { sync; systemctl poweroff; sleep 60; }
+# CI (qemu-test.sh) powers off once the results are saved; its log is the serial port
+if grep -qw kit.poweroff=1 /proc/cmdline; then
+	{ echo "kit: saved=${SAVED:-no}"; cat "$R/summary.txt" "$SUM" 2>/dev/null
+	  grep -h ' /run/live/medium ' /proc/mounts; } > /dev/ttyS0 2>/dev/null
+	sync; systemctl poweroff; sleep 60
+fi
 
 clear
 if [ -n "$SAVED" ]; then

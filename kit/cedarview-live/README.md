@@ -12,7 +12,7 @@ computer's own disks are never written to.
 | `kit-live-run` | the run on tty1 (systemd `kit.service`): system facts, the GPU, the tests, the blit variants, the desktop, the results |
 | `kit-desktop`, `kit-session` | Xorg on vt7 and an Xfce session as `desk`, which runs `kit-smoke` |
 | `kit-smoke` | the desktop's smoke test: glxinfo, gears, glmark2, a browser on `test.html`, a dragged window; a screenshot of each, checked for a blank screen |
-| `60-kit-readonly.rules`, `initramfs-hook` | every non-USB disk read-only from the initramfs on |
+| `99-kit-readonly.rules`, `initramfs-hook` | every non-USB disk read-only from the initramfs on |
 | `qemu-test.sh` | the CI check: boots the image in QEMU next to a disk that must stay unchanged |
 | `SERIES` | the kit's version for testers (`v3`), on the screen and in the results file name |
 
