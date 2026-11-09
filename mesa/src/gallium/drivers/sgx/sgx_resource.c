@@ -191,6 +191,7 @@ sgx_resource_create(struct pipe_screen *pscreen,
       if (e)
          goto fail;
       res->texture = true;
+      res->tail_from = templ->last_level;
       /* the X byte of a format without alpha is read as alpha: 1 from the
        * start, for a texture rendered into before anything is uploaded */
       if (!util_format_has_alpha(templ->format) &&
@@ -747,6 +748,32 @@ sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res)
    sgx_tex_encode_cube0(res);
    res->cube0_gen = res->level0_gen;
    return true;
+}
+
+/* The device tail of a mipmapped 2D texture from the last level a sampler
+ * view allows (sgx_tex_set_tail): rare, when GL_TEXTURE_MAX_LEVEL changes */
+void
+sgx_resource_tail(struct sgx_context *ctx, struct sgx_resource *res,
+                  unsigned last)
+{
+   if (!res->texture || res->base.target != PIPE_TEXTURE_2D ||
+       last == res->tail_from || last >= sgx_tex_dev_last(&res->base))
+      return;
+   /* levels rendered into: the CPU copy catches up, as for a map */
+   if (res->rendered) {
+      sgx_flush_resource_writes(ctx, res);
+      if (sgxws_bo_wait(&res->bo, 2000))
+         fprintf(stderr,
+                 "sgx: a render into a sampled texture did not finish\n");
+      for (unsigned l = 0; l <= res->base.last_level; l++)
+         if (res->rendered & 1u << l)
+            sgx_tex_decode_level(res, l);
+      res->rendered = 0;
+   }
+   if (ctx->hw && sgxws_seq_after(res->use_seq, sgxws_done_seq(ctx->hw)))
+      sgx_finish(ctx);
+   sgx_tex_set_tail(res, last);
+   res->n_alt_dirty = SGX_ALT_ALL; /* the second copy has the old tail */
 }
 
 static void

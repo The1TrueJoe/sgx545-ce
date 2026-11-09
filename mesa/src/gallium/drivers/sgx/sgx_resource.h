@@ -64,6 +64,12 @@ struct sgx_resource {
    struct sgxws_bo cube0;
    uint32_t level0_gen, cube0_gen;
 
+   /* A mipmapped 2D texture's device chain runs to 1x1 (sgx_tex_dev_last);
+    * its levels past tail_from are box-filtered from that level, so sampling
+    * past GL_TEXTURE_MAX_LEVEL reads (a smaller copy of) the last level a
+    * sampler view allows.  The CPU copy keeps those levels' own texels. */
+   uint8_t tail_from;
+
    /* A depth/stencil buffer's contents between renders: the ZLS buffer its
     * renders store and load (sgxws_target), and the render size they were
     * last stored at (0: nothing stored yet, so nothing to load). */
@@ -110,5 +116,8 @@ bool sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
 
 /* brings res->cube0 up to date with level 0 (sgx_tex_words samples it) */
 bool sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res);
+
+void sgx_resource_tail(struct sgx_context *ctx, struct sgx_resource *res,
+                       unsigned last);
 
 #endif

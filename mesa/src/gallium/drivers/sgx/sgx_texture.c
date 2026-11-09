@@ -133,11 +133,25 @@ sgx_tex_offset(const struct pipe_resource *prsc, unsigned level, unsigned layer)
    return layer * face_stride(prsc) + chain_offset(prsc, level);
 }
 
+/* The last level of a texture's chain on the device.  The TPU takes the
+ * level count from the size, so a mipmapped 2D texture with fewer levels
+ * than its size has (GL_TEXTURE_MAX_LEVEL below the last: an atlas with a
+ * few mip levels) gets the rest, filled from a level (fill_tail); otherwise
+ * far-away draws read past the chain. */
+unsigned
+sgx_tex_dev_last(const struct pipe_resource *prsc)
+{
+   if (prsc->target != PIPE_TEXTURE_2D || prsc->array_size > 1 ||
+       !prsc->last_level || !twiddled(prsc->width0, prsc->height0))
+      return prsc->last_level;
+   return util_logbase2(MAX2(prsc->width0, prsc->height0));
+}
+
 size_t
 sgx_tex_size(const struct pipe_resource *prsc)
 {
    return prsc->array_size > 1 ? prsc->array_size * face_stride(prsc)
-                               : chain_offset(prsc, prsc->last_level + 1);
+                               : chain_offset(prsc, sgx_tex_dev_last(prsc) + 1);
 }
 
 /* an R8 or RG8 texel (cbpp bytes) as the device stores it */
@@ -155,8 +169,8 @@ widen_texel(uint8_t *o, const uint8_t *s, unsigned cbpp)
  * put together on the stack and written in one go, only partly covered tiles
  * at the box's edges are written texel by texel. */
 static void
-encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
-           uint8_t *dst, unsigned x0, unsigned y0, unsigned x1, unsigned y1)
+encode_rect(struct sgx_resource *res, unsigned level, const uint8_t *src,
+            uint8_t *dst, unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
    struct pipe_resource *prsc = &res->base;
    unsigned w = u_minify(prsc->width0, level),
@@ -164,8 +178,6 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
    unsigned bpp = sgx_tex_bpp(prsc->format),
             cbpp = util_format_get_blocksize(prsc->format);
    unsigned src_stride = util_format_get_stride(prsc->format, w);
-   const uint8_t *src = (const uint8_t *)res->data + res->level_offset[level] +
-                        (size_t)layer * src_stride * h;
    bool rgbx = prsc->format == PIPE_FORMAT_R8G8B8X8_UNORM;
    bool widen = cbpp != bpp; /* R8, RG8: the texel made RGBA8 */
 
@@ -235,13 +247,109 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
    }
 }
 
+/* a box of a level of the CPU copy */
+static void
+encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
+           uint8_t *dst, unsigned x0, unsigned y0, unsigned x1, unsigned y1)
+{
+   const struct pipe_resource *prsc = &res->base;
+   unsigned w = u_minify(prsc->width0, level),
+            h = u_minify(prsc->height0, level);
+   unsigned stride = util_format_get_stride(prsc->format, w);
+
+   encode_rect(res, level,
+               (const uint8_t *)res->data + res->level_offset[level] +
+                  (size_t)layer * stride * h,
+               dst, x0, y0, x1, y1);
+}
+
+/* The device levels past tail_from: each a 2x2 box filter of the one before,
+ * from tail_from's CPU copy. */
+static void
+fill_tail(struct sgx_resource *res)
+{
+   const struct pipe_resource *prsc = &res->base;
+   enum pipe_format f = prsc->format;
+   unsigned last = res->tail_from, end = sgx_tex_dev_last(prsc);
+   unsigned w = u_minify(prsc->width0, last), h = u_minify(prsc->height0, last);
+   unsigned cbpp = util_format_get_blocksize(f);
+   float *a, *b;
+   uint8_t *row;
+
+   if (end == last)
+      return;
+   a = malloc((size_t)w * h * 4 * sizeof(float));
+   b = malloc((size_t)w * h * 4 * sizeof(float));
+   row = malloc((size_t)w * h * cbpp);
+   if (!a || !b || !row)
+      goto out;
+   for (unsigned y = 0; y < h; y++)
+      util_format_unpack_rgba(f, a + (size_t)y * w * 4,
+                              (const uint8_t *)res->data +
+                                 res->level_offset[last] +
+                                 (size_t)y * util_format_get_stride(f, w),
+                              w);
+   for (unsigned l = last + 1; l <= end; l++) {
+      unsigned nw = MAX2(w / 2, 1), nh = MAX2(h / 2, 1);
+      float *t;
+
+      for (unsigned y = 0; y < nh; y++) {
+         for (unsigned x = 0; x < nw; x++) {
+            unsigned x0 = MIN2(2 * x, w - 1), x1 = MIN2(2 * x + 1, w - 1),
+                     y0 = MIN2(2 * y, h - 1), y1 = MIN2(2 * y + 1, h - 1);
+
+            for (unsigned c = 0; c < 4; c++)
+               b[((size_t)y * nw + x) * 4 + c] =
+                  (a[((size_t)y0 * w + x0) * 4 + c] +
+                   a[((size_t)y0 * w + x1) * 4 + c] +
+                   a[((size_t)y1 * w + x0) * 4 + c] +
+                   a[((size_t)y1 * w + x1) * 4 + c]) *
+                  0.25f;
+         }
+      }
+      for (unsigned y = 0; y < nh; y++)
+         util_format_pack_rgba(f, row + (size_t)y * nw * cbpp,
+                               b + (size_t)y * nw * 4, nw);
+      encode_rect(res, l, row,
+                  (uint8_t *)res->bo.map + sgx_tex_offset(prsc, l, 0), 0, 0, nw,
+                  nh);
+      t = a, a = b, b = t;
+      w = nw, h = nh;
+   }
+out:
+   free(a);
+   free(b);
+   free(row);
+}
+
 void
 sgx_tex_encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
                    unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
+   /* past tail_from the device holds the filtered tail instead */
+   if (level > res->tail_from && res->base.target == PIPE_TEXTURE_2D)
+      return;
    encode_box(res, level, layer,
               (uint8_t *)res->bo.map + sgx_tex_offset(&res->base, level, layer),
               x0, y0, x1, y1);
+   if (level == res->tail_from)
+      fill_tail(res);
+}
+
+/* The tail from level l instead: the levels it covered back from the CPU
+ * copy up to l, then the tail past l (the caller saw to renders that read
+ * the device copy) */
+void
+sgx_tex_set_tail(struct sgx_resource *res, unsigned l)
+{
+   unsigned old = res->tail_from;
+
+   res->tail_from = l;
+   for (unsigned k = old + 1; k <= MIN2(l, res->base.last_level); k++)
+      encode_box(res, k, 0,
+                 (uint8_t *)res->bo.map + sgx_tex_offset(&res->base, k, 0), 0,
+                 0, ~0u, ~0u);
+   fill_tail(res);
 }
 
 void
