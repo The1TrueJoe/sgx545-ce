@@ -832,8 +832,12 @@ has a render on the 3D:
 4. **At its end** (pc 0x0df7): 0x69c = 1, and the layer word gets b1. The TA
    continues, and the scene's last kick renders it normally.
 
-**On hardware** (DDK microkernel, Minecraft, 1 MiB PB from the `PBSize`
-apphint, regsample 2026-11-09, with no recoveries):
+**On hardware** (DDK microkernel, Minecraft, regsample 2026-11-09, with no
+recoveries). The `PBSize` apphint (1 MiB, and again 4 MiB) makes the client
+allocate a per-context PB from the "Percontext 3DParameters" heap instead of
+using the device's shared one. Its thresholds come out the same at both sizes
+(TA 0x72, global 0x40). A size of 0x422 pages failed to allocate. The pattern
+below does not depend on the PB's size:
 - A partial render frees only about 20% of the pages: the TA pauses at the
   global threshold (0x40 there) and resumes at 51-54.
 - The resumed TA allocates up to the threshold again within about 50 µs and
