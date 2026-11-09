@@ -14,3 +14,4 @@ mesa-utils
 mesa-utils-bin
 glmark2-x11
 glmark2-es2-x11
+libdrm-tests

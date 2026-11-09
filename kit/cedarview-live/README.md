@@ -37,7 +37,9 @@ power off, boot again.
 2. gma500 handing the GPU over, and powervr_sgx starting the open microkernel. Then the
    display state, read-only (`display-start.txt`, again as `display-after-desktop.txt`):
    each DRM connector's status, enabled, dpms and modes; the backlight's values; gma500's
-   kernel lines. With `xrandr.txt` from inside X, this shows what the display side believes,
+   kernel lines; the atomic state (`/sys/kernel/debug/dri/*/state`) and `modetest -c -p`
+   (CRTCs, planes and their framebuffers), so a lit-but-black scanout reads differently
+   from a CRTC or plane that is off. With `xrandr.txt` from inside X, this shows what the display side believes,
    since the test cannot see whether the panel actually lit up.
 3. `powervr_sgx_test` and `powervr_sgx_frame -n 10`.
 4. The blit, then its candidates, stopping only if the GPU is lost:

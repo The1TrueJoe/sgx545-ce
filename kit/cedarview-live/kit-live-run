@@ -56,6 +56,17 @@ display() {   # TAG: what the display side says (connectors, backlight, gma500),
 		done
 		echo "== gma500 in the kernel log"
 		dmesg | grep -iE 'gma500|psb_gfx|cedarview|\[drm\].*(lvds|panel|backlight|connector)'
+		# the scanout side (pipes, planes, CRTCs): a dark panel with a live scanout
+		# reads differently from one whose CRTC or plane is off
+		mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
+		for st in /sys/kernel/debug/dri/*/state; do
+			[ -r "$st" ] || continue
+			echo "== $st"; cat "$st"
+		done
+		for c in /dev/dri/card*; do
+			echo "== modetest -D $c -c -p"
+			timeout 10 modetest -D "$c" -c -p
+		done
 	} > "$R/display-$1.txt" 2>&1
 }
 save() {   # the results file on the stick's SGXKIT partition (live-boot mounts it read-only)
