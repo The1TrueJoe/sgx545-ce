@@ -832,6 +832,20 @@ has a render on the 3D:
 4. **At its end** (pc 0x0df7): 0x69c = 1, and the layer word gets b1. The TA
    continues, and the scene's last kick renders it normally.
 
+**On hardware** (DDK microkernel, Minecraft, 1 MiB PB from the `PBSize`
+apphint, regsample 2026-11-09, with no recoveries):
+- A partial render frees only about 20% of the pages: the TA pauses at the
+  global threshold (0x40 there) and resumes at 51-54.
+- The resumed TA allocates up to the threshold again within about 50 µs and
+  raises another OOM.
+- After 2-4 partial renders, the next OOM takes the grant path. It pauses
+  the TA for about 33 µs: 0x628 += 16, 0x624 += 32, then the free-list
+  reload from the live counters. There is no render.
+- The scene then finishes, and the TA finish puts 0x628 and 0x624 back.
+- Over the run: 16,211 pauses with a partial render, 9,145 grants.
+- During the render, 0x50c = 0x408, 0x63c = 3 and 0x630 = 2. 0x630 reads
+  back. Other scenes use both slots meanwhile (0x630 = 4, 5, 7).
+
 **Layer words.** RT entry word 12 points at one u32 per layer; RT entry
 word 10 is the count. A scene's first kick clears them (pc 0x087e,
 0x0a80). A render's completion sets b0 (pc 0x0f8f), and a partial render's
