@@ -347,6 +347,15 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   and command are fresh, and released contexts flush the data caches (8da962c,
   as the DDK does after its cleanup). With open-ukernel; behind the render
   path's out-of-memory handling, since Mesa submits no transfers.
+- [ ] **Runtime PM while a client renders.** On the debug kernel (lockdep,
+  KASAN, kmemleak) the desktop got no frames with runtime suspend on and
+  rendered with it off: submitted work never resumed the GPU, with no timeout
+  (log mc-bench reset-desk-ab, 2026-11-09). The release kernel suspends and
+  resumes between frames at a 1 ms autosuspend delay and renders fine, so it is
+  not the window alone. Stopgap (535b5dc): a render context holds a runtime-PM
+  reference for its life, so the GPU stays powered while any GL client is open.
+  To find the debug-only path and drop the stopgap, so the GPU can power off
+  between frames again.
 - [ ] **Graveyard policy.** Released firmware objects are kept until the next
   restart unless `reap_after_render`; to settle with open-ukernel whether a
   later render's completion is enough, then drop the parameter.
