@@ -14,7 +14,7 @@
 set -eu
 TAR=$1 DEB=$2 OUT=$3
 here=$(cd "$(dirname "$0")" && pwd)
-REPO=$(cd "$here/../.." && pwd)
+REPO=$(cd "$here/../../.." && pwd)
 KIT=$REPO/kit/cedarview-live
 BOX=${BOX:?the address of the box}
 DESK=${DESK:-/opt/desk}

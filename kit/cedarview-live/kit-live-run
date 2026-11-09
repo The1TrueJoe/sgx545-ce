@@ -158,6 +158,7 @@ DESK=
 if /usr/local/bin/kit-desktop "$R"; then DESK=1; fi
 chvt 1 2>/dev/null
 [ -n "$DESK" ] || result FAIL "the desktop (see Xorg.0.log)"
+lost && result FAIL "the GPU was lost during the desktop test: the desktop results after that are not valid"
 dumps desktop
 
 step 6 "Saving the results to the stick"

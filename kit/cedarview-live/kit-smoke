@@ -12,15 +12,24 @@ res() { printf '    %-5s %s\n' "$1" "$2" >> "$R/smoke.txt"; }
 IM=$(command -v magick || command -v convert)
 shot() {   # NN-name WHAT: a screenshot, and whether it shows something
 	local f=$O/$1.png
-	import -window root -resize 50% "png:$f" 2>> "$R/smoke-log.txt"
-	if [ ! -s "$f" ]; then res FAIL "screenshot $1: $2 (not taken)"; return; fi
+	local err
+	err=$(import -window root -resize 50% "png:$f" 2>&1)
+	[ -n "$err" ] && echo "import $1: $err" >> "$R/smoke-log.txt"
+	if [ ! -s "$f" ]; then res FAIL "screenshot $1: $2 (not taken: $(echo "$err" | head -2 | tr '\n' ' '))"; return; fi
 	local sd colors
 	sd=$($IM "$f" -format '%[fx:standard_deviation]' info: 2>/dev/null)
 	colors=$(identify -format '%k' "$f" 2>/dev/null)
+	local sum
+	sum=$(md5sum < "$f")
+	if [ "$sum" = "${LASTSHOT:-}" ]; then
+		res FAIL "screenshot $1: $2 (the same as the one before: the screen stopped updating)"
+		return
+	fi
+	LASTSHOT=$sum
 	if awk -v s="${sd:-0}" -v c="${colors:-0}" 'BEGIN { exit !(s > 0.02 && c > 16) }'; then
 		res PASS "screenshot $1: $2"
 	else
-		res FAIL "screenshot $1: $2 (blank or one colour: sd $sd, $colors colours)"
+		res FAIL "screenshot $1: $2 (blank or one color: sd $sd, $colors colors)"
 	fi
 }
 gpu() {   # whether GL renders on the SGX
@@ -39,7 +48,7 @@ shot 02-glxinfo "a terminal with glxinfo"
 pkill -f kit-glxinfo
 
 G=$(command -v es2gears_x11 || command -v es2gears || command -v glxgears)
-timeout 12 "$G" > "$R/gears.txt" 2>&1 &
+timeout 12 stdbuf -oL "$G" > "$R/gears.txt" 2>&1 &   # line-buffered: a killed gears flushes nothing
 sleep 8
 shot 03-gears "$(basename "$G") running"
 wait
