@@ -354,6 +354,8 @@ both configurations).
   kmemleak and debug objects (`drm/ci/debug.fragment`). To run: the uAPI
   suite, the frame, blit, hang and PRIME tests on both microkernels, then
   `dmesg` and `/sys/kernel/debug/kmemleak`. Findings get fixed and listed here.
+  Single-process tests: clean (3ca68ab; DMA segment size fixed). Open: a
+  three-process soak took the box's userspace down (log 2026-11-08-2300).
 - [ ] **IGT.** The uAPI tests are IGT-shaped C (`drm/tests`); upstream will
   want them as an IGT `powervr_sgx` test binary.
 
@@ -462,7 +464,7 @@ Documentation.
 | generated register header | done: `pvrsgx_regs.h` comes from the GPL `sgx545defs.h` through `drm/tools/gen_regs.py` (CI diffs it); our names for the registers that header leaves out, and the MMU constants, are in `pvrsgx_hw.h` |
 | one `pvrsgx_` prefix | done (the shared stream files are now `pvrsgx_stream*`) |
 | ISA generation in the core table | done: the validator picks its USSE form table by the core's ISA |
-| runtime checkers on the CE5300 | debug kernel to rebuild on the trimmed driver; waiting for a free box |
+| runtime checkers on the CE5300 | single-process tests clean under lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (3ca68ab, one finding fixed); a three-process soak lost the box's userspace, cause open |
 
 **uAPI effect.** v1's header leaves out the transfer context and job types
 and their structures (F1 appends them; the enums are append-only). Mesa
