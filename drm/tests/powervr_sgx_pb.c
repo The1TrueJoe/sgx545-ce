@@ -18,8 +18,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
+
+/* musl's <sys/ioctl.h> redefines the kernel's _IOC: declare ioctl alone. */
+int ioctl(int fd, unsigned long req, ...);
 
 #include <drm.h>
 
