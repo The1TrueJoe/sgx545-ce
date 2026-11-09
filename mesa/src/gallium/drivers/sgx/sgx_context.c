@@ -253,6 +253,31 @@ sgx_context_destroy(struct pipe_context *pctx)
    FREE(ctx);
 }
 
+/* A GPU reset since the last ask (GL_ARB_robustness).  The winsys has
+ * already gone on with a new kernel context; the frames in flight at the
+ * reset were lost. */
+static enum pipe_reset_status
+sgx_get_device_reset_status(struct pipe_context *pctx)
+{
+   struct sgx_context *ctx = sgx_context(pctx);
+   struct sgx_screen *screen = sgx_screen(pctx->screen);
+   enum sgxws_reset r;
+
+   simple_mtx_lock(&screen->lock);
+   r = sgxws_reset_status(ctx->hw);
+   simple_mtx_unlock(&screen->lock);
+   switch (r) {
+   case SGXWS_RESET_GUILTY:
+      return PIPE_GUILTY_CONTEXT_RESET;
+   case SGXWS_RESET_INNOCENT:
+      return PIPE_INNOCENT_CONTEXT_RESET;
+   case SGXWS_RESET_LOST:
+      return PIPE_UNKNOWN_CONTEXT_RESET;
+   default:
+      return PIPE_NO_RESET;
+   }
+}
+
 struct pipe_context *
 sgx_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 {
@@ -282,6 +307,7 @@ sgx_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    ctx->base.destroy = sgx_context_destroy;
    ctx->base.flush = sgx_flush;
    ctx->base.flush_resource = sgx_flush_resource;
+   ctx->base.get_device_reset_status = sgx_get_device_reset_status;
    ctx->base.set_debug_callback = u_default_set_debug_callback;
 
    slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);

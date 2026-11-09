@@ -72,6 +72,7 @@ struct zombie {
 struct psgx_dev {
    struct sgxws_dev base;
    int fd;
+   bool lost;         /* -EIO: the GPU couldn't be recovered; nothing is sent */
    uint32_t vm;       /* VM context */
    uint32_t timeline; /* syncobj: every job signals the next point */
    simple_mtx_t lock; /* the address space, the timeline's points, the zombies */
@@ -100,6 +101,7 @@ struct psgx_bo {
 
 struct psgx_ctx {
    uint32_t handle;
+   uint32_t gen;                    /* kernel contexts made after resets */
    uint64_t point[SGXWS_MAX_SLOTS]; /* by kick number % c->slots */
 };
 
@@ -561,27 +563,69 @@ psgx_code_reset(struct sgxws_dev *d, struct sgxws_bo *bo)
 /* ------------------------------------------------------------------ context */
 
 static int
-psgx_ctx_init(struct sgxws_ctx *c)
+create_context(struct psgx_dev *dd, uint32_t *handle)
 {
-   struct psgx_dev *dd = ddev(c->dev);
-   struct psgx_ctx *k = calloc(1, sizeof(*k));
    struct drm_powervr_sgx_ioctl_create_context_args a = {
       .type = DRM_POWERVR_SGX_CTX_TYPE_RENDER,
       .priority = DRM_POWERVR_SGX_CTX_PRIORITY_NORMAL,
       .vm_context_handle = dd->vm,
    };
+   int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
+
+   if (e)
+      sgxws_err("CREATE_CONTEXT failed: %d\n", e);
+   *handle = a.handle;
+   return e;
+}
+
+static int
+psgx_ctx_init(struct sgxws_ctx *c)
+{
+   struct psgx_ctx *k = calloc(1, sizeof(*k));
    int e;
 
    if (!k)
       return -ENOMEM;
-   if ((e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a))) {
-      sgxws_err("CREATE_CONTEXT failed: %d\n", e);
+   if ((e = create_context(ddev(c->dev), &k->handle))) {
       free(k);
       return e;
    }
-   k->handle = a.handle;
    c->k = k;
    return 0;
+}
+
+/* A context a reset made unusable (its submissions fail with -ECANCELED):
+ * what the reset was to it, then a new kernel context in its place, whose
+ * RT datasets are made again at their next render (UAPI.md,
+ * GET_CONTEXT_STATE).  Called with dd->lock held. */
+static void
+replace_context(struct sgxws_ctx *c)
+{
+   struct psgx_dev *dd = ddev(c->dev);
+   struct psgx_ctx *k = c->k;
+   struct drm_powervr_sgx_ioctl_get_context_state_args st = {.handle =
+                                                                k->handle};
+   struct drm_powervr_sgx_ioctl_destroy_context_args d = {.handle = k->handle};
+   uint32_t handle;
+
+   if (!xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &st) &&
+       st.state == DRM_POWERVR_SGX_CONTEXT_STATE_INNOCENT) {
+      if (c->reset != SGXWS_RESET_GUILTY)
+         c->reset = SGXWS_RESET_INNOCENT;
+   } else {
+      c->reset = SGXWS_RESET_GUILTY;
+   }
+   sgxws_err("GPU reset (%s): a new context; the frames in flight are lost\n",
+             c->reset == SGXWS_RESET_GUILTY ? "this context's job"
+                                            : "another context's job");
+   xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
+   if (create_context(dd, &handle)) {
+      dd->lost = true;
+      c->reset = SGXWS_RESET_LOST;
+      return;
+   }
+   k->handle = handle;
+   k->gen++;
 }
 
 static void
@@ -614,6 +658,7 @@ psgx_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
       return e;
    }
    rt->k = (void *)(uintptr_t)a.handle;
+   rt->ctx_gen = k->gen;
    return 0;
 }
 
@@ -625,7 +670,8 @@ psgx_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
    int e =
       xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &a);
 
-   if (e)
+   /* one of a context a reset replaced went with it */
+   if (e && rt->ctx_gen == ((struct psgx_ctx *)c->k)->gen)
       sgxws_err("DESTROY_RT_DATASET failed: %d\n", e);
 }
 
@@ -683,6 +729,17 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    uint64_t point, t0;
    int e = 0;
 
+   /* an RT dataset of the context a reset replaced: made again (the old one
+    * went with its context) */
+   if (c->rt->ctx_gen != k->gen && !dd->lost) {
+      struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args d = {
+         .handle = (uint32_t)(uintptr_t)c->rt->k};
+
+      xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET, &d);
+      if ((e = psgx_rt_init(c, c->rt)))
+         dd->lost = true;
+   }
+
    /* the scene's stream (it ends with the terminate words), then a stream
     * of the terminate words alone */
    for (unsigned i = 0; i < TA_KICKS; i++) {
@@ -737,10 +794,20 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       .rt_dataset_handle = (uint32_t)(uintptr_t)c->rt->k,
    };
    t0 = sgxws_now_ns();
-   if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
+   if (dd->lost) {
+      e = -EIO; /* nothing reaches a lost device */
+   } else if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
       e = -ECANCELED; /* built, not sent */
    } else if ((e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj))) {
-      sgxws_err("SUBMIT_JOBS failed: %d\n", e);
+      if (e == -ECANCELED) {
+         replace_context(c);
+      } else if (e == -EIO) {
+         sgxws_err("the GPU is lost: nothing more is rendered\n");
+         dd->lost = true;
+         c->reset = SGXWS_RESET_LOST;
+      } else {
+         sgxws_err("SUBMIT_JOBS failed: %d\n", e);
+      }
    }
    c->ns_kick += sgxws_now_ns() - t0;
    /* a job that never ran still gets its point, so waits on it end */
@@ -754,7 +821,9 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    for (unsigned i = 0; i < c->n_use; i++)
       if (c->use[i].write)
          dbo(c->use[i].bo)->write_point = point;
-   return e == -ECANCELED ? 0 : e;
+   /* a lost frame isn't an error to the caller: the reset is reported
+    * through sgxws_reset_status */
+   return e == -ECANCELED || e == -EIO ? 0 : e;
 }
 
 static int

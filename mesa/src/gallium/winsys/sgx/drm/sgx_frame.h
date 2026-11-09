@@ -108,6 +108,8 @@ struct sgxws_rt_numbers {
 /* the TA/3D structures for one w x h target */
 struct sgxws_rt {
    uint32_t w, h;
+   uint32_t ctx_gen; /* the backend's context it was made in (a reset makes
+                        another) */
    struct sgxws_rt_numbers n;
    uint32_t frames;   /* frames rendered into it */
    uint32_t seq;      /* its last render's kick number */
@@ -188,6 +190,7 @@ struct sgxws_ctx {
    uint64_t ns_latency_scanout;
    unsigned n_latency_scanout; /* of those, the ones into the scanout buffer */
    unsigned frames;
+   enum sgxws_reset reset; /* since sgxws_reset_status last asked */
    uint64_t gpu_indices,
       gpu_verts; /* stats: the VDM's indices and the vertices behind them */
 };

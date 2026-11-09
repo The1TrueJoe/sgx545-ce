@@ -157,6 +157,8 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    u_init_pipe_screen_caps(pscreen, 1);
    caps->graphics = true;
    caps->npot_textures = true;
+   /* GPU resets reported (sgx_get_device_reset_status): ARB_robustness */
+   caps->device_reset_status_query = true;
    /* blending is shader code (STATE.md section 3): any equation per channel */
    caps->blend_equation_separate = true;
    caps->uma = true;

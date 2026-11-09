@@ -86,6 +86,17 @@ struct sgxws_target {
    bool zls_load;
 };
 
+/* A GPU reset since sgxws_reset_status last asked: this context's job
+ * hung or faulted (guilty), another's did (innocent), or the device was
+ * lost.  The context goes on with a new kernel context: the frames in flight
+ * at the reset are lost. */
+enum sgxws_reset {
+   SGXWS_RESET_NONE,
+   SGXWS_RESET_GUILTY,
+   SGXWS_RESET_INNOCENT,
+   SGXWS_RESET_LOST,
+};
+
 /* the pixels of a w x h render's tile-padded size (32 x 16 tiles) */
 static inline uint32_t
 sgxws_zls_pixels(uint32_t w, uint32_t h)
@@ -357,6 +368,7 @@ int sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms);
 struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d);
 void sgxws_ctx_destroy(struct sgxws_ctx *c);
 
+enum sgxws_reset sgxws_reset_status(struct sgxws_ctx *c);
 struct sgxws_rt *sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h);
 void sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *rt);
 

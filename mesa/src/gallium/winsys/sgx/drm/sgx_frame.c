@@ -841,6 +841,15 @@ sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h)
    return s;
 }
 
+enum sgxws_reset
+sgxws_reset_status(struct sgxws_ctx *c)
+{
+   enum sgxws_reset r = c->reset;
+
+   c->reset = SGXWS_RESET_NONE;
+   return r;
+}
+
 void
 sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *s)
 {
