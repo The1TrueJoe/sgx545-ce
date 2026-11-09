@@ -1,2 +1,3 @@
-sgx545-ukernel-openhc.bin
-sgx545-ukernel-openhc.json
+*_ukernel.bin
+*_ukernel.bin.pat
+*_ukernel.json

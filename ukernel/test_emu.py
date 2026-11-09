@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright © 2026 Joseph Telaak
-"""Offline check of openHC's microkernel (ukernel/) in the emulator.
+"""Offline check of the open microkernel (ukernel/) in the emulator.
 
 Builds the image, then drives its entries through the USSE emulator
 (tools/ukernel/emu.py) and asserts the behaviour docs/UKERNEL.md requires.
@@ -38,8 +38,8 @@ def patch_limm(code, off, v):
 
 
 def load():
-    binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel-openhc.json")
+    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+    manp = os.path.join(HERE, "sgx545_ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     man = json.load(open(manp))
     # patch the control-block-base limm as srvinit -o does on the box
@@ -73,7 +73,7 @@ def test_init(code, man):
     mem.wr(HOSTCTL + 4 * HC_INTCLEAR, 0)        # clean boot: HWR bit clear
     run_event(u, man, regs)
     assert mem.rd(HOSTCTL) == 1, "init must set ui32InitStatus = PVRSRV_USSE_EDM_INIT_COMPLETE"
-    assert mem.rd(CTLBLK + 4 * 0x18) == 0x00010000, "init must write the advisory openHC version word"
+    assert mem.rd(CTLBLK + 4 * 0x18) == 0x00010000, "init must write the advisory version word"
     print("  init (clean): ui32InitStatus = 1, version word written  OK")
 
 
@@ -110,16 +110,17 @@ def test_render_teardown(code, man):
     live DDK over a real frame, this guards it with no trace or firmware."""
     u, mem, regs = machine(code)
     mem.wr(HOSTCTL, 1)                               # already initialised -> dispatch on events
-    rd, rtentry, ctx, rtdata = 0x32041a00, 0x32041cf0, 0x3000e000, 0x32041d60
+    rd, rtentry, ctx, rtdata, deps = 0x32041a00, 0x32041cf0, 0x3000e000, 0x32041d60, 0x32041f80
     sync0, sync1 = 0x2d0030f4, 0x2d0030fc
     # the control-block scratch do_ta would have stored
     mem.wr(CTLBLK + 4 * 0x32, rd)                    # SC_RD
     mem.wr(CTLBLK + 4 * 0x34, rtentry)               # SC_RTENTRY
     mem.wr(CTLBLK + 4 * 0x30, ctx)                   # SC_CTX
     mem.wr(rtentry + 0x30, rtdata)                   # RT-data pointer
-    mem.wr(rd + 0xd0, sync0)                         # destination sync 0 address
-    mem.wr(rd + 0x240, sync1)                        # destination sync 1 address
-    mem.wr(rd + 4 * 56, 0)                           # no TA3D dependency block
+    mem.wr(rd + 0xd0, sync0)                         # destination sync 0 = render-details word 0x34
+    mem.wr(rd + 0xe0, deps)                          # TA3D dependency block pointer (word 56)
+    mem.wr(deps + 0x00, sync1)                       # deps[0] = destination sync 1 address
+    mem.wr(deps + 0x14, 0)                           # no complete-addr -> counter step skipped
     mem.wr(rd + 4 * 65, 1)                           # write-ops word -> rd+0x108 := 0
     mem.wr(sync0, 7); mem.wr(sync1, 7)               # non-zero, must be cleared
     regs.v[CR_EVENT_STATUS] = EV_3D_END
@@ -166,7 +167,7 @@ def test_xfer_done(code, man):
 
 def main():
     code, man = load()
-    print("openHC microkernel offline tests:")
+    print("microkernel offline tests:")
     test_init(code, man)
     test_recovery_init(code, man)
     test_raise_irq(code, man)

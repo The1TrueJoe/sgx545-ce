@@ -1,0 +1,22 @@
+=== wait for box ===
+=== push uk-timer ===
+Warning: Permanently added '10.0.0.113' (ED25519) to the list of known hosts.
+Warning: Permanently added '10.0.0.113' (ED25519) to the list of known hosts.
+local e8f8ff1319c971d0fd17b29ccabc7eb8 / remote e8f8ff1319c971d0fd17b29ccabc7eb8
+boot 1: srvinit: srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d27000)
+R.R.R..R.R  -> 5/10 rendered
+56f8466aa4cf3b08cfbd166b63dd88ec  /tmp/f1.bin
+  -- HWR check (raw dmesg; should be ABSENT now) --
+     HWR lines: 5
+boot 2: srvinit: srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d25000)
+R.R...R..R  -> 4/10 rendered
+56f8466aa4cf3b08cfbd166b63dd88ec  /tmp/f1.bin
+  -- HWR check (raw dmesg; should be ABSENT now) --
+     HWR lines: 6
+boot 3: srvinit: srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d63000)
+R.R.R.R..R  -> 5/10 rendered
+56f8466aa4cf3b08cfbd166b63dd88ec  /tmp/f1.bin
+  -- HWR check (raw dmesg; should be ABSENT now) --
+     HWR lines: 5
+===== timer-fix: 14 / 30 frames rendered (baseline 13/30) =====
+box rebooting to clean p1 (/boot/once removed, lock released by reboot)

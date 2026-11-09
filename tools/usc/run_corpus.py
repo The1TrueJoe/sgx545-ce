@@ -1,7 +1,7 @@
 """Compile a GLSL corpus (tools/isa/corpus/c*.glsl format: "@frag name" /
 "@vert name" headers) with sgxc.
 
-    python3 -I tools/usc/run_corpus.py SGXC corpus.glsl OUTDIR [-k name] [--layout]
+    python3 -I tools/usc/run_corpus.py SGXC corpus.glsl OUTDIR [-k name] [--layout] [--f16|--driver]
 
 Each fragment shader is paired with a pass-through vertex shader that
 writes every varying it reads (and each vertex shader with a fragment
@@ -91,6 +91,8 @@ def calib_pins(path):
 
 
 F16 = False
+DRIVER = False
+MEDIUMP = False
 
 
 def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
@@ -121,6 +123,8 @@ def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
     # which the int-to-float lowering doesn't take in loops)
     if F16 and re.search(r"_[ml]$", name):
         args.append("-p")
+    if DRIVER:
+        args += ["-p", "-L", "-D", "-F"] + (["-M"] if MEDIUMP else [])
     args += ["-o", base, base + ".vert", base + ".frag"]
     r = subprocess.run(args, capture_output=True, text=True)
     stem = os.path.join(outdir, f"{idx:03d}-{name}")
@@ -147,9 +151,13 @@ def main():
     ap.add_argument("-k")
     ap.add_argument("--layout", action="store_true")
     ap.add_argument("--f16", action="store_true", help="sgxc -p: mediump in F16")
+    ap.add_argument("--driver", action="store_true",
+                    help="every shader as the gallium driver compiles it (sgxc -p -L -D -F)")
+    ap.add_argument("--fs-mediump", action="store_true",
+                    help="with --driver: fragment floats mediump (sgxc -M, st's fixed-function programs)")
     a = ap.parse_args()
-    global F16
-    F16 = a.f16
+    global F16, DRIVER, MEDIUMP
+    F16, DRIVER, MEDIUMP = a.f16, a.driver, a.fs_mediump
     os.makedirs(a.outdir, exist_ok=True)
     n_ok = n = 0
     for idx, (kind, name, src) in enumerate(parse(a.corpus)):

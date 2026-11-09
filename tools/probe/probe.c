@@ -39,6 +39,11 @@
  *   PROBE_SCISSOR2="x y w h"   glScissor before every draw after the first (PROBE_DRAWS >= 2)
  *   PROBE_VIEWPORT2="x y w h"  glViewport likewise
  *   PROBE_NOSCISSOR2=1         glDisable(SCISSOR_TEST) before every draw after the first
+ *   PROBE_FLUSHMID=n           before every draw after the first: 1 glFlush, 2 glFinish,
+ *                              3 glReadPixels of one pixel (a render split mid-frame)
+ *   PROBE_SECOND="z r g b a"   every draw after the first at clip z, in this colour (needs PROBE_Z)
+ *   PROBE_DEPTH2="func mask"   glDepthFunc, glDepthMask before every draw after the first (GL enum, 0/1)
+ *   PROBE_BLEND2="src dst"     glEnable(BLEND), glBlendFunc likewise
  * Textures (PROBE_TEX >= 1; all units the same):
  *   PROBE_TEXFMT=name          rgba8888 rgb565 rgba4444 rgba5551 rgb888 l8 a8 la88   (rgba8888)
  *                              OES_depth_texture / packed_depth_stencil: depth16 depth32 d24s8;
@@ -140,6 +145,7 @@ typedef char GLchar;
 	X(GL, void, glDisableVertexAttribArray, (GLuint)) \
 	X(GL, void, glDrawArrays, (GLenum, GLint, GLsizei)) \
 	X(GL, void, glFinish, (void)) \
+	X(GL, void, glFlush, (void)) \
 	X(GL, GLenum, glGetError, (void)) \
 	X(GL, void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *)) \
 	X(GL, void, glViewport, (GLint, GLint, GLsizei, GLsizei)) \
@@ -806,6 +812,31 @@ int main(void)
 			glDisable(GL_SCISSOR_TEST);
 		if (i == 1 && floats("PROBE_VIEWPORT2", f, 4, "") == 4)
 			glViewport((GLint)f[0], (GLint)f[1], (GLsizei)f[2], (GLsizei)f[3]);
+		if (i == 1 && nz && floats("PROBE_SECOND", f, 5, "") == 5) {
+			for (int k = 0; k < nv; k++)
+				verts[pos * k + 2] = f[0];
+			if (loc >= 0)
+				glUniform4f(loc, f[1], f[2], f[3], f[4]);
+		}
+		if (i == 1 && ints("PROBE_DEPTH2", v, 2, NULL) == 2) {
+			glDepthFunc((GLenum)v[0]);
+			glDepthMask((GLboolean)v[1]);
+		}
+		if (i == 1 && ints("PROBE_BLEND2", v, 2, NULL) == 2) {
+			glEnable(GL_BLEND);
+			glBlendFunc((GLenum)v[0], (GLenum)v[1]);
+		}
+		if (i >= 1 && getenv("PROBE_FLUSHMID")) {
+			int m = atoi(getenv("PROBE_FLUSHMID"));
+
+			note("flush mid-frame");
+			if (m == 1)
+				glFlush();
+			else if (m == 2)
+				glFinish();
+			else
+				glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		}
 		note("draw");
 		glDrawArrays(prim, 0, nv);
 	}

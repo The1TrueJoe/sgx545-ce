@@ -14,8 +14,8 @@ Old netbooks and nettops with **Intel Cedarview (GMA 3600/3650: Atom D2500/D2550
 should get GPU acceleration on a **stock** modern distro (Debian, Ubuntu, Fedora,
 Arch) with no custom image and no setup. The only way to get that is
 **upstream**: a kernel DRM driver in Linux, the microkernel in `linux-firmware`,
-and the GL driver in Mesa. Distros then pick it up on their own. The Control4
-EA (CE5300/CE5310) stays the development and openHC target, but the
+and the GL driver in Mesa. Distros then pick it up on their own. The CE5300/CE5310
+boards stay the development target, but the
 deliverable is upstream code that runs on Cedarview. We are **not** building a
 distro. A DKMS module plus out-of-tree Mesa packages (apt/PPA/COPR/AUR) is an
 acceptable *bridge* until things are merged, never the destination.
@@ -30,7 +30,7 @@ core.
 
 | Piece | State | Upstreamable as-is? |
 |---|---|---|
-| `kernel/` (`pvrsrvkm`) | Intel's GPL DDK 1.7 ported to Linux 7.1, with an i386↔x86_64 compat bridge. Runs on the EA. | **No.** The services/bridge-ioctl uAPI will not be accepted (§3.1). Keep it as openHC's driver and the A/B rig. |
+| `kernel/` (`pvrsrvkm`) | Intel's GPL DDK 1.7 ported to Linux 7.1, with an i386↔x86_64 compat bridge. Runs on the EA. | **No.** The services/bridge-ioctl uAPI will not be accepted (§3.1). Keep it as the downstream driver and the A/B rig. |
 | `srvinit/` | Userspace GPU bring-up (replaces `libsrv_init`); `-o` loads our microkernel | **No.** Upstream, the *kernel* loads firmware and initialises the GPU. |
 | `ukernel/` | Open microkernel in USSE assembly, validated offline: init, host-kick dispatch, TA kick, TA finished, 3D start, render done; register programming matches the DDK per phase. 3ce8f51 fixed the init path offline (bare-DOUTU pds0 + loader-patched limms). | The **key to the firmware problem** (§3.3). Not complete: render teardown, transfers, cleanup, power, multi-render bookkeeping, hardware validation. |
 | `mesa/` | Gallium driver + NIR→USSE compiler, overlay on Mesa 26.2.5. EGL fbdev only, GLES2, no GBM. Pixel-exact vs the DDK in the A/B cases. Minecraft through gl4es at ~33.5 FPS vs the DDK's ~41. | **Compiler and most of the driver: yes, in spirit.** The winsys (`libpvr` over the services bridge) must be rewritten for a new uAPI. |
@@ -118,13 +118,13 @@ Reviewers for reverse-engineered drivers (lima, etnaviv, asahi, panfrost) ask ho
 
 ### 3.7 Mesa expectations
 
-- **Location and name:** new gallium driver plus compiler. Talk to the `src/imagination` (Rogue) maintainers early about naming and placement. `src/imagination/sgx/…` versus `src/gallium/drivers/sgx545` is their call, and the ISA is unrelated to Rogue's. The DRM driver name (what `drmGetVersion` returns) decides the loader mapping. **Don't pick `pvr`**, which is taken.
-- **Platforms:** with a proper render node and dma-buf, gallium gives you GBM, EGL Wayland/X11/surfaceless and DRI3 almost for free. The fbdev EGL platform in the overlay is openHC-only and won't go upstream (Mesa has no fbdev platform).
+- **Location and name:** new gallium driver plus compiler. Talk to the `src/imagination` (Rogue) maintainers early about naming and placement. `src/imagination/sgx/…` versus `src/gallium/drivers/sgx` is their call, and the ISA is unrelated to Rogue's. The DRM driver name (what `drmGetVersion` returns) decides the loader mapping. **Don't pick `pvr`**, which is taken.
+- **Platforms:** with a proper render node and dma-buf, gallium gives you GBM, EGL Wayland/X11/surfaceless and DRI3 almost for free. The fbdev EGL platform in the overlay is downstream-only and won't go upstream (Mesa has no fbdev platform).
 - **Render-only pairing (`kmsro`/`renderonly`):** on Cedarview, the display device is gma500 and the render device is ours. Mesa needs a kmsro entry so opening gma500 creates our screen. Scanout buffers are linear (verify gma500's stride and alignment rules).
 - **Modifiers:** support `DRM_FORMAT_MOD_LINEAR` everywhere first. Twiddled/tiled layouts (TEX.md §1) would need modifiers in `drm_fourcc.h`. Check whether an Imagination vendor namespace exists before inventing one.
 - **Sync:** implicit sync through dma_resv for X/DRI3 and old Wayland; explicit timeline syncobj for Wayland's `linux-drm-syncobj-v1`.
 - **Testing culture:** dEQP via `deqp-runner`, with `*-fails.txt`/`*-flakes.txt`/`*-skips.txt` expectation files (Mesa CI convention), and piglit for desktop GL. A hardware CI runner (LAVA/ci-tron) is welcome but not required to merge. Khronos conformance submission is optional, but a clean dEQP-GLES2 run is the credibility bar.
-- **Code standards:** Mesa style, meson options, no environment-variable-only features in default paths, and the `SGX545_*` debug variables moved to the driver's debug-option table.
+- **Code standards:** Mesa style, meson options, no environment-variable-only features in default paths, and the `SGX_*` debug variables moved to the driver's debug-option table.
 
 ---
 
@@ -148,7 +148,7 @@ Reviewers for reverse-engineered drivers (lima, etnaviv, asahi, panfrost) ask ho
 
 Each milestone has an exit criterion. Don't start the next one's upstream-facing work until the previous criterion holds. Exploration ahead of that is fine.
 
-### M0: finish GLES2 on the current stack (keeps openHC moving)
+### M0: finish GLES2 on the current stack (keeps the downstream distribution moving)
 The `mesa/README.md` "What is missing" list: discard/alpha test (ISPA pass types 2/4), gl_FragCoord/gl_PointCoord, constant-colour blend (sop2 k18/k19), the rest of textures, scissor/partial viewports, lines/points, ZLS, tear-free present, zero-copy vertices and pipelining, extension pruning.
 **Exit:** dEQP-GLES2 runs to completion on the EA3 with a fails list we understand. Run it on the DDK too for comparison.
 
@@ -162,11 +162,11 @@ CE5300 first, because the SGX is its own PCI device there and nothing needs unta
 2. A new driver under `drivers/gpu/drm/`: kernel-side init that replaces `srvinit` (firmware load, host control block, kernel CCB, event programs), MMU/BIF, GEM shmem, drm_gpuvm, drm_sched + IRQ completion, syncobj, runtime PM, devcoredump, debugfs.
 3. IGT tests for each ioctl, including the negative cases (bad flags, VAs outside the VM, malformed streams).
 
-Leave `pvrsrvkm` alone apart from openHC's needs. **Don't add more compat-layer work to it.**
+Leave `pvrsrvkm` alone apart from the downstream distribution's needs. **Don't add more compat-layer work to it.**
 **Exit:** the driver boots the GPU from the kernel on the EA3 and runs submitted jobs, IGT passes, and one client can't corrupt another (test it).
 
 ### M3: Mesa winsys on the new uAPI
-Replace `libpvr` in `src/gallium/winsys/sgx545/` with a DRM winsys: BO allocation, VM_BIND, submit, syncobj, dma-buf import/export. Drop the fbdev platform from the upstream branch (keep it in the overlay for openHC). Enable surfaceless, GBM, Wayland and X11.
+Replace `libpvr` in `src/gallium/winsys/sgx/` with a DRM winsys: BO allocation, VM_BIND, submit, syncobj, dma-buf import/export. Drop the fbdev platform from the upstream branch (keep it in the downstream overlay). Enable surfaceless, GBM, Wayland and X11.
 **Exit:** dEQP-GLES2 on the new kernel driver matches the M0 baseline. Weston or labwc runs on CE5300 through a KMS device. A minimal VDC KMS driver or simpledrm on the CEFDK framebuffer is fine for the EA. Lower priority than Cedarview.
 
 ### M4: Cedarview
@@ -203,7 +203,7 @@ Expectation to set in docs: the point of GL3 on this GPU is that apps start and 
 
 - Follow the repo's existing rules: wrap GPU runs in `flock /tmp/gpu.lock`, never build Buildroot locally, and log hardware work in `docs/log/entries/`.
 - **Boxes (Joseph, 2026-11-01):** GPU work with visible output, including Minecraft on our driver, runs on the **EA-1** (the box on Joseph's monitor; it has no smart plug, so nothing wedge-prone; stop and restart `mc-session` around runs and tell the Minecraft session). The **EA3** belongs to the DSP and Ethernet-switch work; open-microkernel tests that may wedge the GPU run there in slots agreed with those sessions, recovered with the Bench plug.
-- Don't break openHC. `pvrsrvkm` + the overlay stay its shipping stack until the new driver replaces them.
+- Don't break the downstream distribution. `pvrsrvkm` + the overlay stay its shipping stack until the new driver replaces them.
 - Don't put uAPI in Mesa before the kernel side has merged. Don't write 32-bit compat structs in new uAPI. Don't copy `kernel/src` material into Mesa. Don't commit proprietary binaries.
 - Before code relies on any reverse-engineered fact, it goes into `docs/` with how it was established.
 - **Clean room (Joseph, 2026-11-01):** follow `docs/CLEANROOM.md`. Shipping code is written from `docs/` only, by sessions that have not read decompiles or listings for that subsystem; validation is black-box.
@@ -217,7 +217,7 @@ Expectation to set in docs: the point of GL3 on this GPU is that apps start and 
 2. **Driver name** for the kernel module, DRM name and Mesa directory. Coordinate with Imagination's Rogue maintainers.
 3. **Imagination:** will they license the SGX545 microkernel for linux-firmware, or bless the open one? Joseph is asking. Either answer is useful.
 4. Does the open microkernel stay SGXMKIF-compatible forever, or get a simpler host interface for the new driver after M1?
-5. The CE5300 display: a minimal VDC KMS driver, or simpledrm only? This only matters for openHC wanting Wayland.
+5. The CE5300 display: a minimal VDC KMS driver, or simpledrm only? This only matters for a downstream distribution wanting Wayland.
 6. The Cedarview IRQ topology and the BAR layout split between gma500 and SGX, for the auxiliary-device design.
 
 ---
@@ -230,4 +230,4 @@ Expectation to set in docs: the point of GL3 on this GPU is that apps start and 
 - gma500 keeps Cedar Trail (Medfield removal thread): https://lists.freedesktop.org/archives/dri-devel/2021-January/295823.html
 - Imagination's SGX545 announcement (DX10.1, OpenGL 3.2, OpenCL 1.0): https://us.design-reuse.com/news/22405/graphics-ip-core-directx-opengl-opencl.html
 - SGX545 Windows GL 3.0 capability report: https://feedback.wildfiregames.com/report/opengl/device/PowerVR%20SGX545
-- In-repo: `README.md`, `kernel/README.md`, `mesa/README.md` (status, missing list, openHC plan), `ukernel/README.md`, `docs/UKERNEL.md`, `docs/SRVINIT.md`, `docs/GEN.md`, `docs/STATE.md`, `docs/TEX.md`, `docs/ISA.md`, `docs/PDS.md`, `docs/log/`
+- In-repo: `README.md`, `kernel/README.md`, `mesa/README.md` (status, missing list, downstream plan), `ukernel/README.md`, `docs/UKERNEL.md`, `docs/SRVINIT.md`, `docs/GEN.md`, `docs/STATE.md`, `docs/TEX.md`, `docs/ISA.md`, `docs/PDS.md`, `docs/log/`

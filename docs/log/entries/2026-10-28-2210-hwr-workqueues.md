@@ -22,7 +22,7 @@ fix. One CI kernel, booted once from RAM on the EA3, tested both.
   watchdog tries again on its next tick.
 
 On sgx545-ce's old layout this is `user-va-64bit` d2b3187, together with the
-DEVINITPART2 fix (c00e56f). openHC test branch `sgx-user-va-64bit` 59ea8a4,
+DEVINITPART2 fix (c00e56f). Boot-image test branch `sgx-user-va-64bit` 59ea8a4,
 CI run 40694900336. The decompressed kernel contains both queue names
 (`pvr_timer`, `pvr_workqueue`), and dmesg shows `Installing MISR` instead of a
 tasklet.

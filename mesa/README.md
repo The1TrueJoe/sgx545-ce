@@ -9,7 +9,7 @@ our compiler, and the GPU is started by `srvinit/`.
 
 Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 
-- `eglinfo` lists `PowerVR SGX545 (sgx545-ce)`, OpenGL ES 2.0, Mesa 26.2.5.
+- `eglinfo` lists `PowerVR SGX545`, OpenGL ES 2.0, Mesa 26.2.5.
 - Clear + triangle through GLES2 are byte-identical to the DDK.
 - es2gears' shaders run on the GPU at ~400 FPS on fb0.
 
@@ -21,13 +21,13 @@ Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 | `build.sh` | fetch, check, patch, overlay, build (x86_64 and/or i386) |
 | `patches/` | the hooks Mesa needs outside the overlay (meson options, loader, pipe-loader, EGL platform wiring); small, applied with `patch -p1` |
 | `cross/` | the zig cc wrapper and the meson cross-file template |
-| `src/gallium/drivers/sgx545/` | the gallium driver: screen, context, state, resources, draw/clear, shaders (`sgx545_program.c` is the USP finaliser) |
-| `src/gallium/winsys/sgx545/drm/` | the winsys: `sgxws.h` (all the driver sees of it), `sgx545_frame.c` (`tools/gen`'s sgxgen as a multi-frame library: PB, render targets, PDS programs, TA state, VDM, kicks) over `libpvr/` (linked in by build.sh); `sgx545_frame_test.c` exercises it without Mesa |
-| `src/sgx545/compiler/` | the NIR → USSE compiler (`sgx_compiler.h`); its tools and checks are in `tools/usc` |
+| `src/gallium/drivers/sgx/` | the gallium driver: screen, context, state, resources, draw/clear, shaders (`sgx_program.c` is the USP finaliser) |
+| `src/gallium/winsys/sgx/drm/` | the winsys: `sgxws.h` (all the driver sees of it); `sgx_frame.c` (`tools/gen`'s sgxgen as a multi-frame library: rings, PDS programs, TA state, VDM) over a kernel backend, `sgx_powervr_sgx.c` (the powervr_sgx DRM driver) or `sgx_pvr.c` (pvrsrvkm through `libpvr/`, linked in by build.sh); `sgx_frame_test.c` exercises it without Mesa. `docs/WINSYS.md` says which runs when |
+| `src/sgx/compiler/` | the NIR → USSE compiler (`sgx_compiler.h`); its tools and checks are in `tools/usc` |
 | `src/egl/drivers/dri2/platform_fbdev.c` | EGL's `fbdev` platform: window = the framebuffer console |
-| `tests/` | `sgx545_eglinfo`, `sgx545_es2gears` (es2gears' shaders), `sgx545_cpugears` (fixed programs only); `sgx545_texab.sh` and `sgx545_blendab.sh`, A/B against the DDK on the EA3 |
+| `tests/` | `sgx_eglinfo`, `sgx_es2gears` (es2gears' shaders), `sgx_cpugears` (fixed programs only); `sgx_texab.sh` and `sgx_blendab.sh`, A/B against the DDK on the EA3 |
 
-`build.sh` also links `kernel/src` into the tree as `include/sgx545-kernel` (the
+`build.sh` also links `kernel/src` into the tree as `include/sgx-kernel` (the
 bridge structures) and generates the fixed USSE programs from
 `tools/gen/mkusse.py`.
 
@@ -38,27 +38,28 @@ reach the code that goes upstream.  Where the line runs today:
 
 | part | kernel/src or libpvr? |
 |---|---|
-| `src/sgx545/compiler/` | **No.** Includes only Mesa and its own headers. |
-| `src/gallium/drivers/sgx545/` | **No.** It sees the winsys only through `sgxws.h` (GL-level state, the hardware's words as `docs/` describes them, opaque device/context/RT/buffer handles). Its meson dependency (`idep_sgx545_ws`) carries no kernel include path and no kernel defines, so an include of anything services-side fails to build. |
-| `src/gallium/winsys/sgx545/drm/` (`sgx545_frame.c`, `sgx545_frame.h`, `libpvr/`) | **Yes, by design, overlay only.** It is built against the kernel's bridge headers (`include/sgx545-kernel`, the `-DSERVICES4`... defines) and talks to `pvrsrvkm` through libpvr. It also lays out structures the microkernel reads (the TA command, render details, RT data, sync lists) by their offsets. M3 replaces it with a winsys over the new uAPI. |
-| `src/egl/drivers/dri2/platform_fbdev.c` | No kernel material; openHC only (Mesa has no fbdev platform). |
+| `src/sgx/compiler/` | **No.** Includes only Mesa and its own headers. |
+| `src/gallium/drivers/sgx/` | **No.** It sees the winsys only through `sgxws.h` (GL-level state, the hardware's words as `docs/` describes them, opaque device/context/RT/buffer handles). Its meson dependency (`idep_sgx_ws`) carries no kernel include path and no kernel defines, so an include of anything services-side fails to build. |
+| `src/gallium/winsys/sgx/drm/` (`sgx_frame.c`, `sgx_powervr_sgx.c`) | **No.** The frame recorder and the powervr_sgx backend include the dual-licensed uAPI header (`include/drm-uapi/powervr_sgx_drm.h`) and the packers generated from `docs/uapi/powervr_sgx_kmd_stream.xml`, nothing else. |
+| `src/gallium/winsys/sgx/drm/` (`sgx_pvr.c`, `libpvr/`) | **Yes, by design, overlay only.** Built only where build.sh links libpvr in, against the kernel's bridge headers (`include/sgx-kernel`, the `-DSERVICES4`... defines), into objects of their own. It lays out structures the microkernel reads (the TA command, render details, RT data, sync lists) by their offsets. |
+| `src/egl/drivers/dri2/platform_fbdev.c` | No kernel material; not for upstream (Mesa has no fbdev platform). |
 
 ## Building
 
 ```sh
-mesa/build.sh x86_64 i386     # into $SGX545_MESA_BUILD (default build/mesa)/<arch>/install
+mesa/build.sh x86_64 i386     # into $SGX_MESA_BUILD (default build/mesa)/<arch>/install
 ```
 
 You need zig (0.14+), meson, ninja, Python 3.10+ with mako and pyyaml, bison 3
 and flex. The tarball and the libdrm wrap come from the network. Mesa is
 configured with:
 
-- `gallium-drivers=sgx545` and `platforms=fbdev` (EGL's native platform);
+- `gallium-drivers=sgx` and `platforms=fbdev` (EGL's native platform);
 - GLES2 only (`opengl=false`, `gles1=disabled`, `glx=disabled`);
 - no LLVM, no GBM, no xmlconfig/zlib/zstd/expat.
 
-The targets are glibc 2.36 x86_64 (openHC's Buildroot userspace, glibc 2.42,
-runs it) and glibc 2.36 i386 (the Debian bookworm root of openhc-minecraft).
+The targets are glibc 2.36 x86_64 (newer glibc userspaces, 2.42, run it) and
+glibc 2.36 i386 (a Debian bookworm root).
 Never build Buildroot locally; this build is Mesa only, and it fits in about
 1 GB per target.
 
@@ -67,35 +68,35 @@ Never build Buildroot locally; this build is Mesa only, and it fits in about
 Copy `install/usr/lib` onto the box and point the loader at it:
 
 ```sh
-LD_LIBRARY_PATH=/tmp/mesa/lib ./sgx545_eglinfo
-LD_LIBRARY_PATH=/tmp/mesa/lib ./sgx545_es2gears -n 600
+LD_LIBRARY_PATH=/tmp/mesa/lib ./sgx_eglinfo
+LD_LIBRARY_PATH=/tmp/mesa/lib ./sgx_es2gears -n 600
 LD_LIBRARY_PATH=/tmp/mesa/lib PROBE_OUT=f.rgba ./probe       # tools/probe
 ```
 
 The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared EA3, wrap GPU runs in
 `flock /tmp/gpu.lock`.
 
-Debugging options follow Mesa's convention: flags in `SGX545_DEBUG`
-(`SGX545_DEBUG=help` lists them), read once at screen creation; nothing in
+Debugging options follow Mesa's convention: flags in `SGX_DEBUG`
+(`SGX_DEBUG=help` lists them), read once at screen creation; nothing in
 the default path depends on the environment.
 
 | variable | effect |
 |---|---|
-| `SGX545_DEBUG=frame,draw,nir,sync` | per-frame/draw/shader/allocation logging |
-| `SGX545_DEBUG=stats` | where the time goes, every 2 s: FPS, flushes by cause, vertex cache, the winsys's waits and render latency |
-| `SGX545_DEBUG=serial` | wait for every render after submitting it (GPU time per render in `stats`) |
-| `SGX545_DEBUG=hangabort,flushall,flushrt` | abort at a render that does not finish; no deferred flushes; SGX_FLUSH_HW_RENDER_TARGET at a target's destruction |
-| `SGX545_DEBUG=novcache,nof16,nodrvconsts` | turn off the vertex cache, F16/C10 fragment arithmetic, the driver constant formats |
-| `SGX545_DEBUG=novs,nofs` | the fixed programs (gl_Position = attribute 0; gl_FragColor = a uniform or constant) for that stage |
-| `SGX545_DEBUG=fsconst,attrs,blits` | measuring and tracing aids: constant-colour fragment programs; the first draws' vertex inputs; every 255th blit and its caller |
-| `SGX545_DUMP_CODE=dir` | write each compiled program as `vs-N.code` / `fs-N.code`, one "hi lo" hex pair per instruction (`tools/isa/dis.py -x` reads the pairs). The compiler no longer writes USPs; sgxc does, for the DDK A/B harness |
-| `SGX545_TRACE=path`, `SGX545_TRACE_KICKS=n` | a pvrtrace log of the client (every bridge call, memory before each kick, for the first n kicks); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
-| `SGX545_DRY_RUN=n`, `SGX545_FRAME_GAP_US=us` | frames from the n-th on built but never sent; idle time after each render (hang bisecting) |
+| `SGX_DEBUG=frame,draw,nir,sync` | per-frame/draw/shader/allocation logging |
+| `SGX_DEBUG=stats` | where the time goes, every 2 s: FPS, flushes by cause, vertex cache, the winsys's waits and render latency |
+| `SGX_DEBUG=serial` | wait for every render after submitting it (GPU time per render in `stats`) |
+| `SGX_DEBUG=hangabort,flushall,flushrt` | abort at a render that does not finish; no deferred flushes; SGX_FLUSH_HW_RENDER_TARGET at a target's destruction |
+| `SGX_DEBUG=novcache,nof16,nodrvconsts` | turn off the vertex cache, F16/C10 fragment arithmetic, the driver constant formats |
+| `SGX_DEBUG=novs,nofs` | the fixed programs (gl_Position = attribute 0; gl_FragColor = a uniform or constant) for that stage |
+| `SGX_DEBUG=fsconst,attrs,blits` | measuring and tracing aids: constant-colour fragment programs; the first draws' vertex inputs; every 255th blit and its caller |
+| `SGX_DUMP_CODE=dir` | write each compiled program as `vs-N.code` / `fs-N.code`, one "hi lo" hex pair per instruction (`tools/isa/dis.py -x` reads the pairs). The compiler no longer writes USPs; sgxc does, for the DDK A/B harness |
+| `SGX_TRACE=path`, `SGX_TRACE_KICKS=n` | a pvrtrace log of the client (every bridge call, memory before each kick, for the first n kicks); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
+| `SGX_DRY_RUN=n`, `SGX_FRAME_GAP_US=us` | frames from the n-th on built but never sent; idle time after each render (hang bisecting) |
 | `FRAMEBUFFER=/dev/fbN` | the fbdev platform's framebuffer (default /dev/fb0) |
 
 ## How it works
 
-- **Loading.** The loader maps PCI `8086:*` to `sgx545` when the kernel driver is
+- **Loading.** The loader maps PCI `8086:*` to `sgx` when the kernel driver is
   `pvrsrvkm` (a predicate like iris's). The DRM descriptor creates the screen on
   the DRM node; the screen owns the services connection (`libpvr`), one per
   process.
@@ -122,8 +123,8 @@ the default path depends on the environment.
   as four dwords with GL's defaults. They are copied into the frame and drawn
   through an identity index list. Triangle lists and strips are drawn as they
   are; fans become lists.
-- **Shaders** (`sgx545_program.c`). Each shader is compiled on creation by
-  `mesa/src/sgx545/compiler`. The driver reads the USP's lists and does what
+- **Shaders** (`sgx_program.c`). Each shader is compiled on creation by
+  `mesa/src/sgx/compiler`. The driver reads the USP's lists and does what
   the DDK's GL driver did:
   - a vertex program becomes prologue phase, shader + `emit`, epilogue phase;
   - a fragment program becomes `phas`, shader, `mov o0, pa<colour> [end mask=1]`;
@@ -141,7 +142,7 @@ the default path depends on the environment.
 ## What is missing
 
 This list is the next work, roughly in the order dEQP-GLES2 needs it (the fails
-lists in `src/gallium/drivers/sgx545/ci/` say what each costs):
+lists in `src/gallium/drivers/sgx/ci/` say what each costs):
 
 1. **Depth/stencil buffers in memory (ZLS).** Depth and stencil work within one
    render, which covers a frame unless the rings fill mid-frame or the target
@@ -172,18 +173,18 @@ files carry over upstream:
   - Sources and the build live in `~/.cache/sgx545/deqp` (a few GB).
   - The result is `out/`, which gets copied to the box.
   - x86_64 is ours; i386 is for the DDK.
-- On the box, `run-deqp.sh sgx545|ddk` (from that `out/`) runs the GLES2
+- On the box, `run-deqp.sh sgx|ddk` (from that `out/`) runs the GLES2
   mustpass list under `deqp-runner`:
   - pbuffers, 256×256, config `rgba8888d24s0ms0` (no stencil yet);
   - one job (two render contexts on this GPU have locked it up);
   - the whole run holds `/tmp/gpu.lock`.
   - Ours runs on the surfaceless EGL platform (`EGL_PLATFORM=surfaceless`,
     which `mesa/patches/0003` lets find pvrsrvkm's primary node), with
-    `SGX545_DEBUG=hangabort`, so a hang is one failure, not a wedged run.
+    `SGX_DEBUG=hangabort`, so a hang is one failure, not a wedged run.
   - The DDK runs the i386 binary through its own loader and the bus-id shim:
     its default EGL display offers pbuffers too.
-- Expectations are in `src/gallium/drivers/sgx545/ci/`, in Mesa CI's
-  format: `sgx545-fails.txt`, `-flakes.txt` and `-skips.txt` for ours, and
+- Expectations are in `src/gallium/drivers/sgx/ci/`, in Mesa CI's
+  format: `sgx-fails.txt`, `-flakes.txt` and `-skips.txt` for ours, and
   `ddk-*` for the DDK. Every entry gets a reason. Skips are only for tests
   that hang the GPU.
 
@@ -198,11 +199,11 @@ does (`compare -metric AE -fuzz 20%` over its region, under its tolerance).
 
 The rig (the EA1's copy of it is off limits):
 
-- The openhc-minecraft runtime (`runtime-i386.tar.xz` from that repo's CI) in
+- An i386 Minecraft runtime (`runtime-i386.tar.xz`) in
   an ext2 image on the EA3's USB disk (`/media/DISKTEST/mcroot-ext4.img`,
   loop-mounted at `/opt/minecraft`; the root filesystem has 250 MB free). The
   DDK goes to `/usr/lib/sgx` as `mc-session` puts it there, our i386 build to
-  `/usr/lib/sgx545`, apitrace's `glretrace` from Debian's `apitrace` package
+  `/usr/lib/sgx`, apitrace's `glretrace` from Debian's `apitrace` package
   (unpacked: the runtime's apt can't install it), and the traces to `/ctest`.
 - Each replay: Xvfb `:1`, `glretrace --singlethread` with
   `LIBGL_FB=3` (pbuffer) and `LIBGL_EGL`/`LIBGL_GLES` naming one stack.
@@ -238,7 +239,7 @@ What the first runs found, all fixed in the driver:
   biased coordinates): the USP's sample block carries an encoded `smp`
   template; the driver puts it, with the sampler's four DOUTT words in SA
   after the program's own, and a `wdf` into the flat program where the block
-  stream places it. Byte-identical to the DDK (`sgx545_texab.sh`).
+  stream places it. Byte-identical to the DDK (`sgx_texab.sh`).
 - **The PDS middle word** declares the fragment program's primary
   attributes (b0-15, units of 4 dwords) and 12 / units in b25-28, as the DDK
   writes it: a fixed word for one unit overflowed and locked the GPU up as
@@ -248,10 +249,10 @@ What the first runs found, all fixed in the driver:
 
 ## Plan: Minecraft on our driver (milestone e)
 
-1. The i386 build drops into the chroot as `/usr/lib/sgx545/` (libEGL.so.1,
+1. The i386 build drops into the chroot as `/usr/lib/sgx/` (libEGL.so.1,
    libGLESv2.so.2, libgallium, libdrm). It is self-contained apart from glibc.
 2. `runtime/bin/gl4es-run` switches with the same two variables:
-   - `LIBGL_EGL` / `LIBGL_GLES` → `/usr/lib/sgx545`;
+   - `LIBGL_EGL` / `LIBGL_GLES` → `/usr/lib/sgx`;
    - drop `LD_PRELOAD=sgx-busidshim.so`, which only the DDK needs;
    - `LIBGL_DEEPBIND` can return to gl4es' default.
 
@@ -261,40 +262,3 @@ What the first runs found, all fixed in the driver:
 3. The i386 process talks to the x86_64 kernel through the compat bridge, as
    the DDK did; `libpvr` builds for i386 (`MAP_32BIT` is x86_64 only).
 4. Release images ship ours; the DDK stays installable for A/B only.
-
-## openHC integration (sketch, not built)
-
-openHC builds the kernel driver from the sgx545-ce submodule. Userspace would
-come the same way:
-
-- **A Buildroot package `sgx545-mesa`** in openHC's `package/`. It points at the
-  sgx545-ce submodule and does what `build.sh` does with Buildroot's own
-  toolchain (no zig):
-  - extract Buildroot's `mesa3d` source, or fetch `mesa/VERSION`'s tarball
-    itself, and check the sha256;
-  - apply `mesa/patches`, copy the `mesa/src` overlay in, generate
-    `sgx545_usse_progs.h` with `tools/gen/mkusse.py` (host python), and link
-    `kernel/src` and `libpvr`;
-  - configure with the options in `build.sh` through
-    `$(eval $(meson-package))`.
-
-  It installs libEGL, libGLESv2 and libgallium, provides `libegl` and
-  `libgles`, and conflicts with `BR2_PACKAGE_MESA3D`. Pinning one Mesa per
-  sgx545-ce commit keeps the overlay and the release matched. Buildroot's
-  mesa3d package can't take a third-party gallium driver without patching
-  its `Config.in` and meson option list, so a separate package is simpler
-  than an overlay of mesa3d.
-- **openHC features.**
-  - EA images select `sgx545-mesa`.
-  - The DDK moves behind an opt-in `ddk-ab` feature that installs the i386 blobs
-    under `/opt/sgx-i386` for comparison runs, and no longer in release images.
-  - `S95ohc-display` brings the GPU up with `srvinit` instead of the DDK's
-    `sgxinit`.
-  - The on-panel webview (today WPE on the DDK's EGL through libwpe) moves to
-    EGL fbdev on our driver first. WPE WebKit's newer platforms need EGL 1.5,
-    GBM and dma-buf (`EGL_EXT_image_dma_buf_import`, `EGL_MESA_platform_gbm`),
-    which are next for the winsys: dma-buf export of render targets through
-    the services driver, or a GBM backend over `resource_create`.
-- **CI.** The package builds in the GitHub Actions EA image jobs, like everything
-  else in openHC. The overlay adds one Mesa build (about 10 minutes) to the EA
-  images.

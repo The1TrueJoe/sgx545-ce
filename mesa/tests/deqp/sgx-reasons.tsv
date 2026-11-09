@@ -1,0 +1,16 @@
+# mkexpect.py --reasons for our driver: REGEX<tab>why, first match wins
+functional\.fragment_ops\.(random|interaction)	fragment_ops random/interaction: two-sided stencil (the 27-dword block DMA, +45) and blends with SUBTRACT on one side and REVERSE_SUBTRACT on the other (dropped until um-re 29f5a4c, +144) fixed; the rest order-dependent
+functional\.texture\.mipmap\.cube\.bias	cube LOD bias (texture2D's bias argument fails the same way)
+functional\.texture\..*cube	cube maps: NPOT faces (15x15, and the 63/39/51/47 of teximage2d_align): no cube layout for them, the DDK samples one linear face and fails every one; a few 16-bit and copied faces
+functional\.texture\.specification	texture uploads: unpack alignment, sub-image updates and copies of 16-bit formats; the DDK fails teximage2d_align too
+functional\.texture\.(mipmap|completeness|format|size)	texture sampling: LOD bias and completeness corner cases
+functional\.shaders\.texture_functions	texture2D's bias argument
+functional\.fbo\.render	render to texture: a colour buffer shared between framebuffers with a 16-bit depth buffer; 565/4444/5551 targets stored as RGBA8; the DDK fails the shared cases too
+functional\.shaders\.(random|operator|functions|struct)	compiler: random combinations that fail with F16 off too; with the compiler session
+functional\.polygon_offset	polygon offset: the offset is applied, but its size against GL's minimum resolvable difference isn't matched yet (displacement cases, and the factor with 16-bit depth)
+functional\.rasterization\.primitives	wide lines: the hardware's line quads against GL's rule; the DDK fails these too
+functional\.draw\.draw_elements\.points	points from glDrawElements; the DDK fails these too
+functional\.(implementation_limits|state_query\.integers)\.max_vertex_uniform_vectors	GL_MAX_VERTEX_UNIFORM_VECTORS 120: st keeps 8 for clip planes; a 136-vec4 buffer gave 128 but broke dynamic reads of constant arrays (shaders.indexing.tmp_array)
+functional\.depth_stencil_clear\.depth_stencil$	depth and stencil cleared together with no mask or scissor: the stencil comes out 0 (the masked and scissored variants pass)
+functional\.flush_finish\.flush_wait	Warn: glFlush/glFinish timing outside the test's margin, not diagnosed
+functional\.rasterization\.interpolation\..*lines	Warn: line colour interpolation within the low-quality tolerance only (the hardware's line quads), not diagnosed

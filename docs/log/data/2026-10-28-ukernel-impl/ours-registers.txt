@@ -1,6 +1,6 @@
-/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC--claude-worktrees-optimistic-leakey-b1d663/ca698cd7-46e4-4e13-949b-9c4a8185b579/scratchpad/sgx/ukernel/sgx545-ukernel-openhc.bin: 3264 bytes, 408 instructions
-/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC--claude-worktrees-optimistic-leakey-b1d663/ca698cd7-46e4-4e13-949b-9c4a8185b579/scratchpad/sgx/ukernel/sgx545-ukernel-openhc.json: entries init=0x0, init_set=0x88, kick=0xb0, kick_adv=0x140, kick_end=0x180, do_ta=0x188, ta_finished=0x6e8, render_done=0xca0, raise_host_irq=0xca8
-openHC microkernel: 153 register writes; 102 struct-sourced across phases ['3D', 'TA1', 'TA2']
+<scratch>/sgx/ukernel/sgx545_ukernel.bin: 3264 bytes, 408 instructions
+<scratch>/sgx/ukernel/sgx545_ukernel.json: entries init=0x0, init_set=0x88, kick=0xb0, kick_adv=0x140, kick_end=0x180, do_ta=0x188, ta_finished=0x6e8, render_done=0xca0, raise_host_irq=0xca8
+open microkernel: 153 register writes; 102 struct-sourced across phases ['3D', 'TA1', 'TA2']
   3D   0x0148 = 0x00000000
   3D   0x0400 = 0x00000080
   3D   0x0404 = 0x00000000

@@ -81,14 +81,14 @@ struct init {
 	uint32_t code_heap, pixel_heap, vertex_heap, pds_pixel_heap;
 	uint32_t pd;		/* page directory, device physical */
 	uint32_t hwperf_flags;	/* app hint */
-	int ours;		/* load openHC's own microkernel (ukernel/) */
+	int ours;		/* load the open microkernel (ukernel/) */
 	uint32_t uk_size;	/* its size, when ours */
 	uint32_t uk_entry;	/* the entry the event program starts, when ours */
 	uint32_t p_hostctl, p_ccbctl, p_ctlblk;	/* limm patch-site byte offsets (0 = none) */
 };
 
 /*
- * Buffer size. openHC's microkernel is a different size from the DDK's, and
+ * Buffer size. The open microkernel is a different size from the DDK's, and
  * its event PDS program is bigger (it DMAs the control block as well as
  * starting the entry), so override those two in --ours mode.
  */
@@ -273,7 +273,7 @@ static void limm_ours(struct init *s, uint32_t off, uint32_t v)
 }
 
 /*
- * openHC's event program: a bare DOUTU that starts our microkernel's entry,
+ * The event program: a bare DOUTU that starts our microkernel's entry,
  * exactly like the DDK's event program. An event-kicked PDS program is not
  * relied on to run a DMA, so the microkernel gets its addresses from limms the
  * loader patches (not from the secondary attributes). bit 27 is set, as on
@@ -409,7 +409,7 @@ static int build(struct init *s, const uint8_t *fw, SGX_BRIDGE_INIT_INFO *ii)
 		[SGXMKIF_CMD_CLEANUP] = 0x13a, [SGXMKIF_CMD_GETMISCINFO] = 0x173,
 		[SGXMKIF_CMD_PROCESS_QUEUES] = 0x156, [9] = 0x157,
 	};
-	/* openHC's host-kick table is the identity: a command's ServiceAddress
+	/* the host-kick table is the identity: a command's ServiceAddress
 	   is its type, which our microkernel's dispatch switches on. */
 	static const uint32_t kick_ours[SGXMKIF_CMD_MAX] = {
 		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
@@ -591,7 +591,7 @@ static uint8_t *load_fw(const char *path)
 	return d;
 }
 
-/* openHC's microkernel (ukernel/build.py) is a plain image of its own size;
+/* The open microkernel (ukernel/build.py) is a plain image of its own size;
    8-byte instructions, so the size is a multiple of 8. */
 static uint8_t *load_ours(const char *path, uint32_t *size)
 {
@@ -737,7 +737,7 @@ int main(int argc, char **argv)
 		else if (c == 'n')
 			planpath = optarg;
 		else if (c == 'o')
-			ourspath = optarg;	/* load openHC's own microkernel */
+			ourspath = optarg;	/* load the open microkernel */
 		else
 			return fprintf(stderr,
 				       "usage: srvinit [-f firmware | -o ukernel.bin] [-n plan outdir]\n"), 2;

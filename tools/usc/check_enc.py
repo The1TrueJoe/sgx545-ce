@@ -1,14 +1,16 @@
-"""Check the generated C encoder against hw.py: every instruction of the
-corpora (tools/isa/corpus/c1..c3), decoded by hw.decode(), is handed to
-usse_encode() (tests/enc_lines.c) and must come back as the same 64 bits.
+"""Check the compiler's encoder (mesa/src/sgx/isa, isaspec) against hw.py:
+every instruction of the corpora (tools/isa/corpus/c1..c3), decoded by
+hw.decode() and printed in dis.py's notation, is assembled and encoded by
+sgx_isa_test -t and must come back as the same 64 bits.
 
-    cc -std=c11 -O1 -I mesa/src/sgx545/compiler -o tools/usc/build/enc_lines \
-        tools/usc/tests/enc_lines.c mesa/src/sgx545/compiler/usse.c
-    python3 -I tools/usc/check_enc.py [tools/usc/build/enc_lines]
+    mesa/tests/isa-standalone/standalone.sh <mesa-tree>    (or a Mesa build's sgx_isa_test)
+    python3 -I tools/usc/check_enc.py [mesa/src/sgx/isa/tests/build/sgx_isa_test]
 """
 import os
+import re
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ISA = os.path.join(HERE, "..", "isa")
@@ -16,42 +18,30 @@ sys.path.insert(0, ISA)
 import hw  # noqa: E402
 import usp  # noqa: E402
 
-KINDS = ["r", "o", "pa", "sa", "c", "g", "i", "#", "ix", "idx", "p"]
-IXB = ["r", "o", "pa", "sa"]
-FIELDS = sorted({fl.name for f in hw.FORMS for fl in f.fields})
-FID = {n: i for i, n in enumerate(FIELDS)}
-FORMI = {id(f): i for i, f in enumerate(hw.FORMS)}
+START = "setfc #0, #1"   # program-start format control (hw.CTX["fc"] = 2)
 
 
-def line(x, fc):
-    ws = [FORMI[id(x.form)], fc, len(x.d)]
-    for k, v in x.d.items():
-        ws += [FID[k], v]
-    ws.append(len(x.ops))
-    for o in x.ops:
-        k = o["kind"]
-        if k not in KINDS:
-            return None
-        sfx = list(o.get("sfx", []))
-        lane = swz = nw = c10 = 0
-        for x in list(sfx):
-            if len(x) == 2 and x[0] == "l" and x[1].isdigit():
-                lane = int(x[1])
-            elif len(x) == 4 and set(x) <= set("xyzw"):
-                swz = 1
-                n = sum("xyzw".index(ch) << (2 * i) for i, ch in enumerate(x))
-            elif x == "nw":
-                nw = 1
-            elif x == "c10":
-                c10 = 1
-            else:
-                return None
-        f16 = 1 if o.get("f16") or o.get("fc") == "f16" else 0
-        c10 = c10 or o.get("fc") == "c10"
-        ws += [KINDS.index(k), n if swz else o.get("off", o.get("n", 0)), IXB.index(o["bank"]) if k == "ix" else 0,
-               o.get("idx", 0), o.get("neg", 0), o.get("abs", 0), f16, o.get("half", 0),
-               1 if c10 else 0, swz, nw, lane]
-    return " ".join(map(str, ws))
+def norm(t):
+    return re.sub(r"\s+", " ", t.strip())
+
+
+def compact(t):
+    """the same instruction in the spellings ISA.md lists as equivalent and
+    the isaspec assembler takes: efo's i=/a=/m= as x/y, fdual's neg1/neg2 as
+    -src1/-src2 ("Other spellings asm.py takes")"""
+    for f in "iam":
+        t = re.sub(r"\b%s=%s0=([^,\s\]]+),%s1=([^\s\]]+)" % (f, f if f != "a" else "a", f if f != "a" else "a"),
+                   lambda m, f=f: f"{f}={m.group(1)}/{m.group(2)}", t)
+    m = re.match(r"^(\([^)]*\) )?(fdual\.\S+) (.*?)(\s+\[(.*)\])?$", t)
+    if m and m.group(5) and re.search(r"\bneg[12]\b", m.group(5)):
+        ops = [o.strip() for o in m.group(3).split(",")]
+        items = m.group(5).split()
+        for j, flag in ((2, "neg1"), (3, "neg2")):
+            if flag in items:
+                items.remove(flag)
+                ops[j] = ops[j][1:] if ops[j].startswith("-") else "-" + ops[j]
+        t = (m.group(1) or "") + m.group(2) + " " + ", ".join(ops) + (f"  [{' '.join(items)}]" if items else "")
+    return t
 
 
 def corpus_words():
@@ -59,33 +49,65 @@ def corpus_words():
         for s in usp.corpus(os.path.join(ISA, "corpus", c)):
             for part in [s["pre"]] + [b["insts"] for b in s["blocks"] if "insts" in b]:
                 hw.CTX["fc"] = 2
+                yield None
                 for lo, hi in part:
                     x = hw.decode(lo, hi)
                     if x is not None:
-                        yield lo, hi, x, hw.CTX["fc"]
+                        yield lo, hi, hw.fmt(x)
                     hw.track(x)
 
 
 def main():
-    exe = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "build", "enc_lines")
-    todo, skipped = [], 0
-    for lo, hi, x, fc in corpus_words():
-        t = line(x, fc)
-        if t is None:
-            skipped += 1
+    exe = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+        HERE, "..", "..", "mesa", "src", "sgx", "isa", "tests", "build", "sgx_isa_test")
+    lines, todo, plain = [], [], []
+    for w in corpus_words():
+        if w is None:
+            lines.append(START)
+            plain.append(START)
+        else:
+            lines.append(compact(w[2]))
+            plain.append(w[2])
+            todo.append((w[0], w[1], compact(w[2])))
+    # (dis.py's own spellings: ISA.md requires the assembler to take them too)
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write("\n".join(plain) + "\n")
+    try:
+        r0 = subprocess.run([exe, "-t", f.name], capture_output=True, text=True)
+    finally:
+        os.unlink(f.name)
+    n_plain = sum(1 for ln in r0.stdout.split("\n") if " ; " in ln and norm(ln.rsplit(" ; ", 1)[0]) != START)
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write("\n".join(lines) + "\n")
+    try:
+        r = subprocess.run([exe, "-t", f.name], capture_output=True, text=True)
+    finally:
+        os.unlink(f.name)
+    got = []
+    for ln in r.stdout.split("\n"):
+        if ln.startswith("#") or " ; " not in ln:
             continue
-        todo.append((lo, hi, t, hw.fmt(x)))
-    r = subprocess.run([exe], input="\n".join(t for _, _, t, _ in todo) + "\n", capture_output=True, text=True)
-    got = r.stdout.split("\n")
-    bad = 0
-    for (lo, hi, t, txt), g in zip(todo, got):
-        if g != f"{hi:08x} {lo:08x}":
-            bad += 1
-            if bad <= 20:
-                print(f"MISMATCH {hi:08x} {lo:08x} {txt}: C gives {g}")
-    print(f"{len(todo)} corpus instructions, {len(todo) - bad} encode identically in C, {bad} differ, "
-          f"{skipped} skipped (operand kinds C doesn't model)")
-    sys.exit(1 if bad else 0)
+        t, w = ln.rsplit(" ; ", 1)
+        if norm(t) != START:
+            got.append((norm(t), w.split()[:2]))
+    # the table leaves out lines it can't assemble: match in order by text
+    bad = rejected = 0
+    k = 0
+    for lo, hi, txt in todo:
+        if k < len(got) and got[k][0] == norm(txt):
+            glo, ghi = got[k][1]
+            k += 1
+            if (int(glo, 16), int(ghi, 16)) != (lo, hi):
+                bad += 1
+                if bad <= 20:
+                    print(f"MISMATCH {hi:08x} {lo:08x} {txt}: isaspec gives {ghi} {glo}")
+        else:
+            rejected += 1
+            if rejected <= 20:
+                print(f"REJECTED {hi:08x} {lo:08x} {txt}")
+    print(f"{len(todo)} corpus instructions, {len(todo) - bad - rejected} encode identically, {bad} differ, "
+          f"{rejected} not assembled; {len(todo) - n_plain} need the compact spelling (efo i=/a=/m=, fdual neg1/neg2)")
+    sys.exit(1 if bad or rejected else 0)
 
 
 if __name__ == "__main__":

@@ -95,7 +95,7 @@ vec4_slots(const struct glsl_type *type, bool bindless)
    return glsl_count_vec4_slots(type, false, bindless);
 }
 
-/* the gallium driver's (sgx545_program.c): load_uniform base and offset from
+/* the gallium driver's (sgx_program.c): load_uniform base and offset from
  * vec4 slots to components */
 static bool
 rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
@@ -125,11 +125,20 @@ main(int argc, char **argv)
 
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false, driver_uniforms = false;
-   while ((c = getopt(argc, argv, "vpFLDu:a:s:o:")) != -1) {
+   unsigned glsl_version = 100;
+   while ((c = getopt(argc, argv, "vpFLDMG:u:a:s:o:V:")) != -1) {
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
       case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
+      case 'M': opts.fs_mediump = true; break;      /* fragment floats mediump (st's fixed function) */
+      case 'G': glsl_version = atoi(optarg); break; /* GLSL version: 100 ES (default), 110-130 desktop compat */
+      case 'V': {                                   /* -V slot=fmt: attribute slot's raw format (sgx_vtx_fmt) */
+         unsigned slot, fmt;
+         if (sscanf(optarg, "%u=%u", &slot, &fmt) == 2 && slot < 16)
+            opts.vtx_fmt[slot] = fmt;
+         break;
+      }
       case 'p': lowp16 = true; opts.f16 = true; break;
       case 'v': opts.verbose = true; break;
       case 'u': named(&pins, SGX_LAYOUT_UNIFORM, optarg); break;
@@ -137,14 +146,14 @@ main(int argc, char **argv)
       case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
 
    struct standalone_options so;
    memset(&so, 0, sizeof(so));
-   so.glsl_version = 100;
+   so.glsl_version = glsl_version;
    so.do_link = 0;
    so.lower_precision = lowp16;   /* -p: mediump/lowp arithmetic in float16 */
 
@@ -259,6 +268,8 @@ main(int argc, char **argv)
          /* the USP has no list B writer: code only */
          fprintf(stderr, "sgxc: %s shader: %u constants, %u SA slots, %u words in memory: no USP\n", sname,
                  out.n_consts, out.sa_slots, out.mem_dwords);
+      } else if (out.writes_depth) {
+         fprintf(stderr, "sgxc: %s shader: gl_FragDepth in pa%u: no USP\n", sname, out.depth_pa);
       } else if (sgx_write_usp(&out, &usp, &usp_size)) {
          fprintf(stderr, "sgxc: %s shader: USP: out of memory\n", sname);
          status = 1;

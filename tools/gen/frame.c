@@ -5,7 +5,9 @@
  *   frame [-v] [-n node] [-t trace.bin] [-o out.bin] [-s WxH] [-p] [-k r,g,b,a] ops...
  *
  * -p makes the surface y-up, as an EGL pbuffer (rows bottom first in -o).
- * -R N draws the whole frame N times on the same context and surface
+ * -R N draws the whole frame N times on the same context and surface, each as the
+ * surface's first render unless SGXGEN_ALTERNATE=1 (frames count and alternate the RT entries);
+ * with -S each repeat gets a new surface, with -X a new context and surface (as separate runs)
  * (SGXGEN_DUMP_AFTER=1 dumps the microkernel-written structures after each, with
  * the region headers, tail pointers and TA blocks; SGXGEN_DUMP_PROGS=1 the 3D's
  * client programs before and after).
@@ -61,19 +63,21 @@ int main(int argc, char **argv)
 	const char *trace = NULL, *out = NULL, *node = NULL;
 	unsigned w = 720, h = 480;
 	float clear[4] = { 0, 0, 0.5f, 1 };
-	int opt, e = 0, ndraws = 0, verbose = 0, repeat = 1;
+	int opt, e = 0, ndraws = 0, verbose = 0, repeat = 1, fresh = 0;
 	struct { char op; char *arg; } ops[64];
 	int nops = 0;
 	unsigned long flush = 0;
 	uint32_t sflags = 0;
 
-	while ((opt = getopt(argc, argv, "vpn:t:o:s:k:d:V:C:T:F:R:")) != -1) {
+	while ((opt = getopt(argc, argv, "vpn:t:o:s:k:d:V:C:T:F:R:SX")) != -1) {
 		switch (opt) {
 		case 'v': verbose = 1; break;
 		case 'p': sflags |= SGX_SURFACE_Y_UP; break;
 		case 'n': node = optarg; break;
 		case 'F': flush = strtoul(optarg, NULL, 0); break;
 		case 'R': repeat = atoi(optarg); break;
+		case 'S': fresh = 1; break;
+		case 'X': fresh = 2; break;
 		case 't': trace = optarg; break;
 		case 'o': out = optarg; break;
 		case 's':
@@ -115,6 +119,17 @@ int main(int argc, char **argv)
 		struct sgx_state st0 = st;
 
 		ndraws = 0;
+		if (rep && fresh) {
+			sgx_surface_destroy(c, s);
+			if (fresh == 2) {
+				sgx_ctx_destroy(c);
+				c = sgx_ctx_create(&dev);
+				vs_xy = sgx_shader_builtin(c, SGX_VS_XY);
+				vs_xyz = sgx_shader_builtin(c, SGX_VS_XYZ);
+				fs = sgx_shader_builtin(c, SGX_FS_UNIFORM);
+			}
+			s = sgx_surface_create(c, w, h, sflags);
+		}
 		sgx_set_framebuffer(c, s);
 		sgx_clear(c, clear, 1.0f);
 

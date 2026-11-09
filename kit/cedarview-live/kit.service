@@ -1,0 +1,16 @@
+[Unit]
+Description=SGX545 test kit
+After=systemd-udev-settle.service systemd-logind.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/kit-live-run
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

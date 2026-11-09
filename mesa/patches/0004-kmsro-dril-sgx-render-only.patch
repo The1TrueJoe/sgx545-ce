@@ -1,0 +1,461 @@
+kmsro, dril, loader: sgx as a render-only GPU
+
+kmsro pairs a KMS-only display device with the SGX under powervr_sgx: a
+scanout buffer is a dumb buffer of the display device, imported into the
+GPU.
+
+powervr_sgx is a PCI device on the CE5300 (the SGX is its own PCI function)
+and an auxiliary device of gma500's PCI function on Cedarview:
+- a platform display device such as simpledrm on a boot framebuffer has to
+  find its render node off the platform bus: render nodes of PCI devices are
+  taken when their driver is powervr_sgx;
+- a display device on another bus (gma500, PCI) gets the render node of a
+  child of its own device, when that node's driver is in kmsro's list.
+  libdrm's device list leaves out the auxiliary bus, so the loader finds the
+  child through /sys/class/drm (loader_find_child_render_node, with a unit
+  test on fake sysfs trees).
+
+An X server's GLX (AIGLX) loads <display driver>_dri.so: dril stubs for
+simpledrm, gma500 and sgx.
+
+diff --git a/meson.build b/meson.build
+index 916b72b..c1d56a0 100644
+--- a/meson.build
++++ b/meson.build
+@@ -266,6 +266,7 @@ with_gallium_drm = system_has_kms_drm and [
+   with_gallium_panfrost,
+   with_gallium_v3d,
+   with_gallium_vc4,
++  with_gallium_sgx,
+ ].contains(true)
+ 
+ _vulkan_drivers = get_option('vulkan-drivers')
+diff --git a/src/gallium/auxiliary/pipe-loader/meson.build b/src/gallium/auxiliary/pipe-loader/meson.build
+index a4a13c0..4faf414 100644
+--- a/src/gallium/auxiliary/pipe-loader/meson.build
++++ b/src/gallium/auxiliary/pipe-loader/meson.build
+@@ -45,6 +45,9 @@ endif
+ if with_gallium_ethosu
+   renderonly_drivers_c_args += '-DGALLIUM_ETHOSU'
+ endif
++if with_gallium_sgx
++  renderonly_drivers_c_args += '-DGALLIUM_SGX'
++endif
+ if with_gallium_zink
+   renderonly_drivers_c_args += '-DGALLIUM_ZINK'
+ endif
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+index 7d19303..649091a 100644
+--- a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+@@ -397,6 +397,9 @@ pipe_loader_get_compatible_render_capable_device_fds(int kms_only_fd, unsigned i
+ #if defined GALLIUM_VC4
+       "vc4",
+ #endif
++#if defined GALLIUM_SGX
++      "powervr_sgx",
++#endif
+ #if defined GALLIUM_ZINK
+       "zink",
+ #endif
+@@ -408,9 +411,22 @@ pipe_loader_get_compatible_render_capable_device_fds(int kms_only_fd, unsigned i
+    pipe_loader_release(&dev, 1);
+ 
+    /* For display-only devices that are not on the platform bus, we can't assume
+-    * that any of the rendering devices are compatible. */
+-   if (!is_platform_device)
+-      return NULL;
++    * that any of the rendering devices are compatible, except one the display
++    * device's driver made a child of its own device (gma500 and the SGX). */
++   if (!is_platform_device) {
++      int fd = loader_open_child_render_node(kms_only_fd, drivers,
++                                             ARRAY_SIZE(drivers));
++      int *fds;
++
++      if (fd < 0 || !(fds = malloc(sizeof(*fds)))) {
++         if (fd >= 0)
++            close(fd);
++         return NULL;
++      }
++      fds[0] = fd;
++      *n_devices = 1;
++      return fds;
++   }
+ 
+    /* For platform display-only devices, we try to find a render-capable device
+     * on the platform bus and that should be compatible with the display-only
+diff --git a/src/gallium/targets/dril/dril_target.c b/src/gallium/targets/dril/dril_target.c
+index b5ba518..f3969ac 100644
+--- a/src/gallium/targets/dril/dril_target.c
++++ b/src/gallium/targets/dril/dril_target.c
+@@ -652,6 +652,7 @@ DEFINE_LOADER_DRM_ENTRYPOINT(tegra)
+ DEFINE_LOADER_DRM_ENTRYPOINT(armada_drm)
+ DEFINE_LOADER_DRM_ENTRYPOINT(exynos)
+ DEFINE_LOADER_DRM_ENTRYPOINT(gm12u320)
++DEFINE_LOADER_DRM_ENTRYPOINT(gma500)
+ DEFINE_LOADER_DRM_ENTRYPOINT(hdlcd)
+ DEFINE_LOADER_DRM_ENTRYPOINT(hx8357d)
+ DEFINE_LOADER_DRM_ENTRYPOINT(ili9163)
+@@ -676,6 +677,7 @@ DEFINE_LOADER_DRM_ENTRYPOINT(rcar_du)
+ DEFINE_LOADER_DRM_ENTRYPOINT(repaper)
+ DEFINE_LOADER_DRM_ENTRYPOINT(rockchip)
+ DEFINE_LOADER_DRM_ENTRYPOINT(rzg2l_du)
++DEFINE_LOADER_DRM_ENTRYPOINT(simpledrm)
+ DEFINE_LOADER_DRM_ENTRYPOINT(ssd130x)
+ DEFINE_LOADER_DRM_ENTRYPOINT(st7586)
+ DEFINE_LOADER_DRM_ENTRYPOINT(st7735r)
+@@ -687,3 +689,4 @@ DEFINE_LOADER_DRM_ENTRYPOINT(zynqmp_dpsub)
+ DEFINE_LOADER_DRM_ENTRYPOINT(lima)
+ DEFINE_LOADER_DRM_ENTRYPOINT(d3d12)
+ DEFINE_LOADER_DRM_ENTRYPOINT(zink)
++DEFINE_LOADER_DRM_ENTRYPOINT(sgx)
+diff --git a/src/gallium/targets/dril/meson.build b/src/gallium/targets/dril/meson.build
+index 55f10dc..7252df0 100644
+--- a/src/gallium/targets/dril/meson.build
++++ b/src/gallium/targets/dril/meson.build
+@@ -67,6 +67,7 @@ foreach d : [[with_gallium_kmsro, [
+                'armada-drm',
+                'exynos',
+                'gm12u320',
++               'gma500',
+                'hdlcd',
+                'hx8357d',
+                'ili9163',
+@@ -91,6 +92,7 @@ foreach d : [[with_gallium_kmsro, [
+                'repaper',
+                'rockchip',
+                'rzg2l-du',
++               'simpledrm',
+                'ssd130x',
+                'st7586',
+                'st7735r',
+@@ -124,6 +126,7 @@ foreach d : [[with_gallium_kmsro, [
+              [with_gallium_lima, ['lima']],
+              [with_gallium_d3d12, ['d3d12']],
+              [with_gallium_zink, ['zink']],
++             [with_gallium_sgx, ['sgx']],
+              [with_gallium_asahi, ['asahi']]]
+   if d[0]
+     foreach name : d[1]
+diff --git a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
+index 2ead5db..dc0563a 100644
+--- a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
++++ b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
+@@ -33,6 +33,7 @@
+ #include "panfrost/drm/panfrost_drm_public.h"
+ #include "lima/drm/lima_drm_public.h"
+ #include "asahi/drm/asahi_drm_public.h"
++#include "sgx/drm/sgx_drm_public.h"
+ #include "zink/drm/zink_drm_public.h"
+ #include "xf86drm.h"
+ 
+@@ -126,6 +127,14 @@ struct pipe_screen *kmsro_drm_screen_create(int kms_fd,
+          */
+          ro->create_for_resource = renderonly_create_gpu_import_for_resource;
+          screen = vc4_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
++#endif
++      } else if (strcmp(render_dev_name, "powervr_sgx") == 0) {
++#if defined(GALLIUM_SGX)
++         /* the display's dumb buffer, imported: simpledrm's (read with the
++          * CPU: cached pages; powervr_sgx flushes them around each job) or
++          * gma500's (exported through PRIME) */
++         ro->create_for_resource = renderonly_create_kms_dumb_buffer_for_resource;
++         screen = sgx_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
+ #endif
+       }
+ 
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index fcaa6be..5ec0d9a 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -26,6 +26,7 @@
+  *    Rob Clark <robclark@freedesktop.org>
+  */
+ 
++#include <dirent.h>
+ #include <dlfcn.h>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -272,7 +273,8 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+       device = devices[i];
+ 
+       if ((device->available_nodes & (1 << DRM_NODE_RENDER)) &&
+-          (device->bustype == DRM_BUS_PLATFORM)) {
++          (device->bustype == DRM_BUS_PLATFORM ||
++           device->bustype == DRM_BUS_PCI)) {
+          drmVersionPtr version;
+          bool found = false;
+ 
+@@ -286,6 +288,15 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+             continue;
+          }
+ 
++         /* a PCI render node only for the SGX545's DRM driver, which pairs
++          * with a display device of its own (kmsro) */
++         if (device->bustype == DRM_BUS_PCI &&
++             strcmp(version->name, "powervr_sgx") != 0) {
++            drmFreeVersion(version);
++            close(fd);
++            continue;
++         }
++
+          for (j = 0; j < n_drivers; j++) {
+             /* Always try to open the render device with Zink if requested */
+             if (strcmp("zink", drivers[j]) == 0 ||
+@@ -313,6 +324,86 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+    return result;
+ }
+ 
++/**
++ * Find the render node of a device whose parent is \p parent (a resolved
++ * sysfs path): a render-only GPU that a display driver creates as a device
++ * of its own, as gma500 does for the SGX on an auxiliary device of its PCI
++ * function.  libdrm's device list leaves out devices on the auxiliary bus,
++ * so this reads \p sysfs_drm (/sys/class/drm) directly.
++ *
++ * \p name gets the node's name (renderD128); the lowest numbered one wins.
++ */
++bool
++loader_find_child_render_node(const char *sysfs_drm, const char *parent,
++                              char *name, size_t size)
++{
++   char path[PATH_MAX], real[PATH_MAX];
++   struct dirent *ent;
++   long best = -1;
++   DIR *dir = opendir(sysfs_drm);
++
++   if (!dir)
++      return false;
++   while ((ent = readdir(dir))) {
++      long n;
++
++      if (strncmp(ent->d_name, "renderD", 7) != 0)
++         continue;
++      n = strtol(ent->d_name + 7, NULL, 10);
++      snprintf(path, sizeof(path), "%s/%s/device/..", sysfs_drm, ent->d_name);
++      if (!realpath(path, real) || strcmp(real, parent) != 0)
++         continue;
++      if (best < 0 || n < best) {
++         best = n;
++         snprintf(name, size, "%s", ent->d_name);
++      }
++   }
++   closedir(dir);
++   return best >= 0;
++}
++
++/**
++ * Open the render node of a child device of \p kms_fd's device
++ * (loader_find_child_render_node) when its kernel driver is one of
++ * \p drivers.  Returns the fd, or -1.
++ */
++int
++loader_open_child_render_node(int kms_fd, const char * const drivers[],
++                              unsigned int n_drivers)
++{
++#ifdef __linux__
++   char path[PATH_MAX], parent[PATH_MAX], name[32];
++   drmVersionPtr version;
++   struct stat st;
++   bool found = false;
++   int fd;
++
++   if (fstat(kms_fd, &st) || !S_ISCHR(st.st_mode))
++      return -1;
++   snprintf(path, sizeof(path), "/sys/dev/char/%u:%u/device",
++            major(st.st_rdev), minor(st.st_rdev));
++   if (!realpath(path, parent) ||
++       !loader_find_child_render_node("/sys/class/drm", parent, name,
++                                      sizeof(name)))
++      return -1;
++   snprintf(path, sizeof(path), "%s/%s", DRM_DIR_NAME, name);
++   fd = loader_open_device(path);
++   if (fd < 0)
++      return -1;
++   version = drmGetVersion(fd);
++   for (unsigned i = 0; version && i < n_drivers; i++)
++      found |= strcmp(version->name, drivers[i]) == 0;
++   drmFreeVersion(version);
++   if (!found) {
++      close(fd);
++      return -1;
++   }
++   return fd;
++#else
++   return -1;
++#endif
++}
++
+ bool
+ loader_is_device_render_capable(int fd)
+ {
+diff --git a/src/loader/loader.h b/src/loader/loader.h
+index 6748cb5..66efcc0 100644
+--- a/src/loader/loader.h
++++ b/src/loader/loader.h
+@@ -53,6 +53,14 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+                                          unsigned int n_drivers,
+                                          unsigned int *n_devices);
+ 
++bool
++loader_find_child_render_node(const char *sysfs_drm, const char *parent,
++                              char *name, size_t size);
++
++int
++loader_open_child_render_node(int kms_fd, const char * const drivers[],
++                              unsigned int n_drivers);
++
+ bool
+ loader_is_device_render_capable(int fd);
+ 
+diff --git a/src/loader/meson.build b/src/loader/meson.build
+index a8603ad..9ca3461 100644
+--- a/src/loader/meson.build
++++ b/src/loader/meson.build
+@@ -46,3 +46,17 @@ libloader = static_library(
+   dependencies : [idep_mesautil, dep_libdrm, dep_thread, dep_xcb, dep_xcb_xrandr],
+   build_by_default : false,
+ )
++
++if with_tests
++  test(
++    'loader_child_render_node',
++    executable(
++      'loader_child_render_node_test',
++      'tests/child_render_node_test.c',
++      link_with : libloader,
++      include_directories : [inc_include, inc_src, inc_util, inc_gallium],
++      dependencies : [idep_mesautil, idep_xmlconfig, dep_libdrm],
++    ),
++    suite : ['loader'],
++  )
++endif
+diff --git a/src/loader/tests/child_render_node_test.c b/src/loader/tests/child_render_node_test.c
+new file mode 100644
+index 0000000..8bc0155
+--- /dev/null
++++ b/src/loader/tests/child_render_node_test.c
+@@ -0,0 +1,123 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ *
++ * loader_find_child_render_node on fake sysfs trees: a render node on an
++ * auxiliary device of the display's PCI function is found, render nodes of
++ * other devices are not.
++ */
++
++#include <limits.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "loader.h"
++
++static char root[PATH_MAX];
++static int failures;
++
++static void
++mkdirs(const char *rel)
++{
++   char p[PATH_MAX];
++
++   snprintf(p, sizeof(p), "%s/%s", root, rel);
++   for (char *s = p + strlen(root) + 1; *s; s++) {
++      if (*s == '/') {
++         *s = 0;
++         mkdir(p, 0755);
++         *s = '/';
++      }
++   }
++   mkdir(p, 0755);
++}
++
++static void
++link_at(const char *target, const char *rel)
++{
++   char p[PATH_MAX];
++
++   snprintf(p, sizeof(p), "%s/%s", root, rel);
++   if (symlink(target, p)) {
++      perror(p);
++      exit(1);
++   }
++}
++
++/* a DRM node under device dir rel_dev, and its /sys/class/drm link */
++static void
++node(const char *rel_dev, const char *name)
++{
++   char rel[PATH_MAX], target[PATH_MAX];
++
++   snprintf(rel, sizeof(rel), "%s/drm/%s", rel_dev, name);
++   mkdirs(rel);
++   snprintf(rel, sizeof(rel), "%s/drm/%s/device", rel_dev, name);
++   link_at("../..", rel);
++   snprintf(target, sizeof(target), "../../%s/drm/%s", rel_dev, name);
++   snprintf(rel, sizeof(rel), "class/drm/%s", name);
++   link_at(target, rel);
++}
++
++static void
++expect(const char *rel_parent, const char *want)
++{
++   char parent[PATH_MAX], p[PATH_MAX], name[32] = "";
++   bool found;
++
++   snprintf(p, sizeof(p), "%s/%s", root, rel_parent);
++   if (!realpath(p, parent)) {
++      perror(p);
++      exit(1);
++   }
++   snprintf(p, sizeof(p), "%s/class/drm", root);
++   found = loader_find_child_render_node(p, parent, name, sizeof(name));
++   if (want ? !found || strcmp(name, want) != 0 : found) {
++      fprintf(stderr, "%s: got %s, want %s\n", rel_parent,
++              found ? name : "none", want ? want : "none");
++      failures++;
++   }
++}
++
++int
++main(void)
++{
++   const char *gma = "devices/pci0000:00/0000:00:02.0";
++   const char *other = "devices/pci0000:00/0000:00:03.0";
++   const char *plat = "devices/platform/simple-framebuffer.0";
++
++   snprintf(root, sizeof(root), "%s/child-render-XXXXXX",
++            getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
++   if (!mkdtemp(root)) {
++      perror("mkdtemp");
++      return 1;
++   }
++   mkdirs("class/drm");
++
++   /* gma500: the display (card0) on the PCI function, the SGX's render node
++    * on its auxiliary device */
++   node(gma, "card0");
++   node("devices/pci0000:00/0000:00:02.0/gma500_gfx.sgx.0", "card1");
++   node("devices/pci0000:00/0000:00:02.0/gma500_gfx.sgx.0", "renderD129");
++   /* another PCI GPU with a render node of its own, and a platform display */
++   node(other, "card2");
++   node(other, "renderD128");
++   node(plat, "card3");
++
++   expect(gma, "renderD129");
++   /* a GPU's own render node is no child of its device */
++   expect(other, NULL);
++   expect(plat, NULL);
++
++   /* two children: the lowest numbered */
++   node("devices/pci0000:00/0000:00:02.0/second.0", "renderD200");
++   node("devices/pci0000:00/0000:00:02.0/third.0", "renderD130");
++   expect(gma, "renderD129");
++
++   if (!failures)
++      printf("loader_find_child_render_node: all passed\n");
++   return failures != 0;
++}

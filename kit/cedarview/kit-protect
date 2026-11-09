@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# Sets every block device except the stick read-only, partitions included.
+# Run at boot and before every step (a disk can show up late).
+STICK=$(/usr/local/bin/kit-stick)
+for b in /sys/block/*; do
+	d=${b##*/}
+	case $d in loop*|ram*|zram*|"$STICK") continue ;; esac
+	for p in "$b" "$b"/"$d"*; do
+		[ -e "$p/dev" ] || continue
+		blockdev --setro "/dev/${p##*/}" 2>/dev/null
+	done
+done

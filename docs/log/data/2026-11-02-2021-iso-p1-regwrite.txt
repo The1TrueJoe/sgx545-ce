@@ -1,5 +1,5 @@
 P1 open half: does a client USSE `str` to an effective register take effect?
-EA1 (openhc-ea1-000FFF1AFCA9, 10.0.0.110), SGX545 core rev 1.0.14, kernel 7.1.8.
+EA1 (ce5300-board), SGX545 core rev 1.0.14, kernel 7.1.8.
 tools/iso/suite_p1_write.py (safe) then tools/iso/suite_p1_dirbase.py (destructive).
 2026-11-02 ~20:20 UTC. RAM 1781388 kB; SGX BAR0 phys 0xdc000000 (16 MB); DIR base at boot ~0x01d6b000.
 

@@ -108,6 +108,7 @@ struct sgx_surface {
 	uint32_t eot;			/* end-of-tile USSE program */
 	uint32_t pixev, pixev_rows;	/* pixel event PDS program */
 	uint32_t bg_pds[3];		/* background object PDS words (secondary, middle, primary) */
+	uint32_t frames;		/* renders so far (SGXGEN_ALTERNATE) */
 };
 
 struct sgx_shader {

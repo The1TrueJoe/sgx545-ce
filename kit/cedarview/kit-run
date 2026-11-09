@@ -1,0 +1,191 @@
+#!/bin/bash
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# The Cedarview test run (kit/cedarview/README.md). Plain progress on the
+# screen; everything into one results-*.tar.gz on the stick's SGXKIT partition.
+#   1 system facts   2 gma500   3 powervr_sgx: the core's identity, and for a
+#   known core the open microkernel   4 the uAPI, frame and blit tests, then a
+#   deliberate hang and its recovery   5 the results file
+# A step that fails or hangs is logged and the run goes on; any GPU job
+# timeout ends the GPU tests. No serial numbers or network addresses leave.
+. /etc/kit-release
+R=/tmp/results
+mkdir -p "$R"
+LOG=$R/run.log
+step() { printf '\n  [%s/5] %s\n' "$1" "$2"; echo "== step $1: $2 ($(date -u +%T))" >> "$LOG"; }
+note() { printf '        %s\n' "$*"; echo "$*" >> "$LOG"; }
+SUM=/tmp/summary
+: > "$SUM"
+result() { printf '    %-5s %s\n' "$1" "$2" >> "$SUM"; }   # PASS|FAIL|SKIP what
+run() {   # NAME SECS CMD...: CMD's output into NAME, at most SECS
+	local n=$1 t=$2; shift 2
+	echo "\$ $*" >> "$LOG"
+	timeout -k 5 "$t" "$@" > "$R/$n" 2>&1
+	local rc=$?
+	echo "  -> exit $rc" >> "$LOG"
+	return $rc
+}
+scrub() { sed -E -e 's/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g' \
+	-e 's/(SerialNumber|Serial Number|serial)([:=] *).*/\1\2(removed)/I'; }
+timeouts() { dmesg | grep -c 'job timed out'; }
+
+clear
+cat <<EOF
+
+  SGX545 test for Intel Cedarview (GMA 3600/3650), kit $KIT_SERIES ($KIT_VERSION)
+  ------------------------------------------------------------------
+  This only reads from your computer. Your internal disk is set to
+  read-only and nothing is installed. It takes a few minutes.
+EOF
+/usr/local/sbin/kit-protect
+STICK=$(/usr/local/bin/kit-stick)
+lsblk -o NAME,SIZE,RO,TYPE,TRAN,MOUNTPOINT > "$R/disks.txt" 2>&1
+
+step 1 "Reading what hardware this is"
+{
+	echo "kit $KIT_VERSION, kernel $(uname -r), stick ${STICK:-not found}"
+	for f in sys_vendor product_name product_version board_vendor board_name bios_vendor bios_version bios_date; do
+		printf '%s: %s\n' "$f" "$(cat /sys/class/dmi/id/$f 2>/dev/null)"
+	done
+	[ -d /sys/firmware/efi ] && echo "boot: UEFI" || echo "boot: BIOS"
+} > "$R/system.txt"
+uname -a > "$R/uname.txt"
+cp /proc/cpuinfo "$R/cpuinfo.txt"
+cp /proc/meminfo "$R/meminfo.txt"
+run lspci-gpu.txt 30 lspci -nnvvv -s 00:02.0
+run lspci.txt 30 lspci -nnk
+note "$(sed -n 's/^product_name: //p' "$R/system.txt") / $(grep -m1 'model name' "$R/cpuinfo.txt" | cut -d: -f2)"
+note "$(lspci -nn -s 00:02.0 2>/dev/null | cut -d' ' -f2-)"
+
+step 2 "Starting the display driver (gma500)"
+/usr/local/sbin/kit-protect
+run modprobe-gma500.txt 60 modprobe gma500_gfx
+ls -l /sys/bus/auxiliary/devices/ > "$R/auxiliary.txt" 2>&1
+if [ -n "$(compgen -G '/sys/bus/auxiliary/devices/gma500_gfx.sgx.*')" ]; then
+	note "gma500 is up and offers the GPU to the new driver."
+	result PASS "display driver hands the GPU over"
+else
+	note "gma500 did not offer the GPU (this is useful to know too)."
+	result FAIL "display driver hands the GPU over"
+fi
+
+step 3 "Starting the GPU driver"
+# powervr_sgx reads the core's identity first and refuses a core it doesn't
+# know before writing any register; a known core gets the open microkernel.
+/usr/local/sbin/kit-protect
+dmesg > "$R/dmesg-before-sgx.txt"
+FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
+[ -f "$FW" ] || note "This kit has no GPU firmware; the driver can only identify the GPU."
+run modprobe-sgx.txt 60 modprobe powervr_sgx
+ident=$(dmesg | grep -o 'SGX core id 0x[0-9a-f]* revision 0x[0-9a-f]*[^.]*' | tail -1)
+note "${ident:-the driver did not report the GPU}"
+KNOWN=
+echo "$ident" | grep -qE 'revision 0x[0-9a-f]+: ' && KNOWN=1
+STARTED=
+dmesg | grep -q 'powervr_sgx.*microkernel started' && [ -n "$(compgen -G '/dev/dri/renderD*')" ] && STARTED=1
+[ -n "$STARTED" ] && note "The driver started the GPU's microkernel."
+if [ -z "$ident" ]; then result FAIL "GPU identified"
+elif [ -z "$KNOWN" ]; then result SKIP "GPU known to this driver (not yet)"
+elif [ -n "$STARTED" ]; then result PASS "GPU identified and started"
+else result FAIL "GPU started"; fi
+cat /sys/kernel/debug/dri/*/status > "$R/status-after-start.txt" 2>/dev/null
+
+step 4 "Drawing on the GPU"
+T=/usr/local/lib/kit
+if [ -z "$ident" ]; then
+	note "Skipped: the driver found no SGX GPU here (the results say why)."
+elif [ -z "$KNOWN" ]; then
+	note "Skipped: this driver doesn't know this GPU yet. The file this test"
+	note "saves tells us what it is, so the next kit can draw on it."
+elif [ -z "$STARTED" ]; then
+	note "Skipped: the GPU didn't start (the results say why)."
+else
+	/usr/local/sbin/kit-protect
+	t0=$(timeouts)
+	for t in "powervr_sgx_test" "powervr_sgx_frame -n 10" "powervr_sgx_blit -n 4"; do
+		# shellcheck disable=SC2086 # the test and its arguments
+		set -- $t
+		[ -x "$T/$1" ] || { note "$1: not in this kit"; continue; }
+		if run "$1.txt" 180 "$T/$1" "${@:2}"; then note "$1: passed"; result PASS "$1"
+		else note "$1: FAILED (exit $?)"; result FAIL "$1"; fi
+		cat /sys/kernel/debug/dri/*/status > "$R/$1-status.txt" 2>/dev/null
+		if [ "$(timeouts)" != "$t0" ]; then
+			note "The GPU stopped responding; ending the GPU tests here."
+			result FAIL "the GPU stopped responding; later tests skipped"
+			break
+		fi
+	done
+	# last: a render that faults on purpose, and the recovery from it (the
+	# test checks there is exactly one reset); only on a GPU that was fine
+	if [ "$(timeouts)" = "$t0" ] && [ -x "$T/powervr_sgx_hang" ]; then
+		if run powervr_sgx_hang.txt 240 "$T/powervr_sgx_hang"; then
+			note "powervr_sgx_hang: passed (a deliberate GPU hang and its recovery)"
+			result PASS "powervr_sgx_hang (recovery from a deliberate hang)"
+		else
+			note "powervr_sgx_hang: FAILED (exit $?)"
+			result FAIL "powervr_sgx_hang (recovery from a deliberate hang)"
+		fi
+		cat /sys/kernel/debug/dri/*/status > "$R/powervr_sgx_hang-status.txt" 2>/dev/null
+	fi
+	i=0; for d in /sys/class/devcoredump/devcd*/data; do
+		[ -e "$d" ] || continue
+		cat "$d" > "$R/devcoredump-$i.bin"; i=$((i+1))
+	done
+fi
+
+step 5 "Saving the results to the stick"
+dmesg | scrub > "$R/dmesg.txt"
+for f in "$R"/lspci*.txt "$R"/dmesg-before-sgx.txt; do scrub < "$f" > "$f.s" && mv "$f.s" "$f"; done
+cp /proc/interrupts "$R/interrupts.txt"
+cp /proc/iomem "$R/iomem.txt"
+prod=$(sed -n 's/^product_name: //p' "$R/system.txt" | tr -c 'A-Za-z0-9.\n-' '_' | cut -c1-32)
+NAME=results-kit${KIT_SERIES}-${prod:-unknown}-$(date -u +%Y%m%d-%H%M).tar.gz
+cp "$SUM" "$R/summary.txt"
+OK=
+p=$(blkid -t PARTUUID="$DISKID-01" -o device 2>/dev/null | head -1)
+# only the stick's own partition, never anything else
+if [ -n "$STICK" ] && [ -n "$p" ] && [ "$(basename "$(readlink -f "/sys/class/block/${p#/dev/}/..")")" = "$STICK" ] &&
+	mount -t vfat -o rw,flush "$p" /mnt; then
+	tar -C /tmp -czf "/mnt/$NAME" results && sync && OK=1
+	umount /mnt
+fi
+
+clear
+if [ -n "$OK" ]; then
+	cat <<EOF
+
+
+  ==================================================================
+    DONE. Thank you!
+  ==================================================================
+
+    The results are saved on this USB stick, in the file
+
+        $NAME
+
+    1. Turn this computer off (type  p  and Enter below).
+    2. Plug the stick into any other computer. It shows up as a
+       drive named SGXKIT.
+    3. Send us that file, as the guide says.
+
+    GPU: ${ident:-not reported}
+
+    Kit $KIT_SERIES results:
+$(cat "$SUM")
+
+EOF
+else
+	cat <<EOF
+
+  ==================================================================
+    The test ran, but the results could not be saved to the stick.
+  ==================================================================
+
+    Please take a photo of this screen and send it to us instead.
+
+    GPU: ${ident:-not reported}
+    $(tail -3 "$LOG" | tr '\n' ' ')
+
+EOF
+fi

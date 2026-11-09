@@ -14,7 +14,9 @@ tools/tex/blitest
 # is Imagination's) and the frames generated for the offline validators
 cap/
 fw/
-gen/
+/gen/
 tools/tex/blitest-fake-native
 tools/iso/iso
 tools/iso/iso-fake
+__pycache__/
+*.pyc

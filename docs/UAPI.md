@@ -147,7 +147,7 @@ On a failure nothing is copied, the ioctl returns `-EINVAL`, and `bad_offset` is
 object offset of the first bad instruction, for the compiler's debug output.
 
 The table is generated from the clean-room isaspec description,
-`mesa/src/sgx545/isa/sgx545.xml`, by `drm/tools/gen_usse_table.py`: one (mask, match)
+`mesa/src/sgx/isa/sgx.xml`, by `drm/tools/gen_usse_table.py`: one (mask, match)
 pair per form, the bits the form's patterns fix. The generator refuses two forms that
 could match the same word.
 
@@ -905,12 +905,12 @@ pvr's identifiers use `pvr` although its module is `powervr`; the same shortenin
 (`drm_pvr_sgx_*`) would read as part of the Rogue uAPI, so the name is spelled in full. The
 original recommendation follows.
 
-**Recommendation: `sgx545`,** to be confirmed with the Imagination maintainers before any
+**Recommendation: `sgx`,** to be confirmed with the Imagination maintainers before any
 RFC. Upstream's Rogue driver is `powervr`, so `pvr` and `powervr` are taken. Plain `sgx` is
 short and covers later cores, but on Intel hardware it collides with Intel SGX (`/dev/sgx_enclave`,
 `arch/x86/kernel/cpu/sgx`) in every search and bug report. `powervr_sgx` is the clearest
 alternative and the better one if Imagination wants the family name kept together.
-`sgx545` is accurate for the only core we can test and doesn't stop another SGX core being
+`sgx` is accurate for the only core we can test and doesn't stop another SGX core being
 added later. Mesa's directory is the Mesa maintainers' call (`AGENTS.md` section 3.7). The
 placeholder is one search-and-replace from any of these, until something merges.
 
@@ -1067,8 +1067,8 @@ scheduler tests without a GPU workload. It can be dropped before the RFC if revi
 
 ### D12. Code objects and the upload ioctl
 
-**Recommendation, to confirm (2026-11-03): USSE code goes only through
-`UPLOAD_CODE` into `BO_CODE` objects, as section 2 describes.** This is D9 option 1
+**Decided (Joseph, 2026-11-08): USSE code goes only through `UPLOAD_CODE` into
+`BO_CODE` objects, as section 2 describes.** This is D9 option 1
 made concrete, and it closes some options:
 
 - The winsys can no longer write shaders into a mapped buffer. Mesa's code heap becomes

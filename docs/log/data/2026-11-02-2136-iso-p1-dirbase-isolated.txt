@@ -1,4 +1,4 @@
-P1 open half, the DoS question re-run IN ISOLATION. EA1 (openhc-ea1-000FFF1AFCA9, 10.0.0.110),
+P1 open half, the DoS question re-run IN ISOLATION. EA1 (ce5300-board),
 SGX545 core rev 1.0.14. 2026-11-02, real UTC (box clock runs ~5 min 11 s fast).
 tools/iso/suite_p1_dirbase_iso.py under flock /tmp/gpu.lock, WPE stopped, nothing else on the GPU.
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Run dEQP-GLES2 (or piglit) on an EA from the host, across wedges and power cycles.
 
-    drive-deqp.py sgx545|ddk|piglit [--box 10.0.0.110] [--chunk 200] [--filter REGEX] [--max-wedges N]
+    drive-deqp.py sgx|ddk|piglit [--box 10.0.0.110] [--chunk 200] [--filter REGEX] [--max-wedges N]
                   [--name NAME] [--caselist FILE]
 
 --name keeps a run apart from the others (its results in run-NAME, its Mesa in
@@ -21,7 +21,7 @@ a single test that still wedges goes into wedges.txt as a result of "Wedge" and
 is not run again. Those are the lines for ci/<who>-skips.txt.
 
 The box needs nothing but SSH: the payload ($DEQP_WORK/out, and our Mesa from
-$MESA_DIR for sgx545) is copied to $BOX_DIR (default /root/deqp) when missing.
+$MESA_DIR for sgx) is copied to $BOX_DIR (default /root/deqp) when missing.
 
 piglit runs piglit's gpu profile (quick_gl and quick_shader; mesa/tests/piglit/
 build-piglit.sh) on our desktop-GL Mesa ($MESA_DIR: the x86_64-gl build's lib)
@@ -36,7 +36,9 @@ Environment:
   BOX         the box (default 10.0.0.110, the EA1, the GPU box)
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
-  BOX_ENV     more variables for our driver on the box, e.g. "SGX545_F16=0"
+  BOX_ENV     more variables for our driver on the box, e.g. "SGX_F16=0"
+  CHUNK_HOOK  a command on the box after every chunk (e.g. a debugfs status), its
+              output kept in run-NAME/chunk-hook.txt
 """
 import argparse
 import os
@@ -53,6 +55,7 @@ WORK = os.environ.get("DEQP_WORK", os.path.expanduser("~/.cache/sgx545/deqp"))
 PIGLIT_WORK = os.environ.get("PIGLIT_WORK", os.path.expanduser("~/.cache/sgx545/piglit"))
 BOX_DIR = os.environ.get("BOX_DIR", "/root/deqp")    # /root/piglit for piglit (main)
 DDK_ROOT = os.environ.get("DDK_ROOT", "/opt/sgx-i386")
+BOX_PASS = os.environ.get("BOX_PASS", "")  # the box's root password (sshpass)
 BOX_ENV = os.environ.get("BOX_ENV", "")
 CONFIG = "rgba8888d24s8ms0"
 TEST_TIMEOUT = 60  # deqp-runner's per-test limit, seconds
@@ -74,7 +77,7 @@ class Box:
 
     def ssh(self, cmd, timeout=SSH_TIMEOUT, stdin=None):
         """(returncode, output); returncode None when the box didn't answer in time."""
-        args = ["sshpass", "-p", "openhc", "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
+        args = ["sshpass", "-p", BOX_PASS, "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + self.host, cmd]
         for attempt in range(4):
             t0 = time.time()
@@ -112,8 +115,12 @@ def result_line(line):
     return None
 
 
+# the DDK's services driver, and powervr_sgx's job timeout
+RECOVERY_GREP = "grep -c -e 'Recovery triggered' -e 'job timed out'"
+
+
 def recoveries(box):
-    rc, out = box.ssh("dmesg | grep -c 'Recovery triggered'")
+    rc, out = box.ssh(f"dmesg | {RECOVERY_GREP}")
     return int(out.strip() or 0) if rc in (0, 1) else None
 
 
@@ -222,7 +229,7 @@ def payload(box, who, name):
     if rc == 0:
         return
     # dEQP itself is there from an earlier run: only a new Mesa to send
-    exe = "deqp-gles2" if who == "sgx545" else "deqp-gles2-i386"
+    exe = "deqp-gles2" if who == "sgx" else "deqp-gles2-i386"
     rc, _ = box.ssh(f"test -x {BOX_DIR}/deqp-runner && test -d {BOX_DIR}/gles2 && test -x {BOX_DIR}/{exe}")
     whole = rc != 0
     log("copying the payload to the box" if whole else "copying our Mesa to the box")
@@ -233,7 +240,7 @@ def payload(box, who, name):
             t.add(os.path.join(out, "deqp-runner"), "deqp-runner")
             t.add(os.path.join(out, "gles2"), "gles2")
             t.add(os.path.join(out, exe), exe)
-        if who == "sgx545":
+        if who == "sgx":
             t.add(os.environ["MESA_DIR"], "lib-" + name)
     rc, o = box.ssh(f"mkdir -p {BOX_DIR} && cd {BOX_DIR} && tar xf - && touch .complete-{name}", timeout=900,
                     stdin=buf.getvalue())
@@ -244,11 +251,11 @@ def payload(box, who, name):
 def runner_script(who, name):
     if who == "piglit":
         return (f"cd {BOX_DIR} && rm -rf out && set -- && while IFS= read -r t; do set -- \"$@\" "
-                f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX545_DEBUG=hangabort "
+                f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX_DEBUG=hangabort "
                 f"{LOCK} ./piglit-runner run --piglit-folder {BOX_DIR}/piglit --profile gpu --process-isolation "
                 f"--output out --jobs 1 --timeout {TEST_TIMEOUT} \"$@\" > runner.log 2>&1; echo rc=$?")
-    if who == "sgx545":
-        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX545_DEBUG=hangabort {BOX_ENV}"
+    if who == "sgx":
+        env = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless SGX_DEBUG=hangabort {BOX_ENV}"
         deqp = f"{BOX_DIR}/deqp-gles2"
     else:
         deqp = f"{BOX_DIR}/deqp-gles2-ddk"
@@ -272,7 +279,7 @@ def canary(box, who, name):
                           f"tests/spec/glsl-1.10/execution/glsl-fs-add-masked.shader_test -auto -fbo 2>&1",
                           timeout=45)
         return rc == 0 and b'"result": "pass"' in out
-    if who == "sgx545":
+    if who == "sgx":
         pre = f"LD_LIBRARY_PATH={BOX_DIR}/lib-{name} EGL_PLATFORM=surfaceless {BOX_ENV}"
         exe = f"{BOX_DIR}/deqp-gles2"
     else:
@@ -313,6 +320,8 @@ def run_chunk(box, who, name, tests):
     rc, out = box.ssh(runner_script(who, name), timeout=limit)
     res = {}
     wedged = rc is None
+    # piglit-runner reports a comma in a name as "-"
+    named = {t.replace(",", "-"): t for t in tests} if who == "piglit" else {}
     if not wedged:
         rc2, csv = box.ssh(f"cat {BOX_DIR}/out/results.csv 2>/dev/null")
         if rc2 is None:
@@ -320,7 +329,7 @@ def run_chunk(box, who, name, tests):
         for line in csv.decode(errors="replace").splitlines():
             r = result_line(line)
             if r:
-                res[r[0]] = (r[1], r[2])
+                res[named.get(r[0], r[0])] = (r[1], r[2])
     if not wedged:
         # the failing tests' logs, for triage
         logs = "*.log" if who == "piglit" else "*.qpa"    # piglit-runner keeps a log per failing test
@@ -334,6 +343,19 @@ def run_chunk(box, who, name, tests):
     r1 = recoveries(box) if not wedged else None
     if r0 is not None and r1 is not None and r1 != r0:
         log(f"chunk of {len(tests)}: {r1 - r0} SGX recoveries")
+        # what the kernel said about them (and powervr_sgx's devcoredump, which expires)
+        rc4, out4 = box.ssh("dmesg | grep -E 'job timed out|Recovery|powervr_sgx' | tail -40; "
+                            "for d in /sys/class/devcoredump/devcd*; do [ -e $d/data ] && cat $d/data > /tmp/devcd-$(date +%s).bin; done; "
+                            "ls /tmp/devcd-*.bin 2>/dev/null", timeout=60)
+        if rc4 is not None:
+            with open(os.path.join(RUN_DIR, "recoveries.txt"), "ab") as f:
+                f.write(f"== after chunk starting {tests[0]}\n".encode() + out4)
+    if os.environ.get("CHUNK_HOOK") and not wedged:
+        # CHUNK_HOOK: a command on the box after every chunk, its output kept in chunk-hook.txt
+        rc5, out5 = box.ssh(os.environ["CHUNK_HOOK"], timeout=60)
+        if rc5 is not None:
+            with open(os.path.join(RUN_DIR, "chunk-hook.txt"), "ab") as f:
+                f.write(f"== after chunk starting {tests[0]}\n".encode() + out5)
     if not wedged and not canary(box, who, name):
         log("the canary didn't pass after this chunk")
         wedged = True
@@ -345,7 +367,7 @@ def main():
     import signal
     signal.signal(signal.SIGTERM, lambda *_: sys.exit("terminated: the lock is let go"))
     ap = argparse.ArgumentParser()
-    ap.add_argument("who", choices=["sgx545", "ddk", "piglit"])
+    ap.add_argument("who", choices=["sgx", "ddk", "piglit"])
     ap.add_argument("--box", default=os.environ.get("BOX", "10.0.0.110"))
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--filter", default=None)
@@ -410,7 +432,7 @@ def main():
         global LOCK
         LOCK = ""
         box.ssh("touch /tmp/deqp-job")
-        holder = subprocess.Popen(["sshpass", "-p", "openhc", "ssh", "-o", "StrictHostKeyChecking=no",
+        holder = subprocess.Popen(["sshpass", "-p", BOX_PASS, "ssh", "-o", "StrictHostKeyChecking=no",
                                    "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + a.box,
                                    "flock -n /tmp/gpu.lock sh -c 'echo locked; while [ -e /tmp/deqp-job ]; do sleep 2; done' "
                                    "|| echo busy"],
@@ -437,7 +459,7 @@ def main():
 def box_state(box):
     """(the run's boot, boot id, SGX recoveries since boot), or None if the box doesn't answer"""
     rc, out = box.ssh("cat /proc/cmdline; cat /proc/sys/kernel/random/boot_id; "
-                      f"dmesg | grep -c 'Recovery triggered'; test -f {RAMBOOT_MARK} && echo marked")
+                      f"dmesg | {RECOVERY_GREP}; test -f {RAMBOOT_MARK} && echo marked")
     lines = out.decode(errors="replace").split("\n")
     if rc not in (0, 1) or len(lines) < 3:
         return None

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright © 2026 Joseph Telaak
-"""Assemble openHC's microkernel (ukernel.py) into the binary srvinit loads
+"""Assemble the open microkernel (ukernel.py) into the binary srvinit loads
 and a manifest of its entry offsets.
 
     python3 ukernel/build.py [out.bin] [manifest.json]
@@ -50,8 +50,15 @@ def assemble():
     for kind, val in a.lines:
         if kind == "label":
             continue
+        if kind == "raw":                      # a pre-encoded (hi, lo) word
+            words.append((val[1], val[0]))
+            idx += 1
+            continue
         if kind == "patch":
-            text = f"limm r{val[0]}, #0"       # the loader fills the immediate
+            text = f"limm r{val[0]}, #0xdbeef"  # 0xdbeef placeholder: the loader fills the
+                                                # immediate; powervr_sgx's loader checks the
+                                                # sentinel before patching (our srvinit's
+                                                # limm_ours does not, so either works)
         else:
             text = val
         m = re.match(r"(\(!?p\d\)\s*)?(ba|br)\s+([A-Za-z_]\w*)\s*(\[.*\])?$", text.strip())
@@ -69,15 +76,30 @@ def assemble():
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "sgx545-ukernel-openhc.bin")
+        os.path.dirname(os.path.abspath(__file__)), f"{ukernel.CORE_NAME}_ukernel.bin")
     man = sys.argv[2] if len(sys.argv) > 2 else out.rsplit(".", 1)[0] + ".json"
     words, offset, patches = assemble()
     data = b"".join(struct.pack("<II", lo, hi) for lo, hi in words)
     with open(out, "wb") as f:
         f.write(data)
+    # features: the image's declared capability bits (PVRSGX_UKFW_*). Bit 1 = SECURE
+    # (the bgblock is CPU-written, so powervr_sgx drops kernel-heap sharing). Default 2:
+    # secure mode is HW-proven and the open default (m2 2026-11-08). NOT bit 0 (cleanup-v2):
+    # ours is defer-and-hold. build_id names the build. mkukfw --manifest reads both.
+    features = int(os.environ.get("UK_FEATURES", "2"), 0)
+    # Feature bits 0-15 are host-visible and must be known to the driver; bits 16-31 are the
+    # microkernel's own build variants, which the driver accepts and ignores (m2-drm 25f9d54).
+    if ukernel.XFER_BANK_ALL:
+        features |= 1 << 16   # bit 16 = all-data-master transfer bank routing (Cedarview 1.0.13 B)
+    build_id = os.environ.get("UK_BUILD_ID", "dev")
+    version = "%d.%d" % (ukernel.UK_VERSION >> 16, ukernel.UK_VERSION & 0xffff)
     manifest = {
+        "core": ukernel.CORE_NAME,          # the SGX core this image targets (per-core)
+        "version": version,                 # microkernel interface version, major.minor
         "bytes": len(data),
         "instructions": len(words),
+        "features": features,
+        "build_id": build_id,
         "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }

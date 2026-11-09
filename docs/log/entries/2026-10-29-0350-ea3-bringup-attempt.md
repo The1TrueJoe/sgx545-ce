@@ -1,6 +1,6 @@
 # First EA3 slot: the loader works, the core comes up, init does not complete
 
-First hardware test of openHC's open microkernel, on the shared EA3 (slot
+First hardware test of the open microkernel, on the shared EA3 (slot
 agreed with the DSP, both b53 and the SGX replayer sessions; Bench recovery
 pre-cleared). `srvinit -o /lib/.../ukernel.bin` on a clean boot, GPU not yet
 initialised.

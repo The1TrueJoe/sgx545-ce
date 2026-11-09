@@ -6,7 +6,7 @@ linux-firmware.
 
 ## License: MIT (confirmed)
 
-openHC's microkernel (`ukernel/`) is written from `docs/` — behaviour,
+The open microkernel (`ukernel/`) is written from `docs/` — behaviour,
 encodings and register meanings found by tracing and hardware tests
 (`tools/isa/hwt_*`), never translated from Imagination's bytes or decompiled
 code (the clean-room discipline in `docs/CLEANROOM.md`, §3.6 and
@@ -50,10 +50,10 @@ mismatch at load. SGXMKIF already carries two such checks, which ours honours:
   declared; our get-misc-info handler must report the same sizes.
 
 For ours we add one field of our own to the version surface: a small
-**`openHC microkernel version`** word, written into a fixed control-block slot
+**`open microkernel version`** word, written into a fixed control-block slot
 at init and bumped whenever our host-visible behaviour changes. `init` writes
 `0x00010000` (1.0) to control-block `+0x58`; it is advisory on the DDK driver
-(which does not read it) and lets an openHC-aware kernel log exactly which
+(which does not read it) and lets a kernel that knows the open microkernel log exactly which
 build is running. The authoritative compatibility gate stays the SGXMKIF
 build-options and struct-size checks, so the DDK stays a drop-in.
 

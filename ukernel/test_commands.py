@@ -28,8 +28,8 @@ CORE_ID, CORE_REV = 0x1000E, 0x10014
 
 def build_ours():
     import subprocess
-    binp = os.path.join(HERE, "sgx545-ukernel-openhc.bin")
-    manp = os.path.join(HERE, "sgx545-ukernel-openhc.json")
+    binp = os.path.join(HERE, "sgx545_ukernel.bin")
+    manp = os.path.join(HERE, "sgx545_ukernel.json")
     subprocess.run([sys.executable, os.path.join(HERE, "build.py"), binp, manp], check=True)
     man = json.load(open(manp))
     code = bytearray(open(binp, "rb").read())
@@ -102,6 +102,35 @@ def test_cleanup(code, man):
     print("  cleanup: ui32CleanupStatus complete set  OK")
 
 
+def test_cleanup_defer(code, man):
+    """a cleanup must DEFER while this process's render (SC_INFLIGHT, word 0x14) is in
+    flight, so the host can't free the PB/RT under the running 3D/DPM-free, then complete
+    once it clears."""
+    u, mem, regs = ours_machine(code)
+    t = A["ta3d"]
+    mem.wr(t + 4 * 0x14, 0xABCD)             # SC_INFLIGHT != 0: a render is in flight
+    ours_cmd(u, mem, regs, man, 5, [1, 0x10000000])
+    assert not (mem.rd(A["hostctl"] + 8) & 0x1), "cleanup must defer while a render is in flight"
+    mem.wr(t + 4 * 0x14, 0)                   # render finished (SC_INFLIGHT cleared)
+    ours_cmd(u, mem, regs, man, 5, [1, 0x10000000])
+    assert mem.rd(A["hostctl"] + 8) & 0x1, "cleanup must complete once no render is in flight"
+    print("  cleanup defer: holds while in flight, completes after  OK")
+
+
+def test_cleanup_bound(code, man):
+    """the defer is BOUNDED: if a render never finishes (a lost event), the cleanup must
+    force-complete within CLEANUP_DEFER_MAX ticks rather than stick the box forever."""
+    u, mem, regs = ours_machine(code)
+    t = A["ta3d"]
+    mem.wr(t + 4 * 0x14, 0xABCD)             # render stuck in flight forever
+    for _ in range(400):                      # > CLEANUP_DEFER_MAX
+        ours_cmd(u, mem, regs, man, 5, [1, 0x10000000])
+        if mem.rd(A["hostctl"] + 8) & 0x1:
+            break
+    assert mem.rd(A["hostctl"] + 8) & 0x1, "cleanup must force-complete within the bound (no deadlock)"
+    print("  cleanup bound: force-completes within CLEANUP_DEFER_MAX ticks  OK")
+
+
 def test_ctxsuspend(code, man):
     u, mem, regs = ours_machine(code)
     ctx = 0x10800000
@@ -131,10 +160,12 @@ def main():
         sys.exit("usage: test_commands.py DDK_FIRMWARE")
     fw = open(sys.argv[1], "rb").read()
     code, man = build_ours()
-    print("openHC microkernel command tests:")
+    print("microkernel command tests:")
     test_getmiscinfo(fw, code, man)
     test_power(code, man)
     test_cleanup(code, man)
+    test_cleanup_defer(code, man)
+    test_cleanup_bound(code, man)
     test_ctxsuspend(code, man)
     test_active_power(code, man)
     print("all OK")

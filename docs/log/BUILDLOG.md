@@ -1,8 +1,8 @@
 # Opening the SGX545: build log
 
-The Control4 EA controllers (Intel CE5300) carry a PowerVR SGX545 GPU. The only userspace
-that has ever driven it is Intel's closed i386 Cedarview DDK 1.7 (`1.7@862890`). openHC
-runs it on a 64-bit system through the kernel's IA32 compat layer, and that blob is what
+Intel CE5300 boards carry a PowerVR SGX545 GPU. The only userspace
+that has ever driven it is Intel's closed i386 Cedarview DDK 1.7 (`1.7@862890`). The boot
+image runs it on a 64-bit system through the kernel's IA32 compat layer, and that blob is what
 renders the Minecraft session on the EA1 today, through gl4es.
 
 This log tells how an open, native x86_64 userspace for that GPU came together, starting
@@ -24,7 +24,7 @@ in `img/`, and the raw numbers in `data/`.
 |---|---|
 | GPU | PowerVR SGX545, revision 1.0.14 (HW core rev 1000e) |
 | Blob replaced | Intel Cedarview DDK 1.7.862890, i386 |
-| Test box | EA3 (CE5315), openHC, Linux 7.1.8, sgx545ce driver built in |
+| Test box | EA3 (CE5315), Linux 7.1.8, sgx545ce driver built in |
 | Frame | 720×480; back buffer BGRA8888 at device address `0x3e265000`, pitch 736 |
 | Branch | sgx545-ce `um-re` (local) |
 
@@ -103,7 +103,7 @@ md5 (`56f8466a…`) on 4 of 4 runs.
 
 The real fix (`28e6686`) widens three places in the driver: the DoMapToUser VMA walk,
 `OSAcquirePhysPageAddr` on the wrap path, and the mmap offset struct. It was pushed as a
-test branch with an openHC CI image. That kernel has not been booted yet, so for now native
+test branch with a CI-built boot image. That kernel has not been booted yet, so for now native
 clients still use `MAP_32BIT`.
 
 ## 3. Drawing our own (03:13–03:20)
@@ -243,7 +243,7 @@ placeholder `nop`. At draw time the driver turns the program into two phases and
 
 ## 7. Bringing the GPU up ourselves (04:35–06:54)
 
-Something has to load the microkernel before any of this runs. On openHC that was
+Something has to load the microkernel before any of this runs. On the boot image that was
 `libsrv_init`'s `SrvInit()`, an i386 call made at boot. It can run only once per boot, so
 every hardware test costs a power cycle of a box that other work is using.
 

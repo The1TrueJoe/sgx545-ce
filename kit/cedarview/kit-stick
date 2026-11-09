@@ -1,0 +1,11 @@
+#!/bin/sh
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# Prints the stick's disk (e.g. sdb): the one holding the root partition,
+# which the image's fixed MBR disk id names (build.sh: DISKID).
+. /etc/kit-release
+p=$(blkid -t PARTUUID="$DISKID-02" -o device 2>/dev/null | head -1)
+[ -n "$p" ] || exit 1
+p=${p#/dev/}
+basename "$(readlink -f "/sys/class/block/$p/..")"

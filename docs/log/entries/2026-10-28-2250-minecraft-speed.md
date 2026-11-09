@@ -49,7 +49,7 @@ In the bench world the DDK runs at **28-37 FPS**.
 
 - **A stale program in every masked clear** (`957dbd7`). The clear's
   colour-masked PDS programs were made on first use, in frame memory that the
-  next frame overwrote. The openhc-minecraft overlay clears alpha at every
+  next frame overwrote. The Minecraft runtime clears alpha at every
   swap, so from the second frame on it ran whatever was there. They are now
   made with the context. This is a candidate for the menus' one SGX recovery.
 - **Overlap** (`e246ff4`). A submitted frame isn't waited for any more:

@@ -9,7 +9,7 @@ built into usc/build (see glt.c / uspsub.c). Results go to OUTDIR/hw/:
 ddk/<name>.rgba, sub/<name>.rgba, ddk_usp/<tag>.usp (the DDK's binaries),
 and results.txt.
 
-Environment: EA3 (ssh helper script, default the main session's bin/ea3).
+Environment: EA3 (the box's ssh helper script, required).
 """
 import argparse
 import glob
@@ -34,7 +34,7 @@ UNIFORMS = {
     # tests/c10: C10 constants exactly 144, 170, 250 (round and truncate agree), and a scale
     "q": [144.25 / 255, 170.25 / 255, 250.25 / 255, 1.0],
     "sc": [256.0, 1.0, 1.0, 1.0],
-    "c": [0.3, 0.565, 0.98, 1.0],       # tests/f16 fog_m / c10s_m (mesa's sgx545_drvconsts.sh)
+    "c": [0.3, 0.565, 0.98, 1.0],       # tests/f16 fog_m / c10s_m (mesa's sgx_drvconsts.sh)
 }
 MAT = [0.9, 0.1, 0.0, 0.0, -0.1, 0.8, 0.05, 0.0, 0.0, 0.0, 1.0, 0.0, 0.05, -0.02, 0.0, 1.0]
 A1 = [0.1, 0.2, 0.3, 0.4, 0.9, 0.25, 0.5, 0.6, 0.15, 0.85, 0.7, 0.2, 0.95, 0.9, 0.05, 1.0]
@@ -42,8 +42,10 @@ A2 = [0.6, 0.1, 0.9, 0.3, 0.2, 0.7, 0.4, 0.8, 0.5, 0.5, 0.1, 0.9, 0.3, 0.95, 0.6
 
 
 def env_ea3():
-    return os.environ.get("EA3", "/private/tmp/claude-501/-Users-josephtelaak-Documents-GitHub-openHC/"
-                                 "8d4d6471-366e-445e-a0ae-48c496d608d4/scratchpad/bin/ea3")
+    p = os.environ.get("EA3")
+    if not p:
+        sys.exit("hwcmp: set EA3 to the box's ssh helper script")
+    return p
 
 
 def sh(cmd, inp=None, check=True):
