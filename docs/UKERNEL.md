@@ -1006,6 +1006,32 @@ its data accesses in either bank. [D, code and trace]
   live counters into the descriptor (`save_ta_state`, pc 0x168d-0x16a1):
   - `pb[6]` = 0x700, `pb[7]` = 0x710 << 16;
   - `pb[8]` = the high half of 0x724, `pb[9]` = the high half of 0x72c.
+- **Switching PBs** (two clients, each with its own PB). The TA and 3D
+  markers differ in the normal course of things: from a new PB's first kick
+  until that scene's 3D start, +0xb8 holds the new PB and +0xbc the old one.
+  Each side hands over the live counters before it loads, so a descriptor is
+  current whenever it is reloaded. Below, P is the PB being loaded, T the TA
+  marker and D the 3D marker.
+  - **At a kick on a new PB** (pc 0x091f-0x0949, when T != P):
+    1. if T != 0 and T != D, the TA state is saved into T's descriptor
+       (pc 0x168d);
+    2. if P == D, the 3D is paused (pc 0x15bc) and the 3D state is saved into
+       P's descriptor (pc 0x16d4);
+    3. the PB setup (pc 0x170d) and the TA load (pc 0x16a2) follow.
+  - **At a 3D start on a new PB** (pc 0x118d-0x11a7, when D != P):
+    1. if D != 0 and D != T, the 3D state is saved into D's descriptor
+       (pc 0x16d4);
+    2. if P == T, the TA is paused (pc 0x15bc) and the TA state is saved into
+       P's descriptor (pc 0x168d);
+    3. the 3D load (pc 0x16e9) follows.
+  - **The two saves.** The 3D save writes pb[6] = 0x70c, pb[7] = 0x71c << 16,
+    pb[8] = 0x728 & 0xffff and pb[9] = 0x730 & 0xffff: the 3D-side
+    counterparts of the TA's 0x700/0x710/0x724/0x72c. The 3D state includes
+    the pages that render freed, so a PB reloaded without it loses one
+    render's pages at every switch.
+  - **0x664.** Both loads write a mask of which markers differ:
+    `(+0xb4 != +0xbc) | (+0xb4 != +0xb8) << 1 | (+0xb8 != +0xbc) << 2`. It is
+    not a constant.
 - **Arming the page release.** The 3D start writes 0x63c = 3 (0 with render
   details +0xd4 b3). The pages the TA allocated are then freed by the
   hardware while the 3D runs: a CE5300 register sample shows 0x724 counting
