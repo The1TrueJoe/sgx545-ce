@@ -1071,11 +1071,12 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
          continue;
       if (util_format_is_srgb(v->format))
          srgb |= 1u << unit;
-      /* XYZW is none (0) */
+      /* XYZW: none, 0 */
       if (v->swizzle_r != PIPE_SWIZZLE_X || v->swizzle_g != PIPE_SWIZZLE_Y ||
           v->swizzle_b != PIPE_SWIZZLE_Z || v->swizzle_a != PIPE_SWIZZLE_W) {
-         swz[unit] = v->swizzle_r | v->swizzle_g << 3 | v->swizzle_b << 6 |
-                     v->swizzle_a << 9;
+         /* b15 marks one: XXXX packs to 0 */
+         swz[unit] = 0x8000 | v->swizzle_r | v->swizzle_g << 3 |
+                     v->swizzle_b << 6 | v->swizzle_a << 9;
          any_swz = true;
       }
    }

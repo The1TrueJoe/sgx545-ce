@@ -159,6 +159,10 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    u_init_pipe_screen_caps(pscreen, 1);
    caps->graphics = true;
    caps->npot_textures = true;
+   /* sampler-view swizzles, applied in the fragment shader (sgx_fs_for):
+    * EXT_texture_swizzle, and the swizzle parameters glamor sets on GLES
+    * (patch 0005) */
+   caps->texture_swizzle = true;
    /* GPU resets reported (sgx_get_device_reset_status): ARB_robustness */
    caps->device_reset_status_query = true;
    /* blending is shader code (STATE.md section 3): any equation per channel */
