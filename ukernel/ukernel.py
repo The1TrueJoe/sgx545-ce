@@ -229,6 +229,7 @@ CTX_CCBCTL = 4       # client CCB control (write/read offsets, bytes)
 
 # ---- SGXMKIF_COMMAND (kernel CCB entry, 32 bytes) --------------------------
 CMD_SERVICE = 0      # = command type (our host-kick table is the identity)
+CMD_CACHECTL = 1     # ui32CacheControl (SGXMKIF_CC_* bits the host owes since its last command)
 CMD_DATA0 = 2        # ui32Data[0]
 CMD_DATA1 = 3        # ui32Data[1] = HW render context for a TA
 CMD_WORDS = 8        # 32 bytes
@@ -749,6 +750,43 @@ def build(a):
     a.i(f"ld.a.d r6, r17, #{SA_KCCB} [moe]")
     a.i("wdf")
     a.i(f"imae r6, r3, #{CMD_WORDS * 4}, r6 [t2=u32]")   # r6 = &command (bytes)
+    # honour ui32CacheControl (command word 1) once per command, BEFORE dispatch (DDK
+    # pc 0x0098). INVAL_BIF_PD (0x2) -> BIF_CTRL = INVALDC (8), which also flushes the
+    # page-table cache; else INVAL_BIF_PT (0x1) -> BIF_CTRL = FLUSH (4); INVAL_DATA (0x8)
+    # -> MADD invalidate (0x804 bit 28) + wait EVENT_STATUS b26. INVAL_SL (0x4) has no SLC
+    # on this core. do_ta/k_transfer pulse INVALDC only on a PD SWITCH; this honours a
+    # VM_UNMAP's INVAL_BIF_PT on ANY later command, without which the BIF keeps stale PTEs
+    # to freed pages -> a GPU use-after-free into recycled memory (m2 2026-11). The per-type
+    # handlers never read word 1. BIF_CTRL is 0 between pulses here, so restore 0 (do_ta style).
+    a.i(f"ld.a.d r4, r6, #{CMD_CACHECTL} [moe]")         # r4 = ui32CacheControl
+    a.i("wdf")
+    a.i("test.and.eq p0, r4, #2")                        # PD clear? -> try PT
+    a.i("(p0) ba cc_pt")
+    a.i("limm r2, #8")                                   # BIF_CTRL = INVALDC (dir + PT)
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.i("limm r2, #0")
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.i("ba cc_data")
+    a.label("cc_pt")
+    a.i("test.and.eq p0, r4, #1")                        # PT clear? -> data
+    a.i("(p0) ba cc_data")
+    a.i("limm r2, #4")                                   # BIF_CTRL = FLUSH (page-table)
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.i("limm r2, #0")
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.label("cc_data")
+    a.i("test.and.eq p0, r4, #8")                        # DATA clear? -> dispatch
+    a.i("(p0) ba cc_done")
+    a.i("limm r5, #268435456")                           # 0x10000000: MADD cache invalidate
+    a.i(f"ldr r4, #{0x804 // 4}")
+    a.i("wdf")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x804 // 4}, r4")
+    a.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done (clobbers r5, r6)
+    a.i(f"ld.a.d r6, r17, #{SA_KCCB} [moe]")             # recompute &command (wait clobbered r6)
+    a.i("wdf")
+    a.i(f"imae r6, r3, #{CMD_WORDS * 4}, r6 [t2=u32]")
+    a.label("cc_done")
     a.i(f"ld.a.d r7, r6, #{CMD_SERVICE} [moe]")          # type
     a.i(f"ld.a.d r8, r6, #{CMD_DATA1} [moe]")            # data[1] = context
     a.i("wdf")
