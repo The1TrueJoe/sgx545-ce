@@ -41,7 +41,12 @@ shot 01-desktop "the Xfce desktop"
 
 glxinfo -B > "$R/glxinfo.txt" 2>&1
 if [ -n "$(gpu)" ]; then res PASS "OpenGL renders on the SGX545 ($(grep -m1 'OpenGL version' "$R/glxinfo.txt" | cut -d: -f2 | xargs))"
-else res FAIL "OpenGL renders on the SGX545 (renderer: $(grep -m1 'renderer string' "$R/glxinfo.txt" | cut -d: -f2 | xargs))"; fi
+else
+	# the EGL and loader errors behind it, from glxinfo and from the X server
+	why=$(grep -hiE 'MESA-LOADER|libEGL|EGL|DRI3|dri2|drisw|glamor|glx' "$R/glxinfo.txt" "$R/xinit.txt" 2>/dev/null |
+		grep -iE 'fail|error|warn|unable|could not|not supported' | sort -u | head -3 | tr '\n' ';' | cut -c1-400)
+	res FAIL "OpenGL renders on the SGX545 (renderer: $(grep -m1 'renderer string' "$R/glxinfo.txt" | cut -d: -f2 | xargs))${why:+; $why}"
+fi
 xfce4-terminal --geometry=90x24+40+40 --title=kit-glxinfo -x sh -c 'glxinfo -B; sleep 600' &
 sleep 8
 shot 02-glxinfo "a terminal with glxinfo"
