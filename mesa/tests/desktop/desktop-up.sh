@@ -19,6 +19,8 @@ __EGL_VENDOR_LIBRARY_DIRS=/opt/sgx/share/glvnd/egl_vendor.d __GLX_VENDOR_LIBRARY
 LIBGL_DRIVERS_PATH=/opt/sgx/lib/dri"
 # mesa-sgx installed as a package (docs/INSTALL.md) needs no environment
 [ -e "$R/etc/ld.so.conf.d/00-sgx.conf" ] && env_mesa=
+# nor does a root with no Mesa of ours at all (Debian's Mesa, e.g. after apt remove mesa-sgx)
+[ -d "$R/opt/sgx/lib" ] || env_mesa=
 # XENV: more environment for Xorg only (SGX_DEBUG=..., MESA_SHADER_CAPTURE_PATH=...)
 XENV=${XENV:-}
 binds="dev proc sys tmp run"
