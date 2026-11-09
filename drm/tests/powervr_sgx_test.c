@@ -817,7 +817,7 @@ static void t_upload_code_corpus(int fd)
 }
 
 /*
- * Words from the isaspec encoder (mesa/src/sgx545/isa), each with what must
+ * Words from the isaspec encoder (mesa/src/sgx/isa), each with what must
  * happen at word 2 of a 3-word upload at the start of a 1-page object.
  */
 static const struct {
