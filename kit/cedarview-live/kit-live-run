@@ -147,6 +147,11 @@ if [ -n "$STARTED" ] && ! lost; then
 		reload /tmp/sgx545_ukernel-default.bin
 	fi
 	lost || try_blit "extra, not decisive: texture-heap source (-T)" -T
+	# a second client at the same addresses after a first one exits (one client must not
+	# see another's leftovers); only in test builds whose usage lists -2
+	if ! lost && "$T/powervr_sgx_blit" -h 2>&1 | grep -q -- '-2'; then
+		try_blit "two clients one after the other (-2)" -2
+	fi
 	lost && result FAIL "the GPU was lost (later steps run without it)"
 	note "first blit that worked: ${BLIT:-none}"
 else

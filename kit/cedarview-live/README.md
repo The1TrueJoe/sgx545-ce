@@ -33,7 +33,9 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
      image against plain on variant B is the decisive pair;
    - extras that decide nothing (the texture-heap source `-T` fails on the CE5300 with
      either image): `-T` on variant B, then `-T` on the default, last so that a hang there
-     cannot hide variant B's result.
+     cannot hide variant B's result;
+   - when the test build has it, `-2`: a second client in a fresh process at the same
+     addresses after the first exits (one client must not see another's leftovers).
 
    After each failure, the devcoredump and the driver's status are saved. The results are
    saved to the stick here once already.
