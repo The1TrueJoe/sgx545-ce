@@ -643,7 +643,10 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   refuses it and no CPU mapping exists. Reviewers will ask. The follow-up is
   a PB per client with the microkernel storing and loading the DPM free-list
   state on a PB change (ta3d-state's rules, `UKERNEL.md` e2d08c2); the
-  kernel side is the per-VM PB this replaced.
+  kernel side is the per-VM PB this replaced. The DDK does this too when its
+  `PBSize` apphint is set (a per-context PB from its "Percontext
+  3DParameters" heap, seen on hardware 2026-11-09), so it is a mode the
+  hardware and a microkernel support, not only a plan.
 - [ ] **F1: transfer state across clients.** A second client's first
   transfer faults (PDS fetch outside its programs) after another client's
   transfers ran, until a microkernel restart; `powervr_sgx_blit -2` repeats it.
