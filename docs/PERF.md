@@ -320,8 +320,17 @@ EA3, normal boot, the same binary (frames a second; ours/DDK):
 
 - Fill and blend are at the DDK's speed: the per-pixel gaps of the 0.5x
   tables above were the DDK not rendering.
-- **Texturing** is 0.71-0.77 of the DDK. A real per-pixel gap, next to look
-  at.
+- **Texturing** was 0.71-0.77 of the DDK, and the GPU wasn't the cause.
+  ta3d-state's captures of perfmicro tex matched word for word (TA, ISP,
+  PDS, texture words, render details, per-tile programs, the texture's
+  memory), and the A/Bs of the two near-differences (PDS middle word b25-28
+  12, render target in the general heap) changed nothing. The services
+  backend polled a render's completion at 50 us steps doubling to 1 ms, so
+  a 3 ms render was seen done at 3.55 ms. Now a render's wait sleeps to
+  3/4 of its target's last render times, then polls every 50 us, tex is
+  237 -> 302 fps at 1440x960 (0.90) and 810 -> 880 at 720x480 (0.83); fill
+  and blend are at or above the DDK's, verts +8%. (powervr_sgx waits with
+  poll() on its fd, event-driven: no such rounding.)
 - **Vertices:** 0.38-0.54 by default and 0.90-0.95 with
   `SGX_DEBUG=zerocopy` since 72b75fb: an indexed draw from buffers takes its
   indices as they are, from the index buffer's device copy, with no CPU work
