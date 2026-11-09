@@ -83,9 +83,12 @@ jobs:
           sudo chmod 666 /dev/kvm 2>/dev/null || true
           for fw in bios uefi; do sh kit/cedarview-live/qemu-test.sh out/*.img.gz $fw; done
 
+      - name: The artifact's name follows the kit's series
+        run: echo "KIT_SERIES=$(cat kit/cedarview-live/SERIES)" >> "$GITHUB_ENV"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: sgx545-cedarview-kit-v3
+          name: sgx545-cedarview-kit-${{ env.KIT_SERIES }}
           path: out/
           compression-level: 0
           retention-days: 90

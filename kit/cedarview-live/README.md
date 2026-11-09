@@ -19,7 +19,7 @@ computer's own disks are never written to.
 CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview`
 (kernel), `powervr-sgx-cedarview` (static tests) and `mesa-sgx-trixie` (firmware and Mesa
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
-`sgx545-cedarview-kit-v3` artifact for 90 days. There are no GitHub releases.
+`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.1` for v3.1, from `SERIES`) for 90 days. There are no GitHub releases.
 
 ## The menu
 
