@@ -23,7 +23,8 @@
  *               LESS, each nearer than the last: every layer passes the test,
  *               so only hidden surface removal keeps the covered ones unshaded
  *
- * Each test runs SECONDS (default 5) with a glFinish per frame and prints the
+ * Each test runs SECONDS (default 5), each frame rendered and read back (a
+ * pixel: end_frame), and prints the
  * frame rate and what it amounts to (megapixels or megatriangles a second).
  */
 
@@ -76,7 +77,19 @@ program(const char *vs, const char *fs)
 
 static int clear_frames;
 
-/* frames a second of draw() over secs, a glFinish per frame */
+/* Each frame ends with a 1-pixel glReadPixels, which renders it: a glFinish
+ * alone is a TA kick on the DDK, whose pbuffer scene stays open and renders
+ * once every 44 to 566 frames (ta3d-state, the verts captures), so its frame
+ * rates weren't of rendered frames */
+static void
+end_frame(void)
+{
+   GLubyte px[4];
+
+   glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+}
+
+/* frames a second of draw() over secs, each rendered (end_frame) */
 static double
 run(double secs, void (*draw)(void))
 {
@@ -84,13 +97,13 @@ run(double secs, void (*draw)(void))
    double t0, t;
 
    draw();
-   glFinish();
+   end_frame();
    t0 = now();
    do {
       if (clear_frames)
          glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
       draw();
-      glFinish();
+      end_frame();
       frames++;
       t = now();
    } while (t - t0 < secs);
