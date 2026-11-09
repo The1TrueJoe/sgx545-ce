@@ -835,11 +835,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	kobj_cpu(r->ccbctl)[0] = r->ccb_woff;
 	if (last) {
 		rj->cmd_off = woff;
-		trace_pvrsgx_render_kick(kobj_va(s->rtdata), s->w, s->h, f, entry,
-					 rgn_this, rgn_next, woff, cmd->pb_desc,
-					 cmd->te_screen, cmd->te_mtile[0],
-					 cmd->te_mtile[1], cmd->mt_tiles,
-					 cmd->screen_size);
+		trace_pvrsgx_render_kick(cmd, s->w, s->h, rgn_next, woff);
 		s->frames++;
 	}
 

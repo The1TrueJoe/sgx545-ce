@@ -75,8 +75,11 @@ jobs:
           set -eux
           sh drm/ci/cedarview-kernel.sh "$PWD/linux" "$PWD/drm"
           L=linux
-          ./$L/scripts/config --file $L/.config -e DRM_POWERVR_SGX_KUNIT_TEST -e KUNIT
+          # BPF on tracepoints, as distribution kernels have: it caps an event at 12 arguments.
+          ./$L/scripts/config --file $L/.config -e DRM_POWERVR_SGX_KUNIT_TEST -e KUNIT \
+            -e FTRACE -e KPROBES -e KPROBE_EVENTS -e PERF_EVENTS -e BPF_SYSCALL -e BPF_EVENTS
           make -C $L ARCH=x86_64 olddefconfig
+          grep -qx CONFIG_BPF_EVENTS=y $L/.config
           make -C $L ARCH=x86_64 -j"$(nproc)" prepare
 
       - name: gcc W=1, sparse
