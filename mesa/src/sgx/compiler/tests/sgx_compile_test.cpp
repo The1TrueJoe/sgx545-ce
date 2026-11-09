@@ -290,4 +290,21 @@ TEST_F(sgx_compile_test, fragment_early_exit_loop_kept)
    EXPECT_LE(out.n_temps, 8u) << disasm();
 }
 
+/* ceil(x) is one fsubflr d, c48, -x (= -floor(-x)): the floor's negated
+ * result and ceil's own negations cancel */
+TEST_F(sgx_compile_test, fragment_ceil_one_instruction)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_fceil(&b, nir_load_var(&b, a)), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.n_code, 3u) << disasm(); /* fsubflr, two pck */
+   EXPECT_EQ(out.n_temps, 0u) << disasm();
+}
+
 } /* namespace */

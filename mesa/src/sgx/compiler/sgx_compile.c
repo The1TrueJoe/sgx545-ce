@@ -1728,6 +1728,31 @@ emit_efo(struct sgx_ctx *c, nir_alu_instr *root, const struct efo_chain *ch)
    return true;
 }
 
+/* every reader takes d negated at no cost: a float add, multiply or fma
+ * (source modifiers), or an fneg (the negations cancel) */
+static bool
+negated_ok(nir_def *d)
+{
+   nir_foreach_use_including_if (use, d) {
+      if (nir_src_is_if(use))
+         return false;
+      nir_instr *u = nir_src_use_instr(use);
+      if (u->type != nir_instr_type_alu)
+         return false;
+      switch (nir_instr_as_alu(u)->op) {
+      case nir_op_fadd:
+      case nir_op_fmul:
+      case nir_op_ffma:
+      case nir_op_fmad:
+      case nir_op_fneg:
+         break;
+      default:
+         return false;
+      }
+   }
+   return true;
+}
+
 static void
 emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
 {
@@ -1753,6 +1778,22 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    if (alu->def.bit_size == 16) {
       emit_alu16(c, alu);
       return;
+   }
+   if (alu->op == nir_op_fneg && !c->def_dest) {
+      /* the negation of a value readers already take negated (the floor
+       * below): the value itself, no instruction */
+      nir_legacy_alu_dest nd = nir_legacy_chase_alu_dest(&alu->def);
+      struct sgx_ref r[4];
+      bool cancel = nd.dest.is_ssa && !nd.fsat;
+      for (unsigned k = 0; cancel && k < alu->def.num_components; k++) {
+         r[k] = alu_src(c, alu, 0, k);
+         cancel &= r[k].neg && !r[k].abs && r[k].file == SGX_F_V;
+         r[k].neg = 0;
+      }
+      if (cancel) {
+         set_refs(c, &alu->def, r, alu->def.num_components);
+         return;
+      }
    }
    if (alu->op == nir_op_f2f32) {
       /* a 32-bit view of F16 halves: the users read them as F16 operands */
@@ -1915,6 +1956,24 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       return;
    }
 
+   if (alu->op == nir_op_ffloor && ld.dest.is_ssa && !ld.fsat && !c->def_dest &&
+       negated_ok(&alu->def)) {
+      /* fsubflr t, c48, x = -floor(x), one instruction (libusc's ceil is
+       * fsubflr d, c48, -x); readers take t negated, and ceil's own
+       * negations (lower_fceil: -floor(-x)) cancel into it */
+      unsigned t = new_vreg(c, 4);
+      struct sgx_ref td[4], ts[2][4], r[4];
+      for (unsigned k = 0; k < 4; k++) {
+         td[k] = vref(t, k);
+         ts[0][k] = ref(SGX_F_C, 48);
+         ts[1][k] = k < nc ? const_f32(alu_src(c, alu, 0, k)) : ts[0][k];
+         r[k] = vref(t, k);
+         r[k].neg = 1;
+      }
+      emit_runs(c, SGX_OP_FSUBFLR, nir_component_mask(nc), td, 2, ts, &NOF, 0);
+      set_refs(c, &alu->def, r, nc);
+      return;
+   }
    def_dest(c, &alu->def, &ld.dest, &vreg, &base);
    struct sgx_ref d[4], s[3][4];
    for (unsigned k = 0; k < 4; k++) {
@@ -4977,19 +5036,24 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             ok[r->n] = false;
       }
    }
-   /* in place: a repeat that starts a vreg and reads, at the component it
-    * writes and stepping with it, an input for the last time may write over
-    * that input (coalesce_repeats' rule) */
+   /* in place: a repeat that reads, at the components it writes and stepping
+    * with them, an input for the last time may write over that input
+    * (coalesce_repeats' rule). A vreg written by several such repeats (sw
+    * a.zxyw * b: 1 + 2 + 1 components) takes those that agree with the
+    * first one's base: inplace[v] is that base, ipt the point of each
+    * component's in-place write */
    int *inplace = malloc(nv * sizeof(int));
+   int *ipt = malloc(nv * 16 * sizeof(int));
    for (unsigned v = 0; v < nv; v++)
       inplace[v] = -1;
+   for (unsigned v = 0; v < nv * 16; v++)
+      ipt[v] = -1;
    list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
       const struct sgx_ref *d = &i->op[0];
       if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
           d->file != SGX_F_V || d->h16 || !d->step || d->n >= nv ||
-          sgx_vreg(c, d->n)->first != (int)(2 * i->ip) ||
-          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY ||
-          i->form == SGX_OP_FDP)
+          d->comp + i->rpt > 16 || i->form == SGX_OP_FDSX ||
+          i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
          continue;
       int base = -1;
       for (unsigned k = 1; k < i->nops && base < 0; k++) {
@@ -5009,8 +5073,14 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
              r->n < (unsigned)base + d->comp + i->rpt)
             good = r->step && !r->h16 && r->n == (unsigned)base + d->comp;
       }
-      if (good)
+      if (!good)
+         continue;
+      if (inplace[d->n] == -1)
          inplace[d->n] = base;
+      else if (inplace[d->n] != base)
+         continue; /* (the first one's base stands) */
+      for (unsigned j = 0; j < i->rpt; j++)
+         ipt[d->n * 16 + d->comp + j] = 2 * i->ip;
    }
    /* each component's own last use (a 32-bit vreg's register k is free
     * once component k is: the colour's first pck reads .x, its second .z) */
@@ -5074,8 +5144,8 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             unsigned l = MIN2(MAX2(firstc[v * 16 + p - b], (int)lo), (int)hi);
             unsigned h = (unsigned)MAX2(lastc[v * 16 + p - b], (int)l);
             for (unsigned x = l; x <= h && x < end && free; x++)
-               free =
-                  !BITSET_TEST(BUSY(p), x) || ((int)b == inplace[v] && x == lo);
+               free = !BITSET_TEST(BUSY(p), x) ||
+                      ((int)b == inplace[v] && (int)x == ipt[v * 16 + p - b]);
          }
          if (!free)
             continue;
@@ -5090,6 +5160,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       }
    }
    free(inplace);
+   free(ipt);
    free(lastc);
    free(firstc);
    free(odd);
