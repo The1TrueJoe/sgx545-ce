@@ -174,6 +174,8 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
    return true;
 }
 
+static unsigned target_mask(const struct sgx_context *ctx);
+
 static void
 sgx_clear(struct pipe_context *pctx, unsigned buffers,
           uint32_t color_clear_mask, uint8_t stencil_clear_mask,
@@ -204,6 +206,12 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
    if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
        !util_format_has_alpha(ctx->framebuffer.cbufs[0].format) && cm)
       cm |= PIPE_MASK_A;
+   /* R8 and RG8 (stored as RGBA8): a clear of all their channels writes
+    * every byte with the colour they read as, (r, g or 0, 0, 1) */
+   unsigned tm = target_mask(ctx);
+   bool rg_whole = tm != PIPE_MASK_RGBA && (cm & tm) == tm;
+
+   cm = rg_whole ? PIPE_MASK_RGBA : cm & tm;
    wmask = (cm & PIPE_MASK_B ? 1 : 0) | (cm & PIPE_MASK_G ? 2 : 0) |
            (cm & PIPE_MASK_R ? 4 : 0) | (cm & PIPE_MASK_A ? 8 : 0);
    /* a depth-only clear writes no colour (mask 0) */
@@ -231,11 +239,33 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
       if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
           !util_format_has_alpha(ctx->framebuffer.cbufs[0].format))
          rgba[3] = 1.0f;
+      if (rg_whole) {
+         if (!(tm & PIPE_MASK_G))
+            rgba[1] = 0.0f;
+         rgba[2] = 0.0f;
+      }
       sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? rgba : black,
                   (float)depth, have_depth && (buffers & PIPE_CLEAR_DEPTH),
                   wmask, clear_stencil ? (int)stencil : -1);
    }
    simple_mtx_unlock(&screen->lock);
+}
+
+/* The channels a target takes: R8 and RG8 are stored as RGBA8 with B = 0
+ * and A = 255 (sgx_tex_bpp), which draws and clears leave as they are. */
+static unsigned
+target_mask(const struct sgx_context *ctx)
+{
+   if (!ctx->framebuffer.nr_cbufs || !ctx->framebuffer.cbufs[0].texture)
+      return PIPE_MASK_RGBA;
+   switch (ctx->framebuffer.cbufs[0].format) {
+   case PIPE_FORMAT_R8_UNORM:
+      return PIPE_MASK_R;
+   case PIPE_FORMAT_R8G8_UNORM:
+      return PIPE_MASK_R | PIPE_MASK_G;
+   default:
+      return PIPE_MASK_RGBA;
+   }
 }
 
 /* the ISPA depth compare is the GL enum's low bits (STATE.md section 3) */
@@ -312,7 +342,8 @@ build_state(struct sgx_context *ctx, struct sgxws_state *st)
    const struct pipe_rasterizer_state *rs =
       ctx->rasterizer ? &ctx->rasterizer->base : NULL;
    unsigned mask =
-      ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA;
+      (ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA) &
+      target_mask(ctx);
 
    memset(st, 0, sizeof(*st));
    st->depth_func = depth_func(ctx);
@@ -1308,7 +1339,8 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
       /* the colour epilogue: blend, then the colour mask (sgxws_blend) */
       bool has_alpha = util_format_has_alpha(ctx->framebuffer.cbufs[0].format);
       unsigned mask =
-         ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA;
+         (ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA) &
+         target_mask(ctx);
 
       if (ctx->blend && ctx->blend->enable)
          epi = ctx->blend->hw[has_alpha];

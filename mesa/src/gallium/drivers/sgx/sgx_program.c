@@ -557,7 +557,7 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
 static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
-               unsigned srgb, const uint8_t *vtx_fmt)
+               unsigned srgb, const uint16_t *swz, const uint8_t *vtx_fmt)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -587,8 +587,16 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    {
       /* a 1D texture is a 2D one a texel high (sgx_resource): its samples
        * become 2D ones on that row */
-      const nir_lower_tex_options tex = {.lower_1d = true, .lower_srgb = srgb};
+      nir_lower_tex_options tex = {.lower_1d = true, .lower_srgb = srgb};
 
+      /* a sampler view's swizzle, as the texel comes out (sgx_fs_for) */
+      for (unsigned u = 0; swz && u < PIPE_MAX_SAMPLERS; u++) {
+         if (!swz[u])
+            continue;
+         tex.swizzle_result |= 1u << u;
+         for (unsigned c = 0; c < 4; c++)
+            tex.swizzles[u][c] = swz[u] >> (3 * c) & 7;
+      }
       NIR_PASS(_, nir, nir_lower_tex, &tex);
    }
    remap_legacy_varyings(nir);
@@ -929,7 +937,7 @@ sgx_create_shader_state(struct pipe_context *pctx,
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, NULL);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -1036,7 +1044,8 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
-   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, vtx_fmt) ||
+   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, NULL,
+                       vtx_fmt) ||
        !(*slot)->prog.code) {
       FREE((*slot)->vary);
       FREE(*slot);
@@ -1050,17 +1059,31 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 {
    struct sgx_pipe_shader **slot;
    unsigned srgb = 0, unit;
+   uint16_t swz[PIPE_MAX_SAMPLERS] = {0};
+   bool any_swz = false;
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
       return fs;
    BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS) {
-      if (ctx->views[unit] && util_format_is_srgb(ctx->views[unit]->format))
+      const struct pipe_sampler_view *v = ctx->views[unit];
+
+      if (!v)
+         continue;
+      if (util_format_is_srgb(v->format))
          srgb |= 1u << unit;
+      /* XYZW is none (0) */
+      if (v->swizzle_r != PIPE_SWIZZLE_X || v->swizzle_g != PIPE_SWIZZLE_Y ||
+          v->swizzle_b != PIPE_SWIZZLE_Z || v->swizzle_a != PIPE_SWIZZLE_W) {
+         swz[unit] = v->swizzle_r | v->swizzle_g << 3 | v->swizzle_b << 6 |
+                     v->swizzle_a << 9;
+         any_swz = true;
+      }
    }
-   if (!srgb)
+   if (!srgb && !any_swz)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
-      if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb)
+      if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
+          !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
    }
    /* the oldest goes */
@@ -1075,7 +1098,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       return NULL;
    (*slot)->discard_pa = -1;
    (*slot)->srgb = srgb;
-   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, NULL) ||
+   memcpy((*slot)->swz, swz, sizeof(swz));
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, swz, NULL) ||
        !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);

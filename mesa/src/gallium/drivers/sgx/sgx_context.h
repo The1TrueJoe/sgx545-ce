@@ -89,9 +89,11 @@ struct sgx_pipe_shader {
     * 0, f32 x 4, unless SGX_DEBUG=zerocopy picked a variant) */
    uint8_t vtx_fmt[16];
    /* fragment: the same decoding what the samplers in its mask sample as
-    * sRGB (sgx_fs_for) */
+    * sRGB, and swizzling what each sampler view's swizzle says (formats st
+    * stores in another, GL_R16 as RGBA8; 0: none) (sgx_fs_for) */
    unsigned srgb;
-   struct sgx_pipe_shader *variants_srgb[4];
+   uint16_t swz[PIPE_MAX_SAMPLERS];
+   struct sgx_pipe_shader *variants_srgb[8];
    unsigned next_variant_srgb;
 };
 

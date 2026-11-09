@@ -227,7 +227,11 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
       if (format != PIPE_FORMAT_B8G8R8A8_UNORM &&
           format != PIPE_FORMAT_B8G8R8X8_UNORM &&
           format != PIPE_FORMAT_R8G8B8A8_UNORM &&
-          format != PIPE_FORMAT_R8G8B8X8_UNORM)
+          format != PIPE_FORMAT_R8G8B8X8_UNORM &&
+          /* stored as RGBA8, drawn into with R (and G) written alone
+           * (sgx_tex_bpp): GL_ARB_texture_rg, which X's glamor needs on GLES
+           * for its 8-bit pixmaps (glyphs, masks) */
+          format != PIPE_FORMAT_R8_UNORM && format != PIPE_FORMAT_R8G8_UNORM)
          return false;
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {

@@ -196,6 +196,12 @@ sgx_resource_create(struct pipe_screen *pscreen,
       if (!util_format_has_alpha(templ->format) &&
           util_format_get_blocksize(templ->format) == 4)
          memset(res->bo.map, 0xff, sgx_tex_size(prsc));
+      /* R8 and RG8 as RGBA8 (sgx_tex_bpp): (0, 0, 0, 255) until written, the
+       * B and A a render into them leaves alone */
+      if (sgx_tex_bpp(templ->format) !=
+          util_format_get_blocksize(templ->format))
+         for (size_t i = 0; i < sgx_tex_size(prsc) / 4; i++)
+            res->bo.map[i] = 0xff000000;
    }
    return prsc;
 
@@ -474,6 +480,8 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
       break;
    case PIPE_FORMAT_R8G8B8A8_UNORM:
    case PIPE_FORMAT_R8G8B8X8_UNORM:
+   case PIPE_FORMAT_R8_UNORM:   /* stored as RGBA8 (sgx_tex_bpp); the draws */
+   case PIPE_FORMAT_R8G8_UNORM: /* write R (and G) alone (sgx_target_mask) */
       t->pbe_format = 1;
       t->t1_format =
          0x0d; /* swaps R and B against 0x0c: the PBE's order back */

@@ -16,6 +16,7 @@ struct sgx_resource;
 
 /* T1 format code for a sampled gallium format, or 0 (docs/TEX.md section 1) */
 unsigned sgx_tex_format(enum pipe_format format);
+unsigned sgx_tex_bpp(enum pipe_format format);
 
 /* the device layout of a texture: size in bytes, and each level and face's
  * offset */

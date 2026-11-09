@@ -33,6 +33,8 @@ sgx_tex_format(enum pipe_format format)
    case PIPE_FORMAT_R8G8B8X8_UNORM:
    case PIPE_FORMAT_R8G8B8A8_SRGB:
    case PIPE_FORMAT_R8G8B8X8_SRGB:
+   case PIPE_FORMAT_R8_UNORM: /* stored as RGBA8 (sgx_tex_bpp) */
+   case PIPE_FORMAT_R8G8_UNORM:
       /* R, G, B, A bytes in memory.  The DDK tags them 0x0d and libusc folds a
        * zyxw reorder into the sample; our compiler unpacks xyzw, and with 0x0c
        * (BGRA8888) the texels come out GL's way (docs/TEX.md §1) */
@@ -59,6 +61,18 @@ sgx_tex_format(enum pipe_format format)
    }
 }
 
+/* Bytes per texel on the device.  R8 and RG8 are stored as RGBA8: R, G (or
+ * 0), 0, 255, which the PBE can render into (it writes no 8- or 16-bit
+ * format) and the TPU samples as GL's (r, g, 0, 1); the CPU copy keeps
+ * their own format, and encode_box/decode_box convert. */
+unsigned
+sgx_tex_bpp(enum pipe_format format)
+{
+   if (format == PIPE_FORMAT_R8_UNORM || format == PIPE_FORMAT_R8G8_UNORM)
+      return 4;
+   return util_format_get_blocksize(format);
+}
+
 static bool
 twiddled(unsigned w, unsigned h)
 {
@@ -75,7 +89,7 @@ level_bytes(unsigned w, unsigned h, unsigned bpp)
 static size_t
 chain_offset(const struct pipe_resource *prsc, unsigned level)
 {
-   unsigned bpp = util_format_get_blocksize(prsc->format);
+   unsigned bpp = sgx_tex_bpp(prsc->format);
    size_t off = 0;
 
    for (unsigned l = 0; l < level; l++)
@@ -98,9 +112,7 @@ face_stride_levels(const struct pipe_resource *prsc, unsigned levels)
    if (prsc->width0 < TILE)
       return chain;
    return align64(chain,
-                  levels > 1
-                     ? 0x800
-                     : TILE * TILE * util_format_get_blocksize(prsc->format));
+                  levels > 1 ? 0x800 : TILE * TILE * sgx_tex_bpp(prsc->format));
 }
 
 static size_t
@@ -128,6 +140,16 @@ sgx_tex_size(const struct pipe_resource *prsc)
                                : chain_offset(prsc, prsc->last_level + 1);
 }
 
+/* an R8 or RG8 texel (cbpp bytes) as the device stores it */
+static inline void
+widen_texel(uint8_t *o, const uint8_t *s, unsigned cbpp)
+{
+   o[0] = s[0];
+   o[1] = cbpp > 1 ? s[1] : 0;
+   o[2] = 0;
+   o[3] = 0xff;
+}
+
 /* Copy the box x0..x1, y0..y1 of a level from the CPU copy into the texture
  * heap.  The heap is write-combined: a twiddled tile the box covers whole is
  * put together on the stack and written in one go, only partly covered tiles
@@ -139,11 +161,13 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
    struct pipe_resource *prsc = &res->base;
    unsigned w = u_minify(prsc->width0, level),
             h = u_minify(prsc->height0, level);
-   unsigned bpp = util_format_get_blocksize(prsc->format);
+   unsigned bpp = sgx_tex_bpp(prsc->format),
+            cbpp = util_format_get_blocksize(prsc->format);
    unsigned src_stride = util_format_get_stride(prsc->format, w);
    const uint8_t *src = (const uint8_t *)res->data + res->level_offset[level] +
                         (size_t)layer * src_stride * h;
    bool rgbx = prsc->format == PIPE_FORMAT_R8G8B8X8_UNORM;
+   bool widen = cbpp != bpp; /* R8, RG8: the texel made RGBA8 */
 
    x1 = MIN2(x1, w);
    y1 = MIN2(y1, h);
@@ -153,6 +177,12 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
       size_t pitch = (size_t)align(w, 8) * bpp;
 
       for (unsigned y = y0; y < y1; y++) {
+         if (widen) {
+            for (unsigned x = x0; x < x1; x++)
+               widen_texel(dst + y * pitch + (size_t)x * 4,
+                           src + y * src_stride + (size_t)x * cbpp, cbpp);
+            continue;
+         }
          memcpy(dst + y * pitch + (size_t)x0 * bpp,
                 src + y * src_stride + (size_t)x0 * bpp,
                 (size_t)(x1 - x0) * bpp);
@@ -191,7 +221,10 @@ encode_box(struct sgx_resource *res, unsigned level, unsigned layer,
                uint8_t *o =
                   out + (size_t)(spread[y - by] | spread[x - bx] << 1) * bpp;
 
-               memcpy(o, s + (size_t)x * bpp, bpp);
+               if (widen)
+                  widen_texel(o, s + (size_t)x * cbpp, cbpp);
+               else
+                  memcpy(o, s + (size_t)x * bpp, bpp);
                if (rgbx)
                   o[3] = 0xff;
             }
@@ -249,7 +282,8 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer,
    struct pipe_resource *prsc = &res->base;
    unsigned w = u_minify(prsc->width0, level),
             h = u_minify(prsc->height0, level);
-   unsigned bpp = util_format_get_blocksize(prsc->format);
+   unsigned bpp = sgx_tex_bpp(prsc->format),
+            cbpp = util_format_get_blocksize(prsc->format);
    unsigned stride = util_format_get_stride(prsc->format, w);
    uint8_t *dst = (uint8_t *)res->data + res->level_offset[level] +
                   (size_t)layer * stride * h;
@@ -263,9 +297,16 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer,
    if (!twiddled(w, h)) {
       size_t pitch = (size_t)align(w, 8) * bpp;
 
-      for (unsigned y = y0; y < y1; y++)
+      for (unsigned y = y0; y < y1; y++) {
+         if (cbpp != bpp) {
+            for (unsigned x = x0; x < x1; x++)
+               memcpy(dst + y * stride + (size_t)x * cbpp,
+                      src + y * pitch + (size_t)x * bpp, cbpp);
+            continue;
+         }
          memcpy(dst + y * stride + (size_t)x0 * bpp,
                 src + y * pitch + (size_t)x0 * bpp, (size_t)(x1 - x0) * bpp);
+      }
       return;
    }
    /* a row of tiles in one sequential copy, then reordered in cached memory
@@ -295,7 +336,7 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer,
                ((x >> n) - tx0) * tile_bytes +
                (size_t)(spread[y & (t - 1)] | spread[x & (t - 1)] << 1) * bpp;
 
-            memcpy(dst + y * stride + (size_t)x * bpp, s + at, bpp);
+            memcpy(dst + y * stride + (size_t)x * cbpp, s + at, cbpp);
          }
       }
    }
