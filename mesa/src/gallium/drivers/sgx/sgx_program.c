@@ -583,8 +583,12 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
     * fixed-function tests have run on it */
    /* the units sampling 8888 texels get them B, G, R, A ordered
     * (sgx_tex_format): all of them unless the variant says otherwise */
-   if (nir->info.stage == MESA_SHADER_FRAGMENT)
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       opts.tex_bgra = ~not_bgra;
+      /* a coordinate only samples read: the PDS samples from the set
+       * itself (a pure-sample DOUTI, source 0x24, below) */
+      opts.pds_samples_alone = true;
+   }
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
                      (sgx_drv_debug & SGX_DEBUG_FF_MEDIUMP);
