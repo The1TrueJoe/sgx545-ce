@@ -58,7 +58,10 @@ Use one of these free programs:
    usually **F12**, **Esc**, **F10** or **F11**. The start-up screen often shows which one.
 3. In the menu, pick the USB stick.
 4. A menu with four entries appears. Pick **1** (it starts by itself after 10 seconds).
-   Entries 2 to 4 run the same test with settings for screens that go dark with 1.
+   All four run the same test with different display settings.
+
+**Please run the test six times: entry 1 three times, then entry 2 three times.** Some
+screens go dark only some of the time, so we need to know how often, not just once.
 
 If the computer starts its normal system instead, restart it and try another key. On some
 computers you have to turn on "Boot from USB" in the BIOS setup first (often **F2** or
@@ -78,10 +81,12 @@ comment.
 
 1. Wait about five minutes. The test keeps running and saves its results.
 2. Hold the power button to turn the computer off.
-3. Start from the stick again (step 3) and pick the next menu entry: 2, then 3, then 4.
+3. Start the next run from the stick (step 3).
 
-Each try saves its own results file. Send all of them, and tell us which entries left the
-screen dark, and whether it was fully dark (no backlight) or lit but black.
+Each run saves its own results file. Send all of them, and tell us how many of the three
+runs were dark with each entry (for example "entry 1: 0 of 3 dark, entry 2: 2 of 3 dark"),
+and whether it was fully dark (no backlight) or lit but black. If entries 1 and 2 both go
+dark every time, try entries 3 and 4 once each as well.
 
 ## 5. Send us the results
 

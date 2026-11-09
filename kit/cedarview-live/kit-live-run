@@ -238,8 +238,10 @@ if [ -n "$SAVED" ]; then
     panel lit up. If it went dark, did it come back on by itself partway
     through? Tell us that too.
 
-    This run used menu entry ${ENTRY:-?}. If the screen went dark on an earlier
-    try, attach that try's results file too: each try saves its own.
+    This run used menu entry ${ENTRY:-?}. Please boot entry 1 three times and
+    entry 2 three times, and tell us how many of each were dark (for example
+    "entry 1: 0 of 3 dark, entry 2: 2 of 3 dark"). Each run saves its own
+    results file: attach all of them.
 
     GPU: ${ident:-not reported}
 

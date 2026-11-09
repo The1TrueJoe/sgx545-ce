@@ -19,17 +19,18 @@ computer's own disks are never written to.
 CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview`
 (kernel), `powervr-sgx-cedarview` (static tests) and `mesa-sgx-trixie` (firmware and Mesa
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
-`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.1` for v3.1, from `SERIES`) for 90 days. There are no GitHub releases.
+`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.3` for v3.3, from `SERIES`) for 90 days. There are no GitHub releases.
 
 ## The menu
 
 Four GRUB entries run the same test with the kernel's DRM debug log on (`drm.debug=0x6
-log_buf_len=4M`): 1 as it is, then fallbacks for a panel that stays dark: 2
-`acpi_backlight=native`, 3 `acpi_backlight=vendor`, 4 `video=LVDS-1:e`. Never `video=LVDS-1:d`
-(it turns the panel off). Each run records its entry (`kit.entry=N`) and the full command line
-(`cmdline.txt`), and puts the entry in its results file name. The menu shows before Linux
-starts, so a tester whose panel goes dark can still pick the next entry: wait about 5 minutes,
-power off, boot again.
+log_buf_len=4M`), the likeliest fix for a dark panel first: 1 `gma500_gfx.cdv_sr=0` (display
+self-refresh off), 2 as it is, 3 `cdv_sr=0` with `video=LVDS-1:e`, 4 `acpi_backlight=native`.
+Never `video=LVDS-1:d` (it turns the panel off). Each run records its entry (`kit.entry=N`) and
+the full command line (`cmdline.txt`), and puts the entry in its results file name. The dark
+panels are intermittent, so testers are asked for entry 1 three times and entry 2 three times,
+with a count of dark boots for each. The menu shows before Linux starts, so a tester whose
+panel goes dark can still go on: wait about 5 minutes, power off, boot again.
 
 ## The run
 
