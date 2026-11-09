@@ -45,7 +45,7 @@ save() { /usr/local/bin/kit-save "$NAME"; }   # the results file on the stick
 T=/usr/local/lib/kit
 FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
 prod=$(tr -c 'A-Za-z0-9.\n-' '_' < /sys/class/dmi/id/product_name 2>/dev/null | cut -c1-32)
-# the GRUB entry this run came from (1 default, 2-4 the dark-panel fallbacks)
+# the GRUB entry this run came from (1 default, 2-4 display settings to compare)
 ENTRY=$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^kit\.entry=//p' | head -1)
 NAME=results-kit${KIT_SERIES}-${prod:-unknown}-e${ENTRY:-0}-$(date -u +%Y%m%d-%H%M).tar.gz
 cat /proc/cmdline > "$R/cmdline.txt"
@@ -202,8 +202,9 @@ if [ -n "$SAVED" ]; then
 
     This run used menu entry ${ENTRY:-?}. Please boot entry 1 three times and
     entry 2 three times, and tell us how many of each were dark (for example
-    "entry 1: 0 of 3 dark, entry 2: 2 of 3 dark"). Each run saves its own
-    results file: attach all of them. If the desktop stays dark, wait 2
+    "entry 1: 0 of 3 dark, entry 2: 2 of 3 dark"). Entries 3 and 4 only if 1
+    and 2 are both dark every time. Each run saves its own results file:
+    attach all of them. If the desktop stays dark, wait 2
     minutes before turning the computer off: the results keep being saved.
 
     GPU: ${ident:-not reported}

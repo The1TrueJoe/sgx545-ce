@@ -24,12 +24,14 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
 ## The menu
 
 Four GRUB entries run the same test with the kernel's DRM debug log on (`drm.debug=0x6
-log_buf_len=4M`), the likeliest fix for a dark panel first: 1 `gma500_gfx.cdv_sr=0` (display
-self-refresh off), 2 as it is, 3 `cdv_sr=0` with `video=LVDS-1:e`, 4 `acpi_backlight=native`.
+log_buf_len=4M`). The kernel turns display self-refresh off by default (gma500 0005). 1 as it
+is, 2 `gma500_gfx.cdv_dsparb=0x3f01` (pipe B gets almost the whole display FIFO), 3
+`gma500_gfx.cdv_sr=1` (self-refresh on, the old behavior, for comparison), 4 `cdv_dsparb=0x3f01`
+with `video=LVDS-1:e`.
 Never `video=LVDS-1:d` (it turns the panel off). Each run records its entry (`kit.entry=N`) and
 the full command line (`cmdline.txt`), and puts the entry in its results file name. The dark
 panels are intermittent, so testers are asked for entry 1 three times and entry 2 three times,
-with a count of dark boots for each. The menu shows before Linux starts, so a tester whose
+with a count of dark boots for each; 3 and 4 only if 1 and 2 are both dark every time. The menu shows before Linux starts, so a tester whose
 panel goes dark can still go on: wait about 5 minutes, power off, boot again.
 
 ## The run
@@ -64,7 +66,10 @@ panel goes dark can still go on: wait about 5 minutes, power off, boot again.
    after (`display-regs-before.txt`, `display-regs-after.txt`, `screenshots/00-*-modeset.png`;
    whether they differ goes in the summary). No raw MMIO from the stick. The results go to
    the stick (`kit-save`, written as `NAME.part` and renamed) as soon as X is up and every
-   15 s during this step, each time with a fresh register dump (`display-regs-latest.txt`),
+   15 s during this step, each time with a fresh register dump (`display-regs-latest.txt`).
+   From just before X starts until the first desktop screenshot (or 20 s after X), gma500's
+   registers are sampled every 0.5 s into `display-regs-timeline.txt`, to see when pipe B's
+   FIFO underrun bit sets and whether the palette is zero. All of this is in each save,
    so a tester who powers off a dark desktop still leaves the X-time logs and registers. Then the smoke test
    and screenshots `screenshots/NN-name.png`:
    1. the desktop;

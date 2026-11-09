@@ -5,7 +5,10 @@
 # kit-display TAG [regs]: what the display side says, read-only, into
 # /tmp/results/display-TAG.txt: connectors, backlight, gma500's kernel log and
 # display registers (debugfs cdv_display_regs), the DRM state and modetest.
-# With "regs", only the registers, into display-regs-TAG.txt.
+# With "regs", only the registers, into display-regs-TAG.txt. kit-display timeline:
+# the registers every 0.5 s into display-regs-timeline.txt, from before X starts until
+# the first desktop screenshot exists or 20 s after X's socket appears (60 s at most),
+# to see when pipe B's FIFO underrun bit sets and what the palette holds.
 R=/tmp/results
 mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
 regs() {
@@ -15,6 +18,20 @@ regs() {
 		if [ -r "$f" ]; then echo "== $f"; cat "$f"; else echo "== $f: not there (kernel without the dump)"; fi
 	done
 }
+if [ "$1" = timeline ]; then
+	t0=$(date +%s) tx=
+	while :; do
+		now=$(date +%s)
+		[ -z "$tx" ] && [ -S /tmp/.X11-unix/X0 ] && tx=$now
+		echo "== uptime $(cut -d' ' -f1 /proc/uptime)${tx:+ (X up)}"
+		regs
+		[ -e "$R/screenshots/01-desktop.png" ] && break
+		[ -n "$tx" ] && [ $((now - tx)) -ge 20 ] && break
+		[ $((now - t0)) -ge 60 ] && break
+		sleep 0.5
+	done >> "$R/display-regs-timeline.txt" 2>&1
+	exit 0
+fi
 if [ "${2:-}" = regs ]; then
 	regs > "$R/display-regs-$1.txt" 2>&1
 	exit 0
