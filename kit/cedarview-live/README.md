@@ -19,7 +19,7 @@ computer's own disks are never written to.
 CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview`
 (kernel), `powervr-sgx-cedarview` (static tests) and `mesa-sgx-trixie` (firmware and Mesa
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
-`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.3` for v3.3, from `SERIES`) for 90 days. There are no GitHub releases.
+`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.4` for v3.4, from `SERIES`) for 90 days. There are no GitHub releases.
 
 ## The menu
 
@@ -36,9 +36,11 @@ panel goes dark can still go on: wait about 5 minutes, power off, boot again.
 
 1. System facts, and whether the internal disks are read-only.
 2. gma500 handing the GPU over, and powervr_sgx starting the open microkernel. Then the
-   display state, read-only (`display-start.txt`, again as `display-after-desktop.txt`):
-   each DRM connector's status, enabled, dpms and modes; the backlight's values; gma500's
-   kernel lines; the atomic state (`/sys/kernel/debug/dri/*/state`) and `modetest -c -p`
+   display state, read-only (`kit-display`: `display-start.txt`, again as
+   `display-x-start.txt` right after X starts and before the modeset retry, and as
+   `display-after-desktop.txt`): each DRM connector's status, enabled, dpms and modes; the
+   backlight's values; gma500's kernel lines and display registers (`cdv_display_regs`);
+   the atomic state (`/sys/kernel/debug/dri/*/state`) and `modetest -c -p`
    (CRTCs, planes and their framebuffers), so a lit-but-black scanout reads differently
    from a CRTC or plane that is off. With `xrandr.txt` from inside X, this shows what the display side believes,
    since the test cannot see whether the panel actually lit up.
@@ -60,7 +62,10 @@ panel goes dark can still go on: wait about 5 minutes, power off, boot again.
    (`xrandr --output LVDS-1 --off; sleep 1; xrandr --output LVDS-1 --auto`, with the name
    xrandr reports), with gma500's read-only debugfs register dump (`cdv_display_regs`) and a screenshot before and
    after (`display-regs-before.txt`, `display-regs-after.txt`, `screenshots/00-*-modeset.png`;
-   whether they differ goes in the summary). No raw MMIO from the stick. Then the smoke test
+   whether they differ goes in the summary). No raw MMIO from the stick. The results go to
+   the stick (`kit-save`, written as `NAME.part` and renamed) as soon as X is up and every
+   15 s during this step, each time with a fresh register dump (`display-regs-latest.txt`),
+   so a tester who powers off a dark desktop still leaves the X-time logs and registers. Then the smoke test
    and screenshots `screenshots/NN-name.png`:
    1. the desktop;
    2. glxinfo;

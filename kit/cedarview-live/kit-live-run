@@ -6,8 +6,9 @@
 #   1 system facts   2 the GPU driver and its microkernel   3 the GPU tests
 #   4 the blit and its candidate fixes   5 the desktop (Xfce) and its smoke test
 #   6 the results file, then the desktop stays for the tester to try.
-# The results are saved after step 4 and again at the end, so a desktop that
-# freezes still leaves the GPU results on the stick. No serial numbers or
+# The results are saved after step 4, as soon as X starts, every 15 s during the
+# desktop and at the end, so a desktop that freezes or stays dark still leaves
+# them on the stick. No serial numbers or
 # network addresses leave the machine.
 . /etc/kit-release
 R=/tmp/results
@@ -38,49 +39,8 @@ dumps() {   # TAG: the devcoredumps and the driver's status, freed after reading
 	done
 	cat /sys/kernel/debug/dri/*/status > "$R/status-$1.txt" 2>/dev/null
 }
-display() {   # TAG: what the display side says (connectors, backlight, gma500), read-only
-	{
-		for c in /sys/class/drm/card*-*; do
-			[ -e "$c/status" ] || continue
-			echo "== ${c##*/}"
-			for f in status enabled dpms modes; do
-				[ -r "$c/$f" ] && printf '%s: %s\n' "$f" "$(tr '\n' ' ' < "$c/$f")"
-			done
-		done
-		for b in /sys/class/backlight/*; do
-			[ -d "$b" ] || continue
-			echo "== backlight ${b##*/}"
-			for f in type brightness max_brightness actual_brightness bl_power; do
-				[ -r "$b/$f" ] && printf '%s: %s\n' "$f" "$(cat "$b/$f")"
-			done
-		done
-		echo "== gma500 in the kernel log"
-		dmesg | grep -iE 'gma500|psb_gfx|cedarview|\[drm\].*(lvds|panel|backlight|connector)'
-		# the scanout side (pipes, planes, CRTCs): a dark panel with a live scanout
-		# reads differently from one whose CRTC or plane is off
-		mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
-		for st in /sys/kernel/debug/dri/*/state; do
-			[ -r "$st" ] || continue
-			echo "== $st"; cat "$st"
-		done
-		for c in /dev/dri/card*; do
-			echo "== modetest -D $c -c -p"
-			timeout 10 modetest -D "$c" -c -p
-		done
-	} > "$R/display-$1.txt" 2>&1
-}
-save() {   # the results file on the stick's SGXKIT partition (live-boot mounts it read-only)
-	dmesg | scrub > "$R/dmesg.txt"
-	[ -f /var/log/Xorg.0.log ] && cp /var/log/Xorg.0.log "$R/Xorg.0.log"
-	journalctl -b --no-pager 2>/dev/null | scrub | tail -3000 > "$R/journal.txt"
-	cp /proc/interrupts "$R/interrupts.txt"
-	M=/run/live/medium
-	mount -o remount,rw "$M" 2>/dev/null || return 1
-	tar -C /tmp -czf "$M/$NAME" results && sync
-	local rc=$?
-	mount -o remount,ro "$M" 2>/dev/null
-	return $rc
-}
+display() { /usr/local/bin/kit-display "$1"; }   # TAG: the display side, read-only
+save() { /usr/local/bin/kit-save "$NAME"; }   # the results file on the stick
 
 T=/usr/local/lib/kit
 FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
@@ -198,8 +158,10 @@ save && note "GPU results saved to the stick ($NAME)" || note "could not save to
 
 step 5 "The desktop"
 note "The screen switches to a desktop now and back here at the end."
+note "If the desktop stays dark, wait 2 minutes before turning the computer off:"
+note "the test keeps saving its results to the stick."
 DESK=
-if /usr/local/bin/kit-desktop "$R"; then DESK=1; fi
+if /usr/local/bin/kit-desktop "$R" "$NAME"; then DESK=1; fi
 chvt 1 2>/dev/null
 [ -n "$DESK" ] || result FAIL "the desktop (see Xorg.0.log)"
 lost && result FAIL "the GPU was lost during the desktop test: the desktop results after that are not valid"
@@ -241,7 +203,8 @@ if [ -n "$SAVED" ]; then
     This run used menu entry ${ENTRY:-?}. Please boot entry 1 three times and
     entry 2 three times, and tell us how many of each were dark (for example
     "entry 1: 0 of 3 dark, entry 2: 2 of 3 dark"). Each run saves its own
-    results file: attach all of them.
+    results file: attach all of them. If the desktop stays dark, wait 2
+    minutes before turning the computer off: the results keep being saved.
 
     GPU: ${ident:-not reported}
 

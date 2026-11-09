@@ -79,7 +79,9 @@ comment.
 
 **If the screen goes dark** (some Cedarview panels do with Linux):
 
-1. Wait about five minutes. The test keeps running and saves its results.
+1. Wait about five minutes. The test keeps running and saves its results. If it is the
+   desktop that stays dark, wait at least 2 minutes before turning the computer off: the
+   test saves its results to the stick every 15 seconds while the desktop runs.
 2. Hold the power button to turn the computer off.
 3. Start the next run from the stick (step 3).
 
