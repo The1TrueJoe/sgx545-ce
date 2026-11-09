@@ -3459,6 +3459,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       }
       return;
    }
+   /* only the channels something reads (glamor's glyphs: alpha alone) */
+   unsigned read = nir_def_components_read(&tex->def);
    if (tex->def.bit_size == 16) {
       /* to F16, two channels per instruction: the finalizer's own unpack */
       unsigned w = new_vreg16(c, 4);
@@ -3466,6 +3468,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       c->vals[tex->def.index].n = w;
       c->vals[tex->def.index].comp = 0;
       for (unsigned p = 0; p < 2; p++) {
+         if (!(read >> (2 * p) & 3))
+            continue;
          struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_U8);
          pk->nops = 3;
          pk->op[0] = href(w, 2 * p);
@@ -3484,6 +3488,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    c->vals[tex->def.index].n = w;
    c->vals[tex->def.index].comp = 0;
    for (unsigned k = 0; k < 4; k++) {
+      if (!(read >> k & 1))
+         continue;
       struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F32_U8);
       p->nops = 3;
       p->op[0] = vref(w, k);
