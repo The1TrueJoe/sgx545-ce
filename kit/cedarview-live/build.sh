@@ -17,7 +17,7 @@ set -eu
 DEBS=$(realpath "$1") TESTS=$(realpath "$2") OUT=$(realpath -m "$3") VER=$4 FWX=${5:-}
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-KEYRING=${KEYRING:?a Debian archive keyring file with trixie's keys}
+KEYRING=${KEYRING:?a Debian archive keyring file with the trixie keys}
 W=$(mktemp -d)
 ROOT=$W/root
 mkdir -p "$OUT"
