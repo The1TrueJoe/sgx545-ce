@@ -439,20 +439,26 @@ vbo_retire(struct sgx_screen *screen, struct sgxws_bo *bo, uint32_t seq)
    }
 }
 
-/* (screen lock held) */
+/* The buffer's device copy for a draw that reads bytes [off, off + size) of
+ * it (screen lock held).  Unmaps copy what was written, so a copy is current
+ * unless the buffer is mapped for writes still (a stream uploader writes more
+ * into its mapped buffer): then the draw's range is copied again, into a new
+ * copy when a render may still read this one. */
 bool
-sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res)
+sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res, uint32_t off,
+               uint32_t size)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
 
-   /* Written since it was copied, or mapped for writes still (whose writes
-    * reach the copy only at the unmap): copied again, into a new copy when a
-    * render may still read this one */
-   if (sgxws_bo_valid(&res->vbo) &&
-       (res->vbo_gen != res->gen || res->write_maps)) {
+   off = MIN2(off, res->base.width0);
+   size = MIN2(size, res->base.width0 - off);
+   if (sgxws_bo_valid(&res->vbo) && res->write_maps) {
       if (!screen->hw ||
-          !sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw)))
-         goto copy;
+          !sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw))) {
+         memcpy((uint8_t *)res->vbo.map + off, (const uint8_t *)res->data + off,
+                size);
+         return true;
+      }
       /* (mid-draw: a full retired list would flush the frame being
        * recorded, so the draw goes without the device copy instead) */
       if (screen->n_retired == ARRAY_SIZE(screen->retired))
@@ -466,9 +472,7 @@ sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res)
       memset(&res->vbo, 0, sizeof(res->vbo));
       return false;
    }
-copy:
    memcpy(res->vbo.map, res->data, res->base.width0);
-   res->vbo_gen = res->gen;
    return true;
 }
 

@@ -1137,10 +1137,10 @@ zc_draw_resident(struct sgx_context *ctx, const struct pipe_draw_info *info,
    unsigned count = draw->count;
 
    if (!u_trim_pipe_prim(info->mode, &count) || !count ||
-       !sgx_buffer_vbo(ctx, ib))
+       !sgx_buffer_vbo(ctx, ib, draw->start * 2, count * 2))
       return false;
    for (unsigned e = 0; e < n_fetch; e++) {
-      if (!sgx_buffer_vbo(ctx, f[e].res))
+      if (!sgx_buffer_vbo(ctx, f[e].res, f[e].offset, ~0u))
          return false;
       zf[e] = (struct sgxws_fetch){.stride = f[e].stride,
                                    .dwords = f[e].raw_bytes / 4,
@@ -1238,7 +1238,8 @@ zc_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
       zf[e] =
          (struct sgxws_fetch){.stride = f[e].stride, .dwords = n, .reg = 4 * e};
       if (f[e].res) {
-         if (!sgx_buffer_vbo(ctx, f[e].res))
+         if (!sgx_buffer_vbo(ctx, f[e].res, f[e].offset + lo * f[e].stride,
+                             (hi - lo) * f[e].stride + n * 4))
             return false;
          zf[e].va = f[e].res->vbo.va + f[e].offset + lo * f[e].stride;
          if (zf[e].va & 3)
