@@ -155,6 +155,17 @@ EA1 table above (fill 187 against 189), so the boards compare.
   with secondaries: its textured draw 0x18030001) against ours (always
   capped) changed nothing: tex 316.4 against 316.9 fps. Not adopted.
 
+**The rest of item 2** (13eefef, 89fab5d, with usse-compiler's tex_bgra and
+pds_samples_alone): perfmicro's tex is now the DDK's shape, one pure-sample
+DOUTI and no instruction before the driver's `mov o0, pa0`. On the EA3 it
+changed nothing: 1440x960 tex 237 → 239 fps, 720x480 836 → 835. So the
+shader is not what limits the micro tests. Over both sizes ours costs
+2.9 ms a megapixel for fill and tex alike (8 layers, hidden surface removal
+on) plus ~0.2 ms a frame. The DDK costs ~2.1 ms a megapixel for fill, and its
+tex is faster than its fill. What is left is per pixel and outside the USSE
+(ISP, the tile loop, PBE), to be compared with the DDK's 3D state for the same
+draws.
+
 ### Where a Minecraft frame goes (EA1, 2026-11-09)
 
 uapi-stream's profile of the bench world (720x480, render distance 4,
