@@ -161,6 +161,11 @@ STAGE1_FLAG = 0x24   # control block +0x90: the DDK's stage-1 state (sa8 ~b19). 
                      # Carries ACROSS scenes -- not cleared at TA finish (ta3d-state); only init_set clears it.
 STAGE1_SAVED_628 = 0x25 # control block +0x94: the global threshold (0x628) saved before a stage-1 raise; the
                      # stage-1 undo restores it. Separate from OOM_SAVED_628 (the +16 grant's save).
+SLOT1_INIT = 0x26    # control block +0x98: set once slot 1 has a valid DPM CONTROL state. The partial render's
+                     # 3D frees run through slot 1's control (0x698/0x634); we never run a real scene in slot 1
+                     # (the DDK does, ctx630=4/5/7), so its control is stale and the frees link pages off the
+                     # TA's chain -> leak (ta3d-state; EA1 8480a4f: count recovers, ring short). Before the first
+                     # shuffle, give slot 1 a control state like a DDK first kick would. Cleared in init_set.
 SC_OOM = 0x17        # control block +0x5c: OOM partial-render state. 0 = none; 1 = OOM taken, the
                      # TA is paused (0xa74 b0) and held (0x69c=4), awaiting TA_TERMINATE; 2 = the
                      # partial render is in flight (its 3D end resumes the TA via 0x69c=1, unpauses,
@@ -754,6 +759,7 @@ def build(a):
     a.i(f"st.a.d r17, #{OOM_SAVED_624}, r0 [moe]")
     a.i(f"st.a.d r17, #{STAGE1_FLAG}, r0 [moe]")          # no stage-1 raise outstanding
     a.i(f"st.a.d r17, #{STAGE1_SAVED_628}, r0 [moe]")
+    a.i(f"st.a.d r17, #{SLOT1_INIT}, r0 [moe]")           # slot 1's DPM control is whatever reset left: unset
     a.i(f"str #{CR_DPM_LOADSEL // 4}, r0")                # 0x65c = 0: clean DPM load-select, so a reset
     a.i(f"str #{0x630 // 4}, r0")                         # 0x630 = 0: and slot select, leave no stale
                                                           # OOM-shuffle state for the first post-reset 3D
@@ -2005,6 +2011,31 @@ def build(a):
     a.i("wdf")
     a.i("ld.a.d r3, r2, #5 [moe]")                    # rtentry word 5 (+0x14)
     a.i("wdf")
+    # ta3d-state's slot-1 control-init (test): the shuffle renders slot 1, so the 3D's frees go through
+    # slot 1's DPM control (0x698/0x634). We never run a real scene in slot 1, so that control is whatever
+    # reset left -> frees link pages off the TA's chain (leak: count recovers, ring short). Give slot 1 a
+    # valid control ONCE, like a DDK first kick into slot 1: 0x630=5, 0x674=w5, 0x634=w6, 0x694=0x698=2,
+    # wait 0x240. Gated on SLOT1_INIT so it runs only before the first shuffle.
+    a.i(f"ld.a.d r4, r17, #{SLOT1_INIT} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r4, r4")                     # slot-1 control already set up -> straight to shuffle
+    a.i("(p0) ba skip_slot1_init")
+    a.i("ld.a.d r5, r2, #6 [moe]")                    # rtentry word 6 (+0x18)
+    a.i("wdf")
+    a.i(f"ldr r7, #{0x630 // 4}")                     # save 0x630 (survives a.wait; r5/r6 don't)
+    a.i("wdf")
+    a.i("limm r4, #5")                                # 0x630 = 5: slot 1 (b0|b2), as a DDK first kick
+    a.i(f"str #{0x630 // 4}, r4")
+    a.i(f"str #{0x674 // 4}, r3")                     # slot-1 state register = rtentry w5
+    a.i(f"str #{0x634 // 4}, r5")                     # slot-1 control register = rtentry w6
+    a.i("limm r4, #2")
+    a.i(f"str #{CR_DPM_STATE // 4}, r4")              # 0x694 = 2: load the slot-1 state
+    a.i(f"str #{CR_DPM_CONTROL // 4}, r4")            # 0x698 = 2: load the slot-1 control
+    a.wait(CR_EVENT_STATUS, 0x240, CR_EVENT_HOST_CLEAR)  # b6 state + b9 control load done
+    a.i(f"str #{0x630 // 4}, r7")                     # restore 0x630 (the shuffle re-selects below)
+    a.i("limm r4, #1")
+    a.i(f"st.a.d r17, #{SLOT1_INIT}, r4 [moe]")       # slot-1 control is now valid; do this once
+    a.label("skip_slot1_init")
     a.i("limm r4, #2")                                # 0x630 = 2: TA slot 0, 3D slot 1
     a.i(f"str #{0x630 // 4}, r4")
     a.i(f"str #{0x62c // 4}, r3")                     # slot-0 register = rtentry w5
