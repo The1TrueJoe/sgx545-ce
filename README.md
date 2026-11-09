@@ -3,33 +3,57 @@
 > **Working on this repo?** Read [AGENTS.md](AGENTS.md) first: the end goal (upstream Linux, Mesa and
 > linux-firmware support for Cedarview), the standards the work must meet, and the milestones.
 
-An open driver stack for the PowerVR **SGX545** in the Intel Atom CE5300/CE5310,
-the same core as Cedarview's GMA 3600. The kernel side is
-Intel's GPL DDK 1.7 ported to modern Linux; the userspace side is new, written from
-reverse engineering and running natively on x86_64, with no Intel or Imagination
-userspace code. It replaces the closed i386 Cedarview DDK.
+An open graphics driver stack for the PowerVR **SGX545** GPU: the GPU in Intel's Cedarview
+Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the Intel Atom CE5300/CE5310.
+Every part runs from code in this repository. No Intel or Imagination binary is needed, in
+the kernel, the firmware or userspace.
 
-| Directory | What it is |
-|---|---|
-| [`kernel/`](kernel/) | `pvrsrvkm`, the SGX545 DRM/services kernel driver (GPL). A downstream distribution builds it in-tree. |
-| [`srvinit/`](srvinit/) | Open GPU bring-up: loads the microkernel at boot in place of the DDK's `libsrv_init`. |
-| [`mesa/`](mesa/) | The GL driver: a Mesa gallium driver (EGL + GLES2), kept as an overlay on a pinned Mesa release. |
-| [`libpvr/`](libpvr/) | The PVR services client (bridge ioctls, memory, kicks) shared by srvinit, the Mesa winsys and the tools. `abi/` holds the struct layouts and bridge IDs generated from the kernel headers. |
-| [`docs/`](docs/) | Hardware reference written from the reverse engineering, and the [build log](docs/log/BUILDLOG.md). |
-| [`kit/`](kit/) | Test sticks for testers: [`kit/cedarview`](kit/cedarview/) builds a USB image that checks the driver on a Cedarview computer ([guide](docs/TESTING-CEDARVIEW.md)). |
-| [`tools/`](tools/) | Reverse-engineering and test tooling: tracer, decoders, (dis)assemblers, frame generator, hardware tests, and DDK-side helpers for A/B testing. |
+| Part | Where | What it is |
+|---|---|---|
+| Kernel driver | [`drm/`](drm/) | `powervr_sgx`, a new DRM driver (GEM, VM, a `drm_sched` job queue, runtime PM, devcoredump). On Cedarview it takes the GPU over from `gma500` through an auxiliary device. |
+| Firmware | [`ukernel/`](ukernel/) | An open microkernel for the GPU's embedded processor, written in USSE assembly and built with our own assembler. It replaces Imagination's microkernel. |
+| GL driver | [`mesa/`](mesa/) | `sgx`, a Mesa gallium driver: OpenGL 2.1, OpenGL ES 2.0, EGL, GBM, GLX and DRI3 for X, with a NIR to USSE compiler. Kept as a patch series on Mesa 26.2.5. |
+| Packages | [`.github/workflows/`](.github/workflows/) | Debian 13 packages built in CI: `mesa-sgx`, `sgx545-firmware`, and a kernel for Cedarview. |
+| Test sticks | [`kit/`](kit/) | A live Debian USB image that installs the packages, runs the GPU tests and a desktop session, and saves the results for a Cedarview tester ([guide](docs/TESTING-CEDARVIEW.md)). |
+| Tools | [`tools/`](tools/) | The ISA assembler and disassembler, the offline microkernel emulator, decoders, frame and blit generators, and hardware tests. |
+| Documentation | [`docs/`](docs/) | The hardware as we understand it ([ISA](docs/ISA.md), [state](docs/STATE.md), [microkernel](docs/UKERNEL.md), [uAPI](docs/UAPI.md)), and the [build log](docs/log/BUILDLOG.md). |
 
-**Status.** On an EA-3 the GPU is started by `srvinit` and draws frames generated
-entirely by our code, pixel-exact against the DDK. The Mesa driver is in progress;
-the build log tells the story so far.
+`kernel/`, `srvinit/` and `libpvr/` are the earlier path: Intel's GPL DDK kernel driver
+(`pvrsrvkm`) ported to modern Linux, with our own bring-up and client library. They stay for
+comparisons against the DDK; the new stack does not use them.
 
-## Firmware
+## Status
 
-The one piece that is still Imagination's is the 53,096-byte SGX microkernel.
-It is not in this repository: `srvinit/fetch-firmware.sh` extracts it from the
-owner's own copy of the DDK.
+Tested on two CE5300 boards and, by testers, on Cedarview computers.
+
+- **OpenGL ES 2.0:** dEQP-GLES2 passes 16,587 tests with 129 failures, 0 GPU hangs and 0 resets
+  on our kernel driver and microkernel. That is no test worse than the same Mesa on Intel's
+  kernel driver and microkernel (16,566 passes).
+- **Desktop:** Xorg (modesetting with glamor) and Xfce run on the GPU, with Firefox, glxgears
+  and glmark2. A GPU hang in one program is recovered without taking down the desktop.
+- **Games:** Minecraft 1.7.10 runs in its world for 15 minutes without a GPU recovery.
+- **Cedarview:** the microkernel starts and draws frames on Cedarview's SGX545 (revision
+  1.0.13). Some Cedarview panels stay dark with `gma500`; the test stick records why.
+- **Known issues:** see [docs/MAIN-MERGE.md](docs/MAIN-MERGE.md#known-issues-to-state-with-the-merge).
+  The largest is the parameter-buffer out-of-memory path, which is still in progress; a 16 MiB
+  buffer keeps real workloads clear of it.
+
+The [build log](docs/log/BUILDLOG.md) tells the story so far.
+
+## Installing
+
+[docs/INSTALL.md](docs/INSTALL.md) installs the packages on Debian 13 and removes them again.
+Debian's own kernel and Mesa stay installed. The packages come from CI runs; there are no
+releases yet.
+
+## Testing on a Cedarview computer
+
+[docs/TESTING-CEDARVIEW.md](docs/TESTING-CEDARVIEW.md) walks a tester through the USB stick:
+write it, boot it, attach the results file to the issue.
 
 ## Licensing
 
-`kernel/src/` is GPL-2.0 (Imagination Technologies, as published by Intel).
-Everything else here is ours.
+- `drm/` (the `powervr_sgx` kernel driver): GPL-2.0-only; its uAPI header is
+  GPL-2.0-only WITH Linux-syscall-note, or MIT.
+- `kernel/src/`: GPL-2.0, Imagination Technologies, as published by Intel.
+- Everything else here (the microkernel, the Mesa driver, the tools, the test sticks): MIT.
