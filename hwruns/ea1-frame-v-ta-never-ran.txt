@@ -1,1 +1,0 @@
-frame -v (EA1, first frame on open ukernel): after kick 1 PB pages in use 0 (TA never ran), after kick 2 PB pages 0, frame word 0x1, render TIMED OUT. do_ta programs the TA but CR_TA_KICK does not start the VDM/TA.

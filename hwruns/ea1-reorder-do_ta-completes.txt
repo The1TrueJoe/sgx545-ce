@@ -1,1 +1,0 @@
-reorder sentinel (EA1): FL/DPM/pre-kick/post-kick ALL set -> do_ta now COMPLETES (reorder fixed the dpm_load stall), reaches+passes CR_TA_KICK. But PB pages still 0: TA kicked yet not running -> next blocker = TA-start pulses (0x080/0xc00/0xc78/0xa74/0x630).

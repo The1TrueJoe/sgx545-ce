@@ -1,1 +1,0 @@
-0xa74 TA-flags write added to do_ta (clear early + write cmd+0x14). HW: PB pages still 0, render TIMED OUT - necessary-looking but not the final blocker. TA is kicked (post-kick marker) but still does not execute. Remaining undocumented suspects: 0x080/0xc00/0xc78/0x630.
