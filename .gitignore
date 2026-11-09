@@ -20,3 +20,9 @@ tools/iso/iso
 tools/iso/iso-fake
 __pycache__/
 *.pyc
+
+# HW-run scratch (never commit; keep in the session scratchpad)
+hwruns/
+ea1-*.sh
+ea1-*.out
+/tools/ddk/regsample
