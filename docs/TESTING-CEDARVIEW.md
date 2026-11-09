@@ -86,21 +86,16 @@ screen dark, and whether it was fully dark (no backlight) or lit but black.
 ## 5. Send us the results
 
 1. Plug the USB stick into your other computer.
-2. Find the drive named **SGXKIT**. It is small, under 100 MB. The stick has a second part
-   that only Linux can read, so on Windows SGXKIT is the only drive you will see from it.
-   - **On Windows, if no SGXKIT drive shows up:** unplug the stick and plug it in again.
-     If it still doesn't show, open **Disk Management** (right-click the Start button),
-     right-click the small FAT32 partition on the USB stick, choose **Change Drive Letter
-     and Paths**, and give it a letter.
-   - **If Windows asks to format a drive or a disk, click Cancel.** That's the part of the
-     stick Windows can't read. Formatting it would erase the test, and you don't need it.
+2. Find the drive named **SGXKIT**. It is the whole USB stick: the test system and the
+   results are both on it.
+   On Windows, if no SGXKIT drive shows up, unplug the stick and plug it in again.
 3. On SGXKIT, find the files whose names start with **`results-`** and end with
    **`.tar.gz`**: one per try (the `-e1-`, `-e2-`, ... in the name is the menu entry).
-4. Attach them to a comment on the GitHub issue where you were asked to test. You can drag it
-   straight from the SGXKIT drive into the comment box. You don't need to copy or unzip it
-   first. Please also say which computer model you used.
+4. Attach them to a comment on the GitHub issue where you were asked to test. You can drag
+   them straight from the SGXKIT drive into the comment box. You don't need to copy or unzip
+   them first. Please also say which computer model you used.
 
-The file contains only technical information about your computer's hardware and what the
+The files contain only technical information about your computer's hardware and what the
 driver reported. Serial numbers and network addresses are removed. No personal files are
 ever read.
 
