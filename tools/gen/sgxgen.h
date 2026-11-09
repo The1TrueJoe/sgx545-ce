@@ -81,6 +81,7 @@ struct sgx_bo {
 struct sgx_ring {
 	struct sgx_bo bo;
 	uint32_t used;
+	uint32_t mark;	/* sgx_ctx_rewind() goes back to here */
 };
 
 /* where something landed: device address and CPU pointer */
@@ -202,6 +203,11 @@ void sgx_clear(struct sgx_ctx *c, const float rgba[4], float depth);
 int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d);
 /* submit the frame; waits up to timeout_ms for the render to finish; 0 = done */
 int sgx_flush(struct sgx_ctx *c, unsigned timeout_ms);
+/* Rewind the context's program and data rings to the last mark, so a long run
+ * reuses them; only when every frame recorded since the mark has completed.
+ * sgx_ctx_create() marks; mark again after making anything that must last. */
+void sgx_ctx_mark(struct sgx_ctx *c);
+void sgx_ctx_rewind(struct sgx_ctx *c);
 #ifdef SGXGEN_DRM
 /* The frame's render job (signals c->syncobj), for a SUBMIT_JOBS of the caller's
  * own; *j must live until the ioctl returns. sgx_flush is this, submit and wait. */

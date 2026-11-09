@@ -135,6 +135,7 @@ int main(int argc, char **argv)
 		ss[i] = sgx_surface_create(cs[i], w, h, 0);
 		vss[i] = sgx_shader_builtin(cs[i], SGX_VS_XY);
 		fss[i] = sgx_shader_builtin(cs[i], SGX_FS_UNIFORM);
+		sgx_ctx_mark(cs[i]);
 	}
 
 	for (unsigned f = 0; f < frames; f++) {
@@ -155,6 +156,7 @@ int main(int argc, char **argv)
 			ss[i] = sgx_surface_create(cs[i], w, h, 0);
 			vss[i] = sgx_shader_builtin(cs[i], SGX_VS_XY);
 			fss[i] = sgx_shader_builtin(cs[i], SGX_FS_UNIFORM);
+			sgx_ctx_mark(cs[i]);
 		} else if (fresh && f) {
 			sgx_surface_destroy(cs[i], ss[i]);
 			ss[i] = sgx_surface_create(cs[i], w, h, 0);
@@ -177,6 +179,8 @@ int main(int argc, char **argv)
 		       e ? "FAILED" : "done", centre, want_tri, corner, want_bg);
 		if (e || centre != want_tri || corner != want_bg)
 			bad++;
+		/* The frame is done (or reset): its programs and data can go. */
+		sgx_ctx_rewind(c);
 		if (dump)
 			dump_render(f);
 	}

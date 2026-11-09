@@ -16,6 +16,9 @@ on:
         description: Lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (drm/ci/debug.fragment)
         type: boolean
         default: false
+      linux:
+        description: Kernel version (default 7.1.8)
+        default: ''
   push:
     branches: [m2-drm]
     paths:
@@ -27,14 +30,14 @@ on:
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
-  group: powervr-sgx-${{ github.ref }}-${{ inputs.board || 'ea1-v1' }}-${{ inputs.debug && 'debug' || 'plain' }}
+  group: powervr-sgx-${{ github.ref }}-${{ inputs.board || 'ea1-v1' }}-${{ inputs.debug && 'debug' || 'plain' }}-${{ inputs.linux || 'default' }}
   cancel-in-progress: true
 
 env:
-  LINUX_VERSION: 7.1.8
+  LINUX_VERSION: ${{ inputs.linux || '7.1.8' }}
   DIST_REF: main
   BOARD: ${{ inputs.board || 'ea1-v1' }}
-  SET: ${{ inputs.board || 'ea1-v1' }}${{ inputs.debug && '-debug' || '' }}
+  SET: ${{ inputs.board || 'ea1-v1' }}${{ inputs.debug && '-debug' || '' }}${{ inputs.linux && format('-linux-{0}', inputs.linux) || '' }}
 
 jobs:
   build:

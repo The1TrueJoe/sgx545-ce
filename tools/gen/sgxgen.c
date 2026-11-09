@@ -202,6 +202,24 @@ static struct sgx_ptr ring_alloc(struct sgx_ring *r, uint32_t size, uint32_t ali
 	return p;
 }
 
+#define CTX_RINGS(c) { &(c)->pds_pix, &(c)->pds_vtx, &(c)->usse_pix, &(c)->usse_vtx, &(c)->gen }
+
+void sgx_ctx_mark(struct sgx_ctx *c)
+{
+	struct sgx_ring *rs[] = CTX_RINGS(c);
+
+	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
+		rs[i]->mark = rs[i]->used;
+}
+
+void sgx_ctx_rewind(struct sgx_ctx *c)
+{
+	struct sgx_ring *rs[] = CTX_RINGS(c);
+
+	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
+		rs[i]->used = rs[i]->mark;
+}
+
 /* ------------------------------------------------------------------ USSE */
 
 /* Load a program assembled by mkusse.py; phas.i targets are relocated to the
@@ -586,6 +604,7 @@ struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d)
 	for (int i = 0; i < 1024; i += 2)
 		p.p[i / 2] = (uint32_t)i | (uint32_t)(i + 1) << 16;
 	c->idx = p.va;
+	sgx_ctx_mark(c);
 	return c;
 }
 
