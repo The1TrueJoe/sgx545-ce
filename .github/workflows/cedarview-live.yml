@@ -7,7 +7,7 @@ name: cedarview-live
 on:
   workflow_dispatch:
   push:
-    branches: [um-re]
+    branches: [dev, main]
     paths:
       - kit/cedarview-live/**
       - mesa/tests/desktop/packages.txt
@@ -41,7 +41,7 @@ jobs:
             echo "$1: run $id" | tee -a sources.txt
           }
           get powervr-sgx-deb-cedarview m2-drm debs
-          get mesa-sgx-trixie um-re debs
+          get mesa-sgx-trixie dev debs
           get powervr-sgx-cedarview m2-drm tests
           ls -l debs tests
 

@@ -6,7 +6,7 @@ name: mesa-debian
 on:
   workflow_dispatch:
   push:
-    branches: [um-re]
+    branches: [dev, main]
     paths:
       - mesa/**
       - drm/powervr_sgx/include/uapi/**

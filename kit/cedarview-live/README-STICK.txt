@@ -6,7 +6,7 @@ the computer's own disks.
 
 When it finishes, a file named results-kitv3.1-....tar.gz appears on this drive.
 Attach that file to the GitHub issue, as the guide says:
-https://github.com/The1TrueJoe/sgx545-ce/blob/um-re/docs/TESTING-CEDARVIEW.md
+https://github.com/The1TrueJoe/sgx545-ce/blob/main/docs/TESTING-CEDARVIEW.md
 
 If the screen goes dark (some Cedarview panels do with Linux):
   1. Wait about 5 minutes. The test keeps running and saves its results.

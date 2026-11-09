@@ -4,7 +4,7 @@ name: sh-check
 
 on:
   push:
-    branches: [um-re]
+    branches: [dev, main]
     paths:
       - kit/**
       - mesa/tests/**
