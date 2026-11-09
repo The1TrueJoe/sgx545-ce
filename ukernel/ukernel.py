@@ -84,6 +84,20 @@ TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
 # 0x38 = EVENT_STATUS2, 0x39 = 0x008 CLKGATESTATUS, 0x3a = stage counters (byte each:
 # do_ta/ta_finished/do_3d/render_done), 0x3b = tick counter.
 WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
+# Frame profile (mesa-gallium, 2026-11-09): UK_FRAMEPROF=1 stamps the EDM tick counter at the four render
+# phases so the host can split a frame into TA (vertex) vs 3D (pixel). The counter (ctlblk 0x3b) increments on
+# every EDM timer tick (~1 kHz keep-alive = ~1 ms); each phase copies it to its own ctlblk word, host-readable
+# via the regsample over BAR0. Debug-only, off by default (byte-identical production image). Words (ctlblk+):
+#   0x3b = tick, 0x37 = TA kick, 0x38 = TA finished, 0x39 = 3D kick, 0x3a = 3D finished. (Overlaps TMR/WAIT_LOG
+# words, which are separate build flags.) ~1 ms resolution; a free-running GPU counter would give sub-ms if one
+# proves readable.
+FRAMEPROF = os.environ.get("UK_FRAMEPROF") == "1"
+FP_TICK = 0x3b
+FP_TA_KICK, FP_TA_FIN, FP_3D_KICK, FP_3D_FIN = 0x37, 0x38, 0x39, 0x3a
+# Running totals (m2: words 0x3d-0x3f are free; 0x40 is hostctl). Two host reads 5 s apart give the averages
+# over ~50 frames so the 1 ms tick error averages out and regsample needn't catch each render. (Zeroed at every
+# microkernel start; survive within a session while the GPU stays up.)
+FP_TA_BUSY, FP_3D_BUSY, FP_COUNTS = 0x3d, 0x3e, 0x3f   # TA-busy ticks, 3D-busy ticks, TA count (low 16)|3D (high 16)
 # EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
 # alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
@@ -133,6 +147,43 @@ CLEANUP_DEFER_MAX = 256      # ~256 ms at 1 kHz; a render completes in << 30 ms
 # kicked into a live 3D (BANK0 0x101F at every fault) = the 5/10 alternation.
 WAIT_3D = 0x1d               # set at 3D start, cleared by pixel_done (0x40000 + ISP idle)
 WAIT_FREE = 0x1e             # set at 3D start, cleared by free_done (0x1 DPM free)
+SC_OOM_PENDING = 0x1a  # control block +0x68: an OOM (EVENT_STATUS 0x6) fired while an episode was already
+                     # in flight. We ack it (so it can't storm the EDM) and set this; the episode's teardown
+                     # re-dispatches k_oom for it. The DDK's post-partial re-check (step 2), storm-free.
+OOM_SAVED_628 = 0x1b # control block +0x6c: the global DPM threshold (0x628) saved before a grant raises it.
+                     # ta_finished restores it (the DDK undoes the grant at TA finish, pc 0x0606->0x063c).
+                     # 0 = no grant outstanding.
+# DDK grant (ta3d-state, the scene-finish mechanism). Each partial render frees only ~20% of the binned
+# pages; the DDK does 2-4 partial renders, and when one frees < 2 pages it takes the GRANT path on the NEXT
+# OOM -- raise the TA/GBL thresholds and reload the free list -- so a dense scene can finish, then undoes it
+# at TA finish. These flags/marks live in the control block (the DDK keeps them in sa8 bits + TA3D words).
+OOM_FLAGS = 0x1f     # control block +0x7c: OOM_G (last partial freed < 2 pages), OOM_G2 (the GBL case),
+                     # OOM_GRANTED (a grant already given this scene). Survive the SC_OOM clear; reset at TA
+                     # finish (the DDK's 0x785|0x18 mask, pc 0x0606->0x0645).
+OOM_G = 0x1
+OOM_G2 = 0x2
+OOM_GRANTED = 0x4
+OOM_MARK_TA = 0x21   # control block +0x84: (0x724>>16) at the last OOM minus 2, 16-bit (count<2 wraps to
+                     # -2/-1 signed, harmless). The teardown sets OOM_G when the post-render count > this.
+OOM_MARK_GL = 0x22   # control block +0x88: max((0x72c>>16)-2, 0) at the last OOM. The GBL equivalent.
+OOM_SAVED_624 = 0x23 # control block +0x8c: the ZLS threshold (0x624) saved before a grant adds 32; restored
+                     # at TA finish.
+STAGE1_FLAG = 0x24   # control block +0x90: the DDK's stage-1 state (sa8 ~b19). Set by a stage-1 RAISE (move the
+                     # global threshold to the current 0x72c count + reload the TA free list, no render), cleared
+                     # by the stage-1 UNDO at the next OOM. The DDK alternates OOM->stage-1-raise / OOM->undo+
+                     # partial-render; its reloads ride with the raise/undo (a bare reload corrupts the ring).
+                     # Carries ACROSS scenes -- not cleared at TA finish (ta3d-state); only init_set clears it.
+STAGE1_SAVED_628 = 0x25 # control block +0x94: the global threshold (0x628) saved before a stage-1 raise; the
+                     # stage-1 undo restores it. Separate from OOM_SAVED_628 (the +16 grant's save).
+SLOT1_INIT = 0x26    # control block +0x98: set once slot 1 has a valid DPM CONTROL state. The partial render's
+                     # 3D frees run through slot 1's control (0x698/0x634); we never run a real scene in slot 1
+                     # (the DDK does, ctx630=4/5/7), so its control is stale and the frees link pages off the
+                     # TA's chain -> leak (ta3d-state; EA1 8480a4f: count recovers, ring short). Before the first
+                     # shuffle, give slot 1 a control state like a DDK first kick would. Cleared in init_set.
+SC_OOM = 0x17        # control block +0x5c: OOM partial-render state. 0 = none; 1 = OOM taken, the
+                     # TA is paused (0xa74 b0) and held (0x69c=4), awaiting TA_TERMINATE; 2 = the
+                     # partial render is in flight (its 3D end resumes the TA via 0x69c=1, unpauses,
+                     # clears the DPM control, and skips the scene teardown). Cleared by init_set.
 SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
                      # flight (0 = none). The DDK keeps a doubly-linked render-
                      # in-flight list; one context needs only this single slot,
@@ -289,6 +340,12 @@ CR_DPM_CONTROL = 0x698
 CR_DPM_FL_MODE = 0x664       # DPM free-list load selector (TA = 3, 3D = 5)
 CR_DPM_TA_FL = 0x684         # DPM TA free-list load  -> EUR_CR_EVENT_STATUS2 bit 0
 CR_DPM_3D_FL = 0x680         # DPM 3D free-list load  -> EUR_CR_EVENT_STATUS2 bit 1
+CR_DPM_OOM = 0x69c           # DPM out-of-memory allocation control (ta3d-state: 4 = hold the TA's
+                             # allocation during an OOM partial render, 1 = release/resume it). Not
+                             # in the GPL header; HW iteration may refine. The partial-render start
+                             # writes 4, its completion writes 1.
+CR_DPM_LOADSEL = 0x65c       # DPM load-select gate around the slot store/load in the OOM shuffle
+                             # (ta3d-state pc 0x0c40/0x0dd8): 1 to open the store/load, 0 to close.
 CR_OTPM = 0x24C
 CR_TPC = 0x224
 CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
@@ -491,6 +548,29 @@ class Asm:
         # frames, still intermittent lockup_TA) — the TA-cache invalidate is not the
         # terminate-kick cause. See the op0x100 flush at ta_finished's tail instead.
 
+    def ta_settle(self, tag):
+        """TA must already be paused (0xa74 b0). Spin-read 0x700 until two reads 400
+        iterations apart match, so a following free-list reload reads a stable counter
+        (the DDK's pc 0x1765). Uses r5/r6/r7, p2; `tag` names the two labels."""
+        self.label(f"{tag}_settle")
+        self.i(f"ldr r5, #{0x700 // 4}"); self.i("wdf"); self.i("limm r6, #400")
+        self.label(f"{tag}_spin")
+        self.i("test.isubu16.ne p2, r6, r6, #1"); self.i(f"(p2) ba {tag}_spin")
+        self.i(f"ldr r7, #{0x700 // 4}"); self.i("wdf")
+        self.i("test.xor.ne p2, r7, r5"); self.i(f"(p2) ba {tag}_settle")
+
+    def ta_freelist_reload(self):
+        """Re-seed the TA free list from the live counters (the DDK's pc 0x1676): 0x61c=0x700,
+        0x648=0x710<<16, 0x638=(0x724>>16)|((0x72c>>16)<<16), 0x684=1, wait EVENT_STATUS2 b0.
+        Call with the TA paused + settled. Uses r4/r5."""
+        self.i(f"ldr r4, #{0x700 // 4}"); self.i("wdf"); self.i(f"str #{0x61c // 4}, r4")
+        self.i(f"ldr r4, #{0x710 // 4}"); self.i("wdf"); self.i("shl r4, r4, #16"); self.i(f"str #{0x648 // 4}, r4")
+        self.i(f"ldr r4, #{0x724 // 4}"); self.i("wdf"); self.i("shr r4, r4, #16")
+        self.i(f"ldr r5, #{0x72c // 4}"); self.i("wdf"); self.i("shr r5, r5, #16"); self.i("shl r5, r5, #16")
+        self.i("or r4, r4, r5"); self.i(f"str #{0x638 // 4}, r4")
+        self.i("limm r5, #1"); self.i(f"str #{CR_DPM_TA_FL // 4}, r5")
+        self.wait(CR_EVENT_STATUS2, 0x1, CR_EVENT_HOST_CLEAR2)
+
     def dpm_freelist(self, mode, kick_reg, done_bit):
         """load a DPM free list so the geometry/render can allocate parameter-
         buffer pages: selector 0x664 = `mode` (TA 3, 3D 5), then pulse the TA
@@ -598,6 +678,10 @@ def build(a):
     a.dispatch(0x40000, "pixel_done")              # pixel back-end: rendezvous half 1 (3D writeout)
     a.dispatch(0x800000, "pixel_done")             # ISP end of tile (same handler)
     a.dispatch(0x1, "free_done")                   # DPM 3D memory free: rendezvous half 2
+    a.dispatch(0x6, "k_oom")                        # DPM out of memory (MT 0x2 | GBL 0x4): pause + terminate
+    a.dispatch(0x1000, "k_oom_terminate")           # TA_TERMINATE after an OOM pause: the partial render
+    # 0x6 before 0x1000 (568e24f's proven order): k_oom always acks 0x6 and queues an overlap in
+    # SC_OOM_PENDING, so a 2nd OOM is deferred by flag, never left pending to re-enter the partial render.
     # A timer-only event (bit 29 set, no TA/3D bit above) must NOT scan the kernel
     # CCB: at 1 kHz a CCB scan every tick races the doorbell task's dispatch /
     # read-offset advance (the two-task RO race — frames 2+ HWR; EA3 2026-11-03).
@@ -610,8 +694,12 @@ def build(a):
     # incoming event (EA1 2026-11-02: GETMISCINFO sat unconsumed, core looping HWR).
     a.i("limm r4, #0x20000000")
     a.i("test.and.ne p0, r2, r4")                  # timer event (bit 29)?
-    if TMR_LOG or WAIT_LOG:
+    if TMR_LOG or WAIT_LOG or FRAMEPROF:
         a.i("(!p0) ba not_timer_evt")              # not timer -> service doorbell
+        if FRAMEPROF:
+            a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf")
+            a.i("imae r4, r4, #1, #1 [t2=u32]")    # frame-profile tick counter (0x3b) += 1
+            a.st_sa(SA_SELF, FP_TICK, 4)
         if TMR_LOG:
             a.i("ld.a.d r4, r17, #0x38 [moe]"); a.i("wdf")
             a.i("imae r4, r4, #1, #1 [t2=u32]")    # tick counter (0x38) += 1
@@ -637,6 +725,8 @@ def build(a):
     # (WO != RO) -> `kick` services it; empty -> end directly (NOT via kick_end, whose
     # idle ACTIVE_POWER raise would fire a host IRQ every 1 kHz tick).
     a.label("tmr_tick_check")
+    # (Escape (b), the OOM terminate watchdog, was dropped: not DDK behaviour. The next-OOM grant
+    # is the real scene-finish mechanism, and the teardown + 0x658 fixes removed the hang it guarded.)
     a.i(f"ld.a.d r5, r17, #{SA_KCCBCTL} [moe]")
     a.i("wdf")
     a.i("ld.a.d r6, r5, #0 [moe]")                 # kernel CCB write offset
@@ -678,6 +768,19 @@ def build(a):
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r0 [moe]")      # cleanup defer counter clear
     a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
+    a.i(f"st.a.d r17, #{SC_OOM}, r0 [moe]")               # no OOM partial render pending
+    a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r0 [moe]")       # no deferred OOM queued
+    a.i(f"st.a.d r17, #{OOM_SAVED_628}, r0 [moe]")        # no threshold grant outstanding
+    a.i(f"st.a.d r17, #{OOM_FLAGS}, r0 [moe]")            # OOM grant flags clear (G/G2/GRANTED)
+    a.i(f"st.a.d r17, #{OOM_MARK_TA}, r0 [moe]")          # no grant marks yet
+    a.i(f"st.a.d r17, #{OOM_MARK_GL}, r0 [moe]")
+    a.i(f"st.a.d r17, #{OOM_SAVED_624}, r0 [moe]")
+    a.i(f"st.a.d r17, #{STAGE1_FLAG}, r0 [moe]")          # no stage-1 raise outstanding
+    a.i(f"st.a.d r17, #{STAGE1_SAVED_628}, r0 [moe]")
+    a.i(f"st.a.d r17, #{SLOT1_INIT}, r0 [moe]")           # slot 1's DPM control is whatever reset left: unset
+    a.i(f"str #{CR_DPM_LOADSEL // 4}, r0")                # 0x65c = 0: clean DPM load-select, so a reset
+    a.i(f"str #{0x630 // 4}, r0")                         # 0x630 = 0: and slot select, leave no stale
+                                                          # OOM-shuffle state for the first post-reset 3D
     a.i(f"st.a.d r17, #{PB_TA_LOADED}, r0 [moe]")         # no PB free list loaded yet: an HWR
     a.i(f"st.a.d r17, #{PB_3D_LOADED}, r0 [moe]")         # wiped the HW DPM, so force a reload
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
@@ -952,6 +1055,247 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.i("ba kick_adv")
+
+    # ======================================================================
+    # OOM partial render
+    # ======================================================================
+    a.label("k_oom")
+    # DPM out of memory mid-scene (DPM_OUT_OF_MEMORY_MT 0x2 | _GBL 0x4): the TA filled the
+    # parameter buffer while binning the open scene. Recover like the DDK (ta3d-state pc 0x0bf7):
+    # the TA must be TERMINATED before the partial render. OTPM flush, hold the allocation
+    # (0x69c=4), PAUSE the TA (0xa74 b0); the hardware then raises TA_TERMINATE (EVENT_STATUS b12),
+    # which k_oom_terminate turns into the partial render. Terminate only when no render is in the
+    # 3D (WAIT_3D clear); if one is, defer -- it must free first. Dormant unless the OOM fires.
+    # Ack 0x6 unconditionally: an un-acked EVENT_STATUS bit STORMS the EDM (the DCU storm, HW 2026-11-02).
+    # If an OOM episode is already in flight (SC_OOM != 0), remember it in SC_OOM_PENDING and let this
+    # episode's teardown re-dispatch k_oom -- the DDK's post-partial re-check, storm-free (ta3d-state).
+    a.i("limm r4, #6")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")       # ack EVENT_STATUS 0x6 (MT | GBL)
+    a.i(f"ld.a.d r2, r17, #{SC_OOM} [moe]")           # already handling an OOM?
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")                     # SC_OOM == 0 -> take this OOM now
+    a.i("(p0) ba k_oom_take")
+    a.i("limm r4, #1")
+    a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r4 [moe]")   # SC_OOM != 0 -> queue it; teardown re-dispatches k_oom
+    a.i("ba kick_end")
+    a.label("k_oom_take")
+    a.i(f"ld.a.d r2, r17, #{SC_RD} [moe]")            # open scene present?
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(p0) ba kick_end")                           # no open scene -> nothing to do (already acked)
+    a.i(f"ld.a.d r2, r17, #{WAIT_3D} [moe]")          # a render's 3D in flight?
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, r2")
+    a.i("(p0) ba kick_end")                           # busy -> defer (serialized hits WAIT_3D clear)
+    # Stage-1 gate (ta3d-state pc 0x0b8f): 0x734 b0 = macrotile (MT) shortage; moving the GLOBAL threshold can't
+    # help an MT shortage, so skip stage 1 and go to the decision. Otherwise the DDK alternates a stage-1 RAISE
+    # (flag clear) with its UNDO (flag set): the raise moves the global threshold to the current 0x72c count and
+    # reloads the TA free list WITHOUT a render; the undo restores + reloads, then the scene gets a partial
+    # render (or grant). This is the DDK's free-list-sync mechanism -- the reload rides with the threshold move,
+    # so there is NO bare reload at the partial render (EA1: a bare reload leaves a seed the ring can't track).
+    a.i(f"ldr r2, #{0x734 // 4}")
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, #1")                     # 0x734 b0 (MT shortage) -> skip stage 1
+    a.i("(p0) ba k_oom_decision")
+    a.i(f"ld.a.d r2, r17, #{STAGE1_FLAG} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, r2")                     # stage-1 flag set -> UNDO
+    a.i("(p0) ba k_oom_stage1_undo")
+    # STAGE-1 RAISE: 0x628 -> current count, reload, no render. Flag carries across scenes; next OOM undoes it.
+    a.i(f"ldr r4, #{0x628 // 4}")                     # save the global threshold
+    a.i("wdf")
+    a.i(f"st.a.d r17, #{STAGE1_SAVED_628}, r4 [moe]")
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("or r5, r5, #1")                             # pause the TA
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.ta_settle("k_s1r")
+    a.i(f"ldr r4, #{0x72c // 4}")                     # 0x628 = (0x72c>>16) | 0x10000 (may lower it; don't clamp)
+    a.i("wdf")
+    a.i("shr r4, r4, #16")
+    a.i("limm r5, #0x10000")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x628 // 4}, r4")
+    a.ta_freelist_reload()
+    a.i(f"ldr r5, #{0xa74 // 4}")                     # unpause
+    a.i("wdf")
+    a.i("shr r5, r5, #1")
+    a.i("shl r5, r5, #1")
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.i("limm r4, #1")
+    a.i(f"st.a.d r17, #{STAGE1_FLAG}, r4 [moe]")      # set the stage-1 flag
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 1: resume the TA, NO render
+    a.i("ba kick_end")
+    a.label("k_oom_stage1_undo")
+    # STAGE-1 UNDO: restore 0x628 + reload, then fall into the decision (partial render or +16 grant).
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("or r5, r5, #1")                             # pause the TA
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.ta_settle("k_s1u")
+    a.i(f"ld.a.d r4, r17, #{STAGE1_SAVED_628} [moe]") # 0x628 = saved | 0x10000
+    a.i("wdf")
+    a.i("limm r5, #0x10000")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x628 // 4}, r4")
+    a.ta_freelist_reload()
+    a.i(f"ldr r5, #{0xa74 // 4}")                     # unpause
+    a.i("wdf")
+    a.i("shr r5, r5, #1")
+    a.i("shl r5, r5, #1")
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{STAGE1_FLAG}, r4 [moe]")      # clear the stage-1 flag
+    a.label("k_oom_decision")
+    # Grant-vs-partial decision (ta3d-state pc 0x0bbf-0x0bd2): if the last partial render freed < 2 pages
+    # (OOM_G set), this scene hasn't been granted yet (OOM_GRANTED clear), and the count is still above the
+    # saved mark, take the GRANT path instead of another near-empty partial render -- that is what lets a
+    # dense scene finish. Otherwise fall through to the terminate + partial render (the common case).
+    a.i(f"ld.a.d r2, r17, #{OOM_FLAGS} [moe]")
+    a.i("wdf")
+    a.i(f"test.and.eq p0, r2, #{OOM_G}")              # OOM_G clear -> partial render
+    a.i("(p0) ba k_oom_partial")
+    a.i(f"test.and.ne p0, r2, #{OOM_GRANTED}")        # already granted this scene -> partial render
+    a.i("(p0) ba k_oom_partial")
+    a.i(f"test.and.ne p0, r2, #{OOM_G2}")             # OOM_G2 set -> decide on the GBL mark
+    a.i("(p0) ba k_oom_dec_gl")
+    a.i(f"ldr r3, #{0x724 // 4}")                     # TA case: count = 0x724 >> 16
+    a.i("wdf")
+    a.i("shr r3, r3, #16")
+    a.i(f"ld.a.d r2, r17, #{OOM_MARK_TA} [moe]")
+    a.i("wdf")
+    a.i("test.isub16.pos p0, r2, r3")                # mark_ta - count >= 0 (count <= mark) -> partial
+    a.i("(p0) ba k_oom_partial")
+    a.i("ba k_oom_grant")
+    a.label("k_oom_dec_gl")
+    a.i(f"ldr r3, #{0x72c // 4}")                     # GBL case: count = 0x72c >> 16
+    a.i("wdf")
+    a.i("shr r3, r3, #16")
+    a.i(f"ld.a.d r2, r17, #{OOM_MARK_GL} [moe]")
+    a.i("wdf")
+    a.i("test.isub16.pos p0, r2, r3")
+    a.i("(p0) ba k_oom_partial")
+    a.i("ba k_oom_grant")
+    a.label("k_oom_partial")
+    # Save the marks (ta3d-state pc 0x0c0a-0x0c19): mark_ta = (0x724>>16) - 2 (16-bit, count<2 wraps
+    # harmlessly), mark_gl = max((0x72c>>16) - 2, 0). The teardown re-check and the next OOM compare to them.
+    a.i(f"ldr r3, #{0x724 // 4}")
+    a.i("wdf")
+    a.i("shr r3, r3, #16")
+    a.i("ima16.sgn r3, r3, #1, -#2")                  # count - 2
+    a.i(f"st.a.d r17, #{OOM_MARK_TA}, r3 [moe]")
+    a.i(f"ldr r3, #{0x72c // 4}")
+    a.i("wdf")
+    a.i("shr r3, r3, #16")
+    a.i("test.isub16.neg p0, r3, r3, #2")             # r3 -= 2; p0 = (result < 0)
+    a.i("(p0) limm r3, #0")                           # clamp at 0
+    a.i(f"st.a.d r17, #{OOM_MARK_GL}, r3 [moe]")
+    # Pause the TA for the terminate. NO free-list reload here: the DDK does the reload in stage 1 (the
+    # threshold raise/undo above), never at the partial render (its teardown has no 0x684). A bare reload at the
+    # partial render leaves a seed the ring can't track and leaks (EA1 e21ff75). HW raises TA_TERMINATE once
+    # the TA is paused + held.
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("or r5, r5, #1")                             # pause the TA
+    a.i(f"str #{0xa74 // 4}, r5")
+    # OTPM flush before the terminate (0x24c = 1, wait OTPM_INV b20, ack).
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_OTPM // 4}, r4")
+    a.wait(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR)
+    # hold the TA allocation (0x69c = 4); the TA is already paused. HW then raises TA_TERMINATE.
+    a.i("limm r4, #4")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 4: hold the TA's allocation
+    a.i("limm r4, #1")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 1: paused, awaiting TA_TERMINATE
+    a.i("ba kick_end")
+
+    a.label("k_oom_grant")
+    # The grant (ta3d-state pc 0x0bd3-0x0bf5): give the TA its reserve pages so a dense scene finishes,
+    # instead of another partial render that frees almost nothing. Mark GRANTED, pause + settle, raise the
+    # TA/GBL thresholds, reload the TA free list from the live counters, resume. No render; SC_OOM stays 0.
+    # Undone at TA finish (0x624/0x628 restored, flags cleared).
+    a.i(f"ld.a.d r2, r17, #{OOM_FLAGS} [moe]")
+    a.i("wdf")
+    a.i(f"or r2, r2, #{OOM_GRANTED}")
+    a.i(f"st.a.d r17, #{OOM_FLAGS}, r2 [moe]")
+    # pause the TA, then wait for 0x700 to settle (pc 0x1765): spin-read until two reads 400 apart match
+    # (r17 is the control-block base here, so the settle uses r5/r6/r7, not the DDK's r16/r17).
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("or r5, r5, #1")                              # pause the TA
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.label("k_grant_settle")
+    a.i(f"ldr r5, #{0x700 // 4}")                     # first read
+    a.i("wdf")
+    a.i("limm r6, #400")
+    a.label("k_grant_spin")
+    a.i("test.isubu16.ne p2, r6, r6, #1")            # r6 -= 1, spin while nonzero
+    a.i("(p2) ba k_grant_spin")
+    a.i(f"ldr r7, #{0x700 // 4}")                     # second read
+    a.i("wdf")
+    a.i("test.xor.ne p2, r7, r5")                    # changed? re-read and re-spin
+    a.i("(p2) ba k_grant_settle")
+    # 0x624 += 32, saving the original for the TA-finish undo.
+    a.i(f"ldr r4, #{0x624 // 4}")
+    a.i("wdf")
+    a.i(f"st.a.d r17, #{OOM_SAVED_624}, r4 [moe]")
+    a.i("imae r4, r4, #1, #32 [t2=u32]")
+    a.i(f"str #{0x624 // 4}, r4")
+    # 0x628 = ((0x628 & 0xffff) + 16) | 0x10000, saving the original for the undo.
+    a.i(f"ldr r4, #{0x628 // 4}")
+    a.i("wdf")
+    a.i(f"st.a.d r17, #{OOM_SAVED_628}, r4 [moe]")
+    a.i("limm r5, #0xffff")
+    a.i("and r4, r4, r5")
+    a.i("imae r4, r4, #1, #16 [t2=u32]")
+    a.i("limm r5, #0x10000")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x628 // 4}, r4")
+    # reload the TA free list from the live counters (pc 0x1676).
+    a.i(f"ldr r4, #{0x700 // 4}")
+    a.i("wdf")
+    a.i(f"str #{0x61c // 4}, r4")
+    a.i(f"ldr r4, #{0x710 // 4}")
+    a.i("wdf")
+    a.i("shl r4, r4, #16")
+    a.i(f"str #{0x648 // 4}, r4")
+    a.i(f"ldr r4, #{0x724 // 4}")
+    a.i("wdf")
+    a.i("shr r4, r4, #16")                            # 0x724 high half -> low 16
+    a.i(f"ldr r5, #{0x72c // 4}")
+    a.i("wdf")
+    a.i("shr r5, r5, #16")
+    a.i("shl r5, r5, #16")                            # 0x72c high half -> high 16
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x638 // 4}, r4")
+    a.i("limm r5, #1")
+    a.i(f"str #{CR_DPM_TA_FL // 4}, r5")
+    a.wait(CR_EVENT_STATUS2, 0x1, CR_EVENT_HOST_CLEAR2)
+    # resume: unpause the TA (0xa74 b0), then 0x69c = 1.
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("shr r5, r5, #1")
+    a.i("shl r5, r5, #1")
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 1
+    a.i("ba kick_end")
+
+    a.label("k_oom_terminate")
+    # TA_TERMINATE (EVENT_STATUS b12 = 0x1000) after the OOM pause: the TA has stopped, so run the
+    # partial render of the open scene now (do_3d on SC_RD/SC_PB, which do_ta left set). do_3d under
+    # SC_OOM==2 skips the TPC flush and 0x630=0, does the DPM slot shuffle, and sets 0x658=1.
+    a.i("limm r4, #4096")                             # 0x1000
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")       # ack TA_TERMINATE
+    a.i(f"ld.a.d r2, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.ne p0, r2, #1")                     # SC_OOM != 1 -> not our terminate, ignore
+    a.i("(p0) ba kick_end")
+    a.i("limm r4, #2")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 2: partial render in flight
+    a.i("ba do_3d")                                   # partial render = do_3d on the open scene
+
     # transfer (data[1] = HW transfer context): a 3D-only render whose single
     # background object samples the source and writes the destination (texture
     # uploads and the swap blit; docs/TEX.md §3). The transfer context carries a
@@ -1414,6 +1758,8 @@ def build(a):
     a.i("limm r5, #1")
     a.st_sa(SA_SELF, SC_TAFLIGHT, 5)            # TA in flight
     a.i(f"str #{CR_TA_KICK // 4}, r5")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_TA_KICK, 4)  # frameprof: TA kick
     if DEBUG_SENTINEL:
         a.i("limm r6, #0xC01C"); a.st_sa(SA_SELF, 0x37, 6)
     a.i("lapc")
@@ -1422,10 +1768,87 @@ def build(a):
     # ta_finished: write the TA status values, then program and start the 3D
     # ======================================================================
     a.label("ta_finished")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_TA_FIN, 4)  # frameprof: TA finished
+        a.i(f"ld.a.d r5, r17, #{FP_TA_KICK} [moe]"); a.i("wdf")
+        a.i("test.isub16.ne p2, r4, r4, r5")          # r4 = (tick - TA_kick) & 0xffff = this TA's busy ticks
+        a.i(f"ld.a.d r6, r17, #{FP_TA_BUSY} [moe]"); a.i("wdf")
+        # imae truncates its MULTIPLICANDS to 16 bits (emu op_imae), so the running total must be the
+        # full-32-bit ADDEND (ops[3], t2=u32): total = delta*1 + total, delta (<65536) in the mul slot.
+        a.i("imae r6, r4, #1, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_TA_BUSY}, r6 [moe]")   # TA-busy total += delta
+        a.i(f"ld.a.d r6, r17, #{FP_COUNTS} [moe]"); a.i("wdf")
+        a.i("limm r5, #1")
+        a.i("imae r6, r5, #1, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_COUNTS}, r6 [moe]")    # TA count (low 16) += 1
     if WAIT_LOG:
         a.i("limm r4, #2"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached ta_finished
     if DEBUG_SENTINEL:
         a.i("limm r6, #0x7AF1"); a.st_sa(SA_SELF, 0x38, 6)
+    # NOTE: no abort-on-TA_FINISHED here. The DDK never unpauses / writes 0x69c=1 in its TA-finish
+    # handler (ta3d-state: 0 of 1206 TA_FINISHED rows land during an OOM pause). If HW does deliver a
+    # 0x2000 while SC_OOM==1, the hold stays and render_complete releases it AFTER the scene's final
+    # render frees the pages -- releasing earlier over-allocates past the limit (EA1 fc50a6d ep#1 fault).
+    a.label("ta_oom_unwound")
+    # Undo a +16 grant at TA finish (ta3d-state pc 0x0606->0x0645, the rare granted scene): restore 0x624/
+    # 0x628, re-seed the TA free list, and clear the grant flags. The per-OOM free-list reload that keeps the
+    # ring in sync is now in k_oom at each OOM pause (the DDK's position), NOT here -- a TA-finish reload seeds
+    # a stale mid-scene snapshot and made the leak worse (EA1 645e48a).
+    a.i(f"ld.a.d r4, r17, #{OOM_FLAGS} [moe]")
+    a.i("wdf")
+    a.i(f"test.and.eq p0, r4, #{OOM_GRANTED}")        # not granted this scene -> nothing to undo
+    a.i("(p0) ba ta_grant_restored")
+    a.i(f"ld.a.d r4, r17, #{OOM_SAVED_628} [moe]")    # 0x628 = saved | 0x10000
+    a.i("wdf")
+    a.i("limm r5, #0x10000")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x628 // 4}, r4")
+    a.i(f"ld.a.d r4, r17, #{OOM_SAVED_624} [moe]")    # 0x624 = saved
+    a.i("wdf")
+    a.i(f"str #{0x624 // 4}, r4")
+    # pause + settle + the 0x1676 reload + unpause (the DDK grant undo, pc 0x1765/0x1676/0x1773).
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("or r5, r5, #1")                             # pause
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.label("ta_oom_settle")
+    a.i(f"ldr r5, #{0x700 // 4}")
+    a.i("wdf")
+    a.i("limm r6, #400")
+    a.label("ta_oom_spin")
+    a.i("test.isubu16.ne p2, r6, r6, #1")
+    a.i("(p2) ba ta_oom_spin")
+    a.i(f"ldr r7, #{0x700 // 4}")
+    a.i("wdf")
+    a.i("test.xor.ne p2, r7, r5")
+    a.i("(p2) ba ta_oom_settle")
+    a.i(f"ldr r4, #{0x700 // 4}")
+    a.i("wdf")
+    a.i(f"str #{0x61c // 4}, r4")
+    a.i(f"ldr r4, #{0x710 // 4}")
+    a.i("wdf")
+    a.i("shl r4, r4, #16")
+    a.i(f"str #{0x648 // 4}, r4")
+    a.i(f"ldr r4, #{0x724 // 4}")
+    a.i("wdf")
+    a.i("shr r4, r4, #16")
+    a.i(f"ldr r5, #{0x72c // 4}")
+    a.i("wdf")
+    a.i("shr r5, r5, #16")
+    a.i("shl r5, r5, #16")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x638 // 4}, r4")
+    a.i("limm r5, #1")
+    a.i(f"str #{CR_DPM_TA_FL // 4}, r5")
+    a.wait(CR_EVENT_STATUS2, 0x1, CR_EVENT_HOST_CLEAR2)
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("shr r5, r5, #1")
+    a.i("shl r5, r5, #1")
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{OOM_FLAGS}, r4 [moe]")
+    a.i(f"st.a.d r17, #{OOM_SAVED_628}, r4 [moe]")
+    a.i(f"st.a.d r17, #{OOM_SAVED_624}, r4 [moe]")
+    a.label("ta_grant_restored")
     # this TA is no longer in flight; clear the flag so a deferred kick can launch.
     a.i("limm r4, #0")
     a.st_sa(SA_SELF, SC_TAFLIGHT, 4)
@@ -1515,6 +1938,13 @@ def build(a):
     # it, so a non-zero power-up/srvinit value can point the 3D at the slot the TA did
     # NOT fill -> ISP stalls at tile 0 with a clean BIF. Clear bits 0-2 (the DDK's net
     # effect for this single-RT frame). Log the inherited value first (word 0x35).
+    # OOM partial render (SC_OOM==2): skip the 0x630 clear AND the TPC flush below. The DPM
+    # shuffle sets 0x630 itself, and the TA was already TERMINATED (TA_TERMINATE) so there is
+    # no unterminated control stream to flush -- flushing it would be the normal-path assumption.
+    a.i(f"ld.a.d r4, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.eq p0, r4, #2")                     # SC_OOM == 2 -> skip 0x630 clear + TPC flush
+    a.i("(p0) ba do_3d_after_tpc")
     a.i(f"ldr r5, #{0x630 // 4}")
     a.i("wdf")
     if DEBUG_SENTINEL:
@@ -1533,6 +1963,7 @@ def build(a):
     a.i("limm r5, #0x40000000")
     a.i(f"str #{CR_TPC // 4}, r5")
     a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
+    a.label("do_3d_after_tpc")
     a.i(f"ld.a.d r10, r17, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, r17, #{SC_PB} [moe]")   # PB descriptor
     a.i("wdf")
@@ -1597,8 +2028,93 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.label("skip_3d_fl")
+    # OOM partial render (SC_OOM==2): the DPM slot shuffle (ta3d-state pc 0x0c40-0x0c93, corrected).
+    # Render a COPY of the TA's partly-binned DPM state in the OTHER slot (1) so the 3D frees that
+    # copy's pages while the TA keeps its live slot (0) to continue binning the same scene. Without
+    # it the 3D freed the TA's own live slot -> the resumed scene read freed pages (EA1 7th-OOM fault
+    # 0x1f0b8000). One scene at a time -> the other slot is always empty: no eviction, no ctlblk slot
+    # words (SC_INFLIGHT/SC_XFER untouched). r10/r11 (SC_RD/SC_PB) survive for the register program.
+    a.i(f"ld.a.d r4, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.ne p0, r4, #2")                     # SC_OOM != 2 -> normal render, skip the shuffle
+    a.i("(p0) ba skip_oom_shuffle")
+    a.i(f"ld.a.d r2, r17, #{SC_RTENTRY} [moe]")       # rtentry
+    a.i("wdf")
+    a.i("ld.a.d r3, r2, #5 [moe]")                    # rtentry word 5 (+0x14)
+    a.i("wdf")
+    # ta3d-state's slot-1 control-init (test): the shuffle renders slot 1, so the 3D's frees go through
+    # slot 1's DPM control (0x698/0x634). We never run a real scene in slot 1, so that control is whatever
+    # reset left -> frees link pages off the TA's chain (leak: count recovers, ring short). Give slot 1 a
+    # valid control ONCE, like a DDK first kick into slot 1: 0x630=5, 0x674=w5, 0x634=w6, 0x694=0x698=2,
+    # wait 0x240. Gated on SLOT1_INIT so it runs only before the first shuffle.
+    a.i(f"ld.a.d r4, r17, #{SLOT1_INIT} [moe]")
+    a.i("wdf")
+    a.i("test.and.ne p0, r4, r4")                     # slot-1 control already set up -> straight to shuffle
+    a.i("(p0) ba skip_slot1_init")
+    a.i("ld.a.d r5, r2, #6 [moe]")                    # rtentry word 6 (+0x18)
+    a.i("wdf")
+    a.i(f"ldr r7, #{0x630 // 4}")                     # save 0x630 (survives a.wait; r5/r6 don't)
+    a.i("wdf")
+    a.i("limm r4, #5")                                # 0x630 = 5: slot 1 (b0|b2), as a DDK first kick
+    a.i(f"str #{0x630 // 4}, r4")
+    a.i(f"str #{0x674 // 4}, r3")                     # slot-1 state register = rtentry w5
+    a.i(f"str #{0x634 // 4}, r5")                     # slot-1 control register = rtentry w6
+    a.i("limm r4, #2")
+    a.i(f"str #{CR_DPM_STATE // 4}, r4")              # 0x694 = 2: load the slot-1 state
+    a.i(f"str #{CR_DPM_CONTROL // 4}, r4")            # 0x698 = 2: load the slot-1 control
+    a.wait(CR_EVENT_STATUS, 0x240, CR_EVENT_HOST_CLEAR)  # b6 state + b9 control load done
+    a.i(f"str #{0x630 // 4}, r7")                     # restore 0x630 (the shuffle re-selects below)
+    a.i("limm r4, #1")
+    a.i(f"st.a.d r17, #{SLOT1_INIT}, r4 [moe]")       # slot-1 control is now valid; do this once
+    a.label("skip_slot1_init")
+    a.i("limm r4, #2")                                # 0x630 = 2: TA slot 0, 3D slot 1
+    a.i(f"str #{0x630 // 4}, r4")
+    a.i(f"str #{0x62c // 4}, r3")                     # slot-0 register = rtentry w5
+    # NO 0x65c = 1 on the OOM terminate path: the DDK never sets DPM load-select here (sa8 b1 is always set by
+    # the terminate path, so it skips both 0x65c=1 writes) -- r65c = 0 in all 1.04M DDK rows; ours set it in 4.
+    # With 0x65c = 1 the 0x698 = 2 control clear at teardown widened to the free-list bookkeeping and dropped
+    # ring entries the final free never relinked (page count back to 0 but the ring short -> the MT-onset dry).
+    # ta3d-state decode 2026-11-09. (The paired 0x65c = 0 below is now a no-op; kept so 0x65c stays 0.)
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_DPM_STATE // 4}, r4")              # 0x694 = 1: store the TA slot's partial state
+    a.wait(CR_EVENT_STATUS, 0x10, CR_EVENT_HOST_CLEAR)
+    a.i("limm r4, #2")
+    a.i(f"str #{CR_DPM_STATE // 4}, r4")              # 0x694 = 2: clear the TA slot (TA keeps binning)
+    a.wait(CR_EVENT_STATUS, 0x40, CR_EVENT_HOST_CLEAR)   # b6 state-clear done (0x694-only; NOT the 0x240 combined)
+    a.i("limm r4, #3")                                # 0x630 = 3: select the other slot (1)
+    a.i(f"str #{0x630 // 4}, r4")
+    a.i(f"str #{0x674 // 4}, r3")                     # slot-1 register = rtentry w5
+    a.i("limm r4, #4")
+    a.i(f"str #{CR_DPM_STATE // 4}, r4")              # 0x694 = 4: load the stored state into slot 1
+    a.wait(CR_EVENT_STATUS, 0x20, CR_EVENT_HOST_CLEAR)   # load done (ta3d-state 0x20/0x100100; HW-verify)
+    a.i("limm r4, #2")                                # 0x630 = 2: back to the TA's slot 0
+    a.i(f"str #{0x630 // 4}, r4")
+    a.i("limm r4, #0")
+    a.i(f"str #{CR_DPM_LOADSEL // 4}, r4")            # 0x65c = 0
+    a.label("skip_oom_shuffle")
     a.consts(D3_CONST)
+    # OOM partial render: 0x658 = 1 (D3_CONST leaves it 0 on the normal path). ta3d-state (d).
+    a.i(f"ld.a.d r4, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.ne p0, r4, #2")
+    a.i("(p0) ba skip_oom_658")
+    a.i("limm r4, #1")
+    a.i(f"str #{0x658 // 4}, r4")                     # 0x658 = 1
+    a.label("skip_oom_658")
     a.program(10, D3_RD)
+    # OOM partial render (SC_OOM==2): redirect the "next" region headers (0x50c) to THIS render's
+    # (0x408), so the partial render RESETS the lists it binned; the TA then resumes into empty lists
+    # and the scene's final render re-bins. Without this the final render walks the rendered lists a
+    # second time and the DPM frees their pages AGAIN -> r724 high-half underflow (0xedf9) + hang
+    # (ta3d-state pc 0x0d7b). D3_RD set 0x50c = rd+0x28 (the normal "other" array); override here.
+    a.i(f"ld.a.d r4, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.ne p0, r4, #2")                     # SC_OOM != 2 -> normal, keep D3_RD's 0x50c
+    a.i("(p0) ba skip_oom_50c")
+    a.i(f"ldr r4, #{0x408 // 4}")                     # this render's region headers
+    a.i("wdf")
+    a.i(f"str #{0x50c // 4}, r4")                     # 0x50c = 0x408
+    a.label("skip_oom_50c")
     # D (ta3d-state): 3D flags. 0xa74's 3D field (b22-26) = the render details'
     # word 0x13c (0x07c00000), masked REPLACE (clear b22-26, OR in) so a stale 3D
     # field from a previous scene is cleared, not accumulated; keeps the TA field
@@ -1610,8 +2126,17 @@ def build(a):
     a.i("and r4, r4, r6")
     a.i("or r4, r4, r5")                             # a74 = (a74 & ~3D-field) | flags
     a.i(f"str #{0xa74 // 4}, r4")
+    # 0x658 = 0 only on the NORMAL path. do_3d clears 0x658 twice (D3_CONST, then here); the OOM override
+    # above set it to 1, but THIS second clear undid it, so the partial render ran as a NORMAL render for its
+    # whole duration (r658=1 only ~15us) -> the 3D treated the scene as finished and the second resume died
+    # (ta3d-state, EA1 9efb1cb). Keep 0x658 = 1 through the OOM partial render; only the teardown clears it.
+    a.i(f"ld.a.d r4, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.eq p0, r4, #2")                     # SC_OOM == 2 -> skip this 0x658 = 0
+    a.i("(p0) ba skip_oom658_clear")
     a.i("limm r5, #0")
-    a.i(f"str #{0x658 // 4}, r5")
+    a.i(f"str #{0x658 // 4}, r5")                     # 0x658 = 0 (normal render)
+    a.label("skip_oom658_clear")
     a.i("limm r5, #1")
     a.i(f"str #{0x43c // 4}, r5")
     # invalidate the 3D-side caches and wait
@@ -1683,6 +2208,8 @@ def build(a):
     # start the 3D
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_3D_KICK, 4)  # frameprof: 3D kick (render path)
     a.end()
 
     # ======================================================================
@@ -1770,6 +2297,103 @@ def build(a):
     # Walk the render's HW device sync list, set each destination's write-ops-complete
     # to pending+1 (docs/UKERNEL.md §5), tear the render down, and interrupt the host.
     a.label("render_complete")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_3D_FIN, 4)  # frameprof: 3D finished
+        a.i(f"ld.a.d r5, r17, #{FP_3D_KICK} [moe]"); a.i("wdf")
+        a.i("test.isub16.ne p2, r4, r4, r5")          # r4 = (tick - 3D_kick) & 0xffff = this render's 3D busy ticks
+        a.i(f"ld.a.d r6, r17, #{FP_3D_BUSY} [moe]"); a.i("wdf")
+        # running total is the full-32-bit addend (imae truncates the multiplicands to 16 bits)
+        a.i("imae r6, r4, #1, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_3D_BUSY}, r6 [moe]")   # 3D-busy total += delta
+        a.i("limm r5, #256")                          # 256*256 = 0x10000: add to the HIGH 16 of the packed counts
+        a.i(f"ld.a.d r6, r17, #{FP_COUNTS} [moe]"); a.i("wdf")
+        a.i("imae r6, r5, r5, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_COUNTS}, r6 [moe]")    # 3D count (high 16) += 1
+    # OOM partial render done (SC_OOM==2, ta3d-state pc 0x0ddd-0x0df7): UNPAUSE the TA FIRST, then close the
+    # DPM control and resume the allocation (0x69c=1), and SKIP the scene teardown -- the scene isn't done;
+    # the TA keeps binning (in its live slot 0) into the pages this partial render freed from slot 1.
+    # ORDER MATTERS (DDK ground truth, ddk-oom-kit 2026-11-09): the DDK unpauses BEFORE 0x698=2/0x69c=1 so the
+    # TA is live when the control clear + resume land, and it climbs straight back to the threshold to re-OOM.
+    # My earlier order unpaused LAST, leaving the TA paused through the control clear -> on HW the resumed TA
+    # grabbed only ~2 pages then stalled below threshold with no new OOM (uapi-stream f6fb82b/466dc90).
+    a.i(f"ld.a.d r1, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.ne p0, r1, #2")                     # SC_OOM != 2 -> normal teardown
+    a.i("(p0) ba render_complete_oom1")               # SC_OOM != 2 -> finish-during-OOM check, then normal
+    # Grant re-check (ta3d-state pc 0x0dc6-0x0ddc), while the TA is still paused and the 3D has freed: did
+    # this partial render free < 2 pages? If so set OOM_G (and OOM_G2 in the GBL case) so the NEXT OOM grants
+    # reserve pages instead of rendering again. OOM_G is sticky until TA finish.
+    a.i(f"ld.a.d r2, r17, #{OOM_MARK_TA} [moe]")
+    a.i(f"ldr r3, #{0x724 // 4}")
+    a.i("wdf")
+    a.i("shr r3, r3, #16")                            # count after the free
+    a.i("test.isub16.neg p0, r2, r3")                # mark_ta - count < 0 (count > mark_ta = freed < 2 TA)
+    a.i("(!p0) ba rc_oom_gl")                         # TA freed >= 2 -> check the GBL mark
+    a.i(f"ld.a.d r2, r17, #{OOM_FLAGS} [moe]")
+    a.i("wdf")
+    a.i(f"or r2, r2, #{OOM_G}")
+    a.i(f"st.a.d r17, #{OOM_FLAGS}, r2 [moe]")
+    a.i("ba rc_oom_flag_done")
+    a.label("rc_oom_gl")
+    a.i(f"ld.a.d r2, r17, #{OOM_MARK_GL} [moe]")
+    a.i(f"ldr r3, #{0x72c // 4}")
+    a.i("wdf")
+    a.i("shr r3, r3, #16")
+    a.i("test.isub16.neg p0, r2, r3")                # count > mark_gl -> set G|G2
+    a.i("(!p0) ba rc_oom_flag_done")
+    a.i(f"ld.a.d r2, r17, #{OOM_FLAGS} [moe]")
+    a.i("wdf")
+    a.i(f"or r2, r2, #{OOM_G | OOM_G2}")
+    a.i(f"st.a.d r17, #{OOM_FLAGS}, r2 [moe]")
+    a.label("rc_oom_flag_done")
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("shr r5, r5, #1")                             # unpause the TA FIRST (clear 0xa74 b0)
+    a.i("shl r5, r5, #1")
+    a.i(f"str #{0xa74 // 4}, r5")
+    # NO 0x65c = 1 before the 0x698 = 2 control clear: the DDK never sets DPM load-select on the OOM terminate
+    # path (r65c = 0 in all 1.04M DDK rows). With it set, the control clear dropped page-ring entries the final
+    # free never relinked -> the MT-onset short-ring dry. ta3d-state decode 2026-11-09.
+    a.i("limm r4, #2")
+    a.i(f"str #{CR_DPM_CONTROL // 4}, r4")            # 0x698 = 2: DPM control clear
+    a.i("limm r4, #0")
+    a.i(f"str #{0x658 // 4}, r4")                     # 0x658 = 0
+    a.wait(CR_EVENT_STATUS, 0x200, CR_EVENT_HOST_CLEAR)   # DPM_CONTROL_CLEAR
+    a.i("limm r4, #0")
+    a.i(f"str #{CR_DPM_LOADSEL // 4}, r4")            # 0x65c = 0
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 1: resume the TA's allocation
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear SC_OOM
+    # an OOM fired during this episode (ack'd + queued in k_oom to avoid an EDM storm)? start a fresh
+    # episode now on the resumed TA -- the DDK's post-partial re-check, so no OOM is ever lost.
+    a.i(f"ld.a.d r1, r17, #{SC_OOM_PENDING} [moe]")
+    a.i("wdf")
+    a.i("test.and.eq p0, r1, r1")                     # no pending OOM -> done
+    a.i("(p0) ba kick_end")                           # skip the scene teardown; the TA continues
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r4 [moe]")   # clear the queued flag
+    a.i("ba k_oom")                                   # re-terminate the resumed TA for the queued OOM
+    a.label("render_complete_oom1")
+    # SC_OOM==1 at a normal render completion = the TA FINISHED during an OOM pause (its last allocation hit
+    # the limit, so it raised TA_FINISHED instead of TA_TERMINATE). This render just freed the scene's pages at
+    # the DPM free, so NOW it is safe to release the held allocation: unpause + 0x69c=1 + clear SC_OOM. The old
+    # escape (a) released at ta_finished, BEFORE the pages were freed, so the TA grabbed a page past the limit
+    # into an exhausted free list and walked off the end -> BIF fault 0x1ffff000 (EA1 fc50a6d ep#1). The DDK
+    # has no abort and never hits this (0/1206 TA_FINISHED during a pause); this path only fires if HW does.
+    a.i(f"ld.a.d r1, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.ne p0, r1, #1")                     # SC_OOM != 1 -> normal render, nothing held
+    a.i("(p0) ba render_complete_normal")
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("shr r5, r5, #1")                             # unpause the TA (clear 0xa74 b0)
+    a.i("shl r5, r5, #1")
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 1: release the held allocation (pages are back)
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear SC_OOM
+    a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r4 [moe]")   # any queued overlap is moot: the scene finished
+    a.label("render_complete_normal")
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
