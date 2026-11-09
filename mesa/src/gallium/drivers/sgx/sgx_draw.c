@@ -71,16 +71,52 @@ found:
    return ctx->rts[i];
 }
 
-/* start (or continue) the frame into colour buffer 0; called with the lock held
- */
+/* The depth/stencil buffer of a render that starts now, kept across renders
+ * (ZLS): its buffer, which the render stores at its end, loaded unless the
+ * render starts with a clear of all of it (zs_cleared) or nothing was stored
+ * at this size. */
 static bool
-begin_frame(struct sgx_context *ctx)
+zls_target(struct sgx_context *ctx, struct sgx_resource *zs, uint32_t w,
+           uint32_t h, bool zs_cleared, struct sgxws_target *t)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+   uint32_t bytes = align(sgxws_zls_pixels(w, h) * 5, 4096);
+
+   if (!zs)
+      return true;
+   if (sgxws_bo_valid(&zs->zls) && zs->zls_bytes < bytes) {
+      sgxws_wait_idle(ctx->hw, 2000); /* renders that store into it */
+      sgxws_bo_free(screen->dev, &zs->zls);
+      zs->zls_w = zs->zls_h = 0;
+   }
+   if (!sgxws_bo_valid(&zs->zls)) {
+      if (sgxws_bo_alloc(screen->dev, &zs->zls, SGXWS_MEM_ZLS, bytes, 0x1000))
+         return false;
+      zs->zls_bytes = bytes;
+   }
+   t->zls_va = zs->zls.va;
+   t->zls_load = !zs_cleared && zs->zls_w == w && zs->zls_h == h;
+   SGX_DBG(SYNC, "depth/stencil %s %ux%u: ZLS buffer at %#x, %s\n",
+           util_format_short_name(zs->base.format), w, h, t->zls_va,
+           t->zls_load ? "load and store" : "store");
+   zs->zls_w = w;
+   zs->zls_h = h;
+   zs->use_seq = sgxws_next_seq(ctx->hw);
+   return true;
+}
+
+/* start (or continue) the frame into colour buffer 0; called with the lock
+ * held.  zs_cleared: the caller clears all of the depth/stencil buffer, so a
+ * render that starts here needn't load it. */
+static bool
+begin_frame(struct sgx_context *ctx, bool zs_cleared)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    struct pipe_surface *cbuf = &ctx->framebuffer.cbufs[0];
-   struct sgx_resource *res;
+   struct sgx_resource *res, *zs;
    struct sgxws_target t;
    struct sgxws_rt *rt;
+   uint32_t rw, rh;
 
    if (!ctx->framebuffer.nr_cbufs || !cbuf->texture) {
       SGX_DBG(DRAW, "no colour buffer bound\n");
@@ -94,10 +130,14 @@ begin_frame(struct sgx_context *ctx)
       return false;
    }
    t.scanout = res->wrapped;
-   rt = get_rt(ctx, u_minify(res->base.width0, cbuf->level),
-               u_minify(res->base.height0, cbuf->level), t.va);
+   rw = u_minify(res->base.width0, cbuf->level);
+   rh = u_minify(res->base.height0, cbuf->level);
+   rt = get_rt(ctx, rw, rh, t.va);
    if (!rt)
       return false;
+   zs = ctx->framebuffer.zsbuf.texture
+           ? sgx_resource(ctx->framebuffer.zsbuf.texture)
+           : NULL;
    if (sgx_recording(ctx) && ctx->recording != res) {
       SGX_DBG(SYNC, "target switch: %s %ux%u -> %s %ux%u\n",
               util_format_short_name(ctx->recording->base.format),
@@ -106,10 +146,20 @@ begin_frame(struct sgx_context *ctx)
               res->base.height0);
       ctx->recording = NULL; /* sgxws_begin flushes the other frame */
       ctx->stats.fl_switch++;
+   } else if (sgx_recording(ctx) && ctx->recording_zs != zs) {
+      SGX_DBG(SYNC, "depth/stencil buffer switch under %s %ux%u\n",
+              util_format_short_name(res->base.format), res->base.width0,
+              res->base.height0);
+      sgxws_flush(ctx->hw, 0);
+      ctx->recording = NULL;
+      ctx->stats.fl_switch++;
    }
+   if (!sgx_recording(ctx) && !zls_target(ctx, zs, rw, rh, zs_cleared, &t))
+      return false;
    if (sgxws_begin(ctx->hw, rt, &t))
       return false;
    ctx->recording = res;
+   ctx->recording_zs = zs;
    /* a write to the texture waits for this render, as for one that samples it */
    if (res->texture)
       res->use_seq = sgxws_next_seq(ctx->hw);
@@ -153,8 +203,15 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
        !clear_stencil)
       return; /* nothing to clear: every colour channel masked, no depth or
                  stencil */
+   /* all of depth and stencil cleared: a render starting here loads neither */
+   bool zs_cleared =
+      have_depth && (buffers & PIPE_CLEAR_DEPTH) && !scissor_state &&
+      (!util_format_has_stencil(
+          util_format_description(ctx->framebuffer.zsbuf.format)) ||
+       (clear_stencil && stencil_clear_mask == 0xff));
+
    simple_mtx_lock(&screen->lock);
-   if (begin_frame(ctx)) {
+   if (begin_frame(ctx, zs_cleared)) {
       static const float black[4];
 
       /* The ISP starts every render at depth 1.0 (render details +0x40), so
@@ -1578,7 +1635,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    }
 
    simple_mtx_lock(&screen->lock);
-   if (!begin_frame(ctx))
+   if (!begin_frame(ctx, false))
       goto out;
    /* The textures it samples were marked used by the next kick before
     * begin_frame, which flushes the previous target's frame when this draw

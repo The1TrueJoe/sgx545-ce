@@ -500,7 +500,9 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    cmd[0x10 / 4] = c->bg_pds[2];
    cmd[0x14 / 4] = 0x50000000;
    cmd[0x18 / 4] = 0x50000000;
-   cmd[0x1c / 4] = 0x400 | f << 14; /* 3D flags: render, frame [D] */
+   /* 3D flags: render, frame [D]; b7 and b8 (the DDK's kick b19-20) with a
+    * depth/stencil buffer kept across renders, as the DDK's window renders */
+   cmd[0x1c / 4] = 0x400 | f << 14 | (c->target.zls_va ? 0x180 : 0);
    cmd[0x20 / 4] = f;               /* the target's frame number [D] */
    cmd[0x24 / 4] = k->pbdesc.va;
    cmd[0x38 / 4] = s->rd.va;
@@ -523,6 +525,22 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    t[0x3c / 4] = k->pb.va & 0xfff00000;
    t[0x6c / 4] = 0x88;
 
+   /* ZLS (sgxws_target): base, control with the tile count, and the depth
+    * and stencil addresses from the base, each in both of its words */
+   if (c->target.zls_va) {
+      uint32_t d = c->target.zls_va, base = d & 0xfff00000,
+               st = d + sgxws_zls_pixels(rt->w, rt->h) * 4;
+
+      rd[0x04 / 4] = base;
+      rd[0x2c / 4] = SGXWS_ZLS_BASE | SGXWS_ZLS_STORE |
+                     (c->target.zls_load ? SGXWS_ZLS_LOAD : 0) |
+                     (rt->n.xt - 1) << 3;
+      rd[0x30 / 4] = rd[0x34 / 4] = d - base;
+      rd[0x38 / 4] = rd[0x3c / 4] = 0x80000000 | (st - base);
+   } else {
+      rd[0x04 / 4] = rd[0x2c / 4] = rd[0x30 / 4] = rd[0x34 / 4] = 0;
+      rd[0x38 / 4] = rd[0x3c / 4] = 0x80000000;
+   }
    rd[0x14 / 4] = (uint32_t)c->bias_units; /* depth bias */
    rd[0x18 / 4] = sgxws_f32(c->bias_factor);
    rd[0x20 / 4] = rgn_this; /* region headers of this render */

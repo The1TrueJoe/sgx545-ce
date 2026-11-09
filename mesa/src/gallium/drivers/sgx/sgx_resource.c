@@ -437,6 +437,17 @@ sgx_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
       sgxws_bo_free(screen->dev, &res->cube0);
       simple_mtx_unlock(&screen->lock);
    }
+   if (sgxws_bo_valid(&res->zls)) {
+      /* a depth/stencil buffer: the frame storing into it goes now, and the
+       * renders that do are waited for */
+      simple_mtx_lock(&screen->lock);
+      if (screen->hw && res->use_seq == sgxws_next_seq(screen->hw))
+         sgxws_flush(screen->hw, 0);
+      if (screen->hw)
+         sgxws_wait_idle(screen->hw, 2000);
+      sgxws_bo_free(screen->dev, &res->zls);
+      simple_mtx_unlock(&screen->lock);
+   }
    if (sgxws_bo_valid(&res->vbo)) {
       simple_mtx_lock(&screen->lock);
       vbo_retire(screen, &res->vbo, res->vbo_seq);
