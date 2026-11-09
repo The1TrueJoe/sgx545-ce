@@ -328,6 +328,22 @@ The transfer also updates two sync-heap objects named by the kick's
 sync-handle list (not the shared command); reproducing those is the remaining
 increment.
 
+**The rest of the DDK's transfer start** (pc 0x1363-0x1424):
+- **The BIF switch.** pc 0x17ec loads the transfer context's PD into its
+  directory list. When that PD differs from the one loaded, it pulses
+  `BIF_CTRL` INVALDC (pc 0x181e/0x181f). Without the pulse, the BIF's cached
+  directory entries still belong to the previous client, and a transfer
+  reads that client's memory through the same device addresses.
+- **Three optional register groups.** Each is gated on a command word being
+  nonzero:
+  - word 98 (+0x188): words 17-27 go to 0x820-0x848;
+  - word 99 (+0x18c): words 28-30 go to 0x860-0x868;
+  - word 100 (+0x190): words 31-40 go to 0xa9c, 0xa84-0xa98 and 0xb24-0xb2c.
+  These are the registers a render loads from render details +0x6c..+0xc8.
+- **Cache invalidates, after the registers are programmed:** 0xad4 = 1,
+  0xae0 = 1, 0x43c = 1, then 0x804 |= 0x10000000 with a wait for
+  `EVENT_STATUS` b26, then 0xa08 = 1, then a wait for 0x138 & 0x4b.
+
 **When the DDK starts a transfer.**
 - A host kick only queues it.
 - The 3D scheduler (pc 0x1035-0x1047) starts one only while the 3D is free,
