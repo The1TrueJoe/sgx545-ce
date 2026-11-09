@@ -15,10 +15,15 @@ and an auxiliary device of gma500's PCI function on Cedarview:
   child through /sys/class/drm (loader_find_child_render_node, with a unit
   test on fake sysfs trees).
 
-EGL gives a display an EGLDevice from libdrm's device list. A display
-device whose render node libdrm can't describe (the auxiliary-bus SGX) goes
-with the software device's entry, as a primary-node-only device does;
-without it eglInitialize fails on gbm and X11 (Xorg's glamor on Cedarview).
+libdrm describes no auxiliary device: drmGetDevice2 fails on the Cedarview
+SGX's nodes and drmGetDevices2 leaves them out, so EGL had no EGLDevice for
+it and eglInitialize failed on gbm and X11 (Xorg's glamor). The loader's
+loader_drm_get_device/loader_drm_get_devices describe a node of an auxiliary
+device of a PCI function as that PCI function (bus info and ids from sysfs)
+with its own nodes; EGL's device list and lookups, the loader's PCI id and
+DRI_PRIME code use them, so X11, gbm, surfaceless and EGLDevice enumeration
+find the SGX (a unit test on the sysfs layout of a real Cedarview). A render
+node neither describes still leaves the display the software EGLDevice.
 
 An X server's GLX (AIGLX) loads <display driver>_dri.so: dril stubs for
 simpledrm, gma500 and sgx.
@@ -36,29 +41,60 @@ index 916b72b..c1d56a0 100644
  
  _vulkan_drivers = get_option('vulkan-drivers')
 diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
+index edee4ff..190e000 100644
 --- a/src/egl/drivers/dri2/egl_dri2.c
 +++ b/src/egl/drivers/dri2/egl_dri2.c
-@@ -848,7 +848,20 @@
+@@ -848,6 +848,19 @@ dri2_setup_device(_EGLDisplay *disp, EGLBoolean software)
     }
  
     dev = _eglFindDevice(render_fd, software);
 +#ifdef HAVE_LIBDRM
-+   /* A render node libdrm can't describe is in no EGLDevice: the Cedarview
-+    * SGX, which gma500 publishes on the auxiliary bus.  The display goes
-+    * with the software device's entry, as a primary-node-only device does. */
++   /* A render node in no EGLDevice that neither libdrm nor the loader can
++    * describe (loader_drm_get_device): the display goes with the software
++    * device's entry, as a primary-node-only device does. */
 +   if (!dev && render_fd >= 0) {
 +      drmDevicePtr drm_dev;
- 
-+      if (drmGetDevice2(render_fd, 0, &drm_dev) == 0)
++
++      if (loader_drm_get_device(render_fd, &drm_dev) == 0)
 +         drmFreeDevice(&drm_dev);
 +      else
 +         dev = _eglFindDevice(-1, true);
 +   }
 +#endif
-+
+ 
     if (render_fd >= 0 && render_fd != dri2_dpy->fd_render_gpu)
        close(render_fd);
+diff --git a/src/egl/main/egldevice.c b/src/egl/main/egldevice.c
+index ebebda4..c1084ac 100644
+--- a/src/egl/main/egldevice.c
++++ b/src/egl/main/egldevice.c
+@@ -38,6 +38,7 @@
+ #include "egllog.h"
+ #include "egltypedefs.h"
+ #include "egldriver.h"
++#include "loader/loader.h"
  
+ struct _egl_device {
+    _EGLDevice *Next;
+@@ -201,7 +202,7 @@ _eglFindDevice(int fd, bool software)
+ #ifdef HAVE_LIBDRM
+    drmDevicePtr device;
+ 
+-   if (drmGetDevice2(fd, 0, &device) != 0) {
++   if (loader_drm_get_device(fd, &device) != 0) {
+       dev = NULL;
+       goto out;
+    }
+@@ -438,7 +439,8 @@ _eglDeviceRefreshList(void)
+    drmDevicePtr devices[64];
+    int num_devs, ret;
+ 
+-   num_devs = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
++   /* (with the devices libdrm can't describe: the Cedarview SGX) */
++   num_devs = loader_drm_get_devices(devices, ARRAY_SIZE(devices));
+    for (int i = 0; i < num_devs; i++) {
+       if (!(devices[i]->available_nodes & (1 << DRM_NODE_RENDER))) {
+          drmFreeDevice(&devices[i]);
 diff --git a/src/gallium/auxiliary/pipe-loader/meson.build b/src/gallium/auxiliary/pipe-loader/meson.build
 index a4a13c0..4faf414 100644
 --- a/src/gallium/auxiliary/pipe-loader/meson.build
@@ -194,7 +230,7 @@ index 2ead5db..dc0563a 100644
        }
  
 diff --git a/src/loader/loader.c b/src/loader/loader.c
-index fcaa6be..5ec0d9a 100644
+index fcaa6be..dfe7c93 100644
 --- a/src/loader/loader.c
 +++ b/src/loader/loader.c
 @@ -26,6 +26,7 @@
@@ -231,7 +267,7 @@ index fcaa6be..5ec0d9a 100644
           for (j = 0; j < n_drivers; j++) {
              /* Always try to open the render device with Zink if requested */
              if (strcmp("zink", drivers[j]) == 0 ||
-@@ -313,6 +324,86 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+@@ -313,13 +324,286 @@ loader_open_render_node_platform_devices(const char * const drivers[],
     return result;
  }
  
@@ -315,14 +351,242 @@ index fcaa6be..5ec0d9a 100644
 +#endif
 +}
 +
++#ifdef __linux__
++static bool
++sysfs_link_name(const char *dir, const char *link, char *name, size_t size)
++{
++   char path[PATH_MAX], real[PATH_MAX];
++   const char *base;
++
++   snprintf(path, sizeof(path), "%s/%s", dir, link);
++   if (!realpath(path, real))
++      return false;
++   base = strrchr(real, '/');
++   snprintf(name, size, "%s", base ? base + 1 : real);
++   return true;
++}
++
++static bool
++sysfs_hex(const char *dir, const char *file, unsigned *value)
++{
++   char path[PATH_MAX];
++   FILE *f;
++   bool ok;
++
++   snprintf(path, sizeof(path), "%s/%s", dir, file);
++   if (!(f = fopen(path, "r")))
++      return false;
++   ok = fscanf(f, "%x", value) == 1;
++   fclose(f);
++   return ok;
++}
++#endif
++
++drmDevicePtr
++loader_drm_device_from_sysfs(const char *sysfs, unsigned maj, unsigned min)
++{
++#ifdef __linux__
++   char path[PATH_MAX], dev[PATH_MAX], parent[PATH_MAX], name[NAME_MAX + 1];
++   unsigned domain, bus, slot, func, vendor, device, sub_vendor = 0,
++            sub_device = 0, revision = 0;
++   char nodes[DRM_NODE_MAX][32] = {{0}};
++   int available = 0;
++   struct dirent *ent;
++   DIR *dir;
++
++   snprintf(path, sizeof(path), "%s/dev/char/%u:%u/device", sysfs, maj, min);
++   if (!realpath(path, dev) ||
++       !sysfs_link_name(dev, "subsystem", name, sizeof(name)) ||
++       strcmp(name, "auxiliary") != 0)
++      return NULL;
++   snprintf(path, sizeof(path), "%s/..", dev);
++   if (!realpath(path, parent) ||
++       !sysfs_link_name(parent, "subsystem", name, sizeof(name)) ||
++       strcmp(name, "pci") != 0 || !strrchr(parent, '/') ||
++       sscanf(strrchr(parent, '/') + 1, "%x:%x:%x.%u", &domain, &bus, &slot,
++              &func) != 4 ||
++       !sysfs_hex(parent, "vendor", &vendor) ||
++       !sysfs_hex(parent, "device", &device))
++      return NULL;
++   sysfs_hex(parent, "subsystem_vendor", &sub_vendor);
++   sysfs_hex(parent, "subsystem_device", &sub_device);
++   sysfs_hex(parent, "revision", &revision);
++
++   /* the auxiliary device's own nodes */
++   snprintf(path, sizeof(path), "%s/drm", dev);
++   if (!(dir = opendir(path)))
++      return NULL;
++   while ((ent = readdir(dir))) {
++      int type = !strncmp(ent->d_name, "renderD", 7) ? DRM_NODE_RENDER
++                 : !strncmp(ent->d_name, "card", 4)  ? DRM_NODE_PRIMARY
++                                                     : -1;
++
++      if (type < 0 || (available & (1 << type)))
++         continue;
++      snprintf(nodes[type], sizeof(nodes[type]), "%s/%s", DRM_DIR_NAME,
++               ent->d_name);
++      available |= 1 << type;
++   }
++   closedir(dir);
++   if (!available)
++      return NULL;
++
++   /* one block, as libdrm allocates it: drmFreeDevice frees it */
++   size_t size = sizeof(drmDevice) + DRM_NODE_MAX * sizeof(char *) +
++                 sizeof(nodes) + sizeof(drmPciBusInfo) +
++                 sizeof(drmPciDeviceInfo);
++   drmDevicePtr d = calloc(1, size);
++   if (!d)
++      return NULL;
++   char *p = (char *)(d + 1);
++
++   d->nodes = (char **)p;
++   p += DRM_NODE_MAX * sizeof(char *);
++   for (int i = 0; i < DRM_NODE_MAX; i++) {
++      d->nodes[i] = p + i * sizeof(nodes[0]);
++      memcpy(d->nodes[i], nodes[i], sizeof(nodes[0]));
++   }
++   p += sizeof(nodes);
++   d->available_nodes = available;
++   d->bustype = DRM_BUS_PCI;
++   d->businfo.pci = (drmPciBusInfoPtr)p;
++   d->businfo.pci->domain = domain;
++   d->businfo.pci->bus = bus;
++   d->businfo.pci->dev = slot;
++   d->businfo.pci->func = func;
++   p += sizeof(drmPciBusInfo);
++   d->deviceinfo.pci = (drmPciDeviceInfoPtr)p;
++   d->deviceinfo.pci->vendor_id = vendor;
++   d->deviceinfo.pci->device_id = device;
++   d->deviceinfo.pci->subvendor_id = sub_vendor;
++   d->deviceinfo.pci->subdevice_id = sub_device;
++   d->deviceinfo.pci->revision_id = revision;
++   return d;
++#else
++   return NULL;
++#endif
++}
++
++int
++loader_drm_get_device(int fd, drmDevicePtr *device)
++{
++   struct stat st;
++
++   if (drmGetDevice2(fd, 0, device) == 0)
++      return 0;
++#ifdef __linux__
++   if (!fstat(fd, &st) && S_ISCHR(st.st_mode) &&
++       (*device = loader_drm_device_from_sysfs("/sys", major(st.st_rdev),
++                                               minor(st.st_rdev))))
++      return 0;
++#endif
++   return -ENODEV;
++}
++
++/* the render nodes in sysfs/class/drm that none of devices[0..n) has, as
++ * loader_drm_device_from_sysfs describes them; with devices NULL, counted */
++int
++loader_drm_add_sysfs_devices(const char *sysfs, drmDevicePtr devices[], int n,
++                             int max_devices)
++{
++#ifdef __linux__
++   char path[PATH_MAX];
++   struct dirent *ent;
++   DIR *dir;
++
++   snprintf(path, sizeof(path), "%s/class/drm", sysfs);
++   if (!(dir = opendir(path)))
++      return n;
++   while ((ent = readdir(dir))) {
++      unsigned maj, min;
++      drmDevicePtr d;
++      FILE *f;
++      bool known = false;
++
++      if (strncmp(ent->d_name, "renderD", 7) != 0)
++         continue;
++      snprintf(path, sizeof(path), "%s/class/drm/%s/dev", sysfs, ent->d_name);
++      if (!(f = fopen(path, "r")))
++         continue;
++      if (fscanf(f, "%u:%u", &maj, &min) != 2) {
++         fclose(f);
++         continue;
++      }
++      fclose(f);
++      if (!(d = loader_drm_device_from_sysfs(sysfs, maj, min)))
++         continue;
++      for (int i = 0; devices && i < n && !known; i++)
++         known = (devices[i]->available_nodes & (1 << DRM_NODE_RENDER)) &&
++                 !strcmp(devices[i]->nodes[DRM_NODE_RENDER],
++                         d->nodes[DRM_NODE_RENDER]);
++      if (known || (devices && n >= max_devices)) {
++         drmFreeDevice(&d);
++         continue;
++      }
++      if (devices)
++         devices[n] = d;
++      else
++         drmFreeDevice(&d);
++      n++;
++   }
++   closedir(dir);
++#endif
++   return n;
++}
++
++int
++loader_drm_get_devices(drmDevicePtr devices[], int max_devices)
++{
++   int n = drmGetDevices2(0, devices, max_devices);
++
++   if (n < 0)
++      n = 0;
++   return loader_drm_add_sysfs_devices("/sys", devices, n, max_devices);
++}
++
  bool
  loader_is_device_render_capable(int fd)
  {
+    drmDevicePtr dev_ptr;
+    bool ret;
+ 
+-   if (drmGetDevice2(fd, 0, &dev_ptr) != 0)
++   if (loader_drm_get_device(fd, &dev_ptr) != 0)
+       return false;
+ 
+    ret = (dev_ptr->available_nodes & (1 << DRM_NODE_RENDER));
+@@ -470,7 +754,7 @@ static char *drm_get_id_path_tag_for_fd(int fd)
+    drmDevicePtr device;
+    char *tag;
+ 
+-   if (drmGetDevice2(fd, 0, &device) != 0)
++   if (loader_drm_get_device(fd, &device) != 0)
+        return NULL;
+ 
+    tag = drm_construct_id_path_tag(device);
+@@ -534,7 +818,7 @@ bool loader_get_user_preferred_fd(int *fd_render_gpu, int *original_fd)
+    if (default_tag == NULL)
+       goto err;
+ 
+-   num_devices = drmGetDevices2(0, devices, MAX_DRM_DEVICES);
++   num_devices = loader_drm_get_devices(devices, MAX_DRM_DEVICES);
+    if (num_devices <= 0)
+       goto err;
+ 
+@@ -681,7 +965,7 @@ drm_get_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
+ {
+    drmDevicePtr device;
+ 
+-   if (drmGetDevice2(fd, 0, &device) != 0) {
++   if (loader_drm_get_device(fd, &device) != 0) {
+       log_(_LOADER_WARNING, "MESA-LOADER: failed to retrieve device information\n");
+       return false;
+    }
 diff --git a/src/loader/loader.h b/src/loader/loader.h
-index 6748cb5..66efcc0 100644
+index 6748cb5..eb66a52 100644
 --- a/src/loader/loader.h
 +++ b/src/loader/loader.h
-@@ -53,6 +53,14 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+@@ -53,6 +53,35 @@ loader_open_render_node_platform_devices(const char * const drivers[],
                                           unsigned int n_drivers,
                                           unsigned int *n_devices);
  
@@ -334,14 +598,35 @@ index 6748cb5..66efcc0 100644
 +loader_open_child_render_node(int kms_fd, const char * const drivers[],
 +                              unsigned int n_drivers);
 +
++struct _drmDevice;
++
++/* drmGetDevice2 and drmGetDevices2, and the DRM devices libdrm can't
++ * describe: a node of an auxiliary device of a PCI function (gma500 puts the
++ * Cedarview SGX there) is described as that PCI function, with its own
++ * nodes.  Free the devices with drmFreeDevice. */
++int
++loader_drm_get_device(int fd, struct _drmDevice **device);
++
++int
++loader_drm_get_devices(struct _drmDevice *devices[], int max_devices);
++
++/* (their sysfs part, for a sysfs tree at sysfs: the device of the node
++ * maj:min; the nodes /sys/class/drm has that libdrm's list doesn't) */
++struct _drmDevice *
++loader_drm_device_from_sysfs(const char *sysfs, unsigned maj, unsigned min);
++
++int
++loader_drm_add_sysfs_devices(const char *sysfs, struct _drmDevice *devices[],
++                             int n, int max_devices);
++
  bool
  loader_is_device_render_capable(int fd);
  
 diff --git a/src/loader/meson.build b/src/loader/meson.build
-index a8603ad..9ca3461 100644
+index a8603ad..b0a3588 100644
 --- a/src/loader/meson.build
 +++ b/src/loader/meson.build
-@@ -46,3 +46,17 @@ libloader = static_library(
+@@ -46,3 +46,28 @@ libloader = static_library(
    dependencies : [idep_mesautil, dep_libdrm, dep_thread, dep_xcb, dep_xcb_xrandr],
    build_by_default : false,
  )
@@ -358,7 +643,246 @@ index a8603ad..9ca3461 100644
 +    ),
 +    suite : ['loader'],
 +  )
++  test(
++    'loader_cedarview_sysfs',
++    executable(
++      'loader_cedarview_sysfs_test',
++      'tests/cedarview_sysfs_test.c',
++      link_with : libloader,
++      include_directories : [inc_include, inc_src, inc_util, inc_gallium],
++      dependencies : [idep_mesautil, idep_xmlconfig, dep_libdrm],
++    ),
++    suite : ['loader'],
++  )
 +endif
+diff --git a/src/loader/tests/cedarview_sysfs_test.c b/src/loader/tests/cedarview_sysfs_test.c
+new file mode 100644
+index 0000000..a12f0f0
+--- /dev/null
++++ b/src/loader/tests/cedarview_sysfs_test.c
+@@ -0,0 +1,222 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ *
++ * The loader on the sysfs layout of a real Cedarview (D2500) with gma500 and
++ * powervr_sgx: the display's card0 on the PCI function 0000:00:02.0
++ * (8086:0be1, subsystem 1558:2100, rev 0b), the SGX's card1 and renderD128 on
++ * gma500's auxiliary device gma500_gfx.sgx.16, beside ACPI's
++ * acpi.video_bus.0.  libdrm describes no auxiliary device (drmGetDevice2
++ * fails on renderD128), so the loader describes it as the PCI function:
++ *  - kmsro's pick: card0's child render node is renderD128;
++ *  - loader_drm_device_from_sysfs: renderD128 and card1 are a PCI device
++ *    0000:00:02.0, 8086:0be1, with nodes /dev/dri/card1 and
++ *    /dev/dri/renderD128; card0 (the PCI function's own node) is left to
++ *    libdrm;
++ *  - loader_drm_add_sysfs_devices: libdrm's list (gma500 alone, no render
++ *    node) gets the SGX added once, which is the EGLDevice that X11, gbm and
++ *    surfaceless displays find.
++ */
++
++#include <limits.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "loader.h"
++#include "util/libdrm.h"
++
++static char root[PATH_MAX];
++static int failures;
++
++#define CHECK(cond)                                                            \
++   do {                                                                        \
++      if (!(cond)) {                                                           \
++         fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #cond);            \
++         failures++;                                                           \
++      }                                                                        \
++   } while (0)
++
++static void
++mkdirs(const char *rel)
++{
++   char p[PATH_MAX];
++
++   snprintf(p, sizeof(p), "%s/%s", root, rel);
++   for (char *s = p + strlen(root) + 1; *s; s++) {
++      if (*s == '/') {
++         *s = 0;
++         mkdir(p, 0755);
++         *s = '/';
++      }
++   }
++   mkdir(p, 0755);
++}
++
++static void
++link_at(const char *target, const char *rel)
++{
++   char p[PATH_MAX];
++
++   snprintf(p, sizeof(p), "%s/%s", root, rel);
++   if (symlink(target, p)) {
++      perror(p);
++      exit(1);
++   }
++}
++
++static void
++file_at(const char *rel, const char *text)
++{
++   char p[PATH_MAX];
++   FILE *f;
++
++   snprintf(p, sizeof(p), "%s/%s", root, rel);
++   if (!(f = fopen(p, "w"))) {
++      perror(p);
++      exit(1);
++   }
++   fputs(text, f);
++   fclose(f);
++}
++
++/* a device directory (rel, from the sysfs root) on bus */
++static void
++device(const char *rel, const char *bus)
++{
++   char p[PATH_MAX], target[PATH_MAX];
++   int depth = 0;
++
++   mkdirs(rel);
++   snprintf(p, sizeof(p), "bus/%s", bus);
++   mkdirs(p);
++   for (const char *s = rel; *s; s++)
++      depth += *s == '/';
++   target[0] = 0;
++   for (int i = 0; i <= depth; i++)
++      strcat(target, "../");
++   strcat(target, p);
++   snprintf(p, sizeof(p), "%s/subsystem", rel);
++   link_at(target, p);
++}
++
++/* a DRM node maj:min under device rel_dev: its directory, its dev file, and
++ * its /sys/class/drm and /sys/dev/char links, as the kernel lays them out */
++static void
++node(const char *rel_dev, const char *name, unsigned maj, unsigned min)
++{
++   char rel[PATH_MAX], target[PATH_MAX], text[32];
++
++   snprintf(rel, sizeof(rel), "%s/drm/%s", rel_dev, name);
++   mkdirs(rel);
++   snprintf(rel, sizeof(rel), "%s/drm/%s/device", rel_dev, name);
++   link_at("../..", rel);
++   snprintf(rel, sizeof(rel), "%s/drm/%s/dev", rel_dev, name);
++   snprintf(text, sizeof(text), "%u:%u\n", maj, min);
++   file_at(rel, text);
++   snprintf(target, sizeof(target), "../../%s/drm/%s", rel_dev, name);
++   snprintf(rel, sizeof(rel), "class/drm/%s", name);
++   link_at(target, rel);
++   snprintf(rel, sizeof(rel), "dev/char/%u:%u", maj, min);
++   link_at(target, rel);
++}
++
++/* a libdrm-made device with only a primary node, as drmGetDevices2 lists
++ * gma500 */
++static drmDevicePtr
++primary_only(const char *path)
++{
++   drmDevicePtr d = calloc(1, sizeof(*d) + DRM_NODE_MAX * sizeof(char *));
++
++   d->nodes = (char **)(d + 1);
++   d->nodes[DRM_NODE_PRIMARY] = strdup(path);
++   d->available_nodes = 1 << DRM_NODE_PRIMARY;
++   d->bustype = DRM_BUS_PCI;
++   return d;
++}
++
++int
++main(void)
++{
++   const char *pci = "devices/pci0000:00/0000:00:02.0";
++   const char *aux = "devices/pci0000:00/0000:00:02.0/gma500_gfx.sgx.16";
++   char parent[PATH_MAX], p[PATH_MAX], name[32] = "";
++   drmDevicePtr d, list[4];
++   int n;
++
++   snprintf(root, sizeof(root), "%s/cedarview-sysfs-XXXXXX",
++            getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
++   if (!mkdtemp(root)) {
++      perror("mkdtemp");
++      return 1;
++   }
++   mkdirs("class/drm");
++   mkdirs("dev/char");
++
++   device(pci, "pci");
++   file_at("devices/pci0000:00/0000:00:02.0/vendor", "0x8086\n");
++   file_at("devices/pci0000:00/0000:00:02.0/device", "0x0be1\n");
++   file_at("devices/pci0000:00/0000:00:02.0/subsystem_vendor", "0x1558\n");
++   file_at("devices/pci0000:00/0000:00:02.0/subsystem_device", "0x2100\n");
++   file_at("devices/pci0000:00/0000:00:02.0/revision", "0x0b\n");
++   node(pci, "card0", 226, 0);
++   device(aux, "auxiliary");
++   node(aux, "card1", 226, 1);
++   node(aux, "renderD128", 226, 128);
++   /* ACPI's video bus, the other auxiliary device in eddy's auxiliary.txt */
++   device("devices/pci0000:00/acpi.video_bus.0", "auxiliary");
++
++   /* kmsro: card0's device has renderD128 as its child's render node */
++   snprintf(p, sizeof(p), "%s/%s", root, pci);
++   CHECK(realpath(p, parent));
++   snprintf(p, sizeof(p), "%s/class/drm", root);
++   CHECK(loader_find_child_render_node(p, parent, name, sizeof(name)));
++   CHECK(!strcmp(name, "renderD128"));
++
++   /* the SGX's nodes are described as the PCI function */
++   for (unsigned min = 1; min <= 128; min += 127) {
++      d = loader_drm_device_from_sysfs(root, 226, min);
++      CHECK(d);
++      if (!d)
++         continue;
++      CHECK(d->bustype == DRM_BUS_PCI);
++      CHECK(d->businfo.pci->domain == 0 && d->businfo.pci->bus == 0 &&
++            d->businfo.pci->dev == 2 && d->businfo.pci->func == 0);
++      CHECK(d->deviceinfo.pci->vendor_id == 0x8086 &&
++            d->deviceinfo.pci->device_id == 0x0be1);
++      CHECK(d->deviceinfo.pci->subvendor_id == 0x1558 &&
++            d->deviceinfo.pci->subdevice_id == 0x2100 &&
++            d->deviceinfo.pci->revision_id == 0x0b);
++      CHECK(d->available_nodes ==
++            ((1 << DRM_NODE_PRIMARY) | (1 << DRM_NODE_RENDER)));
++      CHECK(!strcmp(d->nodes[DRM_NODE_PRIMARY], "/dev/dri/card1"));
++      CHECK(!strcmp(d->nodes[DRM_NODE_RENDER], "/dev/dri/renderD128"));
++      drmFreeDevice(&d);
++   }
++   /* the display's own node is libdrm's */
++   CHECK(!loader_drm_device_from_sysfs(root, 226, 0));
++   CHECK(!loader_drm_device_from_sysfs(root, 226, 2));
++
++   /* libdrm lists gma500 alone: the SGX is added, once */
++   list[0] = primary_only("/dev/dri/card0");
++   CHECK(loader_drm_add_sysfs_devices(root, NULL, 1, 0) == 2);
++   n = loader_drm_add_sysfs_devices(root, list, 1, 4);
++   CHECK(n == 2);
++   if (n == 2) {
++      CHECK(list[1]->available_nodes & (1 << DRM_NODE_RENDER));
++      CHECK(!strcmp(list[1]->nodes[DRM_NODE_RENDER], "/dev/dri/renderD128"));
++      /* a later libdrm that knows the device: not added twice */
++      CHECK(loader_drm_add_sysfs_devices(root, list, 2, 4) == 2);
++      drmFreeDevice(&list[1]);
++   }
++   /* no room: not added */
++   CHECK(loader_drm_add_sysfs_devices(root, list, 1, 1) == 1);
++   free(list[0]->nodes[DRM_NODE_PRIMARY]);
++   drmFreeDevice(&list[0]);
++
++   if (!failures)
++      printf("cedarview sysfs: all passed\n");
++   return failures != 0;
++}
 diff --git a/src/loader/tests/child_render_node_test.c b/src/loader/tests/child_render_node_test.c
 new file mode 100644
 index 0000000..8bc0155
