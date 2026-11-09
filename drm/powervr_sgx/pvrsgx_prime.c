@@ -17,6 +17,7 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
+#include "pvrsgx_device.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_prime.h"
 #include "pvrsgx_trace.h"
@@ -100,6 +101,9 @@ bool pvrsgx_prime_reachable(struct device *dev, struct sg_table *sgt)
 void pvrsgx_prime_flush(struct pvrsgx_job *job, bool after)
 {
 	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
+
+	if (!READ_ONCE(job->ctx->sdev->prime_flush))
+		return;
 
 	for (u32 i = 0; i < job->nimports; i++) {
 		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);

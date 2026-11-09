@@ -323,6 +323,7 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 
 	pvrsgx_kobj_init(sdev);
 	mutex_init(&sdev->pb_lock);
+	sdev->prime_flush = true;
 	err = pvrsgx_fw_init(sdev);
 	if (err)
 		goto err_fw;

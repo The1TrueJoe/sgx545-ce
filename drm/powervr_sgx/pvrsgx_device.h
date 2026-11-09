@@ -195,6 +195,15 @@ struct pvrsgx_device {
 	/** @pb_lock: Serializes @pb's creation. */
 	struct mutex pb_lock;
 
+	/*
+	 * Experiment (debugfs prime_coherent, prime_flush), to remove once answered:
+	 * do imports mapped cache-consistent need the CPU cache flushes?
+	 */
+	/** @prime_coherent: Map imports with SGX_MMU_PTE_CACHECONSISTENT. */
+	bool prime_coherent;
+	/** @prime_flush: Flush imports around a job (the default). */
+	bool prime_flush;
+
 	/** @kobj_lock: Protects @krange and @graveyard. */
 	struct mutex kobj_lock;
 	/** @krange: Allocators of the device-wide kernel object ranges. */

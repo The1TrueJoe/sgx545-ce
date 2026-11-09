@@ -57,5 +57,10 @@ static const struct drm_debugfs_info pvrsgx_debugfs_list[] = {
 
 void pvrsgx_debugfs_init(struct drm_minor *minor)
 {
+	struct pvrsgx_device *sdev = to_pvrsgx_device(minor->dev);
+
 	drm_debugfs_add_files(minor->dev, pvrsgx_debugfs_list, ARRAY_SIZE(pvrsgx_debugfs_list));
+	/* Experiment: see pvrsgx_device.prime_coherent. */
+	debugfs_create_bool("prime_coherent", 0600, minor->debugfs_root, &sdev->prime_coherent);
+	debugfs_create_bool("prime_flush", 0600, minor->debugfs_root, &sdev->prime_flush);
 }

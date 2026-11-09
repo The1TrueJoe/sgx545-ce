@@ -322,7 +322,9 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 		goto out_unlock;
 	}
 	err = pvrsgx_mmu_map_sgt(vm->mmu, args->device_addr, sgt, args->offset, args->size,
-				 pvrsgx_validate_pte_flags(to_pvrsgx_bo(obj)));
+				 pvrsgx_validate_pte_flags(to_pvrsgx_bo(obj)) |
+				 (drm_gem_is_imported(obj) && READ_ONCE(sdev->prime_coherent) ?
+				  SGX_MMU_PTE_CACHECONSISTENT : 0));
 	if (err)
 		goto out_unlock;
 
