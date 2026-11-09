@@ -204,10 +204,16 @@ The driver advertises desktop GL 2.1, so `EXT_texture_sRGB` is offered. 2.1
 is X's glamor minimum: under 2.0 glamor fell back to GLES2, and text drew as
 solid boxes (704f81a). Sampling decodes sRGB right, in the fragment shader,
 but piglit's `ext_texture_srgb` fails on:
-- mipmap generation of sRGB textures (`fbo-generatemipmap-formats`, s3tc too);
+- LINEAR filtering: the TPU filters the encoded texels and the shader
+  decodes the result, where GL decodes first (`texwrap formats`: 237 for
+  255 next to a darker texel). Fixing it means filtering in the shader
+  (four NEAREST taps, decoded, then mixed) for sRGB views, or a TPU sRGB
+  format if the hardware has one;
 - alpha test against an sRGB framebuffer (`fbo-alphatest-formats`, `fbo-srgb`);
-- mirrored-repeat and border-colour filtering (`texwrap formats`,
-  `texwrap formats bordercolor`).
+- border colour (`texwrap formats bordercolor`), as for every format.
+
+Mipmap generation of sRGB textures passes since adecb99 (the device chain
+past the last level).
 
 The 40 failures are in `ci/sgx-piglit-fails.txt` under their reason. A driver
 advertising 2.1 with these failing will be questioned, so they get fixed, not
