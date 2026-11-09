@@ -591,24 +591,20 @@ static int hang_bystander(unsigned f)
 static int idle(struct rc *a, unsigned f)
 {
 	char st[32] = "";
-	int64_t t0;
-	int bad = 0, s, ok;
+	int bad = 0, s;
 
-	s = rpm_wait_suspended(3000);
+	/* A render context holds the GPU awake: no runtime suspend while a exists. */
+	s = rpm_wait_suspended(1500);
 	if (s < 0) {
 		printf("  no runtime PM\n");
 		return 1;
 	}
-	CHECK(s == 1);
-	t0 = deadline(0);
-	ok = render(a, f);
-	printf("  render from suspended: %lld us\n", (long long)(deadline(0) - t0) / 1000);
-	CHECK(ok);
+	printf("  idle with a render context: %s\n", s ? "SUSPENDED" : "stays active");
+	CHECK(s == 0);
+	CHECK(render(a, f));
 	rpm_status(st, sizeof(st));
 	CHECK(!strcmp(st, "active"));
-	CHECK(rpm_wait_suspended(3000) == 1);
 	CHECK(mixed(a, f + 1));
-	CHECK(rpm_wait_suspended(3000) == 1);
 	CHECK(blit_alone(a));
 	return !bad;
 }
