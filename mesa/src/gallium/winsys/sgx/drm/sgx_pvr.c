@@ -52,6 +52,9 @@ struct pvr_bo {
 struct pvr_token {
    volatile PVRSRV_SYNC_DATA *sd;
    uint32_t value;
+   /* a render's: when it was kicked, and its target's render time (NULL:
+    * unknown) */
+   uint64_t kicked_ns, *render_ns;
 };
 
 struct pvr_ctx {
@@ -68,6 +71,7 @@ struct pvr_rt {
    struct sgxws_bo rtdata, rtword, entword[2], tailptr, ta40, ta50, rgn[2],
       ta88[2], bgblock;
    struct sgxws_bo rd, rd_sync, rd_w8, rd_w4, hwsync, hwsync_access;
+   uint64_t render_ns; /* a render into it, kick to done (running average) */
 };
 
 static const struct sgxws_kif pvr_kif;
@@ -166,23 +170,48 @@ token_done(const struct pvr_token *t)
    return !t->sd || (int32_t)(t->sd->ui32WriteOpsComplete - t->value) >= 0;
 }
 
-/* poll a render's completion: 50 us steps doubling to 1 ms (a frame's wait
- * at 0.1 ms steps was thousands of wakeups, a quarter of the render
- * thread's CPU time in the kernel) */
+/* Poll a render's completion.  The counter is polled, not waited on, so the
+ * poll's steps round the wait up: at 50 us steps doubling to 1 ms a 3 ms
+ * render was seen done at 3.55 ms (perfmicro tex 0.71 of the DDK on the EA3,
+ * 0.9 at 50 us steps), and 0.1 ms steps all the way were thousands of
+ * wakeups.  So a render whose kick time is known is slept on until just
+ * before it should be done (from its target's last renders), then polled
+ * every 50 us; other waits (a buffer's: a readback) poll every 50 us for
+ * 4 ms, then at steps doubling to 1 ms. */
 static int
 token_wait(struct pvr_token *t, unsigned ms)
 {
    uint64_t waited = 0, step = 50000, limit = (uint64_t)ms * 1000000;
+   bool known = false;
 
+   if (!token_done(t) && t->render_ns && *t->render_ns) {
+      uint64_t now = sgxws_now_ns(), due = t->kicked_ns + *t->render_ns * 3 / 4;
+
+      if (due > now && due - now < limit) {
+         struct timespec ts = {(time_t)((due - now) / 1000000000),
+                               (long)((due - now) % 1000000000)};
+
+         nanosleep(&ts, NULL);
+         waited += due - now;
+      }
+      known = true;
+   }
    while (!token_done(t) && waited < limit) {
       struct timespec ts = {0, (long)step};
 
       nanosleep(&ts, NULL);
       waited += step;
-      step = step * 2 < 1000000 ? step * 2 : 1000000;
+      if (!known && waited >= 4000000)
+         step = step * 2 < 1000000 ? step * 2 : 1000000;
    }
    if (!token_done(t))
       return -ETIMEDOUT;
+   if (t->render_ns) {
+      uint64_t took = sgxws_now_ns() - t->kicked_ns;
+
+      *t->render_ns = *t->render_ns ? (*t->render_ns * 3 + took) / 4 : took;
+      t->render_ns = NULL;
+   }
    t->sd = NULL;
    return 0;
 }
@@ -616,6 +645,7 @@ pvr_kick_ta_cmd(struct sgxws_ctx *c, uint32_t seq, unsigned kind)
    __sync_synchronize();
    if (kind & TA_FIRST)
       done->sd = NULL;
+   done->render_ns = NULL;
    if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
       e = pvr_kick_traced(pvr, &kick, 0); /* traced, not sent */
    } else {
@@ -629,6 +659,8 @@ pvr_kick_ta_cmd(struct sgxws_ctx *c, uint32_t seq, unsigned kind)
          /* the kick counted one more pending write on the target */
          done->sd = pbo(c->target.bo)->sd;
          done->value = done->sd->ui32WriteOpsPending;
+         done->kicked_ns = sgxws_now_ns();
+         done->render_ns = &s->render_ns;
       }
    }
    return e;
