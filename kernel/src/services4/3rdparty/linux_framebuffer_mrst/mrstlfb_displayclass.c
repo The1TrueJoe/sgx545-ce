@@ -1421,7 +1421,7 @@ MRST_ERROR MRSTLFBInit(struct drm_device * dev)
 		psDevInfo->sDisplayInfo.ui32MaxSwapInterval = 3;
 		psDevInfo->sDisplayInfo.ui32MinSwapInterval = 0;
 
-		strncpy(psDevInfo->sDisplayInfo.szDisplayName, DISPLAY_DEVICE_NAME, MAX_DISPLAY_NAME_SIZE);
+		strscpy(psDevInfo->sDisplayInfo.szDisplayName, DISPLAY_DEVICE_NAME, MAX_DISPLAY_NAME_SIZE);
 	
 
 		DEBUG_PRINTK((KERN_INFO DRIVER_PREFIX
