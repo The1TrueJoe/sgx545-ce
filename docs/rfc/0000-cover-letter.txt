@@ -75,9 +75,6 @@ series is against drm-misc-next, where CI builds it with checkpatch
 tracepoint events), kernel-doc, KUnit, and an i386/x86_64 uAPI layout
 check.
 
-I used an AI coding assistant for much of this work; each patch says so
-in an Assisted-by tag, and I have reviewed and tested what I send.
-
 Joseph Telaak (8):
   drm/powervr_sgx: Add the uAPI header and its documentation
   drm/powervr_sgx: Add the driver documentation and MAINTAINERS entry
