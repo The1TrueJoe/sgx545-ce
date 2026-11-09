@@ -1282,6 +1282,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    uint32_t prim;
    uint32_t sampled = 0; /* the sampler units this draw reads */
    bool compiled, raw = false;
+   bool points = info->mode == MESA_PRIM_POINTS;
    uint8_t vfmt[16] = {0};
    unsigned raw_bytes[16];
 
@@ -1401,12 +1402,12 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                           &raw_bytes[e]);
       /* the fragment shader's sets (gl_PointCoord: the vertex shader's
        * varyings move up to leave set 0 free) */
-      if (vfs && fs->reads_pointcoord && !ctx->vs->prog.point_size)
+      if (vfs && fs->reads_pointcoord && !ctx->vs->writes_psize)
          return;
-      if (vfs || raw) {
-         if (raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, vfmt)))
+      if (vfs || raw || points) {
+         if (raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, vfmt, points)))
             raw = false;
-         if (!raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, NULL)))
+         if (!raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, NULL, points)))
             return;
       }
       if (vfs)
@@ -1576,7 +1577,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    case MESA_PRIM_POINTS:
       /* the size comes from the vertex program; without one the DDK draws
        * nothing too */
-      if (!compiled || !ctx->vs->prog.point_size)
+      if (!compiled || !ctx->vs->writes_psize)
          return;
       prim = SGXWS_POINTS;
       break;

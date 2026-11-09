@@ -21,11 +21,12 @@ uint32_t sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
  * fs (or NULL) and inputs in vtx_fmt (or NULL, f32 x 4): itself when their
  * varyings' sets agree and the inputs are f32 x 4, else a variant writing
  * fs's sets (gl_PointCoord's set 0 included) and unpacking vtx_fmt; NULL if
- * it can't */
+ * it can't.  For points it keeps the point size st's program writes, which
+ * every other draw goes without */
 struct sgx_pipe_shader *sgx_vs_for(struct sgx_context *ctx,
                                    struct sgx_pipe_shader *vs,
                                    const struct sgx_pipe_shader *fs,
-                                   const uint8_t *vtx_fmt);
+                                   const uint8_t *vtx_fmt, bool points);
 
 /* the texture units a fragment shader samples (all, when it isn't known) */
 uint32_t sgx_fs_textures_used(const struct sgx_pipe_shader *fs);
