@@ -254,4 +254,40 @@ TEST_F(sgx_compile_test, fragment_uniform_colour_packed)
    EXPECT_TRUE(packed);
 }
 
+/* for (i < 8) { if (r.x > a.x) break; r += b; }: a loop that can exit early
+ * stays a loop (unrolled, its exits became a select tree holding all eight
+ * partial sums: corpus loop_v, 31 temporaries) */
+TEST_F(sgx_compile_test, fragment_early_exit_loop_kept)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *bv =
+      var(nir_var_shader_in, glsl_vec4_type(), "b", VARYING_SLOT_VAR1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_variable *i = nir_local_variable_create(b.impl, glsl_int_type(), "i");
+   nir_variable *r = nir_local_variable_create(b.impl, glsl_vec4_type(), "r");
+
+   nir_store_var(&b, r, nir_imm_vec4(&b, 0, 0, 0, 0), 0xf);
+   nir_store_var(&b, i, nir_imm_int(&b, 0), 1);
+   nir_loop *loop = nir_push_loop(&b);
+   {
+      nir_def *iv = nir_load_var(&b, i);
+      nir_break_if(&b, nir_ige_imm(&b, iv, 8));
+      nir_def *rv = nir_load_var(&b, r);
+      nir_break_if(&b, nir_flt(&b, nir_channel(&b, nir_load_var(&b, a), 0),
+                               nir_channel(&b, rv, 0)));
+      nir_store_var(&b, r, nir_fadd(&b, rv, nir_load_var(&b, bv)), 0xf);
+      nir_store_var(&b, i, nir_iadd_imm(&b, iv, 1), 1);
+   }
+   nir_pop_loop(&b, loop);
+   nir_store_var(&b, col, nir_load_var(&b, r), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+   EXPECT_LE(out.n_temps, 8u) << disasm();
+}
+
 } /* namespace */

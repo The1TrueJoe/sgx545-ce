@@ -5875,6 +5875,8 @@ static const struct debug_named_value sgx_debug_options[] = {
    {"nof16const", SGX_DBG_NO_F16_CONST,
     "Load mediump uniforms as F32 and convert in the shader"},
    {"nof16iter", SGX_DBG_NO_F16_ITER, "Iterate every varying in F32"},
+   {"unrollexits", SGX_DBG_UNROLL_EXITS,
+    "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,
     "Unpack a texel that is the colour instead of moving its bytes"},
    {"nopackedcolor", SGX_DBG_NO_PACKED_COLOR,
