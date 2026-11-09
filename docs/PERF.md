@@ -226,14 +226,13 @@ kernel 10%. The client thread is 39% of samples (DDK 43%), the C2 compilers
 CPU is not the bottleneck: the stats give the client thread 1.0-1.2 s of
 CPU in 2 s, draws 180-250 ms of it.
 
-**TA against 3D** (open-ukernel's frame-profile microkernel c284822,
-`UK_FRAMEPROF=1`: running totals of TA busy ticks and TA count in the
-control block, the EDM's ~1 kHz tick; same scene, 10.4 fps): the TA is
-busy 40.1% of the time, ~38 ms a frame (376 TA kicks in 5 s, 2 per render).
-The 3D counters of that build don't count yet. With the GPU busy ~74%, the 3D
-is ~33 ms a frame. So the world render is roughly 36 ms TA (258 k vertices,
-162 k triangles) and 28 ms 3D. The vertex path is the larger GPU bucket, and
-perfmicro verts is 0.46 of the DDK.
+**TA against 3D** (open-ukernel's frame-profile microkernel 775b19a,
+`UK_FRAMEPROF=1`: running totals of TA and 3D busy ticks and their counts in
+the control block, the EDM's ~1 kHz tick; same scene with 31f9341's vertex
+change, ~9 fps in the window): over 5 s the TA is busy 37.6% (320 kicks, 2 a
+render) and the 3D 23.4% (160 renders). That is ~42 ms of TA and ~26 ms of 3D
+a frame, almost all of it the world render. The vertex path is the larger GPU
+bucket, and perfmicro verts is 0.46 of the DDK.
 
 ### The vertex path against the DDK (perfmicro verts, 2026-11-09)
 
