@@ -1,0 +1,89 @@
+# The Cedarview test stick (kit/cedarview): m2-drm's powervr-sgx-cedarview
+# kernel + the open microkernel built from ukernel/ + a small Debian root +
+# the test run, as one USB image. Open code only: no Intel binaries go in.
+name: cedarview-kit
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_run:
+        description: powervr-sgx run id whose powervr-sgx-cedarview artifact to use (default the newest)
+        default: ''
+  push:
+    branches: [um-re]
+    paths:
+      - kit/cedarview/**
+      - .github/workflows/cedarview-kit.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The kernel (m2-drm's cedarview job)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          id=${{ inputs.kernel_run }}
+          # m2-drm's run may still be building it (workflow_run would only fire for a
+          # workflow on the default branch): wait for it, up to 50 minutes
+          for i in $(seq 1 50); do
+            [ -n "$id" ] && break
+            # the API's order is arbitrary: the newest unexpired one from m2-drm
+            id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=powervr-sgx-cedarview&per_page=100" \
+              -q '[.artifacts[] | select((.expired | not) and .workflow_run.head_branch == "m2-drm")]
+                  | sort_by(.created_at) | last | .workflow_run.id // empty')
+            [ -n "$id" ] || { echo "no powervr-sgx-cedarview artifact yet ($i)"; sleep 60; }
+          done
+          [ -n "$id" ] || { echo "::error::no powervr-sgx-cedarview artifact: run powervr-sgx.yml on m2-drm first"; exit 1; }
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -n powervr-sgx-cedarview -D kernel
+          cat kernel/version
+          echo "KERNEL_RUN=$id" >> "$GITHUB_ENV"
+
+      - name: The open microkernel (ukernel/, secure mode, any core revision)
+        run: |
+          set -eux
+          mkdir -p fw
+          python3 ukernel/build.py fw/uk.bin fw/uk.json
+          python3 drm/tools/mkukfw.py fw/uk.bin -o fw/sgx545_ukernel.bin --manifest fw/uk.json \
+            --core-rev 0 --build-id "ukernel-$(git rev-parse --short HEAD)"
+          python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel.bin | tee fw/check.txt
+          grep -q 'features 0x2' fw/check.txt
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends mmdebstrap squashfs-tools dosfstools \
+            grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin kmod fdisk \
+            qemu-system-x86 mtools ovmf debian-archive-keyring
+
+      - name: Build the image
+        run: |
+          set -eux
+          v=$(git rev-parse --short HEAD)
+          sudo sh kit/cedarview/build.sh kernel out "$v" fw/sgx545_ukernel.bin
+          {
+            echo "kit $v from ${GITHUB_SHA}"
+            echo "kernel: powervr-sgx run $KERNEL_RUN: $(cat kernel/version)"
+            echo "microkernel: $(head -1 fw/check.txt)"
+          } | tee out/BUILD-INFO.txt
+
+      - name: Boot it in QEMU, BIOS and UEFI (a results file; the other disk untouched)
+        run: |
+          set -eux
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          for fw in bios uefi; do sh kit/cedarview/qemu-test.sh out/*.img.gz $fw; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgx545-cedarview-kit
+          path: out/
+          compression-level: 0
+          retention-days: 90

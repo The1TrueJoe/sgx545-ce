@@ -1,0 +1,109 @@
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# efo and fdual (ISA.md "efo", "Dual issue", "Text notation and defaults").
+# The efo lines are ISA.md's corpus control words (its efo table) on r0-r3:
+# the low word is the operands, the high word 0x38000000 | the control word.
+
+efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1] ; 00004103 382b0600
+efo r0, r1, r2, r3 [d=a0 a=s0+s2/s1+s2 wi0 wi1] ; 00004103 38230600
+efo r0, r1, r2, r3 [d=i1 i=m0/m1 wi0 wi1] ; 00004103 38180600
+efo r0, r1, r2, r3 [a=m0+i0/i1+m1 wi0 wi1] ; 00004103 38020600
+efo r0, r1, r2, r3 [d=a0 a=m0+i0/i1+m1 wi1] ; 00004103 38220200
+efo r0, r1, r2, r3 [d=a0 i=a0/m1 a=m0+s0/i1+i0 wi0 wi1 a0rneg] ; 00004103 3c2d0600
+efo r0, r1, r2, r3 [d=a1 i=a0/m1 a=m0+s0/i1+i0 wi0 wi1 a0rneg] ; 00004103 3c3d0600
+efo r0, r1, r2, r3 [a=m0+s0/i1+i0 m=s2*s1/s2*s2 wi0 wi1] ; 00004103 38014600
+efo r0, r1, r2, r3 [d=a0] ; 00004103 38200000
+efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 m=s1*s0/s2*s2 wi0 wi1] ; 00004103 382b8600
+
+# efo's i, a and m as dis.py prints them, and the enum fields at 0 written out
+efo r0, r1, r2, r3 [d=a0 i=i0=m0,i1=m1 a=a0=s0+s2,a1=s1+s2 wi0 wi1] == efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1]
+efo r0, r1, r2, r3 [d=i0 i=i0=a0,i1=a1 a=a0=m0+m1,a1=i1+i0 m=m0=s0*s2,m1=s1*s2] == efo r0, r1, r2, r3
+efo r0, r1, r2, r3 [m=m0=s1*s0,m1=s2*s2] == efo r0, r1, r2, r3 [m=s1*s0/s2*s2]
+efo r0, r1, r2, r3 [d=2 i=2 a=3 m=0] == efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2]
+
+# fdual: ISA.md's v_norm pair, every select, and the other spellings
+fdual.fssq.mov o0, pa2, pa0, pa1 [sd=i2 msrc=src0]
+fdual.mov.fmad o3, r0, c52, o0 [sd=i2 sb=i2 sc=src2]
+fdual.fmad.fsub r0, r1, r2, r3 [sd=i0s0 sb=i1 sc=i2]
+fdual.fadm.frsq r4, pa1, pa2, sa3 [sd=i1 sb=src1 sc=i0]
+fdual.fmsa.fmad16 r0, r1, r2, r3 [sd=i2 sb=i0 sc=src2]
+fdual.fddp.fmaxmin r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1]
+fdual.mov.mov r0, r1, r2, r3 [sd=i1 msrc=src2]
+fdual.mov.mov r0, r1, r2, r3 [sd=i1 msrc=src1]
+fdual.mov.mov r0, r1, r2, r3 [sd=i0 msrc=i2]
+fdual.fmad.fexp2 r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.flog2 r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.fsin r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.fcos r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.fmad.fmul r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+fdual.ima32.ima32 r0, r1, r2, r3 [sd=i0 sb=i1 sc=i0]
+(p1) fdual.fmad.fadd r0, r1, -r2, -r3 [skipinv rpt=2 sd=i0 sb=src1 sc=i1]
+fdual.fmad.fadd r0, r1, r2, r3 [neg1 neg2 sd=i0 sb=src1 sc=i1] == fdual.fmad.fadd r0, r1, -r2, -r3 [sd=i0 sb=src1 sc=i1]
+fdual.fmad.fadd r0, r1, r2, r3 [sd=3 sb=3 sc=3] == fdual.fmad.fadd r0, r1, r2, r3 [sd=i0s0 sb=src1 sc=src2]
+fdual.mov.mov r0, r1, r2, r3 [msrc=4] == fdual.mov.mov r0, r1, r2, r3 [msrc=src0]
+
+# dot's scales as cx<n> / ax<n> (ISA.md "Other spellings asm.py takes")
+dot3 r0, r1, r2 [cs=cx4 as=ax2] == dot3 r0, r1, r2 [cs=x4 as=x2]
+
+# hw 1's f16 (h7) and c10 (h8) are separate bits; both may be set
+frcp r0, r1 [f16 c10 chan=2] ; 00000080 08000190
+fsin r0, r1 [c10 chan=1 f16d]
+fsin r0, r1  [c10 chan=1 f16d]
+
+# Same-word hazards (ISA.md "fdual for a compiler", "efo"): an fdual primary
+# reading the internal register its secondary writes is a race, and so is
+# efo's d naming an internal register the word writes.
+hazard fdual.mov.fexp2 r3, r0, r124, r2 [sd=i0 sb=i1 sc=i0]
+hazard fdual.fmad.fsin pa1, r126, r1, r2 [sd=i2 sb=i1 sc=i0]
+hazard fdual.fssq.mov r3, r0, i1, r2 [sd=i1 msrc=i0]
+hazard efo r0, r1, r2, r3 [d=i0 wi0]
+hazard efo r0, r1, r2, r3 [d=i1 i=m0/m1 wi1]
+# not hazards: the secondary reads before the primary writes; both halves
+# read one slot; neg1/neg2 are the primary's; a slot the primary doesn't read
+safe fdual.fmad.mov r125, r0, r1, r2 [sd=i0 msrc=i1]
+safe fdual.fmad.fmad r3, r0, -r1, -r2 [sd=i0 sb=src1 sc=src2]
+safe fdual.mov.fexp2 r3, r124, r1, r2 [sd=i0 sb=i1 sc=i0]
+safe fdual.fmad.fadd r3, r0, r1, r2 [sd=i1 sb=i0 sc=i2]
+safe efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1]
+safe efo r0, r1, r2, r3 [d=i1 wi0]
+
+# sec 3 is fsubflr; fadm and ffrc are other names for it (ISA.md "Dual issue")
+fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
+fdual.mov.fadm r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2] == fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]
+fdual.mov.ffrc r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1] == fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i1]
+
+# bilin/ssum16/firv/firh's fmt is a mnemonic suffix; [fmt=s8] means the same
+# (ISA.md "hw 16 / 17 / 1a")
+firh.s8 i1, r1, r2, r3 [rpt=6 coef=1 shift=31]
+firh.o8 i2, r1, r2, r3
+firv.fmt3 r0, r1, r2, r3
+ssum16.s8 r0, r1, r2, r3
+bilin r0, r1, r2, r3 [fmt=s8 ileave] == bilin.s8 r0, r1, r2, r3 [ileave]
+firh i1, r1, r2, r3 [fmt=o8] == firh.o8 i1, r1, r2, r3
+ssum16 r0, sa4, sa5, r3 [fmt=o8] == ssum16.o8 r0, sa4, sa5, r3
+
+# rlp's src2 slot as one 10-bit value: unused2, written when it isn't 0x300
+# (ISA.md "Text notation and defaults", "hw 0a-0e")
+rlp r0, r1, p2 [unused2=5]
+rlp r0, r1, p2 [unused2=768] == rlp r0, r1, p2
+rlp r0, r1, p2 [unused2=0x3ff] == rlp r0, r1, p2 [unused2=1023]
+
+# A signed 7-bit immediate is its two's complement: imae's src2 for any t2
+# but 0 (ISA.md "imae"); the text shows the raw 7-bit value
+imae o72, pa36, r58, #-63 [skipinv rpt=7 f2_15=3 t2=u32 s2hi] == imae o72, pa36, r58, #65 [skipinv rpt=7 f2_15=3 t2=u32 s2hi]
+(!p0) imae pa0, r44, r6, #-52 [skipinv nosched rpt=4 f2_15=1 t2=x3 s1hi s2hi] == (!p0) imae pa0, r44, r6, #76 [skipinv nosched rpt=4 f2_15=1 t2=x3 s1hi s2hi]
+# ldr/str's address immediate is 14 bits (ISA.md "MOE control", op 6)
+ldr r21, #1503 [drc=1]
+str #3654, r20 [skipinv nosched]
+# ld/st size 3 is .q (ISA.md "hw 1d: ld"); an idx destination's bare .f16
+# under format select sets bit 6, number not halved (ISA.md "Format select")
+ld.a.q r0, sa1, #2
+ld.l.q pa3, r1, r2
+test.fdsx.s0z2o p0, idx16.f16, pa0.f16.hi, r[idx2+1].f16 [nosched chan=2 fmt f2_0] ; 8a12e0c9 486d1222
+# any format suffix sets fmt
+test.fdsx.s0z2o p0, idx16.f16, pa0.f16.hi, r[idx2+1].f16 [nosched f2_0 chan=2] == test.fdsx.s0z2o p0, idx16.f16, pa0.f16.hi, r[idx2+1].f16 [nosched f2_0 fmt chan=2]
+fmad r0, pa0.f16.lo, c52, c48 == fmad r0, pa0.f16.lo, c52, c48 [fmt]
+
+# testmask's unnamed type 3 is .tm3 (ISA.md "test vs testmask")
+testmask.fsubflr.s3z1o.tm3 r0, r1, r2

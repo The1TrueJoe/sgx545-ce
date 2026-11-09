@@ -1,0 +1,461 @@
+<title>Opening the SGX545</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,750&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column of lab-notebook chapters; frames break out wider; a timestamped margin rail on wide screens */
+:root {
+  --bg: #f3f2ee;
+  --surface: #e8e7e1;
+  --fg: #1d1f26;
+  --muted: #5d606b;
+  --rule: #cfcdc5;
+  --navy: #1f2a8a;          /* the clear colour of every test frame, deepened */
+  --proven: #2f7d4a;
+  --hazard: #b4441c;
+  --code-bg: #1b1d27;
+  --code-fg: #e6e4dc;
+  --code-dim: #8d90a0;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161d; --surface: #1d2029; --fg: #e7e5de; --muted: #a2a4ae; --rule: #2e3240;
+    --navy: #8f9bff; --proven: #6cc48a; --hazard: #f08a5d;
+    --code-bg: #0d0f15; --code-fg: #e6e4dc; --code-dim: #7c8090;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14161d; --surface: #1d2029; --fg: #e7e5de; --muted: #a2a4ae; --rule: #2e3240;
+  --navy: #8f9bff; --proven: #6cc48a; --hazard: #f08a5d;
+  --code-bg: #0d0f15; --code-fg: #e6e4dc; --code-dim: #7c8090;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 400 17px/1.62 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 72px;
+}
+.wrap { max-width: 1060px; margin: 0 auto; }
+.col { max-width: 680px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.08; margin: 0; }
+h1 { font-weight: 750; font-size: clamp(44px, 8vw, 86px); letter-spacing: -0.02em; }
+h2 { font-weight: 750; font-size: clamp(28px, 4vw, 38px); letter-spacing: -0.01em; }
+h3 { font-weight: 500; font-size: 20px; }
+p { margin: 0; }
+a { color: var(--navy); }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+
+header.hero { padding-block: 56px 28px; display: grid; gap: 22px; }
+.hero .lede { font-size: 20px; line-height: 1.5; max-width: 640px; color: var(--fg); }
+.hero .lede em { font-style: normal; color: var(--navy); font-weight: 600; }
+figure { margin: 0; display: grid; gap: 10px; }
+figure img { width: 100%; height: auto; display: block; border-radius: 3px; image-rendering: pixelated; }
+figcaption { font-size: 14px; line-height: 1.5; color: var(--muted); max-width: 680px; }
+figcaption b { color: var(--fg); font-weight: 600; }
+
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--rule); border-block: 1px solid var(--rule); margin-block: 8px; }
+.fact { background: var(--bg); padding: 18px 16px 16px 0; display: grid; gap: 6px; }
+.fact + .fact { padding-left: 18px; }
+.fact .n { font: 750 clamp(28px, 4.4vw, 40px)/1 var(--display); font-variant-numeric: tabular-nums; }
+.fact .l { font-size: 14px; color: var(--muted); line-height: 1.4; }
+@media (max-width: 640px) {
+  .facts { grid-template-columns: 1fr; }
+  .fact, .fact + .fact { padding: 14px 0; }
+}
+
+.spec { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 18px; font-size: 14px; }
+.spec dt { color: var(--muted); font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; padding-top: 3px; }
+.spec dd { margin: 0; }
+
+section.ch { padding-block: 56px 8px; border-top: 1px solid var(--rule); margin-top: 48px; display: grid; gap: 20px; }
+.ch-head { display: grid; gap: 10px; }
+.ch-head .when { font: 500 13px/1 var(--mono); color: var(--navy); font-variant-numeric: tabular-nums; }
+.ch p + p { margin-top: 0; }
+.prose { display: grid; gap: 14px; max-width: 680px; }
+.prose ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+
+pre { margin: 0; background: var(--code-bg); color: var(--code-fg); padding: 16px 18px; border-radius: 4px; overflow-x: auto; font: 400 13.5px/1.6 var(--mono); max-width: 100%; }
+pre .c { color: var(--code-dim); }
+pre .k { color: #f0b46a; }
+pre .ok { color: #7fd99a; }
+pre .bad { color: #ff8f72; }
+
+.tablebox { overflow-x: auto; max-width: 100%; }
+table { border-collapse: collapse; font-size: 14px; width: 100%; min-width: 520px; }
+th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 500 11px/1.2 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+td.num, th.num { font-variant-numeric: tabular-nums; }
+td code { white-space: nowrap; }
+
+.chip { display: inline-block; font: 500 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 7px 3px; border-radius: 3px; border: 1px solid currentColor; white-space: nowrap; }
+.chip.proven { color: var(--proven); }
+.chip.hazard { color: var(--hazard); }
+
+.timeline { display: grid; gap: 0; }
+.tl { display: grid; grid-template-columns: 74px 92px minmax(0, 1fr) max-content; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--rule); align-items: baseline; font-size: 15px; }
+.tl .t { font: 500 13px/1.2 var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.tl .w { font: 500 11px/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--navy); }
+.tl .h { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.tl.key .m { font-weight: 600; }
+.tl.bad .m { color: var(--hazard); }
+@media (max-width: 640px) {
+  .tl { grid-template-columns: 64px minmax(0, 1fr); gap: 4px 12px; }
+  .tl .w { grid-column: 2; grid-row: 1; }
+  .tl .m { grid-column: 2; }
+  .tl .h { grid-column: 2; }
+}
+
+.callout { border-left: 3px solid var(--navy); padding: 4px 0 4px 16px; max-width: 680px; font-size: 18px; line-height: 1.5; }
+.next { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.next div { background: var(--surface); padding: 16px; border-radius: 4px; display: grid; gap: 6px; align-content: start; }
+.next b { font-family: var(--display); font-weight: 500; font-size: 18px; }
+.next span { font-size: 14px; color: var(--muted); }
+footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--muted); max-width: 680px; }
+@media (prefers-reduced-motion: no-preference) {
+  .hero figure img { animation: in 700ms ease-out both; }
+  @keyframes in { from { filter: saturate(0) brightness(0.6); } to { filter: none; } }
+}
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <span class="eyebrow">sgx545-ce · build log, 2026-10-28</span>
+  <h1>Opening the SGX545</h1>
+  <p class="lede">The PowerVR GPU in Control4's EA controllers has only ever been driven by Intel's closed, 32-bit Cedarview driver. This is the log of the first day of an open, native 64-bit replacement, ending with <em>a frame rendered on a GPU we started ourselves, with no Intel code loaded at all</em>.</p>
+  <figure>
+    <img src="img/story-01-blob-vs-replay.png" width="1476" height="504" alt="Two identical frames: a green triangle on a navy background. Left from Intel's driver, right from our replay.">
+    <figcaption><b>Left:</b> Intel's driver drawing its test triangle. <b>Right:</b> the same frame submitted by a static x86_64 binary that loads no Imagination or Intel library. 0 of 345,600 pixels differ.</figcaption>
+  </figure>
+  <div class="facts">
+    <div class="fact"><span class="n">5 h 13 m</span><span class="l">from kickoff (00:40 UTC) to the first frame with no Intel code anywhere (05:53)</span></div>
+    <div class="fact"><span class="n">0 / 345,600</span><span class="l">pixels different, every time a replay was compared against the blob</span></div>
+    <div class="fact"><span class="n">442</span><span class="l">hand-assembled shader draws on the EA3, run twice, identical, no GPU hang</span></div>
+  </div>
+  <dl class="spec">
+    <dt>GPU</dt><dd>PowerVR SGX545, revision 1.0.14, in an Intel CE5300 SoC</dd>
+    <dt>Replacing</dt><dd>Intel Cedarview DDK <code>1.7@862890</code>, i386, run on the boot image through the kernel's IA32 compat layer</dd>
+    <dt>Test box</dt><dd>EA3 on the bench, Linux 7.1.8, 720×480 framebuffer</dd>
+    <dt>Goal</dt><dd>a Mesa driver, then the Minecraft session that runs on the blob today</dd>
+  </dl>
+</header>
+
+<section class="ch" id="timeline">
+  <div class="ch-head"><span class="eyebrow">The day, in order</span><h2>Timeline</h2></div>
+  <div class="timeline">
+    <div class="tl key"><span class="t">00:40</span><span class="w">start</span><span class="m">Kickoff: reverse engineer the SGX545 userspace and bring it up to modern, with the Minecraft session as the target</span><span class="h"></span></div>
+    <div class="tl"><span class="t">00:53</span><span class="w">tracer</span><span class="m">First full capture of the blob: 445 bridge calls, 434 memory snapshots, 217 mappings</span><span class="h">5ccf47e</span></div>
+    <div class="tl"><span class="t">01:04</span><span class="w">tracer</span><span class="m">Probe program; five one-change captures give the first decodes</span><span class="h">ab915c3</span></div>
+    <div class="tl key"><span class="t">02:04</span><span class="w">replay</span><span class="m">Blob-free replay of a captured frame, pixel-exact</span><span class="h">df66355</span></div>
+    <div class="tl"><span class="t">02:17</span><span class="w">kernel</span><span class="m">Fix for the driver's 32-bit user addresses written and pushed for CI</span><span class="h">28e6686</span></div>
+    <div class="tl"><span class="t">03:08</span><span class="w">isa</span><span class="m">370 shaders parsed; the compiler's own encoder hooked and fuzzed</span><span class="h">d4fefce</span></div>
+    <div class="tl key"><span class="t">03:20</span><span class="w">replay</span><span class="m">Our own vertices and hand-assembled shaders drawn on the EA3</span><span class="h">7a7a45d</span></div>
+    <div class="tl"><span class="t">03:50</span><span class="w">pds</span><span class="m">PDS disassembler: 13 captures, no unexplained bit</span><span class="h">dcd7d3f</span></div>
+    <div class="tl bad"><span class="t">04:01</span><span class="w">pds</span><span class="m">One bit wedges the GPU; recovery loops</span><span class="h"></span></div>
+    <div class="tl"><span class="t">04:20</span><span class="w">bench</span><span class="m">Smart-plug power cycle; EA3 back in 54 s</span><span class="h"></span></div>
+    <div class="tl"><span class="t">04:49</span><span class="w">srvinit</span><span class="m">Open init rebuilds all 15 buffers identical to the blob, offline</span><span class="h">fea842e</span></div>
+    <div class="tl"><span class="t">04:56</span><span class="w">isa</span><span class="m">The compiler's encoder runs on a Mac in an emulator: 5,045 of 5,056 encodings match</span><span class="h">e9513f2</span></div>
+    <div class="tl"><span class="t">05:34</span><span class="w">isa</span><span class="m">172 forms cover all 32 USSE opcodes</span><span class="h">336ee61</span></div>
+    <div class="tl"><span class="t">05:47</span><span class="w">state</span><span class="m">12 one-field render-state replays, all pixel-exact</span><span class="h">f36f193</span></div>
+    <div class="tl bad"><span class="t">05:49</span><span class="w">srvinit</span><span class="m">First open init boot fails with -22</span><span class="h"></span></div>
+    <div class="tl key"><span class="t">05:53</span><span class="w">srvinit</span><span class="m">GPU up without libsrv_init; replayed frame identical; no Intel code in the path</span><span class="h">75e0f50</span></div>
+    <div class="tl"><span class="t">06:26</span><span class="w">isa</span><span class="m">442 draws read registers back off the screen</span><span class="h">3755f9b</span></div>
+    <div class="tl"><span class="t">06:54</span><span class="w">srvinit</span><span class="m">Init assembles its own PDS programs; only the microkernel is still Imagination's</span><span class="h">64a5a78</span></div>
+    <div class="tl bad"><span class="t">08:07</span><span class="w">gen</span><span class="m">First generated frames hang the GPU, three times</span><span class="h"></span></div>
+    <div class="tl key"><span class="t">08:30</span><span class="w">gen</span><span class="m">A frame built entirely from code, pixel-exact; 10 variations, 0 pixels off</span><span class="h">5890836</span></div>
+    <div class="tl"><span class="t">10:00</span><span class="w">compiler</span><span class="m">Our NIR→USSE compiler: all of Minecraft's gl4es shaders give the DDK's exact frames</span><span class="h">e708d41</span></div>
+    <div class="tl key"><span class="t">10:20</span><span class="w">mesa</span><span class="m">Mesa gallium driver: eglinfo lists it, GLES2 triangle identical to the DDK, es2gears at 403 FPS</span><span class="h">8c72fcc</span></div>
+    <div class="tl"><span class="t">11:00</span><span class="w">mesa</span><span class="m">Textures, blending and colour masks byte-identical to the DDK</span><span class="h">18d7de9</span></div>
+    <div class="tl"><span class="t">13:10</span><span class="w">kernel</span><span class="m">64-bit user-address fix booted: native clients map GPU memory above 4 GB</span><span class="h">929436a</span></div>
+    <div class="tl key"><span class="t">15:30</span><span class="w">mesa</span><span class="m">gl4es' 14 test traces replay with no GPU recoveries; Minecraft starts and draws its title panorama</span><span class="h">8da0125</span></div>
+    <div class="tl"><span class="t">18:30</span><span class="w">ukernel</span><span class="m">Intel's microkernel fully decoded and running in our emulator; a behavioural spec written</span><span class="h">ccb4382</span></div>
+    <div class="tl key"><span class="t">21:00</span><span class="w">mesa</span><span class="m">Minecraft in a world on our driver, on the EA1's monitor</span><span class="h">3857280</span></div>
+    <div class="tl"><span class="t">00:00</span><span class="w">mesa</span><span class="m">16–19 FPS in the bench world (Intel's driver: 28–39)</span><span class="h">7bd90c2</span></div>
+  </div>
+</section>
+
+<section class="ch" id="watch">
+  <div class="ch-head"><span class="when">00:40 – 01:05</span><h2>Watching the blob</h2></div>
+  <div class="prose">
+    <p>The first tool was an <code>LD_PRELOAD</code> tracer. It logs every PVR services bridge call and, before each GPU kick, copies all the GPU memory the process has mapped. The first traced triangle showed 445 bridge calls and not a single mapping.</p>
+    <p>The reason was in the symbol table: <code>libsrv_um</code> imports <code>syscall</code> next to <code>mmap64</code>. It maps GPU memory with a raw <code>syscall(__NR_mmap2)</code>, passing a kernel cookie as the page offset. Hooking <code>syscall()</code> fixed it: the next capture held 434 memory snapshots and 217 mappings.</p>
+    <ul>
+      <li><b>Struct layouts</b> come from clang's record-layout dump of the GPL kernel headers, for both i386 and x86_64. None are written by hand.</li>
+      <li><b>Bridge numbers</b> depend on build flags. So each <code>_IOC_NR()</code> became the size of a <code>char</code> array, and <code>nm</code> read the sizes back: 105 IDs.</li>
+      <li><b>A probe program</b> takes every input from the environment. Changing one input per capture showed that uniforms are FP16 pairs, the clear is a three-vertex background object, and <code>glDrawArrays</code> becomes an indexed draw.</li>
+      <li><b>The render happens on the second kick</b>, which <code>glReadPixels</code> triggers, not <code>glFinish</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="replay">
+  <div class="ch-head"><span class="when">01:39 – 02:20</span><h2>A frame with no blob</h2></div>
+  <div class="prose">
+    <p>A small typed client on the GPL headers covers connect, memory context, allocate and map, wrap, render context and kick. A capture turns into a script for it: 1,485 operations over 196 buffers. The replayer is a static x86_64 binary that loads no vendor library.</p>
+    <p>Its first run hit a driver bug that no 32-bit client could ever have triggered:</p>
+  </div>
+  <pre><span class="bad">replay:5: map of buffer 0 failed</span>
+PVR_K:(Error): DoMapToUser: Error - VM_INSERT_PAGE failed (-14)</pre>
+  <div class="prose">
+    <p>The driver walks user mappings with a 32-bit integer, so a 64-bit process mapping above 4 GB gets a truncated address. With <code>MAP_32BIT</code> as a workaround, the second run produced a back buffer identical to the blob's frame, with the same md5 four runs out of four. The real fix to the driver is written and its CI image is building; it has not been booted yet.</p>
+  </div>
+</section>
+
+<section class="ch" id="own">
+  <div class="ch-head"><span class="when">03:13 – 03:20</span><h2>Drawing our own</h2></div>
+  <figure>
+    <img src="img/story-02-own-frames.png" width="1112" height="256" alt="Three triangles on dark red: orange, cyan, and blue.">
+    <figcaption><b>Orange:</b> our own vertices, clear colour and uniform, matching the blob drawing the same inputs pixel for pixel. <b>Cyan:</b> two hand-assembled <code>pck.u8.f32</code> instructions replace the shader. <b>Blue:</b> one hand-assembled <code>fmad16</code> computes 1 − c.</figcaption>
+  </figure>
+</section>
+
+<section class="ch" id="pds">
+  <div class="ch-head"><span class="when">03:14 – 05:56</span><h2>The PDS, and the bit that wedged the GPU</h2></div>
+  <div class="prose">
+    <p>Before every shader task, a small undocumented processor called the PDS runs a program. It DMAs vertices, sets up varyings, hands texture state to the texture unit and starts the shader. Its halt word appears as an immediate in four of Intel's libraries, which pointed to one shared code generator that writes each instruction as shifted fields ORed into a base word. The disassembler now reads all 13 captures with no unexplained bit.</p>
+  </div>
+  <pre><span class="c">; the triangle's vertex fetch, as dis.py prints it</span>
+<span class="k">mul16</span>       ds1[0x32], in0.lo, ds1[0].lo          <span class="c">; temp = vertex index × stride (8)</span>
+<span class="k">movs.x2.s27</span> doutd, ds0[0], ds0[1], ds1[0x32], …  <span class="c">; DMA 2 dwords from 0x3e51d030 + temp</span>
+<span class="k">movs.cc3</span>    doutu, ds0[2], ds0[3], ds1[1], ds1[1] <span class="c">; start the vertex shader</span>
+<span class="k">halt</span></pre>
+  <figure>
+    <img src="img/story-03-pds-bits.png" width="1480" height="256" alt="Four frames: a normal triangle, an empty frame, a wrong triangle in the corner, and a solid black frame.">
+    <figcaption>One PDS word poked per replay. <b>A:</b> control. <b>B:</b> both address-add bits cleared, so every vertex fetches vertex 0 and nothing is drawn. <b>D:</b> one bit alone, a wrong triangle; the two bits only work together. <b>C:</b> bit 26 of the shader-start word. The GPU never finished.</figcaption>
+  </figure>
+  <pre>PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10f16 tasks)
+PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+<span class="bad">PVR_K:(Error): HWRecoveryResetSGX: SGXInitialise failed (24)</span>   <span class="c">; ×33 in 45 s</span></pre>
+  <div class="prose">
+    <p>Recovery looped about once a second, and only a power cycle clears that. The EA3 sits on a TP-Link HS110 smart plug called Bench, which a script drives over the plug's local protocol. The box was back 54 seconds after the cycle. After that, the rule was one poked replay at a time, with a check of the kernel log in between.</p>
+  </div>
+</section>
+
+<section class="ch" id="state">
+  <div class="ch-head"><span class="when">04:34 – 05:51</span><h2>Render state, proven one word at a time</h2></div>
+  <div class="prose">
+    <p>No register names exist for the rasteriser or the pixel back end, so every field was named from the code that writes it. The state is spread across the TA command, the control stream, a DMA'd state block, an end-of-tile shader and kernel-side structures. The decoder follows all five, and 70 captures decode with no unknown word.</p>
+    <p>Some things aren't where you'd expect. There is no scissor rectangle: the driver draws tile-clipped objects instead. Blending is mostly shader code the driver appends. The render target's address, stride and clip are immediates inside the end-of-tile program.</p>
+  </div>
+  <figure>
+    <img src="img/story-04-state-replays.png" width="1112" height="752" alt="Nine frames in a grid showing a triangle moved, removed, clipped, and textured differently.">
+    <figcaption>Each frame is the captured scene replayed with one word changed, compared against a prediction. <b>Row 1:</b> control; viewport x offset 360 → 180; depth test GREATER. <b>Row 2:</b> cull; end-of-tile clip to 360×240; control stream started past the clear. <b>Row 3:</b> textured control; linear filter; mirror wrap. All 12 runs matched to the pixel.</figcaption>
+  </figure>
+  <div class="tablebox">
+    <table>
+      <thead><tr><th>Run</th><th>Field</th><th>Poke</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>p1</td><td>Viewport x offset 360 → 180</td><td><code>0x30401098 ← 43340000</code></td><td>frame shifted exactly 180 px</td></tr>
+        <tr><td>p2</td><td>Depth compare → GREATER</td><td><code>0x30401084 ← 01100200</code></td><td>no triangle</td></tr>
+        <tr><td>p4</td><td>Cull mode → 2</td><td><code>0x304010bc ← 01555622</code></td><td>no triangle</td></tr>
+        <tr><td>p5</td><td>End-of-tile clip → 359×239</td><td><code>0x37004010 ← 002f0167 fca00070</code></td><td>only 360×240 written</td></tr>
+        <tr><td>p6</td><td>Stride 736 → 640</td><td><code>0x37004018 ← 005f8000 fca00090</code></td><td>0 of 353,280 differ at pitch 640</td></tr>
+        <tr><td>p8</td><td>Texture filter → linear</td><td><code>0x2e018038 ← 07fe1400</code></td><td>the DDK's own linear render</td></tr>
+        <tr><td>p9</td><td>Texture wrap → mirror</td><td><code>0x2e018038 ← 07fe0048</code></td><td>the DDK's own mirror render</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <figure>
+    <img src="img/story-05-ddk-state.png" width="1480" height="504" alt="Eight frames from Intel's driver with depth, cull, viewport, scissor, colour mask and texture variations.">
+    <figcaption>The ground truth: Intel's driver, one GL call changed per capture. Depth LESS, depth NEVER, back-face cull, <code>glViewport</code>, <code>glScissor</code>, colour mask, an 8×8 texture, mirror wrap.</figcaption>
+  </figure>
+</section>
+
+<section class="ch" id="isa">
+  <div class="ch-head"><span class="when">02:28 – 06:54</span><h2>The shader instruction set</h2></div>
+  <div class="prose">
+    <p>USSE instructions are 64 bits wide. The shader compiler, <code>libusc</code>, carries Imagination's hardware encoder inside it, and that encoder became the oracle.</p>
+    <ul>
+      <li><b>On the EA3:</b> it was hooked during real compiles and fed single-bit mutations.</li>
+      <li><b>On a Mac:</b> it was loaded into an i386 emulator and called directly. It reproduced 5,045 of the 5,056 encodings logged on the box.</li>
+      <li><b>Sweeping it:</b> about 20,000 checked encodings later, 172 instruction forms cover all 32 hardware opcodes. Every instruction in a 552-shader corpus decodes with no unexplained bit and re-encodes identically.</li>
+    </ul>
+    <p>The encoder only says where the bits go. To find out what the hardware does with them, a test program ends in <code>mov o0, rN</code>, so every pixel of the triangle is a register value read straight off the screen. That gave 442 draws, run twice with identical results.</p>
+  </div>
+  <div class="next" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+    <div><span class="chip proven">hardware</span><b>sin and cos take quarter turns</b><span><code>fsin(t)</code> is sin(t·π/2), to about 16 bits.</span></div>
+    <div><span class="chip proven">hardware</span><b>FP16 operands count halves</b><span><code>r1.f16</code> is the high half of <code>r0</code>.</span></div>
+    <div><span class="chip proven">hardware</span><b>The constant table is wrong</b><span>c46 and c47 are the FP16 pair (1, 1), not 0.5 and 1.0, and c57–c63 exist.</span></div>
+    <div><span class="chip proven">hardware</span><b>Packing truncates</b><span>f32 → f16 always rounds toward zero, whatever mode is set.</span></div>
+  </div>
+  <figure>
+    <img src="img/story-06-fsin-quarter-turns.png" width="720" height="360" alt="Two sine curves with measured points sitting on them.">
+    <figcaption><b>Squares:</b> <code>fsin</code> (blue) and <code>fcos</code> (orange) as measured on the EA3. <b>Lines:</b> sin and cos of t·π/2. The largest error over 17 points is 2.1 × 10⁻⁵.</figcaption>
+  </figure>
+  <pre><span class="c">// normalize(p.xyz), as the decoder prints it</span>
+<span class="k">fdual.fssq.mov</span> o0, pa2, pa0, pa1  [sd=i2 msrc=src0]  <span class="c">; o0 = x² + y², and i2 = z</span>
+<span class="k">fdual.mov.fmad</span> o3, r0, c52, o0                       <span class="c">; add z²</span>
+<span class="k">frsq</span>           o1, i2                                 <span class="c">; 1 / sqrt</span>
+<span class="k">fmad</span>           o0, pa0, o1, -c48  [rpt=3 moe]         <span class="c">; scale x, y, z in one instruction</span></pre>
+  <div class="prose">
+    <p>The first line here exposed a decoder bug: when the dual-issued secondary op is a <code>mov</code>, it takes one source selector, not two. And <code>discard</code> isn't in the compiled shader at all. The driver rebuilds the program into two phases at draw time and swaps a placeholder <code>nop</code> for an alpha-test instruction.</p>
+  </div>
+</section>
+
+<section class="ch" id="init">
+  <div class="ch-head"><span class="when">04:35 – 06:54</span><h2>Bringing the GPU up ourselves</h2></div>
+  <div class="prose">
+    <p>Before anything renders, something has to load the GPU's microkernel. On the boot image that was a 32-bit library call at boot that works once per boot, so every hardware attempt costs a power cycle of a box other work depends on. So the hardware stayed out of the loop as long as possible.</p>
+    <ul>
+      <li><b>Trace it.</b> The real init was traced from a cold boot and decoded: 15 allocations, two register-write scripts, and 9 instruction pairs patched with buffer addresses.</li>
+      <li><b>Rebuild it offline.</b> The open version builds the same buffers without touching the GPU. A checker found every buffer and field identical to the trace.</li>
+      <li><b>Boot it.</b> The first cold boot failed:</li>
+    </ul>
+  </div>
+  <pre>PVR_K:(Error): pvr: invalid param size for IOCTL#99:
+     kern/user in,out: 2192/2192,<span class="bad">16/8</span></pre>
+  <div class="prose">
+    <p>The driver expects a 16-byte reply from 64-bit callers, while its handler writes 8. On i386 both are 8, so only a native caller ever sees this. With a 16-byte buffer, the next boot worked:</p>
+  </div>
+  <pre>== uptime 29.86, pvr-compat lines so far: <span class="ok">0</span>
+srvinit: <span class="ok">SGX545 microkernel started</span> (ukernel at 0x30000000, pd 0x01d0b000)
+PVR_K: SysFinalise: SGX revision = 1.0.14
+replay: <span class="ok">back buffer IDENTICAL to the reference</span></pre>
+  <p class="callout">Zero compat-layer lines means no 32-bit code had talked to the driver yet. The GPU was started and driven by open x86_64 code alone. Intel's own GL client still drew its triangle on it afterwards.</p>
+  <div class="prose">
+    <p>The open init now also assembles the five small programs that start the microkernel, byte for byte the same as Intel's. The only vendor bytes it needs are the 53,096-byte microkernel, which a script extracts from the owner's own driver package. They are not in the repository.</p>
+  </div>
+</section>
+
+<section class="ch" id="gen">
+  <div class="ch-head"><span class="when">07:50 – 08:30</span><h2>A frame from code alone</h2></div>
+  <div class="prose">
+    <p>Up to here every frame started from a capture. <code>re/gen</code> builds all of it from GL-level parameters instead: the parameter buffer and free list, render details, the TA command, the control stream and state blocks, every PDS program from its encoding tables, and every shader from assembly text. Its first output was the reference triangle, bit for bit.</p>
+    <p>Getting there cost three power cycles and taught two rules:</p>
+    <ul>
+      <li><b>The vertex epilogue.</b> Every vertex program ends in a final phase that its first instruction points to. Without it, the tiling accelerator hangs.</li>
+      <li><b>The previous client.</b> The microkernel keeps pointers into the previous client's kernel data and reads them at the next tiling pass. A client that lays that memory out differently hangs the GPU. The generator now allocates in exactly Intel's order, so it can run safely next to Intel's driver.</li>
+    </ul>
+  </div>
+  <figure>
+    <img src="img/story-08-frame-from-code.png" width="1112" height="504" alt="Six generated frames: overlapping red and blue triangles under different depth settings, one empty frame, and a small green triangle in a viewport.">
+    <figcaption>Generated with no captured bytes, each checked against Intel's driver drawing the same scene. <b>Top:</b> two draws with no depth test; depth LESS with the near triangle first; LESS with depth writes off. <b>Bottom:</b> GREATER against a 1.0 background, so nothing passes; LESS with the far triangle first; <code>glViewport(100, 50, 400, 300)</code>. Every case: 0 pixels different.</figcaption>
+  </figure>
+</section>
+
+<section class="ch" id="mesa">
+  <div class="ch-head"><span class="when">09:00 – 11:00</span><h2>A real GL driver</h2></div>
+  <div class="prose">
+    <p>Two pieces landed together. A compiler takes Mesa's NIR and emits USSE machine code. Every instruction it produced for the test corpus and for gl4es's Minecraft shaders matches Intel's own encoder. Running under Intel's GL driver in place of Intel's compiler, it gives identical frames for all eight shaders Minecraft uses.</p>
+    <p>The second piece is a Mesa gallium driver, kept in the sgx545-ce repo as an overlay on Mesa 26.2.5. <code>eglinfo</code> on the EA3 reports <code>PowerVR SGX545 (sgx545-ce)</code>, OpenGL ES 2.0. The first triangle drawn through the real GLES2 API read back byte-identical to Intel's driver. Frames then had to keep running in one context: the microkernel owns the parameter buffer after the first kick, and the client only bumps a frame counter and re-arms two sync words. With that, es2gears runs with its own shaders compiled by our compiler, at 403 FPS.</p>
+  </div>
+  <figure>
+    <img src="img/story-09-es2gears.png" width="720" height="480" alt="Three gears, red, green and blue, shaded with flat lighting on black.">
+    <figcaption>es2gears on the EA3 through Mesa and our driver: no Intel code from the GL call down to the GPU.</figcaption>
+  </figure>
+  <div class="prose">
+    <p>Each feature was added by drawing the same scene through Intel's driver and through ours, then comparing bytes: 7 texture cases (sizes, NPOT, L8, LA88, RGB565), 10 blend states and 7 colour-mask cases, all identical. Blending turned out to be a shader epilogue, a <code>sop2</code> that reads the framebuffer colour, run in a translucent pass. Our driver also does GL-correct min/max blending, which Intel's never supported.</p>
+  </div>
+  <figure>
+    <img src="img/story-10-blend-ab.png" width="1108" height="252" alt="Two rows of six triangles in matching blend results.">
+    <figcaption><b>Top:</b> Intel's driver. <b>Bottom:</b> ours. Alpha, add, destination colour, destination alpha, subtract and reverse subtract blending.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/story-11-tex-ab.png" width="740" height="252" alt="Two rows of four textured triangles that match.">
+    <figcaption>Textures, Intel's driver on top and ours below: 16×16, 12×6 NPOT, L8 and RGB565.</figcaption>
+  </figure>
+</section>
+
+<section class="ch" id="minecraft">
+  <div class="ch-head"><span class="when">13:00 – 15:30</span><h2>Minecraft, first light</h2></div>
+  <div class="prose">
+    <p>gl4es ships apitrace recordings of real programs (glxgears, neverball, stuntcarracer, descent3 and others) with reference images. All 14 replay to the end on our driver with no GPU recoveries; Intel's driver had recoveries in 6 of them. Each lockup the traces found became a rule in the driver: one hardware render context per process, and discarding shaders built in two phases the way Intel builds them.</p>
+    <p>Then the game itself. Minecraft 1.7.10 started on the EA3 through the stock gl4es, on our driver, and drew its title screen's rotating panorama. The next step, copying that panorama into a texture and blurring it behind the logo and buttons, doesn't come out yet.</p>
+  </div>
+  <figure>
+    <img src="img/story-12-minecraft-first-light.png" width="732" height="248" alt="Minecraft's title screen from Intel's driver on the left; on the right, our driver's frame showing only the panorama in one corner.">
+    <figcaption><b>Left:</b> Intel's driver. <b>Right:</b> ours, drawing the title panorama but not yet the blurred composite and menu built from it.</figcaption>
+  </figure>
+  <div class="prose">
+    <p>By the evening the game was in a world, on the EA1 connected to the monitor. Frames render into a back buffer and reach the screen through our own GPU blit, so nothing flickers. The menus and loading screens replay byte-identical to Intel's driver. Speed came in steps: frames now overlap the GPU instead of waiting for each one, glFlush calls that split a frame are deferred, fences wait for their own frame, and Minecraft's unchanged chunk buffers are cached instead of gathered again every draw. That took the bench world from 6–9 FPS to 16–19, against Intel's 28–39 on the same box. The player's arm still draws dark and streaky.</p>
+  </div>
+  <figure>
+    <img src="img/story-13-minecraft-world.png" width="720" height="480" alt="A Minecraft jungle with vines, grass and water, rendered on our driver.">
+    <figcaption>Minecraft 1.7.10 in the bench world on the EA1, drawn by our Mesa driver and compiler through the stock gl4es.</figcaption>
+  </figure>
+</section>
+
+<section class="ch" id="upstream">
+  <div class="ch-head"><span class="when">2026-11-01 – 11-02</span><h2>Aiming at upstream</h2></div>
+  <div class="prose">
+    <p>The goal widened. The point is no longer a driver for one appliance but GPU acceleration for Cedarview netbooks on a stock distro, and the only route there is upstream: a DRM driver in Linux, the microkernel in linux-firmware, the GL driver in Mesa. The brief for that, with its milestones, is <code>AGENTS.md</code> at the repo root.</p>
+    <p>The first night after both EAs came back online went to the hardware those milestones were waiting on. The boot image came up on our own GPU bring-up instead of Intel's <code>sgxinit</code>: the dashboard rendered through it, and the framebuffer matched Intel's path byte for byte. Our open microkernel ran on the GPU for the first time. It loaded, was kicked and executed, then stopped partway through its init. Markers it wrote into the GPU's debug dump showed where: it wrote its secondary attributes before the GPU had set them up for it, which the offline emulator had allowed. With its pointers kept in an ordinary register instead, the retest got through init. The next evening, on the EA1, it answered the host's first command too, which took two more fixes. The host rings a doorbell that sets no status bit, so the microkernel now watches the command queue's write offset instead. And it had been reading the queue's base from the wrong word of its control block. The GPU bring-up now completes on our microkernel. Left idle, it was then reset every few seconds by the driver's lockup check, because it never told the host it had gone quiet. With that signal raised when its queue empties, the host powers the idle GPU down, and there were no resets in a minute of idling. The first app frame through it came straight after: the microkernel took the frame and programmed the geometry stage, but the geometry pass never started, so the render timed out with an empty buffer. That is the next thing to find.</p>
+    <p>The same night tested what a new kernel driver could promise. The first draft of the uAPI rests on four assumptions about isolation between clients, and hardware tests found three of them false on today's stack. The fourth holds for our microkernel, which reads nothing a client can leave behind. A client shader can read GPU registers and kernel memory, and it can jump into kernel code. A kernel driver that owns the page tables can close the memory and code holes. Register access reaches from any task, so client shaders will need checking before they run. Better to know that before the driver exists than after.</p>
+    <p>The credibility bar for a GL driver is dEQP, the Khronos conformance suite. Its first complete GLES2 run on our driver ran on the EA3 the same night, in small chunks so a GPU hang could only cost one chunk. Two reruns picked up the night's compiler and driver fixes: loops, discard, <code>all()</code>/<code>any()</code>, a crash when a render target was destroyed mid-frame. After them, 15,737 of 17,165 tests passed (91.7%).</p>
+    <p>Then the same suite ran on Intel's driver, on the same box, kernel and dEQP build: <b>15,837 pass (92.3%)</b>. By the next afternoon, with more compiler and driver fixes rerun over the failures, ours was ahead at <b>16,337 (95.2%)</b>, and the next evening, with every blend and stencil test passing and cube maps laid out as the hardware samples them, at <b>16,574 (96.6%)</b>. The two drivers fail in different places. Intel's loses most of its tests in its shader compiler (loops, conversions, swizzles), and it never returns from dEQP's recursive macros, which took the box down seven times. Ours has no failures left in its compiler at all; the last of them, on the half-precision path, fell that afternoon. What it still fails is mostly blending and stencil combinations, cube maps and some render-to-texture formats, and every remaining failure has a reason written next to it.</p>
+    <p>The open microkernel's first frame took a night of its own. Each fix moved the stall one step further along:
+    <ul>
+      <li>it never moved its read position in the app's command queue;</li>
+      <li>it never acknowledged the geometry-finished event;</li>
+      <li>it started the render pass from the wrong flag;</li>
+      <li>it handled the second geometry kick before the first had finished.</li>
+    </ul>
+    That got the frame as far as the render pass, which locked up before its first tile. Matching Intel's register writes didn't fix it. Reading the real registers at the hang did: the render unit was routed to the wrong page-directory slot, and one setup register lost bits our microkernel was clearing. With both fixed, the EA3 rendered the test triangle on firmware with no Intel code in it, byte-identical to Intel's own render of the same frame.</p>
+  </div>
+  <figure>
+    <img src="img/story-15-open-ukernel-triangle.png" width="720" height="480" alt="A green triangle on a navy background, rendered by the open microkernel.">
+    <figcaption>The first frame rendered by the open SGX545 microkernel on the EA3, byte-identical to Intel's microkernel on the same frame.</figcaption>
+  </figure>
+  <div class="prose">
+    <p>That evening the new kernel driver ran for the first time. <code>powervr_sgx</code> is an ordinary DRM render driver with none of Intel's services layer. RAM-booted on the EA1 in place of Intel's module, it loaded the microkernel and brought the GPU up from the kernel. It answered the device query, and ran empty jobs through the scheduler with their fences signalling: one in 7.5 ms, 600 in about 30 ms. All 24 of its uAPI tests passed, including the ones that must be rejected, and unloading and reloading it was clean.</p>
+    <p>The first real frame took three more tries that night. The first showed that Intel's microkernel fetches its own code through each app's page tables, so it needs kernel memory mapped into every app's address space. The isolation the new uAPI promises can only come with our open microkernel, which keeps itself apart. With a compatibility mode for Intel's firmware, the next try got the geometry pass started. The third matched the two-kick form Intel's stack uses, and a cleared screen with a triangle came back pixel-exact. The kernel had built the frame from the command stream and submitted it as one job, and it rendered in 8 ms with its completion interrupt firing. Ten frames in a row came out right at 256×256. A second app's frames hung, though; a first app rendered fine at 256×256 and 720×480. Freeing structures, cleanup commands and the parameter-buffer bookkeeping were all ruled out before the cause turned up. The driver handed out addresses for its per-app parameter buffers from one device-wide pool, so the second app's buffer sat partway up the range, and the GPU counts those pages from the bottom of the range. Intel's driver gives every process its buffer at the bottom of its own address space. With the same layout, eight apps in a row rendered 80 frames without a single reset. Sharing one buffer per process, as Intel does, then let several contexts in one app render too. Fourteen deliberately forced GPU hangs each recovered in place, and every frame after them came out right.</p>
+    <p>The same day started the clean-room half of the instruction set. A fresh session that had seen only the documentation wrote the whole encoding as a Mesa isaspec description, and its first two test tables (180 GLES2 instructions and 66 integer ones) came out bit-exact against the reference encoder on the first full pass. That is the piece that lets the shipping compiler be built from the docs alone.</p>
+    <p>Two of the fixes were the kind only a test suite finds. Mesa splits a matrix attribute into one variable per column, all with the matrix's name, and our compiler placed attributes by name, so every column read the first column's registers. And the two-sided stencil state block was copied with the single-sided block's length, two words short, so those draws came out blank, or in the wrong colours, and differently each run.</p>
+    <p>dEQP covers GLES2; desktop GL 2.1, the next milestone, is measured with piglit. Its whole <code>gpu</code> profile, 25,805 tests, ran on the EA3 the next morning in half-hour slices without a single wedge. 3,220 passed and 21,668 were skipped, most of them for desktop features the driver doesn't advertise yet. 389 failed, 87 crashed and 437 programs aren't built. Every failure has a reason written next to it, and most come from a short list of missing features: flat shading, gl_FragDepth, back-face colours, depth textures, depth and stencil that outlive one render, more texture formats and wrap modes. The compiler started on those that afternoon (derivatives, gl_FragDepth, packing more varyings). One test family locked the GPU: cube maps whose faces aren't a power of two. No layout is known for those, and Intel's driver fails dEQP's versions of them too, so for now such draws are skipped rather than allowed to hang the GPU.</p>
+    <p>Then the pieces met. Joseph set the target: Minecraft with no shims, meaning no Intel userspace, no gl4es and no Intel kernel module, on drivers that upstream would take. The Mesa driver got a second backend that talks to <code>powervr_sgx</code> instead of Intel's services layer. The kernel driver learned to share buffers with the display through dma-buf, and the GPU doesn't snoop the CPU's caches, so that took an explicit flush. It also passed the kernel's own style and static checks and got its documentation. The first full dEQP-GLES2 run through the new kernel driver matched the old stack test for test: 16,566 passing, nothing gained and nothing lost, and no hangs.</p>
+    <p>The compiler stopped using its hand-written instruction encoder. A session that had only ever seen the documentation wrote the instruction set as a Mesa isaspec description, and the compiler now encodes through the encoder generated from it, every test shader byte-identical to before. The same was done for the PDS, the small processor that feeds the shader units: the driver no longer assembles its programs by hand. Minecraft's own GL calls were recorded on the EA1 and replayed on the desktop GL driver, 631 frames without a single GPU recovery, though the terrain still comes out untextured.</p>
+    <p>The open microkernel's multi-frame bug took most of a day. Frames rendered one time in two. The fault moved each time a theory was tested: a watchdog reset between geometry passes, then a wrong sync address, then cleanup that finished too early, each real and each fixed. Intel's microkernel on the same box and the same frames got ten out of ten, which proved the fault was ours. What remained was the order of the end of a render: Intel's firmware reports a frame done only once both the pixels are written and the parameter memory is released, and ours reported on either.</p>
+    <p>That reading turned out to be only half the story. The same firmware, run under the new kernel driver instead of the old test rig, rendered every frame: the rig gave each process a parameter buffer at a different address, and that alone made frames fail. What was left under the real driver were three genuine bugs, each found and fixed in turn. A copy job wrote its optional status word to a null address and never signalled completion. The firmware pointed the GPU at an app's page tables to write a frame's background block, which is exactly what secure mode forbids, so the kernel now writes that block from the CPU. And the firmware reloaded the GPU's free-page lists on every frame instead of once per parameter buffer, leaking pages until the GPU ran out around the fortieth frame.</p>
+    <p>With those fixed, the whole conformance suite ran through a stack with no Intel code in it at all: Mesa, the new <code>powervr_sgx</code> kernel driver and our own microkernel. <b>16,587 of 17,165 dEQP-GLES2 tests passed</b>, no test did worse than on Intel's stack, and in two hours the GPU never needed a single reset. The firmware is also slightly faster than Intel's per render, 315 µs against 344 µs, raising one interrupt where Intel's raises three.</p>
+  </div>
+  <figure>
+    <img src="img/story-14-deqp-groups.png" width="1010" height="770" alt="Bar chart of dEQP-GLES2 failures per test group: our driver's first pass, our driver now, and Intel's driver. Our shader groups go from hundreds of failures to zero; Intel's keep dozens to hundreds.">
+    <figcaption>dEQP-GLES2 failures per group on the EA3, fewer is better: our first pass (grey), ours now (blue), Intel's driver (orange).</figcaption>
+  </figure>
+</section>
+
+<section class="ch" id="how">
+  <div class="ch-head"><span class="eyebrow">How it was run</span><h2>Six workstreams, one GPU</h2></div>
+  <div class="prose">
+    <p>The work ran as parallel Claude Code sessions, each in its own clone, covering replay, PDS, render state, the shader ISA (with a finalizer trace and a hardware check), init, and one session coordinating them. They shared one EA3 with a session working on the box's Ethernet switch. Every session announced its GPU runs, and nobody cut power while someone else objected. The EA1 next to it was left alone: it runs the live Minecraft session.</p>
+  </div>
+  <div class="tablebox">
+    <table>
+      <thead><tr><th class="num">UTC</th><th>Power cycle</th><th>Outcome</th></tr></thead>
+      <tbody>
+        <tr><td class="num">04:20</td><td>Clear the PDS wedge</td><td><span class="chip proven">back</span> in 54 s</td></tr>
+        <tr><td class="num">04:39</td><td>Trace Intel's init from cold boot</td><td><span class="chip hazard">lost</span> tracer not synced before the plug cut</td></tr>
+        <tr><td class="num">04:41</td><td>Trace Intel's init, again</td><td><span class="chip proven">traced</span> 156,917-byte log</td></tr>
+        <tr><td class="num">05:47</td><td>First open init</td><td><span class="chip hazard">-22</span> 16-byte reply</td></tr>
+        <tr><td class="num">05:52</td><td>Open init, fixed</td><td><span class="chip proven">up</span> no Intel code</td></tr>
+        <tr><td class="num">08:07</td><td>Generated frame without a vertex epilogue</td><td><span class="chip hazard">hung</span> TA lockup</td></tr>
+        <tr><td class="num">08:12</td><td>Generated frame after a replay</td><td><span class="chip hazard">hung</span> stale kernel-data pointers</td></tr>
+        <tr><td class="num">08:17</td><td>Render-target flush call</td><td><span class="chip hazard">hung</span> then fixed by matching Intel's layout</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="ch" id="next">
+  <div class="ch-head"><span class="eyebrow">What's left</span><h2>Next</h2></div>
+  <div class="next">
+    <div><b>Faster than Intel</b><span>Ours has to match or beat stock Intel layer by layer, Minecraft included: today 91% of Intel&#x27;s frame rate standing and 79% walking.</span></div>
+    <div><b>The display path</b><span>GBM and an X server with DRI3 on the new kernel driver, the stack Minecraft needs (M3).</span></div>
+    <div><b>Minecraft, no shims</b><span>The game on the desktop GL driver directly: textured terrain first, then the remaining GL 2.1 gaps (M6).</span></div>
+    <div><b>Cedarview</b><span>A stock Debian or Ubuntu netbook drawing its desktop through our stack (M4).</span></div>
+  </div>
+</section>
+
+<footer>
+  Source: sgx545-ce branch <code>um-re</code>, <code>docs/log/</code>, with the technical write-ups in <code>docs/</code>. Frames were read back from the EAs' GPUs. Times are UTC, from 2026-10-28.
+</footer>
+
+</div>

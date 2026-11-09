@@ -1,0 +1,11 @@
+run,capture,poke,prediction,pixels_differing,of
+l0,ln1,none,identical,0,345600
+l1,ln4,ISPB 000040f0->000010f0 @0x30401088,the DDK's ln1 frame (width 1),0,345600
+l2,ln1,ISPB ->000098f0,the DDK's ln9 frame (width 9.5),0,345600
+l3,tri2,VDM 8cc00004->84c00004 (lines; ISPA type left 0),the ln1 frame,720,345600
+l4,ln1,ISPA 01d08200->01d00200 (type 0),discovery: the lines vanish,720,345600
+p0,pt8,none,identical,0,345600
+p1,pt8,sa10 5ffc4800->5ffc4c00 @0x30401108,the DDK's pt16 frame,0,345600
+p2,spr16,sa10 ->5ffc4800,8-px sprites with gl_PointCoord (i+0.5)/8,0,345600
+p3,spr16,sa10 ->5ffc5000,32-px sprites (i+0.5)/32,0,345600
+p4,spr16,ISPA 01d20200->01d18200 (type 3),discovery: squares drawn with coordinate 0,768,345600

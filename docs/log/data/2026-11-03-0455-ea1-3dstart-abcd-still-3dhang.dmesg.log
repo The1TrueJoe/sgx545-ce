@@ -1,0 +1,1690 @@
+[   68.933056] PVR_K:(Error): pvr: invalid param size for IOCTL#99:
+[   68.933056]      kern/user in,out: 2192/2192,16/8
+[   68.933056]  [6101, drivers/gpu/drm/sgx545ce/src/services4/srvkm/bridged/bridged_pvr_bridge.c]
+[   68.949837] PVR_K:(Error): pvr: ioctl#99 failed (-22)
+[   68.949837]  [6260, drivers/gpu/drm/sgx545ce/src/services4/srvkm/bridged/bridged_pvr_bridge.c]
+[   68.963612] PVR: Installing MISR with cookie 00000000a1d3cb55
+[   68.969152] PVR: Installing device LISR pvrsrvkm on IRQ 26 with cookie 00000000e475f8d2
+[   68.977249] PVR: OSUnMapPhysToLin: unmapping 16384 bytes from 000000008216bdc3
+[   68.984246] PVR_K: SysFinalise: SGX revision = 1.0.14
+[   68.989363] PVR_K: SGXInit: HW core rev (1000e), SW core rev (1000d) check skipped.
+[   69.412472] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x5 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   69.423039] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   69.429525] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   69.436624] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   69.450040] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   69.463468] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   69.468831] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   69.474195] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   69.479580] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   69.519051] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   69.524423] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   69.548241] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   69.553600] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   69.558973] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   69.564338] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   69.569713] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   69.575074] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   69.580445] PVR_K: SGX Host control:
+[   69.584022] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   69.590500] PVR_K: 	(HC-10) 0x00000001 0x0000000A 0x00061A80 0x00000000
+[   69.597070] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   69.603654] PVR_K: 	(HC-30) 0x00000000 0xF236DEF8 0x00000000 0x00000000
+[   69.610227] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.616812] PVR_K: SGX TA/3D control:
+[   69.620462] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   69.627028] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.633703] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.640361] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.647031] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.653701] PVR_K: 	(T3C-50) 0x3200AB10 0x00000000 0x32000000 0x01D69000
+[   69.660362] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   69.667033] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.673707] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.680364] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   69.687032] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   69.693707] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   69.700367] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   69.707034] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   69.713713] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   69.720365] PVR_K: SGX Kernel CCB WO:0x4 RO:0x4
+[   69.933469] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   69.944014] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   69.950509] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   69.957613] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   69.971028] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   69.984454] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   69.989816] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   69.995185] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   70.000561] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   70.040042] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   70.045411] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   70.069213] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   70.074591] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   70.079951] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   70.085324] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   70.090701] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   70.096058] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   70.101431] PVR_K: SGX Host control:
+[   70.104984] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   70.111475] PVR_K: 	(HC-10) 0x00000002 0x0000000A 0x00061A80 0x00000000
+[   70.118056] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   70.124635] PVR_K: 	(HC-30) 0x00000000 0xF2411440 0x00000000 0x00000000
+[   70.131213] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.137798] PVR_K: SGX TA/3D control:
+[   70.141437] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   70.148018] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.154683] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.161350] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.168013] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.174686] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   70.181353] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   70.188015] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.194690] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.201354] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.208022] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   70.214691] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   70.221358] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   70.228019] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   70.234692] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   70.241369] PVR_K: SGX Kernel CCB WO:0x5 RO:0x5
+[   70.455756] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   70.466312] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   70.472812] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   70.479904] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   70.493323] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   70.506753] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   70.512109] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   70.517478] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   70.522856] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   70.562342] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   70.567709] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   70.591561] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   70.596908] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   70.602252] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   70.607623] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   70.612996] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   70.618356] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   70.623725] PVR_K: SGX Host control:
+[   70.627273] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   70.633771] PVR_K: 	(HC-10) 0x00000003 0x0000000A 0x00061A80 0x00000000
+[   70.640349] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   70.646931] PVR_K: 	(HC-30) 0x00000000 0xF2490768 0x00000000 0x00000000
+[   70.653514] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.660088] PVR_K: SGX TA/3D control:
+[   70.663733] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   70.670309] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.676978] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.683644] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.690314] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.696981] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   70.703647] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   70.710319] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.716983] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.723651] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   70.730318] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   70.736984] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   70.743648] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   70.750323] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   70.756985] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   70.763654] PVR_K: SGX Kernel CCB WO:0x6 RO:0x6
+[   70.973464] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   70.984031] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   70.990520] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   70.997623] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   71.011047] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   71.024466] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   71.029827] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   71.035193] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   71.040581] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   71.080048] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   71.085427] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   71.109229] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   71.114603] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   71.119962] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   71.125333] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   71.130704] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   71.136072] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   71.141434] PVR_K: SGX Host control:
+[   71.144993] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   71.151484] PVR_K: 	(HC-10) 0x00000004 0x0000000A 0x00061A80 0x00000000
+[   71.158065] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   71.164645] PVR_K: 	(HC-30) 0x00000000 0xF250FE78 0x00000000 0x00000000
+[   71.171231] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.177803] PVR_K: SGX TA/3D control:
+[   71.181455] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   71.188028] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.194690] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.201361] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.208026] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.214700] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   71.221365] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   71.228032] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.234696] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.241363] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.248027] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   71.254703] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   71.261364] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   71.268035] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   71.274701] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   71.281365] PVR_K: SGX Kernel CCB WO:0x7 RO:0x7
+[   71.493461] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   71.504014] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   71.510511] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   71.517607] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   71.531037] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   71.544455] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   71.549820] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   71.555183] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   71.560568] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   71.600127] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   71.605495] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   71.629245] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   71.634605] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   71.639953] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   71.645324] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   71.650694] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   71.656067] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   71.661427] PVR_K: SGX Host control:
+[   71.664982] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   71.671475] PVR_K: 	(HC-10) 0x00000005 0x0000000A 0x00061A80 0x00000000
+[   71.678057] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   71.684638] PVR_K: 	(HC-30) 0x00000000 0xF258E5E8 0x00000000 0x00000000
+[   71.691217] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.697795] PVR_K: SGX TA/3D control:
+[   71.701439] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   71.708016] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.714689] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.721347] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.728019] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.734684] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   71.741359] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   71.748021] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.754692] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.761352] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   71.768024] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   71.774688] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   71.781359] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   71.788023] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   71.794693] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   71.801353] PVR_K: SGX Kernel CCB WO:0x8 RO:0x8
+[   72.013463] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   72.024016] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   72.030507] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   72.037607] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   72.051034] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   72.064456] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   72.069820] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   72.075183] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   72.080567] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   72.120039] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   72.125413] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   72.149215] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   72.154591] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   72.159951] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   72.165324] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   72.170691] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   72.176062] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   72.181425] PVR_K: SGX Host control:
+[   72.184982] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   72.191470] PVR_K: 	(HC-10) 0x00000006 0x0000000A 0x00061A80 0x00000000
+[   72.198055] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   72.204634] PVR_K: 	(HC-30) 0x00000000 0xF260D528 0x00000000 0x00000000
+[   72.211216] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.217793] PVR_K: SGX TA/3D control:
+[   72.221438] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   72.228011] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.234684] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.241347] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.248018] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.254682] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   72.261352] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   72.268017] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.274688] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.281350] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.288022] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   72.294685] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   72.301354] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   72.308022] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   72.314688] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   72.321352] PVR_K: SGX Kernel CCB WO:0x9 RO:0x9
+[   72.533465] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   72.544021] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   72.550512] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   72.557612] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   72.571159] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   72.584489] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   72.589821] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   72.595190] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   72.600572] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   72.640048] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   72.645418] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   72.669237] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   72.674599] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   72.679959] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   72.685325] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   72.690703] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   72.696064] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   72.701432] PVR_K: SGX Host control:
+[   72.704984] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   72.711481] PVR_K: 	(HC-10) 0x00000007 0x0000000A 0x00061A80 0x00000000
+[   72.718056] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   72.724641] PVR_K: 	(HC-30) 0x00000000 0xF268C468 0x00000000 0x00000000
+[   72.731220] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.737797] PVR_K: SGX TA/3D control:
+[   72.741441] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   72.748020] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.754687] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.761352] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.768020] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.774691] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   72.781357] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   72.788024] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.794694] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.801355] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   72.808026] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   72.814694] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   72.821359] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   72.828027] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   72.834697] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   72.841358] PVR_K: SGX Kernel CCB WO:0xA RO:0xA
+[   73.053467] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   73.064031] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   73.070531] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   73.077619] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   73.091038] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   73.104460] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   73.109825] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   73.115192] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   73.120574] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   73.160051] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   73.165424] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   73.189227] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   73.194594] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   73.199962] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   73.205334] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   73.210716] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   73.216070] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   73.221445] PVR_K: SGX Host control:
+[   73.224992] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   73.231483] PVR_K: 	(HC-10) 0x00000008 0x0000000A 0x00061A80 0x00000000
+[   73.238065] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   73.244643] PVR_K: 	(HC-30) 0x00000000 0xF270B3A8 0x00000000 0x00000000
+[   73.251223] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.257803] PVR_K: SGX TA/3D control:
+[   73.261449] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   73.268026] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.274695] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.281358] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.288026] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.294693] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   73.301359] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   73.308040] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.314702] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.321363] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.328027] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   73.334704] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   73.341387] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   73.348036] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   73.354700] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   73.361367] PVR_K: SGX Kernel CCB WO:0xB RO:0xB
+[   73.675478] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x3 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   73.686060] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   73.692538] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   73.699634] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   73.713055] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   73.726477] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   73.731836] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   73.737209] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   73.742588] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   73.782071] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   73.787449] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   73.811249] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   73.816606] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   73.821979] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   73.827344] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   73.832715] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   73.838084] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   73.843454] PVR_K: SGX Host control:
+[   73.847006] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   73.853500] PVR_K: 	(HC-10) 0x00000009 0x0000000A 0x00061A80 0x00000000
+[   73.860080] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   73.866662] PVR_K: 	(HC-30) 0x00000000 0xF278A2E8 0x00000000 0x00000000
+[   73.873237] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.879820] PVR_K: SGX TA/3D control:
+[   73.883473] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   73.890038] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.896709] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.903371] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.910037] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.916709] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   73.923374] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   73.930039] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.936713] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.943376] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   73.950043] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   73.956714] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   73.963378] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   73.970043] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   73.976714] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   73.983385] PVR_K: SGX Kernel CCB WO:0xD RO:0xD
+[   74.197461] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   74.208026] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   74.214490] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   74.221594] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   74.235013] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   74.248428] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   74.253800] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   74.259164] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   74.264543] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   74.304024] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   74.309399] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   74.333202] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   74.338570] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   74.343938] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   74.349303] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   74.354672] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   74.360044] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   74.365409] PVR_K: SGX Host control:
+[   74.368961] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   74.375455] PVR_K: 	(HC-10) 0x0000000A 0x0000000A 0x00061A80 0x00000000
+[   74.382039] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   74.388616] PVR_K: 	(HC-30) 0x00000000 0xF2822098 0x00000000 0x00000000
+[   74.395197] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.401778] PVR_K: SGX TA/3D control:
+[   74.405418] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   74.412001] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.418662] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.425332] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.431996] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.438664] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   74.445335] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   74.451998] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.458666] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.465336] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.472005] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   74.478668] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   74.485339] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   74.492002] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   74.498670] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   74.505339] PVR_K: SGX Kernel CCB WO:0xE RO:0xE
+[   74.717463] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   74.728028] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   74.734510] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   74.741611] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   74.755032] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   74.768450] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   74.773819] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   74.779187] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   74.784568] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   74.824037] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   74.829415] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   74.853221] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   74.858587] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   74.863957] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   74.869324] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   74.874694] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   74.880061] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   74.885429] PVR_K: SGX Host control:
+[   74.888980] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   74.895476] PVR_K: 	(HC-10) 0x0000000B 0x0000000A 0x00061A80 0x00000000
+[   74.902056] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   74.908638] PVR_K: 	(HC-30) 0x00000000 0xF28A17A8 0x00000000 0x00000000
+[   74.915217] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.921795] PVR_K: SGX TA/3D control:
+[   74.925435] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   74.932017] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.938685] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.945351] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.952021] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.958687] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   74.965352] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   74.972020] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.978687] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.985354] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   74.992023] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   74.998690] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   75.005356] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   75.012024] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   75.018692] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   75.025355] PVR_K: SGX Kernel CCB WO:0xF RO:0xF
+[   75.237468] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   75.248018] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   75.254518] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   75.261615] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   75.275032] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   75.288497] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   75.293829] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   75.299198] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   75.304570] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   75.344061] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   75.349416] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   75.373229] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   75.378589] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   75.383954] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   75.389322] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   75.394703] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   75.400062] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   75.405430] PVR_K: SGX Host control:
+[   75.408985] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   75.415477] PVR_K: 	(HC-10) 0x0000000C 0x0000000A 0x00061A80 0x00000000
+[   75.422058] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   75.428642] PVR_K: 	(HC-30) 0x00000000 0xF29206E8 0x00000000 0x00000000
+[   75.435216] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.441799] PVR_K: SGX TA/3D control:
+[   75.445441] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   75.452022] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.458683] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.465350] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.472019] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.478690] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   75.485352] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   75.492021] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.498693] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.505354] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.512026] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   75.518694] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   75.525357] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   75.532026] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   75.538696] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   75.545356] PVR_K: SGX Kernel CCB WO:0x10 RO:0x10
+[   75.757469] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   75.768012] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   75.774512] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   75.781603] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   75.795020] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   75.808441] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   75.813807] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   75.819176] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   75.824555] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   75.864028] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   75.869403] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   75.893218] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   75.898579] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   75.903946] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   75.909315] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   75.914683] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   75.920051] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   75.925421] PVR_K: SGX Host control:
+[   75.928971] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   75.935466] PVR_K: 	(HC-10) 0x0000000D 0x0000000A 0x00061A80 0x00000000
+[   75.942048] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   75.948628] PVR_K: 	(HC-30) 0x00000000 0xF299F628 0x00000000 0x00000000
+[   75.955207] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.961787] PVR_K: SGX TA/3D control:
+[   75.965427] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   75.972007] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.978673] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.985341] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.992016] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   75.998680] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   76.005350] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   76.012013] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.018684] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.025348] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.032020] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   76.038683] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   76.045351] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   76.052018] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   76.058689] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   76.065351] PVR_K: SGX Kernel CCB WO:0x11 RO:0x11
+[   76.277464] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   76.288020] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   76.294497] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   76.301598] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   76.315020] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   76.328438] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   76.333806] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   76.339175] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   76.344553] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   76.384027] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   76.389402] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   76.413208] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   76.418577] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   76.423945] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   76.429313] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   76.434682] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   76.440051] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   76.445417] PVR_K: SGX Host control:
+[   76.448970] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   76.455465] PVR_K: 	(HC-10) 0x0000000E 0x0000000A 0x00061A80 0x00000000
+[   76.462045] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   76.468626] PVR_K: 	(HC-30) 0x00000000 0xF2A1E568 0x00000000 0x00000000
+[   76.475207] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.481785] PVR_K: SGX TA/3D control:
+[   76.485425] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   76.492004] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.498672] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.505340] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.512011] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.518682] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   76.525346] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   76.532017] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.538681] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.545347] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   76.552014] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   76.558686] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   76.565349] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   76.572020] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   76.578685] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   76.585350] PVR_K: SGX Kernel CCB WO:0x12 RO:0x12
+[   76.797467] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   76.808028] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   76.814506] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   76.821607] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   76.835027] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   76.848446] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   76.853814] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   76.859182] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   76.864561] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   76.904034] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   76.909409] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   76.933223] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   76.938588] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   76.943956] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   76.949324] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   76.954699] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   76.960062] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   76.965433] PVR_K: SGX Host control:
+[   76.968981] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   76.975481] PVR_K: 	(HC-10) 0x0000000F 0x0000000A 0x00061A80 0x00000000
+[   76.982056] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   76.988642] PVR_K: 	(HC-30) 0x00000000 0xF2A9D4A8 0x00000000 0x00000000
+[   76.995218] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.001798] PVR_K: SGX TA/3D control:
+[   77.005438] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   77.012020] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.018684] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.025355] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.032017] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.038690] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   77.045356] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   77.052024] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.058689] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.065360] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.072021] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   77.078695] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   77.085357] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   77.092027] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   77.098693] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   77.105357] PVR_K: SGX Kernel CCB WO:0x13 RO:0x13
+[   77.317458] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   77.328006] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   77.334485] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   77.341587] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   77.355007] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   77.368427] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   77.373796] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   77.379164] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   77.384542] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   77.424016] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   77.429391] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   77.453197] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   77.458565] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   77.463933] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   77.469303] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   77.474670] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   77.480039] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   77.485408] PVR_K: SGX Host control:
+[   77.488960] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   77.495454] PVR_K: 	(HC-10) 0x00000010 0x0000000A 0x00061A80 0x00000000
+[   77.502034] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   77.508616] PVR_K: 	(HC-30) 0x00000000 0xF2B1C3E8 0x00000000 0x00000000
+[   77.515196] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.521774] PVR_K: SGX TA/3D control:
+[   77.525414] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   77.531994] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.538663] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.545328] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.551995] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.558666] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   77.565331] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   77.571998] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.578717] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.585340] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   77.592092] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   77.598686] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   77.605342] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   77.612000] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   77.618669] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   77.625332] PVR_K: SGX Kernel CCB WO:0x14 RO:0x14
+[   77.837466] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   77.848028] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   77.854504] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   77.861608] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   77.875033] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   77.888446] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   77.893812] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   77.899179] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   77.904559] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   77.944032] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   77.949406] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   77.973213] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   77.978589] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   77.983951] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   77.989318] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   77.994688] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   78.000056] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   78.005424] PVR_K: SGX Host control:
+[   78.008983] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   78.015474] PVR_K: 	(HC-10) 0x00000011 0x0000000A 0x00061A80 0x00000000
+[   78.022051] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   78.028632] PVR_K: 	(HC-30) 0x00000000 0xF2B9AF40 0x00000000 0x00000000
+[   78.035212] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.041789] PVR_K: SGX TA/3D control:
+[   78.045431] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   78.052016] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.058681] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.065345] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.072012] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.078692] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   78.085348] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   78.092017] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.098682] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.105350] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.112016] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   78.118685] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   78.125350] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   78.132018] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   78.138688] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   78.145352] PVR_K: SGX Kernel CCB WO:0x15 RO:0x15
+[   78.357466] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   78.368017] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   78.374513] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   78.381610] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   78.395034] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   78.408457] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   78.413820] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   78.419186] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   78.424569] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   78.464042] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   78.469416] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   78.493225] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   78.498586] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   78.503950] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   78.509314] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   78.514681] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   78.520057] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   78.525422] PVR_K: SGX Host control:
+[   78.528971] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   78.535468] PVR_K: 	(HC-10) 0x00000012 0x0000000A 0x00061A80 0x00000000
+[   78.542047] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   78.548629] PVR_K: 	(HC-30) 0x00000000 0xF2C1A268 0x00000000 0x00000000
+[   78.555213] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.561789] PVR_K: SGX TA/3D control:
+[   78.565427] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   78.572009] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.578677] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.585342] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.592007] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.598679] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   78.605348] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   78.612012] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.618677] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.625347] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   78.632012] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   78.638683] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   78.645383] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   78.652028] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   78.658688] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   78.665349] PVR_K: SGX Kernel CCB WO:0x16 RO:0x16
+[   78.877468] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   78.888024] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   78.894502] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   78.901605] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   78.915021] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   78.928442] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   78.933810] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   78.939178] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   78.944559] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   78.984030] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   78.989412] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   79.013211] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   79.018580] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   79.023948] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   79.029315] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   79.034684] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   79.040053] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   79.045421] PVR_K: SGX Host control:
+[   79.048980] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   79.055470] PVR_K: 	(HC-10) 0x00000013 0x0000000A 0x00061A80 0x00000000
+[   79.062049] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   79.068630] PVR_K: 	(HC-30) 0x00000000 0xF2C991A8 0x00000000 0x00000000
+[   79.075210] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.081787] PVR_K: SGX TA/3D control:
+[   79.085428] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   79.092021] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.098678] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.105343] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.112009] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.118677] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   79.125344] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   79.132011] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.138679] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.145346] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.152014] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   79.158681] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   79.165354] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   79.172021] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   79.178682] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   79.185349] PVR_K: SGX Kernel CCB WO:0x17 RO:0x17
+[   79.397460] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   79.408004] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   79.414493] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   79.421594] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   79.435020] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   79.448439] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   79.453805] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   79.459170] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   79.464550] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   79.504033] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   79.509399] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   79.533220] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   79.538615] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   79.543962] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   79.549350] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   79.554724] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   79.560048] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   79.565416] PVR_K: SGX Host control:
+[   79.568967] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   79.575463] PVR_K: 	(HC-10) 0x00000014 0x0000000A 0x00061A80 0x00000000
+[   79.582038] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   79.588623] PVR_K: 	(HC-30) 0x00000000 0xF2D180E8 0x00000000 0x00000000
+[   79.595200] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.601782] PVR_K: SGX TA/3D control:
+[   79.605424] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   79.611998] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.618669] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.625369] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.632004] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.638671] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   79.645334] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   79.652017] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.658678] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.665336] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   79.672007] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   79.678676] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   79.685341] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   79.692038] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   79.698679] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   79.705339] PVR_K: SGX Kernel CCB WO:0x18 RO:0x18
+[   79.917555] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   79.928164] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   79.934615] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   79.941709] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   79.955130] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   79.968558] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   79.973921] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   79.979285] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   79.984661] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   80.024147] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   80.029510] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   80.053324] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   80.058692] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   80.064056] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   80.069425] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   80.074792] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   80.080164] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   80.085529] PVR_K: SGX Host control:
+[   80.089083] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   80.095576] PVR_K: 	(HC-10) 0x00000015 0x0000000A 0x00061A80 0x00000000
+[   80.102161] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   80.108737] PVR_K: 	(HC-30) 0x00000000 0xF2D97028 0x00000000 0x00000000
+[   80.115314] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.121897] PVR_K: SGX TA/3D control:
+[   80.125541] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   80.132112] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.138786] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.145459] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.152119] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.158787] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   80.165460] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   80.172116] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.178794] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.185460] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.192119] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   80.198789] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   80.205460] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   80.212129] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   80.218794] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   80.225459] PVR_K: SGX Kernel CCB WO:0x19 RO:0x19
+[   80.437469] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   80.448018] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   80.454508] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   80.461650] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   80.475027] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   80.488448] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   80.493842] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   80.499183] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   80.504563] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   80.544046] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   80.549409] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   80.573223] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   80.578585] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   80.583954] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   80.589322] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   80.594690] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   80.600059] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   80.605427] PVR_K: SGX Host control:
+[   80.608983] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   80.615473] PVR_K: 	(HC-10) 0x00000016 0x0000000A 0x00061A80 0x00000000
+[   80.622055] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   80.628634] PVR_K: 	(HC-30) 0x00000000 0xF2E15F68 0x00000000 0x00000000
+[   80.635216] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.641793] PVR_K: SGX TA/3D control:
+[   80.645440] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   80.652016] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.658684] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.665351] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.672015] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.678682] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   80.685351] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   80.692021] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.698685] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.705352] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   80.712024] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   80.718691] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   80.725355] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   80.732025] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   80.738687] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   80.745354] PVR_K: SGX Kernel CCB WO:0x1A RO:0x1A
+[   80.949468] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   80.960026] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   80.966519] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   80.973608] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   80.987025] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   81.000445] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   81.005812] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   81.011181] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   81.016560] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   81.056034] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   81.061416] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   81.085215] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   81.090584] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   81.095951] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   81.101320] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   81.106689] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   81.112057] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   81.117424] PVR_K: SGX Host control:
+[   81.120983] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   81.127472] PVR_K: 	(HC-10) 0x00000017 0x0000000A 0x00061A80 0x00000000
+[   81.134051] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   81.140633] PVR_K: 	(HC-30) 0x00000000 0xF2E93F08 0x00000000 0x00000000
+[   81.147215] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.153792] PVR_K: SGX TA/3D control:
+[   81.157431] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   81.164024] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.170682] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.177346] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.184014] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.190682] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   81.197347] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   81.204014] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.210683] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.217355] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.224020] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   81.230685] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   81.237352] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   81.244019] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   81.250685] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   81.257353] PVR_K: SGX Kernel CCB WO:0x1B RO:0x1B
+[   81.469457] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   81.480003] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   81.486485] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   81.493586] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   81.507007] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   81.520426] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   81.525794] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   81.531163] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   81.536541] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   81.576034] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   81.581394] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   81.605203] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   81.610569] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   81.615934] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   81.621301] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   81.626671] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   81.632037] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   81.637407] PVR_K: SGX Host control:
+[   81.640961] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   81.647457] PVR_K: 	(HC-10) 0x00000018 0x0000000A 0x00061A80 0x00000000
+[   81.654034] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   81.660614] PVR_K: 	(HC-30) 0x00000000 0xF2F11EA8 0x00000000 0x00000000
+[   81.667214] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.673777] PVR_K: SGX TA/3D control:
+[   81.677413] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   81.684001] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.690663] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.697329] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.703994] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.710663] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   81.717329] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   81.723997] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.730668] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.737331] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   81.743998] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   81.750666] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   81.757334] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   81.764000] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   81.770672] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   81.777333] PVR_K: SGX Kernel CCB WO:0x1C RO:0x1C
+[   81.989465] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   82.000009] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   82.006493] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   82.013593] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   82.027014] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   82.040433] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   82.045801] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   82.051171] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   82.056548] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   82.096027] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   82.101396] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   82.125204] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   82.130572] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   82.135941] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   82.141309] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   82.146678] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   82.152046] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   82.157413] PVR_K: SGX Host control:
+[   82.160969] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   82.167464] PVR_K: 	(HC-10) 0x00000019 0x0000000A 0x00061A80 0x00000000
+[   82.174048] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   82.180623] PVR_K: 	(HC-30) 0x00000000 0xF2F90618 0x00000000 0x00000000
+[   82.187202] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.193779] PVR_K: SGX TA/3D control:
+[   82.197420] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   82.204006] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.210671] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.217335] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.224002] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.230671] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   82.237341] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   82.244005] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.250671] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.257340] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.264006] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   82.270674] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   82.277344] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   82.284009] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   82.290675] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   82.297342] PVR_K: SGX Kernel CCB WO:0x1D RO:0x1D
+[   82.509458] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   82.520000] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   82.526482] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   82.533583] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   82.547005] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   82.560424] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   82.565792] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   82.571161] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   82.576542] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   82.616039] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   82.621413] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   82.645226] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   82.650581] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   82.655925] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   82.661297] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   82.666661] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   82.672042] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   82.677401] PVR_K: SGX Host control:
+[   82.680951] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   82.687444] PVR_K: 	(HC-10) 0x0000001A 0x0000000A 0x00061A80 0x00000000
+[   82.694027] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   82.700605] PVR_K: 	(HC-30) 0x00000000 0xF300FD28 0x00000000 0x00000000
+[   82.707186] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.713766] PVR_K: SGX TA/3D control:
+[   82.717405] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   82.723985] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.730659] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.737323] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.743986] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.750654] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   82.757324] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   82.763988] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.770655] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.777326] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   82.783990] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   82.790661] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   82.797327] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   82.803992] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   82.810659] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   82.817328] PVR_K: SGX Kernel CCB WO:0x1E RO:0x1E
+[   83.029461] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   83.039989] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   83.046493] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   83.053582] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   83.067004] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   83.080430] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   83.085791] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   83.091159] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   83.096539] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   83.136012] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   83.141386] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   83.165192] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   83.170561] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   83.175929] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   83.181303] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   83.186668] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   83.192034] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   83.197403] PVR_K: SGX Host control:
+[   83.200955] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   83.207449] PVR_K: 	(HC-10) 0x0000001B 0x0000000A 0x00061A80 0x00000000
+[   83.214030] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   83.220610] PVR_K: 	(HC-30) 0x00000000 0xF308E880 0x00000000 0x00000000
+[   83.227191] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.233769] PVR_K: SGX TA/3D control:
+[   83.237409] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   83.243994] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.250657] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.257325] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.263995] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.270658] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   83.277326] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   83.284000] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.290662] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.297328] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.303994] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   83.310663] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   83.317330] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   83.323996] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   83.330665] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   83.337330] PVR_K: SGX Kernel CCB WO:0x1F RO:0x1F
+[   83.549460] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   83.560008] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   83.566488] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   83.573590] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   83.587030] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   83.600437] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   83.605798] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   83.611166] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   83.616546] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   83.656020] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   83.661394] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   83.685214] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   83.690602] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   83.695942] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   83.701313] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   83.706681] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   83.712051] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   83.717416] PVR_K: SGX Host control:
+[   83.720969] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   83.727466] PVR_K: 	(HC-10) 0x0000001C 0x0000000A 0x00061A80 0x00000000
+[   83.734045] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   83.740625] PVR_K: 	(HC-30) 0x00000000 0xF310DBA8 0x00000000 0x00000000
+[   83.747206] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.753779] PVR_K: SGX TA/3D control:
+[   83.757425] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   83.764003] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.770670] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.777338] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.784005] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.790686] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   83.797339] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   83.804007] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.810675] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.817343] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   83.824008] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   83.830677] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   83.837345] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   83.844011] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   83.850679] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   83.857344] PVR_K: SGX Kernel CCB WO:0x20 RO:0x20
+[   84.069464] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   84.080027] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   84.086520] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   84.093621] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   84.107039] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   84.120462] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   84.125825] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   84.131189] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   84.136575] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   84.176047] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   84.181421] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   84.205226] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   84.210598] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   84.215960] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   84.221330] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   84.226699] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   84.232067] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   84.237432] PVR_K: SGX Host control:
+[   84.240990] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   84.247479] PVR_K: 	(HC-10) 0x0000001D 0x0000000A 0x00061A80 0x00000000
+[   84.254063] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   84.260642] PVR_K: 	(HC-30) 0x00000000 0xF318CAE8 0x00000000 0x00000000
+[   84.267225] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.273800] PVR_K: SGX TA/3D control:
+[   84.277446] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   84.284024] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.290688] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.297358] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.304021] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.310698] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   84.317356] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   84.324029] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.330693] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.337361] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.344025] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   84.350698] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   84.357359] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   84.364031] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   84.370697] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   84.377359] PVR_K: SGX Kernel CCB WO:0x21 RO:0x21
+[   84.589469] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   84.600039] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   84.606512] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   84.613617] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   84.627034] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   84.640462] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   84.645821] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   84.651188] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   84.656566] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   84.696052] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   84.701417] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   84.725230] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   84.730595] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   84.735958] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   84.741325] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   84.746706] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   84.752065] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   84.757433] PVR_K: SGX Host control:
+[   84.760984] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   84.767484] PVR_K: 	(HC-10) 0x0000001E 0x0000000A 0x00061A80 0x00000000
+[   84.774062] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   84.780643] PVR_K: 	(HC-30) 0x00000000 0xF320BA28 0x00000000 0x00000000
+[   84.787217] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.793803] PVR_K: SGX TA/3D control:
+[   84.797441] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   84.804024] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.810692] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.817352] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.824021] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.830694] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   84.837363] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   84.844023] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.850693] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.857362] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   84.864027] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   84.870698] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   84.877360] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   84.884034] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   84.890697] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   84.897356] PVR_K: SGX Kernel CCB WO:0x22 RO:0x22
+[   85.109466] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   85.120016] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   85.126521] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   85.133627] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   85.147037] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   85.160458] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   85.165823] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   85.171187] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   85.176572] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   85.216043] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   85.221420] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   85.245224] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   85.250595] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   85.255957] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   85.261329] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   85.266695] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   85.272066] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   85.277431] PVR_K: SGX Host control:
+[   85.280985] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   85.287480] PVR_K: 	(HC-10) 0x0000001F 0x0000000A 0x00061A80 0x00000000
+[   85.294059] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   85.300641] PVR_K: 	(HC-30) 0x00000000 0xF328A968 0x00000000 0x00000000
+[   85.307221] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.313800] PVR_K: SGX TA/3D control:
+[   85.317443] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   85.324024] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.330686] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.337355] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.344022] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.350701] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   85.357352] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   85.364029] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.370693] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.377357] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.384026] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   85.390699] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   85.397356] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   85.404033] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   85.410695] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   85.417358] PVR_K: SGX Kernel CCB WO:0x23 RO:0x23
+[   85.629464] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   85.640019] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   85.646508] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   85.653608] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   85.667035] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   85.680453] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   85.685816] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   85.691188] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   85.696562] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   85.736070] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   85.741413] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   85.765219] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   85.770587] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   85.775953] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   85.781322] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   85.786697] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   85.792058] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   85.797431] PVR_K: SGX Host control:
+[   85.800979] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   85.807475] PVR_K: 	(HC-10) 0x00000020 0x0000000A 0x00061A80 0x00000000
+[   85.814054] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   85.820635] PVR_K: 	(HC-30) 0x00000000 0xF33098A8 0x00000000 0x00000000
+[   85.827218] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.833794] PVR_K: SGX TA/3D control:
+[   85.837433] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   85.844017] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.850681] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.857347] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.864016] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.870686] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   85.877350] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   85.884021] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.890684] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.897358] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   85.904019] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   85.910689] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   85.917355] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   85.924025] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   85.930690] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   85.937358] PVR_K: SGX Kernel CCB WO:0x24 RO:0x24
+[   86.141461] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   86.152002] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   86.158481] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   86.165580] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   86.178997] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   86.192419] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   86.197786] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   86.203154] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   86.208532] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   86.248009] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   86.253380] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   86.277208] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   86.282576] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   86.287995] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   86.293341] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   86.298716] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   86.304036] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   86.309401] PVR_K: SGX Host control:
+[   86.312950] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   86.319444] PVR_K: 	(HC-10) 0x00000021 0x0000000A 0x00061A80 0x00000000
+[   86.326024] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   86.332606] PVR_K: 	(HC-30) 0x00000000 0xF3387460 0x00000000 0x00000000
+[   86.339190] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.345763] PVR_K: SGX TA/3D control:
+[   86.349403] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   86.355984] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.362655] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.369318] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.375992] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.382657] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   86.389321] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   86.395988] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.402656] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.409326] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.415993] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   86.422657] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   86.429325] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   86.435992] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   86.442724] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   86.449327] PVR_K: SGX Kernel CCB WO:0x25 RO:0x25
+[   86.661467] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   86.672029] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   86.678501] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   86.685602] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   86.699024] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   86.712456] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   86.717829] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   86.723181] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   86.728564] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   86.768035] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   86.773408] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   86.797213] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   86.802583] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   86.807950] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   86.813319] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   86.818691] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   86.824055] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   86.829423] PVR_K: SGX Host control:
+[   86.832969] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   86.839472] PVR_K: 	(HC-10) 0x00000022 0x0000000A 0x00061A80 0x00000000
+[   86.846052] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   86.852631] PVR_K: 	(HC-30) 0x00000000 0xF3404C30 0x00000000 0x00000000
+[   86.859213] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.865788] PVR_K: SGX TA/3D control:
+[   86.869430] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   86.876010] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.882679] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.889345] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.896011] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.902680] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   86.909347] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   86.916014] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.922684] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.929349] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   86.936017] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   86.942683] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   86.949353] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   86.956017] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   86.962692] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   86.969352] PVR_K: SGX Kernel CCB WO:0x26 RO:0x26
+[   87.181470] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   87.192048] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   87.198515] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   87.205605] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   87.219022] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   87.232442] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   87.237814] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   87.243177] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   87.248556] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   87.288038] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   87.293404] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   87.317214] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   87.322580] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   87.327947] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   87.333340] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   87.338691] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   87.344052] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   87.349423] PVR_K: SGX Host control:
+[   87.352973] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   87.359471] PVR_K: 	(HC-10) 0x00000023 0x0000000A 0x00061A80 0x00000000
+[   87.366048] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   87.372631] PVR_K: 	(HC-30) 0x00000000 0xF3483F58 0x00000000 0x00000000
+[   87.379208] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.385788] PVR_K: SGX TA/3D control:
+[   87.389428] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   87.396007] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.402677] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.409342] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.416010] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.422677] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   87.429344] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   87.436013] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.442678] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.449346] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.456014] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   87.462681] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   87.469357] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   87.476019] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   87.482683] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   87.489348] PVR_K: SGX Kernel CCB WO:0x27 RO:0x27
+[   87.701478] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   87.712030] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   87.718519] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   87.725622] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   87.739041] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   87.752461] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   87.757828] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   87.763197] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   87.768579] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   87.808061] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   87.813425] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   87.837230] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   87.842591] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   87.847956] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   87.853325] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   87.858695] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   87.864061] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   87.869429] PVR_K: SGX Host control:
+[   87.872981] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   87.879475] PVR_K: 	(HC-10) 0x00000024 0x0000000A 0x00061A80 0x00000000
+[   87.886056] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   87.892636] PVR_K: 	(HC-30) 0x00000000 0xF3503668 0x00000000 0x00000000
+[   87.899217] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.905794] PVR_K: SGX TA/3D control:
+[   87.909443] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   87.916015] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.922683] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.929350] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.936016] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.942685] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   87.949352] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   87.956018] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.962686] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.969353] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   87.976021] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   87.982696] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   87.989355] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   87.996023] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   88.002691] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   88.009360] PVR_K: SGX Kernel CCB WO:0x28 RO:0x28
+[   88.221467] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   88.232025] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   88.238504] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   88.245605] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   88.259026] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   88.272445] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   88.277813] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   88.283182] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   88.288560] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   88.328034] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   88.333407] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   88.357224] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   88.362589] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   88.367959] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   88.373324] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   88.378696] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   88.384060] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   88.389427] PVR_K: SGX Host control:
+[   88.392984] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   88.399476] PVR_K: 	(HC-10) 0x00000025 0x0000000A 0x00061A80 0x00000000
+[   88.406061] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   88.412637] PVR_K: 	(HC-30) 0x00000000 0xF35821C0 0x00000000 0x00000000
+[   88.419221] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.425793] PVR_K: SGX TA/3D control:
+[   88.429435] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   88.436016] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.442686] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.449365] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.456020] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.462685] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   88.469356] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   88.476018] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.482690] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.489354] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.496026] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   88.502689] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   88.509356] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   88.516023] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   88.522696] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   88.529355] PVR_K: SGX Kernel CCB WO:0x29 RO:0x29
+[   88.741461] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   88.752009] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   88.758503] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   88.765600] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   88.779020] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   88.792455] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   88.797811] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   88.803176] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   88.808555] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   88.848033] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   88.853400] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   88.877209] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   88.882581] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   88.887944] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   88.893312] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   88.898684] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   88.904052] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   88.909420] PVR_K: SGX Host control:
+[   88.912970] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   88.919471] PVR_K: 	(HC-10) 0x00000026 0x0000000A 0x00061A80 0x00000000
+[   88.926044] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   88.932626] PVR_K: 	(HC-30) 0x00000000 0xF36014E8 0x00000000 0x00000000
+[   88.939205] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.945784] PVR_K: SGX TA/3D control:
+[   88.949428] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   88.956008] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.962673] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.969338] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.976010] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   88.982685] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   88.989353] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   88.996037] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.002686] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.009343] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.016018] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   89.022684] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   89.029347] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   89.036018] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   89.042685] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   89.049346] PVR_K: SGX Kernel CCB WO:0x2A RO:0x2A
+[   89.261472] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   89.272023] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   89.278503] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   89.285603] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   89.299023] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   89.312443] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   89.317810] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   89.323179] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   89.328557] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   89.368031] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   89.373405] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   89.397221] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   89.402586] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   89.407953] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   89.413321] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   89.418691] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   89.424062] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   89.429426] PVR_K: SGX Host control:
+[   89.432977] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   89.439473] PVR_K: 	(HC-10) 0x00000027 0x0000000A 0x00061A80 0x00000000
+[   89.446052] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   89.452637] PVR_K: 	(HC-30) 0x00000000 0xF3680428 0x00000000 0x00000000
+[   89.459214] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.465796] PVR_K: SGX TA/3D control:
+[   89.469434] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   89.476017] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.482681] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.489352] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.496015] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.502686] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   89.509350] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   89.516021] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.522684] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.529356] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.536018] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   89.542690] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   89.549353] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   89.556025] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   89.562689] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   89.569354] PVR_K: SGX Kernel CCB WO:0x2B RO:0x2B
+[   89.781459] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   89.791999] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   89.798483] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   89.805583] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   89.819004] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   89.832425] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   89.837796] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   89.843164] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   89.848545] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   89.888021] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   89.893391] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   89.917201] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   89.922568] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   89.927939] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   89.933303] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   89.938675] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   89.944040] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   89.949407] PVR_K: SGX Host control:
+[   89.952963] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   89.959456] PVR_K: 	(HC-10) 0x00000028 0x0000000A 0x00061A80 0x00000000
+[   89.966039] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   89.972615] PVR_K: 	(HC-30) 0x00000000 0xF36FF368 0x00000000 0x00000000
+[   89.979200] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   89.985774] PVR_K: SGX TA/3D control:
+[   89.989414] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   89.995998] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.002663] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.009334] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.015996] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.022668] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   90.029330] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   90.036001] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.042666] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.049338] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.056000] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   90.062687] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   90.069343] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   90.076003] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   90.082671] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   90.089334] PVR_K: SGX Kernel CCB WO:0x2C RO:0x2C
+[   90.301470] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   90.312024] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   90.318509] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   90.325608] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   90.339023] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   90.352448] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   90.357815] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   90.363179] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   90.368561] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   90.408037] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   90.413408] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   90.437216] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   90.442581] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   90.447952] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   90.453322] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   90.458687] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   90.464055] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   90.469427] PVR_K: SGX Host control:
+[   90.472978] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   90.479469] PVR_K: 	(HC-10) 0x00000029 0x0000000A 0x00061A80 0x00000000
+[   90.486052] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   90.492630] PVR_K: 	(HC-30) 0x00000000 0xF377E2A8 0x00000000 0x00000000
+[   90.499214] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.505790] PVR_K: SGX TA/3D control:
+[   90.509430] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   90.516013] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.522676] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.529343] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.536017] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.542682] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   90.549346] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   90.556016] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.562684] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.569348] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   90.576015] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   90.582687] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   90.589354] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   90.596023] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   90.602689] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   90.609351] PVR_K: SGX Kernel CCB WO:0x2D RO:0x2D
+[   90.813460] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   90.823997] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[   90.830502] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[   90.837590] PVR_K:(Error): SGX Register Base Address (Linear):   0x8051C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   90.851010] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   90.864430] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   90.869803] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   90.875170] PVR_K: (P0) EUR_CR_EVENT_STATUS:     00000000
+[   90.880549] PVR_K: 	(master_irq: no, timer_irq: no, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[   90.920026] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000040
+[   90.925396] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: yes, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   90.949208] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   90.954574] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000000F
+[   90.959945] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080000
+[   90.965308] PVR_K: (P0) EUR_CR_BIF_FAULT:        00000000
+[   90.970681] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   90.976045] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   90.981414] PVR_K: SGX Host control:
+[   90.984968] PVR_K: 	(HC-0) 0x00000001 0x00000000 0x00000000 0x00000000
+[   90.991463] PVR_K: 	(HC-10) 0x0000002A 0x0000000A 0x00061A80 0x00000000
+[   90.998045] PVR_K: 	(HC-20) 0x00000002 0x00000003 0x00000000 0x00000001
+[   91.004622] PVR_K: 	(HC-30) 0x00000000 0xF37FC248 0x00000000 0x00000000
+[   91.011205] PVR_K: 	(HC-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.017778] PVR_K: SGX TA/3D control:
+[   91.021418] PVR_K: 	(T3C-0) 0x32003000 0x32003100 0x32002000 0x00000000
+[   91.028003] PVR_K: 	(T3C-10) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.034670] PVR_K: 	(T3C-20) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.041339] PVR_K: 	(T3C-30) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.048001] PVR_K: 	(T3C-40) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.054673] PVR_K: 	(T3C-50) 0x00000000 0x00000000 0x32000000 0x01D69000
+[   91.061337] PVR_K: 	(T3C-60) 0x00010000 0x00000000 0x00000000 0x00000000
+[   91.068007] PVR_K: 	(T3C-70) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.074700] PVR_K: 	(T3C-80) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.081340] PVR_K: 	(T3C-90) 0x00000000 0x00000000 0x00000000 0x00000000
+[   91.088019] PVR_K: 	(T3C-A0) 0x00000000 0x00000000 0x00000000 0x32004000
+[   91.094674] PVR_K: 	(T3C-B0) 0x3200A420 0x3200B000 0x00000000 0x00000000
+[   91.101340] PVR_K: 	(T3C-C0) 0x30003000 0x3200F2C0 0x3200E560 0x3200E000
+[   91.108007] PVR_K: 	(T3C-D0) 0x3200AB10 0x00000002 0x00000000 0x0000C01C
+[   91.114675] PVR_K: 	(T3C-E0) 0x00007AF1 0x00003DED 0x00000000 0x00000000
+[   91.121342] PVR_K: SGX Kernel CCB WO:0x2E RO:0x2E

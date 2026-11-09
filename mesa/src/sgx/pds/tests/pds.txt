@@ -1,0 +1,49 @@
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# PDS instructions in the disassembler's notation, `<text> [; <word>]`.
+# The words are the ones docs/PDS.md quotes (including its "Text notation"
+# examples); the rest only round-trip.
+
+# tst, bra, halt (PDS.md "TST", "BRA", "HALT", the dis.py example)
+tst ds0[0] ; 87000000
+tst ds0[2] ; 87040000
+tst ds1[0x30] ; 8700c100
+(p0) bra #6 ; 90000006
+(p0) bra #0x18 ; 90000018
+bra #4 ; 97000004
+halt ; af000000
+doutd ds0[0], ds0[1], ds0[0], ds0[0] ; 07000203
+
+# alu and shifts
+op0xd.s1 ds1[0x30], in1, ds1[0] ; df820070
+shr ds0[0x30], in0, #4 ; ff800430
+shl ds0[0x31], ds0[0x31], #0x10 ; f7311031
+shr ds0[0x30], ds0[0x30], #0xf ; ff300f30
+shl ds1[0x30], in1, #0x14 ; f7811470
+add ds1[0x32], ds0[0x31], ds1[0x32]
+mul16 ds1[0x32], in0, ds1[0]
+mul16 ds0[0x31], in1.hi, ds1[3].hi
+and ds1[0x30], in1, ds1[2] ; cf820870
+op0x4.s1 ds0[1], ds0[2], ds1[3]
+op0x6.s1 ds1[1], in0x10, ds1[0x20].hi
+or ds0[0x30], ds0[6], ds1[0x30]
+xor ds0[0x30], ds0[0x30], ds1[0x30]
+(p0) add ds0[4], ds0[2], ds1[1]
+
+# movs (DOUT)
+doutd.x2.s27 ds0[0], ds0[1], ds1[0x32], ds1[0x32] ; 2f032343
+doutu.cc3 ds0[2], ds0[3], ds1[1], ds1[1] ; 030403e5
+douta.x2.s27 in0, ds1[0], in0, ds1[1] ; 2f800466
+doutu ds0[0], ds0[1], ds1[0], ds1[1]
+douti ds1[1], ds0[2], ds0[3], ds0[3]
+doutt ds1[2], ds1[3], ds0[4], ds0[5]
+doutd ds0[0], ds0[1], ds0[0], ds0[1] [r2=0x18]
+douta in2, ds1[0], in2, in2 ; 07840406
+doutu ds1[1], ds0[0x30], ds0[0x30], ds0[0x30]
+(p0) doutu ds0[0], ds0[1], ds0[0], ds0[0]
+doutd.x2 ds0[0], ds0[1], ds1[0x32], ds1[0x32]
+doutd.s27 ds0[0], ds0[1], ds1[0x32], ds1[0x32]
+dout7 ds0[0], ds0[0], ds0[0], ds0[0]
+douti ds0[0], ds0[1], ds0[0], ds0[1] [r2=5]
+doutd ds1[0], ds1[1], ds1[0], ds1[1] [r1=0x1c]

@@ -1,0 +1,23 @@
+sgx: an option for the DDK services backend
+
+The sgx winsys talks to powervr_sgx. -Dgallium-sgx-pvrsrvkm=true also builds its
+backend for the DDK's services kernel driver (pvrsrvkm), from libpvr and the
+kernel driver's headers. Off by default; not for upstream.
+
+diff --git a/meson.options b/meson.options
+index da56417..3ddc860 100644
+--- a/meson.options
++++ b/meson.options
+@@ -915,3 +915,12 @@ option(
+   value : false,
+   description : 'Build panfrost Rust components.'
+ )
++
++option(
++  'gallium-sgx-pvrsrvkm',
++  type : 'boolean',
++  value : false,
++  description : 'sgx: also build the winsys backend for the DDK\'s services ' +
++                'kernel driver (pvrsrvkm). Needs libpvr and the kernel ' +
++                'driver\'s headers linked into the tree.',
++)

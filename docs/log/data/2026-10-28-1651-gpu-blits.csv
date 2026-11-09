@@ -1,0 +1,16 @@
+case,what,values,match,differ
+up,64x64 strided -> twiddled,4096,4096,0
+down,twiddled -> linear,4096,4096,0
+mipn,64->32 NEAREST (texel 2x+1 2y+1),1024,1024,0
+mipl,64->32 LINEAR (two-step rounded average),1024,1024,0
+up2x,64->128 NEAREST,16384,16384,0
+npot,100x30 linear -> strided,3000,3000,0
+to565,RGBA8888 -> RGB565 (truncate),4096,4096,0
+rsub,(8 4 24x20) -> (30 40) linear,4096,4096,0
+rscale,(0 0 16x8) -> (10 10 32x16),4096,4096,0
+rband,full-width band into twiddled (aligned),4096,4096,0
+rband2,full-width band into twiddled (unaligned),4096,4096,0
+rcomp,(40 10 16x16) -> (8 24) twiddled in three blits,4096,4096,0
+present,720x480 back buffer -> /dev/fb0 (1.3 ms),345600,345600,0
+static words,sgxtex vs the DDK's two transfer contexts (p64),364,364,0
+rt words,sgxtex_rt_* vs the DDK's FBO PBE/T1 words (128x64 and 100x60),12,12,0

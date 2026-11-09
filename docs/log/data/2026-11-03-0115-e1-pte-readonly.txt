@@ -1,0 +1,36 @@
+### suite_e1 -k ''
+== e1_st_rw_control rc=0
+va R 0x3e19e000
+va B 0x3e19f000
+render done
+pix 0xdeadbeef uniform=1 bg=0xcc336699
+dump B 0 11111111
+dump R 0 00000000
+== e1_st_readonly rc=0
+va R 0x3e19e000
+va B 0x3e19f000
+render done
+pix 0 uniform=1 bg=0xcc336699
+dump B 0 11111111
+dump R 0 00000000
+kmsg: [  451.995475] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2726 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[  452.006297] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[  452.019892] PVR_K:(Error): SGX Register Base Address (Linear):   0x00C0C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+STOP at e1_st_readonly
+
+[  451.995475] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x2726 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[  452.006297] PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
+[  452.012784] PVR_K: SGX debug (pc_i686_linux_XOrg_family sgxddk 17 1.7@862890)
+[  452.019892] PVR_K:(Error): SGX Register Base Address (Linear):   0x00C0C000 [1000, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[  452.033305] PVR_K:(Error): SGX Register Base Address (Physical): 0xDC000000 [1001, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[  452.046729] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[  452.052094] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[  452.057465] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[  452.062844] PVR_K: 	(master_irq: no, timer_irq: yes, ta_dpm_fault: no, zls_oom: no, ta_mem_free: no, isp_end_tile: no, dpm_initend: no, zls_csw_finish: no, pbe_end_render: no, isp_vis_fail: no, isp_break: no, sw_event no, ta_finish: no, ta_terminate: no, tpc_clear: no, tpc_flush: no, dpm_clear: no, dpm_load: no, dpm_store: no, dpm_state_clear: no, dpm_state_load: no, dpm_state_store: no, dpm_mem_thresh: no, gbl_oom: no, mt_oom: no, 3d_mem_free: no)
+[  452.102406] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000400
+[  452.107772] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: yes, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[  452.131587] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[  452.136952] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000303F
+[  452.142316] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     00080400
+[  452.147685] PVR_K: (P0) EUR_CR_BIF_FAULT:        3E19F043
+[  452.153056] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000

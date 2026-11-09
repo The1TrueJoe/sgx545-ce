@@ -1,0 +1,57 @@
+### suite_p1 -k ''
+== sanity_frame rc=0
+render done
+pix 0xff00ff00 uniform=1 bg=0xcc336699
+== sanity_limm rc=0
+render done
+pix 0x12345678 uniform=1 bg=0xcc336699
+== sanity_st rc=0
+va R 0x3e19e000
+render done
+pix 0x55667788 uniform=1 bg=0xcc336699
+dump R 0 00000000 11223344 00000000 55667788 00000000 00000000 00000000 00000000
+== p1_fs_ldr_core_id rc=0
+va R 0x3e19e000
+reg 0x1c 0x1150000 0x1150000
+render done
+pix 0x1150000 uniform=1 bg=0xcc336699
+dump R 0 00000000
+== p1_fs_ldr_core_rev rc=0
+va R 0x3e19e000
+reg 0x20 0x1000e 0x1000e
+render done
+pix 0x1000e uniform=1 bg=0xcc336699
+dump R 0 00000000
+== p1_fs_ldr_timer rc=0
+va R 0x3e19e000
+reg 0x144 0xa5a47b29 0xa5f1b9f3
+render done
+pix 0xa5f12219 uniform=0 bg=0xcc336699
+dump R 0 00000000 a5f1517c
+== p1_fs_str_base14 rc=0
+va R 0x3e19e000
+reg 0xa44 0x2f8468 0x2f8468
+render done
+pix 0x2f8468 uniform=1 bg=0xcc336699
+dump R 0 00000000
+== p1_fs_str_base14_restore rc=0
+reg 0xa44 0x2f8468 0x2f8468
+render done
+pix 0 uniform=1 bg=0xcc336699
+== p1_vs_ldr_core_id rc=0
+va R 0x3e19e000
+reg 0x1c 0x1150000 0x1150000
+render done
+pix 0xff00ff00 uniform=1 bg=0xcc336699
+dump R 0 00000000
+== p1_vs_str_base14 rc=0
+va R 0x3e19e000
+reg 0xa44 0x2f8468 0x2f8468
+render done
+pix 0xff00ff00 uniform=1 bg=0xcc336699
+dump R 0 00000000
+== p1_vs_str_base14_restore rc=0
+reg 0xa44 0x2f8468 0x2f8468
+render done
+pix 0xff00ff00 uniform=1 bg=0xcc336699
+

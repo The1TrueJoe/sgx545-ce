@@ -1,0 +1,86 @@
+#!/bin/bash
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# kit-smoke RESULTS, as "desk" inside the Xfce session: the desktop, a terminal
+# with glxinfo, gears, glmark2, a browser on a local page and a dragged window,
+# a screenshot of each (screenshots/NN-name.png, half size) checked for a blank
+# screen. PASS/FAIL lines go to smoke.txt.
+R=$1
+O=$R/screenshots
+res() { printf '    %-5s %s\n' "$1" "$2" >> "$R/smoke.txt"; }
+IM=$(command -v magick || command -v convert)
+shot() {   # NN-name WHAT: a screenshot, and whether it shows something
+	local f=$O/$1.png
+	local err
+	err=$(import -window root -resize 50% "png:$f" 2>&1)
+	[ -n "$err" ] && echo "import $1: $err" >> "$R/smoke-log.txt"
+	if [ ! -s "$f" ]; then res FAIL "screenshot $1: $2 (not taken: $(echo "$err" | head -2 | tr '\n' ' '))"; return; fi
+	local sd colors
+	sd=$($IM "$f" -format '%[fx:standard_deviation]' info: 2>/dev/null)
+	colors=$(identify -format '%k' "$f" 2>/dev/null)
+	local sum
+	sum=$(md5sum < "$f")
+	if [ "$sum" = "${LASTSHOT:-}" ]; then
+		res FAIL "screenshot $1: $2 (the same as the one before: the screen stopped updating)"
+		return
+	fi
+	LASTSHOT=$sum
+	if awk -v s="${sd:-0}" -v c="${colors:-0}" 'BEGIN { exit !(s > 0.02 && c > 16) }'; then
+		res PASS "screenshot $1: $2"
+	else
+		res FAIL "screenshot $1: $2 (blank or one color: sd $sd, $colors colors)"
+	fi
+}
+gpu() {   # whether GL renders on the SGX
+	grep -q 'SGX545' "$R/glxinfo.txt" && echo yes
+}
+
+sleep 20   # Xfce settles
+shot 01-desktop "the Xfce desktop"
+
+glxinfo -B > "$R/glxinfo.txt" 2>&1
+if [ -n "$(gpu)" ]; then res PASS "OpenGL renders on the SGX545 ($(grep -m1 'OpenGL version' "$R/glxinfo.txt" | cut -d: -f2 | xargs))"
+else res FAIL "OpenGL renders on the SGX545 (renderer: $(grep -m1 'renderer string' "$R/glxinfo.txt" | cut -d: -f2 | xargs))"; fi
+xfce4-terminal --geometry=90x24+40+40 --title=kit-glxinfo -x sh -c 'glxinfo -B; sleep 600' &
+sleep 8
+shot 02-glxinfo "a terminal with glxinfo"
+pkill -f kit-glxinfo
+
+G=$(command -v es2gears_x11 || command -v es2gears || command -v glxgears)
+timeout 12 stdbuf -oL "$G" > "$R/gears.txt" 2>&1 &   # line-buffered: a killed gears flushes nothing
+sleep 8
+shot 03-gears "$(basename "$G") running"
+wait
+grep -q -iE 'frames in|fps' "$R/gears.txt" && res PASS "$(basename "$G") ($(grep -m1 -iE 'frames in|fps' "$R/gears.txt" | xargs))" ||
+	res FAIL "$(basename "$G") (no frame count; see gears.txt)"
+
+timeout 120 glmark2 -s 640x400 -b build:use-vbo=true:duration=5 -b texture:duration=5 \
+	-b shading:shading=phong:duration=5 > "$R/glmark2.txt" 2>&1 &
+sleep 10
+shot 04-glmark2 "a glmark2 scene"
+wait
+sc=$(grep -o 'glmark2 Score: [0-9]*' "$R/glmark2.txt" | awk '{print $3}')
+[ -n "$sc" ] && res PASS "glmark2 (score $sc)" || res FAIL "glmark2 (no score; see glmark2.txt)"
+
+B=$(command -v firefox-esr || command -v epiphany-browser)
+mkdir -p /tmp/kit-ff
+if [ "${B##*/}" = firefox-esr ]; then
+	timeout 60 "$B" --kiosk --new-instance --profile /tmp/kit-ff file:///usr/local/share/kit/test.html > "$R/browser.txt" 2>&1 &
+else
+	timeout 60 "$B" file:///usr/local/share/kit/test.html > "$R/browser.txt" 2>&1 &
+fi
+sleep 30
+shot 05-browser "$(basename "$B") on a local page"
+pkill -f "$(basename "$B")"
+
+xfce4-terminal --geometry=60x12+120+120 --title=kit-drag -x sh -c 'echo "drag test"; sleep 600' &
+sleep 4
+w=$(xdotool search --sync --name kit-drag | head -1)
+eval "$(xdotool getwindowgeometry --shell "$w")"   # X Y of the client area
+xdotool mousemove $((X + 80)) $((Y - 12)) mousedown 1
+for i in $(seq 1 20); do xdotool mousemove_relative 12 6; sleep 0.05; done
+shot 06-drag "a window being dragged"
+xdotool mouseup 1
+pkill -f kit-drag
+res PASS "the smoke test finished"

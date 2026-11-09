@@ -1,0 +1,91 @@
+# The Cedarview test stick v3 (kit/cedarview-live): live Debian 13 with the
+# packages docs/INSTALL.md installs (m2-drm's kernel .deb, sgx545-firmware,
+# mesa-sgx), the GPU tests, the blit variants and a desktop smoke test, as one
+# USB image; booted in QEMU (BIOS and UEFI) before it is kept. Open code only.
+name: cedarview-live
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [um-re]
+    paths:
+      - kit/cedarview-live/**
+      - mesa/tests/desktop/packages.txt
+      - .github/workflows/cedarview-live.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The packages and tests (the newest of each)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          newest() {   # ARTIFACT BRANCH: the newest unexpired run id
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$1&per_page=100" \
+              -q "[.artifacts[] | select((.expired | not) and .workflow_run.head_branch == \"$2\")]
+                  | sort_by(.created_at) | last | .workflow_run.id // empty"
+          }
+          get() {   # ARTIFACT BRANCH DIR
+            id=$(newest "$1" "$2")
+            [ -n "$id" ] || { echo "::error::no $1 artifact from $2 yet"; exit 1; }
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$1" -D "$3"
+            echo "$1: run $id" | tee -a sources.txt
+          }
+          get powervr-sgx-deb-cedarview m2-drm debs
+          get mesa-sgx-trixie um-re debs
+          get powervr-sgx-cedarview m2-drm tests
+          ls -l debs tests
+
+      - name: Microkernel variant B (the transfer bank) from ukernel/
+        run: |
+          set -eux
+          mkdir -p fw
+          UK_XFER_BANK=1 UK_BUILD_ID="ukernel-xferbank-$(git rev-parse --short HEAD)" \
+            python3 ukernel/build.py fw/xb.bin fw/xb.json
+          python3 drm/tools/mkukfw.py fw/xb.bin -o fw/sgx545_ukernel-xferbank.bin --manifest fw/xb.json --core-rev 0
+          python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel-xferbank.bin
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends mmdebstrap squashfs-tools dosfstools \
+            grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin fdisk qemu-system-x86 mtools ovmf
+          d=$(curl -sfL https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/ |
+              grep -o 'debian-archive-keyring_[0-9.]*_all\.deb' | sort -V | tail -1)
+          curl -sfLO "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/$d"
+          dpkg-deb -x "$d" keyring
+          # outside $HOME: apt checks signatures as _apt, which cannot read the runner's home
+          sudo install -D -m 0644 keyring/usr/share/keyrings/debian-archive-keyring.pgp /usr/local/share/keyrings/debian-archive-keyring.gpg
+
+      - name: Build the image
+        run: |
+          set -eux
+          v=$(git rev-parse --short HEAD)
+          sudo KEYRING=/usr/local/share/keyrings/debian-archive-keyring.gpg sh kit/cedarview-live/build.sh \
+            debs tests out "$v" fw/sgx545_ukernel-xferbank.bin
+          { echo "kit $(cat kit/cedarview-live/SERIES) ($v) from ${GITHUB_SHA}"; cat sources.txt;
+            echo "variant B: $(python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel-xferbank.bin | head -1)";
+          } | tee out/BUILD-INFO.txt
+
+      - name: Boot it in QEMU, BIOS and UEFI (results with screenshots; the other disk untouched)
+        run: |
+          set -eux
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          for fw in bios uefi; do sh kit/cedarview-live/qemu-test.sh out/*.img.gz $fw; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgx545-cedarview-kit-v3
+          path: out/
+          compression-level: 0
+          retention-days: 90

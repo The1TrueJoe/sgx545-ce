@@ -1,0 +1,100 @@
+# powervr_sgx on the EA1, RAM boot of abd4ca8, 2026-11-03 ~05:25 UTC (DDK microkernel)
+# uAPI suite, then powervr_sgx_hang -v (one round: render, mixed render+transfer submit, forced hang)
+
+7.1.8-m2drm
+ohc.ramboot=1
+HELD-BY-US
+Module                  Size  Used by    Not tainted
+dev-query-gpu-info
+  core_id 0x01150000 core_revision 0x0001000e fw_interface 1
+dev-query-short-size
+dev-query-limits-quirks
+dev-query-heap-info
+dev-query-invalid
+create-bo
+create-bo-invalid
+mmap-bo
+mmap-bo-invalid
+vm-create-destroy
+vm-map-unmap
+vm-map-overlap
+vm-map-kernel-ranges
+vm-map-invalid
+vm-handles-per-file
+context-create-destroy
+context-invalid
+submit-null-job
+  null job signalled in 7780 us
+submit-null-job-timeline
+submit-null-job-chain
+submit-null-job-many
+  600 null jobs in 31 ms
+submit-null-job-bo-ref
+submit-null-job-vm-destroyed
+submit-invalid
+context-state-invalid
+submit-other-file
+submit-wait-unsignalled
+rt-dataset-create-destroy
+rt-dataset-invalid
+submit-render-invalid
+submit-transfer-invalid
+31/31 passed
+firmware running: 1 lost: 0 resets: 0 irqs: 0
+kernel PD 0x038e0000 idle PD 0x01b35000
+ccb wo 96 ro 96 issued 608 consumed 608
+
+# ---- powervr_sgx_hang -v
+sgxgen: heap  4 0x37001000 +0x800
+sgxgen: heap  0 0x3e001000 +0x4800
+sgxgen: heap  6 0x2e001000 +0x1800
+sgxgen: heap  6 0x2e003000 +0x400
+sgxgen: heap  0 0x3e006000 +0x10000
+sgxgen: heap  4 0x37002000 +0x8000
+sgxgen: heap  5 0x3c001000 +0x8000
+sgxgen: heap  6 0x2e004000 +0x10000
+sgxgen: heap  7 0x30401000 +0x10000
+sgxgen: heap  0 0x3e016000 +0x40000
+sgxgen: heap  0 0x3e056000 +0x5000
+sgxgen: heap  0 0x3e05b000 +0x10000
+sgxgen: render done after 399 us
+  frame: centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
+sgxgen: heap  4 0x3700a000 +0x8000
+sgxgen: heap  5 0x3c009000 +0x8000
+sgxgen: heap  6 0x2e014000 +0x10000
+sgxgen: heap  7 0x30411000 +0x10000
+sgxgen: heap  0 0x3e06b000 +0x40000
+sgxgen: heap  0 0x3e0ab000 +0x5000
+sgxgen: heap  0 0x3e0b0000 +0x10000
+sgxgen: render done after 2126542 us
+sgxgen: render done after 2554163 us
+sgxgen: heap  4 0x37012000 +0x8000
+sgxgen: heap  5 0x3c011000 +0x8000
+sgxgen: heap  6 0x2e024000 +0x10000
+sgxgen: heap  7 0x30421000 +0x10000
+sgxgen: heap  0 0x3e0c0000 +0x40000
+sgxgen: heap  0 0x3e100000 +0x5000
+sgxgen: heap  0 0x3e105000 +0x10000
+sgxgen: SUBMIT_JOBS failed: -5 (job 0)
+powervr_sgx_hang: transfer SUBMIT_JOBS: -5
+round 0: render right
+  mixed frame: centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+  mixed copy: centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)
+  copy: 0/16384 pixels differ from the frame
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+  frame: centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+  FAILED: render(a, f)
+  FAILED: render(&c, f + 1)
+exit 1
+[   41.262483] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 615, consumed 615); resetting
+[   41.337867] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   41.341912] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   43.374502] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 3, consumed 3); resetting
+[   43.891717] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x20000000)
+[   43.900030] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not restart: device lost
+firmware running: 0 lost: 1 resets: 2 irqs: 7
+kernel PD 0x038e0000 idle PD 0x01b35000
+ccb wo 0 ro 0 issued 0 consumed 0
+
+# ---- second RAM boot, same build: powervr_sgx_hang -H -n 5 (no hang): 11/11 lines right; powervr_sgx_blit -n 5: all blits right

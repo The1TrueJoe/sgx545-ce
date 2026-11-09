@@ -1,0 +1,20 @@
+sgx: build the shared code in src/sgx
+
+The ISA description, compiler, PDS and command stream code the gallium
+driver uses live in src/sgx, as src/imagination does for the newer cores;
+src/meson.build descends into it when the driver is built.
+
+diff --git a/src/meson.build b/src/meson.build
+index c36f44b..95cf772 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -104,6 +104,9 @@ endif
+ if with_gallium_panfrost or with_gallium_lima or with_panfrost_vk or with_tools.contains('panfrost')
+   subdir('panfrost')
+ endif
++if with_gallium_sgx
++  subdir('sgx')
++endif
+ if with_microsoft_clc or with_gallium_d3d12 or with_spirv_to_dxil or with_microsoft_vk
+   subdir('microsoft')
+ endif

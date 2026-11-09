@@ -1,0 +1,22 @@
+{
+  "mesa": {"version": "26.2.5", "sha256": "794b3d1729075dae7ebd47c7283b7ca0cdb5dec668f7f11cc0a5d82f6138a0a5",
+           "toolchain": "zig 0.16.0 cc, x86_64-linux-gnu.2.36", "libgallium_bytes": 19065776},
+  "eglinfo": {"GL_RENDERER": "PowerVR SGX545 (sgx545-ce)", "GL_VERSION": "OpenGL ES 2.0 Mesa 26.2.5",
+              "GL_SHADING_LANGUAGE_VERSION": "OpenGL ES GLSL ES 1.0.16", "configs": 6,
+              "egl_platform": "fbdev (build-time native)"},
+  "probe_reference_scene": {"ddk_md5": "232e49307267cd39ede81480c5209488",
+                            "ours_fixed_programs_md5": "232e49307267cd39ede81480c5209488",
+                            "ours_compiled_md5": "232e49307267cd39ede81480c5209488",
+                            "ours_compiled_w2_md5": "232e49307267cd39ede81480c5209488",
+                            "render_ms": 0.5},
+  "cull_vs_ddk": {"back (0x405)": "identical", "front (0x404)": "identical", "back, CW front": "identical"},
+  "multi_frame": {"frames": 300, "ms_per_frame": 2.71, "ccb_wraps": 3, "pb_pages_in_use": "0x19 every frame",
+                  "last_frame_md5": "56f8466aa4cf3b08cfbd166b63dd88ec",
+                  "before_fix": {"pb_pages_in_use": ["0x19", "0x19", "0x32"], "failed_frame": 3, "unit": "3D lockup"}},
+  "es2gears": {"triangles_per_frame": 720, "fps_300_frames": 403, "fps_91_frames_with_one_readback": 315,
+               "vertex_shader": {"instructions": 19, "temps": 13, "constants": 39},
+               "fragment_shader": {"instructions": 2, "iterators": 1}},
+  "cpugears_fixed_programs": {"fps_600_frames": 439, "draws_per_frame": 24},
+  "power_cycles_utc": ["09:12", "09:33", "09:50", "09:53"],
+  "commits": {"a_b": "d4875ea", "multi_frame": "c0031b3", "cpugears": "2410919", "compiled_es2gears": "8c72fcc"}
+}

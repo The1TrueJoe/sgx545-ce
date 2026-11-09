@@ -1,0 +1,43 @@
+# powervr_sgx on the EA1, RAM boot of e0bc846 (restart re-arms surviving contexts, PBs, RT datasets), 2026-11-03 ~05:45 UTC
+# ---- powervr_sgx_hang (one round)
+round 0: render right
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+round 0: hang recovery right
+all right
+exit 0
+[   43.373485] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 619, consumed 618); resetting
+[   43.455208] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   43.459687] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+firmware running: 1 lost: 0 resets: 1 irqs: 24
+kernel PD 0x04ade000 idle PD 0x01a3b000
+ccb wo 9 ro 9 issued 9 consumed 9
+
+# ---- powervr_sgx_hang -n 5, then powervr_sgx_frame -n 20 -c 2, powervr_sgx_blit -n 5, powervr_sgx_test
+round 0: render right
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 1 -> 2
+round 0: hang recovery right
+round 1: render right
+round 1: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 2 -> 3
+round 1: hang recovery right
+round 2: render right
+round 2: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 3 -> 4
+round 2: hang recovery right
+round 3: render right
+round 3: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 4 -> 5
+round 3: hang recovery right
+round 4: render right
+round 4: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 5 -> 6
+round 4: hang recovery right
+all right
+exit 0
+5
+20/20 frames right
+all blits right
+31/31 passed
+firmware running: 1 lost: 0 resets: 6 irqs: 194

@@ -1,0 +1,136 @@
+# powervr_sgx on the EA1, RAM boots of f52a569, 2026-11-03 ~06:00 UTC (DDK microkernel)
+# uAPI suite (33 tests), PCI config of 01:02.0, hang + devcoredump, then the reset_rearm bisect
+# reset_rearm bits: 1 HW render context bit 0, 2 its render details (+0x20/+0x24), 4 PB, 8 RT dataset, 16 HW transfer context bit 0
+
+7.1.8-m2drm
+HELD-BY-US
+submit-null-job-vm-destroyed
+submit-invalid
+context-state-invalid
+submit-other-file
+submit-wait-unsignalled
+rt-dataset-create-destroy
+rt-dataset-invalid
+submit-render-invalid
+submit-transfer-invalid
+reserved-bits
+submit-other-vm
+33/33 passed
+disabled
+autosuspend_delay_ms
+control
+runtime_active_time
+runtime_status
+runtime_suspended_time
+on
+0
+ 86 80 9b 08 06 00 00 00 01 00 00 03 00 00 00 00
+ 00 00 00 dc 00 af ff df 00 00 00 00 00 00 00 00
+ 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ 00 00 00 00 00 00 00 00 00 00 00 00 04 01 00 00
+ 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ 00 00 00 00 00 00 00 dc 00 af ff df 00 00 00 00
+ 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+*
+
+# ---- powervr_sgx_hang -v (all set-ups)
+round 0: render right
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+  powervr_sgx hang: null job, ccb 616, reset 1
+  devcoredump: 27785 bytes
+round 0: hang recovery right
+all right
+exit 0
+disabled
+[   38.894513] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 616, consumed 616); resetting
+[   38.981773] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   38.985807] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+
+# ---- bisect: one set-up off at a time
+== reset_rearm=15
+round 0: render right
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 2 -> 3
+  devcoredump: 27781 bytes
+round 0: hang recovery right
+all right
+exit 0
+[   67.886535] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 14, consumed 14); resetting
+[   67.918656] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+firmware running: 1 lost: 0 resets: 3 irqs: 45
+== reset_rearm=29
+round 0: render right
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 3 -> 4
+  devcoredump: 27781 bytes
+round 0: hang recovery right
+all right
+exit 0
+[   70.062523] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 16, consumed 16); resetting
+[   70.092508] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+firmware running: 1 lost: 0 resets: 4 irqs: 63
+== reset_rearm=23
+round 0: render right
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 4 -> 5
+  devcoredump: 27781 bytes
+round 0: hang recovery right
+all right
+exit 0
+[   76.398496] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 16, consumed 16); resetting
+[   76.429637] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+firmware running: 1 lost: 0 resets: 5 irqs: 81
+== reset_rearm=27
+round 0: render right
+sgxgen: SUBMIT_JOBS failed: -5 (job 0)
+powervr_sgx_hang: transfer SUBMIT_JOBS: -5
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 5 -> 6
+  devcoredump: 27781 bytes
+  frame: centre 00000000 (want ff00ff00), corner 00000000 (want ff000080)
+  FAILED: render(a, f)
+  FAILED: render(&c, f + 1)
+exit 0
+[   81.390489] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 16, consumed 16); resetting
+[   81.422017] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   83.502489] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 3, consumed 3); resetting
+[   84.022726] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not start (init status 0x0, event status 0x20000000)
+[   84.031034] powervr_sgx 0000:01:02.0: [drm] *ERROR* microkernel did not restart: device lost
+firmware running: 0 lost: 1 resets: 7 irqs: 88
+# ---- (reboot after the lost device: same RAM kernel)
+HELD-BY-US
+== reset_rearm=30
+round 0: render right
+round 0: mixed render + transfer right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+  devcoredump: 27775 bytes
+round 0: hang recovery right
+all right
+exit 0
+[   25.262495] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 8, consumed 8); resetting
+[   25.282775] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+firmware running: 1 lost: 0 resets: 1 irqs: 18
+# ---- the PB alone, 5 rounds, then frames, blits, uAPI
+== reset_rearm=4
+round 0: render right
+round 0: mixed render + transfer right
+round 0: hang recovery right
+round 1: render right
+round 1: mixed render + transfer right
+round 1: hang recovery right
+round 2: render right
+round 2: mixed render + transfer right
+round 2: hang recovery right
+round 3: render right
+round 3: mixed render + transfer right
+round 3: hang recovery right
+round 4: render right
+round 4: mixed render + transfer right
+round 4: hang recovery right
+all right
+exit 0
+firmware running: 1 lost: 0 resets: 6 irqs: 108
+10/10 frames right
+all blits right
+33/33 passed

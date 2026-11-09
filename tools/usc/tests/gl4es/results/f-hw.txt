@@ -1,0 +1,5 @@
+mc_terrain       DIFF   834/4096 px differ, max   1  centre 336699cc
+mc_texfog        DIFF   829/4096 px differ, max   1  centre 336699cc
+mc_gui           DIFF   280/4096 px differ, max   1  centre 336699cc
+mc_sky           DIFF  1832/4096 px differ, max   1  centre 9fbed1f2
+0/4 identical

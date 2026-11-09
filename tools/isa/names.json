@@ -1,0 +1,179 @@
+{
+ "_": "USEASM opcode -> [mnemonic, evidence]. corpus: a one-op shader compiles to it. guess: everything else (see ISA.md for why each guess).",
+ "0x0": [
+  "fmad",
+  "corpus"
+ ],
+ "0x1": [
+  "fadm",
+  "guess"
+ ],
+ "0x2": [
+  "fmsa",
+  "guess"
+ ],
+ "0x3": [
+  "fsubflr",
+  "guess"
+ ],
+ "0x4": [
+  "frcp",
+  "corpus"
+ ],
+ "0x5": [
+  "frsq",
+  "corpus"
+ ],
+ "0x6": [
+  "flog2",
+  "corpus"
+ ],
+ "0x7": [
+  "fexp2",
+  "corpus"
+ ],
+ "0x8": [
+  "fsqrt",
+  "corpus"
+ ],
+ "0x9": [
+  "fsin",
+  "corpus"
+ ],
+ "0xa": [
+  "fcos",
+  "corpus"
+ ],
+ "0xb": [
+  "fdp",
+  "corpus"
+ ],
+ "0x10": [
+  "fmad16",
+  "corpus"
+ ],
+ "0x11": [
+  "fmin",
+  "corpus"
+ ],
+ "0x12": [
+  "fmax",
+  "corpus"
+ ],
+ "0x13": [
+  "efo",
+  "guess"
+ ],
+ "0x20": [
+  "pck.u8.f32",
+  "corpus"
+ ],
+ "0x21": [
+  "pck.u8.f16",
+  "corpus"
+ ],
+ "0x4e": [
+  "pck.u8.c10",
+  "corpus"
+ ],
+ "0x4f": [
+  "and",
+  "guess"
+ ],
+ "0x5a": [
+  "dp3.c10",
+  "corpus"
+ ],
+ "0x5b": [
+  "dp4.c10",
+  "corpus"
+ ],
+ "0x70": [
+  "smp",
+  "corpus"
+ ],
+ "0x73": [
+  "smp.bias",
+  "corpus"
+ ],
+ "0x76": [
+  "smp.lod",
+  "corpus"
+ ],
+ "0x7d": [
+  "ld",
+  "guess"
+ ],
+ "0x96": [
+  "br",
+  "guess"
+ ],
+ "0x9a": [
+  "wdf",
+  "guess"
+ ],
+ "0xa3": [
+  "mov",
+  "corpus"
+ ],
+ "0xa6": [
+  "fsub",
+  "guess"
+ ],
+ "0xa9": [
+  "fsub.neg",
+  "guess"
+ ],
+ "0xbe": [
+  "smoe",
+  "guess"
+ ],
+ "0xcf": [
+  "ffrc",
+  "corpus"
+ ],
+ "0xf2": [
+  "movc",
+  "guess"
+ ],
+ "0x0/1b": [
+  "fdual.fmad",
+  "guess"
+ ],
+ "0x1/1b": [
+  "fdual.fadm",
+  "guess"
+ ],
+ "0xa3/1b": [
+  "fdual.mov",
+  "guess"
+ ],
+ "0xa7/1b": [
+  "fdual.op0xa7",
+  "guess"
+ ],
+ "0xc7/1b": [
+  "fdual.op0xc7",
+  "guess"
+ ],
+ "0x4f/09": [
+  "and.test",
+  "guess"
+ ],
+ "0xa6/09": [
+  "fsub.test",
+  "guess"
+ ],
+ "0xa9/09": [
+  "fsub.neg.test",
+  "guess"
+ ],
+ "0xa9/0f": [
+  "fsub.neg.testmask",
+  "guess"
+ ],
+ "0x52/09": [
+  "shl.test",
+  "guess"
+ ]
+}

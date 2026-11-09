@@ -1,0 +1,131 @@
+# Mesa with the sgx driver for Debian 13 (trixie) users: built natively in a
+# trixie container (mesa/build.sh debian) for /opt/sgx, packed with the two files
+# that put it ahead of Debian's Mesa (mesa/debian/etc). docs/INSTALL.md.
+name: mesa-debian
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [um-re]
+    paths:
+      - mesa/**
+      - drm/powervr_sgx/include/uapi/**
+      - drm/tools/mkukfw.py
+      - ukernel/**
+      - docs/uapi/**
+      - tools/gen/**
+      - .github/workflows/mesa-debian.yml
+
+permissions:
+  contents: read
+
+jobs:
+  mesa:
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 90
+    steps:
+      - name: Build dependencies
+        run: |
+          set -eux
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git perl patch xz-utils python3 python3-mako python3-yaml python3-packaging \
+            meson ninja-build pkg-config bison flex gcc g++ glslang-tools \
+            libdrm-dev libglvnd-dev libx11-dev libxext-dev libxfixes-dev libxdamage-dev libxrandr-dev \
+            libxxf86vm-dev libxshmfence-dev libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-dri3-dev \
+            libxcb-present-dev libxcb-sync-dev libxcb-glx0-dev libxcb-randr0-dev libxcb-xfixes0-dev \
+            libxcb-shm0-dev libxcb-keysyms1-dev libwayland-dev wayland-protocols libwayland-egl-backend-dev \
+            libexpat1-dev zlib1g-dev libzstd-dev libudev-dev llvm-19-dev libclang-cpp19-dev libelf-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          set -eux
+          SGX_MESA_BUILD=$PWD/build/mesa sh mesa/build.sh debian
+
+      # Cedarview: the display is gma500 (PCI) and powervr_sgx sits on an
+      # auxiliary device of its function. The loader's pick of that render
+      # node, on fake sysfs trees, and the stub an X server's GLX loads.
+      - name: Render-node pick and the gma500 stub
+        run: |
+          set -eux
+          test -e build/mesa/debian/install/opt/sgx/lib/dri/gma500_dri.so
+          meson configure build/mesa/debian/build -Dbuild-tests=true
+          ninja -C build/mesa/debian/build src/loader/loader_child_render_node_test
+          build/mesa/debian/build/src/loader/loader_child_render_node_test
+
+      - name: The firmware (the open microkernel, secure mode)
+        run: |
+          set -eux
+          v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          mkdir -p fw
+          python3 ukernel/build.py fw/uk.bin fw/uk.json
+          python3 drm/tools/mkukfw.py fw/uk.bin -o sgx545_ukernel.bin --manifest fw/uk.json \
+            --core-rev 0 --build-id "ukernel-$v"
+          python3 drm/tools/mkukfw.py --check sgx545_ukernel.bin | tee fw/check.txt
+          grep -q 'features 0x2' fw/check.txt
+
+      - name: Packages (.deb)
+        run: |
+          set -eux
+          v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          d=$(git -c safe.directory='*' log -1 --format=%cd --date=format:%Y%m%d)
+          mv=$(. mesa/VERSION; echo "$MESA_VERSION")
+          # mesa-sgx: /opt/sgx and the two files that put it ahead of Debian's Mesa
+          P=$PWD/deb/mesa-sgx
+          mkdir -p $P/DEBIAN
+          cp -a build/mesa/debian/install/opt $P/
+          cp -a mesa/debian/etc $P/
+          rm -rf $P/opt/sgx/include $P/opt/sgx/lib/pkgconfig
+          cat > $P/DEBIAN/control <<CTL
+          Package: mesa-sgx
+          Version: $mv+sgx$d.$v
+          Architecture: amd64
+          Maintainer: Joseph Telaak <joseph@telaak.dev>
+          Depends: libc6, libllvm19, libelf1t64, libdrm2, libglvnd0, libgl1, libegl1, libgles2, libx11-6, libx11-xcb1, libxcb1, libxcb-dri3-0, libxcb-present0, libxcb-sync1, libxcb-xfixes0, libxcb-randr0, libxshmfence1, libxxf86vm1, libwayland-client0, libwayland-server0, libexpat1, zlib1g, libzstd1
+          Section: libs
+          Priority: optional
+          Description: Mesa with the sgx driver for the PowerVR SGX545
+           OpenGL, OpenGL ES, EGL and GBM for the PowerVR SGX545 of Intel's
+           Cedarview and CE5300 SoCs, under the powervr_sgx kernel driver.
+           Installed in /opt/sgx and used ahead of Debian's Mesa.
+          CTL
+          sed -i 's/^          //' $P/DEBIAN/control
+          printf '#!/bin/sh\nset -e\nldconfig\n' > $P/DEBIAN/postinst
+          printf '#!/bin/sh\nset -e\nldconfig\n' > $P/DEBIAN/postrm
+          chmod 755 $P/DEBIAN/postinst $P/DEBIAN/postrm
+          dpkg-deb --root-owner-group --build $P mesa-sgx_${mv}+sgx${d}.${v}_amd64.deb
+
+          # sgx545-firmware: the open microkernel
+          F=$PWD/deb/fw
+          mkdir -p $F/DEBIAN $F/lib/firmware/powervr_sgx
+          cp sgx545_ukernel.bin $F/lib/firmware/powervr_sgx/
+          cat > $F/DEBIAN/control <<CTL
+          Package: sgx545-firmware
+          Version: 0~git$d.$v
+          Architecture: all
+          Maintainer: Joseph Telaak <joseph@telaak.dev>
+          Section: kernel
+          Priority: optional
+          Description: Open microkernel for the PowerVR SGX545 (powervr_sgx)
+           The GPU firmware the powervr_sgx kernel driver loads, built from source
+           (MIT). No Intel or Imagination code.
+          CTL
+          sed -i 's/^          //' $F/DEBIAN/control
+          printf '#!/bin/sh\nset -e\nif command -v update-initramfs >/dev/null; then update-initramfs -u; fi\n' > $F/DEBIAN/postinst
+          cp $F/DEBIAN/postinst $F/DEBIAN/postrm
+          chmod 755 $F/DEBIAN/postinst $F/DEBIAN/postrm
+          dpkg-deb --root-owner-group --build $F sgx545-firmware_0~git${d}.${v}_all.deb
+
+          for f in *.deb; do dpkg-deb -I $f | head -12; dpkg-deb -c $f | head -8; done
+          sha256sum *.deb > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-sgx-trixie
+          path: |
+            *.deb
+            SHA256SUMS
+          retention-days: 90

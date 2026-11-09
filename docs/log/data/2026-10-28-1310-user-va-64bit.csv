@@ -1,0 +1,9 @@
+kernel,mode,device_memory_cpu_va,wrap_va,result,back_buffer_md5,kernel_message
+Oct 26 13:00 (before),default MAP_32BIT,0x400170c8..0x425c7000,0x421b8000,match,56f8466aa4cf3b08cfbd166b63dd88ec,
+Oct 26 13:00 (before),-W,,high,WRAP_EXT_MEMORY failed,,OSAcquirePhysPageAddr: Start address 4b3b7000 is outside of the region returned by find_vma
+Oct 26 13:00 (before),-H,,high,map of buffer 0 failed,,DoMapToUser: Error - VM_INSERT_PAGE failed (-14)
+Oct 26 13:00 (before),i386 probe,,,match,232e49307267cd39ede81480c5209488,
+a3f3667 (after),default MAP_32BIT,0x400039f8..0x425dc000,0x41402000,match,56f8466aa4cf3b08cfbd166b63dd88ec,
+a3f3667 (after),-W,0x4001c000..0x42152000,0x7f3d3b3e7000,match,56f8466aa4cf3b08cfbd166b63dd88ec,
+a3f3667 (after),-H,0x7fbccb403820..0x7fbccbf2b000,0x7fbccb796000,match,56f8466aa4cf3b08cfbd166b63dd88ec,
+a3f3667 (after),i386 probe,,,match,232e49307267cd39ede81480c5209488,

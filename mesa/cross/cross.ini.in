@@ -1,0 +1,17 @@
+# meson cross file for mesa/build.sh; @ZIGCC@, @TARGET@, @FAMILY@ and @CPU@ are filled in
+[binaries]
+c = ['@ZIGCC@', 'cc', '@TARGET@']
+cpp = ['@ZIGCC@', 'c++', '@TARGET@']
+ar = ['zig', 'ar']
+ranlib = ['zig', 'ranlib']
+strip = 'true'
+pkg-config = 'pkg-config'
+
+[properties]
+pkg_config_libdir = ['/nonexistent']
+
+[host_machine]
+system = 'linux'
+cpu_family = '@FAMILY@'
+cpu = '@CPU@'
+endian = 'little'

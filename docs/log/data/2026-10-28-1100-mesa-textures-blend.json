@@ -1,0 +1,27 @@
+{
+  "textures_vs_ddk": {"script": "mesa/tests/sgx545_texab.sh", "commit": "5204d75",
+    "cases": {"n16": "identical", "l16 (linear)": "identical", "n64": "identical", "npot 12x6 clamp": "identical",
+              "l8": "identical", "la88": "identical", "rgb565": "identical"}},
+  "blend_vs_ddk": {"script": "mesa/tests/sgx545_blendab.sh", "commit": "23ea4c1", "color": [0.25, 1, 0.5, 0.5],
+    "cases": {
+      "alpha 770 771":       {"result": "identical", "centre": [32, 128, 128, 191]},
+      "add 1 1":             {"result": "identical", "centre": [64, 255, 255, 255]},
+      "premul 1 771":        {"result": "identical", "centre": [64, 255, 192, 255]},
+      "mul 774 0":           {"result": "identical", "centre": [0, 0, 64, 128]},
+      "srccol 768 769":      {"result": "identical", "centre": [16, 255, 128, 191]},
+      "invdst 775 1":        {"result": "identical", "centre": [64, 255, 192, 255]},
+      "dstalpha 772 773":    {"result": "identical", "centre": [64, 255, 128, 128]},
+      "saturate 776 1":      {"result": "identical", "centre": [0, 0, 128, 255]},
+      "subtract 1 1":        {"result": "identical", "centre": [64, 255, 0, 0]},
+      "revsubtract 770 1":   {"result": "identical", "centre": [0, 0, 64, 191]},
+      "min 1 1":             {"result": "ddk rejects (glerr 0x500), ours GL-correct", "centre_ours": [0, 0, 128, 128]},
+      "max 1 1":             {"result": "ddk rejects (glerr 0x500), ours GL-correct", "centre_ours": [64, 255, 128, 255]}}},
+  "colour_mask_vs_ddk": {"script": "mesa/tests/sgx545_blendab.sh mask", "commit": "353102e",
+    "cases": {"1011": [64, 0, 128, 128], "0111": [0, 255, 128, 128], "1101": [64, 255, 0, 128],
+              "1110": [64, 255, 128, 0], "0000": [0, 0, 0, 0], "1011 + alpha blend": [32, 0, 128, 191],
+              "0110 + add": [0, 255, 255, 0]},
+    "result": "7 of 7 identical"},
+  "encoder_check": {"sop2_and_sopwm_words": 83072, "mismatches_vs_tools_isa": 0},
+  "regression": {"probe_reference_md5": "232e49307267cd39ede81480c5209488", "es2gears_fps": 426.9, "sgx_recoveries": 0,
+                 "power_cycles": 0}
+}

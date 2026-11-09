@@ -1,0 +1,104 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [RFC PATCH 0/8] drm/powervr_sgx: DRM driver for PowerVR SGX5xx
+To: dri-devel@lists.freedesktop.org
+Cc: Alessio Belle <alessio.belle@imgtec.com>,
+    Luigi Santivetti <luigi.santivetti@imgtec.com>,
+    Frank Binns <frank.binns@imgtec.com>,
+    imagination@lists.freedesktop.org,
+    Patrik Jakobsson <patrik.r.jakobsson@gmail.com>,
+    Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+    Maxime Ripard <mripard@kernel.org>,
+    Thomas Zimmermann <tzimmermann@suse.de>,
+    David Airlie <airlied@gmail.com>,
+    Simona Vetter <simona@ffwll.ch>,
+    linux-kernel@vger.kernel.org
+
+This RFC asks for design review of a render-only DRM driver for the
+PowerVR SGX5xx (Series5) GPUs. It is not for merging: the userspace
+side isn't in Mesa yet.
+
+The first platform is the SGX545 in the Intel Atom CE5300, where the GPU
+is its own PCI function (8086:089b). This series is the core only; the
+pieces listed below follow once the design is agreed.
+
+Design
+- drm_gpuvm VMs, one page directory each, GEM shmem objects below
+  4 GiB, drm_sched (one job on the GPU at a time), drm_exec, syncobjs.
+- Each supported core is an entry in a table: ID, revision, required
+  features, firmware name. Unknown cores are refused before any
+  register write. The SGX535 and other Series5 cores would be new
+  entries, not a new driver.
+- The GPU runs a microkernel on its shader unit. We wrote our own
+  (MIT, source public, linux-firmware submission to follow). The driver
+  only loads an image that declares secure mode: no client page
+  directory maps the firmware's memory.
+- Command streams are validated in the kernel, and shader code is
+  uploaded through an ioctl that checks every instruction.
+- One parameter buffer (the tiler's output) for the device, shared by
+  every client, as Imagination's own driver does: the hardware keeps
+  one free-list state, and the microkernel doesn't switch it between
+  buffers. So one client's GPU work can address another client's
+  binned geometry; userspace can't map that range. A buffer per client,
+  with the microkernel switching the state, is planned.
+- Hang recovery that blames only the context whose job hung (one job
+  runs at a time), with guilty/innocent reporting.
+
+Userspace
+- A Gallium driver with a NIR compiler, in a Mesa fork for now
+  (https://github.com/The1TrueJoe/sgx545-ce/tree/um-re/mesa); a Mesa
+  merge request will follow review of this uAPI. On the CE5300 it passes
+  16,587 of 17,165 dEQP-GLES2 tests with no resets, using no vendor
+  code at all.
+
+Questions for reviewers
+1. Naming and placement: drivers/gpu/drm/powervr_sgx, or under
+   drivers/gpu/drm/imagination/ next to the Rogue driver? The two share
+   no code or uAPI; the Rogue driver's firmware interface is different.
+2. Cedarview and Poulsbo: their SGX sits behind gma500. A follow-up
+   publishes it as an auxiliary device this driver binds to; on two
+   Cedarview laptops (Atom N2600, D2500) it starts the microkernel and
+   renders. Is that
+   the right split between the display and render drivers? The SGX535
+   render work in "[RFC] drm/gma500: SGX535 render ownership, MMU and
+   failure handling" could use it too. We would rather work together
+   than add a second SGX stack.
+3. The uAPI (patch 1): VM_MAP is synchronous and there is no VM_BIND
+   queue. Is that acceptable for hardware this old?
+4. The shared parameter buffer above: acceptable for a first version,
+   or a blocker until the per-client buffer exists?
+
+Testing: CE5300 on 7.1.8 and 7.3.3 RAM-booted test kernels, the uAPI
+and frame tests under lockdep, KASAN, UBSAN and DMA-API debug. The
+series is against drm-misc-next, where CI builds it with checkpatch
+--strict, sparse, smatch, coccinelle, gcc and clang W=1 (with BPF
+tracepoint events), kernel-doc, KUnit, and an i386/x86_64 uAPI layout
+check.
+
+I used an AI coding assistant for much of this work; each patch says so
+in an Assisted-by tag, and I have reviewed and tested what I send.
+
+Joseph Telaak (8):
+  drm/powervr_sgx: Add the uAPI header and its documentation
+  drm/powervr_sgx: Add the driver documentation and MAINTAINERS entry
+  drm/powervr_sgx: Add the core table, registers, MMU and device bring-up
+  drm/powervr_sgx: Load and start the microkernel
+  drm/powervr_sgx: Add GEM objects, VMs and dma-buf import
+  drm/powervr_sgx: Add contexts, the scheduler, fences and SUBMIT_JOBS
+  drm/powervr_sgx: Add render jobs and command stream validation
+  drm/powervr_sgx: Add hang recovery
+
+To follow, each a short series of its own: transfer jobs, runtime PM,
+devcoredump, debugfs, tracepoints, and the gma500 auxiliary device for
+Cedarview.
+
+ Documentation/gpu/drivers.rst                 |    1 +
+ Documentation/gpu/powervr_sgx/                |  new
+ MAINTAINERS                                   |    9 +
+ drivers/gpu/drm/Kconfig                       |    1 +
+ drivers/gpu/drm/Makefile                      |    1 +
+ drivers/gpu/drm/powervr_sgx/                  |  new
+ include/uapi/drm/powervr_sgx_drm.h            |  new
+ about 40 files changed, about 8,000 insertions
+
+-- 
+2.x

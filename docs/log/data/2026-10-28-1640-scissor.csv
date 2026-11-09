@@ -1,0 +1,6 @@
+run,capture,poke,prediction,pixels_differing,of
+q0,sc1,none,identical to the DDK readback,0,345600
+q1,sc1,reset ISPC 00000000->02000000 @0x30401088,everything visible; triangle cut to the clear's tiles 3-9 x 20-26,0,345600
+q2,sc1,set strip left x 100.0->150.0 @0x3e51d054 0x3e51d064,scissor left edge at x=150,0,345600
+q3,sc1,set region clip 80030009->80030006 @0x3040110c,nothing right of x=224,0,345600
+q4,sc1,set ISPC 02000000->00000000 @0x30401108,all-zero frame,0,345600
