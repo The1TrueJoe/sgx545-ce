@@ -372,6 +372,11 @@ Each step has its own `SGX_COMPILER_DEBUG` flag (`notexcolor`, `nopackedcolor`,
 `tools/isa/hwt_p13.py` checks the new instructions (`pck.u8.u8` lanes, mask `or` / `and`,
 `test.and.eq`) on a box: all 11 passed on the EA3 (2026-11-09). Full dEQP-GLES2 on the
 EA3 with the whole pass (60eea0e): 16,637 pass, 0 unexpected, 0 wedges.
+On the EA1 (708a02e, uapi-stream, 2026-11-09): the dEQP shaders/fragment_ops/texture.format
+subset 11,940 pass with no new failure (`functional.shaders.*` 10,101 with the one expected
+fail); glmark2 720x480 on Xorg/glamor score 51 -> 53 (most scenes 2-5% faster, loop/uniform
++9%); Minecraft 10.1 / 10.9 -> 10.2 / 11.0 FPS standing / walking, picture unchanged
+(the fragment work is not Minecraft's bottleneck at this point).
 
 Still open, in order:
 - uniform-only math per pixel or vertex. Measured with `nir_opt_preamble` before
