@@ -32,7 +32,8 @@ Supported APIs
 --------------
 
 - **OpenGL ES 2.0.**
-- **OpenGL 2.1** (desktop), with GLSL 1.20 and ``EXT_texture_sRGB``.
+- **OpenGL 2.0** (desktop), with GLSL 1.20. ``EXT_texture_sRGB``, the
+  rest of 2.1, waits on its piglit tests.
 - **OpenGL ES 1.1** and **OpenGL 1.x**, through Mesa's fixed-function
   shaders.
 
@@ -51,9 +52,6 @@ Known limitations
   read back: ``glReadPixels`` of depth or stencil returns no rendered values.
 - ``glPolygonOffset``'s units and factor are one pair per render: a draw
   with another pair ends the render.
-- sRGB textures sample right, but mipmap generation, alpha test against an
-  sRGB framebuffer, and mirrored-repeat and border-colour filtering of them
-  are wrong.
 
 Environment variables
 ---------------------
