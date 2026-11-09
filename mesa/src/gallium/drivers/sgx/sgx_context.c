@@ -75,6 +75,7 @@ sgx_flush_frame(struct sgx_context *ctx)
    /* SGX_DEBUG=serial: wait for every frame's render (as before frames
     * overlapped) */
    e = sgxws_flush(ctx->hw, (sgx_drv_debug & SGX_DEBUG_SERIAL) ? 2000 : 0);
+   sgx_check_reset(ctx);
    simple_mtx_unlock(&screen->lock);
    if (ctx->stats.on) {
       ctx->stats.flush_ns += os_time_get_nano() - t;
@@ -253,29 +254,60 @@ sgx_context_destroy(struct pipe_context *pctx)
    FREE(ctx);
 }
 
-/* A GPU reset since the last ask (GL_ARB_robustness).  The winsys has
- * already gone on with a new kernel context; the frames in flight at the
- * reset were lost. */
+/* A GPU reset the winsys saw (GL_ARB_robustness).  It went on with a new
+ * kernel context, so a context that didn't ask about resets keeps rendering
+ * (the frames in flight were lost); one made to lose itself on a reset gets
+ * st's callback, which makes it refuse every call until the application
+ * makes another.  Called with the screen lock held. */
+void
+sgx_check_reset(struct sgx_context *ctx)
+{
+   enum pipe_reset_status status;
+
+   switch (sgxws_reset_status(ctx->hw)) {
+   case SGXWS_RESET_GUILTY:
+      status = PIPE_GUILTY_CONTEXT_RESET;
+      break;
+   case SGXWS_RESET_INNOCENT:
+      status = PIPE_INNOCENT_CONTEXT_RESET;
+      break;
+   case SGXWS_RESET_LOST:
+      status = PIPE_UNKNOWN_CONTEXT_RESET;
+      break;
+   default:
+      return;
+   }
+   if (ctx->reset == PIPE_NO_RESET || status == PIPE_GUILTY_CONTEXT_RESET)
+      ctx->reset = status;
+   if (ctx->reset_cb.reset)
+      ctx->reset_cb.reset(ctx->reset_cb.data, status);
+}
+
 static enum pipe_reset_status
 sgx_get_device_reset_status(struct pipe_context *pctx)
 {
    struct sgx_context *ctx = sgx_context(pctx);
    struct sgx_screen *screen = sgx_screen(pctx->screen);
-   enum sgxws_reset r;
+   enum pipe_reset_status status;
 
    simple_mtx_lock(&screen->lock);
-   r = sgxws_reset_status(ctx->hw);
+   sgx_check_reset(ctx);
+   status = ctx->reset;
+   ctx->reset = PIPE_NO_RESET;
    simple_mtx_unlock(&screen->lock);
-   switch (r) {
-   case SGXWS_RESET_GUILTY:
-      return PIPE_GUILTY_CONTEXT_RESET;
-   case SGXWS_RESET_INNOCENT:
-      return PIPE_INNOCENT_CONTEXT_RESET;
-   case SGXWS_RESET_LOST:
-      return PIPE_UNKNOWN_CONTEXT_RESET;
-   default:
-      return PIPE_NO_RESET;
-   }
+   return status;
+}
+
+static void
+sgx_set_device_reset_callback(struct pipe_context *pctx,
+                              const struct pipe_device_reset_callback *cb)
+{
+   struct sgx_context *ctx = sgx_context(pctx);
+
+   if (cb)
+      ctx->reset_cb = *cb;
+   else
+      memset(&ctx->reset_cb, 0, sizeof(ctx->reset_cb));
 }
 
 struct pipe_context *
@@ -308,6 +340,7 @@ sgx_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    ctx->base.flush = sgx_flush;
    ctx->base.flush_resource = sgx_flush_resource;
    ctx->base.get_device_reset_status = sgx_get_device_reset_status;
+   ctx->base.set_device_reset_callback = sgx_set_device_reset_callback;
    ctx->base.set_debug_callback = u_default_set_debug_callback;
 
    slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);

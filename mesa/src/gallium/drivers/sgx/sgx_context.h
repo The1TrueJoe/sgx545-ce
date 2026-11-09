@@ -122,6 +122,11 @@ struct vcache_chunk;
 struct sgx_context {
    struct pipe_context base;
 
+   /* a GPU reset seen and not yet asked about, and st's callback (a context
+    * made to lose itself on a reset has one) */
+   enum pipe_reset_status reset;
+   struct pipe_device_reset_callback reset_cb;
+
    struct sgxws_ctx *hw;
    struct sgxws_prog vs_xy, vs_xyz, fs_uniform;
    struct sgxws_rt *rts[SGX_MAX_RTS];
@@ -212,5 +217,6 @@ void sgx_flush_resource_writes(struct sgx_context *ctx,
  * context's frame on the shared render context ends ours (sgxws_begin).
  * Compares addresses only: the resource may be gone. */
 struct sgx_resource *sgx_recording(struct sgx_context *ctx);
+void sgx_check_reset(struct sgx_context *ctx);
 
 #endif
