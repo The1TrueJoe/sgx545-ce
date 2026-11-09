@@ -37,6 +37,8 @@ struct pvrsgx_render_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
 	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
+	/** @awake: Holds a runtime PM reference for the context's life. */
+	bool awake;
 };
 
 /* 16 MiB: the device's one PB holds every client's scenes (pvrsgx_render.c). */
