@@ -1110,6 +1110,72 @@ vtx_format(enum pipe_format format, uint8_t *fmt, unsigned *bytes)
  * binding; the vertex shader unpacks them.  Draws up to the index limit; the
  * rest take the gather, raw too. */
 static bool
+resident_indexed(const struct pipe_draw_info *info,
+                 const struct pipe_draw_start_count_bias *draw,
+                 const struct fetch *f, unsigned n_fetch)
+{
+   if (info->index_size != 2 || info->has_user_indices ||
+       info->mode != MESA_PRIM_TRIANGLES || draw->index_bias ||
+       info->primitive_restart)
+      return false;
+   for (unsigned e = 0; e < n_fetch; e++)
+      if (!f[e].res)
+         return false;
+   return true;
+}
+
+/* (zc_draw's: every fetch raw, from a buffer) */
+static bool
+zc_draw_resident(struct sgx_context *ctx, const struct pipe_draw_info *info,
+                 const struct pipe_draw_start_count_bias *draw,
+                 const struct fetch *f, unsigned n_fetch, struct sgxws_draw *d,
+                 struct sgxws_fetch *zf)
+{
+   struct sgx_resource *ib = sgx_resource(info->index.resource);
+   /* whole triangles in a piece */
+   const unsigned piece = SGXWS_MAX_INDICES / 3 * 3;
+   unsigned count = draw->count;
+
+   if (!u_trim_pipe_prim(info->mode, &count) || !count ||
+       !sgx_buffer_vbo(ctx, ib))
+      return false;
+   for (unsigned e = 0; e < n_fetch; e++) {
+      if (!sgx_buffer_vbo(ctx, f[e].res))
+         return false;
+      zf[e] = (struct sgxws_fetch){.stride = f[e].stride,
+                                   .dwords = f[e].raw_bytes / 4,
+                                   .reg = 4 * e,
+                                   .va = f[e].res->vbo.va + f[e].offset};
+      if (zf[e].va & 3)
+         return false;
+   }
+   for (unsigned e = 0; e < n_fetch; e++)
+      f[e].res->vbo_seq = sgxws_next_seq(ctx->hw);
+   ib->vbo_seq = sgxws_next_seq(ctx->hw);
+   d->fetch = zf;
+   d->n_fetch = n_fetch;
+   d->blocks = NULL;
+   d->n_blocks = 0;
+   d->indices = NULL;
+   d->verts = NULL;
+   d->verts_va = 0;
+   d->count = 0x10000; /* (16-bit indices) */
+   for (unsigned p0 = 0; p0 < count; p0 += piece) {
+      d->idx_va = ib->vbo.va + (draw->start + p0) * 2;
+      d->n_indices = MIN2(piece, count - p0);
+      if (sgxws_draw(ctx->hw, d))
+         fprintf(stderr, "sgx: draw of %u indices dropped\n", d->n_indices);
+   }
+   SGX_DBG(DRAW, "resident indexed draw x%u\n", count);
+   ctx->stats.zc_draws++;
+   d->fetch = NULL;
+   d->n_fetch = 0;
+   d->idx_va = 0;
+   d->n_indices = 0;
+   return true;
+}
+
+static bool
 zc_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
         const struct pipe_draw_start_count_bias *draw, const void *indices,
         const struct fetch *f, unsigned n_fetch, struct sgxws_draw *d)
@@ -1127,14 +1193,21 @@ zc_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
    if (info->mode == MESA_PRIM_TRIANGLE_STRIP && count > SGXWS_MAX_INDICES)
       return false;
    out_count = list ? expanded_count(info->mode, count) : count;
-   if (!out_count || out_count > SGXWS_MAX_INDICES ||
-       n_fetch > PIPE_MAX_ATTRIBS)
+   if (!out_count || n_fetch > PIPE_MAX_ATTRIBS)
       return false;
    for (unsigned e = 0; e < n_fetch; e++) {
       if (!f[e].raw || f[e].dwords != 4 || (f[e].stride & 3) ||
           f[e].stride > 0xffff)
          return false;
    }
+   /* a list of 16-bit indices in a buffer, every vertex buffer in device
+    * memory: the indices as they are, each fetch from vertex 0 (the DDK's
+    * draw from a VBO and an IBO: nothing read or copied a draw), in pieces
+    * of the index limit */
+   if (resident_indexed(info, draw, f, n_fetch))
+      return zc_draw_resident(ctx, info, draw, f, n_fetch, d, zf);
+   if (out_count > SGXWS_MAX_INDICES)
+      return false;
    /* the vertices the draw uses: in order, or through 16-bit indices from lo */
    if (info->index_size || list) {
       uint32_t *ix32 = staging(ctx, out_count);
@@ -1744,11 +1817,17 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
        * a vertex from its cached gather and its quads' indices expanded
        * once, where zero-copy DMAs each input and expands them every draw
        * (docs/PERF.md) */
+      bool zc = compiled && (sgx_drv_debug & SGX_DEBUG_ZERO_COPY);
+
+      /* (zero-copy's draw from an index buffer as it is goes first: nothing
+       * of it is read on the CPU) */
+      if (zc && resident_indexed(info, &draws[n], f, n_fetch) &&
+          zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
+         continue;
       if (compiled && (prim == SGXWS_TRIANGLES) &&
           vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
          continue;
-      if (compiled && (sgx_drv_debug & SGX_DEBUG_ZERO_COPY) &&
-          zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
+      if (zc && zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
          continue;
       /* glDrawArrays of a list or strip: the vertices in order */
       if (!info->index_size && !list && count <= SGXWS_MAX_INDICES) {

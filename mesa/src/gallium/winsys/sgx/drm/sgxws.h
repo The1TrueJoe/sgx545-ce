@@ -266,7 +266,8 @@ struct sgxws_draw {
     * addresses, nothing copied (verts_va 16-byte aligned, idx_va even) */
    uint32_t verts_va, idx_va;
    /* or n_fetch DMAs (the vertex buffers where they are, or copies of client
-    * arrays): no vertices copied, verts and verts_va unused */
+    * arrays): no vertices copied, verts and verts_va unused; the indices
+    * copied from indices, or where they are at idx_va (even) */
    const struct sgxws_fetch *fetch;
    unsigned n_fetch;
    const struct sgxws_block *blocks;

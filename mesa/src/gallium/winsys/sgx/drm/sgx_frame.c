@@ -1578,6 +1578,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
             return -E2BIG;
          n_idx = d->n_indices;
          idx_bytes = (n_idx * 2 + 15) & ~15u;
+      } else if (d->idx_va) {
+         /* an index buffer in device memory, as it is */
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx = d->idx_va;
       } else if (d->count > c->idx_count) {
          return -E2BIG;
       }
