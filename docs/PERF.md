@@ -298,6 +298,39 @@ too, the next suspects are the memory the vertex path reads (our rings'
 allocation flags against the DDK's VBO/IBO) and the CPU index path
 (GPU-resident index buffers with the VDM's index base, instead of rebasing).
 
+### perfmicro against the DDK, rendered frames (2026-11-09) — supersedes the ratios above
+
+**Every earlier perfmicro comparison with the DDK in this file compared
+TA-only frames with rendered ones.** perfmicro ended each frame with a
+glFinish. On the DDK's pbuffer that only kicks the TA and keeps the scene
+open: ta3d-state's captures show its 3D renders once every 44 to 566
+"frames" (1,215 kicks, 13 scenes). Ours renders every frame. perfmicro now
+ends each frame with a 1-pixel glReadPixels (7884888), which renders on
+both.
+
+EA3, normal boot, the same binary (frames a second; ours/DDK):
+
+| test | DDK 720x480 | ours | ours, zerocopy | DDK 1440x960 | ours | ours, zerocopy |
+|---|---|---|---|---|---|---|
+| fill | 812 | 777 (0.96) | 748 | 237 | 230 (0.97) | 233 |
+| fill-blend | 200 | 186 (0.93) | 186 | 53.6 | 51.9 (0.97) | 51.8 |
+| tex | 1067 | 818 (0.77) | 804 | 335 | 238 (0.71) | 238 |
+| verts | 358 | 137 (0.38) | 322 (0.90) | 199 | 107 (0.54) | 190 (0.95) |
+| rows | 99 | 81 (0.82) | 85 | 70 | 59 (0.85) | 62 |
+
+- Fill and blend are at the DDK's speed: the per-pixel gaps of the 0.5x
+  tables above were the DDK not rendering.
+- **Texturing** is 0.71-0.77 of the DDK. A real per-pixel gap, next to look
+  at.
+- **Vertices:** 0.38-0.54 by default and 0.90-0.95 with
+  `SGX_DEBUG=zerocopy` since 72b75fb: an indexed draw from buffers takes its
+  indices as they are, from the index buffer's device copy, with no CPU work
+  a draw. Zero-copy is still opt-in. Its own 79 dEQP fails (depth_stencil,
+  point clipping; the same with or without the resident indices) are what
+  keep it so: fixing them gets every app the vertex path at the DDK's speed.
+- Minecraft swaps every frame, so the DDK renders there too: its profile (TA
+  ~42 ms, 3D ~26 ms) stays the honest target.
+
 ## Shader code against libusc
 
 The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with
