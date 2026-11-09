@@ -945,6 +945,16 @@ def build(a):
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)       # context page directory
     a.i("wdf")
     a.i(f"str #{0xc38 // 4}, r4")                   # DIR_LIST_BASE1 = ctx PD (slot 1), list 0 (kernel PD) left intact
+    # BIF directory-cache invalidate after the PD switch (EUR_CR_BIF_CTRL 0xc00 bit 3 =
+    # INVALDC), as do_ta does on its PD load. The transfer path omitted it, so a 2nd
+    # client's first transfer translated through the 1st client's cached list-1 PD entries
+    # and BIF-faulted reading stale background/PDS program offsets (exec base +0/+0x4000
+    # instead of +0x1020); only a microkernel restart cleared it. The DDK pulses this on a
+    # PD change (pc 0x17ec); we pulse every transfer, which is cheap (ta3d-state decode).
+    a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
+    a.i(f"str #{0xc00 // 4}, r5")
+    a.i("limm r5, #0")
+    a.i(f"str #{0xc00 // 4}, r5")                   # restore BIF_CTRL = 0
     a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     # transfer's 3D field (b22-26) into 0xa74 (DDK pc 0x13a1): xfer cmd word 101
     # (+0x194), masked replace like the render 3D field. r9 = transfer cmd base.
