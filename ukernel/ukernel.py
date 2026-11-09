@@ -2070,8 +2070,11 @@ def build(a):
     a.i("limm r4, #2")                                # 0x630 = 2: TA slot 0, 3D slot 1
     a.i(f"str #{0x630 // 4}, r4")
     a.i(f"str #{0x62c // 4}, r3")                     # slot-0 register = rtentry w5
-    a.i("limm r4, #1")
-    a.i(f"str #{CR_DPM_LOADSEL // 4}, r4")            # 0x65c = 1
+    # NO 0x65c = 1 on the OOM terminate path: the DDK never sets DPM load-select here (sa8 b1 is always set by
+    # the terminate path, so it skips both 0x65c=1 writes) -- r65c = 0 in all 1.04M DDK rows; ours set it in 4.
+    # With 0x65c = 1 the 0x698 = 2 control clear at teardown widened to the free-list bookkeeping and dropped
+    # ring entries the final free never relinked (page count back to 0 but the ring short -> the MT-onset dry).
+    # ta3d-state decode 2026-11-09. (The paired 0x65c = 0 below is now a no-op; kept so 0x65c stays 0.)
     a.i("limm r4, #1")
     a.i(f"str #{CR_DPM_STATE // 4}, r4")              # 0x694 = 1: store the TA slot's partial state
     a.wait(CR_EVENT_STATUS, 0x10, CR_EVENT_HOST_CLEAR)
@@ -2346,8 +2349,9 @@ def build(a):
     a.i("shr r5, r5, #1")                             # unpause the TA FIRST (clear 0xa74 b0)
     a.i("shl r5, r5, #1")
     a.i(f"str #{0xa74 // 4}, r5")
-    a.i("limm r4, #1")
-    a.i(f"str #{CR_DPM_LOADSEL // 4}, r4")            # 0x65c = 1
+    # NO 0x65c = 1 before the 0x698 = 2 control clear: the DDK never sets DPM load-select on the OOM terminate
+    # path (r65c = 0 in all 1.04M DDK rows). With it set, the control clear dropped page-ring entries the final
+    # free never relinked -> the MT-onset short-ring dry. ta3d-state decode 2026-11-09.
     a.i("limm r4, #2")
     a.i(f"str #{CR_DPM_CONTROL // 4}, r4")            # 0x698 = 2: DPM control clear
     a.i("limm r4, #0")
