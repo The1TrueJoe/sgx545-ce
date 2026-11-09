@@ -327,6 +327,19 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   ready to move.
 - [x] **Module parameters.** Down to `job_timeout_ms` and `reap_after_render`
   (the second waits on the graveyard policy below).
+- [ ] **One parameter buffer per device (cross-client exposure).** Every
+  render context of every client shares the device's PB, mapped at the same
+  3D-params address in every VM (2c1f6ac), as the DDK shares one PB
+  descriptor (`pb.c`, `SGXFindSharedPBDescKM`). The DPM's free-list state is
+  one set of registers, and the open microkernel, like the DDK's, doesn't
+  switch it between PBs; two PBs ran each other's lists off their ends (bug
+  B). The cost: client A's GPU work can address client B's binned parameter
+  data, a cross-process read of geometry. Userspace can't reach the PB any
+  other way: the 3D-params range is outside every client heap, so `VM_MAP`
+  refuses it and no CPU mapping exists. Reviewers will ask. The follow-up is
+  a PB per client with the microkernel storing and loading the DPM free-list
+  state on a PB change (ta3d-state's rules, `UKERNEL.md` e2d08c2); the
+  kernel side is the per-VM PB this replaced.
 - [ ] **Graveyard policy.** Released firmware objects are kept until the next
   restart unless `reap_after_render`; to settle with open-ukernel whether a
   later render's completion is enough, then drop the parameter.
