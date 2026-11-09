@@ -787,6 +787,31 @@ pc 0x0b90, and a sa8 flag from an earlier pass). They:
 So the DDK renders the partly binned scene to free pages, then resumes the
 TA. What 0x69c's values 1 and 4 command is G.
 
+**The partial render** [D, code; not run on hardware]:
+1. **Stop the TA.** Write 0x24c = 1 and wait for `EVENT_STATUS` 0x100000.
+   Save 0x720 (its bits 5-13 are the TA's layer) and the counters in TA3D
+   words 35-40. Then write 0x69c = 4 and pause the TA (0xa74 |= 1).
+2. **TA_TERMINATE.** The hardware raises `EVENT_STATUS` b12. The dispatcher
+   acks 0x1000 (pc 0x0add) and enters pc 0x0c23, the partial-render 3D start.
+   It defers if the 3D is busy.
+3. **The partial-render 3D start** (pc 0x0c30-0x0d75) runs on the open
+   scene's render details and RT entry, with these differences:
+   - the layer index is the TA's layer from step 1, not render details +0x108;
+   - region headers (0x408) are offset by layer × RT entry word 11, and the
+     ZLS addresses by layer × render details +0x118/+0x11c;
+   - ZLS follows the 3D flags: b8 ORs 0x22000 into 0x480, b7 ORs 0x44000 |
+     0x80000, and a layer already stored ORs 0x8000. With neither flag,
+     0x480 &= 0xfff99ff9.
+4. **At its end** (pc 0x0df7): 0x69c = 1, and the layer word gets b1. The TA
+   continues, and the scene's last kick renders it normally.
+
+**Layer words.** RT entry word 12 points at one u32 per layer; RT entry
+word 10 is the count. A scene's first kick clears them (pc 0x087e,
+0x0a80). A render's completion sets b0 (pc 0x0f8f), and a partial render's
+end sets b1 (pc 0x0dff). The normal 3D start adds the ZLS load bits when b1
+is set (pc 0x1269-0x1288). The ZLS words store or load nothing without 3D
+flags b7 | b8.
+
 A parameter-buffer fault at `0x1ffff000` (the 3D-params heap base + page
 0xffff) is the free list's end-of-list sentinel: the TA allocated past the
 last page because nothing stopped it at the out-of-memory event.
