@@ -809,6 +809,26 @@ has a render on the 3D:
    - ZLS follows the 3D flags: b8 ORs 0x22000 into 0x480, b7 ORs 0x44000 |
      0x80000, and a layer already stored ORs 0x8000. With neither flag,
      0x480 &= 0xfff99ff9.
+   - **The region-header redirect** (pc 0x0d7b-0x0d8d): **0x50c = 0x408**,
+     so the "next render" region headers are this render's. The 3D resets
+     the lists it renders, and the TA resumes into empty ones. Without this,
+     the scene's final render walks the same lists again and the DPM frees
+     their pages twice: the high half of 0x724 underflows (0xedf9 on a CE5300
+     board, 2026-11-08). On the other path 0x408 is first offset by
+     (0x720 & 0xf) × 0xc0 × RT entry word 2.
+   - **The continuation's background** (pc 0x0d92-0x0d9b): the RT entry's
+     background block (word 4) gets render details +0x12c and +0x130, then
+     `[rd+0x114][layer]`. The final render then reloads the partial render's
+     colour instead of clearing it.
+   - The DPM state is moved before the register program (pc 0x0c40-0x0c93),
+     TA slot 0 and 3D slot 1:
+     1. 0x630 = 2, 0x62c = RT entry word 5, 0x65c = 1;
+     2. 0x694 = 1, wait for 0x10; 0x694 = 2, wait for 0x40;
+     3. 0x630 = 3, 0x674 = RT entry word 5, 0x694 = 4, wait for 0x20;
+     4. 0x630 = 2, 0x65c = 0.
+     The 3D renders the copy in slot 1. An occupied other slot is evicted
+     first with the full store (pc 0x1778). There is no TPC flush, and
+     0x658 = 1.
 4. **At its end** (pc 0x0df7): 0x69c = 1, and the layer word gets b1. The TA
    continues, and the scene's last kick renders it normally.
 
