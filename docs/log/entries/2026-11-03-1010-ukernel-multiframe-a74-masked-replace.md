@@ -21,7 +21,7 @@ d3119a4 slipped through). Offline: run_ours fake/v1/v2/xfer/xfer-rect all MATCH 
 ## HW (EA3 p1, uk-mf.bin md5 a45a421c): multi-frame renders stay byte-identical
 
 On a boot that rendered frame 1, ran 10 consecutive frames (frame-dump x10 after one
-srvinit -o). 6/10 rendered "done", and **every rendered frame's colour buffer is
+srvinit -o). 6/10 rendered "done", and **every rendered frame's color buffer is
 byte-identical to frame 1** (md5 56f8466a == the DDK reference triangle): frames
 1,2,3,7,8,10. No cross-frame corruption, and a timed-out frame does not poison the
 next (frames 4-6 timed out, 7-8 rendered correctly again — the kernel HWRs the stuck
@@ -34,4 +34,4 @@ The 4 TIMED-OUT frames (4,5,6,9) are the lockup_TA race ta3d-state's race.py mod
 kick 2 arriving while kick 1's TA is still running. It is per-FRAME (every frame has
 the two-kick sequence), so it caps the consecutive-render rate (~60% here), not the
 image. "10 frames in a row" and the full dEQP run need the claim-the-CCB-entry-
-before-the-flag serialisation fix so every frame reaches do_3d. That is the next step.
+before-the-flag serialization fix so every frame reaches do_3d. That is the next step.

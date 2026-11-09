@@ -34,7 +34,7 @@ Run from a cold boot, before anything else touched the GPU, in place of
 - The blob-free `tools/replay` frame ran next. Its back buffer was identical to
   the reference (md5 `56f8466a…`, the frame that matches the probe pixel for
   pixel).
-- The i386 blob client `gles2tri` then drew its triangle: the centre pixel is
+- The i386 blob client `gles2tri` then drew its triangle: the center pixel is
   `rgba(0,255,0,255)`, the shader's green, and the swap went to the panel.
 - The replay again, after the blob client: still identical.
 
@@ -265,7 +265,7 @@ reset) runs part 1, zeroes the event kicker, then runs part 2. After that it
 kicks `EUR_CR_EVENT_KICK`. The EDM runs the event PDS program (pds0), which
 starts the microkernel at offset 0xd60, and the kernel then polls
 `HostCtl.ui32InitStatus` for `PVRSRV_USSE_EDM_INIT_COMPLETE`. A timeout
-there only logs "Wait for uKernel initialisation failed" and carries on, so
+there only logs "Wait for uKernel initialization failed" and carries on, so
 `INITSRV_DISCONNECT` succeeding does not prove the microkernel runs. Check
 dmesg, and have a client render.
 

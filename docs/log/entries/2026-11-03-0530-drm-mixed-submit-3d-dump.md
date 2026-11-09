@@ -17,7 +17,7 @@ Three new error-path tests:
 
 `drm/tests/powervr_sgx_hang.c` runs sgxgen (frames) and sgxtex (blits) in one VM. The
 mixed case is one `SUBMIT_JOBS` with two jobs:
-1. a render on context A, signalling A's syncobj;
+1. a render on context A, signaling A's syncobj;
 2. a transfer that waits on that syncobj and copies A's render target to another buffer.
 
 The copy equals the frame in every pixel (16384/16384, 128x128), on the first boot

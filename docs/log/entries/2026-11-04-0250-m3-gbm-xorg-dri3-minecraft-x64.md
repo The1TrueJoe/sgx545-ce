@@ -15,7 +15,7 @@ node (card1, `renderD128`).
 
 `mesa/tests/sgx545_kmscube.c` does the following:
 - renders GLES2 frames through GBM on card0 and flips them onto the display;
-- clears each frame to its own colour and draws a green triangle;
+- clears each frame to its own color and draws a green triangle;
 - checks the last frame in the memory the display scans out, read through `/dev/mem`.
 
 | scanout buffer | FPS | scanout check |
@@ -75,7 +75,7 @@ the chroot has no ALSA device.
 
 Results:
 - The title screen renders: `img/2026-11-04-0320-minecraft-x64-glx-title.png`. Its panorama
-  is drawn only in its lower-left quarter; the rest is grey, not yet looked into.
+  is drawn only in its lower-left quarter; the rest is gray, not yet looked into.
 - A new world loads and renders: textured terrain, water and the HUD
   (`img/2026-11-04-0325-minecraft-x64-glx-world.png`). The player spawned in water and
   drowned, since there is no input but `xdotool`.

@@ -31,7 +31,7 @@ All five lockups: EVENT_STATUS2 = 0x80 (TRIG_TA, b7), 0x2 tasks, BIF_FAULT 0.
 - **Deferral is ruled out.** 0xEC = 0 on every lockup — `k_ta_defer` (SC_TAFLIGHT
   found set when a kick arrives) was NEVER taken. No kick overlaps another at
   dispatch. This also re-explains why the hardware task-mutex was HW-neutral: there
-  is no second concurrent event task to serialise.
+  is no second concurrent event task to serialize.
 - **It is a race, not missing state.** Boot 5 rendered with the identical binary;
   a deterministic missing-register bug (like the 0xa74 one) would fail every frame.
 - **The variance lives in the CCB consumption.** do_ta ran once (boots 1,2,6) or

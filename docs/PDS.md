@@ -363,11 +363,11 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
 
 | bits | meaning | status |
 |---|---|---|
-| 11–16 | source: texture coordinate set + 1 (TC slot from the GL varying map); 0 = the fragment's position (gl_FragCoord: `27800000` x3, `27c00000` x4: x and y at pixel centres in the target's memory order, z, then 1/w; capture `fragcoord`, `fragcoordw`, 2026-11-02); 0x20 = colour (`0x1c10000`); 0x22 = the depth plane a discard's `pcoeff` reads, x3 (ISA.md "Phases, visibility feedback and discard") | capture |
-| 21 | colour iterator at precision < 2 | confirmed (set by GL); meaning of the precision values guessed |
-| 22–23 | components − 1 (forced 4 for colour) | confirmed |
+| 11–16 | source: texture coordinate set + 1 (TC slot from the GL varying map); 0 = the fragment's position (gl_FragCoord: `27800000` x3, `27c00000` x4: x and y at pixel centers in the target's memory order, z, then 1/w; capture `fragcoord`, `fragcoordw`, 2026-11-02); 0x20 = color (`0x1c10000`); 0x22 = the depth plane a discard's `pcoeff` reads, x3 (ISA.md "Phases, visibility feedback and discard") | capture |
+| 21 | color iterator at precision < 2 | confirmed (set by GL); meaning of the precision values guessed |
+| 22–23 | components − 1 (forced 4 for color) | confirmed |
 | 24 | plain iteration enabled | confirmed |
-| 25–26 | a 2-bit field, seen only as 3 or 0. It is 3 on every entry the GL builder 0x36b00 makes: plain, merged and pure-sample (`27800000`, `37400800`, `46012201`). It is 0 on the two entries built elsewhere, the clear's colour `21c10000` and the background object's sample `40012001`. Both of those are drawn at w = 1, so a guess is perspective-correct interpolation | 3/0 split strong (captures); meaning guess |
+| 25–26 | a 2-bit field, seen only as 3 or 0. It is 3 on every entry the GL builder 0x36b00 makes: plain, merged and pure-sample (`27800000`, `37400800`, `46012201`). It is 0 on the two entries built elsewhere, the clear's color `21c10000` and the background object's sample `40012001`. Both of those are drawn at w = 1, so a guess is perspective-correct interpolation | 3/0 split strong (captures); meaning guess |
 | 27 / 28 | precision 2 / precision 1 from the USP entry; mediump varyings give bit 28 | confirmed field, guess that 1 = F16 |
 | 29 | last plain iteration | confirmed |
 
@@ -380,7 +380,7 @@ entry by copying `w0 & 0x400007ff` and `w1 & 0x7f`. Confirmed.
   - `17c00800 37401000`: tc0 ×4, then tc1 ×2 (last).
   - `37c00a02 46012203`: tc0 ×4 merged with a sample of tc1, then a sample
     of tc2 (last sample).
-  - `21c10000`: the clear's colour ×4.
+  - `21c10000`: the clear's color ×4.
   - `40012001`: background object, sample tc0 with type bits 0.
 
 ### DOUTT: texture state (4 words)

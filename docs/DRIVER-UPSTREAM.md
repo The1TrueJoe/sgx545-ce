@@ -69,11 +69,11 @@ The hardware facts it holds:
 | constant formats: F32, F16 (round to nearest even), C10 (clamp(lrint(v·255)), ±2.0), our kinds 0x10/0x11 | `sgx_draw.c` | ISA.md "Hardware checks" (hwt_p3, tests/c10); COMPILER-UPSTREAM §3 | hardware | keep (kinds 0x10/0x11 move into `sgx_const_map`) |
 | what a compiled program needs (constants, iterations, samples, branches) | `sgx_program.c` `read_program` | `sgx_compiler.h` `struct sgx_shader` | — | done (b2ef377): the driver reads `struct sgx_shader`; nothing writes or parses a USP in `mesa/` |
 | dependent samples: the compiler's smp template (`sgx_sample_info.smp`) patched (dst l21-27, state in SA at l7-13, bank l30-31) + `wdf`, branch offsets moved | `sgx_program.c` `insert_samples` | ISA.md "The texture-sample sequence" | hardware (A/B pixel-exact) | compiler: it emits the smp and wdf in place; the driver only passes the texture words |
-| gl_FragCoord: the compiler's iteration (set + 1 = 14) has no DOUTI source we know, so the shader is refused | `sgx_program.c` `read_program` | PDS.md "DOUTI" (sources: set + 1, 0x20 colour) | — | doc gap: capture the DDK's DOUTI for gl_FragCoord |
+| gl_FragCoord: the compiler's iteration (set + 1 = 14) has no DOUTI source we know, so the shader is refused | `sgx_program.c` `read_program` | PDS.md "DOUTI" (sources: set + 1, 0x20 color) | — | doc gap: capture the DDK's DOUTI for gl_FragCoord |
 | gl_PointCoord: iterated as texture coordinate set 0 | `sgx_program.c` | PDS.md "DOUTI" (w1 b4/b5 "coordinate replacement", not captured) | — | doc gap: capture a point-sprite draw |
 | varyings: set = location − VAR0 on both sides | `sgx_program.c`, `sgx_screen.c` | — (our convention) | — | keep |
 | render targets BGRA8888 only, rows padded to 32 px | `sgx_screen.c`, `sgx_resource.c` | STATE.md §4 "PBE words", "Format codes" | capture (code 0), FBO formats [C] | keep |
-| "as the DDK does" comments (indices, uniform pins, ghosting, context sharing) | throughout | — | — | reword to cite the doc section and the test that fixed the behaviour |
+| "as the DDK does" comments (indices, uniform pins, ghosting, context sharing) | throughout | — | — | reword to cite the doc section and the test that fixed the behavior |
 
 ## 3. The winsys: GPU command words
 
@@ -97,11 +97,11 @@ to it.
 | VDM state info word `rows<<26 \| (n + 0x2000) \| 0x2020400 \| (dwords+3)>>2` with a rotating index n | `state_block` | STATE.md §2, GEN.md | capture (values) | doc gap: hardware-test a constant n (is the rotation needed?) and name the fields |
 | draw info word (output dwords, input size, vertices per task, PDS rows); vertices per task = 128 / output dwords, ≤ 16 | `vdm_draw`, `vertices_per_task` | STATE.md §2, GEN.md | capture (probe-st at 4-24 output dwords) + hardware (half that hangs) | doc gap: STATE.md §2 should carry the vertices-per-task table and the field layout |
 | identity index buffer for glDrawArrays | `sgxws_ctx_create` | NOTES.md, STATE.md §2 | capture | keep |
-| TA state block: header bits, ISPA (depth compare, write, pass type, b21 no colour), ISPB (colour mask, line width), ISPC stencil, region clip, PDS words, viewport, output select, MTE cull, W clamp, TSP sizes | `sgxws_clear`, `sgxws_draw`, `ispa`, `mte_ctrl` | STATE.md §3 | capture [D] + replay [C]; [G]: MTE 0x1555620/0x40, output select 0x3000/0x1800, PDS middle word bits | keep; each [G] is a hardware-poke candidate |
+| TA state block: header bits, ISPA (depth compare, write, pass type, b21 no color), ISPB (color mask, line width), ISPC stencil, region clip, PDS words, viewport, output select, MTE cull, W clamp, TSP sizes | `sgxws_clear`, `sgxws_draw`, `ispa`, `mte_ctrl` | STATE.md §3 | capture [D] + replay [C]; [G]: MTE 0x1555620/0x40, output select 0x3000/0x1800, PDS middle word bits | keep; each [G] is a hardware-poke candidate |
 | PDS middle word: b18-24 secondary dwords, b0-15 by varyings | `sgxws_draw` | STATE.md §3 "PDS words" | capture | doc gap: the varyings table the code computes (EA3 captures with 0-5 vec4 varyings) |
-| blend epilogue: `sop2 o0, pa<c>, o0` with GL's factors as selectors, swap for reverse subtract | `sgxws_blend_words` | STATE.md §3 "Blending and the colour mask are shader code"; ISA.md sop2 | capture + hardware (A/B pixel-exact) | compiler: the compiler emits the epilogue from ISA.md's sop2 section; the winsys hand-encodes no instruction words |
-| colour mask: `sopwm o0, pa<c>, pa<c> [end mask=…]`, ISPB b4-7 | `wmask_words`, `clear_pds_masked` | STATE.md §3, ISA.md sopwm | capture + hardware | compiler, as the blend |
-| discard program: phase 0 `phas`, `pcoeff`, shader, `atst8 [end]` with h10; phase 1 colour out + `phas [end]` | `sgxws_upload_fs` | ISA.md "Phases, visibility feedback and discard" | capture + hardware | compiler |
+| blend epilogue: `sop2 o0, pa<c>, o0` with GL's factors as selectors, swap for reverse subtract | `sgxws_blend_words` | STATE.md §3 "Blending and the color mask are shader code"; ISA.md sop2 | capture + hardware (A/B pixel-exact) | compiler: the compiler emits the epilogue from ISA.md's sop2 section; the winsys hand-encodes no instruction words |
+| color mask: `sopwm o0, pa<c>, pa<c> [end mask=…]`, ISPB b4-7 | `wmask_words`, `clear_pds_masked` | STATE.md §3, ISA.md sopwm | capture + hardware | compiler, as the blend |
+| discard program: phase 0 `phas`, `pcoeff`, shader, `atst8 [end]` with h10; phase 1 color out + `phas [end]` | `sgxws_upload_fs` | ISA.md "Phases, visibility feedback and discard" | capture + hardware | compiler |
 | vertex program wrapping: phase 0 (prologue), phase 1 (shader, `emit.t3`), epilogue phase (`emit.t1 … f3_20`) | `sgxws_upload_vs` (copies words out of `usse_vs_xy`) | ISA.md "Phases, visibility feedback and discard", "Vertex shaders" | capture + hardware (a missing epilogue hangs) | compiler |
 | the prologue `nop; test.and.ne p0, #0, #0; (p0) ld; wdf` | `usse_progs.h`, every vertex/state task | — (mkusse.py: "kept because the DDK always emits it") | capture | doc gap: hardware-test without it; if it's needed, say why in ISA.md |
 | fixed USSE programs: state-emit ×32, clear VS, copy FS, pixel-event tasks, the empty task | `sgx_usse_progs.h` (generated) | GEN.md lists them; no program text in docs | capture + hardware | doc gap: the program text and purpose go into GEN.md or ISA.md; compiler: assembled at build time by the compiler's encoder |
@@ -132,7 +132,7 @@ STATE.md §1/§6 and UKERNEL.md.
    program as it is, and a driver should run one written from what the
    events need.
 2. **Move every hand-encoded USSE word into the compiler.** The winsys
-   writes instruction words in raw hex in five places: the blend, the colour
+   writes instruction words in raw hex in five places: the blend, the color
    mask, discard's `pcoeff`/`atst8`/`phas`, the EOT's `limm`/`emitpix`, and
    the vertex wrapper. With the compiler's isaspec encoder
    (COMPILER-UPSTREAM §4), these become compiler output, and the fixed

@@ -1,6 +1,6 @@
 # Constant-colour blending: the DDK multiplies it out
 
-The Mesa driver blends with one `sop2` after the fragment colour, its
+The Mesa driver blends with one `sop2` after the fragment color, its
 selectors standing in for GL's factors. GL_CONSTANT_COLOR and friends had no
 selector, and ISA.md listed two unexplained ones, k18 and k19, that looked
 like the place a constant would go. Those draws fell back to opaque.
@@ -13,7 +13,7 @@ side and both show one shape:
 - Four `sopwm`s compute `r1 = dst × Fd` and `r0 = src × Fs`, an RGB pass
   then an alpha pass with a byte mask.
 - One `sop2` adds them.
-- The blend colour is just a fragment constant, packed BGRA8, in sa2.
+- The blend color is just a fragment constant, packed BGRA8, in sa2.
 
 `sgxs_blend_const` rebuilds the DDK's five instructions from libGLESv2's
 own tables, with the registers as parameters, bit-exact for all seven
@@ -33,7 +33,7 @@ And k18/k19, tried in an ONE, ZERO blend's `sop2`:
 
 - **k19** reads 0.
 - **k18** reads state left over from earlier tasks: values that differ per
-  4×4 block and step by the shader's own colour factor.
+  4×4 block and step by the shader's own color factor.
 
 Neither is a constant register.
 
@@ -46,7 +46,7 @@ ONE, ZERO blend, with k18 as c1 (blocks of leftovers), and with k18 as a1.
 
 Use `sgxs_blend_const` for any blend with a constant factor:
 
-- give it the colour's pa register and the sa register the blend colour is
+- give it the color's pa register and the sa register the blend color is
   in (`sgxs_blend_color_word`);
 - give the program two temporaries.
 

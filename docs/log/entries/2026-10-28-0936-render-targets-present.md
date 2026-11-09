@@ -66,7 +66,7 @@ Replaying the frame with the window path's ZLS bits on the FBO's render
 of those lockups needed a power cycle. A later run showed why: the DDK leaves
 the stencil address words of an FBO without stencil at a placeholder that
 points past the end of memory. With valid stencil words, b0 runs fine and
-turns out to be a depth-only render (depth stored, no colour). The rest of the
+turns out to be a depth-only render (depth stored, no color). The rest of the
 bit sweep is in `docs/TEX.md` section 7.
 
 ## Numbers

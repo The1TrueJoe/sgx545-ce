@@ -3,7 +3,7 @@
 The last Imagination binary in the stack was the 53 KB USSE microkernel that
 `srvinit` uploads. This is the start of replacing it: the whole thing
 disassembled and understood, an offline emulator that runs it against a frame,
-a behavioural spec, and the first piece of an open replacement.
+a behavioral spec, and the first piece of an open replacement.
 
 ## Decoder
 
@@ -20,7 +20,7 @@ subset (moves, limm, bitwise, test, the integer multiply-adds, device
 loads/stores, ldr/str to the register file, branches/calls/setl/savl, emit,
 program end) against a sparse device-memory model and the core register file;
 it stops on any instruction it has no rule for, so a run that completes is
-real behaviour. `sgxsim.py` lays kernel data out as `srvinit` does, models the
+real behavior. `sgxsim.py` lays kernel data out as `srvinit` does, models the
 five entry PDS programs and the registers the microkernel polls, and plays the
 host side. `fromtrace.py` loads device memory, HW contexts and kick parameters
 from a pvrtrace log — a DDK capture or a `tools/gen` `frame-fake` run (which
@@ -47,7 +47,7 @@ interrupt by writing `SW_EVENT` into `EVENT_STATUS` itself.
 (TA, transfer, power, context-suspend, cleanup, misc-info, process-queues,
 HWPerf, flush), the init handshake, the completion/sync path, the TA and 3D
 register sequences with per-register provenance, and open questions. In our
-own words, from behaviour — no listings, no bytes.
+own words, from behavior — no listings, no bytes.
 
 ## Open microkernel
 

@@ -55,6 +55,14 @@ static const struct { const char *name; unsigned off; } REGS[] = {
     {"r638",          0x638},   // TA free-list state, reloaded from 0x724/0x72c
     {"a74",           0xA74},   // b0 = TA paused by the handler
     {"ctx630",        0x630},   // DPM context select: b1 the 3D's slot, b2 the TA's (two scenes on one PB)
+    // the OOM partial render (UKERNEL.md "The partial render"): read by the DDK microkernel itself
+    {"r720",          0x720},   // TA position: b5-13 the layer the OOM render uses
+    {"r658",          0x658},   // 1 during an OOM partial render, 0 for a normal render
+    {"r65c",          0x65C},   // 1 around the DPM state shuffle and the end-of-render control clear
+    {"r62c",          0x62C},   // DPM state block, slot 0 (RT entry word 5)
+    {"r674",          0x674},   // DPM state block, slot 1
+    {"r408",          0x408},   // region headers of this render
+    {"r50c",          0x50C},   // region headers of the next render (= 0x408 in an OOM render)
 };
 #define NREG (sizeof(REGS) / sizeof(REGS[0]))
 

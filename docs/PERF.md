@@ -48,7 +48,7 @@ How each stack runs the shared measures:
 `mesa/tests/perf/profile-new.sh` runs glmark2 and the microbenchmark under `perf record` on the
 box, with `SGX_DEBUG=stats`. `mc-oldnew.sh new` with `MC_PROFILE=SECS` profiles Minecraft's
 java over part of the standing view. Java's JIT frames show as unresolved addresses; Mesa and
-the kernel are symbolised.
+the kernel are symbolized.
 
 | date | benchmark | top CPU hotspots (share of samples) | driver stats |
 |---|---|---|---|
@@ -93,16 +93,16 @@ is higher on ours too.
 - **Texture layout.** POT textures are twiddled on both.
 - **Vertex shader length.** One instruction more than the DDK's.
 
-### Found (ta3d-state's DDK capture; STATE.md "The DDK's fragment programs for a flat colour and one sample")
+### Found (ta3d-state's DDK capture; STATE.md "The DDK's fragment programs for a flat color and one sample")
 
-1. **Flat colour.**
-   - The DDK packs the colour to U8 once a draw in its secondary program, and
+1. **Flat color.**
+   - The DDK packs the color to U8 once a draw in its secondary program, and
      the pixel program is `mov pa0, sa9` (+ the blend).
    - Ours packs f32 -> U8 every pixel (2 `pck.u8.f32`).
    - Fix: constant kind 0x12. The CPU packs the vec4 as BGRA8 at upload
      (driver side done, 7070f2b) and the compiler emits one mov
      (usse-compiler).
-2. **One texture sample to the colour.**
+2. **One texture sample to the color.**
    - The DDK samples RGBA8 with T1 format 0x0d, so the texel arrives in the
      output's byte order, and the program is `mov o0, pa0`.
    - Ours uses 0x0c and unpacks to f32 and repacks: 6 instructions, 2 temps.
@@ -111,7 +111,7 @@ is higher on ours too.
      - add a per-sampler "BGRA-ordered" mask as a fragment-shader variant,
        like the sRGB one;
      - the compiler unpacks those samplers zyxw, and emits a plain mov when
-       the texel goes to the colour unchanged.
+       the texel goes to the color unchanged.
    - Interim: 2 `pck.u8.u8` lane picks.
 3. **Per-frame fixed cost and vertices (0.46).** Not found yet.
    - Measure submit -> kick -> done with the powervr_sgx tracepoints (m2).
@@ -196,7 +196,7 @@ the next rows.
   fragment program's floats as mediump:
   - inputs, texels and uniforms become F16, and the ops over them are rebuilt in F16;
   - texture coordinates stay f32.
-- GL asks of fixed-function colour math only the framebuffer's precision, so this is in spec for
+- GL asks of fixed-function color math only the framebuffer's precision, so this is in spec for
   st's `ff-fs` programs.
 - Effect on the highp builds:
   - gl4es Minecraft frags: 68 → 51 issue slots, 19 → 2 temporaries, the same as their mediump
@@ -251,8 +251,8 @@ glmark2, the biggest moves:
 How:
 - **Split** (f2247cb): a 32-bit vreg that no repeat steps through becomes one vreg per
   component.
-- **Colour sources** (f2247cb): a single instruction reads before it writes, so the colour's
-  sources may sit in the colour register.
+- **Color sources** (f2247cb): a single instruction reads before it writes, so the color's
+  sources may sit in the color register.
 - **In-place repeats** (083bdd0, 65e768e): a repeat whose source dies there, read at the
   component it writes and stepping with it, writes over it. That is libusc's
   `fmad pa0, pa0, pa4, pa8 rpt=4`: iteration k reads component k before writing it, and no later
@@ -261,13 +261,13 @@ How:
   first and last use. 32-bit and F16 vregs both.
 - **mediump demotion** (a919daa): an op over mediump operands runs in F16, as GLSL ES allows.
   Mesa had left `a * b` of mediump varyings in f32.
-- **F16 colour pairs** (a919daa): (g, r) / (b, a), one register per `pck`.
+- **F16 color pairs** (a919daa): (g, r) / (b, a), one register per `pck`.
 - **`fdp`** (77632f3, 649281d): it writes only its last iteration's register, once and after its
   reads. So the operand names that register alone, and it may land on its own inputs.
 - **Output registers** (60c90ff): a vertex shader's temporaries go in output registers before
   their first write, as libusc does (`fmad o0, pa0, sa18, o0`). The `mat4 * v` accumulator ends
   in `o0`.
-- **Colour clamp** (649281d): `clamp(colour, 0, 1)` goes, since the U8 `pck` saturates.
+- **Color clamp** (649281d): `clamp(colour, 0, 1)` goes, since the U8 `pck` saturates.
 
 What still holds temporaries:
 - internal registers (libusc's `efo` keeps `mat4 * v` partials in i0/i1);
@@ -289,16 +289,16 @@ What still holds temporaries:
   - libusc tests into a predicate and writes the result under `(p0)` / `(!p0)`.
   - We compute a 1.0/0.0 value or a mask and `movc` it.
   - c3: `movc` 452 against 48, `testmask` 108 against 18.
-- **8-bit colour math.**
-  - libusc adds and multiplies RGBA8 texels and lowp colours in U8/C10 (`sopwm`, `sop2`).
+- **8-bit color math.**
+  - libusc adds and multiplies RGBA8 texels and lowp colors in U8/C10 (`sopwm`, `sop2`).
     `t_two` (sum of two textures) is 1 instruction.
   - We unpack every texel to F16 or F32, compute, and pack again: 11 instructions for
     `t_two`.
   - The sampler's channel swizzle (`zyxw`) also saves libusc the reorder.
   - Example: `gl_FragColor = texture2D(s, uv)` (`tx_nd_*`) is 0 instructions for libusc. The
-    sample is swizzled into the colour's byte order and its PA register is the colour.
+    sample is swizzled into the color's byte order and its PA register is the color.
   - We spend 4 (unpack, pack). Closing it needs the driver to take a sample swizzle and the
-    colour in the sample's register.
+    color in the sample's register.
 - **Loops.**
   - We unroll every loop fully. `lp_nest` is 66 instructions against 11, but it runs no
     branches, so it is no slower.
@@ -339,7 +339,7 @@ The stages:
 | run → kick | the driver: the microkernel command built, imports flushed, the kernel CCB written and the doorbell rung |
 | kick → irq | the GPU and the microkernel, to the interrupt that reports the job |
 | irq → done | the interrupt thread finding the job done, imports flushed again |
-| done → finished | the hardware fence's callback signalling drm_sched's finished fence, which userspace waits on |
+| done → finished | the hardware fence's callback signaling drm_sched's finished fence, which userspace waits on |
 
 ### Baselines (EA3, 2026-11-08)
 

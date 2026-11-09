@@ -42,7 +42,7 @@ never ran — the command was never processed. The core locks up ~210 ms after
 `SysFinalise` with `EUR_CR_EVENT_STATUS2` `dcu_invalid` set, in both runs,
 identically.
 
-### Localised with sentinels
+### Localized with sentinels
 
 Three sentinels were placed on the post-init path (debug build, not committed),
 writing markers to free control-block words T3C-C0/C4/C8:
@@ -83,7 +83,7 @@ the common block after the `if (s->ours)` branch): the event PDS program address
 DOUTU vs the DDK's) and the host-kick table differ. So for `-o` the event program
 is armed and SW_EVENT is enabled exactly as for the working DDK path — the
 re-trigger is set up. The blocker is therefore in the **microkernel's own
-behaviour after init**, not srvinit registration: the open microkernel's init task ends but the
+behavior after init**, not srvinit registration: the open microkernel's init task ends but the
 core does not return to the event-wait state to re-run B_PDS0 on the next
 SW_EVENT (it locks up with 2 tasks pending, `dcu_invalid`). This implicates the
 init task's exit / task-phase handling (the `phas.i`/`nop [end]` wrapper, or

@@ -37,7 +37,7 @@ Every field below carries one of these tags:
 In the terms of docs/CLEANROOM.md: **encoder** is `static` (the decompile)
 plus `oracle` (the same encoder run black-box, which is what makes a
 position or value a fact); **corpus** is `oracle` (the DDK's compiler as a
-behavioural oracle); **hardware** is `hardware`; **writer / reader /
+behavioral oracle); **hardware** is `hardware`; **writer / reader /
 driver** are `static`. A fact tagged only **guess** or `static` is not
 something shipping code may rely on yet.
 
@@ -306,7 +306,7 @@ Each test is a main pixel program poked into the probe frame's replay (main
 program at 0x37008388, its DOUTU given 16 temporaries) that ends `mov o0, rN
 [end]`; the PBE writes o0 unchanged, so the back buffer's pixels inside the
 triangle are rN (all 32 checked pixels equal; the background is the clear
-colour). Inputs come from `limm`. About 400 draws, no GPU hang or recovery.
+color). Inputs come from `limm`. About 400 draws, no GPU hang or recovery.
 Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
 
 | suite | what | result |
@@ -367,9 +367,9 @@ h27-31 is the hardware opcode. One encoder per class:
 | prefix | file | encoding | notes |
 |---|---|---|---|
 | r | temporaries | 7-bit number | r124-r127 are the internal registers i0-i3: the encoder writes i<n> as r(124+n) in any slot that can't name the internal bank (**encoder**); under format select, numbers are 6 bits |
-| pa | primary attributes | 7-bit | fragment: iterated varyings and non-dependent texture results; vertex: the vertex attributes; the fragment colour is assembled here (**corpus**). The budget is 0x80 minus USP header +0x3c (notes from the finalizer) |
+| pa | primary attributes | 7-bit | fragment: iterated varyings and non-dependent texture results; vertex: the vertex attributes; the fragment color is assembled here (**corpus**). The budget is 0x80 minus USP header +0x3c (notes from the finalizer) |
 | sa | secondary attributes | 7-bit | uniforms, texture state, results of the secondary update program (**corpus**) |
-| o | outputs | 7-bit | vertex outputs; the finalised fragment colour (**hardware**) |
+| o | outputs | 7-bit | vertex outputs; the finalized fragment color (**hardware**) |
 | c | hardware constants | number < 64 on the c/g bank | table below (**encoder**: libusc's regpack.c) |
 | g | special registers | number + 0x40 on the c/g bank | g0-g45 (**encoder**: range); the corpus uses g17 as the per-instance stride when addressing temp arrays |
 | i | internal | i0-i3 | bank 3 + ext in dst/src1/src2; fdual's secondary op works in i0-i2 |
@@ -417,7 +417,7 @@ values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
 | h23 | skipinv | skip invalid instances (libusc INST_SKIPINV; set on nearly every compiled instruction) | encoder; name from libusc's flag name |
 | h20 | syncs | sync start (libusc INST_SYNCSTART) | encoder; name from libusc's flag name |
 | h11 | nosched | no scheduling (libusc INST_NOSCHED, named in an asm.c assert) | encoder |
-| h18 | end | last instruction of the program | encoder; hardware (the finalised probe programs end with it) |
+| h18 | end | last instruction of the program | encoder; hardware (the finalized probe programs end with it) |
 
 ### Operands (generic encoder FUN_00107830)
 
@@ -747,7 +747,7 @@ oracle; **corpus** = what GLSL produces it; **guess** = name/meaning not backed.
 
 Format codes (both fields): 0 u8, 1 s8, 2 o8, 3 u16, 4 s16, 5 f16, 6 f32,
 7 c10. The code -> name map is **encoder** (it follows the USEASM op enum,
-whose order PCK<dst><src> is fixed by the corpus: 0x20 = F32->U8 colour
+whose order PCK<dst><src> is fixed by the corpus: 0x20 = F32->U8 color
 writes, 0x4e = C10 lowp, 0x14 = F32->F16 for mediump); "o8" as an
 offset/biased 8-bit format is a **guess**.
 
@@ -759,7 +759,7 @@ offset/biased 8-bit format is a **guess**.
 | h2-5 | dmask | destination byte write mask, USEASM arg0 flags b7-10. Encoder limits: dst u16/s16/f16 only 3, 0xc, 0xf; f32 only 0xf; 8-bit and c10 any. A partial mask needs a non-indexed dest, and on an `i` dest only c10 takes one | encoder; corpus (`pck.u8.f32 … dmask=6/9` pairs build RGBA8 two bytes at a time) |
 | l16-17 | src1 lane (`.l<n>`) | USEASM arg1 flags b5-6 | encoder; meaning by source format is corpus: 8-bit sources pick a byte (`pck.u8.u8 pa9, pa9.l3`), 16-bit sources use 0/2 = low/high half (`pck.f16.f16 pa9, r0, pa9.l2`), c10 picks the 10-bit channel (`pck.f16.c10 pa11, i2.l2, i2.l1`) |
 | l14-15 | src2 lane | USEASM arg2 flags b5-6 | encoder, as above |
-| l18 | `scale` (pairs with one float side): flags2 b8. `rint` (float->float pairs): flags1 b24. Int->int pairs: encoder never sets it | encoder for the sources. scale = normalise (corpus: every F32->U8 colour write has it). rint: libusc's own trunc (intermediate op 0x96, the fast path of icvt_i32.c's TRC, `psTrcSrc` assert) is `pck.f32.f32 [rint rnd=zero]` -> round to integral with `rnd` (**encoder**+compiler code; the name is ours) |
+| l18 | `scale` (pairs with one float side): flags2 b8. `rint` (float->float pairs): flags1 b24. Int->int pairs: encoder never sets it | encoder for the sources. scale = normalize (corpus: every F32->U8 color write has it). rint: libusc's own trunc (intermediate op 0x96, the fast path of icvt_i32.c's TRC, `psTrcSrc` assert) is `pck.f32.f32 [rint rnd=zero]` -> round to integral with `rnd` (**encoder**+compiler code; the name is ours) |
 | l19-20 | rnd | arg3 must be type 0x10: USEASM 0x3a -> 0, 0x39 -> 1, 0x3b -> 2, 0 -> 3. Required for float->float pairs; with `scale` on float<->int pairs; otherwise not encoded | encoder for the mapping. **hardware** (hwt_p4 `rint_*`, `pck.f32.f32 [rint]` on ±2.5, ±1.7, 3.5, 0.5): **0 = nearest-even, 1 = down (floor), 2 = up (ceil), 3 = toward zero**. It does **not** affect `pck.f16.f32` (always truncates, below) or `pck.u8.f32 [scale]` (always nearest) |
 | l21-27, h0-1, h19 | dst | r o pa sa g i ix | encoder |
 | l7-13, l30-31, h17 | src1 | r o pa sa c g # i ix | encoder |
@@ -774,7 +774,7 @@ Notes:
 - Two sources: the compiler packs two values per instruction (corpus:
   `pck.u8.f32 pa9, pa9, pa13 [dmask=6]` then `... [dmask=9]` builds RGBA8),
   and a one-value conversion passes #0 as src2. **hardware** (hwt_p4
-  `pck_u8_dmask*`, and NOTES.md's colour draws): the enabled bytes, from
+  `pck_u8_dmask*`, and NOTES.md's color draws): the enabled bytes, from
   low to high, take src1, src2, src1, src2 (dmask 3 -> byte 0 src1, byte 1
   src2; dmask 9 -> byte 0 src1, byte 3 src2; dmask 15 -> bytes 0/2 src1,
   1/3 src2; a single enabled byte takes src1). Disabled bytes keep the old
@@ -1049,7 +1049,7 @@ INTSRCSEL (USEASM register type 0x10) values met here. The numbers are **encoder
 | 4 | src0* | 5 | src1 |
 | 6 | src2 | 7 | src0alpha* |
 | 8 | src1alpha | 9 | src2alpha* |
-| 0xa-0xd | cx1..cx8 (dot colour scale) | 0xe-0x11 | ax1..ax8 (dot alpha scale) |
+| 0xa-0xd | cx1..cx8 (dot color scale) | 0xe-0x11 | ax1..ax8 (dot alpha scale) |
 | 0x12 | add* | 0x13 | sub |
 | 0x14 | neg | 0x15 | none |
 | 0x16 | min | 0x17 | max |
@@ -1132,7 +1132,7 @@ The encoder requires the coissue. `dst.rgb = (src1 * c1) cop (src2 * c2)` and `d
 | h6-8, h24 | c1: 0 zero 1 s1 2 s2 3 s1a 4 s2a 5 asat 6 k18; h24 complement | arg4 | encoder |
 | h3-5, h15 | c2: same, 6 = k19 | arg5 | encoder |
 | l18-19 | cop: 0 add, 1 sub, 2 min, 3 max | arg6 | encoder |
-| l20 | cs1c: complement src1 (colour) | arg3 0x1a (else none 0x15) | encoder; usc bComplementCSrc1 |
+| l20 | cs1c: complement src1 (color) | arg3 0x1a (else none 0x15) | encoder; usc bComplementCSrc1 |
 | h20-21, h11 | a1: zero s1a s2a k18 + complement | 0xe3 arg1 | encoder |
 | h9-10, h2 | a2: zero s1a s2a k19 + complement | 0xe3 arg2 | encoder |
 | l16-17 | aop: 0 add, 1 sub, 2 min, 3 max | 0xe3 arg3 | encoder |
@@ -1171,7 +1171,7 @@ h2 and l14-20 are unused. Corpus: lowp add/sub/min/max (`sopwm d, a, b [c1=one c
 
 ### sop3 family (hw 11)
 
-All forms take dst, src0 (r/pa), src1 and src2. cop and aop are 0 add, 1 sub in every form of the family. Selects for c1/c2 (h6-8 + h24, h3-5 + h15) are 0 zero, 1 asat, 2 s1, 3 s1a, 4 s0, 5 s0a, 6 s2, 7 s2a (**encoder**). h21 picks the colour op and h10 the coissued alpha op.
+All forms take dst, src0 (r/pa), src1 and src2. cop and aop are 0 add, 1 sub in every form of the family. Selects for c1/c2 (h6-8 + h24, h3-5 + h15) are 0 zero, 1 asat, 2 s1, 3 s1a, 4 s0, 5 s0a, 6 s2, 7 s2a (**encoder**). h21 picks the color op and h10 the coissued alpha op.
 
 **sop3** (h21=0, h10=0; USEASM 0x59 + 0xde asop / 0xdf arsop):
 
@@ -1189,7 +1189,7 @@ All forms take dst, src0 (r/pa), src1 and src2. cop and aop are 0 add, 1 sub in 
 | h20 | cop | encoder |
 | h13, h9 | a1: zero / s1a + complement | encoder |
 | h12, h14 | a2: zero / s2a + complement | encoder |
-| h11 | cneg: colour result negate (arg7 0x14); only allowed with alrp | encoder |
+| h11 | cneg: color result negate (arg7 0x14); only allowed with alrp | encoder |
 
 **lrp1** (h21=1, h10=0; USEASM 0xe1 + 0xde):
 
@@ -1201,7 +1201,7 @@ All forms take dst, src0 (r/pa), src1 and src2. cop and aop are 0 add, 1 sub in 
 | c1/c2 fields | the coissued asop's two selects, with the family's c1/c2 select values above | encoder |
 | h9 | aop | encoder |
 
-Colour = lerp(l1, l2, cs) is a **guess** from the name.
+Color = lerp(l1, l2, cs) is a **guess** from the name.
 
 **sop3x** (h21=1, h10=1; USEASM 0xe2 + 0xe0): c1 and c2 as above, plus the alrp alpha (a1, a2 as in sop3l).
 
@@ -1215,7 +1215,7 @@ Corpus: lowp `mul_l`/`div_l`/`pow_l`/`mad_l` are `sop3l d, x, y, z [c1=s0 c2=zer
 |---|---|---|---|
 | h24 | 4-vector (dot4) | 0x5b 0x5d 0x5f 0x61 | encoder; usc uVecLength 3/4 |
 | h6 | f6 | 0x5e-0x61 | encoder; meaning unknown |
-| h7-8 | cs: colour scale x1 x2 x4 x8 | arg1 INTSRCSEL 0xa-0xd | encoder |
+| h7-8 | cs: color scale x1 x2 x4 x8 | arg1 INTSRCSEL 0xa-0xd | encoder |
 | h11 / h15 | src1 / src2 complement | arg3/arg4 flag b15 | encoder |
 | h5 | src0 present: coissue 0xda/0xdb (forms dot3s/dot4s) | | encoder |
 | h4 | f4: 0xdb or 0xdd rather than 0xda/0xdc | | encoder |
@@ -1676,7 +1676,7 @@ the word.
 | 2 | `smlsi v0..v3 [lim0 lim1 lim2]` (0xbe) | per operand (dest, src0, src1, src2) an 8-bit value: v0 l24-31, v1 l16-23, v2 l8-15, v3 l0-7; flag h3/h2/h1/h0 set = the value is a swizzle (four 2-bit selects, printed `#0.xyzw`), clear = a signed increment; lim0 h12-15, lim1 h8-11, lim2 h4-7 = USEASM arguments 8-10 / 4 (multiples of 4, up to 60) | encoder, corpus (every swizzled operation is bracketed by `smlsi`; libusc's ISMLSI); limits' meaning guess (temp / pa / sa wrap limits) |
 | 3 | `smbo v0..v3` (0xbf) | as op 1 | encoder; MOE base offsets (the USP code block keeps 4 MOE base offsets) — guess |
 | 4 | `imo v0..v3` (0xc0) | as op 1, signed (the encoder takes -32..31); no register form | encoder; name guess (increment MOE offsets) |
-| 5 | `setfc #a0, #a1` (0xc1) | a0 l0, a1 l8 (USEASM arguments must be #0/#1) | encoder, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l). **hardware** (hwt_p6): **a1 (l8) is the colour-class C10 enable** and is **on at program start**: `sop2 r3, r0.c10, r1.c10` reads C10 with no setfc, after `setfc #1, #1` and after `setfc #0, #1`; after `setfc #0, #0` or `#1, #0` the same word reads r64/r65 (garbage, different per pixel, no fault). **a0 (l0) is the efo F16 enable** and is **off at program start** (hwt_p8: an efo with operand bit 6 reads r64 with no setfc or after `setfc #0, #1`, and the F16 half after `setfc #1, #1`) |
+| 5 | `setfc #a0, #a1` (0xc1) | a0 l0, a1 l8 (USEASM arguments must be #0/#1) | encoder, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l). **hardware** (hwt_p6): **a1 (l8) is the color-class C10 enable** and is **on at program start**: `sop2 r3, r0.c10, r1.c10` reads C10 with no setfc, after `setfc #1, #1` and after `setfc #0, #1`; after `setfc #0, #0` or `#1, #0` the same word reads r64/r65 (garbage, different per pixel, no fault). **a0 (l0) is the efo F16 enable** and is **off at program start** (hwt_p8: an efo with operand bit 6 reads r64 with no setfc or after `setfc #0, #1`, and the F16 half after `setfc #1, #1`) |
 | 6 | `op0xfd dst, #n` (0xfd) | dst l21-27 + h0-1 + h19 (destination slot), n h11-14 (0..8), h23 skipinv | encoder; meaning unknown |
 
 The USP code block header's four MOE words are this state at block entry:
@@ -1760,7 +1760,7 @@ the target label). The patcher lays the blocks out and fills the targets.
   replaces that nop with `atst8 ... [end]` predicated on p1 and splits the
   program into two phases (driver; see "Phases, visibility feedback and
   discard").
-- **calls** (fn_call): the function body is its own labelled region ending
+- **calls** (fn_call): the function body is its own labeled region ending
   in `lapc` (a branch block with label 0xffff); each call site is `br
   [link]` (asm.c ICALL: f1 b19) to that label; arguments and results go
   through ordinary registers (r0-r4 here).
@@ -1862,7 +1862,7 @@ code blocks; the finalizer inserts its generated code at that point.
 | 20 | u32 | sample id | pairs the block with its unpack (block 6); 0, 1, ... per shader | writer, reader, corpus |
 | 24 | u16 | iflags | see above | writer |
 | 26 | u16 | sampler | texture unit, 0..15 (reader rejects >15) | writer, reader, corpus (`tx_nd_two` 0/1, `tx_nd_same2` 0/0) |
-| 28 | u16 | swizzle | 4 × 3 bits: result channel i ← texel channel sel_i (0-3 = xyzw; ≥4 not seen). Bits 12-15 must be 0. The compiler folds a following channel reorder into it: `0x60a` = zyxw when the texel goes straight to the BGRA colour output, `0x688` = xyzw otherwise | writer (IR +0xac), reader (+0x58), driver (`FUN_0005cb10`), corpus |
+| 28 | u16 | swizzle | 4 × 3 bits: result channel i ← texel channel sel_i (0-3 = xyzw; ≥4 not seen). Bits 12-15 must be 0. The compiler folds a following channel reorder into it: `0x60a` = zyxw when the texel goes straight to the BGRA color output, `0x688` = xyzw otherwise | writer (IR +0xac), reader (+0x58), driver (`FUN_0005cb10`), corpus |
 | 30 | u16 | dest type | 2-valued: where the smp writes the raw texel data | writer (IR dest 0), driver (+0x90: smp destination base) |
 | 32 | u16 | dest number | | writer, driver |
 | 34 | u16 | usrc type | 4-valued: IR dest +0xb0; the driver compares this register with the unpack's source and first destination and sets "in place" (sample +0x2d8) when they match | writer, driver (`FUN_00053d00`); meaning **guess** |
@@ -1907,7 +1907,7 @@ Dependent templates in c3 (decoded with `smpblock.smp_fields`):
 | 26 | u16 | mask | live channels of the destination (from the IR dest mask, `iStack_bc` per format) | writer, reader (+0x58) |
 | 28 | 4 u16 | per-channel register type | 4-valued (0 for unwritten channels) | writer, reader (+0x5c + 0x14 i) |
 | 36 | 4 u16 | per-channel register number | base + i / (channels per register) | writer, reader |
-| 44 | 4 u16 | per-channel format | 1 f32, 2 f16, 3 c10, 4 u8 (writer table 0x136c34 from the IR dest format) | writer, reader, corpus (highp f32, mediump f16, lowp to the colour output u8) |
+| 44 | 4 u16 | per-channel format | 1 f32, 2 f16, 3 c10, 4 u8 (writer table 0x136c34 from the IR dest format) | writer, reader, corpus (highp f32, mediump f16, lowp to the color output u8) |
 | 52 | 4 u16 | per-channel byte offset | 0 for f32; 0/2 for f16; 0..3 for c10/u8 (reader checks the bound per format) | writer, reader |
 | 60 | u16+u16 | source | 4-valued type, number: where the unpack expects the raw data (IR arg 4) | writer, reader (+0xac/+0xb0) |
 | 64 | u16+u16 | smp dest | 2-valued: IR arg 0 = block 5's dest | writer, reader (+0xb4/+0xb8), corpus |
@@ -1942,7 +1942,7 @@ word 0 is a format id; 0x21 is special-cased below), two words, and
    +0x550 needed-chunk mask, +0x5b8.. offsets/sizes). Channels can also be
    constant 0/1 (descriptor kinds 5/6), which need no chunk. A YUV-like case
    (all three of channels 0-2 of kind 2..4 from one chunk, flag +0x548) adds
-   a FIRH colour conversion later (`FUN_0005a040`, coefficient tables
+   a FIRH color conversion later (`FUN_0005a040`, coefficient tables
    0x75f48/0x75f6c).
 3. `FUN_00065d30`: builds the final **iterator list** (what GL's PDS
    generator turns into DOUTIs; PDS.md "DOUTI"): for non-dependent samples it
@@ -1996,7 +1996,7 @@ limm 0x41, smlsi 0x39, smbo 0x3a, setfc 0x3c, wdf 0x3e).
 Then back in `FUN_000646c0`: chunks the PDS delivered are found in PA
 (`FUN_0005a2a0`) and, if needed, moved; the YUV conversion; `FUN_0005cfe0` and
 **`FUN_0005fcc0` the unpack**: per output channel, by result format (block 6,
-or the forced format): f32: `pck.f32.<src>` with normalise (`FUN_000595c0`
+or the forced format): f32: `pck.f32.<src>` with normalize (`FUN_000595c0`
 with dst code 7, src code from table 0x75fc4 by channel format: u8, s8, u16,
 s16, f16, f32), or `mov` when the channel is already f32; f16: `pck.f16.<src>`
 (dst code 6, table 0x76070); c10/u8: pck to c10/u8 or in-place when the raw
@@ -2047,9 +2047,9 @@ as f32 in r8..r11:
    src0 r2 (2 consecutive F32 coordinates; h3/h4 for F16/C10 ones), src1 =
    first of the 4 state SAs, src2 `#0`, mask 1 (one dword for RGBA8).
 3. `wdf drc0` before the first use of r4.
-4. Unpack r4: four `pck.f32.u8` with normalise, one per channel, each
+4. Unpack r4: four `pck.f32.u8` with normalize, one per channel, each
    picking byte `swizzle[i]` of r4 into r8+i (or `pck.f16.u8` two per
-   register for mediump; for lowp output to the colour register, the raw
+   register for mediump; for lowp output to the color register, the raw
    RGBA8 can be written to the output as is with the channel order chosen
    by the swizzle).
 
@@ -2096,7 +2096,7 @@ decompile, code-block walker `0xf42a0`, code block `0xf4090`, branch `0xf26e0`,
 labels `0xf2380`/`0xf23d0`, secondary-program writer `0xf2660`, record kind 3
 `0xf2250`) and from the driver's reader (libGLESv2 `FUN_000511d0`, block type
 1, in `$S/gles_sw.c`), which copies the header into a 0xbc-byte record (the
-*record* below, `rec+N`) that the finalizer and `FUN_00054da0` (the finalised
+*record* below, `rec+N`) that the finalizer and `FUN_00054da0` (the finalized
 program, *PROG*) read. **Confirmed**: `usp.py` sizes every list from the header
 alone and parses all 552 shaders of c1-c3; every one ends exactly on the end
 block at the declared size.
@@ -2119,9 +2119,9 @@ corpus (values in c1-c3).
 | 0x08 | u32 | size | size of the binary **minus 12** | writer |
 | 0x0c | u32 | block type | 1: PC shader header (the reader requires it first) | writer, reader |
 | 0x10 | u32 | program type | 0 fragment, 1 vertex, 2 geometry (SAO[0]) | writer, reader |
-| 0x14 | u32 | flags A | 2 = state +0x9c b20; 4 = +0x9c b21 (the finalizer then lets the colour stay in pa0 in output mode 3); **8 = feedback split**: libusc split the program at a feedback point (`psPreFeedbackBlock`, `psPreFeedbackDriverEpilogBlock`, finalise.c), PROG flag 0x40; 0x10 = state +0xa0 b1, PROG flag 0x80. Corpus: 2 most texture shaders, 8 dc_* except dc_always, else 0 | writer, reader, corpus; meaning of 2/4 unknown |
-| 0x18 | u32 | compile flags | state +0xac verbatim (the flags glslcompiler passes to libusc). b5 (0x20) = the driver will insert visibility feedback (finalise.c only builds the pre-feedback epilog block when it is set); discard shaders also get b11 (0x800); b3 with dynamically indexed uniforms (ix_n, vix_*); b29/b30 vary | writer, corpus; other bits unknown |
-| 0x1c | u32 | flags B | 1 = state +0x9c b14 (all dc_*), PROG 1; 2 = the last instruction cannot take `end` (read by `FUN_00054da0` with the block list), PROG 2; 4 = state +0x7cc ≠ 0 or +0xa0 b10, PROG 4 (sets `phas` h13 and fragment state +0x22c = 2 at draw time); 8 / 0x10 = state +0x9c b11 / b12, PROG 8 / 0x10 (0x10: the finalizer counts one more colour register); 0x20 = +0x9c b4; **0x40 = no secondary update program** (state +0x70c empty), PROG 0x100. The finalizer adds 0x100 when a branch is out of range (PROG 0x800) | writer, reader, driver, corpus |
+| 0x14 | u32 | flags A | 2 = state +0x9c b20; 4 = +0x9c b21 (the finalizer then lets the color stay in pa0 in output mode 3); **8 = feedback split**: libusc split the program at a feedback point (`psPreFeedbackBlock`, `psPreFeedbackDriverEpilogBlock`, finalize.c), PROG flag 0x40; 0x10 = state +0xa0 b1, PROG flag 0x80. Corpus: 2 most texture shaders, 8 dc_* except dc_always, else 0 | writer, reader, corpus; meaning of 2/4 unknown |
+| 0x18 | u32 | compile flags | state +0xac verbatim (the flags glslcompiler passes to libusc). b5 (0x20) = the driver will insert visibility feedback (finalize.c only builds the pre-feedback epilog block when it is set); discard shaders also get b11 (0x800); b3 with dynamically indexed uniforms (ix_n, vix_*); b29/b30 vary | writer, corpus; other bits unknown |
+| 0x1c | u32 | flags B | 1 = state +0x9c b14 (all dc_*), PROG 1; 2 = the last instruction cannot take `end` (read by `FUN_00054da0` with the block list), PROG 2; 4 = state +0x7cc ≠ 0 or +0xa0 b10, PROG 4 (sets `phas` h13 and fragment state +0x22c = 2 at draw time); 8 / 0x10 = state +0x9c b11 / b12, PROG 8 / 0x10 (0x10: the finalizer counts one more color register); 0x20 = +0x9c b4; **0x40 = no secondary update program** (state +0x70c empty), PROG 0x100. The finalizer adds 0x100 when a branch is out of range (PROG 0x800) | writer, reader, driver, corpus |
 | 0x20 | u32 | SAO[0x1a] | 1..10 (reader rejects others), always 9; PROG +4 | writer, reader; unknown |
 | 0x24 | u32 | SAO[0x1b] | always 0x2793; PROG +8 | writer; unknown |
 | 0x28 | u32 | workaround count | u32 ids after the header: 0x54c1, 0x54d1, 0x5518 (21697, 21713, 21784) when state +0xbc b0/b1/b2; none in the corpora | writer, reader; hardware-erratum (BRN) numbers is a guess |
@@ -2146,11 +2146,11 @@ corpus (values in c1-c3).
 | 0x58 | 2 u32 | sampler mask | one bit per sampler (≤ 16, asserted), state +0x744; set only by the vertex texture shaders (vtx_*) | writer, corpus; meaning unknown |
 | 0x60 | u32 | memory area size | state +0x788 × +200 × 4 (flags C 4) | writer |
 | 0x64 | u16 | | -(state +0x7bc × 4); 0 | writer; unknown |
-| 0x66 | u16 | colour type | fragment: register type of the colour result, 4-valued (1 r, 2 o, 3 pa): 3 | writer, reader, corpus |
-| 0x68 | u16 | colour register | fragment: its number (pa0; pa2 in dc_gt) | writer, reader, corpus |
-| 0x6a | u16 | colour format | fragment: 1 f32, 2 f16, 3 c10, 4 u8 (4 everywhere: packed BGRA8) | writer, reader, corpus |
-| 0x6c | u16 | colour registers | fragment: 1 | writer, reader |
-| 0x6e / 0x70 / 0x72 | u16 | colour alternatives | fragment: the r, pa and o register the finalizer may move the colour to (output modes 2, 3, 1 below) | writer, driver |
+| 0x66 | u16 | color type | fragment: register type of the color result, 4-valued (1 r, 2 o, 3 pa): 3 | writer, reader, corpus |
+| 0x68 | u16 | color register | fragment: its number (pa0; pa2 in dc_gt) | writer, reader, corpus |
+| 0x6a | u16 | color format | fragment: 1 f32, 2 f16, 3 c10, 4 u8 (4 everywhere: packed BGRA8) | writer, reader, corpus |
+| 0x6c | u16 | color registers | fragment: 1 | writer, reader |
+| 0x6e / 0x70 / 0x72 | u16 | color alternatives | fragment: the r, pa and o register the finalizer may move the color to (output modes 2, 3, 1 below) | writer, driver |
 | 0x74 | u16 | start label | label at the main program's start (3, fn_call 4). The loader opens a code block there; the finalizer puts its placeholders in it | writer, reader, driver, corpus |
 | 0x76 | u16 | feedback label | label just before the discard `nop` (the pre-feedback driver epilog), 0xffff if none. PROG +0x16 = its instruction index | writer, reader, driver, corpus (dc_* 4) |
 | 0x78 | u16 | phase-1 label | label after the epilog, where the post-feedback phase starts. PROG +0x18 | writer, reader, driver, corpus (dc_* 5) |
@@ -2160,9 +2160,9 @@ corpus (values in c1-c3).
 | 0x80 | u16 | input mask bits | vertex: the mask's bit count (SAO block +0x14) | writer, reader |
 | 0x82 | u16 | output mask bits | always 0x80 | writer, reader |
 
-The colour *output mode* is the patch context's +0x2cc, set per draw
-(`FUN_0004f2a0`): 0 when blend or colour-mask code will be appended (the
-colour stays where it is), 1 otherwise (moved to the o register: the
+The color *output mode* is the patch context's +0x2cc, set per draw
+(`FUN_0004f2a0`): 0 when blend or color-mask code will be appended (the
+color stays where it is), 1 otherwise (moved to the o register: the
 hardware capture's `mov o0, sa9`); the finalizer (`FUN_000541a0`,
 `FUN_000546f0`) adds the move. (**driver**, **hardware**)
 
@@ -2177,7 +2177,7 @@ After the header, in this order (writer and reader agree):
    traced), sampler, iterator (texture coordinate set + 1 for varyings;
    0xb/0xc, 0xd, 0xe, 0xf for the writer's other input kinds: the
    draw-time builder iterates the first two from DOUTI source 0x20, the
-   colour, and the rest from source 0), components, format (1 f32, 2 f16,
+   color, and the rest from source 0), components, format (1 f32, 2 f16,
    3 c10: highp, mediump, lowp in the corpus), registers (PA registers it
    takes: 4 for a highp vec4, 2 for a mediump one). A highp `a` gives
    `(4, 0, 1, 4, 1, 4)`. (**writer**, **driver** `FUN_00046b00`, **corpus**;
@@ -2250,7 +2250,7 @@ docs/NOTES.md), **guess**.
   0x100 = flags B 0x40; 0x800 = branch fix-up; 0x20, 0x200, 0x400 come from
   finalizer state that was not traced. The draw-time builder reads 2, 4 and
   0x40 (0x40 only to add one more `phas` when blend code gets a phase of its
-  own in a feedback program). PROG +0x78 = the colour register after the
+  own in a feedback program). PROG +0x78 = the color register after the
   finalizer's move. (**driver**)
 
 ### The draw state (ctx +0x7a0)
@@ -2280,17 +2280,17 @@ Instruction words as written (low high), decoded with `dis.py -x`:
 | `00000000 fa4c0700` | `phas.i #0, #0 [end wait=7]` | last phase ends here |
 | `00000000 f8040140` | `nop [end]` | appended when PROG flag 2 says the last instruction can't take `end` |
 | `n<<14 \| (n+1)<<7 \| b0000004 f8300004` | `pcoeff pa<n>, ...` | n = PA registers taken by the program's iterated inputs: the first register after them |
-| `c<<21 \| c<<14 \| f0000184 f9340406` | `atst8 pa<c>, p0.nw, pa<c>, ... [end]` with h10 set | c = PROG +0x78, the colour register |
+| `c<<21 \| c<<14 \| f0000184 f9340406` | `atst8 pa<c>, p0.nw, pa<c>, ... [end]` with h10 set | c = PROG +0x78, the color register |
 | `a0000000 28a10002` | `mov pa0, pa0 [skipinv rcnt]` | a no-op in pcoeff's place (state 9) |
 | `(n+2)<<14 \| f0000184 fb340404` | `(p1) depthf pa<n+2>, ... [end]` | built for state 9, see below |
 
 Without feedback (ctx +0x7a0 bit 0 clear):
 - placeholder 0 = `phas.i #0, #0 [wait=7]`, then the program, with `end`
   set (h18) on its last instruction, or `nop [end]` appended (PROG flag 2).
-  **hardware**: the probe's finalised main program is
+  **hardware**: the probe's finalized main program is
   `phas.i #0,#0 [wait=7]`, `mov o0, sa9 [end]`, and its secondary program
   starts with the same `phas`.
-- Blend and colour-mask code (`FUN_000457d0`; the mask is the
+- Blend and color-mask code (`FUN_000457d0`; the mask is the
   `sopwm ... 0x90b00601 | mask<<11` of STATE.md) is appended after the
   program; with ctx +0x1280 it gets a phase of its own (a `phas` to it, then
   `phas.i #0,#0`).
@@ -2322,8 +2322,8 @@ With feedback, ctx +0x7a0 = 1 (discard on triangles):
   with p0 / !p0 about 83 % / 19 % survive, scattered over both halves (p0
   is whatever the shader left there; the two are close to complementary).
 - atst8's other operands (src1 = 3, src2 = 4 with bank bits l28-31 = 0xf)
-  are fixed, and the colour register is both its source and destination.
-  The colour's alpha does not matter: the same draw with alpha 0 keeps the
+  are fixed, and the color register is both its source and destination.
+  The color's alpha does not matter: the same draw with alpha 0 keeps the
   same 21600 pixels (**hardware**), so whatever alpha test atst8 can do is
   off in GL's ISP state. Operand meanings not traced.
 
@@ -2371,7 +2371,7 @@ program whose phase 0 ends in a visibility test, and the ISP decides.
 3. Run everything the feedback depends on in phase 0, then
    `atst8 pa<c>, p0.nw, pa<c>, #3?, #4? [end]` with h9-10 = 2 (p1):
    copy the driver's words `f0000184 | c<<21 | c<<14`, `f9340406`.
-4. Phase 1 (the colour output) follows, ending with
+4. Phase 1 (the color output) follows, ending with
    `phas.i #0, #0 [end wait=7]`.
 5. ISPA pass type 4 (2 when blending) for triangles, and also for points
    (hardware). Points also work with pass type 5 and
@@ -2456,7 +2456,7 @@ backed above; this section only collects it.
   math; its pa registers are the main program's sa) plus the **main
   program**. Every secondary program starts `nop [nosched]`,
   `test.and.ne p0, #0, #0`, `(p0) ld ...`, `wdf`.
-- The last instruction of a finalised program has `end` (h18; hardware).
+- The last instruction of a finalized program has `end` (h18; hardware).
   USP code leaves that to the finalizer.
 - **Branches** (hardware): `br` offset = target index - this instruction's
   index, signed 18 bits, in instructions; `ba` is absolute: the instruction
@@ -2487,18 +2487,18 @@ backed above; this section only collects it.
   x, x`, one per component, never repeated. libusc multiplies dFdy's
   operand by a driver constant first (the target's y direction; Mesa's st
   does the same). What feeds a derivative runs with skipinv clear (that
-  fmad, and tx_dep's coordinate math, where the LOD needs the neighbours):
-  a 2x2 neighbour outside the primitive is an invalid instance, and a
+  fmad, and tx_dep's coordinate math, where the LOD needs the neighbors):
+  a 2x2 neighbor outside the primitive is an invalid instance, and a
   skipinv instruction leaves its register stale. The derivative itself
   keeps skipinv. `d` must not be a register `x` uses: the instances of a
-  quad don't all read before any writes, so a neighbour can read the
+  quad don't all read before any writes, so a neighbor can read the
   derivative instead of `x` (the DDK never overlaps them). **Hardware**
   (EA3 piglit): with skipinv on everything, dFdx of an iterated value was
   right while dFdy of an `fmul` and either derivative of an `abs` were
   wrong. With the feeding math skipinv-clear, `glsl-fwidth` passes, and
   every remaining failure was a derivative whose `d` was `x` (`fdsy r4, r4,
   r4`), while each that wrote another register was right.
-- **Phases**: every finalised fragment program (main and secondary) starts
+- **Phases**: every finalized fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
   hardware) and ends with `end` on its last instruction or an appended
   `nop [end]`; a feedback program ends with `phas.i #0, #0 [end wait=7]`.
@@ -2532,11 +2532,11 @@ backed above; this section only collects it.
 - Varyings arrive iterated in pa (USP list A: one entry per iterated input,
   with its precision); non-dependent texture results also land in pa (PDS
   DOUTI/DOUTT, docs/PDS.md).
-- The colour is built in pa0 as packed BGRA8: two `pck.u8.f32 ... scale`
+- The color is built in pa0 as packed BGRA8: two `pck.u8.f32 ... scale`
   with destination byte masks (byte 0 B, 1 G, 2 R, 3 A: hardware); the
-  finalised program writes the colour to o0 (hardware, the probe). The USP
+  finalized program writes the color to o0 (hardware, the probe). The USP
   header (0x66-0x6c) says where the compiler left it; blending and the
-  colour mask are code the driver appends, reading it from there.
+  color mask are code the driver appends, reading it from there.
 - Iterators: each list-A entry is one DOUTI in PA order; a varying's
   iterator is its *fragment-side* texture coordinate set + 1, and GL's
   linker maps it to the vertex shader's set (below).

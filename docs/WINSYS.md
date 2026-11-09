@@ -2,7 +2,7 @@
 
 The gallium driver (`mesa/src/gallium/drivers/sgx`) sees the winsys only through
 `sgxws.h`. Below that, `sgx_frame.c` records frames the same way for every
-kernel driver: rings, PDS programs, USSE finalising, TA state, the VDM stream.
+kernel driver: rings, PDS programs, USSE finalizing, TA state, the VDM stream.
 How memory is allocated and how a recorded frame reaches the GPU belongs to a
 backend, `struct sgxws_kif` in `sgx_frame.h`:
 
@@ -59,7 +59,7 @@ pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 | completion | each job signals the next point of one timeline syncobj per device; waits are syncobj waits | the target's sync object, polled |
 | shared buffers | dma-buf import and export; a shared buffer is named in each job's BO list (the frame's target as written, sampled ones as read), so the kernel orders the job against its other users (implicit sync) and flushes the CPU cache of an imported one, which the SGX doesn't snoop | not supported (`-ENOTSUP`); the fbdev framebuffer is wrapped user memory |
 | scanout (kmsro) | the render target is ours, exported to the display device (simpledrm on the EA, card0; `mesa/patches/0006`) | the fbdev platform |
-| debugging aids | `SGX_DRY_RUN` (a dry-run frame's point is signalled from the CPU) | also `SGX_TRACE` (pvrtrace) and `SGX_DEBUG=flushrt` |
+| debugging aids | `SGX_DRY_RUN` (a dry-run frame's point is signaled from the CPU) | also `SGX_TRACE` (pvrtrace) and `SGX_DEBUG=flushrt` |
 
 Kick numbers stay per context in both, so the driver's fences, the ring slots and
 the texture ghosting don't know which backend they run on.

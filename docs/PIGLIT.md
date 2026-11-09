@@ -118,7 +118,7 @@ recoveries. Of the 25,805 top-level tests:
 built.
 
 The varyings work moved 153 tests from fail to pass. It gives the desktop
-built-ins a set each: the back colours, which st's two-sided colour reads in
+built-ins a set each: the back colors, which st's two-sided color reads in
 the fragment shader, and gl_TexCoord[7]. Sets are handed out in slot order and
 packed past ten. A vertex shader that writes slots its fragment shader doesn't
 read is compiled again to that shader's sets. The compiler's side

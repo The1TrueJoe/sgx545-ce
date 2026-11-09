@@ -8,7 +8,7 @@ found 0x0`), Host control HC-0 (ui32InitStatus) stays 0.
 ## What ran, pinned with in-microkernel sentinels
 
 `srvinit -o` reached native `SysFinalise` (SGX revision 1.0.14 read), so the
-device init and the microkernel upload/kick are fine. To localise the stall I
+device init and the microkernel upload/kick are fine. To localize the stall I
 wrote sentinels to control-block words that appear in the kernel's SGX debug
 dump (T3C-C0..E0), at successive points of the event entry's start:
 
@@ -39,7 +39,7 @@ microkernel **emits** to trigger pds1, whose `DOUTD` DMAs the control block into
 `sa` and re-enters it — only in that re-entered context does the DDK write/read
 `sa`. The open microkernel skipped the emit/DMA and wrote `sa` immediately in the initial
 bare-`DOUTU` context, where it faults. (Corrected 2026-11-02: an earlier note
-here mis-stated this as "tasks cannot write `sa`"; the emulator modelled `mov
+here mis-stated this as "tasks cannot write `sa`"; the emulator modeled `mov
 sa` as a plain register write, so the suite passed offline.)
 
 ## Fix
@@ -61,7 +61,7 @@ sa` as a plain register write, so the suite passed offline.)
 - Ran on the normal p1 cold boot (sgx545ce present); no test kernel RAM-booted,
   no reboot/kexec after GPU use — the box was Bench power-cycled between every
   attempt for a clean cold GPU (the open-microkernel init leaves the device half
-  initialised). `flock /tmp/gpu.lock`, `sync` before each cut.
+  initialized). `flock /tmp/gpu.lock`, `sync` before each cut.
 - srvinit's `SGX_DEVINITPART2` logs one `invalid param size ... out 16/8` error
   then succeeds on the 16-byte retry (the code already handles it); not the
   blocker.

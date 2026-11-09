@@ -16,7 +16,7 @@ in `img/`, and the raw numbers in `data/`.
 - The command stream, render state, PDS programs and USSE shader instruction set are
   decoded well enough to author frames by hand.
 - At 08:15 a frame built entirely from code (`tools/gen`, no captured bytes) matched the
-  blob's reference frame bit for bit. Ten variations (colours, two draws, depth tests, a
+  blob's reference frame bit for bit. Ten variations (colors, two draws, depth tests, a
   viewport, other surface sizes) matched the blob's own rendering with 0 pixels different.
 - What remains is turning that into a compiler and a Mesa driver.
 
@@ -55,12 +55,12 @@ Two pieces of groundwork made the bytes readable:
   reads the sizes back with `nm`, giving 105 ID-to-name pairs. The previously unnamed
   `bridge109` turned out to be `SGX_REGISTER_HW_TRANSFER_CONTEXT`.
 
-Then came a probe program that draws one triangle, with every input (colour, clear colour,
+Then came a probe program that draws one triangle, with every input (color, clear color,
 vertices, draw count) taken from the environment. Five captures that each change one input
 gave the first decodes:
 
 - A uniform `vec4` is stored as FP16 pairs, so green to red is a one-word change.
-- The clear is a background object: three screen-space vertices with an ARGB colour.
+- The clear is a background object: three screen-space vertices with an ARGB color.
 - VDM control-stream words carry a type in the top nibble and an address shifted right by 4.
 - `glDrawArrays` becomes an indexed draw over a static identity index buffer.
 
@@ -112,7 +112,7 @@ The replayer gained `--verts`, `--clear`, `--color`, `--poke` and `--usse`. The 
 writes hand-assembled shader instructions into the captured frame. The assembler
 (`tools/isa/asm.py`) reproduces all 9 encodings the compiler had produced, bit for bit.
 
-- An authored triangle, clear colour and uniform matched the blob drawing the same inputs:
+- An authored triangle, clear color and uniform matched the blob drawing the same inputs:
   0 of 345,600 pixels.
 - Two hand-written `pck.u8.f32` instructions made the triangle cyan.
 - One `fmad16 pa9, -pa9, c45, c45` in front of them computed `1 − c`.
@@ -190,7 +190,7 @@ All 12 replays matched their prediction to the pixel.
 The DDK's own frames, captured while varying one GL call at a time, are the ground truth
 the predictions were checked against:
 
-![DDK captures: depth LESS, depth NEVER, back-face cull, glViewport, glScissor, colour mask, an 8×8 texture, mirror wrap](img/story-05-ddk-state.png)
+![DDK captures: depth LESS, depth NEVER, back-face cull, glViewport, glScissor, color mask, an 8×8 texture, mirror wrap](img/story-05-ddk-state.png)
 
 The details (texture format codes, filter and wrap bits, stencil words) are in
 `docs/STATE.md`. The replay table is in `data/story-state-replays.csv`.

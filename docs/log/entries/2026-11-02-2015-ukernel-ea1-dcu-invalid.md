@@ -78,7 +78,7 @@ each retry re-launches the event program once (CTR+1, reaches POST), finds no
 pending event, ends; the GETMISCINFO command is never consumed; SGXOSTimer
 times out; HWR; repeat.
 
-## The remaining blocker, precisely localised
+## The remaining blocker, precisely localized
 
 **The host GETMISCINFO kick never reaches our dispatch as SW_EVENT.** The event
 program runs and reaches the dispatch (POST set), but `EUR_CR_EVENT_STATUS &

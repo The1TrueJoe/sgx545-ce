@@ -79,12 +79,12 @@ frames run.
   more than the DDK between bursts of work.
 - **B — DDK-style timer-based active-power:** enable the TIMER event, count idle
   time against `ui32ActivePowManSampleRate`, raise ACTIVE_POWER after the
-  latency. Matches the DDK's behaviour and avoids eager power-cycling, but is
+  latency. Matches the DDK's behavior and avoids eager power-cycling, but is
   more code (a TIMER handler + idle counter) and enabling the timer event in
   `srvinit`.
 
 A is enough to clear the HWR and is the natural first step; B is the "right"
-long-term behaviour. Recommend landing A, HW-confirming the idle GPU powers down
+long-term behavior. Recommend landing A, HW-confirming the idle GPU powers down
 (no more `0x2 tasks` HWR, `SGXIsDevicePowered` goes false), then deciding on B.
 
 ## Validatability

@@ -33,7 +33,7 @@ Two things are new with runtime PM:
   after a hang, with the clocks still on.
 
 Changes made without the box:
-- a `powered` flag, cleared (and the IRQ synchronised) before the deinit and set at
+- a `powered` flag, cleared (and the IRQ synchronized) before the deinit and set at
   the start of every start. The hard IRQ handler, debugfs `status` and the
   devcoredump read registers only while it is set, and a stop that finds the device
   already off no longer touches it;

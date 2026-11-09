@@ -7,12 +7,12 @@ Next for milestone (e), after the first light: the game's own frames.
 Ours drew the title screen's panorama, but the panel stayed black. The cause
 was the Minecraft runtime's alpha-only clear at every swap
 (`glColorMask(0, 0, 0, 1)`, then `glClear`). Mesa 26 hands that to the
-driver as a clear with a per-target colour mask, and the driver ignored the
-mask, so it cleared RGB to black after every frame. Clears now honour it
-(the colour-mask `sopwm` in the clear's pixel program, and ISPB). Fixed on
+driver as a clear with a per-target color mask, and the driver ignored the
+mask, so it cleared RGB to black after every frame. Clears now honor it
+(the color-mask `sopwm` in the clear's pixel program, and ISPB). Fixed on
 the way:
 
-- **A depth-only clear wrote black colour.** It now writes no colour.
+- **A depth-only clear wrote black color.** It now writes no color.
 - **A mid-render depth clear to 1.0 was skipped.** It is now drawn; it was
   only right before anything else had been drawn.
 

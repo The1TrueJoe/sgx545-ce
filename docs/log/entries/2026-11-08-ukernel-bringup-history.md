@@ -59,7 +59,7 @@ and `SGXInitialise` times out. `sa` is not a general "tasks can't write it"
 limit — the DDK microkernel writes `sa` (e.g. `mov sa9`) and runs — but only
 after it emits to trigger the pds1 DMA that establishes `sa`; the open microkernel wrote `sa`
 before any such setup (`docs/log/entries/2026-11-02-0630-ukernel-ea3-bringup.md`).
-The emulator modelled `mov sa` as a plain register write, so the suite passed
+The emulator modeled `mov sa` as a plain register write, so the suite passed
 offline. **Fix (option B, offline-validated):** drop `sa` entirely — carry the
 control-block base in a reserved temp (`r17`) from the loader-patched `limm`
 and derive the host-control / CCB pointers from it; `run_ours`/`test_emu` still

@@ -8,7 +8,7 @@ The player's arm came out black, with a moire of the world showing through it.
 - Its shader was fine: the uniforms (dumped with the driver's
   `SGX545_DEBUG_ATTRS`) were sensible, and so were the vertex inputs.
 - The pattern was the alpha test cutting holes at garbage texture coordinates,
-  in a pitch-black lit colour.
+  in a pitch-black lit color.
 - Lit entities are the first vertices with five attributes, 20 dwords. The
   vertex fetch moved a vertex with one DMA, and a DMA longer than 16 dwords
   loses what comes after (the constants' DMAs were already chunked at 16 for

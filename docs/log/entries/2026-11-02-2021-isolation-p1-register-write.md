@@ -100,7 +100,7 @@ misread of two reboots.
 
 What the controls show: `str` to the unused `USE_CODE_BASE_14`/`_15` and the plain `ldr` of 0xc84 (in
 `suite_p1_write`) returned clean in the **same ~20:17 window, on the same warm-rebooted GPU** as the store
-— so they didn't visibly destabilise it, but they ran on the same uncertain-state GPU and don't isolate
+— so they didn't visibly destabilize it, but they ran on the same uncertain-state GPU and don't isolate
 the store either. The honest position: the store's **value effect is known (none — no escape); its side
 effect (DoS or benign) is unknown** on this run.
 
