@@ -84,6 +84,20 @@ TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
 # 0x38 = EVENT_STATUS2, 0x39 = 0x008 CLKGATESTATUS, 0x3a = stage counters (byte each:
 # do_ta/ta_finished/do_3d/render_done), 0x3b = tick counter.
 WAIT_LOG = os.environ.get("UK_WAITLOG") == "1"
+# Frame profile (mesa-gallium, 2026-11-09): UK_FRAMEPROF=1 stamps the EDM tick counter at the four render
+# phases so the host can split a frame into TA (vertex) vs 3D (pixel). The counter (ctlblk 0x3b) increments on
+# every EDM timer tick (~1 kHz keep-alive = ~1 ms); each phase copies it to its own ctlblk word, host-readable
+# via the regsample over BAR0. Debug-only, off by default (byte-identical production image). Words (ctlblk+):
+#   0x3b = tick, 0x37 = TA kick, 0x38 = TA finished, 0x39 = 3D kick, 0x3a = 3D finished. (Overlaps TMR/WAIT_LOG
+# words, which are separate build flags.) ~1 ms resolution; a free-running GPU counter would give sub-ms if one
+# proves readable.
+FRAMEPROF = os.environ.get("UK_FRAMEPROF") == "1"
+FP_TICK = 0x3b
+FP_TA_KICK, FP_TA_FIN, FP_3D_KICK, FP_3D_FIN = 0x37, 0x38, 0x39, 0x3a
+# Running totals (m2: words 0x3d-0x3f are free; 0x40 is hostctl). Two host reads 5 s apart give the averages
+# over ~50 frames so the 1 ms tick error averages out and regsample needn't catch each render. (Zeroed at every
+# microkernel start; survive within a session while the GPU stays up.)
+FP_TA_BUSY, FP_3D_BUSY, FP_COUNTS = 0x3d, 0x3e, 0x3f   # TA-busy ticks, 3D-busy ticks, TA count (low 16)|3D (high 16)
 # EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
 # alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
@@ -680,8 +694,12 @@ def build(a):
     # incoming event (EA1 2026-11-02: GETMISCINFO sat unconsumed, core looping HWR).
     a.i("limm r4, #0x20000000")
     a.i("test.and.ne p0, r2, r4")                  # timer event (bit 29)?
-    if TMR_LOG or WAIT_LOG:
+    if TMR_LOG or WAIT_LOG or FRAMEPROF:
         a.i("(!p0) ba not_timer_evt")              # not timer -> service doorbell
+        if FRAMEPROF:
+            a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf")
+            a.i("imae r4, r4, #1, #1 [t2=u32]")    # frame-profile tick counter (0x3b) += 1
+            a.st_sa(SA_SELF, FP_TICK, 4)
         if TMR_LOG:
             a.i("ld.a.d r4, r17, #0x38 [moe]"); a.i("wdf")
             a.i("imae r4, r4, #1, #1 [t2=u32]")    # tick counter (0x38) += 1
@@ -1740,6 +1758,8 @@ def build(a):
     a.i("limm r5, #1")
     a.st_sa(SA_SELF, SC_TAFLIGHT, 5)            # TA in flight
     a.i(f"str #{CR_TA_KICK // 4}, r5")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_TA_KICK, 4)  # frameprof: TA kick
     if DEBUG_SENTINEL:
         a.i("limm r6, #0xC01C"); a.st_sa(SA_SELF, 0x37, 6)
     a.i("lapc")
@@ -1748,6 +1768,17 @@ def build(a):
     # ta_finished: write the TA status values, then program and start the 3D
     # ======================================================================
     a.label("ta_finished")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_TA_FIN, 4)  # frameprof: TA finished
+        a.i(f"ld.a.d r5, r17, #{FP_TA_KICK} [moe]"); a.i("wdf")
+        a.i("test.isub16.ne p2, r4, r4, r5")          # r4 = (tick - TA_kick) & 0xffff = this TA's busy ticks
+        a.i(f"ld.a.d r6, r17, #{FP_TA_BUSY} [moe]"); a.i("wdf")
+        # imae truncates its MULTIPLICANDS to 16 bits (emu op_imae), so the running total must be the
+        # full-32-bit ADDEND (ops[3], t2=u32): total = delta*1 + total, delta (<65536) in the mul slot.
+        a.i("imae r6, r4, #1, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_TA_BUSY}, r6 [moe]")   # TA-busy total += delta
+        a.i(f"ld.a.d r6, r17, #{FP_COUNTS} [moe]"); a.i("wdf")
+        a.i("limm r5, #1")
+        a.i("imae r6, r5, #1, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_COUNTS}, r6 [moe]")    # TA count (low 16) += 1
     if WAIT_LOG:
         a.i("limm r4, #2"); a.st_sa(SA_SELF, 0x3a, 4)   # stage: reached ta_finished
     if DEBUG_SENTINEL:
@@ -2174,6 +2205,8 @@ def build(a):
     # start the 3D
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_3D_KICK, 4)  # frameprof: 3D kick (render path)
     a.end()
 
     # ======================================================================
@@ -2261,6 +2294,16 @@ def build(a):
     # Walk the render's HW device sync list, set each destination's write-ops-complete
     # to pending+1 (docs/UKERNEL.md §5), tear the render down, and interrupt the host.
     a.label("render_complete")
+    if FRAMEPROF:
+        a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_3D_FIN, 4)  # frameprof: 3D finished
+        a.i(f"ld.a.d r5, r17, #{FP_3D_KICK} [moe]"); a.i("wdf")
+        a.i("test.isub16.ne p2, r4, r4, r5")          # r4 = (tick - 3D_kick) & 0xffff = this render's 3D busy ticks
+        a.i(f"ld.a.d r6, r17, #{FP_3D_BUSY} [moe]"); a.i("wdf")
+        # running total is the full-32-bit addend (imae truncates the multiplicands to 16 bits)
+        a.i("imae r6, r4, #1, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_3D_BUSY}, r6 [moe]")   # 3D-busy total += delta
+        a.i("limm r5, #256")                          # 256*256 = 0x10000: add to the HIGH 16 of the packed counts
+        a.i(f"ld.a.d r6, r17, #{FP_COUNTS} [moe]"); a.i("wdf")
+        a.i("imae r6, r5, r5, r6 [t2=u32]"); a.i(f"st.a.d r17, #{FP_COUNTS}, r6 [moe]")    # 3D count (high 16) += 1
     # OOM partial render done (SC_OOM==2, ta3d-state pc 0x0ddd-0x0df7): UNPAUSE the TA FIRST, then close the
     # DPM control and resume the allocation (0x69c=1), and SKIP the scene teardown -- the scene isn't done;
     # the TA keeps binning (in its live slot 0) into the pages this partial render freed from slot 1.
