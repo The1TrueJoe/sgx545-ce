@@ -719,8 +719,8 @@ Today the driver is 7,639 lines (`drm/powervr_sgx`, including 640 lines of
 stream decoder shared with Mesa and the 168-line KUnit test). The tree keeps
 everything, but it is layered so that v1 builds and runs on its own, and each
 follow-up is a self-contained addition: its own file(s) plus a few clearly
-marked call sites. CI builds v1 alone (the follow-up files removed) as well
-as the whole driver.
+marked call sites. CI builds the whole driver on drm-misc-next; building v1
+alone needs stubs for the follow-ups' call sites first (not done).
 
 **v1, about 5,900 lines:** probe and the core table, firmware boot (open
 microkernel only, secure mode), MMU and VMs (`drm_gpuvm`, `VM_MAP`/`VM_UNMAP`),
@@ -791,7 +791,21 @@ Documentation.
 | generated register header | done: `pvrsgx_regs.h` comes from the GPL `sgx545defs.h` through `drm/tools/gen_regs.py` (CI diffs it); our names for the registers that header leaves out, and the MMU constants, are in `pvrsgx_hw.h` |
 | one `pvrsgx_` prefix | done (the shared stream files are now `pvrsgx_stream*`) |
 | ISA generation in the core table | done: the validator picks its USSE form table by the core's ISA |
-| runtime checkers on the CE5300 | single-process tests clean under lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (3ca68ab, one finding fixed); a three-process soak lost the box's userspace, cause open |
+| runtime checkers on the CE5300 | single-process tests clean under lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (3ca68ab, one finding fixed; again on 57ca2d0); a three-process soak lost the box's userspace, cause open |
+
+**Since then (to fc2551b, 2026-11-09).** The driver is 7,706 lines, the
+follow-up files 814, so v1 is about 6,900, plus the 875-line uAPI header and
+239 lines of Documentation.
+
+| change | where it lands |
+|---|---|
+| one parameter buffer for the device, mapped into every VM (bug B; the DDK's design) | v1 (render); isolation cost in Design above and the cover letter |
+| a released context or VM flushes the GPU's data caches with the next command, as the DDK does after its cleanup | v1 |
+| the default parameter buffer is 16 MiB; the first render context sets its size | v1 |
+| `DRIVER_GEM_GPUVA` dropped (gone in 7.3); `drm/ci/compat.sh` puts it back for older test kernels | v1; compat out of tree |
+| a render context holds a runtime-PM reference (stopgap) | F3 runtime PM |
+| `pvrsgx_render_kick` tracepoint, 5 arguments (BPF caps an event at 12), `ctlblk` debugfs | F6, F5 |
+| CI on drm-misc-next with `BPF_EVENTS` | tooling |
 
 **uAPI effect.** v1's header leaves out the transfer context and job types
 and their structures (F1 appends them; the enums are append-only). Mesa

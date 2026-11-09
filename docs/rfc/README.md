@@ -7,6 +7,10 @@ signs and sends it himself (`b4 send` or `git send-email`).
 - The patches don't exist yet as a series. The cover letter lists the v1
   split (8 patches, the core only) and the follow-ups to come;
   `docs/UPSTREAM-READINESS.md` (Kernel, "Minimal first series") has the plan.
+- Refreshed 2026-11-09 for m2-drm since a8dff09: the shared parameter
+  buffer (and question 4 on it), hang blame, the Cedarview results, and
+  testing on drm-misc-next. The runtime-PM stopgap (a render context
+  keeps the GPU awake) is in F3, not v1, so the letter doesn't mention it.
 
 ## Standards checklist (2026-11-08)
 
@@ -122,7 +126,9 @@ archive refuse automated reads; not bypassed).
 ## Before it could be sent
 
 1. Cut the series (`docs/UPSTREAM-READINESS.md`, Kernel, "The series"),
-   without DDK compat.
+   without DDK compat. Before that, give the follow-ups' call sites in v1
+   code stubs, so CI can build v1 alone; it builds only the whole driver
+   today.
 2. Mesa merge request open, and the uAPI questions above settled.
 3. Port the uAPI tests to IGT.
 4. Recheck To/Cc against MAINTAINERS and `get_maintainer.pl` on the day
