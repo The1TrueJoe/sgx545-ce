@@ -126,7 +126,9 @@ struct sgx_const_map {
     * bits); with driver_consts: 0x10 F16 of the C10 value c (fmt 3's rule):
     * c / 255 rounded to nearest F16, as pck.f16.c10 [scale] gives it
     * (hardware, tests/c10); 0x11 a literal: k = 0xffff, value (32 bits) ORed
-    * into the slot at shift */
+    * into the slot at shift; 0x12 the vec4 at constants k..k+3 as packed
+    * BGRA8, A << 24 | R << 16 | G << 8 | B, each channel clamped to [0, 1]
+    * and rounded to nearest (the whole slot, shift 0) */
    uint8_t fmt;
    uint32_t value; /* fmt 0x11 */
 };

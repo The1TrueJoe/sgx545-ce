@@ -182,6 +182,8 @@ struct sgx_ctx {
    unsigned n_mem_bases;
    uint8_t mem_base_sa[8]; /* SA slot holding block address + 512 * j */
    uint32_t lit_bits[32];  /* driver_consts: literal slots' values */
+   /* ... or, >= 0, the slot is constants k..k+3 packed to BGRA8 (0x12) */
+   int lit_packed_k[32];
    int lit_slot[32];
    unsigned n_lits;
    bool lit_off; /* while a register is needed (fmad16 src0) */
@@ -211,10 +213,21 @@ struct sgx_ctx {
    struct set *shadow_regs; /* decl_regs read as aliases (find_shadow_regs) */
    /* the colour as a lowp C10 expression (emit_c10) */
    struct nir_def *c10_root;
+   /* the colour is a texel or a vec4 uniform as it is, through conversions
+    * (find_colour_source): the def the store reads, the texel, the
+    * uniform's constant number (-1 none) */
+   struct nir_def *colour_end;
+   struct nir_tex_instr *colour_tex;
+   int colour_k;
+   /* emit_color: the raw RGBA8 texel register / the packed literal slot */
+   bool has_colour_raw, has_colour_packed;
+   struct sgx_ref colour_raw;
    /* the one discard's comparison (p1 directly) */
    struct nir_alu_instr *discard_cmp;
    struct hash_table *proj; /* nir_tex_instr -> its projected varying load */
    struct hash_table *efo; /* nir_alu_instr (a chain's root) -> its efo_chain */
+   /* nir_if -> the comparison it alone reads, tested into p0 directly */
+   struct hash_table *if_cmp;
 
    /* results */
    unsigned n_temps, n_pa;
@@ -253,6 +266,11 @@ enum sgx_debug {
    SGX_DBG_NO_COISSUE = BITFIELD64_BIT(13),
    SGX_DBG_NO_F16_CONST = BITFIELD64_BIT(14),
    SGX_DBG_NO_F16_ITER = BITFIELD64_BIT(15),
+   SGX_DBG_UNROLL_EXITS = BITFIELD64_BIT(18),
+   SGX_DBG_NO_MASK_BOOL = BITFIELD64_BIT(19),
+   SGX_DBG_NO_IF_TEST = BITFIELD64_BIT(20),
+   SGX_DBG_NO_TEX_COLOR = BITFIELD64_BIT(16),
+   SGX_DBG_NO_PACKED_COLOR = BITFIELD64_BIT(17),
 };
 
 static inline bool
