@@ -133,10 +133,10 @@ CLEANUP_DEFER_MAX = 256      # ~256 ms at 1 kHz; a render completes in << 30 ms
 # kicked into a live 3D (BANK0 0x101F at every fault) = the 5/10 alternation.
 WAIT_3D = 0x1d               # set at 3D start, cleared by pixel_done (0x40000 + ISP idle)
 WAIT_FREE = 0x1e             # set at 3D start, cleared by free_done (0x1 DPM free)
-SC_OOM = 0x17        # control block +0x5c: OOM partial-render state. 0 = none; 1 = OOM taken, the
-                     # TA is paused (0xa74 b0) and held (0x69c=4), awaiting TA_TERMINATE; 2 = the
-                     # partial render is in flight (its 3D end resumes the TA via 0x69c=1, unpauses
-                     # it, and skips the scene teardown). Cleared by init_set.
+SC_OOM = 0x17        # control block +0x5c: OOM partial-render state. 0 = none; 1 = a partial
+                     # render is in flight (its completion resumes the TA via 0x69c=1 and skips
+                     # the scene teardown); 2 = OOM deferred while a normal render was in flight
+                     # (start the partial render when that render completes). Cleared by init_set.
 SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
                      # flight (0 = none). The DDK keeps a doubly-linked render-
                      # in-flight list; one context needs only this single slot,
@@ -606,8 +606,7 @@ def build(a):
     a.dispatch(0x40000, "pixel_done")              # pixel back-end: rendezvous half 1 (3D writeout)
     a.dispatch(0x800000, "pixel_done")             # ISP end of tile (same handler)
     a.dispatch(0x1, "free_done")                   # DPM 3D memory free: rendezvous half 2
-    a.dispatch(0x6, "k_oom")                        # DPM out of memory (MT 0x2 | GBL 0x4): pause + terminate
-    a.dispatch(0x1000, "k_oom_terminate")           # TA_TERMINATE after an OOM pause: the partial render
+    a.dispatch(0x6, "k_oom")                        # DPM out of memory (MT 0x2 | GBL 0x4): partial render
 
     # A timer-only event (bit 29 set, no TA/3D bit above) must NOT scan the kernel
     # CCB: at 1 kHz a CCB scan every tick races the doorbell task's dispatch /
@@ -970,51 +969,30 @@ def build(a):
     # ======================================================================
     a.label("k_oom")
     # DPM out of memory mid-scene (DPM_OUT_OF_MEMORY_MT 0x2 | _GBL 0x4): the TA filled the
-    # parameter buffer while binning the open scene. Recover like the DDK (ta3d-state decode
-    # part 3, pc 0x0bf7): the TA must be TERMINATED before the partial render -- rendering
-    # while it is still mid-stream reads region headers / tail pointers it is still writing.
-    # So: OTPM flush, hold the allocation (0x69c=4), PAUSE the TA (0xa74 b0); the hardware then
-    # raises TA_TERMINATE (EVENT_STATUS b12), which k_oom_terminate turns into the partial
-    # render of the open scene. Dormant unless the OOM event fires.
+    # parameter buffer while binning the open scene. Recover like the DDK: run a PARTIAL
+    # RENDER of the open scene (do_3d on its SC_RD/SC_PB, which do_ta left set) to flush the
+    # pages binned so far, then resume the TA (0x69c = 1) WITHOUT the scene-end teardown, so
+    # it keeps binning into the freed pages. The completion (render_complete) branches on
+    # SC_OOM. If a normal render's 3D is already in flight (WAIT_3D set), defer: start the
+    # partial render when that render completes. (ta3d-state DDK decode pc 0x0ad1/0x0b50,
+    # 2026-11.) Dormant unless the OOM event fires, so normal renders are untouched.
     a.i("limm r4, #6")
     a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")       # ack EVENT_STATUS 0x6 (MT | GBL)
+    a.i(f"ld.a.d r2, r17, #{WAIT_3D} [moe]")          # a render's 3D in flight?
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, r2")
+    a.i("(p0) ba k_oom_defer")                        # busy -> defer the partial render
     a.i(f"ld.a.d r2, r17, #{SC_RD} [moe]")            # open scene present?
     a.i("wdf")
     a.i("test.and.eq p0, r2, r2")
     a.i("(p0) ba kick_end")                           # no open scene -> nothing to do
-    a.i(f"ld.a.d r2, r17, #{SC_OOM} [moe]")           # already handling an OOM?
-    a.i("wdf")
-    a.i("test.and.ne p0, r2, r2")
-    a.i("(p0) ba kick_end")                           # SC_OOM != 0 -> don't re-enter
-    # OTPM flush before the terminate (0x24c = 1, wait OTPM_INV b20, ack).
     a.i("limm r4, #1")
-    a.i(f"str #{CR_OTPM // 4}, r4")
-    a.wait(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR)
-    # hold the TA allocation (0x69c = 4) and pause the TA (0xa74 b0); HW raises TA_TERMINATE.
-    a.i("limm r4, #4")
-    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 4: hold the TA's allocation
-    a.i(f"ldr r5, #{0xa74 // 4}")
-    a.i("wdf")
-    a.i("or r5, r5, #1")                             # pause the TA
-    a.i(f"str #{0xa74 // 4}, r5")
-    a.i("limm r4, #1")
-    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 1: paused, awaiting TA_TERMINATE
-    a.i("ba kick_end")
-
-    a.label("k_oom_terminate")
-    # TA_TERMINATE (EVENT_STATUS b12 = 0x1000) after the OOM pause: the TA has stopped, so run
-    # the partial render of the open scene now (do_3d on SC_RD/SC_PB, which do_ta left set;
-    # do_3d is self-contained and reads them). Single-layer / no-depth first build: the DDK's
-    # per-layer region-header / ZLS offsets are 0 and the depth-stored bit is unused.
-    a.i("limm r4, #4096")                             # 0x1000
-    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")       # ack TA_TERMINATE
-    a.i(f"ld.a.d r2, r17, #{SC_OOM} [moe]")
-    a.i("wdf")
-    a.i("test.xor.ne p0, r2, #1")                     # SC_OOM != 1 -> not our terminate, ignore
-    a.i("(p0) ba kick_end")
-    a.i("limm r4, #2")
-    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 2: partial render in flight
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 1: partial render in flight
     a.i("ba do_3d")                                   # partial render = do_3d on the open scene
+    a.label("k_oom_defer")
+    a.i("limm r4, #2")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 2: deferred (start at completion)
+    a.i("ba kick_end")
 
     # transfer (data[1] = HW transfer context): a 3D-only render whose single
     # background object samples the source and writes the destination (texture
@@ -1834,29 +1812,25 @@ def build(a):
     # Walk the render's HW device sync list, set each destination's write-ops-complete
     # to pending+1 (docs/UKERNEL.md §5), tear the render down, and interrupt the host.
     a.label("render_complete")
-    # OOM partial render? (SC_OOM set). 2 = this completion IS the partial render: resume the
-    # TA (0x69c = 1), UNPAUSE it (0xa74 b0), and SKIP the scene teardown, so it keeps binning
-    # into the freed pages. 1 = paused awaiting TA_TERMINATE (shouldn't reach a 3D end); clear
-    # and tear down defensively. 0 = normal. (ta3d-state DDK decode part 3, pc 0x0df7, 2026-11.)
+    # OOM partial render? (SC_OOM set). 1 = this completion is the partial render: resume the
+    # TA (0x69c = 1) and SKIP the scene teardown, so the TA keeps binning into the freed pages.
+    # 2 = a deferred OOM (a normal render was in flight when OOM fired): for now clear it and
+    # tear down normally -- the deferred partial render is a follow-up; the serialized target
+    # workload (Minecraft/desktop) hits only the immediate case. (ta3d-state DDK decode 2026-11.)
     a.i(f"ld.a.d r1, r17, #{SC_OOM} [moe]")
     a.i("wdf")
     a.i("test.and.eq p0, r1, r1")                     # SC_OOM == 0 (common) -> normal teardown
     a.i("(p0) ba render_complete_normal")
-    a.i("test.xor.ne p0, r1, #2")                     # SC_OOM != 2 -> unexpected: clear + normal
+    a.i("test.xor.ne p0, r1, #1")                     # SC_OOM != 1 (i.e. 2, deferred) -> clear + normal
     a.i("(p0) ba render_complete_clroom")
     a.i("limm r4, #1")
-    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 1: release/resume the TA allocation
-    a.i(f"ldr r5, #{0xa74 // 4}")
-    a.i("wdf")
-    a.i("shr r5, r5, #1")                             # unpause the TA (clear 0xa74 b0)
-    a.i("shl r5, r5, #1")
-    a.i(f"str #{0xa74 // 4}, r5")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 1: resume the TA's allocation
     a.i("limm r4, #0")
     a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear SC_OOM
     a.i("ba kick_end")                                # skip the scene teardown; the TA continues
     a.label("render_complete_clroom")
     a.i("limm r4, #0")
-    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear an unexpected OOM flag
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear the deferred OOM flag (follow-up)
     a.label("render_complete_normal")
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
