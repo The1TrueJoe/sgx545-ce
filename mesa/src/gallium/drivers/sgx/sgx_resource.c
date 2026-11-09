@@ -439,11 +439,26 @@ vbo_retire(struct sgx_screen *screen, struct sgxws_bo *bo, uint32_t seq)
    }
 }
 
+/* (screen lock held) */
 bool
 sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
 
+   /* Written since it was copied, or mapped for writes still (whose writes
+    * reach the copy only at the unmap): copied again, into a new copy when a
+    * render may still read this one */
+   if (sgxws_bo_valid(&res->vbo) &&
+       (res->vbo_gen != res->gen || res->write_maps)) {
+      if (!screen->hw ||
+          !sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw)))
+         goto copy;
+      /* (mid-draw: a full retired list would flush the frame being
+       * recorded, so the draw goes without the device copy instead) */
+      if (screen->n_retired == ARRAY_SIZE(screen->retired))
+         return false;
+      vbo_retire(screen, &res->vbo, res->vbo_seq);
+   }
    if (sgxws_bo_valid(&res->vbo))
       return true;
    if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX,
@@ -451,7 +466,9 @@ sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res)
       memset(&res->vbo, 0, sizeof(res->vbo));
       return false;
    }
+copy:
    memcpy(res->vbo.map, res->data, res->base.width0);
+   res->vbo_gen = res->gen;
    return true;
 }
 
@@ -637,6 +654,7 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
    if (prsc->target == PIPE_BUFFER) {
       if (usage & PIPE_MAP_WRITE) {
          res->gen++; /* the vertex cache's copies of it are stale */
+         res->write_maps++;
          res->written_ns = os_time_get_nano();
          /* a device copy a render may still read is left to it; the next
           * draw makes another (an unsynchronized write promises to miss
@@ -833,9 +851,13 @@ sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    }
 
    if (ptrans->resource->target == PIPE_BUFFER &&
-       (ptrans->usage & PIPE_MAP_WRITE) && res->vbo.map)
-      memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
-             (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
+       (ptrans->usage & PIPE_MAP_WRITE)) {
+      if (res->vbo.map)
+         memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
+                (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
+      if (res->write_maps)
+         res->write_maps--;
+   }
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);
 }

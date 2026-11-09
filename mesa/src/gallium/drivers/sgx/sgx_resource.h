@@ -38,6 +38,10 @@ struct sgx_resource {
     * vbo_seq is the last kick that reads it */
    struct sgxws_bo vbo;
    uint32_t vbo_seq;
+   /* the data's gen it was copied at, and the write maps open (a stream
+    * uploader keeps its buffer mapped while it writes more into it) */
+   uint32_t vbo_gen;
+   unsigned write_maps;
    uint64_t written_ns;     /* buffers: when last written */
    uint32_t stride;         /* bytes per row of level 0 */
    size_t level_offset[16]; /* each level in the linear CPU copy */
