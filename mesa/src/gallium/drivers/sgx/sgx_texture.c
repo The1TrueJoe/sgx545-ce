@@ -29,23 +29,23 @@ sgx_tex_format(enum pipe_format format)
    switch (format) {
    /* an sRGB format is its linear twin here: the fragment shader decodes
     * what it samples (lower_srgb, sgx_fs_for) */
+   /* The 8888 formats are sampled so the texel arrives in the colour
+    * output's byte order, B, G, R, A, as the DDK binds them: the compiler
+    * unpacks those units zyxw (sgx_compile_options.tex_bgra, sgx_tex_bgra), and
+    * a texel that is the colour as it is takes no instruction.  R, G, B, A
+    * bytes in memory are 0x0d, B, G, R, A bytes 0x0c (docs/TEX.md §1). */
    case PIPE_FORMAT_R8G8B8A8_UNORM:
    case PIPE_FORMAT_R8G8B8X8_UNORM:
    case PIPE_FORMAT_R8G8B8A8_SRGB:
    case PIPE_FORMAT_R8G8B8X8_SRGB:
    case PIPE_FORMAT_R8_UNORM: /* stored as RGBA8 (sgx_tex_bpp) */
    case PIPE_FORMAT_R8G8_UNORM:
-      /* R, G, B, A bytes in memory.  The DDK tags them 0x0d and libusc folds a
-       * zyxw reorder into the sample; our compiler unpacks xyzw, and with 0x0c
-       * (BGRA8888) the texels come out GL's way (docs/TEX.md §1) */
-      return 0x0c;
+      return 0x0d;
    case PIPE_FORMAT_B8G8R8A8_UNORM:
    case PIPE_FORMAT_B8G8R8X8_UNORM:
    case PIPE_FORMAT_B8G8R8A8_SRGB:
    case PIPE_FORMAT_B8G8R8X8_SRGB:
-      /* B, G, R, A bytes in memory: the format that swaps R and B against
-       * 0x0c, as a strided back buffer is sampled (sgx_tex_words) */
-      return 0x0d;
+      return 0x0c;
    case PIPE_FORMAT_B5G6R5_UNORM:
       return 0x05;
    case PIPE_FORMAT_A8_UNORM:
@@ -59,6 +59,15 @@ sgx_tex_format(enum pipe_format format)
    default:
       return 0;
    }
+}
+
+/* sampled B, G, R, A ordered (sgx_tex_format): the compiler unpacks zyxw */
+bool
+sgx_tex_bgra(enum pipe_format format)
+{
+   unsigned f = sgx_tex_format(format);
+
+   return f == 0x0c || f == 0x0d;
 }
 
 /* Bytes per texel on the device.  R8 and RG8 are stored as RGBA8: R, G (or
@@ -531,8 +540,7 @@ sgx_tex_words(const struct pipe_sampler_view *view,
       /* A render target, read where it is: strided (T1 layout 6), the pitch
        * - 1 in T0 b9-11 and b17-26 in place of the mipmap and min filter
        * bits, as the DDK's swap blit reads its back buffer (TEX.md section
-       * 3).  B, G, R, A in memory is 0x0d, the format that swaps R and B
-       * against 0x0c. */
+       * 3), in the format sgx_tex_format gives it. */
       unsigned p = res->pitch - 1;
       bool bgra = prsc->format == PIPE_FORMAT_B8G8R8A8_UNORM ||
                   prsc->format == PIPE_FORMAT_B8G8R8X8_UNORM;
@@ -550,7 +558,7 @@ sgx_tex_words(const struct pipe_sampler_view *view,
       sgx_pack(&t[1], TEXSTATE_WORD1, t1)
       {
          t1.layout = SGX_TEXSTATE_LAYOUT_STRIDED;
-         t1.format = bgra ? 0x0d : 0x0c;
+         t1.format = bgra ? 0x0c : 0x0d;
          t1.width = prsc->width0 - 1;
          t1.height = prsc->height0 - 1;
       }

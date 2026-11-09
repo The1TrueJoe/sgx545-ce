@@ -87,6 +87,11 @@ struct sgx_compile_options {
     * byte 0 is blue, 2 red, the colour output's order. A texel that is the
     * colour as it is then needs no instruction; other reads unpack zyxw */
    uint32_t tex_bgra;
+   /* fragment shader: the driver's PDS samples a non-dependent texture from
+    * the coordinate set itself, so a varying only such samples read needs no
+    * plain iteration of its own (the DDK's tex fs: one PDS sample, no
+    * iteration). Off for the DDK's driver, whose finalizer may read it */
+   bool pds_samples_alone;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components

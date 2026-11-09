@@ -32,6 +32,7 @@
 #include "sgx_csb.h"
 #include "sgx_program.h"
 #include "sgx_screen.h"
+#include "sgx_texture.h"
 
 const nir_shader_compiler_options *
 sgx_get_nir_options(void)
@@ -557,7 +558,8 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
 static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
-               unsigned srgb, const uint16_t *swz, const uint8_t *vtx_fmt)
+               unsigned srgb, const uint16_t *swz, uint32_t not_bgra,
+               const uint8_t *vtx_fmt)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -579,6 +581,14 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    /* st's fixed-function fragment programs only owe the framebuffer's
     * precision: mediump (texture coordinates stay F32), opt-in until piglit's
     * fixed-function tests have run on it */
+   /* the units sampling 8888 texels get them B, G, R, A ordered
+    * (sgx_tex_format): all of them unless the variant says otherwise */
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      opts.tex_bgra = ~not_bgra;
+      /* a coordinate only samples read: the PDS samples from the set
+       * itself (a pure-sample DOUTI, source 0x24, below) */
+      opts.pds_samples_alone = true;
+   }
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
                      (sgx_drv_debug & SGX_DEBUG_FF_MEDIUMP);
@@ -769,7 +779,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          so->code = insert_samples(out.code, out.n_code, &info, sa, &n);
          so->n_code = so->code ? n : 0;
       } else {
-         so->code = malloc(out.n_code * sizeof(*so->code));
+         so->code = malloc(MAX2(out.n_code, 1) * sizeof(*so->code));
          if (so->code) {
             memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
             so->n_code = out.n_code;
@@ -937,7 +947,7 @@ sgx_create_shader_state(struct pipe_context *pctx,
 
    if (!fixed && !nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, NULL);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, 0, NULL);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -1044,7 +1054,7 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
-   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, NULL,
+   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, NULL, 0,
                        vtx_fmt) ||
        !(*slot)->prog.code) {
       FREE((*slot)->vary);
@@ -1054,12 +1064,27 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    return *slot;
 }
 
+/* the texture units a fragment shader samples (all, when it isn't known) */
+uint32_t
+sgx_fs_textures_used(const struct sgx_pipe_shader *fs)
+{
+   uint32_t mask = 0;
+   unsigned unit;
+
+   if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
+      return ~0u;
+   BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS)
+      mask |= 1u << unit;
+   return mask;
+}
+
 struct sgx_pipe_shader *
 sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 {
    struct sgx_pipe_shader **slot;
    unsigned srgb = 0, unit;
    uint16_t swz[PIPE_MAX_SAMPLERS] = {0};
+   uint32_t not_bgra = 0;
    bool any_swz = false;
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
@@ -1071,6 +1096,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
          continue;
       if (util_format_is_srgb(v->format))
          srgb |= 1u << unit;
+      if (!sgx_tex_bgra(v->format))
+         not_bgra |= 1u << unit;
       /* XYZW: none, 0 */
       if (v->swizzle_r != PIPE_SWIZZLE_X || v->swizzle_g != PIPE_SWIZZLE_Y ||
           v->swizzle_b != PIPE_SWIZZLE_Z || v->swizzle_a != PIPE_SWIZZLE_W) {
@@ -1080,10 +1107,11 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
          any_swz = true;
       }
    }
-   if (!srgb && !any_swz)
+   if (!srgb && !any_swz && !not_bgra)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
+          fs->variants_srgb[i]->not_bgra == not_bgra &&
           !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
    }
@@ -1100,7 +1128,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    (*slot)->discard_pa = -1;
    (*slot)->srgb = srgb;
    memcpy((*slot)->swz, swz, sizeof(swz));
-   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, swz, NULL) ||
+   (*slot)->not_bgra = not_bgra;
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, swz, not_bgra, NULL) ||
        !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);
