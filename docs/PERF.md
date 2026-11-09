@@ -343,7 +343,8 @@ c3 2277 / 219.
 Each step has its own `SGX_COMPILER_DEBUG` flag (`notexcolor`, `nopackedcolor`,
 `unrollexits`, `nomaskbool`, `noiftest`) for bisecting a hardware failure.
 `tools/isa/hwt_p13.py` checks the new instructions (`pck.u8.u8` lanes, mask `or` / `and`,
-`test.and.eq`) on a box; it has not run yet.
+`test.and.eq`) on a box: all 11 passed on the EA3 (2026-11-09). Full dEQP-GLES2 on the
+EA3 with the whole pass (60eea0e): 16,637 pass, 0 unexpected, 0 wedges.
 
 Still open, in order:
 - uniform-only math per pixel or vertex. Measured with `nir_opt_preamble` before

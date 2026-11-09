@@ -323,6 +323,7 @@ Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
 | hwt_p8 | setfc's first argument; C10 alpha source; C10 -> U8 byte order | **setfc's 1st argument is the efo F16 enable, off at start**; C10 alpha reads channel 0 |
 | hwt_p10 | test with format select: F16 numbering, chan on F16 and C10 compares | **test's F16 operands count halves too**; C10 operands are whole registers; chan table |
 | hwt_p11 | a repeat over an F16 operand | moe / inc step it by one half |
+| hwt_p13 | pck.u8.u8 lane picks per dmask (3, 12, 6, 9) and RGBA8 -> BGRA8 in two; and / or of 0 and 0xffffffff test masks; test.and.eq into p0 on a mask | an 8-bit source's lane picks its byte, the first source filling the lowest dmask lane; and / or are bitwise on masks; test.and.eq is true for a zero mask, false for 0xffffffff (2026-11-09, all 11 ok) |
 | hwt_p12 | efo's m/a/i/d modes, wi, negates, chaining; fdual's every secondary and primary, i0s0, slot sharing, negates, rpt=2, same-word timing | all units as tabled; secondary sources settled (sd = 1st, sb, sc); sec 3 is fsubflr; neg1/neg2 primary only; same-word read of an internal register being written is a **race** (efo d, fdual primary) |
 
 hwt_p7-p9's `test` lines with `.f16` / `.c10` were drawn before the assembler
