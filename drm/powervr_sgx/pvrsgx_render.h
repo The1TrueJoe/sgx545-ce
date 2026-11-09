@@ -40,6 +40,7 @@ struct pvrsgx_render_ctx {
 };
 
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
+void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
 
 /* A render target's tiling numbers (docs/STATE.md section 6). */
 struct pvrsgx_rt_numbers {

@@ -321,6 +321,7 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 		goto err_mmu;
 
 	pvrsgx_kobj_init(sdev);
+	mutex_init(&sdev->pb_lock);
 	err = pvrsgx_fw_init(sdev);
 	if (err)
 		goto err_fw;
@@ -360,6 +361,8 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	pvrsgx_job_fini(sdev);
 	pvrsgx_fw_stop(sdev);
 	irq_teardown(sdev);
+	pvrsgx_pb_put(sdev->pb);
+	mutex_destroy(&sdev->pb_lock);
 	pvrsgx_kobj_fini(sdev);
 	pvrsgx_fw_fini(sdev);
 	__free_page(sdev->reset_page);

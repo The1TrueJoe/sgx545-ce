@@ -26,6 +26,7 @@
 #include <uapi/drm/powervr_sgx_drm.h>
 
 #include "pvrsgx_stream.h"
+#include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
 #include "pvrsgx_fw.h"
@@ -95,13 +96,15 @@ static void pb_init(struct pvrsgx_pb *pb)
 }
 
 /*
- * The VM's parameter buffer: PB, free list, PB descriptor and block list. One
- * per VM, shared by its render contexts, as the DDK shares one PB descriptor
- * (pb.c): the DPM numbers PB pages from the 3D-params heap base, so a VM's PB
- * must start there and a second one can't (UAPI.md G15). The first context
- * sets the size; later requests are ignored, as the DDK does.
+ * The device's parameter buffer: PB, free list, PB descriptor and block list,
+ * shared by every render context of every client, as the DDK shares one PB
+ * descriptor (pb.c). The DPM's free-list state is one set of registers that the
+ * microkernel doesn't switch between PBs, so two PBs would run each other's
+ * lists off their ends. The DPM numbers PB pages from the 3D-params heap base, so
+ * the PB starts there, at the same address in every VM (pvrsgx_pb_map). The
+ * first context sets the size; later requests are ignored, as the DDK does.
  */
-static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm, u32 req_pages)
+static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 {
 	struct pvrsgx_pb *pb = kzalloc_obj(*pb);
 	u32 pages = (req_pages ?: PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
@@ -113,12 +116,12 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, struct pvrsgx_vm 
 	pb->sdev = sdev;
 
 	/* The PB, and what is addressed from its 1 MiB-aligned base, in the VM. */
-	err = pvrsgx_kobj_new(sdev, &pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, vm);
+	err = pvrsgx_kobj_new(sdev, &pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, NULL);
 	if (err)
 		goto fail;
 	pb->base = kobj_va(pb->buf) & 0xfff00000;
 	err = pvrsgx_kobj_new(sdev, &pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base,
-			      vm);
+			      NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &pb->desc, PVRSGX_KRANGE_KDATA,
 				     sizeof(struct pvrsgx_fw_pb_desc), 0, NULL);
 	if (pb->desc)
@@ -155,24 +158,89 @@ void pvrsgx_pb_put(struct pvrsgx_pb *pb)
 		kref_put(&pb->ref, pb_release);
 }
 
-/* The VM's PB, created by its first render context; the VM keeps one reference until closed. */
-static struct pvrsgx_pb *vm_pb_get(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm, u32 req_pages)
+/* The device's PB, created by the first render context; the device keeps one reference. */
+static struct pvrsgx_pb *dev_pb_get(struct pvrsgx_device *sdev, u32 req_pages)
 {
 	struct pvrsgx_pb *pb;
 
-	mutex_lock(&vm->lock);
-	if (!vm->pb) {
-		pb = pb_create(sdev, vm, req_pages);
+	mutex_lock(&sdev->pb_lock);
+	if (!sdev->pb) {
+		pb = pb_create(sdev, req_pages);
 		if (IS_ERR(pb)) {
-			mutex_unlock(&vm->lock);
+			mutex_unlock(&sdev->pb_lock);
 			return pb;
 		}
-		vm->pb = pb;
+		sdev->pb = pb;
 	}
-	pb = vm->pb;
+	pb = sdev->pb;
 	kref_get(&pb->ref);
-	mutex_unlock(&vm->lock);
+	mutex_unlock(&sdev->pb_lock);
 	return pb;
+}
+
+static struct pvrsgx_kobj *pb_mapped(struct pvrsgx_pb *pb, int i)
+{
+	return i ? pb->freelist : pb->buf;
+}
+
+/* The PB and its free list into the VM, at their device addresses; once per VM. */
+static int pvrsgx_pb_map(struct pvrsgx_vm *vm, struct pvrsgx_pb *pb)
+{
+	struct pvrsgx_device *sdev = vm->sdev;
+	int err = 0, i;
+
+	mutex_lock(&vm->lock);
+	if (vm->pb)
+		goto out;
+	for (i = 0; i < ARRAY_SIZE(vm->pb_nodes); i++) {
+		struct pvrsgx_kobj *o = pb_mapped(pb, i);
+
+		vm->pb_nodes[i].start = kobj_va(o);
+		vm->pb_nodes[i].size = o->km.size;
+		mutex_lock(&sdev->kobj_lock);
+		err = drm_mm_reserve_node(&vm->params, &vm->pb_nodes[i]);
+		mutex_unlock(&sdev->kobj_lock);
+		if (err)
+			goto unwind;
+		err = pvrsgx_mmu_map_pages(vm->mmu, kobj_va(o), o->km.pages, o->km.npages, 0);
+		if (err) {
+			i++;
+			goto unwind;
+		}
+	}
+	kref_get(&pb->ref);
+	vm->pb = pb;
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD;
+	mutex_unlock(&sdev->ccb_lock);
+out:
+	mutex_unlock(&vm->lock);
+	return err;
+
+unwind:
+	while (i--) {
+		pvrsgx_mmu_unmap(vm->mmu, vm->pb_nodes[i].start, vm->pb_nodes[i].size);
+		mutex_lock(&sdev->kobj_lock);
+		drm_mm_remove_node(&vm->pb_nodes[i]);
+		mutex_unlock(&sdev->kobj_lock);
+	}
+	mutex_unlock(&vm->lock);
+	return err;
+}
+
+/* At the VM's release: nothing on the GPU uses it any more. */
+void pvrsgx_pb_unmap(struct pvrsgx_vm *vm)
+{
+	struct pvrsgx_device *sdev = vm->sdev;
+
+	for (int i = 0; i < ARRAY_SIZE(vm->pb_nodes); i++) {
+		pvrsgx_mmu_unmap(vm->mmu, vm->pb_nodes[i].start, vm->pb_nodes[i].size);
+		mutex_lock(&sdev->kobj_lock);
+		drm_mm_remove_node(&vm->pb_nodes[i]);
+		mutex_unlock(&sdev->kobj_lock);
+	}
+	pvrsgx_pb_put(vm->pb);
+	vm->pb = NULL;
 }
 
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 req_pages)
@@ -186,12 +254,15 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 		return -ENOMEM;
 	ctx->render = r;
 
-	r->pb = vm_pb_get(sdev, vm, req_pages);
+	r->pb = dev_pb_get(sdev, req_pages);
 	if (IS_ERR(r->pb)) {
 		err = PTR_ERR(r->pb);
 		r->pb = NULL;
 		goto fail;
 	}
+	err = pvrsgx_pb_map(vm, r->pb);
+	if (err)
+		goto fail;
 
 	err = pvrsgx_kobj_new(sdev, &r->scratch, PVRSGX_KRANGE_3DPARAMS, 0x40, r->pb->base, vm);
 	err = err ?: pvrsgx_kobj_new(sdev, &r->ccb, PVRSGX_KRANGE_KDATA, CCB_BYTES, 0, NULL);

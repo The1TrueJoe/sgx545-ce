@@ -33,9 +33,11 @@ struct pvrsgx_vm {
 	struct pvrsgx_mmu *mmu;
 	/** @params: 3D parameters addresses of this VM's kernel objects (pvrsgx_kobj.c). */
 	struct drm_mm params;
-	/** @pb: The parameter buffer its render contexts share, until the VM is closed. */
+	/** @pb: The device's parameter buffer, mapped here by the first render context. */
 	struct pvrsgx_pb *pb;
-	/** @lock: Serialises map and unmap, and @pb's creation. */
+	/** @pb_nodes: @pb's PB and free list in @params. */
+	struct drm_mm_node pb_nodes[2];
+	/** @lock: Serializes map and unmap, and @pb's mapping. */
 	struct mutex lock;
 	/** @ref: Held by the handle, its contexts and their jobs. */
 	struct kref ref;

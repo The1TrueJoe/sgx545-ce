@@ -54,11 +54,10 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 {
 	struct pvrsgx_kobj *o;
 	u32 start = max(min_addr, ranges[range].start);
-	bool per_vm = range == PVRSGX_KRANGE_3DPARAMS;
+	/* A 3D-params object without a VM is the device's: the PB (pvrsgx_render.c). */
+	bool per_vm = range == PVRSGX_KRANGE_3DPARAMS && vm;
 	int err;
 
-	if (per_vm && !vm)
-		return ERR_PTR(-EINVAL);
 	o = kzalloc_obj(*o);
 	if (!o)
 		return ERR_PTR(-ENOMEM);
