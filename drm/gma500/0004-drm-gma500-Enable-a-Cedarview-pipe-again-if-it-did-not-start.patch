@@ -21,7 +21,7 @@ Assisted-by: Claude:claude-opus-5-5
 ---
 --- a/drivers/gpu/drm/gma500/gma_display.c
 +++ b/drivers/gpu/drm/gma500/gma_display.c
-@@ -9,6 +9,7 @@
+@@ -9,12 +9,14 @@
  
  #include <linux/delay.h>
  #include <linux/highmem.h>
@@ -29,7 +29,14 @@ Assisted-by: Claude:claude-opus-5-5
  
  #include <drm/drm_crtc.h>
  #include <drm/drm_crtc_helper.h>
-@@ -194,6 +195,88 @@
+ #include <drm/drm_fourcc.h>
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_modeset_helper_vtables.h>
++#include <drm/drm_print.h>
+ #include <drm/drm_vblank.h>
+ 
+ #include "framebuffer.h"
+@@ -194,6 +196,88 @@
   * This code should probably grow support for turning the cursor off and back
   * on appropriately at the same time as we're turning the pipe off/on.
   */
@@ -118,7 +125,7 @@ Assisted-by: Claude:claude-opus-5-5
  void gma_crtc_dpms(struct drm_crtc *crtc, int mode)
  {
  	struct drm_device *dev = crtc->dev;
-@@ -219,39 +302,19 @@
+@@ -219,39 +303,19 @@
  
  		gma_crtc->active = true;
  
@@ -169,7 +176,7 @@ Assisted-by: Claude:claude-opus-5-5
  		temp = REG_READ(map->status);
  		temp &= ~(0xFFFF);
  		temp |= PIPE_FIFO_UNDERRUN;
-@@ -285,37 +348,7 @@
+@@ -285,37 +349,7 @@
  		/* Wait for vblank for the disable to take effect */
  		gma_wait_for_vblank(dev);
  
