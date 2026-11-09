@@ -172,7 +172,7 @@ static const struct drm_gpuvm_ops pvrsgx_gpuvm_ops = {
 	.vm_free = pvrsgx_gpuvm_free,
 };
 
-static struct pvrsgx_vm *vm_create(struct pvrsgx_device *sdev)
+struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
 {
 	struct drm_gem_object *r_obj;
 	struct pvrsgx_vm *vm;
@@ -237,7 +237,7 @@ int pvrsgx_ioctl_create_vm_context(struct drm_device *drm, void *data, struct dr
 	if (args->_padding_4)
 		return -EINVAL;
 
-	vm = vm_create(to_pvrsgx_device(drm));
+	vm = pvrsgx_vm_create(to_pvrsgx_device(drm));
 	if (IS_ERR(vm))
 		return PTR_ERR(vm);
 	err = xa_alloc(&sfile->vms, &args->handle, vm, xa_limit_32b, GFP_KERNEL);

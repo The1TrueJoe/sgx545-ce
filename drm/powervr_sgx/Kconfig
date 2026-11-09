@@ -38,10 +38,12 @@ config DRM_POWERVR_SGX_GMA500
 config DRM_POWERVR_SGX_KUNIT_TEST
 	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
 	depends on DRM_POWERVR_SGX && KUNIT
+	select DRM_KUNIT_TEST_HELPERS
 	default KUNIT_ALL_TESTS
 	help
-	  Unit tests of the driver's firmware file checks: a well-formed
+	  Unit tests of the driver's firmware file checks (a well-formed
 	  image is accepted, and every malformed header, table and checksum
-	  is refused. The tests need no GPU.
+	  is refused) and of kernel-object teardown at unbind. The tests
+	  need no GPU.
 
 	  For developers; if unsure, say N.

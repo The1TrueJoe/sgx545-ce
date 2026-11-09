@@ -43,6 +43,7 @@ struct pvrsgx_vm {
 	struct kref ref;
 };
 
+struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);
 struct pvrsgx_vm *pvrsgx_vm_get(struct pvrsgx_vm *vm);
 void pvrsgx_vm_put(struct pvrsgx_vm *vm);
 struct dma_resv *pvrsgx_vm_resv(struct pvrsgx_vm *vm);

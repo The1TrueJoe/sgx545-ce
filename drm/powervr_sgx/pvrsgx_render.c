@@ -931,3 +931,7 @@ void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job)
 	else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER)
 		pvrsgx_transfer_dump(sb, job);
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_kobj_test.c"
+#endif
