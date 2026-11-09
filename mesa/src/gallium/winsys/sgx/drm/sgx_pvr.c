@@ -473,6 +473,12 @@ pvr_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
 /* ------------------------------------------------------------------ submission
  */
 
+/* A scene in one TA kick (0x63), or in several: the first resets the TA
+ * (b0), the last (b1) starts the 3D and alone carries the 3D flags and TA
+ * flags 2; b5-b6 are on every kick (ta3d-state, the DDK's multi-kick
+ * scenes) */
+enum ta_kick { TA_FIRST = 1, TA_LAST = 2 };
+
 /*
  * SGXMKIF_CMDTA, client part (STATE.md section 1), for frame f of the render
  * target as the DDK's swaps do it (3- and 6-frame captures of a test client):
@@ -482,7 +488,7 @@ pvr_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
  * headers alternate, frame 0 taking entry 1 and the second region-header array.
  */
 static void
-ta_command(struct sgxws_ctx *c, uint32_t *cmd)
+ta_command(struct sgxws_ctx *c, uint32_t *cmd, unsigned kind)
 {
    struct pvr_ctx *k = c->k;
    struct sgxws_rt *rt = c->rt;
@@ -493,8 +499,9 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    uint32_t entry = s->rtdata.va + 0x18 + 0x38 * (odd ? 0 : 1);
 
    memset(cmd, 0, TA_CMD_SIZE);
-   cmd[0x00 / 4] = TA_CMD_SIZE;           /* size, rounded to 64 */
-   cmd[0x04 / 4] = 0x63 | (f ? 0 : 0x10); /* TA flags [D] */
+   cmd[0x00 / 4] = TA_CMD_SIZE; /* size, rounded to 64 */
+   cmd[0x04 / 4] = 0x60 | (kind & TA_FIRST ? 1 : 0) | (kind & TA_LAST ? 2 : 0) |
+                   (f || !(kind & TA_FIRST) ? 0 : 0x10); /* TA flags [D] */
    cmd[0x08 / 4] = c->bg_pds[0];
    cmd[0x0c / 4] = c->bg_pds[1];
    cmd[0x10 / 4] = c->bg_pds[2];
@@ -502,8 +509,9 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    cmd[0x18 / 4] = 0x50000000;
    /* 3D flags: render, frame [D]; b7 and b8 (the DDK's kick b19-20) with a
     * depth/stencil buffer kept across renders, as the DDK's window renders */
-   cmd[0x1c / 4] = 0x400 | f << 14 | (c->target.zls_va ? 0x180 : 0);
-   cmd[0x20 / 4] = f;               /* the target's frame number [D] */
+   cmd[0x1c / 4] =
+      kind & TA_LAST ? 0x400 | f << 14 | (c->target.zls_va ? 0x180 : 0) : 0;
+   cmd[0x20 / 4] = f; /* the target's frame number [D] */
    cmd[0x24 / 4] = k->pbdesc.va;
    cmd[0x38 / 4] = s->rd.va;
    cmd[0x3c / 4] = s->hwsync.va;
@@ -514,7 +522,8 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
    t[0x08 / 4] = rt->n.mtile2;
    t[0x0c / 4] = rt->n.te_screen;
    t[0x10 / 4] = rt->n.mt_tiles;
-   t[0x14 / 4] = 0x400000; /* TA flags 2: this kick renders */
+   t[0x14 / 4] =
+      kind & TA_LAST ? 0x400000 : 0; /* TA flags 2: this kick renders */
    t[0x18 / 4] = c->vdm_start;
    t[0x1c / 4] = 0xa2; /* [G] */
    t[0x20 / 4] = rgn_this;
@@ -564,7 +573,7 @@ ta_command(struct sgxws_ctx *c, uint32_t *cmd)
 }
 
 static int
-pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
+pvr_kick_ta_cmd(struct sgxws_ctx *c, uint32_t seq, unsigned kind)
 {
    struct pvr_ctx *k = c->k;
    struct pvr_rt *s = c->rt->k;
@@ -572,9 +581,10 @@ pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
    struct pvr *pvr = dev_pvr(c->dev);
    SGX_CCB_KICK kick;
    IMG_HANDLE dst[1];
-   uint32_t woff = k->ccb_woff, *rd;
+   uint32_t woff, *rd;
    int e;
 
+   woff = k->ccb_woff;
    rd = s->rd.map;
    rd[0x5c / 4] = c->pixev;
    rd[0x60 / 4] = c->pixev_rows;
@@ -582,7 +592,7 @@ pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
    {
       uint64_t t0 = sgxws_now_ns();
 
-      ta_command(c, k->ccb.map + woff / 4);
+      ta_command(c, k->ccb.map + woff / 4, kind);
       c->ns_cmd += sgxws_now_ns() - t0;
    }
 
@@ -593,15 +603,19 @@ pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
    kick.ui32CCBOffset = woff + 0x58;
    kick.sCommand.ui32Data[1] = k->hwctx_va;
    kick.hKernelHWSyncListMemInfo = pbo(&s->hwsync)->b.mem;
+   /* every kick of a scene names the target, whose write the first counts
+    * and the 3D completes; the 3D sync goes with the last (the DDK's
+    * SGX_CCB_KICKs of a 3-kick scene) */
    kick.ui32NumDstSyncObjects = 1;
    kick.pahDstSyncHandles = dst;
-   kick.bFirstKickOrResume = IMG_TRUE;
-   kick.bLastInScene = IMG_TRUE;
-   kick.h3DSyncInfo = pbo(&k->sync3d)->b.sync;
+   kick.bFirstKickOrResume = kind & TA_FIRST ? IMG_TRUE : IMG_FALSE;
+   kick.bLastInScene = kind & TA_LAST ? IMG_TRUE : IMG_FALSE;
+   kick.h3DSyncInfo = kind & TA_LAST ? pbo(&k->sync3d)->b.sync : NULL;
    k->ccb_woff = (woff + TA_CMD_SIZE) & (CCB_RING - 1);
    k->ccbctl.map[0] = k->ccb_woff; /* CCB write offset */
    __sync_synchronize();
-   done->sd = NULL;
+   if (kind & TA_FIRST)
+      done->sd = NULL;
    if (c->dev->dry_run >= 0 && c->frames >= (unsigned)c->dev->dry_run) {
       e = pvr_kick_traced(pvr, &kick, 0); /* traced, not sent */
    } else {
@@ -611,13 +625,26 @@ pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
       c->ns_kick += sgxws_now_ns() - t0;
       if (e) {
          sgxws_err("SGX_DOKICK failed: %d\n", e);
-      } else if (pbo(c->target.bo)->sd) {
+      } else if ((kind & TA_FIRST) && pbo(c->target.bo)->sd) {
          /* the kick counted one more pending write on the target */
          done->sd = pbo(c->target.bo)->sd;
          done->value = done->sd->ui32WriteOpsPending;
       }
    }
    return e;
+}
+
+static int
+pvr_kick_frame(struct sgxws_ctx *c, uint32_t seq)
+{
+   return pvr_kick_ta_cmd(c, seq, TA_LAST | (c->ta_kicks ? 0 : TA_FIRST));
+}
+
+/* (seq: the frame's kick, still to come; only the last kick's token counts) */
+static int
+pvr_kick_ta(struct sgxws_ctx *c)
+{
+   return pvr_kick_ta_cmd(c, c->kicks + 1, c->ta_kicks ? 0 : TA_FIRST);
 }
 
 static int
@@ -661,6 +688,10 @@ static const struct sgxws_kif pvr_kif = {
    .rt_init = pvr_rt_init,
    .rt_fini = pvr_rt_fini,
    .kick = pvr_kick_frame,
+   .kick_ta = pvr_kick_ta,
+   /* the CCB's read offset isn't kept in its control word here: the kicks in
+    * flight are bounded instead */
+   .ring_kicks = CCB_RING / TA_CMD_SIZE,
    .wait_seq = pvr_wait_seq,
    .frame_info = pvr_frame_info,
 };

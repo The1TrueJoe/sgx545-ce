@@ -215,8 +215,13 @@ with `__DRI_IMAGE_USE_SCANOUT`, so kmsro makes each a cached simpledrm dumb
 buffer, imported and flushed around both small renders (~5 ms a frame). Only
 X's screen pixmap is scanned out (X copies the window: its 1.1 ms job a
 frame). Nothing tells the pipe driver that an image is a back buffer (dri2.c
-maps `__DRI_IMAGE_USE_BACKBUFFER` to no bind flag), so keeping back buffers
-on the SGX needs a frontend change. Parked behind the vertex path.
+maps `__DRI_IMAGE_USE_BACKBUFFER` to no bind flag). So on such a display a
+scanout render target now starts as the SGX's own buffer and becomes a dumb
+buffer, with its contents, only when a KMS handle is asked for: X's root
+pixmap does that, client back buffers never do. With m2's listed-import
+flushes, Minecraft's import flushes went 318 → 102 per 5 s (553 → 132 ms),
+one 1.4 MB import a frame (X's); the desktop smoke stayed clean, es2gears
+135 → 160 fps, glmark2 67 → 83.
 
 With both gone the frame is the GPU's 69.5 ms: 14.4 fps, past the DDK.
 
@@ -257,6 +262,74 @@ ta3d-state diffed the DDK's and our state for perfmicro's verts test on the EA3
   GPU's vertex work is ~2x the DDK's, with the TA state matching; next are the
   two vertex programs and their DOUTU words (the DDK sets 0x10000 on every
   DOUTU, we never do).
+
+### TA kicks within a frame, and the vertex gap on the EA3 (2026-11-09)
+
+`SGX_TA_SPLIT=n` (0bf22f3, services backend, off by default) kicks the TA
+every n objects. The DDK does the same (ta3d-state: TA flags 0x71/0x60/0x62;
+3D flags, TA flags 2 and the 3D sync on the last kick only; the target's sync
+on every kick), so the GPU tiles while the CPU records the rest.
+- Correct: dEQP fragment_ops/draw/fbo/depth_stencil_clear/texture.units/
+  builtin_variable/rasterization unchanged with n = 2 (2,818 tests),
+  0 recoveries.
+- perfmicro's new `rows` test (the verts mesh as 127 draws, a colour each):
+  1440x960 58.4 → 63.3 fps, 720x480 80.4 → 86 fps with n = 16-32. verts and
+  fill are unchanged (one or eight draws).
+- A scene left open, with a first kick and no last one (a client killed
+  mid-frame), put services into a microkernel-init recovery loop until a
+  reboot. Every scene a flush opens must be closed. powervr_sgx needs a
+  uAPI for it (uapi-stream: a RENDER flag that leaves the scene open on its
+  rt_dataset, and a PB gate for other contexts).
+
+The DDK on the same box, same binary (i386 perfmicro):
+
+| test | DDK 720x480 | ours | DDK 1440x960 | ours |
+|---|---|---|---|---|
+| fill | 1432 | 791 | 392 | 233 |
+| verts | 537 | 146 | 329 | 110 |
+| rows | 238 | 80 | 205 | 58 |
+
+The vertex-heavy gap (3.4x) is twice the fill gap (1.7x). Our 720x480 verts
+frame (6.85 ms) is ~2.6 ms of CPU in the draw (every index read, rebased and
+copied; the DDK draws from the buffers as they are) and ~4.1 ms kick to done;
+the DDK's whole frame is 1.86 ms. With the vertex programs, TA state and
+vertex DMA width ruled out, the parameter buffer size (4 → 16 MB: no change)
+too, the next suspects are the memory the vertex path reads (our rings'
+allocation flags against the DDK's VBO/IBO) and the CPU index path
+(GPU-resident index buffers with the VDM's index base, instead of rebasing).
+
+### perfmicro against the DDK, rendered frames (2026-11-09) — supersedes the ratios above
+
+**Every earlier perfmicro comparison with the DDK in this file compared
+TA-only frames with rendered ones.** perfmicro ended each frame with a
+glFinish. On the DDK's pbuffer that only kicks the TA and keeps the scene
+open: ta3d-state's captures show its 3D renders once every 44 to 566
+"frames" (1,215 kicks, 13 scenes). Ours renders every frame. perfmicro now
+ends each frame with a 1-pixel glReadPixels (7884888), which renders on
+both.
+
+EA3, normal boot, the same binary (frames a second; ours/DDK):
+
+| test | DDK 720x480 | ours | ours, zerocopy | DDK 1440x960 | ours | ours, zerocopy |
+|---|---|---|---|---|---|---|
+| fill | 812 | 777 (0.96) | 748 | 237 | 230 (0.97) | 233 |
+| fill-blend | 200 | 186 (0.93) | 186 | 53.6 | 51.9 (0.97) | 51.8 |
+| tex | 1067 | 818 (0.77) | 804 | 335 | 238 (0.71) | 238 |
+| verts | 358 | 137 (0.38) | 322 (0.90) | 199 | 107 (0.54) | 190 (0.95) |
+| rows | 99 | 81 (0.82) | 85 | 70 | 59 (0.85) | 62 |
+
+- Fill and blend are at the DDK's speed: the per-pixel gaps of the 0.5x
+  tables above were the DDK not rendering.
+- **Texturing** is 0.71-0.77 of the DDK. A real per-pixel gap, next to look
+  at.
+- **Vertices:** 0.38-0.54 by default and 0.90-0.95 with
+  `SGX_DEBUG=zerocopy` since 72b75fb: an indexed draw from buffers takes its
+  indices as they are, from the index buffer's device copy, with no CPU work
+  a draw. Zero-copy is still opt-in. Its own 79 dEQP fails (depth_stencil,
+  point clipping; the same with or without the resident indices) are what
+  keep it so: fixing them gets every app the vertex path at the DDK's speed.
+- Minecraft swaps every frame, so the DDK renders there too: its profile (TA
+  ~42 ms, 3D ~26 ms) stays the honest target.
 
 ## Shader code against libusc
 
