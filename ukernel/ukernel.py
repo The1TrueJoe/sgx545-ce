@@ -133,6 +133,10 @@ CLEANUP_DEFER_MAX = 256      # ~256 ms at 1 kHz; a render completes in << 30 ms
 # kicked into a live 3D (BANK0 0x101F at every fault) = the 5/10 alternation.
 WAIT_3D = 0x1d               # set at 3D start, cleared by pixel_done (0x40000 + ISP idle)
 WAIT_FREE = 0x1e             # set at 3D start, cleared by free_done (0x1 DPM free)
+SC_OOM = 0x17        # control block +0x5c: OOM partial-render state. 0 = none; 1 = OOM taken, the
+                     # TA is paused (0xa74 b0) and held (0x69c=4), awaiting TA_TERMINATE; 2 = the
+                     # partial render is in flight (its 3D end resumes the TA via 0x69c=1, unpauses
+                     # it, and skips the scene teardown). Cleared by init_set.
 SC_INFLIGHT = 0x14   # control block +0x50: the RT-data entry of the render in
                      # flight (0 = none). The DDK keeps a doubly-linked render-
                      # in-flight list; one context needs only this single slot,
@@ -229,6 +233,7 @@ CTX_CCBCTL = 4       # client CCB control (write/read offsets, bytes)
 
 # ---- SGXMKIF_COMMAND (kernel CCB entry, 32 bytes) --------------------------
 CMD_SERVICE = 0      # = command type (our host-kick table is the identity)
+CMD_CACHECTL = 1     # ui32CacheControl (SGXMKIF_CC_* bits the host owes since its last command)
 CMD_DATA0 = 2        # ui32Data[0]
 CMD_DATA1 = 3        # ui32Data[1] = HW render context for a TA
 CMD_WORDS = 8        # 32 bytes
@@ -288,6 +293,10 @@ CR_DPM_CONTROL = 0x698
 CR_DPM_FL_MODE = 0x664       # DPM free-list load selector (TA = 3, 3D = 5)
 CR_DPM_TA_FL = 0x684         # DPM TA free-list load  -> EUR_CR_EVENT_STATUS2 bit 0
 CR_DPM_3D_FL = 0x680         # DPM 3D free-list load  -> EUR_CR_EVENT_STATUS2 bit 1
+CR_DPM_OOM = 0x69c           # DPM out-of-memory allocation control (ta3d-state: 4 = hold the TA's
+                             # allocation during an OOM partial render, 1 = release/resume it). The
+                             # exact HW meaning isn't in the GPL header; the partial-render completion
+                             # writes 1 to let the TA continue binning. HW iteration may refine this.
 CR_OTPM = 0x24C
 CR_TPC = 0x224
 CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
@@ -597,6 +606,9 @@ def build(a):
     a.dispatch(0x40000, "pixel_done")              # pixel back-end: rendezvous half 1 (3D writeout)
     a.dispatch(0x800000, "pixel_done")             # ISP end of tile (same handler)
     a.dispatch(0x1, "free_done")                   # DPM 3D memory free: rendezvous half 2
+    a.dispatch(0x6, "k_oom")                        # DPM out of memory (MT 0x2 | GBL 0x4): pause + terminate
+    a.dispatch(0x1000, "k_oom_terminate")           # TA_TERMINATE after an OOM pause: the partial render
+
     # A timer-only event (bit 29 set, no TA/3D bit above) must NOT scan the kernel
     # CCB: at 1 kHz a CCB scan every tick races the doorbell task's dispatch /
     # read-offset advance (the two-task RO race — frames 2+ HWR; EA3 2026-11-03).
@@ -677,6 +689,7 @@ def build(a):
     a.i(f"st.a.d r17, #{CLEANUP_DEFER_CT}, r0 [moe]")      # cleanup defer counter clear
     a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
+    a.i(f"st.a.d r17, #{SC_OOM}, r0 [moe]")               # no OOM partial render pending
     a.i(f"st.a.d r17, #{PB_TA_LOADED}, r0 [moe]")         # no PB free list loaded yet: an HWR
     a.i(f"st.a.d r17, #{PB_3D_LOADED}, r0 [moe]")         # wiped the HW DPM, so force a reload
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
@@ -749,6 +762,43 @@ def build(a):
     a.i(f"ld.a.d r6, r17, #{SA_KCCB} [moe]")
     a.i("wdf")
     a.i(f"imae r6, r3, #{CMD_WORDS * 4}, r6 [t2=u32]")   # r6 = &command (bytes)
+    # honour ui32CacheControl (command word 1) once per command, BEFORE dispatch (DDK
+    # pc 0x0098). INVAL_BIF_PD (0x2) -> BIF_CTRL = INVALDC (8), which also flushes the
+    # page-table cache; else INVAL_BIF_PT (0x1) -> BIF_CTRL = FLUSH (4); INVAL_DATA (0x8)
+    # -> MADD invalidate (0x804 bit 28) + wait EVENT_STATUS b26. INVAL_SL (0x4) has no SLC
+    # on this core. do_ta/k_transfer pulse INVALDC only on a PD SWITCH; this honours a
+    # VM_UNMAP's INVAL_BIF_PT on ANY later command, without which the BIF keeps stale PTEs
+    # to freed pages -> a GPU use-after-free into recycled memory (m2 2026-11). The per-type
+    # handlers never read word 1. BIF_CTRL is 0 between pulses here, so restore 0 (do_ta style).
+    a.i(f"ld.a.d r4, r6, #{CMD_CACHECTL} [moe]")         # r4 = ui32CacheControl
+    a.i("wdf")
+    a.i("test.and.eq p0, r4, #2")                        # PD clear? -> try PT
+    a.i("(p0) ba cc_pt")
+    a.i("limm r2, #8")                                   # BIF_CTRL = INVALDC (dir + PT)
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.i("limm r2, #0")
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.i("ba cc_data")
+    a.label("cc_pt")
+    a.i("test.and.eq p0, r4, #1")                        # PT clear? -> data
+    a.i("(p0) ba cc_data")
+    a.i("limm r2, #4")                                   # BIF_CTRL = FLUSH (page-table)
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.i("limm r2, #0")
+    a.i(f"str #{0xc00 // 4}, r2")
+    a.label("cc_data")
+    a.i("test.and.eq p0, r4, #8")                        # DATA clear? -> dispatch
+    a.i("(p0) ba cc_done")
+    a.i("limm r5, #268435456")                           # 0x10000000: MADD cache invalidate
+    a.i(f"ldr r4, #{0x804 // 4}")
+    a.i("wdf")
+    a.i("or r4, r4, r5")
+    a.i(f"str #{0x804 // 4}, r4")
+    a.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done (clobbers r5, r6)
+    a.i(f"ld.a.d r6, r17, #{SA_KCCB} [moe]")             # recompute &command (wait clobbered r6)
+    a.i("wdf")
+    a.i(f"imae r6, r3, #{CMD_WORDS * 4}, r6 [t2=u32]")
+    a.label("cc_done")
     a.i(f"ld.a.d r7, r6, #{CMD_SERVICE} [moe]")          # type
     a.i(f"ld.a.d r8, r6, #{CMD_DATA1} [moe]")            # data[1] = context
     a.i("wdf")
@@ -914,6 +964,58 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.i("ba kick_adv")
+
+    # ======================================================================
+    # OOM partial render
+    # ======================================================================
+    a.label("k_oom")
+    # DPM out of memory mid-scene (DPM_OUT_OF_MEMORY_MT 0x2 | _GBL 0x4): the TA filled the
+    # parameter buffer while binning the open scene. Recover like the DDK (ta3d-state decode
+    # part 3, pc 0x0bf7): the TA must be TERMINATED before the partial render -- rendering
+    # while it is still mid-stream reads region headers / tail pointers it is still writing.
+    # So: OTPM flush, hold the allocation (0x69c=4), PAUSE the TA (0xa74 b0); the hardware then
+    # raises TA_TERMINATE (EVENT_STATUS b12), which k_oom_terminate turns into the partial
+    # render of the open scene. Dormant unless the OOM event fires.
+    a.i("limm r4, #6")
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")       # ack EVENT_STATUS 0x6 (MT | GBL)
+    a.i(f"ld.a.d r2, r17, #{SC_RD} [moe]")            # open scene present?
+    a.i("wdf")
+    a.i("test.and.eq p0, r2, r2")
+    a.i("(p0) ba kick_end")                           # no open scene -> nothing to do
+    a.i(f"ld.a.d r2, r17, #{SC_OOM} [moe]")           # already handling an OOM?
+    a.i("wdf")
+    a.i("test.and.ne p0, r2, r2")
+    a.i("(p0) ba kick_end")                           # SC_OOM != 0 -> don't re-enter
+    # OTPM flush before the terminate (0x24c = 1, wait OTPM_INV b20, ack).
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_OTPM // 4}, r4")
+    a.wait(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR)
+    # hold the TA allocation (0x69c = 4) and pause the TA (0xa74 b0); HW raises TA_TERMINATE.
+    a.i("limm r4, #4")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 4: hold the TA's allocation
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("or r5, r5, #1")                             # pause the TA
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.i("limm r4, #1")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 1: paused, awaiting TA_TERMINATE
+    a.i("ba kick_end")
+
+    a.label("k_oom_terminate")
+    # TA_TERMINATE (EVENT_STATUS b12 = 0x1000) after the OOM pause: the TA has stopped, so run
+    # the partial render of the open scene now (do_3d on SC_RD/SC_PB, which do_ta left set;
+    # do_3d is self-contained and reads them). Single-layer / no-depth first build: the DDK's
+    # per-layer region-header / ZLS offsets are 0 and the depth-stored bit is unused.
+    a.i("limm r4, #4096")                             # 0x1000
+    a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")       # ack TA_TERMINATE
+    a.i(f"ld.a.d r2, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.xor.ne p0, r2, #1")                     # SC_OOM != 1 -> not our terminate, ignore
+    a.i("(p0) ba kick_end")
+    a.i("limm r4, #2")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # SC_OOM = 2: partial render in flight
+    a.i("ba do_3d")                                   # partial render = do_3d on the open scene
+
     # transfer (data[1] = HW transfer context): a 3D-only render whose single
     # background object samples the source and writes the destination (texture
     # uploads and the swap blit; docs/TEX.md §3). The transfer context carries a
@@ -945,6 +1047,16 @@ def build(a):
     a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)       # context page directory
     a.i("wdf")
     a.i(f"str #{0xc38 // 4}, r4")                   # DIR_LIST_BASE1 = ctx PD (slot 1), list 0 (kernel PD) left intact
+    # BIF directory-cache invalidate after the PD switch (EUR_CR_BIF_CTRL 0xc00 bit 3 =
+    # INVALDC), as do_ta does on its PD load. The transfer path omitted it, so a 2nd
+    # client's first transfer translated through the 1st client's cached list-1 PD entries
+    # and BIF-faulted reading stale background/PDS program offsets (exec base +0/+0x4000
+    # instead of +0x1020); only a microkernel restart cleared it. The DDK pulses this on a
+    # PD change (pc 0x17ec); we pulse every transfer, which is cheap (ta3d-state decode).
+    a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
+    a.i(f"str #{0xc00 // 4}, r5")
+    a.i("limm r5, #0")
+    a.i(f"str #{0xc00 // 4}, r5")                   # restore BIF_CTRL = 0
     a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     # transfer's 3D field (b22-26) into 0xa74 (DDK pc 0x13a1): xfer cmd word 101
     # (+0x194), masked replace like the render 3D field. r9 = transfer cmd base.
@@ -1722,6 +1834,30 @@ def build(a):
     # Walk the render's HW device sync list, set each destination's write-ops-complete
     # to pending+1 (docs/UKERNEL.md §5), tear the render down, and interrupt the host.
     a.label("render_complete")
+    # OOM partial render? (SC_OOM set). 2 = this completion IS the partial render: resume the
+    # TA (0x69c = 1), UNPAUSE it (0xa74 b0), and SKIP the scene teardown, so it keeps binning
+    # into the freed pages. 1 = paused awaiting TA_TERMINATE (shouldn't reach a 3D end); clear
+    # and tear down defensively. 0 = normal. (ta3d-state DDK decode part 3, pc 0x0df7, 2026-11.)
+    a.i(f"ld.a.d r1, r17, #{SC_OOM} [moe]")
+    a.i("wdf")
+    a.i("test.and.eq p0, r1, r1")                     # SC_OOM == 0 (common) -> normal teardown
+    a.i("(p0) ba render_complete_normal")
+    a.i("test.xor.ne p0, r1, #2")                     # SC_OOM != 2 -> unexpected: clear + normal
+    a.i("(p0) ba render_complete_clroom")
+    a.i("limm r4, #1")
+    a.i(f"str #{CR_DPM_OOM // 4}, r4")                # 0x69c = 1: release/resume the TA allocation
+    a.i(f"ldr r5, #{0xa74 // 4}")
+    a.i("wdf")
+    a.i("shr r5, r5, #1")                             # unpause the TA (clear 0xa74 b0)
+    a.i("shl r5, r5, #1")
+    a.i(f"str #{0xa74 // 4}, r5")
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear SC_OOM
+    a.i("ba kick_end")                                # skip the scene teardown; the TA continues
+    a.label("render_complete_clroom")
+    a.i("limm r4, #0")
+    a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear an unexpected OOM flag
+    a.label("render_complete_normal")
     a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the

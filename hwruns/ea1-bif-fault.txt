@@ -1,0 +1,7 @@
+Frame on open ukernel (reorder+freelist+0xa74): BIF FAULT.
+  EUR_CR_BIF_FAULT     = 0x3200F00F  (fault addr ~0x3200F000 = the TA command base SC_CMD; low nibble 0xF = fault flags)
+  EUR_CR_BIF_INT_STAT  = 0x00090400  (BIF interrupt raised by the fault)
+  EUR_CR_BIF_MEM_REQ_STAT = 0
+  EVENT_STATUS: ta_finish: yes (set, unacknowledged); ta_dpm_fault: no
+  EUR_CR_BIF_CTRL=0, BIF_BANK0=0x0F, CLKGATECTL=0xA6AA
+=> The VDM/TA is NOT idle - it FAULTS reading the command/kernel-data at 0x3200F000. The GPU page directory (do_ta writes 0xc84=CTX_PD) does not map that region, or the BIF directory setup is incomplete. DDK writes 0xc78=0xf and 0xc84=ctx+0x8 (0x1f000000) which our do_ta does not. Next: fix do_ta's BIF directory/invalidate so the GPU can read the kernel-data heap.
