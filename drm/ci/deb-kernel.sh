@@ -14,7 +14,7 @@ DRM=$2
 SUITE=${DEB_SUITE:-trixie}
 MIRROR=http://deb.debian.org/debian
 
-for p in "$DRM"/gma500/*.patch; do
+for p in "$DRM"/gma500/*.patch "$DRM"/ci/kit/*.patch; do
 	echo ">> patch $(basename "$p")"
 	patch -d "$SRC" -p1 --forward --batch < "$p"
 done
