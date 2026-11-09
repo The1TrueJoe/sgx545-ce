@@ -14,7 +14,7 @@ W=$(mktemp -d)
 gunzip -c "$GZ" > "$W/stick.img"
 M="$W/stick.img@@1M"
 mcopy -n -i "$M" ::/boot/grub/grub.cfg "$W/grub.cfg"
-sed -i 's/ systemd.show_status=0$/ systemd.show_status=0 console=tty0 console=ttyS0 kit.poweroff=1/; s/^set timeout=5/set timeout=0/' "$W/grub.cfg"
+sed -i 's/ systemd.show_status=0$/ systemd.show_status=0 console=tty0 console=ttyS0 kit.poweroff=1/; s/^set timeout=.*/set timeout=0/' "$W/grub.cfg"
 grep -q kit.poweroff=1 "$W/grub.cfg"
 mcopy -o -i "$M" "$W/grub.cfg" ::/boot/grub/grub.cfg
 head -c 64M /dev/urandom > "$W/disk.img"

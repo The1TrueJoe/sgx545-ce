@@ -21,6 +21,16 @@ CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-ced
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
 `sgx545-cedarview-kit-v3` artifact for 90 days. There are no GitHub releases.
 
+## The menu
+
+Four GRUB entries run the same test with the kernel's DRM debug log on (`drm.debug=0x6
+log_buf_len=4M`): 1 as it is, then fallbacks for a panel that stays dark: 2
+`acpi_backlight=native`, 3 `acpi_backlight=vendor`, 4 `video=LVDS-1:e`. Never `video=LVDS-1:d`
+(it turns the panel off). Each run records its entry (`kit.entry=N`) and the full command line
+(`cmdline.txt`), and puts the entry in its results file name. The menu shows before Linux
+starts, so a tester whose panel goes dark can still pick the next entry: wait about 5 minutes,
+power off, boot again.
+
 ## The run
 
 1. System facts, and whether the internal disks are read-only.
@@ -52,6 +62,6 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
    6. a window being dragged.
 
    A blank or one-color screenshot is a FAIL, and so is one that is the same as the one before (a frozen screen).
-6. `results-kitv3-<model>-<date>.tar.gz` on `SGXKIT`, with `summary.txt`, dmesg, the journal
+6. `results-kitv3-<model>-e<entry>-<date>.tar.gz` on `SGXKIT`, with `summary.txt`, dmesg, the journal
    and the Xorg log. Then a "done, attach this file" screen on tty1, which also asks the
    tester to say whether they could see the screen; the desktop stays on vt7.

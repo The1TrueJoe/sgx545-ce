@@ -57,7 +57,8 @@ Use one of these free programs:
 2. Turn it on, and right away press the key for the **boot menu** a few times. It's
    usually **F12**, **Esc**, **F10** or **F11**. The start-up screen often shows which one.
 3. In the menu, pick the USB stick.
-4. A menu titled **SGX545 GPU test** appears and starts by itself after 5 seconds.
+4. A menu with four entries appears. Pick **1** (it starts by itself after 10 seconds).
+   Entries 2 to 4 run the same test with settings for screens that go dark with 1.
 
 If the computer starts its normal system instead, restart it and try another key. On some
 computers you have to turn on "Boot from USB" in the BIOS setup first (often **F2** or
@@ -70,9 +71,17 @@ see **DONE. Thank you!** and the name of the results file.
 
 Then type **p** and press **Enter** to turn the computer off, and unplug the stick.
 
-If the screen stays black or the computer stops responding for more than five minutes,
-hold the power button to turn it off. That's useful to know too: tell us about it, and
-send the results file if there is one on the stick.
+At the end the screen also asks whether you could see it. Please answer that in your
+comment.
+
+**If the screen goes dark** (some Cedarview panels do with Linux):
+
+1. Wait about five minutes. The test keeps running and saves its results.
+2. Hold the power button to turn the computer off.
+3. Start from the stick again (step 3) and pick the next menu entry: 2, then 3, then 4.
+
+Each try saves its own results file. Send all of them, and tell us which entries left the
+screen dark, and whether it was fully dark (no backlight) or lit but black.
 
 ## 5. Send us the results
 
@@ -85,9 +94,9 @@ send the results file if there is one on the stick.
      and Paths**, and give it a letter.
    - **If Windows asks to format a drive or a disk, click Cancel.** That's the part of the
      stick Windows can't read. Formatting it would erase the test, and you don't need it.
-3. On SGXKIT, find the file whose name starts with **`results-`** and ends with
-   **`.tar.gz`**.
-4. Attach it to a comment on the GitHub issue where you were asked to test. You can drag it
+3. On SGXKIT, find the files whose names start with **`results-`** and end with
+   **`.tar.gz`**: one per try (the `-e1-`, `-e2-`, ... in the name is the menu entry).
+4. Attach them to a comment on the GitHub issue where you were asked to test. You can drag it
    straight from the SGXKIT drive into the comment box. You don't need to copy or unzip it
    first. Please also say which computer model you used.
 

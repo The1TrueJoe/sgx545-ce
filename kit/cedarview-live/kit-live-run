@@ -74,7 +74,10 @@ save() {   # the results file on the stick's SGXKIT partition (live-boot mounts 
 T=/usr/local/lib/kit
 FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
 prod=$(tr -c 'A-Za-z0-9.\n-' '_' < /sys/class/dmi/id/product_name 2>/dev/null | cut -c1-32)
-NAME=results-kit${KIT_SERIES}-${prod:-unknown}-$(date -u +%Y%m%d-%H%M).tar.gz
+# the GRUB entry this run came from (1 default, 2-4 the dark-panel fallbacks)
+ENTRY=$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^kit\.entry=//p' | head -1)
+NAME=results-kit${KIT_SERIES}-${prod:-unknown}-e${ENTRY:-0}-$(date -u +%Y%m%d-%H%M).tar.gz
+cat /proc/cmdline > "$R/cmdline.txt"
 
 chvt 1 2>/dev/null
 clear
@@ -89,7 +92,8 @@ EOF
 
 step 1 "Reading what hardware this is"
 {
-	echo "kit $KIT_SERIES ($KIT_VERSION), kernel $(uname -r)"
+	echo "kit $KIT_SERIES ($KIT_VERSION), kernel $(uname -r), menu entry ${ENTRY:-?}"
+	echo "cmdline: $(cat /proc/cmdline)"
 	for f in sys_vendor product_name product_version board_vendor board_name bios_vendor bios_version bios_date; do
 		printf '%s: %s\n' "$f" "$(cat /sys/class/dmi/id/$f 2>/dev/null)"
 	done
@@ -221,6 +225,9 @@ if [ -n "$SAVED" ]; then
     Could you see this screen on the computer's own display? Please say
     so in your comment on the issue: the test cannot tell whether the
     panel lit up.
+
+    This run used menu entry ${ENTRY:-?}. If the screen went dark on an earlier
+    try, attach that try's results file too: each try saves its own.
 
     GPU: ${ident:-not reported}
 
