@@ -1029,6 +1029,17 @@ its data accesses in either bank. [D, code and trace]
     counterparts of the TA's 0x700/0x710/0x724/0x72c. The 3D state includes
     the pages that render freed, so a PB reloaded without it loses one
     render's pages at every switch.
+  - **One shared PB** for every client, as the DDK kernel gives
+    (`SGXFindSharedPBDescKM`), makes all of this inert after the first
+    frame: T == D == P. Only the power-off save, the PB's own cleanup and a
+    reset remain live.
+    - After a reset the markers are 0, so the first kick loads from the
+      descriptor alone. The host must re-arm it first: +0x18 = +0x08,
+      +0x1c = +0x0c (not shifted again), +0x20 = +0x24 = 0, with the free
+      list rebuilt.
+    - Proven on a CE5300 board (2026-11-08): two forced hangs recovered, then
+      200 clean frames. 0x61c stayed at its initial value, 0x700 never reached
+      0xffff, and the two halves of 0x724 always matched.
   - **0x664.** Both loads write a mask of which markers differ:
     `(+0xb4 != +0xbc) | (+0xb4 != +0xb8) << 1 | (+0xb8 != +0xbc) << 2`. It is
     not a constant.
