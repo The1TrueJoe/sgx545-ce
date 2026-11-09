@@ -415,6 +415,11 @@ bool sgxws_recording(struct sgxws_ctx *c);
 
 /* a shared buffer the frame being recorded reads (a texture) or writes */
 void sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write);
+/* whether the frame's list has room for these buffers as well (every shared
+ * buffer a render touches must be listed: the kernel keeps only those
+ * coherent); if not, the caller submits the frame first */
+bool sgxws_use_bo_room(const struct sgxws_ctx *c,
+                       const struct sgxws_bo *const *bos, unsigned n);
 
 /* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md
  * "Clear") */

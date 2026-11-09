@@ -11,6 +11,7 @@
  * unknown).
  */
 
+#include <assert.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -1814,11 +1815,28 @@ sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write)
          return;
       }
    }
+   /* (the caller made room: sgxws_use_bo_room) */
+   assert(c->n_use < ARRAY_SIZE(c->use));
    if (c->n_use < ARRAY_SIZE(c->use))
       c->use[c->n_use++] = (__typeof__(c->use[0])){bo, write};
-   else
-      ws_err("a frame uses more than %u shared buffers\n",
-             (unsigned)ARRAY_SIZE(c->use));
+}
+
+bool
+sgxws_use_bo_room(const struct sgxws_ctx *c, const struct sgxws_bo *const *bos,
+                  unsigned n)
+{
+   unsigned more = 0;
+
+   for (unsigned k = 0; k < n; k++) {
+      bool listed = false;
+
+      for (unsigned i = 0; i < c->n_use && !listed; i++)
+         listed = c->use[i].bo == bos[k];
+      for (unsigned j = 0; j < k && !listed; j++)
+         listed = bos[j] == bos[k];
+      more += !listed;
+   }
+   return c->n_use + more <= ARRAY_SIZE(c->use);
 }
 
 uint64_t

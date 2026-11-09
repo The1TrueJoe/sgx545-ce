@@ -1687,6 +1687,26 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    simple_mtx_lock(&screen->lock);
    if (!begin_frame(ctx, false))
       goto out;
+   /* every shared texture it samples goes in the render's buffer list: a
+    * frame whose list is full is submitted first */
+   {
+      const struct sgxws_bo *shared[PIPE_MAX_SAMPLERS];
+      unsigned n_shared = 0;
+
+      u_foreach_bit (unit, sampled) {
+         struct sgx_resource *tex = sgx_resource(ctx->views[unit]->texture);
+
+         if (tex->shared)
+            shared[n_shared++] = &tex->bo;
+      }
+      if (!sgxws_use_bo_room(ctx->hw, shared, n_shared)) {
+         sgxws_flush(ctx->hw, 0);
+         ctx->recording = NULL;
+         ctx->stats.fl_other++;
+         if (!begin_frame(ctx, false))
+            goto out;
+      }
+   }
    /* The textures it samples were marked used by the next kick before
     * begin_frame, which flushes the previous target's frame when this draw
     * switches targets: mark them again with the frame they're now in (a
