@@ -724,8 +724,7 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 
 	for (u32 i = 0; i < n; i++) {
 		err = job_create(file, &in[i], &ja[i], ja, i);
-		/* Before the reservations: VM_MAP takes vm->lock, then them. */
-		err = err ?: pvrsgx_prime_imports(ja[i].job->ctx->vm, &ja[i].job->imports,
+		err = err ?: pvrsgx_prime_imports(ja[i].bos, ja[i].nbos, &ja[i].job->imports,
 						  &ja[i].job->nimports);
 		if (err) {
 			args->failed_index = i;

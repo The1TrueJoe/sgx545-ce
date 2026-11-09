@@ -9,7 +9,6 @@
 
 #include <drm/drm_cache.h>
 #include <drm/drm_gem_shmem_helper.h>
-#include <drm/drm_gpuvm.h>
 
 #include <linux/device.h>
 #include <linux/iommu.h>
@@ -17,55 +16,41 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
-#include "pvrsgx_device.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_prime.h"
 #include "pvrsgx_trace.h"
-#include "pvrsgx_vm.h"
 
 /*
- * The imported objects mapped in vm, each once and referenced, for a job to
- * flush around itself. *out is NULL when there are none.
+ * The imported objects in a job's BO list, each once and referenced, for the
+ * job to flush around itself. *out is NULL when there are none.
  */
-int pvrsgx_prime_imports(struct pvrsgx_vm *vm, struct drm_gem_object ***out, u32 *n)
+int pvrsgx_prime_imports(struct drm_gem_object **bos, u32 nbos,
+			 struct drm_gem_object ***out, u32 *n)
 {
-	struct drm_gem_object **objs = NULL;
-	struct drm_gpuva *va;
-	u32 count = 0, cap = 0;
-	int err = 0;
+	struct drm_gem_object **objs;
+	u32 count = 0;
 
-	mutex_lock(&vm->lock);
-	drm_gpuvm_for_each_va(va, &vm->gpuvm) {
-		struct drm_gem_object *obj = va->gem.obj;
+	*out = NULL;
+	*n = 0;
+	for (u32 b = 0; b < nbos; b++)
+		count += drm_gem_is_imported(bos[b]);
+	if (!count)
+		return 0;
+	objs = kmalloc_array(count, sizeof(*objs), GFP_KERNEL);
+	if (!objs)
+		return -ENOMEM;
+	count = 0;
+	for (u32 b = 0; b < nbos; b++) {
 		u32 i;
 
-		if (!obj || !drm_gem_is_imported(obj))
+		if (!drm_gem_is_imported(bos[b]))
 			continue;
-		for (i = 0; i < count && objs[i] != obj; i++)
+		for (i = 0; i < count && objs[i] != bos[b]; i++)
 			;
 		if (i < count)
 			continue;
-		if (count == cap) {
-			struct drm_gem_object **more;
-
-			cap = cap ? 2 * cap : 4;
-			more = krealloc_array(objs, cap, sizeof(*objs), GFP_KERNEL);
-			if (!more) {
-				err = -ENOMEM;
-				break;
-			}
-			objs = more;
-		}
-		drm_gem_object_get(obj);
-		objs[count++] = obj;
-	}
-	mutex_unlock(&vm->lock);
-
-	if (err) {
-		while (count)
-			drm_gem_object_put(objs[--count]);
-		kfree(objs);
-		return err;
+		drm_gem_object_get(bos[b]);
+		objs[count++] = bos[b];
 	}
 	*out = objs;
 	*n = count;
@@ -92,18 +77,15 @@ bool pvrsgx_prime_reachable(struct device *dev, struct sg_table *sgt)
 }
 
 /*
- * The GPU's accesses don't snoop the CPU caches (log 2026-11-04-0100). Our own
- * objects are write-combined on the CPU; an import may be cached, so flush
- * every import mapped in the job's VM before it runs (no dirty line lands on
- * its output later) and after (no stale line hides it). Which of them the job
- * touches is not known: a BO list is optional, and explicit sync names none.
+ * The GPU's accesses don't snoop the CPU caches, not even through
+ * cache-consistent PTEs (logs 2026-11-04-0100, 2026-11-09). Our own objects
+ * are write-combined on the CPU; an import may be cached, so flush each import
+ * the job lists before it runs (no dirty line lands on its output later) and
+ * after (no stale line hides it). Userspace lists every import a job touches.
  */
 void pvrsgx_prime_flush(struct pvrsgx_job *job, bool after)
 {
 	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
-
-	if (!READ_ONCE(job->ctx->sdev->prime_flush))
-		return;
 
 	for (u32 i = 0; i < job->nimports; i++) {
 		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);
