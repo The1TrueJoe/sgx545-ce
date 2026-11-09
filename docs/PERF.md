@@ -128,6 +128,33 @@ is higher on ours too.
    in single runs: take medians first.
 4. Ring depth (`SGX_SLOTS`), once the SLOTS=6 hang is understood.
 
+### Measured 2026-11-09: the colour fast paths
+
+usse-compiler's speed pass (its branch at 9ce70e2, not on dev yet: items 1 and 2's interim form, a
+uniform colour as one mov from a 0x12 slot and a texel as colour by two
+`pck.u8.u8`, plus 82f3f5c, 1ead616, 64d06e4, 729718d, 60eea0e). Measured on
+the EA3 under the DDK microkernel, with `-c`, 3 s a test, in frames a second.
+The baseline is dev without those commits. Its 1440x960 numbers match the
+EA1 table above (fill 187 against 189), so the boards compare.
+
+| test | baseline | the pass | DDK (table above) | ours/DDK now |
+|---|---|---|---|---|
+| 720x480 fill | 476 | 790 | 1524 | 0.52 |
+| 720x480 fill-blend | 132 | 187 | | |
+| 720x480 tex | 317 | 840 | | |
+| 1440x960 fill | 187 | 235 | 354 | 0.66 |
+| 1440x960 fill-blend | 34.6 | 52.1 | 60.1 | 0.87 |
+| 1440x960 tex | 104 | 237 | 421.6 | 0.56 |
+| 1440x960 verts | 110 | 112 | 245 | 0.46 |
+
+- Full dEQP-GLES2 on the pass: 0 unexpected results, 0 recoveries.
+- **Tex** is still 0.56: the DDK's one `mov o0, pa0` (T1 0x0d and a BGRA
+  sampler mask) against our two lane picks. The rest of item 2 does that.
+- **Fill at 720x480** (0.52) is the per-frame fixed cost, item 3.
+- **PDS sizeinfo b25-28.** The DDK's rule (12 / units, capped at 0xb only
+  with secondaries: its textured draw 0x18030001) against ours (always
+  capped) changed nothing: tex 316.4 against 316.9 fps. Not adopted.
+
 ## Shader code against libusc
 
 The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with
