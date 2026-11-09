@@ -334,9 +334,16 @@ EA3, normal boot, the same binary (frames a second; ours/DDK):
 - **Vertices:** 0.38-0.54 by default and 0.90-0.95 with
   `SGX_DEBUG=zerocopy` since 72b75fb: an indexed draw from buffers takes its
   indices as they are, from the index buffer's device copy, with no CPU work
-  a draw. Zero-copy is still opt-in. Its own 79 dEQP fails (depth_stencil,
-  point clipping; the same with or without the resident indices) are what
-  keep it so: fixing them gets every app the vertex path at the DDK's speed.
+  a draw. Zero-copy is still opt-in. Its 79 (214 in a long run) dEQP fails
+  depended on test order: a stream uploader writes more into its mapped
+  buffer, and the device copy was refreshed only at the unmap, so later
+  tests' draws read zeros (fixed 7543399, 0d2b9ec: the copy is refreshed
+  for the bytes a draw reads while a write map is open). Under zerocopy all
+  214 pass and a 3,898-test subset matches the default path. Left: one
+  chunk (clipping.triangle_vertex.clip_three) made 18 recoveries on the EA3
+  (services); 264/264 and 0 recoveries on the EA1 (powervr_sgx). Minecraft
+  gains nothing from zerocopy (10.8 vs 11.0 fps): its geometry is display
+  lists, drawn from the vertex cache.
 - Minecraft swaps every frame, so the DDK renders there too: its profile (TA
   ~42 ms, 3D ~26 ms) stays the honest target.
 
