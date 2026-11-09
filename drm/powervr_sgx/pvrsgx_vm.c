@@ -148,6 +148,11 @@ static void vm_release(struct kref *ref)
 		pvrsgx_pb_unmap(vm);
 	drm_mm_takedown(&vm->params);
 	pvrsgx_mmu_destroy(vm->mmu);
+	/* The directory and its pages may come back as another VM's. */
+	mutex_lock(&vm->sdev->ccb_lock);
+	vm->sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD |
+				      PVRSGX_CC_INVAL_DATA;
+	mutex_unlock(&vm->sdev->ccb_lock);
 	mutex_destroy(&vm->lock);
 	drm_gpuvm_put(&vm->gpuvm);
 }
