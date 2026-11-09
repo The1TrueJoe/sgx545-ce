@@ -190,8 +190,7 @@ static const struct drm_ioctl_desc pvrsgx_ioctls[] = {
 DEFINE_DRM_GEM_FOPS(pvrsgx_fops);
 
 static const struct drm_driver pvrsgx_drm_driver = {
-	.driver_features = DRIVER_GEM | DRIVER_GEM_GPUVA | DRIVER_RENDER | DRIVER_SYNCOBJ |
-			   DRIVER_SYNCOBJ_TIMELINE,
+	.driver_features = DRIVER_GEM | DRIVER_RENDER | DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
 	.open = pvrsgx_open,
 	.postclose = pvrsgx_postclose,
 	.ioctls = pvrsgx_ioctls,
