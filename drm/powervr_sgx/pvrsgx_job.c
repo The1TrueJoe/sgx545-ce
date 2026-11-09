@@ -3,7 +3,8 @@
 
 /*
  * Contexts, jobs and the scheduler. One drm_sched scheduler with a credit limit
- * of one: a single job on the GPU at a time (docs/UAPI.md, SUBMIT_JOBS). Each
+ * of one, a single job on the GPU at a time, or two with the overlap parameter
+ * (docs/UAPI.md, SUBMIT_JOBS). Each
  * job becomes one kernel CCB command and is complete when the microkernel has
  * finished it; completion is checked from the SW_EVENT interrupt and, since the
  * firmware does not interrupt for every command, from a short poll while jobs

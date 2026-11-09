@@ -863,8 +863,11 @@ restarts the scheduler. The kernel rebuilds the affected context's free list and
 - Mesa maps these to `GL_GUILTY_CONTEXT_RESET`, `GL_INNOCENT_CONTEXT_RESET` and, for
   `-EIO`, `GL_UNKNOWN_CONTEXT_RESET`. It reads them with `GET_CONTEXT_STATE`; fence errors
   are also visible through `SYNC_IOC_FILE_INFO`.
-- With one job on the hardware at a time, `INNOCENT` can't occur in the first driver. It
-  is in the uAPI for the day TA and 3D of different contexts overlap.
+- `INNOCENT` occurs only with TA/3D overlap (the `overlap` module parameter, two jobs on
+  the hardware at once): a reset then cancels the other job too, and its context is
+  refused like the guilty one, as `drm-uapi.rst` asks. Mesa replaces a refused context
+  and drops the lost frame, so a client whose context was innocent (Xorg's, when a game
+  hangs) loses a frame and carries on.
 - **Device lost.** Re-init failure means `-EIO` from then on, all fences signaled with
   `-EIO`, `drm_dev_wedged_event()` with a rebind or bus reset hint, and a devcoredump.
   TEX.md section 7 records one such recovery failure that needed a power cycle, so this
