@@ -787,7 +787,14 @@ pc 0x0b90, and a sa8 flag from an earlier pass). They:
 So the DDK renders the partly binned scene to free pages, then resumes the
 TA. What 0x69c's values 1 and 4 command is G.
 
-**The partial render** [D, code; not run on hardware]:
+**The partial render** [D, code; not run on hardware]. The handler first
+tests the TA's render context +0x28 (pc 0x0b46). The 3D start writes that
+word and the DPM free clears it, so it is nonzero only while that context
+has a render on the 3D:
+- nonzero: the handler sets sa9 0x40 | 0x4000 and waits for that render's
+  pages;
+- 0 (scenes run one at a time): the steps below.
+
 1. **Stop the TA.** Write 0x24c = 1 and wait for `EVENT_STATUS` 0x100000.
    Save 0x720 (its bits 5-13 are the TA's layer) and the counters in TA3D
    words 35-40. Then write 0x69c = 4 and pause the TA (0xa74 |= 1).
