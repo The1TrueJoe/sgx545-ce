@@ -98,6 +98,18 @@ FP_TA_KICK, FP_TA_FIN, FP_3D_KICK, FP_3D_FIN = 0x37, 0x38, 0x39, 0x3a
 # over ~50 frames so the 1 ms tick error averages out and regsample needn't catch each render. (Zeroed at every
 # microkernel start; survive within a session while the GPU stays up.)
 FP_TA_BUSY, FP_3D_BUSY, FP_COUNTS = 0x3d, 0x3e, 0x3f   # TA-busy ticks, 3D-busy ticks, TA count (low 16)|3D (high 16)
+# TA/3D OVERLAP (main, 2026-11-09): run job N+1's TA while job N's 3D is in flight (the DDK does; Minecraft
+# TA ~42 ms + 3D ~26 ms, so ~11 -> ~20 fps). Off by default -> serial production image byte-identical. The
+# serial path keeps SC_RTENTRY/SC_RD/SC_CTX as the TA set (the current binning scene, so the HW-confirmed OOM
+# code is untouched); overlap ADDS a 3D set populated at the 3D kick and read by render_complete, so the TA can
+# advance to N+1 while N's 3D completes. Slot pick at the first kick: bind the slot the in-flight 3D is NOT on
+# (0x630 b2=TA slot, b1=3D slot, b0=first-kick slot), like the DDK (interleave_ours.py --order overlap). 3D is
+# strictly one at a time (a 3D queue in render_complete). m2's kernel side: credit 2 behind `overlap` (f073c83).
+OVERLAP = os.environ.get("UK_OVERLAP") == "1"
+TD_ENTRY = 0x19      # control block +0x64: the in-flight 3D's RT-data entry (0 = no 3D). Set at the 3D kick,
+                     # cleared at the DPM free. The slot pick reads it ("is a 3D in flight, and on 0x630 b1").
+TD_RD = 0x1c         # control block +0x70: the in-flight 3D's render details. render_complete reads it instead
+                     # of SC_RD, because by completion the TA set may already be N+1's. (DDK uses ctx +0x28/+0x2c.)
 # EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
 # alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
