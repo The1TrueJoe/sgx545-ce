@@ -18,7 +18,7 @@ REPO=$(cd "$here/../../.." && pwd)
 KIT=$REPO/kit/cedarview-live
 BOX=${BOX:?the address of the box}
 DESK=${DESK:-/opt/desk}
-E() { sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no \
+E() { sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password -o StrictHostKeyChecking=no \
 	-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=15 root@$BOX "$@"; }
 mkdir -p "$OUT"
 tag=$(shasum -a 256 "$TAR" | cut -c1-16)
@@ -27,14 +27,16 @@ if [ "$(E "cat $DESK/.root-tag 2>/dev/null" || true)" != "$tag" ]; then
 		rm -rf ${DESK:?}; mkdir -p $DESK"
 	zstd -dc "$TAR" | E "tar -x -C $DESK && echo $tag > $DESK/.root-tag"
 fi
-E "mkdir -p $DESK/root/rig $DESK/usr/local/share/kit"
+E "mkdir -p $DESK/root/rig $DESK/usr/local/share/kit && chmod 755 $DESK/usr/local/share/kit"
 for f in desktop-up.sh xorg.conf; do E "cat > $DESK/root/rig/$f" < "$here/$f"; done
 E "cat > $DESK/usr/local/bin/kit-smoke && chmod 755 $DESK/usr/local/bin/kit-smoke" < "$KIT/kit-smoke"
-E "cat > $DESK/usr/local/share/kit/test.html" < "$KIT/test.html"
+E "cat > $DESK/usr/local/share/kit/test.html && chmod 644 $DESK/usr/local/share/kit/test.html" < "$KIT/test.html"
 E "cat > $DESK/tmp/mesa-sgx.deb" < "$DEB"
 E "cd $DESK && for d in dev proc sys; do mount --bind /\$d \$d; done; \
 	chroot . dpkg -i /tmp/mesa-sgx.deb; r=\$?; umount sys proc dev; rm -f tmp/mesa-sgx.deb; exit \$r" \
 	> "$OUT/dpkg.txt" 2>&1 || { cat "$OUT/dpkg.txt"; exit 1; }
+# each run starts from a new home, as the stick does (a session's saved state blanked later ones)
+E "grep -q ' $DESK/' /proc/mounts && exit 1; cd $DESK/home && rm -rf ./desk && cp -a ../etc/skel ./desk && chown -R 1000:1000 ./desk"
 E "rm -rf /tmp/results; mkdir -p -m 1777 /tmp/results /tmp/results/screenshots; \
 	ls /sys/class/devcoredump/ 2>/dev/null | wc -l"
 E "XENV='${XENV:-}' sh $DESK/root/rig/desktop-up.sh $DESK start" > "$OUT/start.txt" 2>&1 || {
