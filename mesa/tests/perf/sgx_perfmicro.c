@@ -17,6 +17,8 @@
  *   fill-blend  the same with SRC_ALPHA, ONE_MINUS_SRC_ALPHA blending
  *   tex         the same, each sampling a 256x256 RGBA8 texture
  *   verts       one indexed mesh of small triangles in a VBO, drawn per frame
+ *   rows        the same mesh as one draw a row (127), a colour each: a frame
+ *               of many draws, recorded while the GPU could already tile
  *   fill-depth  (-d: a depth buffer) the quads back to front with depth test
  *               LESS, each nearer than the last: every layer passes the test,
  *               so only hidden surface removal keeps the covered ones unshaded
@@ -25,6 +27,7 @@
  * frame rate and what it amounts to (megapixels or megatriangles a second).
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -171,6 +174,23 @@ draw_verts(void)
    glDrawElements(GL_TRIANGLES, mesh_indices, GL_UNSIGNED_SHORT, 0);
 }
 
+static void
+draw_rows(void)
+{
+   unsigned row = mesh_indices / 127;
+
+   glUseProgram(p_flat);
+   glDisable(GL_BLEND);
+   glBindBuffer(GL_ARRAY_BUFFER, mesh_vbo);
+   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh_ibo);
+   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+   for (unsigned r = 0; r < 127; r++) {
+      glUniform4f(u_color, r / 127.0f, 0.8f, 0.4f, 1.0f);
+      glDrawElements(GL_TRIANGLES, row, GL_UNSIGNED_SHORT,
+                     (void *)(uintptr_t)(r * row * sizeof(GLushort)));
+   }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -291,6 +311,8 @@ main(int argc, char **argv)
       printf("tex: %.1f fps, %.0f Mtexel-pix/s\n", fps, fps * px);
       fps = run(secs, draw_verts);
       printf("verts: %.1f fps, %.2f Mtri/s\n", fps, fps * mesh_indices / 3 / 1e6);
+      fps = run(secs, draw_rows);
+      printf("rows: %.1f fps, %.2f Mtri/s\n", fps, fps * mesh_indices / 3 / 1e6);
    }
    if (glGetError() != GL_NO_ERROR)
       printf("GL error at the end\n");

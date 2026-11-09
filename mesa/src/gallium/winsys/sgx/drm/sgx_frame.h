@@ -77,6 +77,7 @@ struct sgxws_dev {
    unsigned frame_gap_us;
    unsigned slots;
    int dry_run;
+   unsigned ta_split; /* sgxws_dev_options */
 };
 
 /* a buffer's backend side; a backend's buffer embeds it first */
@@ -157,6 +158,9 @@ struct sgxws_ctx {
    uint32_t bg_pds[3];
    uint32_t pixev, pixev_rows; /* its pixel event program */
    unsigned draws;             /* objects recorded in this frame */
+   /* kick_ta: the TA kicks of this frame's scene so far, and the objects
+    * since the last one */
+   unsigned ta_kicks, seg_draws;
    /* the frame's depth bias (render details +0x14, +0x18), once a draw
     * with it is recorded */
    bool bias_set;
@@ -234,6 +238,12 @@ struct sgxws_kif {
     * stream ends with vdm_end's words) as kick seq.  A failed kick counts
     * as done. */
    int (*kick)(struct sgxws_ctx *c, uint32_t seq);
+   /* optional: a TA kick of the frame recorded so far (c->vdm_start to
+    * vdm_end's words), the scene going on in later kicks; the last is kick,
+    * with c->ta_kicks > 0 */
+   int (*kick_ta)(struct sgxws_ctx *c);
+   /* kicks the backend's command ring holds unread (0: no bound) */
+   unsigned ring_kicks;
    /* 0 once kick seq is done; timeout 0 polls */
    int (*wait_seq)(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms);
    /* the frame line SGX_DEBUG=frame prints, the backend's part */

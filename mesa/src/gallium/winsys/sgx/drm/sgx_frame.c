@@ -614,6 +614,7 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
    d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 3;
+   d->ta_split = d->kif->kick_ta ? opts->ta_split : 0;
    d->dry_run = opts->dry_run;
 
    drmDevicePtr dev = NULL;
@@ -1103,6 +1104,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->target = *t;
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
+   c->ta_kicks = c->seg_draws = 0;
    c->n_use = 0;
    c->bias_set = false;
    c->bias_units = 0;
@@ -1541,6 +1543,8 @@ mte_ctrl(const struct sgxws_state *st)
    return w;
 }
 
+static int kick_ta(struct sgxws_ctx *c);
+
 int
 sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 {
@@ -1785,6 +1789,9 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
                vs->in_dwords, vs->out_dwords, vs->temps,
                vertices_per_task(vs->out_dwords));
    c->draws++;
+   /* SGX_TA_SPLIT: the GPU tiles what is recorded while the rest is */
+   if (c->dev->ta_split && ++c->seg_draws >= c->dev->ta_split)
+      return kick_ta(c);
    return 0;
 }
 
@@ -1957,6 +1964,46 @@ code_sync(struct sgxws_ctx *c)
  */
 static int sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms);
 
+/* under services, the target's last render is done before its next scene's
+ * first kick (the client writes its render details) */
+static void
+target_wait(struct sgxws_ctx *c)
+{
+   struct sgxws_rt *s = c->rt;
+   uint64_t t0 = sgxws_now_ns();
+
+   if (!c->dev->kif->rt_one_in_flight || c->ta_kicks)
+      return;
+   if (sgxws_seq_after(s->seq, c->done_seq) &&
+       c->slot_kick[s->seq_slot].seq == s->seq &&
+       slot_wait(c, s->seq_slot, 2000))
+      ws_err("the target's last render did not finish\n");
+   c->ns_target_wait += sgxws_now_ns() - t0;
+}
+
+/* a TA kick of what is recorded, the scene going on: the next objects start
+ * a new VDM segment after this one's terminate */
+static int
+kick_ta(struct sgxws_ctx *c)
+{
+   const struct sgxws_kif *kif = c->dev->kif;
+   int e;
+
+   c->seg_draws = 0;
+   /* the frame's kicks that fit in the backend's command ring with c->slots
+    * frames in flight (the last is the frame's own kick) */
+   if (kif->ring_kicks && c->ta_kicks + 2 > kif->ring_kicks / c->slots)
+      return 0;
+   target_wait(c);
+   sgxws_vdm_end(c);
+   if ((e = code_sync(c)) || (e = kif->kick_ta(c)))
+      return e;
+   c->ta_kicks++;
+   c->vdm.used = (c->vdm.used + 3) & ~3u;
+   c->vdm_start = c->vdm.bo.va + c->vdm.used;
+   return 0;
+}
+
 int
 sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
 {
@@ -1979,15 +2026,7 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
       return 0;
 
    sgxws_vdm_end(c);
-   if (kif->rt_one_in_flight) {
-      uint64_t t0 = sgxws_now_ns();
-
-      if (sgxws_seq_after(s->seq, c->done_seq) &&
-          c->slot_kick[s->seq_slot].seq == s->seq &&
-          slot_wait(c, s->seq_slot, 2000))
-         ws_err("the target's last render did not finish\n");
-      c->ns_target_wait += sgxws_now_ns() - t0;
-   }
+   target_wait(c);
    if ((e = code_sync(c)))
       ws_err("shader upload refused: %d\n", e);
    else

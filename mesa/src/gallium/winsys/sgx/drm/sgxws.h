@@ -314,6 +314,8 @@ struct sgxws_dev_options {
                       sent; -1: off */
    unsigned frame_gap_us; /* idle time after each render */
    unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 3) */
+   unsigned ta_split;     /* a TA kick every n objects of a frame, the scene's
+                             render at its end (0: one kick a frame) */
 };
 
 /* fd: the GPU's kernel driver; opts may be NULL */
