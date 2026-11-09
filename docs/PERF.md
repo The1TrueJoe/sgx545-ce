@@ -263,6 +263,41 @@ ta3d-state diffed the DDK's and our state for perfmicro's verts test on the EA3
   two vertex programs and their DOUTU words (the DDK sets 0x10000 on every
   DOUTU, we never do).
 
+### TA kicks within a frame, and the vertex gap on the EA3 (2026-11-09)
+
+`SGX_TA_SPLIT=n` (0bf22f3, services backend, off by default) kicks the TA
+every n objects. The DDK does the same (ta3d-state: TA flags 0x71/0x60/0x62;
+3D flags, TA flags 2 and the 3D sync on the last kick only; the target's sync
+on every kick), so the GPU tiles while the CPU records the rest.
+- Correct: dEQP fragment_ops/draw/fbo/depth_stencil_clear/texture.units/
+  builtin_variable/rasterization unchanged with n = 2 (2,818 tests),
+  0 recoveries.
+- perfmicro's new `rows` test (the verts mesh as 127 draws, a colour each):
+  1440x960 58.4 → 63.3 fps, 720x480 80.4 → 86 fps with n = 16-32. verts and
+  fill are unchanged (one or eight draws).
+- A scene left open, with a first kick and no last one (a client killed
+  mid-frame), put services into a microkernel-init recovery loop until a
+  reboot. Every scene a flush opens must be closed. powervr_sgx needs a
+  uAPI for it (uapi-stream: a RENDER flag that leaves the scene open on its
+  rt_dataset, and a PB gate for other contexts).
+
+The DDK on the same box, same binary (i386 perfmicro):
+
+| test | DDK 720x480 | ours | DDK 1440x960 | ours |
+|---|---|---|---|---|
+| fill | 1432 | 791 | 392 | 233 |
+| verts | 537 | 146 | 329 | 110 |
+| rows | 238 | 80 | 205 | 58 |
+
+The vertex-heavy gap (3.4x) is twice the fill gap (1.7x). Our 720x480 verts
+frame (6.85 ms) is ~2.6 ms of CPU in the draw (every index read, rebased and
+copied; the DDK draws from the buffers as they are) and ~4.1 ms kick to done;
+the DDK's whole frame is 1.86 ms. With the vertex programs, TA state and
+vertex DMA width ruled out, the parameter buffer size (4 → 16 MB: no change)
+too, the next suspects are the memory the vertex path reads (our rings'
+allocation flags against the DDK's VBO/IBO) and the CPU index path
+(GPU-resident index buffers with the VDM's index base, instead of rebasing).
+
 ## Shader code against libusc
 
 The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with
