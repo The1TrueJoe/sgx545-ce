@@ -112,6 +112,7 @@ static void soft_reset(struct pvrsgx_device *sdev, bool bif)
 	       SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF_RESET : 0));
 }
 
+/* BIF_CTRL is 0 whenever the microkernel runs: its invalidates pulse a bit, then write 0. */
 static void inval_dc(struct pvrsgx_device *sdev)
 {
 	sgx_wr(sdev, SGX_CR_BIF_CTRL, SGX_CR_BIF_CTRL_INVALDC);
