@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  LINUX_VERSION: 7.1.8
+  LINUX_VERSION: 7.3.3
 
 jobs:
   cedarview:
