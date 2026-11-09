@@ -136,15 +136,17 @@ if [ -n "$STARTED" ] && ! lost; then
 		sleep 2
 		dmesg | grep 'open microkernel' | tail -1 >> "$LOG"
 	}
+	# the decisive pair: plain on the default image, plain on variant B; -T (broken on
+	# every SGX545 so far) runs last as an extra, so a hang there cannot hide variant B
 	try_blit plain
-	lost || try_blit "texture-heap source (-T)" -T
 	if ! lost && [ -f "$T/sgx545_ukernel-xferbank.bin" ]; then
 		cp "$FW" /tmp/sgx545_ukernel-default.bin
 		reload "$T/sgx545_ukernel-xferbank.bin"
 		try_blit "transfer bank (microkernel variant B)"
-		lost || try_blit "transfer bank + texture-heap source (variant B, -T)" -T
+		lost || try_blit "extra, not decisive: variant B with a texture-heap source (-T)" -T
 		reload /tmp/sgx545_ukernel-default.bin
 	fi
+	lost || try_blit "extra, not decisive: texture-heap source (-T)" -T
 	lost && result FAIL "the GPU was lost (later steps run without it)"
 	note "first blit that worked: ${BLIT:-none}"
 else

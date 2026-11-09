@@ -28,9 +28,12 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
 3. `powervr_sgx_test` and `powervr_sgx_frame -n 10`.
 4. The blit, then its candidates, stopping only if the GPU is lost:
    - plain;
-   - the texture-heap source (`-T`);
-   - microkernel variant B (the transfer bank), plain and with `-T`, by swapping the
-     firmware file and reloading the module, after which the default comes back.
+   - microkernel variant B (the transfer bank), by swapping the firmware file and
+     reloading the module, after which the default comes back. Plain on the default
+     image against plain on variant B is the decisive pair;
+   - extras that decide nothing (the texture-heap source `-T` fails on the CE5300 with
+     either image): `-T` on variant B, then `-T` on the default, last so that a hang there
+     cannot hide variant B's result.
 
    After each failure, the devcoredump and the driver's status are saved. The results are
    saved to the stick here once already.
