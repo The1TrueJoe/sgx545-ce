@@ -229,6 +229,8 @@ struct sgx_ctx {
    struct hash_table *efo; /* nir_alu_instr (a chain's root) -> its efo_chain */
    /* nir_if -> the comparison it alone reads, tested into p0 directly */
    struct hash_table *if_cmp;
+   /* a varying load only non-dependent samples read -> its set + 1 */
+   struct hash_table *sample_set;
 
    /* results */
    unsigned n_temps, n_pa;

@@ -2977,6 +2977,127 @@ iter_reg(const struct sgx_iter *it)
    return it->f16 ? (SGX_IN_HALF | 2 * it->pa) : it->pa;
 }
 
+/* pds_samples_alone: a set none of whose varyings anything reads but
+ * non-dependent samples (the coordinate as loaded, from the set's first
+ * component) needs no plain iteration: the PDS samples from the set itself.
+ * Its iteration goes and the later ones move down, before anything is
+ * emitted, since iterations fill PA in PDS program order (PDS.md "DOUTI");
+ * c->sample_set maps each such load to its set + 1 for emit_tex. */
+static bool
+sample_only_load(struct sgx_ctx *c, nir_intrinsic_instr *ld, unsigned comps)
+{
+   nir_foreach_use_including_if (u, &ld->def) {
+      if (nir_src_is_if(u))
+         return false;
+      nir_instr *ui = nir_src_use_instr(u);
+      if (ui->type != nir_instr_type_tex)
+         return false;
+      nir_tex_instr *t = nir_instr_as_tex(ui);
+      int ci = nir_tex_instr_src_index(t, nir_tex_src_coord);
+      if (t->op != nir_texop_tex || ci < 0 || u != &t->src[ci].src ||
+          nir_tex_instr_src_index(t, nir_tex_src_bias) >= 0 ||
+          nir_tex_instr_src_index(t, nir_tex_src_projector) >= 0 ||
+          _mesa_hash_table_search(c->proj, t) ||
+          t->coord_components != ld->def.num_components ||
+          t->coord_components > comps)
+         return false;
+   }
+   return !list_is_empty(&ld->def.uses);
+}
+
+static int
+input_at(nir_intrinsic_instr *in)
+{
+   nir_src *off = &in->src[in->intrinsic == nir_intrinsic_load_input ? 0 : 1];
+   if (!nir_src_is_const(*off))
+      return -1;
+   uint32_t o = nir_src_as_uint(*off);
+   unsigned slot = nir_intrinsic_io_semantics(in).location +
+                   (o >= 0x10000 ? (uint32_t)uif(o) : o);
+   return slot * 4 + nir_intrinsic_component(in);
+}
+
+static void
+drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
+{
+   if (!c->opts->pds_samples_alone || c->stage != MESA_SHADER_FRAGMENT ||
+       sgx_debug(c, SGX_DBG_KEEP_COORD_ITERS))
+      return;
+   for (unsigned n = 0; n < c->n_iters;) {
+      struct sgx_iter *it = &c->iters[n];
+      unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
+      if (it->sample || it->pointcoord || it->set >= SGX_MAX_SETS) {
+         n++;
+         continue;
+      }
+      /* every load of a varying in this set */
+      bool ok = true, any = false;
+      nir_foreach_block (b, impl) {
+         nir_foreach_instr (instr, b) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            if (in->intrinsic != nir_intrinsic_load_interpolated_input &&
+                in->intrinsic != nir_intrinsic_load_input)
+               continue;
+            int at = input_at(in);
+            int r =
+               at >= 0 && at < (int)ARRAY_SIZE(c->in_reg) ? c->in_reg[at] : -1;
+            if (r < 0)
+               continue;
+            unsigned reg = r & SGX_IN_HALF ? (r & ~SGX_IN_HALF) / 2 : r;
+            if (reg < it->pa || reg >= it->pa + regs)
+               continue;
+            any = true;
+            ok &= r == (int)iter_reg(it) && sample_only_load(c, in, it->comps);
+         }
+      }
+      if (!ok || !any) {
+         n++;
+         continue;
+      }
+      nir_foreach_block (b, impl) {
+         nir_foreach_instr (instr, b) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            if ((in->intrinsic != nir_intrinsic_load_interpolated_input &&
+                 in->intrinsic != nir_intrinsic_load_input) ||
+                input_at(in) < 0 ||
+                c->in_reg[input_at(in)] != (int)iter_reg(it))
+               continue;
+            _mesa_hash_table_insert(c->sample_set, in,
+                                    (void *)(uintptr_t)(it->set + 1));
+            _mesa_set_add(c->skip, instr);
+         }
+      }
+      /* the later iterations, and the inputs in them, move down */
+      unsigned end = it->pa + regs;
+      for (unsigned j = 0; j < ARRAY_SIZE(c->in_reg); j++) {
+         int r = c->in_reg[j];
+         if (r < 0)
+            continue;
+         if (r & SGX_IN_HALF) {
+            unsigned h = r & ~SGX_IN_HALF;
+            if (h / 2 >= end)
+               c->in_reg[j] = SGX_IN_HALF | (h - 2 * regs);
+            else if (h / 2 >= it->pa)
+               c->in_reg[j] = -1;
+         } else if ((unsigned)r >= end) {
+            c->in_reg[j] = r - regs;
+         } else if ((unsigned)r >= it->pa) {
+            c->in_reg[j] = -1;
+         }
+      }
+      for (unsigned j = n + 1; j < c->n_iters; j++)
+         if (c->iters[j].pa >= end)
+            c->iters[j].pa -= regs;
+      c->n_pa_inputs -= regs;
+      memmove(it, it + 1, (c->n_iters - n - 1) * sizeof(*it));
+      c->n_iters--;
+   }
+}
+
 static void
 find_projected(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -3348,7 +3469,14 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    unsigned ncoord = tex->coord_components;
    s->dependent = true;
    struct hash_entry *he = _mesa_hash_table_search(c->proj, tex);
-   if (he) {
+   struct hash_entry *ss =
+      ls.is_ssa ? _mesa_hash_table_search(c->sample_set, nir_def_instr(ls.ssa))
+                : NULL;
+   if (ss) {
+      /* a set only samples read: no plain iteration (drop_sample_only_iters) */
+      s->dependent = false;
+      s->set = (uintptr_t)ss->data - 1;
+   } else if (he) {
       nir_intrinsic_instr *load = he->data;
       unsigned pa = c->vals[load->def.index].n;
       /* (the PDS samples from the set itself, however it is iterated) */
@@ -4682,48 +4810,6 @@ fld_of(const struct sgx_ins *i, enum sgx_field id)
 /* an efo run's internal registers don't survive a deschedule: whatever got
  * put between its efos (an operand's copy, a uniform's load) goes in front of
  * the run, so only nosched efos sit between the first and the last */
-/* pds_samples_alone: a plain iteration whose registers nothing reads (its
- * varying only feeds non-dependent samples, which the PDS takes from the set)
- * goes; its registers stay unused rather than renumbering the others */
-static void
-drop_sample_only_iters(struct sgx_ctx *c)
-{
-   if (!c->opts->pds_samples_alone || c->stage != MESA_SHADER_FRAGMENT ||
-       sgx_debug(c, SGX_DBG_KEEP_COORD_ITERS))
-      return;
-   for (unsigned n = 0; n < c->n_iters;) {
-      struct sgx_iter *it = &c->iters[n];
-      unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
-      bool sampled = false, read = false;
-      for (unsigned s = 0; s < c->n_samples; s++)
-         sampled |=
-            !c->samples[s]->dependent && c->samples[s]->coord_pa == (int)it->pa;
-      if (it->sample || it->pointcoord || it->set >= SGX_MAX_SETS || !sampled) {
-         n++;
-         continue;
-      }
-      list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
-         for (unsigned k = i->ndst; k < i->nops && !read; k++) {
-            const struct sgx_ref *r = &i->op[k];
-            if (r->file != SGX_F_PA)
-               continue;
-            unsigned lo = r->h16 ? r->n / 2 : r->n;
-            unsigned cnt = r->step && i->rpt > 1 ? i->rpt : 1;
-            read = lo < it->pa + regs && lo + cnt > it->pa;
-         }
-      }
-      if (read) {
-         n++;
-         continue;
-      }
-      for (unsigned s = 0; s < c->n_samples; s++)
-         if (c->samples[s]->coord_pa == (int)it->pa)
-            c->samples[s]->coord_pa = -1;
-      memmove(it, it + 1, (c->n_iters - n - 1) * sizeof(*it));
-      c->n_iters--;
-   }
-}
-
 static void
 efo_runs(struct sgx_ctx *c)
 {
@@ -6208,12 +6294,14 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    c->proj = _mesa_pointer_hash_table_create(c);
    c->efo = _mesa_pointer_hash_table_create(c);
    c->if_cmp = _mesa_pointer_hash_table_create(c);
+   c->sample_set = _mesa_pointer_hash_table_create(c);
    if (!sgx_debug(c, SGX_DBG_NO_IF_TEST))
       find_if_compares(c, impl);
    if (!sgx_debug(c, SGX_DBG_NO_COISSUE))
       find_efo(c, impl);
    if (c->stage == MESA_SHADER_FRAGMENT) {
       find_projected(c, impl);
+      drop_sample_only_iters(c, impl);
       find_discard(c, impl);
       find_c10(c, impl);
       if (!c->c10_root)
@@ -6238,8 +6326,6 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       mark_helpers(c);
    if (!c->failed)
       efo_runs(c);
-   if (!c->failed)
-      drop_sample_only_iters(c);
    if (!c->failed)
       allocate(c);
    if (!c->failed)
