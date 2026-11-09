@@ -142,6 +142,7 @@ if [ -n "$STARTED" ] && ! lost; then
 		cp "$FW" /tmp/sgx545_ukernel-default.bin
 		reload "$T/sgx545_ukernel-xferbank.bin"
 		try_blit "transfer bank (microkernel variant B)"
+		lost || try_blit "transfer bank + texture-heap source (variant B, -T)" -T
 		reload /tmp/sgx545_ukernel-default.bin
 	fi
 	lost && result FAIL "the GPU was lost (later steps run without it)"

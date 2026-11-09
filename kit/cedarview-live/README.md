@@ -29,8 +29,8 @@ packages), builds microkernel variant B from `ukernel/`, and keeps the image as 
 4. The blit, then its candidates, stopping only if the GPU is lost:
    - plain;
    - the texture-heap source (`-T`);
-   - microkernel variant B (the transfer bank), by swapping the firmware and reloading the
-     module, after which the default comes back.
+   - microkernel variant B (the transfer bank), plain and with `-T`, by swapping the
+     firmware file and reloading the module, after which the default comes back.
 
    After each failure, the devcoredump and the driver's status are saved. The results are
    saved to the stick here once already.
