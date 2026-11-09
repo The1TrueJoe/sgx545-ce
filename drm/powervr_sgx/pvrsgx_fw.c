@@ -93,6 +93,7 @@ static const struct {
 	[PVRSGX_FW_CCBCTL] = { false, 0x2000, 0x8 },
 	[PVRSGX_FW_KICKER] = { false, 0x2010, 0x4 },
 	[PVRSGX_FW_TA3DCTL] = { false, 0x3000, sizeof(struct pvrsgx_fw_ta3d_ctl) },
+	/* Right after the control block, which fills 0x3000-0x30ff. */
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
 	/* The image at 0, then the PDS programs from its end (0xcf70 for the DDK's). */
@@ -103,6 +104,8 @@ static const struct {
 	[PVRSGX_FW_PDS3] = { true, 0x090, 0x100 },
 	[PVRSGX_FW_PDS4] = { true, 0x190, 0x68 },
 };
+
+static_assert(0x3000 + sizeof(struct pvrsgx_fw_ta3d_ctl) <= 0x3100);
 
 #define PDS_BYTES	0x200
 
