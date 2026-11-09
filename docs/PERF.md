@@ -196,17 +196,27 @@ The idle is two things:
    time (credit limit 1), so nothing hides them. Sent to m2: skip the flush
    for buffers no CPU wrote through a cached mapping, and allow more than one
    job on the hardware.
-2. **The GPU starved by the CPU, ~13 ms a frame.** Every frame the client
-   thread flushes its second small render, then sleeps in the end-of-frame
-   wait (the stats' "slot wait": 500-1000 ms of every 2 s) until the world
-   render before it is done. Only then does it submit the next world, which it
-   recorded before the small renders. The GPU has only the small renders
-   meanwhile. A deeper ring doesn't change it: `SGX_SLOTS=4` gives 10.6 fps,
-   and the thread still sleeps until the world render's IRQ, although the slot
-   it reuses then held a render done long before. 749a8e4 logs every such wait
-   (`SGX_DEBUG=frame`) to find what it waits for. (`SGX_SLOTS=4` also met 5
-   GPU timeouts, all recovered, over 4 h of play. A 4 h run at the default has
-   not been done, so it isn't known to be the cause.)
+2. **The GPU waiting on the CPU, ~13 ms a frame.** A frame is Minecraft's
+   world render into its FBO, then a 2-object and a 1-object render into the
+   back buffer (`SGX_DEBUG=frame`, 749a8e4). With 3 ring slots the third
+   kick's end-of-frame wait lands on the world render kicked just before:
+   the thread sleeps ~20-50 ms, then records the next world while the GPU has
+   only the two small renders. With `SGX_SLOTS=4` the slots cycle 0-3 and the
+   waits move to the previous frame's small renders, which queue behind the
+   64 ms world render. So the frame is GPU-bound and a deeper ring only moves
+   the wait: 8-10 fps with the logging on. Both 4-slot runs also stalled the
+   session after the measured window (and one met 5 recovered GPU timeouts
+   over 4 h). Not adopted.
+
+The import flushes, after m2's "flush only listed imports" (m2-drm 30919fc):
+Minecraft 10.7 → 11.2 fps, flushes 424 → 318 per 5 s. What is left is
+Minecraft's own back buffers. The DRI3 loader asks for every back buffer
+with `__DRI_IMAGE_USE_SCANOUT`, so kmsro makes each a cached simpledrm dumb
+buffer, imported and flushed around both small renders (~5 ms a frame). Only
+X's screen pixmap is scanned out (X copies the window: its 1.1 ms job a
+frame). Nothing tells the pipe driver that an image is a back buffer (dri2.c
+maps `__DRI_IMAGE_USE_BACKBUFFER` to no bind flag), so keeping back buffers
+on the SGX needs a frontend change. Parked behind the vertex path.
 
 With both gone the frame is the GPU's 69.5 ms: 14.4 fps, past the DDK.
 
