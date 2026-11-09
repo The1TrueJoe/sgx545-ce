@@ -47,5 +47,8 @@ Then a soak: three processes rendering at once (`powervr_sgx_frame -q 4 -n 40
 -c 2` in a loop) for five minutes. A few minutes in, the box lost its
 userspace: ssh dropped, and since then nothing listens on any port while the
 kernel still answers ping. The EA1 has no remote power switch, so it waits for
-a hand power cycle; the cause (the OOM killer under KASAN and kmemleak, or a
-driver fault) comes from pstore or the next boot's logs.
+a hand power cycle. After the cycle it came up on its normal boot with
+nothing kept from the lost one: `/var/log` is tmpfs and there is no pstore.
+So the cause (the OOM killer under KASAN and kmemleak, or a driver fault) is
+still open; the next soak runs with the kernel log sent off the box
+(netconsole) and fewer clients first.
