@@ -1,5 +1,6 @@
-# powervr_sgx as upstream would build it: mainline with the gma500 patch and
-# the driver in tree, through the checkers a DRM reviewer runs.
+# powervr_sgx as upstream would build it: drm-misc-next (where a v1 series
+# goes) with the gma500 patches and the driver in tree, through the checkers a
+# DRM reviewer runs.
 # docs/UPSTREAM-READINESS.md lists what this covers.
 name: powervr-sgx-upstream
 
@@ -23,7 +24,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LINUX_VERSION: 7.1.8
+  KERNEL_GIT: https://gitlab.freedesktop.org/drm/misc/kernel.git
+  KERNEL_BRANCH: drm-misc-next
   SMATCH_REF: master
 
 jobs:
@@ -40,11 +42,12 @@ jobs:
             bc bison flex libelf-dev libssl-dev ccache sparse clang lld llvm \
             coccinelle gcc-multilib libsqlite3-dev libdbd-sqlite3-perl libtry-tiny-perl
 
-      - name: Restore the kernel tarball
-        uses: actions/cache@v4
-        with:
-          path: linux-${{ env.LINUX_VERSION }}.tar.xz
-          key: linux-${{ env.LINUX_VERSION }}
+      - name: drm-misc-next
+        run: |
+          set -eux
+          git clone -q --depth 1 -b $KERNEL_BRANCH $KERNEL_GIT linux
+          git -C linux log -1 --format='%H %cs %s'
+          rm -rf linux/.git
 
       - name: Generated register header is current
         run: |
@@ -54,10 +57,7 @@ jobs:
       - name: uAPI header, one layout on i386 and x86_64
         run: |
           set -eux
-          [ -f linux-$LINUX_VERSION.tar.xz ] ||
-            curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
-          tar xf linux-$LINUX_VERSION.tar.xz
-          L=linux-$LINUX_VERSION
+          L=linux
           make -C $L ARCH=x86_64 headers_install INSTALL_HDR_PATH=$PWD/hdr >/dev/null
           cmp drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h docs/uapi/powervr_sgx_drm.h
           # As docs/uapi/check.sh: the kernel's headers as system headers, our header checked.
@@ -73,8 +73,8 @@ jobs:
       - name: Lay out mainline with the driver and gma500 patch in tree
         run: |
           set -eux
-          sh drm/ci/cedarview-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
-          L=linux-$LINUX_VERSION
+          sh drm/ci/cedarview-kernel.sh "$PWD/linux" "$PWD/drm"
+          L=linux
           ./$L/scripts/config --file $L/.config -e DRM_POWERVR_SGX_KUNIT_TEST -e KUNIT
           make -C $L ARCH=x86_64 olddefconfig
           make -C $L ARCH=x86_64 -j"$(nproc)" prepare
@@ -82,7 +82,7 @@ jobs:
       - name: gcc W=1, sparse
         run: |
           set -eux
-          L=linux-$LINUX_VERSION
+          L=linux
           D="drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/"
           make -C $L ARCH=x86_64 -j"$(nproc)" W=1 $D 2>&1 | tee gcc.log
           ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' gcc.log
@@ -94,7 +94,7 @@ jobs:
           set -eux
           git clone -q --depth 1 -b $SMATCH_REF https://repo.or.cz/smatch.git smatch
           make -C smatch -j"$(nproc)" >/dev/null
-          L=linux-$LINUX_VERSION
+          L=linux
           make -C $L ARCH=x86_64 -j"$(nproc)" C=2 CHECK="$PWD/smatch/smatch -p=kernel" \
             drivers/gpu/drm/powervr_sgx/ 2>&1 | tee smatch.log
           ! grep -E 'powervr_sgx/.*(warn|error):' smatch.log
@@ -102,7 +102,7 @@ jobs:
       - name: coccinelle
         run: |
           set -eux
-          L=linux-$LINUX_VERSION
+          L=linux
           make -C $L ARCH=x86_64 coccicheck MODE=report M=drivers/gpu/drm/powervr_sgx 2>&1 | tee cocci.log
           ! grep -E '^(\./)?drivers/gpu/drm/powervr_sgx/' cocci.log
 
@@ -111,7 +111,7 @@ jobs:
           set -eux
           # A copy of the laid-out tree: O= needs a clean source tree.
           C=linux-clang
-          cp -a linux-$LINUX_VERSION $C
+          cp -a linux $C
           make -C $C ARCH=x86_64 LLVM=1 olddefconfig >/dev/null
           make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" prepare >/dev/null
           make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 \
@@ -121,7 +121,7 @@ jobs:
       - name: checkpatch --strict and kernel-doc
         run: |
           set -eux
-          L=linux-$LINUX_VERSION
+          L=linux
           perl $L/scripts/checkpatch.pl --strict --no-tree --terse -f \
             $(ls drm/powervr_sgx/*.[ch] | grep -v _trace.h) drm/powervr_sgx/tests/*.c \
             drm/powervr_sgx/include/uapi/drm/*.h | tee checkpatch.log
