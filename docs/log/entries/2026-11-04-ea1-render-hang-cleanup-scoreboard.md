@@ -102,7 +102,7 @@ completes; test_commands cleanup-defer/bound pass). Committed 76f3d9e + a7b4349.
 WHY it doesn't fix the hang: the cleanup deferral holds process N's MEMORY (PB/RT) until
 its render+page-release finishes, but the fault is the GPU-global DPM FREE-LIST race --
 process N+1's do_ta free-list load runs while process N's DPM 3D free is still draining.
-That is a GPU-timing race on a single DPM unit; holding memory does not serialise it. The
+That is a GPU-timing race on a single DPM unit; holding memory does not serialize it. The
 DDK avoids it structurally by COMPLETING THE RENDER ON THE DPM-FREE EVENT (0x1), so the
 client does not see "done" (and the next process does not start its do_ta) until the free
 is complete. Ours completes at pixel-done (0x40000), so the client exits early and the
@@ -113,7 +113,7 @@ out -- but that was BEFORE the ack fix. The deadlock-safe build proves 0x1 now d
 reliably (dpm_free_done runs on it: the cleanup completes), so render_done-on-0x1 should
 now be reachable. Next: move render_done to the DPM-free event with the ack fix in place,
 keep the cleanup deferral (memory correctness) + the bound. The cleanup fix stays (DDK-
-correct behaviour) but is not itself the hang fix.
+correct behavior) but is not itself the hang fix.
 
 ## Update: render_done-on-0x1 implemented (1cccc1d), offline-validated, ready for HW
 
@@ -154,7 +154,7 @@ exact DDK completion order on 0x1 before spending the slot.
 EA1, same cold-GPU ramboot rig (data: docs/log/data/2026-11-04-0132-ea1-render-on-0x1-
 5of10.log). ta3d-state confirmed the order (test as-is, one change). Result:
 - **RENDERED=5 TIMEOUT=5, HWR=10**, vs clean3 3/10. Directionally right: completing on 0x1
-  (the free) instead of 0x40000 (pixels) raises the rate, confirming the serialisation
+  (the free) instead of 0x40000 (pixels) raises the rate, confirming the serialization
   theory. But the race persists for ~half the renders.
 - **Alternating pattern R..R.R.R.R** (frames 1,4,6,8,10 render; 2,3,5,7,9 time out), vs
   clean3's clustered R.R.......R. A render completes via 0x1, the NEXT faults + HWR, then
@@ -163,7 +163,7 @@ EA1, same cold-GPU ramboot rig (data: docs/log/data/2026-11-04-0132-ea1-render-o
 - Faults: do_ta-style BIF (BANK0=0x101F, FAULT 41B8500F / 4013500F / 41B7500F), and the
   verbose dump shows at every lockup EVENT_STATUS = 0x20000000 (timer_irq: yes ONLY),
   3d_mem_free: no, pbe_end_render: no, ta_finish: no -- the GPU is quiescent on the timer,
-  the timed-out render never signalled.
+  the timed-out render never signaled.
 - cleanup-timeout watch: no host force-free message (the 5 s host poll never fired; our
   SC_INFLIGHT clears well inside it). BANK0 as above.
 
@@ -171,7 +171,7 @@ LEADING HYPOTHESIS for the residual race: the 0x1 event may fire when the DPM 3D
 STARTS, not when it finishes draining -- so render_done-on-0x1 signals the client (sync +
 IRQ) before the free is truly complete, and the next sequential frame-dump's do_ta still
 loads the free-list into a draining free. The DDK (10/10 on 0x1) likely WAITS for the free
-to fully drain inside its 0x1 handler (polls a DPM/BIF status) before signalling. Next:
+to fully drain inside its 0x1 handler (polls a DPM/BIF status) before signaling. Next:
 ask ta3d-state what the DDK's 0x1 handler does after the ack (does it poll a drain-complete
 status?), then add that wait to render_done. Single run -- 3->5 could carry variance; a
 clean A/B (clean3 vs ro1, 3 runs each) is worth a later slot. Box released after, clean

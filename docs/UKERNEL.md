@@ -2,19 +2,19 @@
 
 The microkernel (Imagination's "EDM", event-driven microkernel) is the
 program the SGX545 runs on its USSE pipelines to manage itself. The host
-driver never programs the TA (tiling) or 3D (rasterising) cores directly for
+driver never programs the TA (tiling) or 3D (rasterizing) cores directly for
 work: it leaves a command in a ring buffer and raises a hardware event, and
 the microkernel — running as an ordinary USSE task started by a PDS program —
 reads the command, programs the cores through their memory-mapped registers,
 waits on the completion events the cores raise, updates the sync objects the
 host polls, and raises the host interrupt.
 
-This file is a behavioural specification of that program — its state machines,
+This file is a behavioral specification of that program — its state machines,
 data-structure offsets and register sequences — written so an open microkernel
 can be designed from it and validated in the offline emulator (`tools/ukernel/`,
 which replays a captured or generated frame against a model of device memory
 and the core registers). Where the open microkernel in `ukernel/` does
-something, this is the behaviour it reproduces; the build-specific entry
+something, this is the behavior it reproduces; the build-specific entry
 offsets and magic constants of the reference firmware stay in `srvinit` (see
 `docs/SRVINIT.md`), because a different microkernel chooses its own.
 
@@ -90,7 +90,7 @@ The 0xec-byte block at `hKernelSGXTA3DCtlMemInfo` (`docs/SRVINIT.md`) is DMAed
 to `sa0`..`sa3b`. The microkernel reads and writes it constantly; the fields
 it uses (word index = `saN`):
 
-| word | meaning (behaviour) |
+| word | meaning (behavior) |
 |---|---|
 | 0x00 | the block's own device address (so handlers can address the rest by `sa0 + n`) |
 | 0x01 | host control block address |
@@ -238,7 +238,7 @@ On a host-kick event the microkernel:
 1. reads the CCB control's write offset and compares it with its own read
    offset; if equal, there is nothing to do;
 2. reads the command at the read offset;
-3. **honours `ui32CacheControl`** (command word 1). This runs here, for every
+3. **honors `ui32CacheControl`** (command word 1). This runs here, for every
    command, before the dispatch (pc 0x0098-0x00c2):
    - INVAL_BIF_PD (0x2): pulse `BIF_CTRL` = old | 8 (INVALDC), then the old
      value;
@@ -398,7 +398,7 @@ cleanup fails on a GPU the DDK left mid-render (`docs/NOTES.md`).
 `powervr_sgx` sent the three cleanups the DDK sends, in its order (RT dataset at
 RT-dataset destroy, then render context, then PB descriptor at context
 destroy), each after the context's last render had completed (render-done
-SW_EVENT, fences signalled), on the DDK microkernel
+SW_EVENT, fences signaled), on the DDK microkernel
 (`docs/log/entries/2026-11-03-0300-drm-cleanup.md`):
 
 | cleanup | data[1] | result |
@@ -415,7 +415,7 @@ first blamed for was the PB's address: log `2026-11-03-0340-drm-per-vm-pb`.)
 
 What the open microkernel must do (the list for `ukernel/`):
 
-- once a context's last render has signalled render-done, treat its RT
+- once a context's last render has signaled render-done, treat its RT
   dataset, render context and PB as idle: cleanup of an idle resource
   completes at once;
 - always consume a cleanup command; report busy and done as different status
@@ -433,7 +433,7 @@ data[1] are as above. In addition:
 
 - data[2] is a nonzero sequence number the host picks. The host sends one
   cleanup at a time, and only after every job of the resource's context has
-  signalled. It clears `ui32CleanupStatus` before each send.
+  signaled. It clears `ui32CleanupStatus` before each send.
 - The microkernel always consumes the command (advances the read offset), so
   later commands never wait behind a cleanup.
 - It writes the outcome once, when it processes the command:
@@ -517,7 +517,7 @@ recovery re-init does real work before it can set `ui32InitStatus`. The host's
 `PollForValueKM` on `ui32InitStatus` then succeeds. The offline emulator
 reproduces the clean path: after `Machine.init()` the host control block's
 first word reads 1 (`tools/ukernel/run.py`, the `init` section). A timeout here
-is only logged ("Wait for uKernel initialisation failed"), so a successful
+is only logged ("Wait for uKernel initialization failed"), so a successful
 `INITSRV_DISCONNECT` does not prove the microkernel ran — a client must render.
 
 **Hardware status (2026-11-02).** The open microkernel's clean-boot init path
@@ -626,7 +626,7 @@ the render-in-flight list head to empty, accepting that the render that was in
 flight is lost — which it is in any case, because its core was reset
 mid-render. The clients whose contexts are abandoned will fail their own
 waits and tear down through the normal cleanup path once a working microkernel
-is back. This is a behaviour choice the open microkernel makes; it is not a
+is back. This is a behavior choice the open microkernel makes; it is not a
 reproduction of the DDK's, which rescans. It needs the same offline and
 hardware validation as the rest (a recovery re-init with a non-empty CCB and a
 stale render-in-flight entry, run through the emulator, then the wedge test on
@@ -651,7 +651,7 @@ into the sync-object updates the host and the next client wait on.
   render-in-flight list (removing the finished render) and raises the host
   interrupt (SW_EVENT), with `ui32InterruptFlags` telling the host it was a
   normal completion. The render details carry the destination sync objects at
-  words 0x34 and 0x90 (a colour and a depth destination for a one-context
+  words 0x34 and 0x90 (a color and a depth destination for a one-context
   frame); their ops-pending word is cleared as the 3D drains.
 - **DPM 3D memory free.** The hardware has already returned the render's
   parameter-buffer pages to the free list: the 3D start armed the release
@@ -819,7 +819,7 @@ has a render on the 3D:
    - **The continuation's background** (pc 0x0d92-0x0d9b): the RT entry's
      background block (word 4) gets render details +0x12c and +0x130, then
      `[rd+0x114][layer]`. The final render then reloads the partial render's
-     colour instead of clearing it.
+     color instead of clearing it.
    - The DPM state is moved before the register program (pc 0x0c40-0x0c93),
      TA slot 0 and 3D slot 1:
      1. 0x630 = 2, 0x62c = RT entry word 5, 0x65c = 1;
@@ -1002,7 +1002,7 @@ list bases, then sets `BIF_BANK0` EDM = `SGX_BIF_DIR_LIST_INDEX_EDM` (15 =
 Gap: which registers are safe to read on a core that hasn't been reset is
 in the kernel driver's notes (DRM-DRIVER.md), not here.
 
-**BIF cache invalidate** (honouring a command's `ui32CacheControl`, and after
+**BIF cache invalidate** (honoring a command's `ui32CacheControl`, and after
 a page-directory change). Pulse the invalidate request — `EUR_CR_BIF_CTRL`
 bit 3 (`INVALDC`) for a data-cache invalidate, or the directory/page-table
 request registers `EUR_CR_PDS_INV*` / the 0xa08 USE-cache register — then poll
@@ -1194,12 +1194,12 @@ its data accesses in either bank. [D, code and trace]
     the TA can bin a new scene while the 3D renders the other one.
   - The TA and 3D free-list loads stay per PB in both orders.
 
-  [D: the DDK microkernel in the emulator, with OTPM_FLUSHED_INV modelled;
+  [D: the DDK microkernel in the emulator, with OTPM_FLUSHED_INV modeled;
   the interleave itself is from the capture. On hardware the DDK Minecraft
   register sample read 0x740 = 0 throughout. 0x630 read 0 in a register
   sample across an FBO interleave, which may mean 0x630 does not read back.]
 
-All [D] from the DDK microkernel's code and trace; the release behaviour is
+All [D] from the DDK microkernel's code and trace; the release behavior is
 from the hardware register sample.
 
 **TA start.** The first kick of a scene (TA flags b0) pulses `SOFT_RESET`'s
@@ -1285,9 +1285,9 @@ because those structures are written by the Mesa driver (`tools/gen`,
 memory, `ldr`/`str` to the register file, branches/calls/`savl`/`setl`,
 `emit`, program end) against a sparse device-memory model and a register
 file; it stops with an error on any instruction it has no semantics for, so a
-run that completes has executed real behaviour, not guesses.
+run that completes has executed real behavior, not guesses.
 `tools/ukernel/sgxsim.py` lays kernel data out as `srvinit` does, models the
-five entry PDS programs as behaviour, answers the registers the microkernel
+five entry PDS programs as behavior, answers the registers the microkernel
 polls as a working core would, and plays the host side (init, CCB kicks,
 events). `tools/ukernel/fromtrace.py` loads device memory, HW contexts and
 kick parameters from a pvrtrace log — a DDK capture or a `tools/gen`
@@ -1316,7 +1316,7 @@ memory matching. Only then does it go to the box `srvinit` loads it on
   microkernel seems to signal the DMA/event hardware, and the emulator treats
   them as no-ops that log their operands. Whether an open microkernel needs
   them is not yet known.
-- The `0x138` invalidate-done bit groups (0x27 TA, 0x4b 3D) are modelled as
+- The `0x138` invalidate-done bit groups (0x27 TA, 0x4b 3D) are modeled as
   the hardware's answers from what the poll loops wait for; the per-unit
   decomposition is inferred, not confirmed on hardware.
 - The precise contents of the per-context scratch area (control block words
@@ -1385,11 +1385,11 @@ memory matching. Only then does it go to the box `srvinit` loads it on
 
 ## 10. Implementation map and open gaps
 
-A reference for the `ukernel/` implementation: where each handler's behaviour
+A reference for the `ukernel/` implementation: where each handler's behavior
 is specified, what it depends on from the other documents, how far it is
 validated, and what is still missing.
 
-**Every handler in `ukernel/ukernel.py` and where its behaviour is specified:**
+**Every handler in `ukernel/ukernel.py` and where its behavior is specified:**
 
 | handler | spec |
 |---|---|

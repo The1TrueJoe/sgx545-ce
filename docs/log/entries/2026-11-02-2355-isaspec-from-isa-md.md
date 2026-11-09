@@ -44,7 +44,7 @@ still encodes through `usse_forms.h`.
 - **Modal state.** Format control reaches the XML's expressions as
   `ISA_GPU_ID()`, which isaspec already gives both the encoder (`s->gen`)
   and the decoder (`gpu_id`); the disassembler tracks `setfc` in a straight
-  line. MOE state isn't in the word and isn't modelled.
+  line. MOE state isn't in the word and isn't modeled.
 - **"All values but N"** (movc type 1-5 vs mov 0): one leaf per value.
 
 ## Gaps in ISA.md

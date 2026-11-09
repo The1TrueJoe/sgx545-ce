@@ -32,10 +32,10 @@ instead of cmd+0x00 bit 0. Offline: test_emu, test_commands, run_ours 5/5 MATCH
 Both fixes (read-offset advance + ta_finished 3D-trigger) are in ukernel.py,
 uncommitted, bundled for the next EA1 slot; staged sentinel binary `uk-ready.bin`
 (md5 64e3862b). Expected next run: do_3d marker 0x3DED appears, the 3D runs,
-render_done (0x4D04), the first triangle. Watch for a possible serialisation race:
+render_done (0x4D04), the first triangle. Watch for a possible serialization race:
 our kick handler services both kicks on their own doorbells, so SC_CMD may already
 hold kick 2's command when kick 1's ta_finish fires — if do_3d then runs after
-kick 1 (too early), the fix is to serialise kick 2 after kick 1's TA finishes
+kick 1 (too early), the fix is to serialize kick 2 after kick 1's TA finishes
 (process it from ta_finished rather than its own doorbell). Evidence:
 `data/2026-11-03-0340-ea1-readoffset-kick2-reads-62-still-hangs.dmesg.log`.
 Per the parent, commit all clean once it renders.

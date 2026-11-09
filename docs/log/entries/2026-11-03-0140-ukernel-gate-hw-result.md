@@ -28,7 +28,7 @@ runs its do_ta**, or it runs in a way the per-kick register setup doesn't affect
 Relevant architecture (`ukernel.py`): the `kick` handler processes **one CCB
 command per event-program entry** and ends at `kick_end`/`kick_idle_done`; it does
 **not** drain the CCB, and `ta_finished` ends without checking the CCB for the
-next kick. Nothing serialises kick 2 against kick 1's in-flight TA. So kick 2
+next kick. Nothing serializes kick 2 against kick 1's in-flight TA. So kick 2
 relies on its own `EUR_CR_EVENT_KICK` doorbell producing a fresh entry — which, if
 it arrives while the EDM is busy with kick 1's TA, could be missed (kick 2 never
 runs) or could kick a second TA over the first (overlap → lockup). In the DDK
@@ -42,6 +42,6 @@ A **do_ta entry-counter + path sentinel**: at do_ta entry increment a scratch wo
 render kick (r13=0). After a run: count == 1 → kick 2 never ran; count == 2 with
 the render marker → kick 2 ran the minimal path and the hang is after its kick
 (the terminate stream, or a kick-1/kick-2 overlap). That tells us whether to look
-at command sequencing (serialise kick 2 after kick 1's finish, or from
+at command sequencing (serialize kick 2 after kick 1's finish, or from
 ta_finished) or at the generated terminate stream. Box left on normal boot, slot
 handed to mesa-gallium.

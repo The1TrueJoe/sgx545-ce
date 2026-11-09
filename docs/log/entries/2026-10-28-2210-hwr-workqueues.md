@@ -72,7 +72,7 @@ The first recovery worked. What broke the second time is open. The likely
 suspect is the wedge replay's render context: its cleanup request failed at
 94.5 s, so it is probably still registered with the microkernel, and the next
 TA kick runs into the same bad state. After that, the microkernel never
-finishes initialising again.
+finishes initializing again.
 
 Data: `data/2026-10-28-2210-hwr-workqueues-wedge.txt` (the run) and
 `data/2026-10-28-2210-hwr-workqueues-dmesg.txt` (dmesg 89–113 s).
@@ -80,7 +80,7 @@ Data: `data/2026-10-28-2210-hwr-workqueues-wedge.txt` (the run) and
 ## Open
 
 - Why the reset after the second lockup leaves the microkernel unable to
-  initialise (`ui32InitStatus` never reaches `INIT_COMPLETE`). Next step:
+  initialize (`ui32InitStatus` never reaches `INIT_COMPLETE`). Next step:
   dump the host control block and the EDM registers around a failing
   `SGXInitialise`, and compare against the successful one at 89 s.
 - Whether the context of a client that died mid-wedge should be torn down

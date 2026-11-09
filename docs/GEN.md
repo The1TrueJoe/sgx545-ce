@@ -7,7 +7,7 @@ probe's reference triangle **pixel for pixel**: the back buffer's md5 is
 `56f8466a…`, the same as the blob's frame. Nine variations also match the
 blob's own rendering of the same scene with 0 pixels different:
 
-- colours and vertices;
+- colors and vertices;
 - two draws;
 - depth tests;
 - a viewport;
@@ -41,8 +41,8 @@ The `frame` options:
 
 - `-s WxH`: the surface size.
 - `-p`: a y-up surface, laid out like an EGL pbuffer.
-- `-k r,g,b,a`: the clear colour.
-- `-T verts[,z]:r,g,b,a`: a triangle list with a uniform colour. With `z`,
+- `-k r,g,b,a`: the clear color.
+- `-T verts[,z]:r,g,b,a`: a triangle list with a uniform color. With `z`,
   the positions are vec3.
 - `-d func[,write]`: the depth test.
 - `-V x,y,w,h`: the viewport.
@@ -121,7 +121,7 @@ A compiler backend would fill the same struct.
 
 `sgx_surface_create` builds:
 
-- the BGRA8888 colour buffer;
+- the BGRA8888 color buffer;
 - the RT numbers (macrotiles, TE screen);
 - the RT data with its two entries;
 - the tail pointers;
@@ -148,7 +148,7 @@ A compiler backend would fill the same struct.
 
 `sgx_flush` closes both kicks' streams (empty secondary, TA terminate, VDM
 terminate). It writes both TA commands into the CCB and kicks twice, the
-second with `bLastInScene`. Then it polls the colour buffer's sync object.
+second with `bLastInScene`. Then it polls the color buffer's sync object.
 
 Every word comes from one of these sources:
 
@@ -197,7 +197,7 @@ composes those images in the case's priority order, so the overlap rule
 | case | frame | pixels differing |
 |---|---|---|
 | ref | the probe's triangle, clear (0,0,0.5,1) | 0 of 345600 (md5 `56f8466a…`) |
-| colors | other vertices, clear (0.25,0,0,1), colour (1,0.5,0,1) | 0 |
+| colors | other vertices, clear (0.25,0,0,1), color (1,0.5,0,1) | 0 |
 | two | red then blue, overlapping, no depth test: blue covers | 0 |
 | depth | LESS, near red drawn first, far blue second: red keeps the overlap | 0 |
 | depth-far-first | LESS, far blue first, near red second | 0 |

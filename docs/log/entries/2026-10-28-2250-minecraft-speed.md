@@ -48,7 +48,7 @@ In the bench world the DDK runs at **28-37 FPS**.
   ![six panel dumps 0.3 s apart: every one a finished frame](../img/2026-10-28-2130-ea1-backbuffer-burst.png)
 
 - **A stale program in every masked clear** (`957dbd7`). The clear's
-  colour-masked PDS programs were made on first use, in frame memory that the
+  color-masked PDS programs were made on first use, in frame memory that the
   next frame overwrote. The Minecraft runtime clears alpha at every
   swap, so from the second frame on it ran whatever was there. They are now
   made with the context. This is a candidate for the menus' one SGX recovery.
@@ -65,7 +65,7 @@ In the bench world the DDK runs at **28-37 FPS**.
   samples (`frcp`, `fmad`, `smp`, `wdf`). Three things stood between them and
   the PDS (`81a4bb4`):
   - st packed varyings;
-  - the GL linker's varying optimisation put the fog in front of a texture
+  - the GL linker's varying optimization put the fog in front of a texture
     coordinate;
   - the compiler's matcher only knew `load_interpolated_input`.
 

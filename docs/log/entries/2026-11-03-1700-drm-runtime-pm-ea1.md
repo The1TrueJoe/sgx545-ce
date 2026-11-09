@@ -8,7 +8,7 @@ no power-cycle.
 | run, `runtime_pm=1` | result |
 |---|---|
 | load, then idle | suspended after 500 ms: power status 0x2c, `powered: 0` |
-| the first resume, one NULL job | signalled in 19.5 ms; suspended again within 1.5 s |
+| the first resume, one NULL job | signaled in 19.5 ms; suspended again within 1.5 s |
 | 20 frames, each from suspended | 20/20 right |
 | uAPI suite; blits, 3 rounds; 20 frames on 2 contexts | 33/33; all right; 20/20 right |
 | `powervr_sgx_hang -n 3`: render, mixed submit, idle, forced hang | all right; render from suspended 13-17 ms; 3 resets, 3 devcoredumps, back to suspended afterwards |

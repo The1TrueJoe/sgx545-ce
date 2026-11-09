@@ -6,7 +6,7 @@ linux-firmware.
 
 ## License: MIT (confirmed)
 
-The open microkernel (`ukernel/`) is written from `docs/` — behaviour,
+The open microkernel (`ukernel/`) is written from `docs/` — behavior,
 encodings and register meanings found by tracing and hardware tests
 (`tools/isa/hwt_*`), never translated from Imagination's bytes or decompiled
 code (the clean-room discipline in `docs/CLEANROOM.md`, §3.6 and
@@ -41,7 +41,7 @@ versioned (below).
 ## Versioned host interface: the kernel checks it at load
 
 The microkernel reports its interface version so the kernel can refuse a
-mismatch at load. SGXMKIF already carries two such checks, which ours honours:
+mismatch at load. SGXMKIF already carries two such checks, which ours honors:
 
 - **`ui32ClientBuildOptions`** — the kernel compares it with its own
   `ui32KMBuildOptions` (srvinit passes `0x60218`); a mismatch is logged.
@@ -51,7 +51,7 @@ mismatch at load. SGXMKIF already carries two such checks, which ours honours:
 
 For ours we add one field of our own to the version surface: a small
 **`open microkernel version`** word, written into a fixed control-block slot
-at init and bumped whenever our host-visible behaviour changes. `init` writes
+at init and bumped whenever our host-visible behavior changes. `init` writes
 `0x00010000` (1.0) to control-block `+0x58`; it is advisory on the DDK driver
 (which does not read it) and lets a kernel that knows the open microkernel log exactly which
 build is running. The authoritative compatibility gate stays the SGXMKIF

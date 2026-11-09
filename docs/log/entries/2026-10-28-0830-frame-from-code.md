@@ -37,7 +37,7 @@ can be read by the same decoders as a blob capture.
 ## What still went wrong on the GPU
 
 **1. A missing vertex epilogue.** The first generated frame locked up the TA.
-A finalised vertex program has a third phase that the previous one's
+A finalized vertex program has a third phase that the previous one's
 `phas.i` points to:
 
     phas.i #0, #0 [wait=7]
@@ -72,7 +72,7 @@ layout those addresses held something else.
 on its own in the probe. The prediction composes those images in the case's
 priority order. Every case: **0 pixels differ**.
 
-![reference (left) and new vertices + colours (right), drawn by tools/gen/frame](../img/2026-10-28-0830-frame-from-code-1.png)
+![reference (left) and new vertices + colors (right), drawn by tools/gen/frame](../img/2026-10-28-0830-frame-from-code-1.png)
 
 Top row:
 

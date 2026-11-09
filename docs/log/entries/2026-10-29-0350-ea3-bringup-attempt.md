@@ -3,7 +3,7 @@
 First hardware test of the open microkernel, on the shared EA3 (slot
 agreed with the DSP, both b53 and the SGX replayer sessions; Bench recovery
 pre-cleared). `srvinit -o /lib/.../ukernel.bin` on a clean boot, GPU not yet
-initialised.
+initialized.
 
 ## What worked
 

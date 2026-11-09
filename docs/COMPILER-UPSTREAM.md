@@ -109,19 +109,19 @@ checks", so it's indicative, not exhaustive.)
   it does with our depth is a guess until a hardware test.
 - `pck.f32.f16`: the conversion is hwt_p4. No A/B shader takes this path.
 
-### 2.2 Conventions and behaviour: the DDK as an oracle
+### 2.2 Conventions and behavior: the DDK as an oracle
 
 What to emit for each GLSL feature (iteration layout, discard, sample
 blocks, C10 for lowp, F16 for mediump, rounding choices) comes from the DDK
-used as a **behavioural oracle**. That covers the USPs its compiler produces for
+used as a **behavioral oracle**. That covers the USPs its compiler produces for
 one-feature shaders (`gen*.py` corpora), and pixel A/B on the same draws. §3.6
 allows this: the DDK is an oracle, and nothing is translated from it.
 
-Comments in the compiler name libusc and the DDK as the behaviour being
+Comments in the compiler name libusc and the DDK as the behavior being
 matched ("as libusc fuses a mediump a*b+c"), with ISA.md references. One
 comment cited a libusc function address (`FUN_00029ff0`). It's removed, and no
 `FUN_` address is left in `mesa/`. For upstream, these comments should cite the
-docs/ section and the hardware test that fixed the behaviour, not libusc.
+docs/ section and the hardware test that fixed the behavior, not libusc.
 Reviewers will read "as libusc does" as "copied from libusc", even though it
 means "matched against it".
 
@@ -172,8 +172,8 @@ which is what makes the A/B harness possible. An upstream driver doesn't need it
   gallium driver answers with st's `driver_location` for attributes. Still in
   the compiler: the varying-set allocation and first-use sampler order (the
   compiler's defaults, which match glslcompiler), and the n_pa count of the
-  DDK driver's placeholder colour iteration.
-- **The list A dummy colour iteration** is USP-only (written by
+  DDK driver's placeholder color iteration.
+- **The list A dummy color iteration** is USP-only (written by
   `tools/usc/sgx_usp.c`).
 - **Ours, and staying:** the driver-only constant kinds 0x10 (F16 of a C10
   value) and 0x11 (literals) are our own interface, not the DDK's. Express them
@@ -191,7 +191,7 @@ USSE.
 Size and fit:
 
 - 174 forms (42 used), 1611 field instances, 520 operand slots.
-- **60 fields are split** across non-adjacent bits: the sop2/sop3 colour and
+- **60 fields are split** across non-adjacent bits: the sop2/sop3 color and
   alpha selects, sopwm's write mask (`h12,h13,h14,h11`), fmad16's swizzles
   (`h13,h18`), the movc and ima8 condition bits. isaspec fields are contiguous
   ranges. A split field becomes one `<field>` per range, an `<encode><map>`

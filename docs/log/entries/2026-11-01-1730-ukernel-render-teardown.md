@@ -13,7 +13,7 @@ three generated frames (320×240, 720×480, 1024×768). The TA/3D register match
 The render has drained, so the handler:
 
 - **clears the destination sync objects.** The render details hold the render's
-  `SGXMKIF_HWDEVICE_SYNC_LIST` destinations at words 0x34 and 0x90 (a colour
+  `SGXMKIF_HWDEVICE_SYNC_LIST` destinations at words 0x34 and 0x90 (a color
   and a depth target for a one-context frame); each one's ops-pending word is
   zeroed. These are the two sync-heap writes the `[done]` check was missing.
 - **frees the render slot and RT.** render-details state (+0x2a4) → freed (2),

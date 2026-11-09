@@ -10,7 +10,7 @@ SysFinalised yet, so srvinit -o gets a COLD GPU regardless of the display stack.
 ## Cold GPU — WORKS
 
 `srvinit -o uk-timer.bin` → **"SGX545 microkernel started"** (not 129). First frame
-renders, colour buffer md5 **56f8466a** (the triangle). So the open microkernel runs
+renders, color buffer md5 **56f8466a** (the triangle). So the open microkernel runs
 on the EA1, and the S50 early-boot RAM-boot recipe is a reusable cold-GPU rig for it.
 
 ## Complete fix (EVENT_TIMER + timer-end + k_power): 5/10, HWRs persist

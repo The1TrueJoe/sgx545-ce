@@ -24,7 +24,7 @@ What was wrong, roughly in the order the runs exposed it:
   couldn't be encoded under format select and are now copied first.
 - **Values that never reached their register.** An `f2f32` view and a texture's unpack both
   left their result in a place of their own while NIR said the register had been written.
-  Colours went out as raw F16 bits or stale data.
+  Colors went out as raw F16 bits or stale data.
 - **F16 constants converted twice.** `f32_to_h` read an F16 constant's bits as an f32.
 
 Two methods did most of the work. First, `sgxc -L -D -F` compiles what the driver compiles; it

@@ -61,9 +61,9 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
   instructions at the start of the vertex-shader heap; the fragment program
   shares its first instructions.
 - **Clear** is a background object: three screen-space vertices (0,0) (1440,0)
-  (0,960) at z=1.0, 16 bytes each (x, y, z, colour ARGB8888), drawn as one
+  (0,960) at z=1.0, 16 bytes each (x, y, z, color ARGB8888), drawn as one
   oversized triangle (coordinates look like half-pixel units). Changing
-  `glClearColor` only changes those three colour words.
+  `glClearColor` only changes those three color words.
 - **Vertex data** from a client array is copied into a general-heap vertex
   buffer (`0x3e51d000` here) right after the clear object's vertices; a second
   draw appends another copy.
@@ -174,13 +174,13 @@ pokes overrides after the snapshot loads and again before each kick
     mkreplay.py ref.bin out --verts=-0.8,-0.6,0.2,-0.8,-0.3,0.7 --clear 0.25,0,0,1 \
         --color 1,0.5,0,1 --usse '0x37008388:pck.u8.f32 o0.f8.f9, c52, c48 [f1.0 f2.8 h12]; ...'
 
-- **Authored vertices and colours, pixel-exact.** The triangle's floats go at
-  vertex buffer +0x30, the clear colour (ARGB8888) at +0x0c/+0x1c/+0x2c, and
+- **Authored vertices and colors, pixel-exact.** The triangle's floats go at
+  vertex buffer +0x30, the clear color (ARGB8888) at +0x0c/+0x1c/+0x2c, and
   `c` as FP16 pairs at `0x2e006184`/`0x2e006188`. The back buffer matches a
   probe run with the same PROBE_VERTS/PROBE_CLEAR/PROBE_COLOR: 0 of 345600
-  pixels differ. The three clear-vertex colour words are the only clear state,
+  pixels differ. The three clear-vertex color words are the only clear state,
   and the uniform copy in the PDS pixel data is the only one the frame reads.
-- **The probe's fragment shader, as the driver finalised it** (pixel-shader
+- **The probe's fragment shader, as the driver finalized it** (pixel-shader
   heap, buffer `0x37008000`):
   - secondary program at `0x37008300`: header word `fa440700 00000000`,
     `op0xf1`, `and.test`, `ld pa0 <- [#0]`, `wdf`, then
@@ -188,16 +188,16 @@ pokes overrides after the snapshot loads and again before each kick
     (the FP16 `c` packed to 8 bits per channel);
   - main program at `0x37008380`: the same header word, then `mov o0, sa9`.
     The secondary program's `pa9` is the main program's `sa9`, and `o0` is the
-    pixel colour.
+    pixel color.
   - The rest of the buffer and the small heap-4 allocations are the driver's
     own programs (clears, byte-mask variants); they don't take part in this draw.
 - **f1.17 (h18) ends a program.** It is set on the last instruction of every
-  finalised program. A program can grow into the free space after it (the
+  finalized program. A program can grow into the free space after it (the
   secondary program grew from 6 to 7 instructions) with no other change.
 - **Pack byte order (confirmed on hardware):** destination flags f7-f10 are
   bytes 0-3 of the BGRA8888 pixel, so f7 = B, f8 = G, f9 = R, f10 = A. In each
   pack, src1 goes to the lower selected byte and src2 to the higher one.
-- **Constant colour, no uniform.** Replacing the main program with
+- **Constant color, no uniform.** Replacing the main program with
   `pck.u8.f32 o0.f8.f9, c52, c48` + `pck.u8.f32 o0.f7.f10, c52, c52 [f1.17]`
   draws (0,255,255,255). That confirms c52 = 1.0 and c48 = 0.0 as f32
   hardware constants, and that `o0` takes a direct pack.
@@ -218,7 +218,7 @@ program (0x37008388, after its `phas.i` word) is replaced by a test program
 that loads inputs with `limm`, runs the instruction under test and ends with
 `mov o0, rN [end]`. The PBE stores o0 unchanged in the BGRA8888 back buffer, so
 a pixel inside the triangle *is* rN, bit for bit; the replay dumps one row of
-32 pixels (all must agree) and the background pixel (the clear colour, to
+32 pixels (all must agree) and the background pixel (the clear color, to
 catch a program that didn't run).
 
     S=<scratchpad>; CAP=<dir with ref.bin> REPLAY=<static replay> EA3SH=<ssh helper> \
@@ -250,7 +250,7 @@ logs in `isa/hwt_out/`. The ones a compiler would otherwise get wrong:
 - fadm = (a + b) * c, fmsa = a*a + b*c; fminmax = min(max(a, b), c),
   fmaxmin = max(min(a, c), b);
 - movc's u8/i16/c10 types select per byte / half / channel (signed);
-- `setfc`'s second argument is the colour-class C10 enable, on at task start.
+- `setfc`'s second argument is the color-class C10 enable, on at task start.
 
 Second round (hwt_p7-p11), after the first write-up:
 - **Assembler bug found and fixed:** without `[fmt]`, `asm.py` silently
@@ -310,7 +310,7 @@ See `state/STATE.md`. In short:
   them. Draws are 6 words (index list + vertex program); the stream ends
   with a terminate.
 - **The TA state block** is a header bitmask, then ISPA (depth compare
-  b22-24, write-off b20, pass type b25-27, sref), ISPB (colour mask,
+  b22-24, write-off b20, pass type b25-27, sref), ISPB (color mask,
   line width, depth bias), ISPC (stencil), a PDS triple, an optional
   region clip, the viewport (6 floats), the output select, the W clamp,
   MTE control (cull b0-1) and the TSP words.
@@ -337,7 +337,7 @@ See `state/STATE.md`. In short:
 See `gen/GEN.md`. `tools/gen/frame` builds every buffer of a frame from
 GL-level parameters with the formulas in STATE.md, PDS.md and ISA.md, and
 nothing from a capture. It draws the reference triangle bit for bit (md5
-`56f8466a…`). Ten variations (vertices and colours, two draws, depth
+`56f8466a…`). Ten variations (vertices and colors, two draws, depth
 LESS/GREATER/no-write, a viewport, 128×48 and 320×200 surfaces) match the
 blob's own rendering with 0 pixels different.
 

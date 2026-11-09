@@ -186,7 +186,7 @@ transfer. All 74 match for every transfer in every capture (uploads 12×6,
 
 ## 4. Render to texture [C]
 
-`fbrgba8888`: a 128×64 RGBA8888 texture as an FBO's colour attachment, the
+`fbrgba8888`: a 128×64 RGBA8888 texture as an FBO's color attachment, the
 probe triangle drawn into it, then a window quad sampling it. The DDK makes
 it five TA kicks on the **one** HW render context, with **two** render
 targets, each with its own RT data, render details and region-header pair
@@ -212,7 +212,7 @@ The FBO's end-of-tile program writes the texture directly:
 - the window samples it as an ordinary texture: T0 `07fe0090` (clamp,
   nearest), T1 `0d07f03f` (RGBA8888, layout 0, 128×64), T2 0xf0001000.
 
-The other colour formats (`fbrgb565`, `fbrgba4444`, `fbrgba5551`, same
+The other color formats (`fbrgb565`, `fbrgba4444`, `fbrgba5551`, same
 scene) differ only in the PBE format code and the sampled T1 format; all are
 written twiddled with dither:
 
@@ -226,8 +226,8 @@ written twiddled with dither:
 **Replayed natively on a CE5300 board:** the replay's own FBO render (the texture
 kept out of every delta, `--no-delta`) leaves the texture byte-identical to
 the DDK's, and the window frame and its swap to the fb0 wrap match the DDK's
-readback, 0 of 345600 pixels. **Authored:** with the FBO's clear colour
-changed (the three background-vertex colour words at 0x3e51d00c/1c/2c) to
+readback, 0 of 345600 pixels. **Authored:** with the FBO's clear color
+changed (the three background-vertex color words at 0x3e51d00c/1c/2c) to
 green, the frame is 0 of 345600 pixels off the prediction (the DDK's readback
 with its 170094 FBO-clear pixels turned green).
 
@@ -334,7 +334,7 @@ runs on the re-entry render, with the store on:
 | + b13 or + b15 | no visible change |
 | + b19 | the stored depths are negated (`bf400000`): a format bit |
 | + b0 or + b1, stencil words left at the DDK's `c1b00000` | **3D lockup**; once the recovery failed (`SGXInitialise failed (24)`) and the board had to be power-cycled |
-| + b0 (`0x0017501d`), stencil words +0x38/+0x3c = `00081000` (valid memory) | no lockup; a **depth-only render**: the re-entry triangle's depth is stored (0.75 in 3306 texels) but no colour is written. Still no load |
+| + b0 (`0x0017501d`), stencil words +0x38/+0x3c = `00081000` (valid memory) | no lockup; a **depth-only render**: the re-entry triangle's depth is stored (0.75 in 3306 texels) but no color is written. Still no load |
 
 The packed depth-stencil FBO (`fbds`, DEPTH24_STENCIL8) gets ZLS control
 `0x162018` (b13 and b17 on top of the depth-only word) and its stencil
@@ -479,7 +479,7 @@ DDK writes for its two transfer contexts in the p64 capture; all match.
 | pixel PDS | PDS pixel (6), 0xd, 0x400 (the background pixel program) |
 
 The context buffer is `{1, 0, PD (kernel), CCB, CCB control, 0 ...}` with the
-PID at word 0x2a; the DDK leaves the rest uninitialised. Register it with PD
+PID at word 0x2a; the DDK leaves the rest uninitialized. Register it with PD
 offset 8. Per blit, the client:
 1. writes the 0x1c0-byte command at the CCB write offset:
    - words 0-15;

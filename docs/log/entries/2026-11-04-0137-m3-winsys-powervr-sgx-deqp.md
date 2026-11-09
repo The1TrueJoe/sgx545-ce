@@ -8,7 +8,7 @@ bf0cd9c.
 
 `mesa/src/gallium/winsys/sgx545/drm/` used to build every structure the microkernel reads
 and talk to pvrsrvkm through libpvr. It is now one frame recorder (`sgx545_frame.c`: rings,
-PDS programs, USSE finalising, TA state, VDM) over a kernel backend, `struct sgxws_kif`:
+PDS programs, USSE finalizing, TA state, VDM) over a kernel backend, `struct sgxws_kif`:
 
 - `sgx545_powervr_sgx.c`, over the powervr_sgx uAPI:
   - GEM objects mapped at client-chosen addresses in the heaps from `HEAP_INFO`;

@@ -28,7 +28,7 @@ lockup_ta: no
 So the earlier "idle VDM" reading was wrong: the TA **ran and finished** (the HW
 raised ta_finish, 0x2000), and `ta_finished` dispatched and ran. The break was
 that **the ta_finish event was never acknowledged**, so it re-triggered the
-event program forever — monopolising it so kick 2's host-kick was never
+event program forever — monopolizing it so kick 2's host-kick was never
 processed, `do_3d` was never reached, the render sat in flight, and the "0x2
 tasks" watchdog stormed. PB-pages-in-use (0) was a red herring: the DDK writes
 `pb+0x14 = 0` at TA finish too (`ddk-ref-frame-registers.txt` line 193).

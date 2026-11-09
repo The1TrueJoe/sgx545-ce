@@ -1,8 +1,8 @@
-# The Mesa driver samples textures, blends, and masks colour
+# The Mesa driver samples textures, blends, and masks color
 
 The driver of the previous entry drew untextured, opaque geometry. gl4es and
 Minecraft need three more things before anything of theirs can draw:
-textures, blending and colour masks. All three are now on the EA3, each
+textures, blending and color masks. All three are now on the EA3, each
 checked against the DDK drawing the same scene with `glReadPixels`:
 
 | feature | cases | against the DDK | commit |
@@ -10,7 +10,7 @@ checked against the DDK drawing the same scene with `glReadPixels`:
 | textures | 16×16 nearest and linear, 64×64, 12×6 NPOT with clamp, L8, LA88, RGB565 | 7 of 7 byte-identical | `5204d75` |
 | blending | every ES 2.0 factor except the constant ones; ADD, SUBTRACT, REVERSE_SUBTRACT | 10 of 10 byte-identical | `23ea4c1` |
 | MIN, MAX (EXT_blend_minmax) | 2 | GL-correct; the DDK rejects them (INVALID_ENUM) | `23ea4c1` |
-| colour masks | R, B, G or A off, all off, and two under a blend | 7 of 7 byte-identical | `353102e` |
+| color masks | R, B, G or A off, all off, and two under a blend | 7 of 7 byte-identical | `353102e` |
 
 The i386 build (`mesa/build.sh i386`, for the Minecraft runtime's Debian
 bookworm userspace) runs too. The DDK's own i386 probe-st, with our
@@ -19,9 +19,9 @@ through the kernel's 32-bit compat path.
 
 ![textures, DDK (top) and ours (bottom): 16×16, 12×6 NPOT, L8, RGB565](../img/2026-10-28-1100-mesa-textures-blend-1.png)
 
-![blending, DDK (top) and ours (bottom): alpha, add, dst colour, dst alpha, subtract, reverse subtract](../img/2026-10-28-1100-mesa-textures-blend-2.png)
+![blending, DDK (top) and ours (bottom): alpha, add, dst color, dst alpha, subtract, reverse subtract](../img/2026-10-28-1100-mesa-textures-blend-2.png)
 
-![colour masks, DDK (top) and ours (bottom): G off, R off, B off, A off, G off under alpha blending](../img/2026-10-28-1100-mesa-textures-blend-3.png)
+![color masks, DDK (top) and ours (bottom): G off, R off, B off, A off, G off under alpha blending](../img/2026-10-28-1100-mesa-textures-blend-3.png)
 
 ## Textures
 
@@ -46,11 +46,11 @@ through the kernel's 32-bit compat path.
   The driver parses those names as the compiler does, so both stages agree
   on each set.
 
-## Blending and colour masks are a few more instructions
+## Blending and color masks are a few more instructions
 
 The SGX545 has no blender (`docs/STATE.md`). The DDK appends code to the
 fragment shader, and sets the ISPA pass type to translucent so that o0
-starts as the tile's colour. A capture of probe-st with
+starts as the tile's color. A capture of probe-st with
 SRC_ALPHA/ONE_MINUS_SRC_ALPHA differs from the opaque one in exactly two
 places:
 
@@ -64,13 +64,13 @@ mov  pa0, sa9                [skipinv mask=1]
 sop2 o0, pa0, o0             [skipinv end c1=s1a c2=1-s1a cop=add a1=s1a a2=1-s1a aop=add]
 ```
 
-sop2's colour and alpha halves each take a selector per source: zero, s1,
+sop2's color and alpha halves each take a selector per source: zero, s1,
 s2, s1a, s2a, asat, plus a complement bit. That covers every GL factor except
-the constant colour, two selectors (k18/k19) not decoded yet. The driver:
+the constant color, two selectors (k18/k19) not decoded yet. The driver:
 
-1. maps each factor to a selector, with s1 as the shader's colour and s2 as
+1. maps each factor to a selector, with s1 as the shader's color and s2 as
    the tile's;
-2. maps DST_ALPHA to one when the colour buffer has no alpha;
+2. maps DST_ALPHA to one when the color buffer has no alpha;
 3. builds the sop2 for the blend state;
 4. uploads one program per shader and blend state, on first use.
 
@@ -79,7 +79,7 @@ selectors. An encoder in C writes the words, and every one of the 83,072
 selector, op, source-order and mask combinations it can produce matches
 `tools/isa`'s assembler.
 
-A colour mask is ISPB's mask plus one more instruction,
+A color mask is ISPB's mask plus one more instruction,
 `sopwm o0, pa0, pa0 [end mask=m]`, with a bit per byte of the packed BGRA8.
 The first try set only ISPB, and every masked channel was written anyway.
 Under a blend, the DDK's sop2 writes `r0` without `end`, and the sopwm still

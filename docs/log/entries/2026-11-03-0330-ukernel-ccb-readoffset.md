@@ -52,5 +52,5 @@ register oracle is unaffected).
 Not committed yet — verifying on the next EA1 slot with the counter sentinel
 (expect count 2 / flag 0 => kick 2 reads 0x62; then the terminate TA finishes,
 ta_finished sees READY, do_3d runs, the triangle renders — or the next layer, e.g.
-kick 1/kick 2 TA overlap if the two do_ta calls aren't serialised). Evidence:
+kick 1/kick 2 TA overlap if the two do_ta calls aren't serialized). Evidence:
 `data/2026-11-03-0325-ea1-counter-kick2-rereads-kick1.dmesg.log`.

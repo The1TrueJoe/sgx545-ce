@@ -341,7 +341,7 @@ with the context dirty bits in parentheses:
 | 11 | two-sided stencil: set in both the front and the back group's ISPA | capture (`stencil2`, 2026-11-02) |
 | 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord); see "Lines and points" | C (1, 4) |
 | 20 | depth write disable | D |
-| 21 | no colour write: colour mask 0, or a blend that keeps the destination (ZERO, ONE) | D |
+| 21 | no color write: color mask 0, or a blend that keeps the destination (ZERO, ONE) | D |
 | 22-24 | depth compare, `GL enum - 0x200`: never, less, equal, lequal, greater, notequal, gequal, always. Depth test off, or no depth buffer, gives always + no write (`0x01d00000`) | C (greater) |
 | 25-27 | pass type: 0 opaque, 1 translucent (any glBlendFunc; `b1`/`b2`/`b3` captures), 2 translucent + discard, **3 viewport/scissor generate** (`viewport`/`scissor` captures), 4 punch-through (discard/alpha test), 5 depth-only (stencil/discard special case) | D |
 
@@ -349,7 +349,7 @@ with the context dirty bits in parentheses:
 
 | bits | field | tag |
 |---|---|---|
-| 4-7 | colour write mask: R = 8, G = 4, B = 2, A = 1 | D |
+| 4-7 | color write mask: R = 8, G = 4, B = 2, A = 1 | D |
 | 8-15 | line width × 16 (1.0 → 0x10, 9.5 → 0x98); points keep 0x10, their size is a vertex output | C |
 | 23 | depth bias (POLYGON_OFFSET_FILL) | D |
 
@@ -399,7 +399,7 @@ reference (`cstencil`).
 
     | varyings | word 1 | units | b18-24 | b25-28 |
     |---|---|---|---|---|
-    | 0 (uniform colour) | `160f0001` | 1 | 3 | 0xb |
+    | 0 (uniform color) | `160f0001` | 1 | 3 | 0xb |
     | 1, 2 mediump (or lowp) | `18030001` | 1 | 0 | 12 |
     | 3, 4 mediump | `0c030002` | 2 | 0 | 6 |
     | 5 mediump | `08030003` | 3 | 0 | 4 |
@@ -409,20 +409,20 @@ reference (`cstencil`).
     so units = ceil(attribute dwords / 4). [D, captures]. Gap: the rule with
     both secondaries and more than one unit.
 
-### The DDK's fragment programs for a flat colour and one sample
+### The DDK's fragment programs for a flat color and one sample
 
 From the DDK running `sgx_perfmicro` (a 2026-11-08 capture; 720x480, eight
 full-screen quads a frame):
 
-**Flat colour with blending** (`gl_FragColor = color`, a mediump vec4
+**Flat color with blending** (`gl_FragColor = color`, a mediump vec4
 uniform; SRC_ALPHA, ONE_MINUS_SRC_ALPHA).
-- **Per draw: the secondary program packs the colour once.** The PDS
+- **Per draw: the secondary program packs the color once.** The PDS
   secondary DMAs 11 dwords of uniforms and runs it:
 
       pck.u8.f16 pa9, pa9.l2, pa9  [skipinv dmask=6 scale]
       pck.u8.f16 pa9, pa10, pa10.l2  [skipinv end dmask=9 scale]
 
-  This leaves the colour as one packed U8 dword in sa9.
+  This leaves the color as one packed U8 dword in sa9.
 - **Per pixel: two instructions, 0 temporaries:**
 
       phas.i #0, #0 [wait=7]
@@ -450,7 +450,7 @@ uniform; SRC_ALPHA, ONE_MINUS_SRC_ALPHA).
   `01d00200`.
 
 So for these two cases the DDK does no per-pixel format conversion. The
-colour is packed per draw, and the texel stays in the U8 format the sampler
+color is packed per draw, and the texel stays in the U8 format the sampler
 delivers. [D, capture]
 
 ### Viewport (6 floats)
@@ -480,8 +480,8 @@ z scale.
 - **Output select:** `(vertex output dwords)<<16 | 0x3000`, with `| 0x100`
   when the shader writes the point size.
   - 4 dwords are the position. Each texcoord set adds its size.
-  - The clear's own value is `0x00081800` (8 dwords: position and colour).
-    Its texcoord-size word is 5 (one 4-component set: the colour) and its
+  - The clear's own value is `0x00081800` (8 dwords: position and color).
+    Its texcoord-size word is 5 (one 4-component set: the color) and its
     MTE control 0x40.
   - Status: D.
 - **The clear's vertex program** (the DDK's built-in, `0x3c008080` in the
@@ -497,8 +497,8 @@ z scale.
       emit.t3 r0, #0, #0 [end f12 f10]
       phas.i #0, #0 [wait=7]; emit.t1 r0, #0, #0 [end f12 f10 f3_20]
 
-  So the vertex stream is x, y, z (floats) and the colour as one ARGB8888
-  word, and the outputs are position (4) then colour as 4 floats in 0-1
+  So the vertex stream is x, y, z (floats) and the color as one ARGB8888
+  word, and the outputs are position (4) then color as 4 floats in 0-1
   [D, capture].
 - **TSP word 0:** 3 bits per texcoord set: 1, 2, 3 components, or 5 for 4
   components [D].
@@ -509,14 +509,14 @@ z scale.
   - The output select is `(4 + 4n)<<16 | 0x3000` whatever the precision: the
     vertex outputs stay 32-bit. [D, captures]
 
-### Blending and the colour mask are shader code
+### Blending and the color mask are shader code
 
 - **The SGX545 has no fixed-function blender.**
   - glBlendFunc and glBlendEquation only change ctx+0xf8/+0xfc. Those feed
     the fragment-shader variant, which gets blend code appended. They also
     set ISPA's pass type (translucent) and b21.
-  - The clear colour and glBlendColor go into the variant's constants.
-- **The colour mask is both shader code and ISPB.** It is ISPB b4-7, plus a
+  - The clear color and glBlendColor go into the variant's constants.
+- **The color mask is both shader code and ISPB.** It is ISPB b4-7, plus a
   masked `0x90b00601 | mask<<11` move appended to the shader
   (libGLESv2 `FUN_000459.. `, 0x35b00), plus ISPA b21 when the mask is 0.
 
@@ -526,27 +526,27 @@ setting a state word.
 - **The captures agree.** `b1` (SRC_ALPHA, 1-SRC_ALPHA), `b2` (ONE, ONE)
   and `b3` (+ FUNC_SUBTRACT) differ from the base only in ISPA pass type
   0 → 1, plus the fragment shader.
-- **Colour mask 1 0 1 1** gives ISPB mask 0xb and a different clear shader.
-- **Colour mask 0** sets ISPA b21 and ISPB mask 0. The clear turns into a
+- **Color mask 1 0 1 1** gives ISPB mask 0xb and a different clear shader.
+- **Color mask 0** sets ISPA b21 and ISPB mask 0. The clear turns into a
   full-screen object that samples the previous buffer instead (a masked
   clear changes nothing).
 
 **Decoded on a CE5300 board** (`b1`, `cm1`-`cm3` captures of probe-st; the Mesa
 driver draws them the same way, byte-identical to the DDK):
 
-- **The blend** is one `sop2` after the colour:
+- **The blend** is one `sop2` after the color:
   `sop2 o0, pa0, o0 [skipinv end c1=s1a c2=1-s1a cop=add a1=s1a a2=1-s1a aop=add]`
-  for SRC_ALPHA, ONE_MINUS_SRC_ALPHA. s1 is the shader's colour, s2 the
-  tile's (o0 starts as the tile's colour in a translucent pass). GL's
+  for SRC_ALPHA, ONE_MINUS_SRC_ALPHA. s1 is the shader's color, s2 the
+  tile's (o0 starts as the tile's color in a translucent pass). GL's
   factors are sop2's selectors: zero, s1, s2, s1a, s2a, asat, each with a
   complement (1-zero = one). Alpha has its own selectors and op, so
   separate blend functions and equations cost nothing.
 - **Reverse subtract** works by trading the sources (`sop2 o0, o0, pa0`)
   and renaming the selectors. The DDK has no EXT_blend_minmax: GL_MIN/MAX
   raise INVALID_ENUM there. sop2's min and max ops do them.
-- **The colour mask** is
+- **The color mask** is
   `sopwm o0, pa0, pa0 [skipinv end mask=m c1=zero c2=zero cop=max aop=max]`
-  after the colour, with m one bit per byte of the packed BGRA8 (B b0, G b1,
+  after the color, with m one bit per byte of the packed BGRA8 (B b0, G b1,
   R b2, A b3). It comes with ISPB's mask, and ISPA stays opaque.
 - **Blend and mask together.** The DDK's sop2 loses `end` and writes `r0`,
   then the sopwm reads pa0. One more word changes, 0x2e018020 in `cm2`
@@ -569,9 +569,9 @@ multiplies each side out with sopwm and adds the halves:
     sopwm r0, pa<c>, X   [mask=8 c1=Fsa c2=zero]   src.a * Fsa
     sop2  o0, r0, r1     [end c1=one c2=one cop=add a1=one a2=one aop=add]
 
-- X and Y are whichever of the colour, the tile (o0) or the constant the
+- X and Y are whichever of the color, the tile (o0) or the constant the
   factor reads.
-- **The constant is the blend colour, packed BGRA8 like the colour, in a
+- **The constant is the blend color, packed BGRA8 like the color, in a
   fragment secondary attribute.** The DDK puts it in sa2 of its 11-dword
   constant DMA: glBlendColor(0.25, 0.5, 0.75, 0.375) = `604080bf` [D].
 - Products round to nearest: 204 × 64/255 = 51.2 gives 51 (`k1`) [D].
@@ -590,14 +590,14 @@ multiplies each side out with sopwm and adds the halves:
 **k18/k19 are not a constant.** In `kb0` (ONE, ZERO) the sop2 was turned
 into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery):
 
-- k19 reads 0 in colour and alpha.
+- k19 reads 0 in color and alpha.
 - k18 as c1 reads a different value per 4×4 block, zero in R and G. The
-  values step by the shader colour's own factor (102, 82, 66, 53 … =
+  values step by the shader color's own factor (102, 82, 66, 53 … =
   102 × (204/255)^n): state left behind by earlier tasks, not a register
   the program sets.
 - k18 in a1 gave alpha 255.
 
-So neither can carry a blend colour. The sopwm form above is what to use.
+So neither can carry a blend color. The sopwm form above is what to use.
 
 ### Alpha test (ES1)
 
@@ -629,7 +629,7 @@ with ISPA pass type 1 (`03d00200`). `tools/state/sgxstate.h` has
 **The instruction.** atst8 fields:
 
 - dst l21-27, bank h0-1 (0 r, 1 o, 2 pa);
-- colour source l14-20, bank h2 (0 r, 1 pa);
+- color source l14-20, bank h2 (0 r, 1 pa);
 - the two sa operands l7-13 and l0-6 (bank l28-31 = 0xf);
 - end h18;
 - h6 = write p0 (`p0` instead of `p0.nw`);
@@ -651,7 +651,7 @@ driver's discard) works exactly like the DDK's 1 [C, a5].
   writes p0, no end), then the blend predicated on it:
   `(p0) sop2 o0, r0, o0 [end ...]`.
 - **GL_NEVER** (`e1nev`): no atst8. The draw gets ISPA `01f00200` (b20 and
-  b21: no depth, no colour writes).
+  b21: no depth, no color writes).
 - ES1 points and lines draw as in "Lines and points" (`e1pt`, `e1spr`,
   `e1ln`).
 
@@ -673,13 +673,13 @@ program runs):
 | reset | `07e00100` | `00000000` (b25-27 = 0) | the target, or the old rectangle's tiles | triangle (0,0) (2w,0) (0,2h), VDM prim 0 |
 | set | `07e00100` | `02000000` (b25-27 = 1) | the rectangle's tiles | 4-vertex strip TL TR BL BR, VDM prim 3 |
 
-- ISPA `07e00100`: pass type 3, b21 no colour write, depth always with
+- ISPA `07e00100`: pass type 3, b21 no color write, depth always with
   write, ISPC follows [D].
 - ISPC b25-27: 0 resets the bit under the object, 1 sets it [C, q1 q4].
 - The vertices are 2 dwords (x, y). The vertex program is
   `mov o0, pa0 [rpt=2]; mov o2, c3; mov o3, c3` (z = w = 1.0), output
   select `0x00040000`, MTE `0x40` [D]. The words are in `sgxstate.h`.
-- Pixel centres inside the strip get the bit: moving its left edge from
+- Pixel centers inside the strip get the bit: moving its left edge from
   x 100 to 150 moved the scissor's edge [C, q2].
 - The set object only reaches its region clip's tiles [C, q3].
 - **Region clip words:** `0x80000000 | x0/32 << 16 | (x1-1)/32`,
@@ -694,7 +694,7 @@ program runs):
 
 1. A render that doesn't start with a full-target clear starts with a
    **load object**: a full-target triangle (0,0) (1440,0) (0,960), x y z u v
-   per vertex, sampling the colour buffer's previous contents (T0
+   per vertex, sampling the color buffer's previous contents (T0
    `00b60e90`, T1 `cc2cf1df`: layout 6, format 0xc). It comes with
    `PROBE_NOCLEAR` and no scissor too (`nc0`), so it is the render's "load",
    not part of the scissor. With a scissor it is what keeps the pixels
@@ -702,7 +702,7 @@ program runs):
 2. Scissor (or a viewport) smaller than the target: **reset** over the whole
    target, **set** over the rectangle.
 3. glClear inside a scissor is a strip over the rectangle (4 vertices, x y z
-   colour) with the rectangle's region clip.
+   color) with the rectangle's region clip.
 4. Draws: unchanged (own viewport transform, no group 0x80) after a clear
    or a set object. With no clear in the render, the draw itself carries
    the region clip (header `dfc3`, `sc4`).
@@ -773,8 +773,8 @@ largest point size [D; no draw of ours has run this yet].
   of the size (TSP words 2 and 1). The vertex program doesn't write it
   (o4-o5 stay unwritten), so output select counts 4 + 2 + 1 = 7 [D].
 - The ES1 driver adds that set only for a sprite. `e1pt` has none (output
-  select 9 = position 4 + colour 4 + size 1). `e1spr` puts it after the
-  vertex colour (11, TSP word `0x15`) [D]. So it is only needed when
+  select 9 = position 4 + color 4 + size 1). `e1spr` puts it after the
+  vertex color (11, TSP word `0x15`) [D]. So it is only needed when
   gl_PointCoord is read.
 - The coordinate set comes first, as tc0. A shader's own varyings follow it
   (a varying vec2 is iterated as tc1), and the size comes last: `ptvar` /
@@ -784,7 +784,7 @@ largest point size [D; no draw of ours has run this yet].
   b24) [D]. The values are `(i + 0.5) / size` across the point, origin top
   left. As `round(255 × value)` this predicts the DDK's 16-pixel sprites
   exactly, and resized ones at 8 and 32 [C, p2 p3].
-- A point's square is `[c - size/2, c + size/2)` around its centre [C].
+- A point's square is `[c - size/2, c + size/2)` around its center [C].
 - Without gl_PointSize written (`pt1`) the DDK draws nothing.
 
 ## 4. The render target
@@ -1196,7 +1196,7 @@ The words above as bit fields, for a packer (csbgen). Status:
 - **U**: unknown; pack the value given, or 0 where the column says so.
 
 Widths are only as wide as the evidence shows. "≤" marks an upper bound from
-the neighbouring fields, not a measured width. Observed values are from the
+the neighboring fields, not a measured width. Observed values are from the
 DDK captures on disk (36, `caps-ddk/` 2026-10-28 and 2026-11-08).
 
 ### VDM state-program words (§2)
@@ -1380,10 +1380,10 @@ Base captures and their bases:
 | pt1 / pt8 / pt16 | GL_POINTS without gl_PointSize / 8.0 / 16.0 | nothing / VDM prim 2, ISPA type 3, size output |
 | spr16 | 16-px points, gl_FragColor = gl_PointCoord | ISPA type 4, tc0 iteration |
 | ptattr | gl_PointSize from an attribute | fminmax clamp against 511 |
-| kb0 | glBlendFunc(ONE, ZERO), colour 0.8 0.6 0.4 0.5 | sop2 c1=one c2=zero |
-| k1-k5, k7, k8 | constant factors (src, dst, both), blend colour 0.25 0.5 0.75 0.375 | 4 sopwm + sop2, blend colour in sa2 |
-| k6 | k1 with blend colour 0.5 0.125 1 0.625 | sa2 only |
-| e1base | probe1 (GLES1): clear + a triangle with vertex colours, alpha 0 / 0.5 / 1 | base for the e1 rows |
+| kb0 | glBlendFunc(ONE, ZERO), color 0.8 0.6 0.4 0.5 | sop2 c1=one c2=zero |
+| k1-k5, k7, k8 | constant factors (src, dst, both), blend color 0.25 0.5 0.75 0.375 | 4 sopwm + sop2, blend color in sa2 |
+| k6 | k1 with blend color 0.5 0.125 1 0.625 | sa2 only |
+| e1base | probe1 (GLES1): clear + a triangle with vertex colors, alpha 0 / 0.5 / 1 | base for the e1 rows |
 | e1gt5 / e1lt5 / e1gt25 / e1ge5 | glAlphaFunc GREATER 0.5 / LESS 0.5 / GREATER 0.25 / GEQUAL 0.5 | ISPA pass type 1, atst8, sa1 |
 | e1nev / e1alw | NEVER / ALWAYS | no atst8: ISPA b20+b21 / the base |
 | e1tex / e1texat | an RGBA texture, GL_MODULATE / + alpha test | sop2 modulate into r0, atst8 from r0 |
@@ -1438,7 +1438,7 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 | p2 | sprite size | `spr16` sa10 → `5ffc4800` | 8-px sprites, gl_PointCoord (i+0.5)/8 | 0 differ |
 | p3 | sprite size | `spr16` sa10 → `5ffc5000` | 32-px sprites, (i+0.5)/32 | 0 differ |
 | p4 | ISPA object type | `spr16` ISPA `01d20200` → `01d18200` (type 3) | (discovery) | same squares, coordinate 0: type 4 generates it |
-| b0 | constant blend (control) | none (`k1`: CONSTANT_COLOR, ZERO; colour 0.8 0.6 0.4 0.5, blend colour 0.25 0.5 0.75 0.375) | identical | 0 differ |
+| b0 | constant blend (control) | none (`k1`: CONSTANT_COLOR, ZERO; color 0.8 0.6 0.4 0.5, blend color 0.25 0.5 0.75 0.375) | identical | 0 differ |
 | b2 | constant blend | k1's src-RGB sopwm `90807980` → `91807980` (c1 s2 → 1-s2, `0x370083a0`) | RGB of the DDK's `k2` frame, alpha of `k1` | 0 differ |
 | b3 | constant blend | the same word → `908079c0` (s2a) | the DDK's `k3` frame | 0 differ |
 | kk0 | k18/k19 (control) | none (`kb0`: ONE, ZERO) | identical | 0 differ |

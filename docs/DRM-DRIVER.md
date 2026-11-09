@@ -247,7 +247,7 @@ faults.
    in the kernel. While a VM maps the object, an upload may only write past the end of
    every earlier one (`-EBUSY` otherwise), so code the GPU may be running never
    changes; the new bytes were zeros, which decode as a harmless `fmad`. Once no VM
-   maps it, anywhere again. Uploads and `VM_MAP` serialise on the object's reservation
+   maps it, anywhere again. Uploads and `VM_MAP` serialize on the object's reservation
    lock.
 2. `VM_MAP` into a USSE heap accepts only code objects, and a code object maps only into
    a USSE heap (`pvrsgx_validate_vm_map`).
@@ -288,7 +288,7 @@ upload code through the ioctl instead of writing a mapped buffer: a change for M
 
 ## 7. Testing
 
-`drm/tests/powervr_sgx_test.c` has one subtest per uAPI behaviour, negatives included:
+`drm/tests/powervr_sgx_test.c` has one subtest per uAPI behavior, negatives included:
 reserved fields, unknown flags and types, unaligned and empty ranges, every kernel range
 and heap boundary for `VM_MAP`, handles from another file, short and long query sizes,
 bad pointers, syncobjs that do not exist, a NULL job chain across contexts, 600 NULL jobs

@@ -66,7 +66,7 @@ Unknowns, each an hwt test to write before relying on it:
 ### texelFetch and textureSize
 
 - `smp` takes F32, F16 or C10 coordinates (cfmt). No integer coordinates are
-  known. texelFetch can be lowered to a normalised coordinate,
+  known. texelFetch can be lowered to a normalized coordinate,
   `(i + 0.5) / size`, with `.lod` replace (`smp ... [lod]` encoder; `.lod`
   exists, `tex_lod` corpus). That needs the size.
 - `smp` has return modes `rdata` (h14) and `rinfo` (h15). The names are
@@ -119,7 +119,7 @@ Unknowns, each an hwt test to write before relying on it:
 ### Other M7 items with a compiler side
 
 - **MRT, float render targets, sRGB:** the fragment output goes to the PBE.
-  Today it's one packed BGRA8 colour in pa0, header 0x66. MRT and float
+  Today it's one packed BGRA8 color in pa0, header 0x66. MRT and float
   formats need what the DDK never shows us in GLES2: several outputs, or
   wider ones (o registers, emit to the PBE: TEX.md, STATE.md). Mostly driver
   and state work. The compiler would write each output's register and format.
@@ -149,7 +149,7 @@ Unknowns, each an hwt test to write before relying on it:
 - **TBOs:** a buffer as a 1D texture. Linear layout, so it's the texture path
   plus the driver.
 - **Primitive restart:** CPU fallback.
-- **Rect textures:** unnormalised coordinates lowered in NIR (`nir_lower_tex`).
+- **Rect textures:** unnormalized coordinates lowered in NIR (`nir_lower_tex`).
 - **Depth clamp, sync objects, multisample textures:** driver and state. The
   compiler is only involved for sample masks and sample IDs (unknown).
 

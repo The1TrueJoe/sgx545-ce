@@ -31,7 +31,7 @@ End of a 170 s run in the bench world, two runs each, alternating:
 What the rest of the night bought:
 - The compiler's F16 work: Minecraft's terrain fragment program is down to 19
   instructions, the same as libusc's main program plus its unpack.
-- The driver's own constant formats (`660743c`, `a43ae0b`): lowp colours
+- The driver's own constant formats (`660743c`, `a43ae0b`): lowp colors
   uploaded as F16 of their C10 value, and literals in SA.
 - C10 constants rounded from a double product, as the DDK does it: 0.3 gives
   77, where a float product is exactly 76.5 and rounds to even.

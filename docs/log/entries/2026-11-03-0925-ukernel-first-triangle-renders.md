@@ -2,7 +2,7 @@
 
 The open SGX545 microkernel now completes a full TA/3D render on hardware (EA3 p1,
 `srvinit -o`), and the output is **byte-for-byte identical to the vendor DDK's**:
-same colour-buffer md5 `56f8466aa4cf3b08cfbd166b63dd88ec`, 43200 green triangle
+same color-buffer md5 `56f8466aa4cf3b08cfbd166b63dd88ec`, 43200 green triangle
 pixels (RGB 0,255,0) + 302400 blue-clear (0,0,128) over the visible 720x480. This
 is M1's render milestone — the open microkernel drives init, the host kick, both TA
 kicks, the TA->3D handover and the 3D to completion, producing the reference frame.
@@ -47,9 +47,9 @@ run_ours matched 0x50000000 on both. Fix (ukernel.py do_ta): read-modify-write 0
 ## Evidence
 
 - HW (EA3 p1, uk-a74.bin): `srvinit -o` -> "SGX545 microkernel started"; `frame -o`
-  -> "render done"; colour buffer md5 `56f8466a...` == the DDK's (`srvinit -f`) on
+  -> "render done"; color buffer md5 `56f8466a...` == the DDK's (`srvinit -f`) on
   the same frame, bit for bit. Data: docs/log/data/2026-11-03-0925-ea3-first-
-  triangle.bin (the open uK's colour buffer).
+  triangle.bin (the open uK's color buffer).
 - Offline: run_ours fake/v1/v2/xfer/xfer-rect all MATCH the DDK value-for-value with
   0xc84 + 0xa74 seeded; test_emu 5/5; test_commands OK.
 
@@ -57,7 +57,7 @@ run_ours matched 0x50000000 on both. Fix (ukernel.py do_ta): read-modify-write 0
 
 - lockup_TA variance: ~half the cold boots still re-kick the TA before do_3d (the
   box-timing race ta3d-state's race.py models). The render lands on a do_3d boot;
-  a claim-the-CCB-entry-before-the-flag serialisation fix is wanted so every boot
+  a claim-the-CCB-entry-before-the-flag serialization fix is wanted so every boot
   reaches do_3d.
 - 0xa74 is OR'd (correct for the first render). The DDK does a masked field-REPLACE
   per field (TA b27-31, 3D b22-26, clear b0-3 at TA finish); convert to masked

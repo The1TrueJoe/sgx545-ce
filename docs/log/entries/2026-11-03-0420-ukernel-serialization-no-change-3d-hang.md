@@ -1,4 +1,4 @@
-# Kick serialisation works but does not change the 3D hang — the 3D execution is a separate frontier
+# Kick serialization works but does not change the 3D hang — the 3D execution is a separate frontier
 
 HW test of the kick-serialisation fix on the EA1 (process kick 2 only after kick 1's
 TA finishes, via a new SC_TAFLIGHT "TA in flight" flag + ta_finished pulling the
@@ -12,12 +12,12 @@ pd). So k_ta read non-zero and **deferred every kick, including kick 1**: do_ta
 never ran, all T3C markers zero. Moved SC_TAFLIGHT to word 0x19 (+0x64, zero in the
 dumps). do_ta runs again.
 
-## Serialisation runs, but the outcome is unchanged
+## Serialization runs, but the outcome is unchanged
 
 With SC_TAFLIGHT=0x19: T3C-D0 count 2 / flag 0 (kick 2 reads 0x62), T3C-E0 do_3d
 0x3DED reached — **identical** to the pre-serialisation bLastInScene run, and the
 same hang: `lockup_3d: yes`, `lockup_ta: no`, BIF_FAULT 0, EVENT_STATUS2 0x40, no
-OOM, render TIMED OUT, buffer zero. So the serialisation fix (correct by DDK
+OOM, render TIMED OUT, buffer zero. So the serialization fix (correct by DDK
 analogy, kick1 -> finished -> kick2 -> finished -> 3D) **does not change the HW
 outcome** — the earlier "premature do_3d" hypothesis is not the cause. The 3D hang
 is independent of kick timing.
@@ -41,7 +41,7 @@ is a working reference to diff against.
 
 ## Status
 
-Serialisation fix HELD uncommitted (offline-validated but unproven on HW — it
+Serialization fix HELD uncommitted (offline-validated but unproven on HW — it
 changed nothing observable; run_ours doesn't exercise the defer). The committed
 render-path fixes stand: ack (b6a65d3), first-kick gate (4aecd73), read-offset
 (ded2c15), bLastInScene + emulator test (f852218). Evidence:

@@ -131,7 +131,7 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 
 - About 50 comments in the driver, winsys and compiler name the boot
   image's application, the bench box or game titles (the Minecraft overlay,
-  "EA1"). Rewrite each to say what GL usage triggers the behaviour and which
+  "EA1"). Rewrite each to say what GL usage triggers the behavior and which
   test covers it (dEQP/piglit name), and move the history to `docs/log`.
 - "as the DDK does" comments: cite the `docs/` section instead
   (DRIVER-UPSTREAM.md §2).
@@ -247,7 +247,7 @@ earlier licensing and provenance audit.
     cleanroom-isa's `sgx_isa`.
   - Shaders are built with `nir_builder` and compiled; every word must
     decode through the isaspec disassembler.
-  - Cases: a fragment varying to colour, a vertex position, efo co-issue on
+  - Cases: a fragment varying to color, a vertex position, efo co-issue on
     mat4 * v, and the int-select loop bound (d3adad7).
   - Each case was checked to fail on the bug it guards.
   - To grow: F16 and C10 paths, textures, discard, constants in memory.
@@ -264,11 +264,11 @@ earlier licensing and provenance audit.
   - About 58 comments say "as libusc does" or "as the DDK does" (27 in
     `sgx_compile.c`, 16 in `sgx_nir.c`, 12 in `sgx_compiler.h`).
   - Rewrite each to cite the `docs/` section and the test that fixed the
-    behaviour (COMPILER-UPSTREAM.md §2.2).
+    behavior (COMPILER-UPSTREAM.md §2.2).
   - Box and application names: none left in the compiler.
 - **C8. DDK-compatibility code** (COMPILER-UPSTREAM.md §3).
   - Still in the compiler: the varying-to-set allocation, first-use sampler
-    numbering, the USP label numbers 3/4/5, and the placeholder colour
+    numbering, the USP label numbers 3/4/5, and the placeholder color
     iteration's PA count.
   - Upstream, the driver owns layouts. Move these behind
     `struct sgx_layout`, or into sgxc.
@@ -290,7 +290,7 @@ loaded by the DRM driver).
 |---|---|
 | Reproducible build | **Done.** Pure-CPython assembler, no timestamps/paths/randomness; byte-identical `.bin`+`.json` on any machine, any CPython ≥ 3.7. One command: `ukernel/build.sh`. |
 | Pinned toolchain | **Done (documented).** Only CPython ≥ 3.7; no external packages. Recorded in `ukernel/README.md` → Building. |
-| MIT licence | **Done.** `ukernel/LICENSE` + an `SPDX-License-Identifier: MIT` header on every source file. |
+| MIT license | **Done.** `ukernel/LICENSE` + an `SPDX-License-Identifier: MIT` header on every source file. |
 | Release manifest | **Done.** `core`, `version` (major.minor), `features`, `build_id`, sizes, entry offsets, patch sites. |
 | Per-core identity | **Done.** `ukernel.py:CORE_NAME` names the target SGX core; build.py derives the binary name and manifest `core` from it, so SGX540/SGX531/… images never collide. |
 | Feature-bit documentation | **Done.** `ukernel/README.md` → Feature bits (bit 0 CLEANUP_V2, bit 1 SECURE). |
@@ -322,12 +322,12 @@ driver's module/request path (`powervr_sgx/`, not `powervr/`). build.py emits
 `<core>_ukernel.bin`; the driver's `firmware=` request and its packaging tool
 must use the same name — kept in sync across build.py, the driver, the docs and
 the test scripts. Open before this is real: the MIT text must be added to
-linux-firmware's licence set, and `Source` needs the public repository URL. The
+linux-firmware's license set, and `Source` needs the public repository URL. The
 source and the built binary are versioned together by `version` + `build_id`.
 
 ### Not a blocker, noted
 - The microkernel source carries inline hardware-provenance comments (which
-  behaviours were confirmed on which bring-up box). These are useful engineering
+  behaviors were confirmed on which bring-up box). These are useful engineering
   history; a final upstream-source pass can thin them or move the box-specific
   ones to `docs/log/`, but they do not affect the binary and are low priority.
 
@@ -409,7 +409,7 @@ uapi-stream. Status as of 2026-11-08.
 ### W5. Comments
 
 - **Done.** No boards, applications, dates or project names in the winsys.
-- **Open.** About 88 comment lines cite the DDK's behaviour or captures as
+- **Open.** About 88 comment lines cite the DDK's behavior or captures as
   the reason for a value.
   - Upstream, a value's reason is the hardware fact, with a pointer to the
     hardware documentation (STATE.md, PDS.md, ISA.md), not another driver's
@@ -521,7 +521,7 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
 | Tests under `meson test` | `meson test --suite sgx` runs `sgx_isa` (assemble -> encode -> disassemble over three lists; a line's given words must match), `sgx_pds` (the same for PDS, plus the DOUT data words), and the new `sgx_csb` (66 state words the documentation quotes, packed and unpacked). It passes 3/3 on a native host build with `-Dbuild-tests=true`. The csb test found an XML default that was wrong for one T3 form (tex2 clears b23); the test case now sets it. |
 | Nothing outside `meson test` in the Mesa tree | `isa/tests/standalone.sh` (a library build without Mesa, which `tools/usc/check_enc.py` and `drm/tools/gen_usse_corpus.py` use) moved to `mesa/tests/isa-standalone/`, which isn't copied into Mesa. Its `.gitignore` went with it |
 | Mesa style | one `mesa/src/sgx/.clang-format` for all of `src/sgx` (shared with the compiler): `InheritParentConfig`, `DisableFormat: false`, column limit 80, as `src/asahi` and `src/freedreno`. Every C file here is formatted with it. One macro list, the assembler's flag table, is hand-wrapped between `clang-format off/on`. Comments are in American English (`colour` -> `color`). A `src/sgx/**/*` line in Mesa's `.clang-format-include` belongs to the MR |
-| Licence headers | every source file, XML, meson file, script and test list has `Copyright © 2026 Joseph Telaak` and `SPDX-License-Identifier: MIT` (the test lists as `#` comments). The READMEs carry none, as Mesa's don't |
+| License headers | every source file, XML, meson file, script and test list has `Copyright © 2026 Joseph Telaak` and `SPDX-License-Identifier: MIT` (the test lists as `#` comments). The READMEs carry none, as Mesa's don't |
 | A README per tree | `isa/README.md` and `pds/README.md` now describe the tree rather than its history: what it is, the files, the generated files, the tests, the isaspec patch, what isaspec can't express, and who uses it. The answered-gap lists and the old encoder's story stay in `docs/log`. `csbgen/README.md` is new: files, use, conventions, tests |
 | No DDK inputs | the build and the tests read only the XML, the test lists and Mesa. The test lists' words are the ones the ISA/PDS/state documentation quotes. Comments no longer name the DDK, a capture rig or USEASM, and the `#i16-fmt` enum nothing used (an unused-variable warning in the generated decoder) is gone |
 | Unchanged output | after the restructure, the offline winsys harness (clears, draws, scissors, end-of-tile, over 60 frames) is still byte-identical to um-re 9145c84 (66.9 MB of rings). `mesa/tests/isa-standalone` runs the ISA lists: 317 instructions, 0 failures |
@@ -641,8 +641,8 @@ both configurations).
 - [x] Runtime PM is set up before `drm_dev_register`, and torn down if it fails.
 - [x] `drm_sched` (one entity per context, credit 1), `drm_exec` for the
   submit's reservations, `drm_gpuvm` for VMs and their shared reservation.
-- [x] **dma-fence signalling rules.** The hardware fence is allocated at
-  submit and only initialised in `run_job`; the timeout's devcoredump
+- [x] **dma-fence signaling rules.** The hardware fence is allocated at
+  submit and only initialized in `run_job`; the timeout's devcoredump
   allocates with `GFP_NOWAIT`; completions run inside
   `dma_fence_begin_signalling()`. To confirm under lockdep (above).
 - [ ] **`run_job` resumes the GPU.** `pvrsgx_power_get()` can runtime-resume
