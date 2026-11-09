@@ -1,0 +1,37 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [PATCH] drm/gma500: Leave memory self-refresh off on Cedarview
+
+With a single pipe on, cdv_update_wm() programs fixed FIFO watermarks
+and turns on memory self-refresh. The watermarks come from neither the
+mode nor the memory's self-refresh exit latency.
+
+On two Cedarview laptops this blacks out the LVDS panel, with the
+backlight still on:
+- Atom N2600 (Coradir ES10IS5, 1024x600): the panel goes black when the
+  GPU starts using memory. With self-refresh left off, the same GPU
+  work runs with the panel up.
+- Atom D2500 (Philco 14H): on the boots that come up black, pipe B runs
+  (PIPEBCONF bit 30 is set) and its FIFO underrun bit is set. A full
+  modeset doesn't clear it.
+
+Leave self-refresh off. Every DPMS change still runs cdv_disable_sr()
+first, so self-refresh that the firmware left on gets turned off.
+---
+--- a/drivers/gpu/drm/gma500/cdv_intel_display.c
++++ b/drivers/gpu/drm/gma500/cdv_intel_display.c
+@@ -530,11 +530,10 @@ void cdv_update_wm(struct drm_device *dev, struct drm_crtc *crtc)
+ 
+ 		REG_WRITE(DSPFW6, 0x10);
+ 
+-		gma_wait_for_vblank(dev);
+-
+-		/* enable self-refresh for single pipe active */
+-		REG_WRITE(FW_BLC_SELF, FW_BLC_SELF_EN);
+-		REG_READ(FW_BLC_SELF);
++		/*
++		 * Memory self-refresh stays off: these fixed watermarks don't
++		 * cover its exit latency, and the pipe's FIFO underruns.
++		 */
+ 		gma_wait_for_vblank(dev);
+ 
+ 	} else {

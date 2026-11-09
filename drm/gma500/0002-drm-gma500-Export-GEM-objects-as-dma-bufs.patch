@@ -13,8 +13,6 @@ Add the pin, unpin and get_sg_table hooks the PRIME helpers need. The
 pages are pinned into the GTT as for a framebuffer, so they stay put
 while shared. Objects in stolen memory have no struct pages and can't
 be exported.
-
-Assisted-by: Claude:claude-opus-5-5
 ---
  drivers/gpu/drm/gma500/gem.c | 31 +++++++++++++++++++++++++++++++
  1 file changed, 31 insertions(+)

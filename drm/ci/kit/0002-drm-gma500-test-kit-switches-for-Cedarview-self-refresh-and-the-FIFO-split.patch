@@ -1,0 +1,83 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [PATCH] drm/gma500: kit switches for Cedarview self-refresh, FIFO split
+
+Test kits only, never upstream. On top of 0005 (self-refresh left off):
+gma500_gfx.cdv_sr=1 turns single-pipe memory self-refresh back on, as
+gma500 had it, for an A/B on the same kernel. gma500_gfx.cdv_dsparb=<n>
+writes n to DSPARB in place of 0x3f3e at every DPMS change. 0x3f3e gives
+pipe A, which is off on these laptops, half the FIFO. On the gen3 layout
+(plane B starts at bits 6:0, plane C at bits 13:7), 0x3f01 gives pipe B
+125 of the 126 lines.
+---
+--- a/drivers/gpu/drm/gma500/cdv_intel_display.c
++++ b/drivers/gpu/drm/gma500/cdv_intel_display.c
+@@ -8,6 +8,7 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/i2c.h>
++#include <linux/module.h>
+ 
+ #include <drm/drm_crtc.h>
+ #include <drm/drm_modeset_helper_vtables.h>
+@@ -489,6 +490,14 @@ void cdv_disable_sr(struct drm_device *dev)
+ 
+ }
+ 
++/*
++ * Test kits only, not upstream: memory self-refresh with one pipe on, as
++ * gma500 had it before it was left off, for an A/B on the same kernel.
++ */
++static bool cdv_sr;
++module_param(cdv_sr, bool, 0444);
++MODULE_PARM_DESC(cdv_sr, "Memory self-refresh with a single pipe, as before (test kits; default off)");
++
+ void cdv_update_wm(struct drm_device *dev, struct drm_crtc *crtc)
+ {
+ 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
+@@ -536,6 +545,12 @@ void cdv_update_wm(struct drm_device *dev, struct drm_crtc *crtc)
+ 		 */
+ 		gma_wait_for_vblank(dev);
+ 
++		if (cdv_sr) {
++			REG_WRITE(FW_BLC_SELF, FW_BLC_SELF_EN);
++			REG_READ(FW_BLC_SELF);
++			gma_wait_for_vblank(dev);
++		}
++
+ 	} else {
+ 
+ 		/* HW team suggested values... */
+--- a/drivers/gpu/drm/gma500/gma_display.c
++++ b/drivers/gpu/drm/gma500/gma_display.c
+@@ -9,6 +9,7 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/highmem.h>
++#include <linux/module.h>
+ #include <linux/iopoll.h>
+ 
+ #include <drm/drm_crtc.h>
+@@ -190,6 +191,14 @@ static int gma_crtc_gamma_set(struct drm_crtc *crtc, u16 *red, u16 *green,
+ 	return 0;
+ }
+ 
++/*
++ * Test kits only, not upstream: Cedarview's FIFO split between the planes in
++ * place of 0x3f3e, which gives disabled pipe A half the FIFO.
++ */
++static uint cdv_dsparb;
++module_param(cdv_dsparb, uint, 0444);
++MODULE_PARM_DESC(cdv_dsparb, "Cedarview DSPARB in place of 0x3f3e (test kits; 0 = 0x3f3e)");
++
+ /*
+  * Sets the power management mode of the pipe and plane.
+  *
+@@ -357,7 +366,7 @@ void gma_crtc_dpms(struct drm_crtc *crtc, int mode)
+ 		dev_priv->ops->update_wm(dev, crtc);
+ 
+ 	/* Set FIFO watermarks */
+-	REG_WRITE(DSPARB, 0x3F3E);
++	REG_WRITE(DSPARB, IS_CDV(dev) && cdv_dsparb ? cdv_dsparb : 0x3F3E);
+ }
+ 
+ static int gma_crtc_cursor_set(struct drm_crtc *crtc,
