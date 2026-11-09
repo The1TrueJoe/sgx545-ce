@@ -14,8 +14,12 @@ x=$!
 # the dark-panel workaround, once: a full modeset of the panel's output, with gma500's
 # display registers (its read-only debugfs dump) and a screenshot before and after
 O=/tmp/results
-regs() {   # FILE: every gma500 register dump in debugfs (read-only)
-	for f in /sys/kernel/debug/dri/*/*reg*; do [ -r "$f" ] && { echo "== $f"; cat "$f"; }; done > "$1" 2>&1
+regs() {   # FILE: gma500's read-only display register dump (debugfs cdv_display_regs)
+	for n in /sys/kernel/debug/dri/*/name; do
+		grep -q gma500 "$n" 2>/dev/null || continue
+		f=${n%/name}/cdv_display_regs
+		[ -r "$f" ] && { echo "== $f"; cat "$f"; } || echo "== $f: not there (kernel without the dump)"
+	done > "$1" 2>&1
 }
 sleep 10
 lvds=$(xrandr 2>/dev/null | awk '/^LVDS[^ ]* connected/ { print $1; exit }')

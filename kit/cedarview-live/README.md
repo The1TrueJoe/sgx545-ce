@@ -57,7 +57,7 @@ power off, boot again.
    saved to the stick here once already.
 5. The desktop. First, once, the dark-panel workaround: a full modeset of the LVDS output
    (`xrandr --output LVDS-1 --off; sleep 1; xrandr --output LVDS-1 --auto`, with the name
-   xrandr reports), with gma500's read-only debugfs register dump and a screenshot before and
+   xrandr reports), with gma500's read-only debugfs register dump (`cdv_display_regs`) and a screenshot before and
    after (`display-regs-before.txt`, `display-regs-after.txt`, `screenshots/00-*-modeset.png`;
    whether they differ goes in the summary). No raw MMIO from the stick. Then the smoke test
    and screenshots `screenshots/NN-name.png`:
