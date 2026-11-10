@@ -14,6 +14,10 @@ backlight still on:
   (PIPEBCONF bit 30 is set) and its FIFO underrun bit is set. A full
   modeset doesn't clear it.
 
+With self-refresh left off, the underrun bit stayed clear from boot
+through GPU work and X's start in all twelve test boots, six on each
+laptop, and neither panel went black.
+
 Leave self-refresh off. Every DPMS change still runs cdv_disable_sr()
 first, so self-refresh that the firmware left on gets turned off.
 ---
