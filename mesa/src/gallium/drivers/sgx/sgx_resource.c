@@ -442,8 +442,12 @@ vbo_retire(struct sgx_screen *screen, struct sgxws_bo *bo, uint32_t seq)
 /* The buffer's device copy for a draw that reads bytes [off, off + size) of
  * it (screen lock held).  Unmaps copy what was written, so a copy is current
  * unless the buffer is mapped for writes still (a stream uploader writes more
- * into its mapped buffer): then the draw's range is copied again, into a new
- * copy when a render may still read this one. */
+ * into its mapped buffer): then the draw's range is copied again, into the
+ * same copy.  Such a map is unsynchronized (a synchronized one retires a copy
+ * renders may read: sgx_transfer_map), whose writes promise to leave alone
+ * what renders still read, as the unmap's copy does.  (Replacing a busy copy
+ * here instead freed one that a draw of the frame being recorded still read:
+ * two inputs from one buffer, an MMU fault.) */
 bool
 sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res, uint32_t off,
                uint32_t size)
@@ -452,23 +456,16 @@ sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res, uint32_t off,
 
    off = MIN2(off, res->base.width0);
    size = MIN2(size, res->base.width0 - off);
-   if (sgxws_bo_valid(&res->vbo) && res->write_maps) {
-      if (!screen->hw ||
-          !sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw))) {
+   if (sgxws_bo_valid(&res->vbo)) {
+      if (res->write_maps)
          memcpy((uint8_t *)res->vbo.map + off, (const uint8_t *)res->data + off,
                 size);
-         return true;
-      }
-      /* (mid-draw: a full retired list would flush the frame being
-       * recorded, so the draw goes without the device copy instead) */
-      if (screen->n_retired == ARRAY_SIZE(screen->retired))
-         return false;
-      vbo_retire(screen, &res->vbo, res->vbo_seq);
-   }
-   if (sgxws_bo_valid(&res->vbo))
       return true;
+   }
+   /* past the end, a page the vertex DMA and the VDM's index reads may run
+    * into */
    if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX,
-                      align(MAX2(res->base.width0, 16), 4096), 0x1000)) {
+                      align(MAX2(res->base.width0, 16), 4096) + 4096, 0x1000)) {
       memset(&res->vbo, 0, sizeof(res->vbo));
       return false;
    }
