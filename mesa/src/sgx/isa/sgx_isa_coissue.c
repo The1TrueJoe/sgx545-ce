@@ -137,10 +137,10 @@ sgx_isa_coissue_hazard(const struct sgx_isa_instr *instr)
       return NULL;
    }
    if (instr->opc == SGX_ISA_OPC_EFO) {
-      /* d naming an internal register the word writes is a race */
-      if ((instr->efo_d == 0 && instr->wi0) ||
-          (instr->efo_d == 1 && instr->wi1))
-         return "efo's d names an internal register the same word writes";
+      /* d=i0 while the word writes I0 is a race; d=i1 with wi1 reads the
+       * old I1 (a mat4 * v chain stores the previous chain's result so) */
+      if (instr->efo_d == 0 && instr->wi0)
+         return "efo's d names I0 while the same word writes it";
       return NULL;
    }
    return NULL;

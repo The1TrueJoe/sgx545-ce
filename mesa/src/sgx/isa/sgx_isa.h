@@ -201,10 +201,11 @@ bool sgx_isa_fdual_use(const struct sgx_isa_instr *instr,
 
 /*
  * A same-word race the hardware shows (an fdual primary reading an internal
- * register its secondary writes; efo's d naming one the word writes): a
- * reason, or NULL. Not hazards, by ISA.md: both halves reading one slot, the
+ * register its secondary writes; efo's d naming I0 while the word writes I0):
+ * a reason, or NULL. Not hazards, by ISA.md: both halves reading one slot, the
  * secondary reading an internal register the primary writes, the next
- * instruction reading the secondary's result.
+ * instruction reading the secondary's result, efo's d=i1 with wi1 (it reads
+ * the old I1).
  */
 const char *sgx_isa_coissue_hazard(const struct sgx_isa_instr *instr);
 
