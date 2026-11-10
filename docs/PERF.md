@@ -739,7 +739,9 @@ What does: render distance 2 instead of 4 takes the TA from 40 to 15 ms and the
 3D from 22.5 to 16.5. The TA's time is the tiling of the primitives it is given
 (~160K triangles, 486K indices into 258K vertices a frame, the DDK's count): the
 hardware's rate for this scene, not something per draw or per vertex the driver
-adds.
+adds. The DDK's is no faster: its TA clock runs ~77 ms a frame, ~41 ms of it
+alone and ~35 ms under its 3D (the same sampler on the DDK's Minecraft), so the
+DDK's lead in busy time is overlap, not a quicker TA.
 
 The plan, largest first, with what each is worth:
 
