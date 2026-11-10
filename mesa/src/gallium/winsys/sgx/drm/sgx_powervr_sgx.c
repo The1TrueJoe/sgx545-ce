@@ -925,6 +925,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    }
    d->info.core_id = gi.core_id;
    d->info.core_revision = gi.core_revision;
+   d->info.zero_copy = true;
    d->info.rt_max_width = li.rt_max_width;
    d->info.rt_max_height = li.rt_max_height;
    d->info.rt_max_samples = li.rt_max_samples;

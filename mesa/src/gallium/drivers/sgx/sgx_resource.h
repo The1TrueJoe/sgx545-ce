@@ -27,7 +27,9 @@ struct sgx_resource {
    bool shared;  /* imported or exported dma-buf: its frames name it
                     (sgxws_use_bo) */
    struct renderonly_scanout
-      *scanout; /* kmsro: its buffer on the display device */
+      *scanout;     /* kmsro: its buffer on the display device */
+   bool dumb_later; /* kmsro with a display the CPU reads: made the display's
+                       dumb buffer when a KMS handle is asked for */
 
    uint32_t uid, gen; /* buffers: an id never reused, and a count of writes
                          (vertex cache) */
@@ -36,6 +38,9 @@ struct sgx_resource {
     * vbo_seq is the last kick that reads it */
    struct sgxws_bo vbo;
    uint32_t vbo_seq;
+   /* write maps open (a stream uploader keeps its buffer mapped while it
+    * writes more into it: sgx_buffer_vbo) */
+   unsigned write_maps;
    uint64_t written_ns;     /* buffers: when last written */
    uint32_t stride;         /* bytes per row of level 0 */
    size_t level_offset[16]; /* each level in the linear CPU copy */
@@ -105,7 +110,8 @@ struct sgx_transfer {
 
 void sgx_resource_screen_init(struct sgx_screen *screen);
 /* with the screen lock held: a buffer's device copy, made if need be */
-bool sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res);
+bool sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res,
+                    uint32_t off, uint32_t size);
 void sgx_resource_context_init(struct sgx_context *ctx);
 
 /* the target a render into this level and layer of the resource writes; with

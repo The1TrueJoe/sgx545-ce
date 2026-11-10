@@ -266,7 +266,8 @@ struct sgxws_draw {
     * addresses, nothing copied (verts_va 16-byte aligned, idx_va even) */
    uint32_t verts_va, idx_va;
    /* or n_fetch DMAs (the vertex buffers where they are, or copies of client
-    * arrays): no vertices copied, verts and verts_va unused */
+    * arrays): no vertices copied, verts and verts_va unused; the indices
+    * copied from indices, or where they are at idx_va (even) */
    const struct sgxws_fetch *fetch;
    unsigned n_fetch;
    const struct sgxws_block *blocks;
@@ -314,6 +315,8 @@ struct sgxws_dev_options {
                       sent; -1: off */
    unsigned frame_gap_us; /* idle time after each render */
    unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 3) */
+   unsigned ta_split;     /* a TA kick every n objects of a frame, the scene's
+                             render at its end (0: one kick a frame) */
 };
 
 /* fd: the GPU's kernel driver; opts may be NULL */
@@ -327,6 +330,9 @@ struct sgxws_device_info {
    uint32_t core_revision; /* EUR_CR_CORE_REVISION */
    uint32_t rt_max_width, rt_max_height, rt_max_samples;
    uint16_t pci_vendor, pci_device; /* 0 when the GPU is not a PCI function */
+   /* zero-copy draws (vertex buffers DMAed where they are) by default:
+    * powervr_sgx's; services' only on request (SGX_DEBUG=zerocopy) */
+   bool zero_copy;
 };
 
 const struct sgxws_device_info *sgxws_dev_info(const struct sgxws_dev *d);
@@ -415,6 +421,11 @@ bool sgxws_recording(struct sgxws_ctx *c);
 
 /* a shared buffer the frame being recorded reads (a texture) or writes */
 void sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write);
+/* whether the frame's list has room for these buffers as well (every shared
+ * buffer a render touches must be listed: the kernel keeps only those
+ * coherent); if not, the caller submits the frame first */
+bool sgxws_use_bo_room(const struct sgxws_ctx *c,
+                       const struct sgxws_bo *const *bos, unsigned n);
 
 /* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md
  * "Clear") */

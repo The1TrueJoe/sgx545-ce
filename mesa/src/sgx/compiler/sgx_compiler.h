@@ -82,6 +82,16 @@ struct sgx_compile_options {
    /* vertex shader: what the PDS leaves in PA[4 * driver_location] for each
     * attribute (enum sgx_vtx_fmt); 0, f32 x 4, is the default */
    uint8_t vtx_fmt[16];
+   /* fragment shader: bit n set, texture unit n's texels arrive with red and
+    * blue swapped (an RGBA8 view sampled as T1 0x0d, as the DDK binds it):
+    * byte 0 is blue, 2 red, the colour output's order. A texel that is the
+    * colour as it is then needs no instruction; other reads unpack zyxw */
+   uint32_t tex_bgra;
+   /* fragment shader: the driver's PDS samples a non-dependent texture from
+    * the coordinate set itself, so a varying only such samples read needs no
+    * plain iteration of its own (the DDK's tex fs: one PDS sample, no
+    * iteration). Off for the DDK's driver, whose finalizer may read it */
+   bool pds_samples_alone;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
@@ -126,7 +136,9 @@ struct sgx_const_map {
     * bits); with driver_consts: 0x10 F16 of the C10 value c (fmt 3's rule):
     * c / 255 rounded to nearest F16, as pck.f16.c10 [scale] gives it
     * (hardware, tests/c10); 0x11 a literal: k = 0xffff, value (32 bits) ORed
-    * into the slot at shift */
+    * into the slot at shift; 0x12 the vec4 at constants k..k+3 as packed
+    * BGRA8, A << 24 | R << 16 | G << 8 | B, each channel clamped to [0, 1]
+    * and rounded to nearest (the whole slot, shift 0) */
    uint8_t fmt;
    uint32_t value; /* fmt 0x11 */
 };

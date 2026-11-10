@@ -51,12 +51,14 @@ class sgx_compile_test : public ::testing::Test {
    }
 
    /* compile with the compiler's own layout; false on a compile error */
-   bool compile(bool f16 = false)
+   bool compile(bool f16 = false, uint32_t tex_bgra = 0)
    {
       struct sgx_compile_options opts = {};
       struct sgx_varyings vary = {};
 
       opts.f16 = f16;
+      opts.tex_bgra = tex_bgra;
+      opts.pds_samples_alone = pds_alone;
       opts.driver_consts = true;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
@@ -94,6 +96,7 @@ class sgx_compile_test : public ::testing::Test {
    nir_builder b = {};
    struct sgx_shader out = {};
    bool compiled = false;
+   bool pds_alone = false;
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -203,6 +206,222 @@ TEST_F(sgx_compile_test, fragment_partial_colour)
 
    ASSERT_TRUE(compile(true)) << out.log;
    expect_decodes();
+}
+
+/* A texel as the colour: its bytes moved into BGRA order (two pck.u8.u8),
+ * not unpacked to floats and packed again */
+TEST_F(sgx_compile_test, fragment_texel_to_colour)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_store_var(&b, col, nir_build_tex_struct(&b, nir_texop_tex, tb), 0xf);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   EXPECT_EQ(out.n_code, 2u) << s;
+   EXPECT_EQ(out.n_temps, 0u) << s;
+   EXPECT_NE(s.find("pck.u8.u8"), std::string::npos) << s;
+}
+
+/* A uniform vec4 as the colour: one mov from a slot the driver fills with
+ * the colour packed to BGRA8 (constant map format 0x12) */
+TEST_F(sgx_compile_test, fragment_uniform_colour_packed)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *u = var(nir_var_uniform, glsl_vec4_type(), "color", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, u), 0xf);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.n_code, 1u) << disasm();
+   bool packed = false;
+   for (unsigned i = 0; i < out.n_consts; i++)
+      packed |= out.consts[i].fmt == 0x12 && out.consts[i].k == 0;
+   EXPECT_TRUE(packed);
+}
+
+/* for (i < 8) { if (r.x > a.x) break; r += b; }: a loop that can exit early
+ * stays a loop (unrolled, its exits became a select tree holding all eight
+ * partial sums: corpus loop_v, 31 temporaries) */
+TEST_F(sgx_compile_test, fragment_early_exit_loop_kept)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *bv =
+      var(nir_var_shader_in, glsl_vec4_type(), "b", VARYING_SLOT_VAR1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_variable *i = nir_local_variable_create(b.impl, glsl_int_type(), "i");
+   nir_variable *r = nir_local_variable_create(b.impl, glsl_vec4_type(), "r");
+
+   nir_store_var(&b, r, nir_imm_vec4(&b, 0, 0, 0, 0), 0xf);
+   nir_store_var(&b, i, nir_imm_int(&b, 0), 1);
+   nir_loop *loop = nir_push_loop(&b);
+   {
+      nir_def *iv = nir_load_var(&b, i);
+      nir_break_if(&b, nir_ige_imm(&b, iv, 8));
+      nir_def *rv = nir_load_var(&b, r);
+      nir_break_if(&b, nir_flt(&b, nir_channel(&b, nir_load_var(&b, a), 0),
+                               nir_channel(&b, rv, 0)));
+      nir_store_var(&b, r, nir_fadd(&b, rv, nir_load_var(&b, bv)), 0xf);
+      nir_store_var(&b, i, nir_iadd_imm(&b, iv, 1), 1);
+   }
+   nir_pop_loop(&b, loop);
+   nir_store_var(&b, col, nir_load_var(&b, r), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+   EXPECT_LE(out.n_temps, 8u) << disasm();
+}
+
+/* ceil(x) is one fsubflr d, c48, -x (= -floor(-x)): the floor's negated
+ * result and ceil's own negations cancel */
+TEST_F(sgx_compile_test, fragment_ceil_one_instruction)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_fceil(&b, nir_load_var(&b, a)), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.n_code, 3u) << disasm(); /* fsubflr, two pck */
+   EXPECT_EQ(out.n_temps, 0u) << disasm();
+}
+
+/* (a < b || c < d) ? x : y: the comparisons stay test masks and are or'ed
+ * bitwise, no 1.0 / 0.0 floats (glamor's gradient repeat tests) */
+TEST_F(sgx_compile_test, fragment_or_of_compares_as_masks)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, a);
+   nir_def *c1 = nir_flt(&b, nir_channel(&b, v, 0), nir_channel(&b, v, 1));
+   nir_def *c2 = nir_flt(&b, nir_channel(&b, v, 2), nir_channel(&b, v, 3));
+   nir_def *sel = nir_bcsel(&b, nir_ior(&b, c1, c2), v, nir_fneg(&b, v));
+   nir_store_var(&b, col, sel, 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   EXPECT_NE(s.find(" or "), std::string::npos) << s;
+   EXPECT_EQ(s.find("fmaxmin"), std::string::npos) << s;
+}
+
+/* a texel whose unit arrives BGRA-ordered (tex_bgra) is the colour as it
+ * is: no instruction, the colour register is the sampled one */
+TEST_F(sgx_compile_test, fragment_bgra_texel_is_colour)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_store_var(&b, col, nir_build_tex_struct(&b, nir_texop_tex, tb), 0xf);
+
+   ASSERT_TRUE(compile(true, 1)) << out.log;
+   EXPECT_EQ(out.n_code, 0u) << disasm();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_EQ(out.colour_pa, (unsigned)out.samples[0].reg);
+}
+
+/* ... and read as a value, its red and blue come from bytes 2 and 0 */
+TEST_F(sgx_compile_test, fragment_bgra_texel_unpacks_zyxw)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_fmul_imm(&b, t, 0.5), 0xf);
+
+   ASSERT_TRUE(compile(false, 1)) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   /* channel 0 (red) unpacked from byte 2 */
+   size_t at = s.find("pck.f32.u8 r0, pa");
+   ASSERT_NE(at, std::string::npos) << s;
+   std::string line = s.substr(at, s.find('\n', at) - at);
+   EXPECT_NE(line.find(".l2,"), std::string::npos) << s;
+}
+
+/* pds_samples_alone: a varying only a sample reads has no plain iteration;
+ * the sample is the first PA register (the DDK's tex fs: one PDS sample into
+ * pa0, the colour) */
+TEST_F(sgx_compile_test, fragment_sample_only_varying_not_iterated)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_store_var(&b, col, nir_build_tex_struct(&b, nir_texop_tex, tb), 0xf);
+
+   pds_alone = true;
+   ASSERT_TRUE(compile(true, 1)) << out.log;
+   ASSERT_EQ(out.n_iters, 1u);
+   EXPECT_TRUE(out.iters[0].sample);
+   EXPECT_EQ(out.iters[0].pa, 0u);
+   EXPECT_EQ(out.colour_pa, 0u);
+   EXPECT_EQ(out.n_code, 0u) << disasm();
 }
 
 } /* namespace */

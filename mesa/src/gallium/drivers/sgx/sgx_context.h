@@ -88,11 +88,16 @@ struct sgx_pipe_shader {
    /* vertex: the input formats it unpacks (sgx_compile_options.vtx_fmt; all
     * 0, f32 x 4, unless SGX_DEBUG=zerocopy picked a variant) */
    uint8_t vtx_fmt[16];
+   /* vertex: st's program writes gl_PointSize, and this variant keeps it as
+    * an output (points draws; the others drop it, sgx_vs_for) */
+   bool writes_psize, points;
    /* fragment: the same decoding what the samplers in its mask sample as
     * sRGB, and swizzling what each sampler view's swizzle says (formats st
     * stores in another, GL_R16 as RGBA8; 0: none) (sgx_fs_for) */
    unsigned srgb;
    uint16_t swz[PIPE_MAX_SAMPLERS];
+   uint32_t not_bgra; /* units bound to a texture not sampled B, G, R, A
+                         ordered (sgx_tex_bgra) */
    struct sgx_pipe_shader *variants_srgb[8];
    unsigned next_variant_srgb;
 };

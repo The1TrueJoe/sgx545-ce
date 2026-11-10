@@ -11,6 +11,7 @@
  * unknown).
  */
 
+#include <assert.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -613,6 +614,7 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
    d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 3;
+   d->ta_split = d->kif->kick_ta ? opts->ta_split : 0;
    d->dry_run = opts->dry_run;
 
    drmDevicePtr dev = NULL;
@@ -1102,6 +1104,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->target = *t;
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
+   c->ta_kicks = c->seg_draws = 0;
    c->n_use = 0;
    c->bias_set = false;
    c->bias_units = 0;
@@ -1540,6 +1543,8 @@ mte_ctrl(const struct sgxws_state *st)
    return w;
 }
 
+static int kick_ta(struct sgxws_ctx *c);
+
 int
 sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 {
@@ -1573,6 +1578,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
             return -E2BIG;
          n_idx = d->n_indices;
          idx_bytes = (n_idx * 2 + 15) & ~15u;
+      } else if (d->idx_va) {
+         /* an index buffer in device memory, as it is */
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx = d->idx_va;
       } else if (d->count > c->idx_count) {
          return -E2BIG;
       }
@@ -1784,6 +1795,9 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
                vs->in_dwords, vs->out_dwords, vs->temps,
                vertices_per_task(vs->out_dwords));
    c->draws++;
+   /* SGX_TA_SPLIT: the GPU tiles what is recorded while the rest is */
+   if (c->dev->ta_split && ++c->seg_draws >= c->dev->ta_split)
+      return kick_ta(c);
    return 0;
 }
 
@@ -1814,11 +1828,28 @@ sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write)
          return;
       }
    }
+   /* (the caller made room: sgxws_use_bo_room) */
+   assert(c->n_use < ARRAY_SIZE(c->use));
    if (c->n_use < ARRAY_SIZE(c->use))
       c->use[c->n_use++] = (__typeof__(c->use[0])){bo, write};
-   else
-      ws_err("a frame uses more than %u shared buffers\n",
-             (unsigned)ARRAY_SIZE(c->use));
+}
+
+bool
+sgxws_use_bo_room(const struct sgxws_ctx *c, const struct sgxws_bo *const *bos,
+                  unsigned n)
+{
+   unsigned more = 0;
+
+   for (unsigned k = 0; k < n; k++) {
+      bool listed = false;
+
+      for (unsigned i = 0; i < c->n_use && !listed; i++)
+         listed = c->use[i].bo == bos[k];
+      for (unsigned j = 0; j < k && !listed; j++)
+         listed = bos[j] == bos[k];
+      more += !listed;
+   }
+   return c->n_use + more <= ARRAY_SIZE(c->use);
 }
 
 uint64_t
@@ -1939,6 +1970,46 @@ code_sync(struct sgxws_ctx *c)
  */
 static int sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms);
 
+/* under services, the target's last render is done before its next scene's
+ * first kick (the client writes its render details) */
+static void
+target_wait(struct sgxws_ctx *c)
+{
+   struct sgxws_rt *s = c->rt;
+   uint64_t t0 = sgxws_now_ns();
+
+   if (!c->dev->kif->rt_one_in_flight || c->ta_kicks)
+      return;
+   if (sgxws_seq_after(s->seq, c->done_seq) &&
+       c->slot_kick[s->seq_slot].seq == s->seq &&
+       slot_wait(c, s->seq_slot, 2000))
+      ws_err("the target's last render did not finish\n");
+   c->ns_target_wait += sgxws_now_ns() - t0;
+}
+
+/* a TA kick of what is recorded, the scene going on: the next objects start
+ * a new VDM segment after this one's terminate */
+static int
+kick_ta(struct sgxws_ctx *c)
+{
+   const struct sgxws_kif *kif = c->dev->kif;
+   int e;
+
+   c->seg_draws = 0;
+   /* the frame's kicks that fit in the backend's command ring with c->slots
+    * frames in flight (the last is the frame's own kick) */
+   if (kif->ring_kicks && c->ta_kicks + 2 > kif->ring_kicks / c->slots)
+      return 0;
+   target_wait(c);
+   sgxws_vdm_end(c);
+   if ((e = code_sync(c)) || (e = kif->kick_ta(c)))
+      return e;
+   c->ta_kicks++;
+   c->vdm.used = (c->vdm.used + 3) & ~3u;
+   c->vdm_start = c->vdm.bo.va + c->vdm.used;
+   return 0;
+}
+
 int
 sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
 {
@@ -1961,15 +2032,7 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
       return 0;
 
    sgxws_vdm_end(c);
-   if (kif->rt_one_in_flight) {
-      uint64_t t0 = sgxws_now_ns();
-
-      if (sgxws_seq_after(s->seq, c->done_seq) &&
-          c->slot_kick[s->seq_slot].seq == s->seq &&
-          slot_wait(c, s->seq_slot, 2000))
-         ws_err("the target's last render did not finish\n");
-      c->ns_target_wait += sgxws_now_ns() - t0;
-   }
+   target_wait(c);
    if ((e = code_sync(c)))
       ws_err("shader upload refused: %d\n", e);
    else
@@ -1996,8 +2059,10 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
 
       if (kif->frame_info)
          kif->frame_info(c, info, sizeof(info));
-      ws_err("frame %u (target %u): %u objects, %s, rc %d\n", c->frames,
-             s->frames, c->draws, info, e);
+      ws_err("frame %u (target %#x %ux%u frame %u, kick %u, slot %u, %.3f s): "
+             "%u objects, %s, rc %d\n",
+             c->frames, (unsigned)c->target.va, s->w, s->h, s->frames, seq,
+             c->slot, sgxws_now_ns() / 1e9, c->draws, info, e);
    }
 
    s->frames++;
@@ -2006,11 +2071,17 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    /* the next frame records into the next slot, once the render there is done */
    c->slot = (c->slot + 1) % c->slots;
    {
-      uint64_t t0 = sgxws_now_ns();
+      uint64_t t0 = sgxws_now_ns(), dt;
+      uint32_t waited = c->slot_kick[c->slot].seq, done = c->done_seq;
 
       if (slot_wait(c, c->slot, 2000) && !e)
          e = -ETIMEDOUT;
-      c->ns_slot_wait += sgxws_now_ns() - t0;
+      dt = sgxws_now_ns() - t0;
+      c->ns_slot_wait += dt;
+      if (c->dev->verbose && dt > 2000000)
+         ws_err("slot %u: waited %.1f ms for kick %u (last kick %u, done "
+                "%u)\n",
+                c->slot, dt / 1e6, waited, c->kicks, done);
    }
    ring_use_slot(&c->pds_pix, c->slot);
    ring_use_slot(&c->pds_vtx, c->slot);

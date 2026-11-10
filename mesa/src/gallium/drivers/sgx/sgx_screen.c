@@ -50,7 +50,11 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
    {"ffmediump", SGX_DEBUG_FF_MEDIUMP,
     "fixed-function fragment programs at mediump (F16; texture coordinates F32)"},
    {"zerocopy", SGX_DEBUG_ZERO_COPY,
-    "f32 vertex inputs DMAed where they are: buffers in place, client arrays copied as they are"},
+    "vertex inputs DMAed where they are (buffers in place, client arrays copied as they are), where it isn't the default"},
+   {"nozerocopy", SGX_DEBUG_NO_ZERO_COPY,
+    "vertex inputs gathered into f32 x 4, where zero-copy is the default"},
+   {"nolazyscanout", SGX_DEBUG_NO_LAZY_SCANOUT,
+    "scanout buffers on a dumb-buffer display (kmsro) are the display's from the start, not when a KMS handle is asked for"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -68,6 +72,7 @@ DEBUG_GET_ONCE_NUM_OPTION(sgx_trace_kicks, "SGX_TRACE_KICKS", 0)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_dry_run, "SGX_DRY_RUN", -1)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_frame_gap_us, "SGX_FRAME_GAP_US", 0)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_slots, "SGX_SLOTS", 0)
+DEBUG_GET_ONCE_NUM_OPTION(sgx_ta_split, "SGX_TA_SPLIT", 0)
 
 const char *
 sgx_dump_code_dir(void)
@@ -357,6 +362,7 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       .dry_run = debug_get_option_sgx_dry_run(),
       .frame_gap_us = debug_get_option_sgx_frame_gap_us(),
       .slots = debug_get_option_sgx_slots(),
+      .ta_split = debug_get_option_sgx_ta_split(),
    };
 
    if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {
@@ -375,6 +381,9 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
    snprintf(screen->name, sizeof(screen->name), "PowerVR %s",
             screen->features->name);
    screen->ro = ro;
+   screen->zero_copy =
+      !(sgx_drv_debug & SGX_DEBUG_NO_ZERO_COPY) &&
+      (screen->info->zero_copy || (sgx_drv_debug & SGX_DEBUG_ZERO_COPY));
    simple_mtx_init(&screen->lock, mtx_plain);
    slab_create_parent(&screen->transfer_pool, sizeof(struct sgx_transfer), 16);
 

@@ -1,0 +1,24 @@
+#!/bin/sh
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# kit-save NAME [quick]: /tmp/results as NAME on the stick's SGXKIT partition
+# (live-boot mounts it read-only). It is written as NAME.part and renamed, so a
+# power-off in the middle keeps the previous save. quick: no journal (the saves
+# every 15 s during the desktop).
+N=$1 Q=${2:-}
+R=/tmp/results
+M=/run/live/medium
+scrub() { sed -E -e 's/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g' \
+	-e 's/(SerialNumber|Serial Number|serial)([:=] *).*/\1\2(removed)/I'; }
+dmesg | scrub > "$R/dmesg.txt"
+[ -f /var/log/Xorg.0.log ] && cp /var/log/Xorg.0.log "$R/Xorg.0.log"
+[ -n "$Q" ] || journalctl -b --no-pager 2>/dev/null | scrub | tail -3000 > "$R/journal.txt"
+cp /proc/interrupts "$R/interrupts.txt"
+mount -o remount,rw "$M" 2>/dev/null || exit 1
+# tar exits 1 when a file changed while it read it (the smoke test is still writing)
+tar -C /tmp -czf "$M/$N.part" results 2>/dev/null
+rc=$?
+[ $rc -le 1 ] && mv -f "$M/$N.part" "$M/$N" && sync && rc=0
+mount -o remount,ro "$M" 2>/dev/null
+exit $rc

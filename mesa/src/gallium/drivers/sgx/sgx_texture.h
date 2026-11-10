@@ -17,6 +17,7 @@ struct sgx_resource;
 /* T1 format code for a sampled gallium format, or 0 (docs/TEX.md section 1) */
 unsigned sgx_tex_format(enum pipe_format format);
 unsigned sgx_tex_bpp(enum pipe_format format);
+bool sgx_tex_bgra(enum pipe_format format);
 unsigned sgx_tex_dev_last(const struct pipe_resource *prsc);
 void sgx_tex_set_tail(struct sgx_resource *res, unsigned l);
 

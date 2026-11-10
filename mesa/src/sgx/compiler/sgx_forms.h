@@ -55,6 +55,7 @@ enum sgx_form {
    SGX_OP_PCK_F32_U8,
    SGX_OP_PCK_U8_F32,
    SGX_OP_PCK_U8_F16,
+   SGX_OP_PCK_U8_U8,
    SGX_OP_PCK_S16_F32,
    SGX_OP_PCK_C10_F32,
    SGX_OP_PCK_C10_C10,
@@ -63,6 +64,7 @@ enum sgx_form {
    SGX_OP_TEST,
    SGX_OP_TESTMASK,
    SGX_OP_AND,
+   SGX_OP_OR,
    SGX_OP_XOR,
    /* hw 11, 12: colour */
    SGX_OP_SOPWM,

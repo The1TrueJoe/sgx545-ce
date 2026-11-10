@@ -1437,6 +1437,56 @@ first_free(const struct sgx_compile_options *o, enum sgx_layout_kind k)
              : 0;
 }
 
+/* A loop that can leave early (a break besides its trip count, or one the
+ * frontend merged into it, so the trip count isn't exact) stays a loop, as
+ * libusc keeps it: unrolled, its exits become a select tree that holds every
+ * iteration's value to the end (corpus loop_v: 31 temporaries, 4 as a loop,
+ * libusc 9). Loops that index arrays are still unrolled. */
+static bool
+keep_early_exit_loops_cf(struct exec_list *list)
+{
+   bool progress = false;
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      switch (node->type) {
+      case nir_cf_node_if: {
+         nir_if *nif = nir_cf_node_as_if(node);
+         progress |= keep_early_exit_loops_cf(&nif->then_list);
+         progress |= keep_early_exit_loops_cf(&nif->else_list);
+         break;
+      }
+      case nir_cf_node_loop: {
+         nir_loop *loop = nir_cf_node_as_loop(node);
+         progress |= keep_early_exit_loops_cf(&loop->body);
+         if (loop->control == nir_loop_control_none && loop->info &&
+             !loop->info->force_unroll &&
+             (list_length(&loop->info->loop_terminator_list) > 1 ||
+              !loop->info->exact_trip_count_known)) {
+            loop->control = nir_loop_control_dont_unroll;
+            progress = true;
+         }
+         break;
+      }
+      default:
+         break;
+      }
+   }
+   return progress;
+}
+
+static bool
+keep_early_exit_loops(nir_shader *s)
+{
+   bool progress = false;
+   nir_foreach_function_impl (impl, s) {
+      nir_metadata_require(impl, nir_metadata_loop_analysis,
+                           s->options->force_indirect_unrolling,
+                           (int)s->options->force_indirect_unrolling_sampler);
+      progress |= keep_early_exit_loops_cf(&impl->body);
+      nir_progress(true, impl, nir_metadata_all);
+   }
+   return progress;
+}
+
 static void
 optimize(nir_shader *s)
 {
@@ -1805,6 +1855,8 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_split_var_copies);
    NIR_PASS(_, s, nir_lower_var_copies);
    NIR_PASS(_, s, nir_lower_vars_to_ssa);
+   if (!sgx_debug(c, SGX_DBG_UNROLL_EXITS))
+      NIR_PASS(_, s, keep_early_exit_loops);
    optimize(s);
    if (s->info.stage == MESA_SHADER_FRAGMENT &&
        nir_shader_intrinsics_pass(s, colour_sat_instr,
