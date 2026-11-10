@@ -444,6 +444,7 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	err = drm_sched_entity_init(&ctx->entity, sched_priority(args->priority), &sched, 1, NULL);
 	if (err)
 		goto err_put;
+	pvrsgx_vm_user_get(ctx->vm);
 	err = xa_alloc(&sfile->contexts, &args->handle, ctx, xa_limit_32b, GFP_KERNEL);
 	if (err)
 		goto err_entity;
@@ -451,6 +452,7 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 
 err_entity:
 	drm_sched_entity_destroy(&ctx->entity);
+	pvrsgx_vm_user_put(ctx->vm);
 err_put:
 	context_put(ctx);
 	return err;
@@ -458,7 +460,9 @@ err_put:
 
 static void context_destroy(struct pvrsgx_context *ctx)
 {
+	/* Its queued jobs are on the GPU or cancelled before its VM's mappings may go. */
 	drm_sched_entity_destroy(&ctx->entity);
+	pvrsgx_vm_user_put(ctx->vm);
 	context_put(ctx);
 }
 

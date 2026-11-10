@@ -41,11 +41,15 @@ struct pvrsgx_vm {
 	struct mutex lock;
 	/** @ref: Held by the handle, its contexts and their jobs. */
 	struct kref ref;
+	/** @users: The handle and the live contexts; at zero its mappings go. */
+	atomic_t users;
 };
 
 struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);
 struct pvrsgx_vm *pvrsgx_vm_get(struct pvrsgx_vm *vm);
 void pvrsgx_vm_put(struct pvrsgx_vm *vm);
+void pvrsgx_vm_user_get(struct pvrsgx_vm *vm);
+void pvrsgx_vm_user_put(struct pvrsgx_vm *vm);
 struct dma_resv *pvrsgx_vm_resv(struct pvrsgx_vm *vm);
 struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
 void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);

@@ -163,6 +163,45 @@ void pvrsgx_vm_put(struct pvrsgx_vm *vm)
 		kref_put(&vm->ref, vm_release);
 }
 
+void pvrsgx_vm_user_get(struct pvrsgx_vm *vm)
+{
+	atomic_inc(&vm->users);
+}
+
+/*
+ * The handle or a context is gone. With neither left, nothing can submit to
+ * the VM again: once its jobs are done, unmap and release every object. The
+ * VM itself can live on much longer, held by its contexts' kernel objects
+ * until a later render (pvrsgx_kobj.c), but the client's memory goes now.
+ */
+void pvrsgx_vm_user_put(struct pvrsgx_vm *vm)
+{
+	struct pvrsgx_device *sdev = vm->sdev;
+	struct drm_gpuva *va, *next;
+	long ret;
+
+	if (!atomic_dec_and_test(&vm->users))
+		return;
+
+	ret = dma_resv_wait_timeout(pvrsgx_vm_resv(vm), DMA_RESV_USAGE_BOOKKEEP,
+				    false, MAX_SCHEDULE_TIMEOUT);
+	if (ret <= 0) {
+		drm_warn(&sdev->base, "VM teardown: wait for jobs failed (%ld)\n", ret);
+		return;
+	}
+	mutex_lock(&vm->lock);
+	drm_gpuvm_for_each_va_safe(va, next, &vm->gpuvm) {
+		pvrsgx_mmu_unmap(vm->mmu, va->va.addr, va->va.range);
+		drm_gpuva_remove(va);
+		va_release(vm, va);
+	}
+	mutex_unlock(&vm->lock);
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD |
+				  PVRSGX_CC_INVAL_DATA;
+	mutex_unlock(&sdev->ccb_lock);
+}
+
 static void pvrsgx_gpuvm_free(struct drm_gpuvm *gpuvm)
 {
 	kfree(container_of(gpuvm, struct pvrsgx_vm, gpuvm));
@@ -201,6 +240,7 @@ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
 		    PVRSGX_HEAP_TA_DATA - PVRSGX_HEAP_3D_PARAMS);
 	mutex_init(&vm->lock);
 	kref_init(&vm->ref);
+	atomic_set(&vm->users, 1);
 	return vm;
 }
 
@@ -223,6 +263,7 @@ void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile)
 
 	xa_for_each(&sfile->vms, handle, vm) {
 		xa_erase(&sfile->vms, handle);
+		pvrsgx_vm_user_put(vm);
 		pvrsgx_vm_put(vm);
 	}
 }
@@ -258,6 +299,7 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 	if (!vm)
 		return -EINVAL;
 	/* Contexts and jobs that use it keep it until they are done. */
+	pvrsgx_vm_user_put(vm);
 	pvrsgx_vm_put(vm);
 	return 0;
 }
