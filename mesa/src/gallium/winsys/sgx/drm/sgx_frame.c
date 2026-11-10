@@ -2305,12 +2305,36 @@ wmask_words(unsigned m, unsigned color_pa, uint32_t w[2])
           (m & 4 ? 1u << 14 : 0) | (m & 8 ? 1u << 11 : 0);
 }
 
+static uint32_t
+upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
+          const uint64_t *code1, unsigned count1, unsigned color_pa,
+          const struct sgxws_blend *blend, int discard_pa, unsigned temps);
+
 uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
                 unsigned color_pa, const struct sgxws_blend *blend,
                 int discard_pa, unsigned temps)
 {
-   uint32_t *w = malloc((count + 12) * 8), va, b[2];
+   return upload_fs(c, code, count, NULL, 0, color_pa, blend, discard_pa,
+                    temps);
+}
+
+uint32_t
+sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
+                      const uint64_t *code1, unsigned n1, unsigned color_pa1,
+                      const struct sgxws_blend *blend, int discard_pa,
+                      unsigned temps)
+{
+   return upload_fs(c, code, n, code1, n1, color_pa1, blend, discard_pa,
+                    temps);
+}
+
+static uint32_t
+upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
+          const uint64_t *code1, unsigned count1, unsigned color_pa,
+          const struct sgxws_blend *blend, int discard_pa, unsigned temps)
+{
+   uint32_t *w = malloc((count + count1 + 12) * 8), va, b[2];
    bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
 
@@ -2343,6 +2367,9 @@ sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
       if (n & 1)
          put(w, &n, 0, 0xf8000140u); /* nop: phase 1 on 16 bytes */
       w[0] = n;                      /* relocated to an absolute pc */
+      /* split: the colour's code runs here, only for the pixels that pass */
+      if (code1)
+         put_code(w, &n, code1, count1);
       if (blend && blend->blend)
          put_blend(w, &n, blend, color_pa, !masked, true); /* without end */
       if (masked) {

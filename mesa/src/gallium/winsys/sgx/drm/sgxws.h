@@ -402,6 +402,14 @@ uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
 uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
                          unsigned color_pa, const struct sgxws_blend *blend,
                          int discard_pa, unsigned temps);
+/* a program split around its discard: code (phase 0) ends at the feedback
+ * nop, code1 (phase 1, only for the pixels that pass) leaves the colour in
+ * pa<color_pa1> */
+uint32_t sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code,
+                               unsigned n, const uint64_t *code1, unsigned n1,
+                               unsigned color_pa1,
+                               const struct sgxws_blend *blend, int discard_pa,
+                               unsigned temps);
 void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
                        uint32_t w[2]);
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code,
