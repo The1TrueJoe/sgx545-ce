@@ -15,7 +15,8 @@ auxiliary device, `gma500_gfx.sgx`, for powervr_sgx (`CONFIG_DRM_POWERVR_SGX_GMA
 - `0005`: memory self-refresh is left off with a single pipe. With it on, the
   LVDS panel goes black (backlight on, pipe B's FIFO underruns) on an Atom
   N2600 and a D2500 laptop.
-- `0006`: a page flip's event is sent even when no vblank interrupt will come (the pipe off, or DPMS off mid-flip).
+
+`pending/` holds patches that aren't applied yet (`0006`, the page-flip event fix, until it has run on Cedarview hardware).
 
 They are written to go to the gma500 maintainers as they are. Before sending,
 the author adds a `Signed-off-by:`.
