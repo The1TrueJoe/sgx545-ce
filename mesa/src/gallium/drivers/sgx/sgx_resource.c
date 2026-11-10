@@ -187,6 +187,8 @@ sgx_resource_create(struct pipe_screen *pscreen,
       if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
           dumb_display(screen)) {
          res->dumb_later = true;
+         if (sgx_drv_debug & SGX_DEBUG_NO_LAZY_SCANOUT)
+            make_scanout(screen, res);
          return prsc;
       }
       /* kmsro otherwise: exported to the display device, which scans it out */
