@@ -228,8 +228,7 @@ operands(struct cursor *c, struct sgx_pds_instr *in)
    case SGX_PDS_OPC_OP0XD_S1:
    case SGX_PDS_OPC_OP0X4_S1:
    case SGX_PDS_OPC_OP0X6_S1:
-      if (!word(c, &in->dst) || in->dst.file == SGX_PDS_FILE_IN ||
-          in->dst.hi)
+      if (!word(c, &in->dst) || in->dst.file == SGX_PDS_FILE_IN || in->dst.hi)
          return "bad destination";
       if (!word(c, &in->src1) || in->src1.file == SGX_PDS_FILE_DS1)
          return "src1 is ds0 or an input";

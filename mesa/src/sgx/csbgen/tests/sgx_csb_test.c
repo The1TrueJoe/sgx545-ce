@@ -18,13 +18,13 @@ static unsigned failures, cases;
 #define CHECK(T, expect, name, ...)                                            \
    do {                                                                        \
       uint32_t _w[8] = {0}, _w2[8] = {0};                                      \
-      struct SGX_##T _u;                                                    \
-      sgx_pack(_w, T, name)                                                 \
+      struct SGX_##T _u;                                                       \
+      sgx_pack(_w, T, name)                                                    \
       {                                                                        \
          __VA_ARGS__;                                                          \
       }                                                                        \
-      SGX_##T##_unpack(_w, &_u);                                            \
-      SGX_##T##_pack(_w2, &_u);                                             \
+      SGX_##T##_unpack(_w, &_u);                                               \
+      SGX_##T##_pack(_w2, &_u);                                                \
       cases++;                                                                 \
       if (_w[0] != (expect) || _w2[0] != _w[0]) {                              \
          fprintf(stderr,                                                       \
@@ -106,8 +106,7 @@ test_ta(void)
          s.compare_mask = 0xf0; s.write_mask = 0xff);
    CHECK(TA_STATE_ISPC, 0x0453f0ff, s, s.func = SGX_TA_CMP_EQUAL;
          s.compare_mask = 0xf0; s.write_mask = 0xff;
-         s.sfail = SGX_TA_STENCILOP_ZERO;
-         s.zfail = SGX_TA_STENCILOP_REPLACE;
+         s.sfail = SGX_TA_STENCILOP_ZERO; s.zfail = SGX_TA_STENCILOP_REPLACE;
          s.zpass = SGX_TA_STENCILOP_INCR);
    CHECK(TA_STATE_ISPC, 0x0e0200ff, s, s.func = SGX_TA_CMP_ALWAYS;
          s.zpass = SGX_TA_STENCILOP_REPLACE; s.write_mask = 0xff);
@@ -158,8 +157,7 @@ test_pbe(void)
    CHECK(PBE_STATE_WORD0, 0x00000000, w, (void)w);
    CHECK(PBE_STATE_WORD1, 0x01df02cf, w, w.x_max = 719; w.y_max = 479);
    CHECK(PBE_STATE_WORD2, 0x016f8000, w, w.pitch = 367);
-   CHECK(PBE_STATE_WORD3, 0x3e265000, w,
-         w.address = SGX_DEV_ADDR(0x3e265000));
+   CHECK(PBE_STATE_WORD3, 0x3e265000, w, w.address = SGX_DEV_ADDR(0x3e265000));
    CHECK(PBE_SIDEBAND, 0x00000600, s, s.format = SGX_PBE_FORMAT_BGRA8888;
          s.dither = true);
    /* FBO targets: twiddled, dithered RGBA8888, RGB565, RGBA4444 */
@@ -190,28 +188,21 @@ test_tex(void)
    /* a strided 736-pixel surface, and a 72-pixel 16-bit one (pitch in 32-bit
     * words) */
    CHECK(TEXSTATE_STRIDED_WORD0, 0x00b60e90, t, t.pitch_lo = 735 & 7;
-         t.pitch_hi = 735 >> 3;
-         t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_CLAMP);
+         t.pitch_hi = 735 >> 3; t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_CLAMP);
    CHECK(TEXSTATE_STRIDED_WORD0, 0x00080690, t, t.pitch_lo = 35 & 7;
-         t.pitch_hi = 35 >> 3;
-         t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_CLAMP);
+         t.pitch_hi = 35 >> 3; t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_CLAMP);
 
    /* T1: 8x8 RGBA8888, 12x6 linear, a 16x16 cube, a 720x480 window */
-   CHECK(TEXSTATE_WORD1, 0x0d007007, t,
-         t.format = SGX_TEXSTATE_FORMAT_RGBA8888;
+   CHECK(TEXSTATE_WORD1, 0x0d007007, t, t.format = SGX_TEXSTATE_FORMAT_RGBA8888;
          t.width = 7; t.height = 7);
-   CHECK(
-      TEXSTATE_WORD1, 0x6d00b005, t, t.layout = SGX_TEXSTATE_LAYOUT_LINEAR;
-      t.format = SGX_TEXSTATE_FORMAT_RGBA8888; t.width = 11; t.height = 5);
+   CHECK(TEXSTATE_WORD1, 0x6d00b005, t, t.layout = SGX_TEXSTATE_LAYOUT_LINEAR;
+         t.format = SGX_TEXSTATE_FORMAT_RGBA8888; t.width = 11; t.height = 5);
    CHECK(TEXSTATE_WORD1, 0x4d00f00f, t, t.layout = SGX_TEXSTATE_LAYOUT_CUBE;
-         t.format = SGX_TEXSTATE_FORMAT_RGBA8888; t.width = 15;
-         t.height = 15);
-   CHECK(TEXSTATE_WORD1, 0xcc2cf1df, t,
-         t.layout = SGX_TEXSTATE_LAYOUT_STRIDED;
+         t.format = SGX_TEXSTATE_FORMAT_RGBA8888; t.width = 15; t.height = 15);
+   CHECK(TEXSTATE_WORD1, 0xcc2cf1df, t, t.layout = SGX_TEXSTATE_LAYOUT_STRIDED;
          t.format = SGX_TEXSTATE_FORMAT_BGRA8888; t.width = 719;
          t.height = 479);
-   CHECK(TEXSTATE_WORD2, 0xf0001000, t,
-         t.address = SGX_DEV_ADDR(0xf0001000));
+   CHECK(TEXSTATE_WORD2, 0xf0001000, t, t.address = SGX_DEV_ADDR(0xf0001000));
 
    /* T3: tex1, tex2, the background object's load */
    CHECK(TEXSTATE_WORD3, 0x00800800, t, t.unknown_11 = true);

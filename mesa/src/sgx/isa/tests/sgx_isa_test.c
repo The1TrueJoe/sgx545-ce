@@ -146,8 +146,7 @@ run_file(const char *path, bool table, unsigned *count)
                  path, lineno, text, lo, hi, want[0], want[1]);
          ok = false;
       }
-      if (!sgx_disasm_one(w, &fc, dis, sizeof(dis)) ||
-          !same_text(dis, text)) {
+      if (!sgx_disasm_one(w, &fc, dis, sizeof(dis)) || !same_text(dis, text)) {
          fprintf(stderr, "%s:%u: %s: %08x %08x disassembles as: %s\n", path,
                  lineno, text, lo, hi, dis);
          ok = false;

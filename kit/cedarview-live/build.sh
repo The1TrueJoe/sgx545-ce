@@ -40,7 +40,9 @@ for t in powervr_sgx_test powervr_sgx_frame powervr_sgx_blit powervr_sgx_hang; d
 done
 [ -n "$FWX" ] && install -m 0644 "$FWX" "$ROOT/usr/local/lib/kit/sgx545_ukernel-xferbank.bin"
 install -m 0755 "$HERE/kit-live-run" "$ROOT/usr/local/sbin/"
-install -m 0755 "$HERE/kit-desktop" "$HERE/kit-session" "$HERE/kit-smoke" "$HERE/kit-xorg" "$ROOT/usr/local/bin/"
+install -m 0755 "$HERE/kit-xvariant" "$HERE/kit-session" "$HERE/kit-smoke" "$HERE/kit-xorg" \
+	"$HERE/kit-display" "$HERE/kit-save" "$HERE/kit-hangcap" "$HERE/kit-wdt" "$ROOT/usr/local/bin/"
+install -m 0644 "$HERE/desktop-variants" "$ROOT/usr/local/lib/kit/"
 install -m 0644 "$HERE/test.html" "$ROOT/usr/local/share/kit/"
 install -m 0644 "$HERE/99-kit-readonly.rules" "$ROOT/etc/udev/rules.d/"
 install -m 0755 "$HERE/initramfs-hook" "$ROOT/etc/initramfs-tools/hooks/kit-readonly"

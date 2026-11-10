@@ -1,0 +1,37 @@
+#!/bin/bash
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# kit-hangcap FILE TAG: what a stuck X (and its GL clients) are waiting on,
+# appended to FILE: each process's state, wchan, kernel stack and every
+# thread's kernel stack, the DRM state, then sysrq-w (blocked tasks into the
+# kernel log) and the kernel log's tail. gdb only for a process that is not in
+# D state (attaching to a D-state task hangs gdb), and never longer than 20 s.
+F=$1 TAG=$2
+{
+	echo "==== $TAG at uptime $(cut -d' ' -f1 /proc/uptime)"
+	for name in Xorg xinit glxinfo es2gears_x11 glmark2 firefox-esr xfce4-session; do
+		for p in $(pidof "$name"); do
+			st=$(awk '/^State:/ {print $2}' /proc/$p/status 2>/dev/null)
+			echo "== $name pid $p state ${st:-gone} wchan $(cat /proc/$p/wchan 2>/dev/null)"
+			for t in /proc/$p/task/*; do
+				[ -r "$t/stack" ] || continue
+				echo "-- task ${t##*/} ($(cat $t/comm 2>/dev/null)) state $(awk '/^State:/ {print $2}' $t/status 2>/dev/null)"
+				cat "$t/stack"
+			done
+			if [ "$name" = Xorg ] && [ "$st" != D ] && command -v gdb > /dev/null; then
+				echo "-- gdb thread apply all bt (state $st)"
+				timeout -k 5 20 gdb -q -p "$p" -batch -ex 'thread apply all bt' 2>&1 | tail -150
+			fi
+		done
+	done
+	mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
+	for st in /sys/kernel/debug/dri/*/state; do
+		[ -r "$st" ] && { echo "== $st"; cat "$st"; }
+	done
+	echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+	echo w > /proc/sysrq-trigger 2>/dev/null
+	sleep 1
+	echo "== kernel log tail"
+	dmesg | tail -120
+} >> "$F" 2>&1

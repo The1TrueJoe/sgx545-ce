@@ -57,36 +57,25 @@ Use one of these free programs:
 2. Turn it on, and right away press the key for the **boot menu** a few times. It's
    usually **F12**, **Esc**, **F10** or **F11**. The start-up screen often shows which one.
 3. In the menu, pick the USB stick.
-4. A menu with four entries appears. Pick **1** (it starts by itself after 10 seconds).
-   All four run the same test with different display settings.
-
-**Please run the test six times: entry 1 three times, then entry 2 three times.** Some
-screens go dark only some of the time, so we need to know how often, not just once.
 
 If the computer starts its normal system instead, restart it and try another key. On some
 computers you have to turn on "Boot from USB" in the BIOS setup first (often **F2** or
 **Del**).
 
-## 4. Wait a few minutes
+## 4. Walk away
 
-The screen shows five steps as they run. You don't have to do anything. At the end you
-see **DONE. Thank you!** and the name of the results file.
+The test runs by itself for up to 15 minutes. You don't have to watch it or press anything.
+The screen shows "Testing 3 of 8" and so on, and it may change or go dark while the test
+tries different display settings; that is expected.
 
-Then type **p** and press **Enter** to turn the computer off, and unplug the stick.
+When it is done, the screen says **"Done. Thank you!"**. Then the computer either turns
+itself off, or opens a desktop that worked on your computer, for you to try.
+Either way, the results are already saved, and you can switch the computer off whenever
+you like.
 
-At the end the screen also asks whether you could see it. Please answer that in your
-comment.
-
-**If the screen goes dark** (some Cedarview panels do with Linux):
-
-1. Wait about five minutes. The test keeps running and saves its results.
-2. Hold the power button to turn the computer off.
-3. Start the next run from the stick (step 3).
-
-Each run saves its own results file. Send all of them, and tell us how many of the three
-runs were dark with each entry (for example "entry 1: 0 of 3 dark, entry 2: 2 of 3 dark"),
-and whether it was fully dark (no backlight) or lit but black. If entries 1 and 2 both go
-dark every time, try entries 3 and 4 once each as well.
+If after 20 minutes the computer is still on and you see neither "Done. Thank you!" nor a
+desktop, or it restarted into its own system, start it from the stick once more (step 3).
+The test carries on where it stopped, in the same results file.
 
 ## 5. Send us the results
 
@@ -94,11 +83,11 @@ dark every time, try entries 3 and 4 once each as well.
 2. Find the drive named **SGXKIT**. It is the whole USB stick: the test system and the
    results are both on it.
    On Windows, if no SGXKIT drive shows up, unplug the stick and plug it in again.
-3. On SGXKIT, find the files whose names start with **`results-`** and end with
-   **`.tar.gz`**: one per try (the `-e1-`, `-e2-`, ... in the name is the menu entry).
-4. Attach them to a comment on the GitHub issue where you were asked to test. You can drag
-   them straight from the SGXKIT drive into the comment box. You don't need to copy or unzip
-   them first. Please also say which computer model you used.
+3. On SGXKIT, find the file whose name starts with **`results-`** and ends with
+   **`.tar.gz`**.
+4. Attach it to a comment on the GitHub issue where you were asked to test. You can drag it
+   straight from the SGXKIT drive into the comment box. You don't need to copy or unzip it
+   first. Please also say which computer model you used.
 
 The files contain only technical information about your computer's hardware and what the
 driver reported. Serial numbers and network addresses are removed. No personal files are
@@ -106,7 +95,7 @@ ever read.
 
 ## What happens next
 
-The test first asks the graphics chip what it is. If our driver knows the chip, it then
-starts it and draws a few small test images, and checks that it recovers from a
-deliberate error. Nothing is shown on the screen while it does this. Each kit you test
-lets us support more of your computer. The next ones will run desktop graphics.
+The test asks the graphics chip what it is, starts it with our driver and draws test
+images, checks that it recovers from a deliberate error, then runs a desktop with the chip
+drawing it, in several display settings. Your results tell us which of these work on your
+computer, and what to fix where they don't.

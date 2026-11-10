@@ -116,7 +116,7 @@ tidy(char *s)
 
 bool
 sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
-                  size_t size)
+               size_t size)
 {
    struct sgx_isa_fc f = fc ? *fc : SGX_ISA_FC_START;
    uint32_t words[2] = {(uint32_t)word, (uint32_t)(word >> 32)};
@@ -128,11 +128,11 @@ sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
       return false;
 
    sgx_isa_disasm(words, sizeof(words), out,
-                     &(struct isa_decode_options){
-                        .gpu_id = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
-                        .show_errors = true,
-                        .field_print_cb = print_custom,
-                     });
+                  &(struct isa_decode_options){
+                     .gpu_id = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
+                     .show_errors = true,
+                     .field_print_cb = print_custom,
+                  });
    fclose(out);
 
    tidy(text);
@@ -145,7 +145,7 @@ sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
 
 void
 sgx_disasm(const uint32_t *words, unsigned n, FILE *out,
-              const struct sgx_isa_fc *fc)
+           const struct sgx_isa_fc *fc)
 {
    struct sgx_isa_fc f = fc ? *fc : SGX_ISA_FC_START;
    char line[512];

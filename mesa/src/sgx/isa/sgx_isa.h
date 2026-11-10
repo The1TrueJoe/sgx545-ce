@@ -170,18 +170,18 @@ struct sgx_isa_fc {
 
 /* Encode one instruction. fc may be NULL (program-start state). */
 uint64_t sgx_isa_encode(const struct sgx_isa_instr *instr,
-                           const struct sgx_isa_fc *fc);
+                        const struct sgx_isa_fc *fc);
 
 /*
  * Disassemble n instructions (low word first) to out, one per line.
  * Format control is tracked through setfc from fc (NULL: program start).
  */
 void sgx_disasm(const uint32_t *words, unsigned n, FILE *out,
-                   const struct sgx_isa_fc *fc);
+                const struct sgx_isa_fc *fc);
 
 /* One instruction to a string (no newline); false if nothing matched. */
 bool sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
-                       size_t size);
+                    size_t size);
 
 /*
  * Co-issue (ISA.md "fdual for a compiler", "efo"). What an fdual's two
@@ -197,14 +197,15 @@ struct sgx_isa_fdual_use {
 };
 
 bool sgx_isa_fdual_use(const struct sgx_isa_instr *instr,
-                          struct sgx_isa_fdual_use *use);
+                       struct sgx_isa_fdual_use *use);
 
 /*
  * A same-word race the hardware shows (an fdual primary reading an internal
- * register its secondary writes; efo's d naming one the word writes): a
- * reason, or NULL. Not hazards, by ISA.md: both halves reading one slot, the
+ * register its secondary writes; efo's d naming I0 while the word writes I0):
+ * a reason, or NULL. Not hazards, by ISA.md: both halves reading one slot, the
  * secondary reading an internal register the primary writes, the next
- * instruction reading the secondary's result.
+ * instruction reading the secondary's result, efo's d=i1 with wi1 (it reads
+ * the old I1).
  */
 const char *sgx_isa_coissue_hazard(const struct sgx_isa_instr *instr);
 
