@@ -7,7 +7,9 @@ gma500 had it, for an A/B on the same kernel. gma500_gfx.cdv_dsparb=<n>
 writes n to DSPARB in place of 0x3f3e at every DPMS change. 0x3f3e gives
 pipe A, which is off on these laptops, half the FIFO. On the gen3 layout
 (plane B starts at bits 6:0, plane C at bits 13:7), 0x3f01 gives pipe B
-125 of the 126 lines.
+125 of the 126 lines. Both can be written at runtime, under
+/sys/module/gma500_gfx/parameters, and take effect at the next DPMS
+change (blanking and unblanking fb0, or a modeset).
 ---
 --- a/drivers/gpu/drm/gma500/cdv_intel_display.c
 +++ b/drivers/gpu/drm/gma500/cdv_intel_display.c
@@ -28,7 +30,7 @@ pipe A, which is off on these laptops, half the FIFO. On the gen3 layout
 + * gma500 had it before it was left off, for an A/B on the same kernel.
 + */
 +static bool cdv_sr;
-+module_param(cdv_sr, bool, 0444);
++module_param(cdv_sr, bool, 0644);
 +MODULE_PARM_DESC(cdv_sr, "Memory self-refresh with a single pipe, as before (test kits; default off)");
 +
  void cdv_update_wm(struct drm_device *dev, struct drm_crtc *crtc)
@@ -66,7 +68,7 @@ pipe A, which is off on these laptops, half the FIFO. On the gen3 layout
 + * place of 0x3f3e, which gives disabled pipe A half the FIFO.
 + */
 +static uint cdv_dsparb;
-+module_param(cdv_dsparb, uint, 0444);
++module_param(cdv_dsparb, uint, 0644);
 +MODULE_PARM_DESC(cdv_dsparb, "Cedarview DSPARB in place of 0x3f3e (test kits; 0 = 0x3f3e)");
 +
  /*
