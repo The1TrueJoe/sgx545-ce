@@ -753,7 +753,7 @@ The plan, largest first, with what each is worth:
 
 | item | owner | worth (frame ~75 ms) | state |
 |---|---|---|---|
-| four slots by default: the next frame recorded while this one renders | Mesa + X present path | +16% fps measured | blocked on X's dirtyfb wait on simpledrm |
+| four slots by default: the next frame recorded while this one renders | kernel (simpledrm's dirtyfb), then Mesa | +16% fps measured | the damage commit blocks Xorg's main thread on the copy's fences at every present; a nonblocking commit first, then the default flips with X latency remeasured |
 | TA/3D overlap across frames (the next world TA under this 3D) | open-ukernel + kernel | up to the 3D's ~22 ms with four slots; ~2% at three | parked: recovery storms with `overlap=1` |
 | fewer renders a frame: the small renders after the world (FBO blit, GUI) and X's copy, each a job with its own start cost | Mesa (scene merging, as the DDK's 3-kick scene), X flips | ~5-10 ms (their run time plus a kick-to-TA each) | to do |
 | 3D: F16 fixed-function and F16 samples (done, ~3.5 ms); phase split (done, neutral) | usse-compiler | done | default |
