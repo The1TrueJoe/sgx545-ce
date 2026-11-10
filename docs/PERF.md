@@ -334,7 +334,10 @@ EA3, normal boot, the same binary (frames a second; ours/DDK):
 - **Vertices:** 0.38-0.54 by default and 0.90-0.95 with
   `SGX_DEBUG=zerocopy` since 72b75fb: an indexed draw from buffers takes its
   indices as they are, from the index buffer's device copy, with no CPU work
-  a draw. Zero-copy is still opt-in. Its 79 (214 in a long run) dEQP fails
+  a draw. Zero-copy is the default on powervr_sgx since dEQP-GLES2 mustpass
+  (16,637 pass, 0 new fails, 0 timeouts) and piglit (no new fails) ran clean on
+  the EA1 (7bca567); services keeps it opt-in, `SGX_DEBUG=nozerocopy` turns it
+  off. Its 79 (214 in a long run) dEQP fails
   depended on test order: a stream uploader writes more into its mapped
   buffer, and the device copy was refreshed only at the unmap, so later
   tests' draws read zeros (fixed 7543399, 0d2b9ec: the copy is refreshed
