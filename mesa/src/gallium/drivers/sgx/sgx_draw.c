@@ -707,6 +707,18 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
    for (unsigned i = 0; i < so->n_consts; i++) {
       const struct sgx_const *k = &so->consts[i];
       float v = cb && k->k < avail ? cb[k->k] : 0.0f;
+
+      /* a texture's size (sgx_program.c lower_txs) */
+      if (stage == MESA_SHADER_FRAGMENT && k->k >= SGX_K_TEXSIZE &&
+          k->k < SGX_K_TEXSIZE + 2 * SGX_K_TEXSIZE_UNITS) {
+         const struct pipe_sampler_view *view =
+            ctx->views[(k->k - SGX_K_TEXSIZE) / 2];
+
+         v = !view ? 1.0f
+             : (k->k - SGX_K_TEXSIZE) & 1
+                ? (float)u_minify(view->texture->height0, view->u.tex.first_level)
+                : (float)u_minify(view->texture->width0, view->u.tex.first_level);
+      }
       uint32_t bits,
          *at[2] = {k->slot != 0xffff ? &block[base + k->slot] : NULL,
                    k->mem && mem ? &mem[k->mem] : NULL};
@@ -1514,6 +1526,22 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                      : blend && blend->blend ? 1
                                              : 0;
       d.fs = &fsp;
+      /* SGX_DEBUG=tspf16: the sets the fragment program iterates as F16 and
+       * doesn't sample from, F16 for the TSP as the DDK marks them (a set
+       * sampled with its bit set reads a constant coordinate) */
+      if (sgx_drv_debug & SGX_DEBUG_TSP_F16) {
+         uint32_t f16 = 0, sampled = 0;
+
+         for (unsigned i = 0; i < fsp.n_douti; i++) {
+            const struct sgx_pds_douti *di = &fsp.douti[i];
+
+            if (di->sample_set)
+               sampled |= 1u << (di->sample_set - 1);
+            if (di->iterate && di->prec1 && di->src >= 1 && di->src <= 10)
+               f16 |= 1u << (di->src - 1);
+         }
+         d.tsp_f16 = f16 & ~sampled;
+      }
       if (fs->mem_dwords)
          mem_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, &d.fs_mem);
       else

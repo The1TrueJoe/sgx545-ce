@@ -259,6 +259,9 @@ struct sgxws_block {
 
 struct sgxws_draw {
    uint32_t prim;         /* SGXWS_* */
+   /* TSP word 1 bits besides the vertex program's: the sets the fragment
+    * program iterates as F16 and doesn't sample from (SGX_DEBUG=tspf16) */
+   uint32_t tsp_f16;
    uint32_t count;        /* vertices */
    const uint32_t *verts; /* count x vs->attr_dwords dwords */
    /* NULL: the vertices in order; else n_indices 16-bit indices into them
@@ -304,6 +307,7 @@ struct sgxws_stats {
    unsigned room_flushes; /* frames submitted early because a ring filled */
    uint64_t gpu_indices, gpu_verts; /* what the VDM was given: indices, and the
                                        vertices they index */
+   unsigned state_sent, state_skipped; /* draws' TA state blocks */
 };
 
 /* debugging aids the driver passes on (its SGX_DEBUG options) */
@@ -317,7 +321,7 @@ struct sgxws_dev_options {
    int dry_run;    /* frames from the n-th on are built (and traced) but never
                       sent; -1: off */
    unsigned frame_gap_us; /* idle time after each render */
-   unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 3) */
+   unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 4) */
    unsigned ta_split;     /* a TA kick every n objects of a frame, the scene's
                              render at its end (0: one kick a frame) */
 };

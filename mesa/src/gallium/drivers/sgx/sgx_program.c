@@ -208,6 +208,56 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
    return true;
 }
 
+/* textureSize (level 0) of a fragment program, which st's lowering of
+ * rectangle lookups asks for (coords / textureSize): the size from driver
+ * constants (SGX_K_TEXSIZE) the draw fills, as floats, where the program
+ * converts it to float anyway */
+static bool
+lower_txs(nir_builder *b, nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *tex = nir_instr_as_tex(instr);
+   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+
+   if (tex->op != nir_texop_txs || tex->def.num_components > 2 ||
+       tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
+       (li >= 0 && (!nir_src_is_const(tex->src[li].src) ||
+                    nir_src_as_uint(tex->src[li].src))))
+      return false;
+   b->cursor = nir_before_instr(instr);
+   nir_def *f = nir_load_uniform(b, tex->def.num_components, 32,
+                                 nir_imm_int(b, 0),
+                                 .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
+                                 .range = tex->def.num_components,
+                                 .dest_type = nir_type_float32);
+   nir_def *i = NULL;
+
+   nir_foreach_use_including_if_safe (use, &tex->def) {
+      nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
+
+      if (u && u->type == nir_instr_type_alu &&
+          nir_instr_as_alu(u)->op == nir_op_i2f32) {
+         nir_alu_instr *alu = nir_instr_as_alu(u);
+         unsigned swz[NIR_MAX_VEC_COMPONENTS];
+
+         for (unsigned c = 0; c < alu->def.num_components; c++)
+            swz[c] = alu->src[0].swizzle[c];
+         b->cursor = nir_after_instr(u);
+         nir_def_rewrite_uses(&alu->def,
+                              nir_swizzle(b, f, swz, alu->def.num_components));
+      } else {
+         if (!i) {
+            b->cursor = nir_after_instr(nir_def_instr(f));
+            i = nir_f2i32(b, f);
+         }
+         nir_src_rewrite(use, i);
+      }
+   }
+   nir_instr_remove(instr);
+   return true;
+}
+
 /*
  * varying -> set location - VAR0, the same on both sides.  Entries are named
  * the way the compiler looks varyings up (sgx_nir.c var_names): st names a
@@ -621,8 +671,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             nir_metadata_control_flow, NULL);
    {
       /* a 1D texture is a 2D one a texel high (sgx_resource): its samples
-       * become 2D ones on that row */
-      nir_lower_tex_options tex = {.lower_1d = true, .lower_srgb = srgb};
+       * become 2D ones on that row; a rectangle texture's coordinates are
+       * divided by its size (lower_txs), which st's fixed-function programs
+       * leave to the driver (TFP's rectangle binding: xfwm4's compositor) */
+      nir_lower_tex_options tex = {
+         .lower_1d = true, .lower_srgb = srgb, .lower_rect = true};
 
       /* a sampler view's swizzle, as the texel comes out (sgx_fs_for) */
       for (unsigned u = 0; swz && u < PIPE_MAX_SAMPLERS; u++) {
@@ -633,6 +686,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             tex.swizzles[u][c] = swz[u] >> (3 * c) & 7;
       }
       NIR_PASS(_, nir, nir_lower_tex, &tex);
+   }
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, nir, nir_opt_dce);
    }
    remap_legacy_varyings(nir);
    /* (names the variables the way the list does) */
@@ -684,7 +742,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    /* a discarding fragment program in two phases, as the DDK runs its
     * alpha-tested ones: the test before the visibility feedback, the colour
     * after it for the pixels that pass (out.code1); the compiler decides */
-   opts.split_phases = !vertex && (sgx_drv_debug & SGX_DEBUG_PHASE_SPLIT);
+   opts.split_phases = !vertex && !(sgx_drv_debug & SGX_DEBUG_NO_PHASE_SPLIT);
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",
               vertex ? "vertex" : "fragment", out.log ? out.log : "");
