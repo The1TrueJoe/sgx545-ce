@@ -1631,7 +1631,20 @@ def build(a):
     a.i("wdf")
     a.i(f"str #{0xc38 // 4}, r4")                   # BIF_DIR_LIST_BASE1 = client PD (slot 1)
     a.label("skip_bif_pd")
-    a.i("limm r5, #0x1f")                           # BIF_BANK0: EDM=list 15, TA=list 1
+    if OVERLAP:
+        # PRESERVE the 3D nibble (BANK0 b12-15). On a host kick arriving while a previous render's 3D is still
+        # in flight (credit=2: the next command's EVENT_KICK comes during job N's 3D), a bare BANK0=0x1f would
+        # ZERO b12-15 and re-route N's in-flight 3D to list 0 = the idle PD -> the 3D faults on its next fetch
+        # (m2 decode of the 57cfae8 storm: BANK0 0x1f, 3D on the idle DIR_LIST_BASE0). Read-modify-write so the
+        # 3D keeps its list: result = (BANK0 & 0xf000) | 0x1f (EDM=15, TA=1, 3D nibble untouched).
+        a.i(f"ldr r5, #{0xc78 // 4}")
+        a.i("wdf")
+        a.i("limm r6, #0xf000")
+        a.i("and r5, r5, r6")
+        a.i("limm r6, #0x1f")
+        a.i("or r5, r5, r6")
+    else:
+        a.i("limm r5, #0x1f")                       # BIF_BANK0: EDM=list 15, TA=list 1
     a.i(f"str #{0xc78 // 4}, r5")
     # directory-cache invalidate (INVALDC): first kick only.
     a.i("test.and.eq p0, r13, r13")                 # render kick? skip INVALDC
