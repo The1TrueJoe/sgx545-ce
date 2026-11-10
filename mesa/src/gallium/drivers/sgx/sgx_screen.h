@@ -33,6 +33,8 @@
 #define SGX_DEBUG_FF_MEDIUMP     (1 << 17)
 #define SGX_DEBUG_ZERO_COPY      (1 << 18)
 #define SGX_DEBUG_NO_ZLS         (1 << 19)
+#define SGX_DEBUG_NO_ZERO_COPY   (1 << 20)
+#define SGX_DEBUG_NO_LAZY_SCANOUT (1 << 21)
 
 extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */
@@ -73,6 +75,7 @@ struct sgx_screen {
    unsigned n_retired;
 
    /* kmsro: the display device scanout buffers are allocated on */
+   bool zero_copy; /* sgxws_device_info.zero_copy, or SGX_DEBUG says */
    struct renderonly *ro;
 
    /* the core: what the kernel reports, and what its entry adds */

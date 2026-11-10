@@ -482,7 +482,8 @@ struct fetch {
    unsigned dwords; /* dwords it fills in the vertex */
    bool defaults;   /* missing components 0, 0, 0, 1 (compiled shaders) */
    /* the bytes as they are, for a vertex shader that unpacks them
-    * (SGX_DEBUG=zerocopy, sgx_pipe_shader.vtx_fmt): raw_bytes of them */
+    * (zero-copy: sgx_screen.zero_copy, sgx_pipe_shader.vtx_fmt): raw_bytes of
+    * them */
    bool raw;
    unsigned raw_bytes;
    struct sgx_resource *res; /* the buffer, NULL for client memory */
@@ -1105,10 +1106,10 @@ vtx_format(enum pipe_format format, uint8_t *fmt, unsigned *bytes)
    }
 }
 
-/* raw inputs DMAed where they are (SGX_DEBUG=zerocopy): a buffer's device
- * copy in place, a client array's bytes copied as they are, one block per
- * binding; the vertex shader unpacks them.  Draws up to the index limit; the
- * rest take the gather, raw too. */
+/* raw inputs DMAed where they are (zero-copy, sgx_screen.zero_copy): a buffer's
+ * device copy in place, a client array's bytes copied as they are, one block
+ * per binding; the vertex shader unpacks them.  Draws up to the index limit;
+ * the rest take the gather, raw too. */
 static bool
 resident_indexed(const struct pipe_draw_info *info,
                  const struct pipe_draw_start_count_bias *draw,
@@ -1137,10 +1138,10 @@ zc_draw_resident(struct sgx_context *ctx, const struct pipe_draw_info *info,
    unsigned count = draw->count;
 
    if (!u_trim_pipe_prim(info->mode, &count) || !count ||
-       !sgx_buffer_vbo(ctx, ib))
+       !sgx_buffer_vbo(ctx, ib, draw->start * 2, count * 2))
       return false;
    for (unsigned e = 0; e < n_fetch; e++) {
-      if (!sgx_buffer_vbo(ctx, f[e].res))
+      if (!sgx_buffer_vbo(ctx, f[e].res, f[e].offset, ~0u))
          return false;
       zf[e] = (struct sgxws_fetch){.stride = f[e].stride,
                                    .dwords = f[e].raw_bytes / 4,
@@ -1238,7 +1239,8 @@ zc_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
       zf[e] =
          (struct sgxws_fetch){.stride = f[e].stride, .dwords = n, .reg = 4 * e};
       if (f[e].res) {
-         if (!sgx_buffer_vbo(ctx, f[e].res))
+         if (!sgx_buffer_vbo(ctx, f[e].res, f[e].offset + lo * f[e].stride,
+                             (hi - lo) * f[e].stride + n * 4))
             return false;
          zf[e].va = f[e].res->vbo.va + f[e].offset + lo * f[e].stride;
          if (zf[e].va & 3)
@@ -1465,9 +1467,9 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
       const struct sgx_pipe_shader *vfs =
          fs->kind == SGX_SHADER_COMPILED ? fs : NULL;
 
-      /* SGX_DEBUG=zerocopy: inputs the vertex shader unpacks itself, when
-       * the compiler knows every format */
-      raw = (sgx_drv_debug & SGX_DEBUG_ZERO_COPY) && ctx->velems &&
+      /* zero-copy (sgx_screen.zero_copy): inputs the vertex shader unpacks
+       * itself, when the compiler knows every format */
+      raw = sgx_screen(ctx->base.screen)->zero_copy && ctx->velems &&
             ctx->vs->n_attribs <= 16 &&
             ctx->vs->n_attribs <= ctx->velems->num_elements;
       for (unsigned e = 0; raw && e < ctx->vs->n_attribs; e++)
@@ -1817,7 +1819,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
        * a vertex from its cached gather and its quads' indices expanded
        * once, where zero-copy DMAs each input and expands them every draw
        * (docs/PERF.md) */
-      bool zc = compiled && (sgx_drv_debug & SGX_DEBUG_ZERO_COPY);
+      bool zc = compiled && sgx_screen(ctx->base.screen)->zero_copy;
 
       /* (zero-copy's draw from an index buffer as it is goes first: nothing
        * of it is read on the CPU) */

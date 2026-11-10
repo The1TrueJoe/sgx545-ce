@@ -187,6 +187,8 @@ sgx_resource_create(struct pipe_screen *pscreen,
       if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
           dumb_display(screen)) {
          res->dumb_later = true;
+         if (sgx_drv_debug & SGX_DEBUG_NO_LAZY_SCANOUT)
+            make_scanout(screen, res);
          return prsc;
       }
       /* kmsro otherwise: exported to the display device, which scans it out */
@@ -439,15 +441,33 @@ vbo_retire(struct sgx_screen *screen, struct sgxws_bo *bo, uint32_t seq)
    }
 }
 
+/* The buffer's device copy for a draw that reads bytes [off, off + size) of
+ * it (screen lock held).  Unmaps copy what was written, so a copy is current
+ * unless the buffer is mapped for writes still (a stream uploader writes more
+ * into its mapped buffer): then the draw's range is copied again, into the
+ * same copy.  Such a map is unsynchronized (a synchronized one retires a copy
+ * renders may read: sgx_transfer_map), whose writes promise to leave alone
+ * what renders still read, as the unmap's copy does.  (Replacing a busy copy
+ * here instead freed one that a draw of the frame being recorded still read:
+ * two inputs from one buffer, an MMU fault.) */
 bool
-sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res)
+sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res, uint32_t off,
+               uint32_t size)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
 
-   if (sgxws_bo_valid(&res->vbo))
+   off = MIN2(off, res->base.width0);
+   size = MIN2(size, res->base.width0 - off);
+   if (sgxws_bo_valid(&res->vbo)) {
+      if (res->write_maps)
+         memcpy((uint8_t *)res->vbo.map + off, (const uint8_t *)res->data + off,
+                size);
       return true;
+   }
+   /* past the end, a page the vertex DMA and the VDM's index reads may run
+    * into */
    if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX,
-                      align(MAX2(res->base.width0, 16), 4096), 0x1000)) {
+                      align(MAX2(res->base.width0, 16), 4096) + 4096, 0x1000)) {
       memset(&res->vbo, 0, sizeof(res->vbo));
       return false;
    }
@@ -637,6 +657,7 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
    if (prsc->target == PIPE_BUFFER) {
       if (usage & PIPE_MAP_WRITE) {
          res->gen++; /* the vertex cache's copies of it are stale */
+         res->write_maps++;
          res->written_ns = os_time_get_nano();
          /* a device copy a render may still read is left to it; the next
           * draw makes another (an unsynchronized write promises to miss
@@ -833,9 +854,13 @@ sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    }
 
    if (ptrans->resource->target == PIPE_BUFFER &&
-       (ptrans->usage & PIPE_MAP_WRITE) && res->vbo.map)
-      memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
-             (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
+       (ptrans->usage & PIPE_MAP_WRITE)) {
+      if (res->vbo.map)
+         memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
+                (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
+      if (res->write_maps)
+         res->write_maps--;
+   }
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);
 }

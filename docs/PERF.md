@@ -320,16 +320,54 @@ EA3, normal boot, the same binary (frames a second; ours/DDK):
 
 - Fill and blend are at the DDK's speed: the per-pixel gaps of the 0.5x
   tables above were the DDK not rendering.
-- **Texturing** is 0.71-0.77 of the DDK. A real per-pixel gap, next to look
-  at.
+- **Texturing** was 0.71-0.77 of the DDK, and the GPU wasn't the cause.
+  ta3d-state's captures of perfmicro tex matched word for word (TA, ISP,
+  PDS, texture words, render details, per-tile programs, the texture's
+  memory), and the A/Bs of the two near-differences (PDS middle word b25-28
+  12, render target in the general heap) changed nothing. The services
+  backend polled a render's completion at 50 us steps doubling to 1 ms, so
+  a 3 ms render was seen done at 3.55 ms. Now a render's wait sleeps to
+  3/4 of its target's last render times, then polls every 50 us, tex is
+  237 -> 302 fps at 1440x960 (0.90) and 810 -> 880 at 720x480 (0.83); fill
+  and blend are at or above the DDK's, verts +8%. (powervr_sgx waits with
+  poll() on its fd, event-driven: no such rounding.)
 - **Vertices:** 0.38-0.54 by default and 0.90-0.95 with
   `SGX_DEBUG=zerocopy` since 72b75fb: an indexed draw from buffers takes its
   indices as they are, from the index buffer's device copy, with no CPU work
-  a draw. Zero-copy is still opt-in. Its own 79 dEQP fails (depth_stencil,
-  point clipping; the same with or without the resident indices) are what
-  keep it so: fixing them gets every app the vertex path at the DDK's speed.
+  a draw. Zero-copy is still opt-in. Its 79 (214 in a long run) dEQP fails
+  depended on test order: a stream uploader writes more into its mapped
+  buffer, and the device copy was refreshed only at the unmap, so later
+  tests' draws read zeros (fixed 7543399, 0d2b9ec: the copy is refreshed
+  for the bytes a draw reads while a write map is open). Under zerocopy all
+  214 pass and a 3,898-test subset matches the default path. Left: one
+  chunk (clipping.triangle_vertex.clip_three) made 18 recoveries on the EA3
+  (services); 264/264 and 0 recoveries on the EA1 (powervr_sgx). Minecraft
+  gains nothing from zerocopy (10.8 vs 11.0 fps): its geometry is display
+  lists, drawn from the vertex cache.
 - Minecraft swaps every frame, so the DDK renders there too: its profile (TA
   ~42 ms, 3D ~26 ms) stays the honest target.
+
+### perfmicro on the open stack (EA1, 2026-11-10)
+
+What users run: powervr_sgx and the open microkernel (EA1 normal boot, kernel
+7.1.8-m2drm, dev 3329021, default settings: zero-copy off), against the DDK
+on the same EA1 (its own boot). Every frame rendered (a 1-pixel readback);
+two rounds each, averaged; frames a second:
+
+| test | DDK 1440x960 | ours | ours/DDK | DDK 720x480 | ours | ours/DDK |
+|---|---|---|---|---|---|---|
+| fill | 243 | 236 | 0.97 | 829 | 752 | 0.91 |
+| fill-blend | 53.9 | 53.8 | 1.00 | 201.5 | 196.5 | 0.98 |
+| tex | 341 | 298 | 0.87 | 1075 | 854 | 0.79 |
+| verts | 202.5 | 116.5 | 0.58 | 360 | 158.5 | 0.44 |
+| rows | 72.5 | 61 | 0.84 | 102 | 84 | 0.83 |
+
+- The open stack has no polling quantization (powervr_sgx waits with poll()
+  on its fd). tex 0.79-0.87 is what is left to find on the pixel side,
+  higher at the small size: a per-frame cost.
+- verts is the CPU index path (every index read and rebased each draw);
+  zero-copy's resident indices take it to ~0.9 on the EA3. Zero-copy
+  becomes the default on powervr_sgx once its full dEQP + piglit run is clean.
 
 ## Shader code against libusc
 
