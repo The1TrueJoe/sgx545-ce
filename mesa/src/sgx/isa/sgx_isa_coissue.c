@@ -36,7 +36,7 @@ read_sel(struct sgx_isa_fdual_use *u, unsigned sel, unsigned slot)
 
 bool
 sgx_isa_fdual_use(const struct sgx_isa_instr *instr,
-                     struct sgx_isa_fdual_use *u)
+                  struct sgx_isa_fdual_use *u)
 {
    unsigned sd = instr->sd & 3;
 

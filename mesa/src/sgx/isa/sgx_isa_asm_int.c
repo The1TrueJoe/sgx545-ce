@@ -145,8 +145,8 @@ static const struct {
 };
 
 bool
-sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
-                            unsigned nparts, unsigned nops, const char **pat)
+sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts, unsigned nparts,
+                         unsigned nops, const char **pat)
 {
    if (!strcmp(parts[0], "fdual")) {
       int p = nparts == 3 ? LOOKUP(fdual_pri, parts[1]) : -1;
@@ -260,7 +260,7 @@ efo_pair(const char *v, char *buf, size_t size)
 
 bool
 sgx_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
-                        const char *value)
+                     const char *value)
 {
    enum sgx_isa_opc o = I->opc;
    bool sop2 = o == SGX_ISA_OPC_SOP2, sopwm = o == SGX_ISA_OPC_SOPWM;

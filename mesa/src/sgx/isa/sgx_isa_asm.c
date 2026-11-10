@@ -637,7 +637,7 @@ split_operands(char *s, char **ops, unsigned max)
 
 bool
 sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
-                    size_t errsize)
+                 size_t errsize)
 {
    struct asm_ctx c = {err, errsize};
    char buf[512], *s, *items = NULL;

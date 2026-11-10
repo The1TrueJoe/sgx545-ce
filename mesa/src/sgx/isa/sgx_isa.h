@@ -170,18 +170,18 @@ struct sgx_isa_fc {
 
 /* Encode one instruction. fc may be NULL (program-start state). */
 uint64_t sgx_isa_encode(const struct sgx_isa_instr *instr,
-                           const struct sgx_isa_fc *fc);
+                        const struct sgx_isa_fc *fc);
 
 /*
  * Disassemble n instructions (low word first) to out, one per line.
  * Format control is tracked through setfc from fc (NULL: program start).
  */
 void sgx_disasm(const uint32_t *words, unsigned n, FILE *out,
-                   const struct sgx_isa_fc *fc);
+                const struct sgx_isa_fc *fc);
 
 /* One instruction to a string (no newline); false if nothing matched. */
 bool sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
-                       size_t size);
+                    size_t size);
 
 /*
  * Co-issue (ISA.md "fdual for a compiler", "efo"). What an fdual's two
@@ -197,7 +197,7 @@ struct sgx_isa_fdual_use {
 };
 
 bool sgx_isa_fdual_use(const struct sgx_isa_instr *instr,
-                          struct sgx_isa_fdual_use *use);
+                       struct sgx_isa_fdual_use *use);
 
 /*
  * A same-word race the hardware shows (an fdual primary reading an internal
