@@ -20,5 +20,5 @@ They are written to go to the gma500 maintainers as they are. Before sending,
 the author adds a `Signed-off-by:`.
 
 On hardware: `0001` is proven on an Atom N2600 (the auxiliary device appears,
-powervr_sgx binds and identifies the core). `0002` is untested. CI builds both
+powervr_sgx binds and identifies the core). `0002` hung its first importer (X's front buffer, canteroman's kit v3.4): the PRIME helpers call pin with the reservation lock held and pin took it again; fixed, not yet run on hardware. CI builds both
 (the `cedarview` and Debian package jobs).
