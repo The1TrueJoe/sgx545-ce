@@ -23,8 +23,9 @@ There are three pieces, and each one is easy to remove again:
    in `/opt/sgx`. Debian's own Mesa stays installed; ours is used first.
 
 You need Debian 13 already installed, an internet connection, and a user that can run
-`sudo`. Download everything from the CI run linked in the announcement. You need to be
-signed in to GitHub to download. Each download is a `.zip`; unzip it first.
+`sudo`. There are two downloads, linked in the announcement: the kernel, and Mesa with the
+firmware. You need to be signed in to GitHub to download. Each download is a `.zip`; unzip
+it first.
 
 ## 1. Check what you have
 
@@ -40,7 +41,8 @@ lspci -nn | grep -i -E 'vga|display'
 
 ## 2. The kernel
 
-The driver needs Linux 7.1 or newer. Debian 13 ships 6.12, so install our kernel package.
+The driver needs Linux 7.1 or newer. Debian 13 ships 6.12, so install our kernel package
+(Linux 7.3.3).
 
 ### Cedarview
 
@@ -48,11 +50,11 @@ On Cedarview, the GPU shares its PCI device with the display driver (`gma500`). 
 has a small change to `gma500` that hands the GPU to `powervr_sgx`. It is Debian's own
 kernel configuration with that change added.
 
-1. From the CI download, take `linux-image-7.1.8-sgx_7.1.8-sgx1_amd64.deb`.
+1. From the kernel download, take `linux-image-7.3.3-sgx_7.3.3-sgx1_amd64.deb`.
 2. Install it:
 
    ```bash
-   sudo apt install ./linux-image-7.1.8-sgx_*.deb
+   sudo apt install ./linux-image-7.3.3-sgx_*.deb
    ```
 
 3. Restart. The new kernel is the default in the boot menu. Debian's kernel stays under
@@ -84,7 +86,7 @@ echo 'blacklist pvrsrvkm' | sudo tee /etc/modprobe.d/sgx-no-pvrsrvkm.conf
 
 ## 3. The firmware
 
-From the CI download, take `sgx545-firmware_….deb` and install it:
+From the Mesa download, take `sgx545-firmware_….deb` and install it:
 
 ```bash
 sudo apt install ./sgx545-firmware_*.deb
@@ -119,7 +121,7 @@ If it says `no microkernel`, the firmware file isn't in the right place. If it s
 
 ## 4. Mesa
 
-From the CI download, take `mesa-sgx_….deb` and install it:
+From the Mesa download, take `mesa-sgx_….deb` and install it:
 
 ```bash
 sudo apt install ./mesa-sgx_*.deb
@@ -145,7 +147,7 @@ You can undo each piece on its own.
 - **Mesa:** `sudo apt remove mesa-sgx`. Programs use Debian's Mesa again.
 - **The firmware:** `sudo apt remove sgx545-firmware`. On its own, it does nothing anyway.
 - **The kernel (Cedarview):** pick Debian's kernel under "Advanced options" in the boot menu.
-  To uninstall ours, run `sudo apt remove linux-image-7.1.8-sgx`.
+  To uninstall ours, run `sudo apt remove linux-image-7.3.3-sgx`.
 - **DKMS (CE5300):** run `sudo dkms remove powervr_sgx/0.1 --all`. If you blocked
   `pvrsrvkm` and want it back, delete `/etc/modprobe.d/sgx-no-pvrsrvkm.conf`.
 
