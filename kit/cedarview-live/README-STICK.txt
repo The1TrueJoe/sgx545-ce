@@ -1,23 +1,14 @@
 SGX545 GPU test stick for Intel Cedarview (GMA 3600/3650), live Debian 13
 
-Boot a Cedarview computer from this stick and pick a menu entry. The test runs by
-itself for about ten minutes, shows a desktop for part of it, and never writes to
-the computer's own disks.
+1. Start the Cedarview computer from this stick (pick the USB stick in the boot menu).
+2. Walk away. The test runs by itself for up to 15 minutes and never writes to the
+   computer's own disks. The screen may change or go dark along the way: that's fine,
+   nothing needs to be seen or pressed.
+3. The computer turns itself off when the test is done.
+4. Attach the one file named results-kitv4-....tar.gz on this drive to the GitHub
+   issue, as the guide says:
+   https://github.com/The1TrueJoe/sgx545-ce/blob/main/docs/TESTING-CEDARVIEW.md
 
-Please run it six times: entry 1 three times, then entry 2 three times. Some
-panels go dark only some of the time, so we need counts, not one try. Then tell
-us how many of the three were dark with each entry (for example "entry 1: 0 of 3
-dark, entry 2: 2 of 3 dark").
-
-Each run puts its own file named results-kitv3.4-....tar.gz on this drive (the
--e1-, -e2- in the name is the entry). Attach all of them to the GitHub issue, as
-the guide says:
-https://github.com/The1TrueJoe/sgx545-ce/blob/main/docs/TESTING-CEDARVIEW.md
-
-If the screen goes dark during a run:
-  1. Wait about 5 minutes. The test keeps running and saves its results.
-     If it is the desktop that stays dark, wait at least 2 minutes there:
-     the test saves its results to the stick every 15 seconds.
-  2. Turn the computer off (hold the power button), then start the next run.
-Say whether it was fully dark (no backlight) or lit but black. If entries 1 and 2
-both go dark every time, try 3 and 4 once each as well.
+If the computer stops for more than 20 minutes, or restarts into its own system,
+start it from the stick once more: the test carries on where it stopped, in the
+same results file.
