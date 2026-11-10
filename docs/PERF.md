@@ -707,9 +707,10 @@ overlap. The DDK's hardware work per frame is not smaller.
   game's newest frame, and dirtyfb blocks X's main thread on that copy at every
   present. Three slots stay the default and `SGX_SLOTS=4` is a games setting
   until the present path stops blocking X (gma500 has no dirtyfb).
-- What is left of the idle: 97% of it runs from a 3D's end to the next TA's first
-  clock, 1-10 ms a job, ~70 a second, while the kernel hands the next job over in
-  under 1 ms. That is the microkernel's kick-to-TA time (open-ukernel).
+- What is left of the idle at four slots is the vendor microkernel's too: 5.3%
+  all-idle on ours against 6.5% on the vendor's, same TA and 3D a frame (a
+  steady window; an earlier warm-up window had suggested 1-10 ms of
+  kick-to-TA a job). Serial job turnaround is at parity.
 - `phasesplit` and `f16samples` are correct (dEQP-GLES2 mustpass and 117
   fixed-function piglit tests match the baseline, no channel swaps) but the 3D is
   not where this frame's time goes. F16 fixed-function programs and F16 samples
@@ -735,6 +736,11 @@ What does not move the world TA (each within noise, +-2 ms):
 | TSP precision mask as the DDK's (`tspf16`) | the parameter buffer's per-vertex format | same |
 | parameter buffer 4 / 16 / 32 MiB | partial renders (none at 16) | same |
 
+The TE's configuration (AA, macrotiles, TE screen, region headers, tail
+pointers, the PB descriptor and thresholds, render details) is the DDK's word for
+word on the services path; only TA flags 2 differs, with the scene structure (the
+DDK's world is the first kick of a three-kick scene).
+
 What does: render distance 2 instead of 4 takes the TA from 40 to 15 ms and the
 3D from 22.5 to 16.5. The TA's time is the tiling of the primitives it is given
 (~160K triangles, 486K indices into 258K vertices a frame, the DDK's count): the
@@ -747,7 +753,6 @@ The plan, largest first, with what each is worth:
 
 | item | owner | worth (frame ~75 ms) | state |
 |---|---|---|---|
-| kick-to-TA: 1-10 ms of idle at every job's start, ~5 jobs a frame (97% of the idle) | open-ukernel | ~10-20 ms (+15-25% fps) | measuring (UK_FRAMEPROF stamps) |
 | four slots by default: the next frame recorded while this one renders | Mesa + X present path | +16% fps measured | blocked on X's dirtyfb wait on simpledrm |
 | TA/3D overlap across frames (the next world TA under this 3D) | open-ukernel + kernel | up to the 3D's ~22 ms with four slots; ~2% at three | parked: recovery storms with `overlap=1` |
 | fewer renders a frame: the small renders after the world (FBO blit, GUI) and X's copy, each a job with its own start cost | Mesa (scene merging, as the DDK's 3-kick scene), X flips | ~5-10 ms (their run time plus a kick-to-TA each) | to do |
