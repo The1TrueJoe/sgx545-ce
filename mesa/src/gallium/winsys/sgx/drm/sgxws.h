@@ -336,6 +336,8 @@ struct sgxws_device_info {
    /* zero-copy draws (vertex buffers DMAed where they are) by default:
     * powervr_sgx's; services' only on request (SGX_DEBUG=zerocopy) */
    bool zero_copy;
+   /* contexts can be created at low, normal or high priority */
+   bool priorities;
 };
 
 const struct sgxws_device_info *sgxws_dev_info(const struct sgxws_dev *d);
@@ -374,7 +376,9 @@ void sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo);
 const struct sgxws_bo *sgxws_target_bo(const struct sgxws_ctx *c);
 int sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms);
 
-struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d);
+/* priority: -1 low, 0 normal, 1 high (the backend's scheduler; high may
+ * need privileges and falls back to normal) */
+struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d, int priority);
 void sgxws_ctx_destroy(struct sgxws_ctx *c);
 
 enum sgxws_reset sgxws_reset_status(struct sgxws_ctx *c);

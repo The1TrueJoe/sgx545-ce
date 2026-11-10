@@ -173,6 +173,12 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    /* blending is shader code (STATE.md section 3): any equation per channel */
    caps->blend_equation_separate = true;
    caps->uma = true;
+   /* the kernel's scheduler takes a context's priority (glamor asks for
+    * high, so X's copies don't queue behind a game's frames) */
+   if (screen->info->priorities)
+      caps->context_priority_mask = PIPE_CONTEXT_PRIORITY_LOW |
+                                    PIPE_CONTEXT_PRIORITY_MEDIUM |
+                                    PIPE_CONTEXT_PRIORITY_HIGH;
    /* a texture can be a render target: no bigger than the kernel takes one */
    caps->max_texture_2d_size =
       MIN3(f->max_texture_size, screen->info->rt_max_width,

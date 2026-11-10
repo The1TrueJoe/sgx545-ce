@@ -661,7 +661,7 @@ ctx_free(struct sgxws_ctx *c)
 }
 
 struct sgxws_ctx *
-sgxws_ctx_create(struct sgxws_dev *d)
+sgxws_ctx_create(struct sgxws_dev *d, int priority)
 {
    struct sgxws_ctx *c = calloc(1, sizeof(*c));
    uint32_t rows;
@@ -671,6 +671,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    if (!c)
       return NULL;
    c->dev = d;
+   c->priority = priority;
    c->slots = d->slots;
    /* the kernel side first: under services, the kernel-data and sync
     * allocations keep the DDK's order */
