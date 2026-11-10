@@ -1594,7 +1594,7 @@ assign_io(struct sgx_ctx *c)
    const struct sgx_compile_options *o = c->opts;
 
    for (unsigned i = 0; i < 512; i++)
-      c->in_reg[i] = c->out_reg[i] = c->in_setcomp[i] = -1;
+      c->in_reg[i] = c->out_reg[i] = -1;
    if (s->info.stage == MESA_SHADER_VERTEX) {
       unsigned next_attr = first_free(o, SGX_LAYOUT_ATTRIB);
       nir_foreach_shader_in_variable (var, s) {
@@ -1747,54 +1747,9 @@ assign_io(struct sgx_ctx *c)
          pa += it->f16 ? (it->comps + 1) / 2 : it->comps;
       }
       c->n_pa_inputs = pa;
-      if (c->opts->phase_layout) {
-         /* the iterations of the whole program's compile, as they are */
-         const struct sgx_shader *l = c->opts->phase_layout;
-         c->n_iters = 0;
-         for (unsigned set = 0; set < SGX_MAX_SETS; set++)
-            pbase[set] = -1;
-         for (unsigned j = 0; j < 4; j++)
-            c->in_reg[VARYING_SLOT_POS * 4 + j] =
-               c->in_reg[VARYING_SLOT_PNTC * 4 + j] = -1;
-         unsigned top = 0;
-         for (unsigned i = 0; i < l->n_iters && i < ARRAY_SIZE(c->iters); i++) {
-            const struct sgx_iter_info *o = &l->iters[i];
-            struct sgx_iter *it = &c->iters[c->n_iters++];
-            memset(it, 0, sizeof(*it));
-            it->set = o->set;
-            it->comps = o->comps;
-            it->pa = o->pa;
-            it->f16 = o->f16;
-            it->sample = o->sample;
-            it->proj = o->proj;
-            it->sampler = o->sampler;
-            it->pointcoord = o->pointcoord;
-            top = MAX2(top, o->pa + o->regs);
-            if (o->sample)
-               continue;
-            if (o->set == SGX_ITER_FRAGCOORD - 1) {
-               for (unsigned j = 0; j < 4; j++)
-                  c->in_reg[VARYING_SLOT_POS * 4 + j] = o->pa + j;
-            } else if (o->pointcoord) {
-               for (unsigned j = 0; j < 2; j++)
-                  c->in_reg[VARYING_SLOT_PNTC * 4 + j] =
-                     o->f16 ? (int)(SGX_IN_HALF | (2 * o->pa + j))
-                            : (int)(o->pa + j);
-            } else if (o->set < SGX_MAX_SETS) {
-               pbase[o->set] =
-                  o->f16 ? (int)(SGX_IN_HALF | 2 * o->pa) : (int)o->pa;
-            }
-         }
-         c->n_pa_inputs = top;
-      }
-      int setid[SGX_MAX_SETS];
-      for (unsigned set = 0; set < SGX_MAX_SETS; set++)
-         setid[set] = set * 16;
       nir_foreach_shader_in_variable (var, s)
-         if (var->data.location >= VARYING_SLOT_VAR0) {
+         if (var->data.location >= VARYING_SLOT_VAR0)
             map_varying(c->in_reg, var, c->vary, pbase);
-            map_varying(c->in_setcomp, var, c->vary, setid);
-         }
    }
 
    /* uniforms: constant numbers */

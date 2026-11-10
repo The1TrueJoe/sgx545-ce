@@ -3020,30 +3020,6 @@ input_at(nir_intrinsic_instr *in)
 static void
 drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
 {
-   if (c->stage == MESA_SHADER_FRAGMENT && c->opts->phase_layout) {
-      /* the layout decided: a load of a set it doesn't iterate is a sample's
-       * coordinate (from the set's component 0), or not compilable */
-      nir_foreach_block (b, impl) {
-         nir_foreach_instr (instr, b) {
-            if (instr->type != nir_instr_type_intrinsic)
-               continue;
-            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
-            if (in->intrinsic != nir_intrinsic_load_interpolated_input &&
-                in->intrinsic != nir_intrinsic_load_input)
-               continue;
-            int at = input_at(in);
-            if (at < 0 || at >= (int)ARRAY_SIZE(c->in_reg) ||
-                c->in_reg[at] >= 0 || c->in_setcomp[at] < 0 ||
-                (c->in_setcomp[at] & 15) || !sample_only_load(c, in, 4))
-               continue;
-            _mesa_hash_table_insert(
-               c->sample_set, in,
-               (void *)(uintptr_t)(c->in_setcomp[at] / 16 + 1));
-            _mesa_set_add(c->skip, instr);
-         }
-      }
-      return;
-   }
    if (!c->opts->pds_samples_alone || c->stage != MESA_SHADER_FRAGMENT ||
        sgx_debug(c, SGX_DBG_KEEP_COORD_ITERS))
       return;
@@ -3556,24 +3532,6 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       s->f16_return = c->opts->f16_samples && tex->def.bit_size == 16 &&
                       tex != c->colour_tex &&
                       !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
-      if (c->opts->phase_layout) {
-         /* the whole program's sample of this unit and set */
-         const struct sgx_iter *f = NULL;
-         for (unsigned n = 0; n < c->n_iters && !f; n++)
-            if (c->iters[n].sample && c->iters[n].sampler == s->sampler &&
-                c->iters[n].set == s->set && c->iters[n].proj == s->proj)
-               f = &c->iters[n];
-         if (!f) {
-            sgx_fail(c, "sample of unit %u, set %u not in the layout",
-                     s->sampler, s->set);
-            return;
-         }
-         s->pa = f->pa;
-         s->f16_return = f->f16;
-         raw = ref(SGX_F_PA, s->pa);
-         i->ndst = 0;
-         goto sampled;
-      }
       struct sgx_iter *it = &c->iters[c->n_iters++];
       it->sample = true;
       it->proj = s->proj;
@@ -3585,7 +3543,6 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       c->n_pa_inputs += s->f16_return ? 2 : 1;
       i->ndst = 0;
       raw = ref(SGX_F_PA, s->pa);
-   sampled:;
    } else {
       /* the smp the finalizer writes: raw texel -> a temporary; coordinate
        * in consecutive registers of one bank */
@@ -4484,11 +4441,6 @@ emit_color(struct sgx_ctx *c)
       emit_feedback(c);
       return;
    }
-   if (c->opts->keep_inputs && !c->has_color) {
-      /* phase 0 of a split program: the discard test alone */
-      emit_feedback(c);
-      return;
-   }
    if (c->has_colour_raw && c->colour_raw_bgra) {
       /* already in the colour's byte order: its register is the colour */
       c->colour_pa = c->colour_raw.n;
@@ -4923,28 +4875,6 @@ drop_self_moves(struct sgx_ctx *c)
  * "efo") while it starts its own I0/I1, and the trailing mov goes, as libusc
  * chains v_mvp. The previous chain's last efo becomes nosched so I1
  * survives. Not when the first efo reads what the mov wrote. */
-/* keep_inputs: nothing may have landed on a PA register an iteration or a
- * sample fills (phase 1 reads them) */
-static void
-check_inputs_kept(struct sgx_ctx *c)
-{
-   if (!c->opts->keep_inputs)
-      return;
-   list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
-      for (unsigned k = 0; k < i->ndst; k++) {
-         unsigned f, n;
-         if (!reg_of(c, &i->op[k], &f, &n) || f != SGX_F_PA)
-            continue;
-         unsigned cnt = i->op[k].step && i->rpt > 1 ? i->rpt : 1;
-         if (n < c->n_pa_inputs ||
-             (n < c->n_pa_inputs + cnt && n + cnt > 0 && n < c->n_pa_inputs)) {
-            sgx_fail(c, "keep_inputs: pa%u is written", n);
-            return;
-         }
-      }
-   }
-}
-
 static void
 chain_efos(struct sgx_ctx *c)
 {
@@ -5422,9 +5352,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
    BITSET_WORD *busy = rzalloc_array(c, BITSET_WORD, npa * BITSET_WORDS(end));
 #define BUSY(p) (busy + (p) * BITSET_WORDS(end))
    for (unsigned p = 0; p < npa; p++) {
-      if ((!input[p] && c->stage == MESA_SHADER_VERTEX) ||
-          (c->opts->keep_inputs && input[p])) {
-         /* (keep_inputs: phase 1 reads them after this phase) */
+      if (!input[p] && c->stage == MESA_SHADER_VERTEX) {
          BITSET_SET_RANGE(BUSY(p), 0, end - 1);
          continue;
       }
@@ -5497,7 +5425,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
              r->n < (unsigned)base + d->comp + i->rpt)
             good = r->step && !r->h16 && r->n == (unsigned)base + d->comp;
       }
-      if (!good || c->opts->keep_inputs)
+      if (!good)
          continue;
       if (inplace[d->n] == -1)
          inplace[d->n] = base;
@@ -6464,8 +6392,6 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       drop_self_moves(c);
    if (!c->failed)
       chain_efos(c);
-   if (!c->failed)
-      check_inputs_kept(c);
    if (!c->failed) {
       uniform_layout(c);
       ret = sgx_finish_program(c, out);
