@@ -112,6 +112,8 @@ TD_RD = 0x1c         # control block +0x70: the in-flight 3D's render details. r
                      # of SC_RD, because by completion the TA set may already be N+1's. (DDK uses ctx +0x28/+0x2c.)
 TD_CTX = 0x20        # control block +0x80: the in-flight 3D's HW render context (for the completion teardown's
                      # ctx in-flight clears). Populated at the 3D kick with TD_ENTRY/TD_RD.
+PENDING_3D = 0x26    # control block +0x98: set when a scene's last TA finished but a 3D was already in flight,
+                     # so its 3D is QUEUED (never two 3Ds). render_complete starts it after the current 3D frees.
 # EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
 # alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
@@ -783,6 +785,9 @@ def build(a):
     a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
     a.i(f"st.a.d r17, #{SC_OOM}, r0 [moe]")               # no OOM partial render pending
+    if OVERLAP:
+        a.i(f"st.a.d r17, #{TD_ENTRY}, r0 [moe]")          # no 3D in flight (overlap state clean at start)
+        a.i(f"st.a.d r17, #{PENDING_3D}, r0 [moe]")        # no 3D queued
     a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r0 [moe]")       # no deferred OOM queued
     a.i(f"st.a.d r17, #{OOM_SAVED_628}, r0 [moe]")        # no threshold grant outstanding
     a.i(f"st.a.d r17, #{OOM_FLAGS}, r0 [moe]")            # OOM grant flags clear (G/G2/GRANTED)
@@ -1956,7 +1961,21 @@ def build(a):
     a.i("ld.a.d r2, r1, #1 [moe]")                    # cmd+0x04 = TA flags (0x71/0x62)
     a.i("wdf")
     a.i("test.and.ne p0, r2, #2")                     # bLastInScene (bit 1)? render
-    a.i("(p0) ba do_3d")
+    if OVERLAP:
+        # 3D QUEUE: a scene's 3D can start only when the 3D engine is free (never two 3Ds). If a 3D is in
+        # flight (TD_ENTRY != 0), queue this scene's 3D; render_complete starts it after the current 3D frees.
+        # Credit = 2 blocks a 3rd TA, so SC_* stays this scene's until then. Not last -> kick re-dispatch.
+        a.i("(!p0) ba ov_ta_notlast")
+        a.i(f"ld.a.d r3, r17, #{TD_ENTRY} [moe]")      # a 3D already in flight?
+        a.i("wdf")
+        a.i("test.and.eq p0, r3, r3")                  # none -> start this 3D now
+        a.i("(p0) ba do_3d")
+        a.i("limm r3, #1")
+        a.i(f"st.a.d r17, #{PENDING_3D}, r3 [moe]")     # queue it (render_complete starts it)
+        a.i("ba kick")
+        a.label("ov_ta_notlast")
+    else:
+        a.i("(p0) ba do_3d")
     if DPM_LOG:                                       # point C: TA1's finish (non-last)
         a.i(f"ldr r5, #{0x700 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x38, 5)
         a.i(f"ldr r5, #{0x724 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x39, 5)
@@ -2552,6 +2571,18 @@ def build(a):
     a.i("st.a.d r5, #0, r4 [moe]")                       # rd+0x2a4 = 2 (render freed; DDK does this at completion)
     a.i("idf")
     a.i("wdf")
+    if OVERLAP:
+        # a 3D queued behind this one (its TA finished while this 3D ran)? Raise this render's completion IRQ,
+        # then start the queued 3D: do_3d reads SC_* = the queued scene, which credit=2 kept ours. Else normal end.
+        a.i(f"ld.a.d r3, r17, #{PENDING_3D} [moe]")
+        a.i("wdf")
+        a.i("test.and.ne p0, r3, r3")
+        a.i("(!p0) ba raise_host_irq")
+        a.i("limm r3, #0")
+        a.i(f"st.a.d r17, #{PENDING_3D}, r3 [moe]")       # dequeue
+        a.i(f"limm r0, #{SW_EVENT}")
+        a.i(f"str #{CR_EVENT_STATUS // 4}, r0")           # raise this render's completion IRQ (inline)
+        a.i("ba do_3d")                                   # start the queued 3D on the freed 3D engine
     a.i("ba raise_host_irq")
     # render_done_noop: a DPM 3D-memory-free event (0x1) arrived with no render in
     # flight -- a transfer's own free, or a spurious/duplicate event. 0x1 is already
