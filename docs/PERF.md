@@ -718,3 +718,36 @@ overlap. The DDK's hardware work per frame is not smaller.
   default too (piglit identical with it, dEQP clean, no slower;
   `nophasesplit` turns it off): neutral in Minecraft, but it is the DDK's form
   and spares overdrawn alpha-tested pixels their colour work.
+
+### Where the world render's TA and 3D go, and the plan
+
+Per frame at render distance 4, standing (CLKGATESTATUS, slots 3): world TA
+~40 ms, then world 3D ~22 ms, no gap between them; two small renders and X's
+copy after. Standing fps is now 12.6-13.4, the DDK's 12.8 (under Xvfb).
+
+What does not move the world TA (each within noise, +-2 ms):
+
+| tried | what it changed | TA |
+|---|---|---|
+| vertex program +3 instructions (`noefochain`) | shading per vertex | same |
+| gathered f32 x 4 fetch (`nozerocopy`) | bytes and streams fetched | same |
+| a TA state block per draw vs one per run of equal draws (af18996: 94% skipped) | state the TA writes into the tiles | same |
+| TSP precision mask as the DDK's (`tspf16`) | the parameter buffer's per-vertex format | same |
+| parameter buffer 4 / 16 / 32 MiB | partial renders (none at 16) | same |
+
+What does: render distance 2 instead of 4 takes the TA from 40 to 15 ms and the
+3D from 22.5 to 16.5. The TA's time is the tiling of the primitives it is given
+(~160K triangles, 486K indices into 258K vertices a frame, the DDK's count): the
+hardware's rate for this scene, not something per draw or per vertex the driver
+adds.
+
+The plan, largest first, with what each is worth:
+
+| item | owner | worth (frame ~75 ms) | state |
+|---|---|---|---|
+| kick-to-TA: 1-10 ms of idle at every job's start, ~5 jobs a frame (97% of the idle) | open-ukernel | ~10-20 ms (+15-25% fps) | measuring (UK_FRAMEPROF stamps) |
+| four slots by default: the next frame recorded while this one renders | Mesa + X present path | +16% fps measured | blocked on X's dirtyfb wait on simpledrm |
+| TA/3D overlap across frames (the next world TA under this 3D) | open-ukernel + kernel | up to the 3D's ~22 ms with four slots; ~2% at three | parked: recovery storms with `overlap=1` |
+| fewer renders a frame: the small renders after the world (FBO blit, GUI) and X's copy, each a job with its own start cost | Mesa (scene merging, as the DDK's 3-kick scene), X flips | ~5-10 ms (their run time plus a kick-to-TA each) | to do |
+| 3D: F16 fixed-function and F16 samples (done, ~3.5 ms); phase split (done, neutral) | usse-compiler | done | default |
+| TA rate itself | none (hardware) | the DDK pays the same | |
