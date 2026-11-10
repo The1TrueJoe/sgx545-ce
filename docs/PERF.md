@@ -595,6 +595,12 @@ fail); glmark2 720x480 on Xorg/glamor score 51 -> 53 (most scenes 2-5% faster, l
 +9%); Minecraft 10.1 / 10.9 -> 10.2 / 11.0 FPS standing / walking, picture unchanged
 (the fragment work is not Minecraft's bottleneck at this point).
 
+efo chaining (3db45e4, libusc's chained `v_mvp`: the next chain's first efo stores the
+previous chain's last lane with `d=i1`): gl4es terrain VS 29 → 26 instructions, glmark2
+slots 1292 → 1242. On the EA1 (uapi-stream, A/B against `noefochain`): the dEQP vertex
+subset (5,357 tests) identical; glmark2 build/texture/shading equal or slightly up
+(score 172 → 173); Minecraft renders correctly.
+
 Still open, in order:
 - uniform-only math per pixel or vertex. Measured with `nir_opt_preamble` before
   building it: glmark2 would lift 25 ALU ops over 7 programs (about 2% of its slots),

@@ -123,6 +123,7 @@ struct sgx_sample {
    /* unpacked to F16 (two channels per register), else left as RGBA8 */
    bool f16;
    bool f16coord; /* dependent: F16 coordinates, two per register (smp .f16) */
+   bool f16_return; /* non-dependent: returns F16 pairs in pa, pa + 1 */
    /* dependent: the SAMPLE pseudo-instruction (dst raw, coord, lod) */
    struct sgx_ins *ins;
 };
@@ -231,6 +232,13 @@ struct sgx_ctx {
    struct hash_table *if_cmp;
    /* a varying load only non-dependent samples read -> its set + 1 */
    struct hash_table *sample_set;
+   /* nir_tex_instr -> its sgx_sample (a split program's phase 1 reuses a
+    * non-dependent one) */
+   struct hash_table *tex_sample;
+   /* split_phases: the NIR instructions this pass emits (NULL all), and
+    * whether it is phase 1's (no feedback nop) */
+   struct set *emit_filter;
+   bool phase1;
 
    /* results */
    unsigned n_temps, n_pa;
@@ -273,6 +281,9 @@ enum sgx_debug {
    SGX_DBG_NO_MASK_BOOL = BITFIELD64_BIT(19),
    SGX_DBG_NO_IF_TEST = BITFIELD64_BIT(20),
    SGX_DBG_KEEP_COORD_ITERS = BITFIELD64_BIT(21),
+   SGX_DBG_NO_EFO_CHAIN = BITFIELD64_BIT(22),
+   SGX_DBG_NO_F16_SAMPLES = BITFIELD64_BIT(23),
+   SGX_DBG_NO_PHASES = BITFIELD64_BIT(24),
    SGX_DBG_NO_TEX_COLOR = BITFIELD64_BIT(16),
    SGX_DBG_NO_PACKED_COLOR = BITFIELD64_BIT(17),
 };

@@ -53,20 +53,22 @@ fsin r0, r1  [c10 chan=1 f16d]
 
 # Same-word hazards (ISA.md "fdual for a compiler", "efo"): an fdual primary
 # reading the internal register its secondary writes is a race, and so is
-# efo's d naming an internal register the word writes.
+# efo's d naming I0 while the word writes I0.
 hazard fdual.mov.fexp2 r3, r0, r124, r2 [sd=i0 sb=i1 sc=i0]
 hazard fdual.fmad.fsin pa1, r126, r1, r2 [sd=i2 sb=i1 sc=i0]
 hazard fdual.fssq.mov r3, r0, i1, r2 [sd=i1 msrc=i0]
 hazard efo r0, r1, r2, r3 [d=i0 wi0]
-hazard efo r0, r1, r2, r3 [d=i1 i=m0/m1 wi1]
 # not hazards: the secondary reads before the primary writes; both halves
-# read one slot; neg1/neg2 are the primary's; a slot the primary doesn't read
+# read one slot; neg1/neg2 are the primary's; a slot the primary doesn't read;
+# efo's d=i1 with wi1 reads the old I1
 safe fdual.fmad.mov r125, r0, r1, r2 [sd=i0 msrc=i1]
 safe fdual.fmad.fmad r3, r0, -r1, -r2 [sd=i0 sb=src1 sc=src2]
 safe fdual.mov.fexp2 r3, r124, r1, r2 [sd=i0 sb=i1 sc=i0]
 safe fdual.fmad.fadd r3, r0, r1, r2 [sd=i1 sb=i0 sc=i2]
 safe efo r0, r1, r2, r3 [d=a0 i=m0/m1 a=s0+s2/s1+s2 wi0 wi1]
 safe efo r0, r1, r2, r3 [d=i1 wi0]
+safe efo r0, r1, r2, r3 [d=i1 i=m0/m1 wi1]
+safe efo r0, r1, r2, r3 [d=i1 i=m0/m1 wi0 wi1]
 
 # sec 3 is fsubflr; fadm and ffrc are other names for it (ISA.md "Dual issue")
 fdual.mov.fsubflr r0, r1, r2, r3 [sd=i0 sb=i1 sc=i2]

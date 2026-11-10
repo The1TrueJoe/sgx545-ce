@@ -126,13 +126,15 @@ main(int argc, char **argv)
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false, driver_uniforms = false;
    unsigned glsl_version = 100;
-   while ((c = getopt(argc, argv, "vpFLDMG:B:u:a:s:o:V:")) != -1) {
+   while ((c = getopt(argc, argv, "vpFLDMHPG:B:u:a:s:o:V:")) != -1) {
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
       case 'D': opts.driver_consts = opts.pds_samples_alone = true; break; /* our driver: its constant formats, PDS samples without the plain iteration */
       case 'M': opts.fs_mediump = true; break;      /* fragment floats mediump (st's fixed function) */
       case 'B': opts.tex_bgra = strtoul(optarg, NULL, 0); break; /* units whose texels arrive BGRA-ordered */
+      case 'H': opts.f16_samples = true; break;  /* mediump texels returned as F16 */
+      case 'P': opts.split_phases = true; break; /* discard test and colour in two phases */
       case 'G': glsl_version = atoi(optarg); break; /* GLSL version: 100 ES (default), 110-130 desktop compat */
       case 'V': {                                   /* -V slot=fmt: attribute slot's raw format (sgx_vtx_fmt) */
          unsigned slot, fmt;
@@ -147,7 +149,7 @@ main(int argc, char **argv)
       case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-B unitmask] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-B unitmask] [-H] [-P] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
@@ -287,6 +289,17 @@ main(int argc, char **argv)
       snprintf(suffix, sizeof suffix, "%s.code", sname);
       write_file(prefix, suffix, hex, k);
       free(hex);
+      if (out.n_code1) {
+         /* -P: phase 1 of a split program */
+         hex = (char *)malloc(out.n_code1 * 20 + 1);
+         k = 0;
+         for (unsigned i = 0; i < out.n_code1; i++)
+            k += snprintf(hex + k, 20, "%08x %08x\n", (unsigned)(out.code1[i] >> 32), (unsigned)out.code1[i]);
+         snprintf(suffix, sizeof suffix, "%s.code1", sname);
+         write_file(prefix, suffix, hex, k);
+         free(hex);
+         printf("%s phase 1: %u instructions\n", sname, out.n_code1);
+      }
       printf("%s: %u instructions (%u alu, %u tex, %u flow), %u temps, %u pa\n", sname,
              out.n_code, out.n_alu, out.n_tex, out.n_flow, out.n_temps, out.n_pa);
       sgx_shader_free(&out);

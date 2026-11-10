@@ -148,6 +148,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          o->dependent = s->dependent;
          o->proj = s->proj;
          o->coord_pa = s->coord_pa;
+         o->f16 = s->f16_return;
          o->reg = s->dependent ? phys(c, &s->ins->op[0]) : s->pa;
          if (s->dependent && smp_template(c, s, &o->smp))
             goto fail;
@@ -181,7 +182,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       bool real = false;
       for (unsigned i = 0; i < c->n_iters; i++) {
          struct sgx_iter *it = &c->iters[i];
-         unsigned regs = it->sample ? 1
+         unsigned regs = it->sample ? (it->f16 ? 2 : 1)
                          : it->f16  ? (it->comps + 1) / 2
                                     : it->comps;
          n_pa = MAX2(n_pa, it->pa + regs);
@@ -260,7 +261,9 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       o->set = it->set;
       o->comps = it->comps;
       o->pa = it->pa;
-      o->regs = it->sample ? 1 : it->f16 ? (it->comps + 1) / 2 : it->comps;
+      o->regs = it->sample ? (it->f16 ? 2 : 1)
+                : it->f16  ? (it->comps + 1) / 2
+                           : it->comps;
       o->f16 = it->f16;
       o->sample = it->sample;
       o->proj = it->proj;

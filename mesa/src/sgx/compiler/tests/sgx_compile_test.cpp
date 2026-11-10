@@ -59,6 +59,8 @@ class sgx_compile_test : public ::testing::Test {
       opts.f16 = f16;
       opts.tex_bgra = tex_bgra;
       opts.pds_samples_alone = pds_alone;
+      opts.f16_samples = f16_samples;
+      opts.split_phases = split_phases;
       opts.driver_consts = true;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
@@ -97,6 +99,8 @@ class sgx_compile_test : public ::testing::Test {
    struct sgx_shader out = {};
    bool compiled = false;
    bool pds_alone = false;
+   bool f16_samples = false;
+   bool split_phases = false;
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -422,6 +426,131 @@ TEST_F(sgx_compile_test, fragment_sample_only_varying_not_iterated)
    EXPECT_EQ(out.iters[0].pa, 0u);
    EXPECT_EQ(out.colour_pa, 0u);
    EXPECT_EQ(out.n_code, 0u) << disasm();
+}
+
+/* two mat4 * v back to back (position, then a texture coordinate): the
+ * second chain's first efo stores the first chain's last lane (d=i1), so only
+ * the last chain ends with mov oN, i1 (libusc's chained v_mvp) */
+TEST_F(sgx_compile_test, vertex_efo_chains_share_the_mov)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *m = var(nir_var_uniform,
+                         glsl_matrix_type(GLSL_TYPE_FLOAT, 4, 4), "u_mvp", -1);
+   nir_variable *t = var(nir_var_uniform,
+                         glsl_matrix_type(GLSL_TYPE_FLOAT, 4, 4), "u_tex", -1);
+   nir_variable *in = var(nir_var_shader_in, glsl_vec4_type(), "a_position",
+                          VERT_ATTRIB_GENERIC0);
+   nir_variable *tc =
+      var(nir_var_shader_in, glsl_vec4_type(), "a_tc", VERT_ATTRIB_GENERIC1);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
+                           VARYING_SLOT_POS);
+   nir_variable *vt =
+      var(nir_var_shader_out, glsl_vec4_type(), "v_tc", VARYING_SLOT_VAR0);
+   nir_variable *mats[2] = {m, t}, *srcs[2] = {in, tc}, *dsts[2] = {pos, vt};
+   for (unsigned q = 0; q < 2; q++) {
+      nir_deref_instr *md = nir_build_deref_var(&b, mats[q]);
+      nir_def *v = nir_load_var(&b, srcs[q]);
+      nir_def *r = NULL;
+      for (unsigned c = 0; c < 4; c++) {
+         nir_def *col =
+            nir_load_deref(&b, nir_build_deref_array_imm(&b, md, c));
+         nir_def *x = nir_fmul(&b, col, nir_channel(&b, v, c));
+         r = r ? nir_fadd(&b, r, x) : x;
+      }
+      nir_store_var(&b, dsts[q], r, 0xf);
+   }
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   unsigned movs = 0;
+   for (size_t at = s.find(", i1"); at != std::string::npos;
+        at = s.find(", i1", at + 1))
+      movs += s.rfind("mov ", at) != std::string::npos &&
+              s.rfind("mov ", at) > s.rfind('\n', at);
+   EXPECT_EQ(movs, 1u) << s;
+   EXPECT_NE(s.find("d=i1"), std::string::npos) << s;
+}
+
+/* f16_samples: a mediump texel returns F16 into two registers and is read
+ * as their halves, with no unpack (the DDK's terrain program) */
+TEST_F(sgx_compile_test, fragment_f16_sample_not_unpacked)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   c4->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   smp->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_fmul(&b, t, nir_load_var(&b, c4)), 0xf);
+
+   f16_samples = true;
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_TRUE(out.samples[0].f16);
+   std::string s = disasm();
+   EXPECT_EQ(s.find("pck.f16.u8"), std::string::npos) << s;
+   EXPECT_EQ(s.find("pck.f32.u8"), std::string::npos) << s;
+}
+
+/* split_phases: an alpha-tested texture program becomes phase 0 (the test
+ * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
+ * writes no PA register (the inputs phase 1 reads) */
+TEST_F(sgx_compile_test, fragment_alpha_test_split_in_two_phases)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *v = nir_fmul(&b, nir_build_tex_struct(&b, nir_texop_tex, tb),
+                         nir_load_var(&b, c4));
+   nir_discard_if(&b, nir_flt_imm(&b, nir_channel(&b, v, 3), 0.5));
+   nir_store_var(&b, col, v, 0xf);
+
+   split_phases = true;
+   ASSERT_TRUE(compile()) << out.log;
+   ASSERT_GT(out.n_code1, 0u);
+   ASSERT_GT(out.n_code, 0u);
+   EXPECT_EQ(out.code[out.n_code - 1], (uint64_t)0xf8000140u << 32);
+   EXPECT_TRUE(out.discards);
+   /* phase 0: no instruction writes PA */
+   for (unsigned i = 0; i + 1 < out.n_code; i++) {
+      char text[256];
+      sgx_disasm_one(out.code[i], NULL, text, sizeof(text));
+      std::string t(text);
+      size_t sp = t.find(' ');
+      EXPECT_NE(t.substr(sp + 1, 2), "pa") << t;
+   }
 }
 
 } /* namespace */
