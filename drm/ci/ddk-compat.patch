@@ -59,13 +59,14 @@ diff -ruN powervr_sgx.orig/pvrsgx_ccb.c powervr_sgx/pvrsgx_ccb.c
 diff -ruN powervr_sgx.orig/pvrsgx_core.c powervr_sgx/pvrsgx_core.c
 --- a/drm/powervr_sgx/pvrsgx_core.c	2026-11-08 18:15:34
 +++ b/drm/powervr_sgx/pvrsgx_core.c	2026-11-08 18:15:34
-@@ -40,6 +40,7 @@
+@@ -22,6 +22,7 @@
  		.num_dir_lists = 16,
  		.clock_hz = 400000000,
  		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
 +		.ddk_fw_name = "powervr_sgx/sgx545-ukernel-1.7.862890.bin",
  	},
- };
+ 	{
+ 		/*
  
 diff -ruN powervr_sgx.orig/pvrsgx_core.h powervr_sgx/pvrsgx_core.h
 --- a/drm/powervr_sgx/pvrsgx_core.h	2026-11-08 18:15:34
@@ -238,7 +239,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  	f->name = sdev->core->fw_name;
 -	err = request_firmware(&fw, f->name, sdev->base.dev);
 +	err = firmware_request_nowarn(&fw, f->name, sdev->base.dev);
-+	if (err && IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT)) {
++	if (err && IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) && sdev->core->ddk_fw_name) {
 +		f->name = sdev->core->ddk_fw_name;
 +		err = request_firmware(&fw, f->name, sdev->base.dev);
 +	}
