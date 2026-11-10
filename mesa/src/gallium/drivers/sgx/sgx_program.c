@@ -684,7 +684,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    /* a discarding fragment program in two phases, as the DDK runs its
     * alpha-tested ones: the test before the visibility feedback, the colour
     * after it for the pixels that pass (out.code1); the compiler decides */
-   opts.split_phases = !vertex && (sgx_drv_debug & SGX_DEBUG_PHASE_SPLIT);
+   opts.split_phases = !vertex && !(sgx_drv_debug & SGX_DEBUG_NO_PHASE_SPLIT);
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",
               vertex ? "vertex" : "fragment", out.log ? out.log : "");

@@ -66,7 +66,7 @@ struct sgx_pipe_shader {
     * epilogue is the blend, sgxws_blend) */
    uint64_t *code; /* with the dependent samples' smp put in */
    unsigned n_code, color_reg, temps;
-   /* split around its discard (SGX_DEBUG=phasesplit): code is phase 0 (the
+   /* split around its discard (unless SGX_DEBUG=nophasesplit): code is phase 0 (the
     * test), code1 phase 1 (the colour, into pa<color_reg>) */
    uint64_t *code1;
    unsigned n_code1;
