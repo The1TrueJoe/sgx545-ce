@@ -5,7 +5,7 @@
 # Lay out a Debian-installable kernel with gma500's SGX auxiliary device and
 # powervr_sgx in tree, from Debian's own amd64 config (the config file of
 # linux-image-*-amd64-unsigned from DEB_SUITE, default trixie) plus
-# deb.fragment:
+# deb.fragment, then EXTRA_FRAGMENTS (lockdep.fragment for the lockdep flavor):
 #
 #   deb-kernel.sh <linux source> <drm dir>
 set -eu
@@ -37,7 +37,7 @@ curl -sfo "$T/k.deb" "$MIRROR/$pkg"
 cp "$T"/boot/config-* "$SRC/.config"
 rm -rf "$T"
 
-( cd "$SRC" && ARCH=x86_64 ./scripts/kconfig/merge_config.sh -m .config "$DRM/ci/deb.fragment" )
+( cd "$SRC" && ARCH=x86_64 ./scripts/kconfig/merge_config.sh -m .config "$DRM/ci/deb.fragment" ${EXTRA_FRAGMENTS:-} )
 make -C "$SRC" ARCH=x86_64 olddefconfig
 for want in CONFIG_DRM_GMA500=m CONFIG_DRM_POWERVR_SGX=m CONFIG_DRM_POWERVR_SGX_GMA500=y; do
 	grep -qx "$want" "$SRC/.config" || { echo "deb-kernel: $want missing" >&2; exit 1; }

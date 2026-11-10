@@ -12,6 +12,10 @@ on:
       suite:
         description: Debian suite whose kernel config to start from
         default: trixie
+      lockdep:
+        description: Lock checking (drm/ci/lockdep.fragment); its own release name and artifact
+        type: boolean
+        default: false
   push:
     branches: [m2-drm]
     paths:
@@ -22,11 +26,12 @@ on:
       - .github/workflows/powervr-sgx-deb.yml
 
 concurrency:
-  group: powervr-sgx-deb-${{ github.ref }}
+  group: powervr-sgx-deb-${{ github.ref }}-${{ inputs.lockdep && 'lockdep' || 'plain' }}
   cancel-in-progress: false
 
 env:
   LINUX_VERSION: 7.3.3
+  FLAVOR: ${{ inputs.lockdep && '-lockdep' || '' }}
 
 jobs:
   deb:
@@ -50,6 +55,7 @@ jobs:
       - name: Lay out the kernel
         env:
           DEB_SUITE: ${{ inputs.suite || 'trixie' }}
+          EXTRA_FRAGMENTS: ${{ inputs.lockdep && format('{0}/drm/ci/lockdep.fragment', github.workspace) || '' }}
         run: |
           set -eux
           [ -f linux-$LINUX_VERSION.tar.xz ] ||
@@ -63,7 +69,7 @@ jobs:
           DEBFULLNAME: Joseph Telaak
         run: |
           set -eux
-          make -C linux-$LINUX_VERSION ARCH=x86_64 -j"$(nproc)" LOCALVERSION=-sgx \
+          make -C linux-$LINUX_VERSION ARCH=x86_64 -j"$(nproc)" LOCALVERSION=-sgx$FLAVOR \
             KDEB_PKGVERSION=$LINUX_VERSION-sgx1 bindeb-pkg
           mkdir -p out
           mv linux-image-*.deb linux-headers-*.deb out/
@@ -78,6 +84,7 @@ jobs:
               CONFIG_DRM_FBDEV_EMULATION=y CONFIG_AUXILIARY_BUS=y; do
             grep -qx "$want" $L/.config || { echo "missing $want"; exit 1; }
           done
+          [ -z "$FLAVOR" ] || grep -qx CONFIG_PROVE_LOCKING=y $L/.config
           rm -rf root && mkdir root && dpkg-deb -x out/linux-image-*.deb root
           M=$(ls -d root/lib/modules/*)
           for m in gma500_gfx powervr_sgx; do
@@ -98,6 +105,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: powervr-sgx-deb-cedarview
+          name: powervr-sgx-deb-cedarview${{ env.FLAVOR }}
           path: out/
           retention-days: 30

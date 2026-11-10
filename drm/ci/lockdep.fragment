@@ -1,0 +1,12 @@
+# The Cedarview deb's lock-checking flavor (powervr-sgx-deb, input "lockdep"):
+# lockdep and the cheap checks around it, without debug.fragment's KASAN, which
+# Debian's config would make too slow and too big for a test stick.
+CONFIG_DEBUG_KERNEL=y
+CONFIG_PROVE_LOCKING=y
+CONFIG_DEBUG_ATOMIC_SLEEP=y
+CONFIG_DEBUG_LIST=y
+CONFIG_DEBUG_OBJECTS=y
+CONFIG_DEBUG_OBJECTS_WORK=y
+CONFIG_DEBUG_OBJECTS_TIMERS=y
+CONFIG_DMA_API_DEBUG=y
+CONFIG_DMA_API_DEBUG_SG=y
