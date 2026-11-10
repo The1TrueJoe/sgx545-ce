@@ -97,6 +97,15 @@ struct sgx_compile_options {
     * a texel read at mediump then arrives as F16, two channels per register
     * (sgx_sample_info.f16), and is not unpacked */
    bool f16_samples;
+   /* fragment shader, one phase of a program split around its discard
+    * (phase 0 the discard test, phase 1 the colour): the iterations and
+    * samples another compile of the whole program chose (its PDS program
+    * runs once for both phases), taken as they are; each texture read finds
+    * its sample there by unit, set and projection */
+   const struct sgx_shader *phase_layout;
+   /* phase 0: write no PA register an iteration or sample fills (phase 1
+    * reads them after it); with no colour store, no colour output either */
+   bool keep_inputs;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
