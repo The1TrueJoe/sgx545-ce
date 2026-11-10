@@ -40,6 +40,7 @@
 
 #include "drm-uapi/powervr_sgx_drm.h"
 #include "util/macros.h"
+#include "util/u_debug.h"
 #include "util/simple_mtx.h"
 #include "util/vma.h"
 
@@ -569,6 +570,10 @@ create_context(struct psgx_dev *dd, uint32_t *handle)
       .type = DRM_POWERVR_SGX_CTX_TYPE_RENDER,
       .priority = DRM_POWERVR_SGX_CTX_PRIORITY_NORMAL,
       .vm_context_handle = dd->vm,
+      /* SGX_PB_PAGES: the parameter buffer's size, for experiments; the
+       * device's first render context sizes it for everyone (0: the
+       * kernel's default) */
+      .param_buffer_pages = (uint32_t)debug_get_num_option("SGX_PB_PAGES", 0),
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
 
