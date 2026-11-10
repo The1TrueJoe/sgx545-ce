@@ -1100,9 +1100,14 @@ I0 = 7, I1 = 17 beforehand. The unit wiring in the table above holds:
 - Chaining works as v_mvp's does: an efo with `a=a0=m0+i0` reads the I0 the
   previous efo wrote (10 + 10 = 20).
 - **Hazard:** `d=i0` while the same word writes I0 (`wi0`) gave the old value
-  on some pixels and the new one on others. `d=i1` with `wi1` read the old
-  value uniformly in this one draw. Don't make `d` name an internal register
-  the word writes.
+  on some pixels and the new one on others: don't make `d` name I0 while the
+  word writes it.
+- `d=i1` with `wi1` read the old I1 uniformly. libusc relies on it: in the
+  DDK's Minecraft terrain vertex program (`mc-ddk-vertex.md`, kick 4022) the
+  first efo of each `mat4 * v` chain stores the previous chain's second result
+  with `d=i1` while its `i=i0=m0,i1=m1` starts the new chain, so a chain needs
+  no trailing `mov oN, i1` except the last. The previous chain's last efo is
+  then `nosched` too (I1 must survive to the next word).
 
 Operands:
 - dst: l21-27, bank h0-1 (r o pa ix), no ext.
