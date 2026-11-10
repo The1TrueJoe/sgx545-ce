@@ -2337,10 +2337,18 @@ def build(a):
     a.i("limm r7, #1"); a.i("and r5, r5, r7")         # ISP clock bit
     a.i("test.and.eq p0, r5, r5")                     # bit 0 == 0 -> ISP idle
     a.i("(p0) ba pixel_isp_done")
-    a.i("imae r6, r6, #1, #1 [t2=u32]")               # counter += 1
-    a.i("limm r7, #4096")
-    a.i("test.xor.ne p0, r6, r7")                     # under the bound -> keep polling
-    a.i("(p0) ba pixel_isp_loop")
+    if OVERLAP:
+        # UNBOUNDED spin, as the DDK does (PBE_END handler pc 0x0ec3). The bounded version below can proceed
+        # with the ISP still clocking on a big render; serially that's harmless (the next 3D is a whole TA
+        # away), but under overlap render_complete -> do_3d(N+1) writes the 0x428 kick immediately, and the HW
+        # DROPS it while the ISP is still clocked -> the queued 3D never triggers (EVENT_STATUS2=0, no clock) =
+        # the silent hang. So the completion must wait for the 3D pipe to be truly idle. ta3d-state.
+        a.i("ba pixel_isp_loop")
+    else:
+        a.i("imae r6, r6, #1, #1 [t2=u32]")           # counter += 1
+        a.i("limm r7, #4096")
+        a.i("test.xor.ne p0, r6, r7")                 # under the bound -> keep polling
+        a.i("(p0) ba pixel_isp_loop")
     a.label("pixel_isp_done")
     a.i("limm r4, #0")
     a.i(f"st.a.d r17, #{WAIT_3D}, r4 [moe]")           # WAIT_3D = 0 (3D writeout done)
