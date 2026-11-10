@@ -2330,8 +2330,18 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     # start the 3D
+    if OVERLAP:
+        # DIAGNOSTIC (overlap bring-up, addc0d7 run l): the queued 3D's 0x428 kick is
+        # written but the 3D never completes (EVENT_STATUS2=0, clean BIF, ISP idle,
+        # WAIT_3D/FREE armed). Capture CLKGATESTATUS just before the kick (word 0x27:
+        # is the 3D/ISP pipe gated off at kick time?) and EVENT_STATUS2 just after
+        # (word 0x28: did TRIG_3D=0x40 latch, i.e. kick triggered vs dropped?). Both
+        # land in the ta3d_ctl dump. Remove once the queued kick is fixed.
+        a.i(f"ldr r4, #{0x008 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x27, 4)   # CLKGATESTATUS pre-kick
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")
+    if OVERLAP:
+        a.i(f"ldr r4, #{0x118 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x28, 4)   # EVENT_STATUS2 post-kick (TRIG_3D=0x40?)
     if FRAMEPROF:
         a.i(f"ld.a.d r4, r17, #{FP_TICK} [moe]"); a.i("wdf"); a.st_sa(SA_SELF, FP_3D_KICK, 4)  # frameprof: 3D kick (render path)
     a.end()
