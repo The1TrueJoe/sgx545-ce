@@ -40,6 +40,11 @@ struct sgx_const {
 };
 
 #define SGX_MAX_CONSTS 256 /* SA dwords of constants (sa127 ends them) */
+/* fragment constants the driver fills: texture unit u's level-0 width and
+ * height at SGX_K_TEXSIZE + 2u (st's textureSize, as its rectangle lookups
+ * scale by it); past every uniform (128 vec4) and under the compiler's 1024 */
+#define SGX_K_TEXSIZE       1000
+#define SGX_K_TEXSIZE_UNITS 8
 
 #define SGX_MAX_DEP_SAMPLES 8
 

@@ -707,6 +707,18 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
    for (unsigned i = 0; i < so->n_consts; i++) {
       const struct sgx_const *k = &so->consts[i];
       float v = cb && k->k < avail ? cb[k->k] : 0.0f;
+
+      /* a texture's size (sgx_program.c lower_txs) */
+      if (stage == MESA_SHADER_FRAGMENT && k->k >= SGX_K_TEXSIZE &&
+          k->k < SGX_K_TEXSIZE + 2 * SGX_K_TEXSIZE_UNITS) {
+         const struct pipe_sampler_view *view =
+            ctx->views[(k->k - SGX_K_TEXSIZE) / 2];
+
+         v = !view ? 1.0f
+             : (k->k - SGX_K_TEXSIZE) & 1
+                ? (float)u_minify(view->texture->height0, view->u.tex.first_level)
+                : (float)u_minify(view->texture->width0, view->u.tex.first_level);
+      }
       uint32_t bits,
          *at[2] = {k->slot != 0xffff ? &block[base + k->slot] : NULL,
                    k->mem && mem ? &mem[k->mem] : NULL};
