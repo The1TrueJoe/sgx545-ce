@@ -330,8 +330,8 @@ struct sgxws_device_info {
    uint32_t core_revision; /* EUR_CR_CORE_REVISION */
    uint32_t rt_max_width, rt_max_height, rt_max_samples;
    uint16_t pci_vendor, pci_device; /* 0 when the GPU is not a PCI function */
-   /* zero-copy draws (vertex buffers DMAed where they are) by default;
-    * otherwise only on request (SGX_DEBUG=zerocopy) */
+   /* zero-copy draws (vertex buffers DMAed where they are) by default:
+    * powervr_sgx's; services' only on request (SGX_DEBUG=zerocopy) */
    bool zero_copy;
 };
 
