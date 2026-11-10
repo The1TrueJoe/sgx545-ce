@@ -701,9 +701,12 @@ overlap. The DDK's hardware work per frame is not smaller.
 - Three ring slots and three renders a frame keep one frame in flight: the game
   waits for the world render before recording the next one. Four take the GPU from
   67% to 96% job-busy. With deeper queues X's copies wait behind the game's frames
-  (Xorg in dirtyfb, minutes for a key press); context priorities (5721e6f,
-  `SGX_CTX_PRIORITY=high` for Xorg) are the fix, to be measured before four slots
-  become the default.
+  (Xorg in dirtyfb on simpledrm): an X request's median latency is 1.85 s at four
+  slots against 166 ms at three, with or without a high-priority X context
+  (5721e6f, `SGX_CTX_PRIORITY=high`). X's copy of the game window waits for the
+  game's newest frame, and dirtyfb blocks X's main thread on that copy at every
+  present. Three slots stay the default and `SGX_SLOTS=4` is a games setting
+  until the present path stops blocking X (gma500 has no dirtyfb).
 - What is left of the idle: 97% of it runs from a 3D's end to the next TA's first
   clock, 1-10 ms a job, ~70 a second, while the kernel hands the next job over in
   under 1 ms. That is the microkernel's kick-to-TA time (open-ukernel).
