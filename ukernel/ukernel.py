@@ -110,6 +110,8 @@ TD_ENTRY = 0x19      # control block +0x64: the in-flight 3D's RT-data entry (0 
                      # cleared at the DPM free. The slot pick reads it ("is a 3D in flight, and on 0x630 b1").
 TD_RD = 0x1c         # control block +0x70: the in-flight 3D's render details. render_complete reads it instead
                      # of SC_RD, because by completion the TA set may already be N+1's. (DDK uses ctx +0x28/+0x2c.)
+TD_CTX = 0x20        # control block +0x80: the in-flight 3D's HW render context (for the completion teardown's
+                     # ctx in-flight clears). Populated at the 3D kick with TD_ENTRY/TD_RD.
 # EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
 # alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
@@ -1686,6 +1688,36 @@ def build(a):
     # reused (the DDK skips them on the render kick).
     a.i("test.and.eq p0, r13, r13")             # render kick? skip RT region regs
     a.i("(p0) ba skip_rt")
+    if OVERLAP:
+        # Slot pick (DDK pc 0x09b7): bind the DPM slot the in-flight 3D is NOT on, so this TA can bin while
+        # that 3D renders + frees the other slot. 0x630 b2 = TA slot, b1 = 3D slot, b0 = first-kick slot.
+        # A 3D is in flight iff TD_ENTRY != 0; its slot is 0x630 b1. Only slot 1 is needed (one 3D at a time):
+        # a 3D on slot 0 -> this TA on slot 1 (0x630 = 4 then 5, RT state reg 0x674); else slot 0 (0x630 = 0,
+        # RT state reg 0x62c via TA_RT). Matches interleave_ours.py --order overlap: 0/0/0/4,5/5/7.
+        a.i(f"ld.a.d r5, r17, #{TD_ENTRY} [moe]")   # the in-flight 3D's RT entry (0 = none)
+        a.i("wdf")
+        a.i("test.and.eq p0, r5, r5")               # no 3D in flight -> slot 0
+        a.i("(p0) ba ov_slot0")
+        a.i(f"ldr r6, #{0x630 // 4}")
+        a.i("wdf")
+        a.i("test.and.ne p0, r6, #2")               # 3D on slot 1 (b1 set) -> this TA on slot 0
+        a.i("(p0) ba ov_slot0")
+        a.i("limm r5, #4")                          # slot 1: 0x630 = 4 (b2), then 5 (b2 | b0)
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i("limm r5, #5")
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i("ld.a.d r5, r12, #5 [moe]")             # RT entry words 5/6/7
+        a.i("ld.a.d r6, r12, #6 [moe]")
+        a.i("ld.a.d r7, r12, #7 [moe]")
+        a.i("wdf")
+        a.i(f"str #{0x674 // 4}, r5")                # slot-1 state reg = w5 (0x62c is slot 0's)
+        a.i(f"str #{0x634 // 4}, r6")                # control reg = w6 (shared)
+        a.i(f"str #{0x234 // 4}, r7")                # tail-pointer reg = w7 (shared)
+        a.i("ba skip_rt")
+        a.label("ov_slot0")
+        a.i("limm r5, #0")                          # slot 0: 0x630 = 0 twice (b2 then b0; DDK writes both)
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i(f"str #{0x630 // 4}, r5")
     a.program(12, TA_RT)
     a.label("skip_rt")
     a.program(10, TA_RD)
@@ -1961,9 +1993,27 @@ def build(a):
     a.i("wdf")
     if DEBUG_SENTINEL:
         a.st_sa(SA_SELF, 0x35, 5)                     # log 0x630's inherited value
-    a.i("shr r5, r5, #3")
-    a.i("shl r5, r5, #3")                             # clear bits 0-2
-    a.i(f"str #{0x630 // 4}, r5")
+    if OVERLAP:
+        # 3D start: the 3D takes this scene's slot (0x630 b2) -> set b1 = b2 (DDK: 5 -> 7 for slot 1, 0 -> 0
+        # for slot 0). DON'T clear the slot bits; the TA may already be binning the next scene on the other
+        # slot. Then populate the 3D set so render_complete and the next TA's slot pick see this 3D in flight.
+        a.i("limm r6, #4")
+        a.i("and r6, r5, r6")                        # b2 = the scene's slot (0 or 4)
+        a.i("shr r6, r6, #1")                        # -> b1 position (0 or 2)
+        a.i("or r5, r5, r6")                         # 0x630 b1 = b2
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i(f"ld.a.d r6, r17, #{SC_RTENTRY} [moe]")
+        a.i(f"ld.a.d r7, r17, #{SC_RD} [moe]")
+        a.i("wdf")
+        a.i(f"st.a.d r17, #{TD_ENTRY}, r6 [moe]")    # the in-flight 3D's RT entry
+        a.i(f"st.a.d r17, #{TD_RD}, r7 [moe]")       # and its render details
+        a.i(f"ld.a.d r6, r17, #{SC_CTX} [moe]")
+        a.i("wdf")
+        a.i(f"st.a.d r17, #{TD_CTX}, r6 [moe]")      # and its HW render context
+    else:
+        a.i("shr r5, r5, #3")
+        a.i("shl r5, r5, #3")                         # clear bits 0-2
+        a.i(f"str #{0x630 // 4}, r5")
     # flush the tail-pointer cache before the 3D. The last TA's final control-
     # stream terminates and tail pointers sit in the TPC, not yet written back to
     # the parameter buffer; without the flush the ISP walks UNTERMINATED region
@@ -2406,7 +2456,10 @@ def build(a):
     a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear SC_OOM
     a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r4 [moe]")   # any queued overlap is moot: the scene finished
     a.label("render_complete_normal")
-    a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
+    if OVERLAP:
+        a.i(f"ld.a.d r0, r17, #{TD_RD} [moe]")   # the completing 3D's render details (SC_RD may now be N+1's TA)
+    else:
+        a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")   # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
     # render's own sync ops-pending word (render-details word 0x34 = byte 0xD0 =
@@ -2467,8 +2520,12 @@ def build(a):
     # flight slots. One context: the in-flight "list" is the single control-
     # block slot, cleared to 0 (not an unlink), which is also what tells the
     # cleanup and power handlers no render is running.
-    a.i(f"ld.a.d r1, r17, #{SC_RTENTRY} [moe]")  # RT-data entry
-    a.i(f"ld.a.d r2, r17, #{SC_CTX} [moe]")      # HW render context
+    if OVERLAP:
+        a.i(f"ld.a.d r1, r17, #{TD_ENTRY} [moe]")  # the completing 3D's RT entry (not N+1's TA)
+        a.i(f"ld.a.d r2, r17, #{TD_CTX} [moe]")    # and its HW render context
+    else:
+        a.i(f"ld.a.d r1, r17, #{SC_RTENTRY} [moe]")  # RT-data entry
+        a.i(f"ld.a.d r2, r17, #{SC_CTX} [moe]")      # HW render context
     a.i("wdf")
     a.i("ld.a.d r3, r1, #%d [moe]" % RT_DATA)            # rtdata = *(rtentry+0x30)
     a.i("wdf")
@@ -2486,6 +2543,9 @@ def build(a):
     a.i(f"st.a.d r17, #{SC_INFLIGHT}, r4 [moe]")  # control block +0x50 = 0 (none in flight);
                                                   # this runs on 0x1 (after the page free), so
                                                   # clearing it lets a deferred cleanup free safely
+    if OVERLAP:
+        a.i(f"st.a.d r17, #{TD_ENTRY}, r4 [moe]")  # 3D done: clear the slot-pick gate (the next first kick's
+                                                   # slot pick resets 0x630, so the 3D's b1 needn't be cleared here)
     a.i("limm r5, #%d" % RD_STATE)
     a.i("imae r5, r5, #1, r0 [t2=u32]")                  # &(rd+0x2a4)
     a.i("limm r4, #2")
