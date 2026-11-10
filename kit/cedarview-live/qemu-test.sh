@@ -17,8 +17,8 @@ gunzip -c "$GZ" > "$W/stick.img"
 M="$W/stick.img@@1M"
 mcopy -n -i "$M" ::/boot/grub/grub.cfg "$W/grub.cfg"
 extra=; [ "$MODE" = xhang ] && extra=" kit.test=xhang"
-sed -i "s/ systemd.show_status=0\$/ systemd.show_status=0 console=tty0 console=ttyS0$extra/; s/^set timeout=.*/set timeout=0/" "$W/grub.cfg"
-grep -q "console=ttyS0$extra" "$W/grub.cfg"
+sed -i "s/ systemd.show_status=0\$/ systemd.show_status=0 console=tty0 console=ttyS0 kit.poweroff=1$extra/; s/^set timeout=.*/set timeout=0/" "$W/grub.cfg"
+grep -q "console=ttyS0 kit.poweroff=1$extra" "$W/grub.cfg"
 mcopy -o -i "$M" "$W/grub.cfg" ::/boot/grub/grub.cfg
 head -c 64M /dev/urandom > "$W/disk.img"
 before=$(sha256sum < "$W/disk.img")
@@ -43,7 +43,7 @@ f=$(mdir -b -i "$M" ::/ | grep -E 'results-kit.*\.tar\.gz$' | head -1)
 mcopy -n -i "$M" "$f" "$W/r.tgz"
 tar -tzf "$W/r.tgz" | sort
 tar -xzOf "$W/r.tgz" results/summary.txt
-grep -q '^kit: saved=yes' "$W/serial.log" || { echo "qemu-test: the run did not finish and save" >&2; exit 1; }
+grep -q 'kit: saved=yes' "$W/serial.log" || { echo "qemu-test: the run did not finish and save" >&2; exit 1; }
 mcopy -n -i "$M" ::/kit-progress.txt "$W/progress.txt" && grep -q '^complete' "$W/progress.txt" ||
 	{ echo "qemu-test: the progress marker is not complete" >&2; exit 1; }
 if [ "$MODE" = xhang ]; then

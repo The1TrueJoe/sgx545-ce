@@ -14,6 +14,7 @@
 #   kit.test=xhang     X stops dead in the first desktop variant (watchdog self-test)
 #   kit.test=gpuhang   a forced GPU hang after the GPU tests (recovery self-test)
 #   kit.nopoweroff     stay on at the end (bench runs)
+#   kit.poweroff=1     always power off at the end, never leave a desktop up (CI)
 . /etc/kit-release
 umask 022
 R=/tmp/results M=/run/live/medium
@@ -303,9 +304,11 @@ clear
 # the desktop left up: A when the GPU desktop worked (X up, smoke test through, GL on the SGX),
 # else C; read from the summary, which carries an earlier boot's results after a resume
 FINAL=
-grep -q 'PASS  \[C\] desktop variant' "$SUM" && FINAL=C
-grep -q 'PASS  \[A\] desktop variant' "$SUM" && grep -q 'PASS  \[A\] OpenGL renders on the SGX545' "$SUM" && FINAL=A
-if [ -n "$SAVED" ] && [ -n "$FINAL" ]; then
+# (all saved by now, marker complete: a tester who switches off at that desktop loses nothing)
+has kit.poweroff=1 && FINAL=never
+grep -q 'PASS  \[C\] desktop variant' "$SUM" && [ -z "$FINAL" ] && FINAL=C
+grep -q 'PASS  \[A\] desktop variant' "$SUM" && grep -q 'PASS  \[A\] OpenGL renders on the SGX545' "$SUM" && [ "$FINAL" != never ] && FINAL=A
+if [ -n "$SAVED" ] && [ -n "$FINAL" ] && [ "$FINAL" != never ]; then
 	# everything the tester needs is saved; the best desktop that worked stays up for them
 	printf '\n\n  Done. Thank you!\n\n  The results are on this stick:\n  %s\n\n  A desktop starts now.\n' "$NAME"
 	sleep 5
