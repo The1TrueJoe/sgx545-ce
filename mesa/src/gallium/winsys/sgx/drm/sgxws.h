@@ -129,6 +129,9 @@ struct sgxws_prog {
    uint32_t sec_dwords; /* constant dwords DMA'd for the secondary program */
    struct sgx_pds_douti douti[10]; /* DOUTIs, one per iterated input or sample */
    uint8_t douti_tex[10]; /* 0, or the sampler unit + 1 whose DOUTT follows it */
+   /* that DOUTT's T3 for this sample: the unit's word with these bits
+    * cleared, then these set (an F16 return, sgx_program.c) */
+   uint32_t douti_t3_clr[10], douti_t3_set[10];
    uint32_t n_douti;
    uint32_t pds_middle; /* TA state PDS middle word (0: the default) */
    uint32_t

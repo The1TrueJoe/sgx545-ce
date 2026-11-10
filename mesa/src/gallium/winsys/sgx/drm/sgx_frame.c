@@ -482,7 +482,8 @@ pds_sizeinfo(uint32_t units, uint32_t sec_dwords, uint32_t b25_28)
 static uint32_t
 pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1,
           const struct sgx_pds_douti *douti, const uint8_t *douti_tex,
-          unsigned n_douti, const uint32_t (*tex)[4], uint32_t *rows)
+          const uint32_t *t3_clr, const uint32_t *t3_set, unsigned n_douti,
+          const uint32_t (*tex)[4], uint32_t *rows)
 {
    struct pds p = {0};
    unsigned d0 = 1, d1 = 1;
@@ -510,7 +511,7 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1,
          pds_d1(&p, 2 * a, t[0]);
          pds_d1(&p, 2 * a + 1, t[1]);
          pds_d0(&p, 2 * b, t[2]);
-         pds_d0(&p, 2 * b + 1, t[3]);
+         pds_d0(&p, 2 * b + 1, (t[3] & ~t3_clr[i]) | t3_set[i]);
          CODE(&p, pds_movs(MV, b, a, 2, 3, 0, 1, DOUTT));
       }
    }
@@ -744,7 +745,8 @@ sgxws_ctx_create(struct sgxws_dev *d)
     * last [D] */
    c->clear_pds =
       pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0),
-                doutu_w1_pixel(true, false), &clear_douti, NULL, 1, NULL, NULL);
+                doutu_w1_pixel(true, false), &clear_douti, NULL, NULL, NULL, 1,
+                NULL, NULL);
 
    /* identity index buffer: glDrawArrays draws through it (STATE.md section 2) */
    p = ring_alloc(&c->gen, IDX_COUNT * 2, 4);
@@ -1722,7 +1724,8 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       }
       prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps),
                        doutu_w1_pixel(iter, smp), fs->douti, fs->douti_tex,
-                       fs->n_douti, d->tex, &rows);
+                       fs->douti_t3_clr, fs->douti_t3_set, fs->n_douti, d->tex,
+                       &rows);
    }
    blk[n++] = pds_word(c, prim, rows);
    /* viewport: gallium's transform [C x offset, D rest] */
@@ -2402,7 +2405,7 @@ clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
       fs = sgxws_usse_upload(c, false, w, 2, NULL, 0);
       c->clear_pds_masked[wmask] =
          pds_pixel(c, doutu_w0(c, fs, false, 0), doutu_w1_pixel(true, false),
-                   &clear_douti, NULL, 1, NULL, NULL);
+                   &clear_douti, NULL, NULL, NULL, 1, NULL, NULL);
    }
    return c->clear_pds_masked[wmask];
 }
