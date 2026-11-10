@@ -102,6 +102,7 @@ jobs:
           G=$(find $M -name 'gma500_gfx.ko*')
           case $G in *.zst) zstd -dq $G -o g.ko ;; *.xz) xz -dc $G > g.ko ;; *) cp $G g.ko ;; esac
           nm g.ko | grep -q psb_gem_prime_get_sg_table
+          nm g.ko | grep -q psb_gem_prime_export
 
       - uses: actions/upload-artifact@v4
         with:

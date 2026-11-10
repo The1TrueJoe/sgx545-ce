@@ -15,6 +15,11 @@ be exported.
 The PRIME helpers call pin and unpin with the object's reservation lock
 held, and psb_gem_pin() and psb_gem_unpin() take that lock themselves.
 Split each into a variant that expects the lock held, for the hooks.
+
+The importer's CPU mapping, dma_buf_mmap(), goes through the object's
+fake mmap offset, which a dumb buffer only gets from MAP_DUMB, and Mesa's
+kmsro never calls that for the buffers it exports. Create the offset at
+export.
 ---
 --- a/drivers/gpu/drm/gma500/gem.c
 +++ b/drivers/gpu/drm/gma500/gem.c
@@ -67,13 +72,13 @@ Split each into a variant that expects the lock held, for the hooks.
 -
  	return 0;
 +}
-+
+ 
+-err_dma_resv_unlock:
 +int psb_gem_pin(struct psb_gem_object *pobj)
 +{
 +	struct drm_gem_object *obj = &pobj->base;
 +	int ret;
- 
--err_dma_resv_unlock:
++
 +	ret = dma_resv_lock(obj->resv, NULL);
 +	if (drm_WARN_ONCE(obj->dev, ret, "dma_resv_lock() failed, ret=%d\n", ret))
 +		return ret;
@@ -127,7 +132,7 @@ Split each into a variant that expects the lock held, for the hooks.
  	dma_resv_unlock(obj->resv);
  }
  
-@@ -131,8 +141,39 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
+@@ -131,8 +141,54 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
  	.close = drm_gem_vm_close,
  };
  
@@ -159,8 +164,23 @@ Split each into a variant that expects the lock held, for the hooks.
 +	return drm_prime_pages_to_sg(obj->dev, pobj->pages, obj->size >> PAGE_SHIFT);
 +}
 +
++/*
++ * dma_buf_mmap() maps through the object's fake offset (drm_gem_prime_mmap()),
++ * which a dumb buffer only gets from MAP_DUMB: make sure it has one.
++ */
++static struct dma_buf *psb_gem_prime_export(struct drm_gem_object *obj, int flags)
++{
++	int ret;
++
++	ret = drm_gem_create_mmap_offset(obj);
++	if (ret)
++		return ERR_PTR(ret);
++	return drm_gem_prime_export(obj, flags);
++}
++
  static const struct drm_gem_object_funcs psb_gem_object_funcs = {
  	.free = psb_gem_free_object,
++	.export = psb_gem_prime_export,
 +	.pin = psb_gem_prime_pin,
 +	.unpin = psb_gem_prime_unpin,
 +	.get_sg_table = psb_gem_prime_get_sg_table,
