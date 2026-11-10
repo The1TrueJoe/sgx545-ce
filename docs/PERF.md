@@ -677,3 +677,42 @@ Trims to consider, with these numbers:
   the DDK microkernel's three interrupts);
 - `queue → run`: drm_sched's worker wakeup is the largest kernel share. It is
   roughly constant, and only worth attacking if submits ever queue back to back.
+
+## Minecraft's frame on the open stack (EA1, 2026-11-10)
+
+Bench world, standing, Xorg + our x11 Mesa, kernel ftrace grouped by render target
+plus a CLKGATESTATUS sampler (per-unit clock busy, about every 18 us).
+
+Where the frame goes, default (3 ring slots): one world render (~40 ms TA, then
+~23.5 ms 3D, no gap between them), two small renders and X's copy; every unit idle
+39% of the time and TA/3D never overlapping, against the DDK's 11% idle and 40%
+overlap. The DDK's hardware work per frame is not smaller.
+
+| change | stand fps | world ms | all idle | what it removed |
+|---|---|---|---|---|
+| default | 11.5 | 66 | 39% | |
+| `SGX_SLOTS=4` | 13.3-13.7 | 66 | 27% | recording the next frame waiting for this frame's world render (slot wait, ~40% of the game thread) |
+| `SGX_SLOTS=6` | 13.5 | 66 | | nothing more |
+| parameter buffer 4 / 16 / 32 MiB | 10.5-11.2 | 65-68 | | nothing: no OOM at any size |
+| `ffmediump` | 10.9 | 64 | | nothing |
+| `phasesplit` | 11.2 | 65.6 | | nothing measurable |
+| `phasesplit,ffmediump,f16samples` | 11.8 | 61.4 | | ~3.5 ms of 3D (F16 texels, no unpacks) |
+
+- Three ring slots and three renders a frame keep one frame in flight: the game
+  waits for the world render before recording the next one. Four take the GPU from
+  67% to 96% job-busy. With deeper queues X's copies wait behind the game's frames
+  (Xorg in dirtyfb on simpledrm): an X request's median latency is 1.85 s at four
+  slots against 166 ms at three, with or without a high-priority X context
+  (5721e6f, `SGX_CTX_PRIORITY=high`). X's copy of the game window waits for the
+  game's newest frame, and dirtyfb blocks X's main thread on that copy at every
+  present. Three slots stay the default and `SGX_SLOTS=4` is a games setting
+  until the present path stops blocking X (gma500 has no dirtyfb).
+- What is left of the idle: 97% of it runs from a 3D's end to the next TA's first
+  clock, 1-10 ms a job, ~70 a second, while the kernel hands the next job over in
+  under 1 ms. That is the microkernel's kick-to-TA time (open-ukernel).
+- `phasesplit` and `f16samples` are correct (dEQP-GLES2 mustpass and 117
+  fixed-function piglit tests match the baseline, no channel swaps) but the 3D is
+  not where this frame's time goes. F16 fixed-function programs and F16 samples
+  are the default since dEQP-GLES2 mustpass and piglit matched the baseline with
+  both (`noffmediump`, `nof16samples` turn them off); the phase split stays
+  opt-in.

@@ -404,6 +404,7 @@ struct prog_info {
    const char *why; /* what read_program refused */
    struct {
       unsigned at, sampler, raw;
+      unsigned phase; /* split: at indexes code1 */
       uint64_t smp;
    } deps[SGX_MAX_DEP_SAMPLES];
    unsigned n_deps;
@@ -509,6 +510,7 @@ read_program(const struct sgx_shader *out, struct sgx_pipe_shader *so,
       info->deps[info->n_deps].sampler = x->sampler;
       info->deps[info->n_deps].raw = x->reg;
       info->deps[info->n_deps].smp = x->smp;
+      info->deps[info->n_deps].phase = x->phase;
       info->n_deps++;
    }
    for (unsigned i = 0; i < out->n_blocks; i++) {
@@ -599,8 +601,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
    }
    /* st's fixed-function fragment programs only owe the framebuffer's
-    * precision: mediump (texture coordinates stay F32), opt-in until piglit's
-    * fixed-function tests have run on it */
+    * precision: mediump (texture coordinates stay F32); dEQP-GLES2 mustpass
+    * and piglit unchanged with it and F16 samples (EA1, 2026-11-10) */
    /* the units sampling 8888 texels get them B, G, R, A ordered
     * (sgx_tex_format): all of them unless the variant says otherwise */
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -609,9 +611,12 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * itself (a pure-sample DOUTI, source 0x24, below) */
       opts.pds_samples_alone = true;
    }
+   /* texels a mediump read takes come back F16 (the sample's T3, below) */
+   opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
+                      !(sgx_drv_debug & SGX_DEBUG_NO_F16_SAMPLES);
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
-                     (sgx_drv_debug & SGX_DEBUG_FF_MEDIUMP);
+                     !(sgx_drv_debug & SGX_DEBUG_NO_FF_MEDIUMP);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform,
             nir_metadata_control_flow, NULL);
    {
@@ -676,6 +681,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    }
    if (sgx_drv_debug & SGX_DEBUG_NIR)
       nir_print_shader(nir, stderr);
+   /* a discarding fragment program in two phases, as the DDK runs its
+    * alpha-tested ones: the test before the visibility feedback, the colour
+    * after it for the pixels that pass (out.code1); the compiler decides */
+   opts.split_phases = !vertex && (sgx_drv_debug & SGX_DEBUG_PHASE_SPLIT);
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",
               vertex ? "vertex" : "fragment", out.log ? out.log : "");
@@ -691,15 +700,33 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       /* "hi lo" hex per instruction, as sgxc's .code (dis.py -x reads the
        * pairs) */
       snprintf(path, sizeof(path), "%s/%s-%u.code", sgx_dump_code_dir(),
-               vertex ? "vs" : "fs", seq++);
+               vertex ? "vs" : "fs", seq);
       if ((fp = fopen(path, "w"))) {
          for (unsigned i = 0; i < out.n_code; i++)
             fprintf(fp, "%08x %08x\n", (unsigned)(out.code[i] >> 32),
                     (unsigned)out.code[i]);
          fclose(fp);
       }
+      /* a split program's phase 1, as sgxc -P names it */
+      snprintf(path, sizeof(path), "%s/fs-%u.code1", sgx_dump_code_dir(), seq);
+      if (out.n_code1 && (fp = fopen(path, "w"))) {
+         for (unsigned i = 0; i < out.n_code1; i++)
+            fprintf(fp, "%08x %08x\n", (unsigned)(out.code1[i] >> 32),
+                    (unsigned)out.code1[i]);
+         fclose(fp);
+      }
+      seq++;
    }
-   if (!read_program(&out, so, &info)) {
+   /* phase 1 is straight-line (the compiler splits only such programs): no
+    * branch offsets to move there */
+   for (unsigned i = 0; i < out.n_blocks1; i++) {
+      if (out.blocks1[i].kind == SGX_BLOCK_BRANCH) {
+         info.why = "a branch in phase 1";
+         out.n_code1 = 0;
+         break;
+      }
+   }
+   if (info.why || !read_program(&out, so, &info)) {
       fprintf(stderr, "sgx: %s shader: not handled yet (%s)\n",
               vertex ? "vertex" : "fragment", info.why);
       sgx_shader_free(&out);
@@ -796,8 +823,47 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          }
          so->n_deps = info.n_deps;
          so->const_dwords += 4 * info.n_deps;
-         so->code = insert_samples(out.code, out.n_code, &info, sa, &n);
+         if (out.n_code1) {
+            /* each phase's dependent samples into its own block */
+            struct prog_info i0 = info, i1 = info;
+            unsigned sa0[SGX_MAX_DEP_SAMPLES], sa1[SGX_MAX_DEP_SAMPLES], n1;
+
+            i0.n_deps = i1.n_deps = 0;
+            i1.n_branches = 0;
+            for (unsigned j = 0; j < info.n_deps; j++) {
+               struct prog_info *pi = info.deps[j].phase ? &i1 : &i0;
+               unsigned *ps = info.deps[j].phase ? sa1 : sa0;
+
+               ps[pi->n_deps] = sa[j];
+               pi->deps[pi->n_deps++] = info.deps[j];
+            }
+            so->code = insert_samples(out.code, out.n_code, &i0, sa0, &n);
+            so->code1 = insert_samples(out.code1, out.n_code1, &i1, sa1, &n1);
+            if (!so->code || !so->code1) {
+               free(so->code);
+               free(so->code1);
+               so->code = so->code1 = NULL;
+            }
+            so->n_code1 = so->code1 ? n1 : 0;
+         } else {
+            so->code = insert_samples(out.code, out.n_code, &info, sa, &n);
+         }
          so->n_code = so->code ? n : 0;
+      } else if (out.n_code1) {
+         /* phase 0's code as the program's (it ends at the feedback nop, so
+          * the discard handling below applies), phase 1's after the feedback */
+         so->code = malloc(out.n_code * sizeof(*so->code));
+         so->code1 = malloc(out.n_code1 * sizeof(*so->code1));
+         if (so->code && so->code1) {
+            memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
+            memcpy(so->code1, out.code1, out.n_code1 * sizeof(*so->code1));
+            so->n_code = out.n_code;
+            so->n_code1 = out.n_code1;
+         } else {
+            free(so->code);
+            free(so->code1);
+            so->code = so->code1 = NULL;
+         }
       } else {
          so->code = malloc(MAX2(out.n_code, 1) * sizeof(*so->code));
          if (so->code) {
@@ -816,7 +882,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                stderr,
                "sgx: fragment shader with discard: no feedback point, not drawn\n");
             free(so->code);
-            so->code = NULL;
+            free(so->code1);
+            so->code = so->code1 = NULL;
          }
       }
       /* gl_FragDepth waits in pa<depth_pa> at the feedback nop for a depthf
@@ -873,6 +940,12 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                   .b25_26 = 3,
                };
             }
+            /* returned F16, two registers (opts.f16_samples): the DDK's T3
+             * for a sample its program does math on, as a whole word */
+            if (out.iters[i].f16) {
+               so->prog.douti_t3_clr[last_sample] = ~0u;
+               so->prog.douti_t3_set[last_sample] = 0x01028800u;
+            }
             continue;
          }
          /* gl_FragCoord (the compiler's set 13) is source 0: x and y at pixel
@@ -903,9 +976,13 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             if (d->dim2 || d->proj)
                pa++;
          }
+         /* (an F16 sample fills two) */
+         for (unsigned i = 0; i < out.n_iters; i++)
+            pa = MAX2(pa, (unsigned)out.iters[i].pa + out.iters[i].regs);
          if (so->prog.n_douti == ARRAY_SIZE(so->prog.douti)) {
             free(so->code);
-            so->code = NULL;
+            free(so->code1);
+            so->code = so->code1 = NULL;
          } else {
             last_plain = so->prog.n_douti;
             so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
@@ -921,10 +998,14 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             so->prog.sec_dwords = 9 + so->const_dwords;
          }
       }
-      so->prog.code = so->code ? sgxws_upload_fs(ctx->hw, so->code, so->n_code,
-                                                 so->color_reg, NULL,
-                                                 so->discard_pa, so->temps)
-                               : 0;
+      so->prog.code =
+         !so->code ? 0
+         : so->code1 && so->discard_pa >= 0
+            ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
+                                    so->n_code1, so->color_reg, NULL,
+                                    so->discard_pa, so->temps)
+            : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg,
+                              NULL, so->discard_pa, so->temps);
       if (last_plain >= 0)
          so->prog.douti[last_plain].last_iter = true;
       if (last_sample >= 0)
@@ -1024,6 +1105,7 @@ sgx_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 
    ralloc_free(so->nir);
    free(so->code);
+   free(so->code1);
    FREE(so->vary);
    for (unsigned i = 0; i < ARRAY_SIZE(so->variants_vs); i++) {
       if (so->variants_vs[i]) {
@@ -1072,6 +1154,7 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    slot = &vs->variants_vs[vs->next_variant_vs++ % ARRAY_SIZE(vs->variants_vs)];
    if (*slot) {
       free((*slot)->code);
+      free((*slot)->code1);
       FREE((*slot)->vary);
       FREE(*slot);
    }
@@ -1145,6 +1228,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
                              ARRAY_SIZE(fs->variants_srgb)];
    if (*slot) {
       free((*slot)->code);
+      free((*slot)->code1);
       FREE((*slot)->vary);
       FREE(*slot);
    }
@@ -1183,8 +1267,12 @@ sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    if (!so->code)
       return 0;
    simple_mtx_lock(&screen->lock);
-   va = sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b,
-                        so->discard_pa, so->temps);
+   va = so->code1 && so->discard_pa >= 0
+           ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
+                                   so->n_code1, so->color_reg, b,
+                                   so->discard_pa, so->temps)
+           : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b,
+                             so->discard_pa, so->temps);
    simple_mtx_unlock(&screen->lock);
    /* the program heap is never freed: past the table's size, the slots are
     * reused in turn and a program uploaded again when needed (dEQP's

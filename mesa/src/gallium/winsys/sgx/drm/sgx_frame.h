@@ -130,6 +130,7 @@ struct sgxws_eot {
 struct sgxws_ctx {
    struct sgxws_dev *dev;
    void *k; /* the backend's */
+   int priority; /* sgxws_ctx_create's */
    /* code (persistent) and per-frame rings */
    struct sgxws_ring usse_pix, usse_vtx;
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;

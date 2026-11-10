@@ -1194,7 +1194,9 @@ zc_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
    if (info->mode == MESA_PRIM_TRIANGLE_STRIP && count > SGXWS_MAX_INDICES)
       return false;
    out_count = list ? expanded_count(info->mode, count) : count;
-   if (!out_count || n_fetch > PIPE_MAX_ATTRIBS)
+   /* a vertex program that reads no attribute takes the gather (sgxws_draw
+    * tells zero-copy from it by its fetches) */
+   if (!out_count || !n_fetch || n_fetch > PIPE_MAX_ATTRIBS)
       return false;
    for (unsigned e = 0; e < n_fetch; e++) {
       if (!f[e].raw || f[e].dwords != 4 || (f[e].stride & 3) ||
