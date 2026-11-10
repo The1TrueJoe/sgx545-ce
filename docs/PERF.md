@@ -705,8 +705,11 @@ overlap. The DDK's hardware work per frame is not smaller.
   slots against 166 ms at three, with or without a high-priority X context
   (5721e6f, `SGX_CTX_PRIORITY=high`). X's copy of the game window waits for the
   game's newest frame, and dirtyfb blocks X's main thread on that copy at every
-  present. Three slots stay the default and `SGX_SLOTS=4` is a games setting
-  until the present path stops blocking X (gma500 has no dirtyfb).
+  present. The sysfb damage commit stopped blocking (m2-drm e874e6f): X latency
+  at four slots is 23 ms median (20-53, n=20) against 25 ms at three, no damage
+  lost, Minecraft 13.6 / 11.0 fps standing / walking against 12.6 / 9.2 at
+  three. Four slots are the default since (`SGX_SLOTS=3` for the old
+  behaviour); gma500 never had the wait.
 - What is left of the idle at four slots is the vendor microkernel's too: 5.3%
   all-idle on ours against 6.5% on the vendor's, same TA and 3D a frame (a
   steady window; an earlier warm-up window had suggested 1-10 ms of
@@ -753,7 +756,7 @@ The plan, largest first, with what each is worth:
 
 | item | owner | worth (frame ~75 ms) | state |
 |---|---|---|---|
-| four slots by default: the next frame recorded while this one renders | kernel (simpledrm's dirtyfb), then Mesa | +16% fps measured | the damage commit blocks Xorg's main thread on the copy's fences at every present; a nonblocking commit first, then the default flips with X latency remeasured |
+| four slots by default: the next frame recorded while this one renders | kernel (simpledrm's dirtyfb), then Mesa | +8-20% fps (13.6 vs 12.6 standing, 11.0 vs 9.2 walking) | done: the default, after m2-drm e874e6f made the damage commit nonblocking (X 23 ms median) |
 | TA/3D overlap across frames (the next world TA under this 3D) | open-ukernel + kernel | up to the 3D's ~22 ms with four slots; ~2% at three | parked: recovery storms with `overlap=1` |
 | fewer renders a frame: the small renders after the world (FBO blit, GUI) and X's copy, each a job with its own start cost | Mesa (scene merging, as the DDK's 3-kick scene), X flips | ~5-10 ms (their run time plus a kick-to-TA each) | to do |
 | 3D: F16 fixed-function and F16 samples (done, ~3.5 ms); phase split (done, neutral) | usse-compiler | done | default |

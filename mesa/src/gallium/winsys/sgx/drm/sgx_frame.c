@@ -661,7 +661,9 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
    d->state_always = getenv("SGX_STATE_ALWAYS") && atoi(getenv("SGX_STATE_ALWAYS"));
-   d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 3;
+   /* four: the next frame records while this one renders (a game's frame is
+    * three renders); docs/PERF.md */
+   d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 4;
    d->ta_split = d->kif->kick_ta ? opts->ta_split : 0;
    d->dry_run = opts->dry_run;
 
