@@ -2003,6 +2003,16 @@ def build(a):
         # flight (TD_ENTRY != 0), queue this scene's 3D; render_complete starts it after the current 3D frees.
         # Credit = 2 blocks a 3rd TA, so SC_* stays this scene's until then. Not last -> kick re-dispatch.
         a.i("(!p0) ba ov_ta_notlast")
+        # TPC flush at the LAST TA finish (DDK order, ta3d-state): flush the tail-pointer
+        # cache now, while the TE/TPC still holds THIS scene's tail state and -- on the queued
+        # route -- A's 3D is still running (the DDK flushes here too, mid-A-3D; safe, the TPC
+        # holds the TA's tail, separate from A's active ISP). do_3d used to flush itself, which
+        # on the queued route runs long after this TA finished -> B's tail state is gone and the
+        # 0x428 kick is refused. Do it for BOTH the start-now and the queued paths; do_3d skips
+        # it under OVERLAP. (0x224=0x40000000, wait EVENT_STATUS b10=0x400, ack 0x134=0x400.)
+        a.i("limm r5, #0x40000000")
+        a.i(f"str #{CR_TPC // 4}, r5")
+        a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
         a.i(f"ld.a.d r3, r17, #{TD_ENTRY} [moe]")      # a 3D already in flight?
         a.i("wdf")
         a.i("test.and.eq p0, r3, r3")                  # none -> start this 3D now
@@ -2078,9 +2088,13 @@ def build(a):
     # first thing on the last-in-scene TA finish (ddk-ref "TA finished (2)"):
     # CR_TPC (0x224) = 0x40000000, wait EUR_CR_EVENT_STATUS bit 10 (0x400,
     # TPC_FLUSH), clear it. (ta3d-state, 2026-11-03.)
-    a.i("limm r5, #0x40000000")
-    a.i(f"str #{CR_TPC // 4}, r5")
-    a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
+    if not OVERLAP:
+        # Serial flushes the TPC here. Under OVERLAP the flush moved to ta_finished's last-kick
+        # path (DDK order) so the queued 3D doesn't re-flush long after its TA finished, when the
+        # TE/TPC no longer holds its tail state -- which refused the 0x428 kick (ta3d-state).
+        a.i("limm r5, #0x40000000")
+        a.i(f"str #{CR_TPC // 4}, r5")
+        a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
     a.label("do_3d_after_tpc")
     a.i(f"ld.a.d r10, r17, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, r17, #{SC_PB} [moe]")   # PB descriptor
