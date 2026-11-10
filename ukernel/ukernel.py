@@ -564,6 +564,30 @@ class Asm:
         # frames, still intermittent lockup_TA) — the TA-cache invalidate is not the
         # terminate-kick cause. See the op0x100 flush at ta_finished's tail instead.
 
+    def invalidate3d(self):
+        """DDK-ordered 3D-side cache invalidate (ta3d-state, DDK pc 0x124b-0x1264),
+        used on the overlap queued 3D route. Unlike invalidate(), the MADD cache
+        invalidate is pulsed and WAITED+acked FIRST, and only then are the PDS-3D /
+        coefficient-store / USE invalidates requested, immediately before the
+        0x138 == 0x4b spin. In the overlap queued route do_3d runs from
+        render_complete with the 3D units clock-gated off (EA1 hang: CLKGATESTATUS
+        0x20, EVENT_STATUS2 0 — the 0x428 kick never ran); the MADD pulse wakes the
+        units, and the PDS-side 0x4b done bits can only set once it has retired.
+        invalidate()'s order (PDS first, 0x4b spin BEFORE the MADD wait) wins in the
+        serial case because the units are still warm from the just-finished TA, but
+        on the queued route it spins on 0x4b before the units are up and deadlocks."""
+        self.i("limm r5, #268435456")                  # 0x10000000: MADD cache
+        self.i(f"ldr r4, #{0x804 // 4}")
+        self.i("wdf")
+        self.i("or r4, r4, r5")
+        self.i(f"str #{0x804 // 4}, r4")
+        self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done (b26), ack 0x134
+        self.i("limm r5, #1")
+        self.i(f"str #{CR_USE_INVAL // 4}, r5")        # 0xa08 USE  (DDK requests all three
+        self.i(f"str #{CR_PDS_INV1 // 4}, r5")         # 0xad4 PDS 3D   right before the spin;
+        self.i(f"str #{CR_PDS_INV_CSC // 4}, r5")      # 0xae0 CSC      0xa08 always, not gated)
+        self.wait(0x138, INV_DONE_3D, CR_EVENT_HOST_CLEAR_0x140)      # spin 0x4b, ack 0x140
+
     def ta_settle(self, tag):
         """TA must already be paused (0xa74 b0). Spin-read 0x700 until two reads 400
         iterations apart match, so a following free-list reload reads a stable counter
@@ -2233,8 +2257,14 @@ def build(a):
     a.label("skip_oom658_clear")
     a.i("limm r5, #1")
     a.i(f"str #{0x43c // 4}, r5")
-    # invalidate the 3D-side caches and wait
-    a.invalidate(CR_PDS_INV1, INV_DONE_3D)
+    # invalidate the 3D-side caches and wait. On the overlap queued route this do_3d
+    # can run with the 3D units clock-gated off (render_complete -> do_3d), so use the
+    # DDK order (MADD waited first, PDS/USE right before the 0x4b spin); the serial path
+    # keeps the HW-confirmed invalidate() (units warm from the TA).
+    if OVERLAP:
+        a.invalidate3d()
+    else:
+        a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     # C (ta3d-state, DDK @0x1289): the background-object PDS words. The client
     # leaves bgblock[0..2] = 0, so without these the ISP's background object runs a
     # zeroed PDS program and the 3D hangs (lockup_3d, BIF_FAULT 0). bgblock VA =
