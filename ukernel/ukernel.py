@@ -2383,6 +2383,18 @@ def build(a):
         a.i(f"ldr r4, #{0x630 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x2a, 4)   # 0x630 slot select
         a.i(f"ldr r4, #{0x408 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x2b, 4)   # 0x408 region header
         a.i(f"ldr r4, #{0x724 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x2c, 4)   # 0x724 DPM pages-in-use
+        # ta3d-state: sim-vs-sim state is identical at the kick, so capture more LIVE state the
+        # emulator can't model. 0x1b=0x40 (init debug reg, expect 0 if we never write it -> rule
+        # it out); 0x1f=0x138 (did the 0x4b invalidate-done bits collect?); 0x21=0x740 (slot-1 DPM
+        # free count); 0x22=0x50c (region header 2); 0x2d=0x118 EVENT_STATUS2 pre-write. The KEY
+        # check -- did B's TPC flush land (region-header MEMORY at *(0x408) non-zero?) -- can't be
+        # read from the EDM here (client VA, list-15 routing; the list-1 pulse faults under secure),
+        # so uapi-stream dumps that memory from the devcd instead.
+        a.i(f"ldr r4, #{0x40 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x1b, 4)    # 0x40 init debug reg
+        a.i(f"ldr r4, #{0x138 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x1f, 4)   # 0x138 invalidate-done bits
+        a.i(f"ldr r4, #{0x740 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x21, 4)   # 0x740 slot-1 DPM free count
+        a.i(f"ldr r4, #{0x50c // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x22, 4)   # 0x50c region header 2
+        a.i(f"ldr r4, #{0x118 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x2d, 4)   # EVENT_STATUS2 pre-write
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")
     if OVERLAP:
