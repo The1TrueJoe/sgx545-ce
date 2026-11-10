@@ -601,8 +601,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
    }
    /* st's fixed-function fragment programs only owe the framebuffer's
-    * precision: mediump (texture coordinates stay F32), opt-in until piglit's
-    * fixed-function tests have run on it */
+    * precision: mediump (texture coordinates stay F32); dEQP-GLES2 mustpass
+    * and piglit unchanged with it and F16 samples (EA1, 2026-11-10) */
    /* the units sampling 8888 texels get them B, G, R, A ordered
     * (sgx_tex_format): all of them unless the variant says otherwise */
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -613,10 +613,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    }
    /* texels a mediump read takes come back F16 (the sample's T3, below) */
    opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
-                      (sgx_drv_debug & SGX_DEBUG_F16_SAMPLES);
+                      !(sgx_drv_debug & SGX_DEBUG_NO_F16_SAMPLES);
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
-                     (sgx_drv_debug & SGX_DEBUG_FF_MEDIUMP);
+                     !(sgx_drv_debug & SGX_DEBUG_NO_FF_MEDIUMP);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform,
             nir_metadata_control_flow, NULL);
    {

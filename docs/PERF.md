@@ -712,4 +712,7 @@ overlap. The DDK's hardware work per frame is not smaller.
   under 1 ms. That is the microkernel's kick-to-TA time (open-ukernel).
 - `phasesplit` and `f16samples` are correct (dEQP-GLES2 mustpass and 117
   fixed-function piglit tests match the baseline, no channel swaps) but the 3D is
-  not where this frame's time goes.
+  not where this frame's time goes. F16 fixed-function programs and F16 samples
+  are the default since dEQP-GLES2 mustpass and piglit matched the baseline with
+  both (`noffmediump`, `nof16samples` turn them off); the phase split stays
+  opt-in.
