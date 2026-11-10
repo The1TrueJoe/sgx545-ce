@@ -14,6 +14,7 @@ on:
     paths:
       - drm/powervr_sgx/**
       - drm/gma500/**
+      - drm/sysfb/**
       - drm/ci/cedarview*
       - drm/tools/gen_regs.py
       - docs/uapi/**
@@ -75,6 +76,11 @@ jobs:
           set -eux
           sh drm/ci/cedarview-kernel.sh "$PWD/linux" "$PWD/drm"
           L=linux
+          # The sysfb patches go upstream on their own: on drm-misc-next too.
+          for p in drm/sysfb/*.patch; do
+            patch -d $L -p1 --forward --batch < "$p"
+          done
+          ./$L/scripts/config --file $L/.config -e SYSFB -e DRM_SIMPLEDRM -e DRM_EFIDRM -e DRM_VESADRM
           # BPF on tracepoints, as distribution kernels have: it caps an event at 12 arguments.
           ./$L/scripts/config --file $L/.config -e DRM_POWERVR_SGX_KUNIT_TEST -e KUNIT \
             -e FTRACE -e KPROBES -e KPROBE_EVENTS -e PERF_EVENTS -e BPF_SYSCALL -e BPF_EVENTS
@@ -86,11 +92,12 @@ jobs:
         run: |
           set -eux
           L=linux
-          D="drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/"
+          D="drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/ drivers/gpu/drm/sysfb/"
+          grep -qE "^CONFIG_DRM_SIMPLEDRM=(y|m)$" $L/.config
           make -C $L ARCH=x86_64 -j"$(nproc)" W=1 $D 2>&1 | tee gcc.log
-          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' gcc.log
+          ! grep -E '(powervr_sgx|gma500|sysfb)/.*(warning|error):' gcc.log
           make -C $L ARCH=x86_64 -j"$(nproc)" C=2 $D 2>&1 | tee sparse.log
-          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' sparse.log
+          ! grep -E '(powervr_sgx|gma500|sysfb)/.*(warning|error):' sparse.log
 
       - name: smatch
         run: |
@@ -118,8 +125,8 @@ jobs:
           make -C $C ARCH=x86_64 LLVM=1 olddefconfig >/dev/null
           make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" prepare >/dev/null
           make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 \
-            drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/ 2>&1 | tee clang.log
-          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' clang.log
+            drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/ drivers/gpu/drm/sysfb/ 2>&1 | tee clang.log
+          ! grep -E '(powervr_sgx|gma500|sysfb)/.*(warning|error):' clang.log
 
       - name: checkpatch --strict and kernel-doc
         run: |

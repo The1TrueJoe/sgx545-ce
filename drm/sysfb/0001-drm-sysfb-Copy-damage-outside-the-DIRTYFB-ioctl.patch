@@ -12,7 +12,8 @@ With a render GPU next to the display (here, simpledrm with an SGX545
 rendering), the front buffer's newest fence is X's copy of a client's
 window, which waits for the client's frame. With the GPU busy, X's main
 thread then spends most of its time in DIRTYFB, and input and every
-other client wait behind it.
+other client wait behind it: with a game running, X took a median
+1.85 s (up to 4 s) to answer a pointer query.
 
 Make DIRTYFB return at once. Merge its damage into one pending
 rectangle per device, and let a worker hand it to
@@ -20,6 +21,10 @@ drm_atomic_helper_dirtyfb(), which waits for the fences and copies as
 before. Damage that arrives while the worker runs is merged into the
 next run, so none is dropped. Damage for a different framebuffer waits
 for the pending one to be copied first.
+
+With the game running, X now answers in a median 23 ms (53 ms at most),
+the game's frame rate is unchanged, and typing into a terminal next to
+an animating client loses no damage.
 ---
 --- a/drivers/gpu/drm/sysfb/corebootdrm.c
 +++ b/drivers/gpu/drm/sysfb/corebootdrm.c
