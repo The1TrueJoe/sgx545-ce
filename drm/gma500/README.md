@@ -12,6 +12,7 @@ auxiliary device, `gma500_gfx.sgx`, for powervr_sgx (`CONFIG_DRM_POWERVR_SGX_GMA
 - `0003`: the graphics power island gets 10 ms to come up instead of 50 us, which
   stops a "GPU: power management timed out" at every Cedarview boot.
 - `0004`: a pipe that doesn't start after a DPMS on gets enabled once more.
+- `0006`: a page flip's event is sent even when no vblank interrupt will come (the pipe off, or DPMS off mid-flip).
 - `0005`: memory self-refresh is left off with a single pipe. With it on, the
   LVDS panel goes black (backlight on, pipe B's FIFO underruns) on an Atom
   N2600 and a D2500 laptop.
