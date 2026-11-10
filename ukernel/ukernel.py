@@ -1653,11 +1653,29 @@ def build(a):
     # and BANK0 goes 0x0f->0x1f(TA)->0x101f(3D). client PD (0xc38): first kick
     # only — the render kick reuses the scene's PD (ddk-ref "TA kick 2" = 0x1f, no
     # reload). Then invalidate the PDS/USE caches.
+    if OVERLAP:
+        a.i("limm r7, #0")                          # r7 = "do INVALDC" flag (0 = render kick or PD-hit)
     a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
     a.i("(p0) ba skip_bif_pd")
-    a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
-    a.i("wdf")
-    a.i(f"str #{0xc38 // 4}, r4")                   # BIF_DIR_LIST_BASE1 = client PD (slot 1)
+    if OVERLAP:
+        # DDK PD-point routine (pc 0x17ec): skip the DIR_LIST_BASE1 write AND the INVALDC when list
+        # 1 already holds this PD (a hit). On the overlap route this first kick is B's TA WHILE A's
+        # 3D is translating through list 1 (same-context -> same PD -> a hit), and a directory-cache
+        # invalidate under a live 3D is the overlap-only, sim-invisible hazard that refuses B's later
+        # 3D kick (ta3d-state: the DDK invalidates only on a real PD change, never evicting the list
+        # the other unit uses). Serial never hits it (no 3D runs during a TA first kick), so this stays
+        # OVERLAP-gated and the serial image is byte-identical.
+        a.i(f"ldr r5, #{0xc38 // 4}")               # current list-1 PD
+        a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)   # this context's PD
+        a.i("wdf")
+        a.i("test.xor.eq p0, r5, r4")               # 0xc38 == CTX_PD -> unchanged (hit): skip write + INVALDC
+        a.i("(p0) ba skip_bif_pd")
+        a.i(f"str #{0xc38 // 4}, r4")               # real PD change (miss): load list 1
+        a.i("limm r7, #1")                          # and do the INVALDC
+    else:
+        a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
+        a.i("wdf")
+        a.i(f"str #{0xc38 // 4}, r4")               # BIF_DIR_LIST_BASE1 = client PD (slot 1)
     a.label("skip_bif_pd")
     if OVERLAP:
         # PRESERVE the 3D nibble (BANK0 b12-15). On a host kick arriving while a previous render's 3D is still
@@ -1674,8 +1692,12 @@ def build(a):
     else:
         a.i("limm r5, #0x1f")                       # BIF_BANK0: EDM=list 15, TA=list 1
     a.i(f"str #{0xc78 // 4}, r5")
-    # directory-cache invalidate (INVALDC): first kick only.
-    a.i("test.and.eq p0, r13, r13")                 # render kick? skip INVALDC
+    # directory-cache invalidate (INVALDC): first kick only, and under OVERLAP only on a real PD
+    # change (r7 set above) -- never under a live 3D on a PD hit (ta3d-state, the queued-kick fix).
+    if OVERLAP:
+        a.i("test.and.eq p0, r7, r7")               # r7 == 0 (render kick or PD hit) -> skip INVALDC
+    else:
+        a.i("test.and.eq p0, r13, r13")             # render kick? skip INVALDC
     a.i("(p0) ba skip_bif_invaldc")
     a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
     a.i(f"str #{0xc00 // 4}, r5")
