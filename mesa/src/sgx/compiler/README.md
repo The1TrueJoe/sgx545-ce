@@ -77,6 +77,7 @@ one optimization, so a miscompile can be bisected without rebuilding.
 | `nomaskbool` | or/and of comparisons kept as test masks (computes them as 1.0/0.0 floats instead) |
 | `noiftest` | testing an if's comparison straight into the predicate (branches on its value instead) |
 | `keepcoorditers` | dropping a sampled-only varying's plain iteration (keeps it) |
+| `noefochain` | storing a chain's last lane with the next efo chain's first instruction (keeps each chain's `mov oN, i1`) |
 | `unrollexits` | keeping loops that can exit early as loops (unrolls them into select trees instead) |
 | `notexcolor` | writing a texel that is the color with byte moves (unpacks and repacks it instead) |
 | `nopackedcolor` | a uniform color packed to BGRA8 by the driver (packs it in the shader instead) |

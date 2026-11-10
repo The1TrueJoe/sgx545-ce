@@ -4851,6 +4851,43 @@ drop_self_moves(struct sgx_ctx *c)
    }
 }
 
+/* efo chains back to back (mat4 * v, then another): the next chain's first
+ * efo stores the previous chain's second lane with d=i1 (the old I1, ISA.md
+ * "efo") while it starts its own I0/I1, and the trailing mov goes, as libusc
+ * chains v_mvp. The previous chain's last efo becomes nosched so I1
+ * survives. Not when the first efo reads what the mov wrote. */
+static void
+chain_efos(struct sgx_ctx *c)
+{
+   if (sgx_debug(c, SGX_DBG_NO_COISSUE) || sgx_debug(c, SGX_DBG_NO_EFO_CHAIN))
+      return;
+   list_for_each_entry_safe (struct sgx_ins, m, &c->ins, link) {
+      if (m->kind != SGX_INS_ALU || m->form != SGX_OP_MOV || m->pred ||
+          m->nops != 2 || m->rpt != 1 || m->op[1].file != SGX_F_I ||
+          m->op[1].n != 1 || m->link.prev == &c->ins || m->link.next == &c->ins)
+         continue;
+      struct sgx_ins *p = list_entry(m->link.prev, struct sgx_ins, link);
+      struct sgx_ins *e = list_entry(m->link.next, struct sgx_ins, link);
+      if (p->kind != SGX_INS_ALU || p->form != SGX_OP_EFO || p->pred ||
+          !fld_of(p, SGX_FLD_WI1) || e->kind != SGX_INS_ALU ||
+          e->form != SGX_OP_EFO || e->pred || fld_of(e, SGX_FLD_EFO_I) != 2 ||
+          !slot_ok(SGX_OP_EFO, 0, &m->op[0]))
+         continue;
+      unsigned fd, nd, fs, ns;
+      if (!reg_of(c, &m->op[0], &fd, &nd))
+         continue;
+      bool reads = false;
+      for (unsigned k = 1; k < e->nops; k++)
+         reads |= reg_of(c, &e->op[k], &fs, &ns) && fs == fd && ns == nd;
+      if (reads)
+         continue;
+      e->op[0] = m->op[0];
+      fld(e, SGX_FLD_EFO_D, 1); /* d = i1, the previous chain's */
+      fld(p, SGX_FLD_NOSCHED, 1);
+      list_del(&m->link);
+   }
+}
+
 /* ------------------------------------------------------------------------
  * helper instances
  *
@@ -6248,6 +6285,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Branch on a comparison's value, not a test straight into p0"},
    {"keepcoorditers", SGX_DBG_KEEP_COORD_ITERS,
     "Keep a sampled varying's plain iteration though nothing reads it"},
+   {"noefochain", SGX_DBG_NO_EFO_CHAIN,
+    "End every efo chain with its own mov of i1"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
     "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,
@@ -6330,6 +6369,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       allocate(c);
    if (!c->failed)
       drop_self_moves(c);
+   if (!c->failed)
+      chain_efos(c);
    if (!c->failed) {
       uniform_layout(c);
       ret = sgx_finish_program(c, out);
