@@ -1088,6 +1088,34 @@ kernel data through the client's page directory. The DDK therefore needs the
 kernel code and kernel-data heaps mapped in every client PD; it has no mode
 that works without them.
 
+**The TA and the 3D each get their own directory list (pc 0x17ec).** Every TA
+and 3D kick path calls one routine to point a requestor at a memory context.
+r16 is the context; its word 2 is the page-directory address. `r17 & 3`
+picks the 3D (BANK0 b12-15) or the TA (b4-7).
+- **Pick a list.** It treats lists 0-14 as a cache of page directories. It
+  takes list 0 if that is empty or already holds this directory, otherwise
+  the first of lists 1-14 that is empty or matches.
+- **Evict when all are full.** It advances a round-robin cursor (TA3D word
+  49) mod 15 and skips the list that the *other* requestor is using
+  (pc 0x1807-0x180f). A TA can therefore load its context's directory while
+  the 3D keeps translating through a different context's directory.
+- **Load the list.**
+  1. `BIF_CTRL` |= 8, then restore it (invalidate).
+  2. For the TA only: 0xad0 = 1, 0xae0 = 1 and 0x804 b15.
+  3. 0xa08 = 1, wait for 0x138 & 0x27, then acknowledge it in 0x140.
+  4. Wait for `EVENT_STATUS` b26.
+  5. Write the list register, only if its value changes.
+  6. Write the requestor's nibble in `BIF_BANK0` (pc 0x184c-0x1854).
+- **Shared PB.** The DDK's default PB is one buffer that every context
+  shares, so the two DPM slots hold scenes from any context.
+- **What a microkernel needs.** One that lets two contexts' jobs onto the
+  hardware at once needs the TA and the 3D on different lists, or it must
+  serialize contexts whose directories differ. Reloading a single shared list
+  for the next job swaps the directory under the job still running. The
+  captures are all single-context (`BIF_BANK0` = 0x101f: TA and 3D on list 1),
+  so concurrent use from two contexts is in the code but has not been seen.
+  [D, code]
+
 `EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
 SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only
 BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (pc 0x0c6e,
