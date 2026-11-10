@@ -49,15 +49,7 @@ an animating client loses no damage.
  
  #include <video/pixel_format.h>
  
-@@ -12,6 +14,7 @@
- #include <drm/drm_device.h>
- #include <drm/drm_gem_atomic_helper.h>
- #include <drm/drm_modes.h>
-+#include <drm/drm_rect.h>
- 
- struct drm_format_info;
- struct drm_scanout_buffer;
-@@ -80,6 +83,12 @@ struct drm_sysfb_device {
+@@ -80,6 +82,12 @@ struct drm_sysfb_device {
  
  	/* hardware-framebuffer kernel address */
  	struct iosys_map fb_addr;
@@ -70,7 +62,7 @@ an animating client loses no damage.
  };
  
  static inline struct drm_sysfb_device *to_drm_sysfb_device(struct drm_device *dev)
-@@ -201,8 +210,13 @@ int drm_sysfb_connector_helper_get_modes(struct drm_connector *connector);
+@@ -201,8 +209,13 @@ int drm_sysfb_connector_helper_get_modes(struct drm_connector *connector);
   * Mode config
   */
  
