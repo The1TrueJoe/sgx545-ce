@@ -97,6 +97,14 @@ struct sgx_compile_options {
     * a texel read at mediump then arrives as F16, two channels per register
     * (sgx_sample_info.f16), and is not unpacked */
    bool f16_samples;
+   /* fragment shader with a discard: split it at the visibility feedback, as
+    * the DDK's programs are. Phase 0 (code) runs for every rasterized
+    * fragment and computes only the discard test, ending in the feedback
+    * nop; phase 1 (code1) runs for visible pixels only and computes the
+    * colour from the inputs again. Only PA carries over: both phases share
+    * one iteration list and one constant map. Straight-line programs with
+    * one discard and a colour store; others stay one block (n_code1 = 0) */
+   bool split_phases;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
@@ -175,6 +183,7 @@ struct sgx_sample_info {
    uint8_t reg; /* the raw texel: pa (non-dependent), r (dependent) */
    /* non-dependent: the coordinate's plain iteration, -1 none */
    int16_t coord_pa;
+   uint8_t phase; /* dependent, split program: at indexes code1 */
    /* non-dependent, f16_samples: the texel returns F16 into reg (R lo, G hi)
     * and reg + 1 (B lo, A hi), not RGBA8 into reg; RGBA order for a
     * tex_bgra unit too (the TAG converts by channel) */
@@ -243,6 +252,11 @@ struct sgx_shader {
    struct sgx_sample_info samples[SGX_MAX_SAMPLES];
    struct sgx_block *blocks;
    unsigned n_blocks;
+   /* split_phases: phase 1's program and its blocks (0: one block) */
+   uint64_t *code1;
+   unsigned n_code1;
+   struct sgx_block *blocks1;
+   unsigned n_blocks1;
    unsigned n_alu, n_tex, n_flow; /* instruction counts */
    unsigned n_temps;
    /* PA registers: inputs, colour, and the placeholder colour iteration of a

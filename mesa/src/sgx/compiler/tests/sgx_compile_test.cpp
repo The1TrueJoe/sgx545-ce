@@ -60,6 +60,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.tex_bgra = tex_bgra;
       opts.pds_samples_alone = pds_alone;
       opts.f16_samples = f16_samples;
+      opts.split_phases = split_phases;
       opts.driver_consts = true;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
@@ -99,6 +100,7 @@ class sgx_compile_test : public ::testing::Test {
    bool compiled = false;
    bool pds_alone = false;
    bool f16_samples = false;
+   bool split_phases = false;
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -505,6 +507,50 @@ TEST_F(sgx_compile_test, fragment_f16_sample_not_unpacked)
    std::string s = disasm();
    EXPECT_EQ(s.find("pck.f16.u8"), std::string::npos) << s;
    EXPECT_EQ(s.find("pck.f32.u8"), std::string::npos) << s;
+}
+
+/* split_phases: an alpha-tested texture program becomes phase 0 (the test
+ * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
+ * writes no PA register (the inputs phase 1 reads) */
+TEST_F(sgx_compile_test, fragment_alpha_test_split_in_two_phases)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *v = nir_fmul(&b, nir_build_tex_struct(&b, nir_texop_tex, tb),
+                         nir_load_var(&b, c4));
+   nir_discard_if(&b, nir_flt_imm(&b, nir_channel(&b, v, 3), 0.5));
+   nir_store_var(&b, col, v, 0xf);
+
+   split_phases = true;
+   ASSERT_TRUE(compile()) << out.log;
+   ASSERT_GT(out.n_code1, 0u);
+   ASSERT_GT(out.n_code, 0u);
+   EXPECT_EQ(out.code[out.n_code - 1], (uint64_t)0xf8000140u << 32);
+   EXPECT_TRUE(out.discards);
+   /* phase 0: no instruction writes PA */
+   for (unsigned i = 0; i + 1 < out.n_code; i++) {
+      char text[256];
+      sgx_disasm_one(out.code[i], NULL, text, sizeof(text));
+      std::string t(text);
+      size_t sp = t.find(' ');
+      EXPECT_NE(t.substr(sp + 1, 2), "pa") << t;
+   }
 }
 
 } /* namespace */
