@@ -185,7 +185,8 @@ struct sgx_sample_info {
    /* non-dependent: the coordinate's plain iteration, -1 none */
    int16_t coord_pa;
    /* non-dependent, f16_samples: the texel returns F16 into reg (R lo, G hi)
-    * and reg + 1 (B lo, A hi), not RGBA8 into reg */
+    * and reg + 1 (B lo, A hi), not RGBA8 into reg; RGBA order for a
+    * tex_bgra unit too (the TAG converts by channel) */
    uint8_t f16;
    uint64_t smp; /* dependent: the smp, destination r0, texture state #0 */
 };

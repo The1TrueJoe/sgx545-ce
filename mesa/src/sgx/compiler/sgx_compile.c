@@ -3713,10 +3713,12 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    /* only the channels something reads (glamor's glyphs: alpha alone) */
    unsigned read = nir_def_components_read(&tex->def);
    if (s->f16_return) {
-      /* returned as F16 pairs: the channels are the halves themselves */
+      /* returned as F16 pairs in RGBA order, whatever the texel's byte
+       * order (the TAG converts by channel: the DDK's terrain program, T1
+       * 0x0c): the channels are the halves themselves */
       struct sgx_ref hr[4];
       for (unsigned k = 0; k < 4; k++) {
-         hr[k] = ref(SGX_F_PA, 2 * s->pa + TEXEL_LANE(k));
+         hr[k] = ref(SGX_F_PA, 2 * s->pa + k);
          hr[k].h16 = 1;
       }
       set_refs(c, &tex->def, hr, 4);
