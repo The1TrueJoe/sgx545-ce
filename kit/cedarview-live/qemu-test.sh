@@ -9,7 +9,7 @@
 # Passes when the run turns itself off, leaves one complete results file on
 # SGXKIT with the desktop's screenshots, and the disk is unchanged. xhang adds
 # kit.test=xhang: X stops dead in variant A, and the run must capture it, stop
-# it and carry on with variant B. Needs qemu-system-x86, mtools, ovmf.
+# it and carry on with the next variant. Needs qemu-system-x86, mtools, ovmf.
 set -eu
 GZ=$1 FW=$2 MODE=${3:-}
 W=$(mktemp -d)
@@ -50,7 +50,7 @@ if [ "$MODE" = xhang ]; then
 	s=$(tar -xzOf "$W/r.tgz" results/summary.txt)
 	echo "$s" | grep -q 'FAIL  \[A\] desktop variant.*no desktop within 90 s' || { echo "qemu-test: the watchdog did not stop variant A" >&2; exit 1; }
 	tar -tzf "$W/r.tgz" | grep -q 'results/desk-A/hang.txt' || { echo "qemu-test: no hang capture for variant A" >&2; exit 1; }
-	tar -tzf "$W/r.tgz" | grep -q 'results/desk-B/screenshots/01-desktop.png' || { echo "qemu-test: variant B did not run after the hang" >&2; exit 1; }
+	tar -tzf "$W/r.tgz" | grep -qE 'results/desk-[^A]/screenshots/01-desktop.png' || { echo "qemu-test: no later variant reached its desktop after the hang" >&2; exit 1; }
 else
 	tar -tzf "$W/r.tgz" | grep -q 'results/desk-A/screenshots/01-desktop.png' || { echo "qemu-test: no desktop screenshot" >&2; exit 1; }
 fi
