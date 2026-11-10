@@ -2076,6 +2076,24 @@ def build(a):
         a.i(f"ld.a.d r6, r17, #{SC_CTX} [moe]")
         a.i("wdf")
         a.i(f"st.a.d r17, #{TD_CTX}, r6 [moe]")      # and its HW render context
+        # EARLY BIF dir-cache invalidate for the queued render (DDK @0x182f-0x1855, right after
+        # 0x630 -> 7 and BEFORE the 3D register block): render A changed the BIF directory state,
+        # so flush the MADD+USE caches and re-assert BANK0 to list 1 now, else B's 3D translates
+        # through A's STALE directory cache and the 0x428 kick is REFUSED. The register VALUES
+        # already match the DDK (oracle-clean); this early invalidate -- a HW effect the sim
+        # can't model -- is the one structural difference left on the queued route.
+        a.i("limm r5, #268435456")                     # 0x10000000: MADD cache
+        a.i(f"ldr r4, #{0x804 // 4}")
+        a.i("wdf")
+        a.i("or r4, r4, r5")
+        a.i(f"str #{0x804 // 4}, r4")
+        a.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done (b26), ack 0x134
+        a.i("limm r5, #1")
+        a.i(f"str #{CR_USE_INVAL // 4}, r5")           # 0xa08 USE invalidate
+        a.i("limm r5, #0x101f")
+        a.i(f"str #{0xc78 // 4}, r5")                  # BANK0 = 0x101f (3D requestor -> list 1)
+        a.i(f"ldr r5, #{0xc78 // 4}")                  # read-back fence
+        a.i("wdf")
     else:
         a.i("shr r5, r5, #3")
         a.i("shl r5, r5, #3")                         # clear bits 0-2
