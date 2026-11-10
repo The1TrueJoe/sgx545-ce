@@ -59,6 +59,8 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "a fragment program that discards runs whole before the visibility feedback, not only its test (its colour after, as the DDK's alpha-tested programs)"},
    {"nof16samples", SGX_DEBUG_NO_F16_SAMPLES,
     "texels a mediump program reads come back RGBA8 to unpack, not F16 (T3 01028800)"},
+   {"tspf16", SGX_DEBUG_TSP_F16,
+    "the TSP precision mask marks the sets the fragment program iterates as F16 and doesn't sample from (the DDK's, for the TA's parameter buffer)"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,

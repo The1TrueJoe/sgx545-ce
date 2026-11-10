@@ -37,6 +37,7 @@
 #define SGX_DEBUG_NO_LAZY_SCANOUT (1 << 21)
 #define SGX_DEBUG_NO_PHASE_SPLIT (1 << 22)
 #define SGX_DEBUG_NO_F16_SAMPLES (1 << 23)
+#define SGX_DEBUG_TSP_F16        (1 << 24)
 
 extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */

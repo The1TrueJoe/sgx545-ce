@@ -1830,7 +1830,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    sgx_pack(&blk[n++], TA_STATE_WCLAMP, wc) wc.value = 1e-5f;
    blk[n++] = mte_ctrl(st);
    blk[n++] = vs->tsp_sizes; /* TSP0, TSP1: the vertex program's */
-   blk[n++] = vs->tsp_prec;
+   blk[n++] = vs->tsp_prec | d->tsp_f16;
    sgx_pack(&blk[0], TA_STATE_HEADER, h)
    {
       h.ispa = h.ispb = h.pds = h.viewport = h.unknown_word = h.outselect =

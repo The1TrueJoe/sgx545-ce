@@ -1514,6 +1514,22 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                      : blend && blend->blend ? 1
                                              : 0;
       d.fs = &fsp;
+      /* SGX_DEBUG=tspf16: the sets the fragment program iterates as F16 and
+       * doesn't sample from, F16 for the TSP as the DDK marks them (a set
+       * sampled with its bit set reads a constant coordinate) */
+      if (sgx_drv_debug & SGX_DEBUG_TSP_F16) {
+         uint32_t f16 = 0, sampled = 0;
+
+         for (unsigned i = 0; i < fsp.n_douti; i++) {
+            const struct sgx_pds_douti *di = &fsp.douti[i];
+
+            if (di->sample_set)
+               sampled |= 1u << (di->sample_set - 1);
+            if (di->iterate && di->prec1 && di->src >= 1 && di->src <= 10)
+               f16 |= 1u << (di->src - 1);
+         }
+         d.tsp_f16 = f16 & ~sampled;
+      }
       if (fs->mem_dwords)
          mem_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, &d.fs_mem);
       else

@@ -259,6 +259,9 @@ struct sgxws_block {
 
 struct sgxws_draw {
    uint32_t prim;         /* SGXWS_* */
+   /* TSP word 1 bits besides the vertex program's: the sets the fragment
+    * program iterates as F16 and doesn't sample from (SGX_DEBUG=tspf16) */
+   uint32_t tsp_f16;
    uint32_t count;        /* vertices */
    const uint32_t *verts; /* count x vs->attr_dwords dwords */
    /* NULL: the vertices in order; else n_indices 16-bit indices into them
