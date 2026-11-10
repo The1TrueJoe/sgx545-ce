@@ -296,7 +296,7 @@ display after-desktop
 
 screen "$TOTAL"
 SAVED=
-save && SAVED=1 && mark complete
+save && SAVED=yes && mark complete
 # the serial port gets the summary (CI's QEMU log)
 { echo "kit: saved=${SAVED:-no} boot=$BOOT"; cat "$SUM"; grep -h ' /run/live/medium ' /proc/mounts; } > /dev/ttyS0 2>/dev/null
 
