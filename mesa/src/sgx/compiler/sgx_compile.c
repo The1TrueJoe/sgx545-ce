@@ -3527,13 +3527,20 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    i->smp = s;
    struct sgx_ref raw;
    if (!s->dependent) {
+      /* a texel read at mediump returns F16 (f16_samples); one that is the
+       * colour as it is keeps RGBA8 for the byte path */
+      s->f16_return = c->opts->f16_samples && tex->def.bit_size == 16 &&
+                      tex != c->colour_tex &&
+                      !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
       struct sgx_iter *it = &c->iters[c->n_iters++];
       it->sample = true;
       it->proj = s->proj;
       it->sampler = s->sampler;
       it->set = s->set;
       it->comps = 0;
-      it->pa = s->pa = c->n_pa_inputs++;
+      it->f16 = s->f16_return;
+      it->pa = s->pa = c->n_pa_inputs;
+      c->n_pa_inputs += s->f16_return ? 2 : 1;
       i->ndst = 0;
       raw = ref(SGX_F_PA, s->pa);
    } else {
@@ -3662,6 +3669,16 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    }
    /* only the channels something reads (glamor's glyphs: alpha alone) */
    unsigned read = nir_def_components_read(&tex->def);
+   if (s->f16_return) {
+      /* returned as F16 pairs: the channels are the halves themselves */
+      struct sgx_ref hr[4];
+      for (unsigned k = 0; k < 4; k++) {
+         hr[k] = ref(SGX_F_PA, 2 * s->pa + TEXEL_LANE(k));
+         hr[k].h16 = 1;
+      }
+      set_refs(c, &tex->def, hr, 4);
+      return;
+   }
    if (tex->def.bit_size == 16) {
       /* to F16, two channels per instruction: the finalizer's own unpack */
       unsigned w = new_vreg16(c, 4);
@@ -5251,7 +5268,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       bool real = false;
       for (unsigned i = 0; i < c->n_iters; i++) {
          const struct sgx_iter *it = &c->iters[i];
-         npa = MAX2(npa, it->pa + (it->sample ? 1
+         npa = MAX2(npa, it->pa + (it->sample ? (it->f16 ? 2 : 1)
                                    : it->f16  ? (it->comps + 1) / 2
                                               : it->comps));
          real |= !it->pointcoord;
@@ -6287,6 +6304,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Keep a sampled varying's plain iteration though nothing reads it"},
    {"noefochain", SGX_DBG_NO_EFO_CHAIN,
     "End every efo chain with its own mov of i1"},
+   {"nof16samples", SGX_DBG_NO_F16_SAMPLES,
+    "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
     "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,

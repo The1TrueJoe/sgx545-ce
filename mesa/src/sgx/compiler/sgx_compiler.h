@@ -92,6 +92,11 @@ struct sgx_compile_options {
     * plain iteration of its own (the DDK's tex fs: one PDS sample, no
     * iteration). Off for the DDK's driver, whose finalizer may read it */
    bool pds_samples_alone;
+   /* fragment shader: the driver can have a non-dependent sample return F16
+    * (the T3 word's F16-return bits, as the DDK's terrain program samples):
+    * a texel read at mediump then arrives as F16, two channels per register
+    * (sgx_sample_info.f16), and is not unpacked */
+   bool f16_samples;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
@@ -170,6 +175,9 @@ struct sgx_sample_info {
    uint8_t reg; /* the raw texel: pa (non-dependent), r (dependent) */
    /* non-dependent: the coordinate's plain iteration, -1 none */
    int16_t coord_pa;
+   /* non-dependent, f16_samples: the texel returns F16 into reg (R lo, G hi)
+    * and reg + 1 (B lo, A hi), not RGBA8 into reg */
+   uint8_t f16;
    uint64_t smp; /* dependent: the smp, destination r0, texture state #0 */
 };
 

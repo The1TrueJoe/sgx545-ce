@@ -123,6 +123,7 @@ struct sgx_sample {
    /* unpacked to F16 (two channels per register), else left as RGBA8 */
    bool f16;
    bool f16coord; /* dependent: F16 coordinates, two per register (smp .f16) */
+   bool f16_return; /* non-dependent: returns F16 pairs in pa, pa + 1 */
    /* dependent: the SAMPLE pseudo-instruction (dst raw, coord, lod) */
    struct sgx_ins *ins;
 };
@@ -274,6 +275,7 @@ enum sgx_debug {
    SGX_DBG_NO_IF_TEST = BITFIELD64_BIT(20),
    SGX_DBG_KEEP_COORD_ITERS = BITFIELD64_BIT(21),
    SGX_DBG_NO_EFO_CHAIN = BITFIELD64_BIT(22),
+   SGX_DBG_NO_F16_SAMPLES = BITFIELD64_BIT(23),
    SGX_DBG_NO_TEX_COLOR = BITFIELD64_BIT(16),
    SGX_DBG_NO_PACKED_COLOR = BITFIELD64_BIT(17),
 };

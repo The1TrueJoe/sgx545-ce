@@ -59,6 +59,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.f16 = f16;
       opts.tex_bgra = tex_bgra;
       opts.pds_samples_alone = pds_alone;
+      opts.f16_samples = f16_samples;
       opts.driver_consts = true;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
@@ -97,6 +98,7 @@ class sgx_compile_test : public ::testing::Test {
    struct sgx_shader out = {};
    bool compiled = false;
    bool pds_alone = false;
+   bool f16_samples = false;
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -466,6 +468,43 @@ TEST_F(sgx_compile_test, vertex_efo_chains_share_the_mov)
               s.rfind("mov ", at) > s.rfind('\n', at);
    EXPECT_EQ(movs, 1u) << s;
    EXPECT_NE(s.find("d=i1"), std::string::npos) << s;
+}
+
+/* f16_samples: a mediump texel returns F16 into two registers and is read
+ * as their halves, with no unpack (the DDK's terrain program) */
+TEST_F(sgx_compile_test, fragment_f16_sample_not_unpacked)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   c4->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   smp->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_fmul(&b, t, nir_load_var(&b, c4)), 0xf);
+
+   f16_samples = true;
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_TRUE(out.samples[0].f16);
+   std::string s = disasm();
+   EXPECT_EQ(s.find("pck.f16.u8"), std::string::npos) << s;
+   EXPECT_EQ(s.find("pck.f32.u8"), std::string::npos) << s;
 }
 
 } /* namespace */
