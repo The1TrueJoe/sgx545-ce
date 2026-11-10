@@ -64,14 +64,18 @@ computers you have to turn on "Boot from USB" in the BIOS setup first (often **F
 
 ## 4. Walk away
 
-The test runs by itself for up to 15 minutes and **turns the computer off when it is
-done**. You don't have to watch it or press anything. The screen shows "Testing 3 of 8"
-and so on, and it may change or go dark while the test tries different display
-settings; that is expected.
+The test runs by itself for up to 15 minutes. You don't have to watch it or press anything.
+The screen shows "Testing 3 of 8" and so on, and it may change or go dark while the test
+tries different display settings; that is expected.
 
-If the computer is still on after 20 minutes, or it restarted into its own system, start
-it from the stick once more (step 3). The test carries on where it stopped, in the same
-results file.
+When it is done, the screen says **"Done. Thank you!"**. Then the computer either turns
+itself off, or opens a desktop that worked on your computer, for you to try.
+Either way, the results are already saved, and you can switch the computer off whenever
+you like.
+
+If after 20 minutes the computer is still on and you see neither "Done. Thank you!" nor a
+desktop, or it restarted into its own system, start it from the stick once more (step 3).
+The test carries on where it stopped, in the same results file.
 
 ## 5. Send us the results
 
@@ -91,7 +95,7 @@ ever read.
 
 ## What happens next
 
-The test first asks the graphics chip what it is. If our driver knows the chip, it then
-starts it and draws a few small test images, and checks that it recovers from a
-deliberate error. Nothing is shown on the screen while it does this. Each kit you test
-lets us support more of your computer. The next ones will run desktop graphics.
+The test asks the graphics chip what it is, starts it with our driver and draws test
+images, checks that it recovers from a deliberate error, then runs a desktop with the chip
+drawing it, in several display settings. Your results tell us which of these work on your
+computer, and what to fix where they don't.
