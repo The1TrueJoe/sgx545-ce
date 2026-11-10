@@ -583,10 +583,14 @@ class Asm:
         self.i(f"str #{0x804 // 4}, r4")
         self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done (b26), ack 0x134
         self.i("limm r5, #1")
-        self.i(f"str #{CR_USE_INVAL // 4}, r5")        # 0xa08 USE  (DDK requests all three
-        self.i(f"str #{CR_PDS_INV1 // 4}, r5")         # 0xad4 PDS 3D   right before the spin;
-        self.i(f"str #{CR_PDS_INV_CSC // 4}, r5")      # 0xae0 CSC      0xa08 always, not gated)
-        self.wait(0x138, INV_DONE_3D, CR_EVENT_HOST_CLEAR_0x140)      # spin 0x4b, ack 0x140
+        # No 0xa08 here. The early BIF block (do_3d, right after 0x630->7) already made the
+        # USE/PDS-code request ONCE this run (DDK r22 |= 0x40); the DDK's late 3D handshake sees
+        # that flag and skips its own 0xa08, requesting only 0xad4/0xae0 and collecting the early
+        # request's done bits (0x03, part of 0x4b) inside the 0x4b spin. Requesting 0xa08 twice
+        # in one run isn't what the DDK does (ta3d-state). 3D path only; serial invalidate() stands.
+        self.i(f"str #{CR_PDS_INV1 // 4}, r5")         # 0xad4 PDS 3D
+        self.i(f"str #{CR_PDS_INV_CSC // 4}, r5")      # 0xae0 coefficient store
+        self.wait(0x138, INV_DONE_3D, CR_EVENT_HOST_CLEAR_0x140)      # spin 0x4b (incl. 0x03 from the early 0xa08), ack 0x140
 
     def ta_settle(self, tag):
         """TA must already be paused (0xa74 b0). Spin-read 0x700 until two reads 400
