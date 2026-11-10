@@ -669,15 +669,13 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                      !(sgx_drv_debug & SGX_DEBUG_NO_FF_MEDIUMP);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform,
             nir_metadata_control_flow, NULL);
-   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
-               nir_metadata_control_flow, NULL);
-      NIR_PASS(_, nir, nir_opt_dce);
-   }
    {
       /* a 1D texture is a 2D one a texel high (sgx_resource): its samples
-       * become 2D ones on that row */
-      nir_lower_tex_options tex = {.lower_1d = true, .lower_srgb = srgb};
+       * become 2D ones on that row; a rectangle texture's coordinates are
+       * divided by its size (lower_txs), which st's fixed-function programs
+       * leave to the driver (TFP's rectangle binding: xfwm4's compositor) */
+      nir_lower_tex_options tex = {
+         .lower_1d = true, .lower_srgb = srgb, .lower_rect = true};
 
       /* a sampler view's swizzle, as the texel comes out (sgx_fs_for) */
       for (unsigned u = 0; swz && u < PIPE_MAX_SAMPLERS; u++) {
@@ -688,6 +686,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             tex.swizzles[u][c] = swz[u] >> (3 * c) & 7;
       }
       NIR_PASS(_, nir, nir_lower_tex, &tex);
+   }
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, nir, nir_opt_dce);
    }
    remap_legacy_varyings(nir);
    /* (names the variables the way the list does) */
