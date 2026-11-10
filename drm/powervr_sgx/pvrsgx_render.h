@@ -61,12 +61,13 @@ struct pvrsgx_rt_dataset {
 	/*
 	 * Per RT-data entry, which alternates by frame parity, so one frame's TA
 	 * can be built while the other's 3D still reads its own (as the DDK keeps
-	 * them): render details, their words, the dependency block and its syncs.
+	 * them): render details, their words, the dependency block and its syncs,
+	 * and the background object, which the 3D fetches per tile.
 	 */
 	struct pvrsgx_kobj *rd[2], *rd_w8[2], *rd_w4[2], *hwsync[2];
-	struct pvrsgx_kobj *rd_sync[2], *hwsync_access[2];
+	struct pvrsgx_kobj *rd_sync[2], *hwsync_access[2], *bgblock[2];
 	struct pvrsgx_kobj *rtword, *rtdata, *entword[2], *done;
-	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2], *bgblock;
+	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2];
 	/** @frames: Renders into this dataset so far. */
 	u32 frames;
 };

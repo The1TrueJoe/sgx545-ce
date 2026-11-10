@@ -362,8 +362,8 @@ static void rtds_release(struct kref *ref)
 	pvrsgx_kobj_drop(sdev, &s->tailptr);
 	pvrsgx_kobj_drop(sdev, &s->ta40);
 	pvrsgx_kobj_drop(sdev, &s->ta50);
-	pvrsgx_kobj_drop(sdev, &s->bgblock);
 	for (int i = 0; i < 2; i++) {
+		pvrsgx_kobj_drop(sdev, &s->bgblock[i]);
 		pvrsgx_kobj_drop(sdev, &s->rd[i]);
 		pvrsgx_kobj_drop(sdev, &s->rd_w8[i]);
 		pvrsgx_kobj_drop(sdev, &s->rd_w4[i]);
@@ -401,7 +401,7 @@ static void rtds_init_entry(struct pvrsgx_rt_dataset *s, int i)
 	rd->stencil[1] = BIT(31);
 	rd->bg_depth = f32_one();
 	rd->unk_44 = 0x300;
-	rd->bg_object = 0x2000000 | (kobj_va(s->bgblock) - r->pb->base) >> 4;
+	rd->bg_object = 0x2000000 | (kobj_va(s->bgblock[i]) - r->pb->base) >> 4;
 	rd->rt_flags = RT_FLAGS;
 	rd->unk_58 = 0x30;
 	rd->unk_64 = 1;
@@ -425,9 +425,10 @@ static void rtds_init(struct pvrsgx_rt_dataset *s)
 	u32 w = s->w, h = s->h, *b;
 
 	memset(rt, 0, sizeof(*rt));
-	memset(kobj_cpu(s->bgblock), 0, 0x60);
-	for (int i = 0; i < 2; i++)
+	for (int i = 0; i < 2; i++) {
+		memset(kobj_cpu(s->bgblock[i]), 0, 0x60);
 		kobj_cpu(s->entword[i])[0] = 0;
+	}
 	s->frames = 0;
 
 	kobj_cpu(s->rtword)[0] = 1;
@@ -440,7 +441,7 @@ static void rtds_init(struct pvrsgx_rt_dataset *s)
 		e->hw_render_ctx = kobj_va(r->hwctx);
 		e->mt_units = s->n.mt_tiles >> 4;
 		e->mt_bytes = s->n.mt_tiles * 0xc;
-		e->bg_block = kobj_va(s->bgblock);
+		e->bg_block = kobj_va(s->bgblock[i]);
 		e->ta_data[0] = kobj_va(s->ta88[i]);
 		e->ta_data[1] = kobj_va(s->ta40);
 		e->ta_data[2] = kobj_va(s->ta50);
@@ -451,22 +452,22 @@ static void rtds_init(struct pvrsgx_rt_dataset *s)
 		e->unk_34 = 0x10;
 	}
 
-	/* Background object: screen-space vertices, fixed point offset by 0x1000. */
-	b = kobj_cpu(s->bgblock);
-	b[5] = f32_one();
-	b[8] = f32_one();
-	b[10] = 0x202;
-	b[15] = 0x100000;
-	b[16] = 0x1000;
-	b[17] = 0x3f80;
-	b[18] = ((w + 0x1000) * 0x100) << 8 | 0x10;
-	b[19] = f32_one();
-	b[20] = (h + 0x1000) * 0x100;
-	b[21] = 0x1000;
-	b[22] = 0x3f80;
-
-	for (int i = 0; i < 2; i++)
+	for (int i = 0; i < 2; i++) {
+		/* Background object: screen-space vertices, fixed point offset by 0x1000. */
+		b = kobj_cpu(s->bgblock[i]);
+		b[5] = f32_one();
+		b[8] = f32_one();
+		b[10] = 0x202;
+		b[15] = 0x100000;
+		b[16] = 0x1000;
+		b[17] = 0x3f80;
+		b[18] = ((w + 0x1000) * 0x100) << 8 | 0x10;
+		b[19] = f32_one();
+		b[20] = (h + 0x1000) * 0x100;
+		b[21] = 0x1000;
+		b[22] = 0x3f80;
 		rtds_init_entry(s, i);
+	}
 }
 
 static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, u32 h)
@@ -495,9 +496,9 @@ static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, 
 				     s->n.tailptr_bytes, 0, vm);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->ta40, PVRSGX_KRANGE_TADATA, 0x40, 0, vm);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->ta50, PVRSGX_KRANGE_TADATA, 0x50, 0, vm);
-	err = err ?: pvrsgx_kobj_new(sdev, &s->bgblock, PVRSGX_KRANGE_3DPARAMS, 0x200, r->pb->base,
-				     vm);
 	for (int i = 0; i < 2; i++) {
+		err = err ?: pvrsgx_kobj_new(sdev, &s->bgblock[i], PVRSGX_KRANGE_3DPARAMS, 0x200,
+					     r->pb->base, vm);
 		err = err ?: pvrsgx_kobj_new(sdev, &s->rgn[i], PVRSGX_KRANGE_TADATA,
 					     s->n.region_bytes, 0, vm);
 		err = err ?: pvrsgx_kobj_new(sdev, &s->ta88[i], PVRSGX_KRANGE_TADATA, 0x88, 0, vm);
@@ -786,7 +787,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		 * at the 3D start (secondary, middle, primary): the open microkernel
 		 * leaves them to the host, so it never runs on the job's directory.
 		 */
-		b = kobj_cpu(s->bgblock);
+		b = kobj_cpu(s->bgblock[p]);
 		b[0] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
 		b[1] = BG_PDS_MIDDLE;
 		b[2] = kobj_cpu(s->rd_w4[p])[0];
@@ -905,7 +906,7 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	pvrsgx_kobj_dump(sb, "hwsync", s->hwsync[p], 0, sizeof(struct pvrsgx_fw_rt_deps));
 	pvrsgx_kobj_dump(sb, "hwsync_access", s->hwsync_access[p], 0, 4);
 	pvrsgx_kobj_dump(sb, "done", s->done, 0, SYNC_DATA_BYTES);
-	pvrsgx_kobj_dump(sb, "bgblock", s->bgblock, 0, 0x60);
+	pvrsgx_kobj_dump(sb, "bgblock", s->bgblock[p], 0, 0x60);
 	/* what the TA wrote for the 3D */
 	pvrsgx_kobj_dump(sb, "rgn0", s->rgn[0], 0, 0x60);
 	pvrsgx_kobj_dump(sb, "rgn1", s->rgn[1], 0, 0x60);
