@@ -304,6 +304,7 @@ struct sgxws_stats {
    unsigned room_flushes; /* frames submitted early because a ring filled */
    uint64_t gpu_indices, gpu_verts; /* what the VDM was given: indices, and the
                                        vertices they index */
+   unsigned state_sent, state_skipped; /* draws' TA state blocks */
 };
 
 /* debugging aids the driver passes on (its SGX_DEBUG options) */

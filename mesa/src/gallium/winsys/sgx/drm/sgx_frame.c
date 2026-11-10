@@ -1850,8 +1850,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
        * draws share one block; a block per draw costs the TA in every tile
        * the draw touches). SGX_STATE_ALWAYS=1 sends it anyway */
       if (c->dev->state_always || c->last_blk_n != n ||
-          memcmp(c->last_blk, blk, n * 4))
+          memcmp(c->last_blk, blk, n * 4)) {
          state_block(c, blk, n, dma, (dma - 1) & 3);
+         c->state_sent++;
+      } else {
+         c->state_skipped++;
+      }
    }
 
    /* vertex secondary attributes: the block's own address, then the driver
@@ -2553,7 +2557,10 @@ sgxws_get_stats(struct sgxws_ctx *c, struct sgxws_stats *st, bool reset)
    st->room_flushes = c->room_flushes;
    st->gpu_indices = c->gpu_indices;
    st->gpu_verts = c->gpu_verts;
+   st->state_sent = c->state_sent;
+   st->state_skipped = c->state_skipped;
    if (reset) {
+      c->state_sent = c->state_skipped = 0;
       c->ns_flush = c->ns_cmd = c->ns_kick = c->ns_target_wait =
          c->ns_slot_wait = 0;
       c->ns_sync_wait = c->ns_fence_wait = c->ns_latency =

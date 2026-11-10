@@ -207,6 +207,7 @@ struct sgxws_ctx {
    enum sgxws_reset reset; /* since sgxws_reset_status last asked */
    uint64_t gpu_indices,
       gpu_verts; /* stats: the VDM's indices and the vertices behind them */
+   unsigned state_sent, state_skipped; /* stats: draws' TA state blocks */
 };
 
 /*
