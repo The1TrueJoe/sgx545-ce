@@ -7,7 +7,11 @@
  * X (left red, right blue), bound, drawn to a window and read back; then
  * refilled (green, white) and bound again, as a compositor does every frame.
  *
- *   glxtfp [-v]     exit 0 when every depth the server has passes
+ *   glxtfp [-v] [-r] [-s WxH]   exit 0 when every depth the server has passes
+ *     -r     GL_TEXTURE_RECTANGLE (unnormalised coordinates), not 2D
+ *     -s     the pixmap's size (64x64 by default; a compositor's is the screen's)
+ * First, the swap itself: the window cleared to a colour, swapped, and read
+ * back through X (XGetImage), to see that a GL swap reaches X at all.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,11 +35,18 @@
 #define GLX_TEXTURE_2D_EXT              0x20DC
 #define GLX_FRONT_LEFT_EXT              0x20DE
 #endif
+#ifndef GLX_TEXTURE_RECTANGLE_EXT
+#define GLX_TEXTURE_RECTANGLE_BIT_EXT 0x00000004
+#define GLX_TEXTURE_RECTANGLE_EXT     0x20DD
+#endif
+#ifndef GL_TEXTURE_RECTANGLE_ARB
+#define GL_TEXTURE_RECTANGLE_ARB 0x84F5
+#endif
 
 typedef void (*bind_fn)(Display *, GLXDrawable, int, const int *);
 typedef void (*release_fn)(Display *, GLXDrawable, int);
 
-static int verbose;
+static int verbose, rect, pw = 64, ph = 64;
 static int xerrors;
 
 static int
@@ -74,7 +85,8 @@ tfp_config(Display *dpy, int screen, int depth, int *y_inverted)
                 "rgba %d, targets %#x\n",
                 i, vid, vi ? vi->depth : 0, dt, v_rgb, v_rgba, targets);
       if (found < 0 && vi && vi->depth == depth && (dt & GLX_PIXMAP_BIT) &&
-          (targets & GLX_TEXTURE_2D_BIT_EXT) &&
+          (targets & (rect ? GLX_TEXTURE_RECTANGLE_BIT_EXT
+                         : GLX_TEXTURE_2D_BIT_EXT)) &&
           (depth == 32 ? v_rgba : v_rgb))
          found = i;
       XFree(vi);
@@ -117,9 +129,12 @@ test_depth(Display *dpy, int screen, Window win, GLXContext ctx, int depth)
       printf("depth %d: no glXBindTexImageEXT\n", depth);
       return 0;
    }
-   Pixmap pix = XCreatePixmap(dpy, RootWindow(dpy, screen), 64, 64, depth);
+   Pixmap pix = XCreatePixmap(dpy, RootWindow(dpy, screen), pw, ph, depth);
+   GLenum target = rect ? GL_TEXTURE_RECTANGLE_ARB : GL_TEXTURE_2D;
+   float sx = rect ? pw : 1, sy = rect ? ph : 1;
    GC gc = XCreateGC(dpy, pix, 0, NULL);
-   const int attrs[] = {GLX_TEXTURE_TARGET_EXT, GLX_TEXTURE_2D_EXT,
+   const int attrs[] = {GLX_TEXTURE_TARGET_EXT,
+                        rect ? GLX_TEXTURE_RECTANGLE_EXT : GLX_TEXTURE_2D_EXT,
                         GLX_TEXTURE_FORMAT_EXT,
                         depth == 32 ? GLX_TEXTURE_FORMAT_RGBA_EXT
                                     : GLX_TEXTURE_FORMAT_RGB_EXT,
@@ -135,29 +150,29 @@ test_depth(Display *dpy, int screen, Window win, GLXContext ctx, int depth)
       const unsigned *l = colours[round][0], *r = colours[round][1];
 
       XSetForeground(dpy, gc, pixel(depth, l[0], l[1], l[2]));
-      XFillRectangle(dpy, pix, gc, 0, 0, 32, 64);
+      XFillRectangle(dpy, pix, gc, 0, 0, pw / 2, ph);
       XSetForeground(dpy, gc, pixel(depth, r[0], r[1], r[2]));
-      XFillRectangle(dpy, pix, gc, 32, 0, 32, 64);
+      XFillRectangle(dpy, pix, gc, pw / 2, 0, pw - pw / 2, ph);
       XSync(dpy, False);
 
       glClearColor(0.5f, 0.5f, 0.5f, 1);
       glClear(GL_COLOR_BUFFER_BIT);
-      glBindTexture(GL_TEXTURE_2D, tex);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glBindTexture(target, tex);
+      glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
       bind(dpy, gp, GLX_FRONT_LEFT_EXT, NULL);
-      glEnable(GL_TEXTURE_2D);
+      glEnable(target);
       glBegin(GL_QUADS);
       glTexCoord2f(0, 0);
       glVertex2f(-1, -1);
-      glTexCoord2f(1, 0);
+      glTexCoord2f(sx, 0);
       glVertex2f(1, -1);
-      glTexCoord2f(1, 1);
+      glTexCoord2f(sx, sy);
       glVertex2f(1, 1);
-      glTexCoord2f(0, 1);
+      glTexCoord2f(0, sy);
       glVertex2f(-1, 1);
       glEnd();
-      glDisable(GL_TEXTURE_2D);
+      glDisable(target);
       glFinish();
       glReadPixels(16, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, left);
       glReadPixels(48, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, right);
@@ -190,7 +205,19 @@ main(int argc, char **argv)
                         GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, None};
    int fails = 0, tested = 0;
 
-   verbose = argc > 1 && !strcmp(argv[1], "-v");
+   for (int i = 1; i < argc; i++) {
+      if (!strcmp(argv[i], "-v"))
+         verbose = 1;
+      else if (!strcmp(argv[i], "-r"))
+         rect = 1;
+      else if (!strcmp(argv[i], "-s") && i + 1 < argc &&
+               sscanf(argv[++i], "%dx%d", &pw, &ph) == 2)
+         ;
+      else {
+         fprintf(stderr, "usage: glxtfp [-v] [-r] [-s WxH]\n");
+         return 2;
+      }
+   }
    if (!dpy) {
       fprintf(stderr, "no display\n");
       return 2;
@@ -219,6 +246,32 @@ main(int argc, char **argv)
    glXMakeCurrent(dpy, win, ctx);
    printf("GL_RENDERER: %s\n", (const char *)glGetString(GL_RENDERER));
    glViewport(0, 0, 64, 64);
+
+   /* the swap reaches X: a clear, two swaps (the second makes the first's
+    * copy done), then the window's pixels as X has them */
+   {
+      int swap_ok = 0;
+
+      for (int i = 0; i < 3; i++) {
+         glClearColor(0, 1, 0, 1);
+         glClear(GL_COLOR_BUFFER_BIT);
+         glXSwapBuffers(dpy, win);
+      }
+      glFinish();
+      XSync(dpy, False);
+      XImage *im = XGetImage(dpy, win, 32, 32, 1, 1, AllPlanes, ZPixmap);
+      if (im) {
+         unsigned long p = XGetPixel(im, 0, 0);
+
+         swap_ok = (p & 0xffffff) == 0x00ff00;
+         printf("swap: window pixel %06lx after a green clear and swap: %s\n",
+                p & 0xffffff, swap_ok ? "pass" : "FAIL");
+         XDestroyImage(im);
+      } else {
+         printf("swap: XGetImage failed\n");
+      }
+      fails += !swap_ok;
+   }
 
    for (int depth = 24; depth <= 32; depth += 8) {
       int r = test_depth(dpy, screen, win, ctx, depth);
