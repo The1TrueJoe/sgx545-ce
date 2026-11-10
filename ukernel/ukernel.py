@@ -2331,15 +2331,18 @@ def build(a):
     a.i("wdf")
     # start the 3D
     if OVERLAP:
-        # DIAGNOSTIC (overlap bring-up, addc0d7 run l): the queued 3D's 0x428 kick is
-        # written but the 3D never completes (EVENT_STATUS2=0, clean BIF, ISP idle,
-        # WAIT_3D/FREE armed). All captures land in the ta3d_ctl dump. Pre-kick snapshot
-        # (word 0x27: CLKGATESTATUS -- is the 3D/ISP pipe gated at kick time?) plus the
-        # DPM-side state ta3d-state wants on the stall path (0x29=0x63c release/load-sel,
-        # 0x2a=0x630 slot select, 0x2b=0x408 region header, 0x2c=0x724 DPM pages). Then
-        # word 0x28 = EVENT_STATUS2 just after (TRIG_3D=0x40 latch = triggered vs dropped).
-        # Remove once the queued kick is fixed.
-        a.i(f"ldr r4, #{0x008 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x27, 4)   # CLKGATESTATUS pre-kick
+        # FIX (ta3d-state, DDK event dispatch pc 0x0e89): ack DPM_3D_MEM_FREE (EVENT_STATUS
+        # bit 0 = 0x1) before the 3D kick. The DDK acks EVERY 3D-end event before it starts
+        # the next 3D. Our queued do_3d kicks from inside render N's DPM-free completion, so
+        # N's 0x1 can still be set (or the DPM re-raises it level-triggered) when N+1's 0x428
+        # lands -> the HW DROPS the kick (runs l/m: EVENT_STATUS2 0, no TRIG_3D, yet the DPM
+        # snapshot slot/free-list/region/pages were all valid). Serial never hits it: its kick
+        # comes from ta_finished a whole render later, long after the free was acked.
+        # DIAGNOSTIC alongside (remove once green): word 0x27 = EVENT_STATUS read BEFORE the
+        # ack (is 0x1 set at kick time? confirms the theory); 0x29/0x2a/0x2b/0x2c = the DPM
+        # snapshot (0x63c/0x630/0x408/0x724); word 0x28 = EVENT_STATUS2 after the kick.
+        a.i(f"ldr r4, #{0x12c // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x27, 4)   # EVENT_STATUS pre-ack (0x1 pending?)
+        a.i("limm r4, #1"); a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r4")        # ack DPM_3D_MEM_FREE (0x1) -- THE FIX
         a.i(f"ldr r4, #{0x63c // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x29, 4)   # 0x63c DPM release/load-select
         a.i(f"ldr r4, #{0x630 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x2a, 4)   # 0x630 slot select
         a.i(f"ldr r4, #{0x408 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x2b, 4)   # 0x408 region header
