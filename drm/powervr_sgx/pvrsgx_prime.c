@@ -16,6 +16,7 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
+#include "pvrsgx_cache.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_prime.h"
 #include "pvrsgx_trace.h"
@@ -91,7 +92,7 @@ void pvrsgx_prime_flush(struct pvrsgx_job *job, bool after)
 		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);
 
 		if (shmem->sgt) {
-			drm_clflush_sg(shmem->sgt);
+			pvrsgx_import_sync(shmem->base.dev->dev, shmem->sgt, after);
 			bytes += shmem->base.size;
 		}
 	}

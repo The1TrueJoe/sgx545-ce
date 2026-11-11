@@ -15,8 +15,7 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
-#include <asm/set_memory.h>
-
+#include "pvrsgx_cache.h"
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_core.h"
 #include "pvrsgx_device.h"
@@ -62,7 +61,7 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		if (!km->pages[i])
 			goto err_free;
 	}
-	if (set_pages_array_wc(km->pages, km->npages))
+	if (pvrsgx_pages_wc(sdev->base.dev, km->pages, km->npages))
 		goto err_free;
 	km->cpu = vmap(km->pages, km->npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 	if (!km->cpu)
@@ -77,7 +76,7 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 err_unmap:
 	vunmap(km->cpu);
 err_wb:
-	set_pages_array_wb(km->pages, km->npages);
+	pvrsgx_pages_wb(km->pages, km->npages);
 err_free:
 	while (i--)
 		__free_page(km->pages[i]);
@@ -92,7 +91,7 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km)
 		return;
 	pvrsgx_mmu_unmap(km->mmu, km->dev_addr, km->size);
 	vunmap(km->cpu);
-	set_pages_array_wb(km->pages, km->npages);
+	pvrsgx_pages_wb(km->pages, km->npages);
 	for (unsigned int i = 0; i < km->npages; i++)
 		__free_page(km->pages[i]);
 	kvfree(km->pages);

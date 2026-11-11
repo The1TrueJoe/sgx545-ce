@@ -1,0 +1,112 @@
+# powervr_sgx for the SGX530 of our OMAP3630 test board: an ARMv7 cross build
+# against the board's kernel config (drm/ci/omap3630.config), in tree and out
+# of tree with W=1, through sparse. 7.1.8 is what the board runs now, so its
+# modules load there (same source, config and symbol versions); 7.3.3 is the
+# driver's target. The artifact is modules only; never flash anything.
+name: powervr-sgx-omap3630
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [sgx530]
+    paths:
+      - drm/powervr_sgx/**
+      - drm/ci/omap3630*
+      - drm/ci/compat*
+      - .github/workflows/powervr-sgx-omap3630.yml
+
+concurrency:
+  group: powervr-sgx-omap3630-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        linux: ['7.1.8', '7.3.3']
+    env:
+      LINUX_VERSION: ${{ matrix.linux }}
+      ARCH: arm
+      CROSS_COMPILE: arm-linux-gnueabihf-
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev cpio ccache sparse gcc-arm-linux-gnueabihf
+
+      - name: Restore the kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.LINUX_VERSION }}.tar.xz
+          key: linux-${{ env.LINUX_VERSION }}
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-arm-${{ env.LINUX_VERSION }}-${{ github.sha }}
+          restore-keys: ccache-arm-${{ env.LINUX_VERSION }}-
+
+      - name: Lay out the kernel
+        run: |
+          set -eux
+          [ -f linux-$LINUX_VERSION.tar.xz ] ||
+            curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
+          tar xf linux-$LINUX_VERSION.tar.xz
+          sh drm/ci/omap3630-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+
+      - name: Build the kernel and modules
+        run: |
+          set -eux
+          export CCACHE_DIR=~/.cache/ccache
+          ccache -M 2G
+          make -C linux-$LINUX_VERSION CC="ccache ${CROSS_COMPILE}gcc" \
+            KCFLAGS=-Werror=implicit-function-declaration -j"$(nproc)" vmlinux modules
+          ccache -s
+
+      - name: The driver out of tree, with W=1
+        run: |
+          set -eux
+          make -C linux-$LINUX_VERSION M=$PWD/drm/powervr_sgx CONFIG_DRM_POWERVR_SGX=m \
+            CONFIG_DRM_POWERVR_SGX_OF=y W=1 modules 2>&1 | tee oot.log
+          ! grep -E 'warning:|error:' oot.log
+
+      - name: The driver through sparse
+        run: |
+          set -eux
+          touch drm/powervr_sgx/*.c
+          make -C linux-$LINUX_VERSION M=$PWD/drm/powervr_sgx CONFIG_DRM_POWERVR_SGX=m \
+            CONFIG_DRM_POWERVR_SGX_OF=y C=2 modules 2>&1 | tee sparse.log
+          ! grep -E 'powervr_sgx/.*(warning|error):' sparse.log
+
+      - name: Collect the modules
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          mkdir -p out
+          # Load order: the helpers first, then the driver.
+          for m in drm_exec drm_gpuvm gpu-sched drm_shmem_helper powervr_sgx; do
+            find $L -name "$m.ko" -exec cp {} out/ \;
+          done
+          cp $L/.config out/config
+          for m in out/*.ko; do
+            printf '%s %s\n' "$(basename $m)" "$(strings $m | sed -n 's/^vermagic=//p')"
+          done | tee out/vermagic
+          grep -q "^powervr_sgx.ko $LINUX_VERSION SMP .*ARMv7" out/vermagic
+          [ "$(wc -l < out/vermagic)" = 5 ]
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powervr-sgx-omap3630-linux-${{ env.LINUX_VERSION }}
+          path: out/
+          retention-days: 14
