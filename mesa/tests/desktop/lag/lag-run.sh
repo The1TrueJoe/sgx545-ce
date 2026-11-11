@@ -26,7 +26,7 @@ E "test -e /dev/dri/renderD128 && test -d $DESK/usr/bin && ! pidof Xorg" || {
 	echo "lag-run.sh: the box needs powervr_sgx up, the root at $DESK, and no X running" >&2
 	exit 1
 }
-E "uname -a; cat /proc/cpuinfo | grep -m1 'model name'; cat /sys/class/drm/card0/device/driver/module/srcversion 2>/dev/null" > "$OUT/box.txt"
+E "uname -a; cat /proc/cpuinfo | grep -m1 'model name'; cat /sys/class/drm/card0/device/driver/module/srcversion 2>/dev/null; true" > "$OUT/box.txt"
 # the Mesa under test
 # (the box's umask is 077: a tree only root can read leaves "desk" on the
 # root's own Mesa, silently; busybox's chmod -R fails on the dangling dri
