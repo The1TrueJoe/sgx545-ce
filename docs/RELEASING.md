@@ -97,7 +97,7 @@ never appears in the repository or in CI output.
    If Pages is already on, switch its source to "GitHub Actions" under Settings → Pages.
 
 The workflow publishes the public key itself, at
-`https://the1truejoe.github.io/powervr_sgx/powervr-sgx.gpg` (binary, for
+`https://telaak.dev/powervr_sgx/powervr-sgx.gpg` (binary, for
 `/usr/share/keyrings`) and `powervr-sgx.asc` (armored). It checks the repository's
 signatures against that file before it deploys.
 

@@ -45,11 +45,11 @@ On Cedarview you can install all three pieces from our apt repository, and `apt 
 then keeps them up to date. Add the repository's signing key and its entry:
 
 ```bash
-sudo curl -fsSLo /usr/share/keyrings/powervr-sgx.gpg https://the1truejoe.github.io/powervr_sgx/powervr-sgx.gpg
+sudo curl -fsSLo /usr/share/keyrings/powervr-sgx.gpg https://telaak.dev/powervr_sgx/powervr-sgx.gpg
 ```
 
 ```bash
-printf 'Types: deb\nURIs: https://the1truejoe.github.io/powervr_sgx\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/powervr-sgx.gpg\n' | sudo tee /etc/apt/sources.list.d/powervr-sgx.sources
+printf 'Types: deb\nURIs: https://telaak.dev/powervr_sgx\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/powervr-sgx.gpg\n' | sudo tee /etc/apt/sources.list.d/powervr-sgx.sources
 ```
 
 Then install the three packages:
