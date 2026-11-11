@@ -6,13 +6,14 @@
 /*
  * sgx_hwt: run hand-written fragment programs through the winsys and read
  * their result back (docs/ISA.md "Hardware checks"; docs/porting/isa.md).
- * Each test is ISA.md text, assembled here through the isa library. It must
- * leave its result in pa0, which the winsys's colour epilogue moves to o0,
- * and the pixel back end stores o0 unchanged: a pixel inside the triangle
- * is the 32-bit register. The clear colour (0xcc336699) shows a program that
+ * Each test is ISA.md text, assembled here through the isa library. It ends
+ * with `mov o0, rN [skipinv end mask=1]` (it never reaches the winsys's
+ * colour epilogue; a PA write would land outside the task's PA), and the
+ * pixel back end stores o0 unchanged: a pixel inside the triangle is the
+ * 32-bit register. The clear colour (0xcc336699) shows a program that
  * never ran.
  *
- *   sgx_hwt [-d node] tests.txt
+ *   sgx_hwt [-d node] [-o frame.bin] tests.txt   (-o: the last frame, BGRA)
  *
  * tests.txt:
  *   test NAME
@@ -81,9 +82,11 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
    memcpy(buf->map, init, n_init * 4);
 
    sgxws_prog_builtin(c, SGXWS_VS_XY, &vs);
+   /* the uniform-colour program's setup (its secondary loads sa9, which the
+    * test doesn't read), the test as the main program */
+   sgxws_prog_builtin(c, SGXWS_FS_UNIFORM, &fs);
    fs.code = sgxws_upload_fs(c, code, n, 0, NULL, -1, 16);
    fs.temps = 16;
-   fs.pa_dwords = 1;
    if (!fs.code) {
       printf("%s error upload\n", name);
       return 0;
@@ -98,7 +101,9 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
    st.vp_translate[2] = 0.5f;
 
    const float clear[4] = {0.2f, 0.4f, 0.6f, 0.8f};
+   uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = {0};
    struct sgxws_draw d = {
+      .fs_consts = fsc,
       .prim = SGXWS_TRIANGLES,
       .count = 3,
       .verts = (const uint32_t *)verts,
@@ -143,12 +148,16 @@ main(int argc, char **argv)
 {
    struct sgxws_dev_options opts = {.dry_run = -1};
    const char *node = NULL;
-   uint32_t w = 128, h = 128, stride = 128;
+   /* the render target sgx_frame_test draws to */
+   uint32_t w = 720, h = 480, stride = 736;
+   const char *dump = NULL;
    int opt;
 
-   while ((opt = getopt(argc, argv, "d:")) != -1) {
+   while ((opt = getopt(argc, argv, "d:o:")) != -1) {
       if (opt == 'd')
          node = optarg;
+      else if (opt == 'o')
+         dump = optarg;
       else
          return 2;
    }
@@ -215,6 +224,13 @@ main(int argc, char **argv)
       }
    }
    fclose(f);
+   if (dump) {
+      FILE *o = fopen(dump, "wb");
+      if (o) {
+         fwrite(color.map, 4, (size_t)stride * h, o);
+         fclose(o);
+      }
+   }
    sgxws_bo_free(dev, &buf);
    sgxws_bo_free(dev, &color);
    sgxws_rt_destroy(c, rt);

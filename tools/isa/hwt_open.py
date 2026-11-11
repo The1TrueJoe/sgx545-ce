@@ -5,9 +5,9 @@ winsys, with no captured frame and nothing from the vendor stack.
     python3 -I tools/isa/hwt_open.py <suite module> [-k substring] [--dry]
 
 Same suites as hwt.py (TESTS = [(name, [insn, ...], expect), ...]). A test's
-last line moves its result to o0 (hwt_lib.out); here the winsys adds that move,
-so the line becomes `mov pa0, <reg>`. Tests that poke the replay (a fourth
-field) don't apply and are skipped. A suite may give BUFS = {name: [dwords]}:
+last line moves its result to o0 and ends the program (hwt_lib.out), before the
+winsys's colour epilogue. Tests that poke the replay (a fourth field) don't
+apply and are skipped. A suite may give BUFS = {name: [dwords]}:
 the data buffer's first dwords for that test; BUF in a line is its address.
 
 Environment: BOX_SH (an ssh helper: `$BOX_SH 'cmd'` runs cmd on the box, stdin
@@ -27,12 +27,9 @@ CLEAR = 0xCC336699  # the clear colour: the program never ran
 
 
 def convert(lines):
-    """the suite's lines -> sgx_hwt's, or None"""
-    *body, last = [ln.strip() for ln in lines]
-    m = OUT.match(last)
-    if not m:
-        return None
-    return body + [f"mov pa0, {m.group(1)}  [skipinv]"]
+    """the suite's lines, or None when it doesn't end in its move to o0"""
+    lines = [ln.strip() for ln in lines]
+    return lines if OUT.match(lines[-1]) else None
 
 
 def main():

@@ -34,28 +34,51 @@ for size, off, want in LD:
         "wdf",
         f"mov o0, r0  {END}"], want))
 
-# i0 across a deschedule (four loads and a wdf), without and with nosched on
-# the instructions that have it (ld has no nosched bit); and with no load at
-# all, the control
-for ns in (False, True):
-    f = " nosched" if ns else ""
-    name = "i0_deschedule" + ("_nosched" if ns else "")
+# i0 across a deschedule, as hwt_p12 sets internal registers (mov i0 with
+# mask=1, nosched from the write to the read). The control keeps nosched on
+# every instruction; then the same without nosched; then loads and a wdf in
+# between (ld has no nosched bit, wdf keeps it)
+NS = "[skipinv nosched mask=1]"
+M1 = "[skipinv mask=1]"
+I0 = ["limm r2, #0x12345678  [skipinv]", "limm r1, BUF  [skipinv]"]
+TESTS.append(("i0_control", I0 + [f"mov i0, r2  {NS}", f"mov r3, r2  {NS}", f"mov r4, r2  {NS}",
+                                  f"mov r7, i0  {M1}", f"mov o0, r7  {END}"], 0x12345678))
+TESTS.append(("i0_no_nosched", I0 + [f"mov i0, r2  {M1}", f"mov r3, r2  {M1}", f"mov r4, r2  {M1}",
+                                     f"mov r7, i0  {M1}", f"mov o0, r7  {END}"], None))
+for nld in (1, 4):
+    name = f"i0_across_{nld}ld_wdf"
     BUFS[name] = BYTES
-    TESTS.append((name, [
-        "limm r2, #0x12345678  [skipinv]",
-        f"limm r1, BUF  [skipinv{f}]",
-        f"mov i0, r2  [skipinv{f}]",
-        "ld.a.d r3, r1, #0  [skipinv]",
-        "ld.a.d r4, r1, #1  [skipinv]",
-        "ld.a.d r5, r1, #2  [skipinv]",
-        "ld.a.d r6, r1, #3  [skipinv]",
-        "wdf",
-        "mov r7, i0  [skipinv]",
-        f"mov o0, r7  {END}"], None))
-TESTS.append(("i0_no_load", [
-    "limm r2, #0x12345678  [skipinv]",
-    "mov i0, r2  [skipinv]",
-    "mov r3, r2  [skipinv]",
-    "mov r4, r2  [skipinv]",
-    "mov r7, i0  [skipinv]",
-    f"mov o0, r7  {END}"], 0x12345678))
+    TESTS.append((name, I0 + [f"mov i0, r2  {NS}"] +
+                  [f"ld.a.d r{3 + k}, r1, #{k}  [skipinv]" for k in range(nld)] +
+                  ["wdf  [nosched]", f"mov r7, i0  {M1}", f"mov o0, r7  {END}"], None))
+
+# test with a destination (l20): does it write the ALU result? r0 - r1 = -1.0
+F2, F3 = 0x40000000, 0x40400000
+TESTS.append(("test_dst_alu_result", [
+    f"limm r0, #{F2:#x}  [skipinv]", f"limm r1, #{F3:#x}  [skipinv]", "limm r2, #0x5a5a5a5a  [skipinv]",
+    "test.fsub.lt p0, r2, r0, r1  [skipinv]", f"mov o0, r2  {END}"], None))
+
+# test [mask=15]: one predicate per channel, p0-p3? r0-r3 = 1, 5, 1, 5 against r4-r7 = 3: lt on 0, 2
+ONE, FIVE, THREE = 0x3f800000, 0x40a00000, 0x40400000
+for p in range(4):
+    TESTS.append((f"test_mask15_p{p}", [
+        f"limm r0, #{ONE:#x}  [skipinv]", f"limm r1, #{FIVE:#x}  [skipinv]",
+        f"limm r2, #{ONE:#x}  [skipinv]", f"limm r3, #{FIVE:#x}  [skipinv]"] +
+        [f"limm r{4 + k}, #{THREE:#x}  [skipinv]" for k in range(4)] + [
+        "limm r8, #0x22222222  [skipinv]",
+        "test.fsub.lt p0, r0, r4  [skipinv mask=15]",
+        f"(p{p}) limm r8, #0x11111111  [skipinv]", f"mov o0, r8  {END}"], None))
+
+# fddp: the second result into i1 (h19)
+for r in ("r3", "i1"):
+    TESTS.append((f"fddp_{r}", [
+        f"limm r0, #{ONE:#x}  [skipinv]", f"limm r1, #{F2:#x}  [skipinv]", f"limm r2, #{F3:#x}  [skipinv]",
+        "limm r3, #0x5a5a5a5a  [skipinv]", f"mov i1, r3  {NS}",
+        f"fddp r3, i1, r0, r1, r2  [skipinv nosched]", f"mov r7, {r}  {M1}", f"mov o0, r7  {END}"], None))
+
+# ima32 [hi=i1]: the product's high 32 bits into i1? 0x10000 * 0x10000 = 2^32
+for r in ("r3", "i1"):
+    TESTS.append((f"ima32_hi_{r}", [
+        "limm r0, #0x10000  [skipinv]", "limm r1, #0x10000  [skipinv]", "limm r2, #0  [skipinv]",
+        "limm r4, #0x5a5a5a5a  [skipinv]", f"mov i1, r4  {NS}",
+        "ima32 r3, r0, r1, r2  [skipinv nosched hi=i1]", f"mov r7, {r}  {M1}", f"mov o0, r7  {END}"], None))
