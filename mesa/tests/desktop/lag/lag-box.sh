@@ -22,7 +22,8 @@
 #   nocomp    xfwm4 without its compositor
 #   xpresent  xfwm4 synced to vblank through Present, not GLX
 #   vbloff    xfwm4 not synced to vblank
-#   xsw       glamor on llvmpipe in X (the GPU for the clients only)
+#   xsw       LIBGL_ALWAYS_SOFTWARE for X only: glamor ignores it (still the
+#             GPU, through GBM); kept for the record, not a control
 #   dumbsched the same with Xorg -dumbSched (no scheduler timer signal)
 #   serial    the same with SGX_DEBUG=serial: each render waited for, no
 #             overlap (whether a render still in flight takes part)
