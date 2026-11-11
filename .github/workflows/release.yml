@@ -91,7 +91,8 @@ jobs:
           - \`linux-image-*-sgx\` (and its headers): Linux with the powervr_sgx driver,
             installed next to Debian's kernel.
           - \`sgx545-firmware\`: the open microkernel the driver loads.
-          - \`mesa-sgx\`: Mesa with the sgx driver, in /opt/sgx, used ahead of Debian's Mesa.
+          - \`mesa-sgx\`: Mesa with the sgx driver, in /opt/sgx, used ahead of Debian's Mesa;
+            the i386 one is for 32-bit programs, installed beside the amd64 one.
 
           Install and removal: docs/INSTALL.md. Check the downloads with
           \`sha256sum -c SHA256SUMS\`.
