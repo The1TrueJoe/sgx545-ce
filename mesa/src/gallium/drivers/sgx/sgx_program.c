@@ -29,6 +29,7 @@
 
 #include "sgx_compiler.h"
 #include "sgx_context.h"
+#include "sgx_core.h"
 #include "sgx_csb.h"
 #include "sgx_program.h"
 #include "sgx_screen.h"
@@ -226,11 +227,10 @@ lower_txs(nir_builder *b, nir_instr *instr, void *data)
                     nir_src_as_uint(tex->src[li].src))))
       return false;
    b->cursor = nir_before_instr(instr);
-   nir_def *f = nir_load_uniform(b, tex->def.num_components, 32,
-                                 nir_imm_int(b, 0),
-                                 .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
-                                 .range = tex->def.num_components,
-                                 .dest_type = nir_type_float32);
+   nir_def *f = nir_load_uniform(
+      b, tex->def.num_components, 32, nir_imm_int(b, 0),
+      .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
+      .range = tex->def.num_components, .dest_type = nir_type_float32);
    nir_def *i = NULL;
 
    nir_foreach_use_including_if_safe (use, &tex->def) {
@@ -605,13 +605,73 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
    return next;
 }
 
+/*
+ * Linear filtering of an sRGB texture, in the shader: the TPU filters the
+ * encoded texels and the decode comes after, where GL decodes first.  The four
+ * texels are sampled at their centres (where the TPU's filter returns the
+ * texel itself), decoded (nir_lower_tex's lower_srgb, after this) and mixed
+ * here.  Only for textures sampled at one level (sgx_fs_for): the level a
+ * minified lookup takes isn't known to the shader.  data: the units.
+ */
+static bool
+lower_srgb_filter(nir_builder *b, nir_instr *instr, void *data)
+{
+   uint32_t units = *(const uint32_t *)data;
+
+   if (instr->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *tex = nir_instr_as_tex(instr);
+   int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   bool rect = tex->sampler_dim == GLSL_SAMPLER_DIM_RECT;
+
+   if (tex->op != nir_texop_tex || tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
+       !(units & (1u << tex->texture_index)) || tex->is_shadow ||
+       tex->is_array || ci < 0 || tex->coord_components != 2 ||
+       (tex->sampler_dim != GLSL_SAMPLER_DIM_2D && !rect) ||
+       nir_tex_instr_src_index(tex, nir_tex_src_projector) >= 0 ||
+       nir_tex_instr_src_index(tex, nir_tex_src_bias) >= 0 ||
+       nir_tex_instr_src_index(tex, nir_tex_src_offset) >= 0)
+      return false;
+   b->cursor = nir_before_instr(instr);
+   /* in texels: a rectangle texture's coordinates already are */
+   nir_def *sz =
+      rect ? NULL
+           : nir_load_uniform(b, 2, 32, nir_imm_int(b, 0),
+                              .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
+                              .range = 2, .dest_type = nir_type_float32);
+   nir_def *coord = tex->src[ci].src.ssa;
+   nir_def *u = nir_fadd_imm(b, sz ? nir_fmul(b, coord, sz) : coord, -0.5);
+   nir_def *i0 = nir_ffloor(b, u);
+   nir_def *f = nir_fsub(b, u, i0);
+   nir_def *t[4];
+
+   for (unsigned k = 0; k < 4; k++) {
+      nir_tex_instr *tap = nir_instr_as_tex(nir_instr_clone(b->shader, instr));
+      nir_def *c =
+         nir_fadd(b, i0, nir_imm_vec2(b, (k & 1) + 0.5f, (k >> 1) + 0.5f));
+
+      nir_builder_instr_insert(b, &tap->instr);
+      nir_src_rewrite(&tap->src[ci].src, sz ? nir_fdiv(b, c, sz) : c);
+      t[k] = &tap->def;
+   }
+   unsigned n = tex->def.num_components;
+   nir_def *fx = nir_replicate(b, nir_channel(b, f, 0), n);
+   nir_def *fy = nir_replicate(b, nir_channel(b, f, 1), n);
+   nir_def *r =
+      nir_flrp(b, nir_flrp(b, t[0], t[1], fx), nir_flrp(b, t[2], t[3], fx), fy);
+
+   nir_def_replace(&tex->def, r);
+   return true;
+}
+
 /* fs_vary: a vertex shader compiled to a fragment shader's sets; srgb: the
- * samplers whose texels a fragment shader decodes from sRGB */
+ * samplers whose texels a fragment shader decodes from sRGB, srgb_filter
+ * those of them it filters itself (lower_srgb_filter) */
 static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
-               unsigned srgb, const uint16_t *swz, uint32_t not_bgra,
-               const uint8_t *vtx_fmt, bool points)
+               unsigned srgb, uint32_t srgb_filter, const uint16_t *swz,
+               uint32_t not_bgra, const uint8_t *vtx_fmt, bool points)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -645,7 +705,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    opts.f16 = ctx->base.screen->shader_caps[nir->info.stage].fp16;
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
-   opts.driver_consts = !(sgx_drv_debug & SGX_DEBUG_NO_DRV_CONSTS);
+   opts.driver_consts = true;
    if (vtx_fmt) {
       memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
@@ -659,10 +719,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       opts.tex_bgra = ~not_bgra;
       /* a coordinate only samples read: the PDS samples from the set
        * itself (a pure-sample DOUTI, source 0x24, below) */
-      opts.pds_samples_alone = true;
+      opts.pds_samples_alone = screen->core->pds_samples;
    }
    /* texels a mediump read takes come back F16 (the sample's T3, below) */
    opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
+                      screen->core->f16_sample_return &&
                       !(sgx_drv_debug & SGX_DEBUG_NO_F16_SAMPLES);
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
@@ -674,8 +735,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * become 2D ones on that row; a rectangle texture's coordinates are
        * divided by its size (lower_txs), which st's fixed-function programs
        * leave to the driver (TFP's rectangle binding: xfwm4's compositor) */
-      nir_lower_tex_options tex = {
-         .lower_1d = true, .lower_srgb = srgb, .lower_rect = true};
+      nir_lower_tex_options tex = {.lower_1d = true,
+                                   .lower_srgb = srgb,
+                                   .lower_rect = true};
 
       /* a sampler view's swizzle, as the texel comes out (sgx_fs_for) */
       for (unsigned u = 0; swz && u < PIPE_MAX_SAMPLERS; u++) {
@@ -685,6 +747,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          for (unsigned c = 0; c < 4; c++)
             tex.swizzles[u][c] = swz[u] >> (3 * c) & 7;
       }
+      if (srgb_filter)
+         NIR_PASS(_, nir, nir_shader_instructions_pass, lower_srgb_filter,
+                  nir_metadata_control_flow, &srgb_filter);
       NIR_PASS(_, nir, nir_lower_tex, &tex);
    }
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -814,8 +879,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       }
    }
 
+   uint32_t old_code = so->prog.code;
+
    memset(&so->prog, 0, sizeof(so->prog));
    simple_mtx_lock(&screen->lock);
+   sgxws_code_free(ctx->hw, old_code);
    if (vertex) {
       unsigned dwords = 4, tsp[SGX_MAX_SETS] = {0};
 
@@ -962,8 +1030,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * varying's iterator is its set + 1.  The DDK's driver also iterates a
        * placeholder colour (source 0x20) in a shader without varyings; that
        * hangs the GPU when the vertex program outputs no colour, and ours
-       * never do, so there is none (the compiler still counts its PA register
-       * in n_pa). */
+       * never do, so there is none. */
       int last_plain = -1, last_sample = -1;
 
       for (unsigned i = 0; i < out.n_iters && i < ARRAY_SIZE(so->prog.douti);
@@ -1101,14 +1168,9 @@ sgx_create_shader_state(struct pipe_context *pctx,
    nir_foreach_shader_out_variable (var, nir)
       so->writes_psize |= var->data.location == VARYING_SLOT_PSIZ;
 
-   /* SGX_DEBUG=novs / nofs: the fixed programs for that stage */
-   bool fixed = sgx_drv_debug & (nir->info.stage == MESA_SHADER_VERTEX
-                                    ? SGX_DEBUG_NO_VS_COMPILER
-                                    : SGX_DEBUG_NO_FS_COMPILER);
-
-   if (!fixed && !nir->info.io_lowered) {
+   if (!nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, 0, NULL, false);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0, 0, NULL, 0, NULL, false);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -1156,30 +1218,48 @@ sgx_bind_fs_state(struct pipe_context *pctx, void *hwcso)
    sgx_context(pctx)->fs = hwcso;
 }
 
+/* a shader's programs (its blend variants too) go: the winsys frees their
+ * code once no render runs it */
+static void
+free_programs(struct sgx_context *ctx, struct sgx_pipe_shader *so)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+
+   if (!ctx->hw)
+      return;
+   simple_mtx_lock(&screen->lock);
+   sgxws_code_free(ctx->hw, so->prog.code);
+   for (unsigned i = 0; i < so->n_variants; i++)
+      sgxws_code_free(ctx->hw, so->variants[i].code);
+   simple_mtx_unlock(&screen->lock);
+}
+
+/* a variant (sgx_vs_for, sgx_fs_for) */
+static void
+destroy_variant(struct sgx_context *ctx, struct sgx_pipe_shader *v)
+{
+   if (!v)
+      return;
+   free_programs(ctx, v);
+   free(v->code);
+   free(v->code1);
+   FREE(v->vary);
+   FREE(v);
+}
+
 static void
 sgx_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 {
+   struct sgx_context *ctx = sgx_context(pctx);
    struct sgx_pipe_shader *so = hwcso;
 
+   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_vs); i++)
+      destroy_variant(ctx, so->variants_vs[i]);
+   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_srgb); i++)
+      destroy_variant(ctx, so->variants_srgb[i]);
    ralloc_free(so->nir);
-   free(so->code);
-   free(so->code1);
-   FREE(so->vary);
-   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_vs); i++) {
-      if (so->variants_vs[i]) {
-         free(so->variants_vs[i]->code);
-         FREE(so->variants_vs[i]->vary);
-         FREE(so->variants_vs[i]);
-      }
-   }
-   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_srgb); i++) {
-      if (so->variants_srgb[i]) {
-         free(so->variants_srgb[i]->code);
-         FREE(so->variants_srgb[i]->vary);
-         FREE(so->variants_srgb[i]);
-      }
-   }
-   FREE(so);
+   so->nir = NULL;
+   destroy_variant(ctx, so);
 }
 
 struct sgx_pipe_shader *
@@ -1210,17 +1290,12 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
       return NULL;
    /* the oldest goes */
    slot = &vs->variants_vs[vs->next_variant_vs++ % ARRAY_SIZE(vs->variants_vs)];
-   if (*slot) {
-      free((*slot)->code);
-      free((*slot)->code1);
-      FREE((*slot)->vary);
-      FREE(*slot);
-   }
+   destroy_variant(ctx, *slot);
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
    (*slot)->points = points;
-   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, NULL, 0,
+   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, 0, NULL, 0,
                        vtx_fmt, points) ||
        !(*slot)->prog.code) {
       FREE((*slot)->vary);
@@ -1249,6 +1324,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 {
    struct sgx_pipe_shader **slot;
    unsigned srgb = 0, unit;
+   uint32_t srgb_filter = 0;
    uint16_t swz[PIPE_MAX_SAMPLERS] = {0};
    uint32_t not_bgra = 0;
    bool any_swz = false;
@@ -1260,8 +1336,18 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 
       if (!v)
          continue;
-      if (util_format_is_srgb(v->format))
+      if (util_format_is_srgb(v->format)) {
+         const struct pipe_sampler_state *ss = ctx->samplers[unit];
+
          srgb |= 1u << unit;
+         /* filtered at one level: decoded before it's filtered */
+         if (ss &&
+             (ss->mag_img_filter == PIPE_TEX_FILTER_LINEAR ||
+              ss->min_img_filter == PIPE_TEX_FILTER_LINEAR) &&
+             (ss->min_mip_filter == PIPE_TEX_MIPFILTER_NONE ||
+              v->u.tex.first_level == v->u.tex.last_level))
+            srgb_filter |= 1u << unit;
+      }
       if (!sgx_tex_bgra(v->format))
          not_bgra |= 1u << unit;
       /* XYZW: none, 0 */
@@ -1277,6 +1363,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
+          fs->variants_srgb[i]->srgb_filter == srgb_filter &&
           fs->variants_srgb[i]->not_bgra == not_bgra &&
           !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
@@ -1284,20 +1371,16 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    /* the oldest goes */
    slot = &fs->variants_srgb[fs->next_variant_srgb++ %
                              ARRAY_SIZE(fs->variants_srgb)];
-   if (*slot) {
-      free((*slot)->code);
-      free((*slot)->code1);
-      FREE((*slot)->vary);
-      FREE(*slot);
-   }
+   destroy_variant(ctx, *slot);
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
    (*slot)->srgb = srgb;
+   (*slot)->srgb_filter = srgb_filter;
    memcpy((*slot)->swz, swz, sizeof(swz));
    (*slot)->not_bgra = not_bgra;
-   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, swz, not_bgra, NULL,
-                       false) ||
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz,
+                       not_bgra, NULL, false) ||
        !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);
@@ -1331,19 +1414,19 @@ sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                                    so->discard_pa, so->temps)
            : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b,
                              so->discard_pa, so->temps);
-   simple_mtx_unlock(&screen->lock);
-   /* the program heap is never freed: past the table's size, the slots are
-    * reused in turn and a program uploaded again when needed (dEQP's
-    * fragment_ops.interaction draws one shader with dozens of blends; always
-    * reusing slot 0 uploaded at nearly every draw and filled the heap) */
+   /* past the table's size, the slots are reused in turn, their programs
+    * freed (dEQP's fragment_ops.interaction draws one shader with dozens of
+    * blends) */
    if (va) {
       unsigned i = so->n_variants < ARRAY_SIZE(so->variants)
                       ? so->n_variants++
                       : so->next_variant++ % ARRAY_SIZE(so->variants);
 
+      sgxws_code_free(ctx->hw, so->variants[i].code); /* 0: a new slot */
       so->variants[i].key = *b;
       so->variants[i].code = va;
    }
+   simple_mtx_unlock(&screen->lock);
    return va;
 }
 

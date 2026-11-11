@@ -528,7 +528,9 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
 {
    memset(t, 0, sizeof(*t));
    t->bo = &res->bo;
-   switch (res->base.format) {
+   /* an sRGB texture renders as its linear format: without
+    * EXT_framebuffer_sRGB nothing is encoded on the way out */
+   switch (util_format_linear(res->base.format)) {
    case PIPE_FORMAT_B8G8R8A8_UNORM:
    case PIPE_FORMAT_B8G8R8X8_UNORM:
       t->pbe_format = 0;

@@ -17,8 +17,10 @@
 #include "util/format/u_format.h"
 #include "util/u_math.h"
 
+#include "sgx_core.h"
 #include "sgx_csb.h"
 #include "sgx_resource.h"
+#include "sgx_screen.h"
 #include "sgx_texture.h"
 
 #define TILE 16u
@@ -501,7 +503,8 @@ sgx_tex_words(const struct pipe_sampler_view *view,
     * locks the 3D (piglit fbo-generatemipmap-formats NPOT): its base level */
    bool mips = sampler && sampler->min_mip_filter != PIPE_TEX_MIPFILTER_NONE &&
                view->u.tex.last_level > base &&
-               (prsc->target == PIPE_TEXTURE_CUBE || twiddled(w, h));
+               (prsc->target == PIPE_TEXTURE_CUBE || twiddled(w, h) ||
+                !sgx_screen(prsc->screen)->core->npot_mip_hangs);
 
    sgx_pack(&t[0], TEXSTATE_WORD0, t0)
    {

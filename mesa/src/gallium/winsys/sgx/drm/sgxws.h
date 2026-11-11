@@ -422,6 +422,11 @@ void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code,
                                    unsigned n);
 
+/* a program uploaded above (any of them, each blend variant on its own) is
+ * no longer drawn with: its code goes once the renders that may run it are
+ * done */
+void sgxws_code_free(struct sgxws_ctx *c, uint32_t va);
+
 /* built-in shaders (tools/gen/mkusse.py) */
 enum sgxws_builtin {
    SGXWS_VS_XY,      /* gl_Position = vec4(a0.xy, 0, 1) */

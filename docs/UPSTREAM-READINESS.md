@@ -43,13 +43,13 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M1 | upstream build is powervr_sgx only | done (8c763d3 option; patch split, W1/W2) | uapi-stream |
 | M2 | features from DEV_QUERY and a core table | done: queries (W3), sgx_device.c table on sgxws_dev_info | mesa-gallium (table), uapi-stream (queries) |
 | M3 | driver name for the family | decided: `sgx` (Joseph, 2026-11-08) | mesa-gallium |
-| M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
+| M4 | clang-format | driver clean (3320225); winsys: sgx_frame.c etc. drifted ~60 lines (uapi-stream) | mesa-gallium (driver), uapi-stream (winsys) |
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
-| M6 | debug options and experiment code | partly | mesa-gallium, usse-compiler |
-| M7 | tests in Mesa's format (`ci/`) | partly (ddk files moved, mg-perf 1b86487) | mesa-gallium |
+| M6 | debug options and experiment code | driver done (2026-11-11); winsys fields left (uapi-stream) | mesa-gallium, usse-compiler |
+| M7 | tests in Mesa's format (`ci/`) | suites in (2026-11-11); expectations to refresh from the next full runs | mesa-gallium |
 | M8 | `docs/drivers/sgx.rst` | written: mesa/docs/drivers/sgx.rst | mesa-gallium |
 | M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
-| M10 | sRGB textures right (GL 2.1 is advertised) | must fix before the MR | mesa-gallium |
+| M10 | sRGB textures right (GL 2.1 is advertised) | render targets and one-level filtering fixed (b37aec7, 2a52bdf), on hardware next; border color open | mesa-gallium |
 
 ### M1. The upstream build is powervr_sgx only
 
@@ -116,6 +116,14 @@ scripts. It is cheap once, now, and expensive after upstream review starts.
 
 ### M4. clang-format
 
+**2026-11-11.** Both directories already have their `.clang-format` and were
+formatted. The driver and the fixed-program files are clean again after the
+day's changes (3320225). Left: `sgx_frame.c` (41 lines), `sgx_frame.h`,
+`sgxws.h` and `sgx_powervr_sgx.c` (a few each), to be formatted when the
+winsys has nothing in flight. `powervr_sgx_kmd_stream.h` is generated, so
+its generator should emit formatted code, or the file should be excluded.
+
+
 Mesa's base style is `src/.clang-format`, which has `DisableFormat: true`.
 Each driver opts in with its own `.clang-format`. The PowerVR code
 (`src/imagination`) and most gallium drivers use 80 columns; d3d12 uses 120.
@@ -140,27 +148,27 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 
 ### M6. Debug options and experiment code
 
-- **Already right.** The driver's knobs are `debug_get_option` tables
-  (`SGX_DEBUG`, `SGX_DUMP_CODE`, `SGX_SLOTS`, …), with no raw
-  `getenv` and no paths.
-- **Keep, documented:** `nir`, `draw`, `sync`, `stats`, `serial`,
-  `hangabort`, `flushall`, `novcache`, `nof16`, `noffmediump`.
-- **Experiments to drop or fold in before upstream:**
-  - `fsconst` (a measuring aid);
-  - `attrs` and `blits` (one-off diagnostics, fold into `draw`);
-  - `novs`/`nofs` (fixed programs instead of the compiler; drop once the
-    compiler covers every program);
-  - `zerocopy`: make it the default or drop it, once its numbers are in
-    (docs/PERF.md);
-  - `nodrvconsts`;
-  - `SGX_FRAME_GAP_US`;
-  - `SGX_SLOTS`: pick the default and drop the knob.
-- **`setenv` in the driver.** `sgx_screen_create` sets
-  `MESA_GLSL_DISABLE_IO_OPT=1` so that GLSL linking keeps varyings unpacked,
-  letting the PDS do whole-vec4 texture reads. A driver must not set the
-  process environment. It needs a compiler option instead: a
-  `nir_shader_compiler_options` / io-options flag that keeps
-  `nir_opt_varyings` from packing across slots, or a Mesa patch adding one.
+- **Done in the driver (2026-11-11).**
+  - Dropped: `fsconst`, `nodrvconsts`, `tspf16`, `novs`/`nofs` (the fixed
+    programs stay as the fallback for a shader the compiler refuses),
+    `zerocopy` (the default on powervr_sgx; `nozerocopy` turns it off) and
+    `SGX_TA_SPLIT`.
+  - Folded into `draw`: `attrs` (the clear line now carries the frame's draw
+    count) and `blits`.
+  - Kept, documented in `sgx.rst`: `nir`, `draw`, `frame`, `sync`, `stats`,
+    `serial`, `hangabort`, `flushall`, `novcache`, `nof16`, `noffmediump`,
+    `nof16samples`, `nophasesplit`, `nozerocopy`, `nozls`, `nolazyscanout`;
+    `SGX_DRY_RUN` and `SGX_FRAME_GAP_US` for bisecting a hang;
+    `SGX_SLOTS` (frames in flight, 4 by default), which the install guide
+    on issue #5 gives users as the latency setting.
+  - `MESA_GLSL_DISABLE_IO_OPT` is no longer set by the driver: the
+    compiler's NIR options carry `nir_io_dont_optimize_varyings`, a flag the
+    GLSL linker reads (patch 0006).
+- **Left.**
+  - Winsys (uapi-stream): the `ta_split` and `tsp_f16` fields of
+    `sgxws_dev_options`/`sgxws_draw` are now always 0, and
+    `SGX_STATE_ALWAYS` and `SGX_PB_PAGES` read the environment directly.
+  - `flushrt` moves into the pvrsrvkm backend (M1).
 - **The compiler: done (1ba7774).** `SGX_DISABLE`, `SGX_F16_CONST` and
   `SGX_F16_ITER` are one `SGX_COMPILER_DEBUG` flag table (`nopa`, `noout`,
   ..., `nocoissue`, `nof16const`, `nof16iter`), read once per compile.
@@ -171,14 +179,13 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 - **There.** `drivers/sgx/ci/` holds `sgx-{fails,flakes,skips}.txt`
   (dEQP-GLES2) and `sgx-piglit-{fails,flakes,skips}.txt`, in deqp-runner's
   format.
-- **To do.**
-  - Move `ddk-*.txt` (the DDK comparison) out of the driver's `ci/` to
-    `mesa/tests/deqp/ddk/`, where a copy already is.
-  - Add a deqp-runner suite file (`deqp-sgx.toml`) and the piglit profile
-    the way `ci/` dirs of other gallium drivers have them. Mesa CI runs them
-    only once a farm has the hardware, but the files go in with the driver.
-  - Refresh the expectations from the full runs on mg-perf (2026-11-08,
-    EA3): dEQP 17,165 tests, 0 wedges; piglit in progress.
+- **Done.** `ddk-*.txt` moved to `mesa/tests/deqp/ddk/` (1b86487).
+  `deqp-sgx-sgx545.toml` (dEQP-GLES2 mustpass) and
+  `deqp-sgx-sgx545-piglit.toml` (the `gpu` profile, `PIGLIT_NO_WINDOW=1`)
+  in the shape lima's and freedreno's have. Mesa CI runs them once a farm
+  has the hardware.
+- **To do.** Refresh the expectations from full runs of the current dev
+  (dEQP mustpass and piglit gpu on the EA1), with `mesa/tests/deqp/mkexpect.py`.
 
 ### M8. `docs/drivers/sgx.rst`
 
@@ -214,6 +221,17 @@ but piglit's `ext_texture_srgb` fails on:
 
 Mipmap generation of sRGB textures passes since adecb99 (the device chain
 past the last level).
+
+**2026-11-11 (b37aec7, 2a52bdf, waiting for a hardware run).**
+- `fbo-srgb` and `fbo-alphatest-formats` drew nothing: the driver refused an
+  sRGB texture as a render target. It now renders through the linear format,
+  which is right while `EXT_framebuffer_sRGB` isn't exposed.
+- LINEAR filtering of an sRGB texture sampled at one level (one level, or no
+  mipmap filter) is done in the shader: four texel-centre samples, decoded,
+  then mixed (`lower_srgb_filter`). Mipmapped minification still filters the
+  encoded texels, because the shader doesn't know the level the TPU picks.
+- Border color fails for every format (CLAMP_TO_BORDER is drawn as
+  CLAMP_TO_EDGE). The same four-tap path can choose the border color per tap.
 
 The 40 failures are in `ci/sgx-piglit-fails.txt` under their reason. A driver
 advertising 2.1 with these failing will be questioned, so they get fixed, not

@@ -43,6 +43,7 @@
 
 #include "util/log.h"
 
+#include "sgx_core.h"
 #include "sgxws.h"
 
 /* where a buffer lives: the SGX heap ids (the low byte of a services heap
@@ -69,6 +70,7 @@ struct sgxws_kif;
 /* the connection to the kernel driver; a backend's device embeds it first */
 struct sgxws_dev {
    const struct sgxws_kif *kif;
+   const struct sgx_core *core; /* the core info describes (sgx_core.h) */
    struct sgxws_device_info info; /* filled by the backend; PCI ids by
                                      sgxws_dev_create */
    uint32_t heap_base[16];        /* device address of each heap, by heap id */
@@ -107,6 +109,21 @@ struct sgxws_ring {
    struct sgxws_pds_memo *memo;
 };
 
+/* USSE program code: chunks, each only appended to (powervr_sgx checks code
+ * as it is uploaded), emptied for reuse once every program in it is freed and
+ * no render can run it.  Fixed programs keep the first chunk. */
+#define SGXWS_CODE_CHUNK 0x10000u
+struct sgxws_code_chunk {
+   struct sgxws_ring r;
+   unsigned live;     /* programs in it not freed */
+   uint32_t free_seq; /* the last kick that may run one of them */
+};
+struct sgxws_code {
+   enum sgx_heap heap;
+   struct sgxws_code_chunk **chunk;
+   unsigned n, cur;
+};
+
 struct sgxws_rt_numbers {
    uint32_t xt, yt, mode, mx, my, padx, pady;
    uint32_t mtile1, mtile2, te_screen, mt_tiles, region_bytes, tailptr_bytes;
@@ -137,8 +154,8 @@ struct sgxws_ctx {
    struct sgxws_dev *dev;
    void *k; /* the backend's */
    int priority; /* sgxws_ctx_create's */
-   /* code (persistent) and per-frame rings */
-   struct sgxws_ring usse_pix, usse_vtx;
+   /* program code, pixel [0] and vertex [1] (sgxws_usse_upload) */
+   struct sgxws_code usse[2];
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
    /* the end-of-tile programs: two code pools used in turn, each emptied
     * once no render runs code from it */

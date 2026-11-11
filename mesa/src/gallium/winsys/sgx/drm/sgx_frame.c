@@ -23,6 +23,7 @@
 #include <xf86drm.h>
 
 #include "util/macros.h"
+#include "util/u_math.h"
 
 #include "sgx_csb.h"
 #include "sgx_frame.h"
@@ -111,12 +112,15 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
 
    /* Whatever the texture unit samples lives in the texture heap: render
     * targets are sampled too (FBO textures, the back buffer a blit reads).
-    * Sampling from elsewhere hangs some SGX545 revisions (the sample cache
-    * erratum); the general heap only when the texture heap is full. */
+    * Sampling from elsewhere hangs some cores (the sample cache erratum,
+    * sgx_core.sample_texture_heap_only); the general heap only when the
+    * texture heap is full. */
    switch (mem) {
    case SGXWS_MEM_RENDER_TARGET:
-      e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
-                              size, align);
+      e = d->core->sample_texture_heap_only
+             ? sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
+                                   size, align)
+             : -ENOMEM;
       if (e)
          e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR,
                                  size, align);
@@ -252,20 +256,136 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
 /* ------------------------------------------------------------------ USSE */
 
+static bool
+code_chunk_init(struct sgxws_dev *d, struct sgxws_code_chunk *k,
+                enum sgx_heap heap, uint32_t size)
+{
+   /* aligned to its size: a chunk never straddles a 512K code base window */
+   uint32_t al = 1u << util_logbase2_ceil(size);
+
+   if (sgxws_bo_alloc_heap(d, &k->r.bo, heap, 0x1, size, al))
+      return false;
+   k->r.size = size;
+   /* nothing at a heap's first byte: a DOUTU word of 0 would name it */
+   k->r.used = 0x100;
+   return true;
+}
+
+/* empty a chunk no render runs code from any more */
+static void
+code_chunk_reset(struct sgxws_ctx *c, struct sgxws_code_chunk *k)
+{
+   if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &k->r.bo))
+      mesa_loge("sgx: code chunk reset failed");
+   memset(k->r.bo.map, 0, k->r.size);
+   k->r.used = 0x100;
+   k->r.uploaded = 0;
+}
+
+/* room for size bytes of code: the current chunk, an emptied one, a new one,
+ * or one waited for; NULL when the heap is full of live programs */
+static struct sgxws_code_chunk *
+code_room(struct sgxws_ctx *c, struct sgxws_code *code, uint32_t size)
+{
+   uint32_t need = size + USSE_ALIGN;
+   struct sgxws_code_chunk *k, **grown;
+
+   if (code->n) {
+      k = code->chunk[code->cur];
+      if (k->r.size - k->r.used >= need)
+         return k;
+   }
+   sgxws_done_seq(c);
+   for (int pass = 0; pass < 2; pass++) {
+      for (unsigned i = 0; i < code->n; i++) {
+         k = code->chunk[i];
+         if (k->live || k->r.size - 0x100 < need)
+            continue;
+         if (sgxws_seq_after(k->free_seq, c->done_seq)) {
+            /* the second pass waits, the heap being full, for a kick that
+             * was made (not the frame being recorded) */
+            if (!pass || k->free_seq == sgxws_next_seq(c) ||
+                sgxws_wait_seq(c, k->free_seq, 2000))
+               continue;
+         }
+         code_chunk_reset(c, k);
+         code->cur = i;
+         return k;
+      }
+      if (pass)
+         break;
+      k = calloc(1, sizeof(*k));
+      grown = realloc(code->chunk, (code->n + 1) * sizeof(*grown));
+      if (k && grown) {
+         code->chunk = grown;
+         if (code_chunk_init(c->dev, k, code->heap,
+                             MAX2(SGXWS_CODE_CHUNK, align(need, 0x1000)))) {
+            code->chunk[code->n] = k;
+            code->cur = code->n++;
+            return k;
+         }
+      } else if (grown) {
+         code->chunk = grown;
+      }
+      free(k);
+   }
+   return NULL;
+}
+
+/* a program's code, 0 when there is no room for it */
 uint32_t
 sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
                   unsigned n, const uint8_t *reloc, unsigned nreloc)
 {
-   struct sgxws_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
-   struct sgxws_ptr p = ring_alloc(r, n * 8, USSE_ALIGN);
-   uint32_t pc0 =
-      (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+   struct sgxws_code_chunk *k = code_room(c, &c->usse[vertex], n * 8);
+   struct sgxws_ptr p;
+   uint32_t pc0;
 
+   if (!k) {
+      mesa_loge("sgx: %s program code is full", vertex ? "vertex" : "pixel");
+      return 0;
+   }
+   k->live++;
+   p = ring_alloc(&k->r, n * 8, USSE_ALIGN);
+   pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
    memcpy(p.p, w, n * 8);
    /* phas.i targets are absolute, in instructions (ISA.md) */
    for (unsigned i = 0; i < nreloc; i++)
       p.p[2 * reloc[i]] += pc0;
    return p.va;
+}
+
+void
+sgxws_code_free(struct sgxws_ctx *c, uint32_t va)
+{
+   if (!va)
+      return;
+   for (unsigned v = 0; v < 2; v++) {
+      struct sgxws_code *code = &c->usse[v];
+
+      for (unsigned i = 0; i < code->n; i++) {
+         struct sgxws_code_chunk *k = code->chunk[i];
+
+         if (va >= k->r.bo.va && va < k->r.bo.va + k->r.size) {
+            assert(k->live);
+            k->live--;
+            /* the frame being recorded may still draw with it */
+            k->free_seq = sgxws_next_seq(c);
+            return;
+         }
+      }
+   }
+   mesa_loge("sgx: freeing code at %#x that isn't a program", va);
+}
+
+static void
+code_fini(struct sgxws_ctx *c, struct sgxws_code *code)
+{
+   for (unsigned i = 0; i < code->n; i++) {
+      sgxws_bo_free(c->dev, &code->chunk[i]->r.bo);
+      free(code->chunk[i]);
+   }
+   free(code->chunk);
 }
 
 static uint32_t
@@ -606,17 +726,17 @@ dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secondary)
  * no captured DMA moves more than 25 dwords [D for the values, G for the
  * meaning].
  */
-#define DMA_CHUNK 16
-
 static uint32_t
-pds_dma_task(struct sgxws_ring *r, uint32_t src, uint32_t dwords,
-             uint32_t task_w0, uint32_t task_w1, uint32_t *rows)
+pds_dma_task(struct sgxws_ctx *c, struct sgxws_ring *r, uint32_t src,
+             uint32_t dwords, uint32_t task_w0, uint32_t task_w1,
+             uint32_t *rows)
 {
+   const uint32_t chunk = c->dev->core->dma_chunk_dwords;
    struct pds p = {0};
    unsigned row = 0;
 
-   for (uint32_t off = 0; off < dwords; off += DMA_CHUNK, row++) {
-      uint32_t n = dwords - off < DMA_CHUNK ? dwords - off : DMA_CHUNK;
+   for (uint32_t off = 0; off < dwords; off += chunk, row++) {
+      uint32_t n = dwords - off < chunk ? dwords - off : chunk;
 
       pds_d0(&p, 2 * row, src + off * 4);
       pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, (n - 1) & 3, 1));
@@ -649,11 +769,26 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
       e = sgxws_pvr_dev_create(fd, opts, &d);
 #endif
    if (e)
-      mesa_loge("sgx: no SGX545 kernel driver on fd %d (%s): %d", fd,
+      mesa_loge("sgx: no SGX kernel driver on fd %d (%s): %d", fd,
                 v ? v->name : "?", e);
    drmFreeVersion(v);
    if (e)
       return NULL;
+   /* a core this winsys has a description of (sgx_core.h), or none */
+   d->core = sgx_core_lookup(d->info.core_id, d->info.core_revision);
+   if (!d->core) {
+      mesa_loge(
+         "sgx: SGX core id %#x revision %#x has no description (sgx_core.c)",
+         d->info.core_id, d->info.core_revision);
+      d->kif->dev_destroy(d);
+      return NULL;
+   }
+   /* render-target limits the kernel didn't report: the core's */
+   if (!d->info.rt_max_width) {
+      d->info.rt_max_width = d->core->rt_max_width;
+      d->info.rt_max_height = d->core->rt_max_height;
+      d->info.rt_max_samples = d->core->rt_max_samples;
+   }
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
@@ -696,12 +831,13 @@ static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
 static void
 ctx_free(struct sgxws_ctx *c)
 {
-   struct sgxws_ring *rings[] = {&c->usse_pix,    &c->usse_vtx,   &c->pds_pix,
-                                 &c->pds_vtx,     &c->gen,        &c->vdm,
-                                 &c->eot_pool[0], &c->eot_pool[1]};
+   struct sgxws_ring *rings[] = {&c->pds_pix, &c->pds_vtx,     &c->gen,
+                                 &c->vdm,     &c->eot_pool[0], &c->eot_pool[1]};
 
    for (unsigned i = 0; i < sizeof(rings) / sizeof(rings[0]); i++)
       sgxws_bo_free(c->dev, &rings[i]->bo);
+   code_fini(c, &c->usse[0]);
+   code_fini(c, &c->usse[1]);
    free(c->pds_pix.memo);
    free(c->last_u);
    c->dev->kif->ctx_fini(c);
@@ -728,11 +864,9 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
       return NULL;
    }
 
-   /* pixel programs are never freed (blend variants included): 1 MB of the
-    * 5 MB the ten code base registers reach */
-   if (ring_init(d, &c->usse_pix, H_PIXSHADER, 0x100000) ||
-       ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x40000) ||
-       /* the frame rings hold a whole frame of a game (~1500 draws, ~100K
+   c->usse[0].heap = H_PIXSHADER;
+   c->usse[1].heap = H_VTXSHADER;
+   if (/* the frame rings hold a whole frame of a game (~1500 draws, ~100K
         * vertices): a ring that fills submits the frame so far and waits for
         * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
        ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + d->slots * 0x200000) ||
@@ -1243,11 +1377,12 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n,
  * count, 16 in still gives 16].  Half that (64 / output dwords) hung the GPU
  * at 12 output dwords. */
 static uint32_t
-vertices_per_task(uint32_t out_dwords)
+vertices_per_task(const struct sgx_core *core, uint32_t out_dwords)
 {
-   uint32_t o = (out_dwords + 3) & ~3u, v = 128 / (o ? o : 4);
+   uint32_t o = (out_dwords + 3) & ~3u,
+            v = core->vertex_task_dwords / (o ? o : 4);
 
-   return v > 16 ? 16 : v;
+   return v > core->vertex_task_max ? core->vertex_task_max : v;
 }
 
 /* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md,
@@ -1345,7 +1480,7 @@ frame_has_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 }
 
 /* make room for one more object, submitting the frame so far if need be (the
- * next render starts from its pixels, as every render does) */
+ * next render starts from its pixels, as every render does, and its depth) */
 static int
 make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 {
@@ -1358,6 +1493,7 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    c->room_flushes++;
    if ((e = sgxws_flush(c, 0)))
       return e;
+   t.zls_load = t.zls_va != 0; /* and its depth and stencil */
    if ((e = sgxws_begin(c, rt, &t)))
       return e;
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
@@ -1378,6 +1514,7 @@ depth_bias(struct sgxws_ctx *c, const struct sgxws_state *st)
        (c->bias_units != st->bias_units || c->bias_factor != st->bias_factor)) {
       if ((e = sgxws_flush(c, 0)))
          return e;
+      t.zls_load = t.zls_va != 0;
       if ((e = sgxws_begin(c, rt, &t)))
          return e;
    }
@@ -1440,7 +1577,7 @@ vpgen_object(struct sgxws_ctx *c, bool set, const struct sgxws_rect *tiles,
    }
    state_block(c, blk, 9, 9, 0);
    vdm_draw(c, prim, count, c->idx, v.va, 8, 2, c->vpgen_vs, 2, 4, 0,
-            vertices_per_task(4));
+            vertices_per_task(c->dev->core, 4));
 }
 
 /* Make r the visible pixels (STATE.md "Scissor and partial viewports"): reset
@@ -1480,9 +1617,11 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
    uint32_t blk[13], n = 0;
    int e;
 
-   bool zwrite = write_depth && (depth != 1.0f || c->draws);
+   /* a render that loads its depth (ZLS) doesn't start at 1.0 */
+   bool zwrite =
+      write_depth && (depth != 1.0f || c->draws || c->target.zls_load);
 
-   /* nothing to write: no colour, and the depth every render starts with */
+   /* nothing to write: no colour, and the depth a fresh render starts with */
    if (!(wmask & 0xf) && !zwrite && stencil < 0)
       return 0;
    if ((e = make_room(c, 3 * 16)))
@@ -1504,7 +1643,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
       h.ispc = stencil >= 0;
    }
    /* always; depth write for a depth clear, except to the background depth
-    * (1.0) before anything was drawn: every render starts there */
+    * (1.0) before anything was drawn in a render that doesn't load depth */
    sgx_pack(&blk[n++], TA_STATE_ISPA, a)
    {
       a.depth_func = SGX_TA_CMP_ALWAYS;
@@ -1749,7 +1888,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       /* a task that waits for the DMA (wdf) before it ends: the empty task
        * here locks the GPU up */
       sec = pds_dma_task(
-         &c->pds_pix, u.va, fs->sec_dwords,
+         c, &c->pds_pix, u.va, fs->sec_dwords,
          doutu_w0(c, fs->sec ? fs->sec : c->sec_wait, false, fs->sec_temps), 4,
          &rows);
    } else {
@@ -1870,7 +2009,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       memcpy(vsec.p + 10, d->vs_consts, vs->const_dwords * 4);
    for (unsigned j = 0; j < d->vs_mem.n_bases && d->vs_mem.dwords; j++)
       vsec.p[10 + d->vs_mem.base[j]] = vmem.va + 512 * j;
-   sec = pds_dma_task(&c->pds_vtx, vsec.va, vsec_dwords,
+   sec = pds_dma_task(c, &c->pds_vtx, vsec.va, vsec_dwords,
                       doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm_state(c, SGX_VDMCTRL_BLOCK_TYPE_PDS_STATE, sec, vrows,
              SGX_VDMCTRL_STATE_KIND_DMA, vsec_dwords, 0);
@@ -1880,11 +2019,11 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    if (d->n_fetch)
       vdm_fetch(c, d->prim, n_idx, idx, fetch, d->n_fetch, vs->code,
                 vs->in_dwords, vs->out_dwords, vs->temps,
-                vertices_per_task(vs->out_dwords));
+                vertices_per_task(c->dev->core, vs->out_dwords));
    else
       vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code,
                vs->in_dwords, vs->out_dwords, vs->temps,
-               vertices_per_task(vs->out_dwords));
+               vertices_per_task(c->dev->core, vs->out_dwords));
    c->draws++;
    /* SGX_TA_SPLIT: the GPU tiles what is recorded while the rest is */
    if (c->dev->ta_split && ++c->seg_draws >= c->dev->ta_split)
@@ -2026,23 +2165,35 @@ sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms)
 
 /* code written since the last kick, to the GPU */
 static int
+ring_sync(struct sgxws_ctx *c, struct sgxws_ring *r)
+{
+   uint32_t end = (r->used + 7) & ~7u;
+   int e;
+
+   if (end <= r->uploaded)
+      return 0;
+   if ((e = c->dev->kif->code_upload(c->dev, &r->bo, r->uploaded,
+                                     end - r->uploaded)))
+      return e;
+   r->uploaded = end;
+   return 0;
+}
+
+static int
 code_sync(struct sgxws_ctx *c)
 {
-   struct sgxws_ring *rs[] = {&c->usse_pix, &c->usse_vtx, &c->eot_pool[0],
-                              &c->eot_pool[1]};
    int e;
 
    if (!c->dev->kif->code_upload)
       return 0;
-   for (unsigned i = 0; i < ARRAY_SIZE(rs); i++) {
-      uint32_t end = (rs[i]->used + 7) & ~7u;
-
-      if (end <= rs[i]->uploaded)
-         continue;
-      if ((e = c->dev->kif->code_upload(c->dev, &rs[i]->bo, rs[i]->uploaded,
-                                        end - rs[i]->uploaded)))
-         return e;
-      rs[i]->uploaded = end;
+   if ((e = ring_sync(c, &c->eot_pool[0])) ||
+       (e = ring_sync(c, &c->eot_pool[1])))
+      return e;
+   for (unsigned v = 0; v < 2; v++) {
+      for (unsigned i = 0; i < c->usse[v].n; i++) {
+         if ((e = ring_sync(c, &c->usse[v].chunk[i]->r)))
+            return e;
+      }
    }
    return 0;
 }
