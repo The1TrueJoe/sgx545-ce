@@ -369,6 +369,26 @@ lower_tex_derefs(nir_shader *s, struct sgx_ctx *c)
                                        nir_metadata_control_flow, &t);
 }
 
+/* a texel of a tex_f32 unit: its first component, the rest (0, 0, 1) */
+static bool
+lower_f32_texel(nir_builder *b, nir_instr *instr, void *data)
+{
+   uint32_t units = *(const uint32_t *)data;
+   if (instr->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *tex = nir_instr_as_tex(instr);
+   if (tex->texture_index >= 32 || !(units >> tex->texture_index & 1) ||
+       tex->def.num_components != 4 || nir_tex_instr_is_query(tex))
+      return false;
+   unsigned bits = tex->def.bit_size;
+   b->cursor = nir_after_instr(instr);
+   nir_def *v =
+      nir_vec4(b, nir_channel(b, &tex->def, 0), nir_imm_floatN_t(b, 0, bits),
+               nir_imm_floatN_t(b, 0, bits), nir_imm_floatN_t(b, 1, bits));
+   nir_def_rewrite_uses_after(&tex->def, v);
+   return true;
+}
+
 /* gl_FrontFacing as the constant true (see sgx_compile_options.front_sa) */
 static bool
 front_true_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
@@ -2046,6 +2066,9 @@ sgx_lower(struct sgx_ctx *c)
    s->info.flrp_lowered = false;
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
    NIR_PASS(_, s, lower_tex_derefs, c);
+   if (s->info.stage == MESA_SHADER_FRAGMENT && c->opts->tex_f32)
+      NIR_PASS(_, s, nir_shader_instructions_pass, lower_f32_texel,
+               nir_metadata_control_flow, (void *)&c->opts->tex_f32);
    if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_sa)
       NIR_PASS(_, s, nir_shader_intrinsics_pass, front_true_instr,
                nir_metadata_control_flow, NULL);
