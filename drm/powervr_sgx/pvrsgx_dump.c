@@ -152,6 +152,7 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 		[DRM_POWERVR_SGX_JOB_TYPE_TRANSFER] = "transfer",
 		[DRM_POWERVR_SGX_JOB_TYPE_NULL] = "null",
 	};
+	unsigned long flags;
 	struct seq_buf sb;
 	char *buf;
 
@@ -173,5 +174,42 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	pvrsgx_job_dump(&sb, bad);
 	if (seq_buf_has_overflowed(&sb))
 		drm_warn(&sdev->base, "coredump truncated\n");
-	dev_coredumpv(sdev->base.dev, buf, seq_buf_used(&sb), GFP_NOWAIT);
+	/* devcoredump registers a device, which allocates: from a worker. */
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	if (!sdev->coredump) {
+		sdev->coredump = buf;
+		sdev->coredump_len = seq_buf_used(&sb);
+		buf = NULL;
+	}
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	vfree(buf);
+	queue_work(system_dfl_wq, &sdev->coredump_work);
+}
+
+static void coredump_work_fn(struct work_struct *work)
+{
+	struct pvrsgx_device *sdev = container_of(work, struct pvrsgx_device, coredump_work);
+	unsigned long flags;
+	size_t len;
+	void *buf;
+
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	buf = sdev->coredump;
+	len = sdev->coredump_len;
+	sdev->coredump = NULL;
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	if (buf)
+		dev_coredumpv(sdev->base.dev, buf, len, GFP_KERNEL);
+}
+
+void pvrsgx_coredump_init(struct pvrsgx_device *sdev)
+{
+	INIT_WORK(&sdev->coredump_work, coredump_work_fn);
+}
+
+void pvrsgx_coredump_fini(struct pvrsgx_device *sdev)
+{
+	cancel_work_sync(&sdev->coredump_work);
+	vfree(sdev->coredump);
+	sdev->coredump = NULL;
 }

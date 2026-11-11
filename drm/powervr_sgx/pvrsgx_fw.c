@@ -479,8 +479,12 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		err = fw_build(sdev, sdev->fw.image);
 		if (err)
 			return err;
-		/* Nothing the old run pointed at matters any more. */
-		pvrsgx_kobj_reap(sdev, U64_MAX);
+		/*
+		 * Nothing the old run pointed at matters any more. Freeing can take
+		 * locks a fence waiter holds, so the reap work does it, not a reset.
+		 */
+		WRITE_ONCE(sdev->restarts, sdev->restarts + 1);
+		queue_work(system_dfl_wq, &sdev->reap_work);
 	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
 	hc[HOSTCTL_UK_TIMER_CLOCK] = sdev->core->clock_hz / UKERNEL_TIMER_HZ;

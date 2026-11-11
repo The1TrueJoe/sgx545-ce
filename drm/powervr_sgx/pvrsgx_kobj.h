@@ -39,6 +39,8 @@ struct pvrsgx_kobj {
 	struct list_head grave;
 	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
 	u64 grave_seq;
+	/** @grave_restarts: pvrsgx_device.restarts when it was released. */
+	u32 grave_restarts;
 };
 
 static inline u32 *kobj_cpu(struct pvrsgx_kobj *o)

@@ -217,6 +217,14 @@ struct pvrsgx_device {
 	 * count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
 	 */
 	u32 done_seq;
+	/** @restarts: Microkernel restarts; graveyard entries from before one can go. */
+	u32 restarts;
+	/** @coredump_work: Hands a hang's dump to devcoredump, outside the reset. */
+	struct work_struct coredump_work;
+	/** @coredump: The dump waiting for @coredump_work, or NULL (@fence_lock). */
+	void *coredump;
+	/** @coredump_len: Its length. */
+	size_t coredump_len;
 	/** @renders_done: Render jobs the firmware has finished. */
 	u64 renders_done;
 	/** @reap_work: Frees @graveyard entries a later render made safe. */

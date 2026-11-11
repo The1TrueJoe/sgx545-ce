@@ -122,6 +122,7 @@ void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 		return;
 	mutex_lock(&sdev->kobj_lock);
 	o->grave_seq = sdev->renders_submitted;
+	o->grave_restarts = READ_ONCE(sdev->restarts);
 	list_add_tail(&o->grave, &sdev->graveyard);
 	mutex_unlock(&sdev->kobj_lock);
 }
@@ -130,12 +131,15 @@ void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 {
 	struct pvrsgx_kobj *o, *tmp;
-	bool restart = renders_done == U64_MAX;
+	bool all = renders_done == U64_MAX;
+	u32 restarts = READ_ONCE(sdev->restarts);
 	LIST_HEAD(dead);
 
 	mutex_lock(&sdev->kobj_lock);
 	list_for_each_entry_safe(o, tmp, &sdev->graveyard, grave) {
-		if (o->grave_seq < renders_done && (restart || !o->until_restart))
+		/* A restart forgets everything the old run pointed at. */
+		if (all || o->grave_restarts != restarts ||
+		    (o->grave_seq < renders_done && !o->until_restart))
 			list_move_tail(&o->grave, &dead);
 	}
 	mutex_unlock(&sdev->kobj_lock);

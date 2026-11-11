@@ -242,6 +242,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	u32 data[6] = {};
 	struct dma_fence *fence;
 	unsigned long flags;
+	bool cookie;
 	int err, idx;
 
 	if (sched_job->s_fence->finished.error)
@@ -305,8 +306,10 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 fail_exit:
 	drm_dev_exit(idx);
 fail:
+	cookie = dma_fence_begin_signalling();
 	dma_fence_set_error(fence, err);
 	dma_fence_signal(fence);
+	dma_fence_end_signalling(cookie);
 	return fence;
 }
 
@@ -319,11 +322,13 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 {
 	struct pvrsgx_job *bad = to_pvrsgx_job(sched_job), *job, *tmp;
 	struct pvrsgx_device *sdev = bad->ctx->sdev;
-	bool fault = READ_ONCE(sdev->faulted), lost;
+	bool fault = READ_ONCE(sdev->faulted), lost, cookie;
 	unsigned long flags;
 	int idx;
 
 	drm_sched_stop(&sdev->sched, sched_job);
+	/* Every fence on the GPU and in the queue waits on what follows. */
+	cookie = dma_fence_begin_signalling();
 	/* After unbind (pvrsgx_job_unplug) the hardware is gone: fail, touch nothing. */
 	mutex_lock(&sdev->reset_lock);
 	lost = READ_ONCE(sdev->lost) || !drm_dev_enter(&sdev->base, &idx);
@@ -375,6 +380,7 @@ fail:
 	drm_dev_exit(idx);
 out:
 	mutex_unlock(&sdev->reset_lock);
+	dma_fence_end_signalling(cookie);
 	drm_sched_start(&sdev->sched, 0);
 	return DRM_GPU_SCHED_STAT_RESET;
 }
@@ -421,6 +427,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	INIT_LIST_HEAD(&sdev->active);
 	INIT_DELAYED_WORK(&sdev->poll_work, poll_work_fn);
 	INIT_WORK(&sdev->reap_work, reap_work_fn);
+	pvrsgx_coredump_init(sdev);
 	sdev->fence_context = dma_fence_context_alloc(1);
 	return drm_sched_init(&sdev->sched, &args);
 }
@@ -434,6 +441,7 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_job *job, *tmp;
 	unsigned long flags;
+	bool cookie;
 
 	drm_sched_wqueue_stop(&sdev->sched);
 	/* A reset under way finishes first; one after this sees @lost. */
@@ -444,6 +452,7 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	cancel_delayed_work_sync(&sdev->poll_work);
 
 	mutex_lock(&sdev->done_lock);
+	cookie = dma_fence_begin_signalling();
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
@@ -451,6 +460,7 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 		dma_fence_signal_locked(job->hw_fence);
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	dma_fence_end_signalling(cookie);
 	mutex_unlock(&sdev->done_lock);
 	drm_sched_wqueue_start(&sdev->sched);
 }
@@ -493,6 +503,7 @@ void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 	drm_sched_fini(&sdev->sched);
 	cancel_delayed_work_sync(&sdev->poll_work);
 	cancel_work_sync(&sdev->reap_work);
+	pvrsgx_coredump_fini(sdev);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = NULL;
 }
