@@ -333,38 +333,51 @@ loaded by the DRM driver).
 | Pinned toolchain | **Done (documented).** Only CPython ≥ 3.7; no external packages. Recorded in `ukernel/README.md` → Building. |
 | MIT license | **Done.** `ukernel/LICENSE` + an `SPDX-License-Identifier: MIT` header on every source file. |
 | Release manifest | **Done.** `core`, `version` (major.minor), `features`, `build_id`, sizes, entry offsets, patch sites. |
-| Per-core identity | **Done.** `ukernel.py:CORE_NAME` names the target SGX core; build.py derives the binary name and manifest `core` from it, so SGX540/SGX531/… images never collide. |
+| Per-core identity | **Done.** The per-core config `cores/<core>.py:CORE_NAME` (selected by `build.py <core>` / `SGX_CORE`, default sgx545) names the target SGX core; build.py derives the binary name and manifest `core` from it, so SGX540/SGX531/… images never collide. |
 | Feature-bit documentation | **Done.** `ukernel/README.md` → Feature bits (bit 0 CLEANUP_V2, bit 1 SECURE). |
 | Build/feature README | **Done.** `ukernel/README.md`. |
 | linux-firmware WHENCE entry | **Draft below** (not submitted). |
 | Neutral docs pass | **Pending ta3d-state** — `docs/` and any Documentation text use CE5300/SGX5xx neutrally; dev-box history → `docs/log/`. |
-| DPM out-of-memory handler | **Pending** — the one open functional gap before the firmware is feature-complete for general workloads (`side-session-notes/.../dpm-oom-handler-design.md`). Not a packaging item, but gates "ready". |
+| DPM out-of-memory handler | **Done.** The OOM partial-render handler is confirmed on real hardware — the last open functional gap; general workloads now run (e.g. Minecraft 15 min in-world, 0 GPU recoveries). Behaviour in `docs/UKERNEL.md`; bring-up in `docs/log`. |
 
 ### Draft linux-firmware WHENCE entry (not submitted)
 
 The binary linux-firmware would carry is the **packaged** image the DRM driver
 requests (header + feature bits applied by the driver's packaging tool over the
-`ukernel/build.py` output), named as the driver requests it:
+`ukernel/build.py` output), named per core as the driver requests it:
 
 ```
 Driver: powervr_sgx — PowerVR SGX5xx (e.g. SGX545 on the Intel Atom CE5300)
 
-File: powervr_sgx/sgx_ukernel.bin
+File: powervr_sgx/sgx545_ukernel.bin
 Version: 1.0
-Source: <source-repository-url>/ukernel   (ukernel.py + build.py; the DRM
-        driver's packaging tool applies the header/feature bits)
-License: MIT.  See LICENSE.<id> for details.
+Source: <source-repository-url>/ukernel   (ukernel.py + cores/<core>.py + build.py;
+        the DRM driver's packaging tool applies the header/feature bits)
+License: MIT.  See LICENSE.powervr_sgx for details.
 ```
 
-Naming (no project name upstream; per core; the driver's own subdirectory):
-`powervr_sgx/<core>_ukernel.bin`, so `powervr_sgx/sgx_ukernel.bin` here and
-`powervr_sgx/sgx540_ukernel.bin` for another core. The directory matches the DRM
-driver's module/request path (`powervr_sgx/`, not `powervr/`). build.py emits
-`<core>_ukernel.bin`; the driver's `firmware=` request and its packaging tool
-must use the same name — kept in sync across build.py, the driver, the docs and
-the test scripts. Open before this is real: the MIT text must be added to
-linux-firmware's license set, and `Source` needs the public repository URL. The
-source and the built binary are versioned together by `version` + `build_id`.
+Naming (no project name upstream; one file per core; the driver's own
+subdirectory): `powervr_sgx/<core>_ukernel.bin` — `powervr_sgx/sgx545_ukernel.bin`
+here, `powervr_sgx/sgx540_ukernel.bin` for another core. The directory matches the
+DRM driver's module/request path (`powervr_sgx/`, not `powervr/`). build.py emits
+`<core>_ukernel.bin` from the selected core (`cores/<core>.py`); the driver's
+`firmware=` request and its packaging tool use the same name, kept in sync across
+build.py, the driver, the docs and the test scripts.
+
+**Still needed before linux-firmware submission:**
+
+1. **MIT license file entry.** linux-firmware carries each file's license text in
+   its own tree and the WHENCE `License:` line references it. Add the MIT text as
+   `LICENSE.powervr_sgx` (or reuse an existing MIT entry if the maintainers prefer)
+   and point the `License:` line at it.
+2. **Public source URL.** Replace `<source-repository-url>` with the real public
+   repository of the microkernel source (`ukernel.py` + `cores/<core>.py` +
+   `build.py`), so a third party can reproduce the binary from a stable URL.
+3. **Version scheme.** `Version` tracks the manifest `version` (the SGXMKIF
+   interface major.minor); the manifest `build_id` identifies the exact build. Any
+   change to the emitted bytes bumps the build, and the checked-in golden hash
+   (`ukernel/golden/sgx545.sha256`) is what proves a given Version's binary. Source
+   and built binary are versioned together.
 
 ### Not a blocker, noted
 - The microkernel source carries inline hardware-provenance comments (which
