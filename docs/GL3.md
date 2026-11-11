@@ -367,7 +367,11 @@ Agreed with the compiler (2026-11-11):
 Still open:
 
 - the o registers of outputs past the first, and of formats wider than 32
-  bits (H1);
+  bits (H1). The compiler's `rt_packed` (bit i: output i arrives as one
+  packed 32-bit word, moved to o0 as it is; a `load_output` of it reads o0)
+  is in; the driver wires it together with integer sampling after H2, since
+  neither integer nor float color buffers are reachable from GL before
+  `EXT_texture_integer` / `ARB_texture_float`;
 - transform feedback turns Mesa's varying packing back on: st disables
   packing only while `EXT_transform_feedback` is off (`st_extensions.c`, next
   to `max_tex_indirections`). The compiler's varying map has to handle packed
