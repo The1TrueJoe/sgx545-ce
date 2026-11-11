@@ -100,12 +100,13 @@ pvr_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    if (!impl)
       return -ENOMEM;
    if ((e = pvr_alloc(dev_pvr(d), &impl->b, heap, attribs, size, align))) {
-      sgxws_err("ALLOC_DEVICEMEM heap %u size %#x failed: %d\n", heap, size, e);
+      mesa_loge("sgx: ALLOC_DEVICEMEM heap %u size %#x failed: %d", heap, size,
+                e);
       free(impl);
       return e;
    }
    if ((e = pvr_map(dev_pvr(d), &impl->b))) {
-      sgxws_err("map of %#x failed: %d\n", impl->b.devva, e);
+      mesa_loge("sgx: map of %#x failed: %d", impl->b.devva, e);
       pvr_free(dev_pvr(d), &impl->b);
       free(impl);
       return e;
@@ -117,7 +118,7 @@ pvr_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    bo->map = impl->b.cpu;
    memset(bo->map, 0, size);
    if (d->verbose)
-      sgxws_err("heap %2u %#010x +%#x\n", heap, bo->va, size);
+      mesa_logi("sgx: heap %2u %#010x +%#x", heap, bo->va, size);
    return 0;
 }
 
@@ -140,7 +141,7 @@ pvr_bo_wrap(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu, uint32_t size)
    if (!impl)
       return -ENOMEM;
    if ((e = pvr_wrap(dev_pvr(d), &impl->b, cpu, size))) {
-      sgxws_err("WRAP_EXT_MEMORY of %u bytes failed: %d\n", size, e);
+      mesa_loge("sgx: WRAP_EXT_MEMORY of %u bytes failed: %d", size, e);
       free(impl);
       return e;
    }
@@ -331,7 +332,7 @@ pvr_ctx_init(struct sgxws_ctx *c)
    hw[16] = (uint32_t)getpid();
    if ((e = pvr_register_render_ctx(dev_pvr(d), hw, sizeof(hw), 8, &k->hwctx,
                                     &k->hwctx_va))) {
-      sgxws_err("SGX_REGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: SGX_REGISTER_HW_RENDER_CONTEXT failed: %d", e);
       goto fail;
    }
    return 0;
@@ -349,7 +350,7 @@ pvr_ctx_fini(struct sgxws_ctx *c)
    int e;
 
    if ((e = pvr_unregister_render_ctx(dev_pvr(c->dev), k->hwctx)))
-      sgxws_err("SGX_UNREGISTER_HW_RENDER_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: SGX_UNREGISTER_HW_RENDER_CONTEXT failed: %d", e);
    /* the rest of the device memory goes with the services connection (resman) */
    free(k);
 }
@@ -483,8 +484,8 @@ pvr_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
       int e = pvr_flush_rt(dev_pvr(c->dev), s->rtdata.va);
 
       if (e)
-         sgxws_err("SGX_FLUSH_HW_RENDER_TARGET %#x failed: %d\n", s->rtdata.va,
-                   e);
+         mesa_loge("sgx: SGX_FLUSH_HW_RENDER_TARGET %#x failed: %d",
+                   s->rtdata.va, e);
    }
    /* The kernel-data structures stay allocated: the microkernel may still
     * hold pointers into them (docs/GEN.md, "Layout"). */
@@ -654,7 +655,7 @@ pvr_kick_ta_cmd(struct sgxws_ctx *c, uint32_t seq, unsigned kind)
       e = pvr_kick(pvr, &kick);
       c->ns_kick += sgxws_now_ns() - t0;
       if (e) {
-         sgxws_err("SGX_DOKICK failed: %d\n", e);
+         mesa_loge("sgx: SGX_DOKICK failed: %d", e);
       } else if ((kind & TA_FIRST) && pbo(c->target.bo)->sd) {
          /* the kick counted one more pending write on the target */
          done->sd = pbo(c->target.bo)->sd;
@@ -745,7 +746,7 @@ sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
    if (opts->trace_kicks)
       pd->pvr.trace_kicks = opts->trace_kicks;
    if ((e = pvr_init(&pd->pvr))) {
-      sgxws_err("no PVR services on fd %d: %d\n", fd, e);
+      mesa_loge("sgx: no PVR services on fd %d: %d", fd, e);
       pvr_trace_close(&pd->pvr);
       goto fail;
    }

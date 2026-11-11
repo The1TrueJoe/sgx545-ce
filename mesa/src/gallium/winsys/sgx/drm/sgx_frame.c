@@ -42,7 +42,6 @@
 #define H_PDSPIXEL  SGX_HEAP_PDSPIXEL
 #define H_PDSVERTEX SGX_HEAP_PDSVERTEX
 
-#define ws_err sgxws_err
 #define f32    sgxws_f32
 
 uint32_t
@@ -242,7 +241,7 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
    if (o + size > (r->hi ? r->hi : r->size)) {
       /* sgxws_draw keeps the frame rings from filling; this is a bug */
-      ws_err("ring at %#x full (%#x + %#x)\n", r->bo.va, o, size);
+      mesa_loge("sgx: ring at %#x full (%#x + %#x)", r->bo.va, o, size);
       abort();
    }
    r->used = o + size;
@@ -652,15 +651,15 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
       e = sgxws_pvr_dev_create(fd, opts, &d);
 #endif
    if (e)
-      ws_err("no SGX545 kernel driver on fd %d (%s): %d\n", fd,
-             v ? v->name : "?", e);
+      mesa_loge("sgx: no SGX545 kernel driver on fd %d (%s): %d", fd,
+                v ? v->name : "?", e);
    drmFreeVersion(v);
    if (e)
       return NULL;
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
-   d->state_always = getenv("SGX_STATE_ALWAYS") && atoi(getenv("SGX_STATE_ALWAYS"));
+   d->state_always = opts->state_always;
    /* four: the next frame records while this one renders (a game's frame is
     * three renders); docs/PERF.md */
    d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 4;
@@ -832,7 +831,7 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
    return c;
 
 fail:
-   ws_err("context creation failed\n");
+   mesa_loge("sgx: context creation failed");
    ctx_free(c);
    return NULL;
 }
@@ -953,9 +952,10 @@ eot_program(struct sgxws_ctx *c)
       pool = &c->eot_pool[other];
       if (sgxws_seq_after(pool->last_seq, c->done_seq) &&
           sgxws_wait_seq(c, pool->last_seq, 2000))
-         ws_err("a render with the end-of-tile pool's code did not finish\n");
+         mesa_loge(
+            "sgx: a render with the end-of-tile pool's code did not finish");
       if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &pool->bo))
-         ws_err("end-of-tile pool reset failed\n");
+         mesa_loge("sgx: end-of-tile pool reset failed");
       memset(pool->bo.map, 0, pool->size);
       pool->used = 0x100;
       pool->uploaded = 0;
@@ -2078,7 +2078,7 @@ target_wait(struct sgxws_ctx *c)
    if (sgxws_seq_after(s->seq, c->done_seq) &&
        c->slot_kick[s->seq_slot].seq == s->seq &&
        slot_wait(c, s->seq_slot, 2000))
-      ws_err("the target's last render did not finish\n");
+      mesa_loge("sgx: the target's last render did not finish");
    c->ns_target_wait += sgxws_now_ns() - t0;
 }
 
@@ -2130,7 +2130,7 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    sgxws_vdm_end(c);
    target_wait(c);
    if ((e = code_sync(c)))
-      ws_err("shader upload refused: %d\n", e);
+      mesa_loge("sgx: shader upload refused: %d", e);
    else
       e = kif->kick(c, seq);
    c->kicks = seq;
@@ -2155,10 +2155,11 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
 
       if (kif->frame_info)
          kif->frame_info(c, info, sizeof(info));
-      ws_err("frame %u (target %#x %ux%u frame %u, kick %u, slot %u, %.3f s): "
-             "%u objects, %s, rc %d\n",
-             c->frames, (unsigned)c->target.va, s->w, s->h, s->frames, seq,
-             c->slot, sgxws_now_ns() / 1e9, c->draws, info, e);
+      mesa_logi(
+         "sgx: frame %u (target %#x %ux%u frame %u, kick %u, slot %u, %.3f s): "
+         "%u objects, %s, rc %d",
+         c->frames, (unsigned)c->target.va, s->w, s->h, s->frames, seq, c->slot,
+         sgxws_now_ns() / 1e9, c->draws, info, e);
    }
 
    s->frames++;
@@ -2175,9 +2176,10 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
       dt = sgxws_now_ns() - t0;
       c->ns_slot_wait += dt;
       if (c->dev->verbose && dt > 2000000)
-         ws_err("slot %u: waited %.1f ms for kick %u (last kick %u, done "
-                "%u)\n",
-                c->slot, dt / 1e6, waited, c->kicks, done);
+         mesa_logi(
+            "sgx: slot %u: waited %.1f ms for kick %u (last kick %u, done "
+            "%u)",
+            c->slot, dt / 1e6, waited, c->kicks, done);
    }
    ring_use_slot(&c->pds_pix, c->slot);
    ring_use_slot(&c->pds_vtx, c->slot);

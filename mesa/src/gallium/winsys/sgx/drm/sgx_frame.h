@@ -41,6 +41,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "util/log.h"
+
 #include "sgxws.h"
 
 /* where a buffer lives: the SGX heap ids (the low byte of the DDK's heap ID),
@@ -75,7 +77,7 @@ struct sgxws_dev {
    int verbose;
    bool flush_rt; /* sgxws_dev_options */
    unsigned frame_gap_us;
-   bool state_always; /* SGX_STATE_ALWAYS: every draw its own programs and TA state */
+   bool state_always; /* every draw its own programs and TA state */
    unsigned slots;
    int dry_run;
    unsigned ta_split; /* sgxws_dev_options */
@@ -285,8 +287,6 @@ void sgxws_vdm_end(struct sgxws_ctx *c);
 
 uint64_t sgxws_now_ns(void);
 uint32_t sgxws_f32(float x);
-
-#define sgxws_err(...) fprintf(stderr, "sgx: " __VA_ARGS__)
 
 #ifdef __cplusplus
 }

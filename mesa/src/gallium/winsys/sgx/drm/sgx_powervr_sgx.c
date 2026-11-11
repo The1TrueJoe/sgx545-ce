@@ -40,7 +40,6 @@
 
 #include "drm-uapi/powervr_sgx_drm.h"
 #include "util/macros.h"
-#include "util/u_debug.h"
 #include "util/simple_mtx.h"
 #include "util/vma.h"
 
@@ -74,6 +73,7 @@ struct psgx_dev {
    struct sgxws_dev base;
    int fd;
    bool lost;         /* -EIO: the GPU couldn't be recovered; nothing is sent */
+   unsigned pb_pages; /* the parameter buffer's size (0: the kernel's) */
    uint32_t vm;       /* VM context */
    uint32_t timeline; /* syncobj: every job signals the next point */
    simple_mtx_t lock; /* the address space, the timeline's points, the zombies */
@@ -165,7 +165,7 @@ vm_unmap(struct psgx_dev *dd, uint64_t va, uint64_t size)
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &a);
 
    if (e)
-      sgxws_err("VM_UNMAP %#llx +%#llx failed: %d\n", (unsigned long long)va,
+      mesa_loge("sgx: VM_UNMAP %#llx +%#llx failed: %d", (unsigned long long)va,
                 (unsigned long long)size, e);
 }
 
@@ -272,7 +272,8 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    impl->dmabuf_fd = -1;
    impl->refs = 1;
    if ((e = create_bo(dd, bytes, code, &impl->handle))) {
-      sgxws_err("CREATE_BO %#llx failed: %d\n", (unsigned long long)bytes, e);
+      mesa_loge("sgx: CREATE_BO %#llx failed: %d", (unsigned long long)bytes,
+                e);
       free(impl);
       return e;
    }
@@ -300,13 +301,13 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    va = va_alloc(dd, heap, bytes, align > 0x1000 ? align : 0x1000);
    simple_mtx_unlock(&dd->lock);
    if (!va) {
-      sgxws_err("heap %u has no room for %#llx bytes\n", heap,
+      mesa_loge("sgx: heap %u has no room for %#llx bytes", heap,
                 (unsigned long long)bytes);
       e = -ENOMEM;
       goto fail_map;
    }
    if ((e = vm_map(dd, impl->handle, va, bytes))) {
-      sgxws_err("VM_MAP heap %u at %#llx +%#llx failed: %d\n", heap,
+      mesa_loge("sgx: VM_MAP heap %u at %#llx +%#llx failed: %d", heap,
                 (unsigned long long)va, (unsigned long long)bytes, e);
       simple_mtx_lock(&dd->lock);
       util_vma_heap_free(&dd->vma[heap], va, bytes);
@@ -318,7 +319,7 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    bo->va = impl->va;
    bo->map = impl->map;
    if (d->verbose)
-      sgxws_err("heap %2u %#010x +%#x%s\n", heap, bo->va, size,
+      mesa_logi("sgx: heap %2u %#010x +%#x%s", heap, bo->va, size,
                 code ? " (code)" : "");
    return 0;
 
@@ -434,7 +435,7 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
    impl->map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
    if (impl->map == MAP_FAILED) {
       e = -errno;
-      sgxws_err("mmap of an imported dma-buf failed: %d\n", e);
+      mesa_loge("sgx: mmap of an imported dma-buf failed: %d", e);
       goto fail;
    }
    simple_mtx_lock(&dd->lock);
@@ -449,7 +450,7 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
       goto fail_map;
    }
    if ((e = vm_map(dd, handle, va, bytes))) {
-      sgxws_err("VM_MAP of an imported dma-buf failed: %d\n", e);
+      mesa_loge("sgx: VM_MAP of an imported dma-buf failed: %d", e);
       simple_mtx_lock(&dd->lock);
       util_vma_heap_free(&dd->vma[impl->heap], va, bytes);
       simple_mtx_unlock(&dd->lock);
@@ -535,8 +536,8 @@ psgx_code_upload(struct sgxws_dev *d, struct sgxws_bo *bo, uint32_t off,
    int e = xioctl(ddev(d)->fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a);
 
    if (e)
-      sgxws_err(
-         "UPLOAD_CODE at %#x +%#x: %d, first refused instruction at %#x: %08x %08x\n",
+      mesa_loge(
+         "sgx: UPLOAD_CODE at %#x +%#x: %d, first refused instruction at %#x: %08x %08x",
          impl->va + off, size, e, impl->va + (uint32_t)a.bad_offset,
          ((uint32_t *)impl->map)[a.bad_offset / 4 + 1],
          ((uint32_t *)impl->map)[a.bad_offset / 4]);
@@ -572,10 +573,7 @@ create_context(struct psgx_dev *dd, int priority, uint32_t *handle)
                   : priority < 0 ? DRM_POWERVR_SGX_CTX_PRIORITY_LOW
                                  : DRM_POWERVR_SGX_CTX_PRIORITY_NORMAL,
       .vm_context_handle = dd->vm,
-      /* SGX_PB_PAGES: the parameter buffer's size, for experiments; the
-       * device's first render context sizes it for everyone (0: the
-       * kernel's default) */
-      .param_buffer_pages = (uint32_t)debug_get_num_option("SGX_PB_PAGES", 0),
+      .param_buffer_pages = dd->pb_pages,
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
 
@@ -583,7 +581,7 @@ create_context(struct psgx_dev *dd, int priority, uint32_t *handle)
    if ((e == -EACCES || e == -EPERM) && priority > 0)
       return create_context(dd, 0, handle);
    if (e)
-      sgxws_err("CREATE_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: CREATE_CONTEXT failed: %d", e);
    *handle = a.handle;
    return e;
 }
@@ -625,9 +623,10 @@ replace_context(struct sgxws_ctx *c)
    } else {
       c->reset = SGXWS_RESET_GUILTY;
    }
-   sgxws_err("GPU reset (%s): a new context; the frames in flight are lost\n",
-             c->reset == SGXWS_RESET_GUILTY ? "this context's job"
-                                            : "another context's job");
+   mesa_loge(
+      "sgx: GPU reset (%s): a new context; the frames in flight are lost",
+      c->reset == SGXWS_RESET_GUILTY ? "this context's job"
+                                     : "another context's job");
    xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
    if (create_context(dd, c->priority, &handle)) {
       dd->lost = true;
@@ -646,7 +645,7 @@ psgx_ctx_fini(struct sgxws_ctx *c)
    int e = xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &a);
 
    if (e)
-      sgxws_err("DESTROY_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: DESTROY_CONTEXT failed: %d", e);
    free(k);
 }
 
@@ -664,7 +663,7 @@ psgx_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
       xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
 
    if (e) {
-      sgxws_err("CREATE_RT_DATASET %ux%u failed: %d\n", rt->w, rt->h, e);
+      mesa_loge("sgx: CREATE_RT_DATASET %ux%u failed: %d", rt->w, rt->h, e);
       return e;
    }
    rt->k = (void *)(uintptr_t)a.handle;
@@ -682,7 +681,7 @@ psgx_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
 
    /* one of a context a reset replaced went with it */
    if (e && rt->ctx_gen == ((struct psgx_ctx *)c->k)->gen)
-      sgxws_err("DESTROY_RT_DATASET failed: %d\n", e);
+      mesa_loge("sgx: DESTROY_RT_DATASET failed: %d", e);
 }
 
 /* ------------------------------------------------------------------ submission
@@ -812,11 +811,11 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       if (e == -ECANCELED) {
          replace_context(c);
       } else if (e == -EIO) {
-         sgxws_err("the GPU is lost: nothing more is rendered\n");
+         mesa_loge("sgx: the GPU is lost: nothing more is rendered");
          dd->lost = true;
          c->reset = SGXWS_RESET_LOST;
       } else {
-         sgxws_err("SUBMIT_JOBS failed: %d\n", e);
+         mesa_loge("sgx: SUBMIT_JOBS failed: %d", e);
       }
    }
    c->ns_kick += sgxws_now_ns() - t0;
@@ -917,10 +916,11 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
       return -ENOMEM;
    d->kif = &psgx_kif;
    dd->fd = fd;
+   dd->pb_pages = opts->pb_pages;
    if (opts->trace)
-      sgxws_err("SGX_TRACE is for the services driver; ignored\n");
+      mesa_logw("sgx: SGX_TRACE is for the services driver; ignored");
    if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) || !cap) {
-      sgxws_err("powervr_sgx without timeline syncobjs\n");
+      mesa_loge("sgx: powervr_sgx without timeline syncobjs");
       e = -ENODEV;
       goto fail;
    }
@@ -930,7 +930,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
                       sizeof(li))) ||
        (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET, &hi,
                       sizeof(hi)))) {
-      sgxws_err("DEV_QUERY failed: %d\n", e);
+      mesa_loge("sgx: DEV_QUERY failed: %d", e);
       goto fail;
    }
    d->info.core_id = gi.core_id;
@@ -957,7 +957,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    if (!dd->has_heap[SGX_HEAP_GENERAL] || !dd->has_heap[SGX_HEAP_PDSPIXEL] ||
        !dd->has_heap[SGX_HEAP_PDSVERTEX] || !dd->has_heap[SGX_HEAP_PIXSHADER] ||
        !dd->has_heap[SGX_HEAP_VTXSHADER]) {
-      sgxws_err("powervr_sgx lacks a heap the winsys needs\n");
+      mesa_loge("sgx: powervr_sgx lacks a heap the winsys needs");
       e = -ENODEV;
       goto fail_heaps;
    }
@@ -966,7 +966,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    d->usse_base_index[1] =
       (uint8_t)heaps[DRM_POWERVR_SGX_HEAP_USSE_VERTEX].usse_base_index;
    if ((e = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT, &vm))) {
-      sgxws_err("CREATE_VM_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: CREATE_VM_CONTEXT failed: %d", e);
       goto fail_heaps;
    }
    dd->vm = vm.handle;
@@ -976,7 +976,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    }
    simple_mtx_init(&dd->lock, mtx_plain);
    if (opts->verbose)
-      sgxws_err("powervr_sgx: core %#x rev %#x, firmware interface %u\n",
+      mesa_logi("sgx: powervr_sgx: core %#x rev %#x, firmware interface %u",
                 gi.core_id, gi.core_revision, gi.fw_interface_version);
    *out = d;
    return 0;

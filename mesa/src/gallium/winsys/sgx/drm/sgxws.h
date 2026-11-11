@@ -324,6 +324,10 @@ struct sgxws_dev_options {
    unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 4) */
    unsigned ta_split;     /* a TA kick every n objects of a frame, the scene's
                              render at its end (0: one kick a frame) */
+   bool state_always;     /* every draw its own programs and TA state */
+   unsigned pb_pages;     /* the parameter buffer's size; the device's first
+                             render context sizes it for everyone (0: the
+                             kernel's default) */
 };
 
 /* fd: the GPU's kernel driver; opts may be NULL */
