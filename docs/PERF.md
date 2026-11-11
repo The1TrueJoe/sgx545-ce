@@ -652,6 +652,42 @@ Still open, in order:
 - 8-bit colour math (`sopwm`, `sop2` on texels and lowp colours, as libusc does);
 - the texel's channel swizzle in the sample, so a texel colour is 0 instructions.
 
+### The desktop's programs (glamor, xfwm4), 2026-11-11
+
+The X server's own programs, built the way glamor builds them on GL 2.1 / GLSL 1.20
+(`tools/usc/glamor_corpus.py` over the Debian trixie X server source, 21.1.16), compiled
+in driver mode (`run_corpus.py --driver-all`). Not yet checked against a shader dump from
+a running X server.
+
+- xfwm4 4.20 composites with XRender (`src/compositor.c`), so its drawing is glamor's
+  composite programs. Its GLX path only puts the finished frame on screen, a textured quad
+  in fixed function (`GL_REPLACE`): one sample, no ALU.
+- Rectangle fills, copy area and glyphs: 0-3 ALU instructions each. Nothing to win.
+- Composite (22 source × mask × combine programs that read a texture): 88-212 instructions
+  and 18-19 temporaries, because the repeat-mode branches (`rel_sampler`, `rel_tex_coord`,
+  on the `source_repeat_mode` / `mask_repeat_mode` uniforms) were flattened into selects, so
+  every pixel ran every repeat mode. dae9a8b keeps an `if` on a uniform condition
+  (divergence analysis) a branch when it holds more than a few instructions, so a pixel
+  runs only the path for its mode. Measured as the program with the mode a constant
+  (instructions, samples apart; the branch tests add one test and branch per `if`):
+
+  | mode | when glamor uses it | flattened → branch |
+  |---|---|---|
+  | RepeatNone / Normal / Pad / Reflect | every picture that fits one texture | 88-212 → 0-6 |
+  | RepeatFix + None | a pixmap larger than the texture limit, or an alpha-less transformed picture | 88-212 → 13-48 |
+  | RepeatFix + Normal | the same, repeating | 88-212 → 1-20 |
+
+  Corpus c1-c3, glmark2, Minecraft, loops: byte-identical (no existing program has such an
+  `if`). `SGX_COMPILER_DEBUG=flattenuniform` restores the selects.
+- `nir_opt_preamble` (measure only, ALU cost 1): on the uniform program it lifts 35 of
+  131 ALU ops (comp_tex_tex_n), but those are mostly the repeat-mode tests, which still
+  cost a test into a predicate per branch when the result comes from the preamble. With the
+  mode fixed it lifts 0-1 NIR ops on the common path and 1-2 on RepeatFix. Fills,
+  copies and glyphs: 0.
+
+The fragment secondary preamble isn't worth building for the desktop. The gradients
+(15-34 ops a program, above) are the only glamor programs it would help, and those are rare.
+
 ## Kernel driver (powervr_sgx)
 
 What a job costs on the CPU side, from a submit to its fence, measured with the
