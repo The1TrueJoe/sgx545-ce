@@ -660,7 +660,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       opts.tex_bgra = ~not_bgra;
       /* a coordinate only samples read: the PDS samples from the set
        * itself (a pure-sample DOUTI, source 0x24, below) */
-      opts.pds_samples_alone = true;
+      opts.pds_samples_alone = screen->core->pds_samples;
    }
    /* texels a mediump read takes come back F16 (the sample's T3, below) */
    opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&

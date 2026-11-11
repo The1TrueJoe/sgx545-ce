@@ -47,7 +47,11 @@ struct sgx_core {
    unsigned fs_inputs;        /* vec4 varyings */
    unsigned gl_max_temps;     /* GL's temporary limit (not the register file) */
    unsigned temps;            /* USSE temporaries r0.. (compiler) [HW] */
+   unsigned pa_regs, sa_regs; /* primary, secondary attribute registers [HW] */
    unsigned coord_sets;       /* TSP texture coordinate sets of 4 [HW] */
+   unsigned max_iters;        /* PDS iterations of a pixel program [D] */
+   unsigned max_samples;      /* texture samples of a pixel program [D] */
+   unsigned fragcoord_iter;   /* the PDS iterator of gl_FragCoord [HW] */
    /* render targets, where the kernel doesn't report them (services) */
    unsigned rt_max_width, rt_max_height, rt_max_samples; /* [D] */
    unsigned line_width_max; /* ISPB: width * 16 in 8 bits [D] */
@@ -60,7 +64,12 @@ struct sgx_core {
    unsigned dma_chunk_dwords;   /* a PDS DMA moves at most this [HW] */
 
    /* ---- features ---- */
-   bool f16;              /* USSE F16 and C10 arithmetic [HW] */
+   bool f16;              /* USSE F16 arithmetic and iteration [HW] */
+   bool c10;              /* C10 color arithmetic (sop2/sop3/sopwm) [HW] */
+   bool efo_coissue;      /* efo co-issue chains [HW] */
+   bool idx_regs;         /* indexed SA access (ima16 into idx1) [HW] */
+   bool ld_const_mem;     /* constants past SA from memory (ld.a.d) [HW] */
+   bool pds_samples;      /* the PDS samples non-dependent textures [HW] */
    bool f16_sample_return; /* the TAG returns F16 texels (T3 01028800) [HW] */
 
    /* ---- what hangs it ---- */
