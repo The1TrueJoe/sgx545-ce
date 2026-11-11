@@ -49,7 +49,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M7 | tests in Mesa's format (`ci/`) | suites in (2026-11-11); expectations to refresh from the next full runs | mesa-gallium |
 | M8 | `docs/drivers/sgx.rst` | written: mesa/docs/drivers/sgx.rst | mesa-gallium |
 | M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
-| M10 | sRGB textures right (GL 2.1 is advertised) | must fix before the MR | mesa-gallium |
+| M10 | sRGB textures right (GL 2.1 is advertised) | render targets and one-level filtering fixed (b37aec7, 2a52bdf), on hardware next; border color open | mesa-gallium |
 
 ### M1. The upstream build is powervr_sgx only
 
@@ -211,6 +211,17 @@ but piglit's `ext_texture_srgb` fails on:
 
 Mipmap generation of sRGB textures passes since adecb99 (the device chain
 past the last level).
+
+**2026-11-11 (b37aec7, 2a52bdf, waiting for a hardware run).**
+- `fbo-srgb` and `fbo-alphatest-formats` drew nothing: the driver refused an
+  sRGB texture as a render target. It now renders through the linear format,
+  which is right while `EXT_framebuffer_sRGB` isn't exposed.
+- LINEAR filtering of an sRGB texture sampled at one level (one level, or no
+  mipmap filter) is done in the shader: four texel-centre samples, decoded,
+  then mixed (`lower_srgb_filter`). Mipmapped minification still filters the
+  encoded texels, because the shader doesn't know the level the TPU picks.
+- Border color fails for every format (CLAMP_TO_BORDER is drawn as
+  CLAMP_TO_EDGE). The same four-tap path can choose the border color per tap.
 
 The 40 failures are in `ci/sgx-piglit-fails.txt` under their reason. A driver
 advertising 2.1 with these failing will be questioned, so they get fixed, not

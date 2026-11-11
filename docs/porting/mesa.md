@@ -23,6 +23,10 @@ assumes a kernel that reports the core id and revision and runs a render job.
     them. Wait on the kernel's event (`poll()` on the fd for powervr_sgx) or
     pre-sleep to the expected render time (`docs/PERF.md`, "tex gap").
   - Nothing may sit at a heap's first byte: a state word of 0 would name it.
+  - Program code is only appended to under powervr_sgx (the kernel checks it
+    as it is uploaded). Free it anyway: keep it in chunks that are reset once
+    their programs are deleted and no render can run them. A bump allocator
+    runs out when a game restarts its renderer (`mesa/tests/sgx_progchurn.c`).
 
 ### 2. The first clear
 
@@ -59,6 +63,9 @@ assumes a kernel that reports the core id and revision and runs a render job.
     (`sgx_core.sample_texture_heap_only`).
   - Mipmapped NPOT textures and large NPOT cube maps lock the 3D
     (`sgx_core.npot_mip_hangs`).
+  - The TPU filters sRGB texels before the shader decodes them. Filter
+    one-level sRGB textures in the shader, and render into sRGB textures
+    through their linear format (piglit `ext_texture_srgb`).
   - Rectangle textures arrive from Mesa's fixed-function path unnormalized.
     The driver lowers them itself (`lower_rect`, then `textureSize` from
     driver constants). Compositors bind their screen pixmap that way:
