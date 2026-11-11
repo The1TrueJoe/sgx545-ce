@@ -2991,13 +2991,43 @@ iter_reg(const struct sgx_iter *it)
  * component) needs no plain iteration: the PDS samples from the set itself.
  * Its iteration goes and the later ones move down, before anything is
  * emitted, since iterations fill PA in PDS program order (PDS.md "DOUTI");
- * c->sample_set maps each such load to its set + 1 for emit_tex. */
+ * c->sample_set maps each such load to its set + 1 for emit_tex. A
+ * projected sample (find_projected: xy and w of this load) counts too: the
+ * PDS projects as it samples, through a swizzle mov or not. */
+static bool
+proj_use(struct sgx_ctx *c, nir_intrinsic_instr *ld, nir_src *u)
+{
+   nir_instr *ui = nir_src_use_instr(u);
+   if (ui->type == nir_instr_type_alu) {
+      /* a swizzle mov find_projected took out of the program */
+      nir_alu_instr *m = nir_instr_as_alu(ui);
+      if (m->op != nir_op_mov || !_mesa_set_search(c->skip, &m->instr))
+         return false;
+      nir_foreach_use_including_if (v, &m->def) {
+         if (nir_src_is_if(v) || !proj_use(c, ld, v))
+            return false;
+      }
+      return true;
+   }
+   if (ui->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *t = nir_instr_as_tex(ui);
+   struct hash_entry *he = _mesa_hash_table_search(c->proj, t);
+   int ci = nir_tex_instr_src_index(t, nir_tex_src_coord);
+   int pi = nir_tex_instr_src_index(t, nir_tex_src_projector);
+   return he && he->data == ld && (u == &t->src[ci].src || u == &t->src[pi].src);
+}
+
 static bool
 sample_only_load(struct sgx_ctx *c, nir_intrinsic_instr *ld, unsigned comps)
 {
+   bool proj = !sgx_debug(c, SGX_DBG_NO_PROJ_ALONE) && comps == 4 &&
+               ld->def.num_components == 4;
    nir_foreach_use_including_if (u, &ld->def) {
       if (nir_src_is_if(u))
          return false;
+      if (proj && proj_use(c, ld, u))
+         continue;
       nir_instr *ui = nir_src_use_instr(u);
       if (ui->type != nir_instr_type_tex)
          return false;
@@ -3568,9 +3598,12 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    struct hash_entry *ss =
       ls.is_ssa ? _mesa_hash_table_search(c->sample_set, nir_def_instr(ls.ssa))
                 : NULL;
+   if (he && !ss)
+      ss = _mesa_hash_table_search(c->sample_set, he->data);
    if (ss) {
       /* a set only samples read: no plain iteration (drop_sample_only_iters) */
       s->dependent = false;
+      s->proj = he != NULL;
       s->set = (uintptr_t)ss->data - 1;
    } else if (he) {
       nir_intrinsic_instr *load = he->data;
@@ -6486,6 +6519,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"nophases", SGX_DBG_NO_PHASES,
     "Keep a discarding fragment program in one phase"},
+   {"noprojalone", SGX_DBG_NO_PROJ_ALONE,
+    "Keep the plain iteration of a varying only projected samples read"},
    {"noconstswap", SGX_DBG_NO_CONST_SWAP,
     "Keep 1 * k - x as is (a limm for src0), not x * -1 + k"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
