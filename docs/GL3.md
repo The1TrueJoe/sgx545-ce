@@ -336,15 +336,24 @@ Agreed with the compiler (2026-11-11):
   dependent sample at (i + 0.5) / size with its own texture state from the
   driver (NEAREST, no mips, clamp, the level's address), never the bound
   sampler's filter or wrap; the compiler marks those samples.
-- **Driver constants**, all under the compiler's 1024 (user constants end
-  near 548): 896 + 3u the base level's width, height and depth of unit u
-  (0-15); 944 + n UBO n's GPU address (`ubo_base_k` = 944, up to 16); 960 +
-  4s the border colors; 1000-1015 today's `SGX_K_TEXSIZE` until the 896 block
-  replaces it; 1016 gl_InstanceID. Under `native_integers` the sizes and
+- **Driver constants**, above the user constants and the compiler's other
+  numbers (`SGX_MAX_CONST_K` = 1280): 1024 + 3u the base level's width,
+  height and depth of unit u (0-15); 1072 gl_InstanceID; 1080 + n UBO n's
+  GPU address (`ubo_base_k` = 1080, up to 16); the rest of 1024-1279
+  reserved. 960 + 4s are the border colors. `SGX_K_TEXSIZE` (1000) and
+  `SGX_K_INSTANCE` (1016) move into the block when the driver takes the
+  compiler's `native_integers`. Under `native_integers` the sizes and
   gl_InstanceID are raw integers, otherwise floats. The compiler's
   `sgx_lower_tex` runs first (textureGrad, offsets, rect, 1D, texelFetch); a
   texelFetch sample (`sgx_sample_info.fetch`) gets NEAREST, MIPMAP_NEAREST
   and clamp on the bound texture.
+- **Flat varyings:** the compiler puts the first flat varying that fits one
+  vec4 (a split int or ivec2 counts as four floats) on the colour source and
+  says which in `sgx_varyings` and `sgx_shader`; the driver sets output
+  select b11 and the DOUTI source 0x20 iteration for it. The driver
+  replicates the provoking vertex for every other flat varying, with a
+  vertex-program variant made on plain NIR before `sgx_compile` whose
+  outputs, names and types are the original's.
 - **Render-target formats:** the fragment variant is keyed on the bound
   surfaces' formats; the compiler's color epilogue packs each output into
   its surface's 32-bit word, and the driver names the o register of each
