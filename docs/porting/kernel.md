@@ -46,6 +46,22 @@ shader code-base windows (535 and 540 have no `USE_CODE_BASE` registers), the op
 microkernel's command constants, and the validator's USSE2 tables. The heap layout, a
 single-kick start (no `EVENT_KICK2`) and a single memory context are per-core now.
 
+## Building the module for a board
+
+Build against the board's own kernel: the same source, the same config (its
+`/proc/config.gz`), **and the same compiler**. With `MODVERSIONS` each imported symbol
+carries a genksyms CRC, and those move with compiler features as well as with the
+config: gcc 15 sets `CC_HAS_COUNTED_BY` and other options that change the type
+expansions genksyms hashes. Modules from Ubuntu's gcc 13 against our OMAP3630 test
+board's exact config were refused ("disagrees about version of symbol
+dev_driver_string") by its gcc 15.3 kernel. Read the board's `CONFIG_CC_VERSION_TEXT`
+first, build with that compiler version, and check the `CONFIG_CC_HAS_*` lines against the
+board's config before loading (`drm/ci/omap3630-kernel.sh`, `powervr-sgx-omap3630.yml`).
+The DRM helper modules the driver needs (`drm_exec`, `drm_gpuvm`, `gpu-sched`,
+`drm_shmem_helper`) come from the same build when the board's kernel doesn't have them.
+A refused helper is harmless: load them first, and `powervr_sgx` itself only if they
+all went in.
+
 ## 1. Publish the device
 
 Establish: the driver binds, with the register window mapped, the interrupt routed, and
