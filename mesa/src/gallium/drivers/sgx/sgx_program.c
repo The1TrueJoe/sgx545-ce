@@ -31,6 +31,7 @@
 #include "sgx_context.h"
 #include "sgx_csb.h"
 #include "sgx_program.h"
+#include "sgx_core.h"
 #include "sgx_screen.h"
 #include "sgx_texture.h"
 
@@ -663,6 +664,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    }
    /* texels a mediump read takes come back F16 (the sample's T3, below) */
    opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
+                      screen->core->f16_sample_return &&
                       !(sgx_drv_debug & SGX_DEBUG_NO_F16_SAMPLES);
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&

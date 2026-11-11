@@ -49,7 +49,7 @@ const char *sgx_dump_code_dir(void);
          fprintf(stderr, "sgx: " __VA_ARGS__);                                 \
    } while (0)
 
-struct sgx_device_features;
+struct sgx_core;
 
 struct sgx_screen {
    struct pipe_screen base;
@@ -83,7 +83,7 @@ struct sgx_screen {
 
    /* the core: what the kernel reports, and what its entry adds */
    const struct sgxws_device_info *info;
-   const struct sgx_device_features *features;
+   const struct sgx_core *core; /* sgx_core.h */
    char name[48];
 };
 

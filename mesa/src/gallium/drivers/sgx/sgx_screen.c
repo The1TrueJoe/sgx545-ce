@@ -15,7 +15,7 @@
 #include "util/u_screen.h"
 
 #include "sgx_context.h"
-#include "sgx_device.h"
+#include "sgx_core.h"
 #include "sgx_program.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
@@ -113,7 +113,7 @@ sgx_get_screen_fd(struct pipe_screen *pscreen)
 static void
 sgx_init_shader_caps(struct pipe_screen *pscreen)
 {
-   const struct sgx_device_features *f = sgx_screen(pscreen)->features;
+   const struct sgx_core *f = sgx_screen(pscreen)->core;
 
    for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT;
         s += MESA_SHADER_FRAGMENT) {
@@ -146,7 +146,7 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
       /* u[i]: indexed from SA, or from the block when the array doesn't fit
        * (without it GLSL selects over the whole array, a load per element) */
       caps->indirect_const_addr = true;
-      caps->max_temps = f->max_temps;
+      caps->max_temps = f->gl_max_temps;
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = f->samplers;
          /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
@@ -164,7 +164,7 @@ static void
 sgx_init_screen_caps(struct pipe_screen *pscreen)
 {
    struct sgx_screen *screen = sgx_screen(pscreen);
-   const struct sgx_device_features *f = screen->features;
+   const struct sgx_core *f = screen->core;
    struct pipe_caps *caps = (struct pipe_caps *)&pscreen->caps;
 
    u_init_pipe_screen_caps(pscreen, 1);
@@ -202,8 +202,8 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    caps->fs_coord_pixel_center_half_integer = true;
    caps->min_line_width = caps->min_line_width_aa = 1;
    caps->min_point_size = caps->min_point_size_aa = 1;
-   caps->max_line_width = caps->max_line_width_aa = 16;
-   caps->max_point_size = caps->max_point_size_aa = 511;
+   caps->max_line_width = caps->max_line_width_aa = f->line_width_max;
+   caps->max_point_size = caps->max_point_size_aa = f->point_size_max;
    caps->point_size_granularity = caps->line_width_granularity = 0.1f;
    caps->max_texture_lod_bias = 16;
    /* What desktop GL has and the hardware does in the shader: st lowers the
@@ -382,16 +382,11 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       return NULL;
    }
    screen->info = sgxws_dev_info(screen->dev);
-   screen->features = sgx_device_features(screen->info);
-   if (!screen->features) {
-      mesa_loge("sgx: no support for core id %#x revision %#x",
-                screen->info->core_id, screen->info->core_revision);
-      sgxws_dev_destroy(screen->dev);
-      FREE(screen);
-      return NULL;
-   }
+   /* the winsys refused a core without a description */
+   screen->core =
+      sgx_core_lookup(screen->info->core_id, screen->info->core_revision);
    snprintf(screen->name, sizeof(screen->name), "PowerVR %s",
-            screen->features->name);
+            screen->core->name);
    screen->ro = ro;
    screen->zero_copy =
       !(sgx_drv_debug & SGX_DEBUG_NO_ZERO_COPY) &&

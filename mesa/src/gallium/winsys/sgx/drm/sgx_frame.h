@@ -41,6 +41,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "sgx_core.h"
 #include "sgxws.h"
 
 /* where a buffer lives: the SGX heap ids (the low byte of the DDK's heap ID),
@@ -67,6 +68,7 @@ struct sgxws_kif;
 /* the connection to the kernel driver; a backend's device embeds it first */
 struct sgxws_dev {
    const struct sgxws_kif *kif;
+   const struct sgx_core *core; /* the core info describes (sgx_core.h) */
    struct sgxws_device_info info; /* filled by the backend; PCI ids by
                                      sgxws_dev_create */
    uint32_t heap_base[16];        /* device address of each heap, by heap id */

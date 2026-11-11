@@ -112,12 +112,15 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
 
    /* Whatever the texture unit samples lives in the texture heap: render
     * targets are sampled too (FBO textures, the back buffer a blit reads).
-    * Sampling from elsewhere hangs some SGX545 revisions (the sample cache
-    * erratum); the general heap only when the texture heap is full. */
+    * Sampling from elsewhere hangs some cores (the sample cache erratum,
+    * sgx_core.sample_texture_heap_only); the general heap only when the
+    * texture heap is full. */
    switch (mem) {
    case SGXWS_MEM_RENDER_TARGET:
-      e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
-                              size, align);
+      e = d->core->sample_texture_heap_only
+             ? sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE,
+                                   SGXWS_ATTRIBS_COLOR, size, align)
+             : -ENOMEM;
       if (e)
          e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR,
                                  size, align);
@@ -609,17 +612,17 @@ dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secondary)
  * captures), so the chunks carry that too [D for the values, G for the
  * meaning].
  */
-#define DMA_CHUNK 16
-
 static uint32_t
-pds_dma_task(struct sgxws_ring *r, uint32_t src, uint32_t dwords,
-             uint32_t task_w0, uint32_t task_w1, uint32_t *rows)
+pds_dma_task(struct sgxws_ctx *c, struct sgxws_ring *r, uint32_t src,
+             uint32_t dwords, uint32_t task_w0, uint32_t task_w1,
+             uint32_t *rows)
 {
+   const uint32_t chunk = c->dev->core->dma_chunk_dwords;
    struct pds p = {0};
    unsigned row = 0;
 
-   for (uint32_t off = 0; off < dwords; off += DMA_CHUNK, row++) {
-      uint32_t n = dwords - off < DMA_CHUNK ? dwords - off : DMA_CHUNK;
+   for (uint32_t off = 0; off < dwords; off += chunk, row++) {
+      uint32_t n = dwords - off < chunk ? dwords - off : chunk;
 
       pds_d0(&p, 2 * row, src + off * 4);
       pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, (n - 1) & 3, 1));
@@ -652,11 +655,25 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
       e = sgxws_pvr_dev_create(fd, opts, &d);
 #endif
    if (e)
-      ws_err("no SGX545 kernel driver on fd %d (%s): %d\n", fd,
+      ws_err("no SGX kernel driver on fd %d (%s): %d\n", fd,
              v ? v->name : "?", e);
    drmFreeVersion(v);
    if (e)
       return NULL;
+   /* a core this winsys has a description of (sgx_core.h), or none */
+   d->core = sgx_core_lookup(d->info.core_id, d->info.core_revision);
+   if (!d->core) {
+      ws_err("SGX core id %#x revision %#x has no description (sgx_core.c)\n",
+             d->info.core_id, d->info.core_revision);
+      d->kif->dev_destroy(d);
+      return NULL;
+   }
+   /* render-target limits the kernel didn't report: the core's */
+   if (!d->info.rt_max_width) {
+      d->info.rt_max_width = d->core->rt_max_width;
+      d->info.rt_max_height = d->core->rt_max_height;
+      d->info.rt_max_samples = d->core->rt_max_samples;
+   }
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
@@ -1246,11 +1263,11 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n,
  * Half that (64 / output dwords) hung the GPU at 12 output dwords. The DDK's
  * clear draws 8 per task. */
 static uint32_t
-vertices_per_task(uint32_t out_dwords)
+vertices_per_task(const struct sgx_core *core, uint32_t out_dwords)
 {
-   uint32_t o = (out_dwords + 3) & ~3u, v = 128 / (o ? o : 4);
+   uint32_t o = (out_dwords + 3) & ~3u, v = core->vertex_task_dwords / (o ? o : 4);
 
-   return v > 16 ? 16 : v;
+   return v > core->vertex_task_max ? core->vertex_task_max : v;
 }
 
 /* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md
@@ -1443,7 +1460,7 @@ vpgen_object(struct sgxws_ctx *c, bool set, const struct sgxws_rect *tiles,
    }
    state_block(c, blk, 9, 9, 0);
    vdm_draw(c, prim, count, c->idx, v.va, 8, 2, c->vpgen_vs, 2, 4, 0,
-            vertices_per_task(4));
+            vertices_per_task(c->dev->core, 4));
 }
 
 /* Make r the visible pixels (STATE.md "Scissor and partial viewports"): reset
@@ -1752,7 +1769,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       /* a task that waits for the DMA (wdf) before it ends: the empty task
        * here locks the GPU up */
       sec = pds_dma_task(
-         &c->pds_pix, u.va, fs->sec_dwords,
+         c, &c->pds_pix, u.va, fs->sec_dwords,
          doutu_w0(c, fs->sec ? fs->sec : c->sec_wait, false, fs->sec_temps), 4,
          &rows);
    } else {
@@ -1874,7 +1891,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       memcpy(vsec.p + 10, d->vs_consts, vs->const_dwords * 4);
    for (unsigned j = 0; j < d->vs_mem.n_bases && d->vs_mem.dwords; j++)
       vsec.p[10 + d->vs_mem.base[j]] = vmem.va + 512 * j;
-   sec = pds_dma_task(&c->pds_vtx, vsec.va, vsec_dwords,
+   sec = pds_dma_task(c, &c->pds_vtx, vsec.va, vsec_dwords,
                       doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm_state(c, SGX_VDMCTRL_BLOCK_TYPE_PDS_STATE, sec, vrows,
              SGX_VDMCTRL_STATE_KIND_DMA, vsec_dwords, 0);
@@ -1884,11 +1901,11 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    if (d->n_fetch)
       vdm_fetch(c, d->prim, n_idx, idx, fetch, d->n_fetch, vs->code,
                 vs->in_dwords, vs->out_dwords, vs->temps,
-                vertices_per_task(vs->out_dwords));
+                vertices_per_task(c->dev->core, vs->out_dwords));
    else
       vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code,
                vs->in_dwords, vs->out_dwords, vs->temps,
-               vertices_per_task(vs->out_dwords));
+               vertices_per_task(c->dev->core, vs->out_dwords));
    c->draws++;
    /* SGX_TA_SPLIT: the GPU tiles what is recorded while the rest is */
    if (c->dev->ta_split && ++c->seg_draws >= c->dev->ta_split)
