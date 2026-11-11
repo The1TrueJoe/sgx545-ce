@@ -58,7 +58,8 @@ ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx/drm/libpvr"
 # the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi), and its
 # command streams' XML with the generator meson runs on it (src/sgx/kmd_stream),
 # from their one definition
-cp "$REPO/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h" "$TREE/include/drm-uapi/"
+# (SGX_UAPI_H: another revision of the header, to build against a kernel branch)
+cp "${SGX_UAPI_H:-$REPO/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h}" "$TREE/include/drm-uapi/"
 cp "$REPO/docs/uapi/powervr_sgx_kmd_stream.xml" "$REPO/docs/uapi/gen_stream.py" \
 	"$TREE/src/sgx/kmd_stream/"
 rm -f "$TREE/src/gallium/winsys/sgx/drm/powervr_sgx_kmd_stream.h"

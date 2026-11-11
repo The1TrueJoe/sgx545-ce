@@ -161,18 +161,48 @@ timeline_value(struct psgx_dev *dd)
 
 /* ------------------------------------------------------------------ memory */
 
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+/* VM_BIND: ops applied in order, all or nothing; synchronous */
+static int
+vm_bind(struct psgx_dev *dd, struct drm_powervr_sgx_vm_bind_op *ops, unsigned n)
+{
+   struct drm_powervr_sgx_ioctl_vm_bind_args a = {
+      .vm_context_handle = dd->vm,
+      .flags = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC,
+      .ops = {.stride = sizeof(*ops), .count = n, .array = (uintptr_t)ops},
+   };
+
+   return xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_BIND, &a);
+}
+
+static struct drm_powervr_sgx_vm_bind_op
+unmap_op(uint64_t va, uint64_t size)
+{
+   return (struct drm_powervr_sgx_vm_bind_op){
+      .op = DRM_POWERVR_SGX_VM_BIND_OP_UNMAP,
+      .device_addr = va,
+      .size = size,
+   };
+}
+#endif
+
 static void
 vm_unmap(struct psgx_dev *dd, uint64_t va, uint64_t size)
 {
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+   struct drm_powervr_sgx_vm_bind_op op = unmap_op(va, size);
+   int e = vm_bind(dd, &op, 1);
+#else
    struct drm_powervr_sgx_ioctl_vm_unmap_args a = {
       .vm_context_handle = dd->vm,
       .device_addr = va,
       .size = size,
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &a);
+#endif
 
    if (e)
-      mesa_loge("sgx: VM_UNMAP %#llx +%#llx failed: %d", (unsigned long long)va,
+      mesa_loge("sgx: VM unmap %#llx +%#llx failed: %d", (unsigned long long)va,
                 (unsigned long long)size, e);
 }
 
@@ -196,6 +226,28 @@ reap(struct psgx_dev *dd, bool all)
    if (all)
       timeline_wait(dd, dd->point, 5000);
    done = timeline_value(dd);
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+   /* the done ones' unmaps in as few VM_BINDs as the kernel takes */
+   {
+      struct drm_powervr_sgx_vm_bind_op ops[256];
+      unsigned nops = 0;
+
+      for (unsigned i = 0; i < dd->n_zombies; i++) {
+         struct zombie *z = &dd->zombies[i];
+
+         if (z->point > done && !all)
+            continue;
+         ops[nops++] = unmap_op(z->va, z->size);
+         if (nops == ARRAY_SIZE(ops)) {
+            if (vm_bind(dd, ops, nops))
+               mesa_loge("sgx: VM unmap of %u buffers failed", nops);
+            nops = 0;
+         }
+      }
+      if (nops && vm_bind(dd, ops, nops))
+         mesa_loge("sgx: VM unmap of %u buffers failed", nops);
+   }
+#endif
    for (unsigned i = 0; i < dd->n_zombies; i++) {
       struct zombie *z = &dd->zombies[i];
 
@@ -203,7 +255,9 @@ reap(struct psgx_dev *dd, bool all)
          dd->zombies[n++] = *z;
          continue;
       }
+#ifndef DRM_IOCTL_POWERVR_SGX_VM_BIND
       vm_unmap(dd, z->va, z->size);
+#endif
       gem_close(dd, z->handle);
       util_vma_heap_free(&dd->vma[z->heap], z->va, z->size);
    }
@@ -228,6 +282,16 @@ va_alloc(struct psgx_dev *dd, enum sgx_heap heap, uint64_t size, uint64_t align)
 static int
 vm_map(struct psgx_dev *dd, uint32_t handle, uint64_t va, uint64_t size)
 {
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+   struct drm_powervr_sgx_vm_bind_op op = {
+      .op = DRM_POWERVR_SGX_VM_BIND_OP_MAP,
+      .handle = handle,
+      .device_addr = va,
+      .size = size,
+   };
+
+   return vm_bind(dd, &op, 1);
+#else
    struct drm_powervr_sgx_ioctl_vm_map_args a = {
       .vm_context_handle = dd->vm,
       .device_addr = va,
@@ -236,6 +300,7 @@ vm_map(struct psgx_dev *dd, uint32_t handle, uint64_t va, uint64_t size)
    };
 
    return xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &a);
+#endif
 }
 
 static int
