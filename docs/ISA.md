@@ -2405,9 +2405,13 @@ backed above; this section only collects it.
   r4`), while each that wrote another register was right. The allocator now
   makes a derivative's destination live from its own instruction's start
   (as a repeat's is), so `d` is never one of its sources. `glsl-derivs` and
-  `glsl-fwidth` pass on hardware (2026-11-10); `glsl-derivs-abs`,
-  `-abs-sign`, `-sign`, `-varyings` and `fs-dfd{x,y}-accuracy` last ran
-  before that change (2026-11-03) and need a rerun.
+  `glsl-fwidth` pass on hardware (2026-11-10), and so do `glsl-derivs-abs`,
+  `-abs-sign`, `-sign`, `-swizzle` and `-varyings` (2026-11-11, EA3).
+  `fs-dfdx-accuracy` and `fs-dfdy-accuracy` give Warn: they expect
+  `dFdx(x * y)` of gl_FragCoord to be exactly `y` under the NICEST hint,
+  which only per-pixel differencing gives. That fits fdsx/fdsy differencing
+  per 2x2 quad (coarse; **guess**, not yet read back per pixel), which GL
+  allows. No fine form is known.
 - **Logic ops** (GL 1.1 `glLogicOp`; piglit `gl-1.0-logicop`, 16 subtests,
   `gl-1.1-xor`, `gl-1.1-xor-copypixels`): there is no fixed-function logic
   op, as there is no blender. Like blending they are code after the colour,
