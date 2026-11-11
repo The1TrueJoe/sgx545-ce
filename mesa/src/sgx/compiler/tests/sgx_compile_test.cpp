@@ -63,6 +63,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.pds_samples_alone = pds_alone;
       opts.f16_samples = f16_samples;
       opts.split_phases = split_phases;
+      opts.dep_f16_samples = dep_f16;
       opts.driver_consts = true;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
@@ -103,6 +104,7 @@ class sgx_compile_test : public ::testing::Test {
    bool pds_alone = false;
    bool f16_samples = false;
    bool split_phases = false;
+   bool dep_f16 = false;
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -553,6 +555,43 @@ TEST_F(sgx_compile_test, fragment_proj_sample_only_varying_not_iterated)
    }
    EXPECT_EQ(plain, 1u); /* c only */
    EXPECT_EQ(proj, 1u);
+}
+
+/* dep_f16_samples: a dependent mediump texel whose four channels are read
+ * returns F16 into two registers (the driver's T3), and isn't unpacked */
+TEST_F(sgx_compile_test, fragment_dependent_f16_sample_not_unpacked)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   c4->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   smp->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   nir_def *c = nir_load_var(&b, uv);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_fadd_imm(&b, nir_fmul(&b, c, c), 0.1);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *texel = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_fmul(&b, texel, nir_load_var(&b, c4)), 0xf);
+
+   f16_samples = dep_f16 = true;
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_TRUE(out.samples[0].dependent);
+   EXPECT_TRUE(out.samples[0].f16);
+   EXPECT_EQ(disasm().find("pck.f16.u8"), std::string::npos) << disasm();
 }
 
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test

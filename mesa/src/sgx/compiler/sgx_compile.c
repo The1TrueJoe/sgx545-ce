@@ -3510,12 +3510,18 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
    unsigned read = nir_def_components_read(&tex->def);
    if (s->f16_return) {
       /* returned as F16 pairs in RGBA order, whatever the texel's byte
-       * order (the TAG converts by channel; capture, T1 0x0c): the channels
-       * are the halves themselves */
+       * order (the TAG converts by channel; capture, T1 0x0c; hardware,
+       * hwt_smp for a dependent smp): the channels are the halves
+       * themselves */
       struct sgx_ref hr[4];
       for (unsigned k = 0; k < 4; k++) {
-         hr[k] = ref(SGX_F_PA, 2 * s->pa + k);
-         hr[k].h16 = 1;
+         if (s->dependent) {
+            hr[k] = raw;
+            hr[k].comp = k;
+         } else {
+            hr[k] = ref(SGX_F_PA, 2 * s->pa + k);
+            hr[k].h16 = 1;
+         }
       }
       set_refs(c, &tex->def, hr, 4);
       return;
@@ -3751,8 +3757,21 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
                    form == SGX_OP_MOV ? 1 : 2, ts, &NOF, 0);
          cr[0] = vref(t, 0);
       }
-      unsigned rv = new_vreg(c, 1);
-      raw = vref(rv, 0);
+      /* a mediump texel returned as F16 into two registers (the driver
+       * sets the state's T3 for it): when both channel pairs are read, it
+       * saves their two unpacks for one more register */
+      unsigned rd = nir_def_components_read(&tex->def);
+      s->f16_return = c->opts->f16_samples && c->opts->dep_f16_samples &&
+                      tex->def.bit_size == 16 && tex != c->colour_tex &&
+                      (rd & 3) && (rd & 12) &&
+                      !sgx_debug(c, SGX_DBG_NO_DEP_F16) &&
+                      !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
+      if (s->f16_return) {
+         raw = href(new_vreg16(c, 4), 0);
+      } else {
+         unsigned rv = new_vreg(c, 1);
+         raw = vref(rv, 0);
+      }
       i->ndst = 1;
       i->nops = 2;
       i->op[0] = raw;
@@ -5516,8 +5535,11 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             odd[r->n] = true;
             continue;
          }
-         /* (an F16 vreg by register: a repeat steps a register at a time) */
+         /* (an F16 vreg by register: a repeat steps a register at a time;
+          * a dependent F16 sample writes two) */
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         if (i->kind == SGX_INS_SAMPLE && k < i->ndst && i->smp->f16_return)
+            n = 2;
          unsigned first = half ? r->comp / 2 : r->comp;
          bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) ||
                       i->kind == SGX_INS_SAMPLE ||
@@ -6519,6 +6541,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"nophases", SGX_DBG_NO_PHASES,
     "Keep a discarding fragment program in one phase"},
+   {"nodepf16", SGX_DBG_NO_DEP_F16,
+    "Unpack a dependent sample's RGBA8 texel, though the driver can return F16"},
    {"noprojalone", SGX_DBG_NO_PROJ_ALONE,
     "Keep the plain iteration of a varying only projected samples read"},
    {"noconstswap", SGX_DBG_NO_CONST_SWAP,

@@ -94,6 +94,7 @@ F16 = False
 DRIVER = False
 MEDIUMP = False
 DRIVER_ALL = False
+DEP_F16 = False
 
 
 def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
@@ -130,6 +131,8 @@ def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
             # the rest of what the driver sets (sgx_program.c): every unit's
             # texels BGRA-ordered, mediump texels returned F16, the phase split
             args += ["-B", "0xffffffff", "-H", "-P"]
+        if DEP_F16:
+            args.append("-J")
     args += ["-o", base, base + ".vert", base + ".frag"]
     r = subprocess.run(args, capture_output=True, text=True)
     stem = os.path.join(outdir, f"{idx:03d}-{name}")
@@ -160,11 +163,14 @@ def main():
                     help="every shader as the gallium driver compiles it (sgxc -p -L -D -F)")
     ap.add_argument("--driver-all", action="store_true",
                     help="--driver plus the driver's other options (sgxc -B ~0 -H -P)")
+    ap.add_argument("--dep-f16", action="store_true",
+                    help="with --driver-all: dependent mediump texels returned F16 (sgxc -J)")
     ap.add_argument("--fs-mediump", action="store_true",
                     help="with --driver: fragment floats mediump (sgxc -M, st's fixed-function programs)")
     a = ap.parse_args()
-    global F16, DRIVER, MEDIUMP, DRIVER_ALL
+    global F16, DRIVER, MEDIUMP, DRIVER_ALL, DEP_F16
     F16, DRIVER, MEDIUMP, DRIVER_ALL = a.f16, a.driver or a.driver_all, a.fs_mediump, a.driver_all
+    DEP_F16 = a.dep_f16
     os.makedirs(a.outdir, exist_ok=True)
     n_ok = n = 0
     for idx, (kind, name, src) in enumerate(parse(a.corpus)):
