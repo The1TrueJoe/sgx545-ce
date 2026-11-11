@@ -497,8 +497,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_POWER_STATUS] = 0;
 	pvrsgx_ccb_reset(sdev);
 	ta3dctl_fill(sdev);
-	/* The first command invalidates the directory cache. */
-	sdev->fw.cache_control = PVRSGX_CC_INVAL_BIF_PD;
+	/* The first command invalidates the directory cache, keeping what a reap queued. */
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PD;
 
 	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,

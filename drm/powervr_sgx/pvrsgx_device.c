@@ -91,6 +91,14 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km)
 	if (!km->pages)
 		return;
 	pvrsgx_mmu_unmap(km->mmu, km->dev_addr, km->size);
+	pvrsgx_kmem_release(km);
+}
+
+/* The memory of kmem the caller has already unmapped from the GPU. */
+void pvrsgx_kmem_release(struct pvrsgx_kmem *km)
+{
+	if (!km->pages)
+		return;
 	vunmap(km->cpu);
 	pvrsgx_pages_wb(km->pages, km->npages);
 	for (unsigned int i = 0; i < km->npages; i++)

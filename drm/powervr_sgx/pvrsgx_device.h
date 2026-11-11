@@ -208,12 +208,14 @@ struct pvrsgx_device {
 	/** @pb_lock: Serializes @pb's creation. */
 	struct mutex pb_lock;
 
-	/** @kobj_lock: Protects @krange and @graveyard. */
+	/** @kobj_lock: Protects @krange, @graveyard and @kobj_unmapped. */
 	struct mutex kobj_lock;
 	/** @krange: Allocators of the device-wide kernel object ranges. */
 	struct drm_mm krange[PVRSGX_KRANGE_COUNT];
 	/** @graveyard: Released kernel objects the firmware may still read. */
 	struct list_head graveyard;
+	/** @kobj_unmapped: Unmapped kernel objects waiting for a BIF TLB invalidate. */
+	struct list_head kobj_unmapped;
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
 	/**
@@ -302,6 +304,7 @@ static inline void pvrsgx_pages_wb(struct page **pages, int n)
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags, gfp_t gfp);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
+void pvrsgx_kmem_release(struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_unplug(struct pvrsgx_device *sdev);

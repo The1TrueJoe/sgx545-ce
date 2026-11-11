@@ -14,6 +14,14 @@
  * next restart instead: the microkernel remembers the last PB's address to
  * skip reloading its free list, so a new PB at a freed one's address must not
  * appear while it runs.
+ *
+ * Unmapping is not the end either: the BIF may hold a translation of the
+ * object's pages until it is invalidated, and the microkernel invalidates only
+ * for the cache control word of a command it takes, before it moves the read
+ * offset on. So a reaped object is unmapped, the invalidate is queued for the
+ * next command, and its pages and address are freed once the kernel CCB has
+ * consumed that command. A hardware unit's late write then faults instead of
+ * landing in a page the kernel has handed out again.
  */
 
 #include <linux/mm.h>
@@ -44,6 +52,7 @@ int pvrsgx_kobj_init(struct pvrsgx_device *sdev)
 {
 	mutex_init(&sdev->kobj_lock);
 	INIT_LIST_HEAD(&sdev->graveyard);
+	INIT_LIST_HEAD(&sdev->kobj_unmapped);
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		drm_mm_init(&sdev->krange[r], ranges[r].start, ranges[r].end - ranges[r].start);
 	return 0;
@@ -103,13 +112,21 @@ err_free:
 	return ERR_PTR(err);
 }
 
-static void kobj_free(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
+static void kobj_unmap(struct pvrsgx_kobj *o)
 {
 	struct pvrsgx_vm *vm = o->vm;
 
 	if (vm && o->km.mmu != vm->mmu)
 		pvrsgx_mmu_unmap(vm->mmu, kobj_va(o), o->km.size);
-	pvrsgx_kmem_free(sdev, &o->km);
+	pvrsgx_mmu_unmap(o->km.mmu, o->km.dev_addr, o->km.size);
+}
+
+/* An unmapped object, after the invalidate: nothing can reach it now. */
+static void kobj_free(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
+{
+	struct pvrsgx_vm *vm = o->vm;
+
+	pvrsgx_kmem_release(&o->km);
 	mutex_lock(&sdev->kobj_lock);
 	drm_mm_remove_node(&o->node);
 	mutex_unlock(&sdev->kobj_lock);
@@ -129,12 +146,17 @@ void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 	mutex_unlock(&sdev->kobj_lock);
 }
 
-/* Free what was released before a render that has now finished. */
+/*
+ * Unmap what was released before a render that has now finished, and free
+ * what was unmapped before a command the microkernel has since taken.
+ * renders_done U64_MAX (unbind, the GPU stopped) frees everything at once.
+ */
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 {
 	struct pvrsgx_kobj *o, *tmp;
 	bool all = renders_done == U64_MAX;
 	u32 restarts = READ_ONCE(sdev->restarts);
+	u64 seq = 0, consumed;
 	LIST_HEAD(dead);
 
 	mutex_lock(&sdev->kobj_lock);
@@ -142,6 +164,32 @@ void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 		/* A restart forgets everything the old run pointed at. */
 		if (all || o->grave_restarts != restarts ||
 		    (o->grave_seq < renders_done && !o->until_restart))
+			list_move_tail(&o->grave, &dead);
+	}
+	mutex_unlock(&sdev->kobj_lock);
+
+	if (!list_empty(&dead)) {
+		list_for_each_entry(o, &dead, grave)
+			kobj_unmap(o);
+		/* The next command carries the invalidate. */
+		mutex_lock(&sdev->ccb_lock);
+		sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD;
+		seq = sdev->ccb_issued + 1;
+		mutex_unlock(&sdev->ccb_lock);
+	}
+
+	mutex_lock(&sdev->kobj_lock);
+	list_for_each_entry(o, &dead, grave)
+		o->flush_seq = seq;
+	list_splice_tail_init(&dead, &sdev->kobj_unmapped);
+	/*
+	 * After a restart the ring starts over empty, so everything sent before it
+	 * counts as consumed: the GPU was reset, and the first command after the
+	 * microkernel's start carries an invalidate of its own.
+	 */
+	consumed = all ? U64_MAX : pvrsgx_ccb_consumed(sdev);
+	list_for_each_entry_safe(o, tmp, &sdev->kobj_unmapped, grave) {
+		if (o->flush_seq <= consumed)
 			list_move_tail(&o->grave, &dead);
 	}
 	mutex_unlock(&sdev->kobj_lock);
@@ -159,7 +207,7 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 		bool empty;
 
 		mutex_lock(&sdev->kobj_lock);
-		empty = list_empty(&sdev->graveyard);
+		empty = list_empty(&sdev->graveyard) && list_empty(&sdev->kobj_unmapped);
 		mutex_unlock(&sdev->kobj_lock);
 		if (empty)
 			break;

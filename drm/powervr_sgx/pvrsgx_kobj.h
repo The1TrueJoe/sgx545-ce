@@ -40,6 +40,8 @@ struct pvrsgx_kobj {
 	struct list_head grave;
 	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
 	u64 grave_seq;
+	/** @flush_seq: Once unmapped, the kernel CCB command whose cache control frees it. */
+	u64 flush_seq;
 	/** @grave_restarts: pvrsgx_device.restarts when it was released. */
 	u32 grave_restarts;
 };
