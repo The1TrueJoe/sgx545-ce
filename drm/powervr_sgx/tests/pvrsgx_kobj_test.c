@@ -21,6 +21,10 @@ static struct pvrsgx_device *kobj_test_device(struct kunit *test)
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dev);
 	sdev = drm_kunit_helper_alloc_drm_device(test, dev, struct pvrsgx_device, base, 0);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, sdev);
+	/* The core sets the heap layout the kernel objects and VMs use. */
+	sdev->family = pvrsgx_core_family_get(545);
+	KUNIT_ASSERT_NOT_NULL(test, sdev->family);
+	sdev->cr = sdev->family->regs;
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, sdev->kernel_mmu);
 	mutex_init(&sdev->ccb_lock);
