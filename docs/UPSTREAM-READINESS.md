@@ -196,7 +196,11 @@ Write it for Mesa's docs tree. It covers:
 - GL/GLES versions and extensions;
 - the debug options table;
 - known limitations: no 3D textures, NPOT cube restrictions, one render
-  target, no MSAA;
+  target, no MSAA; flat shading takes the last vertex only, though core
+  Mesa always advertises EXT_provoking_vertex (GL_FIRST_VERTEX_CONVENTION
+  is ignored until a provoking-vertex field is found, or the draw rotates
+  each primitive's indices); depth textures are compared on the nearest
+  texel only (the F32 depth isn't filtered) and aren't rendered into;
 - how to run the tests.
 
 ### M9. Build inputs from `tools/`

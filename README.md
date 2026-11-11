@@ -36,16 +36,17 @@ Tested on two CE5300 boards and, by testers, on Cedarview computers.
 - **Cedarview:** the microkernel starts and draws frames on Cedarview's SGX545 (revision
   1.0.13). Some Cedarview panels stay dark with `gma500`; the test stick records why.
 - **Known issues:** see [docs/MAIN-MERGE.md](docs/MAIN-MERGE.md#known-issues-to-state-with-the-merge).
-  The largest is the parameter-buffer out-of-memory path, which is still in progress; a 16 MiB
-  buffer keeps real workloads clear of it.
+  The parameter-buffer out-of-memory handler, listed there as in progress, is now done and
+  confirmed on the hardware.
 
 The [build log](docs/log/BUILDLOG.md) tells the story so far.
 
 ## Installing
 
 [docs/INSTALL.md](docs/INSTALL.md) installs the packages on Debian 13 and removes them again.
-Debian's own kernel and Mesa stay installed. The packages come from CI runs; there are no
-releases yet.
+Debian's own kernel and Mesa stay installed. The packages come from our apt repository at
+`https://telaak.dev/powervr_sgx`, or as `.deb` files from the
+[releases](https://github.com/The1TrueJoe/powervr_sgx/releases) (the first is v0.1.0).
 
 ## Testing on a Cedarview computer
 

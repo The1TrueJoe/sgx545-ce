@@ -1167,7 +1167,7 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
             return false;
    }
    unsigned t = new_vreg16(c, ALIGN_POT(nc, 2));
-   struct sgx_ref r[4];
+   struct sgx_ref r[4] = {0};
    for (unsigned p = 0; 2 * p < nc; p++) {
       unsigned l1 = 2 * p + 1 < nc ? 2 * p + 1 : 2 * p;
       struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_MOVC_I32);
@@ -2994,7 +2994,7 @@ vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
                                                                       : 4;
    nir_component_mask_t rd = nir_def_components_read(&in->def);
    unsigned t = fmt >= SGX_VF_UNORM8_4 ? new_vreg(c, nc) : 0;
-   struct sgx_ref x[4];
+   struct sgx_ref x[4] = {0};
    for (unsigned k = 0; k < nc; k++) {
       unsigned comp = (r & 3) + k;
       if (comp >= held) {
@@ -3271,7 +3271,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                 c->const_fmt[k + nc] == 3)
             c->const_used[k + nc++] = 1;
          unsigned t = new_vreg16(c, 4);
-         struct sgx_ref r[4];
+         struct sgx_ref r[4] = {0};
          for (unsigned p = 0; p < (nc + 1) / 2; p++) {
             struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_C10);
             i->nops = 3;
@@ -3344,7 +3344,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       v->n = r;
       if (r & SGX_IN_HALF) {
          /* iterated as F16: component j in half (2 * pa + comp) + j */
-         struct sgx_ref hr[4];
+         struct sgx_ref hr[4] = {0};
          for (unsigned j = 0; j < in->def.num_components; j++) {
             hr[j] = ref(SGX_F_PA, (r & ~SGX_IN_HALF) + j);
             hr[j].h16 = 1;
@@ -3471,7 +3471,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                in->intrinsic == nir_intrinsic_ddy_coarse;
       nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
       unsigned nc = in->def.num_components, w = new_vreg(c, nc);
-      struct sgx_ref r[4];
+      struct sgx_ref r[4] = {0};
       for (unsigned j = 0; j < nc; j++) {
          struct sgx_ins *d =
             ins_alloc(c, SGX_INS_ALU, y ? SGX_OP_FDSY : SGX_OP_FDSX);
@@ -3670,7 +3670,8 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
    for (unsigned n = 0; n < c->n_iters;) {
       struct sgx_iter *it = &c->iters[n];
       unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
-      if (it->sample || it->pointcoord || it->set >= SGX_MAX_SETS) {
+      /* (a flat set isn't one: the PDS would interpolate its coordinate) */
+      if (it->sample || it->pointcoord || it->flat || it->set >= SGX_MAX_SETS) {
          n++;
          continue;
       }
@@ -3886,6 +3887,25 @@ interleave_samples(struct sgx_ctx *c)
       c->depth_pa = map[c->depth_pa];
 }
 
+/* a load from a flat set (sgx_iter.flat) */
+static bool
+flat_load(struct sgx_ctx *c, nir_intrinsic_instr *in)
+{
+   int at = input_at(in);
+   int r = at >= 0 && at < (int)ARRAY_SIZE(c->in_reg) ? c->in_reg[at] : -1;
+   if (r < 0)
+      return false;
+   unsigned reg = r & SGX_IN_HALF ? (r & ~SGX_IN_HALF) / 2 : r;
+   for (unsigned i = 0; i < c->n_iters; i++) {
+      const struct sgx_iter *it = &c->iters[i];
+      if (!it->sample && reg >= it->pa && reg < it->pa + iter_regs(it))
+         return it->flat;
+   }
+   return false;
+}
+
+/* (not a flat varying's: the PDS would interpolate it, so the divide stays
+ * in the program) */
 static void
 find_projected(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -3904,7 +3924,8 @@ find_projected(struct sgx_ctx *c, nir_function_impl *impl)
          nir_alu_instr *cm, *pm;
          nir_intrinsic_instr *l1 = varying_load(&tex->src[ci].src, &cs, &cm);
          nir_intrinsic_instr *l2 = varying_load(&tex->src[pi].src, &ps, &pm);
-         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3)
+         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3 ||
+             flat_load(c, l1))
             continue;
          _mesa_hash_table_insert(c->proj, tex, l1);
          if (cm && list_is_singular(&cm->def.uses))
@@ -4316,6 +4337,26 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
       }
       return;
    }
+   if (c->opts->tex_f32 >> s->sampler & 1) {
+      /* one F32 value in the register, read as the first channel alone
+       * (lower_f32_texel) */
+      struct sgx_ref r[4];
+      if (tex->def.bit_size == 32) {
+         r[0] = raw;
+      } else {
+         unsigned t = new_vreg16(c, 2);
+         struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_F32);
+         pk->nops = 3;
+         pk->op[0] = href(t, 0);
+         pk->op[1] = raw;
+         pk->op[2] = raw;
+         emit(c, pk);
+         r[0] = href(t, 0);
+      }
+      r[1] = r[2] = r[3] = r[0];
+      set_refs(c, &tex->def, r, 4);
+      return;
+   }
    /* only the channels something reads (glamor's glyphs: alpha alone) */
    unsigned read = nir_def_components_read(&tex->def);
    if (s->f16_return) {
@@ -4472,8 +4513,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       unsigned pa = c->vals[load->def.index].n;
       /* (the PDS samples from the set itself, however it is iterated) */
       for (unsigned i = 0; i < c->n_iters; i++) {
-         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == pa &&
-             c->iters[i].comps == 4) {
+         if (!c->iters[i].sample && !c->iters[i].flat &&
+             iter_reg(&c->iters[i]) == pa && c->iters[i].comps == 4) {
             s->dependent = false;
             s->proj = true;
             s->set = c->iters[i].set;
@@ -4503,9 +4544,11 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          if (prefix)
             pa = c->vals[l->def.index].n;
       }
-      /* (an F16-iterated varying is matched by its halves' register) */
+      /* (an F16-iterated varying is matched by its halves' register; a
+       * flat one samples from its register: the PDS would interpolate it) */
       for (unsigned i = 0; pa >= 0 && i < c->n_iters; i++) {
-         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == (unsigned)pa &&
+         if (!c->iters[i].sample && !c->iters[i].flat &&
+             iter_reg(&c->iters[i]) == (unsigned)pa &&
              c->iters[i].comps >= ncoord) {
             s->dependent = false;
             s->set = c->iters[i].set;
@@ -4522,6 +4565,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       /* a texel read at mediump returns F16 (f16_samples); one that is the
        * colour as it is keeps RGBA8 for the byte path */
       s->f16_return = c->opts->f16_samples && tex->def.bit_size == 16 &&
+                      !(c->opts->tex_f32 >> tex->texture_index & 1) &&
                       tex != c->colour_tex &&
                       !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
       struct sgx_iter *it = &c->iters[c->n_iters++];
@@ -4538,7 +4582,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    } else {
       /* the smp the finalizer writes: raw texel -> a temporary; coordinate
        * in consecutive registers of one bank */
-      struct sgx_ref cr[4];
+      struct sgx_ref cr[4] = {0};
       for (unsigned k = 0; k < ncoord; k++)
          cr[k] = src_comp(c, &ls, k);
       if (pi >= 0) {
@@ -4618,8 +4662,9 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
        * saves their two unpacks for one more register */
       unsigned rd = nir_def_components_read(&tex->def);
       s->f16_return = c->opts->f16_samples && c->opts->dep_f16_samples &&
-                      tex->def.bit_size == 16 && tex != c->colour_tex &&
-                      (rd & 3) && (rd & 12) &&
+                      tex->def.bit_size == 16 &&
+                      !(c->opts->tex_f32 >> tex->texture_index & 1) &&
+                      tex != c->colour_tex && (rd & 3) && (rd & 12) &&
                       !sgx_debug(c, SGX_DBG_NO_DEP_F16) &&
                       !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
       if (s->f16_return) {
@@ -4716,7 +4761,7 @@ c10_alu(nir_def *d)
 static nir_alu_instr *
 c10_msub(nir_alu_instr *alu, nir_def **x)
 {
-   bool n0, n1;
+   bool n0 = false, n1 = false;
    nir_def *a = c10_src(alu, 0, &n0), *b = c10_src(alu, 1, &n1);
    if (alu->op != nir_op_fadd || !a || !b || n0 == n1)
       return NULL;
@@ -4823,6 +4868,7 @@ find_colour_source(struct sgx_ctx *c, nir_function_impl *impl)
       if (p->type == nir_instr_type_tex) {
          nir_tex_instr *tex = nir_instr_as_tex(p);
          if (tex->op == nir_texop_tex && tex->def.num_components == 4 &&
+             !(c->opts->tex_f32 >> tex->texture_index & 1) &&
              !sgx_debug(c, SGX_DBG_NO_TEX_COLOR)) {
             c->colour_end = end;
             c->colour_tex = tex;

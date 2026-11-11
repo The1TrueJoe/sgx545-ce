@@ -214,8 +214,11 @@ sgx_resource_create(struct pipe_screen *pscreen,
    res->data = align_malloc(MAX2(texture_size(prsc, res->stride), 1), 64);
    if (!res->data)
       goto fail;
+   /* (a depth buffer that isn't sampled has none: the ISP keeps depth) */
    if (sgx_tex_format(templ->format) && templ->target != PIPE_TEXTURE_3D &&
-       templ->last_level < ARRAY_SIZE(res->level_offset)) {
+       templ->last_level < ARRAY_SIZE(res->level_offset) &&
+       (!sgx_tex_depth(templ->format) ||
+        (templ->bind & PIPE_BIND_SAMPLER_VIEW))) {
       int e;
 
       simple_mtx_lock(&screen->lock);
@@ -229,12 +232,14 @@ sgx_resource_create(struct pipe_screen *pscreen,
       /* the X byte of a format without alpha is read as alpha: 1 from the
        * start, for a texture rendered into before anything is uploaded */
       if (!util_format_has_alpha(templ->format) &&
-          util_format_get_blocksize(templ->format) == 4)
+          util_format_get_blocksize(templ->format) == 4 &&
+          !sgx_tex_depth(templ->format))
          memset(res->bo.map, 0xff, sgx_tex_size(prsc));
       /* R8 and RG8 as RGBA8 (sgx_tex_bpp): (0, 0, 0, 255) until written, the
        * B and A a render into them leaves alone */
       if (sgx_tex_bpp(templ->format) !=
-          util_format_get_blocksize(templ->format))
+             util_format_get_blocksize(templ->format) &&
+          !sgx_tex_depth(templ->format))
          for (size_t i = 0; i < sgx_tex_size(prsc) / 4; i++)
             res->bo.map[i] = 0xff000000;
    }

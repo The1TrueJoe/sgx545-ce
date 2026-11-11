@@ -64,6 +64,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.f16_samples = f16_samples;
       opts.split_phases = split_phases;
       opts.dep_f16_samples = dep_f16;
+      opts.tex_f32 = tex_f32;
       opts.driver_consts = true;
       opts.native_integers = native;
       opts.ubo_base_k = ubo_base_k;
@@ -107,6 +108,7 @@ class sgx_compile_test : public ::testing::Test {
    bool f16_samples = false;
    bool split_phases = false;
    bool dep_f16 = false;
+   uint32_t tex_f32 = 0;
    bool native = false;
    unsigned ubo_base_k = 0;
 
@@ -582,6 +584,91 @@ TEST_F(sgx_compile_test, fragment_proj_sample_only_varying_not_iterated)
    }
    EXPECT_EQ(plain, 1u); /* c only */
    EXPECT_EQ(proj, 1u);
+}
+
+/* a flat texture coordinate, plain and projected: the PDS would interpolate
+ * it as it samples, so the set is iterated flat and the sample is dependent */
+TEST_F(sgx_compile_test, fragment_flat_coordinate_sample_is_dependent)
+{
+   for (unsigned proj = 0; proj < 2; proj++) {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *tc =
+         var(nir_var_shader_in, glsl_vec4_type(), "tc", VARYING_SLOT_VAR0);
+      nir_variable *smp = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+         "t", -1);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      tc->data.interpolation = INTERP_MODE_FLAT;
+      nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+      nir_def *v = nir_load_var(&b, tc);
+      nir_tex_instr *tx = nir_tex_instr_create(b.shader, proj ? 4 : 3);
+      tx->op = nir_texop_tex;
+      tx->sampler_dim = GLSL_SAMPLER_DIM_2D;
+      tx->dest_type = nir_type_float32;
+      tx->coord_components = 2;
+      tx->src[0] =
+         nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
+      tx->src[1] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &sd->def);
+      tx->src[2] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref, &sd->def);
+      if (proj)
+         tx->src[3] =
+            nir_tex_src_for_ssa(nir_tex_src_projector, nir_channel(&b, v, 3));
+      nir_def_init(&tx->instr, &tx->def, 4, 32);
+      nir_builder_instr_insert(&b, &tx->instr);
+      nir_store_var(&b, col, &tx->def, 0xf);
+
+      pds_alone = true;
+      ASSERT_TRUE(compile()) << out.log;
+      expect_decodes();
+      ASSERT_EQ(out.n_iters, 1u);
+      EXPECT_FALSE(out.iters[0].sample);
+      EXPECT_TRUE(out.iters[0].flat);
+      ASSERT_EQ(out.n_samples, 1u);
+      EXPECT_TRUE(out.samples[0].dependent);
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
+}
+
+/* tex_f32: a depth texture's texel is one F32 value, read as (d, 0, 0, 1)
+ * and not unpacked as RGBA8, at highp and mediump */
+TEST_F(sgx_compile_test, fragment_f32_texel_not_unpacked)
+{
+   for (unsigned f16 = 0; f16 < 2; f16++) {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *uv =
+         var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+      nir_variable *smp = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+         "t", -1);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+      struct nir_tex_builder tb = {};
+      tb.coord = nir_load_var(&b, uv);
+      tb.texture_deref = sd;
+      tb.sampler_deref = sd;
+      tb.dim = GLSL_SAMPLER_DIM_2D;
+      tb.dest_type = nir_type_float32;
+      nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+      nir_def *h = f16 ? nir_f2fmp(&b, t) : NULL;
+      nir_store_var(&b, col, f16 ? nir_f2f32(&b, nir_fadd(&b, h, h)) : t, 0xf);
+
+      tex_f32 = 1;
+      ASSERT_TRUE(compile(f16)) << out.log;
+      expect_decodes();
+      std::string s = disasm();
+      EXPECT_EQ(s.find(".u8, pa"), std::string::npos) << s;
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
 }
 
 /* dep_f16_samples: a dependent mediump texel whose four channels are read

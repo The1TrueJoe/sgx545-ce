@@ -1,5 +1,5 @@
 # The apt repository: when a release is published (not a draft), rebuild a
-# signed repository for Debian 13 (trixie, amd64) from the .debs of every
+# signed repository for Debian 13 (trixie, amd64 and i386) from the .debs of every
 # published release and publish it to GitHub Pages:
 #
 #   https://<owner>.github.io/<repo>/        dists/trixie, pool/main
@@ -73,7 +73,7 @@ jobs:
           Label: powervr_sgx
           Codename: trixie
           Suite: trixie
-          Architectures: amd64
+          Architectures: amd64 i386
           Components: main
           Description: The open PowerVR SGX545 stack for Debian 13
           SignWith: $SIGNING_FPR
