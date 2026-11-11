@@ -246,6 +246,13 @@ static int identify(struct pvrsgx_device *sdev)
 	sdev->core_id = sgx_rd(sdev, sdev->cr->core_id);
 	sdev->core_rev = sgx_rd(sdev, sdev->cr->core_revision);
 
+	if (!pvrsgx_core_family_usable(sdev->family)) {
+		drm_info(&sdev->base,
+			 "%s core id 0x%08x revision 0x%08x: this driver can't run an %s yet; not touching it further\n",
+			 sdev->family->name, sdev->core_id, sdev->core_rev, sdev->family->name);
+		return -ENODEV;
+	}
+
 	sdev->core = pvrsgx_core_lookup(sdev->family, sdev->core_id, sdev->core_rev);
 	if (!sdev->core) {
 		drm_err(&sdev->base,

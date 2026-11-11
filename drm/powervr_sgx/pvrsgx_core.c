@@ -54,6 +54,15 @@ static const struct pvrsgx_core_init_reg sgx545_init_regs[] = {
 	{ 0xa00, 0x7c000 },
 };
 
+/*
+ * SGX530 (TI OMAP3630): only where its identity registers sit (sgx530defs.h,
+ * docs/porting/cores/sgx530.md). The driver reads them, logs them and stops.
+ */
+static const struct pvrsgx_core_regs sgx530_regs = {
+	.core_id = 0x0010,
+	.core_revision = 0x0014,
+};
+
 static const struct pvrsgx_core_family families[] = {
 	{
 		.name = "SGX545",
@@ -67,6 +76,15 @@ static const struct pvrsgx_core_family families[] = {
 		.va_bits = 32,
 		.init_regs = sgx545_init_regs,
 		.num_init_regs = ARRAY_SIZE(sgx545_init_regs),
+	},
+	{
+		/* One memory context, one kick, 28-bit addresses: not drivable yet. */
+		.name = "SGX530",
+		.core = 530,
+		.regs = &sgx530_regs,
+		.isa = PVRSGX_ISA_SGX545,
+		.num_dir_lists = 1,
+		.va_bits = 28,
 	},
 };
 
@@ -95,18 +113,22 @@ static const struct pvrsgx_core_info cores[] = {
 
 MODULE_FIRMWARE("powervr_sgx/sgx545_ukernel.bin");
 
-static bool family_usable(const struct pvrsgx_core_family *f)
+/* Whether the driver can run the core, not only identify it. */
+bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f)
 {
 	return (f->features & PVRSGX_FEATURES_REQUIRED) == PVRSGX_FEATURES_REQUIRED &&
 	       f->va_bits >= PVRSGX_VA_BITS_REQUIRED && f->num_dir_lists >= 2 &&
 	       f->num_dir_lists <= SGX_BIF_MAX_DIRLISTS;
 }
 
-/* The core the bus says is there (545 for an SGX545), or NULL if the driver can't drive it. */
+/*
+ * The core the bus says is there (545 for an SGX545), or NULL if the driver
+ * doesn't know where its registers are.
+ */
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core)
 {
 	for (unsigned int i = 0; i < ARRAY_SIZE(families); i++)
-		if (families[i].core == core && family_usable(&families[i]))
+		if (families[i].core == core)
 			return &families[i];
 	return NULL;
 }

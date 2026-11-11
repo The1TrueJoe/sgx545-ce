@@ -25,21 +25,38 @@ static void core_test_unknown(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, pvrsgx_core_family_get(544));
 }
 
-/* Every entry is one the driver can drive, with the registers it reads first. */
+/* A core the driver only identifies: listed, with its ID registers, not run. */
+static void core_test_identify_only(struct kunit *test)
+{
+	const struct pvrsgx_core_family *f = pvrsgx_core_family_get(530);
+
+	KUNIT_ASSERT_NOT_NULL(test, f);
+	KUNIT_EXPECT_FALSE(test, pvrsgx_core_family_usable(f));
+	KUNIT_EXPECT_EQ(test, f->regs->core_id, 0x10);
+	KUNIT_EXPECT_EQ(test, f->regs->core_revision, 0x14);
+	KUNIT_EXPECT_TRUE(test, pvrsgx_core_family_usable(pvrsgx_core_family_get(545)));
+}
+
+/*
+ * Every entry has the registers the driver reads first; every one it can
+ * drive has the rest, and a part.
+ */
 static void core_test_table(struct kunit *test)
 {
 	for (unsigned int i = 0; i < ARRAY_SIZE(families); i++) {
 		const struct pvrsgx_core_family *f = &families[i];
 
-		KUNIT_EXPECT_TRUE(test, family_usable(f));
 		KUNIT_EXPECT_NE(test, f->regs->core_id, 0);
 		KUNIT_EXPECT_NE(test, f->regs->core_revision, 0);
+		if (!pvrsgx_core_family_usable(f))
+			continue;
 		KUNIT_EXPECT_NE(test, f->regs->event_kick2, 0);
 		KUNIT_EXPECT_NE(test, f->regs->use_code_base0, 0);
 		KUNIT_EXPECT_GT(test, f->num_init_regs, 0);
 	}
 	for (unsigned int i = 0; i < ARRAY_SIZE(cores); i++) {
 		KUNIT_EXPECT_NOT_NULL(test, cores[i].family);
+		KUNIT_EXPECT_TRUE(test, pvrsgx_core_family_usable(cores[i].family));
 		KUNIT_EXPECT_NOT_NULL(test, cores[i].fw_name);
 		KUNIT_EXPECT_GT(test, cores[i].clock_hz, 0);
 	}
@@ -48,6 +65,7 @@ static void core_test_table(struct kunit *test)
 static struct kunit_case pvrsgx_core_test_cases[] = {
 	KUNIT_CASE(core_test_lookup),
 	KUNIT_CASE(core_test_unknown),
+	KUNIT_CASE(core_test_identify_only),
 	KUNIT_CASE(core_test_table),
 	{}
 };

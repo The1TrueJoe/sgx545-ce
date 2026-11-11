@@ -33,7 +33,8 @@ enum pvrsgx_isa {
  *
  * The other registers in pvrsgx_regs.h sit at the same offsets with the same
  * fields on SGX535, 540, 544 and 545 (the GPL DDK's sgx5xxdefs.h). A register
- * a core lacks is 0.
+ * a core lacks is 0. A core the driver can only identify has just @core_id
+ * and @core_revision.
  */
 struct pvrsgx_core_regs {
 	u32 core_id;
@@ -118,6 +119,7 @@ struct pvrsgx_core_info {
 };
 
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
+bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f);
 const struct pvrsgx_core_info *pvrsgx_core_lookup(const struct pvrsgx_core_family *family,
 						  u32 core_id, u32 core_rev);
 

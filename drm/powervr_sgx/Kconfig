@@ -41,8 +41,9 @@ config DRM_POWERVR_SGX_OF
 	help
 	  Bind to an SGX described by the img,powervr-sgx device tree
 	  binding. Only parts whose GPU node sits in a ti-sysc module, which
-	  clocks and powers it, are handled: the OMAP3630's SGX530, which
-	  can't run jobs yet.
+	  clocks and powers it, are handled: the OMAP3630's SGX530. The
+	  driver reads its core ID and revision, logs them and stops; it
+	  can't run jobs on it yet.
 
 	  Say N unless this kernel is for such an SoC.
 
