@@ -503,17 +503,17 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw_ddk.c powervr_sgx/pvrsgx_fw_ddk.c
 diff -ruN powervr_sgx.orig/pvrsgx_kobj.c powervr_sgx/pvrsgx_kobj.c
 --- a/drm/powervr_sgx/pvrsgx_kobj.c
 +++ b/drm/powervr_sgx/pvrsgx_kobj.c
-@@ -137,6 +137,10 @@
- 	u32 restarts = READ_ONCE(sdev->restarts);
- 	LIST_HEAD(dead);
- 
-+	/* The vendor microkernel keeps pointers to earlier renders' structures. */
-+	if (pvrsgx_fw_is_ddk(sdev) && !restart)
-+		return;
-+
+@@ -140,8 +140,9 @@
  	mutex_lock(&sdev->kobj_lock);
  	list_for_each_entry_safe(o, tmp, &sdev->graveyard, grave) {
  		/* A restart forgets everything the old run pointed at. */
++		/* The vendor microkernel keeps pointers to earlier renders' structures. */
+ 		if (all || o->grave_restarts != restarts ||
+-		    (o->grave_seq < renders_done && !o->until_restart))
++		    (o->grave_seq < renders_done && !o->until_restart && !pvrsgx_fw_is_ddk(sdev)))
+ 			list_move_tail(&o->grave, &dead);
+ 	}
+ 	mutex_unlock(&sdev->kobj_lock);
 diff -ruN powervr_sgx.orig/pvrsgx_mmu.c powervr_sgx/pvrsgx_mmu.c
 --- a/drm/powervr_sgx/pvrsgx_mmu.c
 +++ b/drm/powervr_sgx/pvrsgx_mmu.c
