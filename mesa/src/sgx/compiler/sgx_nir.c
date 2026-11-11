@@ -284,30 +284,17 @@ lower_sincos(nir_shader *s)
                               NULL);
 }
 
-/* sampler derefs -> texture/sampler indices. The USP's sampler number is
- * glslcompiler's: it counts the samplers a shader uses, in order of use
- * (corpus c3 tx_nd_s1: s1 alone is sampler 0; tx_nd_two: s, s1 = 0, 1),
- * unless the caller pinned it (-s). */
+/* sampler derefs -> texture/sampler indices: the caller's unit for the
+ * sampler, else its binding */
 struct tex_ctx {
    struct sgx_ctx *c;
-   nir_variable *seen[16];
-   unsigned n;
 };
 
 static unsigned
 sampler_number(struct tex_ctx *t, nir_variable *var)
 {
-   const struct sgx_compile_options *o = t->c->opts;
-   int pinned = place(o, SGX_LAYOUT_SAMPLER, var->name);
-   if (pinned >= 0)
-      return pinned;
-   unsigned next = first_free(o, SGX_LAYOUT_SAMPLER);
-   for (unsigned i = 0; i < t->n; i++)
-      if (t->seen[i] == var)
-         return next + i;
-   if (t->n < 16)
-      t->seen[t->n++] = var;
-   return next + t->n - 1;
+   int pinned = place(t->c->opts, SGX_LAYOUT_SAMPLER, var->name);
+   return pinned >= 0 ? (unsigned)pinned : var->data.binding;
 }
 
 static bool
@@ -1755,15 +1742,9 @@ assign_io(struct sgx_ctx *c)
 
    /* uniforms: constant numbers */
    unsigned next = ALIGN_POT(first_free(o, SGX_LAYOUT_UNIFORM), 4);
-   unsigned next_sampler = first_free(o, SGX_LAYOUT_SAMPLER);
    nir_foreach_uniform_variable (var, s) {
-      if (glsl_type_is_sampler(glsl_without_array(var->type))) {
-         /* the USP's sampler number: glslcompiler counts the samplers a
-          * shader uses (corpus c3 tx_nd_s1: s1 alone is sampler 0) */
-         int u = place(o, SGX_LAYOUT_SAMPLER, var->name);
-         var->data.binding = u >= 0 ? (unsigned)u : next_sampler++;
-         continue;
-      }
+      if (glsl_type_is_sampler(glsl_without_array(var->type)))
+         continue; /* lower_tex_derefs */
       int k = place(o, SGX_LAYOUT_UNIFORM, var->name);
       if (k < 0) {
          /* an array or matrix pinned element by element: its base */

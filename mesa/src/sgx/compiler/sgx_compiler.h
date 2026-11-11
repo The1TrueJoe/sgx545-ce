@@ -258,9 +258,7 @@ struct sgx_shader {
    unsigned n_blocks1;
    unsigned n_alu, n_tex, n_flow; /* instruction counts */
    unsigned n_temps;
-   /* PA registers: inputs, colour, and the placeholder colour iteration of a
-    * fragment program with no other (the DDK's driver iterates one) */
-   unsigned n_pa;
+   unsigned n_pa; /* PA registers: inputs and colour */
    char *log; /* listing / errors (malloc'd) */
 };
 

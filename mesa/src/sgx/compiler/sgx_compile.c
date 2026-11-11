@@ -6508,7 +6508,6 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    c->colour_k = -1;
    memset(c->lit_packed_k, 0xff, sizeof(c->lit_packed_k));
    c->p16 = opts->f16;
-   c->n_labels = 6; /* 3 start, 4 feedback, 5 phase 1: the USP's numbers */
    c->sa_base = c->stage == MESA_SHADER_FRAGMENT ? 9 : 10;
    util_dynarray_init(&c->vregs, c);
    util_dynarray_init(&c->words, c);

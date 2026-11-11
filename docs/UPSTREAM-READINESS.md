@@ -236,7 +236,7 @@ earlier licensing and provenance audit.
 | C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
 | C6 | no global mutable state | done (`hw_const`) |
 | C7 | comments cite `docs/`, not libusc or the DDK | libusc done (aaa2ba7); DDK mentions left |
-| C8 | DDK-compatibility code out of the compiler | partly |
+| C8 | DDK-compatibility code out of the compiler | done (2026-11-11) |
 | C9 | file size | open (optional) |
 
 - **C1. Debug options.**
@@ -289,11 +289,18 @@ earlier licensing and provenance audit.
     behavior (COMPILER-UPSTREAM.md §2.2).
   - Box and application names: none left in the compiler.
 - **C8. DDK-compatibility code** (COMPILER-UPSTREAM.md §3).
-  - Still in the compiler: the varying-to-set allocation, first-use sampler
-    numbering, the USP label numbers 3/4/5, and the placeholder color
-    iteration's PA count.
-  - Upstream, the driver owns layouts. Move these behind
-    `struct sgx_layout`, or into sgxc.
+  - Samplers: the compiler takes the caller's unit (`struct sgx_layout`), or
+    else the sampler variable's binding. sgxc numbers unpinned samplers in
+    order of use, as the corpus does.
+  - Labels: the compiler numbers its own from 0. The USP writer
+    (`tools/usc/sgx_usp.c`) keeps 3/4/5 for start, feedback and phase 1 and
+    puts the compiler's after them.
+  - `n_pa` counts the iterations and the color only. The USP writer adds the
+    DDK driver's placeholder color iteration's register to the header.
+  - The varying-to-set allocation stays. It is the compiler's allocation,
+    and the driver uses it for both stages; the rule is in ISA.md "What a
+    compiler needs".
+  - Every step is byte-identical on the 11,868 programs.
 - **C9. File size.** `sgx_compile.c` is 5.8k lines, the size of
   `ir3_compiler_nir.c`.
   - Splitting it into selection, register allocation and encoding files means
