@@ -18,8 +18,7 @@ SA_KCCB = 0x16       # kernel CCB base, control block +0x58. This is the DDK's
                      # own slot: srvinit writes it at t[0x16] and the DDK model
                      # keeps it there (tools/ukernel/sgxsim.py, +0x58). (It read
                      # word 16 = +0x40 before — an unset slot — so the kick read
-                     # the command from a garbage address and wedged the core;
-                     # EA1 HW-confirmed 2026-11-02.)
+                     # the command from a garbage address and wedged the core.)
 # our one-context scratch (control block words we own; written to memory so the
 # next task's DMA brings them back)
 SC_CTX = 0x30
@@ -27,7 +26,7 @@ SC_CMD = 0x31
 SC_RD = 0x32
 SC_PB = 0x33
 SC_RTENTRY = 0x34
-# Cleanup serialisation (ta3d-state's DDK cleanup trace). A process-exit cleanup must
+# Cleanup serialisation (the DDK's cleanup trace). A process-exit cleanup must
 # not complete (let the host free the PB/RT) until this process's render AND its DPM
 # page-release have finished. render_done now runs on the DPM 3D memory-free event
 # (EVENT_STATUS bit 0, the DDK order): it is the event that fires AFTER the scene's 3D
@@ -37,7 +36,7 @@ SC_RTENTRY = 0x34
 # + log) so a lost event can never stick the box.
 CLEANUP_DEFER_CT = 0x1c
 CLEANUP_DEFER_MAX = 256      # ~256 ms at 1 kHz; a render completes in << 30 ms
-# Render-completion RENDEZVOUS (ta3d-state's DDK completion trace). A render completes
+# Render-completion RENDEZVOUS (the DDK's completion trace). A render completes
 # only once BOTH halves are done: the 3D writeout (0x40000 pixel back-end, after the ISP
 # clock goes idle) AND the DPM 3D memory free (0x1). do_3d sets both flags at 3D start;
 # pixel_done clears WAIT_3D, free_done clears WAIT_FREE, and whichever runs second (sees
@@ -50,15 +49,15 @@ SC_OOM_PENDING = 0x1a  # control block +0x68: an OOM (EVENT_STATUS 0x6) fired wh
                      # in flight. We ack it (so it can't storm the EDM) and set this; the episode's teardown
                      # re-dispatches k_oom for it. The DDK's post-partial re-check (step 2), storm-free.
 OOM_SAVED_628 = 0x1b # control block +0x6c: the global DPM threshold (0x628) saved before a grant raises it.
-                     # ta_finished restores it (the DDK undoes the grant at TA finish, pc 0x0606->0x063c).
+                     # ta_finished restores it (the DDK undoes the grant at TA finish).
                      # 0 = no grant outstanding.
-# DDK grant (ta3d-state, the scene-finish mechanism). Each partial render frees only ~20% of the binned
+# DDK grant (the scene-finish mechanism). Each partial render frees only ~20% of the binned
 # pages; the DDK does 2-4 partial renders, and when one frees < 2 pages it takes the GRANT path on the NEXT
 # OOM -- raise the TA/GBL thresholds and reload the free list -- so a dense scene can finish, then undoes it
 # at TA finish. These flags/marks live in the control block (the DDK keeps them in sa8 bits + TA3D words).
 OOM_FLAGS = 0x1f     # control block +0x7c: OOM_G (last partial freed < 2 pages), OOM_G2 (the GBL case),
                      # OOM_GRANTED (a grant already given this scene). Survive the SC_OOM clear; reset at TA
-                     # finish (the DDK's 0x785|0x18 mask, pc 0x0606->0x0645).
+                     # finish (the DDK's 0x785|0x18 mask).
 OOM_G = 0x1
 OOM_G2 = 0x2
 OOM_GRANTED = 0x4
@@ -71,13 +70,13 @@ STAGE1_FLAG = 0x24   # control block +0x90: the DDK's stage-1 state (sa8 ~b19). 
                      # global threshold to the current 0x72c count + reload the TA free list, no render), cleared
                      # by the stage-1 UNDO at the next OOM. The DDK alternates OOM->stage-1-raise / OOM->undo+
                      # partial-render; its reloads ride with the raise/undo (a bare reload corrupts the ring).
-                     # Carries ACROSS scenes -- not cleared at TA finish (ta3d-state); only init_set clears it.
+                     # Carries ACROSS scenes -- not cleared at TA finish; only init_set clears it.
 STAGE1_SAVED_628 = 0x25 # control block +0x94: the global threshold (0x628) saved before a stage-1 raise; the
                      # stage-1 undo restores it. Separate from OOM_SAVED_628 (the +16 grant's save).
 SLOT1_INIT = 0x26    # control block +0x98: set once slot 1 has a valid DPM CONTROL state. The partial render's
                      # 3D frees run through slot 1's control (0x698/0x634); we never run a real scene in slot 1
                      # (the DDK does, ctx630=4/5/7), so its control is stale and the frees link pages off the
-                     # TA's chain -> leak (ta3d-state; EA1 8480a4f: count recovers, ring short). Before the first
+                     # TA's chain -> leak (count recovers, ring short). Before the first
                      # shuffle, give slot 1 a control state like a DDK first kick would. Cleared in init_set.
 SC_OOM = 0x17        # control block +0x5c: OOM partial-render state. 0 = none; 1 = OOM taken, the
                      # TA is paused (0xa74 b0) and held (0x69c=4), awaiting TA_TERMINATE; 2 = the
@@ -93,22 +92,22 @@ SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
                      # render never overlap on one context.)
 SC_TAFLIGHT = 0x36   # control block +0xd8: 1 while a TA is in flight. Serialises
                      # host kicks. Must be a word srvinit never writes: +0x64
-                     # (word 0x19) is clobbered by srvinit's control-block setup on
-                     # the EA3 (k_ta then deferred the very FIRST kick, do_ta never
-                     # ran, all T3C markers 0). 0x36 is in the microkernel's private
+                     # (word 0x19) is clobbered by srvinit's control-block setup
+                     # (k_ta then deferred the very FIRST kick, do_ta never
+                     # ran, all markers 0). 0x36 is in the microkernel's private
                      # region (0 on every prior dump), next to the sentinel words.
                      # host kicks: a TA kick arriving while this is set is left in
                      # the kernel CCB and re-launched from ta_finished (the DDK
-                     # pattern). Without it a fast host (EA3 p1) delivers kick 2
+                     # pattern). Without it a fast host delivers kick 2
                      # while TA 1 runs, re-kicking the TA mid-run (lockup_TA) and
-                     # making ta_finished act on the wrong command (ta3d-state race).
+                     # making ta_finished act on the wrong command (a race).
 PB_TA_LOADED = 0x2e  # control block +0xb8 (the DDK's loaded-PB marker, ta3d+0xb8): the PB
                      # descriptor whose TA free list is currently loaded (0 = none). do_ta
                      # loads the TA free list ONLY when the kick's PB differs -- the DDK loads
-                     # once per PB and lets the hardware keep the ring in sync (ta3d-state
-                     # 2026-11-08). Reloading every frame re-seeds the head from pb+0x18 (last
+                     # once per PB and lets the hardware keep the ring in sync.
+                     # Reloading every frame re-seeds the head from pb+0x18 (last
                      # frame's snapshot), skipping the ~25 pages the 3D freed -> DPM_OUT_OF_MEM
-                     # at ~frame 40 (uapi-stream M1 exit). Reset at init (post-HWR the HW DPM is
+                     # at ~frame 40 (the M1 exit). Reset at init (post-HWR the HW DPM is
                      # wiped) and at cleanup (so a same-address PB realloc reloads).
 PB_3D_LOADED = 0x2f  # control block +0xbc (the DDK's ta3d+0xbc): the PB whose 3D free list +
                      # save_ta_state are loaded. do_3d gates those on it the same way; 0x63c=3
@@ -156,11 +155,10 @@ HC_INTFLAGS = 8      # ui32InterruptFlags (microkernel -> host); bit 1 = ACTIVE_
 HC_INTCLEAR = 9      # ui32InterruptClearFlags; bit 0 = INTERRUPT_HWR
 HC_TIMERCLK = 6      # ui32uKernelTimerClock (host-set EVENT_TIMER period)
 HC_BGBLOCK = 15      # word +0x3c: bit 0 = HOSTCTL_HOST_BGBLOCK -- the host wrote the
-                     # background block on the CPU, so do_3d skips its EDM pulse (§4a / m2).
+                     # background block on the CPU, so do_3d skips its EDM pulse (§4a).
                      # This word is the DDK's ui32PerfGroup (HWPerf counter group); reusing it
                      # is safe because powervr_sgx has no HWPerf and the driver sets it only for
-                     # open images (never the DDK one), and our uK never reads it as PerfGroup
-                     # (ta3d-state 2026-11-08).
+                     # open images (never the DDK one), and our uK never reads it as PerfGroup.
 EDM_INIT_COMPLETE = 1
 EDM_INTERRUPT_HWR = 1
 EDM_INTERRUPT_ACTIVE_POWER = 2   # host control ui32InterruptFlags bit 1: the
@@ -239,12 +237,12 @@ CR_DPM_CONTROL = 0x698
 CR_DPM_FL_MODE = 0x664       # DPM free-list load selector (TA = 3, 3D = 5)
 CR_DPM_TA_FL = 0x684         # DPM TA free-list load  -> EUR_CR_EVENT_STATUS2 bit 0
 CR_DPM_3D_FL = 0x680         # DPM 3D free-list load  -> EUR_CR_EVENT_STATUS2 bit 1
-CR_DPM_OOM = 0x69c           # DPM out-of-memory allocation control (ta3d-state: 4 = hold the TA's
+CR_DPM_OOM = 0x69c           # DPM out-of-memory allocation control (4 = hold the TA's
                              # allocation during an OOM partial render, 1 = release/resume it). Not
                              # in the GPL header; HW iteration may refine. The partial-render start
                              # writes 4, its completion writes 1.
-CR_DPM_LOADSEL = 0x65c       # DPM load-select gate around the slot store/load in the OOM shuffle
-                             # (ta3d-state pc 0x0c40/0x0dd8): 1 to open the store/load, 0 to close.
+CR_DPM_LOADSEL = 0x65c       # DPM load-select gate around the slot store/load in the OOM shuffle:
+                             # 1 to open the store/load, 0 to close.
 CR_OTPM = 0x24C
 CR_TPC = 0x224
 CR_EVENT_HOST_CLEAR_0x140 = 0x140    # the invalidate-done acknowledge register
@@ -252,8 +250,8 @@ INV_DONE_TA = 0x27           # 0x138 bits for the TA-side invalidate
 INV_DONE_3D = 0x4B           # 0x138 bits for the 3D-side invalidate
 SW_EVENT = 0x4000
 DCU_INVALID = 0x400          # EUR_CR_EVENT_STATUS2: a data-cache-unit invalidate
-                             # completion. Pending after the kernel's SysFinalise
-                             # on the EA1; the event program must acknowledge it
+                             # completion. Pending after the kernel's SysFinalise;
+                             # the event program must acknowledge it
                              # or it re-triggers forever (docs/UKERNEL.md §2).
 
 # ---- register-programming tables (reg byte-offset, base word index) --------
@@ -301,8 +299,8 @@ T3_CMD = [(0x4c4, 0), (0x4bc, 1), (0x4b8, 2), (0x404, 3), (0x408, 4), (0x414, 5)
           (0x42c, 7), (0x4c8, 8), (0xa5c, 9), (0xa60, 10), (0xa64, 11), (0x40c, 12), (0x410, 13),
           (0x400, 14), (0xab8, 15), (0x148, 16)]
 # word 12 is the first tile ((x/32)<<16 | y/16) and 13 the last tile; a full-surface
-# blit has first tile 0, a sub-rectangle blit does not (confirmed against a capture
-# with the textures session). Word 4 (depth/stencil block) is 0 in every capture.
+# blit has first tile 0, a sub-rectangle blit does not (confirmed against a
+# capture). Word 4 (depth/stencil block) is 0 in every capture.
 # fixed transfer-start constants (the render's 0x63c=3 is 0 for a transfer; no PB)
 T3_CONST = [(0x480, 0), (0x63c, 0), (0x43c, 1)]
 TRANSFERCMD_SHARED = 0xac     # ui32SharedCmdCCBOffset points here; command base is 0xac before

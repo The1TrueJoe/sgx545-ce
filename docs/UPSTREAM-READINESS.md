@@ -381,10 +381,12 @@ build.py, the driver, the docs and the test scripts.
    and built binary are versioned together.
 
 ### Not a blocker, noted
-- The microkernel source carries inline hardware-provenance comments (which
-  behaviors were confirmed on which bring-up box). These are useful engineering
-  history; a final upstream-source pass can thin them or move the box-specific
-  ones to `docs/log/`, but they do not affect the binary and are low priority.
+- **Done.** The microkernel source's inline bring-up provenance (box names and
+  dates, session attributions, vendor-binary PC citations, internal dump/tool names)
+  was thinned for upstream; the mechanism and field explanations stayed, and the
+  removed history is preserved in
+  `docs/log/entries/2026-11-11-ukernel-source-provenance.md`. Comments-only — the
+  golden image is unchanged.
 
 ## Mesa winsys and platform
 
