@@ -15,4 +15,5 @@ Each document tags its claims by evidence: encoder or DDK code, capture diffs, o
 | [TEX.md](TEX.md) | Texture memory layout, uploads, render to texture, depth/stencil (ZLS), presentation to fb0 |
 | [GEN.md](GEN.md) | Generating a whole frame from code (`tools/gen`) |
 | [UAPI.md](UAPI.md) | Draft of the `powervr_sgx` DRM driver's uAPI: ioctls, client streams, heaps, threat model ([header](uapi/powervr_sgx_drm.h), [streams](uapi/powervr_sgx_kmd_stream.xml)) |
+| [porting/kernel.md](porting/kernel.md) | Bringing `powervr_sgx` up on a new SGX core or board: the stages, the tests that show each, the traps |
 | [log/](log/BUILDLOG.md) | The build log: how all of the above was found, with frames and data |
