@@ -29,6 +29,7 @@ struct seq_buf;
 #define PVRSGX_USSE_WINDOW_LOG2		19
 #define PVRSGX_USSE_PIXEL_BASE_INDEX	0
 #define PVRSGX_USSE_VERTEX_BASE_INDEX	10
+#define PVRSGX_USSE_SPARE_BASE_INDEX	14
 #define PVRSGX_USSE_UKERNEL_BASE_INDEX	15
 
 /* Host control block words (docs/UKERNEL.md section 1, "The TA3D control block"). */

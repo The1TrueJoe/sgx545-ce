@@ -396,11 +396,17 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
-	/* Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15 ours. */
+	/*
+	 * Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15
+	 * ours. A client's PDS program can name any of them, so 14 is a second
+	 * name for 0 rather than whatever it held.
+	 */
 	for (u32 i = 0; i < 10; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
 		       ((PVRSGX_HEAP_USSE_PIXEL + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
 			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
+	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_SPARE_BASE_INDEX),
+	       (PVRSGX_HEAP_USSE_PIXEL >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
 	for (u32 i = 0; i < 4; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
 		       (PVRSGX_HEAP_USSE_VERTEX + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
