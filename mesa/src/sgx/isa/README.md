@@ -68,9 +68,12 @@ encodes differently gets a `<gen>` range, or an override that reads
 
 ## isaspec change
 
-This needs one isaspec change, carried as
+This needs two isaspec commits, carried together as
 `mesa/patches/0003-isaspec-derived-bitset-params-and-override-fields.patch`
-in powervr_sgx and to be sent upstream ahead of this tree (see below).
+in powervr_sgx (`git am` applies them as two commits) and to be sent
+upstream ahead of this tree (see below). Neither changes the code generated
+for ir3, etnaviv or qrisc, apart from unreachable code the second removes
+from ir3's encoder.
 
 ## How the XML is laid out
 
@@ -98,11 +101,11 @@ in powervr_sgx and to be sent upstream ahead of this tree (see below).
 - **Fields made of several bit ranges.** One field per range plus a
   `<derived>` field. isaspec decodes a derived field of bitset type, but its
   Python didn't accept `<param>`s on one, and the encoder's parameter struct
-  didn't know their names: patch 0003, part 1.
+  didn't know their names: patch 0003, commit 1.
 - **Several `<override>`s defining the same field.** The generated encoder
   left a dangling `else` that swallowed the next field (it lost the F16 flag
-  of an indexed operand under format select). Patch 0003, part 2: the
-  definition in the case being encoded wins.
+  of an indexed operand under format select). Patch 0003, commit 2: the
+  definition in the case being encoded wins, as in the decoder.
 - **Modal state outside the word.**
   - Format control (`setfc`): the encoder takes it as `struct
     sgx_isa_fc` and hands it to the XML's expressions in the low digits of

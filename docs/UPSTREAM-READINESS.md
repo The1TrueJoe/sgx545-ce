@@ -574,7 +574,7 @@ Later and optional: the inline hardware-provenance comments in
 
 Owner: the clean-room implementation session. The USSE instruction set and
 the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
-2026-11-08, branch upstream-ready on um-re.
+2026-11-11 (MR-readiness pass on dev 7c7d624 plus core-id-asm).
 
 ### Done
 
@@ -582,13 +582,13 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
 |---|---|
 | Layout like Mesa's other isaspec users | `isa/` and `pds/` follow `src/etnaviv/isa`: the XML, the `isa.h` the generated decoder includes, custom targets for the decoder (`<name>-isa.c/.h`), the encoder (`-encode.h`) and the enums, a static library and an `idep_`, and `tests/meson.build` |
 | Layout like Mesa's csbgen users | `csbgen/` follows `src/imagination/csbgen/rogue`: `<name>.xml` -> `csbgen/<name>.h` through the shared `gen_pack_header.py`, and the per-file loop is the same. `sgx_csb.h` plays the part of the Vulkan driver's `pvr_csb.h` (address type, includes, the pack-in-place macro). The XML files are renamed `vdm.xml`, `ta.xml`, `pbe.xml`, `tex.xml` |
-| Tests under `meson test` | `meson test --suite sgx` runs `sgx_isa` (assemble -> encode -> disassemble over three lists; a line's given words must match), `sgx_pds` (the same for PDS, plus the DOUT data words), and the new `sgx_csb` (66 state words the documentation quotes, packed and unpacked). It passes 3/3 on a native host build with `-Dbuild-tests=true`. The csb test found an XML default that was wrong for one T3 form (tex2 clears b23); the test case now sets it. |
+| Tests under `meson test` | `meson test --suite sgx` runs `sgx_isa` (assemble -> encode -> disassemble over three lists; a line's given words must match), `sgx_pds` (the same for PDS, plus the DOUT data words), and the new `sgx_csb` (66 state words the documentation quotes, packed and unpacked). Together with `sgx_isa_tools` (sgx-asm and sgx-disasm over the lists, hex and binary) it passes 4/4 on a `-Dtools=sgx -Dbuild-tests=true` build (no gallium driver) of Mesa 26.2.5 with the whole series applied, with no compiler warnings. The csb test found an XML default that was wrong for one T3 form (tex2 clears b23); the test case now sets it. |
 | Nothing outside `meson test` in the Mesa tree | `isa/tests/standalone.sh` (a library build without Mesa, which `tools/usc/check_enc.py` and `drm/tools/gen_usse_corpus.py` use) moved to `mesa/tests/isa-standalone/`, which isn't copied into Mesa. Its `.gitignore` went with it |
-| Mesa style | one `mesa/src/sgx/.clang-format` for all of `src/sgx` (shared with the compiler): `InheritParentConfig`, `DisableFormat: false`, column limit 80, as `src/asahi` and `src/freedreno`. Every C file here is formatted with it. One macro list, the assembler's flag table, is hand-wrapped between `clang-format off/on`. Comments are in American English (`colour` -> `color`). A `src/sgx/**/*` line in Mesa's `.clang-format-include` belongs to the MR |
+| Mesa style | one `mesa/src/sgx/.clang-format` for all of `src/sgx` (shared with the compiler): `InheritParentConfig`, `DisableFormat: false`, column limit 80, as `src/asahi` and `src/freedreno`. Every C file in the three trees is clean under clang-format 21 and 22 (2026-11-11). One macro list, the assembler's flag table, is hand-wrapped between `clang-format off/on`. Comments are in American English (`colour` -> `color`). `mesa/patches/0002` opts `src/sgx/isa`, `pds` and `csbgen` in to `.clang-format-include` (not `src/sgx/**/*`: `src/sgx/compiler` isn't clean yet) |
 | License headers | every source file, XML, meson file, script and test list has `Copyright © 2026 Joseph Telaak` and `SPDX-License-Identifier: MIT` (the test lists as `#` comments). The READMEs carry none, as Mesa's don't |
 | A README per tree | `isa/README.md` and `pds/README.md` now describe the tree rather than its history: what it is, the files, the generated files, the tests, the isaspec patch, what isaspec can't express, and who uses it. The answered-gap lists and the old encoder's story stay in `docs/log`. `csbgen/README.md` is new: files, use, conventions, tests |
 | No DDK inputs | the build and the tests read only the XML, the test lists and Mesa. The test lists' words are the ones the ISA/PDS/state documentation quotes. Comments no longer name the DDK, a capture rig or USEASM, and the `#i16-fmt` enum nothing used (an unused-variable warning in the generated decoder) is gone |
-| Unchanged output | after the restructure, the offline winsys harness (clears, draws, scissors, end-of-tile, over 60 frames) is still byte-identical to um-re 9145c84 (66.9 MB of rings). `mesa/tests/isa-standalone` runs the ISA lists: 317 instructions, 0 failures |
+| Unchanged output | after the restructure, the offline winsys harness (clears, draws, scissors, end-of-tile, over 60 frames) is still byte-identical to um-re 9145c84 (66.9 MB of rings). `mesa/tests/isa-standalone` runs the ISA lists: 324 instructions, 0 failures |
 | Warnings | no warnings from the three trees on the host build (clang) or the zig x86_64 build. The PDS library keeps `-Wno-unused-variable` for isaspec's tables of encode-only roots (below) |
 
 ### Open
@@ -602,12 +602,22 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
      `csbgen` for the gallium driver too, not only for the Vulkan driver and
      tools.
    - A decision for the MR series, not for the code.
-2. **The isaspec change** (`mesa/patches/0003`) goes upstream first, as two
-   commits:
-   - `<param>`s on a derived field of bitset type;
-   - the encoder's handling of several `<override>`s defining one field.
-   - isaspec has no test suite. The SGX545 ISA test is the first user of
-     both, so the commits should point at it, or bring a minimal XML case.
+2. **The isaspec change** (`mesa/patches/0003`) goes upstream first. Done
+   2026-11-11: the file is two commits in `git format-patch` form (`git am`
+   applies them as two, `patch -p1` as one), each applying alone on Mesa
+   26.2.5, each with a `docs/isaspec.rst` sentence:
+   - `isaspec: allow <param>s on derived fields of bitset type`;
+   - `isaspec: encode: stop at the override that defines the field` (the
+     decoder already takes the first override that holds).
+   - Checked: the code generated for ir3, etnaviv and qrisc is unchanged by
+     the first commit. With the second, etnaviv's and qrisc's is unchanged
+     and ir3's encoder loses 120 lines that can't run (cat1's immediate
+     overrides test exclusive `SRC_TYPE` values). Compare with a fixed
+     `PYTHONHASHSEED`: upstream's encoder output already varies with it.
+   - Open for review: isaspec has no test suite, so the commits point at
+     the SGX545 description as the first user. A reviewer may ask for a
+     minimal XML case, or for the second commit's `Fixes:` tag (the commit
+     that introduced the override ladder; not looked up).
 3. **The PDS decoder's unused tables.** The DOUT data words are encode-only
    roots, and isaspec emits decode tables nothing uses for them, so
    `-Wno-unused-variable` is needed. Options:
@@ -636,12 +646,33 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
 9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`, `0006`) become
    part of the driver's MR series. Nothing in these three trees depends on
    them beyond `with_gallium_sgx` or `-Dtools=sgx` entering `src/sgx`.
+   - `0006` (`sgx: build sgx-asm and sgx-disasm with -Dtools=sgx`) is one
+     commit of its own but not independent: it edits the `src/meson.build`
+     line `0002` adds, and `src/sgx/meson.build` reads `0001`'s
+     `with_gallium_sgx`. An MR that lands the ISA trees and tools before the
+     driver needs the order turned round: the tools commit adds
+     `subdir('sgx')` under `with_tools.contains('sgx')`, and the driver
+     commit adds `with_gallium_sgx` to it and `subdir('compiler')`.
 10. **The core id.** `ISA_GPU_ID()` is `core * 100 + format control`
     (`sgx_isa_gpu_id()`), and the root bitset is `<gen>`-limited to SGX545
-    (54500-54599). A second core is a `<gen>` range or an override on
-    `ISA_GPU_ID() / 100`, once ISA.md documents it. isaspec offers no
-    second parameter, so the core shares `gpu_id` with format control, as
-    freedreno's `gpu_id` carries its chip.
+    (54500-54599). isaspec offers no second parameter, so the core shares
+    `gpu_id` with format control, as freedreno's `gpu_id` carries its chip.
+    The SGX530 plan (agreed with the sgx530-ukernel spec side, 2026-11-11,
+    not started): the root widens once to 53000-54599 (535 and 540 can't
+    reach the encoder: `sgx_isa_core_supported()` refuses them), 545-only
+    classes get 54500-54599, a form that differs is a same-name bitset per
+    core, and a field that differs is an override on `ISA_GPU_ID() / 100`.
+    `-c 530` covers only the classes ISA.md marks confirmed on the 530, and
+    sgx-asm refuses a form outside the core instead of writing 0.
+11. **Cross-tree paths.** `csbgen/meson.build` reaches the generator as
+    `files('../../imagination/csbgen/gen_pack_header.py')` and includes
+    `../../imagination`. Reviewers usually want such a script exported as a
+    variable from its own `meson.build` (`src/imagination` is entered only
+    for its own drivers and tools), or the XML moved next to `rogue/`
+    (item 1).
+12. **Test form.** The tests are plain C programs plus one Python script
+    under `meson test`, as `src/freedreno/ir3/tests` does. etnaviv's ISA
+    test is a gtest; a reviewer may prefer that.
 
 ## Kernel (powervr_sgx)
 

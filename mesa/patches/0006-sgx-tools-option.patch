@@ -1,7 +1,10 @@
-sgx: add the sgx tools option
+sgx: build sgx-asm and sgx-disasm with -Dtools=sgx
 
--Dtools=sgx builds sgx-asm and sgx-disasm from src/sgx/isa without the
-gallium driver: src/meson.build descends into src/sgx for either.
+sgx-asm assembles USSE instructions from text in one batch, for builds
+of the GPU's microkernel firmware that have no use for the driver;
+sgx-disasm is the matching disassembler. -Dtools=sgx builds both without
+the gallium driver, as -Dtools=etnaviv builds etnaviv-disasm:
+src/meson.build descends into src/sgx for either, and 'all' includes sgx.
 
 diff --git a/meson.build b/meson.build
 index c1d56a0..6baab45 100644

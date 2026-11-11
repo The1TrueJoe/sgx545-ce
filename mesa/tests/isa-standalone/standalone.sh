@@ -16,8 +16,9 @@ B=${2:-$T/build}
 PY=${PYTHON:-python3}
 mkdir -p "$B/obj" "$B/isaspec"
 cp "$M"/src/compiler/isaspec/*.py "$B/isaspec/"
-(cd "$B" && mkdir -p a/src/compiler && rm -rf a/src/compiler/isaspec &&
- cp -R isaspec a/src/compiler/ &&
+# the patch also documents the changes in docs/isaspec.rst
+(cd "$B" && rm -rf a && mkdir -p a/src/compiler a/docs &&
+ cp -R isaspec a/src/compiler/ && cp "$M"/docs/isaspec.rst a/docs/ &&
  P=$(ls "$T"/../../patches/*-isaspec-derived-bitset-params-and-override-fields.patch) &&
  # (a tree that already carries the patch is used as it is)
  { ! patch -d a -p1 --forward --batch --dry-run -s < "$P" >/dev/null 2>&1 ||
