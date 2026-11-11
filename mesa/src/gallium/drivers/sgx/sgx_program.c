@@ -816,8 +816,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       }
    }
 
+   uint32_t old_code = so->prog.code;
+
    memset(&so->prog, 0, sizeof(so->prog));
    simple_mtx_lock(&screen->lock);
+   sgxws_code_free(ctx->hw, old_code);
    if (vertex) {
       unsigned dwords = 4, tsp[SGX_MAX_SETS] = {0};
 
@@ -1158,30 +1161,48 @@ sgx_bind_fs_state(struct pipe_context *pctx, void *hwcso)
    sgx_context(pctx)->fs = hwcso;
 }
 
+/* a shader's programs (its blend variants too) go: the winsys frees their
+ * code once no render runs it */
+static void
+free_programs(struct sgx_context *ctx, struct sgx_pipe_shader *so)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+
+   if (!ctx->hw)
+      return;
+   simple_mtx_lock(&screen->lock);
+   sgxws_code_free(ctx->hw, so->prog.code);
+   for (unsigned i = 0; i < so->n_variants; i++)
+      sgxws_code_free(ctx->hw, so->variants[i].code);
+   simple_mtx_unlock(&screen->lock);
+}
+
+/* a variant (sgx_vs_for, sgx_fs_for) */
+static void
+destroy_variant(struct sgx_context *ctx, struct sgx_pipe_shader *v)
+{
+   if (!v)
+      return;
+   free_programs(ctx, v);
+   free(v->code);
+   free(v->code1);
+   FREE(v->vary);
+   FREE(v);
+}
+
 static void
 sgx_delete_shader_state(struct pipe_context *pctx, void *hwcso)
 {
+   struct sgx_context *ctx = sgx_context(pctx);
    struct sgx_pipe_shader *so = hwcso;
 
+   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_vs); i++)
+      destroy_variant(ctx, so->variants_vs[i]);
+   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_srgb); i++)
+      destroy_variant(ctx, so->variants_srgb[i]);
    ralloc_free(so->nir);
-   free(so->code);
-   free(so->code1);
-   FREE(so->vary);
-   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_vs); i++) {
-      if (so->variants_vs[i]) {
-         free(so->variants_vs[i]->code);
-         FREE(so->variants_vs[i]->vary);
-         FREE(so->variants_vs[i]);
-      }
-   }
-   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_srgb); i++) {
-      if (so->variants_srgb[i]) {
-         free(so->variants_srgb[i]->code);
-         FREE(so->variants_srgb[i]->vary);
-         FREE(so->variants_srgb[i]);
-      }
-   }
-   FREE(so);
+   so->nir = NULL;
+   destroy_variant(ctx, so);
 }
 
 struct sgx_pipe_shader *
@@ -1212,12 +1233,7 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
       return NULL;
    /* the oldest goes */
    slot = &vs->variants_vs[vs->next_variant_vs++ % ARRAY_SIZE(vs->variants_vs)];
-   if (*slot) {
-      free((*slot)->code);
-      free((*slot)->code1);
-      FREE((*slot)->vary);
-      FREE(*slot);
-   }
+   destroy_variant(ctx, *slot);
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
@@ -1286,12 +1302,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    /* the oldest goes */
    slot = &fs->variants_srgb[fs->next_variant_srgb++ %
                              ARRAY_SIZE(fs->variants_srgb)];
-   if (*slot) {
-      free((*slot)->code);
-      free((*slot)->code1);
-      FREE((*slot)->vary);
-      FREE(*slot);
-   }
+   destroy_variant(ctx, *slot);
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
@@ -1333,19 +1344,19 @@ sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                                    so->discard_pa, so->temps)
            : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b,
                              so->discard_pa, so->temps);
-   simple_mtx_unlock(&screen->lock);
-   /* the program heap is never freed: past the table's size, the slots are
-    * reused in turn and a program uploaded again when needed (dEQP's
-    * fragment_ops.interaction draws one shader with dozens of blends; always
-    * reusing slot 0 uploaded at nearly every draw and filled the heap) */
+   /* past the table's size, the slots are reused in turn, their programs
+    * freed (dEQP's fragment_ops.interaction draws one shader with dozens of
+    * blends) */
    if (va) {
       unsigned i = so->n_variants < ARRAY_SIZE(so->variants)
                       ? so->n_variants++
                       : so->next_variant++ % ARRAY_SIZE(so->variants);
 
+      sgxws_code_free(ctx->hw, so->variants[i].code); /* 0: a new slot */
       so->variants[i].key = *b;
       so->variants[i].code = va;
    }
+   simple_mtx_unlock(&screen->lock);
    return va;
 }
 

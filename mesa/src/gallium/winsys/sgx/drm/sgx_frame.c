@@ -23,6 +23,7 @@
 #include <xf86drm.h>
 
 #include "util/macros.h"
+#include "util/u_math.h"
 
 #include "sgx_csb.h"
 #include "sgx_frame.h"
@@ -256,20 +257,136 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
 /* ------------------------------------------------------------------ USSE */
 
+static bool
+code_chunk_init(struct sgxws_dev *d, struct sgxws_code_chunk *k,
+                enum sgx_heap heap, uint32_t size)
+{
+   /* aligned to its size: a chunk never straddles a 512K code base window */
+   uint32_t al = 1u << util_logbase2_ceil(size);
+
+   if (sgxws_bo_alloc_heap(d, &k->r.bo, heap, 0x1, size, al))
+      return false;
+   k->r.size = size;
+   /* nothing at a heap's first byte: a DOUTU word of 0 would name it */
+   k->r.used = 0x100;
+   return true;
+}
+
+/* empty a chunk no render runs code from any more */
+static void
+code_chunk_reset(struct sgxws_ctx *c, struct sgxws_code_chunk *k)
+{
+   if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &k->r.bo))
+      ws_err("code chunk reset failed\n");
+   memset(k->r.bo.map, 0, k->r.size);
+   k->r.used = 0x100;
+   k->r.uploaded = 0;
+}
+
+/* room for size bytes of code: the current chunk, an emptied one, a new one,
+ * or one waited for; NULL when the heap is full of live programs */
+static struct sgxws_code_chunk *
+code_room(struct sgxws_ctx *c, struct sgxws_code *code, uint32_t size)
+{
+   uint32_t need = size + USSE_ALIGN;
+   struct sgxws_code_chunk *k, **grown;
+
+   if (code->n) {
+      k = code->chunk[code->cur];
+      if (k->r.size - k->r.used >= need)
+         return k;
+   }
+   sgxws_done_seq(c);
+   for (int pass = 0; pass < 2; pass++) {
+      for (unsigned i = 0; i < code->n; i++) {
+         k = code->chunk[i];
+         if (k->live || k->r.size - 0x100 < need)
+            continue;
+         if (sgxws_seq_after(k->free_seq, c->done_seq)) {
+            /* the second pass waits, the heap being full, for a kick that
+             * was made (not the frame being recorded) */
+            if (!pass || k->free_seq == sgxws_next_seq(c) ||
+                sgxws_wait_seq(c, k->free_seq, 2000))
+               continue;
+         }
+         code_chunk_reset(c, k);
+         code->cur = i;
+         return k;
+      }
+      if (pass)
+         break;
+      k = calloc(1, sizeof(*k));
+      grown = realloc(code->chunk, (code->n + 1) * sizeof(*grown));
+      if (k && grown) {
+         code->chunk = grown;
+         if (code_chunk_init(c->dev, k, code->heap,
+                             MAX2(SGXWS_CODE_CHUNK, align(need, 0x1000)))) {
+            code->chunk[code->n] = k;
+            code->cur = code->n++;
+            return k;
+         }
+      } else if (grown) {
+         code->chunk = grown;
+      }
+      free(k);
+   }
+   return NULL;
+}
+
+/* a program's code, 0 when there is no room for it */
 uint32_t
 sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
                   unsigned n, const uint8_t *reloc, unsigned nreloc)
 {
-   struct sgxws_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
-   struct sgxws_ptr p = ring_alloc(r, n * 8, USSE_ALIGN);
-   uint32_t pc0 =
-      (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+   struct sgxws_code_chunk *k = code_room(c, &c->usse[vertex], n * 8);
+   struct sgxws_ptr p;
+   uint32_t pc0;
 
+   if (!k) {
+      ws_err("%s program code is full\n", vertex ? "vertex" : "pixel");
+      return 0;
+   }
+   k->live++;
+   p = ring_alloc(&k->r, n * 8, USSE_ALIGN);
+   pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
    memcpy(p.p, w, n * 8);
    /* phas.i targets are absolute, in instructions (ISA.md) */
    for (unsigned i = 0; i < nreloc; i++)
       p.p[2 * reloc[i]] += pc0;
    return p.va;
+}
+
+void
+sgxws_code_free(struct sgxws_ctx *c, uint32_t va)
+{
+   if (!va)
+      return;
+   for (unsigned v = 0; v < 2; v++) {
+      struct sgxws_code *code = &c->usse[v];
+
+      for (unsigned i = 0; i < code->n; i++) {
+         struct sgxws_code_chunk *k = code->chunk[i];
+
+         if (va >= k->r.bo.va && va < k->r.bo.va + k->r.size) {
+            assert(k->live);
+            k->live--;
+            /* the frame being recorded may still draw with it */
+            k->free_seq = sgxws_next_seq(c);
+            return;
+         }
+      }
+   }
+   ws_err("freeing code at %#x that isn't a program\n", va);
+}
+
+static void
+code_fini(struct sgxws_ctx *c, struct sgxws_code *code)
+{
+   for (unsigned i = 0; i < code->n; i++) {
+      sgxws_bo_free(c->dev, &code->chunk[i]->r.bo);
+      free(code->chunk[i]);
+   }
+   free(code->chunk);
 }
 
 static uint32_t
@@ -716,12 +833,14 @@ static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
 static void
 ctx_free(struct sgxws_ctx *c)
 {
-   struct sgxws_ring *rings[] = {&c->usse_pix,    &c->usse_vtx,   &c->pds_pix,
-                                 &c->pds_vtx,     &c->gen,        &c->vdm,
+   struct sgxws_ring *rings[] = {&c->pds_pix,     &c->pds_vtx,
+                                 &c->gen,         &c->vdm,
                                  &c->eot_pool[0], &c->eot_pool[1]};
 
    for (unsigned i = 0; i < sizeof(rings) / sizeof(rings[0]); i++)
       sgxws_bo_free(c->dev, &rings[i]->bo);
+   code_fini(c, &c->usse[0]);
+   code_fini(c, &c->usse[1]);
    free(c->pds_pix.memo);
    free(c->last_u);
    c->dev->kif->ctx_fini(c);
@@ -748,11 +867,9 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
       return NULL;
    }
 
-   /* pixel programs are never freed (blend variants included): 1 MB of the
-    * 5 MB the ten code base registers reach */
-   if (ring_init(d, &c->usse_pix, H_PIXSHADER, 0x100000) ||
-       ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x40000) ||
-       /* the frame rings hold a whole frame of a game (~1500 draws, ~100K
+   c->usse[0].heap = H_PIXSHADER;
+   c->usse[1].heap = H_VTXSHADER;
+   if (/* the frame rings hold a whole frame of a game (~1500 draws, ~100K
         * vertices): a ring that fills submits the frame so far and waits for
         * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
        ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + d->slots * 0x200000) ||
@@ -2051,23 +2168,35 @@ sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms)
 
 /* code written since the last kick, to the GPU */
 static int
+ring_sync(struct sgxws_ctx *c, struct sgxws_ring *r)
+{
+   uint32_t end = (r->used + 7) & ~7u;
+   int e;
+
+   if (end <= r->uploaded)
+      return 0;
+   if ((e = c->dev->kif->code_upload(c->dev, &r->bo, r->uploaded,
+                                     end - r->uploaded)))
+      return e;
+   r->uploaded = end;
+   return 0;
+}
+
+static int
 code_sync(struct sgxws_ctx *c)
 {
-   struct sgxws_ring *rs[] = {&c->usse_pix, &c->usse_vtx, &c->eot_pool[0],
-                              &c->eot_pool[1]};
    int e;
 
    if (!c->dev->kif->code_upload)
       return 0;
-   for (unsigned i = 0; i < ARRAY_SIZE(rs); i++) {
-      uint32_t end = (rs[i]->used + 7) & ~7u;
-
-      if (end <= rs[i]->uploaded)
-         continue;
-      if ((e = c->dev->kif->code_upload(c->dev, &rs[i]->bo, rs[i]->uploaded,
-                                        end - rs[i]->uploaded)))
-         return e;
-      rs[i]->uploaded = end;
+   if ((e = ring_sync(c, &c->eot_pool[0])) ||
+       (e = ring_sync(c, &c->eot_pool[1])))
+      return e;
+   for (unsigned v = 0; v < 2; v++) {
+      for (unsigned i = 0; i < c->usse[v].n; i++) {
+         if ((e = ring_sync(c, &c->usse[v].chunk[i]->r)))
+            return e;
+      }
    }
    return 0;
 }
