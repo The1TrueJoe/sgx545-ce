@@ -22,24 +22,29 @@ part of a known core is only a new `struct pvrsgx_core_info`.
 | `family.core` | the core number the bus glue passes (545) | the SoC's documentation, the DT compatible |
 | `family.core_id` | expected `CORE_ID` | read back on the hardware (stage 3) |
 | `family.regs` | registers whose offset or fields differ between cores | the GPL DDK's `sgx5xxdefs.h` for that core, `CORE_ID` first |
-| `family.features` | `PVRSGX_FEATURE_*` | `sgxfeaturedefs.h` for the core; must include `PVRSGX_FEATURES_REQUIRED` |
+| `family.features` | `PVRSGX_FEATURE_*` | `sgxfeaturedefs.h` for the core. Without `MULTIPLE_MEM_CONTEXTS` the core is single-context ([single-context.md](single-context.md)) |
 | `family.isa` | the USSE instruction set, for the validator | USSE1 or USSE2 (543/544/554) |
-| `family.num_dir_lists` | BIF directory lists | `SGX_FEATURE_BIF_NUM_DIRLISTS` (16 on 535/545, 8 on 543/544) |
-| `family.va_bits` | device-virtual address bits | `SGX_FEATURE_ADDRESS_SPACE_SIZE`; the heap layout needs 32 |
+| `family.num_dir_lists` | BIF directory lists | `SGX_FEATURE_BIF_NUM_DIRLISTS` (16 on 535/545, 8 on 543/544; 1 on the single-context 530) |
+| `family.va_bits` | device-virtual address bits | `SGX_FEATURE_ADDRESS_SPACE_SIZE`: 28 or 32 |
+| `family.heaps` | the device-virtual layout | within `va_bits`; the kernel heaps on 4 MiB boundaries for a single-context core |
+| `family.quirks` | `PVRSGX_QUIRK_*` | `sgxerrata.h`'s `FIX_HW_BRN_*` that the kernel works around |
 | `family.init_regs` | init script part 2 | [SRVINIT.md](../SRVINIT.md), "Init scripts"; captured from a working boot |
 | `info.core_rev` | expected `CORE_REVISION` | read back on the hardware |
 | `info.clock_hz` | core clock, for the microkernel's timer | the platform's clock tree; the order of magnitude is enough |
 | `info.fw_name` | `powervr_sgx/sgx<core>_ukernel.bin` | the open microkernel built for the core ([UKERNEL.md 4a](../UKERNEL.md#4a-the-firmware-file)) |
 
-The driver refuses a core whose family is missing, lacks a required feature, or has
-fewer than 32 address bits, before it writes a register. `KUnit powervr_sgx_core` checks
+The driver refuses a core whose family is missing or isn't usable
+(`pvrsgx_core_family_usable()`: directory lists, address bits, a layout that fits, the
+event PDS registers, the kick registers matching the features), and a single-context
+core without `allow_unisolated=1`, before it writes a register. A listed family it can't
+run still has its ID and revision read and logged. `KUnit powervr_sgx_core` checks
 the table: run `tools/testing/kunit/kunit.py run
 --kunitconfig=drivers/gpu/drm/powervr_sgx/tests/.kunitconfig`.
 
-What is not per-core yet, so a new core may need code as well as a table entry: the heap
-layout (28-bit cores), the shader code-base windows (535 and 540 have no `USE_CODE_BASE`
-registers), the microkernel start (it needs `EVENT_KICK2`, which 535 lacks), the open
-microkernel's command constants, and the validator's USSE2 tables.
+What is not per-core yet, so a new core may need code as well as a table entry: the
+shader code-base windows (535 and 540 have no `USE_CODE_BASE` registers), the open
+microkernel's command constants, and the validator's USSE2 tables. The heap layout, a
+single-kick start (no `EVENT_KICK2`) and a single memory context are per-core now.
 
 ## 1. Publish the device
 

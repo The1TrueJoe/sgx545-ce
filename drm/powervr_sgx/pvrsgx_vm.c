@@ -14,6 +14,7 @@
 #include <linux/dma-resv.h>
 #include <linux/module.h>
 #include <linux/overflow.h>
+#include <linux/pm_runtime.h>
 #include <linux/scatterlist.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
@@ -32,51 +33,48 @@
 #include "pvrsgx_prime.h"
 #include "pvrsgx_vm.h"
 
-/* The client heaps, the same in every VM. */
-static const struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {
-	[DRM_POWERVR_SGX_HEAP_GENERAL] = {
-		.base = PVRSGX_HEAP_GENERAL,
-		.size = PVRSGX_HEAP_TEXTURE - PVRSGX_HEAP_GENERAL,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-	[DRM_POWERVR_SGX_HEAP_PDS_PIXEL] = {
-		.base = PVRSGX_HEAP_PDS_PIXEL,
-		.size = PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-	[DRM_POWERVR_SGX_HEAP_PDS_VERTEX] = {
-		.base = PVRSGX_HEAP_PDS_VERTEX,
-		.size = PVRSGX_HEAP_KERNEL_DATA - PVRSGX_HEAP_PDS_VERTEX,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-	[DRM_POWERVR_SGX_HEAP_USSE_PIXEL] = {
-		.base = PVRSGX_HEAP_USSE_PIXEL,
-		.size = PVRSGX_HEAP_USSE_PIXEL_SIZE,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-		.usse_base_index = PVRSGX_USSE_PIXEL_BASE_INDEX,
-		.usse_window_log2 = PVRSGX_USSE_WINDOW_LOG2,
-	},
-	[DRM_POWERVR_SGX_HEAP_USSE_VERTEX] = {
-		.base = PVRSGX_HEAP_USSE_VERTEX,
-		.size = PVRSGX_HEAP_USSE_VERTEX_SIZE,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-		.usse_base_index = PVRSGX_USSE_VERTEX_BASE_INDEX,
-		.usse_window_log2 = PVRSGX_USSE_WINDOW_LOG2,
-	},
-	[DRM_POWERVR_SGX_HEAP_TEXTURE] = {
-		.base = PVRSGX_HEAP_TEXTURE,
-		.size = SZ_4G - PVRSGX_HEAP_TEXTURE,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-};
+/* The client heaps, the same in every VM, from the core's layout. */
+static void client_heaps(const struct pvrsgx_device *sdev,
+			 struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT])
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	const struct {
+		const struct pvrsgx_va_range *r;
+		u32 usse_base_index;
+	} from[DRM_POWERVR_SGX_HEAP_COUNT] = {
+		[DRM_POWERVR_SGX_HEAP_GENERAL] = { &h->general },
+		[DRM_POWERVR_SGX_HEAP_PDS_PIXEL] = { &h->pds_pixel },
+		[DRM_POWERVR_SGX_HEAP_PDS_VERTEX] = { &h->pds_vertex },
+		[DRM_POWERVR_SGX_HEAP_USSE_PIXEL] = { &h->usse_pixel,
+						      PVRSGX_USSE_PIXEL_BASE_INDEX },
+		[DRM_POWERVR_SGX_HEAP_USSE_VERTEX] = { &h->usse_vertex,
+						       PVRSGX_USSE_VERTEX_BASE_INDEX },
+		[DRM_POWERVR_SGX_HEAP_TEXTURE] = { &h->texture },
+	};
+
+	for (int i = 0; i < DRM_POWERVR_SGX_HEAP_COUNT; i++) {
+		bool usse = i == DRM_POWERVR_SGX_HEAP_USSE_PIXEL ||
+			    i == DRM_POWERVR_SGX_HEAP_USSE_VERTEX;
+
+		heaps[i] = (struct drm_powervr_sgx_heap){
+			.base = from[i].r->base,
+			.size = from[i].r->end - from[i].r->base,
+			.page_size_log2 = SGX_MMU_PAGE_SHIFT,
+			.usse_base_index = from[i].usse_base_index,
+			.usse_window_log2 = usse ? PVRSGX_USSE_WINDOW_LOG2 : 0,
+		};
+	}
+}
 
 /* The heap holding all of [addr, addr + size), or -1. */
-int pvrsgx_heap_find(u64 addr, u64 size)
+int pvrsgx_heap_find(const struct pvrsgx_device *sdev, u64 addr, u64 size)
 {
+	struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT];
 	u64 end;
 
 	if (check_add_overflow(addr, size, &end))
 		return -1;
+	client_heaps(sdev, heaps);
 	for (int i = 0; i < ARRAY_SIZE(heaps); i++) {
 		if (addr >= heaps[i].base && end <= heaps[i].base + heaps[i].size)
 			return i;
@@ -86,6 +84,7 @@ int pvrsgx_heap_find(u64 addr, u64 size)
 
 int pvrsgx_query_heap_info(struct pvrsgx_device *sdev, void __user *ptr, u32 *size)
 {
+	struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT];
 	struct drm_powervr_sgx_dev_query_heap_info info = {};
 	int err;
 
@@ -97,6 +96,7 @@ int pvrsgx_query_heap_info(struct pvrsgx_device *sdev, void __user *ptr, u32 *si
 	if (err)
 		return err;
 
+	client_heaps(sdev, heaps);
 	if (info.heaps.array) {
 		err = pvrsgx_obj_array_put(&info.heaps, heaps, sizeof(heaps[0]), ARRAY_SIZE(heaps));
 		if (err)
@@ -133,6 +133,29 @@ static void va_release(struct pvrsgx_vm *vm, struct drm_gpuva *va)
 	kfree(va);
 }
 
+/*
+ * On a single-context core the microkernel puts list 0 back on the firmware's
+ * directory when it raises its interrupt, which can come after a job's
+ * completion shows. Before a VM's directory is freed, list 0 must not hold it.
+ * A suspended core holds nothing: the next start's reset sets list 0.
+ */
+static void vm_pd_unload(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu)
+{
+	struct device *dev = sdev->base.dev;
+	u32 pd = pvrsgx_mmu_pd_addr(mmu);
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return;
+	if (IS_ENABLED(CONFIG_PM) && pm_runtime_get_if_active(dev) <= 0)
+		return;
+	if (READ_ONCE(sdev->powered) && sgx_rd(sdev, SGX_CR_BIF_DIR_LIST_BASE0) == pd) {
+		drm_dbg_driver(&sdev->base, "list 0 still on a released VM's directory\n");
+		sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE0, pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	}
+	if (IS_ENABLED(CONFIG_PM))
+		pm_runtime_put(dev);
+}
+
 static void vm_release(struct kref *ref)
 {
 	struct pvrsgx_vm *vm = container_of(ref, struct pvrsgx_vm, ref);
@@ -147,6 +170,9 @@ static void vm_release(struct kref *ref)
 	if (vm->pb)
 		pvrsgx_pb_unmap(vm);
 	drm_mm_takedown(&vm->params);
+	if (vm->pd_slot)
+		pvrsgx_fw_pd_slot_put(vm->sdev, vm->pd_slot);
+	vm_pd_unload(vm->sdev, vm->mmu);
 	pvrsgx_mmu_destroy(vm->mmu);
 	/* The directory and its pages may come back as another VM's. */
 	mutex_lock(&vm->sdev->ccb_lock);
@@ -232,16 +258,37 @@ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
 		kfree(vm);
 		return ERR_PTR(-ENOMEM);
 	}
+	if (pvrsgx_core_single_context(sdev->family)) {
+		pvrsgx_share_fw_heaps(sdev, vm->mmu);
+		vm->pd_slot = pvrsgx_fw_pd_slot_get(sdev, pvrsgx_mmu_pd_addr(vm->mmu));
+		if (vm->pd_slot < 0) {
+			int err = vm->pd_slot;
+
+			drm_gem_object_put(r_obj);
+			pvrsgx_mmu_destroy(vm->mmu);
+			kfree(vm);
+			return ERR_PTR(err);
+		}
+	}
 	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
-		       0, SZ_4G, 0, 0, &pvrsgx_gpuvm_ops);
+		       0, BIT_ULL(sdev->family->va_bits), 0, 0, &pvrsgx_gpuvm_ops);
 	drm_gem_object_put(r_obj);
 	vm->sdev = sdev;
-	drm_mm_init(&vm->params, PVRSGX_HEAP_3D_PARAMS,
-		    PVRSGX_HEAP_TA_DATA - PVRSGX_HEAP_3D_PARAMS);
+	drm_mm_init(&vm->params, pvrsgx_heaps(sdev)->params_3d.base,
+		    pvrsgx_heaps(sdev)->params_3d.end - pvrsgx_heaps(sdev)->params_3d.base);
 	mutex_init(&vm->lock);
 	kref_init(&vm->ref);
 	atomic_set(&vm->users, 1);
 	return vm;
+}
+
+/*
+ * What a HW context's directory word holds: the directory's address, or on a
+ * single-context core its slot in the microkernel's PD table.
+ */
+u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm)
+{
+	return vm->pd_slot ?: pvrsgx_mmu_pd_addr(vm->mmu);
 }
 
 struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle)
@@ -322,7 +369,7 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 	if (!args->size || !PAGE_ALIGNED(args->size) || !PAGE_ALIGNED(args->offset) ||
 	    !PAGE_ALIGNED(args->device_addr))
 		return -EINVAL;
-	heap = pvrsgx_heap_find(args->device_addr, args->size);
+	heap = pvrsgx_heap_find(to_pvrsgx_device(drm), args->device_addr, args->size);
 	if (heap < 0)
 		return -EINVAL;
 

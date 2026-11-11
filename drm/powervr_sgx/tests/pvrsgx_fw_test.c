@@ -137,7 +137,7 @@ static void ukfw_test_tables(struct kunit *test)
 		{ false, 0, T_IMAGE - 4, UKFW_TA3DCTL },	/* patch past the image */
 		{ false, 0, 0xc, UKFW_TA3DCTL },	/* patch not on an instruction */
 		{ false, 1, 0x48, 0 },		/* value 0 */
-		{ false, 1, 0x48, UKFW_MISC + 1 },	/* unknown value */
+		{ false, 1, 0x48, UKFW_PDTABLE + 1 },	/* unknown value */
 	};
 
 	for (u32 i = 0; i < ARRAY_SIZE(bad); i++) {

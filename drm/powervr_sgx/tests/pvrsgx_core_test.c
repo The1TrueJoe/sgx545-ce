@@ -62,10 +62,42 @@ static void core_test_table(struct kunit *test)
 	}
 }
 
+/* The SGX545's layout is the fixed one of docs/UAPI.md section 5; the SGX530's fits 28 bits. */
+static void core_test_heaps(struct kunit *test)
+{
+	const struct pvrsgx_core_family *f545 = pvrsgx_core_family_get(545);
+	const struct pvrsgx_core_family *f530 = pvrsgx_core_family_get(530);
+
+	KUNIT_ASSERT_NOT_NULL(test, f545);
+	KUNIT_ASSERT_NOT_NULL(test, f530);
+	KUNIT_EXPECT_FALSE(test, pvrsgx_core_single_context(f545));
+	KUNIT_EXPECT_EQ(test, f545->heaps->kernel_code.base, PVRSGX_HEAP_KERNEL_CODE);
+	KUNIT_EXPECT_EQ(test, f545->heaps->kernel_data.base, PVRSGX_HEAP_KERNEL_DATA);
+	KUNIT_EXPECT_EQ(test, f545->heaps->pds_pixel.base, PVRSGX_HEAP_PDS_PIXEL);
+	KUNIT_EXPECT_EQ(test, f545->heaps->params_3d.base, PVRSGX_HEAP_3D_PARAMS);
+	KUNIT_EXPECT_EQ(test, f545->heaps->texture.end, SZ_4G);
+	KUNIT_EXPECT_EQ(test, f545->heaps->pb_max_pages, 0x8000);
+	KUNIT_EXPECT_EQ(test, f545->quirks, 0);
+
+	KUNIT_EXPECT_TRUE(test, pvrsgx_core_single_context(f530));
+	KUNIT_EXPECT_EQ(test, f530->num_dir_lists, 1);
+	KUNIT_EXPECT_EQ(test, f530->va_bits, 28);
+	KUNIT_EXPECT_TRUE(test, heaps_fit(f530));
+	KUNIT_EXPECT_TRUE(test, f530->quirks & PVRSGX_QUIRK_BRN_28889);
+	/* The shared kernel heaps are whole 4 MiB directory entries. */
+	KUNIT_EXPECT_EQ(test, f530->heaps->kernel_code.base % SZ_4M, 0);
+	KUNIT_EXPECT_EQ(test, f530->heaps->kernel_data.end % SZ_4M, 0);
+	KUNIT_EXPECT_EQ(test, f530->heaps->sync.base % SZ_4M, 0);
+	KUNIT_EXPECT_EQ(test, f530->regs->bif_bank0, 0);
+	KUNIT_EXPECT_EQ(test, f530->regs->clkgatectl2, 0);
+	KUNIT_EXPECT_EQ(test, f530->regs->event_kick2, 0);
+}
+
 static struct kunit_case pvrsgx_core_test_cases[] = {
 	KUNIT_CASE(core_test_lookup),
 	KUNIT_CASE(core_test_unknown),
 	KUNIT_CASE(core_test_identify_only),
+	KUNIT_CASE(core_test_heaps),
 	KUNIT_CASE(core_test_table),
 	{}
 };

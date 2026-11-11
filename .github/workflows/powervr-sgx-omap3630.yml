@@ -101,7 +101,8 @@ jobs:
           for m in out/*.ko; do
             printf '%s %s\n' "$(basename $m)" "$(strings $m | sed -n 's/^vermagic=//p')"
           done | tee out/vermagic
-          grep -q "^powervr_sgx.ko $LINUX_VERSION SMP .*ARMv7" out/vermagic
+          # omap2plus is a multi-v6/v7 kernel: its vermagic says ARMv6, as the board's does.
+          grep -q "^powervr_sgx.ko $LINUX_VERSION SMP mod_unload modversions ARMv" out/vermagic
           [ "$(wc -l < out/vermagic)" = 5 ]
           ls -l out
 

@@ -48,6 +48,8 @@ struct seq_buf;
 /* Feature bits of the open microkernel's file header (docs/UKERNEL.md 4a). */
 #define PVRSGX_UKFW_CLEANUP_V2		BIT(0)	/* accepted, unused */
 #define PVRSGX_UKFW_SECURE		BIT(1)
+/* Runs on list 0 with the jobs, directories from the PD table (single-context cores). */
+#define PVRSGX_UKFW_SINGLE_CONTEXT	BIT(2)
 
 #define HOSTCTL_INIT_COMPLETE		BIT(0)
 #define HOSTCTL_POWMAN_POWEROFF_COMPLETE BIT(3)
@@ -62,5 +64,7 @@ u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word);
 void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v);
 void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
 		    const char *name);
+int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd);
+void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot);
 
 #endif /* PVRSGX_FW_H */

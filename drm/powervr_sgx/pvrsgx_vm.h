@@ -43,9 +43,12 @@ struct pvrsgx_vm {
 	struct kref ref;
 	/** @users: The handle and the live contexts; at zero its mappings go. */
 	atomic_t users;
+	/** @pd_slot: Its slot in the microkernel's PD table (single-context cores), or 0. */
+	int pd_slot;
 };
 
 struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);
+u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm);
 struct pvrsgx_vm *pvrsgx_vm_get(struct pvrsgx_vm *vm);
 void pvrsgx_vm_put(struct pvrsgx_vm *vm);
 void pvrsgx_vm_user_get(struct pvrsgx_vm *vm);
@@ -53,7 +56,7 @@ void pvrsgx_vm_user_put(struct pvrsgx_vm *vm);
 struct dma_resv *pvrsgx_vm_resv(struct pvrsgx_vm *vm);
 struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
 void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);
-int pvrsgx_heap_find(u64 addr, u64 size);
+int pvrsgx_heap_find(const struct pvrsgx_device *sdev, u64 addr, u64 size);
 
 int pvrsgx_ioctl_create_vm_context(struct drm_device *drm, void *data, struct drm_file *file);
 int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct drm_file *file);

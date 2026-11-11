@@ -363,7 +363,8 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	const struct drm_sched_init_args args = {
 		.ops = &pvrsgx_sched_ops,
 		.num_rqs = DRM_SCHED_PRIORITY_COUNT,
-		.credit_limit = overlap ? 2 : 1,
+		/* One directory list: a second VM's TA can't run under the first's 3D. */
+		.credit_limit = overlap && !pvrsgx_core_single_context(sdev->family) ? 2 : 1,
 		.timeout = msecs_to_jiffies(job_timeout_ms),
 		.name = "powervr_sgx",
 		.dev = sdev->base.dev,
@@ -422,7 +423,8 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	if (args->type == DRM_POWERVR_SGX_CTX_TYPE_TRANSFER && args->param_buffer_pages)
 		return -EINVAL;
 	if (args->param_buffer_pages &&
-	    (args->param_buffer_pages < 0x100 || args->param_buffer_pages > 0x8000))
+	    (args->param_buffer_pages < 0x100 ||
+	     args->param_buffer_pages > pvrsgx_heaps(to_pvrsgx_device(drm))->pb_max_pages))
 		return -EINVAL;
 
 	ctx = kzalloc_obj(*ctx);
