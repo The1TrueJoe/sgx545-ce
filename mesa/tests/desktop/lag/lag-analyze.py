@@ -147,6 +147,12 @@ def stats(path):
             acc["cpu_blits"].append(int(m.group(3)))
             acc["cpu_blit_ms"].append(float(m.group(5)))
             continue
+        m = re.search(r"end of frame (\d+), other flush (\d+), target switch (\d+)(?: \((\d+) of clears only\))?", ln)
+        if m:
+            acc["r_eof"].append(int(m.group(1)))
+            acc["r_switch"].append(int(m.group(3)))
+            if m.group(4) is not None:
+                acc["r_clear_only"].append(int(m.group(4)))
         m = re.search(r"render latency \(kick to seen done\) " + NUM + r" ms over (\d+)", ln)
         if m and int(m.group(2)):
             acc["latency_ms"].append(float(m.group(1)))
@@ -194,8 +200,9 @@ def variant(d, name):
     cur = re.search(r"current (\d+ x \d+)", res)
     print(f"## {name} ({cur.group(1) if cur else '?'})\n")
     print("| workload | s | GPU busy % (by process) | renders/s | CPU % Xorg / xfwm4 / other / machine | "
-          "X FPS, draw+flush ms/s, slot wait ms/s, CPU blits | xfwm4 FPS, draw+flush ms/s, latency ms | metric |")
-    print("|---|---|---|---|---|---|---|---|")
+          "X FPS, draw+flush ms/s, slot wait ms/s, CPU blits | xfwm4 FPS, draw+flush ms/s, latency ms | "
+          "renders per 2 s X / xfwm4: frame end, target switch (clears only) | metric |")
+    print("|---|---|---|---|---|---|---|---|---|")
     for w, t0, t1 in marks:
         dur = t1 - t0
         busy = collections.Counter()
@@ -220,7 +227,14 @@ def variant(d, name):
         fs = (f"{fmt(sf.get('fps'), 1)}, {fmt((sf.get('draw_ms') or 0) + (sf.get('flushwait_ms') or 0))}, "
               f"{fmt(sf.get('latency_ms'), 1)}") if sf else "-"
         mt = ", ".join(f"{k} {v}" for k, v in metric(os.path.join(d, f"wl-{w}.txt")).items()) or ""
-        print(f"| {w} | {dur:.0f} | {gb} | {rn} | {cp} | {xs} | {fs} | {mt} |")
+
+        def causes(st):
+            if "r_eof" not in st:
+                return "-"
+            return (f"{st['r_eof']:.0f}, {st.get('r_switch', 0):.0f}"
+                    f" ({fmt(st.get('r_clear_only'))})")
+        rc = f"{causes(sx)} / {causes(sf)}"
+        print(f"| {w} | {dur:.0f} | {gb} | {rn} | {cp} | {xs} | {fs} | {rc} | {mt} |")
     if sizes:
         print("\nrender sizes: " + "; ".join(f"{c}: " + ", ".join(f"{s} x{k}" for s, k in v.most_common(3))
                                        for c, v in sizes.items()))

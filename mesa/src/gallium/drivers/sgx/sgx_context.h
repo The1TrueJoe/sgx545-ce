@@ -171,12 +171,16 @@ struct sgx_context {
    struct pipe_sampler_view *views[PIPE_MAX_SHADER_SAMPLER_VIEWS]; /* fragment */
 
    /* SGX_STATS=1: where the time goes, printed every 2 s */
+   /* objects the frame being recorded has from clears (the stats tell a frame
+    * of clears alone) */
+   unsigned frame_clears;
    struct {
       bool on;
       uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns, rb_ns, rb_bytes;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read,
-         fl_deferred; /* flushes by cause */
+         fl_deferred;           /* flushes by cause */
+      unsigned fl_switch_clear; /* of the switches, of a frame of clears only */
       unsigned vc_hits, vc_misses, vc_uncacheable, zc_draws;
       unsigned blit_gpu, blit_copy, blit_cpu;
       uint64_t blit_cpu_px, blit_cpu_ns;
