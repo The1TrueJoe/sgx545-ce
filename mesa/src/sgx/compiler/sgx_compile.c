@@ -1159,7 +1159,7 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
             return false;
    }
    unsigned t = new_vreg16(c, ALIGN_POT(nc, 2));
-   struct sgx_ref r[4];
+   struct sgx_ref r[4] = {0};
    for (unsigned p = 0; 2 * p < nc; p++) {
       unsigned l1 = 2 * p + 1 < nc ? 2 * p + 1 : 2 * p;
       struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_MOVC_I32);
@@ -2512,7 +2512,7 @@ vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
                                                                       : 4;
    nir_component_mask_t rd = nir_def_components_read(&in->def);
    unsigned t = fmt >= SGX_VF_UNORM8_4 ? new_vreg(c, nc) : 0;
-   struct sgx_ref x[4];
+   struct sgx_ref x[4] = {0};
    for (unsigned k = 0; k < nc; k++) {
       unsigned comp = (r & 3) + k;
       if (comp >= held) {
@@ -2735,7 +2735,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                 c->const_fmt[k + nc] == 3)
             c->const_used[k + nc++] = 1;
          unsigned t = new_vreg16(c, 4);
-         struct sgx_ref r[4];
+         struct sgx_ref r[4] = {0};
          for (unsigned p = 0; p < (nc + 1) / 2; p++) {
             struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_C10);
             i->nops = 3;
@@ -2796,7 +2796,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       v->n = r;
       if (r & SGX_IN_HALF) {
          /* iterated as F16: component j in half (2 * pa + comp) + j */
-         struct sgx_ref hr[4];
+         struct sgx_ref hr[4] = {0};
          for (unsigned j = 0; j < in->def.num_components; j++) {
             hr[j] = ref(SGX_F_PA, (r & ~SGX_IN_HALF) + j);
             hr[j].h16 = 1;
@@ -2908,7 +2908,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                in->intrinsic == nir_intrinsic_ddy_coarse;
       nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
       unsigned nc = in->def.num_components, w = new_vreg(c, nc);
-      struct sgx_ref r[4];
+      struct sgx_ref r[4] = {0};
       for (unsigned j = 0; j < nc; j++) {
          struct sgx_ins *d =
             ins_alloc(c, SGX_INS_ALU, y ? SGX_OP_FDSY : SGX_OP_FDSX);
@@ -3922,7 +3922,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    } else {
       /* the smp the finalizer writes: raw texel -> a temporary; coordinate
        * in consecutive registers of one bank */
-      struct sgx_ref cr[4];
+      struct sgx_ref cr[4] = {0};
       for (unsigned k = 0; k < ncoord; k++)
          cr[k] = src_comp(c, &ls, k);
       if (pi >= 0) {
@@ -4096,7 +4096,7 @@ c10_alu(nir_def *d)
 static nir_alu_instr *
 c10_msub(nir_alu_instr *alu, nir_def **x)
 {
-   bool n0, n1;
+   bool n0 = false, n1 = false;
    nir_def *a = c10_src(alu, 0, &n0), *b = c10_src(alu, 1, &n1);
    if (alu->op != nir_op_fadd || !a || !b || n0 == n1)
       return NULL;
