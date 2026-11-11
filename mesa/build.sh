@@ -20,7 +20,7 @@
 #   debian  a native build on Debian (mesa/debian: CI) for /opt/sgx, for users.
 # Installs into $SGX_MESA_BUILD/<arch>/install (lib/libEGL.so.1,
 # lib/libGLESv2.so.2, lib/libgallium-<ver>.so, ...), and copies the winsys
-# test (sgx_frame_test) next to it.
+# tests (sgx_frame_test, sgx_hwt) next to it.
 #
 # Needs: zig (0.14+), meson, ninja, python3 with mako and pyyaml, bison 3,
 # flex, network for the tarball and the libdrm wrap.
@@ -81,10 +81,10 @@ for arch in $ARCHES; do
 				-Dgallium-drivers=sgx,llvmpipe -Dvulkan-drivers= -Dopengl=true \
 				-Dgles1=enabled -Dgles2=enabled -Degl=enabled -Dgbm=enabled -Dllvm=enabled \
 				-Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled
-		ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test
+		ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test src/gallium/winsys/sgx/drm/sgx_hwt
 		rm -rf "$O/install"
 		DESTDIR="$O/install" meson install -C "$O/build" --no-rebuild --quiet
-		cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/install/opt/sgx/lib/"
+		cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/build/src/gallium/winsys/sgx/drm/sgx_hwt" "$O/install/opt/sgx/lib/"
 		echo "build.sh: debian -> $O/install/opt/sgx"
 		continue
 	fi
@@ -128,9 +128,9 @@ for arch in $ARCHES; do
 			-Dlibunwind=disabled -Dlmsensors=disabled \
 			-Dallow-fallback-for=libdrm -Dlibdrm:tests=false
 	fi
-	ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test
+	ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test src/gallium/winsys/sgx/drm/sgx_hwt
 	rm -rf "$O/install"
 	DESTDIR="$O/install" meson install -C "$O/build" --no-rebuild --quiet
-	cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/install/usr/lib/"
+	cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/build/src/gallium/winsys/sgx/drm/sgx_hwt" "$O/install/usr/lib/"
 	echo "build.sh: $arch -> $O/install/usr/lib"
 done

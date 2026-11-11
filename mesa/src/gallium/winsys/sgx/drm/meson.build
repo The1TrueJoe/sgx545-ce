@@ -85,3 +85,17 @@ sgx_frame_test = executable(
   build_by_default : false,
   install : false,
 )
+
+# Hand-written fragment programs through the winsys, their result read back:
+# the hardware checks on the open stack (ninja sgx_hwt; tools/isa/hwt_open.py).
+sgx_hwt = executable(
+  'sgx_hwt',
+  files('sgx_hwt.c'), sgx_ws_files,
+  include_directories : [sgx_ws_inc, inc_src, inc_include],
+  c_args : sgx_ws_args,
+  objects : sgx_ws_pvr,
+  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
+                  idep_sgx_isa],
+  build_by_default : false,
+  install : false,
+)
