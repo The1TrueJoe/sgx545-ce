@@ -427,7 +427,7 @@ uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code,
  * done */
 void sgxws_code_free(struct sgxws_ctx *c, uint32_t va);
 
-/* built-in shaders (tools/gen/mkusse.py) */
+/* built-in shaders (src/sgx/compiler/sgx_fixed.c) */
 enum sgxws_builtin {
    SGXWS_VS_XY,      /* gl_Position = vec4(a0.xy, 0, 1) */
    SGXWS_VS_XYZ,     /* gl_Position = vec4(a0.xyz, 1) */

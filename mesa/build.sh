@@ -55,7 +55,6 @@ fi
 (cd "$HERE/src" && tar cf - .) | (cd "$TREE/src" && tar xf -)
 ln -sfn "$REPO/kernel/src" "$TREE/include/sgx-kernel"
 ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx/drm/libpvr"
-python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx/drm/sgx_usse_progs.h"
 # the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi), and its
 # command streams' XML with the generator meson runs on it (src/sgx/kmd_stream),
 # from their one definition

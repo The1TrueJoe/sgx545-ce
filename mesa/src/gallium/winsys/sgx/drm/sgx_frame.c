@@ -28,7 +28,6 @@
 #include "sgx_csb.h"
 #include "sgx_frame.h"
 #include "sgx_pds.h"
-#include "sgx_usse_progs.h"
 
 /* Placement: PDS programs on 64 bytes, USSE programs on 128, DMA sources on
  * 32 [D: captured PDS programs start on 32; G: what the hardware needs is
@@ -389,7 +388,7 @@ code_fini(struct sgxws_ctx *c, struct sgxws_code *code)
 }
 
 static uint32_t
-usse_load(struct sgxws_ctx *c, const struct usse_prog *pr, bool vertex)
+usse_load(struct sgxws_ctx *c, const struct sgx_fixed_prog *pr, bool vertex)
 {
    return sgxws_usse_upload(c, vertex, pr->w, pr->n, pr->reloc, pr->nreloc);
 }
@@ -883,27 +882,32 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
       c->pds_pix.memo = calloc(1, sizeof(*c->pds_pix.memo));
 
    /* fixed USSE programs */
-   c->empty_v = usse_load(c, &usse_empty, true);
-   c->empty_p = usse_load(c, &usse_empty, false);
-   c->copy_fs = usse_load(c, &usse_copy_fs, false);
-   c->clear_vs = usse_load(c, &usse_clear_vs, true);
-   c->vpgen_vs = usse_load(c, &usse_vpgen_vs, true);
-   c->pe_ptoff = usse_load(c, &usse_pe_ptoff, false);
-   c->pe_emit = usse_load(c, &usse_pe_emit, false);
+   char err[160];
+   if (!sgx_fixed_progs_build(&c->fixed, err, sizeof(err))) {
+      mesa_loge("sgx: %s", err);
+      goto fail;
+   }
+   c->empty_v = usse_load(c, &c->fixed.empty, true);
+   c->empty_p = usse_load(c, &c->fixed.empty, false);
+   c->copy_fs = usse_load(c, &c->fixed.copy_fs, false);
+   c->clear_vs = usse_load(c, &c->fixed.clear_vs, true);
+   c->vpgen_vs = usse_load(c, &c->fixed.vpgen_vs, true);
+   c->pe_ptoff = usse_load(c, &c->fixed.pe_ptoff, false);
+   c->pe_emit = usse_load(c, &c->fixed.pe_emit, false);
    {
       /* phas, the secondary programs' prologue up to its wdf, nop [end] */
       uint32_t w[12];
 
       w[0] = 0;
       w[1] = 0xfa440700;
-      memcpy(w + 2, usse_fs_uniform_sec.w + 2, 4 * 8);
+      memcpy(w + 2, c->fixed.fs_uniform_sec.w + 2, 4 * 8);
       w[10] = 0x00000000;
       w[11] = 0xf8040140;
       c->sec_wait = sgxws_usse_upload(c, false, w, 6, NULL, 0);
    }
    /* every state-emit length up front: the code rings are never reset */
    for (int n = 1; n <= 32; n++)
-      c->state_emit[n] = usse_load(c, usse_state_emit[n], true);
+      c->state_emit[n] = usse_load(c, &c->fixed.state_emit[n], true);
 
    /* VDM state programs that every frame ends with */
    c->empty_state = pds_secondary(&c->pds_vtx, 0, 0,
@@ -2347,15 +2351,15 @@ sgxws_prog_builtin(struct sgxws_ctx *c, enum sgxws_builtin which,
    case SGXWS_VS_XY:
    case SGXWS_VS_XYZ:
       s->vertex = true;
-      s->code =
-         usse_load(c, which == SGXWS_VS_XY ? &usse_vs_xy : &usse_vs_xyz, true);
+      s->code = usse_load(
+         c, which == SGXWS_VS_XY ? &c->fixed.vs_xy : &c->fixed.vs_xyz, true);
       s->in_dwords = 4;
       s->out_dwords = 4;
       s->attr_dwords = which == SGXWS_VS_XY ? 2 : 3;
       break;
    case SGXWS_FS_UNIFORM:
-      s->sec = usse_load(c, &usse_fs_uniform_sec, false);
-      s->code = usse_load(c, &usse_fs_uniform, false);
+      s->sec = usse_load(c, &c->fixed.fs_uniform_sec, false);
+      s->code = usse_load(c, &c->fixed.fs_uniform, false);
       s->sec_dwords = SGXWS_FS_UNIFORM_DWORDS;
       break;
    }
@@ -2387,9 +2391,9 @@ uint32_t
 sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
                 unsigned temps)
 {
-   /* usse_vs_xy: [0] phas.i @p1, [1-4] the prologue, [7] phas.i @p2 [wait=2],
+   /* fixed.vs_xy: [0] phas.i @p1, [1-4] the prologue, [7] phas.i @p2 [wait=2],
     * [9] emit.t3 r0, #0, #0 [end f12 f10], [10-11] the epilogue phase */
-   const uint32_t *t = usse_vs_xy.w;
+   const uint32_t *t = c->fixed.vs_xy.w;
    uint32_t *w = malloc((count + 12) * 8), va;
    uint8_t reloc[2];
    unsigned n = 0, p1, p2;

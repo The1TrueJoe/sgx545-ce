@@ -464,7 +464,8 @@ uapi-stream. Status as of 2026-11-08.
   - m2's `pvrsgx_*` rename (e90beba) covers the kernel's stream decoder only.
     The uAPI names (`powervr_sgx_drm.h`, `powervr_sgx_kmd_stream.xml`,
     `SGX_KMD_STREAM_*`) are unchanged, so Mesa has nothing to follow.
-- **`sgx_usse_progs.h`** comes from `tools/gen/mkusse.py`. That is M9.
+- **`sgx_usse_progs.h`** is gone (M9): the winsys assembles the fixed
+  programs per context with `sgx_fixed_progs_build()`.
 
 ### W5. Comments
 

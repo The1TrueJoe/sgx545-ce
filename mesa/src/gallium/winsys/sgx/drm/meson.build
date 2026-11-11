@@ -50,7 +50,7 @@ if get_option('gallium-sgx-pvrsrvkm')
     files('libpvr/pvr.c', 'sgx_pvr.c'),
     include_directories : [include_directories('.', 'libpvr'), inc_sgx_kernel, inc_src, inc_include],
     c_args : sgx_kernel_args,
-    dependencies : [idep_sgx_pds, idep_sgx_core],
+    dependencies : [idep_sgx_pds, idep_sgx_core, idep_sgx_compiler],
     gnu_symbol_visibility : 'hidden',
   )
   sgx_ws_args += '-DSGX_PVRSRVKM'
@@ -69,7 +69,7 @@ libsgxwinsys = static_library(
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
   dependencies : [idep_mesautil, dep_libdrm, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_core, idep_sgx_kmd_stream],
+                  idep_sgx_core, idep_sgx_kmd_stream, idep_sgx_compiler],
   gnu_symbol_visibility : 'hidden',
 )
 
@@ -82,7 +82,7 @@ sgx_frame_test = executable(
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
   dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_core, idep_sgx_kmd_stream],
+                  idep_sgx_core, idep_sgx_kmd_stream, idep_sgx_compiler],
   build_by_default : false,
   install : false,
 )

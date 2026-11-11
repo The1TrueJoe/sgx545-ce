@@ -44,6 +44,7 @@
 #include "util/log.h"
 
 #include "sgx_core.h"
+#include "sgx_fixed.h"
 #include "sgxws.h"
 
 /* where a buffer lives: the SGX heap ids (the low byte of a services heap
@@ -156,6 +157,7 @@ struct sgxws_ctx {
    int priority; /* sgxws_ctx_create's */
    /* program code, pixel [0] and vertex [1] (sgxws_usse_upload) */
    struct sgxws_code usse[2];
+   struct sgx_fixed_progs fixed; /* the fixed programs, assembled */
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
    /* the end-of-tile programs: two code pools used in turn, each emptied
     * once no render runs code from it */
