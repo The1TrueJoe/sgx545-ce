@@ -6,8 +6,10 @@ drm/powervr_sgx PowerVR SGX545 GPU Driver
 
 ``powervr_sgx`` is a render-only DRM driver for the PowerVR SGX545. It binds
 the GPU where it is a PCI function of its own, as in the Intel CE5300
-(``8086:089b``, core revision 1.0.14). Scanout goes through a separate KMS
-driver, and buffers move between the two as dma-bufs.
+(``8086:089b``, core revision 1.0.14), and on Cedarview (GMA3600/3650, core
+revision 1.0.13), where the SGX shares a PCI function with the display engine,
+as the auxiliary device ``gma500_gfx.sgx`` that gma500 publishes. Scanout goes
+through a separate KMS driver, and buffers move between the two as dma-bufs.
 
 .. toctree::
    :maxdepth: 2
@@ -138,11 +140,15 @@ they reference.
 Recovery
 ========
 
-A job that doesn't finish within the scheduler's timeout resets the GPU. The
-driver takes a devcoredump (registers, the microkernel's control blocks, the
-command buffer and the hung job's structures). It then restarts the microkernel
-and marks the guilty context. Its later submissions fail, and other contexts
-carry on.
+A job that doesn't finish within the scheduler's timeout, or that takes a GPU
+page fault, resets the GPU. The SGX545 raises no interrupt for a page fault, so
+the driver checks the MMU's fault status while jobs are on the GPU. The
+driver halts the cores and takes a devcoredump (registers, the microkernel's
+control blocks, the command buffer and the hung job's structures). Then it
+fails the jobs that were on the GPU: the guilty one with -ETIME, or -EFAULT
+after a fault, and the others with -ECANCELED. It restarts the microkernel and
+marks the guilty context. Its later submissions fail, and other contexts carry
+on.
 
 Power
 =====
@@ -159,34 +165,14 @@ Debugging
 debugfs, under ``/sys/kernel/debug/dri/<minor>/``, has:
 
 ``status``
-    firmware state, command buffer offsets, the host control block and the
-    core's registers (when powered).
+    firmware state, command buffer offsets, the host control block and,
+    while the GPU is awake, the core's registers.
 
-``render``
-    the last render job's structures, as the microkernel left them.
-
-``render_before``
-    with ``snapshot=1``, the same structures as the driver wrote them before
-    the last kick.
+``ctlblk``
+    the microkernel's TA/3D and host control blocks.
 
 Module parameters
 =================
 
-``firmware``
-    microkernel image under ``/lib/firmware``.
-
-``runtime_pm``
-    power the microkernel off when idle (default on).
-
-``core_clock``
-    SGX core clock in Hz, for the microkernel's timer.
-
-``share_kernel_heaps``
-    map the firmware's heaps in every VM. The default is -1: on only for a
-    microkernel that runs a job under the job's own page directory and can't
-    reach its data otherwise. When they are shared, a client's tasks can reach
-    the firmware's memory, and the driver says so at load.
-
-``cleanup``, ``restart_quiesce``, ``reap_after_render``, ``idle_kernel_pd``,
-``single_entry``, ``snapshot``, ``snap_gap_ms``
-    debugging only.
+``job_timeout_ms``
+    how long a job may run before the GPU is reset (default 2000).
