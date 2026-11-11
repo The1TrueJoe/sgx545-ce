@@ -78,8 +78,8 @@ const char *pvrsgx_kobj_quarantined(struct pvrsgx_device *sdev, u32 dev_addr, u6
 
 struct page;
 struct pvrsgx_bo_quarantine;
-struct pvrsgx_bo_quarantine *pvrsgx_bo_quarantine_take(struct pvrsgx_device *sdev,
-						      struct page **pages, unsigned int n);
+struct pvrsgx_bo_quarantine *
+pvrsgx_bo_quarantine_take(struct pvrsgx_device *sdev, struct page **pages, unsigned int n);
 void pvrsgx_bo_quarantine_arm(struct pvrsgx_device *sdev, struct pvrsgx_bo_quarantine *q);
 void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o);
 void pvrsgx_kobj_dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off,

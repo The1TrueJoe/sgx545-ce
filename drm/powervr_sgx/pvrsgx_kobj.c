@@ -358,8 +358,8 @@ static void qbo_release(struct pvrsgx_device *sdev, struct pvrsgx_bo_quarantine 
 }
 
 /* Before shmem frees a client object: hold its pages. NULL when off. */
-struct pvrsgx_bo_quarantine *pvrsgx_bo_quarantine_take(struct pvrsgx_device *sdev,
-						      struct page **pages, unsigned int n)
+struct pvrsgx_bo_quarantine *
+pvrsgx_bo_quarantine_take(struct pvrsgx_device *sdev, struct page **pages, unsigned int n)
 {
 	struct pvrsgx_bo_quarantine *q;
 
@@ -394,8 +394,9 @@ void pvrsgx_bo_quarantine_arm(struct pvrsgx_device *sdev, struct pvrsgx_bo_quara
 	sdev->bo_quarantine_pages += q->npages;
 	while (sdev->bo_quarantine_pages >
 	       (unsigned long)quarantine_bo_max_mb << (20 - PAGE_SHIFT)) {
-		struct pvrsgx_bo_quarantine *o = list_first_entry(&sdev->bo_quarantine,
-								  struct pvrsgx_bo_quarantine, node);
+		struct pvrsgx_bo_quarantine *o;
+
+		o = list_first_entry(&sdev->bo_quarantine, struct pvrsgx_bo_quarantine, node);
 
 		if (o == q)
 			break;
@@ -551,8 +552,9 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 		q_release(sdev, o);
 	}
 	while (!list_empty(&sdev->bo_quarantine)) {
-		struct pvrsgx_bo_quarantine *q = list_first_entry(&sdev->bo_quarantine,
-								  struct pvrsgx_bo_quarantine, node);
+		struct pvrsgx_bo_quarantine *q;
+
+		q = list_first_entry(&sdev->bo_quarantine, struct pvrsgx_bo_quarantine, node);
 
 		list_del(&q->node);
 		sdev->bo_quarantine_pages -= q->npages;
