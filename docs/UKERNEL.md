@@ -842,11 +842,26 @@ below does not depend on the PB's size:
   global threshold (0x40 there) and resumes at 51-54.
 - The resumed TA allocates up to the threshold again within about 50 µs and
   raises another OOM.
-- After 2-4 partial renders, the next OOM takes the grant path. It pauses
-  the TA for about 33 µs: 0x628 += 16, 0x624 += 32, then the free-list
-  reload from the live counters. There is no render.
-- The scene then finishes, and the TA finish puts 0x628 and 0x624 back.
-- Over the run: 16,211 pauses with a partial render, 9,145 grants.
+- Partial renders alternate with a "stage 1" response (pc 0x0b97-0x0bac)
+  that has no render:
+  - pause the TA and let 0x700 settle;
+  - save 0x628, then set **0x628 = (0x72c >> 16) | 0x10000**;
+  - reload the TA free list from the live counters;
+  - unpause, set the stage-1 flag, and write 0x69c = 1.
+- The next OOM with that flag set undoes it (pc 0x0bad): it puts 0x628
+  back and reloads again. Then it picks between a partial render and the
+  rare +16 grant (pc 0x0bd3: 0x628 += 16, 0x624 += 32, a reload). If
+  0x734 b0 is set, stage 1 is skipped.
+- Over the run's 27,319 pauses:
+  - 16,211 partial renders;
+  - 7,643 stage-1 raises;
+  - 729 +16 grants;
+  - 1,963 pause-only.
+- Partial render → stage 1 happens 7,189 times, stage 1 → partial render
+  6,297.
+- The TA free list is reloaded about once per partial render: 0x61c
+  changes 16,274 times. That reload keeps the free list in step with the
+  DPM after its state has been moved.
 - During the render, 0x50c = 0x408, 0x63c = 3 and 0x630 = 2. 0x630 reads
   back. Other scenes use both slots meanwhile (0x630 = 4, 5, 7).
 
@@ -1072,6 +1087,34 @@ inside it. While a window is open, the EDM fetches its instructions and reads
 kernel data through the client's page directory. The DDK therefore needs the
 kernel code and kernel-data heaps mapped in every client PD; it has no mode
 that works without them.
+
+**The TA and the 3D each get their own directory list (pc 0x17ec).** Every TA
+and 3D kick path calls one routine to point a requestor at a memory context.
+r16 is the context; its word 2 is the page-directory address. `r17 & 3`
+picks the 3D (BANK0 b12-15) or the TA (b4-7).
+- **Pick a list.** It treats lists 0-14 as a cache of page directories. It
+  takes list 0 if that is empty or already holds this directory, otherwise
+  the first of lists 1-14 that is empty or matches.
+- **Evict when all are full.** It advances a round-robin cursor (TA3D word
+  49) mod 15 and skips the list that the *other* requestor is using
+  (pc 0x1807-0x180f). A TA can therefore load its context's directory while
+  the 3D keeps translating through a different context's directory.
+- **Load the list.**
+  1. `BIF_CTRL` |= 8, then restore it (invalidate).
+  2. For the TA only: 0xad0 = 1, 0xae0 = 1 and 0x804 b15.
+  3. 0xa08 = 1, wait for 0x138 & 0x27, then acknowledge it in 0x140.
+  4. Wait for `EVENT_STATUS` b26.
+  5. Write the list register, only if its value changes.
+  6. Write the requestor's nibble in `BIF_BANK0` (pc 0x184c-0x1854).
+- **Shared PB.** The DDK's default PB is one buffer that every context
+  shares, so the two DPM slots hold scenes from any context.
+- **What a microkernel needs.** One that lets two contexts' jobs onto the
+  hardware at once needs the TA and the 3D on different lists, or it must
+  serialize contexts whose directories differ. Reloading a single shared list
+  for the next job swaps the directory under the job still running. The
+  captures are all single-context (`BIF_BANK0` = 0x101f: TA and 3D on list 1),
+  so concurrent use from two contexts is in the code but has not been seen.
+  [D, code]
 
 `EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
 SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only

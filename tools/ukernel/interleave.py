@@ -1,11 +1,13 @@
 """Replay a two-surface trace (tools/gen v2s: two RT datasets, one context and PB)
 through a microkernel in the emulator, with the two scenes interleaved.
 
-    python3 tools/ukernel/interleave.py FW TRACE [--order interleave|overlap|serial] [--rounds N]
+    python3 tools/ukernel/interleave.py FW TRACE [--order interleave|overlap|overlap2|serial] [--rounds N]
 
 interleave: A first, B first (A's scene open, not rendered), A last, B last.
 overlap:    A first, A last (A's 3D starts), B first while A's 3D runs, A's 3D
             ends, B last.
+overlap2:   A first, A last (A's 3D starts), B first and B last while A's 3D runs
+            (B's 3D is queued), A's 3D ends (B's 3D starts from it), B's 3D ends.
 serial:     A first, A last, A's render ends, then B the same way: one scene at a
             time, the two surfaces alternating, N rounds (A B A B ...).
 The commands are rewritten into the context CCB in that order. Prints every
@@ -25,7 +27,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("fw")
     ap.add_argument("trace")
-    ap.add_argument("--order", choices=("interleave", "overlap", "serial"), default="interleave")
+    ap.add_argument("--order", choices=("interleave", "overlap", "overlap2", "serial"), default="interleave")
     ap.add_argument("--rounds", type=int, default=2, help="serial: A/B pairs")
     a = ap.parse_args()
     out = io.StringIO()
@@ -87,6 +89,13 @@ def main():
                 kick(f"{name}{n} first", f)
                 kick(f"{name}{n} last", l)
                 render_end(f"{name}{n}")
+    elif a.order == "overlap2":
+        kick("A first", a1)
+        kick("A last", a2)
+        kick("B first (A's 3D running)", b1)
+        kick("B last (A's 3D running)", b2)
+        render_end("A")
+        render_end("B")
     else:
         kick("A first", a1)
         kick("A last", a2)
