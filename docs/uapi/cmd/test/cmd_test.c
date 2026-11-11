@@ -357,6 +357,8 @@ static void test_sgx530(void)
 	u64 present;
 
 	EXPECT_EQ(c->va_bits, 28, "the SGX530's address bits");
+	EXPECT_EQ(c->max_samples, 1, "the SGX530: single-sampled until 4x is known there");
+	EXPECT_EQ(core545->max_samples, 4, "the SGX545 renders 4x");
 	for (unsigned t = 0; t < PVRSGX_CMD_COUNT; t++)
 		EXPECT_EQ(c->cmds[t]->supported, 0, "no SGX530 command until its values are known");
 	EXPECT_EQ(pvrsgx_cmd_copy(c->cmds[PVRSGX_CMD_RENDER], UPTR(&r), &all, &present), -EOPNOTSUPP,

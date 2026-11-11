@@ -31,7 +31,7 @@ TYPES = {"u32": ("__u32", 4), "s32": ("__s32", 4), "u64": ("__u64", 8), "f32": (
 HEAPS = {"client": "CLIENT", "pds_pixel": "PDS_PIXEL"}
 LIMITS = {"tiles_x": "TILES_X", "tiles_y": "TILES_Y"}
 EXTENTS = {"rt_depth": "RT_DEPTH", "rt_stencil": "RT_STENCIL", "pds_rows": "PDS_ROWS"}
-CORE_VALUES = ("va_bits", "pds_row_bytes")
+CORE_VALUES = ("va_bits", "pds_row_bytes", "max_samples")
 CHECK_ATTRS = ("min", "max", "max_limit", "mask", "heap", "align", "optional", "extent",
                "extent_field")
 HEAD_SIZE = 16
@@ -457,7 +457,8 @@ def kernel_c(spec):
         out.append(f"const struct pvrsgx_cmd_core pvrsgx_cmd_core_{core} = {{")
         out.append(f"\t.name = \"{core}\",")
         for v in CORE_VALUES:
-            out.append(f"\t.{v} = {0 if vals[v] == 'unknown' else vals[v]},")
+            unknown = 1 if v == "max_samples" else 0  # max_samples: unknown is 1x only
+            out.append(f"\t.{v} = {unknown if vals[v] == 'unknown' else vals[v]},")
         out.append("\t.cmds = {")
         for c in spec.commands:
             out.append(f"\t\t[PVRSGX_CMD_{u(c.name)}] = &{core}_{c.name},")

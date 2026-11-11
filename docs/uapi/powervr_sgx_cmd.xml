@@ -16,6 +16,8 @@ One source, read only by docs/uapi/gen_cmd.py, which emits:
 <core>: a core the uAPI supports, with the values its checks depend on.
   va_bits        device-virtual address bits: an address must be below 2^va_bits
   pds_row_bytes  bytes per PDS data row (the pds_rows extent)
+  max_samples    the most samples per pixel an RT dataset may have (1 or 4);
+                 "unknown" is 1: single-sampled only
   "unknown" for a value not yet measured: a command that depends on it is not
   offered on that core (its job_types bit is clear, a submit is -EOPNOTSUPP).
 
@@ -46,8 +48,8 @@ Rules (rev3-commands.md section 3):
 
 <powervr_sgx_cmd>
 
-  <core name="sgx545" va_bits="32" pds_row_bytes="16"/>
-  <core name="sgx530" va_bits="28" pds_row_bytes="unknown"/>
+  <core name="sgx545" va_bits="32" pds_row_bytes="16" max_samples="4"/>
+  <core name="sgx530" va_bits="28" pds_row_bytes="unknown" max_samples="unknown"/>
 
   <!-- The 3D part of a render job (drm_powervr_sgx_job.cmd). -->
   <command name="render" job_type="RENDER">

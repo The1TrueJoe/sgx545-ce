@@ -376,10 +376,10 @@ from the start of the struct. One column per core: an address must be below
 | `ext_sgx545_ta_kick` (24 B, id 2, sgx545) | 0x00 | head | |  |  |
 | | 0x10 | `ta_flags2` | u32 | mask `0x02c80000` | - |
 
-| core | va_bits | pds_row_bytes | commands offered |
-|---|---|---|---|
-| sgx545 | 32 | 16 | render, ta_kick, transfer |
-| sgx530 | 28 | unknown | none |
+| core | va_bits | pds_row_bytes | max_samples | commands offered |
+|---|---|---|---|---|
+| sgx545 | 32 | 16 | 4 | render, ta_kick, transfer |
+| sgx530 | 28 | unknown | unknown | none |
 <!-- cmd-table end -->
 
 Where a field says "mapped", that is a programming-error check made at submit time. A

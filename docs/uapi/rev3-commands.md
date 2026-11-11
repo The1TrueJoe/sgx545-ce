@@ -334,6 +334,19 @@ extension.
 - **Its 2D unit**, if ever used, is a new job type, not a TRANSFER extension. The
   job-type enum stays open.
 
+**4x multisampling** (STATE.md "Multisampling (4x)"):
+- The sample count is the RT dataset's (`CREATE_RT_DATASET.samples`, 1 or 4,
+  0 is 1), not the render command's. The kernel sizes the tiling, the region
+  arrays and the ZLS from it. The resolve is a bit in the client's own PBE
+  words, so it needs no field.
+- `max_samples` is a per-core value in the XML: 4 on the SGX545; unknown on
+  the 530, which means 1x only. `limits.rt_max_samples` reports it, and a
+  dataset above it is `-EOPNOTSUPP`.
+- At 4x the depth and stencil extents scale by the sample count
+  (`pvrsgx_cmd_ctx.rt_samples`). A 4x render needs ZLS: `zls_control` not 0
+  in `EXT_SGX545_RENDER`, and so a depth address. On a core without that
+  extension, 4x can't be offered until its own ZLS extension exists.
+
 **DEV_QUERY additions** (the size-versioned query structs grow at their tails):
 - `limits.va_bits`;
 - `limits.caps`: bit 0 = backward (overlapping) blits, which the 530 lacks;

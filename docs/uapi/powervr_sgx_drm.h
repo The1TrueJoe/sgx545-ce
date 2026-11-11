@@ -728,9 +728,10 @@ struct drm_powervr_sgx_ioctl_create_rt_dataset_args {
 	__u32 height;
 
 	/**
-	 * @samples: [IN] Samples per pixel: 1 or 4 (0 is 1). A 4-sample
-	 * target's renders need a depth buffer and ZLS control, with depth
-	 * and stencil per sample.
+	 * @samples: [IN] Samples per pixel: 1 or 4 (0 is 1). 4 needs
+	 * &drm_powervr_sgx_dev_query_limits.rt_max_samples of 4 on this core;
+	 * otherwise it is -EOPNOTSUPP. A 4-sample target's renders need a
+	 * depth buffer and ZLS control, with depth and stencil per sample.
 	 */
 	__u32 samples;
 
