@@ -99,7 +99,7 @@ the two sizes. A NULL pointer returns the size.
 |---|---|---|
 | `GPU_INFO_GET` | `core_id` and `core_revision`, raw from `EUR_CR_CORE_ID` and `EUR_CR_CORE_REVISION`; `fw_interface_version` | capture: rev `0x1000e` on the CE5300 (SRVINIT.md). gap: Cedarview's value (G25) |
 | `LIMITS_GET` | RT size and samples limits, PB min/default/max in pages, largest TA kick count | capture: default PB of 0x400 pages (STATE.md 6). gap: RT limits (G14) |
-| `QUIRKS_GET` | quirk numbers, mandatory ones first, as pvr | design. The list is empty on rev 1014 until an erratum that reaches userspace is documented (G25) |
+| `QUIRKS_GET` | quirk numbers, mandatory ones first, as pvr | design. The list is empty on rev 1014 until an erratum that reaches userspace is documented (G25). A single-context core (the SGX530) lists `DRM_POWERVR_SGX_QUIRK_UNISOLATED` (1, not an erratum, never mandatory): see 7.7 and D13 |
 | `HEAP_INFO_GET` | array of `drm_powervr_sgx_heap`, see section 5 | capture, section 5 |
 
 ### CREATE_BO, GET_BO_MMAP_OFFSET
@@ -842,6 +842,18 @@ a header type twice, a stream over 4 KiB. `uapi/stream/test/stream_test.c` alrea
 each of these against the reference decoder on the host. M2's exit test, that one client can't corrupt another, needs
 P1 to P4 as positive tests from an actual shader. It can't be met by ioctl tests alone.
 
+### 7.7 Single-context cores
+
+Everything above assumes a core with a directory list per VM, as the SGX545 has. The SGX530
+has one ([porting/single-context.md](porting/single-context.md)). Its microkernel, TA and
+3D share list 0, so every VM maps the firmware heaps, and the directory addresses the
+microkernel loads sit in GPU-writable memory. 7.1 items 2 and 4 don't hold there. A client
+can read the firmware's structures and the other clients' commands, corrupt the
+microkernel, forge another client's completion, and point translation at any physical
+memory. **Nothing in this section is claimed for single-context cores.** They run only with
+the module parameter `allow_unisolated=1`, and then report
+`DRM_POWERVR_SGX_QUIRK_UNISOLATED` (D13).
+
 ## 8. Hardware recovery as userspace sees it
 
 The mechanism (UKERNEL.md 5a): a job that passes the `drm_sched` timeout triggers a soft
@@ -1093,6 +1105,17 @@ made concrete, and it closes some options:
 
 Alternatives weighed in D9 (firmware-protected EDM, one client at a time, a trusted
 group) still stand if this is rejected.
+
+### D13. Single-context cores
+
+**Decided (Joseph, 2026-11-11): opt-in.** A core with one memory context (the SGX530) runs
+only with `powervr_sgx.allow_unisolated=1`. Without it, the probe logs the core's ID and
+revision, says why it refuses the core, and stops before any write. With it, the probe
+warns, and `QUIRKS_GET` lists `DRM_POWERVR_SGX_QUIRK_UNISOLATED`, so userspace can tell. No
+`CAP_SYS_ADMIN` gate, which would break ordinary desktop clients, and no isolation claim
+for these cores anywhere (7.7). Multi-context cores never need the parameter and never list
+the quirk. Weighed and not taken: one VM at a time (a desktop is already two clients), and
+not supporting the core at all.
 
 ## 11. Doc gaps
 

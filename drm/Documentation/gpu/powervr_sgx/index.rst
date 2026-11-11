@@ -41,6 +41,19 @@ The driver only loads an image that declares secure mode, in which no client
 page directory maps the firmware's memory. After the start it asks the
 microkernel for its version and features.
 
+Single-context cores
+--------------------
+
+The SGX530 (TI OMAP3630, behind its ti-sysc interconnect module) has one
+memory context: the microkernel and the client's tasks translate through the
+same directory list. Every VM's page directory then maps the firmware's heaps,
+so a client can read the firmware's structures and the other clients'
+commands, corrupt the firmware, and through it reach any physical memory.
+Clients are not isolated. The driver runs such a core only with
+``allow_unisolated=1``. Without it, it logs the core's ID and refuses it before
+writing a register. With it, it warns at probe, and ``DEV_QUERY`` lists the
+quirk ``DRM_POWERVR_SGX_QUIRK_UNISOLATED``.
+
 Memory
 ======
 
@@ -118,6 +131,10 @@ Module parameters
 
 ``core_clock``
     SGX core clock in Hz, for the microkernel's timer.
+
+``allow_unisolated``
+    run a single-context core, where clients are not isolated (default off).
+    Multi-context cores never need it.
 
 ``share_kernel_heaps``
     map the firmware's heaps in every VM. The default is -1: on only for a
