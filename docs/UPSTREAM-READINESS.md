@@ -565,7 +565,7 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
      `csbgen` for the gallium driver too, not only for the Vulkan driver and
      tools.
    - A decision for the MR series, not for the code.
-2. **The isaspec change** (`mesa/patches/0004`) goes upstream first, as two
+2. **The isaspec change** (`mesa/patches/0003`) goes upstream first, as two
    commits:
    - `<param>`s on a derived field of bitset type;
    - the encoder's handling of several `<override>`s defining one field.
@@ -580,10 +580,12 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
    and `docs/STATE.md` live in sgx545-ce. Upstream needs them either as
    `docs/drivers/sgx/*.rst` in Mesa or behind a stable link from each
    README. The comments cite them by section name.
-5. **A disassembler tool.** `etnaviv-disasm` is built with
-   `-Dtools=etnaviv`. Ours is `sgx_pds_test -d` and the ISA test's text
-   output. A `sgx-disasm` (USSE and PDS) behind `-Dtools=sgx` needs a
-   `meson.options` entry.
+5. **The tools.** `sgx-asm` and `sgx-disasm` (USSE) are built with
+   `-Dtools=sgx`, as `etnaviv-disasm` is with `-Dtools=etnaviv`. The
+   `meson.options` entry is `mesa/patches/0006`, and the `sgx_isa_tools`
+   test runs them. The microkernel's build is to assemble through
+   `sgx-asm` (UKERNEL-TOOLING.md §2). Still open: PDS in `sgx-disasm` (today
+   `sgx_pds_test -d`).
 6. **csbgen's unknown bits.** Constant bits of unknown meaning are
    `unknown_<bits>` fields with defaults. csbgen also has `mbo`
    (must-be-one), which fits only bits that are always 1. A reviewer may
@@ -594,9 +596,15 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
    winsys's bytes. Settling it is a driver change: winsys/driver owners.
 8. **`src/sgx/compiler`** isn't covered by this pass (the compiler
    session's tree): no `.clang-format`, and it has its own tests.
-9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`) become part of
-   the driver's MR series. Nothing in these three trees depends on them
-   beyond `with_gallium_sgx` entering `src/sgx`.
+9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`, `0006`) become
+   part of the driver's MR series. Nothing in these three trees depends on
+   them beyond `with_gallium_sgx` or `-Dtools=sgx` entering `src/sgx`.
+10. **The core id.** `ISA_GPU_ID()` is `core * 100 + format control`
+    (`sgx_isa_gpu_id()`), and the root bitset is `<gen>`-limited to SGX545
+    (54500-54599). A second core is a `<gen>` range or an override on
+    `ISA_GPU_ID() / 100`, once ISA.md documents it. isaspec offers no
+    second parameter, so the core shares `gpu_id` with format control, as
+    freedreno's `gpu_id` carries its chip.
 
 ## Kernel (powervr_sgx)
 
