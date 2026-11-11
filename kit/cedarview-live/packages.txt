@@ -14,4 +14,8 @@ mesa-utils
 mesa-utils-bin
 glmark2-x11
 glmark2-es2-x11
+glmark2-es2-drm
 libdrm-tests
+# kit v4: X hang backtraces (kit-hangcap), the big console font of the progress screen
+gdb
+console-setup-linux

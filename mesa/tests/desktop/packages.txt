@@ -1,6 +1,7 @@
 # The desktop test root (Debian 13 trixie amd64, the current stable), built by .github/workflows/desktop-root.yml.
 # One package per line; Debian's own Mesa comes along as glvnd's fallback, ours is chosen
 # by the mesa-sgx package or desktop-up.sh's environment. passwd: useradd for the user "desk".
+# picom: a second compositor besides xfwm4 (--backend xrender; its glx backend needs GL 3.3 core, we expose 2.1).
 xserver-xorg-core
 xserver-xorg-input-libinput
 xinit
@@ -22,3 +23,4 @@ less
 imagemagick
 mesa-utils-bin
 glmark2-es2-x11
+picom

@@ -129,6 +129,9 @@ struct sgxws_prog {
    uint32_t sec_dwords; /* constant dwords DMA'd for the secondary program */
    struct sgx_pds_douti douti[10]; /* DOUTIs, one per iterated input or sample */
    uint8_t douti_tex[10]; /* 0, or the sampler unit + 1 whose DOUTT follows it */
+   /* that DOUTT's T3 for this sample: the unit's word with these bits
+    * cleared, then these set (an F16 return, sgx_program.c) */
+   uint32_t douti_t3_clr[10], douti_t3_set[10];
    uint32_t n_douti;
    uint32_t pds_middle; /* TA state PDS middle word (0: the default) */
    uint32_t
@@ -256,6 +259,9 @@ struct sgxws_block {
 
 struct sgxws_draw {
    uint32_t prim;         /* SGXWS_* */
+   /* TSP word 1 bits besides the vertex program's: the sets the fragment
+    * program iterates as F16 and doesn't sample from (SGX_DEBUG=tspf16) */
+   uint32_t tsp_f16;
    uint32_t count;        /* vertices */
    const uint32_t *verts; /* count x vs->attr_dwords dwords */
    /* NULL: the vertices in order; else n_indices 16-bit indices into them
@@ -301,6 +307,7 @@ struct sgxws_stats {
    unsigned room_flushes; /* frames submitted early because a ring filled */
    uint64_t gpu_indices, gpu_verts; /* what the VDM was given: indices, and the
                                        vertices they index */
+   unsigned state_sent, state_skipped; /* draws' TA state blocks */
 };
 
 /* debugging aids the driver passes on (its SGX_DEBUG options) */
@@ -314,7 +321,7 @@ struct sgxws_dev_options {
    int dry_run;    /* frames from the n-th on are built (and traced) but never
                       sent; -1: off */
    unsigned frame_gap_us; /* idle time after each render */
-   unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 3) */
+   unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 4) */
    unsigned ta_split;     /* a TA kick every n objects of a frame, the scene's
                              render at its end (0: one kick a frame) */
 };
@@ -333,6 +340,8 @@ struct sgxws_device_info {
    /* zero-copy draws (vertex buffers DMAed where they are) by default:
     * powervr_sgx's; services' only on request (SGX_DEBUG=zerocopy) */
    bool zero_copy;
+   /* contexts can be created at low, normal or high priority */
+   bool priorities;
 };
 
 const struct sgxws_device_info *sgxws_dev_info(const struct sgxws_dev *d);
@@ -371,7 +380,9 @@ void sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo);
 const struct sgxws_bo *sgxws_target_bo(const struct sgxws_ctx *c);
 int sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms);
 
-struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d);
+/* priority: -1 low, 0 normal, 1 high (the backend's scheduler; high may
+ * need privileges and falls back to normal) */
+struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d, int priority);
 void sgxws_ctx_destroy(struct sgxws_ctx *c);
 
 enum sgxws_reset sgxws_reset_status(struct sgxws_ctx *c);
@@ -395,6 +406,14 @@ uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
 uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
                          unsigned color_pa, const struct sgxws_blend *blend,
                          int discard_pa, unsigned temps);
+/* a program split around its discard: code (phase 0) ends at the feedback
+ * nop, code1 (phase 1, only for the pixels that pass) leaves the colour in
+ * pa<color_pa1> */
+uint32_t sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code,
+                               unsigned n, const uint64_t *code1, unsigned n1,
+                               unsigned color_pa1,
+                               const struct sgxws_blend *blend, int discard_pa,
+                               unsigned temps);
 void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
                        uint32_t w[2]);
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code,

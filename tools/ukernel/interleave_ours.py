@@ -38,7 +38,7 @@ def dump(u, mem):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trace")
-    ap.add_argument("--order", choices=("interleave", "overlap", "serial"), default="overlap")
+    ap.add_argument("--order", choices=("interleave", "overlap", "overlap2", "serial"), default="overlap")
     a = ap.parse_args()
     code, man = RO.ours()
     ctxs = []
@@ -99,6 +99,16 @@ def main():
         kick("B first (A's 3D running)", b1)
         render_end("A")
         kick("B last", b2)
+        render_end("B")
+    elif a.order == "overlap2":
+        # B's last TA finishes WHILE A's 3D is still in flight -> the 3D queue must hold B's 3D until
+        # render_end("A") frees the engine. (No DDK reference for this order; self-consistency check only:
+        # B's 3D kick 0x428 must appear in "DPM 3D memory free A", not in "TA finished B last".)
+        kick("A first", a1)
+        kick("A last", a2)
+        kick("B first", b1)
+        kick("B last", b2)
+        render_end("A")
         render_end("B")
     elif a.order == "interleave":
         kick("A first", a1)

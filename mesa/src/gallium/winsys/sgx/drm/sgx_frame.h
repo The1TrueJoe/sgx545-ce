@@ -75,6 +75,7 @@ struct sgxws_dev {
    int verbose;
    bool flush_rt; /* sgxws_dev_options */
    unsigned frame_gap_us;
+   bool state_always; /* SGX_STATE_ALWAYS: every draw its own programs and TA state */
    unsigned slots;
    int dry_run;
    unsigned ta_split; /* sgxws_dev_options */
@@ -99,6 +100,9 @@ struct sgxws_ring {
    uint32_t part, hi, parts;
    uint32_t uploaded;
    uint32_t last_seq; /* the last kick that runs code from it (code pools) */
+   /* PDS rings: the slot's last programs, for a draw that needs one again
+    * (NULL: not kept) */
+   struct sgxws_pds_memo *memo;
 };
 
 struct sgxws_rt_numbers {
@@ -130,6 +134,7 @@ struct sgxws_eot {
 struct sgxws_ctx {
    struct sgxws_dev *dev;
    void *k; /* the backend's */
+   int priority; /* sgxws_ctx_create's */
    /* code (persistent) and per-frame rings */
    struct sgxws_ring usse_pix, usse_vtx;
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
@@ -161,6 +166,11 @@ struct sgxws_ctx {
    /* kick_ta: the TA kicks of this frame's scene so far, and the objects
     * since the last one */
    unsigned ta_kicks, seg_draws;
+   /* the TA state block the MTE has (0 words: none yet in this kick), and the
+    * frame's last fragment constant block, for draws that repeat them */
+   uint32_t last_blk[32];
+   unsigned last_blk_n;
+   uint32_t *last_u, last_u_cap, last_u_dwords, last_u_va;
    /* the frame's depth bias (render details +0x14, +0x18), once a draw
     * with it is recorded */
    bool bias_set;
@@ -197,6 +207,7 @@ struct sgxws_ctx {
    enum sgxws_reset reset; /* since sgxws_reset_status last asked */
    uint64_t gpu_indices,
       gpu_verts; /* stats: the VDM's indices and the vertices behind them */
+   unsigned state_sent, state_skipped; /* stats: draws' TA state blocks */
 };
 
 /*

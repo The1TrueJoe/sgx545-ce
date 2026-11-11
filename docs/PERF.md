@@ -595,6 +595,12 @@ fail); glmark2 720x480 on Xorg/glamor score 51 -> 53 (most scenes 2-5% faster, l
 +9%); Minecraft 10.1 / 10.9 -> 10.2 / 11.0 FPS standing / walking, picture unchanged
 (the fragment work is not Minecraft's bottleneck at this point).
 
+efo chaining (3db45e4, libusc's chained `v_mvp`: the next chain's first efo stores the
+previous chain's last lane with `d=i1`): gl4es terrain VS 29 → 26 instructions, glmark2
+slots 1292 → 1242. On the EA1 (uapi-stream, A/B against `noefochain`): the dEQP vertex
+subset (5,357 tests) identical; glmark2 build/texture/shading equal or slightly up
+(score 172 → 173); Minecraft renders correctly.
+
 Still open, in order:
 - uniform-only math per pixel or vertex. Measured with `nir_opt_preamble` before
   building it: glmark2 would lift 25 ALU ops over 7 programs (about 2% of its slots),
@@ -671,3 +677,87 @@ Trims to consider, with these numbers:
   the DDK microkernel's three interrupts);
 - `queue → run`: drm_sched's worker wakeup is the largest kernel share. It is
   roughly constant, and only worth attacking if submits ever queue back to back.
+
+## Minecraft's frame on the open stack (EA1, 2026-11-10)
+
+Bench world, standing, Xorg + our x11 Mesa, kernel ftrace grouped by render target
+plus a CLKGATESTATUS sampler (per-unit clock busy, about every 18 us).
+
+Where the frame goes, default (3 ring slots): one world render (~40 ms TA, then
+~23.5 ms 3D, no gap between them), two small renders and X's copy; every unit idle
+39% of the time and TA/3D never overlapping, against the DDK's 11% idle and 40%
+overlap. The DDK's hardware work per frame is not smaller.
+
+| change | stand fps | world ms | all idle | what it removed |
+|---|---|---|---|---|
+| default | 11.5 | 66 | 39% | |
+| `SGX_SLOTS=4` | 13.3-13.7 | 66 | 27% | recording the next frame waiting for this frame's world render (slot wait, ~40% of the game thread) |
+| `SGX_SLOTS=6` | 13.5 | 66 | | nothing more |
+| parameter buffer 4 / 16 / 32 MiB | 10.5-11.2 | 65-68 | | nothing: no OOM at any size |
+| `ffmediump` | 10.9 | 64 | | nothing |
+| `phasesplit` | 11.2 | 65.6 | | nothing measurable |
+| `phasesplit,ffmediump,f16samples` | 11.8 | 61.4 | | ~3.5 ms of 3D (F16 texels, no unpacks) |
+
+- Three ring slots and three renders a frame keep one frame in flight: the game
+  waits for the world render before recording the next one. Four take the GPU from
+  67% to 96% job-busy. With deeper queues X's copies wait behind the game's frames
+  (Xorg in dirtyfb on simpledrm): an X request's median latency is 1.85 s at four
+  slots against 166 ms at three, with or without a high-priority X context
+  (5721e6f, `SGX_CTX_PRIORITY=high`). X's copy of the game window waits for the
+  game's newest frame, and dirtyfb blocks X's main thread on that copy at every
+  present. The sysfb damage commit stopped blocking (m2-drm e874e6f): X latency
+  at four slots is 23 ms median (20-53, n=20) against 25 ms at three, no damage
+  lost, Minecraft 13.6 / 11.0 fps standing / walking against 12.6 / 9.2 at
+  three. Four slots are the default since (`SGX_SLOTS=3` for the old
+  behaviour); gma500 never had the wait.
+- What is left of the idle at four slots is the vendor microkernel's too: 5.3%
+  all-idle on ours against 6.5% on the vendor's, same TA and 3D a frame (a
+  steady window; an earlier warm-up window had suggested 1-10 ms of
+  kick-to-TA a job). Serial job turnaround is at parity.
+- `phasesplit` and `f16samples` are correct (dEQP-GLES2 mustpass and 117
+  fixed-function piglit tests match the baseline, no channel swaps) but the 3D is
+  not where this frame's time goes. F16 fixed-function programs and F16 samples
+  are the default since dEQP-GLES2 mustpass and piglit matched the baseline with
+  both (`noffmediump`, `nof16samples` turn them off). The phase split is the
+  default too (piglit identical with it, dEQP clean, no slower;
+  `nophasesplit` turns it off): neutral in Minecraft, but it is the DDK's form
+  and spares overdrawn alpha-tested pixels their colour work.
+
+### Where the world render's TA and 3D go, and the plan
+
+Per frame at render distance 4, standing (CLKGATESTATUS, slots 3): world TA
+~40 ms, then world 3D ~22 ms, no gap between them; two small renders and X's
+copy after. Standing fps is now 12.6-13.4, the DDK's 12.8 (under Xvfb).
+
+What does not move the world TA (each within noise, +-2 ms):
+
+| tried | what it changed | TA |
+|---|---|---|
+| vertex program +3 instructions (`noefochain`) | shading per vertex | same |
+| gathered f32 x 4 fetch (`nozerocopy`) | bytes and streams fetched | same |
+| a TA state block per draw vs one per run of equal draws (af18996: 94% skipped) | state the TA writes into the tiles | same |
+| TSP precision mask as the DDK's (`tspf16`) | the parameter buffer's per-vertex format | same |
+| parameter buffer 4 / 16 / 32 MiB | partial renders (none at 16) | same |
+
+The TE's configuration (AA, macrotiles, TE screen, region headers, tail
+pointers, the PB descriptor and thresholds, render details) is the DDK's word for
+word on the services path; only TA flags 2 differs, with the scene structure (the
+DDK's world is the first kick of a three-kick scene).
+
+What does: render distance 2 instead of 4 takes the TA from 40 to 15 ms and the
+3D from 22.5 to 16.5. The TA's time is the tiling of the primitives it is given
+(~160K triangles, 486K indices into 258K vertices a frame, the DDK's count): the
+hardware's rate for this scene, not something per draw or per vertex the driver
+adds. The DDK's is no faster: its TA clock runs ~77 ms a frame, ~41 ms of it
+alone and ~35 ms under its 3D (the same sampler on the DDK's Minecraft), so the
+DDK's lead in busy time is overlap, not a quicker TA.
+
+The plan, largest first, with what each is worth:
+
+| item | owner | worth (frame ~75 ms) | state |
+|---|---|---|---|
+| four slots by default: the next frame recorded while this one renders | kernel (simpledrm's dirtyfb), then Mesa | +8-20% fps (13.6 vs 12.6 standing, 11.0 vs 9.2 walking) | done: the default, after m2-drm e874e6f made the damage commit nonblocking (X 23 ms median) |
+| TA/3D overlap across frames (the next world TA under this 3D) | open-ukernel + kernel | up to the 3D's ~22 ms with four slots; ~2% at three | parked: recovery storms with `overlap=1` |
+| fewer renders a frame: the small renders after the world (FBO blit, GUI) and X's copy, each a job with its own start cost | Mesa (scene merging, as the DDK's 3-kick scene), X flips | ~5-10 ms (their run time plus a kick-to-TA each) | to do |
+| 3D: F16 fixed-function and F16 samples (done, ~3.5 ms); phase split (done, neutral) | usse-compiler | done | default |
+| TA rate itself | none (hardware) | the DDK pays the same | |

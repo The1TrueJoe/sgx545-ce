@@ -57,3 +57,8 @@ write it, boot it, attach the results file to the issue.
   GPL-2.0-only WITH Linux-syscall-note, or MIT.
 - `kernel/src/`: GPL-2.0, Imagination Technologies, as published by Intel.
 - Everything else here (the microkernel, the Mesa driver, the tools, the test sticks): MIT.
+
+## Contributing
+
+Contributions are welcome, including support for other PowerVR SGX cores. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/porting/](docs/porting/README.md).

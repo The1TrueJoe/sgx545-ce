@@ -183,8 +183,7 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
 #include "sgx-isa-encode.h"
 
 uint64_t
-sgx_isa_encode(const struct sgx_isa_instr *instr,
-                  const struct sgx_isa_fc *fc)
+sgx_isa_encode(const struct sgx_isa_instr *instr, const struct sgx_isa_fc *fc)
 {
    struct sgx_isa_fc f = fc ? *fc : SGX_ISA_FC_START;
    struct encode_state s = {

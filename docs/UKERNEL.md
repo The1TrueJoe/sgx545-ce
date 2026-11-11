@@ -1484,3 +1484,82 @@ in `docs/log/entries/2026-11-08-ukernel-bringup-history.md`.
   the open microkernel has to do the same.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).
+
+## 11. TA/3D overlap (`UK_OVERLAP`) — parked
+
+Set `UK_OVERLAP=1` at build time to emit a microkernel that runs render N+1's
+TA while render N's 3D is still in flight (the DDK's `credit=2`, same-context
+scheduling). It is **off by default**: the shipped serial image is byte-identical
+(14400 B) whether or not the flag existed, and every overlap change is gated
+behind it. This section records why it is parked.
+
+**Why it was pursued, and why the payoff is small here.** The hope (from an
+early frameprof estimate) was ~11→20 fps in Minecraft. Hardware measurement
+showed that ceiling is wrong for this workload. On the EA1 at `SGX_SLOTS=4`,
+join+90s steady state:
+
+| µK | fps (stand/walk) | world render | GPU busy | inter-job gap | all-idle |
+|---|---|---|---|---|---|
+| ours, serial (`eb484b2`) | 13.5 / 12.0 | 65.0 ms | 97% | 0.61 ms | 3% |
+| vendor DDK, serial | 13.5 / 10.3 | 65.7 ms | 95% | 0.88 ms | 6.5% |
+| vendor DDK, overlap=1 | 13.7 | 63.3 ms | 97% | 0.48 ms | 3.8% |
+
+Our serial microkernel already equals the vendor's — it idles *less* (0.61 vs
+0.88 ms/job) — so the microkernel is not leaving frame time on the table. The
+frame is GPU-**work** bound: TA ≈ 41 ms + 3D ≈ 28 ms per world frame, the same
+on both microkernels. Overlap on the vendor µK buys ~5% concurrent TA+3D and
+13.5→13.7 fps, because at ~96% GPU-busy there is almost nothing left to overlap.
+Reducing frame time now means reducing the GPU work itself (shader/texture/
+vertex — the Mesa driver and compiler), not microkernel scheduling.
+
+**The queued-3D kick bug (unresolved).** The vendor DDK firmware runs overlap=1
+cleanly on our `powervr_sgx` kernel via the DDK-compat path (`hw job count:2`
+×382, 160/265 kicks issued while the previous job ran, 0 timeouts) — so overlap
+*is* achievable on this hardware+kernel; the defect is in our microkernel. On
+the first overlapped pair our queued 3D's `CR_3D_KICK` (0x428) write never
+latches `TRIG_3D` (EVENT_STATUS2 b6): the 3D never starts, the microkernel idles
+in the event loop, `WAIT_3D`/`WAIT_FREE` armed forever. At the hang the state is
+all valid — DPM slot (0x630=7), free-list selector (0x63c=3), region headers
+populated, pipe idle (CLKGATESTATUS 0x20), BIF_FAULT 0, EVENT_STATUS 0.
+
+Six fixes were made against the DDK's own queued-start sequence (decoded from
+`fw/sgx545-ukernel-1.7.862890.bin` in the offline emulator, `--order overlap2`);
+each is a genuine DDK-faithful correction, and the write sequence + full register
+state at the kick now match the DDK register-for-register, yet the kick is still
+refused on hardware:
+
+1. **`addc0d7`** — the 3D-side cache invalidate uses the DDK order (MADD pulsed
+   and waited *first*, then PDS/USE before the `0x138==0x4b` spin). Fixed an
+   earlier deadlock; the hang moved past the invalidate.
+2. **`cbfe976`** — the TPC flush (`0x224=0x40000000`) moved to the last TA's
+   `ta_finished`, where the tail state is live, instead of the deferred `do_3d`.
+3. **`4eeb281`** — the early BIF MADD + `0xa08` USE request + `BANK0=0x101f`
+   after the slot select, before the 3D register block (DDK pc 0x182f).
+4. **`f70a2f5`** — request `0xa08` once per EDM run (the late handshake collects
+   its done bits), not twice.
+5. **`251b861`** — `do_ta` skips the `DIR_LIST_BASE1` write **and** the
+   `BIF_CTRL` INVALDC on a PD hit, so B's first TA does not invalidate the
+   directory cache while A's 3D is translating through list 1. (The strongest
+   theory — a directory-cache invalidate under a live 3D — but it did not fix it.)
+6. **`40b45c9`** (reverted in `445674a`) — an ack of `DPM_3D_MEM_FREE`
+   (`0x134=0x1`) before the kick; disproven on hardware (the bit was not pending)
+   and removed.
+
+Ruled out on hardware: a pending DPM-free event; a busy pipe (CLKGATESTATUS
+`0x000ccfa0` is DPM + the shared USSE clock group, on whenever the EDM runs; the
+3D/TA/pixel groups were idle); the TPC flush not landing (region headers are
+populated); the init registers `0x40`/`0xa68`/`0xa6c` (srvinit/debug, not kick
+gates); the kernel re-initializing the dataset's TA buffers (written once at
+`CREATE_RT_DATASET`, never per job).
+
+**The next thing to try, if overlap is reopened:** m2's alternating-lists idea.
+The vendor µK's `BANK0` alternates BIF directory lists 1 and 2; with two live
+contexts (Xorg + the game) that is the per-context PD cache, but it also means a
+render's requestor never shares a directory list with the other unit's in-flight
+render. Have the microkernel write `DIR_LIST_BASE2` (0xc3c) = the context PD
+(like `do_ta` writes 0xc38) and route the queued render's 3D to list 2 by frame
+parity, so B's 3D is on a different directory list from A's. Lists 1..14 are free
+in `powervr_sgx` and read 0 after a reset, so `0xc3c` **must** be written before
+a requestor is routed there (an earlier attempt, `2ea95f3`, routed the 3D to list
+2 without writing `0xc3c` and faulted on PD 0). `m2-drm 10c3edf` adds
+`BIF_DIR_LIST_BASE2` to the hang dump for that work.

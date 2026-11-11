@@ -2,18 +2,20 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# The X session kit-desktop starts (as root, the first client): lets "desk"
-# connect, starts Xfce as desk, runs the smoke test, then waits on Xfce so the
-# desktop stays for the tester.
+# The X session kit-xvariant starts (as root, the first client): lets "desk"
+# connect, starts Xfce as desk and runs the smoke test into the variant's
+# directory ($KIT_V, mode $KIT_SMOKE), then waits on Xfce until kit-xvariant
+# stops the session.
+O=${KIT_V:-/tmp/results}
+touch "$O/session.started"
 xhost +si:localuser:desk > /dev/null
-xrandr --verbose > /tmp/results/xrandr.txt 2>&1
+xrandr --verbose > "$O/xrandr.txt" 2>&1
 U="runuser -u desk -- env HOME=/home/desk USER=desk DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/desk-run"
 mkdir -p -m 700 /tmp/desk-run && chown desk /tmp/desk-run
-$U dbus-launch --exit-with-session startxfce4 > /tmp/results/xfce.txt 2>&1 &
+$U dbus-launch --exit-with-session startxfce4 > "$O/xfce.txt" 2>&1 &
 x=$!
 # the dark-panel workaround, once: a full modeset of the panel's output, with gma500's
 # display registers (its read-only debugfs dump) and a screenshot before and after
-O=/tmp/results
 regs() {   # FILE: gma500's read-only display register dump (debugfs cdv_display_regs)
 	for n in /sys/kernel/debug/dri/*/name; do
 		grep -q gma500 "$n" 2>/dev/null || continue
@@ -21,23 +23,31 @@ regs() {   # FILE: gma500's read-only display register dump (debugfs cdv_display
 		[ -r "$f" ] && { echo "== $f"; cat "$f"; } || echo "== $f: not there (kernel without the dump)"
 	done > "$1" 2>&1
 }
-sleep 10
-lvds=$(xrandr 2>/dev/null | awk '/^LVDS[^ ]* connected/ { print $1; exit }')
-regs $O/display-regs-before.txt
-import -window root -resize 50% "png:$O/screenshots/00-before-modeset.png" 2>/dev/null
-if [ -n "$lvds" ]; then
-	xrandr --output "$lvds" --off; sleep 1; xrandr --output "$lvds" --auto
-	sleep 3
-	what="modeset of $lvds (xrandr off, then auto)"
-else
-	what="no LVDS output connected, no modeset"
+if [ "${KIT_SMOKE:-}" != final ]; then
+	sleep 10
+	lvds=$(xrandr 2>/dev/null | awk '/^LVDS[^ ]* connected/ { print $1; exit }')
+	regs $O/display-regs-before.txt
+	import -window root -resize 50% "png:$O/screenshots/00-before-modeset.png" 2>/dev/null
+	if [ -n "$lvds" ]; then
+		xrandr --output "$lvds" --off; sleep 1; xrandr --output "$lvds" --auto
+		sleep 3
+		what="modeset of $lvds (xrandr off, then auto)"
+	else
+		what="no LVDS output connected, no modeset"
+	fi
+	regs $O/display-regs-after.txt
+	import -window root -resize 50% "png:$O/screenshots/00-after-modeset.png" 2>/dev/null
+	a=$(md5sum < $O/screenshots/00-before-modeset.png 2>/dev/null) b=$(md5sum < $O/screenshots/00-after-modeset.png 2>/dev/null)
+	[ "$a" = "$b" ] && same="the same" || same="different"
+	cmp -s $O/display-regs-before.txt $O/display-regs-after.txt && rsame="the same" || rsame="different"
+	printf '    %-5s %s\n' INFO "$what: screenshots $same, register dumps $rsame" > $O/modeset.txt
 fi
-regs $O/display-regs-after.txt
-import -window root -resize 50% "png:$O/screenshots/00-after-modeset.png" 2>/dev/null
-a=$(md5sum < $O/screenshots/00-before-modeset.png 2>/dev/null) b=$(md5sum < $O/screenshots/00-after-modeset.png 2>/dev/null)
-[ "$a" = "$b" ] && same="the same" || same="different"
-cmp -s $O/display-regs-before.txt $O/display-regs-after.txt && rsame="the same" || rsame="different"
-printf '    %-5s %s\n' INFO "$what: screenshots $same, register dumps $rsame" > $O/modeset.txt
-$U /usr/local/bin/kit-smoke /tmp/results > /tmp/results/smoke-log.txt 2>&1
-touch /tmp/kit-smoke.done
+if [ "${KIT_SMOKE:-}" = final ]; then
+	sleep 8
+	$U zenity --info --no-wrap --title "SGX545 test" --text "The test is done. Thank you!\n\nYour results are saved on the stick.\nYou can use this desktop, or turn the computer off." > /dev/null 2>&1 &
+else
+	# desk owns its log (kit-smoke appends to it too)
+	$U /bin/sh -c 'exec /usr/local/bin/kit-smoke "$0" "$1" > "$0/smoke-log.txt" 2>&1' "$O" "${KIT_SMOKE:-full}"
+	touch "$O/smoke.done"
+fi
 wait $x

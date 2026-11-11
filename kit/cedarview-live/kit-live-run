@@ -2,22 +2,32 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# The live Debian test (kit/cedarview-live/README.md), on tty1 at boot:
-#   1 system facts   2 the GPU driver and its microkernel   3 the GPU tests
-#   4 the blit and its candidate fixes   5 the desktop (Xfce) and its smoke test
-#   6 the results file, then the desktop stays for the tester to try.
-# The results are saved after step 4, as soon as X starts, every 15 s during the
-# desktop and at the end, so a desktop that freezes or stays dark still leaves
-# them on the stick. No serial numbers or
-# network addresses leave the machine.
+# The live Debian test (kit/cedarview-live/README.md), on tty1 at boot, hands-off:
+# every step and every display/desktop variant runs in this one boot, each under
+# a time limit, and the computer turns itself off at the end. Steps: system facts,
+# the GPU driver, the GPU tests, the blit set, then one X attempt per line of
+# /usr/local/lib/kit/desktop-variants (kit-xvariant). The results file is saved
+# after every step and every 15 s during X. A progress marker on the stick
+# (kit-progress.txt) lets a boot after a hang or a watchdog reset record the step
+# that was running and carry on after it, in the same results file. No serial
+# numbers or network addresses leave the machine.
+#   kit.test=xhang     X stops dead in the first desktop variant (watchdog self-test)
+#   kit.test=gpuhang   a forced GPU hang after the GPU tests (recovery self-test)
+#   kit.nopoweroff     stay on at the end (bench runs)
+#   kit.poweroff=1     always power off at the end, never leave a desktop up (CI)
 . /etc/kit-release
-R=/tmp/results
+umask 022
+R=/tmp/results M=/run/live/medium
+PROG=$M/kit-progress.txt
+T=/usr/local/lib/kit
+FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
+CMD=${KIT_CMDLINE:-$(cat /proc/cmdline)}
+has() { [[ " $CMD " == *" $1 "* ]]; }
 mkdir -p "$R/screenshots"
 LOG=$R/run.log
 SUM=$R/summary.txt
-: > "$SUM"
-step() { printf '\n  [%s/6] %s\n' "$1" "$2"; echo "== step $1: $2 ($(date -u +%T))" >> "$LOG"; }
-note() { printf '        %s\n' "$*"; echo "$*" >> "$LOG"; }
+touch "$SUM"
+note() { echo "$*" >> "$LOG"; }
 result() { printf '    %-5s %s\n' "$1" "$2" >> "$SUM"; note "$1: $2"; }
 run() {   # NAME SECS CMD...: CMD's output into NAME, at most SECS
 	local n=$1 t=$2; shift 2
@@ -31,6 +41,7 @@ scrub() { sed -E -e 's/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g
 	-e 's/(SerialNumber|Serial Number|serial)([:=] *).*/\1\2(removed)/I'; }
 timeouts() { dmesg | grep -c 'job timed out'; }
 lost() { dmesg | grep -q 'device lost'; }
+started() { dmesg | grep -q 'powervr_sgx.*microkernel started' && [ -n "$(compgen -G '/dev/dri/renderD*')" ]; }
 dumps() {   # TAG: the devcoredumps and the driver's status, freed after reading
 	local i=0
 	for d in /sys/class/devcoredump/devcd*/data; do
@@ -41,85 +52,127 @@ dumps() {   # TAG: the devcoredumps and the driver's status, freed after reading
 }
 display() { /usr/local/bin/kit-display "$1"; }   # TAG: the display side, read-only
 save() { /usr/local/bin/kit-save "$NAME"; }   # the results file on the stick
+beat() { touch /tmp/kit-heartbeat; }
+mark() {   # a line in the progress marker on the stick
+	mount -o remount,rw "$M" 2>/dev/null || return 1
+	echo "$*" >> "$PROG"; sync
+	mount -o remount,ro "$M" 2>/dev/null
+}
 
-T=/usr/local/lib/kit
-FW=/lib/firmware/powervr_sgx/sgx545_ukernel.bin
 prod=$(tr -c 'A-Za-z0-9.\n-' '_' < /sys/class/dmi/id/product_name 2>/dev/null | cut -c1-32)
-# the GRUB entry this run came from (1 default, 2-4 display settings to compare)
-ENTRY=$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^kit\.entry=//p' | head -1)
-NAME=results-kit${KIT_SERIES}-${prod:-unknown}-e${ENTRY:-0}-$(date -u +%Y%m%d-%H%M).tar.gz
+# glamor's EGL init waits ~10 s on a cold read of libgallium + libLLVM off the stick: read them now,
+# in the background, and time it
+G=$(ls /opt/sgx/lib/libgallium-*.so /opt/sgx/lib/*/libgallium-*.so 2>/dev/null | head -1)
+[ -n "$G" ] && { { time cat "$G" $(ldd "$G" | awk '/=>/ {print $3}') > /dev/null; } > "$R/preread-boot.txt" 2>&1 & }
 cat /proc/cmdline > "$R/cmdline.txt"
 
-chvt 1 2>/dev/null
-clear
-cat <<EOF
-
-  SGX545 test for Intel Cedarview (GMA 3600/3650), kit $KIT_SERIES ($KIT_VERSION)
-  ------------------------------------------------------------------------
-  Debian 13 with the open driver, running from this USB stick. Your internal
-  disk is read-only and nothing is installed. It takes about 10 minutes; the
-  screen changes to a desktop on its own halfway.
-EOF
-
-step 1 "Reading what hardware this is"
-{
-	echo "kit $KIT_SERIES ($KIT_VERSION), kernel $(uname -r), menu entry ${ENTRY:-?}"
-	echo "cmdline: $(cat /proc/cmdline)"
-	for f in sys_vendor product_name product_version board_vendor board_name bios_vendor bios_version bios_date; do
-		printf '%s: %s\n' "$f" "$(cat /sys/class/dmi/id/$f 2>/dev/null)"
+# a run that a hang or a watchdog reset interrupted carries on; anything else starts afresh
+HUNG= BOOT=1
+if [ -f "$PROG" ] && ! grep -q '^complete' "$PROG" && grep -q '^name ' "$PROG"; then
+	NAME=$(awk '/^name / {print $2}' "$PROG" | tail -1)
+	BOOT=$(( $(grep -c '^boot ' "$PROG") + 1 ))
+	for s in $(awk '/^start / {print $3}' "$PROG"); do
+		grep -q "^done [0-9]* $s\( \|$\)" "$PROG" || HUNG="$HUNG $s"
 	done
-	[ -d /sys/firmware/efi ] && echo "boot: UEFI" || echo "boot: BIOS"
-	dpkg-query -W linux-image-* sgx545-firmware mesa-sgx 2>/dev/null
-} > "$R/system.txt"
-cp /proc/cpuinfo "$R/cpuinfo.txt"
-cp /proc/meminfo "$R/meminfo.txt"
-lsblk -o NAME,SIZE,RO,TYPE,TRAN,MOUNTPOINT > "$R/disks.txt" 2>&1
-run lspci-gpu.txt 30 lspci -nnvvv -s 00:02.0
-run lspci.txt 30 lspci -nnk
-for f in "$R"/lspci*.txt; do scrub < "$f" > "$f.s" && mv "$f.s" "$f"; done
-note "$(sed -n 's/^product_name: //p' "$R/system.txt") / $(grep -m1 'model name' "$R/cpuinfo.txt" | cut -d: -f2)"
-rw=$(lsblk -dno NAME,RO,TRAN | awk '$3 != "usb" && $2 == "0" && $1 !~ /^(loop|ram|zram|sr)/ {print $1}' | xargs)
-if [ -z "$rw" ]; then result PASS "internal disks are read-only"; else result FAIL "internal disks are read-only ($rw is not)"; fi
-
-step 2 "The GPU driver and its microkernel"
-# Debian loads gma500_gfx and powervr_sgx at boot; load them if it didn't
-modprobe gma500_gfx 2>/dev/null
-modprobe powervr_sgx 2>/dev/null
-sleep 2
-ls -l /sys/bus/auxiliary/devices/ > "$R/auxiliary.txt" 2>&1
-if [ -n "$(compgen -G '/sys/bus/auxiliary/devices/gma500_gfx.sgx.*')" ]; then
-	result PASS "display driver hands the GPU over"
+	if [ -f "$M/$NAME" ]; then
+		mkdir -p /tmp/prev && tar -C /tmp/prev -xzf "$M/$NAME" 2>/dev/null
+		[ -d /tmp/prev/results ] && mv /tmp/prev/results "$R/boot-$((BOOT - 1))"
+		cat "$R/boot-$((BOOT - 1))/summary.txt" >> "$SUM" 2>/dev/null
+	fi
+	result INFO "boot $BOOT: the previous boot stopped during:${HUNG:- nothing (it was switched off)}"
 else
-	result FAIL "display driver hands the GPU over"
+	NAME=results-kit${KIT_SERIES}-${prod:-unknown}-$(date -u +%Y%m%d-%H%M).tar.gz
+	mount -o remount,rw "$M" 2>/dev/null && { printf 'name %s\n' "$NAME" > "$PROG"; sync; mount -o remount,ro "$M"; }
 fi
-ident=$(dmesg | grep -o 'SGX core id 0x[0-9a-f]* revision 0x[0-9a-f]*[^.]*' | tail -1)
-note "${ident:-the driver did not report the GPU}"
-STARTED=
-dmesg | grep -q 'powervr_sgx.*microkernel started' && [ -n "$(compgen -G '/dev/dri/renderD*')" ] && STARTED=1
-if [ -n "$STARTED" ]; then result PASS "GPU identified and its microkernel started"
-elif [ -z "$ident" ]; then result FAIL "GPU identified"
-else result FAIL "GPU microkernel started"; fi
-dumps start
-display start
+mark "boot $BOOT $(date -u +%FT%TZ) $(uname -r)"
 
-step 3 "GPU tests"
-if [ -n "$STARTED" ]; then
+# the plan: fixed steps, then one desktop attempt per variant line (NAME|PARAMS|ENV|full|short)
+STEPS=(system driver gputests)
+has kit.test=gpuhang && STEPS+=(gpuhang)
+STEPS+=(blit kmsflip kmsgpu)
+declare -A VPARAMS VENV VSMOKE
+while IFS='|' read -r vn vp ve vs; do
+	[[ -z "$vn" || "$vn" == \#* ]] && continue
+	STEPS+=("desk$vn"); VPARAMS[$vn]=$vp VENV[$vn]=$ve VSMOKE[$vn]=$vs
+done < "$T/desktop-variants"
+TOTAL=$(( ${#STEPS[@]} + 1 ))
+
+FONT=/usr/share/consolefonts/Lat15-TerminusBold32x16.psf.gz
+[ -f "$FONT" ] && setfont "$FONT" 2>/dev/null
+screen() {   # N: the progress screen on tty1; nothing depends on it being seen
+	chvt 1 2>/dev/null
+	clear
+	printf '\n\n  SGX545 test   (kit %s)\n\n  Testing %s of %s.\n\n  Please wait.\n\n  The computer will turn\n  itself off when done.\n' \
+		"$KIT_SERIES" "$1" "$TOTAL"
+}
+
+s_system() {
+	{
+		echo "kit $KIT_SERIES ($KIT_VERSION), kernel $(uname -r), boot $BOOT"
+		echo "cmdline: $(cat /proc/cmdline)"
+		for f in sys_vendor product_name product_version board_vendor board_name bios_vendor bios_version bios_date; do
+			printf '%s: %s\n' "$f" "$(cat /sys/class/dmi/id/$f 2>/dev/null)"
+		done
+		[ -d /sys/firmware/efi ] && echo "boot: UEFI" || echo "boot: BIOS"
+		dpkg-query -W linux-image-* sgx545-firmware mesa-sgx 2>/dev/null
+	} > "$R/system.txt"
+	cp /proc/cpuinfo "$R/cpuinfo.txt"
+	cp /proc/meminfo "$R/meminfo.txt"
+	lsblk -o NAME,SIZE,RO,TYPE,TRAN,MOUNTPOINT > "$R/disks.txt" 2>&1
+	run lspci-gpu.txt 30 lspci -nnvvv -s 00:02.0
+	run lspci.txt 30 lspci -nnk
+	for f in "$R"/lspci*.txt; do scrub < "$f" > "$f.s" && mv "$f.s" "$f"; done
+	local rw
+	rw=$(lsblk -dno NAME,RO,TRAN | awk '$3 != "usb" && $2 == "0" && $1 !~ /^(loop|ram|zram|sr)/ {print $1}' | xargs)
+	if [ -z "$rw" ]; then result PASS "internal disks are read-only"; else result FAIL "internal disks are read-only ($rw is not)"; fi
+	# the packages docs/INSTALL.md installs, as this stick has them (the same .debs install on Debian 13)
+	result INFO "packages: $(dpkg-query -W -f '${Package} ${Version}, ' 'linux-image-*sgx*' sgx545-firmware mesa-sgx 2>/dev/null | sed 's/, $//')"
+}
+
+s_driver() {
+	ls -l /sys/bus/auxiliary/devices/ > "$R/auxiliary.txt" 2>&1
+	if [ -n "$(compgen -G '/sys/bus/auxiliary/devices/gma500_gfx.sgx.*')" ]; then
+		result PASS "display driver hands the GPU over"
+	else
+		result FAIL "display driver hands the GPU over"
+	fi
+	ident=$(dmesg | grep -o 'SGX core id 0x[0-9a-f]* revision 0x[0-9a-f]*[^.]*' | tail -1)
+	note "${ident:-the driver did not report the GPU}"
+	if started; then result PASS "GPU identified and its microkernel started"
+	elif [ -z "$ident" ]; then result FAIL "GPU identified"
+	else result FAIL "GPU microkernel started"; fi
+	dumps start
+	display start
+}
+
+s_gputests() {
+	started || { result SKIP "GPU tests (the GPU didn't start)"; return; }
+	local t0 t
 	t0=$(timeouts)
 	for t in "powervr_sgx_test" "powervr_sgx_frame -n 10"; do
 		# shellcheck disable=SC2086 # the test and its arguments
 		set -- $t
+		beat
 		if run "$1.txt" 180 "$T/$1" "${@:2}"; then result PASS "$1"; else result FAIL "$1"; dumps "$1"; fi
 	done
 	[ "$(timeouts)" = "$t0" ] || note "a GPU job timed out during the tests"
-else
-	result SKIP "GPU tests (the GPU didn't start)"
-fi
+}
 
-step 4 "The blit, and its candidate fixes"
-BLIT=
-if [ -n "$STARTED" ] && ! lost; then
+s_gpuhang() {   # kit.test=gpuhang: a hang the driver must recover from, the run carries on
+	if ! started || lost; then result SKIP "forced GPU hang (no GPU)"; return; fi
+	local t0
+	t0=$(timeouts)
+	run gpuhang.txt 120 "$T/powervr_sgx_hang"
+	result INFO "forced GPU hang: $(( $(timeouts) - t0 )) job timeout(s), $(lost && echo 'GPU lost' || echo 'GPU recovered')"
+	dumps gpuhang
+}
+
+s_blit() {
+	if ! started || lost; then result SKIP "blit (no GPU)"; return; fi
+	BLIT=
 	try_blit() {   # NAME ARGS...
 		local n=$1; shift
+		beat
 		if run "blit-$n.txt" 180 "$T/powervr_sgx_blit" -n 4 "$@"; then
 			result PASS "blit: $n"; BLIT=${BLIT:-$n}
 		else
@@ -128,7 +181,7 @@ if [ -n "$STARTED" ] && ! lost; then
 	}
 	reload() {   # the microkernel image FILE
 		cp "$1" "$FW"
-		modprobe -r powervr_sgx && modprobe powervr_sgx
+		timeout 60 modprobe -r powervr_sgx && timeout 60 modprobe powervr_sgx
 		sleep 2
 		dmesg | grep 'open microkernel' | tail -1 >> "$LOG"
 	}
@@ -143,98 +196,136 @@ if [ -n "$STARTED" ] && ! lost; then
 		reload /tmp/sgx545_ukernel-default.bin
 	fi
 	lost || try_blit "extra, not decisive: texture-heap source (-T)" -T
-	# a second client at the same addresses after a first one exits (one client must not
-	# see another's leftovers); only in test builds whose usage lists -2
+	# a second client at the same addresses after a first one exits; only in test builds
+	# whose usage lists -2
 	if ! lost && "$T/powervr_sgx_blit" -h 2>&1 | grep -q -- '-2'; then
 		try_blit "two clients one after the other (-2)" -2
 	fi
-	lost && result FAIL "the GPU was lost (later steps run without it)"
 	note "first blit that worked: ${BLIT:-none}"
-else
-	result SKIP "blit (no GPU)"
-fi
-cp "$SUM" "$R/summary.txt" 2>/dev/null
-save && note "GPU results saved to the stick ($NAME)" || note "could not save to the stick yet"
+}
 
-step 5 "The desktop"
-note "The screen switches to a desktop now and back here at the end."
-note "If the desktop stays dark, wait 2 minutes before turning the computer off:"
-note "the test keeps saving its results to the stick."
-DESK=
-if /usr/local/bin/kit-desktop "$R" "$NAME"; then DESK=1; fi
-chvt 1 2>/dev/null
-[ -n "$DESK" ] || result FAIL "the desktop (see Xorg.0.log)"
-lost && result FAIL "the GPU was lost during the desktop test: the desktop results after that are not valid"
-dumps desktop
+kmsdev() {   # the KMS card with a connected output (gma500 on Cedarview)
+	local c
+	for c in /sys/class/drm/card[0-9]*-*; do
+		[ "$(cat "$c/status" 2>/dev/null)" = connected ] && { echo "/dev/dri/${c##*/}" | sed 's/-.*//'; return; }
+	done
+}
+s_kmsflip() {   # page flips with vsync, no X, no GPU: gma500's flips and vblank events
+	local dev drv conn mode hz
+	dev=$(kmsdev)
+	[ -n "$dev" ] || { result SKIP "page flips (no connected display output)"; return; }
+	# modetest takes the DRM driver's name (gma500 on Cedarview), from debugfs
+	mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
+	drv=$(awk '{print $1; exit}' "/sys/kernel/debug/dri/${dev##*card}/name" 2>/dev/null)
+	[ -n "$drv" ] || { result SKIP "page flips (no DRM driver name for $dev)"; return; }
+	timeout 10 modetest -M "$drv" -c > "$R/modetest-connectors.txt" 2>&1
+	read -r conn mode < <(awk '$3 == "connected" && !c {c = $1} c && /^  #0 / {print c, $2; exit}' "$R/modetest-connectors.txt")
+	[ -n "$conn" ] || { result SKIP "page flips (no connected connector in modetest)"; return; }
+	# vblank interrupts: they should rise ~60 a second while modetest waits on flips
+	irq() { awk '/gma500|psb/ {s = 0; for (i = 2; i <= NF && $i ~ /^[0-9]+$/; i++) s += $i; print s; exit}' /proc/interrupts; }
+	local i0 i1
+	i0=$(irq)
+	run kmsflip.txt 15 timeout -s INT 6 modetest -M "$drv" -s "$conn:$mode" -v
+	i1=$(irq)
+	echo "gma500 interrupts: ${i0:-none} -> ${i1:-none}" >> "$R/kmsflip.txt"
+	hz=$(grep -o 'freq: [0-9.]*' "$R/kmsflip.txt" | tail -1 | awk '{print $2}')
+	if awk -v h="${hz:-0}" 'BEGIN { exit !(h > 30) }'; then result PASS "page flips on the display, no X ($mode, $hz Hz)"
+	else result FAIL "page flips on the display, no X ($mode: ${hz:-no} flips reported; see kmsflip.txt)"; fi
+	if [ -n "$i0" ] && [ $(( ${i1:-0} - i0 )) -lt 120 ]; then
+		NOVBLANK=1
+		result FAIL "vblank interrupts didn't rise during the flips ($i0 -> $i1): results that wait on a flip are suspect; the GL desktop variants run with vblank_mode=0 and PageFlip off"
+	elif [ -n "$i0" ]; then
+		result PASS "vblank interrupts during the flips ($i0 -> $i1)"
+	fi
+}
+s_kmsgpu() {   # the GPU drawing to the display, no X: SGX + kmsro + gbm + PRIME import + flips
+	if ! started || lost; then result SKIP "GPU to the display without X (no GPU)"; return; fi
+	beat
+	run kmsgpu.txt 60 glmark2-es2-drm --visual-config a=0 -b build:duration=3 -b texture:duration=3
+	local sc r
+	sc=$(grep -o 'glmark2 Score: [0-9]*' "$R/kmsgpu.txt" | awk '{print $3}')
+	r=$(grep -m1 'GL_RENDERER' "$R/kmsgpu.txt" | cut -d: -f2 | xargs)
+	if [ -n "$sc" ] && [[ "$r" == *SGX* ]]; then result PASS "GPU to the display without X (glmark2-es2-drm score $sc)"
+	else result FAIL "GPU to the display without X (${r:-no renderer}, score ${sc:-none}; see kmsgpu.txt)"; fi
+}
+
+XSTUCK= NOVBLANK=
+s_desk() {   # VARIANT
+	local v=$1 rc
+	if [ -n "$XSTUCK" ]; then result SKIP "[$v] desktop (X from an earlier variant is still stuck)"; return; fi
+	if lost; then result SKIP "[$v] desktop (the GPU was lost)"; return; fi
+	local env=${VENV[$v]}
+	# without vblank, nothing on the GL path may wait on a flip or a swap interval
+	[ -n "$NOVBLANK" ] && [[ "$env" != *KIT_GL=software* ]] && env="$env vblank_mode=0 KIT_XORG_PAGEFLIP=off"
+	/usr/local/bin/kit-xvariant "$v" "${VPARAMS[$v]}" "$env" "${VSMOKE[$v]:-short}" "$NAME"
+	rc=$?
+	[ $rc = 3 ] && XSTUCK=1
+
+	chvt 1 2>/dev/null
+	dumps "desk$v"
+}
+
+# the steps; the chipset watchdog resets a computer that stops beating during the GPU steps
+modprobe gma500_gfx 2>/dev/null; modprobe powervr_sgx 2>/dev/null; sleep 2
+WDT=
+i=0
+for s in "${STEPS[@]}"; do
+	i=$((i + 1))
+	if grep -q "^done [0-9]* $s\( \|$\)" "$PROG" 2>/dev/null; then continue; fi   # an earlier boot did it
+	if [[ " $HUNG " == *" $s "* ]]; then
+		result HANG "step $i ($s): the computer stopped or restarted during it, in the previous boot"
+		mark "done $i $s HANG"; continue
+	fi
+	if [ -z "$WDT" ] && [ "$s" != system ] && [ "$s" != driver ]; then
+		WDT=$(/usr/local/bin/kit-wdt start) && note "chipset watchdog: $WDT" || { note "no chipset watchdog"; WDT=none; }
+	fi
+	screen $i
+	mark "start $i $s"
+	beat
+	echo "== step $i: $s ($(date -u +%T))" >> "$LOG"
+	case $s in
+	desk*) s_desk "${s#desk}" ;;
+	*) "s_$s" ;;
+	esac
+	lost && ! grep -q 'GPU was lost' "$SUM" && result FAIL "the GPU was lost (the GPU and desktop steps after this are skipped)"
+	mark "done $i $s"
+	save
+done
+/usr/local/bin/kit-wdt stop
 display after-desktop
 
-step 6 "Saving the results to the stick"
+screen "$TOTAL"
 SAVED=
-save && SAVED=1
-
-# CI (qemu-test.sh) powers off once the results are saved; its log is the serial port
-if grep -qw kit.poweroff=1 /proc/cmdline; then
-	{ echo "kit: saved=${SAVED:-no}"; cat "$R/summary.txt" "$SUM" 2>/dev/null
-	  grep -h ' /run/live/medium ' /proc/mounts; } > /dev/ttyS0 2>/dev/null
-	sync; systemctl poweroff; sleep 60
-fi
+save && SAVED=yes && mark complete
+# the serial port gets the summary (CI's QEMU log)
+{ echo "kit: saved=${SAVED:-no} boot=$BOOT"; cat "$SUM"; grep -h ' /run/live/medium ' /proc/mounts; } > /dev/ttyS0 2>/dev/null
 
 clear
-if [ -n "$SAVED" ]; then
-	cat <<EOF
-
-
-  ======================================================================
-    DONE. Thank you!   (kit $KIT_SERIES)
-  ======================================================================
-
-    The results are on this USB stick, in the file
-
-        $NAME
-
-    Please attach that file to the GitHub issue. Plug the stick into any
-    other computer: it is the drive named SGXKIT.
-
-    Could you see this screen on the computer's own display? Please say
-    so in your comment on the issue: the test cannot tell whether the
-    panel lit up. If it went dark, did it come back on by itself partway
-    through? Tell us that too.
-
-    This run used menu entry ${ENTRY:-?}. Please boot entry 1 three times and
-    entry 2 three times, and tell us how many of each were dark (for example
-    "entry 1: 0 of 3 dark, entry 2: 2 of 3 dark"). Entries 3 and 4 only if 1
-    and 2 are both dark every time. Each run saves its own results file:
-    attach all of them. If the desktop stays dark, wait 2
-    minutes before turning the computer off: the results keep being saved.
-
-    GPU: ${ident:-not reported}
-
-    Results:
-$(cat "$SUM")
-
-    Press Alt+F7 to try the desktop, or type  p  and Enter below to turn
-    the computer off.
-EOF
+# the desktop left up: A when the GPU desktop worked (X up, smoke test through, GL on the SGX),
+# else C; read from the summary, which carries an earlier boot's results after a resume
+FINAL=
+# (all saved by now, marker complete: a tester who switches off at that desktop loses nothing)
+has kit.poweroff=1 && FINAL=never
+grep -q 'PASS  \[C\] desktop variant' "$SUM" && [ -z "$FINAL" ] && FINAL=C
+grep -q 'PASS  \[A\] desktop variant' "$SUM" && grep -q 'PASS  \[A\] OpenGL renders on the SGX545' "$SUM" && [ "$FINAL" != never ] && FINAL=A
+if [ -n "$SAVED" ] && [ -n "$FINAL" ] && [ "$FINAL" != never ]; then
+	# everything the tester needs is saved; the best desktop that worked stays up for them
+	printf '\n\n  Done. Thank you!\n\n  The results are on this stick:\n  %s\n\n  A desktop starts now.\n' "$NAME"
+	sleep 5
+	V=/tmp/results/final; mkdir -p "$V/screenshots"; chmod 1777 "$V" "$V/screenshots"
+	for kv in ${VPARAMS[$FINAL]}; do echo "${kv#*=}" > "/sys/module/gma500_gfx/parameters/${kv%%=*}" 2>/dev/null; done
+	rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+	# shellcheck disable=SC2086 # the variant's VAR=value words
+	env ${VENV[$FINAL]} KIT_V="$V" KIT_SMOKE=final xinit /usr/local/bin/kit-session -- /usr/local/bin/kit-xorg :0 vt7 \
+		-nolisten tcp -logfile "$V/Xorg.0.log" > "$V/xinit.txt" 2>&1 &
+elif [ -n "$SAVED" ]; then
+	printf '\n\n  Done. Thank you!\n\n  The results are on this stick:\n  %s\n\n  The computer turns itself off now.\n' "$NAME"
+	if ! has kit.nopoweroff; then sleep 10; sync; systemctl poweroff; sleep 60; fi
 else
-	cat <<EOF
-
-  ======================================================================
-    The test ran, but the results could not be saved to the stick.
-  ======================================================================
-
-    Please take a photo of this screen and send it to us instead, and say
-    whether you could see it on the computer's own display.
-
-    GPU: ${ident:-not reported}
-$(cat "$SUM")
-
-EOF
+	printf '\n\n  The test ran, but the results\n  could not be saved to the stick.\n\n  Please take a photo of this screen.\n\n'
+	tail -25 "$SUM"
 fi
 while :; do
-	printf '\n  > '
-	read -r a
-	case $a in
-	p|P) sync; systemctl poweroff ;;
-	s|S) setsid -c /bin/bash -l ;;
-	esac
+	read -r a || { sleep 3600; continue; }   # no terminal (bench runs): just stay
+	case $a in p|P) sync; systemctl poweroff ;; s|S) setsid -c /bin/bash -l ;; esac
 done

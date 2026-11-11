@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <string.h>
 #include <time.h>
 
+#include "util/os_misc.h"
 #include "util/os_time.h"
 #include "util/u_debug.h"
 #include "util/u_debug_cb.h"
@@ -146,10 +148,11 @@ sgx_stats_report(struct sgx_context *ctx)
       ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
    fprintf(
       stderr,
-      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame)\n",
+      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame); TA state blocks %u sent, %u skipped\n",
       (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
       ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
-      ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0);
+      ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0,
+      ws.state_sent, ws.state_skipped);
    fprintf(
       stderr,
       "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
@@ -320,8 +323,19 @@ sgx_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
       return NULL;
 
    simple_mtx_lock(&screen->lock);
-   if (!screen->hw)
-      screen->hw = sgxws_ctx_create(screen->dev);
+   if (!screen->hw) {
+      /* the screen's one hardware context takes its first context's priority;
+       * SGX_CTX_PRIORITY=high|normal|low overrides it (an X server that
+       * doesn't ask) */
+      const char *env = os_get_option("SGX_CTX_PRIORITY");
+      int prio = flags & PIPE_CONTEXT_HIGH_PRIORITY  ? 1
+                 : flags & PIPE_CONTEXT_LOW_PRIORITY ? -1
+                                                     : 0;
+
+      if (env)
+         prio = !strcmp(env, "high") ? 1 : !strcmp(env, "low") ? -1 : 0;
+      screen->hw = sgxws_ctx_create(screen->dev, prio);
+   }
    ctx->hw = screen->hw;
    if (ctx->hw) {
       sgxws_prog_builtin(ctx->hw, SGXWS_VS_XY, &ctx->vs_xy);

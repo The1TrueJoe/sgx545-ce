@@ -38,8 +38,7 @@ __u_case(struct encode_state *s, const struct sgx_pds_reg *r)
 static inline enum sgx_pds_case_ud
 __ud_case(struct encode_state *s, const struct sgx_pds_reg *r)
 {
-   return r->file == SGX_PDS_FILE_DS1 ? SGX_PDS_UD_DS1
-                                         : SGX_PDS_UD_DS0;
+   return r->file == SGX_PDS_FILE_DS1 ? SGX_PDS_UD_DS1 : SGX_PDS_UD_DS0;
 }
 
 static inline enum sgx_pds_case_s1

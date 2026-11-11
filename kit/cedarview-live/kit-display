@@ -9,7 +9,7 @@
 # the registers every 0.5 s into display-regs-timeline.txt, from before X starts until
 # the first desktop screenshot exists or 20 s after X's socket appears (60 s at most),
 # to see when pipe B's FIFO underrun bit sets and what the palette holds.
-R=/tmp/results
+R=${KIT_OUT:-/tmp/results}   # kit-xvariant points it at the variant's directory
 mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
 regs() {
 	for n in /sys/kernel/debug/dri/*/name; do

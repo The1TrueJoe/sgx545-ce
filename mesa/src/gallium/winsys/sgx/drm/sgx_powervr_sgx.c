@@ -40,6 +40,7 @@
 
 #include "drm-uapi/powervr_sgx_drm.h"
 #include "util/macros.h"
+#include "util/u_debug.h"
 #include "util/simple_mtx.h"
 #include "util/vma.h"
 
@@ -563,15 +564,24 @@ psgx_code_reset(struct sgxws_dev *d, struct sgxws_bo *bo)
 /* ------------------------------------------------------------------ context */
 
 static int
-create_context(struct psgx_dev *dd, uint32_t *handle)
+create_context(struct psgx_dev *dd, int priority, uint32_t *handle)
 {
    struct drm_powervr_sgx_ioctl_create_context_args a = {
       .type = DRM_POWERVR_SGX_CTX_TYPE_RENDER,
-      .priority = DRM_POWERVR_SGX_CTX_PRIORITY_NORMAL,
+      .priority = priority > 0   ? DRM_POWERVR_SGX_CTX_PRIORITY_HIGH
+                  : priority < 0 ? DRM_POWERVR_SGX_CTX_PRIORITY_LOW
+                                 : DRM_POWERVR_SGX_CTX_PRIORITY_NORMAL,
       .vm_context_handle = dd->vm,
+      /* SGX_PB_PAGES: the parameter buffer's size, for experiments; the
+       * device's first render context sizes it for everyone (0: the
+       * kernel's default) */
+      .param_buffer_pages = (uint32_t)debug_get_num_option("SGX_PB_PAGES", 0),
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
 
+   /* high priority needs CAP_SYS_NICE: without it, normal */
+   if ((e == -EACCES || e == -EPERM) && priority > 0)
+      return create_context(dd, 0, handle);
    if (e)
       sgxws_err("CREATE_CONTEXT failed: %d\n", e);
    *handle = a.handle;
@@ -586,7 +596,7 @@ psgx_ctx_init(struct sgxws_ctx *c)
 
    if (!k)
       return -ENOMEM;
-   if ((e = create_context(ddev(c->dev), &k->handle))) {
+   if ((e = create_context(ddev(c->dev), c->priority, &k->handle))) {
       free(k);
       return e;
    }
@@ -619,7 +629,7 @@ replace_context(struct sgxws_ctx *c)
              c->reset == SGXWS_RESET_GUILTY ? "this context's job"
                                             : "another context's job");
    xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
-   if (create_context(dd, &handle)) {
+   if (create_context(dd, c->priority, &handle)) {
       dd->lost = true;
       c->reset = SGXWS_RESET_LOST;
       return;
@@ -926,6 +936,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    d->info.core_id = gi.core_id;
    d->info.core_revision = gi.core_revision;
    d->info.zero_copy = true;
+   d->info.priorities = true;
    d->info.rt_max_width = li.rt_max_width;
    d->info.rt_max_height = li.rt_max_height;
    d->info.rt_max_samples = li.rt_max_samples;

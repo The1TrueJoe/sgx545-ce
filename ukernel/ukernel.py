@@ -98,6 +98,22 @@ FP_TA_KICK, FP_TA_FIN, FP_3D_KICK, FP_3D_FIN = 0x37, 0x38, 0x39, 0x3a
 # over ~50 frames so the 1 ms tick error averages out and regsample needn't catch each render. (Zeroed at every
 # microkernel start; survive within a session while the GPU stays up.)
 FP_TA_BUSY, FP_3D_BUSY, FP_COUNTS = 0x3d, 0x3e, 0x3f   # TA-busy ticks, 3D-busy ticks, TA count (low 16)|3D (high 16)
+# TA/3D OVERLAP (main, 2026-11-09): run job N+1's TA while job N's 3D is in flight (the DDK does; Minecraft
+# TA ~42 ms + 3D ~26 ms, so ~11 -> ~20 fps). Off by default -> serial production image byte-identical. The
+# serial path keeps SC_RTENTRY/SC_RD/SC_CTX as the TA set (the current binning scene, so the HW-confirmed OOM
+# code is untouched); overlap ADDS a 3D set populated at the 3D kick and read by render_complete, so the TA can
+# advance to N+1 while N's 3D completes. Slot pick at the first kick: bind the slot the in-flight 3D is NOT on
+# (0x630 b2=TA slot, b1=3D slot, b0=first-kick slot), like the DDK (interleave_ours.py --order overlap). 3D is
+# strictly one at a time (a 3D queue in render_complete). m2's kernel side: credit 2 behind `overlap` (f073c83).
+OVERLAP = os.environ.get("UK_OVERLAP") == "1"
+TD_ENTRY = 0x19      # control block +0x64: the in-flight 3D's RT-data entry (0 = no 3D). Set at the 3D kick,
+                     # cleared at the DPM free. The slot pick reads it ("is a 3D in flight, and on 0x630 b1").
+TD_RD = 0x1c         # control block +0x70: the in-flight 3D's render details. render_complete reads it instead
+                     # of SC_RD, because by completion the TA set may already be N+1's. (DDK uses ctx +0x28/+0x2c.)
+TD_CTX = 0x20        # control block +0x80: the in-flight 3D's HW render context (for the completion teardown's
+                     # ctx in-flight clears). Populated at the 3D kick with TD_ENTRY/TD_RD.
+PENDING_3D = 0x26    # control block +0x98: set when a scene's last TA finished but a 3D was already in flight,
+                     # so its 3D is QUEUED (never two 3Ds). render_complete starts it after the current 3D frees.
 # EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
 # alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
@@ -548,6 +564,34 @@ class Asm:
         # frames, still intermittent lockup_TA) — the TA-cache invalidate is not the
         # terminate-kick cause. See the op0x100 flush at ta_finished's tail instead.
 
+    def invalidate3d(self):
+        """DDK-ordered 3D-side cache invalidate (ta3d-state, DDK pc 0x124b-0x1264),
+        used on the overlap queued 3D route. Unlike invalidate(), the MADD cache
+        invalidate is pulsed and WAITED+acked FIRST, and only then are the PDS-3D /
+        coefficient-store / USE invalidates requested, immediately before the
+        0x138 == 0x4b spin. In the overlap queued route do_3d runs from
+        render_complete with the 3D units clock-gated off (EA1 hang: CLKGATESTATUS
+        0x20, EVENT_STATUS2 0 — the 0x428 kick never ran); the MADD pulse wakes the
+        units, and the PDS-side 0x4b done bits can only set once it has retired.
+        invalidate()'s order (PDS first, 0x4b spin BEFORE the MADD wait) wins in the
+        serial case because the units are still warm from the just-finished TA, but
+        on the queued route it spins on 0x4b before the units are up and deadlocks."""
+        self.i("limm r5, #268435456")                  # 0x10000000: MADD cache
+        self.i(f"ldr r4, #{0x804 // 4}")
+        self.i("wdf")
+        self.i("or r4, r4, r5")
+        self.i(f"str #{0x804 // 4}, r4")
+        self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done (b26), ack 0x134
+        self.i("limm r5, #1")
+        # No 0xa08 here. The early BIF block (do_3d, right after 0x630->7) already made the
+        # USE/PDS-code request ONCE this run (DDK r22 |= 0x40); the DDK's late 3D handshake sees
+        # that flag and skips its own 0xa08, requesting only 0xad4/0xae0 and collecting the early
+        # request's done bits (0x03, part of 0x4b) inside the 0x4b spin. Requesting 0xa08 twice
+        # in one run isn't what the DDK does (ta3d-state). 3D path only; serial invalidate() stands.
+        self.i(f"str #{CR_PDS_INV1 // 4}, r5")         # 0xad4 PDS 3D
+        self.i(f"str #{CR_PDS_INV_CSC // 4}, r5")      # 0xae0 coefficient store
+        self.wait(0x138, INV_DONE_3D, CR_EVENT_HOST_CLEAR_0x140)      # spin 0x4b (incl. 0x03 from the early 0xa08), ack 0x140
+
     def ta_settle(self, tag):
         """TA must already be paused (0xa74 b0). Spin-read 0x700 until two reads 400
         iterations apart match, so a following free-list reload reads a stable counter
@@ -769,6 +813,9 @@ def build(a):
     a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
     a.i(f"st.a.d r17, #{SC_OOM}, r0 [moe]")               # no OOM partial render pending
+    if OVERLAP:
+        a.i(f"st.a.d r17, #{TD_ENTRY}, r0 [moe]")          # no 3D in flight (overlap state clean at start)
+        a.i(f"st.a.d r17, #{PENDING_3D}, r0 [moe]")        # no 3D queued
     a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r0 [moe]")       # no deferred OOM queued
     a.i(f"st.a.d r17, #{OOM_SAVED_628}, r0 [moe]")        # no threshold grant outstanding
     a.i(f"st.a.d r17, #{OOM_FLAGS}, r0 [moe]")            # OOM grant flags clear (G/G2/GRANTED)
@@ -1606,16 +1653,51 @@ def build(a):
     # and BANK0 goes 0x0f->0x1f(TA)->0x101f(3D). client PD (0xc38): first kick
     # only — the render kick reuses the scene's PD (ddk-ref "TA kick 2" = 0x1f, no
     # reload). Then invalidate the PDS/USE caches.
+    if OVERLAP:
+        a.i("limm r7, #0")                          # r7 = "do INVALDC" flag (0 = render kick or PD-hit)
     a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
     a.i("(p0) ba skip_bif_pd")
-    a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
-    a.i("wdf")
-    a.i(f"str #{0xc38 // 4}, r4")                   # BIF_DIR_LIST_BASE1 = client PD (slot 1)
+    if OVERLAP:
+        # DDK PD-point routine (pc 0x17ec): skip the DIR_LIST_BASE1 write AND the INVALDC when list
+        # 1 already holds this PD (a hit). On the overlap route this first kick is B's TA WHILE A's
+        # 3D is translating through list 1 (same-context -> same PD -> a hit), and a directory-cache
+        # invalidate under a live 3D is the overlap-only, sim-invisible hazard that refuses B's later
+        # 3D kick (ta3d-state: the DDK invalidates only on a real PD change, never evicting the list
+        # the other unit uses). Serial never hits it (no 3D runs during a TA first kick), so this stays
+        # OVERLAP-gated and the serial image is byte-identical.
+        a.i(f"ldr r5, #{0xc38 // 4}")               # current list-1 PD
+        a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)   # this context's PD
+        a.i("wdf")
+        a.i("test.xor.eq p0, r5, r4")               # 0xc38 == CTX_PD -> unchanged (hit): skip write + INVALDC
+        a.i("(p0) ba skip_bif_pd")
+        a.i(f"str #{0xc38 // 4}, r4")               # real PD change (miss): load list 1
+        a.i("limm r7, #1")                          # and do the INVALDC
+    else:
+        a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
+        a.i("wdf")
+        a.i(f"str #{0xc38 // 4}, r4")               # BIF_DIR_LIST_BASE1 = client PD (slot 1)
     a.label("skip_bif_pd")
-    a.i("limm r5, #0x1f")                           # BIF_BANK0: EDM=list 15, TA=list 1
+    if OVERLAP:
+        # PRESERVE the 3D nibble (BANK0 b12-15). On a host kick arriving while a previous render's 3D is still
+        # in flight (credit=2: the next command's EVENT_KICK comes during job N's 3D), a bare BANK0=0x1f would
+        # ZERO b12-15 and re-route N's in-flight 3D to list 0 = the idle PD -> the 3D faults on its next fetch
+        # (m2 decode of the 57cfae8 storm: BANK0 0x1f, 3D on the idle DIR_LIST_BASE0). Read-modify-write so the
+        # 3D keeps its list: result = (BANK0 & 0xf000) | 0x1f (EDM=15, TA=1, 3D nibble untouched).
+        a.i(f"ldr r5, #{0xc78 // 4}")
+        a.i("wdf")
+        a.i("limm r6, #0xf000")
+        a.i("and r5, r5, r6")
+        a.i("limm r6, #0x1f")
+        a.i("or r5, r5, r6")
+    else:
+        a.i("limm r5, #0x1f")                       # BIF_BANK0: EDM=list 15, TA=list 1
     a.i(f"str #{0xc78 // 4}, r5")
-    # directory-cache invalidate (INVALDC): first kick only.
-    a.i("test.and.eq p0, r13, r13")                 # render kick? skip INVALDC
+    # directory-cache invalidate (INVALDC): first kick only, and under OVERLAP only on a real PD
+    # change (r7 set above) -- never under a live 3D on a PD hit (ta3d-state, the queued-kick fix).
+    if OVERLAP:
+        a.i("test.and.eq p0, r7, r7")               # r7 == 0 (render kick or PD hit) -> skip INVALDC
+    else:
+        a.i("test.and.eq p0, r13, r13")             # render kick? skip INVALDC
     a.i("(p0) ba skip_bif_invaldc")
     a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
     a.i(f"str #{0xc00 // 4}, r5")
@@ -1674,6 +1756,36 @@ def build(a):
     # reused (the DDK skips them on the render kick).
     a.i("test.and.eq p0, r13, r13")             # render kick? skip RT region regs
     a.i("(p0) ba skip_rt")
+    if OVERLAP:
+        # Slot pick (DDK pc 0x09b7): bind the DPM slot the in-flight 3D is NOT on, so this TA can bin while
+        # that 3D renders + frees the other slot. 0x630 b2 = TA slot, b1 = 3D slot, b0 = first-kick slot.
+        # A 3D is in flight iff TD_ENTRY != 0; its slot is 0x630 b1. Only slot 1 is needed (one 3D at a time):
+        # a 3D on slot 0 -> this TA on slot 1 (0x630 = 4 then 5, RT state reg 0x674); else slot 0 (0x630 = 0,
+        # RT state reg 0x62c via TA_RT). Matches interleave_ours.py --order overlap: 0/0/0/4,5/5/7.
+        a.i(f"ld.a.d r5, r17, #{TD_ENTRY} [moe]")   # the in-flight 3D's RT entry (0 = none)
+        a.i("wdf")
+        a.i("test.and.eq p0, r5, r5")               # no 3D in flight -> slot 0
+        a.i("(p0) ba ov_slot0")
+        a.i(f"ldr r6, #{0x630 // 4}")
+        a.i("wdf")
+        a.i("test.and.ne p0, r6, #2")               # 3D on slot 1 (b1 set) -> this TA on slot 0
+        a.i("(p0) ba ov_slot0")
+        a.i("limm r5, #4")                          # slot 1: 0x630 = 4 (b2), then 5 (b2 | b0)
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i("limm r5, #5")
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i("ld.a.d r5, r12, #5 [moe]")             # RT entry words 5/6/7
+        a.i("ld.a.d r6, r12, #6 [moe]")
+        a.i("ld.a.d r7, r12, #7 [moe]")
+        a.i("wdf")
+        a.i(f"str #{0x674 // 4}, r5")                # slot-1 state reg = w5 (0x62c is slot 0's)
+        a.i(f"str #{0x634 // 4}, r6")                # control reg = w6 (shared)
+        a.i(f"str #{0x234 // 4}, r7")                # tail-pointer reg = w7 (shared)
+        a.i("ba skip_rt")
+        a.label("ov_slot0")
+        a.i("limm r5, #0")                          # slot 0: 0x630 = 0 twice (b2 then b0; DDK writes both)
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i(f"str #{0x630 // 4}, r5")
     a.program(12, TA_RT)
     a.label("skip_rt")
     a.program(10, TA_RD)
@@ -1912,7 +2024,31 @@ def build(a):
     a.i("ld.a.d r2, r1, #1 [moe]")                    # cmd+0x04 = TA flags (0x71/0x62)
     a.i("wdf")
     a.i("test.and.ne p0, r2, #2")                     # bLastInScene (bit 1)? render
-    a.i("(p0) ba do_3d")
+    if OVERLAP:
+        # 3D QUEUE: a scene's 3D can start only when the 3D engine is free (never two 3Ds). If a 3D is in
+        # flight (TD_ENTRY != 0), queue this scene's 3D; render_complete starts it after the current 3D frees.
+        # Credit = 2 blocks a 3rd TA, so SC_* stays this scene's until then. Not last -> kick re-dispatch.
+        a.i("(!p0) ba ov_ta_notlast")
+        # TPC flush at the LAST TA finish (DDK order, ta3d-state): flush the tail-pointer
+        # cache now, while the TE/TPC still holds THIS scene's tail state and -- on the queued
+        # route -- A's 3D is still running (the DDK flushes here too, mid-A-3D; safe, the TPC
+        # holds the TA's tail, separate from A's active ISP). do_3d used to flush itself, which
+        # on the queued route runs long after this TA finished -> B's tail state is gone and the
+        # 0x428 kick is refused. Do it for BOTH the start-now and the queued paths; do_3d skips
+        # it under OVERLAP. (0x224=0x40000000, wait EVENT_STATUS b10=0x400, ack 0x134=0x400.)
+        a.i("limm r5, #0x40000000")
+        a.i(f"str #{CR_TPC // 4}, r5")
+        a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
+        a.i(f"ld.a.d r3, r17, #{TD_ENTRY} [moe]")      # a 3D already in flight?
+        a.i("wdf")
+        a.i("test.and.eq p0, r3, r3")                  # none -> start this 3D now
+        a.i("(p0) ba do_3d")
+        a.i("limm r3, #1")
+        a.i(f"st.a.d r17, #{PENDING_3D}, r3 [moe]")     # queue it (render_complete starts it)
+        a.i("ba kick")
+        a.label("ov_ta_notlast")
+    else:
+        a.i("(p0) ba do_3d")
     if DPM_LOG:                                       # point C: TA1's finish (non-last)
         a.i(f"ldr r5, #{0x700 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x38, 5)
         a.i(f"ldr r5, #{0x724 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x39, 5)
@@ -1949,9 +2085,45 @@ def build(a):
     a.i("wdf")
     if DEBUG_SENTINEL:
         a.st_sa(SA_SELF, 0x35, 5)                     # log 0x630's inherited value
-    a.i("shr r5, r5, #3")
-    a.i("shl r5, r5, #3")                             # clear bits 0-2
-    a.i(f"str #{0x630 // 4}, r5")
+    if OVERLAP:
+        # 3D start: the 3D takes this scene's slot (0x630 b2) -> set b1 = b2 (DDK: 5 -> 7 for slot 1, 0 -> 0
+        # for slot 0). DON'T clear the slot bits; the TA may already be binning the next scene on the other
+        # slot. Then populate the 3D set so render_complete and the next TA's slot pick see this 3D in flight.
+        a.i("limm r6, #4")
+        a.i("and r6, r5, r6")                        # b2 = the scene's slot (0 or 4)
+        a.i("shr r6, r6, #1")                        # -> b1 position (0 or 2)
+        a.i("or r5, r5, r6")                         # 0x630 b1 = b2
+        a.i(f"str #{0x630 // 4}, r5")
+        a.i(f"ld.a.d r6, r17, #{SC_RTENTRY} [moe]")
+        a.i(f"ld.a.d r7, r17, #{SC_RD} [moe]")
+        a.i("wdf")
+        a.i(f"st.a.d r17, #{TD_ENTRY}, r6 [moe]")    # the in-flight 3D's RT entry
+        a.i(f"st.a.d r17, #{TD_RD}, r7 [moe]")       # and its render details
+        a.i(f"ld.a.d r6, r17, #{SC_CTX} [moe]")
+        a.i("wdf")
+        a.i(f"st.a.d r17, #{TD_CTX}, r6 [moe]")      # and its HW render context
+        # EARLY BIF dir-cache invalidate for the queued render (DDK @0x182f-0x1855, right after
+        # 0x630 -> 7 and BEFORE the 3D register block): render A changed the BIF directory state,
+        # so flush the MADD+USE caches and re-assert BANK0 to list 1 now, else B's 3D translates
+        # through A's STALE directory cache and the 0x428 kick is REFUSED. The register VALUES
+        # already match the DDK (oracle-clean); this early invalidate -- a HW effect the sim
+        # can't model -- is the one structural difference left on the queued route.
+        a.i("limm r5, #268435456")                     # 0x10000000: MADD cache
+        a.i(f"ldr r4, #{0x804 // 4}")
+        a.i("wdf")
+        a.i("or r4, r4, r5")
+        a.i(f"str #{0x804 // 4}, r4")
+        a.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done (b26), ack 0x134
+        a.i("limm r5, #1")
+        a.i(f"str #{CR_USE_INVAL // 4}, r5")           # 0xa08 USE invalidate
+        a.i("limm r5, #0x101f")
+        a.i(f"str #{0xc78 // 4}, r5")                  # BANK0 = 0x101f (3D requestor -> list 1)
+        a.i(f"ldr r5, #{0xc78 // 4}")                  # read-back fence
+        a.i("wdf")
+    else:
+        a.i("shr r5, r5, #3")
+        a.i("shl r5, r5, #3")                         # clear bits 0-2
+        a.i(f"str #{0x630 // 4}, r5")
     # flush the tail-pointer cache before the 3D. The last TA's final control-
     # stream terminates and tail pointers sit in the TPC, not yet written back to
     # the parameter buffer; without the flush the ISP walks UNTERMINATED region
@@ -1960,9 +2132,13 @@ def build(a):
     # first thing on the last-in-scene TA finish (ddk-ref "TA finished (2)"):
     # CR_TPC (0x224) = 0x40000000, wait EUR_CR_EVENT_STATUS bit 10 (0x400,
     # TPC_FLUSH), clear it. (ta3d-state, 2026-11-03.)
-    a.i("limm r5, #0x40000000")
-    a.i(f"str #{CR_TPC // 4}, r5")
-    a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
+    if not OVERLAP:
+        # Serial flushes the TPC here. Under OVERLAP the flush moved to ta_finished's last-kick
+        # path (DDK order) so the queued 3D doesn't re-flush long after its TA finished, when the
+        # TE/TPC no longer holds its tail state -- which refused the 0x428 kick (ta3d-state).
+        a.i("limm r5, #0x40000000")
+        a.i(f"str #{CR_TPC // 4}, r5")
+        a.wait(CR_EVENT_STATUS, 0x400, CR_EVENT_HOST_CLEAR)
     a.label("do_3d_after_tpc")
     a.i(f"ld.a.d r10, r17, #{SC_RD} [moe]")   # render details
     a.i(f"ld.a.d r11, r17, #{SC_PB} [moe]")   # PB descriptor
@@ -2139,8 +2315,14 @@ def build(a):
     a.label("skip_oom658_clear")
     a.i("limm r5, #1")
     a.i(f"str #{0x43c // 4}, r5")
-    # invalidate the 3D-side caches and wait
-    a.invalidate(CR_PDS_INV1, INV_DONE_3D)
+    # invalidate the 3D-side caches and wait. On the overlap queued route this do_3d
+    # can run with the 3D units clock-gated off (render_complete -> do_3d), so use the
+    # DDK order (MADD waited first, PDS/USE right before the 0x4b spin); the serial path
+    # keeps the HW-confirmed invalidate() (units warm from the TA).
+    if OVERLAP:
+        a.invalidate3d()
+    else:
+        a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     # C (ta3d-state, DDK @0x1289): the background-object PDS words. The client
     # leaves bgblock[0..2] = 0, so without these the ISP's background object runs a
     # zeroed PDS program and the 3D hangs (lockup_3d, BIF_FAULT 0). bgblock VA =
@@ -2243,10 +2425,18 @@ def build(a):
     a.i("limm r7, #1"); a.i("and r5, r5, r7")         # ISP clock bit
     a.i("test.and.eq p0, r5, r5")                     # bit 0 == 0 -> ISP idle
     a.i("(p0) ba pixel_isp_done")
-    a.i("imae r6, r6, #1, #1 [t2=u32]")               # counter += 1
-    a.i("limm r7, #4096")
-    a.i("test.xor.ne p0, r6, r7")                     # under the bound -> keep polling
-    a.i("(p0) ba pixel_isp_loop")
+    if OVERLAP:
+        # UNBOUNDED spin, as the DDK does (PBE_END handler pc 0x0ec3). The bounded version below can proceed
+        # with the ISP still clocking on a big render; serially that's harmless (the next 3D is a whole TA
+        # away), but under overlap render_complete -> do_3d(N+1) writes the 0x428 kick immediately, and the HW
+        # DROPS it while the ISP is still clocked -> the queued 3D never triggers (EVENT_STATUS2=0, no clock) =
+        # the silent hang. So the completion must wait for the 3D pipe to be truly idle. ta3d-state.
+        a.i("ba pixel_isp_loop")
+    else:
+        a.i("imae r6, r6, #1, #1 [t2=u32]")           # counter += 1
+        a.i("limm r7, #4096")
+        a.i("test.xor.ne p0, r6, r7")                 # under the bound -> keep polling
+        a.i("(p0) ba pixel_isp_loop")
     a.label("pixel_isp_done")
     a.i("limm r4, #0")
     a.i(f"st.a.d r17, #{WAIT_3D}, r4 [moe]")           # WAIT_3D = 0 (3D writeout done)
@@ -2394,7 +2584,10 @@ def build(a):
     a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear SC_OOM
     a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r4 [moe]")   # any queued overlap is moot: the scene finished
     a.label("render_complete_normal")
-    a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")    # render details
+    if OVERLAP:
+        a.i(f"ld.a.d r0, r17, #{TD_RD} [moe]")   # the completing 3D's render details (SC_RD may now be N+1's TA)
+    else:
+        a.i(f"ld.a.d r0, r17, #{SC_RD} [moe]")   # render details
     a.i("wdf")
     # Destination sync 0 (docs/UKERNEL.md §5 "3D end of render"): clear the
     # render's own sync ops-pending word (render-details word 0x34 = byte 0xD0 =
@@ -2455,8 +2648,12 @@ def build(a):
     # flight slots. One context: the in-flight "list" is the single control-
     # block slot, cleared to 0 (not an unlink), which is also what tells the
     # cleanup and power handlers no render is running.
-    a.i(f"ld.a.d r1, r17, #{SC_RTENTRY} [moe]")  # RT-data entry
-    a.i(f"ld.a.d r2, r17, #{SC_CTX} [moe]")      # HW render context
+    if OVERLAP:
+        a.i(f"ld.a.d r1, r17, #{TD_ENTRY} [moe]")  # the completing 3D's RT entry (not N+1's TA)
+        a.i(f"ld.a.d r2, r17, #{TD_CTX} [moe]")    # and its HW render context
+    else:
+        a.i(f"ld.a.d r1, r17, #{SC_RTENTRY} [moe]")  # RT-data entry
+        a.i(f"ld.a.d r2, r17, #{SC_CTX} [moe]")      # HW render context
     a.i("wdf")
     a.i("ld.a.d r3, r1, #%d [moe]" % RT_DATA)            # rtdata = *(rtentry+0x30)
     a.i("wdf")
@@ -2474,12 +2671,27 @@ def build(a):
     a.i(f"st.a.d r17, #{SC_INFLIGHT}, r4 [moe]")  # control block +0x50 = 0 (none in flight);
                                                   # this runs on 0x1 (after the page free), so
                                                   # clearing it lets a deferred cleanup free safely
+    if OVERLAP:
+        a.i(f"st.a.d r17, #{TD_ENTRY}, r4 [moe]")  # 3D done: clear the slot-pick gate (the next first kick's
+                                                   # slot pick resets 0x630, so the 3D's b1 needn't be cleared here)
     a.i("limm r5, #%d" % RD_STATE)
     a.i("imae r5, r5, #1, r0 [t2=u32]")                  # &(rd+0x2a4)
     a.i("limm r4, #2")
     a.i("st.a.d r5, #0, r4 [moe]")                       # rd+0x2a4 = 2 (render freed; DDK does this at completion)
     a.i("idf")
     a.i("wdf")
+    if OVERLAP:
+        # a 3D queued behind this one (its TA finished while this 3D ran)? Raise this render's completion IRQ,
+        # then start the queued 3D: do_3d reads SC_* = the queued scene, which credit=2 kept ours. Else normal end.
+        a.i(f"ld.a.d r3, r17, #{PENDING_3D} [moe]")
+        a.i("wdf")
+        a.i("test.and.ne p0, r3, r3")
+        a.i("(!p0) ba raise_host_irq")
+        a.i("limm r3, #0")
+        a.i(f"st.a.d r17, #{PENDING_3D}, r3 [moe]")       # dequeue
+        a.i(f"limm r0, #{SW_EVENT}")
+        a.i(f"str #{CR_EVENT_STATUS // 4}, r0")           # raise this render's completion IRQ (inline)
+        a.i("ba do_3d")                                   # start the queued 3D on the freed 3D engine
     a.i("ba raise_host_irq")
     # render_done_noop: a DPM 3D-memory-free event (0x1) arrived with no render in
     # flight -- a transfer's own free, or a spurious/duplicate event. 0x1 is already

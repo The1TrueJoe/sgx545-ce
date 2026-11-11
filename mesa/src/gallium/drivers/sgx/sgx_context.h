@@ -40,6 +40,11 @@ struct sgx_const {
 };
 
 #define SGX_MAX_CONSTS 256 /* SA dwords of constants (sa127 ends them) */
+/* fragment constants the driver fills: texture unit u's level-0 width and
+ * height at SGX_K_TEXSIZE + 2u (st's textureSize, as its rectangle lookups
+ * scale by it); past every uniform (128 vec4) and under the compiler's 1024 */
+#define SGX_K_TEXSIZE       1000
+#define SGX_K_TEXSIZE_UNITS 8
 
 #define SGX_MAX_DEP_SAMPLES 8
 
@@ -66,6 +71,10 @@ struct sgx_pipe_shader {
     * epilogue is the blend, sgxws_blend) */
    uint64_t *code; /* with the dependent samples' smp put in */
    unsigned n_code, color_reg, temps;
+   /* split around its discard (unless SGX_DEBUG=nophasesplit): code is phase 0 (the
+    * test), code1 phase 1 (the colour, into pa<color_reg>) */
+   uint64_t *code1;
+   unsigned n_code1;
    int discard_pa; /* discards: the depth plane's first PA register; -1 doesn't */
    /* dependent samples: the SA register of each one's 4 texture state words,
     * and its sampler */

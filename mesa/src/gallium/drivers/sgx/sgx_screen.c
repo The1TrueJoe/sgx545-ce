@@ -47,14 +47,20 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "the fixed vertex programs instead of the compiler"},
    {"nofs", SGX_DEBUG_NO_FS_COMPILER,
     "the fixed fragment programs instead of the compiler"},
-   {"ffmediump", SGX_DEBUG_FF_MEDIUMP,
-    "fixed-function fragment programs at mediump (F16; texture coordinates F32)"},
+   {"noffmediump", SGX_DEBUG_NO_FF_MEDIUMP,
+    "fixed-function fragment programs at highp (F32), not mediump (F16; texture coordinates F32)"},
    {"zerocopy", SGX_DEBUG_ZERO_COPY,
     "vertex inputs DMAed where they are (buffers in place, client arrays copied as they are), where it isn't the default"},
    {"nozerocopy", SGX_DEBUG_NO_ZERO_COPY,
     "vertex inputs gathered into f32 x 4, where zero-copy is the default"},
    {"nolazyscanout", SGX_DEBUG_NO_LAZY_SCANOUT,
     "scanout buffers on a dumb-buffer display (kmsro) are the display's from the start, not when a KMS handle is asked for"},
+   {"nophasesplit", SGX_DEBUG_NO_PHASE_SPLIT,
+    "a fragment program that discards runs whole before the visibility feedback, not only its test (its colour after, as the DDK's alpha-tested programs)"},
+   {"nof16samples", SGX_DEBUG_NO_F16_SAMPLES,
+    "texels a mediump program reads come back RGBA8 to unpack, not F16 (T3 01028800)"},
+   {"tspf16", SGX_DEBUG_TSP_F16,
+    "the TSP precision mask marks the sets the fragment program iterates as F16 and doesn't sample from (the DDK's, for the TA's parameter buffer)"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -173,6 +179,12 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    /* blending is shader code (STATE.md section 3): any equation per channel */
    caps->blend_equation_separate = true;
    caps->uma = true;
+   /* the kernel's scheduler takes a context's priority (glamor asks for
+    * high, so X's copies don't queue behind a game's frames) */
+   if (screen->info->priorities)
+      caps->context_priority_mask = PIPE_CONTEXT_PRIORITY_LOW |
+                                    PIPE_CONTEXT_PRIORITY_MEDIUM |
+                                    PIPE_CONTEXT_PRIORITY_HIGH;
    /* a texture can be a render target: no bigger than the kernel takes one */
    caps->max_texture_2d_size =
       MIN3(f->max_texture_size, screen->info->rt_max_width,

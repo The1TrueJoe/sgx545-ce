@@ -1,38 +1,54 @@
-# Cedarview test stick v3: live Debian
+# Cedarview test stick v4: live Debian, one hands-off boot
 
-One boot answers everything a Cedarview tester can tell us. A live Debian 13 system on a
-USB stick, with exactly the packages [docs/INSTALL.md](../../docs/INSTALL.md) installs, runs
-the GPU tests, tries the blit's candidate fixes, brings up an Xfce desktop and runs a
-smoke test with screenshots. Everything goes into one results file on the stick. The
-computer's own disks are never written to.
+One boot answers everything a Cedarview tester can tell us, with nothing for the tester to
+do: flash, boot, walk away, attach one file. A live Debian 13 system on a USB stick, with
+exactly the packages [docs/INSTALL.md](../../docs/INSTALL.md) installs, runs the GPU tests,
+tries the blit's candidate fixes, then brings up X once per display/desktop variant and runs
+a smoke test with screenshots in each, every step under a time limit, and turns the computer
+off. Everything goes into one results file on the stick. The computer's own disks are never
+written to.
 
 | file | what |
 |---|---|
 | `build.sh DEBS TESTS OUTDIR VERSION [XFERBANK_FW]` | the image, as root on a Linux runner: mmdebstrap of trixie with `mesa/tests/desktop/packages.txt` and `packages.txt`, the kernel, firmware and Mesa packages installed with apt, live-boot's squashfs on one FAT32 partition `SGXKIT`, GRUB for BIOS, x86_64 EFI and i386 EFI |
-| `kit-live-run` | the run on tty1 (systemd `kit.service`): system facts, the GPU, the tests, the blit variants, the desktop, the results |
-| `kit-desktop`, `kit-session` | Xorg on vt7 and an Xfce session as `desk`, which runs `kit-smoke` |
-| `kit-smoke` | the desktop's smoke test: glxinfo, gears, glmark2, a browser on `test.html`, a dragged window; a screenshot of each, checked for a blank screen |
+| `kit-live-run` | the run on tty1 (systemd `kit.service`): the step list, the progress marker and resume, the progress screen, the save and the power-off |
+| `desktop-variants` | one X attempt per line: gma500 parameters, environment, full or short smoke test |
+| `kit-xvariant` | one desktop attempt: the parameters, X under a watchdog (stall and time limits), the hang capture, X stopped whatever its state |
+| `kit-session`, `kit-xorg` | the X session (Xfce as `desk`, then `kit-smoke`) and Xorg's debug environment |
+| `kit-smoke` | the smoke test, full (glxinfo, gears, glmark2, a browser on `test.html`, a dragged window) or short; a screenshot of each, checked for a blank screen |
+| `kit-hangcap` | a stuck X's state, wchan and thread stacks, the DRM state, sysrq-w, gdb only outside D state |
+| `kit-wdt` | the chipset watchdog (iTCO) around the GPU and desktop steps, petted from the run's heartbeat |
+| `kit-display`, `kit-save` | the display side's dumps and register timeline; the results file, written and renamed |
 | `99-kit-readonly.rules`, `initramfs-hook` | every non-USB disk read-only from the initramfs on |
 | `qemu-test.sh` | the CI check: boots the image in QEMU next to a disk that must stay unchanged |
-| `SERIES` | the kit's version for testers (`v3`), on the screen and in the results file name |
+| `SERIES` | the kit's version for testers (`v4`), on the screen and in the results file name |
 
 CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview`
 (kernel), `powervr-sgx-cedarview` (static tests) and `mesa-sgx-trixie` (firmware and Mesa
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
-`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.4` for v3.4, from `SERIES`) for 90 days. There are no GitHub releases.
+`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v4` for v4, from `SERIES`) for 90 days. There are no GitHub releases.
 
-## The menu
+## One boot
 
-Four GRUB entries run the same test with the kernel's DRM debug log on (`drm.debug=0x6
-log_buf_len=4M`). The kernel turns display self-refresh off by default (gma500 0005). 1 as it
-is, 2 `gma500_gfx.cdv_dsparb=0x3f01` (pipe B gets almost the whole display FIFO), 3
-`gma500_gfx.cdv_sr=1` (self-refresh on, the old behavior, for comparison), 4 `cdv_dsparb=0x3f01`
-with `video=LVDS-1:e`.
-Never `video=LVDS-1:d` (it turns the panel off). Each run records its entry (`kit.entry=N`) and
-the full command line (`cmdline.txt`), and puts the entry in its results file name. The dark
-panels are intermittent, so testers are asked for entry 1 three times and entry 2 three times,
-with a count of dark boots for each; 3 and 4 only if 1 and 2 are both dark every time. The menu shows before Linux starts, so a tester whose
-panel goes dark can still go on: wait about 5 minutes, power off, boot again.
+GRUB has one entry and boots it by itself (`drm.debug=0x6 log_buf_len=4M`). The run is a list
+of steps (`kit-live-run`): system facts, the driver, the GPU tests, the blit set, then one X
+attempt per line of `desktop-variants` (A: the kernel's defaults with the full smoke test,
+B: `cdv_dsparb=0x3f01`, C: `cdv_sr=1`, the old behavior). The gma500 parameters are written to
+`/sys/module/gma500_gfx/parameters/` and applied with a blank/unblank; a variant whose
+parameters can't be set is skipped.
+
+Every step has a time limit. For X: up within 40 s, the first desktop screenshot within 90 s,
+the whole attempt within 240 s. When Xorg.0.log stands still for 5 s before the session starts
+(and again 30 s later), or a limit is hit, `kit-hangcap` records the stacks; X is then stopped
+and the next variant runs. A lost GPU skips the remaining GPU and desktop steps; the run still
+saves and powers off.
+
+`kit-progress.txt` on SGXKIT records each step before it starts. A boot that finds a step
+started but not done records it as HANG and resumes after it, in the same results file
+(the earlier boot's results under `boot-N/`). The chipset watchdog (iTCO, 120 s) is armed
+from the GPU steps to the end and petted while the run's heartbeat is fresh, so a hard hang
+restarts the computer by itself. Test switches: `kit.test=xhang` (X stops dead in variant A),
+`kit.test=gpuhang` (a forced GPU hang after the GPU tests), `kit.nopoweroff`.
 
 ## The run
 
