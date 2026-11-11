@@ -1925,9 +1925,11 @@ assign_io(struct sgx_ctx *c)
             continue;
          struct sgx_iter *it = &c->iters[c->n_iters++];
          it->set = set;
-         it->comps = MIN2(comps, 4);
+         /* (the colour source is always four F32 components) */
+         bool colour = c->vary->colour && set == 0;
+         it->comps = colour ? 4 : MIN2(comps, 4);
          it->pa = pa;
-         it->f16 = set16[set];
+         it->f16 = set16[set] && !colour;
          it->flat = flat[set] && !smooth[set];
          /* F16: in_reg holds SGX_IN_HALF | the half index */
          pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
