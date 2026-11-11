@@ -114,6 +114,10 @@ TD_CTX = 0x20        # control block +0x80: the in-flight 3D's HW render context
                      # ctx in-flight clears). Populated at the 3D kick with TD_ENTRY/TD_RD.
 PENDING_3D = 0x26    # control block +0x98: set when a scene's last TA finished but a 3D was already in flight,
                      # so its 3D is QUEUED (never two 3Ds). render_complete starts it after the current 3D frees.
+SC_BIF_GAVEUP = 0x28 # TEST firmware (BIF flush A/B): count of PD-switch flushes that hit the spin bound WITHOUT
+                     # seeing FLUSH_COMPLETE, so a hardware run tells "flushed" from "gave up" (0 = all completed).
+                     # Control block +0xA0, host-readable via the regsample over BAR0. Free sgx545 word (between
+                     # SC_COMPLETED and PB_TA_LOADED); production and debug builds never touch it.
 # EVENT_TIMER period divisor for the perf measurement: UK_TIMERDIV=N makes the EDM keep-
 # alive timer N times slower (1 = default 1 kHz, 4 = 250 Hz, 10 = 100 Hz). Scales the
 # host-set period at init and at power-resume. Default 1 emits nothing -> byte-identical.
@@ -289,6 +293,13 @@ class Asm:
         self.i(f"(p0) ba {done}")
         self.i(f"test.isubu16.ne p0, {rc}, {rc}, #1")  # rc -= 1; nonzero -> keep polling
         self.i(f"(p0) ba {spin}")
+        # fell through: hit the bound without FLUSH_COMPLETE. Record the give-up so
+        # a hardware run can tell a completed flush from one that timed out -- and
+        # whether the bound is large enough. rv is free here (rc == 0).
+        self.i(f"ld.a.d {rv}, r17, #{SC_BIF_GAVEUP} [moe]")
+        self.i("wdf")
+        self.i(f"imae {rv}, {rv}, #1, #1 [t2=u32]")   # SC_BIF_GAVEUP += 1
+        self.i(f"st.a.d r17, #{SC_BIF_GAVEUP}, {rv} [moe]")
         self.label(done)
 
     def invalidate(self, inv_reg, done_mask):
@@ -562,6 +573,7 @@ def build(a):
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
     a.i(f"st.a.d r17, #{SC_OOM}, r0 [moe]")               # no OOM partial render pending
     a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")          # completion seqno starts at 0 (host resyncs on restart)
+    a.i(f"st.a.d r17, #{SC_BIF_GAVEUP}, r0 [moe]")         # TEST: BIF-flush give-up counter starts at 0
     if OVERLAP:
         a.i(f"st.a.d r17, #{TD_ENTRY}, r0 [moe]")          # no 3D in flight (overlap state clean at start)
         a.i(f"st.a.d r17, #{PENDING_3D}, r0 [moe]")        # no 3D queued
