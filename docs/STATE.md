@@ -1123,7 +1123,9 @@ instruction, not the texture: `tex1` gives `00800800` and `tex2`
 sampling tc0, then DOUTT) gives `00800000`, with T0 `00b60e90`, T1
 `cc2cf1df` and T2 = the render target's address [capture]. What the 0x800
 part that the shader samples add, and the background lacks, does is
-[unconfirmed].
+[unconfirmed]. Three fields are known from open-stack runs [hardware;
+TEX.md §14-15]: b29-31 the shadow compare function, b16-17 the compare
+result format, and the low bits (b0-6 at least) a volume's depth - 1.
 
 **The background's T0 and T1 follow the surface**, from the 2026-11-08
 pbuffer and FBO captures:

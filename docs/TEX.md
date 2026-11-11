@@ -763,7 +763,7 @@ native border mode, if the replays find one, replaces it.
   has it (docs/porting/cores/sgx530.md lists the 530's features against
   it). The DDK's desktop GL lists `EXT_texture3D`. The DDK's ES2 doesn't
   list `OES_texture_3D` (**capture**, `PROBE_EXTS=1`, 2026-11-11), so no ES2
-  capture can show a volume; step 3 below is the path.
+  capture can show a volume; the step 3 tests below are the evidence.
 - **The open driver has none:** `caps->max_texture_3d_levels = 0`, and
   `sgx_resource.c` gives a PIPE_TEXTURE_3D no device copy. Mesa still
   advertises GL 2.1, since its version check doesn't look at 3D levels below
@@ -777,16 +777,24 @@ native border mode, if the replays find one, replaces it.
   corpus). A plain `texture3D` is likely the same form (**guess**). Which
   DOUTI bits carry the dimension isn't known: PDS.md lists only the 2-D
   (0x200) and projected (0x400) bits.
-- **What the texture words have room for** (**guess**, from STATE.md §5):
-  - T1 has no spare bits: 12 + 12 bits of size, 5 of format, 3 of layout.
-    The layouts seen are 0 (twiddled), 2 (cube), 3 (linear) and 6 (strided);
-    a volume layout would be one of 1, 4, 5 and 7.
-  - The depth then lives in T0 or T3.
-  - T0 b0-2 is a 3-bit field just below the wrap T (b3-5) and wrap S (b6-8)
-    fields and is 0 in every 2D capture. It's the natural place for wrap R.
-- **Memory layout: not known.** A twiddled volume might interleave all three
-  axes. A capture with `PROBE_TEXPAT=1` settles it: layer z's texels carry
-  `z<<4` in blue, and `rawmap.py` reads where each texel went.
+- **The texture words and the layout** (**hardware**: open-stack black-box
+  tests on a CE5300 board, 2026-11-11, `tools/isa/hwt_vol*.py`, a 4×4×D
+  RGBA8888 volume written by hand, a dependent `smp.3d` at (s, t, r)):
+  - **The depth is T3's low bits, as depth - 1.** 1 gives 2 slices, 2 gives
+    3 (r splits into thirds), 3 gives 4, and so on to 7 for 8; single bits
+    b3-b6 fit 9, 17, 33 and 65 slices. With 0, the value in every 2D word,
+    r isn't read. The field is at least b0-6 wide; b7-10 also move the
+    address and are likely the same field (**unconfirmed**).
+  - **T1 layout 1 with a depth is a twiddled volume**, Morton order with y
+    first: index bits y0, x0, z0, y1, x1, z1, then the remaining z bits (z2
+    at bit 6, z3 at bit 7 for 4×4×D). Checked at (2,0,0) = 16, (0,2,0) = 8,
+    (1,1,1) = 7, (3,3,3) = 63, (3,0,0) = 18, (0,3,0) = 9, (0,0,3) = 36, and
+    slices 0-7 of an 8-deep one. Sizes where x and y aren't 4 are untested.
+  - Layout 1 with depth 0 reads linear rows. Layouts 0 and 7 are 2D
+    twiddled and never read r; layout 4 is strided; layout 5 returns 0.
+  - Wrap R is still open. T0 b0-2, a 3-bit field just below wrap T (b3-5)
+    and wrap S (b6-8), is 0 in every 2D capture and is the candidate
+    (**guess**).
 
 **Tests** (Gaps, §14):
 
@@ -803,12 +811,14 @@ native border mode, if the replays find one, replaces it.
 3. If it doesn't, black-box tests with the open stack: a dim-2 `smp` on a
    texture whose T1 layout is 1, 4, 5 or 7, over a `PROBE_TEXPAT`-style
    volume written to memory by hand. Read back which texel each (s, t, r)
-   returns, with T0 b0-2 and T3 varied one field at a time.
+   returns, with T0 b0-2 and T3 varied one field at a time. Done for the
+   layout and the depth (above); wrap R, mipmaps and filtering across r are
+   still to run.
 
-**Lowering, if no volume form is found:** a 2D texture holding the slices
-side by side, with two samples a fragment and a mix across r for LINEAR. It
-costs a second sample and has no mipmaps across r, so it is a last resort,
-and GL 1.2 conformance would still need the real layout.
+**What the driver needs:** a PIPE_TEXTURE_3D upload in T1 layout 1, twiddled
+in the order above, with T3's low bits = depth - 1, and a dependent `smp.3d`.
+Wrap R, mipmapped volumes, NPOT depths and the non-dependent (DOUTI) form
+come from the remaining tests (Gaps, §14).
 
 ## 15. Depth textures and shadow compare
 
@@ -830,23 +840,50 @@ and GL 1.2 conformance would still need the real layout.
     texel 1 is `0x37800080` (1/65535), and depth32 and d24s8 hold their
     value / (2^32 - 1) and / (2^24 - 1). The stencil byte of d24s8 is
     dropped.
-  - The sample returns (d, d, d, 1): the centre texel (136 / 65535 for
-    depth16, about 8e-6 for the others) reads back as (1, 1, 1, 255) and
-    (0, 0, 0, 255).
-  - So 0x12 is a one-channel F32 format, replicated to RGB, with alpha 1
-    (**guess** for formats other than depth: no `lf32` capture shows which
-    code a float luminance texture gets).
+  - The DDK's shader returns (d, d, d, 1): the centre texel (136 / 65535
+    for depth16, about 8e-6 for the others) reads back as (1, 1, 1, 255) and
+    (0, 0, 0, 255). The sampler itself writes the depth to r0 only and
+    leaves r1-r3 alone (**hardware**, `hwt_pcf*.py`, 2026-11-11), so the
+    replication is a swizzle in the shader.
+  - So 0x12 is a one-channel F32 format (**guess** for formats other than
+    depth: no `lf32` capture shows which code a float luminance texture
+    gets). The TPU doesn't filter it: with mag LINEAR (T0 b12) a sample
+    still returns the nearest texel, plain or compared (**hardware**).
   - The DDK's ES2 has no `EXT_shadow_samplers`, so its captures show no
     compare at all.
-- **Shadow compare in the sampler** (ISA.md, hw 1c: **oracle**):
-  - `smp` has two PCF bits. h5 (`.pcf`) is accepted with F32 coordinates
-    only, and h6 (`.pcf16`) with F16 coordinates, never with C10.
-  - What they do is **unconfirmed**.
-  - smp's coordinate count follows the dimension and the PCF mode (ISA.md),
-    which fits the reference value riding in the coordinate as an extra
-    component (**guess**).
-  - Where the compare function lives (T0's spare bits, T3, or the
-    instruction) isn't known.
+- **Shadow compare in the sampler** (**hardware**: open-stack black-box
+  tests on a CE5300 board, 2026-11-11, `tools/isa/hwt_pcf*.py`, the DDK's
+  depth16 words with every texel 0.5, a dependent `smp.2d.pcf r0, r8, r4`):
+  - `smp` has two PCF bits (ISA.md, hw 1c: **oracle**). h5 (`.pcf`) is
+    accepted with F32 coordinates only, and h6 (`.pcf16`) with F16
+    coordinates, never with C10.
+  - `.pcf` compares against a **reference in the third coordinate** (r10
+    for (s, t, ref) in r8-r10). The result lands in r0 only.
+  - **T3 b29-31 is the compare function**, in GL's `ref OP texel` order.
+    0 always returns 0, which is why a T3 from a plain sample compares to
+    nothing:
+
+    | T3 b29-31 | GL function |
+    |---|---|
+    | 0 | NEVER |
+    | 1 | GREATER |
+    | 2 | EQUAL |
+    | 3 | GEQUAL |
+    | 4 | LESS |
+    | 5 | LEQUAL |
+    | 6 | NOTEQUAL |
+    | 7 | ALWAYS |
+
+    Every code was checked at ref 0.25, 0.5 and 0.75 against 0.5, and code 4
+    also at 0, 0.25, 0.49, 0.5, 0.51, 0.75 and 1. Equality is exact (F32).
+  - **T3 b16-17 is the result format:** 0 F32 (1.0 = `0x3f800000`), 1 U8
+    (`0xff`), 2 F16 (`0x3c00`), 3 F32.
+  - T0 b0-2 has no effect here. T3 b13, b14 and b19 page-fault; T0 b21-27
+    (the strided pitch) read zero or fault when changed; T0 b30 and b31 move
+    where the result lands. Drivers should leave those bits as the DDK sets
+    them.
+  - Not tested: whether ref is clamped to [0, 1], `.pcf16`, projected
+    forms, and cube shadow.
 - **What GL needs** (from the DDK's desktop GL extension list, PIGLIT.md):
   - `ARB_shadow`, `EXT_shadow_funcs` (all eight compare functions) and
     `ARB_shadow_ambient`;
@@ -865,17 +902,16 @@ and GL 1.2 conformance would still need the real layout.
    texture (T1 `d200f00f`, T0 `00060e00` for 16×16, F32 texels written by
    hand) with (s, t, ref) and ref swept across the stored values. That shows
    whether the result switches from 0 to 1, and which T0 or T3 field changes
-   the function.
+   the function. Done: the compare, T3 b29-31 and T3 b16-17 (above).
 
-**Without a hardware compare, the driver path is known:** upload depth as
-F32 in format 0x12, strided, the way the DDK does, sample it as a value, and
-lower the compare (below).
-
-**Lowering, if the sampler can't compare:** sample the depth as a value, then
-compare and swizzle in the shader. Mesa has `nir_lower_tex_shadow`, which
-etnaviv and r300 use. LINEAR filtering of a compare (PCF across taps) then
-needs the four-tap path of §13, compare per tap, then mix. NEAREST needs one
-compare.
+**The driver path:** upload depth as F32 in format 0x12, strided, the way the
+DDK does. A NEAREST compare is one `smp.pcf` with the reference as the extra
+coordinate and T3 b29-31 from the compare function. Since the TPU doesn't
+filter 0x12, LINEAR is four taps with a mix in the shader: four `smp.pcf`
+taps, or plain samples with `nir_lower_tex_shadow` (which etnaviv and r300
+use), along the four-tap path of §13. DEPTH_TEXTURE_MODE and the (d, d, d, 1)
+of a plain sample are swizzles in the shader, since the sampler writes r0
+only.
 
 ## Gaps
 
@@ -939,23 +975,22 @@ until it is confirmed.
 
 ### 14. Volume textures
 
-- A volume sample is `smp` dim 2 when dependent, and a dimension-3
-  non-dependent sample otherwise, with DOUTI bits still unknown → the
-  open-stack tests of step 3 (the DDK's ES2 has no `OES_texture_3D`).
-- The volume layout code (1, 4, 5 or 7), where the depth goes (T0 or T3),
-  and wrap R in T0 b0-2 → the §14 captures, or the open-stack tests of
-  step 3.
-- The texel layout of a twiddled volume → a `PROBE_TEXPAT=1` volume capture
-  read with `rawmap.py`.
+- The non-dependent volume sample (a dimension-3 USP sample block, DOUTI
+  bits unknown) → an open-stack PDS test of a plain `texture3D`.
+- Wrap R in T0 b0-2 → the step 3 tests with T0 b0-2 swept and r outside
+  [0, 1].
+- Whether T3 b7-10 belong to the depth field; the twiddle order when x or y
+  isn't 4; NPOT depths; mipmapped volumes; LINEAR across r → further step 3
+  tests.
 
 ### 15. Depth textures
 
 - Format 0x12 is a general one-channel F32 format, not a depth-only code
   → a DDK `PROBE_TEXFMT=lf32` capture (OES_texture_float), compared with
   `dt16`'s T1.
-- smp `.pcf` / `.pcf16` compare against a reference in the coordinate →
-  §15 step 3.
-- The compare-function field → §15 step 3.
+- Whether the reference is clamped to [0, 1]; `.pcf16` with F16
+  coordinates; projected and cube shadow samples → further §15 step 3
+  tests.
 
 ### Open questions
 
