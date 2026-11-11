@@ -46,7 +46,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
 | M6 | debug options and experiment code | driver done (2026-11-11); winsys fields left (uapi-stream) | mesa-gallium, usse-compiler |
-| M7 | tests in Mesa's format (`ci/`) | partly (ddk files moved, mg-perf 1b86487) | mesa-gallium |
+| M7 | tests in Mesa's format (`ci/`) | suites in (2026-11-11); expectations to refresh from the next full runs | mesa-gallium |
 | M8 | `docs/drivers/sgx.rst` | written: mesa/docs/drivers/sgx.rst | mesa-gallium |
 | M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
 | M10 | sRGB textures right (GL 2.1 is advertised) | must fix before the MR | mesa-gallium |
@@ -169,14 +169,13 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 - **There.** `drivers/sgx/ci/` holds `sgx-{fails,flakes,skips}.txt`
   (dEQP-GLES2) and `sgx-piglit-{fails,flakes,skips}.txt`, in deqp-runner's
   format.
-- **To do.**
-  - Move `ddk-*.txt` (the DDK comparison) out of the driver's `ci/` to
-    `mesa/tests/deqp/ddk/`, where a copy already is.
-  - Add a deqp-runner suite file (`deqp-sgx.toml`) and the piglit profile
-    the way `ci/` dirs of other gallium drivers have them. Mesa CI runs them
-    only once a farm has the hardware, but the files go in with the driver.
-  - Refresh the expectations from the full runs on mg-perf (2026-11-08,
-    EA3): dEQP 17,165 tests, 0 wedges; piglit in progress.
+- **Done.** `ddk-*.txt` moved to `mesa/tests/deqp/ddk/` (1b86487).
+  `deqp-sgx-sgx545.toml` (dEQP-GLES2 mustpass) and
+  `deqp-sgx-sgx545-piglit.toml` (the `gpu` profile, `PIGLIT_NO_WINDOW=1`)
+  in the shape lima's and freedreno's have. Mesa CI runs them once a farm
+  has the hardware.
+- **To do.** Refresh the expectations from full runs of the current dev
+  (dEQP mustpass and piglit gpu on the EA1), with `mesa/tests/deqp/mkexpect.py`.
 
 ### M8. `docs/drivers/sgx.rst`
 

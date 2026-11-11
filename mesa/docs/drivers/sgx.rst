@@ -111,8 +111,14 @@ Environment variables
 Testing
 -------
 
-``src/gallium/drivers/sgx/ci`` holds the expectation files for
-dEQP-GLES2 (``sgx-fails.txt``, ``sgx-flakes.txt``, ``sgx-skips.txt``) and for
-piglit's ``gpu`` profile (``sgx-piglit-*.txt``), in deqp-runner's format.
+``src/gallium/drivers/sgx/ci`` holds the deqp-runner suites the expectations
+come from, ``deqp-sgx-sgx545.toml`` (dEQP-GLES2 mustpass, 256x256 pbuffers)
+and ``deqp-sgx-sgx545-piglit.toml`` (piglit's ``gpu`` profile, surfaceless),
+and the expectation files for them: ``sgx-fails.txt``, ``sgx-flakes.txt``,
+``sgx-skips.txt`` and ``sgx-piglit-*.txt``.  For example::
+
+   deqp-runner suite --suite deqp-sgx-sgx545.toml \
+      --baseline sgx-fails.txt --flakes sgx-flakes.txt --skips sgx-skips.txt \
+      --output results
 ``meson test --suite sgx`` runs the compiler, instruction-set and
 command-stream unit tests.
