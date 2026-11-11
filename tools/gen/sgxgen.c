@@ -219,12 +219,22 @@ void sgx_ctx_mark(struct sgx_ctx *c)
 		rs[i]->mark = rs[i]->used;
 }
 
+/*
+ * A code object takes each instruction once while it is mapped (UPLOAD_CODE
+ * refuses to rewrite below what it holds), so a code ring keeps what it has
+ * uploaded: rewinding into it would leave the GPU running the old programs.
+ */
 void sgx_ctx_rewind(struct sgx_ctx *c)
 {
 	struct sgx_ring *rs[] = CTX_RINGS(c);
 
-	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
+	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++) {
 		rs[i]->used = rs[i]->mark;
+#ifdef SGXGEN_DRM
+		if (rs[i]->bo.code && rs[i]->used < rs[i]->bo.uploaded)
+			rs[i]->used = rs[i]->bo.uploaded;
+#endif
+	}
 }
 
 /* ------------------------------------------------------------------ USSE */
