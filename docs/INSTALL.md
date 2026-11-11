@@ -172,10 +172,10 @@ If it says `no microkernel`, the firmware file isn't in the right place. If it s
 
 ## 4. Mesa
 
-From the release, take `mesa-sgx_….deb` and install it:
+From the release, take `mesa-sgx_…_amd64.deb` and install it:
 
 ```bash
-sudo apt install ./mesa-sgx_*.deb
+sudo apt install ./mesa-sgx_*_amd64.deb
 ```
 
 It installs into `/opt/sgx`, with two small settings files that tell programs to use it
@@ -191,6 +191,37 @@ glxinfo -B | grep -E 'renderer|version'
 The renderer line should name the **SGX545**. If it says `llvmpipe`, Debian's software
 Mesa is still in use: check that steps 2 to 4 worked.
 
+### 32-bit games
+
+32-bit programs, such as older Steam games, load a 32-bit Mesa. Without one they fall back
+to Debian's software renderer (`llvmpipe`). Install the 32-bit `mesa-sgx` beside the
+64-bit one. First let the system install 32-bit packages:
+
+```bash
+sudo dpkg --add-architecture i386
+```
+
+```bash
+sudo apt update
+```
+
+Then, from the apt repository:
+
+```bash
+sudo apt install mesa-sgx:i386
+```
+
+Or from the release, take `mesa-sgx_…_i386.deb` and install it the same way:
+
+```bash
+sudo apt install ./mesa-sgx_*_i386.deb
+```
+
+It goes into `/opt/sgx/lib/i386-linux-gnu`, beside the 64-bit files, and both stay
+installed together. A 32-bit game's renderer (in its log or console) should then name the
+**SGX545**. Steam's runtime picks up the system's Mesa. This hasn't been tested with every
+runtime yet, so if a game still reports `llvmpipe`, please report it.
+
 If the desktop reacts slowly while a game runs, let programs keep fewer frames in flight:
 add the line `SGX_SLOTS=3` to `/etc/environment` and log in again. Games then run a little
 slower. Delete the line to go back to the default of 4.
@@ -199,7 +230,8 @@ slower. Delete the line to go back to the default of 4.
 
 You can undo each piece on its own.
 
-- **Mesa:** `sudo apt remove mesa-sgx`. Programs use Debian's Mesa again.
+- **Mesa:** `sudo apt remove mesa-sgx`. Programs use Debian's Mesa again. The 32-bit one is
+  `sudo apt remove mesa-sgx:i386`.
 - **The firmware:** `sudo apt remove sgx545-firmware`. On its own, it does nothing anyway.
 - **The kernel (Cedarview):** pick Debian's kernel under "Advanced options" in the boot menu.
   To uninstall ours, run `sudo apt remove linux-image-7.3.3-sgx`.
