@@ -377,6 +377,39 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	return drm_sched_init(&sdev->sched, &args);
 }
 
+/*
+ * System sleep: no new job reaches the GPU, and the jobs on it finish, or the
+ * timeout's reset ends them, within a job timeout. -EBUSY aborts the suspend.
+ */
+int pvrsgx_job_quiesce(struct pvrsgx_device *sdev)
+{
+	long left = msecs_to_jiffies(job_timeout_ms) + HZ;
+
+	/* A reset restarts submission; stop it again after one. */
+	for (int i = 0; i < 2; i++) {
+		struct dma_fence *last;
+
+		drm_sched_wqueue_stop(&sdev->sched);
+		/* Set only by run_job, which is stopped. Jobs finish in order. */
+		last = sdev->last_fence;
+		if (!last || dma_fence_is_signaled(last)) {
+			flush_work(&sdev->reap_work);
+			return 0;
+		}
+		left = dma_fence_wait_timeout(last, false, left);
+		if (left <= 0)
+			break;
+	}
+	drm_err(&sdev->base, "GPU still busy: not suspending\n");
+	drm_sched_wqueue_start(&sdev->sched);
+	return -EBUSY;
+}
+
+void pvrsgx_job_unquiesce(struct pvrsgx_device *sdev)
+{
+	drm_sched_wqueue_start(&sdev->sched);
+}
+
 void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 {
 	drm_sched_fini(&sdev->sched);
