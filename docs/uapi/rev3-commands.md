@@ -1,7 +1,9 @@
 # uAPI rev 3: per-command structs (design draft)
 
-Status: draft for review, nothing implemented. The base/extension split
-follows the SGX530 field table (shared notes, sgx530-job-uapi-deltas-2026-11-11).
+Status: approved. The uAPI header, the XML and generator, the reference checker
+(`docs/uapi/cmd/`, tested on the host) and the winsys are done. The kernel half
+(section 7, step 4) is next. The base/extension split follows the SGX530 field
+table (shared notes, sgx530-job-uapi-deltas-2026-11-11).
 
 Rev 3 replaces the client command streams (UAPI.md section 3) with one plain
 struct per command. It is independent of the explicit-sync work (M5/B3) and of
@@ -128,23 +130,37 @@ catches a caller whose stride came from a different header than its struct.
 
 ## 2a. Old userspace on a rev 3 kernel
 
-Today nothing tells uAPI revisions apart. The driver reports DRM version 0.1
-under rev 1, and the rev 2 proposal (VM_BIND) only renumbers ioctls. The job
-struct keeps its layout in rev 3, so a rev 1 binary's stream would be read as a
-struct: its length word as `head.size`, and its `depth_addr` at offset 8 as the
-`extensions` pointer. Rev 3 makes that impossible:
+Rev 3 builds on rev 2 (VM_BIND), whose ioctls shifted down by one from rev 1.
+The job struct keeps its layout in rev 3, so an older binary's stream would be
+read as a struct: its length word as `head.size`, and its `depth_addr` at
+offset 8 as the `extensions` pointer. Rev 3 makes that impossible:
 
-- **SUBMIT_JOBS gets a new number.** It moves to `0x0e`. Its old number (`0x0c`)
-  stays an empty slot in the ioctl table, so `drm_ioctl()` returns `-EINVAL`
-  before any argument is read. Old userspace fails on its first submit, the same
-  way every time.
-  - Retired numbers are never reused, by this revision or a later one (rev 2's
-    renumbering included).
+| ioctl | rev 1 | rev 2 | rev 3 |
+|---|---|---|---|
+| VM_MAP / VM_UNMAP | 0x05 / 0x06 | - | - |
+| VM_BIND | - | 0x05 | 0x05 |
+| CREATE_CONTEXT .. DESTROY_RT_DATASET | 0x07-0x0b | 0x06-0x0a | 0x06-0x0a |
+| SUBMIT_JOBS | 0x0c | 0x0b | **0x0e** |
+| UPLOAD_CODE | 0x0d | 0x0c | 0x0c |
+
+- **SUBMIT_JOBS gets a number neither earlier revision used:** 0x0e. 0x0b
+  (rev 2's SUBMIT_JOBS) and 0x0d (rev 1's UPLOAD_CODE) stay empty slots, so
+  `drm_ioctl()` returns `-EINVAL` before any argument is read. An older
+  binary's first submit fails the same way every time.
+  - 0x0d is not reused because a rev 1 UPLOAD_CODE (40-byte args) would land
+    on it.
+  - Retired numbers are never reused, by this revision or a later one.
+  - Rev 1's SUBMIT_JOBS (0x0c) already reaches rev 2's UPLOAD_CODE, a rev 1
+    vs rev 2 hazard that rev 3 inherits. The minor version below is what tells
+    those stacks apart.
 - **The DRM minor version becomes the uAPI revision:** 3 for this one.
   - The winsys refuses a powervr_sgx fd whose minor is below the revision it was
     built for, with a log line naming both. A new Mesa on an old kernel then fails
     at screen creation, not at the first draw.
-  - Once rev 2 lands, it takes its own minor the same way.
+- **Downstream only.** The gaps at 0x0b and 0x0d and the minor-as-revision scheme are
+  for our out-of-tree stack, which has shipped revisions 1 and 2. The upstream
+  series has never seen them: its first version has dense ioctl numbers and
+  DRM version 1.0. Don't copy the gap into it.
 
 
 For a command at a user pointer (render, transfer):
@@ -153,7 +169,10 @@ For a command at a user pointer (render, transfer):
    `sizeof(struct drm_powervr_sgx_cmd_head)` or above 4096.
 2. `copy_struct_from_user(&k, sizeof(k), ucmd, size)`:
    - a shorter struct is zero-filled;
-   - non-zero bytes past what this kernel knows give `-E2BIG`, returned as `-EINVAL`.
+   - non-zero bytes past what this kernel knows give `-E2BIG`, as from every
+     `copy_struct_from_user()` user (sched_setattr, openat2, clone3, pvr's
+     `PVR_UOBJ_GET`): it tells new userspace "this kernel doesn't know my larger
+     struct" apart from "malformed".
 3. Refuse a copied `k.head.size` that differs from the size read in step 1, so
    a second thread changing the size between the two reads gets `-EINVAL`.
 4. Refuse non-zero padding fields.
@@ -191,8 +210,7 @@ goes into an extension instead.
     "malformed" need different handling in userspace, a fallback versus a bug;
   - a repeated name or a seventeenth extension is `-EINVAL`;
   - an unreadable pointer is `-EFAULT`;
-  - `copy_struct_from_user`'s `-E2BIG` (a non-zero tail) is always returned as
-    `-EINVAL`, for commands and query structs alike.
+  - a non-zero tail is `-E2BIG`, for commands and query structs alike.
 - **Checks.** An extension's fields are checked like base fields, from the same
   tables, keyed by offset within the extension. An extension that wasn't sent
   is all zero for the cross-field checks.
@@ -331,12 +349,25 @@ wrong.
 
 ## 7. Plan
 
-1. This doc, then the field split once the 530 table is in.
-2. The XML and `gen_cmd.py`, which emit the header block, the kernel tables,
-   the UAPI.md tables and the test.
-3. **uapi-stream:** the winsys (`sgx_frame.c` fills the structs; the stream
-   writer goes) and the test.
-4. **m2:** the kernel (the copy, extensions and table checks in place of
-   `pvrsgx_stream_process`), and the uAPI suite's command cases.
+1. Done: this doc, and the field split from the 530 table.
+2. Done: `powervr_sgx_cmd.xml` and `gen_cmd.py`. They emit the header block,
+   `docs/uapi/cmd/pvrsgx_cmd_defs.[ch]` (all-structs and per-core tables) and
+   the UAPI.md table. `check.sh` fails if any of them is stale.
+3. Done:
+   - the reference checker, `docs/uapi/cmd/pvrsgx_cmd.c` (copy, extension chain,
+     field and mapped checks) and `pvrsgx_cmd_checks.c` (cross-field);
+   - its host test, `docs/uapi/cmd/test/cmd_test.c`;
+   - the winsys: `sgx_powervr_sgx.c` fills the structs, checks the DRM minor and
+     reads COMMANDS_GET;
+   - the stream decoder, XML, generator and Mesa's kmd_stream target are deleted.
+4. **m2, the kernel.** The kernel's links to the cmd files and its object list
+   are in place. Left to do:
+   - render and transfer job init call `pvrsgx_cmd_copy()` and `pvrsgx_cmd_check()`;
+   - TA kicks go through `pvrsgx_cmd_take_elem()`, and `check_mapped` runs
+     under the VM lock;
+   - the core table points at `pvrsgx_cmd_core_<core>`;
+   - SUBMIT_JOBS moves to 0x0e (0x0b and 0x0d empty), the DRM minor becomes 3, and
+     DEV_QUERY_COMMANDS_GET plus the new limits fields are added;
+   - the uAPI suite gets the command cases.
 5. Hardware: the RC suites on the EA3 (dEQP, ff piglit, the hang test, the uAPI
    suite) against rev 1's numbers.

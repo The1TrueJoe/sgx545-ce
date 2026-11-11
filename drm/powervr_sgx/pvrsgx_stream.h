@@ -1,1 +1,0 @@
-../../docs/uapi/stream/pvrsgx_stream.h

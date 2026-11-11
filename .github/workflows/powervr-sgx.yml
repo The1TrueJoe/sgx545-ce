@@ -112,7 +112,7 @@ jobs:
           if grep -E 'powervr_sgx/.*(warning|error):' sparse.log; then exit 1; fi
           perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse -f \
             $(ls drm/powervr_sgx/*.[ch] | grep -v -e _trace.h -e '\.mod\.c$') drm/powervr_sgx/tests/*.c \
-            docs/uapi/powervr_sgx_drm.h docs/uapi/stream/*.[ch] | tee checkpatch.log
+            docs/uapi/powervr_sgx_drm.h docs/uapi/cmd/*.[ch] | tee checkpatch.log
           if grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log; then exit 1; fi
           python3 linux-$LINUX_VERSION/scripts/kernel-doc -none -Wall -Werror \
             docs/uapi/powervr_sgx_drm.h drm/powervr_sgx/pvrsgx_*.[ch]
