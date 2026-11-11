@@ -1,4 +1,4 @@
-# sgx545-ce
+# powervr_sgx
 
 PowerVR **SGX545** kernel driver (`pvrsrvkm`) for the Intel Atom CE5300/CE5310
 (as fitted to the Control4 EA-1 / EA-3) and Cedarview (GMA 3600/3650) — the same

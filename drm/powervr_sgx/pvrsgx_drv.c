@@ -258,6 +258,7 @@ static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (IS_ERR(sdev))
 		return PTR_ERR(sdev);
 	sdev->pdev = pdev;
+	sdev->family = pvrsgx_core_family_get(id->driver_data);
 	sdev->irq = pdev->irq;
 	pci_set_drvdata(pdev, sdev);
 
@@ -284,7 +285,7 @@ static void pvrsgx_shutdown(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id pvrsgx_pci_ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x089b) },	/* CE5300 family */
+	{ PCI_VDEVICE(INTEL, 0x089b), 545 },	/* CE5300 family: SGX545 */
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, pvrsgx_pci_ids);

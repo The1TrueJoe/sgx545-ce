@@ -766,6 +766,11 @@ struct drm_powervr_sgx_sync_op {
  *
  * Only objects shared with another client or process need an entry. An object
  * must be mapped in the job's VM to be useful, and that is not checked here.
+ *
+ * Every object imported from another device that the job reads or writes
+ * must be listed: the GPU doesn't snoop the CPU caches, and the kernel flushes
+ * only listed imports around the job. An unlisted import may be read stale or
+ * have its contents overwritten by dirty CPU cache lines.
  */
 struct drm_powervr_sgx_bo_ref {
 	/** @handle: GEM handle. */

@@ -20,11 +20,14 @@
  *   implicit  DIRTYFB at once: the KMS commit must wait for the job's fence in
  *             the shared dma_resv;
  *   control   no BO list, DIRTYFB at once: the scanout may well be stale (not
- *             counted), which shows the implicit frames' check can fail. The
- *             buffer itself must still be right: the kernel flushes every
- *             import mapped in the VM, listed or not.
+ *             counted), which shows the implicit frames' check can fail. In
+ *             a) the import isn't listed, so it gets no coherence (the uAPI
+ *             rule: a job lists every import it touches): its buffer may be
+ *             stale too, reported, not counted. In b) the buffer is ours,
+ *             write-combined, and must be right listed or not.
  *
- * The explicit and implicit frames list the buffer as written.
+ * The explicit and implicit frames list the buffer as written: in a) they
+ * show that a listed import is flushed around the job.
  *
  * -d holds each frame on the screen. Exit 0 when every counted frame is right
  * in both places.
@@ -388,7 +391,9 @@ int main(int argc, char **argv)
 			       map[(size_t)(h / 2) * stride + w / 2], gpu_bad, gpu_poison,
 			       !k.scanout ? "not checked" : out_bad + out_poison ? "WRONG" : "right",
 			       out_bad, out_poison);
-			if (gpu_bad || (mode != 2 && (out_bad || out_poison)))
+			/* An unlisted import (a's control frames) has no coherence to check. */
+			if ((gpu_bad && !(mode == 2 && pass == 1)) ||
+			    (mode != 2 && (out_bad || out_poison)))
 				bad_frames++;
 			if (hold_ms)
 				usleep(hold_ms * 1000);

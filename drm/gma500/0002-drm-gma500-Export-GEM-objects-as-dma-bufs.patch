@@ -1,6 +1,4 @@
-From a9905bba4217d7b496414189441651c56e640d06 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
-Date: Sun, 8 Nov 2026 18:10:44 -0500
 Subject: [PATCH] drm/gma500: Export GEM objects as dma-bufs
 
 A render GPU next to gma500 draws into gma500's scanout buffers: on
@@ -14,13 +12,15 @@ pages are pinned into the GTT as for a framebuffer, so they stay put
 while shared. Objects in stolen memory have no struct pages and can't
 be exported.
 
-Assisted-by: Claude:claude-opus-5-5
----
- drivers/gpu/drm/gma500/gem.c | 31 +++++++++++++++++++++++++++++++
- 1 file changed, 31 insertions(+)
+The PRIME helpers call pin and unpin with the object's reservation lock
+held, and psb_gem_pin() and psb_gem_unpin() take that lock themselves.
+Split each into a variant that expects the lock held, for the hooks.
 
-diff --git a/drivers/gpu/drm/gma500/gem.c b/drivers/gpu/drm/gma500/gem.c
-index 88f1e86..22eb869 100644
+The importer's CPU mapping, dma_buf_mmap(), goes through the object's
+fake mmap offset, which a dumb buffer only gets from MAP_DUMB, and Mesa's
+kmsro never calls that for the buffers it exports. Create the offset at
+export.
+---
 --- a/drivers/gpu/drm/gma500/gem.c
 +++ b/drivers/gpu/drm/gma500/gem.c
 @@ -16,6 +16,7 @@
@@ -31,13 +31,115 @@ index 88f1e86..22eb869 100644
  #include <drm/drm_print.h>
  #include <drm/drm_vma_manager.h>
  
-@@ -131,8 +132,38 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
+@@ -26,7 +27,7 @@
+  * PSB GEM object
+  */
+ 
+-int psb_gem_pin(struct psb_gem_object *pobj)
++static int psb_gem_pin_locked(struct psb_gem_object *pobj)
+ {
+ 	struct drm_gem_object *obj = &pobj->base;
+ 	struct drm_device *dev = obj->dev;
+@@ -34,20 +35,15 @@ int psb_gem_pin(struct psb_gem_object *pobj)
+ 	u32 gpu_base = dev_priv->gtt.gatt_start;
+ 	struct page **pages;
+ 	unsigned int npages;
+-	int ret;
+ 
+-	ret = dma_resv_lock(obj->resv, NULL);
+-	if (drm_WARN_ONCE(dev, ret, "dma_resv_lock() failed, ret=%d\n", ret))
+-		return ret;
++	dma_resv_assert_held(obj->resv);
+ 
+ 	if (pobj->in_gart || pobj->stolen)
+ 		goto out; /* already mapped */
+ 
+ 	pages = drm_gem_get_pages(obj);
+-	if (IS_ERR(pages)) {
+-		ret = PTR_ERR(pages);
+-		goto err_dma_resv_unlock;
+-	}
++	if (IS_ERR(pages))
++		return PTR_ERR(pages);
+ 
+ 	npages = obj->size / PAGE_SIZE;
+ 
+@@ -62,34 +58,39 @@ int psb_gem_pin(struct psb_gem_object *pobj)
+ 
+ out:
+ 	++pobj->in_gart;
+-	dma_resv_unlock(obj->resv);
+-
+ 	return 0;
++}
+ 
+-err_dma_resv_unlock:
++int psb_gem_pin(struct psb_gem_object *pobj)
++{
++	struct drm_gem_object *obj = &pobj->base;
++	int ret;
++
++	ret = dma_resv_lock(obj->resv, NULL);
++	if (drm_WARN_ONCE(obj->dev, ret, "dma_resv_lock() failed, ret=%d\n", ret))
++		return ret;
++	ret = psb_gem_pin_locked(pobj);
+ 	dma_resv_unlock(obj->resv);
++
+ 	return ret;
+ }
+ 
+-void psb_gem_unpin(struct psb_gem_object *pobj)
++static void psb_gem_unpin_locked(struct psb_gem_object *pobj)
+ {
+ 	struct drm_gem_object *obj = &pobj->base;
+ 	struct drm_device *dev = obj->dev;
+ 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
+ 	u32 gpu_base = dev_priv->gtt.gatt_start;
+ 	unsigned long npages;
+-	int ret;
+ 
+-	ret = dma_resv_lock(obj->resv, NULL);
+-	if (drm_WARN_ONCE(dev, ret, "dma_resv_lock() failed, ret=%d\n", ret))
+-		return;
++	dma_resv_assert_held(obj->resv);
+ 
+ 	WARN_ON(!pobj->in_gart);
+ 
+ 	--pobj->in_gart;
+ 
+ 	if (pobj->in_gart || pobj->stolen)
+-		goto out;
++		return;
+ 
+ 	npages = obj->size / PAGE_SIZE;
+ 
+@@ -102,8 +103,17 @@ void psb_gem_unpin(struct psb_gem_object *pobj)
+ 
+ 	drm_gem_put_pages(obj, pobj->pages, true, false);
+ 	pobj->pages = NULL;
++}
+ 
+-out:
++void psb_gem_unpin(struct psb_gem_object *pobj)
++{
++	struct drm_gem_object *obj = &pobj->base;
++	int ret;
++
++	ret = dma_resv_lock(obj->resv, NULL);
++	if (drm_WARN_ONCE(obj->dev, ret, "dma_resv_lock() failed, ret=%d\n", ret))
++		return;
++	psb_gem_unpin_locked(pobj);
+ 	dma_resv_unlock(obj->resv);
+ }
+ 
+@@ -131,8 +141,54 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
  	.close = drm_gem_vm_close,
  };
  
 +/*
 + * PRIME export, for a render GPU to draw into scanout buffers. Only objects
-+ * with pages can be shared: stolen memory has none.
++ * with pages can be shared: stolen memory has none. The PRIME helpers call
++ * pin and unpin with the reservation lock held.
 + */
 +static int psb_gem_prime_pin(struct drm_gem_object *obj)
 +{
@@ -45,12 +147,12 @@ index 88f1e86..22eb869 100644
 +
 +	if (pobj->stolen)
 +		return -EINVAL;
-+	return psb_gem_pin(pobj);
++	return psb_gem_pin_locked(pobj);
 +}
 +
 +static void psb_gem_prime_unpin(struct drm_gem_object *obj)
 +{
-+	psb_gem_unpin(to_psb_gem_object(obj));
++	psb_gem_unpin_locked(to_psb_gem_object(obj));
 +}
 +
 +static struct sg_table *psb_gem_prime_get_sg_table(struct drm_gem_object *obj)
@@ -62,14 +164,26 @@ index 88f1e86..22eb869 100644
 +	return drm_prime_pages_to_sg(obj->dev, pobj->pages, obj->size >> PAGE_SHIFT);
 +}
 +
++/*
++ * dma_buf_mmap() maps through the object's fake offset (drm_gem_prime_mmap()),
++ * which a dumb buffer only gets from MAP_DUMB: make sure it has one.
++ */
++static struct dma_buf *psb_gem_prime_export(struct drm_gem_object *obj, int flags)
++{
++	int ret;
++
++	ret = drm_gem_create_mmap_offset(obj);
++	if (ret)
++		return ERR_PTR(ret);
++	return drm_gem_prime_export(obj, flags);
++}
++
  static const struct drm_gem_object_funcs psb_gem_object_funcs = {
  	.free = psb_gem_free_object,
++	.export = psb_gem_prime_export,
 +	.pin = psb_gem_prime_pin,
 +	.unpin = psb_gem_prime_unpin,
 +	.get_sg_table = psb_gem_prime_get_sg_table,
  	.vm_ops = &psb_gem_vm_ops,
  };
  
--- 
-2.50.1 (Apple Git-155)
-

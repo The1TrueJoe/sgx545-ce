@@ -6,7 +6,8 @@
 
 libsgx_compiler = static_library(
   'sgx_compiler',
-  files('sgx_forms.c', 'sgx_nir.c', 'sgx_compile.c', 'sgx_program.c'),
+  files('sgx_forms.c', 'sgx_nir.c', 'sgx_compile.c', 'sgx_program.c',
+        'sgx_fixed.c'),
   include_directories : [inc_include, inc_src, inc_mesa, inc_gallium, inc_gallium_aux],
   c_args : [no_override_init_args],
   dependencies : [idep_nir, idep_mesautil, idep_sgx_isa],

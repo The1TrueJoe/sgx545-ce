@@ -4,7 +4,7 @@
 instructions of the PowerVR SGX545 in Mesa's isaspec format. isaspec
 generates the encoder and the disassembler from it; the C files here are the
 glue and a small text assembler. The instruction set and its text notation
-are documented in `docs/ISA.md` of the sgx545-ce repository; the comments
+are documented in `docs/ISA.md` of the powervr_sgx repository; the comments
 cite its sections by name.
 
 | file | what |
@@ -15,8 +15,10 @@ cite its sections by name.
 | `sgx_isa_disasm.c` | the generated decoder plus custom fields, setfc tracking, bracket tidying |
 | `sgx_isa_asm.c`, `sgx_isa_asm_int.c` | ISA.md's text notation into `struct sgx_isa_instr` |
 | `sgx_isa_coissue.c` | co-issue for a compiler: what an fdual's two halves read and write (`sgx_isa_fdual_use()`), and the same-word races of fdual and efo (`sgx_isa_coissue_hazard()`), from ISA.md "fdual for a compiler" and "efo" |
+| `assembler.c`, `disasm.c` | `sgx-asm` and `sgx-disasm`, the command-line tools (`-Dtools=sgx`) |
 | `sgx_isa_enums.py` | generates `sgx-isa-enums.h`: the opcode and operand-kind enums the encoder switches on, and the field-value enums |
 | `tests/sgx_isa_test.c` | text -> struct -> words -> text round trip; checks expected words where a line gives them |
+| `tests/tools_test.py` | the lists again through `sgx-asm` and `sgx-disasm` |
 | `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: the efo control words and the other spellings of efo and fdual, as `a == b` lines, and the co-issue hazards) |
 
 Generated: `sgx-isa.c` / `sgx-isa.h` (decoder), `sgx-isa-encode.h`
@@ -27,13 +29,48 @@ Generated: `sgx-isa.c` / `sgx-isa.h` (decoder), `sgx-isa-encode.h`
 `meson test --suite sgx` runs `sgx_isa` (with `-Dbuild-tests=true`):
 every line of the lists is assembled, encoded, disassembled and compared
 with its input, and a line that gives `; <lo> <hi>` must encode to those
-words.
+words. `sgx_isa_tools` puts the same lines through `sgx-asm` and
+`sgx-disasm`, as hex and as binary.
+
+## Tools
+
+With `-Dtools=sgx` (patch 0006), Mesa builds two command-line tools; both
+only read and write files.
+
+    sgx-asm [-c core] [-F fc] [-b | -L] [-o out] [file...]
+    sgx-disasm [-c core] [-F fc] [-x] [-w] [file...]
+
+`sgx-asm` assembles a whole file in one run, one instruction per line. It
+writes one output per instruction, in order: `<lo> <hi>` in hex (the
+default), the words in binary, low word first and little endian (`-b`), or a
+listing of offset, words and disassembly (`-L`). Blank lines and lines
+starting with `#` are skipped, and `;` starts a comment. An error is reported
+as `<file>:<line>: <text>: <message>`, and the exit status is then 1.
+`sgx-disasm` reads binary, or with `-x` the first two hex words of each line
+(so the output of `sgx-asm` and of `sgx-disasm -w` read back). It prints the
+text, or with `-w` the words and the text.
+`-c` selects the core (545, the default), and `-F` the starting format
+control (1 = C10, 2 = F16; 1 by default). Both tools follow `setfc` from
+there. `mesa/tests/isa-standalone/standalone.sh` builds both without a Mesa
+build.
+
+## Cores
+
+`ISA_GPU_ID()` (the encoder's `gen`, the decoder's `gpu_id`) is
+`core * 100 + format control`, from `sgx_isa_gpu_id()`: the core's number in
+the hundreds, so a `<gen>` range selects a core (`min="54500"
+max="54599"` is SGX545), and the format-control bits in the low digits. The
+root bitset carries SGX545's range, so a word for a core `sgx.xml` doesn't
+describe doesn't decode, and `sgx_isa_core_supported()` refuses it.
+`struct sgx_isa_fc` carries the core; 0 means SGX545. A field another core
+encodes differently gets a `<gen>` range, or an override that reads
+`ISA_GPU_ID() / 100`, once ISA.md documents it for that core.
 
 ## isaspec change
 
 This needs one isaspec change, carried as
-`mesa/patches/0004-isaspec-derived-bitset-params-and-override-fields.patch`
-in sgx545-ce and to be sent upstream ahead of this tree (see below).
+`mesa/patches/0003-isaspec-derived-bitset-params-and-override-fields.patch`
+in powervr_sgx and to be sent upstream ahead of this tree (see below).
 
 ## How the XML is laid out
 
@@ -61,16 +98,17 @@ in sgx545-ce and to be sent upstream ahead of this tree (see below).
 - **Fields made of several bit ranges.** One field per range plus a
   `<derived>` field. isaspec decodes a derived field of bitset type, but its
   Python didn't accept `<param>`s on one, and the encoder's parameter struct
-  didn't know their names: patch 0004, part 1.
+  didn't know their names: patch 0003, part 1.
 - **Several `<override>`s defining the same field.** The generated encoder
   left a dangling `else` that swallowed the next field (it lost the F16 flag
-  of an indexed operand under format select). Patch 0004, part 2: the
+  of an indexed operand under format select). Patch 0003, part 2: the
   definition in the case being encoded wins.
 - **Modal state outside the word.**
   - Format control (`setfc`): the encoder takes it as `struct
-    sgx_isa_fc` and hands it to the XML's expressions as `ISA_GPU_ID()`
-    (bit 0 = C10 enable, bit 1 = efo F16 enable); the disassembler tracks
-    `setfc` in a straight line from the program-start state (it does not
+    sgx_isa_fc` and hands it to the XML's expressions in the low digits of
+    `ISA_GPU_ID()` (bit 0 = C10 enable, bit 1 = efo F16 enable; see
+    "Cores"). The disassembler and the tools track
+    `setfc` in a straight line from the program-start state (they do not
     follow branches).
   - MOE state (`smlsi`, `smbo`, ...) and the repeat it drives: only the
     word's own fields (`moe`, `inc0-2`, `rpt`) are encoded. Which registers

@@ -18,6 +18,7 @@
 #include "nir.h"
 #include "nir_builder.h"
 #include "sgx_compiler.h"
+#include "sgx_fixed.h"
 #include "sgx_isa.h"
 
 namespace {
@@ -551,6 +552,181 @@ TEST_F(sgx_compile_test, fragment_alpha_test_split_in_two_phases)
       size_t sp = t.find(' ');
       EXPECT_NE(t.substr(sp + 1, 2), "pa") << t;
    }
+}
+
+/* mediump arithmetic with f16: a * b + c becomes fmad16 on F16 halves */
+TEST_F(sgx_compile_test, fragment_mediump_fmad16)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *u = var(nir_var_uniform, glsl_vec4_type(), "u", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   a->data.precision = u->data.precision = col->data.precision =
+      GLSL_PRECISION_MEDIUM;
+   nir_def *x = nir_load_var(&b, a);
+   nir_store_var(&b, col,
+                 nir_ffma(&b, x, nir_load_var(&b, u), nir_fmul(&b, x, x)), 0xf);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   EXPECT_NE(disasm().find("fmad16"), std::string::npos) << disasm();
+}
+
+/* lowp: a colour from lowp uniforms only is computed in C10 (the colour
+ * classes) */
+TEST_F(sgx_compile_test, fragment_lowp_colour_in_c10)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *u0 = var(nir_var_uniform, glsl_vec4_type(), "u0", -1);
+   nir_variable *u1 = var(nir_var_uniform, glsl_vec4_type(), "u1", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   u0->data.precision = u1->data.precision = col->data.precision =
+      GLSL_PRECISION_LOW;
+   nir_store_var(&b, col,
+                 nir_fmul(&b, nir_load_var(&b, u0), nir_load_var(&b, u1)), 0xf);
+
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   EXPECT_TRUE(s.find("sop") != std::string::npos ||
+               s.find(".c10") != std::string::npos)
+      << s;
+}
+
+/* a sample whose coordinate is computed is dependent: reported with its smp
+ * (which decodes) for the driver to insert, and not iterated by the PDS */
+TEST_F(sgx_compile_test, fragment_dependent_sample)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   nir_def *c = nir_load_var(&b, uv);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_fadd_imm(&b, nir_fmul(&b, c, c), 0.1);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_store_var(&b, col, nir_build_tex_struct(&b, nir_texop_tex, tb), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_TRUE(out.samples[0].dependent);
+   char text[256];
+   ASSERT_TRUE(sgx_disasm_one(out.samples[0].smp, NULL, text, sizeof(text)));
+   EXPECT_EQ(std::string(text).find("smp"), 0u) << text;
+   for (unsigned i = 0; i < out.n_iters; i++)
+      EXPECT_FALSE(out.iters[i].sample) << "a PDS sample";
+}
+
+/* a discard without split_phases: one program, the test into the keep
+ * predicate and the feedback nop, no phase 1 */
+TEST_F(sgx_compile_test, fragment_discard_one_phase)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_discard_if(&b, nir_flt_imm(&b, nir_channel(&b, v, 0), 0.5));
+   nir_store_var(&b, col, v, 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.discards);
+   EXPECT_EQ(out.n_code1, 0u);
+   bool feedback = false;
+   for (unsigned i = 0; i < out.n_blocks; i++)
+      feedback |= out.blocks[i].kind == SGX_BLOCK_FEEDBACK;
+   EXPECT_TRUE(feedback);
+}
+
+/* more constants than SA holds: the rest are loaded from memory (ld.a.d) */
+TEST_F(sgx_compile_test, vertex_constants_in_memory)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *arr = var(nir_var_uniform,
+                           glsl_array_type(glsl_vec4_type(), 48, 0), "u", -1);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
+                           VARYING_SLOT_POS);
+   nir_deref_instr *ad = nir_build_deref_var(&b, arr);
+   nir_def *r = NULL;
+   for (unsigned i = 0; i < 48; i++) {
+      nir_def *e = nir_load_deref(&b, nir_build_deref_array_imm(&b, ad, i));
+      r = r ? nir_fmul(&b, r, e) : e;
+   }
+   nir_store_var(&b, pos, r, 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_NE(disasm().find("ld.a.d"), std::string::npos) << disasm();
+}
+
+/* what feeds a derivative runs on helper instances too: skipinv clear */
+TEST_F(sgx_compile_test, fragment_derivative_source_no_skipinv)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_store_var(&b, col, nir_ddx(&b, nir_fmul(&b, v, v)), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   size_t d = s.find("fdsx");
+   ASSERT_NE(d, std::string::npos) << s;
+   /* the multiply before it */
+   size_t m = s.rfind("fmad", d);
+   ASSERT_NE(m, std::string::npos) << s;
+   std::string line = s.substr(m, s.find('\n', m) - m);
+   EXPECT_EQ(line.find("skipinv"), std::string::npos) << s;
+}
+
+/* the fixed programs: every line assembles, every word decodes, and each
+ * program's last instruction ends it */
+TEST(sgx_fixed, programs_assemble)
+{
+   struct sgx_fixed_progs p;
+   char err[256] = "";
+   ASSERT_TRUE(sgx_fixed_progs_build(&p, err, sizeof(err))) << err;
+   const struct sgx_fixed_prog *all[] = {
+      &p.empty,    &p.clear_vs,       &p.vpgen_vs,   &p.copy_fs,
+      &p.vs_xy,    &p.vs_xyz,         &p.fs_uniform_sec, &p.fs_uniform,
+      &p.pe_ptoff, &p.pe_emit,
+   };
+   std::vector<const struct sgx_fixed_prog *> v(all, all + ARRAY_SIZE(all));
+   for (unsigned n = 1; n <= 32; n++)
+      v.push_back(&p.state_emit[n]);
+   for (const struct sgx_fixed_prog *x : v) {
+      ASSERT_GT(x->n, 0u) << x->name;
+      for (unsigned i = 0; i < x->n; i++) {
+         char text[256];
+         uint64_t w = x->w[2 * i] | (uint64_t)x->w[2 * i + 1] << 32;
+         EXPECT_TRUE(sgx_disasm_one(w, NULL, text, sizeof(text))) << x->name;
+         if (i == x->n - 1)
+            EXPECT_NE(std::string(text).find("end"), std::string::npos)
+               << x->name << ": " << text;
+      }
+   }
+   /* phas.i @label: the target is the label's instruction, to relocate */
+   ASSERT_EQ(p.vs_xy.nreloc, 2u);
+   EXPECT_EQ(p.vs_xy.reloc[0], 0u);
+   EXPECT_EQ(p.vs_xy.reloc[1], 7u);
 }
 
 } /* namespace */

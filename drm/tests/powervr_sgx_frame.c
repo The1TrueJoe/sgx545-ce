@@ -118,7 +118,7 @@ int main(int argc, char **argv)
 			break;
 		case 'o': out = optarg; break;
 		default:
-			fprintf(stderr, "usage: powervr_sgx_frame [-v] [-n frames] [-s WxH] [-o out]\n");
+			fprintf(stderr, "usage: powervr_sgx_frame [-v] [-D] [-r] [-C] [-c contexts] [-k kicks] [-n frames] [-q depth] [-s WxH] [-o out]\n");
 			return 2;
 		}
 	}

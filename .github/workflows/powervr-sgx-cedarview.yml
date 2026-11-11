@@ -61,7 +61,7 @@ jobs:
       - name: The gma500 patches through checkpatch --strict
         run: |
           set -eux
-          for p in drm/gma500/*.patch; do
+          for p in drm/gma500/*.patch drm/sysfb/*.patch; do
             # On stdin, as a mailed patch; the author signs it when sending.
             perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse \
               --ignore FILE_PATH_CHANGES,MISSING_SIGN_OFF - < "$p" | tee -a gma-checkpatch.log

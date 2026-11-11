@@ -47,7 +47,7 @@ alive:
 
 - **Read only named registers.** Every register you read must be one you can name
   and expect a value from. A blind sweep of a BAR can wedge the GPU or the box — a
-  read-only sweep of the display controller's address space hung an EA3
+  read-only sweep of the display controller's address space hung a CE5300 board
   ([`2026-11-03` memory-constants run](../log/entries/2026-11-03-0311-memory-constants-hw.md)).
 - **No MMIO sweeps, ever.** Discover addresses from captures and the emulator, not by
   scanning. The register map is in `UKERNEL.md` §6; a new core overrides only what
@@ -147,7 +147,7 @@ ordering; `tools/gen` frame read back and compared to the reference render.
 **Done.** One TA+3D renders a generated frame that reads back correct — the "frame
 from code" milestone ([frame from code](../log/entries/2026-10-28-0830-frame-from-code.md),
 [first triangle on hardware](../log/entries/2026-11-03-0925-ukernel-first-triangle-renders.md),
-[first frame EA1](../log/entries/2026-11-02-2150-ukernel-ea1-first-frame.md)).
+[first frame](../log/entries/2026-11-02-2150-ukernel-ea1-first-frame.md)).
 
 **Traps.**
 - The 3D reached but stalled at tile 0 with a clean BIF through a long saga — the
@@ -195,7 +195,7 @@ holds a reference so the core is not powered off under a live job.
   fix a lockup, and runtime PM wedged the GPU on one path
   ([idle active-power analysis](../log/entries/2026-11-02-2130-ukernel-idle-active-power-analysis.md),
   [active-power clear is not the fix](../log/entries/2026-11-03-1730-ukernel-active-power-clear-does-not-fix-lockup.md),
-  [runtime-PM EA1](../log/entries/2026-11-03-1700-drm-runtime-pm-ea1.md)).
+  [runtime PM](../log/entries/2026-11-03-1700-drm-runtime-pm-ea1.md)).
 - `CLKGATESTATUS` is **not** EDM-readable as a plain value on 545 — read it only from
   the devcd (the kernel side), not from the microkernel (`UKERNEL.md` §11).
 
@@ -214,7 +214,7 @@ the microkernel skips the EDM→client pulse.
 - The EDM→list-1 pulse to write the background block faults under secure/no-share;
   the host writes the block and the microkernel skips the pulse
   ([secure mode](../log/entries/2026-11-08-1858-drm-secure-mode.md),
-  [EA3 latency secure](../log/entries/2026-11-08-1815-drm-ea3-latency-secure.md)).
+  [latency in secure mode](../log/entries/2026-11-08-1815-drm-ea3-latency-secure.md)).
 
 ### 9. OOM partial render
 

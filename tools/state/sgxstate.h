@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 The sgx545-ce authors
+ * Copyright © 2026 The powervr_sgx authors
  * SPDX-License-Identifier: MIT
  */
 

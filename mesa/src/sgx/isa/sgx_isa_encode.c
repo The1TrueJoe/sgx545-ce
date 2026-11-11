@@ -13,10 +13,7 @@
 
 #include "util/macros.h"
 
-/*
- * gen is what the XML's expressions read as ISA_GPU_ID(): the format
- * control state, bit 0 = C10 enable, bit 1 = efo F16 enable.
- */
+/* gen is what the XML's expressions read as ISA_GPU_ID() (sgx_isa_gpu_id()). */
 struct encode_state {
    uint32_t gen;
 };
@@ -187,9 +184,23 @@ sgx_isa_encode(const struct sgx_isa_instr *instr, const struct sgx_isa_fc *fc)
 {
    struct sgx_isa_fc f = fc ? *fc : SGX_ISA_FC_START;
    struct encode_state s = {
-      .gen = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
+      .gen = sgx_isa_gpu_id(&f),
    };
 
    return bitmask_to_uint64_t(
       encode__instruction(&s, NULL, (struct sgx_isa_instr *)instr));
+}
+
+bool
+sgx_isa_core_supported(unsigned core)
+{
+   return core == 0 || core == SGX_ISA_CORE_SGX545;
+}
+
+uint32_t
+sgx_isa_gpu_id(const struct sgx_isa_fc *fc)
+{
+   unsigned core = fc->core ? fc->core : SGX_ISA_CORE_SGX545;
+
+   return core * 100 + (fc->c10 ? 1 : 0) + (fc->f16 ? 2 : 0);
 }

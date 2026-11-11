@@ -13,6 +13,7 @@ constants, PDS iterations, texture samples, branches, register counts.
 | `sgx_compile.c` | instruction selection, the backend passes, register allocation, encoding |
 | `sgx_program.c` | the finished program: flat code with branch offsets resolved, the block list, samples, the constant and iteration lists |
 | `sgx_forms.c`, `sgx_forms.h` | the instruction forms the compiler emits, as `struct sgx_isa_instr` templates for the encoder |
+| `sgx_fixed.c`, `sgx_fixed.h` | the fixed programs a frame needs besides the shaders (state emit, clear, pixel events, ...), as assembly text assembled through `../isa` when a context is created |
 | `sgx_priv.h` | the backend IR (`sgx_ins`, `sgx_ref`, vregs) and the compile context |
 | `tests/sgx_compile_test.cpp` | end-to-end tests: shaders built with `nir_builder`, compiled, every word decoded |
 
@@ -91,5 +92,8 @@ option.
 ## Tests
 
 `meson test --suite sgx` runs these tests and the ISA round-trip tests.
-`tools/usc` in the sgx545-ce repository has the corpus harness that checks
-the output against the DDK's compiler. It stays outside Mesa.
+`tests/sgx_compile_test.cpp` builds each case with `nir_builder` (22 cases:
+selection, F16 and C10, textures, discard and phases, constants in memory,
+helper instances). `tools/usc` in the powervr_sgx repository has the corpus
+harness that checks the output against the DDK's compiler. It stays outside
+Mesa.

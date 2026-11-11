@@ -16,7 +16,7 @@ sgx_ws_args = []
 sgx_ws_inc = [include_directories('.')]
 
 # The services backend (pvrsrvkm, the DDK's kernel driver), with
-# -Dgallium-sgx-pvrsrvkm (patch 0007): mesa/build.sh links sgx545-ce's libpvr
+# -Dgallium-sgx-pvrsrvkm (patch 0007): mesa/build.sh links powervr_sgx's libpvr
 # into this directory for it.  It is built against the
 # kernel driver's own bridge headers (kernel/src, linked into the tree as
 # include/sgx-kernel) with the kernel's defines (libpvr/abi/flags.sh);

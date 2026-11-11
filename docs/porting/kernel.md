@@ -246,7 +246,7 @@ Traps:
   must create the mmap offset at export (gma500 0002).
 - A sysfb display (simpledrm, efidrm) copies damage in DIRTYFB with a blocking commit that
   waits for the render; X's main thread stalled behind deep render queues
-  ([drm/sysfb/0001](https://github.com/The1TrueJoe/sgx545-ce/blob/m2-drm/drm/sysfb/0001-drm-sysfb-Copy-damage-outside-the-DIRTYFB-ioctl.patch)).
+  ([drm/sysfb/0001](../../drm/sysfb/0001-drm-sysfb-Copy-damage-outside-the-DIRTYFB-ioctl.patch)).
 
 ## What a new core's entry needs before it is accepted
 

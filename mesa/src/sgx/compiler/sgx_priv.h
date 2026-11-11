@@ -145,7 +145,7 @@ struct sgx_ctx {
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
 #define SGX_ITER_FRAGCOORD                                                     \
-   14 /* list A iterator of gl_FragCoord (DDK capture) */
+   14 /* list A iterator of gl_FragCoord (capture) */
    struct sgx_iter iters[16];
    unsigned n_iters;
    unsigned n_pa_inputs;
@@ -199,7 +199,7 @@ struct sgx_ctx {
    int keep_vreg; /* discard: 1.0 = keep, -1 none */
    bool discards;
    bool keep_pred; /* the single discard wrote p1 (= keep) itself */
-   bool p16;       /* mediump in F16, as the DDK computes it */
+   bool p16;       /* mediump in F16 */
    /* emit_alu writes its def, never the register NIR stores it to */
    bool def_dest;
    int face_vreg; /* gl_FrontFacing as made at entry; -1 none */

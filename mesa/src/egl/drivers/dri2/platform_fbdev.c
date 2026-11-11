@@ -108,7 +108,7 @@ fbdev_open(void)
    fbdev.map_size = fix.smem_len;
    /*
     * Below 4 GB: the PowerVR services driver's OSAcquirePhysPageAddr keeps
-    * the address it wraps in 32 bits (sgx545-ce kernel/src osfunc.c), so a
+    * the address it wraps in 32 bits (powervr_sgx kernel/src osfunc.c), so a
     * 64-bit process's fbdev mapping must be one a 32-bit pointer can name.
     */
    int flags = MAP_SHARED;

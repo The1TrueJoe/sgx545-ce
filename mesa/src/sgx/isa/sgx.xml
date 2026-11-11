@@ -29,6 +29,14 @@ codes"). MODE tells the operand how its number reads:
 Format control is program state, not in the word: the encoder takes it from
 struct encode_state and the disassembler tracks setfc (sgx_disasm.c).
 
+ISA_GPU_ID() (the encoder's s->gen, the decoder's gpu_id) is
+core * 100 + format control: the core's number (545) in the hundreds, the
+format-control bits in the low digits (sgx_isa_gpu_id()). <gen> ranges
+select cores, e.g. min="54500" max="54599" for SGX545; expressions read
+the core as ISA_GPU_ID() / 100 and format control as ISA_GPU_ID() % 100.
+Everything here is SGX545's (the root's <gen>); a field another core
+encodes differently gets a <gen> range or an override on the core.
+
 What isaspec cannot express directly, and how it is handled here:
   - split fields (h6-8 + h24, limm's three-piece immediate, operands):
     one field per piece plus a <derived> field that joins them;
@@ -867,6 +875,7 @@ NUM | BANK << 7 | EXT << 8.
 		h27-31 (bits 59-63) is the hardware class; each class splits
 		further on its own sub-op bits.
 	</doc>
+	<gen min="54500" max="54599"/>
 	<encode type="struct sgx_isa_instr *" case-prefix="SGX_ISA_OPC_">
 		<map name="PRED">src->pred</map>
 		<map name="SKIPINV">src->skipinv</map>
@@ -2937,11 +2946,11 @@ pa = 1.
 <!-- ===================================================================== -->
 
 <!--
-Format control: the encoder's s->gen and the decoder's gpu_id carry it
-(bit 0 = setfc a1, the C10 enable; bit 1 = setfc a0, efo's F16 enable).
+Format control: the low digits of ISA_GPU_ID() carry it (bit 0 = setfc a1,
+the C10 enable; bit 1 = setfc a0, efo's F16 enable).
 -->
-<expr name="#fc-c10">(ISA_GPU_ID() &amp; 1) ? 3 : 0</expr>
-<expr name="#fc-f16">(ISA_GPU_ID() &amp; 2) ? 4 : 0</expr>
+<expr name="#fc-c10">(ISA_GPU_ID() % 100 &amp; 1) ? 3 : 0</expr>
+<expr name="#fc-f16">(ISA_GPU_ID() % 100 &amp; 2) ? 4 : 0</expr>
 
 <enum name="#rpt8">
 	<value val="0" display=""/>
@@ -4093,7 +4102,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 </bitset>
 
 <!-- hw 07: efo -->
-<expr name="#efo-mode">(ISA_GPU_ID() &amp; 2) ? 4 : 0</expr>
+<expr name="#efo-mode">(ISA_GPU_ID() % 100 &amp; 2) ? 4 : 0</expr>
 
 <bitset name="efo" extends="#instruction">
 	<doc>

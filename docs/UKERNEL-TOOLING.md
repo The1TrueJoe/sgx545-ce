@@ -26,7 +26,8 @@ byte-for-byte regression check.
 - Upstream layout: one kernel driver (`powervr_sgx`) with a per-core table; one
   Mesa driver; firmware binaries per core into `linux-firmware`
   (`powervr_sgx/sgx<core>_ukernel.bin`) with `WHENCE` pointing at the source; the
-  microkernel source and its assembler in their own repository, because Mesa does
+  microkernel source and its assembler in this repository, `powervr_sgx`, the monorepo
+  for all the PowerVR work (Joseph, 2026-11-11; this replaces "their own repository"), because Mesa does
   not host firmware.
 - **One** instruction-set description is the source of truth. It lives in Mesa and
   is used by both the Mesa compiler's encoder and the microkernel assembler. The
@@ -182,8 +183,8 @@ constants. A core with no behavioral difference is *only* a config file.
 
 ## 4. Repo layout and build
 
-The microkernel source and assembler live in their own repository (the fixed
-decision), today `The1TrueJoe/sgx545-ce`'s `ukernel/` + `tools/isa/`. Proposed
+The microkernel source and assembler live in this monorepo (the fixed
+decision), today `The1TrueJoe/powervr_sgx`'s `ukernel/` + `tools/isa/`. Proposed
 shape:
 
 ```
