@@ -259,6 +259,38 @@ class Asm:
             self.i("limm r5, #0")
             self.st_sa(SA_SELF, 0x35, 5)
 
+    def bif_pd_flush(self, rv, rm, rc):
+        """TEST firmware (Xorg-crash hunt, uapi-stream 2026-11-11): on a
+        page-directory switch, pulse FLUSH | INVALDC together (page-table
+        flush AND directory-cache invalidate, BIF_CTRL 0xc00 b2|b3 = 0xc)
+        instead of INVALDC alone, then wait -- bounded -- for FLUSH_COMPLETE
+        (BIF_INT_STAT 0xc04 b19) before dispatch. The kernel always sets PD
+        and PT together, so the cache-control path only ever pulsed INVALDC;
+        if INVALDC alone does not drop the SGX545's PTE TLB, a VM_UNMAP's stale
+        translation outlives the unmap. Forcing the page-table flush and
+        confirming it lands is the A/B test. rv/rm/rc are three scratch GPRs
+        the caller can spare. The emulator does not model BIF_INT_STAT (an
+        unmodelled read returns 0), so the bound -- not the status bit -- ends
+        the spin in sim; on hardware FLUSH_COMPLETE exits it early."""
+        Asm._wl += 1
+        spin = f"_bifpd{Asm._wl}"
+        done = f"_bifpd{Asm._wl}_done"
+        self.i(f"limm {rv}, #0xc")                      # FLUSH (b2) | INVALDC (b3)
+        self.i(f"str #{0xc00 // 4}, {rv}")
+        self.i(f"limm {rv}, #0")                        # pulse the request back to 0
+        self.i(f"str #{0xc00 // 4}, {rv}")
+        self.i(f"limm {rm}, #0x80000")                  # BIF_INT_STAT FLUSH_COMPLETE (b19)
+        self.i(f"limm {rc}, #4096")                     # bounded spin budget
+        self.label(spin)
+        self.i(f"ldr {rv}, #{0xc04 // 4}")             # BIF_INT_STAT
+        self.i("wdf")
+        self.i(f"and {rv}, {rv}, {rm}")
+        self.i(f"test.xor.eq p0, {rv}, {rm}")         # FLUSH_COMPLETE set -> done
+        self.i(f"(p0) ba {done}")
+        self.i(f"test.isubu16.ne p0, {rc}, {rc}, #1")  # rc -= 1; nonzero -> keep polling
+        self.i(f"(p0) ba {spin}")
+        self.label(done)
+
     def invalidate(self, inv_reg, done_mask):
         """request a BIF/USE cache invalidate and wait for it (docs/UKERNEL.md
         §6). inv_reg is the PDS invalidate for this side (TA 0xad0, 3D 0xad4);
@@ -629,10 +661,7 @@ def build(a):
     a.i("wdf")
     a.i("test.and.eq p0, r4, #2")                        # PD clear? -> try PT
     a.i("(p0) ba cc_pt")
-    a.i("limm r2, #8")                                   # BIF_CTRL = INVALDC (dir + PT)
-    a.i(f"str #{0xc00 // 4}, r2")
-    a.i("limm r2, #0")
-    a.i(f"str #{0xc00 // 4}, r2")
+    a.bif_pd_flush("r2", "r5", "r7")                     # TEST: FLUSH|INVALDC + wait (was INVALDC 8)
     a.i("ba cc_data")
     a.label("cc_pt")
     a.i("test.and.eq p0, r4, #1")                        # PT clear? -> data
@@ -1106,10 +1135,7 @@ def build(a):
     # and BIF-faulted reading stale background/PDS program offsets (exec base +0/+0x4000
     # instead of +0x1020); only a microkernel restart cleared it. The DDK pulses this on a
     # PD change; we pulse every transfer, which is cheap.
-    a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
-    a.i(f"str #{0xc00 // 4}, r5")
-    a.i("limm r5, #0")
-    a.i(f"str #{0xc00 // 4}, r5")                   # restore BIF_CTRL = 0
+    a.bif_pd_flush("r5", "r6", "r7")                # TEST: FLUSH|INVALDC + wait (was INVALDC 8)
     a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     # transfer's 3D field (b22-26) into 0xa74: xfer cmd word 101
     # (+0x194), masked replace like the render 3D field. r9 = transfer cmd base.
@@ -1425,10 +1451,7 @@ def build(a):
     else:
         a.i("test.and.eq p0, r13, r13")             # render kick? skip INVALDC
     a.i("(p0) ba skip_bif_invaldc")
-    a.i("limm r5, #8")                              # BIF_CTRL: INVALDC (flush dir cache)
-    a.i(f"str #{0xc00 // 4}, r5")
-    a.i("limm r5, #0")
-    a.i(f"str #{0xc00 // 4}, r5")
+    a.bif_pd_flush("r5", "r6", "r7")                # TEST: FLUSH|INVALDC + wait (was INVALDC 8)
     a.label("skip_bif_invaldc")
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
     # 0xa74's TA-flags field (b27-31) is written below, read-modify-write so
