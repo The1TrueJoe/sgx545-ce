@@ -312,6 +312,17 @@ format through the CPU gather (half-float and BGRA among them), R8 and RG8
 stored as RGBA8 (so st's RGTC decompression has its formats), rectangle
 textures (`lower_rect` with the size from `SGX_K_TEXSIZE`).
 
+4x MSAA (4f6cbf2c, on uAPI rev 3's winsys and wip/msaa4-kcalc's header):
+4-sample colour and depth/stencil renderbuffers when the kernel reports
+`rt_max_samples` 4, resolved by the PBE, a per-sample ZLS buffer (the
+context's own when no depth buffer is bound), resolves through
+`glBlitFramebuffer` as copies. Not run on a board yet: `mesa/tests/sgx_msaa.c`
+checks the quarter-coverage edge pixels and per-sample depth at 720×480 and
+256×256, with piglit's `ext_framebuffer_multisample` tests after it. Not
+done: multisampled window surfaces (EGL configs), depth/stencil resolves,
+GL_MULTISAMPLE off on a 4x target (the render target's samples are fixed
+per render), sample coverage and alpha to coverage.
+
 Provoking vertex first waits for flat shading, which the driver doesn't do
 yet (DOUTI b25-26, STATE.md §3).
 
