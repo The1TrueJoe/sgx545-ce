@@ -3,7 +3,12 @@
 """Assemble the open microkernel (ukernel.py) into the binary srvinit loads
 and a manifest of its entry offsets.
 
-    python3 ukernel/build.py [out.bin] [manifest.json]
+    python3 ukernel/build.py [core] [out.bin] [manifest.json]
+
+`core` is an optional leading bare token (e.g. `sgx545`) selecting
+`cores/<core>.py`; it defaults to sgx545, and because output paths carry a
+`.`/`/`, existing callers that pass only out.bin/manifest.json are unchanged.
+`SGX_CORE` does the same and, if set, wins.
 
 Each line is assembled by tools/isa/asm.py (libusc's own encoding, so nothing
 the hardware can't accept is emitted), labels resolve to byte offsets of
@@ -19,6 +24,24 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "isa"))
 import asm  # noqa: E402
+
+
+def _select_core():
+    """Consume an optional leading bare core token into SGX_CORE, before
+    ukernel imports its config. A token with no `/` or `.` names a core; output
+    paths always carry one, so existing callers are untouched. SGX_CORE wins."""
+    if os.environ.get("SGX_CORE") is not None:
+        return
+    if len(sys.argv) > 1 and "/" not in sys.argv[1] and "." not in sys.argv[1]:
+        tok = sys.argv[1]
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cores", tok + ".py")
+        if not os.path.exists(path):
+            sys.exit(f"build.py: unknown core {tok!r} (no cores/{tok}.py)")
+        os.environ["SGX_CORE"] = tok
+        del sys.argv[1]
+
+
+_select_core()
 
 import ukernel  # noqa: E402
 

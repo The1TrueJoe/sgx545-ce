@@ -129,10 +129,16 @@ NO_IDLE_AP = int(os.environ.get("UK_NO_IDLE_AP", "0"))
 
 # ---- per-core configuration (docs/UKERNEL-TOOLING.md §3) -------------------
 # Register map, control-block layout, host-control/command offsets and the
-# register-programming tables for the core this image targets. Selecting a
-# different core (§6 step 3) swaps this module; the handler logic below is
-# core-independent. Byte-identity gate: ukernel/golden/sgx545.golden.
-from cores.sgx545 import *  # noqa: F401,F403
+# register-programming tables for the core this image targets, loaded from
+# cores/<core>.py. The core is SGX_CORE (default sgx545); build.py sets it from
+# its optional leading argument. The handler logic below is core-independent.
+# Byte-identity gate for sgx545: ukernel/golden/sgx545.golden.
+import importlib  # noqa: E402
+
+CORE = os.environ.get("SGX_CORE", "sgx545")
+_core = importlib.import_module("cores." + CORE)
+globals().update({k: v for k, v in vars(_core).items() if not k.startswith("_")})
+del _core
 
 
 class Asm:
