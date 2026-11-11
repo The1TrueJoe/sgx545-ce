@@ -13,7 +13,7 @@
  * family, not here: a core of another family needs its own descriptions.
  *
  * Each field says how its value is known: [HW] measured on hardware with the
- * open stack, [D] from the vendor driver's behaviour (captures, its limits),
+ * open stack, [D] from the vendor driver's behavior (captures, its limits),
  * [G] a guess that works.
  */
 #ifndef SGX_CORE_H
