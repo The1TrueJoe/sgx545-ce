@@ -230,8 +230,10 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
    if (begin_frame(ctx, zs_cleared)) {
       static const float black[4];
 
-      /* The ISP starts every render at depth 1.0 (render details +0x40), so
-       * a depth clear only needs drawing when it is not 1.0. */
+      /* A render that loads no depth starts at 1.0 (render details +0x40):
+       * sgxws_clear skips a 1.0 depth clear there.  A depth-only clear of a
+       * stencil format loads the stencil, and the depth with it, so it's
+       * drawn (ioquake3 starts every frame so). */
       /* a buffer without alpha reads it as 1 wherever it's sampled: clear the X
        * byte to that */
       float rgba[4] = {color->f[0], color->f[1], color->f[2], color->f[3]};

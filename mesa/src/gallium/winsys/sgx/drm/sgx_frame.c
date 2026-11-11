@@ -1365,7 +1365,7 @@ frame_has_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 }
 
 /* make room for one more object, submitting the frame so far if need be (the
- * next render starts from its pixels, as every render does) */
+ * next render starts from its pixels, as every render does, and its depth) */
 static int
 make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 {
@@ -1378,6 +1378,7 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    c->room_flushes++;
    if ((e = sgxws_flush(c, 0)))
       return e;
+   t.zls_load = t.zls_va != 0; /* and its depth and stencil */
    if ((e = sgxws_begin(c, rt, &t)))
       return e;
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
@@ -1398,6 +1399,7 @@ depth_bias(struct sgxws_ctx *c, const struct sgxws_state *st)
        (c->bias_units != st->bias_units || c->bias_factor != st->bias_factor)) {
       if ((e = sgxws_flush(c, 0)))
          return e;
+      t.zls_load = t.zls_va != 0;
       if ((e = sgxws_begin(c, rt, &t)))
          return e;
    }
@@ -1500,9 +1502,11 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
    uint32_t blk[13], n = 0;
    int e;
 
-   bool zwrite = write_depth && (depth != 1.0f || c->draws);
+   /* a render that loads its depth (ZLS) doesn't start at 1.0 */
+   bool zwrite =
+      write_depth && (depth != 1.0f || c->draws || c->target.zls_load);
 
-   /* nothing to write: no colour, and the depth every render starts with */
+   /* nothing to write: no colour, and the depth a fresh render starts with */
    if (!(wmask & 0xf) && !zwrite && stencil < 0)
       return 0;
    if ((e = make_room(c, 3 * 16)))
@@ -1524,7 +1528,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
       h.ispc = stencil >= 0;
    }
    /* always; depth write for a depth clear, except to the background depth
-    * (1.0) before anything was drawn: every render starts there */
+    * (1.0) before anything was drawn in a render that doesn't load depth */
    sgx_pack(&blk[n++], TA_STATE_ISPA, a)
    {
       a.depth_func = SGX_TA_CMP_ALWAYS;
