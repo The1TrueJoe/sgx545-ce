@@ -14,7 +14,7 @@ microkernel source. A new core is added as data in each of them, not by copying 
 | Core | ISA | Example hardware | Status |
 |---|---|---|---|
 | SGX545 | USSE | Intel Cedarview (Atom N2600, N2800, D2500, D2550, D2700); Intel Atom CE5300/CE5310 | Supported |
-| SGX535 | USSE | Intel Poulsbo (GMA 500), Apple A4 | Wanted |
+| SGX535 | USSE | Intel Poulsbo (GMA 500), Apple A4 | Wanted; fact sheet: [cores/sgx535.md](cores/sgx535.md) |
 | SGX530 | USSE | TI OMAP3 | Wanted; fact sheet: [cores/sgx530.md](cores/sgx530.md) |
 | SGX540 | USSE | TI OMAP4 | Wanted |
 | SGX543, SGX544, SGX554 | USSE2 | TI OMAP5 and AM57xx, Allwinner A31 and A83T, some MediaTek SoCs | Wanted; needs USSE2 support in the compiler and assembler |
