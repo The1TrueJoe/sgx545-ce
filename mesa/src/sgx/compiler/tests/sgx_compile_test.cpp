@@ -1189,6 +1189,50 @@ TEST_F(sgx_compile_test, vertex_clip_vertex_to_clip_distances)
    EXPECT_EQ(sets, 1u) << disasm(); /* clipdist_0 */
 }
 
+/* polygon stipple as nir_lower_pstipple_fs builds it (bool1): a sample of
+ * the 32x32 stipple texture at gl_FragCoord / 32, by texture index with no
+ * deref, and a discard on its alpha */
+TEST_F(sgx_compile_test, fragment_polygon_stipple)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_variable *fc = var(nir_var_shader_in, glsl_vec4_type(), "gl_FragCoord",
+                          VARYING_SLOT_POS);
+   nir_variable *st =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "stipple_tex", -1);
+   st->data.binding = 1;
+   st->data.explicit_binding = true;
+   BITSET_SET(b.shader->info.textures_used, 1);
+   BITSET_SET(b.shader->info.samplers_used, 1);
+
+   nir_def *tc = nir_fmul(&b, nir_trim_vector(&b, nir_load_var(&b, fc), 2),
+                          nir_imm_vec2(&b, 1.0 / 32.0, 1.0 / 32.0));
+   nir_tex_instr *tex = nir_tex_instr_create(b.shader, 1);
+   tex->op = nir_texop_tex;
+   tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
+   tex->coord_components = 2;
+   tex->dest_type = nir_type_float32;
+   tex->texture_index = 1;
+   tex->sampler_index = 1;
+   tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, tc);
+   nir_def_init(&tex->instr, &tex->def, 4, 32);
+   nir_builder_instr_insert(&b, &tex->instr);
+   nir_discard_if(&b, nir_fneu_imm(&b, nir_channel(&b, &tex->def, 3), 0.0));
+   b.shader->info.fs.uses_discard = true;
+   nir_store_var(&b, col, nir_load_var(&b, in), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.discards);
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_EQ(out.samples[0].sampler, 1u);
+}
+
 /* the fixed programs: every line assembles, every word decodes, and each
  * program's last instruction ends it */
 TEST(sgx_fixed, programs_assemble)
