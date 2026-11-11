@@ -141,15 +141,48 @@ encoder:
   line can read `str #{CR_3D_KICK}` instead of a literal.
 - **Symbols and relocations for the control block.** The event program carries the
   control-block base in a loader-patched `limm` (§1 of `UKERNEL.md`); control-block
-  words are referenced symbolically (`SC_INFLIGHT`, `TD_ENTRY`, …) and resolved at
-  assemble time from the per-core layout, so the same source assembles for a core
-  whose layout differs.
+  words are referenced symbolically (`SC_INFLIGHT`, `TD_ENTRY`, …) in the µK source
+  and resolved by `build.py` from the per-core layout *before* the line reaches
+  sgx-asm (which takes only numeric immediates), so the same source assembles for a
+  core whose layout differs.
 - **Listing / map output.** `build.py` already emits a manifest of entry offsets;
   the assembler should also emit a full listing (address, bytes, source line) and a
   symbol map, for debugging a hang against a devcd PC.
 - **Disassembler for round-trip.** The round trip is `sgx-asm ∘ sgx-disasm` ==
   identity over each ISA's corpus (§5), both built from `sgx.xml` — not the
   `hw.py`-based `dis.py`.
+
+### Agreed invocation contract (sgx-asm)
+
+Agreed with cleanroom-isa 2026-11-11; the tool is on origin/dev (built with
+`-Dtools=sgx`, or standalone via `mesa/tests/isa-standalone/standalone.sh
+<mesa-tree> <out>`, which writes `<out>/sgx-asm` and `<out>/sgx-disasm`). The µK
+build finds it through `SGX_ASM`. There is no `--version`; the pinned `sgx.xml`
+hash plus the tool's build inputs identify it.
+
+- **Core.** `-c 545` (or `-c sgx545`), optional, default 545. A core `sgx.xml` does
+  not describe exits 2 before any input is read. (`ISA_GPU_ID` = core×100 + format
+  control; the root bitset is `<gen 54500-54599>`.)
+- **Input.** Fully resolved text — the syntax `sgx_disasm` prints, one instruction
+  per line, every immediate numeric, no symbols and no labels. `build.py` resolves
+  the per-core constants (`#CR_3D_KICK`, `SC_INFLIGHT`, …) and branch targets itself,
+  so sgx-asm carries no µK data. File arguments (one ordered stream) or stdin; blank
+  lines, `#` lines and `;` comments are skipped.
+- **Format control.** sgx-asm follows `setfc` in straight-line order, starting at
+  `-F 1` (C10 on, F16 off); `build.py` feeds the whole program as one ordered stream
+  so this tracks, and passes `-F` only if the µK enters a block under a different
+  format control.
+- **Output.** Text is `%08x %08x` = **lo hi** (low word first, the test-list /
+  `ISA.md` order). `build.py` uses `-b`: raw little-endian, lo then hi, 8 bytes per
+  instruction (= `struct.pack("<II", lo, hi)`). `-o <file>` writes a file; `-L` a
+  listing (offset, lo hi, disassembly).
+- **Errors.** Every unencodable line → stderr `<file>:<line>: <text>: <message>`
+  (`<stdin>` for stdin) and exit 1, with no output for that line (no zeros, no
+  placeholder). `build.py` treats exit 1 as a hard failure and discards the output.
+- **Bit-for-bit is the oracle side's check.** `build.py` (this repo) runs the
+  comparison against today's image (the golden hash). cleanroom-isa does not run
+  `build.py` or diff against `asm.py`; a byte difference is an `ISA.md` question to
+  usse-compiler, resolved in `sgx.xml` — never by matching `asm.py`/`hw.py`.
 
 ---
 
