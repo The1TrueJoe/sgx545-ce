@@ -94,6 +94,8 @@ struct sgx_pipe_shader {
       n_deps;
    /* the texel comes back F16 into two registers (T3 01028800) */
    bool dep_f16[SGX_MAX_DEP_SAMPLES];
+   /* a texelFetch (sgx_sample_info.fetch): sampled NEAREST, clamped */
+   bool dep_fetch[SGX_MAX_DEP_SAMPLES];
    struct {
       struct sgxws_blend key;
       uint32_t code;

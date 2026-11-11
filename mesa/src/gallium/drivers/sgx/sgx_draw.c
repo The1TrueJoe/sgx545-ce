@@ -1622,7 +1622,20 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                     unit);
             return;
          }
-         sgx_tex_words(view, ctx->samplers[unit], &fsk[fs->dep_sa[j]]);
+         /* a texelFetch reads the texel at an explicit level, whatever the
+          * bound sampler filters or wraps (the compiler's sgx_lower_tex
+          * puts the coordinate at the texel's centre) */
+         const struct pipe_sampler_state fetch = {
+            .wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE,
+            .wrap_t = PIPE_TEX_WRAP_CLAMP_TO_EDGE,
+            .wrap_r = PIPE_TEX_WRAP_CLAMP_TO_EDGE,
+            .min_img_filter = PIPE_TEX_FILTER_NEAREST,
+            .mag_img_filter = PIPE_TEX_FILTER_NEAREST,
+            .min_mip_filter = PIPE_TEX_MIPFILTER_NEAREST,
+            .max_lod = 1000.0f,
+         };
+         sgx_tex_words(view, fs->dep_fetch[j] ? &fetch : ctx->samplers[unit],
+                       &fsk[fs->dep_sa[j]]);
          /* an F16 texel: the whole T3, as for a PDS sample's */
          if (fs->dep_f16[j])
             fsk[fs->dep_sa[j] + 3] = 0x01028800u;
