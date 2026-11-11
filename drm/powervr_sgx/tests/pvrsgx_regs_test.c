@@ -10,6 +10,8 @@
 
 #include <kunit/test.h>
 
+#include "../pvrsgx_drv.h"
+
 #define REGS_PATTERN	0xa5a5a5a5u
 
 struct regs_fixture {
