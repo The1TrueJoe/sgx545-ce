@@ -33,10 +33,13 @@ void pvrsgx_ccb_reset(struct pvrsgx_device *sdev)
 	ccbctl(sdev)[CCB_WO] = 0;
 	ccbctl(sdev)[CCB_RO] = 0;
 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
-	sdev->ccb_issued = 0;
+	/*
+	 * @ccb_issued carries on: a job sent after a restart has a higher sequence
+	 * than any count read before it, so a stale count can't complete it.
+	 */
 }
 
-/* Commands the microkernel has taken off the ring since it started. */
+/* Commands the microkernel has taken off the ring since the driver loaded. */
 u64 pvrsgx_ccb_consumed(struct pvrsgx_device *sdev)
 {
 	u32 ro = READ_ONCE(ccbctl(sdev)[CCB_RO]);

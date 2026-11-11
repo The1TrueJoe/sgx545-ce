@@ -141,14 +141,16 @@ static bool pvrsgx_job_fault_check(struct pvrsgx_device *sdev)
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_job *job, *tmp;
-	u64 consumed = pvrsgx_ccb_consumed(sdev);
 	unsigned long flags;
 	bool more, reap = false;
 	LIST_HEAD(finished);
 	u32 done = 0;
 	bool cookie;
+	u64 consumed;
 
 	mutex_lock(&sdev->done_lock);
+	/* Under the lock a reset fails the old jobs under: no count from before it. */
+	consumed = pvrsgx_ccb_consumed(sdev);
 	cookie = dma_fence_begin_signalling();
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {

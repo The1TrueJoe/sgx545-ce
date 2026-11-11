@@ -172,7 +172,7 @@ struct pvrsgx_device {
 	struct mutex ccb_lock;
 	/** @ccb_spin: Keeps @ccb_issued and the write offset in step for readers. */
 	spinlock_t ccb_spin;
-	/** @ccb_issued: Commands written to the kernel CCB since the firmware started. */
+	/** @ccb_issued: Commands written to the kernel CCB since load, across restarts. */
 	u64 ccb_issued;
 
 	/** @sched: The one scheduler; one job on the GPU at a time. */
