@@ -28,6 +28,7 @@ enum sgx_form {
    SGX_OP_FMSA,
    SGX_OP_FSUBFLR,
    SGX_OP_FDP,
+   SGX_OP_FDPC, /* fdp plus a clip-plane result into cp<n> */
    SGX_OP_FMAXMIN,
    SGX_OP_FMINMAX,
    SGX_OP_FDSX,
@@ -125,6 +126,7 @@ enum sgx_field {
    SGX_FLD_A,
    SGX_FLD_A1,
    SGX_FLD_A2,
+   SGX_FLD_CP,  /* fdpc clip plane */
    SGX_FLD_DIM, /* smp */
    SGX_FLD_LOD,
    SGX_FLD_CFMT,

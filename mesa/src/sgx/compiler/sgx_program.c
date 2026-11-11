@@ -273,6 +273,8 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];
    out->point_size = !frag && c->vary->point_size;
    out->n_out_regs = frag ? 0 : c->n_out_regs;
+   out->n_clip = frag ? 0 : c->n_clip;
+   out->clip_o = frag ? 0 : c->clip_o;
    out->n_code = util_dynarray_num_elements(&flat, uint64_t);
    out->code = malloc(MAX2(flat.size, 8));
    memcpy(out->code, flat.data, flat.size);

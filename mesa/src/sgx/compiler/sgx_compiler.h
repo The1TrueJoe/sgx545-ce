@@ -237,6 +237,10 @@ struct sgx_shader {
    unsigned set_comps[SGX_MAX_SETS];
    bool point_size; /* vertex: writes the point size (f32), after the sets */
    unsigned n_out_regs; /* vertex: o registers written */
+   /* vertex: user clip distances 0..n_clip-1, plane p's in o<clip_o + p>
+    * through fdpc into cp<p>; the driver enables planes 0..n_clip-1 in the
+    * TA's output select (b0-5) and counts n_clip more output dwords */
+   unsigned n_clip, clip_o;
    /* SA registers used from sa_base on (constants and the compiler's own) */
    unsigned sa_slots;
    /* Constants past sa127 (counting 4 per dependent sample of a fragment

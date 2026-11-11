@@ -1694,6 +1694,26 @@ assign_io(struct sgx_ctx *c)
          c->out_reg[VARYING_SLOT_POS * 4 + j] = j;
       if (c->vary->point_size)
          c->out_reg[VARYING_SLOT_PSIZ * 4] = c->psize_reg;
+      /* the clip distances (nir_lower_clip_vs: planes 0..n-1, a disabled one
+       * below the last 0.0) after everything else, one o register each */
+      unsigned nclip = 0;
+      nir_foreach_shader_out_variable (var, s) {
+         if (var->data.location == VARYING_SLOT_CLIP_DIST0 ||
+             var->data.location == VARYING_SLOT_CLIP_DIST1) {
+            const struct glsl_type *e = glsl_without_array(var->type);
+            unsigned n = glsl_get_aoa_size(var->type);
+            n = (n ? n : 1) * glsl_get_vector_elements(e);
+            nclip = MAX2(nclip, MIN2(
+               (var->data.location - VARYING_SLOT_CLIP_DIST0) * 4 + n, 8u));
+         }
+      }
+      if (s->info.clip_distance_array_size)
+         nclip = MIN2(nclip, s->info.clip_distance_array_size);
+      c->n_clip = nclip;
+      c->clip_o = c->n_out_regs;
+      for (unsigned p = 0; p < nclip; p++)
+         c->out_reg[VARYING_SLOT_CLIP_DIST0 * 4 + p] = c->clip_o + p;
+      c->n_out_regs += nclip;
       nir_foreach_shader_out_variable (var, s)
          if (var->data.location >= VARYING_SLOT_VAR0)
             map_varying(c->out_reg, var, c->vary, obase);

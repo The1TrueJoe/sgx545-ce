@@ -79,6 +79,7 @@ static const struct sgx_form_info {
    FLOAT3(FMINMAX),
    FLOAT2(FSUBFLR),
    FLOAT2(FDP),
+   FLOAT2(FDPC),
    FLOAT2(FDSX),
    FLOAT2(FDSY),
    SCALAR(FRCP),
@@ -273,6 +274,9 @@ sgx_form_set(struct sgx_isa_instr *instr, unsigned form, unsigned id, int32_t v)
    case SGX_FLD_A2:
       instr->a2 = v & 1;
       instr->a2c = v >> 1;
+      break;
+   case SGX_FLD_CP:
+      instr->cp[0] = v;
       break;
    case SGX_FLD_DIM:
       instr->dim = v;

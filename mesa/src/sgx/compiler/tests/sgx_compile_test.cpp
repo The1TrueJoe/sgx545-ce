@@ -1305,6 +1305,61 @@ TEST_F(sgx_compile_test, fragment_volume_sample_is_3d)
    }
 }
 
+/* user clip planes in the TA: gl_ClipVertex through st's lowering
+ * (nir_lower_clip_vs, planes 0..n-1), each distance an fdpc into cp<p> and
+ * o<clip_o + p>, after every other output */
+static void
+clip_vs(nir_builder *b, unsigned enables)
+{
+   nir_variable *a = nir_variable_create(b->shader, nir_var_shader_in,
+                                         glsl_vec4_type(), "a");
+   a->data.location = VERT_ATTRIB_GENERIC0;
+   nir_variable *pos = nir_variable_create(b->shader, nir_var_shader_out,
+                                           glsl_vec4_type(), "gl_Position");
+   pos->data.location = VARYING_SLOT_POS;
+   nir_variable *cv = nir_variable_create(b->shader, nir_var_shader_out,
+                                          glsl_vec4_type(), "gl_ClipVertex");
+   cv->data.location = VARYING_SLOT_CLIP_VERTEX;
+   nir_def *p = nir_load_var(b, a);
+   nir_store_var(b, pos, p, 0xf);
+   nir_store_var(b, cv, nir_fmul_imm(b, p, 2.0), 0xf);
+   b->shader->info.outputs_written =
+      VARYING_BIT_POS | BITFIELD64_BIT(VARYING_SLOT_CLIP_VERTEX);
+   /* (st's STATE_CLIPPLANE; only the uniforms' names matter here) */
+   gl_state_index16 state[8][STATE_LENGTH] = {};
+   for (unsigned i = 0; i < 8; i++) {
+      state[i][0] = 1;
+      state[i][1] = i;
+   }
+   nir_lower_clip_vs(b->shader, enables, true, false, state);
+}
+
+TEST_F(sgx_compile_test, vertex_clip_planes_fdpc)
+{
+   for (unsigned enables : {0x1u, 0x3u, 0x21u, 0x3fu}) {
+      start(MESA_SHADER_VERTEX);
+      clip_vs(&b, enables);
+      ASSERT_TRUE(compile()) << out.log;
+      expect_decodes();
+      unsigned n = util_last_bit(enables);
+      EXPECT_EQ(out.n_clip, n) << enables;
+      EXPECT_EQ(out.clip_o + n, out.n_out_regs);
+      EXPECT_GE(out.clip_o, 4u);
+      std::string s = disasm();
+      for (unsigned p = 0; p < n; p++) {
+         /* fdp's operand names the register below its result (rpt=2) */
+         std::string want = "fdpc o" + std::to_string(out.clip_o + p - 1) +
+                            ", cp" + std::to_string(p) + ",";
+         EXPECT_NE(s.find(want), std::string::npos) << want << "\n" << s;
+      }
+      EXPECT_EQ(s.find("cp" + std::to_string(n) + ","), std::string::npos) << s;
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
+}
+
 /* the fixed programs: every line assembles, every word decodes, and each
  * program's last instruction ends it */
 TEST(sgx_fixed, programs_assemble)

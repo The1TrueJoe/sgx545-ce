@@ -151,6 +151,9 @@ struct sgx_ctx {
    unsigned n_iters;
    unsigned n_pa_inputs;
    unsigned psize_reg, n_out_regs;
+   /* vertex: user clip distances 0..n_clip-1, one fdpc each into
+    * o<clip_o + p> and cp<p> */
+   unsigned n_clip, clip_o;
 
    /* NIR def -> value */
    struct sgx_val *vals;

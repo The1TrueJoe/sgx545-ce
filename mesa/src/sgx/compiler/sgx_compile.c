@@ -177,6 +177,7 @@ form_class(unsigned form)
    case SGX_OP_FMINMAX:
    case SGX_OP_FMAXMIN:
    case SGX_OP_FDP:
+   case SGX_OP_FDPC:
    case SGX_OP_FDSX:
    case SGX_OP_FDSY:
       return CLS_INC;
@@ -258,6 +259,14 @@ slot_ok(unsigned form, unsigned k, const struct sgx_ref *r)
 }
 
 /* hardware constants (ISA.md table, hardware-checked) as f32 bits */
+/* fdpc is fdp with a clip-plane result besides: the same operands and
+ * repeat rules (it writes only the last iteration's destination) */
+static inline bool
+is_fdp(unsigned form)
+{
+   return form == SGX_OP_FDP || form == SGX_OP_FDPC;
+}
+
 static int
 hw_const(uint32_t bits)
 {
@@ -2532,6 +2541,32 @@ vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
    set_refs(c, &in->def, x, nc);
 }
 
+/* User clip plane p's distance into the TA (output select enables plane p):
+ * `fdpc o<clip_o + p>, cp<p>, (x, 0), (c52, c53) [rpt=2]`, x * 1 + 0 * 1, as
+ * the vertex programs of the DDK's ES1 do; fdpc writes only its last
+ * iteration's destination, like fdp */
+static void
+emit_clip_distance(struct sgx_ctx *c, unsigned p, struct sgx_ref x)
+{
+   if (p >= c->n_clip)
+      return;
+   unsigned t = new_vreg(c, 2);
+   struct sgx_ref td[4] = {vref(t, 0), vref(t, 1)};
+   struct sgx_ref ts[1][4] = {{x, ref(SGX_F_K, 0)}};
+   emit_runs(c, SGX_OP_MOV, 3, td, 1, ts, &NOF, 0);
+   unsigned o = c->clip_o + p;
+   struct sgx_ins *f = ins_alloc(c, SGX_INS_ALU, SGX_OP_FDPC);
+   f->nops = 3;
+   f->rpt = 2;
+   f->op[0] = ref(SGX_F_O, o);
+   f->op[1] = vref(t, 0);
+   f->op[1].step = 1;
+   f->op[2] = cref(52);
+   f->op[2].step = 1;
+   fld(f, SGX_FLD_CP, p);
+   emit(c, f);
+}
+
 static void
 emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
 {
@@ -2815,6 +2850,14 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
       struct sgx_ref d[4], ss[1][4];
       unsigned m = 0;
+      if (slot == VARYING_SLOT_CLIP_DIST0 || slot == VARYING_SLOT_CLIP_DIST1) {
+         for (unsigned k = 0; k < 4; k++)
+            if (wmask & (1u << k))
+               emit_clip_distance(
+                  c, (slot - VARYING_SLOT_CLIP_DIST0) * 4 + k,
+                  src_comp(c, &ls, k - nir_intrinsic_component(in)));
+         return;
+      }
       if (slot == VARYING_SLOT_PSIZ) {
          /* an f32 output, clamped to the largest point size (docs/STATE.md
           * "Lines and points"): min(x, 511), a constant
@@ -2933,6 +2976,8 @@ emit_br(struct sgx_ctx *c, unsigned l, unsigned pred)
 }
 
 static void emit_tex(struct sgx_ctx *c, nir_tex_instr *tex);
+
+
 
 /* tex(v.xy * rcp(v.w)) on a whole vec4 varying v: a non-dependent
  * projected read (corpus c3 tx_nd_proj4: the PDS iterates v.xy / v.w); the
@@ -4907,7 +4952,7 @@ merge_runs(struct sgx_ctx *c)
           a->form != b->form || a->pred || b->pred ||
           (cls != CLS_ALL && cls != CLS_INC) ||
           a->rpt + b->rpt > max_rpt(cls) || a->nops != b->nops ||
-          a->ndst != 1 || a->form == SGX_OP_FDP || !same_fields(a, b) ||
+          a->ndst != 1 || is_fdp(a->form) || !same_fields(a, b) ||
           a->writes_pred || b->writes_pred ||
           /* (a derivative isn't repeated: corpus c3) */
           a->form == SGX_OP_FDSX || a->form == SGX_OP_FDSY)
@@ -4989,7 +5034,7 @@ fold_movs(struct sgx_ctx *c)
             ok = i->ndst == 1 && !i->pred && i->rpt == m->rpt &&
                  i->op[0].file == SGX_F_V && i->op[0].n == s.n &&
                  i->op[0].comp == s.comp && !i->op[0].h16 && i->op[0].step &&
-                 (cls == CLS_INC || cls == CLS_ALL) && i->form != SGX_OP_FDP &&
+                 (cls == CLS_INC || cls == CLS_ALL) && !is_fdp(i->form) &&
                  slot_ok(i->form, 0, &d);
             for (unsigned k = i->ndst; k < i->nops && ok; k++)
                ok = !ref_hits(&i->op[k], i->rpt, d.file, d.n, dn, m->rpt);
@@ -5334,7 +5379,7 @@ coalesce_repeats(struct sgx_ctx *c)
    list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
       if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
           i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY ||
-          i->form == SGX_OP_FDP)
+          is_fdp(i->form))
          continue;
       struct sgx_ref d = i->op[0];
       if (d.file != SGX_F_V || d.h16 || !d.step || d.n >= nv)
@@ -5397,7 +5442,7 @@ o_candidates(struct sgx_ctx *c, unsigned nv, int *inplace, bool *ok)
       const struct sgx_ref *d = &i->op[0];
       if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred ||
           d->file != SGX_F_O || !d->step || i->form == SGX_OP_FDSX ||
-          i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+          i->form == SGX_OP_FDSY || is_fdp(i->form))
          continue;
       for (unsigned k = 1; k < i->nops; k++) {
          const struct sgx_ref *r = &i->op[k];
@@ -5455,7 +5500,7 @@ place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             continue;
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
          int at =
-            2 * i->ip + (k < i->ndst && (i->rpt == 1 || i->form == SGX_OP_FDP));
+            2 * i->ip + (k < i->ndst && (i->rpt == 1 || is_fdp(i->form)));
          for (unsigned j = r->n; j < r->n + n && j < 128; j++) {
             if (from[j] < 0 || at < from[j])
                from[j] = at;
@@ -5567,7 +5612,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
                 * own sources may sit in the colour register) */
                if (first_w[j] < 0)
                   first_w[j] =
-                     2 * i->ip + (i->rpt == 1 || i->form == SGX_OP_FDP);
+                     2 * i->ip + (i->rpt == 1 || is_fdp(i->form));
             } else {
                last[j] = MAX2(last[j], (int)(2 * i->ip));
                if (c->stage == MESA_SHADER_VERTEX)
@@ -5655,7 +5700,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
           d->file != SGX_F_V || d->h16 || !d->step || d->n >= nv ||
           d->comp + i->rpt > 16 || i->form == SGX_OP_FDSX ||
-          i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+          i->form == SGX_OP_FDSY || is_fdp(i->form))
          continue;
       int base = -1;
       for (unsigned k = 1; k < i->nops && base < 0; k++) {
@@ -5709,7 +5754,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
          if (i->kind == SGX_INS_SAMPLE && k < i->ndst && i->smp->f16_return)
             n = 2;
          unsigned first = half ? r->comp / 2 : r->comp;
-         bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) ||
+         bool early = (i->rpt > 1 && !is_fdp(i->form)) ||
                       i->kind == SGX_INS_SAMPLE ||
                       (i->kind == SGX_INS_ALU &&
                        (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
@@ -5804,7 +5849,7 @@ allocate(struct sgx_ctx *c)
             first_is_read[r->n] = true;
          touch(c, r, 2 * ip, 0);
       }
-      bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) ||
+      bool early = (i->rpt > 1 && !is_fdp(i->form)) ||
                    i->kind == SGX_INS_SAMPLE ||
                    (i->kind == SGX_INS_ALU &&
                     (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
@@ -5905,7 +5950,7 @@ allocate(struct sgx_ctx *c)
    /* an fdp's result register sits rpt - 1 above its operand number */
    unsigned *minb = calloc(nv, sizeof(unsigned));
    list_for_each_entry (struct sgx_ins, i, &c->ins, link)
-      if (i->kind == SGX_INS_ALU && i->form == SGX_OP_FDP &&
+      if (i->kind == SGX_INS_ALU && is_fdp(i->form) &&
           i->op[0].file == SGX_F_V && i->op[0].n < nv)
          minb[i->op[0].n] = MAX2(minb[i->op[0].n], i->rpt - 1u);
    place_in_pa(c, six, ip, loops, nloops, minb);
@@ -6464,7 +6509,7 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
             fmt = true;
          }
       }
-      if (form == SGX_OP_FDP && k == 0 && i->rpt > 1) {
+      if (is_fdp(form) && k == 0 && i->rpt > 1) {
          assert(o.num >= i->rpt - 1u);
          o.num -= i->rpt - 1;
       }
