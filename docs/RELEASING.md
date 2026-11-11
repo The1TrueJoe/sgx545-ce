@@ -25,7 +25,12 @@ A tag is `v` and a version that starts with a digit: digits, letters, dots, `+` 
 
 ## Steps
 
-1. On `dev`, with CI green, tag the commit and push the tag:
+1. Merge `dev` into `main` (a merge commit) once `dev`'s CI is green, then tag `main`
+   and push the tag:
+
+   ```bash
+   git checkout main && git merge --no-ff dev && git push origin main
+   ```
 
    ```bash
    git tag -a v0.1.0 -m "powervr_sgx 0.1.0" && git push origin v0.1.0
