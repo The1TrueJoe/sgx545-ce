@@ -352,15 +352,26 @@ struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args {
 /**
  * DOC: PowerVR SGX IOCTL UPLOAD_CODE interface
  *
- * Copies USSE instructions into a code object and validates them (docs/UAPI.md
- * section 7.2, decision D9). An instruction is rejected if:
+ * Copies USSE instructions into a code object and validates them
+ * (Documentation/gpu/powervr_sgx, "Shader validation"). An instruction is
+ * rejected if:
  *
- *  - it is not one of the forms the kernel knows (an unknown encoding might
- *    reach what a known one can't);
- *  - it reads or writes the core's register file (``ldr``, ``str``);
- *  - it sets the link address from a register (``setl``, ``savl``), which
- *    would let ``lapc`` jump anywhere;
- *  - it is a relative branch (``br``) whose target is outside the object.
+ *  - it is not exactly one of the forms the kernel knows;
+ *  - it is a form the kernel refuses: register-file access (``ldr``, ``str``),
+ *    the link address (``setl``, ``savl``, ``lapc``, a branch with ``link``),
+ *    ``ba``, ``phas`` with a register operand, ``lock``, ``release``, the
+ *    operand-stepping controls other than ``smlsi``, ``fdual``, and forms
+ *    whose meaning is not known;
+ *  - it is a ``br`` whose target is outside the object;
+ *  - it is a ``phas.i`` with a target other than 0 that is outside the object,
+ *    counting from the base of the USSE heap the object is mapped in, or the
+ *    object is not mapped, or mapped at more than one place;
+ *  - an operand writes a constant or global, reads a global past ``g45``, or
+ *    names an internal register past ``i3`` or an index register other than
+ *    ``idx1`` and ``idx2``.
+ *
+ * Once an object holds code with ``phas.i`` targets, VM_MAP fails with -EINVAL
+ * for a mapping that would put it anywhere else.
  *
  * On a rejection nothing is copied, the ioctl fails with -EINVAL, and
  * @bad_offset is the byte offset in the object of the first rejected

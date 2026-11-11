@@ -369,7 +369,8 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 		goto out_unlock;
 
 	dma_resv_lock(obj->resv, NULL);
-	vm_bo = drm_gpuvm_bo_obtain_locked(&vm->gpuvm, obj);
+	err = pvrsgx_validate_vm_link(to_pvrsgx_bo(obj), args->device_addr, args->offset);
+	vm_bo = err ? ERR_PTR(err) : drm_gpuvm_bo_obtain_locked(&vm->gpuvm, obj);
 	if (IS_ERR(vm_bo)) {
 		dma_resv_unlock(obj->resv);
 		pvrsgx_mmu_unmap(vm->mmu, args->device_addr, args->size);

@@ -9,10 +9,28 @@ the clean-room isaspec encoder's words for its own test lists,
   <out>/sgx545_isa_test -t tests/gles2.txt tests/int.txt > words.txt
   gen_usse_corpus.py words.txt > drm/tests/usse_corpus.h
 
-setl and savl are left out: valid encodings the validator refuses.
+Words the validator refuses are left out: the forms gen_usse_table.py
+refuses, br [link], phas.i with a target (it needs a mapped object) and
+writes to c or g.
 """
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gen_usse_table import REFUSE  # noqa: E402
+
+
+def refused(text):
+    t = re.sub(r'^\(!?p\d\)\s*', '', text)
+    op = t.split()[0]
+    if op == 'phas.i':
+        return not t.startswith('phas.i #0,')
+    if op in REFUSE or op.split('.')[0] in REFUSE:
+        return True
+    if op == 'br' and 'link' in t:
+        return True
+    return re.match(r'^\S+ [cg]\d+,', t) is not None
 
 print('/* SPDX-License-Identifier: MIT */')
 print('/* Copyright © 2026 Joseph Telaak */')
@@ -24,7 +42,7 @@ for line in open(sys.argv[1]):
     if not m or line.startswith('#'):
         continue
     text = m.group(1).strip()
-    if text.split()[0] in ('setl', 'savl'):
+    if refused(text):
         continue
     print('\t{ 0x%s, 0x%s, "%s" },' % (m.group(2), m.group(3), text.replace('"', '\\"')))
     n += 1

@@ -16,6 +16,12 @@ struct pvrsgx_bo {
 	u64 flags;
 	/** @code_end: A code object's end of the furthest upload (under the resv lock). */
 	u64 code_end;
+	/**
+	 * @code_abs: The code has absolute targets, checked for the object's start
+	 * at @code_place instructions from its USSE heap's base (resv lock).
+	 */
+	bool code_abs;
+	s64 code_place;
 };
 
 static inline struct pvrsgx_bo *to_pvrsgx_bo(struct drm_gem_object *obj)

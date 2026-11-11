@@ -877,6 +877,23 @@ static const struct {
 	{ 0x000001fd, 0xf8000040, "br #509 (its last word)", 1 },
 	{ 0x000001fe, 0xf8000040, "br #510 (past its end)", 0 },
 	{ 0x0001ffff, 0xf8000040, "br #131071", 0 },
+	{ 0x00001077, 0xf8000000, "ba #4215", 0 },
+	{ 0x00000000, 0xf8000080, "lapc", 0 },
+	{ 0x00000003, 0xf8000240, "br #3 [link]", 0 },
+	{ 0x00000009, 0xfa440000, "phas.i #9, #0 (the object isn't mapped)", 0 },
+	{ 0x00000000, 0xfa440700, "phas.i #0, #0 [wait=7]", 1 },
+	{ 0x00000010, 0xfd200000, "lock #1", 0 },
+	{ 0x02003004, 0xfb100010, "smbo #1, #2, #3, #4", 0 },
+	{ 0xa0008001, 0xdc2c23c5, "fdual.fssq.mov o0, pa2, pa0, pa1", 0 },
+	{ 0x00000001, 0xff200000, "op0xd6 #1", 0 },
+	{ 0x00000000, 0xff200000, "op0xd6 #0", 1 },
+	{ 0x08a04103, 0x00080001, "fmad g5, r1, r2, r3 (writes a global)", 0 },
+	{ 0x20600000, 0x28090001, "mov c3, r0 (writes a constant)", 0 },
+	{ 0x60003900, 0x28030000, "mov r0, g50 (undocumented global)", 0 },
+	{ 0x60002a00, 0x28030000, "mov r0, g20", 1 },
+	{ 0xe0000200, 0x28030000, "mov r0, i4", 0 },
+	{ 0x20800000, 0x28090003, "mov i4, r0", 0 },
+	{ 0x20003000, 0x28a33001, "mov with an indexed source", 1 },
 	{ 0x0000001c, 0xfe210008, "ldr r0, #28 with a stray bit (h3): no form", 0 },
 	{ 0xffffffff, 0xffffffff, "all ones: no form", 0 },
 	{ 0xffffffff, 0x00000000, "fmad with every operand bit set", 1 },
@@ -940,6 +957,29 @@ static void t_upload_code_mapped(int fd)
 	assert_eq(upload(fd, bo, 0x300, w, 0x100, NULL), -EBUSY);	/* behind the furthest */
 	assert_eq(vm_unmap(fd, vm, 0x37000000, 2 * PAGE), 0);
 	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);
+}
+
+/*
+ * phas.i's target counts from the USSE heap's base: it must land in the
+ * object where it is mapped, and the object then stays there.
+ */
+static void t_upload_code_phas(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	const uint64_t at = 0x37010000, first = (at - 0x37000000) / 8, insts = 2 * PAGE / 8;
+	uint64_t w = 0xfa440000ull << 32, bad;
+
+	assert_eq(vm_map(fd, vm, bo, at, 0, 2 * PAGE), 0);
+	w = 0xfa440000ull << 32 | (first - 1);
+	assert_eq(upload(fd, bo, 0, &w, 8, &bad), -EINVAL);	/* before the object */
+	w = 0xfa440000ull << 32 | (first + insts);
+	assert_eq(upload(fd, bo, 0, &w, 8, &bad), -EINVAL);	/* past its end */
+	w = 0xfa440000ull << 32 | (first + 4);
+	assert_eq(upload(fd, bo, 0, &w, 8, NULL), 0);
+	assert_eq(vm_unmap(fd, vm, at, 2 * PAGE), 0);
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, 2 * PAGE), -EINVAL);	/* moved */
+	assert_eq(vm_map(fd, vm, bo, at, 0, 2 * PAGE), 0);
+	assert_eq(vm_unmap(fd, vm, at, 2 * PAGE), 0);
 }
 
 /* RT datasets */
@@ -1347,6 +1387,7 @@ static const struct {
 	{ "prime", t_prime },
 	{ "upload-code-corpus", t_upload_code_corpus },
 	{ "upload-code-reject", t_upload_code_reject },
+	{ "upload-code-phas", t_upload_code_phas },
 	{ "upload-code-invalid", t_upload_code_invalid },
 	{ "upload-code-mapped", t_upload_code_mapped },
 	{ "submit-other-vm", t_submit_other_vm },
