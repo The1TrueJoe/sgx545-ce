@@ -191,6 +191,17 @@ struct drm_powervr_sgx_dev_query_quirks {
 };
 
 /**
+ * DRM_POWERVR_SGX_QUIRK_UNISOLATED - The device does not isolate clients
+ *
+ * Not an erratum number. Listed, never as a mandatory quirk, on a core with
+ * one memory context (the SGX530), which the driver runs only with the
+ * allow_unisolated module parameter. The firmware is mapped in every client's
+ * address space there, so a client's shaders can read the firmware's
+ * structures and the other clients' commands, and can corrupt the firmware.
+ */
+#define DRM_POWERVR_SGX_QUIRK_UNISOLATED 1
+
+/**
  * enum drm_powervr_sgx_heap_id - Index into the array returned by
  * %DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET
  *

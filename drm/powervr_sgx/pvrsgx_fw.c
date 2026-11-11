@@ -307,7 +307,17 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 		drm_err(&sdev->base, "%s: %s\n", f->name, why);
 	if (err)
 		return err;
-	if (!(f->features & PVRSGX_UKFW_SECURE)) {
+	/*
+	 * Secure mode keeps the firmware out of every client directory, which a
+	 * single-context core can't do: there the image must not claim it.
+	 */
+	if (pvrsgx_core_single_context(sdev->family)) {
+		if (f->features & PVRSGX_UKFW_SECURE) {
+			drm_err(&sdev->base, "%s: a secure-mode image on a single-context core\n",
+				f->name);
+			return -EINVAL;
+		}
+	} else if (!(f->features & PVRSGX_UKFW_SECURE)) {
 		drm_err(&sdev->base, "%s: not a secure-mode image; clients would reach the firmware\n",
 			f->name);
 		return -EINVAL;
@@ -343,12 +353,13 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 
 	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
-	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
+	err = pvrsgx_kmem_alloc(sdev, &f->data, pvrsgx_heaps(sdev)->kernel_data.base,
+				DATA_ARENA_SIZE,
 				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
 	if (err)
 		return err;
-	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE,
-				SGX_MMU_PTE_READONLY);
+	err = pvrsgx_kmem_alloc(sdev, &f->code, pvrsgx_heaps(sdev)->kernel_code.base,
+				CODE_ARENA_SIZE, SGX_MMU_PTE_READONLY);
 	if (err)
 		return err;
 
@@ -377,10 +388,10 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
 }
 
-/* USE_CODE_BASE: device address >> 7, and the window's mode bits. */
+/* USE_CODE_BASE: device address >> 7, and the window's data master (1 pixel, 3 the EDM). */
 #define USE_CODE_BASE_ADDR_SHIFT	7
-#define USE_CODE_BASE_PIXEL		0x2000000
-#define USE_CODE_BASE_UKERNEL		0x6000000
+#define USE_CODE_BASE_DM_PIXEL		1
+#define USE_CODE_BASE_DM_UKERNEL	3
 
 static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 {
@@ -391,23 +402,26 @@ static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 static void init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
+	u32 dm = cr->use_code_base_dm_shift;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
 	/* Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15 ours. */
 	for (u32 i = 0; i < 10; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
-		       ((PVRSGX_HEAP_USSE_PIXEL + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
+		       ((u32)(h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
+			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_DM_PIXEL << dm);
 	for (u32 i = 0; i < 4; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
-		       (PVRSGX_HEAP_USSE_VERTEX + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
+		       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
 		       USE_CODE_BASE_ADDR_SHIFT);
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
-	       (PVRSGX_HEAP_KERNEL_CODE >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_UKERNEL);
-	sgx_wr(sdev, cr->pds_exec_base, PVRSGX_HEAP_PDS_PIXEL);
+	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) |
+	       USE_CODE_BASE_DM_UKERNEL << dm);
+	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
 	sgx_wr(sdev, 0xb30, 0x100);	/* unnamed, as the vendor script */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
@@ -428,7 +442,29 @@ static void deinit_script(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE2, 0);
 	sgx_wr(sdev, SGX_CR_CLKGATECTL, 0);
-	sgx_wr(sdev, cr->clkgatectl2, 0);
+	sgx_wr_opt(sdev, cr->clkgatectl2, 0);
+}
+
+/* Every unit's clock gated automatically, but the DPM's: it stays on. */
+static void clocks_on(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	sgx_wr(sdev, SGX_CR_CLKGATECTL,
+	       (SGX_CLKG_ALL(cr->clkgatectl_units, SGX_CLKG_AUTO) & ~cr->clkgatectl_dpm) |
+	       field_prep(cr->clkgatectl_dpm, SGX_CLKG_ON));
+	sgx_wr_opt(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
+}
+
+/* The init kick; a core with one kick register (BRN_22934) starts on EVENT_KICK. */
+static void init_kick(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	if (cr->event_kick2)
+		sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
+	else
+		sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
 }
 
 /*
@@ -486,11 +522,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	/* The first command invalidates the directory cache. */
 	sdev->fw.cache_control = PVRSGX_CC_INVAL_BIF_PD;
 
-	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
-	sgx_wr(sdev, SGX_CR_CLKGATECTL,
-	       (SGX_CLKG_ALL(cr->clkgatectl_units, SGX_CLKG_AUTO) & ~cr->clkgatectl_dpm) |
-	       field_prep(cr->clkgatectl_dpm, SGX_CLKG_ON));
-	sgx_wr(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
+	clocks_on(sdev);
 	sgx_wr(sdev, cr->event_pds_enable, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
 
@@ -502,7 +534,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
-	sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
+	init_kick(sdev);
 
 	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
 			  HOSTCTL_INIT_COMPLETE, 500000);
@@ -558,4 +590,5 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
 #include "tests/pvrsgx_fw_test.c"
+#include "tests/pvrsgx_regs_test.c"
 #endif

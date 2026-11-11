@@ -16,25 +16,50 @@
 /* EUR_CR_EVENT_KICK1..3 next to EUR_CR_EVENT_KICK. */
 #define PVRSGX_FEATURE_MULTI_EVENT_KICK		BIT(1)
 
+/* Errata the kernel works around (the GPL DDK's FIX_HW_BRN_*). */
+/* A BIF directory or table invalidate and a data invalidate never in one command. */
+#define PVRSGX_QUIRK_BRN_28889			BIT(0)
+
 /* The USSE instruction set, for the shader validator's tables. */
 enum pvrsgx_isa {
 	PVRSGX_ISA_SGX545,
 };
 
-/* What this driver needs: a directory per VM, and the second kick for the microkernel's start. */
-#define PVRSGX_FEATURES_REQUIRED \
-	(PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS | PVRSGX_FEATURE_MULTI_EVENT_KICK)
+/* A device-virtual range, [base, end). */
+struct pvrsgx_va_range {
+	u64 base;
+	u64 end;
+};
 
-/* The device-virtual layout (pvrsgx_fw.h) needs a 32-bit address space. */
-#define PVRSGX_VA_BITS_REQUIRED	32
+/*
+ * struct pvrsgx_heap_layout - Where every heap sits (docs/UAPI.md section 5)
+ *
+ * Device-wide, the same in every VM. The kernel heaps (kernel code, kernel
+ * data, sync) are whole 4 MiB directory entries.
+ */
+struct pvrsgx_heap_layout {
+	struct pvrsgx_va_range params_3d;
+	struct pvrsgx_va_range ta_data;
+	struct pvrsgx_va_range sync;
+	struct pvrsgx_va_range pds_pixel;
+	struct pvrsgx_va_range kernel_code;
+	struct pvrsgx_va_range pds_vertex;
+	struct pvrsgx_va_range kernel_data;
+	struct pvrsgx_va_range usse_pixel;
+	struct pvrsgx_va_range usse_vertex;
+	struct pvrsgx_va_range general;
+	struct pvrsgx_va_range texture;
+	/* The largest PB, in pages, the 3D parameters heap holds. */
+	u32 pb_max_pages;
+};
 
 /*
  * struct pvrsgx_core_regs - Registers that move or change between SGX5xx cores
  *
  * The other registers in pvrsgx_regs.h sit at the same offsets with the same
- * fields on SGX535, 540, 544 and 545 (the GPL DDK's sgx5xxdefs.h). A register
- * a core lacks is 0. A core the driver can only identify has just @core_id
- * and @core_revision.
+ * fields on SGX530, 535, 540, 544 and 545 (the GPL DDK's sgx5xxdefs.h). A
+ * register a core lacks is 0, and the driver never writes or reads it. A core
+ * the driver can only identify has just @core_id and @core_revision.
  */
 struct pvrsgx_core_regs {
 	u32 core_id;
@@ -53,6 +78,10 @@ struct pvrsgx_core_regs {
 	u32 pds_exec_base;
 	u32 bif_int_stat_fault_req;
 	u32 bif_int_stat_fault_type;
+	u32 bif_fault_addr;		/* BIF_FAULT's address field */
+	u32 bif_bank_set;
+	u32 bif_bank0;
+	u32 use_code_base_dm_shift;	/* USE_CODE_BASE's data-master field */
 	/* Not in the GPL header (pvrsgx_hw.h). */
 	u32 event_pds_enable;
 	u32 event_pds_enable_all;
@@ -92,6 +121,10 @@ struct pvrsgx_core_family {
 	u32 num_dir_lists;
 	/** @va_bits: Device-virtual address bits (SGX_FEATURE_ADDRESS_SPACE_SIZE). */
 	u32 va_bits;
+	/** @heaps: The device-virtual layout, within @va_bits. */
+	const struct pvrsgx_heap_layout *heaps;
+	/** @quirks: PVRSGX_QUIRK_*. */
+	u32 quirks;
 	/** @init_regs: Init script part 2's register writes, in order. */
 	const struct pvrsgx_core_init_reg *init_regs;
 	/** @num_init_regs: Entries in @init_regs. */
@@ -120,6 +153,19 @@ struct pvrsgx_core_info {
 
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
 bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f);
+
+/*
+ * One memory context: the microkernel, TA, 3D and 2D all translate through
+ * directory list 0, so the firmware heaps are in every VM (docs/porting/
+ * single-context.md). Clients aren't isolated from the firmware or from
+ * each other's commands.
+ */
+static inline bool pvrsgx_core_single_context(const struct pvrsgx_core_family *f)
+{
+	return !(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS);
+}
+
+extern bool pvrsgx_allow_unisolated;
 const struct pvrsgx_core_info *pvrsgx_core_lookup(const struct pvrsgx_core_family *family,
 						  u32 core_id, u32 core_rev);
 
