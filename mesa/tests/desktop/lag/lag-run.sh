@@ -62,7 +62,7 @@ for v in "$@"; do
 	sshpass -p "$BOX_PASS" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
 		-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 \
 		-o ServerAliveInterval=15 -o ServerAliveCountMax=40 root@$BOX \
-		"rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} NOPERF=${NOPERF:-} \
+		"rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} NOPERF=${NOPERF:-} CORES=${CORES:-} \
 		sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" || echo "$v failed"
 	mkdir -p "$OUT/$v"
 	E "cd /tmp/lagout/$v && tar cf - ." | tar xf - -C "$OUT/$v"

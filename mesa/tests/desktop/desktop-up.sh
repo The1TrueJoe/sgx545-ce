@@ -25,6 +25,12 @@ LIBGL_DRIVERS_PATH=/opt/sgx/lib/dri"
 XENV=${XENV:-}
 # XARGS: more Xorg arguments (-dumbSched, ...)
 XARGS=${XARGS:-}
+# CORES=1: Xorg dumps core on a fatal error (into the box's /tmp)
+if [ -n "${CORES:-}" ]; then
+	ulimit -c unlimited
+	echo /tmp/core.%e.%p > /proc/sys/kernel/core_pattern
+	XARGS="$XARGS -core"
+fi
 binds="dev proc sys tmp run"
 mounts() {
 	for d in $binds; do

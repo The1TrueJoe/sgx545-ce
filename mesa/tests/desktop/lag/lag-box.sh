@@ -99,7 +99,7 @@ cp "$RIG/desktop-up.sh" "$RIG/xorg.conf" "$OUT/rig/"
 cp "$RIG/lag-wl.sh" /tmp/lag-wl.sh
 chmod 755 /tmp/lag-wl.sh
 
-XENV="$xenv" XARGS="$xargs" sh "$OUT/rig/desktop-up.sh" "$R" start > "$OUT/up.txt" 2>&1 || { cat "$OUT/up.txt"; exit 1; }
+XENV="$xenv" XARGS="$xargs" CORES="${CORES:-}" sh "$OUT/rig/desktop-up.sh" "$R" start > "$OUT/up.txt" 2>&1 || { cat "$OUT/up.txt"; exit 1; }
 # whatever happens next, the box is left without X, perf or the sampler
 perfpid= sampler=
 cleanup() {   # (busybox sh exits with the trap's status: keep the script's)
