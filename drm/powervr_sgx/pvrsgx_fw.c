@@ -40,7 +40,7 @@
 #define UKFW_MAGIC1		0x4e524b55	/* "UKRN" */
 #define UKFW_HEADER_MIN		0x60
 #define UKFW_IF_MAJOR		1
-#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE)
+#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE | PVRSGX_UKFW_DONE_SEQ)
 /* Bits 16-31: the microkernel's own build variants, nothing the host must know. */
 #define UKFW_FEATURES_PRIVATE	GENMASK(31, 16)
 #define UKFW_MAX_IMAGE		(CODE_ARENA_SIZE - PDS_BYTES - 0x10)
@@ -171,6 +171,8 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 	t->ccb_ctl = f->addr[PVRSGX_FW_CCBCTL];
 	t->ccb = f->addr[PVRSGX_FW_CCB];
 	t->kernel_pd = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
+	/* A fresh microkernel counts finished jobs from 0. */
+	WRITE_ONCE(sdev->done_seq, 0);
 }
 
 /*

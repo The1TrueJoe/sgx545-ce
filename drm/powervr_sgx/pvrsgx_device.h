@@ -212,6 +212,11 @@ struct pvrsgx_device {
 	struct list_head graveyard;
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
+	/**
+	 * @done_seq: Jobs signalled since the microkernel started, against its
+	 * count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
+	 */
+	u32 done_seq;
 	/** @renders_done: Render jobs the firmware has finished. */
 	u64 renders_done;
 	/** @reap_work: Frees @graveyard entries a later render made safe. */

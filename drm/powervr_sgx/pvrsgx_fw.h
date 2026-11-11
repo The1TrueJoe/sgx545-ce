@@ -49,6 +49,8 @@ struct seq_buf;
 /* Feature bits of the microkernel file's header. */
 #define PVRSGX_UKFW_CLEANUP_V2		BIT(0)	/* accepted, unused */
 #define PVRSGX_UKFW_SECURE		BIT(1)
+/* It counts finished jobs in pvrsgx_fw_ta3d_ctl.done_seq, then interrupts. */
+#define PVRSGX_UKFW_DONE_SEQ		BIT(2)
 
 #define HOSTCTL_INIT_COMPLETE		BIT(0)
 #define HOSTCTL_POWMAN_POWEROFF_COMPLETE BIT(3)

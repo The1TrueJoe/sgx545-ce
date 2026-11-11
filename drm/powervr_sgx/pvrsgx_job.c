@@ -4,10 +4,10 @@
 /*
  * Contexts, jobs and the scheduler. One drm_sched scheduler with a credit limit
  * of one: a single job on the GPU at a time. Each job becomes one kernel CCB
- * command and is complete when the microkernel has
- * finished it; completion is checked from the SW_EVENT interrupt and, since the
- * firmware does not interrupt for every command, from a short poll while jobs
- * are out.
+ * command and is complete when the microkernel has finished it. A microkernel
+ * that counts finished jobs (PVRSGX_UKFW_DONE_SEQ) interrupts for each one, and
+ * a slow poll is only a backstop; with an older one, completion is also polled
+ * every jiffy while jobs are out.
  */
 
 #include <drm/drm_auth.h>
@@ -102,6 +102,20 @@ static void context_put(struct pvrsgx_context *ctx)
 	pvrsgx_context_put(ctx);
 }
 
+/*
+ * How many of the oldest jobs on the GPU the microkernel says it has finished,
+ * when it counts them (PVRSGX_UKFW_DONE_SEQ); otherwise -1. Jobs finish in
+ * order, and POWER and cleanup commands are never on the active list.
+ */
+static s64 jobs_finished(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_fw_ta3d_ctl *t = sdev->fw.cpu[PVRSGX_FW_TA3DCTL];
+
+	if (!(sdev->fw.features & PVRSGX_UKFW_DONE_SEQ))
+		return -1;
+	return (u32)(READ_ONCE(t->done_seq) - sdev->done_seq);
+}
+
 static bool job_done(struct pvrsgx_job *job, u64 consumed)
 {
 	if (job->done_cpu)
@@ -118,7 +132,8 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	job = list_first_entry_or_null(&sdev->active, struct pvrsgx_job, node);
-	done = job && job_done(job, pvrsgx_ccb_consumed(sdev));
+	done = job && (sdev->fw.features & PVRSGX_UKFW_DONE_SEQ ? jobs_finished(sdev) > 0 :
+		       job_done(job, pvrsgx_ccb_consumed(sdev)));
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	return done;
 }
@@ -154,15 +169,21 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	LIST_HEAD(finished);
 	bool cookie;
 	u64 consumed;
+	s64 n;
 
 	mutex_lock(&sdev->done_lock);
 	/* Under the lock a reset fails the old jobs under: no count from before it. */
 	consumed = pvrsgx_ccb_consumed(sdev);
 	cookie = dma_fence_begin_signalling();
 	spin_lock_irqsave(&sdev->fence_lock, flags);
+	n = jobs_finished(sdev);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
-		if (!job_done(job, consumed))
+		if (n >= 0 ? !n : !job_done(job, consumed))
 			break;
+		if (n > 0) {
+			n--;
+			sdev->done_seq++;
+		}
 		list_move_tail(&job->node, &finished);
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 			sdev->renders_done++;
@@ -188,8 +209,10 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 		queue_work(system_dfl_wq, &sdev->reap_work);
 	if (more && pvrsgx_job_fault_check(sdev))
 		return;
+	/* With a count the interrupt does it, and the poll is only a backstop. */
 	if (more)
-		mod_delayed_work(system_dfl_wq, &sdev->poll_work, 1);
+		mod_delayed_work(system_dfl_wq, &sdev->poll_work,
+				 sdev->fw.features & PVRSGX_UKFW_DONE_SEQ ? HZ / 10 : 1);
 }
 
 static void reap_work_fn(struct work_struct *work)
