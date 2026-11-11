@@ -155,7 +155,7 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 		err = -EFAULT;
 		goto out_buf;
 	}
-	bad = usse_scan(sdev->core->isa, buf, args->size / 8, args->offset / 8, obj->size / 8);
+	bad = usse_scan(sdev->family->isa, buf, args->size / 8, args->offset / 8, obj->size / 8);
 	if (bad >= 0) {
 		args->bad_offset = args->offset + bad * 8;
 		err = -EINVAL;

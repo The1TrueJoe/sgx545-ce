@@ -18,6 +18,7 @@
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
+#include "pvrsgx_core.h"
 #include "pvrsgx_hw.h"
 
 /* Device-wide ranges for kernel-owned objects (docs/UAPI.md section 5). */
@@ -130,7 +131,11 @@ struct pvrsgx_device {
 	/** @irq: Its interrupt. */
 	int irq;
 
-	/** @core: What the driver knows about this core. */
+	/** @family: The core the bus says is there, set before the probe reads a register. */
+	const struct pvrsgx_core_family *family;
+	/** @cr: Its registers that move between cores (@family's). */
+	const struct pvrsgx_core_regs *cr;
+	/** @core: What the driver knows about this part. */
 	const struct pvrsgx_core_info *core;
 	/** @core_id: SGX_CR_CORE_ID. */
 	u32 core_id;
@@ -247,6 +252,16 @@ static inline u32 sgx_rd(struct pvrsgx_device *sdev, u32 reg)
 static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 {
 	iowrite32(val, sdev->regs + reg);
+}
+
+/*
+ * The microkernel translates through the last directory list; TA, 3D and
+ * host requests through list 0, which the microkernel points at the job's
+ * page directory.
+ */
+static inline u32 pvrsgx_dirlist_edm(const struct pvrsgx_device *sdev)
+{
+	return sdev->family->num_dir_lists - 1;
 }
 
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
