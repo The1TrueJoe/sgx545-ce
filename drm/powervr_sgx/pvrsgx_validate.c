@@ -54,7 +54,8 @@ static_assert(PVRSGX_USSE_WINDOW_INSTS * 8 == 1u << PVRSGX_USSE_WINDOW_LOG2);
 /*
  * Where a mapping at addr of the object from offset puts the object's start,
  * in instructions from the start of its code base window: what phas.i's
- * targets count from, since a task runs from the window its first word is in.
+ * targets count from when the task's PDS program names the window its first
+ * word is in. One window per object makes that base the same for every entry.
  */
 static s64 code_place(u64 addr, u64 offset)
 {

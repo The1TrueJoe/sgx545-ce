@@ -15,7 +15,8 @@
 
 /*
  * One code base's window, in instructions: 512 KiB. A task's absolute targets
- * (phas.i) count from the base it runs from, the window of its first word.
+ * (phas.i) count from the base its PDS program names, which a compiler sets to
+ * the window of the task's first word.
  */
 #define PVRSGX_USSE_WINDOW_INSTS	BIT(16)
 

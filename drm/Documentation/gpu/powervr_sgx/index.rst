@@ -102,11 +102,15 @@ description of the instruction set that Mesa's compiler uses
   (``fdual``), whose second operation's operands aren't checked; and forms
   this core doesn't have or whose meaning is not known.
 - ``br``: the target must be inside the object.
-- ``phas.i``: a target other than 0 counts from the code base the task runs
-  from, the 512 KiB window of the USSE heap its first instruction is in, and
-  must be inside the object where it is mapped. Such an object must lie in one
-  window, be mapped when its code is uploaded, at one place in its window only,
-  and can't be mapped at another place afterwards.
+- ``phas.i``: a target other than 0 counts from the code base the task's PDS
+  program names. Measured: base 0 with offset 0x88380 runs code in window 1,
+  and its targets still count from base 0. The check takes the base a compiler
+  names, the 512 KiB window of the USSE heap the task's first instruction is
+  in, and the target must be inside the object where it is mapped. Such an
+  object must lie in one window, so that base is the same for every entry in
+  it, be mapped when its code is uploaded, at one place in its window only,
+  and can't be mapped at another place afterwards. A PDS program that names
+  another base only moves the target within the reach described above.
 - ``setfc``: only ``setfc #0, #1``, the format control a program starts
   with, so the check knows the format control of every instruction without
   following the program.
