@@ -227,16 +227,17 @@ int pvrsgx_probe_common(struct pvrsgx_device *sdev)
 	err = drm_dev_register(&sdev->base, 0);
 	if (err) {
 		pvrsgx_power_fini(sdev);
-		pvrsgx_device_fini(sdev);
+		pvrsgx_device_unplug(sdev);
 	}
 	return err;
 }
 
 void pvrsgx_remove_common(struct pvrsgx_device *sdev)
 {
-	pvrsgx_power_fini(sdev);
+	/* No new ioctl, and the running ones done, before the hardware goes. */
 	drm_dev_unplug(&sdev->base);
-	pvrsgx_device_fini(sdev);
+	pvrsgx_power_fini(sdev);
+	pvrsgx_device_unplug(sdev);
 }
 
 static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)

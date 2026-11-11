@@ -29,7 +29,7 @@ static struct pvrsgx_device *kobj_test_device(struct kunit *test)
 	return sdev;
 }
 
-/* What pvrsgx_device_fini() does with them; every range must come back empty. */
+/* What the device release does with them; every range must come back empty. */
 static void kobj_test_fini(struct kunit *test, struct pvrsgx_device *sdev)
 {
 	pvrsgx_pb_put(sdev->pb);

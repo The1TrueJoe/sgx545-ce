@@ -70,7 +70,7 @@ static void dump_regs(struct seq_buf *sb, struct pvrsgx_device *sdev)
 	}
 }
 
-void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
+void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool regs)
 {
 	u32 *ctl = sdev->fw.cpu[PVRSGX_FW_CCBCTL];
 
@@ -90,7 +90,7 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_ASSERT_FAIL));
 	seq_buf_printf(sb, "powered: %d\n", READ_ONCE(sdev->powered));
 	/* After a failed start the clocks are still on; after a stop they are not. */
-	if (!READ_ONCE(sdev->powered))
+	if (!regs || !READ_ONCE(sdev->powered))
 		return;
 	dump_regs(sb, sdev);
 }
@@ -163,7 +163,7 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	seq_buf_printf(&sb, "powervr_sgx hang: %s job, ccb %llu, reset %u\n",
 		       bad->type < ARRAY_SIZE(types) ? types[bad->type] : "?", bad->ccb_seq,
 		       sdev->reset_count + 1);
-	pvrsgx_dump_status(&sb, sdev);
+	pvrsgx_dump_status(&sb, sdev, true);
 	if (sdev->fw_running)
 		dump_bif(&sb, sdev, bad);
 	pvrsgx_fw_dump(&sb, sdev, PVRSGX_FW_HOSTCTL, "hostctl");

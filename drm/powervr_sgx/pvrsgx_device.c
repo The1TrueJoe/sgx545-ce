@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright © 2026 Joseph Telaak */
 
+#include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
 #include <drm/gma500_sgx.h>
@@ -305,6 +306,26 @@ static void irq_teardown(struct pvrsgx_device *sdev)
 	free_irq(sdev->irq, sdev);
 }
 
+/*
+ * The software state, at the DRM device's release: after unbind, and after the
+ * last file is closed, so nothing a file can reach goes before the file does.
+ */
+static void pvrsgx_device_release(struct drm_device *drm, void *arg)
+{
+	struct pvrsgx_device *sdev = arg;
+
+	pvrsgx_job_fini(sdev);
+	pvrsgx_pb_put(sdev->pb);
+	mutex_destroy(&sdev->pb_lock);
+	pvrsgx_kobj_fini(sdev);
+	pvrsgx_fw_fini(sdev);
+	__free_page(sdev->reset_page);
+	/* The reset directory still names the scratch page's tables, never the page. */
+	pvrsgx_mmu_destroy(sdev->reset_mmu);
+	pvrsgx_mmu_destroy(sdev->idle_mmu);
+	pvrsgx_mmu_destroy(sdev->kernel_mmu);
+}
+
 int pvrsgx_device_init(struct pvrsgx_device *sdev)
 {
 	int err;
@@ -337,20 +358,22 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	if (err)
 		goto err_fw;
 
+	/* From here the release frees the software state, on success or failure. */
+	err = drmm_add_action_or_reset(&sdev->base, pvrsgx_device_release, sdev);
+	if (err)
+		return err;
+
 	err = irq_setup(sdev);
 	if (err)
-		goto err_job;
+		return err;
 
 	err = pvrsgx_fw_start(sdev);
-	if (err)
-		goto err_irq;
-	return 0;
+	if (err) {
+		pvrsgx_fw_stop(sdev);
+		irq_teardown(sdev);
+	}
+	return err;
 
-err_irq:
-	pvrsgx_fw_stop(sdev);
-	irq_teardown(sdev);
-err_job:
-	pvrsgx_job_fini(sdev);
 err_fw:
 	pvrsgx_fw_fini(sdev);
 	pvrsgx_kobj_fini(sdev);
@@ -363,18 +386,13 @@ err_mmu:
 	return err;
 }
 
-void pvrsgx_device_fini(struct pvrsgx_device *sdev)
+/*
+ * The hardware, at unbind or when registration fails: no job reaches the GPU
+ * again, the firmware stops, the interrupt goes. Open files keep working
+ * against the software state until they close.
+ */
+void pvrsgx_device_unplug(struct pvrsgx_device *sdev)
 {
-	pvrsgx_job_fini(sdev);
-	pvrsgx_fw_stop(sdev);
+	pvrsgx_job_unplug(sdev);
 	irq_teardown(sdev);
-	pvrsgx_pb_put(sdev->pb);
-	mutex_destroy(&sdev->pb_lock);
-	pvrsgx_kobj_fini(sdev);
-	pvrsgx_fw_fini(sdev);
-	__free_page(sdev->reset_page);
-	/* The reset directory still names the scratch page's tables, never the page. */
-	pvrsgx_mmu_destroy(sdev->reset_mmu);
-	pvrsgx_mmu_destroy(sdev->idle_mmu);
-	pvrsgx_mmu_destroy(sdev->kernel_mmu);
 }

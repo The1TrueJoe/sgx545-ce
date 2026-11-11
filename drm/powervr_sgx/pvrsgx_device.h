@@ -165,6 +165,8 @@ struct pvrsgx_device {
 	u32 fw_gen;
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
+	/** @reset_lock: Serializes a GPU reset with unbind. */
+	struct mutex reset_lock;
 	/** @faulted: The BIF reported a page fault; the running job ends with -EFAULT. */
 	bool faulted;
 
@@ -265,7 +267,7 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
-void pvrsgx_device_fini(struct pvrsgx_device *sdev);
+void pvrsgx_device_unplug(struct pvrsgx_device *sdev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);

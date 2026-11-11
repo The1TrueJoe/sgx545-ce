@@ -11,6 +11,7 @@
  */
 
 #include <drm/drm_auth.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_exec.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
@@ -129,8 +130,15 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
  */
 static bool pvrsgx_job_fault_check(struct pvrsgx_device *sdev)
 {
-	if (READ_ONCE(sdev->faulted) || !READ_ONCE(sdev->powered) ||
-	    !(sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & sdev->cr->bif_int_stat_fault_req))
+	bool fault;
+	int idx;
+
+	if (READ_ONCE(sdev->faulted) || READ_ONCE(sdev->lost) || !READ_ONCE(sdev->powered) ||
+	    !drm_dev_enter(&sdev->base, &idx))
+		return false;
+	fault = sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & sdev->cr->bif_int_stat_fault_req;
+	drm_dev_exit(idx);
+	if (!fault)
 		return false;
 	WRITE_ONCE(sdev->faulted, true);
 	drm_sched_fault(&sdev->sched);
@@ -214,7 +222,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	u32 data[6] = {};
 	struct dma_fence *fence;
 	unsigned long flags;
-	int err;
+	int err, idx;
 
 	if (sched_job->s_fence->finished.error)
 		return NULL;
@@ -231,16 +239,18 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	job->hw_fence = dma_fence_get(fence);
 
+	/* After unbind the doorbell is gone (pvrsgx_job_unplug). */
+	if (!drm_dev_enter(&sdev->base, &idx)) {
+		err = -ENODEV;
+		goto fail;
+	}
 	err = sdev->lost ? -EIO : pvrsgx_power_get(sdev);
 	if (!err && sdev->lost) {
 		pvrsgx_power_put(sdev, 1);
 		err = -EIO;
 	}
-	if (err) {
-		dma_fence_set_error(fence, err);
-		dma_fence_signal(fence);
-		return fence;
-	}
+	if (err)
+		goto fail_exit;
 
 	pvrsgx_prime_flush(job, false);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
@@ -262,9 +272,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	if (err) {
 		drm_err_ratelimited(&sdev->base, "job not sent to the microkernel (%d)\n", err);
 		pvrsgx_power_put(sdev, 1);
-		dma_fence_set_error(fence, err);
-		dma_fence_signal(fence);
-		return fence;
+		goto fail_exit;
 	}
 
 	trace_pvrsgx_kick(job->type, job->ccb_seq, fence->seqno);
@@ -274,6 +282,14 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	list_add_tail(&job->node, &sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	mod_delayed_work(system_dfl_wq, &sdev->poll_work, 0);
+	drm_dev_exit(idx);
+	return fence;
+
+fail_exit:
+	drm_dev_exit(idx);
+fail:
+	dma_fence_set_error(fence, err);
+	dma_fence_signal(fence);
 	return fence;
 }
 
@@ -286,11 +302,17 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 {
 	struct pvrsgx_job *bad = to_pvrsgx_job(sched_job), *job, *tmp;
 	struct pvrsgx_device *sdev = bad->ctx->sdev;
-	bool fault = READ_ONCE(sdev->faulted);
+	bool fault = READ_ONCE(sdev->faulted), lost;
 	unsigned long flags;
 	u32 failed = 0;
+	int idx;
 
 	drm_sched_stop(&sdev->sched, sched_job);
+	/* After unbind (pvrsgx_job_unplug) the hardware is gone: fail, touch nothing. */
+	mutex_lock(&sdev->reset_lock);
+	lost = READ_ONCE(sdev->lost) || !drm_dev_enter(&sdev->base, &idx);
+	if (lost)
+		goto fail;
 	if (fault)
 		drm_err(&sdev->base, "job page fault at 0x%08x (BIF status 0x%08x); resetting\n",
 			sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK,
@@ -303,6 +325,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	/* Stopped before any fence signals: userspace may free the jobs' memory then. */
 	pvrsgx_fw_halt(sdev);
 
+fail:
 	mutex_lock(&sdev->done_lock);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
@@ -310,14 +333,17 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		failed++;
 		if (job->ctx != bad->ctx)
 			WRITE_ONCE(job->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_INNOCENT);
-		dma_fence_set_error(job->hw_fence, job != bad ? -ECANCELED : fault ? -EFAULT : -ETIME);
+		dma_fence_set_error(job->hw_fence, lost ? -ENODEV : job != bad ? -ECANCELED :
+				    fault ? -EFAULT : -ETIME);
 		dma_fence_signal_locked(job->hw_fence);
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	mutex_unlock(&sdev->done_lock);
+	if (lost)
+		goto out;
 
 	/*
-	 * As the DDK's hardware recovery: no power-off handshake with a hung
+	 * As the hardware recovery of the GPL kernel services: no power-off handshake with a hung
 	 * microkernel, straight into the full start (clocks, scripts, a reset
 	 * that drains pending faults, the first kick).
 	 */
@@ -329,8 +355,11 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		drm_err(&sdev->base, "microkernel did not restart: device lost\n");
 		/* Lost: the cores stay in reset, and run_job fails every job. */
 		pvrsgx_fw_halt(sdev);
-		sdev->lost = true;
+		WRITE_ONCE(sdev->lost, true);
 	}
+	drm_dev_exit(idx);
+out:
+	mutex_unlock(&sdev->reset_lock);
 	drm_sched_start(&sdev->sched, 0);
 	pvrsgx_power_put(sdev, failed);
 	return DRM_GPU_SCHED_STAT_RESET;
@@ -371,11 +400,45 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	};
 
 	spin_lock_init(&sdev->fence_lock);
+	mutex_init(&sdev->reset_lock);
 	INIT_LIST_HEAD(&sdev->active);
 	INIT_DELAYED_WORK(&sdev->poll_work, poll_work_fn);
 	INIT_WORK(&sdev->reap_work, reap_work_fn);
 	sdev->fence_context = dma_fence_context_alloc(1);
 	return drm_sched_init(&sdev->sched, &args);
+}
+
+/*
+ * Unbind. Nothing reaches the GPU again: the firmware stops, the jobs on it
+ * fail with -ENODEV, and run_job fails the queued ones (-EIO, @lost) without
+ * touching the hardware.
+ */
+void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_job *job, *tmp;
+	unsigned long flags;
+	u32 failed = 0;
+
+	drm_sched_wqueue_stop(&sdev->sched);
+	/* A reset under way finishes first; one after this sees @lost. */
+	mutex_lock(&sdev->reset_lock);
+	WRITE_ONCE(sdev->lost, true);
+	pvrsgx_fw_stop(sdev);
+	mutex_unlock(&sdev->reset_lock);
+	cancel_delayed_work_sync(&sdev->poll_work);
+
+	mutex_lock(&sdev->done_lock);
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
+		list_del_init(&job->node);
+		failed++;
+		dma_fence_set_error(job->hw_fence, -ENODEV);
+		dma_fence_signal_locked(job->hw_fence);
+	}
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	mutex_unlock(&sdev->done_lock);
+	pvrsgx_power_put(sdev, failed);
+	drm_sched_wqueue_start(&sdev->sched);
 }
 
 /*
@@ -793,6 +856,8 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	args->failed_index = ~0u;
 	if (args->_padding_14 || !n)
 		return -EINVAL;
+	if (drm_dev_is_unplugged(drm))
+		return -ENODEV;
 
 	in = pvrsgx_obj_array_get(&args->jobs, sizeof(*in), PVRSGX_MAX_JOBS);
 	if (IS_ERR(in))

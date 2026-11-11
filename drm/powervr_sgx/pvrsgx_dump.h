@@ -8,7 +8,7 @@ struct pvrsgx_device;
 struct pvrsgx_job;
 struct seq_buf;
 
-void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev);
+void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool regs);
 void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad);
 
 #endif /* PVRSGX_DUMP_H */

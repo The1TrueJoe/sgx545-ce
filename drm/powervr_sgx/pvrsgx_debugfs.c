@@ -2,11 +2,13 @@
 /* Copyright © 2026 Joseph Telaak */
 
 #include <drm/drm_debugfs.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_file.h>
 #include <drm/drm_print.h>
 
 #include <linux/debugfs.h>
 #include <linux/ktime.h>
+#include <linux/pm_runtime.h>
 #include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
@@ -16,16 +18,31 @@
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
 
+/*
+ * The registers only while the device is still bound and already awake:
+ * reading never resumes the GPU, and a suspend can't start under the read.
+ */
 static int status_show(struct seq_file *m, void *unused)
 {
 	struct drm_debugfs_entry *entry = m->private;
+	struct pvrsgx_device *sdev = to_pvrsgx_device(entry->dev);
 	struct seq_buf sb;
 	char *buf = kmalloc(SZ_4K, GFP_KERNEL);
+	int idx, awake;
 
 	if (!buf)
 		return -ENOMEM;
+	if (!drm_dev_enter(entry->dev, &idx)) {
+		kfree(buf);
+		return -ENODEV;
+	}
+	/* -EINVAL: runtime PM is off and the device always on. */
+	awake = pm_runtime_get_if_active(sdev->base.dev);
 	seq_buf_init(&sb, buf, SZ_4K);
-	pvrsgx_dump_status(&sb, to_pvrsgx_device(entry->dev));
+	pvrsgx_dump_status(&sb, sdev, awake > 0 || awake == -EINVAL);
+	if (awake > 0)
+		pm_runtime_put(sdev->base.dev);
+	drm_dev_exit(idx);
 	seq_puts(m, seq_buf_str(&sb));
 	kfree(buf);
 	return 0;
