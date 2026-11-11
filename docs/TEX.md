@@ -32,7 +32,7 @@ own. Where a captured fact was later run on the board, both are given.
 | `tex.py` | the encoder: linear texels → GPU memory (twiddle, NPOT pitch, mip chain) |
 | `rawmap.py` | reads a `PROBE_TEXPAT` texture back out of a capture: which texel sits at each offset |
 | `check.py` | compares every texel of a capture with `tex.py`'s prediction |
-| `tools/probe/probe.c` | new knobs: `PROBE_TEXPAT`, `PROBE_TEXFILE`, `PROBE_TEXLEVELS`, `PROBE_TEXCUBE`, `PROBE_FBO`, `PROBE_FBODS`, `PROBE_FBOREENTER`, `PROBE_QUAD`, `PROBE_FBOCLEAR` |
+| `tools/probe/probe.c` | new knobs: `PROBE_TEXPAT`, `PROBE_TEXFILE`, `PROBE_TEXLEVELS`, `PROBE_TEXCUBE`, `PROBE_FBO`, `PROBE_FBODS`, `PROBE_FBOREENTER`, `PROBE_QUAD`, `PROBE_FBOCLEAR`; for §13-15 `PROBE_TEX3D`, `PROBE_TEXBORDER`, `PROBE_TEXCOMPARE`, `PROBE_EXTS` |
 | `tools/trace/pvrtrace.c` | now also snapshots all mapped memory before every `SGX_SUBMITTRANSFER` (reason `xfer`) |
 | `tools/decode/mkreplay.py` | `--xfers` replays transfers and registers transfer contexts; `--write VA:file`; `--no-delta VA:size` |
 | `tools/replay/replay.c` | `regxfer` and `xfer` ops; `-F` wraps the real `/dev/fb0` instead of private memory |
@@ -689,6 +689,165 @@ Until a vblank source is proven, swapping with the 1.3 ms blit is the
 tear-light path, and rendering straight into the fb0 wrap (section 6) is the
 zero-copy one.
 
+## 13. Border color (CLAMP_TO_BORDER, GL_CLAMP)
+
+**Why ours fails for every format** (**hardware, open driver**: piglit
+`texwrap formats bordercolor`). `wrap()` in `sgx_texture.c` gives CLAMP,
+CLAMP_TO_EDGE and CLAMP_TO_BORDER the same T0 code, 2, and no texture word
+carries a color. Every read past the edge returns the edge texel, so the
+result doesn't depend on the format. GL_CLAMP adds nothing of its own:
+st/mesa rewrites it when the screen's `caps.gl_clamp` is false, as it is
+here. It saturates the coordinate and samples with CLAMP_TO_BORDER under
+LINEAR filtering, or CLAMP_TO_EDGE under NEAREST (`_mesa_lower_gl_clamp`).
+The driver only has to do CLAMP_TO_BORDER.
+
+**What the hardware offers isn't known yet.**
+
+- T0's wrap fields are 3 bits each: S in b6-8, T in b3-5 (§5 of STATE.md).
+  The DDK's ES2 uses codes 0, 1 and 2 only (**capture**). Codes 3-7 have
+  never been seen or tried.
+- Mesa's driver for the next PowerVR generation
+  (`src/imagination/csbgen/rogue/texstate.xml`) numbers its address modes
+  the same way: 0 repeat, 1 mirror, 2 clamp to edge. It adds 3 mirror once
+  then clamp, 4 clamp to border and 5 GL_CLAMP. Its border color comes from
+  a table in memory, indexed by a sampler-word field, with the table's base
+  in a register. That the SGX545 numbers codes 3-5 the same way is a
+  **guess** from the three that match. The GPL kernel's `sgx545defs.h` names
+  no texture-unit register at all, so it can't show a table base either way.
+- The DDK's desktop GL lists `ARB_texture_border_clamp` (PIGLIT.md, "The
+  DDK's desktop GL"), so that driver does border clamp, in the texture unit
+  or in the shader. It needs X, so it gives no captures.
+
+**Tests, in order** (Gaps, §13):
+
+1. `PROBE_EXTS=1` on the DDK's ES2 and ES1. If the ES2 lists
+   `EXT_texture_border_clamp` or `OES_texture_border_clamp`, a capture with
+   `PROBE_TEXWRAP="0x812D 0x812D" PROBE_TEXBORDER="1 0 1 0.5"` gives the
+   words, and the steps below shrink to reading them.
+2. A DDK capture of the 8×8 checker sampled over [-1, 2] (`PROBE_VS` with
+   `v = a1 * 4.0 - 2.0`, CLAMP_TO_EDGE), as the base for replays.
+3. Replays of it with both wrap fields set to 3, 4, 5, 6 and 7, then S
+   alone, each read back. A border mode shows a constant outside [0, 1]. A
+   mirror-once mode shows the texture mirrored once, then clamped.
+4. If one code shows a constant: which constant, and whether it follows the
+   format. Then replays that change T0's unused bits (b0-2, b11, b13-16,
+   b27-29, b31) and T3's bits one at a time, looking for a field that moves
+   the color.
+5. If no code gives a border, the border is shader work (below).
+
+**Lowering, if the texture unit has no border color.** Per sample, in the
+fragment shader, choose the border color (a uniform per sampler) for any
+coordinate outside [0, 1] on a CLAMP_TO_BORDER axis. With LINEAR filtering
+the choice is per tap: the four-tap path the sRGB filter already uses
+(`lower_srgb_filter`, UPSTREAM-READINESS M10) samples the 2×2 taps with
+NEAREST, so each tap that falls outside takes the border before the weights
+mix. The border color is a GL float color. For integer, sRGB and luminance
+formats it goes through the same conversion and swizzle as the texel.
+
+## 14. Volume (3D) textures
+
+- **The SGX545 has them.** The GPL kernel's `sgxfeaturedefs.h` gives the 545
+  `SGX_FEATURE_VOLUME_TEXTURES`, and it is the only core in that header that
+  has it (docs/porting/cores/sgx530.md lists the 530's features against
+  it). The DDK's desktop GL lists `EXT_texture3D`.
+- **The open driver has none:** `caps->max_texture_3d_levels = 0`, and
+  `sgx_resource.c` gives a PIPE_TEXTURE_3D no device copy. Mesa still
+  advertises GL 2.1, since its version check doesn't look at 3D levels below
+  4.1. GL 1.2 makes them core, and 35 piglit tests fail.
+- **The sample instruction.** `smp` dimension 2 is "3D". The vendor
+  assembler accepts it, and the DDK's compiler uses it for samplerCube (ISA.md,
+  hw 1c: **oracle**, corpus). A volume sample is likely dim 2 as well, with
+  the texture words telling volume from cube (**guess**). A plain
+  `textureCube(s, v)` is a non-dependent sample: the USP sample block gives
+  it coordinate dimension 3 (ISA.md, "USP texture-sample blocks": capture,
+  corpus). A plain `texture3D` is likely the same form (**guess**). Which
+  DOUTI bits carry the dimension isn't known: PDS.md lists only the 2-D
+  (0x200) and projected (0x400) bits.
+- **What the texture words have room for** (**guess**, from STATE.md §5):
+  - T1 has no spare bits: 12 + 12 bits of size, 5 of format, 3 of layout.
+    The layouts seen are 0 (twiddled), 2 (cube), 3 (linear) and 6 (strided);
+    a volume layout would be one of 1, 4, 5 and 7.
+  - The depth then lives in T0 or T3.
+  - T0 b0-2 is a 3-bit field just below the wrap T (b3-5) and wrap S (b6-8)
+    fields and is 0 in every 2D capture. It's the natural place for wrap R.
+- **Memory layout: not known.** A twiddled volume might interleave all three
+  axes. A capture with `PROBE_TEXPAT=1` settles it: layer z's texels carry
+  `z<<4` in blue, and `rawmap.py` reads where each texel went.
+
+**Tests** (Gaps, §14):
+
+1. `PROBE_EXTS=1`: whether the DDK's ES2 lists `OES_texture_3D`.
+2. If it does, DDK captures sampling with `texture3D`:
+   - `PROBE_TEX3D=4 PROBE_TEXSIZE="4 4"`, RGBA8888, `PROBE_TEXPAT=1`;
+   - 8×8×8 with `PROBE_TEXLEVELS=4`;
+   - 8×8×2 and 2×2×8 (which axis the layout favors);
+   - an NPOT one, 6×5×3;
+   - wrap R repeat against clamp (`PROBE_TEXWRAP="0x2901 0x2901 0x812F"`).
+
+   Each gives the T words, the sample form and the texel layout.
+3. If it doesn't, black-box tests with the open stack: a dim-2 `smp` on a
+   texture whose T1 layout is 1, 4, 5 or 7, over a `PROBE_TEXPAT`-style
+   volume written to memory by hand. Read back which texel each (s, t, r)
+   returns, with T0 b0-2 and T3 varied one field at a time.
+
+**Lowering, if no volume form is found:** a 2D texture holding the slices
+side by side, with two samples a fragment and a mix across r for LINEAR. It
+costs a second sample and has no mipmaps across r, so it is a last resort,
+and GL 1.2 conformance would still need the real layout.
+
+## 15. Depth textures and shadow compare
+
+- **Why 96 piglit tests crash** (**hardware, open driver**, PIGLIT.md):
+  - Mesa always exposes `ARB_depth_texture` (GL 1.4 core).
+  - `sgx_tex_format` has no depth code, so `is_format_supported` refuses
+    every depth format for sampling.
+  - A `GL_DEPTH_COMPONENT` texture gets no format, and the test crashes
+    later on.
+- **The DDK's ES2 samples depth.** It lists `OES_depth_texture` and
+  `OES_packed_depth_stencil` (the extension dump in PIGLIT.md), so either the
+  texture unit reads a 16-bit, 32-bit and 24/8 depth format, or the DDK
+  converts on upload. The T1 codes and the texel layout come from one
+  capture each. The knobs are in `tools/probe` since 28976b01
+  (`PROBE_TEXFMT=depth16`, `depth32`, `d24s8`, with `PROBE_TEXPAT=1`), but
+  no capture has been taken yet.
+- **Shadow compare in the sampler** (ISA.md, hw 1c: **oracle**):
+  - `smp` has two PCF bits. h5 (`.pcf`) is accepted with F32 coordinates
+    only, and h6 (`.pcf16`) with F16 coordinates, never with C10.
+  - What they do is **unconfirmed**.
+  - smp's coordinate count follows the dimension and the PCF mode (ISA.md),
+    which fits the reference value riding in the coordinate as an extra
+    component (**guess**).
+  - Where the compare function lives (T0's spare bits, T3, or the
+    instruction) isn't known.
+- **What GL needs** (from the DDK's desktop GL extension list, PIGLIT.md):
+  - `ARB_shadow`, `EXT_shadow_funcs` (all eight compare functions) and
+    `ARB_shadow_ambient`;
+  - DEPTH_TEXTURE_MODE: LUMINANCE, INTENSITY or ALPHA, a swizzle of the
+    depth or compare result;
+  - in GLSL 1.10, `shadow1D`, `shadow2D` and their projected forms.
+
+**Tests** (Gaps, §15):
+
+1. DDK captures with `PROBE_TEXFMT=depth16`, `depth32` and `d24s8`, each with
+   `PROBE_TEXPAT=1`, sampled with `texture2D`. They give the T1 codes, the
+   texel layout and the channel a depth arrives in. Under the RGBA8888
+   readback, the value pattern says the bits per channel.
+2. `PROBE_EXTS=1`: whether the DDK's ES2 lists `EXT_shadow_samplers`. If it
+   does, captures with `PROBE_TEXCOMPARE="0x884E <func>"` and a
+   `sampler2DShadow` shader, for LEQUAL, GREATER and NEVER, against a depth16
+   texture. Diffing their T words and smp words gives the compare-function
+   field and the reference's place.
+3. If it doesn't, black-box tests with the open stack: a `smp.2d.pcf` on the
+   depth16 texture with (s, t, ref) and ref swept across the stored values.
+   That shows whether the result switches from 0 to 1, and which T0 or T3
+   field changes the function.
+
+**Lowering, if the sampler can't compare:** sample the depth as a value, then
+compare and swizzle in the shader. Mesa has `nir_lower_tex_shadow`, which
+etnaviv and r300 use. LINEAR filtering of a compare (PCF across taps) then
+needs the four-tap path of §13, compare per tap, then mix. NEAREST needs one
+compare.
+
 ## Gaps
 
 Facts above tagged **unconfirmed**, each with the hardware test or capture
@@ -738,6 +897,35 @@ until it is confirmed.
   by writing 1 → a hardware run that reads only +0x70024 at short intervals
   and sees b1 set about every 16.7 ms and clear after a write of 1 (read
   only named registers; see the cautions in section 12).
+
+### 13. Border color
+
+- Wrap codes 3-7 mean mirror-once, border and GL_CLAMP as on later PowerVR
+  cores → replays of the [-1, 2] checker capture with each code in both
+  fields, then S alone (§13, steps 2-3).
+- Where a border color comes from (a fixed set by format, a T word field, a
+  table in memory) → the step 4 replays, once a code shows a constant.
+- Whether the DDK's ES2 offers border clamp → `PROBE_EXTS=1`.
+
+### 14. Volume textures
+
+- A volume sample is `smp` dim 2 when dependent, and a dimension-3
+  non-dependent sample otherwise, with DOUTI bits still unknown → a DDK
+  `texture3D` capture, if its ES2 lists `OES_texture_3D`, decoded for the
+  DOUTI and the USP sample block.
+- The volume layout code (1, 4, 5 or 7), where the depth goes (T0 or T3),
+  and wrap R in T0 b0-2 → the §14 captures, or the open-stack tests of
+  step 3.
+- The texel layout of a twiddled volume → a `PROBE_TEXPAT=1` volume capture
+  read with `rawmap.py`.
+
+### 15. Depth textures
+
+- The T1 codes and texel layouts of depth16, depth32 and d24s8, and which
+  channel the depth arrives in → the §15 step 1 captures.
+- smp `.pcf` / `.pcf16` compare against a reference in the coordinate →
+  §15 steps 2-3.
+- The compare-function field → §15 steps 2-3.
 
 ### Open questions
 

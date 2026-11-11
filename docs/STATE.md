@@ -807,6 +807,93 @@ largest point size [capture; no draw of ours has run this yet].
   [hardware: p1-p3].
 - Without gl_PointSize written (`pt1`) the DDK draws nothing [capture].
 
+### Clip planes, shading, polygon and line state: native or lowered
+
+What GL 2.1 asks of rasterization, against what the hardware is known to do.
+"Native" means a state word does it; the rest is lowered in the shader or
+on the CPU. The driver already gathers vertices on the CPU (`sgx_screen.c`,
+vertex buffers), so CPU expansion costs a copy it already makes.
+
+| GL state | how | tag |
+|---|---|---|
+| cull face, front face | native: MTE control b0-1 | hardware |
+| polygon offset (fill) | native: ISPB b23 per state block; units and factor are render details +0x14/+0x18, **one pair per render**, so a change of values splits the render (`depth_bias` in the winsys) | capture (`polyoff`); hardware (open driver) |
+| line width | native: ISPB b8-15 = width × 16, at most 16 | hardware |
+| point size, sprites | native: a vertex output; ISPA object type 4 generates gl_PointCoord | hardware |
+| line strips and loops | lowered: no strip primitive; expanded to line lists | hardware |
+| scissor, viewport | native: region clip plus pass-type-3 objects | hardware |
+| user clip planes | not known: below | — |
+| flat shading, provoking vertex | not known: below | — |
+| logic ops | likely shader code, as blending is: below | guess |
+| polygon mode LINE/POINT, edge flags | not known; lowering below | — |
+| polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 1 or 3 draw is untried | unconfirmed |
+| line stipple | no ES state, so no DDK capture; no field known; lowered | — |
+| polygon stipple | no ES state, no field known; lowered | — |
+| line and point smooth | not known: ES1 has both, so a capture gives the DDK's way | — |
+
+**User clip planes.** The hardware has a clip-plane path in the vertex
+shader: `fdpc` is a dot product with a clip-plane operand cp0-7, and `fddpc`
+takes two at once (ISA.md "Float classes", **oracle**). That it writes a
+result the TA clips against is **unconfirmed**, and so is the enable (output
+select, MTE control or a TA header group). The driver sets
+`caps->clip_planes = 0`, so st/mesa lowers user planes into the vertex
+shader (`nir_lower_clip_vs` writes gl_ClipDistance), and the driver has to
+clip against those or discard per pixel. piglit's clip-plane failures
+(`sgx-piglit-fails.txt`, M6) are that missing half.
+
+- The DDK's ES1 has `glClipPlanef` (core in ES 1.1). One capture per case
+  gives the shader code and the state: `probe1` with
+  `PROBE_CLIPPLANE="1 0 0 0"` (x ≥ 0, cutting the triangle), two planes,
+  six planes, and one plane that cuts nothing. Diff the vertex program
+  (fdpc or fddpc into cp<n>), output select, MTE control and the TA state
+  header against `probe1`'s base.
+- **Lowered, if no hardware path works:** `nir_lower_clip_fs` turns the
+  distances into varyings and a discard. A discard makes the draw
+  punch-through (pass type 4, or 2 with a blend: the two-phase discard of
+  ISA.md "Phases, visibility feedback and discard"), so it costs the
+  depth-feedback pass, and a varying per four planes.
+
+**Flat shading.** ES1 has `glShadeModel(GL_FLAT)`, so a `probe1` capture with
+`PROBE_SHADEMODEL=0x1D00` against the base (`0x1D01`) gives the field. GL's
+provoking vertex is the last vertex of each primitive. Which vertex the
+hardware takes is part of the same capture: probe1's three vertex colors
+differ. One candidate is the DOUTI 2-bit field b25-26 (PDS.md: 3 on every
+shader entry, 0 on the clear's and background's iterations) (**guess**).
+**Lowered, if there's no field:** unindex the draw on the CPU and give each
+primitive's three vertices the provoking vertex's flat attributes.
+
+**Logic ops.** The ES1 has `glLogicOp`. Blending and the color mask are
+fragment-shader code here (§3, "Blending and the color mask are shader
+code"), so the DDK most likely does a logic op the same way, as a shader
+epilogue that reads the destination (**guess**). Capture: `probe1`
+`PROBE_LOGICOP=0x1506` (XOR) and `0x150C` (COPY_INVERTED) against the base.
+If it is shader code, `nir_lower_blend` already takes a logic op
+(`logicop_enable`, `logicop_func`).
+
+**Polygon mode and edge flags.**
+- ISPA's object type values 2 and 5-7 have never been seen. Whether a
+  triangle list drawn with object type 1 (lines) or 3 (points) draws its
+  edges or vertices is untried. A line list drawn with type 0 draws nothing
+  (§3, "Lines and points").
+- Test: replays of the base triangle with ISPA b15-18 = 1, 2, 3, 5, 6 and 7,
+  read back.
+- **Lowered, if none draws edges:** `u_unfilled_indices` (gallium aux)
+  rewrites triangle indices into line or point lists. Edge flags need the
+  per-vertex flag at that step, which the CPU expansion has to hand.
+
+**Line and polygon stipple.**
+- **Line stipple:** the CPU already expands strips and loops, so it can add
+  a per-vertex distance along the line, in pixels. The fragment shader then
+  discards by the pattern and factor, both uniforms.
+- **Polygon stipple:** `util_pstipple` (gallium aux) puts the 32×32 pattern
+  in a texture and adds a discard to the fragment shader.
+- Both discard, so both pay for the punch-through pass.
+
+**Line and point smooth.** ES1 has `GL_LINE_SMOOTH` and `GL_POINT_SMOOTH`.
+Captures with `PROBE_ENABLE=0x0B20` (lines, `PROBE_PRIM=1`) and `0x0B10`
+(points) show whether the DDK uses a state bit or shader coverage. Mesa's
+`nir_lower_poly_line_smooth` is the shader-side option.
+
 ## 4. The render target
 
 ### The end-of-tile program (pixel event → EOT USSE program)
@@ -1558,6 +1645,12 @@ until it is confirmed.
 - The color-mask move appended to the shader is `0x90b00601 | mask<<11` → compare the appended instruction words of the `cm1`-`cm3` captures with the expression.
 - The Mesa driver's discard program does an alpha test once sa4 has another function and reference → a replay of a Mesa discard draw with sa4 poked to GREATER 0.5, checking against the DDK's `e1gt5` frame.
 - glLineWidth clamps to [1, 16] → captures with glLineWidth(0.5) and glLineWidth(20).
+- User clip planes: fdpc/fddpc into cp<n> are what the TA clips against, and an enable exists in output select, MTE control or the TA header → `probe1` captures with `PROBE_CLIPPLANE` (one plane cutting the triangle, two, six, one cutting nothing), diffed against the base.
+- Flat shading has a state field, and which vertex is the provoking one → a `probe1` capture with `PROBE_SHADEMODEL=0x1D00` against `0x1D01`.
+- Logic ops are a shader epilogue → `probe1` captures with `PROBE_LOGICOP=0x1506` and `0x150C`.
+- Polygon offset applies to object types 1 and 3 → a replay of `polyoff` with the draw turned into lines (ISPA type 1 and a prim-1 VDM list), reading back the depth test result against a second draw.
+- ISPA object types 2 and 5-7, and triangles drawn as type 1 or 3 → replays of the base triangle with each type, read back.
+- Line and point smooth → `probe1` captures with `PROBE_ENABLE=0x0B20` (lines) and `0x0B10` (points).
 
 ### §4 Render target
 
