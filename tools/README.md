@@ -1,7 +1,8 @@
 # tools
 
-Reverse-engineering and test tooling. None of it ships on a box; the driver lives in
-`../kernel`, `../srvinit`, `../mesa` and `../libpvr`. Build scripts expect
+Bring-up and test tooling. None of it ships; the driver lives in `../drm`, `../mesa` and
+`../ukernel`. [docs/porting/](../docs/porting/README.md) says which tool belongs to which
+bring-up stage. Build scripts expect
 [zig](https://ziglang.org) (`zig cc`) for cross-compiling to the EA's x86_64 and i386.
 
 | Directory | What it does |
