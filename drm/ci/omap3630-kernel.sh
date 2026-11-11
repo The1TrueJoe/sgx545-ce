@@ -9,8 +9,9 @@
 #
 # The config is the board's own (omap3630.config, a 7.1.8 config; olddefconfig
 # carries it to a later kernel) plus omap3630.fragment. Built from the same
-# source and config, the modules match the running kernel's symbol versions.
-# CROSS_COMPILE defaults to arm-linux-gnueabihf-.
+# source, config and compiler, the modules match the running kernel's symbol versions.
+# CROSS_COMPILE defaults to arm-linux-gnueabihf-. Modules that load on the board need
+# the board's compiler (gcc 15.3): CI uses Bootlin's, see powervr-sgx-omap3630.yml.
 set -eu
 
 SRC=$1

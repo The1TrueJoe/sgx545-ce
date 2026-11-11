@@ -33,7 +33,10 @@ jobs:
     env:
       LINUX_VERSION: ${{ matrix.linux }}
       ARCH: arm
-      CROSS_COMPILE: arm-linux-gnueabihf-
+      # The board's kernel is built with gcc 15.3 (musl). The same compiler gives
+      # the same CC_HAS_* options and so the same symbol versions; gcc 13 doesn't.
+      TOOLCHAIN: armv7-eabihf--musl--stable-2026.08-1
+      TOOLCHAIN_SHA256: 9147bafae4aa272321a3c6440d04d83b7e23411b2d344f875541d84c4444ba9b
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +44,24 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache sparse gcc-arm-linux-gnueabihf
+            bc bison flex libelf-dev libssl-dev cpio ccache sparse
+
+      - name: Restore the toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLCHAIN }}.tar.xz
+          key: toolchain-${{ env.TOOLCHAIN }}
+
+      - name: The board's compiler (gcc 15.3, Bootlin)
+        run: |
+          set -eux
+          [ -f $TOOLCHAIN.tar.xz ] ||
+            curl -sfLO https://toolchains.bootlin.com/downloads/releases/toolchains/armv7-eabihf/tarballs/$TOOLCHAIN.tar.xz
+          echo "$TOOLCHAIN_SHA256  $TOOLCHAIN.tar.xz" | sha256sum -c -
+          mkdir -p $RUNNER_TEMP/tc && tar xf $TOOLCHAIN.tar.xz -C $RUNNER_TEMP/tc
+          gcc=$(ls $RUNNER_TEMP/tc/$TOOLCHAIN/bin/*-linux-*-gcc | head -1)
+          echo "CROSS_COMPILE=${gcc%gcc}" >> $GITHUB_ENV
+          "$gcc" --version | head -1
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
@@ -63,6 +83,14 @@ jobs:
             curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
           tar xf linux-$LINUX_VERSION.tar.xz
           sh drm/ci/omap3630-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+          # Every compiler-dependent option as on the board, or the modules won't load.
+          if [ "$LINUX_VERSION" = 7.1.8 ]; then
+            for k in GCC_VERSION CC_HAS_COUNTED_BY CC_HAS_MULTIDIMENSIONAL_NONSTRING \
+                     CC_HAS_MIN_FUNCTION_ALIGNMENT CC_HAS_SANE_FUNCTION_ALIGNMENT; do
+              grep "^CONFIG_$k=" drm/ci/omap3630.config
+              grep -x "$(grep "^CONFIG_$k=" drm/ci/omap3630.config)" linux-$LINUX_VERSION/.config
+            done
+          fi
 
       - name: Build the kernel and modules
         run: |
