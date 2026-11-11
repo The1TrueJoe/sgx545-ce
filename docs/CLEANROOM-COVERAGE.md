@@ -516,7 +516,7 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 
 | file (lines) / area | what it encodes | doc section(s) | status |
 |---|---|---|---|
-| sgxws.h:49-64 GL enums, VDM prim codes | depth/stencil compare = GL enum - 0x200; VDM prim 0 tri, 1 lines, 2 points, 3 strip | STATE.md §3 "ISPA (ctx+0x780)" (b22-24), §3 "ISPC: stencil"; §2 draw word 0; §3 "Lines and points" | covered |
+| sgxws.h:49-64 GL enums, VDM prim codes | depth/stencil compare = GL enum - 0x200; VDM prim 0 tri, 1 lines, 2 points, 3 strip | STATE.md §3 "ISPA" (b22-24), §3 "ISPC: stencil"; §2 draw word 0; §3 "Lines and points" | covered |
 | sgxws.h:67-77 `sgxws_target` | BGRA8888 top-first; stride "even, or 1"; PBE format code; T1 format/layout 6 strided, 3 linear (pitch rounded to 8 texels), 0 twiddled with the PBE writing twiddled | STATE.md §4 "PBE words", "Format codes"; §5 T1 table; TEX.md §11 "Render targets the sampler reads directly", §4 "Render to texture" | partial |
 | sgxws.h:81-103 `sgxws_prog` | temporaries (DOUTU in fours), TSP sizes 3 bits per set, precision mask, point size as last output dword, up to 10 DOUTIs/sets | PDS.md "DOUTU" word 0 b24-31; STATE.md §3 "Output select ... and TSP words"; ISA.md "Vertex shaders" (sets 0-9) | covered |
 | sgxws.h:105-149 blend description, `sgxws_bsel`, `SGXWS_BLEND_CONST_SA` 2 | sop2 epilogue form, selector codes zero/s1/s2/s1a/s2a/asat, complement; sopwm color mask, byte order B b0 G b1 R b2 A b3; constant color in sa2 | STATE.md §3 "Blending and the color mask are shader code", "Constant-color blending"; ISA.md "sop2 (hw 10 ...)" | covered |
