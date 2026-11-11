@@ -62,8 +62,8 @@ sgx_nir_options(void)
 }
 
 /* ------------------------------------------------------------------------
- * varyings -> texture coordinate sets, as glslcompiler allocates them
- * (ISA.md "Varyings to sets"): by type mat4, mat2, vec4,
+ * varyings -> texture coordinate sets (ISA.md "What a compiler needs",
+ * varyings to sets): by type mat4, mat2, vec4,
  * mat3, vec3, vec2, float; within a type the largest array first, then
  * declaration order; one set per row while sets last.
  */
@@ -142,8 +142,8 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
           var_used(nir, var, true))
          out->point_size = true;
       /* the point-sprite coordinate is iterated from set 0, the set a vertex
-       * shader that writes gl_PointSize reserves (DDK capture: gl_PointCoord
-       * = list A iterator 1) */
+       * shader that writes gl_PointSize reserves (capture: gl_PointCoord =
+       * list A iterator 1) */
       if (!vertex && builtin &&
           (var->data.location == VARYING_SLOT_PNTC ||
            !strcmp(var->name, "gl_PointCoord")) &&
@@ -204,8 +204,8 @@ sgx_pack_varyings(struct sgx_varyings *out)
    if (fits)
       return true;
 
-   /* glslcompiler: a set per row while sets remain, then rows into free
-    * components of earlier sets (ISA.md "Varyings to sets"). It packs by
+   /* a set per row while sets remain, then rows into free components of
+    * earlier sets (ISA.md "What a compiler needs"). It packs by
     * precision too, but a varying's precision may differ between the stages,
     * each placed on its own, so not here (a mixed set is iterated in f32). A
     * sprite's set 0 is the point coordinate's alone. */
@@ -1080,7 +1080,7 @@ vec_to_regs_32(const nir_instr *instr, unsigned wrmask, const void *data)
  * uniforms -> load_uniform with base = the constant number of the first
  * component. Each deref step adds vec4-aligned offsets (array elements,
  * struct members, matrix columns), unless the caller numbered that member
- * itself (-u var.member=k): glslcompiler's layout of struct members isn't
+ * itself (-u var.member=k): the corpus's layout of struct members isn't
  * known, so it can be pinned member by member. */
 
 static unsigned
@@ -1176,7 +1176,8 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
       nir_def_replace(&in->def, v);
       return true;
    }
-   /* the constants' format in SA, as the DDK loads them: F16 pairs for
+   /* the constants' format in SA (ISA.md "Register files and operand
+    * limits"): F16 pairs for
     * mediump (16-bit loads), C10 for lowp vectors used as F16, else f32 */
    unsigned n = in->def.num_components, fmt = in->def.bit_size == 16 ? 2 : 1;
    if (u->c->opts->verbose)
@@ -1207,7 +1208,7 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    if (fmt == 2 && u->c->p16 && prec == GLSL_PRECISION_LOW && !(k & 3) &&
        n >= 3 && !(nir_def_components_read(&in->def) & ~7u)) {
       /* a lowp vector loaded 16-bit (sgxc's frontend) and read for xyz: C10
-       * as the DDK loads it, then to F16 where read; or with driver_consts
+       * as loaded (corpus *_l), then to F16 where read; or with driver_consts
        * the F16 of its C10 value from the upload */
       fmt = u->c->opts->driver_consts ? 5 : 3;
    }
@@ -1288,7 +1289,7 @@ uniform_prec(struct sgx_ctx *c, unsigned k)
 }
 
 /* f32 uniforms that F16 math reads (every use an f2f16), in the format the
- * DDK loads such a constant in: mediump as F16 constants (list C kind 2,
+ * driver loads such a constant in: mediump as F16 constants (list C kind 2,
  * rounded at upload), a lowp vector's xyz as C10 (kind 3), highp left f32
  * (converted where read with pck.f16.f32, truncating: ISA.md "Hardware
  * checks"). sgxc's frontend loads mediump uniforms 16-bit already;
@@ -1429,7 +1430,7 @@ first_free(const struct sgx_compile_options *o, enum sgx_layout_kind k)
  * frontend merged into it, so the trip count isn't exact) stays a loop:
  * unrolled, its exits become a select tree that holds every
  * iteration's value to the end (corpus loop_v: 31 temporaries, 4 as a loop,
- * the DDK 9). Loops that index arrays are still unrolled. */
+ * the corpus 9). Loops that index arrays are still unrolled. */
 static bool
 keep_early_exit_loops_cf(struct exec_list *list)
 {
@@ -1625,7 +1626,7 @@ assign_io(struct sgx_ctx *c)
             map_varying(c->out_reg, var, c->vary, obase);
    } else {
       /* in F16 mode, a varying every load of which is mediump is iterated as
-       * F16 (list A format 2: two components per register, as the DDK does) */
+       * F16 (list A format 2: two components per register; corpus *_m) */
       bool hp[128] = {0}, mp[128] = {0};
       nir_foreach_function_impl (impl, s) {
          nir_foreach_block (b, impl) {
@@ -1683,7 +1684,7 @@ assign_io(struct sgx_ctx *c)
          for (unsigned set = 0; set < SGX_MAX_SETS; set++)
             set16[set] &= !not16[set];
       }
-      /* gl_FragCoord first (list A iterator 14, F32, as the DDK orders it),
+      /* gl_FragCoord first (list A iterator 14, F32: capture),
        * then the sets in order; gl_PointCoord is set 0 */
       int pbase[SGX_MAX_SETS];
       unsigned pa = 0;

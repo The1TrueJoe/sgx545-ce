@@ -235,7 +235,7 @@ earlier licensing and provenance audit.
 | C4 | unit tests under `meson test` | done (7e0421a); coverage to grow |
 | C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
 | C6 | no global mutable state | done (`hw_const`) |
-| C7 | comments cite `docs/`, not libusc or the DDK | libusc done (aaa2ba7); DDK mentions left |
+| C7 | comments cite `docs/`, not libusc or the DDK | done (2026-11-11) |
 | C8 | DDK-compatibility code out of the compiler | done (2026-11-11) |
 | C9 | file size | open (optional) |
 
@@ -282,12 +282,10 @@ earlier licensing and provenance audit.
   race between two contexts compiling at once). It is now a const table.
   This also fixes a latent bug: a literal equal to the old filler value
   0xdeadbeef no longer matches hardware constant 0.
-- **C7. Comments.**
-  - About 58 comments say "as libusc does" or "as the DDK does" (27 in
-    `sgx_compile.c`, 16 in `sgx_nir.c`, 12 in `sgx_compiler.h`).
-  - Rewrite each to cite the `docs/` section and the test that fixed the
-    behavior (COMPILER-UPSTREAM.md §2.2).
-  - Box and application names: none left in the compiler.
+- **C7. Comments.** Every comment that named libusc, the DDK or
+  glslcompiler as the behavior matched now cites the docs section, corpus
+  shader, capture or hardware test it rests on (byte-identical). Box and
+  application names: none left in the compiler.
 - **C8. DDK-compatibility code** (COMPILER-UPSTREAM.md §3).
   - Samplers: the compiler takes the caller's unit (`struct sgx_layout`), or
     else the sampler variable's binding. sgxc numbers unpinned samplers in
