@@ -18,8 +18,6 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
-#include <asm/set_memory.h>
-
 #include "pvrsgx_device.h"
 #include "pvrsgx_mmu.h"
 
@@ -42,7 +40,7 @@ static struct page *table_page_alloc(void)
 {
 	struct page *p = alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_DMA32);
 
-	if (p && set_pages_array_wc(&p, 1)) {
+	if (p && pvrsgx_pages_wc(&p, 1)) {
 		__free_page(p);
 		return NULL;
 	}
@@ -51,7 +49,7 @@ static struct page *table_page_alloc(void)
 
 static void table_page_free(struct page *p)
 {
-	set_pages_array_wb(&p, 1);
+	pvrsgx_pages_wb(&p, 1);
 	__free_page(p);
 }
 

@@ -18,6 +18,10 @@
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
+#ifdef CONFIG_X86
+#include <asm/set_memory.h>
+#endif
+
 #include "pvrsgx_core.h"
 #include "pvrsgx_hw.h"
 
@@ -275,8 +279,28 @@ static inline u32 pvrsgx_dirlist_edm(const struct pvrsgx_device *sdev)
 	return sdev->family->num_dir_lists - 1;
 }
 
+/*
+ * The GPU doesn't snoop, so the CPU maps what it shares write-combined. Only
+ * x86 has the call; elsewhere (COMPILE_TEST) it is a no-op.
+ */
+static inline int pvrsgx_pages_wc(struct page **pages, int n)
+{
+#ifdef CONFIG_X86
+	return set_pages_array_wc(pages, n);
+#else
+	return 0;
+#endif
+}
+
+static inline void pvrsgx_pages_wb(struct page **pages, int n)
+{
+#ifdef CONFIG_X86
+	set_pages_array_wb(pages, n);
+#endif
+}
+
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
-		      u32 dev_addr, u32 size, u32 pte_flags);
+		      u32 dev_addr, u32 size, u32 pte_flags, gfp_t gfp);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);

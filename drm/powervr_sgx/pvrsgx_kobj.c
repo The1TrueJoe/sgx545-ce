@@ -58,7 +58,8 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 	bool per_vm = range == PVRSGX_KRANGE_3DPARAMS && vm;
 	int err;
 
-	o = kzalloc_obj(*o);
+	/* Clients' ioctls create these: charge them to the caller. */
+	o = kzalloc_obj(*o, GFP_KERNEL_ACCOUNT);
 	if (!o)
 		return ERR_PTR(-ENOMEM);
 	o->range = range;
@@ -72,7 +73,8 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 
 	if (per_vm)
 		o->km.mmu = vm->mmu;
-	err = pvrsgx_kmem_alloc(sdev, &o->km, o->node.start, size, ranges[range].pte);
+	err = pvrsgx_kmem_alloc(sdev, &o->km, o->node.start, size, ranges[range].pte,
+				__GFP_ACCOUNT);
 	if (err)
 		goto err_node;
 	memset(o->km.cpu, 0, o->km.size);

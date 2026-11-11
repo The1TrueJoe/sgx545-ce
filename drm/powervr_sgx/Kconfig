@@ -3,7 +3,7 @@
 
 config DRM_POWERVR_SGX
 	tristate "PowerVR SGX5xx (SGX545: Intel CE5300, Cedarview)"
-	depends on DRM && PCI && MMU && X86
+	depends on DRM && PCI && MMU && (X86 || COMPILE_TEST)
 	select DRM_EXEC
 	select DRM_GEM_SHMEM_HELPER
 	select DRM_GPUVM

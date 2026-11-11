@@ -344,11 +344,11 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 
 	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
-				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
+				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT, 0);
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE,
-				SGX_MMU_PTE_READONLY);
+				SGX_MMU_PTE_READONLY, 0);
 	if (err)
 		return err;
 
