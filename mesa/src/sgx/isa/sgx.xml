@@ -2290,7 +2290,7 @@ pa = 1.
 		<map name="LIM2">src->lim[2]</map>
 		<map name="A0">src->a[0]</map>
 		<map name="A1">src->a[1]</map>
-		<map name="N">src->n</map>
+		<map name="NVAL">src->n</map>
 	</encode>
 </bitset>
 
@@ -2448,14 +2448,14 @@ pa = 1.
 <bitset name="op0xfd" extends="#moe">
 	<doc>dst in the destination slot, n h11-14; meaning unknown.</doc>
 	<display>
-		{NAME} {DST}, #{N} [{SKIPINV} {NOSCHED}]
+		{NAME} {DST}, #{NVAL} [{SKIPINV} {NOSCHED}]
 	</display>
 	<pattern low="0" high="20">000000000000000000000</pattern>
 	<field name="DN" low="21" high="27" type="uint"/>
 	<pattern low="28" high="31">0000</pattern>
 	<field name="DB" low="32" high="33" type="uint"/>
 	<pattern low="34" high="42">000000000</pattern>
-	<field name="N" low="43" high="46" type="uint"/>
+	<field name="NVAL" low="43" high="46" type="uint"/>
 	<pattern low="47" high="49">000</pattern>
 	<field name="DE" pos="51" type="uint"/>
 	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
@@ -2474,7 +2474,7 @@ pa = 1.
 	<derived name="MODE0" expr="#zero" type="uint"/>
 	<encode>
 		<map name="PATH">src->path</map>
-		<map name="N">src->n</map>
+		<map name="NVAL">src->n</map>
 		<map name="TGT">src->tgt</map>
 		<map name="F10">src->f10</map>
 		<map name="F12">src->f12</map>
@@ -2518,9 +2518,9 @@ pa = 1.
 
 <bitset name="op0xd7" extends="#other">
 	<display>
-		{NAME} #{N} [{NOSCHED}]
+		{NAME} #{NVAL} [{NOSCHED}]
 	</display>
-	<field name="N" low="0" high="3" type="uint"/>
+	<field name="NVAL" low="0" high="3" type="uint"/>
 	<pattern low="4" high="31">0000000000000000000000000000</pattern>
 	<pattern low="32" high="42">00000000000</pattern>
 	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
@@ -2614,10 +2614,10 @@ pa = 1.
 
 <bitset name="#lock" extends="#other">
 	<display>
-		{NAME} #{N} [{NOSCHED}]
+		{NAME} #{NVAL} [{NOSCHED}]
 	</display>
 	<pattern low="1" high="3">000</pattern>
-	<field name="N" low="4" high="6" type="uint"/>
+	<field name="NVAL" low="4" high="6" type="uint"/>
 	<pattern low="7" high="31">0000000000000000000000000</pattern>
 	<pattern low="32" high="42">00000000000</pattern>
 	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
@@ -2719,9 +2719,9 @@ pa = 1.
 
 <bitset name="op0xd6" extends="#other">
 	<display>
-		{NAME} #{N} [{NOSCHED} {F3_6}]
+		{NAME} #{NVAL} [{NOSCHED} {F3_6}]
 	</display>
-	<field name="N" low="0" high="2" type="uint"/>
+	<field name="NVAL" low="0" high="2" type="uint"/>
 	<field name="F3_6" pos="3" type="bool" display=" f3_6"/>
 	<pattern low="4" high="31">0000000000000000000000000000</pattern>
 	<pattern low="32" high="42">00000000000</pattern>
@@ -2863,7 +2863,7 @@ pa = 1.
 		<map name="WAIT">src->wait</map>
 		<map name="RATE">src->rate</map>
 		<map name="SEL43">src->sel43</map>
-		<map name="N">src->n</map>
+		<map name="NVAL">src->n</map>
 		<map name="F3_11">src->f3_11</map>
 		<map name="F3_12">src->f3_12</map>
 	</encode>
@@ -2921,10 +2921,10 @@ pa = 1.
 
 <bitset name="#opff" extends="#phase-src">
 	<display>
-		{NAME} {SRC1}, {SRC2}, #{N} [{NOSCHED} {F3_11} {F3_12}]
+		{NAME} {SRC1}, {SRC2}, #{NVAL} [{NOSCHED} {F3_11} {F3_12}]
 	</display>
 	<pattern low="32" high="39">00000000</pattern>
-	<field name="N" low="40" high="41" type="uint"/>
+	<field name="NVAL" low="40" high="41" type="uint"/>
 	<pattern pos="42">0</pattern>
 	<field name="F3_12" pos="46" type="bool" display=" f3_12"/>
 	<field name="F3_11" pos="47" type="bool" display=" f3_11"/>
