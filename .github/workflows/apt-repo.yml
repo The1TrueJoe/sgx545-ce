@@ -1,0 +1,115 @@
+# The apt repository: when a release is published (not a draft), rebuild a
+# signed repository for Debian 13 (trixie, amd64) from the .debs of every
+# published release and publish it to GitHub Pages:
+#
+#   https://<owner>.github.io/<repo>/        dists/trixie, pool/main
+#   https://<owner>.github.io/<repo>/powervr-sgx.gpg   the signing key (public)
+#
+# Signing uses the secret APT_SIGNING_KEY: an ASCII-armored private key with no
+# passphrase, made for this repository only (docs/RELEASING.md).
+# Pages must be set to "GitHub Actions" as its source.
+name: apt-repo
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-repo
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends reprepro gnupg dpkg-dev
+
+      - name: The signing key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "$APT_SIGNING_KEY" ] || { echo "the APT_SIGNING_KEY secret is not set"; exit 1; }
+          export GNUPGHOME=$RUNNER_TEMP/gnupg
+          install -d -m 700 "$GNUPGHOME"
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+          fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
+          [ -n "$fpr" ] || { echo "APT_SIGNING_KEY holds no secret key"; exit 1; }
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "SIGNING_FPR=$fpr" >> "$GITHUB_ENV"
+
+      - name: The packages of every published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          mkdir -p debs
+          # oldest first, so each package ends at its newest version
+          gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 200 \
+            --json tagName,isPrerelease,createdAt --jq 'sort_by(.createdAt) | .[].tagName' > tags.txt
+          cat tags.txt
+          [ -s tags.txt ] || { echo "no published release"; exit 1; }
+          while read -r tag; do
+            mkdir -p "debs/$tag"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "debs/$tag" \
+              --pattern '*.deb' --pattern SHA256SUMS
+            if [ -f "debs/$tag/SHA256SUMS" ]; then (cd "debs/$tag" && sha256sum -c SHA256SUMS); fi
+          done < tags.txt
+
+      - name: The repository
+        run: |
+          set -eux
+          R=$PWD/site
+          mkdir -p "$R/conf"
+          cat > "$R/conf/distributions" <<EOF
+          Origin: powervr_sgx
+          Label: powervr_sgx
+          Codename: trixie
+          Suite: trixie
+          Architectures: amd64
+          Components: main
+          Description: The open PowerVR SGX545 stack for Debian 13
+          SignWith: $SIGNING_FPR
+          EOF
+          sed -i 's/^          //' "$R/conf/distributions"
+          while read -r tag; do
+            for f in debs/"$tag"/*.deb; do
+              [ -e "$f" ] || continue
+              reprepro -b "$R" --ignore=wrongdistribution includedeb trixie "$f" || true
+            done
+          done < tags.txt
+          reprepro -b "$R" export trixie
+          reprepro -b "$R" list trixie | tee list.txt
+          [ -s list.txt ]
+          rm -rf "$R/conf" "$R/db"
+          gpg --batch --export "$SIGNING_FPR" > "$R/powervr-sgx.gpg"
+          gpg --batch --armor --export "$SIGNING_FPR" > "$R/powervr-sgx.asc"
+          # The signatures check against the published key.
+          gpgv --keyring "$R/powervr-sgx.gpg" "$R/dists/trixie/InRelease"
+          gpgv --keyring "$R/powervr-sgx.gpg" "$R/dists/trixie/Release.gpg" "$R/dists/trixie/Release"
+          printf 'The powervr_sgx apt repository. Setup: docs/INSTALL.md.\n' > "$R/index.html"
+          find "$R" -type f | sort
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

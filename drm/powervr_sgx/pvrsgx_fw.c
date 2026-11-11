@@ -93,6 +93,7 @@ static const struct {
 	[PVRSGX_FW_CCBCTL] = { false, 0x2000, 0x8 },
 	[PVRSGX_FW_KICKER] = { false, 0x2010, 0x4 },
 	[PVRSGX_FW_TA3DCTL] = { false, 0x3000, sizeof(struct pvrsgx_fw_ta3d_ctl) },
+	/* Right after the control block, which fills 0x3000-0x30ff. */
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
 	/* The image at 0, then the PDS programs from its end (0xcf70 for the DDK's). */
@@ -103,6 +104,8 @@ static const struct {
 	[PVRSGX_FW_PDS3] = { true, 0x090, 0x100 },
 	[PVRSGX_FW_PDS4] = { true, 0x190, 0x68 },
 };
+
+static_assert(0x3000 + sizeof(struct pvrsgx_fw_ta3d_ctl) <= 0x3100);
 
 #define PDS_BYTES	0x200
 
@@ -374,65 +377,58 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
 }
 
-/*
- * Init script part 2 (docs/SRVINIT.md, "Init scripts"), in its order. Most of
- * these registers have no name in the GPL header; the values are the vendor
- * script's.
- */
-static const struct {
-	u16 reg;
-	u32 val;
-} init_regs[] = {
-	{ 0x818, 0x7ff }, { 0x810, 1 }, { 0x814, 0xffff },
-	{ SGX_CR_EVENT_HOST_ENABLE, SGX_CR_EVENT_STATUS_SW_EVENT },
-	{ SGX_CR_EVENT_HOST_ENABLE2, 0 },
-	{ 0x13c, 0 }, { 0xa7c, 0 }, { 0xa80, 0 }, { 0xa74, 0x208200 }, { 0x4e8, 0x100 },
-	{ 0xa78, 0x2c }, { 0xaac, 0x45 }, { 0xabc, 0xe }, { 0x800, 0x30 }, { 0x804, 0xffff },
-	{ 0xa00, 0x7c000 },
-};
-
 /* USE_CODE_BASE: device address >> 7, and the window's mode bits. */
 #define USE_CODE_BASE_ADDR_SHIFT	7
 #define USE_CODE_BASE_PIXEL		0x2000000
 #define USE_CODE_BASE_UKERNEL		0x6000000
 
+static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
+{
+	return sdev->cr->use_code_base0 + 4 * n;
+}
+
+/* Init script part 2 (docs/SRVINIT.md, "Init scripts"): the core's script, then the bases. */
 static void init_script_part2(struct pvrsgx_device *sdev)
 {
+	const struct pvrsgx_core_family *fam = sdev->family;
+	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
 
-	for (u32 i = 0; i < ARRAY_SIZE(init_regs); i++)
-		sgx_wr(sdev, init_regs[i].reg, init_regs[i].val);
+	for (u32 i = 0; i < fam->num_init_regs; i++)
+		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
 	/* Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15 ours. */
 	for (u32 i = 0; i < 10; i++)
-		sgx_wr(sdev, SGX_CR_USE_CODE_BASE(PVRSGX_USSE_PIXEL_BASE_INDEX + i),
+		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
 		       ((PVRSGX_HEAP_USSE_PIXEL + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
 			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
 	for (u32 i = 0; i < 4; i++)
-		sgx_wr(sdev, SGX_CR_USE_CODE_BASE(PVRSGX_USSE_VERTEX_BASE_INDEX + i),
+		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
 		       (PVRSGX_HEAP_USSE_VERTEX + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
 		       USE_CODE_BASE_ADDR_SHIFT);
-	sgx_wr(sdev, SGX_CR_USE_CODE_BASE(PVRSGX_USSE_UKERNEL_BASE_INDEX),
+	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       (PVRSGX_HEAP_KERNEL_CODE >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_UKERNEL);
-	sgx_wr(sdev, SGX_CR_PDS_EXEC_BASE, PVRSGX_HEAP_PDS_PIXEL);
+	sgx_wr(sdev, cr->pds_exec_base, PVRSGX_HEAP_PDS_PIXEL);
 	sgx_wr(sdev, 0xb30, 0x100);	/* unnamed, as the vendor script */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_BASE, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_DATA0, 1);
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_DATA1, 6);
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_ENABLE, SGX_CR_EVENT_PDS_ENABLE_ALL);
+	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
+	sgx_wr(sdev, cr->event_pds_data0, 1);
+	sgx_wr(sdev, cr->event_pds_data1, 6);
+	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
 }
 
 static void deinit_script(struct pvrsgx_device *sdev)
 {
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_ENABLE, 0);
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_BASE, 0);
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_DATA0, 0);
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_DATA1, 0);
-	sgx_wr(sdev, SGX_CR_USE_CODE_BASE(PVRSGX_USSE_UKERNEL_BASE_INDEX), 0);
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	sgx_wr(sdev, cr->event_pds_enable, 0);
+	sgx_wr(sdev, cr->event_pds_base, 0);
+	sgx_wr(sdev, cr->event_pds_data0, 0);
+	sgx_wr(sdev, cr->event_pds_data1, 0);
+	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX), 0);
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE2, 0);
 	sgx_wr(sdev, SGX_CR_CLKGATECTL, 0);
-	sgx_wr(sdev, SGX_CR_CLKGATECTL2, 0);
+	sgx_wr(sdev, cr->clkgatectl2, 0);
 }
 
 /*
@@ -441,6 +437,7 @@ static void deinit_script(struct pvrsgx_device *sdev)
  */
 int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 {
+	const struct pvrsgx_core_regs *cr = sdev->cr;
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
 	bool first = !sdev->fw_started, was_powered = READ_ONCE(sdev->powered);
 	int err;
@@ -462,8 +459,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		if (was_powered) {
 			/* What an unload and reload (which recovers) does in between. */
 			deinit_script(sdev);
-			sgx_wr(sdev, SGX_CR_SOFT_RESET,
-			       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
+			sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 			sgx_rd(sdev, SGX_CR_SOFT_RESET);
 			/* Behind gma500 bus mastering is the display's too: leave it. */
 			if (sdev->pdev)
@@ -492,11 +488,10 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 
 	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
-	       (SGX_CLKG_ALL(SGX_CR_CLKGATECTL_UNITS, SGX_CLKG_AUTO) &
-		~SGX_CR_CLKGATECTL_DPM_CLKG) |
-	       FIELD_PREP(SGX_CR_CLKGATECTL_DPM_CLKG, SGX_CLKG_ON));
-	sgx_wr(sdev, SGX_CR_CLKGATECTL2, SGX_CLKG_ALL(SGX_CR_CLKGATECTL2_UNITS, SGX_CLKG_AUTO));
-	sgx_wr(sdev, SGX_CR_EVENT_PDS_ENABLE, 0);
+	       (SGX_CLKG_ALL(cr->clkgatectl_units, SGX_CLKG_AUTO) & ~cr->clkgatectl_dpm) |
+	       field_prep(cr->clkgatectl_dpm, SGX_CLKG_ON));
+	sgx_wr(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
+	sgx_wr(sdev, cr->event_pds_enable, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
 
 	pvrsgx_reset(sdev, true);
@@ -507,7 +502,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
-	sgx_wr(sdev, SGX_CR_EVENT_KICK2, SGX_CR_EVENT_KICK2_NOW);
+	sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
 
 	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
 			  HOSTCTL_INIT_COMPLETE, 500000);
@@ -531,6 +526,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 /* Ask the microkernel to power off, then hold the cores in reset. */
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 {
+	const struct pvrsgx_core_regs *cr = sdev->cr;
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
 	u32 data[6] = { 0, POWER_OFF };
 
@@ -541,7 +537,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			drm_warn(&sdev->base, "microkernel did not power off\n");
 		/* Wait for the clocks to gate; the DPM's stays on. */
 		for (int i = 0; i < 500; i++) {
-			if (!(sgx_rd(sdev, SGX_CR_CLKGATESTATUS) & ~SGX_CR_CLKGATESTATUS_DPM_CLKS))
+			if (!(sgx_rd(sdev, cr->clkgatestatus) & ~cr->clkgatestatus_dpm))
 				break;
 			usleep_range(100, 200);
 		}
@@ -549,15 +545,13 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		synchronize_irq(sdev->irq);
 		deinit_script(sdev);
 		sdev->fw_running = false;
-		sgx_wr(sdev, SGX_CR_SOFT_RESET,
-		       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	} else if (READ_ONCE(sdev->powered)) {
 		/* A failed start: the clocks are on, the microkernel isn't. */
 		WRITE_ONCE(sdev->powered, false);
 		synchronize_irq(sdev->irq);
-		sgx_wr(sdev, SGX_CR_SOFT_RESET,
-		       SGX_CR_SOFT_RESET_BIF_RESET | SGX_CR_SOFT_RESET_CORES);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
 }

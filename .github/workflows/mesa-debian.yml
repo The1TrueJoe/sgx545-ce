@@ -5,6 +5,17 @@ name: mesa-debian
 
 on:
   workflow_dispatch:
+  # release.yml builds the release packages through this.
+  workflow_call:
+    inputs:
+      release_version:
+        description: the release's version without the v (0.1.0); empty for a git snapshot
+        type: string
+        default: ''
+    outputs:
+      artifact:
+        description: the name of the artifact holding the packages
+        value: mesa-sgx-trixie
   push:
     branches: [dev, main]
     paths:
@@ -60,23 +71,37 @@ jobs:
           build/mesa/debian/build/src/loader/loader_child_render_node_test
           build/mesa/debian/build/src/loader/loader_cedarview_sysfs_test
 
-      - name: The firmware (the open microkernel, secure mode)
+      - name: The firmware (the open microkernel, secure mode, assembled through sgx-asm)
+        env:
+          RELEASE: ${{ inputs.release_version }}
         run: |
           set -eux
           v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          [ -z "$RELEASE" ] || v=v$RELEASE
           mkdir -p fw
+          # Shipped firmware is assembled through sgx-asm (built from sgx.xml), the
+          # clean-room path, not the asm.py oracle. Reuse the mesa tree the Build
+          # step unpacked (it carries our mesa/src overlays).
+          . mesa/VERSION
+          mesa/tests/isa-standalone/standalone.sh "$PWD/build/mesa/mesa-$MESA_VERSION" "$PWD/isa-build"
+          export SGX_ASM="$PWD/isa-build/sgx-asm"
           python3 ukernel/build.py fw/uk.bin fw/uk.json
+          grep -q '"assembler": "sgx-asm"' fw/uk.json   # the shipped image must come from sgx.xml
           python3 drm/tools/mkukfw.py fw/uk.bin -o sgx545_ukernel.bin --manifest fw/uk.json \
             --core-rev 0 --build-id "ukernel-$v"
           python3 drm/tools/mkukfw.py --check sgx545_ukernel.bin | tee fw/check.txt
           grep -q 'features 0x2' fw/check.txt
 
       - name: Packages (.deb)
+        env:
+          RELEASE: ${{ inputs.release_version }}
         run: |
           set -eux
           v=$(git -c safe.directory='*' rev-parse --short HEAD)
           d=$(git -c safe.directory='*' log -1 --format=%cd --date=format:%Y%m%d)
           mv=$(. mesa/VERSION; echo "$MESA_VERSION")
+          # A release names its packages by the release; a snapshot by date and commit.
+          if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE fver=$RELEASE; else mver=$mv+sgx$d.$v fver=0~git$d.$v; fi
           # mesa-sgx: /opt/sgx and the two files that put it ahead of Debian's Mesa
           P=$PWD/deb/mesa-sgx
           mkdir -p $P/DEBIAN
@@ -85,7 +110,7 @@ jobs:
           rm -rf $P/opt/sgx/include $P/opt/sgx/lib/pkgconfig
           cat > $P/DEBIAN/control <<CTL
           Package: mesa-sgx
-          Version: $mv+sgx$d.$v
+          Version: $mver
           Architecture: amd64
           Maintainer: Joseph Telaak <joseph@telaak.dev>
           Depends: libc6, libllvm19, libelf1t64, libdrm2, libglvnd0, libgl1, libegl1, libgles2, libx11-6, libx11-xcb1, libxcb1, libxcb-dri3-0, libxcb-present0, libxcb-sync1, libxcb-xfixes0, libxcb-randr0, libxshmfence1, libxxf86vm1, libwayland-client0, libwayland-server0, libexpat1, zlib1g, libzstd1
@@ -100,7 +125,7 @@ jobs:
           printf '#!/bin/sh\nset -e\nldconfig\n' > $P/DEBIAN/postinst
           printf '#!/bin/sh\nset -e\nldconfig\n' > $P/DEBIAN/postrm
           chmod 755 $P/DEBIAN/postinst $P/DEBIAN/postrm
-          dpkg-deb --root-owner-group --build $P mesa-sgx_${mv}+sgx${d}.${v}_amd64.deb
+          dpkg-deb --root-owner-group --build $P mesa-sgx_${mver}_amd64.deb
 
           # sgx545-firmware: the open microkernel
           F=$PWD/deb/fw
@@ -108,7 +133,7 @@ jobs:
           cp sgx545_ukernel.bin $F/lib/firmware/powervr_sgx/
           cat > $F/DEBIAN/control <<CTL
           Package: sgx545-firmware
-          Version: 0~git$d.$v
+          Version: $fver
           Architecture: all
           Maintainer: Joseph Telaak <joseph@telaak.dev>
           Section: kernel
@@ -121,7 +146,7 @@ jobs:
           printf '#!/bin/sh\nset -e\nif command -v update-initramfs >/dev/null; then update-initramfs -u; fi\n' > $F/DEBIAN/postinst
           cp $F/DEBIAN/postinst $F/DEBIAN/postrm
           chmod 755 $F/DEBIAN/postinst $F/DEBIAN/postrm
-          dpkg-deb --root-owner-group --build $F sgx545-firmware_0~git${d}.${v}_all.deb
+          dpkg-deb --root-owner-group --build $F sgx545-firmware_${fver}_all.deb
 
           for f in *.deb; do dpkg-deb -I $f | head -12; dpkg-deb -c $f | head -8; done
           sha256sum *.deb > SHA256SUMS

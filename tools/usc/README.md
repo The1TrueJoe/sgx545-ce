@@ -29,7 +29,7 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 ## Building
 
 In a Mesa checkout (tested at 27.0.0-devel 177e630), make `src/sgx/` hold a link
-`compiler -> <sgx545-ce>/mesa/src/sgx/compiler`, a link `sgxc -> <sgx545-ce>/tools/usc`,
+`compiler -> <powervr_sgx>/mesa/src/sgx/compiler`, a link `sgxc -> <powervr_sgx>/tools/usc`,
 and a `meson.build` with `subdir('compiler')` and `subdir('sgxc')`. Then add
 `if with_gallium` / `subdir('sgx')` / `endif` after `subdir('compiler')` in `src/meson.build`:
 

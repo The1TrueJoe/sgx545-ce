@@ -50,6 +50,24 @@ idep_sgx_isa = declare_dependency(
   sources : [sgx_isa_enums_h],
 )
 
+sgx_asm = executable(
+  'sgx-asm',
+  'assembler.c',
+  include_directories : [inc_include, inc_src],
+  dependencies : [idep_sgx_isa, idep_mesautil],
+  build_by_default : with_tools.contains('sgx'),
+  install : false,
+)
+
+sgx_disasm = executable(
+  'sgx-disasm',
+  'disasm.c',
+  include_directories : [inc_include, inc_src],
+  dependencies : [idep_sgx_isa, idep_mesautil],
+  build_by_default : with_tools.contains('sgx'),
+  install : false,
+)
+
 if with_tests
   subdir('tests')
 endif

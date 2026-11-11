@@ -21,3 +21,5 @@ CONFIG_DEBUG_OBJECTS_FREE=y
 CONFIG_DEBUG_OBJECTS_WORK=y
 CONFIG_DEBUG_OBJECTS_TIMERS=y
 CONFIG_KALLSYMS_ALL=y
+# /sys/power/pm_test: a suspend cycle that never leaves RAM, so the box needs no wake source.
+CONFIG_PM_DEBUG=y

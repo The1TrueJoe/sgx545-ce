@@ -37,8 +37,8 @@ MAINTAINERS, Kconfig), committed as one patch and run through
 | item | status |
 |---|---|
 | No `Signed-off-by` from the AI | pass |
-| `Assisted-by: Claude:claude-opus-5-5 sparse smatch coccinelle` on each patch (the documented format) | pass |
-| The cover letter says AI assistance was used | pass |
+| No AI attribution trailers on any patch (Joseph's rule) | pass |
+| AI-assistance disclosure in the cover letter | **left for Joseph**: his wording, if any |
 
 ### drm-uapi.rst (new uAPI)
 

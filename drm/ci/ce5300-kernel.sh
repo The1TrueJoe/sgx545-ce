@@ -25,7 +25,7 @@ DRM=$3
 BOARD=${BOARD:-ea1-v1}
 B=$DIST/board
 
-for p in "$B"/common/patches/linux/*.patch "$B"/ea/common/patches/linux/*.patch; do
+for p in "$B"/common/patches/linux/*.patch "$B"/ea/common/patches/linux/*.patch "$DRM"/sysfb/*.patch; do
 	[ -e "$p" ] || continue
 	echo ">> patch $(basename "$p")"
 	patch -d "$SRC" -p1 --forward --batch < "$p"

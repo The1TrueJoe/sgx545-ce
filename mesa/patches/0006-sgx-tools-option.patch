@@ -1,0 +1,43 @@
+sgx: add the sgx tools option
+
+-Dtools=sgx builds sgx-asm and sgx-disasm from src/sgx/isa without the
+gallium driver: src/meson.build descends into src/sgx for either.
+
+diff --git a/meson.build b/meson.build
+index c1d56a0..6baab45 100644
+--- a/meson.build
++++ b/meson.build
+@@ -130,6 +130,7 @@ if with_tools.contains('all')
+     'nir',
+     'nouveau',
+     'panfrost',
++    'sgx',
+     'gamma',
+     'zink',
+   ]
+diff --git a/meson.options b/meson.options
+index 97f3b9c..6299634 100644
+--- a/meson.options
++++ b/meson.options
+@@ -559,7 +559,7 @@ option(
+   value : [],
+   choices : ['amd', 'asahi', 'dlclose-skip', 'drm-shim', 'etnaviv', 'freedreno',  
+              'gamma', 'glsl', 'imagination', 'intel', 'intel-ui', 'lima', 'nir',
+-             'nouveau', 'panfrost', 'zink', 'all'],
++             'nouveau', 'panfrost', 'sgx', 'zink', 'all'],
+   description : 'List of tools to build. (Note: `intel-ui` selects `intel`)',
+ )
+ 
+diff --git a/src/meson.build b/src/meson.build
+index 95cf772..929580d 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -104,7 +104,7 @@ endif
+ if with_gallium_panfrost or with_gallium_lima or with_panfrost_vk or with_tools.contains('panfrost')
+   subdir('panfrost')
+ endif
+-if with_gallium_sgx
++if with_gallium_sgx or with_tools.contains('sgx')
+   subdir('sgx')
+ endif
+ if with_microsoft_clc or with_gallium_d3d12 or with_spirv_to_dxil or with_microsoft_vk

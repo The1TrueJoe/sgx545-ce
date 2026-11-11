@@ -5,8 +5,25 @@ What a GL client needs beyond one flat-shaded triangle, as the Cedarview DDK
 memory, how they get there, how a render lands in a texture, how depth and
 stencil survive between renders, and how a frame reaches the display.
 
-Tags as in `docs/STATE.md`: **[C]** replay-confirmed on a CE5300 board, **[D]**
-diff of captures or read from the DDK code that writes it, **[G]** guess.
+## How each fact is established
+
+Each fact below carries one of these tags, for what it rests on today:
+
+- **hardware**: confirmed on a CE5300 board, by a replay or a native run
+  whose output was checked (pixels, bytes or words read back; section 9
+  lists the pixel-exact ones). **hardware, open driver** means the open
+  driver in this repo (`mesa/src/gallium/drivers/sgx`,
+  `mesa/src/gallium/winsys/sgx`) does it and runs on the board.
+- **capture**: seen in the DDK's captured output: command streams, texture
+  words, texel uploads, transfer commands, and the diff between two captures
+  that differ in one probe setting.
+- **unconfirmed**: stated but not backed by hardware or a capture today.
+  Each one is listed in "Gaps" at the end with the test that would confirm
+  it. Shipping code must not rely on an unconfirmed fact.
+- **guess**: a name or meaning that fits but has no other backing.
+
+A tag on a lead sentence covers what follows it, unless a fact carries its
+own. Where a captured fact was later run on the board, both are given.
 
 ## Tools
 
@@ -28,11 +45,14 @@ says where each texel went with no guessing.
 ## 1. Texel memory layout
 
 All from `PROBE_TEXPAT` captures on 2026-10-28; `check.py` places every
-texel of every capture where `tex.py` predicts.
+texel of every capture where `tex.py` predicts (**capture**). The replays of
+section 9 sample `tex.py`'s twiddled RGBA8888 and RGB565 layouts and its
+linear RGBA8888 layout pixel for pixel (**hardware**).
 
-### Texel formats [D]
+### Texel formats
 
-Every format at 16×16 (`f*` captures), all 256 texels of each in place:
+Every format at 16×16 (`f*` captures), all 256 texels of each in place
+(**capture**):
 
 | GL upload | T1 format | in memory |
 |---|---|---|
@@ -44,12 +64,19 @@ Every format at 16×16 (`f*` captures), all 256 texels of each in place:
 | LUMINANCE_ALPHA | 0x1b | L, A bytes, as uploaded |
 | LUMINANCE / ALPHA | 0x1a / 0x19 | the byte |
 
-The 4444/5551 rotations are the driver's conversion on upload; a client
-writing memory itself must apply them (`tex.convert`, `sgxtex_convert16`).
-The render target's BGRA8888 is another format code (T1 0x0c), so a texture
-and a BGRA surface are not interchangeable without a swizzle.
+The open driver samples 0x0d, 0x05, 0x1b, 0x1a and 0x19 with these memory
+layouts (**hardware, open driver**); RGB565 is also replayed (section 9).
 
-### Twiddled: power-of-two sizes, T1 layout 0 [D]
+The 4444/5551 rotations are the driver's conversion on upload (**capture**);
+a client writing memory itself must apply them (`tex.convert`,
+`sgxtex_convert16`). The render target's BGRA8888 is another format code
+(T1 0x0c; **capture**, and **hardware, open driver**), so a texture and a
+BGRA surface are not interchangeable without a swizzle.
+
+### Twiddled: power-of-two sizes, T1 layout 0
+
+**capture**; **hardware** for RGBA8888 256×256 and RGB565 64×64 (section
+9); **hardware, open driver** for every power-of-two texture it samples.
 
 Square tiles of `t = min(w, h, 16)` texels. Inside a tile the texel index is
 the Morton interleave of x and y with **y in the lowest bit**
@@ -69,15 +96,22 @@ the first size where the 16×16 tiles show (bit 10 is y4, not x5). Checked
 texel by texel: p1x1, p2x1, p8x8, p16x8, p8x16, p32x8, p8x32, p64,
 p128x32 (4096 texels) and p256x256 (65536): all match, none differ.
 
-### Linear: sizes that are not powers of two, T1 layout 3 [D]
+### Linear: sizes that are not powers of two, T1 layout 3
+
+**capture**; **hardware** for RGBA8888 100×30 (section 9); **hardware,
+open driver** for every NPOT texture it samples.
 
 Rows top to bottom, each padded to a multiple of **8 texels**: 12×6 has a
 16-texel pitch (0x40 bytes), 100×30 a 104-texel pitch (0x1a0 bytes, the
 buffer is exactly 104 × 30 × 4). Every texel of both matches. T1 layout 3
-has no pitch field: the sampler derives it from the width the same way.
-n5x7 (pitch 8) and n33x17 (pitch 40) match too.
+has no pitch field: the sampler derives it from the width the same way
+(**hardware**: `tpn100` samples at pitch 104). n5x7 (pitch 8) and n33x17
+(pitch 40) match too.
 
-### Mipmaps [D]
+### Mipmaps
+
+**capture**; the open driver lays its mip chains out this way (**hardware,
+open driver**).
 
 Level n+1 follows level n with no padding or alignment, down to 1×1 on both
 axes; each level is laid out by its own size (twiddled when both sides are
@@ -86,17 +120,22 @@ powers of two). m16 (16×16, 5 levels, 0x554 bytes), m32x8 (32×8 → 16×4 →
 texel for texel. T2 is the base; nothing else in the texture words moves
 with the level count (STATE.md).
 
-**glGenerateMipmap runs on the GPU**: one transfer per level (mg64: six,
-before the frame's kicks), each sampling the previous level as a twiddled
-texture (T0 `001e0090`: clamp, nearest, no mips) and writing the next one
-twiddled. With nearest sampling the DDK's "filter" is decimation: texel
-(x, y) of level n is texel (2x+1, 2y+1) of level n−1 (all 1365 generated
-texels of mg64). A driver that wants box-filtered mips should make its own.
+**glGenerateMipmap runs on the GPU** (**capture**): one transfer per level
+(mg64: six, before the frame's kicks), each sampling the previous level as a
+twiddled texture (T0 `001e0090`: clamp, nearest, no mips) and writing the
+next one twiddled. With nearest sampling the DDK's "filter" is decimation:
+texel (x, y) of level n is texel (2x+1, 2y+1) of level n−1 (all 1365
+generated texels of mg64; `blitest mipn` gives the same on the board,
+**hardware**, section 10). A driver that wants box-filtered mips should make
+its own.
 
-## 2. Uploads: the CPU for small textures, the transfer queue otherwise [D]
+## 2. Uploads: the CPU for small textures, the transfer queue otherwise
+
+**capture**; the p64 GPU upload replays byte-identical to the DDK's
+(**hardware**, section 9).
 
 `glTexImage2D` does nothing visible until the first draw that uses the
-texture. Then libGLESv2 allocates the texture in the texture heap
+texture. Then the DDK allocates the texture in the texture heap
 (0xf0000000, attribs 0x3, CPU-mapped) and fills it one of two ways:
 
 - **CPU twiddle:** every power-of-two texture of up to 256 texels in the
@@ -110,12 +149,18 @@ texture. Then libGLESv2 allocates the texture in the texture heap
   sync is the GLES context's. The snapshot before the transfer shows the
   texture all zero; the one before kick 1 shows it filled.
 
-(The Mac-side DDK copy's `powervr.ini` says `DisableHWTextureUpload=1`; the
-board evidently does not read that file. The cut-over between 256 and 4096
+(The DDK's `powervr.ini` says `DisableHWTextureUpload=1`; the board
+evidently does not read that file. The cut-over between 256 and 4096
 texels was not narrowed down.) Either way the bytes are the same, so a
 client that twiddles on the CPU with `tex.py` never needs the transfer.
 
-## 3. The transfer queue: a 3D render with only a background object [D]
+## 3. The transfer queue: a 3D render with only a background object
+
+The buffers and words below are as captured (**capture**), and
+`present.py --check` rebuilds all of them (end of this section). `blitest`
+(section 10) builds the same words itself and runs them on the board, and
+the swap replays of section 6 run the DDK's (**hardware**). The two
+depth/stencil entries in the command table are the exception.
 
 `SGX_SUBMITTRANSFER` (texture uploads, and the swap blit in section 6) runs
 a render on the 3D core with no TA and no geometry. The only object is the
@@ -134,16 +179,15 @@ transfer context (one for GLES uploads, one for EGL's swap) owns:
 The command itself sits in the context's own CCB (kernel data, 0x104c8
 bytes) at offset 0; `ui32SharedCmdCCBOffset` = 0xac points at the
 `SGXMKIF_TRANSFERCMD_SHARED` the kernel fills (syncs), and the whole command
-is 0x1c0 bytes (word +0xa4). libsrv_um `FUN_0002ca20` writes the client
-words:
+is 0x1c0 bytes (word +0xa4). The client words:
 
 | word | upload / swap | field |
 |---|---|---|
 | 0 | 02008100 / 02000700 | `1<<25 \| (background block - base)>>4` |
-| 1 | 0x200 | 0x300 with a depth/stencil surface (not seen) |
+| 1 | 0x200 | 0x300 with a depth/stencil surface (not seen; **unconfirmed**) |
 | 2 | 3f800000 | background depth 1.0 |
 | 3 | 3 | |
-| 4 | 0 | depth/stencil block - base (not seen) |
+| 4 | 0 | depth/stencil block - base (not seen; **unconfirmed**) |
 | 5 | 0x100 | |
 | 6 | 3e000000 / 3e100000 | base: the background block & 0xfff00000 |
 | 7, 8 | 80000000, 0x88 | as render details +0x10, +0x50 |
@@ -160,7 +204,9 @@ destination's w, h in words 18 and 20.
 The source is a **strided** texture (T1 layout 6, format 0x0c BGRA8888,
 which here only means "copy 4 bytes"). Its T0 carries the pitch, which
 STATE.md had as a guess: **(pitch in texels − 1)** is split, the low 3 bits
-in T0 b9-11 and the rest in b17-26:
+in T0 b9-11 and the rest in b17-26 (**capture**; **hardware**: the swap
+replays and `blitest up`; **hardware, open driver**: it samples its render
+targets this way):
 
 | source | pitch | T0 |
 |---|---|---|
@@ -171,12 +217,12 @@ in T0 b9-11 and the rest in b17-26:
 | swap (back buffer) | 736 | 00b60e00 |
 
 The destination is the PBE words in the end-of-tile program's LIMMs; the
-sideband's **b13 (0x2000) writes the destination twiddled**. libGLESv2's
-PBE builder (`FUN_0004e7a0`) ORs it in from a two-entry table indexed by
-the surface's memory layout (`DAT_0006d5bc` = {0, 0x2000}); the twiddled
-uploads have sideband 0x2200 and the linear (NPOT) ones and the swap 0x200.
-The PBE writes the linear destination at its own pitch (104 for a 100-wide
-NPOT texture), so the GPU does the padding.
+sideband's **b13 (0x2000) writes the destination twiddled** (**hardware**:
+`blitest up` and the render-to-texture replays of section 4; **hardware,
+open driver**). It is set by the surface's memory layout: the twiddled
+uploads have sideband 0x2200 and the linear (NPOT) ones and the swap 0x200
+(**capture**). The PBE writes the linear destination at its own pitch (104
+for a 100-wide NPOT texture), so the GPU does the padding (**capture**).
 
 `present.py --check CAPTURE` rebuilds every one of these words from the
 surface sizes and addresses: command words 0-15, the background block, the
@@ -184,7 +230,10 @@ DOUTT words, the pixel PDS program and the end-of-tile program, 74 words per
 transfer. All 74 match for every transfer in every capture (uploads 12×6,
 100×30, 64×64, 128×32, 256×256; 12 swaps).
 
-## 4. Render to texture [C]
+## 4. Render to texture
+
+The kicks and words below are as captured (**capture**). RGBA8888 and RGB565
+are replayed on the board pixel for pixel (**hardware**, section 9).
 
 `fbrgba8888`: a 128×64 RGBA8888 texture as an FBO's color attachment, the
 probe triangle drawn into it, then a window quad sampling it. The DDK makes
@@ -201,8 +250,9 @@ targets, each with its own RT data, render details and region-header pair
 | 5 | window | last, 3D 0x400 | renders the window |
 
 The microkernel runs the 3D renders in kick order on the context, so the
-FBO is rendered before the window samples it; no source sync is involved.
-The FBO's end-of-tile program writes the texture directly:
+FBO is rendered before the window samples it; no source sync is involved
+(**hardware**: the replay renders this way, pixel-exact). The FBO's
+end-of-tile program writes the texture directly:
 
 - PBE words: clip max (127, 63), pitch 128 (word 2 `003f8000`), address =
   the texture (0xf0001000);
@@ -214,7 +264,10 @@ The FBO's end-of-tile program writes the texture directly:
 
 The other color formats (`fbrgb565`, `fbrgba4444`, `fbrgba5551`, same
 scene) differ only in the PBE format code and the sampled T1 format; all are
-written twiddled with dither:
+written twiddled with dither. RGBA8888 and RGB565 are replayed (**hardware**);
+RGBA5551 and RGBA4444 are **capture** only. The open driver renders
+RGBA8888 (and BGRA8888, PBE format 0) into textures this way (**hardware,
+open driver**).
 
 | FBO texture | sideband | PBE format | sampled as T1 |
 |---|---|---|---|
@@ -223,15 +276,18 @@ written twiddled with dither:
 | RGBA5551 | 0x2604 | 4 | 0x04 |
 | RGBA4444 | 0x2605 | 5 | 0x02 (texels come out ARGB4444, as uploads are stored) |
 
-**Replayed natively on a CE5300 board:** the replay's own FBO render (the texture
-kept out of every delta, `--no-delta`) leaves the texture byte-identical to
-the DDK's, and the window frame and its swap to the fb0 wrap match the DDK's
-readback, 0 of 345600 pixels. **Authored:** with the FBO's clear color
-changed (the three background-vertex color words at 0x3e51d00c/1c/2c) to
-green, the frame is 0 of 345600 pixels off the prediction (the DDK's readback
-with its 170094 FBO-clear pixels turned green).
+**Replayed natively on a CE5300 board** (**hardware**): the replay's own FBO
+render (the texture kept out of every delta, `--no-delta`) leaves the
+texture byte-identical to the DDK's, and the window frame and its swap to
+the fb0 wrap match the DDK's readback, 0 of 345600 pixels. **Authored:**
+with the FBO's clear color changed (the three background-vertex color words
+at 0x3e51d00c/1c/2c) to green, the frame is 0 of 345600 pixels off the
+prediction (the DDK's readback with its 170094 FBO-clear pixels turned
+green).
 
-## 5. Several renders per frame: the HW sync lists [C]
+## 5. Several renders per frame: the HW sync lists
+
+**hardware** (the `fbrgba8888` replay below).
 
 Each render target has a **HW sync list** in kernel data (the kick's
 `hKernelHWSyncListMemInfo`; `SGXMKIF_HWDEVICE_SYNC_LIST`: access address,
@@ -239,7 +295,7 @@ count, then per sync object its write/read-ops-complete addresses and the
 **pending values**). The client writes the pending values: absolute op
 counts of the surfaces the render writes, which the 3D waits for.
 
-Found the hard way: a first replay of `fbrgba8888` skipped the one transfer
+On the board: a first replay of `fbrgba8888` skipped the one transfer
 the DDK had submitted for the FBO texture (its initial fill) before kick 1.
 All five TA kicks completed (TA status counter 1 → 5, CCB read offset in
 step), but neither 3D render ever started, because the FBO's sync list
@@ -252,7 +308,10 @@ counts equal to what it actually submitted for each surface.
 how the stall was located: `0x2d00303c` counts TA kicks, `0x2d003030` and
 `0x2d003088` are the window's and the FBO's 3D completion status words.)
 
-## 6. Presentation: eglSwapBuffers [C]
+## 6. Presentation: eglSwapBuffers
+
+What the DDK does is from its trace (**capture**); each part is run
+natively on the board (**hardware**, table below).
 
 - **fb0 is wrapped, not mapped through the display class.** The DDK
   (LinuxFB WSEGL) mmaps `/dev/fb0` (720×480, 32 bpp BGRA, pitch 2944 = 736
@@ -280,9 +339,10 @@ after the replay:
 | direct15 `-F` | the same with PBE word 2 b15 cleared | **nothing written** to fb0 (no recovery) |
 
 So a client can present either way: render into its own back buffer and blit
-(what the DDK does, tear-free with two buffers), or render straight into the
-fb0 wrap (zero copy, single buffered). PBE b15 must stay set for both; it is
-not the "scanout" bit STATE.md had guessed.
+(what the DDK does, tear-free with two buffers: **unconfirmed**, see section
+12), or render straight into the fb0 wrap (zero copy, single buffered). PBE
+b15 must stay set for both; it is not the "scanout" bit STATE.md had guessed
+(**hardware**).
 
 ## 7. Depth and stencil across renders (ZLS)
 
@@ -292,38 +352,44 @@ the window samples the FBO; then a red triangle at clip z 0.5 (depth 0.75)
 that covers the green one is drawn into the FBO **without a clear**, and the
 window samples again. GL requires the green triangle to stay on top.
 
-**The DDK loses the FBO's depth** [D]. In its own frame not one green pixel
-is left: the red triangle covers all 24306 pixels of the green one, and the
-FBO's depth buffer (0x3e581000) is still all zero when the re-entry scene is
-kicked. The capture is ten kicks: FBO TA (1), window (2), FBO render (3),
-window (4, 5), FBO re-entry TA (6), window (7), FBO re-entry render (8),
-window (9, 10). The FBO's render details (one block, 0x3200ece0, for both
-FBO renders) carry ZLS control `0x00140018`, and the re-entry `0x00144018`
-(b14 added). Neither has the store bits.
+**The DDK loses the FBO's depth** (**capture**). In its own frame not one
+green pixel is left: the red triangle covers all 24306 pixels of the green
+one, and the FBO's depth buffer (0x3e581000) is still all zero when the
+re-entry scene is kicked. The capture is ten kicks: FBO TA (1), window (2),
+FBO render (3), window (4, 5), FBO re-entry TA (6), window (7), FBO re-entry
+render (8), window (9, 10). The FBO's render details (one block, 0x3200ece0,
+for both FBO renders) carry ZLS control `0x00140018`, and the re-entry
+`0x00144018` (b14 added). Neither has the store bits.
 
-Why, from libGLESv2 (`FUN_0002e2d0`): ZLS is only set up for **EGL window
-surfaces**, and only when a frame is flushed mid-scene (kick flag 0x80). Then
-it allocates a ZLS buffer of 5 bytes per padded pixel and sends, as
-deferred render-details updates (section 1 of STATE.md):
+In the captures the DDK sets ZLS up only for **EGL window surfaces**: the
+`fbd` and `fbds` FBO renders have no store bits, and its window renders with
+a depth buffer have them (**capture**). That it does so only when a frame is
+flushed mid-scene (kick flag 0x80) is **unconfirmed**; the split-window
+captures below store depth whether or not the frame is split. Its ZLS
+buffer is 5 bytes per padded pixel (**unconfirmed** for the DDK; the open
+driver allocates that and runs on the board, **hardware, open driver**). It
+sends, as deferred render-details updates (section 1 of STATE.md;
+**capture**):
 
 | render details | value | from |
 |---|---|---|
-| +0x2c ZLS control | `surface bits & 0xf80ee007 \| 0x111000 \| (xtiles-1)<<3` | window d0: `001710b4` |
+| +0x2c ZLS control | `surface bits & 0xf80ee007 \| 0x111000 \| (xtiles-1)<<3` (the `surface bits & 0xf80ee007` part **unconfirmed**) | window d0: `001710b4` |
 | +0x04 ZLS request base | buffer & 0xfff00000 | `3e500000` |
 | +0x30, +0x34 | **depth** address - base (both words) | `00081000` |
 | +0x38, +0x3c | b31 \| **stencil** address - base (both words), stencil after 4 bytes/pixel of depth | `801da000` |
 
 STATE.md had +0x30/+0x34 as depth/stencil store and +0x38/+0x3c as
-depth/stencil load; the code writes the depth address into both of the first
-pair and the stencil address into both of the second.
+depth/stencil load; the depth address goes into both words of the first
+pair and the stencil address into both of the second (**capture**;
+**hardware, open driver**).
 
-**Store, proven on a CE5300 board** [C]. Replaying `fbd` natively (control: 0 of
-345600 pixels off the DDK's frame) with the FBO's ZLS control set to
-`0x0017101c` (the DDK's FBO word plus b2, b12, b16, b17: the window path's
-bits) makes the 3D store the FBO's depth: after the frame the depth buffer
-holds float32 depths (`3f800000` = 1.0 where only the clear was, `3f400000` =
-0.75 under the red triangle) even though GL asked for 16 bits. Single-bit
-runs on the re-entry render, with the store on:
+**Store, proven on a CE5300 board** (**hardware**). Replaying `fbd` natively
+(control: 0 of 345600 pixels off the DDK's frame) with the FBO's ZLS control
+set to `0x0017101c` (the DDK's FBO word plus b2, b12, b16, b17: the window
+path's bits) makes the 3D store the FBO's depth: after the frame the depth
+buffer holds float32 depths (`3f800000` = 1.0 where only the clear was,
+`3f400000` = 0.75 under the red triangle) even though GL asked for 16 bits.
+Single-bit runs on the re-entry render, with the store on:
 
 | ZLS control | result |
 |---|---|
@@ -332,25 +398,28 @@ runs on the re-entry render, with the store on:
 | `0x0017101c` (+ b2, b12, b16, b17) | **depth stored**, float32 |
 | + b14 (`0x0017501c`, the DDK's "re-entry" bit) | stored, **not loaded**: red still covers green |
 | + b13 or + b15 | no visible change |
-| + b19 | the stored depths are negated (`bf400000`): a format bit |
+| + b19 | the stored depths are negated (`bf400000`): a format bit (name **guess**) |
 | + b0 or + b1, stencil words left at the DDK's `c1b00000` | **3D lockup**; once the recovery failed (`SGXInitialise failed (24)`) and the board had to be power-cycled |
 | + b0 (`0x0017501d`), stencil words +0x38/+0x3c = `00081000` (valid memory) | no lockup; a **depth-only render**: the re-entry triangle's depth is stored (0.75 in 3306 texels) but no color is written. Still no load |
 
 The packed depth-stencil FBO (`fbds`, DEPTH24_STENCIL8) gets ZLS control
 `0x162018` (b13 and b17 on top of the depth-only word) and its stencil
 address 0x8000 after the depth (+0x38 = `80089000`); its depth is lost the
-same way (the re-entry triangle covers the first one).
+same way (the re-entry triangle covers the first one) (**capture**).
 
 So the lockups were most likely the DDK's placeholder stencil words: `c1b00000`
 is b31 | b30 | 0x01b00000, an address past the end of the ZLS request base's
-range. Bits that make the 3D touch the stencil address then fault. **Point
-+0x38/+0x3c at valid memory before trying ZLS bits.**
+range. Bits that make the 3D touch the stencil address then fault. With
+valid stencil words b0 ran without a lockup (above), and so does the load
+below, which sets b1 (**hardware**). **Point +0x38/+0x3c at valid memory
+before trying ZLS bits.**
 
-**Load, from a split window frame** [D]. `zls-*` (2026-11-08) is a 720×480
-window with a 16-bit depth buffer, depth test LESS, clear depth 1. Draw 1 is
-a green triangle at depth 0.5. Draw 2 is the same triangle in red at depth
-0.75. Something runs between the two draws (probe `PROBE_FLUSHMID`). The
-DDK's frame is green in every variant: it keeps the depth.
+**Load, from a split window frame** (**capture**). `zls-*` (2026-11-08) is a
+720×480 window with a 16-bit depth buffer, depth test LESS, clear depth 1.
+Draw 1 is a green triangle at depth 0.5. Draw 2 is the same triangle in red
+at depth 0.75. Something runs between the two draws (probe
+`PROBE_FLUSHMID`). The DDK's frame is green in every variant: it keeps the
+depth.
 
 | between the draws | kicks (TA flags / 3D flags) | ZLS control of each render |
 |---|---|---|
@@ -365,7 +434,9 @@ DDK's frame is green in every variant: it keeps the depth.
   stores depth. The second render's (`001770b6`, a deferred update at its
   last kick) loads and stores it. The TA-only kick between them carries
   `001170b2`, load only, in its render details.
-- **The bits.** The base is `0x111000 | (xtiles-1)<<3`.
+- **The bits.** The base is `0x111000 | (xtiles-1)<<3`. The open driver
+  uses these words and they work on the board (below; **hardware, open
+  driver**).
   - **Store** is b2 | b17 | b18 (`0x060004`). This matches the store proven
     above.
   - **Load** is b1 | b13 | b14 (`0x006002`). The section's earlier tries had
@@ -377,15 +448,15 @@ DDK's frame is green in every variant: it keeps the depth.
   - Stencil: +0x38 = +0x3c = `801da000`.
   - Stencil starts 0x159000 bytes after depth: 736 × 480 × 4 bytes, so one
     float32 per pixel of the tile-padded width (23 tiles of 32 px). One
-    stencil byte per pixel follows.
+    stencil byte per pixel follows (**unconfirmed**).
   - The same addresses serve the store and the load.
 - **Every DDK window render with a depth buffer stores depth** (`001710b4` at
   the terminating kick), split or not.
-- **Proven natively on a CE5300 board** [C] (2026-11-08, an open Mesa driver
-  on the DDK microkernel). A 96×64 surface (xt 3) is split mid-frame by
-  glFlush, glFinish or a 1-pixel readback. The second draw is farther away,
-  depth LESS. The result is green in all 12 cases, with 24/0, 24/8 and 16/0
-  depth/stencil configs, and there were no lockups.
+- **Proven natively on a CE5300 board** (**hardware**, 2026-11-08, an open
+  Mesa driver on the DDK microkernel). A 96×64 surface (xt 3) is split
+  mid-frame by glFlush, glFinish or a 1-pixel readback. The second draw is
+  farther away, depth LESS. The result is green in all 12 cases, with 24/0,
+  24/8 and 16/0 depth/stencil configs, and there were no lockups.
   - Store with `00171014`, then load + store with `00177016`.
   - +0x04 = buffer & 0xfff00000; +0x30/+0x34 = the depth offset; +0x38/+0x3c
     = b31 | the stencil offset. The stencil offset is the depth offset plus
@@ -397,7 +468,10 @@ DDK's frame is green in every variant: it keeps the depth.
     uses ZLS (the DDK sends 0x580 = 0x400 | 0x180). Without them nothing is
     stored. Which of the two bits does it is not isolated.
 
-## 8. Cube maps [D]
+## 8. Cube maps
+
+**capture**; the open driver lays its cube faces out this way, the 0x800
+alignment included (**hardware, open driver**).
 
 Six faces in GL order (+X, −X, +Y, −Y, +Z, −Z), one after the other, each a
 complete mip chain in the layout of section 1. Face spacing:
@@ -413,7 +487,7 @@ So faces are packed when level 0 is smaller than one 16×16 tile and aligned
 otherwise. Every texel of all four captures sits where `check.py --cube
 --face-stride` predicts (384, 510, 2046 and 8190 texels).
 
-**The alignment is 0x800 bytes in every format** [D] (2026-11-02:
+**The alignment is 0x800 bytes in every format** (**capture**, 2026-11-02:
 probe cubes with full chains and NEAREST_MIPMAP_NEAREST, the DDK's texture
 buffer divided by six):
 
@@ -426,18 +500,20 @@ buffer divided by six):
 **Mip levels sampled without mipmapping.** The sampler then spaces the faces
 by level 0 alone (T0 b18 set): with our chain-spaced faces every face but +X
 came from the wrong place, and no T0 bit tried (b17, b19, b20, b21-26)
-changes that. The DDK keeps such a cube in different storage: a 16×16 RGBA
-cube with five levels uploaded and a MIN filter of LINEAR samples a 0x1800
-buffer (six 0x400 faces, level 0 only), the same cube with
-NEAREST_MIPMAP_NEAREST a 0x3000 one. The driver keeps a copy of the level-0
-faces for that case (`res->cube0`).
+changes that (**hardware**). The DDK keeps such a cube in different storage
+(**capture**): a 16×16 RGBA cube with five levels uploaded and a MIN filter
+of LINEAR samples a 0x1800 buffer (six 0x400 faces, level 0 only), the same
+cube with NEAREST_MIPMAP_NEAREST a 0x3000 one. The driver keeps a copy of
+the level-0 faces for that case (`res->cube0`; **hardware, open driver**).
 
-**NPOT faces** [D]. The DDK samples a 12×12, 15×15 or 20×20 cube as one
-linear face (T1 layout 3, a buffer of one face's bytes at the 8-texel pitch)
-and fails every NPOT cube test in dEQP-GLES2; layout 2 has no NPOT form that
-we know of.
+**NPOT faces** (**capture**). The DDK samples a 12×12, 15×15 or 20×20 cube
+as one linear face (T1 layout 3, a buffer of one face's bytes at the 8-texel
+pitch) and fails every NPOT cube test in dEQP-GLES2 (**hardware**); layout 2
+has no NPOT form that we know of.
 
 ## 9. What is proven on hardware, pixel for pixel
+
+Every row is **hardware**.
 
 | claim | run | result |
 |---|---|---|
@@ -453,7 +529,10 @@ we know of.
 | present by rendering into fb0 | PBE address = the fb0 wrap | fb0 = the DDK's readback, 0 px |
 | depth store across renders | fbd with ZLS control `0x0017101c` | depth buffer written (float32) |
 
-## 10. GPU blits of our own: copies, mipmaps, sub-rectangles [C]
+## 10. GPU blits of our own: copies, mipmaps, sub-rectangles
+
+**hardware** (`blitest` on the board, checked by `check_blit.py`), except
+where a fact carries its own tag.
 
 `tools/tex/blitest.c` runs the transfer queue on a context it builds itself:
 no DDK library and no capture. Every word comes from `sgxtex`:
@@ -465,9 +544,10 @@ no DDK library and no capture. Every word comes from `sgxtex`:
   program.
 
 Before any GPU run, those builders were checked against the 364 words the
-DDK writes for its two transfer contexts in the p64 capture; all match.
+DDK writes for its two transfer contexts in the p64 capture; all match
+(**capture**).
 
-**Setting a context up** (libsrv_um `SGXCreateTransferContext`, decompiled):
+**Setting a context up:**
 
 | buffer | heap, attribs, size |
 |---|---|
@@ -479,8 +559,8 @@ DDK writes for its two transfer contexts in the p64 capture; all match.
 | pixel PDS | PDS pixel (6), 0xd, 0x400 (the background pixel program) |
 
 The context buffer is `{1, 0, PD (kernel), CCB, CCB control, 0 ...}` with the
-PID at word 0x2a; the DDK leaves the rest uninitialized. Register it with PD
-offset 8. Per blit, the client:
+PID at word 0x2a; the DDK leaves the rest uninitialized (**unconfirmed**).
+Register it with PD offset 8. Per blit, the client:
 1. writes the 0x1c0-byte command at the CCB write offset:
    - words 0-15;
    - +0xa4 = 0x1c0;
@@ -507,7 +587,8 @@ Two traps:
 coordinates (u, v) at those three vertices, and the 3D interpolates them; a
 sweep of each word on a CE5300 board fits u = w3·(1-s-t) + w5·s + w7·t exactly (and
 the same for v). The DDK always writes (0,0), (1,0), (0,1); words 18, 20 and
-21 hold the vertices themselves, in a fixed-point form not decoded further.
+21 hold the vertices themselves, in a fixed-point form not decoded further
+(**capture**).
 A sub-rectangle copy (`sgxtex_blit_build_rect`) does three things:
 - sets the coordinates so destination pixel (x, y) samples source texel
   (sx − dx + x, sy − dy + y), scaled;
@@ -548,26 +629,28 @@ So glCopyTexImage2D, glCopyTexSubImage2D, texture-to-texture copies,
 glBlitFramebuffer-style scaled copies and box-filtered mipmap generation can
 all run on the GPU.
 
-## 11. Render targets the sampler reads directly [C]
+## 11. Render targets the sampler reads directly
 
 The DDK never converts a render-to-texture target: it renders it in the
-layout the sampler reads (section 4).
+layout the sampler reads (section 4; **capture**). The open driver renders
+its texture targets the same two ways (**hardware, open driver**).
 - **Power-of-two** sizes are rendered twiddled: PBE sideband b13, PBE pitch
   = the width, sampled as T1 layout 0.
 - **Other sizes** are rendered linear, with the pitch rounded up to 8
   texels. A 100×60 RGBA8888 FBO gets PBE pitch 104 (`00338000`), sideband
   0x601 and a 0x6180-byte buffer, and is sampled as T1 `6d06303b` (layout 3,
-  100×60) from the same address (`fbnpot`, retaken today).
+  100×60) from the same address (`fbnpot`).
 
 `sgxtex_rt_surface` and `sgxtex_rt_pbe` give exactly the DDK's words for
-both: 128×64 gives `003f8000`, sideband 0x2601 and T1 `0d07f03f`; 100×60
-gives `00338000`, 0x601 and `6d06303b`. The same PBE words work for a TA/3D
-render's end-of-tile program and for a transfer-queue blit, and render to
-texture is replay-proven for RGBA8888 and RGB565 (section 4).
+both (**capture**): 128×64 gives `003f8000`, sideband 0x2601 and T1
+`0d07f03f`; 100×60 gives `00338000`, 0x601 and `6d06303b`. The same PBE
+words work for a TA/3D render's end-of-tile program and for a transfer-queue
+blit, and render to texture is replay-proven for RGBA8888 and RGB565
+(section 4; **hardware**).
 
 ## 12. Tear-free presentation
 
-**Back buffer plus swap blit** [C]. `blitest present`:
+**Back buffer plus swap blit** (**hardware**). `blitest present`:
 - wraps the real `/dev/fb0` the way the DDK's EGL does;
 - fills a 720×480 BGRA8888 back buffer (pitch 736);
 - blits it to fb0 on its own transfer context.
@@ -576,19 +659,21 @@ fb0 read back afterwards equals the back buffer, 0 of 345600 pixels. Submit
 to completion took **1.3 ms**, so a frame rendered off-screen reaches the
 display in about a tenth of a 60 Hz frame.
 
-**Flipping is not available.** fb0 is `simplefb` over the fixed buffer the
-CEFDK left the display controller scanning out (0x7fc00000, 720×480, pitch
-2944). It has no virtual height and no pan, so FBIOPAN flips can't work.
+**Flipping is not available** (**hardware**). fb0 is `simplefb` over the
+fixed buffer the CEFDK left the display controller scanning out (0x7fc00000,
+720×480, pitch 2944). It has no virtual height and no pan, so FBIOPAN flips
+can't work.
 
 **Vsync: not established.** The display controller (VDC, 8086:2e61,
-BAR 0xdfb00000) has the i9xx layout:
+BAR 0xdfb00000) has the i9xx layout (**hardware**, register reads):
 - pipe A's timing reads 857×525 total and 720×480 active (`035902cf`,
   `020c01df`);
 - pipe A's config (+0x70008) read `80000000` (enabled);
 - its status (+0x70024) changed between reads (`342` → `302`).
 
 That status is where an i9xx pipe keeps its vblank bit (b1, write 1 to
-clear). Two cautions for anyone continuing:
+clear; **unconfirmed** on this controller). Two cautions for anyone
+continuing (**hardware**):
 - A read-only scan of the whole 1 MB BAR hung the board outright, with no ping
   and a power cycle needed: holes in this window are not safe to read. Read
   only known registers.
@@ -604,15 +689,72 @@ Until a vblank source is proven, swapping with the 1.3 ms blit is the
 tear-light path, and rendering straight into the fb0 wrap (section 6) is the
 zero-copy one.
 
-## Open
+## Gaps
 
-- The ZLS **load** enable (section 7).
+Facts above tagged **unconfirmed**, each with the hardware test or capture
+that would confirm it. Shipping code must not rely on an unconfirmed fact
+until it is confirmed.
+
+### 3. The transfer queue
+
+- Command word 1 is 0x300 when the transfer has a depth/stencil surface →
+  a capture of a DDK transfer with a depth/stencil surface, or a `blitest`
+  run with word 1 = 0x300 and a depth/stencil block, reading back what the
+  3D writes.
+- Command word 4 holds the depth/stencil block's address minus the base →
+  the same capture or `blitest` run.
+
+### 6. Presentation
+
+- The DDK's back buffer plus swap blit is tear-free with two buffers → a
+  vblank source (section 12) to time the blit against, or a moving-edge test
+  on the display presented through the blit.
+
+### 7. Depth and stencil across renders
+
+- The DDK sets ZLS up only when a frame is flushed mid-scene (kick flag
+  0x80); the `zls-*` captures already show window renders storing depth
+  without a split → captures of window frames with and without a split,
+  logging each kick's flags next to its render's ZLS words.
+- The DDK's ZLS buffer is 5 bytes per padded pixel → a capture of the DDK's
+  ZLS buffer allocation for a window with a depth buffer, its size compared
+  with the padded pixel count.
+- ZLS control's bits outside the base are the surface's bits masked with
+  `0xf80ee007` → captures of windows with different depth/stencil configs
+  (16/0, 24/0, 24/8) and a diff of +0x2c.
+- One stencil byte per pixel follows the depth in the ZLS buffer, and it is
+  stored and loaded → a hardware split-frame stencil test (stencil written
+  before a 1-pixel readback, tested after), with the ZLS buffer read back.
+
+### 10. GPU blits of our own
+
+- The DDK leaves the 0xb4-byte transfer context buffer uninitialized past
+  the words it sets → captures of that buffer from two DDK runs with
+  different prior memory contents, compared word by word.
+
+### 12. Tear-free presentation
+
+- Pipe A status (+0x70024) b1 is the vblank bit on this controller, cleared
+  by writing 1 → a hardware run that reads only +0x70024 at short intervals
+  and sees b1 set about every 16.7 ms and clear after a write of 1 (read
+  only named registers; see the cautions in section 12).
+
+### Open questions
+
+These are untested behavior, not stated facts.
+
+- Which single bits enable the ZLS load (b1, b13, b14) and the store (b2,
+  b17, b18), and which of TA 3D flags b7 and b8 is needed (section 7) →
+  single-bit hardware runs on the split-frame test.
 - The cut-over between CPU and transfer-queue uploads (between 256 and
-  4096 texels).
+  4096 texels; section 2) → captures of power-of-two textures of 512, 1024
+  and 2048 texels, noting which submit a transfer.
 - A vblank source for vsync; why the VDC registers went to 0 (section 12).
 - The fixed-point format of the background block's vertex words 18, 20 and 21
-  (sub-rectangles don't need them; section 10).
+  (sub-rectangles don't need them; section 10) → captures of blits to
+  several destination sizes, diffing those words.
 - PBE word 2 b15: it must be set for the PBE to write; what clearing it
   selects is unknown.
 - Formats beyond the ones probed: compressed textures (PVRTC/ETC), float
-  textures, the PBE codes 2 and 6+ in libGLESv2's table.
+  textures, the PBE format codes 2 and 6 and up → captures of uploads and
+  renders in those formats.

@@ -9,7 +9,7 @@ SGX545 GPU test stick for Intel Cedarview (GMA 3600/3650), live Debian 13
    results are saved, and you can switch it off whenever you like.
 4. Attach the one file named results-kitv4-....tar.gz on this drive to the GitHub
    issue, as the guide says:
-   https://github.com/The1TrueJoe/sgx545-ce/blob/dev/docs/TESTING-CEDARVIEW.md
+   https://github.com/The1TrueJoe/powervr_sgx/blob/dev/docs/TESTING-CEDARVIEW.md
 
 If after 20 minutes there is neither "Done. Thank you!" nor a desktop, or the
 computer restarted into its own system, start it from the stick once more: the

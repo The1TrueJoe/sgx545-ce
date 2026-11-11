@@ -12,26 +12,57 @@ on:
       suite:
         description: Debian suite whose kernel config to start from
         default: trixie
+      lockdep:
+        description: Lock checking (drm/ci/lockdep.fragment); its own release name and artifact
+        type: boolean
+        default: false
+  # release.yml builds the release flavor through this.
+  workflow_call:
+    inputs:
+      suite:
+        type: string
+        default: trixie
+      lockdep:
+        type: boolean
+        default: false
+      flavor:
+        description: kit (the test-kit patches too) or release (only what ships)
+        type: string
+        default: kit
+      pkg_release:
+        description: the package revision after "<linux version>-sgx" (1 by default; the release version for a release)
+        type: string
+        default: '1'
+    outputs:
+      artifact:
+        description: the name of the artifact holding the packages
+        value: ${{ jobs.deb.outputs.artifact }}
   push:
     branches: [m2-drm]
     paths:
       - drm/ci/deb-kernel.sh
       - drm/ci/deb.fragment
       - drm/gma500/**
+      - drm/ci/kit/**
       - drm/powervr_sgx/**
       - .github/workflows/powervr-sgx-deb.yml
 
 concurrency:
-  group: powervr-sgx-deb-${{ github.ref }}
+  group: powervr-sgx-deb-${{ github.ref }}-${{ inputs.lockdep && 'lockdep' || 'plain' }}-${{ inputs.flavor || 'kit' }}
   cancel-in-progress: false
 
 env:
   LINUX_VERSION: 7.3.3
+  FLAVOR: ${{ inputs.lockdep && '-lockdep' || '' }}
+  DEB_FLAVOR: ${{ inputs.flavor || 'kit' }}
+  PKG_RELEASE: ${{ inputs.pkg_release || '1' }}
 
 jobs:
   deb:
     runs-on: ubuntu-24.04
     timeout-minutes: 340
+    outputs:
+      artifact: powervr-sgx-deb-cedarview${{ env.FLAVOR }}${{ env.DEB_FLAVOR == 'release' && '-release' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +81,7 @@ jobs:
       - name: Lay out the kernel
         env:
           DEB_SUITE: ${{ inputs.suite || 'trixie' }}
+          EXTRA_FRAGMENTS: ${{ inputs.lockdep && format('{0}/drm/ci/lockdep.fragment', github.workspace) || '' }}
         run: |
           set -eux
           [ -f linux-$LINUX_VERSION.tar.xz ] ||
@@ -63,8 +95,8 @@ jobs:
           DEBFULLNAME: Joseph Telaak
         run: |
           set -eux
-          make -C linux-$LINUX_VERSION ARCH=x86_64 -j"$(nproc)" LOCALVERSION=-sgx \
-            KDEB_PKGVERSION=$LINUX_VERSION-sgx1 bindeb-pkg
+          make -C linux-$LINUX_VERSION ARCH=x86_64 -j"$(nproc)" LOCALVERSION=-sgx$FLAVOR \
+            KDEB_PKGVERSION=$LINUX_VERSION-sgx$PKG_RELEASE bindeb-pkg
           mkdir -p out
           mv linux-image-*.deb linux-headers-*.deb out/
           ls -l out
@@ -78,6 +110,13 @@ jobs:
               CONFIG_DRM_FBDEV_EMULATION=y CONFIG_AUXILIARY_BUS=y; do
             grep -qx "$want" $L/.config || { echo "missing $want"; exit 1; }
           done
+          [ -z "$FLAVOR" ] || grep -qx CONFIG_PROVE_LOCKING=y $L/.config
+          # The release flavor ships without the test-kit gma500 patches.
+          if [ "$DEB_FLAVOR" = release ]; then
+            for p in drm/ci/kit/*.patch; do
+              ! patch -d $L -p1 -R --dry-run -s -f < "$p" >/dev/null 2>&1 || { echo "kit patch $p is applied"; exit 1; }
+            done
+          fi
           rm -rf root && mkdir root && dpkg-deb -x out/linux-image-*.deb root
           M=$(ls -d root/lib/modules/*)
           for m in gma500_gfx powervr_sgx; do
@@ -95,9 +134,10 @@ jobs:
           G=$(find $M -name 'gma500_gfx.ko*')
           case $G in *.zst) zstd -dq $G -o g.ko ;; *.xz) xz -dc $G > g.ko ;; *) cp $G g.ko ;; esac
           nm g.ko | grep -q psb_gem_prime_get_sg_table
+          nm g.ko | grep -q psb_gem_prime_export
 
       - uses: actions/upload-artifact@v4
         with:
-          name: powervr-sgx-deb-cedarview
+          name: powervr-sgx-deb-cedarview${{ env.FLAVOR }}${{ env.DEB_FLAVOR == 'release' && '-release' || '' }}
           path: out/
           retention-days: 30

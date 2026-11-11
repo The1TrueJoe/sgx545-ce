@@ -205,6 +205,16 @@ Write it for Mesa's docs tree. It covers:
 Upstream, the fixed programs are assembled by the compiler's encoder at build
 time (DRIVER-UPSTREAM.md §5.2, COMPILER-UPSTREAM.md).
 
+Compiler half done (2026-11-11): `mesa/src/sgx/compiler/sgx_fixed.c` holds the
+programs as assembly text, and `sgx_fixed_progs_build()` assembles them
+through the isa library into a caller-owned struct. The result is
+byte-identical to `mkusse.py`'s header: 42 programs, relocations included.
+The gtest `sgx_fixed.programs_assemble` assembles and decodes every program.
+It runs when a context is created, not at build time: `mesa/build.sh`
+cross-compiles, and a build-time generator would need native builds of the
+isa library, mesautil and isaspec. Left for the winsys: call it, then drop
+`sgx_usse_progs.h` and `build.sh`'s call to `tools/gen/mkusse.py`.
+
 ### M10. sRGB textures (must fix before the MR)
 
 The driver advertises desktop GL 2.1, so `EXT_texture_sRGB` is offered. 2.1
@@ -249,12 +259,12 @@ earlier licensing and provenance audit.
 |---|---|---|
 | C1 | debug options in a `debug_named_value` table | done (1ba7774) |
 | C2 | clang-format | done (31f6f18) |
-| C3 | NIR passes in Mesa's shape | done (69923e0); one item left |
-| C4 | unit tests under `meson test` | done (7e0421a); coverage to grow |
+| C3 | NIR passes in Mesa's shape | done (69923e0, options asserted 2026-11-11) |
+| C4 | unit tests under `meson test` | done (7e0421a; 22 cases 2026-11-11) |
 | C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
 | C6 | no global mutable state | done (`hw_const`) |
-| C7 | comments cite `docs/`, not libusc or the DDK | not started |
-| C8 | DDK-compatibility code out of the compiler | partly |
+| C7 | comments cite `docs/`, not libusc or the DDK | done (2026-11-11) |
+| C8 | DDK-compatibility code out of the compiler | done (2026-11-11) |
 | C9 | file size | open (optional) |
 
 - **C1. Debug options.**
@@ -279,18 +289,22 @@ earlier licensing and provenance audit.
     `lower_tex_derefs`, `lower_uniforms`.
   - Rewrites are `nir_shader_{instructions,alu,intrinsics}_pass` callbacks;
     the block walks left are analyses.
-  - Still to do: `sgx_lower()` sets `s->options` to its own options. The
-    driver and sgxc should create the shader with `sgx_nir_options()`
-    instead, and the compiler should assert that they did.
+  - The caller creates the shader with `sgx_nir_options()` (the driver's
+    `get_compiler_options`, the gtest's builder; sgxc sets it on the
+    standalone frontend's NIR), and `sgx_lower()` asserts it.
 - **C4. Tests.**
   - `meson test --suite sgx` runs `sgx_compiler` (gtest) beside
     cleanroom-isa's `sgx_isa`.
   - Shaders are built with `nir_builder` and compiled; every word must
     decode through the isaspec disassembler.
-  - Cases: a fragment varying to color, a vertex position, efo co-issue on
-    mat4 * v, and the int-select loop bound (d3adad7).
-  - Each case was checked to fail on the bug it guards.
-  - To grow: F16 and C10 paths, textures, discard, constants in memory.
+  - 22 cases: varyings, positions and efo co-issue (and its chains), the
+    int-select loop bound, an early-exit loop, partial colors, ceil,
+    or-of-compares masks, textures (BGRA units, PDS-only samples, F16
+    returns, a dependent sample), the color fast paths, mediump fmad16, lowp
+    C10, discard in one phase and split in two, constants past SA (ld.a.d),
+    and skipinv clear on what feeds a derivative.
+  - Each case was checked to fail on the bug it guards (the new ones with
+    `SGX_COMPILER_DEBUG=nomediump` and with the helper marking disabled).
   - The DDK corpus harness (`tools/usc`) stays in this repository.
 - **C5. Structure doc.** `compiler/README.md` covers the files, the pipeline
   (lowering, analysis, selection, backend passes, allocation, encoding), the
@@ -300,18 +314,23 @@ earlier licensing and provenance audit.
   race between two contexts compiling at once). It is now a const table.
   This also fixes a latent bug: a literal equal to the old filler value
   0xdeadbeef no longer matches hardware constant 0.
-- **C7. Comments.**
-  - About 58 comments say "as libusc does" or "as the DDK does" (27 in
-    `sgx_compile.c`, 16 in `sgx_nir.c`, 12 in `sgx_compiler.h`).
-  - Rewrite each to cite the `docs/` section and the test that fixed the
-    behavior (COMPILER-UPSTREAM.md §2.2).
-  - Box and application names: none left in the compiler.
+- **C7. Comments.** Every comment that named libusc, the DDK or
+  glslcompiler as the behavior matched now cites the docs section, corpus
+  shader, capture or hardware test it rests on (byte-identical). Box and
+  application names: none left in the compiler.
 - **C8. DDK-compatibility code** (COMPILER-UPSTREAM.md §3).
-  - Still in the compiler: the varying-to-set allocation, first-use sampler
-    numbering, the USP label numbers 3/4/5, and the placeholder color
-    iteration's PA count.
-  - Upstream, the driver owns layouts. Move these behind
-    `struct sgx_layout`, or into sgxc.
+  - Samplers: the compiler takes the caller's unit (`struct sgx_layout`), or
+    else the sampler variable's binding. sgxc numbers unpinned samplers in
+    order of use, as the corpus does.
+  - Labels: the compiler numbers its own from 0. The USP writer
+    (`tools/usc/sgx_usp.c`) keeps 3/4/5 for start, feedback and phase 1 and
+    puts the compiler's after them.
+  - `n_pa` counts the iterations and the color only. The USP writer adds the
+    DDK driver's placeholder color iteration's register to the header.
+  - The varying-to-set allocation stays. It is the compiler's allocation,
+    and the driver uses it for both stages; the rule is in ISA.md "What a
+    compiler needs".
+  - Every step is byte-identical on the 11,868 programs.
 - **C9. File size.** `sgx_compile.c` is 5.8k lines, the size of
   `ir3_compiler_nir.c`.
   - Splitting it into selection, register allocation and encoding files means
@@ -323,8 +342,8 @@ earlier licensing and provenance audit.
 
 The microkernel is MIT-licensed source (`ukernel/ukernel.py`) assembled to a
 small binary a loader runs on the SGX core. Upstreaming has two destinations:
-the **source** (its own repository) and the **built binary** (linux-firmware,
-loaded by the DRM driver).
+the **source** (this repository `powervr_sgx`, under `ukernel/`) and the **built
+binary** (linux-firmware, loaded by the DRM driver).
 
 | item | state |
 |---|---|
@@ -332,44 +351,60 @@ loaded by the DRM driver).
 | Pinned toolchain | **Done (documented).** Only CPython ≥ 3.7; no external packages. Recorded in `ukernel/README.md` → Building. |
 | MIT license | **Done.** `ukernel/LICENSE` + an `SPDX-License-Identifier: MIT` header on every source file. |
 | Release manifest | **Done.** `core`, `version` (major.minor), `features`, `build_id`, sizes, entry offsets, patch sites. |
-| Per-core identity | **Done.** `ukernel.py:CORE_NAME` names the target SGX core; build.py derives the binary name and manifest `core` from it, so SGX540/SGX531/… images never collide. |
+| Per-core identity | **Done.** The per-core config `cores/<core>.py:CORE_NAME` (selected by `build.py <core>` / `SGX_CORE`, default sgx545) names the target SGX core; build.py derives the binary name and manifest `core` from it, so SGX540/SGX531/… images never collide. |
 | Feature-bit documentation | **Done.** `ukernel/README.md` → Feature bits (bit 0 CLEANUP_V2, bit 1 SECURE). |
 | Build/feature README | **Done.** `ukernel/README.md`. |
 | linux-firmware WHENCE entry | **Draft below** (not submitted). |
 | Neutral docs pass | **Pending ta3d-state** — `docs/` and any Documentation text use CE5300/SGX5xx neutrally; dev-box history → `docs/log/`. |
-| DPM out-of-memory handler | **Pending** — the one open functional gap before the firmware is feature-complete for general workloads (`side-session-notes/.../dpm-oom-handler-design.md`). Not a packaging item, but gates "ready". |
+| DPM out-of-memory handler | **Done.** The OOM partial-render handler is confirmed on real hardware — the last open functional gap; general workloads now run (e.g. Minecraft 15 min in-world, 0 GPU recoveries). Behaviour in `docs/UKERNEL.md`; bring-up in `docs/log`. |
 
 ### Draft linux-firmware WHENCE entry (not submitted)
 
 The binary linux-firmware would carry is the **packaged** image the DRM driver
 requests (header + feature bits applied by the driver's packaging tool over the
-`ukernel/build.py` output), named as the driver requests it:
+`ukernel/build.py` output), named per core as the driver requests it:
 
 ```
 Driver: powervr_sgx — PowerVR SGX5xx (e.g. SGX545 on the Intel Atom CE5300)
 
-File: powervr_sgx/sgx_ukernel.bin
+File: powervr_sgx/sgx545_ukernel.bin
 Version: 1.0
-Source: <source-repository-url>/ukernel   (ukernel.py + build.py; the DRM
-        driver's packaging tool applies the header/feature bits)
-License: MIT.  See LICENSE.<id> for details.
+Source: https://github.com/The1TrueJoe/powervr_sgx   (ukernel/ — ukernel.py +
+        cores/<core>.py + build.py; the DRM driver's packaging tool applies the
+        header/feature bits)
+License: MIT.  See LICENSE.powervr_sgx for details.
 ```
 
-Naming (no project name upstream; per core; the driver's own subdirectory):
-`powervr_sgx/<core>_ukernel.bin`, so `powervr_sgx/sgx_ukernel.bin` here and
-`powervr_sgx/sgx540_ukernel.bin` for another core. The directory matches the DRM
-driver's module/request path (`powervr_sgx/`, not `powervr/`). build.py emits
-`<core>_ukernel.bin`; the driver's `firmware=` request and its packaging tool
-must use the same name — kept in sync across build.py, the driver, the docs and
-the test scripts. Open before this is real: the MIT text must be added to
-linux-firmware's license set, and `Source` needs the public repository URL. The
-source and the built binary are versioned together by `version` + `build_id`.
+Naming (no project name upstream; one file per core; the driver's own
+subdirectory): `powervr_sgx/<core>_ukernel.bin` — `powervr_sgx/sgx545_ukernel.bin`
+here, `powervr_sgx/sgx540_ukernel.bin` for another core. The directory matches the
+DRM driver's module/request path (`powervr_sgx/`, not `powervr/`). build.py emits
+`<core>_ukernel.bin` from the selected core (`cores/<core>.py`); the driver's
+`firmware=` request and its packaging tool use the same name, kept in sync across
+build.py, the driver, the docs and the test scripts.
+
+**Still needed before linux-firmware submission:**
+
+1. **MIT license file entry.** linux-firmware carries each file's license text in
+   its own tree and the WHENCE `License:` line references it. Add the MIT text as
+   `LICENSE.powervr_sgx` (or reuse an existing MIT entry if the maintainers prefer)
+   and point the `License:` line at it.
+2. **Public source URL.** **Set** — the source is the monorepo
+   `https://github.com/The1TrueJoe/powervr_sgx` (`ukernel/`), which must be publicly
+   reachable at submission so a third party can reproduce the binary from it.
+3. **Version scheme.** `Version` tracks the manifest `version` (the SGXMKIF
+   interface major.minor); the manifest `build_id` identifies the exact build. Any
+   change to the emitted bytes bumps the build, and the checked-in golden hash
+   (`ukernel/golden/sgx545.sha256`) is what proves a given Version's binary. Source
+   and built binary are versioned together.
 
 ### Not a blocker, noted
-- The microkernel source carries inline hardware-provenance comments (which
-  behaviors were confirmed on which bring-up box). These are useful engineering
-  history; a final upstream-source pass can thin them or move the box-specific
-  ones to `docs/log/`, but they do not affect the binary and are low priority.
+- **Done.** The microkernel source's inline bring-up provenance (box names and
+  dates, session attributions, vendor-binary PC citations, internal dump/tool names)
+  was thinned for upstream; the mechanism and field explanations stayed, and the
+  removed history is preserved in
+  `docs/log/entries/2026-11-11-ukernel-source-provenance.md`. Comments-only — the
+  golden image is unchanged.
 
 ## Mesa winsys and platform
 
@@ -504,13 +539,13 @@ Atom CE5300, the PowerVR SGX545 and the SGX5xx family. The dev-board history
 moves to `docs/log/`. The replacements:
 - the dev-board names (EA1, EA3, HC-800) become "a CE5300 board", or a plain
   dated hardware tag;
-- "the open microkernel" becomes "the open microkernel";
+- shorthand for our microkernel ("UK", "our µK") becomes "the open microkernel";
 - IP addresses, box workspaces and product names go.
 
 Long bring-up narratives move to a dated `docs/log/entries/` file, with a
 pointer left in their place.
 
-Remaining box-specific references, counted on 2026-11-08 by
+Box-specific references, counted on 2026-11-08 (and again on 2026-11-11, when the last ones went) by
 `grep -E 'Control4|\bEA[0-9]\b|EA-[0-9]|HC-800|10\.0\.0\.|Bench plug'` plus the
 downstream distribution's name (which must not appear anywhere in this
 repository, 2026-11-08).
@@ -524,13 +559,15 @@ The last column is the count of lines naming a branch, commit or log entry.
 | STATE.md | 0 | 1 | done 6e71335 | ta3d-state |
 | TEX.md | 0 | 0 | done 6e71335 | ta3d-state |
 | PDS.md | 0 | 0 | done 6e71335 | ta3d-state |
-| ISA.md | 12 | 0 | not started | usse-compiler / cleanroom-isa |
-| DRM-DRIVER.md | 9 | 16 | not started | m2-kernel-driver |
-| UAPI.md | 9 | 1 | not started | uapi-stream |
-| GEN.md, WINSYS.md | 5, 4 | 0 | not started | mesa-gallium |
-| COMPILER-UPSTREAM.md, DRIVER-UPSTREAM.md | 2, 2 | 1, 1 | not started | usse-compiler, mesa-gallium |
-| NOTES.md, PERF.md, PIGLIT.md, CLEANROOM-COVERAGE.md | 11, 2, 7, 17 | — | internal working notes, stay as they are (decided) | main |
-| README.md | 1 | — | not started | main |
+| ISA.md | 0 | 0 | done 2026-11-11 | ta3d-state |
+| DRM-DRIVER.md | 0 | 16 | done 2026-11-11 (log pointers kept: our own docs may keep them) | ta3d-state |
+| UAPI.md | 0 | 1 | done 2026-11-11 | ta3d-state |
+| GEN.md, WINSYS.md | 0, 0 | 0 | done 2026-11-11 | ta3d-state |
+| COMPILER-UPSTREAM.md, DRIVER-UPSTREAM.md | 0, 0 | 1, 1 | done 2026-11-11 | ta3d-state |
+| NOTES.md, PERF.md, PIGLIT.md, CLEANROOM-COVERAGE.md | 11, 26, 7, 15 | — | internal working notes, stay as they are (decided) | main |
+| README.md | 0 | — | done 2026-11-11 | ta3d-state |
+| PDS.md, UKERNEL.md, MAIN-MERGE.md, porting/microkernel.md | 0 | — | done 2026-11-11 (references that had come back since 2026-11-08) | ta3d-state |
+| In-tree upstream text: `drm/Documentation/gpu/powervr_sgx/*.rst`, `mesa/docs/drivers/sgx.rst` | 0 | 0 | checked 2026-11-11: no board names, no downstream name, no commits, branches or log paths | ta3d-state |
 
 Decided (main, 2026-11-08):
 - **Internal notes stay as they are.** NOTES, PERF, PIGLIT,
@@ -583,7 +620,7 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
      `csbgen` for the gallium driver too, not only for the Vulkan driver and
      tools.
    - A decision for the MR series, not for the code.
-2. **The isaspec change** (`mesa/patches/0004`) goes upstream first, as two
+2. **The isaspec change** (`mesa/patches/0003`) goes upstream first, as two
    commits:
    - `<param>`s on a derived field of bitset type;
    - the encoder's handling of several `<override>`s defining one field.
@@ -595,13 +632,15 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
    - isaspec skips decode tables for roots no `#instruction` reaches;
    - the data words move to a second XML that only the encoder reads.
 4. **The documentation the comments cite.** `docs/ISA.md`, `docs/PDS.md`
-   and `docs/STATE.md` live in sgx545-ce. Upstream needs them either as
+   and `docs/STATE.md` live in powervr_sgx. Upstream needs them either as
    `docs/drivers/sgx/*.rst` in Mesa or behind a stable link from each
    README. The comments cite them by section name.
-5. **A disassembler tool.** `etnaviv-disasm` is built with
-   `-Dtools=etnaviv`. Ours is `sgx_pds_test -d` and the ISA test's text
-   output. A `sgx-disasm` (USSE and PDS) behind `-Dtools=sgx` needs a
-   `meson.options` entry.
+5. **The tools.** `sgx-asm` and `sgx-disasm` (USSE) are built with
+   `-Dtools=sgx`, as `etnaviv-disasm` is with `-Dtools=etnaviv`. The
+   `meson.options` entry is `mesa/patches/0006`, and the `sgx_isa_tools`
+   test runs them. The microkernel's build is to assemble through
+   `sgx-asm` (UKERNEL-TOOLING.md §2). Still open: PDS in `sgx-disasm` (today
+   `sgx_pds_test -d`).
 6. **csbgen's unknown bits.** Constant bits of unknown meaning are
    `unknown_<bits>` fields with defaults. csbgen also has `mbo`
    (must-be-one), which fits only bits that are always 1. A reviewer may
@@ -612,9 +651,15 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
    winsys's bytes. Settling it is a driver change: winsys/driver owners.
 8. **`src/sgx/compiler`** isn't covered by this pass (the compiler
    session's tree): no `.clang-format`, and it has its own tests.
-9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`) become part of
-   the driver's MR series. Nothing in these three trees depends on them
-   beyond `with_gallium_sgx` entering `src/sgx`.
+9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`, `0006`) become
+   part of the driver's MR series. Nothing in these three trees depends on
+   them beyond `with_gallium_sgx` or `-Dtools=sgx` entering `src/sgx`.
+10. **The core id.** `ISA_GPU_ID()` is `core * 100 + format control`
+    (`sgx_isa_gpu_id()`), and the root bitset is `<gen>`-limited to SGX545
+    (54500-54599). A second core is a `<gen>` range or an override on
+    `ISA_GPU_ID() / 100`, once ISA.md documents it. isaspec offers no
+    second parameter, so the core shares `gpu_id` with format control, as
+    freedreno's `gpu_id` carries its chip.
 
 ## Kernel (powervr_sgx)
 
@@ -661,7 +706,10 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   refuses it and no CPU mapping exists. Reviewers will ask. The follow-up is
   a PB per client with the microkernel storing and loading the DPM free-list
   state on a PB change (ta3d-state's rules, `UKERNEL.md` e2d08c2); the
-  kernel side is the per-VM PB this replaced.
+  kernel side is the per-VM PB this replaced. The DDK does this too when its
+  `PBSize` apphint is set (a per-context PB from its "Percontext
+  3DParameters" heap, seen on hardware 2026-11-09), so it is a mode the
+  hardware and a microkernel support, not only a plan.
 - [ ] **F1: transfer state across clients.** A second client's first
   transfer faults (PDS fetch outside its programs) after another client's
   transfers ran, until a microkernel restart; `powervr_sgx_blit -2` repeats it.

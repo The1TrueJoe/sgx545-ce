@@ -4,7 +4,7 @@
 the PowerVR SGX545 in Mesa's isaspec format. isaspec generates the encoder
 and the disassembler from it; the C files here are the glue and a small text
 assembler. The instruction set and its text notation are documented in
-`docs/PDS.md` of the sgx545-ce repository; the comments cite its sections by
+`docs/PDS.md` of the powervr_sgx repository; the comments cite its sections by
 name.
 
 | file | what |

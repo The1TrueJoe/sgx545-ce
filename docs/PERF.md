@@ -372,6 +372,37 @@ two rounds each, averaged; frames a second:
   zero-copy's resident indices take it to ~0.9 on the EA3. Zero-copy
   becomes the default on powervr_sgx once its full dEQP + piglit run is clean.
 
+### perfmicro on the open stack against the DDK (EA3, 2026-11-11)
+
+Current gaps on the EA3, which has no persistent open stack:
+- **Ours:** a RAM boot of the CI kernel (m2-drm 9ab77e2, 7.3.3-m2drm, which
+  includes 0f4d7d3), powervr_sgx and the open microkernel. Mesa is from dev
+  01768aa, with its defaults: zero-copy, F16 sampling, state reuse and 4 slots.
+- **DDK:** the DDK's GLES2 on the normal boot.
+- The same perfmicro source for both (x86_64 on ours, i386 on the DDK), every
+  frame rendered (a 1-pixel readback).
+- Two rounds of 5 s each, averaged; frames a second. 0 job timeouts and
+  0 recoveries.
+
+| test | DDK 720x480 | ours | ours/DDK | DDK 1440x960 | ours | ours/DDK |
+|---|---|---|---|---|---|---|
+| fill | 840.0 | 758.8 | 0.90 | 248.1 | 242.1 | 0.98 |
+| fill-blend | 201.3 | 196.8 | 0.98 | 53.7 | 53.9 | 1.00 |
+| tex | 1104.7 | 958.1 | 0.87 | 351.0 | 334.9 | 0.95 |
+| verts | 366.3 | 360.3 | 0.98 | 212.2 | 209.4 | 0.99 |
+| rows | 98.1 | 95.3 | 0.97 | 72.0 | 76.7 | 1.06 |
+
+- **verts:** 0.44-0.58 is now 0.98-0.99, with zero-copy as the default.
+- **rows:** above the DDK at 1440x960.
+- **What is left is per frame:**
+  - At 1440x960 every test is within 5%. At 720x480, fill (0.90) and tex (0.87)
+    lose about 0.13 ms and 0.14 ms a frame against the DDK's 1.19 ms and
+    0.91 ms.
+  - That cost doesn't grow with the pixel count, so it is in the frame's fixed
+    work (kick, completion, the readback), not in the per-pixel programs.
+- glmark2 isn't on the EA3, which has no x64 root and no mounted Minecraft root,
+  so its numbers come from the EA1 run.
+
 ## Shader code against libusc
 
 The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with

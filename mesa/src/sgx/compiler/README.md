@@ -13,6 +13,7 @@ constants, PDS iterations, texture samples, branches, register counts.
 | `sgx_compile.c` | instruction selection, the backend passes, register allocation, encoding |
 | `sgx_program.c` | the finished program: flat code with branch offsets resolved, the block list, samples, the constant and iteration lists |
 | `sgx_forms.c`, `sgx_forms.h` | the instruction forms the compiler emits, as `struct sgx_isa_instr` templates for the encoder |
+| `sgx_fixed.c`, `sgx_fixed.h` | the fixed programs a frame needs besides the shaders (state emit, clear, pixel events, ...), as assembly text assembled through `../isa` when a context is created |
 | `sgx_priv.h` | the backend IR (`sgx_ins`, `sgx_ref`, vregs) and the compile context |
 | `tests/sgx_compile_test.cpp` | end-to-end tests: shaders built with `nir_builder`, compiled, every word decoded |
 
@@ -80,6 +81,10 @@ one optimization, so a miscompile can be bisected without rebuilding.
 | `noefochain` | storing a chain's last lane with the next efo chain's first instruction (keeps each chain's `mov oN, i1`) |
 | `nof16samples` | mediump texels returned as F16 by the sampler (unpacks RGBA8 instead) |
 | `nophases` | splitting a discarding fragment program at its visibility feedback (one phase instead) |
+| `nointerleave` | each PDS-only sample placed after a plain iteration of another set, for the driver's DOUTI merge |
+| `nodepf16` | F16 returns on dependent samples (when the driver sets `dep_f16_samples`) |
+| `noprojalone` | dropping the plain iteration of a varying only projected (TXP) samples read |
+| `noconstswap` | `1 * k - x` in F16 as `x * -1 + k` (no `limm` for src0) |
 | `unrollexits` | keeping loops that can exit early as loops (unrolls them into select trees instead) |
 | `notexcolor` | writing a texel that is the color with byte moves (unpacks and repacks it instead) |
 | `nopackedcolor` | a uniform color packed to BGRA8 by the driver (packs it in the shader instead) |
@@ -91,5 +96,8 @@ option.
 ## Tests
 
 `meson test --suite sgx` runs these tests and the ISA round-trip tests.
-`tools/usc` in the sgx545-ce repository has the corpus harness that checks
-the output against the DDK's compiler. It stays outside Mesa.
+`tests/sgx_compile_test.cpp` builds each case with `nir_builder` (22 cases:
+selection, F16 and C10, textures, discard and phases, constants in memory,
+helper instances). `tools/usc` in the powervr_sgx repository has the corpus
+harness that checks the output against the DDK's compiler. It stays outside
+Mesa.

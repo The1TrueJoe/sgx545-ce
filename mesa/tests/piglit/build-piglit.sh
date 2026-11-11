@@ -78,7 +78,7 @@ echo "build-piglit.sh: glvnd -> $SYS"
 if [ ! -d "$W/waffle" ]; then
 	git clone -q https://gitlab.freedesktop.org/mesa/waffle.git "$W/waffle"
 	git -C "$W/waffle" checkout -q "$WAFFLE_VERSION"
-	git -C "$W/waffle" -c user.name=sgx545-ce -c user.email=sgx545-ce@localhost cherry-pick -x $WAFFLE_PICKS
+	git -C "$W/waffle" -c user.name=powervr_sgx -c user.email=powervr_sgx@localhost cherry-pick -x $WAFFLE_PICKS
 	# a disabled wayland's dependency('egl') replaces the one surfaceless found;
 	# surfaceless includes gbm.h and uses nothing from it (no GBM in our Mesa)
 	sed -i.orig "s|^  dep_egl = dependency('egl', required : get_option('wayland'))$|  if not dep_egl.found()\\n    dep_egl = dependency('egl', required : get_option('wayland'))\\n  endif|" \

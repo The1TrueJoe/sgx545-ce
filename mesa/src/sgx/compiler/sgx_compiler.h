@@ -5,12 +5,11 @@
 
 /*
  * SGX545 shader compiler: NIR in, USSE code out, plus what the driver needs
- * to run it (constants, iterations, texture samples, branches). The DDK's
- * USP container is not written here: tools/usc/sgx_usp.c builds it from
+ * to run it (constants, iterations, texture samples, branches). The USP
+ * container is not written here: tools/usc/sgx_usp.c builds it from
  * struct sgx_shader for the A/B harness (docs/COMPILER-UPSTREAM.md §3).
  *
- * The input/output conventions are the ones the DDK's driver expects from
- * libusc (ISA.md "What a compiler needs"):
+ * The input/output conventions (ISA.md "What a compiler needs"):
  *  - uniforms: one 32-bit constant per component, constant k of the driver's
  *    constant buffer loaded into sa[base + k] (fragment base 9, vertex 10);
  *  - fragment varyings: iterated by the PDS into pa, F32, one register per
@@ -21,8 +20,8 @@
  *  - vertex outputs: position o0-o3, then the texture coordinate sets in
  *    order, each its size, then the point size.
  * Constant numbers, attribute slots and sampler units are the caller's to
- * choose (sgx_compile_options.layout); sgxc's choice matches the DDK's GLSL
- * compiler, for the A/B harness.
+ * choose (sgx_compile_options.layout); sgxc chooses the corpus's numbers for
+ * the A/B harness.
  */
 #ifndef SGX_COMPILER_H
 #define SGX_COMPILER_H
@@ -62,17 +61,16 @@ struct sgx_compile_options {
    const struct sgx_layout *layout; /* NULL: the compiler's own numbering */
    bool verbose;
    /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
-    * F16 iteration, fmad16, F16/C10 uniforms, as the DDK does */
+    * F16 iteration, fmad16, F16/C10 uniforms (corpus *_m, *_l) */
    bool f16;
    /* gl_FrontFacing = ((g16 ^ sa[front_sa]) & 1) != 0: g16 bit 0 is the
     * primitive's winding in memory (docs/ISA.md "Fragment shaders"), and the
     * driver loads this SA register with what makes that winding front.
-    * 0: constant true (no way to flip it under the DDK's driver) */
+    * 0: constant true (the A/B harness can't load it) */
    unsigned front_sa;
-   /* the driver loads constant formats the DDK's driver has no list C kind
-    * for (sgx_const_map fmt 0x10 / 0x11): a lowp vector's xyz pre-converted
-    * to F16 and literal constants, where libusc converts once per draw in its
-    * secondary program and keeps literals with the uniforms */
+   /* the driver loads constant formats the USP has no list C kind for
+    * (sgx_const_map fmt 0x10 / 0x11): a lowp vector's xyz pre-converted
+    * to F16 and literal constants, loaded rather than computed per draw */
    bool driver_consts;
    /* (with f16) every float of a fragment program is mediump, texture
     * coordinates excepted: for programs without precision qualifiers whose
@@ -83,28 +81,34 @@ struct sgx_compile_options {
     * attribute (enum sgx_vtx_fmt); 0, f32 x 4, is the default */
    uint8_t vtx_fmt[16];
    /* fragment shader: bit n set, texture unit n's texels arrive with red and
-    * blue swapped (an RGBA8 view sampled as T1 0x0d, as the DDK binds it):
+    * blue swapped (an RGBA8 view sampled as T1 0x0d: docs/TEX.md):
     * byte 0 is blue, 2 red, the colour output's order. A texel that is the
     * colour as it is then needs no instruction; other reads unpack zyxw */
    uint32_t tex_bgra;
    /* fragment shader: the driver's PDS samples a non-dependent texture from
     * the coordinate set itself, so a varying only such samples read needs no
-    * plain iteration of its own (the DDK's tex fs: one PDS sample, no
-    * iteration). Off for the DDK's driver, whose finalizer may read it */
+    * plain iteration of its own (capture: one PDS sample, no iteration).
+    * Off for the A/B harness, whose finalizer may read it */
    bool pds_samples_alone;
    /* fragment shader: the driver can have a non-dependent sample return F16
-    * (the T3 word's F16-return bits, as the DDK's terrain program samples):
+    * (the T3 word's F16-return bits: docs/STATE.md §5):
     * a texel read at mediump then arrives as F16, two channels per register
     * (sgx_sample_info.f16), and is not unpacked */
    bool f16_samples;
-   /* fragment shader with a discard: split it at the visibility feedback, as
-    * the DDK's programs are. Phase 0 (code) runs for every rasterized
-    * fragment and computes only the discard test, ending in the feedback
-    * nop; phase 1 (code1) runs for visible pixels only and computes the
-    * colour from the inputs again. Only PA carries over: both phases share
-    * one iteration list and one constant map. Straight-line programs with
-    * one discard and a colour store; others stay one block (n_code1 = 0) */
+   /* fragment shader with a discard: split it at the visibility feedback
+    * (ISA.md "Phases, visibility feedback and discard"). Phase 0 (code)
+    * runs for every rasterized fragment and computes only the discard test,
+    * ending in the feedback nop; phase 1 (code1) runs for visible pixels
+    * only and computes the colour from the inputs again. Only PA carries
+    * over: both phases share one iteration list and one constant map.
+    * Straight-line programs with one discard and a colour store; others stay
+    * one block (n_code1 = 0) */
    bool split_phases;
+   /* with f16_samples: the driver also sets the F16-return T3 bits in a
+    * dependent sample's state words (sgx_sample_info.f16), so a mediump
+    * texel a dependent smp reads arrives as F16 in two registers (ISA.md
+    * "hw 1c: smp": the result format is the state's) */
+   bool dep_f16_samples;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
@@ -224,7 +228,7 @@ struct sgx_shader {
    bool discards; /* fragment: p1 = keep at the feedback nop (USP labels 4/5) */
    /* fragment: gl_FragDepth, clamped to [0, 1], is in pa<depth_pa> at the
     * feedback nop, for a depthf there (predicated on p1 when it discards
-    * too); not in the DDK's USP */
+    * too); not in the USP */
    bool writes_depth;
    unsigned depth_pa;
    /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
@@ -259,22 +263,20 @@ struct sgx_shader {
    unsigned n_blocks1;
    unsigned n_alu, n_tex, n_flow; /* instruction counts */
    unsigned n_temps;
-   /* PA registers: inputs, colour, and the placeholder colour iteration of a
-    * fragment program with no other (the DDK's driver iterates one) */
-   unsigned n_pa;
+   unsigned n_pa; /* PA registers: inputs and colour */
    char *log; /* listing / errors (malloc'd) */
 };
 
 const struct nir_shader_compiler_options *sgx_nir_options(void);
 
-/* GLSL ES varyings to texture coordinate sets, as the DDK's glslcompiler
- * allocates them (ISA.md "Varyings to sets"); call on each stage's NIR
+/* GLSL ES varyings to texture coordinate sets (ISA.md "What a compiler
+ * needs", varyings to sets); call on each stage's NIR
  * before linking removes unused ones */
 void sgx_assign_varyings(struct nir_shader *nir, bool vertex,
                          struct sgx_varyings *out);
 
 /* Varyings whose sets go past the ten (or past a set's four components):
- * re-placed in their order as glslcompiler does past ten sets, sharing sets
+ * re-placed in their order, sharing sets
  * (sgx_varying.comp); set_comps follows. Deterministic in the list, so two
  * stages with the same list agree. Anything that already fits is left as it
  * is. False: more than 10 x 4 components */

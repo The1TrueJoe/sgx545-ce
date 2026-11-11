@@ -24,3 +24,10 @@ u_printf_length(const char *fmt, va_list untouched_args)
    va_end(ap);
    return n;
 }
+/* CPU detection, done and empty: half floats take the portable path (x86) */
+#include "util/u_cpu_detect.h"
+struct _util_cpu_caps_state_t _util_cpu_caps_state = {.detect_done = 1};
+void
+_util_cpu_detect_once(void)
+{
+}

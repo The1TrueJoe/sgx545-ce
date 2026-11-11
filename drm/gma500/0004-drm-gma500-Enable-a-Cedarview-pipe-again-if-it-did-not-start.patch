@@ -16,8 +16,6 @@ not start.
 Move the existing enable and disable sequences into helpers for this,
 without changing them for the other chips but for fsleep() in place of
 udelay(): the path already sleeps (vblank off, the vblank wait).
-
-Assisted-by: Claude:claude-opus-5-5
 ---
 --- a/drivers/gpu/drm/gma500/gma_display.c
 +++ b/drivers/gpu/drm/gma500/gma_display.c

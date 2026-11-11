@@ -160,13 +160,34 @@ struct sgx_isa_instr {
    uint8_t pri, sec, sd, sb, sc, msrc;
 };
 
-/* Format control (setfc): program state the color/integer classes read. */
+/* Cores sgx.xml describes; the value is the core's number. */
+enum sgx_isa_core {
+   SGX_ISA_CORE_SGX545 = 545,
+};
+
+/*
+ * What an encoding depends on besides the instruction: the target core and
+ * format control (setfc), program state the color/integer classes read.
+ */
 struct sgx_isa_fc {
-   bool c10; /* setfc a1: on at program start */
-   bool f16; /* setfc a0 (efo): off at program start */
+   bool c10;      /* setfc a1: on at program start */
+   bool f16;      /* setfc a0 (efo): off at program start */
+   uint16_t core; /* enum sgx_isa_core; 0 is SGX545 */
 };
 
 #define SGX_ISA_FC_START ((struct sgx_isa_fc){.c10 = true, .f16 = false})
+
+/* Whether sgx.xml describes the core (0 counts as SGX545). */
+bool sgx_isa_core_supported(unsigned core);
+
+/*
+ * What sgx.xml's expressions read as ISA_GPU_ID() and its <gen> ranges
+ * compare: core * 100 + format control (bit 0 C10, bit 1 F16).
+ */
+uint32_t sgx_isa_gpu_id(const struct sgx_isa_fc *fc);
+
+/* If word is a setfc, apply it to *fc and return true. */
+bool sgx_isa_setfc(uint64_t word, struct sgx_isa_fc *fc);
 
 /* Encode one instruction. fc may be NULL (program-start state). */
 uint64_t sgx_isa_encode(const struct sgx_isa_instr *instr,

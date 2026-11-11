@@ -39,6 +39,37 @@ lspci -nn | grep -i -E 'vga|display'
   Cedarview steps below.
 - `[8086:089b]`: a **CE5300** GPU. Follow the CE5300 steps below.
 
+## The apt repository (Cedarview)
+
+On Cedarview you can install all three pieces from our apt repository, and `apt upgrade`
+then keeps them up to date. Add the repository's signing key and its entry:
+
+```bash
+sudo curl -fsSLo /usr/share/keyrings/powervr-sgx.gpg https://telaak.dev/powervr_sgx/powervr-sgx.gpg
+```
+
+```bash
+printf 'Types: deb\nURIs: https://telaak.dev/powervr_sgx\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/powervr-sgx.gpg\n' | sudo tee /etc/apt/sources.list.d/powervr-sgx.sources
+```
+
+Then install the three packages:
+
+```bash
+sudo apt update
+```
+
+```bash
+sudo apt install linux-image-7.3.3-sgx sgx545-firmware mesa-sgx
+```
+
+Restart, and go on with the checks in "3. The firmware" and "4. Mesa" below. To remove
+the repository again, delete `/etc/apt/sources.list.d/powervr-sgx.sources` and
+`/usr/share/keyrings/powervr-sgx.gpg`.
+
+If you'd rather install the files by hand, each release on the project's GitHub
+Releases page has the same `.deb` files and a `SHA256SUMS` file to check them with
+(`sha256sum -c SHA256SUMS`). Sections 2 to 4 install them one by one.
+
 ## 2. The kernel
 
 The driver needs Linux 7.1 or newer. Debian 13 ships 6.12, so install our kernel package

@@ -58,7 +58,7 @@ Decide whether `cedarview-kit` (v2) stays now that v3 replaces it.
 
 ## INSTALL.md on hardware
 
-On a CE5300 board (EA1) on 2026-11-09, in the Debian 13 test root, with the packages from
+On a CE5300 board on 2026-11-09, in the Debian 13 test root, with the packages from
 `mesa-debian` run 42557836753 (the ones stick v3.1 carries) and the kernel from
 `powervr-sgx` 535b5dc. The run is `mesa/tests/desktop/install-e2e.sh`.
 

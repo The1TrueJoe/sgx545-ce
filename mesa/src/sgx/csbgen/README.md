@@ -5,7 +5,7 @@ format of Imagination's csbgen. `src/imagination/csbgen/gen_pack_header.py`,
 the generator the PowerVR Vulkan driver uses, turns each `<name>.xml` into
 `csbgen/<name>.h`, with a struct, `_header` defaults, `_pack()` and
 `_unpack()` per word. The same layout as `src/imagination/csbgen/rogue`.
-The words are documented in `docs/STATE.md` of the sgx545-ce repository
+The words are documented in `docs/STATE.md` of the powervr_sgx repository
 (sections 2-5).
 
 | file | prefix | words |

@@ -28,7 +28,7 @@ There is nothing to configure: the device decides.
   same Mesa build runs on either: on pvrsrvkm the boot images today, on powervr_sgx
   a RAM-booted kernel with the module loaded (`drm/ci/ea-ramboot`).
 
-`sgx_frame_test -d <node>` runs the winsys without Mesa on either driver. On the EA1 under
+`sgx_frame_test -d <node>` runs the winsys without Mesa on either driver. On a CE5300 board under
 powervr_sgx (2026-11-04, kernel c95e32d) it draws the probe's clear and triangle at 720x480,
 pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 

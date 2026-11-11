@@ -635,9 +635,8 @@ split_operands(char *s, char **ops, unsigned max)
    return n;
 }
 
-bool
-sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
-                 size_t errsize)
+static bool
+parse_line(const char *line, struct sgx_isa_instr *I, char *err, size_t errsize)
 {
    struct asm_ctx c = {err, errsize};
    char buf[512], *s, *items = NULL;
@@ -864,4 +863,82 @@ sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
       }
    }
    return true;
+}
+
+/*
+ * A flag the form has no field for would be dropped by the encoder, so the
+ * text would claim what the word doesn't do. Each bare item must show in the
+ * word's disassembly, or (another spelling, or implied by an operand) change
+ * the word: the line without it encodes differently.
+ */
+static bool
+has_item(const char *dis, const char *item)
+{
+   const char *lb = strrchr(dis, '[');
+   size_t n = strlen(item);
+
+   if (!lb)
+      return false;
+   for (const char *p = lb + 1; (p = strstr(p, item)); p += n) {
+      if ((p[-1] == '[' || p[-1] == ' ') && (p[n] == ' ' || p[n] == ']'))
+         return true;
+   }
+   return false;
+}
+
+static bool
+check_flags(const char *line, const struct sgx_isa_instr *I, char *err,
+            size_t errsize)
+{
+   struct asm_ctx c = {err, errsize};
+   char buf[512], *s;
+
+   snprintf(buf, sizeof(buf), "%s", line);
+   if ((s = strchr(buf, ';')))
+      *s = '\0';
+   s = trim(buf);
+   char *lb = strrchr(s, '[');
+   if (!lb || lb == s || lb[-1] != ' ' || s[strlen(s) - 1] != ']')
+      return true;
+   *lb = '\0';
+   char *items = lb + 1;
+   items[strlen(items) - 1] = '\0';
+
+   char *tok[32];
+   unsigned n = 0;
+   for (char *t = strtok(items, " \t"); t && n < ARRAY_LEN(tok);
+        t = strtok(NULL, " \t"))
+      tok[n++] = t;
+
+   uint64_t w = sgx_isa_encode(I, NULL);
+   char dis[512];
+   if (!sgx_disasm_one(w, NULL, dis, sizeof(dis)))
+      dis[0] = '\0';
+   for (unsigned i = 0; i < n; i++) {
+      if (strchr(tok[i], '=') || has_item(dis, tok[i]))
+         continue;
+      char without[512], e[128];
+      size_t len = snprintf(without, sizeof(without), "%s [", s);
+      for (unsigned j = 0; j < n && len < sizeof(without); j++) {
+         if (strcmp(tok[j], tok[i]))
+            len +=
+               snprintf(without + len, sizeof(without) - len, "%s ", tok[j]);
+      }
+      if (len < sizeof(without))
+         snprintf(without + len, sizeof(without) - len, "]");
+
+      struct sgx_isa_instr J;
+      if (parse_line(without, &J, e, sizeof(e)) &&
+          sgx_isa_encode(&J, NULL) == w)
+         return fail(&c, "'%s' isn't encoded by this form", tok[i]);
+   }
+   return true;
+}
+
+bool
+sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
+                 size_t errsize)
+{
+   return parse_line(line, I, err, errsize) &&
+          check_flags(line, I, err, errsize);
 }

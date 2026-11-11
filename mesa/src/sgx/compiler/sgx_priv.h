@@ -123,7 +123,8 @@ struct sgx_sample {
    /* unpacked to F16 (two channels per register), else left as RGBA8 */
    bool f16;
    bool f16coord; /* dependent: F16 coordinates, two per register (smp .f16) */
-   bool f16_return; /* non-dependent: returns F16 pairs in pa, pa + 1 */
+   bool f16_return; /* returns F16 pairs: pa, pa + 1; dependent: its two
+                       destination registers */
    /* dependent: the SAMPLE pseudo-instruction (dst raw, coord, lod) */
    struct sgx_ins *ins;
 };
@@ -145,7 +146,7 @@ struct sgx_ctx {
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
 #define SGX_ITER_FRAGCOORD                                                     \
-   14 /* list A iterator of gl_FragCoord (DDK capture) */
+   14 /* list A iterator of gl_FragCoord (capture) */
    struct sgx_iter iters[16];
    unsigned n_iters;
    unsigned n_pa_inputs;
@@ -199,7 +200,7 @@ struct sgx_ctx {
    int keep_vreg; /* discard: 1.0 = keep, -1 none */
    bool discards;
    bool keep_pred; /* the single discard wrote p1 (= keep) itself */
-   bool p16;       /* mediump in F16, as the DDK computes it */
+   bool p16;       /* mediump in F16 */
    /* emit_alu writes its def, never the register NIR stores it to */
    bool def_dest;
    int face_vreg; /* gl_FrontFacing as made at entry; -1 none */
@@ -284,6 +285,10 @@ enum sgx_debug {
    SGX_DBG_NO_EFO_CHAIN = BITFIELD64_BIT(22),
    SGX_DBG_NO_F16_SAMPLES = BITFIELD64_BIT(23),
    SGX_DBG_NO_PHASES = BITFIELD64_BIT(24),
+   SGX_DBG_NO_CONST_SWAP = BITFIELD64_BIT(25),
+   SGX_DBG_NO_PROJ_ALONE = BITFIELD64_BIT(26),
+   SGX_DBG_NO_DEP_F16 = BITFIELD64_BIT(27),
+   SGX_DBG_NO_INTERLEAVE = BITFIELD64_BIT(28),
    SGX_DBG_NO_TEX_COLOR = BITFIELD64_BIT(16),
    SGX_DBG_NO_PACKED_COLOR = BITFIELD64_BIT(17),
 };
