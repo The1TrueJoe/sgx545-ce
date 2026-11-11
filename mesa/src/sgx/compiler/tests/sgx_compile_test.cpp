@@ -672,6 +672,33 @@ TEST_F(sgx_compile_test, fragment_uniform_if_stays_a_branch)
    EXPECT_GT(out.n_flow, 0u) << disasm();
 }
 
+/* a flrp the driver adds after st lowered its own (flrp_lowered set), inside
+ * an if that stays a branch: lowered, not left for the backend */
+TEST_F(sgx_compile_test, fragment_flrp_after_flrp_lowered)
+{
+   start(MESA_SHADER_FRAGMENT);
+   b.shader->info.flrp_lowered = true;
+   nir_variable *v =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *u = var(nir_var_uniform, glsl_float_type(), "mode", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *x = nir_load_var(&b, v);
+   nir_push_if(&b, nir_flt_imm(&b, nir_load_var(&b, u), 0.5));
+   nir_def *t = x;
+   for (unsigned k = 0; k < 3; k++)
+      t = nir_flrp(&b, nir_fmul(&b, t, t), nir_fsin(&b, t),
+                   nir_channel(&b, x, k));
+   nir_store_var(&b, col, t, 0xf);
+   nir_push_else(&b, NULL);
+   nir_store_var(&b, col, x, 0xf);
+   nir_pop_if(&b, NULL);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+}
+
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
  * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
  * writes no PA register (the inputs phase 1 reads) */

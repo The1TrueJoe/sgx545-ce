@@ -2022,6 +2022,9 @@ sgx_lower(struct sgx_ctx *c)
    /* (Mesa's GLSL linker hands over I/O already lowered: keep the
     * variables, they name the varyings) */
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);
+   /* st's lowering sets flrp_lowered, which makes this a no-op: a flrp the
+    * driver adds after it (a filter in the shader) would reach the backend */
+   s->info.flrp_lowered = false;
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
    NIR_PASS(_, s, lower_tex_derefs, c);
    if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_sa)
