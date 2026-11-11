@@ -2406,7 +2406,7 @@ backed above; this section only collects it.
   makes a derivative's destination live from its own instruction's start
   (as a repeat's is), so `d` is never one of its sources. `glsl-derivs` and
   `glsl-fwidth` pass on hardware (2026-11-10), and so do `glsl-derivs-abs`,
-  `-abs-sign`, `-sign`, `-swizzle` and `-varyings` (2026-11-11, EA3).
+  `-abs-sign`, `-sign`, `-swizzle` and `-varyings` (2026-11-11, a CE5300 board).
   `fs-dfdx-accuracy` and `fs-dfdy-accuracy` give Warn: they expect
   `dFdx(x * y)` of gl_FragCoord to be exactly `y` under the NICEST hint,
   which only per-pixel differencing gives. That fits fdsx/fdsy differencing
