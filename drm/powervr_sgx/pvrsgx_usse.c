@@ -32,6 +32,16 @@ enum pvrsgx_usse_slot_kind {
 	USSE_SLOT_SRC0,
 };
 
+/*
+ * How an operand's number bit 6 reads: part of the number; a flag for r, o,
+ * pa, sa and i under C10 format control, which is on at program start and the
+ * only setfc allowed keeps so; or, for every register file, a flag while
+ * format select (that bit of the word) is set.
+ */
+#define USSE_NUM	0
+#define USSE_C10	1
+#define USSE_SEL(bit)	(0x80 | (bit))
+
 #define USSE_MAX_SLOTS	4
 #define USSE_MAX_PIECES	3
 #define USSE_ALWAYS	0xff
@@ -39,8 +49,8 @@ enum pvrsgx_usse_slot_kind {
 /* An operand slot: its value is the pieces' bits, each shifted into place. */
 struct pvrsgx_usse_slot {
 	u8 kind;
-	/* Under a half or C10 format, number bit 6 is a format flag. */
-	bool mode;
+	/* USSE_NUM, USSE_C10 or USSE_SEL(). */
+	u8 fmt;
 	/* The slot exists only while this bit of the word is set. */
 	u8 when;
 	struct {
@@ -94,6 +104,7 @@ static const u8 src0_files[4] = { USSE_R, USSE_PA, USSE_O, USSE_SA };
 
 static bool usse_slot_ok(const struct pvrsgx_usse_slot *s, u64 w)
 {
+	bool sel = (s->fmt & 0x80) && (w & BIT_ULL(s->fmt & 0x3f));
 	u32 v = 0, n, file;
 
 	if (s->when != USSE_ALWAYS && !(w & BIT_ULL(s->when)))
@@ -117,12 +128,13 @@ static bool usse_slot_ok(const struct pvrsgx_usse_slot *s, u64 w)
 	default:
 		return false;
 	}
-	if (s->mode)
+	/* Bit 6 is a flag only where the format says so; elsewhere it counts. */
+	if (sel || (s->fmt == USSE_C10 && file == USSE_I))
 		n &= 0x3f;
 	switch (file) {
 	case USSE_CG:
 		/* Read only: what writing c or g does isn't known. */
-		return s->kind != USSE_SLOT_DST && (v & 0x7f) < USSE_CG_END;
+		return s->kind != USSE_SLOT_DST && n < USSE_CG_END;
 	case USSE_I:
 		return n <= USSE_I_LAST;
 	case USSE_IDX:

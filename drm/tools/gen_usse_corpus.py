@@ -10,8 +10,8 @@ the clean-room isaspec encoder's words for its own test lists,
   gen_usse_corpus.py words.txt > drm/tests/usse_corpus.h
 
 Words the validator refuses are left out: the forms gen_usse_table.py
-refuses, br [link], phas.i with a target (it needs a mapped object) and
-writes to c or g.
+refuses, br [link], phas.i with a target (it needs a mapped object), setfc
+other than the program-start state and writes to c or g.
 """
 import os
 import re
@@ -28,6 +28,8 @@ def refused(text):
         return not t.startswith('phas.i #0,')
     if op in REFUSE or op.split('.')[0] in REFUSE:
         return True
+    if op == 'setfc':
+        return not t.startswith('setfc #0, #1')
     if op == 'br' and 'link' in t:
         return True
     return re.match(r'^\S+ [cg]\d+,', t) is not None

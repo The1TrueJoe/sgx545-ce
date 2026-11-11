@@ -43,6 +43,14 @@ static const struct {
 	{ W(0x00000000, 0xffffffff), "fmad with every operand bit set", true },
 	{ W(0x00000000, 0x00000000), "zero", true },
 	{ W(0xffffffff, 0xffffffff), "all ones", false },
+	/* Number bit 6: a flag only where the format makes it one. */
+	{ W(0x50021000, 0xc0000001), "and r0, i0, r1", true },
+	{ W(0x50021000, 0xc0002001), "and r0, i64, r1", false },
+	{ W(0x00420000, 0xc0006103), "fmad r0, r1, i2.f16, r3 [fmt]", true },
+	{ W(0x00020000, 0xc0006103), "fmad r0, r1, i66, r3", false },
+	{ W(0x9183f802, 0xf0002041), "sopwm pa0, i0.c10, i1.c10", true },
+	{ W(0xfd100000, 0x00000100), "setfc #0, #1", true },
+	{ W(0xfd100000, 0x00000101), "setfc #1, #1", false },
 };
 
 static void usse_test_words(struct kunit *test)

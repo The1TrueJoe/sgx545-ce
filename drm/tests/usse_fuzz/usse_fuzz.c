@@ -78,7 +78,12 @@ static u64 corpus_word(void)
 static void gen(u64 seed, u64 n)
 {
 	struct counts uniform = { .name = "uniform" }, shaped = { .name = "kernel-form" },
-		      flip = { .name = "corpus-flip" }, window = { .name = "corpus-window" };
+		      flip = { .name = "corpus-flip" }, window = { .name = "corpus-window" },
+		      floor = { .name = "uapi-corpus" };
+
+	/* The uAPI test's corpus: every word must pass. */
+	for (u32 i = 0; i < ARRAY_SIZE(usse_corpus); i++)
+		check(&floor, (u64)usse_corpus[i].hi << 32 | usse_corpus[i].lo);
 
 	rng_state = seed;
 	for (u64 i = 0; i < n; i++)
@@ -110,6 +115,7 @@ static void gen(u64 seed, u64 n)
 		check(&window, w);
 	}
 
+	report(&floor);
 	report(&uniform);
 	report(&shaped);
 	report(&flip);

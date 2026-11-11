@@ -9,6 +9,7 @@ Builds usse_fuzz.c (the kernel's own pvrsgx_usse.c on the host), then checks
 words of five classes, each alone at instruction 2 of a 512-instruction
 object placed 0x100 instructions into its heap:
 
+  uapi-corpus    the uAPI test's corpus (drm/tests/usse_corpus.h): all must pass
   uniform        N random 64-bit words
   kernel-form    N words with random bits under the kernel's own forms
   corpus-flip    N compiler words with one to four bits flipped
@@ -26,12 +27,13 @@ hw.py and must not be, by hw.py's reading:
   closed     another form the kernel fails closed on (lock, release, the
              MOE controls and smlsi's register form, imo, fdual, the forms
              the SGX545 lacks, op0x98/d7/f3/fd/fe/ff/100, op0xd6 with n or
-             f3_6 set)
+             f3_6 set, setfc other than #0, #1)
   operand    a c/g destination, a read past g45, i4 and up, an index
              register other than idx1/idx2, or a bank hw.py can't name
   unknown    a word hw.py has no form for
 
-Exit status 0 when every count in those five lists is 0.
+Exit status 0 when every count in those five lists is 0 and the whole
+uapi-corpus class passes.
 """
 import argparse
 import collections
@@ -100,6 +102,8 @@ def judge(hi, lo):
         return "closed", "smlsi register form"
     if name == "op0xd6" and (dict(ops)["n"].get("n") or x.d.get("f3_6")):
         return "closed", "op0xd6 with n or f3_6"
+    if name == "setfc" and (dict(ops)["a0"]["n"], dict(ops)["a1"]["n"]) != (0, 1):
+        return "closed", "setfc other than #0, #1"
     for role, o in ops:
         kind, n = o.get("kind", "?"), o.get("n")
         if kind.startswith("?"):
@@ -171,6 +175,8 @@ def main():
             bad[v[0]].append((cls, hi, lo, v[1]))
 
     no_reason = sum(c[2] for c in counts.values())
+    floor = counts.get("uapi-corpus", [0, 0])
+    print(f"\nuapi corpus: {floor[1]} of {floor[0]} accepted")
     print(f"\nrefusals without a reason: {no_reason}")
     print(f"accepted words decoded by hw.py: {len(accepted)}")
     for cat in ("register", "branch", "closed", "operand", "unknown"):
@@ -196,7 +202,7 @@ def main():
     never = sorted(n[7:] for n, c in oracle.items() if not c[1])
     print(f"\nhw.py forms the kernel accepted some word of: {len(taken)} of {len(oracle)}")
     print(f"never accepted: {' '.join(never)}")
-    return 1 if no_reason or any(bad.values()) else 0
+    return 1 if no_reason or any(bad.values()) or floor[0] != floor[1] else 0
 
 
 if __name__ == "__main__":
