@@ -22,6 +22,8 @@
 #   nocomp    xfwm4 without its compositor
 #   xpresent  xfwm4 synced to vblank through Present, not GLX
 #   vbloff    xfwm4 not synced to vblank
+#   clientsw  X with glamor on the GPU, the clients (glmark2, xfwm4) on the
+#             root's own Mesa (llvmpipe): whether GPU clients take part
 #   software  no GPU: Xorg without glamor, clients on the root's own Mesa
 #             (llvmpipe), the baseline at the same resolution
 #   glamordebug  the default with GLAMOR_DEBUG=1 (counts glamor's CPU
@@ -65,6 +67,7 @@ nocomp) xfwm=--compositor=off ;;
 xpresent) xfwm=--vblank=xpresent ;;
 vbloff) xfwm=--vblank=off ;;
 software) cenv="LIBGL_ALWAYS_SOFTWARE=1" xenv= ;;
+clientsw) cenv="LIBGL_ALWAYS_SOFTWARE=1" ;;   # X on the GPU, the clients on llvmpipe
 glamordebug) xenv="$xenv GLAMOR_DEBUG=1" ;;
 shaderdump)   # every linked GL program as a .shader_test, for the compiler
 	mkdir -p /tmp/lag-shaders; chmod 1777 /tmp/lag-shaders
