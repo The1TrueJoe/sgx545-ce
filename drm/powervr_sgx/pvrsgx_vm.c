@@ -353,7 +353,7 @@ int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *fil
 		err = PTR_ERR(sgt);
 		goto out_va;
 	}
-	if (drm_gem_is_imported(obj) && !pvrsgx_prime_reachable(drm->dev, sgt)) {
+	if (drm_gem_is_imported(obj) && !pvrsgx_prime_reachable(drm_dev_dma_dev(drm), sgt)) {
 		err = -EFAULT;
 		goto out_va;
 	}

@@ -9,7 +9,6 @@
  */
 
 #include <linux/auxiliary_bus.h>
-#include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
@@ -33,41 +32,29 @@ static int pvrsgx_aux_probe(struct auxiliary_device *adev, const struct auxiliar
 		return -ENODEV;
 	}
 
-	/* DMA as the GPU's PCI function does; there is no IOMMU on these parts. */
-	dev->dma_mask = &dev->coherent_dma_mask;
-	err = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
-	if (err)
-		return err;
-
 	sdev = pvrsgx_alloc(dev);
 	if (IS_ERR(sdev))
 		return PTR_ERR(sdev);
+	/* The SGX does DMA as the GPU's PCI function: no device of its own. */
+	drm_dev_set_dma_dev(&sdev->base, dev->parent);
 	sdev->gma_sgx = gma;
 	sdev->family = pvrsgx_core_family_get(gma->core);
-	/* An auxiliary device has no DMA parameters of its own. */
-	dev->dma_parms = &sdev->dma_parms;
-	dma_set_max_seg_size(dev, UINT_MAX);
 	sdev->regs = gma->regs;
 	sdev->irq = to_pci_dev(dev->parent)->irq;
 	auxiliary_set_drvdata(adev, sdev);
 
 	/* The graphics island is up only while gma500 is. */
 	err = pm_runtime_resume_and_get(dev->parent);
-	if (err) {
-		dev->dma_parms = NULL;
+	if (err)
 		return err;
-	}
 	err = pvrsgx_probe_common(sdev);
 	pm_runtime_put(dev->parent);
-	if (err)
-		dev->dma_parms = NULL;	/* sdev goes with the failed probe */
 	return err;
 }
 
 static void pvrsgx_aux_remove(struct auxiliary_device *adev)
 {
 	pvrsgx_remove_common(auxiliary_get_drvdata(adev));
-	adev->dev.dma_parms = NULL;
 }
 
 static const struct auxiliary_device_id pvrsgx_aux_ids[] = {

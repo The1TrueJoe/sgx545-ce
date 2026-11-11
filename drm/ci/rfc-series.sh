@@ -3,7 +3,7 @@
 # Copyright © 2026 Joseph Telaak
 #
 # Commit the RFC series onto a drm-misc-next tree (a b4 prep branch), as
-# upstream would carry it: gma500 0001 and 0002, the uAPI with its docs and
+# upstream would carry it: the shmem DMA-device fix, gma500 0001 and 0002, the uAPI with its docs and
 # MAINTAINERS entry, the driver by area, the KUnit tests. Messages:
 # docs/rfc/series.
 #
@@ -16,7 +16,7 @@ MSG=$R/docs/rfc/series
 D=$K/drivers/gpu/drm/powervr_sgx
 
 cd "$K"
-git am -q "$DRM"/gma500/0001-*.patch "$DRM"/gma500/0002-*.patch
+git am -q "$DRM"/shmem/0001-*.patch "$DRM"/gma500/0001-*.patch "$DRM"/gma500/0002-*.patch
 
 # 3: the uAPI, its documentation, MAINTAINERS.
 cp "$DRM/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h" include/uapi/drm/
@@ -82,4 +82,4 @@ mkdir -p "$D/tests"
 cp "$DRM"/powervr_sgx/tests/*.c "$DRM/powervr_sgx/tests/.kunitconfig" "$D/tests/"
 git add "$D"
 git commit -q -F "$MSG/12-kunit.txt"
-git log --oneline -12
+git log --oneline -13
