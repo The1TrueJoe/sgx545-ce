@@ -1488,9 +1488,10 @@ TEST(sgx_fixed, programs_assemble)
          char text[256];
          uint64_t w = x->w[2 * i] | (uint64_t)x->w[2 * i + 1] << 32;
          EXPECT_TRUE(sgx_disasm_one(w, NULL, text, sizeof(text))) << x->name;
-         if (i == x->n - 1)
+         if (i == x->n - 1) {
             EXPECT_NE(std::string(text).find("end"), std::string::npos)
                << x->name << ": " << text;
+         }
       }
    }
    /* phas.i @label: the target is the label's instruction, to relocate */
