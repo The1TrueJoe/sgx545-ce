@@ -982,7 +982,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * in it, the TPU samples at a constant coordinate; the DDK's for a
        * sprite's coordinate set (`sprite`) is 1 */
       sgx_pack(&so->prog.tsp_prec, TA_STATE_TSP1, t1) t1.f16 = sprite ? 1 : 0;
-      so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0);
+      /* user clip planes 0..n_clip-1 (st's clip distances), their results
+       * after the point size */
+      so->prog.clip_planes = BITFIELD_MASK(MIN2(out.n_clip, 6));
+      so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0) + out.n_clip;
       so->prog.const_dwords = so->const_dwords;
    } else {
       /* dependent samples: their state words go in SA after the constants */
