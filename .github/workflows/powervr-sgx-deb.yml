@@ -4,19 +4,44 @@
 #   kit      linux-image-<v>-sgx-kit  artifact powervr-sgx-deb-cedarview-kit      (test-kit sticks only:
 #            adds drm/ci/kit's display register dump and cdv_sr/cdv_dsparb switches)
 # Each installs next to Debian's kernel, so the stock kernel stays in GRUB for rollback.
+# release.yml calls this (workflow_call) with flavor release and its own pkg_version.
 name: powervr-sgx-deb
 
 permissions:
   contents: read
 
 on:
+  workflow_call:
+    inputs:
+      flavor:
+        description: release, kit, or empty for both
+        type: string
+        default: ''
+      pkg_version:
+        description: Debian package version (KDEB_PKGVERSION); empty for <linux>-sgx1 or -sgxkit1
+        type: string
+        default: ''
+      suite:
+        description: Debian suite whose kernel config to start from
+        type: string
+        default: trixie
+      lockdep:
+        description: Lock checking (drm/ci/lockdep.fragment); its own artifact
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
+      flavor:
+        description: release, kit, or empty for both
+        default: ''
+      pkg_version:
+        description: Debian package version (KDEB_PKGVERSION); empty for <linux>-sgx1 or -sgxkit1
+        default: ''
       suite:
         description: Debian suite whose kernel config to start from
         default: trixie
       lockdep:
-        description: Lock checking (drm/ci/lockdep.fragment); its own release name and artifact
+        description: Lock checking (drm/ci/lockdep.fragment); its own artifact
         type: boolean
         default: false
   push:
@@ -38,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [release, kit]
+        flavor: ${{ fromJSON(inputs.flavor && format('["{0}"]', inputs.flavor) || '["release","kit"]') }}
     concurrency:
       group: powervr-sgx-deb-${{ github.ref }}-${{ matrix.flavor }}-${{ inputs.lockdep && 'lockdep' || 'plain' }}
       cancel-in-progress: false
@@ -46,6 +71,7 @@ jobs:
     timeout-minutes: 340
     env:
       DEB_KIT: ${{ matrix.flavor == 'kit' && '1' || '0' }}
+      PKG_VERSION: ${{ inputs.pkg_version }}
       # -sgx for release, -sgx-kit for the kit; -lockdep after either.
       FLAVOR: ${{ matrix.flavor == 'kit' && '-kit' || '' }}${{ inputs.lockdep && '-lockdep' || '' }}
       PKGTAG: ${{ matrix.flavor == 'kit' && 'sgxkit' || 'sgx' }}
@@ -73,7 +99,7 @@ jobs:
           [ -f linux-$LINUX_VERSION.tar.xz ] ||
             curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
           tar xf linux-$LINUX_VERSION.tar.xz
-          sh drm/ci/deb-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+          sh drm/ci/deb-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm" ${{ matrix.flavor }}
 
       - name: Build the packages
         env:
@@ -82,7 +108,7 @@ jobs:
         run: |
           set -eux
           make -C linux-$LINUX_VERSION ARCH=x86_64 -j"$(nproc)" LOCALVERSION=-sgx$FLAVOR \
-            KDEB_PKGVERSION=$LINUX_VERSION-${PKGTAG}1 bindeb-pkg
+            KDEB_PKGVERSION=${PKG_VERSION:-$LINUX_VERSION-${PKGTAG}1} bindeb-pkg
           mkdir -p out
           mv linux-image-*.deb linux-headers-*.deb out/
           ls -l out

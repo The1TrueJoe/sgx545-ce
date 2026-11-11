@@ -6,18 +6,23 @@
 # powervr_sgx in tree, from Debian's own amd64 config (the config file of
 # linux-image-*-amd64-unsigned from DEB_SUITE, default trixie) plus
 # deb.fragment, then EXTRA_FRAGMENTS (lockdep.fragment for the lockdep flavor).
-# DEB_KIT=1 adds the test kit's gma500 patches (drm/ci/kit: the display register
-# dump, the self-refresh and FIFO switches), for the kit's sticks only:
+# FLAVOR release: what people install. kit: also the test kit's gma500 patches
+# (drm/ci/kit: the display register dump, the self-refresh and FIFO switches),
+# for the kit's sticks only.
 #
-#   deb-kernel.sh <linux source> <drm dir>
+#   deb-kernel.sh <linux source> <drm dir> release|kit
 set -eu
 SRC=$1
 DRM=$2
+FLAVOR=${3:-}
 SUITE=${DEB_SUITE:-trixie}
 MIRROR=http://deb.debian.org/debian
 
-kit=
-[ "${DEB_KIT:-0}" = 1 ] && kit=$(ls "$DRM"/ci/kit/*.patch)
+case $FLAVOR in
+release) kit= ;;
+kit) kit=$(ls "$DRM"/ci/kit/*.patch) ;;
+*) echo "deb-kernel: flavor release or kit, not '$FLAVOR'" >&2; exit 2 ;;
+esac
 for p in "$DRM"/gma500/*.patch $kit; do
 	echo ">> patch $(basename "$p")"
 	patch -d "$SRC" -p1 --forward --batch < "$p"
