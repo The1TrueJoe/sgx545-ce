@@ -1,0 +1,39 @@
+# Shipped firmware image features word <= the in-tree driver's accepted mask.
+# Fails if ukernel/build.py turns on a host-visible feature bit the in-tree
+# powervr_sgx driver does not accept (docs/UKFW-FEATURES-MIGRATION.md): a kernel
+# built from that driver would reject the image at probe, not hang.
+name: ukfw-features-pin
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - ukernel/**
+      - drm/powervr_sgx/pvrsgx_fw.h
+      - drm/powervr_sgx/pvrsgx_fw.c
+      - drm/tools/mkukfw.py
+      - drm/tools/ukfw_features_pin.py
+      - .github/workflows/ukfw-features-pin.yml
+  pull_request:
+    paths:
+      - ukernel/**
+      - drm/powervr_sgx/pvrsgx_fw.h
+      - drm/powervr_sgx/pvrsgx_fw.c
+      - drm/tools/mkukfw.py
+      - drm/tools/ukfw_features_pin.py
+      - .github/workflows/ukfw-features-pin.yml
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Default image features are a subset of the in-tree driver mask
+        run: python3 drm/tools/ukfw_features_pin.py

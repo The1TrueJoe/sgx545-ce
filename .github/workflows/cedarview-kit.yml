@@ -55,7 +55,8 @@ jobs:
           python3 drm/tools/mkukfw.py fw/uk.bin -o fw/sgx545_ukernel.bin --manifest fw/uk.json \
             --core-rev 0 --build-id "ukernel-$(git rev-parse --short HEAD)"
           python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel.bin | tee fw/check.txt
-          grep -q 'features 0x2' fw/check.txt
+          # features word <= the in-tree driver's accepted mask (not a hardcoded literal)
+          python3 drm/tools/ukfw_features_pin.py --image fw/sgx545_ukernel.bin
 
       - name: Host tools
         run: |
