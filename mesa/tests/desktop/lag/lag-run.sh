@@ -24,8 +24,8 @@ E() {
 	for i in 1 2 3 4 5 6; do
 		sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no \
 			-o PreferredAuthentications=password -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-			-o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=15 root@$BOX "$@"
-		r=$?
+			-o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=15 root@$BOX "$@" &&
+			r=0 || r=$?
 		[ $r -ne 255 ] && return $r
 		sleep 3
 	done
