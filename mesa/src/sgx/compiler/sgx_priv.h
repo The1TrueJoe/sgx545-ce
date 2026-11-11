@@ -107,6 +107,7 @@ struct sgx_iter {
    bool proj;       /* ... iterated projected (x/w, y/w) */
    bool f16;        /* iterated as F16 (mediump), two components per register */
    bool pointcoord; /* gl_PointCoord (set 0) */
+   bool flat;       /* every varying in the set flat */
    unsigned sampler;
 };
 

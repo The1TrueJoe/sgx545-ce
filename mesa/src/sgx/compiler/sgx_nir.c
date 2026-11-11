@@ -1843,6 +1843,24 @@ assign_io(struct sgx_ctx *c)
          for (unsigned set = 0; set < SGX_MAX_SETS; set++)
             set16[set] &= !not16[set];
       }
+      /* (a set is flat when every varying in it is: the linker packs flat
+       * ones apart) */
+      bool flat[SGX_MAX_SETS] = {0}, smooth[SGX_MAX_SETS] = {0};
+      nir_foreach_shader_in_variable (var, s) {
+         char names[8][64];
+         unsigned l = var->data.location, n = var_names(var, names, 8);
+         if (l < VARYING_SLOT_VAR0 || l >= 128)
+            continue;
+         bool f = var->data.interpolation == INTERP_MODE_FLAT;
+         for (unsigned i = 0; i < n; i++) {
+            const struct sgx_varying *vy = find_varying(c->vary, names[i]);
+            if (!vy)
+               continue;
+            for (unsigned r = 0; r < vy->rows && vy->set + r < SGX_MAX_SETS;
+                 r++)
+               (f ? flat : smooth)[vy->set + r] = true;
+         }
+      }
       /* gl_FragCoord first (list A iterator 14, F32),
        * then the sets in order; gl_PointCoord is set 0 */
       int pbase[SGX_MAX_SETS];
@@ -1890,6 +1908,7 @@ assign_io(struct sgx_ctx *c)
          it->comps = MIN2(comps, 4);
          it->pa = pa;
          it->f16 = set16[set];
+         it->flat = flat[set] && !smooth[set];
          /* F16: in_reg holds SGX_IN_HALF | the half index */
          pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
          pa += it->f16 ? (it->comps + 1) / 2 : it->comps;

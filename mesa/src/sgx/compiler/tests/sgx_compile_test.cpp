@@ -699,6 +699,61 @@ TEST_F(sgx_compile_test, fragment_flrp_after_flrp_lowered)
    EXPECT_GT(out.n_flow, 0u) << disasm();
 }
 
+/* a flat varying's set is iterated flat, a smooth one's isn't; a set with
+ * both stays smooth */
+TEST_F(sgx_compile_test, fragment_flat_varyings)
+{
+   for (unsigned mixed = 0; mixed < 2; mixed++) {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *a =
+         var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+      nir_variable *bv =
+         var(nir_var_shader_in, mixed ? glsl_vec2_type() : glsl_vec4_type(),
+             "b", VARYING_SLOT_VAR1);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      a->data.interpolation = INTERP_MODE_FLAT;
+      if (mixed) {
+         a->type = glsl_vec2_type();
+         nir_store_var(&b, col,
+                       nir_vec4(&b, nir_channel(&b, nir_load_var(&b, a), 0),
+                                nir_channel(&b, nir_load_var(&b, a), 1),
+                                nir_channel(&b, nir_load_var(&b, bv), 0),
+                                nir_channel(&b, nir_load_var(&b, bv), 1)),
+                       0xf);
+      } else {
+         nir_store_var(&b, col,
+                       nir_fadd(&b, nir_load_var(&b, a), nir_load_var(&b, bv)),
+                       0xf);
+      }
+      struct sgx_varyings vary = {};
+      sgx_assign_varyings(b.shader, false, &vary);
+      if (mixed) {
+         /* both in set 0, as packing past ten sets would place them */
+         ASSERT_EQ(vary.n, 2u);
+         vary.v[1].set = vary.v[0].set;
+         vary.v[1].comp = 2;
+      }
+      struct sgx_compile_options opts = {};
+      opts.driver_consts = true;
+      compiled = true;
+      ASSERT_EQ(sgx_compile(b.shader, &opts, &vary, &out), 0) << out.log;
+      expect_decodes();
+      if (mixed) {
+         ASSERT_EQ(out.n_iters, 1u);
+         EXPECT_FALSE(out.iters[0].flat);
+      } else {
+         ASSERT_EQ(out.n_iters, 2u);
+         EXPECT_TRUE(out.iters[0].flat);
+         EXPECT_FALSE(out.iters[1].flat);
+      }
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
+}
+
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
  * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
  * writes no PA register (the inputs phase 1 reads) */

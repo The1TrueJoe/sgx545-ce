@@ -168,6 +168,9 @@ struct sgx_iter_info {
    uint8_t proj;   /* ... with a projected coordinate (x/w, y/w) */
    uint8_t sampler;    /* ... of this sampler */
    uint8_t pointcoord; /* gl_PointCoord (set 0) */
+   /* not interpolated: every varying in the set is flat, the provoking
+    * vertex's value (DOUTI b25-26 = 2; 3 interpolates) */
+   uint8_t flat;
 };
 
 /* A texture sample. A

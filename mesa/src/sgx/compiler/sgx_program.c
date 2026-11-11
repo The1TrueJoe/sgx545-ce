@@ -263,6 +263,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       o->proj = it->proj;
       o->sampler = it->sampler;
       o->pointcoord = it->pointcoord;
+      o->flat = it->flat;
    }
    out->colour_pa = c->colour_pa;
    out->discards = c->discards;
