@@ -1762,4 +1762,42 @@ TEST_F(sgx_compile_test, vertex_loop_once_no_branches)
    EXPECT_FALSE(has("br")) << disasm();
 }
 
+/* integer varyings as two exact 16-bit halves: two sets per row, written
+ * with pck.f32.u16, joined with pck.u16.f32 */
+TEST_F(sgx_compile_test, int_varying_as_halves)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_imul(b, x, y);
+   });
+   struct sgx_varyings vv;
+   sgx_assign_varyings(b.shader, true, &vv);
+   ASSERT_EQ(vv.n, 1u);
+   EXPECT_TRUE(vv.v[0].split);
+   EXPECT_EQ(vv.v[0].rows, 2u);
+   EXPECT_EQ(vv.v[0].comps, 4u);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("pck.f32.u16 o")) << disasm();
+   EXPECT_EQ(out.set_comps[0], 4u);
+   EXPECT_EQ(out.set_comps[1], 4u);
+   sgx_shader_free(&out);
+   compiled = false;
+   ralloc_free(b.shader);
+
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_ivec4_type(), "r", VARYING_SLOT_VAR0);
+   in->data.interpolation = INTERP_MODE_FLAT;
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "color",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col,
+                 nir_i2f32(&b, nir_iadd_imm(&b, nir_load_var(&b, in), 1)),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.n_iters, 2u);
+   EXPECT_TRUE(has("pck.u16.f32")) << disasm();
+}
+
 } /* namespace */

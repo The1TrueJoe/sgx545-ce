@@ -226,6 +226,12 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
       v->rows = len * cols;
       v->comps = glsl_get_vector_elements(e);
       v->precision = var->data.precision;
+      if (glsl_base_type_is_integer(glsl_get_base_type(e))) {
+         v->split = true;
+         v->rows *= 2;
+         /* (whole numbers to 65535: F32 iteration) */
+         v->precision = GLSL_PRECISION_HIGH;
+      }
       v->set = set;
       for (unsigned r = 0; r < v->rows; r++, set++)
          if (set < SGX_MAX_SETS)
@@ -1690,8 +1696,8 @@ find_varying(const struct sgx_varyings *v, const char *name)
 /* per component of a varying variable, the register: base[set] + the
  * varying's component in the set */
 static void
-map_varying(int *tab, nir_variable *var, const struct sgx_varyings *vary,
-            const int *set_base)
+map_varying(int *tab, int *hi, nir_variable *var,
+            const struct sgx_varyings *vary, const int *set_base)
 {
    char names[8][64];
    unsigned n = var_names(var, names, 8);
@@ -1700,16 +1706,22 @@ map_varying(int *tab, nir_variable *var, const struct sgx_varyings *vary,
       const struct sgx_varying *vy = find_varying(vary, names[i]);
       if (!vy)
          continue;
-      for (unsigned r = 0; r < vy->rows; r++) {
-         if (vy->set + r >= SGX_MAX_SETS || set_base[vy->set + r] < 0)
+      unsigned step = vy->split ? 2 : 1;
+      for (unsigned r = 0; r < vy->rows / step; r++) {
+         unsigned set = vy->set + step * r;
+         if (set + step - 1 >= SGX_MAX_SETS || set_base[set] < 0 ||
+             set_base[set + step - 1] < 0)
             continue;
          for (unsigned j = 0; j < vy->comps && comp + j < 4; j++) {
             unsigned at = (var->data.location + r) * 4 + comp + j;
-            if (at < 512)
-               tab[at] = set_base[vy->set + r] + vy->comp + j;
+            if (at >= 512)
+               continue;
+            tab[at] = set_base[set] + vy->comp + j;
+            if (vy->split)
+               hi[at] = set_base[set + 1] + vy->comp + j;
          }
       }
-      comp += vy->rows == 1 ? vy->comps : 0;
+      comp += vy->rows == step ? vy->comps : 0;
    }
 }
 
@@ -1721,7 +1733,7 @@ assign_io(struct sgx_ctx *c)
    const struct sgx_compile_options *o = c->opts;
 
    for (unsigned i = 0; i < 512; i++)
-      c->in_reg[i] = c->out_reg[i] = -1;
+      c->in_reg[i] = c->out_reg[i] = c->in_hi[i] = c->out_hi[i] = -1;
    if (s->info.stage == MESA_SHADER_VERTEX) {
       unsigned next_attr = first_free(o, SGX_LAYOUT_ATTRIB);
       nir_foreach_shader_in_variable (var, s) {
@@ -1783,7 +1795,7 @@ assign_io(struct sgx_ctx *c)
       c->n_out_regs += nclip;
       nir_foreach_shader_out_variable (var, s)
          if (var->data.location >= VARYING_SLOT_VAR0)
-            map_varying(c->out_reg, var, c->vary, obase);
+            map_varying(c->out_reg, c->out_hi, var, c->vary, obase);
    } else {
       /* in F16 mode, a varying every load of which is mediump is iterated as
        * F16 (list A format 2: two components per register) */
@@ -1917,7 +1929,7 @@ assign_io(struct sgx_ctx *c)
       c->n_pa_inputs = pa;
       nir_foreach_shader_in_variable (var, s)
          if (var->data.location >= VARYING_SLOT_VAR0)
-            map_varying(c->in_reg, var, c->vary, pbase);
+            map_varying(c->in_reg, c->in_hi, var, c->vary, pbase);
    }
 
    /* uniforms: constant numbers */

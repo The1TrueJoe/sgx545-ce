@@ -148,6 +148,8 @@ struct sgx_ctx {
    /* register per I/O component: [location * 4 + component] (VARYING_SLOT_* /
     * VERT_ATTRIB_*), -1 none */
    int in_reg[512], out_reg[512];
+   /* a split (integer) varying's high halves, per component; -1 none */
+   int in_hi[512], out_hi[512];
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
 #define SGX_ITER_FRAGCOORD 14 /* list A iterator of gl_FragCoord */

@@ -3274,6 +3274,18 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          vtx_unpack(c, in, r, c->opts->vtx_fmt[r / 4]);
          return;
       }
+      if (c->stage == MESA_SHADER_FRAGMENT && c->in_hi[at] >= 0) {
+         /* an integer varying: the halves, rounded and joined */
+         unsigned w = new_vreg(c, in->def.num_components);
+         for (unsigned j = 0; j < in->def.num_components; j++)
+            emit_pck(c, SGX_OP_PCK_U16_F32, vref(w, j),
+                     ref(SGX_F_PA, c->in_reg[at + j]),
+                     ref(SGX_F_PA, c->in_hi[at + j]), &NOF);
+         v->kind = VAL_V;
+         v->n = w;
+         v->comp = 0;
+         return;
+      }
       v->kind = VAL_PA;
       v->n = r;
       if (r & SGX_IN_HALF) {
@@ -3369,8 +3381,20 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                     : -1;
          if (!(wmask & (1u << k)) || r < 0)
             continue;
+         struct sgx_ref x = src_comp(c, &ls, k - nir_intrinsic_component(in));
+         int h = c->out_hi[slot * 4 + k];
+         if (h >= 0) {
+            /* an integer varying: its 16-bit halves, as floats */
+            struct sgx_ref xh = x;
+            xh.lane = 2;
+            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, r), x,
+                     ref(SGX_F_IMM, 0), &NOF);
+            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, h), xh,
+                     ref(SGX_F_IMM, 0), &NOF);
+            continue;
+         }
          d[k] = ref(SGX_F_O, r);
-         ss[0][k] = src_comp(c, &ls, k - nir_intrinsic_component(in));
+         ss[0][k] = x;
          m |= 1u << k;
       }
       emit_runs(c, SGX_OP_MOV, m, d, 1, ss, &NOF, 0);

@@ -132,6 +132,10 @@ struct sgx_varying {
    unsigned comp; /* first component in its sets: varyings may share a set */
    unsigned rows, comps;
    unsigned precision; /* GLSL: 0 none, 1 high, 2 medium, 3 low */
+   /* an integer varying: each row's 16-bit halves as exact floats, the
+    * low ones in set + 2 * row, the high ones in the next (rows counts
+    * both) */
+   bool split;
 };
 
 struct sgx_varyings {
