@@ -559,6 +559,8 @@ struct job_args {
 	u32 *intra;
 	u32 nintra;
 	bool inited;
+	/* Once pushed: the job's finished fence, for later jobs' waits. */
+	struct dma_fence *done;
 };
 
 static void job_args_fini(struct job_args *ja)
@@ -574,6 +576,7 @@ static void job_args_fini(struct job_args *ja)
 	}
 	kvfree(ja->signals);
 	kvfree(ja->intra);
+	dma_fence_put(ja->done);
 	if (ja->job) {
 		if (ja->inited)
 			drm_sched_job_cleanup(&ja->job->base);
@@ -835,24 +838,27 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 		}
 	}
 
-	/* Arm in order, each after the earlier jobs it waits on. */
+	/*
+	 * In order: a job's waits on earlier jobs of the submit, then arm, publish
+	 * and push it. An armed job must be pushed, so a wait that can't be added
+	 * fails this job and those after it; the earlier ones are already queued
+	 * (@failed_index). The VM's reservation, held throughout, keeps the order.
+	 */
 	for (u32 i = 0; i < n; i++) {
-		for (u32 d = 0; d < ja[i].nintra; d++) {
-			struct dma_fence *f = &ja[ja[i].intra[d]].job->base.s_fence->finished;
+		struct pvrsgx_job *job = ja[i].job;
+		struct dma_fence *done;
 
-			err = drm_sched_job_add_dependency(&ja[i].job->base, dma_fence_get(f));
+		for (u32 d = 0; d < ja[i].nintra; d++) {
+			err = drm_sched_job_add_dependency(&job->base,
+							   dma_fence_get(ja[ja[i].intra[d]].done));
 			if (err) {
 				args->failed_index = i;
 				goto out_exec;
 			}
 		}
-		drm_sched_job_arm(&ja[i].job->base);
-	}
-
-	/* Nothing can fail from here: publish the fences, push. */
-	for (u32 i = 0; i < n; i++) {
-		struct pvrsgx_job *job = ja[i].job;
-		struct dma_fence *done = &job->base.s_fence->finished;
+		drm_sched_job_arm(&job->base);
+		done = &job->base.s_fence->finished;
+		ja[i].done = dma_fence_get(done);
 
 		dma_resv_add_fence(drm_gpuvm_resv(&job->ctx->vm->gpuvm), done,
 				   DMA_RESV_USAGE_BOOKKEEP);
