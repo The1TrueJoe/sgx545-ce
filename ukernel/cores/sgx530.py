@@ -53,6 +53,11 @@ DCU_INVALID = 0              # EVENT_STATUS2 has only b0/b1 (the DPM free-list l
 # first candidate if b20 times out (G).
 OTPM_CLEAR_WAITS = [(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR)]  # noqa: F405
 
+ISA_CORE = 545               # assembled with the SGX545's encodings: sgx.xml describes
+                             # only the 545 (sgx-asm -c 530 refuses), and the image uses
+                             # only forms the SGX545 microkernel uses (sgx530.md, ISA).
+                             # 530 once sgx.xml has the SGX530's confirmed forms.
+
 # ---- bring-up ---------------------------------------------------------------
 WAIT_BOUND = 0xffff          # every wait gives up after 65535 polls and logs itself
                              # in WAIT_TIMEOUT_ID/CT (the manifest's "waits" names it)

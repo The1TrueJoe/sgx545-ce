@@ -99,6 +99,8 @@ and the manifest `core` field, so images never collide. Where a core needs other
 handler logic, `ukernel.py` has a per-core feature flag (`MULTI_MEM_CONTEXTS`,
 `FIX_HW_BRN_28889`, `WAIT_BOUND`, `HEARTBEAT`, `INIT_DPM_CLEAR`), never a fork; the SGX545 defaults
 emit the code the SGX545 always had.
+`ISA_CORE` names whose instruction encodings `sgx-asm -c` uses. It is 545 for every
+core until sgx.xml describes another, and the manifest's `isa` says so when it differs.
 
 - `sgx545`: the shipping core; golden `golden/sgx545.sha256`.
 - `sgx530`: our OMAP3630 test board, being brought up

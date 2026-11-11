@@ -327,6 +327,8 @@ PD_TABLE_SLOTS = 1024        # one-context cores: the host's read-only PD table 
 INIT_DPM_CLEAR = [CR_DPM_LOADSEL, 0x630]  # init zeroes the DPM load-select and slot
                              # select, so an HWR leaves no stale OOM-shuffle state
 
+ISA_CORE = 545               # the instruction encodings: sgx-asm -c sgx<ISA_CORE>
+
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
 CR_CLKGATESTATUS = 0x008

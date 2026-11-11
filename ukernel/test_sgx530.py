@@ -134,9 +134,12 @@ def test_stage1_named(code, man):
     queue(mem, C.CMD_GETMISCINFO, data1=MISC)
     event(u, man, regs)
     runs.append(regs.log)
+    host = [(op, a) for log in runs for (op, a, v, pc) in log if a in (0x130, 0x110)]
+    assert not host, f"EVENT_HOST_ENABLE/ENABLE2 are the host's, the image touched {host}"
     bad = sorted({a for log in runs for (op, a, v, pc) in log if a not in STAGE1_NAMED})
     assert not bad, "stage 1 touches unnamed registers: " + ", ".join(f"{a:#x}" for a in bad)
-    print(f"  stage 1: only named registers ({len(STAGE1_NAMED)})  OK")
+    print(f"  stage 1: only named registers ({len(STAGE1_NAMED)}), none of the host's "
+          "EVENT_HOST_ENABLE/ENABLE2  OK")
 
 
 def test_getmiscinfo(code, man):

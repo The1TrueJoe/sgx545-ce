@@ -110,7 +110,7 @@ def _encode_sgxasm(items, tool):
     raw items are spliced back at their positions (docs/UKERNEL-TOOLING.md §2)."""
     import subprocess
     text_lines = [t for kind, t in items if kind == "text"]
-    proc = subprocess.run([tool, "-b", "-c", ukernel.CORE_NAME],
+    proc = subprocess.run([tool, "-b", "-c", f"sgx{ukernel.ISA_CORE}"],
                           input=("\n".join(text_lines) + "\n").encode(),
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.returncode != 0:
@@ -184,6 +184,8 @@ def main():
         "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }
+    if f"sgx{ukernel.ISA_CORE}" != ukernel.CORE_NAME:   # assembled with another core's encodings
+        manifest["isa"] = f"sgx{ukernel.ISA_CORE}"
     if resolve.waits:             # a core built with bounded waits: id -> what it polls
         manifest["waits"] = {str(i): {"poll": "0x%x" % p, "mask": "0x%x" % m, "until": u}
                              for i, p, m, u in resolve.waits}
