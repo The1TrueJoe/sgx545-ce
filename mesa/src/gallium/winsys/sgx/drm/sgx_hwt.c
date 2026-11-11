@@ -20,7 +20,7 @@
  *   buf 11223344 ...    optional: the data buffer's first dwords (up to 64)
  *   limm r1, BUF        lines of ISA.md text; BUF is the buffer's address
  *   raw HI LO           a word given as it is (one no form encodes)
- *   tex TEXEL           optional: a texture in the texture heap (1 KiB),
+ *   tex TEXEL           optional: a texture in the texture heap (4 KiB),
  *                       every dword TEXEL (its bytes in memory order); TEX in
  *                       a line is its address
  *   texpat              optional: the same heap with dword i = 0x5a5a0000 | i,
@@ -44,7 +44,7 @@
 
 #define MAX_INSTS 256
 #define BUF_DWORDS 64
-#define TEX_DWORDS 256
+#define TEX_DWORDS 1024
 
 /* a line with BUF / TEX replaced by the address */
 static void

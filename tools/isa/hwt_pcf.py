@@ -2,10 +2,11 @@
 (ISA.md "hw 1c: smp" h5; TEX.md 15, test 3: the DDK's ES2 has no
 EXT_shadow_samplers).
 
-A 16x16 depth16 texture with the DDK's own words for one (the dt16 capture:
-T0 00060e00 strided, 32-byte stride, repeat; T1 d200f00f 16x16, format 0x12,
-layout 6), every texel 0x8000 (0.5). First a plain dependent smp at (0.5, 0.5),
-to see how a depth16 texel comes back (r0, and r1 for a second register); then
+A 16x16 depth16 texture as the DDK stores one (the dt16 capture, STATE.md /
+TEX.md 15: converted to F32 on upload, T0 00060e00, T1 d200f00f 16x16, format
+0x12, layout 6 strided with a 32-texel pitch, T3 00800800; a sample returns
+(d, d, d, 1)), every texel 0.5. First a plain dependent smp at (0.5, 0.5), to
+see the result's registers (r0-r3); then
 smp.2d.pcf with the reference as a third coordinate (r10, the guess: the
 coordinate count follows the PCF mode), swept across 0.5. A compare shows as
 the result switching between the references below and above the texel.
@@ -17,8 +18,7 @@ from hwt_lib import END
 TESTS = []
 TEXS = {}
 
-DEPTH = 0x8000
-TEXEL = DEPTH << 16 | DEPTH
+TEXEL = 0x3F000000  # 0.5
 T = [0x00060E00, 0xD200F00F, None, 0x00800800]
 
 
@@ -43,9 +43,9 @@ def coords(ref=None):
     return c
 
 
-SENT = ["limm r0, #0x5a5a5a5a  [skipinv]", "limm r1, #0xa5a5a5a5  [skipinv]"]
+SENT = [f"limm r{k}, #0x5a5a5a{k:02x}  [skipinv]" for k in range(4)]
 
-for r in ("r0", "r1"):
+for r in ("r0", "r1", "r2", "r3"):
     name = f"dt16_plain_{r}"
     TEXS[name] = TEXEL
     TESTS.append((name, words() + coords() + SENT +

@@ -9,7 +9,7 @@ last line moves its result to o0 and ends the program (hwt_lib.out), before the
 winsys's colour epilogue. Tests that poke the replay (a fourth field) don't
 apply and are skipped. A suite may give BUFS = {name: [dwords]}:
 the data buffer's first dwords for that test; BUF in a line is its address.
-TEXS = {name: texel} fills that test's texture heap (1 KiB) with one dword;
+TEXS = {name: texel} fills that test's texture heap (4 KiB) with one dword;
 "pat" instead fills dword i with 0x5a5a0000 | i, so a texel names where it came
 from. TEX in a line is the heap's address.
 
