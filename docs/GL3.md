@@ -265,7 +265,7 @@ CE5300 board** (piglit `arb_draw_instanced`, `arb_instanced_arrays`,
   `SGX_K_INSTANCE` as a float (`lower_instance_id`), instanced elements
   fetched at base instance + instance / divisor (`setup_fetch`); caps
   `vs_instanceid`, `vertex_element_instance_divisor`, `start_instance`. The
-  cost is one draw a instance: a draw of thousands of instances becomes
+  cost is one draw an instance: a draw of thousands of instances becomes
   thousands of draws;
 - pure integer vertex attributes keep their bits, with an integer 1 for a
   missing w.
