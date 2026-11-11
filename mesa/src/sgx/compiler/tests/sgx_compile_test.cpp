@@ -594,6 +594,58 @@ TEST_F(sgx_compile_test, fragment_dependent_f16_sample_not_unpacked)
    EXPECT_EQ(disasm().find("pck.f16.u8"), std::string::npos) << disasm();
 }
 
+/* two plain varyings and two projected PDS-only samples: each sample comes
+ * right after a plain iteration (the driver merges it into that DOUTI) */
+TEST_F(sgx_compile_test, fragment_pds_samples_interleaved)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *d =
+      var(nir_var_shader_in, glsl_vec4_type(), "d", VARYING_SLOT_VAR1);
+   nir_variable *tc[2] = {
+      var(nir_var_shader_in, glsl_vec4_type(), "t0", VARYING_SLOT_VAR2),
+      var(nir_var_shader_in, glsl_vec4_type(), "t1", VARYING_SLOT_VAR3)};
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *acc = nir_fmul(&b, nir_load_var(&b, a), nir_load_var(&b, d));
+   for (unsigned k = 0; k < 2; k++) {
+      nir_variable *smp = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+         k ? "s1" : "s0", -1);
+      smp->data.binding = k;
+      nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+      nir_def *v = nir_load_var(&b, tc[k]);
+      nir_tex_instr *tx = nir_tex_instr_create(b.shader, 4);
+      tx->op = nir_texop_tex;
+      tx->sampler_dim = GLSL_SAMPLER_DIM_2D;
+      tx->dest_type = nir_type_float32;
+      tx->coord_components = 2;
+      tx->texture_index = tx->sampler_index = k;
+      tx->src[0] =
+         nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
+      tx->src[1] =
+         nir_tex_src_for_ssa(nir_tex_src_projector, nir_channel(&b, v, 3));
+      tx->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &sd->def);
+      tx->src[3] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref, &sd->def);
+      nir_def_init(&tx->instr, &tx->def, 4, 32);
+      nir_builder_instr_insert(&b, &tx->instr);
+      acc = nir_fmul(&b, acc, &tx->def);
+   }
+   nir_store_var(&b, col, acc, 0xf);
+
+   pds_alone = true;
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_iters, 4u);
+   for (unsigned i = 0; i < 4; i++)
+      EXPECT_EQ((bool)out.iters[i].sample, (bool)(i & 1)) << "entry " << i;
+   /* PA in list order */
+   for (unsigned i = 1; i < 4; i++)
+      EXPECT_EQ(out.iters[i].pa, out.iters[i - 1].pa + out.iters[i - 1].regs);
+}
+
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
  * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
  * writes no PA register (the inputs phase 1 reads) */

@@ -3137,6 +3137,151 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
    }
 }
 
+/* PDS samples alone (no coordinate iteration of their own) each placed right
+ * after a plain iteration of another set, F16 ones first, so the driver can
+ * merge the sample into that DOUTI (the DDK's `iterate tc0; sample tc1`):
+ * fewer DOUTIs a pixel. Iterations fill PA in list order (PDS.md "DOUTI"), so
+ * the input PA registers are renamed to the new order, after allocation. Not
+ * when a repeat or a PA vreg would straddle a moved boundary. */
+static unsigned
+iter_regs(const struct sgx_iter *it)
+{
+   return it->sample ? (it->f16 ? 2 : 1)
+          : it->f16  ? (it->comps + 1) / 2
+                     : it->comps;
+}
+
+static const struct sgx_sample *
+iter_sample(struct sgx_ctx *c, const struct sgx_iter *it)
+{
+   for (unsigned i = 0; i < c->n_samples; i++)
+      if (!c->samples[i]->dependent && c->samples[i]->pa == it->pa)
+         return c->samples[i];
+   return NULL;
+}
+
+static bool
+pa_remap_ref(struct sgx_ctx *c, struct sgx_ref *r, unsigned span,
+             const int *map, bool apply)
+{
+   unsigned reg, regs = span;
+   if (r->file == SGX_F_PA) {
+      reg = r->h16 ? r->n / 2 : r->n;
+   } else if (r->file == SGX_F_V) {
+      struct sgx_vreg *v = sgx_vreg(c, r->n);
+      if (!v->pa || v->phys < 0)
+         return true;
+      reg = v->phys;
+      regs = MAX2(regs, v->half ? (v->size + 1) / 2 : v->size);
+   } else {
+      return true;
+   }
+   if (reg >= c->n_pa_inputs)
+      return true;
+   for (unsigned j = 1; j < regs && reg + j < c->n_pa_inputs; j++)
+      if (map[reg + j] != map[reg] + (int)j)
+         return false;
+   if (!apply)
+      return true;
+   if (r->file == SGX_F_PA)
+      r->n = r->h16 ? 2 * map[reg] + (r->n & 1) : (unsigned)map[reg];
+   return true;
+}
+
+static void
+interleave_samples(struct sgx_ctx *c)
+{
+   if (!c->opts->pds_samples_alone || c->stage != MESA_SHADER_FRAGMENT ||
+       sgx_debug(c, SGX_DBG_NO_INTERLEAVE) || c->n_iters < 2 ||
+       c->n_iters > 16)
+      return;
+   /* partners: plain iterations of a coordinate set no other sample reads */
+   int partner[16], order[16], n = 0;
+   bool taken[16] = {0}, any = false;
+   for (unsigned i = 0; i < c->n_iters; i++)
+      partner[i] = -1;
+   for (unsigned s = 0; s < c->n_iters; s++) {
+      const struct sgx_iter *it = &c->iters[s];
+      const struct sgx_sample *sm = it->sample ? iter_sample(c, it) : NULL;
+      if (!sm || sm->coord_pa >= 0)
+         continue;
+      for (int f16 = 1; f16 >= 0 && partner[s] < 0; f16--) {
+         for (unsigned p = 0; p < c->n_iters; p++) {
+            const struct sgx_iter *pi = &c->iters[p];
+            bool busy = taken[p];
+            for (unsigned k = 0; k < c->n_samples && !busy; k++)
+               busy |= !c->samples[k]->dependent &&
+                       c->samples[k]->coord_pa == (int)pi->pa;
+            if (pi->sample || pi->pointcoord || pi->set >= SGX_MAX_SETS ||
+                pi->f16 != (bool)f16 || busy)
+               continue;
+            partner[s] = p;
+            taken[p] = true;
+            any = true;
+            break;
+         }
+      }
+   }
+   if (!any)
+      return;
+   /* the new order: each partner followed by its sample */
+   for (unsigned i = 0; i < c->n_iters; i++) {
+      if (c->iters[i].sample && partner[i] >= 0)
+         continue;
+      order[n++] = i;
+      for (unsigned s = 0; s < c->n_iters; s++)
+         if (partner[s] == (int)i)
+            order[n++] = s;
+   }
+   int map[128];
+   for (unsigned r = 0; r < 128; r++)
+      map[r] = r;
+   unsigned at = c->iters[0].pa;
+   for (unsigned k = 0; k < c->n_iters; k++) {
+      const struct sgx_iter *it = &c->iters[order[k]];
+      for (unsigned j = 0; j < iter_regs(it) && it->pa + j < 128; j++)
+         map[it->pa + j] = at + j;
+      at += iter_regs(it);
+   }
+   /* every PA operand keeps its registers in order, or nothing moves */
+   for (int apply = 0; apply < 2; apply++) {
+      list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
+         for (unsigned k = 0; k < i->nops; k++) {
+            unsigned span = i->op[k].step && i->rpt > 1 ? i->rpt : 1;
+            if (i->op[k].h16)
+               span = (span + 1) / 2;
+            if (!pa_remap_ref(c, &i->op[k], span, map, apply))
+               return;
+         }
+      }
+      if (!apply)
+         continue;
+      unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+      for (unsigned v = 0; v < nv; v++) {
+         struct sgx_vreg *r = sgx_vreg(c, v);
+         if (r->pa && r->phys >= 0 && (unsigned)r->phys < c->n_pa_inputs)
+            r->phys = map[r->phys];
+      }
+   }
+   struct sgx_iter old[16];
+   memcpy(old, c->iters, c->n_iters * sizeof(old[0]));
+   for (unsigned i = 0; i < c->n_samples; i++) {
+      struct sgx_sample *s = c->samples[i];
+      if (!s->dependent)
+         s->pa = map[s->pa];
+      if (s->coord_pa >= 0)
+         s->coord_pa = map[s->coord_pa];
+   }
+   for (unsigned k = 0; k < c->n_iters; k++) {
+      c->iters[k] = old[order[k]];
+      c->iters[k].pa = map[old[order[k]].pa];
+   }
+   if (c->colour_pa < c->n_pa_inputs)
+      c->colour_pa = map[c->colour_pa];
+   if (c->depth_pa < c->n_pa_inputs)
+      c->depth_pa = map[c->depth_pa];
+}
+
 static void
 find_projected(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -6541,6 +6686,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"nophases", SGX_DBG_NO_PHASES,
     "Keep a discarding fragment program in one phase"},
+   {"nointerleave", SGX_DBG_NO_INTERLEAVE,
+    "Keep PDS-only samples after the iterations (no cross-set DOUTI merge)"},
    {"nodepf16", SGX_DBG_NO_DEP_F16,
     "Unpack a dependent sample's RGBA8 texel, though the driver can return F16"},
    {"noprojalone", SGX_DBG_NO_PROJ_ALONE,
@@ -6650,6 +6797,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       drop_self_moves(c);
    if (!c->failed)
       chain_efos(c);
+   if (!c->failed)
+      interleave_samples(c);
    if (!c->failed) {
       uniform_layout(c);
       ret = sgx_finish_program(c, out);

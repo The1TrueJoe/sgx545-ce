@@ -139,7 +139,7 @@ def compile_one(sgxc, kind, name, src, outdir, idx, use_layout):
     # (constants in memory: code only, no USP)
     ok = r.returncode == 0 and os.path.exists(f"{base}.{kind}.code")
     if ok:
-        for ext in ("usp", "code"):
+        for ext in ("usp", "code", "code1"):
             if os.path.exists(f"{base}.{kind}.{ext}"):
                 os.replace(f"{base}.{kind}.{ext}", f"{stem}.{ext}")
     line = [x for x in r.stdout.splitlines() if x.startswith(kind + ":")]
