@@ -1,0 +1,15 @@
+drm/powervr_sgx: Load and start the microkernel
+
+The GPU runs a microkernel on its shader unit. Load it with
+request_firmware(), check its header (magic, interface version,
+features, image CRC, entry points and patch sites), and refuse an image
+that doesn't declare secure mode, in which no client page directory maps
+the firmware's memory.
+
+Build the microkernel's control blocks and entry PDS programs in kernel
+memory, run the core's init script, kick the first event and wait for
+the microkernel to report it is running. Stopping is the microkernel's
+power-off, then the cores held in reset.
+
+Commands reach the microkernel through a kernel-owned ring (the kernel
+CCB); a command is done when the microkernel's read offset passes it.
