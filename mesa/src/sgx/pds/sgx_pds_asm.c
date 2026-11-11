@@ -14,8 +14,6 @@
  */
 
 #include <ctype.h>
-#include <errno.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,20 +41,15 @@ eat(struct cursor *c, const char *s)
    return true;
 }
 
-/* An unsigned number of at most 32 bits. */
 static bool
-number(struct cursor *c, uint32_t *v)
+number(struct cursor *c, unsigned long *v)
 {
    char *end;
 
    skip(c);
-   if (!isdigit((unsigned char)*c->p))
+   *v = strtoul(c->p, &end, 0);
+   if (end == c->p)
       return false;
-   errno = 0;
-   unsigned long long n = strtoull(c->p, &end, 0);
-   if (errno || n > UINT32_MAX)
-      return false;
-   *v = n;
    c->p = end;
    return true;
 }
@@ -65,7 +58,7 @@ number(struct cursor *c, uint32_t *v)
 static bool
 word(struct cursor *c, struct sgx_pds_reg *r)
 {
-   uint32_t n;
+   unsigned long n;
 
    memset(r, 0, sizeof(*r));
    if (eat(c, "ds0[") || eat(c, "ds1[")) {
@@ -128,7 +121,7 @@ movs(struct cursor *c, struct sgx_pds_instr *in)
       in->sel[k] = (s2 ? 2 : 0) | (w & 1);
    }
    for (;;) {
-      uint32_t n;
+      unsigned long n;
 
       if (eat(c, "[r1=") && number(c, &n) && eat(c, "]"))
          in->r1 = n;
@@ -186,12 +179,8 @@ sgx_pds_asm(const char *text, struct sgx_pds_instr *in)
          if (douts[d] && !strcmp(op, douts[d]))
             in->dest = d;
       }
-      if (in->dest == 0xff && isdigit((unsigned char)op[4])) {
-         char *end;
-         unsigned long d = strtoul(op + 4, &end, 10);
-         if (!*end && d <= 31)
-            in->dest = d;
-      }
+      if (in->dest == 0xff)
+         in->dest = strtoul(op + 4, NULL, 10);
       *sfx = save;
    }
    if (in->opc == SGX_PDS_OPC_NONE)
@@ -224,7 +213,7 @@ sgx_pds_asm(const char *text, struct sgx_pds_instr *in)
 static const char *
 operands(struct cursor *c, struct sgx_pds_instr *in)
 {
-   uint32_t n;
+   unsigned long n;
 
    switch (in->opc) {
    case SGX_PDS_OPC_MOVS:
