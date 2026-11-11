@@ -15,12 +15,13 @@ microkernel source. A new core is added as data in each of them, not by copying 
 |---|---|---|---|
 | SGX545 | USSE | Intel Cedarview (Atom N2600, N2800, D2500, D2550, D2700); Intel Atom CE5300/CE5310 | Supported |
 | SGX535 | USSE | Intel Poulsbo (GMA 500), Apple A4 | Wanted |
-| SGX530 | USSE | TI OMAP3 | Wanted |
+| SGX530 | USSE | TI OMAP3 | Wanted; fact sheet: [cores/sgx530.md](cores/sgx530.md) |
 | SGX540 | USSE | TI OMAP4 | Wanted |
 | SGX543, SGX544, SGX554 | USSE2 | TI OMAP5 and AM57xx, Allwinner A31 and A83T, some MediaTek SoCs | Wanted; needs USSE2 support in the compiler and assembler |
 
 The cores marked USSE share an instruction set with the SGX545, so most of the work is
-the per-core facts and the platform glue. USSE2 is a different instruction set and a
+the per-core facts and the platform glue. Each core's facts, sourced and tagged, go in a fact sheet under
+[cores/](cores/) before they go into the driver tables. USSE2 is a different instruction set and a
 larger project.
 
 ## The guides
