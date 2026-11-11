@@ -727,6 +727,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                       screen->core->f16_sample_return &&
                       !(sgx_drv_debug & SGX_DEBUG_NO_F16_SAMPLES);
+   /* and those of dependent samples (sgx_draw.c sets their T3) */
+   opts.dep_f16_samples =
+      opts.f16_samples && !(sgx_drv_debug & SGX_DEBUG_NO_DEP_F16_SAMPLES);
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
                      !(sgx_drv_debug & SGX_DEBUG_NO_FF_MEDIUMP);

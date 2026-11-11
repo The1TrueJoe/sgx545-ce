@@ -46,6 +46,8 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "a fragment program that discards runs whole before the visibility feedback, not only its test (its colour after, as the DDK's alpha-tested programs)"},
    {"nof16samples", SGX_DEBUG_NO_F16_SAMPLES,
     "texels a mediump program reads come back RGBA8 to unpack, not F16 (T3 01028800)"},
+   {"nodepf16samples", SGX_DEBUG_NO_DEP_F16_SAMPLES,
+    "dependent texels a mediump program reads come back RGBA8 to unpack, not F16"},
    {"nopdsmerge", SGX_DEBUG_NO_PDS_MERGE,
     "a sample is merged only into the previous iteration of its own set, not of another"},
    {"nozls", SGX_DEBUG_NO_ZLS,
