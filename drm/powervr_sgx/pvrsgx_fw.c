@@ -578,7 +578,7 @@ static void bringup_diag(struct pvrsgx_device *sdev, const char *when)
 }
 
 /* Wait for init; on a guessed core, log every 100 ms that it doesn't come. */
-static int init_wait(struct pvrsgx_device *sdev, const u32 *status)
+static int wait_for_init(struct pvrsgx_device *sdev, const u32 *status)
 {
 	char when[32];
 	int err = -ETIMEDOUT;
@@ -699,7 +699,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	wmb();
 	init_kick(sdev);
 
-	err = init_wait(sdev, &hc[HOSTCTL_INIT_STATUS]);
+	err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (err) {
 		drm_err(&sdev->base,
 			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",
