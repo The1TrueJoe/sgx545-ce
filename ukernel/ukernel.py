@@ -139,11 +139,17 @@ CORE = os.environ.get("SGX_CORE", "sgx545")
 _core = importlib.import_module("cores." + CORE)
 globals().update({k: v for k, v in vars(_core).items() if not k.startswith("_")})
 del _core
+# the directory list a job's page directory goes in: list 1 with BANK0 routing, or
+# on a one-context core the only list, switched per job and restored after it
+CTX_DIR_LIST = CR_BIF_DIR_LIST_BASE1 if MULTI_MEM_CONTEXTS else CR_BIF_DIR_LIST_BASE0
+if OVERLAP and not MULTI_MEM_CONTEXTS:
+    raise SystemExit(f"UK_OVERLAP needs MULTI_MEM_CONTEXTS ({CORE} has one memory context)")
 
 
 class Asm:
     def __init__(self):
         self.lines = []
+        self.waits = []           # (id, poll, mask) of each bounded wait (WAIT_BOUND)
 
     def label(self, name):
         self.lines.append(("label", name))
@@ -248,16 +254,92 @@ class Asm:
             self.i(f"limm r5, #{Asm._wl}")
             self.st_sa(SA_SELF, 0x35, 5)
         self.i(f"limm r6, #{mask}")
+        if WAIT_BOUND:
+            self.waits.append((Asm._wl, poll, mask, "set"))
+            self.i(f"limm r15, #{WAIT_BOUND}")      # r15: only the bounded wait uses it
         self.label(lbl)
         self.i(f"ldr r5, #{poll // 4}")
         self.i("wdf")
         self.i("and r5, r5, r6")
         self.i(f"test.xor.ne p0, r5, r6")
-        self.i(f"(p0) ba {lbl}")
+        if WAIT_BOUND:
+            # an unverified core: a bit it lacks must not freeze the EDM. Give up,
+            # name the wait in the control block, count it, and carry on.
+            self.i(f"(!p0) ba {lbl}_ok")
+            self.i("test.isubu16.ne p0, r15, r15, #1")
+            self.i(f"(p0) ba {lbl}")
+            self.timed_out(Asm._wl)
+            self.label(f"{lbl}_ok")
+        else:
+            self.i(f"(p0) ba {lbl}")
         self.i(f"str #{ack // 4}, r6")
         if WAIT_LOG:                                   # wait returned -> clear the id
             self.i("limm r5, #0")
             self.st_sa(SA_SELF, 0x35, 5)
+
+    def timed_out(self, wid):
+        """a bounded wait gave up: name it and count it in the control block (r5)"""
+        self.i(f"limm r5, #{wid}")
+        self.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r5 [moe]")
+        self.i(f"ld.a.d r5, r17, #{WAIT_TIMEOUT_CT} [moe]")
+        self.i("wdf")
+        self.i("imae r5, r5, #1, #1 [t2=u32]")
+        self.i(f"st.a.d r17, #{WAIT_TIMEOUT_CT}, r5 [moe]")
+        self.i("idf")
+        self.i("wdf")
+
+    def job_pd(self, dst, ctx):
+        """dst = the PD a one-context core loads for the HW context in r<ctx>. The
+        context's CTX_PD word is a slot in the host's read-only PD table (r14), not
+        an address, masked to the table so any value names a host-written entry."""
+        self.i(f"ld.a.d r{dst}, r{ctx}, #{CTX_PD} [moe]")
+        self.i("wdf")
+        self.i(f"limm r5, #{PD_TABLE_SLOTS - 1}")
+        self.i(f"and r{dst}, r{dst}, r5")
+        self.i(f"imae r{dst}, r{dst}, #4, r14 [t2=u32]")
+        self.i(f"ld.a.d r{dst}, r{dst}, #0 [moe]")
+        self.i("wdf")
+
+    def bif_settle(self):
+        """BRN_28889: after a BIF directory invalidate, let the BIF drain before any
+        data invalidate follows: read BIF_CTRL back, then spin (bounded) until
+        BIF_MEM_REQ_STAT shows no request outstanding. Uses r5, r15, p0."""
+        Asm._wl += 1
+        lbl = f"_wait{Asm._wl}"
+        self.waits.append((Asm._wl, CR_BIF_MEM_REQ_STAT, BIF_MEM_REQ_MASK, "clear"))
+        self.i(f"ldr r5, #{CR_BIF_CTRL // 4}")
+        self.i("wdf")
+        self.i(f"limm r15, #{WAIT_BOUND or 0xffff}")
+        self.label(lbl)
+        self.i(f"ldr r5, #{CR_BIF_MEM_REQ_STAT // 4}")
+        self.i("wdf")
+        self.i(f"limm r6, #{BIF_MEM_REQ_MASK}")
+        self.i("and r5, r5, r6")
+        self.i("test.and.eq p0, r5, r5")
+        self.i(f"(p0) ba {lbl}_ok")
+        self.i("test.isubu16.ne p0, r15, r15, #1")
+        self.i(f"(p0) ba {lbl}")
+        self.timed_out(Asm._wl)
+        self.label(f"{lbl}_ok")
+
+    _rl = 0
+
+    def restore_fw_pd(self):
+        """one-context cores: DIR_LIST_BASE0 = the firmware PD (PD table slot 0),
+        with an INVALDC, unless it already holds it. Uses r4, r5, p0."""
+        Asm._rl += 1
+        lbl = f"_fwpd{Asm._rl}"
+        self.i("ld.a.d r4, r14, #0 [moe]")
+        self.i(f"ldr r5, #{CR_BIF_DIR_LIST_BASE0 // 4}")
+        self.i("wdf")
+        self.i("test.xor.eq p0, r4, r5")
+        self.i(f"(p0) ba {lbl}")
+        self.i(f"str #{CR_BIF_DIR_LIST_BASE0 // 4}, r4")
+        self.i(f"limm r5, #{BIF_CTRL_INVALDC}")
+        self.i(f"str #{CR_BIF_CTRL // 4}, r5")
+        self.i("limm r5, #0")
+        self.i(f"str #{CR_BIF_CTRL // 4}, r5")
+        self.label(lbl)
 
     def invalidate(self, inv_reg, done_mask):
         """request a BIF/USE cache invalidate and wait for it (docs/UKERNEL.md
@@ -353,8 +435,8 @@ class Asm:
         self.wait(CR_EVENT_STATUS, 0x240, CR_EVENT_HOST_CLEAR)
         self.i("limm r5, #9")
         self.i(f"str #{CR_OTPM // 4}, r5")             # OTPM invalidate + clear
-        self.wait(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR)
-        self.wait(CR_EVENT_STATUS2, 0x1000, CR_EVENT_HOST_CLEAR2)
+        for poll, mask, ack in OTPM_CLEAR_WAITS:
+            self.wait(poll, mask, ack)
 
 
 def build(a):
@@ -384,6 +466,19 @@ def build(a):
                                                    # entry (writing it here wedges init). The
                                                    # handlers therefore derive host-control / CCB
                                                    # pointers from r17.
+    if not MULTI_MEM_CONTEXTS:
+        a.patch(14, "pdtable")                     # r14 = the host's PD table: read-only to the
+                                                   # GPU, so its base lives in the (read-only)
+                                                   # code, not in the writable control block
+    if HEARTBEAT is not None:
+        # a progress word for the host's watchdog, on a core whose EDM task
+        # registers we can't name: +1 on every event
+        a.i(f"ld.a.d r3, r17, #{HEARTBEAT} [moe]")
+        a.i("wdf")
+        a.i("imae r3, r3, #1, #1 [t2=u32]")
+        a.i(f"st.a.d r17, #{HEARTBEAT}, r3 [moe]")
+        a.i("idf")
+        a.i("wdf")
     # init not done yet (ui32InitStatus == 0) -> init. host control = *(ctlblk + 1).
     a.i(f"ld.a.d r2, r17, #{SA_HOSTCTL} [moe]")
     a.i("wdf")
@@ -402,8 +497,9 @@ def build(a):
     # core (STATUS2=0x400, event re-entered 16+
     # times, the kick never serviced). Clearing a bit that is not set is a
     # no-op, so the acknowledge is unconditional and no handler reads it.
-    a.i(f"limm r3, #{DCU_INVALID}")
-    a.i(f"str #{CR_EVENT_HOST_CLEAR2 // 4}, r3")
+    if DCU_INVALID:                                # a core whose STATUS2 has the bit
+        a.i(f"limm r3, #{DCU_INVALID}")
+        a.i(f"str #{CR_EVENT_HOST_CLEAR2 // 4}, r3")
     # acknowledge the TA-finish (0x2000) and 3D-end (0x40000 pixel back-end,
     # 0x800000 ISP end-of-tile) events in EUR_CR_EVENT_STATUS the same way: the
     # dispatch() below only tests the r2 snapshot and branches, it never clears
@@ -468,7 +564,7 @@ def build(a):
             # per-tick snapshot, last wins: the hang state as of the last tick
             a.i(f"ldr r4, #{CR_EVENT_STATUS // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x37, 4)
             a.i(f"ldr r4, #{CR_EVENT_STATUS2 // 4}"); a.i("wdf"); a.st_sa(SA_SELF, 0x38, 4)
-            a.i("ldr r4, #%d" % (0x008 // 4)); a.i("wdf"); a.st_sa(SA_SELF, 0x39, 4)  # CLKGATESTATUS
+            a.i("ldr r4, #%d" % (CR_CLKGATESTATUS // 4)); a.i("wdf"); a.st_sa(SA_SELF, 0x39, 4)
             a.i("ld.a.d r4, r17, #0x3b [moe]"); a.i("wdf")
             a.i("imae r4, r4, #1, #1 [t2=u32]"); a.st_sa(SA_SELF, 0x3b, 4)  # tick counter
         a.i("ba tmr_tick_check")                   # timer event: check for a coincident doorbell
@@ -541,9 +637,9 @@ def build(a):
     a.i(f"st.a.d r17, #{STAGE1_FLAG}, r0 [moe]")          # no stage-1 raise outstanding
     a.i(f"st.a.d r17, #{STAGE1_SAVED_628}, r0 [moe]")
     a.i(f"st.a.d r17, #{SLOT1_INIT}, r0 [moe]")           # slot 1's DPM control is whatever reset left: unset
-    a.i(f"str #{CR_DPM_LOADSEL // 4}, r0")                # 0x65c = 0: clean DPM load-select, so a reset
-    a.i(f"str #{0x630 // 4}, r0")                         # 0x630 = 0: and slot select, leave no stale
-                                                          # OOM-shuffle state for the first post-reset 3D
+    for r in INIT_DPM_CLEAR:                              # 0x65c, 0x630 = 0: clean DPM load-select and
+        a.i(f"str #{r // 4}, r0")                         # slot select, no stale OOM-shuffle state for
+                                                          # the first post-reset 3D
     a.i(f"st.a.d r17, #{PB_TA_LOADED}, r0 [moe]")         # no PB free list loaded yet: an HWR
     a.i(f"st.a.d r17, #{PB_3D_LOADED}, r0 [moe]")         # wiped the HW DPM, so force a reload
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does
@@ -632,6 +728,17 @@ def build(a):
     a.i(f"str #{0xc00 // 4}, r2")
     a.i("limm r2, #0")
     a.i(f"str #{0xc00 // 4}, r2")
+    if FIX_HW_BRN_28889:
+        # BRN_28889: no data invalidate in the same pass as a BIF one. Leave the
+        # command queued with only its data bit; the next event services it.
+        a.i("test.and.eq p0, r4, #8")
+        a.i("(p0) ba cc_data")
+        a.i("limm r2, #8")
+        a.i("and r4, r4, r2")
+        a.i(f"st.a.d r6, #{CMD_CACHECTL}, r4 [moe]")
+        a.i("idf")
+        a.i("wdf")
+        a.i("ba kick_end")
     a.i("ba cc_data")
     a.label("cc_pt")
     a.i("test.and.eq p0, r4, #1")                        # PT clear? -> data
@@ -640,6 +747,17 @@ def build(a):
     a.i(f"str #{0xc00 // 4}, r2")
     a.i("limm r2, #0")
     a.i(f"str #{0xc00 // 4}, r2")
+    if FIX_HW_BRN_28889:
+        # BRN_28889: no data invalidate in the same pass as a BIF one. Leave the
+        # command queued with only its data bit; the next event services it.
+        a.i("test.and.eq p0, r4, #8")
+        a.i("(p0) ba cc_data")
+        a.i("limm r2, #8")
+        a.i("and r4, r4, r2")
+        a.i(f"st.a.d r6, #{CMD_CACHECTL}, r4 [moe]")
+        a.i("idf")
+        a.i("wdf")
+        a.i("ba kick_end")
     a.label("cc_data")
     a.i("test.and.eq p0, r4, #8")                        # DATA clear? -> dispatch
     a.i("(p0) ba cc_done")
@@ -1087,9 +1205,12 @@ def build(a):
     a.i("ld.a.d r3, r2, #1 [moe]")                  # read offset (bytes)
     a.i("wdf")
     a.i("imae r9, r3, #1, r1 [t2=u32]")             # r9 = transfer command base
-    a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)       # context page directory
-    a.i("wdf")
-    a.i(f"str #{0xc38 // 4}, r4")                   # DIR_LIST_BASE1 = ctx PD (slot 1), list 0 (kernel PD) left intact
+    if MULTI_MEM_CONTEXTS:
+        a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)   # context page directory
+        a.i("wdf")
+    else:
+        a.job_pd(4, 16)                             # from the read-only PD table
+    a.i(f"str #{CTX_DIR_LIST // 4}, r4")            # DIR_LIST_BASE1 = ctx PD (slot 1), list 0 (kernel PD) left intact
     # BIF directory-cache invalidate after the PD switch (EUR_CR_BIF_CTRL 0xc00 bit 3 =
     # INVALDC), as do_ta does on its PD load. The transfer path omitted it, so a 2nd
     # client's first transfer translated through the 1st client's cached list-1 PD entries
@@ -1100,6 +1221,8 @@ def build(a):
     a.i(f"str #{0xc00 // 4}, r5")
     a.i("limm r5, #0")
     a.i(f"str #{0xc00 // 4}, r5")                   # restore BIF_CTRL = 0
+    if FIX_HW_BRN_28889:
+        a.bif_settle()                              # the BIF invalidate drains before the MADD one
     a.invalidate(CR_PDS_INV1, INV_DONE_3D)
     # transfer's 3D field (b22-26) into 0xa74: xfer cmd word 101
     # (+0x194), masked replace like the render 3D field. r9 = transfer cmd base.
@@ -1121,10 +1244,11 @@ def build(a):
     # address (BANK0=0x0f, DIR_LIST_BASE0=idle, FAULT on 0x3e001000). We do
     # NOT write the ctx PD into list 0 -- that clobbers the kernel PD the 3D/ISP/PBE read
     # through and wedged srvinit (do_ta note); routing via BANK0 avoids that.
-    a.i(f"limm r5, #{0x1111f if XFER_BANK_ALL else 0x101f}")
-    a.i(f"str #{0xc78 // 4}, r5")                    # BIF_BANK0: TA/3D (or all DMs if XFER_BANK_ALL) -> list 1 (ctx PD)
-    a.i(f"ldr r5, #{0xc78 // 4}")                    # read-back + fence
-    a.i("wdf")
+    if MULTI_MEM_CONTEXTS:                           # one context: every requestor is on list 0
+        a.i(f"limm r5, #{0x1111f if XFER_BANK_ALL else 0x101f}")
+        a.i(f"str #{0xc78 // 4}, r5")                # BIF_BANK0: TA/3D (or all DMs if XFER_BANK_ALL) -> list 1 (ctx PD)
+        a.i(f"ldr r5, #{0xc78 // 4}")                # read-back + fence
+        a.i("wdf")
     a.i("limm r5, #1")
     a.i(f"str #{CR_3D_KICK // 4}, r5")              # start the 3D
     a.i("ba kick_adv")
@@ -1321,10 +1445,10 @@ def build(a):
     # it begins the scene clean (the DDK does this early, ddk-ref line 22).
     a.i("test.and.eq p0, r13, r13")                 # render kick (r13 == 0)? skip
     a.i("(p0) ba skip_ta_reset")
-    a.i("limm r5, #4")
-    a.i(f"str #{0x80 // 4}, r5")
+    a.i(f"limm r5, #{SOFT_RESET_TA}")
+    a.i(f"str #{CR_SOFT_RESET // 4}, r5")
     a.i("limm r5, #0")
-    a.i(f"str #{0x80 // 4}, r5")
+    a.i(f"str #{CR_SOFT_RESET // 4}, r5")
     a.label("skip_ta_reset")
     # remember context, command, and the pointers the 3D phase needs
     a.i("ld.a.d r10, r9, #%d [moe]" % CMDTA_RD)     # render details
@@ -1389,9 +1513,12 @@ def build(a):
         a.i(f"str #{0xc38 // 4}, r4")               # real PD change (miss): load list 1
         a.i("limm r7, #1")                          # and do the INVALDC
     else:
-        a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
-        a.i("wdf")
-        a.i(f"str #{0xc38 // 4}, r4")               # BIF_DIR_LIST_BASE1 = client PD (slot 1)
+        if MULTI_MEM_CONTEXTS:
+            a.i("ld.a.d r4, r16, #%d [moe]" % CTX_PD)
+            a.i("wdf")
+        else:
+            a.job_pd(4, 16)                         # from the read-only PD table
+        a.i(f"str #{CTX_DIR_LIST // 4}, r4")        # BIF_DIR_LIST_BASE1 = client PD (slot 1)
     a.label("skip_bif_pd")
     if OVERLAP:
         # PRESERVE the 3D nibble (BANK0 b12-15). On a host kick arriving while a previous render's 3D is still
@@ -1405,9 +1532,10 @@ def build(a):
         a.i("and r5, r5, r6")
         a.i("limm r6, #0x1f")
         a.i("or r5, r5, r6")
-    else:
+    elif MULTI_MEM_CONTEXTS:
         a.i("limm r5, #0x1f")                       # BIF_BANK0: EDM=list 15, TA=list 1
-    a.i(f"str #{0xc78 // 4}, r5")
+    if MULTI_MEM_CONTEXTS:
+        a.i(f"str #{0xc78 // 4}, r5")
     # directory-cache invalidate (INVALDC): first kick only, and under OVERLAP only on a real PD
     # change (r7 set above) -- never under a live 3D on a PD hit (the queued-kick fix).
     if OVERLAP:
@@ -1419,6 +1547,8 @@ def build(a):
     a.i(f"str #{0xc00 // 4}, r5")
     a.i("limm r5, #0")
     a.i(f"str #{0xc00 // 4}, r5")
+    if FIX_HW_BRN_28889:
+        a.bif_settle()                              # the BIF invalidate drains before the MADD one
     a.label("skip_bif_invaldc")
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
     # 0xa74's TA-flags field (b27-31) is written below, read-modify-write so
@@ -2050,10 +2180,11 @@ def build(a):
     # 0x101f, bg pulse 0x1011->0x101f, c84 never touched.
     # BANK0: route the 3D requestor to list 1 (the client PD) -- the render needs this
     # whether or not the EDM writes the bgblock below.
-    a.i("limm r5, #0x101f")                           # BANK0: EDM=15, TA=1, 3D -> list 1
-    a.i(f"str #{0xc78 // 4}, r5")
-    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
-    a.i("wdf")
+    if MULTI_MEM_CONTEXTS:
+        a.i("limm r5, #0x101f")                       # BANK0: EDM=15, TA=1, 3D -> list 1
+        a.i(f"str #{0xc78 // 4}, r5")
+        a.i(f"ldr r5, #{0xc78 // 4}")                 # read-back + fence
+        a.i("wdf")
     # Background-object PDS block. The EDM writes bgblock[0..2] into the CLIENT PD, which
     # needs a transient EDM->list-1 pulse (0x1011) -- but that routes the EDM's own
     # instruction fetch onto the client PD and faults it under secure/no-share
@@ -2081,19 +2212,21 @@ def build(a):
     a.i("imae r6, r7, #4, r6 [t2=u32]")               # list base + 4*index
     a.i("ld.a.d r6, r6, #0 [moe]")                    # word2 (bg PDS primary)
     a.i("wdf")
-    a.i("limm r5, #0x1011")                           # BANK0: EDM -> list 1 for the bg stores
-    a.i(f"str #{0xc78 // 4}, r5")
-    a.i(f"ldr r5, #{0xc78 // 4}")                     # read-back + fence
-    a.i("wdf")
+    if MULTI_MEM_CONTEXTS:                            # one context: the EDM is already on the job's PD
+        a.i("limm r5, #0x1011")                       # BANK0: EDM -> list 1 for the bg stores
+        a.i(f"str #{0xc78 // 4}, r5")
+        a.i(f"ldr r5, #{0xc78 // 4}")                 # read-back + fence
+        a.i("wdf")
     a.i("st.a.d r2, #0, r3 [moe]")                    # bgblock[0] = cmd+0x08
     a.i("st.a.d r2, #1, r4 [moe]")                    # bgblock[1] = cmd+0x0c
     a.i("st.a.d r2, #2, r6 [moe]")                    # bgblock[2] = list word
     a.i("idf")
     a.i("wdf")
-    a.i("limm r5, #0x101f")                           # BANK0: EDM -> list 15, 3D stays list 1
-    a.i(f"str #{0xc78 // 4}, r5")
-    a.i(f"ldr r5, #{0xc78 // 4}")
-    a.i("wdf")
+    if MULTI_MEM_CONTEXTS:
+        a.i("limm r5, #0x101f")                       # BANK0: EDM -> list 15, 3D stays list 1
+        a.i(f"str #{0xc78 // 4}, r5")
+        a.i(f"ldr r5, #{0xc78 // 4}")
+        a.i("wdf")
     a.label("skip_bgblock")
     # arm the completion rendezvous: this render is not done until BOTH the 3D writeout
     # (pixel_done, 0x40000 + ISP idle) and the DPM free (free_done, 0x1) have happened.
@@ -2128,16 +2261,16 @@ def build(a):
     # ISP-idle rendezvous: if CLKGATECTL&3==2 (clock-on-demand; 0xA6AA,
     # so always), poll CLKGATESTATUS (0x008) bit 0 until it reads 0. Bounded,
     # so a stuck clock can never wedge the EDM; after the bound we proceed anyway.
-    a.i(f"ldr r5, #{0x0 // 4}")                        # EUR_CR_CLKGATECTL
+    a.i(f"ldr r5, #{CR_CLKGATECTL // 4}")              # EUR_CR_CLKGATECTL
     a.i("wdf")
-    a.i("limm r7, #3"); a.i("and r5, r5, r7")
-    a.i("limm r7, #2"); a.i("test.xor.ne p0, r5, r7") # &3 != 2 -> no ISP wait
+    a.i(f"limm r7, #{CLKGATE_ISP_MASK}"); a.i("and r5, r5, r7")
+    a.i(f"limm r7, #{CLKGATE_ISP_AUTO}"); a.i("test.xor.ne p0, r5, r7") # ISP not on demand -> no ISP wait
     a.i("(p0) ba pixel_isp_done")
     a.i("limm r6, #0")                                 # spin counter
     a.label("pixel_isp_loop")
-    a.i(f"ldr r5, #{0x8 // 4}")                        # EUR_CR_CLKGATESTATUS
+    a.i(f"ldr r5, #{CR_CLKGATESTATUS // 4}")           # EUR_CR_CLKGATESTATUS
     a.i("wdf")
-    a.i("limm r7, #1"); a.i("and r5, r5, r7")         # ISP clock bit
+    a.i(f"limm r7, #{CLKGATESTATUS_ISP}"); a.i("and r5, r5, r7")   # ISP clock bit
     a.i("test.and.eq p0, r5, r5")                     # bit 0 == 0 -> ISP idle
     a.i("(p0) ba pixel_isp_done")
     if OVERLAP:
@@ -2299,6 +2432,8 @@ def build(a):
     a.i(f"st.a.d r17, #{SC_OOM}, r4 [moe]")           # clear SC_OOM
     a.i(f"st.a.d r17, #{SC_OOM_PENDING}, r4 [moe]")   # any queued overlap is moot: the scene finished
     a.label("render_complete_normal")
+    if not MULTI_MEM_CONTEXTS:
+        a.restore_fw_pd()                           # before the first completion write
     if OVERLAP:
         a.i(f"ld.a.d r0, r17, #{TD_RD} [moe]")   # the completing 3D's render details (SC_RD may now be N+1's TA)
     else:
@@ -2422,6 +2557,8 @@ def build(a):
     # the transfer's SGXMKIF_TRANSFERCMD_SHARED is the next increment; docs/TEX.md.)
     # ======================================================================
     a.label("xfer_done")
+    if not MULTI_MEM_CONTEXTS:
+        a.restore_fw_pd()                           # before the first completion write (keeps r1)
     a.i("ld.a.d r5, r1, #%d [moe]" % CTX_CCB)            # transfer context CCB base
     a.i("ld.a.d r2, r1, #%d [moe]" % CTX_CCBCTL)         # CCB control
     a.i("wdf")
@@ -2469,6 +2606,8 @@ def build(a):
     a.i("idf")
     a.i("wdf")
     a.label("raise_host_irq")
+    if not MULTI_MEM_CONTEXTS:
+        a.restore_fw_pd()                           # and on the idle path, in case
     a.i(f"limm r0, #{SW_EVENT}")
     a.i(f"str #{CR_EVENT_STATUS // 4}, r0")        # raise the host IRQ
     # After a completion (render_complete/xfer_done just cleared SC_INFLIGHT/SC_XFER),

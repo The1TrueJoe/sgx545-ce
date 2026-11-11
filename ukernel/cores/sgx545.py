@@ -304,3 +304,50 @@ T3_CMD = [(0x4c4, 0), (0x4bc, 1), (0x4b8, 2), (0x404, 3), (0x408, 4), (0x414, 5)
 # fixed transfer-start constants (the render's 0x63c=3 is 0 for a transfer; no PB)
 T3_CONST = [(0x480, 0), (0x63c, 0), (0x43c, 1)]
 TRANSFERCMD_SHARED = 0xac     # ui32SharedCmdCCBOffset points here; command base is 0xac before
+
+# ---- per-core handler features (docs/porting/cores/) ------------------------
+# Each flag selects a path in ukernel.py's handlers; these are the SGX545 values,
+# and another core overrides only what differs. The defaults emit the code the
+# SGX545 always had, so its image is unchanged.
+MULTI_MEM_CONTEXTS = True    # BIF directory lists 1-15 + BANK0 routing. False: one
+                             # list (DIR_LIST_BASE0), switched per job (sgx530.py)
+MULTI_EVENT_KICK = True      # host side only: the host's init kick uses EVENT_KICK2.
+                             # The event entry tells init from a kick by
+                             # ui32InitStatus, so the microkernel is the same either way
+FIX_HW_BRN_28889 = False     # never issue a BIF and a data-cache invalidate together
+WAIT_BOUND = 0               # 0: a wait() spins until its bits set. N: give up after N
+                             # polls (16-bit), log it (WAIT_TIMEOUT_*) and go on
+WAIT_TIMEOUT_ID = 0x28       # control block +0xa0: the last wait that timed out
+WAIT_TIMEOUT_CT = 0x29       # control block +0xa4: how many waits timed out
+HEARTBEAT = None             # a control block word the event entry increments, for
+                             # a host watchdog that can't read EDM task registers
+PD_TABLE_SLOTS = 1024        # one-context cores: the host's read-only PD table (a 4 KiB
+                             # page of DIR_LIST_BASE0 values; slot 0 = the firmware PD)
+
+INIT_DPM_CLEAR = [CR_DPM_LOADSEL, 0x630]  # init zeroes the DPM load-select and slot
+                             # select, so an HWR leaves no stale OOM-shuffle state
+
+ISA_CORE = 545               # the instruction encodings: sgx-asm -c sgx<ISA_CORE>
+
+# ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
+CR_CLKGATECTL = 0x000
+CR_CLKGATESTATUS = 0x008
+CLKGATE_ISP_MASK = 0x3       # CLKGATECTL's ISP field (b0-1)
+CLKGATE_ISP_AUTO = 0x2       # ... set to clock-on-demand
+CLKGATESTATUS_ISP = 0x1      # CLKGATESTATUS's ISP bit (b0)
+CR_SOFT_RESET = 0x080
+SOFT_RESET_TA = 0x4          # SOFT_RESET b2
+CR_BIF_CTRL = 0xC00
+BIF_CTRL_FLUSH = 0x4
+BIF_CTRL_INVALDC = 0x8
+CR_BIF_DIR_LIST_BASE0 = 0xC84
+CR_BIF_DIR_LIST_BASE1 = 0xC38
+CR_BIF_BANK0 = 0xC78
+CR_BIF_MEM_REQ_STAT = 0xCA8
+BIF_MEM_REQ_MASK = 0x7ff     # reads b0-10
+# the waits after the OTPM invalidate + clear in dpm_load: (poll reg, bits, ack reg)
+OTPM_CLEAR_WAITS = [(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR),
+                    (CR_EVENT_STATUS2, 0x1000, CR_EVENT_HOST_CLEAR2)]
+FEATURES = 2                 # default PVRSGX_UKFW_* bits in the manifest (UK_FEATURES
+                             # overrides): SECURE, the host writes the background block,
+                             # so powervr_sgx needn't map its heaps into client PDs

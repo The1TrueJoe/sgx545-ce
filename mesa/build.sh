@@ -2,7 +2,7 @@
 # Build Mesa with the sgx gallium driver (over powervr_sgx, or pvrsrvkm
 # through libpvr), the EGL fbdev platform, and GBM.
 #
-#   mesa/build.sh [x86_64] [i386] [x86_64-gl] [x86_64-x11] [debian]   (default: x86_64 i386)
+#   mesa/build.sh [x86_64] [i386] [armv7] [x86_64-gl] [x86_64-x11] [debian]   (default: x86_64 i386)
 #
 # Fetches the release in mesa/VERSION (checked against its sha256), unpacks
 # it under $SGX_MESA_BUILD (default build/mesa in the repo), applies
@@ -12,6 +12,9 @@
 # zig cc for each target:
 #   x86_64  glibc 2.36 ABI: newer glibc userspaces (2.42) run it;
 #   i386    glibc 2.36: the Debian bookworm i386 root the Minecraft runtime uses.
+#   armv7   ARMv7 hard float, musl, tuned for the Cortex-A8: the SGX530 on our OMAP3630
+#           test board, whose userspace is musl (loader /lib/ld-musl-armhf.so.1).
+#           powervr_sgx only (the DDK services backend is x86's).
 #   x86_64-gl  x86_64 with desktop GL through libglvnd (libEGL_mesa), for
 #           piglit (mesa/tests/piglit); finds glvnd in $GLVND_SYSROOT.
 #   x86_64-x11 x86_64 with desktop GL, GLX and the X11 platform through
@@ -66,6 +69,7 @@ for arch in $ARCHES; do
 	case $arch in
 	x86_64|x86_64-gl|x86_64-x11) target=x86_64-linux-gnu.2.36; family=x86_64; cpu=x86_64 ;;
 	i386) target=x86-linux-gnu.2.36; family=x86; cpu=i686 ;;
+	armv7) target=arm-linux-musleabihf; family=arm; cpu=armv7 ;;
 	debian) ;;
 	*) echo "build.sh: unknown arch $arch" >&2; exit 1 ;;
 	esac
@@ -92,6 +96,10 @@ for arch in $ARCHES; do
 	mkdir -p "$O"
 	sed -e "s|@ZIGCC@|$HERE/cross/zigcc|" -e "s|@TARGET@|$target|" -e "s|@FAMILY@|$family|" \
 		-e "s|@CPU@|$cpu|" "$HERE/cross/cross.ini.in" > "$O/cross.ini"
+	if [ "$arch" = armv7 ]; then
+		# the Cortex-A8: NEON, VFPv3
+		sed -i.bak "s|^c = \[\(.*\)\]|c = [\1, '-mcpu=cortex_a8']|; s|^cpp = \[\(.*\)\]|cpp = [\1, '-mcpu=cortex_a8']|" "$O/cross.ini"
+	fi
 	api="-Dopengl=false -Dglvnd=disabled"
 	if [ "$arch" = x86_64-gl ]; then
 		# a plain sysroot (usr/lib/pkgconfig) or a Debian one (multiarch)
@@ -107,6 +115,7 @@ for arch in $ARCHES; do
 	platforms="-Dplatforms=fbdev -Degl-native-platform=fbdev -Dglx=disabled"
 	# the DDK's services backend too, for the fbdev targets
 	pvrsrvkm=-Dgallium-sgx-pvrsrvkm=true
+	[ "$arch" = armv7 ] && pvrsrvkm=
 	if [ "$arch" = x86_64-x11 ]; then
 		R=${X11_SYSROOT:?x86_64-x11 needs a Debian root in X11_SYSROOT (mesa/tests/x11/mkroot.py)}
 		sed -i.bak "s|^pkg_config_libdir = .*|pkg_config_libdir = ['$R/usr/lib/x86_64-linux-gnu/pkgconfig', '$R/usr/share/pkgconfig']\nsys_root = '$R'|" "$O/cross.ini"

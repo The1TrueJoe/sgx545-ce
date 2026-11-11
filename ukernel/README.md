@@ -92,13 +92,22 @@ generated, not committed.
 ## Per-core images
 
 The microkernel programs the SGX core registers for one specific SGX5xx variant
-(the register-programming tables are docs/UKERNEL.md §7). `ukernel.py`'s
-`CORE_NAME` names that core — `sgx545`, the GPU in the Intel Atom CE5300 — and
-build.py names the output binary and the manifest `core` field from it, so a
-build for another core (e.g. `sgx540`, `sgx531`) produces a distinctly-named
-image and the two never collide. Porting to another SGX5xx core means a
-core-specific source and its own `CORE_NAME`; the loader selects the image by
-core.
+(the register-programming tables are docs/UKERNEL.md §7). Each core is a config
+module, `cores/<core>.py`, selected by `build.py <core>` (default `sgx545`, the GPU
+in the Intel Atom CE5300 and Cedarview); its `CORE_NAME` names the output binary
+and the manifest `core` field, so images never collide. Where a core needs other
+handler logic, `ukernel.py` has a per-core feature flag (`MULTI_MEM_CONTEXTS`,
+`FIX_HW_BRN_28889`, `WAIT_BOUND`, `HEARTBEAT`, `INIT_DPM_CLEAR`), never a fork; the SGX545 defaults
+emit the code the SGX545 always had.
+`ISA_CORE` names whose instruction encodings `sgx-asm -c` uses. It is 545 for every
+core until sgx.xml describes another, and the manifest's `isa` says so when it differs.
+
+- `sgx545`: the shipping core; golden `golden/sgx545.sha256`.
+- `sgx530`: our OMAP3630 test board, being brought up
+  (docs/porting/cores/sgx530.md, "The open microkernel's SGX530 build"): one
+  memory context with the host's PD table (a second patch, `pdtable`), bounded
+  waits and a heartbeat word. Checked offline by `test_sgx530.py`; golden
+  `golden/sgx530.sha256`.
 
 ## Feature bits
 
@@ -109,12 +118,13 @@ from it) declares the capabilities the loader must assume. Bits:
 |---|---|---|
 | 0 (0x1) | `CLEANUP_V2` | the DDK's two-phase resource cleanup. **This image does NOT set it** — this microkernel uses a simpler defer-and-hold cleanup, so the loader must not expect the v2 protocol. |
 | 1 (0x2) | `SECURE` | the background-object PDS block is written by the host (CPU) at submit, not by the microkernel's event-driven module, so the loader can isolate each client address space from the firmware's own heaps instead of mapping them into every context. Set by default (`UK_FEATURES`, default 2). |
+| 2 (0x4) | `SINGLE_CONTEXT` | (number proposed, with the kernel side) one memory context: the EDM runs on list 0, the job's PD comes from the host's read-only PD table, the firmware PD is restored before any completion, init on `EVENT_KICK`. The SGX530 image's default (and it does not set `SECURE`). |
 
 A loader keys its behaviour on these bits, not on the build id, so an image can
 state exactly which protocol it implements. The upstream DRM driver loads only
 images that declare `SECURE` (bit 1) unless a compat config is set, so a
-feature-0 image is a dev/test-only build; `UK_FEATURES` defaults to 2 so the
-default build is the upstream-loadable one.
+feature-0 image is a dev/test-only build; `UK_FEATURES` defaults to the core's
+`FEATURES` (2 for the SGX545), so the default build is the upstream-loadable one.
 
 ## Manifest fields
 

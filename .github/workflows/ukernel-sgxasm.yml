@@ -53,3 +53,7 @@ jobs:
         run: mesa/tests/isa-standalone/standalone.sh "$PWD/mesa-tree" "$PWD/isa-build"
       - name: Golden image assembles through sgx-asm (bit-for-bit)
         run: SGX_ASM="$PWD/isa-build/sgx-asm" python3 ukernel/golden/check.py
+      # the SGX530 image, through sgx-asm -c sgx<ISA_CORE> (545 until sgx.xml
+      # describes the 530; ukernel/cores/sgx530.py)
+      - name: SGX530 image assembles through sgx-asm (bit-for-bit)
+        run: SGX_ASM="$PWD/isa-build/sgx-asm" python3 ukernel/golden/check.py sgx530

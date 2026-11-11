@@ -34,3 +34,7 @@ jobs:
         run: python3 tools/isa/test_symbols.py
       - name: Rebuild the SGX545 serial image and verify its hash
         run: python3 ukernel/golden/check.py
+      - name: Rebuild the SGX530 image and verify its hash
+        run: python3 ukernel/golden/check.py sgx530
+      - name: SGX530 per-core paths in the emulator
+        run: python3 ukernel/test_sgx530.py

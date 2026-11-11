@@ -51,6 +51,10 @@ jobs:
           isa-build/sgx_isa_test mesa/src/sgx/isa/tests/*.txt
       - name: Coverage gate
         run: python3 -I ukernel/isa_coverage.py isa-build/sgx_isa_test -v
+      # the SGX530 image, against the SGX545's description: it uses only the
+      # SGX545 microkernel's forms (docs/porting/cores/sgx530.md)
+      - name: Coverage gate, SGX530 image
+        run: python3 -I ukernel/isa_coverage.py isa-build/sgx_isa_test --core sgx530 -v
       - name: Coverage gate, every build variant on
         run: |
           for v in $(grep -oE 'environ.get\("UK_[A-Z0-9_]+"\) == "1"' ukernel/*.py | grep -oE 'UK_[A-Z0-9_]+' | sort -u); do
