@@ -19,6 +19,7 @@
 #include "nir_builder.h"
 #include "sgx_compiler.h"
 #include "sgx_fixed.h"
+#include "sgx_fixed_golden.h"
 #include "sgx_isa.h"
 
 namespace {
@@ -727,6 +728,45 @@ TEST(sgx_fixed, programs_assemble)
    ASSERT_EQ(p.vs_xy.nreloc, 2u);
    EXPECT_EQ(p.vs_xy.reloc[0], 0u);
    EXPECT_EQ(p.vs_xy.reloc[1], 7u);
+}
+
+/* the words are the ones the winsys used before (sgx_fixed_golden.h) */
+TEST(sgx_fixed, programs_match_golden)
+{
+   struct sgx_fixed_progs p;
+   char err[256] = "";
+   ASSERT_TRUE(sgx_fixed_progs_build(&p, err, sizeof(err))) << err;
+   const struct {
+      const char *name;
+      const struct sgx_fixed_prog *prog;
+   } named[] = {
+      {"empty", &p.empty},       {"clear_vs", &p.clear_vs},
+      {"vpgen_vs", &p.vpgen_vs}, {"copy_fs", &p.copy_fs},
+      {"vs_xy", &p.vs_xy},       {"vs_xyz", &p.vs_xyz},
+      {"fs_uniform_sec", &p.fs_uniform_sec},
+      {"fs_uniform", &p.fs_uniform},
+      {"pe_ptoff", &p.pe_ptoff}, {"pe_emit", &p.pe_emit},
+   };
+   unsigned checked = 0;
+   for (const struct sgx_fixed_golden &g : sgx_fixed_golden) {
+      const struct sgx_fixed_prog *x = NULL;
+      unsigned k;
+      if (sscanf(g.name, "state_emit_%u", &k) == 1 && k >= 1 && k <= 32)
+         x = &p.state_emit[k];
+      for (const auto &e : named) {
+         if (!strcmp(e.name, g.name))
+            x = e.prog;
+      }
+      ASSERT_NE(x, nullptr) << g.name;
+      ASSERT_EQ(x->n, g.n) << g.name;
+      for (unsigned i = 0; i < 2 * g.n; i++)
+         EXPECT_EQ(x->w[i], g.w[i]) << g.name << " word " << i;
+      ASSERT_EQ(x->nreloc, g.nreloc) << g.name;
+      for (unsigned i = 0; i < g.nreloc; i++)
+         EXPECT_EQ(x->reloc[i], g.reloc[i]) << g.name;
+      checked++;
+   }
+   EXPECT_EQ(checked, 42u);
 }
 
 } /* namespace */
