@@ -83,6 +83,9 @@ struct sgx_compile_options {
     * byte 0 is blue, 2 red, the colour output's order. A texel that is the
     * colour as it is then needs no instruction; other reads unpack zyxw */
    uint32_t tex_bgra;
+   /* fragment shader: bit n set, texture unit n's texel is one F32 value in
+    * the first register (a depth texture), read as (d, 0, 0, 1) */
+   uint32_t tex_f32;
    /* fragment shader: the driver's PDS samples a non-dependent texture from
     * the coordinate set itself, so a varying only such samples read needs no
     * plain iteration of its own (one PDS sample, no iteration).
@@ -107,6 +110,14 @@ struct sgx_compile_options {
     * texel a dependent smp reads arrives as F16 in two registers (the
     * result format is the state's) */
    bool dep_f16_samples;
+   /* GLSL 1.30 and later: 32-bit integers and 0 / ~0 booleans in the
+    * integer units. Off: GLSL ES 1.00, whose integers and booleans are
+    * computed as floats, as the DDK's compiler does */
+   bool native_integers;
+   /* the constant number whose word the driver loads with uniform block
+    * 0's GPU address; block n's is constant ubo_base_k + n (raw 32 bits).
+    * 0: the program has no uniform blocks */
+   unsigned ubo_base_k;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
@@ -128,6 +139,10 @@ struct sgx_varying {
    unsigned comp; /* first component in its sets: varyings may share a set */
    unsigned rows, comps;
    unsigned precision; /* GLSL: 0 none, 1 high, 2 medium, 3 low */
+   /* an integer varying: each row's 16-bit halves as exact floats, the
+    * low ones in set + 2 * row, the high ones in the next (rows counts
+    * both) */
+   bool split;
 };
 
 struct sgx_varyings {
@@ -140,7 +155,10 @@ struct sgx_varyings {
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
 #define SGX_SLOT_NONE     0xffff
-#define SGX_MAX_CONST_MAP (1024 + 32) /* every constant number and literal */
+/* constant numbers: uniforms from 0, the driver's own above them; 1024 on
+ * is the driver's block (docs/GL3.md) */
+#define SGX_MAX_CONST_K   1280
+#define SGX_MAX_CONST_MAP (SGX_MAX_CONST_K + 32) /* every constant and literal */
 
 struct sgx_const_map {
    uint16_t k; /* constant number: uniform component (sgx_nir.c's numbering) */
@@ -193,6 +211,10 @@ struct sgx_sample_info {
     * and reg + 1 (B lo, A hi), not RGBA8 into reg; RGBA order for a
     * tex_bgra unit too (the TAG converts by channel) */
    uint8_t f16;
+   /* dependent: a texelFetch (sgx_lower_tex), at the texel's center with an
+    * explicit LOD; the driver gives it state of its own: NEAREST filtering
+    * and mip selection, clamped, whatever the bound sampler says */
+   uint8_t fetch;
    uint64_t smp; /* dependent: the smp, destination r0, texture state #0 */
 };
 
@@ -294,6 +316,14 @@ bool sgx_pack_varyings(struct sgx_varyings *v);
  * Call on the fragment shader before sgx_compile. Not for lines: a
  * discarding program breaks a lines draw. */
 bool sgx_lower_clip_fs(struct nir_shader *fs, unsigned ucp_enables);
+
+/* GLSL 1.30's texture functions on what smp has: textureGrad as an
+ * explicit LOD, the Offset variants and rectangle textures through the
+ * texture's size, 1D as 2D, texelFetch as an explicit-LOD read at the
+ * texel's center (marked sgx_sample_info.fetch). The txs instructions it
+ * adds (and the program's own textureSize) are the driver's to lower before
+ * sgx_compile. Call after the texture and sampler indices are final */
+bool sgx_lower_tex(struct nir_shader *s);
 
 /* lower and compile; 0 on success */
 int sgx_compile(struct nir_shader *nir, const struct sgx_compile_options *opts,

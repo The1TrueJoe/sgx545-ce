@@ -33,7 +33,7 @@ smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
    sgx_form_init(&m, SGX_OP_SMP);
    m.skipinv = true;
    m.dim = s->dim == 3 ? 2 : 1;
-   m.lod = s->lod == 1 ? 1 : 0;
+   m.lod = s->lod;
    m.dst = (struct sgx_isa_src){.file = SGX_ISA_FILE_R};
    struct sgx_ref cr = i->op[1];
    unsigned cn = cr.file == SGX_F_U ? sgx_const_sa(c, cr.n) : phys(c, &cr);
@@ -149,6 +149,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          o->proj = s->proj;
          o->coord_pa = s->coord_pa;
          o->f16 = s->f16_return;
+         o->fetch = s->fetch;
          o->reg = s->dependent ? phys(c, &s->ins->op[0]) : s->pa;
          if (s->dependent && smp_template(c, s, &o->smp))
             goto fail;

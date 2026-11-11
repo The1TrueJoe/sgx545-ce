@@ -1984,6 +1984,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       os.out_dwords = vs->out_dwords;
       os.unknown_11_13 = SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
       os.point_size = vs->point_size;
+      os.clip_planes = vs->clip_planes;
    }
    sgx_pack(&blk[n++], TA_STATE_WCLAMP, wc) wc.value = 1e-5f;
    blk[n++] = mte_ctrl(st);

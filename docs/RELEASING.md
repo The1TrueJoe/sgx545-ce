@@ -41,18 +41,34 @@ and the package inside still says `0.2.0~rc1`.
 
 2. Wait for the `release` run to finish. The kernel build takes several hours.
 3. On the Releases page, check the draft: its five files (the four packages and
-   `SHA256SUMS`), the notes, and that `SHA256SUMS` matches. Then publish it.
+   `SHA256SUMS`), and that `SHA256SUMS` checks against a plain download:
+
+   ```bash
+   gh release download v0.1.0 --repo The1TrueJoe/powervr_sgx --dir /tmp/v0.1.0 && (cd /tmp/v0.1.0 && sha256sum -c SHA256SUMS)
+   ```
+
+   The workflow writes short generic notes. Replace them with the release's own notes
+   (what changed, what was tested, the known issues), then publish it.
 4. Publishing starts `apt-repo`. When it finishes, the repository is live, and
    `sudo apt update` on a machine set up as in `docs/INSTALL.md` sees the new versions.
+   Check the published key once:
 
-To throw a test tag away, delete its draft release first and then the tag:
+   ```bash
+   curl -fsSL https://telaak.dev/powervr_sgx/powervr-sgx.gpg | gpg --show-keys
+   ```
+
+   Its fingerprint must be the one `docs/INSTALL.md` gives,
+   `5C26DC64CAEC63910424E220E0DD2B7AD794C167`.
+
+To throw a test tag away, delete its draft release and the tag on GitHub, then the
+local tag:
 
 ```bash
-gh release delete v0.0.0-test --yes --repo The1TrueJoe/powervr_sgx
+gh release delete v0.0.0-test --yes --cleanup-tag --repo The1TrueJoe/powervr_sgx
 ```
 
 ```bash
-git push origin :refs/tags/v0.0.0-test && git tag -d v0.0.0-test
+git tag -d v0.0.0-test
 ```
 
 ## One-time setup for the apt repository
@@ -99,10 +115,19 @@ never appears in the repository or in CI output.
 
    If Pages is already on, switch its source to "GitHub Actions" under Settings → Pages.
 
+6. Let tags deploy to Pages. A published release runs `apt-repo` on its tag, and the
+   `github-pages` environment allows only `main` by default, so the deploy job would be
+   refused:
+
+   ```bash
+   gh api -X POST repos/The1TrueJoe/powervr_sgx/environments/github-pages/deployment-branch-policies -f name='v*' -f type=tag
+   ```
+
 The workflow publishes the public key itself, at
 `https://telaak.dev/powervr_sgx/powervr-sgx.gpg` (binary, for
 `/usr/share/keyrings`) and `powervr-sgx.asc` (armored). It checks the repository's
 signatures against that file before it deploys.
 
-To rotate the key, make a new one, replace the secret, and run `apt-repo` again from
-the Actions tab. Users then fetch the new `powervr-sgx.gpg` once.
+To rotate the key, make a new one, replace the secret, change the fingerprint in
+`docs/INSTALL.md`, and run `apt-repo` again from the Actions tab. Users then fetch the
+new `powervr-sgx.gpg` once.

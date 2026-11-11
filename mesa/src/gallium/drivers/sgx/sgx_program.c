@@ -741,6 +741,56 @@ lower_srgb_filter(nir_builder *b, nir_instr *instr, void *data)
    return true;
 }
 
+/* the units a fragment shader takes shadow samples of */
+static uint32_t
+shadow_units(nir_shader *nir)
+{
+   uint32_t units = 0;
+
+   nir_foreach_function_impl (impl, nir) {
+      nir_foreach_block (block, impl) {
+         nir_foreach_instr (instr, block) {
+            if (instr->type != nir_instr_type_tex ||
+                !nir_instr_as_tex(instr)->is_shadow)
+               continue;
+            nir_tex_instr *tex = nir_instr_as_tex(instr);
+            int d = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+            nir_variable *var = d >= 0 ? nir_deref_instr_get_variable(
+                                            nir_src_as_deref(tex->src[d].src))
+                                       : NULL;
+            unsigned unit = var ? var->data.binding : tex->texture_index;
+
+            if (unit < 32)
+               units |= 1u << unit;
+         }
+      }
+   }
+   return units;
+}
+
+/* A shadow sample: the depth sampled as a value, compared in the shader
+ * (the TPU doesn't filter the F32 depth, so a compare of the nearest texel)
+ * with the sampler's function (compare: PIPE_FUNC + 1 by unit, 0 or NULL
+ * LEQUAL, GL's default) and swizzled as the view says (swz, sgx_fs_for). */
+static void
+lower_shadow(nir_shader *nir, const uint8_t *compare, const uint16_t *swz)
+{
+   enum compare_func func[PIPE_MAX_SAMPLERS];
+   nir_lower_tex_shadow_swizzle sw[PIPE_MAX_SAMPLERS];
+
+   for (unsigned u = 0; u < PIPE_MAX_SAMPLERS; u++) {
+      func[u] = compare && compare[u] ? (enum compare_func)(compare[u] - 1)
+                                      : COMPARE_FUNC_LEQUAL;
+      sw[u] = (nir_lower_tex_shadow_swizzle){PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y,
+                                             PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W};
+      if (swz && swz[u])
+         sw[u] = (nir_lower_tex_shadow_swizzle){
+            swz[u] & 7, swz[u] >> 3 & 7, swz[u] >> 6 & 7, swz[u] >> 9 & 7};
+   }
+   /* (the reference clamped to [0, 1], as for the fixed-point depths) */
+   NIR_PASS(_, nir, nir_lower_tex_shadow, PIPE_MAX_SAMPLERS, func, sw, true);
+}
+
 /* fs_vary: a vertex shader compiled to a fragment shader's sets; srgb: the
  * samplers whose texels a fragment shader decodes from sRGB, srgb_filter
  * those of them it filters itself (lower_srgb_filter) */
@@ -748,7 +798,8 @@ static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
                unsigned srgb, uint32_t srgb_filter, const uint16_t *swz,
-               uint32_t not_bgra, const uint8_t *vtx_fmt, bool points)
+               uint32_t not_bgra, const uint8_t *vtx_fmt, bool points,
+               uint32_t depth, const uint8_t *compare)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -796,8 +847,12 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
     * and piglit unchanged with it and F16 samples (EA1, 2026-11-10) */
    /* the units sampling 8888 texels get them B, G, R, A ordered
     * (sgx_tex_format): all of them unless the variant says otherwise */
+   /* a unit sampled for a compare holds a depth texture */
+   uint32_t shadow =
+      nir->info.stage == MESA_SHADER_FRAGMENT ? shadow_units(nir) : 0;
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      opts.tex_bgra = ~not_bgra;
+      opts.tex_bgra = ~not_bgra & ~(depth | shadow);
+      opts.tex_f32 = depth | shadow;
       /* a coordinate only samples read: the PDS samples from the set
        * itself (a pure-sample DOUTI, source 0x24, below) */
       opts.pds_samples_alone = screen->core->pds_samples;
@@ -823,9 +878,12 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                                    .lower_srgb = srgb,
                                    .lower_rect = true};
 
-      /* a sampler view's swizzle, as the texel comes out (sgx_fs_for) */
+      /* a sampler view's swizzle, as the texel comes out (sgx_fs_for); a
+       * shadow sample's goes on its result (lower_shadow) */
+      if (shadow)
+         lower_shadow(nir, compare, swz);
       for (unsigned u = 0; swz && u < PIPE_MAX_SAMPLERS; u++) {
-         if (!swz[u])
+         if (!swz[u] || (shadow >> u & 1))
             continue;
          tex.swizzle_result |= 1u << u;
          for (unsigned c = 0; c < 4; c++)
@@ -1011,7 +1069,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * in it, the TPU samples at a constant coordinate; the DDK's for a
        * sprite's coordinate set (`sprite`) is 1 */
       sgx_pack(&so->prog.tsp_prec, TA_STATE_TSP1, t1) t1.f16 = sprite ? 1 : 0;
-      so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0);
+      /* user clip planes 0..n_clip-1 (st's clip distances), their results
+       * after the point size */
+      so->prog.clip_planes = BITFIELD_MASK(MIN2(out.n_clip, 6));
+      so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0) + out.n_clip;
       so->prog.const_dwords = so->const_dwords;
    } else {
       /* dependent samples: their state words go in SA after the constants */
@@ -1138,7 +1199,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
              * iteration of a coordinate set, of this set or another, as the
              * DDK's generator does: its texel lands after that iteration, where
              * a DOUTI of its own would put it.  Not into gl_FragCoord's or a
-             * point coordinate's (its w1 bits are the sample half's).
+             * point coordinate's (its w1 bits are the sample half's), nor a
+             * flat one's (b25-26 2 may take the sample's coordinate too).
              * Otherwise a pure sample (source 0x24). */
             bool proj = out.iters[i].proj;
             unsigned prev = so->prog.n_douti - 1;
@@ -1147,7 +1209,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             bool other_set = !(sgx_drv_debug & SGX_DEBUG_NO_PDS_MERGE);
 
             if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 &&
-                !d->proj && d->iterate && !d->w1 &&
+                !d->proj && d->iterate && !d->w1 && d->b25_26 == 3 &&
                 (d->src == it ||
                  (other_set && d->src >= 1 && d->src <= SGX_MAX_SETS))) {
                d->sample_set = it;
@@ -1183,7 +1245,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             .src = it,
             .comps = out.iters[i].comps,
             .iterate = true,
-            .b25_26 = 3,
+            /* 2: the provoking (last) vertex's value, 3 interpolated */
+            .b25_26 = out.iters[i].flat ? 2 : 3,
             .prec1 = out.iters[i].f16,
             .w1 = out.iters[i].pointcoord ? 0x10 : 0,
          };
@@ -1271,7 +1334,8 @@ sgx_create_shader_state(struct pipe_context *pctx,
 
    if (!nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL, 0, 0, NULL, 0, NULL, false);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0, 0, NULL, 0, NULL, false,
+                               0, NULL);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -1397,7 +1461,7 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    (*slot)->discard_pa = -1;
    (*slot)->points = points;
    if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, 0, NULL, 0,
-                       vtx_fmt, points) ||
+                       vtx_fmt, points, 0, NULL) ||
        !(*slot)->prog.code) {
       FREE((*slot)->vary);
       FREE(*slot);
@@ -1427,7 +1491,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    unsigned srgb = 0, unit;
    uint32_t srgb_filter = 0;
    uint16_t swz[PIPE_MAX_SAMPLERS] = {0};
-   uint32_t not_bgra = 0;
+   uint32_t not_bgra = 0, depth = 0;
+   uint8_t compare[PIPE_MAX_SAMPLERS] = {0};
    bool any_swz = false;
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
@@ -1451,6 +1516,13 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       }
       if (!sgx_tex_bgra(v->format))
          not_bgra |= 1u << unit;
+      if (sgx_tex_depth(v->format)) {
+         const struct pipe_sampler_state *ss = ctx->samplers[unit];
+
+         depth |= 1u << unit;
+         if (ss && ss->compare_mode == PIPE_TEX_COMPARE_R_TO_TEXTURE)
+            compare[unit] = ss->compare_func + 1;
+      }
       /* XYZW: none, 0 */
       if (v->swizzle_r != PIPE_SWIZZLE_X || v->swizzle_g != PIPE_SWIZZLE_Y ||
           v->swizzle_b != PIPE_SWIZZLE_Z || v->swizzle_a != PIPE_SWIZZLE_W) {
@@ -1466,6 +1538,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
           fs->variants_srgb[i]->srgb_filter == srgb_filter &&
           fs->variants_srgb[i]->not_bgra == not_bgra &&
+          fs->variants_srgb[i]->depth == depth &&
+          !memcmp(fs->variants_srgb[i]->compare, compare, sizeof(compare)) &&
           !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
    }
@@ -1480,8 +1554,10 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    (*slot)->srgb_filter = srgb_filter;
    memcpy((*slot)->swz, swz, sizeof(swz));
    (*slot)->not_bgra = not_bgra;
+   (*slot)->depth = depth;
+   memcpy((*slot)->compare, compare, sizeof(compare));
    if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz,
-                       not_bgra, NULL, false) ||
+                       not_bgra, NULL, false, depth, compare) ||
        !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);
