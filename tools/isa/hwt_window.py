@@ -45,10 +45,10 @@ def M(w):
     return 0x5a5a0000 | w
 
 
-def layout(base, bodies=None):
-    """pokes: every window's header, entry body and landing; DOUTU at base"""
+def layout(base, bodies=None, off=ENTRY):
+    """pokes: every window's header, entry body and landing; DOUTU at base, offset off"""
     bodies = bodies or {}
-    p = [(DOUTU0, [DOUTU0_W | base])]
+    p = [(DOUTU0, [(DOUTU0_W & ~0x3ffff0) | (off >> 3) << 4 | base])]
     for w in range(3):
         va = HEAP + w * WIN
         p.append((va + ENTRY, [0x00000000, 0xfa440700]))
@@ -70,4 +70,8 @@ TESTS = [
     ("ba_b1_win", [], M(1), layout(1, {1: [f"ba #{T_WIN:#x}  [nosched]"]})),
     ("ba_b1_heap", [], M(2), layout(1, {1: [f"ba #{T_HEAP1:#x}  [nosched]"]})),
     ("ba_b2_win", [], M(2), layout(2, {2: [f"ba #{T_WIN:#x}  [nosched]"]})),
+    # past the window: DOUTU's offset field (b4-21) and ba's 18 bits can reach 2 MiB from
+    # a base; E(1) / M(1) if they do, E(0) / M(0) if either wraps at 512 KiB
+    ("base0_off1", [], E(1), layout(0, off=WIN + ENTRY)),
+    ("ba_b0_heap1", [], M(1), layout(0, {0: [f"ba #{T_HEAP1:#x}  [nosched]"]})),
 ]
