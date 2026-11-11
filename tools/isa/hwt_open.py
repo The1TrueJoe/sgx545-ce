@@ -52,7 +52,7 @@ def main():
             continue
         conv = convert(lines) if len(t) < 4 else None
         if conv is None:
-            print(f"{name:24s} skipped (replay pokes or no final out)")
+            print(f"{name:24s} skipped (replay pokes or no final out)", file=sys.stderr if a.dry else sys.stdout)
             continue
         tests.append((name, expect))
         text.append(f"test {name}")

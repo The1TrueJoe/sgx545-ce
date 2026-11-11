@@ -18,6 +18,7 @@
  *   test NAME
  *   buf 11223344 ...    optional: the data buffer's first dwords (up to 64)
  *   limm r1, BUF        lines of ISA.md text; BUF is the buffer's address
+ *   raw HI LO           a word given as it is (one no form encodes)
  *   ...
  *   end
  *
@@ -54,6 +55,12 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
    for (unsigned i = 0; i < n; i++) {
       struct sgx_isa_instr I;
       char *b = strstr(lines[i], "BUF");
+      unsigned hi, lo;
+
+      if (sscanf(lines[i], "raw %x %x", &hi, &lo) == 2) {
+         code[i] = (uint64_t)hi << 32 | lo;
+         continue;
+      }
 
       if (b)
          snprintf(text, sizeof(text), "%.*s#0x%x%s", (int)(b - lines[i]),
