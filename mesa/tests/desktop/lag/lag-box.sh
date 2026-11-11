@@ -18,6 +18,7 @@
 #             branching on them (glamor's repeat modes)
 #   nolevers  the same without lazy clears and depth discards
 #             (SGX_DEBUG=nolazyclear,nozsdiscard): their A/B
+#   nopdsmerge  the same with SGX_DEBUG=nopdsmerge (the PDS-merge lever off)
 #   nocomp    xfwm4 without its compositor
 #   xpresent  xfwm4 synced to vblank through Present, not GLX
 #   vbloff    xfwm4 not synced to vblank
@@ -58,6 +59,8 @@ flatten)   # the compiler's uniform ifs flattened into selects again
 nolevers)   # the default without lazy clears and depth discards (PERF.md levers 2, 3)
 	cenv="$mesa SGX_DEBUG=stats,nolazyclear,nozsdiscard"
 	xenv="$mesa SGX_DEBUG=stats,nolazyclear,nozsdiscard" ;;
+nopdsmerge)   # samples merged into their own set's iteration only (the PDS-merge lever off)
+	cenv="$cenv,nopdsmerge" xenv="$xenv,nopdsmerge" ;;
 nocomp) xfwm=--compositor=off ;;
 xpresent) xfwm=--vblank=xpresent ;;
 vbloff) xfwm=--vblank=off ;;

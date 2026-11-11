@@ -41,7 +41,7 @@ E "uname -a; cat /proc/cpuinfo | grep -m1 'model name'; cat /sys/class/drm/card0
 # (the box's umask is 077: a tree only root can read leaves "desk" on the
 # root's own Mesa, silently; busybox's chmod -R fails on the dangling dri
 # links, and that's fine)
-(cd "$MESA" && tar cf - lib share) | E "rm -rf $DESK/opt/sgx && mkdir -m 755 -p $DESK/opt/sgx && \
+(cd "$MESA" && COPYFILE_DISABLE=1 tar cf - lib share) | E "rm -rf $DESK/opt/sgx && mkdir -m 755 -p $DESK/opt/sgx && \
 	tar xf - -C $DESK/opt/sgx && { chmod -R a+rX $DESK/opt/sgx 2>/dev/null; true; }"
 E "rm -rf /tmp/lagrig && mkdir -p /tmp/lagrig"
 for f in ../desktop-up.sh ../xorg.conf lag-wl.sh lag-box.sh; do
