@@ -75,7 +75,7 @@ sleep 30
 as_desk sh -c "exec xfwm4 --replace $xfwm" > /tmp/lag-xfwm4.err 2>&1 &
 sleep 8
 as_desk xrandr > "$OUT/xrandr.txt" 2>&1
-as_desk glxinfo -B > "$OUT/glxinfo.txt" 2>&1
+as_desk timeout 20 glxinfo -B > "$OUT/glxinfo.txt" 2>&1
 if [ $V != software ] && ! grep -q 'SGX545' "$OUT/glxinfo.txt"; then
 	echo "clients are not on our Mesa (glxinfo: $(grep -m1 'renderer string' "$OUT/glxinfo.txt"))" >> "$OUT/notes.txt"
 	echo "lag-box.sh: clients are not on our Mesa, see $OUT/glxinfo.txt" >&2
