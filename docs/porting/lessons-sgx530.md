@@ -211,3 +211,44 @@ with `--core`, and `test_sgx530.py` next to `test_emu.py`.
     none), and `test_sgx530.py` "stage 1" keeps it that way. The same trace lists the
     instruction forms stage 1 executes, so a passing boot is coarse evidence for those
     forms on the new core.
+
+### 2026-11-11: the assembler's core, and what a third core needs from the tooling
+
+15. **"Assemble with `sgx-asm -c <core>`" assumes sgx.xml already describes the core.**
+    UKERNEL-TOOLING §2 makes `build.py` pass the image's core to `sgx-asm`, and
+    `sgx-asm -c 530` refuses because sgx.xml describes only the SGX545. The image's core
+    and its instruction encodings are separate facts. `ISA_CORE` in the core config says
+    whose encodings it uses: 545 for the SGX530 until sgx.xml has the SGX530's confirmed
+    forms. The manifest records it (`"isa"`) when it differs from the core, and CI checks
+    the image through `sgx-asm -c sgx<ISA_CORE>` against the golden.
+
+**What the SGX535 will need**, from what the SGX530 took ([sgx535.md](cores/sgx535.md)):
+
+16. **A config that mixes the two.** The SGX535 has the SGX530's low registers and the
+    SGX545's BIF (16 lists, banks, 32 bits), one kick, and none of BRN_28889. So
+    `cores/sgx535.py` would start from `sgx530` and set `MULTI_MEM_CONTEXTS`, the list-1
+    and `BANK0` offsets, `FIX_HW_BRN_28889` off and `SECURE` possible, and keep the
+    bounded waits and the heartbeat for bring-up. That works only because every
+    difference is an independent flag. Multi-context with one kick is a combination no
+    image has built yet. The event entry doesn't care (entry 9), but the 535 needs its own
+    golden and emulator cases.
+17. **Shared test harness.** `test_sgx530.py` carries its own harness (the machine, the
+    kernel CCB queue, the event run, the stage-1 register and form listing). It should
+    move to a module that `test_sgx535.py` imports, leaving each file only its core's
+    cases. The stage-1 allowlist belongs in the core config, as the set of registers the
+    core's K header names, not as a test constant.
+18. **A per-core register model in the emulator.** `tools/ukernel/emu.py` models the
+    SGX545's registers for every core, so an access to an offset the core lacks only
+    shows when a test lists it. If the emulator knew the core's named set, and flagged
+    anything outside it that no "accepted unknown" list covers, gap-13 registers would
+    show in every test, not only stage 1.
+19. **One list of cores for CI.** Each core adds a line to `ukernel-golden`,
+    `ukernel-sgxasm` and `ukernel-isa-gate` (golden, `sgx-asm` golden, coverage). A
+    `CORES` list in `ukernel/cores/` that the workflows loop over would make a third core
+    one config file plus tests, as UKERNEL-TOOLING promises.
+20. **Revision first.** Poulsbo's revision is U (the DDK lists four). As for the 530,
+    `mkukfw --core-rev`, the kernel's part entry and Mesa's table entry wait for the
+    first ID read, and Mesa's provisional entry pattern (entry 10) applies.
+21. **Mesa target.** The Atom Z5xx has no x86-64, so the 535 uses `build.sh i386`, which
+    is glibc and already built. gma500 hosts it through the auxiliary device, as on
+    Cedarview, so the armv7 work doesn't carry over.
