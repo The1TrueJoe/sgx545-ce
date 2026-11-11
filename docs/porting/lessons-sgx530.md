@@ -113,3 +113,14 @@ In `ukernel/cores/sgx545.py`, at their SGX545 values; `sgx530.py` overrides them
 Tooling made per-core: `golden/check.py <core>` (it built only the 545), a golden per
 core, the manifest's `waits` map (only when waits are bounded), the ISA coverage gate run
 with `--core`, and `test_sgx530.py` next to `test_emu.py`.
+
+## 2026-11-11: packaging
+
+13. **The firmware packager has 545 assumptions too.** `drm/tools/mkukfw.py` sits between
+    the microkernel build and the loader. It knew only the `ctlblk` patch (`--manifest`
+    packaged that one alone), only the patch values 1-5 and only feature bits 0-1. The
+    530's second patch (`pdtable`, loader value 6) and its feature bit 2 needed all three
+    to change. None of the guides mention the packager. A new core's microkernel changes
+    can need a `drm/tools` change, so the guides should list it with the loader, and the
+    manifest's patches should be packaged by name, all of them, rather than one fixed
+    patch.
