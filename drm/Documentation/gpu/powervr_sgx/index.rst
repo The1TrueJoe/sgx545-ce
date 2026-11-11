@@ -130,7 +130,11 @@ Jobs
 ====
 
 One drm_gpu_scheduler feeds the microkernel, and contexts are scheduler
-entities. A render job is a scene of one or two TA kicks and the 3D render that
+entities. Unlike firmware-scheduled GPUs, where each queue gets a scheduler of
+its own, the SGX545's microkernel takes commands from a single kernel command
+buffer and doesn't choose between contexts, so drm_sched does: one job on the
+GPU at a time (credit limit 1), in priority order. After a reset the queued
+jobs simply run; nothing is resubmitted. A render job is a scene of one or two TA kicks and the 3D render that
 follows them. A transfer job is a blit. Userspace describes either as a command
 stream, which the kernel decodes field by field before it writes the
 microkernel's command. Jobs wait for and signal binary and timeline syncobjs,
