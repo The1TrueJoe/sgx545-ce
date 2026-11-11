@@ -10,7 +10,8 @@
  * compared with the expected words, disassembled, and the text compared
  * with the line. A line "<a> == <b>" checks another spelling instead: a and
  * b must assemble to the same words. "hazard <text>" / "safe <text>" check
- * sgx_isa_coissue_hazard() on the instruction. setfc lines update the
+ * sgx_isa_coissue_hazard() on the instruction; "reject <text>" must not
+ * assemble. setfc lines update the
  * format-control state the later lines are encoded and decoded with. The
  * core checks run first.
  *
@@ -94,6 +95,16 @@ run_file(const char *path, bool table, unsigned *count)
 
       struct sgx_isa_instr I;
       char err[256], dis[512];
+      if (!strncmp(text, "reject ", 7)) {
+         char *t = trim(text + 7);
+         (*count)++;
+         if (sgx_isa_asm_line(t, &I, err, sizeof(err))) {
+            fprintf(stderr, "%s:%u: %s: assembles, expected an error\n", path,
+                    lineno, t);
+            fails++;
+         }
+         continue;
+      }
       bool want_hazard = !strncmp(text, "hazard ", 7);
       if (want_hazard || !strncmp(text, "safe ", 5)) {
          char *t = trim(text + (want_hazard ? 7 : 5));

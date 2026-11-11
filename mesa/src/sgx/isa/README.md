@@ -19,7 +19,7 @@ cite its sections by name.
 | `sgx_isa_enums.py` | generates `sgx-isa-enums.h`: the opcode and operand-kind enums the encoder switches on, and the field-value enums |
 | `tests/sgx_isa_test.c` | text -> struct -> words -> text round trip; checks expected words where a line gives them |
 | `tests/tools_test.py` | the lists again through `sgx-asm` and `sgx-disasm` |
-| `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: the efo control words and the other spellings of efo and fdual, as `a == b` lines, and the co-issue hazards) |
+| `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: the efo control words and the other spellings of efo and fdual, as `a == b` lines, and the co-issue hazards; `reject` lines must not assemble) |
 
 Generated: `sgx-isa.c` / `sgx-isa.h` (decoder), `sgx-isa-encode.h`
 (encoder), `sgx-isa-enums.h`.

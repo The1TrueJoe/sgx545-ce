@@ -33,7 +33,7 @@ def check_list(asm, dis, path):
         for raw in f:
             t = raw.strip()
             if (not t or t.startswith('#') or ' == ' in t or
-                    t.startswith('hazard ') or t.startswith('safe ')):
+                    t.startswith(('hazard ', 'safe ', 'reject '))):
                 continue
             text, _, words = t.partition(';')
             lines.append(text.strip())

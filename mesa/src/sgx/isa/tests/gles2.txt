@@ -213,3 +213,11 @@ limm r0, #3735928559 [skipinv]
 phas.i #128, #4
 phas.i #0, #0 [end wait=7]
 (p1) depthf pa2, sa3, sa4 [end]
+
+# --- flags a form has no field for are errors, not dropped ------------------
+# (ISA.md "hw 1d: ld": ld has no nosched)
+reject ld.a.d r3, r1, #0 [skipinv nosched]
+reject ld.a.d r3, r1, #0 [skipinv end]
+reject fmad r0, r1, r2, r3 [partial]
+reject mov r0, r1 [link]
+ld.a.d r3, r1, #0 [skipinv]

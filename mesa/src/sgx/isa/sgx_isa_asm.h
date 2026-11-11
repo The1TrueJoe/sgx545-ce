@@ -17,7 +17,8 @@ extern "C" {
 
 /*
  * Parse one line of ISA.md's text notation into *instr. Returns false
- * with a message in err on a parse error. A ';' starts a comment.
+ * with a message in err on a parse error, or for a flag the form has no
+ * field for (it would be dropped from the word). A ';' starts a comment.
  */
 bool sgx_isa_asm_line(const char *line, struct sgx_isa_instr *instr, char *err,
                       size_t errsize);
