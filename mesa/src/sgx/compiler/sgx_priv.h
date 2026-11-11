@@ -196,6 +196,7 @@ struct sgx_ctx {
    bool has_color;
    struct sgx_ref depth; /* gl_FragDepth */
    bool has_depth;
+   bool depth_done; /* emit_depth ran */
    unsigned depth_pa;
    int keep_vreg; /* discard: 1.0 = keep, -1 none */
    bool discards;

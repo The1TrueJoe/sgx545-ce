@@ -833,6 +833,178 @@ TEST_F(sgx_compile_test, fragment_derivative_source_no_skipinv)
    EXPECT_EQ(line.find("skipinv"), std::string::npos) << s;
 }
 
+/* gl_FragDepth: the instruction that writes pa<depth_pa> (the clamp) */
+static std::string
+depth_write(const std::string &s, unsigned pa)
+{
+   std::string want = "pa" + std::to_string(pa) + ",";
+   size_t at = 0;
+   while ((at = s.find(want, at)) != std::string::npos) {
+      size_t b = s.rfind('\n', at);
+      b = b == std::string::npos ? 0 : b + 1;
+      std::string line = s.substr(b, s.find('\n', at) - b);
+      if (line.find("fminmax") != std::string::npos)
+         return line;
+      at++;
+   }
+   return "";
+}
+
+class sgx_depth_test : public sgx_compile_test {
+ protected:
+   /* gl_FragColor = v; gl_FragDepth = the constant k, or v[ch] when k < 0 */
+   void build(float k = -1.0f, bool discard = false, unsigned ch = 2)
+   {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *in =
+         var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      nir_variable *z = var(nir_var_shader_out, glsl_float_type(),
+                            "gl_FragDepth", FRAG_RESULT_DEPTH);
+      nir_def *v = nir_load_var(&b, in);
+      if (discard)
+         nir_discard_if(&b, nir_flt_imm(&b, nir_channel(&b, v, 0), 0.5));
+      nir_store_var(&b, col, v, 0xf);
+      nir_store_var(
+         &b, z, k >= 0.0f ? nir_imm_float(&b, k) : nir_channel(&b, v, ch), 0x1);
+   }
+
+   /* the depth is clamped into its own PA register, after the inputs and
+    * the colour, and the program has a feedback point for the depthf */
+   void expect_depth()
+   {
+      expect_decodes();
+      EXPECT_TRUE(out.writes_depth);
+      EXPECT_NE(out.depth_pa, out.colour_pa);
+      EXPECT_LT(out.depth_pa, out.n_pa);
+      std::string s = disasm();
+      std::string w = depth_write(s, out.depth_pa);
+      ASSERT_NE(w, "") << s;
+      /* clamped to [0, 1]: fminmax d, x, 0, 1 */
+      EXPECT_NE(w.find("c48"), std::string::npos) << w;
+      EXPECT_NE(w.find("c52"), std::string::npos) << w;
+      bool feedback = false;
+      for (unsigned i = 0; i < out.n_blocks; i++)
+         feedback |= out.blocks[i].kind == SGX_BLOCK_FEEDBACK;
+      EXPECT_TRUE(feedback);
+      for (unsigned i = 0; i < out.n_iters; i++)
+         EXPECT_LT(out.iters[i].pa, out.depth_pa);
+   }
+};
+
+TEST_F(sgx_depth_test, fragment_depth_written)
+{
+   build();
+   ASSERT_TRUE(compile()) << out.log;
+   expect_depth();
+   EXPECT_FALSE(out.discards);
+}
+
+TEST_F(sgx_depth_test, fragment_depth_and_discard)
+{
+   build(-1.0f, true);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_depth();
+   EXPECT_TRUE(out.discards);
+}
+
+/* gl_FragDepth = v.x: the colour is packed over pa0, where v.x is, so the
+ * depth is clamped out of it first */
+TEST_F(sgx_depth_test, fragment_depth_read_before_colour)
+{
+   build(-1.0f, false, 0);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_depth();
+   int clamp = -1, colour = -1;
+   std::string want = "pa" + std::to_string(out.colour_pa) + ",";
+   for (unsigned i = 0; i < out.n_code; i++) {
+      char text[256];
+      sgx_disasm_one(out.code[i], NULL, text, sizeof(text));
+      std::string t(text);
+      if (t.find("fminmax pa" + std::to_string(out.depth_pa) + ",") !=
+          std::string::npos)
+         clamp = (int)i;
+      else if (colour < 0 && t.find("pck.u8") != std::string::npos &&
+               t.find(want) != std::string::npos)
+         colour = (int)i;
+   }
+   ASSERT_GE(clamp, 0) << disasm();
+   ASSERT_GE(colour, 0) << disasm();
+   EXPECT_LT(clamp, colour) << disasm();
+}
+
+/* a constant depth is a register write too (the clamp folds or reads a
+ * constant), not dropped */
+TEST_F(sgx_depth_test, fragment_depth_constant)
+{
+   build(0.25f);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.writes_depth);
+   EXPECT_LT(out.depth_pa, out.n_pa);
+}
+
+/* split_phases: a program that writes depth stays one phase (the depth is
+ * read at the feedback point, where phase 0 would end), with the depth
+ * written before the feedback nop */
+TEST_F(sgx_depth_test, fragment_depth_not_split)
+{
+   build(-1.0f, true);
+   split_phases = true;
+   ASSERT_TRUE(compile()) << out.log;
+   EXPECT_EQ(out.n_code1, 0u);
+   EXPECT_TRUE(out.writes_depth);
+   int fb = -1;
+   for (unsigned i = 0; i < out.n_blocks; i++)
+      if (out.blocks[i].kind == SGX_BLOCK_FEEDBACK)
+         fb = (int)out.blocks[i].at;
+   ASSERT_GE(fb, 0);
+   EXPECT_EQ(out.code[fb], (uint64_t)0xf8000140u << 32);
+   int wrote = -1;
+   for (int i = 0; i < fb; i++) {
+      char text[256];
+      sgx_disasm_one(out.code[i], NULL, text, sizeof(text));
+      std::string t(text);
+      if (t.find("fminmax pa" + std::to_string(out.depth_pa) + ",") !=
+          std::string::npos)
+         wrote = i;
+   }
+   EXPECT_GE(wrote, 0) << disasm();
+}
+
+/* a derivative never writes a register it reads: the neighbours of a quad
+ * don't all read before any writes */
+TEST_F(sgx_compile_test, fragment_derivative_dest_not_source)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_def *a = nir_fabs(&b, nir_fmul(&b, v, v));
+   nir_def *d = nir_fadd(&b, nir_ddy(&b, a), nir_ddx(&b, a));
+   nir_def *fw =
+      nir_fadd(&b, nir_fabs(&b, nir_ddx(&b, v)), nir_fabs(&b, nir_ddy(&b, v)));
+   nir_store_var(&b, col, nir_fmul(&b, d, fw), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   unsigned n = 0;
+   for (size_t at = 0; (at = s.find("fds", at)) != std::string::npos; at++) {
+      std::string line = s.substr(at, s.find('\n', at) - at);
+      /* fdsx d, x, x */
+      char op[8], dst[16], src[16];
+      ASSERT_EQ(sscanf(line.c_str(), "%7s %15[^,], %15[^,],", op, dst, src), 3)
+         << line;
+      EXPECT_STRNE(dst, src) << line;
+      n++;
+   }
+   EXPECT_GE(n, 8u) << s;
+}
+
 /* the fixed programs: every line assembles, every word decodes, and each
  * program's last instruction ends it */
 TEST(sgx_fixed, programs_assemble)

@@ -4624,6 +4624,24 @@ reads_pa0(const struct sgx_ref *r)
    return r->file == SGX_F_PA && (r->h16 ? r->n / 2 : r->n) == 0;
 }
 
+/* gl_FragDepth clamped to [0, 1] into pa<depth_pa>, before the colour:
+ * the colour may be written over an input the depth reads, so the depth
+ * goes past every register the colour can take (pa0, an input's,
+ * pa<max(inputs, 1)>) */
+static void
+emit_depth(struct sgx_ctx *c)
+{
+   if (!c->has_depth || c->depth_done)
+      return;
+   c->depth_done = true;
+   c->depth_pa = MAX2(c->n_pa_inputs, 1) + 1;
+   struct sgx_ref d[4] = {ref(SGX_F_PA, c->depth_pa)};
+   struct sgx_ref s[3][4] = {{c->depth},
+                             {ref(SGX_F_K, 0)},
+                             {ref(SGX_F_K, 0x3f800000)}};
+   emit_runs(c, SGX_OP_FMINMAX, 1, d, 3, s, &NOF, 0);
+}
+
 /* The feedback point (USP labels 4/5), after the colour: p1 = keep for a
  * discard, gl_FragDepth clamped to [0, 1] in pa<depth_pa>. The driver puts
  * its atst8, or (p1) depthf pa<depth_pa> for a depth write, in the nop's
@@ -4635,14 +4653,7 @@ emit_feedback(struct sgx_ctx *c)
       return; /* (phase 0 ended in it) */
    if (c->discards && !c->keep_pred)
       emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
-   if (c->has_depth) {
-      c->depth_pa = MAX2(c->n_pa_inputs, c->colour_pa + 1);
-      struct sgx_ref d[4] = {ref(SGX_F_PA, c->depth_pa)};
-      struct sgx_ref s[3][4] = {{c->depth},
-                                {ref(SGX_F_K, 0)},
-                                {ref(SGX_F_K, 0x3f800000)}};
-      emit_runs(c, SGX_OP_FMINMAX, 1, d, 3, s, &NOF, 0);
-   }
+   emit_depth(c);
    if (c->discards || c->has_depth) {
       struct sgx_ins *f = ins_alloc(c, SGX_INS_FEEDBACK, SGX_OP_NOP);
       f->ndst = 0;
@@ -4653,6 +4664,7 @@ emit_feedback(struct sgx_ctx *c)
 static void
 emit_color(struct sgx_ctx *c)
 {
+   emit_depth(c);
    if (c->c10_root) {
       struct c10_state st = {0};
       struct list_head *before = c->ins.prev;
