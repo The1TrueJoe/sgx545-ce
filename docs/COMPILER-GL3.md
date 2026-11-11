@@ -163,3 +163,54 @@ Unknowns, each an hwt test to write before relying on it:
    UBOs and SA copies.
 4. Only then the compiler: integer isel behind a "GLSL 3" switch, keeping the
    ES 1.00 float path pixel-exact against the DDK.
+
+## Status (2026-11-11)
+
+The compiler side of GLSL 1.30 and 1.40 is in, behind
+`sgx_compile_options.native_integers`, which the driver sets screen-wide
+once it reports integers (GL3.md, "Crossing the driver/compiler line").
+Without it nothing changes: GLSL ES 1.00 integers and booleans stay floats,
+and the corpus output is byte-identical. GLSL 1.50 is not planned (GL3.md:
+no geometry-shader path).
+
+| GLSL feature | how | relies on |
+|---|---|---|
+| int/uint add, sub, negate, multiply | `ima32` (`a * #1 + -b`, `-a` as `a * c56`) | **hardware** (hwt_int) |
+| `umulExtended`-style high words (division) | `ima32 [hi=i1]`, read by the next instruction | **hardware** (hwt_gaps, hwt_int: unsigned and `.sgn`) |
+| bitwise ops, shifts | hw 0a-0d; constants as rotated 16-bit immediates; register counts masked to 0-31 | **hardware** (hwt_p7, hwt_int) |
+| compares | `testmask.xor.eq/ne.dword`; lt/ge from a - b and the operands' signs (no overflow), then `testmask.or.neg/pos.dword` | **hardware** (hwt_int) |
+| min, max, abs, sign, selects | `movc.ltz/z/nz.i32` | **hardware** (hwt_p2) |
+| `/`, `%` | `nir_lower_idiv` (reciprocal, two fix-ups) | frcp exactly rounded on the five values hwt_int tried; the fix-up steps don't need it |
+| int/uint ↔ float | the two 16-bit halves through `pck.f32.s16/u16` and one `fmad`; back by trunc, floor(\|t\| / 65536), `pck.u16.f32` | **hardware** (hwt_int; trunc and floor hwt_p4) |
+| booleans | 0 / ~0 (`nir_lower_bool_to_int32`); an `if` tests the comparison into p0 (`test.xor` for ieq/ine) or `test.and.eq` on the mask | **hardware** (hwt_p13, hwt_int) |
+| `switch` | GLSL's loop-once lowering, emitted without branches | — |
+| `textureLod`, vertex texture reads | dependent `smp` with LOD replace (vertex: LOD c48) | **corpus** |
+| `texelFetch` | `sgx_lower_tex`: txl at (i + 0.5) / max(size >> lod, 1), marked `sgx_sample_info.fetch` for NEAREST state of its own | — |
+| `textureSize`, `textureGrad`, the Offset variants, rect, 1D | `sgx_lower_tex` (`nir_lower_tex`); txs is the driver's (`SGX_K_TEXSIZE`) | — |
+| isampler / usampler | an RGBA8 texel's bytes, sign- or zero-extended | — |
+| integer varyings | two sets per row, the 16-bit halves as exact floats (`sgx_varying.split`) | flat: see below |
+| uniform blocks | `ld.a.d` from the address in constant `ubo_base_k + n`; word d at `#(d - 1)`, others through an `ima32` address | ld.a.d immediates: **hardware** (hwt_gaps) |
+| gl_VertexID, gl_InstanceID | the driver's (an input it gathers, a constant) | — |
+
+Checks: `tools/usc/usse_sim.py` models the integer and conversion forms the
+compiler emits, with ISA.md's semantics, and `tools/usc/int_check.py` runs
+42 GLSL 1.30 operations through sgxc and the model on random inputs; all
+give exact results. `tools/isa/hwt_int.py` checked the semantics the model
+assumes on a CE5300 board (2026-11-11): all 50 expected words, so every
+form in the table is now **hardware** (log in `tools/isa/hwt_out/open/`).
+What is not yet run on hardware is the compiled programs themselves
+(piglit's GLSL 1.30 tests, once the driver exposes integers).
+
+Flat varyings (planned with gl3-driver, GL3.md "Flat varyings"): only the TA's
+vertex-colour source iterates flat. The compiler will choose, in
+`sgx_assign_varyings` where both stages see the same order, the first flat
+varying that fits one vec4 (a split int or ivec2 counts as four floats), place
+it in the colour source and report it. The driver then makes every other flat
+varying's three vertices equal (a vertex-program variant over copied inputs),
+so they iterate in their sets. Built on usse-compiler's colour-source path once
+it lands; not done yet.
+
+Not done here: integer and float textures wider than RGBA8 (the texel
+formats are GL3.md's H2), MRT and packed render-target outputs (H1),
+transform feedback (H4), texture arrays (GL3.md's layer-address path), and
+shadow-compare and cube-array variants beyond what Mesa lowers.

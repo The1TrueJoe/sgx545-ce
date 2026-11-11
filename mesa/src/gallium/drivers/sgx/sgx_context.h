@@ -110,6 +110,9 @@ struct sgx_pipe_shader {
    uint16_t swz[PIPE_MAX_SAMPLERS];
    uint32_t not_bgra; /* units bound to a texture not sampled B, G, R, A
                          ordered (sgx_tex_bgra) */
+   uint32_t depth;    /* units bound to a depth texture (sgx_tex_depth) */
+   /* shadow samples: each unit's compare function (lower_shadow) */
+   uint8_t compare[PIPE_MAX_SAMPLERS];
    struct sgx_pipe_shader *variants_srgb[8];
    unsigned next_variant_srgb;
 };

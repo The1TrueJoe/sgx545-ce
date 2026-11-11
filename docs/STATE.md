@@ -490,6 +490,15 @@ z scale.
   when the shader writes the point size.
   - 4 dwords are the position. Each texcoord set adds its size.
   - The clear's own value is `0x00081800` (8 dwords: position and color).
+  - **The vertex color.** ES1 draws with a color have `0x00083800`: the usual
+    `0x3000` plus b11, which the clear's `0x1800` has too. Their vertex
+    program writes the color as 4 F32 dwords in o4-o7, right after the
+    position; TSP word 0 counts it as one 4-component set (5) and word 1
+    is 0. The pixel program iterates it with DOUTI source 0x20, 4
+    components (`27c10000`), not as tc0 (capture: `es1base`, 2026-11-11).
+    That b11 is what turns the first set into the color source is a
+    **guess** (no capture without it). No second color source (0x21) has
+    been seen.
     Its texcoord-size word is 5 (one 4-component set: the color) and its
     MTE control 0x40.
   - Status: capture; hardware (open driver).
@@ -825,7 +834,7 @@ vertex buffers), so CPU expansion costs a copy it already makes.
 | line strips and loops | lowered: no strip primitive; expanded to line lists | hardware |
 | scissor, viewport | native: region clip plus pass-type-3 objects | hardware |
 | user clip planes | native: `fdpc` into cp<n> in the vertex program, enabled by output select b0-5 | capture (`cp1`, `cp2`, `cp6`, `cpnone`) |
-| flat shading, provoking vertex | native: pixel PDS DOUTI b25-26 = 2 for the iteration; the last vertex provokes | hardware (`fl-douti` replay); capture (`flat`) |
+| flat shading, provoking vertex | native for the color source (0x20): pixel PDS DOUTI b25-26 = 2; coordinate sets have no flat switch; the last vertex provokes | hardware (`fl-douti` replay); capture (`flat`) |
 | logic ops | shader code: pass type 1, and the program combines its color with o0, which holds the destination | capture (`lxor`, `lcinv`) |
 | polygon mode LINE/POINT, edge flags | native for the mode: ISPA object type 5 draws a triangle's edges, 6 its vertices; edge flags not known | hardware (`ot5`, `ot6` replays) |
 | polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 5 or 6 draw is untried | unconfirmed |
@@ -894,8 +903,12 @@ dump matches the `flat` capture pixel for pixel. The MTE control and VDM
 draw word changes, alone, leave the dump byte for byte equal to the base.
 PDS.md has b25-26 as 3 on every shader entry and 0 on the clear's and
 background's iterations, so the field is the iteration's shading mode,
-with 2 flat and 3 smooth (Gouraud). It is set per iterated attribute, so a
-GLSL `flat` varying is the same switch on that one DOUTI. What the MTE
+with 2 flat and 3 smooth (Gouraud), **for the color source (0x20) only**.
+On a texture-coordinate set (source 1, F16 or F32) b25-26 = 2 still
+interpolates (**hardware**, the open stack on a CE5300 board, 2026-11-11).
+So GL's flat colors go through the color source, and a GLSL `flat` varying
+on a coordinate set has no known switch (CPU de-indexing with the provoking
+vertex's values is the fallback). What the MTE
 control word and VDM b26 change is unknown. Neither selects the provoking
 vertex: replays of `flat` with the MTE word set back to `15555620`, with
 VDM b26 cleared, and with both, all give the capture's dump byte for byte,

@@ -612,6 +612,14 @@ struct fieldset {
    } f[6];
 };
 
+static void
+fs_add(struct fieldset *fs, unsigned id, int32_t v)
+{
+   assert(fs->n < ARRAY_SIZE(fs->f));
+   fs->f[fs->n].id = id;
+   fs->f[fs->n++].v = v;
+}
+
 /* the register a vreg reference names (h16 refs count halves) */
 static bool
 same_vreg_reg(const struct sgx_ref *a, const struct sgx_ref *b)
@@ -1159,7 +1167,7 @@ csel16(struct sgx_ctx *c, nir_alu_instr *alu, struct sgx_ref s[3][4])
             return false;
    }
    unsigned t = new_vreg16(c, ALIGN_POT(nc, 2));
-   struct sgx_ref r[4];
+   struct sgx_ref r[4] = {0};
    for (unsigned p = 0; 2 * p < nc; p++) {
       unsigned l1 = 2 * p + 1 < nc ? 2 * p + 1 : 2 * p;
       struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_MOVC_I32);
@@ -1847,6 +1855,455 @@ negated_ok(nir_def *d)
    return true;
 }
 
+/* ------------------------------------------------------------------------
+ * 32-bit integers (native_integers): booleans are 0 / ~0 */
+
+/* a constant for a bitwise op's src2: a 16-bit immediate rotated left, or
+ * the same of its inverse with inv (the vendor assembler's compression) */
+static bool
+bw_imm(uint32_t v, uint32_t *n, unsigned *rot, bool *inv)
+{
+   for (unsigned i = 0; i < 2; i++) {
+      uint32_t x = i ? ~v : v;
+      for (unsigned r = 0; r < 32; r++) {
+         uint32_t m = r ? (x >> r) | (x << (32 - r)) : x;
+         if (m < 0x10000) {
+            *n = m;
+            *rot = r;
+            *inv = i;
+            return true;
+         }
+      }
+   }
+   return false;
+}
+
+/* d = form(a, b) for one component; a constant b of a bitwise op is an
+ * immediate where it compresses */
+static void
+emit_bw(struct sgx_ctx *c, unsigned form, struct sgx_ref d, struct sgx_ref a,
+        struct sgx_ref b, bool inv)
+{
+   struct fieldset fs = {0};
+   uint32_t n;
+   unsigned rot;
+   bool binv;
+   if (b.file == SGX_F_K && !b.neg && !b.abs && bw_imm(b.n, &n, &rot, &binv)) {
+      b = ref(SGX_F_IMM, n);
+      if (rot)
+         fs_add(&fs, SGX_FLD_ROT, rot);
+      inv ^= binv;
+   }
+   if (inv)
+      fs_add(&fs, SGX_FLD_INV, 1);
+   struct sgx_ref dd[4] = {d}, ss[2][4] = {{a}, {b}};
+   emit_runs(c, form, 1, dd, 2, ss, &fs, 0);
+}
+
+static bool
+is_const(const struct sgx_ref *r)
+{
+   return r->file == SGX_F_K && !r->neg && !r->abs;
+}
+
+/* ima32 d, a, b, e: d = a * b + e (low 32 bits); src0 must be a register */
+static void
+emit_ima32(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref a,
+           struct sgx_ref b, struct sgx_ref e, unsigned hi)
+{
+   if (is_const(&a) && !is_const(&b)) {
+      struct sgx_ref t = a;
+      a = b;
+      b = t;
+   }
+   /* small constants: unsigned 7-bit immediates */
+   if (is_const(&b) && b.n < 0x80)
+      b = ref(SGX_F_IMM, b.n);
+   if (is_const(&e) && e.n < 0x80)
+      e = ref(SGX_F_IMM, e.n);
+   struct fieldset fs = {0};
+   if (hi) {
+      fs_add(&fs, SGX_FLD_HI, hi);
+      fs_add(&fs, SGX_FLD_NOSCHED, 1);
+   }
+   struct sgx_ref dd[4] = {d}, ss[3][4] = {{a}, {b}, {e}};
+   emit_runs(c, SGX_OP_IMA32, 1, dd, 3, ss, &fs, 0);
+}
+
+/* a - b (b a register, or a constant negated at compile time) */
+static void
+emit_isub(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref a,
+          struct sgx_ref b)
+{
+   if (is_const(&a) && a.n == 0) {
+      /* -b: b * ~0, the low word whatever the signedness */
+      emit_ima32(c, d, b, cref(56), ref(SGX_F_K, 0), 0);
+      return;
+   }
+   if (is_const(&b)) {
+      struct sgx_ref e = ref(SGX_F_K, -b.n);
+      if (b.n < 0x80) {
+         e = ref(SGX_F_IMM, b.n);
+         e.neg = 1;
+      }
+      emit_ima32(c, d, a, ref(SGX_F_K, 1), e, 0);
+      return;
+   }
+   if (b.file != SGX_F_V && b.file != SGX_F_R && b.file != SGX_F_PA &&
+       b.file != SGX_F_U && b.file != SGX_F_SA) {
+      struct sgx_ref t = vref(new_vreg(c, 1), 0);
+      struct sgx_ref dd[4] = {t}, ss[1][4] = {{b}};
+      emit_runs(c, SGX_OP_MOV, 1, dd, 1, ss, &NOF, 0);
+      b = t;
+   }
+   b.neg = 1;
+   emit_ima32(c, d, a, ref(SGX_F_K, 1), b, 0);
+}
+
+/* a value whose sign bit is a < b, as two operands of an or (the result is
+ * the or of *x and *y): signs that differ decide by a's (b's unsigned),
+ * equal ones by a - b, so nothing overflows */
+static void
+lt_parts(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, bool sgn,
+         struct sgx_ref *x, struct sgx_ref *y)
+{
+   struct sgx_ref ab = vref(new_vreg(c, 1), 0), df = vref(new_vreg(c, 1), 0);
+   *x = vref(new_vreg(c, 1), 0);
+   *y = vref(new_vreg(c, 1), 0);
+   emit_bw(c, SGX_OP_XOR, ab, a, b, false);
+   emit_isub(c, df, a, b);
+   emit_bw(c, SGX_OP_AND, *x, df, ab, true);
+   emit_bw(c, SGX_OP_AND, *y, ab, sgn ? a : b, false);
+}
+
+/* testmask.<alu>.<cond>.dword d, a, b: ~0 where the test passes, else 0 */
+static void
+emit_mask(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref a,
+          struct sgx_ref b, int alu, int cond)
+{
+   struct fieldset tf = {
+      3, {{SGX_FLD_ALU, alu}, {SGX_FLD_COND, cond}, {SGX_FLD_TYPE, 2}}};
+   struct sgx_ref dd[4] = {d}, ss[2][4] = {{a}, {b}};
+   emit_runs(c, SGX_OP_TESTMASK, 1, dd, 2, ss, &tf, 0);
+}
+
+/* an integer comparison as a mask */
+static void
+emit_icmp(struct sgx_ctx *c, nir_op op, struct sgx_ref d, struct sgx_ref a,
+          struct sgx_ref b)
+{
+   bool sgn = op == nir_op_ilt32 || op == nir_op_ige32;
+   bool lt = op == nir_op_ilt32 || op == nir_op_ult32;
+   if (op == nir_op_ieq32 || op == nir_op_ine32) {
+      if (is_const(&a)) {
+         struct sgx_ref t = a;
+         a = b;
+         b = t;
+      }
+      emit_mask(c, d, a, b, SGX_ISA_TEST_ALU_XOR,
+                op == nir_op_ieq32 ? SGX_ISA_TEST_COND_EQ
+                                   : SGX_ISA_TEST_COND_NE);
+      return;
+   }
+   if (sgn && is_const(&b) && b.n == 0) {
+      /* a < 0, a >= 0: a's sign */
+      emit_mask(c, d, a, ref(SGX_F_IMM, 0), SGX_ISA_TEST_ALU_OR,
+                lt ? SGX_ISA_TEST_COND_NEG : SGX_ISA_TEST_COND_POS);
+      return;
+   }
+   if (sgn && is_const(&a) && a.n == 0) {
+      /* 0 < b, 0 >= b */
+      emit_mask(c, d, b, ref(SGX_F_IMM, 0), SGX_ISA_TEST_ALU_OR,
+                lt ? SGX_ISA_TEST_COND_GT : SGX_ISA_TEST_COND_LE);
+      return;
+   }
+   struct sgx_ref x, y;
+   lt_parts(c, a, b, sgn, &x, &y);
+   emit_mask(c, d, x, y, SGX_ISA_TEST_ALU_OR,
+             lt ? SGX_ISA_TEST_COND_NEG : SGX_ISA_TEST_COND_POS);
+}
+
+/* d = s0 < 0 ? s1 : s2 (whole-word, signed) or s0 != 0 ? s1 : s2 */
+static void
+emit_movc(struct sgx_ctx *c, unsigned form, int cond, struct sgx_ref d,
+          struct sgx_ref s0, struct sgx_ref s1, struct sgx_ref s2)
+{
+   struct fieldset fs = {1, {{SGX_FLD_COND, cond}}};
+   struct sgx_ref dd[4] = {d}, ss[3][4] = {{s0}, {s1}, {s2}};
+   emit_runs(c, form, 1, dd, 3, ss, &fs, 0);
+}
+
+/* pck.<form> d, a, b with fields */
+static void
+emit_pck(struct sgx_ctx *c, unsigned form, struct sgx_ref d, struct sgx_ref a,
+         struct sgx_ref b, const struct fieldset *fs)
+{
+   struct sgx_ref dd[4] = {d}, ss[2][4] = {{a}, {b}};
+   emit_runs(c, form, 1, dd, 2, ss, fs, 0);
+}
+
+static void
+emit_fmad(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref a,
+          struct sgx_ref b, struct sgx_ref e)
+{
+   struct sgx_ref dd[4] = {d}, ss[3][4] = {{a}, {b}, {e}};
+   emit_runs(c, SGX_OP_FMAD, 1, dd, 3, ss, &NOF, 0);
+}
+
+/* float(i): the high half (signed or not) * 65536 + the low half, each
+ * converted exactly, so the one rounding is the fmad's */
+static void
+emit_i2f(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref a, bool sgn)
+{
+   struct sgx_ref h = vref(new_vreg(c, 1), 0), l = vref(new_vreg(c, 1), 0);
+   struct sgx_ref ah = a;
+   ah.lane = 2;
+   emit_pck(c, sgn ? SGX_OP_PCK_F32_S16 : SGX_OP_PCK_F32_U16, h, ah,
+            ref(SGX_F_IMM, 0), &NOF);
+   emit_pck(c, SGX_OP_PCK_F32_U16, l, a, ref(SGX_F_IMM, 0), &NOF);
+   emit_fmad(c, d, h, ref(SGX_F_K, 0x47800000), l);
+}
+
+/* uint(x) of |trunc(x)|, x = trunc'd value t: the high half floor(|t| /
+ * 65536) and the low half |t| - 65536 * high, both exact, packed as u16 */
+static void
+emit_f2u_abs(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref t)
+{
+   struct sgx_ref h = vref(new_vreg(c, 1), 0), hf = vref(new_vreg(c, 1), 0),
+                  lo = vref(new_vreg(c, 1), 0), at = t;
+   at.abs = 1;
+   at.neg = 0;
+   /* |t| * 2^-16 */
+   emit_fmad(c, h, at, cref(39), ref(SGX_F_K, 0x80000000));
+   /* floor: pck.f32.f32 [rint rnd=1] */
+   struct fieldset fl = {2, {{SGX_FLD_SCALE, 1}, {SGX_FLD_RND, 1}}};
+   emit_pck(c, SGX_OP_PCK_F32_F32, hf, h, ref(SGX_F_IMM, 0), &fl);
+   emit_fmad(c, lo, hf, ref(SGX_F_K, 0xc7800000), at);
+   emit_pck(c, SGX_OP_PCK_U16_F32, d, lo, hf, &NOF);
+}
+
+static void
+emit_f2i(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref x, bool sgn)
+{
+   struct sgx_ref t = vref(new_vreg(c, 1), 0);
+   /* trunc: pck.f32.f32 [rint rnd=3] */
+   struct fieldset tr = {2, {{SGX_FLD_SCALE, 1}, {SGX_FLD_RND, 3}}};
+   if (x.neg || x.abs) {
+      struct sgx_ref m = vref(new_vreg(c, 1), 0);
+      struct sgx_ref dd[4] = {m}, ss[2][4] = {{x}, {cref(48)}};
+      emit_runs(c, SGX_OP_FSUBFLR, 1, dd, 2, ss, &NOF, 0);
+      x = m;
+   }
+   emit_pck(c, SGX_OP_PCK_F32_F32, t, x, ref(SGX_F_IMM, 0), &tr);
+   if (!sgn) {
+      emit_f2u_abs(c, d, t);
+      return;
+   }
+   struct sgx_ref u = vref(new_vreg(c, 1), 0), n = vref(new_vreg(c, 1), 0);
+   emit_f2u_abs(c, u, t);
+   emit_isub(c, n, ref(SGX_F_K, 0), u);
+   emit_movc(c, SGX_OP_MOVC_F32, SGX_ISA_MOVC_COND_LTZ, d, t, n, u);
+}
+
+static bool
+int_op(nir_op op)
+{
+   switch (op) {
+   case nir_op_iadd:
+   case nir_op_isub:
+   case nir_op_ineg:
+   case nir_op_imul:
+   case nir_op_umul_high:
+   case nir_op_imul_high:
+   case nir_op_iabs:
+   case nir_op_isign:
+   case nir_op_imin:
+   case nir_op_imax:
+   case nir_op_umin:
+   case nir_op_umax:
+   case nir_op_iand:
+   case nir_op_ior:
+   case nir_op_ixor:
+   case nir_op_inot:
+   case nir_op_ishl:
+   case nir_op_ishr:
+   case nir_op_ushr:
+   case nir_op_ieq32:
+   case nir_op_ine32:
+   case nir_op_ilt32:
+   case nir_op_ige32:
+   case nir_op_ult32:
+   case nir_op_uge32:
+   case nir_op_flt32:
+   case nir_op_fge32:
+   case nir_op_feq32:
+   case nir_op_fneu32:
+   case nir_op_b32csel:
+   case nir_op_b2f32:
+   case nir_op_b2i32:
+   case nir_op_i2f32:
+   case nir_op_u2f32:
+   case nir_op_f2i32:
+   case nir_op_f2u32:
+      return true;
+   default:
+      return false;
+   }
+}
+
+/* one component of an integer ALU op */
+static void
+emit_int_comp(struct sgx_ctx *c, nir_op op, struct sgx_ref d,
+              struct sgx_ref *s)
+{
+   struct sgx_ref a = s[0], b = s[1];
+   switch (op) {
+   case nir_op_iadd:
+      emit_ima32(c, d, a, ref(SGX_F_K, 1), b, 0);
+      break;
+   case nir_op_isub:
+      emit_isub(c, d, a, b);
+      break;
+   case nir_op_ineg:
+      emit_isub(c, d, ref(SGX_F_K, 0), a);
+      break;
+   case nir_op_imul:
+      emit_ima32(c, d, a, b, ref(SGX_F_K, 0), 0);
+      break;
+   case nir_op_umul_high:
+   case nir_op_imul_high: {
+      /* the high word goes to i1, read by the next instruction */
+      struct sgx_ref lo = vref(new_vreg(c, 1), 0);
+      if (is_const(&a) && !is_const(&b)) {
+         struct sgx_ref t = a;
+         a = b;
+         b = t;
+      }
+      struct fieldset fs = {2, {{SGX_FLD_HI, 5}, {SGX_FLD_NOSCHED, 1}}};
+      if (op == nir_op_imul_high)
+         fs_add(&fs, SGX_FLD_SGN, 1);
+      struct sgx_ref dd[4] = {lo}, ss[3][4] = {{a}, {b}, {ref(SGX_F_IMM, 0)}};
+      emit_runs(c, SGX_OP_IMA32, 1, dd, 3, ss, &fs, 0);
+      struct sgx_ref d2[4] = {d}, s2[1][4] = {{ref(SGX_F_I, 1)}};
+      emit_runs(c, SGX_OP_MOV, 1, d2, 1, s2, &NOF, 0);
+      break;
+   }
+   case nir_op_iabs: {
+      struct sgx_ref n = vref(new_vreg(c, 1), 0);
+      emit_isub(c, n, ref(SGX_F_K, 0), a);
+      emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_LTZ, d, a, n, a);
+      break;
+   }
+   case nir_op_isign: {
+      struct sgx_ref t = vref(new_vreg(c, 1), 0);
+      emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_Z, t, a, cref(48),
+                ref(SGX_F_K, 1));
+      emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_LTZ, d, a, cref(56), t);
+      break;
+   }
+   case nir_op_imin:
+   case nir_op_imax:
+   case nir_op_umin:
+   case nir_op_umax: {
+      struct sgx_ref x, y, r = vref(new_vreg(c, 1), 0);
+      bool sgn = op == nir_op_imin || op == nir_op_imax;
+      bool mn = op == nir_op_imin || op == nir_op_umin;
+      if (is_const(&a)) {
+         struct sgx_ref t = a;
+         a = b;
+         b = t;
+      }
+      if (sgn && is_const(&b) && b.n == 0) {
+         /* min(a, 0), max(a, 0): a's sign */
+         emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_LTZ, d, a,
+                   mn ? a : cref(48), mn ? cref(48) : a);
+         break;
+      }
+      if (op == nir_op_umax && is_const(&b) && b.n == 1) {
+         emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_Z, d, a, b, a);
+         break;
+      }
+      lt_parts(c, a, b, sgn, &x, &y);
+      emit_bw(c, SGX_OP_OR, r, x, y, false);
+      emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_LTZ, d, r, mn ? a : b,
+                mn ? b : a);
+      break;
+   }
+   case nir_op_iand:
+   case nir_op_ior:
+   case nir_op_ixor: {
+      unsigned form = op == nir_op_iand  ? SGX_OP_AND
+                      : op == nir_op_ior ? SGX_OP_OR
+                                         : SGX_OP_XOR;
+      if (is_const(&a) && !is_const(&b)) {
+         struct sgx_ref t = a;
+         a = b;
+         b = t;
+      }
+      emit_bw(c, form, d, a, b, false);
+      break;
+   }
+   case nir_op_inot:
+      emit_bw(c, SGX_OP_XOR, d, a, ref(SGX_F_K, 0xffffffff), false);
+      break;
+   case nir_op_ishl:
+   case nir_op_ishr:
+   case nir_op_ushr: {
+      unsigned form = op == nir_op_ishl   ? SGX_OP_SHL
+                      : op == nir_op_ishr ? SGX_OP_ASR
+                                          : SGX_OP_SHR;
+      if (is_const(&b)) {
+         b = ref(SGX_F_K, b.n & 31);
+      } else {
+         /* NIR's count is mod 32, the hardware's is not (33 gives 0) */
+         struct sgx_ref m = vref(new_vreg(c, 1), 0);
+         emit_bw(c, SGX_OP_AND, m, b, ref(SGX_F_K, 31), false);
+         b = m;
+      }
+      emit_bw(c, form, d, a, b, false);
+      break;
+   }
+   case nir_op_ieq32:
+   case nir_op_ine32:
+   case nir_op_ilt32:
+   case nir_op_ige32:
+   case nir_op_ult32:
+   case nir_op_uge32:
+      emit_icmp(c, op, d, a, b);
+      break;
+   case nir_op_flt32:
+   case nir_op_fge32:
+   case nir_op_feq32:
+   case nir_op_fneu32:
+      emit_mask(c, d, a, b, SGX_ISA_TEST_ALU_FSUB,
+                op == nir_op_flt32   ? SGX_ISA_TEST_COND_LT
+                : op == nir_op_fge32 ? SGX_ISA_TEST_COND_GE
+                : op == nir_op_feq32 ? SGX_ISA_TEST_COND_EQ
+                                     : SGX_ISA_TEST_COND_NE);
+      break;
+   case nir_op_b32csel:
+      emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_NZ, d, cond_f32(c, a),
+                b, s[2]);
+      break;
+   case nir_op_b2f32:
+      emit_bw(c, SGX_OP_AND, d, a, ref(SGX_F_K, 0x3f800000), false);
+      break;
+   case nir_op_b2i32:
+      emit_bw(c, SGX_OP_AND, d, a, ref(SGX_F_K, 1), false);
+      break;
+   case nir_op_i2f32:
+   case nir_op_u2f32:
+      emit_i2f(c, d, a, op == nir_op_i2f32);
+      break;
+   case nir_op_f2i32:
+   case nir_op_f2u32:
+      emit_f2i(c, d, a, op == nir_op_f2i32);
+      break;
+   default:
+      UNREACHABLE("not an integer op");
+   }
+}
+
 static void
 emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
 {
@@ -2094,6 +2551,29 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
       for (unsigned j = 0; j < nin && j < 3; j++)
          s[j][k] = (wmask & (1u << k)) ? const_f32(alu_src(c, alu, j, k))
                                        : ref(SGX_F_C, 48);
+   }
+
+   if (c->opts->native_integers && int_op(alu->op)) {
+      /* one component at a time: the integer forms don't repeat */
+      for (unsigned k = 0; k < 4; k++) {
+         if (!(wmask & (1u << k)))
+            continue;
+         struct sgx_ref sk[3];
+         for (unsigned j = 0; j < nin && j < 3; j++)
+            sk[j] = s[j][k];
+         emit_int_comp(c, alu->op, d[k], sk);
+      }
+      assert(!ld.fsat || alu->op == nir_op_b2f32);
+      if (ld.fsat) {
+         struct sgx_ref ss[3][4];
+         for (unsigned k = 0; k < 4; k++) {
+            ss[0][k] = d[k];
+            ss[1][k] = ref(SGX_F_K, 0);
+            ss[2][k] = ref(SGX_F_K, 0x3f800000);
+         }
+         emit_runs(c, SGX_OP_FMINMAX, wmask, d, 3, ss, &NOF, 0);
+      }
+      return;
    }
 
    struct sgx_ref ops[3][4];
@@ -2442,7 +2922,8 @@ face_float(struct sgx_ctx *c, unsigned t, struct list_head *after)
    m->nops = 4;
    m->op[0] = vref(f, 0);
    m->op[1] = vref(t, 0);
-   m->op[2] = cref(52);
+   /* (a boolean is ~0 with native integers) */
+   m->op[2] = cref(c->opts->native_integers ? 56 : 52);
    m->op[3] = cref(48);
    fld(m, SGX_FLD_COND, 1);
    list_add(&m->link, after);
@@ -2491,6 +2972,7 @@ front_face(struct sgx_ctx *c, struct sgx_val *v, nir_def *def)
       list_add(&a->link, &c->ins);
       list_add(&x->link, &c->ins);
       c->face_and = a;
+      cond_only &= !c->opts->native_integers;
       c->face_int = cond_only;
       c->face_vreg = cond_only ? (int)t : (int)face_float(c, t, &a->link);
    }
@@ -2512,7 +2994,7 @@ vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
                                                                       : 4;
    nir_component_mask_t rd = nir_def_components_read(&in->def);
    unsigned t = fmt >= SGX_VF_UNORM8_4 ? new_vreg(c, nc) : 0;
-   struct sgx_ref x[4];
+   struct sgx_ref x[4] = {0};
    for (unsigned k = 0; k < nc; k++) {
       unsigned comp = (r & 3) + k;
       if (comp >= held) {
@@ -2565,6 +3047,60 @@ emit_clip_distance(struct sgx_ctx *c, unsigned p, struct sgx_ref x)
    f->op[2].step = 1;
    fld(f, SGX_FLD_CP, p);
    emit(c, f);
+}
+
+/* A uniform block's words: ld.a.d from its address, which the driver loads
+ * as constant ubo_base_k + block. ld.a.d #i reads base + 4 * (i + 1), so a
+ * word past the first 128, or at an offset in a register, gets its address
+ * (less one word) computed first */
+static void
+emit_load_ubo(struct sgx_ctx *c, nir_intrinsic_instr *in, struct sgx_val *v)
+{
+   unsigned nc = in->def.num_components;
+   if (!c->opts->ubo_base_k || !nir_src_is_const(in->src[0]) ||
+       in->def.bit_size != 32) {
+      sgx_fail(c, "uniform block load");
+      return;
+   }
+   unsigned k = c->opts->ubo_base_k + nir_src_as_uint(in->src[0]);
+   if (k >= ARRAY_SIZE(c->const_used)) {
+      sgx_fail(c, "uniform block %u out of range", k);
+      return;
+   }
+   c->const_used[k] = 1;
+   struct sgx_ref base = ref(SGX_F_U, k);
+   int first = 0;
+   if (nir_src_is_const(in->src[1])) {
+      uint32_t off = nir_src_as_uint(in->src[1]);
+      first = off / 4 - 1;
+      if (first < 0 || first + nc > 128) {
+         struct sgx_ref a = vref(new_vreg(c, 1), 0);
+         emit_ima32(c, a, base, ref(SGX_F_K, 1), ref(SGX_F_K, off - 4), 0);
+         base = a;
+         first = 0;
+      }
+   } else {
+      nir_legacy_src ls = nir_legacy_chase_src(&in->src[1]);
+      struct sgx_ref a = vref(new_vreg(c, 1), 0), a4 = vref(new_vreg(c, 1), 0);
+      emit_ima32(c, a, src_comp(c, &ls, 0), ref(SGX_F_K, 1), base, 0);
+      emit_isub(c, a4, a, ref(SGX_F_K, 4));
+      base = a4;
+   }
+   unsigned t = new_vreg(c, nc);
+   for (unsigned j = 0; j < nc; j++) {
+      struct sgx_ins *ld = ins_alloc(c, SGX_INS_ALU, SGX_OP_LD);
+      ld->nops = 3;
+      ld->op[0] = vref(t, j);
+      ld->op[1] = base;
+      ld->op[2] = ref(SGX_F_IMM, first + j);
+      emit(c, ld);
+   }
+   struct sgx_ins *w = ins_alloc(c, SGX_INS_ALU, SGX_OP_WDF);
+   w->ndst = 0;
+   emit(c, w);
+   v->kind = VAL_V;
+   v->n = t;
+   v->comp = 0;
 }
 
 static void
@@ -2735,7 +3271,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                 c->const_fmt[k + nc] == 3)
             c->const_used[k + nc++] = 1;
          unsigned t = new_vreg16(c, 4);
-         struct sgx_ref r[4];
+         struct sgx_ref r[4] = {0};
          for (unsigned p = 0; p < (nc + 1) / 2; p++) {
             struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_C10);
             i->nops = 3;
@@ -2792,11 +3328,23 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          vtx_unpack(c, in, r, c->opts->vtx_fmt[r / 4]);
          return;
       }
+      if (c->stage == MESA_SHADER_FRAGMENT && c->in_hi[at] >= 0) {
+         /* an integer varying: the halves, rounded and joined */
+         unsigned w = new_vreg(c, in->def.num_components);
+         for (unsigned j = 0; j < in->def.num_components; j++)
+            emit_pck(c, SGX_OP_PCK_U16_F32, vref(w, j),
+                     ref(SGX_F_PA, c->in_reg[at + j]),
+                     ref(SGX_F_PA, c->in_hi[at + j]), &NOF);
+         v->kind = VAL_V;
+         v->n = w;
+         v->comp = 0;
+         return;
+      }
       v->kind = VAL_PA;
       v->n = r;
       if (r & SGX_IN_HALF) {
          /* iterated as F16: component j in half (2 * pa + comp) + j */
-         struct sgx_ref hr[4];
+         struct sgx_ref hr[4] = {0};
          for (unsigned j = 0; j < in->def.num_components; j++) {
             hr[j] = ref(SGX_F_PA, (r & ~SGX_IN_HALF) + j);
             hr[j].h16 = 1;
@@ -2807,6 +3355,9 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    }
    case nir_intrinsic_load_front_face:
       front_face(c, v, &in->def);
+      return;
+   case nir_intrinsic_load_ubo:
+      emit_load_ubo(c, in, v);
       return;
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
@@ -2887,8 +3438,20 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                     : -1;
          if (!(wmask & (1u << k)) || r < 0)
             continue;
+         struct sgx_ref x = src_comp(c, &ls, k - nir_intrinsic_component(in));
+         int h = c->out_hi[slot * 4 + k];
+         if (h >= 0) {
+            /* an integer varying: its 16-bit halves, as floats */
+            struct sgx_ref xh = x;
+            xh.lane = 2;
+            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, r), x,
+                     ref(SGX_F_IMM, 0), &NOF);
+            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, h), xh,
+                     ref(SGX_F_IMM, 0), &NOF);
+            continue;
+         }
          d[k] = ref(SGX_F_O, r);
-         ss[0][k] = src_comp(c, &ls, k - nir_intrinsic_component(in));
+         ss[0][k] = x;
          m |= 1u << k;
       }
       emit_runs(c, SGX_OP_MOV, m, d, 1, ss, &NOF, 0);
@@ -2908,7 +3471,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
                in->intrinsic == nir_intrinsic_ddy_coarse;
       nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
       unsigned nc = in->def.num_components, w = new_vreg(c, nc);
-      struct sgx_ref r[4];
+      struct sgx_ref r[4] = {0};
       for (unsigned j = 0; j < nc; j++) {
          struct sgx_ins *d =
             ins_alloc(c, SGX_INS_ALU, y ? SGX_OP_FDSY : SGX_OP_FDSX);
@@ -3107,7 +3670,8 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
    for (unsigned n = 0; n < c->n_iters;) {
       struct sgx_iter *it = &c->iters[n];
       unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
-      if (it->sample || it->pointcoord || it->set >= SGX_MAX_SETS) {
+      /* (a flat set isn't one: the PDS would interpolate its coordinate) */
+      if (it->sample || it->pointcoord || it->flat || it->set >= SGX_MAX_SETS) {
          n++;
          continue;
       }
@@ -3323,6 +3887,25 @@ interleave_samples(struct sgx_ctx *c)
       c->depth_pa = map[c->depth_pa];
 }
 
+/* a load from a flat set (sgx_iter.flat) */
+static bool
+flat_load(struct sgx_ctx *c, nir_intrinsic_instr *in)
+{
+   int at = input_at(in);
+   int r = at >= 0 && at < (int)ARRAY_SIZE(c->in_reg) ? c->in_reg[at] : -1;
+   if (r < 0)
+      return false;
+   unsigned reg = r & SGX_IN_HALF ? (r & ~SGX_IN_HALF) / 2 : r;
+   for (unsigned i = 0; i < c->n_iters; i++) {
+      const struct sgx_iter *it = &c->iters[i];
+      if (!it->sample && reg >= it->pa && reg < it->pa + iter_regs(it))
+         return it->flat;
+   }
+   return false;
+}
+
+/* (not a flat varying's: the PDS would interpolate it, so the divide stays
+ * in the program) */
 static void
 find_projected(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -3341,7 +3924,8 @@ find_projected(struct sgx_ctx *c, nir_function_impl *impl)
          nir_alu_instr *cm, *pm;
          nir_intrinsic_instr *l1 = varying_load(&tex->src[ci].src, &cs, &cm);
          nir_intrinsic_instr *l2 = varying_load(&tex->src[pi].src, &ps, &pm);
-         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3)
+         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3 ||
+             flat_load(c, l1))
             continue;
          _mesa_hash_table_insert(c->proj, tex, l1);
          if (cm && list_is_singular(&cm->def.uses))
@@ -3563,6 +4147,30 @@ emit_block(struct sgx_ctx *c, nir_block *b, struct loop_labels *loop)
    }
 }
 
+/* the inverse test of a comparison an if can branch on directly, -1 none */
+static int
+if_test_cond(nir_op op)
+{
+   switch (op) {
+   case nir_op_slt:
+   case nir_op_flt32:
+      return SGX_ISA_TEST_COND_GE;
+   case nir_op_sge:
+   case nir_op_fge32:
+      return SGX_ISA_TEST_COND_LT;
+   case nir_op_seq:
+   case nir_op_feq32:
+   case nir_op_ieq32:
+      return SGX_ISA_TEST_COND_NE;
+   case nir_op_sne:
+   case nir_op_fneu32:
+   case nir_op_ine32:
+      return SGX_ISA_TEST_COND_EQ;
+   default:
+      return -1;
+   }
+}
+
 /* an if on a comparison only it reads, computed last in the block before
  * it: test.fsub.<inverse> p0, a, b, instead of a mask
  * or 1.0 / 0.0 and a test of that */
@@ -3588,8 +4196,7 @@ find_if_compares_cf(struct sgx_ctx *c, struct exec_list *list)
           !list_is_singular(&d->uses) || d->num_components != 1)
          continue;
       nir_alu_instr *cmp = nir_instr_as_alu(p);
-      if (cmp->op != nir_op_slt && cmp->op != nir_op_sge &&
-          cmp->op != nir_op_seq && cmp->op != nir_op_sne)
+      if (if_test_cond(cmp->op) < 0)
          continue;
       _mesa_set_add(c->skip, p);
       _mesa_hash_table_insert(c->if_cmp, nif, cmp);
@@ -3600,6 +4207,40 @@ static void
 find_if_compares(struct sgx_ctx *c, nir_function_impl *impl)
 {
    find_if_compares_cf(c, &impl->body);
+}
+
+/* a jump in this list that leaves (or restarts) the loop around it */
+static bool
+has_jump(struct exec_list *list)
+{
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      if (node->type == nir_cf_node_block) {
+         nir_instr *last = nir_block_last_instr(nir_cf_node_as_block(node));
+         if (last && last->type == nir_instr_type_jump)
+            return true;
+      } else if (node->type == nir_cf_node_if) {
+         nir_if *nif = nir_cf_node_as_if(node);
+         if (has_jump(&nif->then_list) || has_jump(&nif->else_list))
+            return true;
+      }
+   }
+   return false;
+}
+
+/* a loop that runs once (GLSL's switch: loop { ...; break; }): its body
+ * ends in a break and has no other jump */
+static bool
+loop_once(nir_loop *nl)
+{
+   nir_block *last = nir_loop_last_block(nl);
+   nir_instr *j = nir_block_last_instr(last);
+   if (!j || j->type != nir_instr_type_jump ||
+       nir_instr_as_jump(j)->type != nir_jump_break)
+      return false;
+   nir_instr_remove(j);
+   bool once = !has_jump(&nl->body);
+   nir_instr_insert_after_block(last, j);
+   return once;
 }
 
 static void
@@ -3619,13 +4260,12 @@ emit_cf_list(struct sgx_ctx *c, struct exec_list *list,
          struct hash_entry *he = _mesa_hash_table_search(c->if_cmp, nif);
          if (he) {
             nir_alu_instr *cmp = he->data;
-            int inv = cmp->op == nir_op_sge   ? 25
-                      : cmp->op == nir_op_slt ? 6
-                      : cmp->op == nir_op_seq ? 24
-                                              : 20;
-            emit_test(c, 0, alu_src(c, cmp, 0, 0), alu_src(c, cmp, 1, 0), 14,
-                      inv);
-         } else if (ls.is_ssa && held_as_mask(c, ls.ssa)) {
+            bool icmp = cmp->op == nir_op_ieq32 || cmp->op == nir_op_ine32;
+            emit_test(c, 0, alu_src(c, cmp, 0, 0), alu_src(c, cmp, 1, 0),
+                      icmp ? SGX_ISA_TEST_ALU_XOR : SGX_ISA_TEST_ALU_FSUB,
+                      if_test_cond(cmp->op));
+         } else if (c->opts->native_integers ||
+                    (ls.is_ssa && held_as_mask(c, ls.ssa))) {
             struct sgx_ref m = src_comp(c, &ls, 0);
             emit_test(c, 0, m, m, 0x30, 20);
          } else {
@@ -3652,6 +4292,12 @@ emit_cf_list(struct sgx_ctx *c, struct exec_list *list,
       }
       case nir_cf_node_loop: {
          nir_loop *nl = nir_cf_node_as_loop(node);
+         if (c->opts->native_integers && loop_once(nl)) {
+            nir_instr *brk = nir_block_last_instr(nir_loop_last_block(nl));
+            _mesa_set_add(c->skip, brk);
+            emit_cf_list(c, &nl->body, loop);
+            break;
+         }
          struct loop_labels ll = {new_label(c), new_label(c)};
          emit_label(c, ll.head);
          emit_cf_list(c, &nl->body, &ll);
@@ -3689,6 +4335,26 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
          _mesa_set_add(c->skip, u);
          d = &nir_instr_as_alu(u)->def;
       }
+      return;
+   }
+   if (c->opts->tex_f32 >> s->sampler & 1) {
+      /* one F32 value in the register, read as the first channel alone
+       * (lower_f32_texel) */
+      struct sgx_ref r[4];
+      if (tex->def.bit_size == 32) {
+         r[0] = raw;
+      } else {
+         unsigned t = new_vreg16(c, 2);
+         struct sgx_ins *pk = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_F32);
+         pk->nops = 3;
+         pk->op[0] = href(t, 0);
+         pk->op[1] = raw;
+         pk->op[2] = raw;
+         emit(c, pk);
+         r[0] = href(t, 0);
+      }
+      r[1] = r[2] = r[3] = r[0];
+      set_refs(c, &tex->def, r, 4);
       return;
    }
    /* only the channels something reads (glamor's glyphs: alpha alone) */
@@ -3732,6 +4398,33 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
       }
       return;
    }
+   nir_alu_type base = nir_alu_type_get_base_type(tex->dest_type);
+   if (base == nir_type_int || base == nir_type_uint) {
+      /* an integer texel (RGBA8UI / RGBA8I): its bytes, zero- or
+       * sign-extended */
+      unsigned w = new_vreg(c, 4);
+      c->vals[tex->def.index].kind = VAL_V;
+      c->vals[tex->def.index].n = w;
+      c->vals[tex->def.index].comp = 0;
+      for (unsigned k = 0; k < 4; k++) {
+         if (!(read >> k & 1))
+            continue;
+         unsigned by = TEXEL_LANE(k);
+         struct sgx_ref d = vref(w, k), t = vref(new_vreg(c, 1), 0);
+         if (base == nir_type_int) {
+            emit_bw(c, SGX_OP_SHL, t, raw, ref(SGX_F_K, 24 - 8 * by), false);
+            emit_bw(c, SGX_OP_ASR, d, t, ref(SGX_F_K, 24), false);
+         } else if (by == 3) {
+            emit_bw(c, SGX_OP_SHR, d, raw, ref(SGX_F_K, 24), false);
+         } else {
+            if (by)
+               emit_bw(c, SGX_OP_SHR, t, raw, ref(SGX_F_K, 8 * by), false);
+            emit_bw(c, SGX_OP_AND, d, by ? t : raw, ref(SGX_F_K, 0xff),
+                    false);
+         }
+      }
+      return;
+   }
    /* the texel: RGBA8, channel n in byte n (swizzle xyzw); to F32 */
    unsigned w = new_vreg(c, 4);
    c->vals[tex->def.index].kind = VAL_V;
@@ -3755,16 +4448,23 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
 static void
 emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
 {
-   if (c->stage != MESA_SHADER_FRAGMENT ||
+   bool vertex = c->stage == MESA_SHADER_VERTEX;
+   if ((!vertex && c->stage != MESA_SHADER_FRAGMENT) ||
+       (vertex && !c->opts->native_integers) ||
        c->n_samples >= ARRAY_SIZE(c->samples) ||
        c->n_iters >= ARRAY_SIZE(c->iters)) {
       sgx_fail(c, "texture sampling here is not supported yet");
       return;
    }
    int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
-   int bi = nir_tex_instr_src_index(tex, nir_tex_src_bias);
+   /* a bias or an explicit LOD: smp's lod source */
+   int bi = nir_tex_instr_src_index(tex, tex->op == nir_texop_txl
+                                            ? nir_tex_src_lod
+                                            : nir_tex_src_bias);
    int pi = nir_tex_instr_src_index(tex, nir_tex_src_projector);
-   if ((tex->op != nir_texop_tex && tex->op != nir_texop_txb) || ci < 0) {
+   if ((tex->op != nir_texop_tex && tex->op != nir_texop_txb &&
+        tex->op != nir_texop_txl) ||
+       (vertex && tex->op == nir_texop_txb) || ci < 0) {
       sgx_fail(c, "texture op %d", tex->op);
       return;
    }
@@ -3791,6 +4491,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
                : 2;
    s->coord_pa = -1;
    s->sampler = tex->texture_index;
+   s->fetch = tex->backend_flags & SGX_TEX_FETCH;
    /* non-dependent: the coordinate is (the start of) a varying the PDS
     * iterates, no bias; the PDS then samples and leaves the texel in pa */
    nir_legacy_src ls = nir_legacy_chase_src(&tex->src[ci].src);
@@ -3812,8 +4513,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       unsigned pa = c->vals[load->def.index].n;
       /* (the PDS samples from the set itself, however it is iterated) */
       for (unsigned i = 0; i < c->n_iters; i++) {
-         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == pa &&
-             c->iters[i].comps == 4) {
+         if (!c->iters[i].sample && !c->iters[i].flat &&
+             iter_reg(&c->iters[i]) == pa && c->iters[i].comps == 4) {
             s->dependent = false;
             s->proj = true;
             s->set = c->iters[i].set;
@@ -3824,7 +4525,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          sgx_fail(c, "projected read of a varying that isn't iterated");
          return;
       }
-   } else if (bi < 0 && pi < 0) {
+   } else if (!vertex && bi < 0 && pi < 0) {
       /* (a whole varying, or its first components; directly or through a
        * mov that takes its first components in order) */
       int pa = -1;
@@ -3843,9 +4544,11 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          if (prefix)
             pa = c->vals[l->def.index].n;
       }
-      /* (an F16-iterated varying is matched by its halves' register) */
+      /* (an F16-iterated varying is matched by its halves' register; a
+       * flat one samples from its register: the PDS would interpolate it) */
       for (unsigned i = 0; pa >= 0 && i < c->n_iters; i++) {
-         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == (unsigned)pa &&
+         if (!c->iters[i].sample && !c->iters[i].flat &&
+             iter_reg(&c->iters[i]) == (unsigned)pa &&
              c->iters[i].comps >= ncoord) {
             s->dependent = false;
             s->set = c->iters[i].set;
@@ -3862,6 +4565,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       /* a texel read at mediump returns F16 (f16_samples); one that is the
        * colour as it is keeps RGBA8 for the byte path */
       s->f16_return = c->opts->f16_samples && tex->def.bit_size == 16 &&
+                      !(c->opts->tex_f32 >> tex->texture_index & 1) &&
                       tex != c->colour_tex &&
                       !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
       struct sgx_iter *it = &c->iters[c->n_iters++];
@@ -3878,7 +4582,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    } else {
       /* the smp the finalizer writes: raw texel -> a temporary; coordinate
        * in consecutive registers of one bank */
-      struct sgx_ref cr[4];
+      struct sgx_ref cr[4] = {0};
       for (unsigned k = 0; k < ncoord; k++)
          cr[k] = src_comp(c, &ls, k);
       if (pi >= 0) {
@@ -3958,8 +4662,9 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
        * saves their two unpacks for one more register */
       unsigned rd = nir_def_components_read(&tex->def);
       s->f16_return = c->opts->f16_samples && c->opts->dep_f16_samples &&
-                      tex->def.bit_size == 16 && tex != c->colour_tex &&
-                      (rd & 3) && (rd & 12) &&
+                      tex->def.bit_size == 16 &&
+                      !(c->opts->tex_f32 >> tex->texture_index & 1) &&
+                      tex != c->colour_tex && (rd & 3) && (rd & 12) &&
                       !sgx_debug(c, SGX_DBG_NO_DEP_F16) &&
                       !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
       if (s->f16_return) {
@@ -3976,9 +4681,14 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
                            : ncoord; /* the coordinate's registers are read */
       if (bi >= 0) {
          nir_legacy_src lb = nir_legacy_chase_src(&tex->src[bi].src);
-         s->lod = 1;
+         s->lod = tex->op == nir_texop_txl ? 2 : 1;
          i->op[2] = const_f32(src_comp(c, &lb, 0));
          i->op[2].step = 0;
+         i->nops = 3;
+      } else if (vertex) {
+         /* no derivatives: the base level (ISA.md, vertex texture fetch) */
+         s->lod = 2;
+         i->op[2] = cref(48);
          i->nops = 3;
       }
       s->ins = i;
@@ -4051,7 +4761,7 @@ c10_alu(nir_def *d)
 static nir_alu_instr *
 c10_msub(nir_alu_instr *alu, nir_def **x)
 {
-   bool n0, n1;
+   bool n0 = false, n1 = false;
    nir_def *a = c10_src(alu, 0, &n0), *b = c10_src(alu, 1, &n1);
    if (alu->op != nir_op_fadd || !a || !b || n0 == n1)
       return NULL;
@@ -4158,6 +4868,7 @@ find_colour_source(struct sgx_ctx *c, nir_function_impl *impl)
       if (p->type == nir_instr_type_tex) {
          nir_tex_instr *tex = nir_instr_as_tex(p);
          if (tex->op == nir_texop_tex && tex->def.num_components == 4 &&
+             !(c->opts->tex_f32 >> tex->texture_index & 1) &&
              !sgx_debug(c, SGX_DBG_NO_TEX_COLOR)) {
             c->colour_end = end;
             c->colour_tex = tex;

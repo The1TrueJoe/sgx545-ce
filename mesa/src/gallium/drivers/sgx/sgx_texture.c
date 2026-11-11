@@ -58,6 +58,12 @@ sgx_tex_format(enum pipe_format format)
    case PIPE_FORMAT_L8A8_UNORM:
    case PIPE_FORMAT_L8A8_SRGB:
       return 0x1b;
+   /* depths as F32 (sgx_tex_depth) */
+   case PIPE_FORMAT_Z16_UNORM:
+   case PIPE_FORMAT_Z24X8_UNORM:
+   case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+   case PIPE_FORMAT_Z32_FLOAT:
+      return 0x12;
    default:
       return 0;
    }
@@ -72,6 +78,21 @@ sgx_tex_bgra(enum pipe_format format)
    return f == 0x0c || f == 0x0d;
 }
 
+/* A depth texture is F32 on the device whatever its format, in rows of a
+ * multiple of 32 texels read strided (T1 layout 6); the CPU copy keeps its
+ * own format.  The TPU doesn't filter it. */
+bool
+sgx_tex_depth(enum pipe_format format)
+{
+   return sgx_tex_format(format) == SGX_TEXSTATE_FORMAT_F32;
+}
+
+static unsigned
+depth_pitch(unsigned w)
+{
+   return align(w, 32);
+}
+
 /* Bytes per texel on the device.  R8 and RG8 are stored as RGBA8: R, G (or
  * 0), 0, 255, which the PBE can render into (it writes no 8- or 16-bit
  * format) and the TPU samples as GL's (r, g, 0, 1); the CPU copy keeps
@@ -79,7 +100,8 @@ sgx_tex_bgra(enum pipe_format format)
 unsigned
 sgx_tex_bpp(enum pipe_format format)
 {
-   if (format == PIPE_FORMAT_R8_UNORM || format == PIPE_FORMAT_R8G8_UNORM)
+   if (format == PIPE_FORMAT_R8_UNORM || format == PIPE_FORMAT_R8G8_UNORM ||
+       sgx_tex_depth(format))
       return 4;
    return util_format_get_blocksize(format);
 }
@@ -101,11 +123,14 @@ static size_t
 chain_offset(const struct pipe_resource *prsc, unsigned level)
 {
    unsigned bpp = sgx_tex_bpp(prsc->format);
+   bool depth = sgx_tex_depth(prsc->format);
    size_t off = 0;
 
-   for (unsigned l = 0; l < level; l++)
-      off += level_bytes(u_minify(prsc->width0, l), u_minify(prsc->height0, l),
-                         bpp);
+   for (unsigned l = 0; l < level; l++) {
+      unsigned w = u_minify(prsc->width0, l), h = u_minify(prsc->height0, l);
+
+      off += depth ? (size_t)depth_pitch(w) * h * 4 : level_bytes(w, h, bpp);
+   }
    return off;
 }
 
@@ -153,7 +178,8 @@ unsigned
 sgx_tex_dev_last(const struct pipe_resource *prsc)
 {
    if (prsc->target != PIPE_TEXTURE_2D || prsc->array_size > 1 ||
-       !prsc->last_level || !twiddled(prsc->width0, prsc->height0))
+       !prsc->last_level || !twiddled(prsc->width0, prsc->height0) ||
+       sgx_tex_depth(prsc->format))
       return prsc->last_level;
    return util_logbase2(MAX2(prsc->width0, prsc->height0));
 }
@@ -196,6 +222,15 @@ encode_rect(struct sgx_resource *res, unsigned level, const uint8_t *src,
    y1 = MIN2(y1, h);
    if (x0 >= x1 || y0 >= y1)
       return;
+   if (sgx_tex_depth(prsc->format)) {
+      size_t pitch = (size_t)depth_pitch(w) * 4;
+
+      for (unsigned y = y0; y < y1; y++)
+         util_format_unpack_z_float(
+            prsc->format, (float *)(dst + y * pitch) + x0,
+            src + y * src_stride + (size_t)x0 * cbpp, x1 - x0);
+      return;
+   }
    if (!twiddled(w, h)) {
       size_t pitch = (size_t)align(w, 8) * bpp;
 
@@ -411,7 +446,8 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer,
 
    x1 = MIN2(x1, w);
    y1 = MIN2(y1, h);
-   if (x0 >= x1 || y0 >= y1)
+   /* (nothing renders into a depth texture: the CPU copy is current) */
+   if (x0 >= x1 || y0 >= y1 || sgx_tex_depth(prsc->format))
       return;
    if (!twiddled(w, h)) {
       size_t pitch = (size_t)align(w, 8) * bpp;
@@ -564,6 +600,28 @@ sgx_tex_words(const struct pipe_sampler_view *view,
          t1.format = bgra ? 0x0c : 0x0d;
          t1.width = prsc->width0 - 1;
          t1.height = prsc->height0 - 1;
+      }
+   }
+   if (sgx_tex_depth(prsc->format)) {
+      /* rows of depth_pitch texels, strided as a render target is read
+       * (16x16: T0 00060e00, T1 d200f00f), base level only */
+      unsigned p = depth_pitch(w) - 1;
+
+      sgx_pack(&t[0], TEXSTATE_STRIDED_WORD0, t0)
+      {
+         t0.pitch_lo = p & 7;
+         t0.pitch_hi = p >> 3;
+         if (sampler) {
+            t0.wrap_t = wrap(sampler->wrap_t);
+            t0.wrap_s = wrap(sampler->wrap_s);
+         }
+      }
+      sgx_pack(&t[1], TEXSTATE_WORD1, t1)
+      {
+         t1.layout = SGX_TEXSTATE_LAYOUT_STRIDED;
+         t1.format = SGX_TEXSTATE_FORMAT_F32;
+         t1.width = w - 1;
+         t1.height = h - 1;
       }
    }
    /* T3: the sample instruction's half; 00800800 for a single 2-D sample [D] */

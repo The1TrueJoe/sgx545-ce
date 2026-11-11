@@ -151,6 +151,9 @@ field of unknown width runs up to the next known field.
       <define name="CLEAR" value="3"/>  <!-- 0x1800 -->
     </field>
     <field name="point_size" start="8" end="8" type="bool"/>   <!-- the last output is the size -->
+    <!-- the user clip planes the TA clips against, plane n's result (fdpc
+         into cp<n>) an output after the others -->
+    <field name="clip_planes" start="0" end="5" type="uint"/>
   </struct>
 
   <struct name="STATE_WCLAMP" length="1">

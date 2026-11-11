@@ -205,6 +205,9 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
     * vertex program writes its own) */
    caps->alpha_test = false;
    caps->two_sided_color = false;
+   /* glShadeModel(GL_FLAT): st makes the colours flat inputs, iterated flat
+    * (sgx_iter_info.flat) */
+   caps->flatshade = false;
    caps->point_size_fixed = PIPE_POINT_SIZE_LOWER_ALWAYS;
    caps->clip_planes = 0;
    caps->texture_transfer_modes = 0;
