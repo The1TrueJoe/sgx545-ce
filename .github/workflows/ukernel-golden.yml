@@ -30,5 +30,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Symbolic assembler resolves per-core constants to the same bytes
+        run: python3 tools/isa/test_symbols.py
       - name: Rebuild the SGX545 serial image and verify its hash
         run: python3 ukernel/golden/check.py
