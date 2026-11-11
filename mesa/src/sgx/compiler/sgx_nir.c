@@ -41,12 +41,12 @@ static const nir_shader_compiler_options options = {
    /* fmad: the product is rounded before the add (hwt_p7: not fused) */
    .float_mul_add32 =
       nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
-   /* fmad16, as libusc fuses a mediump a * b + c (one rounding) */
+   /* fmad16: a mediump a * b + c, one rounding (corpus; hwt_p7) */
    .float_mul_add16 =
       nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
    .no_integers = true,
-   .max_unroll_iterations = 8, /* (libusc unrolls nothing; a 16-trip loop with a
-                                  break became 125 instructions) */
+   .max_unroll_iterations = 8, /* (a 16-trip loop with a break unrolled to
+                                  125 instructions) */
    .lower_int64_options = ~0,
    /* (not lower_doubles_options = ~0: GLSL ES has no doubles, and with it
     * 144 dEQP fragment loops came out wrong on hardware) */
@@ -576,7 +576,7 @@ alu_of(nir_src s)
 }
 
 /* The colour is packed to U8 with pck's saturation: a clamp to [0, 1] of
- * what is stored there is the pack's own (libusc drops it, sat_m) */
+ * what is stored there is the pack's own (corpus sat_m) */
 static bool
 colour_sat_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
@@ -1302,8 +1302,8 @@ uniform_prec(struct sgx_ctx *c, unsigned k)
 /* f32 uniforms that F16 math reads (every use an f2f16), in the format the
  * DDK loads such a constant in: mediump as F16 constants (list C kind 2,
  * rounded at upload), a lowp vector's xyz as C10 (kind 3), highp left f32
- * (converted where read with pck.f16.f32, truncating as libusc's own
- * conversion does). sgxc's frontend loads mediump uniforms 16-bit already;
+ * (converted where read with pck.f16.f32, truncating: ISA.md "Hardware
+ * checks"). sgxc's frontend loads mediump uniforms 16-bit already;
  * the gallium driver's arrive as f32 load_uniform. */
 static bool
 uniform_format_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
@@ -1376,7 +1376,7 @@ uniform_format_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    if (prec != GLSL_PRECISION_MEDIUM && prec != GLSL_PRECISION_LOW)
       return false;
    /* F16 constants; a C10 vector's xyz as the F16 of its C10 value (the
-    * driver converts at upload what libusc's secondary program does) */
+    * driver converts at upload) */
    b->cursor = nir_after_instr(&in->instr);
    nir_def *h = nir_load_uniform(b, n, 16, in->src[0].ssa, .base = k,
                                  .range = n, .dest_type = nir_type_float16);
@@ -1438,10 +1438,10 @@ first_free(const struct sgx_compile_options *o, enum sgx_layout_kind k)
 }
 
 /* A loop that can leave early (a break besides its trip count, or one the
- * frontend merged into it, so the trip count isn't exact) stays a loop, as
- * libusc keeps it: unrolled, its exits become a select tree that holds every
+ * frontend merged into it, so the trip count isn't exact) stays a loop:
+ * unrolled, its exits become a select tree that holds every
  * iteration's value to the end (corpus loop_v: 31 temporaries, 4 as a loop,
- * libusc 9). Loops that index arrays are still unrolled. */
+ * the DDK 9). Loops that index arrays are still unrolled. */
 static bool
 keep_early_exit_loops_cf(struct exec_list *list)
 {

@@ -109,12 +109,9 @@ That reference is the USPs it produces for one-feature shaders (the `gen*.py` co
 and pixel A/B on the same draws. The results are written in docs/ISA.md "What a
 compiler needs" and docs/STATE.md, and the compiler follows those docs.
 
-Comments in the compiler still name the vendor compiler as the behavior matched
-("as libusc fuses a mediump a*b+c"): 30 such comments in `sgx_compile.c`,
-`sgx_nir.c` and `sgx_compiler.h` (2026-11-11). No vendor function address is left in
-`mesa/`. For upstream, each should cite the docs/ section and the test that fixed the
-behavior instead: reviewers would read "as libusc does" as "copied from libusc", even
-though it means "matched against it".
+The compiler's comments cite the docs section, the corpus shader or the hardware test
+each choice rests on (2026-11-11); none names the vendor compiler, and no vendor
+function address is in `mesa/`.
 
 ### 2.3 Hardware semantics
 
@@ -130,7 +127,7 @@ now handled with `nosched`. All come from `hwt_*` and A/B runs, logged in `docs/
 2. Close the gaps in 2.1 with hwt tests, derivatives first.
 3. Confirm on hardware the ISA.md gaps a compiler relies on: skipinv, syncs and nosched
    (ISA.md "Gaps").
-4. Rewrite the compiler comments of 2.2 to cite docs and tests.
+4. Done (2026-11-11): the compiler comments cite docs and tests (2.2).
 
 ## 3. DDK-compatibility code that doesn't go upstream
 
