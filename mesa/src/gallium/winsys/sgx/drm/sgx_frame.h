@@ -133,6 +133,7 @@ struct sgxws_rt_numbers {
 /* the TA/3D structures for one w x h target */
 struct sgxws_rt {
    uint32_t w, h;
+   uint8_t samples; /* 1, or 4: 2x2 a pixel (STATE.md "Multisampling (4x)") */
    uint32_t ctx_gen; /* the backend's context it was made in (a reset makes
                         another) */
    struct sgxws_rt_numbers n;
@@ -147,7 +148,7 @@ struct sgxws_rt {
 
 struct sgxws_eot {
    uint32_t va, stride, w, h;
-   uint8_t pbe_format, t1_layout;
+   uint8_t pbe_format, t1_layout, samples;
    uint32_t code;
 };
 

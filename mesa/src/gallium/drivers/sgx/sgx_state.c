@@ -704,12 +704,75 @@ sgx_blit_gpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
    return true;
 }
 
+/* A blit out of a 4x colour buffer: its memory holds the resolved pixels
+ * (the PBE resolves each tile as it stores it, sgx_draw.c begin_frame), so
+ * the resolve is a copy; a scaled or converting one copies into a
+ * one-sample texture first and blits from that.  Depth and stencil samples
+ * stay in the ZLS buffer, in a layout not known: not blitted. */
+static bool
+sgx_blit_resolve(struct pipe_context *pctx, const struct pipe_blit_info *info)
+{
+   const struct pipe_resource *src = info->src.resource;
+   struct pipe_blit_info b = *info;
+   struct pipe_resource templ, *tmp;
+   struct pipe_box box = info->src.box;
+
+   if (info->mask & PIPE_MASK_ZS) {
+      fprintf(stderr, "sgx: depth/stencil blit from a 4x buffer not done\n");
+      return true;
+   }
+   if (box.width < 0) {
+      box.x += box.width;
+      box.width = -box.width;
+   }
+   if (box.height < 0) {
+      box.y += box.height;
+      box.height = -box.height;
+   }
+   if (info->src.format == info->dst.format &&
+       info->src.format == src->format &&
+       info->dst.format == info->dst.resource->format &&
+       info->src.box.width == info->dst.box.width &&
+       info->src.box.height == info->dst.box.height && !info->scissor_enable &&
+       !info->render_condition_enable && info->mask == PIPE_MASK_RGBA) {
+      pctx->resource_copy_region(pctx, info->dst.resource, info->dst.level,
+                                 info->dst.box.x, info->dst.box.y,
+                                 info->dst.box.z, info->src.resource,
+                                 info->src.level, &box);
+      return true;
+   }
+   templ = (struct pipe_resource){
+      .target = PIPE_TEXTURE_2D,
+      .format = src->format,
+      .width0 = box.width,
+      .height0 = box.height,
+      .depth0 = 1,
+      .array_size = 1,
+      .bind = PIPE_BIND_SAMPLER_VIEW,
+   };
+   if (!(tmp = pctx->screen->resource_create(pctx->screen, &templ)))
+      return false;
+   pctx->resource_copy_region(pctx, tmp, 0, 0, 0, 0, info->src.resource,
+                              info->src.level, &box);
+   b.src.resource = tmp;
+   b.src.level = 0;
+   b.src.box.x = info->src.box.width < 0 ? box.width : 0;
+   b.src.box.y = info->src.box.height < 0 ? box.height : 0;
+   b.src.box.z = 0;
+   pctx->blit(pctx, &b);
+   pipe_resource_reference(&tmp, NULL);
+   return true;
+}
+
 static void
 sgx_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 {
    struct sgx_context *ctx = sgx_context(pctx);
    uint64_t t0;
 
+   if (info->src.resource->nr_samples > 1 &&
+       sgx_blit_resolve(pctx, info))
+      return;
    if (sgx_blit_gpu(pctx, info)) {
       ctx->stats.blit_gpu++;
       return;

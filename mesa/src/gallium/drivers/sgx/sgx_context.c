@@ -247,6 +247,10 @@ sgx_context_destroy(struct pipe_context *pctx)
       for (unsigned i = 0; i < ctx->num_rts; i++)
          sgxws_rt_destroy(ctx->hw,
                           ctx->rts[i]); /* flushes this context's frame */
+      if (sgxws_bo_valid(&ctx->ms_zls)) {
+         sgxws_wait_idle(ctx->hw, 2000);
+         sgxws_bo_free(screen->dev, &ctx->ms_zls);
+      }
    }
    simple_mtx_unlock(&screen->lock);
 

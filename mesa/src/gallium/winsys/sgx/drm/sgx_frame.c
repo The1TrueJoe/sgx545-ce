@@ -1021,12 +1021,22 @@ rt_numbers(struct sgxws_rt_numbers *r, uint32_t w, uint32_t h)
 struct sgxws_rt *
 sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h)
 {
-   struct sgxws_rt *s = calloc(1, sizeof(*s));
+   return sgxws_rt_create_samples(c, w, h, 1);
+}
 
-   if (!s)
+struct sgxws_rt *
+sgxws_rt_create_samples(struct sgxws_ctx *c, uint32_t w, uint32_t h,
+                        unsigned samples)
+{
+   struct sgxws_rt *s;
+
+   if ((samples != 1 && samples != 4) || samples > c->dev->info.rt_max_samples)
+      return NULL;
+   if (!(s = calloc(1, sizeof(*s))))
       return NULL;
    s->w = w;
    s->h = h;
+   s->samples = samples;
    rt_numbers(&s->n, w, h);
    if (c->dev->kif->rt_init(c, s)) {
       free(s);
@@ -1075,7 +1085,7 @@ eot_program(struct sgxws_ctx *c)
 
       if (e->va == t->va && e->stride == t->stride && e->w == s->w &&
           e->h == s->h && e->pbe_format == t->pbe_format &&
-          e->t1_layout == t->t1_layout) {
+          e->t1_layout == t->t1_layout && e->samples == MAX2(t->samples, 1)) {
          pool->last_seq = sgxws_next_seq(c);
          return e->code;
       }
@@ -1120,7 +1130,12 @@ eot_program(struct sgxws_ctx *c)
       w1.y_max = s->h - 1;
    }
    sgx_pack(&pbe[2], PBE_STATE_WORD2, w2) /* b15 [D] */
-      w2.pitch = (t->stride - 1) >> 1;    /* [C] */
+   {
+      w2.pitch = (t->stride - 1) >> 1; /* [C] */
+      /* 4x: the 2x2 samples resolved into the pixel (STATE.md
+       * "Multisampling (4x)", ms4: 016f8000 -> 416f8000) */
+      w2.downscale = t->samples > 1 ? 1 : 0;
+   }
    sgx_pack(&pbe[3], PBE_STATE_WORD3, w3) /* [D] */
       w3.address = SGX_DEV_ADDR(t->va);
    sgx_pack(&side, PBE_SIDEBAND, sb)
@@ -1144,6 +1159,7 @@ eot_program(struct sgxws_ctx *c)
       .h = s->h,
       .pbe_format = t->pbe_format,
       .t1_layout = t->t1_layout,
+      .samples = MAX2(t->samples, 1),
       .code = p.va,
    };
    pool->last_seq = sgxws_next_seq(c);

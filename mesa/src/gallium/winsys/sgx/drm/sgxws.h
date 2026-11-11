@@ -84,6 +84,11 @@ struct sgxws_target {
     * depth and stencil live only within the render. */
    uint32_t zls_va;
    bool zls_load;
+   /* 4: the render target is 4x multisampled (its rt made with 4 samples):
+    * the PBE resolves each pixel's 2x2 samples (PBE word 2 downscale), and
+    * zls_va is then required, a buffer of 4x the bytes, a depth and a
+    * stencil per sample (STATE.md "Multisampling (4x)").  0 or 1: one. */
+   uint8_t samples;
 };
 
 /* A GPU reset since sgxws_reset_status last asked: this context's job
@@ -391,6 +396,9 @@ void sgxws_ctx_destroy(struct sgxws_ctx *c);
 
 enum sgxws_reset sgxws_reset_status(struct sgxws_ctx *c);
 struct sgxws_rt *sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h);
+/* the same with samples 1 or 4, up to sgxws_dev_info's rt_max_samples */
+struct sgxws_rt *sgxws_rt_create_samples(struct sgxws_ctx *c, uint32_t w,
+                                         uint32_t h, unsigned samples);
 void sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *rt);
 
 /*

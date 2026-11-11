@@ -232,9 +232,19 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
                         enum pipe_texture_target target, unsigned sample_count,
                         unsigned storage_sample_count, unsigned usage)
 {
-   if (sample_count > 1 ||
-       MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+   if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
       return false;
+   /* 4x: 2x2 samples a pixel, resolved by the PBE as each tile is stored
+    * (STATE.md "Multisampling (4x)"), when the kernel makes 4x targets.  A
+    * colour or depth/stencil renderbuffer only: its samples don't outlive
+    * the render, so nothing samples or displays them */
+   if (sample_count > 1) {
+      if (sample_count != 4 ||
+          sgx_screen(pscreen)->info->rt_max_samples < 4 ||
+          target != PIPE_TEXTURE_2D ||
+          (usage & ~(PIPE_BIND_RENDER_TARGET | PIPE_BIND_DEPTH_STENCIL)))
+         return false;
+   }
 
    if (usage &
        (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) {

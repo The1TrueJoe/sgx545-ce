@@ -736,7 +736,7 @@ psgx_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
       .context_handle = k->handle,
       .width = rt->w,
       .height = rt->h,
-      .samples = 1,
+      .samples = rt->samples ? rt->samples : 1,
    };
    int e =
       xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
@@ -857,7 +857,9 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    struct drm_powervr_sgx_ext_sgx545_render zls = {
       .base.name = DRM_POWERVR_SGX_EXT_SGX545_RENDER,
    };
-   uint32_t pad = sgxws_zls_pixels(c->rt->w, c->rt->h);
+   /* the ZLS buffer's depths: a float each, per sample (4x: 4 a pixel) */
+   uint32_t pad = sgxws_zls_pixels(c->rt->w, c->rt->h) *
+                  (c->rt->samples ? c->rt->samples : 1);
    struct drm_powervr_sgx_cmd_ta_kick kicks[TA_KICKS];
    struct shared_use sh[ARRAY_SIZE(c->use) + 1];
    struct drm_powervr_sgx_bo_ref refs[ARRAY_SIZE(sh)];
@@ -870,6 +872,14 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    uint64_t point, t0;
    int e = 0;
 
+   /* a 4x render keeps a depth and a stencil per sample: the kernel refuses
+    * one without its ZLS buffer (sgxws_target.samples) */
+   if (c->rt->samples > 1 &&
+       (!c->target.zls_va ||
+        !(dd->render_exts & BITFIELD64_BIT(DRM_POWERVR_SGX_EXT_SGX545_RENDER)))) {
+      mesa_loge("sgx: a 4x render without its ZLS buffer, not kicked");
+      return -EINVAL;
+   }
    /* an RT dataset of the context a reset replaced: made again (the old one
     * went with its context) */
    if (c->rt->ctx_gen != k->gen && !dd->lost) {

@@ -35,16 +35,19 @@
  * takes the place of the set used longest ago (never the frame being
  * recorded, which was taken last). */
 static struct sgxws_rt *
-get_rt(struct sgx_context *ctx, uint32_t w, uint32_t h, uint32_t va)
+get_rt(struct sgx_context *ctx, uint32_t w, uint32_t h, uint32_t va,
+       unsigned samples)
 {
    unsigned i, n = ctx->num_rts;
 
    for (i = 0; i < n; i++)
-      if (ctx->rt_w[i] == w && ctx->rt_h[i] == h && ctx->rt_va[i] == va)
+      if (ctx->rt_w[i] == w && ctx->rt_h[i] == h && ctx->rt_va[i] == va &&
+          ctx->rt_samples[i] == samples)
          goto found;
    if (n == SGX_MAX_RTS) {
       for (i = 0; i < n; i++)
-         if (ctx->rt_w[i] == w && ctx->rt_h[i] == h)
+         if (ctx->rt_w[i] == w && ctx->rt_h[i] == h &&
+             ctx->rt_samples[i] == samples)
             goto found;
       i = 0;
       for (unsigned j = 1; j < n; j++)
@@ -54,16 +57,18 @@ get_rt(struct sgx_context *ctx, uint32_t w, uint32_t h, uint32_t va)
    } else {
       i = ctx->num_rts++;
    }
-   ctx->rts[i] = sgxws_rt_create(ctx->hw, w, h);
+   ctx->rts[i] = sgxws_rt_create_samples(ctx->hw, w, h, samples);
    ctx->rt_va[i] = va;
    ctx->rt_w[i] = w;
    ctx->rt_h[i] = h;
+   ctx->rt_samples[i] = samples;
    if (!ctx->rts[i]) {
       /* none made: the place goes (the last set moves into it) */
       ctx->rts[i] = ctx->rts[--ctx->num_rts];
       ctx->rt_va[i] = ctx->rt_va[ctx->num_rts];
       ctx->rt_w[i] = ctx->rt_w[ctx->num_rts];
       ctx->rt_h[i] = ctx->rt_h[ctx->num_rts];
+      ctx->rt_samples[i] = ctx->rt_samples[ctx->num_rts];
       ctx->rt_used[i] = ctx->rt_used[ctx->num_rts];
       return NULL;
    }
@@ -75,14 +80,34 @@ found:
 /* The depth/stencil buffer of a render that starts now, kept across renders
  * (ZLS): its buffer, which the render stores at its end, loaded unless the
  * render starts with a clear of all of it (zs_cleared) or nothing was stored
- * at this size. */
+ * at this size.  A 4x render keeps a depth and a stencil per sample, 4x the
+ * bytes, and needs the buffer even with no depth buffer bound: then it's
+ * the context's own, never loaded (STATE.md "Multisampling (4x)": the DDK
+ * allocates one too). */
 static bool
 zls_target(struct sgx_context *ctx, struct sgx_resource *zs, uint32_t w,
-           uint32_t h, bool zs_cleared, struct sgxws_target *t)
+           uint32_t h, bool zs_cleared, unsigned samples, struct sgxws_target *t)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
-   uint32_t bytes = align(sgxws_zls_pixels(w, h) * 5, 4096);
+   uint32_t bytes = align(sgxws_zls_pixels(w, h) * 5 * samples, 4096);
 
+   if (!zs && samples > 1) {
+      if (sgxws_bo_valid(&ctx->ms_zls) && ctx->ms_zls_bytes < bytes) {
+         sgxws_flush(ctx->hw, 0);
+         ctx->recording = NULL;
+         sgxws_wait_idle(ctx->hw, 2000);
+         sgxws_bo_free(screen->dev, &ctx->ms_zls);
+      }
+      if (!sgxws_bo_valid(&ctx->ms_zls)) {
+         if (sgxws_bo_alloc(screen->dev, &ctx->ms_zls, SGXWS_MEM_ZLS, bytes,
+                            0x1000))
+            return false;
+         ctx->ms_zls_bytes = bytes;
+      }
+      t->zls_va = ctx->ms_zls.va;
+      t->zls_load = false;
+      return true;
+   }
    if (!zs || (sgx_drv_debug & SGX_DEBUG_NO_ZLS))
       return true;
    if (sgxws_bo_valid(&zs->zls) && zs->zls_bytes < bytes) {
@@ -136,7 +161,10 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
    t.scanout = res->wrapped;
    rw = u_minify(res->base.width0, cbuf->level);
    rh = u_minify(res->base.height0, cbuf->level);
-   rt = get_rt(ctx, rw, rh, t.va);
+   /* 4x: rendered at 2x2 samples a pixel and resolved as the tiles are
+    * stored, so the colour buffer holds the resolved pixels */
+   t.samples = MAX2(res->base.nr_samples, 1);
+   rt = get_rt(ctx, rw, rh, t.va, t.samples);
    if (!rt)
       return false;
    zs = ctx->framebuffer.zsbuf.texture
@@ -164,7 +192,7 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
       ctx->stats.fl_switch_clear += clears_only;
    }
    if (!sgx_recording(ctx)) {
-      if (!zls_target(ctx, zs, rw, rh, zs_cleared, &t))
+      if (!zls_target(ctx, zs, rw, rh, zs_cleared, t.samples, &t))
          return false;
       ctx->frame_clears = 0;
    }

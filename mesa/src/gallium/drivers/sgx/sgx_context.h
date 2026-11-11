@@ -170,6 +170,11 @@ struct sgx_context {
    struct sgxws_rt *rts[SGX_MAX_RTS];
    uint32_t rt_va[SGX_MAX_RTS]; /* the target each was made for */
    uint32_t rt_w[SGX_MAX_RTS], rt_h[SGX_MAX_RTS]; /* and its size */
+   uint8_t rt_samples[SGX_MAX_RTS];                /* and samples, 1 or 4 */
+   /* the depth and stencil of a 4x target with no depth buffer bound: a 4x
+    * render needs a ZLS buffer, one per sample (sgx_draw.c zls_target) */
+   struct sgxws_bo ms_zls;
+   uint32_t ms_zls_bytes;
    uint64_t rt_used[SGX_MAX_RTS], rt_clock;       /* when each was last taken */
    unsigned num_rts;
    struct sgx_resource *recording; /* the target of the frame being recorded */
