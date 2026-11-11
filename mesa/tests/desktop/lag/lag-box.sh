@@ -109,6 +109,7 @@ cleanup() {   # (busybox sh exits with the trap's status: keep the script's)
 	st=$?
 	[ -n "$perfpid" ] && kill -INT $perfpid 2>/dev/null
 	[ -n "$sampler" ] && kill $sampler 2>/dev/null
+	[ -n "$rsppid" ] && { kill $rsppid 2>/dev/null; for p in $(ps | grep '[r]spcheck' | awk '{print $1}'); do kill $p; done; }
 	sleep 2
 	sh "$OUT/rig/desktop-up.sh" "$R" stop > /dev/null 2>&1
 	rm -f /tmp/lag-perf-*.data
@@ -116,6 +117,13 @@ cleanup() {   # (busybox sh exits with the trap's status: keep the script's)
 }
 trap cleanup EXIT
 sleep 30
+# RSPCHECK=1: tests/crash/rspcheck (in the box's /tmp) beside the workloads,
+# two niced threads checking their own stack pointer
+rsppid=
+if [ -n "${RSPCHECK:-}" ] && [ -x /tmp/rspcheck ]; then
+	chroot "$R" nice -n 10 /tmp/rspcheck 2 100000 > "$OUT/rspcheck.txt" 2>&1 &
+	rsppid=$!
+fi
 # the session's D-Bus, for the clients started here (xfwm4 reads its settings
 # through Xfconf, on it)
 sess=$(pidof xfce4-session | cut -d' ' -f1)
