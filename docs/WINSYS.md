@@ -35,11 +35,13 @@ pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 ## Building the backends
 
 - **powervr_sgx** is always built. It needs the uAPI header in Mesa's
-  `include/drm-uapi/` and the stream packers `powervr_sgx_kmd_stream.h`, which
-  `mesa/build.sh` copies from `drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h`
-  and generates with `docs/uapi/gen_stream.py user` from
-  `docs/uapi/powervr_sgx_kmd_stream.xml`. Upstream, the header comes from drm-next
-  (`AGENTS.md` 3.1), and the generator's home is G26 in UAPI.md.
+  `include/drm-uapi/` and the stream packers `powervr_sgx_kmd_stream.h`.
+  `mesa/build.sh` copies the header from
+  `drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h`, and
+  `docs/uapi/powervr_sgx_kmd_stream.xml` with `docs/uapi/gen_stream.py` into
+  `src/sgx/kmd_stream`, where meson generates the packers (`gen_stream.py
+  user`), as csbgen does for the state words. Upstream, the header comes from
+  drm-next (`AGENTS.md` 3.1), and the generator's home is G26 in UAPI.md.
 - **services** is built only when `libpvr/` is in the winsys directory, which
   `mesa/build.sh` links in. It is compiled against `kernel/src`'s bridge headers
   with the kernel's defines, into objects of its own, so no other winsys file

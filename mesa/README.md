@@ -28,8 +28,8 @@ Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 | `tests/` | `sgx_eglinfo`, `sgx_es2gears` (es2gears' shaders), `sgx_cpugears` (fixed programs only); `sgx_texab.sh` and `sgx_blendab.sh`, A/B against the DDK on the EA3 |
 
 `build.sh` also links `kernel/src` into the tree as `include/sgx-kernel` (the
-bridge structures) and generates the fixed USSE programs from
-`tools/gen/mkusse.py`.
+bridge structures). The fixed USSE programs are assembly text in
+`src/sgx/compiler/sgx_fixed.c`, assembled when a context is created.
 
 ## Licensing boundary (AGENTS.md section 3.5)
 

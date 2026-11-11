@@ -41,11 +41,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "util/log.h"
+
 #include "sgx_core.h"
+#include "sgx_fixed.h"
 #include "sgxws.h"
 
-/* where a buffer lives: the SGX heap ids (the low byte of the DDK's heap ID),
- * which index sgxws_dev.heap_base */
+/* where a buffer lives: the SGX heap ids (the low byte of a services heap
+ * ID), which index sgxws_dev.heap_base */
 enum sgx_heap {
    SGX_HEAP_GENERAL = 0,
    SGX_HEAP_TADATA = 1,
@@ -77,7 +80,7 @@ struct sgxws_dev {
    int verbose;
    bool flush_rt; /* sgxws_dev_options */
    unsigned frame_gap_us;
-   bool state_always; /* SGX_STATE_ALWAYS: every draw its own programs and TA state */
+   bool state_always; /* every draw its own programs and TA state */
    unsigned slots;
    int dry_run;
    unsigned ta_split; /* sgxws_dev_options */
@@ -154,6 +157,7 @@ struct sgxws_ctx {
    int priority; /* sgxws_ctx_create's */
    /* program code, pixel [0] and vertex [1] (sgxws_usse_upload) */
    struct sgxws_code usse[2];
+   struct sgx_fixed_progs fixed; /* the fixed programs, assembled */
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
    /* the end-of-tile programs: two code pools used in turn, each emptied
     * once no render runs code from it */
@@ -172,7 +176,7 @@ struct sgxws_ctx {
    uint32_t idx;            /* identity 16-bit index buffer */
    uint32_t defaults;       /* what a fetch leaves out (vdm_fetch) */
    uint32_t idx_count;
-   uint32_t vdm_counter; /* the DDK's rotating TA-state buffer index */
+   uint32_t vdm_counter; /* the rotating TA-state buffer index */
    /* the frame being recorded */
    struct sgxws_rt *rt;
    struct sgxws_target target;
@@ -289,7 +293,7 @@ int sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
 int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo,
                         enum sgx_heap heap, uint32_t attribs, uint32_t size,
                         uint32_t align);
-/* the attributes the DDK gives a colour buffer it renders to */
+/* the attributes of a colour buffer the GPU renders to [D] */
 #define SGXWS_ATTRIBS_COLOR 0x10000003
 
 /* Upload a USSE program to the code heaps (phas.i targets in reloc[] are
@@ -302,8 +306,6 @@ void sgxws_vdm_end(struct sgxws_ctx *c);
 
 uint64_t sgxws_now_ns(void);
 uint32_t sgxws_f32(float x);
-
-#define sgxws_err(...) fprintf(stderr, "sgx: " __VA_ARGS__)
 
 #ifdef __cplusplus
 }

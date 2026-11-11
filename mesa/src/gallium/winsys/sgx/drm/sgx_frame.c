@@ -6,9 +6,9 @@
 /*
  * sgxws: SGX545 frames from GL-level parameters.  See sgx_frame.h.
  *
- * Tags in the comments follow docs/STATE.md: [C] proven by a replay,
- * [D] from a diff of captures, [G] guess (the value the DDK uses, meaning
- * unknown).
+ * Tags in the comments follow docs/STATE.md: [C] hardware (a replay or
+ * this driver on the board), [D] capture (the command streams of another
+ * driver's frames), [G] guess (a value that works, its meaning unknown).
  */
 
 #include <assert.h>
@@ -28,11 +28,10 @@
 #include "sgx_csb.h"
 #include "sgx_frame.h"
 #include "sgx_pds.h"
-#include "sgx_usse_progs.h"
 
-/* Placement: every PDS program the DDK makes starts on 32 bytes, every USSE
- * program GL allocates on 128, every DMA source on 32 [G: what the hardware
- * needs is untested] */
+/* Placement: PDS programs on 64 bytes, USSE programs on 128, DMA sources on
+ * 32 [D: captured PDS programs start on 32; G: what the hardware needs is
+ * untested] */
 #define PDS_ALIGN  0x40
 #define USSE_ALIGN 0x80
 #define DMA_ALIGN  0x20
@@ -43,7 +42,6 @@
 #define H_PDSPIXEL  SGX_HEAP_PDSPIXEL
 #define H_PDSVERTEX SGX_HEAP_PDSVERTEX
 
-#define ws_err sgxws_err
 #define f32    sgxws_f32
 
 uint32_t
@@ -119,8 +117,8 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
    switch (mem) {
    case SGXWS_MEM_RENDER_TARGET:
       e = d->core->sample_texture_heap_only
-             ? sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE,
-                                   SGXWS_ATTRIBS_COLOR, size, align)
+             ? sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
+                                   size, align)
              : -ENOMEM;
       if (e)
          e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR,
@@ -246,7 +244,7 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
    if (o + size > (r->hi ? r->hi : r->size)) {
       /* sgxws_draw keeps the frame rings from filling; this is a bug */
-      ws_err("ring at %#x full (%#x + %#x)\n", r->bo.va, o, size);
+      mesa_loge("sgx: ring at %#x full (%#x + %#x)", r->bo.va, o, size);
       abort();
    }
    r->used = o + size;
@@ -277,7 +275,7 @@ static void
 code_chunk_reset(struct sgxws_ctx *c, struct sgxws_code_chunk *k)
 {
    if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &k->r.bo))
-      ws_err("code chunk reset failed\n");
+      mesa_loge("sgx: code chunk reset failed");
    memset(k->r.bo.map, 0, k->r.size);
    k->r.used = 0x100;
    k->r.uploaded = 0;
@@ -343,7 +341,7 @@ sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
    uint32_t pc0;
 
    if (!k) {
-      ws_err("%s program code is full\n", vertex ? "vertex" : "pixel");
+      mesa_loge("sgx: %s program code is full", vertex ? "vertex" : "pixel");
       return 0;
    }
    k->live++;
@@ -376,7 +374,7 @@ sgxws_code_free(struct sgxws_ctx *c, uint32_t va)
          }
       }
    }
-   ws_err("freeing code at %#x that isn't a program\n", va);
+   mesa_loge("sgx: freeing code at %#x that isn't a program", va);
 }
 
 static void
@@ -390,7 +388,7 @@ code_fini(struct sgxws_ctx *c, struct sgxws_code *code)
 }
 
 static uint32_t
-usse_load(struct sgxws_ctx *c, const struct usse_prog *pr, bool vertex)
+usse_load(struct sgxws_ctx *c, const struct sgx_fixed_prog *pr, bool vertex)
 {
    return sgxws_usse_upload(c, vertex, pr->w, pr->n, pr->reloc, pr->nreloc);
 }
@@ -419,7 +417,7 @@ doutu_w1_pixel(bool iterations, bool samples)
                                                    .samples = samples});
 }
 
-/* LIMM rN, #v (STATE.md, from the DDK's end-of-tile generator) */
+/* LIMM rN, #v (ISA.md) */
 static void
 usse_limm(uint32_t *w, uint32_t v, uint32_t reg)
 {
@@ -559,9 +557,8 @@ pds_emit(struct sgxws_ring *r, const struct pds *p, uint32_t *rows_out)
    struct sgxws_pds_memo *mm = r->memo;
    struct sgxws_ptr m;
 
-   /* a program this slot already holds: its address again (the terrain's
-    * draws differ in their vertex data only, so one TA state for all of them,
-    * as the DDK's) */
+   /* a program this slot already holds: its address again (draws that
+    * differ in their vertex data only share one TA state) */
    if (mm) {
       for (unsigned i = 0; i < mm->n; i++) {
          const struct pds *q = &mm->e[i].p;
@@ -639,7 +636,7 @@ pds_sizeinfo(uint32_t units, uint32_t sec_dwords, uint32_t b25_28)
 }
 
 /*
- * pixel program (PDS.md "What the DDK generates"): DOUTU, then per iterated
+ * pixel program (PDS.md, program forms): DOUTU, then per iterated
  * input a DOUTI, and after a sampling DOUTI the DOUTT with the texture's four
  * words. A DOUTI takes its word from the high half of a DS1 pair (the first
  * shares DS1 pair 0 with the DOUTU) and a zero DS0 pair; a DOUTT takes T0, T1
@@ -685,7 +682,7 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1,
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
-/* secondary/state program (PDS.md "What the DDK generates"): an optional DOUTD
+/* secondary/state program (PDS.md, program forms): an optional DOUTD
  * of n dwords, then a task */
 static uint32_t
 pds_secondary(struct sgxws_ring *r, uint32_t src, uint32_t dma_ctrl,
@@ -723,10 +720,9 @@ dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secondary)
 
 /*
  * A secondary/state program for any amount of constants: one DOUTD per 16
- * dwords into consecutive secondary attributes, then the task.  The DDK
- * never DMAs more than 25 dwords at once, and every b22-23 it writes is
- * (dwords-1) & 3 (10/11/12/25 dwords: 1/2/3/0; 3-frame and uniform-array
- * captures), so the chunks carry that too [D for the values, G for the
+ * dwords into consecutive secondary attributes, then the task.  b22-23 of
+ * the DMA control word is (dwords-1) & 3 (10/11/12/25 dwords: 1/2/3/0), and
+ * no captured DMA moves more than 25 dwords [D for the values, G for the
  * meaning].
  */
 static uint32_t
@@ -772,16 +768,17 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
       e = sgxws_pvr_dev_create(fd, opts, &d);
 #endif
    if (e)
-      ws_err("no SGX kernel driver on fd %d (%s): %d\n", fd,
-             v ? v->name : "?", e);
+      mesa_loge("sgx: no SGX kernel driver on fd %d (%s): %d", fd,
+                v ? v->name : "?", e);
    drmFreeVersion(v);
    if (e)
       return NULL;
    /* a core this winsys has a description of (sgx_core.h), or none */
    d->core = sgx_core_lookup(d->info.core_id, d->info.core_revision);
    if (!d->core) {
-      ws_err("SGX core id %#x revision %#x has no description (sgx_core.c)\n",
-             d->info.core_id, d->info.core_revision);
+      mesa_loge(
+         "sgx: SGX core id %#x revision %#x has no description (sgx_core.c)",
+         d->info.core_id, d->info.core_revision);
       d->kif->dev_destroy(d);
       return NULL;
    }
@@ -794,7 +791,7 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
-   d->state_always = getenv("SGX_STATE_ALWAYS") && atoi(getenv("SGX_STATE_ALWAYS"));
+   d->state_always = opts->state_always;
    /* four: the next frame records while this one renders (a game's frame is
     * three renders); docs/PERF.md */
    d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 4;
@@ -833,9 +830,8 @@ static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
 static void
 ctx_free(struct sgxws_ctx *c)
 {
-   struct sgxws_ring *rings[] = {&c->pds_pix,     &c->pds_vtx,
-                                 &c->gen,         &c->vdm,
-                                 &c->eot_pool[0], &c->eot_pool[1]};
+   struct sgxws_ring *rings[] = {&c->pds_pix, &c->pds_vtx,     &c->gen,
+                                 &c->vdm,     &c->eot_pool[0], &c->eot_pool[1]};
 
    for (unsigned i = 0; i < sizeof(rings) / sizeof(rings[0]); i++)
       sgxws_bo_free(c->dev, &rings[i]->bo);
@@ -861,7 +857,7 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
    c->priority = priority;
    c->slots = d->slots;
    /* the kernel side first: under services, the kernel-data and sync
-    * allocations keep the DDK's order */
+    * allocations come before the rings */
    if (d->kif->ctx_init(c)) {
       free(c);
       return NULL;
@@ -886,27 +882,32 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
       c->pds_pix.memo = calloc(1, sizeof(*c->pds_pix.memo));
 
    /* fixed USSE programs */
-   c->empty_v = usse_load(c, &usse_empty, true);
-   c->empty_p = usse_load(c, &usse_empty, false);
-   c->copy_fs = usse_load(c, &usse_copy_fs, false);
-   c->clear_vs = usse_load(c, &usse_clear_vs, true);
-   c->vpgen_vs = usse_load(c, &usse_vpgen_vs, true);
-   c->pe_ptoff = usse_load(c, &usse_pe_ptoff, false);
-   c->pe_emit = usse_load(c, &usse_pe_emit, false);
+   char err[160];
+   if (!sgx_fixed_progs_build(&c->fixed, err, sizeof(err))) {
+      mesa_loge("sgx: %s", err);
+      goto fail;
+   }
+   c->empty_v = usse_load(c, &c->fixed.empty, true);
+   c->empty_p = usse_load(c, &c->fixed.empty, false);
+   c->copy_fs = usse_load(c, &c->fixed.copy_fs, false);
+   c->clear_vs = usse_load(c, &c->fixed.clear_vs, true);
+   c->vpgen_vs = usse_load(c, &c->fixed.vpgen_vs, true);
+   c->pe_ptoff = usse_load(c, &c->fixed.pe_ptoff, false);
+   c->pe_emit = usse_load(c, &c->fixed.pe_emit, false);
    {
       /* phas, the secondary programs' prologue up to its wdf, nop [end] */
       uint32_t w[12];
 
       w[0] = 0;
       w[1] = 0xfa440700;
-      memcpy(w + 2, usse_fs_uniform_sec.w + 2, 4 * 8);
+      memcpy(w + 2, c->fixed.fs_uniform_sec.w + 2, 4 * 8);
       w[10] = 0x00000000;
       w[11] = 0xf8040140;
       c->sec_wait = sgxws_usse_upload(c, false, w, 6, NULL, 0);
    }
    /* every state-emit length up front: the code rings are never reset */
    for (int n = 1; n <= 32; n++)
-      c->state_emit[n] = usse_load(c, usse_state_emit[n], true);
+      c->state_emit[n] = usse_load(c, &c->fixed.state_emit[n], true);
 
    /* VDM state programs that every frame ends with */
    c->empty_state = pds_secondary(&c->pds_vtx, 0, 0,
@@ -944,7 +945,7 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
    c->idx = p.va;
    c->idx_count = IDX_COUNT;
    /* what a fetch of n dwords leaves out, at + 16 n: (0, 0, 1), (0, 1), (1),
-    * each 16-byte aligned like every DMA source the DDK uses */
+    * each 16-byte aligned like every DMA source */
    p = ring_alloc(&c->gen, 64, DMA_ALIGN);
    memset(p.p, 0, 64);
    p.p[3] = p.p[6] = p.p[9] = p.p[12] = f32(1.0f);
@@ -966,7 +967,7 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
    return c;
 
 fail:
-   ws_err("context creation failed\n");
+   mesa_loge("sgx: context creation failed");
    ctx_free(c);
    return NULL;
 }
@@ -1087,9 +1088,10 @@ eot_program(struct sgxws_ctx *c)
       pool = &c->eot_pool[other];
       if (sgxws_seq_after(pool->last_seq, c->done_seq) &&
           sgxws_wait_seq(c, pool->last_seq, 2000))
-         ws_err("a render with the end-of-tile pool's code did not finish\n");
+         mesa_loge(
+            "sgx: a render with the end-of-tile pool's code did not finish");
       if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &pool->bo))
-         ws_err("end-of-tile pool reset failed\n");
+         mesa_loge("sgx: end-of-tile pool reset failed");
       memset(pool->bo.map, 0, pool->size);
       pool->used = 0x100;
       pool->uploaded = 0;
@@ -1350,7 +1352,7 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n,
    /* (the frame rings' headroom covers an object and its clip objects) */
    memset(b.p, 0, dma_dwords * 4);
    memcpy(b.p, blk, n * 4);
-   /* the DDK's static state program: tst; bra; doutd; tst; bra; doutd; doutu */
+   /* the VDM state program (PDS.md): tst; bra; doutd; tst; bra; doutd; doutu */
    pds_d0(&p, 0, b.va);
    pds_d0(&p, 1, dma_ctrl(dma_dwords, 0, kind, 1));
    pds_d0(&p, 2, 0);
@@ -1374,21 +1376,21 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n,
       memcpy(c->last_blk, blk, n * 4);
 }
 
-/* Vertices per USSE task: 128 / output dwords, at most 16, as the DDK counts
- * them (captures on the CE5300: 4 and 8 output dwords 16 vertices, 12 10,
- * 16 8, 20 6, 24 5; the input dwords don't count, 16 in still gives 16).
- * Half that (64 / output dwords) hung the GPU at 12 output dwords. The DDK's
- * clear draws 8 per task. */
+/* Vertices per USSE task: 128 / output dwords, at most 16 [D: 4 and 8
+ * output dwords 16 vertices, 12 10, 16 8, 20 6, 24 5; the input dwords don't
+ * count, 16 in still gives 16].  Half that (64 / output dwords) hung the GPU
+ * at 12 output dwords. */
 static uint32_t
 vertices_per_task(const struct sgx_core *core, uint32_t out_dwords)
 {
-   uint32_t o = (out_dwords + 3) & ~3u, v = core->vertex_task_dwords / (o ? o : 4);
+   uint32_t o = (out_dwords + 3) & ~3u,
+            v = core->vertex_task_dwords / (o ? o : 4);
 
    return v > core->vertex_task_max ? core->vertex_task_max : v;
 }
 
-/* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md
- * "What the DDK generates"): per stride a MUL16 of the index into ds1[0x32],
+/* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md,
+ * program forms): per stride a MUL16 of the index into ds1[0x32],
  * then each DMA adds it to its address; the defaults DMA plainly. */
 static void
 vdm_fetch(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx,
@@ -1723,8 +1725,8 @@ ispa(const struct sgxws_state *st, uint32_t prim, unsigned face)
 }
 
 /* MTE cull (STATE.md section 3): with gallium's front_ccw (st flips it for a
- * y-down window), 1 culls back faces of a CCW-front draw, 2 front faces;
- * checked against the DDK for cull back, front, and back with a CW front */
+ * y-down window), 1 culls back faces of a CCW-front draw, 2 front faces
+ * [D: cull back, front, and back with a CW front] */
 static uint32_t
 mte_ctrl(const struct sgxws_state *st)
 {
@@ -1923,10 +1925,9 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    blk[n++] = pds_word(c, sec, rows);
    /* PDS middle word: the fragment program's primary attributes in units
     * of 4 dwords, the secondaries [D]; b25-28 = 12 divided by the units
-    * (DDK captures with 0-5 vec4 varyings: units 1 1 1 2 2 3, b25-28 12 12 6 6
-    * 4; 0xb with one unit, as the DDK's uniform shader and every draw before
-    * had it). A program with more attributes than the word declares locks
-    * the GPU up (two F32 vec4 varyings). */
+    * [D: 0-5 vec4 varyings give units 1 1 1 2 2 3, b25-28 12 12 6 6 4; 0xb
+    * with one unit works too]. A program with more attributes than the word
+    * declares locks the GPU up (two F32 vec4 varyings). */
    {
       unsigned units = fs->pa_dwords > 4 ? (fs->pa_dwords + 3) / 4 : 1,
                per = 12 / units;
@@ -1979,16 +1980,16 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       h.ispc = st->stencil;
       h.ispa2 = h.ispb2 = h.ispc2 = st->stencil && st->two_sided;
    }
-   /* the DDK DMAs 25 dwords for a draw's block (kind 0) and 27 (kind 2) for the
-    * 22-word two-sided one; the header says where it ends. 25 for the two-sided
+   /* a draw's block is DMAed as 25 dwords (kind 0), the 22-word two-sided one
+    * as 27 (kind 2) [D]; the header says where it ends. 25 for the two-sided
     * block draws nothing or the wrong colours from run to run (dEQP
     * fragment_ops.random; 27 and 28 draw it, 24 and 25 don't) */
    {
       uint32_t dma = n + 5 > 25 ? n + 5 : 25;
 
-      /* the MTE has it from the last draw: no new state (the DDK's terrain
-       * draws share one block; a block per draw costs the TA in every tile
-       * the draw touches). SGX_STATE_ALWAYS=1 sends it anyway */
+      /* the MTE has it from the last draw: no new state (a block per draw
+       * costs the TA in every tile the draw touches). SGX_STATE_ALWAYS=1
+       * sends it anyway */
       if (c->dev->state_always || c->last_blk_n != n ||
           memcmp(c->last_blk, blk, n * 4)) {
          state_block(c, blk, n, dma, (dma - 1) & 3);
@@ -2203,8 +2204,8 @@ code_sync(struct sgxws_ctx *c)
 
 /*
  * Submitting a frame doesn't wait for its render: the next frame records into
- * the next ring slot meanwhile, as the DDK overlaps the CPU's next frame with
- * the GPU's last.  What the CPU must not touch while a render runs:
+ * the next ring slot meanwhile, so the CPU's next frame overlaps the GPU's
+ * last.  What the CPU must not touch while a render runs:
  *  - the ring slot it was recorded in, until it is done (the slot is used
  *    again c->slots submissions later);
  *  - under services, its render target's structures (render details, region
@@ -2228,7 +2229,7 @@ target_wait(struct sgxws_ctx *c)
    if (sgxws_seq_after(s->seq, c->done_seq) &&
        c->slot_kick[s->seq_slot].seq == s->seq &&
        slot_wait(c, s->seq_slot, 2000))
-      ws_err("the target's last render did not finish\n");
+      mesa_loge("sgx: the target's last render did not finish");
    c->ns_target_wait += sgxws_now_ns() - t0;
 }
 
@@ -2280,7 +2281,7 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    sgxws_vdm_end(c);
    target_wait(c);
    if ((e = code_sync(c)))
-      ws_err("shader upload refused: %d\n", e);
+      mesa_loge("sgx: shader upload refused: %d", e);
    else
       e = kif->kick(c, seq);
    c->kicks = seq;
@@ -2305,10 +2306,11 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
 
       if (kif->frame_info)
          kif->frame_info(c, info, sizeof(info));
-      ws_err("frame %u (target %#x %ux%u frame %u, kick %u, slot %u, %.3f s): "
-             "%u objects, %s, rc %d\n",
-             c->frames, (unsigned)c->target.va, s->w, s->h, s->frames, seq,
-             c->slot, sgxws_now_ns() / 1e9, c->draws, info, e);
+      mesa_logi(
+         "sgx: frame %u (target %#x %ux%u frame %u, kick %u, slot %u, %.3f s): "
+         "%u objects, %s, rc %d",
+         c->frames, (unsigned)c->target.va, s->w, s->h, s->frames, seq, c->slot,
+         sgxws_now_ns() / 1e9, c->draws, info, e);
    }
 
    s->frames++;
@@ -2325,9 +2327,10 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
       dt = sgxws_now_ns() - t0;
       c->ns_slot_wait += dt;
       if (c->dev->verbose && dt > 2000000)
-         ws_err("slot %u: waited %.1f ms for kick %u (last kick %u, done "
-                "%u)\n",
-                c->slot, dt / 1e6, waited, c->kicks, done);
+         mesa_logi(
+            "sgx: slot %u: waited %.1f ms for kick %u (last kick %u, done "
+            "%u)",
+            c->slot, dt / 1e6, waited, c->kicks, done);
    }
    ring_use_slot(&c->pds_pix, c->slot);
    ring_use_slot(&c->pds_vtx, c->slot);
@@ -2348,15 +2351,15 @@ sgxws_prog_builtin(struct sgxws_ctx *c, enum sgxws_builtin which,
    case SGXWS_VS_XY:
    case SGXWS_VS_XYZ:
       s->vertex = true;
-      s->code =
-         usse_load(c, which == SGXWS_VS_XY ? &usse_vs_xy : &usse_vs_xyz, true);
+      s->code = usse_load(
+         c, which == SGXWS_VS_XY ? &c->fixed.vs_xy : &c->fixed.vs_xyz, true);
       s->in_dwords = 4;
       s->out_dwords = 4;
       s->attr_dwords = which == SGXWS_VS_XY ? 2 : 3;
       break;
    case SGXWS_FS_UNIFORM:
-      s->sec = usse_load(c, &usse_fs_uniform_sec, false);
-      s->code = usse_load(c, &usse_fs_uniform, false);
+      s->sec = usse_load(c, &c->fixed.fs_uniform_sec, false);
+      s->code = usse_load(c, &c->fixed.fs_uniform, false);
       s->sec_dwords = SGXWS_FS_UNIFORM_DWORDS;
       break;
    }
@@ -2388,9 +2391,9 @@ uint32_t
 sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
                 unsigned temps)
 {
-   /* usse_vs_xy: [0] phas.i @p1, [1-4] the prologue, [7] phas.i @p2 [wait=2],
+   /* fixed.vs_xy: [0] phas.i @p1, [1-4] the prologue, [7] phas.i @p2 [wait=2],
     * [9] emit.t3 r0, #0, #0 [end f12 f10], [10-11] the epilogue phase */
-   const uint32_t *t = usse_vs_xy.w;
+   const uint32_t *t = c->fixed.vs_xy.w;
    uint32_t *w = malloc((count + 12) * 8), va;
    uint8_t reloc[2];
    unsigned n = 0, p1, p2;
@@ -2588,7 +2591,7 @@ upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
    if (discard_pa >= 0) {
       /*
        * A program that discards runs in two phases (ISA.md "Phases, visibility
-       * feedback and discard"; the DDK's words for `if (q.x > 0.0) discard`):
+       * feedback and discard"):
        * phase 0 = phas to phase 1, pcoeff (hands the ISP the depth plane
        * the PDS iterated into pa<n>..), the shader with the keep predicate in
        * p1, and atst8 [end] in place of the compiler's feedback nop (its last
@@ -2634,8 +2637,8 @@ upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
       wmask_words(blend->wmask, color_pa, b);
       put(w, &n, b[0], b[1]);
    } else if (!blend || !blend->blend) {
-      /* mov o0, pa<c> [skipinv end mask=1], as the DDK writes it (its uniform
-       * shader's mov o0, sa9); without the mask this mov locks the GPU up */
+      /* mov o0, pa<c> [skipinv end mask=1]; without the mask this mov locks
+       * the GPU up */
       put(w, &n, 0xa0000000u | color_pa << 7, 0x28851001u);
    }
    va = sgxws_usse_upload(c, false, w, n, NULL, 0);

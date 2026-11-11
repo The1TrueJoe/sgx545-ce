@@ -22,9 +22,11 @@
  *
  * Completion: every job signals the next point of one timeline syncobj per
  * device.  A context's kick waits on the point its job got; a buffer's CPU
- * wait on the point of the last job that wrote it.  Shared (imported or
- * exported) buffers are named in the job's BO list, so the kernel orders the
- * job against their other users through their dma-buf fences.
+ * wait on the point of the last job that wrote it.  The kernel does no
+ * implicit sync: for a shared (imported or exported) buffer the job waits on
+ * its dma-buf's fences (DMA_BUF_IOCTL_EXPORT_SYNC_FILE), and its own fence is
+ * added to them after the submit (DMA_BUF_IOCTL_IMPORT_SYNC_FILE), so the
+ * buffer's other users (X, the display, other clients) order against it.
  */
 
 #include <errno.h>
@@ -38,9 +40,10 @@
 
 #include <xf86drm.h>
 
+#include "drm-uapi/dma-buf.h"
 #include "drm-uapi/powervr_sgx_drm.h"
+#include "util/libsync.h"
 #include "util/macros.h"
-#include "util/u_debug.h"
 #include "util/simple_mtx.h"
 #include "util/vma.h"
 
@@ -74,8 +77,12 @@ struct psgx_dev {
    struct sgxws_dev base;
    int fd;
    bool lost;         /* -EIO: the GPU couldn't be recovered; nothing is sent */
+   unsigned pb_pages; /* the parameter buffer's size (0: the kernel's) */
    uint32_t vm;       /* VM context */
    uint32_t timeline; /* syncobj: every job signals the next point */
+   /* binary syncobjs: a job's wait on its shared buffers' dma-buf fences,
+    * and its fence for them */
+   uint32_t in_sync, out_sync;
    simple_mtx_t lock; /* the address space, the timeline's points, the zombies */
    struct util_vma_heap vma[16]; /* by heap id */
    bool has_heap[16];
@@ -93,8 +100,8 @@ struct psgx_bo {
    uint32_t va;
    enum sgx_heap heap;
    bool code;     /* a code object: map is a copy */
-   bool shared;   /* imported or exported: named in every job that uses it */
-   int dmabuf_fd; /* imported: the dma-buf, for its fences; else -1 */
+   bool shared;   /* imported or exported: synced through its dma-buf */
+   int dmabuf_fd; /* shared: the dma-buf, for its fences; else -1 */
    unsigned refs; /* imports of the same dma-buf */
    void *map;
    uint64_t write_point; /* the last job that writes it */
@@ -165,7 +172,7 @@ vm_unmap(struct psgx_dev *dd, uint64_t va, uint64_t size)
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &a);
 
    if (e)
-      sgxws_err("VM_UNMAP %#llx +%#llx failed: %d\n", (unsigned long long)va,
+      mesa_loge("sgx: VM_UNMAP %#llx +%#llx failed: %d", (unsigned long long)va,
                 (unsigned long long)size, e);
 }
 
@@ -272,7 +279,8 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    impl->dmabuf_fd = -1;
    impl->refs = 1;
    if ((e = create_bo(dd, bytes, code, &impl->handle))) {
-      sgxws_err("CREATE_BO %#llx failed: %d\n", (unsigned long long)bytes, e);
+      mesa_loge("sgx: CREATE_BO %#llx failed: %d", (unsigned long long)bytes,
+                e);
       free(impl);
       return e;
    }
@@ -300,13 +308,13 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    va = va_alloc(dd, heap, bytes, align > 0x1000 ? align : 0x1000);
    simple_mtx_unlock(&dd->lock);
    if (!va) {
-      sgxws_err("heap %u has no room for %#llx bytes\n", heap,
+      mesa_loge("sgx: heap %u has no room for %#llx bytes", heap,
                 (unsigned long long)bytes);
       e = -ENOMEM;
       goto fail_map;
    }
    if ((e = vm_map(dd, impl->handle, va, bytes))) {
-      sgxws_err("VM_MAP heap %u at %#llx +%#llx failed: %d\n", heap,
+      mesa_loge("sgx: VM_MAP heap %u at %#llx +%#llx failed: %d", heap,
                 (unsigned long long)va, (unsigned long long)bytes, e);
       simple_mtx_lock(&dd->lock);
       util_vma_heap_free(&dd->vma[heap], va, bytes);
@@ -318,7 +326,7 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    bo->va = impl->va;
    bo->map = impl->map;
    if (d->verbose)
-      sgxws_err("heap %2u %#010x +%#x%s\n", heap, bo->va, size,
+      mesa_logi("sgx: heap %2u %#010x +%#x%s", heap, bo->va, size,
                 code ? " (code)" : "");
    return 0;
 
@@ -434,7 +442,7 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
    impl->map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
    if (impl->map == MAP_FAILED) {
       e = -errno;
-      sgxws_err("mmap of an imported dma-buf failed: %d\n", e);
+      mesa_loge("sgx: mmap of an imported dma-buf failed: %d", e);
       goto fail;
    }
    simple_mtx_lock(&dd->lock);
@@ -449,7 +457,7 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
       goto fail_map;
    }
    if ((e = vm_map(dd, handle, va, bytes))) {
-      sgxws_err("VM_MAP of an imported dma-buf failed: %d\n", e);
+      mesa_loge("sgx: VM_MAP of an imported dma-buf failed: %d", e);
       simple_mtx_lock(&dd->lock);
       util_vma_heap_free(&dd->vma[impl->heap], va, bytes);
       simple_mtx_unlock(&dd->lock);
@@ -494,8 +502,12 @@ psgx_bo_export(struct sgxws_dev *d, const struct sgxws_bo *bo, int *fd)
    if (drmPrimeHandleToFD(ddev(d)->fd, impl->handle, DRM_CLOEXEC | DRM_RDWR,
                           fd))
       return -errno;
-   impl->shared = true;
-   return 0;
+   simple_mtx_lock(&ddev(d)->lock);
+   if (impl->dmabuf_fd < 0)
+      impl->dmabuf_fd = fcntl(*fd, F_DUPFD_CLOEXEC, 3);
+   impl->shared = impl->dmabuf_fd >= 0;
+   simple_mtx_unlock(&ddev(d)->lock);
+   return impl->shared ? 0 : -errno;
 }
 
 static int
@@ -535,8 +547,8 @@ psgx_code_upload(struct sgxws_dev *d, struct sgxws_bo *bo, uint32_t off,
    int e = xioctl(ddev(d)->fd, DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, &a);
 
    if (e)
-      sgxws_err(
-         "UPLOAD_CODE at %#x +%#x: %d, first refused instruction at %#x: %08x %08x\n",
+      mesa_loge(
+         "sgx: UPLOAD_CODE at %#x +%#x: %d, first refused instruction at %#x: %08x %08x",
          impl->va + off, size, e, impl->va + (uint32_t)a.bad_offset,
          ((uint32_t *)impl->map)[a.bad_offset / 4 + 1],
          ((uint32_t *)impl->map)[a.bad_offset / 4]);
@@ -572,10 +584,7 @@ create_context(struct psgx_dev *dd, int priority, uint32_t *handle)
                   : priority < 0 ? DRM_POWERVR_SGX_CTX_PRIORITY_LOW
                                  : DRM_POWERVR_SGX_CTX_PRIORITY_NORMAL,
       .vm_context_handle = dd->vm,
-      /* SGX_PB_PAGES: the parameter buffer's size, for experiments; the
-       * device's first render context sizes it for everyone (0: the
-       * kernel's default) */
-      .param_buffer_pages = (uint32_t)debug_get_num_option("SGX_PB_PAGES", 0),
+      .param_buffer_pages = dd->pb_pages,
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
 
@@ -583,7 +592,7 @@ create_context(struct psgx_dev *dd, int priority, uint32_t *handle)
    if ((e == -EACCES || e == -EPERM) && priority > 0)
       return create_context(dd, 0, handle);
    if (e)
-      sgxws_err("CREATE_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: CREATE_CONTEXT failed: %d", e);
    *handle = a.handle;
    return e;
 }
@@ -625,9 +634,10 @@ replace_context(struct sgxws_ctx *c)
    } else {
       c->reset = SGXWS_RESET_GUILTY;
    }
-   sgxws_err("GPU reset (%s): a new context; the frames in flight are lost\n",
-             c->reset == SGXWS_RESET_GUILTY ? "this context's job"
-                                            : "another context's job");
+   mesa_loge(
+      "sgx: GPU reset (%s): a new context; the frames in flight are lost",
+      c->reset == SGXWS_RESET_GUILTY ? "this context's job"
+                                     : "another context's job");
    xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
    if (create_context(dd, c->priority, &handle)) {
       dd->lost = true;
@@ -646,7 +656,7 @@ psgx_ctx_fini(struct sgxws_ctx *c)
    int e = xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &a);
 
    if (e)
-      sgxws_err("DESTROY_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: DESTROY_CONTEXT failed: %d", e);
    free(k);
 }
 
@@ -664,7 +674,7 @@ psgx_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
       xioctl(ddev(c->dev)->fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a);
 
    if (e) {
-      sgxws_err("CREATE_RT_DATASET %ux%u failed: %d\n", rt->w, rt->h, e);
+      mesa_loge("sgx: CREATE_RT_DATASET %ux%u failed: %d", rt->w, rt->h, e);
       return e;
    }
    rt->k = (void *)(uintptr_t)a.handle;
@@ -682,30 +692,80 @@ psgx_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
 
    /* one of a context a reset replaced went with it */
    if (e && rt->ctx_gen == ((struct psgx_ctx *)c->k)->gen)
-      sgxws_err("DESTROY_RT_DATASET failed: %d\n", e);
+      mesa_loge("sgx: DESTROY_RT_DATASET failed: %d", e);
 }
 
 /* ------------------------------------------------------------------ submission
  */
 
+struct shared_use {
+   struct psgx_bo *bo;
+   bool write;
+};
+
 static void
-add_ref(struct drm_powervr_sgx_bo_ref *refs, unsigned *n,
-        const struct sgxws_bo *bo, bool write)
+add_shared(struct shared_use *sh, unsigned *n, const struct sgxws_bo *bo,
+           bool write)
 {
    struct psgx_bo *impl = dbo(bo);
 
    if (!impl || !impl->shared)
       return;
    for (unsigned i = 0; i < *n; i++) {
-      if (refs[i].handle == impl->handle) {
-         refs[i].flags |= write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0;
+      if (sh[i].bo == impl) {
+         sh[i].write |= write;
          return;
       }
    }
-   refs[(*n)++] = (struct drm_powervr_sgx_bo_ref){
-      .handle = impl->handle,
-      .flags = write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
-   };
+   sh[(*n)++] = (struct shared_use){impl, write};
+}
+
+/* the fences a job must wait for on its shared buffers, in dd->in_sync:
+ * writers for a read, everyone for a write.  False when there are none. */
+static bool
+shared_wait(struct psgx_dev *dd, const struct shared_use *sh, unsigned n)
+{
+   int fd = -1;
+
+   for (unsigned i = 0; i < n; i++) {
+      struct dma_buf_export_sync_file x = {
+         .flags = sh[i].write ? DMA_BUF_SYNC_RW : DMA_BUF_SYNC_READ,
+         .fd = -1,
+      };
+
+      if (drmIoctl(sh[i].bo->dmabuf_fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &x))
+         continue;
+      sync_accumulate("sgx", &fd, x.fd);
+      close(x.fd);
+   }
+   if (fd < 0)
+      return false;
+   if (drmSyncobjImportSyncFile(dd->fd, dd->in_sync, fd)) {
+      close(fd);
+      return false;
+   }
+   close(fd);
+   return true;
+}
+
+/* the job's fence (dd->out_sync) onto its shared buffers */
+static void
+shared_signal(struct psgx_dev *dd, const struct shared_use *sh, unsigned n)
+{
+   int fd = -1;
+
+   if (!n || drmSyncobjExportSyncFile(dd->fd, dd->out_sync, &fd))
+      return;
+   for (unsigned i = 0; i < n; i++) {
+      struct dma_buf_import_sync_file x = {
+         .flags = sh[i].write ? DMA_BUF_SYNC_WRITE : DMA_BUF_SYNC_READ,
+         .fd = fd,
+      };
+
+      if (drmIoctl(sh[i].bo->dmabuf_fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &x))
+         mesa_loge("sgx: IMPORT_SYNC_FILE failed: %d", -errno);
+   }
+   close(fd);
 }
 
 static int
@@ -729,13 +789,14 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    uint64_t render_buf[SGX_KMD_STREAM_CMD_RENDER_length / 8];
    uint64_t kick_buf[TA_KICKS][(SGX_KMD_STREAM_CMD_TA_KICK_length + 7) / 8];
    struct drm_powervr_sgx_ta_kick kicks[TA_KICKS];
-   struct drm_powervr_sgx_bo_ref refs[ARRAY_SIZE(c->use) + 1];
-   struct drm_powervr_sgx_sync_op op;
+   struct shared_use sh[ARRAY_SIZE(c->use) + 1];
+   struct drm_powervr_sgx_bo_ref refs[ARRAY_SIZE(sh)];
+   struct drm_powervr_sgx_sync_op ops[3];
    struct drm_powervr_sgx_job job;
    struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
       .jobs = {.stride = sizeof(job), .count = 1, .array = (uintptr_t)&job},
    };
-   unsigned n_refs = 0;
+   unsigned n_sh = 0, n_ops = 0;
    uint64_t point, t0;
    int e = 0;
 
@@ -770,33 +831,55 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       render.stencil_addr = c->target.zls_va + pad * 4;
       render.zls_control = SGXWS_ZLS_BASE | SGXWS_ZLS_STORE |
                            (c->target.zls_load ? SGXWS_ZLS_LOAD : 0);
-      /* the 3D flags the DDK's renders with a depth buffer carry (its kick
-       * b19-20) */
+      /* the 3D flags of a render with a depth buffer (kick b19-20) [D] */
       render.flags_3d = 0x180;
    }
    SGX_KMD_STREAM_CMD_RENDER_pack(render_buf, &render);
 
    if (c->target.bo)
-      add_ref(refs, &n_refs, c->target.bo, true);
+      add_shared(sh, &n_sh, c->target.bo, true);
    for (unsigned i = 0; i < c->n_use; i++)
-      add_ref(refs, &n_refs, c->use[i].bo, c->use[i].write);
+      add_shared(sh, &n_sh, c->use[i].bo, c->use[i].write);
+
+   /* until the kernel flushes imports without it: the shared buffers'
+    * list, which is what makes it flush them around the job */
+   for (unsigned i = 0; i < n_sh; i++)
+      refs[i] = (struct drm_powervr_sgx_bo_ref){
+         .handle = sh[i].bo->handle,
+         .flags = sh[i].write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
+      };
 
    simple_mtx_lock(&dd->lock);
    point = ++dd->point;
-   op = (struct drm_powervr_sgx_sync_op){
+   ops[n_ops++] = (struct drm_powervr_sgx_sync_op){
       .handle = dd->timeline,
       .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ |
                DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL,
       .value = point,
    };
+   if (n_sh) {
+      if (shared_wait(dd, sh, n_sh))
+         ops[n_ops++] = (struct drm_powervr_sgx_sync_op){
+            .handle = dd->in_sync,
+            .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ |
+                     DRM_POWERVR_SGX_SYNC_OP_FLAG_WAIT,
+         };
+      ops[n_ops++] = (struct drm_powervr_sgx_sync_op){
+         .handle = dd->out_sync,
+         .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ |
+                  DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL,
+      };
+   }
    job = (struct drm_powervr_sgx_job){
       .type = DRM_POWERVR_SGX_JOB_TYPE_RENDER,
       .context_handle = k->handle,
       .cmd_stream = (uintptr_t)render_buf,
       .cmd_stream_len = SGX_KMD_STREAM_CMD_RENDER_length,
-      .sync_ops = {.stride = sizeof(op), .count = 1, .array = (uintptr_t)&op},
+      .sync_ops = {.stride = sizeof(ops[0]),
+                   .count = n_ops,
+                   .array = (uintptr_t)ops},
       .bo_refs = {.stride = sizeof(refs[0]),
-                  .count = n_refs,
+                  .count = n_sh,
                   .array = (uintptr_t)refs},
       .ta_kicks = {.stride = sizeof(kicks[0]),
                    .count = TA_KICKS,
@@ -812,17 +895,19 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       if (e == -ECANCELED) {
          replace_context(c);
       } else if (e == -EIO) {
-         sgxws_err("the GPU is lost: nothing more is rendered\n");
+         mesa_loge("sgx: the GPU is lost: nothing more is rendered");
          dd->lost = true;
          c->reset = SGXWS_RESET_LOST;
       } else {
-         sgxws_err("SUBMIT_JOBS failed: %d\n", e);
+         mesa_loge("sgx: SUBMIT_JOBS failed: %d", e);
       }
    }
    c->ns_kick += sgxws_now_ns() - t0;
    /* a job that never ran still gets its point, so waits on it end */
    if (e)
       drmSyncobjTimelineSignal(dd->fd, &dd->timeline, &point, 1);
+   else
+      shared_signal(dd, sh, n_sh);
    simple_mtx_unlock(&dd->lock);
 
    k->point[seq % c->slots] = point;
@@ -857,6 +942,8 @@ psgx_dev_destroy(struct sgxws_dev *d)
    simple_mtx_unlock(&dd->lock);
    xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &a);
    drmSyncobjDestroy(dd->fd, dd->timeline);
+   drmSyncobjDestroy(dd->fd, dd->in_sync);
+   drmSyncobjDestroy(dd->fd, dd->out_sync);
    for (unsigned i = 0; i < 16; i++)
       if (dd->has_heap[i])
          util_vma_heap_finish(&dd->vma[i]);
@@ -917,10 +1004,11 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
       return -ENOMEM;
    d->kif = &psgx_kif;
    dd->fd = fd;
+   dd->pb_pages = opts->pb_pages;
    if (opts->trace)
-      sgxws_err("SGX_TRACE is for the services driver; ignored\n");
+      mesa_logw("sgx: SGX_TRACE is for the services driver; ignored");
    if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) || !cap) {
-      sgxws_err("powervr_sgx without timeline syncobjs\n");
+      mesa_loge("sgx: powervr_sgx without timeline syncobjs");
       e = -ENODEV;
       goto fail;
    }
@@ -930,7 +1018,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
                       sizeof(li))) ||
        (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET, &hi,
                       sizeof(hi)))) {
-      sgxws_err("DEV_QUERY failed: %d\n", e);
+      mesa_loge("sgx: DEV_QUERY failed: %d", e);
       goto fail;
    }
    d->info.core_id = gi.core_id;
@@ -957,7 +1045,7 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    if (!dd->has_heap[SGX_HEAP_GENERAL] || !dd->has_heap[SGX_HEAP_PDSPIXEL] ||
        !dd->has_heap[SGX_HEAP_PDSVERTEX] || !dd->has_heap[SGX_HEAP_PIXSHADER] ||
        !dd->has_heap[SGX_HEAP_VTXSHADER]) {
-      sgxws_err("powervr_sgx lacks a heap the winsys needs\n");
+      mesa_loge("sgx: powervr_sgx lacks a heap the winsys needs");
       e = -ENODEV;
       goto fail_heaps;
    }
@@ -966,17 +1054,23 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    d->usse_base_index[1] =
       (uint8_t)heaps[DRM_POWERVR_SGX_HEAP_USSE_VERTEX].usse_base_index;
    if ((e = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT, &vm))) {
-      sgxws_err("CREATE_VM_CONTEXT failed: %d\n", e);
+      mesa_loge("sgx: CREATE_VM_CONTEXT failed: %d", e);
       goto fail_heaps;
    }
    dd->vm = vm.handle;
-   if ((e = drmSyncobjCreate(fd, 0, &dd->timeline))) {
+   if (drmSyncobjCreate(fd, 0, &dd->timeline) ||
+       drmSyncobjCreate(fd, 0, &dd->in_sync) ||
+       drmSyncobjCreate(fd, 0, &dd->out_sync)) {
       e = -errno;
+      if (dd->timeline)
+         drmSyncobjDestroy(fd, dd->timeline);
+      if (dd->in_sync)
+         drmSyncobjDestroy(fd, dd->in_sync);
       goto fail_vm;
    }
    simple_mtx_init(&dd->lock, mtx_plain);
    if (opts->verbose)
-      sgxws_err("powervr_sgx: core %#x rev %#x, firmware interface %u\n",
+      mesa_logi("sgx: powervr_sgx: core %#x rev %#x, firmware interface %u",
                 gi.core_id, gi.core_revision, gi.fw_interface_version);
    *out = d;
    return 0;

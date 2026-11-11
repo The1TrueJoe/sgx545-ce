@@ -65,6 +65,9 @@ DEBUG_GET_ONCE_NUM_OPTION(sgx_frame_gap_us, "SGX_FRAME_GAP_US", 0)
 /* frames in flight, 2 to 4 (4 by default): fewer trade throughput for
  * latency (an X desktop behind a game) */
 DEBUG_GET_ONCE_NUM_OPTION(sgx_slots, "SGX_SLOTS", 0)
+/* every draw its own programs and TA state; the parameter buffer's size */
+DEBUG_GET_ONCE_BOOL_OPTION(sgx_state_always, "SGX_STATE_ALWAYS", false)
+DEBUG_GET_ONCE_NUM_OPTION(sgx_pb_pages, "SGX_PB_PAGES", 0)
 
 const char *
 sgx_dump_code_dir(void)
@@ -353,6 +356,8 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       .dry_run = debug_get_option_sgx_dry_run(),
       .frame_gap_us = debug_get_option_sgx_frame_gap_us(),
       .slots = debug_get_option_sgx_slots(),
+      .state_always = debug_get_option_sgx_state_always(),
+      .pb_pages = debug_get_option_sgx_pb_pages(),
    };
 
    if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {

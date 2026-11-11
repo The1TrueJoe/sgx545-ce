@@ -16,7 +16,7 @@
  * (sgx_vs_for).
  *
  * Before the compiler (SGX_DEBUG=novs,nofs still selects this), a shader was
- * matched against the fixed programs the winsys carries (tools/gen/mkusse.py):
+ * matched against the fixed programs the winsys carries (sgx_fixed.c):
  * gl_Position = attribute 0, gl_FragColor = one vec4 uniform or constant.
  */
 
