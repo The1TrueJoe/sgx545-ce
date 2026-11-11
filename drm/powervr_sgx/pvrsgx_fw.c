@@ -706,6 +706,9 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			hc[HOSTCTL_INIT_STATUS], sgx_rd(sdev, SGX_CR_EVENT_STATUS),
 			sgx_rd(sdev, SGX_CR_BIF_INT_STAT), sgx_rd(sdev, SGX_CR_BIF_FAULT),
 			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
+		/* Memory only: a heartbeat of 0 means the event program never ran. */
+		if (sdev->family->event_pds_guessed)
+			pvrsgx_fw_dump_status_words(sdev);
 		return err;
 	}
 	if (sdev->family->event_pds_guessed)
