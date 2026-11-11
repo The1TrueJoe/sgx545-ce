@@ -2381,6 +2381,9 @@ backed above; this section only collects it.
     computes no p1, so `(p1)` would test whatever p1 holds: such a program
     needs h9-10 = 0, hi `0xfb340004` (**guess**: an atst8 with h9-10 = 0
     kills nothing, hardware, so depthf with 0 should keep every pixel).
+  - The clamp runs before the colour is written: the colour may be packed
+    over an input the depth reads (pa0), so depth_pa is past every register
+    the colour can take, `max(inputs, 1) + 1`.
   - The test: piglit `glsl-1.10-fragdepth` and `glsl-bug-22603` (a shader
     depth against a depth-tested second draw, read back as colour); the
     `*-copypixels` / `*-drawpixels` depth tests also need depth loaded and
@@ -2446,10 +2449,14 @@ backed above; this section only collects it.
 - **User clip planes**: `fdpc` writes a dot product and a clip-plane result
   to cp<n> (**oracle**; what the TA does with cp<n> is **unconfirmed**).
   Until that is traced, the driver can clip per pixel: st lowers the planes
-  to gl_ClipDistance in the vertex shader (`nir_lower_clip_vs`, as it does
-  for any driver without `clip_planes`), and `nir_lower_clip_fs` turns them
-  into a discard. That breaks line draws (any discarding program breaks a
-  lines frame, above). The DDK's ES1 `glClipPlanef` (PROBE_CLIPPLANE) shows
+  to clip distances in the vertex shader (`nir_lower_clip_vs`, as it does
+  for any driver without `clip_planes`: vec4 outputs `clipdist_0/1` at
+  CLIP_DIST0/1, the gl_ClipVertex store removed), and the compiler's
+  `sgx_lower_clip_fs` reads them back as inputs of the same names and
+  discards where an enabled one is negative (through derefs, so the driver
+  places the CLIP_DIST slots as it places the other built-in varyings).
+  That breaks line draws (any discarding program breaks a lines frame,
+  above), so lines go without it or as thin triangles. The DDK's ES1 `glClipPlanef` (PROBE_CLIPPLANE) shows
   the hardware path.
 - **Polygon stipple**: `nir_lower_pstipple_fs` (a 32x32 texture read at
   gl_FragCoord and a discard): nothing new for the compiler.
