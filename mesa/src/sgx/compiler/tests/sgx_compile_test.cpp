@@ -1741,4 +1741,43 @@ TEST_F(sgx_compile_test, fragment_tex_lod_fetch_size)
    EXPECT_TRUE(has("#255")) << disasm();
 }
 
+/* gl_VertexID / gl_InstanceID: PA registers after the attributes, which the
+ * driver's PDS program fills */
+TEST_F(sgx_compile_test, vertex_vertex_and_instance_id)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, x,
+                      nir_vec4(b, nir_load_vertex_id(b), nir_load_instance_id(b),
+                               nir_imm_int(b, 0), nir_imm_int(b, 0)));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.vertex_id_pa, 8);
+   EXPECT_EQ(out.instance_id_pa, 9);
+   EXPECT_TRUE(out.in_mask[0] >> 8 & 1);
+   EXPECT_TRUE(out.in_mask[0] >> 9 & 1);
+}
+
+/* a loop that only runs once (a switch from GLSL) has no branches */
+TEST_F(sgx_compile_test, vertex_loop_once_no_branches)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_variable *t =
+         nir_local_variable_create(b->impl, glsl_ivec4_type(), "t");
+      nir_store_var(b, t, x, 0xf);
+      nir_loop *l = nir_push_loop(b);
+      nir_push_if(b, nir_ieq(b, nir_channel(b, x, 0), nir_channel(b, y, 0)));
+      nir_store_var(b, t, y, 0xf);
+      nir_pop_if(b, NULL);
+      nir_jump(b, nir_jump_break);
+      nir_pop_loop(b, l);
+      return nir_load_var(b, t);
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_FALSE(has("br")) << disasm();
+}
+
 } /* namespace */

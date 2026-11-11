@@ -1661,6 +1661,18 @@ optimize_late(nir_shader *s)
    } while (progress);
 }
 
+static bool
+reads_intrinsic(nir_shader *s, nir_intrinsic_op op)
+{
+   nir_foreach_function_impl (impl, s)
+      nir_foreach_block (b, impl)
+         nir_foreach_instr (instr, b)
+            if (instr->type == nir_instr_type_intrinsic &&
+                nir_instr_as_intrinsic(instr)->intrinsic == op)
+               return true;
+   return false;
+}
+
 /* the varyings a (possibly linker-packed) variable holds: "packed:a,b" */
 static unsigned
 var_names(nir_variable *var, char names[][64], unsigned max)
@@ -1722,8 +1734,9 @@ assign_io(struct sgx_ctx *c)
 
    for (unsigned i = 0; i < 512; i++)
       c->in_reg[i] = c->out_reg[i] = -1;
+   c->vertex_id_pa = c->instance_id_pa = -1;
    if (s->info.stage == MESA_SHADER_VERTEX) {
-      unsigned next_attr = first_free(o, SGX_LAYOUT_ATTRIB);
+      unsigned next_attr = first_free(o, SGX_LAYOUT_ATTRIB), end = next_attr;
       nir_foreach_shader_in_variable (var, s) {
          int a = place(o, SGX_LAYOUT_ATTRIB, var->name);
          unsigned rows = type_size_vec4(var->type, false);
@@ -1745,7 +1758,14 @@ assign_io(struct sgx_ctx *c)
             for (unsigned j = 0; j < 4; j++)
                if ((var->data.location + r) * 4 + j < 512)
                   c->in_reg[(var->data.location + r) * 4 + j] = 4 * (a + r) + j;
+         end = MAX2(end, a + rows);
       }
+      /* gl_VertexID, gl_InstanceID: PA registers after the attributes */
+      unsigned sv = 4 * end;
+      if (reads_intrinsic(s, nir_intrinsic_load_vertex_id))
+         c->vertex_id_pa = sv++;
+      if (reads_intrinsic(s, nir_intrinsic_load_instance_id))
+         c->instance_id_pa = sv++;
       /* outputs: o0-o3 position, then the sets, then the point size */
       int obase[SGX_MAX_SETS];
       unsigned k = 4;
@@ -1846,20 +1866,22 @@ assign_io(struct sgx_ctx *c)
       }
       /* (a set is flat when every varying in it is: the linker packs flat
        * ones apart) */
-      bool flat[SGX_MAX_SETS] = {0}, smooth[SGX_MAX_SETS] = {0};
+      bool flat[SGX_MAX_SETS] = {0}, smooth[SGX_MAX_SETS] = {0},
+           linear[SGX_MAX_SETS] = {0};
       nir_foreach_shader_in_variable (var, s) {
          char names[8][64];
          unsigned l = var->data.location, n = var_names(var, names, 8);
          if (l < VARYING_SLOT_VAR0 || l >= 128)
             continue;
          bool f = var->data.interpolation == INTERP_MODE_FLAT;
+         bool np = var->data.interpolation == INTERP_MODE_NOPERSPECTIVE;
          for (unsigned i = 0; i < n; i++) {
             const struct sgx_varying *vy = find_varying(c->vary, names[i]);
             if (!vy)
                continue;
             for (unsigned r = 0; r < vy->rows && vy->set + r < SGX_MAX_SETS;
                  r++)
-               (f ? flat : smooth)[vy->set + r] = true;
+               (f ? flat : np ? linear : smooth)[vy->set + r] = true;
          }
       }
       /* gl_FragCoord first (list A iterator 14, F32),
@@ -1909,7 +1931,8 @@ assign_io(struct sgx_ctx *c)
          it->comps = MIN2(comps, 4);
          it->pa = pa;
          it->f16 = set16[set];
-         it->flat = flat[set] && !smooth[set];
+         it->flat = flat[set] && !smooth[set] && !linear[set];
+         it->noperspective = linear[set] && !smooth[set] && !flat[set];
          /* F16: in_reg holds SGX_IN_HALF | the half index */
          pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
          pa += it->f16 ? (it->comps + 1) / 2 : it->comps;
@@ -2045,6 +2068,9 @@ sgx_lower(struct sgx_ctx *c)
 
    /* the caller creates the shader with sgx_nir_options() */
    assert(s->options == &options);
+   /* (st lowers them; sgxc's frontend doesn't) */
+   if (c->opts->native_integers)
+      NIR_PASS(_, s, nir_lower_system_values);
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr,
             nir_metadata_control_flow, NULL);
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT &&

@@ -3311,6 +3311,18 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_load_front_face:
       front_face(c, v, &in->def);
       return;
+   case nir_intrinsic_load_vertex_id:
+   case nir_intrinsic_load_instance_id: {
+      int r = in->intrinsic == nir_intrinsic_load_vertex_id ? c->vertex_id_pa
+                                                           : c->instance_id_pa;
+      if (r < 0) {
+         sgx_fail(c, "%s has no register", nir_intrinsic_infos[in->intrinsic].name);
+         return;
+      }
+      v->kind = VAL_PA;
+      v->n = r;
+      return;
+   }
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
       v->kind = VAL_CONST;
@@ -4128,6 +4140,40 @@ find_if_compares(struct sgx_ctx *c, nir_function_impl *impl)
    find_if_compares_cf(c, &impl->body);
 }
 
+/* a jump in this list that leaves (or restarts) the loop around it */
+static bool
+has_jump(struct exec_list *list)
+{
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      if (node->type == nir_cf_node_block) {
+         nir_instr *last = nir_block_last_instr(nir_cf_node_as_block(node));
+         if (last && last->type == nir_instr_type_jump)
+            return true;
+      } else if (node->type == nir_cf_node_if) {
+         nir_if *nif = nir_cf_node_as_if(node);
+         if (has_jump(&nif->then_list) || has_jump(&nif->else_list))
+            return true;
+      }
+   }
+   return false;
+}
+
+/* a loop that runs once (GLSL's switch: loop { ...; break; }): its body
+ * ends in a break and has no other jump */
+static bool
+loop_once(nir_loop *nl)
+{
+   nir_block *last = nir_loop_last_block(nl);
+   nir_instr *j = nir_block_last_instr(last);
+   if (!j || j->type != nir_instr_type_jump ||
+       nir_instr_as_jump(j)->type != nir_jump_break)
+      return false;
+   nir_instr_remove(j);
+   bool once = !has_jump(&nl->body);
+   nir_instr_insert_after_block(last, j);
+   return once;
+}
+
 static void
 emit_cf_list(struct sgx_ctx *c, struct exec_list *list,
              struct loop_labels *loop)
@@ -4177,6 +4223,12 @@ emit_cf_list(struct sgx_ctx *c, struct exec_list *list,
       }
       case nir_cf_node_loop: {
          nir_loop *nl = nir_cf_node_as_loop(node);
+         if (c->opts->native_integers && loop_once(nl)) {
+            nir_instr *brk = nir_block_last_instr(nir_loop_last_block(nl));
+            _mesa_set_add(c->skip, brk);
+            emit_cf_list(c, &nl->body, loop);
+            break;
+         }
          struct loop_labels ll = {new_label(c), new_label(c)};
          emit_label(c, ll.head);
          emit_cf_list(c, &nl->body, &ll);

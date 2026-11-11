@@ -264,12 +264,15 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       o->sampler = it->sampler;
       o->pointcoord = it->pointcoord;
       o->flat = it->flat;
+      o->noperspective = it->noperspective;
    }
    out->colour_pa = c->colour_pa;
    out->discards = c->discards;
    out->writes_depth = c->has_depth;
    out->depth_pa = c->depth_pa;
    memcpy(out->in_mask, inmask, sizeof(inmask));
+   out->vertex_id_pa = frag ? -1 : c->vertex_id_pa;
+   out->instance_id_pa = frag ? -1 : c->instance_id_pa;
    for (unsigned i = 0; i < SGX_MAX_SETS; i++)
       out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];
    out->point_size = !frag && c->vary->point_size;

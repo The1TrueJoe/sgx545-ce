@@ -179,6 +179,10 @@ struct sgx_iter_info {
    /* not interpolated: every varying in the set is flat, the provoking
     * vertex's value (DOUTI b25-26 = 2; 3 interpolates) */
    uint8_t flat;
+   /* interpolated without perspective correction: every varying in the
+    * set is noperspective (DOUTI b25-26 = 0, the clear's and the
+    * background object's mode, is the candidate; not yet established) */
+   uint8_t noperspective;
 };
 
 /* A texture sample. A
@@ -242,6 +246,10 @@ struct sgx_shader {
    unsigned depth_pa;
    /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
    uint32_t in_mask[4];
+   /* vertex: the PA register the PDS loads with the vertex index (in0) and
+    * the instance index (in1), after the attributes; -1 when the program
+    * doesn't read it. As integers: native_integers programs only */
+   int vertex_id_pa, instance_id_pa;
    /* vertex: output set sizes (o4 on); 0 = unused */
    unsigned set_comps[SGX_MAX_SETS];
    bool point_size; /* vertex: writes the point size (f32), after the sets */

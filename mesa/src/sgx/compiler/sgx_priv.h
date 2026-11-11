@@ -108,6 +108,7 @@ struct sgx_iter {
    bool f16;        /* iterated as F16 (mediump), two components per register */
    bool pointcoord; /* gl_PointCoord (set 0) */
    bool flat;       /* every varying in the set flat */
+   bool noperspective; /* every varying in the set noperspective */
    unsigned sampler;
 };
 
@@ -144,6 +145,7 @@ struct sgx_ctx {
    /* register per I/O component: [location * 4 + component] (VARYING_SLOT_* /
     * VERT_ATTRIB_*), -1 none */
    int in_reg[512], out_reg[512];
+   int vertex_id_pa, instance_id_pa; /* -1: not read */
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
 #define SGX_ITER_FRAGCOORD 14 /* list A iterator of gl_FragCoord */
