@@ -446,6 +446,13 @@ int sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
                 const struct sgxws_target *t);
 bool sgxws_recording(struct sgxws_ctx *c);
 
+/* Hardware tests only (sgx_hwt): the frames begun from now on end their
+ * tiles with these words as the end-of-tile program instead of the
+ * target's (docs/GL3.md, test H1); NULL goes back to the target's.  At most
+ * SGXWS_EOT_OVERRIDE_WORDS. */
+#define SGXWS_EOT_OVERRIDE_WORDS 64
+void sgxws_hwt_eot(struct sgxws_ctx *c, const uint32_t *words, unsigned n);
+
 /* a shared buffer the frame being recorded reads (a texture) or writes */
 void sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write);
 /* whether the frame's list has room for these buffers as well (every shared

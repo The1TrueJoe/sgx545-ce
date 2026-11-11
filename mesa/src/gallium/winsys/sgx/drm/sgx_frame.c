@@ -1070,7 +1070,7 @@ eot_program(struct sgxws_ctx *c)
    uint32_t pbe[4], side;
    struct sgxws_ptr p;
 
-   for (unsigned i = 0; i < c->n_eot; i++) {
+   for (unsigned i = 0; i < c->n_eot && !c->n_eot_override; i++) {
       const struct sgxws_eot *e = &c->eot[i];
 
       if (e->va == t->va && e->stride == t->stride && e->w == s->w &&
@@ -1080,7 +1080,9 @@ eot_program(struct sgxws_ctx *c)
          return e->code;
       }
    }
-   if (c->n_eot == SGXWS_EOT_CACHE || ring_room(pool) < 7 * 8 + USSE_ALIGN) {
+   unsigned bytes = c->n_eot_override ? c->n_eot_override * 4 : 7 * 8;
+
+   if (c->n_eot == SGXWS_EOT_CACHE || ring_room(pool) < bytes + USSE_ALIGN) {
       /* the other pool, emptied once the last render that ran code from it is
        * done */
       unsigned other = !c->eot_cur;
@@ -1099,6 +1101,13 @@ eot_program(struct sgxws_ctx *c)
       c->n_eot = 0;
    }
 
+   if (c->n_eot_override) {
+      /* a hardware test's, not cached: the next test brings its own */
+      p = ring_alloc(pool, c->n_eot_override * 4, USSE_ALIGN);
+      memcpy(p.p, c->eot_override, c->n_eot_override * 4);
+      pool->last_seq = sgxws_next_seq(c);
+      return p.va;
+   }
    p = ring_alloc(pool, 7 * 8, USSE_ALIGN);
    sgx_pack(&pbe[0], PBE_STATE_WORD0, w0)
    { /* clip min [D] */
@@ -1139,6 +1148,14 @@ eot_program(struct sgxws_ctx *c)
    };
    pool->last_seq = sgxws_next_seq(c);
    return p.va;
+}
+
+void
+sgxws_hwt_eot(struct sgxws_ctx *c, const uint32_t *words, unsigned n)
+{
+   c->n_eot_override = words ? MIN2(n, SGXWS_EOT_OVERRIDE_WORDS) : 0;
+   if (words)
+      memcpy(c->eot_override, words, c->n_eot_override * 4);
 }
 
 /* The pixel event program (PDS.md "pixel-event program decoded"):

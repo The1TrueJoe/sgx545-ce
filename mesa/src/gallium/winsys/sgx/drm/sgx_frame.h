@@ -164,6 +164,9 @@ struct sgxws_ctx {
    struct sgxws_ring eot_pool[2];
    unsigned eot_cur, n_eot;
    struct sgxws_eot eot[SGXWS_EOT_CACHE];
+   /* a hardware test's own end-of-tile program (sgxws_hwt_eot) */
+   uint32_t eot_override[SGXWS_EOT_OVERRIDE_WORDS];
+   unsigned n_eot_override;
    /* fixed programs */
    uint32_t empty_v, empty_p, copy_fs, clear_vs, vpgen_vs, pe_ptoff, pe_emit,
       state_emit[33];
