@@ -48,7 +48,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M6 | debug options and experiment code | driver done (2026-11-11); winsys fields left (uapi-stream) | mesa-gallium, usse-compiler |
 | M7 | tests in Mesa's format (`ci/`) | suites in (2026-11-11); expectations to refresh from the next full runs | mesa-gallium |
 | M8 | `docs/drivers/sgx.rst` | written: mesa/docs/drivers/sgx.rst | mesa-gallium |
-| M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
+| M9 | build inputs from `tools/` | fixed programs done (2026-11-11): assembled in Mesa; the stream packer (gen_stream.py) left | uapi-stream, usse-compiler |
 | M10 | sRGB textures right (GL 2.1 is advertised) | render targets and one-level filtering fixed (b37aec7, 2a52bdf), on hardware next; border color open | mesa-gallium |
 
 ### M1. The upstream build is powervr_sgx only
@@ -191,9 +191,15 @@ Write it for Mesa's docs tree. It covers:
 
 ### M9. Build inputs from `tools/`
 
-`mesa/build.sh` generates `sgx_usse_progs.h` with `tools/gen/mkusse.py`.
-Upstream, the fixed programs are assembled by the compiler's encoder at build
-time (DRIVER-UPSTREAM.md §5.2, COMPILER-UPSTREAM.md).
+- **Done (2026-11-11).** The winsys's fixed programs (state emit, clear,
+  scissor objects, pixel events, the built-in shaders) are source text in
+  `winsys/sgx/drm/sgx_usse_progs.c`, assembled once per process by
+  `src/sgx/isa`'s assembler. `mesa/build.sh` no longer runs
+  `tools/gen/mkusse.py`. The words are the ones mkusse.py gave, all 369
+  (`meson test sgx_usse_progs` against `tests/usse_progs.txt`).
+- **Left.** `powervr_sgx_kmd_stream.h` comes from `docs/uapi/gen_stream.py`
+  out of the tree (uapi-stream): a generator in the tree, as csbgen is, or
+  the header checked in next to the uAPI header.
 
 ### M10. sRGB textures (must fix before the MR)
 

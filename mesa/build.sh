@@ -55,7 +55,6 @@ fi
 (cd "$HERE/src" && tar cf - .) | (cd "$TREE/src" && tar xf -)
 ln -sfn "$REPO/kernel/src" "$TREE/include/sgx-kernel"
 ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx/drm/libpvr"
-python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx/drm/sgx_usse_progs.h"
 # the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi) and the
 # packers for its command streams, from their one definition
 cp "$REPO/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h" "$TREE/include/drm-uapi/"
