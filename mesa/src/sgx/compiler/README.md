@@ -81,6 +81,7 @@ one optimization, so a miscompile can be bisected without rebuilding.
 | `noefochain` | storing a chain's last lane with the next efo chain's first instruction (keeps each chain's `mov oN, i1`) |
 | `nof16samples` | mediump texels returned as F16 by the sampler (unpacks RGBA8 instead) |
 | `nophases` | splitting a discarding fragment program at its visibility feedback (one phase instead) |
+| `flattenuniform` | ifs on a uniform condition flattened into selects (by default they stay branches) |
 | `nointerleave` | each PDS-only sample placed after a plain iteration of another set, for the driver's DOUTI merge |
 | `nodepf16` | F16 returns on dependent samples (when the driver sets `dep_f16_samples`) |
 | `noprojalone` | dropping the plain iteration of a varying only projected (TXP) samples read |
