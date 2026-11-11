@@ -93,12 +93,14 @@ chmod 755 /tmp/lag-wl.sh
 XENV="$xenv" sh "$OUT/rig/desktop-up.sh" "$R" start > "$OUT/up.txt" 2>&1 || { cat "$OUT/up.txt"; exit 1; }
 # whatever happens next, the box is left without X, perf or the sampler
 perfpid= sampler=
-cleanup() {
+cleanup() {   # (busybox sh exits with the trap's status: keep the script's)
+	st=$?
 	[ -n "$perfpid" ] && kill -INT $perfpid 2>/dev/null
 	[ -n "$sampler" ] && kill $sampler 2>/dev/null
 	sleep 2
 	sh "$OUT/rig/desktop-up.sh" "$R" stop > /dev/null 2>&1
 	rm -f /tmp/lag-perf-*.data
+	exit $st
 }
 trap cleanup EXIT
 sleep 30
@@ -127,13 +129,13 @@ echo > $T/trace
 echo 16384 > $T/buffer_size_kb
 echo mono > $T/trace_clock 2>/dev/null
 for e in pvrsgx_kick pvrsgx_job_done pvrsgx_render_kick; do
-	echo 1 > $T/events/powervr_sgx/$e/enable 2>/dev/null || echo "no tracepoint $e" >> "$OUT/notes.txt"
+	{ echo 1 > $T/events/powervr_sgx/$e/enable; } 2>/dev/null || echo "no tracepoint $e" >> "$OUT/notes.txt"
 done
 # the kick runs in the scheduler's worker: the submitting process comes from
 # drm_sched's own events (drm_sched_job in the submitter, drm_run_job in the
 # worker just before the kick)
 for e in drm_sched_job drm_run_job; do
-	echo 1 > $T/events/gpu_scheduler/$e/enable 2>/dev/null || echo "no tracepoint $e: GPU time by worker, not by process" >> "$OUT/notes.txt"
+	{ echo 1 > $T/events/gpu_scheduler/$e/enable; } 2>/dev/null || echo "no tracepoint $e: GPU time by worker, not by process" >> "$OUT/notes.txt"
 done
 echo 1 > $T/tracing_on
 
@@ -197,10 +199,10 @@ sampler=
 echo 0 > $T/tracing_on
 cat $T/trace > "$OUT/trace.txt"
 for e in pvrsgx_kick pvrsgx_job_done pvrsgx_render_kick; do
-	echo 0 > $T/events/powervr_sgx/$e/enable 2>/dev/null
+	{ echo 0 > $T/events/powervr_sgx/$e/enable; } 2>/dev/null
 done
 for e in drm_sched_job drm_run_job; do
-	echo 0 > $T/events/gpu_scheduler/$e/enable 2>/dev/null
+	{ echo 0 > $T/events/gpu_scheduler/$e/enable; } 2>/dev/null || true
 done
 echo 1408 > $T/buffer_size_kb
 cp "$R/var/log/Xorg.0.log" "$R/var/log/xorg.out" "$R/var/log/xfce.out" "$OUT/" 2>/dev/null
