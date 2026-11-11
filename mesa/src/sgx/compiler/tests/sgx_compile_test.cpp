@@ -1832,4 +1832,32 @@ TEST_F(sgx_compile_test, vertex_ubo_loads)
    EXPECT_TRUE(k0 && k1);
 }
 
+/* vertex texture fetch: a dependent smp at LOD 0 (c48), as the vendor
+ * compiler's vertex reads */
+TEST_F(sgx_compile_test, vertex_texture_fetch)
+{
+   native = true;
+   start(MESA_SHADER_VERTEX);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "p", VERT_ATTRIB_GENERIC0);
+   nir_variable *smp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+      "h", -1);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(),
+                           "gl_Position", VARYING_SLOT_POS);
+   nir_def *p = nir_load_var(&b, in);
+   nir_store_var(&b, pos,
+                 nir_fadd(&b, p, sample_dim(&b, smp, nir_trim_vector(&b, p, 2))),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_TRUE(out.samples[0].dependent);
+   char text[256];
+   sgx_disasm_one(out.samples[0].smp, NULL, text, sizeof(text));
+   EXPECT_NE(std::string(text).find(".lod"), std::string::npos) << text;
+   EXPECT_NE(std::string(text).find("c48"), std::string::npos) << text;
+}
+
 } /* namespace */

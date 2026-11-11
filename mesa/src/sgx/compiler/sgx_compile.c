@@ -4407,7 +4407,9 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
 static void
 emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
 {
-   if (c->stage != MESA_SHADER_FRAGMENT ||
+   bool vertex = c->stage == MESA_SHADER_VERTEX;
+   if ((!vertex && c->stage != MESA_SHADER_FRAGMENT) ||
+       (vertex && !c->opts->native_integers) ||
        c->n_samples >= ARRAY_SIZE(c->samples) ||
        c->n_iters >= ARRAY_SIZE(c->iters)) {
       sgx_fail(c, "texture sampling here is not supported yet");
@@ -4421,7 +4423,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    int pi = nir_tex_instr_src_index(tex, nir_tex_src_projector);
    if ((tex->op != nir_texop_tex && tex->op != nir_texop_txb &&
         tex->op != nir_texop_txl) ||
-       ci < 0) {
+       (vertex && tex->op == nir_texop_txb) || ci < 0) {
       sgx_fail(c, "texture op %d", tex->op);
       return;
    }
@@ -4482,7 +4484,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          sgx_fail(c, "projected read of a varying that isn't iterated");
          return;
       }
-   } else if (bi < 0 && pi < 0) {
+   } else if (!vertex && bi < 0 && pi < 0) {
       /* (a whole varying, or its first components; directly or through a
        * mov that takes its first components in order) */
       int pa = -1;
@@ -4637,6 +4639,11 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          s->lod = tex->op == nir_texop_txl ? 2 : 1;
          i->op[2] = const_f32(src_comp(c, &lb, 0));
          i->op[2].step = 0;
+         i->nops = 3;
+      } else if (vertex) {
+         /* no derivatives: the base level (ISA.md, vertex texture fetch) */
+         s->lod = 2;
+         i->op[2] = cref(48);
          i->nops = 3;
       }
       s->ins = i;
