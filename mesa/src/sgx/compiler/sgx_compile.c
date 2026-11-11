@@ -3359,6 +3359,20 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_load_ubo:
       emit_load_ubo(c, in, v);
       return;
+   case nir_intrinsic_load_output: {
+      /* the tile's packed word (rt_packed), for a blend in the program */
+      nir_io_semantics sem = nir_intrinsic_io_semantics(in);
+      if (c->stage != MESA_SHADER_FRAGMENT || !(c->opts->rt_packed & 1) ||
+          (sem.location != FRAG_RESULT_DATA0 &&
+           sem.location != FRAG_RESULT_COLOR) ||
+          in->def.num_components != 1 || in->def.bit_size != 32) {
+         sgx_fail(c, "output read");
+         return;
+      }
+      struct sgx_ref r = ref(SGX_F_O, 0);
+      set_refs(c, &in->def, &r, 1);
+      return;
+   }
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
       v->kind = VAL_CONST;
@@ -5426,6 +5440,16 @@ static void
 emit_color(struct sgx_ctx *c)
 {
    emit_depth(c);
+   if (c->opts->rt_packed & 1) {
+      /* the render target's word, packed by the driver */
+      struct sgx_ref x =
+         c->has_color && (c->color_mask & 1) ? c->color[0] : ref(SGX_F_K, 0);
+      c->colour_pa = 0;
+      struct sgx_ref dd[4] = {ref(SGX_F_PA, 0)}, ss[1][4] = {{x}};
+      emit_runs(c, SGX_OP_MOV, 1, dd, 1, ss, &NOF, 0);
+      emit_feedback(c);
+      return;
+   }
    if (c->c10_root) {
       struct c10_state st = {0};
       struct list_head *before = c->ins.prev;
@@ -7518,9 +7542,11 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       find_projected(c, impl);
       drop_sample_only_iters(c, impl);
       find_discard(c, impl);
-      find_c10(c, impl);
-      if (!c->c10_root)
-         find_colour_source(c, impl);
+      if (!(opts->rt_packed & 1)) {
+         find_c10(c, impl);
+         if (!c->c10_root)
+            find_colour_source(c, impl);
+      }
    }
    c->shadow_regs = _mesa_pointer_set_create(c);
    find_shadow_regs(c, impl);

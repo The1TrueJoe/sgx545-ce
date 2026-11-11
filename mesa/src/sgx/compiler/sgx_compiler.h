@@ -118,6 +118,12 @@ struct sgx_compile_options {
     * 0's GPU address; block n's is constant ubo_base_k + n (raw 32 bits).
     * 0: the program has no uniform blocks */
    unsigned ubo_base_k;
+   /* fragment: bit i, output i (FRAG_RESULT_DATA0 + i) arrives as one 32-bit
+    * word already packed for its render target's format (the driver's
+    * nir_format_pack): it goes to colour_pa as it is, with no BGRA8
+    * conversion. Only output 0 so far. A load_output of output 0 reads the
+    * tile's word in o0, for a blend the driver writes in NIR */
+   uint8_t rt_packed;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
