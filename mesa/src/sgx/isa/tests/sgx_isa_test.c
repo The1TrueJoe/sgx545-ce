@@ -11,7 +11,8 @@
  * with the line. A line "<a> == <b>" checks another spelling instead: a and
  * b must assemble to the same words. "hazard <text>" / "safe <text>" check
  * sgx_isa_coissue_hazard() on the instruction. setfc lines update the
- * format-control state the later lines are encoded and decoded with.
+ * format-control state the later lines are encoded and decoded with. The
+ * core checks run first.
  *
  *    sgx_isa_test [-t] [-f N] file...
  *
@@ -156,12 +157,55 @@ run_file(const char *path, bool table, unsigned *count)
       if (table)
          printf("%-60s ; %08x %08x\n", text, lo, hi);
 
-      if (I.opc == SGX_ISA_OPC_SETFC) {
-         fc.f16 = I.a[0];
-         fc.c10 = I.a[1];
-      }
+      sgx_isa_setfc(w, &fc);
    }
    fclose(f);
+   return fails;
+}
+
+/*
+ * The core: 0 and SGX545 encode and decode alike; a core sgx.xml doesn't
+ * describe is refused, and its words don't decode.
+ */
+static unsigned
+core_checks(unsigned *count)
+{
+   const char *text = "fmad r0, pa1, sa2, c52 [skipinv]";
+   struct sgx_isa_fc fc0 = SGX_ISA_FC_START, fc545 = fc0, fc535 = fc0;
+   struct sgx_isa_instr I;
+   char err[256], dis[512];
+   unsigned fails = 0;
+
+   fc545.core = SGX_ISA_CORE_SGX545;
+   fc535.core = 535;
+   if (!sgx_isa_asm_line(text, &I, err, sizeof(err))) {
+      fprintf(stderr, "core: %s: %s\n", text, err);
+      return 1;
+   }
+   (*count)++;
+   uint64_t w = sgx_isa_encode(&I, &fc0);
+   if (sgx_isa_encode(&I, &fc545) != w) {
+      fprintf(stderr, "core: core 545 encodes differently from 0\n");
+      fails++;
+   }
+   if (!sgx_disasm_one(w, &fc545, dis, sizeof(dis))) {
+      fprintf(stderr, "core: core 545 doesn't decode %s\n", text);
+      fails++;
+   }
+   if (sgx_isa_gpu_id(&fc0) != 54501 || sgx_isa_gpu_id(&fc545) != 54501) {
+      fprintf(stderr, "core: gpu_id %u, expected 54501\n",
+              sgx_isa_gpu_id(&fc0));
+      fails++;
+   }
+   if (!sgx_isa_core_supported(0) || !sgx_isa_core_supported(545) ||
+       sgx_isa_core_supported(535)) {
+      fprintf(stderr, "core: sgx_isa_core_supported() is wrong\n");
+      fails++;
+   }
+   if (sgx_disasm_one(w, &fc535, dis, sizeof(dis))) {
+      fprintf(stderr, "core: core 535 decodes %s\n", dis);
+      fails++;
+   }
    return fails;
 }
 
@@ -221,6 +265,7 @@ main(int argc, char **argv)
    bool table = false;
    unsigned fails = 0, count = 0;
 
+   fails += core_checks(&count);
    for (int i = 1; i < argc; i++) {
       if (!strcmp(argv[i], "-t")) {
          table = true;
