@@ -49,7 +49,8 @@ void *pvrsgx_obj_array_get(const struct drm_powervr_sgx_obj_array *in, u32 obj_s
 
 		if (err) {
 			kvfree(out);
-			return ERR_PTR(err);	/* -E2BIG: a larger struct this kernel doesn't know */
+			/* -E2BIG: a larger struct this kernel doesn't know. */
+			return ERR_PTR(err);
 		}
 	}
 	return out;
