@@ -834,7 +834,7 @@ vertex buffers), so CPU expansion costs a copy it already makes.
 | line strips and loops | lowered: no strip primitive; expanded to line lists | hardware |
 | scissor, viewport | native: region clip plus pass-type-3 objects | hardware |
 | user clip planes | native: `fdpc` into cp<n> in the vertex program, enabled by output select b0-5 | capture (`cp1`, `cp2`, `cp6`, `cpnone`) |
-| flat shading, provoking vertex | native: pixel PDS DOUTI b25-26 = 2 for the iteration; the last vertex provokes | hardware (`fl-douti` replay); capture (`flat`) |
+| flat shading, provoking vertex | native for the color source (0x20): pixel PDS DOUTI b25-26 = 2; coordinate sets have no flat switch; the last vertex provokes | hardware (`fl-douti` replay); capture (`flat`) |
 | logic ops | shader code: pass type 1, and the program combines its color with o0, which holds the destination | capture (`lxor`, `lcinv`) |
 | polygon mode LINE/POINT, edge flags | native for the mode: ISPA object type 5 draws a triangle's edges, 6 its vertices; edge flags not known | hardware (`ot5`, `ot6` replays) |
 | polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 5 or 6 draw is untried | unconfirmed |
