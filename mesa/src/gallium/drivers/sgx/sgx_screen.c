@@ -36,31 +36,16 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
    {"flushall", SGX_DEBUG_FLUSH_ALL, "submit at every flush (none deferred)"},
    {"novcache", SGX_DEBUG_NO_VCACHE, "no vertex cache"},
    {"nof16", SGX_DEBUG_NO_F16, "no F16/C10 fragment arithmetic"},
-   {"nodrvconsts", SGX_DEBUG_NO_DRV_CONSTS,
-    "no driver constant formats (lowp as F16, literals)"},
-   {"fsconst", SGX_DEBUG_FS_CONST,
-    "every fragment shader a constant colour per program (measuring)"},
-   {"attrs", SGX_DEBUG_ATTRS,
-    "describe the first draws with 5 or more vertex inputs, and clears"},
-   {"blits", SGX_DEBUG_BLITS, "describe every 255th blit and its caller"},
-   {"novs", SGX_DEBUG_NO_VS_COMPILER,
-    "the fixed vertex programs instead of the compiler"},
-   {"nofs", SGX_DEBUG_NO_FS_COMPILER,
-    "the fixed fragment programs instead of the compiler"},
    {"noffmediump", SGX_DEBUG_NO_FF_MEDIUMP,
     "fixed-function fragment programs at highp (F32), not mediump (F16; texture coordinates F32)"},
-   {"zerocopy", SGX_DEBUG_ZERO_COPY,
-    "vertex inputs DMAed where they are (buffers in place, client arrays copied as they are), where it isn't the default"},
    {"nozerocopy", SGX_DEBUG_NO_ZERO_COPY,
-    "vertex inputs gathered into f32 x 4, where zero-copy is the default"},
+    "vertex inputs gathered into f32 x 4, not DMAed where they are"},
    {"nolazyscanout", SGX_DEBUG_NO_LAZY_SCANOUT,
     "scanout buffers on a dumb-buffer display (kmsro) are the display's from the start, not when a KMS handle is asked for"},
    {"nophasesplit", SGX_DEBUG_NO_PHASE_SPLIT,
     "a fragment program that discards runs whole before the visibility feedback, not only its test (its colour after, as the DDK's alpha-tested programs)"},
    {"nof16samples", SGX_DEBUG_NO_F16_SAMPLES,
     "texels a mediump program reads come back RGBA8 to unpack, not F16 (T3 01028800)"},
-   {"tspf16", SGX_DEBUG_TSP_F16,
-    "the TSP precision mask marks the sets the fragment program iterates as F16 and doesn't sample from (the DDK's, for the TA's parameter buffer)"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -77,8 +62,6 @@ DEBUG_GET_ONCE_OPTION(sgx_trace, "SGX_TRACE", NULL)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_trace_kicks, "SGX_TRACE_KICKS", 0)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_dry_run, "SGX_DRY_RUN", -1)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_frame_gap_us, "SGX_FRAME_GAP_US", 0)
-DEBUG_GET_ONCE_NUM_OPTION(sgx_slots, "SGX_SLOTS", 0)
-DEBUG_GET_ONCE_NUM_OPTION(sgx_ta_split, "SGX_TA_SPLIT", 0)
 
 const char *
 sgx_dump_code_dir(void)
@@ -366,8 +349,6 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       .trace_kicks = debug_get_option_sgx_trace_kicks(),
       .dry_run = debug_get_option_sgx_dry_run(),
       .frame_gap_us = debug_get_option_sgx_frame_gap_us(),
-      .slots = debug_get_option_sgx_slots(),
-      .ta_split = debug_get_option_sgx_ta_split(),
    };
 
    if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {
@@ -382,8 +363,7 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
             screen->core->name);
    screen->ro = ro;
    screen->zero_copy =
-      !(sgx_drv_debug & SGX_DEBUG_NO_ZERO_COPY) &&
-      (screen->info->zero_copy || (sgx_drv_debug & SGX_DEBUG_ZERO_COPY));
+      !(sgx_drv_debug & SGX_DEBUG_NO_ZERO_COPY) && screen->info->zero_copy;
    simple_mtx_init(&screen->lock, mtx_plain);
    slab_create_parent(&screen->transfer_pool, sizeof(struct sgx_transfer), 16);
 

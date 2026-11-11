@@ -82,6 +82,24 @@ Environment variables
       no vertex cache
    ``nof16``
       no 16-bit fragment arithmetic
+   ``noffmediump``
+      fixed-function fragment programs at highp, not mediump
+   ``nof16samples``
+      texels a mediump program reads come back as RGBA8, not F16
+   ``nophasesplit``
+      a fragment program that discards runs whole before the visibility
+      test, not only up to its discard
+   ``nozerocopy``
+      vertex inputs gathered into f32 x 4, not DMAed where they are
+   ``nozls``
+      depth and stencil not kept across renders
+   ``nolazyscanout``
+      scanout buffers on a display-only device are the display's from the
+      start, not from the first request for a KMS handle
+
+``SGX_DRY_RUN``, ``SGX_FRAME_GAP_US``
+   For bisecting a GPU hang: frames from the n-th on are built but not sent;
+   the GPU is left idle this long after each render.
 
 ``SGX_COMPILER_DEBUG``
    Flags that each turn off one compiler optimization, for bisecting a

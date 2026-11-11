@@ -45,7 +45,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M3 | driver name for the family | decided: `sgx` (Joseph, 2026-11-08) | mesa-gallium |
 | M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
-| M6 | debug options and experiment code | partly | mesa-gallium, usse-compiler |
+| M6 | debug options and experiment code | driver done (2026-11-11); winsys fields left (uapi-stream) | mesa-gallium, usse-compiler |
 | M7 | tests in Mesa's format (`ci/`) | partly (ddk files moved, mg-perf 1b86487) | mesa-gallium |
 | M8 | `docs/drivers/sgx.rst` | written: mesa/docs/drivers/sgx.rst | mesa-gallium |
 | M9 | build inputs from `tools/` | open | uapi-stream, usse-compiler |
@@ -140,27 +140,25 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 
 ### M6. Debug options and experiment code
 
-- **Already right.** The driver's knobs are `debug_get_option` tables
-  (`SGX_DEBUG`, `SGX_DUMP_CODE`, `SGX_SLOTS`, …), with no raw
-  `getenv` and no paths.
-- **Keep, documented:** `nir`, `draw`, `sync`, `stats`, `serial`,
-  `hangabort`, `flushall`, `novcache`, `nof16`, `noffmediump`.
-- **Experiments to drop or fold in before upstream:**
-  - `fsconst` (a measuring aid);
-  - `attrs` and `blits` (one-off diagnostics, fold into `draw`);
-  - `novs`/`nofs` (fixed programs instead of the compiler; drop once the
-    compiler covers every program);
-  - `zerocopy`: make it the default or drop it, once its numbers are in
-    (docs/PERF.md);
-  - `nodrvconsts`;
-  - `SGX_FRAME_GAP_US`;
-  - `SGX_SLOTS`: pick the default and drop the knob.
-- **`setenv` in the driver.** `sgx_screen_create` sets
-  `MESA_GLSL_DISABLE_IO_OPT=1` so that GLSL linking keeps varyings unpacked,
-  letting the PDS do whole-vec4 texture reads. A driver must not set the
-  process environment. It needs a compiler option instead: a
-  `nir_shader_compiler_options` / io-options flag that keeps
-  `nir_opt_varyings` from packing across slots, or a Mesa patch adding one.
+- **Done in the driver (2026-11-11).**
+  - Dropped: `fsconst`, `nodrvconsts`, `tspf16`, `novs`/`nofs` (the fixed
+    programs stay as the fallback for a shader the compiler refuses),
+    `zerocopy` (the default on powervr_sgx; `nozerocopy` turns it off),
+    `SGX_SLOTS` (4) and `SGX_TA_SPLIT`.
+  - Folded into `draw`: `attrs` (the clear line now carries the frame's draw
+    count) and `blits`.
+  - Kept, documented in `sgx.rst`: `nir`, `draw`, `frame`, `sync`, `stats`,
+    `serial`, `hangabort`, `flushall`, `novcache`, `nof16`, `noffmediump`,
+    `nof16samples`, `nophasesplit`, `nozerocopy`, `nozls`, `nolazyscanout`;
+    `SGX_DRY_RUN` and `SGX_FRAME_GAP_US` for bisecting a hang.
+  - `MESA_GLSL_DISABLE_IO_OPT` is no longer set by the driver: the
+    compiler's NIR options carry `nir_io_dont_optimize_varyings`, a flag the
+    GLSL linker reads (patch 0006).
+- **Left.**
+  - Winsys (uapi-stream): the `slots`, `ta_split` and `tsp_f16` fields of
+    `sgxws_dev_options`/`sgxws_draw` are now always 0, and
+    `SGX_STATE_ALWAYS` and `SGX_PB_PAGES` read the environment directly.
+  - `flushrt` moves into the pvrsrvkm backend (M1).
 - **The compiler: done (1ba7774).** `SGX_DISABLE`, `SGX_F16_CONST` and
   `SGX_F16_ITER` are one `SGX_COMPILER_DEBUG` flag table (`nopa`, `noout`,
   ..., `nocoissue`, `nof16const`, `nof16iter`), read once per compile.

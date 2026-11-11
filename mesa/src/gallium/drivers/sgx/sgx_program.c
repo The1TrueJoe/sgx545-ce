@@ -646,7 +646,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    opts.f16 = ctx->base.screen->shader_caps[nir->info.stage].fp16;
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
-   opts.driver_consts = !(sgx_drv_debug & SGX_DEBUG_NO_DRV_CONSTS);
+   opts.driver_consts = true;
    if (vtx_fmt) {
       memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
@@ -1106,12 +1106,7 @@ sgx_create_shader_state(struct pipe_context *pctx,
    nir_foreach_shader_out_variable (var, nir)
       so->writes_psize |= var->data.location == VARYING_SLOT_PSIZ;
 
-   /* SGX_DEBUG=novs / nofs: the fixed programs for that stage */
-   bool fixed = sgx_drv_debug & (nir->info.stage == MESA_SHADER_VERTEX
-                                    ? SGX_DEBUG_NO_VS_COMPILER
-                                    : SGX_DEBUG_NO_FS_COMPILER);
-
-   if (!fixed && !nir->info.io_lowered) {
+   if (!nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
       bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, 0, NULL, false);
 
