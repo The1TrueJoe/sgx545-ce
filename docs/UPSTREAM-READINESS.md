@@ -198,6 +198,16 @@ Write it for Mesa's docs tree. It covers:
 Upstream, the fixed programs are assembled by the compiler's encoder at build
 time (DRIVER-UPSTREAM.md §5.2, COMPILER-UPSTREAM.md).
 
+Compiler half done (2026-11-11): `mesa/src/sgx/compiler/sgx_fixed.c` holds the
+programs as assembly text, and `sgx_fixed_progs_build()` assembles them
+through the isa library into a caller-owned struct. The result is
+byte-identical to `mkusse.py`'s header: 42 programs, relocations included.
+The gtest `sgx_fixed.programs_assemble` assembles and decodes every program.
+It runs when a context is created, not at build time: `mesa/build.sh`
+cross-compiles, and a build-time generator would need native builds of the
+isa library, mesautil and isaspec. Left for the winsys: call it, then drop
+`sgx_usse_progs.h` and `build.sh`'s call to `tools/gen/mkusse.py`.
+
 ### M10. sRGB textures (must fix before the MR)
 
 The driver advertises desktop GL 2.1, so `EXT_texture_sRGB` is offered. 2.1

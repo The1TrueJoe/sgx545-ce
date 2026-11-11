@@ -18,6 +18,7 @@
 #include "nir.h"
 #include "nir_builder.h"
 #include "sgx_compiler.h"
+#include "sgx_fixed.h"
 #include "sgx_isa.h"
 
 namespace {
@@ -694,6 +695,38 @@ TEST_F(sgx_compile_test, fragment_derivative_source_no_skipinv)
    ASSERT_NE(m, std::string::npos) << s;
    std::string line = s.substr(m, s.find('\n', m) - m);
    EXPECT_EQ(line.find("skipinv"), std::string::npos) << s;
+}
+
+/* the fixed programs: every line assembles, every word decodes, and each
+ * program's last instruction ends it */
+TEST(sgx_fixed, programs_assemble)
+{
+   struct sgx_fixed_progs p;
+   char err[256] = "";
+   ASSERT_TRUE(sgx_fixed_progs_build(&p, err, sizeof(err))) << err;
+   const struct sgx_fixed_prog *all[] = {
+      &p.empty,    &p.clear_vs,       &p.vpgen_vs,   &p.copy_fs,
+      &p.vs_xy,    &p.vs_xyz,         &p.fs_uniform_sec, &p.fs_uniform,
+      &p.pe_ptoff, &p.pe_emit,
+   };
+   std::vector<const struct sgx_fixed_prog *> v(all, all + ARRAY_SIZE(all));
+   for (unsigned n = 1; n <= 32; n++)
+      v.push_back(&p.state_emit[n]);
+   for (const struct sgx_fixed_prog *x : v) {
+      ASSERT_GT(x->n, 0u) << x->name;
+      for (unsigned i = 0; i < x->n; i++) {
+         char text[256];
+         uint64_t w = x->w[2 * i] | (uint64_t)x->w[2 * i + 1] << 32;
+         EXPECT_TRUE(sgx_disasm_one(w, NULL, text, sizeof(text))) << x->name;
+         if (i == x->n - 1)
+            EXPECT_NE(std::string(text).find("end"), std::string::npos)
+               << x->name << ": " << text;
+      }
+   }
+   /* phas.i @label: the target is the label's instruction, to relocate */
+   ASSERT_EQ(p.vs_xy.nreloc, 2u);
+   EXPECT_EQ(p.vs_xy.reloc[0], 0u);
+   EXPECT_EQ(p.vs_xy.reloc[1], 7u);
 }
 
 } /* namespace */

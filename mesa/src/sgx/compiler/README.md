@@ -13,6 +13,7 @@ constants, PDS iterations, texture samples, branches, register counts.
 | `sgx_compile.c` | instruction selection, the backend passes, register allocation, encoding |
 | `sgx_program.c` | the finished program: flat code with branch offsets resolved, the block list, samples, the constant and iteration lists |
 | `sgx_forms.c`, `sgx_forms.h` | the instruction forms the compiler emits, as `struct sgx_isa_instr` templates for the encoder |
+| `sgx_fixed.c`, `sgx_fixed.h` | the fixed programs a frame needs besides the shaders (state emit, clear, pixel events, ...), as assembly text assembled through `../isa` when a context is created |
 | `sgx_priv.h` | the backend IR (`sgx_ins`, `sgx_ref`, vregs) and the compile context |
 | `tests/sgx_compile_test.cpp` | end-to-end tests: shaders built with `nir_builder`, compiled, every word decoded |
 
