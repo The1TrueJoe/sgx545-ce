@@ -188,18 +188,27 @@ no geometry-shader path).
 | `texelFetch` | `sgx_lower_tex`: txl at (i + 0.5) / max(size >> lod, 1), marked `sgx_sample_info.fetch` for NEAREST state of its own | — |
 | `textureSize`, `textureGrad`, the Offset variants, rect, 1D | `sgx_lower_tex` (`nir_lower_tex`); txs is the driver's (`SGX_K_TEXSIZE`) | — |
 | isampler / usampler | an RGBA8 texel's bytes, sign- or zero-extended | — |
-| integer varyings | two sets per row, the 16-bit halves as exact floats (`sgx_varying.split`) | GL3.md: flat iteration only on the colour source |
+| integer varyings | two sets per row, the 16-bit halves as exact floats (`sgx_varying.split`) | flat: see below |
 | uniform blocks | `ld.a.d` from the address in constant `ubo_base_k + n`; word d at `#(d - 1)`, others through an `ima32` address | ld.a.d immediates: **hardware** (hwt_gaps) |
 | gl_VertexID, gl_InstanceID | the driver's (an input it gathers, a constant) | — |
 
 Checks: `tools/usc/usse_sim.py` models the integer and conversion forms the
 compiler emits, with ISA.md's semantics, and `tools/usc/int_check.py` runs
-43 GLSL 1.30 operations through sgxc and the model on random inputs; all
+42 GLSL 1.30 operations through sgxc and the model on random inputs; all
 give exact results. `tools/isa/hwt_int.py` checked the semantics the model
 assumes on a CE5300 board (2026-11-11): all 50 expected words, so every
 form in the table is now **hardware** (log in `tools/isa/hwt_out/open/`).
 What is not yet run on hardware is the compiled programs themselves
 (piglit's GLSL 1.30 tests, once the driver exposes integers).
+
+Flat varyings (planned with gl3-driver, GL3.md "Flat varyings"): only the TA's
+vertex-colour source iterates flat. The compiler will choose, in
+`sgx_assign_varyings` where both stages see the same order, the first flat
+varying that fits one vec4 (a split int or ivec2 counts as four floats), place
+it in the colour source and report it. The driver then makes every other flat
+varying's three vertices equal (a vertex-program variant over copied inputs),
+so they iterate in their sets. Built on usse-compiler's colour-source path once
+it lands; not done yet.
 
 Not done here: integer and float textures wider than RGBA8 (the texel
 formats are GL3.md's H2), MRT and packed render-target outputs (H1),
