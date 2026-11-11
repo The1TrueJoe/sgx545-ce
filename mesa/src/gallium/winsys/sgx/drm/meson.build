@@ -9,8 +9,8 @@ idep_sgx_ws = declare_dependency(
   dependencies : [idep_sgx_pds, idep_sgx_csb, idep_sgx_core],
 )
 
-# The powervr_sgx backend: the uAPI header (include/drm-uapi) and the stream
-# packers generated from its stream definitions (src/sgx/kmd_stream).
+# The powervr_sgx backend: the uAPI header (include/drm-uapi), its command
+# structs included.
 sgx_ws_files = files('sgx_frame.c', 'sgx_powervr_sgx.c')
 sgx_ws_args = []
 sgx_ws_inc = [include_directories('.')]
@@ -69,7 +69,7 @@ libsgxwinsys = static_library(
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
   dependencies : [idep_mesautil, dep_libdrm, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_core, idep_sgx_kmd_stream, idep_sgx_compiler],
+                  idep_sgx_core, idep_sgx_compiler],
   gnu_symbol_visibility : 'hidden',
 )
 
@@ -82,7 +82,7 @@ sgx_frame_test = executable(
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
   dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_core, idep_sgx_kmd_stream, idep_sgx_compiler],
+                  idep_sgx_core, idep_sgx_compiler],
   build_by_default : false,
   install : false,
 )
@@ -96,7 +96,7 @@ sgx_hwt = executable(
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
   dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_isa, idep_sgx_core, idep_sgx_kmd_stream,
+                  idep_sgx_isa, idep_sgx_core,
                   idep_sgx_compiler],
   build_by_default : false,
   install : false,
