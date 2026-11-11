@@ -528,6 +528,8 @@ Every row is **hardware**.
 | present via an authored blit | `present.py` words, crop to fb0 | 0 px off the prediction |
 | present by rendering into fb0 | PBE address = the fb0 wrap | fb0 = the DDK's readback, 0 px |
 | depth store across renders | fbd with ZLS control `0x0017101c` | depth buffer written (float32) |
+| replay control, `bbase` | rp-bctl, the capture replayed | 0 of 345600 px vs the DDK's readback |
+| wrap code 3 = mirror once | b33 / b32 vs the control | mirrored below 0, clamped above 1, per axis |
 
 ## 10. GPU blits of our own: copies, mipmaps, sub-rectangles
 
@@ -701,11 +703,27 @@ here. It saturates the coordinate and samples with CLAMP_TO_BORDER under
 LINEAR filtering, or CLAMP_TO_EDGE under NEAREST (`_mesa_lower_gl_clamp`).
 The driver only has to do CLAMP_TO_BORDER.
 
-**What the hardware offers isn't known yet.**
+**The texture unit has no border mode in its wrap codes, but code 3 is
+mirror once** (**hardware**: replays of `bbase` on a CE5300 board,
+2026-11-11, T0's wrap fields changed; the control replay matches the
+capture pixel for pixel).
 
 - T0's wrap fields are 3 bits each: S in b6-8, T in b3-5 (§5 of STATE.md).
-  The DDK's ES2 uses codes 0, 1 and 2 only (**capture**). Codes 3-7 have
-  never been seen or tried.
+  The DDK's ES2 uses codes 0, 1 and 2 only (**capture**).
+- **Code 3 is GL_MIRROR_CLAMP_TO_EDGE:** for a coordinate below 0 the
+  texture is mirrored once, and above 1 it clamps to the edge texel. With
+  S 3 and T 2 only the S axis mirrors, so the fields are per axis.
+- **Codes 4, 6 and 7 in S return (0, 0, 0, 0) for every sample**, inside
+  [0, 1] as well, whatever T is: one dump for all six of 44, 66, 77, 42, 62
+  and 72.
+- **Code 5 isn't a border either.** With both axes 5, every sample with
+  either coordinate inside [0, 1] returns 0; where both are outside it
+  returns the same corner texel as clamp to edge. With S 5 and T 2,
+  everything is 0 except where s is outside [0, 1] and t is below 0, which
+  reads the clamped texel at half its value and half its alpha.
+- No code returns a constant outside [0, 1] and the texels inside, so no
+  wrap code is a border mode, and the shader lowering below stays. 4-7 are
+  likely reserved (**guess**).
 - Mesa's driver for the next PowerVR generation
   (`src/imagination/csbgen/rogue/texstate.xml`) numbers its address modes
   the same way: 0 repeat, 1 mirror, 2 clamp to edge. It adds 3 mirror once
@@ -732,13 +750,11 @@ The driver only has to do CLAMP_TO_BORDER.
    of the screen in each axis.
 3. Replays of it with both wrap fields set to 3, 4, 5, 6 and 7, then S
    alone, each read back. A border mode shows a constant outside [0, 1]. A
-   mirror-once mode shows the texture mirrored once, then clamped. Queued on
-   the board: the T0 values are in the Gaps entry.
-4. If one code shows a constant: which constant, and whether it follows the
-   format. Then replays that change T0's unused bits (b0-2, b11, b13-16,
-   b27-29, b31) and T3's bits one at a time, looking for a field that moves
-   the color.
-5. If no code gives a border, the border is shader work (below).
+   mirror-once mode shows the texture mirrored once, then clamped. Done:
+   code 3 mirrors once, and no code is a border (above).
+4. If one code had shown a constant: which constant, and the T0 and T3 bit
+   scans for a field that moves it. Not needed, since none did.
+5. No code gives a border, so the border is shader work (below).
 
 **Lowering, if the texture unit has no border color.** Per sample, in the
 fragment shader, choose the border color (a uniform per sampler) for any
@@ -965,13 +981,11 @@ until it is confirmed.
 
 ### 13. Border color
 
-- Wrap codes 3-7 mean mirror-once, border and GL_CLAMP as on later PowerVR
-  cores → replays of `bbase` with T0 (`0x2e018038`) set to `07fe00d8`,
-  `07fe0120`, `07fe0168`, `07fe01b0`, `07fe01f8` (both fields 3-7), then
-  `07fe00d0`, `07fe0110`, `07fe0150`, `07fe0190`, `07fe01d0` (S 3-7, T 2),
-  each read back (§13, step 3; queued).
-- Where a border color comes from (a fixed set by format, a T word field, a
-  table in memory) → the step 4 replays, once a code shows a constant.
+- The open driver's CLAMP_TO_BORDER lowering (mesa-gallium c01cac3) has
+  not run on the board → piglit `texwrap formats bordercolor` on the
+  CE5300 board.
+- Code 3 under LINEAR filtering and on mipmapped textures → a `bbase`-style
+  replay with T0 b12 set and a mipmapped texture.
 
 ### 14. Volume textures
 

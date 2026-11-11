@@ -340,7 +340,7 @@ which groups follow, in this order:
 | 8 | ISPC follows (stencil enabled with a stencil buffer) | capture; hardware (open driver) |
 | 9 | ISPB follows: always set | capture |
 | 11 | two-sided stencil: set in both the front and the back group's ISPA | capture (`stencil2`, 2026-11-02); hardware (open driver) |
-| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord); see "Lines and points" | hardware (1, 4); capture (0, 3); hardware (open driver) |
+| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord), 5 a triangle's edges, 6 a triangle's vertices; 7 locks up the 3D core; see "Lines and points" and "Polygon mode and edge flags" | hardware (1, 4, 5, 6, 7); capture (0, 3); hardware (open driver) |
 | 20 | depth write disable | capture (`dmask0`); hardware (open driver) |
 | 21 | no color write: color mask 0, or a blend that keeps the destination (ZERO, ONE) | capture (`cmask0`); hardware (open driver) |
 | 22-24 | depth compare, `GL enum - 0x200`: never, less, equal, lequal, greater, notequal, gequal, always. Depth test off, or no depth buffer, gives always + no write (`0x01d00000`) | hardware (greater); capture (`dless`, `dnever`, `dgreater`); hardware (open driver) |
@@ -825,10 +825,10 @@ vertex buffers), so CPU expansion costs a copy it already makes.
 | line strips and loops | lowered: no strip primitive; expanded to line lists | hardware |
 | scissor, viewport | native: region clip plus pass-type-3 objects | hardware |
 | user clip planes | native: `fdpc` into cp<n> in the vertex program, enabled by output select b0-5 | capture (`cp1`, `cp2`, `cp6`, `cpnone`) |
-| flat shading, provoking vertex | the DDK changes three words, one of them the switch; the last vertex provokes | capture (`flat`) |
+| flat shading, provoking vertex | native: pixel PDS DOUTI b25-26 = 2 for the iteration; the last vertex provokes | hardware (`fl-douti` replay); capture (`flat`) |
 | logic ops | shader code: pass type 1, and the program combines its color with o0, which holds the destination | capture (`lxor`, `lcinv`) |
-| polygon mode LINE/POINT, edge flags | not known; lowering below | — |
-| polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 1 or 3 draw is untried | unconfirmed |
+| polygon mode LINE/POINT, edge flags | native for the mode: ISPA object type 5 draws a triangle's edges, 6 its vertices; edge flags not known | hardware (`ot5`, `ot6` replays) |
+| polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 5 or 6 draw is untried | unconfirmed |
 | line stipple | no ES state, so no DDK capture; no field known; lowered | — |
 | polygon stipple | no ES state, no field known; lowered | — |
 | line and point smooth | no hardware antialiasing seen: the DDK draws a smooth line 1 px wide and a smooth point 1 px | capture (`lsmooth`, `psmooth`) |
@@ -888,14 +888,18 @@ itself in its own buffer:
 | MTE control (TA block, `0x304110bc`) | `15555620` | `000003a0` |
 | VDM draw word 2 (`0x3e519038`) | `f0000000` | `f4000000` (b26) |
 
-DOUTI b25-26 was the candidate (PDS.md: 3 on every shader entry, 0 on the
-clear's and background's iterations), and it moves. Whether it alone flattens
-the color, or the MTE word or the draw word is the switch, is
-**unconfirmed**: replays of the base with one of the three changed at a time
-are queued on the board. The MTE control word was a constant in every ES2
+**DOUTI b25-26 alone is the switch** (**hardware**: replays of the base on a
+CE5300 board, 2026-11-11, one word changed at a time). With `25c10000` the
+dump matches the `flat` capture pixel for pixel. The MTE control and VDM
+draw word changes, alone, leave the dump byte for byte equal to the base.
+PDS.md has b25-26 as 3 on every shader entry and 0 on the clear's and
+background's iterations, so the field is the iteration's shading mode,
+with 2 flat and 3 smooth (Gouraud). It is set per iterated attribute, so a
+GLSL `flat` varying is the same switch on that one DOUTI. What the MTE
+control word and VDM b26 change is unknown; they make no difference to this
+draw (**guess**: provoking-vertex or vertex-reuse settings that only matter
+for strips and fans). The MTE control word was a constant in every ES2
 capture (`01555620`); what its other fields mean is still a **guess**.
-**Lowered, if none works alone:** unindex the draw on the CPU and give each
-primitive's three vertices the provoking vertex's flat attributes.
 
 **Logic ops.** The ES1 has `glLogicOp`. Blending and the color mask are
 fragment-shader code here (§3, "Blending and the color mask are shader
@@ -912,15 +916,24 @@ takes a logic op (`logicop_enable`, `logicop_func`). The compiler's side, a bitw
 the 16 ops after the color, is in ISA.md "What a compiler needs".
 
 **Polygon mode and edge flags.**
-- ISPA's object type values 2 and 5-7 have never been seen. Whether a
-  triangle list drawn with object type 1 (lines) or 3 (points) draws its
-  edges or vertices is untried. A line list drawn with type 0 draws nothing
-  (§3, "Lines and points").
-- Test: replays of the base triangle with ISPA b15-18 = 1, 2, 3, 5, 6 and 7,
-  read back.
-- **Lowered, if none draws edges:** `u_unfilled_indices` (gallium aux)
-  rewrites triangle indices into line or point lists. Edge flags need the
-  per-vertex flag at that step, which the CPU expansion has to hand.
+- **The ISP has polygon modes** (**hardware**: replays of the base triangle
+  on a CE5300 board, 2026-11-11, with ISPA b15-18 changed):
+  - Type 5 draws the triangle's three edges as 1-pixel lines, with the
+    vertex colors interpolated along each edge: 840 pixels, two per row
+    down the sides and the whole bottom row.
+  - Type 6 draws its three vertices as single pixels, in the vertex colors.
+  - Types 1 (lines), 2 and 3 (points) draw nothing from triangle data, as a
+    line list drawn with type 0 draws nothing (§3, "Lines and points").
+  - Type 7 locks up the 3D core (HWR, `lockup_3d`). Never write it.
+- So GL_LINE and GL_POINT polygon modes are type 5 and type 6 on a
+  triangle draw. Front and back can differ, since ISPA is per side.
+  Unknown: the width and size these draw with (1 pixel at line width 1 and
+  no point size here), whether ISPB's line width applies, whether a vertex
+  output gives type 6 a point size, and how edge flags are given. Polygon
+  offset on them is untried (the table above).
+- **Lowered, for edge flags:** `u_unfilled_indices` (gallium aux) rewrites
+  triangle indices into line or point lists, and the CPU expansion has the
+  per-vertex flag to hand.
 
 **Line and polygon stipple.**
 - **Line stipple:** the CPU already expands strips and loops, so it can add
@@ -1701,9 +1714,9 @@ until it is confirmed.
 - The Mesa driver's discard program does an alpha test once sa4 has another function and reference → a replay of a Mesa discard draw with sa4 poked to GREATER 0.5, checking against the DDK's `e1gt5` frame.
 - glLineWidth clamps to [1, 16] → captures with glLineWidth(0.5) and glLineWidth(20).
 - User clip planes: the `fdpc` result lands in output o8+n (or o7+n), and the TA clips lines as well as triangles against it → an open-stack frame with one `fdpc` into cp0 and output select `00093801`, drawing a triangle and a line across the plane, read back.
-- Flat shading: which of DOUTI b25-26 = 2, MTE control `000003a0` and VDM draw word 2 b26 is the switch → replays of `es1base` with `0x2e01802c` = `25c10000`, `0x304110bc` = `000003a0`, or `0x3e519038` = `f4000000`, one at a time (queued).
-- Polygon offset applies to object types 1 and 3 → a replay of `polyoff` with the draw turned into lines (ISPA type 1 and a prim-1 VDM list), reading back the depth test result against a second draw.
-- ISPA object types 2 and 5-7, and triangles drawn as type 1 or 3 → replays of `es1base` with ISPA `0x30411084` = `01d08200`, `01d10200`, `01d18200`, `01d28200`, `01d30200`, `01d38200`, read back (queued).
+- What MTE control `000003a0` and VDM draw word 2 b26 (the other two flat-capture changes) do → a flat triangle strip and fan, replayed with each word reverted.
+- Polygon offset applies to object types 1, 3, 5 and 6 → a replay of `polyoff` with the draw's ISPA type set to 5, reading back the depth test result against a second draw.
+- Object types 5 and 6: the line width and point size they draw with, and where edge flags go → replays of `es1base` with type 5 and ISPB width `40`, and with type 6 and a point-size output.
 
 ### §4 Render target
 
