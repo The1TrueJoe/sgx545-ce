@@ -126,6 +126,42 @@ var_used(nir_shader *nir, nir_variable *var, bool store)
    return false;
 }
 
+bool
+sgx_lower_clip_fs(nir_shader *fs, unsigned ucp_enables)
+{
+   ucp_enables &= 0xff;
+   if (fs->info.stage != MESA_SHADER_FRAGMENT || !ucp_enables)
+      return false;
+   nir_variable *in[2] = {NULL, NULL};
+   for (unsigned h = 0; h < 2; h++) {
+      if (!(ucp_enables & (0xfu << (4 * h))))
+         continue;
+      gl_varying_slot slot = VARYING_SLOT_CLIP_DIST0 + h;
+      in[h] = nir_find_variable_with_location(fs, nir_var_shader_in, slot);
+      if (!in[h]) {
+         char name[16];
+         snprintf(name, sizeof(name), "clipdist_%u", h);
+         in[h] =
+            nir_variable_create(fs, nir_var_shader_in, glsl_vec4_type(), name);
+         in[h]->data.location = slot;
+         in[h]->data.interpolation = INTERP_MODE_NONE;
+      }
+   }
+   nir_function_impl *impl = nir_shader_get_entrypoint(fs);
+   nir_builder b = nir_builder_at(nir_before_impl(impl));
+   nir_def *d[2] = {NULL, NULL}, *out = NULL;
+   for (unsigned h = 0; h < 2; h++)
+      if (in[h])
+         d[h] = nir_load_var(&b, in[h]);
+   u_foreach_bit (p, ucp_enables) {
+      nir_def *neg = nir_flt_imm(&b, nir_channel(&b, d[p / 4], p % 4), 0.0);
+      out = out ? nir_ior(&b, out, neg) : neg;
+   }
+   nir_discard_if(&b, out);
+   fs->info.fs.uses_discard = true;
+   return nir_progress(true, impl, nir_metadata_none);
+}
+
 void
 sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
 {

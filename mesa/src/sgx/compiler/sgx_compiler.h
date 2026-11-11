@@ -282,6 +282,15 @@ void sgx_assign_varyings(struct nir_shader *nir, bool vertex,
  * is. False: more than 10 x 4 components */
 bool sgx_pack_varyings(struct sgx_varyings *v);
 
+/* GL user clip planes per pixel: discard where any plane in ucp_enables
+ * has a negative distance. The distances are the vertex shader's clip
+ * distances (nir_lower_clip_vs: vec4 outputs clipdist_0 / clipdist_1 at
+ * VARYING_SLOT_CLIP_DIST0 / 1), read here as inputs of the same names and
+ * slots, which the driver places as it places other built-in varyings.
+ * Call on the fragment shader before sgx_compile. Not for lines: a
+ * discarding program breaks a lines draw. */
+bool sgx_lower_clip_fs(struct nir_shader *fs, unsigned ucp_enables);
+
 /* lower and compile; 0 on success */
 int sgx_compile(struct nir_shader *nir, const struct sgx_compile_options *opts,
                 const struct sgx_varyings *vary, struct sgx_shader *out);

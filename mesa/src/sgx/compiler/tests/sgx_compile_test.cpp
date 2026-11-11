@@ -1098,6 +1098,97 @@ TEST_F(sgx_deriv_test, fragment_derivative_mediump)
    check();
 }
 
+/* user clip planes per pixel: the clip distances as varyings, one
+ * discard on any negative enabled one. The driver moves the CLIP_DIST
+ * slots to VAR slots as it does other built-ins; here they are moved by
+ * hand */
+static void
+move_clipdist(nir_shader *s, nir_variable_mode mode)
+{
+   nir_foreach_variable_with_modes (v, s, mode)
+      if (v->data.location == VARYING_SLOT_CLIP_DIST0 ||
+          v->data.location == VARYING_SLOT_CLIP_DIST1)
+         v->data.location = VARYING_SLOT_VAR0 + 8 +
+                            (v->data.location - VARYING_SLOT_CLIP_DIST0);
+}
+
+TEST_F(sgx_compile_test, fragment_clip_planes_discard)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, in), 0xf);
+   ASSERT_TRUE(sgx_lower_clip_fs(b.shader, 0x3));
+   move_clipdist(b.shader, nir_var_shader_in);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.discards);
+   EXPECT_EQ(out.n_iters, 2u); /* v and clipdist_0 */
+}
+
+/* planes 0 and 5: both clip-distance vec4s */
+TEST_F(sgx_compile_test, fragment_clip_planes_two_sets)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, in), 0xf);
+   ASSERT_TRUE(sgx_lower_clip_fs(b.shader, 0x21));
+   move_clipdist(b.shader, nir_var_shader_in);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.discards);
+   EXPECT_EQ(out.n_iters, 3u);
+}
+
+/* no planes: nothing changes */
+TEST_F(sgx_compile_test, fragment_clip_planes_none)
+{
+   start(MESA_SHADER_FRAGMENT);
+   EXPECT_FALSE(sgx_lower_clip_fs(b.shader, 0));
+}
+
+/* gl_ClipVertex through st's lowering (nir_lower_clip_vs): the vertex
+ * shader writes the clip distances as an output set; the clip vertex
+ * itself isn't an output */
+TEST_F(sgx_compile_test, vertex_clip_vertex_to_clip_distances)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VERT_ATTRIB_GENERIC0);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
+                           VARYING_SLOT_POS);
+   nir_variable *cv = var(nir_var_shader_out, glsl_vec4_type(), "gl_ClipVertex",
+                          VARYING_SLOT_CLIP_VERTEX);
+   nir_def *p = nir_load_var(&b, a);
+   nir_store_var(&b, pos, p, 0xf);
+   nir_store_var(&b, cv, nir_fmul_imm(&b, p, 2.0), 0xf);
+   b.shader->info.outputs_written =
+      VARYING_BIT_POS | BITFIELD64_BIT(VARYING_SLOT_CLIP_VERTEX);
+
+   /* (st's STATE_CLIPPLANE; only the uniforms' names matter here) */
+   gl_state_index16 state[8][STATE_LENGTH] = {};
+   for (unsigned i = 0; i < 8; i++) {
+      state[i][0] = 1;
+      state[i][1] = i;
+   }
+   ASSERT_TRUE(nir_lower_clip_vs(b.shader, 0x3, true, false, state));
+   move_clipdist(b.shader, nir_var_shader_out);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   unsigned sets = 0;
+   for (unsigned i = 0; i < SGX_MAX_SETS; i++)
+      sets += out.set_comps[i] != 0;
+   EXPECT_EQ(sets, 1u) << disasm(); /* clipdist_0 */
+}
+
 /* the fixed programs: every line assembles, every word decodes, and each
  * program's last instruction ends it */
 TEST(sgx_fixed, programs_assemble)
