@@ -152,7 +152,6 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	unsigned long flags;
 	bool more, reap = false;
 	LIST_HEAD(finished);
-	u32 done = 0;
 	bool cookie;
 	u64 consumed;
 
@@ -165,7 +164,6 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 		if (!job_done(job, consumed))
 			break;
 		list_move_tail(&job->node, &finished);
-		done++;
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 			sdev->renders_done++;
 			reap = true;
@@ -300,7 +298,6 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	struct pvrsgx_device *sdev = bad->ctx->sdev;
 	bool fault = READ_ONCE(sdev->faulted), lost;
 	unsigned long flags;
-	u32 failed = 0;
 	int idx;
 
 	drm_sched_stop(&sdev->sched, sched_job);
@@ -326,7 +323,6 @@ fail:
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
-		failed++;
 		if (job->ctx != bad->ctx)
 			WRITE_ONCE(job->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_INNOCENT);
 		dma_fence_set_error(job->hw_fence, lost ? -ENODEV : job != bad ? -ECANCELED :
@@ -415,7 +411,6 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_job *job, *tmp;
 	unsigned long flags;
-	u32 failed = 0;
 
 	drm_sched_wqueue_stop(&sdev->sched);
 	/* A reset under way finishes first; one after this sees @lost. */
@@ -429,7 +424,6 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
-		failed++;
 		dma_fence_set_error(job->hw_fence, -ENODEV);
 		dma_fence_signal_locked(job->hw_fence);
 	}
