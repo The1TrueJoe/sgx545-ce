@@ -22,6 +22,8 @@
 #   nocomp    xfwm4 without its compositor
 #   xpresent  xfwm4 synced to vblank through Present, not GLX
 #   vbloff    xfwm4 not synced to vblank
+#   serial    the same with SGX_DEBUG=serial: each render waited for, no
+#             overlap (whether a render still in flight takes part)
 #   clientsw  X with glamor on the GPU, the clients (glmark2, xfwm4) on the
 #             root's own Mesa (llvmpipe): whether GPU clients take part
 #   software  no GPU: Xorg without glamor, clients on the root's own Mesa
@@ -68,6 +70,8 @@ xpresent) xfwm=--vblank=xpresent ;;
 vbloff) xfwm=--vblank=off ;;
 software) cenv="LIBGL_ALWAYS_SOFTWARE=1" xenv= ;;
 clientsw) cenv="LIBGL_ALWAYS_SOFTWARE=1" ;;   # X on the GPU, the clients on llvmpipe
+serial)   # every render waited for after its submit: nothing in flight when a buffer goes
+	cenv="$cenv,serial" xenv="$xenv,serial" ;;
 glamordebug) xenv="$xenv GLAMOR_DEBUG=1" ;;
 shaderdump)   # every linked GL program as a .shader_test, for the compiler
 	mkdir -p /tmp/lag-shaders; chmod 1777 /tmp/lag-shaders
