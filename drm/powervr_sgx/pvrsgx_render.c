@@ -255,16 +255,6 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 		return -ENOMEM;
 	ctx->render = r;
 
-	/*
-	 * No runtime suspend while a render context exists: a restart between a
-	 * client's renders can hang its next render (the debug-kernel desktop
-	 * hang). Until the restart path is fixed.
-	 */
-	err = pvrsgx_power_get(sdev);
-	if (err)
-		goto fail;
-	r->awake = true;
-
 	r->pb = dev_pb_get(sdev, req_pages);
 	if (IS_ERR(r->pb)) {
 		err = PTR_ERR(r->pb);
@@ -313,8 +303,6 @@ void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *c
 	pvrsgx_kobj_drop(sdev, &r->ccb);
 	pvrsgx_kobj_drop(sdev, &r->scratch);
 	pvrsgx_pb_put(r->pb);
-	if (r->awake)
-		pvrsgx_power_put(sdev, 1);
 	kfree(r);
 	ctx->render = NULL;
 }

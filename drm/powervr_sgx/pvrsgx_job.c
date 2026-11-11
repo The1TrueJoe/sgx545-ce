@@ -185,7 +185,6 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
 	mutex_unlock(&sdev->done_lock);
-	pvrsgx_power_put(sdev, done);
 
 	if (reap)
 		queue_work(system_dfl_wq, &sdev->reap_work);
@@ -244,13 +243,11 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		err = -ENODEV;
 		goto fail;
 	}
-	err = sdev->lost ? -EIO : pvrsgx_power_get(sdev);
-	if (!err && sdev->lost) {
-		pvrsgx_power_put(sdev, 1);
+	/* The job's runtime-PM reference, taken at submit, keeps the GPU up. */
+	if (sdev->lost) {
 		err = -EIO;
-	}
-	if (err)
 		goto fail_exit;
+	}
 
 	pvrsgx_prime_flush(job, false);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
@@ -271,7 +268,6 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	}
 	if (err) {
 		drm_err_ratelimited(&sdev->base, "job not sent to the microkernel (%d)\n", err);
-		pvrsgx_power_put(sdev, 1);
 		goto fail_exit;
 	}
 
@@ -361,13 +357,15 @@ fail:
 out:
 	mutex_unlock(&sdev->reset_lock);
 	drm_sched_start(&sdev->sched, 0);
-	pvrsgx_power_put(sdev, failed);
 	return DRM_GPU_SCHED_STAT_RESET;
 }
 
 static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 {
 	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
+
+	/* Taken at submit, for this job: the GPU may suspend once none are left. */
+	pvrsgx_power_put(job->ctx->sdev, 1);
 
 	drm_sched_job_cleanup(sched_job);
 	dma_fence_put(job->hw_fence);
@@ -437,7 +435,6 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	mutex_unlock(&sdev->done_lock);
-	pvrsgx_power_put(sdev, failed);
 	drm_sched_wqueue_start(&sdev->sched);
 }
 
@@ -851,6 +848,7 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	struct job_args *ja;
 	struct drm_exec exec;
 	u32 n = args->jobs.count;
+	u32 pushed = 0;
 	int err = 0;
 
 	args->failed_index = ~0u;
@@ -874,6 +872,18 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 						  &ja[i].job->nimports);
 		if (err) {
 			args->failed_index = i;
+			goto out;
+		}
+	}
+
+	/*
+	 * One runtime-PM reference per job, from here, where resuming may sleep and
+	 * no reservation is held, to free_job; never in run_job, which signals fences.
+	 */
+	for (u32 i = 0; i < n; i++) {
+		err = pvrsgx_power_get(to_pvrsgx_device(drm));
+		if (err) {
+			pvrsgx_power_put(to_pvrsgx_device(drm), i);
 			goto out;
 		}
 	}
@@ -956,10 +966,13 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 		ja[i].nbos = 0;
 		drm_sched_entity_push_job(&job->base);
 		ja[i].job = NULL;	/* the scheduler owns it now */
+		pushed++;
 	}
 
 out_exec:
 	drm_exec_fini(&exec);
+	/* The references of the jobs not pushed. */
+	pvrsgx_power_put(to_pvrsgx_device(drm), n - pushed);
 out:
 	for (u32 i = 0; i < n; i++)
 		job_args_fini(&ja[i]);
