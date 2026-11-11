@@ -185,7 +185,7 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
   in the shape lima's and freedreno's have. Mesa CI runs them once a farm
   has the hardware.
 - **To do.** Refresh the expectations from full runs of the current dev
-  (dEQP mustpass and piglit gpu on the EA1), with `mesa/tests/deqp/mkexpect.py`.
+  (dEQP mustpass and piglit gpu on a CE5300 board), with `mesa/tests/deqp/mkexpect.py`.
 
 ### M8. `docs/drivers/sgx.rst`
 
