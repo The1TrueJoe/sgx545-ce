@@ -191,7 +191,15 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 
 static void ring_init(struct sgx_dev *d, struct sgx_ring *r, uint32_t heap, uint32_t size)
 {
-	bo_alloc(d, &r->bo, heap, 0x1, size, 0x1000);
+	uint32_t align = 0x1000;
+
+#ifdef SGXGEN_DRM
+	/* a code ring stays in one code base window, as UPLOAD_CODE wants of an object with
+	 * phas.i targets: aligned to its (power of two) size, as Mesa's code chunks are */
+	if (heap == H_PIXSHADER || heap == H_VTXSHADER)
+		align = size;
+#endif
+	bo_alloc(d, &r->bo, heap, 0x1, size, align);
 	/* nothing at a heap's first byte: a PDS state word or DOUTU word of 0 would name it */
 	r->used = 0x100;
 }
