@@ -157,6 +157,7 @@ struct sgxws_ctx {
    int priority; /* sgxws_ctx_create's */
    /* program code, pixel [0] and vertex [1] (sgxws_usse_upload) */
    struct sgxws_code usse[2];
+   struct sgxws_bo code_hold[2]; /* SGX_CODE_WINDOW's space below the code */
    struct sgx_fixed_progs fixed; /* the fixed programs, assembled */
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
    /* the end-of-tile programs: two code pools used in turn, each emptied
@@ -297,7 +298,8 @@ int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo,
 #define SGXWS_ATTRIBS_COLOR 0x10000003
 
 /* Upload a USSE program to the code heaps (phas.i targets in reloc[] are
- * relocated to where it lands).  Returns its device address. */
+ * relocated to where it lands, within its 512 KiB code base window).
+ * Returns its device address. */
 uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
                            unsigned n, const uint8_t *reloc, unsigned nreloc);
 
