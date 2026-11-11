@@ -2,7 +2,7 @@
 
 `tools/gen` builds a whole SGX545 frame from GL-level parameters and submits it
 through the native x86_64 services bridge. Nothing is read from a capture,
-and no Imagination library is loaded. On the EA3 (2026-10-28) it draws the
+and no Imagination library is loaded. On a CE5300 board (2026-10-28) it draws the
 probe's reference triangle **pixel for pixel**: the back buffer's md5 is
 `56f8466a…`, the same as the blob's frame. Nine variations also match the
 blob's own rendering of the same scene with 0 pixels different (**hardware**,
@@ -20,7 +20,7 @@ blob's own rendering of the same scene with 0 pixels different (**hardware**,
 | `mkusse.py` | the fixed USSE programs as assembly text, put through `tools/isa/hw.py`'s encoder into `usse_progs.h` at build time |
 | `frame.c` | `frame`: a command-line scene (clear, triangles, depth, viewport, cull) → one frame, dumped |
 | `fakepvr.c` | a stand-in for the kernel driver: `frame-fake` runs the generator on any x86_64 Linux and writes a trace, touching no GPU |
-| `vary.py` | runs `frame` and the blob probe on the EA3 for each test case and compares them |
+| `vary.py` | runs `frame` and the blob probe on the CE5300 board for each test case and compares them |
 | `cmpcap.py` | compares a generated frame's trace with a DDK capture structure by structure, addresses mapped |
 | `build.sh` | builds `frame` and `frame-fake` (static, musl, zig cc) |
 
@@ -34,11 +34,11 @@ capture of the DDK. `mkreplay.py` now reads x86_64 traces.
 Facts about what a generated word is, and what the hardware did with it, carry
 one of these tags:
 
-- **hardware**: a generated frame ran on the EA3 and its output was checked,
+- **hardware**: a generated frame ran on the CE5300 board and its output was checked,
   by `vary.py` against the DDK's rendering of the same scene ("Hardware
   results"), or as the lockup or timeout the text describes. **open driver**
   means the open driver (`mesa/src/gallium/winsys/sgx/drm`) does the same
-  thing and runs on the EA3.
+  thing and runs on the CE5300 board.
 - **capture**: matches the DDK's output. `cmpcap.py` compares the reference
   frame with a DDK capture of the same scene, structure by structure, and
   every word is equal except address-bearing ones. So every word of the
@@ -95,7 +95,7 @@ Checking a frame without the GPU:
     python3 tools/state/decode.py fake.bin --brief         # every state word, annotated
     python3 tools/pds/dis.py fake.bin                      # every PDS program
 
-The test suite (it needs a shell helper that runs commands on the EA3):
+The test suite (it needs a shell helper that runs commands on the CE5300 board):
 
     EA3SH=<ssh helper> python3 tools/gen/vary.py OUTDIR [case...]
 
@@ -217,7 +217,7 @@ buffers. The generator covers what the frame reads (**capture**):
 structure by structure: it follows the same pointers in both and maps the
 addresses. Every word is equal except address-bearing ones.
 
-## Hardware results (EA3, 2026-10-28)
+## Hardware results (2026-10-28)
 
 Every row is **hardware**. `vary.py`'s cases are each checked against the DDK
 probe (`probe-st`) on the same box. Each triangle is drawn by the blob on its
@@ -283,7 +283,7 @@ the hangs below point to.
   replay are both proven since (**hardware**, **open driver**).
 - **The DDK's own cleanup doesn't work here.** It sends
   `SGX_FLUSH_HW_RENDER_TARGET` (cleanup type RT) when it removes a render
-  target. On this srvinit-started EA3 that request timed out ("Wait for
+  target. On this srvinit-started board that request timed out ("Wait for
   uKernel to clean up (1) failed"), and the GPU locked up right after
   (**hardware**). It is off by default (`SGXGEN_FLUSH_RT=1` sends it, as does
   `mkreplay.py --flushrt`). Whether the blob-initialized microkernel handles
@@ -338,12 +338,12 @@ until it is confirmed.
 
 - `-s WxH` without `-p`: surfaces of other sizes that are not y-up render correctly → a `vary.py` case with `-s` at two or more sizes (one under 0x4b000 pixels) against the probe at the same window size.
 - `-C face[,front]`: culling (0x404 FRONT, 0x405 BACK; front 0x900 CW, 0x901 CCW) culls the right triangles → `vary.py` cases with a CW and a CCW triangle under each face and front setting, against the probe with the same glCullFace / glFrontFace.
-- `-R N` in the default mode (every render the surface's first: entry 1, region array 1, frame counter 0) renders every repeat correctly → `frame -R 6 -o` on the EA3, each frame compared with the reference, and the PB checked for leaked pages.
-- `SGXGEN_ALTERNATE=1`: frame 2 of the generator's two-kick frame has TA flags 0x61, cmd+0x20 = 1, 3D flags 0x4400, cmd+0x44 = entry 0, region array 0 and RT frame word 2, and alternating frames run → `SGXGEN_ALTERNATE=1 frame -R 6` on the EA3, each frame compared with the reference; or a DDK capture of several two-kick frames on one surface, compared with `cmpcap.py`.
+- `-R N` in the default mode (every render the surface's first: entry 1, region array 1, frame counter 0) renders every repeat correctly → `frame -R 6 -o` on the CE5300 board, each frame compared with the reference, and the PB checked for leaked pages.
+- `SGXGEN_ALTERNATE=1`: frame 2 of the generator's two-kick frame has TA flags 0x61, cmd+0x20 = 1, 3D flags 0x4400, cmd+0x44 = entry 0, region array 0 and RT frame word 2, and alternating frames run → `SGXGEN_ALTERNATE=1 frame -R 6` on the CE5300 board, each frame compared with the reference; or a DDK capture of several two-kick frames on one surface, compared with `cmpcap.py`.
 - Vertices per task is 64 / output dwords, at most 16, for any output count → a DDK capture of vertex programs with more outputs (one and several varyings), comparing the vertex-fetch PDS program's task size.
 - The ISP starts each tile's depth from render details +0x40 → a generated frame with +0x40 set to 0.5 and the depth-greater and depth cases, checked against the probe drawn with glClearDepth(0.5).
 - The microkernel reads the previous client's RT data entry and render-details pointers (`T3C-60..7C`) when the next client's TA starts → a generated frame after a replay with only the RT data and render details moved (everything else in the DDK's layout), and one with everything moved except those: only the first should hang.
-- Two different native clients with different kernel-data layouts hang the same way → two generated clients with different allocation orders run back to back on the EA3, without a reboot between them.
-- The blob-initialized microkernel accepts `SGX_FLUSH_HW_RENDER_TARGET` → `SGXGEN_FLUSH_RT=1 frame` on an EA3 whose microkernel the DDK's own srvinit started, then a second frame.
+- Two different native clients with different kernel-data layouts hang the same way → two generated clients with different allocation orders run back to back on the CE5300 board, without a reboot between them.
+- The blob-initialized microkernel accepts `SGX_FLUSH_HW_RENDER_TARGET` → `SGXGEN_FLUSH_RT=1 frame` on a board whose microkernel the DDK's own srvinit started, then a second frame.
 - The hardware needs PDS programs on 32 bytes, USSE programs on 128 and DMA sources on 32 → generated frames with each alignment lowered one at a time (for example PDS on 16, USSE on 64, DMA on 16), compared with the reference.
 - A PDS state word or DOUTU word of 0 misbehaves → a generated frame with rings starting at 0, so the first program sits at offset 0, compared with the reference.

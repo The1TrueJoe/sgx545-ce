@@ -1,6 +1,6 @@
 # docs
 
-What the SGX545 does, as learned by tracing the DDK and proving each finding on an EA-3.
+What the SGX545 does, as learned by tracing the DDK and proving each finding on a CE5300 board.
 Each document tags its claims by evidence: encoder or DDK code, capture diffs, or hardware.
 
 | Document | Covers |

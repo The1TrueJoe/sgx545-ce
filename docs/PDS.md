@@ -16,8 +16,8 @@ Each fact carries one of these tags:
 - **hardware**: run on the GPU. Either a replay of a captured frame with one word
   changed (`tools/decode/mkreplay.py --poke`), or the open stack: the winsys
   (`mesa/src/gallium/winsys/sgx/drm/sgx_frame.c`) and `srvinit` build every program
-  kind marked so from this page, and they run (dEQP-GLES2 on the EA3, desktop sessions
-  on the EA1, cold boot of the microkernel).
+  kind marked so from this page, and they run (dEQP-GLES2 on a CE5300 board, desktop sessions
+  on the CE5300 board, cold boot of the microkernel).
 - **capture**: seen in captures of the DDK's programs and consistent across all of
   them: 13 targeted captures (listed at the end), and the `caps`, `cube` and `ff` sets
   (315 programs found through their pointers).
@@ -30,7 +30,7 @@ Each fact carries one of these tags:
 - **Captures** of the DDK's programs in GPU memory: the six original ones
   (`base red clr mov two ref`), seven made with `probe-pds` (see "Captures"), and the
   `caps`, `cube` and `ff` sets.
-- **Replays** of captured frames with words poked, on the EA3.
+- **Replays** of captured frames with words poked, on the CE5300 board.
 - **The open stack's own programs:**
   - pixel, secondary, vertex-fetch, VDM state, TA terminate, pixel-event and
     end-of-tile programs (the winsys);

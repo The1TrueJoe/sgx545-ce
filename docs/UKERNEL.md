@@ -1514,7 +1514,7 @@ behind it. This section records why it is parked.
 
 **Why it was pursued, and why the payoff is small here.** The hope (from an
 early frameprof estimate) was ~11→20 fps in Minecraft. Hardware measurement
-showed that ceiling is wrong for this workload. On the EA1 at `SGX_SLOTS=4`,
+showed that ceiling is wrong for this workload. On a CE5300 board at `SGX_SLOTS=4`,
 join+90s steady state:
 
 | µK | fps (stand/walk) | world render | GPU busy | inter-job gap | all-idle |

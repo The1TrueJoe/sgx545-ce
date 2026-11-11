@@ -486,13 +486,13 @@ Atom CE5300, the PowerVR SGX545 and the SGX5xx family. The dev-board history
 moves to `docs/log/`. The replacements:
 - the dev-board names (EA1, EA3, HC-800) become "a CE5300 board", or a plain
   dated hardware tag;
-- "the open microkernel" becomes "the open microkernel";
+- shorthand for our microkernel ("UK", "our µK") becomes "the open microkernel";
 - IP addresses, box workspaces and product names go.
 
 Long bring-up narratives move to a dated `docs/log/entries/` file, with a
 pointer left in their place.
 
-Remaining box-specific references, counted on 2026-11-08 by
+Box-specific references, counted on 2026-11-08 (and again on 2026-11-11, when the last ones went) by
 `grep -E 'Control4|\bEA[0-9]\b|EA-[0-9]|HC-800|10\.0\.0\.|Bench plug'` plus the
 downstream distribution's name (which must not appear anywhere in this
 repository, 2026-11-08).
@@ -506,13 +506,15 @@ The last column is the count of lines naming a branch, commit or log entry.
 | STATE.md | 0 | 1 | done 6e71335 | ta3d-state |
 | TEX.md | 0 | 0 | done 6e71335 | ta3d-state |
 | PDS.md | 0 | 0 | done 6e71335 | ta3d-state |
-| ISA.md | 12 | 0 | not started | usse-compiler / cleanroom-isa |
-| DRM-DRIVER.md | 9 | 16 | not started | m2-kernel-driver |
-| UAPI.md | 9 | 1 | not started | uapi-stream |
-| GEN.md, WINSYS.md | 5, 4 | 0 | not started | mesa-gallium |
-| COMPILER-UPSTREAM.md, DRIVER-UPSTREAM.md | 2, 2 | 1, 1 | not started | usse-compiler, mesa-gallium |
-| NOTES.md, PERF.md, PIGLIT.md, CLEANROOM-COVERAGE.md | 11, 2, 7, 17 | — | internal working notes, stay as they are (decided) | main |
-| README.md | 1 | — | not started | main |
+| ISA.md | 0 | 0 | done 2026-11-11 | ta3d-state |
+| DRM-DRIVER.md | 0 | 16 | done 2026-11-11 (log pointers kept: our own docs may keep them) | ta3d-state |
+| UAPI.md | 0 | 1 | done 2026-11-11 | ta3d-state |
+| GEN.md, WINSYS.md | 0, 0 | 0 | done 2026-11-11 | ta3d-state |
+| COMPILER-UPSTREAM.md, DRIVER-UPSTREAM.md | 0, 0 | 1, 1 | done 2026-11-11 | ta3d-state |
+| NOTES.md, PERF.md, PIGLIT.md, CLEANROOM-COVERAGE.md | 11, 26, 7, 15 | — | internal working notes, stay as they are (decided) | main |
+| README.md | 0 | — | done 2026-11-11 | ta3d-state |
+| PDS.md, UKERNEL.md, MAIN-MERGE.md, porting/microkernel.md | 0 | — | done 2026-11-11 (references that had come back since 2026-11-08) | ta3d-state |
+| In-tree upstream text: `drm/Documentation/gpu/powervr_sgx/*.rst`, `mesa/docs/drivers/sgx.rst` | 0 | 0 | checked 2026-11-11: no board names, no downstream name, no commits, branches or log paths | ta3d-state |
 
 Decided (main, 2026-11-08):
 - **Internal notes stay as they are.** NOTES, PERF, PIGLIT,

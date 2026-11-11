@@ -53,7 +53,7 @@ Checks, all repeatable:
 | emitted words | every word sgxc emits decodes with no unknown bit and round-trips | `tools/usc/check_out.py --no-oracle`, run_corpus |
 | blind encoder | an encoder written from ISA.md alone matches random valid words (120/120) | `tools/isa/blind.py` |
 | hardware: meaning | F16 numbering, rounding, C10, setfc, repeats, swizzles, efo and fdual units, same-word races (13 suites) | `tools/isa/hwt_*`, ISA.md "Hardware checks" |
-| hardware: programs | the compiler's programs give the DDK's pixels in the A/B suites, and the open stack passes dEQP-GLES2 on the EA3 (16,637 pass, 0 unexpected, 2026-11-09) | `tools/usc/hw`, docs/PIGLIT.md |
+| hardware: programs | the compiler's programs give the DDK's pixels in the A/B suites, and the open stack passes dEQP-GLES2 on a CE5300 board (16,637 pass, 0 unexpected, 2026-11-09) | `tools/usc/hw`, docs/PIGLIT.md |
 
 A wrong field value in a form the compiler emits would show up as a wrong pixel or a
 GPU fault in the A/B and dEQP runs. Per form:

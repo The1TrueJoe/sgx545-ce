@@ -14,18 +14,18 @@ Every field below carries one of these tags:
   a black box and decoding the words. The `check_<area>.py` sweeps encode every field
   value of every form (about 20,000 outputs) and require each word to decode with no
   unexplained bit and to re-encode from its text. The same encoding is bit-exact
-  against 5045 instructions logged from real compiles on the EA3. A field's position
+  against 5045 instructions logged from real compiles on a CE5300 board. A field's position
   and values are therefore facts. Its meaning is a fact only where corpus or hardware
   evidence backs it.
 - **corpus**: what the DDK's GLSL compiler emits for a one-feature shader (`gen.py`,
   `gen2.py`, `gen3.py`; corpora `corpus/c1..c3`), or what toggling that feature
   changes.
-- **hardware**: run on the EA3. Most of these come from `hwt.py`: a hand-assembled
+- **hardware**: run on the CE5300 board. Most of these come from `hwt.py`: a hand-assembled
   fragment program moves its result to `o0`, which the PBE stores unchanged, so one
   pixel of the back buffer is the 32-bit register. Each hardware tag names the test
   (`hwt_<suite>.py` / test name; logs in `hwt_out/`). See "Hardware checks" below.
   Where a form is in `mesa/src/sgx/isa/tests/gles2.txt`, the open compiler emits it
-  and passes dEQP-GLES2 on the EA3 with it; that exercises the form, though not the
+  and passes dEQP-GLES2 on the CE5300 board with it; that exercises the form, though not the
   field values the compiler leaves at their defaults.
 - **capture**: seen in the vendor driver's output: its USP binaries (`usp.py` parses
   every corpus binary), its finalized programs and state in GPU memory, its traces.
@@ -63,7 +63,7 @@ stored low word first.
 | `hw.py`, `hw_*.py` | the instruction forms (framework + one module per group of classes); `decode`, `encode`, `fmt`, `parse` |
 | `dis.py` | disassemble USP binaries (`python3 dis.py corpus/c3`) or hex words (`-x hi lo`) |
 | `asm.py` | assemble dis.py's text; `--check` runs `hwcheck.py` |
-| `hwt.py`, `hwt_lib.py`, `hwt_*.py`, `hwt_out/` | run hand-assembled fragment programs on the EA3 through the replay and read the result register back from the back buffer; one suite per area, logs per suite |
+| `hwt.py`, `hwt_lib.py`, `hwt_*.py`, `hwt_out/` | run hand-assembled fragment programs on the CE5300 board through the replay and read the result register back from the back buffer; one suite per area, logs per suite |
 | `hwcheck.py` | every corpus word: has a form, no unexplained bit, text round-trips |
 | `check_float.py`, `check_pack.py`, `check_int.py`, `check_mem.py` | oracle sweeps per area |
 | `usp.py`, `smpblock.py` | the USP container and its texture-sample blocks |
@@ -294,7 +294,7 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
 - `syncend` is h23 and `xsyncend` h12, two separate bits. The vendor
   assembler's extended sync-end sets both (**oracle**).
 
-## Hardware checks (hwt.py, EA3, 2026-10-28)
+## Hardware checks (hwt.py, CE5300, 2026-10-28)
 
     python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, EA3SH set; see hwt.py)
 
@@ -381,7 +381,7 @@ source's is bank 0 + extension. src0 can't be indexed.
 
 ### Hardware constants (c<n>)
 
-The hardware's special constants, every entry read back on the EA3
+The hardware's special constants, every entry read back on the CE5300 board
 (**hardware**, hwt_p3 `c0`..`c63`: `mov o0, cN`). **c46 and c47 are the
 F16 pair (1.0, 1.0) = 0x3c003c00 like c45**, and c57-c63 exist. c28-c44 are the correctly rounded f32
 values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
@@ -619,7 +619,7 @@ computes into internal registers.
 A one-source secondary op reads sb; a two-source one sb and sc; mov reads
 msrc. All **oracle**.
 
-**hardware** (hwt_p12, EA3, 2026-11-08): 113 draws, every one ran with no
+**hardware** (hwt_p12, 2026-11-08): 113 draws, every one ran with no
 recovery. Inputs were s0 = 2, s1 = 3, s2 = 5 and i0 = 7, i1 = 17, i2 = 19;
 the logs are in `hwt_out/hwt_p12.txt`. The encodings were already settled:
 every corpus fdual word assembles from its text to the same bits
@@ -951,7 +951,7 @@ Evidence tags:
 - **oracle**: a field's position and values, or a form's legality, from encoding through the vendor assembler and decoding the words.
 - **oracle (not emitted for SGX545)**: the vendor assembler rejects the form for the SGX545 target but accepts it for other cores of the family. These forms were swept with the target's feature checks altered. The SGX545 has not been tested with them.
 - **corpus**: a GLSL shader in c1/c2/c3 produces it.
-- **hardware**: an hwt suite on the EA3 (see "Hardware checks").
+- **hardware**: an hwt suite on the CE5300 board (see "Hardware checks").
 - **capture**: seen in the vendor driver's programs in GPU memory.
 - **unconfirmed**: not yet backed by any of the above.
 - **guess**: not backed.
@@ -1034,7 +1034,7 @@ Units:
 
 efo has no end bit (h18-19 is `i`), so it can't be a program's last instruction.
 
-**hardware** (hwt_p12, EA3, 2026-11-08), with s0 = 2, s1 = 3, s2 = 5 and
+**hardware** (hwt_p12, 2026-11-08), with s0 = 2, s1 = 3, s2 = 5 and
 I0 = 7, I1 = 17 beforehand. The unit wiring in the table above holds:
 - every `m` mode: mode 2's m1 is `s2 * s2`, and mode 3 reads I0/I1 as they
   were before the word;
@@ -1451,7 +1451,7 @@ placeholder), DRC.
 | l7-13, l30-31 | off | any source kind, including #0-127 and indexed | oracle, corpus |
 | l0-6, l28-29 | range | without h6: the unused pattern | oracle |
 
-**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode, EA3
+**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode
 2026-11-02): `ld.a.d` and `st.a.d` with an immediate offset `#i` access the
 dword at base + 4·(i + 1). `st.a.d sa0, #0` wrote word 1 of the buffer whose
 address was in sa0, `#2` wrote word 3, and `ld.a.d #2` read word 3 back.
@@ -1520,7 +1520,7 @@ predicate (oracle).
 | `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | oracle, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
 | `lapc` | h6-8 = 2 | return to the saved link address | oracle, corpus (fn_call); **hardware** (hwt_p7 `call_lapc`): `br #3 [link]` ... `lapc` returns to the instruction after the br |
 | `nop` | h6-8 = 5 | h23 syncs, h18 end, l0 = f2_26, l1 = f3_5; no predicate, h12 and h24-26 are 0 | oracle, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
-| `setl src` | h6-8 = 3 | set the link address from a register: src in the src1 slot (l7-13, bank l30-31, extension h17) | **hardware** (the open microkernel saves and restores the link around a nested call with `savl r23` ... `setl r23` and runs on the EA1 and EA3); capture (the DDK microkernel calls through a table with `setl` + `lapc` and nests calls the same way). The vendor assembler has no form for it, so there is no oracle; exercised by the open stack (dEQP-GLES2) |
+| `setl src` | h6-8 = 3 | set the link address from a register: src in the src1 slot (l7-13, bank l30-31, extension h17) | **hardware** (the open microkernel saves and restores the link around a nested call with `savl r23` ... `setl r23` and runs on the CE5300 board and CE5300); capture (the DDK microkernel calls through a table with `setl` + `lapc` and nests calls the same way). The vendor assembler has no form for it, so there is no oracle; exercised by the open stack (dEQP-GLES2) |
 | `savl dst` | h6-8 = 4 | save the link address to a register: dst in the destination slot's number and bank (l21-27, h0-1), no extension bit | as `setl` |
 | `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no operands; accepted for the SGX545 | oracle; meaning unknown |
 
@@ -1669,9 +1669,9 @@ Evidence tags: **capture** (the vendor compiler's USP binaries: `usp.py` and
 `smpblock.py` parse every one in c1-c3, and a field is capture when it is
 present and consistent across them; also the vendor driver's programs in GPU
 memory), **corpus** (c1/c2/c3 and `ef_c3.txt`), **hardware** (A/B: the vendor
-driver runs, on the EA3, USPs that our writer `tools/usc/sgx_usp.c` builds
+driver runs, on the CE5300 board, USPs that our writer `tools/usc/sgx_usp.c` builds
 with that field; or open stack: the open compiler and driver emit it and pass
-dEQP-GLES2 on the EA3), **unconfirmed**, **guess**.
+dEQP-GLES2 on the CE5300 board), **unconfirmed**, **guess**.
 
 Tools: `smpblock.py` parses the three block types; `usp.py` calls it
 (`block["sample"]`). `python3 -I smpblock.py corpus/c3` prints every sample
@@ -1872,7 +1872,7 @@ u8 in-place path runs in the A/B harness. Finally the MOE state is put back
 A compiler that does not go through the vendor finalizer has to do all of
 this itself. The open compiler and driver do it for dependent 2D and cube
 reads, bias, state words in SA, `wdf`, the u8 unpack and non-dependent PDS
-reads, and pass dEQP-GLES2 on the EA3 (**hardware**, open stack). LOD reads,
+reads, and pass dEQP-GLES2 on the CE5300 board (**hardware**, open stack). LOD reads,
 gradients, vertex texture fetch, state words in memory and multi-chunk
 formats are what the vendor compiler emits (**corpus**) or what its finalizer
 does (**unconfirmed**); the open stack does not emit them yet. Field names as
@@ -1948,7 +1948,7 @@ The vendor compiler's shader binary. **Confirmed** (**capture**): `usp.py`
 sizes every list from the header alone and parses all 552 shaders of c1-c3;
 every one ends exactly on the end block at the declared size. Our writer
 `tools/usc/sgx_usp.c` builds USPs to this layout, and the vendor driver runs
-them on the EA3 (**hardware**, A/B: the fields the writer fills).
+them on the CE5300 board (**hardware**, A/B: the fields the writer fills).
 
 Fields are packed with no padding, so a u16 field leaves the next u32
 unaligned (**capture**).
@@ -2080,8 +2080,8 @@ same step builds the DOUTI words of docs/PDS.md), and for `discard` adds the
 visibility feedback. Tags: **capture** (the vendor driver's finalized
 programs in GPU memory: the probe's in docs/NOTES.md, and STATE.md "The DDK's
 fragment programs for a flat color and one sample"), **hardware** (the
-discard draws on the EA3 below, and the open stack's discard programs, which
-use the same words and pass dEQP-GLES2 on the EA3), **oracle**,
+discard draws on the CE5300 board below, and the open stack's discard programs, which
+use the same words and pass dEQP-GLES2 on the CE5300 board), **oracle**,
 **unconfirmed**, **guess**.
 
 ### What the finalizer prepares
@@ -2175,7 +2175,7 @@ With feedback (discard on triangles):
   1 p0, 2 p1, 3 !p0, as in depthf). The vendor assembler never sets it
   (**oracle**; `{?h10}` in dis.py); the driver's word has 2 = p1, the keep
   predicate the USP's `test` computed. A pixel whose atst8 predicate is
-  false is killed. **hardware** (EA3, `tools/isa/discard/`, the left half
+  false is killed. **hardware** (`tools/isa/discard/`, the left half
   of a triangle kept by `if (q.x > 0.0) discard`): the stock driver keeps
   exactly the left half (21600 of 43200 pixels); with a driver patched to
   put 0 in h9-10 nothing is killed; with p0 / !p0 about 83 % / 19 %
@@ -2197,7 +2197,7 @@ program: the discard `nop` stays, and the program's temporary count becomes
 0xfb340404 (**unconfirmed**; the hardware result below, points ignoring the
 discard, agrees with it).
 
-On hardware (EA3, 2026-10-28; `tools/isa/discard/results.txt`):
+On hardware (2026-10-28; `tools/isa/discard/results.txt`):
 
 | draw | stock DDK 1.7 | `depthf_patch.py` | `pt_patch.py` |
 |---|---|---|---|
@@ -2361,7 +2361,7 @@ backed above; this section only collects it.
   keeps skipinv. `d` must not be a register `x` uses: the instances of a
   quad don't all read before any writes, so a neighbor can read the
   derivative instead of `x` (the DDK never overlaps them). **Hardware**
-  (EA3 piglit): with skipinv on everything, dFdx of an iterated value was
+  (piglit): with skipinv on everything, dFdx of an iterated value was
   right while dFdy of an `fmul` and either derivative of an `abs` were
   wrong. With the feeding math skipinv-clear, `glsl-fwidth` passes, and
   every remaining failure was a derivative whose `d` was `x` (`fdsy r4, r4,
@@ -2390,7 +2390,7 @@ backed above; this section only collects it.
 ### Fragment shaders
 
 - **gl_FrontFacing** comes from special register g16: bit 0 is set for a
-  primitive that is clockwise in memory (**capture**, EA-1, one draw shape,
+  primitive that is clockwise in memory (**capture**, one draw shape,
   y-flipped window; other bits not examined). The DDK reads it with
   `test.and.ne p0, g16, #1` and a per-draw constant in sa9 (only 0 captured;
   nonzero presumably inverts). Our compiler: `xor r, g16, sa[front_sa]; and r,
@@ -2528,7 +2528,7 @@ vendor driver; the open stack doesn't use the container.
 - Shared sub-records: iflags b0 makes the driver save and restore i0..i2 around inserted code → capture the finalized program of a corpus shader with ilive 3 (tx_dep_proj3) and look for the saves.
 - Shared sub-records: with iflags b2 clear, every driver-generated instruction gets skipinv → capture finalized tx_dep_chain vs tx_dep and compare skipinv on the generated smp/wdf/pck.
 - Shared sub-records: iflags b4-7 (meaning unknown, written only under a compile option) → A/B: set them in our USP and diff the finalized program.
-- Shared sub-records: 4-valued register types 2 = o and 4 = i → A/B: a block 6 whose destination is o or i, and check the result on the EA3.
+- Shared sub-records: 4-valued register types 2 = o and 4 = i → A/B: a block 6 whose destination is o or i, and check the result on the CE5300 board.
 - Block 5: flags b2 is matched against an iterator key (centroid guess) → A/B: set b2 on a non-dependent sample and capture the PDS DOUTI the driver builds.
 - Block 5: sampler > 15 rejected → A/B: a USP with sampler 16 and check the load fails.
 - Block 5: swizzle bits 12-15 must be 0; selects >= 4 unseen → A/B: swizzles with a select of 4-7 and with bit 12 set, capture the finalized unpack.
@@ -2551,7 +2551,7 @@ vendor driver; the open stack doesn't use the container.
 - The finalizer: unpack paths for s8, u16, s16, f16, f32 texel channels, `mov` for f32, c10 targets, formats 6/7 (`limm 0xffff8000`, test) → capture finalized programs for each texel format and result precision.
 - The finalizer: how the driver writes the texture-state table into SA registers at draw time → capture the secondary program / PDS DOUTD of a draw with a dependent read.
 - The texture-sample sequence: LOD reads, gradient operand layout (how many registers, which order) → hwt: an smp.2d.grad with known derivatives against a mipmapped texture, read the level chosen.
-- The texture-sample sequence: vertex texture fetch with LOD c48 and skipinv → hwt or open-stack vertex texture test on the EA3.
+- The texture-sample sequence: vertex texture fetch with LOD c48 and skipinv → hwt or open-stack vertex texture test on the CE5300 board.
 - Header: version other than 0x23 rejected → A/B: version 0x22.
 - Header: program type 2 = geometry → none on GLES2; leave unsupported.
 - Header: flags A 4 (color may stay in pa0 in output mode 3) and 0x10 → A/B: set each and capture the finalized program.
