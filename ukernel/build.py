@@ -185,8 +185,8 @@ def main():
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }
     if resolve.waits:             # a core built with bounded waits: id -> what it polls
-        manifest["waits"] = {str(i): {"poll": "0x%x" % p, "mask": "0x%x" % m}
-                             for i, p, m in resolve.waits}
+        manifest["waits"] = {str(i): {"poll": "0x%x" % p, "mask": "0x%x" % m, "until": u}
+                             for i, p, m, u in resolve.waits}
     with open(man, "w") as f:
         json.dump(manifest, f, indent=2)
     # a flat sidecar srvinit -o reads (plain text, fscanf-friendly): the entry

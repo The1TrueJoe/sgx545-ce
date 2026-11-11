@@ -22,8 +22,10 @@ from test_emu import patch_limm, CTLBLK, HOSTCTL, KCCBCTL  # noqa: E402
 from cores import sgx530 as C  # noqa: E402
 
 KCCB = 0x32000000
-KPD = 0x0abc0000             # the firmware PD the host leaves in DIR_LIST_BASE0
-CPD = 0x0def0000             # a client's PD
+KPD = 0x0abc0000             # the firmware PD: PD table slot 0
+CPD = 0x0def0000             # a client's PD, in slot SLOT
+SLOT = 3
+PDTABLE = 0x32010000         # the host's read-only PD table
 MISC = 0x32005000
 # registers the SGX530 doesn't have (docs/porting/cores/sgx530.md, "Only on the SGX545")
 ABSENT = {0x0c38: "DIR_LIST_BASE1", 0x0c78: "BANK0", 0x0ae4: "EVENT_KICK1",
@@ -40,6 +42,7 @@ def load():
     man = json.load(open(manp))
     code = bytearray(open(binp, "rb").read())
     patch_limm(code, man["patches"]["ctlblk"], CTLBLK)
+    patch_limm(code, man["patches"]["pdtable"], PDTABLE)
     return bytes(code), man
 
 
@@ -51,6 +54,10 @@ def machine(code, initialised=True):
     mem.wr(CTLBLK + 4 * C.SA_KCCBCTL, KCCBCTL)
     mem.wr(CTLBLK + 4 * C.SA_KCCB, KCCB)
     mem.wr(HOSTCTL + 4 * C.HC_INIT, 1 if initialised else 0)
+    for i in range(C.PD_TABLE_SLOTS):                 # unused slots hold the firmware PD
+        mem.wr(PDTABLE + 4 * i, KPD)
+    mem.wr(PDTABLE + 4 * SLOT, CPD)
+    regs.v[C.CR_BIF_DIR_LIST_BASE0] = KPD             # idle: the firmware PD
     return u, mem, regs
 
 
@@ -91,7 +98,8 @@ def test_static(man):
         if m and int(m.group(2)) * 4 in ABSENT:
             bad.append(f"{text} ({ABSENT[int(m.group(2)) * 4]})")
     assert not bad, "the SGX530 image names SGX545-only registers: " + "; ".join(bad)
-    assert man["core"] == "sgx530" and man["features"] == 0
+    assert man["core"] == "sgx530" and man["features"] == 0x4
+    assert set(man["patches"]) == {"ctlblk", "pdtable"}, man["patches"]
     print(f"  static: no SGX545-only register in {man['instructions']} instructions, "
           f"{len(man['waits'])} bounded waits  OK")
 
@@ -101,11 +109,12 @@ def test_init(code, man):
     regs.v[C.CR_BIF_DIR_LIST_BASE0] = KPD
     event(u, man, regs)
     assert mem.rd(HOSTCTL) == 1, "init must set ui32InitStatus"
-    assert mem.rd(CTLBLK + 4 * C.SC_KERNEL_PD) == KPD, \
-        "init must keep the firmware PD it found in DIR_LIST_BASE0"
     assert mem.rd(CTLBLK + 4 * C.SC_VERSION) == C.UK_VERSION
+    assert mem.rd(CTLBLK + 4 * C.HEARTBEAT) == 1, "every event must advance the heartbeat"
+    event(u, man, regs, status=C.EVENT_TIMER)
+    assert mem.rd(CTLBLK + 4 * C.HEARTBEAT) == 2
     check_absent(regs, "init")
-    print("  init: InitStatus = 1, firmware PD kept from DIR_LIST_BASE0  OK")
+    print("  init: InitStatus = 1, heartbeat +1 per event  OK")
 
 
 def test_getmiscinfo(code, man):
@@ -128,7 +137,6 @@ def test_restore_pd(code, man):
     """a command that leaves the core idle reaches raise_host_irq through
     kick_end's idle path, which must put the firmware PD back"""
     u, mem, regs = machine(code)
-    mem.wr(CTLBLK + 4 * C.SC_KERNEL_PD, KPD)
     regs.v[C.CR_BIF_DIR_LIST_BASE0] = CPD             # a job's PD left in the list
     queue(mem, C.CMD_GETMISCINFO, data1=MISC)
     event(u, man, regs)
@@ -139,7 +147,6 @@ def test_restore_pd(code, man):
     assert sw == [C.SW_EVENT], sw
     # already on the firmware PD: no write, no invalidate
     u, mem, regs = machine(code)
-    mem.wr(CTLBLK + 4 * C.SC_KERNEL_PD, KPD)
     regs.v[C.CR_BIF_DIR_LIST_BASE0] = KPD
     queue(mem, C.CMD_GETMISCINFO, data1=MISC)
     event(u, man, regs)
@@ -194,7 +201,7 @@ def test_first_ta(code, man):
     rd, pb, rtentry = 0x32009000, 0x3200a000, 0x3200b000
     mem.wr(ctx + 4 * C.CTX_CCB, ccb)
     mem.wr(ctx + 4 * C.CTX_CCBCTL, ccbctl)
-    mem.wr(ctx + 4 * C.CTX_PD, CPD)
+    mem.wr(ctx + 4 * C.CTX_PD, SLOT + C.PD_TABLE_SLOTS)   # a slot, masked to the table
     mem.wr(ccbctl + 0, 0x300)
     mem.wr(ccbctl + 4, 0)
     mem.wr(ccb + 4 * C.CMDTA_SIZE, 0x300)
@@ -219,9 +226,46 @@ def test_first_ta(code, man):
                    (C.CR_BIF_DIR_LIST_BASE0, CPD),
                    (C.CR_BIF_CTRL, C.BIF_CTRL_INVALDC), (C.CR_BIF_CTRL, 0),
                    (C.CR_TA_KICK, 1)], seq
+    # BRN_28889: the BIF drains (BIF_MEM_REQ_STAT read) before the MADD invalidate
+    order = [a for (op, a, v, pc) in regs.log if a in (C.CR_BIF_MEM_REQ_STAT, 0x804)]
+    assert order and order[0] == C.CR_BIF_MEM_REQ_STAT, order
     assert mem.rd(CTLBLK + 4 * C.WAIT_TIMEOUT_CT) == 0
     check_absent(regs, "the first TA kick")
-    print("  first TA kick: TA reset b3, job PD -> DIR_LIST_BASE0 + INVALDC, TA kicked  OK")
+    print("  first TA kick: TA reset b3, PD table slot -> DIR_LIST_BASE0 + INVALDC, "
+          "BIF drained before MADD, TA kicked  OK")
+
+
+def test_render_complete(code, man):
+    """a render's completion puts the firmware PD back before its first
+    completion write (the sync objects), so the host never sees a done job
+    whose PD is still live"""
+    u, mem, regs = machine(code)
+    mem.log = regs.log                                # one ordered log of MMIO and memory
+    regs.v[C.CR_BIF_DIR_LIST_BASE0] = CPD             # the job's PD, loaded at its TA
+    rd, rtentry, ctx, rtdata, deps = 0x32041a00, 0x32041cf0, 0x3000e000, 0x32041d60, 0x32041f80
+    sync0, sync1 = 0x2d0030f4, 0x2d0030fc
+    mem.wr(CTLBLK + 4 * C.SC_RD, rd)
+    mem.wr(CTLBLK + 4 * C.SC_RTENTRY, rtentry)
+    mem.wr(CTLBLK + 4 * C.SC_CTX, ctx)
+    mem.wr(CTLBLK + 4 * C.SC_INFLIGHT, rtentry)
+    mem.wr(CTLBLK + 4 * C.WAIT_3D, 1)
+    mem.wr(CTLBLK + 4 * C.WAIT_FREE, 0)               # the DPM free already came
+    mem.wr(rtentry + 4 * C.RT_DATA, rtdata)
+    mem.wr(rd + 4 * C.RD_SYNC0, sync0)
+    mem.wr(rd + 0xe0, deps)
+    mem.wr(deps, sync1)
+    mem.wr(sync0, 7)
+    mem.wr(sync1, 7)
+    regs.log.clear()
+    event(u, man, regs, status=0x40000)               # pixel back end: the rendezvous completes
+    assert mem.rd(sync0) == 0 and mem.rd(CTLBLK + 4 * C.SC_INFLIGHT) == 0, "the render must complete"
+    pd = next(i for i, (op, a, v, pc) in enumerate(regs.log)
+              if op == "str" and a == C.CR_BIF_DIR_LIST_BASE0)
+    first = next(i for i, (op, a, v, pc) in enumerate(regs.log) if op == "st" and a in (sync0, sync1))
+    assert regs.log[pd][2] == KPD and pd < first, "the firmware PD must be back before the sync writes"
+    assert regs.v[C.CR_BIF_DIR_LIST_BASE0] == KPD
+    check_absent(regs, "render completion")
+    print("  render completion: firmware PD restored before the first sync write  OK")
 
 
 def main():
@@ -234,6 +278,7 @@ def main():
     test_bounded_wait(code, man)
     test_brn28889(code, man)
     test_first_ta(code, man)
+    test_render_complete(code, man)
     print("all passed")
 
 

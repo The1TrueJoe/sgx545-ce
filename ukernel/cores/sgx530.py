@@ -33,13 +33,16 @@ SOFT_RESET_TA = 0x8          # b3: every unit above the BIF moves up a bit for t
 # ---- the BIF: one memory context (K) ----------------------------------------
 MULTI_MEM_CONTEXTS = False   # only DIR_LIST_BASE0, no BANK registers. A job's PD
                              # goes in list 0 for the whole job, so every requestor,
-                             # the EDM included, translates through it: the host must
-                             # map the firmware's code and data at the same addresses
-                             # in every client PD. raise_host_irq puts the firmware
-                             # PD back (SC_KERNEL_PD) when nothing is in flight.
+                             # the EDM included, translates through it: the host maps
+                             # the firmware heaps into every client PD. The PD comes
+                             # from the host's read-only PD table (base: the "pdtable"
+                             # patch, r14; the context's CTX_PD word is a slot), and
+                             # slot 0, the firmware PD, goes back before any completion.
 CR_BIF_DIR_LIST_BASE1 = None  # absent; using one is a build error
 CR_BIF_BANK0 = None
 FIX_HW_BRN_28889 = True      # listed for every SGX530 revision
+BIF_MEM_REQ_MASK = 0xff      # BIF_MEM_REQ_STAT reads b0-7 here (K); the fence after a
+                             # PD switch spins until they clear (what they mean: G)
 
 # ---- events and kicks (K) ---------------------------------------------------
 MULTI_EVENT_KICK = False     # FIX_HW_BRN_22934: EVENT_KICK only; the host's init kick
@@ -53,5 +56,8 @@ OTPM_CLEAR_WAITS = [(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR)]  # noqa: F
 # ---- bring-up ---------------------------------------------------------------
 WAIT_BOUND = 0xffff          # every wait gives up after 65535 polls and logs itself
                              # in WAIT_TIMEOUT_ID/CT (the manifest's "waits" names it)
-FEATURES = 0                 # not SECURE: one context means the firmware heaps are in
-                             # every client PD
+FEATURES = 0x4              # PVRSGX_UKFW_SINGLE_CONTEXT (bit 2, proposed): EDM on list
+                             # 0, the PD table, the firmware PD restored, init on
+                             # EVENT_KICK. Not SECURE: the firmware heaps are in every PD.
+HEARTBEAT = 0x2a             # control block +0xa8: +1 per event, the watchdog's progress
+                             # word (the SGX545's EDM task registers are unnamed here)

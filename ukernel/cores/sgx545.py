@@ -319,8 +319,10 @@ WAIT_BOUND = 0               # 0: a wait() spins until its bits set. N: give up 
                              # polls (16-bit), log it (WAIT_TIMEOUT_*) and go on
 WAIT_TIMEOUT_ID = 0x28       # control block +0xa0: the last wait that timed out
 WAIT_TIMEOUT_CT = 0x29       # control block +0xa4: how many waits timed out
-SC_KERNEL_PD = 0x27          # control block +0x9c: one-context cores only; the
-                             # firmware PD init found in DIR_LIST_BASE0
+HEARTBEAT = None             # a control block word the event entry increments, for
+                             # a host watchdog that can't read EDM task registers
+PD_TABLE_SLOTS = 1024        # one-context cores: the host's read-only PD table (a 4 KiB
+                             # page of DIR_LIST_BASE0 values; slot 0 = the firmware PD)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
@@ -336,6 +338,8 @@ BIF_CTRL_INVALDC = 0x8
 CR_BIF_DIR_LIST_BASE0 = 0xC84
 CR_BIF_DIR_LIST_BASE1 = 0xC38
 CR_BIF_BANK0 = 0xC78
+CR_BIF_MEM_REQ_STAT = 0xCA8
+BIF_MEM_REQ_MASK = 0x7ff     # reads b0-10
 # the waits after the OTPM invalidate + clear in dpm_load: (poll reg, bits, ack reg)
 OTPM_CLEAR_WAITS = [(CR_EVENT_STATUS, 0x100000, CR_EVENT_HOST_CLEAR),
                     (CR_EVENT_STATUS2, 0x1000, CR_EVENT_HOST_CLEAR2)]
