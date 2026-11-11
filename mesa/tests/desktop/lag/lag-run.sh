@@ -18,9 +18,19 @@ here=$(cd "$(dirname "$0")" && pwd)
 BOX=${BOX:?the address of the box}
 DESK=${DESK:-/opt/desk}
 WORKLOADS=${WORKLOADS:-idle drag term menus drag-gl firefox}
-E() { sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-	-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 \
-	-o ServerAliveInterval=15 root@$BOX "$@"; }
+# ssh with retries: the box's sshd turns down connections that come fast
+# (255: ssh's own failure, not the command's)
+E() {
+	for i in 1 2 3 4 5 6; do
+		sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no \
+			-o PreferredAuthentications=password -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+			-o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=15 root@$BOX "$@"
+		r=$?
+		[ $r -ne 255 ] && return $r
+		sleep 3
+	done
+	return $r
+}
 mkdir -p "$OUT"
 E "test -e /dev/dri/renderD128 && test -d $DESK/usr/bin && ! pidof Xorg" || {
 	echo "lag-run.sh: the box needs powervr_sgx up, the root at $DESK, and no X running" >&2
