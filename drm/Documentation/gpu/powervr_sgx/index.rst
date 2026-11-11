@@ -26,9 +26,14 @@ structures: the host control block, the command buffer, render and transfer
 contexts, render target datasets and parameter buffers. Userspace never writes
 them.
 
-Each supported core has an entry in a table (``pvrsgx_core.c``): its ID and
-revision, the features the driver relies on, its clock and its firmware file.
-The driver refuses a core that isn't in the table before writing any register.
+The supported cores are in a table (``pvrsgx_core.c``). Each core design has
+an entry with its ID, the registers whose offsets or fields differ between
+SGX5xx cores, its features, instruction set, directory lists, address width
+and init script. Each part of it has an entry with its revision, clock and
+firmware file. The bus tells the driver which core to expect, since even the
+core ID register moves between cores: the PCI ID for the CE5300, the gma500
+auxiliary device for Cedarview. The driver refuses a core that isn't in the
+table before writing any register.
 For the CE5300 the file is ``powervr_sgx/sgx545_ukernel.bin``. It starts
 with a header giving the host interface version, feature bits, the image's CRC,
 its entry points and the immediates the driver fills with buffer addresses.

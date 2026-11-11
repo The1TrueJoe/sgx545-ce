@@ -10,8 +10,6 @@ comes up a moment later and the GPU works.
 
 Poll for up to 10 ms instead, so the message only appears when the
 island really fails to power up.
-
-Assisted-by: Claude:claude-opus-5-5
 ---
  drivers/gpu/drm/gma500/cdv_device.c | 16 ++++++----------
  1 file changed, 6 insertions(+), 10 deletions(-)

@@ -1,0 +1,311 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [PATCH] drm/sysfb: Copy damage outside the DIRTYFB ioctl
+
+The sysfb drivers implement DIRTYFB with drm_atomic_helper_dirtyfb(),
+which runs a blocking commit. The commit waits for the framebuffer's
+fences, so the ioctl doesn't return until the GPU has finished
+rendering into the framebuffer.
+
+Xorg's modesetting driver calls DIRTYFB from its main thread after
+every frame. When a separate GPU renders for a sysfb display, X then
+blocks for as long as the GPU takes to render the client's frame. With
+a game running, X took a median of 1.85 s to answer a pointer query.
+
+If the framebuffer still has unsignaled write fences, queue the damage
+instead and copy it from a worker. The worker still waits for the
+fences, so nothing unfinished reaches the screen, and damage that
+arrives while a copy is pending is merged into it. Idle framebuffers,
+such as the ones the CPU draws into, are still copied in the ioctl.
+
+With this change, X answers in a median of 26 ms and the game's frame
+rate is unchanged.
+---
+--- a/drivers/gpu/drm/sysfb/corebootdrm.c
++++ b/drivers/gpu/drm/sysfb/corebootdrm.c
+@@ -206,6 +206,9 @@ static int corebootdrm_mode_config_init(struct corebootdrm_device *cdev,
+ 	int ret;
+ 
+ 	ret = drmm_mode_config_init(dev);
++	if (ret)
++		return ret;
++	ret = drm_sysfb_damage_init(sysfb);
+ 	if (ret)
+ 		return ret;
+ 
+--- a/drivers/gpu/drm/sysfb/drm_sysfb_helper.h
++++ b/drivers/gpu/drm/sysfb/drm_sysfb_helper.h
+@@ -5,6 +5,8 @@
+ 
+ #include <linux/container_of.h>
+ #include <linux/iosys-map.h>
++#include <linux/spinlock.h>
++#include <linux/workqueue.h>
+ 
+ #include <video/pixel_format.h>
+ 
+@@ -80,6 +82,12 @@ struct drm_sysfb_device {
+ 
+ 	/* hardware-framebuffer kernel address */
+ 	struct iosys_map fb_addr;
++
++	/* damage from DIRTYFB, copied to the hardware framebuffer by damage_work */
++	spinlock_t damage_lock;
++	struct drm_framebuffer *damage_fb;
++	struct drm_rect damage;
++	struct work_struct damage_work;
+ };
+ 
+ static inline struct drm_sysfb_device *to_drm_sysfb_device(struct drm_device *dev)
+@@ -201,8 +209,13 @@ int drm_sysfb_connector_helper_get_modes(struct drm_connector *connector);
+  * Mode config
+  */
+ 
++int drm_sysfb_damage_init(struct drm_sysfb_device *sysfb);
++struct drm_framebuffer *drm_sysfb_fb_create(struct drm_device *dev, struct drm_file *file,
++					    const struct drm_format_info *info,
++					    const struct drm_mode_fb_cmd2 *mode_cmd);
++
+ #define DRM_SYSFB_MODE_CONFIG_FUNCS \
+-	.fb_create = drm_gem_fb_create_with_dirty, \
++	.fb_create = drm_sysfb_fb_create, \
+ 	.atomic_check = drm_atomic_helper_check, \
+ 	.atomic_commit = drm_atomic_helper_commit
+ 
+--- a/drivers/gpu/drm/sysfb/drm_sysfb_modeset.c
++++ b/drivers/gpu/drm/sysfb/drm_sysfb_modeset.c
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
++#include <linux/dma-resv.h>
+ #include <linux/export.h>
+ #include <linux/slab.h>
+ 
+@@ -11,7 +12,9 @@
+ #include <drm/drm_edid.h>
+ #include <drm/drm_fourcc.h>
+ #include <drm/drm_framebuffer.h>
++#include <drm/drm_gem.h>
+ #include <drm/drm_gem_framebuffer_helper.h>
++#include <drm/drm_managed.h>
+ #include <drm/drm_panic.h>
+ #include <drm/drm_print.h>
+ #include <drm/drm_probe_helper.h>
+@@ -606,3 +609,170 @@ int drm_sysfb_connector_helper_get_modes(struct drm_connector *connector)
+ 	return drm_connector_helper_get_modes_fixed(connector, &sysfb->fb_mode);
+ }
+ EXPORT_SYMBOL(drm_sysfb_connector_helper_get_modes);
++
++/*
++ * Damage
++ *
++ * drm_atomic_helper_dirtyfb() waits for the GPU work that last rendered into
++ * the framebuffer before the CPU copies it. Done in DIRTYFB, that wait blocks
++ * the compositor for as long as the rendering takes. So damage of a busy
++ * framebuffer is merged into one pending rectangle, and a worker copies it
++ * once the rendering is done. Damage of an idle framebuffer is copied at once.
++ */
++
++static bool drm_sysfb_fb_busy(struct drm_framebuffer *fb)
++{
++	for (unsigned int i = 0; i < fb->format->num_planes; i++) {
++		struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, i);
++
++		if (obj && !dma_resv_test_signaled(obj->resv, DMA_RESV_USAGE_WRITE))
++			return true;
++	}
++	return false;
++}
++
++static void drm_sysfb_damage_work(struct work_struct *work)
++{
++	struct drm_sysfb_device *sysfb = container_of(work, struct drm_sysfb_device,
++						      damage_work);
++	struct drm_framebuffer *fb;
++	struct drm_clip_rect clip;
++	int ret;
++
++	spin_lock(&sysfb->damage_lock);
++	fb = sysfb->damage_fb;
++	sysfb->damage_fb = NULL;
++	clip.x1 = sysfb->damage.x1;
++	clip.y1 = sysfb->damage.y1;
++	clip.x2 = sysfb->damage.x2;
++	clip.y2 = sysfb->damage.y2;
++	spin_unlock(&sysfb->damage_lock);
++	if (!fb)
++		return;
++
++	/* Wait unlocked, so other commits don't queue behind the GPU. */
++	for (unsigned int i = 0; i < fb->format->num_planes; i++) {
++		struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, i);
++
++		if (obj)
++			dma_resv_wait_timeout(obj->resv, DMA_RESV_USAGE_WRITE, false,
++					      MAX_SCHEDULE_TIMEOUT);
++	}
++
++	ret = drm_atomic_helper_dirtyfb(fb, NULL, 0, 0, &clip, 1);
++	if (ret)
++		drm_err_ratelimited(&sysfb->dev, "damage update failed: %d\n", ret);
++	drm_framebuffer_put(fb);
++}
++
++static void drm_sysfb_damage_fini(struct drm_device *dev, void *arg)
++{
++	struct drm_sysfb_device *sysfb = arg;
++
++	cancel_work_sync(&sysfb->damage_work);
++	if (sysfb->damage_fb)
++		drm_framebuffer_put(sysfb->damage_fb);
++	sysfb->damage_fb = NULL;
++}
++
++/**
++ * drm_sysfb_damage_init - Set up deferred damage for a sysfb device
++ * @sysfb: the device
++ *
++ * Call after drmm_mode_config_init(). Framebuffers from drm_sysfb_fb_create()
++ * then copy the damage of busy framebuffers outside the DIRTYFB ioctl.
++ *
++ * Returns: 0 on success, or a negative errno.
++ */
++int drm_sysfb_damage_init(struct drm_sysfb_device *sysfb)
++{
++	spin_lock_init(&sysfb->damage_lock);
++	INIT_WORK(&sysfb->damage_work, drm_sysfb_damage_work);
++
++	return drmm_add_action_or_reset(&sysfb->dev, drm_sysfb_damage_fini, sysfb);
++}
++EXPORT_SYMBOL(drm_sysfb_damage_init);
++
++static void drm_sysfb_damage_bounds(struct drm_framebuffer *fb, unsigned int flags,
++				    const struct drm_clip_rect *clips, unsigned int num_clips,
++				    struct drm_rect *r)
++{
++	unsigned int inc = 1;
++
++	if (!clips || !num_clips) {
++		drm_rect_init(r, 0, 0, fb->width, fb->height);
++		return;
++	}
++	if (flags & DRM_MODE_FB_DIRTY_ANNOTATE_COPY) {
++		inc = 2;
++		num_clips /= 2;
++	}
++	drm_rect_init(r, clips->x1, clips->y1, clips->x2 - clips->x1, clips->y2 - clips->y1);
++	for (unsigned int i = 1; i < num_clips; i++) {
++		clips += inc;
++		r->x1 = min_t(int, r->x1, clips->x1);
++		r->y1 = min_t(int, r->y1, clips->y1);
++		r->x2 = max_t(int, r->x2, clips->x2);
++		r->y2 = max_t(int, r->y2, clips->y2);
++	}
++}
++
++static int drm_sysfb_fb_dirty(struct drm_framebuffer *fb, struct drm_file *file,
++			      unsigned int flags, unsigned int color,
++			      struct drm_clip_rect *clips, unsigned int num_clips)
++{
++	struct drm_sysfb_device *sysfb = to_drm_sysfb_device(fb->dev);
++	bool busy = drm_sysfb_fb_busy(fb);
++	struct drm_rect r;
++
++	drm_sysfb_damage_bounds(fb, flags, clips, num_clips, &r);
++
++	spin_lock(&sysfb->damage_lock);
++	if (sysfb->damage_fb == fb) {
++		sysfb->damage.x1 = min(sysfb->damage.x1, r.x1);
++		sysfb->damage.y1 = min(sysfb->damage.y1, r.y1);
++		sysfb->damage.x2 = max(sysfb->damage.x2, r.x2);
++		sysfb->damage.y2 = max(sysfb->damage.y2, r.y2);
++		spin_unlock(&sysfb->damage_lock);
++		return 0;
++	}
++	if (busy && !sysfb->damage_fb) {
++		drm_framebuffer_get(fb);
++		sysfb->damage_fb = fb;
++		sysfb->damage = r;
++		/* Freezable: no copies while the device suspends or resumes. */
++		queue_work(system_freezable_wq, &sysfb->damage_work);
++		spin_unlock(&sysfb->damage_lock);
++		return 0;
++	}
++	spin_unlock(&sysfb->damage_lock);
++
++	/* Idle, or another framebuffer is pending: copy now. */
++	return drm_atomic_helper_dirtyfb(fb, file, flags, color, clips, num_clips);
++}
++
++static const struct drm_framebuffer_funcs drm_sysfb_fb_funcs = {
++	.destroy = drm_gem_fb_destroy,
++	.create_handle = drm_gem_fb_create_handle,
++	.dirty = drm_sysfb_fb_dirty,
++};
++
++/**
++ * drm_sysfb_fb_create - &drm_mode_config_funcs.fb_create for sysfb devices
++ * @dev: the device
++ * @file: the DRM file of the caller
++ * @info: the pixel format
++ * @mode_cmd: the framebuffer from userspace
++ *
++ * Like drm_gem_fb_create_with_dirty(), but the framebuffer's damage is copied
++ * outside the DIRTYFB ioctl (drm_sysfb_damage_init()).
++ *
++ * Returns: the framebuffer, or an ERR_PTR() on failure.
++ */
++struct drm_framebuffer *drm_sysfb_fb_create(struct drm_device *dev, struct drm_file *file,
++					    const struct drm_format_info *info,
++					    const struct drm_mode_fb_cmd2 *mode_cmd)
++{
++	return drm_gem_fb_create_with_funcs(dev, file, info, mode_cmd, &drm_sysfb_fb_funcs);
++}
++EXPORT_SYMBOL(drm_sysfb_fb_create);
+--- a/drivers/gpu/drm/sysfb/efidrm.c
++++ b/drivers/gpu/drm/sysfb/efidrm.c
+@@ -284,6 +284,9 @@ static struct efidrm_device *efidrm_device_create(struct drm_driver *drv,
+ 	 */
+ 
+ 	ret = drmm_mode_config_init(dev);
++	if (ret)
++		return ERR_PTR(ret);
++	ret = drm_sysfb_damage_init(sysfb);
+ 	if (ret)
+ 		return ERR_PTR(ret);
+ 
+--- a/drivers/gpu/drm/sysfb/ofdrm.c
++++ b/drivers/gpu/drm/sysfb/ofdrm.c
+@@ -1007,6 +1007,9 @@ static struct ofdrm_device *ofdrm_device_create(struct drm_driver *drv,
+ 	 */
+ 
+ 	ret = drmm_mode_config_init(dev);
++	if (ret)
++		return ERR_PTR(ret);
++	ret = drm_sysfb_damage_init(sysfb);
+ 	if (ret)
+ 		return ERR_PTR(ret);
+ 
+--- a/drivers/gpu/drm/sysfb/simpledrm.c
++++ b/drivers/gpu/drm/sysfb/simpledrm.c
+@@ -815,6 +815,9 @@ static struct simpledrm_device *simpledrm_device_create(struct drm_driver *drv,
+ 	 */
+ 
+ 	ret = drmm_mode_config_init(dev);
++	if (ret)
++		return ERR_PTR(ret);
++	ret = drm_sysfb_damage_init(sysfb);
+ 	if (ret)
+ 		return ERR_PTR(ret);
+ 
+--- a/drivers/gpu/drm/sysfb/vesadrm.c
++++ b/drivers/gpu/drm/sysfb/vesadrm.c
+@@ -523,6 +523,9 @@ static struct vesadrm_device *vesadrm_device_create(struct drm_driver *drv,
+ 	 */
+ 
+ 	ret = drmm_mode_config_init(dev);
++	if (ret)
++		return ERR_PTR(ret);
++	ret = drm_sysfb_damage_init(sysfb);
+ 	if (ret)
+ 		return ERR_PTR(ret);
+ 

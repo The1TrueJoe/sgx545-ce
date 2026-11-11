@@ -43,6 +43,7 @@ static int pvrsgx_aux_probe(struct auxiliary_device *adev, const struct auxiliar
 	if (IS_ERR(sdev))
 		return PTR_ERR(sdev);
 	sdev->gma_sgx = gma;
+	sdev->family = pvrsgx_core_family_get(gma->core);
 	/* An auxiliary device has no DMA parameters of its own. */
 	dev->dma_parms = &sdev->dma_parms;
 	dma_set_max_seg_size(dev, UINT_MAX);

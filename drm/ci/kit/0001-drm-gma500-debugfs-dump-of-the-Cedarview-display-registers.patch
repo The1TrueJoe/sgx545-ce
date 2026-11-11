@@ -5,11 +5,12 @@ Test kits only, never upstream: drm/ci/deb-kernel.sh applies it, and
 drm/ci/cedarview-kernel.sh when KIT=1. A read-only debugfs file,
 cdv_display_regs, with the registers that decide whether the LVDS panel
 shows a mode (DPLL, pipe config and status, timings, plane control and
-surface, LVDS port, panel power) for pipes A and B, read under gma500's
-power reference. For an intermittent black, backlit panel: read it on a
-dark boot and on a good one.
-
-Assisted-by: Claude:claude-opus-5-5
+surface, LVDS port, panel power) for pipes A and B, and the FIFO
+watermarks and memory self-refresh state behind a pipe underrun
+(FW_BLC_SELF, DSPARB, DSPFW1-6), and pipe B's stride, cursor and gamma
+palette (a zeroed palette is black too), read under gma500's power
+reference. For an intermittent black, backlit panel: read it on a dark
+boot and on a good one.
 ---
 --- a/drivers/gpu/drm/gma500/cdv_device.c
 +++ b/drivers/gpu/drm/gma500/cdv_device.c
@@ -31,16 +32,15 @@ Assisted-by: Claude:claude-opus-5-5
  #include "psb_drv.h"
  #include "psb_intel_reg.h"
  #include "psb_reg.h"
-@@ -541,8 +544,52 @@
- 		.tileoff = DSPBTILEOFF,
- 		.palette = PALETTE_B,
+@@ -543,6 +546,60 @@ static const struct psb_offset cdv_regmap[2] = {
  	}
-+};
-+
+ };
+ 
 +#ifdef CONFIG_DEBUG_FS
 +/*
 + * Test kits only, not upstream: the display registers that decide whether a
-+ * panel shows a mode, read-only, for an intermittent black LVDS panel.
++ * panel shows a mode, and the FIFO watermarks and memory self-refresh state
++ * behind a pipe underrun, read-only, for an intermittent black LVDS panel.
 + */
 +static const struct {
 +	const char *name;
@@ -55,13 +55,22 @@ Assisted-by: Claude:claude-opus-5-5
 +	{ "DSPACNTR", DSPACNTR },	{ "DSPBCNTR", DSPBCNTR },
 +	{ "DSPASURF", DSPASURF },	{ "DSPBSURF", DSPBSURF },
 +	{ "LVDS", LVDS },		{ "PP_STATUS", PP_STATUS },
- };
++	{ "FW_BLC_SELF", FW_BLC_SELF },	{ "DSPARB", DSPARB },
++	{ "DSPFW1", DSPFW1 },		{ "DSPFW2", DSPFW2 },
++	{ "DSPFW3", DSPFW3 },		{ "DSPFW4", DSPFW4 },
++	{ "DSPFW5", DSPFW5 },		{ "DSPFW6", DSPFW6 },
++	{ "DSPBSTRIDE", DSPBSTRIDE },	{ "DSPBLINOFF", DSPBLINOFF },
++	{ "CURBCNTR", CURBCNTR },	{ "CURBBASE", CURBBASE },
++	{ "PALETTE_B0", PALETTE_B },	{ "PALETTE_B1", PALETTE_B + 4 },
++	{ "PALETTE_B128", PALETTE_B + 4 * 128 },
++	{ "PALETTE_B255", PALETTE_B + 4 * 255 },
++};
 +
 +static int cdv_display_regs_show(struct seq_file *m, void *unused)
 +{
 +	struct drm_debugfs_entry *entry = m->private;
 +	struct drm_device *dev = entry->dev;
- 
++
 +	if (!gma_power_begin(dev, false)) {
 +		seq_puts(m, "display powered off\n");
 +		return 0;
@@ -84,7 +93,7 @@ Assisted-by: Claude:claude-opus-5-5
  static int cdv_chip_setup(struct drm_device *dev)
  {
  	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
-@@ -554,6 +601,7 @@
+@@ -554,6 +611,7 @@ static int cdv_chip_setup(struct drm_device *dev)
  	psb_intel_opregion_init(dev);
  	psb_intel_init_bios(dev);
  	cdv_hotplug_enable(dev, false);

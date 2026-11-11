@@ -1,0 +1,68 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [PATCH] drm/gma500: Don't lose a page flip's completion event
+
+gma_crtc_page_flip() keeps the flip's event in the CRTC, and the vblank
+interrupt sends it. Two cases never send it, and the client waits on
+the flip forever:
+- the pipe is off, so drm_crtc_vblank_get() fails: the flip WARNs and
+  then waits for a vblank interrupt that never comes;
+- DPMS off with a flip pending: drm_crtc_vblank_off() only completes
+  the events on the core's own list, not this one.
+
+Complete the flip at once when vblank can't be had, and send a pending
+flip's event before turning vblank off.
+---
+--- a/drivers/gpu/drm/gma500/gma_display.c
++++ b/drivers/gpu/drm/gma500/gma_display.c
+@@ -287,6 +287,22 @@ static bool gma_crtc_running(struct drm_device *dev, const struct psb_offset *ma
+ 				  false, dev, map->conf);
+ }
+ 
++/* Complete a pending page flip's event: no vblank interrupt will. */
++static void gma_crtc_complete_flip(struct drm_crtc *crtc)
++{
++	struct gma_crtc *gma_crtc = to_gma_crtc(crtc);
++	struct drm_device *dev = crtc->dev;
++	unsigned long flags;
++
++	spin_lock_irqsave(&dev->event_lock, flags);
++	if (gma_crtc->page_flip_event) {
++		drm_crtc_send_vblank_event(crtc, gma_crtc->page_flip_event);
++		gma_crtc->page_flip_event = NULL;
++		drm_crtc_vblank_put(crtc);
++	}
++	spin_unlock_irqrestore(&dev->event_lock, flags);
++}
++
+ void gma_crtc_dpms(struct drm_crtc *crtc, int mode)
+ {
+ 	struct drm_device *dev = crtc->dev;
+@@ -353,6 +369,7 @@ void gma_crtc_dpms(struct drm_crtc *crtc, int mode)
+ 		REG_WRITE(VGACNTRL, VGA_DISP_DISABLE);
+ 
+ 		/* Turn off vblank interrupts */
++		gma_crtc_complete_flip(crtc);
+ 		drm_crtc_vblank_off(crtc);
+ 
+ 		/* Wait for vblank for the disable to take effect */
+@@ -571,11 +588,16 @@ int gma_crtc_page_flip(struct drm_crtc *crtc,
+ 	/* Using mode_set_base requires the new fb to be set already. */
+ 	crtc->primary->fb = fb;
+ 
+-	if (event) {
++	if (event && drm_crtc_vblank_get(crtc)) {
++		/* The pipe is off: no vblank will complete the flip. */
++		ret = crtc_funcs->mode_set_base(crtc, crtc->x, crtc->y, old_fb);
++		if (!ret) {
++			spin_lock_irqsave(&dev->event_lock, flags);
++			drm_crtc_send_vblank_event(crtc, event);
++			spin_unlock_irqrestore(&dev->event_lock, flags);
++		}
++	} else if (event) {
+ 		spin_lock_irqsave(&dev->event_lock, flags);
+-
+-		WARN_ON(drm_crtc_vblank_get(crtc) != 0);
+-
+ 		gma_crtc->page_flip_event = event;
+ 		spin_unlock_irqrestore(&dev->event_lock, flags);
+ 

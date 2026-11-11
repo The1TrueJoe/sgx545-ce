@@ -58,9 +58,16 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_context *ctx;
 	u32 w, h;
 	struct pvrsgx_rt_numbers n;
-	struct pvrsgx_kobj *rd, *rd_w8, *rd_w4, *hwsync, *rtword, *rtdata, *entword[2];
-	struct pvrsgx_kobj *rd_sync, *hwsync_access, *done;
-	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2], *bgblock;
+	/*
+	 * Per RT-data entry, which alternates by frame parity, so one frame's TA
+	 * can be built while the other's 3D still reads its own (as the DDK keeps
+	 * them): render details, their words, the dependency block and its syncs,
+	 * and the background object, which the 3D fetches per tile.
+	 */
+	struct pvrsgx_kobj *rd[2], *rd_w8[2], *rd_w4[2], *hwsync[2];
+	struct pvrsgx_kobj *rd_sync[2], *hwsync_access[2], *bgblock[2];
+	struct pvrsgx_kobj *rtword, *rtdata, *entword[2], *done;
+	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2];
 	/** @frames: Renders into this dataset so far. */
 	u32 frames;
 };
@@ -85,6 +92,8 @@ struct pvrsgx_render_job {
 	u32 nkicks;
 	/** @cmd_off: Where the last kick's TA command went in the context's ring. */
 	u32 cmd_off;
+	/** @entry: The RT-data entry (frame parity) the render used. */
+	u32 entry;
 };
 
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
