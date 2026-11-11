@@ -1030,8 +1030,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * varying's iterator is its set + 1.  The DDK's driver also iterates a
        * placeholder colour (source 0x20) in a shader without varyings; that
        * hangs the GPU when the vertex program outputs no colour, and ours
-       * never do, so there is none (the compiler still counts its PA register
-       * in n_pa). */
+       * never do, so there is none. */
       int last_plain = -1, last_sample = -1;
 
       for (unsigned i = 0; i < out.n_iters && i < ARRAY_SIZE(so->prog.douti);
