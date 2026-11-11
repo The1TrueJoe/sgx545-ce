@@ -138,6 +138,36 @@ Formats wider than 32 bits, and more than one draw buffer, need either:
 | `ARB_map_buffer_range`, `ARB_framebuffer_object` | — | gallium generic; FBO needs mixed attachment sizes, which the render target handles by its own size | — | high |
 | `MAX_SAMPLES` ≥ 4 (`EXT_framebuffer_multisample`) | TE AA b30-31 = 2× in X / Y; PBE word 2 b30-31 = downscale; **listed** (ICD: 4) | 4× by rendering at 2×2 and downsampling in the PBE (**H6**, or a DDK ES2 capture with a 4-sample EGL config). Mesa's fake MSAA (`caps->fake_sw_msaa`) would pass the gate with one sample; it isn't used | STATE.md §1 tail (+0x238: unconfirmed), §4 (unconfirmed) | medium |
 | 8 clip distances | 6 planes in the TA (`fdpc` → cp0-5, output select b0-5) | 7 and 8 lowered to a discard (`nir_lower_clip_fs`) | STATE.md §3 "Clip planes" (capture) | high |
+| flat varyings (GLSL 1.30 `flat`; every integer varying is flat) | flat iteration works only on the TA's vertex-colour source, one vec4: DOUTI b25-26 on a texcoord set's iteration does nothing | one flat vec4 through the colour source; the rest by making the provoking vertex's values reach all three vertices (see "Flat varyings" below) | hardware (2026-11-11: the colour source flat, a texcoord set's flat bit no effect); STATE.md §3 "Clip planes, shading…" (DOUTI b25-26) | medium |
+
+### Flat varyings
+
+The hardware keeps one vec4 flat, the vertex-colour source, so the driver has
+to make other flat varyings come out equal at a triangle's three vertices.
+Then a smooth iteration returns the provoking vertex's value: the plane
+through three equal values is constant (exact in F32 for whole numbers up to
+2^24 and the 16-bit halves the compiler passes integers as; **unconfirmed**
+until a test reads back such a varying across a triangle).
+
+1. **The colour source** takes the first flat vec4, or up to four flat
+   scalars packed into it. What precision the colour source iterates at (F32,
+   or clamped or narrowed the way a vertex colour may be) is **unknown**, and
+   decides whether integers and arbitrary floats can use it: a test that
+   passes 0x3f800001, -3.5, 1e20 and 65535.0 through it flat and reads them
+   back exactly.
+2. **The rest, by replicating the provoking vertex.** The driver already
+   unindexes draws on the CPU, so a draw whose program has more flat outputs
+   than the colour source holds becomes a triangle list in which each vertex
+   also carries the provoking vertex's inputs. A vertex-program variant
+   computes the flat outputs from those copies (a second copy of the shader's
+   NIR, reading the copied inputs and writing only the flat outputs). Only
+   the inputs the flat outputs depend on are copied, within the 16 attributes.
+   Lines take the second vertex, points need nothing.
+3. **When that doesn't fit** (too many inputs to copy), the draw is refused
+   with a message, not drawn wrong.
+
+The provoking vertex is the last one (STATE.md §3); `flatshade_first` is a
+rotation of each triangle's vertices on the CPU before step 2.
 
 ## GL 3.1
 
