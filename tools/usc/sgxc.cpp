@@ -169,6 +169,8 @@ main(int argc, char **argv)
       }
    }
 
+   /* GLSL 1.30 and later (and ES 3.00): integers in the integer units */
+   opts.native_integers = glsl_version >= 130;
    struct standalone_options so;
    memset(&so, 0, sizeof(so));
    so.glsl_version = glsl_version;
@@ -302,7 +304,7 @@ main(int argc, char **argv)
       char *hex = (char *)malloc(out.n_code * 20 + 1);
       size_t k = 0;
       for (unsigned i = 0; i < out.n_code; i++)
-         k += sprintf(hex + k, "%08x %08x\n", (unsigned)(out.code[i] >> 32), (unsigned)out.code[i]);
+         k += snprintf(hex + k, 20, "%08x %08x\n", (unsigned)(out.code[i] >> 32), (unsigned)out.code[i]);
       snprintf(suffix, sizeof suffix, "%s.code", sname);
       write_file(prefix, suffix, hex, k);
       free(hex);

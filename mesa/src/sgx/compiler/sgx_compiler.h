@@ -107,6 +107,10 @@ struct sgx_compile_options {
     * texel a dependent smp reads arrives as F16 in two registers (the
     * result format is the state's) */
    bool dep_f16_samples;
+   /* GLSL 1.30 and later: 32-bit integers and 0 / ~0 booleans in the
+    * integer units. Off: GLSL ES 1.00, whose integers and booleans are
+    * computed as floats, as the DDK's compiler does */
+   bool native_integers;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components

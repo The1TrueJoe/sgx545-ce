@@ -65,6 +65,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.split_phases = split_phases;
       opts.dep_f16_samples = dep_f16;
       opts.driver_consts = true;
+      opts.native_integers = native;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
       compiled = true;
@@ -105,6 +106,29 @@ class sgx_compile_test : public ::testing::Test {
    bool f16_samples = false;
    bool split_phases = false;
    bool dep_f16 = false;
+   bool native = false;
+
+   /* a vertex shader with ivec4 attributes a, b (pa0-3, pa4-7) storing
+    * fn(a, b) to a flat ivec4 varying */
+   void int_vertex(nir_def *(*fn)(nir_builder *, nir_def *, nir_def *),
+                   const glsl_type *t = glsl_ivec4_type())
+   {
+      start(MESA_SHADER_VERTEX);
+      nir_variable *a = var(nir_var_shader_in, t, "a", VERT_ATTRIB_GENERIC0);
+      nir_variable *bv = var(nir_var_shader_in, t, "b", VERT_ATTRIB_GENERIC1);
+      nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_Position", VARYING_SLOT_POS);
+      nir_variable *r = var(nir_var_shader_out, t, "r", VARYING_SLOT_VAR0);
+      r->data.interpolation = INTERP_MODE_FLAT;
+      nir_store_var(&b, pos, nir_imm_vec4(&b, 0, 0, 0, 1), 0xf);
+      nir_store_var(&b, r, fn(&b, nir_load_var(&b, a), nir_load_var(&b, bv)),
+                    0xf);
+   }
+
+   bool has(const char *text)
+   {
+      return disasm().find(text) != std::string::npos;
+   }
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -1541,6 +1565,105 @@ TEST(sgx_fixed, programs_match_golden)
       checked++;
    }
    EXPECT_EQ(checked, 42u);
+}
+
+/* native integers: 32-bit add, multiply, shift and or in the integer units */
+TEST_F(sgx_compile_test, vertex_int_alu)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *t = nir_ixor(b, nir_imul(b, x, y), nir_ishl(b, x, y));
+      return nir_ior(b, nir_ushr(b, t, y), nir_iand_imm(b, x, 0x0ff00000));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("ima32")) << disasm();
+   EXPECT_TRUE(has("shl")) << disasm();
+   /* a register shift count is masked to 0-31 first */
+   EXPECT_TRUE(has(", #31 ")) << disasm();
+   /* 0x0ff00000 as a rotated 16-bit immediate */
+   EXPECT_TRUE(has("rot=")) << disasm();
+   EXPECT_FALSE(has("fmad")) << disasm();
+}
+
+/* the same shader without native integers computes in floats */
+TEST_F(sgx_compile_test, vertex_int_alu_as_floats)
+{
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, nir_imul(b, x, y), x);
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_FALSE(has("ima32")) << disasm();
+}
+
+/* signed and unsigned compares as 0 / ~0 masks, selects on them */
+TEST_F(sgx_compile_test, vertex_int_compare_select)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *lt = nir_ilt(b, x, y), *ul = nir_ult(b, x, y);
+      return nir_bcsel(b, nir_ior(b, lt, nir_ieq(b, x, nir_imm_int(b, 5))),
+                       nir_imin(b, x, y), nir_bcsel(b, ul, x, y));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("testmask.or.neg.dword")) << disasm();
+   EXPECT_TRUE(has("testmask.xor.eq.dword")) << disasm();
+   EXPECT_TRUE(has("movc.nz.i32")) << disasm();
+   EXPECT_TRUE(has("movc.ltz.i32")) << disasm();
+}
+
+/* division: nir_lower_idiv, the high word of a product through i1 */
+TEST_F(sgx_compile_test, vertex_int_divide)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, nir_idiv(b, x, y), nir_umod(b, x, y));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("frcp")) << disasm();
+   EXPECT_TRUE(has("hi=i1")) << disasm();
+   EXPECT_TRUE(has(", i1 ")) << disasm();
+}
+
+/* int <-> float: 16-bit halves through pck */
+TEST_F(sgx_compile_test, vertex_int_float_conversions)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *f = nir_fadd(b, nir_i2f32(b, x), nir_u2f32(b, y));
+      return nir_iadd(b, nir_f2i32(b, f), nir_f2u32(b, nir_fabs(b, f)));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("pck.f32.s16")) << disasm();
+   EXPECT_TRUE(has("pck.f32.u16")) << disasm();
+   EXPECT_TRUE(has("pck.u16.f32")) << disasm();
+   EXPECT_TRUE(has("rnd=zero")) << disasm();
+}
+
+/* an if on an integer equality tests it straight into p0 */
+TEST_F(sgx_compile_test, fragment_if_int_compare)
+{
+   native = true;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *u = var(nir_var_uniform, glsl_int_type(), "u_n", -1);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v_c", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "color",
+                           FRAG_RESULT_COLOR);
+   nir_variable *res = nir_local_variable_create(b.impl, glsl_vec4_type(), "t");
+   nir_store_var(&b, res, nir_load_var(&b, in), 0xf);
+   nir_push_if(&b, nir_ieq_imm(&b, nir_load_var(&b, u), 3));
+   nir_store_var(&b, res, nir_fmul_imm(&b, nir_load_var(&b, in), 0.5), 0xf);
+   nir_pop_if(&b, NULL);
+   nir_store_var(&b, col, nir_load_var(&b, res), 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+   EXPECT_TRUE(has("test.xor.ne p0")) << disasm();
 }
 
 } /* namespace */

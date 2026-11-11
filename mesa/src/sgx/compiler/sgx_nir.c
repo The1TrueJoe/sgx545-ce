@@ -2068,6 +2068,14 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, lower_sincos);
    optimize(s);
+   if (c->opts->native_integers) {
+      /* no integer divide: a reciprocal and a fix-up */
+      bool idiv = false;
+      NIR_PASS(idiv, s, nir_lower_idiv,
+               &(nir_lower_idiv_options){.allow_fp16 = false});
+      if (idiv)
+         optimize(s);
+   }
 
    optimize_late(s);
 
@@ -2084,18 +2092,23 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_bit_size, int16_to_32, NULL);
    NIR_PASS(_, s, nir_opt_constant_folding);
    NIR_PASS(_, s, nir_opt_dce);
-   NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr,
-            nir_metadata_control_flow, NULL);
-   NIR_PASS(_, s, nir_shader_alu_pass, i2f16_instr, nir_metadata_control_flow,
-            NULL);
-   NIR_PASS(_, s, nir_opt_dce);
-   NIR_PASS(_, s, nir_lower_int_to_float);
-   NIR_PASS(_, s, nir_opt_copy_prop);
-   /* (a 16-bit bcsel would become fcsel, an f32-only opcode: b32csel takes
-    * any size, on the condition as a float) */
-   NIR_PASS(_, s, nir_shader_alu_pass, csel16_instr, nir_metadata_control_flow,
-            NULL);
-   NIR_PASS(_, s, nir_lower_bool_to_float, true);
+   if (c->opts->native_integers) {
+      /* integers stay integers; booleans are 0 / ~0 (testmask's dword) */
+      NIR_PASS(_, s, nir_lower_bool_to_int32);
+   } else {
+      NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_shader_alu_pass, i2f16_instr,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_opt_dce);
+      NIR_PASS(_, s, nir_lower_int_to_float);
+      NIR_PASS(_, s, nir_opt_copy_prop);
+      /* (a 16-bit bcsel would become fcsel, an f32-only opcode: b32csel
+       * takes any size, on the condition as a float) */
+      NIR_PASS(_, s, nir_shader_alu_pass, csel16_instr,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_lower_bool_to_float, true);
+   }
    NIR_PASS(_, s, nir_opt_copy_prop);
    NIR_PASS(_, s, nir_opt_constant_folding);
    NIR_PASS(_, s, nir_opt_cse);
