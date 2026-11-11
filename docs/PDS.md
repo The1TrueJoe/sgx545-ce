@@ -288,7 +288,10 @@ unknown. The notation shows it as `.hi`, and nothing should emit it.
 **Word 0:**
 
 - bits 0–3: USE code base register (`EUR_CR_USE_CODE_BASE_n`). Hardware.
-- bits 4–21: code offset / 8 inside that base's 512 KB window. Hardware.
+- bits 4–21: code offset / 8 from that base. Hardware. The field is 18 bits
+  and reaches past the base's 512 KB window: base 0 with offset 0x88380 runs
+  the code at 0x37088380, not window 0's (**hardware** (`hwt_window`, 2026-11-11, CE5300 board)). Windows
+  are where the registers point, not a limit on the offset.
   - `off = pc - heap_base`, then `w0 = (off>>19) + base_index |
     (off*2 & mask)` (the open stack's formula).
   - Pixel programs use bases 0–9 at 0x37000000 + n·512K; vertex and state

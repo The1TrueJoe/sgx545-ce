@@ -316,6 +316,7 @@ reproduced all 650 recorded values exactly; open-stack logs are in `hwt_out/open
 | hwt_p4 | fminmax/fmaxmin (all orders); fmad16 swizzles x 3 sources; pck dmask lanes, u8/s16/f16 rounding, rint rnd 0-3, u8 unpack lanes | confirmed; swizzle 0-3 = lohi, lolo, hihi, f32; rnd = nearest-even, down, up, zero; **f32 -> f16 truncates** |
 | hwt_p5 | fadm/fmsa on new inputs; h2 partial write; C10 chan 3 and range | as above |
 | hwt_ba | ba absolute target | instruction index from the code base |
+| hwt_window | code base windows 0-2; ba from bases 0-2; DOUTU offset and ba target past 512 KiB | base n runs heap + n·512K + offset; **ba, and phas.i, count from the task's code base, not the heap**; both fields reach past the window |
 | hwt_p6 | sop2 U8 select/add/sub/mul; C10 operands with each setfc | **setfc's 2nd argument is the C10 enable, on at start** |
 | hwt_p7 | efo F16 numbering; fmad fused?/rounding; fmad16 rounding; C10 alpha; testmask byte/word; call + lapc; fdp; bitwise | efo F16 counts halves; **fmad rounds the product (not fused)**; fmad16 rounds to nearest; fdp writes only the last iteration's dst |
 | hwt_p8 | setfc's first argument; C10 alpha source; C10 -> U8 byte order | **setfc's 1st argument is the efo F16 enable, off at start**; C10 alpha reads channel 0 |
@@ -1540,7 +1541,7 @@ predicate (oracle).
 
 | form | fixed | fields | evidence |
 |---|---|---|---|
-| `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits | oracle; **hardware** (hwt_ba): the target is the absolute instruction index from the USE code base the task runs from (DOUTU's base 0 = 0x37000000): `ba #0x1077` reached the instruction at 0x37008388 + 6*8 |
+| `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits | oracle; **hardware** (hwt_ba): the target is the absolute instruction index from the USE code base the task runs from (DOUTU's base 0 = 0x37000000): `ba #0x1077` reached the instruction at 0x37008388 + 6*8. From base 1 (0x37080000), `ba #0x1090` lands at 0x37088480, and `ba #0x11090` at 0x37108480, so the origin is the task's code base and not the heap; from base 0, `ba #0x11090` reaches 0x37088480, past the first window (hwt_window) |
 | `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | oracle, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
 | `lapc` | h6-8 = 2 | return to the saved link address | oracle, corpus (fn_call); **hardware** (hwt_p7 `call_lapc`): `br #3 [link]` ... `lapc` returns to the instruction after the br |
 | `nop` | h6-8 = 5 | h23 syncs, h18 end, l0 = f2_26, l1 = f3_5; no predicate, h12 and h24-26 are 0 | oracle, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
@@ -1614,7 +1615,7 @@ h11 = nosched, h23 = syncs (atst8, depthf). All oracle.
 | op | form | layout | evidence |
 |---|---|---|---|
 | 2 | `phas src1, src2` (h18 = 0) | h19 end, h11 nosched | oracle; name guess |
-| 2 | `phas.i #pc, #temps4 [rate wait sel43 end]` (h18 = 1) | pc l0-17 (18 bits, absolute, no load offset added); temps4 h0-7 = the temporaries / 4 (multiple of 4, up to 0x3fc); rate h11-12 (0, 1, 2); wait h8-10 (0, 1, 2, 7); sel43 h13; h19 end | oracle; exercised by the open stack (dEQP-GLES2: `wait=7`, `rate=1`, `end`); pc and temps4 as the next phase's address and temporaries: **hardware** (the two-phase discard program, "Phases, visibility feedback and discard"); rate and wait as execution rate and wait condition are a guess |
+| 2 | `phas.i #pc, #temps4 [rate wait sel43 end]` (h18 = 1) | pc l0-17 (18 bits, absolute from the task's USE code base, as `ba`; no load offset added); temps4 h0-7 = the temporaries / 4 (multiple of 4, up to 0x3fc); rate h11-12 (0, 1, 2); wait h8-10 (0, 1, 2, 7); sel43 h13; h19 end | oracle; exercised by the open stack (dEQP-GLES2: `wait=7`, `rate=1`, `end`); pc and temps4 as the next phase's address and temporaries: **hardware** (the two-phase discard program, "Phases, visibility feedback and discard"); rate and wait as execution rate and wait condition are a guess |
 | 0 | `op0xff` / `op0xfe` / `op0x100 src1, src2, #n` | h12-13 = 1 / 2 / 3; n h8-9 (0..3); h15 = f3_11, h14 = f3_12; h11 nosched | oracle; unknown |
 
 ---------------------------------------------------------------------------
@@ -2148,7 +2149,7 @@ Instruction words as written (low high), decoded with `dis.py -x`:
 | words | decodes as | role |
 |---|---|---|
 | `00000000 fa440700` | `phas.i #0, #0 [wait=7]` | single phase: no next phase |
-| `pc>>3 fa440800 \| t` | `phas.i #pc, #t` | phase 0 → phase 1 at `pc` (byte address relative to the code heap, /8); t = (temps + 3) / 4 in h0-7; h13 = header flags B 4; h11 (`rate=1`) when the blend code runs in a phase of its own |
+| `pc>>3 fa440800 \| t` | `phas.i #pc, #t` | phase 0 → phase 1 at `pc` (byte address relative to the task's USE code base, /8: the DOUTU base's window, not the heap); t = (temps + 3) / 4 in h0-7; h13 = header flags B 4; h11 (`rate=1`) when the blend code runs in a phase of its own |
 | `00000000 fa4c0700` | `phas.i #0, #0 [end wait=7]` | last phase ends here |
 | `00000000 f8040140` | `nop [end]` | appended when header flags B 2 says the last instruction can't take `end` |
 | `n<<14 \| (n+1)<<7 \| b0000004 f8300004` | `pcoeff pa<n>, ...` | n = PA registers taken by the program's iterated inputs: the first register after them |
