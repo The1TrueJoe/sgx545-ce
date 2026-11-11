@@ -651,7 +651,7 @@ the RFC series of 2026-11-11 below.
 
 ### RFC series (2026-11-11, dry run, not sent)
 
-`[PATCH RFC 0/5] drm/powervr_sgx: DRM driver for PowerVR SGX5xx GPUs`, cut
+`[PATCH RFC 00/12] drm/powervr_sgx: DRM driver for PowerVR SGX5xx GPUs`, cut
 from m2-drm by `drm/ci/rfc-series.sh` onto drm-misc-next 41b5458595c6 (b4
 branch `b4/powervr-sgx` in `upstream/sgx-series`, the emails in
 `upstream/sgx-series-dryrun` with `RECIPIENTS.txt`):
@@ -659,14 +659,18 @@ branch `b4/powervr-sgx` in `upstream/sgx-series`, the emails in
 1. drm/gma500: Publish the Cedarview SGX as an auxiliary device
 2. drm/gma500: Export GEM objects as dma-bufs
 3. drm/powervr_sgx: Add the uAPI header and its documentation (and MAINTAINERS)
-4. drm/powervr_sgx: Add a driver for PowerVR SGX5xx GPUs (8,111 lines)
-5. drm/powervr_sgx: Add KUnit tests
+4. to 11. the driver by area, 331 to 1,391 lines each: core table, registers and
+   device bring-up; the microkernel loader; GEM, VMs and dma-buf; contexts, the
+   scheduler and SUBMIT_JOBS; the command-stream decoder; render and transfer
+   jobs; the shader validator; the DRM driver, PM and debugging, with the Kconfig
+   entry. Nothing builds before 11.
+12. drm/powervr_sgx: Add KUnit tests
 
 The driver files are byte-identical to m2-drm; only its Makefile (no
 out-of-tree branch) and Kconfig (no vendor-driver note) differ. checkpatch
 `--strict` per patch: no errors but the missing Signed-off-by; the only
-CHECKs are `TRACE_EVENT` layout in `pvrsgx_trace.h`, and the "MAINTAINERS
-need updating" warnings on 4 and 5 are covered by 3's entry. The same code
+CHECKs are `TRACE_EVENT` layout in `pvrsgx_trace.h` (patch 7), and the
+"MAINTAINERS need updating" warnings on 4 to 12 are covered by 3's entry. The same code
 builds clean on drm-misc-next in CI (gcc W=1, sparse, smatch, coccinelle,
 clang W=1, kernel-doc, KUnit). To/Cc from get_maintainer, minus its INTEL SGX
 keyword hit (our `SGX_` names), plus the Rogue maintainers and the
@@ -680,8 +684,8 @@ imagination list.
   WHENCE draft is in the Firmware section).
 - [ ] A parameter buffer per client (Design, below).
 - [ ] The uAPI tests as an IGT `powervr_sgx` binary.
-- [ ] The driver split by area, each patch building ("The series", below);
-  the RFC carries it as one patch.
+- [ ] Each driver patch building on its own ("The series", below); the RFC adds
+  the files by area and builds them from patch 11.
 - [ ] About 60 comments point at this repository's docs (`docs/UKERNEL.md`,
   `docs/SRVINIT.md`, log entries). Upstream needs the facts in the comment or
   in `Documentation/gpu/powervr_sgx`.
@@ -693,7 +697,9 @@ imagination list.
 - [ ] More cores: a DT platform driver for the `img,powervr-sgx` binding, an
   SGX535 compatible there, and what isn't per-core yet (`docs/porting/kernel.md`,
   "What a core needs").
-- [ ] The sysfb DIRTYFB change goes on its own (RFC v2 ready, not in this series).
+- [x] The sysfb DIRTYFB change: declined upstream (RFC v1, 2026-11-11: DIRTYFB
+  blocks by design, as the compositor's feedback path; fix X). Not sent again;
+  the CE5300 test kernels keep it as a local patch (`drm/sysfb/README.md`).
 
 ### Design
 
