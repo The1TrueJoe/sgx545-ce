@@ -1,7 +1,7 @@
 # uAPI rev 3: per-command structs (design draft)
 
-Status: draft for review, nothing implemented. The SGX530 mapping (section 6)
-waits on the 530 bring-up's field table and is provisional until then.
+Status: draft for review, nothing implemented. The base/extension split
+follows the SGX530 field table (shared notes, sgx530-job-uapi-deltas-2026-11-11).
 
 Rev 3 replaces the client command streams (UAPI.md section 3) with one plain
 struct per command. It is independent of the explicit-sync work (M5/B3) and of
@@ -49,7 +49,7 @@ struct drm_powervr_sgx_ext {
 	__u64 next;		/* user pointer to the next extension, or 0 */
 };
 
-struct drm_powervr_sgx_cmd_render {		/* 88 bytes */
+struct drm_powervr_sgx_cmd_render {		/* 80 bytes */
 	struct drm_powervr_sgx_cmd_head head;	/*  0 */
 	__u64 depth_addr;			/* 16 */
 	__u64 stencil_addr;			/* 24 */
@@ -59,18 +59,14 @@ struct drm_powervr_sgx_cmd_render {		/* 88 bytes */
 	__u32 pixel_event_pds_rows;		/* 56 */
 	__u32 bg_pds_secondary_rows;		/* 60 */
 	__u32 bg_pds_primary_rows;		/* 64 */
-	__u32 zls_control;			/* 68 */
-	__u32 flags_3d;				/* 72 */
-	__u32 bg_depth;				/* 76: IEEE float bits */
-	__s32 depth_bias_units;			/* 80 */
-	__u32 depth_bias_factor;		/* 84: IEEE float bits */
+	__u32 bg_depth;				/* 68: IEEE float bits */
+	__s32 depth_bias_units;			/* 72 */
+	__u32 depth_bias_factor;		/* 76: IEEE float bits */
 };
 
-struct drm_powervr_sgx_cmd_ta_kick {		/* 32 bytes */
+struct drm_powervr_sgx_cmd_ta_kick {		/* 24 bytes */
 	struct drm_powervr_sgx_cmd_head head;	/*  0 */
 	__u64 vdm_base;				/* 16 */
-	__u32 ta_flags2;			/* 24 */
-	__u32 _padding_1c;			/* 28 */
 };
 
 struct drm_powervr_sgx_cmd_transfer {		/* 56 bytes */
@@ -86,9 +82,32 @@ struct drm_powervr_sgx_cmd_transfer {		/* 56 bytes */
 };
 ```
 
-The fields, their meanings and checks are rev 1's, one for one (UAPI.md 3.3-3.5).
-Which of them are common to every core is settled by section 6; any that are not
-move to an extension before this is merged.
+The base structs hold only fields that every core has with the same meaning:
+addresses (checked against named heaps), counts, the tile range and depth
+values. Their meanings are rev 1's (UAPI.md 3.3-3.5). The three rev 1 fields
+that are raw SGX545 register images go into the SGX545 extensions:
+
+```c
+#define DRM_POWERVR_SGX_EXT_SGX545_RENDER	1
+#define DRM_POWERVR_SGX_EXT_SGX545_TA_KICK	2
+
+struct drm_powervr_sgx_ext_sgx545_render {	/* 24 bytes */
+	struct drm_powervr_sgx_ext base;	/*  0 */
+	__u32 zls_control;			/* 16: mask 0x001ff007; b3-11 are the kernel's */
+	__u32 flags_3d;				/* 20: mask 0x00000180; b8 uses the stencil */
+};
+
+struct drm_powervr_sgx_ext_sgx545_ta_kick {	/* 24 bytes */
+	struct drm_powervr_sgx_ext base;	/*  0 */
+	__u32 ta_flags2;			/* 16: mask 0x02c80000 */
+	__u32 _padding_14;			/* 20 */
+};
+```
+
+An extension left out reads as all zero, which is rev 1's "off" for all three
+fields: no depth/stencil load or store, no 3D flags, no TA flags. So a 545
+render that uses neither ZLS nor those flags needs no extension. Another core
+sending them gets `-EOPNOTSUPP`.
 
 `struct drm_powervr_sgx_job` changes in two fields; the rest is as in rev 1:
 
@@ -98,7 +117,8 @@ move to an extension before this is merged.
 ```
 
 The struct keeps its size. For a render job `ta_kicks` holds
-`struct drm_powervr_sgx_cmd_ta_kick` elements directly, with `stride` = the
+`struct drm_powervr_sgx_cmd_ta_kick` elements directly (each with its own
+extension chain), with `stride` = the
 element's `head.size`. A transfer job's `ta_kicks` stays empty.
 
 ## 3. Kernel rules
@@ -180,7 +200,11 @@ the file, the schema is ours:
 
 Field attributes are rev 1's: check none/range/mask/addr, min/max/max_limit,
 mask, heap, align, optional, extent (a number, rt_depth, rt_stencil,
-rows16 + extent_field). A `<core>` child overrides any check attribute for
+pds_rows + extent_field). Two changes for other cores:
+- `addr` means "below 2^va_bits and inside the named heap", with `va_bits`
+  from the core table (32 on the 545, 28 on the 530), not "below 2^32";
+- `pds_rows` replaces `rows16`: bytes per row come from the core table (16 on
+  the 545, the two-dword DS0/DS1 interleave; the 530's value is unknown yet). A `<core>` child overrides any check attribute for
 that core. A field with a `<core ... absent="true"/>` child is refused at
 generation: a field some core lacks belongs in an extension.
 
@@ -215,16 +239,39 @@ CI fails if any generated output is stale, as it does for the stream tables toda
 **What decides base vs extension:** a field is base only if every supported
 core has it, with the same meaning and width. Its valid values may differ
 (per-core checks). A field one core lacks, or means differently, is an
-extension. This is why the base list above is provisional until the 530's table.
+extension.
 
-**SGX530 (provisional):** waiting on the 530 bring-up session's per-field
-table: which of the fields above exist there with the same meaning and width,
-their masks and ranges, and what the 530 needs that the 545 derives in the
-kernel. Each answer maps to one of:
-- same field, same checks: nothing to do;
-- same field, other masks or ranges: a `<core name="sgx530">` override;
-- a 545 field the 530 lacks: it moves to a 545 extension before rev 3 merges;
-- a 530-only field: a 530 extension.
+**SGX530** (from its field table; nothing on it has run past CORE_ID):
+- **No base field is missing or extra on the 530.** Every base field exists there
+  (deduced: the same firmware path).
+- **The register images** (`zls_control`, `flags_3d`, `ta_flags2`) have 545
+  encodings, and the 530's are unknown. The 530 also lacks external Z for the ZLS.
+  Hence the SGX545 extensions above. The 530 gets `EXT_SGX530_*` extensions once
+  its ISP/ZLS/TA registers are decoded. Until then a 530 render without
+  extensions runs with them all off.
+- **28-bit VAs:** `va_bits` = 28 in its core entry. The ZLS cross-field rule
+  (offset below 2^30 from a 1 MiB base) becomes "below 2^va_bits", which is
+  vacuous on both cores today.
+- **Heaps:** the 530 has its own layout (pds_pixel at 0x02c00000, 4 MiB).
+  Checks name heaps, never addresses, so nothing changes.
+- **`*_rows`:** the unit is per core (`pds_rows`); the 1..63 range is unknown on
+  the 530, so it gets a `<core>` override once known.
+- **Alignments** (PDS 16, VDM 4, bg block 16 and 0x200) are unknown on the 530:
+  `<core>` overrides when known. Until then the 545 values apply.
+- **Single context:** overlap is off and QUIRK_UNISOLATED is set; the BRN_28889
+  invalidate split is the kernel's. None of it is a job field.
+- **Its 2D unit**, if ever used, is a new job type, not a TRANSFER extension. The
+  job-type enum stays open.
+
+**DEV_QUERY additions** (the size-versioned query structs grow at their tails):
+- `limits.va_bits`;
+- `limits.caps`: bit 0 = backward (overlapping) blits, which the 530 lacks;
+- `limits.max_layers` (1 on both today);
+- per-core `rt_max_width/height` and transfer tile limits, hardcoded 545 values
+  today.
+
+So userspace never infers these from the core id. A future 545 extension for
+backward blits is refused on a core without the cap.
 
 **SGX535 (the blueprint):** a third core is the test of the scheme. It should
 need only steps 1-3 above. If it needs a base field changed, the base list was
