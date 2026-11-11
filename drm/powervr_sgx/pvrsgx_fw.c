@@ -523,6 +523,21 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	return 0;
 }
 
+/*
+ * Every unit and the BIF held in reset, at once and without the microkernel:
+ * no GPU memory access after this returns. For a hang, before the jobs' memory
+ * can go, and when the device is lost.
+ */
+void pvrsgx_fw_halt(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
+	sgx_rd(sdev, SGX_CR_SOFT_RESET);
+	if (sdev->pdev)
+		pci_clear_master(sdev->pdev);
+}
+
 /* Ask the microkernel to power off, then hold the cores in reset. */
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 {

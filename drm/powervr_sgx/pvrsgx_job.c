@@ -300,6 +300,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 			bad->ccb_seq, pvrsgx_ccb_consumed(sdev));
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
 	pvrsgx_coredump(sdev, bad);
+	/* Stopped before any fence signals: userspace may free the jobs' memory then. */
+	pvrsgx_fw_halt(sdev);
 
 	mutex_lock(&sdev->done_lock);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
@@ -325,6 +327,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	WRITE_ONCE(sdev->faulted, false);
 	if (pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not restart: device lost\n");
+		/* Lost: the cores stay in reset, and run_job fails every job. */
+		pvrsgx_fw_halt(sdev);
 		sdev->lost = true;
 	}
 	drm_sched_start(&sdev->sched, 0);
