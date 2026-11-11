@@ -263,3 +263,15 @@ with `--core`, and `test_sgx530.py` next to `test_emu.py`.
     (phases, pairing) next to the formats. Before a first start, list the image's forms
     with the features that could change each (ISA.md, "Other cores: the SGX530"), and
     put the riskiest form on the failure table, so a dead init points at it.
+
+### 2026-11-11: the first start
+
+23. **Log the memory-side progress words when a start fails, not only when it passes.** The
+    runbook asked for the heartbeat after a start. The first attempt timed out, the probe
+    freed the arenas, and the one word that splits "the USSE never ran" from "init
+    stalled" was gone. The event entry's first write is the heartbeat (instruction 6). It
+    comes after a PDS fetch, a USSE fetch and one load, so on a failure it localizes the
+    stall from memory alone, with no register read. For any core, the failure path should
+    dump the control block's progress words from the CPU mapping before teardown. The
+    runbook for each start should say, for the image, which word the event writes
+    first.

@@ -73,6 +73,17 @@ Then read the status words **a second time, at least a second later** (debugfs d
 second status line). The heartbeat is the one value that has to change between reads.
 Also note interrupt 21's count in `/proc/interrupts` before and after the load.
 
+**On a failed start, log the heartbeat too**, from the CPU mapping, before the arenas are
+freed. It is memory, not a register. The event entry's first memory accesses, in order:
+- the PDS fetches the entry program (0x18 bytes at the event-program address);
+- its DOUTU starts the USSE at code base 15, segment 0;
+- instruction 3 loads the heartbeat (control block +0xa8);
+- instruction 6 stores it +1. This is the event's first write. `INIT_STATUS` follows at instruction 50.
+
+So a heartbeat of 0 means nothing reached instruction 6: the PDS fetch, the DOUTU, or the
+USSE's first fetch or load stalled. A heartbeat of 1 means the USSE ran, and the stall is
+in init.
+
 ## What each result means
 
 **Pass:** the base reads back what was written; init 1; version 0x00010000; wait 0 and
@@ -84,7 +95,7 @@ evidence for the 18 instruction forms the path runs (sgx530.md, "What stage 1 ru
 | Result | Likely cause | What to do |
 |---|---|---|
 | `doesn't read back; not starting the microkernel` (-EIO) | 0xa68 isn't the program address on this core, or it holds fewer bits | Stop. Nothing was kicked and the events were never enabled. Record both values and the pre-write line; the offsets stay G. |
-| The base reads back, init stays 0 (the probe fails after 500 ms) | The event program didn't run or didn't reach the microkernel: the enable register's layout, the kick, the entry program's data layout, or `USE_CODE_BASE_15`. Or the microkernel's first instruction, `phas.i`, isn't valid on this core: the SGX530 lacks `USE_UNLIMITED_PHASES` (ISA.md, "Other cores: the SGX530") | Stop. Record the logged `EVENT_STATUS` and BIF fault registers. A BIF fault points at the PD or the heap layout; no fault and no event bit points at the event program. |
+| The base reads back, init stays 0 (the probe fails after 500 ms) | The event program didn't run or didn't reach the microkernel: the enable register's layout, the kick, the entry program's data layout, or `USE_CODE_BASE_15`. Or the microkernel's first instruction, `phas.i`, isn't valid on this core: the SGX530 lacks `USE_UNLIMITED_PHASES` (ISA.md, "Other cores: the SGX530") | Stop. Record the logged `EVENT_STATUS`, the BIF fault registers, `BIF_MEM_REQ_STAT` and the heartbeat. A BIF fault points at the PD or the heap layout. No fault and no event bit points at the event program. Reads outstanding with no fault point below the MMU: the table walk's own reads or the interconnect. The first attempt (log 2026-11-11-1532) gave this: 2 reads, no fault; the heartbeat wasn't logged. |
 | Init 1, version not 0x00010000 | The ctlblk patch, or a different image | Check `--check` and the file's sha256 against the packaged one. |
 | Init 1, timeouts > 0 | A status wait gave up. Nothing on the init and timer paths waits, so this is unexpected | Record `wait` (the last id) and look it up in `sgx530.json`'s `waits` map (register, bits, set or clear). |
 | Init 1, heartbeat stuck at 1 | Init ran but no timer event reached the event program: `EVENT_TIMER`'s layout, the enable value's b29, or the period from `clock_hz` | Read `EVENT_TIMER` (0xacc, named) once: bit 24 should be set, with a nonzero period. Stage 1 isn't passed until the heartbeat moves. |
