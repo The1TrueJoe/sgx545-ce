@@ -66,9 +66,13 @@ Shader validation
 =================
 
 The GPU's page tables keep a client's memory accesses to its own VM, but a USSE
-program can also read and write the core's own registers (``ldr``, ``str``),
-the page directory bases among them, which the page tables can't stop. So the
-kernel decides which USSE code may run for a client.
+program can also read the core's own registers (``ldr``), which the page
+tables can't stop. On the SGX545, a client's fragment task read the core ID,
+a live timer and the page directory base. A client's ``str`` to the page
+directory base or to code bases 14 and 15 was dropped. Stores to other
+registers from a client task are untested, and the microkernel itself writes
+registers with ``str``, so stores are refused as well. So the kernel decides
+which USSE code may run for a client.
 
 **Where client code runs from.** A USSE task starts at one of the 16 USE code
 bases plus an offset, both taken from a ``DOUTU`` word of a PDS program. PDS
