@@ -38,6 +38,12 @@ had to turn into a per-core field. Facts about the core itself are in
 7. **There was no way to build for a board.** CI has to build the board's exact kernel
    config, or the module's symbol versions won't match. `drm/ci/omap3630.config` plus a
    fragment works; omap2plus_defconfig with DRM=m doesn't, because the board has DRM=y.
+   **The config isn't enough: the compiler must match too.** The first modules, built with
+   Ubuntu's gcc 13, were refused on the board ("disagrees about version of symbol
+   dev_driver_string", ...). Its kernel is from gcc 15.3, which sets `CC_HAS_COUNTED_BY`
+   and other options that change what genksyms hashes. CI now uses a gcc 15.3 toolchain and
+   checks those options against the board's config. Check the board's `CONFIG_CC_VERSION_TEXT`
+   before the first load.
 8. **The isolation model was presented as universal.** On a one-directory core the
    firmware is in every client's address space, which no table entry can fix. That is a
    uAPI promise (UAPI.md 7.7, D13), not a porting detail. The guide should send a
