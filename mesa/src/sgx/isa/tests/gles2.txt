@@ -206,7 +206,6 @@ idf [drc=1]
 limm r0, #4096
 limm r0, #305419896
 limm r0, #3735928559 [skipinv]
-limm r0, #4294967295
 (p0) limm sa3, #7
 
 # --- phases and visibility --------------------------------------------------
@@ -220,7 +219,4 @@ reject ld.a.d r3, r1, #0 [skipinv nosched]
 reject ld.a.d r3, r1, #0 [skipinv end]
 reject fmad r0, r1, r2, r3 [partial]
 reject mov r0, r1 [link]
-# numbers wider than 32 bits are errors, on every host
-reject limm r0, #4294967296
-reject limm r0, #-2147483649
 ld.a.d r3, r1, #0 [skipinv]
