@@ -187,12 +187,13 @@ jobs:
       # -k 0: every warning-as-error in one run, not only the first. Mesa's
       # x86_32 CI builds debug; this is the release build we ship, where gcc 14 at
       # -O3 flags upstream NIR (nir_opt_copy_prop_vars.c, a stringop-overflow false
-      # positive), so that one stays a warning.
+      # positive), so that one stays a warning. ld's RWX-segment note is silenced
+      # as Mesa's x86_32 CI does.
       - name: Build (i386, -Dwerror=true)
         run: |
           set -eux
           SGX_MESA_BUILD=$PWD/build/mesa SGX_MESA_LIBDIR=lib/i386-linux-gnu SGX_NINJA_ARGS="-k 0" \
-          SGX_MESA_MESON_ARGS="--cross-file=$PWD/cross-i386.txt -Dwerror=true -Dbuild-tests=true -Dc_args=-Wno-error=stringop-overflow -Dcpp_args=-Wno-error=deprecated-declarations" \
+          SGX_MESA_MESON_ARGS="--cross-file=$PWD/cross-i386.txt -Dwerror=true -Dbuild-tests=true -Dc_args=-Wno-error=stringop-overflow -Dcpp_args=-Wno-error=deprecated-declarations -Dc_link_args=-Wl,--no-warn-rwx-segments -Dcpp_link_args=-Wl,--no-warn-rwx-segments" \
             sh mesa/build.sh debian 2>&1 | tee build-i386.log
           file -L build/mesa/debian/install/opt/sgx/lib/i386-linux-gnu/libgallium-*.so | grep 'ELF 32-bit'
 
