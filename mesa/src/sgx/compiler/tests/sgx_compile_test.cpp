@@ -1808,7 +1808,7 @@ TEST_F(sgx_compile_test, int_varying_as_halves)
 TEST_F(sgx_compile_test, vertex_ubo_loads)
 {
    native = true;
-   ubo_base_k = 1017;
+   ubo_base_k = 1080;
    int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
       nir_def *a = nir_load_ubo(b, 4, 32, nir_imm_int(b, 1), nir_imm_int(b, 16),
                                 .align_mul = 16, .range = ~0u);
@@ -1826,8 +1826,8 @@ TEST_F(sgx_compile_test, vertex_ubo_loads)
    EXPECT_TRUE(has("wdf")) << disasm();
    bool k0 = false, k1 = false;
    for (unsigned n = 0; n < out.n_consts; n++) {
-      k0 |= out.consts[n].k == 1017;
-      k1 |= out.consts[n].k == 1018;
+      k0 |= out.consts[n].k == 1080;
+      k1 |= out.consts[n].k == 1081;
    }
    EXPECT_TRUE(k0 && k1);
 }

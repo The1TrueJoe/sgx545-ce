@@ -168,16 +168,16 @@ struct sgx_ctx {
    unsigned n_labels;
 
    /* uniforms */
-   uint8_t const_used[1024];
+   uint8_t const_used[SGX_MAX_CONST_K];
    /* 1 f32 (list C kind 1), 2 f16 (kind 2), 3 c10 (kind 3) */
-   uint8_t const_fmt[1024];
-   int const_slot[1024];
+   uint8_t const_fmt[SGX_MAX_CONST_K];
+   int const_slot[SGX_MAX_CONST_K];
    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
-   uint8_t const_shift[1024];
+   uint8_t const_shift[SGX_MAX_CONST_K];
    /* the first of a lowp vec4 uniform (C10 candidate) */
-   uint8_t const_lowp[1024];
+   uint8_t const_lowp[SGX_MAX_CONST_K];
    /* GLSL precision of the uniform behind constant k (0 unknown) */
-   uint8_t const_prec[1024];
+   uint8_t const_prec[SGX_MAX_CONST_K];
    /* dynamically indexed arrays: first constant, constants it spans */
    struct {
       uint16_t k, range;
@@ -187,7 +187,7 @@ struct sgx_ctx {
    unsigned sa_base;
    /* where the slots live (place_constants): SA slot from sa_base, -1 memory
     * only; with mem_dwords every slot is also block word slot + 1 */
-   int slot_sa[1024 + 32];
+   int slot_sa[SGX_MAX_CONST_MAP];
    unsigned n_sa_phys; /* SA slots used: kept slots, then the bases */
    unsigned mem_dwords;
    unsigned n_mem_bases;
