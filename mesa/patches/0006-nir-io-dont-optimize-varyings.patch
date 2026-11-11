@@ -1,0 +1,42 @@
+nir: let a driver keep its varyings where the GLSL linker put them
+
+Add nir_io_dont_optimize_varyings. With it, the GLSL linker doesn't run
+nir_opt_varyings, as MESA_GLSL_DISABLE_IO_OPT does for every driver. The
+sgx driver's PDS fetches a texture with an interpolated coordinate before the
+fragment shader runs, and needs that coordinate as a whole vec4 slot from
+component 0. nir_opt_varyings' compaction packs, say, a fog factor in front
+of it, and the fetch becomes a dependent sample in the shader. Until now the
+driver set MESA_GLSL_DISABLE_IO_OPT in its own process environment.
+
+diff --git a/src/compiler/glsl/gl_nir_linker.c b/src/compiler/glsl/gl_nir_linker.c
+--- a/src/compiler/glsl/gl_nir_linker.c
++++ b/src/compiler/glsl/gl_nir_linker.c
+@@ -1518,7 +1518,8 @@
+    for (unsigned i = 0; i < num_shaders; i++)
+       nir_lower_io_passes(shaders[i], true);
+ 
+-   if (debug_get_bool_option("MESA_GLSL_DISABLE_IO_OPT", false))
++   if (debug_get_bool_option("MESA_GLSL_DISABLE_IO_OPT", false) ||
++       (shaders[0]->options->io_options & nir_io_dont_optimize_varyings))
+       return;
+ 
+    nir_opt_varyings_bulk(shaders, num_shaders, spirv, max_uniform_comps,
+diff --git a/src/compiler/nir/nir_shader_compiler_options.h b/src/compiler/nir/nir_shader_compiler_options.h
+--- a/src/compiler/nir/nir_shader_compiler_options.h	2026-10-14 11:12:24
++++ b/src/compiler/nir/nir_shader_compiler_options.h	2026-11-11 01:13:36
+@@ -232,6 +232,15 @@
+     */
+    nir_io_compact_to_higher_16 = BITFIELD_BIT(13),
+ 
++   /**
++    * Whether the GLSL linker must keep varyings where it assigned them: it
++    * doesn't run nir_opt_varyings, which may pack several varyings into one
++    * vec4 slot. For hardware that fetches textures with interpolated
++    * coordinates before the fragment shader runs, which needs each
++    * coordinate as a whole vec4 slot from component 0.
++    */
++   nir_io_dont_optimize_varyings = BITFIELD_BIT(14),
++
+    /* Options affecting the GLSL compiler or Gallium are below. */
+ 
+    /**

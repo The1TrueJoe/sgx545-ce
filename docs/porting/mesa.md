@@ -79,8 +79,8 @@ assumes a kernel that reports the core id and revision and runs a render job.
 - **Traps:**
   - Going past the last SA register locks the GPU. Keep a guard that refuses
     the program.
-  - The GLSL linker's varying packing breaks PDS samples: keep
-    `MESA_GLSL_DISABLE_IO_OPT`.
+  - The GLSL linker's varying packing breaks PDS samples: the compiler's
+    NIR options set `nir_io_dont_optimize_varyings` (patch 0006).
   - Alpha-tested programs belong in two phases: the test before the
     visibility feedback, the color after, for the pixels that pass
     (`split_phases`).

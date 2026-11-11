@@ -348,13 +348,6 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
    if (!screen)
       return NULL;
    sgx_drv_debug = debug_get_option_sgx_drv_debug();
-   /* The GL linker's varying optimisation (nir_opt_varyings) packs varyings
-    * into shared slots whatever the driver asks: a fog varying packed in
-    * front of a texture coordinate keeps the PDS from doing the texture read
-    * (a projected read needs a whole vec4 varying at component 0), and it
-    * becomes a dependent sample in the shader.  Varyings are kept as
-    * declared, for this process, unless the user set it. */
-   setenv("MESA_GLSL_DISABLE_IO_OPT", "1", 0);
    screen->fd = screen->dev_fd = fd;
    simple_mtx_lock(&kept_lock);
    if (kept.fd >= 0) {
