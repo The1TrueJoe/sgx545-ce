@@ -166,9 +166,11 @@ fixing.
 - **RT data header word 1:** STATE.md §6 says it is 1; the clients and the
   kernel driver leave it at 0. *Resolved:* it is a counter the microkernel
   advances, and its starting value doesn't matter (STATE.md §6 "RT data").
-- **`phas.i` target origin:** ISA.md's builder table says it counts from the
+- **`phas.i` target origin:** ISA.md's builder table said it counts from the
   code heap, while UAPI.md and ISA.md's `ba` say from the code base the task
-  runs from. The two differ past the first 512 KB.
+  runs from. The two differ past the first 512 KB. *Resolved:* from the task's
+  code base (ISA.md, `hwt_window`); a heap-relative relocation sent every
+  vertex program past the first window one window high.
 - **TA command +0x20:** UAPI.md §4.1 says it is 0; the kernel driver writes
   the frame index there.
 - **`share_kernel_heaps`:** DRM-DRIVER.md §4 says it maps the kernel heaps
@@ -621,7 +623,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 - GEN.md "Smaller things": the code uses `PDS_ALIGN` 0x40 (64 bytes), but GEN.md and UAPI.md §5 say PDS programs go on 32 bytes. State the value used, and the hardware minimum once tested (G10).
 
 **`sgxws_usse_upload` phas.i relocation (partial)**
-- ISA.md "phase / 0xfe-0x100": what a `phas.i` pc counts from when the task's DOUTU names code base n > 0. ISA.md's builder table says "relative to the code heap". UAPI.md "UPLOAD_CODE" and ISA.md `ba` say "from the code base the task runs from". The code uses the heap base, so a pixel program past the first 512 KB depends on the heap-base reading.
+- ISA.md "phase / 0xfe-0x100": what a `phas.i` pc counts from when the task's DOUTU names code base n > 0. ISA.md's builder table says "relative to the code heap". UAPI.md "UPLOAD_CODE" and ISA.md `ba` say "from the code base the task runs from". The code used the heap base, so a program past the first 512 KB jumped one window high. *Resolved:* the code base (`hwt_window`); the relocation must be the offset from the DOUTU's window.
 
 **DOUTD control and chunking (partial)**
 - PDS.md "DOUTD": the b22-24 rule the code uses is (dwords - 1) & 3. It fits 12 → 3, 25 → 0, 10 → 1, 11 → 2, 27 → 2. Say whether it is a hardware field or only the DDK's value.
@@ -783,7 +785,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 - Background block words 3-8: STATE.md §6 calls them a rotation matrix; TEX.md §10 measures them as texture coordinates.
 - CCB 0x10420: STATE.md §6 reads the 0x420 as control; the code comment reads it as room past the ring.
 - RT data header [1]: STATE.md §6 says 1; the client leaves it 0.
-- phas.i target origin: ISA.md's builder table says "relative to the code heap". UAPI.md and ISA.md `ba` say "the code base the task runs from".
+- phas.i target origin: resolved, from the task's code base (ISA.md, `hwt_window`).
 
 ### compiler: `mesa/src/sgx/compiler`
 

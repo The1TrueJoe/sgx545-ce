@@ -26,7 +26,7 @@ constants, PDS iterations, texture samples, branches, register counts.
      F16-free values;
    - runs the general optimization loop;
    - lowers integers and booleans to floats, the way GLSL ES 1.0 `int` and
-     `bool` are computed (docs/ISA.md "What GLSL integer code compiles to");
+     `bool` are computed;
    - leaves the shader out of SSA, with vectors in registers.
 2. **Analysis**: finds the patterns that need one specific emission, each
    recorded before selection:
@@ -81,6 +81,7 @@ one optimization, so a miscompile can be bisected without rebuilding.
 | `noefochain` | storing a chain's last lane with the next efo chain's first instruction (keeps each chain's `mov oN, i1`) |
 | `nof16samples` | mediump texels returned as F16 by the sampler (unpacks RGBA8 instead) |
 | `nophases` | splitting a discarding fragment program at its visibility feedback (one phase instead) |
+| `flattenuniform` | ifs on a uniform condition flattened into selects (by default they stay branches) |
 | `nointerleave` | each PDS-only sample placed after a plain iteration of another set, for the driver's DOUTI merge |
 | `nodepf16` | F16 returns on dependent samples (when the driver sets `dep_f16_samples`) |
 | `noprojalone` | dropping the plain iteration of a varying only projected (TXP) samples read |
@@ -96,8 +97,6 @@ option.
 ## Tests
 
 `meson test --suite sgx` runs these tests and the ISA round-trip tests.
-`tests/sgx_compile_test.cpp` builds each case with `nir_builder` (22 cases:
+`tests/sgx_compile_test.cpp` builds each case with `nir_builder` (47 cases:
 selection, F16 and C10, textures, discard and phases, constants in memory,
-helper instances). `tools/usc` in the powervr_sgx repository has the corpus
-harness that checks the output against the DDK's compiler. It stays outside
-Mesa.
+helper instances, branches).

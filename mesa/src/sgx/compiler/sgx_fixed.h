@@ -4,11 +4,11 @@
  */
 
 /*
- * The fixed USSE programs a frame needs besides the shaders (docs/GEN.md):
+ * The fixed USSE programs a frame needs besides the shaders:
  * the TA state-emit programs, the empty task, the clear's and the viewport
  * object's vertex programs, the copy and uniform-colour pixel programs, the
  * position-only vertex programs and the pixel-event tasks. They are assembly
- * text (ISA.md "Text notation and defaults"), assembled through the isa
+ * text (the isa library's notation), assembled through the isa
  * library when a context is created.
  */
 #ifndef SGX_FIXED_H

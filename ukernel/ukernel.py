@@ -529,6 +529,7 @@ def build(a):
     a.i(f"st.a.d r17, #{WAIT_3D}, r0 [moe]")              # rendezvous flags clear (no render yet)
     a.i(f"st.a.d r17, #{WAIT_FREE}, r0 [moe]")
     a.i(f"st.a.d r17, #{SC_OOM}, r0 [moe]")               # no OOM partial render pending
+    a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")          # completion seqno starts at 0 (host resyncs on restart)
     if OVERLAP:
         a.i(f"st.a.d r17, #{TD_ENTRY}, r0 [moe]")          # no 3D in flight (overlap state clean at start)
         a.i(f"st.a.d r17, #{PENDING_3D}, r0 [moe]")        # no 3D queued
@@ -671,7 +672,16 @@ def build(a):
     a.i("(p0) ba k_cleanup")
     a.i(f"test.xor.eq p0, r7, #{CMD_TRANSFER}")
     a.i("(p0) ba k_transfer")
-    a.i("ba kick_adv")                          # process-queues / unhandled: nothing
+    # process-queues / unhandled: a no-op job, retired as soon as it is taken. Bump the
+    # completion seqno so its fence can signal; the SW_EVENT comes from the next job's
+    # completion or, if the CCB is now empty, the idle/active-power raise in kick_end.
+    a.i(f"ld.a.d r0, r17, #{SC_COMPLETED} [moe]")
+    a.i("wdf")
+    a.i("imae r0, r0, #1, #1 [t2=u32]")         # seqno += 1
+    a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")
+    a.i("idf")
+    a.i("wdf")
+    a.i("ba kick_adv")                          # advance the CCB read offset, then kick_end
     a.label("k_ta")
     # serialise: at most one TA in flight. If one is running, leave this kick in
     # the kernel CCB (don't advance RO) and let ta_finished re-launch it, so we
@@ -2401,13 +2411,19 @@ def build(a):
         a.i(f"ld.a.d r3, r17, #{PENDING_3D} [moe]")
         a.i("wdf")
         a.i("test.and.ne p0, r3, r3")
-        a.i("(!p0) ba raise_host_irq")
+        a.i("(!p0) ba complete_irq")                      # no queued 3D: bump the seqno + SW_EVENT, normal end
         a.i("limm r3, #0")
         a.i(f"st.a.d r17, #{PENDING_3D}, r3 [moe]")       # dequeue
+        a.i(f"ld.a.d r0, r17, #{SC_COMPLETED} [moe]")     # queued 3D starts next, so bump the seqno inline
+        a.i("wdf")
+        a.i("imae r0, r0, #1, #1 [t2=u32]")
+        a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")
+        a.i("idf")
+        a.i("wdf")
         a.i(f"limm r0, #{SW_EVENT}")
         a.i(f"str #{CR_EVENT_STATUS // 4}, r0")           # raise this render's completion IRQ (inline)
         a.i("ba do_3d")                                   # start the queued 3D on the freed 3D engine
-    a.i("ba raise_host_irq")
+    a.i("ba complete_irq")                                # render (3D) done: bump the seqno, then SW_EVENT
     # render_done_noop: a DPM 3D-memory-free event (0x1) arrived with no render in
     # flight -- a transfer's own free, or a spurious/duplicate event. 0x1 is already
     # acked at render_done's head; there is nothing to complete, so just end.
@@ -2466,6 +2482,19 @@ def build(a):
     a.i("st.a.d r1, #%d, r4 [moe]" % CTX_XFER0)          # clear ctx in-flight fields
     a.i("st.a.d r1, #%d, r4 [moe]" % CTX_XFER1)
     a.i(f"st.a.d r17, #{SC_XFER}, r4 [moe]")      # no transfer in flight
+    a.i("idf")
+    a.i("wdf")
+    # xfer_done falls through here; render_complete branches here. The idle/active-power
+    # path jumps PAST this to raise_host_irq, so it does not bump the seqno.
+    a.label("complete_irq")
+    # bump the host-visible completion seqno (SC_COMPLETED), then idf/wdf so it is
+    # globally visible before the SW_EVENT edge: the host ISR reads it and signals every
+    # job with ccb_seq <= it (M8, docs/UKERNEL.md). The per-job done word was made visible
+    # by the idf/wdf at each caller before this.
+    a.i(f"ld.a.d r0, r17, #{SC_COMPLETED} [moe]")
+    a.i("wdf")
+    a.i("imae r0, r0, #1, #1 [t2=u32]")            # seqno += 1
+    a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")
     a.i("idf")
     a.i("wdf")
     a.label("raise_host_irq")

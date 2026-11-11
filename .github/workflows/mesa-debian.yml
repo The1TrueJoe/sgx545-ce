@@ -90,7 +90,9 @@ jobs:
           python3 drm/tools/mkukfw.py fw/uk.bin -o sgx545_ukernel.bin --manifest fw/uk.json \
             --core-rev 0 --build-id "ukernel-$v"
           python3 drm/tools/mkukfw.py --check sgx545_ukernel.bin | tee fw/check.txt
-          grep -q 'features 0x2' fw/check.txt
+          # features word <= the in-tree driver's accepted mask (not a hardcoded
+          # literal): the firmware and the kernel in this release move together.
+          python3 drm/tools/ukfw_features_pin.py --image sgx545_ukernel.bin
 
       - name: Packages (.deb)
         env:

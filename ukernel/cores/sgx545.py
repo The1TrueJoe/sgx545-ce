@@ -78,6 +78,13 @@ SLOT1_INIT = 0x26    # control block +0x98: set once slot 1 has a valid DPM CONT
                      # (the DDK does, ctx630=4/5/7), so its control is stale and the frees link pages off the
                      # TA's chain -> leak (count recovers, ring short). Before the first
                      # shuffle, give slot 1 a control state like a DDK first kick would. Cleared in init_set.
+SC_COMPLETED = 0x27  # control block +0x9c: the host-visible completion seqno. Bumped once per
+                     # RETIRED job command (render at its 3D end, transfer at its 3D end, a no-op
+                     # when taken), after the per-job done word is visible and before SW_EVENT.
+                     # powervr_sgx reads it in the SW_EVENT ISR and signals every job with
+                     # ccb_seq <= it, so it drops the 1-jiffy completion poll (M8). init_set
+                     # zeroes it; it lives in the microkernel's private region (DMA-restored,
+                     # srvinit never writes it). Monotonic; the host de-wraps across restarts.
 SC_OOM = 0x17        # control block +0x5c: OOM partial-render state. 0 = none; 1 = OOM taken, the
                      # TA is paused (0xa74 b0) and held (0x69c=4), awaiting TA_TERMINATE; 2 = the
                      # partial render is in flight (its 3D end resumes the TA via 0x69c=1, unpauses,
