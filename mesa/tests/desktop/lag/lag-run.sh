@@ -57,13 +57,20 @@ settle() {
 for v in "$@"; do
 	settle
 	echo "== $v"
-	# once, not retried (a retry would run the variant again): a long
-	# keepalive instead
-	sshpass -p "$BOX_PASS" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-		-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 \
-		-o ServerAliveInterval=15 -o ServerAliveCountMax=40 root@$BOX \
-		"rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} NOPERF=${NOPERF:-} CORES=${CORES:-} RSPCHECK=${RSPCHECK:-} PERFARGS='${PERFARGS:-}' \
-		sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" || echo "$v failed"
+	# not retried once it started (a retry would run the variant again): a
+	# long keepalive instead; retried only when ssh itself failed (255) and the
+	# variant never started on the box (sshd turned the connection down)
+	for try in 1 2 3; do
+		sleep 3
+		sshpass -p "$BOX_PASS" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
+			-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 \
+			-o ServerAliveInterval=15 -o ServerAliveCountMax=40 root@$BOX \
+			"rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} NOPERF=${NOPERF:-} CORES=${CORES:-} RSPCHECK=${RSPCHECK:-} PERFARGS='${PERFARGS:-}' \
+			sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" && r=0 || r=$?
+		[ $r -eq 255 ] && ! E "test -d /tmp/lagout/$v" && continue
+		break
+	done
+	[ $r -eq 0 ] || echo "$v failed"
 	mkdir -p "$OUT/$v"
 	E "cd /tmp/lagout/$v && tar cf - ." | tar xf - -C "$OUT/$v"
 	E "rm -rf /tmp/lagout/$v"
