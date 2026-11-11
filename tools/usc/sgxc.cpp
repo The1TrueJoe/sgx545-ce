@@ -213,6 +213,8 @@ main(int argc, char **argv)
          continue;
       }
       nir_shader *nir = sep->_LinkedShaders[st]->Program->nir;
+      /* the standalone frontend builds NIR with its own options */
+      nir->options = sgx_nir_options();
       const char *sname = st == MESA_SHADER_VERTEX ? "vert" : "frag";
       /* this stage's pins: unprefixed ones, and "vert:" / "frag:" ones */
       struct sgx_compile_options so2 = opts;

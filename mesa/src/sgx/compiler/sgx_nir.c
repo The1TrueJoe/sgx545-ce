@@ -7,6 +7,7 @@
  * SGX545 compiler: NIR options, varying set allocation, I/O assignment and
  * the NIR lowering pipeline that runs before instruction selection.
  */
+#include <assert.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1842,7 +1843,8 @@ sgx_lower(struct sgx_ctx *c)
 {
    nir_shader *s = c->nir;
 
-   s->options = &options;
+   /* the caller creates the shader with sgx_nir_options() */
+   assert(s->options == &options);
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr,
             nir_metadata_control_flow, NULL);
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT &&

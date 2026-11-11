@@ -231,11 +231,11 @@ earlier licensing and provenance audit.
 |---|---|---|
 | C1 | debug options in a `debug_named_value` table | done (1ba7774) |
 | C2 | clang-format | done (31f6f18) |
-| C3 | NIR passes in Mesa's shape | done (69923e0); one item left |
+| C3 | NIR passes in Mesa's shape | done (69923e0, options asserted 2026-11-11) |
 | C4 | unit tests under `meson test` | done (7e0421a); coverage to grow |
 | C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
 | C6 | no global mutable state | done (`hw_const`) |
-| C7 | comments cite `docs/`, not libusc or the DDK | not started |
+| C7 | comments cite `docs/`, not libusc or the DDK | libusc done (aaa2ba7); DDK mentions left |
 | C8 | DDK-compatibility code out of the compiler | partly |
 | C9 | file size | open (optional) |
 
@@ -261,9 +261,9 @@ earlier licensing and provenance audit.
     `lower_tex_derefs`, `lower_uniforms`.
   - Rewrites are `nir_shader_{instructions,alu,intrinsics}_pass` callbacks;
     the block walks left are analyses.
-  - Still to do: `sgx_lower()` sets `s->options` to its own options. The
-    driver and sgxc should create the shader with `sgx_nir_options()`
-    instead, and the compiler should assert that they did.
+  - The caller creates the shader with `sgx_nir_options()` (the driver's
+    `get_compiler_options`, the gtest's builder; sgxc sets it on the
+    standalone frontend's NIR), and `sgx_lower()` asserts it.
 - **C4. Tests.**
   - `meson test --suite sgx` runs `sgx_compiler` (gtest) beside
     cleanroom-isa's `sgx_isa`.
