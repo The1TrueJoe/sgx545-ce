@@ -45,7 +45,7 @@ Design
 
 Userspace
 - A Gallium driver with a NIR compiler, in a Mesa fork for now
-  (https://github.com/The1TrueJoe/sgx545-ce/tree/main/mesa); a Mesa
+  (https://github.com/The1TrueJoe/powervr_sgx/tree/main/mesa); a Mesa
   merge request will follow review of this uAPI. On the CE5300 it passes
   16,587 of 17,165 dEQP-GLES2 tests with no resets, using no vendor
   code at all.

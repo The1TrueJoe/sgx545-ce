@@ -305,7 +305,7 @@ earlier licensing and provenance audit.
 
 The microkernel is MIT-licensed source (`ukernel/ukernel.py`) assembled to a
 small binary a loader runs on the SGX core. Upstreaming has two destinations:
-the **source** (its own repository) and the **built binary** (linux-firmware,
+the **source** (this repository, `powervr_sgx`) and the **built binary** (linux-firmware,
 loaded by the DRM driver).
 
 | item | state |
@@ -579,7 +579,7 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
    - isaspec skips decode tables for roots no `#instruction` reaches;
    - the data words move to a second XML that only the encoder reads.
 4. **The documentation the comments cite.** `docs/ISA.md`, `docs/PDS.md`
-   and `docs/STATE.md` live in sgx545-ce. Upstream needs them either as
+   and `docs/STATE.md` live in powervr_sgx. Upstream needs them either as
    `docs/drivers/sgx/*.rst` in Mesa or behind a stable link from each
    README. The comments cite them by section name.
 5. **The tools.** `sgx-asm` and `sgx-disasm` (USSE) are built with

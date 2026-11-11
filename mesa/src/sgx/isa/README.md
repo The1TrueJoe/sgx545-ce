@@ -4,7 +4,7 @@
 instructions of the PowerVR SGX545 in Mesa's isaspec format. isaspec
 generates the encoder and the disassembler from it; the C files here are the
 glue and a small text assembler. The instruction set and its text notation
-are documented in `docs/ISA.md` of the sgx545-ce repository; the comments
+are documented in `docs/ISA.md` of the powervr_sgx repository; the comments
 cite its sections by name.
 
 | file | what |
@@ -70,7 +70,7 @@ encodes differently gets a `<gen>` range, or an override that reads
 
 This needs one isaspec change, carried as
 `mesa/patches/0003-isaspec-derived-bitset-params-and-override-fields.patch`
-in sgx545-ce and to be sent upstream ahead of this tree (see below).
+in powervr_sgx and to be sent upstream ahead of this tree (see below).
 
 ## How the XML is laid out
 

@@ -91,5 +91,5 @@ option.
 ## Tests
 
 `meson test --suite sgx` runs these tests and the ISA round-trip tests.
-`tools/usc` in the sgx545-ce repository has the corpus harness that checks
+`tools/usc` in the powervr_sgx repository has the corpus harness that checks
 the output against the DDK's compiler. It stays outside Mesa.

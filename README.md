@@ -1,10 +1,11 @@
-# sgx545-ce
+# powervr_sgx
 
 > **Working on this repo?** Read [AGENTS.md](AGENTS.md) first: the end goal (upstream Linux, Mesa and
 > linux-firmware support for Cedarview), the standards the work must meet, and the milestones.
 
-An open graphics driver stack for the PowerVR **SGX545** GPU: the GPU in Intel's Cedarview
-Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the Intel Atom CE5300/CE5310.
+An open graphics driver stack for the PowerVR **SGX** GPUs. It supports the **SGX545**: the
+GPU in Intel's Cedarview Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the
+Intel Atom CE5300/CE5310. Other SGX cores are welcome ([docs/porting/](docs/porting/README.md)).
 Every part runs from code in this repository. No Intel or Imagination binary is needed, in
 the kernel, the firmware or userspace.
 
