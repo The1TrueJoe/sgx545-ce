@@ -12,6 +12,12 @@
 /* A code object's place when it isn't mapped, or is mapped at more than one. */
 #define PVRSGX_USSE_PLACE_NONE	S64_MIN
 
+/*
+ * One code base's window, in instructions: 512 KiB. A task's absolute targets
+ * (phas.i) count from the base it runs from, the window of its first word.
+ */
+#define PVRSGX_USSE_WINDOW_INSTS	(1u << 16)
+
 /* Why pvrsgx_usse_scan() refused an instruction. */
 enum pvrsgx_usse_refusal {
 	PVRSGX_USSE_REFUSAL_NONE,
@@ -23,7 +29,10 @@ enum pvrsgx_usse_refusal {
 	PVRSGX_USSE_REFUSAL_KIND,
 	/* br's target outside the object. */
 	PVRSGX_USSE_REFUSAL_BRANCH,
-	/* phas.i's target outside the object, or the object has no one place. */
+	/*
+	 * phas.i's target outside the object, the object has no one place, or it
+	 * crosses a code base window.
+	 */
 	PVRSGX_USSE_REFUSAL_PHAS,
 };
 

@@ -102,10 +102,11 @@ description of the instruction set that Mesa's compiler uses
   (``fdual``), whose second operation's operands aren't checked; and forms
   this core doesn't have or whose meaning is not known.
 - ``br``: the target must be inside the object.
-- ``phas.i``: a target other than 0 counts from the USSE heap's base and must
-  be inside the object where it is mapped. The object must be mapped when such
-  code is uploaded, at one place only, and can't be mapped anywhere else
-  afterwards.
+- ``phas.i``: a target other than 0 counts from the code base the task runs
+  from, the 512 KiB window of the USSE heap its first instruction is in, and
+  must be inside the object where it is mapped. Such an object must lie in one
+  window, be mapped when its code is uploaded, at one place in its window only,
+  and can't be mapped at another place afterwards.
 - ``setfc``: only ``setfc #0, #1``, the format control a program starts
   with, so the check knows the format control of every instruction without
   following the program.

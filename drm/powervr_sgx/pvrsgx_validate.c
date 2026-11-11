@@ -49,16 +49,22 @@ int pvrsgx_validate_vm_map(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm,
 	return heap_is_usse(heap) == bo_is_code(bo) ? 0 : -EINVAL;
 }
 
+static_assert(PVRSGX_USSE_WINDOW_INSTS * 8 == 1u << PVRSGX_USSE_WINDOW_LOG2);
+
 /*
  * Where a mapping at addr of the object from offset puts the object's start,
- * in instructions from its USSE heap's base: what phas.i's targets count from.
+ * in instructions from the start of its code base window: what phas.i's
+ * targets count from, since a task runs from the window its first word is in.
  */
 static s64 code_place(u64 addr, u64 offset)
 {
 	u64 base = addr >= PVRSGX_HEAP_USSE_VERTEX ? PVRSGX_HEAP_USSE_VERTEX :
 						    PVRSGX_HEAP_USSE_PIXEL;
+	s64 start = (s64)(addr - base) - (s64)offset;
 
-	return ((s64)(addr - base) - (s64)offset) / 8;
+	if (start < 0)
+		return PVRSGX_USSE_PLACE_NONE;
+	return (start / 8) & (PVRSGX_USSE_WINDOW_INSTS - 1);
 }
 
 /*

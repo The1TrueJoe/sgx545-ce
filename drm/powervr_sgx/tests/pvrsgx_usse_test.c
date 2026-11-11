@@ -79,6 +79,14 @@ static void usse_test_phas_place(struct kunit *test)
 					       &why), -1);
 	KUNIT_EXPECT_EQ(test, why, PVRSGX_USSE_REFUSAL_NONE);
 	KUNIT_EXPECT_TRUE(test, abs);
+
+	/* An object with a target must not cross into the next window. */
+	w = W(0xfa440000, PVRSGX_USSE_WINDOW_INSTS - 0x100 + 2);
+	KUNIT_EXPECT_EQ(test, pvrsgx_usse_scan(PVRSGX_ISA_SGX545, &w, 1, 0, 0x100,
+					       PVRSGX_USSE_WINDOW_INSTS - 0x100, &abs, &why), -1);
+	KUNIT_EXPECT_EQ(test, pvrsgx_usse_scan(PVRSGX_ISA_SGX545, &w, 1, 0, 0x101,
+					       PVRSGX_USSE_WINDOW_INSTS - 0x100, &abs, &why), 0);
+	KUNIT_EXPECT_EQ(test, why, PVRSGX_USSE_REFUSAL_PHAS);
 }
 
 /* Each refusal says why. */

@@ -161,9 +161,9 @@ static s64 refuse(enum pvrsgx_usse_refusal *why, enum pvrsgx_usse_refusal r, u32
  * @n: Number of @w.
  * @first: Instruction index @w[0] will sit at in the object.
  * @obj_insts: The object's size in instructions.
- * @place: The object's start, in instructions from the base of the USSE heap
- *	it is mapped in, or %PVRSGX_USSE_PLACE_NONE. An absolute target
- *	(phas.i) needs it.
+ * @place: The object's start, in instructions from the start of the code base
+ *	window it is mapped in, or %PVRSGX_USSE_PLACE_NONE. An absolute target
+ *	(phas.i) needs it, and an object with one must lie in one window.
  * @abs: Set when an instruction has an absolute target.
  * @why: If not NULL, why the instruction returned was refused.
  *
@@ -205,12 +205,13 @@ s64 pvrsgx_usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 ob
 				return refuse(why, PVRSGX_USSE_REFUSAL_BRANCH, i);
 			break;
 		case USSE_PHAS:
-			/* 0: no next phase. Otherwise from the heap base. */
+			/* 0: no next phase. Otherwise from the task's code base. */
 			target = w[i] & USSE_TARGET;
 			if (!target)
 				break;
 			if (place == PVRSGX_USSE_PLACE_NONE || target < place ||
-			    target >= place + obj_insts)
+			    target >= place + obj_insts ||
+			    place + obj_insts > PVRSGX_USSE_WINDOW_INSTS)
 				return refuse(why, PVRSGX_USSE_REFUSAL_PHAS, i);
 			*abs = true;
 			break;
