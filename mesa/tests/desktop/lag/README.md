@@ -29,7 +29,9 @@ Variants: `default`; `slots3` (`SGX_SLOTS=3` for X and the clients);
 `nocomp` (xfwm4 without its compositor); `xpresent` and `vbloff` (xfwm4
 synced to vblank through Present, or not at all); `software` (no GPU: Xorg
 without glamor and llvmpipe from the root's own Mesa, the baseline);
-`glamordebug` (`GLAMOR_DEBUG=1`: glamor's CPU fallbacks, not for timing).
+`glamordebug` (`GLAMOR_DEBUG=1`: glamor's CPU fallbacks, not for timing);
+`shaderdump` (`MESA_SHADER_DUMP_PATH`: every program X, xfwm4 and the clients
+link, as `.shader_test` files in `OUT/shaderdump/shaders`, for the compiler).
 
 For each workload the summary has:
 

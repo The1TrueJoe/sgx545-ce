@@ -18,6 +18,9 @@
 #             (llvmpipe), the baseline at the same resolution
 #   glamordebug  the default with GLAMOR_DEBUG=1 (counts glamor's CPU
 #             fallbacks; slower, so not for timing)
+#   shaderdump  the default with MESA_SHADER_DUMP_PATH: X's, xfwm4's and the
+#             clients' programs as .shader_test files in OUT/shaders (not for
+#             timing)
 # Recorded in OUT: the kernel's job trace (kick and completion per job, by
 # process), CPU time per process every 0.5 s, the driver's SGX_DEBUG=stats
 # lines of X and xfwm4, the workloads' own metrics, perf profiles when perf
@@ -43,6 +46,10 @@ xpresent) xfwm=--vblank=xpresent ;;
 vbloff) xfwm=--vblank=off ;;
 software) cenv="LIBGL_ALWAYS_SOFTWARE=1" xenv= ;;
 glamordebug) xenv="$xenv GLAMOR_DEBUG=1" ;;
+shaderdump)   # every linked GL program as a .shader_test, for the compiler
+	mkdir -p "$R/tmp/lag-shaders"; chmod 1777 "$R/tmp/lag-shaders"
+	xenv="$xenv MESA_SHADER_DUMP_PATH=/tmp/lag-shaders"
+	cenv="$cenv MESA_SHADER_DUMP_PATH=/tmp/lag-shaders" ;;
 *) echo "lag-box.sh: no variant $V" >&2; exit 2 ;;
 esac
 
@@ -148,6 +155,11 @@ done
 echo 1408 > $T/buffer_size_kb
 cp "$R/var/log/Xorg.0.log" "$R/var/log/xorg.out" "$R/var/log/xfce.out" "$OUT/" 2>/dev/null
 cp /tmp/lag-xfwm4.err "$OUT/xfwm4.err"
+if [ $V = shaderdump ]; then
+	mkdir -p "$OUT/shaders"
+	cp "$R"/tmp/lag-shaders/* "$OUT/shaders/" 2>/dev/null
+	rm -rf "$R/tmp/lag-shaders"
+fi
 { getconf CLK_TCK 2>/dev/null || chroot "$R" getconf CLK_TCK 2>/dev/null || echo 100; } > "$OUT/clk_tck.txt"
 dmesg | grep -i 'powervr\|sgx' | tail -40 > "$OUT/dmesg.txt"
 sh "$OUT/rig/desktop-up.sh" "$R" stop > /dev/null 2>&1
