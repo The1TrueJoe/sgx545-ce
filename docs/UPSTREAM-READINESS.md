@@ -43,7 +43,7 @@ doc gaps still stand. Status as of 2026-11-08, um-re 0507229 plus mg-perf.
 | M1 | upstream build is powervr_sgx only | done (8c763d3 option; patch split, W1/W2) | uapi-stream |
 | M2 | features from DEV_QUERY and a core table | done: queries (W3), sgx_device.c table on sgxws_dev_info | mesa-gallium (table), uapi-stream (queries) |
 | M3 | driver name for the family | decided: `sgx` (Joseph, 2026-11-08) | mesa-gallium |
-| M4 | clang-format | not started | mesa-gallium (driver), uapi-stream (winsys) |
+| M4 | clang-format | driver clean (3320225); winsys: sgx_frame.c etc. drifted ~60 lines (uapi-stream) | mesa-gallium (driver), uapi-stream (winsys) |
 | M5 | comments and naming | driver done (mg-perf b42aa0d) | mesa-gallium |
 | M6 | debug options and experiment code | driver done (2026-11-11); winsys fields left (uapi-stream) | mesa-gallium, usse-compiler |
 | M7 | tests in Mesa's format (`ci/`) | suites in (2026-11-11); expectations to refresh from the next full runs | mesa-gallium |
@@ -115,6 +115,14 @@ loader patch (0005), kmsro (0006), the downstream packaging and every session's
 scripts. It is cheap once, now, and expensive after upstream review starts.
 
 ### M4. clang-format
+
+**2026-11-11.** Both directories already have their `.clang-format` and were
+formatted. The driver and the fixed-program files are clean again after the
+day's changes (3320225). Left: `sgx_frame.c` (41 lines), `sgx_frame.h`,
+`sgxws.h` and `sgx_powervr_sgx.c` (a few each), to be formatted when the
+winsys has nothing in flight. `powervr_sgx_kmd_stream.h` is generated, so
+its generator should emit formatted code, or the file should be excluded.
+
 
 Mesa's base style is `src/.clang-format`, which has `DisableFormat: true`.
 Each driver opts in with its own `.clang-format`. The PowerVR code
