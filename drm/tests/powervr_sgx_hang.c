@@ -593,14 +593,15 @@ static int idle(struct rc *a, unsigned f)
 	char st[32] = "";
 	int bad = 0, s;
 
-	/* A render context holds the GPU awake: no runtime suspend while a exists. */
+	/* Only jobs hold the GPU awake: it suspends while a's context is idle. */
 	s = rpm_wait_suspended(1500);
 	if (s < 0) {
 		printf("  no runtime PM\n");
 		return 1;
 	}
 	printf("  idle with a render context: %s\n", s ? "SUSPENDED" : "stays active");
-	CHECK(s == 0);
+	CHECK(s == 1);
+	/* A render resumes it, and the context's state survived the suspend. */
 	CHECK(render(a, f));
 	rpm_status(st, sizeof(st));
 	CHECK(!strcmp(st, "active"));
