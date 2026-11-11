@@ -136,6 +136,8 @@ struct pvrsgx_device {
 
 	/** @regs: The core registers (BAR 0, or the node's first reg). */
 	void __iomem *regs;
+	/** @ocp: The OMAP 36xx OCP wrapper (SGX_OCP_*), read only for bring-up logs, or NULL. */
+	void __iomem *ocp;
 	/** @irq: Its interrupt. */
 	int irq;
 

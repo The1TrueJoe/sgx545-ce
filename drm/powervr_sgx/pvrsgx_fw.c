@@ -556,6 +556,47 @@ static void deinit_script(struct pvrsgx_device *sdev)
 	sgx_wr_opt(sdev, cr->clkgatectl2, 0);
 }
 
+/*
+ * Bring-up logs for a core whose event registers are a guess: named registers
+ * only, and the OMAP OCP wrapper's (SGX_OCP_*) where it is mapped.
+ */
+static void bringup_diag(struct pvrsgx_device *sdev, const char *when)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	drm_info(&sdev->base,
+		 "%s: clock status 0x%08x event status 0x%08x BIF req 0x%x int 0x%x\n",
+		 when, sgx_rd(sdev, cr->clkgatestatus), sgx_rd(sdev, SGX_CR_EVENT_STATUS),
+		 sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT), sgx_rd(sdev, SGX_CR_BIF_INT_STAT));
+	if (sdev->ocp)
+		drm_info(&sdev->base,
+			 "%s: OCP revision 0x%08x sysconfig 0x%08x debug config 0x%08x status 0x%08x\n",
+			 when, readl(sdev->ocp + SGX_OCP_REVISION),
+			 readl(sdev->ocp + SGX_OCP_SYSCONFIG),
+			 readl(sdev->ocp + SGX_OCP_DEBUG_CONFIG),
+			 readl(sdev->ocp + SGX_OCP_DEBUG_STATUS));
+}
+
+/* Wait for init; on a guessed core, log every 100 ms that it doesn't come. */
+static int init_wait(struct pvrsgx_device *sdev, const u32 *status)
+{
+	char when[32];
+	int err = -ETIMEDOUT;
+
+	if (!sdev->family->event_pds_guessed)
+		return pvrsgx_poll(sdev, status, HOSTCTL_INIT_COMPLETE, HOSTCTL_INIT_COMPLETE,
+				   500000);
+	for (int i = 1; i <= 5; i++) {
+		err = pvrsgx_poll(sdev, status, HOSTCTL_INIT_COMPLETE, HOSTCTL_INIT_COMPLETE,
+				  100000);
+		if (!err)
+			return 0;
+		snprintf(when, sizeof(when), "%d ms after the kick", i * 100);
+		bringup_diag(sdev, when);
+	}
+	return err;
+}
+
 /* Every unit's clock gated automatically, but the DPM's: it stays on. */
 static void clocks_on(struct pvrsgx_device *sdev)
 {
@@ -635,6 +676,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 
 	clocks_on(sdev);
 	if (sdev->family->event_pds_guessed && first)
+		bringup_diag(sdev, "clocks on");
+	if (sdev->family->event_pds_guessed && first)
 		drm_info(&sdev->base,
 			 "event PDS registers before any write: enable 0x%08x base 0x%08x data 0x%08x 0x%08x\n",
 			 sgx_rd(sdev, cr->event_pds_enable), sgx_rd(sdev, cr->event_pds_base),
@@ -650,12 +693,13 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		return err;
 
 	hc[HOSTCTL_INIT_STATUS] = 0;
+	if (sdev->family->event_pds_guessed)
+		bringup_diag(sdev, "before the kick");
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
 	init_kick(sdev);
 
-	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
-			  HOSTCTL_INIT_COMPLETE, 500000);
+	err = init_wait(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (err) {
 		drm_err(&sdev->base,
 			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",

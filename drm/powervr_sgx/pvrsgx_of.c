@@ -22,6 +22,7 @@
 #include "pvrsgx_drv.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_pm.h"
+#include "pvrsgx_regs.h"
 
 static int pvrsgx_of_probe(struct platform_device *pdev)
 {
@@ -65,6 +66,10 @@ static int pvrsgx_of_probe(struct platform_device *pdev)
 	sdev->regs = devm_ioremap_resource(dev, &win);
 	if (IS_ERR(sdev->regs))
 		return PTR_ERR(sdev->regs);
+	/* The OCP wrapper, for bring-up logs. Only the 36xx's reads back. */
+	if (of_device_is_compatible(dev->of_node, "ti,omap3630-gpu") &&
+	    resource_size(res) >= SGX_OCP_BASE + SGX_OCP_SIZE)
+		sdev->ocp = devm_ioremap(dev, res->start + SGX_OCP_BASE, SGX_OCP_SIZE);
 
 	/* The module is clocked only while its parent is awake. */
 	err = pm_runtime_resume_and_get(dev->parent);

@@ -69,6 +69,15 @@ The driver logs these on the first start:
 | `event PDS base 0x0a68: wrote …, read …` | The program-address read-back after init-script part 2. |
 | `microkernel: init … version … wait … timeouts … heartbeat …` | After a start: `INIT_STATUS` (host control word 0), and control-block words 0x18, 0x28, 0x29 and 0x2a. |
 
+On a guessed core, powervr_sgx also logs `<when>: clock status … event status … BIF req …
+int …`, with the clocks on, before the kick, and every 100 ms after it until init
+completes. On the OMAP36xx it adds `<when>: OCP revision … sysconfig … debug config …
+status …` (the OCP wrapper, [sgx530.md](sgx530.md)). Expected there: revision
+0x40000000, sysconfig 0x28 and debug config bit 31 set (ti-sysc's quirk). In the status
+word, MWait (b16) or MStandby (b17) set while `BIF req` stays nonzero would point at the
+initiator's requests not completing on the interconnect (G: from the field names only). The driver holds a runtime-PM
+reference on a single-context core, so `power/control` no longer needs setting by hand.
+
 Then read the status words **a second time, at least a second later** (debugfs dump or a
 second status line). The heartbeat is the one value that has to change between reads.
 Also note interrupt 21's count in `/proc/interrupts` before and after the load.
