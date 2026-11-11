@@ -11,6 +11,8 @@
 # xorg.conf and lag-wl.sh, and ROOT/opt/sgx the Mesa under test. Variants:
 #   default   Xorg with glamor, xfwm4 compositing through GLX (Xfce's default)
 #   slots3    the same with SGX_SLOTS=3 for X and the clients
+#   gpuimport the same with SGX_DEBUG=gpuimport: scanout buffers the GPU's,
+#             imported by the display device (its damage copy reads them)
 #   flatten   the same with the compiler's uniform-condition ifs flattened
 #             into selects (SGX_COMPILER_DEBUG=flattenuniform): the A/B of
 #             branching on them (glamor's repeat modes)
@@ -46,6 +48,8 @@ xfwm=
 case $V in
 default) ;;
 slots3) cenv="$cenv SGX_SLOTS=3" xenv="$xenv SGX_SLOTS=3" ;;
+gpuimport)   # scanout buffers the GPU's, imported by the display (simpledrm)
+	cenv="$cenv,gpuimport" xenv="$xenv,gpuimport" ;;
 flatten)   # the compiler's uniform ifs flattened into selects again
 	cenv="$cenv SGX_COMPILER_DEBUG=flattenuniform"
 	xenv="$xenv SGX_COMPILER_DEBUG=flattenuniform" ;;
