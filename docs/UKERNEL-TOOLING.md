@@ -251,6 +251,10 @@ behavior.
    the loader-patched `limm` — becomes an `ISA.md` item (spec side) and then an
    `sgx.xml` item (implementation side) first. The switch cannot land until coverage
    is complete.
+   **Done 2026-11-11:** `ukernel/isa_coverage.py` (CI: `ukernel-isa-gate`). All 1800
+   instructions of the 545 image (2411 with every `UK_*` build variant on) are
+   covered, both as ISA.md text and as the source spells them; no `ISA.md` or
+   `sgx.xml` items came out of it.
 6. **Assemble through `sgx.xml`.** Switch the µK build from `asm.py`/`hw.py` to the
    `sgx-asm` host tool built from `sgx.xml` (§2). The tool must reproduce the 545
    image bit-for-bit. From here, any byte difference against today's `asm.py` image

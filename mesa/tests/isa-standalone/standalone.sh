@@ -18,7 +18,7 @@ mkdir -p "$B/obj" "$B/isaspec"
 cp "$M"/src/compiler/isaspec/*.py "$B/isaspec/"
 (cd "$B" && mkdir -p a/src/compiler && rm -rf a/src/compiler/isaspec &&
  cp -R isaspec a/src/compiler/ &&
- P="$T/../../patches/0004-isaspec-derived-bitset-params-and-override-fields.patch" &&
+ P=$(ls "$T"/../../patches/*-isaspec-derived-bitset-params-and-override-fields.patch) &&
  # (a tree that already carries the patch is used as it is)
  { ! patch -d a -p1 --forward --batch --dry-run -s < "$P" >/dev/null 2>&1 ||
    patch -d a -p1 --forward --batch -s < "$P"; } &&
