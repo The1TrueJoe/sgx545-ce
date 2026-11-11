@@ -340,7 +340,7 @@ which groups follow, in this order:
 | 8 | ISPC follows (stencil enabled with a stencil buffer) | capture; hardware (open driver) |
 | 9 | ISPB follows: always set | capture |
 | 11 | two-sided stencil: set in both the front and the back group's ISPA | capture (`stencil2`, 2026-11-02); hardware (open driver) |
-| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord); see "Lines and points" | hardware (1, 4); capture (0, 3); hardware (open driver) |
+| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord), 5 a triangle's edges, 6 a triangle's vertices; 7 locks up the 3D core; see "Lines and points" and "Polygon mode and edge flags" | hardware (1, 4, 5, 6, 7); capture (0, 3); hardware (open driver) |
 | 20 | depth write disable | capture (`dmask0`); hardware (open driver) |
 | 21 | no color write: color mask 0, or a blend that keeps the destination (ZERO, ONE) | capture (`cmask0`); hardware (open driver) |
 | 22-24 | depth compare, `GL enum - 0x200`: never, less, equal, lequal, greater, notequal, gequal, always. Depth test off, or no depth buffer, gives always + no write (`0x01d00000`) | hardware (greater); capture (`dless`, `dnever`, `dgreater`); hardware (open driver) |
@@ -480,7 +480,9 @@ z scale.
     keeps it. In the captures, `cullb` gives 1, and `cullf` and `cullcw`
     give 2.
 - **The rest is a constant, `0x1555620`** [capture: every draw; any meaning
-  is a guess]. The clear object uses `0x40` [capture].
+  is a guess]. The clear object uses `0x40` [capture]. The DDK's ES1 draws
+  use `0x15555620`, and `0x3a0` with flat shading ("Flat shading" below)
+  [capture].
 
 ### Output select and TSP words
 
@@ -822,69 +824,119 @@ vertex buffers), so CPU expansion costs a copy it already makes.
 | point size, sprites | native: a vertex output; ISPA object type 4 generates gl_PointCoord | hardware |
 | line strips and loops | lowered: no strip primitive; expanded to line lists | hardware |
 | scissor, viewport | native: region clip plus pass-type-3 objects | hardware |
-| user clip planes | not known: below | — |
-| flat shading, provoking vertex | not known: below | — |
-| logic ops | likely shader code, as blending is: below | guess |
-| polygon mode LINE/POINT, edge flags | not known; lowering below | — |
-| polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 1 or 3 draw is untried | unconfirmed |
+| user clip planes | native: `fdpc` into cp<n> in the vertex program, enabled by output select b0-5 | capture (`cp1`, `cp2`, `cp6`, `cpnone`) |
+| flat shading, provoking vertex | native: pixel PDS DOUTI b25-26 = 2 for the iteration; the last vertex provokes | hardware (`fl-douti` replay); capture (`flat`) |
+| logic ops | shader code: pass type 1, and the program combines its color with o0, which holds the destination | capture (`lxor`, `lcinv`) |
+| polygon mode LINE/POINT, edge flags | native for the mode: ISPA object type 5 draws a triangle's edges, 6 its vertices; edge flags not known | hardware (`ot5`, `ot6` replays) |
+| polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 5 or 6 draw is untried | unconfirmed |
 | line stipple | no ES state, so no DDK capture; no field known; lowered | — |
 | polygon stipple | no ES state, no field known; lowered | — |
-| line and point smooth | not known: ES1 has both, so a capture gives the DDK's way | — |
+| line and point smooth | no hardware antialiasing seen: the DDK draws a smooth line 1 px wide and a smooth point 1 px | capture (`lsmooth`, `psmooth`) |
 
-**User clip planes.** The hardware has a clip-plane path in the vertex
-shader: `fdpc` is a dot product with a clip-plane operand cp0-7, and `fddpc`
-takes two at once (ISA.md "Float classes", **oracle**). That it writes a
-result the TA clips against is **unconfirmed**, and so is the enable (output
-select, MTE control or a TA header group). The driver sets
-`caps->clip_planes = 0`, so st/mesa lowers user planes into the vertex
-shader (`nir_lower_clip_vs` writes gl_ClipDistance), and the driver has to
-clip against those or discard per pixel. piglit's clip-plane failures
-(`sgx-piglit-fails.txt`, M6) are that missing half.
+**User clip planes are native** (**capture**: `probe1` with
+`PROBE_CLIPPLANE`, 2026-11-11: one plane `1 0 0 0` (`cp1`), two (`cp2`), six
+(`cp6`) and one that cuts nothing, `1 0 0 1` (`cpnone`)). The read-backs
+clip exactly: `cp1` keeps the triangle's x ≥ 0 half, `cp2` its x, y ≥ 0
+quarter, `cp6` less again, and `cpnone` matches the base pixel for pixel.
+Against the base, the DDK changes three things and nothing else (no MTE
+control, TA header or ISP word):
 
-- The DDK's ES1 has `glClipPlanef` (core in ES 1.1). One capture per case
-  gives the shader code and the state: `probe1` with
-  `PROBE_CLIPPLANE="1 0 0 0"` (x ≥ 0, cutting the triangle), two planes,
-  six planes, and one plane that cuts nothing. Diff the vertex program
-  (fdpc or fddpc into cp<n>), output select, MTE control and the TA state
-  header against `probe1`'s base.
-- **Lowered, if no hardware path works:** `nir_lower_clip_fs` turns the
-  distances into varyings and a discard. A discard makes the draw
-  punch-through (pass type 4, or 2 with a blend: the two-phase discard of
-  ISA.md "Phases, visibility feedback and discard"), so it costs the
-  depth-feedback pass, and a varying per four planes. **Not on lines:**
-  any program with visibility feedback breaks a frame drawn with lines,
-  whether or not the discard is taken (ISA.md, "Phases, visibility feedback
-  and discard": hardware). Clipped lines need the hardware path, or have to
-  be drawn as thin triangles.
+- **The vertex program** computes the eye-space position and, for plane n,
+  ends with `fdpc o(7+n), cp<n>, pa0, c52 [rpt=2 inc0 inc1]` (as `dis.py`
+  prints it). Six planes give `cp0` to `cp5`, one `fdpc` each; no `fddpc`.
+  The planes' coefficients arrive as constants in the PDS vertex program's
+  data (the values 1, -1, 0.4 and 0.2 of `cp6` are there).
+- **Output select** (TA block word, `0x304110b4` in these captures) gets
+  one bit per plane in b0-5 and one more output dword per plane:
+  `00083800` with none, `00093801` with one, `000a3803` with two,
+  `000e383f` with six. The `fdpc` result is that extra output. Which output
+  register it lands in (o7+n as printed, or o8+n after the repeat) is
+  **unconfirmed**: the count says 8 + n dwords.
+- **The VDM draw words** follow the bigger program: the vertex PDS
+  program's address and data size.
+
+So the TA clips against the `fdpc` results of the planes whose bit is set.
+The driver sets `caps->clip_planes = 0` today, so st/mesa lowers user planes
+into the vertex shader (`nir_lower_clip_vs` writes gl_ClipDistance). The
+native path is: the compiler emits each distance with an `fdpc` into cp<n>
+as an extra output, and the driver sets output select's mask and count. How
+the compiler gets a gl_ClipDistance through `fdpc` (a dot product of the
+distance with a unit vector, or of the position with the plane) is its
+choice (**guess** until the hardware test below). Clipping in the TA works
+on lines too, so the discard fallback, which can't run on lines, isn't
+needed.
+
+- **Test (open stack):** a replay or `sgx_hwt` frame with one `fdpc` into
+  cp0 and output select `00093801`, drawing a triangle and a line across
+  the plane, read back. It confirms the output slot and that lines clip.
+- **Fallback, if the test fails:** `nir_lower_clip_fs` turns the distances
+  into varyings and a discard. That costs the punch-through pass and a
+  varying per four planes, and **not on lines:** any program with
+  visibility feedback breaks a frame drawn with lines, whether or not the
+  discard is taken (ISA.md, "Phases, visibility feedback and discard":
+  hardware). Clipped lines would have to be drawn as thin triangles.
 
 **Flat shading.** ES1 has `glShadeModel(GL_FLAT)`, so a `probe1` capture with
-`PROBE_SHADEMODEL=0x1D00` against the base (`0x1D01`) gives the field. GL's
-provoking vertex is the last vertex of each primitive. Which vertex the
-hardware takes is part of the same capture: probe1's three vertex colors
-differ. One candidate is the DOUTI 2-bit field b25-26 (PDS.md: 3 on every
-shader entry, 0 on the clear's and background's iterations) (**guess**).
-**Lowered, if there's no field:** unindex the draw on the CPU and give each
-primitive's three vertices the provoking vertex's flat attributes.
+`PROBE_SHADEMODEL=0x1D00` against the base (`0x1D01`) (**capture**, `flat`,
+2026-11-11). The whole triangle reads back (0, 0, 255), the third vertex's
+color: the last vertex provokes, as GL wants. Three words change, each by
+itself in its own buffer:
+
+| word | smooth (base) | flat |
+|---|---|---|
+| pixel PDS DOUTI for the color (`0x2e01802c`) | `27c10000` (b25-26 = 3) | `25c10000` (b25-26 = 2) |
+| MTE control (TA block, `0x304110bc`) | `15555620` | `000003a0` |
+| VDM draw word 2 (`0x3e519038`) | `f0000000` | `f4000000` (b26) |
+
+**DOUTI b25-26 alone is the switch** (**hardware**: replays of the base on a
+CE5300 board, 2026-11-11, one word changed at a time). With `25c10000` the
+dump matches the `flat` capture pixel for pixel. The MTE control and VDM
+draw word changes, alone, leave the dump byte for byte equal to the base.
+PDS.md has b25-26 as 3 on every shader entry and 0 on the clear's and
+background's iterations, so the field is the iteration's shading mode,
+with 2 flat and 3 smooth (Gouraud). It is set per iterated attribute, so a
+GLSL `flat` varying is the same switch on that one DOUTI. What the MTE
+control word and VDM b26 change is unknown. Neither selects the provoking
+vertex: replays of `flat` with the MTE word set back to `15555620`, with
+VDM b26 cleared, and with both, all give the capture's dump byte for byte,
+the last vertex's color (**hardware**, 2026-11-11). A first-vertex
+convention has no known field; rotating each triangle's indices is the
+fallback. The MTE control word was a constant in every ES2
+capture (`01555620`); what its other fields mean is still a **guess**.
 
 **Logic ops.** The ES1 has `glLogicOp`. Blending and the color mask are
 fragment-shader code here (§3, "Blending and the color mask are shader
-code"), so the DDK most likely does a logic op the same way, as a shader
-epilogue that reads the destination (**guess**). Capture: `probe1`
-`PROBE_LOGICOP=0x1506` (XOR) and `0x150C` (COPY_INVERTED) against the base.
-If it is shader code, `nir_lower_blend` already takes a logic op
-(`logicop_enable`, `logicop_func`). The compiler's side, a bitwise table of
+code"), and a logic op is too (**capture**: `probe1` `PROBE_LOGICOP=0x1506`
+(XOR, `lxor`) and `0x150C` (COPY_INVERTED, `lcinv`), 2026-11-11). Against the
+base, two things change: ISPA goes from pass type 0 to 1 (`01d00200` →
+`03d00200`), and the pixel program's one instruction, `mov o0, pa0`,
+becomes `xor o0, pa0, o0` for XOR and `and.inv o0, c56, pa0` for
+COPY_INVERTED (c56 holding all ones). Under pass type 1, o0 starts as the
+destination pixel, packed 8888. The read-backs agree: the centre's
+(63, 64, 128, 160) over the background (0, 0, 128, 255) gives (63, 64, 0, 95)
+for XOR and (192, 191, 127, 95) for COPY_INVERTED. `nir_lower_blend` already
+takes a logic op (`logicop_enable`, `logicop_func`). The compiler's side, a bitwise table of
 the 16 ops after the color, is in ISA.md "What a compiler needs".
 
 **Polygon mode and edge flags.**
-- ISPA's object type values 2 and 5-7 have never been seen. Whether a
-  triangle list drawn with object type 1 (lines) or 3 (points) draws its
-  edges or vertices is untried. A line list drawn with type 0 draws nothing
-  (§3, "Lines and points").
-- Test: replays of the base triangle with ISPA b15-18 = 1, 2, 3, 5, 6 and 7,
-  read back.
-- **Lowered, if none draws edges:** `u_unfilled_indices` (gallium aux)
-  rewrites triangle indices into line or point lists. Edge flags need the
-  per-vertex flag at that step, which the CPU expansion has to hand.
+- **The ISP has polygon modes** (**hardware**: replays of the base triangle
+  on a CE5300 board, 2026-11-11, with ISPA b15-18 changed):
+  - Type 5 draws the triangle's three edges as 1-pixel lines, with the
+    vertex colors interpolated along each edge: 840 pixels, two per row
+    down the sides and the whole bottom row.
+  - Type 6 draws its three vertices as single pixels, in the vertex colors.
+  - Types 1 (lines), 2 and 3 (points) draw nothing from triangle data, as a
+    line list drawn with type 0 draws nothing (§3, "Lines and points").
+  - Type 7 locks up the 3D core (HWR, `lockup_3d`). Never write it.
+- So GL_LINE and GL_POINT polygon modes are type 5 and type 6 on a
+  triangle draw. Front and back can differ, since ISPA is per side.
+  Unknown: the width and size these draw with (1 pixel at line width 1 and
+  no point size here), whether ISPB's line width applies, whether a vertex
+  output gives type 6 a point size, and how edge flags are given. Polygon
+  offset on them is untried (the table above).
+- **Lowered, for edge flags:** `u_unfilled_indices` (gallium aux) rewrites
+  triangle indices into line or point lists, and the CPU expansion has the
+  per-vertex flag to hand.
 
 **Line and polygon stipple.**
 - **Line stipple:** the CPU already expands strips and loops, so it can add
@@ -897,9 +949,19 @@ the 16 ops after the color, is in ISA.md "What a compiler needs".
   be drawn as thin triangles: two per segment, from the same CPU expansion.
 
 **Line and point smooth.** ES1 has `GL_LINE_SMOOTH` and `GL_POINT_SMOOTH`.
-Captures with `PROBE_ENABLE=0x0B20` (lines, `PROBE_PRIM=1`) and `0x0B10`
-(points) show whether the DDK uses a state bit or shader coverage. Mesa's
-`nir_lower_poly_line_smooth` is the shader-side option.
+The DDK antialiases neither (**capture**: `lsmooth`/`lsharp`, a width-3
+line, and `psmooth`/`psharp`, a 16-px point, 2026-11-11):
+- with `GL_LINE_SMOOTH` the only change is ISPB's width, `30f0` → `10f0`
+  (3.0 → 1.0), and the line reads back 1 px wide (360 pixels against
+  1080);
+- with `GL_POINT_SMOOTH` the only change is the point size the vertex
+  program writes, 16 → 1, and the point reads back as one pixel.
+
+So no state word for smoothing shows up. GL lets a driver report a smooth
+line width range and point size range of 1 to 1, which fits what the DDK
+draws (**guess**: the DDK's ranges weren't queried). Mesa's
+`nir_lower_poly_line_smooth` gives real coverage in the shader, at the cost
+of a blend.
 
 ## 4. The render target
 
@@ -1077,7 +1139,9 @@ instruction, not the texture: `tex1` gives `00800800` and `tex2`
 sampling tc0, then DOUTT) gives `00800000`, with T0 `00b60e90`, T1
 `cc2cf1df` and T2 = the render target's address [capture]. What the 0x800
 part that the shader samples add, and the background lacks, does is
-[unconfirmed].
+[unconfirmed]. Three fields are known from open-stack runs [hardware;
+TEX.md §14-15]: b29-31 the shadow compare function, b16-17 the compare
+result format, and the low bits (b0-6 at least) a volume's depth - 1.
 
 **The background's T0 and T1 follow the surface**, from the 2026-11-08
 pbuffer and FBO captures:
@@ -1652,12 +1716,11 @@ until it is confirmed.
 - The color-mask move appended to the shader is `0x90b00601 | mask<<11` → compare the appended instruction words of the `cm1`-`cm3` captures with the expression.
 - The Mesa driver's discard program does an alpha test once sa4 has another function and reference → a replay of a Mesa discard draw with sa4 poked to GREATER 0.5, checking against the DDK's `e1gt5` frame.
 - glLineWidth clamps to [1, 16] → captures with glLineWidth(0.5) and glLineWidth(20).
-- User clip planes: fdpc/fddpc into cp<n> are what the TA clips against, and an enable exists in output select, MTE control or the TA header → `probe1` captures with `PROBE_CLIPPLANE` (one plane cutting the triangle, two, six, one cutting nothing), diffed against the base.
-- Flat shading has a state field, and which vertex is the provoking one → a `probe1` capture with `PROBE_SHADEMODEL=0x1D00` against `0x1D01`.
-- Logic ops are a shader epilogue → `probe1` captures with `PROBE_LOGICOP=0x1506` and `0x150C`.
-- Polygon offset applies to object types 1 and 3 → a replay of `polyoff` with the draw turned into lines (ISPA type 1 and a prim-1 VDM list), reading back the depth test result against a second draw.
-- ISPA object types 2 and 5-7, and triangles drawn as type 1 or 3 → replays of the base triangle with each type, read back.
-- Line and point smooth → `probe1` captures with `PROBE_ENABLE=0x0B20` (lines) and `0x0B10` (points).
+- User clip planes: the `fdpc` result lands in output o8+n (or o7+n), and the TA clips lines as well as triangles against it → an open-stack frame with one `fdpc` into cp0 and output select `00093801`, drawing a triangle and a line across the plane, read back.
+- What MTE control `000003a0` and VDM draw word 2 b26 (the other two flat-capture changes) do → a flat triangle strip and fan, replayed with each word reverted.
+- A first-vertex provoking convention (EXT_provoking_vertex): no field known; neither of those two words selects it → a TA header or ISPB bit scan on the `flat` replay, or CPU index rotation.
+- Polygon offset applies to object types 1, 3, 5 and 6 → a replay of `polyoff` with the draw's ISPA type set to 5, reading back the depth test result against a second draw.
+- Object types 5 and 6: the line width and point size they draw with, and where edge flags go → replays of `es1base` with type 5 and ISPB width `40`, and with type 6 and a point-size output.
 
 ### §4 Render target
 
