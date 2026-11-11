@@ -1335,8 +1335,7 @@ uniform_prec(struct sgx_ctx *c, unsigned k)
    if (k < ARRAY_SIZE(c->const_prec) && c->const_prec[k])
       return c->const_prec[k];
    nir_foreach_variable_with_modes (var, c->nir, nir_var_uniform) {
-      if (glsl_type_is_sampler(glsl_without_array(var->type)) ||
-          var->data.driver_location < 0)
+      if (glsl_type_is_sampler(glsl_without_array(var->type)))
          continue;
       unsigned base = var->data.driver_location,
                n = 4 * glsl_count_vec4_slots(var->type, false, false);
