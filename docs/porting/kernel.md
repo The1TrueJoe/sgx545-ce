@@ -61,9 +61,12 @@ Three patterns:
 - **A device tree SoC** (OMAP, Allwinner, Ingenic): the upstream binding
   `Documentation/devicetree/bindings/gpu/img,powervr-sgx.yaml` already describes the
   node (`reg`, one interrupt, `core`/`mem`/`sys` clocks, a power domain), with
-  compatibles `img,powervr-sgx530`, `-sgx540` and `-sgx544`. The driver has no
-  platform driver yet. Add one in `pvrsgx_drv.c` whose `of_device_id` table carries the
-  core number in `.data`, enables the clocks and the power domain, and maps `reg`. An
+  compatibles `img,powervr-sgx530`, `-sgx540` and `-sgx544`. The platform driver is
+  `pvrsgx_of.c` (`CONFIG_DRM_POWERVR_SGX_OF`); its `of_device_id` table carries the core
+  number in `.data`. It maps only the first `PVRSGX_REGS_MIN` bytes of `reg`, and it
+  handles the TI layout only: no clocks on the GPU node, a ti-sysc parent that clocks
+  and powers the module whenever the GPU device is runtime-resumed. A part with its own
+  `clocks` or `resets` (Allwinner, Ingenic) is refused until the driver enables them. An
   SGX535 has no compatible in that binding yet; it needs an addition to the binding.
 
 Done: `dmesg` shows the driver probing the device. A device whose bus names no known core

@@ -117,7 +117,7 @@ struct pvrsgx_fw {
 struct pvrsgx_device {
 	/** @base: The DRM device. */
 	struct drm_device base;
-	/** @pdev: The SGX PCI function (CE5300), or NULL behind gma500 (Cedarview). */
+	/** @pdev: The SGX PCI function (CE5300), or NULL (gma500, device tree). */
 	struct pci_dev *pdev;
 	/** @dma_parms: DMA parameters of the gma500 auxiliary device. */
 	struct device_dma_parameters dma_parms;
@@ -126,7 +126,7 @@ struct pvrsgx_device {
 	/** @irq_work: The interrupt's bottom half behind gma500, which owns the line. */
 	struct work_struct irq_work;
 
-	/** @regs: The core registers (BAR 0). */
+	/** @regs: The core registers (BAR 0, or the node's first reg). */
 	void __iomem *regs;
 	/** @irq: Its interrupt. */
 	int irq;
