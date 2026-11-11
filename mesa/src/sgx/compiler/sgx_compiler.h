@@ -182,7 +182,7 @@ struct sgx_sample_info {
    uint16_t id;
    uint8_t sampler;
    uint8_t set; /* non-dependent: the coordinate's set */
-   uint8_t dim; /* 2 = 2D, 3 = cube */
+   uint8_t dim; /* 2 = 2D, 3 = cube or volume (smp.3d) */
    uint8_t dependent, proj;
    uint8_t reg; /* the raw texel: pa (non-dependent), r (dependent) */
    /* non-dependent: the coordinate's plain iteration, -1 none */

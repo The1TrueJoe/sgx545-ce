@@ -3735,9 +3735,20 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       emit_texel(c, tex, ps, ref(SGX_F_PA, ps->pa));
       return;
    }
+   /* (a compare sample is the driver's to lower: nir_lower_tex_shadow) */
+   if (tex->is_shadow ||
+       nir_tex_instr_src_index(tex, nir_tex_src_comparator) >= 0) {
+      sgx_fail(c, "shadow sampler not lowered");
+      return;
+   }
    struct sgx_sample *s = rzalloc(c, struct sgx_sample);
    s->id = c->n_samples;
-   s->dim = tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ? 3 : 2;
+   /* smp's 3D dimension takes cube maps and volumes, the texture state
+    * telling them apart */
+   s->dim = tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ||
+                  tex->sampler_dim == GLSL_SAMPLER_DIM_3D
+               ? 3
+               : 2;
    s->coord_pa = -1;
    s->sampler = tex->texture_index;
    /* non-dependent: the coordinate is (the start of) a varying the PDS

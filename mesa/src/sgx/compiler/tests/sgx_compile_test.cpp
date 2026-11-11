@@ -1233,6 +1233,78 @@ TEST_F(sgx_compile_test, fragment_polygon_stipple)
    EXPECT_EQ(out.samples[0].sampler, 1u);
 }
 
+/* texture() of a sampler of this dimension at coordinate c */
+static nir_def *
+sample_dim(nir_builder *b, nir_variable *smp, nir_def *c, bool shadow = false)
+{
+   nir_deref_instr *sd = nir_build_deref_var(b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = c;
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = glsl_get_sampler_dim(smp->type);
+   tb.dest_type = nir_type_float32;
+   if (shadow) {
+      tb.comparator = nir_channel(b, c, 2);
+      tb.coord = nir_trim_vector(b, c, 2);
+   }
+   return nir_build_tex_struct(b, nir_texop_tex, tb);
+}
+
+/* a compare sample reaching the compiler is refused (the driver lowers it) */
+TEST_F(sgx_compile_test, fragment_shadow_sampler_refused)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec_type(3), "v", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, true, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *r = sample_dim(&b, smp, nir_load_var(&b, in), true);
+   nir_store_var(&b, col, nir_vec4(&b, r, r, r, r), 0xf);
+   EXPECT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("shadow"),
+             std::string::npos);
+}
+
+/* a volume sample is smp's 3D dimension, as a cube map's is: from the PDS
+ * (a whole vec3 varying) and dependent */
+TEST_F(sgx_compile_test, fragment_volume_sample_is_3d)
+{
+   for (unsigned dep = 0; dep < 2; dep++) {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *in =
+         var(nir_var_shader_in, glsl_vec_type(3), "v", VARYING_SLOT_VAR0);
+      nir_variable *smp = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_3D, false, false, GLSL_TYPE_FLOAT),
+         "t", -1);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      nir_def *c = nir_load_var(&b, in);
+      if (dep)
+         c = nir_fmul(&b, c, c);
+      nir_store_var(&b, col, sample_dim(&b, smp, c), 0xf);
+      ASSERT_TRUE(compile()) << out.log;
+      expect_decodes();
+      ASSERT_EQ(out.n_samples, 1u);
+      EXPECT_EQ(out.samples[0].dim, 3u);
+      EXPECT_EQ(out.samples[0].dependent, (bool)dep);
+      if (dep) {
+         char text[256];
+         sgx_disasm_one(out.samples[0].smp, NULL, text, sizeof(text));
+         EXPECT_NE(std::string(text).find("smp.3d"), std::string::npos) << text;
+      }
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
+}
+
 /* the fixed programs: every line assembles, every word decodes, and each
  * program's last instruction ends it */
 TEST(sgx_fixed, programs_assemble)
