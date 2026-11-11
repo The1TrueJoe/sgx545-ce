@@ -16,6 +16,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
@@ -55,7 +56,7 @@ static int pvrsgx_of_probe(struct platform_device *pdev)
 	sdev = pvrsgx_alloc(dev);
 	if (IS_ERR(sdev))
 		return PTR_ERR(sdev);
-	sdev->family = pvrsgx_core_family_get((uintptr_t)of_device_get_match_data(dev));
+	sdev->family = pvrsgx_core_family_get((uintptr_t)device_get_match_data(dev));
 	sdev->irq = irq;
 	platform_set_drvdata(pdev, sdev);
 
