@@ -5,7 +5,9 @@
 # Lay out a Debian-installable kernel with gma500's SGX auxiliary device and
 # powervr_sgx in tree, from Debian's own amd64 config (the config file of
 # linux-image-*-amd64-unsigned from DEB_SUITE, default trixie) plus
-# deb.fragment, then EXTRA_FRAGMENTS (lockdep.fragment for the lockdep flavor):
+# deb.fragment, then EXTRA_FRAGMENTS (lockdep.fragment for the lockdep flavor).
+# DEB_KIT=1 adds the test kit's gma500 patches (drm/ci/kit: the display register
+# dump, the self-refresh and FIFO switches), for the kit's sticks only:
 #
 #   deb-kernel.sh <linux source> <drm dir>
 set -eu
@@ -14,7 +16,9 @@ DRM=$2
 SUITE=${DEB_SUITE:-trixie}
 MIRROR=http://deb.debian.org/debian
 
-for p in "$DRM"/gma500/*.patch "$DRM"/ci/kit/*.patch; do
+kit=
+[ "${DEB_KIT:-0}" = 1 ] && kit=$(ls "$DRM"/ci/kit/*.patch)
+for p in "$DRM"/gma500/*.patch $kit; do
 	echo ">> patch $(basename "$p")"
 	patch -d "$SRC" -p1 --forward --batch < "$p"
 done

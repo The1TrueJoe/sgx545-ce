@@ -16,7 +16,7 @@ computer's own disks are never written to.
 | `qemu-test.sh` | the CI check: boots the image in QEMU next to a disk that must stay unchanged |
 | `SERIES` | the kit's version for testers (`v3`), on the screen and in the results file name |
 
-CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview`
+CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview-kit`
 (kernel), `powervr-sgx-cedarview` (static tests) and `mesa-sgx-trixie` (firmware and Mesa
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
 `sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.1` for v3.1, from `SERIES`) for 90 days. There are no GitHub releases.
