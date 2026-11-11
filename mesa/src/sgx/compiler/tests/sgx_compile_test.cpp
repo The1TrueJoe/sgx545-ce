@@ -841,6 +841,51 @@ TEST_F(sgx_compile_test, fragment_flat_varyings)
    }
 }
 
+/* integer division by a power of two as the GLSL front end lowers it,
+ * isign(i) * (iabs(i) >> 2), and a shift left and an arithmetic shift right
+ * by constants: all become float arithmetic (integers are floats here) */
+TEST_F(sgx_compile_test, fragment_int_division_and_shifts)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, a);
+   nir_def *i = nir_f2i32(&b, nir_channel(&b, v, 0));
+   nir_def *j = nir_f2i32(&b, nir_channel(&b, v, 1));
+   nir_def *q =
+      nir_imul(&b, nir_isign(&b, i), nir_ushr_imm(&b, nir_iabs(&b, i), 2));
+   nir_def *l = nir_ishl_imm(&b, j, 3);
+   nir_def *r = nir_ishr_imm(&b, j, 1);
+   nir_store_var(&b, col,
+                 nir_vec4(&b, nir_i2f32(&b, q), nir_i2f32(&b, l),
+                          nir_i2f32(&b, r), nir_imm_float(&b, 1)),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+}
+
+/* an integer op with no float form fails to compile, with an error */
+TEST_F(sgx_compile_test, fragment_unsupported_int_op_fails)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *i = nir_f2i32(&b, nir_channel(&b, nir_load_var(&b, a), 0));
+   nir_def *c = nir_bit_count(&b, i);
+   nir_store_var(&b, col,
+                 nir_vec4(&b, nir_i2f32(&b, c), nir_imm_float(&b, 0),
+                          nir_imm_float(&b, 0), nir_imm_float(&b, 1)),
+                 0xf);
+   EXPECT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("unsupported integer op"),
+             std::string::npos)
+      << (out.log ? out.log : "");
+}
+
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
  * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
  * writes no PA register (the inputs phase 1 reads) */
