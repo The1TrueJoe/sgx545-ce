@@ -28,6 +28,8 @@
 #   shaderdump  the default with MESA_SHADER_DUMP_PATH: X's, xfwm4's and the
 #             clients' programs as .shader_test files in OUT/shaders (not for
 #             timing)
+# SCANOUT=address (and SCANOUT_BYTES) dumps the display's framebuffer after
+# each workload with /root/m3/memdump.
 # Recorded in OUT: the kernel's job trace (kick and completion per job, by
 # process), CPU time per process every 0.5 s, the driver's SGX_DEBUG=stats
 # lines of X and xfwm4, the workloads' own metrics, perf profiles when perf
@@ -147,6 +149,12 @@ for w in "$@"; do
 	mark start "$V" "$w"
 	as_desk sh /tmp/lag-wl.sh "$w" > "$OUT/wl-$w.txt" 2>&1
 	mark end "$V" "$w"
+	# what X has, and what the display scans out (simpledrm's boot
+	# framebuffer, where /root/m3/memdump is there): is the screen right
+	as_desk import -window root -resize 50% "png:/tmp/lag-$V-$w.png" > /dev/null 2>&1 &&
+		mv "$R/tmp/lag-$V-$w.png" "$OUT/x-$w.png" 2>/dev/null
+	[ -x /root/m3/memdump ] && [ -n "${SCANOUT:-}" ] &&
+		/root/m3/memdump $SCANOUT "${SCANOUT_BYTES:-1413120}" > "$OUT/scanout-$w.raw" 2>/dev/null
 	if [ -n "$perfpid" ]; then
 		kill -INT $perfpid; wait $perfpid
 		# by process, then where each spends it
