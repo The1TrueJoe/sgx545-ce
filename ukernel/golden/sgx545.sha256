@@ -2,5 +2,5 @@
 # The image itself is never checked in (ukernel/.gitignore ignores every *.bin);
 # this hash + size is the byte-for-byte golden the ukernel-golden CI enforces.
 # Regenerate after an intentional change: python3 ukernel/golden/check.py --write
-sha256 1ecd147e72cdcda1a96cdd815200df45f3c293d9a07eadabbfc0410d8eb35fb6
-bytes  14504
+sha256 3c0ccd63eefbce7e61f9ed5c39500b33dce8060051469b5fe575a7e49d4e05b7
+bytes  14440

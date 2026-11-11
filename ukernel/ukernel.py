@@ -1448,10 +1448,9 @@ def build(a):
     # skips the ~25 pages the 3D freed, exhausting the PB at ~frame 40 (DPM_OUT_OF_MEM_MT,
     # the M1 exit). PB_TA_LOADED is the DDK's own
     # ta3d+0xb8 marker; init and cleanup reset it so an HWR or a same-address realloc reloads.
-    a.i(f"ld.a.d r5, r17, #{PB_TA_LOADED} [moe]")
-    a.i("wdf")
-    a.i("test.xor.eq p0, r5, r11")              # same PB already loaded -> skip the reload
-    a.i("(p0) ba skip_pb_fl")
+    # DIAGNOSTIC (frame-2 / -r third-RTD): reload the TA free list on EVERY first kick
+    # -- the PB_TA_LOADED address-compare skip is removed. Tests whether a stale free
+    # list is behind the failure. Regresses to ~frame-40 PB exhaustion; NOT for merge.
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
     a.i(f"st.a.d r17, #{PB_TA_LOADED}, r11 [moe]")   # remember the loaded PB
@@ -1889,10 +1888,8 @@ def build(a):
     # Load the 3D free list + save_ta_state only when the PB changed (the per-PB rule, same
     # as the TA side: the DDK loads once per PB and the HW keeps the ring in sync). When it
     # is unchanged, 0x63c=3 and the ISP/PBE state (D3_CONST/D3_RD) below still run every 3D.
-    a.i(f"ld.a.d r4, r17, #{PB_3D_LOADED} [moe]")
-    a.i("wdf")
-    a.i("test.xor.eq p0, r4, r11")                    # same PB already loaded -> skip
-    a.i("(p0) ba skip_3d_fl")
+    # DIAGNOSTIC: run save_ta_state + load_3d_state + the 3D free-list load on EVERY 3D
+    # (the PB_3D_LOADED address-compare skip is removed), matching the TA side above.
     # save_ta_state: stash the TA page counters in the PB descriptor, shifted.
     a.i(f"ldr r4, #{0x700 // 4}")
     a.i(f"ldr r5, #{0x710 // 4}")
