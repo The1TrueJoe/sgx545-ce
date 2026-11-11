@@ -1050,7 +1050,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
              * iteration of a coordinate set, of this set or another, as the
              * DDK's generator does: its texel lands after that iteration, where
              * a DOUTI of its own would put it.  Not into gl_FragCoord's or a
-             * point coordinate's (its w1 bits are the sample half's).
+             * point coordinate's (its w1 bits are the sample half's), nor a
+             * flat one's (b25-26 2 may take the sample's coordinate too).
              * Otherwise a pure sample (source 0x24). */
             bool proj = out.iters[i].proj;
             unsigned prev = so->prog.n_douti - 1;
@@ -1059,7 +1060,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             bool other_set = !(sgx_drv_debug & SGX_DEBUG_NO_PDS_MERGE);
 
             if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 &&
-                !d->proj && d->iterate && !d->w1 &&
+                !d->proj && d->iterate && !d->w1 && d->b25_26 == 3 &&
                 (d->src == it ||
                  (other_set && d->src >= 1 && d->src <= SGX_MAX_SETS))) {
                d->sample_set = it;
@@ -1095,7 +1096,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             .src = it,
             .comps = out.iters[i].comps,
             .iterate = true,
-            .b25_26 = 3,
+            /* 2: the provoking (last) vertex's value, 3 interpolated */
+            .b25_26 = out.iters[i].flat ? 2 : 3,
             .prec1 = out.iters[i].f16,
             .w1 = out.iters[i].pointcoord ? 0x10 : 0,
          };

@@ -3107,7 +3107,8 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
    for (unsigned n = 0; n < c->n_iters;) {
       struct sgx_iter *it = &c->iters[n];
       unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
-      if (it->sample || it->pointcoord || it->set >= SGX_MAX_SETS) {
+      /* (a flat set isn't one: the PDS would interpolate its coordinate) */
+      if (it->sample || it->pointcoord || it->flat || it->set >= SGX_MAX_SETS) {
          n++;
          continue;
       }
@@ -3323,6 +3324,25 @@ interleave_samples(struct sgx_ctx *c)
       c->depth_pa = map[c->depth_pa];
 }
 
+/* a load from a flat set (sgx_iter.flat) */
+static bool
+flat_load(struct sgx_ctx *c, nir_intrinsic_instr *in)
+{
+   int at = input_at(in);
+   int r = at >= 0 && at < (int)ARRAY_SIZE(c->in_reg) ? c->in_reg[at] : -1;
+   if (r < 0)
+      return false;
+   unsigned reg = r & SGX_IN_HALF ? (r & ~SGX_IN_HALF) / 2 : r;
+   for (unsigned i = 0; i < c->n_iters; i++) {
+      const struct sgx_iter *it = &c->iters[i];
+      if (!it->sample && reg >= it->pa && reg < it->pa + iter_regs(it))
+         return it->flat;
+   }
+   return false;
+}
+
+/* (not a flat varying's: the PDS would interpolate it, so the divide stays
+ * in the program) */
 static void
 find_projected(struct sgx_ctx *c, nir_function_impl *impl)
 {
@@ -3341,7 +3361,8 @@ find_projected(struct sgx_ctx *c, nir_function_impl *impl)
          nir_alu_instr *cm, *pm;
          nir_intrinsic_instr *l1 = varying_load(&tex->src[ci].src, &cs, &cm);
          nir_intrinsic_instr *l2 = varying_load(&tex->src[pi].src, &ps, &pm);
-         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3)
+         if (!l1 || l1 != l2 || cs[0] != 0 || cs[1] != 1 || ps[0] != 3 ||
+             flat_load(c, l1))
             continue;
          _mesa_hash_table_insert(c->proj, tex, l1);
          if (cm && list_is_singular(&cm->def.uses))
@@ -3812,8 +3833,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       unsigned pa = c->vals[load->def.index].n;
       /* (the PDS samples from the set itself, however it is iterated) */
       for (unsigned i = 0; i < c->n_iters; i++) {
-         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == pa &&
-             c->iters[i].comps == 4) {
+         if (!c->iters[i].sample && !c->iters[i].flat &&
+             iter_reg(&c->iters[i]) == pa && c->iters[i].comps == 4) {
             s->dependent = false;
             s->proj = true;
             s->set = c->iters[i].set;
@@ -3843,9 +3864,11 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          if (prefix)
             pa = c->vals[l->def.index].n;
       }
-      /* (an F16-iterated varying is matched by its halves' register) */
+      /* (an F16-iterated varying is matched by its halves' register; a
+       * flat one samples from its register: the PDS would interpolate it) */
       for (unsigned i = 0; pa >= 0 && i < c->n_iters; i++) {
-         if (!c->iters[i].sample && iter_reg(&c->iters[i]) == (unsigned)pa &&
+         if (!c->iters[i].sample && !c->iters[i].flat &&
+             iter_reg(&c->iters[i]) == (unsigned)pa &&
              c->iters[i].comps >= ncoord) {
             s->dependent = false;
             s->set = c->iters[i].set;

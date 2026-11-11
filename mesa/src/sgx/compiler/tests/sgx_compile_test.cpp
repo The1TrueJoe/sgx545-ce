@@ -558,6 +558,54 @@ TEST_F(sgx_compile_test, fragment_proj_sample_only_varying_not_iterated)
    EXPECT_EQ(proj, 1u);
 }
 
+/* a flat texture coordinate, plain and projected: the PDS would interpolate
+ * it as it samples, so the set is iterated flat and the sample is dependent */
+TEST_F(sgx_compile_test, fragment_flat_coordinate_sample_is_dependent)
+{
+   for (unsigned proj = 0; proj < 2; proj++) {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *tc =
+         var(nir_var_shader_in, glsl_vec4_type(), "tc", VARYING_SLOT_VAR0);
+      nir_variable *smp = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+         "t", -1);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      tc->data.interpolation = INTERP_MODE_FLAT;
+      nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+      nir_def *v = nir_load_var(&b, tc);
+      nir_tex_instr *tx = nir_tex_instr_create(b.shader, proj ? 4 : 3);
+      tx->op = nir_texop_tex;
+      tx->sampler_dim = GLSL_SAMPLER_DIM_2D;
+      tx->dest_type = nir_type_float32;
+      tx->coord_components = 2;
+      tx->src[0] =
+         nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
+      tx->src[1] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &sd->def);
+      tx->src[2] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref, &sd->def);
+      if (proj)
+         tx->src[3] =
+            nir_tex_src_for_ssa(nir_tex_src_projector, nir_channel(&b, v, 3));
+      nir_def_init(&tx->instr, &tx->def, 4, 32);
+      nir_builder_instr_insert(&b, &tx->instr);
+      nir_store_var(&b, col, &tx->def, 0xf);
+
+      pds_alone = true;
+      ASSERT_TRUE(compile()) << out.log;
+      expect_decodes();
+      ASSERT_EQ(out.n_iters, 1u);
+      EXPECT_FALSE(out.iters[0].sample);
+      EXPECT_TRUE(out.iters[0].flat);
+      ASSERT_EQ(out.n_samples, 1u);
+      EXPECT_TRUE(out.samples[0].dependent);
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
+}
+
 /* dep_f16_samples: a dependent mediump texel whose four channels are read
  * returns F16 into two registers (the driver's T3), and isn't unpacked */
 TEST_F(sgx_compile_test, fragment_dependent_f16_sample_not_unpacked)
