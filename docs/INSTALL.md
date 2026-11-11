@@ -23,9 +23,8 @@ There are three pieces, and each one is easy to remove again:
    in `/opt/sgx`. Debian's own Mesa stays installed; ours is used first.
 
 You need Debian 13 already installed, an internet connection, and a user that can run
-`sudo`. There are two downloads, linked in the announcement: the kernel, and Mesa with the
-firmware. You need to be signed in to GitHub to download. Each download is a `.zip`; unzip
-it first.
+`sudo`. The packages come from our apt repository, or as `.deb` files from a release on the
+project's [Releases page](https://github.com/The1TrueJoe/powervr_sgx/releases).
 
 ## 1. Check what you have
 
@@ -39,14 +38,24 @@ lspci -nn | grep -i -E 'vga|display'
   Cedarview steps below.
 - `[8086:089b]`: a **CE5300** GPU. Follow the CE5300 steps below.
 
-## The apt repository (Cedarview)
+## The apt repository
 
 On Cedarview you can install all three pieces from our apt repository, and `apt upgrade`
-then keeps them up to date. Add the repository's signing key and its entry:
+then keeps them up to date. Add the repository's signing key (if `curl` is missing, install
+it first with `sudo apt install curl`):
 
 ```bash
 sudo curl -fsSLo /usr/share/keyrings/powervr-sgx.gpg https://telaak.dev/powervr_sgx/powervr-sgx.gpg
 ```
+
+Check the key before you trust it:
+
+```bash
+gpg --show-keys /usr/share/keyrings/powervr-sgx.gpg
+```
+
+The long line under `pub` must read `5C26DC64CAEC63910424E220E0DD2B7AD794C167`. If it doesn't,
+delete the file and stop. Then add the repository's entry:
 
 ```bash
 printf 'Types: deb\nURIs: https://telaak.dev/powervr_sgx\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/powervr-sgx.gpg\n' | sudo tee /etc/apt/sources.list.d/powervr-sgx.sources
@@ -66,9 +75,19 @@ Restart, and go on with the checks in "3. The firmware" and "4. Mesa" below. To 
 the repository again, delete `/etc/apt/sources.list.d/powervr-sgx.sources` and
 `/usr/share/keyrings/powervr-sgx.gpg`.
 
-If you'd rather install the files by hand, each release on the project's GitHub
-Releases page has the same `.deb` files and a `SHA256SUMS` file to check them with
-(`sha256sum -c SHA256SUMS`). Sections 2 to 4 install them one by one.
+On a CE5300 board, add the repository the same way but install only
+`sudo apt install sgx545-firmware mesa-sgx`, and build the kernel driver as in "2. The
+kernel" below.
+
+If you'd rather install the files by hand, download them from the newest release on the
+[Releases page](https://github.com/The1TrueJoe/powervr_sgx/releases): the four `.deb` files
+and `SHA256SUMS`. Put them in one folder and check them there:
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+Every line must end in `OK`. Sections 2 to 4 then install them one by one.
 
 ## 2. The kernel
 
@@ -81,7 +100,8 @@ On Cedarview, the GPU shares its PCI device with the display driver (`gma500`). 
 has a small change to `gma500` that hands the GPU to `powervr_sgx`. It is Debian's own
 kernel configuration with that change added.
 
-1. From the kernel download, take `linux-image-7.3.3-sgx_7.3.3-sgx1_amd64.deb`.
+1. From the release, take `linux-image-7.3.3-sgx_7.3.3-sgx….deb` (the headers package
+   next to it is only needed to build other kernel modules).
 2. Install it:
 
    ```bash
@@ -117,7 +137,7 @@ echo 'blacklist pvrsrvkm' | sudo tee /etc/modprobe.d/sgx-no-pvrsrvkm.conf
 
 ## 3. The firmware
 
-From the Mesa download, take `sgx545-firmware_….deb` and install it:
+From the release, take `sgx545-firmware_….deb` and install it:
 
 ```bash
 sudo apt install ./sgx545-firmware_*.deb
@@ -152,7 +172,7 @@ If it says `no microkernel`, the firmware file isn't in the right place. If it s
 
 ## 4. Mesa
 
-From the Mesa download, take `mesa-sgx_….deb` and install it:
+From the release, take `mesa-sgx_….deb` and install it:
 
 ```bash
 sudo apt install ./mesa-sgx_*.deb
@@ -170,6 +190,10 @@ glxinfo -B | grep -E 'renderer|version'
 
 The renderer line should name the **SGX545**. If it says `llvmpipe`, Debian's software
 Mesa is still in use: check that steps 2 to 4 worked.
+
+If the desktop reacts slowly while a game runs, let programs keep fewer frames in flight:
+add the line `SGX_SLOTS=3` to `/etc/environment` and log in again. Games then run a little
+slower. Delete the line to go back to the default of 4.
 
 ## Removing it again
 
