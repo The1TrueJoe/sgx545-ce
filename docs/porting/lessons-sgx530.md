@@ -269,3 +269,26 @@ with `--core`, and `test_sgx530.py` next to `test_emu.py`.
 21. **Mesa target.** The Atom Z5xx has no x86-64, so the 535 uses `build.sh i386`, which
     is glibc and already built. gma500 hosts it through the auxiliary device, as on
     Cedarview, so the armv7 work doesn't carry over.
+
+### 2026-11-11: the ISA delta
+
+22. **The microkernel's ISA surface isn't risk-free just because it's small.** Entry 7 said
+    the microkernel can come up on the SGX545's encodings because it uses only integer,
+    load/store and flow forms. True, but its very first instruction is `phas.i`, and the
+    SGX530 lacks `SGX_FEATURE_USE_UNLIMITED_PHASES` (and `USE_NO_INSTRUCTION_PAIRING`).
+    isa.md's list of what may differ per core should name the scheduling features
+    (phases, pairing) next to the formats. Before a first start, list the image's forms
+    with the features that could change each (ISA.md, "Other cores: the SGX530"), and
+    put the riskiest form on the failure table, so a dead init points at it.
+
+### 2026-11-11: the first start
+
+23. **Log the memory-side progress words when a start fails, not only when it passes.** The
+    runbook asked for the heartbeat after a start. The first attempt timed out, the probe
+    freed the arenas, and the one word that splits "the USSE never ran" from "init
+    stalled" was gone. The event entry's first write is the heartbeat (instruction 6). It
+    comes after a PDS fetch, a USSE fetch and one load, so on a failure it localizes the
+    stall from memory alone, with no register read. For any core, the failure path should
+    dump the control block's progress words from the CPU mapping before teardown. The
+    runbook for each start should say, for the image, which word the event writes
+    first.

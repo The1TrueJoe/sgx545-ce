@@ -2463,6 +2463,78 @@ backed above; this section only collects it.
 - Vertex texture fetch is always a USSE `smp` with LOD (c48 = 0.0 for
   `texture2D`).
 
+## Other cores: the SGX530 (spec delta for the open microkernel)
+
+Everything above is the SGX545's. This section lists what the open microkernel's SGX530
+image (`ukernel/build.py sgx530`) needs from the instruction set, and where the SGX530
+might encode it differently. It is the spec side's input for an SGX530 range in
+`sgx.xml`. Until then the image is assembled with the SGX545's encodings
+(`ISA_CORE = 545`, `sgx-asm -c sgx545`), and the coverage gate checks its 2136
+instructions against the SGX545 forms.
+
+Evidence for the SGX530, besides the tags above:
+
+- **K**: the GPL kernel side of the DDK. `kernel/src/services4/srvkm/hwdefs/sgxfeaturedefs.h`
+  sets per-core features. The SGX545 has `SGX_FEATURE_USE_NO_INSTRUCTION_PAIRING` and
+  `SGX_FEATURE_USE_UNLIMITED_PHASES`; the SGX530 has neither, has 2 USE pipes against 4,
+  and a 28-bit address space. No GPL source defines what either feature means for an
+  encoding. The rest of the SGX530's K facts are in
+  [porting/cores/sgx530.md](porting/cores/sgx530.md).
+- **stage 1**: the SGX530's first microkernel start
+  ([runbook](porting/cores/sgx530-stage1.md)). If it passes, that is coarse hardware
+  evidence for the forms its path executes: the outputs (`INIT_STATUS`, the version word,
+  the heartbeat) need those forms to behave as on the SGX545. It isn't evidence for a
+  field the path doesn't vary.
+- **hwt**: the instruction-level suites (`hwt_open.py` with `sgx_hwt`), once the SGX530
+  renders a frame. Each confirmed form gets a per-core note in its section above.
+
+Nothing here is confirmed on SGX530 hardware yet. Every SGX530 entry is **pending**.
+
+### The forms the image uses
+
+From the image's words (`hw.decode`), by hardware class and printed form. "Stage 1" marks
+the forms the init, timer and get-misc-info paths execute (in the emulator, 267
+instructions). On the SGX545 every form is **oracle** and **hardware**: the same image
+runs on the CE5300 board.
+
+| hw | form | count | stage 1 | Might differ on the SGX530 | Evidence |
+|---|---|---|---|---|---|
+| 1f | `phas.i #0, #0 [wait=7]` | 1 | yes, first instruction of every task | **The highest risk.** The SGX530 lacks `USE_UNLIMITED_PHASES`, so a phase limit, other fields, or no `phas` at all are possible. The event entry runs it before anything else, so a wrong encoding shows as init never running (`INIT_STATUS` 0, no BIF fault). | K (feature absent); meaning U |
+| all | pairing | — | yes | The SGX530 lacks `USE_NO_INSTRUCTION_PAIRING`, so it may pair instructions. If a bit the SGX545 ignores means "pair with the next" on the SGX530, any form that sets it would co-issue. Which bit, if any, is unknown. | K (feature absent); encoding U |
+| 1d, 1e | `ld.a.d … [moe]`, `st.a.d … [moe]` | 303, 193 | yes | Addresses are 28 bits (K). The image's heaps are all below 256 MiB, so a core that drops b28-31 reads the same. The `moe` and access-size fields: U. | K (address space); fields pending (stage 1, hwt_gaps) |
+| 1f | `ldr rN, #reg`, `str #reg, rN` | 100, 272 | yes | The register-index field. The image's highest offset is 0xcb0, inside the SGX530's register block (K for the named ones), so the same field width is enough. | D; pending (stage 1) |
+| 1f | `limm rN, #imm32` | 248 | yes | None known. Two of them are loader patch sites (`ctlblk`, `pdtable`), so a wrong split of the immediate shows as a wrong control-block address. | pending (stage 1) |
+| 1f | `ba #target` | 169 | yes | The 18-bit target counts 8-byte words from the code base. The SGX530's `USE_CODE_BASE` address field is b0-23 against the SGX545's b0-24 (K). Its unit is U, so whether the base, and so the target, scale the same is unproven. | K (field width); unit U |
+| 1f | `idf`, `wdf` | 79, 429 | yes | The fence semantics. A `wdf` that waits on something the SGX530 never signals hangs the task. | pending (stage 1) |
+| 1f | `nop [end]` | 8 | yes | The end flag's position. | pending (stage 1) |
+| 05 | `mov rD, rS [mask=1]` | 3 | yes | The write mask. | pending (stage 1, hwt_p2) |
+| 09 | `test.and.eq/.ne`, `test.xor.eq/.ne` | 35, 20, 18, 40 | yes | The predicate destination and the condition encoding. | pending (stage 1, hwt_p2) |
+| 0a | `and`, `or` | 47, 36 | yes | None known. | pending (stage 1, hwt_p7 bitwise) |
+| 15 | `imae … [t2=u32]` | 49 | yes | The 16-bit source truncation (above, "imae") and the `t2` type. | pending (stage 1, an hwt integer test) |
+| 0a | `and.inv` | 1 | no | The inverted source. | pending (hwt_p7) |
+| 0c, 0d | `shl`, `shr` | 18, 25 | no | The shift-count field. | pending (hwt_p7) |
+| 14 | `ima16.sgn` | 1 | no | The signed mode. | pending (an hwt integer test) |
+| 09 | `test.isub16.ne/.neg/.pos`, `test.isubu16.ne`, `test.shl.neg` | 1, 3, 2, 30, 1 | no | The 16-bit compare modes. `test.isubu16.ne` is the bounded-wait counter, so a wrong encoding shows as a wait that never gives up or gives up at once (control-block words 0x28/0x29). | pending (hwt_p2) |
+| 1f | `ba #target [link]`, `lapc`, `savl rN`, `setl rN` | 1 each | no | The link register. | pending (hwt_p7 `call_lapc`) |
+
+The image uses no float, F16, C10, `efo`, `fdual`, `smp`, `pck`, `setfc` or MOE setup
+form. Those are compiler questions for the SGX530 ("What needs the ISA first" in
+porting/cores/sgx530.md).
+
+### What sgx.xml can take, and when
+
+- **Now:** nothing. Every row above is pending.
+- **After stage 1 passes:** the stage-1 forms have coarse evidence. That is enough to keep
+  assembling the microkernel with the SGX545's encodings, but not enough for an SGX530 gen
+  range, since no field value was varied.
+- **After the hwt suites:** each confirmed form gets a per-core note in its section
+  above. Then `sgx.xml` widens those classes to the SGX530 (the cleanroom-isa plan:
+  widen the root, pin the SGX545-only classes, give a form that differs two bitsets),
+  and `ISA_CORE` in `ukernel/cores/sgx530.py` becomes 530.
+- **If `phas.i` is wrong on the SGX530:** the open microkernel needs an entry without it.
+  That is a per-core flag in `ukernel.py`, so the SGX545 image doesn't change. Its form
+  would be an SGX545-only class in `sgx.xml`.
+
 ## Gaps
 
 Facts above tagged **unconfirmed**, each with the hardware test or capture that would
