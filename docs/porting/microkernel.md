@@ -12,8 +12,13 @@ the SGX545 story, run by run, is in [the build log](../log/BUILDLOG.md) and its
 `entries/`. This guide links them instead of repeating them.
 
 A new core is meant to be a config file plus tests, not a fork. The per-core
-configuration is still being built; until it lands, ask in your core's issue. Most stages below are "confirm the shared handler works on this core"; only a
-few need new code, and those are called out.
+config, the build's core selector (`build.py <core>` / `SGX_CORE`) and the
+symbolic assembler now exist — [`cores/sgx545.py`](../../ukernel/cores/sgx545.py)
+is the first core. The ISA-coverage gate and assembling through the shared
+`sgx.xml` host tool ([`UKERNEL-TOOLING.md`](../UKERNEL-TOOLING.md) §6 steps 5-6)
+are the remaining cross-repo pieces on the Mesa side, so coordinate in your
+core's issue. Most stages below are "confirm the shared handler works on this
+core"; only a few need new code, and those are called out.
 
 ---
 
