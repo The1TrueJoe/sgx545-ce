@@ -982,18 +982,25 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
       sp[1][0] = t0;
       sp[1][1] = t1;
    }
-   /* x * 1 + y with x a constant: y * 1 + x (exact either way) */
+   /* x * 1 + y with x a constant: y * 1 + x, and x * 1 - y: y * -1 + x
+    * (exact either way; src0 takes no constant and no negate) */
    bool one = true;
    for (unsigned l = 0; l < 2; l++)
       one &= sp[1][l].file == SGX_F_K && sp[1][l].h16 && !sp[1][l].neg &&
              !sp[1][l].abs && (sp[1][l].n & 0xffff) == 0x3c00;
-   if (one && !is_rpa(&sp[0][0]) && is_rpa(&sp[2][0]) && !sp[2][0].neg &&
-       is_rpa(&sp[2][1]) && !sp[2][1].neg) {
+   bool neg2 = sp[2][0].neg && sp[2][1].neg && !sp[2][0].abs &&
+               !sp[2][1].abs && !sgx_debug(c, SGX_DBG_NO_CONST_SWAP);
+   if (one && !is_rpa(&sp[0][0]) && is_rpa(&sp[2][0]) && is_rpa(&sp[2][1]) &&
+       ((!sp[2][0].neg && !sp[2][1].neg) || neg2)) {
       struct sgx_ref t0 = sp[0][0], t1 = sp[0][1];
       sp[0][0] = sp[2][0];
       sp[0][1] = sp[2][1];
       sp[2][0] = t0;
       sp[2][1] = t1;
+      if (neg2) {
+         sp[0][0].neg = sp[0][1].neg = 0;
+         sp[1][0].neg = sp[1][1].neg = 1; /* -1: -c45 below */
+      }
    }
    bool neg0 = sp[0][0].neg;
    sp[0][0].neg = sp[0][1].neg = 0;
@@ -6479,6 +6486,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"nophases", SGX_DBG_NO_PHASES,
     "Keep a discarding fragment program in one phase"},
+   {"noconstswap", SGX_DBG_NO_CONST_SWAP,
+    "Keep 1 * k - x as is (a limm for src0), not x * -1 + k"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
     "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,
