@@ -461,7 +461,6 @@ out_vm:
 int pvrsgx_ioctl_vm_unmap(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_vm_unmap_args *args = data;
-	struct pvrsgx_device *sdev = to_pvrsgx_device(drm);
 	struct pvrsgx_vm *vm;
 	struct drm_gpuva *va;
 	long ret;
