@@ -22,6 +22,7 @@
 #   nocomp    xfwm4 without its compositor
 #   xpresent  xfwm4 synced to vblank through Present, not GLX
 #   vbloff    xfwm4 not synced to vblank
+#   dumbsched the same with Xorg -dumbSched (no scheduler timer signal)
 #   serial    the same with SGX_DEBUG=serial: each render waited for, no
 #             overlap (whether a render still in flight takes part)
 #   clientsw  X with glamor on the GPU, the clients (glmark2, xfwm4) on the
@@ -51,7 +52,7 @@ __EGL_VENDOR_LIBRARY_DIRS=/opt/sgx/share/glvnd/egl_vendor.d __GLX_VENDOR_LIBRARY
 LIBGL_DRIVERS_PATH=/opt/sgx/lib/dri"
 cenv="$mesa SGX_DEBUG=stats"
 xenv="$mesa SGX_DEBUG=stats"
-xfwm=
+xfwm= xargs=
 case $V in
 default) ;;
 slots3) cenv="$cenv SGX_SLOTS=3" xenv="$xenv SGX_SLOTS=3" ;;
@@ -70,6 +71,7 @@ xpresent) xfwm=--vblank=xpresent ;;
 vbloff) xfwm=--vblank=off ;;
 software) cenv="LIBGL_ALWAYS_SOFTWARE=1" xenv= ;;
 clientsw) cenv="LIBGL_ALWAYS_SOFTWARE=1" ;;   # X on the GPU, the clients on llvmpipe
+dumbsched) xargs=-dumbSched ;;   # Xorg without the smart scheduler's timer signal
 serial)   # every render waited for after its submit: nothing in flight when a buffer goes
 	cenv="$cenv,serial" xenv="$xenv,serial" ;;
 glamordebug) xenv="$xenv GLAMOR_DEBUG=1" ;;
@@ -97,7 +99,7 @@ cp "$RIG/desktop-up.sh" "$RIG/xorg.conf" "$OUT/rig/"
 cp "$RIG/lag-wl.sh" /tmp/lag-wl.sh
 chmod 755 /tmp/lag-wl.sh
 
-XENV="$xenv" sh "$OUT/rig/desktop-up.sh" "$R" start > "$OUT/up.txt" 2>&1 || { cat "$OUT/up.txt"; exit 1; }
+XENV="$xenv" XARGS="$xargs" sh "$OUT/rig/desktop-up.sh" "$R" start > "$OUT/up.txt" 2>&1 || { cat "$OUT/up.txt"; exit 1; }
 # whatever happens next, the box is left without X, perf or the sampler
 perfpid= sampler=
 cleanup() {   # (busybox sh exits with the trap's status: keep the script's)
