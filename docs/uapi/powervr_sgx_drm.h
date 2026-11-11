@@ -846,13 +846,19 @@ struct drm_powervr_sgx_cmd_render {
 	/** @bg_pds_primary_rows: Data rows of the background primary program. */
 	__u32 bg_pds_primary_rows;
 
-	/** @bg_depth_f32: Depth the background object clears to. IEEE-754 binary32 bits, any value. */
+	/**
+	 * @bg_depth_f32: Depth the background object clears to. IEEE-754
+	 * binary32 bits, any value.
+	 */
 	__u32 bg_depth_f32;
 
 	/** @depth_bias_units: Constant depth bias (glPolygonOffset units). */
 	__s32 depth_bias_units;
 
-	/** @depth_bias_factor_f32: Slope-scaled depth bias (glPolygonOffset factor). IEEE-754 binary32 bits, any value. */
+	/**
+	 * @depth_bias_factor_f32: Slope-scaled depth bias (glPolygonOffset
+	 * factor). IEEE-754 binary32 bits, any value.
+	 */
 	__u32 depth_bias_factor_f32;
 };
 

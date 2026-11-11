@@ -14,7 +14,6 @@
 
 #include "pvrsgx_cmd_defs.h"
 
-
 static const struct pvrsgx_cmd_ext_def *ext_find(const struct pvrsgx_cmd_def *def, u32 id)
 {
 	for (u32 i = 0; i < def->nr_exts; i++) {
