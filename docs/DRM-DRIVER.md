@@ -6,17 +6,18 @@ of `srvinit` and `pvrsrvkm`. It is written in the upstream layout
 (`drivers/gpu/drm/powervr_sgx/`) and builds in tree or out of tree. The uAPI it implements
 is `docs/UAPI.md`; its header is `drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h`.
 
-It binds the CE5300's GPU (`01:02.0 8086:089b`, core rev 1014). Cedarview (M4) needs the
-gma500 auxiliary device first.
+It binds the CE5300's GPU (`01:02.0 8086:089b`, core revision 1.0.14), and the Cedarview
+SGX (1.0.13) through the gma500 auxiliary device. The driver itself is on the `m2-drm`
+branch. Bringing it up on another core or board: `docs/porting/kernel.md`.
 
 ## 1. Status
 
 | piece | state |
 |---|---|
 | PCI probe, BAR0, INTx | written |
-| microkernel load (`request_firmware`), patching, entry PDS programs | written; the DDK 1.7.862890 microkernel (D8: SGXMKIF) |
+| microkernel load (`request_firmware`), patching, entry PDS programs | written; the open microkernel (`powervr_sgx/sgx545_ukernel.bin`, UKERNEL.md 4a), host interface SGXMKIF 1.7 (D8). Only an image that declares secure mode loads. The vendor microkernel runs only in CE5300 test kernels, through the out-of-tree `drm/ci/ddk-compat.patch`, for A/B runs |
 | init sequence (clocks, scripts, reset, BIF, first kick, `INIT_COMPLETE`) | written |
-| firmware check (`GETMISCINFO`, struct sizes) | written |
+| firmware check | written: the file header's magic, interface version, features, image CRC, entry points and patch sites (KUnit `powervr_sgx_fw`); a warning if the image was validated on another core revision |
 | kernel CCB, SW_EVENT interrupt, completion | written |
 | MMU: firmware directory, per-VM directories, idle directory | written |
 | GEM shmem, `GET_BO_MMAP_OFFSET`, PRIME import | written |
@@ -28,10 +29,11 @@ gma500 auxiliary device first.
 | shader validator (D9) | written; HW-verified on the EA3: every frame, blit and hang test runs its shaders from validated read-only code objects, and the PBE can't write into one (log `2026-11-03-0730-drm-d9-validator`) |
 | devcoredump on a hang | written; HW-verified (log `2026-11-03-0600-drm-rearm-bisect`) |
 | PRIME | export and import (shmem helpers); a dma-buf maps on the CPU only with `ALLOW_CPU_ACCESS`; imports flushed around the jobs that list them (the SGX doesn't snoop the CPU caches); HW-verified with simpledrm both ways (log `2026-11-04-0100-drm-prime-ea1`) |
-| open microkernel file (UKERNEL.md 4a), cleanup v2, secure mode | the loader works on hardware: frames render on the open microkernel (um-re e78a17c), with runtime PM, hang recovery and the RT/RC/PB cleanups. Transfers wait on its destination sync (log `2026-11-04-0330-drm-open-ukernel`). KUnit covers the file checks. secure mode HW-verified with the open microkernel f36ddd2: no firmware heap in any client VM, every test right (log `2026-11-08-1858-drm-secure-mode`); cleanup v2 written, no image declares it yet |
+| open microkernel file (UKERNEL.md 4a), cleanup v2, secure mode | the default. The loader works on hardware: frames render on the open microkernel (um-re e78a17c), with runtime PM, hang recovery and the RT/RC/PB cleanups. Transfers wait on its destination sync (log `2026-11-04-0330-drm-open-ukernel`). KUnit covers the file checks. secure mode HW-verified with the open microkernel f36ddd2: no firmware heap in any client VM, every test right (log `2026-11-08-1858-drm-secure-mode`); cleanup v2 written, no image declares it yet |
 | checkpatch `--strict`, sparse, kernel-doc, `Documentation/gpu/powervr_sgx` | clean, checked in CI |
-| Cedarview (GMA3600/3650) | written, untested on hardware: gma500 publishes the SGX as the auxiliary device `gma500_gfx.sgx` (drm/gma500/0001) and hands over its interrupt; powervr_sgx binds to it (`CONFIG_DRM_POWERVR_SGX_GMA500`). Any core but the CE5300's is refused before a register is written; `probe_only=1` reports the identity and stops |
-| runtime PM | on by default (`runtime_pm=0` turns it off); HW-verified on the EA3 and the EA1 (logs `2026-11-03-0630-drm-runtime-pm-ea3`, `2026-11-03-1700-drm-runtime-pm-ea1`); the first try froze the EA1 (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
+| core table (`pvrsgx_core.c`) | per core design: ID, the registers that move between SGX5xx cores, features, ISA, directory lists, address width, init script; per part: revision, clock, firmware file. The bus names the core (PCI ID, gma500 auxiliary device), and anything not in the table is refused before a register is written (KUnit `powervr_sgx_core`) |
+| Cedarview (GMA3600/3650) | gma500 publishes the SGX as the auxiliary device `gma500_gfx.sgx` (drm/gma500/0001, with PRIME export in 0002) and hands over its interrupt; powervr_sgx binds to it (`CONFIG_DRM_POWERVR_SGX_GMA500`). A GPU-accelerated desktop runs on four testers' Cedarview machines (issue #5) |
+| runtime PM | on with `CONFIG_PM` (`pvrsgx_pm.c`); no runtime suspend while a render context exists; HW-verified on the EA3 and the EA1 (logs `2026-11-03-0630-drm-runtime-pm-ea3`, `2026-11-03-1700-drm-runtime-pm-ea1`); the first try froze the EA1 (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
 
 First frames (2026-11-03, `docs/log/entries/2026-11-03-0210-drm-first-frame.md`): a clear and a
 triangle from client streams, pixels exact, 10 of 10 frames at 256x256, completion from the
@@ -68,32 +70,31 @@ tests.
 ## 3. Bringing the GPU up
 
 The sequence is `SGXInitialise` as the DDK's GPL kernel services run it, with the parts
-`srvinit` used to supply now built in the kernel. Every buffer, constant and register
-value is the one `docs/SRVINIT.md` lists.
+`srvinit` used to supply built into the kernel (`pvrsgx_fw_start()`). The buffers,
+constants and register values are the ones `docs/SRVINIT.md` lists; the per-core ones come
+from the core table.
 
-1. Map BAR0. Read `CORE_ID` and `CORE_REVISION`, which are safe on a core in any state.
-2. Load the microkernel with `request_firmware("powervr_sgx/sgx545-ukernel-1.7.862890.bin")`.
-   It must be 0xcf68 bytes and carry all nine `limm` placeholders.
+1. Map the register window. The bus names the core; read `CORE_ID` and `CORE_REVISION` at
+   that core's offsets, which are safe on a core in any state, and look the part up.
+2. Load the part's microkernel (`powervr_sgx/sgx545_ukernel.bin`) with
+   `request_firmware()` and check its header (UKERNEL.md 4a). A file that doesn't declare
+   secure mode is refused.
 3. Allocate the kernel data (`0x32000000`) and kernel code (`0x30000000`) arenas, 14 pages
-   each, below 4 GiB and write-combined, and map them in the firmware's directory. The
-   buffers sit at the offsets SRVINIT.md's allocation table gives, so a trace compares
-   with a DDK boot one for one.
-4. Fill the TA3D control block, the signature lists, the five PDS programs and the
-   microkernel's immediates.
-5. Host control block: HWR check rate 10 (1 kHz timer / 100 Hz), timer clock = core
-   clock / 1000, active power off, power status 0 (as `SGXPostPowerState` leaves it).
-   Empty kernel CCB.
-6. `CLKGATECTL` 0xa6aa, `CLKGATECTL2` 0xaaaaaa, script part 1.
+   each, below 4 GiB and write-combined, and map them in the firmware's directory only.
+4. Copy the image in, fill the TA3D control block, the five PDS programs and the
+   immediates the file header lists.
+5. Host control block: timer clock = core clock / 1000, `HOSTCTL_FLAGS` with the host's
+   background block, power status 0. Empty kernel CCB.
+6. Clock gating: every unit automatic but the DPM, which stays on (`CLKGATECTL` 0xa6aa,
+   `CLKGATECTL2` 0xaaaaaa on the SGX545).
 7. Reset (section 4).
-8. Event kicker 0, script part 2, `INIT_STATUS` 0, write barrier, `EUR_CR_EVENT_KICK2`.
-9. Poll `INIT_STATUS` bit 0 for 500 ms.
-10. `GETMISCINFO` with `GET_STRUCT_SIZES`: the microkernel's struct sizes must equal the
-    ones its build was made with (SRVINIT.md, `SGX_BRIDGE_INIT_INFO`). The DDK version it
-    reports is logged.
+8. Event kicker 0, init script part 2 (the core table's), the code bases, the event PDS
+   program, `INIT_STATUS` 0, write barrier, `EVENT_KICK2`.
+9. Poll `INIT_STATUS` bit 0 for 500 ms. `dmesg` shows "microkernel started".
 
-Stopping is the DDK's power-off: a `POWER` command with `POWEROFF`, a poll for
+Stopping is the microkernel's power-off: a `POWER` command with `POWEROFF`, a poll for
 `POWEROFF_COMPLETE`, a wait for the clocks to gate, the deinit script, and the cores held in
-reset (as the board's `ce5300-sgx-quiesce` service does at handoff).
+reset.
 
 ## 4. Address translation
 
@@ -292,14 +293,24 @@ upload code through the ioctl instead of writing a mapped buffer: a change for M
 reserved fields, unknown flags and types, unaligned and empty ranges, every kernel range
 and heap boundary for `VM_MAP`, handles from another file, short and long query sizes,
 bad pointers, syncobjs that do not exist, a NULL job chain across contexts, 600 NULL jobs
-(more than the kernel CCB holds), and a job on a context whose VM was destroyed. It
-builds as a static binary and runs on an EA. The subtests map one to one onto an IGT
-suite.
+(more than the kernel CCB holds), a job on a context whose VM was destroyed, and a VM's
+memory freed once its client is gone. 40 subtests; they map one to one onto an IGT suite.
+On the GPU, `powervr_sgx_frame`, `_blit`, `_hang`, `_prime` and `_pb` check frames, blits,
+hang recovery and PRIME pixel by pixel (the commands are in `docs/porting/kernel.md`).
+All of them build as static binaries.
 
-The test kernel is built in CI (`.github/workflows/powervr-sgx.yml`): kernel.org 7.1.8
-with the CE5300 board's patches, drivers and config (`drm/ci/ce5300-kernel.sh`), the vendor
-driver out and this one in as a module. It is booted from RAM through a one-shot
-`S00aramboot` before anything has touched the GPU, and never flashed.
+KUnit (`drm/powervr_sgx/tests/`, run under QEMU in CI) covers the firmware file checks,
+the kernel-object lifetimes and the core table.
+
+CI (`.github/workflows/powervr-sgx*.yml` on `m2-drm`) builds:
+- the CE5300 test kernel: kernel.org 7.3.3 with the board's patches, drivers and config
+  (`drm/ci/ce5300-kernel.sh`), the vendor driver out and this one in as a module, with an
+  optional debug build (lockdep, KASAN, UBSAN, DMA-API debug, kmemleak, `pm_test`);
+- the driver in drm-misc-next with gcc W=1, sparse and clang, plus checkpatch `--strict`
+  and kernel-doc;
+- mainline with the gma500 patches for Cedarview, and a Debian kernel package for testers.
+
+A test kernel is booted from RAM before anything has touched the GPU, and never flashed.
 
 ## 8. Gaps this driver depends on
 
