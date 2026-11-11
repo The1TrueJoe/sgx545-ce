@@ -323,6 +323,7 @@ static void pvrsgx_device_release(struct drm_device *drm, void *arg)
 	struct pvrsgx_device *sdev = arg;
 
 	pvrsgx_job_fini(sdev);
+	pvrsgx_ccb_inval_reap(sdev, true);
 	pvrsgx_pb_put(sdev->pb);
 	mutex_destroy(&sdev->pb_lock);
 	pvrsgx_kobj_fini(sdev);
@@ -341,6 +342,8 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	mutex_init(&sdev->ccb_lock);
 	mutex_init(&sdev->done_lock);
 	spin_lock_init(&sdev->ccb_spin);
+	spin_lock_init(&sdev->inval_lock);
+	INIT_LIST_HEAD(&sdev->inval_waits);
 
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
 	sdev->idle_mmu = pvrsgx_mmu_create(sdev);

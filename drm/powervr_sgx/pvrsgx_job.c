@@ -206,7 +206,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	dma_fence_end_signalling(cookie);
 	mutex_unlock(&sdev->done_lock);
 
-	if (reap)
+	if (reap || !list_empty_careful(&sdev->inval_waits))
 		queue_work(system_dfl_wq, &sdev->reap_work);
 	if (more && pvrsgx_job_fault_check(sdev))
 		return;
@@ -226,6 +226,7 @@ static void reap_work_fn(struct work_struct *work)
 	done = sdev->renders_done;
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	pvrsgx_kobj_reap(sdev, done);
+	pvrsgx_ccb_inval_reap(sdev, false);
 }
 
 static void poll_work_fn(struct work_struct *work)
@@ -451,6 +452,8 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	pvrsgx_fw_stop(sdev);
 	mutex_unlock(&sdev->reset_lock);
 	cancel_delayed_work_sync(&sdev->poll_work);
+	/* Stopped: nothing translates any more, so unmapped memory can go. */
+	pvrsgx_ccb_inval_reap(sdev, true);
 
 	mutex_lock(&sdev->done_lock);
 	cookie = dma_fence_begin_signalling();

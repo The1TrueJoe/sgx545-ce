@@ -180,6 +180,10 @@ struct pvrsgx_device {
 	spinlock_t ccb_spin;
 	/** @ccb_issued: Commands written to the kernel CCB since load, across restarts. */
 	u64 ccb_issued;
+	/** @inval_lock: Protects @inval_waits. */
+	spinlock_t inval_lock;
+	/** @inval_waits: &struct pvrsgx_inval_wait for invalidates not yet taken. */
+	struct list_head inval_waits;
 
 	/** @sched: The one scheduler; one job on the GPU at a time. */
 	struct drm_gpu_scheduler sched;
