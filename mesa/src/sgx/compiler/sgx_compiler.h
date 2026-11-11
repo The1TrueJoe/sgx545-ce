@@ -144,6 +144,7 @@ struct sgx_varyings {
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
 #define SGX_SLOT_NONE     0xffff
+#define SGX_CONST_TEX_SIZE 0x13
 #define SGX_MAX_CONST_MAP (1024 + 32) /* every constant number and literal */
 
 struct sgx_const_map {
@@ -157,9 +158,12 @@ struct sgx_const_map {
     * (hardware, tests/c10); 0x11 a literal: k = 0xffff, value (32 bits) ORed
     * into the slot at shift; 0x12 the vec4 at constants k..k+3 as packed
     * BGRA8, A << 24 | R << 16 | G << 8 | B, each channel clamped to [0, 1]
-    * and rounded to nearest (the whole slot, shift 0) */
+    * and rounded to nearest (the whole slot, shift 0); 0x13 the base
+    * level's size of texture unit (value & 0xff) in dimension
+    * (value >> 8): 0 width, 1 height, 2 depth, as a 32-bit unsigned
+    * integer (k = 0xffff) */
    uint8_t fmt;
-   uint32_t value; /* fmt 0x11 */
+   uint32_t value; /* fmt 0x11, 0x13 */
 };
 
 struct sgx_iter_info {

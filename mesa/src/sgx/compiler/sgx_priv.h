@@ -189,6 +189,9 @@ struct sgx_ctx {
    uint32_t lit_bits[32];  /* driver_consts: literal slots' values */
    /* ... or, >= 0, the slot is constants k..k+3 packed to BGRA8 (0x12) */
    int lit_packed_k[32];
+   /* ... or, nonzero, a value the driver supplies: its sgx_const_map fmt,
+    * lit_bits its descriptor */
+   uint8_t lit_kind[32];
    int lit_slot[32];
    unsigned n_lits;
    bool lit_off; /* while a register is needed (fmad16 src0) */

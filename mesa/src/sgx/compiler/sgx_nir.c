@@ -14,6 +14,7 @@
 
 #include "nir.h"
 #include "nir_builder.h"
+#include "nir_builtin_builder.h"
 #include "nir_deref.h"
 #include "nir_legacy.h"
 
@@ -1998,6 +1999,45 @@ copysign_instr(nir_builder *b, nir_alu_instr *alu, void *data)
    return false;
 }
 
+static bool
+all_offsets(const nir_instr *instr, const void *data)
+{
+   return true;
+}
+
+/* texelFetch as an explicit-LOD read at the texel's center,
+ * (i + 0.5) / max(size >> lod, 1): smp has no integer coordinates */
+static bool
+txf_to_txl_instr(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   if (tex->op != nir_texop_txf || tex->sampler_dim == GLSL_SAMPLER_DIM_BUF ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_MS)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+   nir_def *coord = tex->src[ci].src.ssa;
+   nir_def *lod = li >= 0 ? tex->src[li].src.ssa : nir_imm_int(b, 0);
+   unsigned n = tex->coord_components - tex->is_array;
+   nir_def *size = nir_channels(b, nir_get_texture_size(b, tex),
+                                nir_component_mask(n));
+   size = nir_umax(b, nir_ushr(b, size, lod), nir_imm_int(b, 1));
+   nir_def *uv = nir_fmul(
+      b, nir_fadd_imm(b, nir_i2f32(b, nir_channels(b, coord, nir_component_mask(n))),
+                      0.5),
+      nir_frcp(b, nir_u2f32(b, size)));
+   if (tex->is_array)
+      uv = nir_vec2(b, uv, nir_i2f32(b, nir_channel(b, coord, n)));
+   nir_src_rewrite(&tex->src[ci].src, uv);
+   if (li >= 0)
+      nir_src_rewrite(&tex->src[li].src, nir_i2f32(b, lod));
+   else
+      nir_tex_instr_add_src(tex, nir_tex_src_lod, nir_imm_float(b, 0.0));
+   tex->op = nir_texop_txl;
+   tex->sampler_index = tex->texture_index;
+   return true;
+}
+
 void
 sgx_lower(struct sgx_ctx *c)
 {
@@ -2046,6 +2086,21 @@ sgx_lower(struct sgx_ctx *c)
    s->info.flrp_lowered = false;
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
    NIR_PASS(_, s, lower_tex_derefs, c);
+   if (c->opts->native_integers) {
+      /* GLSL 1.30's texture functions on what smp has: gradients and
+       * offsets through the size, rectangle and 1D textures as 2D */
+      nir_lower_tex_options to = {
+         .lower_txd = true,
+         .lower_txf_offset = true,
+         .lower_rect_offset = true,
+         .lower_rect = true,
+         .lower_1d = true,
+         .lower_offset_filter = all_offsets,
+      };
+      NIR_PASS(_, s, nir_lower_tex, &to);
+      NIR_PASS(_, s, nir_shader_tex_pass, txf_to_txl_instr,
+               nir_metadata_control_flow, NULL);
+   }
    if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_sa)
       NIR_PASS(_, s, nir_shader_intrinsics_pass, front_true_instr,
                nir_metadata_control_flow, NULL);

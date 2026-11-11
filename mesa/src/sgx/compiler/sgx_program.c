@@ -33,7 +33,7 @@ smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
    sgx_form_init(&m, SGX_OP_SMP);
    m.skipinv = true;
    m.dim = s->dim == 3 ? 2 : 1;
-   m.lod = s->lod == 1 ? 1 : 0;
+   m.lod = s->lod;
    m.dst = (struct sgx_isa_src){.file = SGX_ISA_FILE_R};
    struct sgx_ref cr = i->op[1];
    unsigned cn = cr.file == SGX_F_U ? sgx_const_sa(c, cr.n) : phys(c, &cr);
@@ -245,7 +245,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
                                                : c->slot_sa[c->lit_slot[i]];
       m->mem = c->mem_dwords ? c->lit_slot[i] + 1 : 0;
       m->shift = 0;
-      m->fmt = packed ? 0x12 : 0x11;
+      m->fmt = c->lit_kind[i] ? c->lit_kind[i] : packed ? 0x12 : 0x11;
       m->value = packed ? 0 : c->lit_bits[i];
    }
    out->n_iters = frag ? MIN2(c->n_iters, ARRAY_SIZE(out->iters)) : 0;

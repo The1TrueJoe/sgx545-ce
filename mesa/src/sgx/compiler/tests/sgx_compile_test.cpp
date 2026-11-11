@@ -1666,4 +1666,79 @@ TEST_F(sgx_compile_test, fragment_if_int_compare)
    EXPECT_TRUE(has("test.xor.ne p0")) << disasm();
 }
 
+/* GLSL 1.30 texture functions: textureLod (smp's LOD replace),
+ * texelFetch (txl at the texel's center over the driver-loaded size),
+ * textureSize, and an integer texture's bytes */
+TEST_F(sgx_compile_test, fragment_tex_lod_fetch_size)
+{
+   native = true;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec_type(2), "v", VARYING_SLOT_VAR0);
+   nir_variable *smp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+      "t", -1);
+   nir_variable *usmp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+      "u", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "color",
+                           FRAG_RESULT_COLOR);
+   nir_def *uv = nir_load_var(&b, in);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   nir_deref_instr *ud = nir_build_deref_var(&b, usmp);
+   struct nir_tex_builder tb = {};
+   tb.coord = uv;
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   tb.lod = nir_imm_float(&b, 1.5);
+   nir_def *a = nir_build_tex_struct(&b, nir_texop_txl, tb);
+   tb.coord = nir_f2i32(&b, nir_fmul_imm(&b, uv, 64.0));
+   tb.lod = nir_imm_int(&b, 1);
+   tb.sampler_deref = NULL;
+   nir_def *f = nir_build_tex_struct(&b, nir_texop_txf, tb);
+   tb.coord = uv;
+   tb.texture_deref = ud;
+   tb.sampler_deref = ud;
+   tb.lod = NULL;
+   tb.dest_type = nir_type_uint32;
+   nir_def *u = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   struct nir_tex_builder sb = {};
+   sb.texture_deref = sd;
+   sb.dim = GLSL_SAMPLER_DIM_2D;
+   sb.lod = nir_imm_int(&b, 2);
+   sb.dest_type = nir_type_int32;
+   nir_def *sz = nir_build_tex_struct(&b, nir_texop_txs, sb);
+   nir_def *r = nir_fadd(&b, nir_fadd(&b, a, f), nir_u2f32(&b, u));
+   r = nir_fadd(&b, r, nir_i2f32(&b, nir_vec4(&b, nir_channel(&b, sz, 0),
+                                              nir_channel(&b, sz, 1),
+                                              nir_imm_int(&b, 0),
+                                              nir_imm_int(&b, 0))));
+   nir_store_var(&b, col, r, 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 3u);
+   unsigned lods = 0;
+   for (unsigned i = 0; i < out.n_samples; i++) {
+      char text[256];
+      sgx_disasm_one(out.samples[i].smp, NULL, text, sizeof(text));
+      lods += std::string(text).find(".lod") != std::string::npos;
+   }
+   EXPECT_EQ(lods, 2u);
+   /* the sizes of texture 0 (width, height) as driver constants */
+   unsigned sizes = 0;
+   for (unsigned i = 0; i < out.n_consts; i++)
+      if (out.consts[i].fmt == SGX_CONST_TEX_SIZE) {
+         EXPECT_EQ(out.consts[i].value & 0xff, 0u);
+         EXPECT_LT(out.consts[i].value >> 8, 2u);
+         sizes++;
+      }
+   EXPECT_EQ(sizes, 2u);
+   /* the uint texel's bytes, not normalized */
+   EXPECT_TRUE(has("#255")) << disasm();
+}
+
 } /* namespace */
