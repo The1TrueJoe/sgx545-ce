@@ -237,12 +237,13 @@ Driver-side pieces that need no new hardware fact come first; each goes in
 behind its cap only when piglit and dEQP pass it.
 
 1. CPU-side vertex and draw features: `NV_primitive_restart`,
-   `ARB_draw_elements_base_vertex` (exposed), half-float and BGRA vertex
-   formats, provoking vertex first.
+   `ARB_draw_elements_base_vertex`, half-float and BGRA vertex formats,
+   provoking vertex first (see "Status").
 2. Formats by swizzle and conversion: R8 and RG8 (`ARB_texture_rg`'s 8-bit
-   part, and RGTC through st), rectangle textures.
-3. Instancing by per-instance draws (needs the compiler's `gl_InstanceID`
-   input: agreed with gl3-compiler).
+   part, and RGTC through st), rectangle textures, then 8-bit snorm (decode
+   in the shader, four taps when filtered, as sRGB).
+3. Instancing by per-instance draws, `gl_InstanceID` from a driver constant
+   (see "Status").
 4. UBOs (the driver's half: addresses in SA; the compiler's half: `ld.a.d`).
 5. The box tests, in the order H1, H2, H4, H6, H5 (one slot covers H1-H3).
 6. Render targets: shader packing for 32-bit float and integer formats, then
@@ -250,6 +251,32 @@ behind its cap only when piglit and dEQP pass it.
 7. Float and integer sampling formats (H2), texture arrays, transform feedback
    (H4), occlusion queries (H5), conditional render.
 8. Then 3.2's pieces, if Joseph wants 3.2.
+
+## Status
+
+Done in the driver, built and unit-tested on the host, **not yet run on a
+CE5300 board** (piglit `arb_draw_instanced`, `arb_instanced_arrays`,
+`arb_base_instance`'s draws, `nv_primitive_restart` and
+`gl-3.1-primitive-restart` are the gate):
+
+- primitive restart, the NV extension and the fixed index: split on the CPU
+  (`sgx_draw_vbo`);
+- instancing: one draw per instance, `gl_InstanceID` in vertex constant
+  `SGX_K_INSTANCE` as a float (`lower_instance_id`), instanced elements
+  fetched at base instance + instance / divisor (`setup_fetch`); caps
+  `vs_instanceid`, `vertex_element_instance_divisor`, `start_instance`. The
+  cost is one draw a instance: a draw of thousands of instances becomes
+  thousands of draws;
+- pure integer vertex attributes keep their bits, with an integer 1 for a
+  missing w.
+
+Already there before this work: base vertex (`index_bias`), any plain vertex
+format through the CPU gather (half-float and BGRA among them), R8 and RG8
+stored as RGBA8 (so st's RGTC decompression has its formats), rectangle
+textures (`lower_rect` with the size from `SGX_K_TEXSIZE`).
+
+Provoking vertex first waits for flat shading, which the driver doesn't do
+yet (DOUTI b25-26, STATE.md §3).
 
 ## Crossing the driver/compiler line
 
