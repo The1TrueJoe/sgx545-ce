@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright © 2026 Joseph Telaak */
+
 /*
  * sgxgen: build SGX545 frames from GL-level parameters, with no DDK code and
  * nothing read from a capture. Every word comes from the formulas in

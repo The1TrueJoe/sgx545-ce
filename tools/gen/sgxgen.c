@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+/* Copyright © 2026 Joseph Telaak */
+
 /*
  * sgxgen: SGX545 frames from code alone. See sgxgen.h and docs/GEN.md.
  *
