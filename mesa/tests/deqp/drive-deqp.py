@@ -195,7 +195,8 @@ def piglit_payload(box, name):
 
 
 def piglit_env(name):
-    # glvnd dispatches to this run's Mesa; it stays loaded, since unloading it at
+    # BOX_ENV last: its SGX_DEBUG replaces the runner's hangabort (keep
+    # hangabort in it). glvnd dispatches to this run's Mesa; it stays loaded, since unloading it at
     # waffle's teardown crashes the process at exit (docs/PIGLIT.md)
     lib = f"{BOX_DIR}/lib-{name}"
     return (f"LD_LIBRARY_PATH={lib}:{BOX_DIR}/lib:{BOX_DIR}/piglit/lib __EGL_VENDOR_LIBRARY_FILENAMES={lib}/50_mesa.json "
@@ -251,7 +252,7 @@ def payload(box, who, name):
 def runner_script(who, name):
     if who == "piglit":
         return (f"cd {BOX_DIR} && rm -rf out && set -- && while IFS= read -r t; do set -- \"$@\" "
-                f"--include-tests \"$t\"; done < chunk.txt && env {piglit_env(name)} SGX_DEBUG=hangabort "
+                f"--include-tests \"$t\"; done < chunk.txt && env SGX_DEBUG=hangabort {piglit_env(name)} "
                 f"{LOCK} ./piglit-runner run --piglit-folder {BOX_DIR}/piglit --profile gpu --process-isolation "
                 f"--output out --jobs 1 --timeout {TEST_TIMEOUT} \"$@\" > runner.log 2>&1; echo rc=$?")
     if who == "sgx":
