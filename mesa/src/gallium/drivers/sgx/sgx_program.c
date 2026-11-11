@@ -209,6 +209,38 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
    return true;
 }
 
+/* Uses of the integer def by those of f, a float the draw fills: an i2f32 of
+ * it takes f itself, anything else f2i32(f).  The integer is whole and well
+ * within F32's 24 bits (a size, an instance number), so the conversions are
+ * exact. */
+static void
+rewrite_int_as_float(nir_builder *b, nir_def *def, nir_def *f)
+{
+   nir_def *i = NULL;
+
+   nir_foreach_use_including_if_safe (use, def) {
+      nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
+
+      if (u && u->type == nir_instr_type_alu &&
+          nir_instr_as_alu(u)->op == nir_op_i2f32) {
+         nir_alu_instr *alu = nir_instr_as_alu(u);
+         unsigned swz[NIR_MAX_VEC_COMPONENTS];
+
+         for (unsigned c = 0; c < alu->def.num_components; c++)
+            swz[c] = alu->src[0].swizzle[c];
+         b->cursor = nir_after_instr(u);
+         nir_def_rewrite_uses(&alu->def,
+                              nir_swizzle(b, f, swz, alu->def.num_components));
+      } else {
+         if (!i) {
+            b->cursor = nir_after_instr(nir_def_instr(f));
+            i = nir_f2i32(b, f);
+         }
+         nir_src_rewrite(use, i);
+      }
+   }
+}
+
 /* textureSize (level 0) of a fragment program, which st's lowering of
  * rectangle lookups asks for (coords / textureSize): the size from driver
  * constants (SGX_K_TEXSIZE) the draw fills, as floats, where the program
@@ -231,30 +263,27 @@ lower_txs(nir_builder *b, nir_instr *instr, void *data)
       b, tex->def.num_components, 32, nir_imm_int(b, 0),
       .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
       .range = tex->def.num_components, .dest_type = nir_type_float32);
-   nir_def *i = NULL;
 
-   nir_foreach_use_including_if_safe (use, &tex->def) {
-      nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
-
-      if (u && u->type == nir_instr_type_alu &&
-          nir_instr_as_alu(u)->op == nir_op_i2f32) {
-         nir_alu_instr *alu = nir_instr_as_alu(u);
-         unsigned swz[NIR_MAX_VEC_COMPONENTS];
-
-         for (unsigned c = 0; c < alu->def.num_components; c++)
-            swz[c] = alu->src[0].swizzle[c];
-         b->cursor = nir_after_instr(u);
-         nir_def_rewrite_uses(&alu->def,
-                              nir_swizzle(b, f, swz, alu->def.num_components));
-      } else {
-         if (!i) {
-            b->cursor = nir_after_instr(nir_def_instr(f));
-            i = nir_f2i32(b, f);
-         }
-         nir_src_rewrite(use, i);
-      }
-   }
+   rewrite_int_as_float(b, &tex->def, f);
    nir_instr_remove(instr);
+   return true;
+}
+
+/* gl_InstanceID of a vertex program: an instanced draw is one draw per
+ * instance (sgx_draw_vbo), each with its instance number in a driver
+ * constant (SGX_K_INSTANCE), as a float */
+static bool
+lower_instance_id(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   if (in->intrinsic != nir_intrinsic_load_instance_id)
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def *f =
+      nir_load_uniform(b, 1, 32, nir_imm_int(b, 0), .base = SGX_K_INSTANCE,
+                       .range = 1, .dest_type = nir_type_float32);
+
+   rewrite_int_as_float(b, &in->def, f);
+   nir_instr_remove(&in->instr);
    return true;
 }
 
@@ -759,6 +788,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    }
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, nir, nir_opt_dce);
+   } else {
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass, lower_instance_id,
                nir_metadata_control_flow, NULL);
       NIR_PASS(_, nir, nir_opt_dce);
    }

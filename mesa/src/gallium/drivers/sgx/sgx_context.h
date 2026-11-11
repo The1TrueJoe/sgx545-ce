@@ -45,6 +45,9 @@ struct sgx_const {
  * scale by it); past every uniform (128 vec4) and under the compiler's 1024 */
 #define SGX_K_TEXSIZE       1000
 #define SGX_K_TEXSIZE_UNITS 8
+/* the vertex constant the draw fills with gl_InstanceID, as a float
+ * (sgx_program.c lower_instance_id) */
+#define SGX_K_INSTANCE 1016
 
 #define SGX_MAX_DEP_SAMPLES 8
 
@@ -207,6 +210,9 @@ struct sgx_context {
    uint32_t *mem_consts[2]; /* a draw's constants in memory, vertex and fragment
                                (sgx_draw.c) */
    unsigned idx_staging_size;
+   /* the instance this draw is (an instanced draw is one draw per instance,
+    * sgx_draw_vbo): gl_InstanceID, and the draw's first instance */
+   unsigned instance, base_instance;
    bool warned_shader, warned_prim, warned_blend, warned_varyings, warned_cube,
       warned_frag_depth;
 };

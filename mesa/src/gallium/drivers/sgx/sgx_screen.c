@@ -213,6 +213,12 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
     * needn't be copied into upload buffers first (u_vbuf's copy would be a
     * second memcpy of every client-array draw) */
    caps->user_vertex_buffers = true;
+   /* one draw per instance, gl_InstanceID in a vertex constant, instanced
+    * elements fetched per instance from their first one on (sgx_draw_vbo) */
+   caps->vs_instanceid = caps->vertex_element_instance_divisor =
+      caps->start_instance = true;
+   /* split at the restart index on the CPU (sgx_draw_vbo) */
+   caps->primitive_restart = caps->primitive_restart_fixed_index = true;
    /* linear render targets, over powervr_sgx */
    if (sgxws_dev_has_dmabuf(sgx_screen(pscreen)->dev))
       caps->dmabuf = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;

@@ -18,6 +18,7 @@
 #include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_prim.h"
+#include "util/u_prim_restart.h"
 
 #include "sgx_compiler.h"
 #include "sgx_context.h"
@@ -526,9 +527,14 @@ setup_fetch(struct sgx_context *ctx, unsigned e, struct fetch *f)
       return false;
    }
    f->offset = vb->buffer_offset + ve->src_offset;
-   f->base += f->offset;
-   /* an instanced element is one value for the whole draw (one instance) */
+   /* an instanced element is one value for the whole draw, as each instance
+    * is a draw of its own (sgx_draw_vbo): GL's element
+    * base instance + instance / divisor */
+   if (ve->instance_divisor)
+      f->offset += (ctx->base_instance + ctx->instance / ve->instance_divisor) *
+                   ve->src_stride;
    f->stride = ve->instance_divisor ? 0 : ve->src_stride;
+   f->base += f->offset;
    f->format = ve->src_format;
    return true;
 }
@@ -561,6 +567,10 @@ fetch_vertex(const struct fetch *f, unsigned index, uint32_t *out)
       float t[4];
       unsigned n = util_format_get_nr_components(f->format);
 
+      /* a pure integer format unpacks to integers (glVertexAttribIPointer),
+       * and its missing w is the integer 1 */
+      if (util_format_is_pure_integer(f->format))
+         v[3] = uif(1);
       util_format_unpack_rgba(f->format, t, src, 1);
       memcpy(v, t, n * sizeof(float));
    }
@@ -732,6 +742,9 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
                 : (float)u_minify(view->texture->width0,
                                   view->u.tex.first_level);
       }
+      /* gl_InstanceID (sgx_program.c lower_instance_id) */
+      if (stage == MESA_SHADER_VERTEX && k->k == SGX_K_INSTANCE)
+         v = (float)ctx->instance;
       uint32_t bits,
          *at[2] = {k->slot != 0xffff ? &block[base + k->slot] : NULL,
                    k->mem && mem ? &mem[k->mem] : NULL};
@@ -1901,14 +1914,33 @@ sgx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
              const struct pipe_draw_start_count_bias *draws, unsigned num_draws)
 {
    struct sgx_context *ctx = sgx_context(pctx);
-   uint64_t t;
+   uint64_t t = 0;
 
-   if (!ctx->stats.on) {
-      sgx_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
+   if (!info->instance_count)
+      return;
+   /* Primitive restart, split on the CPU: no restart index is known in the
+    * VDM draw words (docs/GL3.md), and the indices are read here anyway.
+    * The split comes back here as several draws without restart. */
+   if (info->primitive_restart && info->index_size && !indirect) {
+      for (unsigned n = 0; n < num_draws; n++)
+         util_draw_vbo_without_prim_restart(pctx, info, drawid_offset + n,
+                                            NULL, &draws[n]);
       return;
    }
-   t = os_time_get_nano();
-   sgx_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
+   /* Instancing: one draw per instance.  No instance count is known in the
+    * VDM draw words (docs/GL3.md), so each instance gets its own draw, with
+    * gl_InstanceID in a vertex constant and its instanced elements' values
+    * fetched for it (setup_fetch). */
+   if (ctx->stats.on)
+      t = os_time_get_nano();
+   ctx->base_instance = info->start_instance;
+   for (unsigned i = 0; i < info->instance_count; i++) {
+      ctx->instance = i;
+      sgx_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
+   }
+   ctx->instance = ctx->base_instance = 0;
+   if (!ctx->stats.on)
+      return;
    ctx->stats.draw_ns += os_time_get_nano() - t;
    ctx->stats.draws += num_draws;
    for (unsigned n = 0; n < num_draws; n++)
