@@ -12,10 +12,26 @@
 #include <uapi/drm/powervr_sgx_drm.h>
 
 #include "pvrsgx_drv.h"
+#include "pvrsgx_device.h"
 #include "pvrsgx_gem.h"
+#include "pvrsgx_kobj.h"
 
 /* The GPU has 32-bit physical addresses and a 4 GiB address space. */
 #define PVRSGX_BO_MAX_SIZE	SZ_1G
+
+/* Debug (powervr_sgx.quarantine): the pages outlive the object, to catch late GPU writes. */
+static void pvrsgx_gem_free(struct drm_gem_object *obj)
+{
+	struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(obj);
+	struct pvrsgx_device *sdev = to_pvrsgx_device(obj->dev);
+	struct pvrsgx_bo_quarantine *q = NULL;
+
+	if (!drm_gem_is_imported(obj))
+		q = pvrsgx_bo_quarantine_take(sdev, shmem->pages, obj->size >> PAGE_SHIFT);
+	drm_gem_shmem_object_free(obj);
+	if (q)
+		pvrsgx_bo_quarantine_arm(sdev, q);
+}
 
 /* A code object's contents are validated: no other way to reach them. */
 static struct dma_buf *pvrsgx_gem_export(struct drm_gem_object *obj, int flags)
@@ -35,7 +51,7 @@ static int pvrsgx_gem_mmap(struct drm_gem_object *obj, struct vm_area_struct *vm
 }
 
 static const struct drm_gem_object_funcs pvrsgx_gem_funcs = {
-	.free = drm_gem_shmem_object_free,
+	.free = pvrsgx_gem_free,
 	.export = pvrsgx_gem_export,
 	.print_info = drm_gem_shmem_object_print_info,
 	.pin = drm_gem_shmem_object_pin,

@@ -75,6 +75,12 @@ int __pvrsgx_kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst, cons
 		      enum pvrsgx_krange range, u32 size, u32 min, struct pvrsgx_vm *vm);
 #define pvrsgx_kobj_new(sdev, dst, ...) __pvrsgx_kobj_new(sdev, dst, #dst, __VA_ARGS__)
 const char *pvrsgx_kobj_quarantined(struct pvrsgx_device *sdev, u32 dev_addr, u64 *renders_ago);
+
+struct page;
+struct pvrsgx_bo_quarantine;
+struct pvrsgx_bo_quarantine *pvrsgx_bo_quarantine_take(struct pvrsgx_device *sdev,
+						      struct page **pages, unsigned int n);
+void pvrsgx_bo_quarantine_arm(struct pvrsgx_device *sdev, struct pvrsgx_bo_quarantine *q);
 void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o);
 void pvrsgx_kobj_dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off,
 		      u32 bytes);

@@ -218,6 +218,10 @@ struct pvrsgx_device {
 	unsigned long quarantine_pages;
 	/** @quarantine_cursor: Next entry the incremental check starts at. */
 	unsigned long quarantine_cursor;
+	/** @bo_quarantine: Freed client objects' pages kept to catch late writes (debug). */
+	struct list_head bo_quarantine;
+	/** @bo_quarantine_pages: Pages in @bo_quarantine. */
+	unsigned long bo_quarantine_pages;
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
 	/** @renders_done: Render jobs the firmware has finished. */

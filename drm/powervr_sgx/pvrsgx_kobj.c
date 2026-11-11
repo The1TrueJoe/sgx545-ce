@@ -25,6 +25,9 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
+#include <drm/drm_cache.h>
+#include <linux/highmem.h>
+
 #include <asm/set_memory.h>
 
 #include "pvrsgx_ccb.h"
@@ -61,6 +64,10 @@ module_param(quarantine, int, 0444);
 MODULE_PARM_DESC(quarantine,
 		 "Debug: keep freed kernel objects and report late GPU writes to them (0 off, 1 keep, 2 keep and invalidate the BIF TLB at free)");
 
+static unsigned int quarantine_bo_max_mb = 64;
+module_param(quarantine_bo_max_mb, uint, 0444);
+MODULE_PARM_DESC(quarantine_bo_max_mb, "Debug: client-object page quarantine size before the oldest is freed");
+
 static unsigned int quarantine_max_mb = 32;
 module_param(quarantine_max_mb, uint, 0444);
 MODULE_PARM_DESC(quarantine_max_mb, "Debug: quarantine size before the oldest entry is checked and freed");
@@ -80,6 +87,7 @@ int pvrsgx_kobj_init(struct pvrsgx_device *sdev)
 	mutex_init(&sdev->kobj_lock);
 	INIT_LIST_HEAD(&sdev->graveyard);
 	INIT_LIST_HEAD(&sdev->quarantine);
+	INIT_LIST_HEAD(&sdev->bo_quarantine);
 	if (quarantine)
 		drm_warn(&sdev->base, "kernel object quarantine %d on (debug, up to %u MiB)\n",
 			 quarantine, quarantine_max_mb);
@@ -272,6 +280,154 @@ static void kobj_quarantine(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 	}
 }
 
+/*
+ * Debug: a freed client object's pages, kept with a reference of ours after
+ * shmem let go of them, filled with a pattern through the cached linear map
+ * and flushed to memory. The GPU doesn't snoop, so a check flushes the lines
+ * again and reads what reached memory.
+ */
+struct pvrsgx_bo_quarantine {
+	struct list_head node;
+	u64 done;
+	unsigned long jiffies;
+	u32 hits;
+	unsigned int npages;
+	struct page *pages[] __counted_by(npages);
+};
+
+static u32 qbo_pattern(unsigned int page, u32 dword)
+{
+	return 0xb0000000 | (page & 0xfff) << 16 | (dword & 0xffff);
+}
+
+static void qbo_fill(struct pvrsgx_bo_quarantine *q)
+{
+	for (unsigned int i = 0; i < q->npages; i++) {
+		u32 *v = kmap_local_page(q->pages[i]);
+
+		for (u32 d = 0; d < PAGE_SIZE / 4; d++)
+			v[d] = qbo_pattern(i, d);
+		drm_clflush_virt_range(v, PAGE_SIZE);
+		kunmap_local(v);
+	}
+}
+
+static void qbo_check(struct pvrsgx_device *sdev, struct pvrsgx_bo_quarantine *q)
+{
+	u32 printed = 0, hits = 0;
+
+	for (unsigned int i = 0; i < q->npages; i++) {
+		u32 *v = kmap_local_page(q->pages[i]);
+		bool dirty = false;
+
+		/* Drop our cached lines: what counts is what reached memory. */
+		drm_clflush_virt_range(v, PAGE_SIZE);
+		for (u32 d = 0; d < PAGE_SIZE / 4; d++) {
+			u32 w = READ_ONCE(v[d]);
+
+			if (w == qbo_pattern(i, d))
+				continue;
+			if (!hits++)
+				WARN(1, "powervr_sgx: quarantined client object (%u pages) written %llu renders, %u ms after its free\n",
+				     q->npages, sdev->renders_done - q->done,
+				     jiffies_to_msecs(jiffies - q->jiffies));
+			if (printed++ < QUARANTINE_PRINT)
+				drm_err(&sdev->base,
+					"quarantine: client object page %u (pfn 0x%lx) +0x%x: 0x%08x -> 0x%08x\n",
+					i, page_to_pfn(q->pages[i]), d * 4, qbo_pattern(i, d), w);
+			v[d] = qbo_pattern(i, d);
+			dirty = true;
+		}
+		if (dirty)
+			drm_clflush_virt_range(v, PAGE_SIZE);
+		kunmap_local(v);
+	}
+	if (hits) {
+		q->hits += hits;
+		drm_err(&sdev->base, "quarantine: client object: %u dwords changed (%u in all)\n",
+			hits, q->hits);
+	}
+}
+
+static void qbo_release(struct pvrsgx_device *sdev, struct pvrsgx_bo_quarantine *q)
+{
+	qbo_check(sdev, q);
+	for (unsigned int i = 0; i < q->npages; i++)
+		put_page(q->pages[i]);
+	kfree(q);
+}
+
+/* Before shmem frees a client object: hold its pages. NULL when off. */
+struct pvrsgx_bo_quarantine *pvrsgx_bo_quarantine_take(struct pvrsgx_device *sdev,
+						      struct page **pages, unsigned int n)
+{
+	struct pvrsgx_bo_quarantine *q;
+
+	if (!quarantine || !pages || !n)
+		return NULL;
+	q = kzalloc_flex(*q, pages, n);
+	if (!q)
+		return NULL;
+	q->npages = n;
+	for (unsigned int i = 0; i < n; i++) {
+		q->pages[i] = pages[i];
+		get_page(pages[i]);
+	}
+	return q;
+}
+
+/* After shmem has let go: the pages are ours; fill, keep, and check later. */
+void pvrsgx_bo_quarantine_arm(struct pvrsgx_device *sdev, struct pvrsgx_bo_quarantine *q)
+{
+	LIST_HEAD(old);
+
+	qbo_fill(q);
+	if (quarantine >= 2) {
+		mutex_lock(&sdev->ccb_lock);
+		sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD;
+		mutex_unlock(&sdev->ccb_lock);
+	}
+	mutex_lock(&sdev->kobj_lock);
+	q->done = sdev->renders_done;
+	q->jiffies = jiffies;
+	list_add_tail(&q->node, &sdev->bo_quarantine);
+	sdev->bo_quarantine_pages += q->npages;
+	while (sdev->bo_quarantine_pages >
+	       (unsigned long)quarantine_bo_max_mb << (20 - PAGE_SHIFT)) {
+		struct pvrsgx_bo_quarantine *o = list_first_entry(&sdev->bo_quarantine,
+								  struct pvrsgx_bo_quarantine, node);
+
+		if (o == q)
+			break;
+		sdev->bo_quarantine_pages -= o->npages;
+		list_move_tail(&o->node, &old);
+	}
+	mutex_unlock(&sdev->kobj_lock);
+	while (!list_empty(&old)) {
+		struct pvrsgx_bo_quarantine *o = list_first_entry(&old, struct pvrsgx_bo_quarantine,
+								  node);
+
+		list_del(&o->node);
+		qbo_release(sdev, o);
+	}
+}
+
+/* The newest client objects at each reap (a late write comes soon), all at a restart. */
+static void qbo_scan(struct pvrsgx_device *sdev, bool all)
+{
+	unsigned long budget = QUARANTINE_CHECK_PAGES * 4;
+	struct pvrsgx_bo_quarantine *q;
+
+	mutex_lock(&sdev->kobj_lock);
+	list_for_each_entry_reverse(q, &sdev->bo_quarantine, node) {
+		if (!all && budget < q->npages)
+			break;
+		qbo_check(sdev, q);
+		budget -= min_t(unsigned long, budget, q->npages);
+	}
+	mutex_unlock(&sdev->kobj_lock);
+}
+
 /* Check the quarantine: the next few pages, round robin, or all of it. */
 static void q_scan(struct pvrsgx_device *sdev, bool all)
 {
@@ -364,8 +520,10 @@ void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 	mutex_unlock(&sdev->kobj_lock);
 	list_for_each_entry_safe(o, tmp, &dead, grave)
 		kobj_free(sdev, o);
-	if (quarantine)
+	if (quarantine) {
 		q_scan(sdev, restart);
+		qbo_scan(sdev, restart);
+	}
 }
 
 void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
@@ -391,6 +549,14 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 		list_del(&o->grave);
 		sdev->quarantine_pages -= o->km.npages;
 		q_release(sdev, o);
+	}
+	while (!list_empty(&sdev->bo_quarantine)) {
+		struct pvrsgx_bo_quarantine *q = list_first_entry(&sdev->bo_quarantine,
+								  struct pvrsgx_bo_quarantine, node);
+
+		list_del(&q->node);
+		sdev->bo_quarantine_pages -= q->npages;
+		qbo_release(sdev, q);
 	}
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		drm_mm_takedown(&sdev->krange[r]);
