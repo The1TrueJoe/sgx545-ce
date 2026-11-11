@@ -56,11 +56,13 @@ fi
 ln -sfn "$REPO/kernel/src" "$TREE/include/sgx-kernel"
 ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx/drm/libpvr"
 python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx/drm/sgx_usse_progs.h"
-# the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi) and the
-# packers for its command streams, from their one definition
+# the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi), and its
+# command streams' XML with the generator meson runs on it (src/sgx/kmd_stream),
+# from their one definition
 cp "$REPO/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h" "$TREE/include/drm-uapi/"
-python3 "$REPO/docs/uapi/gen_stream.py" user "$REPO/docs/uapi/powervr_sgx_kmd_stream.xml" \
-	> "$TREE/src/gallium/winsys/sgx/drm/powervr_sgx_kmd_stream.h"
+cp "$REPO/docs/uapi/powervr_sgx_kmd_stream.xml" "$REPO/docs/uapi/gen_stream.py" \
+	"$TREE/src/sgx/kmd_stream/"
+rm -f "$TREE/src/gallium/winsys/sgx/drm/powervr_sgx_kmd_stream.h"
 
 for arch in $ARCHES; do
 	case $arch in
