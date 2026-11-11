@@ -58,7 +58,7 @@ pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 | a frame | one `SUBMIT_JOBS` render job: a `CMD_RENDER` stream and two `CMD_TA_KICK` streams (the scene, then the terminate words), written by the generated packers | the TA command in the CCB, `SGX_DOKICK` |
 | completion | each job signals the next point of one timeline syncobj per device; waits are syncobj waits | the target's sync object, polled |
 | shared buffers | dma-buf import and export; a shared buffer is named in each job's BO list (the frame's target as written, sampled ones as read), so the kernel orders the job against its other users (implicit sync) and flushes the CPU cache of an imported one, which the SGX doesn't snoop | not supported (`-ENOTSUP`); the fbdev framebuffer is wrapped user memory |
-| scanout (kmsro) | the render target is ours, exported to the display device (simpledrm on the EA, card0; `mesa/patches/0006`) | the fbdev platform |
+| scanout (kmsro) | the render target is ours, exported to the display device (simpledrm on the EA, card0; `mesa/patches/0004`) | the fbdev platform |
 | debugging aids | `SGX_DRY_RUN` (a dry-run frame's point is signaled from the CPU) | also `SGX_TRACE` (pvrtrace) and `SGX_DEBUG=flushrt` |
 
 Kick numbers stay per context in both, so the driver's fences, the ring slots and
