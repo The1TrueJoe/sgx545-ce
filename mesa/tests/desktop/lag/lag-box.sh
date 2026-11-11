@@ -64,7 +64,7 @@ vbloff) xfwm=--vblank=off ;;
 software) cenv="LIBGL_ALWAYS_SOFTWARE=1" xenv= ;;
 glamordebug) xenv="$xenv GLAMOR_DEBUG=1" ;;
 shaderdump)   # every linked GL program as a .shader_test, for the compiler
-	mkdir -p "$R/tmp/lag-shaders"; chmod 1777 "$R/tmp/lag-shaders"
+	mkdir -p /tmp/lag-shaders; chmod 1777 /tmp/lag-shaders
 	xenv="$xenv MESA_SHADER_DUMP_PATH=/tmp/lag-shaders"
 	cenv="$cenv MESA_SHADER_DUMP_PATH=/tmp/lag-shaders" ;;
 *) echo "lag-box.sh: no variant $V" >&2; exit 2 ;;
@@ -83,8 +83,9 @@ mark() {   # a line in the kernel trace and in marks.txt, on the same clock
 mkdir -p "$OUT/rig"
 cp "$RIG/desktop-up.sh" "$RIG/xorg.conf" "$OUT/rig/"
 [ $V = software ] && sed -i 's/"AccelMethod" "glamor"/"AccelMethod" "none"/' "$OUT/rig/xorg.conf"
-cp "$RIG/lag-wl.sh" "$R/tmp/lag-wl.sh"
-chmod 755 "$R/tmp/lag-wl.sh"
+# into the box's /tmp, which desktop-up.sh binds over the root's
+cp "$RIG/lag-wl.sh" /tmp/lag-wl.sh
+chmod 755 /tmp/lag-wl.sh
 
 XENV="$xenv" sh "$OUT/rig/desktop-up.sh" "$R" start > "$OUT/up.txt" 2>&1 || { cat "$OUT/up.txt"; exit 1; }
 # whatever happens next, the box is left without X, perf or the sampler
@@ -167,7 +168,7 @@ for w in "$@"; do
 	# what X has, and what the display scans out (simpledrm's boot
 	# framebuffer, where /root/m3/memdump is there): is the screen right
 	as_desk import -window root -resize 50% "png:/tmp/lag-$V-$w.png" > /dev/null 2>&1 &&
-		mv "$R/tmp/lag-$V-$w.png" "$OUT/x-$w.png" 2>/dev/null
+		mv "/tmp/lag-$V-$w.png" "$OUT/x-$w.png" 2>/dev/null
 	[ -x /root/m3/memdump ] && [ -n "${SCANOUT:-}" ] &&
 		/root/m3/memdump $SCANOUT "${SCANOUT_BYTES:-1413120}" > "$OUT/scanout-$w.raw" 2>/dev/null
 	if [ -n "$perfpid" ]; then
@@ -202,8 +203,8 @@ cp "$R/var/log/Xorg.0.log" "$R/var/log/xorg.out" "$R/var/log/xfce.out" "$OUT/" 2
 cp /tmp/lag-xfwm4.err "$OUT/xfwm4.err"
 if [ $V = shaderdump ]; then
 	mkdir -p "$OUT/shaders"
-	cp "$R"/tmp/lag-shaders/* "$OUT/shaders/" 2>/dev/null
-	rm -rf "$R/tmp/lag-shaders"
+	cp /tmp/lag-shaders/* "$OUT/shaders/" 2>/dev/null
+	rm -rf /tmp/lag-shaders
 fi
 { getconf CLK_TCK 2>/dev/null || chroot "$R" getconf CLK_TCK 2>/dev/null || echo 100; } > "$OUT/clk_tck.txt"
 dmesg | grep -i 'powervr\|sgx' | tail -40 > "$OUT/dmesg.txt"

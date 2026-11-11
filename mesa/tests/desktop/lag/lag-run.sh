@@ -47,7 +47,15 @@ E "rm -rf /tmp/lagrig && mkdir -p /tmp/lagrig"
 for f in ../desktop-up.sh ../xorg.conf lag-wl.sh lag-box.sh; do
 	E "cat > /tmp/lagrig/$(basename $f)" < "$here/$f"
 done
+# a variant starts from a box with no X and nothing of the last one running
+settle() {
+	E "for p in \$(ps | grep -E '[l]ag-box|[l]ag-wl|[p]erf record' | awk '{print \$1}'); do kill \$p; done; \
+		for i in \$(seq 1 20); do pidof Xorg > /dev/null || break; sleep 2; done; \
+		pidof Xorg > /dev/null && sh /tmp/lagrig/desktop-up.sh $DESK stop > /dev/null 2>&1; \
+		grep -q ' $DESK/' /proc/mounts && echo 'binds still mounted' >&2; true"
+}
 for v in "$@"; do
+	settle
 	echo "== $v"
 	# once, not retried (a retry would run the variant again): a long
 	# keepalive instead
