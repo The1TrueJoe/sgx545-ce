@@ -1,0 +1,11 @@
+drm/powervr_sgx: Validate shader code in the kernel
+
+A client's USSE task could read the core's registers with ldr, which no
+page directory can stop. So client shader code only runs from code
+objects that UPLOAD_CODE filled, and the kernel checks every 8-byte
+word first: it must match a known instruction form, and it may not be
+ldr, str, setl or savl, or a branch out of the object. Code objects are
+mapped read-only for the GPU, and the code bases cover exactly the two
+USSE heaps, so a task can run nothing else.
+
+The table of instruction forms is generated from the ISA description.

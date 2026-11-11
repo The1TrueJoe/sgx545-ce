@@ -1,0 +1,14 @@
+drm/powervr_sgx: Add KUnit tests
+
+Tests that need no GPU:
+
+- powervr_sgx_fw: a well-formed firmware file is accepted, and each
+  malformed header, table and checksum is refused.
+- powervr_sgx_kobj: the chain of kernel objects a released client
+  leaves behind is freed at unbind.
+- powervr_sgx_core: the core table's lookups and entries.
+
+Run them with:
+
+  ./tools/testing/kunit/kunit.py run \
+      --kunitconfig=drivers/gpu/drm/powervr_sgx/tests/.kunitconfig

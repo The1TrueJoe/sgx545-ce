@@ -1,0 +1,13 @@
+drm/powervr_sgx: Add GEM objects, VMs and dma-buf sharing
+
+- GEM shmem objects below 4 GiB, mapped write-combined. A code object
+  has no CPU mapping; its contents come through UPLOAD_CODE.
+- VM contexts on drm_gpuvm, one GPU page directory each, with VM_MAP
+  and VM_UNMAP inside the fixed heaps. An unmap invalidates the GPU's
+  directory and table caches and waits for the VM's jobs before the
+  pages go.
+- dma-buf export and import. The SGX doesn't snoop the CPU's caches, so
+  imports a job lists are flushed before it runs and after it is done.
+- Firmware objects a client releases wait until the GPU can no longer
+  use them; a VM's mappings go when its handle and its last context are
+  gone.

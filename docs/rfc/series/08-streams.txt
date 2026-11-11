@@ -1,0 +1,8 @@
+drm/powervr_sgx: Add the command-stream decoder
+
+Userspace describes a job as a stream of typed fields, never as a
+firmware structure. The decoder reads the stream, checks every field
+against its definition (size, range, alignment, the VM's heaps), and
+hands the checked values to the code that builds the firmware command.
+The stream definitions are shared with Mesa, so both sides read one
+layout.

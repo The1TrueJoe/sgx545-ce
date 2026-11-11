@@ -1,0 +1,18 @@
+drm/powervr_sgx: Add the core table, registers and device bring-up
+
+The first part of powervr_sgx, a render-only DRM driver for the PowerVR
+SGX5xx (Series5) GPUs. Nothing builds until the Kconfig entry, in the
+last driver patch of this series.
+
+- A core table names each supported core: its ID, the registers that
+  move between SGX5xx cores, features, instruction set, directory lists
+  and init script, and per part its revision, clock and firmware file.
+  The bus says which core to expect, and a core the table doesn't have,
+  or one the driver can't run, is refused before a register is read.
+- The register names come from the GPL SGX545 headers, through a
+  generated pvrsgx_regs.h.
+- Kernel memory and the GPU's two-level page tables, below 4 GiB and
+  write-combined in every CPU mapping.
+- The reset sequence: every directory list cleared, list 0 on a scratch
+  directory that absorbs leftover faults, the microkernel's directory on
+  the last list.

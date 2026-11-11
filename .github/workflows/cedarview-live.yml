@@ -40,7 +40,7 @@ jobs:
             gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$1" -D "$3"
             echo "$1: run $id" | tee -a sources.txt
           }
-          get powervr-sgx-deb-cedarview m2-drm debs
+          get powervr-sgx-deb-cedarview-kit m2-drm debs
           get mesa-sgx-trixie dev debs
           get powervr-sgx-cedarview m2-drm tests
           ls -l debs tests

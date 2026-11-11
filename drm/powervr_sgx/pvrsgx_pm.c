@@ -7,6 +7,7 @@
 
 #include "pvrsgx_device.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_job.h"
 #include "pvrsgx_pm.h"
 
 /*
@@ -91,6 +92,35 @@ static int pvrsgx_runtime_resume(struct device *dev)
 	return 0;
 }
 
+/*
+ * System sleep. The core loses power, so the microkernel has to stop first and
+ * start again after: drain the GPU, then the runtime suspend and resume above.
+ * Behind gma500 this runs before its suspend and after its resume, with the
+ * graphics island up.
+ */
+static int pvrsgx_suspend(struct device *dev)
+{
+	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
+	int err = pvrsgx_job_quiesce(sdev);
+
+	if (err)
+		return err;
+	err = pm_runtime_force_suspend(dev);
+	if (err)
+		pvrsgx_job_unquiesce(sdev);
+	return err;
+}
+
+static int pvrsgx_resume(struct device *dev)
+{
+	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
+	int err = pm_runtime_force_resume(dev);
+
+	pvrsgx_job_unquiesce(sdev);
+	return err;
+}
+
 const struct dev_pm_ops pvrsgx_pm_ops = {
+	SYSTEM_SLEEP_PM_OPS(pvrsgx_suspend, pvrsgx_resume)
 	RUNTIME_PM_OPS(pvrsgx_runtime_suspend, pvrsgx_runtime_resume, NULL)
 };
