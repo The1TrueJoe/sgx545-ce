@@ -53,14 +53,14 @@ u64 pvrsgx_ccb_consumed(struct pvrsgx_device *sdev)
 	return consumed;
 }
 
-int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
+int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type,
 		    const u32 data[6], u64 *seq)
 {
 	u32 *ctl = ccbctl(sdev), *cmd, wo;
 	unsigned long timeout = jiffies + msecs_to_jiffies(500);
 
 	/* The vendor image has no entry for some types; the open one's table is the identity. */
-	if (type >= PVRSGX_CMD_MAX)
+	if (type >= PVRSGX_KCMD_MAX)
 		return -EINVAL;
 
 	mutex_lock(&sdev->ccb_lock);

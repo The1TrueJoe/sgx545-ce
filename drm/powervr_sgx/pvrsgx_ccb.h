@@ -9,12 +9,12 @@
 struct pvrsgx_device;
 
 /* Kernel CCB command types. */
-enum pvrsgx_cmd {
-	PVRSGX_CMD_TA = 0,
-	PVRSGX_CMD_TRANSFER = 1,
-	PVRSGX_CMD_POWER = 3,
-	PVRSGX_CMD_PROCESS_QUEUES = 7,
-	PVRSGX_CMD_MAX = 11
+enum pvrsgx_kcmd {
+	PVRSGX_KCMD_TA = 0,
+	PVRSGX_KCMD_TRANSFER = 1,
+	PVRSGX_KCMD_POWER = 3,
+	PVRSGX_KCMD_PROCESS_QUEUES = 7,
+	PVRSGX_KCMD_MAX = 11
 };
 
 /* Cache control: invalidates the microkernel runs before the command. */
@@ -27,7 +27,7 @@ enum pvrsgx_cmd {
 #define PVRSGX_CCB_SLOTS	256
 #define PVRSGX_CCB_CMD_WORDS	8
 
-int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
+int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type,
 		    const u32 data[6], u64 *seq);
 u64 pvrsgx_ccb_consumed(struct pvrsgx_device *sdev);
 void pvrsgx_ccb_reset(struct pvrsgx_device *sdev);

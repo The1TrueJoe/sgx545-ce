@@ -560,7 +560,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 	u32 data[6] = { 0, POWER_OFF };
 
 	if (sdev->fw_running) {
-		if (pvrsgx_ccb_send(sdev, PVRSGX_CMD_POWER, data, NULL) ||
+		if (pvrsgx_ccb_send(sdev, PVRSGX_KCMD_POWER, data, NULL) ||
 		    pvrsgx_poll(sdev, &hc[HOSTCTL_POWER_STATUS], HOSTCTL_POWMAN_POWEROFF_COMPLETE,
 				HOSTCTL_POWMAN_POWEROFF_COMPLETE, 500000))
 			drm_warn(&sdev->base, "microkernel did not power off\n");
