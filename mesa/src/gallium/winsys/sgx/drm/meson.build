@@ -96,7 +96,7 @@ sgx_hwt = executable(
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
   dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_isa],
+                  idep_sgx_isa, idep_sgx_core],
   build_by_default : false,
   install : false,
 )
