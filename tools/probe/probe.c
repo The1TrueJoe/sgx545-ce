@@ -18,6 +18,7 @@
  *
  * Render state (each one a single GL call or enable, for one-change captures):
  *   PROBE_CONFIG="r g b a d s" EGL config sizes                  (5 6 5 0 0 0)
+ *   PROBE_SAMPLES=n            a multisampled config: EGL_SAMPLE_BUFFERS 1, EGL_SAMPLES n
  *   PROBE_PBUFFER="w h"        render into a pbuffer of this size instead of the window
  *   PROBE_DEPTH="func mask"    glEnable(DEPTH_TEST), glDepthFunc, glDepthMask (func as a GL enum)
  *   PROBE_CLEARDEPTH=z         glClearDepthf, and DEPTH_BUFFER_BIT in the clear
@@ -101,6 +102,7 @@ typedef char GLchar;
 	X(EGL, EGLDisplay, eglGetDisplay, (void *)) \
 	X(EGL, EGLBoolean, eglInitialize, (EGLDisplay, EGLint *, EGLint *)) \
 	X(EGL, EGLBoolean, eglChooseConfig, (EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *)) \
+	X(EGL, EGLBoolean, eglGetConfigAttrib, (EGLDisplay, EGLConfig, EGLint, EGLint *)) \
 	X(EGL, EGLSurface, eglCreateWindowSurface, (EGLDisplay, EGLConfig, uintptr_t, const EGLint *)) \
 	X(EGL, EGLSurface, eglCreatePbufferSurface, (EGLDisplay, EGLConfig, const EGLint *)) \
 	X(EGL, EGLContext, eglCreateContext, (EGLDisplay, EGLConfig, EGLContext, const EGLint *)) \
@@ -187,6 +189,8 @@ FNS(DECL)
 #define EGL_DEPTH_SIZE 0x3025
 #define EGL_STENCIL_SIZE 0x3026
 #define EGL_SURFACE_TYPE 0x3033
+#define EGL_SAMPLES 0x3031
+#define EGL_SAMPLE_BUFFERS 0x3032
 #define EGL_PBUFFER_BIT 0x0001
 #define EGL_WINDOW_BIT 0x0004
 #define EGL_RENDERABLE_TYPE 0x3040
@@ -587,7 +591,7 @@ int main(void)
 	EGLConfig cfg;
 	EGLint cfg_attr[] = { EGL_RED_SIZE, 5, EGL_GREEN_SIZE, 6, EGL_BLUE_SIZE, 5, EGL_ALPHA_SIZE, 0,
 			      EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-			      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE };
+			      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE, EGL_NONE, EGL_NONE, EGL_NONE, EGL_NONE };
 	const EGLint ctx_attr[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
 	const char *vs = getenv("PROBE_VS"), *fs = getenv("PROBE_FS"), *out = getenv("PROBE_OUT");
 	const char *texfmt = getenv("PROBE_TEXFMT") ? getenv("PROBE_TEXFMT") : "rgba8888";
@@ -626,9 +630,22 @@ int main(void)
 		cfg_attr[2 * i + 1] = conf[i];
 	if (getenv("PROBE_PBUFFER"))
 		cfg_attr[13] = EGL_PBUFFER_BIT;
+	if (getenv("PROBE_SAMPLES")) {
+		cfg_attr[16] = EGL_SAMPLE_BUFFERS;
+		cfg_attr[17] = 1;
+		cfg_attr[18] = EGL_SAMPLES;
+		cfg_attr[19] = atoi(getenv("PROBE_SAMPLES"));
+	}
 	dpy = eglGetDisplay(NULL);
 	if (!eglInitialize(dpy, &maj, &min) || !eglChooseConfig(dpy, cfg_attr, &cfg, 1, &n) || n < 1)
 		return note("egl failed"), 1;
+	{
+		EGLint sb = 0, ns = 0;
+
+		eglGetConfigAttrib(dpy, cfg, EGL_SAMPLE_BUFFERS, &sb);
+		eglGetConfigAttrib(dpy, cfg, EGL_SAMPLES, &ns);
+		printf("probe: config sample buffers %d samples %d\n", sb, ns);
+	}
 	if (ints("PROBE_PBUFFER", v, 2, NULL) == 2) {
 		const EGLint pb[] = { EGL_WIDTH, (EGLint)v[0], EGL_HEIGHT, (EGLint)v[1], EGL_NONE };
 
