@@ -175,14 +175,14 @@ no geometry-shader path).
 
 | GLSL feature | how | relies on |
 |---|---|---|
-| int/uint add, sub, negate, multiply | `ima32` (`a * #1 + -b`, `-a` as `a * c56`) | ima32 low word: **oracle**; `hwt_int` ima32_* |
-| `umulExtended`-style high words (division) | `ima32 [hi=i1]`, read by the next instruction | **hardware** for 0x10000²; `hwt_int` ima32_hi_* for signed and large |
-| bitwise ops, shifts | hw 0a-0d; constants as rotated 16-bit immediates; register counts masked to 0-31 | **hardware** (hwt_p7); register `and.inv`, `asr`/`shl` by a register: `hwt_int` |
-| compares | `testmask.xor.eq/ne.dword`; lt/ge from a - b and the operands' signs (no overflow), then `testmask.or.neg/pos.dword` | testmask with bitwise ALU ops: **oracle**; `hwt_int` testmask_* |
+| int/uint add, sub, negate, multiply | `ima32` (`a * #1 + -b`, `-a` as `a * c56`) | **hardware** (hwt_int) |
+| `umulExtended`-style high words (division) | `ima32 [hi=i1]`, read by the next instruction | **hardware** (hwt_gaps, hwt_int: unsigned and `.sgn`) |
+| bitwise ops, shifts | hw 0a-0d; constants as rotated 16-bit immediates; register counts masked to 0-31 | **hardware** (hwt_p7, hwt_int) |
+| compares | `testmask.xor.eq/ne.dword`; lt/ge from a - b and the operands' signs (no overflow), then `testmask.or.neg/pos.dword` | **hardware** (hwt_int) |
 | min, max, abs, sign, selects | `movc.ltz/z/nz.i32` | **hardware** (hwt_p2) |
-| `/`, `%` | `nir_lower_idiv` (reciprocal, two fix-ups) | frcp accuracy: `hwt_int` frcp_* (recorded) |
-| int/uint ↔ float | the two 16-bit halves through `pck.f32.s16/u16` and one `fmad`; back by trunc, floor(\|t\| / 65536), `pck.u16.f32` | pck u16 forms and lanes: **oracle**; `hwt_int` pck_*, i2f_seq; trunc and floor: **hardware** (hwt_p4) |
-| booleans | 0 / ~0 (`nir_lower_bool_to_int32`); an `if` tests the comparison into p0 (`test.xor` for ieq/ine) or `test.and.eq` on the mask | `test.and.eq`: **hardware** (hwt_p13); `test.xor`: `hwt_int` |
+| `/`, `%` | `nir_lower_idiv` (reciprocal, two fix-ups) | frcp exactly rounded on the five values hwt_int tried; the fix-up steps don't need it |
+| int/uint ↔ float | the two 16-bit halves through `pck.f32.s16/u16` and one `fmad`; back by trunc, floor(\|t\| / 65536), `pck.u16.f32` | **hardware** (hwt_int; trunc and floor hwt_p4) |
+| booleans | 0 / ~0 (`nir_lower_bool_to_int32`); an `if` tests the comparison into p0 (`test.xor` for ieq/ine) or `test.and.eq` on the mask | **hardware** (hwt_p13, hwt_int) |
 | `switch` | GLSL's loop-once lowering, emitted without branches | — |
 | `textureLod`, vertex texture reads | dependent `smp` with LOD replace (vertex: LOD c48) | **corpus** |
 | `texelFetch` | `sgx_lower_tex`: txl at (i + 0.5) / max(size >> lod, 1), marked `sgx_sample_info.fetch` for NEAREST state of its own | — |
@@ -192,12 +192,14 @@ no geometry-shader path).
 | uniform blocks | `ld.a.d` from the address in constant `ubo_base_k + n`; word d at `#(d - 1)`, others through an `ima32` address | ld.a.d immediates: **hardware** (hwt_gaps) |
 | gl_VertexID, gl_InstanceID | the driver's (an input it gathers, a constant) | — |
 
-Checks without hardware: `tools/usc/usse_sim.py` models the integer and
-conversion forms the compiler emits, with ISA.md's semantics, and
-`tools/usc/int_check.py` runs 43 GLSL 1.30 operations through sgxc and the
-model on random inputs. All give exact results, so the sequences are right
-if the **oracle** facts above hold. `tools/isa/hwt_int.py` (55 tests) checks
-those facts on the hardware. It has not run yet.
+Checks: `tools/usc/usse_sim.py` models the integer and conversion forms the
+compiler emits, with ISA.md's semantics, and `tools/usc/int_check.py` runs
+43 GLSL 1.30 operations through sgxc and the model on random inputs; all
+give exact results. `tools/isa/hwt_int.py` checked the semantics the model
+assumes on a CE5300 board (2026-11-11): all 50 expected words, so every
+form in the table is now **hardware** (log in `tools/isa/hwt_out/open/`).
+What is not yet run on hardware is the compiled programs themselves
+(piglit's GLSL 1.30 tests, once the driver exposes integers).
 
 Not done here: integer and float textures wider than RGBA8 (the texel
 formats are GL3.md's H2), MRT and packed render-target outputs (H1),
