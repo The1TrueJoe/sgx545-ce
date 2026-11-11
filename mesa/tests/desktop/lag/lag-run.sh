@@ -28,7 +28,10 @@ E "test -e /dev/dri/renderD128 && test -d $DESK/usr/bin && ! pidof Xorg" || {
 }
 E "uname -a; cat /proc/cpuinfo | grep -m1 'model name'; cat /sys/class/drm/card0/device/driver/module/srcversion 2>/dev/null" > "$OUT/box.txt"
 # the Mesa under test
-(cd "$MESA" && tar cf - lib share) | E "rm -rf $DESK/opt/sgx && mkdir -p $DESK/opt/sgx && tar xf - -C $DESK/opt/sgx"
+# (the box's umask is 077: a tree only root can read leaves "desk" on the
+# root's own Mesa, silently)
+(cd "$MESA" && tar cf - lib share) | E "rm -rf $DESK/opt/sgx && mkdir -m 755 -p $DESK/opt/sgx && \
+	tar xf - -C $DESK/opt/sgx && chmod -R a+rX $DESK/opt/sgx"
 E "rm -rf /tmp/lagrig && mkdir -p /tmp/lagrig"
 for f in ../desktop-up.sh ../xorg.conf lag-wl.sh lag-box.sh; do
 	E "cat > /tmp/lagrig/$(basename $f)" < "$here/$f"

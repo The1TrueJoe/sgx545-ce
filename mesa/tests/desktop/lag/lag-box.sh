@@ -76,6 +76,11 @@ as_desk sh -c "exec xfwm4 --replace $xfwm" > /tmp/lag-xfwm4.err 2>&1 &
 sleep 8
 as_desk xrandr > "$OUT/xrandr.txt" 2>&1
 as_desk glxinfo -B > "$OUT/glxinfo.txt" 2>&1
+if [ $V != software ] && ! grep -q 'SGX545' "$OUT/glxinfo.txt"; then
+	echo "clients are not on our Mesa (glxinfo: $(grep -m1 'renderer string' "$OUT/glxinfo.txt"))" >> "$OUT/notes.txt"
+	echo "lag-box.sh: clients are not on our Mesa, see $OUT/glxinfo.txt" >&2
+fi
+# whose Mesa each one runs: ours is /opt/sgx/lib, the root's own is not
 for p in $(pidof Xorg) $(pidof xfwm4); do
 	echo "$p $(tr '\0' ' ' < /proc/$p/cmdline): $(grep -o '/opt/sgx/lib/[^ ]*\|/usr/lib/x86_64-linux-gnu/dri/[^ ]*' /proc/$p/maps | sort -u | tr '\n' ' ')"
 done > "$OUT/libs.txt"
