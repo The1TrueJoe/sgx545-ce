@@ -99,7 +99,9 @@ reset.
 ## 4. Address translation
 
 The SGX545 has 16 directory lists. `BIF_BANK0` assigns one to each requestor: the EDM (the
-microkernel) gets list 15, and TA, 3D, host and 2D keep list 0.
+microkernel) gets list 15, and TA, 3D, host and 2D keep list 0. A single-context core (the
+SGX530) has list 0 only, shared by the EDM and every requestor; what changes there is in
+[porting/single-context.md](porting/single-context.md).
 
 | list | holds | when |
 |---|---|---|

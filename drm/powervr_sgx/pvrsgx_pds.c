@@ -10,13 +10,14 @@
 #include "pvrsgx_pds.h"
 
 /*
- * DOUTU word 0 for microkernel code at device address a: code base 15 plus the
- * 512 KiB segment, then the offset in the segment in 8-byte instructions, << 4.
- * Bit 27 is set on every microkernel entry.
+ * DOUTU word 0 for microkernel code at device address a, in the kernel code
+ * heap at kcode: code base 15 plus the 512 KiB segment, then the offset in the
+ * segment in 8-byte instructions, << 4. Bit 27 is set on every microkernel
+ * entry.
  */
-u32 pvrsgx_doutu(u32 a)
+u32 pvrsgx_doutu(u32 kcode, u32 a)
 {
-	u32 off = a - PVRSGX_HEAP_KERNEL_CODE, seg = off >> 19;
+	u32 off = a - kcode, seg = off >> 19;
 
 	return ((seg + 15) & 15) | 0x8000000 | (((off - (seg << 19)) * 2) & 0x3ffff0);
 }
@@ -74,10 +75,24 @@ struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf
 void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 {
 	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, 4);
+	u32 doutu = pvrsgx_doutu(sdev->fw.code.dev_addr, sdev->fw.addr[PVRSGX_FW_UKERNEL] + e);
 
-	pvrsgx_pds_ds(&p, PDS_D0(0), pvrsgx_doutu(sdev->fw.addr[PVRSGX_FW_UKERNEL] + e));
-	pvrsgx_pds_ds(&p, PDS_D0(1), 2);
-	pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
+	if (sdev->family->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS) {
+		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
+		pvrsgx_pds_ds(&p, PDS_D0(1), 2);
+		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
+	} else {
+		/*
+		 * Whether the data store interleaves one word at a time is unknown
+		 * (G): the memory row [doutu, 0, 0, 2] gives DOUTU (doutu, 2, 0)
+		 * under either layout.
+		 */
+		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
+		pvrsgx_pds_ds(&p, PDS_D0(1), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(0), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(1), 2);
+		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D1(1), PDS_D0(1), PDS_D0(0));
+	}
 	pvrsgx_pds_halt(&p);
 }
 

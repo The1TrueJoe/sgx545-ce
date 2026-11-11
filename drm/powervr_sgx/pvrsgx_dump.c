@@ -28,7 +28,7 @@
 static void dump_regs(struct seq_buf *sb, struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
-	u32 edm = pvrsgx_dirlist_edm(sdev);
+	u32 edm = pvrsgx_dirlist_edm(sdev), lists = sdev->family->num_dir_lists;
 	const struct {
 		const char *name;
 		u32 reg;
@@ -46,11 +46,11 @@ static void dump_regs(struct seq_buf *sb, struct pvrsgx_device *sdev)
 		{ "BIF_CTRL", SGX_CR_BIF_CTRL },
 		{ "BIF_INT_STAT", SGX_CR_BIF_INT_STAT },
 		{ "BIF_FAULT", SGX_CR_BIF_FAULT },
-		{ "BIF_BANK0", SGX_CR_BIF_BANK0 },
+		{ "BIF_BANK0", cr->bif_bank0 },
 		{ "BIF_DIR_LIST_BASE0", SGX_CR_BIF_DIR_LIST_BASE0 },
-		{ "BIF_DIR_LIST_BASE1", SGX_CR_BIF_DIR_LIST_BASE1 },
-		{ "BIF_DIR_LIST_BASE2", SGX_CR_BIF_DIR_LIST_BASE1 + 4 },
-		{ NULL, sgx_cr_bif_dir_list_base(edm) },
+		{ "BIF_DIR_LIST_BASE1", lists > 1 ? SGX_CR_BIF_DIR_LIST_BASE1 : 0 },
+		{ "BIF_DIR_LIST_BASE2", lists > 2 ? SGX_CR_BIF_DIR_LIST_BASE1 + 4 : 0 },
+		{ NULL, edm ? sgx_cr_bif_dir_list_base(edm) : 0 },
 		{ "EDM_TASK_REG0", cr->edm_task_reg0 },
 		{ "EDM_TASK_REG1", cr->edm_task_reg1 },
 	};
@@ -77,7 +77,8 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
 	seq_buf_printf(sb, "firmware running: %d lost: %d resets: %u irqs: %d\n", sdev->fw_running,
 		       sdev->lost, sdev->reset_count, atomic_read(&sdev->irq_count));
 	seq_buf_printf(sb, "kernel PD 0x%08x idle PD 0x%08x\n",
-		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu), pvrsgx_mmu_pd_addr(sdev->idle_mmu));
+		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu),
+		       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
 	seq_buf_printf(sb, "ccb wo %u ro %u issued %llu consumed %llu\n", READ_ONCE(ctl[0]),
 		       READ_ONCE(ctl[1]), sdev->ccb_issued, pvrsgx_ccb_consumed(sdev));
 	seq_buf_printf(sb, "hostctl init 0x%x power 0x%x uk-lockups %u ",
@@ -119,11 +120,14 @@ static void dump_bif(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrs
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	u32 stat = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
-	u32 addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK;
+	u32 addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & cr->bif_fault_addr;
 
-	seq_buf_printf(sb, "BIF: bank set 0x%08x bank0 0x%08x mem req 0x%08x\n",
-		       sgx_rd(sdev, SGX_CR_BIF_BANK_SET), sgx_rd(sdev, SGX_CR_BIF_BANK0),
-		       sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
+	if (cr->bif_bank0)
+		seq_buf_printf(sb, "BIF: bank set 0x%08x bank0 0x%08x mem req 0x%08x\n",
+			       sgx_rd(sdev, cr->bif_bank_set), sgx_rd(sdev, cr->bif_bank0),
+			       sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
+	else
+		seq_buf_printf(sb, "BIF: mem req 0x%08x\n", sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 	for (unsigned int i = 0; i < sdev->family->num_dir_lists; i++)
 		seq_buf_printf(sb, "  dir list %2u: 0x%08x\n", i,
 			       sgx_rd(sdev, sgx_cr_bif_dir_list_base(i)));
@@ -138,7 +142,8 @@ static void dump_bif(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrs
 		       field_get(cr->bif_int_stat_fault_type, stat));
 	dump_lookup(sb, "job's", bad->ctx->vm->mmu, addr);
 	dump_lookup(sb, "firmware's", sdev->kernel_mmu, addr);
-	dump_lookup(sb, "idle", sdev->idle_mmu, addr);
+	if (!pvrsgx_core_single_context(sdev->family))
+		dump_lookup(sb, "idle", sdev->idle_mmu, addr);
 }
 
 /*

@@ -22,24 +22,45 @@ part of a known core is only a new `struct pvrsgx_core_info`.
 | `family.core` | the core number the bus glue passes (545) | the SoC's documentation, the DT compatible |
 | `family.core_id` | expected `CORE_ID` | read back on the hardware (stage 3) |
 | `family.regs` | registers whose offset or fields differ between cores | the GPL DDK's `sgx5xxdefs.h` for that core, `CORE_ID` first |
-| `family.features` | `PVRSGX_FEATURE_*` | `sgxfeaturedefs.h` for the core; must include `PVRSGX_FEATURES_REQUIRED` |
+| `family.features` | `PVRSGX_FEATURE_*` | `sgxfeaturedefs.h` for the core. Without `MULTIPLE_MEM_CONTEXTS` the core is single-context ([single-context.md](single-context.md)) |
 | `family.isa` | the USSE instruction set, for the validator | USSE1 or USSE2 (543/544/554) |
-| `family.num_dir_lists` | BIF directory lists | `SGX_FEATURE_BIF_NUM_DIRLISTS` (16 on 535/545, 8 on 543/544) |
-| `family.va_bits` | device-virtual address bits | `SGX_FEATURE_ADDRESS_SPACE_SIZE`; the heap layout needs 32 |
+| `family.num_dir_lists` | BIF directory lists | `SGX_FEATURE_BIF_NUM_DIRLISTS` (16 on 535/545, 8 on 543/544; 1 on the single-context 530) |
+| `family.va_bits` | device-virtual address bits | `SGX_FEATURE_ADDRESS_SPACE_SIZE`: 28 or 32 |
+| `family.heaps` | the device-virtual layout | within `va_bits`; the kernel heaps on 4 MiB boundaries for a single-context core |
+| `family.quirks` | `PVRSGX_QUIRK_*` | `sgxerrata.h`'s `FIX_HW_BRN_*` that the kernel works around |
 | `family.init_regs` | init script part 2 | [SRVINIT.md](../SRVINIT.md), "Init scripts"; captured from a working boot |
 | `info.core_rev` | expected `CORE_REVISION` | read back on the hardware |
 | `info.clock_hz` | core clock, for the microkernel's timer | the platform's clock tree; the order of magnitude is enough |
 | `info.fw_name` | `powervr_sgx/sgx<core>_ukernel.bin` | the open microkernel built for the core ([UKERNEL.md 4a](../UKERNEL.md#4a-the-firmware-file)) |
 
-The driver refuses a core whose family is missing, lacks a required feature, or has
-fewer than 32 address bits, before it writes a register. `KUnit powervr_sgx_core` checks
+The driver refuses a core whose family is missing or isn't usable
+(`pvrsgx_core_family_usable()`: directory lists, address bits, a layout that fits, the
+event PDS registers, the kick registers matching the features), and a single-context
+core without `allow_unisolated=1`, before it writes a register. A listed family it can't
+run still has its ID and revision read and logged. `KUnit powervr_sgx_core` checks
 the table: run `tools/testing/kunit/kunit.py run
 --kunitconfig=drivers/gpu/drm/powervr_sgx/tests/.kunitconfig`.
 
-What is not per-core yet, so a new core may need code as well as a table entry: the heap
-layout (28-bit cores), the shader code-base windows (535 and 540 have no `USE_CODE_BASE`
-registers), the microkernel start (it needs `EVENT_KICK2`, which 535 lacks), the open
-microkernel's command constants, and the validator's USSE2 tables.
+What is not per-core yet, so a new core may need code as well as a table entry: the
+shader code-base windows (535 and 540 have no `USE_CODE_BASE` registers), the open
+microkernel's command constants, and the validator's USSE2 tables. The heap layout, a
+single-kick start (no `EVENT_KICK2`) and a single memory context are per-core now.
+
+## Building the module for a board
+
+Build against the board's own kernel: the same source, the same config (its
+`/proc/config.gz`), **and the same compiler**. With `MODVERSIONS` each imported symbol
+carries a genksyms CRC, and those move with compiler features as well as with the
+config: gcc 15 sets `CC_HAS_COUNTED_BY` and other options that change the type
+expansions genksyms hashes. Modules from Ubuntu's gcc 13 against our OMAP3630 test
+board's exact config were refused ("disagrees about version of symbol
+dev_driver_string") by its gcc 15.3 kernel. Read the board's `CONFIG_CC_VERSION_TEXT`
+first, build with that compiler version, and check the `CONFIG_CC_HAS_*` lines against the
+board's config before loading (`drm/ci/omap3630-kernel.sh`, `powervr-sgx-omap3630.yml`).
+The DRM helper modules the driver needs (`drm_exec`, `drm_gpuvm`, `gpu-sched`,
+`drm_shmem_helper`) come from the same build when the board's kernel doesn't have them.
+A refused helper is harmless: load them first, and `powervr_sgx` itself only if they
+all went in.
 
 ## 1. Publish the device
 
@@ -61,9 +82,12 @@ Three patterns:
 - **A device tree SoC** (OMAP, Allwinner, Ingenic): the upstream binding
   `Documentation/devicetree/bindings/gpu/img,powervr-sgx.yaml` already describes the
   node (`reg`, one interrupt, `core`/`mem`/`sys` clocks, a power domain), with
-  compatibles `img,powervr-sgx530`, `-sgx540` and `-sgx544`. The driver has no
-  platform driver yet. Add one in `pvrsgx_drv.c` whose `of_device_id` table carries the
-  core number in `.data`, enables the clocks and the power domain, and maps `reg`. An
+  compatibles `img,powervr-sgx530`, `-sgx540` and `-sgx544`. The platform driver is
+  `pvrsgx_of.c` (`CONFIG_DRM_POWERVR_SGX_OF`); its `of_device_id` table carries the core
+  number in `.data`. It maps only the first `PVRSGX_REGS_MIN` bytes of `reg`, and it
+  handles the TI layout only: no clocks on the GPU node, a ti-sysc parent that clocks
+  and powers the module whenever the GPU device is runtime-resumed. A part with its own
+  `clocks` or `resets` (Allwinner, Ingenic) is refused until the driver enables them. An
   SGX535 has no compatible in that binding yet; it needs an addition to the binding.
 
 Done: `dmesg` shows the driver probing the device. A device whose bus names no known core

@@ -18,8 +18,7 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
-#include <asm/set_memory.h>
-
+#include "pvrsgx_cache.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_mmu.h"
 
@@ -38,20 +37,30 @@ struct pvrsgx_mmu {
 	struct pvrsgx_mmu_pt *pt[SGX_MMU_PD_ENTRIES];
 };
 
-static struct page *table_page_alloc(void)
+static struct page *table_page_alloc(struct pvrsgx_device *sdev, u32 **cpu)
 {
 	struct page *p = alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_DMA32);
 
-	if (p && set_pages_array_wc(&p, 1)) {
-		__free_page(p);
+	if (!p)
 		return NULL;
-	}
+	if (pvrsgx_pages_wc(sdev->base.dev, &p, 1))
+		goto err_free;
+	*cpu = pvrsgx_table_map(p);
+	if (!*cpu)
+		goto err_wb;
 	return p;
+
+err_wb:
+	pvrsgx_pages_wb(&p, 1);
+err_free:
+	__free_page(p);
+	return NULL;
 }
 
-static void table_page_free(struct page *p)
+static void table_page_free(struct page *p, u32 *cpu)
 {
-	set_pages_array_wb(&p, 1);
+	pvrsgx_table_unmap(cpu);
+	pvrsgx_pages_wb(&p, 1);
 	__free_page(p);
 }
 
@@ -62,12 +71,11 @@ struct pvrsgx_mmu *pvrsgx_mmu_create(struct pvrsgx_device *sdev)
 	if (!mmu)
 		return ERR_PTR(-ENOMEM);
 
-	mmu->pd_page = table_page_alloc();
+	mmu->pd_page = table_page_alloc(sdev, &mmu->pd);
 	if (!mmu->pd_page) {
 		kfree(mmu);
 		return ERR_PTR(-ENOMEM);
 	}
-	mmu->pd = page_address(mmu->pd_page);
 	mmu->sdev = sdev;
 	mutex_init(&mmu->lock);
 	return mmu;
@@ -82,10 +90,10 @@ void pvrsgx_mmu_destroy(struct pvrsgx_mmu *mmu)
 		if (!mmu->pt[i])
 			continue;
 		WARN_ON(mmu->pt[i]->used);
-		table_page_free(mmu->pt[i]->page);
+		table_page_free(mmu->pt[i]->page, mmu->pt[i]->cpu);
 		kfree(mmu->pt[i]);
 	}
-	table_page_free(mmu->pd_page);
+	table_page_free(mmu->pd_page, mmu->pd);
 	mutex_destroy(&mmu->lock);
 	kfree(mmu);
 }
@@ -102,17 +110,17 @@ static u32 *pte_get(struct pvrsgx_mmu *mmu, u32 dev_addr, bool alloc)
 	struct pvrsgx_mmu_pt *pt = mmu->pt[pdi];
 
 	if (!pt) {
-		if (!alloc)
+		/* A directory entry with no table of ours is another directory's (shared). */
+		if (!alloc || WARN_ON(mmu->pd[pdi]))
 			return NULL;
 		pt = kzalloc_obj(*pt);
 		if (!pt)
 			return NULL;
-		pt->page = table_page_alloc();
+		pt->page = table_page_alloc(mmu->sdev, &pt->cpu);
 		if (!pt->page) {
 			kfree(pt);
 			return NULL;
 		}
-		pt->cpu = page_address(pt->page);
 		mmu->pt[pdi] = pt;
 		mmu->pd[pdi] = (lower_32_bits(page_to_phys(pt->page)) & SGX_MMU_ADDR_MASK) |
 			       SGX_MMU_PDE_PAGE_SIZE_4K | SGX_MMU_PDE_VALID;
@@ -228,4 +236,30 @@ bool pvrsgx_mmu_lookup(struct pvrsgx_mmu *mmu, u32 dev_addr, u32 *pde, u32 *pte)
 	*pte = p ? *p : 0;
 	mutex_unlock(&mmu->lock);
 	return true;
+}
+
+/* Give [start, end) page tables of their own now, so their PDEs never change. */
+int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u64 end)
+{
+	int err = 0;
+
+	mutex_lock(&mmu->lock);
+	for (u64 a = start; a < end && !err; a += SGX_MMU_PDE_SPAN)
+		err = pte_get(mmu, a, true) ? 0 : -ENOMEM;
+	mutex_unlock(&mmu->lock);
+	return err;
+}
+
+/*
+ * Point dst's directory entries for [start, end) at src's page tables: src's
+ * mappings there show in dst too, and dst never maps anything there itself.
+ * Both ends 4 MiB aligned, src preallocated.
+ */
+void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u64 end)
+{
+	for (u64 a = start; a < end; a += SGX_MMU_PDE_SPAN) {
+		unsigned int i = a >> (SGX_MMU_PAGE_SHIFT + SGX_MMU_PT_SHIFT);
+
+		dst->pd[i] = src->pd[i];
+	}
 }

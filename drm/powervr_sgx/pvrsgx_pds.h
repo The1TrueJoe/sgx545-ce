@@ -25,7 +25,7 @@ struct pvrsgx_pds {
 	unsigned int pc;
 };
 
-u32 pvrsgx_doutu(u32 addr);
+u32 pvrsgx_doutu(u32 kcode, u32 addr);
 void pvrsgx_pds_ds(struct pvrsgx_pds *p, unsigned int r, u32 v);
 void pvrsgx_pds_movs(struct pvrsgx_pds *p, unsigned int dest, unsigned int a,
 		     unsigned int b, unsigned int c, unsigned int d);

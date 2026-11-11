@@ -6,7 +6,7 @@
     mkukfw.py IMAGE -o OUT [--entry PROG:OFF]... [--patch OFF:VALUE]...
               [--features N] [--interface MAJOR.MINOR] [--core-rev N] [--build-id TEXT]
     mkukfw.py IMAGE -o OUT --manifest JSON    the same, from ukernel/build.py's manifest:
-              entries.event, patches.ctlblk and, if present, "features" and "build_id"
+              entries.event, patches.ctlblk (and .pdtable) and, if present, "features" and "build_id"
     mkukfw.py --check FILE      print and check a file as the driver does
 
 VALUE is a number or one of ta3dctl, hostctl, ccbctl, ccb, misc.
@@ -18,8 +18,8 @@ import zlib
 
 MAGIC = (0x35584753, 0x4E524B55)
 HEADER = struct.Struct("<2I10I4I32s")
-VALUES = {"ta3dctl": 1, "hostctl": 2, "ccbctl": 3, "ccb": 4, "misc": 5}
-FEATURES = 0x3
+VALUES = {"ta3dctl": 1, "hostctl": 2, "ccbctl": 3, "ccb": 4, "misc": 5, "pdtable": 6}
+FEATURES = 0x7  # cleanup v2, secure, single-context
 PRIVATE = 0xffff0000  # the microkernel's own build variants, as the driver's UKFW_FEATURES_PRIVATE
 MAX_IMAGE = 0xE000 - 0x200 - 0x10
 
@@ -120,7 +120,9 @@ def main():
         import json
         m = json.load(open(a.manifest))
         a.entry = a.entry or [f"0:{m['entries']['event']}"]
-        a.patch = a.patch or [f"{m['patches']['ctlblk']}:ta3dctl"]
+        # the microkernel's patch names -> the loader's buffers
+        bufs = {"ctlblk": "ta3dctl", "pdtable": "pdtable"}
+        a.patch = a.patch or [f"{o}:{bufs[n]}" for n, o in m["patches"].items()]
         a.features = m.get("features", a.features)
         a.build_id = a.build_id or m.get("build_id", "")
     major, minor = (int(x) for x in a.interface.split("."))

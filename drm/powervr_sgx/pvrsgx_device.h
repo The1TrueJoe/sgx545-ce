@@ -10,6 +10,7 @@
 #include <drm/gpu_scheduler.h>
 
 #include <linux/device.h>
+#include <linux/idr.h>
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -109,6 +110,13 @@ struct pvrsgx_fw {
 	u32 (*patches)[2];
 	/** @n_patches: Entries in @patches. */
 	u32 n_patches;
+	/**
+	 * @pdtable: On a single-context core, the directory addresses the
+	 * microkernel loads into list 0, by slot; GPU read-only.
+	 */
+	struct pvrsgx_kmem pdtable;
+	/** @pd_slots: The @pdtable slots VMs hold; slot 0 is the firmware's. */
+	struct ida pd_slots;
 };
 
 /**
@@ -117,7 +125,7 @@ struct pvrsgx_fw {
 struct pvrsgx_device {
 	/** @base: The DRM device. */
 	struct drm_device base;
-	/** @pdev: The SGX PCI function (CE5300), or NULL behind gma500 (Cedarview). */
+	/** @pdev: The SGX PCI function (CE5300), or NULL (gma500, device tree). */
 	struct pci_dev *pdev;
 	/** @dma_parms: DMA parameters of the gma500 auxiliary device. */
 	struct device_dma_parameters dma_parms;
@@ -126,7 +134,7 @@ struct pvrsgx_device {
 	/** @irq_work: The interrupt's bottom half behind gma500, which owns the line. */
 	struct work_struct irq_work;
 
-	/** @regs: The core registers (BAR 0). */
+	/** @regs: The core registers (BAR 0, or the node's first reg). */
 	void __iomem *regs;
 	/** @irq: Its interrupt. */
 	int irq;
@@ -144,7 +152,7 @@ struct pvrsgx_device {
 
 	/** @kernel_mmu: Page directory the microkernel translates through. */
 	struct pvrsgx_mmu *kernel_mmu;
-	/** @idle_mmu: Empty directory for list 0 while no job runs. */
+	/** @idle_mmu: Empty directory for list 0 while no job runs (multi-context cores). */
 	struct pvrsgx_mmu *idle_mmu;
 	/** @reset_mmu: Scratch directory that absorbs faults during reset. */
 	struct pvrsgx_mmu *reset_mmu;
@@ -254,6 +262,18 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 	iowrite32(val, sdev->regs + reg);
 }
 
+/* A register from the core table: 0 is one the core lacks, never written. */
+static inline void sgx_wr_opt(struct pvrsgx_device *sdev, u32 reg, u32 val)
+{
+	if (reg)
+		sgx_wr(sdev, reg, val);
+}
+
+static inline const struct pvrsgx_heap_layout *pvrsgx_heaps(const struct pvrsgx_device *sdev)
+{
+	return sdev->family->heaps;
+}
+
 /*
  * The microkernel translates through the last directory list; TA, 3D and
  * host requests through list 0, which the microkernel points at the job's
@@ -264,6 +284,16 @@ static inline u32 pvrsgx_dirlist_edm(const struct pvrsgx_device *sdev)
 	return sdev->family->num_dir_lists - 1;
 }
 
+/*
+ * What list 0 holds while no job runs: an empty directory, or on a
+ * single-context core the firmware's, since the microkernel translates
+ * through list 0 too.
+ */
+static inline struct pvrsgx_mmu *pvrsgx_idle_mmu(const struct pvrsgx_device *sdev)
+{
+	return pvrsgx_core_single_context(sdev->family) ? sdev->kernel_mmu : sdev->idle_mmu;
+}
+
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
@@ -271,6 +301,7 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_fini(struct pvrsgx_device *sdev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
+void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);
 

@@ -111,7 +111,7 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			.rt_max_samples = 1,
 			.pb_min_pages = 0x100,
 			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
-			.pb_max_pages = 0x8000,
+			.pb_max_pages = pvrsgx_heaps(sdev)->pb_max_pages,
 			.max_ta_kicks = 64,
 		};
 
@@ -119,6 +119,10 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 	}
 	case DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET: {
 		struct drm_powervr_sgx_dev_query_quirks q = {};
+		/* No erratum that reaches userspace is documented for rev 1014 (G25). */
+		static const u32 unisolated[] = { DRM_POWERVR_SGX_QUIRK_UNISOLATED };
+		bool single = pvrsgx_core_single_context(sdev->family);
+		u16 n = single ? ARRAY_SIZE(unisolated) : 0;
 		int err;
 
 		if (ptr) {
@@ -127,9 +131,12 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 				return err;
 			if (q._padding_c)
 				return -EINVAL;
+			if (n && q.quirks && q.count &&
+			    copy_to_user(u64_to_user_ptr(q.quirks), unisolated,
+					 min(q.count, n) * sizeof(u32)))
+				return -EFAULT;
 		}
-		/* No erratum that reaches userspace is documented for rev 1014 (G25). */
-		q.count = 0;
+		q.count = n;
 		q.musthave_count = 0;
 		return query_put(ptr, &args->size, &q, sizeof(q));
 	}
@@ -307,13 +314,23 @@ static int __init pvrsgx_init(void)
 		return err;
 	err = pvrsgx_aux_register();
 	if (err)
-		pci_unregister_driver(&pvrsgx_pci_driver);
+		goto err_pci;
+	err = pvrsgx_of_register();
+	if (err)
+		goto err_aux;
+	return 0;
+
+err_aux:
+	pvrsgx_aux_unregister();
+err_pci:
+	pci_unregister_driver(&pvrsgx_pci_driver);
 	return err;
 }
 module_init(pvrsgx_init);
 
 static void __exit pvrsgx_exit(void)
 {
+	pvrsgx_of_unregister();
 	pvrsgx_aux_unregister();
 	pci_unregister_driver(&pvrsgx_pci_driver);
 }

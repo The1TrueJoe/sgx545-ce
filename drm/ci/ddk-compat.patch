@@ -3,11 +3,11 @@ for A/B tests on the CE5300 boards. Never upstream: that microkernel needs every
 client page directory to map the firmware's heaps. Applied by drm/ci/ce5300-kernel.sh.
 
 diff -ruN powervr_sgx.orig/Kconfig powervr_sgx/Kconfig
---- a/drm/powervr_sgx/Kconfig	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/Kconfig	2026-11-08 18:15:34
-@@ -35,6 +35,18 @@
+--- a/drm/powervr_sgx/Kconfig	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/Kconfig	2026-11-11 02:56:18
+@@ -47,6 +47,18 @@
  
- 	  Say Y if this kernel runs on a Cedarview machine.
+ 	  Say N unless this kernel is for such an SoC.
  
 +config DRM_POWERVR_SGX_DDK_COMPAT
 +	bool "Run the vendor microkernel too (testing)"
@@ -25,41 +25,45 @@ diff -ruN powervr_sgx.orig/Kconfig powervr_sgx/Kconfig
  	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
  	depends on DRM_POWERVR_SGX && KUNIT
 diff -ruN powervr_sgx.orig/Makefile powervr_sgx/Makefile
---- a/drm/powervr_sgx/Makefile	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/Makefile	2026-11-08 18:15:34
+--- a/drm/powervr_sgx/Makefile	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/Makefile	2026-11-11 02:56:18
 @@ -30,6 +30,7 @@
  
  powervr_sgx-$(CONFIG_DEBUG_FS) += pvrsgx_debugfs.o
  powervr_sgx-$(CONFIG_PM) += pvrsgx_pm.o
 +powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) += pvrsgx_fw_ddk.o
  powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_GMA500) += pvrsgx_aux.o
+ powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_OF) += pvrsgx_of.o
  
- obj-$(CONFIG_DRM_POWERVR_SGX) += powervr_sgx.o
+File a/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h is a unknown type while file b/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h is a unknown type
 diff -ruN powervr_sgx.orig/pvrsgx_ccb.c powervr_sgx/pvrsgx_ccb.c
---- a/drm/powervr_sgx/pvrsgx_ccb.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_ccb.c	2026-11-08 18:15:34
-@@ -57,7 +57,7 @@
+--- a/drm/powervr_sgx/pvrsgx_ccb.c	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_ccb.c	2026-11-11 02:56:18
+@@ -57,6 +57,10 @@
+ 	u32 *ctl = ccbctl(sdev), *cmd, wo;
  	unsigned long timeout = jiffies + msecs_to_jiffies(500);
  
- 	/* The DDK image has no entry for some types; the open one's table is the identity. */
--	if (type >= PVRSGX_CMD_MAX)
++	/* The DDK image has no entry for some types; the open one's table is the identity. */
 +	if (type >= PVRSGX_CMD_MAX || (pvrsgx_fw_is_ddk(sdev) && !sdev->fw.host_kick[type]))
- 		return -EINVAL;
- 
- 	mutex_lock(&sdev->ccb_lock);
-@@ -73,7 +73,7 @@
++		return -EINVAL;
++
+ 	wo = ctl[CCB_WO];
+ 	while (((wo + 1) & (PVRSGX_CCB_SLOTS - 1)) ==
+ 	       (READ_ONCE(ctl[CCB_RO]) & (PVRSGX_CCB_SLOTS - 1))) {
+@@ -68,7 +72,7 @@
  	}
  
  	cmd = (u32 *)sdev->fw.cpu[PVRSGX_FW_CCB] + wo * PVRSGX_CCB_CMD_WORDS;
 -	cmd[0] = type;
 +	cmd[0] = sdev->fw.host_kick[type];
- 	cmd[1] = sdev->fw.cache_control;
+ 	cmd[1] = cache_control;
  	memcpy(&cmd[2], data, 6 * sizeof(u32));
- 	sdev->fw.cache_control = 0;
+ 
+File a/drm/powervr_sgx/pvrsgx_cmd_checks.c is a unknown type while file b/drm/powervr_sgx/pvrsgx_cmd_checks.c is a unknown type
 diff -ruN powervr_sgx.orig/pvrsgx_core.c powervr_sgx/pvrsgx_core.c
---- a/drm/powervr_sgx/pvrsgx_core.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_core.c	2026-11-08 18:15:34
-@@ -77,6 +77,7 @@
+--- a/drm/powervr_sgx/pvrsgx_core.c	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_core.c	2026-11-11 02:56:17
+@@ -164,6 +164,7 @@
  		.core_rev = 0x0001000e,
  		.clock_hz = 400000000,
  		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
@@ -68,9 +72,9 @@ diff -ruN powervr_sgx.orig/pvrsgx_core.c powervr_sgx/pvrsgx_core.c
  	{
  		/*
 diff -ruN powervr_sgx.orig/pvrsgx_core.h powervr_sgx/pvrsgx_core.h
---- a/drm/powervr_sgx/pvrsgx_core.h	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_core.h	2026-11-08 18:15:34
-@@ -115,6 +115,8 @@
+--- a/drm/powervr_sgx/pvrsgx_core.h	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_core.h	2026-11-11 02:56:18
+@@ -151,6 +151,8 @@
  	u32 clock_hz;
  	/** @fw_name: The open microkernel under /lib/firmware. */
  	const char *fw_name;
@@ -80,9 +84,9 @@ diff -ruN powervr_sgx.orig/pvrsgx_core.h powervr_sgx/pvrsgx_core.h
  
  const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
 diff -ruN powervr_sgx.orig/pvrsgx_device.c powervr_sgx/pvrsgx_device.c
---- a/drm/powervr_sgx/pvrsgx_device.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_device.c	2026-11-08 18:15:34
-@@ -27,6 +27,16 @@
+--- a/drm/powervr_sgx/pvrsgx_device.c	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_device.c	2026-11-11 02:56:18
+@@ -26,6 +26,16 @@
  #include "pvrsgx_mmu.h"
  #include "pvrsgx_render.h"
  
@@ -99,7 +103,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_device.c powervr_sgx/pvrsgx_device.c
  int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
  		unsigned int timeout_us)
  {
-@@ -321,6 +331,13 @@
+@@ -371,6 +381,13 @@
  	    IS_ERR(sdev->reset_mmu) || !sdev->reset_page) {
  		err = -ENOMEM;
  		goto err_mmu;
@@ -114,9 +118,9 @@ diff -ruN powervr_sgx.orig/pvrsgx_device.c powervr_sgx/pvrsgx_device.c
  
  	err = identify(sdev);
 diff -ruN powervr_sgx.orig/pvrsgx_device.h powervr_sgx/pvrsgx_device.h
---- a/drm/powervr_sgx/pvrsgx_device.h	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_device.h	2026-11-08 18:15:34
-@@ -89,10 +89,14 @@
+--- a/drm/powervr_sgx/pvrsgx_device.h	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_device.h	2026-11-11 02:56:18
+@@ -90,10 +90,14 @@
  	u32 addr[PVRSGX_FW_NBUF];
  	/** @cpu: CPU address of each buffer. */
  	void *cpu[PVRSGX_FW_NBUF];
@@ -131,7 +135,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_device.h powervr_sgx/pvrsgx_device.h
  	/** @name: Firmware file the image came from. */
  	const char *name;
  	/** @image: The microkernel as loaded, for restarts. */
-@@ -244,6 +248,12 @@
+@@ -252,6 +256,12 @@
  	return file->driver_priv;
  }
  
@@ -144,9 +148,9 @@ diff -ruN powervr_sgx.orig/pvrsgx_device.h powervr_sgx/pvrsgx_device.h
  static inline u32 sgx_rd(struct pvrsgx_device *sdev, u32 reg)
  {
  	return ioread32(sdev->regs + reg);
-@@ -253,6 +263,12 @@
+@@ -273,6 +283,12 @@
  {
- 	iowrite32(val, sdev->regs + reg);
+ 	return sdev->family->heaps;
  }
 +
 +struct pvrsgx_krange_span {
@@ -158,8 +162,8 @@ diff -ruN powervr_sgx.orig/pvrsgx_device.h powervr_sgx/pvrsgx_device.h
  /*
   * The microkernel translates through the last directory list; TA, 3D and
 diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
---- a/drm/powervr_sgx/pvrsgx_fw.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_fw.c	2026-11-08 18:15:34
+--- a/drm/powervr_sgx/pvrsgx_fw.c	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_fw.c	2026-11-11 02:56:42
 @@ -7,8 +7,9 @@
   * buffer, constant, PDS program and script value here, and docs/UKERNEL.md for
   * how the microkernel uses them.
@@ -180,7 +184,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  
  /* The open microkernel's file (docs/UKERNEL.md 4a). */
  #define UKFW_MAGIC0		0x35584753	/* "SGX5" */
-@@ -141,13 +143,14 @@
+@@ -143,13 +145,14 @@
  
  /*
   * Fill one of the microkernel's limm placeholders (word 0 0x?dbeef, the value
@@ -199,12 +203,15 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  
  	if (off > sdev->fw.image_size - 8 || !ok) {
  		drm_err(&sdev->base, "%s: no patch placeholder at +0x%x\n", sdev->fw.name, off);
-@@ -203,9 +206,12 @@
- 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
- 
- 	for (u32 i = 0; i < f->n_patches && !err; i++)
--		err = fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
-+		err = pvrsgx_fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
+@@ -212,11 +215,14 @@
+ 				f->name);
+ 			return -EINVAL;
+ 		}
+-		err = fw_limm(sdev, f->patches[i][0],
+-			      v == UKFW_PDTABLE ? f->pdtable.dev_addr : f->addr[value_buf[v]]);
++		err = pvrsgx_fw_limm(sdev, f->patches[i][0],
++				     v == UKFW_PDTABLE ? f->pdtable.dev_addr : f->addr[value_buf[v]]);
+ 	}
  	if (err)
  		return err;
 +
@@ -213,7 +220,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  	return 0;
  }
  
-@@ -216,6 +222,8 @@
+@@ -227,6 +233,8 @@
  
  	memcpy(f->cpu[PVRSGX_FW_UKERNEL], image, f->image_size);
  
@@ -222,19 +229,19 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  	return fw_build_open(sdev);
  }
  
-@@ -307,7 +315,8 @@
- 		drm_err(&sdev->base, "%s: %s\n", f->name, why);
- 	if (err)
- 		return err;
--	if (!(f->features & PVRSGX_UKFW_SECURE)) {
-+	if (!IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) &&
-+	    !(f->features & PVRSGX_UKFW_SECURE)) {
+@@ -332,7 +340,8 @@
+ 	} else if (f->features & PVRSGX_UKFW_SINGLE_CONTEXT) {
+ 		drm_err(&sdev->base, "%s: an image for a single-context core\n", f->name);
+ 		return -EINVAL;
+-	} else if (!(f->features & PVRSGX_UKFW_SECURE)) {
++	} else if (!IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT) &&
++		   !(f->features & PVRSGX_UKFW_SECURE)) {
  		drm_err(&sdev->base, "%s: not a secure-mode image; clients would reach the firmware\n",
  			f->name);
  		return -EINVAL;
-@@ -329,13 +338,19 @@
- 	int err;
+@@ -403,13 +412,19 @@
  
+ 	ida_init(&f->pd_slots);
  	f->name = sdev->core->fw_name;
 -	err = request_firmware(&fw, f->name, sdev->base.dev);
 +	err = firmware_request_nowarn(&fw, f->name, sdev->base.dev);
@@ -253,7 +260,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  		drm_err(&sdev->base, "%s: not a microkernel file\n", f->name);
  	release_firmware(fw);
  	if (err)
-@@ -478,7 +493,8 @@
+@@ -583,7 +598,8 @@
  	}
  	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
  	hc[HOSTCTL_UK_TIMER_CLOCK] = sdev->core->clock_hz / UKERNEL_TIMER_HZ;
@@ -263,7 +270,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  	/* The power status starts clear at every start. */
  	hc[HOSTCTL_POWER_STATUS] = 0;
  	pvrsgx_ccb_reset(sdev);
-@@ -520,6 +536,9 @@
+@@ -621,6 +637,9 @@
  		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
  		sdev->reset_logged = sdev->reset_count;
  	}
@@ -274,8 +281,8 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  }
  
 diff -ruN powervr_sgx.orig/pvrsgx_fw.h powervr_sgx/pvrsgx_fw.h
---- a/drm/powervr_sgx/pvrsgx_fw.h	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_fw.h	2026-11-08 18:15:34
+--- a/drm/powervr_sgx/pvrsgx_fw.h	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_fw.h	2026-11-11 02:56:42
 @@ -5,8 +5,11 @@
  #define PVRSGX_FW_H
  
@@ -288,10 +295,10 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.h powervr_sgx/pvrsgx_fw.h
  struct pvrsgx_device;
  struct seq_buf;
  
-@@ -62,5 +65,21 @@
- void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v);
- void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,
+@@ -66,5 +69,21 @@
  		    const char *name);
+ int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd);
+ void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot);
 +int pvrsgx_fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v);
 +
 +#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_DDK_COMPAT)
@@ -311,9 +318,9 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.h powervr_sgx/pvrsgx_fw.h
  
  #endif /* PVRSGX_FW_H */
 diff -ruN powervr_sgx.orig/pvrsgx_fw_ddk.c powervr_sgx/pvrsgx_fw_ddk.c
---- a/drm/powervr_sgx/pvrsgx_fw_ddk.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_fw_ddk.c	2026-11-08 18:15:34
-@@ -0,0 +1,186 @@
+--- a/drm/powervr_sgx/pvrsgx_fw_ddk.c	1969-12-31 19:00:00
++++ b/drm/powervr_sgx/pvrsgx_fw_ddk.c	2026-11-11 02:56:18
+@@ -0,0 +1,187 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Copyright © 2026 Joseph Telaak */
 +
@@ -387,11 +394,12 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw_ddk.c powervr_sgx/pvrsgx_fw_ddk.c
 +	pvrsgx_pds_ds(&p, PDS_D1(0), 0x000);
 +	pvrsgx_pds_ds(&p, PDS_D1(1), 0x100);
 +	pvrsgx_pds_ds(&p, PDS_D1(2), 0x200);
-+	pvrsgx_pds_ds(&p, PDS_D1(6), pvrsgx_doutu(uk + 0x30));
++	pvrsgx_pds_ds(&p, PDS_D1(6), pvrsgx_doutu(PVRSGX_HEAP_KERNEL_CODE, uk + 0x30));
 +	pvrsgx_pds_ds(&p, PDS_D1(7), 0xffffff);
 +	pvrsgx_pds_ds(&p, PDS_D1(8), 0x100);
 +	for (int i = 0; i < 3; i++) {
-+		pvrsgx_pds_ds(&p, PDS_D1(3 + i), pvrsgx_doutu(uk + ev[i].entry));
++		pvrsgx_pds_ds(&p, PDS_D1(3 + i),
++			      pvrsgx_doutu(PVRSGX_HEAP_KERNEL_CODE, uk + ev[i].entry));
 +		pvrsgx_pds_ds(&p, PDS_D1(9 + i), ev[i].mask);
 +	}
 +	pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_IN(0), PDS_D1(0), PDS_IN(0), PDS_IN(0));
@@ -432,11 +440,11 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw_ddk.c powervr_sgx/pvrsgx_fw_ddk.c
 +	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, PVRSGX_FW_PDS4, 12);
 +	u32 uk = sdev->fw.addr[PVRSGX_FW_UKERNEL];
 +
-+	pvrsgx_pds_ds(&p, PDS_D0(0), pvrsgx_doutu(uk + 0x73a0));
++	pvrsgx_pds_ds(&p, PDS_D0(0), pvrsgx_doutu(PVRSGX_HEAP_KERNEL_CODE, uk + 0x73a0));
 +	pvrsgx_pds_ds(&p, PDS_D0(1), 2);
-+	pvrsgx_pds_ds(&p, PDS_D0(2), pvrsgx_doutu(uk + 0x2ea0));
++	pvrsgx_pds_ds(&p, PDS_D0(2), pvrsgx_doutu(PVRSGX_HEAP_KERNEL_CODE, uk + 0x2ea0));
 +	pvrsgx_pds_ds(&p, PDS_D0(3), 2);
-+	pvrsgx_pds_ds(&p, PDS_D0(4), pvrsgx_doutu(uk + 0x5740));
++	pvrsgx_pds_ds(&p, PDS_D0(4), pvrsgx_doutu(PVRSGX_HEAP_KERNEL_CODE, uk + 0x5740));
 +	pvrsgx_pds_ds(&p, PDS_D0(5), 2);
 +	pvrsgx_pds_ds(&p, PDS_D1(0), 0x000);
 +	pvrsgx_pds_ds(&p, PDS_D1(1), 0x200);
@@ -501,9 +509,9 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw_ddk.c powervr_sgx/pvrsgx_fw_ddk.c
 +	return 0;
 +}
 diff -ruN powervr_sgx.orig/pvrsgx_kobj.c powervr_sgx/pvrsgx_kobj.c
---- a/drm/powervr_sgx/pvrsgx_kobj.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_kobj.c	2026-11-08 18:15:34
-@@ -133,6 +133,10 @@
+--- a/drm/powervr_sgx/pvrsgx_kobj.c	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_kobj.c	2026-11-11 02:56:18
+@@ -147,6 +147,10 @@
  	bool restart = renders_done == U64_MAX;
  	LIST_HEAD(dead);
  
@@ -514,55 +522,10 @@ diff -ruN powervr_sgx.orig/pvrsgx_kobj.c powervr_sgx/pvrsgx_kobj.c
  	mutex_lock(&sdev->kobj_lock);
  	list_for_each_entry_safe(o, tmp, &sdev->graveyard, grave) {
  		if (o->grave_seq < renders_done && (restart || !o->until_restart))
-diff -ruN powervr_sgx.orig/pvrsgx_mmu.c powervr_sgx/pvrsgx_mmu.c
---- a/drm/powervr_sgx/pvrsgx_mmu.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_mmu.c	2026-11-08 18:15:34
-@@ -229,3 +229,29 @@
- 	mutex_unlock(&mmu->lock);
- 	return true;
- }
-+
-+/* Give [start, end) page tables of their own now, so their PDEs never change. */
-+int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u32 end)
-+{
-+	int err = 0;
-+
-+	mutex_lock(&mmu->lock);
-+	for (u64 a = start; a < end && !err; a += SGX_MMU_PDE_SPAN)
-+		err = pte_get(mmu, a, true) ? 0 : -ENOMEM;
-+	mutex_unlock(&mmu->lock);
-+	return err;
-+}
-+
-+/*
-+ * Point dst's directory entries for [start, end) at src's page tables: src's
-+ * mappings there show in dst too, and dst never maps anything there itself.
-+ * Both ends 4 MiB aligned, src preallocated.
-+ */
-+void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u32 end)
-+{
-+	for (u64 a = start; a < end; a += SGX_MMU_PDE_SPAN) {
-+		unsigned int i = a >> (SGX_MMU_PAGE_SHIFT + SGX_MMU_PT_SHIFT);
-+
-+		dst->pd[i] = src->pd[i];
-+	}
-+}
-diff -ruN powervr_sgx.orig/pvrsgx_mmu.h powervr_sgx/pvrsgx_mmu.h
---- a/drm/powervr_sgx/pvrsgx_mmu.h	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_mmu.h	2026-11-08 18:15:34
-@@ -20,6 +20,8 @@
- 		       struct sg_table *sgt, u64 offset, u64 size, u32 flags);
- void pvrsgx_mmu_unmap(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
- bool pvrsgx_mmu_range_empty(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
-+int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u32 end);
-+void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u32 end);
- bool pvrsgx_mmu_lookup(struct pvrsgx_mmu *mmu, u32 dev_addr, u32 *pde, u32 *pte);
- 
- #endif /* PVRSGX_MMU_H */
 diff -ruN powervr_sgx.orig/pvrsgx_pds.c powervr_sgx/pvrsgx_pds.c
---- a/drm/powervr_sgx/pvrsgx_pds.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_pds.c	2026-11-08 18:15:34
-@@ -59,6 +59,27 @@
+--- a/drm/powervr_sgx/pvrsgx_pds.c	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_pds.c	2026-11-11 02:56:18
+@@ -60,6 +60,27 @@
  	pds_emit(p, (u32)PDS_CC_ALWAYS << 24 | r1 << 18 | r2 << 13 | sel | dest);
  }
  
@@ -591,8 +554,8 @@ diff -ruN powervr_sgx.orig/pvrsgx_pds.c powervr_sgx/pvrsgx_pds.c
  {
  	pds_emit(p, 0xaf000000u);
 diff -ruN powervr_sgx.orig/pvrsgx_pds.h powervr_sgx/pvrsgx_pds.h
---- a/drm/powervr_sgx/pvrsgx_pds.h	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_pds.h	2026-11-08 18:15:34
+--- a/drm/powervr_sgx/pvrsgx_pds.h	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_pds.h	2026-11-11 02:56:18
 @@ -15,8 +15,16 @@
   */
  #define PDS_D0(n)		(n)
@@ -621,10 +584,14 @@ diff -ruN powervr_sgx.orig/pvrsgx_pds.h powervr_sgx/pvrsgx_pds.h
  void pvrsgx_pds_halt(struct pvrsgx_pds *p);
  struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b,
  				  unsigned int data);
+File a/drm/powervr_sgx/pvrsgx_stream.c is a unknown type while file b/drm/powervr_sgx/pvrsgx_stream.c is a unknown type
+File a/drm/powervr_sgx/pvrsgx_stream.h is a unknown type while file b/drm/powervr_sgx/pvrsgx_stream.h is a unknown type
+File a/drm/powervr_sgx/pvrsgx_stream_defs.c is a unknown type while file b/drm/powervr_sgx/pvrsgx_stream_defs.c is a unknown type
+File a/drm/powervr_sgx/pvrsgx_stream_defs.h is a unknown type while file b/drm/powervr_sgx/pvrsgx_stream_defs.h is a unknown type
 diff -ruN powervr_sgx.orig/pvrsgx_vm.c powervr_sgx/pvrsgx_vm.c
---- a/drm/powervr_sgx/pvrsgx_vm.c	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_vm.c	2026-11-08 18:15:34
-@@ -32,6 +32,35 @@
+--- a/drm/powervr_sgx/pvrsgx_vm.c	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_vm.c	2026-11-11 02:56:42
+@@ -33,6 +33,35 @@
  #include "pvrsgx_prime.h"
  #include "pvrsgx_vm.h"
  
@@ -657,13 +624,13 @@ diff -ruN powervr_sgx.orig/pvrsgx_vm.c powervr_sgx/pvrsgx_vm.c
 +}
 +#endif
 +
- /* The client heaps, the same in every VM. */
- static const struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {
- 	[DRM_POWERVR_SGX_HEAP_GENERAL] = {
-@@ -231,6 +260,11 @@
- 		pvrsgx_mmu_destroy(vm->mmu);
- 		kfree(vm);
- 		return ERR_PTR(-ENOMEM);
+ /* The client heaps, the same in every VM, from the core's layout. */
+ static void client_heaps(const struct pvrsgx_device *sdev,
+ 			 struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT])
+@@ -269,6 +298,11 @@
+ 			kfree(vm);
+ 			return ERR_PTR(err);
+ 		}
 +	}
 +	if (pvrsgx_vm_shares_kernel_heaps(sdev)) {
 +		for (int i = 0; i < ARRAY_SIZE(pvrsgx_kernel_heaps); i++)
@@ -671,14 +638,14 @@ diff -ruN powervr_sgx.orig/pvrsgx_vm.c powervr_sgx/pvrsgx_vm.c
 +					 pvrsgx_kernel_heaps[i].end);
  	}
  	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
- 		       0, SZ_4G, 0, 0, &pvrsgx_gpuvm_ops);
+ 		       0, BIT_ULL(sdev->family->va_bits), 0, 0, &pvrsgx_gpuvm_ops);
 diff -ruN powervr_sgx.orig/pvrsgx_vm.h powervr_sgx/pvrsgx_vm.h
---- a/drm/powervr_sgx/pvrsgx_vm.h	2026-11-08 18:15:34
-+++ b/drm/powervr_sgx/pvrsgx_vm.h	2026-11-08 18:15:34
-@@ -54,6 +54,7 @@
+--- a/drm/powervr_sgx/pvrsgx_vm.h	2026-11-11 02:56:17
++++ b/drm/powervr_sgx/pvrsgx_vm.h	2026-11-11 02:56:18
+@@ -57,6 +57,7 @@
  struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
  void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);
- int pvrsgx_heap_find(u64 addr, u64 size);
+ int pvrsgx_heap_find(const struct pvrsgx_device *sdev, u64 addr, u64 size);
 +bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev);
  
  int pvrsgx_ioctl_create_vm_context(struct drm_device *drm, void *data, struct drm_file *file);

@@ -26,26 +26,39 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_vm.h"
 
-static const struct {
+struct krange {
 	u32 start, end, pte;
-} ranges[PVRSGX_KRANGE_COUNT] = {
-	/* past the firmware's own arenas (pvrsgx_fw.c) */
-	[PVRSGX_KRANGE_KDATA] = { PVRSGX_HEAP_KERNEL_DATA + 0x10000, PVRSGX_HEAP_USSE_PIXEL,
-				  SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT },
-	[PVRSGX_KRANGE_KCODE] = { PVRSGX_HEAP_KERNEL_CODE + 0x10000, PVRSGX_HEAP_PDS_VERTEX,
-				  SGX_MMU_PTE_CACHECONSISTENT },
-	[PVRSGX_KRANGE_SYNC] = { PVRSGX_HEAP_SYNC, PVRSGX_HEAP_PDS_PIXEL,
-				 SGX_MMU_PTE_CACHECONSISTENT },
-	[PVRSGX_KRANGE_3DPARAMS] = { PVRSGX_HEAP_3D_PARAMS, PVRSGX_HEAP_TA_DATA, 0 },
-	[PVRSGX_KRANGE_TADATA] = { PVRSGX_HEAP_TA_DATA, PVRSGX_HEAP_SYNC, 0 },
 };
+
+/* Each range in the core's layout (pvrsgx_core.c). */
+static struct krange krange(const struct pvrsgx_device *sdev, enum pvrsgx_krange r)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+
+	switch (r) {
+	case PVRSGX_KRANGE_KDATA:	/* past the firmware's own arenas (pvrsgx_fw.c) */
+		return (struct krange){ h->kernel_data.base + 0x10000, h->kernel_data.end,
+					SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT };
+	case PVRSGX_KRANGE_KCODE:
+		return (struct krange){ h->kernel_code.base + 0x10000, h->kernel_code.end,
+					SGX_MMU_PTE_CACHECONSISTENT };
+	case PVRSGX_KRANGE_SYNC:
+		return (struct krange){ h->sync.base, h->sync.end, SGX_MMU_PTE_CACHECONSISTENT };
+	case PVRSGX_KRANGE_3DPARAMS:
+		return (struct krange){ h->params_3d.base, h->params_3d.end, 0 };
+	case PVRSGX_KRANGE_TADATA:
+	default:
+		return (struct krange){ h->ta_data.base, h->ta_data.end, 0 };
+	}
+}
 
 int pvrsgx_kobj_init(struct pvrsgx_device *sdev)
 {
 	mutex_init(&sdev->kobj_lock);
 	INIT_LIST_HEAD(&sdev->graveyard);
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
-		drm_mm_init(&sdev->krange[r], ranges[r].start, ranges[r].end - ranges[r].start);
+		drm_mm_init(&sdev->krange[r], krange(sdev, r).start,
+			    krange(sdev, r).end - krange(sdev, r).start);
 	return 0;
 }
 
@@ -53,7 +66,8 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 				       u32 size, u32 min_addr, struct pvrsgx_vm *vm)
 {
 	struct pvrsgx_kobj *o;
-	u32 start = max(min_addr, ranges[range].start);
+	struct krange kr = krange(sdev, range);
+	u32 start = max(min_addr, kr.start);
 	/* A 3D-params object without a VM is the device's: the PB (pvrsgx_render.c). */
 	bool per_vm = range == PVRSGX_KRANGE_3DPARAMS && vm;
 	int err;
@@ -65,14 +79,14 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 	o->mm = per_vm ? &vm->params : &sdev->krange[range];
 	mutex_lock(&sdev->kobj_lock);
 	err = drm_mm_insert_node_in_range(o->mm, &o->node, PAGE_ALIGN(size), PAGE_SIZE,
-					  0, start, ranges[range].end, DRM_MM_INSERT_LOW);
+					  0, start, kr.end, DRM_MM_INSERT_LOW);
 	mutex_unlock(&sdev->kobj_lock);
 	if (err)
 		goto err_free;
 
 	if (per_vm)
 		o->km.mmu = vm->mmu;
-	err = pvrsgx_kmem_alloc(sdev, &o->km, o->node.start, size, ranges[range].pte);
+	err = pvrsgx_kmem_alloc(sdev, &o->km, o->node.start, size, kr.pte);
 	if (err)
 		goto err_node;
 	memset(o->km.cpu, 0, o->km.size);
