@@ -175,7 +175,7 @@ style), unless it says capture. In order of how much each unblocks:
   MRT and wide formats are native. Then: how many outputs (8 for 3.0; 4 for
   RGBA32F), and whatever sets the output buffer's size (DOUTU or render
   details). Unblocks MRT, 64/128-bit formats.
-- **H2, sampler format codes.** Sample a pattern texture with every T1 format
+- **H2, sampler format codes** (`tools/isa/hwt_fmt.py`). Sample a pattern texture with every T1 format
   code from 0x00 to 0x1f and record what each returns; and check that 0x12
   returns stored bits unchanged (NaN payloads, denormals, 0x80000000). Codes
   that fault are noted and skipped. A shorter way to the float ones: the DDK's
