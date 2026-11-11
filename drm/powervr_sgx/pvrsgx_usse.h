@@ -4,6 +4,7 @@
 #ifndef PVRSGX_USSE_H
 #define PVRSGX_USSE_H
 
+#include <linux/bits.h>
 #include <linux/limits.h>
 #include <linux/types.h>
 
@@ -16,7 +17,7 @@
  * One code base's window, in instructions: 512 KiB. A task's absolute targets
  * (phas.i) count from the base it runs from, the window of its first word.
  */
-#define PVRSGX_USSE_WINDOW_INSTS	(1u << 16)
+#define PVRSGX_USSE_WINDOW_INSTS	BIT(16)
 
 /* Why pvrsgx_usse_scan() refused an instruction. */
 enum pvrsgx_usse_refusal {
