@@ -285,10 +285,31 @@ yet (DOUTI b25-26, STATE.md §3).
 
 ## Crossing the driver/compiler line
 
-These need the gl3-compiler session's agreement before code:
+Agreed with the compiler (2026-11-11):
 
-- the primary attribute that `gl_InstanceID` and `gl_VertexID` come in (the
-  PDS vertex program's DOUTA target);
+- **Integers:** the compiler's `native_integers` option is set for every
+  shader once the screen reports integers. Gallium's cap is screen-wide, so
+  GLSL ES 1.00 shaders then come with integers too, and dEQP-GLES2 has to
+  stay where the float path has it.
+- **gl_InstanceID** is the driver constant `SGX_K_INSTANCE`, lowered in the
+  driver (`lower_instance_id`): a float today, raw int bits under
+  `native_integers`.
+- **gl_VertexID** is not the PDS's `in0`: the driver rebases indices on most
+  paths (the CPU gather, the vertex cache, expanded primitives). The driver
+  lowers `load_vertex_id` to an extra vertex input it gathers itself, the
+  original index plus the base vertex.
+- **textureSize, texelFetch:** driver constants in a block above the
+  compiler's 1024 user constants, the base level's width, height and depth
+  per unit; level sizes are computed in the shader. A texelFetch is a
+  dependent sample at (i + 0.5) / size with its own texture state from the
+  driver (NEAREST, no mips, clamp, the level's address), never the bound
+  sampler's filter or wrap; the compiler marks those samples.
+- **Integer varyings** pass as two exact 16-bit halves until a test shows
+  that a flat iteration keeps raw 32-bit words (needs flat shading in the
+  driver first).
+
+Still open:
+
 - how a fragment program writes a packed render-target format (a lowering
   the driver keys on the bound surfaces' formats, as sRGB decoding is keyed
   on the sampler views today), and later its outputs o1-o7;
