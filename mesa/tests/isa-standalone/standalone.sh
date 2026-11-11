@@ -2,9 +2,9 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# Build the ISA library (mesa/src/sgx/isa) and sgx_isa_test without a
-# Mesa build, against an unpacked Mesa tree of mesa/VERSION's release (needs
-# python3 with mako):
+# Build the ISA library (mesa/src/sgx/isa), sgx_isa_test, sgx-asm and
+# sgx-disasm without a Mesa build, against an unpacked Mesa tree of
+# mesa/VERSION's release (needs python3 with mako):
 #
 #    mesa/tests/isa-standalone/standalone.sh <mesa-tree> [out-dir]  &&
 #       <out-dir>/sgx_isa_test mesa/src/sgx/isa/tests/*.txt
@@ -39,4 +39,6 @@ for f in $B/sgx-isa.c $HERE/sgx_isa_encode.c $HERE/sgx_isa_disasm.c \
   OBJS+=($o)
 done
 ${CC:-cc} "${CF[@]}" $HERE/tests/sgx_isa_test.c "${OBJS[@]}" -o $B/sgx_isa_test
+${CC:-cc} "${CF[@]}" $HERE/assembler.c "${OBJS[@]}" -o $B/sgx-asm
+${CC:-cc} "${CF[@]}" $HERE/disasm.c "${OBJS[@]}" -o $B/sgx-disasm
 echo "$B/sgx_isa_test"
