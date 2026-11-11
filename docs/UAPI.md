@@ -612,7 +612,7 @@ Constraints from the hardware, which any layout must meet:
 
 | constraint | applies to | evidence |
 |---|---|---|
-| USSE code is reached through `EUR_CR_USE_CODE_BASE_n`, one 512 KiB window per register. DOUTU w0 holds `n` and offset/8. Bases 0-9 are pixel, 10-13 vertex, 15 the microkernel, 14 unset. So at most 5 MiB of pixel and 2 MiB of vertex code | USSE heaps | hardware: every program run; capture: SRVINIT.md, PDS.md |
+| USSE code is reached through `EUR_CR_USE_CODE_BASE_n`, one 512 KiB window per register. DOUTU w0 holds `n` and offset/8; the offset can reach past the window (hardware: `hwt_window`). `ba` and `phas.i` targets count from the task's code base, so a loader relocates them by the program's offset from the window its DOUTU names, not from the heap. Bases 0-9 are pixel, 10-13 vertex, 15 the microkernel, 14 unset. So at most 5 MiB of pixel and 2 MiB of vertex code | USSE heaps | hardware: every program run; capture: SRVINIT.md, PDS.md |
 | The register holds `addr>>7`, so a code base is 128-byte aligned; instructions are 8 bytes | USSE heaps | capture |
 | `HEAP_INFO` returns `usse_base_index` and `usse_window_log2` so that Mesa computes DOUTU words from the query, not from constants | USSE heaps | design |
 | TA state and transfer words reference PDS programs as `(addr - base)>>4` with `rows<<26`. That is 16-byte aligned, within 256 MiB, with a 6-bit row count | PDS pixel | capture |
