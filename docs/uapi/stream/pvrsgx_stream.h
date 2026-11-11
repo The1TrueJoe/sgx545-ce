@@ -91,7 +91,10 @@ struct pvrsgx_stream_cmd_defs {
 };
 
 struct pvrsgx_stream_ctx {
-	/* Heap ranges; size 0 skips the range check. */
+	/*
+	 * Heap ranges, by enum pvrsgx_stream_heap. CLIENT's is never read; a
+	 * heap left at size 0 refuses every address in it.
+	 */
 	struct {
 		u64 base, size;
 	} heaps[PVRSGX_STREAM_HEAP_MAX];

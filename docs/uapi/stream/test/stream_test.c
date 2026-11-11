@@ -105,6 +105,10 @@ static void test_render(void)
 	       out.flags_3d == 0x180 && out.bg_depth == 0x3f800000 &&
 	       (s32)out.depth_bias_units == -2 && out.depth_bias_factor == 0x3f000000,
 	       "render fields round-trip");
+	c.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].size = 0;
+	EXPECT(render(&good_render, &c, &out) != 0,
+	       "a heap the context left unset refuses its addresses (fails closed)");
+	c = ctx();
 
 	/* Framing. */
 	len = SGX_KMD_STREAM_CMD_RENDER_pack(buf, &good_render);
