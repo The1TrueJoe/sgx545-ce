@@ -26,7 +26,9 @@ larger project.
 2. **Microkernel** ([microkernel.md](microkernel.md)): a configuration for the core, and a
    firmware build from it.
 3. **Mesa** ([mesa.md](mesa.md)): an entry in the driver's per-core table.
-4. **Evidence**: each guide lists the minimum hardware results before an entry is accepted.
+4. **State** ([state.md](state.md)): how to decode the core's command streams and GPU
+   state against a working driver, and how to check each finding on the hardware.
+5. **Evidence**: each guide lists the minimum hardware results before an entry is accepted.
    Attach them to the pull request.
 
 Open a "New SGX core" issue first, with your hardware and what you can already run on it.
