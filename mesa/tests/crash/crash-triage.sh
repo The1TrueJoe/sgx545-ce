@@ -18,8 +18,17 @@ shift 3
 BOX=${BOX:?the address of the box}
 SYM=${SYM:-/opt/homebrew/opt/llvm/bin/llvm-symbolizer}
 P=/root/piglit
-E() { sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-	-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 root@$BOX "$@"; }
+# ssh with retries (255: ssh's own failure; the box's sshd turns down fast reconnects)
+E() {
+	for i in 1 2 3 4 5 6; do
+		sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no \
+			-o PreferredAuthentications=password -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+			-o LogLevel=ERROR -o ConnectTimeout=8 root@$BOX "$@" && r=0 || r=$?
+		[ $r -ne 255 ] && return $r
+		sleep 3
+	done
+	return $r
+}
 mkdir -p "$OUT"
 (cd "$LIB" && tar cf - .) | E "rm -rf $P/lib-triage && mkdir -p $P/lib-triage && tar xf - -C $P/lib-triage && \
 	printf '{\"file_format_version\":\"1.0.0\",\"ICD\":{\"library_path\":\"$P/lib-triage/libEGL_mesa.so.0\"}}\n' > $P/lib-triage/50_mesa.json"
