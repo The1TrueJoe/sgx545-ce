@@ -846,11 +846,11 @@ P1 to P4 as positive tests from an actual shader. It can't be met by ioctl tests
 
 Everything above assumes a core with a directory list per VM, as the SGX545 has. The SGX530
 has one ([porting/single-context.md](porting/single-context.md)). Its microkernel, TA and
-3D share list 0, so every VM maps the firmware heaps, and the directory addresses the
-microkernel loads sit in GPU-writable memory. 7.1 items 2 and 4 don't hold there. A client
-can read the firmware's structures and the other clients' commands, corrupt the
-microkernel, forge another client's completion, and point translation at any physical
-memory. **Nothing in this section is claimed for single-context cores.** They run only with
+3D share list 0, so every VM maps the firmware heaps. 7.1 items 2 and 4 don't hold there.
+A client can read the firmware's structures and the other clients' commands, corrupt the
+microkernel, forge another client's completion, and make a job translate through another
+client's directory. A read-only table of directory addresses keeps it from translating
+through memory no directory maps. **Nothing in this section is claimed for single-context cores.** They run only with
 the module parameter `allow_unisolated=1`, and then report
 `DRM_POWERVR_SGX_QUIRK_UNISOLATED` (D13).
 

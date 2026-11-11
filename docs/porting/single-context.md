@@ -10,6 +10,25 @@ at a context". **The SGX545 (CE5300, Cedarview) keeps its behavior exactly.** Ev
 field holds the value the code uses today, and every new branch is taken only on a family
 that sets the new property.
 
+## 0. Three properties, not one mode
+
+What the SGX530 lacks is three independent properties of the core table. A core can have any
+mix of them. The SGX535 (docs/porting/cores/sgx535.md) has 16 directory lists and the
+SGX545's banks, but one kick and the SGX530's low registers and 2D unit.
+
+| Property | Table | What depends on it | SGX545 | SGX530 | SGX535 |
+|---|---|---|---|---|---|
+| Memory contexts | `features & MULTIPLE_MEM_CONTEXTS`, `num_dir_lists`, `regs.bif_bank*` | section 2 (list 0 shared, firmware heaps in every VM, PD table), the opt-in (D13), the secure-mode rule and feature bit 2, no overlap | multi | single | multi |
+| Event kicks | `features & MULTI_EVENT_KICK`, `regs.event_kick2` | the init kick (section 4) | two | one | one |
+| Low registers and 2D unit | `regs.core_id`, `clkgate*`, `soft_reset_*`, `clkgatectl2` | identify, clocks, reset | the 545's | the 530's | the 530's |
+| Address space | `va_bits`, `heaps` | section 5 | 32 | 28 | 32 |
+| Errata | `quirks` | section 3 (BRN_28889) | none | BRN_28889 | (not listed) |
+| PDS data interleave | `features & PDS_DATA_INTERLEAVE_2DWORDS` | the microkernel entry program (section 4) | two words | unknown | unknown |
+
+The usable check takes each on its own: a multi-context core with one kick (the 535's mix)
+is accepted. KUnit `powervr_sgx_regs` runs a 535-shaped entry through the usable check, the
+reset, the clocks and the init kick.
+
 ## 1. What differs, and where it goes
 
 | SGX530 difference | Table entry | What the code does with it |
@@ -62,12 +81,19 @@ On the SGX530 the EDM, TA, 3D and 2D all translate through list 0. So:
    so every microkernel start (boot, recovery, resume) finds it there. The scratch
    directory that soaks up stale faults during recovery stays unshared: the microkernel
    isn't running then, and a scratch page must not land in the shared tables.
-3. **The microkernel switches list 0** (agreed with the SGX530 microkernel session,
-   2026-11-11). At a scene's first TA kick, and at a transfer, it writes the job's
-   directory (HW context word 2, as on the 545) into `DIR_LIST_BASE0` and pulses
-   `INVALDC`. At init it saves what `DIR_LIST_BASE0` holds, the firmware directory, in
-   control-block word 0x27. Before it raises `SW_EVENT` with nothing in flight it writes
-   that back, with `INVALDC`. It never touches a bank register.
+3. **The microkernel switches list 0, from a read-only PD table** (agreed with the
+   SGX530 microkernel session, 2026-11-11; its c91005a). The table is one page of 1024
+   `DIR_LIST_BASE0` values in the kernel code heap (`PDTABLE_OFFSET`, mapped
+   `READONLY`). Slot 0 and every free slot hold the firmware directory. Each VM takes a
+   slot at creation (`pvrsgx_fw_pd_slot_get()`), and its HW render and transfer contexts
+   carry the slot in word 2, not an address (`pvrsgx_vm_pd_word()`). The microkernel
+   masks it with 1023. Its address reaches the microkernel through the loader patch
+   `UKFW_PDTABLE`. At a scene's first TA kick, and at a transfer, the microkernel writes
+   the job's table entry into `DIR_LIST_BASE0` and pulses `INVALDC`. It writes slot 0
+   back before the first completion write of a render or a transfer, and on the idle
+   path. It never touches a bank register. Its heartbeat is control-block word 0x2a (+1
+   per event), and words 0x28/0x29 are the last timed-out wait and the count. The
+   devcoredump has the whole control block.
 4. **A directory is freed only when list 0 can't hold it.** VM teardown already waits for
    every job of the VM, and the VM's kernel objects keep it until a later render. The
    microkernel's restore can still come after a job's completion shows, so before
@@ -81,10 +107,12 @@ On the SGX530 the EDM, TA, 3D and 2D all translate through list 0. So:
 P2 and P3 (UAPI.md 7.2) are open on the 530, as they are on the 545 under the DDK
 microkernel. On the 545, P2 failed even for pages mapped `EDM_PROTECT`. On the 530 it is
 untested (fact-sheet gap 6, extended: a client task loads from an `EDM_PROTECT`
-kernel-data page). Worse, the directory addresses the microkernel loads (HW context
-word 2, control-block word 0x27) sit in GPU-writable pages, so a client that writes one
-can make the GPU translate through any physical memory. On a single-context core,
-access to the render node gives access to all of memory.
+kernel-data page). A client can read the firmware's structures and the other clients'
+commands, corrupt the microkernel's state (a hang, bounded by the job timeout, or another
+client's completion forged), and write any HW context's slot word. The PD table bounds the
+last one: a slot names only a directory the kernel wrote, so a client can make a job
+translate through another client's directory, but never through memory no directory
+maps.
 
 **Decision D13 (Joseph, 2026-11-11): opt-in.** A single-context core runs only with the
 module parameter `powervr_sgx.allow_unisolated=1`.
@@ -96,10 +124,9 @@ module parameter `powervr_sgx.allow_unisolated=1`.
 - No isolation claim for single-context cores anywhere, upstream included.
 - Multi-context cores (the 545) never need the parameter and never report the quirk.
 
-A hardening for later, not agreed yet and not needed for the opt-in: move the directory
-addresses into a host-written table the GPU sees read-only, with HW contexts naming an
-entry rather than an address. That would close the physical-memory hole and leave only
-reads and corruption of the microkernel's own state (hangs, early fences).
+The PD table was first proposed as hardening on top of the opt-in. It is in because it
+costs one page and a slot per VM, and without it a writable directory word would hand any
+render-node client all of physical memory.
 
 **Before a second client runs on hardware**, test the restore of point 3 and the check of
 point 4 (the coordinator's condition): two VMs, each with jobs, the first one closed while
@@ -126,20 +153,32 @@ together are harmless.
   header checks are unchanged: magic, interface version, CRC, entries, patches, and the
   warning for another core revision.
 - **Mode:** secure mode (`PVRSGX_UKFW_SECURE`: firmware heaps in no client directory)
-  can't hold on the 530. On a single-context core the loader refuses an image that claims
-  it, and the 530 image declares features 0. A multi-context core still requires it.
+  can't hold on the 530. A single-context core needs `PVRSGX_UKFW_SINGLE_CONTEXT` (bit 2:
+  list 0 with the jobs, directories from the PD table) and not secure mode. A
+  multi-context core refuses bit 2 and still requires secure mode. The 530 image declares
+  features 0x4.
+- **Entry programs:** the SGX545's PDS data store interleaves DS0 and DS1 two words at a
+  time (`PDS_DATA_INTERLEAVE_2DWORDS`). The 530's doesn't, and whether it interleaves one
+  word at a time is a guess. On a core without the feature, `pvrsgx_pds_entry()` writes
+  the memory row [doutu, 0, 0, 2] and selects (D0(0), D1(1), D0(1), D0(0)). That feeds
+  DOUTU (doutu, 2, 0) under either layout (the 530 microkernel session's construction). The
+  545 keeps its program. If the init kick runs (`INIT_STATUS` 1, the heartbeat moving), the
+  program works on the 530.
 - **Start:** the same sequence, with three per-family differences: no `CLKGATECTL2`
   write; the reset leaves list 0 = firmware directory, with no bank registers; the init
   kick goes to `EVENT_KICK` (`init_kick()`). The host writes `INIT_STATUS` 0 before the
   kick, as today, and the microkernel tells the init kick from a CCB kick by that word.
   `EVENT_KICKER`'s 28-bit field holds the kicker buffer, which is below 256 MiB in the
   530's layout.
-- **What the 530 still lacks:** the event-PDS registers and `EDM_TASK_REG0/1`, which
-  enter the microkernel (`SGX545_CR_*` on the 545, measured, not in any GPL header), and
-  any init-script part 2 the 530 microkernel needs. Until its session names them, the
-  family isn't usable (`pvrsgx_core_family_usable()`), and the probe stops after the ID
-  read. A part entry, with the revision read on hardware, comes when the microkernel
-  starts.
+- **What the 530 still lacks:** the event-PDS registers, which enter the microkernel
+  (`SGX545_CR_*` on the 545, measured, not in any GPL header). The best guess (G) is the
+  545's offsets: 0xa58 (enable, 0x2204b00f), 0xa68 (base), 0xa6c/0xa70 (data), since the
+  code bases below and `PDS_EXEC_BASE` above sit at the 545's offsets (K). They go into
+  the table with the first microkernel start on hardware (stage 1: read each once after
+  reset, write the base and read it back, kick, and `INIT_STATUS` goes to 1), together
+  with the part entry and its measured revision. Until then the family isn't usable, and
+  the probe stops after the ID read. `EDM_TASK_REG0/1` aren't needed: the heartbeat word
+  replaces them. Init-script part 2 is empty through stage 3.
 - **Runtime PM:** unchanged. When `sgx_pwrdm` turns off the core loses everything, and
   resume already runs the full start.
 
