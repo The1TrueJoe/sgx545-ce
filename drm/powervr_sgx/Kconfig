@@ -43,7 +43,8 @@ config DRM_POWERVR_SGX_KUNIT_TEST
 	help
 	  Unit tests of the driver's firmware file checks (a well-formed
 	  image is accepted, and every malformed header, table and checksum
-	  is refused), of kernel-object teardown at unbind and of the core
-	  table. The tests need no GPU.
+	  is refused), of kernel-object teardown at unbind, of the core
+	  table and of a render target's tiling numbers. The tests need no
+	  GPU.
 
 	  For developers; if unsure, say N.

@@ -108,7 +108,7 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 		struct drm_powervr_sgx_dev_query_limits lim = {
 			.rt_max_width = 2048,
 			.rt_max_height = 2048,
-			.rt_max_samples = 1,
+			.rt_max_samples = 4,
 			.pb_min_pages = 0x100,
 			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
 			.pb_max_pages = 0x8000,

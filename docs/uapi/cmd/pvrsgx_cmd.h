@@ -100,6 +100,7 @@ struct pvrsgx_cmd_ctx {
 	} heaps[PVRSGX_CMD_HEAP_MAX];	/* size 0: refuse every address */
 	u64 limits[PVRSGX_CMD_LIMIT_MAX];
 	u32 rt_pad_width, rt_pad_height;	/* the RT's size in whole tiles */
+	u32 rt_samples;				/* 0 is 1 */
 	bool (*mapped)(const void *priv, u64 addr, u64 size);
 	const void *priv;
 };
