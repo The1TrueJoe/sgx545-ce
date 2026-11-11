@@ -1,0 +1,34 @@
+# The SGX545 serial microkernel image is byte-for-byte reproducible from source.
+# CI rebuilds it and fails on any drift from the recorded golden hash
+# (ukernel/golden/sgx545.sha256) -- the image itself is never checked in -- so a
+# refactor meant to preserve the image is caught the moment it does not. Every
+# later tooling step (core config, symbolic assembler, assembling through the
+# ISA description) is gated on this check staying green.
+name: ukernel-golden
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - ukernel/**
+      - tools/isa/**
+      - .github/workflows/ukernel-golden.yml
+  pull_request:
+    paths:
+      - ukernel/**
+      - tools/isa/**
+
+permissions:
+  contents: read
+
+jobs:
+  golden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rebuild the SGX545 serial image and verify its hash
+        run: python3 ukernel/golden/check.py
