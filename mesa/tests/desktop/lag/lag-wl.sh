@@ -12,7 +12,9 @@ W=${1:?workload}
 DT=0.016
 
 term_window() {   # an 80x24 terminal at a known place; prints its window id
-	xfce4-terminal --geometry=80x24+120+120 --title=lagterm --hold -x sh -c 'echo lag; exec sleep 600' &
+	# (its output away from the $(...) this runs in, or that waits for it)
+	xfce4-terminal --geometry=80x24+120+120 --title=lagterm --hold -x sh -c 'echo lag; exec sleep 600' \
+		> /dev/null 2>&1 &
 	# (the first terminal of a session takes a while to map on these Atoms)
 	for i in $(seq 1 120); do
 		id=$(xdotool search --name '^lagterm$' 2>/dev/null | head -1)

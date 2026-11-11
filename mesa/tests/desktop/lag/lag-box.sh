@@ -151,6 +151,7 @@ sampler=$!
 PERF=
 for p in /usr/bin/perf /usr/sbin/perf; do [ -x "$R$p" ] && PERF="chroot $R $p" && break; done
 [ -z "$PERF" ] && command -v perf > /dev/null && PERF=perf
+[ -n "${NOPERF:-}" ] && PERF=
 [ -z "$PERF" ] && echo "no perf in the root or on the box: no CPU profiles" >> "$OUT/notes.txt"
 
 for w in "$@"; do
