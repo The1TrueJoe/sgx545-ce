@@ -141,6 +141,9 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
    zs = ctx->framebuffer.zsbuf.texture
            ? sgx_resource(ctx->framebuffer.zsbuf.texture)
            : NULL;
+   bool clears_only = sgx_recording(ctx) && ctx->frame_clears &&
+                      sgxws_frame_objects(ctx->hw) == ctx->frame_clears;
+
    if (sgx_recording(ctx) && ctx->recording != res) {
       SGX_DBG(SYNC, "target switch: %s %ux%u -> %s %ux%u\n",
               util_format_short_name(ctx->recording->base.format),
@@ -149,6 +152,7 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
               res->base.height0);
       ctx->recording = NULL; /* sgxws_begin flushes the other frame */
       ctx->stats.fl_switch++;
+      ctx->stats.fl_switch_clear += clears_only;
    } else if (sgx_recording(ctx) && ctx->recording_zs != zs) {
       SGX_DBG(SYNC, "depth/stencil buffer switch under %s %ux%u\n",
               util_format_short_name(res->base.format), res->base.width0,
@@ -156,9 +160,13 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
       sgxws_flush(ctx->hw, 0);
       ctx->recording = NULL;
       ctx->stats.fl_switch++;
+      ctx->stats.fl_switch_clear += clears_only;
    }
-   if (!sgx_recording(ctx) && !zls_target(ctx, zs, rw, rh, zs_cleared, &t))
-      return false;
+   if (!sgx_recording(ctx)) {
+      if (!zls_target(ctx, zs, rw, rh, zs_cleared, &t))
+         return false;
+      ctx->frame_clears = 0;
+   }
    if (sgxws_begin(ctx->hw, rt, &t))
       return false;
    ctx->recording = res;
@@ -244,9 +252,12 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
             rgba[1] = 0.0f;
          rgba[2] = 0.0f;
       }
+      unsigned n0 = sgxws_frame_objects(ctx->hw);
+
       sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? rgba : black,
                   (float)depth, have_depth && (buffers & PIPE_CLEAR_DEPTH),
                   wmask, clear_stencil ? (int)stencil : -1);
+      ctx->frame_clears += sgxws_frame_objects(ctx->hw) - n0;
    }
    simple_mtx_unlock(&screen->lock);
 }
@@ -1566,6 +1577,9 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
             return;
          }
          sgx_tex_words(view, ctx->samplers[unit], &fsk[fs->dep_sa[j]]);
+         /* an F16 texel: the whole T3, as for a PDS sample's */
+         if (fs->dep_f16[j])
+            fsk[fs->dep_sa[j] + 3] = 0x01028800u;
          sgx_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
          sampled |= 1u << unit;
          SGX_DBG(

@@ -130,12 +130,13 @@ sgx_stats_report(struct sgx_context *ctx)
       ws.ns_sync_wait * ms);
    fprintf(
       stderr,
-      "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
-      "readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
+      "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u "
+      "(%u of clears only), readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
       ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch,
-      ctx->stats.fl_read, ctx->stats.fl_deferred, ctx->stats.zc_draws,
-      ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
-      (unsigned)(ctx->vcache_bytes >> 10), ws.ns_fence_wait * ms,
+      ctx->stats.fl_switch_clear, ctx->stats.fl_read, ctx->stats.fl_deferred,
+      ctx->stats.zc_draws, ctx->stats.vc_hits, ctx->stats.vc_misses,
+      ctx->stats.vc_uncacheable, (unsigned)(ctx->vcache_bytes >> 10),
+      ws.ns_fence_wait * ms,
       ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
       ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout
                            : 0,

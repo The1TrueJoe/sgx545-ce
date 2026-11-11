@@ -982,18 +982,25 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
       sp[1][0] = t0;
       sp[1][1] = t1;
    }
-   /* x * 1 + y with x a constant: y * 1 + x (exact either way) */
+   /* x * 1 + y with x a constant: y * 1 + x, and x * 1 - y: y * -1 + x
+    * (exact either way; src0 takes no constant and no negate) */
    bool one = true;
    for (unsigned l = 0; l < 2; l++)
       one &= sp[1][l].file == SGX_F_K && sp[1][l].h16 && !sp[1][l].neg &&
              !sp[1][l].abs && (sp[1][l].n & 0xffff) == 0x3c00;
-   if (one && !is_rpa(&sp[0][0]) && is_rpa(&sp[2][0]) && !sp[2][0].neg &&
-       is_rpa(&sp[2][1]) && !sp[2][1].neg) {
+   bool neg2 = sp[2][0].neg && sp[2][1].neg && !sp[2][0].abs &&
+               !sp[2][1].abs && !sgx_debug(c, SGX_DBG_NO_CONST_SWAP);
+   if (one && !is_rpa(&sp[0][0]) && is_rpa(&sp[2][0]) && is_rpa(&sp[2][1]) &&
+       ((!sp[2][0].neg && !sp[2][1].neg) || neg2)) {
       struct sgx_ref t0 = sp[0][0], t1 = sp[0][1];
       sp[0][0] = sp[2][0];
       sp[0][1] = sp[2][1];
       sp[2][0] = t0;
       sp[2][1] = t1;
+      if (neg2) {
+         sp[0][0].neg = sp[0][1].neg = 0;
+         sp[1][0].neg = sp[1][1].neg = 1; /* -1: -c45 below */
+      }
    }
    bool neg0 = sp[0][0].neg;
    sp[0][0].neg = sp[0][1].neg = 0;
@@ -2984,13 +2991,43 @@ iter_reg(const struct sgx_iter *it)
  * component) needs no plain iteration: the PDS samples from the set itself.
  * Its iteration goes and the later ones move down, before anything is
  * emitted, since iterations fill PA in PDS program order (PDS.md "DOUTI");
- * c->sample_set maps each such load to its set + 1 for emit_tex. */
+ * c->sample_set maps each such load to its set + 1 for emit_tex. A
+ * projected sample (find_projected: xy and w of this load) counts too: the
+ * PDS projects as it samples, through a swizzle mov or not. */
+static bool
+proj_use(struct sgx_ctx *c, nir_intrinsic_instr *ld, nir_src *u)
+{
+   nir_instr *ui = nir_src_use_instr(u);
+   if (ui->type == nir_instr_type_alu) {
+      /* a swizzle mov find_projected took out of the program */
+      nir_alu_instr *m = nir_instr_as_alu(ui);
+      if (m->op != nir_op_mov || !_mesa_set_search(c->skip, &m->instr))
+         return false;
+      nir_foreach_use_including_if (v, &m->def) {
+         if (nir_src_is_if(v) || !proj_use(c, ld, v))
+            return false;
+      }
+      return true;
+   }
+   if (ui->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *t = nir_instr_as_tex(ui);
+   struct hash_entry *he = _mesa_hash_table_search(c->proj, t);
+   int ci = nir_tex_instr_src_index(t, nir_tex_src_coord);
+   int pi = nir_tex_instr_src_index(t, nir_tex_src_projector);
+   return he && he->data == ld && (u == &t->src[ci].src || u == &t->src[pi].src);
+}
+
 static bool
 sample_only_load(struct sgx_ctx *c, nir_intrinsic_instr *ld, unsigned comps)
 {
+   bool proj = !sgx_debug(c, SGX_DBG_NO_PROJ_ALONE) && comps == 4 &&
+               ld->def.num_components == 4;
    nir_foreach_use_including_if (u, &ld->def) {
       if (nir_src_is_if(u))
          return false;
+      if (proj && proj_use(c, ld, u))
+         continue;
       nir_instr *ui = nir_src_use_instr(u);
       if (ui->type != nir_instr_type_tex)
          return false;
@@ -3098,6 +3135,151 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
       memmove(it, it + 1, (c->n_iters - n - 1) * sizeof(*it));
       c->n_iters--;
    }
+}
+
+/* PDS samples alone (no coordinate iteration of their own) each placed right
+ * after a plain iteration of another set, F16 ones first, so the driver can
+ * merge the sample into that DOUTI (the DDK's `iterate tc0; sample tc1`):
+ * fewer DOUTIs a pixel. Iterations fill PA in list order (PDS.md "DOUTI"), so
+ * the input PA registers are renamed to the new order, after allocation. Not
+ * when a repeat or a PA vreg would straddle a moved boundary. */
+static unsigned
+iter_regs(const struct sgx_iter *it)
+{
+   return it->sample ? (it->f16 ? 2 : 1)
+          : it->f16  ? (it->comps + 1) / 2
+                     : it->comps;
+}
+
+static const struct sgx_sample *
+iter_sample(struct sgx_ctx *c, const struct sgx_iter *it)
+{
+   for (unsigned i = 0; i < c->n_samples; i++)
+      if (!c->samples[i]->dependent && c->samples[i]->pa == it->pa)
+         return c->samples[i];
+   return NULL;
+}
+
+static bool
+pa_remap_ref(struct sgx_ctx *c, struct sgx_ref *r, unsigned span,
+             const int *map, bool apply)
+{
+   unsigned reg, regs = span;
+   if (r->file == SGX_F_PA) {
+      reg = r->h16 ? r->n / 2 : r->n;
+   } else if (r->file == SGX_F_V) {
+      struct sgx_vreg *v = sgx_vreg(c, r->n);
+      if (!v->pa || v->phys < 0)
+         return true;
+      reg = v->phys;
+      regs = MAX2(regs, v->half ? (v->size + 1) / 2 : v->size);
+   } else {
+      return true;
+   }
+   if (reg >= c->n_pa_inputs)
+      return true;
+   for (unsigned j = 1; j < regs && reg + j < c->n_pa_inputs; j++)
+      if (map[reg + j] != map[reg] + (int)j)
+         return false;
+   if (!apply)
+      return true;
+   if (r->file == SGX_F_PA)
+      r->n = r->h16 ? 2 * map[reg] + (r->n & 1) : (unsigned)map[reg];
+   return true;
+}
+
+static void
+interleave_samples(struct sgx_ctx *c)
+{
+   if (!c->opts->pds_samples_alone || c->stage != MESA_SHADER_FRAGMENT ||
+       sgx_debug(c, SGX_DBG_NO_INTERLEAVE) || c->n_iters < 2 ||
+       c->n_iters > 16)
+      return;
+   /* partners: plain iterations of a coordinate set no other sample reads */
+   int partner[16], order[16], n = 0;
+   bool taken[16] = {0}, any = false;
+   for (unsigned i = 0; i < c->n_iters; i++)
+      partner[i] = -1;
+   for (unsigned s = 0; s < c->n_iters; s++) {
+      const struct sgx_iter *it = &c->iters[s];
+      const struct sgx_sample *sm = it->sample ? iter_sample(c, it) : NULL;
+      if (!sm || sm->coord_pa >= 0)
+         continue;
+      for (int f16 = 1; f16 >= 0 && partner[s] < 0; f16--) {
+         for (unsigned p = 0; p < c->n_iters; p++) {
+            const struct sgx_iter *pi = &c->iters[p];
+            bool busy = taken[p];
+            for (unsigned k = 0; k < c->n_samples && !busy; k++)
+               busy |= !c->samples[k]->dependent &&
+                       c->samples[k]->coord_pa == (int)pi->pa;
+            if (pi->sample || pi->pointcoord || pi->set >= SGX_MAX_SETS ||
+                pi->f16 != (bool)f16 || busy)
+               continue;
+            partner[s] = p;
+            taken[p] = true;
+            any = true;
+            break;
+         }
+      }
+   }
+   if (!any)
+      return;
+   /* the new order: each partner followed by its sample */
+   for (unsigned i = 0; i < c->n_iters; i++) {
+      if (c->iters[i].sample && partner[i] >= 0)
+         continue;
+      order[n++] = i;
+      for (unsigned s = 0; s < c->n_iters; s++)
+         if (partner[s] == (int)i)
+            order[n++] = s;
+   }
+   int map[128];
+   for (unsigned r = 0; r < 128; r++)
+      map[r] = r;
+   unsigned at = c->iters[0].pa;
+   for (unsigned k = 0; k < c->n_iters; k++) {
+      const struct sgx_iter *it = &c->iters[order[k]];
+      for (unsigned j = 0; j < iter_regs(it) && it->pa + j < 128; j++)
+         map[it->pa + j] = at + j;
+      at += iter_regs(it);
+   }
+   /* every PA operand keeps its registers in order, or nothing moves */
+   for (int apply = 0; apply < 2; apply++) {
+      list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
+         for (unsigned k = 0; k < i->nops; k++) {
+            unsigned span = i->op[k].step && i->rpt > 1 ? i->rpt : 1;
+            if (i->op[k].h16)
+               span = (span + 1) / 2;
+            if (!pa_remap_ref(c, &i->op[k], span, map, apply))
+               return;
+         }
+      }
+      if (!apply)
+         continue;
+      unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
+      for (unsigned v = 0; v < nv; v++) {
+         struct sgx_vreg *r = sgx_vreg(c, v);
+         if (r->pa && r->phys >= 0 && (unsigned)r->phys < c->n_pa_inputs)
+            r->phys = map[r->phys];
+      }
+   }
+   struct sgx_iter old[16];
+   memcpy(old, c->iters, c->n_iters * sizeof(old[0]));
+   for (unsigned i = 0; i < c->n_samples; i++) {
+      struct sgx_sample *s = c->samples[i];
+      if (!s->dependent)
+         s->pa = map[s->pa];
+      if (s->coord_pa >= 0)
+         s->coord_pa = map[s->coord_pa];
+   }
+   for (unsigned k = 0; k < c->n_iters; k++) {
+      c->iters[k] = old[order[k]];
+      c->iters[k].pa = map[old[order[k]].pa];
+   }
+   if (c->colour_pa < c->n_pa_inputs)
+      c->colour_pa = map[c->colour_pa];
+   if (c->depth_pa < c->n_pa_inputs)
+      c->depth_pa = map[c->depth_pa];
 }
 
 static void
@@ -3473,12 +3655,18 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
    unsigned read = nir_def_components_read(&tex->def);
    if (s->f16_return) {
       /* returned as F16 pairs in RGBA order, whatever the texel's byte
-       * order (the TAG converts by channel; capture, T1 0x0c): the channels
-       * are the halves themselves */
+       * order (the TAG converts by channel; capture, T1 0x0c; hardware,
+       * hwt_smp for a dependent smp): the channels are the halves
+       * themselves */
       struct sgx_ref hr[4];
       for (unsigned k = 0; k < 4; k++) {
-         hr[k] = ref(SGX_F_PA, 2 * s->pa + k);
-         hr[k].h16 = 1;
+         if (s->dependent) {
+            hr[k] = raw;
+            hr[k].comp = k;
+         } else {
+            hr[k] = ref(SGX_F_PA, 2 * s->pa + k);
+            hr[k].h16 = 1;
+         }
       }
       set_refs(c, &tex->def, hr, 4);
       return;
@@ -3561,9 +3749,12 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    struct hash_entry *ss =
       ls.is_ssa ? _mesa_hash_table_search(c->sample_set, nir_def_instr(ls.ssa))
                 : NULL;
+   if (he && !ss)
+      ss = _mesa_hash_table_search(c->sample_set, he->data);
    if (ss) {
       /* a set only samples read: no plain iteration (drop_sample_only_iters) */
       s->dependent = false;
+      s->proj = he != NULL;
       s->set = (uintptr_t)ss->data - 1;
    } else if (he) {
       nir_intrinsic_instr *load = he->data;
@@ -3711,8 +3902,21 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
                    form == SGX_OP_MOV ? 1 : 2, ts, &NOF, 0);
          cr[0] = vref(t, 0);
       }
-      unsigned rv = new_vreg(c, 1);
-      raw = vref(rv, 0);
+      /* a mediump texel returned as F16 into two registers (the driver
+       * sets the state's T3 for it): when both channel pairs are read, it
+       * saves their two unpacks for one more register */
+      unsigned rd = nir_def_components_read(&tex->def);
+      s->f16_return = c->opts->f16_samples && c->opts->dep_f16_samples &&
+                      tex->def.bit_size == 16 && tex != c->colour_tex &&
+                      (rd & 3) && (rd & 12) &&
+                      !sgx_debug(c, SGX_DBG_NO_DEP_F16) &&
+                      !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
+      if (s->f16_return) {
+         raw = href(new_vreg16(c, 4), 0);
+      } else {
+         unsigned rv = new_vreg(c, 1);
+         raw = vref(rv, 0);
+      }
       i->ndst = 1;
       i->nops = 2;
       i->op[0] = raw;
@@ -5476,8 +5680,11 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             odd[r->n] = true;
             continue;
          }
-         /* (an F16 vreg by register: a repeat steps a register at a time) */
+         /* (an F16 vreg by register: a repeat steps a register at a time;
+          * a dependent F16 sample writes two) */
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
+         if (i->kind == SGX_INS_SAMPLE && k < i->ndst && i->smp->f16_return)
+            n = 2;
          unsigned first = half ? r->comp / 2 : r->comp;
          bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) ||
                       i->kind == SGX_INS_SAMPLE ||
@@ -6479,6 +6686,14 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"nophases", SGX_DBG_NO_PHASES,
     "Keep a discarding fragment program in one phase"},
+   {"nointerleave", SGX_DBG_NO_INTERLEAVE,
+    "Keep PDS-only samples after the iterations (no cross-set DOUTI merge)"},
+   {"nodepf16", SGX_DBG_NO_DEP_F16,
+    "Unpack a dependent sample's RGBA8 texel, though the driver can return F16"},
+   {"noprojalone", SGX_DBG_NO_PROJ_ALONE,
+    "Keep the plain iteration of a varying only projected samples read"},
+   {"noconstswap", SGX_DBG_NO_CONST_SWAP,
+    "Keep 1 * k - x as is (a limm for src0), not x * -1 + k"},
    {"unrollexits", SGX_DBG_UNROLL_EXITS,
     "Unroll loops that can exit early (into select trees)"},
    {"notexcolor", SGX_DBG_NO_TEX_COLOR,
@@ -6582,6 +6797,8 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       drop_self_moves(c);
    if (!c->failed)
       chain_efos(c);
+   if (!c->failed)
+      interleave_samples(c);
    if (!c->failed) {
       uniform_layout(c);
       ret = sgx_finish_program(c, out);

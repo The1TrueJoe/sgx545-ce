@@ -63,6 +63,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.pds_samples_alone = pds_alone;
       opts.f16_samples = f16_samples;
       opts.split_phases = split_phases;
+      opts.dep_f16_samples = dep_f16;
       opts.driver_consts = true;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
@@ -103,6 +104,7 @@ class sgx_compile_test : public ::testing::Test {
    bool pds_alone = false;
    bool f16_samples = false;
    bool split_phases = false;
+   bool dep_f16 = false;
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -509,6 +511,139 @@ TEST_F(sgx_compile_test, fragment_f16_sample_not_unpacked)
    std::string s = disasm();
    EXPECT_EQ(s.find("pck.f16.u8"), std::string::npos) << s;
    EXPECT_EQ(s.find("pck.f32.u8"), std::string::npos) << s;
+}
+
+/* ... and a projected sample (TXP: xy and w of one vec4 varying): the PDS
+ * projects as it samples, so the varying isn't iterated either */
+TEST_F(sgx_compile_test, fragment_proj_sample_only_varying_not_iterated)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *tc =
+      var(nir_var_shader_in, glsl_vec4_type(), "tc", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   nir_def *v = nir_load_var(&b, tc);
+   nir_tex_instr *tx = nir_tex_instr_create(b.shader, 4);
+   tx->op = nir_texop_tex;
+   tx->sampler_dim = GLSL_SAMPLER_DIM_2D;
+   tx->dest_type = nir_type_float32;
+   tx->coord_components = 2;
+   tx->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
+   tx->src[1] =
+      nir_tex_src_for_ssa(nir_tex_src_projector, nir_channel(&b, v, 3));
+   tx->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &sd->def);
+   tx->src[3] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref, &sd->def);
+   nir_def_init(&tx->instr, &tx->def, 4, 32);
+   nir_builder_instr_insert(&b, &tx->instr);
+   nir_def *texel = &tx->def;
+   nir_store_var(&b, col, nir_fmul(&b, texel, nir_load_var(&b, c4)), 0xf);
+
+   pds_alone = true;
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   unsigned plain = 0, proj = 0;
+   for (unsigned i = 0; i < out.n_iters; i++) {
+      plain += !out.iters[i].sample;
+      proj += out.iters[i].sample && out.iters[i].proj;
+   }
+   EXPECT_EQ(plain, 1u); /* c only */
+   EXPECT_EQ(proj, 1u);
+}
+
+/* dep_f16_samples: a dependent mediump texel whose four channels are read
+ * returns F16 into two registers (the driver's T3), and isn't unpacked */
+TEST_F(sgx_compile_test, fragment_dependent_f16_sample_not_unpacked)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   c4->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   smp->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   nir_def *c = nir_load_var(&b, uv);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_fadd_imm(&b, nir_fmul(&b, c, c), 0.1);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *texel = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_fmul(&b, texel, nir_load_var(&b, c4)), 0xf);
+
+   f16_samples = dep_f16 = true;
+   ASSERT_TRUE(compile(true)) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_TRUE(out.samples[0].dependent);
+   EXPECT_TRUE(out.samples[0].f16);
+   EXPECT_EQ(disasm().find("pck.f16.u8"), std::string::npos) << disasm();
+}
+
+/* two plain varyings and two projected PDS-only samples: each sample comes
+ * right after a plain iteration (the driver merges it into that DOUTI) */
+TEST_F(sgx_compile_test, fragment_pds_samples_interleaved)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *d =
+      var(nir_var_shader_in, glsl_vec4_type(), "d", VARYING_SLOT_VAR1);
+   nir_variable *tc[2] = {
+      var(nir_var_shader_in, glsl_vec4_type(), "t0", VARYING_SLOT_VAR2),
+      var(nir_var_shader_in, glsl_vec4_type(), "t1", VARYING_SLOT_VAR3)};
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *acc = nir_fmul(&b, nir_load_var(&b, a), nir_load_var(&b, d));
+   for (unsigned k = 0; k < 2; k++) {
+      nir_variable *smp = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+         k ? "s1" : "s0", -1);
+      smp->data.binding = k;
+      nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+      nir_def *v = nir_load_var(&b, tc[k]);
+      nir_tex_instr *tx = nir_tex_instr_create(b.shader, 4);
+      tx->op = nir_texop_tex;
+      tx->sampler_dim = GLSL_SAMPLER_DIM_2D;
+      tx->dest_type = nir_type_float32;
+      tx->coord_components = 2;
+      tx->texture_index = tx->sampler_index = k;
+      tx->src[0] =
+         nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
+      tx->src[1] =
+         nir_tex_src_for_ssa(nir_tex_src_projector, nir_channel(&b, v, 3));
+      tx->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &sd->def);
+      tx->src[3] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref, &sd->def);
+      nir_def_init(&tx->instr, &tx->def, 4, 32);
+      nir_builder_instr_insert(&b, &tx->instr);
+      acc = nir_fmul(&b, acc, &tx->def);
+   }
+   nir_store_var(&b, col, acc, 0xf);
+
+   pds_alone = true;
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_iters, 4u);
+   for (unsigned i = 0; i < 4; i++)
+      EXPECT_EQ((bool)out.iters[i].sample, (bool)(i & 1)) << "entry " << i;
+   /* PA in list order */
+   for (unsigned i = 1; i < 4; i++)
+      EXPECT_EQ(out.iters[i].pa, out.iters[i - 1].pa + out.iters[i - 1].regs);
 }
 
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test

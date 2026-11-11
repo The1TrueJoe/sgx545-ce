@@ -9,6 +9,8 @@ last line moves its result to o0 and ends the program (hwt_lib.out), before the
 winsys's colour epilogue. Tests that poke the replay (a fourth field) don't
 apply and are skipped. A suite may give BUFS = {name: [dwords]}:
 the data buffer's first dwords for that test; BUF in a line is its address.
+TEXS = {name: texel} gives that test an 8x8 RGBA8 texture in the texture heap,
+every texel the same; TEX in a line is its address.
 
 Environment: BOX_SH (an ssh helper: `$BOX_SH 'cmd'` runs cmd on the box, stdin
 passed through), SGX_HWT (the box's path to sgx_hwt; default: the one the
@@ -42,6 +44,7 @@ def main():
     sys.path.insert(0, os.getcwd())
     suite = importlib.import_module(a.suite)
     bufs = getattr(suite, "BUFS", {})
+    texs = getattr(suite, "TEXS", {})
     tests, text = [], []
     for t in suite.TESTS:
         name, lines, expect = t[0], t[1], t[2]
@@ -55,6 +58,8 @@ def main():
         text.append(f"test {name}")
         if name in bufs:
             text.append("buf " + " ".join(f"{w:08x}" for w in bufs[name]))
+        if name in texs:
+            text.append(f"tex {texs[name]:08x}")
         text += conv + ["end"]
     src = "\n".join(text) + "\n"
     if a.dry:

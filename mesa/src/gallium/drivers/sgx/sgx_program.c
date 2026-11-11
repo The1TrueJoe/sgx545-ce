@@ -455,6 +455,7 @@ struct prog_info {
    struct {
       unsigned at, sampler, raw;
       unsigned phase; /* split: at indexes code1 */
+      bool f16;       /* the texel returns F16, two registers from raw */
       uint64_t smp;
    } deps[SGX_MAX_DEP_SAMPLES];
    unsigned n_deps;
@@ -561,6 +562,7 @@ read_program(const struct sgx_shader *out, struct sgx_pipe_shader *so,
       info->deps[info->n_deps].raw = x->reg;
       info->deps[info->n_deps].smp = x->smp;
       info->deps[info->n_deps].phase = x->phase;
+      info->deps[info->n_deps].f16 = x->f16;
       info->n_deps++;
    }
    for (unsigned i = 0; i < out->n_blocks; i++) {
@@ -725,6 +727,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                       screen->core->f16_sample_return &&
                       !(sgx_drv_debug & SGX_DEBUG_NO_F16_SAMPLES);
+   /* and those of dependent samples (sgx_draw.c sets their T3) */
+   opts.dep_f16_samples =
+      opts.f16_samples && !(sgx_drv_debug & SGX_DEBUG_NO_DEP_F16_SAMPLES);
    opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
                      nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
                      !(sgx_drv_debug & SGX_DEBUG_NO_FF_MEDIUMP);
@@ -945,6 +950,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          for (unsigned j = 0; j < info.n_deps; j++) {
             so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
             so->dep_sampler[j] = info.deps[j].sampler;
+            so->dep_f16[j] = info.deps[j].f16;
             sa[j] = so->dep_sa[j];
          }
          so->n_deps = info.n_deps;
@@ -1039,16 +1045,23 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
 
          if (out.iters[i].sample) {
             /* sample half: coordinate set + 1, 2-D or projected (docs/PDS.md).
-             * A sample of the set the previous plain DOUTI iterates is merged
-             * into it, as the DDK's generator does; a separate one samples at
-             * coordinate 0.  Otherwise a pure sample (source 0x24). */
+             * The sample half is independent of the iterate half, so a sample
+             * is merged into the previous DOUTI when that one is a plain
+             * iteration of a coordinate set, of this set or another, as the
+             * DDK's generator does: its texel lands after that iteration, where
+             * a DOUTI of its own would put it.  Not into gl_FragCoord's or a
+             * point coordinate's (its w1 bits are the sample half's).
+             * Otherwise a pure sample (source 0x24). */
             bool proj = out.iters[i].proj;
             unsigned prev = so->prog.n_douti - 1;
             struct sgx_pds_douti *d =
                so->prog.n_douti ? &so->prog.douti[prev] : NULL;
+            bool other_set = !(sgx_drv_debug & SGX_DEBUG_NO_PDS_MERGE);
 
             if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 &&
-                !d->proj && d->src == it) {
+                !d->proj && d->iterate && !d->w1 &&
+                (d->src == it ||
+                 (other_set && d->src >= 1 && d->src <= SGX_MAX_SETS))) {
                d->sample_set = it;
                d->dim2 = !proj;
                d->proj = proj;

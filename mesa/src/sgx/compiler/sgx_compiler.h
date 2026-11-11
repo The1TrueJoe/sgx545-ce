@@ -104,6 +104,11 @@ struct sgx_compile_options {
     * Straight-line programs with one discard and a colour store; others stay
     * one block (n_code1 = 0) */
    bool split_phases;
+   /* with f16_samples: the driver also sets the F16-return T3 bits in a
+    * dependent sample's state words (sgx_sample_info.f16), so a mediump
+    * texel a dependent smp reads arrives as F16 in two registers (ISA.md
+    * "hw 1c: smp": the result format is the state's) */
+   bool dep_f16_samples;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components
