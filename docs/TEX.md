@@ -717,18 +717,23 @@ The driver only has to do CLAMP_TO_BORDER.
 - The DDK's desktop GL lists `ARB_texture_border_clamp` (PIGLIT.md, "The
   DDK's desktop GL"), so that driver does border clamp, in the texture unit
   or in the shader. It needs X, so it gives no captures.
+- The DDK's ES2 has no border clamp: its extension string lists neither
+  `EXT_texture_border_clamp` nor `OES_texture_border_clamp` (**capture**,
+  `PROBE_EXTS=1`, 2026-11-11). The ES2 captures can't show a border word.
 
 **Tests, in order** (Gaps, §13):
 
-1. `PROBE_EXTS=1` on the DDK's ES2 and ES1. If the ES2 lists
-   `EXT_texture_border_clamp` or `OES_texture_border_clamp`, a capture with
-   `PROBE_TEXWRAP="0x812D 0x812D" PROBE_TEXBORDER="1 0 1 0.5"` gives the
-   words, and the steps below shrink to reading them.
-2. A DDK capture of the 8×8 checker sampled over [-1, 2] (`PROBE_VS` with
-   `v = a1 * 4.0 - 2.0`, CLAMP_TO_EDGE), as the base for replays.
+1. `PROBE_EXTS=1` on the DDK's ES2 and ES1. Done: no border extension (above).
+2. A DDK capture of the 8×8 checker sampled over [-1, 2], as the base for
+   replays. Done: `bbase` (2026-11-11), a screen-covering triangle with
+   `v = p.xy * 1.5 + 0.5` and CLAMP_TO_EDGE on both axes. Its T0 is
+   `07fe0090`, in the pixel PDS program's data at `0x2e018038` (T1 to T3
+   follow: `0d007007 f0001000 00800800`). The texture fills the middle third
+   of the screen in each axis.
 3. Replays of it with both wrap fields set to 3, 4, 5, 6 and 7, then S
    alone, each read back. A border mode shows a constant outside [0, 1]. A
-   mirror-once mode shows the texture mirrored once, then clamped.
+   mirror-once mode shows the texture mirrored once, then clamped. Queued on
+   the board: the T0 values are in the Gaps entry.
 4. If one code shows a constant: which constant, and whether it follows the
    format. Then replays that change T0's unused bits (b0-2, b11, b13-16,
    b27-29, b31) and T3's bits one at a time, looking for a field that moves
@@ -756,7 +761,9 @@ native border mode, if the replays find one, replaces it.
 - **The SGX545 has them.** The GPL kernel's `sgxfeaturedefs.h` gives the 545
   `SGX_FEATURE_VOLUME_TEXTURES`, and it is the only core in that header that
   has it (docs/porting/cores/sgx530.md lists the 530's features against
-  it). The DDK's desktop GL lists `EXT_texture3D`.
+  it). The DDK's desktop GL lists `EXT_texture3D`. The DDK's ES2 doesn't
+  list `OES_texture_3D` (**capture**, `PROBE_EXTS=1`, 2026-11-11), so no ES2
+  capture can show a volume; step 3 below is the path.
 - **The open driver has none:** `caps->max_texture_3d_levels = 0`, and
   `sgx_resource.c` gives a PIPE_TEXTURE_3D no device copy. Mesa still
   advertises GL 2.1, since its version check doesn't look at 3D levels below
@@ -783,7 +790,8 @@ native border mode, if the replays find one, replaces it.
 
 **Tests** (Gaps, §14):
 
-1. `PROBE_EXTS=1`: whether the DDK's ES2 lists `OES_texture_3D`.
+1. `PROBE_EXTS=1`: whether the DDK's ES2 lists `OES_texture_3D`. Done: it
+   doesn't, so step 2 can't run and step 3 is the path.
 2. If it does, DDK captures sampling with `texture3D`:
    - `PROBE_TEX3D=4 PROBE_TEXSIZE="4 4"`, RGBA8888, `PROBE_TEXPAT=1`;
    - 8×8×8 with `PROBE_TEXLEVELS=4`;
@@ -810,13 +818,26 @@ and GL 1.2 conformance would still need the real layout.
     every depth format for sampling.
   - A `GL_DEPTH_COMPONENT` texture gets no format, and the test crashes
     later on.
-- **The DDK's ES2 samples depth.** It lists `OES_depth_texture` and
-  `OES_packed_depth_stencil` (the extension dump in PIGLIT.md), so either the
-  texture unit reads a 16-bit, 32-bit and 24/8 depth format, or the DDK
-  converts on upload. The T1 codes and the texel layout come from one
-  capture each. The knobs are in `tools/probe` since 28976b01
-  (`PROBE_TEXFMT=depth16`, `depth32`, `d24s8`, with `PROBE_TEXPAT=1`), but
-  no capture has been taken yet.
+- **The DDK's ES2 samples depth by converting it to float on upload**
+  (**capture**: `dt16`, `dt32`, `dt24s8`, 2026-11-11, a 16×16 texture with
+  `PROBE_TEXPAT=1` sampled with `texture2D`):
+  - All three formats get the same texture words: T0 `00060e00`, T1
+    `d200f00f`, T2 the texture, T3 `00800800`. Only the texels differ.
+  - T1 is layout 6 (strided) and format **0x12**, a code no other capture
+    shows. T0 holds the stride: (pitch - 1) = 31, so rows are 32 texels
+    (0x80 bytes) apart for a 16-texel row.
+  - Every texel is a 32-bit float, the depth normalized to [0, 1]: depth16
+    texel 1 is `0x37800080` (1/65535), and depth32 and d24s8 hold their
+    value / (2^32 - 1) and / (2^24 - 1). The stencil byte of d24s8 is
+    dropped.
+  - The sample returns (d, d, d, 1): the centre texel (136 / 65535 for
+    depth16, about 8e-6 for the others) reads back as (1, 1, 1, 255) and
+    (0, 0, 0, 255).
+  - So 0x12 is a one-channel F32 format, replicated to RGB, with alpha 1
+    (**guess** for formats other than depth: no `lf32` capture shows which
+    code a float luminance texture gets).
+  - The DDK's ES2 has no `EXT_shadow_samplers`, so its captures show no
+    compare at all.
 - **Shadow compare in the sampler** (ISA.md, hw 1c: **oracle**):
   - `smp` has two PCF bits. h5 (`.pcf`) is accepted with F32 coordinates
     only, and h6 (`.pcf16`) with F16 coordinates, never with C10.
@@ -836,18 +857,19 @@ and GL 1.2 conformance would still need the real layout.
 **Tests** (Gaps, §15):
 
 1. DDK captures with `PROBE_TEXFMT=depth16`, `depth32` and `d24s8`, each with
-   `PROBE_TEXPAT=1`, sampled with `texture2D`. They give the T1 codes, the
-   texel layout and the channel a depth arrives in. Under the RGBA8888
-   readback, the value pattern says the bits per channel.
-2. `PROBE_EXTS=1`: whether the DDK's ES2 lists `EXT_shadow_samplers`. If it
-   does, captures with `PROBE_TEXCOMPARE="0x884E <func>"` and a
-   `sampler2DShadow` shader, for LEQUAL, GREATER and NEVER, against a depth16
-   texture. Diffing their T words and smp words gives the compare-function
-   field and the reference's place.
-3. If it doesn't, black-box tests with the open stack: a `smp.2d.pcf` on the
-   depth16 texture with (s, t, ref) and ref swept across the stored values.
-   That shows whether the result switches from 0 to 1, and which T0 or T3
-   field changes the function.
+   `PROBE_TEXPAT=1`, sampled with `texture2D`. Done: format 0x12, F32 texels,
+   (d, d, d, 1) (above).
+2. `PROBE_EXTS=1`: whether the DDK's ES2 lists `EXT_shadow_samplers`. Done:
+   it doesn't, so there's no compare to capture.
+3. Black-box tests with the open stack: a `smp.2d.pcf` on a format-0x12
+   texture (T1 `d200f00f`, T0 `00060e00` for 16×16, F32 texels written by
+   hand) with (s, t, ref) and ref swept across the stored values. That shows
+   whether the result switches from 0 to 1, and which T0 or T3 field changes
+   the function.
+
+**Without a hardware compare, the driver path is known:** upload depth as
+F32 in format 0x12, strided, the way the DDK does, sample it as a value, and
+lower the compare (below).
 
 **Lowering, if the sampler can't compare:** sample the depth as a value, then
 compare and swizzle in the shader. Mesa has `nir_lower_tex_shadow`, which
@@ -908,18 +930,18 @@ until it is confirmed.
 ### 13. Border color
 
 - Wrap codes 3-7 mean mirror-once, border and GL_CLAMP as on later PowerVR
-  cores → replays of the [-1, 2] checker capture with each code in both
-  fields, then S alone (§13, steps 2-3).
+  cores → replays of `bbase` with T0 (`0x2e018038`) set to `07fe00d8`,
+  `07fe0120`, `07fe0168`, `07fe01b0`, `07fe01f8` (both fields 3-7), then
+  `07fe00d0`, `07fe0110`, `07fe0150`, `07fe0190`, `07fe01d0` (S 3-7, T 2),
+  each read back (§13, step 3; queued).
 - Where a border color comes from (a fixed set by format, a T word field, a
   table in memory) → the step 4 replays, once a code shows a constant.
-- Whether the DDK's ES2 offers border clamp → `PROBE_EXTS=1`.
 
 ### 14. Volume textures
 
 - A volume sample is `smp` dim 2 when dependent, and a dimension-3
-  non-dependent sample otherwise, with DOUTI bits still unknown → a DDK
-  `texture3D` capture, if its ES2 lists `OES_texture_3D`, decoded for the
-  DOUTI and the USP sample block.
+  non-dependent sample otherwise, with DOUTI bits still unknown → the
+  open-stack tests of step 3 (the DDK's ES2 has no `OES_texture_3D`).
 - The volume layout code (1, 4, 5 or 7), where the depth goes (T0 or T3),
   and wrap R in T0 b0-2 → the §14 captures, or the open-stack tests of
   step 3.
@@ -928,11 +950,12 @@ until it is confirmed.
 
 ### 15. Depth textures
 
-- The T1 codes and texel layouts of depth16, depth32 and d24s8, and which
-  channel the depth arrives in → the §15 step 1 captures.
+- Format 0x12 is a general one-channel F32 format, not a depth-only code
+  → a DDK `PROBE_TEXFMT=lf32` capture (OES_texture_float), compared with
+  `dt16`'s T1.
 - smp `.pcf` / `.pcf16` compare against a reference in the coordinate →
-  §15 steps 2-3.
-- The compare-function field → §15 steps 2-3.
+  §15 step 3.
+- The compare-function field → §15 step 3.
 
 ### Open questions
 
