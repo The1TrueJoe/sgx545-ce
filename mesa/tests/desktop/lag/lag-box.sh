@@ -22,6 +22,7 @@
 #   nocomp    xfwm4 without its compositor
 #   xpresent  xfwm4 synced to vblank through Present, not GLX
 #   vbloff    xfwm4 not synced to vblank
+#   xsw       glamor on llvmpipe in X (the GPU for the clients only)
 #   dumbsched the same with Xorg -dumbSched (no scheduler timer signal)
 #   serial    the same with SGX_DEBUG=serial: each render waited for, no
 #             overlap (whether a render still in flight takes part)
@@ -71,6 +72,7 @@ xpresent) xfwm=--vblank=xpresent ;;
 vbloff) xfwm=--vblank=off ;;
 software) cenv="LIBGL_ALWAYS_SOFTWARE=1" xenv= ;;
 clientsw) cenv="LIBGL_ALWAYS_SOFTWARE=1" ;;   # X on the GPU, the clients on llvmpipe
+xsw) xenv="$xenv LIBGL_ALWAYS_SOFTWARE=1" ;;   # glamor on llvmpipe: X off the GPU, the clients on it
 dumbsched) xargs=-dumbSched ;;   # Xorg without the smart scheduler's timer signal
 serial)   # every render waited for after its submit: nothing in flight when a buffer goes
 	cenv="$cenv,serial" xenv="$xenv,serial" ;;
