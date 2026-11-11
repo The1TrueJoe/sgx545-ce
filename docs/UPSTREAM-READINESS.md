@@ -611,7 +611,7 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
 | A README per tree | `isa/README.md` and `pds/README.md` now describe the tree rather than its history: what it is, the files, the generated files, the tests, the isaspec patch, what isaspec can't express, and who uses it. The answered-gap lists and the old encoder's story stay in `docs/log`. `csbgen/README.md` is new: files, use, conventions, tests |
 | No DDK inputs | the build and the tests read only the XML, the test lists and Mesa. The test lists' words are the ones the ISA/PDS/state documentation quotes. Comments no longer name the DDK, a capture rig or USEASM, and the `#i16-fmt` enum nothing used (an unused-variable warning in the generated decoder) is gone |
 | Unchanged output | after the restructure, the offline winsys harness (clears, draws, scissors, end-of-tile, over 60 frames) is still byte-identical to um-re 9145c84 (66.9 MB of rings). `mesa/tests/isa-standalone` runs the ISA lists: 324 instructions, 0 failures |
-| Warnings | no warnings from the three trees on the host build (clang) or the zig x86_64 build. The PDS library keeps `-Wno-unused-variable` for isaspec's tables of encode-only roots (below) |
+| Warnings | no warnings from the three trees on the host build (clang) or the zig x86_64 build. Since 2026-11-11 the PDS library needs no warning flag (isaspec commit 3, item 3), and the ISA-first tree builds with `-Dwerror=true` under clang and gcc 16 |
 
 ### Open
 
@@ -625,9 +625,9 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
      tools.
    - A decision for the MR series, not for the code.
 2. **The isaspec change** (`mesa/patches/0003`) goes upstream first. Done
-   2026-11-11: the file is two commits in `git format-patch` form (`git am`
-   applies them as two, `patch -p1` as one), each applying alone on Mesa
-   26.2.5, each with a `docs/isaspec.rst` sentence:
+   2026-11-11: the file is three commits in `git format-patch` form (`git
+   am` applies them as three, `patch -p1` as one), the first two with a
+   `docs/isaspec.rst` sentence (the third is item 3):
    - `isaspec: allow <param>s on derived fields of bitset type`;
    - `isaspec: encode: stop at the override that defines the field` (the
      decoder already takes the first override that holds).
@@ -643,11 +643,15 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
    - Open for review: a reviewer may still ask for a minimal XML case, or
      for the second commit's `Fixes:` tag (the commit that introduced the
      override ladder; not looked up).
-3. **The PDS decoder's unused tables.** The DOUT data words are encode-only
-   roots, and isaspec emits decode tables nothing uses for them, so
-   `-Wno-unused-variable` is needed. Options:
-   - isaspec skips decode tables for roots no `#instruction` reaches;
-   - the data words move to a second XML that only the encoder reads.
+3. **The PDS decoder's unused tables.** Done 2026-11-11: a third isaspec
+   commit (`isaspec: decode: leave out roots nothing decodes from`, in
+   `mesa/patches/0003`). decode.py drops the roots decoding can't start
+   from (neither `#instruction` nor a field's type) and their bitsets;
+   encode.py still sees them. ir3, etnaviv, qrisc and the USSE decoders
+   are byte-identical; the PDS decoder loses its six encode-only roots, and
+   `-Wno-unused-variable` is gone. Removing only the root tables wasn't
+   enough: `-Werror` then caught the bitsets under them
+   (`-Wunused-const-variable`).
 4. **The documentation the comments cite.** Done 2026-11-11: nothing in
    the three trees cites `docs/ISA.md`, `PDS.md`, `STATE.md` or tools
    outside Mesa any more. Each comment states the fact itself, and the
@@ -693,12 +697,14 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
     core, and a field that differs is an override on `ISA_GPU_ID() / 100`.
     `-c 530` covers only the classes ISA.md marks confirmed on the 530, and
     sgx-asm refuses a form outside the core instead of writing 0.
-11. **Cross-tree paths.** `csbgen/meson.build` reaches the generator as
-    `files('../../imagination/csbgen/gen_pack_header.py')` and includes
-    `../../imagination`. Reviewers usually want such a script exported as a
-    variable from its own `meson.build` (`src/imagination` is entered only
-    for its own drivers and tools), or the XML moved next to `rogue/`
-    (item 1).
+11. **Cross-tree paths.** Done 2026-11-11: `src/imagination/csbgen`
+    exports `pvr_gen_pack_header_py` (as `src/intel/genxml` exports
+    `gen_pack_header_py`), `src/meson.build` enters `src/imagination` for
+    `-Dtools=sgx` too (`0002`; `0006` adds `with_gallium_sgx`), and
+    `csbgen/meson.build` uses the variable and `inc_imagination`. On 26.2.5
+    `0002` also moves `subdir('csbgen')` out of `src/imagination`'s driver
+    condition, as Mesa main already has it. The other option (the XML
+    beside `rogue/`, item 1) remains a location decision.
 12. **Test form.** The tests are plain C programs plus one Python script
     under `meson test`, as `src/freedreno/ir3/tests` does. etnaviv's ISA
     test is a gtest; a reviewer may prefer that.

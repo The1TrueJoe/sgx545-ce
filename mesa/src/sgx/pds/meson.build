@@ -39,8 +39,6 @@ libsgx_pds = static_library(
   [sgx_pds_decode, sgx_pds_encode_h, sgx_pds_enums_h,
    'sgx_pds_encode.c', 'sgx_pds_disasm.c', 'sgx_pds_asm.c'],
   include_directories : [inc_include, inc_src, include_directories('.')],
-  # the decoder's tables for the encode-only data-word roots are unused
-  c_args : cc.get_supported_arguments('-Wno-unused-variable'),
   dependencies : [idep_mesautil, idep_isaspec_decode],
   link_with : [libisaspec],
   gnu_symbol_visibility : 'hidden',

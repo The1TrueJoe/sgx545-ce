@@ -9,6 +9,11 @@ GPU's microkernel firmware, which don't need a driver), and sgx-disasm
 is the matching disassembler. 'all' includes sgx. The three trees are
 clang-format clean and opt in to enforcement.
 
+csbgen's generator is exported from src/imagination/csbgen as
+pvr_gen_pack_header_py (as src/intel/genxml exports gen_pack_header_py),
+and src/imagination, whose csbgen subdirectory is entered unconditionally,
+is entered for -Dtools=sgx too.
+
 diff --git a/.clang-format-include b/.clang-format-include
 index 4a0e12f..e711f40 100644
 --- a/.clang-format-include
@@ -45,10 +50,48 @@ index 93a60e3..989dabd 100644
    description : 'List of tools to build. (Note: `intel-ui` selects `intel`)',
  )
  
+diff --git a/src/imagination/csbgen/meson.build b/src/imagination/csbgen/meson.build
+index c72e47b..6372174 100644
+--- a/src/imagination/csbgen/meson.build
++++ b/src/imagination/csbgen/meson.build
+@@ -1,6 +1,8 @@
+ # Copyright © 2022 Imagination Technologies Ltd.
+ # SPDX-License-Identifier: MIT
+ 
++pvr_gen_pack_header_py = files('gen_pack_header.py')
++
+ pvr_xml_pack = []
+ subdir('rogue')
+ subdir('volcanic')
+diff --git a/src/imagination/meson.build b/src/imagination/meson.build
+index 0c666d3..a3327e4 100644
+--- a/src/imagination/meson.build
++++ b/src/imagination/meson.build
+@@ -11,9 +11,10 @@ inc_imagination = include_directories([
+   'include',
+ ])
+ 
++subdir('csbgen')
++
+ if with_imagination_vk or with_tools.contains('imagination')
+   subdir('common')
+-  subdir('csbgen')
+   subdir('pco')
+ endif
+ 
 diff --git a/src/meson.build b/src/meson.build
-index c36f44b..fad4238 100644
+index c36f44b..e46a460 100644
 --- a/src/meson.build
 +++ b/src/meson.build
+@@ -95,7 +95,7 @@ endif
+ if with_gallium_freedreno or with_freedreno_vk or with_tools.contains('freedreno')
+   subdir('freedreno')
+ endif
+-if with_imagination_vk or with_tools.contains('imagination')
++if with_imagination_vk or with_tools.contains('imagination') or with_tools.contains('sgx')
+   subdir('imagination')
+ endif
+ if with_any_intel
 @@ -104,6 +104,9 @@ endif
  if with_gallium_panfrost or with_gallium_lima or with_panfrost_vk or with_tools.contains('panfrost')
    subdir('panfrost')
