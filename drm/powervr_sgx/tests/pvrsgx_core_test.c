@@ -91,6 +91,9 @@ static void core_test_heaps(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, f530->regs->bif_bank0, 0);
 	KUNIT_EXPECT_EQ(test, f530->regs->clkgatectl2, 0);
 	KUNIT_EXPECT_EQ(test, f530->regs->event_kick2, 0);
+	/* No register the SGX530's header doesn't name: the vendor script's 0xb30 is the 545's. */
+	KUNIT_EXPECT_EQ(test, f530->regs->vendor_b30, 0);
+	KUNIT_EXPECT_EQ(test, f545->regs->vendor_b30, 0xb30);
 }
 
 static struct kunit_case pvrsgx_core_test_cases[] = {

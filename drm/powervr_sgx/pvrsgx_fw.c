@@ -491,7 +491,7 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) |
 	       USE_CODE_BASE_DM_UKERNEL << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
-	sgx_wr(sdev, 0xb30, 0x100);	/* unnamed, as the vendor script */
+	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
 	sgx_wr(sdev, cr->event_pds_data0, 1);

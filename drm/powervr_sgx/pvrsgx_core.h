@@ -84,6 +84,7 @@ struct pvrsgx_core_regs {
 	u32 bif_bank_set;
 	u32 bif_bank0;
 	u32 use_code_base_dm_shift;	/* USE_CODE_BASE's data-master field */
+	u32 vendor_b30;			/* unnamed, 0x100 in the SGX545's vendor script */
 	/* Not in the GPL header (pvrsgx_hw.h). */
 	u32 event_pds_enable;
 	u32 event_pds_enable_all;

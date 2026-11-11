@@ -44,6 +44,7 @@ static const struct pvrsgx_core_regs sgx545_regs = {
 	.bif_bank_set = SGX_CR_BIF_BANK_SET,
 	.bif_bank0 = SGX_CR_BIF_BANK0,
 	.use_code_base_dm_shift = 25,
+	.vendor_b30 = 0x0b30,
 	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
 	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
 	.event_pds_base = SGX545_CR_EVENT_PDS_BASE,
