@@ -2,7 +2,7 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * The cross-field rules of docs/UAPI.md section 3, run after
+ * The rules that span fields of a command stream, run after
  * pvrsgx_stream_process() has checked each field on its own.
  */
 
@@ -10,11 +10,11 @@
 
 #include "pvrsgx_stream_defs.h"
 
-/* ZLS control bits that use the stencil address (UAPI.md 3.3). */
+/* ZLS control bits that use the stencil address. */
 #define ZLS_STENCIL_BITS 0x3U
 /* 3D flags bit that uses the stencil address. */
 #define FLAGS_3D_STENCIL BIT(8)
-/* ZLS addresses are offsets from a 1 MiB-aligned base; the limit is a guess (G13). */
+/* ZLS addresses are offsets from a 1 MiB-aligned base; the limit is a guess. */
 #define ZLS_BASE_MASK 0xfff00000U
 #define ZLS_OFFSET_LIMIT BIT(30)
 

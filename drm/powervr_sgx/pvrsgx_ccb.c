@@ -3,7 +3,7 @@
 
 /*
  * The kernel CCB: a ring of 256 commands the host writes and the microkernel
- * reads (UKERNEL.md section 3). The host advances the write offset and rings
+ * reads. The host advances the write offset and rings
  * EUR_CR_EVENT_KICK; the microkernel advances the read offset as it takes each
  * command. Neither raises an interrupt by itself, so a command is complete, as
  * far as the ring is concerned, once the read offset has passed it.

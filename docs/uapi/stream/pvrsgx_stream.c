@@ -246,7 +246,7 @@ static int check_mapped_fields(const struct pvrsgx_stream_def *defs, u32 nr,
  * @dest: Struct decoded by pvrsgx_stream_process().
  *
  * A programming-error check made at submit time: the client can unmap
- * afterwards, so this is not the isolation boundary (UAPI.md section 7.1).
+ * afterwards, so this is not the isolation boundary.
  *
  * Return: 0, or -EINVAL when a range is not mapped.
  */

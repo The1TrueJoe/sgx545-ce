@@ -289,8 +289,8 @@ fail:
 
 /*
  * A job ran too long. Blame its context, fail what was on the GPU, and start
- * the microkernel again from a clean control block and an empty CCB (the
- * "discard" recovery of UKERNEL.md 5a, not the DDK's rescan).
+ * the microkernel again from a clean control block and an empty CCB, rather
+ * than rescan the old one as the vendor driver does.
  */
 static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_job)
 {
@@ -335,8 +335,8 @@ fail:
 		goto out;
 
 	/*
-	 * As the hardware recovery of the GPL kernel services: no power-off handshake with a hung
-	 * microkernel, straight into the full start (clocks, scripts, a reset
+	 * As the vendor driver's hardware recovery: no power-off handshake with a
+	 * hung microkernel, straight into the full start (clocks, scripts, a reset
 	 * that drains pending faults, the first kick).
 	 */
 	sdev->reset_count++;

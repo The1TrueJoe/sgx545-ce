@@ -8,7 +8,7 @@
 
 struct pvrsgx_device;
 
-/* Kernel CCB command types (docs/UKERNEL.md section 3). */
+/* Kernel CCB command types. */
 enum pvrsgx_cmd {
 	PVRSGX_CMD_TA = 0,
 	PVRSGX_CMD_TRANSFER = 1,

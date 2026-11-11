@@ -20,7 +20,7 @@ struct pvrsgx_job;
 struct pvrsgx_kobj;
 struct pvrsgx_vm;
 
-/* The firmware half of a render context (STATE.md section 6). */
+/* The firmware half of a render context. */
 /* A VM's parameter buffer, shared by its render contexts (pvrsgx_render.c). */
 struct pvrsgx_pb {
 	struct kref ref;
@@ -45,7 +45,7 @@ struct pvrsgx_render_ctx {
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
 
-/* A render target's tiling numbers (docs/STATE.md section 6). */
+/* A render target's tiling numbers. */
 struct pvrsgx_rt_numbers {
 	u32 xt, yt, mx, my, padx, pady;
 	u32 mtile1, mtile2, te_screen, mt_tiles, region_bytes, tailptr_bytes;

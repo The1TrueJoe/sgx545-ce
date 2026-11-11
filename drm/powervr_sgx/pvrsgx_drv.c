@@ -101,9 +101,8 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 	}
 	case DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET: {
 		/*
-		 * Render-target limits are not documented (docs/UAPI.md G14):
-		 * these are the sizes the captures cover, to be raised when
-		 * larger targets are tested. PB pages from STATE.md 6.
+		 * Render-target limits are not documented: these are the sizes
+		 * known to work, to be raised when larger targets are tested.
 		 */
 		struct drm_powervr_sgx_dev_query_limits lim = {
 			.rt_max_width = 2048,
@@ -128,7 +127,7 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			if (q._padding_c)
 				return -EINVAL;
 		}
-		/* No erratum that reaches userspace is documented for rev 1014 (G25). */
+		/* No erratum that reaches userspace is known for these cores. */
 		q.count = 0;
 		q.musthave_count = 0;
 		return query_put(ptr, &args->size, &q, sizeof(q));

@@ -3,7 +3,7 @@
 
 /*
  * VM contexts on drm_gpuvm. The client picks every address inside the heaps
- * DEV_QUERY reports (docs/UAPI.md section 5); a mapping is one GEM range at one
+ * DEV_QUERY reports; a mapping is one GEM range at one
  * address, never split or merged, so VM_UNMAP takes back exactly one VM_MAP.
  */
 

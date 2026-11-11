@@ -23,12 +23,12 @@
 /*
  * A transfer is a 3D-only render: the background object covers the
  * destination, its pixel program samples the source and its end-of-tile
- * program writes the destination, all client memory (TEX.md 3, 10). The
+ * program writes the destination, all client memory. The
  * kernel owns the HW transfer context, its command ring and the completion
  * sync, and writes the command from the client's CMD_TRANSFER stream.
  */
 #define XFER_CCB_BYTES		0x104c8	/* 0x10000 ring + slack for a command that wraps */
-#define XFER_TILES_X_MAX	127	/* 4096 pixels: G14 has the real limit */
+#define XFER_TILES_X_MAX	127	/* 4096 pixels; the real limit is not known */
 #define XFER_TILES_Y_MAX	255
 
 int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
@@ -107,7 +107,7 @@ int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	return pvrsgx_check_transfer(&tj->xfer);
 }
 
-/* Write the 0x1c0-byte transfer command into the context's ring (UAPI.md 3.5). */
+/* Write the 0x1c0-byte transfer command into the context's ring. */
 void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 {
 	struct pvrsgx_transfer_ctx *x = job->ctx->transfer;

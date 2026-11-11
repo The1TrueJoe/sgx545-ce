@@ -11,15 +11,14 @@
 
 /*
  * Structures the host writes and the microkernel reads, in the microkernel's
- * layout (docs/STATE.md, docs/UKERNEL.md). The SGX and its x86 hosts are both
- * little-endian, so the fields are plain u32. Fields the driver leaves zero
- * are padding here; the docs list them.
+ * layout. The SGX and its x86 hosts are both little-endian, so the fields are
+ * plain u32. Fields the driver leaves zero are padding here.
  */
 
 /**
  * struct pvrsgx_fw_ta3d_ctl - The microkernel's control block
  *
- * docs/UKERNEL.md, "The TA3D control block". The host fills the addresses;
+ * The host fills the addresses;
  * the rest is the microkernel's live state, zero at every start.
  */
 struct pvrsgx_fw_ta3d_ctl {
@@ -57,7 +56,7 @@ static_assert(sizeof(struct pvrsgx_fw_ta3d_ctl) == 0x100);
 #define PVRSGX_3D_FRAME_SHIFT		14
 
 /**
- * struct pvrsgx_fw_ta_cmd - One TA kick (docs/STATE.md section 1)
+ * struct pvrsgx_fw_ta_cmd - One TA kick
  *
  * The header and tail come from the client's streams and the kernel's own
  * structures; the shared part carries the synchronisation.
@@ -179,7 +178,7 @@ static_assert(sizeof(struct pvrsgx_fw_rt_deps) == 0x28);
 /**
  * struct pvrsgx_fw_rt_entry - One of an RT dataset's two render slots
  *
- * Frames alternate between the two (docs/STATE.md section 6, "RT data").
+ * Frames alternate between the two.
  */
 struct pvrsgx_fw_rt_entry {
 	/** @hw_render_ctx: Device address of the HW render context. */
@@ -236,7 +235,7 @@ static_assert(sizeof(struct pvrsgx_fw_rt_data) == 0x88);
 /**
  * struct pvrsgx_fw_pb_desc - Parameter buffer descriptor
  *
- * docs/STATE.md section 6. Page numbers count from the 3D parameters heap.
+ * Page numbers count from the 3D parameters heap.
  */
 struct pvrsgx_fw_pb_desc {
 	/* private: */
@@ -277,7 +276,7 @@ static_assert(sizeof(struct pvrsgx_fw_pb_desc) == 0x3c);
 /**
  * struct pvrsgx_fw_render_details - Per-dataset render details
  *
- * docs/STATE.md section 6. Fields named unk_* hold values captured from the
+ * Fields named unk_* hold values captured from the
  * vendor stack whose meaning isn't known.
  */
 struct pvrsgx_fw_render_details {
@@ -443,7 +442,7 @@ static_assert(sizeof(struct pvrsgx_fw_hw_transfer_ctx) == 0xb4);
 /**
  * struct pvrsgx_fw_transfer_cmd - One transfer: a 3D render of a background object
  *
- * docs/TEX.md sections 3 and 10. The first words are 3D registers in the
+ * The first words are 3D registers in the
  * render details' encoding; the shared part carries the destination sync.
  */
 struct pvrsgx_fw_transfer_cmd {

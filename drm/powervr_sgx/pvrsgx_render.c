@@ -6,10 +6,9 @@
  * needs for a TA kick and the 3D after it, built by the kernel from the
  * client's CMD_RENDER and CMD_TA_KICK streams.
  *
- * Layouts and values: docs/STATE.md sections 1 and 6, docs/UAPI.md section 4.
  * A render job is one scene of one TA kick, which starts the scene and the 3D
- * (TA flags 0x63). Scenes of several kicks need the middle-kick flags, which no
- * capture shows yet (G12).
+ * (TA flags 0x63). Scenes of several kicks need the middle-kick flags, which
+ * are not known yet.
  */
 
 #include <drm/drm_file.h>
@@ -45,7 +44,7 @@
 #define CCB_BYTES		0x10420
 /* The background object's middle PDS word, a constant. */
 #define BG_PDS_MIDDLE		0x00030001
-/* Constant TA command words (docs/STATE.md section 1). */
+/* Constant TA command words. */
 #define TA_CTL			0x50000000
 #define TE_AA			0x20000000
 #define VDM_CTL			0xa2
@@ -645,7 +644,7 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		return -EINVAL;
 	if (!in->ta_kicks.count)
 		return -EINVAL;
-	/* Scenes of more than two kicks need the middle-kick flags (G12). */
+	/* Scenes of more than two kicks need the middle-kick flags, not known yet. */
 	if (in->ta_kicks.count > PVRSGX_MAX_TA_KICKS)
 		return -EOPNOTSUPP;
 
@@ -699,16 +698,15 @@ static u32 pds_word(u64 addr, u32 rows)
  * dataset are ours.
  *
  * One kick both starts the scene and renders it (TA flags 0x63, the form Mesa
- * uses). Two kicks are the captured form of a single-draw frame (STATE.md, "A
- * frame, end to end"): 0x71 runs the stream, 0x62 runs the terminate words and
- * starts the 3D.
+ * uses). Two kicks are the vendor stack's form of a single-draw frame: 0x71
+ * runs the stream, 0x62 runs the terminate words and starts the 3D.
  */
 /*
  * A restart (a reset, or a runtime resume) starts a fresh microkernel, but a
  * VM's PB lives through it. After a hang the pages the TA took are still off
  * its free list: the next render on any of the VM's contexts hangs, and the
  * next restart fails. The PB's first job after a restart sets it up as new.
- * Nothing else needs it (log 2026-11-03-0600): the HW contexts and RT datasets
+ * Nothing else needs it: the HW contexts and RT datasets
  * carry on as they are.
  */
 static void pb_rearm(struct pvrsgx_device *sdev, struct pvrsgx_pb *pb)
@@ -743,7 +741,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	entry = kobj_va(s->rtdata) + 0x18 + 0x38 * p;
 	rd = (struct pvrsgx_fw_render_details *)kobj_cpu(s->rd[p]);
 	if (first) {
-		/* Render details (STATE.md 6; UAPI.md 4.2). */
+		/* Render details. */
 		if (in->depth_addr || in->stencil_addr) {
 			u64 lo = in->depth_addr ?: in->stencil_addr;
 

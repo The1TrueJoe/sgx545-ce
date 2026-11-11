@@ -2,14 +2,12 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * Loading and starting the microkernel: what srvinit and the DDK services did
- * between them, now in the kernel. docs/SRVINIT.md is the reference for every
- * buffer, constant, PDS program and script value here, and docs/UKERNEL.md for
- * how the microkernel uses them.
+ * Loading and starting the microkernel: the buffers, constants, PDS programs
+ * and init scripts it needs, which the vendor's user-space init and services
+ * driver set up between them.
  *
- * The host interface is the vendor's as of DDK 1.7 (decision D8). The open
- * microkernel's file header lists its entry points and patch sites
- * (docs/UKERNEL.md 4a).
+ * The host interface is the vendor's SGXMKIF as of DDK 1.7. The microkernel
+ * file's header lists its entry points and patch sites.
  */
 
 #include <drm/drm_print.h>
@@ -37,7 +35,7 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_pds.h"
 
-/* The open microkernel's file (docs/UKERNEL.md 4a). */
+/* The microkernel file's header. */
 #define UKFW_MAGIC0		0x35584753	/* "SGX5" */
 #define UKFW_MAGIC1		0x4e524b55	/* "UKRN" */
 #define UKFW_HEADER_MIN		0x60
@@ -82,8 +80,8 @@ enum ukfw_patch_value {
 #define UKERNEL_TIMER_HZ	1000
 
 /*
- * Where each buffer lives: the addresses the DDK's allocator gave on an EA3,
- * kept so traces compare one for one with a DDK boot.
+ * Where each buffer lives: the addresses the vendor driver's allocator gives,
+ * kept so traces compare one for one with a vendor driver's.
  */
 static const struct {
 	bool code;
@@ -160,7 +158,7 @@ static int fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v)
 
 /*
  * The microkernel's control block, rebuilt at every start: after a reset it
- * must not find the previous run's render in flight (UKERNEL.md 5a, "discard").
+ * must not find the previous run's render in flight.
  */
 static void ta3dctl_fill(struct pvrsgx_device *sdev)
 {
@@ -238,7 +236,7 @@ static u32 (*ukfw_table(const u8 *data, size_t size, u32 off, u32 n))[2]
 }
 
 /*
- * The open microkernel's file: check the header (docs/UKERNEL.md 4a) and take
+ * The microkernel file: check the header and take
  * its image and tables into f. -ENOENT if data is not one; on -EINVAL, *why
  * says what is wrong. f's tables and image are the caller's to free either way.
  */
@@ -387,7 +385,7 @@ static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 	return sdev->cr->use_code_base0 + 4 * n;
 }
 
-/* Init script part 2 (docs/SRVINIT.md, "Init scripts"): the core's script, then the bases. */
+/* Init script part 2: the core's script, then the bases. */
 static void init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
@@ -460,7 +458,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		/*
 		 * After a hang the clocks are on and the cores may be busy. After a
 		 * clean stop (runtime suspend) they are gated and quiet already, and
-		 * a register read there froze the EA3 (log 2026-11-03-0630).
+		 * a register read there can hang the SoC.
 		 */
 		if (was_powered) {
 			/* What an unload and reload (which recovers) does in between. */

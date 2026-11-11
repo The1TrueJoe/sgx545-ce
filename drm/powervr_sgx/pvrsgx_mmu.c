@@ -8,8 +8,8 @@
  * page the GPU sees must sit below 4 GiB.
  *
  * Tables are write-combined: whether the BIF snoops the CPU caches is not
- * established (docs/UAPI.md G19). Callers order the writes before the GPU
- * uses them by kicking the firmware, which issues a write barrier first.
+ * known. Callers order the writes before the GPU uses them by kicking the
+ * firmware, which issues a write barrier first.
  */
 
 #include <linux/io.h>

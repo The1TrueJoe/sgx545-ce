@@ -21,7 +21,7 @@
 #include "pvrsgx_core.h"
 #include "pvrsgx_hw.h"
 
-/* Device-wide ranges for kernel-owned objects (docs/UAPI.md section 5). */
+/* Device-wide ranges for kernel-owned objects. */
 enum pvrsgx_krange {
 	PVRSGX_KRANGE_KDATA,	/* firmware only */
 	PVRSGX_KRANGE_KCODE,	/* firmware only */
@@ -60,7 +60,7 @@ struct pvrsgx_kmem {
 	void *cpu;
 };
 
-/* Firmware-visible buffers, in the allocation order docs/SRVINIT.md lists. */
+/* Firmware-visible buffers, in the vendor init's allocation order. */
 enum pvrsgx_fw_buf {
 	PVRSGX_FW_CCB,		/* kernel CCB: 256 commands */
 	PVRSGX_FW_CCBCTL,	/* its write and read offsets */

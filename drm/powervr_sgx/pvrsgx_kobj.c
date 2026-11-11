@@ -6,7 +6,7 @@
  * datasets' firmware structures, parameter buffers, free lists, region headers.
  * The 3D parameters range (PB, free list, scratch, background block) is per VM
  * instead: the DPM numbers PB pages from the heap base, so a second context's PB
- * at a higher device-wide address hung its third render (EA1, 2026-11-03).
+ * at a higher device-wide address hangs the GPU.
  *
  * Releasing one does not free it at once: a render already handed to the
  * microkernel may still read it. Released objects are freed once every render

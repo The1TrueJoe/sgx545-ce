@@ -80,8 +80,7 @@ static const struct pvrsgx_core_info cores[] = {
 	},
 	{
 		/*
-		 * The same core one revision earlier (docs/UKERNEL.md, "SGX545
-		 * core revisions"): same features and instruction set, the same
+		 * The same core one revision earlier: same features and instruction set, the same
 		 * microkernel. Its clock depends on the part (400 or 640 MHz);
 		 * the microkernel's timer only needs the order of magnitude.
 		 */

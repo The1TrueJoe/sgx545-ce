@@ -4,8 +4,8 @@
 /*
  * Stream decoder of the powervr_sgx uAPI: the reference for the kernel driver.
  * Same framing as the upstream PowerVR driver's pvr_stream.c, stricter (no
- * unchecked bytes), plus a validator per field. docs/UAPI.md section 3 is the
- * specification; the tables come from gen_stream.py.
+ * unchecked bytes), plus a validator per field. The tables are generated from
+ * the stream definitions (powervr_sgx_kmd_stream.xml).
  */
 
 #ifndef PVRSGX_STREAM_H

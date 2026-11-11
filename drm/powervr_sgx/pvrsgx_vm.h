@@ -22,7 +22,7 @@ struct pvrsgx_pb;
  *
  * Maps only the client heaps, plus (later) the kernel-owned structures the TA
  * and 3D read under it. Never the kernel code or data heaps: that is what keeps
- * a client's tasks away from the firmware's memory (docs/UAPI.md 7.2, P2/P3).
+ * a client's tasks away from the firmware's memory.
  */
 struct pvrsgx_vm {
 	/** @gpuvm: The GPU VA manager. */

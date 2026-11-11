@@ -62,7 +62,7 @@ struct pvrsgx_core_regs {
 	u32 edm_task_reg1;
 };
 
-/* One write of the vendor init script (docs/SRVINIT.md, "Init scripts"). */
+/* One write of the vendor init script. */
 struct pvrsgx_core_init_reg {
 	u16 reg;
 	u32 val;

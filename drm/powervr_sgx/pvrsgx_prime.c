@@ -78,7 +78,7 @@ bool pvrsgx_prime_reachable(struct device *dev, struct sg_table *sgt)
 
 /*
  * The GPU's accesses don't snoop the CPU caches, not even through
- * cache-consistent PTEs (logs 2026-11-04-0100, 2026-11-09). Our own objects
+ * cache-consistent PTEs. Our own objects
  * are write-combined on the CPU; an import may be cached, so flush each import
  * the job lists before it runs (no dirty line lands on its output later) and
  * after (no stale line hides it). Userspace lists every import a job touches.
