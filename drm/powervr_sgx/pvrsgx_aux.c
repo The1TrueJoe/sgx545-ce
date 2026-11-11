@@ -5,7 +5,8 @@
  * The SGX545 of a Cedarview GPU (GMA3600/3650). It shares the PCI function and
  * register BAR with the display engine, which gma500 drives; gma500 publishes
  * the SGX as the auxiliary device "gma500_gfx.sgx" with its register window mapped
- * and hands over its interrupt (include/drm/gma500_sgx.h).
+ * and hands over its interrupt; it never touches the SGX itself
+ * (include/drm/gma500_sgx.h).
  */
 
 #include <linux/auxiliary_bus.h>

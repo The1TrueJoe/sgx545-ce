@@ -1,4 +1,4 @@
-From f0f651a586b07f1692b7cd4b5d2588cbeba88c66 Mon Sep 17 00:00:00 2001
+From 064ebef098ec4db254b6a780db9ad15ee94a8103 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Tue, 10 Nov 2026 23:37:45 -0500
 Subject: [PATCH 2/5] drm/gma500: Export GEM objects as dma-bufs
@@ -29,7 +29,7 @@ export.
  2 files changed, 117 insertions(+), 30 deletions(-)
 
 diff --git a/drivers/gpu/drm/gma500/gem.c b/drivers/gpu/drm/gma500/gem.c
-index 2708e8c..f6aecb7 100644
+index 4a4ecfb..aaed7d2 100644
 --- a/drivers/gpu/drm/gma500/gem.c
 +++ b/drivers/gpu/drm/gma500/gem.c
 @@ -16,6 +16,7 @@
@@ -40,7 +40,7 @@ index 2708e8c..f6aecb7 100644
  #include <drm/drm_print.h>
  #include <drm/drm_vma_manager.h>
  
-@@ -26,70 +27,103 @@
+@@ -26,71 +27,104 @@
   * PSB GEM object
   */
  
@@ -114,11 +114,12 @@ index 2708e8c..f6aecb7 100644
 -	set_pages_array_wc(pages, npages);
 -
 -	psb_gtt_insert_pages(dev_priv, &pobj->resource, pages);
--	psb_mmu_insert_pages(psb_mmu_get_default_pd(dev_priv->mmu), pages,
 +	psb_gtt_insert_pages(dev_priv, &pobj->resource, pobj->pages);
-+	psb_mmu_insert_pages(psb_mmu_get_default_pd(dev_priv->mmu), pobj->pages,
- 			     (gpu_base + pobj->offset), npages, 0, 0,
- 			     PSB_MMU_CACHED_MEMORY);
+ 	if (dev_priv->mmu)
+-		psb_mmu_insert_pages(psb_mmu_get_default_pd(dev_priv->mmu), pages,
++		psb_mmu_insert_pages(psb_mmu_get_default_pd(dev_priv->mmu), pobj->pages,
+ 				     (gpu_base + pobj->offset), npages, 0, 0,
+ 				     PSB_MMU_CACHED_MEMORY);
  
 -	pobj->pages = pages;
 -
@@ -169,8 +170,8 @@ index 2708e8c..f6aecb7 100644
  
  	npages = obj->size / PAGE_SIZE;
  
-@@ -97,13 +131,18 @@ void psb_gem_unpin(struct psb_gem_object *pobj)
- 			     (gpu_base + pobj->offset), npages, 0, 0);
+@@ -99,13 +133,18 @@ void psb_gem_unpin(struct psb_gem_object *pobj)
+ 				     (gpu_base + pobj->offset), npages, 0, 0);
  	psb_gtt_remove_pages(dev_priv, &pobj->resource);
  
 -	/* Reset caching flags */
@@ -193,7 +194,7 @@ index 2708e8c..f6aecb7 100644
  	dma_resv_unlock(obj->resv);
  }
  
-@@ -131,8 +170,55 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
+@@ -133,8 +172,55 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
  	.close = drm_gem_vm_close,
  };
  
