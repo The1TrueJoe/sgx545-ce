@@ -8,7 +8,7 @@
  * sgx_lower()), register allocation, encoding.
  *
  * Vector operations become one USSE instruction with a repeat where the
- * operands allow it (ISA.md "Repeats"): the float 3-source/dot/min-max
+ * operands allow it: the float 3-source/dot/min-max
  * classes step each source or hold it (inc bits, or moe when all step);
  * the scalar, move, select and testmask classes step every operand. A NIR
  * vector op is split into runs of components that one instruction covers.
@@ -177,6 +177,7 @@ form_class(unsigned form)
    case SGX_OP_FMINMAX:
    case SGX_OP_FMAXMIN:
    case SGX_OP_FDP:
+   case SGX_OP_FDPC:
    case SGX_OP_FDSX:
    case SGX_OP_FDSY:
       return CLS_INC;
@@ -257,7 +258,15 @@ slot_ok(unsigned form, unsigned k, const struct sgx_ref *r)
    return true;
 }
 
-/* hardware constants (ISA.md table, hardware-checked) as f32 bits */
+/* hardware constants (checked on hardware) as f32 bits */
+/* fdpc is fdp with a clip-plane result besides: the same operands and
+ * repeat rules (it writes only the last iteration's destination) */
+static inline bool
+is_fdp(unsigned form)
+{
+   return form == SGX_OP_FDP || form == SGX_OP_FDPC;
+}
+
 static int
 hw_const(uint32_t bits)
 {
@@ -690,7 +699,7 @@ emit_runs_raw(struct sgx_ctx *c, unsigned form, unsigned wmask,
             bool st = ref_next(&src[s][j - 1], &src[s][j]);
             if (scalar && src[s][j].h16) {
                /* a scalar op's F16 source steps by register, its half fixed
-                * (ISA.md hw1 source format) */
+                * (the source format has no half step) */
                struct sgx_ref a = src[s][j - 1];
                if (a.file == SGX_F_V)
                   a.comp += 1;
@@ -740,8 +749,8 @@ is_rpa(const struct sgx_ref *r)
 static const struct fieldset NOF = {0};
 
 /* ------------------------------------------------------------------------
- * float16 (mediump; corpus *_m): values are F16 halves, two per
- * register; arithmetic is fmad16 on lane pairs (ISA.md: per-source swizzle
+ * float16 (mediump): values are F16 halves, two per
+ * register; arithmetic is fmad16 on lane pairs (per-source swizzle
  * lohi / ll / hh / f32-converted, rounds to nearest), packing is
  * pck.f16.f16, conversions pck/fmad16. */
 
@@ -988,8 +997,8 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
    for (unsigned l = 0; l < 2; l++)
       one &= sp[1][l].file == SGX_F_K && sp[1][l].h16 && !sp[1][l].neg &&
              !sp[1][l].abs && (sp[1][l].n & 0xffff) == 0x3c00;
-   bool neg2 = sp[2][0].neg && sp[2][1].neg && !sp[2][0].abs &&
-               !sp[2][1].abs && !sgx_debug(c, SGX_DBG_NO_CONST_SWAP);
+   bool neg2 = sp[2][0].neg && sp[2][1].neg && !sp[2][0].abs && !sp[2][1].abs &&
+               !sgx_debug(c, SGX_DBG_NO_CONST_SWAP);
    if (one && !is_rpa(&sp[0][0]) && is_rpa(&sp[2][0]) && is_rpa(&sp[2][1]) &&
        ((!sp[2][0].neg && !sp[2][1].neg) || neg2)) {
       struct sgx_ref t0 = sp[0][0], t1 = sp[0][1];
@@ -1314,7 +1323,7 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
       struct sgx_ref r[4];
       if (alu->op == nir_op_f2f16) {
          /* an f32 uniform read as F16: pck.f16.f32, two halves at a time,
-          * truncating (hwt_p4) */
+          * truncating (checked on hardware) */
          for (unsigned k = 0; k < nc; k++) {
             r[k] = s[0][k];
             if (r[k].file != SGX_F_U || r[k].h16 || r[k].neg || r[k].abs)
@@ -1438,7 +1447,7 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
          fmad16(c, dp, m);
          break;
       case nir_op_flrp: {
-         /* mix: b * t + a, then t * -a + that (corpus mix_m) */
+         /* mix: b * t + a, then t * -a + that */
          unsigned t = new_vreg16(c, 2);
          m[0][0] = s[1][l0];
          m[0][1] = s[1][l1];
@@ -1461,7 +1470,7 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
       case nir_op_ffloor:
       case nir_op_ffract: {
          /* per lane: fract in f32 from the F16 half (fsubflr under format
-          * select), then x - fract as fmad16 (corpus floor_m) */
+          * select), then x - fract as fmad16 */
          struct sgx_ref lane[2];
          for (unsigned q = 0; q < 2; q++) {
             unsigned li = q ? l1 : l0;
@@ -1561,14 +1570,14 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
 
 /* ------------------------------------------------------------------------
  * co-issue: a sum of vector * scalar terms (mat4 * v: columns times v's
- * components, plus a translation) as efos, two result lanes per instruction,
- * (corpus c3 v_mvp). Per lane pair (l0, l1) and term t:
+ * components, plus a translation) as efos, two result lanes per
+ * instruction. Per lane pair (l0, l1) and term t:
  *    efo d, M_t[l0], M_t[l1], s_t   m0 = s0*s2, m1 = s1*s2
  * the first with I0/I1 = m0/m1, the others with a0 = m0 + i0, a1 = i1 + m1
  * into I0/I1; the last one's d = a0 is lane l0, and lane l1 is I1, moved out
  * by the next instruction. All but the last efo are nosched (internal
  * registers don't survive a deschedule), and no instruction reads an internal
- * register the same word writes (ISA.md "efo", hwt_p12). */
+ * register the same word writes (checked on hardware). */
 
 struct efo_term {
    nir_alu_instr *alu;
@@ -1999,7 +2008,8 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
          }
       }
       emit_runs(c, SGX_OP_FDP, nir_component_mask(n), d, 2, s, &NOF, 0);
-      /* fdp writes only the last iteration's destination (ISA.md hwt_p7): its
+      /* fdp writes only the last iteration's destination (checked on
+       * hardware): its
        * operand names that register alone, the encoder takes rpt - 1 off,
        * and nothing holds the ones below it */
       unsigned w1 = new_vreg(c, 1);
@@ -2061,7 +2071,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    }
    if (alu->op == nir_op_ffloor && ld.dest.is_ssa && !ld.fsat && !c->def_dest &&
        negated_ok(&alu->def)) {
-      /* fsubflr t, c48, x = -floor(x), one instruction (corpus: ceil is
+      /* fsubflr t, c48, x = -floor(x), one instruction (ceil is
        * fsubflr d, c48, -x); readers take t negated, and ceil's own
        * negations (lower_fceil: -floor(-x)) cancel into it */
       unsigned t = new_vreg(c, 4);
@@ -2300,7 +2310,8 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
            (mask_bool(alu) && !sgx_debug(c, SGX_DBG_NO_MASK_BOOL))) &&
           !sgx_debug(c, SGX_DBG_NO_CONDMASK)) {
          /* only selects read it: the mask itself (a passing dword test
-          * writes 0xffffffff, which movc.nz takes as true: ISA.md hwt_p2/p7) */
+          * writes 0xffffffff, which movc.nz takes as true: checked on
+          * hardware) */
          c->vals[alu->def.index].kind = VAL_V;
          c->vals[alu->def.index].n = t;
          c->vals[alu->def.index].comp = 0;
@@ -2387,8 +2398,7 @@ discard(struct sgx_ctx *c, nir_intrinsic_instr *in, bool cond)
 {
    if (cond && c->discard_cmp) {
       /* the only discard, on one comparison: the keep predicate p1 directly
-       * (the inverse condition; ISA.md "What a compiler must emit to
-       * discard") */
+       * (the inverse condition) */
       nir_alu_instr *cmp = c->discard_cmp;
       int inv = cmp->op == nir_op_sge   ? 25
                 : cmp->op == nir_op_slt ? 6
@@ -2532,6 +2542,31 @@ vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
    set_refs(c, &in->def, x, nc);
 }
 
+/* User clip plane p's distance into the TA (output select enables plane p):
+ * `fdpc o<clip_o + p>, cp<p>, (x, 0), (c52, c53) [rpt=2]`, x * 1 + 0 * 1;
+ * fdpc writes only its last iteration's destination, like fdp */
+static void
+emit_clip_distance(struct sgx_ctx *c, unsigned p, struct sgx_ref x)
+{
+   if (p >= c->n_clip)
+      return;
+   unsigned t = new_vreg(c, 2);
+   struct sgx_ref td[4] = {vref(t, 0), vref(t, 1)};
+   struct sgx_ref ts[1][4] = {{x, ref(SGX_F_K, 0)}};
+   emit_runs(c, SGX_OP_MOV, 3, td, 1, ts, &NOF, 0);
+   unsigned o = c->clip_o + p;
+   struct sgx_ins *f = ins_alloc(c, SGX_INS_ALU, SGX_OP_FDPC);
+   f->nops = 3;
+   f->rpt = 2;
+   f->op[0] = ref(SGX_F_O, o);
+   f->op[1] = vref(t, 0);
+   f->op[1].step = 1;
+   f->op[2] = cref(52);
+   f->op[2].step = 1;
+   fld(f, SGX_FLD_CP, p);
+   emit(c, f);
+}
+
 static void
 emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
 {
@@ -2637,8 +2672,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_load_uniform: {
       if (!nir_src_is_const(in->src[0])) {
          /* a[i]: pck.s16.f32 t, offset; ima16.sgn idx1, t, #1, #<SA of the
-          * array>; then each component from sa[idx1 + j] (ISA.md
-          * "What GLSL integer code compiles to") */
+          * array>; then each component from sa[idx1 + j] */
          unsigned k = nir_intrinsic_base(in), range = nir_intrinsic_range(in);
          for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_used);
               j++)
@@ -2693,9 +2727,9 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          off = (uint32_t)uif(off);
       v->n = nir_intrinsic_base(in) + off;
       if (v->n < ARRAY_SIZE(c->const_fmt) && c->const_fmt[v->n] == 3) {
-         /* C10 in SA (a lowp vector, corpus *_l): to F16 with
+         /* C10 in SA (a lowp vector): to F16 with
           * pck.f16.c10 [scale], channel n at bits 10n holds constant
-          * k + 2 - n (corpus mc_texfog) */
+          * k + 2 - n */
          unsigned k = v->n, nc = 0;
          while (nc < in->def.num_components && nc < 3 &&
                 c->const_fmt[k + nc] == 3)
@@ -2815,10 +2849,17 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       nir_legacy_src ls = nir_legacy_chase_src(&in->src[0]);
       struct sgx_ref d[4], ss[1][4];
       unsigned m = 0;
+      if (slot == VARYING_SLOT_CLIP_DIST0 || slot == VARYING_SLOT_CLIP_DIST1) {
+         for (unsigned k = 0; k < 4; k++)
+            if (wmask & (1u << k))
+               emit_clip_distance(
+                  c, (slot - VARYING_SLOT_CLIP_DIST0) * 4 + k,
+                  src_comp(c, &ls, k - nir_intrinsic_component(in)));
+         return;
+      }
       if (slot == VARYING_SLOT_PSIZ) {
-         /* an f32 output, clamped to the largest point size (docs/STATE.md
-          * "Lines and points"): min(x, 511), a constant
-          * at compile time */
+         /* an f32 output, clamped to the largest point size: min(x, 511), a
+          * constant at compile time */
          int r = c->out_reg[VARYING_SLOT_PSIZ * 4];
          if (r < 0)
             return;
@@ -2859,9 +2900,9 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_ddy:
    case nir_intrinsic_ddy_fine:
    case nir_intrinsic_ddy_coarse: {
-      /* fdsx / fdsy d, x, x per component (corpus c3 dsx, dsy;
-       * st has already flipped dFdy's sign for the target). f32
-       * only: an F16 source is format-selected, the result rounded back */
+      /* fdsx / fdsy d, x, x per component (st has already flipped dFdy's sign
+       * for the target). f32 only: an F16 source is format-selected, the result
+       * rounded back */
       bool y = in->intrinsic == nir_intrinsic_ddy ||
                in->intrinsic == nir_intrinsic_ddy_fine ||
                in->intrinsic == nir_intrinsic_ddy_coarse;
@@ -2935,7 +2976,7 @@ emit_br(struct sgx_ctx *c, unsigned l, unsigned pred)
 static void emit_tex(struct sgx_ctx *c, nir_tex_instr *tex);
 
 /* tex(v.xy * rcp(v.w)) on a whole vec4 varying v: a non-dependent
- * projected read (corpus c3 tx_nd_proj4: the PDS iterates v.xy / v.w); the
+ * projected read (the PDS iterates v.xy / v.w); the
  * divide isn't emitted.
  * The varying load behind a mov of it (or the load itself), and the swizzle */
 static nir_intrinsic_instr *
@@ -2990,7 +3031,7 @@ iter_reg(const struct sgx_iter *it)
  * non-dependent samples (the coordinate as loaded, from the set's first
  * component) needs no plain iteration: the PDS samples from the set itself.
  * Its iteration goes and the later ones move down, before anything is
- * emitted, since iterations fill PA in PDS program order (PDS.md "DOUTI");
+ * emitted, since iterations fill PA in PDS program order (DOUTI order);
  * c->sample_set maps each such load to its set + 1 for emit_tex. A
  * projected sample (find_projected: xy and w of this load) counts too: the
  * PDS projects as it samples, through a swizzle mov or not. */
@@ -3015,7 +3056,8 @@ proj_use(struct sgx_ctx *c, nir_intrinsic_instr *ld, nir_src *u)
    struct hash_entry *he = _mesa_hash_table_search(c->proj, t);
    int ci = nir_tex_instr_src_index(t, nir_tex_src_coord);
    int pi = nir_tex_instr_src_index(t, nir_tex_src_projector);
-   return he && he->data == ld && (u == &t->src[ci].src || u == &t->src[pi].src);
+   return he && he->data == ld &&
+          (u == &t->src[ci].src || u == &t->src[pi].src);
 }
 
 static bool
@@ -3139,8 +3181,8 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
 
 /* PDS samples alone (no coordinate iteration of their own) each placed right
  * after a plain iteration of another set, F16 ones first, so the driver can
- * merge the sample into that DOUTI (the DDK's `iterate tc0; sample tc1`):
- * fewer DOUTIs a pixel. Iterations fill PA in list order (PDS.md "DOUTI"), so
+ * merge the sample into that DOUTI (`iterate tc0; sample tc1` in one):
+ * fewer DOUTIs a pixel. Iterations fill PA in list order, so
  * the input PA registers are renamed to the new order, after allocation. Not
  * when a repeat or a PA vreg would straddle a moved boundary. */
 static unsigned
@@ -3192,8 +3234,7 @@ static void
 interleave_samples(struct sgx_ctx *c)
 {
    if (!c->opts->pds_samples_alone || c->stage != MESA_SHADER_FRAGMENT ||
-       sgx_debug(c, SGX_DBG_NO_INTERLEAVE) || c->n_iters < 2 ||
-       c->n_iters > 16)
+       sgx_debug(c, SGX_DBG_NO_INTERLEAVE) || c->n_iters < 2 || c->n_iters > 16)
       return;
    /* partners: plain iterations of a coordinate set no other sample reads */
    int partner[16], order[16], n = 0;
@@ -3523,8 +3564,7 @@ emit_block(struct sgx_ctx *c, nir_block *b, struct loop_labels *loop)
 }
 
 /* an if on a comparison only it reads, computed last in the block before
- * it: test.fsub.<inverse> p0, a, b (ISA.md "How the corpus builds control
- * flow"), instead of a mask
+ * it: test.fsub.<inverse> p0, a, b, instead of a mask
  * or 1.0 / 0.0 and a test of that */
 static void
 find_if_compares_cf(struct sgx_ctx *c, struct exec_list *list)
@@ -3655,8 +3695,8 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
    unsigned read = nir_def_components_read(&tex->def);
    if (s->f16_return) {
       /* returned as F16 pairs in RGBA order, whatever the texel's byte
-       * order (the TAG converts by channel; capture, T1 0x0c; hardware,
-       * hwt_smp for a dependent smp): the channels are the halves
+       * order (the TAG converts by channel, seen with T1 0x0c; checked on
+       * hardware for a dependent smp): the channels are the halves
        * themselves */
       struct sgx_ref hr[4];
       for (unsigned k = 0; k < 4; k++) {
@@ -3735,9 +3775,20 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       emit_texel(c, tex, ps, ref(SGX_F_PA, ps->pa));
       return;
    }
+   /* (a compare sample is the driver's to lower: nir_lower_tex_shadow) */
+   if (tex->is_shadow ||
+       nir_tex_instr_src_index(tex, nir_tex_src_comparator) >= 0) {
+      sgx_fail(c, "shadow sampler not lowered");
+      return;
+   }
    struct sgx_sample *s = rzalloc(c, struct sgx_sample);
    s->id = c->n_samples;
-   s->dim = tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ? 3 : 2;
+   /* smp's 3D dimension takes cube maps and volumes, the texture state
+    * telling them apart */
+   s->dim = tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ||
+                  tex->sampler_dim == GLSL_SAMPLER_DIM_3D
+               ? 3
+               : 2;
    s->coord_pa = -1;
    s->sampler = tex->texture_index;
    /* non-dependent: the coordinate is (the start of) a varying the PDS
@@ -3857,8 +3908,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       for (unsigned k = 1; k < ncoord; k++)
          run &= ref_next(&cr[k - 1], &cr[k]);
       if (h16) {
-         /* F16 coordinates: smp .f16 (cfmt) reads them two to a register,
-          * (corpus tests/f16) */
+         /* F16 coordinates: smp .f16 (cfmt) reads them two to a
+          * register */
          s->f16coord = true;
          run = ncoord <= 2 &&
                (cr[0].file == SGX_F_V || cr[0].file == SGX_F_PA) &&
@@ -3951,9 +4002,9 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
  * fragment epilogue: colour to packed BGRA8, discard feedback */
 
 /* ------------------------------------------------------------------------
- * lowp in C10 (corpus *_l): a lowp vec4 expression over lowp
+ * lowp in C10: a lowp vec4 expression over lowp
  * uniforms that only the colour reads runs in the colour classes on 10-bit
- * fixed point (ISA.md "sop2"; corpus c1/c2 *_l). Its leaves are the uniforms
+ * fixed point (sop2, sop3, sopwm). Its leaves are the uniforms
  * as C10 (xyz in one SA slot, w in channel 0 of another). A value goes into
  * an internal register (pck.c10.c10 i, xyz, w [scale]) for sopwm (add, sub,
  * min, max), sop3l (mul, mix) and sop3 (x - y * z); rcp, log2 and exp2 run
@@ -4407,8 +4458,7 @@ emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d,
       bool n2;
       nir_def *cc = c10_src(alu, 2, &n2);
       if (n0 || n1) {
-         /* c - a * b: sop3 d, b, c, a [cop=sub c1=one c2=s0 a=one aop=sub],
-          * the corpus's x - y * z */
+         /* c - a * b: sop3 d, b, c, a [cop=sub c1=one c2=s0 a=one aop=sub] */
          struct c10v vz = c10_get(c, st, b, true);
          struct c10v vy = c10_get(c, st, a, true);
          struct c10v vx = c10_get(c, st, cc, true);
@@ -4424,7 +4474,7 @@ emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d,
          break;
       }
       /* a * b + c: the product into an internal register (sop3l), then a
-       * sopwm add (corpus: a lowp mad) */
+       * sopwm add (a lowp mad) */
       nir_def *x = a, *y = b;
       if (!c10_leaf(c, a) && c10_leaf(c, b)) {
          x = b;
@@ -4501,7 +4551,7 @@ emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d,
       va = c10_get(c, st, a, true);
       unsigned t[3];
       int wi = va.held ? c10_ialloc(c, st) : va.i;
-      /* channel order z, y, x, then w over the source (corpus *_l) */
+      /* channel order z, y, x, then w over the source */
       for (unsigned n = 0; n < 4; n++) {
          unsigned ch = n < 3 ? 2 - n : 3;
          struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, form);
@@ -4624,10 +4674,28 @@ reads_pa0(const struct sgx_ref *r)
    return r->file == SGX_F_PA && (r->h16 ? r->n / 2 : r->n) == 0;
 }
 
+/* gl_FragDepth clamped to [0, 1] into pa<depth_pa>, before the colour:
+ * the colour may be written over an input the depth reads, so the depth
+ * goes past every register the colour can take (pa0, an input's,
+ * pa<max(inputs, 1)>) */
+static void
+emit_depth(struct sgx_ctx *c)
+{
+   if (!c->has_depth || c->depth_done)
+      return;
+   c->depth_done = true;
+   c->depth_pa = MAX2(c->n_pa_inputs, 1) + 1;
+   struct sgx_ref d[4] = {ref(SGX_F_PA, c->depth_pa)};
+   struct sgx_ref s[3][4] = {{c->depth},
+                             {ref(SGX_F_K, 0)},
+                             {ref(SGX_F_K, 0x3f800000)}};
+   emit_runs(c, SGX_OP_FMINMAX, 1, d, 3, s, &NOF, 0);
+}
+
 /* The feedback point (USP labels 4/5), after the colour: p1 = keep for a
  * discard, gl_FragDepth clamped to [0, 1] in pa<depth_pa>. The driver puts
  * its atst8, or (p1) depthf pa<depth_pa> for a depth write, in the nop's
- * place (ISA.md "Phases, visibility feedback and discard"). */
+ * place. */
 static void
 emit_feedback(struct sgx_ctx *c)
 {
@@ -4635,14 +4703,7 @@ emit_feedback(struct sgx_ctx *c)
       return; /* (phase 0 ended in it) */
    if (c->discards && !c->keep_pred)
       emit_test(c, 1, vref(c->keep_vreg, 0), ref(SGX_F_K, 0), 0, 24);
-   if (c->has_depth) {
-      c->depth_pa = MAX2(c->n_pa_inputs, c->colour_pa + 1);
-      struct sgx_ref d[4] = {ref(SGX_F_PA, c->depth_pa)};
-      struct sgx_ref s[3][4] = {{c->depth},
-                                {ref(SGX_F_K, 0)},
-                                {ref(SGX_F_K, 0x3f800000)}};
-      emit_runs(c, SGX_OP_FMINMAX, 1, d, 3, s, &NOF, 0);
-   }
+   emit_depth(c);
    if (c->discards || c->has_depth) {
       struct sgx_ins *f = ins_alloc(c, SGX_INS_FEEDBACK, SGX_OP_NOP);
       f->ndst = 0;
@@ -4653,13 +4714,14 @@ emit_feedback(struct sgx_ctx *c)
 static void
 emit_color(struct sgx_ctx *c)
 {
+   emit_depth(c);
    if (c->c10_root) {
       struct c10_state st = {0};
       struct list_head *before = c->ins.prev;
       c->colour_pa = 0;
       emit_c10(c, &st, c->c10_root, ref(SGX_F_PA, 0));
       /* internal registers don't survive a deschedule: nosched on all but
-       * the last two instructions of the sequence (found in the A/B runs) */
+       * the last two instructions of the sequence (found on hardware) */
       unsigned n = 0;
       for (struct list_head *l = before->next; l != &c->ins; l = l->next)
          n++;
@@ -4724,8 +4786,8 @@ emit_color(struct sgx_ctx *c)
       h16 &= col[k].h16 || (col[k].file == SGX_F_K &&
                             (col[k].n == 0 || col[k].n == 0x3f800000));
    if (h16) {
-      /* pck.u8.f16 D, r, a [dmask=12] then D, b, g [dmask=3]: an F16 colour
-       * (corpus *_m) */
+      /* pck.u8.f16 D, r, a [dmask=12] then D, b, g [dmask=3]: an F16
+       * colour */
       struct sgx_ref orig[4];
       memcpy(orig, col, sizeof(orig));
       for (unsigned k = 0; k < 4; k++) {
@@ -4766,7 +4828,7 @@ emit_color(struct sgx_ctx *c)
       }
       /* (g, r) [dmask=6] and (b, a) [dmask=9] when r, g share a register and
        * b, a another (a vec4 as it is): each pck reads one register, so the
-       * first one's may become the colour (corpus mul_m) */
+       * first one's may become the colour */
       bool rg = same_reg16(&col[0], &col[1]) && same_reg16(&col[2], &col[3]);
       struct sgx_ref pr[2][2] = {{col[0], col[3]}, {col[2], col[1]}};
       unsigned dm[2] = {12, 3};
@@ -4801,8 +4863,7 @@ emit_color(struct sgx_ctx *c)
       return;
    }
    /* pck.u8.f32 D, g, r [dmask=6] then D, b, a [dmask=9]: the second reads
-    * after the first wrote D, so D must not be what it reads (ISA.md "Fragment
-    * shaders") */
+    * after the first wrote D, so D must not be what it reads */
    unsigned d = 0;
    for (unsigned k = 0; k < 4; k++) {
       if (col[k].h16 && col[k].file == SGX_F_K) {
@@ -4884,9 +4945,9 @@ merge_runs(struct sgx_ctx *c)
           a->form != b->form || a->pred || b->pred ||
           (cls != CLS_ALL && cls != CLS_INC) ||
           a->rpt + b->rpt > max_rpt(cls) || a->nops != b->nops ||
-          a->ndst != 1 || a->form == SGX_OP_FDP || !same_fields(a, b) ||
+          a->ndst != 1 || is_fdp(a->form) || !same_fields(a, b) ||
           a->writes_pred || b->writes_pred ||
-          /* (a derivative isn't repeated: corpus c3) */
+          /* (a derivative isn't repeated) */
           a->form == SGX_OP_FDSX || a->form == SGX_OP_FDSY)
          continue;
       bool ok = true;
@@ -4966,7 +5027,7 @@ fold_movs(struct sgx_ctx *c)
             ok = i->ndst == 1 && !i->pred && i->rpt == m->rpt &&
                  i->op[0].file == SGX_F_V && i->op[0].n == s.n &&
                  i->op[0].comp == s.comp && !i->op[0].h16 && i->op[0].step &&
-                 (cls == CLS_INC || cls == CLS_ALL) && i->form != SGX_OP_FDP &&
+                 (cls == CLS_INC || cls == CLS_ALL) && !is_fdp(i->form) &&
                  slot_ok(i->form, 0, &d);
             for (unsigned k = i->ndst; k < i->nops && ok; k++)
                ok = !ref_hits(&i->op[k], i->rpt, d.file, d.n, dn, m->rpt);
@@ -5098,10 +5159,10 @@ drop_self_moves(struct sgx_ctx *c)
 }
 
 /* efo chains back to back (mat4 * v, then another): the next chain's first
- * efo stores the previous chain's second lane with d=i1 (the old I1, ISA.md
- * "efo") while it starts its own I0/I1, and the trailing mov goes (capture of a
- * terrain vertex program). The previous chain's last efo becomes
- * nosched so I1 survives. Not when the first efo reads what the mov wrote. */
+ * efo stores the previous chain's second lane with d=i1 (the old I1) while
+ * it starts its own I0/I1, and the trailing mov goes. The previous chain's last
+ * efo becomes nosched so I1 survives. Not when the first efo reads what the mov
+ * wrote. */
 static void
 chain_efos(struct sgx_ctx *c)
 {
@@ -5139,7 +5200,7 @@ chain_efos(struct sgx_ctx *c)
  *
  * A derivative reads its 2x2 neighbours, and a dependent sample takes its LOD
  * from them, so whatever feeds one runs with skipinv clear: helper instances
- * then hold real values (corpus c3 dsy, fwidth, tx_dep). Flow-
+ * then hold real values. Flow-
  * insensitive: every writer of a needed register is needed, and with any of
  * them, the branch predicates too. PA isn't tracked: the iterations fill it
  * on every instance, and the program writes it only for its outputs. */
@@ -5299,7 +5360,7 @@ split_vregs(struct sgx_ctx *c)
 /* A repeat whose source vreg dies here, read at the component its
  * destination writes and stepping with it, writes in place: iteration k
  * reads component k before writing it, and no later iteration reads what an
- * earlier one wrote (corpus: fmad pa0, pa0, pa4, pa8 rpt=4). The
+ * earlier one wrote (fmad pa0, pa0, pa4, pa8 rpt=4). The
  * destination vreg becomes the source's, so a mat4 * v chain needs one
  * register run, not two. */
 static void
@@ -5310,8 +5371,7 @@ coalesce_repeats(struct sgx_ctx *c)
    unsigned nv = util_dynarray_num_elements(&c->vregs, struct sgx_vreg);
    list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
       if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
-          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY ||
-          i->form == SGX_OP_FDP)
+          i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY || is_fdp(i->form))
          continue;
       struct sgx_ref d = i->op[0];
       if (d.file != SGX_F_V || d.h16 || !d.step || d.n >= nv)
@@ -5374,7 +5434,7 @@ o_candidates(struct sgx_ctx *c, unsigned nv, int *inplace, bool *ok)
       const struct sgx_ref *d = &i->op[0];
       if (i->kind != SGX_INS_ALU || i->ndst != 1 || i->pred ||
           d->file != SGX_F_O || !d->step || i->form == SGX_OP_FDSX ||
-          i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+          i->form == SGX_OP_FDSY || is_fdp(i->form))
          continue;
       for (unsigned k = 1; k < i->nops; k++) {
          const struct sgx_ref *r = &i->op[k];
@@ -5431,8 +5491,7 @@ place_in_o(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
          if (r->file != SGX_F_O)
             continue;
          unsigned n = r->step && i->rpt > 1 ? i->rpt : 1;
-         int at =
-            2 * i->ip + (k < i->ndst && (i->rpt == 1 || i->form == SGX_OP_FDP));
+         int at = 2 * i->ip + (k < i->ndst && (i->rpt == 1 || is_fdp(i->form)));
          for (unsigned j = r->n; j < r->n + n && j < 128; j++) {
             if (from[j] < 0 || at < from[j])
                from[j] = at;
@@ -5517,8 +5576,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       last[p] = first_w[p] = -1;
    list_for_each_entry (struct sgx_ins, i, &c->ins, link) {
       /* a finalizer that samples a non-dependent texture with USSE code
-       * reads the coordinate's plain iteration there (ISA.md, "Code
-       * generation") */
+       * reads the coordinate's plain iteration there */
       if (i->kind == SGX_INS_SAMPLE && !i->smp->dependent &&
           i->smp->coord_pa >= 0) {
          for (unsigned n = 0; n < c->n_iters; n++) {
@@ -5543,8 +5601,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
                /* (a single instruction reads before it writes: the colour's
                 * own sources may sit in the colour register) */
                if (first_w[j] < 0)
-                  first_w[j] =
-                     2 * i->ip + (i->rpt == 1 || i->form == SGX_OP_FDP);
+                  first_w[j] = 2 * i->ip + (i->rpt == 1 || is_fdp(i->form));
             } else {
                last[j] = MAX2(last[j], (int)(2 * i->ip));
                if (c->stage == MESA_SHADER_VERTEX)
@@ -5632,7 +5689,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       if (i->kind != SGX_INS_ALU || i->rpt < 2 || i->ndst != 1 || i->pred ||
           d->file != SGX_F_V || d->h16 || !d->step || d->n >= nv ||
           d->comp + i->rpt > 16 || i->form == SGX_OP_FDSX ||
-          i->form == SGX_OP_FDSY || i->form == SGX_OP_FDP)
+          i->form == SGX_OP_FDSY || is_fdp(i->form))
          continue;
       int base = -1;
       for (unsigned k = 1; k < i->nops && base < 0; k++) {
@@ -5686,7 +5743,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
          if (i->kind == SGX_INS_SAMPLE && k < i->ndst && i->smp->f16_return)
             n = 2;
          unsigned first = half ? r->comp / 2 : r->comp;
-         bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) ||
+         bool early = (i->rpt > 1 && !is_fdp(i->form)) ||
                       i->kind == SGX_INS_SAMPLE ||
                       (i->kind == SGX_INS_ALU &&
                        (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
@@ -5781,7 +5838,7 @@ allocate(struct sgx_ctx *c)
             first_is_read[r->n] = true;
          touch(c, r, 2 * ip, 0);
       }
-      bool early = (i->rpt > 1 && i->form != SGX_OP_FDP) ||
+      bool early = (i->rpt > 1 && !is_fdp(i->form)) ||
                    i->kind == SGX_INS_SAMPLE ||
                    (i->kind == SGX_INS_ALU &&
                     (i->form == SGX_OP_FDSX || i->form == SGX_OP_FDSY));
@@ -5821,8 +5878,7 @@ allocate(struct sgx_ctx *c)
    coalesce_repeats(c);
 
    /* F16 values in r0-r31: under format select an F16 operand's number
-    * counts halves, so only those registers can be named (ISA.md "Float
-    * classes") */
+    * counts halves, so only those registers can be named */
    struct ra_regs *regs = ra_alloc_reg_set(c, NUM_TEMPS, true);
    struct ra_class *cls[17] = {0}, *cls_h[17] = {0}, *cls_6[17] = {0};
    struct ra_class *cls_b[4] = {0},
@@ -5882,7 +5938,7 @@ allocate(struct sgx_ctx *c)
    /* an fdp's result register sits rpt - 1 above its operand number */
    unsigned *minb = calloc(nv, sizeof(unsigned));
    list_for_each_entry (struct sgx_ins, i, &c->ins, link)
-      if (i->kind == SGX_INS_ALU && i->form == SGX_OP_FDP &&
+      if (i->kind == SGX_INS_ALU && is_fdp(i->form) &&
           i->op[0].file == SGX_F_V && i->op[0].n < nv)
          minb[i->op[0].n] = MAX2(minb[i->op[0].n], i->rpt - 1u);
    place_in_pa(c, six, ip, loops, nloops, minb);
@@ -6420,7 +6476,7 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
       if (o.file == SGX_ISA_FILE_I &&
           !(sgx_form_slot(form, k)->files & SGX_FILE_BIT(SGX_ISA_FILE_I))) {
          /* sop3's src0 has no internal bank: i<n> is r124+n, six bits
-          * under format control (ISA.md "Operand slots") */
+          * under format control */
          o.file = SGX_ISA_FILE_R;
          o.num += 60;
       }
@@ -6441,7 +6497,7 @@ sgx_encode_ins(struct sgx_ctx *c, const struct sgx_ins *i, uint64_t *w)
             fmt = true;
          }
       }
-      if (form == SGX_OP_FDP && k == 0 && i->rpt > 1) {
+      if (is_fdp(form) && k == 0 && i->rpt > 1) {
          assert(o.num >= i->rpt - 1u);
          o.num -= i->rpt - 1;
       }
@@ -6686,6 +6742,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"nophases", SGX_DBG_NO_PHASES,
     "Keep a discarding fragment program in one phase"},
+   {"flattenuniform", SGX_DBG_FLATTEN_UNIFORM,
+    "Flatten ifs on uniform conditions into selects too"},
    {"nointerleave", SGX_DBG_NO_INTERLEAVE,
     "Keep PDS-only samples after the iterations (no cross-set DOUTI merge)"},
    {"nodepf16", SGX_DBG_NO_DEP_F16,

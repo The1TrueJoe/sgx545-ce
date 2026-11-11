@@ -267,7 +267,7 @@ TEST_F(sgx_compile_test, fragment_uniform_colour_packed)
 
 /* for (i < 8) { if (r.x > a.x) break; r += b; }: a loop that can exit early
  * stays a loop (unrolled, its exits became a select tree holding all eight
- * partial sums: corpus loop_v, 31 temporaries) */
+ * partial sums, 31 temporaries) */
 TEST_F(sgx_compile_test, fragment_early_exit_loop_kept)
 {
    start(MESA_SHADER_FRAGMENT);
@@ -401,8 +401,8 @@ TEST_F(sgx_compile_test, fragment_bgra_texel_unpacks_zyxw)
 }
 
 /* pds_samples_alone: a varying only a sample reads has no plain iteration;
- * the sample is the first PA register (the DDK's tex fs: one PDS sample into
- * pa0, the colour) */
+ * the sample is the first PA register (a texture-only fs: one PDS sample
+ * into pa0, the colour) */
 TEST_F(sgx_compile_test, fragment_sample_only_varying_not_iterated)
 {
    start(MESA_SHADER_FRAGMENT);
@@ -434,7 +434,7 @@ TEST_F(sgx_compile_test, fragment_sample_only_varying_not_iterated)
 
 /* two mat4 * v back to back (position, then a texture coordinate): the
  * second chain's first efo stores the first chain's last lane (d=i1), so only
- * the last chain ends with mov oN, i1 (libusc's chained v_mvp) */
+ * the last chain ends with mov oN, i1 */
 TEST_F(sgx_compile_test, vertex_efo_chains_share_the_mov)
 {
    start(MESA_SHADER_VERTEX);
@@ -477,7 +477,7 @@ TEST_F(sgx_compile_test, vertex_efo_chains_share_the_mov)
 }
 
 /* f16_samples: a mediump texel returns F16 into two registers and is read
- * as their halves, with no unpack (the DDK's terrain program) */
+ * as their halves, with no unpack */
 TEST_F(sgx_compile_test, fragment_f16_sample_not_unpacked)
 {
    start(MESA_SHADER_FRAGMENT);
@@ -535,7 +535,8 @@ TEST_F(sgx_compile_test, fragment_proj_sample_only_varying_not_iterated)
    tx->sampler_dim = GLSL_SAMPLER_DIM_2D;
    tx->dest_type = nir_type_float32;
    tx->coord_components = 2;
-   tx->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
+   tx->src[0] =
+      nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
    tx->src[1] =
       nir_tex_src_for_ssa(nir_tex_src_projector, nir_channel(&b, v, 3));
    tx->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &sd->def);
@@ -644,6 +645,113 @@ TEST_F(sgx_compile_test, fragment_pds_samples_interleaved)
    /* PA in list order */
    for (unsigned i = 1; i < 4; i++)
       EXPECT_EQ(out.iters[i].pa, out.iters[i - 1].pa + out.iters[i - 1].regs);
+}
+
+/* an if on a uniform stays a branch (glamor's repeat modes): only the side
+ * taken runs, where selects compute both on every pixel */
+TEST_F(sgx_compile_test, fragment_uniform_if_stays_a_branch)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *v =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *u = var(nir_var_uniform, glsl_float_type(), "mode", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *x = nir_load_var(&b, v);
+   nir_push_if(&b, nir_flt_imm(&b, nir_load_var(&b, u), 0.5));
+   nir_def *t = x;
+   for (unsigned k = 0; k < 6; k++)
+      t = nir_fadd(&b, nir_fmul(&b, t, t), nir_fsin(&b, t));
+   nir_store_var(&b, col, t, 0xf);
+   nir_push_else(&b, NULL);
+   nir_store_var(&b, col, x, 0xf);
+   nir_pop_if(&b, NULL);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+}
+
+/* a flrp the driver adds after st lowered its own (flrp_lowered set), inside
+ * an if that stays a branch: lowered, not left for the backend */
+TEST_F(sgx_compile_test, fragment_flrp_after_flrp_lowered)
+{
+   start(MESA_SHADER_FRAGMENT);
+   b.shader->info.flrp_lowered = true;
+   nir_variable *v =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *u = var(nir_var_uniform, glsl_float_type(), "mode", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *x = nir_load_var(&b, v);
+   nir_push_if(&b, nir_flt_imm(&b, nir_load_var(&b, u), 0.5));
+   nir_def *t = x;
+   for (unsigned k = 0; k < 3; k++)
+      t = nir_flrp(&b, nir_fmul(&b, t, t), nir_fsin(&b, t),
+                   nir_channel(&b, x, k));
+   nir_store_var(&b, col, t, 0xf);
+   nir_push_else(&b, NULL);
+   nir_store_var(&b, col, x, 0xf);
+   nir_pop_if(&b, NULL);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+}
+
+/* a flat varying's set is iterated flat, a smooth one's isn't; a set with
+ * both stays smooth */
+TEST_F(sgx_compile_test, fragment_flat_varyings)
+{
+   for (unsigned mixed = 0; mixed < 2; mixed++) {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *a =
+         var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+      nir_variable *bv =
+         var(nir_var_shader_in, mixed ? glsl_vec2_type() : glsl_vec4_type(),
+             "b", VARYING_SLOT_VAR1);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      a->data.interpolation = INTERP_MODE_FLAT;
+      if (mixed) {
+         a->type = glsl_vec2_type();
+         nir_store_var(&b, col,
+                       nir_vec4(&b, nir_channel(&b, nir_load_var(&b, a), 0),
+                                nir_channel(&b, nir_load_var(&b, a), 1),
+                                nir_channel(&b, nir_load_var(&b, bv), 0),
+                                nir_channel(&b, nir_load_var(&b, bv), 1)),
+                       0xf);
+      } else {
+         nir_store_var(&b, col,
+                       nir_fadd(&b, nir_load_var(&b, a), nir_load_var(&b, bv)),
+                       0xf);
+      }
+      struct sgx_varyings vary = {};
+      sgx_assign_varyings(b.shader, false, &vary);
+      if (mixed) {
+         /* both in set 0, as packing past ten sets would place them */
+         ASSERT_EQ(vary.n, 2u);
+         vary.v[1].set = vary.v[0].set;
+         vary.v[1].comp = 2;
+      }
+      struct sgx_compile_options opts = {};
+      opts.driver_consts = true;
+      compiled = true;
+      ASSERT_EQ(sgx_compile(b.shader, &opts, &vary, &out), 0) << out.log;
+      expect_decodes();
+      if (mixed) {
+         ASSERT_EQ(out.n_iters, 1u);
+         EXPECT_FALSE(out.iters[0].flat);
+      } else {
+         ASSERT_EQ(out.n_iters, 2u);
+         EXPECT_TRUE(out.iters[0].flat);
+         EXPECT_FALSE(out.iters[1].flat);
+      }
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
 }
 
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
@@ -793,8 +901,8 @@ TEST_F(sgx_compile_test, fragment_discard_one_phase)
 TEST_F(sgx_compile_test, vertex_constants_in_memory)
 {
    start(MESA_SHADER_VERTEX);
-   nir_variable *arr = var(nir_var_uniform,
-                           glsl_array_type(glsl_vec4_type(), 48, 0), "u", -1);
+   nir_variable *arr =
+      var(nir_var_uniform, glsl_array_type(glsl_vec4_type(), 48, 0), "u", -1);
    nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
                            VARYING_SLOT_POS);
    nir_deref_instr *ad = nir_build_deref_var(&b, arr);
@@ -833,6 +941,533 @@ TEST_F(sgx_compile_test, fragment_derivative_source_no_skipinv)
    EXPECT_EQ(line.find("skipinv"), std::string::npos) << s;
 }
 
+/* gl_FragDepth: the instruction that writes pa<depth_pa> (the clamp) */
+static std::string
+depth_write(const std::string &s, unsigned pa)
+{
+   std::string want = "pa" + std::to_string(pa) + ",";
+   size_t at = 0;
+   while ((at = s.find(want, at)) != std::string::npos) {
+      size_t b = s.rfind('\n', at);
+      b = b == std::string::npos ? 0 : b + 1;
+      std::string line = s.substr(b, s.find('\n', at) - b);
+      if (line.find("fminmax") != std::string::npos)
+         return line;
+      at++;
+   }
+   return "";
+}
+
+class sgx_depth_test : public sgx_compile_test {
+ protected:
+   /* gl_FragColor = v; gl_FragDepth = the constant k, or v[ch] when k < 0 */
+   void build(float k = -1.0f, bool discard = false, unsigned ch = 2)
+   {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *in =
+         var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      nir_variable *z = var(nir_var_shader_out, glsl_float_type(),
+                            "gl_FragDepth", FRAG_RESULT_DEPTH);
+      nir_def *v = nir_load_var(&b, in);
+      if (discard)
+         nir_discard_if(&b, nir_flt_imm(&b, nir_channel(&b, v, 0), 0.5));
+      nir_store_var(&b, col, v, 0xf);
+      nir_store_var(
+         &b, z, k >= 0.0f ? nir_imm_float(&b, k) : nir_channel(&b, v, ch), 0x1);
+   }
+
+   /* the depth is clamped into its own PA register, after the inputs and
+    * the colour, and the program has a feedback point for the depthf */
+   void expect_depth()
+   {
+      expect_decodes();
+      EXPECT_TRUE(out.writes_depth);
+      EXPECT_NE(out.depth_pa, out.colour_pa);
+      EXPECT_LT(out.depth_pa, out.n_pa);
+      std::string s = disasm();
+      std::string w = depth_write(s, out.depth_pa);
+      ASSERT_NE(w, "") << s;
+      /* clamped to [0, 1]: fminmax d, x, 0, 1 */
+      EXPECT_NE(w.find("c48"), std::string::npos) << w;
+      EXPECT_NE(w.find("c52"), std::string::npos) << w;
+      bool feedback = false;
+      for (unsigned i = 0; i < out.n_blocks; i++)
+         feedback |= out.blocks[i].kind == SGX_BLOCK_FEEDBACK;
+      EXPECT_TRUE(feedback);
+      for (unsigned i = 0; i < out.n_iters; i++)
+         EXPECT_LT(out.iters[i].pa, out.depth_pa);
+   }
+};
+
+TEST_F(sgx_depth_test, fragment_depth_written)
+{
+   build();
+   ASSERT_TRUE(compile()) << out.log;
+   expect_depth();
+   EXPECT_FALSE(out.discards);
+}
+
+TEST_F(sgx_depth_test, fragment_depth_and_discard)
+{
+   build(-1.0f, true);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_depth();
+   EXPECT_TRUE(out.discards);
+}
+
+/* gl_FragDepth = v.x: the colour is packed over pa0, where v.x is, so the
+ * depth is clamped out of it first */
+TEST_F(sgx_depth_test, fragment_depth_read_before_colour)
+{
+   build(-1.0f, false, 0);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_depth();
+   int clamp = -1, colour = -1;
+   std::string want = "pa" + std::to_string(out.colour_pa) + ",";
+   for (unsigned i = 0; i < out.n_code; i++) {
+      char text[256];
+      sgx_disasm_one(out.code[i], NULL, text, sizeof(text));
+      std::string t(text);
+      if (t.find("fminmax pa" + std::to_string(out.depth_pa) + ",") !=
+          std::string::npos)
+         clamp = (int)i;
+      else if (colour < 0 && t.find("pck.u8") != std::string::npos &&
+               t.find(want) != std::string::npos)
+         colour = (int)i;
+   }
+   ASSERT_GE(clamp, 0) << disasm();
+   ASSERT_GE(colour, 0) << disasm();
+   EXPECT_LT(clamp, colour) << disasm();
+}
+
+/* a constant depth is a register write too (the clamp folds or reads a
+ * constant), not dropped */
+TEST_F(sgx_depth_test, fragment_depth_constant)
+{
+   build(0.25f);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.writes_depth);
+   EXPECT_LT(out.depth_pa, out.n_pa);
+}
+
+/* split_phases: a program that writes depth stays one phase (the depth is
+ * read at the feedback point, where phase 0 would end), with the depth
+ * written before the feedback nop */
+TEST_F(sgx_depth_test, fragment_depth_not_split)
+{
+   build(-1.0f, true);
+   split_phases = true;
+   ASSERT_TRUE(compile()) << out.log;
+   EXPECT_EQ(out.n_code1, 0u);
+   EXPECT_TRUE(out.writes_depth);
+   int fb = -1;
+   for (unsigned i = 0; i < out.n_blocks; i++)
+      if (out.blocks[i].kind == SGX_BLOCK_FEEDBACK)
+         fb = (int)out.blocks[i].at;
+   ASSERT_GE(fb, 0);
+   EXPECT_EQ(out.code[fb], (uint64_t)0xf8000140u << 32);
+   int wrote = -1;
+   for (int i = 0; i < fb; i++) {
+      char text[256];
+      sgx_disasm_one(out.code[i], NULL, text, sizeof(text));
+      std::string t(text);
+      if (t.find("fminmax pa" + std::to_string(out.depth_pa) + ",") !=
+          std::string::npos)
+         wrote = i;
+   }
+   EXPECT_GE(wrote, 0) << disasm();
+}
+
+/* a derivative never writes a register it reads: the neighbours of a quad
+ * don't all read before any writes */
+TEST_F(sgx_compile_test, fragment_derivative_dest_not_source)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_def *a = nir_fabs(&b, nir_fmul(&b, v, v));
+   nir_def *d = nir_fadd(&b, nir_ddy(&b, a), nir_ddx(&b, a));
+   nir_def *fw =
+      nir_fadd(&b, nir_fabs(&b, nir_ddx(&b, v)), nir_fabs(&b, nir_ddy(&b, v)));
+   nir_store_var(&b, col, nir_fmul(&b, d, fw), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   std::string s = disasm();
+   unsigned n = 0;
+   for (size_t at = 0; (at = s.find("fds", at)) != std::string::npos; at++) {
+      std::string line = s.substr(at, s.find('\n', at) - at);
+      /* fdsx d, x, x */
+      char op[8], dst[16], src[16];
+      ASSERT_EQ(sscanf(line.c_str(), "%7s %15[^,], %15[^,],", op, dst, src), 3)
+         << line;
+      EXPECT_STRNE(dst, src) << line;
+      n++;
+   }
+   EXPECT_GE(n, 8u) << s;
+}
+
+/* derivatives of what isn't a varying: a uniform, a constant (both 0),
+ * gl_FragCoord (1 a pixel), and the fine and coarse forms */
+class sgx_deriv_test : public sgx_compile_test {
+ protected:
+   nir_variable *col = NULL;
+
+   void begin()
+   {
+      start(MESA_SHADER_FRAGMENT);
+      col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                FRAG_RESULT_COLOR);
+   }
+
+   /* compiles, decodes, and a constant source never reaches an fds */
+   void check()
+   {
+      ASSERT_TRUE(compile(f16)) << out.log;
+      expect_decodes();
+      std::string s = disasm();
+      for (size_t at = 0; (at = s.find("fds", at)) != std::string::npos; at++) {
+         std::string line = s.substr(at, s.find('\n', at) - at);
+         EXPECT_EQ(line.find(", c"), std::string::npos) << line;
+         EXPECT_EQ(line.find("#"), std::string::npos) << line;
+      }
+   }
+
+   bool f16 = false;
+};
+
+TEST_F(sgx_deriv_test, fragment_derivative_of_uniform)
+{
+   begin();
+   nir_variable *u = var(nir_var_uniform, glsl_vec4_type(), "u", -1);
+   nir_def *v = nir_load_var(&b, u);
+   nir_store_var(&b, col, nir_fadd(&b, nir_ddx(&b, v), nir_ddy(&b, v)), 0xf);
+   check();
+   EXPECT_EQ(disasm().find("fds"), std::string::npos) << disasm();
+}
+
+TEST_F(sgx_deriv_test, fragment_derivative_of_constant)
+{
+   begin();
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_def *k = nir_imm_vec4(&b, 0.25f, 0.5f, 0.75f, 1.0f);
+   nir_store_var(&b, col, nir_fadd(&b, nir_load_var(&b, in), nir_ddy(&b, k)),
+                 0xf);
+   check();
+}
+
+TEST_F(sgx_deriv_test, fragment_derivative_of_fragcoord)
+{
+   begin();
+   nir_variable *fc = var(nir_var_shader_in, glsl_vec4_type(), "gl_FragCoord",
+                          VARYING_SLOT_POS);
+   nir_def *p = nir_load_var(&b, fc);
+   nir_def *d = nir_vec4(&b, nir_ddx(&b, nir_channel(&b, p, 0)),
+                         nir_ddy(&b, nir_channel(&b, p, 1)),
+                         nir_imm_float(&b, 0.0f), nir_imm_float(&b, 1.0f));
+   nir_store_var(&b, col, d, 0xf);
+   check();
+   EXPECT_NE(disasm().find("fdsx"), std::string::npos) << disasm();
+   EXPECT_NE(disasm().find("fdsy"), std::string::npos) << disasm();
+}
+
+TEST_F(sgx_deriv_test, fragment_derivative_fine_and_coarse)
+{
+   begin();
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_def *v = nir_fmul(&b, nir_load_var(&b, in), nir_load_var(&b, in));
+   nir_def *d =
+      nir_fadd(&b, nir_fadd(&b, nir_ddx_fine(&b, v), nir_ddy_fine(&b, v)),
+               nir_fadd(&b, nir_ddx_coarse(&b, v), nir_ddy_coarse(&b, v)));
+   nir_store_var(&b, col, d, 0xf);
+   check();
+}
+
+/* mediump in F16 mode: the source is format-selected, the result F16 */
+TEST_F(sgx_deriv_test, fragment_derivative_mediump)
+{
+   begin();
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   in->data.precision = GLSL_PRECISION_MEDIUM;
+   col->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_def *v = nir_f2f16(&b, nir_load_var(&b, in));
+   nir_def *d = nir_fadd(&b, nir_ddx(&b, v), nir_ddy(&b, v));
+   nir_store_var(&b, col, nir_f2f32(&b, d), 0xf);
+   f16 = true;
+   check();
+}
+
+/* user clip planes per pixel: the clip distances as varyings, one
+ * discard on any negative enabled one. The driver moves the CLIP_DIST
+ * slots to VAR slots as it does other built-ins; here they are moved by
+ * hand */
+static void
+move_clipdist(nir_shader *s, nir_variable_mode mode)
+{
+   nir_foreach_variable_with_modes (v, s, mode)
+      if (v->data.location == VARYING_SLOT_CLIP_DIST0 ||
+          v->data.location == VARYING_SLOT_CLIP_DIST1)
+         v->data.location = VARYING_SLOT_VAR0 + 8 +
+                            (v->data.location - VARYING_SLOT_CLIP_DIST0);
+}
+
+TEST_F(sgx_compile_test, fragment_clip_planes_discard)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, in), 0xf);
+   ASSERT_TRUE(sgx_lower_clip_fs(b.shader, 0x3));
+   move_clipdist(b.shader, nir_var_shader_in);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.discards);
+   EXPECT_EQ(out.n_iters, 2u); /* v and clipdist_0 */
+}
+
+/* planes 0 and 5: both clip-distance vec4s */
+TEST_F(sgx_compile_test, fragment_clip_planes_two_sets)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col, nir_load_var(&b, in), 0xf);
+   ASSERT_TRUE(sgx_lower_clip_fs(b.shader, 0x21));
+   move_clipdist(b.shader, nir_var_shader_in);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.discards);
+   EXPECT_EQ(out.n_iters, 3u);
+}
+
+/* no planes: nothing changes */
+TEST_F(sgx_compile_test, fragment_clip_planes_none)
+{
+   start(MESA_SHADER_FRAGMENT);
+   EXPECT_FALSE(sgx_lower_clip_fs(b.shader, 0));
+}
+
+/* gl_ClipVertex through st's lowering (nir_lower_clip_vs): the vertex
+ * shader writes the clip distances as an output set; the clip vertex
+ * itself isn't an output */
+TEST_F(sgx_compile_test, vertex_clip_vertex_to_clip_distances)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VERT_ATTRIB_GENERIC0);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
+                           VARYING_SLOT_POS);
+   nir_variable *cv = var(nir_var_shader_out, glsl_vec4_type(), "gl_ClipVertex",
+                          VARYING_SLOT_CLIP_VERTEX);
+   nir_def *p = nir_load_var(&b, a);
+   nir_store_var(&b, pos, p, 0xf);
+   nir_store_var(&b, cv, nir_fmul_imm(&b, p, 2.0), 0xf);
+   b.shader->info.outputs_written =
+      VARYING_BIT_POS | BITFIELD64_BIT(VARYING_SLOT_CLIP_VERTEX);
+
+   /* (st's STATE_CLIPPLANE; only the uniforms' names matter here) */
+   gl_state_index16 state[8][STATE_LENGTH] = {};
+   for (unsigned i = 0; i < 8; i++) {
+      state[i][0] = 1;
+      state[i][1] = i;
+   }
+   ASSERT_TRUE(nir_lower_clip_vs(b.shader, 0x3, true, false, state));
+   move_clipdist(b.shader, nir_var_shader_out);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   unsigned sets = 0;
+   for (unsigned i = 0; i < SGX_MAX_SETS; i++)
+      sets += out.set_comps[i] != 0;
+   EXPECT_EQ(sets, 1u) << disasm(); /* clipdist_0 */
+}
+
+/* polygon stipple as nir_lower_pstipple_fs builds it (bool1): a sample of
+ * the 32x32 stipple texture at gl_FragCoord / 32, by texture index with no
+ * deref, and a discard on its alpha */
+TEST_F(sgx_compile_test, fragment_polygon_stipple)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_variable *fc = var(nir_var_shader_in, glsl_vec4_type(), "gl_FragCoord",
+                          VARYING_SLOT_POS);
+   nir_variable *st =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "stipple_tex", -1);
+   st->data.binding = 1;
+   st->data.explicit_binding = true;
+   BITSET_SET(b.shader->info.textures_used, 1);
+   BITSET_SET(b.shader->info.samplers_used, 1);
+
+   nir_def *tc = nir_fmul(&b, nir_trim_vector(&b, nir_load_var(&b, fc), 2),
+                          nir_imm_vec2(&b, 1.0 / 32.0, 1.0 / 32.0));
+   nir_tex_instr *tex = nir_tex_instr_create(b.shader, 1);
+   tex->op = nir_texop_tex;
+   tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
+   tex->coord_components = 2;
+   tex->dest_type = nir_type_float32;
+   tex->texture_index = 1;
+   tex->sampler_index = 1;
+   tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, tc);
+   nir_def_init(&tex->instr, &tex->def, 4, 32);
+   nir_builder_instr_insert(&b, &tex->instr);
+   nir_discard_if(&b, nir_fneu_imm(&b, nir_channel(&b, &tex->def, 3), 0.0));
+   b.shader->info.fs.uses_discard = true;
+   nir_store_var(&b, col, nir_load_var(&b, in), 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(out.discards);
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_EQ(out.samples[0].sampler, 1u);
+}
+
+/* texture() of a sampler of this dimension at coordinate c */
+static nir_def *
+sample_dim(nir_builder *b, nir_variable *smp, nir_def *c, bool shadow = false)
+{
+   nir_deref_instr *sd = nir_build_deref_var(b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = c;
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = glsl_get_sampler_dim(smp->type);
+   tb.dest_type = nir_type_float32;
+   if (shadow) {
+      tb.comparator = nir_channel(b, c, 2);
+      tb.coord = nir_trim_vector(b, c, 2);
+   }
+   return nir_build_tex_struct(b, nir_texop_tex, tb);
+}
+
+/* a compare sample reaching the compiler is refused (the driver lowers it) */
+TEST_F(sgx_compile_test, fragment_shadow_sampler_refused)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec_type(3), "v", VARYING_SLOT_VAR0);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, true, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *r = sample_dim(&b, smp, nir_load_var(&b, in), true);
+   nir_store_var(&b, col, nir_vec4(&b, r, r, r, r), 0xf);
+   EXPECT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("shadow"),
+             std::string::npos);
+}
+
+/* a volume sample is smp's 3D dimension, as a cube map's is: from the PDS
+ * (a whole vec3 varying) and dependent */
+TEST_F(sgx_compile_test, fragment_volume_sample_is_3d)
+{
+   for (unsigned dep = 0; dep < 2; dep++) {
+      start(MESA_SHADER_FRAGMENT);
+      nir_variable *in =
+         var(nir_var_shader_in, glsl_vec_type(3), "v", VARYING_SLOT_VAR0);
+      nir_variable *smp = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_3D, false, false, GLSL_TYPE_FLOAT),
+         "t", -1);
+      nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_FragColor", FRAG_RESULT_COLOR);
+      nir_def *c = nir_load_var(&b, in);
+      if (dep)
+         c = nir_fmul(&b, c, c);
+      nir_store_var(&b, col, sample_dim(&b, smp, c), 0xf);
+      ASSERT_TRUE(compile()) << out.log;
+      expect_decodes();
+      ASSERT_EQ(out.n_samples, 1u);
+      EXPECT_EQ(out.samples[0].dim, 3u);
+      EXPECT_EQ(out.samples[0].dependent, (bool)dep);
+      if (dep) {
+         char text[256];
+         sgx_disasm_one(out.samples[0].smp, NULL, text, sizeof(text));
+         EXPECT_NE(std::string(text).find("smp.3d"), std::string::npos) << text;
+      }
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
+}
+
+/* user clip planes in the TA: gl_ClipVertex through st's lowering
+ * (nir_lower_clip_vs, planes 0..n-1), each distance an fdpc into cp<p> and
+ * o<clip_o + p>, after every other output */
+static void
+clip_vs(nir_builder *b, unsigned enables)
+{
+   nir_variable *a =
+      nir_variable_create(b->shader, nir_var_shader_in, glsl_vec4_type(), "a");
+   a->data.location = VERT_ATTRIB_GENERIC0;
+   nir_variable *pos = nir_variable_create(b->shader, nir_var_shader_out,
+                                           glsl_vec4_type(), "gl_Position");
+   pos->data.location = VARYING_SLOT_POS;
+   nir_variable *cv = nir_variable_create(b->shader, nir_var_shader_out,
+                                          glsl_vec4_type(), "gl_ClipVertex");
+   cv->data.location = VARYING_SLOT_CLIP_VERTEX;
+   nir_def *p = nir_load_var(b, a);
+   nir_store_var(b, pos, p, 0xf);
+   nir_store_var(b, cv, nir_fmul_imm(b, p, 2.0), 0xf);
+   b->shader->info.outputs_written =
+      VARYING_BIT_POS | BITFIELD64_BIT(VARYING_SLOT_CLIP_VERTEX);
+   /* (st's STATE_CLIPPLANE; only the uniforms' names matter here) */
+   gl_state_index16 state[8][STATE_LENGTH] = {};
+   for (unsigned i = 0; i < 8; i++) {
+      state[i][0] = 1;
+      state[i][1] = i;
+   }
+   nir_lower_clip_vs(b->shader, enables, true, false, state);
+}
+
+TEST_F(sgx_compile_test, vertex_clip_planes_fdpc)
+{
+   for (unsigned enables : {0x1u, 0x3u, 0x21u, 0x3fu}) {
+      start(MESA_SHADER_VERTEX);
+      clip_vs(&b, enables);
+      ASSERT_TRUE(compile()) << out.log;
+      expect_decodes();
+      unsigned n = util_last_bit(enables);
+      EXPECT_EQ(out.n_clip, n) << enables;
+      EXPECT_EQ(out.clip_o + n, out.n_out_regs);
+      EXPECT_GE(out.clip_o, 4u);
+      std::string s = disasm();
+      for (unsigned p = 0; p < n; p++) {
+         /* fdp's operand names the register below its result (rpt=2) */
+         std::string want = "fdpc o" + std::to_string(out.clip_o + p - 1) +
+                            ", cp" + std::to_string(p) + ",";
+         EXPECT_NE(s.find(want), std::string::npos) << want << "\n" << s;
+      }
+      EXPECT_EQ(s.find("cp" + std::to_string(n) + ","), std::string::npos) << s;
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+   }
+}
+
 /* the fixed programs: every line assembles, every word decodes, and each
  * program's last instruction ends it */
 TEST(sgx_fixed, programs_assemble)
@@ -841,9 +1476,8 @@ TEST(sgx_fixed, programs_assemble)
    char err[256] = "";
    ASSERT_TRUE(sgx_fixed_progs_build(&p, err, sizeof(err))) << err;
    const struct sgx_fixed_prog *all[] = {
-      &p.empty,    &p.clear_vs,       &p.vpgen_vs,   &p.copy_fs,
-      &p.vs_xy,    &p.vs_xyz,         &p.fs_uniform_sec, &p.fs_uniform,
-      &p.pe_ptoff, &p.pe_emit,
+      &p.empty,  &p.clear_vs,       &p.vpgen_vs,   &p.copy_fs,  &p.vs_xy,
+      &p.vs_xyz, &p.fs_uniform_sec, &p.fs_uniform, &p.pe_ptoff, &p.pe_emit,
    };
    std::vector<const struct sgx_fixed_prog *> v(all, all + ARRAY_SIZE(all));
    for (unsigned n = 1; n <= 32; n++)
@@ -875,12 +1509,16 @@ TEST(sgx_fixed, programs_match_golden)
       const char *name;
       const struct sgx_fixed_prog *prog;
    } named[] = {
-      {"empty", &p.empty},       {"clear_vs", &p.clear_vs},
-      {"vpgen_vs", &p.vpgen_vs}, {"copy_fs", &p.copy_fs},
-      {"vs_xy", &p.vs_xy},       {"vs_xyz", &p.vs_xyz},
+      {"empty", &p.empty},
+      {"clear_vs", &p.clear_vs},
+      {"vpgen_vs", &p.vpgen_vs},
+      {"copy_fs", &p.copy_fs},
+      {"vs_xy", &p.vs_xy},
+      {"vs_xyz", &p.vs_xyz},
       {"fs_uniform_sec", &p.fs_uniform_sec},
       {"fs_uniform", &p.fs_uniform},
-      {"pe_ptoff", &p.pe_ptoff}, {"pe_emit", &p.pe_emit},
+      {"pe_ptoff", &p.pe_ptoff},
+      {"pe_emit", &p.pe_emit},
    };
    unsigned checked = 0;
    for (const struct sgx_fixed_golden &g : sgx_fixed_golden) {

@@ -41,18 +41,18 @@ enum sgx_file {
                    after layout) */
    SGX_F_IXSA,  /* sa[idx1 + n] */
    SGX_F_IDX,   /* index register n (destination) */
-   SGX_F_LIT, /* literal constant n (driver_consts: an SA slot the driver fills)
-               */
+   /* literal constant n (driver_consts: an SA slot the driver fills) */
+   SGX_F_LIT,
 };
 
 struct sgx_ref {
    uint8_t file;
    uint8_t comp;
    uint8_t neg : 1, abs : 1;
-   uint8_t step
-      : 1; /* steps by one per iteration (else the same every iteration) */
-   uint8_t h16
-      : 1; /* an F16 half: n (comp for vregs) counts halves, 2 * reg + half */
+   /* steps by one per iteration (else the same every iteration) */
+   uint8_t step : 1;
+   /* an F16 half: n (comp for vregs) counts halves, 2 * reg + half */
+   uint8_t h16 : 1;
    uint8_t c10 : 1; /* a C10 operand of the colour classes (format control) */
    uint8_t lane;    /* pck .l<n> */
    uint32_t n;
@@ -107,6 +107,7 @@ struct sgx_iter {
    bool proj;       /* ... iterated projected (x/w, y/w) */
    bool f16;        /* iterated as F16 (mediump), two components per register */
    bool pointcoord; /* gl_PointCoord (set 0) */
+   bool flat;       /* every varying in the set flat */
    unsigned sampler;
 };
 
@@ -145,12 +146,14 @@ struct sgx_ctx {
    int in_reg[512], out_reg[512];
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
-#define SGX_ITER_FRAGCOORD                                                     \
-   14 /* list A iterator of gl_FragCoord (capture) */
+#define SGX_ITER_FRAGCOORD 14 /* list A iterator of gl_FragCoord */
    struct sgx_iter iters[16];
    unsigned n_iters;
    unsigned n_pa_inputs;
    unsigned psize_reg, n_out_regs;
+   /* vertex: user clip distances 0..n_clip-1, one fdpc each into
+    * o<clip_o + p> and cp<p> */
+   unsigned n_clip, clip_o;
 
    /* NIR def -> value */
    struct sgx_val *vals;
@@ -196,6 +199,7 @@ struct sgx_ctx {
    bool has_color;
    struct sgx_ref depth; /* gl_FragDepth */
    bool has_depth;
+   bool depth_done; /* emit_depth ran */
    unsigned depth_pa;
    int keep_vreg; /* discard: 1.0 = keep, -1 none */
    bool discards;
@@ -289,6 +293,7 @@ enum sgx_debug {
    SGX_DBG_NO_PROJ_ALONE = BITFIELD64_BIT(26),
    SGX_DBG_NO_DEP_F16 = BITFIELD64_BIT(27),
    SGX_DBG_NO_INTERLEAVE = BITFIELD64_BIT(28),
+   SGX_DBG_FLATTEN_UNIFORM = BITFIELD64_BIT(29),
    SGX_DBG_NO_TEX_COLOR = BITFIELD64_BIT(16),
    SGX_DBG_NO_PACKED_COLOR = BITFIELD64_BIT(17),
 };

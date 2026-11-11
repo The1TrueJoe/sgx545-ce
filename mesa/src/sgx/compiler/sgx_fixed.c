@@ -10,7 +10,7 @@
 #include "sgx_isa.h"
 #include "sgx_isa_asm.h"
 
-/* The prologue of every vertex and state task (GEN.md). test.and.ne of #0
+/* The prologue of every vertex and state task. test.and.ne of #0
  * and #0 never sets p0, so the predicated load never runs. */
 #define PROLOGUE                                                               \
    "nop [nosched]", "test.and.ne p0, #0, #0 [skipinv nodst=0]",                \
@@ -41,7 +41,7 @@ static const char *const clear_vs[] = {
    NULL,
 };
 
-/* pass-type-3 objects (STATE.md "Scissor and partial viewports"):
+/* pass-type-3 objects (the viewport object of a scissor or partial viewport):
  * screen-space x, y -> position with z = w = 1.0 */
 static const char *const vpgen_vs[] = {
    "phas.i @end, #0 [wait=2]",
@@ -127,8 +127,8 @@ static const char *const pe_emit[] = {
 };
 
 static bool
-assemble(struct sgx_fixed_prog *p, const char *name,
-         const char *const *lines, char *err, size_t size)
+assemble(struct sgx_fixed_prog *p, const char *name, const char *const *lines,
+         char *err, size_t size)
 {
    const char *label[8];
    unsigned at[8], nlabels = 0, n = 0;

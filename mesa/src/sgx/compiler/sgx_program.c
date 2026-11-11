@@ -24,7 +24,7 @@ phys(struct sgx_ctx *c, const struct sgx_ref *r)
 }
 
 /* A dependent sample's smp: destination r0 and texture state #0, which the
- * driver replaces (docs/ISA.md "The texture-sample sequence"). */
+ * driver replaces. */
 static int
 smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
 {
@@ -263,6 +263,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       o->proj = it->proj;
       o->sampler = it->sampler;
       o->pointcoord = it->pointcoord;
+      o->flat = it->flat;
    }
    out->colour_pa = c->colour_pa;
    out->discards = c->discards;
@@ -273,10 +274,12 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];
    out->point_size = !frag && c->vary->point_size;
    out->n_out_regs = frag ? 0 : c->n_out_regs;
+   out->n_clip = frag ? 0 : c->n_clip;
+   out->clip_o = frag ? 0 : c->clip_o;
    out->n_code = util_dynarray_num_elements(&flat, uint64_t);
    out->code = malloc(MAX2(flat.size, 8));
    memcpy(out->code, flat.data, flat.size);
-   /* the words as sgxc's .code (high, low), for tools/isa/dis.py */
+   /* the words (high, low) */
    if (c->opts->verbose) {
       for (unsigned i = 0; i < out->n_code; i++)
          fprintf(stderr, "%08x %08x\n", (unsigned)(out->code[i] >> 32),

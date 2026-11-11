@@ -2375,6 +2375,19 @@ backed above; this section only collects it.
   gl_FragDepth, clamped to [0, 1], in a pa register at the feedback nop for
   a `depthf` there, pass type 5. **Guess**: that depthf's src0 is the depth
   written; sa3/sa4 not traced. Needs hardware.
+  - The words for it: lo `0xf0000184 | depth_pa << 14` (src0 = pa<depth_pa>
+    in l14-20, src1/src2 = sa3/sa4 as in atst8), hi `0xfb340404` for
+    `(p1) depthf` (h9-10 = 2). In a program without a discard the compiler
+    computes no p1, so `(p1)` would test whatever p1 holds: such a program
+    needs h9-10 = 0, hi `0xfb340004` (**guess**: an atst8 with h9-10 = 0
+    kills nothing, hardware, so depthf with 0 should keep every pixel).
+  - The clamp runs before the colour is written: the colour may be packed
+    over an input the depth reads (pa0), so depth_pa is past every register
+    the colour can take, `max(inputs, 1) + 1`.
+  - The test: piglit `glsl-1.10-fragdepth` and `glsl-bug-22603` (a shader
+    depth against a depth-tested second draw, read back as colour); the
+    `*-copypixels` / `*-drawpixels` depth tests also need depth loaded and
+    stored between renders (ZLS), so they test both.
 - **Derivatives** (corpus c3 dsx, dsy, fwidth): `fdsx d, x, x` / `fdsy d,
   x, x`, one per component, never repeated. The vendor compiler multiplies
   dFdy's operand by a driver constant first (the target's y direction; Mesa's st
@@ -2389,7 +2402,77 @@ backed above; this section only collects it.
   right while dFdy of an `fmul` and either derivative of an `abs` were
   wrong. With the feeding math skipinv-clear, `glsl-fwidth` passes, and
   every remaining failure was a derivative whose `d` was `x` (`fdsy r4, r4,
-  r4`), while each that wrote another register was right.
+  r4`), while each that wrote another register was right. The allocator now
+  makes a derivative's destination live from its own instruction's start
+  (as a repeat's is), so `d` is never one of its sources. `glsl-derivs` and
+  `glsl-fwidth` pass on hardware (2026-11-10), and so do `glsl-derivs-abs`,
+  `-abs-sign`, `-sign`, `-swizzle` and `-varyings` (2026-11-11, EA3).
+  `fs-dfdx-accuracy` and `fs-dfdy-accuracy` give Warn: they expect
+  `dFdx(x * y)` of gl_FragCoord to be exactly `y` under the NICEST hint,
+  which only per-pixel differencing gives. That fits fdsx/fdsy differencing
+  per 2x2 quad (coarse; **guess**, not yet read back per pixel), which GL
+  allows. No fine form is known.
+- **Logic ops** (GL 1.1 `glLogicOp`; piglit `gl-1.0-logicop`, 16 subtests,
+  `gl-1.1-xor`, `gl-1.1-xor-copypixels`): there is no fixed-function logic
+  op, as there is no blender. Like blending they are code after the colour,
+  in a translucent pass where o0 starts as the tile's colour (STATE.md
+  "Blending and the color mask are shader code"), on the packed BGRA8 word.
+  The bitwise class has and, or and xor with src2 optionally inverted
+  (`.inv` on the mnemonic; src1 takes no modifier), each **hardware**
+  (hwt_p7 `bit_*`, `and.inv #1`), and an immediate src2 is inverted too.
+  With S = pa<c> (the colour) and D = o0:
+
+  | GL | code |
+  |---|---|
+  | CLEAR | `and o0, o0, #0` |
+  | AND | `and o0, pa<c>, o0` |
+  | AND_REVERSE (S & ~D) | `and.inv o0, pa<c>, o0` |
+  | COPY | nothing (the plain colour write) |
+  | AND_INVERTED (~S & D) | `and.inv o0, o0, pa<c>` |
+  | NOOP | `mov o0, o0` (or write nothing: colour mask 0) |
+  | XOR | `xor o0, pa<c>, o0` |
+  | OR | `or o0, pa<c>, o0` |
+  | NOR | `or r, pa<c>, o0`; `xor.inv o0, r, #0` |
+  | EQUIV (~(S ^ D)) | `xor.inv o0, pa<c>, o0` |
+  | INVERT | `xor.inv o0, o0, #0` |
+  | OR_REVERSE (S \| ~D) | `or.inv o0, pa<c>, o0` |
+  | COPY_INVERTED | `xor.inv o0, pa<c>, #0` |
+  | OR_INVERTED (~S \| D) | `or.inv o0, o0, pa<c>` |
+  | NAND | `and r, pa<c>, o0`; `xor.inv o0, r, #0` |
+  | SET | `or.inv o0, o0, #0` |
+
+  Every row assembles and round-trips (`tools/isa/asm.py`; with c = 0,
+  XOR is `58041001 90000000`). The last instruction carries `end`. The ops:
+  **hardware**; that a bitwise
+  op may write o0 (its dst slot takes o: oracle) and read the tile there in
+  a translucent pass as sop2 does: **guess**, to be confirmed by a DDK ES1
+  capture with `glLogicOp` (`tools/probe/probe1.c` PROBE_LOGICOP) or by the
+  piglit tests on the open driver. With a colour mask the logic op goes
+  first, then the masked move. Only for unsigned normalized colour buffers
+  (GL ignores the logic op for float ones).
+- **User clip planes** are clipped by the TA (STATE.md "Clip planes, shading,
+  polygon and line state": capture `cp1`, `cp2`, `cp6`). For plane n the DDK's
+  ES1 vertex program ends with `fdpc o(7+n), cp<n>, pa0, c52 [rpt=2 inc0
+  inc1]` (words `1081d001 90e04034` for n = 0): pa0 holds the distance
+  (computed by efos from the eye-space position and the planes, which arrive
+  as constants), pa1 = 0, and c52-c53 are 1.0, so the dot product is the
+  distance. fdpc writes only its last iteration's destination, as fdp does
+  (hardware, hwt_p7), so plane n's result is o(8+n), and output select's
+  dword count, 8 + n, agrees. Output select also gets b0-5 = the planes.
+  - The compiler: st keeps lowering the planes and gl_ClipVertex to clip
+    distances in the vertex shader (`nir_lower_clip_vs`, driver
+    `clip_planes` 0: planes 0..n-1, a disabled one below the last 0.0), and
+    each distance becomes `fdpc o<clip_o + p - 1>, cp<p>, (d, 0), c52
+    [rpt=2]` after every other output (`sgx_shader.n_clip`, `clip_o`). The
+    driver sets output select b0-5 to planes 0..n_clip-1 and counts n_clip
+    more dwords. Lines clip too: no discard.
+  - **Guesses** until a hardware draw: that a plane enabled with a 0.0
+    distance keeps everything (a point on the plane is inside); that the
+    result registers follow the enabled bits in order.
+  - `sgx_lower_clip_fs` (the per-pixel fallback) stays for a core without
+    the TA path.
+- **Polygon stipple**: `nir_lower_pstipple_fs` (a 32x32 texture read at
+  gl_FragCoord and a discard): nothing new for the compiler.
 - **Phases**: every finalized fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
   hardware) and ends with `end` on its last instruction or an appended

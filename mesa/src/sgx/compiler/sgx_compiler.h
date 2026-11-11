@@ -5,11 +5,10 @@
 
 /*
  * SGX545 shader compiler: NIR in, USSE code out, plus what the driver needs
- * to run it (constants, iterations, texture samples, branches). The USP
- * container is not written here: tools/usc/sgx_usp.c builds it from
- * struct sgx_shader for the A/B harness (docs/COMPILER-UPSTREAM.md §3).
+ * to run it (constants, iterations, texture samples, branches). No
+ * container format is written here: the caller packages struct sgx_shader.
  *
- * The input/output conventions (ISA.md "What a compiler needs"):
+ * The input/output conventions:
  *  - uniforms: one 32-bit constant per component, constant k of the driver's
  *    constant buffer loaded into sa[base + k] (fragment base 9, vertex 10);
  *  - fragment varyings: iterated by the PDS into pa, F32, one register per
@@ -20,8 +19,7 @@
  *  - vertex outputs: position o0-o3, then the texture coordinate sets in
  *    order, each its size, then the point size.
  * Constant numbers, attribute slots and sampler units are the caller's to
- * choose (sgx_compile_options.layout); sgxc chooses the corpus's numbers for
- * the A/B harness.
+ * choose (sgx_compile_options.layout).
  */
 #ifndef SGX_COMPILER_H
 #define SGX_COMPILER_H
@@ -61,12 +59,12 @@ struct sgx_compile_options {
    const struct sgx_layout *layout; /* NULL: the compiler's own numbering */
    bool verbose;
    /* mediump/lowp arithmetic in F16 (NIR from Mesa's precision lowering):
-    * F16 iteration, fmad16, F16/C10 uniforms (corpus *_m, *_l) */
+    * F16 iteration, fmad16, F16/C10 uniforms */
    bool f16;
    /* gl_FrontFacing = ((g16 ^ sa[front_sa]) & 1) != 0: g16 bit 0 is the
-    * primitive's winding in memory (docs/ISA.md "Fragment shaders"), and the
+    * primitive's winding in memory, and the
     * driver loads this SA register with what makes that winding front.
-    * 0: constant true (the A/B harness can't load it) */
+    * 0: constant true */
    unsigned front_sa;
    /* the driver loads constant formats the USP has no list C kind for
     * (sgx_const_map fmt 0x10 / 0x11): a lowp vector's xyz pre-converted
@@ -81,22 +79,22 @@ struct sgx_compile_options {
     * attribute (enum sgx_vtx_fmt); 0, f32 x 4, is the default */
    uint8_t vtx_fmt[16];
    /* fragment shader: bit n set, texture unit n's texels arrive with red and
-    * blue swapped (an RGBA8 view sampled as T1 0x0d: docs/TEX.md):
+    * blue swapped (an RGBA8 view sampled as T1 0x0d):
     * byte 0 is blue, 2 red, the colour output's order. A texel that is the
     * colour as it is then needs no instruction; other reads unpack zyxw */
    uint32_t tex_bgra;
    /* fragment shader: the driver's PDS samples a non-dependent texture from
     * the coordinate set itself, so a varying only such samples read needs no
-    * plain iteration of its own (capture: one PDS sample, no iteration).
-    * Off for the A/B harness, whose finalizer may read it */
+    * plain iteration of its own (one PDS sample, no iteration).
+    * Off when other code may read that iteration */
    bool pds_samples_alone;
    /* fragment shader: the driver can have a non-dependent sample return F16
-    * (the T3 word's F16-return bits: docs/STATE.md §5):
+    * (the T3 word's F16-return bits):
     * a texel read at mediump then arrives as F16, two channels per register
     * (sgx_sample_info.f16), and is not unpacked */
    bool f16_samples;
-   /* fragment shader with a discard: split it at the visibility feedback
-    * (ISA.md "Phases, visibility feedback and discard"). Phase 0 (code)
+   /* fragment shader with a discard: split it at the visibility feedback.
+    * Phase 0 (code)
     * runs for every rasterized fragment and computes only the discard test,
     * ending in the feedback nop; phase 1 (code1) runs for visible pixels
     * only and computes the colour from the inputs again. Only PA carries
@@ -106,8 +104,8 @@ struct sgx_compile_options {
    bool split_phases;
    /* with f16_samples: the driver also sets the F16-return T3 bits in a
     * dependent sample's state words (sgx_sample_info.f16), so a mediump
-    * texel a dependent smp reads arrives as F16 in two registers (ISA.md
-    * "hw 1c: smp": the result format is the state's) */
+    * texel a dependent smp reads arrives as F16 in two registers (the
+    * result format is the state's) */
    bool dep_f16_samples;
 };
 
@@ -170,9 +168,12 @@ struct sgx_iter_info {
    uint8_t proj;   /* ... with a projected coordinate (x/w, y/w) */
    uint8_t sampler;    /* ... of this sampler */
    uint8_t pointcoord; /* gl_PointCoord (set 0) */
+   /* not interpolated: every varying in the set is flat, the provoking
+    * vertex's value (DOUTI b25-26 = 2; 3 interpolates) */
+   uint8_t flat;
 };
 
-/* A texture sample (docs/ISA.md "The texture-sample sequence"). A
+/* A texture sample. A
  * non-dependent one is the PDS's: the raw RGBA8 texel lands in pa `reg`. A
  * dependent one is an smp the driver puts in before code[at], with the
  * sampler's state words as its src1, writing the raw texel to temporary
@@ -182,7 +183,7 @@ struct sgx_sample_info {
    uint16_t id;
    uint8_t sampler;
    uint8_t set; /* non-dependent: the coordinate's set */
-   uint8_t dim; /* 2 = 2D, 3 = cube */
+   uint8_t dim; /* 2 = 2D, 3 = cube or volume (smp.3d) */
    uint8_t dependent, proj;
    uint8_t reg; /* the raw texel: pa (non-dependent), r (dependent) */
    /* non-dependent: the coordinate's plain iteration, -1 none */
@@ -237,6 +238,10 @@ struct sgx_shader {
    unsigned set_comps[SGX_MAX_SETS];
    bool point_size; /* vertex: writes the point size (f32), after the sets */
    unsigned n_out_regs; /* vertex: o registers written */
+   /* vertex: user clip distances 0..n_clip-1, plane p's in o<clip_o + p>
+    * through fdpc into cp<p>; the driver enables planes 0..n_clip-1 in the
+    * TA's output select (b0-5) and counts n_clip more output dwords */
+   unsigned n_clip, clip_o;
    /* SA registers used from sa_base on (constants and the compiler's own) */
    unsigned sa_slots;
    /* Constants past sa127 (counting 4 per dependent sample of a fragment
@@ -264,13 +269,12 @@ struct sgx_shader {
    unsigned n_alu, n_tex, n_flow; /* instruction counts */
    unsigned n_temps;
    unsigned n_pa; /* PA registers: inputs and colour */
-   char *log; /* listing / errors (malloc'd) */
+   char *log;     /* listing / errors (malloc'd) */
 };
 
 const struct nir_shader_compiler_options *sgx_nir_options(void);
 
-/* GLSL ES varyings to texture coordinate sets (ISA.md "What a compiler
- * needs", varyings to sets); call on each stage's NIR
+/* GLSL ES varyings to texture coordinate sets; call on each stage's NIR
  * before linking removes unused ones */
 void sgx_assign_varyings(struct nir_shader *nir, bool vertex,
                          struct sgx_varyings *out);
@@ -281,6 +285,15 @@ void sgx_assign_varyings(struct nir_shader *nir, bool vertex,
  * stages with the same list agree. Anything that already fits is left as it
  * is. False: more than 10 x 4 components */
 bool sgx_pack_varyings(struct sgx_varyings *v);
+
+/* GL user clip planes per pixel: discard where any plane in ucp_enables
+ * has a negative distance. The distances are the vertex shader's clip
+ * distances (nir_lower_clip_vs: vec4 outputs clipdist_0 / clipdist_1 at
+ * VARYING_SLOT_CLIP_DIST0 / 1), read here as inputs of the same names and
+ * slots, which the driver places as it places other built-in varyings.
+ * Call on the fragment shader before sgx_compile. Not for lines: a
+ * discarding program breaks a lines draw. */
+bool sgx_lower_clip_fs(struct nir_shader *fs, unsigned ucp_enables);
 
 /* lower and compile; 0 on success */
 int sgx_compile(struct nir_shader *nir, const struct sgx_compile_options *opts,
