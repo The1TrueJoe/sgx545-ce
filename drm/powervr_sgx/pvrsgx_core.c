@@ -135,7 +135,8 @@ static const struct pvrsgx_core_family families[] = {
 		.core_id = 0x01150000,
 		.regs = &sgx545_regs,
 		.features = PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS |
-			    PVRSGX_FEATURE_MULTI_EVENT_KICK,
+			    PVRSGX_FEATURE_MULTI_EVENT_KICK |
+			    PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS,
 		.isa = PVRSGX_ISA_SGX545,
 		.num_dir_lists = 16,
 		.va_bits = 32,

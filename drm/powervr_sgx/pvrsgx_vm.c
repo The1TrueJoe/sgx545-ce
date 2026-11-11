@@ -170,6 +170,8 @@ static void vm_release(struct kref *ref)
 	if (vm->pb)
 		pvrsgx_pb_unmap(vm);
 	drm_mm_takedown(&vm->params);
+	if (vm->pd_slot)
+		pvrsgx_fw_pd_slot_put(vm->sdev, vm->pd_slot);
 	vm_pd_unload(vm->sdev, vm->mmu);
 	pvrsgx_mmu_destroy(vm->mmu);
 	/* The directory and its pages may come back as another VM's. */
@@ -256,7 +258,18 @@ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
 		kfree(vm);
 		return ERR_PTR(-ENOMEM);
 	}
-	pvrsgx_share_fw_heaps(sdev, vm->mmu);
+	if (pvrsgx_core_single_context(sdev->family)) {
+		pvrsgx_share_fw_heaps(sdev, vm->mmu);
+		vm->pd_slot = pvrsgx_fw_pd_slot_get(sdev, pvrsgx_mmu_pd_addr(vm->mmu));
+		if (vm->pd_slot < 0) {
+			int err = vm->pd_slot;
+
+			drm_gem_object_put(r_obj);
+			pvrsgx_mmu_destroy(vm->mmu);
+			kfree(vm);
+			return ERR_PTR(err);
+		}
+	}
 	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
 		       0, BIT_ULL(sdev->family->va_bits), 0, 0, &pvrsgx_gpuvm_ops);
 	drm_gem_object_put(r_obj);
@@ -267,6 +280,15 @@ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
 	kref_init(&vm->ref);
 	atomic_set(&vm->users, 1);
 	return vm;
+}
+
+/*
+ * What a HW context's directory word holds: the directory's address, or on a
+ * single-context core its slot in the microkernel's PD table.
+ */
+u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm)
+{
+	return vm->pd_slot ?: pvrsgx_mmu_pd_addr(vm->mmu);
 }
 
 struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle)

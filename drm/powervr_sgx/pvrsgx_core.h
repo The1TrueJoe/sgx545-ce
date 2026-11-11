@@ -15,6 +15,8 @@
 #define PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS	BIT(0)
 /* EUR_CR_EVENT_KICK1..3 next to EUR_CR_EVENT_KICK. */
 #define PVRSGX_FEATURE_MULTI_EVENT_KICK		BIT(1)
+/* The PDS data store interleaves DS0 and DS1 two words at a time (docs/PDS.md). */
+#define PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS	BIT(2)
 
 /* Errata the kernel works around (the GPL DDK's FIX_HW_BRN_*). */
 /* A BIF directory or table invalidate and a data invalidate never in one command. */

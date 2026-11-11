@@ -288,7 +288,7 @@ int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ct
 	/* HW render context: the microkernel points list 0 at word 2's directory. */
 	hw = (void *)kobj_cpu(r->hwctx);
 	hw->flags = PVRSGX_HW_RENDER_CTX_VALID | PVRSGX_HW_RENDER_CTX_OWN_PB;
-	hw->page_dir = pvrsgx_mmu_pd_addr(vm->mmu);
+	hw->page_dir = pvrsgx_vm_pd_word(vm);
 	hw->ccb = kobj_va(r->ccb);
 	hw->ccb_ctl = kobj_va(r->ccbctl);
 	hw->pb_desc = kobj_va(r->pb->desc);

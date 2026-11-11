@@ -10,6 +10,7 @@
 #include <drm/gpu_scheduler.h>
 
 #include <linux/device.h>
+#include <linux/idr.h>
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -109,6 +110,13 @@ struct pvrsgx_fw {
 	u32 (*patches)[2];
 	/** @n_patches: Entries in @patches. */
 	u32 n_patches;
+	/**
+	 * @pdtable: On a single-context core, the directory addresses the
+	 * microkernel loads into list 0, by slot; GPU read-only.
+	 */
+	struct pvrsgx_kmem pdtable;
+	/** @pd_slots: The @pdtable slots VMs hold; slot 0 is the firmware's. */
+	struct ida pd_slots;
 };
 
 /**

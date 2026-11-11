@@ -52,7 +52,7 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 	/* The words a transfer context needs; the rest stays zero. */
 	hw = (void *)kobj_cpu(x->hwctx);
 	hw->flags = 1;
-	hw->page_dir = pvrsgx_mmu_pd_addr(ctx->vm->mmu);
+	hw->page_dir = pvrsgx_vm_pd_word(ctx->vm);
 	hw->ccb = kobj_va(x->ccb);
 	hw->ccb_ctl = kobj_va(x->ccbctl);
 	hw->pid = task_tgid_nr(current);
