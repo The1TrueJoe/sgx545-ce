@@ -22,6 +22,7 @@ powervr_sgx-y := \
 	pvrsgx_render.o \
 	pvrsgx_transfer.o \
 	pvrsgx_trace.o \
+	pvrsgx_usse.o \
 	pvrsgx_validate.o \
 	pvrsgx_vm.o \
 	pvrsgx_cmd_checks.o \
