@@ -646,7 +646,7 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		return -EINVAL;
 	/* Scenes of more than two kicks need the middle-kick flags, not known yet. */
 	if (in->ta_kicks.count > PVRSGX_MAX_TA_KICKS)
-		return -EOPNOTSUPP;
+		return -EINVAL;
 
 	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
 	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].size =

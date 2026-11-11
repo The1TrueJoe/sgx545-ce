@@ -123,7 +123,10 @@ struct drm_powervr_sgx_dev_query_gpu_info {
 	__u32 _padding_c;
 };
 
-/* The DDK 1.7 SGXMKIF host interface (D8, docs/UKERNEL-DECISIONS.md). */
+/*
+ * The microkernel speaks the host interface of the vendor's SGXMKIF, as of its
+ * DDK 1.7: the command buffer, control blocks and command layouts.
+ */
 #define DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7 1
 
 /**
@@ -638,7 +641,12 @@ struct drm_powervr_sgx_ioctl_get_context_state_args {
 	/** @state: [OUT] One of &enum drm_powervr_sgx_context_state. */
 	__u32 state;
 
-	/** @reset_count: [OUT] Number of GPU resets since the device was opened. */
+	/**
+	 * @reset_count: [OUT] Number of GPU resets since the driver bound the
+	 * device, for every context alike; it only grows. Compare two reads to see
+	 * whether a reset happened in between. @state says whether this context
+	 * was to blame.
+	 */
 	__u32 reset_count;
 
 	/** @_padding_c: Reserved. This field must be zero. */
@@ -696,7 +704,7 @@ struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args {
  * The client's part of a GPU command is a stream of scalars, in the manner of the
  * upstream PowerVR driver's streams. The kernel copies the stream into kernel
  * memory, decodes it, checks every field and builds the firmware command from the
- * result; docs/UAPI.md lists how every word of the firmware command is produced.
+ * result.
  *
  * A stream is:
  *
@@ -911,7 +919,11 @@ struct drm_powervr_sgx_ioctl_submit_jobs_args {
 	/** @jobs: [IN] Array of &struct drm_powervr_sgx_job. */
 	struct drm_powervr_sgx_obj_array jobs;
 
-	/** @failed_index: [OUT] On error, the index of the job that caused it. */
+	/**
+	 * @failed_index: [OUT] On error, the index of the job that caused it.
+	 * When the error is -ENOMEM from a wait on an earlier job of the same
+	 * call, the jobs before it were submitted; for any other error none were.
+	 */
 	__u32 failed_index;
 
 	/** @_padding_14: Reserved. This field must be zero. */

@@ -378,9 +378,9 @@ static void t_vm_create_destroy(int fd)
 	struct drm_powervr_sgx_ioctl_destroy_vm_context_args d = { .handle = create_vm(fd) };
 
 	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d);
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, ENOENT);
 	d.handle = 0;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, ENOENT);
 	d.handle = create_vm(fd);
 	d._padding_4 = 1;
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, EINVAL);
@@ -531,8 +531,8 @@ static void t_context_create_destroy(int fd)
 	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s);
 	assert_eq(s.state, DRM_POWERVR_SGX_CONTEXT_STATE_OK);
 	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d, EINVAL);
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d, ENOENT);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, ENOENT);
 	create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 }
 
@@ -597,7 +597,7 @@ static void t_context_invalid(int fd)
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
 	a.priority = 0;
 	a.vm_context_handle = vm + 100;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, ENOENT);
 	a.vm_context_handle = vm;
 	a.param_buffer_pages = 1;
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
@@ -770,7 +770,7 @@ static void t_context_state_invalid(int fd)
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
 	s._padding_c = 0;
 	s.handle = 0xdead;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, ENOENT);
 }
 
 /* Handles are per file: another open file's context, syncobj and BO are not found. */
@@ -1172,7 +1172,7 @@ static void t_submit_render_invalid(int fd)
 	REJECT(EINVAL, r.j.cmd_stream += 4);		/* 8-byte aligned */
 	REJECT(EFAULT, r.j.cmd_stream = 8);
 	REJECT(EINVAL, r.j.ta_kicks.count = 0);
-	REJECT(EOPNOTSUPP, r.j.ta_kicks.count = 3);	/* middle kicks: G12 */
+	REJECT(EINVAL, r.j.ta_kicks.count = 3);	/* more than max_ta_kicks */
 	REJECT(EINVAL, r.j.ta_kicks.count = 2; r.k[1].flags = 1);
 	REJECT(EINVAL, r.k[0].flags = 1);
 	REJECT(EINVAL, ((uint32_t *)r.kick)[0] = 24);

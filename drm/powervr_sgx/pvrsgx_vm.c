@@ -399,7 +399,7 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 
 	vm = xa_erase(&to_pvrsgx_file(file)->vms, args->handle);
 	if (!vm)
-		return -EINVAL;
+		return -ENOENT;
 	/* Contexts and jobs that use it keep it until they are done. */
 	pvrsgx_vm_user_put(vm);
 	pvrsgx_vm_put(vm);

@@ -519,7 +519,7 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	ctx->vm = pvrsgx_vm_lookup(sfile, args->vm_context_handle);
 	if (!ctx->vm) {
 		kfree(ctx);
-		return -EINVAL;
+		return -ENOENT;
 	}
 	ctx->sdev = sdev;
 	ctx->type = args->type;
@@ -574,7 +574,7 @@ int pvrsgx_ioctl_destroy_context(struct drm_device *drm, void *data, struct drm_
 		return -EINVAL;
 	ctx = xa_erase(&to_pvrsgx_file(file)->contexts, args->handle);
 	if (!ctx)
-		return -EINVAL;
+		return -ENOENT;
 	context_destroy(ctx);
 	return 0;
 }
@@ -600,7 +600,7 @@ int pvrsgx_ioctl_get_context_state(struct drm_device *drm, void *data, struct dr
 		return -EINVAL;
 	ctx = pvrsgx_context_lookup(to_pvrsgx_file(file), args->handle);
 	if (!ctx)
-		return -EINVAL;
+		return -ENOENT;
 	args->state = READ_ONCE(ctx->state);
 	args->reset_count = to_pvrsgx_device(drm)->reset_count;
 	context_put(ctx);

@@ -111,7 +111,7 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			.pb_min_pages = 0x100,
 			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
 			.pb_max_pages = 0x8000,
-			.max_ta_kicks = 64,
+			.max_ta_kicks = PVRSGX_MAX_TA_KICKS,
 		};
 
 		return query_put(ptr, &args->size, &lim, sizeof(lim));
