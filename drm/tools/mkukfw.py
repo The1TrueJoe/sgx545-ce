@@ -19,7 +19,8 @@ import zlib
 MAGIC = (0x35584753, 0x4E524B55)
 HEADER = struct.Struct("<2I10I4I32s")
 VALUES = {"ta3dctl": 1, "hostctl": 2, "ccbctl": 3, "ccb": 4, "misc": 5}
-FEATURES = 0x3
+FEATURES = 0x7       # host-visible bits the driver knows: 0x1 CLEANUP_V2, 0x2 SECURE,
+                     # 0x4 DONE_SEQ (M8: the image writes the completion seqno at ctlblk +0x9c)
 PRIVATE = 0xffff0000  # the microkernel's own build variants, as the driver's UKFW_FEATURES_PRIVATE
 MAX_IMAGE = 0xE000 - 0x200 - 0x10
 
