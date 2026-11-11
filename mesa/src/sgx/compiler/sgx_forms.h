@@ -6,7 +6,7 @@
 /*
  * The instruction forms the compiler emits, on top of the isaspec encoder
  * (src/sgx/isa). A form is an opcode plus the fields the compiler fixes
- * for it; its operands are the IR's op[] in text order (docs/ISA.md), and
+ * for it; its operands are the IR's op[] in assembly text order, and
  * sgx_form_slot() says which slot each one lands in and what that slot can
  * hold.
  */
@@ -88,7 +88,7 @@ enum sgx_form {
 };
 
 /*
- * Fields the compiler sets on a form, by name (docs/ISA.md). A select
+ * Fields the compiler sets on a form, by name (sgx.xml). A select
  * (c1, c2, a, a1, a2) is its value with the complement as the next bit up.
  */
 enum sgx_field {

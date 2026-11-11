@@ -14,6 +14,7 @@ struct sgx_fixed_golden {
    uint8_t reloc[4];
 };
 
+/* clang-format off */
 static const struct sgx_fixed_golden sgx_fixed_golden[] = {
    {"empty", 1,
     {
@@ -337,3 +338,4 @@ static const struct sgx_fixed_golden sgx_fixed_golden[] = {
      0x00000000, 0xff200000, 0xa0200000, 0xfb2f4000,
     }, 0, {}},
 };
+/* clang-format on */

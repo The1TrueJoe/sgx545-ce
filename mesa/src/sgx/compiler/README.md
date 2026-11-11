@@ -26,7 +26,7 @@ constants, PDS iterations, texture samples, branches, register counts.
      F16-free values;
    - runs the general optimization loop;
    - lowers integers and booleans to floats, the way GLSL ES 1.0 `int` and
-     `bool` are computed (docs/ISA.md "What GLSL integer code compiles to");
+     `bool` are computed;
    - leaves the shader out of SSA, with vectors in registers.
 2. **Analysis**: finds the patterns that need one specific emission, each
    recorded before selection:
@@ -97,8 +97,6 @@ option.
 ## Tests
 
 `meson test --suite sgx` runs these tests and the ISA round-trip tests.
-`tests/sgx_compile_test.cpp` builds each case with `nir_builder` (22 cases:
+`tests/sgx_compile_test.cpp` builds each case with `nir_builder` (47 cases:
 selection, F16 and C10, textures, discard and phases, constants in memory,
-helper instances). `tools/usc` in the powervr_sgx repository has the corpus
-harness that checks the output against the DDK's compiler. It stays outside
-Mesa.
+helper instances, branches).

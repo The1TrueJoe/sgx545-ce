@@ -41,18 +41,18 @@ enum sgx_file {
                    after layout) */
    SGX_F_IXSA,  /* sa[idx1 + n] */
    SGX_F_IDX,   /* index register n (destination) */
-   SGX_F_LIT, /* literal constant n (driver_consts: an SA slot the driver fills)
-               */
+   /* literal constant n (driver_consts: an SA slot the driver fills) */
+   SGX_F_LIT,
 };
 
 struct sgx_ref {
    uint8_t file;
    uint8_t comp;
    uint8_t neg : 1, abs : 1;
-   uint8_t step
-      : 1; /* steps by one per iteration (else the same every iteration) */
-   uint8_t h16
-      : 1; /* an F16 half: n (comp for vregs) counts halves, 2 * reg + half */
+   /* steps by one per iteration (else the same every iteration) */
+   uint8_t step : 1;
+   /* an F16 half: n (comp for vregs) counts halves, 2 * reg + half */
+   uint8_t h16 : 1;
    uint8_t c10 : 1; /* a C10 operand of the colour classes (format control) */
    uint8_t lane;    /* pck .l<n> */
    uint32_t n;
@@ -145,8 +145,7 @@ struct sgx_ctx {
    int in_reg[512], out_reg[512];
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
-#define SGX_ITER_FRAGCOORD                                                     \
-   14 /* list A iterator of gl_FragCoord (capture) */
+#define SGX_ITER_FRAGCOORD 14 /* list A iterator of gl_FragCoord */
    struct sgx_iter iters[16];
    unsigned n_iters;
    unsigned n_pa_inputs;

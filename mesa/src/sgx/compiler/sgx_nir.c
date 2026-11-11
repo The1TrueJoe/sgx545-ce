@@ -39,10 +39,11 @@ static const nir_shader_compiler_options options = {
    .lower_extract_word = true,
    .lower_insert_byte = true,
    .lower_insert_word = true,
-   /* fmad: the product is rounded before the add (hwt_p7: not fused) */
+   /* fmad: the product is rounded before the add (not fused: checked on
+      hardware) */
    .float_mul_add32 =
       nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
-   /* fmad16: a mediump a * b + c, one rounding (corpus; hwt_p7) */
+   /* fmad16: a mediump a * b + c, one rounding (checked on hardware) */
    .float_mul_add16 =
       nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
    .no_integers = true,
@@ -65,8 +66,7 @@ sgx_nir_options(void)
 }
 
 /* ------------------------------------------------------------------------
- * varyings -> texture coordinate sets (ISA.md "What a compiler needs",
- * varyings to sets): by type mat4, mat2, vec4,
+ * varyings -> texture coordinate sets: by type mat4, mat2, vec4,
  * mat3, vec3, vec2, float; within a type the largest array first, then
  * declaration order; one set per row while sets last.
  */
@@ -181,8 +181,8 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
           var_used(nir, var, true))
          out->point_size = true;
       /* the point-sprite coordinate is iterated from set 0, the set a vertex
-       * shader that writes gl_PointSize reserves (capture: gl_PointCoord =
-       * list A iterator 1) */
+       * shader that writes gl_PointSize reserves (gl_PointCoord = list A
+       * iterator 1) */
       if (!vertex && builtin &&
           (var->data.location == VARYING_SLOT_PNTC ||
            !strcmp(var->name, "gl_PointCoord")) &&
@@ -244,7 +244,7 @@ sgx_pack_varyings(struct sgx_varyings *out)
       return true;
 
    /* a set per row while sets remain, then rows into free components of
-    * earlier sets (ISA.md "What a compiler needs"). It packs by
+    * earlier sets. It packs by
     * precision too, but a varying's precision may differ between the stages,
     * each placed on its own, so not here (a mixed set is iterated in f32). A
     * sprite's set 0 is the point coordinate's alone. */
@@ -290,7 +290,7 @@ sgx_pack_varyings(struct sgx_varyings *out)
 
 /* ------------------------------------------------------------------------
  * sin/cos: the hardware's fsin/fcos take quarter turns and are accurate
- * only on [-2, 2) (hwt_p3), so reduce: t = 4 * fract(x / 2pi + c) - 2, and
+ * only on [-2, 2) (measured), so reduce: t = 4 * fract(x / 2pi + c) - 2, and
  * sin(x) = fsin(t) for c = 0.5, cos(x) = fsin(t) for c = 0.75.
  * fsin_agx is NIR's sin(t * pi / 2).
  */
@@ -423,8 +423,8 @@ int16_as_32(nir_builder *b, nir_def *d, unsigned comp)
    }
 }
 
-/* What nir_lower_bit_size leaves of 16-bit integers (mediump int, under
- * sgxc -p) are conversions at the edges: read them from the 32-bit value */
+/* What nir_lower_bit_size leaves of 16-bit integers (mediump int in F16
+ * mode) are conversions at the edges: read them from the 32-bit value */
 static bool
 int16_conv_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 {
@@ -603,7 +603,7 @@ alu_of(nir_src s)
 }
 
 /* The colour is packed to U8 with pck's saturation: a clamp to [0, 1] of
- * what is stored there is the pack's own (corpus sat_m) */
+ * what is stored there is the pack's own */
 static bool
 colour_sat_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
@@ -1119,8 +1119,8 @@ vec_to_regs_32(const nir_instr *instr, unsigned wrmask, const void *data)
  * uniforms -> load_uniform with base = the constant number of the first
  * component. Each deref step adds vec4-aligned offsets (array elements,
  * struct members, matrix columns), unless the caller numbered that member
- * itself (-u var.member=k): the corpus's layout of struct members isn't
- * known, so it can be pinned member by member. */
+ * itself (sgx_compile_options.layout can pin a struct's members one by
+ * one). */
 
 static unsigned
 slots4(const struct glsl_type *t)
@@ -1215,8 +1215,7 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
       nir_def_replace(&in->def, v);
       return true;
    }
-   /* the constants' format in SA (ISA.md "Register files and operand
-    * limits"): F16 pairs for
+   /* the constants' format in SA: F16 pairs for
     * mediump (16-bit loads), C10 for lowp vectors used as F16, else f32 */
    unsigned n = in->def.num_components, fmt = in->def.bit_size == 16 ? 2 : 1;
    if (u->c->opts->verbose)
@@ -1246,9 +1245,9 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    }
    if (fmt == 2 && u->c->p16 && prec == GLSL_PRECISION_LOW && !(k & 3) &&
        n >= 3 && !(nir_def_components_read(&in->def) & ~7u)) {
-      /* a lowp vector loaded 16-bit (sgxc's frontend) and read for xyz: C10
-       * as loaded (corpus *_l), then to F16 where read; or with driver_consts
-       * the F16 of its C10 value from the upload */
+      /* a lowp vector loaded 16-bit (a frontend that lowers precision) and
+       * read for xyz: C10 as loaded, then to F16 where read; or with
+       * driver_consts the F16 of its C10 value from the upload */
       fmt = u->c->opts->driver_consts ? 5 : 3;
    }
    for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
@@ -1330,9 +1329,9 @@ uniform_prec(struct sgx_ctx *c, unsigned k)
 /* f32 uniforms that F16 math reads (every use an f2f16), in the format the
  * driver loads such a constant in: mediump as F16 constants (list C kind 2,
  * rounded at upload), a lowp vector's xyz as C10 (kind 3), highp left f32
- * (converted where read with pck.f16.f32, truncating: ISA.md "Hardware
- * checks"). sgxc's frontend loads mediump uniforms 16-bit already;
- * the gallium driver's arrive as f32 load_uniform. */
+ * (converted where read with pck.f16.f32, which truncates). A frontend
+ * that lowers precision loads mediump uniforms 16-bit already; the gallium
+ * driver's arrive as f32 load_uniform. */
 static bool
 uniform_format_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
@@ -1468,8 +1467,8 @@ first_free(const struct sgx_compile_options *o, enum sgx_layout_kind k)
 /* A loop that can leave early (a break besides its trip count, or one the
  * frontend merged into it, so the trip count isn't exact) stays a loop:
  * unrolled, its exits become a select tree that holds every
- * iteration's value to the end (corpus loop_v: 31 temporaries, 4 as a loop,
- * the corpus 9). Loops that index arrays are still unrolled. */
+ * iteration's value to the end (eight vec4 sums with a break: 31 temporaries,
+ * 4 as a loop). Loops that index arrays are still unrolled. */
 static bool
 keep_early_exit_loops_cf(struct exec_list *list)
 {
@@ -1768,8 +1767,10 @@ assign_io(struct sgx_ctx *c)
             const struct glsl_type *e = glsl_without_array(var->type);
             unsigned n = glsl_get_aoa_size(var->type);
             n = (n ? n : 1) * glsl_get_vector_elements(e);
-            nclip = MAX2(nclip, MIN2(
-               (var->data.location - VARYING_SLOT_CLIP_DIST0) * 4 + n, 8u));
+            nclip =
+               MAX2(nclip,
+                    MIN2((var->data.location - VARYING_SLOT_CLIP_DIST0) * 4 + n,
+                         8u));
          }
       }
       if (s->info.clip_distance_array_size)
@@ -1784,13 +1785,13 @@ assign_io(struct sgx_ctx *c)
             map_varying(c->out_reg, var, c->vary, obase);
    } else {
       /* in F16 mode, a varying every load of which is mediump is iterated as
-       * F16 (list A format 2: two components per register; corpus *_m) */
+       * F16 (list A format 2: two components per register) */
       bool hp[128] = {0}, mp[128] = {0};
       nir_foreach_function_impl (impl, s) {
          nir_foreach_block (b, impl) {
             nir_foreach_instr (instr, b) {
-               /* (sgxc's inputs are interpolated loads; the gallium driver's
-                * are still derefs here, before nir_lower_io: their
+               /* (lowered inputs are interpolated loads; the gallium
+                * driver's are still derefs here, before nir_lower_io: their
                 * variable's precision says) */
                if (instr->type == nir_instr_type_intrinsic &&
                    nir_instr_as_intrinsic(instr)->intrinsic ==
@@ -1842,7 +1843,7 @@ assign_io(struct sgx_ctx *c)
          for (unsigned set = 0; set < SGX_MAX_SETS; set++)
             set16[set] &= !not16[set];
       }
-      /* gl_FragCoord first (list A iterator 14, F32: capture),
+      /* gl_FragCoord first (list A iterator 14, F32),
        * then the sets in order; gl_PointCoord is set 0 */
       int pbase[SGX_MAX_SETS];
       unsigned pa = 0;

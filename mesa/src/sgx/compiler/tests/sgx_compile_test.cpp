@@ -267,7 +267,7 @@ TEST_F(sgx_compile_test, fragment_uniform_colour_packed)
 
 /* for (i < 8) { if (r.x > a.x) break; r += b; }: a loop that can exit early
  * stays a loop (unrolled, its exits became a select tree holding all eight
- * partial sums: corpus loop_v, 31 temporaries) */
+ * partial sums, 31 temporaries) */
 TEST_F(sgx_compile_test, fragment_early_exit_loop_kept)
 {
    start(MESA_SHADER_FRAGMENT);
@@ -401,8 +401,8 @@ TEST_F(sgx_compile_test, fragment_bgra_texel_unpacks_zyxw)
 }
 
 /* pds_samples_alone: a varying only a sample reads has no plain iteration;
- * the sample is the first PA register (the DDK's tex fs: one PDS sample into
- * pa0, the colour) */
+ * the sample is the first PA register (a texture-only fs: one PDS sample
+ * into pa0, the colour) */
 TEST_F(sgx_compile_test, fragment_sample_only_varying_not_iterated)
 {
    start(MESA_SHADER_FRAGMENT);
@@ -434,7 +434,7 @@ TEST_F(sgx_compile_test, fragment_sample_only_varying_not_iterated)
 
 /* two mat4 * v back to back (position, then a texture coordinate): the
  * second chain's first efo stores the first chain's last lane (d=i1), so only
- * the last chain ends with mov oN, i1 (libusc's chained v_mvp) */
+ * the last chain ends with mov oN, i1 */
 TEST_F(sgx_compile_test, vertex_efo_chains_share_the_mov)
 {
    start(MESA_SHADER_VERTEX);
@@ -477,7 +477,7 @@ TEST_F(sgx_compile_test, vertex_efo_chains_share_the_mov)
 }
 
 /* f16_samples: a mediump texel returns F16 into two registers and is read
- * as their halves, with no unpack (the DDK's terrain program) */
+ * as their halves, with no unpack */
 TEST_F(sgx_compile_test, fragment_f16_sample_not_unpacked)
 {
    start(MESA_SHADER_FRAGMENT);
@@ -535,7 +535,8 @@ TEST_F(sgx_compile_test, fragment_proj_sample_only_varying_not_iterated)
    tx->sampler_dim = GLSL_SAMPLER_DIM_2D;
    tx->dest_type = nir_type_float32;
    tx->coord_components = 2;
-   tx->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
+   tx->src[0] =
+      nir_tex_src_for_ssa(nir_tex_src_coord, nir_channels(&b, v, 0x3));
    tx->src[1] =
       nir_tex_src_for_ssa(nir_tex_src_projector, nir_channel(&b, v, 3));
    tx->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &sd->def);
@@ -818,8 +819,8 @@ TEST_F(sgx_compile_test, fragment_discard_one_phase)
 TEST_F(sgx_compile_test, vertex_constants_in_memory)
 {
    start(MESA_SHADER_VERTEX);
-   nir_variable *arr = var(nir_var_uniform,
-                           glsl_array_type(glsl_vec4_type(), 48, 0), "u", -1);
+   nir_variable *arr =
+      var(nir_var_uniform, glsl_array_type(glsl_vec4_type(), 48, 0), "u", -1);
    nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
                            VARYING_SLOT_POS);
    nir_deref_instr *ad = nir_build_deref_var(&b, arr);
@@ -1336,8 +1337,8 @@ TEST_F(sgx_compile_test, fragment_volume_sample_is_3d)
 static void
 clip_vs(nir_builder *b, unsigned enables)
 {
-   nir_variable *a = nir_variable_create(b->shader, nir_var_shader_in,
-                                         glsl_vec4_type(), "a");
+   nir_variable *a =
+      nir_variable_create(b->shader, nir_var_shader_in, glsl_vec4_type(), "a");
    a->data.location = VERT_ATTRIB_GENERIC0;
    nir_variable *pos = nir_variable_create(b->shader, nir_var_shader_out,
                                            glsl_vec4_type(), "gl_Position");
@@ -1393,9 +1394,8 @@ TEST(sgx_fixed, programs_assemble)
    char err[256] = "";
    ASSERT_TRUE(sgx_fixed_progs_build(&p, err, sizeof(err))) << err;
    const struct sgx_fixed_prog *all[] = {
-      &p.empty,    &p.clear_vs,       &p.vpgen_vs,   &p.copy_fs,
-      &p.vs_xy,    &p.vs_xyz,         &p.fs_uniform_sec, &p.fs_uniform,
-      &p.pe_ptoff, &p.pe_emit,
+      &p.empty,  &p.clear_vs,       &p.vpgen_vs,   &p.copy_fs,  &p.vs_xy,
+      &p.vs_xyz, &p.fs_uniform_sec, &p.fs_uniform, &p.pe_ptoff, &p.pe_emit,
    };
    std::vector<const struct sgx_fixed_prog *> v(all, all + ARRAY_SIZE(all));
    for (unsigned n = 1; n <= 32; n++)
@@ -1427,12 +1427,16 @@ TEST(sgx_fixed, programs_match_golden)
       const char *name;
       const struct sgx_fixed_prog *prog;
    } named[] = {
-      {"empty", &p.empty},       {"clear_vs", &p.clear_vs},
-      {"vpgen_vs", &p.vpgen_vs}, {"copy_fs", &p.copy_fs},
-      {"vs_xy", &p.vs_xy},       {"vs_xyz", &p.vs_xyz},
+      {"empty", &p.empty},
+      {"clear_vs", &p.clear_vs},
+      {"vpgen_vs", &p.vpgen_vs},
+      {"copy_fs", &p.copy_fs},
+      {"vs_xy", &p.vs_xy},
+      {"vs_xyz", &p.vs_xyz},
       {"fs_uniform_sec", &p.fs_uniform_sec},
       {"fs_uniform", &p.fs_uniform},
-      {"pe_ptoff", &p.pe_ptoff}, {"pe_emit", &p.pe_emit},
+      {"pe_ptoff", &p.pe_ptoff},
+      {"pe_emit", &p.pe_emit},
    };
    unsigned checked = 0;
    for (const struct sgx_fixed_golden &g : sgx_fixed_golden) {
