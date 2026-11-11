@@ -48,6 +48,15 @@ struct sgx_const {
 /* the vertex constant the draw fills with gl_InstanceID, as a float
  * (sgx_program.c lower_instance_id) */
 #define SGX_K_INSTANCE 1016
+/* The driver's block of constant numbers for programs compiled with the
+ * compiler's native integers (docs/GL3.md, "Crossing the driver/compiler
+ * line"): unit u's base-level width, height and depth at SGX_K_SIZE + 3u,
+ * gl_InstanceID at SGX_K_INSTANCE_INT, all raw integers; uniform block n's
+ * GPU address at SGX_K_UBO + n */
+#define SGX_K_SIZE         1024
+#define SGX_K_SIZE_UNITS   16
+#define SGX_K_INSTANCE_INT 1072
+#define SGX_K_UBO          1080
 
 #define SGX_MAX_DEP_SAMPLES 8
 
@@ -91,6 +100,8 @@ struct sgx_pipe_shader {
    } variants[32];
    unsigned n_variants, next_variant;
    bool uses_front_face;      /* fragment: reads SGX_SA_FRONT */
+   bool native_integers;      /* compiled with them: its driver constants in
+                                 the SGX_K_SIZE block, raw integers */
    bool reads_pointcoord;     /* fragment: its varyings start at set 1,
                                  gl_PointCoord is set 0 */
    struct sgx_varyings *vary; /* compiled: the varyings' sets (a variant's: its

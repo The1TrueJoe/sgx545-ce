@@ -745,6 +745,34 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
       /* gl_InstanceID (sgx_program.c lower_instance_id) */
       if (stage == MESA_SHADER_VERTEX && k->k == SGX_K_INSTANCE)
          v = (float)ctx->instance;
+      /* a 32-bit word as it is: a uniform's bits (an integer's too), or one
+       * of the native-integer block's integers; the driver's other
+       * constants are the float v */
+      bool raw = cb && k->k < avail;
+      uint32_t word = raw ? ((const uint32_t *)cb)[k->k] : 0;
+
+      if (k->k >= SGX_K_SIZE && k->k < SGX_K_SIZE + 3 * SGX_K_SIZE_UNITS) {
+         /* the base level's width, height, and depth or layers
+          * (sgx_program.c lower_txs_int) */
+         unsigned u = (k->k - SGX_K_SIZE) / 3, c = (k->k - SGX_K_SIZE) % 3;
+         const struct pipe_sampler_view *view =
+            stage == MESA_SHADER_FRAGMENT ? ctx->views[u] : NULL;
+         const struct pipe_resource *t = view ? view->texture : NULL;
+
+         word = !t ? 1
+                : c == 0 ? u_minify(t->width0, view->u.tex.first_level)
+                : c == 1 ? (t->target == PIPE_TEXTURE_1D_ARRAY
+                               ? view->u.tex.last_layer -
+                                    view->u.tex.first_layer + 1
+                               : u_minify(t->height0, view->u.tex.first_level))
+                : t->target == PIPE_TEXTURE_3D
+                   ? u_minify(t->depth0, view->u.tex.first_level)
+                   : view->u.tex.last_layer - view->u.tex.first_layer + 1;
+         raw = true;
+      } else if (stage == MESA_SHADER_VERTEX && k->k == SGX_K_INSTANCE_INT) {
+         word = ctx->instance;
+         raw = true;
+      }
       uint32_t bits,
          *at[2] = {k->slot != 0xffff ? &block[base + k->slot] : NULL,
                    k->mem && mem ? &mem[k->mem] : NULL};
@@ -781,7 +809,12 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
                *at[j] = bits;
          continue;
       } else {
-         memcpy(&bits, &v, 4);
+         /* F32: the driver's float constants, or the word as it is (no
+          * float in between, which could quiet a NaN's payload) */
+         if (raw)
+            bits = word;
+         else
+            memcpy(&bits, &v, 4);
          for (unsigned j = 0; j < 2; j++)
             if (at[j])
                *at[j] = bits;

@@ -241,10 +241,44 @@ rewrite_int_as_float(nir_builder *b, nir_def *def, nir_def *f)
    }
 }
 
+/* textureSize of a program compiled with native integers: the base level's
+ * size from driver constants (SGX_K_SIZE + 3u: width, height, depth or
+ * layers, raw integers), shifted down to the level asked for; an array's
+ * layer count isn't */
+static bool
+lower_txs_int(nir_builder *b, nir_tex_instr *tex)
+{
+   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+   unsigned n = tex->def.num_components;
+
+   if (tex->texture_index >= SGX_K_SIZE_UNITS || n > 3)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   nir_def *size = nir_load_uniform(
+      b, n, 32, nir_imm_int(b, 0), .base = SGX_K_SIZE + 3 * tex->texture_index,
+      .range = n, .dest_type = nir_type_int32);
+
+   if (li >= 0 && !(nir_src_is_const(tex->src[li].src) &&
+                    nir_src_as_uint(tex->src[li].src) == 0)) {
+      nir_def *lod = tex->src[li].src.ssa;
+      nir_def *c[3];
+      unsigned mips = n - (tex->is_array ? 1 : 0);
+
+      for (unsigned i = 0; i < n; i++) {
+         c[i] = nir_channel(b, size, i);
+         if (i < mips)
+            c[i] = nir_imax(b, nir_ushr(b, c[i], lod), nir_imm_int(b, 1));
+      }
+      size = nir_vec(b, c, n);
+   }
+   nir_def_replace(&tex->def, size);
+   return true;
+}
+
 /* textureSize (level 0) of a fragment program, which st's lowering of
  * rectangle lookups asks for (coords / textureSize): the size from driver
  * constants (SGX_K_TEXSIZE) the draw fills, as floats, where the program
- * converts it to float anyway */
+ * converts it to float anyway.  With native integers (data), lower_txs_int. */
 static bool
 lower_txs(nir_builder *b, nir_instr *instr, void *data)
 {
@@ -253,6 +287,8 @@ lower_txs(nir_builder *b, nir_instr *instr, void *data)
    nir_tex_instr *tex = nir_instr_as_tex(instr);
    int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
 
+   if (tex->op == nir_texop_txs && *(const bool *)data)
+      return lower_txs_int(b, tex);
    if (tex->op != nir_texop_txs || tex->def.num_components > 2 ||
        tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
        (li >= 0 && (!nir_src_is_const(tex->src[li].src) ||
@@ -271,13 +307,21 @@ lower_txs(nir_builder *b, nir_instr *instr, void *data)
 
 /* gl_InstanceID of a vertex program: an instanced draw is one draw per
  * instance (sgx_draw_vbo), each with its instance number in a driver
- * constant (SGX_K_INSTANCE), as a float */
+ * constant: SGX_K_INSTANCE as a float, or with native integers (data)
+ * SGX_K_INSTANCE_INT as an integer */
 static bool
 lower_instance_id(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
    if (in->intrinsic != nir_intrinsic_load_instance_id)
       return false;
    b->cursor = nir_before_instr(&in->instr);
+   if (*(const bool *)data) {
+      nir_def_replace(&in->def,
+                      nir_load_uniform(b, 1, 32, nir_imm_int(b, 0),
+                                       .base = SGX_K_INSTANCE_INT, .range = 1,
+                                       .dest_type = nir_type_int32));
+      return true;
+   }
    nir_def *f =
       nir_load_uniform(b, 1, 32, nir_imm_int(b, 0), .base = SGX_K_INSTANCE,
                        .range = 1, .dest_type = nir_type_float32);
@@ -737,6 +781,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
    opts.driver_consts = true;
+   /* GLSL 1.30's integers, once the screen has them: the cap is the
+    * screen's, so GLSL ES 1.00 programs come with integers then too */
+   opts.native_integers = so->native_integers =
+      screen->base.shader_caps[nir->info.stage].integers;
    if (vtx_fmt) {
       memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
@@ -786,13 +834,17 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                   nir_metadata_control_flow, &srgb_filter);
       NIR_PASS(_, nir, nir_lower_tex, &tex);
    }
+   /* textureGrad, the Offset variants and texelFetch as smp can do them;
+    * the sizes they ask for are lower_txs's */
+   if (opts.native_integers)
+      NIR_PASS(_, nir, sgx_lower_tex);
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
-               nir_metadata_control_flow, NULL);
+               nir_metadata_control_flow, &opts.native_integers);
       NIR_PASS(_, nir, nir_opt_dce);
    } else {
       NIR_PASS(_, nir, nir_shader_intrinsics_pass, lower_instance_id,
-               nir_metadata_control_flow, NULL);
+               nir_metadata_control_flow, &opts.native_integers);
       NIR_PASS(_, nir, nir_opt_dce);
    }
    remap_legacy_varyings(nir);
