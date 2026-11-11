@@ -334,6 +334,16 @@ Agreed with the compiler (2026-11-11):
   dependent sample at (i + 0.5) / size with its own texture state from the
   driver (NEAREST, no mips, clamp, the level's address), never the bound
   sampler's filter or wrap; the compiler marks those samples.
+- **Driver constants** (above the compiler's 1024 user constants, once its
+  constant space is raised): 1024 + 3u the base level's width, height and
+  depth of unit u (0-15), 1072 gl_InstanceID, 1080 + n UBO n's GPU address
+  (`ubo_base_k`, up to 16), the rest of 1024-1279 reserved. Until then
+  `SGX_K_TEXSIZE` (1000) and `SGX_K_INSTANCE` (1016) stay. The compiler's
+  `sgx_lower_tex` runs first (textureGrad, offsets, rect, 1D, texelFetch);
+  a texelFetch sample (`sgx_sample_info.fetch`) gets NEAREST, MIPMAP_NEAREST
+  and clamp on the bound texture.
+- **UBOs:** `load_ubo` is an `ld.a.d` from the address in constant
+  `ubo_base_k + n`.
 - **Integer varyings** pass as two exact 16-bit halves until a test shows
   that a flat iteration keeps raw 32-bit words (needs flat shading in the
   driver first).
@@ -343,7 +353,6 @@ Still open:
 - how a fragment program writes a packed render-target format (a lowering
   the driver keys on the bound surfaces' formats, as sRGB decoding is keyed
   on the sampler views today), and later its outputs o1-o7;
-- the UBO base addresses' SA registers;
 - transform feedback turns Mesa's varying packing back on: st disables
   packing only while `EXT_transform_feedback` is off (`st_extensions.c`, next
   to `max_tex_indirections`). The compiler's varying map has to handle packed
