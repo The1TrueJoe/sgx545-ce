@@ -212,6 +212,12 @@ struct pvrsgx_device {
 	struct drm_mm krange[PVRSGX_KRANGE_COUNT];
 	/** @graveyard: Released kernel objects the firmware may still read. */
 	struct list_head graveyard;
+	/** @quarantine: Freed kernel objects kept to catch late writes (debug). */
+	struct list_head quarantine;
+	/** @quarantine_pages: Pages in @quarantine. */
+	unsigned long quarantine_pages;
+	/** @quarantine_cursor: Next entry the incremental check starts at. */
+	unsigned long quarantine_cursor;
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
 	/** @renders_done: Render jobs the firmware has finished. */

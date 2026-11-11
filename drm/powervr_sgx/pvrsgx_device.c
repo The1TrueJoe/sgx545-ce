@@ -152,6 +152,15 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 				break;
 			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK;
 			drm_warn(&sdev->base, "reset: page fault 0x%x at 0x%08x\n", stat, addr);
+			{
+				u64 ago;
+				const char *q = pvrsgx_kobj_quarantined(sdev, addr, &ago);
+
+				if (q)
+					drm_err(&sdev->base,
+						"reset: the fault is in quarantined %s, freed %llu renders ago\n",
+						q, ago);
+			}
 			soft_reset(sdev, true);
 			pvrsgx_mmu_map_pages(sdev->reset_mmu, addr, &sdev->reset_page, 1, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR, sgx_rd(sdev, SGX_CR_EVENT_STATUS));

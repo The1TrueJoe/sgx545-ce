@@ -39,6 +39,16 @@ struct pvrsgx_kobj {
 	struct list_head grave;
 	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
 	u64 grave_seq;
+	/** @name: What it is, for the quarantine's reports. */
+	const char *name;
+	/** @q_done: pvrsgx_device.renders_done when it entered the quarantine. */
+	u64 q_done;
+	/** @q_jiffies: When it entered the quarantine. */
+	unsigned long q_jiffies;
+	/** @q_hits: Changed dwords found in it so far. */
+	u32 q_hits;
+	/** @q_node: Its device-wide address is kept while quarantined. */
+	bool q_node;
 };
 
 static inline u32 *kobj_cpu(struct pvrsgx_kobj *o)
@@ -61,8 +71,10 @@ void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done);
 struct seq_buf;
 struct pvrsgx_vm;
 
-int pvrsgx_kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst,
-		    enum pvrsgx_krange range, u32 size, u32 min, struct pvrsgx_vm *vm);
+int __pvrsgx_kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst, const char *name,
+		      enum pvrsgx_krange range, u32 size, u32 min, struct pvrsgx_vm *vm);
+#define pvrsgx_kobj_new(sdev, dst, ...) __pvrsgx_kobj_new(sdev, dst, #dst, __VA_ARGS__)
+const char *pvrsgx_kobj_quarantined(struct pvrsgx_device *sdev, u32 dev_addr, u64 *renders_ago);
 void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o);
 void pvrsgx_kobj_dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off,
 		      u32 bytes);
