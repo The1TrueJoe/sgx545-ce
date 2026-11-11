@@ -855,10 +855,8 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
    struct sgxws_ptr p;
    struct pds t = {0};
 
-   if (!c || !sgx_usse_progs_init()) {
-      free(c);
+   if (!c)
       return NULL;
-   }
    c->dev = d;
    c->priority = priority;
    c->slots = d->slots;

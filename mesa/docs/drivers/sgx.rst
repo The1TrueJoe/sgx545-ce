@@ -106,10 +106,6 @@ Environment variables
    For bisecting a GPU hang: frames from the n-th on are built but not sent;
    the GPU is left idle this long after each render.
 
-Mesa's disk shader cache is on, as for other drivers (``MESA_SHADER_CACHE_DISABLE``
-turns it off). Debug options that change compiled code, such as ``nof16``,
-take effect only for shaders not already in the cache.
-
 ``SGX_COMPILER_DEBUG``
    Flags that each turn off one compiler optimization, for bisecting a
    miscompile (``src/sgx/compiler/README.md``).
