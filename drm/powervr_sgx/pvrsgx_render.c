@@ -24,7 +24,8 @@
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
-#include "pvrsgx_stream.h"
+#include "pvrsgx_cmd.h"
+#include "pvrsgx_cmd_checks.h"
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 #include "pvrsgx_drv.h"
@@ -579,7 +580,7 @@ int pvrsgx_ioctl_destroy_rt_dataset(struct drm_device *drm, void *data, struct d
 
 /* ---------------------------------------------------------------- streams */
 
-bool pvrsgx_stream_mapped(const void *priv, u64 addr, u64 size)
+bool pvrsgx_cmd_mapped(const void *priv, u64 addr, u64 size)
 {
 	struct pvrsgx_vm *vm = (struct pvrsgx_vm *)priv;
 	u64 cur = addr, end = addr + size;
@@ -597,30 +598,24 @@ bool pvrsgx_stream_mapped(const void *priv, u64 addr, u64 size)
 	return cur >= end;
 }
 
-bool pvrsgx_stream_no_quirk(const void *priv, u32 quirk)
+/* The core's command of @type: what a client's command is checked against. */
+const struct pvrsgx_cmd_def *pvrsgx_cmd_def(struct pvrsgx_device *sdev, enum pvrsgx_cmd_type type)
 {
-	return false;
+	return sdev->family->cmds->cmds[type];
 }
 
-/* Copy one stream in, decode and check it field by field, then against the VM. */
-int pvrsgx_stream_take(const struct pvrsgx_stream_cmd_defs *defs,
-		       struct pvrsgx_stream_ctx *sctx, struct pvrsgx_vm *vm,
-		       u64 uptr, u32 len, void *dest)
+/* A copied command, field by field, then against the VM (under its lock). */
+int pvrsgx_cmd_take(struct pvrsgx_device *sdev, const struct pvrsgx_cmd_def *def,
+		    const struct pvrsgx_cmd_ctx *ctx, struct pvrsgx_vm *vm, const void *all,
+		    u64 present)
 {
-	void *buf;
-	int err;
+	const struct pvrsgx_cmd_core *core = sdev->family->cmds;
+	int err = pvrsgx_cmd_check(core, def, ctx, all, present);
 
-	if (!len || len > PVRSGX_STREAM_MAX_SIZE || (uptr & 7))
-		return -EINVAL;
-	buf = memdup_user(u64_to_user_ptr(uptr), len);
-	if (IS_ERR(buf))
-		return PTR_ERR(buf);
-	err = pvrsgx_stream_process(defs, sctx, buf, len, dest);
-	kfree(buf);
 	if (err)
 		return err;
 	mutex_lock(&vm->lock);
-	err = pvrsgx_stream_check_mapped(defs, sctx, dest);
+	err = pvrsgx_cmd_check_mapped(core, def, ctx, all, present);
 	mutex_unlock(&vm->lock);
 	return err;
 }
@@ -628,10 +623,14 @@ int pvrsgx_stream_take(const struct pvrsgx_stream_cmd_defs *defs,
 int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in)
 {
+	struct pvrsgx_device *sdev = job->ctx->sdev;
+	const struct pvrsgx_cmd_def *rdef = pvrsgx_cmd_def(sdev, PVRSGX_CMD_RENDER);
+	const struct pvrsgx_cmd_def *kdef = pvrsgx_cmd_def(sdev, PVRSGX_CMD_TA_KICK);
 	struct pvrsgx_render_job *rj = &job->render;
-	struct pvrsgx_stream_ctx sctx = {};
-	struct drm_powervr_sgx_ta_kick *kicks;
+	struct drm_powervr_sgx_cmd_ta_kick *kicks;
 	struct pvrsgx_vm *vm = job->ctx->vm;
+	struct pvrsgx_cmd_ctx cctx = {};
+	u64 present;
 	int err;
 
 	if (in->flags & ~DRM_POWERVR_SGX_SUBMIT_JOB_RENDER_FLAGS_MASK)
@@ -649,22 +648,22 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	if (in->ta_kicks.count > PVRSGX_MAX_TA_KICKS)
 		return -EINVAL;
 
-	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
-	sctx.heaps[PVRSGX_STREAM_HEAP_PDS_PIXEL].size =
-		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
-	sctx.limits[PVRSGX_STREAM_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
-	sctx.limits[PVRSGX_STREAM_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
-	sctx.has_quirk = pvrsgx_stream_no_quirk;
-	sctx.rt_pad_width = rj->rtds->n.xt * 32;
-	sctx.rt_pad_height = rj->rtds->n.yt * 16;
-	sctx.mapped = pvrsgx_stream_mapped;
-	sctx.priv = vm;
+	if (!rdef || !kdef)
+		return -EOPNOTSUPP;
 
-	err = pvrsgx_stream_take(&pvrsgx_stream_render_defs, &sctx, vm, in->cmd_stream,
-				 in->cmd_stream_len, &rj->render);
-	if (err)
-		return err;
-	err = pvrsgx_check_render(&rj->render);
+	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
+	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].size =
+		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
+	cctx.limits[PVRSGX_CMD_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
+	cctx.limits[PVRSGX_CMD_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
+	cctx.rt_pad_width = rj->rtds->n.xt * 32;
+	cctx.rt_pad_height = rj->rtds->n.yt * 16;
+	cctx.mapped = pvrsgx_cmd_mapped;
+	cctx.priv = vm;
+
+	err = pvrsgx_cmd_copy(rdef, in->cmd, &rj->render, &present);
+	err = err ?: pvrsgx_cmd_take(sdev, rdef, &cctx, vm, &rj->render, present);
+	err = err ?: pvrsgx_check_render(sdev->family->cmds, &rj->render);
 	if (err)
 		return err;
 
@@ -672,11 +671,11 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	if (IS_ERR(kicks))
 		return PTR_ERR(kicks);
 	rj->nkicks = in->ta_kicks.count;
-	for (u32 k = 0; k < rj->nkicks && !err; k++)
-		err = kicks[k].flags ? -EINVAL :
-		      pvrsgx_stream_take(&pvrsgx_stream_ta_kick_defs, &sctx, vm,
-					 kicks[k].cmd_stream, kicks[k].cmd_stream_len,
-					 &rj->kick[k]);
+	for (u32 k = 0; k < rj->nkicks && !err; k++) {
+		err = pvrsgx_cmd_take_elem(kdef, &kicks[k], in->ta_kicks.stride, &rj->kick[k],
+					   &present);
+		err = err ?: pvrsgx_cmd_take(sdev, kdef, &cctx, vm, &rj->kick[k], present);
+	}
 	kvfree(kicks);
 	return err;
 }
@@ -723,7 +722,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_render_job *rj = &job->render;
 	struct pvrsgx_render_ctx *r = job->ctx->render;
 	struct pvrsgx_rt_dataset *s = rj->rtds;
-	const struct pvrsgx_stream_render *in = &rj->render;
+	const struct drm_powervr_sgx_cmd_render *in = &rj->render.base;
+	const struct drm_powervr_sgx_ext_sgx545_render *x545 = &rj->render.sgx545_render;
 	bool first = k == 0, last = k == rj->nkicks - 1;
 	struct pvrsgx_fw_ta_cmd *cmd;
 	struct pvrsgx_fw_rt_deps *deps;
@@ -753,16 +753,16 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		}
 		rd->zls_base = zls_base;
 		rd->depth_bias_units = in->depth_bias_units;
-		rd->depth_bias_factor = in->depth_bias_factor;
+		rd->depth_bias_factor = in->depth_bias_factor_f32;
 		rd->region_headers = rgn_this;
 		rd->region_headers_next = rgn_next;
-		rd->zls_ctl = in->zls_control ? in->zls_control | (s->n.xt - 1) << 3 : 0;
+		rd->zls_ctl = x545->zls_control ? x545->zls_control | (s->n.xt - 1) << 3 : 0;
 		rd->depth[0] = in->depth_addr ? (u32)in->depth_addr - zls_base : 0;
 		rd->depth[1] = rd->depth[0];
 		rd->stencil[0] = BIT(31) |
 				 (in->stencil_addr ? (u32)in->stencil_addr - zls_base : 0);
 		rd->stencil[1] = rd->stencil[0];
-		rd->bg_depth = in->bg_depth;
+		rd->bg_depth = in->bg_depth_f32;
 		rd->pixel_event_pds = (u32)in->pixel_event_pds_addr;
 		rd->pixel_event_rows = in->pixel_event_pds_rows;
 		rd->rt_data_entry = entry;
@@ -798,7 +798,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	cmd->ta_ctl[0] = TA_CTL;
 	cmd->ta_ctl[1] = TA_CTL;
 	if (last)
-		cmd->flags_3d = in->flags_3d | PVRSGX_3D_RENDER | f << PVRSGX_3D_FRAME_SHIFT;
+		cmd->flags_3d = x545->flags_3d | PVRSGX_3D_RENDER | f << PVRSGX_3D_FRAME_SHIFT;
 	cmd->frame = f;
 	cmd->pb_desc = kobj_va(r->pb->desc);
 	cmd->render_details = kobj_va(s->rd[p]);
@@ -833,8 +833,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	cmd->te_mtile[1] = s->n.mtile2;
 	cmd->te_screen = s->n.te_screen;
 	cmd->mt_tiles = s->n.mt_tiles;
-	cmd->ta_flags2 = rj->kick[k].ta_flags2 | (last ? PVRSGX_TA2_RENDER : 0);
-	cmd->vdm_base = (u32)rj->kick[k].vdm_base;
+	cmd->ta_flags2 = rj->kick[k].sgx545_ta_kick.ta_flags2 | (last ? PVRSGX_TA2_RENDER : 0);
+	cmd->vdm_base = (u32)rj->kick[k].base.vdm_base;
 	cmd->vdm_ctl = VDM_CTL;
 	cmd->region_headers = rgn_this;
 	cmd->tail_pointers = kobj_va(s->tailptr);

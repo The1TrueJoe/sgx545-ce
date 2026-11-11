@@ -9,7 +9,7 @@
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
-#include "pvrsgx_stream_defs.h"
+#include "pvrsgx_cmd_defs.h"
 
 struct drm_device;
 struct drm_file;
@@ -85,8 +85,8 @@ struct pvrsgx_rt_dataset {
 /* What a render job carries from SUBMIT_JOBS to run_job. */
 struct pvrsgx_render_job {
 	struct pvrsgx_rt_dataset *rtds;
-	struct pvrsgx_stream_render render;
-	struct pvrsgx_stream_ta_kick kick[PVRSGX_MAX_TA_KICKS];
+	struct pvrsgx_cmd_render_all render;
+	struct pvrsgx_cmd_ta_kick_all kick[PVRSGX_MAX_TA_KICKS];
 	u32 nkicks;
 	/** @cmd_off: Where the last kick's TA command went in the context's ring. */
 	u32 cmd_off;
@@ -110,11 +110,11 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
 struct seq_buf;
 void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job);
 
-/* The stream decoder's hooks, shared with transfer jobs. */
-bool pvrsgx_stream_mapped(const void *priv, u64 addr, u64 size);
-bool pvrsgx_stream_no_quirk(const void *priv, u32 quirk);
-int pvrsgx_stream_take(const struct pvrsgx_stream_cmd_defs *defs,
-		       struct pvrsgx_stream_ctx *sctx, struct pvrsgx_vm *vm,
-		       u64 uptr, u32 len, void *dest);
+/* Command checks shared with transfer jobs. */
+bool pvrsgx_cmd_mapped(const void *priv, u64 addr, u64 size);
+const struct pvrsgx_cmd_def *pvrsgx_cmd_def(struct pvrsgx_device *sdev, enum pvrsgx_cmd_type type);
+int pvrsgx_cmd_take(struct pvrsgx_device *sdev, const struct pvrsgx_cmd_def *def,
+		    const struct pvrsgx_cmd_ctx *ctx, struct pvrsgx_vm *vm, const void *all,
+		    u64 present);
 
 #endif /* PVRSGX_RENDER_H */

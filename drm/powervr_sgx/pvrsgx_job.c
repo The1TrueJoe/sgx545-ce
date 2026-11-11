@@ -801,12 +801,12 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 	struct pvrsgx_job *job;
 	int err;
 
-	if (in->_padding_4c)
+	if (in->_padding_c || in->_padding_4c)
 		return -EINVAL;
 
 	switch (in->type) {
 	case DRM_POWERVR_SGX_JOB_TYPE_NULL:
-		if (in->flags || in->cmd_stream_len || in->cmd_stream || in->ta_kicks.count ||
+		if (in->flags || in->cmd || in->ta_kicks.count ||
 		    in->rt_dataset_handle)
 			return -EINVAL;
 		break;

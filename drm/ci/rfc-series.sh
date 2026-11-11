@@ -41,7 +41,7 @@ AREAS="04-device:core hw regs device mmu
 05-firmware:fw fwif pds ccb
 06-memory:gem vm prime kobj
 07-jobs:job trace
-08-streams:stream stream_defs cmd_checks
+08-commands:cmd cmd_defs cmd_checks
 09-render:render transfer
 10-validate:validate usse_table
 11-driver:drv pm debugfs dump aux"
