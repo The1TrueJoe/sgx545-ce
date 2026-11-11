@@ -18,6 +18,7 @@
 #include "main/mtypes.h"
 #include "nir.h"
 #include "nir_builder.h"
+#include "gl_nir.h"
 #include "gl_nir_linker.h"
 #include "linker_util.h"
 #include "standalone.h"
@@ -140,7 +141,7 @@ main(int argc, char **argv)
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false, driver_uniforms = false;
    unsigned glsl_version = 100;
-   while ((c = getopt(argc, argv, "vpFLDMHPJG:B:u:a:s:o:V:")) != -1) {
+   while ((c = getopt(argc, argv, "vpFLDMHPJG:B:U:u:a:s:o:V:")) != -1) {
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
@@ -150,6 +151,7 @@ main(int argc, char **argv)
       case 'H': opts.f16_samples = true; break;  /* mediump texels returned as F16 */
       case 'P': opts.split_phases = true; break; /* discard test and colour in two phases */
       case 'J': opts.dep_f16_samples = true; break; /* dependent mediump texels returned F16 too */
+      case 'U': opts.ubo_base_k = strtoul(optarg, NULL, 0); break; /* constant of uniform block 0's address */
       case 'G': glsl_version = atoi(optarg); break; /* GLSL version: 100 ES (default), 110-130 desktop compat */
       case 'V': {                                   /* -V slot=fmt: attribute slot's raw format (sgx_vtx_fmt) */
          unsigned slot, fmt;
@@ -164,7 +166,7 @@ main(int argc, char **argv)
       case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-B unitmask] [-H] [-P] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-U k] [-B unitmask] [-H] [-P] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
@@ -184,6 +186,15 @@ main(int argc, char **argv)
    if (!prog) {
       fprintf(stderr, "sgxc: GLSL compile failed\n");
       return 1;
+   }
+
+   /* GL 3.1's uniform block limits (the standalone context has none) */
+   if (glsl_version >= 140) {
+      for (unsigned st = 0; st < MESA_SHADER_STAGES; st++)
+         ctx->Const.Program[st].MaxUniformBlocks = 12;
+      ctx->Const.MaxCombinedUniformBlocks = 24;
+      ctx->Const.MaxUniformBufferBindings = 24;
+      ctx->Const.MaxUniformBlockSize = 16384;
    }
 
    /* varying sets, per stage, from each shader as compiled (before the
@@ -230,6 +241,12 @@ main(int argc, char **argv)
          continue;
       }
       nir_shader *nir = sep->_LinkedShaders[st]->Program->nir;
+      /* uniform blocks to load_ubo (block index, byte offset), as st does */
+      if (glsl_version >= 140) {
+         NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+         NIR_PASS(_, nir, nir_opt_constant_folding);
+         NIR_PASS(_, nir, gl_nir_lower_buffers, sep);
+      }
       /* the standalone frontend builds NIR with its own options */
       nir->options = sgx_nir_options();
       const char *sname = st == MESA_SHADER_VERTEX ? "vert" : "frag";

@@ -66,6 +66,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.dep_f16_samples = dep_f16;
       opts.driver_consts = true;
       opts.native_integers = native;
+      opts.ubo_base_k = ubo_base_k;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
       compiled = true;
@@ -107,6 +108,7 @@ class sgx_compile_test : public ::testing::Test {
    bool split_phases = false;
    bool dep_f16 = false;
    bool native = false;
+   unsigned ubo_base_k = 0;
 
    /* a vertex shader with ivec4 attributes a, b (pa0-3, pa4-7) storing
     * fn(a, b) to a flat ivec4 varying */
@@ -1798,6 +1800,36 @@ TEST_F(sgx_compile_test, int_varying_as_halves)
    expect_decodes();
    EXPECT_EQ(out.n_iters, 2u);
    EXPECT_TRUE(has("pck.u16.f32")) << disasm();
+}
+
+/* uniform blocks: ld.a.d from the block's address (constant ubo_base_k +
+ * block), the immediate counting words from base + 4; word 0 and offsets in
+ * a register through an address computed first */
+TEST_F(sgx_compile_test, vertex_ubo_loads)
+{
+   native = true;
+   ubo_base_k = 1017;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *a = nir_load_ubo(b, 4, 32, nir_imm_int(b, 1), nir_imm_int(b, 16),
+                                .align_mul = 16, .range = ~0u);
+      nir_def *z = nir_load_ubo(b, 4, 32, nir_imm_int(b, 0), nir_imm_int(b, 0),
+                                .align_mul = 16, .range = ~0u);
+      nir_def *i = nir_load_ubo(b, 4, 32, nir_imm_int(b, 1),
+                                nir_imul_imm(b, nir_channel(b, x, 0), 16),
+                                .align_mul = 16, .range = ~0u);
+      return nir_iadd(b, nir_iadd(b, a, z), nir_iadd(b, i, y));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("ld.a.d")) << disasm();
+   EXPECT_TRUE(has(", #3 ")) << disasm(); /* byte 16 = base + 4 * (3 + 1) */
+   EXPECT_TRUE(has("wdf")) << disasm();
+   bool k0 = false, k1 = false;
+   for (unsigned n = 0; n < out.n_consts; n++) {
+      k0 |= out.consts[n].k == 1017;
+      k1 |= out.consts[n].k == 1018;
+   }
+   EXPECT_TRUE(k0 && k1);
 }
 
 } /* namespace */

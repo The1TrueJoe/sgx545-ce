@@ -111,6 +111,10 @@ struct sgx_compile_options {
     * integer units. Off: GLSL ES 1.00, whose integers and booleans are
     * computed as floats, as the DDK's compiler does */
    bool native_integers;
+   /* the constant number whose word the driver loads with uniform block
+    * 0's GPU address; block n's is constant ubo_base_k + n (raw 32 bits).
+    * 0: the program has no uniform blocks */
+   unsigned ubo_base_k;
 };
 
 /* a vertex attribute's raw format in PA, unpacked by the shader. Components

@@ -3049,6 +3049,60 @@ emit_clip_distance(struct sgx_ctx *c, unsigned p, struct sgx_ref x)
    emit(c, f);
 }
 
+/* A uniform block's words: ld.a.d from its address, which the driver loads
+ * as constant ubo_base_k + block. ld.a.d #i reads base + 4 * (i + 1), so a
+ * word past the first 128, or at an offset in a register, gets its address
+ * (less one word) computed first */
+static void
+emit_load_ubo(struct sgx_ctx *c, nir_intrinsic_instr *in, struct sgx_val *v)
+{
+   unsigned nc = in->def.num_components;
+   if (!c->opts->ubo_base_k || !nir_src_is_const(in->src[0]) ||
+       in->def.bit_size != 32) {
+      sgx_fail(c, "uniform block load");
+      return;
+   }
+   unsigned k = c->opts->ubo_base_k + nir_src_as_uint(in->src[0]);
+   if (k >= ARRAY_SIZE(c->const_used)) {
+      sgx_fail(c, "uniform block %u out of range", k);
+      return;
+   }
+   c->const_used[k] = 1;
+   struct sgx_ref base = ref(SGX_F_U, k);
+   int first = 0;
+   if (nir_src_is_const(in->src[1])) {
+      uint32_t off = nir_src_as_uint(in->src[1]);
+      first = off / 4 - 1;
+      if (first < 0 || first + nc > 128) {
+         struct sgx_ref a = vref(new_vreg(c, 1), 0);
+         emit_ima32(c, a, base, ref(SGX_F_K, 1), ref(SGX_F_K, off - 4), 0);
+         base = a;
+         first = 0;
+      }
+   } else {
+      nir_legacy_src ls = nir_legacy_chase_src(&in->src[1]);
+      struct sgx_ref a = vref(new_vreg(c, 1), 0), a4 = vref(new_vreg(c, 1), 0);
+      emit_ima32(c, a, src_comp(c, &ls, 0), ref(SGX_F_K, 1), base, 0);
+      emit_isub(c, a4, a, ref(SGX_F_K, 4));
+      base = a4;
+   }
+   unsigned t = new_vreg(c, nc);
+   for (unsigned j = 0; j < nc; j++) {
+      struct sgx_ins *ld = ins_alloc(c, SGX_INS_ALU, SGX_OP_LD);
+      ld->nops = 3;
+      ld->op[0] = vref(t, j);
+      ld->op[1] = base;
+      ld->op[2] = ref(SGX_F_IMM, first + j);
+      emit(c, ld);
+   }
+   struct sgx_ins *w = ins_alloc(c, SGX_INS_ALU, SGX_OP_WDF);
+   w->ndst = 0;
+   emit(c, w);
+   v->kind = VAL_V;
+   v->n = t;
+   v->comp = 0;
+}
+
 static void
 emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
 {
@@ -3301,6 +3355,9 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    }
    case nir_intrinsic_load_front_face:
       front_face(c, v, &in->def);
+      return;
+   case nir_intrinsic_load_ubo:
+      emit_load_ubo(c, in, v);
       return;
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
