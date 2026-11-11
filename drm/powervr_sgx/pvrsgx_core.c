@@ -12,6 +12,8 @@
 
 #include <linux/sizes.h>
 
+#include <uapi/drm/powervr_sgx_drm.h>
+
 #include "pvrsgx_core.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_hw.h"
@@ -261,6 +263,19 @@ const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core)
 		if (families[i].core == core)
 			return &families[i];
 	return NULL;
+}
+
+/*
+ * The quirks DEV_QUERY lists for the core, none of them mandatory. No erratum
+ * that reaches userspace is documented for the SGX545 (UAPI.md G25); a
+ * single-context core lists DRM_POWERVR_SGX_QUIRK_UNISOLATED.
+ */
+u16 pvrsgx_core_uapi_quirks(const struct pvrsgx_core_family *f, const u32 **quirks)
+{
+	static const u32 unisolated[] = { DRM_POWERVR_SGX_QUIRK_UNISOLATED };
+
+	*quirks = unisolated;
+	return pvrsgx_core_single_context(f) ? ARRAY_SIZE(unisolated) : 0;
 }
 
 /* The entry for this part, or NULL if the driver doesn't know it. */

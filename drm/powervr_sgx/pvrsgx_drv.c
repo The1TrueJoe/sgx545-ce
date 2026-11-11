@@ -119,10 +119,8 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 	}
 	case DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET: {
 		struct drm_powervr_sgx_dev_query_quirks q = {};
-		/* No erratum that reaches userspace is documented for rev 1014 (G25). */
-		static const u32 unisolated[] = { DRM_POWERVR_SGX_QUIRK_UNISOLATED };
-		bool single = pvrsgx_core_single_context(sdev->family);
-		u16 n = single ? ARRAY_SIZE(unisolated) : 0;
+		const u32 *quirks;
+		u16 n = pvrsgx_core_uapi_quirks(sdev->family, &quirks);
 		int err;
 
 		if (ptr) {
@@ -132,7 +130,7 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			if (q._padding_c)
 				return -EINVAL;
 			if (n && q.quirks && q.count &&
-			    copy_to_user(u64_to_user_ptr(q.quirks), unisolated,
+			    copy_to_user(u64_to_user_ptr(q.quirks), quirks,
 					 min(q.count, n) * sizeof(u32)))
 				return -EFAULT;
 		}

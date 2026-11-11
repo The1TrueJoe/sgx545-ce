@@ -431,3 +431,7 @@ void pvrsgx_device_fini(struct pvrsgx_device *sdev)
 	pvrsgx_mmu_destroy(sdev->idle_mmu);
 	pvrsgx_mmu_destroy(sdev->kernel_mmu);
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_device_test.c"
+#endif
