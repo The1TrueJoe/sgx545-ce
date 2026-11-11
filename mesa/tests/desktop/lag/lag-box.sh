@@ -101,22 +101,36 @@ echo 1 > $T/tracing_on
 	done
 ) > "$OUT/cpu.txt" 2>/dev/null &
 sampler=$!
-PERF=$(command -v perf || true)
-[ -z "$PERF" ] && echo "no perf on the box: no CPU profiles" >> "$OUT/notes.txt"
+# perf in the root (linux-perf), system-wide while each workload runs: Xorg,
+# xfwm4 and the client by name, with our Mesa's symbols from /opt/sgx/lib
+PERF=
+for p in /usr/bin/perf /usr/sbin/perf; do [ -x "$R$p" ] && PERF="chroot $R $p" && break; done
+[ -z "$PERF" ] && command -v perf > /dev/null && PERF=perf
+[ -z "$PERF" ] && echo "no perf in the root or on the box: no CPU profiles" >> "$OUT/notes.txt"
 
 for w in "$@"; do
 	xl0=$(wc -l < "$R/var/log/xorg.out")
 	fl0=$(wc -l < /tmp/lag-xfwm4.err)
 	perfpid=
 	if [ -n "$PERF" ] && [ $w != idle ]; then
-		"$PERF" record -F 499 -g -o "$OUT/perf-$w.data" -p "$(pidof Xorg | tr ' ' ','),$(pidof xfwm4 | tr ' ' ',')" \
-			-- sleep 20 > /dev/null 2>&1 &
+		$PERF record -a -g -F 499 -o /tmp/lag-perf-$w.data > /tmp/lag-perf-$w.log 2>&1 &
 		perfpid=$!
+		sleep 1
 	fi
 	mark start "$V" "$w"
 	as_desk sh /tmp/lag-wl.sh "$w" > "$OUT/wl-$w.txt" 2>&1
 	mark end "$V" "$w"
-	[ -n "$perfpid" ] && wait $perfpid
+	if [ -n "$perfpid" ]; then
+		kill -INT $perfpid; wait $perfpid
+		# by process, then where each spends it
+		$PERF report -i /tmp/lag-perf-$w.data --stdio --no-children --sort comm,dso -g none \
+			> "$OUT/perf-$w-dso.txt" 2>/dev/null
+		$PERF report -i /tmp/lag-perf-$w.data --stdio --no-children --sort comm,dso,sym -g none \
+			--percent-limit 0.5 > "$OUT/perf-$w-sym.txt" 2>/dev/null
+		$PERF report -i /tmp/lag-perf-$w.data --stdio --no-children --comms Xorg,xfwm4 \
+			-g caller,0.5,callee --percent-limit 2 > "$OUT/perf-$w-calls.txt" 2>/dev/null
+		mv /tmp/lag-perf-$w.data "$OUT/perf-$w.data"
+	fi
 	sleep 3   # the stats line after the workload (every 2 s)
 	sed -n "$((xl0 + 1)),\$p" "$R/var/log/xorg.out" | grep '^sgx stats' > "$OUT/stats-x-$w.txt"
 	sed -n "$((fl0 + 1)),\$p" /tmp/lag-xfwm4.err | grep '^sgx stats' > "$OUT/stats-xfwm4-$w.txt"

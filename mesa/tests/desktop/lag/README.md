@@ -43,8 +43,12 @@ For each workload the summary has:
   `/proc` every 0.5 s.
 - **The driver's own view** (`SGX_DEBUG=stats` in X and xfwm4): frames a
   second, draw and flush+wait time, slot waits, CPU blits, render latency.
-- The workload's own number, and perf profiles of X and xfwm4 where the box
-  has perf.
+- The workload's own number.
+- **perf**, system-wide while each workload runs, from the root's linux-perf
+  (or the box's): `perf-W-dso.txt` (by process and library),
+  `perf-W-sym.txt` (functions), `perf-W-calls.txt` (Xorg's and xfwm4's
+  call chains). Use a Mesa build with debug info (`mesa/build.sh` keeps it)
+  so the profiles name the driver's functions.
 
 ## What the EA1 can't show
 
