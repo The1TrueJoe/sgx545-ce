@@ -48,8 +48,8 @@ The SGX530 (TI OMAP3630, behind its ti-sysc interconnect module) has one
 memory context: the microkernel and the client's tasks translate through the
 same directory list. Every VM's page directory then maps the firmware's heaps,
 so a client can read the firmware's structures and the other clients'
-commands, corrupt the firmware, and through it reach any physical memory.
-Clients are not isolated. The driver runs such a core only with
+commands, corrupt the firmware, and make a job run under another client's
+page directory. Clients are not isolated. The driver runs such a core only with
 ``allow_unisolated=1``. Without it, it logs the core's ID and refuses it before
 writing a register. With it, it warns at probe, and ``DEV_QUERY`` lists the
 quirk ``DRM_POWERVR_SGX_QUIRK_UNISOLATED``.
