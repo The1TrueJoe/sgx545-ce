@@ -149,6 +149,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          o->proj = s->proj;
          o->coord_pa = s->coord_pa;
          o->f16 = s->f16_return;
+         o->fetch = s->fetch;
          o->reg = s->dependent ? phys(c, &s->ins->op[0]) : s->pa;
          if (s->dependent && smp_template(c, s, &o->smp))
             goto fail;
@@ -245,7 +246,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
                                                : c->slot_sa[c->lit_slot[i]];
       m->mem = c->mem_dwords ? c->lit_slot[i] + 1 : 0;
       m->shift = 0;
-      m->fmt = c->lit_kind[i] ? c->lit_kind[i] : packed ? 0x12 : 0x11;
+      m->fmt = packed ? 0x12 : 0x11;
       m->value = packed ? 0 : c->lit_bits[i];
    }
    out->n_iters = frag ? MIN2(c->n_iters, ARRAY_SIZE(out->iters)) : 0;
@@ -264,15 +265,12 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       o->sampler = it->sampler;
       o->pointcoord = it->pointcoord;
       o->flat = it->flat;
-      o->noperspective = it->noperspective;
    }
    out->colour_pa = c->colour_pa;
    out->discards = c->discards;
    out->writes_depth = c->has_depth;
    out->depth_pa = c->depth_pa;
    memcpy(out->in_mask, inmask, sizeof(inmask));
-   out->vertex_id_pa = frag ? -1 : c->vertex_id_pa;
-   out->instance_id_pa = frag ? -1 : c->instance_id_pa;
    for (unsigned i = 0; i < SGX_MAX_SETS; i++)
       out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];
    out->point_size = !frag && c->vary->point_size;

@@ -857,8 +857,7 @@ lit_run(struct sgx_ctx *c, const uint32_t *w, unsigned n)
 {
    for (unsigned s = 0; s + n <= c->n_lits; s++) {
       unsigned j = 0;
-      while (j < n && c->lit_packed_k[s + j] < 0 && !c->lit_kind[s + j] &&
-             c->lit_bits[s + j] == w[j])
+      while (j < n && c->lit_packed_k[s + j] < 0 && c->lit_bits[s + j] == w[j])
          j++;
       if (j == n)
          return s;
@@ -869,25 +868,6 @@ lit_run(struct sgx_ctx *c, const uint32_t *w, unsigned n)
    for (unsigned j = 0; j < n; j++)
       c->lit_bits[c->n_lits++] = w[j];
    return s;
-}
-
-/* an SA slot the driver loads with a value it knows per draw (const map
- * fmt, descriptor); needs driver_consts */
-static struct sgx_ref
-drv_value(struct sgx_ctx *c, uint8_t fmt, uint32_t desc)
-{
-   unsigned l;
-   for (l = 0; l < c->n_lits; l++)
-      if (c->lit_kind[l] == fmt && c->lit_bits[l] == desc)
-         return ref(SGX_F_LIT, l);
-   if (!c->opts->driver_consts || l >= ARRAY_SIZE(c->lit_bits)) {
-      sgx_fail(c, "no slot for a driver value");
-      return cref(48);
-   }
-   c->lit_bits[l] = desc;
-   c->lit_kind[l] = fmt;
-   c->n_lits++;
-   return ref(SGX_F_LIT, l);
 }
 
 /* a register operand for a fmad16 source reading lanes (a, b), and its
@@ -916,8 +896,7 @@ pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz)
          /* a literal in SA, beside the uniforms */
          unsigned n;
          for (n = 0;
-              n < c->n_lits && (c->lit_packed_k[n] >= 0 || c->lit_kind[n] ||
-                                c->lit_bits[n] != w);
+              n < c->n_lits && (c->lit_packed_k[n] >= 0 || c->lit_bits[n] != w);
               n++)
             ;
          if (n < ARRAY_SIZE(c->lit_bits)) {
@@ -3311,18 +3290,6 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_load_front_face:
       front_face(c, v, &in->def);
       return;
-   case nir_intrinsic_load_vertex_id:
-   case nir_intrinsic_load_instance_id: {
-      int r = in->intrinsic == nir_intrinsic_load_vertex_id ? c->vertex_id_pa
-                                                           : c->instance_id_pa;
-      if (r < 0) {
-         sgx_fail(c, "%s has no register", nir_intrinsic_infos[in->intrinsic].name);
-         return;
-      }
-      v->kind = VAL_PA;
-      v->n = r;
-      return;
-   }
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
       v->kind = VAL_CONST;
@@ -4356,46 +4323,9 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
 #undef TEXEL_LANE
 }
 
-/* textureSize: the base level's size the driver loads (SGX_CONST_TEX_SIZE),
- * max(size >> lod, 1) */
-static void
-emit_txs(struct sgx_ctx *c, nir_tex_instr *tex)
-{
-   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
-   struct sgx_ref lod = ref(SGX_F_K, 0);
-   if (li >= 0) {
-      nir_legacy_src ls = nir_legacy_chase_src(&tex->src[li].src);
-      lod = src_comp(c, &ls, 0);
-   }
-   unsigned nc = tex->def.num_components;
-   unsigned w = new_vreg(c, nc);
-   c->vals[tex->def.index].kind = VAL_V;
-   c->vals[tex->def.index].n = w;
-   c->vals[tex->def.index].comp = 0;
-   for (unsigned k = 0; k < nc; k++) {
-      struct sgx_ref d = vref(w, k);
-      struct sgx_ref base =
-         drv_value(c, SGX_CONST_TEX_SIZE, tex->texture_index | k << 8);
-      bool array = tex->is_array && k == nc - 1;
-      if ((is_const(&lod) && lod.n == 0) || array) {
-         struct sgx_ref dd[4] = {d}, ss[1][4] = {{base}};
-         emit_runs(c, SGX_OP_MOV, 1, dd, 1, ss, &NOF, 0);
-         continue;
-      }
-      struct sgx_ref t = vref(new_vreg(c, 1), 0);
-      emit_bw(c, SGX_OP_SHR, t, base, lod, false);
-      emit_movc(c, SGX_OP_MOVC_I32, SGX_ISA_MOVC_COND_Z, d, t, ref(SGX_F_K, 1),
-                t);
-   }
-}
-
 static void
 emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
 {
-   if (tex->op == nir_texop_txs && c->opts->native_integers) {
-      emit_txs(c, tex);
-      return;
-   }
    if (c->stage != MESA_SHADER_FRAGMENT ||
        c->n_samples >= ARRAY_SIZE(c->samples) ||
        c->n_iters >= ARRAY_SIZE(c->iters)) {
@@ -4437,6 +4367,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
                : 2;
    s->coord_pa = -1;
    s->sampler = tex->texture_index;
+   s->fetch = tex->backend_flags & SGX_TEX_FETCH;
    /* non-dependent: the coordinate is (the start of) a varying the PDS
     * iterates, no bias; the PDS then samples and leaves the texel in pa */
    nir_legacy_src ls = nir_legacy_chase_src(&tex->src[ci].src);

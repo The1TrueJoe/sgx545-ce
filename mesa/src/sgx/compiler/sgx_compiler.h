@@ -144,7 +144,6 @@ struct sgx_varyings {
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
 #define SGX_SLOT_NONE     0xffff
-#define SGX_CONST_TEX_SIZE 0x13
 #define SGX_MAX_CONST_MAP (1024 + 32) /* every constant number and literal */
 
 struct sgx_const_map {
@@ -158,12 +157,9 @@ struct sgx_const_map {
     * (hardware, tests/c10); 0x11 a literal: k = 0xffff, value (32 bits) ORed
     * into the slot at shift; 0x12 the vec4 at constants k..k+3 as packed
     * BGRA8, A << 24 | R << 16 | G << 8 | B, each channel clamped to [0, 1]
-    * and rounded to nearest (the whole slot, shift 0); 0x13 the base
-    * level's size of texture unit (value & 0xff) in dimension
-    * (value >> 8): 0 width, 1 height, 2 depth, as a 32-bit unsigned
-    * integer (k = 0xffff) */
+    * and rounded to nearest (the whole slot, shift 0) */
    uint8_t fmt;
-   uint32_t value; /* fmt 0x11, 0x13 */
+   uint32_t value; /* fmt 0x11 */
 };
 
 struct sgx_iter_info {
@@ -179,10 +175,6 @@ struct sgx_iter_info {
    /* not interpolated: every varying in the set is flat, the provoking
     * vertex's value (DOUTI b25-26 = 2; 3 interpolates) */
    uint8_t flat;
-   /* interpolated without perspective correction: every varying in the
-    * set is noperspective (DOUTI b25-26 = 0, the clear's and the
-    * background object's mode, is the candidate; not yet established) */
-   uint8_t noperspective;
 };
 
 /* A texture sample. A
@@ -205,6 +197,10 @@ struct sgx_sample_info {
     * and reg + 1 (B lo, A hi), not RGBA8 into reg; RGBA order for a
     * tex_bgra unit too (the TAG converts by channel) */
    uint8_t f16;
+   /* dependent: a texelFetch (sgx_lower_tex), at the texel's center with an
+    * explicit LOD; the driver gives it state of its own: NEAREST filtering
+    * and mip selection, clamped, whatever the bound sampler says */
+   uint8_t fetch;
    uint64_t smp; /* dependent: the smp, destination r0, texture state #0 */
 };
 
@@ -246,10 +242,6 @@ struct sgx_shader {
    unsigned depth_pa;
    /* vertex: PA registers read (attribute slot k = pa 4k..4k+3) */
    uint32_t in_mask[4];
-   /* vertex: the PA register the PDS loads with the vertex index (in0) and
-    * the instance index (in1), after the attributes; -1 when the program
-    * doesn't read it. As integers: native_integers programs only */
-   int vertex_id_pa, instance_id_pa;
    /* vertex: output set sizes (o4 on); 0 = unused */
    unsigned set_comps[SGX_MAX_SETS];
    bool point_size; /* vertex: writes the point size (f32), after the sets */
@@ -310,6 +302,14 @@ bool sgx_pack_varyings(struct sgx_varyings *v);
  * Call on the fragment shader before sgx_compile. Not for lines: a
  * discarding program breaks a lines draw. */
 bool sgx_lower_clip_fs(struct nir_shader *fs, unsigned ucp_enables);
+
+/* GLSL 1.30's texture functions on what smp has: textureGrad as an
+ * explicit LOD, the Offset variants and rectangle textures through the
+ * texture's size, 1D as 2D, texelFetch as an explicit-LOD read at the
+ * texel's center (marked sgx_sample_info.fetch). The txs instructions it
+ * adds (and the program's own textureSize) are the driver's to lower before
+ * sgx_compile. Call after the texture and sampler indices are final */
+bool sgx_lower_tex(struct nir_shader *s);
 
 /* lower and compile; 0 on success */
 int sgx_compile(struct nir_shader *nir, const struct sgx_compile_options *opts,

@@ -108,14 +108,17 @@ struct sgx_iter {
    bool f16;        /* iterated as F16 (mediump), two components per register */
    bool pointcoord; /* gl_PointCoord (set 0) */
    bool flat;       /* every varying in the set flat */
-   bool noperspective; /* every varying in the set noperspective */
    unsigned sampler;
 };
+
+/* nir_tex_instr.backend_flags: a texelFetch lowered to txl */
+#define SGX_TEX_FETCH 1
 
 struct sgx_sample {
    unsigned id;
    unsigned sampler;
    bool dependent, proj;
+   bool fetch; /* a texelFetch (SGX_TEX_FETCH) */
    unsigned dim; /* 2 = 2D, 3 = cube */
    unsigned set; /* non-dependent: the coordinate's texture coordinate set */
    int coord_pa; /* ... and its plain iteration, -1 none */
@@ -145,7 +148,6 @@ struct sgx_ctx {
    /* register per I/O component: [location * 4 + component] (VARYING_SLOT_* /
     * VERT_ATTRIB_*), -1 none */
    int in_reg[512], out_reg[512];
-   int vertex_id_pa, instance_id_pa; /* -1: not read */
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
 #define SGX_ITER_FRAGCOORD 14 /* list A iterator of gl_FragCoord */
@@ -191,9 +193,6 @@ struct sgx_ctx {
    uint32_t lit_bits[32];  /* driver_consts: literal slots' values */
    /* ... or, >= 0, the slot is constants k..k+3 packed to BGRA8 (0x12) */
    int lit_packed_k[32];
-   /* ... or, nonzero, a value the driver supplies: its sgx_const_map fmt,
-    * lit_bits its descriptor */
-   uint8_t lit_kind[32];
    int lit_slot[32];
    unsigned n_lits;
    bool lit_off; /* while a register is needed (fmad16 src0) */

@@ -1666,10 +1666,23 @@ TEST_F(sgx_compile_test, fragment_if_int_compare)
    EXPECT_TRUE(has("test.xor.ne p0")) << disasm();
 }
 
-/* GLSL 1.30 texture functions: textureLod (smp's LOD replace),
- * texelFetch (txl at the texel's center over the driver-loaded size),
- * textureSize, and an integer texture's bytes */
-TEST_F(sgx_compile_test, fragment_tex_lod_fetch_size)
+/* txs as the driver lowers it: a constant size */
+static bool
+const_txs(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   if (tex->op != nir_texop_txs)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   nir_def *sz = nir_imm_ivec4(b, 64, 32, 1, 1);
+   nir_def_replace(&tex->def,
+                   nir_trim_vector(b, sz, tex->def.num_components));
+   return true;
+}
+
+/* GLSL 1.30 texture functions: textureLod (smp's LOD replace), texelFetch
+ * (sgx_lower_tex: an explicit-LOD read marked fetch), an integer texture's
+ * bytes */
+TEST_F(sgx_compile_test, fragment_tex_lod_fetch)
 {
    native = true;
    start(MESA_SHADER_FRAGMENT);
@@ -1706,57 +1719,26 @@ TEST_F(sgx_compile_test, fragment_tex_lod_fetch_size)
    tb.lod = NULL;
    tb.dest_type = nir_type_uint32;
    nir_def *u = nir_build_tex_struct(&b, nir_texop_tex, tb);
-   struct nir_tex_builder sb = {};
-   sb.texture_deref = sd;
-   sb.dim = GLSL_SAMPLER_DIM_2D;
-   sb.lod = nir_imm_int(&b, 2);
-   sb.dest_type = nir_type_int32;
-   nir_def *sz = nir_build_tex_struct(&b, nir_texop_txs, sb);
    nir_def *r = nir_fadd(&b, nir_fadd(&b, a, f), nir_u2f32(&b, u));
-   r = nir_fadd(&b, r, nir_i2f32(&b, nir_vec4(&b, nir_channel(&b, sz, 0),
-                                              nir_channel(&b, sz, 1),
-                                              nir_imm_int(&b, 0),
-                                              nir_imm_int(&b, 0))));
    nir_store_var(&b, col, r, 0xf);
+   EXPECT_TRUE(sgx_lower_tex(b.shader));
+   nir_shader_tex_pass(b.shader, const_txs, nir_metadata_control_flow, NULL);
    ASSERT_TRUE(compile()) << out.log;
    expect_decodes();
    ASSERT_EQ(out.n_samples, 3u);
-   unsigned lods = 0;
+   unsigned lods = 0, fetches = 0;
    for (unsigned i = 0; i < out.n_samples; i++) {
+      if (!out.samples[i].dependent)
+         continue;
       char text[256];
       sgx_disasm_one(out.samples[i].smp, NULL, text, sizeof(text));
       lods += std::string(text).find(".lod") != std::string::npos;
+      fetches += out.samples[i].fetch;
    }
    EXPECT_EQ(lods, 2u);
-   /* the sizes of texture 0 (width, height) as driver constants */
-   unsigned sizes = 0;
-   for (unsigned i = 0; i < out.n_consts; i++)
-      if (out.consts[i].fmt == SGX_CONST_TEX_SIZE) {
-         EXPECT_EQ(out.consts[i].value & 0xff, 0u);
-         EXPECT_LT(out.consts[i].value >> 8, 2u);
-         sizes++;
-      }
-   EXPECT_EQ(sizes, 2u);
+   EXPECT_EQ(fetches, 1u);
    /* the uint texel's bytes, not normalized */
    EXPECT_TRUE(has("#255")) << disasm();
-}
-
-/* gl_VertexID / gl_InstanceID: PA registers after the attributes, which the
- * driver's PDS program fills */
-TEST_F(sgx_compile_test, vertex_vertex_and_instance_id)
-{
-   native = true;
-   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
-      return nir_iadd(b, x,
-                      nir_vec4(b, nir_load_vertex_id(b), nir_load_instance_id(b),
-                               nir_imm_int(b, 0), nir_imm_int(b, 0)));
-   });
-   ASSERT_TRUE(compile()) << out.log;
-   expect_decodes();
-   EXPECT_EQ(out.vertex_id_pa, 8);
-   EXPECT_EQ(out.instance_id_pa, 9);
-   EXPECT_TRUE(out.in_mask[0] >> 8 & 1);
-   EXPECT_TRUE(out.in_mask[0] >> 9 & 1);
 }
 
 /* a loop that only runs once (a switch from GLSL) has no branches */

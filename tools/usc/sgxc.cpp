@@ -269,6 +269,10 @@ main(int argc, char **argv)
          NIR_PASS(_, nir, nir_opt_constant_folding);
          NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform, nir_metadata_control_flow, NULL);
       }
+      /* (a textureSize, its own or one this adds, is the driver's to lower:
+       * sgxc refuses it) */
+      if (so2.native_integers)
+         sgx_lower_tex(nir);
       struct sgx_shader out;
       memset(&out, 0, sizeof(out));
       int r = sgx_compile(nir, &so2, &vary[st], &out);
