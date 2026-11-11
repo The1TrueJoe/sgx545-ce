@@ -61,8 +61,10 @@ static int check_field(const struct pvrsgx_stream_def *def,
 		/* The GPU's address words are 32 bits. */
 		if (v >> 32 || v & (def->align - 1))
 			return -EINVAL;
-		/* CLIENT has no range (the mapped check covers it); any other heap
-		 * must be set, or nothing in it passes. */
+		/*
+		 * CLIENT has no range (the mapped check covers it); any other heap
+		 * must be set, or nothing in it passes.
+		 */
 		if (def->heap == PVRSGX_STREAM_HEAP_CLIENT)
 			return 0;
 		if (!ctx->heaps[def->heap].size ||
