@@ -102,18 +102,18 @@ jobs:
         run: |
           set -eux
           make -C linux-$LINUX_VERSION ARCH=x86_64 M=$PWD/drm/powervr_sgx W=1 modules 2>&1 | tee oot.log
-          ! grep -E 'warning:|error:' oot.log
+          if grep -E 'warning:|error:' oot.log; then exit 1; fi
 
       - name: The driver through sparse and checkpatch --strict
         run: |
           set -eux
           touch drm/powervr_sgx/*.c
           make -C linux-$LINUX_VERSION ARCH=x86_64 M=$PWD/drm/powervr_sgx C=2 modules 2>&1 | tee sparse.log
-          ! grep -E 'powervr_sgx/.*(warning|error):' sparse.log
+          if grep -E 'powervr_sgx/.*(warning|error):' sparse.log; then exit 1; fi
           perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse -f \
-            $(ls drm/powervr_sgx/*.[ch] | grep -v _trace.h) drm/powervr_sgx/tests/*.c \
+            $(ls drm/powervr_sgx/*.[ch] | grep -v -e _trace.h -e '\.mod\.c$') drm/powervr_sgx/tests/*.c \
             docs/uapi/powervr_sgx_drm.h docs/uapi/stream/*.[ch] | tee checkpatch.log
-          ! grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log
+          if grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log; then exit 1; fi
           python3 linux-$LINUX_VERSION/scripts/kernel-doc -none -Wall -Werror \
             docs/uapi/powervr_sgx_drm.h drm/powervr_sgx/pvrsgx_*.[ch]
 
