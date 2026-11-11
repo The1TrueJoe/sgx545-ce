@@ -177,6 +177,7 @@ static void q_check(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o, unsigned 
 		o->q_hits += hits;
 		drm_err(&sdev->base, "quarantine: %s: %u dwords changed (%u in all)\n", o->name,
 			hits, o->q_hits);
+		/* The re-armed pattern leaves the write-combining buffers now. */
 		wmb();
 	}
 }
@@ -239,6 +240,7 @@ static void kobj_quarantine(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 
 	for (u32 i = 0; i < o->km.size / 4; i++)
 		WRITE_ONCE(w[i], q_pattern(i));
+	/* The pattern is in memory before the next command can reach the GPU. */
 	wmb();
 	if (quarantine >= 2) {
 		mutex_lock(&sdev->ccb_lock);
