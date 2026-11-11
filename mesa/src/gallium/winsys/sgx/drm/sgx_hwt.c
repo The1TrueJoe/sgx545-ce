@@ -20,6 +20,9 @@
  *   buf 11223344 ...    optional: the data buffer's first dwords (up to 64)
  *   limm r1, BUF        lines of ISA.md text; BUF is the buffer's address
  *   raw HI LO           a word given as it is (one no form encodes)
+ *   tex TEXEL           optional: an 8x8 RGBA8 texture in the texture heap,
+ *                       every texel TEXEL (its bytes in memory order); TEX in
+ *                       a line is its address
  *   ...
  *   end
  *
@@ -40,11 +43,24 @@
 #define MAX_INSTS 256
 #define BUF_DWORDS 64
 
+/* a line with BUF / TEX replaced by the address */
+static void
+subst(char *out, size_t size, const char *in, const char *tok, uint32_t va)
+{
+   const char *b = strstr(in, tok);
+   if (b)
+      snprintf(out, size, "%.*s#0x%x%s", (int)(b - in), in, va,
+               b + strlen(tok));
+   else
+      snprintf(out, size, "%s", in);
+}
+
 static int
 run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
-    struct sgxws_bo *buf, const char *name, char lines[][160], unsigned n,
-    const uint32_t *init, unsigned n_init, const uint32_t *pixels,
-    uint32_t w, uint32_t h, uint32_t stride)
+    struct sgxws_bo *buf, struct sgxws_bo *tex, const char *name,
+    char lines[][160], unsigned n, const uint32_t *init, unsigned n_init,
+    bool has_texel, uint32_t texel, const uint32_t *pixels, uint32_t w,
+    uint32_t h, uint32_t stride)
 {
    static const float verts[6] = {-0.9f, -0.9f, 0.9f, -0.9f, 0.0f, 0.9f};
    uint64_t code[MAX_INSTS];
@@ -55,19 +71,15 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
 
    for (unsigned i = 0; i < n; i++) {
       struct sgx_isa_instr I;
-      char *b = strstr(lines[i], "BUF");
+      char t1[200];
       unsigned hi, lo;
 
       if (sscanf(lines[i], "raw %x %x", &hi, &lo) == 2) {
          code[i] = (uint64_t)hi << 32 | lo;
          continue;
       }
-
-      if (b)
-         snprintf(text, sizeof(text), "%.*s#0x%x%s", (int)(b - lines[i]),
-                  lines[i], buf->va, b + 3);
-      else
-         snprintf(text, sizeof(text), "%s", lines[i]);
+      subst(t1, sizeof(t1), lines[i], "BUF", buf->va);
+      subst(text, sizeof(text), t1, "TEX", tex->va);
       if (!sgx_isa_asm_line(text, &I, err, sizeof(err))) {
          printf("%s error %s: %s\n", name, text, err);
          return 0;
@@ -80,6 +92,8 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
    }
    memset(buf->map, 0, BUF_DWORDS * 4);
    memcpy(buf->map, init, n_init * 4);
+   for (unsigned i = 0; i < 64; i++)
+      tex->map[i] = has_texel ? texel : 0;
 
    sgxws_prog_builtin(c, SGXWS_VS_XY, &vs);
    /* the uniform-colour program's setup (its secondary loads sa9, which the
@@ -115,6 +129,7 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
    if (sgxws_begin(c, rt, t) || sgxws_clear(c, clear, 1.0f, false, 0xf, -1))
       return 1;
    sgxws_use_bo(c, buf, true);
+   sgxws_use_bo(c, tex, false);
    if (sgxws_draw(c, &d))
       return 1;
    if ((e = sgxws_flush(c, 2000))) {
@@ -181,11 +196,13 @@ main(int argc, char **argv)
    }
    struct sgxws_ctx *c = sgxws_ctx_create(dev, 0);
    struct sgxws_rt *rt = c ? sgxws_rt_create(c, w, h) : NULL;
-   struct sgxws_bo color, buf;
+   struct sgxws_bo color, buf, tex;
    if (!rt ||
        sgxws_bo_alloc(dev, &color, SGXWS_MEM_RENDER_TARGET, stride * h * 4,
                       0x1000) ||
-       sgxws_bo_alloc(dev, &buf, SGXWS_MEM_VERTEX, BUF_DWORDS * 4, 0x1000))
+       sgxws_bo_alloc(dev, &buf, SGXWS_MEM_VERTEX, BUF_DWORDS * 4, 0x1000) ||
+       /* sampling outside the texture heap hangs (sgx_core) */
+       sgxws_bo_alloc(dev, &tex, SGXWS_MEM_TEXTURE, 64 * 4, 0x1000))
       return 1;
    /* BGRA8888, strided (TEX.md sections 4, 11) */
    struct sgxws_target t = {.va = color.va, .stride = stride, .bo = &color,
@@ -193,8 +210,9 @@ main(int argc, char **argv)
 
    static char lines[MAX_INSTS][160];
    char ln[256], name[64] = "";
-   uint32_t init[BUF_DWORDS];
+   uint32_t init[BUF_DWORDS], texel = 0;
    unsigned n = 0, n_init = 0;
+   bool has_texel = false;
    int status = 0;
    while (fgets(ln, sizeof(ln), f)) {
       ln[strcspn(ln, "\r\n")] = 0;
@@ -204,6 +222,10 @@ main(int argc, char **argv)
       if (!strncmp(s, "test ", 5)) {
          snprintf(name, sizeof(name), "%s", s + 5);
          n = n_init = 0;
+         has_texel = false;
+      } else if (!strncmp(s, "tex ", 4)) {
+         texel = strtoul(s + 4, NULL, 16);
+         has_texel = true;
       } else if (!strncmp(s, "buf ", 4)) {
          for (char *p = s + 4; *p && n_init < BUF_DWORDS;) {
             char *e;
@@ -214,8 +236,8 @@ main(int argc, char **argv)
             p = e;
          }
       } else if (!strcmp(s, "end")) {
-         if (run(c, rt, &t, &buf, name, lines, n, init, n_init, color.map, w,
-                 h, stride)) {
+         if (run(c, rt, &t, &buf, &tex, name, lines, n, init, n_init,
+                 has_texel, texel, color.map, w, h, stride)) {
             status = 1;
             break;
          }
@@ -232,6 +254,7 @@ main(int argc, char **argv)
       }
    }
    sgxws_bo_free(dev, &buf);
+   sgxws_bo_free(dev, &tex);
    sgxws_bo_free(dev, &color);
    sgxws_rt_destroy(c, rt);
    sgxws_ctx_destroy(c);

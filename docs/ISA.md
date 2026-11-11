@@ -1426,7 +1426,12 @@ Operands: dest, coordinate, texture state, [LOD source], DRC (0/1).
 | h1 | - | never set by the vendor assembler | oracle |
 
 Result format: nothing in the word selects it (oracle); the texture state
-(src1) does (**unconfirmed**). The `state` operand is a placeholder in the USP
+(src1) does. **hardware** (hwt_smp, open stack, EA3, 2026-11-11): the same
+dependent `smp.2d r0, r8, r4` on an RGBA8888 texel (bytes 0x10, 0x20, 0x40,
+0x80) returned one register, 0x80102040 (BGRA byte order, as T1 format 0x0d
+gives it), with T3 = 0x00800800. It returned two registers with T3 =
+0x01028800: r0 = 0x30042c04 (R lo, G hi as F16) and r1 = 0x38043404 (B lo,
+A hi), the non-dependent F16 return's layout. The `state` operand is a placeholder in the USP
 binary: dependent `smp` words sit in USP sample blocks, which the patcher
 turns into code with the real state registers at finalize time (capture;
 ef_c3 logs them with `#0`). Projective reads have no smp bit: the compiler
@@ -2515,7 +2520,6 @@ vendor driver; the open stack doesn't use the container.
 ### smp, ld/st and the special class
 
 - hw 1c: smp: pcf (h5) / pcf16 (h6) are a percentage-closer compare → hwt sample of a depth texture with compare state set, pcf on and off, F32 and F16 coordinates; compare the result to the reference compare.
-- hw 1c: smp: the result format is selected by the texture state (src1), not the word → hwt: one smp word against state words that differ only in format (U8, F16, F32), read the result registers.
 - hw 1d: eld: size 0 = dword, 1 = quad (what each size loads) → hwt eld.d / eld.q from a known buffer, count the registers written.
 - hw 1f: emit: t1 is a geometry-shader vertex emit and its f13 is "emit and cut" → capture of a vendor program using emit.t1, or a hwt draw on a core that runs geometry; low priority on the SGX545 (GLES2 has no geometry stage).
 - Open questions: br/ba h10 (f1_22) and op0xd7's limit are tied to the same core feature → hwt br with h10 set vs clear, and op0xd7 n sweep, looking for any behavior difference.

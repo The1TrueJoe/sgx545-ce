@@ -1,0 +1,4 @@
+smp_u8_r0                0x80102040
+smp_u8_r1                0xa5a5a5a5
+smp_f16_r0               0x30042c04
+smp_f16_r1               0x38043404
