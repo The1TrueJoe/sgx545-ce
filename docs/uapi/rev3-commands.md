@@ -162,6 +162,7 @@ offset 8 as the `extensions` pointer. Rev 3 makes that impossible:
   series has never seen them: its first version has dense ioctl numbers and
   DRM version 1.0. Don't copy the gap into it.
 
+## 3. Kernel rules
 
 For a command at a user pointer (render, transfer):
 
