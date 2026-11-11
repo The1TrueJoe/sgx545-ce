@@ -54,6 +54,7 @@ def resolve():
     every immediate numeric (branch targets and per-core symbols resolved here), or
     ("raw", (lo, hi)) for a pre-encoded word. The assembler never sees a symbol."""
     a = ukernel.program()
+    resolve.waits = a.waits       # the bounded waits' ids (WAIT_BOUND), for the manifest
     # first pass: assign each real instruction an index; labels mark the next one
     idx = 0
     pending = []
@@ -164,7 +165,7 @@ def main():
     # (the bgblock is CPU-written, so powervr_sgx drops kernel-heap sharing). Default 2:
     # secure mode is HW-proven and the open default (m2 2026-11-08). NOT bit 0 (cleanup-v2):
     # ours is defer-and-hold. build_id names the build. mkukfw --manifest reads both.
-    features = int(os.environ.get("UK_FEATURES", "2"), 0)
+    features = int(os.environ.get("UK_FEATURES", str(ukernel.FEATURES)), 0)
     # Feature bits 0-15 are host-visible and must be known to the driver; bits 16-31 are the
     # microkernel's own build variants, which the driver accepts and ignores (m2-drm 25f9d54).
     if ukernel.XFER_BANK_ALL:
@@ -183,6 +184,9 @@ def main():
         "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }
+    if resolve.waits:             # a core built with bounded waits: id -> what it polls
+        manifest["waits"] = {str(i): {"poll": "0x%x" % p, "mask": "0x%x" % m}
+                             for i, p, m in resolve.waits}
     with open(man, "w") as f:
         json.dump(manifest, f, indent=2)
     # a flat sidecar srvinit -o reads (plain text, fscanf-friendly): the entry

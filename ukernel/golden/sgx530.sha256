@@ -1,0 +1,8 @@
+# SGX530 serial microkernel image, built by ukernel/build.py sgx530 (bring-up:
+# bounded waits on, nothing confirmed on hardware yet). Never checked in; this
+# hash + size is the golden the ukernel-golden CI enforces, so a shared change
+# that perturbs the 530 is caught. The 530 is still being brought up, so its
+# image will change on purpose: regenerate with
+#   python3 ukernel/golden/check.py sgx530 --write
+sha256 f576b5caffc82f1841ebb88c8dbdad61a9f64bc65da67ec95a3ba1b5475c09c7
+bytes  16544

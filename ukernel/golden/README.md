@@ -8,14 +8,19 @@ refactors meant to preserve the image are caught automatically.
 
 - `sgx545.sha256` — SGX545 serial image (14400 B / 1800 instructions), built by
   `ukernel/build.py` with `UK_OVERLAP` unset.
+- `sgx530.sha256` — SGX530 image (16544 B / 2068 instructions), built by
+  `ukernel/build.py sgx530`. It is still being brought up, so it changes on
+  purpose; the golden catches a shared change that moves it unintentionally.
 
 Verify locally:
 
     python3 ukernel/golden/check.py
+    python3 ukernel/golden/check.py sgx530
 
 Regenerate after an intentional change:
 
     python3 ukernel/golden/check.py --write
+    python3 ukernel/golden/check.py sgx530 --write
 
 Debug a mismatch — build a reference from a known-good checkout, then diff:
 
