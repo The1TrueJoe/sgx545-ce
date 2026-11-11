@@ -646,6 +646,31 @@ TEST_F(sgx_compile_test, fragment_pds_samples_interleaved)
       EXPECT_EQ(out.iters[i].pa, out.iters[i - 1].pa + out.iters[i - 1].regs);
 }
 
+/* an if on a uniform stays a branch (glamor's repeat modes): only the side
+ * taken runs, where selects compute both on every pixel */
+TEST_F(sgx_compile_test, fragment_uniform_if_stays_a_branch)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *v =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *u = var(nir_var_uniform, glsl_float_type(), "mode", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *x = nir_load_var(&b, v);
+   nir_push_if(&b, nir_flt_imm(&b, nir_load_var(&b, u), 0.5));
+   nir_def *t = x;
+   for (unsigned k = 0; k < 6; k++)
+      t = nir_fadd(&b, nir_fmul(&b, t, t), nir_fsin(&b, t));
+   nir_store_var(&b, col, t, 0xf);
+   nir_push_else(&b, NULL);
+   nir_store_var(&b, col, x, 0xf);
+   nir_pop_if(&b, NULL);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+}
+
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
  * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
  * writes no PA register (the inputs phase 1 reads) */

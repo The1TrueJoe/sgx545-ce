@@ -6754,6 +6754,8 @@ static const struct debug_named_value sgx_debug_options[] = {
     "Unpack mediump texels from RGBA8 though the driver can return F16"},
    {"nophases", SGX_DBG_NO_PHASES,
     "Keep a discarding fragment program in one phase"},
+   {"flattenuniform", SGX_DBG_FLATTEN_UNIFORM,
+    "Flatten ifs on uniform conditions into selects too"},
    {"nointerleave", SGX_DBG_NO_INTERLEAVE,
     "Keep PDS-only samples after the iterations (no cross-set DOUTI merge)"},
    {"nodepf16", SGX_DBG_NO_DEP_F16,

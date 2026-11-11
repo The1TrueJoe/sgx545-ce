@@ -1515,6 +1515,71 @@ keep_early_exit_loops(nir_shader *s)
    return progress;
 }
 
+/* An if on a uniform condition takes one way for every instance of a draw:
+ * a branch over the side not taken costs a test and a br, where flattening
+ * computes both sides on every pixel (glamor's composite programs branch on
+ * their repeat-mode uniforms: 100-200 instructions as selects). So such ifs,
+ * with more than a few instructions inside, stay branches. */
+static unsigned
+cf_size(struct exec_list *list)
+{
+   unsigned n = 0;
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      switch (node->type) {
+      case nir_cf_node_block:
+         nir_foreach_instr (i, nir_cf_node_as_block(node))
+            n++;
+         break;
+      case nir_cf_node_if: {
+         nir_if *f = nir_cf_node_as_if(node);
+         n += 1 + cf_size(&f->then_list) + cf_size(&f->else_list);
+         break;
+      }
+      case nir_cf_node_loop:
+         n += 16 * cf_size(&nir_cf_node_as_loop(node)->body);
+         break;
+      default:
+         break;
+      }
+   }
+   return n;
+}
+
+static bool
+keep_uniform_ifs_cf(struct exec_list *list)
+{
+   bool progress = false;
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      if (node->type == nir_cf_node_if) {
+         nir_if *f = nir_cf_node_as_if(node);
+         if (!nir_src_is_divergent(&f->condition) &&
+             f->control == nir_selection_control_none &&
+             cf_size(&f->then_list) + cf_size(&f->else_list) > 4) {
+            f->control = nir_selection_control_dont_flatten;
+            progress = true;
+         }
+         progress |= keep_uniform_ifs_cf(&f->then_list);
+         progress |= keep_uniform_ifs_cf(&f->else_list);
+      } else if (node->type == nir_cf_node_loop) {
+         progress |= keep_uniform_ifs_cf(&nir_cf_node_as_loop(node)->body);
+      }
+   }
+   return progress;
+}
+
+static bool
+keep_uniform_ifs(nir_shader *s)
+{
+   bool progress = false;
+   nir_divergence_analysis(s);
+   nir_foreach_function_impl (impl, s) {
+      bool p = keep_uniform_ifs_cf(&impl->body);
+      nir_progress(p, impl, nir_metadata_all);
+      progress |= p;
+   }
+   return progress;
+}
+
 /* A derivative of a value that is the same for every pixel (a uniform, or
  * math over uniforms and constants) is 0: no fds on it */
 static bool
@@ -1934,6 +1999,10 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_vars_to_ssa);
    if (!sgx_debug(c, SGX_DBG_UNROLL_EXITS))
       NIR_PASS(_, s, keep_early_exit_loops);
+   if (!sgx_debug(c, SGX_DBG_FLATTEN_UNIFORM)) {
+      NIR_PASS(_, s, nir_opt_copy_prop);
+      NIR_PASS(_, s, keep_uniform_ifs);
+   }
    NIR_PASS(_, s, uniform_derivatives);
    optimize(s);
    if (s->info.stage == MESA_SHADER_FRAGMENT &&
