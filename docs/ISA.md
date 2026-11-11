@@ -2446,18 +2446,27 @@ backed above; this section only collects it.
   piglit tests on the open driver. With a colour mask the logic op goes
   first, then the masked move. Only for unsigned normalized colour buffers
   (GL ignores the logic op for float ones).
-- **User clip planes**: `fdpc` writes a dot product and a clip-plane result
-  to cp<n> (**oracle**; what the TA does with cp<n> is **unconfirmed**).
-  Until that is traced, the driver can clip per pixel: st lowers the planes
-  to clip distances in the vertex shader (`nir_lower_clip_vs`, as it does
-  for any driver without `clip_planes`: vec4 outputs `clipdist_0/1` at
-  CLIP_DIST0/1, the gl_ClipVertex store removed), and the compiler's
-  `sgx_lower_clip_fs` reads them back as inputs of the same names and
-  discards where an enabled one is negative (through derefs, so the driver
-  places the CLIP_DIST slots as it places the other built-in varyings).
-  That breaks line draws (any discarding program breaks a lines frame,
-  above), so lines go without it or as thin triangles. The DDK's ES1 `glClipPlanef` (PROBE_CLIPPLANE) shows
-  the hardware path.
+- **User clip planes** are clipped by the TA (STATE.md "Clip planes, shading,
+  polygon and line state": capture `cp1`, `cp2`, `cp6`). For plane n the DDK's
+  ES1 vertex program ends with `fdpc o(7+n), cp<n>, pa0, c52 [rpt=2 inc0
+  inc1]` (words `1081d001 90e04034` for n = 0): pa0 holds the distance
+  (computed by efos from the eye-space position and the planes, which arrive
+  as constants), pa1 = 0, and c52-c53 are 1.0, so the dot product is the
+  distance. fdpc writes only its last iteration's destination, as fdp does
+  (hardware, hwt_p7), so plane n's result is o(8+n), and output select's
+  dword count, 8 + n, agrees. Output select also gets b0-5 = the planes.
+  - The compiler: st keeps lowering the planes and gl_ClipVertex to clip
+    distances in the vertex shader (`nir_lower_clip_vs`, driver
+    `clip_planes` 0: planes 0..n-1, a disabled one below the last 0.0), and
+    each distance becomes `fdpc o<clip_o + p - 1>, cp<p>, (d, 0), c52
+    [rpt=2]` after every other output (`sgx_shader.n_clip`, `clip_o`). The
+    driver sets output select b0-5 to planes 0..n_clip-1 and counts n_clip
+    more dwords. Lines clip too: no discard.
+  - **Guesses** until a hardware draw: that a plane enabled with a 0.0
+    distance keeps everything (a point on the plane is inside); that the
+    result registers follow the enabled bits in order.
+  - `sgx_lower_clip_fs` (the per-pixel fallback) stays for a core without
+    the TA path.
 - **Polygon stipple**: `nir_lower_pstipple_fs` (a 32x32 texture read at
   gl_FragCoord and a discard): nothing new for the compiler.
 - **Phases**: every finalized fragment program (main and secondary) starts
