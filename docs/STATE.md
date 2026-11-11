@@ -896,9 +896,12 @@ PDS.md has b25-26 as 3 on every shader entry and 0 on the clear's and
 background's iterations, so the field is the iteration's shading mode,
 with 2 flat and 3 smooth (Gouraud). It is set per iterated attribute, so a
 GLSL `flat` varying is the same switch on that one DOUTI. What the MTE
-control word and VDM b26 change is unknown; they make no difference to this
-draw (**guess**: provoking-vertex or vertex-reuse settings that only matter
-for strips and fans). The MTE control word was a constant in every ES2
+control word and VDM b26 change is unknown. Neither selects the provoking
+vertex: replays of `flat` with the MTE word set back to `15555620`, with
+VDM b26 cleared, and with both, all give the capture's dump byte for byte,
+the last vertex's color (**hardware**, 2026-11-11). A first-vertex
+convention has no known field; rotating each triangle's indices is the
+fallback. The MTE control word was a constant in every ES2
 capture (`01555620`); what its other fields mean is still a **guess**.
 
 **Logic ops.** The ES1 has `glLogicOp`. Blending and the color mask are
@@ -1715,6 +1718,7 @@ until it is confirmed.
 - glLineWidth clamps to [1, 16] → captures with glLineWidth(0.5) and glLineWidth(20).
 - User clip planes: the `fdpc` result lands in output o8+n (or o7+n), and the TA clips lines as well as triangles against it → an open-stack frame with one `fdpc` into cp0 and output select `00093801`, drawing a triangle and a line across the plane, read back.
 - What MTE control `000003a0` and VDM draw word 2 b26 (the other two flat-capture changes) do → a flat triangle strip and fan, replayed with each word reverted.
+- A first-vertex provoking convention (EXT_provoking_vertex): no field known; neither of those two words selects it → a TA header or ISPB bit scan on the `flat` replay, or CPU index rotation.
 - Polygon offset applies to object types 1, 3, 5 and 6 → a replay of `polyoff` with the draw's ISPA type set to 5, reading back the depth test result against a second draw.
 - Object types 5 and 6: the line width and point size they draw with, and where edge flags go → replays of `es1base` with type 5 and ISPB width `40`, and with type 6 and a point-size output.
 
