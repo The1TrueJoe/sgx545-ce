@@ -851,7 +851,11 @@ clip against those or discard per pixel. piglit's clip-plane failures
   distances into varyings and a discard. A discard makes the draw
   punch-through (pass type 4, or 2 with a blend: the two-phase discard of
   ISA.md "Phases, visibility feedback and discard"), so it costs the
-  depth-feedback pass, and a varying per four planes.
+  depth-feedback pass, and a varying per four planes. **Not on lines:**
+  any program with visibility feedback breaks a frame drawn with lines,
+  whether or not the discard is taken (ISA.md, "Phases, visibility feedback
+  and discard": hardware). Clipped lines need the hardware path, or have to
+  be drawn as thin triangles.
 
 **Flat shading.** ES1 has `glShadeModel(GL_FLAT)`, so a `probe1` capture with
 `PROBE_SHADEMODEL=0x1D00` against the base (`0x1D01`) gives the field. GL's
@@ -868,7 +872,8 @@ code"), so the DDK most likely does a logic op the same way, as a shader
 epilogue that reads the destination (**guess**). Capture: `probe1`
 `PROBE_LOGICOP=0x1506` (XOR) and `0x150C` (COPY_INVERTED) against the base.
 If it is shader code, `nir_lower_blend` already takes a logic op
-(`logicop_enable`, `logicop_func`).
+(`logicop_enable`, `logicop_func`). The compiler's side, a bitwise table of
+the 16 ops after the color, is in ISA.md "What a compiler needs".
 
 **Polygon mode and edge flags.**
 - ISPA's object type values 2 and 5-7 have never been seen. Whether a
@@ -887,7 +892,9 @@ If it is shader code, `nir_lower_blend` already takes a logic op
   discards by the pattern and factor, both uniforms.
 - **Polygon stipple:** `util_pstipple` (gallium aux) puts the 32×32 pattern
   in a texture and adds a discard to the fragment shader.
-- Both discard, so both pay for the punch-through pass.
+- Both discard, so both pay for the punch-through pass. A discard breaks a
+  frame with lines (see "User clip planes" above), so stippled lines have to
+  be drawn as thin triangles: two per segment, from the same CPU expansion.
 
 **Line and point smooth.** ES1 has `GL_LINE_SMOOTH` and `GL_POINT_SMOOTH`.
 Captures with `PROBE_ENABLE=0x0B20` (lines, `PROBE_PRIM=1`) and `0x0B10`
