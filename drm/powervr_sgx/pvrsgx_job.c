@@ -82,7 +82,8 @@ static void context_release(struct kref *ref)
 	pvrsgx_render_ctx_fini(sdev, ctx);
 	pvrsgx_transfer_ctx_fini(sdev, ctx);
 	/*
-	 * As the DDK after a context's cleanup: the next command flushes the GPU's
+	 * As the vendor's GPL kernel services after a cleanup (sgxutils.c): the
+	 * next command flushes the GPU's
 	 * data caches, or a later client at the same addresses reads this one's.
 	 */
 	mutex_lock(&sdev->ccb_lock);

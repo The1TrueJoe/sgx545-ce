@@ -58,7 +58,7 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_rt_numbers n;
 	/*
 	 * Per RT-data entry, which alternates by frame parity, so one frame's TA
-	 * can be built while the other's 3D still reads its own (as the DDK keeps
+	 * can be built while the other's 3D still reads its own (as the vendor stack keeps
 	 * them): render details, their words, the dependency block and its syncs,
 	 * and the background object, which the 3D fetches per tile.
 	 */

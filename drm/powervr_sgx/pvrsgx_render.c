@@ -96,12 +96,13 @@ static void pb_init(struct pvrsgx_pb *pb)
 
 /*
  * The device's parameter buffer: PB, free list, PB descriptor and block list,
- * shared by every render context of every client, as the DDK shares one PB
- * descriptor (pb.c). The DPM's free-list state is one set of registers that the
- * microkernel doesn't switch between PBs, so two PBs would run each other's
- * lists off their ends. The DPM numbers PB pages from the 3D-params heap base, so
- * the PB starts there, at the same address in every VM (pvrsgx_pb_map). The
- * first context sets the size; later requests are ignored, as the DDK does.
+ * shared by every render context of every client, as the vendor's GPL kernel
+ * services share one PB descriptor (pb.c, SGXAddSharedPBDescKM). The DPM's
+ * free-list state is one set of registers that the microkernel doesn't switch
+ * between PBs, so two PBs would run each other's lists off their ends. The DPM
+ * numbers PB pages from the 3D-params heap base, so the PB starts there, at the
+ * same address in every VM (pvrsgx_pb_map). The first context sets the size;
+ * later requests are ignored, as pb.c does.
  */
 static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 {
@@ -769,7 +770,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 						    in->bg_pds_primary_rows);
 
 		/*
-		 * The background object's PDS words, as the DDK microkernel copies them
+		 * The background object's PDS words, as the vendor microkernel copies them
 		 * at the 3D start (secondary, middle, primary): the open microkernel
 		 * leaves them to the host, so it never runs on the job's directory.
 		 */

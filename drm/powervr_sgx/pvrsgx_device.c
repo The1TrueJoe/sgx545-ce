@@ -197,7 +197,7 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 	       SGX_CR_EVENT_HOST_CLEAR_SW_EVENT | SGX_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT);
 	atomic_inc(&sdev->irq_count);
 	/*
-	 * The DDK microkernel interrupts at TA and 3D completion too: wake the
+	 * The vendor microkernel interrupts at TA and 3D completion too: wake the
 	 * thread only for a finished job or a lockup report.
 	 */
 	if (!sdev->fw_running || pvrsgx_job_oldest_done(sdev) ||
@@ -220,7 +220,8 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
 				    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
 	/*
-	 * The microkernel's idle notice: acknowledge it, as the DDK's host does.
+	 * The microkernel's idle notice: acknowledge it, as the vendor's GPL
+	 * kernel services do (sgxutils.c, SGXTestActivePowerEvent).
 	 * Powering down is runtime PM's business, so nothing else happens here.
 	 */
 	if ((flags & ~clear) & HOSTCTL_INTERRUPT_ACTIVE_POWER)

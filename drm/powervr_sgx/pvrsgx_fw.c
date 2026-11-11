@@ -94,7 +94,7 @@ static const struct {
 	/* Right after the control block, which fills 0x3000-0x30ff. */
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
-	/* The image at 0, then the PDS programs from its end (0xcf70 for the DDK's). */
+	/* The image at 0, then the PDS programs from its end (0xcf70 for the vendor's). */
 	[PVRSGX_FW_UKERNEL] = { true, 0x0000, 0 },
 	[PVRSGX_FW_PDS0] = { true, 0x000, 0x18 },
 	[PVRSGX_FW_PDS1] = { true, 0x020, 0x38 },
@@ -342,7 +342,11 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		return err;
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 
-	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
+	/*
+	 * The PTE flags the vendor's GPL kernel services give the same buffers
+	 * (mmu.c, from EDM_PROTECT and read-only allocations): data read-write,
+	 * code read-only.
+	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
 				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT, 0);
 	if (err)
