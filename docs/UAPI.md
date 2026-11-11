@@ -659,8 +659,8 @@ XML, the decoder compiles for both targets, and the stream test passes.
 | `drm_powervr_sgx_ioctl_upload_code_args` | 40 | `0x00 handle (4)`, `0x04 flags (4)`, `0x08 offset (8)`, `0x10 size (8)`, `0x18 pointer (8)`, `0x20 bad_offset (8)` |
 | `drm_powervr_sgx_ioctl_create_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
 | `drm_powervr_sgx_ioctl_destroy_vm_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
-| `drm_powervr_sgx_ioctl_vm_map_args` | 40 | `0x00 vm_context_handle (4)`, `0x04 flags (4)`, `0x08 device_addr (8)`, `0x10 handle (4)`, `0x14 _padding_14 (4)`, `0x18 offset (8)`, `0x20 size (8)` |
-| `drm_powervr_sgx_ioctl_vm_unmap_args` | 24 | `0x00 vm_context_handle (4)`, `0x04 _padding_4 (4)`, `0x08 device_addr (8)`, `0x10 size (8)` |
+| `drm_powervr_sgx_vm_bind_op` | 40 | `0x00 op (4)`, `0x04 handle (4)`, `0x08 bo_offset (8)`, `0x10 device_addr (8)`, `0x18 size (8)`, `0x20 flags (4)`, `0x24 _padding_24 (4)` |
+| `drm_powervr_sgx_ioctl_vm_bind_args` | 40 | `0x00 vm_context_handle (4)`, `0x04 flags (4)`, `0x08 ops (16)`, `0x18 sync_ops (16)` |
 | `drm_powervr_sgx_ioctl_create_context_args` | 24 | `0x00 type (4)`, `0x04 flags (4)`, `0x08 priority (4)`, `0x0c vm_context_handle (4)`, `0x10 param_buffer_pages (4)`, `0x14 handle (4)` |
 | `drm_powervr_sgx_ioctl_destroy_context_args` | 8 | `0x00 handle (4)`, `0x04 _padding_4 (4)` |
 | `drm_powervr_sgx_ioctl_get_context_state_args` | 16 | `0x00 handle (4)`, `0x04 state (4)`, `0x08 reset_count (4)`, `0x0c _padding_c (4)` |

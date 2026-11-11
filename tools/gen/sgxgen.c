@@ -87,6 +87,20 @@ static int xioctl(int fd, unsigned long req, void *arg)
 	return r == -1 ? -errno : 0;
 }
 
+/* Map handle's first size bytes at addr in the device's VM. */
+static int vm_map(struct sgx_dev *d, uint32_t handle, uint64_t addr, uint64_t size)
+{
+	struct drm_powervr_sgx_vm_bind_op op = {
+		.op = DRM_POWERVR_SGX_VM_BIND_OP_MAP, .handle = handle, .device_addr = addr, .size = size,
+	};
+	struct drm_powervr_sgx_ioctl_vm_bind_args a = {
+		.vm_context_handle = d->vm, .flags = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC,
+		.ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
+	};
+
+	return xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_BIND, &a);
+}
+
 /*
  * A shmem object mapped in the VM at the next free address of the heap, and
  * CPU-mapped. In the USSE heaps it is a code object instead: no CPU mapping,
@@ -101,7 +115,6 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 		.flags = code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
 	};
 	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
-	struct drm_powervr_sgx_ioctl_vm_map_args vm = {};
 	uint32_t a = align < 0x1000 ? 0x1000 : align, addr;
 	void *p;
 	int e;
@@ -124,12 +137,8 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 		if (p == MAP_FAILED)
 			die("mmap failed: %d", errno);
 	}
-	vm.vm_context_handle = d->vm;
-	vm.device_addr = addr;
-	vm.handle = cb.handle;
-	vm.size = cb.size;
-	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &vm)))
-		die("VM_MAP heap %u at %#x +%#llx failed: %d", heap, addr, (unsigned long long)cb.size, e);
+	if ((e = vm_map(d, cb.handle, addr, cb.size)))
+		die("VM_BIND heap %u at %#x +%#llx failed: %d", heap, addr, (unsigned long long)cb.size, e);
 	d->heap_next[heap] = addr + cb.size;
 	bo->handle = cb.handle;
 	bo->code = code;
@@ -146,17 +155,12 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 static void bo_map_handle(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t handle, uint32_t size,
 			  uint32_t *map)
 {
-	struct drm_powervr_sgx_ioctl_vm_map_args vm = {};
 	uint32_t addr = (d->heap_next[heap] ? d->heap_next[heap] : d->heap_base[heap] + 0x1000);
 	int e;
 
 	size = (size + 0xfff) & ~0xfffu;
-	vm.vm_context_handle = d->vm;
-	vm.device_addr = addr;
-	vm.handle = handle;
-	vm.size = size;
-	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &vm)))
-		die("VM_MAP of handle %u at %#x +%#x failed: %d", handle, addr, size, e);
+	if ((e = vm_map(d, handle, addr, size)))
+		die("VM_BIND of handle %u at %#x +%#x failed: %d", handle, addr, size, e);
 	d->heap_next[heap] = addr + size;
 	memset(bo, 0, sizeof(*bo));
 	bo->handle = handle;

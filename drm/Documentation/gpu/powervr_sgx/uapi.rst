@@ -61,8 +61,18 @@ VM CONTEXTS
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
    :identifiers: drm_powervr_sgx_ioctl_create_vm_context_args
                  drm_powervr_sgx_ioctl_destroy_vm_context_args
-                 drm_powervr_sgx_ioctl_vm_map_args
-                 drm_powervr_sgx_ioctl_vm_unmap_args
+
+VM_BIND
+-------
+.. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
+   :doc: VM_BIND operations
+
+.. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
+   :doc: Flags for struct drm_powervr_sgx_ioctl_vm_bind_args
+
+.. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
+   :identifiers: drm_powervr_sgx_vm_bind_op
+                 drm_powervr_sgx_ioctl_vm_bind_args
 
 CONTEXTS
 --------

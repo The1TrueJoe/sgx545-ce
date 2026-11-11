@@ -82,7 +82,11 @@ static struct buf bo(int heap, uint32_t size)
 		.flags = code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
 	};
 	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
-	struct drm_powervr_sgx_ioctl_vm_map_args m = {};
+	struct drm_powervr_sgx_vm_bind_op op = { .op = DRM_POWERVR_SGX_VM_BIND_OP_MAP };
+	struct drm_powervr_sgx_ioctl_vm_bind_args m = {
+		.flags = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC,
+		.ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
+	};
 	struct buf b;
 	int e;
 
@@ -106,11 +110,11 @@ static struct buf bo(int heap, uint32_t size)
 	b.handle = cb.handle;
 	b.size = cb.size;
 	m.vm_context_handle = vm;
-	m.handle = cb.handle;
-	m.device_addr = heap_next[heap];
-	m.size = cb.size;
-	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_VM_MAP, &m)))
-		die("VM_MAP", e);
+	op.handle = cb.handle;
+	op.device_addr = heap_next[heap];
+	op.size = cb.size;
+	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_VM_BIND, &m)))
+		die("VM_BIND", e);
 	b.va = (uint32_t)heap_next[heap];
 	heap_next[heap] += cb.size;
 	return b;

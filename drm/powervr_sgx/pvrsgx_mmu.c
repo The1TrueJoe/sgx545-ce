@@ -192,6 +192,23 @@ int pvrsgx_mmu_map_sgt(struct pvrsgx_mmu *mmu, u32 dev_addr,
 	return err;
 }
 
+/*
+ * Allocate the page tables of [dev_addr, dev_addr + size), so that a later map
+ * of the range can't fail for memory. Tables stay until the directory goes.
+ */
+int pvrsgx_mmu_reserve(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size)
+{
+	u64 span = SGX_MMU_PDE_SPAN, end = (u64)dev_addr + size;
+	int err = 0;
+
+	mutex_lock(&mmu->lock);
+	for (u64 a = round_down(dev_addr, span); a < end && !err; a += span)
+		if (!pte_get(mmu, a, true))
+			err = -ENOMEM;
+	mutex_unlock(&mmu->lock);
+	return err;
+}
+
 void pvrsgx_mmu_unmap(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size)
 {
 	mutex_lock(&mmu->lock);

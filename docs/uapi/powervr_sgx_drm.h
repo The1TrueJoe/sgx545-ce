@@ -85,15 +85,14 @@ struct drm_powervr_sgx_obj_array {
 #define DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET PVR_SGX_IOCTL(0x02, DRM_IOWR, get_bo_mmap_offset)
 #define DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT PVR_SGX_IOCTL(0x03, DRM_IOWR, create_vm_context)
 #define DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT PVR_SGX_IOCTL(0x04, DRM_IOW, destroy_vm_context)
-#define DRM_IOCTL_POWERVR_SGX_VM_MAP PVR_SGX_IOCTL(0x05, DRM_IOW, vm_map)
-#define DRM_IOCTL_POWERVR_SGX_VM_UNMAP PVR_SGX_IOCTL(0x06, DRM_IOW, vm_unmap)
-#define DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT PVR_SGX_IOCTL(0x07, DRM_IOWR, create_context)
-#define DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT PVR_SGX_IOCTL(0x08, DRM_IOW, destroy_context)
-#define DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE PVR_SGX_IOCTL(0x09, DRM_IOWR, get_context_state)
-#define DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET PVR_SGX_IOCTL(0x0a, DRM_IOWR, create_rt_dataset)
-#define DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET PVR_SGX_IOCTL(0x0b, DRM_IOW, destroy_rt_dataset)
-#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS PVR_SGX_IOCTL(0x0c, DRM_IOWR, submit_jobs)
-#define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE PVR_SGX_IOCTL(0x0d, DRM_IOWR, upload_code)
+#define DRM_IOCTL_POWERVR_SGX_VM_BIND PVR_SGX_IOCTL(0x05, DRM_IOW, vm_bind)
+#define DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT PVR_SGX_IOCTL(0x06, DRM_IOWR, create_context)
+#define DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT PVR_SGX_IOCTL(0x07, DRM_IOW, destroy_context)
+#define DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE PVR_SGX_IOCTL(0x08, DRM_IOWR, get_context_state)
+#define DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET PVR_SGX_IOCTL(0x09, DRM_IOWR, create_rt_dataset)
+#define DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET PVR_SGX_IOCTL(0x0a, DRM_IOW, destroy_rt_dataset)
+#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS PVR_SGX_IOCTL(0x0b, DRM_IOWR, submit_jobs)
+#define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE PVR_SGX_IOCTL(0x0c, DRM_IOWR, upload_code)
 
 /**
  * DOC: PowerVR SGX IOCTL DEV_QUERY interface
@@ -370,8 +369,8 @@ struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args {
  *    names an internal register past ``i3`` or an index register other than
  *    ``idx1`` and ``idx2``.
  *
- * Once an object holds code with ``phas.i`` targets, VM_MAP fails with -EINVAL
- * for a mapping that would put it anywhere else.
+ * Once an object holds code with ``phas.i`` targets, a VM_BIND map that would
+ * put it anywhere else fails with -EINVAL.
  *
  * On a rejection nothing is copied, the ioctl fails with -EINVAL, and
  * @bad_offset is the byte offset in the object of the first rejected
@@ -434,6 +433,10 @@ struct drm_powervr_sgx_ioctl_create_vm_context_args {
 /**
  * struct drm_powervr_sgx_ioctl_destroy_vm_context_args - Arguments for
  * %DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT
+ *
+ * The handle goes at once. Once no context uses the VM either and every job on
+ * it is done, its mappings go and their objects are released; the ioctl
+ * doesn't wait for that.
  */
 struct drm_powervr_sgx_ioctl_destroy_vm_context_args {
 	/** @handle: [IN] Handle of the VM context. */
@@ -444,54 +447,85 @@ struct drm_powervr_sgx_ioctl_destroy_vm_context_args {
 };
 
 /**
- * struct drm_powervr_sgx_ioctl_vm_map_args - Arguments for %DRM_IOCTL_POWERVR_SGX_VM_MAP
+ * DOC: VM_BIND operations
  *
- * Returns -EINVAL when the range is not page aligned or does not fit inside one
- * heap, and -EEXIST when it overlaps an existing mapping.
+ * .. c:macro:: DRM_POWERVR_SGX_VM_BIND_OP_MAP
+ *
+ *    Map @size bytes of the object @handle, from @bo_offset, at @device_addr.
+ *    The range must lie inside one heap, page aligned, and must not overlap a
+ *    mapping (-EEXIST). A code object maps only into a USSE heap, and only a
+ *    code object does.
+ *
+ * .. c:macro:: DRM_POWERVR_SGX_VM_BIND_OP_UNMAP
+ *
+ *    Unmap every mapping in [@device_addr, @device_addr + @size), splitting a
+ *    mapping that straddles either end. @handle and @bo_offset must be 0. A
+ *    range with no mapping in it is not an error.
+ *
+ * The page tables of an unmapped range change before the ioctl returns, so a
+ * job that is still running and uses the range faults inside this VM. The
+ * objects stay allocated until every job submitted before the unmap is done.
  */
-struct drm_powervr_sgx_ioctl_vm_map_args {
-	/** @vm_context_handle: [IN] VM context to map into. */
-	__u32 vm_context_handle;
+#define DRM_POWERVR_SGX_VM_BIND_OP_MAP 0
+#define DRM_POWERVR_SGX_VM_BIND_OP_UNMAP 1
+
+/**
+ * struct drm_powervr_sgx_vm_bind_op - One map or unmap of %DRM_IOCTL_POWERVR_SGX_VM_BIND
+ */
+struct drm_powervr_sgx_vm_bind_op {
+	/** @op: [IN] ``DRM_POWERVR_SGX_VM_BIND_OP_*``. */
+	__u32 op;
+
+	/** @handle: [IN] GEM handle of the object to map; 0 for an unmap. */
+	__u32 handle;
+
+	/** @bo_offset: [IN] Offset into the object, in bytes; 0 for an unmap. */
+	__u64 bo_offset;
+
+	/** @device_addr: [IN] Device-virtual start of the range. */
+	__u64 device_addr;
+
+	/** @size: [IN] Size of the range, in bytes. */
+	__u64 size;
 
 	/** @flags: [IN] Reserved, must be 0. */
 	__u32 flags;
 
-	/** @device_addr: [IN] Device-virtual address of the mapping. */
-	__u64 device_addr;
-
-	/** @handle: [IN] GEM handle of the object to map. */
-	__u32 handle;
-
-	/** @_padding_14: Reserved. This field must be zero. */
-	__u32 _padding_14;
-
-	/** @offset: [IN] Offset into the object, in bytes. */
-	__u64 offset;
-
-	/** @size: [IN] Size of the mapping, in bytes. */
-	__u64 size;
+	/** @_padding_24: Reserved. This field must be zero. */
+	__u32 _padding_24;
 };
 
 /**
- * struct drm_powervr_sgx_ioctl_vm_unmap_args - Arguments for %DRM_IOCTL_POWERVR_SGX_VM_UNMAP
+ * DOC: Flags for struct drm_powervr_sgx_ioctl_vm_bind_args
  *
- * The object's pages stay allocated until the GPU's translation caches have been
- * invalidated and every job submitted before the unmap has finished. A job
- * already running that still uses the range faults or reads stale data inside
- * this VM only.
+ * .. c:macro:: DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC
+ *
+ *    The ioctl waits for @sync_ops' waits, then binds, and returns when the
+ *    binds are done; @sync_ops' signals get an already signalled fence.
+ *    Required: a bind without it fails with -EINVAL.
  */
-struct drm_powervr_sgx_ioctl_vm_unmap_args {
-	/** @vm_context_handle: [IN] VM context of the mapping. */
+#define DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC _BITUL(0)
+
+/**
+ * struct drm_powervr_sgx_ioctl_vm_bind_args - Arguments for %DRM_IOCTL_POWERVR_SGX_VM_BIND
+ *
+ * The ops apply in array order, and all or none of them apply: every op is
+ * checked, and everything it needs allocated, before any mapping changes. The
+ * ranges of the ops in one call must not overlap each other (-EINVAL). A wait
+ * that is interrupted fails with -EINTR before anything changes.
+ */
+struct drm_powervr_sgx_ioctl_vm_bind_args {
+	/** @vm_context_handle: [IN] VM context to bind in. */
 	__u32 vm_context_handle;
 
-	/** @_padding_4: Reserved. This field must be zero. */
-	__u32 _padding_4;
+	/** @flags: [IN] ``DRM_POWERVR_SGX_VM_BIND_FLAG_*``. */
+	__u32 flags;
 
-	/** @device_addr: [IN] Start of the mapping. */
-	__u64 device_addr;
+	/** @ops: [IN] Array of &struct drm_powervr_sgx_vm_bind_op, at least one. */
+	struct drm_powervr_sgx_obj_array ops;
 
-	/** @size: [IN] Size of the mapping. */
-	__u64 size;
+	/** @sync_ops: [IN] Array of &struct drm_powervr_sgx_sync_op. May be empty. */
+	struct drm_powervr_sgx_obj_array sync_ops;
 };
 
 /**

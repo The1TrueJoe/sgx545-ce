@@ -37,7 +37,7 @@ struct pvrsgx_vm {
 	struct pvrsgx_pb *pb;
 	/** @pb_nodes: @pb's PB and free list in @params. */
 	struct drm_mm_node pb_nodes[2];
-	/** @lock: Serializes map and unmap, and @pb's mapping. */
+	/** @lock: Serializes binds, the teardown and @pb's mapping. */
 	struct mutex lock;
 	/** @ref: Held by the handle, its contexts and their jobs. */
 	struct kref ref;
@@ -57,8 +57,7 @@ int pvrsgx_heap_find(u64 addr, u64 size);
 
 int pvrsgx_ioctl_create_vm_context(struct drm_device *drm, void *data, struct drm_file *file);
 int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct drm_file *file);
-int pvrsgx_ioctl_vm_map(struct drm_device *drm, void *data, struct drm_file *file);
-int pvrsgx_ioctl_vm_unmap(struct drm_device *drm, void *data, struct drm_file *file);
+int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *file);
 int pvrsgx_query_heap_info(struct pvrsgx_device *sdev, void __user *ptr, u32 *size);
 
 #endif /* PVRSGX_VM_H */

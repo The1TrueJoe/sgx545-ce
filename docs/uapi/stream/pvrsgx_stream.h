@@ -29,7 +29,7 @@ enum pvrsgx_stream_check {
 	PVRSGX_STREAM_CHECK_ADDR,
 };
 
-/* CLIENT has no range: VM_MAP only maps client heaps, and the mapped check covers it. */
+/* CLIENT has no range: VM_BIND only maps client heaps, and the mapped check covers it. */
 enum pvrsgx_stream_heap {
 	PVRSGX_STREAM_HEAP_CLIENT = 0,
 	PVRSGX_STREAM_HEAP_PDS_PIXEL,

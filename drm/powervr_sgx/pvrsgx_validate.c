@@ -313,7 +313,7 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 		err = -EFAULT;
 		goto out_buf;
 	}
-	/* VM_MAP links a mapping under the same lock. */
+	/* VM_BIND links a mapping under the same lock. */
 	err = dma_resv_lock_interruptible(obj->resv, NULL);
 	if (err)
 		goto out_buf;
