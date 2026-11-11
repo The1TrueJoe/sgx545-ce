@@ -45,8 +45,8 @@
 
 #include "sgxws.h"
 
-/* where a buffer lives: the SGX heap ids (the low byte of the DDK's heap ID),
- * which index sgxws_dev.heap_base */
+/* where a buffer lives: the SGX heap ids (the low byte of a services heap
+ * ID), which index sgxws_dev.heap_base */
 enum sgx_heap {
    SGX_HEAP_GENERAL = 0,
    SGX_HEAP_TADATA = 1,
@@ -157,7 +157,7 @@ struct sgxws_ctx {
    uint32_t idx;            /* identity 16-bit index buffer */
    uint32_t defaults;       /* what a fetch leaves out (vdm_fetch) */
    uint32_t idx_count;
-   uint32_t vdm_counter; /* the DDK's rotating TA-state buffer index */
+   uint32_t vdm_counter; /* the rotating TA-state buffer index */
    /* the frame being recorded */
    struct sgxws_rt *rt;
    struct sgxws_target target;
@@ -274,7 +274,7 @@ int sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
 int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo,
                         enum sgx_heap heap, uint32_t attribs, uint32_t size,
                         uint32_t align);
-/* the attributes the DDK gives a colour buffer it renders to */
+/* the attributes of a colour buffer the GPU renders to [D] */
 #define SGXWS_ATTRIBS_COLOR 0x10000003
 
 /* Upload a USSE program to the code heaps (phas.i targets in reloc[] are

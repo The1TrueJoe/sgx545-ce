@@ -365,7 +365,7 @@ uapi-stream. Status as of 2026-11-08.
 | W2 | the Mesa patches as standalone commits | done |
 | W3 | device info from DEV_QUERY (M2's queries) | done |
 | W4 | generated headers and the uAPI header | done (stream packers); uAPI copy until the kernel merge |
-| W5 | comments: no boards, apps or dates; DDK references | half done |
+| W5 | comments: no boards, apps or dates; DDK references | done |
 | W6 | `sgx_frame_test` | done |
 | W7 | Mesa logging and helpers | done |
 | W8 | kmsro's render-node pick | open |
@@ -432,12 +432,10 @@ uapi-stream. Status as of 2026-11-08.
 ### W5. Comments
 
 - **Done.** No boards, applications, dates or project names in the winsys.
-- **Open.** About 88 comment lines cite the DDK's behavior or captures as
-  the reason for a value.
-  - Upstream, a value's reason is the hardware fact, with a pointer to the
-    hardware documentation (STATE.md, PDS.md, ISA.md), not another driver's
-    output.
-  - These need rewording one by one. No code changes.
+- **Done.** The comments give a value's reason as the hardware fact, with a
+  pointer to STATE.md, PDS.md or ISA.md and STATE.md's tags ([C] hardware,
+  [D] capture, [G] guess), not another driver's output. The DDK is named
+  only where the services backend (downstream) is described.
 
 ### W6. The winsys test
 

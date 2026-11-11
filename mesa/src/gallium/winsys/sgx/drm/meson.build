@@ -3,7 +3,7 @@
 
 # The driver's view of the winsys: sgxws.h alone.  No services or kernel
 # headers on its include path, so nothing from kernel/src can reach the
-# gallium driver (AGENTS.md section 3.5).
+# gallium driver.
 idep_sgx_ws = declare_dependency(
   include_directories : include_directories('.'),
   dependencies : [idep_sgx_pds, idep_sgx_csb],

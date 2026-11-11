@@ -145,8 +145,8 @@ struct sgxws_prog {
  *    sop2 o0, pa<c>, o0 [skipinv end c1 c2 cop a1 a2 aop]
  * dst.rgb = (s1 * c1) cop (s2 * c2), dst.a = (s1.a * a1) aop (s2.a * a2),
  * s1 the shader's colour, s2 the tile's; with swap the sources trade places
- * (sop2 o0, o0, pa<c>), for a reverse subtract.  The DDK's SRC_ALPHA,
- * ONE_MINUS_SRC_ALPHA draw is c1=a1=s1a, c2=a2=1-s1a, add. */
+ * (sop2 o0, o0, pa<c>), for a reverse subtract.  SRC_ALPHA,
+ * ONE_MINUS_SRC_ALPHA is c1=a1=s1a, c2=a2=1-s1a, add. */
 enum sgxws_bsel {
    SGXWS_BS_ZERO,
    SGXWS_BS_S1,
@@ -161,7 +161,7 @@ enum sgxws_bop { SGXWS_BOP_ADD, SGXWS_BOP_SUB, SGXWS_BOP_MIN, SGXWS_BOP_MAX };
 /* The colour epilogue: blend (sop2), then the colour mask.  A colour mask is
  *    sopwm o0, pa<c>, pa<c> [skipinv end mask=wmask c1=zero c2=zero cop=max
  * aop=max] after the colour, a bit per byte of the packed BGRA8 (B b0, G b1, R
- * b2, A b3), as the DDK's glColorMask draws; with a blend before it, the
+ * b2, A b3); with a blend before it, the
  * sop2 writes pa<c> back and doesn't end the program. */
 struct sgxws_blend {
    uint8_t blend;          /* the sop2 below */
@@ -238,7 +238,7 @@ struct sgxws_state {
 
 #define SGXWS_MAX_INDICES 0xffff
 
-/* One vertex DMA (PDS DOUTD, PDS.md "What the DDK generates"): dwords (1-16)
+/* One vertex DMA (PDS DOUTD, PDS.md, program forms): dwords (1-16)
  * of a vertex from va + index * stride into attribute register reg; with
  * defaults, the components past dwords up to 4 read 0, 0, 0, 1.  block > 0:
  * va is an offset into the draw's copy block block - 1. */
@@ -314,8 +314,7 @@ struct sgxws_stats {
 struct sgxws_dev_options {
    bool verbose;      /* print every frame submitted */
    bool flush_rt;     /* SGX_FLUSH_HW_RENDER_TARGET at a target's destruction */
-   const char *trace; /* a pvrtrace log of this client, as tools/decode reads a
-                         DDK capture */
+   const char *trace; /* a pvrtrace log of this client (services only) */
    unsigned
       trace_kicks; /* and memory copies for its first n kicks only (0: all) */
    int dry_run;    /* frames from the n-th on are built (and traced) but never
@@ -395,9 +394,9 @@ void sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *rt);
 
 /*
  * Compiled programs (mesa/src/sgx/compiler: flat USSE words, low word
- * first), finalised the way the DDK's GL driver finalises a USP (docs/ISA.md
- * "Phases, visibility feedback and discard") and uploaded:
- *  - vertex: phase 0 = the DDK's prologue; phase 1 = the shader (temps
+ * first), finalised into phases (docs/ISA.md "Phases, visibility feedback
+ * and discard") and uploaded:
+ *  - vertex: phase 0 = the prologue; phase 1 = the shader (temps
  *    temporaries), then emit the vertex; then the epilogue phase every
  *    vertex program needs (docs/GEN.md);
  *  - fragment: phas, the shader, then `mov o0, pa<color_pa> [end]` (output

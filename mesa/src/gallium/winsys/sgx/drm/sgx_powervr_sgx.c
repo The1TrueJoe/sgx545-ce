@@ -769,8 +769,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       render.stencil_addr = c->target.zls_va + pad * 4;
       render.zls_control = SGXWS_ZLS_BASE | SGXWS_ZLS_STORE |
                            (c->target.zls_load ? SGXWS_ZLS_LOAD : 0);
-      /* the 3D flags the DDK's renders with a depth buffer carry (its kick
-       * b19-20) */
+      /* the 3D flags of a render with a depth buffer (kick b19-20) [D] */
       render.flags_3d = 0x180;
    }
    SGX_KMD_STREAM_CMD_RENDER_pack(render_buf, &render);
