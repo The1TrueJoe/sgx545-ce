@@ -792,3 +792,112 @@ The plan, largest first, with what each is worth:
 | fewer renders a frame: the small renders after the world (FBO blit, GUI) and X's copy, each a job with its own start cost | Mesa (scene merging, as the DDK's 3-kick scene), X flips | ~5-10 ms (their run time plus a kick-to-TA each) | to do |
 | 3D: F16 fixed-function and F16 samples (done, ~3.5 ms); phase split (done, neutral) | usse-compiler | done | default |
 | TA rate itself | none (hardware) | the DDK pays the same | |
+
+### Where the 3D goes, against the DDK's (offline, 2026-11-11)
+
+From captures already taken, with no new box time:
+- the CLKGATESTATUS sampler (`caps-ddk/2026-11-10-busy`, 30 s each, standing at
+  render distance 4, three slots);
+- the pvrtrace captures of one steady frame: ours on the services path
+  (`2026-11-10-mcworld` A, kicks 2506-2510) and the DDK's (`mc-31091`, kicks
+  4021-4025).
+
+**The unit split can't separate ISP, TSP, texturing and PBE.** Inside our world
+render's 3D, the ISP, PBE, PDS, USSE and cache clocks are on 98-99% of the time.
+The TSP, iterator and texture clocks are on 87-88% of it, as one group, so all
+the sampler shows is a TSP-side group that is idle 12% of the 3D. The DDK's 3D
+shows the same picture.
+
+**Per frame, our 3D isn't slower than the DDK's in clock time:**
+
+| | ours | DDK |
+|---|---|---|
+| 3D clocked | 244 ms/s at 8.3 frames/s = 29.4 ms a frame | 423 ms/s at ~11.2 frames/s (TA 866 ms/s, ~77 ms a frame) = ~38 ms a frame |
+| of it with the TA clocked too | 1% | 94% |
+| world render's 3D | 23.9 ms (median) | not separable: it runs under the TA |
+| other 3D a frame | 5.1 ms, in 4 renders: 3.0 + 0.9 + 1.0 + ~0 ms | mostly under the TA |
+
+The DDK's 3D shares the USSE with its TA, so its clock time runs long; its 3D
+alone isn't measurable here. Its lead is still overlap: it hides its 3D under
+its TA.
+
+**The world render's state matches the DDK's except in the iteration.** About
+99% of both world renders' indices go to one terrain class. Both use
+punch-through, `lequal`, depth write on and colour mask `f`. Both sample the
+512×256 BGRA8888 atlas (nearest, repeat, no mipmaps) and the 16×16 lightmap
+(linear, clamp), with projected samples. Both pixel programs are 17 instructions
+of F16 math ending in `atst8`. Ours uses 0 temporaries against the DDK's 8.
+
+The DDK keeps both textures linear (layout 3); ours are twiddled (layout 0),
+which should be no worse for the texture cache.
+
+The difference is the PDS:
+
+| | DOUTIs per pixel | iterated into PA |
+|---|---|---|
+| DDK | 3: `iterate tc0 x4 f16; sample tc1 proj`, `iterate tc3 x1 f16; sample tc2 proj`, the colour (`src22 x3`) | 3 dwords plus the 3 of the colour |
+| ours | 7: `iterate tc0 x4 f16`, `iterate tc1 x1 f16`, `iterate tc2 x4`, `iterate tc3 x4`, `sample tc2 proj`, `sample tc3 proj`, the colour | 11 dwords plus the 3 of the colour |
+
+Our program never reads `tc2` and `tc3` (pa3-pa10). They're the two sampled
+coordinates, iterated as F32×4 on top of the samples that iterate them again.
+The compiler's `pds_samples_alone` (89fab5db) is meant to drop such iterations,
+but `sample_only_load()` refuses any projected sample (`nir_tex_src_projector`,
+`c->proj`). st's fixed-function programs sample with TXP, and so does all of
+Minecraft's terrain. On top of that, the driver merges a sample only into a
+plain DOUTI of the same set, while the DDK merges a sample into the previous
+iteration of another set.
+
+**The other renders: a clear on its own, and ZLS traffic the DDK has none of.**
+
+| | ours | DDK |
+|---|---|---|
+| renders a frame | 4: the window's clear (1 draw); the world, into the FBO; the window (the FBO blit, one draw, a depth quad); the present copy | 2: clear, world and GUI into the FBO in one scene; the window (clear, blit, depth quad) in one render. The present goes as a transfer. |
+| clear | its own render: 1.0 ms of 3D, depth and stencil stored | drawn in the next render's scene |
+| world render ZLS | `001710b4`: depth and stencil stored at every tile, never loaded again | `001440b0`: no store, no load |
+| window render ZLS | `001770b6`: loaded and stored. Its background object also loads the clear's colour. 3.0 ms. | `001110b0`: neither, and the clear is in the render |
+| present | a 3D render, 0.9 ms | `SUBMITTRANSFER` |
+
+Our ZLS buffer is stored at the end of every render (`zls_target`) and loaded
+unless the render starts with a full clear. A target switch flushes a frame
+that holds only a clear (`sgx_set_framebuffer_state`, then `begin_frame`). The
+window render then has to load the colour and depth that the clear render
+stored, and the depth it loads is overwritten by its own depth quad before
+anything reads it. Each store or load moves the 720×480 ZLS buffer, 5 bytes a
+pixel, 1.7 MB.
+
+**The levers, largest first:**
+
+1. **The terrain's dead iterations.** Let `sample_only_load()` accept a
+   projected sample when the PDS does the projection: that's the sample
+   `sample tcN proj` already emitted. Merge each sample into the previous plain
+   DOUTI of another set, as the DDK does. This takes 8 F32 dwords and 4 DOUTIs
+   off every terrain pixel, on 99% of the world render's draws, in the 3D's
+   busiest group. The size is unmeasured; the sampler can't separate the
+   iterator. An A/B of the world render's 3D, with and without the change, on
+   the sampler gives it.
+2. **Lazy clears.** Keep a frame that holds only full clears pending on its
+   target instead of rendering it at a target switch. The next render of that
+   target starts with the clear: no background load, no ZLS load. That removes
+   the 1.0 ms clear render and the window render's colour and depth loads.
+   Measured: the window render takes 3.0 ms against 0.9 ms for the present
+   copy, a full-screen sample without loads, so ~2 ms of loads and stores. About
+   3 ms a frame in all.
+3. **Depth stores nothing loads.** A window's depth buffer is undefined after a
+   swap, so the window render needn't store it. An FBO's depth is dead once the
+   next render of that FBO starts with a depth clear. Minecraft clears every
+   frame, and the DDK never stores the world's depth. Storing only when a later
+   render could load it needs either a hint (`glInvalidateFramebuffer`, which
+   Minecraft doesn't use) or the store decided when that next render begins.
+   Worth ~0.5 ms of the world render, a guess from the window render's loads.
+   The window part is in lever 2's ~2 ms.
+
+Beyond the 3D itself, the biggest lever is still TA/3D overlap: the DDK runs
+94% of its 3D clock under its TA. Fewer renders a frame (the present as a
+transfer or a flip, 0.9 ms) is in the plan above.
+
+**Gaps.**
+- Overdraw and per-tile object counts need the parameter buffer after the TA.
+  The pvrtrace snapshots are taken at kick time, before it runs.
+- Capture A is a services-path build of 2026-11-10. Lever 1's cause is
+  unchanged in today's compiler (`sample_only_load`). Lever 2's is unchanged in
+  today's driver (`zls_target`, the target-switch flush).
