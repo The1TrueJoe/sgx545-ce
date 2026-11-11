@@ -91,5 +91,8 @@ option.
 ## Tests
 
 `meson test --suite sgx` runs these tests and the ISA round-trip tests.
-`tools/usc` in the powervr_sgx repository has the corpus harness that checks
-the output against the DDK's compiler. It stays outside Mesa.
+`tests/sgx_compile_test.cpp` builds each case with `nir_builder` (22 cases:
+selection, F16 and C10, textures, discard and phases, constants in memory,
+helper instances). `tools/usc` in the powervr_sgx repository has the corpus
+harness that checks the output against the DDK's compiler. It stays outside
+Mesa.

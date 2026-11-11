@@ -232,7 +232,7 @@ earlier licensing and provenance audit.
 | C1 | debug options in a `debug_named_value` table | done (1ba7774) |
 | C2 | clang-format | done (31f6f18) |
 | C3 | NIR passes in Mesa's shape | done (69923e0, options asserted 2026-11-11) |
-| C4 | unit tests under `meson test` | done (7e0421a); coverage to grow |
+| C4 | unit tests under `meson test` | done (7e0421a; 22 cases 2026-11-11) |
 | C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
 | C6 | no global mutable state | done (`hw_const`) |
 | C7 | comments cite `docs/`, not libusc or the DDK | done (2026-11-11) |
@@ -269,10 +269,14 @@ earlier licensing and provenance audit.
     cleanroom-isa's `sgx_isa`.
   - Shaders are built with `nir_builder` and compiled; every word must
     decode through the isaspec disassembler.
-  - Cases: a fragment varying to color, a vertex position, efo co-issue on
-    mat4 * v, and the int-select loop bound (d3adad7).
-  - Each case was checked to fail on the bug it guards.
-  - To grow: F16 and C10 paths, textures, discard, constants in memory.
+  - 22 cases: varyings, positions and efo co-issue (and its chains), the
+    int-select loop bound, an early-exit loop, partial colors, ceil,
+    or-of-compares masks, textures (BGRA units, PDS-only samples, F16
+    returns, a dependent sample), the color fast paths, mediump fmad16, lowp
+    C10, discard in one phase and split in two, constants past SA (ld.a.d),
+    and skipinv clear on what feeds a derivative.
+  - Each case was checked to fail on the bug it guards (the new ones with
+    `SGX_COMPILER_DEBUG=nomediump` and with the helper marking disabled).
   - The DDK corpus harness (`tools/usc`) stays in this repository.
 - **C5. Structure doc.** `compiler/README.md` covers the files, the pipeline
   (lowering, analysis, selection, backend passes, allocation, encoding), the
