@@ -1039,16 +1039,23 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
 
          if (out.iters[i].sample) {
             /* sample half: coordinate set + 1, 2-D or projected (docs/PDS.md).
-             * A sample of the set the previous plain DOUTI iterates is merged
-             * into it, as the DDK's generator does; a separate one samples at
-             * coordinate 0.  Otherwise a pure sample (source 0x24). */
+             * The sample half is independent of the iterate half, so a sample
+             * is merged into the previous DOUTI when that one is a plain
+             * iteration of a coordinate set, of this set or another, as the
+             * DDK's generator does: its texel lands after that iteration, where
+             * a DOUTI of its own would put it.  Not into gl_FragCoord's or a
+             * point coordinate's (its w1 bits are the sample half's).
+             * Otherwise a pure sample (source 0x24). */
             bool proj = out.iters[i].proj;
             unsigned prev = so->prog.n_douti - 1;
             struct sgx_pds_douti *d =
                so->prog.n_douti ? &so->prog.douti[prev] : NULL;
+            bool other_set = !(sgx_drv_debug & SGX_DEBUG_NO_PDS_MERGE);
 
             if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 &&
-                !d->proj && d->src == it) {
+                !d->proj && d->iterate && !d->w1 &&
+                (d->src == it ||
+                 (other_set && d->src >= 1 && d->src <= SGX_MAX_SETS))) {
                d->sample_set = it;
                d->dim2 = !proj;
                d->proj = proj;

@@ -89,6 +89,9 @@ Environment variables
    ``nophasesplit``
       a fragment program that discards runs whole before the visibility
       test, not only up to its discard
+   ``nopdsmerge``
+      a texture sample is merged only into the previous iteration of its own
+      coordinate set, not of another
    ``nozerocopy``
       vertex inputs gathered into f32 x 4, not DMAed where they are
    ``nozls``

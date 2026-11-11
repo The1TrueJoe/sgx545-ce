@@ -30,6 +30,7 @@
 #define SGX_DEBUG_NO_LAZY_SCANOUT (1 << 14)
 #define SGX_DEBUG_NO_PHASE_SPLIT  (1 << 15)
 #define SGX_DEBUG_NO_F16_SAMPLES  (1 << 16)
+#define SGX_DEBUG_NO_PDS_MERGE    (1 << 17)
 
 extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */

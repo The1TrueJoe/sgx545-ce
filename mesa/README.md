@@ -87,7 +87,7 @@ the default path depends on the environment.
 | `SGX_DEBUG=serial` | wait for every render after submitting it (GPU time per render in `stats`) |
 | `SGX_DEBUG=hangabort,flushall,flushrt` | abort at a render that does not finish; no deferred flushes; SGX_FLUSH_HW_RENDER_TARGET at a target's destruction |
 | `SGX_DEBUG=novcache,nof16,noffmediump,nof16samples,nophasesplit` | turn off the vertex cache, F16/C10 fragment arithmetic, mediump fixed-function programs, F16 texel returns, the split of discarding programs |
-| `SGX_DEBUG=nozerocopy,nozls,nolazyscanout` | gather vertex inputs instead of DMAing them in place; no depth/stencil across renders; scanout buffers on the display device from the start |
+| `SGX_DEBUG=nozerocopy,nozls,nolazyscanout,nopdsmerge` | gather vertex inputs instead of DMAing them in place; no depth/stencil across renders; scanout buffers on the display device from the start; samples merged only into their own set's iteration |
 | `SGX_DUMP_CODE=dir` | write each compiled program as `vs-N.code` / `fs-N.code`, one "hi lo" hex pair per instruction (`tools/isa/dis.py -x` reads the pairs). The compiler no longer writes USPs; sgxc does, for the DDK A/B harness |
 | `SGX_TRACE=path`, `SGX_TRACE_KICKS=n` | a pvrtrace log of the client (every bridge call, memory before each kick, for the first n kicks); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
 | `SGX_SLOTS=n` | frames in flight, 2 to 4 (default 4); fewer lower other clients' latency behind a game |
