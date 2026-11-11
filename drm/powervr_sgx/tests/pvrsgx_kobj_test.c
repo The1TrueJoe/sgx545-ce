@@ -24,6 +24,9 @@ static struct pvrsgx_device *kobj_test_device(struct kunit *test)
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, sdev->kernel_mmu);
 	mutex_init(&sdev->ccb_lock);
+	spin_lock_init(&sdev->ccb_spin);
+	spin_lock_init(&sdev->inval_lock);
+	INIT_LIST_HEAD(&sdev->inval_waits);
 	mutex_init(&sdev->pb_lock);
 	pvrsgx_kobj_init(sdev);
 	return sdev;
@@ -36,6 +39,7 @@ static void kobj_test_fini(struct kunit *test, struct pvrsgx_device *sdev)
 	sdev->pb = NULL;
 	pvrsgx_kobj_fini(sdev);
 	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->inval_waits));
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		KUNIT_EXPECT_TRUE_MSG(test, drm_mm_clean(&sdev->krange[r]), "range %d", r);
 	pvrsgx_mmu_destroy(sdev->kernel_mmu);

@@ -167,7 +167,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	mutex_unlock(&sdev->done_lock);
 	pvrsgx_power_put(sdev, done);
 
-	if (reap)
+	if (reap || !list_empty_careful(&sdev->inval_waits))
 		queue_work(system_dfl_wq, &sdev->reap_work);
 	if (more)
 		mod_delayed_work(system_dfl_wq, &sdev->poll_work, 1);
@@ -183,6 +183,7 @@ static void reap_work_fn(struct work_struct *work)
 	done = sdev->renders_done;
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	pvrsgx_kobj_reap(sdev, done);
+	pvrsgx_ccb_inval_reap(sdev, false);
 }
 
 static void poll_work_fn(struct work_struct *work)
