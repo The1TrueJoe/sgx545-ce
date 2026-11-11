@@ -246,6 +246,12 @@ Traps:
   board on the first resume (commit 1d170e9).
 - No runtime suspend while a render context exists (commit ce42391): a restart between
   a client's renders loses state the microkernel keeps.
+- A device-tree core is runtime-active straight after its probe, so it autosuspends
+  500 ms later. That suspend is the microkernel's power-off, sent through the CCB: stage 6
+  work, long before stage 5 has passed. A single-context core (the SGX530) holds a
+  runtime-PM reference from probe to remove (`pvrsgx_power_init`) until this stage is
+  shown on it. The SGX545 paths are unchanged: PCI keeps runtime PM forbidden until
+  probe ends, and gma500's SGX is multi-context.
 
 ## 10. Several clients
 

@@ -175,6 +175,8 @@ struct pvrsgx_device {
 	u32 fw_gen;
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
+	/** @pm_pinned: Runtime PM is held active (single-context bring-up). */
+	bool pm_pinned;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
