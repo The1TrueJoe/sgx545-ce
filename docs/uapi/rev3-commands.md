@@ -59,9 +59,9 @@ struct drm_powervr_sgx_cmd_render {		/* 80 bytes */
 	__u32 pixel_event_pds_rows;		/* 56 */
 	__u32 bg_pds_secondary_rows;		/* 60 */
 	__u32 bg_pds_primary_rows;		/* 64 */
-	__u32 bg_depth;				/* 68: IEEE float bits */
+	__u32 bg_depth_f32;			/* 68: IEEE-754 binary32 bits */
 	__s32 depth_bias_units;			/* 72 */
-	__u32 depth_bias_factor;		/* 76: IEEE float bits */
+	__u32 depth_bias_factor_f32;		/* 76: IEEE-754 binary32 bits */
 };
 
 struct drm_powervr_sgx_cmd_ta_kick {		/* 24 bytes */
@@ -78,7 +78,7 @@ struct drm_powervr_sgx_cmd_transfer {		/* 56 bytes */
 	__u32 first_tile_y;			/* 40 */
 	__u32 last_tile_x;			/* 44 */
 	__u32 last_tile_y;			/* 48 */
-	__u32 bg_depth;				/* 52: IEEE float bits */
+	__u32 bg_depth_f32;			/* 52: IEEE-754 binary32 bits */
 };
 ```
 
@@ -121,7 +121,31 @@ The struct keeps its size. For a render job `ta_kicks` holds
 extension chain), with `stride` = the
 element's `head.size`. A transfer job's `ta_kicks` stays empty.
 
-## 3. Kernel rules
+Why a kick carries `head.size` when the array has a stride: every command
+struct then has the same head, so one copy routine and one size rule serve all
+three. The kernel requires the two to be equal. That costs one compare and
+catches a caller whose stride came from a different header than its struct.
+
+## 2a. Old userspace on a rev 3 kernel
+
+Today nothing tells uAPI revisions apart. The driver reports DRM version 0.1
+under rev 1, and the rev 2 proposal (VM_BIND) only renumbers ioctls. The job
+struct keeps its layout in rev 3, so a rev 1 binary's stream would be read as a
+struct: its length word as `head.size`, and its `depth_addr` at offset 8 as the
+`extensions` pointer. Rev 3 makes that impossible:
+
+- **SUBMIT_JOBS gets a new number.** It moves to `0x0e`. Its old number (`0x0c`)
+  stays an empty slot in the ioctl table, so `drm_ioctl()` returns `-EINVAL`
+  before any argument is read. Old userspace fails on its first submit, the same
+  way every time.
+  - Retired numbers are never reused, by this revision or a later one (rev 2's
+    renumbering included).
+- **The DRM minor version becomes the uAPI revision:** 3 for this one.
+  - The winsys refuses a powervr_sgx fd whose minor is below the revision it was
+    built for, with a log line naming both. A new Mesa on an old kernel then fails
+    at screen creation, not at the first draw.
+  - Once rev 2 lands, it takes its own minor the same way.
+
 
 For a command at a user pointer (render, transfer):
 
@@ -162,17 +186,44 @@ goes into an extension instead.
   - each extension is copied with `copy_from_user` at its fixed size.
 - **Errors:**
   - an unknown name, or one that belongs to another command, is `-EINVAL`;
-  - a known name this core doesn't support is `-EOPNOTSUPP`, so userspace can
-    tell "not on this core" from "malformed";
+  - a known name this core doesn't support is `-EOPNOTSUPP`. This is deliberate
+    (most DRM drivers return `-EINVAL` here): "valid, but not on this core" and
+    "malformed" need different handling in userspace, a fallback versus a bug;
   - a repeated name or a seventeenth extension is `-EINVAL`;
-  - an unreadable pointer is `-EFAULT`.
+  - an unreadable pointer is `-EFAULT`;
+  - `copy_struct_from_user`'s `-E2BIG` (a non-zero tail) is always returned as
+    `-EINVAL`, for commands and query structs alike.
 - **Checks.** An extension's fields are checked like base fields, from the same
   tables, keyed by offset within the extension. An extension that wasn't sent
   is all zero for the cross-field checks.
 
-Userspace learns which extensions a core takes from the core id it already
-reads (DEV_QUERY GPU_INFO). It needs that id for the ISA anyway. `-EOPNOTSUPP`
-covers a kernel older than the userspace.
+**What this kernel accepts** is a DEV_QUERY of its own, not a table keyed by
+core id in userspace. That also covers an extension backported to an older
+kernel:
+
+```c
+	DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET,	/* struct drm_powervr_sgx_dev_query_commands */
+
+struct drm_powervr_sgx_dev_query_commands {
+	__u32 job_types;	/* bit n: job type n is accepted on this core */
+	__u32 _padding_4;
+	__u64 render_exts;	/* bit n: extension name n is accepted in a render command */
+	__u64 ta_kick_exts;	/* ... in a TA kick */
+	__u64 transfer_exts;	/* ... in a transfer command */
+};
+```
+
+- Extension names stay below 64 so that a bit per name fits.
+- A later command type appends a field; the query is size-versioned like the
+  others.
+- `-EOPNOTSUPP` remains the fallback for a caller that didn't ask.
+
+**A value unknown for a core refuses the command.** The core table can leave any
+value a command depends on unset: PDS bytes per row, rt_max, the transfer tile
+limits, an alignment. Then that command is not offered on that core. Its
+`job_types` bit is clear, and a submit is `-EOPNOTSUPP`. It never falls back to
+another core's value. So until the 530's values are measured, the 530 refuses
+RENDER and TRANSFER rather than run them with guessed state.
 
 ## 5. One source: the XML and the generator
 
@@ -247,8 +298,8 @@ extension.
 - **The register images** (`zls_control`, `flags_3d`, `ta_flags2`) have 545
   encodings, and the 530's are unknown. The 530 also lacks external Z for the ZLS.
   Hence the SGX545 extensions above. The 530 gets `EXT_SGX530_*` extensions once
-  its ISP/ZLS/TA registers are decoded. Until then a 530 render without
-  extensions runs with them all off.
+  its ISP/ZLS/TA registers are decoded. Until then the 530 refuses RENDER and
+  TRANSFER (section 4, unknown values), and its `job_types` says so.
 - **28-bit VAs:** `va_bits` = 28 in its core entry. The ZLS cross-field rule
   (offset below 2^30 from a 1 MiB base) becomes "below 2^va_bits", which is
   vacuous on both cores today.
@@ -257,7 +308,8 @@ extension.
 - **`*_rows`:** the unit is per core (`pds_rows`); the 1..63 range is unknown on
   the 530, so it gets a `<core>` override once known.
 - **Alignments** (PDS 16, VDM 4, bg block 16 and 0x200) are unknown on the 530:
-  `<core>` overrides when known. Until then the 545 values apply.
+  `<core>` overrides when known. Until then they are unset in its core entry,
+  which keeps its commands refused.
 - **Single context:** overlap is off and QUIRK_UNISOLATED is set; the BRN_28889
   invalidate split is the kernel's. None of it is a job field.
 - **Its 2D unit**, if ever used, is a new job type, not a TRANSFER extension. The
