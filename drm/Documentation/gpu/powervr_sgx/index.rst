@@ -106,9 +106,15 @@ description of the instruction set that Mesa's compiler uses
   be inside the object where it is mapped. The object must be mapped when such
   code is uploaded, at one place only, and can't be mapped anywhere else
   afterwards.
+- ``setfc``: only ``setfc #0, #1``, the format control a program starts
+  with, so the check knows the format control of every instruction without
+  following the program.
 - Each operand: no writes to constants or globals; no reads of the globals
   past ``g45``, which are not documented; internal registers ``i0``-``i3``
-  and index registers ``idx1``-``idx2`` only.
+  and index registers ``idx1``-``idx2`` only. Bit 6 of an operand number is
+  a format flag only under format select (the instruction's ``fmt`` bit) or,
+  for the color classes' ``r``, ``o``, ``pa``, ``sa`` and ``i`` operands, C10
+  format control; everywhere else it is part of the number.
 
 **What is not checked, and why.** Memory accesses (``ld``, ``st``, texture
 samples, the pixel back end's tile writes through ``emit``, PDS DMA) go
