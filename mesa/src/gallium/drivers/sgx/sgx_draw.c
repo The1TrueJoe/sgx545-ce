@@ -716,8 +716,10 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
 
          v = !view ? 1.0f
              : (k->k - SGX_K_TEXSIZE) & 1
-                ? (float)u_minify(view->texture->height0, view->u.tex.first_level)
-                : (float)u_minify(view->texture->width0, view->u.tex.first_level);
+                ? (float)u_minify(view->texture->height0,
+                                  view->u.tex.first_level)
+                : (float)u_minify(view->texture->width0,
+                                  view->u.tex.first_level);
       }
       uint32_t bits,
          *at[2] = {k->slot != 0xffff ? &block[base + k->slot] : NULL,

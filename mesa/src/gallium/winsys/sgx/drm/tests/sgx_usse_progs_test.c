@@ -17,12 +17,16 @@ find(const char *name)
       const char *name;
       const struct usse_prog *p;
    } progs[] = {
-      {"empty", &usse_empty},       {"clear_vs", &usse_clear_vs},
-      {"vpgen_vs", &usse_vpgen_vs}, {"copy_fs", &usse_copy_fs},
-      {"vs_xy", &usse_vs_xy},       {"vs_xyz", &usse_vs_xyz},
+      {"empty", &usse_empty},
+      {"clear_vs", &usse_clear_vs},
+      {"vpgen_vs", &usse_vpgen_vs},
+      {"copy_fs", &usse_copy_fs},
+      {"vs_xy", &usse_vs_xy},
+      {"vs_xyz", &usse_vs_xyz},
       {"fs_uniform_sec", &usse_fs_uniform_sec},
       {"fs_uniform", &usse_fs_uniform},
-      {"pe_ptoff", &usse_pe_ptoff}, {"pe_emit", &usse_pe_emit},
+      {"pe_ptoff", &usse_pe_ptoff},
+      {"pe_emit", &usse_pe_emit},
    };
    unsigned n;
 

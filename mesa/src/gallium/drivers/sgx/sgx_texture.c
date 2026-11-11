@@ -17,8 +17,8 @@
 #include "util/format/u_format.h"
 #include "util/u_math.h"
 
-#include "sgx_csb.h"
 #include "sgx_core.h"
+#include "sgx_csb.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
 #include "sgx_texture.h"

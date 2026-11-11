@@ -29,9 +29,9 @@
 
 #include "sgx_compiler.h"
 #include "sgx_context.h"
+#include "sgx_core.h"
 #include "sgx_csb.h"
 #include "sgx_program.h"
-#include "sgx_core.h"
 #include "sgx_screen.h"
 #include "sgx_texture.h"
 
@@ -227,11 +227,10 @@ lower_txs(nir_builder *b, nir_instr *instr, void *data)
                     nir_src_as_uint(tex->src[li].src))))
       return false;
    b->cursor = nir_before_instr(instr);
-   nir_def *f = nir_load_uniform(b, tex->def.num_components, 32,
-                                 nir_imm_int(b, 0),
-                                 .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
-                                 .range = tex->def.num_components,
-                                 .dest_type = nir_type_float32);
+   nir_def *f = nir_load_uniform(
+      b, tex->def.num_components, 32, nir_imm_int(b, 0),
+      .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
+      .range = tex->def.num_components, .dest_type = nir_type_float32);
    nir_def *i = NULL;
 
    nir_foreach_use_including_if_safe (use, &tex->def) {
@@ -648,8 +647,8 @@ lower_srgb_filter(nir_builder *b, nir_instr *instr, void *data)
 
    for (unsigned k = 0; k < 4; k++) {
       nir_tex_instr *tap = nir_instr_as_tex(nir_instr_clone(b->shader, instr));
-      nir_def *c = nir_fadd(b, i0, nir_imm_vec2(b, (k & 1) + 0.5f,
-                                                (k >> 1) + 0.5f));
+      nir_def *c =
+         nir_fadd(b, i0, nir_imm_vec2(b, (k & 1) + 0.5f, (k >> 1) + 0.5f));
 
       nir_builder_instr_insert(b, &tap->instr);
       nir_src_rewrite(&tap->src[ci].src, sz ? nir_fdiv(b, c, sz) : c);
@@ -658,8 +657,8 @@ lower_srgb_filter(nir_builder *b, nir_instr *instr, void *data)
    unsigned n = tex->def.num_components;
    nir_def *fx = nir_replicate(b, nir_channel(b, f, 0), n);
    nir_def *fy = nir_replicate(b, nir_channel(b, f, 1), n);
-   nir_def *r = nir_flrp(b, nir_flrp(b, t[0], t[1], fx),
-                         nir_flrp(b, t[2], t[3], fx), fy);
+   nir_def *r =
+      nir_flrp(b, nir_flrp(b, t[0], t[1], fx), nir_flrp(b, t[2], t[3], fx), fy);
 
    nir_def_replace(&tex->def, r);
    return true;
@@ -736,8 +735,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * become 2D ones on that row; a rectangle texture's coordinates are
        * divided by its size (lower_txs), which st's fixed-function programs
        * leave to the driver (TFP's rectangle binding: xfwm4's compositor) */
-      nir_lower_tex_options tex = {
-         .lower_1d = true, .lower_srgb = srgb, .lower_rect = true};
+      nir_lower_tex_options tex = {.lower_1d = true,
+                                   .lower_srgb = srgb,
+                                   .lower_rect = true};
 
       /* a sampler view's swizzle, as the texel comes out (sgx_fs_for) */
       for (unsigned u = 0; swz && u < PIPE_MAX_SAMPLERS; u++) {
@@ -1380,8 +1380,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    (*slot)->srgb_filter = srgb_filter;
    memcpy((*slot)->swz, swz, sizeof(swz));
    (*slot)->not_bgra = not_bgra;
-   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz, not_bgra, NULL,
-                       false) ||
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz,
+                       not_bgra, NULL, false) ||
        !(*slot)->code) {
       FREE((*slot)->vary);
       FREE(*slot);

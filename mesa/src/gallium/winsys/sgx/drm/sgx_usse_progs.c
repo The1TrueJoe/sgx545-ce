@@ -147,8 +147,8 @@ static const char *const src_pe_emit[] = {
 };
 
 struct usse_prog usse_empty, usse_clear_vs, usse_vpgen_vs, usse_copy_fs,
-   usse_vs_xy, usse_vs_xyz, usse_fs_uniform_sec, usse_fs_uniform,
-   usse_pe_ptoff, usse_pe_emit;
+   usse_vs_xy, usse_vs_xyz, usse_fs_uniform_sec, usse_fs_uniform, usse_pe_ptoff,
+   usse_pe_emit;
 static struct usse_prog state_emit[33];
 const struct usse_prog *usse_state_emit[33];
 
@@ -249,17 +249,17 @@ assemble_state_emit(struct usse_prog *p, unsigned n)
 static void
 progs_init(void)
 {
-   bool ok = assemble(&usse_empty, "empty", src_empty) &&
-             assemble(&usse_clear_vs, "clear_vs", src_clear_vs) &&
-             assemble(&usse_vpgen_vs, "vpgen_vs", src_vpgen_vs) &&
-             assemble(&usse_copy_fs, "copy_fs", src_copy_fs) &&
-             assemble(&usse_vs_xy, "vs_xy", src_vs_xy) &&
-             assemble(&usse_vs_xyz, "vs_xyz", src_vs_xyz) &&
-             assemble(&usse_fs_uniform_sec, "fs_uniform_sec",
-                      src_fs_uniform_sec) &&
-             assemble(&usse_fs_uniform, "fs_uniform", src_fs_uniform) &&
-             assemble(&usse_pe_ptoff, "pe_ptoff", src_pe_ptoff) &&
-             assemble(&usse_pe_emit, "pe_emit", src_pe_emit);
+   bool ok =
+      assemble(&usse_empty, "empty", src_empty) &&
+      assemble(&usse_clear_vs, "clear_vs", src_clear_vs) &&
+      assemble(&usse_vpgen_vs, "vpgen_vs", src_vpgen_vs) &&
+      assemble(&usse_copy_fs, "copy_fs", src_copy_fs) &&
+      assemble(&usse_vs_xy, "vs_xy", src_vs_xy) &&
+      assemble(&usse_vs_xyz, "vs_xyz", src_vs_xyz) &&
+      assemble(&usse_fs_uniform_sec, "fs_uniform_sec", src_fs_uniform_sec) &&
+      assemble(&usse_fs_uniform, "fs_uniform", src_fs_uniform) &&
+      assemble(&usse_pe_ptoff, "pe_ptoff", src_pe_ptoff) &&
+      assemble(&usse_pe_emit, "pe_emit", src_pe_emit);
 
    for (unsigned n = 1; ok && n <= 32; n++) {
       ok = assemble_state_emit(&state_emit[n], n);
