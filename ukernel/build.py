@@ -164,7 +164,14 @@ def main():
     # (the bgblock is CPU-written, so powervr_sgx drops kernel-heap sharing). Default 2:
     # secure mode is HW-proven and the open default (m2 2026-11-08). NOT bit 0 (cleanup-v2):
     # ours is defer-and-hold. build_id names the build. mkukfw --manifest reads both.
-    features = int(os.environ.get("UK_FEATURES", "2"), 0)
+    # TEST BRANCH (wip-bif-pd-flush): default 3 = CLEANUP_V2 | SECURE, so this image
+    # ADVERTISES cleanup-v2 to the driver. NOTE: on the current driver this changes
+    # nothing (CLEANUP_V2 is "accepted, unused" in pvrsgx_fw.h; the kernel sends no
+    # cleanup command and the microkernel's k_cleanup does not clear PB_*_LOADED). It
+    # is the prerequisite flag for a cleanup-with-ack fix, not a fix on its own.
+    # Revert to "2" before anything merges. The assembled image is byte-identical
+    # (features live only in the mkukfw header), so golden does not move.
+    features = int(os.environ.get("UK_FEATURES", "3"), 0)
     # Feature bits 0-15 are host-visible and must be known to the driver; bits 16-31 are the
     # microkernel's own build variants, which the driver accepts and ignores (m2-drm 25f9d54).
     if ukernel.XFER_BANK_ALL:
