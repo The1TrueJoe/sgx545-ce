@@ -211,7 +211,7 @@ s64 pvrsgx_usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 ob
 				break;
 			if (place == PVRSGX_USSE_PLACE_NONE || target < place ||
 			    target >= place + obj_insts ||
-			    place + obj_insts > PVRSGX_USSE_WINDOW_INSTS)
+			    place + obj_insts > (s64)PVRSGX_USSE_WINDOW_INSTS)
 				return refuse(why, PVRSGX_USSE_REFUSAL_PHAS, i);
 			*abs = true;
 			break;
