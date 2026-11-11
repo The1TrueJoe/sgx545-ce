@@ -148,6 +148,8 @@ static const struct pvrsgx_core_family families[] = {
 		/* One memory context, one kick (BRN_22934), 28-bit addresses. */
 		.name = "SGX530",
 		.core = 530,
+		/* Read on our OMAP3630 test board (docs/porting/cores/sgx530.md). */
+		.core_id = 0x01120000,
 		.regs = &sgx530_regs,
 		.isa = PVRSGX_ISA_SGX545,
 		.num_dir_lists = 1,
