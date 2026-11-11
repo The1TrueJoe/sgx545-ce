@@ -90,6 +90,7 @@ the default path depends on the environment.
 | `SGX_DEBUG=nozerocopy,nozls,nolazyscanout` | gather vertex inputs instead of DMAing them in place; no depth/stencil across renders; scanout buffers on the display device from the start |
 | `SGX_DUMP_CODE=dir` | write each compiled program as `vs-N.code` / `fs-N.code`, one "hi lo" hex pair per instruction (`tools/isa/dis.py -x` reads the pairs). The compiler no longer writes USPs; sgxc does, for the DDK A/B harness |
 | `SGX_TRACE=path`, `SGX_TRACE_KICKS=n` | a pvrtrace log of the client (every bridge call, memory before each kick, for the first n kicks); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
+| `SGX_SLOTS=n` | frames in flight, 2 to 4 (default 4); fewer lower other clients' latency behind a game |
 | `SGX_DRY_RUN=n`, `SGX_FRAME_GAP_US=us` | frames from the n-th on built but never sent; idle time after each render (hang bisecting) |
 | `FRAMEBUFFER=/dev/fbN` | the fbdev platform's framebuffer (default /dev/fb0) |
 

@@ -97,6 +97,11 @@ Environment variables
       scanout buffers on a display-only device are the display's from the
       start, not from the first request for a KMS handle
 
+``SGX_SLOTS``
+   Frames in flight, 2 to 4 (4 by default). Fewer frames lower the latency of
+   other clients, such as an X desktop behind a game, at some cost in the
+   game's frame rate.
+
 ``SGX_DRY_RUN``, ``SGX_FRAME_GAP_US``
    For bisecting a GPU hang: frames from the n-th on are built but not sent;
    the GPU is left idle this long after each render.

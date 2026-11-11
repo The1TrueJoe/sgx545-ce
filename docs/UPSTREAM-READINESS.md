@@ -143,19 +143,21 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 - **Done in the driver (2026-11-11).**
   - Dropped: `fsconst`, `nodrvconsts`, `tspf16`, `novs`/`nofs` (the fixed
     programs stay as the fallback for a shader the compiler refuses),
-    `zerocopy` (the default on powervr_sgx; `nozerocopy` turns it off),
-    `SGX_SLOTS` (4) and `SGX_TA_SPLIT`.
+    `zerocopy` (the default on powervr_sgx; `nozerocopy` turns it off) and
+    `SGX_TA_SPLIT`.
   - Folded into `draw`: `attrs` (the clear line now carries the frame's draw
     count) and `blits`.
   - Kept, documented in `sgx.rst`: `nir`, `draw`, `frame`, `sync`, `stats`,
     `serial`, `hangabort`, `flushall`, `novcache`, `nof16`, `noffmediump`,
     `nof16samples`, `nophasesplit`, `nozerocopy`, `nozls`, `nolazyscanout`;
-    `SGX_DRY_RUN` and `SGX_FRAME_GAP_US` for bisecting a hang.
+    `SGX_DRY_RUN` and `SGX_FRAME_GAP_US` for bisecting a hang;
+    `SGX_SLOTS` (frames in flight, 4 by default), which the install guide
+    on issue #5 gives users as the latency setting.
   - `MESA_GLSL_DISABLE_IO_OPT` is no longer set by the driver: the
     compiler's NIR options carry `nir_io_dont_optimize_varyings`, a flag the
     GLSL linker reads (patch 0006).
 - **Left.**
-  - Winsys (uapi-stream): the `slots`, `ta_split` and `tsp_f16` fields of
+  - Winsys (uapi-stream): the `ta_split` and `tsp_f16` fields of
     `sgxws_dev_options`/`sgxws_draw` are now always 0, and
     `SGX_STATE_ALWAYS` and `SGX_PB_PAGES` read the environment directly.
   - `flushrt` moves into the pvrsrvkm backend (M1).

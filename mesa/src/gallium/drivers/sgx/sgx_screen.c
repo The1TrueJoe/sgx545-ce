@@ -62,6 +62,9 @@ DEBUG_GET_ONCE_OPTION(sgx_trace, "SGX_TRACE", NULL)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_trace_kicks, "SGX_TRACE_KICKS", 0)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_dry_run, "SGX_DRY_RUN", -1)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_frame_gap_us, "SGX_FRAME_GAP_US", 0)
+/* frames in flight, 2 to 4 (4 by default): fewer trade throughput for
+ * latency (an X desktop behind a game) */
+DEBUG_GET_ONCE_NUM_OPTION(sgx_slots, "SGX_SLOTS", 0)
 
 const char *
 sgx_dump_code_dir(void)
@@ -349,6 +352,7 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       .trace_kicks = debug_get_option_sgx_trace_kicks(),
       .dry_run = debug_get_option_sgx_dry_run(),
       .frame_gap_us = debug_get_option_sgx_frame_gap_us(),
+      .slots = debug_get_option_sgx_slots(),
    };
 
    if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {
