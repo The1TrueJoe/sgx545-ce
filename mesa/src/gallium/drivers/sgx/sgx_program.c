@@ -606,13 +606,73 @@ layout_first_free(void *data, enum sgx_layout_kind kind)
    return next;
 }
 
+/*
+ * Linear filtering of an sRGB texture, in the shader: the TPU filters the
+ * encoded texels and the decode comes after, where GL decodes first.  The four
+ * texels are sampled at their centres (where the TPU's filter returns the
+ * texel itself), decoded (nir_lower_tex's lower_srgb, after this) and mixed
+ * here.  Only for textures sampled at one level (sgx_fs_for): the level a
+ * minified lookup takes isn't known to the shader.  data: the units.
+ */
+static bool
+lower_srgb_filter(nir_builder *b, nir_instr *instr, void *data)
+{
+   uint32_t units = *(const uint32_t *)data;
+
+   if (instr->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *tex = nir_instr_as_tex(instr);
+   int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   bool rect = tex->sampler_dim == GLSL_SAMPLER_DIM_RECT;
+
+   if (tex->op != nir_texop_tex || tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
+       !(units & (1u << tex->texture_index)) || tex->is_shadow ||
+       tex->is_array || ci < 0 || tex->coord_components != 2 ||
+       (tex->sampler_dim != GLSL_SAMPLER_DIM_2D && !rect) ||
+       nir_tex_instr_src_index(tex, nir_tex_src_projector) >= 0 ||
+       nir_tex_instr_src_index(tex, nir_tex_src_bias) >= 0 ||
+       nir_tex_instr_src_index(tex, nir_tex_src_offset) >= 0)
+      return false;
+   b->cursor = nir_before_instr(instr);
+   /* in texels: a rectangle texture's coordinates already are */
+   nir_def *sz =
+      rect ? NULL
+           : nir_load_uniform(b, 2, 32, nir_imm_int(b, 0),
+                              .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
+                              .range = 2, .dest_type = nir_type_float32);
+   nir_def *coord = tex->src[ci].src.ssa;
+   nir_def *u = nir_fadd_imm(b, sz ? nir_fmul(b, coord, sz) : coord, -0.5);
+   nir_def *i0 = nir_ffloor(b, u);
+   nir_def *f = nir_fsub(b, u, i0);
+   nir_def *t[4];
+
+   for (unsigned k = 0; k < 4; k++) {
+      nir_tex_instr *tap = nir_instr_as_tex(nir_instr_clone(b->shader, instr));
+      nir_def *c = nir_fadd(b, i0, nir_imm_vec2(b, (k & 1) + 0.5f,
+                                                (k >> 1) + 0.5f));
+
+      nir_builder_instr_insert(b, &tap->instr);
+      nir_src_rewrite(&tap->src[ci].src, sz ? nir_fdiv(b, c, sz) : c);
+      t[k] = &tap->def;
+   }
+   unsigned n = tex->def.num_components;
+   nir_def *fx = nir_replicate(b, nir_channel(b, f, 0), n);
+   nir_def *fy = nir_replicate(b, nir_channel(b, f, 1), n);
+   nir_def *r = nir_flrp(b, nir_flrp(b, t[0], t[1], fx),
+                         nir_flrp(b, t[2], t[3], fx), fy);
+
+   nir_def_replace(&tex->def, r);
+   return true;
+}
+
 /* fs_vary: a vertex shader compiled to a fragment shader's sets; srgb: the
- * samplers whose texels a fragment shader decodes from sRGB */
+ * samplers whose texels a fragment shader decodes from sRGB, srgb_filter
+ * those of them it filters itself (lower_srgb_filter) */
 static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
-               unsigned srgb, const uint16_t *swz, uint32_t not_bgra,
-               const uint8_t *vtx_fmt, bool points)
+               unsigned srgb, uint32_t srgb_filter, const uint16_t *swz,
+               uint32_t not_bgra, const uint8_t *vtx_fmt, bool points)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    nir_shader *nir = nir_shader_clone(NULL, orig);
@@ -687,6 +747,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          for (unsigned c = 0; c < 4; c++)
             tex.swizzles[u][c] = swz[u] >> (3 * c) & 7;
       }
+      if (srgb_filter)
+         NIR_PASS(_, nir, nir_shader_instructions_pass, lower_srgb_filter,
+                  nir_metadata_control_flow, &srgb_filter);
       NIR_PASS(_, nir, nir_lower_tex, &tex);
    }
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -1108,7 +1171,7 @@ sgx_create_shader_state(struct pipe_context *pctx,
 
    if (!nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
-      bool ok = compile_shader(ctx, so, nir, NULL, 0, NULL, 0, NULL, false);
+      bool ok = compile_shader(ctx, so, nir, NULL, 0, 0, NULL, 0, NULL, false);
 
       ctx->stats.compile_ns += os_time_get_nano() - t;
       if (ok)
@@ -1233,7 +1296,7 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
       return NULL;
    (*slot)->discard_pa = -1;
    (*slot)->points = points;
-   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, NULL, 0,
+   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, 0, NULL, 0,
                        vtx_fmt, points) ||
        !(*slot)->prog.code) {
       FREE((*slot)->vary);
@@ -1262,6 +1325,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 {
    struct sgx_pipe_shader **slot;
    unsigned srgb = 0, unit;
+   uint32_t srgb_filter = 0;
    uint16_t swz[PIPE_MAX_SAMPLERS] = {0};
    uint32_t not_bgra = 0;
    bool any_swz = false;
@@ -1273,8 +1337,18 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 
       if (!v)
          continue;
-      if (util_format_is_srgb(v->format))
+      if (util_format_is_srgb(v->format)) {
+         const struct pipe_sampler_state *ss = ctx->samplers[unit];
+
          srgb |= 1u << unit;
+         /* filtered at one level: decoded before it's filtered */
+         if (ss &&
+             (ss->mag_img_filter == PIPE_TEX_FILTER_LINEAR ||
+              ss->min_img_filter == PIPE_TEX_FILTER_LINEAR) &&
+             (ss->min_mip_filter == PIPE_TEX_MIPFILTER_NONE ||
+              v->u.tex.first_level == v->u.tex.last_level))
+            srgb_filter |= 1u << unit;
+      }
       if (!sgx_tex_bgra(v->format))
          not_bgra |= 1u << unit;
       /* XYZW: none, 0 */
@@ -1290,6 +1364,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
+          fs->variants_srgb[i]->srgb_filter == srgb_filter &&
           fs->variants_srgb[i]->not_bgra == not_bgra &&
           !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
@@ -1302,9 +1377,10 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       return NULL;
    (*slot)->discard_pa = -1;
    (*slot)->srgb = srgb;
+   (*slot)->srgb_filter = srgb_filter;
    memcpy((*slot)->swz, swz, sizeof(swz));
    (*slot)->not_bgra = not_bgra;
-   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, swz, not_bgra, NULL,
+   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz, not_bgra, NULL,
                        false) ||
        !(*slot)->code) {
       FREE((*slot)->vary);
