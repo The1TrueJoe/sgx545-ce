@@ -304,6 +304,8 @@ program at 0x37008388, its DOUTU given 16 temporaries) that ends `mov o0, rN
 triangle are rN (all 32 checked pixels equal; the background is the clear
 color). Inputs come from `limm`. About 400 draws, no GPU hang or recovery.
 Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
+On the open stack (`tools/isa/hwt_open.py`, 2026-11-11), hwt_p1-p4, p6-p8 and p10-p12
+reproduced all 650 recorded values exactly; open-stack logs are in `hwt_out/open/`.
 
 | suite | what | result |
 |---|---|---|
@@ -320,6 +322,7 @@ Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
 | hwt_p10 | test with format select: F16 numbering, chan on F16 and C10 compares | **test's F16 operands count halves too**; C10 operands are whole registers; chan table |
 | hwt_p11 | a repeat over an F16 operand | moe / inc step it by one half |
 | hwt_p13 | pck.u8.u8 lane picks per dmask (3, 12, 6, 9) and RGBA8 -> BGRA8 in two; and / or of 0 and 0xffffffff test masks; test.and.eq into p0 on a mask | an 8-bit source's lane picks its byte, the first source filling the lowest dmask lane; and / or are bitwise on masks; test.and.eq is true for a zero mask, false for 0xffffffff (2026-11-09, all 11 ok) |
+| hwt_gaps (open stack) | ld.a.d/w/b offsets and sizes; i0 across loads and a wdf, with and without nosched; test with a dest and with mask=15; fddp's i<n>; ima32 hi | see "hw 1d: ld", "Dual issue", "test vs testmask", fddp, ima32 (2026-11-11, `tools/isa/hwt_open.py` through `sgx_hwt`: powervr_sgx and the open microkernel, nothing from the vendor stack) |
 | hwt_p12 | efo's m/a/i/d modes, wi, negates, chaining; fdual's every secondary and primary, i0s0, slot sharing, negates, rpt=2, same-word timing | all units as tabled; secondary sources settled (sd = 1st, sb, sc); sec 3 is fsubflr; neg1/neg2 primary only; same-word read of an internal register being written is a **race** (efo d, fdual primary) |
 
 hwt_p7-p9's `test` lines with `.f16` / `.c10` were drawn before the assembler
@@ -558,9 +561,11 @@ result to cp<n> is **unconfirmed**.
 fddp/fddpc (**oracle** for the fields): the i<n> operand is in h19, so the
 destination has no extension bit; fddpc's clip planes are in h3-5 (the
 first cp operand) and h6-8 (the second), no source modifiers. That fddp
-computes two dot products with the second going to i0/i1 is
-**unconfirmed** (the fdual primary fddp leaves a second product in i0,
-hwt_p12, below).
+computes two dot products is **unconfirmed**. **hardware** (hwt_gaps
+`fddp_*`, open stack, 2026-11-11): the second result goes to the i<n> in
+h19. With r0, r1, r2 = 1, 2, 3, `fddp r3, i1, r0, r1, r2` gave r3 = 2.0 and
+i1 = 3.0; what each product sums over a repeat is not settled by that. The
+fdual primary fddp also leaves a second product in i0 (hwt_p12, below).
 
 ### Moves (hw 5)
 
@@ -687,7 +692,11 @@ The secondary's internal registers don't step: `sd` holds the one result
   corpus shader has `fdual.fmad.fsin pa1, r126, ... [sd=i2]`; don't copy it.)
 - Internal registers don't survive a deschedule (**unconfirmed**). The vendor
   compiler puts `nosched` on the words between an internal register's write
-  and its last read (corpus).
+  and its last read (corpus). Not reproduced on hardware (hwt_gaps `i0_*`,
+  open stack, 2026-11-11): an i0 written with `mov i0, r2 [mask=1]` read back
+  unchanged across one and four `ld.a.d` plus a `wdf`, with and without
+  `nosched`, on every checked pixel of a 720x480 triangle. The loss may need a
+  sample or other work between the write and the read.
 
 `fssq` exists only as a dual-issue primary (oracle): two sources in the
 src1/src2 slots, each source channel feeding the same destination channel
@@ -867,10 +876,13 @@ false).
 #### test vs testmask
 
 `test` writes predicate pdst from one channel (chan) of the ALU result, or
-with mask > 1 one predicate per channel starting at p0 (**unconfirmed**; the
-vendor assembler forces pdst = p0 then (oracle); guess that channel n writes
-pn). The ALU result itself is also written when there is a dest (l20)
-(**unconfirmed**).
+with mask > 1 one predicate per channel starting at p0. The vendor assembler
+forces pdst = p0 then (oracle). **hardware** (hwt_gaps `test_mask15_p*`, open
+stack, 2026-11-11): `test.fsub.lt p0, r0, r4 [mask=15]` set pn from channel n,
+r0+n against r4+n (1, 5, 1, 5 < 3: p0, p2 set, p1, p3 clear). The ALU result
+itself is also written when there is a dest (l20): **hardware** (hwt_gaps
+`test_dst_alu_result`: `test.fsub.lt p0, r2, r0, r1` with 2.0, 3.0 left -1.0
+in r2).
 
 `testmask` has no predicate: it writes into dst, per enabled channel (mask), a
 mask of the given width that is all ones when the test passes and zero
@@ -1278,7 +1290,9 @@ Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unle
 
 **ima32** (1a, h20=0): `dst = src0*src1 + src2`, 32-bit.
 - sgn h9 (it also makes immediates signed).
-- hi h4-6: 0 none, 4 i0, 5 i1, 6 i2. The high 32 bits go there (**unconfirmed**).
+- hi h4-6: 0 none, 4 i0, 5 i1, 6 i2. The high 32 bits go there: **hardware**
+  (hwt_gaps `ima32_hi_*`, open stack, 2026-11-11: 0x10000 * 0x10000 gave 0 in
+  the destination and 1 in i1).
 - cin h10-11: carry-in from i0-i2: 0 none, 1 i0, 2 i1, 3 i2.
 - negp h8 = src0 neg xor src1 neg.
 - src2 neg h7.
@@ -1442,7 +1456,7 @@ placeholder), DRC.
 | h9 | postinc | not both | oracle; name guess |
 | h7 | dst bank | 0 r, 1 pa | oracle |
 | h6 | range | src2 holds a 4th source | oracle; name guess |
-| h4-5 | size | 0 d (dword), 1 w, 2 b, 3 `q` (the vendor assembler rejects it, but the field holds it; the text is `ld.<mode>.q` and it encodes as 3) | oracle, corpus (d); which of 1 and 2 is word and which is byte is **unconfirmed** |
+| h4-5 | size | 0 d (dword), 1 w, 2 b, 3 `q` (the vendor assembler rejects it, but the field holds it; the text is `ld.<mode>.q` and it encodes as 3) | oracle, corpus (d); **hardware** (hwt_gaps `ld_w_*`, `ld_b_*`, open stack, 2026-11-11): 1 is a halfword, 2 a byte, each zero-extended (see Address) |
 | h3 | f2_9 | | oracle; unknown |
 | h1 | f2_2 | | oracle; data-cache control (guess) |
 | h0 | drc | DRC the loaded data signals | oracle, corpus (ix_tmp*: loads alternate drc 0/1, each followed later by `wdf`) |
@@ -1457,8 +1471,13 @@ dword at base + 4·(i + 1). `st.a.d sa0, #0` wrote word 1 of the buffer whose
 address was in sa0, `#2` wrote word 3, and `ld.a.d #2` read word 3 back.
 Microkernel code read with `#0`-`#7` lands as instruction pairs (low word,
 then the high word with the class) only under that reading: `wdf`'s high word
-0xf9200000 came from an odd word. Untested: register offsets, the b/w sizes,
-modes l/t, and offsets past #127.
+0xf9200000 came from an odd word. The other sizes follow the same rule in
+their own unit (**hardware**, hwt_gaps, open stack, 2026-11-11, a buffer of
+bytes 0x00, 0x01, ...): `ld.a.w #i` reads the halfword at base + 2·(i + 1)
+into the low half, zero-extended (#0 -> 0x0302, #3 -> 0x0908); `ld.a.b #i`
+reads the byte at base + (i + 1), zero-extended (#0 -> 0x01, #5 -> 0x06).
+`ld.a.d #0`/`#2` read words 1 and 3 again. Untested: register offsets, modes
+l/t, and offsets past #127.
 
 ### hw 1d: eld, h22 = 1
 
@@ -2480,12 +2499,10 @@ vendor driver; the open stack doesn't use the container.
 - Common fields: syncs (h20) is a sync start → hwt draw with a derivative or dependent sample after a divergent branch, with and without h20, checking the result per pixel.
 - Common fields: nosched (h11 in the float classes, h22 in pck/test/bitwise) stops the scheduler from descheduling → hwt run with an internal-register write, a long-latency op (smp or ld) and a read, with and without nosched, many pixels.
 - Float classes, fdpc: writes a clip-plane result to cp<n> (l15-17) → capture a vendor vertex program with user clip planes and its state, or an hwt vertex draw that toggles the cp operand and watches clipping.
-- Float classes, fddp/fddpc: two dot products, the second written to the i<n> named in h19 (fddpc also to the two cp operands) → hwt draw of a hw 2 fddp with i1 then `mov o0, i1`; and fddpc with distinct cp operands.
+- Float classes, fddp/fddpc: what the two dot products sum (the second goes to the i<n> in h19: hardware), and fddpc's writes to the two cp operands → hwt fddp with vector inputs and a repeat; fddpc with distinct cp operands.
 - Moves, op0xf3 (h8-10 = 6, 7): writes an output → hwt draw of each form, reading o and r registers back.
-- fdual: internal registers don't survive a deschedule → hwt draw that writes i0, runs an smp/ld without nosched, then reads i0, many pixels.
+- fdual: internal registers don't survive a deschedule (not reproduced across loads and a wdf) → hwt draw that writes i0, runs a dependent smp, then reads i0, many pixels.
 - fdual, fssq: each source channel feeds the same destination channel → hwt fssq with rpt=2 (or a mask) over distinct registers, checking each destination.
-- test vs testmask: with mask > 1, test writes one predicate per channel starting at p0 (channel n → pn) → hwt `test.fsub.lt p0, r0, r1 [mask=15]` with per-channel inputs, then `(pN) mov` for p0-p3.
-- test vs testmask: a test with a dest (l20 set) also writes the ALU result there → hwt `test.fsub.lt p0, r2, r0, r1` then `mov o0, r2`.
 
 ### Integer, fixed-point and multi-unit ops
 
@@ -2493,14 +2510,12 @@ vendor driver; the open stack doesn't use the container.
 - efo: earlier cores' EFO use h3-8 as three 2-bit source modifiers, with different control-field meanings → oracle sweep with a pre-SGX545 target, plus hardware on such a core
 - sop3: h11 (arev / arsop) negates the alpha result, swapping the roles to b - a → hwt_p6-style U8 draw of sop3 with arev on and off, distinct src alphas
 - ima16: the vendor compiler picks u8 format exactly when the source is an immediate → corpus/capture check of every ima16 with an immediate or register source (any with a non-u8 immediate or u8 register?)
-- ima32: hi (h4-6) receives the high 32 bits of the product in i0-i2 → hwt draw `ima32 [hi=i1]` with a product over 2^32, then `mov oN, i1`
 - hw 16 ssum16i, firh, op16s1, op1adrc (oracle, not emitted for SGX545): whether the SGX545 executes them at all, and what they compute → hwt draws of each word (watch for a hang/HWR), compare against candidate formulas
 
 ### smp, ld/st and the special class
 
 - hw 1c: smp: pcf (h5) / pcf16 (h6) are a percentage-closer compare → hwt sample of a depth texture with compare state set, pcf on and off, F32 and F16 coordinates; compare the result to the reference compare.
 - hw 1c: smp: the result format is selected by the texture state (src1), not the word → hwt: one smp word against state words that differ only in format (U8, F16, F32), read the result registers.
-- hw 1d: ld: size 1 = word and 2 = byte → hwt `ld.a.w` / `ld.a.b` from a buffer with distinct bytes, check how many bytes land and in which lanes (the Address test covers d only).
 - hw 1d: eld: size 0 = dword, 1 = quad (what each size loads) → hwt eld.d / eld.q from a known buffer, count the registers written.
 - hw 1f: emit: t1 is a geometry-shader vertex emit and its f13 is "emit and cut" → capture of a vendor program using emit.t1, or a hwt draw on a core that runs geometry; low priority on the SGX545 (GLES2 has no geometry stage).
 - Open questions: br/ba h10 (f1_22) and op0xd7's limit are tied to the same core feature → hwt br with h10 set vs clear, and op0xd7 n sweep, looking for any behavior difference.

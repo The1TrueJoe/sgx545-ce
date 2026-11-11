@@ -25,7 +25,11 @@ code are kept apart.
 - **The frame to poke into.** You need any frame that runs a pixel program you can
   replace, its code address, and its PDS `DOUTU` (to give the program temporaries). On
   the SGX545 this was a captured frame replayed on the box. Once the open stack runs,
-  the open driver's own frames serve.
+  [`sgx_hwt`](../../mesa/src/gallium/winsys/sgx/drm/sgx_hwt.c) does it without
+  one: it assembles each test with Mesa's isa library, draws it through the winsys
+  and reads the pixel back. [`tools/isa/hwt_open.py`](../../tools/isa/hwt_open.py)
+  runs the same suites through it. On the SGX545 it reproduced all 650 values of the
+  replay rig exactly.
 - **Shader binaries from a working driver**, if one runs on your hardware. Compile
   one-feature shaders, capture the program words the driver uploads, and diff pairs
   that differ in one thing (a register, an operator, a swizzle, a precision qualifier).

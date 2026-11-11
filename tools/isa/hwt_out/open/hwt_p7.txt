@@ -1,0 +1,49 @@
+call_lapc                skipped (replay pokes or no final out)
+test_f16_r1_lt_r0        0xaaaaaaaa  FAIL want 0x3f800000 
+test_f16_r0_lt_r1        0x3f800000  FAIL want 0xaaaaaaaa 
+efo_f32                  0x40800000  ok 
+efo_f16_r0_11            0x40800000   
+efo_f16_r1_11            0x40400000   
+efo_f16_r0_10            0x40800000   
+efo_f16_r1_10            0x40400000   
+fmad_fused               0x00000000   
+fmad_round               0x3f80102b  ok 
+fmad16_round             0x3c2f3c2f   
+fmad16_cvt_round         0x3c013c01   
+sop2_c10_alpha0          0x004080ff   
+sop2_c10dst_alpha0       0x04020100   
+sop2_c10_alpha1          0x004080ff   
+sop2_c10dst_alpha1       0x04020100   
+sop2_c10_alpha2          0x004080ff   
+sop2_c10dst_alpha2       0x04020100   
+sop2_c10_alpha3          0x004080ff   
+sop2_c10dst_alpha3       0x04020100   
+test_c10_chan0           0x3f800000   
+test_c10_chan1           0x3f800000   
+test_c10_chan2           0xaaaaaaaa   
+test_c10_chan3           0x3f800000   
+testmask_byte_12         0x000000ff   
+testmask_byte_21         0x00000000   
+testmask_word_12         0x0000ffff   
+testmask_word_21         0x00000000   
+testmask_dword_12        0xffffffff   
+testmask_dword_21        0x00000000   
+fdp_rpt3_0               0x5a5a5a50   
+fdp_rpt3_1               0x5a5a5a51   
+fdp_rpt3_2               0x4548a000   
+fdp_rpt3_3               0x5a5a5a53   
+fdp_rpt4_0               0x5a5a5a50   
+fdp_rpt4_1               0x5a5a5a51   
+fdp_rpt4_2               0x5a5a5a52   
+fdp_rpt4_3               0x4728ca00   
+bit_and                  0x30300f00  ok 
+bit_or                   0xfcfcfff0  ok 
+bit_xor                  0xccccf0f0  ok 
+bit_shl4                 0x0f0ff000  ok 
+bit_shr4                 0x0f0f0ff0  ok 
+bit_asr4                 0xff0f0ff0  ok 
+bit_rol4                 0x0f0ff00f  ok 
+bit_shr_reg              0x00f0f0ff  ok 
+bit_shl_33               0x00000000   
+bit_and_rot              0xff000000  ok 
+bit_and_inv              0xfffffffe  ok 
