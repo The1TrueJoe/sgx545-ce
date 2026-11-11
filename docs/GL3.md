@@ -136,7 +136,7 @@ Formats wider than 32 bits, and more than one draw buffer, need either:
 | occlusion queries (GL 1.5, `SAMPLES_PASSED`) | **listed** (ICD, DDK GL: `ARB_occlusion_query`); no capture, no register known | **H5**. No good fallback: a fragment program can't count without atomics; `ANY_SAMPLES_PASSED` could be a store of 1 under a translucent pass, which shades in order | listed only | low |
 | `ARB_shader_texture_lod` | `smp .lod` and `.grad` forms exist | compiler | ISA.md smp (encoder; `tex_lod` corpus) | medium (compiler) |
 | `ARB_map_buffer_range`, `ARB_framebuffer_object` | — | gallium generic; FBO needs mixed attachment sizes, which the render target handles by its own size | — | high |
-| `MAX_SAMPLES` ≥ 4 (`EXT_framebuffer_multisample`) | TE AA b30-31 = 2× in X / Y; PBE word 2 b30-31 = downscale; **listed** (ICD: 4) | 4× by rendering at 2×2 and downsampling in the PBE (**H6**, or a DDK ES2 capture with a 4-sample EGL config). Mesa's fake MSAA (`caps->fake_sw_msaa`) would pass the gate with one sample; it isn't used | STATE.md §1 tail (+0x238: unconfirmed), §4 (unconfirmed) | medium |
+| `MAX_SAMPLES` ≥ 4 (`EXT_framebuffer_multisample`) | **native 4×**: 2×2 samples a pixel, resolved by the PBE at the end of the tile (box filter). TE AA b31 + b30 (`e0000000`), PBE word 2 b30-31 = 1 (downscale), X macrotile boundaries 6/12/18 and 0x30 tiles a macrotile, TA flags 2 b25, region headers and tail pointers 3× and 4×, per-sample depth/stencil (4× the 1-sample buffer) stored through ZLS. The colour target, its pitch and the tile grid stay the pixels' | the TA tail, RT data, region arrays and ZLS words as STATE.md "Multisampling (4x)" lists them. Under powervr_sgx the kernel computes TE AA, MTILE and the region arrays, so the uAPI needs a samples field (UAPI.md G14) before userspace can ask for 4×. 2 and 8 samples, MSAA FBOs and the per-sample ZLS layout are not captured | capture (`ms1`/`ms4`, `ms1d`/`ms4d`: 480 edge pixels at exactly 1/4, 2/4 and 3/4 coverage); STATE.md "Multisampling (4x)" | high (window surfaces); medium (FBOs, resolve blits) |
 | 8 clip distances | 6 planes in the TA (`fdpc` → cp0-5, output select b0-5) | 7 and 8 lowered to a discard (`nir_lower_clip_fs`) | STATE.md §3 "Clip planes" (capture) | high |
 | flat varyings (GLSL 1.30 `flat`; every integer varying is flat) | flat iteration works only on the TA's vertex-colour source, one vec4: DOUTI b25-26 on a texcoord set's iteration does nothing | one flat vec4 through the colour source; the rest by making the provoking vertex's values reach all three vertices (see "Flat varyings" below) | hardware (2026-11-11: the colour source flat, a texcoord set's flat bit no effect); STATE.md §3 "Clip planes, shading…" (DOUTI b25-26) | medium |
 
@@ -224,9 +224,10 @@ style), unless it says capture. In order of how much each unblocks:
   `glBeginQuery(GL_SAMPLES_PASSED)` would show it, but that DDK needs X (it's
   GLX only). Otherwise, look for a counter in the render details' unknown
   words after a render with a visibility test.
-- **H6, multisampling.** Capture the DDK's ES2 with a 4-sample EGL config if it
-  offers one; or set TE AA b30-31 and PBE word 2 b30-31 on a replay of the base
-  frame and look at the edges.
+- **H6, multisampling.** Done as a capture: the DDK's ES2 renders 4× (see the
+  table). Still open: an MSAA FBO and a resolve blit (`glBlitFramebuffer`),
+  the per-sample ZLS layout (for multisample textures, which read samples
+  one by one), and a replay of `ms4` on the open stack.
 - **H7, an instance count in the VDM draw.** Lower priority: the per-instance
   path needs nothing.
 - **H8, seamless cube filtering.** A LINEAR sample on a cube map's face edge,
@@ -235,8 +236,9 @@ style), unless it says capture. In order of how much each unblocks:
 ## Verdict
 
 - **GL 3.0 can be exposed honestly** if H1 (or the pass-per-target fallback)
-  gives four or more color outputs, and real 4× multisampling works (H6).
-  Mesa's fake MSAA (`fake_sw_msaa`) is not an option. Everything else in 3.0 has a path that
+  gives four or more color outputs. Real 4× multisampling is there (H6, a
+  capture); it needs a uAPI samples field and the driver's half. Mesa's fake
+  MSAA (`fake_sw_msaa`) is not an option. Everything else in 3.0 has a path that
   needs no fact we lack: shader packing for ≤ 32-bit float and integer
   targets, the 0x12 and unorm sampler formats plus shader conversion for
   sampling, st's RGTC decompression, sRGB in the shader, CPU-side vertex
@@ -278,9 +280,9 @@ behind its cap only when piglit and dEQP pass it.
 3. Instancing by per-instance draws, `gl_InstanceID` from a driver constant
    (see "Status").
 4. UBOs (the driver's half: addresses in SA; the compiler's half: `ld.a.d`).
-5. The box tests: H2 and H1 (one slot covers H1-H3), H6 (first as a DDK
-   capture with a 4-sample EGL config: under powervr_sgx the kernel computes
-   TE AA and allows one sample), H5, H4.
+5. The box tests: H2 and H1 (one slot covers H1-H3), then a replay of the
+   4× capture on the open stack and an MSAA FBO capture (H6), H5, H4. The
+   uAPI samples field goes to the kernel driver's owners.
 6. Render targets: shader packing for 32-bit float and integer formats, then
    MRT once H1 says how.
 7. Float and integer sampling formats (H2), texture arrays, transform feedback
