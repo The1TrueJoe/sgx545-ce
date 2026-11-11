@@ -97,7 +97,7 @@ module, `cores/<core>.py`, selected by `build.py <core>` (default `sgx545`, the 
 in the Intel Atom CE5300 and Cedarview); its `CORE_NAME` names the output binary
 and the manifest `core` field, so images never collide. Where a core needs other
 handler logic, `ukernel.py` has a per-core feature flag (`MULTI_MEM_CONTEXTS`,
-`FIX_HW_BRN_28889`, `WAIT_BOUND`, `HEARTBEAT`), never a fork; the SGX545 defaults
+`FIX_HW_BRN_28889`, `WAIT_BOUND`, `HEARTBEAT`, `INIT_DPM_CLEAR`), never a fork; the SGX545 defaults
 emit the code the SGX545 always had.
 
 - `sgx545`: the shipping core; golden `golden/sgx545.sha256`.

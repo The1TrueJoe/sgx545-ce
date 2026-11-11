@@ -30,6 +30,11 @@ MISC = 0x32005000
 # registers the SGX530 doesn't have (docs/porting/cores/sgx530.md, "Only on the SGX545")
 ABSENT = {0x0c38: "DIR_LIST_BASE1", 0x0c78: "BANK0", 0x0ae4: "EVENT_KICK1",
           0x0ae8: "EVENT_KICK2", 0x0aec: "EVENT_KICK3"}
+# stage 1 (docs/porting/microkernel.md) touches only registers the SGX530's GPL
+# header names (K): init, the timer, get-misc-info and the idle PD restore
+STAGE1_NAMED = {0x0010: "CORE_ID", 0x0014: "CORE_REVISION", 0x012c: "EVENT_STATUS",
+                0x0134: "EVENT_HOST_CLEAR", 0x0acc: "EVENT_TIMER", 0x0c00: "BIF_CTRL",
+                0x0c84: "DIR_LIST_BASE0"}
 
 
 def load():
@@ -117,14 +122,31 @@ def test_init(code, man):
     print("  init: InitStatus = 1, heartbeat +1 per event  OK")
 
 
+def test_stage1_named(code, man):
+    """the first boot's paths stay on named registers: no SGX545 DPM writes at init"""
+    runs = []
+    u, mem, regs = machine(code, initialised=False)
+    event(u, man, regs)
+    event(u, man, regs, status=C.EVENT_TIMER)
+    runs.append(regs.log)
+    u, mem, regs = machine(code)
+    regs.v[C.CR_BIF_DIR_LIST_BASE0] = CPD             # restore path too
+    queue(mem, C.CMD_GETMISCINFO, data1=MISC)
+    event(u, man, regs)
+    runs.append(regs.log)
+    bad = sorted({a for log in runs for (op, a, v, pc) in log if a not in STAGE1_NAMED})
+    assert not bad, "stage 1 touches unnamed registers: " + ", ".join(f"{a:#x}" for a in bad)
+    print(f"  stage 1: only named registers ({len(STAGE1_NAMED)})  OK")
+
+
 def test_getmiscinfo(code, man):
     u, mem, regs = machine(code)
-    regs.v[C.CR_CORE_ID] = 0x01230000
+    regs.v[C.CR_CORE_ID] = 0x01120000   # read on the board
     regs.v[C.CR_CORE_REVISION] = 0x00010205
     queue(mem, C.CMD_GETMISCINFO, data1=MISC)
     event(u, man, regs)
     assert mem.rd(MISC + 4) == 0x00010205, "misc[1] must be CORE_REVISION (0x14)"
-    assert mem.rd(MISC + 8) == 0x01230000, "misc[2] must be CORE_ID (0x10)"
+    assert mem.rd(MISC + 8) == 0x01120000, "misc[2] must be CORE_ID (0x10)"
     assert mem.rd(MISC + 20) == 530, "misc[5] must name the core"
     assert mem.rd(MISC) & C.MISC_READY
     assert not touched(regs, {0x1c, 0x20}), "read the SGX545's CORE_ID/REVISION offsets"
@@ -273,6 +295,7 @@ def main():
     print("SGX530 microkernel offline tests:")
     test_static(man)
     test_init(code, man)
+    test_stage1_named(code, man)
     test_getmiscinfo(code, man)
     test_restore_pd(code, man)
     test_bounded_wait(code, man)

@@ -59,5 +59,7 @@ WAIT_BOUND = 0xffff          # every wait gives up after 65535 polls and logs it
 FEATURES = 0x4              # PVRSGX_UKFW_SINGLE_CONTEXT (bit 2, proposed): EDM on list
                              # 0, the PD table, the firmware PD restored, init on
                              # EVENT_KICK. Not SECURE: the firmware heaps are in every PD.
+INIT_DPM_CLEAR = []          # the SGX545's 0x65c/0x630 aren't named here (gap 13);
+                             # stage 1 touches only named registers
 HEARTBEAT = 0x2a             # control block +0xa8: +1 per event, the watchdog's progress
                              # word (the SGX545's EDM task registers are unnamed here)

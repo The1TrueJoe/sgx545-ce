@@ -637,9 +637,9 @@ def build(a):
     a.i(f"st.a.d r17, #{STAGE1_FLAG}, r0 [moe]")          # no stage-1 raise outstanding
     a.i(f"st.a.d r17, #{STAGE1_SAVED_628}, r0 [moe]")
     a.i(f"st.a.d r17, #{SLOT1_INIT}, r0 [moe]")           # slot 1's DPM control is whatever reset left: unset
-    a.i(f"str #{CR_DPM_LOADSEL // 4}, r0")                # 0x65c = 0: clean DPM load-select, so a reset
-    a.i(f"str #{0x630 // 4}, r0")                         # 0x630 = 0: and slot select, leave no stale
-                                                          # OOM-shuffle state for the first post-reset 3D
+    for r in INIT_DPM_CLEAR:                              # 0x65c, 0x630 = 0: clean DPM load-select and
+        a.i(f"str #{r // 4}, r0")                         # slot select, no stale OOM-shuffle state for
+                                                          # the first post-reset 3D
     a.i(f"st.a.d r17, #{PB_TA_LOADED}, r0 [moe]")         # no PB free list loaded yet: an HWR
     a.i(f"st.a.d r17, #{PB_3D_LOADED}, r0 [moe]")         # wiped the HW DPM, so force a reload
     # Enable EUR_CR_EVENT_TIMER (0xacc) = host timer period | ENABLE, as the DDK does

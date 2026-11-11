@@ -198,3 +198,16 @@ In `ukernel/cores/sgx545.py`, at their SGX545 values; `sgx530.py` overrides them
 Tooling made per-core: `golden/check.py <core>` (it built only the 545), a golden per
 core, the manifest's `waits` map (only when waits are bounded), the ISA coverage gate run
 with `--core`, and `test_sgx530.py` next to `test_emu.py`.
+
+### 2026-11-11: before the first start
+
+14. **"The first boot" isn't only a host-side step.** microkernel.md's stage 1 says what the
+    host checks (`ui32InitStatus`, the heartbeat), not what the microkernel touches to get
+    there. The 530 image's init wrote two SGX545 DPM registers (0x65c, 0x630) that nothing
+    names for the 530, so the first boot would also have been the first write to unnamed
+    MMIO. Before the first start on a new core, list in the emulator every register the
+    init, timer and get-misc-info paths touch, and gate any that the core's header doesn't
+    name. The 530 does that with `INIT_DPM_CLEAR` (545: the two literal `str`s at init; 530:
+    none), and `test_sgx530.py` "stage 1" keeps it that way. The same trace lists the
+    instruction forms stage 1 executes, so a passing boot is coarse evidence for those
+    forms on the new core.
