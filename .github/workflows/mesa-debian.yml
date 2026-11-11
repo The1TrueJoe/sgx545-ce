@@ -72,6 +72,8 @@ jobs:
             src/loader/loader_cedarview_sysfs_test
           build/mesa/debian/build/src/loader/loader_child_render_node_test
           build/mesa/debian/build/src/loader/loader_cedarview_sysfs_test
+          # the driver's own tests (compiler gtest, ISA, PDS, csb), as the i386 job runs them
+          LC_ALL=C.UTF-8 meson test -C build/mesa/debian/build --suite sgx --print-errorlogs
 
       - name: The firmware (the open microkernel, secure mode, assembled through sgx-asm)
         env:
@@ -138,43 +140,87 @@ jobs:
           path: '*.deb'
           retention-days: 7
 
-  # 32-bit programs (GoldSrc and other i386 games, their steam-runtime) load an
-  # i386 Mesa. Built natively in an i386 trixie container (actions can't run
-  # inside one, so the host drives docker), libdir lib/i386-linux-gnu.
+  # i386, the way Mesa's debian-x86_32 CI builds it: a cross build in an amd64
+  # trixie container (crossbuild-essential-i386, the :i386 multiarch libraries,
+  # a meson env2mfile cross file, llvm-config from llvm-19:i386), -Dwerror=true,
+  # and the sgx tests run on the runner (i386 binaries run on its x86_64 kernel).
+  # It packs mesa-sgx:i386 for 32-bit programs (games, their steam-runtime),
+  # libdir lib/i386-linux-gnu.
   mesa-i386:
     runs-on: ubuntu-24.04
+    container: debian:trixie
     timeout-minutes: 120
     steps:
+      - name: Build dependencies (amd64 tools, i386 libraries)
+        run: |
+          set -eux
+          a=i386
+          dpkg --add-architecture $a
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git perl patch xz-utils file python3 python3-mako python3-yaml python3-packaging \
+            meson ninja-build bison flex glslang-tools dpkg-dev crossbuild-essential-$a pkgconf:$a \
+            libdrm-dev:$a libglvnd-dev:$a libx11-dev:$a libxext-dev:$a libxfixes-dev:$a libxdamage-dev:$a \
+            libxrandr-dev:$a libxxf86vm-dev:$a libxshmfence-dev:$a libx11-xcb-dev:$a libxcb1-dev:$a \
+            libxcb-dri2-0-dev:$a libxcb-dri3-dev:$a libxcb-present-dev:$a libxcb-sync-dev:$a libxcb-glx0-dev:$a \
+            libxcb-randr0-dev:$a libxcb-xfixes0-dev:$a libxcb-shm0-dev:$a libxcb-keysyms1-dev:$a \
+            libwayland-dev:$a libwayland-egl-backend-dev:$a wayland-protocols libexpat1-dev:$a zlib1g-dev:$a \
+            libzstd-dev:$a libudev-dev:$a libelf-dev:$a libstdc++6:$a libgcc-s1:$a \
+            llvm-19:$a libclang-cpp19:$a libtinfo-dev:$a libz3-dev:$a
+          # llvm-19-{dev,tools}:i386 conflict with python3:amd64; as Mesa's CI does,
+          # install them past that with dpkg (last: apt refuses work after it)
+          cd /tmp
+          apt-get download llvm-19-dev:$a llvm-19-tools:$a
+          dpkg -i --force-depends llvm-19-*_$a.deb
+          file -L /usr/bin/llvm-config-19 | grep -q 'ELF 32-bit'
+
       - uses: actions/checkout@v4
 
-      - name: Build and pack (i386)
+      - name: Cross file
+        run: |
+          set -eux
+          meson env2mfile --cross --debarch i386 -o cross-i386.txt
+          sed -i -e '/\[properties\]/a\' -e 'needs_exe_wrapper = false' cross-i386.txt
+          sed -i -e '/\[binaries\]/a\' -e "llvm-config = '/usr/bin/llvm-config-19'" cross-i386.txt
+          cat cross-i386.txt
+
+      # -k 0: every warning-as-error in one run, not only the first
+      - name: Build (i386, -Dwerror=true)
+        run: |
+          set -eux
+          SGX_MESA_BUILD=$PWD/build/mesa SGX_MESA_LIBDIR=lib/i386-linux-gnu SGX_NINJA_ARGS="-k 0" \
+          SGX_MESA_MESON_ARGS="--cross-file=$PWD/cross-i386.txt -Dwerror=true -Dbuild-tests=true -Dcpp_args=-Wno-error=deprecated-declarations" \
+            sh mesa/build.sh debian 2>&1 | tee build-i386.log
+          file -L build/mesa/debian/install/opt/sgx/lib/i386-linux-gnu/libgallium-*.so | grep 'ELF 32-bit'
+
+      - name: Tests (i386)
+        run: |
+          set -eux
+          B=build/mesa/debian/build
+          LC_ALL=C.UTF-8 meson test -C $B --suite sgx --print-errorlogs
+          ninja -C $B src/loader/loader_child_render_node_test src/loader/loader_cedarview_sysfs_test
+          $B/src/loader/loader_child_render_node_test
+          $B/src/loader/loader_cedarview_sysfs_test
+
+      - name: Pack (i386)
         env:
           RELEASE: ${{ inputs.release_version }}
         run: |
           set -eux
-          v=$(git rev-parse --short HEAD)
-          d=$(git log -1 --format=%cd --date=format:%Y%m%d)
+          v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          d=$(git -c safe.directory='*' log -1 --format=%cd --date=format:%Y%m%d)
           mv=$(. mesa/VERSION; echo "$MESA_VERSION")
           if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE; else mver=$mv+sgx$d.$v; fi
-          docker run --rm --platform linux/386 -v "$PWD:/w" -w /w -e MVER="$mver" debian:trixie \
-            setarch i686 sh -c '
-              set -eux
-              apt-get update -qq
-              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                ca-certificates curl perl patch xz-utils python3 python3-mako python3-yaml python3-packaging \
-                meson ninja-build pkg-config bison flex gcc g++ glslang-tools dpkg-dev file \
-                libdrm-dev libglvnd-dev libx11-dev libxext-dev libxfixes-dev libxdamage-dev libxrandr-dev \
-                libxxf86vm-dev libxshmfence-dev libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-dri3-dev \
-                libxcb-present-dev libxcb-sync-dev libxcb-glx0-dev libxcb-randr0-dev libxcb-xfixes0-dev \
-                libxcb-shm0-dev libxcb-keysyms1-dev libwayland-dev wayland-protocols libwayland-egl-backend-dev \
-                libexpat1-dev zlib1g-dev libzstd-dev libudev-dev llvm-19-dev libclang-cpp19-dev libelf-dev
-              [ "$(dpkg --print-architecture)" = i386 ]
-              SGX_MESA_BUILD=/w/build/mesa SGX_MESA_LIBDIR=lib/i386-linux-gnu sh mesa/build.sh debian
-              file build/mesa/debian/install/opt/sgx/lib/i386-linux-gnu/libgallium-*.so | grep -q "ELF 32-bit"
-              sh mesa/debian/package.sh build/mesa/debian/install i386 "$MVER"
-              dpkg-deb -I mesa-sgx_*_i386.deb | head -12
-              dpkg-deb -c mesa-sgx_*_i386.deb | head -12
-            '
+          sh mesa/debian/package.sh build/mesa/debian/install i386 "$mver"
+          dpkg-deb -I mesa-sgx_*_i386.deb | head -12
+          dpkg-deb -c mesa-sgx_*_i386.deb | head -12
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mesa-i386-build-log
+          path: build-i386.log
+          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         with:

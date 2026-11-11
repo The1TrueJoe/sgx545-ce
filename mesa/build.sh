@@ -20,6 +20,8 @@
 #   debian  a native build on Debian (mesa/debian: CI) for /opt/sgx, for users;
 #           $SGX_MESA_LIBDIR (default lib) is its libdir under /opt/sgx: the
 #           i386 package uses lib/i386-linux-gnu, beside amd64's lib.
+#           $SGX_MESA_MESON_ARGS adds meson setup options (a cross file, werror)
+#           and $SGX_NINJA_ARGS ninja's (-k 0).
 # Installs into $SGX_MESA_BUILD/<arch>/install (lib/libEGL.so.1,
 # lib/libGLESv2.so.2, lib/libgallium-<ver>.so, ...), and copies the winsys
 # tests (sgx_frame_test, sgx_hwt) next to it.
@@ -84,8 +86,8 @@ for arch in $ARCHES; do
 				-Dplatforms=x11,wayland -Degl-native-platform=x11 -Dglx=dri -Dglvnd=enabled \
 				-Dgallium-drivers=sgx,llvmpipe -Dvulkan-drivers= -Dopengl=true \
 				-Dgles1=enabled -Dgles2=enabled -Degl=enabled -Dgbm=enabled -Dllvm=enabled \
-				-Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled
-		ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test src/gallium/winsys/sgx/drm/sgx_hwt
+				-Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled ${SGX_MESA_MESON_ARGS:-}
+		ninja -C "$O/build" ${SGX_NINJA_ARGS:-} all src/gallium/winsys/sgx/drm/sgx_frame_test src/gallium/winsys/sgx/drm/sgx_hwt
 		rm -rf "$O/install"
 		DESTDIR="$O/install" meson install -C "$O/build" --no-rebuild --quiet
 		cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/build/src/gallium/winsys/sgx/drm/sgx_hwt" "$O/install/opt/sgx/$L/"
