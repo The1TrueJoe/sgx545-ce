@@ -218,6 +218,26 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 	mutex_destroy(&sdev->kobj_lock);
 }
 
+/* For status dumps: what waits to be freed. Never sleeps: false if busy. */
+bool pvrsgx_kobj_pending(struct pvrsgx_device *sdev, struct pvrsgx_kobj_counts *c)
+{
+	struct pvrsgx_kobj *o;
+
+	if (!mutex_trylock(&sdev->kobj_lock))
+		return false;
+	memset(c, 0, sizeof(*c));
+	list_for_each_entry(o, &sdev->graveyard, grave) {
+		c->graveyard++;
+		c->graveyard_pages += o->km.npages;
+	}
+	list_for_each_entry(o, &sdev->kobj_unmapped, grave) {
+		c->unmapped++;
+		c->unmapped_pages += o->km.npages;
+	}
+	mutex_unlock(&sdev->kobj_lock);
+	return true;
+}
+
 void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
 {
 	pvrsgx_kobj_release(sdev, *o);

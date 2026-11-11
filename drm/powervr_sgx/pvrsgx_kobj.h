@@ -63,6 +63,14 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o);
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done);
 
+/* Objects and pages waiting in the graveyard, and unmapped ones waiting for the invalidate. */
+struct pvrsgx_kobj_counts {
+	u32 graveyard, unmapped;
+	u64 graveyard_pages, unmapped_pages;
+};
+
+bool pvrsgx_kobj_pending(struct pvrsgx_device *sdev, struct pvrsgx_kobj_counts *c);
+
 struct seq_buf;
 struct pvrsgx_vm;
 

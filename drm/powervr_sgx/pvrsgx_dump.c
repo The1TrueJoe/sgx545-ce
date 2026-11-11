@@ -19,6 +19,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_kobj.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
@@ -73,6 +74,7 @@ static void dump_regs(struct seq_buf *sb, struct pvrsgx_device *sdev)
 void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool regs)
 {
 	u32 *ctl = sdev->fw.cpu[PVRSGX_FW_CCBCTL];
+	struct pvrsgx_kobj_counts kc;
 
 	seq_buf_printf(sb, "firmware running: %d lost: %d resets: %u irqs: %d\n", sdev->fw_running,
 		       sdev->lost, sdev->reset_count, atomic_read(&sdev->irq_count));
@@ -89,6 +91,9 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool reg
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_ASSERT_FAIL));
 	seq_buf_printf(sb, "powered: %d\n", READ_ONCE(sdev->powered));
+	if (pvrsgx_kobj_pending(sdev, &kc))
+		seq_buf_printf(sb, "kobjs graveyard %u (%llu pages) unmapped %u (%llu pages)\n",
+			       kc.graveyard, kc.graveyard_pages, kc.unmapped, kc.unmapped_pages);
 	/* After a failed start the clocks are still on; after a stop they are not. */
 	if (!regs || !READ_ONCE(sdev->powered))
 		return;

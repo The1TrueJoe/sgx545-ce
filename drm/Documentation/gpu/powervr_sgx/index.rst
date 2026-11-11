@@ -173,8 +173,9 @@ Debugging
 debugfs, under ``/sys/kernel/debug/dri/<minor>/``, has:
 
 ``status``
-    firmware state, command buffer offsets, the host control block and,
-    while the GPU is awake, the core's registers.
+    firmware state, command buffer offsets, the host control block, the
+    kernel objects waiting to be freed and, while the GPU is awake, the
+    core's registers.
 
 ``ctlblk``
     the microkernel's TA/3D and host control blocks.
