@@ -110,11 +110,22 @@ static void core_test_heaps(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, f545->regs->vendor_b30, 0xb30);
 }
 
+/* DEV_QUERY lists the unisolated quirk on a single-context core only, never as mandatory. */
+static void core_test_uapi_quirks(struct kunit *test)
+{
+	const u32 *q;
+
+	KUNIT_EXPECT_EQ(test, pvrsgx_core_uapi_quirks(pvrsgx_core_family_get(545), &q), 0);
+	KUNIT_ASSERT_EQ(test, pvrsgx_core_uapi_quirks(pvrsgx_core_family_get(530), &q), 1);
+	KUNIT_EXPECT_EQ(test, q[0], DRM_POWERVR_SGX_QUIRK_UNISOLATED);
+}
+
 static struct kunit_case pvrsgx_core_test_cases[] = {
 	KUNIT_CASE(core_test_lookup),
 	KUNIT_CASE(core_test_unknown),
 	KUNIT_CASE(core_test_identify_only),
 	KUNIT_CASE(core_test_heaps),
+	KUNIT_CASE(core_test_uapi_quirks),
 	KUNIT_CASE(core_test_table),
 	{}
 };

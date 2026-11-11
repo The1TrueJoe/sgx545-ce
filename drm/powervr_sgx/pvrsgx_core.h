@@ -162,6 +162,7 @@ struct pvrsgx_core_info {
 
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
 bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f);
+u16 pvrsgx_core_uapi_quirks(const struct pvrsgx_core_family *f, const u32 **quirks);
 
 /*
  * One memory context: the microkernel, TA, 3D and 2D all translate through

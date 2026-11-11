@@ -139,3 +139,7 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
 	mutex_unlock(&sdev->ccb_lock);
 	return err;
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_ccb_test.c"
+#endif
