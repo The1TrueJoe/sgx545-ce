@@ -175,7 +175,10 @@ def variant(d, name):
     lines = open(tpath, errors="replace").read().splitlines()
     marks = windows_from_trace(lines)
     jobs, sizes = gpu_jobs(lines)
-    clk = int(open(os.path.join(d, "clk_tck.txt")).read()) if os.path.exists(os.path.join(d, "clk_tck.txt")) else 100
+    try:
+        clk = int(open(os.path.join(d, "clk_tck.txt")).read().split()[0])
+    except (OSError, IndexError, ValueError):
+        clk = 100
     # cpu.txt and marks.txt share /proc/uptime's clock
     um = []
     if os.path.exists(os.path.join(d, "marks.txt")):

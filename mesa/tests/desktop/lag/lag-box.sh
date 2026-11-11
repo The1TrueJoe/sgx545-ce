@@ -134,7 +134,7 @@ done
 echo 1408 > $T/buffer_size_kb
 cp "$R/var/log/Xorg.0.log" "$R/var/log/xorg.out" "$R/var/log/xfce.out" "$OUT/" 2>/dev/null
 cp /tmp/lag-xfwm4.err "$OUT/xfwm4.err"
-getconf CLK_TCK > "$OUT/clk_tck.txt"
+{ getconf CLK_TCK 2>/dev/null || chroot "$R" getconf CLK_TCK 2>/dev/null || echo 100; } > "$OUT/clk_tck.txt"
 dmesg | grep -i 'powervr\|sgx' | tail -40 > "$OUT/dmesg.txt"
 sh "$OUT/rig/desktop-up.sh" "$R" stop > /dev/null 2>&1
 echo "lag-box.sh: $V done"
