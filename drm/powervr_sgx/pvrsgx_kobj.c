@@ -168,7 +168,7 @@ static void q_check(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o, unsigned 
 		if (printed++ < QUARANTINE_PRINT)
 			drm_err(&sdev->base,
 				"quarantine: %s +0x%x (0x%08x, page %u): 0x%08x -> 0x%08x\n",
-				o->name, i * 4, o->km.dev_addr + i * 4, i / (PAGE_SIZE / 4),
+				o->name, i * 4, o->km.dev_addr + i * 4, (u32)(i / (PAGE_SIZE / 4)),
 				q_pattern(i), v);
 		/* Re-arm: a later write is reported again. */
 		WRITE_ONCE(w[i], q_pattern(i));
