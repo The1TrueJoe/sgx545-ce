@@ -13,31 +13,23 @@
 #include "sgxws.h"
 
 /* SGX_DEBUG=flag,flag... (sgx_drv_debug_options in sgx_screen.c) */
-#define SGX_DEBUG_FRAME          (1 << 0)
-#define SGX_DEBUG_NIR            (1 << 1)
-#define SGX_DEBUG_DRAW           (1 << 2)
-#define SGX_DEBUG_SYNC           (1 << 3)
-#define SGX_DEBUG_STATS          (1 << 4)
-#define SGX_DEBUG_SERIAL         (1 << 5)
-#define SGX_DEBUG_HANG_ABORT     (1 << 6)
-#define SGX_DEBUG_FLUSH_ALL      (1 << 7)
-#define SGX_DEBUG_NO_VCACHE      (1 << 8)
-#define SGX_DEBUG_NO_F16         (1 << 9)
-#define SGX_DEBUG_NO_DRV_CONSTS  (1 << 10)
-#define SGX_DEBUG_FS_CONST       (1 << 11)
-#define SGX_DEBUG_ATTRS          (1 << 12)
-#define SGX_DEBUG_BLITS          (1 << 13)
-#define SGX_DEBUG_NO_VS_COMPILER (1 << 14)
-#define SGX_DEBUG_NO_FS_COMPILER (1 << 15)
-#define SGX_DEBUG_FLUSH_RT       (1 << 16)
-#define SGX_DEBUG_NO_FF_MEDIUMP  (1 << 17)
-#define SGX_DEBUG_ZERO_COPY      (1 << 18)
-#define SGX_DEBUG_NO_ZLS         (1 << 19)
-#define SGX_DEBUG_NO_ZERO_COPY   (1 << 20)
-#define SGX_DEBUG_NO_LAZY_SCANOUT (1 << 21)
-#define SGX_DEBUG_NO_PHASE_SPLIT (1 << 22)
-#define SGX_DEBUG_NO_F16_SAMPLES (1 << 23)
-#define SGX_DEBUG_TSP_F16        (1 << 24)
+#define SGX_DEBUG_FRAME           (1 << 0)
+#define SGX_DEBUG_NIR             (1 << 1)
+#define SGX_DEBUG_DRAW            (1 << 2)
+#define SGX_DEBUG_SYNC            (1 << 3)
+#define SGX_DEBUG_STATS           (1 << 4)
+#define SGX_DEBUG_SERIAL          (1 << 5)
+#define SGX_DEBUG_HANG_ABORT      (1 << 6)
+#define SGX_DEBUG_FLUSH_ALL       (1 << 7)
+#define SGX_DEBUG_NO_VCACHE       (1 << 8)
+#define SGX_DEBUG_NO_F16          (1 << 9)
+#define SGX_DEBUG_FLUSH_RT        (1 << 10)
+#define SGX_DEBUG_NO_FF_MEDIUMP   (1 << 11)
+#define SGX_DEBUG_NO_ZLS          (1 << 12)
+#define SGX_DEBUG_NO_ZERO_COPY    (1 << 13)
+#define SGX_DEBUG_NO_LAZY_SCANOUT (1 << 14)
+#define SGX_DEBUG_NO_PHASE_SPLIT  (1 << 15)
+#define SGX_DEBUG_NO_F16_SAMPLES  (1 << 16)
 
 extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */
@@ -49,7 +41,7 @@ const char *sgx_dump_code_dir(void);
          fprintf(stderr, "sgx: " __VA_ARGS__);                                 \
    } while (0)
 
-struct sgx_device_features;
+struct sgx_core;
 
 struct sgx_screen {
    struct pipe_screen base;
@@ -78,12 +70,12 @@ struct sgx_screen {
    unsigned n_retired;
 
    /* kmsro: the display device scanout buffers are allocated on */
-   bool zero_copy; /* sgxws_device_info.zero_copy, or SGX_DEBUG says */
+   bool zero_copy; /* sgxws_device_info.zero_copy, unless SGX_DEBUG=nozerocopy */
    struct renderonly *ro;
 
    /* the core: what the kernel reports, and what its entry adds */
    const struct sgxws_device_info *info;
-   const struct sgx_device_features *features;
+   const struct sgx_core *core; /* sgx_core.h */
    char name[48];
 };
 

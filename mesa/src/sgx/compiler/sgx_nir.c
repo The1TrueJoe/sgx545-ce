@@ -53,6 +53,9 @@ static const nir_shader_compiler_options options = {
     * 144 dEQP fragment loops came out wrong on hardware) */
    .force_indirect_unrolling = nir_var_all,
    .force_indirect_unrolling_sampler = true,
+   /* the PDS reads a texture with a varying in a whole vec4 slot from
+    * component 0: the linker mustn't pack another varying in front of it */
+   .io_options = nir_io_dont_optimize_varyings,
 };
 
 const nir_shader_compiler_options *

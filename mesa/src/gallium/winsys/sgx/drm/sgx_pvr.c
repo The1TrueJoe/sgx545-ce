@@ -756,13 +756,10 @@ sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
    d->usse_base_index[0] = 0;
    d->usse_base_index[1] = 10;
    /* The services driver exists only for the CE5300's SGX545 (its system
-    * layer), so its identity is that core's; the limits are powervr_sgx's
-    * LIMITS for the same core. */
+    * layer), so its identity is that core's; the limits are the core's
+    * description (sgxws_dev_create) */
    d->info.core_id = 0x01150000;
    d->info.core_revision = 0x0001000e;
-   d->info.rt_max_width = 2048;
-   d->info.rt_max_height = 2048;
-   d->info.rt_max_samples = 1;
    *out = d;
    return 0;
 

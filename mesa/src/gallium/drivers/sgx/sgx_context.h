@@ -71,8 +71,8 @@ struct sgx_pipe_shader {
     * epilogue is the blend, sgxws_blend) */
    uint64_t *code; /* with the dependent samples' smp put in */
    unsigned n_code, color_reg, temps;
-   /* split around its discard (unless SGX_DEBUG=nophasesplit): code is phase 0 (the
-    * test), code1 phase 1 (the colour, into pa<color_reg>) */
+   /* split around its discard (unless SGX_DEBUG=nophasesplit): code is phase 0
+    * (the test), code1 phase 1 (the colour, into pa<color_reg>) */
    uint64_t *code1;
    unsigned n_code1;
    int discard_pa; /* discards: the depth plane's first PA register; -1 doesn't */
@@ -104,6 +104,7 @@ struct sgx_pipe_shader {
     * sRGB, and swizzling what each sampler view's swizzle says (formats st
     * stores in another, GL_R16 as RGBA8; 0: none) (sgx_fs_for) */
    unsigned srgb;
+   uint32_t srgb_filter; /* of those, the ones it filters (lower_srgb_filter) */
    uint16_t swz[PIPE_MAX_SAMPLERS];
    uint32_t not_bgra; /* units bound to a texture not sampled B, G, R, A
                          ordered (sgx_tex_bgra) */

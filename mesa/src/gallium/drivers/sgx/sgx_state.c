@@ -6,7 +6,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include <dlfcn.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -711,36 +710,6 @@ sgx_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
    struct sgx_context *ctx = sgx_context(pctx);
    uint64_t t0;
 
-   /* SGX_DEBUG=blits: every 255th blit and its caller described (an odd
-    * stride, so alternating kinds show), 40 times */
-   static int blits_left = -1;
-   static unsigned blit_no;
-
-   if (blits_left < 0)
-      blits_left = (sgx_drv_debug & SGX_DEBUG_BLITS) ? 40 : 0;
-   if (blits_left > 0 && blit_no++ % 255 == 0) {
-      Dl_info dl;
-      void *ra = __builtin_return_address(0);
-
-      blits_left--;
-      if (dladdr(ra, &dl))
-         fprintf(stderr, "sgx blit %u caller %s+%#lx (%s)\n", blit_no - 1,
-                 dl.dli_fname,
-                 (unsigned long)((char *)ra - (char *)dl.dli_fbase),
-                 dl.dli_sname ? dl.dli_sname : "?");
-      fprintf(
-         stderr,
-         "sgx blit %u: %s %ux%u%s (%d,%d %dx%d) -> %s %ux%u%s (%d,%d %dx%d) filter %u mask %#x scissor %d\n",
-         blit_no - 1, util_format_short_name(info->src.format),
-         info->src.resource->width0, info->src.resource->height0,
-         sgx_resource(info->src.resource)->texture ? " texture" : "",
-         info->src.box.x, info->src.box.y, info->src.box.width,
-         info->src.box.height, util_format_short_name(info->dst.format),
-         info->dst.resource->width0, info->dst.resource->height0,
-         sgx_resource(info->dst.resource)->texture ? " texture" : "",
-         info->dst.box.x, info->dst.box.y, info->dst.box.width,
-         info->dst.box.height, info->filter, info->mask, info->scissor_enable);
-   }
    if (sgx_blit_gpu(pctx, info)) {
       ctx->stats.blit_gpu++;
       return;

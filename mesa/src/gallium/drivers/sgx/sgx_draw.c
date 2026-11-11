@@ -186,13 +186,11 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
    struct sgx_screen *screen = sgx_screen(pctx->screen);
    bool have_depth = ctx->framebuffer.zsbuf.texture != NULL;
 
-   SGX_DBG(DRAW, "clear %#x (%.3f %.3f %.3f %.3f) depth %.3f\n", buffers,
-           color->f[0], color->f[1], color->f[2], color->f[3], depth);
-   if (sgx_drv_debug & SGX_DEBUG_ATTRS)
-      fprintf(stderr,
-              "sgx clear %#x mask %#x depth %.3f, %u draws in the frame\n",
-              buffers, color_clear_mask, depth,
-              ctx->hw ? sgxws_frame_objects(ctx->hw) : 0);
+   SGX_DBG(DRAW,
+           "clear %#x mask %#x (%.3f %.3f %.3f %.3f) depth %.3f, %u draws in "
+           "the frame\n",
+           buffers, color_clear_mask, color->f[0], color->f[1], color->f[2],
+           color->f[3], depth, ctx->hw ? sgxws_frame_objects(ctx->hw) : 0);
    /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
     * b3); a buffer without alpha keeps its X byte written. A colour clear
     * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
@@ -230,8 +228,10 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
    if (begin_frame(ctx, zs_cleared)) {
       static const float black[4];
 
-      /* The ISP starts every render at depth 1.0 (render details +0x40), so
-       * a depth clear only needs drawing when it is not 1.0. */
+      /* A render that loads no depth starts at 1.0 (render details +0x40):
+       * sgxws_clear skips a 1.0 depth clear there.  A depth-only clear of a
+       * stencil format loads the stencil, and the depth with it, so it's
+       * drawn (ioquake3 starts every frame so). */
       /* a buffer without alpha reads it as 1 wherever it's sampled: clear the X
        * byte to that */
       float rgba[4] = {color->f[0], color->f[1], color->f[2], color->f[3]};
@@ -716,8 +716,10 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
 
          v = !view ? 1.0f
              : (k->k - SGX_K_TEXSIZE) & 1
-                ? (float)u_minify(view->texture->height0, view->u.tex.first_level)
-                : (float)u_minify(view->texture->width0, view->u.tex.first_level);
+                ? (float)u_minify(view->texture->height0,
+                                  view->u.tex.first_level)
+                : (float)u_minify(view->texture->width0,
+                                  view->u.tex.first_level);
       }
       uint32_t bits,
          *at[2] = {k->slot != 0xffff ? &block[base + k->slot] : NULL,
@@ -1511,10 +1513,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
    } else if (ctx->vs->kind != SGX_SHADER_VS_POSITION) {
       return;
    }
-   /* SGX_DEBUG=fsconst (measuring): every fragment shader a constant colour */
-   bool exp_fs_const = sgx_drv_debug & SGX_DEBUG_FS_CONST;
-
-   if (fs->kind == SGX_SHADER_COMPILED && !exp_fs_const) {
+   if (fs->kind == SGX_SHADER_COMPILED) {
       fsp = fs->prog;
       if (blend) {
          fsp.code = sgx_fs_program(ctx, fs, blend);
@@ -1526,22 +1525,6 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                      : blend && blend->blend ? 1
                                              : 0;
       d.fs = &fsp;
-      /* SGX_DEBUG=tspf16: the sets the fragment program iterates as F16 and
-       * doesn't sample from, F16 for the TSP as the DDK marks them (a set
-       * sampled with its bit set reads a constant coordinate) */
-      if (sgx_drv_debug & SGX_DEBUG_TSP_F16) {
-         uint32_t f16 = 0, sampled = 0;
-
-         for (unsigned i = 0; i < fsp.n_douti; i++) {
-            const struct sgx_pds_douti *di = &fsp.douti[i];
-
-            if (di->sample_set)
-               sampled |= 1u << (di->sample_set - 1);
-            if (di->iterate && di->prec1 && di->src >= 1 && di->src <= 10)
-               f16 |= 1u << (di->src - 1);
-         }
-         d.tsp_f16 = f16 & ~sampled;
-      }
       if (fs->mem_dwords)
          mem_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, &d.fs_mem);
       else
@@ -1626,19 +1609,8 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
             "sgx: blending and colour masks need a compiled fragment shader\n");
          ctx->warned_blend = true;
       }
-      switch (exp_fs_const ? SGX_SHADER_FS_CONSTANT : fs->kind) {
+      switch (fs->kind) {
       case SGX_SHADER_FS_CONSTANT:
-         if (exp_fs_const) {
-            /* a colour per fragment program, so each shader's objects show
-             * as flat silhouettes */
-            uint32_t h = (uint32_t)(uintptr_t)fs * 2654435761u;
-
-            color[0] = ((h >> 8) & 0xff) / 255.0f;
-            color[1] = ((h >> 16) & 0xff) / 255.0f;
-            color[2] = ((h >> 24) & 0xff) / 255.0f;
-            color[3] = 1.0f;
-            break;
-         }
          memcpy(color, fs->color, sizeof(color));
          break;
       case SGX_SHADER_FS_UNIFORM: {
@@ -1708,66 +1680,6 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
          d.vs = f[e].dwords == 2 ? &ctx->vs_xy : &ctx->vs_xyz;
       }
       vertex_dwords += f[e].dwords;
-   }
-   /* SGX_DEBUG=attrs: the vertex elements of the first 16 draws of 200 or more
-    * vertices with 4 or more inputs (a terrain chunk's) */
-   {
-      static int left = -1;
-
-      if (left < 0)
-         left = (sgx_drv_debug & SGX_DEBUG_ATTRS) ? 16 : 0;
-      if (left > 0 && compiled && n_fetch >= 4 && draws[0].count >= 200) {
-         left--;
-         fprintf(
-            stderr,
-            "sgx attrs: %s x%u start %u index_size %u; depth func %#x write %d, cull %#x front_ccw %d, "
-            "pass %u, blend %d wmask %#x, fs douti %u\n",
-            u_prim_name(info->mode), draws[0].count, draws[0].start,
-            info->index_size, st.depth_func, st.depth_write, st.cull,
-            st.front_ccw, st.pass_type, blend ? blend->blend : 0, epi.wmask,
-            d.fs ? d.fs->n_douti : 0);
-         for (unsigned u = 0; u < PIPE_MAX_SAMPLERS; u++) {
-            struct pipe_sampler_view *view = ctx->views[u];
-
-            if (view)
-               fprintf(
-                  stderr,
-                  "  sampler %u: %s %ux%u levels %u sampleable %d texture %d\n",
-                  u, util_format_short_name(view->format),
-                  view->texture->width0, view->texture->height0,
-                  view->texture->last_level + 1,
-                  sgx_resource_sampleable(sgx_resource(view->texture)),
-                  sgx_resource(view->texture)->texture);
-         }
-         for (unsigned e = 0; e < n_fetch; e++) {
-            const struct pipe_vertex_element *ve = &ctx->velems->elements[e];
-            uint32_t val[4];
-
-            fetch_vertex(&f[e], info->index_size ? 0 : draws[0].start, val);
-            fprintf(
-               stderr,
-               "  el %u: %s stride %u offset %u divisor %u vb %u %s -> %f %f %f %f\n",
-               e, util_format_short_name(f[e].format), f[e].stride, f[e].offset,
-               ve->instance_divisor, ve->vertex_buffer_index,
-               f[e].res ? "buffer" : "client", uif(val[0]), uif(val[1]),
-               uif(val[2]), uif(val[3]));
-         }
-         {
-            const float *cb = constant_data(ctx, MESA_SHADER_VERTEX);
-
-            fprintf(stderr, "  vs constants (buffer %u floats):",
-                    ctx->constants[MESA_SHADER_VERTEX].buffer_size / 4);
-            for (unsigned i = 0; i < ctx->vs->n_consts; i++)
-               fprintf(
-                  stderr, " k%u>sa%u=%g", ctx->vs->consts[i].k,
-                  ctx->vs->consts[i].slot,
-                  cb && ctx->vs->consts[i].k <
-                           ctx->constants[MESA_SHADER_VERTEX].buffer_size / 4
-                     ? cb[ctx->vs->consts[i].k]
-                     : -999.0);
-            fprintf(stderr, "\n");
-         }
-      }
    }
    if (compiled && fs->kind == SGX_SHADER_COMPILED &&
        !varyings_match(d.vs, d.fs)) {
