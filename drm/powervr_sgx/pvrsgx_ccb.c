@@ -123,6 +123,20 @@ void pvrsgx_ccb_after_invalidate(struct pvrsgx_device *sdev, struct pvrsgx_inval
 	spin_unlock_irqrestore(&sdev->inval_lock, flags);
 }
 
+/* For status dumps: how much work still waits for an invalidate. */
+u32 pvrsgx_ccb_inval_pending(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_inval_wait *w;
+	unsigned long flags;
+	u32 n = 0;
+
+	spin_lock_irqsave(&sdev->inval_lock, flags);
+	list_for_each_entry(w, &sdev->inval_waits, node)
+		n++;
+	spin_unlock_irqrestore(&sdev->inval_lock, flags);
+	return n;
+}
+
 /*
  * Run what waited for an invalidate the microkernel has now taken; all of it
  * once the GPU is stopped. A restart empties the ring, so everything sent

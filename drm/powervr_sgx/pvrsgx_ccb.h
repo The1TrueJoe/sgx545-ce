@@ -47,5 +47,6 @@ void pvrsgx_ccb_reset(struct pvrsgx_device *sdev);
 void pvrsgx_ccb_after_invalidate(struct pvrsgx_device *sdev, struct pvrsgx_inval_wait *w,
 				 u32 cache_control);
 void pvrsgx_ccb_inval_reap(struct pvrsgx_device *sdev, bool all);
+u32 pvrsgx_ccb_inval_pending(struct pvrsgx_device *sdev);
 
 #endif /* PVRSGX_CCB_H */
