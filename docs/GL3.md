@@ -334,14 +334,19 @@ Agreed with the compiler (2026-11-11):
   dependent sample at (i + 0.5) / size with its own texture state from the
   driver (NEAREST, no mips, clamp, the level's address), never the bound
   sampler's filter or wrap; the compiler marks those samples.
-- **Driver constants** (above the compiler's 1024 user constants, once its
-  constant space is raised): 1024 + 3u the base level's width, height and
-  depth of unit u (0-15), 1072 gl_InstanceID, 1080 + n UBO n's GPU address
-  (`ubo_base_k`, up to 16), the rest of 1024-1279 reserved. Until then
-  `SGX_K_TEXSIZE` (1000) and `SGX_K_INSTANCE` (1016) stay. The compiler's
-  `sgx_lower_tex` runs first (textureGrad, offsets, rect, 1D, texelFetch);
-  a texelFetch sample (`sgx_sample_info.fetch`) gets NEAREST, MIPMAP_NEAREST
+- **Driver constants**, all under the compiler's 1024 (user constants end
+  near 548): 896 + 3u the base level's width, height and depth of unit u
+  (0-15); 944 + n UBO n's GPU address (`ubo_base_k` = 944, up to 16); 960 +
+  4s the border colors; 1000-1015 today's `SGX_K_TEXSIZE` until the 896 block
+  replaces it; 1016 gl_InstanceID. Under `native_integers` the sizes and
+  gl_InstanceID are raw integers, otherwise floats. The compiler's
+  `sgx_lower_tex` runs first (textureGrad, offsets, rect, 1D, texelFetch); a
+  texelFetch sample (`sgx_sample_info.fetch`) gets NEAREST, MIPMAP_NEAREST
   and clamp on the bound texture.
+- **Render-target formats:** the fragment variant is keyed on the bound
+  surfaces' formats; the compiler's color epilogue packs each output into
+  its surface's 32-bit word, and the driver names the o register of each
+  output (o0 alone until H1).
 - **UBOs:** `load_ubo` is an `ld.a.d` from the address in constant
   `ubo_base_k + n`.
 - **Integer varyings** pass as two exact 16-bit halves until a test shows
@@ -350,9 +355,8 @@ Agreed with the compiler (2026-11-11):
 
 Still open:
 
-- how a fragment program writes a packed render-target format (a lowering
-  the driver keys on the bound surfaces' formats, as sRGB decoding is keyed
-  on the sampler views today), and later its outputs o1-o7;
+- the o registers of outputs past the first, and of formats wider than 32
+  bits (H1);
 - transform feedback turns Mesa's varying packing back on: st disables
   packing only while `EXT_transform_feedback` is off (`st_extensions.c`, next
   to `max_tex_indirections`). The compiler's varying map has to handle packed
