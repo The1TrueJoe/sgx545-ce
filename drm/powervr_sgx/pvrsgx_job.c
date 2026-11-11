@@ -122,6 +122,21 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
 	return done;
 }
 
+/*
+ * A page fault stalls the faulting requestor, and the SGX545 raises no host
+ * event for it: check the BIF here, and end the job at once rather than at its
+ * timeout. Only while jobs are out, so the core is powered.
+ */
+static bool pvrsgx_job_fault_check(struct pvrsgx_device *sdev)
+{
+	if (READ_ONCE(sdev->faulted) || !READ_ONCE(sdev->powered) ||
+	    !(sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & sdev->cr->bif_int_stat_fault_req))
+		return false;
+	WRITE_ONCE(sdev->faulted, true);
+	drm_sched_fault(&sdev->sched);
+	return true;
+}
+
 /* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 {
@@ -164,6 +179,8 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 
 	if (reap)
 		queue_work(system_dfl_wq, &sdev->reap_work);
+	if (more && pvrsgx_job_fault_check(sdev))
+		return;
 	if (more)
 		mod_delayed_work(system_dfl_wq, &sdev->poll_work, 1);
 }
@@ -267,12 +284,18 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 {
 	struct pvrsgx_job *bad = to_pvrsgx_job(sched_job), *job, *tmp;
 	struct pvrsgx_device *sdev = bad->ctx->sdev;
+	bool fault = READ_ONCE(sdev->faulted);
 	unsigned long flags;
 	u32 failed = 0;
 
 	drm_sched_stop(&sdev->sched, sched_job);
-	drm_err(&sdev->base, "job timed out (ccb %llu, consumed %llu); resetting\n",
-		bad->ccb_seq, pvrsgx_ccb_consumed(sdev));
+	if (fault)
+		drm_err(&sdev->base, "job page fault at 0x%08x (BIF status 0x%08x); resetting\n",
+			sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK,
+			sgx_rd(sdev, SGX_CR_BIF_INT_STAT));
+	else
+		drm_err(&sdev->base, "job timed out (ccb %llu, consumed %llu); resetting\n",
+			bad->ccb_seq, pvrsgx_ccb_consumed(sdev));
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
 	pvrsgx_coredump(sdev, bad);
 
@@ -283,7 +306,7 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		failed++;
 		if (job->ctx != bad->ctx)
 			WRITE_ONCE(job->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_INNOCENT);
-		dma_fence_set_error(job->hw_fence, job == bad ? -ETIME : -ECANCELED);
+		dma_fence_set_error(job->hw_fence, job != bad ? -ECANCELED : fault ? -EFAULT : -ETIME);
 		dma_fence_signal_locked(job->hw_fence);
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
@@ -296,6 +319,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	 */
 	sdev->reset_count++;
 	sdev->fw_running = false;
+	/* The restart's reset clears the BIF's fault state. */
+	WRITE_ONCE(sdev->faulted, false);
 	if (pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not restart: device lost\n");
 		sdev->lost = true;

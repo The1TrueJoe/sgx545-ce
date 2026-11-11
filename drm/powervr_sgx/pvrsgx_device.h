@@ -165,6 +165,8 @@ struct pvrsgx_device {
 	u32 fw_gen;
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
+	/** @faulted: The BIF reported a page fault; the running job ends with -EFAULT. */
+	bool faulted;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
