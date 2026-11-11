@@ -1,5 +1,8 @@
 # OpenGL 3.0, 3.1 and 3.2 on the SGX545: what the hardware does
 
+The target is GL 3.1; 3.2 is not planned, since no hardware geometry-shader
+path is known (see "Verdict").
+
 For each feature that GL 3.0, 3.1 and 3.2 add, this says whether the SGX545
 does it in hardware, what the driver does if it doesn't, the evidence for
 both, and the test that would settle what is open. The verdict and the order
@@ -133,7 +136,7 @@ Formats wider than 32 bits, and more than one draw buffer, need either:
 | occlusion queries (GL 1.5, `SAMPLES_PASSED`) | **listed** (ICD, DDK GL: `ARB_occlusion_query`); no capture, no register known | **H5**. No good fallback: a fragment program can't count without atomics; `ANY_SAMPLES_PASSED` could be a store of 1 under a translucent pass, which shades in order | listed only | low |
 | `ARB_shader_texture_lod` | `smp .lod` and `.grad` forms exist | compiler | ISA.md smp (encoder; `tex_lod` corpus) | medium (compiler) |
 | `ARB_map_buffer_range`, `ARB_framebuffer_object` | — | gallium generic; FBO needs mixed attachment sizes, which the render target handles by its own size | — | high |
-| `MAX_SAMPLES` ≥ 4 (`EXT_framebuffer_multisample`) | TE AA b30-31 = 2× in X / Y; PBE word 2 b30-31 = downscale; **listed** (ICD: 4) | 4× by rendering at 2×2 and downsampling in the PBE (**H6**, or a DDK ES2 capture with a 4-sample EGL config). Mesa's fake MSAA (`caps->fake_sw_msaa`) passes the gate with one sample; whether that is honest enough is Joseph's call | STATE.md §1 tail (+0x238: unconfirmed), §4 (unconfirmed) | medium |
+| `MAX_SAMPLES` ≥ 4 (`EXT_framebuffer_multisample`) | TE AA b30-31 = 2× in X / Y; PBE word 2 b30-31 = downscale; **listed** (ICD: 4) | 4× by rendering at 2×2 and downsampling in the PBE (**H6**, or a DDK ES2 capture with a 4-sample EGL config). Mesa's fake MSAA (`caps->fake_sw_msaa`) would pass the gate with one sample; it isn't used | STATE.md §1 tail (+0x238: unconfirmed), §4 (unconfirmed) | medium |
 | 8 clip distances | 6 planes in the TA (`fdpc` → cp0-5, output select b0-5) | 7 and 8 lowered to a discard (`nir_lower_clip_fs`) | STATE.md §3 "Clip planes" (capture) | high |
 
 ## GL 3.1
@@ -202,8 +205,8 @@ style), unless it says capture. In order of how much each unblocks:
 ## Verdict
 
 - **GL 3.0 can be exposed honestly** if H1 (or the pass-per-target fallback)
-  gives four or more color outputs, and multisampling is settled (H6, or
-  Joseph accepts Mesa's fake MSAA). Everything else in 3.0 has a path that
+  gives four or more color outputs, and real 4× multisampling works (H6).
+  Mesa's fake MSAA (`fake_sw_msaa`) is not an option. Everything else in 3.0 has a path that
   needs no fact we lack: shader packing for ≤ 32-bit float and integer
   targets, the 0x12 and unorm sampler formats plus shader conversion for
   sampling, st's RGTC decompression, sRGB in the shader, CPU-side vertex
@@ -213,23 +216,23 @@ style), unless it says capture. In order of how much each unblocks:
 - **GL 3.1 adds nothing the hardware has to do** beyond 3.0: instancing by
   per-instance draws, UBOs by `ld.a.d` (which runs today), snorm by shader
   conversion, primitive restart on the CPU. It's driver and compiler work.
-- **GL 3.2 is possible only with geometry shaders on the CPU** (the `draw`
-  module), depth clamp through gl_FragDepth, and seamless cube maps in the
-  shader unless H8 finds a bit. That's honest (everything passes, slowly), but
-  a geometry shader draw would run at CPU speed on an Atom. Exposing 3.2 is a
-  decision for Joseph once 3.1 passes.
+- **GL 3.2 is not planned.** No hardware geometry-shader path is known, and
+  running geometry shaders on the CPU (the `draw` module) was ruled out
+  (decision, 2026-11-11). Depth clamp, seamless cube maps and the other 3.2
+  pieces in the table above stay recorded, but nothing is built for them.
 
-**Target: GL 3.1 (GLSL 1.40), with 3.2 as a follow-up decision.** Until MRT
-works, Mesa's version stays at 2.1, but each extension below can be exposed on
-its own as it passes.
+**Target: GL 3.1 (GLSL 1.40).** Until MRT and MSAA work, Mesa's version stays
+at 2.1, but each extension below can be exposed on its own as it passes. The
+pieces a clean 3.1 needs: real 4× MSAA (H6), occlusion queries (H5), MRT and
+the render and sampler formats (H1-H3), transform feedback (H4), UBOs,
+instancing and primitive restart.
 
 What's emulated, in one list: RGTC (st), R11G11B10F / RGB9E5 sampling (shader
 unpack), snorm (shader), integer sampling (shader scale or `ld`), sRGB
 (shader), float filtering beyond what the TPU filters (four taps), primitive
 restart and provoking vertex (CPU), instancing (one draw per instance),
 texture arrays (dependent samples at a layer address), clip distances 7-8
-(discard); and for 3.2, geometry shaders (CPU), depth clamp (gl_FragDepth),
-seamless cubes (shader).
+(discard).
 
 ## Order of work
 
@@ -245,12 +248,14 @@ behind its cap only when piglit and dEQP pass it.
 3. Instancing by per-instance draws, `gl_InstanceID` from a driver constant
    (see "Status").
 4. UBOs (the driver's half: addresses in SA; the compiler's half: `ld.a.d`).
-5. The box tests, in the order H1, H2, H4, H6, H5 (one slot covers H1-H3).
+5. The box tests: H2 and H1 (one slot covers H1-H3), H6 (first as a DDK
+   capture with a 4-sample EGL config: under powervr_sgx the kernel computes
+   TE AA and allows one sample), H5, H4.
 6. Render targets: shader packing for 32-bit float and integer formats, then
    MRT once H1 says how.
 7. Float and integer sampling formats (H2), texture arrays, transform feedback
    (H4), occlusion queries (H5), conditional render.
-8. Then 3.2's pieces, if Joseph wants 3.2.
+8. GL 3.2 is not planned (see "Verdict").
 
 ## Status
 
