@@ -218,6 +218,12 @@ the vendor driver's behavior, **[G]** a working guess.
 Anything else that differs between cores becomes a field of `struct sgx_core`
 read in one place, never a test of the core's id.
 
+One build-time value is per core too: the services backend's `SGX_CORE_REV`
+(`mesa/src/gallium/winsys/sgx/drm/meson.build`, with `-DSGX545`). It selects
+the vendor kernel's structure layouts, so it follows that kernel's build, not
+the revision the core reports (the CE5300's services build uses 1013 while the
+core reports 1.0.14). powervr_sgx doesn't use it.
+
 ### The compiler
 
 - **USSE1 cores** (SGX530, 531, 535, 540): the same instruction families as
