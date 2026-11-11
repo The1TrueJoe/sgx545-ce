@@ -69,6 +69,11 @@ jobs:
           set -eux
           cd assets
           rm -f SHA256SUMS
+          # GitHub serves a ~ in an asset name as a dot; name the files that
+          # way first so SHA256SUMS checks against a plain download
+          for f in *.deb; do
+            case $f in *'~'*) mv -- "$f" "$(printf '%s' "$f" | tr '~' '.')" ;; esac
+          done
           sha256sum -- *.deb > SHA256SUMS
           cat SHA256SUMS
 
@@ -95,3 +100,8 @@ jobs:
           gh release create "$TAG" assets/*.deb assets/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
             --title "powervr_sgx $VERSION" --notes-file notes.md
+          # every name in SHA256SUMS is a file the draft serves
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -vx SHA256SUMS | sort > served.txt
+          awk '{print $2}' assets/SHA256SUMS | sort > listed.txt
+          diff listed.txt served.txt

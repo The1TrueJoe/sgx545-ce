@@ -22,6 +22,9 @@ The packages take their versions from the tag:
 A tag is `v` and a version that starts with a digit: digits, letters, dots, `+` and
 `-`. A `-` becomes `~` in the package versions, so a pre-release sorts before its release
 (`v0.2.0-rc1` gives `0.2.0~rc1`, which apt treats as older than `0.2.0`).
+GitHub doesn't keep a `~` in a file name, so the release files carry a `.`
+there (`sgx545-firmware_0.2.0.rc1_all.deb`). `SHA256SUMS` lists those names,
+and the package inside still says `0.2.0~rc1`.
 
 ## Steps
 
