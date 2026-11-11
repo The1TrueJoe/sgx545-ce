@@ -1577,6 +1577,9 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
             return;
          }
          sgx_tex_words(view, ctx->samplers[unit], &fsk[fs->dep_sa[j]]);
+         /* an F16 texel: the whole T3, as for a PDS sample's */
+         if (fs->dep_f16[j])
+            fsk[fs->dep_sa[j] + 3] = 0x01028800u;
          sgx_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
          sampled |= 1u << unit;
          SGX_DBG(

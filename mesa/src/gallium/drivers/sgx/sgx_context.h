@@ -80,6 +80,8 @@ struct sgx_pipe_shader {
     * and its sampler */
    unsigned dep_sa[SGX_MAX_DEP_SAMPLES], dep_sampler[SGX_MAX_DEP_SAMPLES],
       n_deps;
+   /* the texel comes back F16 into two registers (T3 01028800) */
+   bool dep_f16[SGX_MAX_DEP_SAMPLES];
    struct {
       struct sgxws_blend key;
       uint32_t code;

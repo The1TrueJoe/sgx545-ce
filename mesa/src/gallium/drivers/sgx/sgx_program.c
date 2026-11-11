@@ -455,6 +455,7 @@ struct prog_info {
    struct {
       unsigned at, sampler, raw;
       unsigned phase; /* split: at indexes code1 */
+      bool f16;       /* the texel returns F16, two registers from raw */
       uint64_t smp;
    } deps[SGX_MAX_DEP_SAMPLES];
    unsigned n_deps;
@@ -561,6 +562,7 @@ read_program(const struct sgx_shader *out, struct sgx_pipe_shader *so,
       info->deps[info->n_deps].raw = x->reg;
       info->deps[info->n_deps].smp = x->smp;
       info->deps[info->n_deps].phase = x->phase;
+      info->deps[info->n_deps].f16 = x->f16;
       info->n_deps++;
    }
    for (unsigned i = 0; i < out->n_blocks; i++) {
@@ -945,6 +947,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          for (unsigned j = 0; j < info.n_deps; j++) {
             so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
             so->dep_sampler[j] = info.deps[j].sampler;
+            so->dep_f16[j] = info.deps[j].f16;
             sa[j] = so->dep_sa[j];
          }
          so->n_deps = info.n_deps;
