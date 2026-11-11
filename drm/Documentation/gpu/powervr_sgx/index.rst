@@ -53,14 +53,76 @@ map.
 
 USSE programs run only from code objects. A code object has no CPU mapping and
 can't be exported, and the GPU sees it read-only. Its contents arrive through
-``UPLOAD_CODE``, which checks every instruction against the instruction forms
-the driver knows. Register-file loads and stores, and branches out of the
-object, are refused.
+``UPLOAD_CODE``, which validates them (see `Shader validation`_).
 
 dma-bufs are exported and imported with the shmem helpers. An imported object
 maps in any heap a data object maps in. A CPU mapping of an exported dma-buf
 needs ``DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS``, as a mapping through the DRM
 file does.
+
+Shader validation
+=================
+
+The GPU's page tables keep a client's memory accesses to its own VM, but a USSE
+program can also read and write the core's own registers (``ldr``, ``str``),
+the page directory bases among them, which the page tables can't stop. So the
+kernel decides which USSE code may run for a client.
+
+**Where client code runs from.** A USSE task starts at one of the 16 USE code
+bases plus an offset, both taken from a ``DOUTU`` word of a PDS program. PDS
+programs and their data are client memory and are not checked, so a client can
+name any base and any offset. The offset, like the absolute targets inside
+USSE code, reaches at most 2 MiB past the base. The kernel programs bases 0-9
+onto the pixel shader heap, 10-13 onto the vertex shader heap, 14 the same as
+0, and 15 onto the microkernel's code, which no client page directory maps.
+From bases 0-14, everything within reach is a USSE heap or an address range no
+client can map. The USSE heaps take only code objects. So a client task runs
+code ``UPLOAD_CODE`` checked, or faults.
+
+**What UPLOAD_CODE checks.** Every 8-byte word of an upload, whether or not
+the program's branches reach it, against a table generated from the isaspec
+description of the instruction set that Mesa's compiler uses
+(``pvrsgx_usse_table.h``):
+
+- The word must be exactly one known form. Fields the compilers leave at one
+  value are pinned to it.
+- Refused outright: register-file access (``ldr``, ``str``); everything that
+  sets or uses the link address (``setl``, ``savl``, ``lapc``, a branch with
+  ``link``), since together they make a computed jump; the absolute branch
+  ``ba``; ``phas`` with a register operand; the mutexes ``lock`` and
+  ``release``, which can stall other tasks; the operand-stepping controls
+  whose effect on operand numbers is not known (``smbo``, ``smr``, ``smoa``,
+  ``imo`` and the register forms of all four with ``smlsi``); dual issue
+  (``fdual``), whose second operation's operands aren't checked; and forms
+  this core doesn't have or whose meaning is not known.
+- ``br``: the target must be inside the object.
+- ``phas.i``: a target other than 0 counts from the USSE heap's base and must
+  be inside the object where it is mapped. The object must be mapped when such
+  code is uploaded, at one place only, and can't be mapped anywhere else
+  afterwards.
+- Each operand: no writes to constants or globals; no reads of the globals
+  past ``g45``, which are not documented; internal registers ``i0``-``i3``
+  and index registers ``idx1``-``idx2`` only.
+
+**What is not checked, and why.** Memory accesses (``ld``, ``st``, texture
+samples, the pixel back end's tile writes through ``emit``, PDS DMA) go
+through the job's page directory, which maps only the client's own objects
+and the parameter buffer, and none of the firmware's. The GPU can't modify a
+code object once it is checked. Code objects are mapped read-only, and the MMU
+faults USSE stores and pixel back end writes to such pages.
+
+**Known gaps.**
+
+- The parameter buffer is one per device and mapped read-write into every
+  client VM, so one client's shader can read or corrupt the scenes other
+  clients are binning.
+- The following are expected but not yet tested on hardware: that a client
+  task's instruction fetch from base 15 faults, and that the read-only PTE
+  bit also stops the depth/stencil store and the tile accelerator.
+- Indexed operands and repeated instructions can step an operand past the
+  128 registers its field names. Whether the hardware keeps such accesses
+  inside the task's own registers is not documented. The compilers need
+  both.
 
 Jobs
 ====
