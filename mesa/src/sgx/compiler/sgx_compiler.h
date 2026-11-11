@@ -9,8 +9,8 @@
  * USP container is not written here: tools/usc/sgx_usp.c builds it from
  * struct sgx_shader for the A/B harness (docs/COMPILER-UPSTREAM.md §3).
  *
- * The input/output conventions are the ones the DDK's driver expects from
- * libusc (ISA.md "What a compiler needs"):
+ * The input/output conventions are the DDK driver's (ISA.md "What a
+ * compiler needs"):
  *  - uniforms: one 32-bit constant per component, constant k of the driver's
  *    constant buffer loaded into sa[base + k] (fragment base 9, vertex 10);
  *  - fragment varyings: iterated by the PDS into pa, F32, one register per
@@ -71,8 +71,7 @@ struct sgx_compile_options {
    unsigned front_sa;
    /* the driver loads constant formats the DDK's driver has no list C kind
     * for (sgx_const_map fmt 0x10 / 0x11): a lowp vector's xyz pre-converted
-    * to F16 and literal constants, where libusc converts once per draw in its
-    * secondary program and keeps literals with the uniforms */
+    * to F16 and literal constants, loaded rather than computed per draw */
    bool driver_consts;
    /* (with f16) every float of a fragment program is mediump, texture
     * coordinates excepted: for programs without precision qualifiers whose

@@ -876,7 +876,7 @@ pair_src(struct sgx_ctx *c, struct sgx_ref a, struct sgx_ref b, int *swz)
       if (w == 0x3c003c00)
          return cref(45);
       if (c->opts->driver_consts && !c->lit_off) {
-         /* a literal in SA, as libusc keeps them beside the uniforms */
+         /* a literal in SA, beside the uniforms */
          unsigned n;
          for (n = 0;
               n < c->n_lits && (c->lit_packed_k[n] >= 0 || c->lit_bits[n] != w);
@@ -1002,7 +1002,7 @@ fmad16(struct sgx_ctx *c, struct sgx_ref dpair, struct sgx_ref s[3][2])
           sp[j][1].file == SGX_F_K && sp[j][1].h16 &&
           ((sp[j][0].n ^ (sp[j][0].neg ? 0x8000 : 0)) & 0xffff) == 0xbc00 &&
           ((sp[j][1].n ^ (sp[j][1].neg ? 0x8000 : 0)) & 0xffff) == 0xbc00) {
-         /* (-1, -1): -c45, as libusc writes it (no limm) */
+         /* (-1, -1): -c45 (no limm) */
          r[j] = cref(45);
          r[j].neg = 1;
          swz[j] = SWZ_LOHI;
@@ -1307,7 +1307,7 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
       struct sgx_ref r[4];
       if (alu->op == nir_op_f2f16) {
          /* an f32 uniform read as F16: pck.f16.f32, two halves at a time,
-          * truncating as libusc's own conversion of one does (hwt_p4) */
+          * truncating (hwt_p4) */
          for (unsigned k = 0; k < nc; k++) {
             r[k] = s[0][k];
             if (r[k].file != SGX_F_U || r[k].h16 || r[k].neg || r[k].abs)
@@ -1357,8 +1357,8 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
       return;
    }
    if (alu->op == nir_op_ffract) {
-      /* fsubflr's f32 result as is (libusc packs it to U8 straight from
-       * f32); an F16 reader converts where it reads it */
+      /* fsubflr's f32 result as is (a U8 pack reads f32); an F16 reader
+       * converts where it reads it */
       struct sgx_ref r[4];
       for (unsigned k = 0; k < nc; k++) {
          unsigned f = new_vreg(c, 1);
@@ -1555,7 +1555,7 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
 /* ------------------------------------------------------------------------
  * co-issue: a sum of vector * scalar terms (mat4 * v: columns times v's
  * components, plus a translation) as efos, two result lanes per instruction,
- * as libusc compiles it (v_mvp). Per lane pair (l0, l1) and term t:
+ * (corpus c3 v_mvp). Per lane pair (l0, l1) and term t:
  *    efo d, M_t[l0], M_t[l1], s_t   m0 = s0*s2, m1 = s1*s2
  * the first with I0/I1 = m0/m1, the others with a0 = m0 + i0, a1 = i1 + m1
  * into I0/I1; the last one's d = a0 is lane l0, and lane l1 is I1, moved out
@@ -2054,7 +2054,7 @@ emit_alu(struct sgx_ctx *c, nir_alu_instr *alu)
    }
    if (alu->op == nir_op_ffloor && ld.dest.is_ssa && !ld.fsat && !c->def_dest &&
        negated_ok(&alu->def)) {
-      /* fsubflr t, c48, x = -floor(x), one instruction (libusc's ceil is
+      /* fsubflr t, c48, x = -floor(x), one instruction (corpus: ceil is
        * fsubflr d, c48, -x); readers take t negated, and ceil's own
        * negations (lower_fceil: -floor(-x)) cancel into it */
       unsigned t = new_vreg(c, 4);
@@ -2380,7 +2380,8 @@ discard(struct sgx_ctx *c, nir_intrinsic_instr *in, bool cond)
 {
    if (cond && c->discard_cmp) {
       /* the only discard, on one comparison: the keep predicate p1 directly
-       * (the inverse condition), as libusc writes it */
+       * (the inverse condition; ISA.md "What a compiler must emit to
+       * discard") */
       nir_alu_instr *cmp = c->discard_cmp;
       int inv = cmp->op == nir_op_sge   ? 25
                 : cmp->op == nir_op_slt ? 6
@@ -2629,8 +2630,8 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_load_uniform: {
       if (!nir_src_is_const(in->src[0])) {
          /* a[i]: pck.s16.f32 t, offset; ima16.sgn idx1, t, #1, #<SA of the
-          * array>; then each component from sa[idx1 + j] (libusc's pattern,
-          * ISA.md "What GLSL integer code compiles to") */
+          * array>; then each component from sa[idx1 + j] (ISA.md
+          * "What GLSL integer code compiles to") */
          unsigned k = nir_intrinsic_base(in), range = nir_intrinsic_range(in);
          for (unsigned j = 0; j < range && k + j < ARRAY_SIZE(c->const_used);
               j++)
@@ -2809,7 +2810,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
       unsigned m = 0;
       if (slot == VARYING_SLOT_PSIZ) {
          /* an f32 output, clamped to the largest point size (docs/STATE.md
-          * "Lines and points"): min(x, 511) as libusc writes it, a constant
+          * "Lines and points"): min(x, 511), a constant
           * at compile time */
          int r = c->out_reg[VARYING_SLOT_PSIZ * 4];
          if (r < 0)
@@ -2851,8 +2852,8 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
    case nir_intrinsic_ddy:
    case nir_intrinsic_ddy_fine:
    case nir_intrinsic_ddy_coarse: {
-      /* fdsx / fdsy d, x, x per component, as libusc writes them (corpus c3
-       * dsx, dsy; st has already flipped dFdy's sign for the target). f32
+      /* fdsx / fdsy d, x, x per component (corpus c3 dsx, dsy;
+       * st has already flipped dFdy's sign for the target). f32
        * only: an F16 source is format-selected, the result rounded back */
       bool y = in->intrinsic == nir_intrinsic_ddy ||
                in->intrinsic == nir_intrinsic_ddy_fine ||
@@ -3339,7 +3340,8 @@ emit_block(struct sgx_ctx *c, nir_block *b, struct loop_labels *loop)
 }
 
 /* an if on a comparison only it reads, computed last in the block before
- * it: test.fsub.<inverse> p0, a, b, as libusc branches, instead of a mask
+ * it: test.fsub.<inverse> p0, a, b (ISA.md "How the corpus builds control
+ * flow"), instead of a mask
  * or 1.0 / 0.0 and a test of that */
 static void
 find_if_compares_cf(struct sgx_ctx *c, struct exec_list *list)
@@ -3664,7 +3666,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          run &= ref_next(&cr[k - 1], &cr[k]);
       if (h16) {
          /* F16 coordinates: smp .f16 (cfmt) reads them two to a register,
-          * as libusc samples a mediump coordinate (corpus tests/f16) */
+          * (corpus tests/f16) */
          s->f16coord = true;
          run = ncoord <= 2 &&
                (cr[0].file == SGX_F_V || cr[0].file == SGX_F_PA) &&
@@ -4201,7 +4203,7 @@ emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d,
       nir_def *cc = c10_src(alu, 2, &n2);
       if (n0 || n1) {
          /* c - a * b: sop3 d, b, c, a [cop=sub c1=one c2=s0 a=one aop=sub],
-          * libusc's x - y * z */
+          * the corpus's x - y * z */
          struct c10v vz = c10_get(c, st, b, true);
          struct c10v vy = c10_get(c, st, a, true);
          struct c10v vx = c10_get(c, st, cc, true);
@@ -4217,7 +4219,7 @@ emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d,
          break;
       }
       /* a * b + c: the product into an internal register (sop3l), then a
-       * sopwm add, as libusc does a lowp mad */
+       * sopwm add (corpus: a lowp mad) */
       nir_def *x = a, *y = b;
       if (!c10_leaf(c, a) && c10_leaf(c, b)) {
          x = b;
@@ -4452,7 +4454,7 @@ emit_color(struct sgx_ctx *c)
       c->colour_pa = 0;
       emit_c10(c, &st, c->c10_root, ref(SGX_F_PA, 0));
       /* internal registers don't survive a deschedule: nosched on all but
-       * the last two instructions of the sequence, as libusc marks it */
+       * the last two instructions of the sequence (found in the A/B runs) */
       unsigned n = 0;
       for (struct list_head *l = before->next; l != &c->ins; l = l->next)
          n++;
@@ -4559,7 +4561,7 @@ emit_color(struct sgx_ctx *c)
       }
       /* (g, r) [dmask=6] and (b, a) [dmask=9] when r, g share a register and
        * b, a another (a vec4 as it is): each pck reads one register, so the
-       * first one's may become the colour (libusc's mul_m) */
+       * first one's may become the colour (corpus mul_m) */
       bool rg = same_reg16(&col[0], &col[1]) && same_reg16(&col[2], &col[3]);
       struct sgx_ref pr[2][2] = {{col[0], col[3]}, {col[2], col[1]}};
       unsigned dm[2] = {12, 3};
@@ -4679,7 +4681,7 @@ merge_runs(struct sgx_ctx *c)
           a->rpt + b->rpt > max_rpt(cls) || a->nops != b->nops ||
           a->ndst != 1 || a->form == SGX_OP_FDP || !same_fields(a, b) ||
           a->writes_pred || b->writes_pred ||
-          /* (libusc never repeats a derivative) */
+          /* (a derivative isn't repeated: corpus c3) */
           a->form == SGX_OP_FDSX || a->form == SGX_OP_FDSY)
          continue;
       bool ok = true;
@@ -4892,9 +4894,9 @@ drop_self_moves(struct sgx_ctx *c)
 
 /* efo chains back to back (mat4 * v, then another): the next chain's first
  * efo stores the previous chain's second lane with d=i1 (the old I1, ISA.md
- * "efo") while it starts its own I0/I1, and the trailing mov goes, as libusc
- * chains v_mvp. The previous chain's last efo becomes nosched so I1
- * survives. Not when the first efo reads what the mov wrote. */
+ * "efo") while it starts its own I0/I1, and the trailing mov goes (capture:
+ * the DDK's terrain vertex program). The previous chain's last efo becomes
+ * nosched so I1 survives. Not when the first efo reads what the mov wrote. */
 static void
 chain_efos(struct sgx_ctx *c)
 {
@@ -5050,8 +5052,8 @@ touch(struct sgx_ctx *c, const struct sgx_ref *r, int at, unsigned span)
 
 /* Temporaries in PA registers the program no longer needs: an input after
  * its last read, any PA register below the count the program has anyway
- * (fragment: iterations and colour; vertex: the attributes it reads), as
- * libusc does it. Fewer temporaries per instance, more instances resident. */
+ * (fragment: iterations and colour; vertex: the attributes it reads).
+ * Fewer temporaries per instance, more instances resident. */
 /* A 32-bit vreg nothing reads or writes as a run (no repeat steps through
  * it) becomes one vreg per component: each is allocated, or placed in PA,
  * for its own live range (a vec4 built a component at a time). */
@@ -5092,7 +5094,7 @@ split_vregs(struct sgx_ctx *c)
 /* A repeat whose source vreg dies here, read at the component its
  * destination writes and stepping with it, writes in place: iteration k
  * reads component k before writing it, and no later iteration reads what an
- * earlier one wrote (libusc's fmad pa0, pa0, pa4, pa8 rpt=4). The
+ * earlier one wrote (corpus: fmad pa0, pa0, pa4, pa8 rpt=4). The
  * destination vreg becomes the source's, so a mat4 * v chain needs one
  * register run, not two. */
 static void
@@ -6506,7 +6508,7 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    c->colour_k = -1;
    memset(c->lit_packed_k, 0xff, sizeof(c->lit_packed_k));
    c->p16 = opts->f16;
-   c->n_labels = 6; /* 3 start, 4 feedback, 5 phase 1: as libusc numbers them */
+   c->n_labels = 6; /* 3 start, 4 feedback, 5 phase 1: the USP's numbers */
    c->sa_base = c->stage == MESA_SHADER_FRAGMENT ? 9 : 10;
    util_dynarray_init(&c->vregs, c);
    util_dynarray_init(&c->words, c);
