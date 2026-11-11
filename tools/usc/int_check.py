@@ -4,7 +4,8 @@ and run through usse_sim.py on random inputs, against exact results.
     python3 -I tools/usc/int_check.py SGXC SGX_DISASM OUTDIR [-n 300]
 
 Each op is `r0 = expr` over ivec4/uvec4 attributes a (pa0-3) and b (pa4-7),
-written to a flat varying (o4-7). A failure is a compiler bug under
+written to a flat varying: an integer one as its 16-bit halves (o4-7 low,
+o8-11 high), a float one in o4-7. A failure is a compiler bug under
 docs/ISA.md's semantics as usse_sim.py models them; the hwt suite
 (tools/isa/hwt_int.py) checks those semantics on the hardware.
 """
@@ -102,7 +103,12 @@ for name, (ty, expr, fn) in OPS.items():
             print(name, "SIM", repr(e)); errs += 1; break
         for k in range(4):
             want = fn(av[k], bv[k]) & M
-            got = sim.r.get(("o", 4 + k))
+            if oty == "vec4":
+                got = sim.r.get(("o", 4 + k))
+            else:
+                # an integer varying: its 16-bit halves as floats, low in o4-7, high in o8-11
+                lo, hi = sim.r.get(("o", 4 + k)), sim.r.get(("o", 8 + k))
+                got = None if lo is None or hi is None else int(U.f(lo)) | int(U.f(hi)) << 16
             if got != want:
                 if errs < 3: print(f"{name}: a={av[k]:#x} b={bv[k]:#x} want {want:#x} got {got if got is None else hex(got)}")
                 errs += 1
