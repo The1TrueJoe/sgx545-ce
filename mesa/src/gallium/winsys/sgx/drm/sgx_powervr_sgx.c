@@ -790,6 +790,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    uint64_t kick_buf[TA_KICKS][(SGX_KMD_STREAM_CMD_TA_KICK_length + 7) / 8];
    struct drm_powervr_sgx_ta_kick kicks[TA_KICKS];
    struct shared_use sh[ARRAY_SIZE(c->use) + 1];
+   struct drm_powervr_sgx_bo_ref refs[ARRAY_SIZE(sh)];
    struct drm_powervr_sgx_sync_op ops[3];
    struct drm_powervr_sgx_job job;
    struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
@@ -840,6 +841,14 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    for (unsigned i = 0; i < c->n_use; i++)
       add_shared(sh, &n_sh, c->use[i].bo, c->use[i].write);
 
+   /* until the kernel flushes imports without it: the shared buffers'
+    * list, which is what makes it flush them around the job */
+   for (unsigned i = 0; i < n_sh; i++)
+      refs[i] = (struct drm_powervr_sgx_bo_ref){
+         .handle = sh[i].bo->handle,
+         .flags = sh[i].write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
+      };
+
    simple_mtx_lock(&dd->lock);
    point = ++dd->point;
    ops[n_ops++] = (struct drm_powervr_sgx_sync_op){
@@ -869,6 +878,9 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       .sync_ops = {.stride = sizeof(ops[0]),
                    .count = n_ops,
                    .array = (uintptr_t)ops},
+      .bo_refs = {.stride = sizeof(refs[0]),
+                  .count = n_sh,
+                  .array = (uintptr_t)refs},
       .ta_kicks = {.stride = sizeof(kicks[0]),
                    .count = TA_KICKS,
                    .array = (uintptr_t)kicks},
