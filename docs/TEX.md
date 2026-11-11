@@ -744,6 +744,13 @@ NEAREST, so each tap that falls outside takes the border before the weights
 mix. The border color is a GL float color. For integer, sRGB and luminance
 formats it goes through the same conversion and swizzle as the texel.
 
+The driver does this since mesa-gallium c01cac3 (`lower_tex_filter`, the
+sRGB filter generalized; the border colors are driver constants at k 960 +
+4 per sampler), for a CLAMP_TO_BORDER texture sampled at one level: one
+tap for NEAREST, four for LINEAR, two in 1D. Mipmapped minification still
+clamps to the edge. It hasn't run on the board yet (**unconfirmed**). A
+native border mode, if the replays find one, replaces it.
+
 ## 14. Volume (3D) textures
 
 - **The SGX545 has them.** The GPL kernel's `sgxfeaturedefs.h` gives the 545
