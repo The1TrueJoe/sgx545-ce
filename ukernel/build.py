@@ -145,15 +145,18 @@ def _encode_asm(items):
 def assemble():
     items, offset, patches = resolve()
     tool = os.environ.get("SGX_ASM")
-    words = _encode_sgxasm(items, tool) if tool else _encode_asm(items)
-    return words, offset, patches
+    if tool:
+        words, used = _encode_sgxasm(items, tool), "sgx-asm"
+    else:
+        words, used = _encode_asm(items), "asm.py"
+    return words, offset, patches, used
 
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), f"{ukernel.CORE_NAME}_ukernel.bin")
     man = sys.argv[2] if len(sys.argv) > 2 else out.rsplit(".", 1)[0] + ".json"
-    words, offset, patches = assemble()
+    words, offset, patches, used = assemble()
     data = b"".join(struct.pack("<II", lo, hi) for lo, hi in words)
     with open(out, "wb") as f:
         f.write(data)
@@ -175,6 +178,8 @@ def main():
         "instructions": len(words),
         "features": features,
         "build_id": build_id,
+        "assembler": used,                  # which assembler emitted the bytes: "sgx-asm"
+                                            # (from sgx.xml, the shipped path) or "asm.py" (oracle)
         "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }
@@ -186,7 +191,7 @@ def main():
         f.write(f"entry event {offset['event'] * 8}\n")   # the event program starts this
         for name, i in patches.items():
             f.write(f"patch {name} {i * 8}\n")
-    print(f"{out}: {len(data)} bytes, {len(words)} instructions")
+    print(f"{out}: {len(data)} bytes, {len(words)} instructions, assembled with {used}")
     print(f"{man}: entries " + ", ".join(f"{k}=0x{v * 8:x}" for k, v in offset.items()))
     print(f"{man}: patches " + ", ".join(f"{k}=0x{v * 8:x}" for k, v in patches.items()))
 

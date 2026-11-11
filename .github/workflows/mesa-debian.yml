@@ -71,7 +71,7 @@ jobs:
           build/mesa/debian/build/src/loader/loader_child_render_node_test
           build/mesa/debian/build/src/loader/loader_cedarview_sysfs_test
 
-      - name: The firmware (the open microkernel, secure mode)
+      - name: The firmware (the open microkernel, secure mode, assembled through sgx-asm)
         env:
           RELEASE: ${{ inputs.release_version }}
         run: |
@@ -79,7 +79,14 @@ jobs:
           v=$(git -c safe.directory='*' rev-parse --short HEAD)
           [ -z "$RELEASE" ] || v=v$RELEASE
           mkdir -p fw
+          # Shipped firmware is assembled through sgx-asm (built from sgx.xml), the
+          # clean-room path, not the asm.py oracle. Reuse the mesa tree the Build
+          # step unpacked (it carries our mesa/src overlays).
+          . mesa/VERSION
+          mesa/tests/isa-standalone/standalone.sh "$PWD/build/mesa/mesa-$MESA_VERSION" "$PWD/isa-build"
+          export SGX_ASM="$PWD/isa-build/sgx-asm"
           python3 ukernel/build.py fw/uk.bin fw/uk.json
+          grep -q '"assembler": "sgx-asm"' fw/uk.json   # the shipped image must come from sgx.xml
           python3 drm/tools/mkukfw.py fw/uk.bin -o sgx545_ukernel.bin --manifest fw/uk.json \
             --core-rev 0 --build-id "ukernel-$v"
           python3 drm/tools/mkukfw.py --check sgx545_ukernel.bin | tee fw/check.txt
