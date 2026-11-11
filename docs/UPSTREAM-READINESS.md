@@ -646,7 +646,54 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
 ## Kernel (powervr_sgx)
 
 Owner: powervr_sgx. `drm/powervr_sgx`, the gma500 patch in `drm/gma500`, the
-uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
+uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08, with
+the RFC series of 2026-11-11 below.
+
+### RFC series (2026-11-11, dry run, not sent)
+
+`[PATCH RFC 0/5] drm/powervr_sgx: DRM driver for PowerVR SGX5xx GPUs`, cut
+from m2-drm by `drm/ci/rfc-series.sh` onto drm-misc-next 41b5458595c6 (b4
+branch `b4/powervr-sgx` in `upstream/sgx-series`, the emails in
+`upstream/sgx-series-dryrun` with `RECIPIENTS.txt`):
+
+1. drm/gma500: Publish the Cedarview SGX as an auxiliary device
+2. drm/gma500: Export GEM objects as dma-bufs
+3. drm/powervr_sgx: Add the uAPI header and its documentation (and MAINTAINERS)
+4. drm/powervr_sgx: Add a driver for PowerVR SGX5xx GPUs (8,111 lines)
+5. drm/powervr_sgx: Add KUnit tests
+
+The driver files are byte-identical to m2-drm; only its Makefile (no
+out-of-tree branch) and Kconfig (no vendor-driver note) differ. checkpatch
+`--strict` per patch: no errors but the missing Signed-off-by; the only
+CHECKs are `TRACE_EVENT` layout in `pvrsgx_trace.h`, and the "MAINTAINERS
+need updating" warnings on 4 and 5 are covered by 3's entry. The same code
+builds clean on drm-misc-next in CI (gcc W=1, sparse, smatch, coccinelle,
+clang W=1, kernel-doc, KUnit). To/Cc from get_maintainer, minus its INTEL SGX
+keyword hit (our `SGX_` names), plus the Rogue maintainers and the
+imagination list.
+
+**Left after the RFC, before a v1 that can merge:**
+- [ ] Joseph signs and sends (one-time permission each time).
+- [ ] The userspace in canonical Mesa (drm-uapi.rst), and its reviewer's
+  Acked-by on the uAPI patch.
+- [ ] The microkernel in linux-firmware (`powervr_sgx/sgx545_ukernel.bin`; the
+  WHENCE draft is in the Firmware section).
+- [ ] A parameter buffer per client (Design, below).
+- [ ] The uAPI tests as an IGT `powervr_sgx` binary.
+- [ ] The driver split by area, each patch building ("The series", below);
+  the RFC carries it as one patch.
+- [ ] About 60 comments point at this repository's docs (`docs/UKERNEL.md`,
+  `docs/SRVINIT.md`, log entries). Upstream needs the facts in the comment or
+  in `Documentation/gpu/powervr_sgx`.
+- [ ] The runtime-PM stopgap (a render context keeps the GPU awake) and F1,
+  both in Design.
+- [ ] System suspend (255f24c: drain, microkernel stop, start on resume) is
+  proven with pm_test on a CE5300 board only; a real S3 on Cedarview is for the
+  testers.
+- [ ] More cores: a DT platform driver for the `img,powervr-sgx` binding, an
+  SGX535 compatible there, and what isn't per-core yet (`docs/porting/kernel.md`,
+  "What a core needs").
+- [ ] The sysfb DIRTYFB change goes on its own (RFC v2 ready, not in this series).
 
 ### Design
 
@@ -670,12 +717,15 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
 - [x] **Firmware name.** The CE5300 entry names
   `powervr_sgx/sgx545_ukernel.bin`, the name agreed with the firmware section
   (one file per core under the module's directory).
-- [ ] **Upstream tree layout.** The uAPI header moves to
-  `include/uapi/drm/powervr_sgx_drm.h` (now a symlink under the driver);
-  `drm/MAINTAINERS.fragment` and `drm/Documentation/gpu/powervr_sgx/` are
-  ready to move.
-- [x] **Module parameters.** Down to `job_timeout_ms` and `reap_after_render`
-  (the second waits on the graveyard policy below).
+- [x] **Upstream tree layout.** `drm/ci/rfc-series.sh` lays the driver out as
+  upstream carries it: `include/uapi/drm/powervr_sgx_drm.h`,
+  `Documentation/gpu/powervr_sgx/`, the MAINTAINERS entry, the drm Kconfig and
+  Makefile hooks.
+- [x] **Module parameters.** Down to `job_timeout_ms` and `overlap` (a
+  render's TA while the same context's previous 3D finishes, default off).
+- [x] **Core families.** The table has the registers that move between SGX5xx
+  cores, the init script, directory lists, address width and ISA per core, and
+  the bus names the core (PCI ID, gma500's per-chip `gma_sgx_info`).
 - [ ] **One parameter buffer per device (cross-client exposure).** Every
   render context of every client shares the device's PB, mapped at the same
   3D-params address in every VM (2c1f6ac), as the DDK shares one PB
@@ -708,9 +758,10 @@ uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08.
   reference for its life, so the GPU stays powered while any GL client is open.
   To find the debug-only path and drop the stopgap, so the GPU can power off
   between frames again.
-- [ ] **Graveyard policy.** Released firmware objects are kept until the next
-  restart unless `reap_after_render`; to settle with open-ukernel whether a
-  later render's completion is enough, then drop the parameter.
+- [x] **Graveyard policy.** Released firmware objects are freed once a later
+  render completes (9798b17, no parameter), everything at a restart; unbind
+  frees the whole chain (4ae6750, KUnit `powervr_sgx_kobj`), and a VM's
+  mappings go with its last user (0f4d7d3).
 
 ### Tools (CI)
 
