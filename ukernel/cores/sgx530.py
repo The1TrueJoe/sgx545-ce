@@ -17,7 +17,7 @@ MISC_CORE = 530
 
 # ---- identity (K) -----------------------------------------------------------
 CR_CORE_ID = 0x10
-CR_CORE_REVISION = 0x14      # expect 0x00010205, rev 125 (D)
+CR_CORE_REVISION = 0x14      # 0x00010205, rev 125 (C: read on the board)
 
 # ---- clock gating (K) -------------------------------------------------------
 CR_CLKGATESTATUS = 0x004     # 0x008 is CLKGATECTLOVR here

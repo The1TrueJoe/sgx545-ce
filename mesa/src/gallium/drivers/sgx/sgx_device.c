@@ -24,19 +24,17 @@ static const struct sgx_device_features sgx_devices[] = {
       .f16 = true,
    },
    {
-      /* Our OMAP3630 test board's: revision 1.2.5 expected (0x00010205).
-       * docs/porting/cores/sgx530.md has each fact and its tag; nothing is
-       * confirmed on the hardware yet (no C tag), so every value below but
-       * core_id is the SGX545's or the safe choice:
-       *   core_id      unknown (gap 1). 0 matches nothing, so the entry is
-       *                inert until the first ID read fills it in.
+      /* Our OMAP3630 test board's: core id 0x01120000, revision 1.2.5
+       * (0x00010205), both read on the board (C in
+       * docs/porting/cores/sgx530.md). Every value but core_id is still the
+       * SGX545's or the safe choice:
        *   limits       the SGX545's, unconfirmed (gap 12).
        *   f16          off: F16 and C10 are unknown on this core (gap 10),
        *                so the compiler emits F32 only.
        * The USSE encodings are the SGX545's (one sgx.xml, no SGX530 gen yet;
        * docs/porting/isa.md), checked by hwt_open on the board (gap 10). */
       .name = "SGX530",
-      .core_id = 0,
+      .core_id = 0x0112,
       .max_texture_size = 2048,
       .max_cube_levels = 12,
       .samplers = 8,
