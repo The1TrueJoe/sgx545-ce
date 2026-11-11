@@ -1,30 +1,24 @@
 From: Joseph Telaak <joseph@telaak.dev>
 Subject: [PATCH] drm/sysfb: Copy damage outside the DIRTYFB ioctl
 
-The sysfb drivers copy a framebuffer's damage to the hardware
-framebuffer with drm_atomic_helper_dirtyfb(), a blocking atomic commit.
-It waits for the framebuffer's fences before the CPU copy, so DIRTYFB
-returns only once the GPU work that last rendered into the framebuffer
-is done.
+The sysfb drivers implement DIRTYFB with drm_atomic_helper_dirtyfb(),
+which runs a blocking commit. The commit waits for the framebuffer's
+fences, so the ioctl doesn't return until the GPU has finished
+rendering into the framebuffer.
 
-X's modesetting driver calls DIRTYFB after every frame it presents.
-With a render GPU next to the display (here, simpledrm with an SGX545
-rendering), the front buffer's newest fence is X's copy of a client's
-window, which waits for the client's frame. With the GPU busy, X's main
-thread then spends most of its time in DIRTYFB, and input and every
-other client wait behind it: with a game running, X took a median
-1.85 s (up to 4 s) to answer a pointer query.
+Xorg's modesetting driver calls DIRTYFB from its main thread after
+every frame. When a separate GPU renders for a sysfb display, X then
+blocks for as long as the GPU takes to render the client's frame. With
+a game running, X took a median of 1.85 s to answer a pointer query.
 
-Make DIRTYFB return at once. Merge its damage into one pending
-rectangle per device, and let a worker hand it to
-drm_atomic_helper_dirtyfb(), which waits for the fences and copies as
-before. Damage that arrives while the worker runs is merged into the
-next run, so none is dropped. Damage for a different framebuffer waits
-for the pending one to be copied first.
+If the framebuffer still has unsignaled write fences, queue the damage
+instead and copy it from a worker. The worker still waits for the
+fences, so nothing unfinished reaches the screen, and damage that
+arrives while a copy is pending is merged into it. Idle framebuffers,
+such as the ones the CPU draws into, are still copied in the ioctl.
 
-With the game running, X now answers in a median 23 ms (53 ms at most),
-the game's frame rate is unchanged, and typing into a terminal next to
-an animating client loses no damage.
+With this change, X answers in a median of 26 ms and the game's frame
+rate is unchanged.
 ---
 --- a/drivers/gpu/drm/sysfb/corebootdrm.c
 +++ b/drivers/gpu/drm/sysfb/corebootdrm.c
@@ -79,15 +73,24 @@ an animating client loses no damage.
  
 --- a/drivers/gpu/drm/sysfb/drm_sysfb_modeset.c
 +++ b/drivers/gpu/drm/sysfb/drm_sysfb_modeset.c
-@@ -12,6 +12,7 @@
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
++#include <linux/dma-resv.h>
+ #include <linux/export.h>
+ #include <linux/slab.h>
+ 
+@@ -11,7 +12,9 @@
+ #include <drm/drm_edid.h>
  #include <drm/drm_fourcc.h>
  #include <drm/drm_framebuffer.h>
++#include <drm/drm_gem.h>
  #include <drm/drm_gem_framebuffer_helper.h>
 +#include <drm/drm_managed.h>
  #include <drm/drm_panic.h>
  #include <drm/drm_print.h>
  #include <drm/drm_probe_helper.h>
-@@ -606,3 +607,156 @@ int drm_sysfb_connector_helper_get_modes(struct drm_connector *connector)
+@@ -606,3 +609,170 @@ int drm_sysfb_connector_helper_get_modes(struct drm_connector *connector)
  	return drm_connector_helper_get_modes_fixed(connector, &sysfb->fb_mode);
  }
  EXPORT_SYMBOL(drm_sysfb_connector_helper_get_modes);
@@ -95,14 +98,23 @@ an animating client loses no damage.
 +/*
 + * Damage
 + *
-+ * DIRTYFB returns at once: the damage is merged into one pending rectangle,
-+ * and a worker hands it to drm_atomic_helper_dirtyfb(). That commit waits for
-+ * the framebuffer's fences, the GPU work that last rendered into it, before
-+ * the CPU copies it to the hardware framebuffer. Done in the ioctl, the wait
-+ * blocks the compositor for as long as that rendering takes. Damage that
-+ * arrives while the worker runs is merged and copied by the next run, so none
-+ * is dropped.
++ * drm_atomic_helper_dirtyfb() waits for the GPU work that last rendered into
++ * the framebuffer before the CPU copies it. Done in DIRTYFB, that wait blocks
++ * the compositor for as long as the rendering takes. So damage of a busy
++ * framebuffer is merged into one pending rectangle, and a worker copies it
++ * once the rendering is done. Damage of an idle framebuffer is copied at once.
 + */
++
++static bool drm_sysfb_fb_busy(struct drm_framebuffer *fb)
++{
++	for (unsigned int i = 0; i < fb->format->num_planes; i++) {
++		struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, i);
++
++		if (obj && !dma_resv_test_signaled(obj->resv, DMA_RESV_USAGE_WRITE))
++			return true;
++	}
++	return false;
++}
 +
 +static void drm_sysfb_damage_work(struct work_struct *work)
 +{
@@ -110,7 +122,7 @@ an animating client loses no damage.
 +						      damage_work);
 +	struct drm_framebuffer *fb;
 +	struct drm_clip_rect clip;
-+	int idx, ret;
++	int ret;
 +
 +	spin_lock(&sysfb->damage_lock);
 +	fb = sysfb->damage_fb;
@@ -123,12 +135,18 @@ an animating client loses no damage.
 +	if (!fb)
 +		return;
 +
-+	if (drm_dev_enter(&sysfb->dev, &idx)) {
-+		ret = drm_atomic_helper_dirtyfb(fb, NULL, 0, 0, &clip, 1);
-+		if (ret)
-+			drm_err_ratelimited(&sysfb->dev, "damage update failed: %d\n", ret);
-+		drm_dev_exit(idx);
++	/* Wait unlocked, so other commits don't queue behind the GPU. */
++	for (unsigned int i = 0; i < fb->format->num_planes; i++) {
++		struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, i);
++
++		if (obj)
++			dma_resv_wait_timeout(obj->resv, DMA_RESV_USAGE_WRITE, false,
++					      MAX_SCHEDULE_TIMEOUT);
 +	}
++
++	ret = drm_atomic_helper_dirtyfb(fb, NULL, 0, 0, &clip, 1);
++	if (ret)
++		drm_err_ratelimited(&sysfb->dev, "damage update failed: %d\n", ret);
 +	drm_framebuffer_put(fb);
 +}
 +
@@ -147,7 +165,7 @@ an animating client loses no damage.
 + * @sysfb: the device
 + *
 + * Call after drmm_mode_config_init(). Framebuffers from drm_sysfb_fb_create()
-+ * then copy their damage outside the DIRTYFB ioctl.
++ * then copy the damage of busy framebuffers outside the DIRTYFB ioctl.
 + *
 + * Returns: 0 on success, or a negative errno.
 + */
@@ -189,34 +207,33 @@ an animating client loses no damage.
 +			      struct drm_clip_rect *clips, unsigned int num_clips)
 +{
 +	struct drm_sysfb_device *sysfb = to_drm_sysfb_device(fb->dev);
++	bool busy = drm_sysfb_fb_busy(fb);
 +	struct drm_rect r;
-+	bool queue = false;
 +
 +	drm_sysfb_damage_bounds(fb, flags, clips, num_clips, &r);
 +
 +	spin_lock(&sysfb->damage_lock);
-+	/* Pending damage of another framebuffer is copied first. */
-+	while (sysfb->damage_fb && sysfb->damage_fb != fb) {
-+		spin_unlock(&sysfb->damage_lock);
-+		flush_work(&sysfb->damage_work);
-+		spin_lock(&sysfb->damage_lock);
-+	}
-+	if (!sysfb->damage_fb) {
-+		drm_framebuffer_get(fb);
-+		sysfb->damage_fb = fb;
-+		sysfb->damage = r;
-+		queue = true;
-+	} else {
++	if (sysfb->damage_fb == fb) {
 +		sysfb->damage.x1 = min(sysfb->damage.x1, r.x1);
 +		sysfb->damage.y1 = min(sysfb->damage.y1, r.y1);
 +		sysfb->damage.x2 = max(sysfb->damage.x2, r.x2);
 +		sysfb->damage.y2 = max(sysfb->damage.y2, r.y2);
++		spin_unlock(&sysfb->damage_lock);
++		return 0;
++	}
++	if (busy && !sysfb->damage_fb) {
++		drm_framebuffer_get(fb);
++		sysfb->damage_fb = fb;
++		sysfb->damage = r;
++		/* Freezable: no copies while the device suspends or resumes. */
++		queue_work(system_freezable_wq, &sysfb->damage_work);
++		spin_unlock(&sysfb->damage_lock);
++		return 0;
 +	}
 +	spin_unlock(&sysfb->damage_lock);
 +
-+	if (queue)
-+		queue_work(system_dfl_wq, &sysfb->damage_work);
-+	return 0;
++	/* Idle, or another framebuffer is pending: copy now. */
++	return drm_atomic_helper_dirtyfb(fb, file, flags, color, clips, num_clips);
 +}
 +
 +static const struct drm_framebuffer_funcs drm_sysfb_fb_funcs = {
