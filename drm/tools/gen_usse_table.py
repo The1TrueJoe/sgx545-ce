@@ -206,11 +206,10 @@ def leaf_forms(root):
 
 def entries(n, mask, match, fields):
     allow = {}
-    for f, vals in ALLOW.get(n, {}).items():
+    for name, vals in ALLOW.get(n, {}).items():
+        f = name if name in fields else OLD_NAMES.get(name)
         if f not in fields:
-            f = OLD_NAMES.get(f)
-        if f not in fields:
-            raise SystemExit('%s: ALLOW names no field %s' % (n, f))
+            raise SystemExit('%s: ALLOW names no field %s' % (n, name))
         allow[f] = vals
     names = sorted(allow)
     for vals in itertools.product(*(allow[f] for f in names)):
