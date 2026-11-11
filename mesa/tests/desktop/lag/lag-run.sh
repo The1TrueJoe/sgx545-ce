@@ -38,7 +38,8 @@ for f in ../desktop-up.sh ../xorg.conf lag-wl.sh lag-box.sh; do
 done
 for v in "$@"; do
 	echo "== $v"
-	E "rm -rf /tmp/lagout/$v; sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" || echo "$v failed"
+	E "rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} \
+		sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" || echo "$v failed"
 	mkdir -p "$OUT/$v"
 	E "cd /tmp/lagout/$v && tar cf - ." | tar xf - -C "$OUT/$v"
 	E "rm -rf /tmp/lagout/$v"
