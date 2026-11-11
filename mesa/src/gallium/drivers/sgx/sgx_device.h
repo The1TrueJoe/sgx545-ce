@@ -28,6 +28,9 @@ struct sgx_device_features {
    unsigned fs_inputs;
    unsigned max_temps;
    bool f16; /* USSE F16 and C10 arithmetic */
+   /* the values aren't all confirmed on this core's hardware yet: the
+    * screen says so once at creation */
+   bool provisional;
 };
 
 /* the features of the core sgxws_dev_info describes, or NULL */

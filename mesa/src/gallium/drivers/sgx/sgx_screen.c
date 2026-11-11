@@ -392,6 +392,9 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
    }
    snprintf(screen->name, sizeof(screen->name), "PowerVR %s",
             screen->features->name);
+   if (screen->features->provisional)
+      mesa_logw("sgx: %s support is provisional: its limits and instruction "
+                "set aren't all confirmed on hardware", screen->features->name);
    screen->ro = ro;
    screen->zero_copy =
       !(sgx_drv_debug & SGX_DEBUG_NO_ZERO_COPY) &&
