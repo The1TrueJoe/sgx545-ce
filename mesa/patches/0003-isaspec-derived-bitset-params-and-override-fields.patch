@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Wed, 11 Nov 2026 04:13:40 -0500
-Subject: [PATCH 1/2] isaspec: allow <param>s on derived fields of bitset type
+Subject: [PATCH 1/3] isaspec: allow <param>s on derived fields of bitset type
 
 A <derived> field may have a bitset type, so that a sub-encoding whose
 bits are scattered across the instruction can be put together by an
@@ -82,7 +82,7 @@ index e5ba462..6d898c2 100644
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Wed, 11 Nov 2026 04:13:40 -0500
-Subject: [PATCH 2/2] isaspec: encode: stop at the override that defines the
+Subject: [PATCH 2/3] isaspec: encode: stop at the override that defines the
  field
 
 Inside the branch for an <override> that defines a field, the encoder
@@ -137,3 +137,74 @@ index 24690f7..8d382c9 100755
          if bitset.extends is not None:
              yield from self.fields(bitset.isa.bitsets[bitset.extends])
  
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Wed, 11 Nov 2026 05:55:43 -0500
+Subject: [PATCH 3/3] isaspec: decode: leave out roots nothing decodes from
+
+The decoder emitted tables for every root bitset and the bitsets under
+it, but decoding only starts from #instruction and from the roots that
+are the type of a field. A root only an encoder uses, such as a data
+word that sits outside the instruction stream, gave the decoder tables
+nothing referenced, and -Wunused-variable / -Wunused-const-variable
+warned. decode.py now drops those roots and their bitsets
+(ISA.drop_undecoded_roots()) before generating; encode.py still sees
+them.
+
+The generated decoders of ir3, etnaviv and qrisc are identical before
+and after (PYTHONHASHSEED fixed). The SGX545 PDS description has six
+encode-only roots, which go away from its decoder.
+---
+ src/compiler/isaspec/decode.py |  1 +
+ src/compiler/isaspec/isa.py    | 26 ++++++++++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/src/compiler/isaspec/decode.py b/src/compiler/isaspec/decode.py
+index 106cc88..589f11a 100644
+--- a/src/compiler/isaspec/decode.py
++++ b/src/compiler/isaspec/decode.py
+@@ -431,6 +431,7 @@ def main():
+     args = parser.parse_args()
+ 
+     isa = ISA(args.xml)
++    isa.drop_undecoded_roots()
+     s = State(isa)
+ 
+     try:
+diff --git a/src/compiler/isaspec/isa.py b/src/compiler/isaspec/isa.py
+index 08bb000..dbf3dfb 100644
+--- a/src/compiler/isaspec/isa.py
++++ b/src/compiler/isaspec/isa.py
+@@ -661,6 +661,32 @@ class ISA(object):
+ 
+         return parts
+ 
++    # Drops the roots decoding never starts from, with their bitsets.
++    # Decoding starts from #instruction and from the roots that are the type
++    # of a field; a root only an encoder uses (such as a data word outside
++    # the instruction stream) would otherwise give the decoder tables nothing
++    # references.
++    def drop_undecoded_roots(self):
++        decoded = {'#instruction'}
++        for _, bitset in self.all_bitsets():
++            for case in bitset.cases:
++                for field in case.fields.values():
++                    if field.type in self.roots:
++                        decoded.add(field.type)
++        drop = {n for n in self.roots if n not in decoded}
++        if not drop:
++            return
++        root_of = {id(b): b.get_root().name for _, b in self.all_bitsets()}
++        self.bitsets = {n: b for n, b in self.bitsets.items()
++                        if root_of[id(b)] not in drop}
++        for name in list(self.leafs):
++            leafs = [b for b in self.leafs[name] if root_of[id(b)] not in drop]
++            if leafs:
++                self.leafs[name] = leafs
++            else:
++                del self.leafs[name]
++        self.roots = {n: r for n, r in self.roots.items() if n not in drop}
++
+     # Returns all bitsets in the ISA, including all per-gen variants, in
+     # (name, bitset) pairs.
+     def all_bitsets(self):
