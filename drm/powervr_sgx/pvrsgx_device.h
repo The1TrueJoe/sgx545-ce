@@ -189,10 +189,6 @@ struct pvrsgx_device {
 	struct list_head active;
 	/** @last_fence: Hardware fence of the job last sent to the firmware. */
 	struct dma_fence *last_fence;
-	/** @last_ctx: That job's context; compared only while @last_fence is pending. */
-	struct pvrsgx_context *last_ctx;
-	/** @last_type: That job's type. */
-	u32 last_type;
 	/** @poll_work: Checks completions while jobs are out. */
 	struct delayed_work poll_work;
 

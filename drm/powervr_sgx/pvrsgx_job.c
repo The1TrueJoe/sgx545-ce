@@ -3,10 +3,8 @@
 
 /*
  * Contexts, jobs and the scheduler. One drm_sched scheduler with a credit limit
- * of one, a single job on the GPU at a time, or two with the overlap parameter:
- * then a render may start while the same context's previous render finishes
- * (pvrsgx_prepare_job; docs/UAPI.md, SUBMIT_JOBS). Each
- * job becomes one kernel CCB command and is complete when the microkernel has
+ * of one: a single job on the GPU at a time. Each job becomes one kernel CCB
+ * command and is complete when the microkernel has
  * finished it; completion is checked from the SW_EVENT interrupt and, since the
  * firmware does not interrupt for every command, from a short poll while jobs
  * are out.
@@ -54,9 +52,6 @@ MODULE_PARM_DESC(job_timeout_ms, "How long a job may run before the GPU is reset
  * finishes. Off until proven: it needs the microkernel to take a TA while a 3D
  * is in flight. A reset then cancels both, and both contexts are refused.
  */
-static bool overlap;
-module_param(overlap, bool, 0444);
-MODULE_PARM_DESC(overlap, "Run a render's TA while the same context's previous 3D finishes (default off)");
 
 static struct pvrsgx_job *to_pvrsgx_job(struct drm_sched_job *sched_job)
 {
@@ -193,28 +188,6 @@ static void poll_work_fn(struct work_struct *work)
 	pvrsgx_job_process_done(sdev);
 }
 
-/*
- * With overlap the scheduler lets two jobs out, from any contexts; the
- * microkernel overlaps a render's TA only with the 3D of the same context's
- * previous render (per RT-data-entry state, one directory). Any other job
- * waits for the job last sent. The job last sent holds its context, so
- * @last_ctx can't be a freed context while @last_fence is pending.
- */
-static struct dma_fence *pvrsgx_prepare_job(struct drm_sched_job *sched_job,
-					    struct drm_sched_entity *s_entity)
-{
-	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
-	struct pvrsgx_device *sdev = job->ctx->sdev;
-	struct dma_fence *last = sdev->last_fence;
-
-	if (!last || dma_fence_is_signaled(last))
-		return NULL;
-	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER &&
-	    sdev->last_type == DRM_POWERVR_SGX_JOB_TYPE_RENDER && sdev->last_ctx == job->ctx)
-		return NULL;
-	return dma_fence_get(last);
-}
-
 static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 {
 	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
@@ -278,8 +251,6 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	trace_pvrsgx_kick(job->type, job->ccb_seq, fence->seqno);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = dma_fence_get(fence);
-	sdev->last_ctx = job->ctx;
-	sdev->last_type = job->type;
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_add_tail(&job->node, &sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
@@ -352,7 +323,6 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 }
 
 static const struct drm_sched_backend_ops pvrsgx_sched_ops = {
-	.prepare_job = pvrsgx_prepare_job,
 	.run_job = pvrsgx_run_job,
 	.timedout_job = pvrsgx_timedout_job,
 	.free_job = pvrsgx_free_job,
@@ -363,7 +333,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	const struct drm_sched_init_args args = {
 		.ops = &pvrsgx_sched_ops,
 		.num_rqs = DRM_SCHED_PRIORITY_COUNT,
-		.credit_limit = overlap ? 2 : 1,
+		.credit_limit = 1,
 		.timeout = msecs_to_jiffies(job_timeout_ms),
 		.name = "powervr_sgx",
 		.dev = sdev->base.dev,
