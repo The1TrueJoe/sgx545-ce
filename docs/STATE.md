@@ -192,12 +192,12 @@ formulas.
 
 | off | ref.bin | field | tag |
 |---|---|---|---|
-| 0x238 | 20000000 | TE AA: `0x20000000`, b31 = x2 multisample in X, b30 = in Y | capture (0x20000000); unconfirmed (b30, b31) |
+| 0x238 | 20000000 | TE AA: `0x20000000`, b31 = x2 multisample in X, b30 = in Y; 4x MSAA sets both (`e0000000`, "Multisampling" below) | capture (0x20000000; `e0000000` with 4 samples) |
 | 0x23c | 82010018 | TE MTILE1: b31 = 4×4 macrotile mode, macrotile X boundaries (in 32-px tiles) at b22 / b12 / b0 = 8, 16, 24 | capture; hardware (open driver) |
 | 0x240 | 02010018 | TE MTILE2: macrotile Y boundaries (in 16-px tiles) = 8, 16, 24 | capture; hardware (open driver) |
 | 0x244 | 0001d016 | TE screen: last tile X (b0-11) = 22, last tile Y (b12-) = 29 | capture; hardware (open driver) |
 | 0x248 | 0x40 | tiles per macrotile (8 × 8) | capture; hardware (open driver) |
-| 0x24c | 0 / 0x2400000 | TA flags 2: b22-23 and b25 follow client kick flags, and b19. The microkernel loads it into the TA register 0x218 at TA start (with +0x238..+0x248 into 0x204-0x214). b22 (0x400000) is set on the kick that renders: the DDK's kick 2 carries 0x400000, kick 1 0 | capture (b22, the register loads); hardware (open driver: b22); unconfirmed (b19, b23, b25) |
+| 0x24c | 0 / 0x2400000 | TA flags 2: b22-23 and b25 follow client kick flags, and b19; b25 is set with 4x MSAA (`02400000`). The microkernel loads it into the TA register 0x218 at TA start (with +0x238..+0x248 into 0x204-0x214). b22 (0x400000) is set on the kick that renders: the DDK's kick 2 carries 0x400000, kick 1 0 | capture (b22, the register loads); hardware (open driver: b22); unconfirmed (b19, b23, b25) |
 | 0x250 | 3e518000 | **VDM control stream base** for this kick | hardware |
 | 0x254 | 0xa2 | a client value, 0xa2 in every capture | guess |
 | 0x258 | 20006000 | region header array of this render (TE PSG region base) | capture; hardware (open driver) |
@@ -210,7 +210,7 @@ formulas.
 | 0x27c-0x298 | 0 | client values (multisample / output values) | guess |
 | 0x29c | 0 | number of RT data entries - 1 | capture |
 | 0x2a0 | 0 | a render-target value << 12 | capture (0); unconfirmed (the formula) |
-| 0x2a4 | 0x88 | a render-target value: 0x88 with no AA | capture (0x88); unconfirmed (other values) |
+| 0x2a4 | 0x88 | a render-target value: 0x88 with no AA; `eaa26e26` in both 4x captures (meaning unknown) | capture |
 | 0x2a8.. | | deferred render-details updates: (device address, value) pairs, `count` at +0x54 | capture |
 
 The deferred updates exist because the render details are written in full
@@ -1246,6 +1246,43 @@ and the pbuffers (mode 0); hardware, open driver]:
 - TE screen = `(yt-1)<<12 | (xt-1)`.
 - Tiles per macrotile = mx·my (tail +0x248).
 
+### Multisampling (4x)
+
+The DDK's ES2 gives a window config with `EGL_SAMPLES` 4 (sample buffers 1,
+samples 4) and renders it as 2×2 samples per pixel, resolved to one sample
+per pixel at the end of each tile (**capture**: `ms1` / `ms4` and `ms1d` /
+`ms4d`, 720×480, one triangle, clear + draw + swap, 2026-11-11; `msaa-2026-11-11`).
+
+- **The read-back is a box resolve.** The 4-sample frame has 480 edge pixels
+  at exactly 1/4, 2/4 and 3/4 of the triangle's green over the clear's blue
+  (green `3f`, `7f`, `bf`), and the 1-sample frame none.
+- **The color target is unchanged:** same address, stride (736), clip
+  (720×480) and sideband. Only PBE word 2 changes, `016f8000` →
+  `416f8000`: b30, the field the decoder calls rot/aa, = 1. That is the
+  downscale (**guess** from the read-back: the PBE writes the resolved
+  pixel).
+- **TE and tiling** (tail): TE AA `20000000` → `e0000000` (b31 and b30:
+  2x in X and in Y). MTILE1 `82010018` → `8180c012`: the macrotile X
+  boundaries go from 8/16/24 to 6/12/18. Tiles per macrotile 0x40 → 0x30
+  (6 × 8). MTILE2, TE screen (`0001d016`, 23 × 30 tiles) and the screen
+  size are unchanged. So the tile grid stays in pixels, and the X
+  macrotiles shrink.
+- **Region headers and tail pointers grow:** the arrays are 0x9000 and
+  0x4000 bytes against 0x3000 and 0x1000 (RT data's sizes go along:
+  +0x8 0x20 → 0x30, +0x20 4 → 0xc, +0x24 0x300 → 0x900, +0x3c 0x1000 →
+  0x4000). The PB descriptor's +0x14 goes 0x19 → 0x59 after the frame.
+- **Depth and stencil are per sample, and always there.** Even without a
+  depth config (`ms4`), the DDK allocates a 0x6bd000-byte buffer, 4 × the
+  1-sample depth+stencil buffer (`ms1d`: 0x1af400 = 736 × 480 × 5 bytes).
+  It turns on ZLS through the deferred render-details updates: control
+  `0017116c` (with `ms1d`'s `001710b4`, the x-tiles field goes from 22 to
+  45, twice as wide), store offsets 0x81000, and loads with b31.
+- **Other words:** 3D flags (+0x1c) 0x400 → 0x580 (b7 | b8, the ZLS
+  bits), render details +0x10 `80000000` → `80000002` (b1), and the TA
+  command grows to 0x300 bytes for the six deferred updates.
+- Not seen: 2 or 8 samples (only 4 was captured), a multisampled FBO, and
+  whether the 2x-wide ZLS layout is sample-interleaved per pixel.
+
 ### RT data (kdata, `nbuf·0x38 + 0x18` bytes; nbuf = 2)
 
 - **Header:**
@@ -1711,10 +1748,10 @@ until it is confirmed.
 - TA flags b4 is the USE code-cache invalidate (0xa08 = 1) → a replay that rewrites a shader's code in place between two frames, with b4 set and cleared on frame 2, checking which program's pixels appear.
 - TA flags b5 invalidates the TA-side caches (0xad0, 0xae0, waits on 0x138) → a microkernel trace of a kick with b5 set showing those register writes, or a replay changing the TA state block in place between frames with b5 cleared.
 - TA flags b6, past the register-sample edge: the 0x804 bit, the MADD cache invalidate and the USE data-cache flush → a replay that changes a texture's texels in place between two frames with b6 set and cleared, checking for stale texels.
-- Tail +0x238: TE AA b31 = x2 multisample in X, b30 = in Y → a capture with a 4x multisample EGL config.
+- 4x MSAA on the open stack: TE AA b30-31, the MTILE1 / tiles-per-macrotile values, PBE word 2 b30 and per-sample ZLS → an open-stack frame with those words from `ms4`, compared with its read-back.
 - Tail +0x24c: TA flags 2 b19, b23 and b25 → one-change captures with multisampling and with a render that reloads its depth, looking for each bit.
 - Tail +0x2a0 is a render-target value << 12 → a capture in which it is nonzero (multisampling, or a larger target).
-- Tail +0x2a4 takes values other than 0x88 (with AA) → a 4x multisample capture.
+- Tail +0x2a4's `eaa26e26` with 4x AA → a 2-sample or 8-sample capture, or a second 4x one.
 
 ### §2 VDM control stream
 
