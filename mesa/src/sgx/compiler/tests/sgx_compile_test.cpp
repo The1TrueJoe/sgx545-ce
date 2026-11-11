@@ -1005,6 +1005,99 @@ TEST_F(sgx_compile_test, fragment_derivative_dest_not_source)
    EXPECT_GE(n, 8u) << s;
 }
 
+/* derivatives of what isn't a varying: a uniform, a constant (both 0),
+ * gl_FragCoord (1 a pixel), and the fine and coarse forms */
+class sgx_deriv_test : public sgx_compile_test {
+ protected:
+   nir_variable *col = NULL;
+
+   void begin()
+   {
+      start(MESA_SHADER_FRAGMENT);
+      col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                FRAG_RESULT_COLOR);
+   }
+
+   /* compiles, decodes, and a constant source never reaches an fds */
+   void check()
+   {
+      ASSERT_TRUE(compile(f16)) << out.log;
+      expect_decodes();
+      std::string s = disasm();
+      for (size_t at = 0; (at = s.find("fds", at)) != std::string::npos; at++) {
+         std::string line = s.substr(at, s.find('\n', at) - at);
+         EXPECT_EQ(line.find(", c"), std::string::npos) << line;
+         EXPECT_EQ(line.find("#"), std::string::npos) << line;
+      }
+   }
+
+   bool f16 = false;
+};
+
+TEST_F(sgx_deriv_test, fragment_derivative_of_uniform)
+{
+   begin();
+   nir_variable *u = var(nir_var_uniform, glsl_vec4_type(), "u", -1);
+   nir_def *v = nir_load_var(&b, u);
+   nir_store_var(&b, col, nir_fadd(&b, nir_ddx(&b, v), nir_ddy(&b, v)), 0xf);
+   check();
+   EXPECT_EQ(disasm().find("fds"), std::string::npos) << disasm();
+}
+
+TEST_F(sgx_deriv_test, fragment_derivative_of_constant)
+{
+   begin();
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_def *k = nir_imm_vec4(&b, 0.25f, 0.5f, 0.75f, 1.0f);
+   nir_store_var(&b, col, nir_fadd(&b, nir_load_var(&b, in), nir_ddy(&b, k)),
+                 0xf);
+   check();
+}
+
+TEST_F(sgx_deriv_test, fragment_derivative_of_fragcoord)
+{
+   begin();
+   nir_variable *fc = var(nir_var_shader_in, glsl_vec4_type(), "gl_FragCoord",
+                          VARYING_SLOT_POS);
+   nir_def *p = nir_load_var(&b, fc);
+   nir_def *d = nir_vec4(&b, nir_ddx(&b, nir_channel(&b, p, 0)),
+                         nir_ddy(&b, nir_channel(&b, p, 1)),
+                         nir_imm_float(&b, 0.0f), nir_imm_float(&b, 1.0f));
+   nir_store_var(&b, col, d, 0xf);
+   check();
+   EXPECT_NE(disasm().find("fdsx"), std::string::npos) << disasm();
+   EXPECT_NE(disasm().find("fdsy"), std::string::npos) << disasm();
+}
+
+TEST_F(sgx_deriv_test, fragment_derivative_fine_and_coarse)
+{
+   begin();
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_def *v = nir_fmul(&b, nir_load_var(&b, in), nir_load_var(&b, in));
+   nir_def *d =
+      nir_fadd(&b, nir_fadd(&b, nir_ddx_fine(&b, v), nir_ddy_fine(&b, v)),
+               nir_fadd(&b, nir_ddx_coarse(&b, v), nir_ddy_coarse(&b, v)));
+   nir_store_var(&b, col, d, 0xf);
+   check();
+}
+
+/* mediump in F16 mode: the source is format-selected, the result F16 */
+TEST_F(sgx_deriv_test, fragment_derivative_mediump)
+{
+   begin();
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   in->data.precision = GLSL_PRECISION_MEDIUM;
+   col->data.precision = GLSL_PRECISION_MEDIUM;
+   nir_def *v = nir_f2f16(&b, nir_load_var(&b, in));
+   nir_def *d = nir_fadd(&b, nir_ddx(&b, v), nir_ddy(&b, v));
+   nir_store_var(&b, col, nir_f2f32(&b, d), 0xf);
+   f16 = true;
+   check();
+}
+
 /* the fixed programs: every line assembles, every word decodes, and each
  * program's last instruction ends it */
 TEST(sgx_fixed, programs_assemble)

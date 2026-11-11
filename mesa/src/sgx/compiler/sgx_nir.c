@@ -1479,6 +1479,40 @@ keep_early_exit_loops(nir_shader *s)
    return progress;
 }
 
+/* A derivative of a value that is the same for every pixel (a uniform, or
+ * math over uniforms and constants) is 0: no fds on it */
+static bool
+uniform_derivative_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   switch (in->intrinsic) {
+   case nir_intrinsic_ddx:
+   case nir_intrinsic_ddx_fine:
+   case nir_intrinsic_ddx_coarse:
+   case nir_intrinsic_ddy:
+   case nir_intrinsic_ddy_fine:
+   case nir_intrinsic_ddy_coarse:
+      break;
+   default:
+      return false;
+   }
+   if (nir_src_is_divergent(&in->src[0]))
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def_replace(&in->def,
+                   nir_imm_zero(b, in->def.num_components, in->def.bit_size));
+   return true;
+}
+
+static bool
+uniform_derivatives(nir_shader *s)
+{
+   if (s->info.stage != MESA_SHADER_FRAGMENT)
+      return false;
+   nir_divergence_analysis(s);
+   return nir_shader_intrinsics_pass(s, uniform_derivative_instr,
+                                     nir_metadata_control_flow, NULL);
+}
+
 static void
 optimize(nir_shader *s)
 {
@@ -1844,6 +1878,7 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_vars_to_ssa);
    if (!sgx_debug(c, SGX_DBG_UNROLL_EXITS))
       NIR_PASS(_, s, keep_early_exit_loops);
+   NIR_PASS(_, s, uniform_derivatives);
    optimize(s);
    if (s->info.stage == MESA_SHADER_FRAGMENT &&
        nir_shader_intrinsics_pass(s, colour_sat_instr,
