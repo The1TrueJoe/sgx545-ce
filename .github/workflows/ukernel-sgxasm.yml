@@ -1,0 +1,55 @@
+# §6.6 (docs/UKERNEL-TOOLING.md): the microkernel build assembles through the
+# sgx-asm host tool, built from mesa/src/sgx/isa's sgx.xml, and the resulting image
+# is byte-identical to the golden hash. sgx-asm is built standalone the same way
+# ukernel-isa-gate builds it (mesa/tests/isa-standalone/standalone.sh), so it
+# inherits that script's fixes. A byte difference here is an sgx.xml / ISA.md
+# question, never resolved by matching tools/isa/asm.py.
+name: ukernel-sgxasm
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ukernel/**
+      - tools/isa/**
+      - mesa/src/sgx/isa/**
+      - mesa/tests/isa-standalone/**
+      - mesa/patches/*isaspec*
+      - .github/workflows/ukernel-sgxasm.yml
+  push:
+    branches: [dev, main]
+    paths:
+      - ukernel/**
+      - tools/isa/**
+      - mesa/src/sgx/isa/**
+      - mesa/tests/isa-standalone/**
+      - mesa/patches/*isaspec*
+      - .github/workflows/ukernel-sgxasm.yml
+
+permissions:
+  contents: read
+
+jobs:
+  sgxasm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-mako
+      - uses: actions/cache@v4
+        with:
+          path: mesa-src.tar.xz
+          key: mesa-${{ hashFiles('mesa/VERSION') }}
+      - name: Mesa release
+        run: |
+          set -eu
+          . mesa/VERSION
+          [ -f mesa-src.tar.xz ] || curl -sfL -o mesa-src.tar.xz "$MESA_URL"
+          echo "$MESA_SHA256  mesa-src.tar.xz" | sha256sum -c
+          tar xf mesa-src.tar.xz
+          mv "mesa-$MESA_VERSION" mesa-tree
+      - name: Build sgx-asm standalone
+        run: mesa/tests/isa-standalone/standalone.sh "$PWD/mesa-tree" "$PWD/isa-build"
+      - name: Golden image assembles through sgx-asm (bit-for-bit)
+        run: SGX_ASM="$PWD/isa-build/sgx-asm" python3 ukernel/golden/check.py

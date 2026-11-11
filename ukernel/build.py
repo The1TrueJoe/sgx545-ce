@@ -10,8 +10,10 @@ and a manifest of its entry offsets.
 `.`/`/`, existing callers that pass only out.bin/manifest.json are unchanged.
 `SGX_CORE` does the same and, if set, wins.
 
-Each line is assembled by tools/isa/asm.py (libusc's own encoding, so nothing
-the hardware can't accept is emitted), labels resolve to byte offsets of
+Lines are assembled by the `sgx-asm` host tool built from mesa/src/sgx/isa's
+`sgx.xml` (point `SGX_ASM` at it; docs/UKERNEL-TOOLING.md §2). Without `SGX_ASM`
+the build falls back to tools/isa/asm.py as a spec-side oracle; the sgx-asm CI
+gate proves the two agree bit-for-bit. Labels resolve to byte offsets of
 branch/entry targets, and the result is written little-endian, 8 bytes per
 instruction. The manifest gives srvinit the entry offsets it must point its
 PDS programs and host-kick table at — the open equivalent of the DDK build's
@@ -46,7 +48,11 @@ _select_core()
 import ukernel  # noqa: E402
 
 
-def assemble():
+def resolve():
+    """Resolve the program to an ordered list of encodable items plus the
+    manifest's entry/patch offsets. Each item is ("text", <instruction text>) with
+    every immediate numeric (branch targets and per-core symbols resolved here), or
+    ("raw", (lo, hi)) for a pre-encoded word. The assembler never sees a symbol."""
     a = ukernel.program()
     # first pass: assign each real instruction an index; labels mark the next one
     idx = 0
@@ -65,16 +71,16 @@ def assemble():
             idx += 1
     for name in pending:          # labels at the very end point past the code
         offset[name] = idx
-    # second pass: encode, resolving `ba LABEL` / `br LABEL` to instruction
-    # targets (ba is absolute, br is relative to this instruction)
+    # second pass: resolve `ba LABEL` / `br LABEL` to instruction targets (ba is
+    # absolute, br is relative to this instruction) and emit the ordered items
     import re
-    words = []
+    items = []
     idx = 0
     for kind, val in a.lines:
         if kind == "label":
             continue
         if kind == "raw":                      # a pre-encoded (hi, lo) word
-            words.append((val[1], val[0]))
+            items.append(("raw", (val[1], val[0])))
             idx += 1
             continue
         if kind == "patch":
@@ -91,9 +97,55 @@ def assemble():
                 raise ValueError(f"branch to undefined label {name!r} in {text!r}")
             tgt = offset[name] if m.group(2) == "ba" else offset[name] - idx
             text = text.replace(name, f"#{tgt}")
-        hi, lo = asm.assemble(text)
-        words.append((lo, hi))
+        items.append(("text", text))
         idx += 1
+    return items, offset, patches
+
+
+def _encode_sgxasm(items, tool):
+    """Assemble the text items through the `sgx-asm` host tool (built from
+    mesa/src/sgx/isa's sgx.xml). sgx-asm takes fully-resolved text, one
+    instruction per line, and `-b` emits raw little-endian lo,hi per instruction;
+    raw items are spliced back at their positions (docs/UKERNEL-TOOLING.md §2)."""
+    import subprocess
+    text_lines = [t for kind, t in items if kind == "text"]
+    proc = subprocess.run([tool, "-b", "-c", ukernel.CORE_NAME],
+                          input=("\n".join(text_lines) + "\n").encode(),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        sys.exit(f"sgx-asm ({tool}) failed:\n{proc.stderr.decode(errors='replace')}")
+    blob = proc.stdout
+    if len(blob) != 8 * len(text_lines):
+        sys.exit(f"sgx-asm emitted {len(blob)} bytes for {len(text_lines)} instructions")
+    enc = [struct.unpack_from("<II", blob, 8 * i) for i in range(len(text_lines))]  # (lo, hi)
+    words, ti = [], 0
+    for kind, v in items:
+        if kind == "raw":
+            words.append(v)
+        else:
+            words.append(enc[ti])
+            ti += 1
+    return words
+
+
+def _encode_asm(items):
+    """Oracle fallback (no SGX_ASM): assemble each line with tools/isa/asm.py.
+    Not the shipping path; the sgx-asm CI gate proves it agrees with sgx-asm
+    bit-for-bit (docs/UKERNEL-TOOLING.md §6)."""
+    words = []
+    for kind, v in items:
+        if kind == "raw":
+            words.append(v)
+        else:
+            hi, lo = asm.assemble(v)
+            words.append((lo, hi))
+    return words
+
+
+def assemble():
+    items, offset, patches = resolve()
+    tool = os.environ.get("SGX_ASM")
+    words = _encode_sgxasm(items, tool) if tool else _encode_asm(items)
     return words, offset, patches
 
 
