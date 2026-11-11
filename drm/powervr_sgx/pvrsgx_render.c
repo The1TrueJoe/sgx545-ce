@@ -568,6 +568,8 @@ int pvrsgx_ioctl_create_rt_dataset(struct drm_device *drm, void *data, struct dr
 	    !args->height ||
 	    args->width > RT_MAX_DIM || args->height > RT_MAX_DIM)
 		return -EINVAL;
+	if (args->samples > to_pvrsgx_device(drm)->family->cmds->max_samples)
+		return -EOPNOTSUPP;
 	ctx = pvrsgx_context_lookup(sfile, args->context_handle);
 	if (!ctx)
 		return -ENOENT;
