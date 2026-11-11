@@ -11,7 +11,6 @@
 #include <drm/drm_gem_shmem_helper.h>
 
 #include <linux/device.h>
-#include <linux/iommu.h>
 #include <linux/ktime.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
@@ -58,19 +57,18 @@ int pvrsgx_prime_imports(struct drm_gem_object **bos, u32 nbos,
 }
 
 /*
- * An import's pages were mapped for this device with its 32-bit DMA mask.
- * Without an IOMMU a page above 4 GiB comes back as a swiotlb bounce buffer,
- * which the GPU would write behind the exporter's back: refuse those.
+ * The GPU's MMU takes 32-bit addresses. An import was mapped for our device,
+ * whose DMA mask is 32 bits, so the DMA API already keeps every address below
+ * 4 GiB (bouncing if it must, synced through the dma-buf's CPU access calls);
+ * check the addresses only, never the exporter's pages.
  */
-bool pvrsgx_prime_reachable(struct device *dev, struct sg_table *sgt)
+bool pvrsgx_prime_reachable(struct sg_table *sgt)
 {
 	struct scatterlist *sg;
 	unsigned int i;
 
-	if (device_iommu_mapped(dev))
-		return true;
 	for_each_sgtable_dma_sg(sgt, sg, i) {
-		if (sg_page(sg) && sg_dma_address(sg) != sg_phys(sg))
+		if (upper_32_bits(sg_dma_address(sg) + sg_dma_len(sg) - 1))
 			return false;
 	}
 	return true;

@@ -6,12 +6,11 @@
 
 #include <linux/types.h>
 
-struct device;
 struct drm_gem_object;
 struct pvrsgx_job;
 struct sg_table;
 
-bool pvrsgx_prime_reachable(struct device *dev, struct sg_table *sgt);
+bool pvrsgx_prime_reachable(struct sg_table *sgt);
 int pvrsgx_prime_imports(struct drm_gem_object **bos, u32 nbos,
 			 struct drm_gem_object ***out, u32 *n);
 void pvrsgx_prime_flush(struct pvrsgx_job *job, bool after);

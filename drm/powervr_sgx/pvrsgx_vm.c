@@ -504,7 +504,6 @@ static bool ranges_overlap(u64 a, u64 as, u64 b, u64 bs)
 static int bind_op_check(struct drm_file *file, struct pvrsgx_vm *vm, struct bind_op *o)
 {
 	const struct drm_powervr_sgx_vm_bind_op *in = &o->in;
-	struct drm_device *drm = &vm->sdev->base;
 	u64 end;
 	int heap, err;
 
@@ -535,7 +534,7 @@ static int bind_op_check(struct drm_file *file, struct pvrsgx_vm *vm, struct bin
 		o->sgt = NULL;
 		return err;
 	}
-	if (drm_gem_is_imported(o->obj) && !pvrsgx_prime_reachable(drm_dev_dma_dev(drm), o->sgt))
+	if (drm_gem_is_imported(o->obj) && !pvrsgx_prime_reachable(o->sgt))
 		return -EFAULT;
 	return 0;
 }
