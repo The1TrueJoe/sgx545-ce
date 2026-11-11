@@ -128,6 +128,12 @@ struct pvrsgx_core_family {
 	const struct pvrsgx_heap_layout *heaps;
 	/** @quirks: PVRSGX_QUIRK_*. */
 	u32 quirks;
+	/**
+	 * @event_pds_guessed: The event PDS registers are a guess, not yet
+	 * confirmed on this core: read them once before the first write, and
+	 * refuse to kick if the program address doesn't read back.
+	 */
+	bool event_pds_guessed;
 	/** @init_regs: Init script part 2's register writes, in order. */
 	const struct pvrsgx_core_init_reg *init_regs;
 	/** @num_init_regs: Entries in @init_regs. */

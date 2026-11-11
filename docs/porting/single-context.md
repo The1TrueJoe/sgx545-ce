@@ -170,15 +170,31 @@ together are harmless.
   kick, as today, and the microkernel tells the init kick from a CCB kick by that word.
   `EVENT_KICKER`'s 28-bit field holds the kicker buffer, which is below 256 MiB in the
   530's layout.
-- **What the 530 still lacks:** the event-PDS registers, which enter the microkernel
-  (`SGX545_CR_*` on the 545, measured, not in any GPL header). The best guess (G) is the
-  545's offsets: 0xa58 (enable, 0x2204b00f), 0xa68 (base), 0xa6c/0xa70 (data), since the
-  code bases below and `PDS_EXEC_BASE` above sit at the 545's offsets (K). They go into
-  the table with the first microkernel start on hardware (stage 1: read each once after
-  reset, write the base and read it back, kick, and `INIT_STATUS` goes to 1), together
-  with the part entry and its measured revision. Until then the family isn't usable, and
-  the probe stops after the ID read. `EDM_TASK_REG0/1` aren't needed: the heartbeat word
-  replaces them. Init-script part 2 is empty through stage 3.
+- **The event PDS registers (G), and how stage 1 guards them.** They enter the
+  microkernel, and no GPL header names them for any core: in `sgx535defs.h`,
+  `sgx540defs.h`, `sgx544defs.h` and `sgx545defs.h` nothing between `USE_CODE_BASE_15`
+  (0xa48) and `PDS_EXEC_BASE` (0xab8) has a name. The SGX545's (0xa58 enable, 0xa68 the
+  program address, 0xa6c/0xa70 data) come from its captured vendor init script
+  (SRVINIT.md). The SGX530 table uses the same offsets: every named register around them
+  that the SGX530 has (the code bases, `PDS_EXEC_BASE`, `EVENT_KICKER`, `EVENT_KICK`,
+  `EVENT_TIMER`, `PDS_INV0/1`) sits at the SGX545's offset, and so does the SGX535's. The
+  enable value 0x2204b00f sets only `EVENT_STATUS` bits the two cores share. While
+  `family.event_pds_guessed` is set:
+  - after the clocks are on, before anything writes them, the first start reads the four
+    once and logs them;
+  - after init-script part 2, the program address must read back, or the start stops
+    with -EIO and no kick (`check_event_pds()`);
+  - after a start, the log carries `INIT_STATUS` and control-block words 0x18 (version),
+    0x28/0x29 (last timed-out wait, count) and 0x2a (heartbeat).
+  Init-script part 2 is the host's interrupt enable only (`EVENT_HOST_ENABLE` = SW_EVENT,
+  `ENABLE2` = 0), named registers. `EDM_TASK_REG0/1` aren't needed: the heartbeat replaces
+  them. The part entry (revision 0x00010205, `powervr_sgx/sgx530_ukernel.bin`, 200 MHz for
+  the timer's order of magnitude) is in the table, so with `allow_unisolated=1` and the
+  firmware file present the probe starts the microkernel; without either it stops before
+  any write.
+- **Bounded:** the start polls `INIT_STATUS` for 500 ms. A microkernel that doesn't answer
+  leaves the probe failing with the init status, `EVENT_STATUS` and the BIF fault
+  registers logged, the cores held in reset, and the ti-sysc parent released.
 - **Runtime PM:** unchanged. When `sgx_pwrdm` turns off the core loses everything, and
   resume already runs the full start.
 

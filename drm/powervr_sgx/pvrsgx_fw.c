@@ -131,6 +131,21 @@ void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int
 	seq_buf_puts(sb, "\n");
 }
 
+/*
+ * A core still being brought up: the microkernel's version, last timed-out
+ * wait, wait count and heartbeat (open microkernel control-block words 0x18,
+ * 0x28, 0x29 and 0x2a), and the host control block's init status.
+ */
+void pvrsgx_fw_dump_status_words(struct pvrsgx_device *sdev)
+{
+	const u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
+
+	drm_info(&sdev->base,
+		 "microkernel: init 0x%x version 0x%08x wait %u timeouts %u heartbeat %u\n",
+		 pvrsgx_fw_hostctl(sdev, HOSTCTL_INIT_STATUS), READ_ONCE(t[0x18]),
+		 READ_ONCE(t[0x28]), READ_ONCE(t[0x29]), READ_ONCE(t[0x2a]));
+}
+
 u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word)
 {
 	return READ_ONCE(fw_words(sdev, PVRSGX_FW_HOSTCTL)[word]);
@@ -467,14 +482,36 @@ static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 	return sdev->cr->use_code_base0 + 4 * n;
 }
 
+/*
+ * Where the event PDS registers are a guess, the program address must read
+ * back before anything kicks the microkernel; if not, no kick.
+ */
+static int check_event_pds(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 want = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu, got;
+
+	if (!sdev->family->event_pds_guessed)
+		return 0;
+	got = sgx_rd(sdev, cr->event_pds_base);
+	drm_info(&sdev->base, "event PDS base 0x%04x: wrote 0x%08x, read 0x%08x\n",
+		 cr->event_pds_base, want, got);
+	if (got != want) {
+		drm_err(&sdev->base, "event PDS base doesn't read back; not starting the microkernel\n");
+		return -EIO;
+	}
+	return 0;
+}
+
 /* Init script part 2 (docs/SRVINIT.md, "Init scripts"): the core's script, then the bases. */
-static void init_script_part2(struct pvrsgx_device *sdev)
+static int init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
 	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 dm = cr->use_code_base_dm_shift;
+	int err;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -496,7 +533,12 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
 	sgx_wr(sdev, cr->event_pds_data0, 1);
 	sgx_wr(sdev, cr->event_pds_data1, 6);
+	/* Before the events are enabled, so a wrong guess starts nothing. */
+	err = check_event_pds(sdev);
+	if (err)
+		return err;
 	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
+	return 0;
 }
 
 static void deinit_script(struct pvrsgx_device *sdev)
@@ -592,13 +634,20 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	sdev->fw.cache_control = PVRSGX_CC_INVAL_BIF_PD;
 
 	clocks_on(sdev);
+	if (sdev->family->event_pds_guessed && first)
+		drm_info(&sdev->base,
+			 "event PDS registers before any write: enable 0x%08x base 0x%08x data 0x%08x 0x%08x\n",
+			 sgx_rd(sdev, cr->event_pds_enable), sgx_rd(sdev, cr->event_pds_base),
+			 sgx_rd(sdev, cr->event_pds_data0), sgx_rd(sdev, cr->event_pds_data1));
 	sgx_wr(sdev, cr->event_pds_enable, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
 
 	pvrsgx_reset(sdev, true);
 
 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
-	init_script_part2(sdev);
+	err = init_script_part2(sdev);
+	if (err)
+		return err;
 
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
@@ -615,6 +664,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 		return err;
 	}
+	if (sdev->family->event_pds_guessed)
+		pvrsgx_fw_dump_status_words(sdev);
 	sdev->fw_running = true;
 	sdev->fw_started = true;
 	if (first || sdev->reset_count != sdev->reset_logged) {

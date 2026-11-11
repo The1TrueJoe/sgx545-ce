@@ -108,6 +108,22 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 	.bif_int_stat_fault_type = BIT(14),	/* read or write */
 	.bif_fault_addr = GENMASK(27, 12),
 	.use_code_base_dm_shift = 24,
+	/*
+	 * Not in any GPL header, for any core: the SGX545's offsets, from its
+	 * vendor init script (docs/SRVINIT.md), a guess here (G). Every named
+	 * register around them that the SGX530 has sits at the SGX545's offset.
+	 */
+	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
+	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
+	.event_pds_base = SGX545_CR_EVENT_PDS_BASE,
+	.event_pds_data0 = SGX545_CR_EVENT_PDS_DATA0,
+	.event_pds_data1 = SGX545_CR_EVENT_PDS_DATA1,
+};
+
+/* Init script part 2 for the SGX530: the host's interrupt, named registers only. */
+static const struct pvrsgx_core_init_reg sgx530_init_regs[] = {
+	{ SGX_CR_EVENT_HOST_ENABLE, SGX_CR_EVENT_STATUS_SW_EVENT },
+	{ SGX_CR_EVENT_HOST_ENABLE2, 0 },
 };
 
 /*
@@ -157,6 +173,9 @@ static const struct pvrsgx_core_family families[] = {
 		.va_bits = 28,
 		.heaps = &sgx530_heaps,
 		.quirks = PVRSGX_QUIRK_BRN_28889,
+		.event_pds_guessed = true,
+		.init_regs = sgx530_init_regs,
+		.num_init_regs = ARRAY_SIZE(sgx530_init_regs),
 	},
 };
 
@@ -181,9 +200,21 @@ static const struct pvrsgx_core_info cores[] = {
 		.clock_hz = 400000000,
 		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
 	},
+	{
+		/*
+		 * Revision read on our OMAP3630 test board. The microkernel's
+		 * timer needs only the clock's order of magnitude.
+		 */
+		.family = &families[1],
+		.name = "TI OMAP3630 (SGX530 1.2.5)",
+		.core_rev = 0x00010205,
+		.clock_hz = 200000000,
+		.fw_name = "powervr_sgx/sgx530_ukernel.bin",
+	},
 };
 
 MODULE_FIRMWARE("powervr_sgx/sgx545_ukernel.bin");
+MODULE_FIRMWARE("powervr_sgx/sgx530_ukernel.bin");
 
 static bool heaps_fit(const struct pvrsgx_core_family *f)
 {

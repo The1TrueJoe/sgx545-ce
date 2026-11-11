@@ -16,6 +16,13 @@ static void core_test_lookup(struct kunit *test)
 			   "Intel Cedarview (SGX545 1.0.13)");
 	KUNIT_EXPECT_NULL(test, pvrsgx_core_lookup(f, 0x01150000, 0x0001000c));
 	KUNIT_EXPECT_NULL(test, pvrsgx_core_lookup(f, 0x01120000, 0x0001000e));
+
+	/* Read on our OMAP3630 test board. */
+	f = pvrsgx_core_family_get(530);
+	KUNIT_ASSERT_NOT_NULL(test, f);
+	KUNIT_EXPECT_STREQ(test, pvrsgx_core_lookup(f, 0x01120000, 0x00010205)->name,
+			   "TI OMAP3630 (SGX530 1.2.5)");
+	KUNIT_EXPECT_NULL(test, pvrsgx_core_lookup(f, 0x01150000, 0x00010205));
 }
 
 static void core_test_unknown(struct kunit *test)
@@ -25,13 +32,19 @@ static void core_test_unknown(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, pvrsgx_core_family_get(544));
 }
 
-/* A core the driver only identifies: listed, with its ID registers, not run. */
+/*
+ * The SGX530: its ID registers at 0x10/0x14, usable only as a single-context
+ * core with event PDS registers that are still a guess.
+ */
 static void core_test_identify_only(struct kunit *test)
 {
 	const struct pvrsgx_core_family *f = pvrsgx_core_family_get(530);
 
 	KUNIT_ASSERT_NOT_NULL(test, f);
-	KUNIT_EXPECT_FALSE(test, pvrsgx_core_family_usable(f));
+	KUNIT_EXPECT_TRUE(test, pvrsgx_core_family_usable(f));
+	KUNIT_EXPECT_TRUE(test, pvrsgx_core_single_context(f));
+	KUNIT_EXPECT_TRUE(test, f->event_pds_guessed);
+	KUNIT_EXPECT_FALSE(test, pvrsgx_core_family_get(545)->event_pds_guessed);
 	KUNIT_EXPECT_EQ(test, f->regs->core_id, 0x10);
 	KUNIT_EXPECT_EQ(test, f->regs->core_revision, 0x14);
 	KUNIT_EXPECT_TRUE(test, pvrsgx_core_family_usable(pvrsgx_core_family_get(545)));
@@ -50,7 +63,8 @@ static void core_test_table(struct kunit *test)
 		KUNIT_EXPECT_NE(test, f->regs->core_revision, 0);
 		if (!pvrsgx_core_family_usable(f))
 			continue;
-		KUNIT_EXPECT_NE(test, f->regs->event_kick2, 0);
+		KUNIT_EXPECT_EQ(test, !!f->regs->event_kick2,
+				!!(f->features & PVRSGX_FEATURE_MULTI_EVENT_KICK));
 		KUNIT_EXPECT_NE(test, f->regs->use_code_base0, 0);
 		KUNIT_EXPECT_GT(test, f->num_init_regs, 0);
 	}
