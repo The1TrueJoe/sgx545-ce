@@ -41,7 +41,7 @@ jobs:
     uses: ./.github/workflows/powervr-sgx-deb.yml
     with:
       flavor: release
-      pkg_release: ${{ needs.version.outputs.version }}
+      pkg_version: 7.3.3-sgx${{ needs.version.outputs.version }}
 
   mesa:
     needs: version
@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.kernel.outputs.artifact }}
+          name: powervr-sgx-deb-cedarview-release
           path: assets
       - uses: actions/download-artifact@v4
         with:
