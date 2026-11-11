@@ -22,9 +22,11 @@
  *
  * Completion: every job signals the next point of one timeline syncobj per
  * device.  A context's kick waits on the point its job got; a buffer's CPU
- * wait on the point of the last job that wrote it.  Shared (imported or
- * exported) buffers are named in the job's BO list, so the kernel orders the
- * job against their other users through their dma-buf fences.
+ * wait on the point of the last job that wrote it.  The kernel does no
+ * implicit sync: for a shared (imported or exported) buffer the job waits on
+ * its dma-buf's fences (DMA_BUF_IOCTL_EXPORT_SYNC_FILE), and its own fence is
+ * added to them after the submit (DMA_BUF_IOCTL_IMPORT_SYNC_FILE), so the
+ * buffer's other users (X, the display, other clients) order against it.
  */
 
 #include <errno.h>
@@ -38,7 +40,9 @@
 
 #include <xf86drm.h>
 
+#include "drm-uapi/dma-buf.h"
 #include "drm-uapi/powervr_sgx_drm.h"
+#include "util/libsync.h"
 #include "util/macros.h"
 #include "util/simple_mtx.h"
 #include "util/vma.h"
@@ -76,6 +80,9 @@ struct psgx_dev {
    unsigned pb_pages; /* the parameter buffer's size (0: the kernel's) */
    uint32_t vm;       /* VM context */
    uint32_t timeline; /* syncobj: every job signals the next point */
+   /* binary syncobjs: a job's wait on its shared buffers' dma-buf fences,
+    * and its fence for them */
+   uint32_t in_sync, out_sync;
    simple_mtx_t lock; /* the address space, the timeline's points, the zombies */
    struct util_vma_heap vma[16]; /* by heap id */
    bool has_heap[16];
@@ -93,8 +100,8 @@ struct psgx_bo {
    uint32_t va;
    enum sgx_heap heap;
    bool code;     /* a code object: map is a copy */
-   bool shared;   /* imported or exported: named in every job that uses it */
-   int dmabuf_fd; /* imported: the dma-buf, for its fences; else -1 */
+   bool shared;   /* imported or exported: synced through its dma-buf */
+   int dmabuf_fd; /* shared: the dma-buf, for its fences; else -1 */
    unsigned refs; /* imports of the same dma-buf */
    void *map;
    uint64_t write_point; /* the last job that writes it */
@@ -495,8 +502,12 @@ psgx_bo_export(struct sgxws_dev *d, const struct sgxws_bo *bo, int *fd)
    if (drmPrimeHandleToFD(ddev(d)->fd, impl->handle, DRM_CLOEXEC | DRM_RDWR,
                           fd))
       return -errno;
-   impl->shared = true;
-   return 0;
+   simple_mtx_lock(&ddev(d)->lock);
+   if (impl->dmabuf_fd < 0)
+      impl->dmabuf_fd = fcntl(*fd, F_DUPFD_CLOEXEC, 3);
+   impl->shared = impl->dmabuf_fd >= 0;
+   simple_mtx_unlock(&ddev(d)->lock);
+   return impl->shared ? 0 : -errno;
 }
 
 static int
@@ -687,24 +698,74 @@ psgx_rt_fini(struct sgxws_ctx *c, struct sgxws_rt *rt)
 /* ------------------------------------------------------------------ submission
  */
 
+struct shared_use {
+   struct psgx_bo *bo;
+   bool write;
+};
+
 static void
-add_ref(struct drm_powervr_sgx_bo_ref *refs, unsigned *n,
-        const struct sgxws_bo *bo, bool write)
+add_shared(struct shared_use *sh, unsigned *n, const struct sgxws_bo *bo,
+           bool write)
 {
    struct psgx_bo *impl = dbo(bo);
 
    if (!impl || !impl->shared)
       return;
    for (unsigned i = 0; i < *n; i++) {
-      if (refs[i].handle == impl->handle) {
-         refs[i].flags |= write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0;
+      if (sh[i].bo == impl) {
+         sh[i].write |= write;
          return;
       }
    }
-   refs[(*n)++] = (struct drm_powervr_sgx_bo_ref){
-      .handle = impl->handle,
-      .flags = write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
-   };
+   sh[(*n)++] = (struct shared_use){impl, write};
+}
+
+/* the fences a job must wait for on its shared buffers, in dd->in_sync:
+ * writers for a read, everyone for a write.  False when there are none. */
+static bool
+shared_wait(struct psgx_dev *dd, const struct shared_use *sh, unsigned n)
+{
+   int fd = -1;
+
+   for (unsigned i = 0; i < n; i++) {
+      struct dma_buf_export_sync_file x = {
+         .flags = sh[i].write ? DMA_BUF_SYNC_RW : DMA_BUF_SYNC_READ,
+         .fd = -1,
+      };
+
+      if (drmIoctl(sh[i].bo->dmabuf_fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &x))
+         continue;
+      sync_accumulate("sgx", &fd, x.fd);
+      close(x.fd);
+   }
+   if (fd < 0)
+      return false;
+   if (drmSyncobjImportSyncFile(dd->fd, dd->in_sync, fd)) {
+      close(fd);
+      return false;
+   }
+   close(fd);
+   return true;
+}
+
+/* the job's fence (dd->out_sync) onto its shared buffers */
+static void
+shared_signal(struct psgx_dev *dd, const struct shared_use *sh, unsigned n)
+{
+   int fd = -1;
+
+   if (!n || drmSyncobjExportSyncFile(dd->fd, dd->out_sync, &fd))
+      return;
+   for (unsigned i = 0; i < n; i++) {
+      struct dma_buf_import_sync_file x = {
+         .flags = sh[i].write ? DMA_BUF_SYNC_WRITE : DMA_BUF_SYNC_READ,
+         .fd = fd,
+      };
+
+      if (drmIoctl(sh[i].bo->dmabuf_fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &x))
+         mesa_loge("sgx: IMPORT_SYNC_FILE failed: %d", -errno);
+   }
+   close(fd);
 }
 
 static int
@@ -728,13 +789,13 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    uint64_t render_buf[SGX_KMD_STREAM_CMD_RENDER_length / 8];
    uint64_t kick_buf[TA_KICKS][(SGX_KMD_STREAM_CMD_TA_KICK_length + 7) / 8];
    struct drm_powervr_sgx_ta_kick kicks[TA_KICKS];
-   struct drm_powervr_sgx_bo_ref refs[ARRAY_SIZE(c->use) + 1];
-   struct drm_powervr_sgx_sync_op op;
+   struct shared_use sh[ARRAY_SIZE(c->use) + 1];
+   struct drm_powervr_sgx_sync_op ops[3];
    struct drm_powervr_sgx_job job;
    struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
       .jobs = {.stride = sizeof(job), .count = 1, .array = (uintptr_t)&job},
    };
-   unsigned n_refs = 0;
+   unsigned n_sh = 0, n_ops = 0;
    uint64_t point, t0;
    int e = 0;
 
@@ -775,27 +836,39 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    SGX_KMD_STREAM_CMD_RENDER_pack(render_buf, &render);
 
    if (c->target.bo)
-      add_ref(refs, &n_refs, c->target.bo, true);
+      add_shared(sh, &n_sh, c->target.bo, true);
    for (unsigned i = 0; i < c->n_use; i++)
-      add_ref(refs, &n_refs, c->use[i].bo, c->use[i].write);
+      add_shared(sh, &n_sh, c->use[i].bo, c->use[i].write);
 
    simple_mtx_lock(&dd->lock);
    point = ++dd->point;
-   op = (struct drm_powervr_sgx_sync_op){
+   ops[n_ops++] = (struct drm_powervr_sgx_sync_op){
       .handle = dd->timeline,
       .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ |
                DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL,
       .value = point,
    };
+   if (n_sh) {
+      if (shared_wait(dd, sh, n_sh))
+         ops[n_ops++] = (struct drm_powervr_sgx_sync_op){
+            .handle = dd->in_sync,
+            .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ |
+                     DRM_POWERVR_SGX_SYNC_OP_FLAG_WAIT,
+         };
+      ops[n_ops++] = (struct drm_powervr_sgx_sync_op){
+         .handle = dd->out_sync,
+         .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ |
+                  DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL,
+      };
+   }
    job = (struct drm_powervr_sgx_job){
       .type = DRM_POWERVR_SGX_JOB_TYPE_RENDER,
       .context_handle = k->handle,
       .cmd_stream = (uintptr_t)render_buf,
       .cmd_stream_len = SGX_KMD_STREAM_CMD_RENDER_length,
-      .sync_ops = {.stride = sizeof(op), .count = 1, .array = (uintptr_t)&op},
-      .bo_refs = {.stride = sizeof(refs[0]),
-                  .count = n_refs,
-                  .array = (uintptr_t)refs},
+      .sync_ops = {.stride = sizeof(ops[0]),
+                   .count = n_ops,
+                   .array = (uintptr_t)ops},
       .ta_kicks = {.stride = sizeof(kicks[0]),
                    .count = TA_KICKS,
                    .array = (uintptr_t)kicks},
@@ -821,6 +894,8 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    /* a job that never ran still gets its point, so waits on it end */
    if (e)
       drmSyncobjTimelineSignal(dd->fd, &dd->timeline, &point, 1);
+   else
+      shared_signal(dd, sh, n_sh);
    simple_mtx_unlock(&dd->lock);
 
    k->point[seq % c->slots] = point;
@@ -855,6 +930,8 @@ psgx_dev_destroy(struct sgxws_dev *d)
    simple_mtx_unlock(&dd->lock);
    xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &a);
    drmSyncobjDestroy(dd->fd, dd->timeline);
+   drmSyncobjDestroy(dd->fd, dd->in_sync);
+   drmSyncobjDestroy(dd->fd, dd->out_sync);
    for (unsigned i = 0; i < 16; i++)
       if (dd->has_heap[i])
          util_vma_heap_finish(&dd->vma[i]);
@@ -969,8 +1046,14 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
       goto fail_heaps;
    }
    dd->vm = vm.handle;
-   if ((e = drmSyncobjCreate(fd, 0, &dd->timeline))) {
+   if (drmSyncobjCreate(fd, 0, &dd->timeline) ||
+       drmSyncobjCreate(fd, 0, &dd->in_sync) ||
+       drmSyncobjCreate(fd, 0, &dd->out_sync)) {
       e = -errno;
+      if (dd->timeline)
+         drmSyncobjDestroy(fd, dd->timeline);
+      if (dd->in_sync)
+         drmSyncobjDestroy(fd, dd->in_sync);
       goto fail_vm;
    }
    simple_mtx_init(&dd->lock, mtx_plain);
