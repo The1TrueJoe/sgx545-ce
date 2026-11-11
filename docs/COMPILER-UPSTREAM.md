@@ -152,7 +152,10 @@ which is what makes the A/B harness possible. An upstream driver doesn't need it
   gallium driver answers with st's `driver_location` for attributes. Still in
   the compiler: the varying-set allocation and first-use sampler order (the
   compiler's defaults, which match glslcompiler), and the n_pa count of the
-  DDK driver's placeholder color iteration.
+  DDK driver's placeholder color iteration. **Done (2026-11-11):** first-use
+  sampler numbering, the USP label numbers and the placeholder's PA register
+  moved to sgxc and `tools/usc/sgx_usp.c`. The varying-set allocation stays
+  as the compiler's own, which the driver uses.
 - **The list A dummy color iteration** is USP-only (written by
   `tools/usc/sgx_usp.c`).
 - **Ours, and staying:** the driver-only constant kinds 0x10 (F16 of a C10

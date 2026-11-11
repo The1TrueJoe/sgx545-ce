@@ -30,10 +30,15 @@ PYTHONPATH=$W $PY $HERE/sgx_isa_enums.py --xml $HERE/sgx.xml --out-h $B/sgx-isa-
 CF=(-std=gnu11 -g -O1 -I $B -I $HERE -I $M/src -I $M/include -I $M/src/compiler/isaspec
     -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
     -DHAVE_PTHREAD -DHAVE_STRUCT_TIMESPEC -DHAVE_TIMESPEC_GET -DHAVE_STRNDUP)
+# as meson does: glibc's byte order comes through <endian.h> (util/u_endian.h)
+if echo '#include <endian.h>' | ${CC:-cc} -E -x c - >/dev/null 2>&1; then
+  CF+=(-DHAVE_ENDIAN_H)
+fi
 OBJS=()
 for f in $B/sgx-isa.c $HERE/sgx_isa_encode.c $HERE/sgx_isa_disasm.c \
          $HERE/sgx_isa_asm.c $HERE/sgx_isa_asm_int.c $HERE/sgx_isa_coissue.c $T/standalone_stubs.c \
-         $M/src/compiler/isaspec/isaspec.c $M/src/util/ralloc.c $M/src/util/hash_table.c; do
+         $M/src/compiler/isaspec/isaspec.c $M/src/util/ralloc.c $M/src/util/hash_table.c \
+         $M/src/util/half_float.c $M/src/util/softfloat.c; do
   o=$B/obj/$(basename $f .c).o
   ${CC:-cc} "${CF[@]}" -c $f -o $o
   OBJS+=($o)

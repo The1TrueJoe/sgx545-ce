@@ -174,22 +174,16 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       fw[fix[k].at] = sgx_isa_encode(&m, NULL);
    }
 
-   /* PA registers: the iterations, the colour, and the DDK driver's
-    * placeholder colour iteration when nothing else is iterated
-    * (gl_PointCoord alone counts as nothing) */
+   /* PA registers: the iterations and the colour */
    unsigned n_pa = 0;
    if (frag) {
-      bool real = false;
       for (unsigned i = 0; i < c->n_iters; i++) {
          struct sgx_iter *it = &c->iters[i];
          unsigned regs = it->sample ? (it->f16 ? 2 : 1)
                          : it->f16  ? (it->comps + 1) / 2
                                     : it->comps;
          n_pa = MAX2(n_pa, it->pa + regs);
-         real |= !it->pointcoord;
       }
-      if (!real)
-         n_pa++;
       n_pa = MAX2(n_pa, c->colour_pa + 1);
       if (c->has_depth)
          n_pa = MAX2(n_pa, c->depth_pa + 1);

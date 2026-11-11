@@ -740,7 +740,7 @@ is_rpa(const struct sgx_ref *r)
 static const struct fieldset NOF = {0};
 
 /* ------------------------------------------------------------------------
- * float16 (mediump, as the DDK computes it): values are F16 halves, two per
+ * float16 (mediump; corpus *_m): values are F16 halves, two per
  * register; arithmetic is fmad16 on lane pairs (ISA.md: per-source swizzle
  * lohi / ll / hh / f32-converted, rounds to nearest), packing is
  * pck.f16.f16, conversions pck/fmad16. */
@@ -1431,7 +1431,7 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
          fmad16(c, dp, m);
          break;
       case nir_op_flrp: {
-         /* the DDK's mix: b * t + a, then t * -a + that */
+         /* mix: b * t + a, then t * -a + that (corpus mix_m) */
          unsigned t = new_vreg16(c, 2);
          m[0][0] = s[1][l0];
          m[0][1] = s[1][l1];
@@ -1454,7 +1454,7 @@ emit_alu16(struct sgx_ctx *c, nir_alu_instr *alu)
       case nir_op_ffloor:
       case nir_op_ffract: {
          /* per lane: fract in f32 from the F16 half (fsubflr under format
-          * select), then x - fract as fmad16 (the DDK's floor) */
+          * select), then x - fract as fmad16 (corpus floor_m) */
          struct sgx_ref lane[2];
          for (unsigned q = 0; q < 2; q++) {
             unsigned li = q ? l1 : l0;
@@ -2686,7 +2686,7 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          off = (uint32_t)uif(off);
       v->n = nir_intrinsic_base(in) + off;
       if (v->n < ARRAY_SIZE(c->const_fmt) && c->const_fmt[v->n] == 3) {
-         /* C10 in SA (as the DDK loads a lowp vector): to F16 with
+         /* C10 in SA (a lowp vector, corpus *_l): to F16 with
           * pck.f16.c10 [scale], channel n at bits 10n holds constant
           * k + 2 - n (corpus mc_texfog) */
          unsigned k = v->n, nc = 0;
@@ -2927,8 +2927,9 @@ emit_br(struct sgx_ctx *c, unsigned l, unsigned pred)
 
 static void emit_tex(struct sgx_ctx *c, nir_tex_instr *tex);
 
-/* tex(v.xy * rcp(v.w)) on a whole vec4 varying v: the DDK's non-dependent
- * projected read (the PDS iterates v.xy / v.w); the divide isn't emitted.
+/* tex(v.xy * rcp(v.w)) on a whole vec4 varying v: a non-dependent
+ * projected read (corpus c3 tx_nd_proj4: the PDS iterates v.xy / v.w); the
+ * divide isn't emitted.
  * The varying load behind a mov of it (or the load itself), and the swizzle */
 static nir_intrinsic_instr *
 varying_load(nir_src *src, const uint8_t **swz, nir_alu_instr **mov)
@@ -3472,8 +3473,8 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
    unsigned read = nir_def_components_read(&tex->def);
    if (s->f16_return) {
       /* returned as F16 pairs in RGBA order, whatever the texel's byte
-       * order (the TAG converts by channel: the DDK's terrain program, T1
-       * 0x0c): the channels are the halves themselves */
+       * order (the TAG converts by channel; capture, T1 0x0c): the channels
+       * are the halves themselves */
       struct sgx_ref hr[4];
       for (unsigned k = 0; k < 4; k++) {
          hr[k] = ref(SGX_F_PA, 2 * s->pa + k);
@@ -3746,7 +3747,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
  * fragment epilogue: colour to packed BGRA8, discard feedback */
 
 /* ------------------------------------------------------------------------
- * lowp in C10, as the DDK computes it: a lowp vec4 expression over lowp
+ * lowp in C10 (corpus *_l): a lowp vec4 expression over lowp
  * uniforms that only the colour reads runs in the colour classes on 10-bit
  * fixed point (ISA.md "sop2"; corpus c1/c2 *_l). Its leaves are the uniforms
  * as C10 (xyz in one SA slot, w in channel 0 of another). A value goes into
@@ -4296,7 +4297,7 @@ emit_c10(struct sgx_ctx *c, struct c10_state *st, nir_def *d,
       va = c10_get(c, st, a, true);
       unsigned t[3];
       int wi = va.held ? c10_ialloc(c, st) : va.i;
-      /* channel order as the DDK: z, y, x, then w over the source */
+      /* channel order z, y, x, then w over the source (corpus *_l) */
       for (unsigned n = 0; n < 4; n++) {
          unsigned ch = n < 3 ? 2 - n : 3;
          struct sgx_ins *i = ins_alloc(c, SGX_INS_ALU, form);
@@ -4519,8 +4520,8 @@ emit_color(struct sgx_ctx *c)
       h16 &= col[k].h16 || (col[k].file == SGX_F_K &&
                             (col[k].n == 0 || col[k].n == 0x3f800000));
    if (h16) {
-      /* pck.u8.f16 D, r, a [dmask=12] then D, b, g [dmask=3], as the DDK packs
-       * an F16 colour */
+      /* pck.u8.f16 D, r, a [dmask=12] then D, b, g [dmask=3]: an F16 colour
+       * (corpus *_m) */
       struct sgx_ref orig[4];
       memcpy(orig, col, sizeof(orig));
       for (unsigned k = 0; k < 4; k++) {
@@ -4894,8 +4895,8 @@ drop_self_moves(struct sgx_ctx *c)
 
 /* efo chains back to back (mat4 * v, then another): the next chain's first
  * efo stores the previous chain's second lane with d=i1 (the old I1, ISA.md
- * "efo") while it starts its own I0/I1, and the trailing mov goes (capture:
- * the DDK's terrain vertex program). The previous chain's last efo becomes
+ * "efo") while it starts its own I0/I1, and the trailing mov goes (capture of a
+ * terrain vertex program). The previous chain's last efo becomes
  * nosched so I1 survives. Not when the first efo reads what the mov wrote. */
 static void
 chain_efos(struct sgx_ctx *c)
@@ -4934,7 +4935,7 @@ chain_efos(struct sgx_ctx *c)
  *
  * A derivative reads its 2x2 neighbours, and a dependent sample takes its LOD
  * from them, so whatever feeds one runs with skipinv clear: helper instances
- * then hold real values (the DDK's dsy, fwidth and tx_dep words). Flow-
+ * then hold real values (corpus c3 dsy, fwidth, tx_dep). Flow-
  * insensitive: every writer of a needed register is needed, and with any of
  * them, the branch predicates too. PA isn't tracked: the iterations fill it
  * on every instance, and the program writes it only for its outputs. */
@@ -6508,7 +6509,6 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    c->colour_k = -1;
    memset(c->lit_packed_k, 0xff, sizeof(c->lit_packed_k));
    c->p16 = opts->f16;
-   c->n_labels = 6; /* 3 start, 4 feedback, 5 phase 1: the USP's numbers */
    c->sa_base = c->stage == MESA_SHADER_FRAGMENT ? 9 : 10;
    util_dynarray_init(&c->vregs, c);
    util_dynarray_init(&c->words, c);

@@ -231,12 +231,12 @@ earlier licensing and provenance audit.
 |---|---|---|
 | C1 | debug options in a `debug_named_value` table | done (1ba7774) |
 | C2 | clang-format | done (31f6f18) |
-| C3 | NIR passes in Mesa's shape | done (69923e0); one item left |
-| C4 | unit tests under `meson test` | done (7e0421a); coverage to grow |
+| C3 | NIR passes in Mesa's shape | done (69923e0, options asserted 2026-11-11) |
+| C4 | unit tests under `meson test` | done (7e0421a; 22 cases 2026-11-11) |
 | C5 | structure doc | done (`compiler/README.md`, 7e0421a) |
 | C6 | no global mutable state | done (`hw_const`) |
-| C7 | comments cite `docs/`, not libusc or the DDK | not started |
-| C8 | DDK-compatibility code out of the compiler | partly |
+| C7 | comments cite `docs/`, not libusc or the DDK | done (2026-11-11) |
+| C8 | DDK-compatibility code out of the compiler | done (2026-11-11) |
 | C9 | file size | open (optional) |
 
 - **C1. Debug options.**
@@ -261,18 +261,22 @@ earlier licensing and provenance audit.
     `lower_tex_derefs`, `lower_uniforms`.
   - Rewrites are `nir_shader_{instructions,alu,intrinsics}_pass` callbacks;
     the block walks left are analyses.
-  - Still to do: `sgx_lower()` sets `s->options` to its own options. The
-    driver and sgxc should create the shader with `sgx_nir_options()`
-    instead, and the compiler should assert that they did.
+  - The caller creates the shader with `sgx_nir_options()` (the driver's
+    `get_compiler_options`, the gtest's builder; sgxc sets it on the
+    standalone frontend's NIR), and `sgx_lower()` asserts it.
 - **C4. Tests.**
   - `meson test --suite sgx` runs `sgx_compiler` (gtest) beside
     cleanroom-isa's `sgx_isa`.
   - Shaders are built with `nir_builder` and compiled; every word must
     decode through the isaspec disassembler.
-  - Cases: a fragment varying to color, a vertex position, efo co-issue on
-    mat4 * v, and the int-select loop bound (d3adad7).
-  - Each case was checked to fail on the bug it guards.
-  - To grow: F16 and C10 paths, textures, discard, constants in memory.
+  - 22 cases: varyings, positions and efo co-issue (and its chains), the
+    int-select loop bound, an early-exit loop, partial colors, ceil,
+    or-of-compares masks, textures (BGRA units, PDS-only samples, F16
+    returns, a dependent sample), the color fast paths, mediump fmad16, lowp
+    C10, discard in one phase and split in two, constants past SA (ld.a.d),
+    and skipinv clear on what feeds a derivative.
+  - Each case was checked to fail on the bug it guards (the new ones with
+    `SGX_COMPILER_DEBUG=nomediump` and with the helper marking disabled).
   - The DDK corpus harness (`tools/usc`) stays in this repository.
 - **C5. Structure doc.** `compiler/README.md` covers the files, the pipeline
   (lowering, analysis, selection, backend passes, allocation, encoding), the
@@ -282,18 +286,23 @@ earlier licensing and provenance audit.
   race between two contexts compiling at once). It is now a const table.
   This also fixes a latent bug: a literal equal to the old filler value
   0xdeadbeef no longer matches hardware constant 0.
-- **C7. Comments.**
-  - About 58 comments say "as libusc does" or "as the DDK does" (27 in
-    `sgx_compile.c`, 16 in `sgx_nir.c`, 12 in `sgx_compiler.h`).
-  - Rewrite each to cite the `docs/` section and the test that fixed the
-    behavior (COMPILER-UPSTREAM.md §2.2).
-  - Box and application names: none left in the compiler.
+- **C7. Comments.** Every comment that named libusc, the DDK or
+  glslcompiler as the behavior matched now cites the docs section, corpus
+  shader, capture or hardware test it rests on (byte-identical). Box and
+  application names: none left in the compiler.
 - **C8. DDK-compatibility code** (COMPILER-UPSTREAM.md §3).
-  - Still in the compiler: the varying-to-set allocation, first-use sampler
-    numbering, the USP label numbers 3/4/5, and the placeholder color
-    iteration's PA count.
-  - Upstream, the driver owns layouts. Move these behind
-    `struct sgx_layout`, or into sgxc.
+  - Samplers: the compiler takes the caller's unit (`struct sgx_layout`), or
+    else the sampler variable's binding. sgxc numbers unpinned samplers in
+    order of use, as the corpus does.
+  - Labels: the compiler numbers its own from 0. The USP writer
+    (`tools/usc/sgx_usp.c`) keeps 3/4/5 for start, feedback and phase 1 and
+    puts the compiler's after them.
+  - `n_pa` counts the iterations and the color only. The USP writer adds the
+    DDK driver's placeholder color iteration's register to the header.
+  - The varying-to-set allocation stays. It is the compiler's allocation,
+    and the driver uses it for both stages; the rule is in ISA.md "What a
+    compiler needs".
+  - Every step is byte-identical on the 11,868 programs.
 - **C9. File size.** `sgx_compile.c` is 5.8k lines, the size of
   `ir3_compiler_nir.c`.
   - Splitting it into selection, register allocation and encoding files means
