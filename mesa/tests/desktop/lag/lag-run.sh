@@ -49,7 +49,12 @@ for f in ../desktop-up.sh ../xorg.conf lag-wl.sh lag-box.sh; do
 done
 for v in "$@"; do
 	echo "== $v"
-	E "rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} \
+	# once, not retried (a retry would run the variant again): a long
+	# keepalive instead
+	sshpass -p "$BOX_PASS" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
+		-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 \
+		-o ServerAliveInterval=15 -o ServerAliveCountMax=40 root@$BOX \
+		"rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} \
 		sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" || echo "$v failed"
 	mkdir -p "$OUT/$v"
 	E "cd /tmp/lagout/$v && tar cf - ." | tar xf - -C "$OUT/$v"

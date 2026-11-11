@@ -87,7 +87,22 @@ cp "$RIG/lag-wl.sh" "$R/tmp/lag-wl.sh"
 chmod 755 "$R/tmp/lag-wl.sh"
 
 XENV="$xenv" sh "$OUT/rig/desktop-up.sh" "$R" start > "$OUT/up.txt" 2>&1 || { cat "$OUT/up.txt"; exit 1; }
+# whatever happens next, the box is left without X, perf or the sampler
+perfpid= sampler=
+cleanup() {
+	[ -n "$perfpid" ] && kill -INT $perfpid 2>/dev/null
+	[ -n "$sampler" ] && kill $sampler 2>/dev/null
+	sleep 2
+	sh "$OUT/rig/desktop-up.sh" "$R" stop > /dev/null 2>&1
+	rm -f /tmp/lag-perf-*.data
+}
+trap cleanup EXIT
 sleep 30
+# the session's D-Bus, for the clients started here (xfwm4 reads its settings
+# through Xfconf, on it)
+sess=$(pidof xfce4-session | cut -d' ' -f1)
+dbus=$([ -n "$sess" ] && tr '\0' '\n' < /proc/$sess/environ | grep '^DBUS_SESSION_BUS_ADDRESS=')
+cenv="$cenv $dbus"
 # xfwm4 again, with this variant's Mesa, options and stats
 as_desk sh -c "exec xfwm4 --replace $xfwm" > /tmp/lag-xfwm4.err 2>&1 &
 sleep 8
@@ -147,7 +162,7 @@ for w in "$@"; do
 		sleep 1
 	fi
 	mark start "$V" "$w"
-	as_desk sh /tmp/lag-wl.sh "$w" > "$OUT/wl-$w.txt" 2>&1
+	as_desk timeout 180 sh /tmp/lag-wl.sh "$w" > "$OUT/wl-$w.txt" 2>&1
 	mark end "$V" "$w"
 	# what X has, and what the display scans out (simpledrm's boot
 	# framebuffer, where /root/m3/memdump is there): is the screen right
@@ -165,6 +180,7 @@ for w in "$@"; do
 		$PERF report -i /tmp/lag-perf-$w.data --stdio --no-children --comms Xorg,xfwm4 \
 			-g caller,0.5,callee --percent-limit 2 > "$OUT/perf-$w-calls.txt" 2>/dev/null
 		mv /tmp/lag-perf-$w.data "$OUT/perf-$w.data"
+		perfpid=
 	fi
 	sleep 3   # the stats line after the workload (every 2 s)
 	sed -n "$((xl0 + 1)),\$p" "$R/var/log/xorg.out" | grep '^sgx stats' > "$OUT/stats-x-$w.txt"
@@ -172,6 +188,7 @@ for w in "$@"; do
 done
 
 kill $sampler
+sampler=
 echo 0 > $T/tracing_on
 cat $T/trace > "$OUT/trace.txt"
 for e in pvrsgx_kick pvrsgx_job_done pvrsgx_render_kick; do
@@ -190,5 +207,4 @@ if [ $V = shaderdump ]; then
 fi
 { getconf CLK_TCK 2>/dev/null || chroot "$R" getconf CLK_TCK 2>/dev/null || echo 100; } > "$OUT/clk_tck.txt"
 dmesg | grep -i 'powervr\|sgx' | tail -40 > "$OUT/dmesg.txt"
-sh "$OUT/rig/desktop-up.sh" "$R" stop > /dev/null 2>&1
 echo "lag-box.sh: $V done"
