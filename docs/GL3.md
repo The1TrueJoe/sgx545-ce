@@ -181,7 +181,7 @@ rotation of each triangle's vertices on the CPU before step 2.
 | primitive restart (`NV_primitive_restart`) | none known | split on the CPU (`util_draw_vbo_without_prim_restart`); the driver already reads indices on the CPU | `sgx_draw.c` | high |
 | rectangle textures (`NV_texture_rectangle`) | NPOT linear layout (T1 layout 3) | unnormalized coordinates scaled in NIR (`nir_lower_tex` `lower_rect`) | TEX.md §1 (hardware) | high |
 | texture buffer objects (3.1 core; Mesa doesn't gate on them) | — | a linear 1D texture of the buffer, `texelFetch` through `ld` | ISA.md `ld` | medium |
-| 16 vertex texture units | the vertex program samples with `smp` (h8-9 = 2) | today the driver has fragment samplers only (`sgx_screen.c`); needs vertex sampler state in the vertex program's SA | ISA.md "Vertex texture fetch" (corpus); listed (ICD: 16) | medium |
+| 16 vertex texture units | the vertex program samples with `smp` (h8-9 = 2) | the compiler emits vertex samples (dependent `smp`); the driver has fragment samplers only (`sgx_screen.c`) and needs vertex sampler views and states, their DOUTT words in the vertex program's SA, and the size constants (lower_txs_int) for vertex units: until then a vertex program that samples is refused | ISA.md "Vertex texture fetch" (corpus); listed (ICD: 16) | medium |
 
 ## GL 3.2
 
