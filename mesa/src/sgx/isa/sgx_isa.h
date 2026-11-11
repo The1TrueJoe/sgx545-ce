@@ -5,12 +5,12 @@
 
 /*
  * SGX545 USSE instructions: the encoder and disassembler generated from
- * sgx.xml (docs/ISA.md). The compiler fills a struct sgx_isa_instr and
- * calls sgx_isa_encode().
+ * sgx.xml. The compiler fills a struct sgx_isa_instr and calls
+ * sgx_isa_encode().
  *
- * Operands are given by slot, as ISA.md names them: dst, src[0] (src0),
- * src[1] (src1), src[2] (src2). A form with one source (frcp, mov, ...)
- * uses src[1]. Fields a form doesn't have are ignored.
+ * Operands are given by slot: dst, src[0] (src0), src[1] (src1), src[2]
+ * (src2). A form with one source (frcp, mov, ...) uses src[1]. Fields a form
+ * doesn't have are ignored.
  */
 
 #ifndef SGX_ISA_H
@@ -205,11 +205,11 @@ bool sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
                     size_t size);
 
 /*
- * Co-issue (ISA.md "fdual for a compiler", "efo"). What an fdual's two
+ * Co-issue (fdual, and efo's internal registers). What an fdual's two
  * halves read and write: bit n of an _i mask is i<n> (r124+n counts as
- * i<n>), bit k of a _slots mask the src<k> slot. settled is false where
- * ISA.md leaves the op's operands open (fmaxmin, fmad16 and ima32 as the
- * secondary, fddp and ima32 as the primary); the masks then assume the most.
+ * i<n>), bit k of a _slots mask the src<k> slot. settled is false where the
+ * op's operands aren't known (fmaxmin, fmad16 and ima32 as the secondary,
+ * fddp and ima32 as the primary); the masks then assume the most.
  */
 struct sgx_isa_fdual_use {
    uint8_t sec_reads_i, sec_writes_i, sec_reads_slots;
@@ -223,7 +223,7 @@ bool sgx_isa_fdual_use(const struct sgx_isa_instr *instr,
 /*
  * A same-word race the hardware shows (an fdual primary reading an internal
  * register its secondary writes; efo's d naming I0 while the word writes I0):
- * a reason, or NULL. Not hazards, by ISA.md: both halves reading one slot, the
+ * a reason, or NULL. Not hazards: both halves reading one slot, the
  * secondary reading an internal register the primary writes, the next
  * instruction reading the secondary's result, efo's d=i1 with wi1 (it reads
  * the old I1).

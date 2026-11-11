@@ -1,0 +1,61 @@
+sgx: add the SGX545 ISA trees and sgx-asm/sgx-disasm (-Dtools=sgx)
+
+src/sgx/isa describes the PowerVR SGX545's USSE instruction set and
+src/sgx/pds its PDS programs, both for isaspec; src/sgx/csbgen describes
+its TA/3D state words for csbgen. -Dtools=sgx builds them, their tests,
+and two tools, as -Dtools=etnaviv builds etnaviv-disasm: sgx-asm
+assembles USSE instructions from text in one batch (for builds of the
+GPU's microkernel firmware, which don't need a driver), and sgx-disasm
+is the matching disassembler. 'all' includes sgx. The three trees are
+clang-format clean and opt in to enforcement.
+
+diff --git a/.clang-format-include b/.clang-format-include
+index 4a0e12f..e711f40 100644
+--- a/.clang-format-include
++++ b/.clang-format-include
+@@ -13,3 +13,6 @@ src/egl/**/*
+ src/etnaviv/isa/**/*
+ src/imagination/**/*
+ src/kosmickrisp/**/*
++src/sgx/csbgen/**/*
++src/sgx/isa/**/*
++src/sgx/pds/**/*
+diff --git a/meson.build b/meson.build
+index 5f19ef9..f890885 100644
+--- a/meson.build
++++ b/meson.build
+@@ -130,6 +130,7 @@ if with_tools.contains('all')
+     'nir',
+     'nouveau',
+     'panfrost',
++    'sgx',
+     'gamma',
+     'zink',
+   ]
+diff --git a/meson.options b/meson.options
+index 93a60e3..989dabd 100644
+--- a/meson.options
++++ b/meson.options
+@@ -559,7 +559,7 @@ option(
+   value : [],
+   choices : ['amd', 'asahi', 'dlclose-skip', 'drm-shim', 'etnaviv', 'freedreno',  
+              'gamma', 'glsl', 'imagination', 'intel', 'intel-ui', 'lima', 'nir',
+-             'nouveau', 'panfrost', 'zink', 'all'],
++             'nouveau', 'panfrost', 'sgx', 'zink', 'all'],
+   description : 'List of tools to build. (Note: `intel-ui` selects `intel`)',
+ )
+ 
+diff --git a/src/meson.build b/src/meson.build
+index c36f44b..fad4238 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -104,6 +104,9 @@ endif
+ if with_gallium_panfrost or with_gallium_lima or with_panfrost_vk or with_tools.contains('panfrost')
+   subdir('panfrost')
+ endif
++if with_tools.contains('sgx')
++  subdir('sgx')
++endif
+ if with_microsoft_clc or with_gallium_d3d12 or with_spirv_to_dxil or with_microsoft_vk
+   subdir('microsoft')
+ endif

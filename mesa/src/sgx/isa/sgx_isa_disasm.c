@@ -23,7 +23,7 @@
 static void
 print_custom(struct isa_print_state *print, const char *name, uint64_t v)
 {
-   /* Numbers print in decimal (ISA.md "Text notation and defaults"). */
+   /* Numbers print in decimal. */
    if (!strcmp(name, "NODST")) {
       if (v != 0x280)
          isa_print(print, " nodst=%" PRIu64, v);

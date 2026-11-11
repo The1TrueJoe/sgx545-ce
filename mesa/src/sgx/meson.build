@@ -8,6 +8,6 @@ subdir('csbgen')
 subdir('isa')
 subdir('pds')
 # NIR is a stub without a driver that uses it (-Dtools=sgx alone)
-if with_gallium_sgx
+if gallium_drivers.contains('sgx')
   subdir('compiler')
 endif

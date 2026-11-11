@@ -3,9 +3,7 @@
 `sgx.xml` describes the 64-bit USSE (universal scalable shader engine)
 instructions of the PowerVR SGX545 in Mesa's isaspec format. isaspec
 generates the encoder and the disassembler from it; the C files here are the
-glue and a small text assembler. The instruction set and its text notation
-are documented in `docs/ISA.md` of the powervr_sgx repository; the comments
-cite its sections by name.
+glue and a small text assembler for the notation below.
 
 | file | what |
 |---|---|
@@ -13,8 +11,8 @@ cite its sections by name.
 | `sgx_isa.h` | the API: `struct sgx_isa_instr`, `sgx_isa_encode()`, `sgx_disasm()` |
 | `sgx_isa_encode.c` | leaf selection for the generated encoder, the helpers the XML's `<map>`s call |
 | `sgx_isa_disasm.c` | the generated decoder plus custom fields, setfc tracking, bracket tidying |
-| `sgx_isa_asm.c`, `sgx_isa_asm_int.c` | ISA.md's text notation into `struct sgx_isa_instr` |
-| `sgx_isa_coissue.c` | co-issue for a compiler: what an fdual's two halves read and write (`sgx_isa_fdual_use()`), and the same-word races of fdual and efo (`sgx_isa_coissue_hazard()`), from ISA.md "fdual for a compiler" and "efo" |
+| `sgx_isa_asm.c`, `sgx_isa_asm_int.c` | the text notation into `struct sgx_isa_instr` |
+| `sgx_isa_coissue.c` | co-issue for a compiler: what an fdual's two halves read and write (`sgx_isa_fdual_use()`), and the same-word races of fdual and efo (`sgx_isa_coissue_hazard()`) |
 | `assembler.c`, `disasm.c` | `sgx-asm` and `sgx-disasm`, the command-line tools (`-Dtools=sgx`) |
 | `sgx_isa_enums.py` | generates `sgx-isa-enums.h`: the opcode and operand-kind enums the encoder switches on, and the field-value enums |
 | `tests/sgx_isa_test.c` | text -> struct -> words -> text round trip; checks expected words where a line gives them |
@@ -23,6 +21,28 @@ cite its sections by name.
 
 Generated: `sgx-isa.c` / `sgx-isa.h` (decoder), `sgx-isa-encode.h`
 (encoder), `sgx-isa-enums.h`.
+
+## Text notation
+
+What `sgx_disasm()` prints and the assembler reads, one instruction per
+line:
+
+    [(pred)] mnemonic[.suffix...] operand, operand, ... [item item=value ...]
+
+- **Bits.** l<n> is bit n of the low word, h<n> bit n of the high word; an
+  instruction is stored low word first. h27-31 is the class.
+- **Operands**, destination first: `r<n>` temporaries, `pa<n>` primary and
+  `sa<n>` secondary attributes, `o<n>` outputs, `c<n>` hardware constants,
+  `g<n>` special registers, `i<n>` internal registers, `idx<n>` index
+  registers, `p<n>` predicates, `#<n>` immediates. An indexed operand is
+  `bank[idx<k>+<off>]`, the offset always written. `-x`, `|x|` and `-|x|`
+  are the float source modifiers. Under format select an F16 operand is
+  `r<n>.f16.lo` / `.hi` and a C10 one `r<n>.c10`.
+- **Predicate**: `(p0)`-`(p3)`, `(!p0)`, `(!p1)`, `(pn)`.
+- **Items** in brackets are flags and fields; a field the text doesn't show
+  holds its default. Bracket order doesn't matter, and any whitespace may
+  come before `[`.
+- Numbers are decimal; large immediates print in hex.
 
 ## Tests
 
@@ -34,7 +54,7 @@ words. `sgx_isa_tools` puts the same lines through `sgx-asm` and
 
 ## Tools
 
-With `-Dtools=sgx` (patch 0006), Mesa builds two command-line tools; both
+With `-Dtools=sgx`, Mesa builds two command-line tools; both
 only read and write files.
 
     sgx-asm [-c core] [-F fc] [-b | -L] [-o out] [file...]
@@ -51,8 +71,7 @@ as `<file>:<line>: <text>: <message>`, and the exit status is then 1.
 text, or with `-w` the words and the text.
 `-c` selects the core (545, the default), and `-F` the starting format
 control (1 = C10, 2 = F16; 1 by default). Both tools follow `setfc` from
-there. `mesa/tests/isa-standalone/standalone.sh` builds both without a Mesa
-build.
+there.
 
 ## Cores
 
@@ -64,27 +83,25 @@ root bitset carries SGX545's range, so a word for a core `sgx.xml` doesn't
 describe doesn't decode, and `sgx_isa_core_supported()` refuses it.
 `struct sgx_isa_fc` carries the core; 0 means SGX545. A field another core
 encodes differently gets a `<gen>` range, or an override that reads
-`ISA_GPU_ID() / 100`, once ISA.md documents it for that core.
+`ISA_GPU_ID() / 100`.
 
-## isaspec change
+## isaspec features it relies on
 
-This needs two isaspec commits, carried together as
-`mesa/patches/0003-isaspec-derived-bitset-params-and-override-fields.patch`
-in powervr_sgx (`git am` applies them as two commits) and to be sent
-upstream ahead of this tree (see below). Neither changes the code generated
-for ir3, etnaviv or qrisc, apart from unreachable code the second removes
-from ir3's encoder.
+Two isaspec behaviors that other descriptions don't use: `<param>`s on a
+`<derived>` field of bitset type, and, when several `<override>`s define one
+field, the encoder taking the first that holds (as the decoder does). See
+below.
 
 ## How the XML is laid out
 
-- Bit n < 32 is ISA.md's `l<n>`, bit 32 + n is `h<n>`.
+- Bit n < 32 is `l<n>`, bit 32 + n is `h<n>`.
 - Each class is a bitset extending `#instruction` with its opcode pattern on
   bits 59-63; sub-ops are leaf patterns.
 - **Operands.** A register operand's number, bank and extension bits are
   spread over the word (dst: l21-27, h0-1, h19). Each slot is one field per
   piece plus a `<derived>` field that joins them (`NUM | BANK << 7 | EXT <<
   9`) and is typed with an operand hierarchy (`#dst`, `#src`, `#src0`,
-  `#dst1`) whose leaf patterns are ISA.md's bank tables. A `MODE` parameter
+  `#dst1`) whose leaf patterns are the bank codes. A `MODE` parameter
   tells the operand how its number reads (plain, format select F16/C10,
   format control C10/F16): F16 numbers count halves (`r3.f16.hi`), C10
   numbers are flagged whole registers (`pa4.c10`), indexed operands shrink
@@ -99,13 +116,11 @@ from ir3's encoder.
 ## What isaspec can't express, and what is done instead
 
 - **Fields made of several bit ranges.** One field per range plus a
-  `<derived>` field. isaspec decodes a derived field of bitset type, but its
-  Python didn't accept `<param>`s on one, and the encoder's parameter struct
-  didn't know their names: patch 0003, commit 1.
-- **Several `<override>`s defining the same field.** The generated encoder
-  left a dangling `else` that swallowed the next field (it lost the F16 flag
-  of an indexed operand under format select). Patch 0003, commit 2: the
-  definition in the case being encoded wins, as in the decoder.
+  `<derived>` field of bitset type, which takes `<param>`s like a bitset
+  field.
+- **Several `<override>`s defining the same field.** The encoder takes the
+  definition in the first override that holds, as the decoder does (an
+  indexed operand under format select relies on it for its F16 flag).
 - **Modal state outside the word.**
   - Format control (`setfc`): the encoder takes it as `struct
     sgx_isa_fc` and hands it to the XML's expressions in the low digits of

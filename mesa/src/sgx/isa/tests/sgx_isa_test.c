@@ -5,7 +5,7 @@
 
 /*
  * Round trip for the isaspec encoder and disassembler: each line of the
- * input is an instruction in ISA.md's text notation, optionally followed
+ * input is an instruction in the USSE text notation, optionally followed
  * by "; <lo> <hi>", the expected words. The line is assembled, encoded,
  * compared with the expected words, disassembled, and the text compared
  * with the line. A line "<a> == <b>" checks another spelling instead: a and
@@ -41,7 +41,7 @@ trim(char *s)
    return s;
 }
 
-/* a == b up to runs of whitespace (ISA.md allows any whitespace before "[") */
+/* a == b up to runs of whitespace (any whitespace may come before "[") */
 static bool
 same_text(const char *a, const char *b)
 {

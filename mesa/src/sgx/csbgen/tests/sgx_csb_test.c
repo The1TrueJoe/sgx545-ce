@@ -4,9 +4,8 @@
  */
 
 /*
- * The state-word packers against words the hardware documentation quotes:
- * each case packs its fields, compares the word, then unpacks the word and
- * packs it again.
+ * The state-word packers against known words: each case packs its fields,
+ * compares the word, then unpacks the word and packs it again.
  */
 
 #include <stdio.h>

@@ -422,9 +422,12 @@ uapi-stream. Status as of 2026-11-08.
   its own description.
   1. `gallium: add the sgx driver`: meson, the pipe loader's DRM descriptor,
      the DRI target, and a loader predicate that picks sgx for powervr_sgx.
-  2. The shared code in `src/sgx`.
-  3. The isaspec changes.
+  2. `sgx: add the SGX545 ISA trees and sgx-asm/sgx-disasm (-Dtools=sgx)`:
+     the tools option, and `src/sgx` entered for it. Applies to Mesa alone.
+  3. The isaspec changes (two commits). Apply to Mesa alone.
   4. `kmsro, dril: sgx as a render-only GPU`.
+  5. GLES2 texture swizzle for glamor.
+  6. `sgx: build src/sgx for the gallium driver` (needs 1 and 2).
 - **`mesa/patches/pvrsrvkm/`, downstream only.**
   1. The EGL fbdev platform hooks.
   2. The loader predicate for pvrsrvkm.
@@ -614,22 +617,27 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
      and ir3's encoder loses 120 lines that can't run (cat1's immediate
      overrides test exclusive `SRC_TYPE` values). Compare with a fixed
      `PYTHONHASHSEED`: upstream's encoder output already varies with it.
-   - Open for review: isaspec has no test suite, so the commits point at
-     the SGX545 description as the first user. A reviewer may ask for a
-     minimal XML case, or for the second commit's `Fixes:` tag (the commit
-     that introduced the override ladder; not looked up).
+   - isaspec has no test harness, so each commit message says how it was
+     checked: the generated-code comparison, and for the second, that the
+     SGX545 test (`sgx_isa`) fails without it (2 of 324: the indexed F16
+     operands lose their F16 flag; checked 2026-11-11).
+   - Open for review: a reviewer may still ask for a minimal XML case, or
+     for the second commit's `Fixes:` tag (the commit that introduced the
+     override ladder; not looked up).
 3. **The PDS decoder's unused tables.** The DOUT data words are encode-only
    roots, and isaspec emits decode tables nothing uses for them, so
    `-Wno-unused-variable` is needed. Options:
    - isaspec skips decode tables for roots no `#instruction` reaches;
    - the data words move to a second XML that only the encoder reads.
-4. **The documentation the comments cite.** `docs/ISA.md`, `docs/PDS.md`
-   and `docs/STATE.md` live in powervr_sgx. Upstream needs them either as
-   `docs/drivers/sgx/*.rst` in Mesa or behind a stable link from each
-   README. The comments cite them by section name.
+4. **The documentation the comments cite.** Done 2026-11-11: nothing in
+   the three trees cites `docs/ISA.md`, `PDS.md`, `STATE.md` or tools
+   outside Mesa any more. Each comment states the fact itself, and the
+   text notation is summarized in `isa/README.md` ("Text notation"), which
+   the tools and the assembler point at. The test lists say what their
+   words are (known words) without naming a source.
 5. **The tools.** `sgx-asm` and `sgx-disasm` (USSE) are built with
    `-Dtools=sgx`, as `etnaviv-disasm` is with `-Dtools=etnaviv`. The
-   `meson.options` entry is `mesa/patches/0006`, and the `sgx_isa_tools`
+   option is `mesa/patches/0002`, and the `sgx_isa_tools`
    test runs them. The microkernel's build is to assemble through
    `sgx-asm` (UKERNEL-TOOLING.md §2). Still open: PDS in `sgx-disasm` (today
    `sgx_pds_test -d`).
@@ -643,16 +651,18 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
    winsys's bytes. Settling it is a driver change: winsys/driver owners.
 8. **`src/sgx/compiler`** isn't covered by this pass (the compiler
    session's tree): no `.clang-format`, and it has its own tests.
-9. **The gallium/meson hooks** (`mesa/patches/0001`, `0002`, `0006`) become
-   part of the driver's MR series. Nothing in these three trees depends on
-   them beyond `with_gallium_sgx` or `-Dtools=sgx` entering `src/sgx`.
-   - `0006` (`sgx: build sgx-asm and sgx-disasm with -Dtools=sgx`) is one
-     commit of its own but not independent: it edits the `src/meson.build`
-     line `0002` adds, and `src/sgx/meson.build` reads `0001`'s
-     `with_gallium_sgx`. An MR that lands the ISA trees and tools before the
-     driver needs the order turned round: the tools commit adds
-     `subdir('sgx')` under `with_tools.contains('sgx')`, and the driver
-     commit adds `with_gallium_sgx` to it and `subdir('compiler')`.
+9. **The meson hooks.** Done 2026-11-11: the ISA trees and tools can land
+   before the driver.
+   - `0002` (the tools option) applies to Mesa 26.2.5 alone and enters
+     `src/sgx` for `-Dtools=sgx`; with `0003` and only `isa/`, `pds/`,
+     `csbgen/` and `src/sgx/meson.build` it builds and passes `meson test
+     --suite sgx` 4/4.
+   - `0006` (`sgx: build src/sgx for the gallium driver`) adds
+     `with_gallium_sgx` to that condition, so it needs `0001` and `0002`.
+   - `src/sgx/meson.build` enters `compiler/` on
+     `gallium_drivers.contains('sgx')`, so it doesn't need `0001`'s
+     `with_gallium_sgx` either. In the MR the compiler arrives with the
+     driver.
 10. **The core id.** `ISA_GPU_ID()` is `core * 100 + format control`
     (`sgx_isa_gpu_id()`), and the root bitset is `<gen>`-limited to SGX545
     (54500-54599). isaspec offers no second parameter, so the core shares

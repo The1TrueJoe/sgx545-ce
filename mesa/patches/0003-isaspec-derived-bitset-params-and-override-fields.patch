@@ -9,8 +9,11 @@ expression and decoded by one bitset hierarchy. Such a field needs
 <param>s like a plain bitset field: parse them, and add their names to
 the encoder's bitset_params struct.
 
-The SGX545 instruction set description is the first user. The code
-generated for ir3, etnaviv and qrisc doesn't change.
+The SGX545 instruction set description (src/sgx/isa) is the first user.
+isaspec has no tests of its own, so this was checked by generating the
+ir3, etnaviv and qrisc decoders and encoders before and after the change,
+with PYTHONHASHSEED fixed (the encoder's output order otherwise varies
+from run to run): they are identical.
 ---
  docs/isaspec.rst               |  5 ++++-
  src/compiler/isaspec/encode.py | 13 +++++++++++++
@@ -92,10 +95,13 @@ definition is OR'ed into the word.
 The decoder uses the first override whose expression holds, so make the
 encoder stop at the case being encoded, too.
 
-ir3's overrides of a field test exclusive conditions, so its encoder only
-loses unreachable code (120 lines of the generated encode.h). etnaviv's
-and qrisc's generated code doesn't change. The SGX545 instruction set
-description has overlapping overrides and needs the fix.
+Checked as for the previous commit, by comparing the generated code with
+PYTHONHASHSEED fixed. etnaviv's and qrisc's is identical. ir3's encoder
+only loses unreachable code (120 lines of the generated encode.h): its
+overrides of a field test exclusive conditions (cat1's immediate tests
+distinct SRC_TYPE values). The SGX545 instruction set description has
+overlapping overrides: without this, its sgx_isa test fails on the two
+indexed F16 operands it checks, which lose their F16 flag.
 ---
  docs/isaspec.rst               | 4 +++-
  src/compiler/isaspec/encode.py | 4 ++++

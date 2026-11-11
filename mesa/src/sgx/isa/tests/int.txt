@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Integer, fixed-point and multi-unit forms (hw 07, 10-1a) and fdual (hw 1b),
-# in docs/ISA.md's text notation. Program-start format control (C10 on,
+# in the USSE text notation. Program-start format control (C10 on,
 # efo F16 off) until a setfc line changes it.
 
 # --- lowp color ops (C10 format control on) --------------------------------
@@ -61,7 +61,7 @@ ima32 r0, r1, r2, r3
 ima32.sgn r0, sa1, r2, -r3 [hi=i1 cin=i2 negp]
 ima32 r0, o1, #5, r3 [rpt=8]
 
-# --- hw 16 / 17 / 1a forms with no corpus words ------------------------------
+# --- hw 16 / 17 / 1a forms ---------------------------------------------------
 adif r0, r1, r2
 adifsum r0, r1, r2, r3 [s0f13]
 op16s1 r0, r1, r2, r3 [f2_15=5 s8 x38 x1c x39=2 i=i1]

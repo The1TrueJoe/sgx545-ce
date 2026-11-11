@@ -76,7 +76,7 @@ __src_case(struct encode_state *s, const struct sgx_isa_src *o)
    }
 }
 
-/* src0 slots have no internal bank: i<n> is r(124 + n) (ISA.md "Registers"). */
+/* src0 slots have no internal bank: i<n> is r(124 + n). */
 static inline enum sgx_isa_case_src0
 __src0_case(struct encode_state *s, const struct sgx_isa_src *o)
 {
@@ -112,7 +112,7 @@ __dst1_case(struct encode_state *s, const struct sgx_isa_src *o)
 /*
  * The number field: g<n> is n + 0x40 on the c/g bank, i<n> in an r slot is
  * 124 + n, a negative immediate its 7-bit two's complement (the signed
- * immediates of ima16, imae, ...: ISA.md "imae").
+ * immediates of ima16, imae, ...).
  */
 static inline uint32_t
 sgx_isa_opnd_num(const struct sgx_isa_src *o)

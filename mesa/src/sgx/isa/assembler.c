@@ -4,7 +4,8 @@
  */
 
 /*
- * sgx-asm: assemble ISA.md's text notation, one instruction per line.
+ * sgx-asm: assemble the USSE text notation (README.md), one instruction per
+ * line.
  *
  *    sgx-asm [-c core] [-F fc] [-b | -L] [-o out] [file...]
  *

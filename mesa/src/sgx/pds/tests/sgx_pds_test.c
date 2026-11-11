@@ -9,8 +9,8 @@
  *
  * Each line of FILE is `<text> [; <word>]`: the text is assembled, encoded
  * and disassembled again, and must come back the same; with a word, the
- * encoding must equal it. Then the DOUT data words of docs/PDS.md's
- * examples. -f N also checks N random words: every word that decodes must
+ * encoding must equal it. Then a set of known DOUT data
+ * words. -f N also checks N random words: every word that decodes must
  * assemble back to itself. -t prints `<text> ; <word>` for each line.
  * -d disassembles hex words read from stdin, one `<word>  <text>` per word.
  */
@@ -79,7 +79,7 @@ check_word(const char *what, uint32_t got, uint32_t want)
    }
 }
 
-/* The DOUT data words docs/PDS.md quotes. */
+/* Known DOUT data words. */
 static void
 check_data_words(void)
 {

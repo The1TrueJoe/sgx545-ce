@@ -6,7 +6,7 @@
 /*
  * What a compiler needs to pair operations with efo and fdual: which
  * internal registers and slots each half reads and writes, and the same-word
- * hazards (ISA.md "fdual for a compiler", "efo").
+ * hazards.
  */
 
 #include "sgx_isa.h"

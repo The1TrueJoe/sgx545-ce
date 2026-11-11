@@ -1,0 +1,19 @@
+sgx: build src/sgx for the gallium driver
+
+The gallium driver uses the ISA, PDS and state-word code in src/sgx, and
+the compiler in src/sgx/compiler: src/meson.build enters src/sgx for the
+driver as well as for -Dtools=sgx.
+
+diff --git a/src/meson.build b/src/meson.build
+index fad4238..929580d 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -104,7 +104,7 @@ endif
+ if with_gallium_panfrost or with_gallium_lima or with_panfrost_vk or with_tools.contains('panfrost')
+   subdir('panfrost')
+ endif
+-if with_tools.contains('sgx')
++if with_gallium_sgx or with_tools.contains('sgx')
+   subdir('sgx')
+ endif
+ if with_microsoft_clc or with_gallium_d3d12 or with_spirv_to_dxil or with_microsoft_vk

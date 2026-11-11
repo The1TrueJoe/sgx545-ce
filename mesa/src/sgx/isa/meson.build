@@ -1,7 +1,7 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 
-# SGX545 USSE instruction set: sgx.xml (written from docs/ISA.md) through
+# SGX545 USSE instruction set: sgx.xml through
 # isaspec into an encoder, a disassembler and a text assembler.
 
 sgx_isa_depend_files = [files('sgx.xml'), isaspec_py_deps]

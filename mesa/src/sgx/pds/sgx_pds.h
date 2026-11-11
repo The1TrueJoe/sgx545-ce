@@ -4,7 +4,7 @@
  */
 
 /*
- * SGX545 PDS programs (docs/PDS.md): the encoder and disassembler generated
+ * SGX545 PDS programs: the encoder and disassembler generated
  * from sgx_pds.xml, the DOUT data-word encoders, and the program layout
  * (data segment, then code).
  */

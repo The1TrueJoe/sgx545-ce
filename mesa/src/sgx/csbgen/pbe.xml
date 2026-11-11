@@ -4,10 +4,10 @@
 Copyright © 2026 Joseph Telaak
 SPDX-License-Identifier: MIT
 
-The PBE (pixel back end) words the end-of-tile program emits
-(docs/STATE.md section 4), for Mesa's csbgen. A field named
-unknown_<bits> holds bits STATE.md gives a value but no meaning; widths
-STATE.md doesn't give are taken up to the next known field.
+The PBE (pixel back end) words the end-of-tile program emits, for Mesa's
+csbgen. A field named unknown_<bits> holds bits whose meaning is unknown,
+defaulting to the value they always have. A field of unknown width runs up
+to the next known field.
 -->
 
 <csbgen name="SGX" prefix="PBE">

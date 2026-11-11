@@ -5,7 +5,7 @@
 
 /*
  * The disassembler: isaspec's generated decoder, data-store word numbers
- * printed as in docs/PDS.md (ds0[2], ds1[0x30]), and the program layout.
+ * printed as ds0[2] / ds1[0x30], and the program layout.
  */
 
 #include <inttypes.h>
@@ -25,7 +25,7 @@ print_custom(struct isa_print_state *print, const char *name, uint64_t v)
       else
          return;
    }
-   /* numbers below 10 in decimal, the rest in hex (PDS.md "Text notation") */
+   /* numbers below 10 in decimal, the rest in hex */
    if (v < 10)
       isa_print(print, "%" PRIu64, v);
    else

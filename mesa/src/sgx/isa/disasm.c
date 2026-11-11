@@ -4,7 +4,8 @@
  */
 
 /*
- * sgx-disasm: disassemble USSE instructions to ISA.md's text notation.
+ * sgx-disasm: disassemble USSE instructions to the USSE text notation
+ * (README.md).
  *
  *    sgx-disasm [-c core] [-F fc] [-x] [-w] [file...]
  *

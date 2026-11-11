@@ -1,7 +1,7 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 
-# SGX545 PDS programs: sgx_pds.xml (written from docs/PDS.md) through
+# SGX545 PDS programs: sgx_pds.xml through
 # isaspec into an encoder and a disassembler, plus a text assembler.
 # (The generated files are named sgxpds-isa.*: isaspec names its
 # functions after the part of the file name before the first '-'.)

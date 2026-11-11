@@ -4,7 +4,8 @@
  */
 
 /*
- * A small assembler for ISA.md's text notation, into struct sgx_isa_instr:
+ * A small assembler for the USSE text notation (README.md), into struct
+ * sgx_isa_instr:
  *
  *    [(pred)] mnemonic[.suffix...] operand, operand, ... [item item=value ...]
  *
@@ -821,8 +822,8 @@ parse_line(const char *line, struct sgx_isa_instr *I, char *err, size_t errsize)
 
    if (!parse_operands(&c, I, pat, ops, nops))
       return false;
-   /* any format suffix sets format select (ISA.md "Text notation and
-    * defaults"; classes without the field ignore it) */
+   /* any format suffix sets format select (classes without the field
+    * ignore it) */
    for (unsigned k = 0; k < 3; k++)
       I->fmt |= I->src[k].fmt != SGX_ISA_FMT_NONE;
    I->fmt |= I->dst.fmt != SGX_ISA_FMT_NONE;
@@ -843,9 +844,9 @@ parse_line(const char *line, struct sgx_isa_instr *I, char *err, size_t errsize)
    } else if (I->rcnt) {
       return fail(&c, "'%s' has no rcnt", mnem);
    }
-   /* a source immediate is 7 bits, unsigned or (in the forms ISA.md says)
-    * two's complement: -64..127; the bitwise classes' src2 takes 16 bits,
-    * ldr/str's address 14 (ISA.md "MOE control", op 6) */
+   /* a source immediate is 7 bits, unsigned or (in the integer forms with
+    * signed immediates) two's complement: -64..127; the bitwise classes'
+    * src2 takes 16 bits, ldr/str's address 14 */
    for (unsigned k = 0; k < 3; k++) {
       bool wide =
          k == 2 && (I->opc == SGX_ISA_OPC_AND || I->opc == SGX_ISA_OPC_OR ||

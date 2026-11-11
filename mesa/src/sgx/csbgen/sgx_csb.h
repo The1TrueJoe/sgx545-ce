@@ -5,7 +5,7 @@
 
 /*
  * The state words of vdm.xml, ta.xml, pbe.xml and tex.xml, packed by csbgen's
- * generated helpers (docs/STATE.md sections 2-5).
+ * generated helpers.
  */
 
 #ifndef SGX_CSB_H
