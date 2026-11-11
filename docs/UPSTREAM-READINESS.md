@@ -324,8 +324,8 @@ earlier licensing and provenance audit.
 
 The microkernel is MIT-licensed source (`ukernel/ukernel.py`) assembled to a
 small binary a loader runs on the SGX core. Upstreaming has two destinations:
-the **source** (this repository, `powervr_sgx`) and the **built binary** (linux-firmware,
-loaded by the DRM driver).
+the **source** (this repository `powervr_sgx`, under `ukernel/`) and the **built
+binary** (linux-firmware, loaded by the DRM driver).
 
 | item | state |
 |---|---|
@@ -351,8 +351,9 @@ Driver: powervr_sgx — PowerVR SGX5xx (e.g. SGX545 on the Intel Atom CE5300)
 
 File: powervr_sgx/sgx545_ukernel.bin
 Version: 1.0
-Source: <source-repository-url>/ukernel   (ukernel.py + cores/<core>.py + build.py;
-        the DRM driver's packaging tool applies the header/feature bits)
+Source: https://github.com/The1TrueJoe/powervr_sgx   (ukernel/ — ukernel.py +
+        cores/<core>.py + build.py; the DRM driver's packaging tool applies the
+        header/feature bits)
 License: MIT.  See LICENSE.powervr_sgx for details.
 ```
 
@@ -370,9 +371,9 @@ build.py, the driver, the docs and the test scripts.
    its own tree and the WHENCE `License:` line references it. Add the MIT text as
    `LICENSE.powervr_sgx` (or reuse an existing MIT entry if the maintainers prefer)
    and point the `License:` line at it.
-2. **Public source URL.** Replace `<source-repository-url>` with the real public
-   repository of the microkernel source (`ukernel.py` + `cores/<core>.py` +
-   `build.py`), so a third party can reproduce the binary from a stable URL.
+2. **Public source URL.** **Set** — the source is the monorepo
+   `https://github.com/The1TrueJoe/powervr_sgx` (`ukernel/`), which must be publicly
+   reachable at submission so a third party can reproduce the binary from it.
 3. **Version scheme.** `Version` tracks the manifest `version` (the SGXMKIF
    interface major.minor); the manifest `build_id` identifies the exact build. Any
    change to the emitted bytes bumps the build, and the checked-in golden hash
