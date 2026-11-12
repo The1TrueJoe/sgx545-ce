@@ -452,13 +452,36 @@ def build(a):
     # handler is reached from here by a branch (one task), so only this entry
     # has the phase/end wrapper.
     a.label("event")
-    a.phas()
+    if DIAG_ENTRY is not None:
+        # bring-up only (cores/sgx530_diag.py): markers before phas.i. A register
+        # store, then memory: two stores, a ld/add/st, then the normal entry (+1 again)
+        a.i(f"limm r0, #{DIAG_TIMER}")
+        a.i(f"str #{CR_EVENT_TIMER // 4}, r0")
+        a.patch(17, "ctlblk")
+        if not MULTI_MEM_CONTEXTS:
+            a.patch(14, "pdtable")
+        a.i(f"limm r0, #{DIAG_ENTRY}")
+        a.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r0 [moe]")
+        a.i("idf")
+        a.i("wdf")
+        a.i(f"ldr r1, #{CR_CORE_ID // 4}")
+        a.i("wdf")
+        a.i(f"st.a.d r17, #{SC_VERSION}, r1 [moe]")   # CORE_ID; init overwrites it
+        a.i(f"ld.a.d r2, r17, #{HEARTBEAT} [moe]")
+        a.i("wdf")
+        a.i("imae r2, r2, #1, #1 [t2=u32]")
+        a.i(f"st.a.d r17, #{HEARTBEAT}, r2 [moe]")
+        a.i("idf")
+        a.i("wdf")
+    if DIAG_ENTRY is None or DIAG_PHAS:
+        a.phas()
     # (A `lock #1`/`release #1` task mutex was tried here + in a.end() to serialise
     # concurrent event tasks. It is offline-perfect (race_interleave 358/358) but
     # HW-neutral — the lockup_TA is unchanged with it, so the two-task
     # interleave is not what fails on hardware. Held out: a lock held across an
     # HWR reset is an unknown risk, for no measured benefit.)
-    a.patch(17, "ctlblk")                          # r17 = control block base, reserved for the
+    if DIAG_ENTRY is None:
+        a.patch(17, "ctlblk")                      # r17 = control block base, reserved for the
                                                    # whole task. A task can write its own secondary
                                                    # attributes, but only after the emit-triggered
                                                    # pds1 DMA sets sa up; this event program is a
@@ -466,7 +489,7 @@ def build(a):
                                                    # entry (writing it here wedges init). The
                                                    # handlers therefore derive host-control / CCB
                                                    # pointers from r17.
-    if not MULTI_MEM_CONTEXTS:
+    if not MULTI_MEM_CONTEXTS and DIAG_ENTRY is None:
         a.patch(14, "pdtable")                     # r14 = the host's PD table: read-only to the
                                                    # GPU, so its base lives in the (read-only)
                                                    # code, not in the writable control block

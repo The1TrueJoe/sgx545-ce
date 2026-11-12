@@ -111,6 +111,82 @@ evidence for the 18 instruction forms the path runs (sgx530.md, "What stage 1 ru
 | The heartbeat moves very fast | The timer period is short for this clock | Not a failure. Record the rate for the `clock_hz` entry (gap 14). |
 | Interrupt 21's count climbs fast | An event the host enabled keeps firing | Unload the module. Only SW_EVENT is enabled, and init raises none, so this is unexpected. |
 
+## The diagnostic entry (the third attempt)
+
+The second attempt (log 2026-11-11-1946) got this far:
+- `USE_CLKS` came on and memory reads completed;
+- there was no fault;
+- the heartbeat, the version word and `INIT_STATUS` stayed 0.
+
+So something in the USE's clock domain ran, but the image's first store (instruction 6)
+never landed. `cores/sgx530_diag.py` builds the same image with markers in front of
+`phas.i`. Each one depends on fewer forms than the next:
+
+| Step | Instructions | Leaves |
+|---|---|---|
+| 1 | `limm r0`, `str` to `EVENT_TIMER` (K) | `EVENT_TIMER` = 0xa5a (b24, enable, clear: no timer) |
+| 2 | the patched `limm r17`/`r14`, `limm r0`, `st.a.d` | control block word 0x28 (the log's "wait") = 0xd1a60001 |
+| 3 | `ldr` `CORE_ID`, `st.a.d` | word 0x18 (the log's "version") = 0x01120000 |
+| 4 | `ld.a.d`, `imae`, `st.a.d` on the heartbeat | heartbeat 1 |
+| 5 | `phas.i`, then the normal entry (its own heartbeat +1, init) | heartbeat 2; init writes version 0x00010000 and `INIT_STATUS` 1 |
+
+Every event runs the markers again, so while both halves run, the heartbeat moves by 2 per
+event. Init leaves word 0x28 alone, and no wait on the init or timer path can time out.
+
+```bash
+python3 ukernel/build.py sgx530_diag sgx530_diag.bin sgx530_diag.json
+python3 drm/tools/mkukfw.py sgx530_diag.bin -o sgx530_ukernel.bin --manifest sgx530_diag.json --core-rev 0x00010205
+python3 drm/tools/mkukfw.py --check sgx530_ukernel.bin
+```
+
+Expected:
+- `--check` prints image 0x4338, crc 0x1fb64e42, features 0x4, entry program 0 at 0x0,
+  and patches 0x10 <- ta3dctl and 0x18 <- pdtable.
+- The image is 17208 B, sha256 a2ee6a6d…, the same bytes through asm.py and
+  `sgx-asm -c sgx545`.
+- The packaged file is 845463a3…. The event program moves to 0x02004340.
+
+The file name stays `sgx530_ukernel.bin`, so the driver needs no change. The one extra
+read is `EVENT_TIMER` (0x0acc, named) on the failed start, next to the status words.
+Without it, step 1 goes unread, and an all-zero result can't tell row 1 from row 2.
+
+| `EVENT_TIMER` | wait | version | heartbeat | init | What it means |
+|---|---|---|---|---|---|
+| 0 | 0 | 0 | 0 | 0 | None of our code ran: the entry program's data under the SGX530's layout, the DOUTU against `USE_CODE_BASE_15`, or `limm`/`str` encode differently. Or the SGX530 needs `phas.i` first (U). Next: the entry side. |
+| 0xa5a | 0 | 0 | 0 | 0 | Our code runs and register stores work; the memory store doesn't land. Suspects: `st.a.d [moe]`, or the patched address. |
+| 0xa5a | 0xd1a60001 | 0 | 0 | 0 | Memory stores work, so the address patch is right. `ldr` or the `wdf` after it stops. |
+| 0xa5a | 0xd1a60001 | 0x01120000 | 0 | 0 | `ld.a.d` or `imae`. |
+| 0xa5a | 0xd1a60001 | 0x01120000 | 1 | 0 | Everything before `phas.i` works; `phas.i` stops or derails the task (ISA.md's highest risk). Next: a per-core flag that drops it. |
+| any | 0xd1a60001 | 0x01120000 | 2 | 0 | `phas.i` runs, and the stall is in init, past the entry. |
+| period \| b24 | 0xd1a60001 | 0x00010000 | ≥ 2, +2 per event | 1 | Init passes and the timer runs. The normal image's only difference is `phas.i` at instruction 0. |
+
+Other values: record them. An `EVENT_TIMER` other than 0, 0xa5a or init's value means a
+field is narrower than assumed, which is still evidence that step 1 ran.
+
+**What the addresses depend on.** hwt_window showed on the SGX545 that `ba` and `phas.i`
+targets count from the code base the task runs from, not from the heap.
+- The entry runs from `USE_CODE_BASE_15`. The DOUTU uses segment 0 and offset 0, and
+  `USE_CODE_BASE_15` points at the kernel code heap's start, where the image is loaded at
+  offset 0. So the image's indices are the base's indices, and build.py adds no load
+  offset.
+- `phas.i #0, #0` names no next phase, so it has no target.
+- Steps 1-4 have no branch. The normal entry's first `ba` comes after the markers.
+- The image is 17 KiB: one window.
+- The markers go to the control block at 0x02403000 (words 0x18, 0x28 and 0x2a, at 0x02403060,
+  0x024030a0 and 0x024030a8). That is page 3 of the kernel data arena, mapped
+  read-write and EDM-protected in the firmware directory (PDE 9, valid only).
+- What these don't cover is the unit of `USE_CODE_BASE`'s 24-bit address field on the
+  SGX530 (gap 9). The 32-bit SGX535 and SGX545 have 25-bit fields in units of 128 B. A
+  28-bit core with a 24-bit field would fit a 16 B unit, and then base 15 would point at
+  0x00400000. Nothing is mapped there at start, so I'd expect a USSE fetch there to fault.
+  The second attempt saw no fault, but row 1 can't rule it out.
+
+**`sgx530_diag_nophas`** is the same build without `phas.i`: after step 4 the normal
+entry falls through. It is the follow-up if the diagnostic entry stops at heartbeat 1.
+- Expected: image 0x4330 (17200 B, sha256 c42a740e…) and crc 0x5bd6b2f7.
+- The same patches, and the packaged file is 8d1a634f….
+- A pass gives the same results as the last row above.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:

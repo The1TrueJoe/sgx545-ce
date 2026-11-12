@@ -328,6 +328,9 @@ INIT_DPM_CLEAR = [CR_DPM_LOADSEL, 0x630]  # init zeroes the DPM load-select and 
                              # select, so an HWR leaves no stale OOM-shuffle state
 
 ISA_CORE = 545               # the instruction encodings: sgx-asm -c sgx<ISA_CORE>
+DIAG_ENTRY = None            # a bring-up marker: the event entry stores markers before
+                             # phas.i (cores/sgx530_diag.py); None = the normal entry
+DIAG_PHAS = True             # False drops the event entry's phas.i (diagnostic builds only)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
