@@ -329,13 +329,23 @@ static int __init pvrsgx_init(void)
 		return err;
 	err = pvrsgx_aux_register();
 	if (err)
-		pci_unregister_driver(&pvrsgx_pci_driver);
+		goto err_pci;
+	err = pvrsgx_of_register();
+	if (err)
+		goto err_aux;
+	return 0;
+
+err_aux:
+	pvrsgx_aux_unregister();
+err_pci:
+	pci_unregister_driver(&pvrsgx_pci_driver);
 	return err;
 }
 module_init(pvrsgx_init);
 
 static void __exit pvrsgx_exit(void)
 {
+	pvrsgx_of_unregister();
 	pvrsgx_aux_unregister();
 	pci_unregister_driver(&pvrsgx_pci_driver);
 }

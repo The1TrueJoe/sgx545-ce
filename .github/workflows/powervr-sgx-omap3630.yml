@@ -1,0 +1,141 @@
+# powervr_sgx for the SGX530 of our OMAP3630 test board: an ARMv7 cross build
+# against the board's kernel config (drm/ci/omap3630.config), in tree and out
+# of tree with W=1, through sparse. 7.1.8 is what the board runs now, so its
+# modules load there (same source, config and symbol versions); 7.3.3 is the
+# driver's target. The artifact is modules only; never flash anything.
+name: powervr-sgx-omap3630
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [m2-drm, sgx530, wip/multicore]
+    paths:
+      - drm/powervr_sgx/**
+      - drm/ci/omap3630*
+      - drm/ci/compat*
+      - .github/workflows/powervr-sgx-omap3630.yml
+
+concurrency:
+  group: powervr-sgx-omap3630-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        linux: ['7.1.8', '7.3.3']
+    env:
+      LINUX_VERSION: ${{ matrix.linux }}
+      ARCH: arm
+      # The board's kernel is built with gcc 15.3 (musl). The same compiler gives
+      # the same CC_HAS_* options and so the same symbol versions; gcc 13 doesn't.
+      TOOLCHAIN: armv7-eabihf--musl--stable-2026.08-1
+      TOOLCHAIN_SHA256: 9147bafae4aa272321a3c6440d04d83b7e23411b2d344f875541d84c4444ba9b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev cpio ccache sparse
+
+      - name: Restore the toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLCHAIN }}.tar.xz
+          key: toolchain-${{ env.TOOLCHAIN }}
+
+      - name: The board's compiler (gcc 15.3, Bootlin)
+        run: |
+          set -eux
+          [ -f $TOOLCHAIN.tar.xz ] ||
+            curl -sfLO https://toolchains.bootlin.com/downloads/releases/toolchains/armv7-eabihf/tarballs/$TOOLCHAIN.tar.xz
+          echo "$TOOLCHAIN_SHA256  $TOOLCHAIN.tar.xz" | sha256sum -c -
+          mkdir -p $RUNNER_TEMP/tc && tar xf $TOOLCHAIN.tar.xz -C $RUNNER_TEMP/tc
+          gcc=$(ls $RUNNER_TEMP/tc/$TOOLCHAIN/bin/*-linux-*-gcc | head -1)
+          echo "CROSS_COMPILE=${gcc%gcc}" >> $GITHUB_ENV
+          "$gcc" --version | head -1
+
+      - name: Restore the kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.LINUX_VERSION }}.tar.xz
+          key: linux-${{ env.LINUX_VERSION }}
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-arm-${{ env.LINUX_VERSION }}-${{ github.sha }}
+          restore-keys: ccache-arm-${{ env.LINUX_VERSION }}-
+
+      - name: Lay out the kernel
+        run: |
+          set -eux
+          [ -f linux-$LINUX_VERSION.tar.xz ] ||
+            curl -sfLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$LINUX_VERSION.tar.xz
+          tar xf linux-$LINUX_VERSION.tar.xz
+          sh drm/ci/omap3630-kernel.sh "$PWD/linux-$LINUX_VERSION" "$PWD/drm"
+          # Every compiler-dependent option as on the board, or the modules won't load.
+          if [ "$LINUX_VERSION" = 7.1.8 ]; then
+            for k in GCC_VERSION CC_HAS_COUNTED_BY CC_HAS_MULTIDIMENSIONAL_NONSTRING \
+                     CC_HAS_MIN_FUNCTION_ALIGNMENT CC_HAS_SANE_FUNCTION_ALIGNMENT; do
+              grep "^CONFIG_$k=" drm/ci/omap3630.config
+              grep -x "$(grep "^CONFIG_$k=" drm/ci/omap3630.config)" linux-$LINUX_VERSION/.config
+            done
+          fi
+
+      - name: Build the kernel and modules
+        run: |
+          set -eux
+          export CCACHE_DIR=~/.cache/ccache
+          ccache -M 2G
+          make -C linux-$LINUX_VERSION CC="ccache ${CROSS_COMPILE}gcc" \
+            KCFLAGS=-Werror=implicit-function-declaration -j"$(nproc)" vmlinux modules
+          ccache -s
+
+      - name: The driver out of tree, with W=1
+        run: |
+          set -eux
+          make -C linux-$LINUX_VERSION M=$PWD/drm/powervr_sgx CONFIG_DRM_POWERVR_SGX=m \
+            CONFIG_DRM_POWERVR_SGX_OF=y W=1 modules 2>&1 | tee oot.log
+          ! grep -E 'warning:|error:' oot.log
+
+      - name: The driver through sparse
+        run: |
+          set -eux
+          touch drm/powervr_sgx/*.c
+          make -C linux-$LINUX_VERSION M=$PWD/drm/powervr_sgx CONFIG_DRM_POWERVR_SGX=m \
+            CONFIG_DRM_POWERVR_SGX_OF=y C=2 modules 2>&1 | tee sparse.log
+          ! grep -E 'powervr_sgx/.*(warning|error):' sparse.log
+
+      - name: Collect the modules
+        run: |
+          set -eux
+          L=linux-$LINUX_VERSION
+          mkdir -p out
+          # Load order: the helpers first, then the driver.
+          for m in drm_exec drm_gpuvm gpu-sched drm_shmem_helper powervr_sgx; do
+            find $L -name "$m.ko" -exec cp {} out/ \;
+          done
+          cp $L/.config out/config
+          for m in out/*.ko; do
+            printf '%s %s\n' "$(basename $m)" "$(strings $m | sed -n 's/^vermagic=//p')"
+          done | tee out/vermagic
+          # omap2plus is a multi-v6/v7 kernel: its vermagic says ARMv6, as the board's does.
+          grep -q "^powervr_sgx.ko $LINUX_VERSION SMP mod_unload modversions ARMv" out/vermagic
+          [ "$(wc -l < out/vermagic)" = 5 ]
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powervr-sgx-omap3630-linux-${{ env.LINUX_VERSION }}
+          path: out/
+          retention-days: 14

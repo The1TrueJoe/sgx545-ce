@@ -1,0 +1,3 @@
+# powervr_sgx as a module on our OMAP3630 test board's kernel (omap3630.config).
+CONFIG_DRM_POWERVR_SGX=m
+CONFIG_DRM_POWERVR_SGX_OF=y
