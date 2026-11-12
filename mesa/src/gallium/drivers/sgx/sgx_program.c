@@ -953,6 +953,10 @@ remap_outputs(nir_shader *nir, unsigned t)
 {
    bool demoted = false;
 
+   /* gl_FragData is one array variable at FRAG_RESULT_DATA0: an element a
+    * variable first, each at its own location */
+   NIR_PASS(_, nir, nir_lower_io_array_vars_to_elements_no_indirects, true);
+
    nir_foreach_shader_out_variable (var, nir) {
       int loc = var->data.location;
 
