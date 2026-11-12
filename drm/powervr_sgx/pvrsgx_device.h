@@ -204,6 +204,10 @@ struct pvrsgx_device {
 	u8 sweep_data1;
 	/** @sweep_enable: The sweep's event PDS enable, with PVRSGX_SWEEP_ENABLE. */
 	u32 sweep_enable;
+	/** @sweep_prog: The sweep's minimal event program (pvrsgx_pds.c), 0 the normal one. */
+	u8 sweep_prog;
+	/** @sweep_a68_low: The sweep's low bits of the event PDS base, 0 normally. */
+	u8 sweep_a68_low;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;

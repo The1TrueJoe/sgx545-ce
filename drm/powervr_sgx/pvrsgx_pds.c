@@ -81,6 +81,28 @@ struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf
 }
 
 /* Start the microkernel at offset e: DOUTU with word 1 = 2. */
+/*
+ * The stage-1 sweep's minimal event programs (docs/PDS.md encodings): does the
+ * SGX530's PDS execute at all? A: two branches to code word 1, so a running PDS
+ * loops on it. B: a halt. C: a branch to word 3 over two halts. D: A with no
+ * data segment.
+ */
+static const u32 sweep_prog[][4] = {
+	[1] = { 0x97000001, 0x97000001 },
+	[2] = { 0xaf000000 },
+	[3] = { 0x97000003, 0xaf000000, 0xaf000000, 0xaf000000 },
+	[4] = { 0x97000001, 0x97000001 },
+};
+
+static void pds_sweep_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
+{
+	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, sdev->sweep_prog == 4 ? 0 : 4);
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(sweep_prog[0]); i++)
+		if (sweep_prog[sdev->sweep_prog][i])
+			pds_emit(&p, sweep_prog[sdev->sweep_prog][i]);
+}
+
 void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 {
 	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, 4);
@@ -88,6 +110,11 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 	/* The bring-up sweep's changes (pvrsgx_fw.c), event program only. */
 	u32 sw = b == PVRSGX_FW_PDS0 ? sdev->sweep_flags : 0;
 	u32 w1 = sw & PVRSGX_SWEEP_DOUTU_W1_0 ? 0 : 2;
+
+	if (b == PVRSGX_FW_PDS0 && sdev->sweep_prog && sdev->sweep_prog < ARRAY_SIZE(sweep_prog)) {
+		pds_sweep_prog(sdev, b);
+		return;
+	}
 
 	/* The temporaries field, in fours (docs/PDS.md, DOUTU word 0). */
 	if (sdev->family->ukernel_temps)

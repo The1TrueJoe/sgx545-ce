@@ -503,7 +503,8 @@ static u32 event_pds_addr(struct pvrsgx_device *sdev)
 
 	if (!(sdev->family->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE))
 		a -= pvrsgx_heaps(sdev)->pds_pixel.base;
-	return a;
+	/* The stage-1 sweep tries the low bits the SGX545 leaves clear. */
+	return a | sdev->sweep_a68_low;
 }
 
 static int check_event_pds(struct pvrsgx_device *sdev)
@@ -516,7 +517,8 @@ static int check_event_pds(struct pvrsgx_device *sdev)
 	got = sgx_rd(sdev, cr->event_pds_base);
 	drm_info(&sdev->base, "event PDS base 0x%04x: wrote 0x%08x, read 0x%08x\n",
 		 cr->event_pds_base, want, got);
-	if (got != want) {
+	/* The sweep's low bits may not stick: only the address has to. */
+	if (sdev->sweep_a68_low ? (got & ~0xfu) != (want & ~0xfu) : got != want) {
 		drm_err(&sdev->base, "event PDS base doesn't read back; not starting the microkernel\n");
 		return -EIO;
 	}
@@ -795,41 +797,26 @@ MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a gue
  */
 struct sweep_variant {
 	u32 flags, enable;
-	u8 dest, cc, data0, data1;
+	u8 dest, cc, data0, data1, prog, a68_low;
 };
-
-#define D1(b)		{ .data1 = (b) + 1 }
-#define F(f)		{ .flags = (f) }
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	/* First: does the PDS execute the MOVS? With cc 0 it skips to the HALT. */
-	{ .cc = 0 + 1 },
-	D1(0), D1(1), D1(2), D1(3), D1(4), D1(8), D1(16),
-	{ .dest = 4 + 1 }, { .dest = 6 + 1 }, { .dest = 7 + 1 }, { .dest = 1 + 1 },
-	{ .dest = 0 + 1 }, { .dest = 2 + 1 }, { .cc = 3 + 1 },
-	F(PVRSGX_SWEEP_DOUTU_W1_0), F(PVRSGX_SWEEP_INTERLEAVE), F(PVRSGX_SWEEP_ALL_SLOTS),
-	F(PVRSGX_SWEEP_TEMPS4), F(PVRSGX_SWEEP_TEMPS0), F(PVRSGX_SWEEP_DM2),
-	F(PVRSGX_SWEEP_DOUTU_W1_0 | PVRSGX_SWEEP_DM2),
-	F(PVRSGX_SWEEP_ALL_SLOTS | PVRSGX_SWEEP_TEMPS4),
-	/* Crossed with 0xa70 = 4 (the data segment). */
-	{ .data1 = 4 + 1, .cc = 0 + 1 }, { .data1 = 4 + 1, .dest = 4 + 1 },
-	{ .data1 = 4 + 1, .dest = 6 + 1 }, { .data1 = 4 + 1, .dest = 7 + 1 },
-	{ .data1 = 4 + 1, .dest = 1 + 1 }, { .data1 = 4 + 1, .dest = 0 + 1 },
-	{ .data1 = 4 + 1, .dest = 2 + 1 },
-	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_DOUTU_W1_0 },
-	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_ALL_SLOTS },
-	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_TEMPS4 },
-	/* 0xa70 = 6, the whole program, is the baseline's: the single variants above. */
+	{ .prog = 1 }, { .prog = 2 }, { .prog = 3 },
+	{ .prog = 4, .data0 = 0 + 1 },
+	{ .prog = 1, .a68_low = 0x1 }, { .prog = 1, .a68_low = 0x4 },
+	{ .prog = 1, .a68_low = 0xf },
 };
-
-#undef D1
-#undef F
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
-			  sv->data1 ? "" : "baseline");
+			  sv->data1 || sv->prog || sv->a68_low ? "" : "baseline");
+
+	if (sv->prog)
+		n += scnprintf(buf + n, len - n, " program %c", 'A' + sv->prog - 1);
+	if (sv->a68_low)
+		n += scnprintf(buf + n, len - n, " 0xa68 low 0x%x", sv->a68_low);
 
 	if (sv->data0)
 		n += scnprintf(buf + n, len - n, " data0 %d", sv->data0 - 1);
@@ -906,6 +893,8 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	sdev->sweep_cc = 0;
 	sdev->sweep_data0 = 0;
 	sdev->sweep_data1 = 0;
+	sdev->sweep_prog = 0;
+	sdev->sweep_a68_low = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -969,6 +958,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_data0 = sv->data0;
 			sdev->sweep_data1 = sv->data1;
 			sdev->sweep_enable = sv->enable;
+			sdev->sweep_prog = sv->prog;
+			sdev->sweep_a68_low = sv->a68_low;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			pvrsgx_reset(sdev, true);
 			/*
