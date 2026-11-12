@@ -876,23 +876,20 @@ struct sweep_variant {
 };
 
 /*
- * Where does the DDK's reach to the kernel code heap come from? The fetch's
- * fault page for DOUTU word 0 segment guesses for an offset of 0x01400000
- * (nibble 8 with b19-20 = 2; the SGX545's (40 + 15) & 15; 0xf8 << 16); then
- * code base 15's address field at 0 and at 0x08000000 >> 7, the normal word
- * otherwise (the baseline has kernel code >> 7).
+ * Code base 15 at 0, 0x100000 and kernel code >> 7 fit an EDM fetch at
+ * (field << 8) & 0x0fffffff (stage 1, log 2026-11-12-0300): 256-byte units
+ * on the SGX530. The baseline; the field at 0x1b0000 (fetch 0x0b000000) to
+ * pin the shift; at kernel code >> 8, where the microkernel should run; and
+ * at kernel code >> 8 + 1, one unit in.
  */
-#define W0(v)	{ .doutu_set = true, .doutu0 = (v) }
 #define CB15(v)	{ .flags = PVRSGX_SWEEP_CB15, .cb15 = (v) }
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	W0(0x100008), W0(0x7), W0(0xf80000),
-	CB15(0), CB15(0x08000000 >> USE_CODE_BASE_ADDR_SHIFT),
+	CB15(0x1b0000), CB15(0x0ec00000 >> 8), CB15((0x0ec00000 >> 8) + 1),
 };
 
 #undef CB15
-#undef W0
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
 static int alias_map(struct pvrsgx_device *sdev)
