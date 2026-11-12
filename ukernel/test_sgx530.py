@@ -37,12 +37,12 @@ STAGE1_NAMED = {0x0010: "CORE_ID", 0x0014: "CORE_REVISION", 0x012c: "EVENT_STATU
                 0x0c84: "DIR_LIST_BASE0"}
 
 
-def load():
+def load(core="sgx530"):
     d = tempfile.mkdtemp()
-    binp, manp = os.path.join(d, "sgx530.bin"), os.path.join(d, "sgx530.json")
+    binp, manp = os.path.join(d, core + ".bin"), os.path.join(d, core + ".json")
     env = dict(os.environ)
     env.pop("SGX_CORE", None)
-    subprocess.run([sys.executable, os.path.join(HERE, "build.py"), "sgx530", binp, manp],
+    subprocess.run([sys.executable, os.path.join(HERE, "build.py"), core, binp, manp],
                    check=True, stdout=subprocess.DEVNULL, env=env)
     man = json.load(open(manp))
     code = bytearray(open(binp, "rb").read())
@@ -140,6 +140,49 @@ def test_stage1_named(code, man):
     assert not bad, "stage 1 touches unnamed registers: " + ", ".join(f"{a:#x}" for a in bad)
     print(f"  stage 1: only named registers ({len(STAGE1_NAMED)}), none of the host's "
           "EVENT_HOST_ENABLE/ENABLE2  OK")
+
+
+def test_diag_entry():
+    """stage 1's diagnostic build (cores/sgx530_diag.py): its markers land in
+    order before phas.i, then the normal entry and init run as in sgx530"""
+    from cores import sgx530_diag as D
+    code, man = load("sgx530_diag")
+    assert man["entries"]["event"] == 0 and set(man["patches"]) == {"ctlblk", "pdtable"}
+    u, mem, regs = machine(code, initialised=False)
+    regs.v[C.CR_CORE_ID] = 0x01120000
+    mem.log = []
+    event(u, man, regs)
+    hb, ver, wait = (CTLBLK + 4 * w for w in (C.HEARTBEAT, C.SC_VERSION, C.WAIT_TIMEOUT_ID))
+    m = D.DIAG_ENTRY
+    assert regs.log[0][:3] == ("str", C.CR_EVENT_TIMER, D.DIAG_TIMER), regs.log[0]
+    assert not D.DIAG_TIMER & 0x1000000, "the marker must leave the timer disabled"
+    seen = [(a, v) for (op, a, v, pc) in mem.log if op == "st" and a in (hb, ver, wait)]
+    assert seen[:4] == [(wait, m), (ver, 0x01120000), (hb, 1), (hb, 2)], seen
+    assert mem.rd(wait) == m, "init must leave the marker word alone"
+    assert seen[-1] == (ver, C.UK_VERSION)
+    assert mem.rd(HOSTCTL + 4 * C.HC_INIT) == 1, "init must complete after the markers"
+    phas = next(pc for pc, t in enumerate(man_text(man)) if t.startswith("phas"))
+    first_st = next(pc for (op, a, v, pc) in mem.log if op == "st")
+    assert first_st < phas, "the first marker must come before phas.i"
+    event(u, man, regs, status=C.EVENT_TIMER)
+    assert mem.rd(hb) == 4, "a timer event must add 2 more"
+    bad = sorted({a for (op, a, v, pc) in regs.log if a not in STAGE1_NAMED})
+    assert not bad, "the diagnostic entry touches unnamed registers: " + \
+        ", ".join(f"{a:#x}" for a in bad)
+    print(f"  diagnostic entry: EVENT_TIMER {D.DIAG_TIMER:#x}, wait {m:#x}, CORE_ID in 0x18, "
+          "heartbeat 1, 2 before init, 4 after a tick  OK")
+
+
+def man_text(man):
+    """the diagnostic image's instruction texts, by index"""
+    os.environ["SGX_CORE"] = "sgx530_diag"
+    import importlib
+    import ukernel
+    importlib.reload(ukernel)
+    out = [t for kind, t in ukernel.program().lines if kind in ("i", "patch", "raw")]
+    os.environ["SGX_CORE"] = "sgx530"
+    importlib.reload(ukernel)
+    return [t if isinstance(t, str) else "limm" for t in out]
 
 
 def test_getmiscinfo(code, man):
@@ -299,6 +342,7 @@ def main():
     test_static(man)
     test_init(code, man)
     test_stage1_named(code, man)
+    test_diag_entry()
     test_getmiscinfo(code, man)
     test_restore_pd(code, man)
     test_bounded_wait(code, man)

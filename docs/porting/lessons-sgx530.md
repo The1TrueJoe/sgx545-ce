@@ -275,3 +275,9 @@ with `--core`, and `test_sgx530.py` next to `test_emu.py`.
     dump the control block's progress words from the CPU mapping before teardown. The
     runbook for each start should say, for the image, which word the event writes
     first.
+24. **`imae` adds 16-bit sources.** The heartbeat is `imae r3, r3, #1, #1`, so it counts
+    to 0x10000 and then restarts at 1: every 65 s at 1 kHz. A watchdog that only asks
+    "did it change" is fine. One that asks "did it grow" trips at the wrap. The first
+    diagnostic image put a 32-bit marker in the heartbeat and lost its high half at the
+    first increment. The emulator caught it, since it models imae's source width. Put
+    32-bit markers in words that nothing increments.
