@@ -1615,6 +1615,41 @@ dispatch, address arithmetic), not just readable pointers. Attributes are PDS-wr
 Whether the microkernel can run without a task-writable register file, or whether another
 file (outputs `o`) is task-writable, is the next question — see the restructure proposal.
 
+## After the forty-first attempt (log `st41`, build `f85c22d9`): outputs are task-writable (C)
+
+Attempt 41 ran the hinge in one slot: probe 2 (the output-write test) on the plain driver,
+and probe 1 (the one-row PA0 DOUTA confirmation) across a three-variant sweep. Board up 1:51,
+same boot as attempt 40.
+
+**Probe 2 — `sgx530_aluwr_o0` (image 3d8e8a72…, pkg c30c27a1…, crc 0x8050de8b):** `or o0, r5,
+r17` then `ld.a.d r3, o0, #0`. b1 fault at **exactly 0x0fd7d000** = r5's leftover 0x0c004000 |
+r17's 0x0fd79000. The `or` wrote `o0` and the dependent `ld` read it back. **Output registers
+are task-writable (C)** — the first task-side register write to retire on the SGX530. The
+output bank is usable scratch where the temporary bank is not. This is the hinge the
+restructure rested on: it is positive, so the restructure is viable (see
+[sgx530-attr-restructure.md](sgx530-attr-restructure.md)).
+
+**Probe 1 — `sgx530_pa0` reader across the sweep:**
+- Baseline: b1 at 0x0e850000 — PA0 still holds attempt 40's 10:17 DOUTA value, ~19 minutes
+  and several reloads later. Confirms the attribute persistence again.
+- DOUTU `w1 = 0` control: b1 at 0x0e850000 — a task with DOUTU word 1 = 0 starts normally.
+- One-row DOUTA `[V=0x0e860000, 0, 0, doutu]`: b2 at 0x0f400000, **code base 0 — the same
+  failure as the two-row form.** With a DOUTA before it, the DOUTU issues with word 0 ≈ 0 in
+  both the one-row and two-row layouts, while the same DOUTU words *without* a preceding DOUTA
+  run. So the earlier "second data row's interleave" guess is **not** the cause.
+
+**Reading (G):** the fault is not the PDS data-row interleave; it is the DOUTA-before-DOUTU
+ordering in the probe's hand-built PDS — the DOUTA appears to consume or rewrite what the
+following MOVS DOUTU reads, or this PDS needs the DOUTU issued first. The driver's real `pds3`
+puts its DOUTAs first and works (attempt 40 wrote PA0 through it), so its MOVS construction
+differs from the probe's. Whether the one-row DOUTA actually wrote 0x0e860000 to PA0 is
+unknown — no PA0 read followed it in the same boot. A plain PA0 baseline load after it would
+tell (PA0 reads 0x0e860000 if it did); deferred to the coordinator.
+
+**Net:** the microkernel now has a task-writable file (outputs). The multi-DOUTA PDS
+construction for the probe needs its ordering fixed, but the driver's own PDS already sets
+attributes correctly, so attribute setup for the restructure is not blocked on it.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:

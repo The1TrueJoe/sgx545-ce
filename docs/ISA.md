@@ -2540,11 +2540,22 @@ the SGX530 and then hit a register-write blocker. The ISA-relevant confirmed fin
   before that was also retracted — attempt 30 showed every `limm`-bit probe faults at the
   same leftover, so `limm`'s value is irrelevant: `limm` simply never wrote the register.)
 
-**The open blocker:** no register write (`limm`, ALU `or`, `str`, or an `ld` destination)
-retires to where a read sees it; reads return stable power-on leftovers. Ruled out: the DOUTU
-temp field, `phas.i` temps4, host init-regs, and pairing. It is a register-file / write-back
-difference, **U**, still open. Nothing here moves for `sgx.xml` yet; the leftover-register
-table and the chronology are in the fact sheet and the runbook.
+**The blocker is the temporary file only; outputs and attributes work (C, attempts 40-41).**
+No write to a **temporary** (`limm`, ALU `or`, `str`, or an `ld` destination into `rN`) retires
+to where a read sees it; reads return stable power-on leftovers. Ruled out as the cause: the
+DOUTU temp field, `phas.i` temps4, host init-regs, and pairing. But two other files are
+task-visible:
+
+- **An ALU write to an output retires (C, attempt 41):** `or o0, r5, r17` then `ld.a.d r3, o0`
+  faults at r5⊕r17's leftovers OR'd together (0x0fd7d000), so `o0` took the write and the
+  dependent `ld` read it back. The output bank is writable scratch where temporaries are not.
+- **PDS-set primary attributes are task-readable (C, attempt 40):** a `DOUTA` to PA0 is read
+  back by `ld.a.d r3, pa0`. Inputs only — the task reads them, it does not write them.
+
+So the SGX530's USSE, in the microkernel's task context, retires writes to outputs but not to
+temporaries — **U** as to why (the EDM-task temp allocation is suspected). For `sgx.xml` this
+is not an encoding change; it is a code-generation constraint for the SGX530 (scratch lives in
+outputs). The leftover-register table and chronology are in the fact sheet and the runbook.
 
 ### What sgx.xml can take, and when
 
