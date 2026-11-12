@@ -36,6 +36,7 @@
 #include "pvrsgx_drv.h"
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_host.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_prime.h"
 #include "pvrsgx_kobj.h"
@@ -276,7 +277,19 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 
 	pvrsgx_prime_flush(job, false);
 	WRITE_ONCE(job->ctx->vm->ran_gen, sdev->fw_gen + 1);
-	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
+	if (pvrsgx_core_host_kick(sdev->family)) {
+		/* The CPU programs the cores itself; no kernel CCB (pvrsgx_host.c). */
+		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
+			mutex_lock(&sdev->kobj_lock);
+			sdev->renders_submitted++;
+			mutex_unlock(&sdev->kobj_lock);
+			err = pvrsgx_host_render(sdev, job);
+		} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
+			err = pvrsgx_host_transfer(sdev, job);
+		} else {
+			err = 0;
+		}
+	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
 		mutex_unlock(&sdev->kobj_lock);

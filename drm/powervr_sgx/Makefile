@@ -14,6 +14,7 @@ powervr_sgx-y := \
 	pvrsgx_dump.o \
 	pvrsgx_fw.o \
 	pvrsgx_gem.o \
+	pvrsgx_host.o \
 	pvrsgx_job.o \
 	pvrsgx_kobj.o \
 	pvrsgx_mmu.o \
