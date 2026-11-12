@@ -1704,6 +1704,38 @@ are the remaining differences from the one construction known to work on the 545
 (DOUTU first, then DOUTA) is the diagnostic if that is flat too. Analysis:
 [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §6.
 
+## After the forty-fourth attempt (c105cac9): outputs are distinct (C); a store gate appears
+
+**Distinctness — the scratch gate is green (C).** The ten `odist` images each read their own
+source's leftover: o0 0x0055d000, o1 0x0722a000, o2 0x003e1000, o3 0x08439000, o4 0x09e06000,
+o5 0x0c004000, o6 0x0503f000, o7 0x08779000, o8 0x002ba000, o9 0x0d04f000 — all matching the
+expected table. So **o0..o9 are ten distinct, task-writable registers**, covering the
+restructure's peak output pressure of 10. (`odist10`, the margin-1 check, did not run in that
+slot; folded into attempt 45.)
+
+**st-from-output surfaced a store gate, not an answer.** With PA0 set to a mapped control-block
+scratch address (ctlblk+0x60), `stout_o0`'s `st.a.d pa0, #0, o0` **faulted** — BIF 0x4004 at page
+0x0f003000, the control block's own (mapped) page. The store uses PA0 as its base correctly, but
+the write does not land, so whether `st` reads an output as data is still unseen. Also confirmed
+in the same slot: attempt 43's `.x2` DOUTA **did** write PA0 (a `stout` variant using the
+PA0 it left faulted at 0x0e870000, C) — the DOUTA writes regardless of form; only the following
+DOUTU fails.
+
+**Reading (G), grounded in the docs.** This looks like **EDM_PROTECT** enforcement. UAPI.md P2:
+on the SGX545 a *client* task's `st` into EDM_PROTECT kernel memory wedged the GPU (HWR), while
+the microkernel — running as the EDM data master — writes its control block normally. So
+EDM_PROTECT distinguishes the EDM from other requestors. If the SGX530 numbers its data masters
+differently from the 545's (where code base 15 = the microkernel/EDM), the task launched at code
+base 15 is **not** recognised as the EDM, and its stores to EDM_PROTECT pages fault — which would
+block **every** microkernel store to its control block (heartbeat, status, dispatch state). A
+direct check: `BIF_FAULT` CID (b0-3) reads **0xf** for an EDM fault (UKERNEL.md, 2026-11-03); if
+the stout store's CID is not 0xf, the store is not coming from the EDM, confirming this.
+
+This is a **third gate** on the restructure, alongside distinctness (now green) and
+DOUTA-then-DOUTU: the microkernel cannot run if its stores fault, whatever the register files do.
+Attempt 45 (approved): the code-base-15 data-master field at 0/1/2, then the data arena mapped
+without EDM_PROTECT on the 530. Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:

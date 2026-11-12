@@ -77,13 +77,14 @@ plus the §2(A) attribute change for the two bases (r17, r14 → PA0, PA1), plus
 Contained — it changes the register convention, not each path's logic. The `<10 usable` spill
 case does not arise. **The margin is one** (eleven outputs, ten needed) *if* o10 is distinct too.
 
-**One caveat gates it (G):** attempt 42 wrote the *same* value to every output, so the outputs
-are not yet shown to be **distinct** physical registers. A reallocation needs 10 distinct scratch
-slots; if the "11 outputs" are aliases of fewer physical registers, the budget collapses. The
-distinctness sweep (`sgx530_odist0..10`: write o0..o10 eleven distinct values and read each in
-turn — each must read its own source's leftover, else a later write clobbered it = aliasing)
-settles it, and o10 tells whether the margin is one or zero. **Go/no-go: GO for the clean
-reallocation, conditional on the distinctness check.**
+**Distinctness is now confirmed (C, attempt 44):** o0..o9 are ten distinct task-writable
+registers, so the scratch side of the reallocation is a GO (margin 1 pending `odist10`). **But a
+third gate appeared:** the task's `st` to a mapped control-block page faulted (attempt 44, likely
+EDM_PROTECT — §5). The microkernel cannot run if its stores fault, so the restructure's three
+gates are: **(1) scratch → outputs: green;** (2) bases → attributes (DOUTA-then-DOUTU, pds3-mirror
+next); **(3) task stores land (the EDM data-master / EDM_PROTECT question, attempt 45).** The
+register reallocation is ready to draft, but it only makes the microkernel *run* once gates (2)
+and (3) are green too.
 
 ## 4. Which microkernel paths change
 
@@ -110,15 +111,21 @@ likely to fit.
   per-output fault-readout (`or oN, r5, r17; ld.a.d r3, oN`: fault page is the readout, 0x0fd7d000
   = writable) was the right shape; the earlier store-based sweep was wrong (it used `r17`, a
   non-retiring `limm`, as the store base — there is no `limm`-loaded temp base on the 530).
-- **Output distinctness — pending.** Attempt 42 wrote the same value to every output, so they are
-  not yet shown to be distinct physical registers (a reallocation needs 10 distinct slots). Probe
-  `sgx530_odist0/9` writes o0..o9 ten distinct leftovers and reads the endpoints; own value =
-  distinct, other page = aliasing.
-- **`st.a.d` reading an output as its source.** Needs a *mapped* store base, which `limm` cannot
-  provide. Use PA0: a **standalone DOUTA** (driver-set, persists — this does not need
-  DOUTA-then-DOUTU) puts a mapped control-block scratch address in PA0, then the task does
-  `or o0, r5, r17; st.a.d pa0, #0, o0`, and the host reads that scratch word (0x0fd7d000 =
-  st-from-output works). Probe `cores/sgx530_stout_o0.py`, paired with the driver's DOUTA.
+- **Output distinctness — done (C, attempt 44).** The ten `odist` images each read their own
+  source's leftover (o0 0x0055d000 .. o9 0x0d04f000), so **o0..o9 are ten distinct task-writable
+  registers** — the scratch gate is green and covers the budget of 10. (`odist10`, the margin-1
+  check, is folded into attempt 45.)
+- **Can the task store to the control block at all? — a third gate (attempt 44).** This is the
+  one that bites. `stout_o0`'s `st.a.d pa0, #0, o0` with PA0 = a mapped ctlblk scratch address
+  **faulted** (BIF 0x4004 at the control block's mapped page). The likely cause is **EDM_PROTECT**:
+  UAPI.md P2 shows a 545 *client* task's `st` into EDM_PROTECT kernel memory wedges the GPU, while
+  the microkernel — as the EDM data master — writes its control block normally. If the SGX530
+  numbers its data masters differently from the 545's (code base 15 = the microkernel/EDM), the
+  task is not recognised as the EDM and its stores fault, which blocks **every** microkernel store
+  to the control block. Check: `BIF_FAULT` CID (b0-3) = 0xf for an EDM fault; a non-0xf CID on this
+  store confirms it. Attempt 45: the code-base-15 data-master field at 0/1/2, then the arena
+  without EDM_PROTECT (530 only). **Until a task store lands, the restructure cannot make the
+  microkernel run, whatever the register files do.**
 - **Emit-at-end semantics.** Outputs are normally emitted to the output buffer when a task
   ends. Every output probe self-loops, so emit is untested. If the microkernel's EDM-style task
   emits outputs on completion, using them as scratch could write scratch to memory. Confirm the
