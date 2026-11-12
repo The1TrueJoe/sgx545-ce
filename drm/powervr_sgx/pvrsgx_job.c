@@ -280,6 +280,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	u32 data[6] = {};
 	struct dma_fence *fence;
 	unsigned long flags;
+	u32 sent = 0;
 	bool cookie;
 	int err, idx;
 
@@ -319,6 +320,13 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		for (u32 k = 0; k < job->render.nkicks && !err; k++) {
 			pvrsgx_render_job_build(job, k, data);
 			err = pvrsgx_ccb_send(sdev, PVRSGX_KCMD_TA, data, &job->ccb_seq);
+			if (!err)
+				sent++;
+		}
+		if (err && !sent) {
+			mutex_lock(&sdev->kobj_lock);
+			sdev->renders_submitted--;
+			mutex_unlock(&sdev->kobj_lock);
 		}
 	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
 		pvrsgx_transfer_job_build(job, data);
@@ -327,7 +335,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		/* A NULL job is a no-op command: done when the microkernel has taken it. */
 		err = pvrsgx_ccb_send(sdev, PVRSGX_KCMD_PROCESS_QUEUES, data, &job->ccb_seq);
 	}
-	if (err) {
+	if (err && !sent) {
 		drm_err_ratelimited(&sdev->base, "job not sent to the microkernel (%d)\n", err);
 		goto fail_exit;
 	}
@@ -339,7 +347,18 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_add_tail(&job->node, &sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
-	mod_delayed_work(sdev->wq, &sdev->poll_work, 0);
+	if (err) {
+		/*
+		 * Part of the render is on the GPU and the rest never will be: it
+		 * ends at its reset, now, not at a fence that would free its memory
+		 * under the kicks that run.
+		 */
+		drm_err_ratelimited(&sdev->base, "render sent in part (%u of %u kicks, %d); resetting\n",
+				    sent, job->render.nkicks, err);
+		drm_sched_fault(&sdev->sched);
+	} else {
+		mod_delayed_work(sdev->wq, &sdev->poll_work, 0);
+	}
 	drm_dev_exit(idx);
 	return fence;
 
