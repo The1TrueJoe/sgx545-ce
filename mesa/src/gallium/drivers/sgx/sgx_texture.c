@@ -692,7 +692,11 @@ sgx_tex_words(const struct pipe_sampler_view *view,
          t0.pitch_hi = p >> 3;
          if (sampler) {
             t0.wrap_t = wrap(sampler->wrap_t);
-            t0.wrap_s = wrap(sampler->wrap_s);
+            /* an RG32 or RGBA32 one is read at subtexel centres the
+             * compiler wraps itself: s repeats (sgx_lower_tex) */
+            t0.wrap_s = wrap(sgx_tex_raw32(prsc->format) > 1
+                                ? PIPE_TEX_WRAP_REPEAT
+                                : sampler->wrap_s);
          }
       }
       sgx_pack(&t[1], TEXSTATE_WORD1, t1)

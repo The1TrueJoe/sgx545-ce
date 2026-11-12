@@ -505,6 +505,26 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
          vary->set_comps[set + r] =
             MAX2(vary->set_comps[set + r], frac + comps);
    }
+   /* noperspective: the compiler's own w varying (SGX_NOPERSPECTIVE_W, one
+    * highp component), in the set after the slots', the same in both stages
+    * (the vertex program writes v * w and w, the fragment one divides) */
+   bool noperspective = false;
+   for (unsigned i = 0; i < n; i++)
+      noperspective |=
+         vars[i]->data.interpolation == INTERP_MODE_NOPERSPECTIVE;
+   if (noperspective && vary->n < ARRAY_SIZE(vary->v)) {
+      struct sgx_varying *v = &vary->v[vary->n++];
+      unsigned set = (sprite ? 1 : 0) + util_bitcount64(rows_used);
+
+      snprintf(v->name, sizeof(v->name), "%s", SGX_NOPERSPECTIVE_W);
+      v->set = set;
+      v->comp = 0;
+      v->rows = 1;
+      v->comps = 1;
+      v->precision = GLSL_PRECISION_HIGH;
+      if (set < SGX_MAX_SETS)
+         vary->set_comps[set] = MAX2(vary->set_comps[set], 1);
+   }
    /* past ten sets: rows into the free components of earlier sets */
    vary->point_size = sprite;
    if (sprite)
@@ -910,6 +930,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       opts.tex_bgra = ~not_bgra & ~(depth | shadow);
       opts.tex_f32 = depth | shadow;
+      /* RGBA32 and RG32: N reads of the R32 texture N times as wide */
+      opts.tex_r32x4 = so->r32x4;
+      opts.tex_r32x2 = so->r32x2;
+      opts.tex_r32_clamp = so->r32_clamp;
       /* a coordinate only samples read: the PDS samples from the set
        * itself (a pure-sample DOUTI, source 0x24, below) */
       opts.pds_samples_alone = screen->core->pds_samples;
@@ -954,7 +978,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    /* textureGrad, the Offset variants and texelFetch as smp can do them;
     * the sizes they ask for are lower_txs's */
    if (opts.native_integers)
-      NIR_PASS(_, nir, sgx_lower_tex);
+      NIR_PASS(_, nir, sgx_lower_tex, &opts);
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
                nir_metadata_control_flow, &opts.native_integers);
@@ -1571,6 +1595,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    uint8_t compare[PIPE_MAX_SAMPLERS] = {0};
    bool any_swz = false;
    uint8_t rt_int = 0;
+   uint32_t r32x4 = 0, r32x2 = 0, r32_clamp = 0;
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
       return fs;
@@ -1597,9 +1622,23 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       }
       if (!sgx_tex_bgra(v->format))
          not_bgra |= 1u << unit;
-      /* one F32 word a texel (tex_f32): depth, and R32 (raw) */
+      /* one F32 word a texel (tex_f32): depth, and R32 (raw); RG32 and
+       * RGBA32 word by word (tex_r32x2 / x4), s clamped or repeated as the
+       * sampler says */
       if (sgx_tex_raw32(v->format) == 1)
          depth |= 1u << unit;
+      if (sgx_tex_raw32(v->format) > 1) {
+         const struct pipe_sampler_state *ss = ctx->samplers[unit];
+
+         if (sgx_tex_raw32(v->format) == 4)
+            r32x4 |= 1u << unit;
+         else
+            r32x2 |= 1u << unit;
+         if (ss && (ss->wrap_s == PIPE_TEX_WRAP_CLAMP_TO_EDGE ||
+                    ss->wrap_s == PIPE_TEX_WRAP_CLAMP ||
+                    ss->wrap_s == PIPE_TEX_WRAP_CLAMP_TO_BORDER))
+            r32_clamp |= 1u << unit;
+      }
       if (sgx_tex_depth(v->format)) {
          const struct pipe_sampler_state *ss = ctx->samplers[unit];
 
@@ -1616,7 +1655,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
          any_swz = true;
       }
    }
-   if (!srgb && !any_swz && !not_bgra && !rt_int)
+   if (!srgb && !any_swz && !not_bgra && !rt_int && !r32x4 && !r32x2)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
@@ -1624,6 +1663,9 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
           fs->variants_srgb[i]->not_bgra == not_bgra &&
           fs->variants_srgb[i]->depth == depth &&
           fs->variants_srgb[i]->rt_int == rt_int &&
+          fs->variants_srgb[i]->r32x4 == r32x4 &&
+          fs->variants_srgb[i]->r32x2 == r32x2 &&
+          fs->variants_srgb[i]->r32_clamp == r32_clamp &&
           !memcmp(fs->variants_srgb[i]->compare, compare, sizeof(compare)) &&
           !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
@@ -1642,6 +1684,9 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    (*slot)->not_bgra = not_bgra;
    (*slot)->depth = depth;
    (*slot)->rt_int = rt_int;
+   (*slot)->r32x4 = r32x4;
+   (*slot)->r32x2 = r32x2;
+   (*slot)->r32_clamp = r32_clamp;
    memcpy((*slot)->compare, compare, sizeof(compare));
    if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz,
                        not_bgra, NULL, false, depth, compare) ||

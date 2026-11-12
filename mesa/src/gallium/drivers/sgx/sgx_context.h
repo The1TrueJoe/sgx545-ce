@@ -136,6 +136,9 @@ struct sgx_pipe_shader {
    /* colour buffer 0 is an integer format (pack_int_output): 0 not, 1 one of
     * 8 bits a channel, 2 R32 */
    uint8_t rt_int;
+   /* units bound to an RGBA32 / RG32 texture, read word by word (the
+    * compiler's tex_r32x4 / tex_r32x2), and those whose s clamps */
+   uint32_t r32x4, r32x2, r32_clamp;
    /* shadow samples: each unit's compare function (lower_shadow) */
    uint8_t compare[PIPE_MAX_SAMPLERS];
    struct sgx_pipe_shader *variants_srgb[8];
