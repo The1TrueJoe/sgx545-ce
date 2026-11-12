@@ -570,6 +570,10 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DATA0_2)
 		data0 = 2;
+	if (sdev->sweep_data0)
+		data0 = sdev->sweep_data0 - 1;
+	if (sdev->sweep_data1)
+		data1 = sdev->sweep_data1 - 1;
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DM2)
 		uk_dm = 2;
 
@@ -600,7 +604,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	err = check_event_pds(sdev);
 	if (err)
 		return err;
-	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
+	sgx_wr(sdev, cr->event_pds_enable, sdev->sweep_flags & PVRSGX_SWEEP_ENABLE ?
+	       sdev->sweep_enable : cr->event_pds_enable_all);
 	return 0;
 }
 
@@ -777,27 +782,41 @@ static bool stage1_sweep;
 module_param(stage1_sweep, bool, 0444);
 MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
 
-#define AS	PVRSGX_SWEEP_ALL_SLOTS
-
-/* dest and cc: the event program's MOVS fields, + 1 (0 keeps DOUTU, always). */
-static const struct {
-	u32 flags;
-	u8 dest, cc;
-	const char *name;
-} sweep[] = {
-	{ 0, 0, 0, "baseline (MOVS dest 5, cc 7)" },
-	{ 0, 4 + 1, 0, "MOVS dest 4" },
-	{ 0, 6 + 1, 0, "MOVS dest 6" },
-	{ 0, 7 + 1, 0, "MOVS dest 7" },
-	{ 0, 1 + 1, 0, "MOVS dest 1" },
-	{ 0, 0 + 1, 0, "MOVS dest 0" },
-	{ 0, 2 + 1, 0, "MOVS dest 2" },
-	{ 0, 0, 3 + 1, "MOVS cc 3" },
-	{ 0, 0, 0 + 1, "MOVS cc 0" },
-	{ AS, 0, 0, "all four slots the DOUTU word" },
+/*
+ * Each variant one change from the normal start, + 1 where 0 means none:
+ * the event program's MOVS destination and condition, the event data words
+ * 0xa6c and 0xa70; or flags.
+ */
+struct sweep_variant {
+	u32 flags, enable;
+	u8 dest, cc, data0, data1;
 };
 
-#undef AS
+#define DATA(a, b)	{ .data0 = (a) + 1, .data1 = (b) + 1 }
+
+static const struct sweep_variant sweep[] = {
+	{ 0 },
+	DATA(0, 0), DATA(0, 1), DATA(0, 2), DATA(0, 4), DATA(0, 6), DATA(0, 8),
+	DATA(1, 0), DATA(1, 1), DATA(1, 2), DATA(1, 4), DATA(1, 8),
+	DATA(2, 0), DATA(2, 1), DATA(2, 2), DATA(2, 4), DATA(2, 6), DATA(2, 8),
+	DATA(4, 0), DATA(4, 1), DATA(4, 2), DATA(4, 4), DATA(4, 6), DATA(4, 8),
+	{ .flags = PVRSGX_SWEEP_ENABLE, .enable = 0x7fffffff },
+	{ .flags = PVRSGX_SWEEP_ENABLE, .enable = 0 },
+};
+
+#undef DATA
+
+static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
+{
+	if (sv->data0 || sv->data1)
+		snprintf(buf, len, "event data %d, %d", sv->data0 - 1, sv->data1 - 1);
+	else if (sv->flags & PVRSGX_SWEEP_ENABLE)
+		snprintf(buf, len, "event PDS enable 0x%08x", sv->enable);
+	else if (sv->dest || sv->cc)
+		snprintf(buf, len, "MOVS dest %d cc %d", sv->dest - 1, sv->cc - 1);
+	else
+		snprintf(buf, len, "baseline (data 1, 6)");
+}
 
 /*
  * Whether the diagnostic ladder ran: its EVENT_TIMER write (0xa5a, timer
@@ -858,6 +877,8 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	sdev->sweep_flags = 0;
 	sdev->sweep_dest = 0;
 	sdev->sweep_cc = 0;
+	sdev->sweep_data0 = 0;
+	sdev->sweep_data1 = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -906,14 +927,21 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 	int err;
 
 	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
-		if ((sweep[v].flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
+		const struct sweep_variant *sv = &sweep[v];
+		char name[40];
+
+		if ((sv->flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
 			continue;
+		sweep_name(sv, name, sizeof(name));
 		if (v) {
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
-			sdev->sweep_flags = sweep[v].flags;
-			sdev->sweep_dest = sweep[v].dest;
-			sdev->sweep_cc = sweep[v].cc;
+			sdev->sweep_flags = sv->flags;
+			sdev->sweep_dest = sv->dest;
+			sdev->sweep_cc = sv->cc;
+			sdev->sweep_data0 = sv->data0;
+			sdev->sweep_data1 = sv->data1;
+			sdev->sweep_enable = sv->enable;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			pvrsgx_reset(sdev, true);
 			/*
@@ -934,7 +962,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			wmb();
 			init_kick(sdev);
 		}
-		snprintf(when, sizeof(when), "variant %u (%s)", v, sweep[v].name);
+		snprintf(when, sizeof(when), "variant %u (%s)", v, name);
 		if (ladder_ran(sdev, when)) {
 			drm_info(&sdev->base, "sweep: %s runs the diagnostic ladder\n", when);
 			return 0;
