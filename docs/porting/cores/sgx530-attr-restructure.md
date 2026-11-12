@@ -77,13 +77,14 @@ plus the §2(A) attribute change for the two bases (r17, r14 → PA0, PA1), plus
 Contained — it changes the register convention, not each path's logic. The `<10 usable` spill
 case does not arise. **The margin is one** (eleven outputs, ten needed) *if* o10 is distinct too.
 
-**One caveat gates it (G):** attempt 42 wrote the *same* value to every output, so the outputs
-are not yet shown to be **distinct** physical registers. A reallocation needs 10 distinct scratch
-slots; if the "11 outputs" are aliases of fewer physical registers, the budget collapses. The
-distinctness sweep (`sgx530_odist0..10`: write o0..o10 eleven distinct values and read each in
-turn — each must read its own source's leftover, else a later write clobbered it = aliasing)
-settles it, and o10 tells whether the margin is one or zero. **Go/no-go: GO for the clean
-reallocation, conditional on the distinctness check.**
+**Distinctness is now confirmed (C, attempt 44):** o0..o9 are ten distinct task-writable
+registers, so the scratch side of the reallocation is a GO (margin 1 pending `odist10`). **But a
+third gate appeared:** the task's `st` to a mapped control-block page faulted (attempt 44, likely
+EDM_PROTECT — §5). The microkernel cannot run if its stores fault, so the restructure's three
+gates are: **(1) scratch → outputs: green;** (2) bases → attributes (DOUTA-then-DOUTU, pds3-mirror
+next); **(3) task stores land (the EDM data-master / EDM_PROTECT question, attempt 45).** The
+register reallocation is ready to draft, but it only makes the microkernel *run* once gates (2)
+and (3) are green too.
 
 ## 4. Which microkernel paths change
 
@@ -110,15 +111,46 @@ likely to fit.
   per-output fault-readout (`or oN, r5, r17; ld.a.d r3, oN`: fault page is the readout, 0x0fd7d000
   = writable) was the right shape; the earlier store-based sweep was wrong (it used `r17`, a
   non-retiring `limm`, as the store base — there is no `limm`-loaded temp base on the 530).
-- **Output distinctness — pending.** Attempt 42 wrote the same value to every output, so they are
-  not yet shown to be distinct physical registers (a reallocation needs 10 distinct slots). Probe
-  `sgx530_odist0/9` writes o0..o9 ten distinct leftovers and reads the endpoints; own value =
-  distinct, other page = aliasing.
-- **`st.a.d` reading an output as its source.** Needs a *mapped* store base, which `limm` cannot
-  provide. Use PA0: a **standalone DOUTA** (driver-set, persists — this does not need
-  DOUTA-then-DOUTU) puts a mapped control-block scratch address in PA0, then the task does
-  `or o0, r5, r17; st.a.d pa0, #0, o0`, and the host reads that scratch word (0x0fd7d000 =
-  st-from-output works). Probe `cores/sgx530_stout_o0.py`, paired with the driver's DOUTA.
+- **Output distinctness — done (C, attempt 44).** The ten `odist` images each read their own
+  source's leftover (o0 0x0055d000 .. o9 0x0d04f000), so **o0..o9 are ten distinct task-writable
+  registers** — the scratch gate is green and covers the budget of 10. (`odist10`, the margin-1
+  check, is folded into attempt 45.)
+- **Can the task store to the control block at all? — the third gate (attempts 44-45).** The
+  store `st.a.d pa0, #0, o0` **faulted** (BIF 0x4004, control-block page). Attempt 45 found the
+  cause: **EDM_PROTECT (C).** The code-base-15 data-master field at 3/0/1/2 made no difference, but
+  mapping the arena **CACHECONSISTENT only (no EDM_PROTECT)** stopped the fault. So the driver fix
+  is clean: the SGX530 maps the microkernel's writable structures without EDM_PROTECT (a bring-up
+  stopgap, landed as d8160ba2). (This fits UAPI.md P2 — a 545 client `st` into EDM_PROTECT memory
+  wedges the GPU — the 530 task simply is not treated as the EDM, and the DM field does not change
+  that: on the 530 a USSE task issues as a USSE data master, not the EDM, and the single shared
+  directory list 0 leaves EDM_PROTECT nothing to scope by. Analysis in sgx530.md, "Why the SGX530
+  USSE task is not the EDM requestor".) **Stage-2 open item (gap 19), a hard gate before any client
+  work:** restoring isolation on the 530 is unsolved — EDM_PROTECT can't be the boundary, and
+  omitting kernel memory from client PDs can't either (one shared list, so the microkernel runs on
+  the client's PD and needs its code/control block/CCB mapped there, UAPI P2). Isolation must come
+  from an instruction checker (E3), `READONLY` mappings where the microkernel only reads (E1,
+  enforced), and/or per-kick list switching — M2/M3 work the per-context-PD design does not cover.
+- **Does the store reach memory? — still open (attempts 45-46).** With EDM_PROTECT off the store
+  no longer faults, but the target word read 0. Attempt 46 narrowed it: the control
+  `sgx530_stout_r5` (store a **temp**) also read 0, so it is **not st-from-output** — a general
+  store-visibility problem. Good for the restructure: scratch in outputs can be stored once this is
+  fixed. The cause isn't a missing flush instruction (the open microkernel's own stores use
+  `st; idf; wdf` and land on the 545), and `ld.a.d` addresses correctly with offset `#0`, so it is
+  either the store not committing or a non-coherent host read. Next, with no new image: scan the
+  control block and neighbour page for stout_o0's distinctive 0x0fd7d000 (misplaced vs not
+  committed). **Load-bearing:** the microkernel must store its scratch to the control block, so a
+  task store must become host-visible before any of the restructure runs.
+- **A retiring LOAD destination — a fourth gate.** Only an **ALU write to an output** is confirmed
+  to retire. But the microkernel also **loads** from memory (heartbeat, status, the CCB), and the
+  loaded value must land where a later instruction reads it. The assembler encodes `ld.a.d` into a
+  **temp** (does not retire) or the **pa bank** (`ld.a.d pa0, pa0` — the open stack's uniform-load
+  form, ISA.md), **but not an output** (`ld.a.d o1`/`o5` both emit the same word, dst field zero, an
+  "Unhandled #dst1 encode case"). So outputs — the one file known to retire — cannot receive a load.
+  The candidate load destination is the **pa bank**. The built probe `sgx530_aluwr_pa0w`
+  (`or pa0, r5, r17; ld.a.d r3, pa0`, ab1f53cc) tests whether a task can write pa at all: a fault at
+  0x0fd7d000 = pa retires (and since `ld` can target pa, loads can land there); the leftover = pa is
+  not writable, and then loads have **no** retiring destination — the vendor capture (temps working)
+  becomes the only path. As fundamental as the store gate.
 - **Emit-at-end semantics.** Outputs are normally emitted to the output buffer when a task
   ends. Every output probe self-loops, so emit is untested. If the microkernel's EDM-style task
   emits outputs on completion, using them as scratch could write scratch to memory. Confirm the

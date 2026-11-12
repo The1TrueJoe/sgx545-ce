@@ -1704,6 +1704,84 @@ are the remaining differences from the one construction known to work on the 545
 (DOUTU first, then DOUTA) is the diagnostic if that is flat too. Analysis:
 [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §6.
 
+## After the forty-fourth attempt (c105cac9): outputs are distinct (C); a store gate appears
+
+**Distinctness — the scratch gate is green (C).** The ten `odist` images each read their own
+source's leftover: o0 0x0055d000, o1 0x0722a000, o2 0x003e1000, o3 0x08439000, o4 0x09e06000,
+o5 0x0c004000, o6 0x0503f000, o7 0x08779000, o8 0x002ba000, o9 0x0d04f000 — all matching the
+expected table. So **o0..o9 are ten distinct, task-writable registers**, covering the
+restructure's peak output pressure of 10. (`odist10`, the margin-1 check, did not run in that
+slot; folded into attempt 45.)
+
+**st-from-output surfaced a store gate, not an answer.** With PA0 set to a mapped control-block
+scratch address (ctlblk+0x60), `stout_o0`'s `st.a.d pa0, #0, o0` **faulted** — BIF 0x4004 at page
+0x0f003000, the control block's own (mapped) page. The store uses PA0 as its base correctly, but
+the write does not land, so whether `st` reads an output as data is still unseen. Also confirmed
+in the same slot: attempt 43's `.x2` DOUTA **did** write PA0 (a `stout` variant using the
+PA0 it left faulted at 0x0e870000, C) — the DOUTA writes regardless of form; only the following
+DOUTU fails.
+
+**Reading (G), grounded in the docs.** This looks like **EDM_PROTECT** enforcement. UAPI.md P2:
+on the SGX545 a *client* task's `st` into EDM_PROTECT kernel memory wedged the GPU (HWR), while
+the microkernel — running as the EDM data master — writes its control block normally. So
+EDM_PROTECT distinguishes the EDM from other requestors. If the SGX530 numbers its data masters
+differently from the 545's (where code base 15 = the microkernel/EDM), the task launched at code
+base 15 is **not** recognised as the EDM, and its stores to EDM_PROTECT pages fault — which would
+block **every** microkernel store to its control block (heartbeat, status, dispatch state). A
+direct check: `BIF_FAULT` CID (b0-3) reads **0xf** for an EDM fault (UKERNEL.md, 2026-11-03); if
+the stout store's CID is not 0xf, the store is not coming from the EDM, confirming this.
+
+This is a **third gate** on the restructure, alongside distinctness (now green) and
+DOUTA-then-DOUTU: the microkernel cannot run if its stores fault, whatever the register files do.
+Attempt 45 (approved): the code-base-15 data-master field at 0/1/2, then the data arena mapped
+without EDM_PROTECT on the 530. Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
+
+## After the forty-fifth attempt (5ee84d86): EDM_PROTECT is the store gate (C); margin one (C)
+
+**The store gate is EDM_PROTECT, not the data master (C).** `stout_o0` (PA0 = ctlblk+0x60) was
+run with the code-base-15 data-master field at 3/0/1/2: **every one faulted** BIF 0x4004 at the
+control-block page, so the DM field does not change it. Then with the kernel data arena mapped
+**CACHECONSISTENT only (no EDM_PROTECT)**: **no fault at all** (BIF int 0, the USE busy in its
+loop). So EDM_PROTECT is what blocks the task's stores, whatever the data master. The fix is
+driver-side and clean: the SGX530 maps the microkernel's writable structures without EDM_PROTECT.
+(The 545's `BIF_FAULT` CID-in-b0-3 does not show on the 530 — its low 12 bits read 0 — so the
+EDM-vs-not question can't be read off the fault there; the EDM_PROTECT result settles it anyway.)
+
+**Margin one (C).** `odist10` faulted b1 at 0x0fd79000 = r17's leftover, so o10 is distinct too:
+**eleven distinct task-writable outputs**, one more than the peak of 10.
+
+**Open: the store does not reach host-visible memory yet.** With EDM_PROTECT off the store no
+longer faults, but the version word (t[0x18], where PA0 points) still read **0**. Two candidates:
+(1) `st` cannot read an **output** as its data source; or (2) `idf`/`wdf` fences but does not
+flush the USE data cache to memory (the DDK uses the op0x100 data-cache flush). `stout_o0`
+already carries `st; idf; wdf`, so a missing fence is not it. The control `sgx530_stout_r5`
+stores a **temp** (r5's leftover 0x0c004000) through the same path: reads 0x0c004000 → `st`
+reaches memory and (2) is wrong, so the failure is (1) st-from-output; reads 0 → (2), a
+cache-flush problem for any source. This matters for the restructure: the microkernel must store
+its output-scratch to the control block. Analysis:
+[sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
+
+## After the forty-sixth attempt (8abc9c05): store visibility, not st-from-output (C); pds3 flat
+
+With EDM_PROTECT off by default, three results:
+- **`stout_r5` (store a temp) and `stout_o0` (store an output): both no fault, USE busy, t[0x18] = 0.**
+  So the failure is **not st-reading-an-output** — a temp store doesn't reach visible memory
+  either. The store completes without faulting but does not show in the control block (C).
+- **pds3-mirror variant 1 flat:** DOUTU 0x07003885 (w1=2, w0 from ds1[3]) + 13 × `tst` spacers
+  still launched at code base 0 (b2 0x0f400000). So w1=2, the DS1 w0, and spacing are **not** the
+  DOUTA-then-DOUTU cause. The in0-source DOUTA (variant 2) and the order-swap remain.
+
+**Store-visibility reading (G).** `st; idf; wdf` is exactly what the open microkernel's own
+heartbeat/status stores use, and those land on the SGX545 — so the 530 difference is not a missing
+flush instruction. `ld.a.d` computes addresses correctly on the 530 (loads fault at their expected
+pages), and the stout store uses offset `#0`, so address-unit scaling is unlikely to be it. That
+points to either the store not committing, or the host read not being coherent with the GPU write
+(the arena is read through a write-combined CPU mapping). Per the coordinator, check the simpler
+cases first, with **no new instructions**: scan the whole control block and its neighbouring page
+for `stout_o0`'s distinctive 0x0fd7d000 — found off t[0x18] = a misplaced store (an addressing
+difference); absent = not committed or a non-coherent read. Only then weigh a documented flush.
+Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
