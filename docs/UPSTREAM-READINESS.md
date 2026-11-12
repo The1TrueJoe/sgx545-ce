@@ -405,6 +405,14 @@ build.py, the driver, the docs and the test scripts.
    change to the emitted bytes bumps the build, and the checked-in golden hash
    (`ukernel/golden/sgx545.sha256`) is what proves a given Version's binary. Source
    and built binary are versioned together.
+4. **Re-spin the parked dry run.** The linux-firmware dry run (df280de) was cut
+   with WHENCE `Licence: MIT`. It needs a re-spin with:
+   - the dual license, `Licence: MIT OR Apache-2.0`;
+   - the file name the driver will request, `powervr_sgx/sgx545_v1.fw` (Kernel
+     K17);
+   - the shipped features word: 0x6 (DONE_SEQ), and 0xe once PB_SWITCH lands
+     (Kernel K7, K11);
+   - a WHENCE that `check_whence.py` accepts: no `Source:` line naming a URL.
 
 ### Not a blocker, noted
 - **Done.** The microkernel source's inline bring-up provenance (box names and
