@@ -2187,6 +2187,55 @@ sgx_lower_tex(nir_shader *s)
    return progress;
 }
 
+/* src i of alu is the constant k in every component it reads */
+static bool
+alu_src_is_k(nir_alu_instr *alu, unsigned i, int64_t k)
+{
+   if (!nir_src_is_const(alu->src[i].src))
+      return false;
+   for (unsigned c = 0; c < alu->def.num_components; c++)
+      if (nir_src_comp_as_int(alu->src[i].src, alu->src[i].swizzle[c]) != k)
+         return false;
+   return true;
+}
+
+/* imin(imax(x, -1), 1) (lower_isign's, for the float path) back to isign:
+ * the integer units' isign is two movc */
+static bool
+isign_clamp_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   nir_op in_op;
+   int64_t ko, ki;
+   if (alu->op == nir_op_imin) {
+      in_op = nir_op_imax, ko = 1, ki = -1;
+   } else if (alu->op == nir_op_imax) {
+      in_op = nir_op_imin, ko = -1, ki = 1;
+   } else {
+      return false;
+   }
+   for (unsigned o = 0; o < 2; o++) {
+      if (!alu_src_is_k(alu, 1 - o, ko))
+         continue;
+      nir_alu_instr *in = nir_def_as_alu_or_null(alu->src[o].src.ssa);
+      if (!in || in->op != in_op ||
+          in->def.num_components != alu->def.num_components)
+         continue;
+      bool ident = true;
+      for (unsigned c = 0; c < alu->def.num_components; c++)
+         ident &= alu->src[o].swizzle[c] == c;
+      if (!ident)
+         continue;
+      for (unsigned i = 0; i < 2; i++) {
+         if (!alu_src_is_k(in, 1 - i, ki))
+            continue;
+         b->cursor = nir_before_instr(&alu->instr);
+         nir_def_replace(&alu->def, nir_isign(b, nir_ssa_for_alu_src(b, in, i)));
+         return true;
+      }
+   }
+   return false;
+}
+
 void
 sgx_lower(struct sgx_ctx *c)
 {
@@ -2287,6 +2336,8 @@ sgx_lower(struct sgx_ctx *c)
    if (c->opts->native_integers) {
       /* integers stay integers; booleans are 0 / ~0 (testmask's dword) */
       NIR_PASS(_, s, nir_lower_bool_to_int32);
+      NIR_PASS(_, s, nir_shader_alu_pass, isign_clamp_instr,
+               nir_metadata_control_flow, NULL);
    } else {
       NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr,
                nir_metadata_control_flow, NULL);

@@ -1810,6 +1810,21 @@ TEST_F(sgx_compile_test, vertex_int_compare_select)
    EXPECT_TRUE(has("movc.ltz.i32")) << disasm();
 }
 
+/* sign(int): lower_isign's clamp to [-1, 1] back to isign, two movc (not
+ * the compare masks of imin and imax) */
+TEST_F(sgx_compile_test, vertex_int_sign)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, nir_isign(b, x), y);
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("movc.z.i32")) << disasm();
+   EXPECT_TRUE(has("movc.ltz.i32")) << disasm();
+   EXPECT_FALSE(has("testmask")) << disasm();
+}
+
 /* division: nir_lower_idiv, the high word of a product through i1 */
 TEST_F(sgx_compile_test, vertex_int_divide)
 {
