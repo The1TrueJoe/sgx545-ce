@@ -179,6 +179,9 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		pvrsgx_pds_ds(&p, PDS_D1(0), 0);
 		pvrsgx_pds_ds(&p, PDS_D1(1), doutu);
 		pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_D0(0), PDS_D0(1), PDS_D0(0), PDS_D0(1));
+		/* The .x2.s27 form seen on DOUTA pairs (0x2f..., docs/PDS.md). */
+		if (sw & PVRSGX_SWEEP_DOUTA_X2)
+			p.w[p.data + p.pc - 1] |= 0x28000000;
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D1(1), PDS_D0(1), PDS_D1(0), PDS_D1(1));
 		pvrsgx_pds_halt(&p);
 		return;

@@ -901,17 +901,17 @@ struct sweep_variant {
 };
 
 /*
- * A primary attribute the PDS writes is visible to the task, and PA0 keeps
- * it across loads (stage 1, log 2026-11-12-0526). Confirm it within one
- * run: the baseline (PA0 still holds the earlier 0x0e850000); the normal
- * program with DOUTU word 1 = 0, the one-row program's DOUTU, as its
- * control; then the one-row program writing a new value, 0x0e860000
- * (unmapped), to PA0 before that DOUTU.
+ * A DOUTA ahead of the DOUTU leaves the DOUTU starting the task at code base
+ * 0 (stage 1, logs 2026-11-12-0517 to -0536). Is it the DOUTA's form? The
+ * baseline; the one-row program as it ran in attempt 41; then the same with
+ * its DOUTA in the captured .x2.s27 form (0x2f...), writing a new value,
+ * 0x0e870000 (unmapped), to PA0. A task that starts at our entry and loads
+ * through PA0 faults there.
  */
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .flags = PVRSGX_SWEEP_DOUTU_W1_0 },
 	{ .flags = PVRSGX_SWEEP_DOUTA_1ROW, .doutu0 = 0x0e860000 },
+	{ .flags = PVRSGX_SWEEP_DOUTA_1ROW | PVRSGX_SWEEP_DOUTA_X2, .doutu0 = 0x0e870000 },
 };
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
@@ -960,7 +960,8 @@ static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *n
 			 PVRSGX_SWEEP_EXEC0_BRA)
 #define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS | PVRSGX_SWEEP_CB15 | \
 				 PVRSGX_SWEEP_DOUTU_OR | PVRSGX_SWEEP_TEMPS_FIELD | \
-				 PVRSGX_SWEEP_DOUTA_PA0 | PVRSGX_SWEEP_DOUTA_1ROW)
+				 PVRSGX_SWEEP_DOUTA_PA0 | PVRSGX_SWEEP_DOUTA_1ROW | \
+				 PVRSGX_SWEEP_DOUTA_X2)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -1055,7 +1056,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 	if (sv->flags & PVRSGX_SWEEP_DOUTA_PA0)
 		n += scnprintf(buf + n, len - n, " DOUTA PA0 0x%x", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_DOUTA_1ROW)
-		n += scnprintf(buf + n, len - n, " one-row DOUTA PA0 0x%x", sv->doutu0);
+		n += scnprintf(buf + n, len - n, " one-row DOUTA%s PA0 0x%x",
+			       sv->flags & PVRSGX_SWEEP_DOUTA_X2 ? ".x2" : "", sv->doutu0);
 	if (sv->regset)
 		n += scnprintf(buf + n, len - n, " part-2 set 0x%x", sv->regset);
 	if (sv->vendor == SWEEP_VENDOR_ALL)
