@@ -1,10 +1,12 @@
-From 9fd28cc6c146352bdeeac869129148aaded2280c Mon Sep 17 00:00:00 2001
+From b2d165a38ae8bef2d8f369637ac1f5116ad28f9d Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:14 -0500
 Subject: [PATCH 08/21] ci: build and test the sgx tools
 
-[Placeholder. Mesa wants commit messages in the submitter's own words;
-what this one must say is in MR-FACTS.md, "Commit 8".]
+Add sgx to debian-build-x86_64's tools, so meson test runs the four sgx
+tests in CI. debian-release already builds them, through tools=all.
+
+Assisted-by: LLM
 ---
  .gitlab-ci/build/gitlab-ci.yml | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)

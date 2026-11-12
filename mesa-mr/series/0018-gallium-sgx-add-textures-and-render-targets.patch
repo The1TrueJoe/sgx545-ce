@@ -1,8 +1,13 @@
-From 0d395d297fda42c84fb3aa776ccd9b773a1199f9 Mon Sep 17 00:00:00 2001
+From 4f74e4dd5b7d8440a448c8c53a4e1bd4b0c7d625 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:05 -0500
-Subject: [PATCH 18/21] PLACEHOLDER 19 gallium/sgx: textures and render targets
+Subject: [PATCH 18/21] gallium/sgx: add textures and render targets
 
+Texture layouts (twiddled and strided), format conversion on upload,
+mipmap chains, cube maps, and the render-target setup the end-of-tile
+programs write to.
+
+Assisted-by: LLM
 ---
  src/gallium/drivers/sgx/meson.build   |   1 +
  src/gallium/drivers/sgx/sgx_texture.c | 629 ++++++++++++++++++++++++++

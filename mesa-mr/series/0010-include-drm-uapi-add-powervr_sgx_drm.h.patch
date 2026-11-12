@@ -1,8 +1,16 @@
-From 26688e70772b6fdc83a0b9a674f62be19d71bb56 Mon Sep 17 00:00:00 2001
+From d6a0455c468cd5e9296051ca59cd22b5901556f9 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:40:34 -0500
-Subject: [PATCH 10/21] PLACEHOLDER 11 include/drm-uapi: powervr_sgx_drm.h
+Subject: [PATCH 10/21] include/drm-uapi: add powervr_sgx_drm.h
 
+The uAPI header of the powervr_sgx kernel driver, revision 4 (DRM driver
+version 1.0), as posted in the kernel RFC [link]. The command structs the
+winsys submits are part of it.
+
+This is a copy until the kernel driver is merged; it will then be updated
+from the kernel's include/uapi/drm like the other DRM uAPI headers.
+
+Assisted-by: LLM
 ---
  include/drm-uapi/powervr_sgx_drm.h | 1171 ++++++++++++++++++++++++++++
  1 file changed, 1171 insertions(+)

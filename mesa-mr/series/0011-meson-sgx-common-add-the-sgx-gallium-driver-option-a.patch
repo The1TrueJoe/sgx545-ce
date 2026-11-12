@@ -1,9 +1,21 @@
-From 5964e424c7e220bcc055e9e78b30365003750ebe Mon Sep 17 00:00:00 2001
+From f30201de0fe2400f769b05a17715d9d4771bcfc7 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:40:40 -0500
-Subject: [PATCH 11/21] PLACEHOLDER 12 meson, sgx/common: the sgx gallium
- driver option and the per-core table
+Subject: [PATCH 11/21] meson, sgx/common: add the sgx gallium driver option
+ and the per-core table
 
+Add 'sgx' to -Dgallium-drivers (with_gallium_sgx) and enter src/sgx for it,
+as -Dtools=sgx already does.
+
+src/sgx/common holds one entry per SGX core: what the kernel doesn't
+report through DRM_POWERVR_SGX_DEV_QUERY (the ISA variant, sampler count,
+texture size, render-target limits on the services path). The SGX545 is
+the only entry; a core without one is not driven.
+
+Nothing builds the driver yet; the following commits add it piece by
+piece.
+
+Assisted-by: LLM
 ---
  .clang-format-include      |  1 +
  meson.build                |  2 +

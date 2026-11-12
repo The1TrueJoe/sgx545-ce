@@ -1,9 +1,34 @@
-From a409d00449f7ca274cb494ff674e787c278bb0cb Mon Sep 17 00:00:00 2001
+From c4ffdf67a628f4c307acb03b1bfb679f33dc9d41 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:44 -0500
-Subject: [PATCH 20/21] PLACEHOLDER 21 loader, egl, kmsro, dril: sgx as a
- render-only GPU beside a display-only device
+Subject: [PATCH 20/21] loader, egl, kmsro, dril: support sgx as a render-only
+ GPU
 
+The SGX has no display. kmsro pairs it with a KMS-only display device: a
+scanout buffer is a dumb buffer of the display device, imported into the
+GPU.
+
+powervr_sgx binds to a PCI device on the CE5300 and to an auxiliary device
+of gma500's PCI function on Cedarview:
+
+- a platform display device such as simpledrm finds its render node off the
+  platform bus: render nodes of PCI devices are taken when their driver is
+  powervr_sgx;
+- a display device on another bus (gma500) gets the render node of a child
+  of its own device. libdrm's device list leaves out the auxiliary bus, so
+  the loader finds the child through /sys/class/drm
+  (loader_find_child_render_node, with a unit test on fake sysfs trees).
+
+libdrm doesn't describe auxiliary devices, so drmGetDevice2 fails on the
+Cedarview SGX's nodes and EGL had no EGLDevice for it. The loader's
+loader_drm_get_device/loader_drm_get_devices describe such a node as its
+parent PCI function, and EGL's device list and lookups use them (a unit
+test on a real Cedarview's sysfs layout).
+
+dril gets stubs for simpledrm, gma500 and sgx, which an X server's GLX
+loads by the display driver's name.
+
+Assisted-by: LLM
 ---
  src/egl/drivers/dri2/egl_dri2.c               |  13 +
  src/egl/main/egldevice.c                      |   6 +-

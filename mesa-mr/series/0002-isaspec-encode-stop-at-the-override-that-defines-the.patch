@@ -1,11 +1,25 @@
-From 818dcc2aac2dd3cacf14975486bf3f45e1ef24b1 Mon Sep 17 00:00:00 2001
+From 278168dfeb5c344de50a4436ec74a243a2d9728e Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:12 -0500
 Subject: [PATCH 02/21] isaspec: encode: stop at the override that defines the
  field
 
-[Placeholder. Mesa wants commit messages in the submitter's own words;
-what this one must say is in MR-FACTS.md, "Commit 2".]
+Inside an override's branch, the encoder also emitted the same field's
+definitions from the overrides after it, as an if/else chain with no
+final else. The code for the next field then became that else, so when
+a later override's expression also held, the next field wasn't encoded
+and the later override's definition was OR'ed in.
+
+Stop at the case being encoded. That is what the decoder does:
+find_field() takes the first case whose expression holds.
+
+etnaviv's and qrisc's generated encoders are unchanged. ir3's encode.h
+loses 120 unreachable lines: cat1's immediate overrides test distinct
+SRC_TYPE values, so they never overlap. Without this change, 2 of the
+SGX545 round-trip test's instructions fail: the indexed F16 operands lose
+their F16 flag.
+
+Assisted-by: LLM
 ---
  docs/isaspec.rst               | 4 +++-
  src/compiler/isaspec/encode.py | 4 ++++

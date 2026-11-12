@@ -1,9 +1,14 @@
-From 22a0658b4de0c68f56f2a9235daa2b3bb12d8c1f Mon Sep 17 00:00:00 2001
+From 569ebbaa0c5d31c827cb2c8d5764a9de882b6ceb Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:01 -0500
-Subject: [PATCH 17/21] PLACEHOLDER 18 gallium/sgx: state, programs and the
- draw path
+Subject: [PATCH 17/21] gallium/sgx: add state, programs and the draw path
 
+Pipe state objects, shader variants (programs are compiled per state that
+changes the code: texture formats, the colour output format, flat shading),
+and the draw path: vertex fetch to the TA, with a cache for vertex data
+drawn every frame and a zero-copy path for resident buffers.
+
+Assisted-by: LLM
 ---
  src/gallium/drivers/sgx/meson.build   |    3 +
  src/gallium/drivers/sgx/sgx_draw.c    | 1936 +++++++++++++++++++++++++

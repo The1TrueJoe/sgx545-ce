@@ -1,9 +1,17 @@
-From 7481b008dbcf136cca4494ff3e912e50564ff17b Mon Sep 17 00:00:00 2001
+From c2f14c9ee764a7f7441472f32c7111aa1a468a5c Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:44:37 -0500
-Subject: [PATCH 16/21] PLACEHOLDER 17 gallium/sgx: screen, context and
- resources
+Subject: [PATCH 16/21] gallium/sgx: add the screen, context and resources
 
+The start of the sgx gallium driver: the screen (device info from the
+kernel and the per-core table, caps, formats), the context, and resources
+(buffers; textures kept as a CPU copy and a device copy in the GPU's
+layout; render targets; imported and exported buffers).
+
+Also the entry the DRM target calls (sgx_drm_screen_create), and the
+driver's headers. It isn't built into a target until the wiring commit.
+
+Assisted-by: LLM
 ---
  .clang-format-include                       |   1 +
  src/gallium/drivers/sgx/.clang-format       |   6 +

@@ -1,11 +1,24 @@
-From 5e58c0c60f5e07a3e3754e26bb0fe123af358db4 Mon Sep 17 00:00:00 2001
+From 859ae5db05636046f8074d0d3ed31fd44b4f1efb Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:12 -0500
 Subject: [PATCH 01/21] isaspec: allow <param>s on derived fields of bitset
  type
 
-[Placeholder. Mesa wants commit messages in the submitter's own words;
-what this one must say is in MR-FACTS.md, "Commit 1".]
+A <derived> field may now have a bitset type. Like a plain field of
+bitset type, it then takes <param>s, which isa.py parses and the encoder
+adds to its bitset_params struct.
+
+This is for operands whose number, bank and extension bits are spread
+over the instruction word: an expression puts the bits back together,
+and one operand hierarchy decodes the result, instead of a copy of the
+hierarchy per layout. The first user is the SGX545 instruction set in
+src/sgx/isa.
+
+isaspec has no tests of its own. With PYTHONHASHSEED fixed, the ir3,
+etnaviv and qrisc decoders and encoders generated before and after this
+change are identical.
+
+Assisted-by: LLM
 ---
  docs/isaspec.rst               |  5 ++++-
  src/compiler/isaspec/encode.py | 13 +++++++++++++

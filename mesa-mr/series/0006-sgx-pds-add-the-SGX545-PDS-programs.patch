@@ -1,10 +1,14 @@
-From bdb3039d761e33a6464814fe105c4c636f9ce6c6 Mon Sep 17 00:00:00 2001
+From 3495a5b71be0980aac064d13de68220bbecfbb07 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:13 -0500
 Subject: [PATCH 06/21] sgx/pds: add the SGX545 PDS programs
 
-[Placeholder. Mesa wants commit messages in the submitter's own words;
-what this one must say is in MR-FACTS.md, "Commit 6".]
+Describe the SGX545's PDS (programmable data sequencer) instructions in
+isaspec, with an assembler and a test. The DOUT data words are
+encode-only roots, which the isaspec decoder change earlier in this
+series keeps out of the decoder, so the library needs no warning flags.
+
+Assisted-by: LLM
 ---
  .clang-format-include            |   1 +
  src/sgx/meson.build              |   1 +

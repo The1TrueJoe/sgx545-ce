@@ -1,9 +1,18 @@
-From b042ce97c4e3177c3f27828e7aaee7d1ef166bdf Mon Sep 17 00:00:00 2001
+From 746a4311d486c507c92f6bbe75a55d2f89056826 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:25 -0500
-Subject: [PATCH 12/21] PLACEHOLDER 13 sgx/compiler: NIR options and the
- backend's lowering passes
+Subject: [PATCH 12/21] sgx/compiler: add the NIR options and the backend's
+ lowering passes
 
+The first part of the NIR -> USSE compiler: the NIR compiler options the
+driver creates shaders with, and the backend's own lowering passes (mediump
+lowering, 16-bit narrowing, uniform formats, texture derefs, uniforms),
+each a NIR_PASS that returns progress.
+
+sgx_forms holds the ALU instruction forms the selection in the next commit
+picks from.
+
+Assisted-by: LLM
 ---
  .clang-format-include           |    1 +
  src/sgx/compiler/meson.build    |   21 +

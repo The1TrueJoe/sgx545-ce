@@ -1,8 +1,24 @@
-From abcdf5b1f03375d95cf2c5cd71f18ce2f1769877 Mon Sep 17 00:00:00 2001
+From 6a8ff1ce1d41f7aa577a97997fc4c235b4d198c0 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:40:33 -0500
-Subject: [PATCH 09/21] PLACEHOLDER 09 nir,glsl: nir_io_dont_optimize_varyings
+Subject: [PATCH 09/21] nir, glsl: add nir_io_dont_optimize_varyings
 
+Add a compiler option that stops the GLSL linker from running
+nir_opt_varyings for a driver, as MESA_GLSL_DISABLE_IO_OPT does for every
+driver today.
+
+The SGX's PDS fetches a texture with an interpolated coordinate before the
+fragment shader runs, and it needs that coordinate as a whole vec4 slot
+starting at component 0. nir_opt_varyings' compaction can pack another
+varying (a fog factor, say) in front of it, and the fetch then becomes a
+dependent sample in the shader, which is slower and counts against a small
+per-program limit.
+
+Until now the sgx driver set MESA_GLSL_DISABLE_IO_OPT in its own process
+environment. No driver other than sgx sets the option, so no other
+driver's output changes.
+
+Assisted-by: LLM
 ---
  src/compiler/glsl/gl_nir_linker.c              | 3 ++-
  src/compiler/nir/nir_shader_compiler_options.h | 9 +++++++++

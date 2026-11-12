@@ -1,9 +1,21 @@
-From 9c4378210930cc44d44a0e45e6615e945df8bfb4 Mon Sep 17 00:00:00 2001
+From 68a67e1e07e1b8abacdddd0dd401a31a506198df Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:38 -0500
-Subject: [PATCH 13/21] PLACEHOLDER 14 sgx/compiler: instruction selection,
- register allocation and encoding
+Subject: [PATCH 13/21] sgx/compiler: add instruction selection, register
+ allocation and encoding
 
+The backend: instruction selection from NIR, scheduling and co-issue (fdual
+and efo), register allocation, and encoding through the isaspec encoder in
+src/sgx/isa. sgx_program.c turns a compiled shader into the words the
+driver uploads.
+
+sgx_compile.c is one file of about 7,000 lines, the size of
+ir3_compiler_nir.c. It is kept whole: splitting it into selection,
+allocation and encoding files means exporting about 60 of its static
+functions with prototypes in sgx_priv.h. Happy to split it if review
+prefers.
+
+Assisted-by: LLM
 ---
  src/sgx/compiler/meson.build   |    2 +-
  src/sgx/compiler/sgx_compile.c | 7014 ++++++++++++++++++++++++++++++++

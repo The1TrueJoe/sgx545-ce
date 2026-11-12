@@ -1,9 +1,23 @@
-From cb39da4d421e2db5d5ad37e3bf3de0d2514c288e Mon Sep 17 00:00:00 2001
+From 08f561b530b1fa4c125d4bf6824309909bdede7c Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:52 -0500
-Subject: [PATCH 14/21] PLACEHOLDER 15 sgx/compiler: the fixed programs and the
- unit tests
+Subject: [PATCH 14/21] sgx/compiler: add the fixed programs and the unit tests
 
+sgx_fixed.c holds the fixed USSE programs a frame needs besides the
+shaders: the TA state-emit programs, the empty task, the clear's and the
+viewport object's vertex programs, the copy and uniform-colour pixel
+programs, the position-only vertex programs and the pixel-event tasks. They
+are assembly text, assembled through the isa library when a context is
+created; a golden header checks the words they assemble to.
+
+The gtest suite (meson test --suite sgx) builds shaders with nir_builder,
+compiles them and checks that every word decodes through the isaspec
+disassembler: 55 cases covering varyings, co-issue, loops, textures, the
+colour fast paths, mediump and lowp arithmetic, discard, constants past the
+register file, and the fixed programs. README.md describes the compiler's structure and its
+debug flags (SGX_COMPILER_DEBUG).
+
+Assisted-by: LLM
 ---
  src/sgx/compiler/README.md                  |  102 ++
  src/sgx/compiler/meson.build                |   17 +-

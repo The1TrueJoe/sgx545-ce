@@ -1,10 +1,16 @@
-From 384698509de2482f66f6b4c114f7a4b2b99671e8 Mon Sep 17 00:00:00 2001
+From b1d8d83574de5b6dba594c055af9eff82e42b647 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:13 -0500
 Subject: [PATCH 05/21] sgx/isa: add sgx-asm and sgx-disasm
 
-[Placeholder. Mesa wants commit messages in the submitter's own words;
-what this one must say is in MR-FACTS.md, "Commit 5".]
+sgx-asm assembles a file in one go, writing hex, binary or a listing.
+Its user is the build of the GPU's open microkernel firmware, which has
+no driver to go through. sgx-disasm disassembles.
+
+Both are built with -Dtools=sgx, as etnaviv-disasm is with
+-Dtools=etnaviv. sgx_isa_tools runs the round-trip lists through both.
+
+Assisted-by: LLM
 ---
  src/sgx/isa/README.md           |  26 ++++-
  src/sgx/isa/assembler.c         | 193 ++++++++++++++++++++++++++++++++

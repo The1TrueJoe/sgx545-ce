@@ -1,9 +1,17 @@
-From ad0b851dd7d6966a1232854b5e79a3aab2a05595 Mon Sep 17 00:00:00 2001
+From 5d3e275dc2b7bae51244d400d0c1b2a6f5d9a061 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:46:03 -0500
-Subject: [PATCH 21/21] PLACEHOLDER 22 docs, ci: the sgx driver's documentation
- and test expectations
+Subject: [PATCH 21/21] docs, ci: add the sgx driver's documentation and test
+ expectations
 
+docs/drivers/sgx.rst: supported hardware, the kernel driver it needs, the
+GL and GLES versions, debug options, known limitations and how to run the
+tests; listed in the driver index, systems.rst and the release notes.
+
+src/gallium/drivers/sgx/ci: deqp-runner suites for dEQP-GLES2 and piglit
+and their expectation files, for when a farm has the hardware.
+
+Assisted-by: LLM
 ---
  docs/drivers/sgx.rst                          |  134 +
  docs/index.rst                                |    1 +

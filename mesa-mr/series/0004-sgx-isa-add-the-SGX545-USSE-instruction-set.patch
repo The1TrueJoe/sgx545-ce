@@ -1,10 +1,25 @@
-From 02bddf9343930c5e8f1152c74d4f3f3eb2fd85d2 Mon Sep 17 00:00:00 2001
+From cba958820858efb6118959c9f2a6faf371f4b7cf Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:13 -0500
 Subject: [PATCH 04/21] sgx/isa: add the SGX545 USSE instruction set
 
-[Placeholder. Mesa wants commit messages in the submitter's own words;
-what this one must say is in MR-FACTS.md, "Commit 4".]
+Describe the 64-bit USSE instruction set of the PowerVR SGX545 in
+isaspec (sgx.xml), with:
+
+- the encoder glue, and a text assembler for the disassembler's
+  notation. The assembler parses numbers into 64 bits and reads each one
+  back from the encoded word, so a value too wide for its field is
+  refused instead of being truncated;
+- the co-issue helpers for fdual and efo;
+- a round-trip test over three instruction lists.
+
+The SGX545 is the GPU in the Intel Atom CE5300 family and in Cedarview
+(Atom N2000/D2000).
+
+This also adds an sgx choice to -Dtools (and to all), which enters
+src/sgx.
+
+Assisted-by: LLM
 ---
  .clang-format-include            |    1 +
  meson.build                      |    1 +

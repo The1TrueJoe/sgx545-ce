@@ -1,9 +1,15 @@
-From f0a53591c55fc03e876fba73cd2ce5e6c12a6a7f Mon Sep 17 00:00:00 2001
+From 4fe8b91c26f04a78ff4bdfe60f95322614192128 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:34 -0500
-Subject: [PATCH 19/21] PLACEHOLDER 20 gallium: wire up the sgx driver (pipe
- loader, DRI target, loader)
+Subject: [PATCH 19/21] gallium: wire up the sgx driver
 
+Add the driver's DRM descriptor to the pipe loader, its screen-create hook to
+the DRM target helpers, and the driver to the DRI target. The loader picks
+sgx for a node whose kernel driver is powervr_sgx (sgx_predicate).
+
+With this, -Dgallium-drivers=sgx builds a working driver.
+
+Assisted-by: LLM
 ---
  .../auxiliary/pipe-loader/pipe_loader_drm.c     |  4 ++++
  .../auxiliary/target-helpers/drm_helper.h       | 17 +++++++++++++++++

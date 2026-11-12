@@ -1,10 +1,24 @@
-From d8b6c083484ab03f480da22c6fc380a4f347392d Mon Sep 17 00:00:00 2001
+From 31ff9c68f3c49e8a4de1854483bddd52682be4a1 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:13 -0500
 Subject: [PATCH 03/21] isaspec: decode: leave out roots nothing decodes from
 
-[Placeholder. Mesa wants commit messages in the submitter's own words;
-what this one must say is in MR-FACTS.md, "Commit 3".]
+The decoder generated tables for every root bitset and the bitsets
+under it, but decoding only starts from #instruction and from the roots
+that are some field's type. A root that only the encoder uses, such as a
+data word outside the instruction stream, left tables that nothing
+references, and -Wunused-variable and -Wunused-const-variable warned
+about them.
+
+decode.py now drops those roots and their bitsets before generating,
+through ISA.drop_undecoded_roots() in isa.py. encode.py still sees them.
+
+With PYTHONHASHSEED fixed, the ir3, etnaviv, qrisc and SGX545 USSE
+decoders are byte-identical before and after. The SGX545 PDS decoder,
+added later in this series, loses its six encode-only roots and builds
+with -Werror and no warning flags.
+
+Assisted-by: LLM
 ---
  src/compiler/isaspec/decode.py |  1 +
  src/compiler/isaspec/isa.py    | 26 ++++++++++++++++++++++++++
