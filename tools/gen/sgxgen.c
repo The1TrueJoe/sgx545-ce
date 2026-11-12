@@ -191,7 +191,15 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 
 static void ring_init(struct sgx_dev *d, struct sgx_ring *r, uint32_t heap, uint32_t size)
 {
-	bo_alloc(d, &r->bo, heap, 0x1, size, 0x1000);
+	uint32_t align = 0x1000;
+
+#ifdef SGXGEN_DRM
+	/* a code ring stays in one code base window, as UPLOAD_CODE wants of an object with
+	 * phas.i targets: aligned to its (power of two) size, as Mesa's code chunks are */
+	if (heap == H_PIXSHADER || heap == H_VTXSHADER)
+		align = size;
+#endif
+	bo_alloc(d, &r->bo, heap, 0x1, size, align);
 	/* nothing at a heap's first byte: a PDS state word or DOUTU word of 0 would name it */
 	r->used = 0x100;
 }
@@ -219,12 +227,22 @@ void sgx_ctx_mark(struct sgx_ctx *c)
 		rs[i]->mark = rs[i]->used;
 }
 
+/*
+ * A code object takes each instruction once while it is mapped (UPLOAD_CODE
+ * refuses to rewrite below what it holds), so a code ring keeps what it has
+ * uploaded: rewinding into it would leave the GPU running the old programs.
+ */
 void sgx_ctx_rewind(struct sgx_ctx *c)
 {
 	struct sgx_ring *rs[] = CTX_RINGS(c);
 
-	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
+	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++) {
 		rs[i]->used = rs[i]->mark;
+#ifdef SGXGEN_DRM
+		if (rs[i]->bo.code && rs[i]->used < rs[i]->bo.uploaded)
+			rs[i]->used = rs[i]->bo.uploaded;
+#endif
+	}
 }
 
 /* ------------------------------------------------------------------ USSE */
@@ -235,7 +253,8 @@ static uint32_t usse_load(struct sgx_ctx *c, const struct usse_prog *pr, int ver
 {
 	struct sgx_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
 	struct sgx_ptr p = ring_alloc(r, pr->n * 8, USSE_ALIGN);
-	uint32_t pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+	/* phas.i targets count from the task's code base: the 512 KiB window, not the heap */
+	uint32_t pc0 = ((p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) & 0x7ffff) / 8;
 
 	memcpy(p.p, pr->w, pr->n * 8);
 	for (unsigned i = 0; i < pr->nreloc; i++)
@@ -248,7 +267,8 @@ uint32_t sgx_usse_load(struct sgx_ctx *c, int vertex, const uint32_t *w, unsigne
 {
 	struct sgx_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
 	struct sgx_ptr p = ring_alloc(r, n * 8, USSE_ALIGN);
-	uint32_t pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+	/* phas.i targets count from the task's code base: the 512 KiB window, not the heap */
+	uint32_t pc0 = ((p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) & 0x7ffff) / 8;
 
 	memcpy(p.p, w, n * 8);
 	for (unsigned i = 0; i < nreloc; i++)

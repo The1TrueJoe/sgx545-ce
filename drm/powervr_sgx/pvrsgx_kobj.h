@@ -40,6 +40,8 @@ struct pvrsgx_kobj {
 	struct list_head grave;
 	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
 	u64 grave_seq;
+	/** @flush_seq: Once unmapped, the kernel CCB command whose cache control frees it. */
+	u64 flush_seq;
 	/** @grave_restarts: pvrsgx_device.restarts when it was released. */
 	u32 grave_restarts;
 };
@@ -60,6 +62,14 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 				       u32 size, u32 min_addr, struct pvrsgx_vm *vm);
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o);
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done);
+
+/* Objects and pages waiting in the graveyard, and unmapped ones waiting for the invalidate. */
+struct pvrsgx_kobj_counts {
+	u32 graveyard, unmapped;
+	u64 graveyard_pages, unmapped_pages;
+};
+
+bool pvrsgx_kobj_pending(struct pvrsgx_device *sdev, struct pvrsgx_kobj_counts *c);
 
 struct seq_buf;
 struct pvrsgx_vm;

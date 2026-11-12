@@ -24,6 +24,7 @@ static struct pvrsgx_device *kobj_test_device(struct kunit *test)
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, sdev->kernel_mmu);
 	mutex_init(&sdev->ccb_lock);
+	spin_lock_init(&sdev->ccb_spin);
 	mutex_init(&sdev->pb_lock);
 	pvrsgx_kobj_init(sdev);
 	return sdev;
@@ -36,6 +37,7 @@ static void kobj_test_fini(struct kunit *test, struct pvrsgx_device *sdev)
 	sdev->pb = NULL;
 	pvrsgx_kobj_fini(sdev);
 	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->kobj_unmapped));
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		KUNIT_EXPECT_TRUE_MSG(test, drm_mm_clean(&sdev->krange[r]), "range %d", r);
 	pvrsgx_mmu_destroy(sdev->kernel_mmu);
@@ -92,9 +94,54 @@ static void kobj_test_vm_gone_first(struct kunit *test)
 	kobj_test_fini(test, sdev);
 }
 
+/*
+ * A reaped object is unmapped at once, but its pages and address wait until
+ * the microkernel has taken a command after it: that command's cache control
+ * invalidates the BIF TLB, which may still translate the old pages.
+ */
+static void kobj_test_free_after_invalidate(struct kunit *test)
+{
+	struct pvrsgx_device *sdev = kobj_test_device(test);
+	u32 *ccbctl = kunit_kzalloc(test, 2 * sizeof(u32), GFP_KERNEL);
+	struct pvrsgx_kobj *o = NULL;
+	u32 addr;
+
+	KUNIT_ASSERT_NOT_NULL(test, ccbctl);
+	/* An empty ring: everything issued is consumed. */
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = ccbctl;
+	KUNIT_ASSERT_EQ(test, pvrsgx_kobj_new(sdev, &o, PVRSGX_KRANGE_KDATA, PAGE_SIZE, 0, NULL),
+			0);
+	addr = kobj_va(o);
+	sdev->fw.cache_control = 0;
+
+	/* Released before render 1, which has finished. */
+	pvrsgx_kobj_drop(sdev, &o);
+	pvrsgx_kobj_reap(sdev, 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sdev->kobj_unmapped));
+	KUNIT_EXPECT_TRUE(test, pvrsgx_mmu_range_empty(sdev->kernel_mmu, addr, PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, sdev->fw.cache_control & PVRSGX_CC_INVAL_BIF_PT,
+			PVRSGX_CC_INVAL_BIF_PT);
+	KUNIT_EXPECT_FALSE(test, drm_mm_clean(&sdev->krange[PVRSGX_KRANGE_KDATA]));
+
+	/* No command since: still held. */
+	pvrsgx_kobj_reap(sdev, 1);
+	KUNIT_EXPECT_FALSE(test, list_empty(&sdev->kobj_unmapped));
+
+	/* The next command was sent and taken. */
+	sdev->ccb_issued++;
+	pvrsgx_kobj_reap(sdev, 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->kobj_unmapped));
+	KUNIT_EXPECT_TRUE(test, drm_mm_clean(&sdev->krange[PVRSGX_KRANGE_KDATA]));
+
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = NULL;
+	kobj_test_fini(test, sdev);
+}
+
 static struct kunit_case pvrsgx_kobj_test_cases[] = {
 	KUNIT_CASE(kobj_test_vm_held_by_graveyard),
 	KUNIT_CASE(kobj_test_vm_gone_first),
+	KUNIT_CASE(kobj_test_free_after_invalidate),
 	{}
 };
 

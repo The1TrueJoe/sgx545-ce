@@ -11,10 +11,12 @@
 #include <drm/drm_gem_shmem_helper.h>
 
 #include <linux/device.h>
+#include <linux/dma-buf.h>
 #include <linux/ktime.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
+#include "pvrsgx_gem.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_prime.h"
 #include "pvrsgx_trace.h"
@@ -80,23 +82,56 @@ bool pvrsgx_prime_reachable(struct sg_table *sgt)
  * are write-combined on the CPU; an import may be cached, so flush each import
  * the job lists before it runs (no dirty line lands on its output later) and
  * after (no stale line hides it). Userspace lists every import a job touches.
+ * An importer may not touch the attachment's pages, so the flushes go through
+ * the exporter's own CPU mapping, taken at import.
  */
+static u64 import_flush(struct drm_gem_object *obj)
+{
+	struct iosys_map *map = &to_pvrsgx_bo(obj)->import_map;
+
+	/* I/O memory isn't cached. */
+	if (map->is_iomem)
+		return 0;
+	drm_clflush_virt_range(map->vaddr, obj->size);
+	return obj->size;
+}
+
 void pvrsgx_prime_flush(struct pvrsgx_job *job, bool after)
 {
 	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
 
-	for (u32 i = 0; i < job->nimports; i++) {
-		struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(job->imports[i]);
-
-		if (shmem->sgt) {
-			drm_clflush_sg(shmem->sgt);
-			bytes += shmem->base.size;
-		}
-	}
+	for (u32 i = 0; i < job->nimports; i++)
+		bytes += import_flush(job->imports[i]);
 	if (job->nimports)
 		trace_pvrsgx_flush_imports(job->hw_fence ? job->hw_fence->seqno : 0,
 					   job->nimports, bytes,
 					   t0 ? ktime_get_ns() - t0 : 0, after);
+}
+
+struct drm_gem_object *pvrsgx_prime_import_sg_table(struct drm_device *drm,
+						    struct dma_buf_attachment *attach,
+						    struct sg_table *sgt)
+{
+	struct drm_gem_object *obj;
+	struct iosys_map map;
+	int err;
+
+	err = dma_buf_vmap_unlocked(attach->dmabuf, &map);
+	if (err)
+		return ERR_PTR(err);
+	obj = drm_gem_shmem_prime_import_sg_table(drm, attach, sgt);
+	if (IS_ERR(obj)) {
+		dma_buf_vunmap_unlocked(attach->dmabuf, &map);
+		return obj;
+	}
+	to_pvrsgx_bo(obj)->import_map = map;
+	/*
+	 * A listed import is flushed around each job, an unlisted one never: what
+	 * the CPU still holds of it (its zeroing, say) reaches memory now, or the
+	 * GPU could see the pages' earlier contents.
+	 */
+	import_flush(obj);
+	return obj;
 }
 
 void pvrsgx_prime_put(struct pvrsgx_job *job)
