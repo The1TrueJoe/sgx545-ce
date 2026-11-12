@@ -603,9 +603,25 @@ static void sweep_write(struct pvrsgx_device *sdev, u32 reg, u32 val)
 		 reg, before, val, sgx_rd(sdev, reg));
 }
 
+/*
+ * The rest of the SGX545 init script's part 2, in its order, for the stage-1
+ * sweep's @sweep_regset (bit n writes entry n): unnamed in both GPL headers,
+ * the values the SGX545's (docs/SRVINIT.md; G on the SGX530). Approved for
+ * the SGX530 bring-up only, read before and put back after each variant.
+ */
+static const struct pvrsgx_core_init_reg sweep_part2_regs[] = {
+	{ 0x818, 0x7ff }, { 0x810, 1 }, { 0x814, 0xffff }, { 0x13c, 0 }, { 0xa7c, 0 },
+	{ 0xa80, 0 }, { 0x4e8, 0x100 }, { 0xa78, 0x2c }, { 0xaac, 0x45 }, { 0xabc, 0xe },
+	{ 0x800, 0x30 }, { 0x804, 0xffff }, { 0xa00, 0x7c000 },
+};
+
 static void sweep_setup_writes(struct pvrsgx_device *sdev)
 {
 	unsigned int v = sdev->sweep_vendor;
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(sweep_part2_regs); i++)
+		if (sdev->sweep_regset & BIT(i))
+			sweep_write(sdev, sweep_part2_regs[i].reg, sweep_part2_regs[i].val);
 
 	if ((sdev->sweep_flags & PVRSGX_SWEEP_PDS_CTRL) && sdev->cr->pds_ctrl)
 		sweep_write(sdev, sdev->cr->pds_ctrl, 0xe);
@@ -878,31 +894,37 @@ MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unname
  */
 struct sweep_variant {
 	u32 flags, enable, doutu0, cb15;
+	u16 regset;
 	bool doutu_set;
 	u16 data0;
 	u8 dest, cc, data1, prog, a68_low, vendor, doutu_bit;
 };
 
 /*
- * No register write reaches the register a load then reads (stage 1, logs
- * 2026-11-12-0353 to -0357): does the task get no temporaries because the
- * SGX530 reads their count elsewhere in DOUTU word 0? The normal word; the
- * temporaries field at 8 (32, which sets b27 as the SGX545's own entries do;
- * the SGX530's 24 gives 6 and clears it); then the bits that don't move the
- * code fetch (log 2026-11-12-0226) set in groups on top of the normal word:
- * b8-15, b19-23, b28-31.
+ * No register write lands (stage 1, logs 2026-11-12-0353 to -0443): does the
+ * SGX530 need the rest of the SGX545's part 2? The baseline; then, with
+ * stage1_vendor, the 0x8xx/0xaxx writes; those plus 0x4e8 and 0x13c; then
+ * 0x810/0x814/0x818, 0x800/0x804 and the 0xaxx writes alone. Bits index
+ * sweep_part2_regs[].
  */
-#define TEMPS(v)	{ .flags = PVRSGX_SWEEP_TEMPS_FIELD, .doutu0 = (v) }
-#define DOUTU_OR(v)	{ .flags = PVRSGX_SWEEP_DOUTU_OR, .doutu0 = (v) }
+#define REGSET(m)	{ .regset = (m) }
+#define RS_0X81X	0x0007	/* 0x818, 0x810, 0x814 */
+#define RS_0XAXX	0x13b0	/* 0xa7c, 0xa80, 0xa78, 0xaac, 0xabc, 0xa00 */
+#define RS_0X80X	0x0c00	/* 0x800, 0x804 */
+#define RS_OTHER	0x0048	/* 0x13c, 0x4e8 */
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	TEMPS(8),
-	DOUTU_OR(0x0000ff00), DOUTU_OR(0x00f80000), DOUTU_OR(0xf0000000),
+	REGSET(RS_0X81X | RS_0XAXX | RS_0X80X),
+	REGSET(RS_0X81X | RS_0XAXX | RS_0X80X | RS_OTHER),
+	REGSET(RS_0X81X), REGSET(RS_0X80X), REGSET(RS_0XAXX),
 };
 
-#undef DOUTU_OR
-#undef TEMPS
+#undef RS_OTHER
+#undef RS_0X80X
+#undef RS_0XAXX
+#undef RS_0X81X
+#undef REGSET
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
 static int alias_map(struct pvrsgx_device *sdev)
@@ -999,7 +1021,7 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2", "HALT" };
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
 			  sv->data1 || sv->prog || sv->a68_low || sv->vendor ||
-			  sv->doutu_bit || sv->doutu_set ? "" : "baseline");
+			  sv->doutu_bit || sv->doutu_set || sv->regset ? "" : "baseline");
 
 	if (sv->prog)
 		n += scnprintf(buf + n, len - n, " program %s",
@@ -1041,6 +1063,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " DOUTU w0 |= 0x%x", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_TEMPS_FIELD)
 		n += scnprintf(buf + n, len - n, " temps field %u", sv->doutu0);
+	if (sv->regset)
+		n += scnprintf(buf + n, len - n, " part-2 set 0x%x", sv->regset);
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
@@ -1163,6 +1187,7 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	sdev->sweep_vendor = 0;
 	sdev->sweep_doutu_bit = 0;
 	sdev->sweep_doutu_set = false;
+	sdev->sweep_regset = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -1237,7 +1262,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 
 		if ((sv->flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
 			continue;
-		if (sv->vendor && !stage1_vendor)
+		if ((sv->vendor || sv->regset) && !stage1_vendor)
 			continue;
 		/* 0xa7c and 0xa80 only if the other writes changed nothing. */
 		if (sv->vendor > SWEEP_VENDOR_ALL && vendor_fault)
@@ -1259,6 +1284,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_doutu0 = sv->doutu0;
 			sdev->sweep_doutu_set = sv->doutu_set;
 			sdev->sweep_cb15 = sv->cb15;
+			sdev->sweep_regset = sv->regset;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			err = exec0_fill(sdev);
 			if (err)

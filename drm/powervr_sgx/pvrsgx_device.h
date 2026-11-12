@@ -235,8 +235,10 @@ struct pvrsgx_device {
 	bool sweep_doutu_set;
 	/** @sweep_cb15: The sweep's code base 15 address field, with PVRSGX_SWEEP_CB15. */
 	u32 sweep_cb15;
+	/** @sweep_regset: The sweep's SGX545 part-2 writes (pvrsgx_fw.c), a bit each. */
+	u16 sweep_regset;
 	/** @sweep_saved: Registers the sweep wrote, with their values before. */
-	struct pvrsgx_core_init_reg sweep_saved[8];
+	struct pvrsgx_core_init_reg sweep_saved[16];
 	/** @sweep_nsaved: Entries in @sweep_saved. */
 	unsigned int sweep_nsaved;
 
