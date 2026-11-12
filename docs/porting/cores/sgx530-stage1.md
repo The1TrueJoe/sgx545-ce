@@ -2239,3 +2239,25 @@ into r5, then fault-read r5 — fault at the sentinel ⇒ loads retire (C); faul
 `da0f5462483fdde37bc96af1b7aa19b57c8188d1534f713e3fbe1db3f4377b62`, pkg
 `4b669b8d154c7aab373861d053a7a3ed1b21e41ce5a05992f1ced4631ff780ad` (crc 0x558044f1).
 The driver writes a distinctive unmapped sentinel (e.g. 0x0dddd000) at ctlblk+0x200.
+
+## DECISIVE: str + limm work under §9 — the EDM path is viable
+
+`sgx530_limmwr_r5` under §9 read **EVENT_TIMER (0xacc) = 0x00000a5a**, stable: the
+task ran `limm r5, #0xa5a; str r5 → EVENT_TIMER` and the register holds exactly the
+constant. So **`limm` and `str` both commit under §9**. The init clears EVENT_TIMER to
+0 (SRVINIT part 1), so a fresh insmod starts at 0 and the 0xa5a is the task's own
+write. (The xorr5 run also showing 0xa5a is intra-slot residual — it reused the state
+without a re-init — not a second writer.)
+
+With temps retiring (xorr5), `limm` and `str` working, `pa` via DOUTA, and `ld` into
+temps (ldret pending), the EDM task can DRIVE the SGX530: compute, load constants, read
+memory into temps, program BIF/DPM, kick TA/3D, ack events. The only gap — `st.a.d`
+does not commit — is the host's job in the uAPI model (kernel owns the structures,
+fences from the host IRQ). **Architecture decided: the open microkernel runs as an EDM
+task on the 530 with host-owned memory.** Plan: [sgx530-edm-path.md](sgx530-edm-path.md).
+
+**Residual-doubt confirmation — `sgx530_limmwr_r5_5c3`:** same probe with a FRESH
+constant 0x5c3 (b24 clear). A fresh value cannot be residual, so EVENT_TIMER = **0x5c3**
+nails str+limm; 0xa5a or a leftover would reopen it. img
+`c72392bfcb3f71af94b6e3af699ecf361cc28e1b280b2b5f06f202d1baedc46b`, pkg
+`03e1cbd8b814da86bb13d8b1290d70e3e4653d9b514c5392aa7607fe7c4a80f9` (crc 0x6d713278).

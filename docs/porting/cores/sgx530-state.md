@@ -49,21 +49,25 @@ word1 is free (0x04000000 or 2 both retire). Notably word1 = 0x04000000, vendor-
 |---|---|---|---|
 | temp register file | ALU (xor/or) | **retires (C, xorr5)** | all computation / scratch |
 | pa bank | ALU | does not retire (C, xorpa0) | **not a blocker** — the vendor writes PA0–PA2 via **attribute writes (DOUTA)**, not ALU (vendor-setup §5); the standalone-DOUTA path works (C) |
-| memory store | `st.a.d` | **silently drops (C, stor5)** | no fault, no commit; the stage-1 drop persists under §9 |
-| EUR_CR register | `str` | **untested under §9** | BIF/DPM/kick programming — pivotal |
-| load immediate | `limm` | **untested under §9** | constants everywhere |
+| memory store | `st.a.d` | **silently drops (C, stor5)** | survivable — the host owns memory |
+| EUR_CR register | `str` | **works (C, limmwr_r5)** | programs BIF/DPM/kicks |
+| load immediate | `limm` | **works (C, limmwr_r5)** | constants |
 
-**Strategic read.** `st.a.d` dropping need not block a modern driver: in the uAPI
-model the **kernel** owns every firmware-visible structure (sync objects, control
-block), and drm_sched/dma_fence signals completion from the **host IRQ**, not from the
-microkernel writing sync words. So the hinge is **`str`**: if the task can program
-registers, the EDM can drive the TA/3D while the host owns memory; if not, it is full
-host-kick. Next test: `sgx530_limmwr_r5` (`limm r5,#0xa5a; str r5→EVENT_TIMER`), read
-EVENT_TIMER — 0xa5a = limm+str both work, 0x0fa93000 = str works but limm doesn't,
-unchanged = str drops.
+**ARCHITECTURE DECIDED (2026-11-12): the open microkernel runs as an EDM task on the
+530.** `sgx530_limmwr_r5` under §9 read EVENT_TIMER = 0x00000a5a — `limm` AND `str`
+both commit. So the task can compute (temps retire), load constants (`limm`), read
+memory into temps (`ld`), and program every register (`str`) — enough to point the
+BIF, program the DPM, and kick the TA/3D. The one thing it cannot do, commit arbitrary
+`st.a.d`, is the host's job anyway: the **kernel owns every firmware-visible structure**
+and drm_sched/dma_fence signal completion from the **host IRQ**, not from microkernel
+stores; `pa` goes via DOUTA. Host-kick stays the fallback but is not needed. The plan
+to fold the §9 launch into real init with host-owned memory is
+[sgx530-edm-path.md](sgx530-edm-path.md). (One confirmation pending: `limmwr_r5_5c3`
+re-runs with a fresh constant to rule out EVENT_TIMER residual; `ldret` confirms loads
+retire.)
 
-So the gates table below is the **pre-§9** picture. The output-only restructure it
-motivated is no longer the only path; §9 + host-owned memory may suffice if `str` works.
+So the gates table below is the **pre-§9** picture, now superseded: §9 + host-owned
+memory is the path.
 
 ## What works (C, on hardware)
 
