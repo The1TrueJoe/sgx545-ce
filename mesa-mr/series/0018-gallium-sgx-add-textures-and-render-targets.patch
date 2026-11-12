@@ -1,4 +1,4 @@
-From 4f74e4dd5b7d8440a448c8c53a4e1bd4b0c7d625 Mon Sep 17 00:00:00 2001
+From 5d7a4df3912fcd8da9d7ef9e0b2887d091fc1c8e Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:05 -0500
 Subject: [PATCH 18/21] gallium/sgx: add textures and render targets

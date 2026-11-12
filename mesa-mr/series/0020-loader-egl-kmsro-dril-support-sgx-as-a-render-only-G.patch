@@ -1,4 +1,4 @@
-From c4ffdf67a628f4c307acb03b1bfb679f33dc9d41 Mon Sep 17 00:00:00 2001
+From 36f420b21e76fb30a756481dee90144e64e0b220 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:44 -0500
 Subject: [PATCH 20/21] loader, egl, kmsro, dril: support sgx as a render-only

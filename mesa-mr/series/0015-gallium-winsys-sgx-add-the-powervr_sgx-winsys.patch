@@ -1,4 +1,4 @@
-From bb9553816adf08d0d2e5d34121a76621352ba5cc Mon Sep 17 00:00:00 2001
+From 585e9cdfd9591e1254c252404432d8e40c7cd24b Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:44:11 -0500
 Subject: [PATCH 15/21] gallium/winsys/sgx: add the powervr_sgx winsys

@@ -1,4 +1,4 @@
-From 4fe8b91c26f04a78ff4bdfe60f95322614192128 Mon Sep 17 00:00:00 2001
+From 246b7f8c498612230c7de923e144c71dece88f55 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:34 -0500
 Subject: [PATCH 19/21] gallium: wire up the sgx driver

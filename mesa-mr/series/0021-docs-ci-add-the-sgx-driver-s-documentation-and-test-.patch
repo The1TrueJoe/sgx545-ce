@@ -1,4 +1,4 @@
-From 5d3e275dc2b7bae51244d400d0c1b2a6f5d9a061 Mon Sep 17 00:00:00 2001
+From 2e708d08a624bfac2c372fe2e0fab6d15f4eb652 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:46:03 -0500
 Subject: [PATCH 21/21] docs, ci: add the sgx driver's documentation and test

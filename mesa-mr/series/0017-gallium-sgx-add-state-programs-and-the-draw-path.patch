@@ -1,4 +1,4 @@
-From 569ebbaa0c5d31c827cb2c8d5764a9de882b6ceb Mon Sep 17 00:00:00 2001
+From f27c1cb033ca65701ad349681dd68cc2e6353403 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:01 -0500
 Subject: [PATCH 17/21] gallium/sgx: add state, programs and the draw path
@@ -14,7 +14,8 @@ Assisted-by: LLM
  src/gallium/drivers/sgx/sgx_draw.c    | 1936 +++++++++++++++++++++++++
  src/gallium/drivers/sgx/sgx_program.c | 1576 ++++++++++++++++++++
  src/gallium/drivers/sgx/sgx_state.c   |  783 ++++++++++
- 4 files changed, 4298 insertions(+)
+ src/sgx/pds/README.md                 |   13 +-
+ 5 files changed, 4305 insertions(+), 6 deletions(-)
  create mode 100644 src/gallium/drivers/sgx/sgx_draw.c
  create mode 100644 src/gallium/drivers/sgx/sgx_program.c
  create mode 100644 src/gallium/drivers/sgx/sgx_state.c
@@ -41,7 +42,7 @@ index 20b66cc..ef5f662 100644
  
 diff --git a/src/gallium/drivers/sgx/sgx_draw.c b/src/gallium/drivers/sgx/sgx_draw.c
 new file mode 100644
-index 0000000..ece3e44
+index 0000000..5cdb1ea
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_draw.c
 @@ -0,0 +1,1936 @@
@@ -913,9 +914,9 @@ index 0000000..ece3e44
 +};
 +
 +/* Entries are cut from 2 MB chunks of device memory, not allocated one by
-+ * one: with hundreds of entries alive, every allocation crawled through the
-+ * services' segment list (over a third of the render thread in
-+ * _SegmentListInsert).  A chunk whose entries are all gone is used again. */
++ * one: hundreds of entries are alive at once, and a buffer object takes a
++ * page at least and four system calls to create (CREATE_BO, the mmap offset,
++ * mmap, VM_BIND).  A chunk whose entries are all gone is used again. */
 +#define VCACHE_CHUNK (2u << 20)
 +
 +struct vcache_chunk {
@@ -4352,6 +4353,30 @@ index 0000000..7203655
 +   p->resource_copy_region = sgx_resource_copy_region;
 +   p->blit = sgx_blit;
 +}
+diff --git a/src/sgx/pds/README.md b/src/sgx/pds/README.md
+index 8718f61..8ed55d4 100644
+--- a/src/sgx/pds/README.md
++++ b/src/sgx/pds/README.md
+@@ -58,12 +58,13 @@ struct (`struct sgx_pds_doutu`, ...) and an encoder
+ 
+ ## Who uses it
+ 
+-[Placeholder: rewrite in the submitter's own words. Facts to state:]
+-
+-- In this MR: the tests only.
+-- Later: the gallium driver builds its PDS programs (pixel,
+-  secondary/state, DMA, vertex fetch, pixel event, background, TA
+-  terminate) and their DOUT words through it.
++- The winsys (`src/gallium/winsys/sgx/drm/sgx_frame.c`) builds every PDS
++  program through it: the pixel, secondary/state, DMA, vertex-fetch,
++  pixel-event, background and TA-terminate programs, and their DOUTU, DOUTD,
++  DOUTI and DOUTA words.
++- The driver (`src/gallium/drivers/sgx/sgx_program.c`) describes a fragment
++  program's iterations as `struct sgx_pds_douti` (`struct sgxws_prog`);
++  the winsys encodes them.
+ 
+ ## Tests
+ 
 -- 
 2.50.1 (Apple Git-155)
 

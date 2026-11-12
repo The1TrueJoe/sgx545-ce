@@ -1,4 +1,4 @@
-From c2f14c9ee764a7f7441472f32c7111aa1a468a5c Mon Sep 17 00:00:00 2001
+From e096d89d53ae7c171cf7a25555c220c2232f4950 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:44:37 -0500
 Subject: [PATCH 16/21] gallium/sgx: add the screen, context and resources
@@ -22,14 +22,14 @@ Assisted-by: LLM
  src/gallium/drivers/sgx/sgx_public.h        |  15 +
  src/gallium/drivers/sgx/sgx_resource.c      | 968 ++++++++++++++++++++
  src/gallium/drivers/sgx/sgx_resource.h      | 138 +++
- src/gallium/drivers/sgx/sgx_screen.c        | 393 ++++++++
+ src/gallium/drivers/sgx/sgx_screen.c        | 387 ++++++++
  src/gallium/drivers/sgx/sgx_screen.h        |  99 ++
  src/gallium/drivers/sgx/sgx_texture.h       |  53 ++
  src/gallium/meson.build                     |   3 +
  src/gallium/winsys/sgx/drm/meson.build      |   2 +-
  src/gallium/winsys/sgx/drm/sgx_drm_public.h |  18 +
  src/gallium/winsys/sgx/drm/sgx_drm_winsys.c |  35 +
- 16 files changed, 2436 insertions(+), 1 deletion(-)
+ 16 files changed, 2430 insertions(+), 1 deletion(-)
  create mode 100644 src/gallium/drivers/sgx/.clang-format
  create mode 100644 src/gallium/drivers/sgx/meson.build
  create mode 100644 src/gallium/drivers/sgx/sgx_context.c
@@ -1939,10 +1939,10 @@ index 0000000..565bd80
 +#endif
 diff --git a/src/gallium/drivers/sgx/sgx_screen.c b/src/gallium/drivers/sgx/sgx_screen.c
 new file mode 100644
-index 0000000..7f103e6
+index 0000000..4cbd91f
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_screen.c
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,387 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -2244,15 +2244,9 @@ index 0000000..7f103e6
 +{
 +   struct sgx_screen *screen = sgx_screen(pscreen);
 +
-+   /* Keep the services connection and a hardware context for the process's
-+    * next screen instead of tearing them down: when srvinit started the
-+    * microkernel, a render context's cleanup never completes (the bridge
-+    * returns -EINVAL after its wait), and the next connection's TA then runs
-+    * against a parameter buffer the microkernel doesn't use: no pages
-+    * allocated, nothing drawn, renders waiting ~270 ms, then lockups (an
-+    * application that initialises EGL, terminates it and initialises it
-+    * again).  The process's
-+    * exit releases them. */
++   /* A screen that goes while none is kept leaves its device and hardware
++    * context to the process's next screen (an application that terminates
++    * EGL and initialises it again); the process's exit releases them. */
 +   simple_mtx_lock(&kept_lock);
 +   if (kept.fd < 0) {
 +      kept.fd = screen->dev_fd;
@@ -2338,7 +2332,7 @@ index 0000000..7f103e6
 +}
 diff --git a/src/gallium/drivers/sgx/sgx_screen.h b/src/gallium/drivers/sgx/sgx_screen.h
 new file mode 100644
-index 0000000..141c6fa
+index 0000000..4b13c82
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_screen.h
 @@ -0,0 +1,99 @@
@@ -2391,9 +2385,9 @@ index 0000000..141c6fa
 +struct sgx_screen {
 +   struct pipe_screen base;
 +   int fd;     /* the fd the screen was created on (its key) */
-+   int dev_fd; /* the fd the services connection lives on */
++   int dev_fd; /* the device's fd: fd, or a kept device's */
 +
-+   /* the services connection; one per screen, used under lock */
++   /* the powervr_sgx device; used under lock */
 +   struct sgxws_dev *dev;
 +   simple_mtx_t lock;
 +   uint64_t spare_bytes; /* textures' spare copies (p_atomic) */

@@ -1,4 +1,4 @@
-From 08f561b530b1fa4c125d4bf6824309909bdede7c Mon Sep 17 00:00:00 2001
+From 1c0644a738b1cdfab0b0948b3b3f1c3397bde26e Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:52 -0500
 Subject: [PATCH 14/21] sgx/compiler: add the fixed programs and the unit tests
@@ -25,7 +25,8 @@ Assisted-by: LLM
  src/sgx/compiler/sgx_fixed.h                |   51 +
  src/sgx/compiler/tests/sgx_compile_test.cpp | 1740 +++++++++++++++++++
  src/sgx/compiler/tests/sgx_fixed_golden.h   |  341 ++++
- 6 files changed, 2487 insertions(+), 1 deletion(-)
+ src/sgx/isa/README.md                       |   14 +-
+ 7 files changed, 2494 insertions(+), 8 deletions(-)
  create mode 100644 src/sgx/compiler/README.md
  create mode 100644 src/sgx/compiler/sgx_fixed.c
  create mode 100644 src/sgx/compiler/sgx_fixed.h
@@ -2565,6 +2566,28 @@ index 0000000..5bb8987
 +    }, 0, {}},
 +};
 +/* clang-format on */
+diff --git a/src/sgx/isa/README.md b/src/sgx/isa/README.md
+index 9b76c61..a8ed18c 100644
+--- a/src/sgx/isa/README.md
++++ b/src/sgx/isa/README.md
+@@ -146,10 +146,10 @@ below.
+ 
+ ## Users
+ 
+-[Placeholder: rewrite in the submitter's own words. Facts to state:]
+-
+-- In this MR: `sgx-asm`, `sgx-disasm` and the tests.
+-- Later: the gallium driver's compiler fills a `struct sgx_isa_instr` per
+-  instruction and calls `sgx_isa_encode()`.
+-- `sgx_isa_fdual_use()` and `sgx_isa_coissue_hazard()` are for a
+-  scheduler: the co-issue rules of fdual and efo.
++- `src/sgx/compiler` encodes through this library: it fills a `struct
++  sgx_isa_instr` per instruction and calls `sgx_isa_encode()` at the
++  program-start format control (it emits no `setfc`). Its fixed programs
++  are assembly text, assembled with `sgx_isa_asm_line()`.
++- `sgx_isa_fdual_use()` and `sgx_isa_coissue_hazard()` give a scheduler
++  the co-issue rules of fdual and efo.
++- `sgx-asm` and `sgx-disasm` (see Tools).
 -- 
 2.50.1 (Apple Git-155)
 
