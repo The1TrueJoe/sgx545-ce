@@ -86,10 +86,16 @@ struct sgxws_dev {
    unsigned ta_split; /* sgxws_dev_options */
 };
 
+/* the PBE writes the target twiddled, not in rows */
+bool sgxws_target_twiddled(const struct sgxws_target *t);
+
 /* a buffer's backend side; a backend's buffer embeds it first */
 struct sgxws_bo_impl {
    const struct sgxws_kif *kif;
    uint32_t size;
+   /* the CPU may have written it since a job last flushed it (shared buffers:
+    * the kernel then flushes it for the next job that uses it) */
+   bool cpu_dirty;
 };
 
 /* A ring: the persistent part up to mark, then one equal part per frame in
@@ -199,6 +205,9 @@ struct sgxws_ctx {
    float bias_factor;
    struct sgxws_rect
       clip; /* what the visible bits and the region clip are now */
+   /* what the frame's draws and clears may change: the union of their clips
+    * (empty: x1 <= x0) */
+   struct sgxws_rect damage;
    /* shared buffers it reads or writes (sgxws_use_bo) */
    unsigned n_use;
    struct {
