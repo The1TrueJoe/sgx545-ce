@@ -167,7 +167,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	mutex_unlock(&sdev->done_lock);
 	pvrsgx_power_put(sdev, done);
 
-	if (reap)
+	if (reap || !list_empty_careful(&sdev->inval_waits))
 		queue_work(system_dfl_wq, &sdev->reap_work);
 	if (more)
 		mod_delayed_work(system_dfl_wq, &sdev->poll_work, 1);
@@ -183,6 +183,7 @@ static void reap_work_fn(struct work_struct *work)
 	done = sdev->renders_done;
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	pvrsgx_kobj_reap(sdev, done);
+	pvrsgx_ccb_inval_reap(sdev, false);
 }
 
 static void poll_work_fn(struct work_struct *work)
@@ -251,6 +252,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	}
 
 	pvrsgx_prime_flush(job, false);
+	WRITE_ONCE(job->ctx->vm->ran_gen, sdev->fw_gen + 1);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;
@@ -328,6 +330,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	if (pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not restart: device lost\n");
 		sdev->lost = true;
+		/* Stopped: nothing translates any more, so unmapped memory can go. */
+		queue_work(system_dfl_wq, &sdev->reap_work);
 	}
 	drm_sched_start(&sdev->sched, 0);
 	pvrsgx_power_put(sdev, failed);

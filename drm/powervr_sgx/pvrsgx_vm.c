@@ -133,6 +133,55 @@ static void va_release(struct pvrsgx_vm *vm, struct drm_gpuva *va)
 	kfree(va);
 }
 
+/* Mappings an unmap took down, freed once the BIF invalidate has run. */
+struct vm_unmapped {
+	struct pvrsgx_inval_wait inval;
+	struct pvrsgx_vm *vm;
+	u32 n;
+	struct drm_gpuva *vas[] __counted_by(n);
+};
+
+static void vm_unmapped_done(struct pvrsgx_inval_wait *w)
+{
+	struct vm_unmapped *u = container_of(w, struct vm_unmapped, inval);
+
+	for (u32 i = 0; i < u->n; i++)
+		va_release(u->vm, u->vas[i]);
+	pvrsgx_vm_put(u->vm);
+	kfree(u);
+}
+
+/*
+ * Unmapped is not unreachable: the BIF may keep a translation of the pages
+ * until the microkernel invalidates it for the next command. Free the mappings
+ * (and their objects) once it has; with no memory to wait, at once.
+ */
+static void vm_free_unmapped(struct pvrsgx_vm *vm, struct drm_gpuva **vas, u32 n)
+{
+	struct pvrsgx_device *sdev = vm->sdev;
+	struct vm_unmapped *u;
+
+	if (!n)
+		return;
+	/*
+	 * The BIF caches walks only of a directory a job ran on, and a restart
+	 * or power-off drops them: then there is nothing to wait for.
+	 */
+	u = !READ_ONCE(sdev->powered) || READ_ONCE(vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1 ?
+	    NULL : kzalloc_flex(*u, vas, n);
+	if (!u) {
+		for (u32 i = 0; i < n; i++)
+			va_release(vm, vas[i]);
+		return;
+	}
+	u->n = n;
+	memcpy(u->vas, vas, n * sizeof(*vas));
+	u->vm = pvrsgx_vm_get(vm);
+	u->inval.done = vm_unmapped_done;
+	pvrsgx_ccb_after_invalidate(vm->sdev, &u->inval, PVRSGX_CC_INVAL_BIF_PT |
+				    PVRSGX_CC_INVAL_BIF_PD | PVRSGX_CC_INVAL_DATA);
+}
+
 static void vm_release(struct kref *ref)
 {
 	struct pvrsgx_vm *vm = container_of(ref, struct pvrsgx_vm, ref);
@@ -177,7 +226,8 @@ void pvrsgx_vm_user_get(struct pvrsgx_vm *vm)
 void pvrsgx_vm_user_put(struct pvrsgx_vm *vm)
 {
 	struct pvrsgx_device *sdev = vm->sdev;
-	struct drm_gpuva *va, *next;
+	struct drm_gpuva *va, *next, **vas;
+	u32 n = 0, i = 0;
 	long ret;
 
 	if (!atomic_dec_and_test(&vm->users))
@@ -190,12 +240,24 @@ void pvrsgx_vm_user_put(struct pvrsgx_vm *vm)
 		return;
 	}
 	mutex_lock(&vm->lock);
+	drm_gpuvm_for_each_va(va, &vm->gpuvm)
+		n++;
+	vas = kmalloc_array(n, sizeof(*vas), GFP_KERNEL);
 	drm_gpuvm_for_each_va_safe(va, next, &vm->gpuvm) {
 		pvrsgx_mmu_unmap(vm->mmu, va->va.addr, va->va.range);
 		drm_gpuva_remove(va);
-		va_release(vm, va);
+		if (vas)
+			vas[i++] = va;
+		else
+			va_release(vm, va);
 	}
 	mutex_unlock(&vm->lock);
+	if (vas) {
+		vm_free_unmapped(vm, vas, i);
+		kfree(vas);
+		return;
+	}
+	/* No memory to wait for the invalidate: the pages went already. */
 	mutex_lock(&sdev->ccb_lock);
 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD |
 				  PVRSGX_CC_INVAL_DATA;
@@ -405,7 +467,6 @@ out_vm:
 int pvrsgx_ioctl_vm_unmap(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_vm_unmap_args *args = data;
-	struct pvrsgx_device *sdev = to_pvrsgx_device(drm);
 	struct pvrsgx_vm *vm;
 	struct drm_gpuva *va;
 	long ret;
@@ -428,17 +489,13 @@ int pvrsgx_ioctl_vm_unmap(struct drm_device *drm, void *data, struct drm_file *f
 	drm_gpuva_remove(va);
 	mutex_unlock(&vm->lock);
 
-	/* The next command invalidates the BIF's cached translations. */
-	mutex_lock(&sdev->ccb_lock);
-	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD;
-	mutex_unlock(&sdev->ccb_lock);
-
-	/* Keep the pages until every job submitted before the unmap is done. */
+	/* Keep the pages until every job submitted before the unmap is done... */
 	ret = dma_resv_wait_timeout(pvrsgx_vm_resv(vm), DMA_RESV_USAGE_BOOKKEEP,
 				    false, MAX_SCHEDULE_TIMEOUT);
 	if (ret <= 0)
 		drm_warn(drm, "VM_UNMAP: wait for jobs failed (%ld)\n", ret);
-	va_release(vm, va);
+	/* ...and the BIF can no longer translate them. */
+	vm_free_unmapped(vm, &va, 1);
 	pvrsgx_vm_put(vm);
 	return 0;
 }
