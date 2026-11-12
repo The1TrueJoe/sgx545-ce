@@ -769,6 +769,10 @@ spare_get(struct sgx_context *ctx, struct sgx_resource *res, uint32_t done)
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    struct sgx_tex_copy *sp;
 
+   /* a shared buffer is one BO another device holds (and D6's flags are on
+    * it): never swapped for a spare (none is a texture today) */
+   if (res->shared)
+      return NULL;
    for (unsigned i = 0; i < res->n_spares; i++)
       if (!sgxws_seq_after(res->spare[i].use_seq, done))
          return &res->spare[i];
