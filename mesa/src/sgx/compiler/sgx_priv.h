@@ -108,17 +108,22 @@ struct sgx_iter {
    bool f16;        /* iterated as F16 (mediump), two components per register */
    bool pointcoord; /* gl_PointCoord (set 0) */
    bool flat;       /* every varying in the set flat */
+   /* the TA's vertex colour (source 0x20): one register, BGRA8 */
+   bool colour;
    unsigned sampler;
 };
 
 /* nir_tex_instr.backend_flags: a texelFetch lowered to txl */
 #define SGX_TEX_FETCH 1
+#define SGX_TEX_PLANAR 2 /* a plane of a tex_r32x4 / x2 unit: always dependent */
+#define SGX_TEX_PLANE_SHIFT 2
 
 struct sgx_sample {
    unsigned id;
    unsigned sampler;
    bool dependent, proj;
    bool fetch; /* a texelFetch (SGX_TEX_FETCH) */
+   unsigned plane; /* SGX_TEX_PLANAR: its plane */
    unsigned dim; /* 2 = 2D, 3 = cube */
    unsigned set; /* non-dependent: the coordinate's texture coordinate set */
    int coord_pa; /* ... and its plain iteration, -1 none */
@@ -152,6 +157,8 @@ struct sgx_ctx {
    int in_hi[512], out_hi[512];
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
+#define SGX_IN_U8                                                              \
+   0x20000 /* in_reg: a vertex colour component, low bits = 4 * pa + it */
 #define SGX_ITER_FRAGCOORD 14 /* list A iterator of gl_FragCoord */
    struct sgx_iter iters[16];
    unsigned n_iters;

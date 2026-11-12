@@ -50,6 +50,7 @@ on:
       - drm/ci/deb-kernel.sh
       - drm/ci/deb.fragment
       - drm/gma500/**
+      - drm/shmem/**
       - drm/ci/kit/**
       - drm/powervr_sgx/**
       - .github/workflows/powervr-sgx-deb.yml

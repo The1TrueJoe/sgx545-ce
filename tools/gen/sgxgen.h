@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright © 2026 Joseph Telaak */
+
 /*
  * sgxgen: build SGX545 frames from GL-level parameters, with no DDK code and
  * nothing read from a capture. Every word comes from the formulas in
@@ -212,8 +215,8 @@ void sgx_ctx_rewind(struct sgx_ctx *c);
 /* The frame's render job (signals c->syncobj), for a SUBMIT_JOBS of the caller's
  * own; *j must live until the ioctl returns. sgx_flush is this, submit and wait. */
 struct sgx_job {
-	uint64_t render[10], kick_buf[2][3];
-	struct drm_powervr_sgx_ta_kick kick[2];
+	struct drm_powervr_sgx_cmd_render render;
+	struct drm_powervr_sgx_cmd_ta_kick kick[2];
 	struct drm_powervr_sgx_sync_op op;
 	struct drm_powervr_sgx_job job;
 };

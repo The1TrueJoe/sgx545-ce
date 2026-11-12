@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright © 2026 Joseph Telaak */
+
 /*
  * sgxtex: SGX545 texture memory layout and the transfer-queue blit, as
  * measured from the Cedarview DDK 1.7 on an EA3 (docs/TEX.md).

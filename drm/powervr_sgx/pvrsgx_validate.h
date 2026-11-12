@@ -14,9 +14,10 @@ struct pvrsgx_vm;
 struct drm_device;
 struct drm_file;
 
-/* The shader validator (decision D9, docs/DRM-DRIVER.md section 6). */
+/* The shader validator (Documentation/gpu/powervr_sgx.rst, "Shader validation"). */
 int pvrsgx_validate_vm_map(struct pvrsgx_device *sdev, struct pvrsgx_vm *vm,
 			   unsigned int heap, struct pvrsgx_bo *bo, u64 offset, u64 size);
+int pvrsgx_validate_vm_link(struct pvrsgx_bo *bo, u64 addr, u64 offset);
 u32 pvrsgx_validate_pte_flags(struct pvrsgx_bo *bo);
 int pvrsgx_validate_job(struct pvrsgx_device *sdev, struct pvrsgx_job *job);
 int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file *file);

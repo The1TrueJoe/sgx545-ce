@@ -114,22 +114,35 @@ static uint32_t create_vm(int fd)
 	return a.handle;
 }
 
-static int vm_map(int fd, uint32_t vm, uint32_t bo, uint64_t addr, uint64_t off, uint64_t size)
+static int vm_bind(int fd, uint32_t vm, uint32_t flags, const struct drm_powervr_sgx_vm_bind_op *ops,
+		   uint32_t n, const struct drm_powervr_sgx_sync_op *syncs, uint32_t nsyncs)
 {
-	struct drm_powervr_sgx_ioctl_vm_map_args a = {
-		.vm_context_handle = vm, .device_addr = addr, .handle = bo, .offset = off, .size = size,
+	struct drm_powervr_sgx_ioctl_vm_bind_args a = {
+		.vm_context_handle = vm, .flags = flags,
+		.ops = { .stride = sizeof(*ops), .count = n, .array = (uintptr_t)ops },
+		.sync_ops = { .stride = sizeof(*syncs), .count = nsyncs, .array = (uintptr_t)syncs },
 	};
 
-	return xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &a);
+	return xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_BIND, &a);
+}
+
+#define MAP_OP(bo, addr, off, sz) { .op = DRM_POWERVR_SGX_VM_BIND_OP_MAP, .handle = (bo), \
+	.bo_offset = (off), .device_addr = (addr), .size = (sz) }
+#define UNMAP_OP(addr, sz) { .op = DRM_POWERVR_SGX_VM_BIND_OP_UNMAP, .device_addr = (addr), \
+	.size = (sz) }
+
+static int vm_map(int fd, uint32_t vm, uint32_t bo, uint64_t addr, uint64_t off, uint64_t size)
+{
+	struct drm_powervr_sgx_vm_bind_op op = MAP_OP(bo, addr, off, size);
+
+	return vm_bind(fd, vm, DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC, &op, 1, NULL, 0);
 }
 
 static int vm_unmap(int fd, uint32_t vm, uint64_t addr, uint64_t size)
 {
-	struct drm_powervr_sgx_ioctl_vm_unmap_args a = {
-		.vm_context_handle = vm, .device_addr = addr, .size = size,
-	};
+	struct drm_powervr_sgx_vm_bind_op op = UNMAP_OP(addr, size);
 
-	return xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &a);
+	return vm_bind(fd, vm, DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC, &op, 1, NULL, 0);
 }
 
 static uint32_t create_ctx(int fd, uint32_t vm, uint32_t type)
@@ -251,13 +264,35 @@ static void t_query_limits_quirks(int fd)
 	uint32_t size = sizeof(l);
 
 	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &l, &size), 0);
-	assert_true(l.rt_max_width && l.rt_max_height && l.rt_max_samples == 1);
+	assert_true(l.rt_max_width && l.rt_max_height && (l.rt_max_samples == 1 || l.rt_max_samples == 4));
 	assert_true(l.pb_min_pages <= l.pb_default_pages && l.pb_default_pages <= l.pb_max_pages);
+	assert_eq(l.va_bits, 32);
+	assert_eq(l.max_layers, 1);
+	assert_true(l.caps & DRM_POWERVR_SGX_CAP_BACKWARD_BLITS);
 	size = sizeof(q);
 	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET, &q, &size), 0);
 	assert_eq(q.count, 0);
 	q._padding_c = 1;
 	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET, &q, &size), -EINVAL);
+}
+
+/* What the SGX545 accepts: every job type, and its own two extensions. */
+static void t_query_commands(int fd)
+{
+	struct drm_powervr_sgx_dev_query_commands c;
+	uint32_t size = 0;
+
+	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET, NULL, &size), 0);
+	assert_eq(size, sizeof(c));
+	memset(&c, 0xff, sizeof(c));
+	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET, &c, &size), 0);
+	assert_eq(c.job_types, (1u << DRM_POWERVR_SGX_JOB_TYPE_RENDER) |
+			       (1u << DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) |
+			       (1u << DRM_POWERVR_SGX_JOB_TYPE_NULL));
+	assert_eq(c._padding_4, 0);
+	assert_eq(c.render_exts, 1ull << DRM_POWERVR_SGX_EXT_SGX545_RENDER);
+	assert_eq(c.ta_kick_exts, 1ull << DRM_POWERVR_SGX_EXT_SGX545_TA_KICK);
+	assert_eq(c.transfer_exts, 0);
 }
 
 static void t_query_heap_info(int fd)
@@ -358,16 +393,16 @@ static void t_mmap_bo_invalid(int fd)
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &a, EINVAL);
 }
 
-/* VM contexts, VM_MAP, VM_UNMAP */
+/* VM contexts, VM_BIND */
 
 static void t_vm_create_destroy(int fd)
 {
 	struct drm_powervr_sgx_ioctl_destroy_vm_context_args d = { .handle = create_vm(fd) };
 
 	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d);
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, ENOENT);
 	d.handle = 0;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, ENOENT);
 	d.handle = create_vm(fd);
 	d._padding_4 = 1;
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &d, EINVAL);
@@ -382,11 +417,58 @@ static void t_vm_map_unmap(int fd)
 	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, PAGE), -EINVAL);	/* USSE pixel: code objects only */
 	assert_eq(vm_map(fd, vm, bo, 0xfffff000, 0, PAGE), 0);	/* last page */
 	assert_eq(vm_unmap(fd, vm, 0x3e000000, 8 * PAGE), 0);
-	assert_eq(vm_unmap(fd, vm, 0x3e000000, 8 * PAGE), -ENOENT);
-	assert_eq(vm_unmap(fd, vm, 0x3e100000, PAGE), -ENOENT);	/* not the whole mapping */
+	assert_eq(vm_unmap(fd, vm, 0x3e000000, 8 * PAGE), 0);	/* nothing there: no error */
+	assert_eq(vm_unmap(fd, vm, 0x3e100000, PAGE), 0);	/* the first page of a mapping */
+	assert_eq(vm_map(fd, vm, bo, 0x3e100000, 0, PAGE), 0);	/* free again */
+	assert_eq(vm_map(fd, vm, bo, 0x3e101000, 0, PAGE), -EEXIST);	/* the rest stays */
 	assert_eq(vm_unmap(fd, vm, 0x3e100000, 4 * PAGE), 0);
 	/* the range is free again */
 	assert_eq(vm_map(fd, vm, bo, 0x3e000000, 0, 8 * PAGE), 0);
+}
+
+/* An unmap in the middle of a mapping leaves both ends mapped. */
+static void t_vm_unmap_split(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 4 * PAGE, 0);
+
+	assert_eq(vm_map(fd, vm, bo, 0x3e200000, 0, 4 * PAGE), 0);
+	assert_eq(vm_unmap(fd, vm, 0x3e201000, 2 * PAGE), 0);
+	assert_eq(vm_map(fd, vm, bo, 0x3e200000, 0, PAGE), -EEXIST);
+	assert_eq(vm_map(fd, vm, bo, 0x3e203000, 0, PAGE), -EEXIST);
+	assert_eq(vm_map(fd, vm, bo, 0x3e201000, PAGE, 2 * PAGE), 0);
+	/* one unmap across all three */
+	assert_eq(vm_unmap(fd, vm, 0x3e200000, 4 * PAGE), 0);
+	assert_eq(vm_map(fd, vm, bo, 0x3e200000, 0, 4 * PAGE), 0);
+}
+
+/* The ops of one call apply all or none; their syncs wait first and signal after. */
+static void t_vm_bind_ops(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 4 * PAGE, 0), done = syncobj(fd);
+	struct drm_powervr_sgx_vm_bind_op ops[3] = {
+		MAP_OP(bo, 0x3e300000, 0, PAGE),
+		MAP_OP(bo, 0x3e301000, 0, PAGE),
+		MAP_OP(bo, 0x3e400000, 0, PAGE),
+	};
+	struct drm_powervr_sgx_sync_op sig = { .handle = done, .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL };
+	const uint32_t sync = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC;
+
+	assert_eq(vm_map(fd, vm, bo, 0x3e400000, 0, PAGE), 0);
+	assert_eq(vm_bind(fd, vm, sync, ops, 3, NULL, 0), -EEXIST);	/* the third */
+	assert_eq(vm_map(fd, vm, bo, 0x3e300000, 0, PAGE), 0);	/* the first didn't apply */
+	assert_eq(vm_unmap(fd, vm, 0x3e300000, PAGE), 0);
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, &sig, 1), 0);
+	assert_eq(syncobj_wait(fd, done, 0), 0);
+	ops[2] = (struct drm_powervr_sgx_vm_bind_op)UNMAP_OP(0x3e300000, 2 * PAGE);
+	assert_eq(vm_bind(fd, vm, sync, &ops[2], 1, NULL, 0), 0);
+	/* overlapping ops in one call */
+	ops[1] = (struct drm_powervr_sgx_vm_bind_op)UNMAP_OP(0x3e300000, PAGE);
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, NULL, 0), -EINVAL);
+	/* a wait on a syncobj with no fence */
+	sig.flags = 0;
+	assert_eq(vm_bind(fd, vm, sync, ops, 1, &sig, 1), 0);
+	sig.handle = syncobj(fd);
+	assert_eq(vm_bind(fd, vm, sync, &ops[1], 1, &sig, 1), -EINVAL);
 }
 
 static void t_vm_map_overlap(int fd)
@@ -422,9 +504,8 @@ static void t_vm_map_kernel_ranges(int fd)
 static void t_vm_map_invalid(int fd)
 {
 	uint32_t vm = create_vm(fd), bo = create_bo(fd, 4 * PAGE, 0);
-	struct drm_powervr_sgx_ioctl_vm_map_args a = {
-		.vm_context_handle = vm, .device_addr = 0x3e000000, .handle = bo, .size = PAGE,
-	};
+	struct drm_powervr_sgx_vm_bind_op op = MAP_OP(bo, 0x3e000000, 0, PAGE);
+	const uint32_t sync = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC;
 
 	assert_eq(vm_map(fd, vm, bo, 0x3e000800, 0, PAGE), -EINVAL);
 	assert_eq(vm_map(fd, vm, bo, 0x3e000000, 0x800, PAGE), -EINVAL);
@@ -432,13 +513,21 @@ static void t_vm_map_invalid(int fd)
 	assert_eq(vm_map(fd, vm, bo, 0x3e000000, 0, 0), -EINVAL);
 	assert_eq(vm_map(fd, vm, bo, 0x3e000000, 2 * PAGE, 4 * PAGE), -EINVAL);
 	assert_eq(vm_map(fd, vm, bo, 0x3e000000, ~0ull & ~0xfffull, 2 * PAGE), -EINVAL);
-	assert_eq(vm_map(fd, vm + 100, bo, 0x3e000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd, vm + 100, bo, 0x3e000000, 0, PAGE), -ENOENT);
 	assert_eq(vm_map(fd, vm, 0xdead, 0x3e000000, 0, PAGE), -ENOENT);
-	a.flags = 1;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &a, EINVAL);
-	a.flags = 0;
-	a._padding_14 = 1;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &a, EINVAL);
+	assert_eq(vm_unmap(fd, vm, 0x3e000800, PAGE), -EINVAL);
+	assert_eq(vm_unmap(fd, vm, 0xfffff000, 2 * PAGE), -EINVAL);	/* past 4 GiB */
+	assert_eq(vm_bind(fd, vm, 0, &op, 1, NULL, 0), -EINVAL);	/* SYNC is required */
+	assert_eq(vm_bind(fd, vm, sync | 2, &op, 1, NULL, 0), -EINVAL);
+	assert_eq(vm_bind(fd, vm, sync, &op, 0, NULL, 0), -EINVAL);	/* no ops */
+	op.op = 2;
+	assert_eq(vm_bind(fd, vm, sync, &op, 1, NULL, 0), -EINVAL);
+	op = (struct drm_powervr_sgx_vm_bind_op)UNMAP_OP(0x3e000000, PAGE);
+	op.handle = bo;
+	assert_eq(vm_bind(fd, vm, sync, &op, 1, NULL, 0), -EINVAL);	/* unmap names no object */
+	op.handle = 0;
+	op.bo_offset = PAGE;
+	assert_eq(vm_bind(fd, vm, sync, &op, 1, NULL, 0), -EINVAL);
 }
 
 static void t_vm_handles_per_file(int fd)
@@ -447,7 +536,7 @@ static void t_vm_handles_per_file(int fd)
 	int fd2 = open_dev();
 
 	assert_true(fd2 >= 0);
-	assert_eq(vm_map(fd2, vm, create_bo(fd2, PAGE, 0), 0x3e000000, 0, PAGE), -EINVAL);
+	assert_eq(vm_map(fd2, vm, create_bo(fd2, PAGE, 0), 0x3e000000, 0, PAGE), -ENOENT);
 	close(fd2);
 }
 
@@ -464,8 +553,8 @@ static void t_context_create_destroy(int fd)
 	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s);
 	assert_eq(s.state, DRM_POWERVR_SGX_CONTEXT_STATE_OK);
 	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d, EINVAL);
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d, ENOENT);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, ENOENT);
 	create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 }
 
@@ -504,8 +593,14 @@ static void t_vm_release_frees(int fd)
 	do_ioctl(fd2, DRM_IOCTL_GEM_CLOSE, &c);
 	mapped = shmem_kb();
 	close(fd2);
-	closed = shmem_kb();
-	/* 32 MiB mapped; allow other activity on the box some slack. */
+	/* Freed from a worker once the (no) jobs are done: give it a moment. */
+	for (int i = 0; i < 100; i++) {
+		closed = shmem_kb();
+		/* 32 MiB mapped; allow other activity on the box some slack. */
+		if (mapped - closed > 24 * 1024)
+			break;
+		usleep(10000);
+	}
 	assert_true(mapped - closed > 24 * 1024);
 }
 
@@ -524,7 +619,7 @@ static void t_context_invalid(int fd)
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
 	a.priority = 0;
 	a.vm_context_handle = vm + 100;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, ENOENT);
 	a.vm_context_handle = vm;
 	a.param_buffer_pages = 1;
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
@@ -600,24 +695,78 @@ static void t_null_job_many(int fd)
 	printf("  600 null jobs in %lld ms\n", (long long)(now_ns() - t0) / 1000000);
 }
 
-static void t_null_job_bo_ref(int fd)
+#define CR_RD DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ
+#define CR_WR DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE
+
+/* Cache ranges, rev3-commands.md section 8.2, in its order; our own objects flush nothing. */
+static void t_null_job_cache_ranges(int fd)
 {
-	uint32_t vm = create_vm(fd), bo = create_bo(fd, PAGE, 0);
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, 0);
 	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER), s = syncobj(fd);
 	struct drm_powervr_sgx_sync_op op = SIGNAL(s);
-	struct drm_powervr_sgx_bo_ref refs[] = {
-		{ .handle = bo, .flags = DRM_POWERVR_SGX_BO_REF_FLAG_WRITE }, { .handle = bo },
-	};
+	struct drm_powervr_sgx_cache_range r[65], one = { .handle = bo, .flags = CR_WR, .size = PAGE };
+	struct { struct drm_powervr_sgx_cache_range r; uint64_t tail; } big = { .r = one };
 	struct drm_powervr_sgx_job j = null_job(ctx, &op, 1);
+#define CR(...) do { r[0] = one; r[0] = (struct drm_powervr_sgx_cache_range){ __VA_ARGS__ }; } while (0)
 
-	j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(2, refs);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, r);
+	/* accepted: a non-import, linear, 2D to the object's last byte, rows 0, a duplicate */
+	CR(.handle = bo, .flags = CR_RD | CR_WR, .offset = 0, .size = 2 * PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	CR(.handle = bo, .flags = CR_WR, .offset = 64, .size = 256, .stride = 1024, .rows = 8);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	CR(.handle = bo, .flags = CR_RD, .offset = 2 * PAGE - 256 - 7 * 1024, .size = 256, .stride = 1024, .rows = 8);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	r[1] = r[0];
+	j.cache_ranges.count = 2;
 	assert_eq(submit(fd, &j, 1, NULL), 0);
 	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
-	refs[0].flags = 2;
+	j.cache_ranges.count = 1;
+
+	/* the array: count over 64, stride 0, a tail the kernel doesn't know; a zero tail is fine */
+	for (int i = 0; i < 65; i++)
+		r[i] = one;
+	j.cache_ranges.count = 65;
 	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
-	refs[0].flags = 0;
-	refs[1].handle = 0xdead;
+	j.cache_ranges.count = 64;
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array){ .stride = 0, .count = 1, .array = (uintptr_t)r };
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &big);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	big.tail = 1;
+	assert_eq(submit(fd, &j, 1, NULL), -E2BIG);
+	/* a shorter element zero-extends: stride and rows 0 are one row */
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array){ .stride = 24, .count = 1, .array = (uintptr_t)r };
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, r);
+
+	/* the handle first, then flags, size, stride, bounds */
+	CR(.handle = 0xdead, .flags = 0, .size = 0);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	CR(.handle = bo, .flags = 0, .size = PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD | 4, .size = PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .size = 0);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .size = 256, .stride = 128, .rows = 2);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = 1, .size = 2 * PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = 2 * PAGE - 256 - 7 * 1024 + 1, .size = 256, .stride = 1024, .rows = 8);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = ~0ull - 7, .size = 16);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = 0, .size = 64, .stride = ~0u, .rows = ~0u);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	/* the second entry fails the job; nothing was queued */
+	r[0] = one;
+	r[1] = one;
+	r[1].handle = 0xdead;
+	j.cache_ranges.count = 2;
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+#undef CR
 }
 
 /* The VM goes away while a context still runs jobs in it. */
@@ -652,7 +801,7 @@ static void t_submit_invalid(int fd)
 	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_RENDER;	/* no RT dataset */
 	assert_eq(submit(fd, j, 2, &failed), -ENOENT);
 	assert_eq(failed, 1);
-	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;	/* no stream */
+	j[1].type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;	/* no command */
 	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
 	assert_eq(failed, 1);
 	j[1].type = 9;
@@ -662,9 +811,12 @@ static void t_submit_invalid(int fd)
 	j[1].flags = 1;
 	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
 	j[1].flags = 0;
-	j[1].cmd_stream_len = 16;
+	j[1].cmd = 16;		/* a null job carries no command */
 	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
-	j[1].cmd_stream_len = 0;
+	j[1].cmd = 0;
+	j[1]._padding_c = 1;
+	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
+	j[1]._padding_c = 0;
 	j[1].context_handle = 0xdead;
 	assert_eq(submit(fd, j, 2, &failed), -ENOENT);
 	assert_eq(failed, 1);
@@ -697,7 +849,7 @@ static void t_context_state_invalid(int fd)
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
 	s._padding_c = 0;
 	s.handle = 0xdead;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, EINVAL);
+	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &s, ENOENT);
 }
 
 /* Handles are per file: another open file's context, syncobj and BO are not found. */
@@ -706,7 +858,7 @@ static void t_submit_other_file(int fd)
 	int fd2 = open_dev();
 	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER), ctx2, s2, bo2;
 	struct drm_powervr_sgx_sync_op op;
-	struct drm_powervr_sgx_bo_ref ref;
+	struct drm_powervr_sgx_cache_range range;
 	struct drm_powervr_sgx_job j;
 
 	/* fd2's handles above any of fd's */
@@ -719,14 +871,14 @@ static void t_submit_other_file(int fd)
 	s2 = syncobj(fd2);
 	bo2 = create_bo(fd2, PAGE, 0);
 	op = (struct drm_powervr_sgx_sync_op)SIGNAL(s2);
-	ref = (struct drm_powervr_sgx_bo_ref){ .handle = bo2 };
+	range = (struct drm_powervr_sgx_cache_range){ .handle = bo2, .flags = CR_RD, .size = PAGE };
 
 	j = null_job(ctx2, NULL, 0);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
 	j = null_job(ctx, &op, 1);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
 	j = null_job(ctx, NULL, 0);
-	j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &ref);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &range);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
 	close(fd2);
 }
@@ -877,6 +1029,23 @@ static const struct {
 	{ 0x000001fd, 0xf8000040, "br #509 (its last word)", 1 },
 	{ 0x000001fe, 0xf8000040, "br #510 (past its end)", 0 },
 	{ 0x0001ffff, 0xf8000040, "br #131071", 0 },
+	{ 0x00001077, 0xf8000000, "ba #4215", 0 },
+	{ 0x00000000, 0xf8000080, "lapc", 0 },
+	{ 0x00000003, 0xf8000240, "br #3 [link]", 0 },
+	{ 0x00000009, 0xfa440000, "phas.i #9, #0 (the object isn't mapped)", 0 },
+	{ 0x00000000, 0xfa440700, "phas.i #0, #0 [wait=7]", 1 },
+	{ 0x00000010, 0xfd200000, "lock #1", 0 },
+	{ 0x02003004, 0xfb100010, "smbo #1, #2, #3, #4", 0 },
+	{ 0xa0008001, 0xdc2c23c5, "fdual.fssq.mov o0, pa2, pa0, pa1", 0 },
+	{ 0x00000001, 0xff200000, "op0xd6 #1", 0 },
+	{ 0x00000000, 0xff200000, "op0xd6 #0", 1 },
+	{ 0x08a04103, 0x00080001, "fmad g5, r1, r2, r3 (writes a global)", 0 },
+	{ 0x20600000, 0x28090001, "mov c3, r0 (writes a constant)", 0 },
+	{ 0x60003900, 0x28030000, "mov r0, g50 (undocumented global)", 0 },
+	{ 0x60002a00, 0x28030000, "mov r0, g20", 1 },
+	{ 0xe0000200, 0x28030000, "mov r0, i4", 0 },
+	{ 0x20800000, 0x28090003, "mov i4, r0", 0 },
+	{ 0x20003000, 0x28a33001, "mov with an indexed source", 1 },
 	{ 0x0000001c, 0xfe210008, "ldr r0, #28 with a stray bit (h3): no form", 0 },
 	{ 0xffffffff, 0xffffffff, "all ones: no form", 0 },
 	{ 0xffffffff, 0x00000000, "fmad with every operand bit set", 1 },
@@ -942,6 +1111,53 @@ static void t_upload_code_mapped(int fd)
 	assert_eq(upload(fd, bo, 0, w, 0x100, NULL), 0);
 }
 
+/*
+ * phas.i's target counts from the USSE heap's base: it must land in the
+ * object where it is mapped, and the object then stays there.
+ */
+static void t_upload_code_phas(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	const uint64_t at = 0x37010000, first = (at - 0x37000000) / 8, insts = 2 * PAGE / 8;
+	uint64_t w = 0xfa440000ull << 32, bad;
+
+	assert_eq(vm_map(fd, vm, bo, at, 0, 2 * PAGE), 0);
+	w = 0xfa440000ull << 32 | (first - 1);
+	assert_eq(upload(fd, bo, 0, &w, 8, &bad), -EINVAL);	/* before the object */
+	w = 0xfa440000ull << 32 | (first + insts);
+	assert_eq(upload(fd, bo, 0, &w, 8, &bad), -EINVAL);	/* past its end */
+	w = 0xfa440000ull << 32 | (first + 4);
+	assert_eq(upload(fd, bo, 0, &w, 8, NULL), 0);
+	assert_eq(vm_unmap(fd, vm, at, 2 * PAGE), 0);
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, 2 * PAGE), -EINVAL);	/* moved */
+	assert_eq(vm_map(fd, vm, bo, at, 0, 2 * PAGE), 0);
+	assert_eq(vm_unmap(fd, vm, at, 2 * PAGE), 0);
+	/* Targets count from the code base window: the same place one window on is fine. */
+	assert_eq(vm_map(fd, vm, bo, at + 0x80000, 0, 2 * PAGE), 0);
+	assert_eq(vm_unmap(fd, vm, at + 0x80000, 2 * PAGE), 0);
+}
+
+/* In window 1, a phas.i target counts from the window, not the heap; no straddling. */
+static void t_upload_code_phas_window(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint32_t bo2 = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	const uint64_t at = 0x37090000, first = (at - 0x37080000) / 8;
+	uint64_t w, bad;
+
+	assert_eq(vm_map(fd, vm, bo, at, 0, 2 * PAGE), 0);
+	w = 0xfa440000ull << 32 | ((at - 0x37000000) / 8 + 4);
+	assert_eq(upload(fd, bo, 0, &w, 8, &bad), -EINVAL);	/* counted from the heap */
+	w = 0xfa440000ull << 32 | (first + 4);
+	assert_eq(upload(fd, bo, 0, &w, 8, NULL), 0);
+	assert_eq(vm_unmap(fd, vm, at, 2 * PAGE), 0);
+	/* Across the window boundary at 0x37080000: no absolute targets. */
+	assert_eq(vm_map(fd, vm, bo2, 0x37080000 - PAGE, 0, 2 * PAGE), 0);
+	w = 0xfa440000ull << 32 | ((0x80000 - PAGE) / 8 + 4);
+	assert_eq(upload(fd, bo2, 0, &w, 8, &bad), -EINVAL);
+	assert_eq(vm_unmap(fd, vm, 0x37080000 - PAGE, 2 * PAGE), 0);
+}
+
 /* RT datasets */
 
 static uint32_t create_rtds(int fd, uint32_t ctx, uint32_t w, uint32_t h, int *err)
@@ -980,10 +1196,24 @@ static void t_rtds_invalid(int fd)
 	struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
 		.context_handle = ctx, .width = 64, .height = 64, .samples = 1,
 	};
+	struct drm_powervr_sgx_dev_query_limits l = {};
+	uint32_t size = sizeof(l);
 	int err;
 
+	/* 0, 1 and 4 samples; 4 only up to the core's limit */
+	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &l, &size), 0);
+	for (uint32_t s = 2; s <= 8; s++) {
+		if (s == 4)
+			continue;
+		a.samples = s;
+		do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	}
 	a.samples = 4;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	if (l.rt_max_samples >= 4)
+		assert_eq(xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a), 0);	/* freed with the file */
+	else
+		do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EOPNOTSUPP);
+	a.handle = 0;
 	a.samples = 1;
 	a.flags = 1;
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
@@ -998,35 +1228,36 @@ static void t_rtds_invalid(int fd)
 	assert_eq(err, -ENOENT);
 }
 
-/* Render streams: every case fails validation, so nothing reaches the GPU. */
+/* Render commands: every case fails validation, so nothing reaches the GPU. */
 
-struct rstreams {
-	uint64_t render[10];
-	uint64_t kick[3];
-	struct drm_powervr_sgx_ta_kick k[3];
+struct rcmd {
+	struct drm_powervr_sgx_cmd_render render;
+	uint64_t tail;	/* past the struct: a larger caller's fields */
+	struct drm_powervr_sgx_ext_sgx545_render zls;
+	struct drm_powervr_sgx_cmd_ta_kick k[3];
+	struct drm_powervr_sgx_ext_sgx545_ta_kick kx;
 	struct drm_powervr_sgx_job j;
 };
 
-static void rstreams_init(struct rstreams *r, uint32_t ctx, uint32_t rtds, uint64_t pds, uint64_t vdm)
+static void rcmd_init(struct rcmd *r, uint32_t ctx, uint32_t rtds, uint64_t pds, uint64_t vdm)
 {
-	uint32_t *r32 = (uint32_t *)r->render, *k32 = (uint32_t *)r->kick;
-
 	memset(r, 0, sizeof(*r));
-	r32[0] = 80;
-	r->render[3] = pds;			/* pixel event */
-	r->render[4] = pds + 0x40;		/* bg secondary */
-	r->render[5] = pds + 0x80;		/* bg primary */
-	r32[0x30 / 4] = 5;
-	r32[0x34 / 4] = 1;
-	r32[0x38 / 4] = 2;
-	k32[0] = 20;
-	r->kick[1] = vdm;
-	r->k[0] = (struct drm_powervr_sgx_ta_kick){ .cmd_stream = (uintptr_t)r->kick, .cmd_stream_len = 20 };
-	r->k[1] = r->k[0];
-	r->k[2] = r->k[0];
+	r->render.head.size = sizeof(r->render);
+	r->render.pixel_event_pds_addr = pds;
+	r->render.bg_pds_secondary_addr = pds + 0x40;
+	r->render.bg_pds_primary_addr = pds + 0x80;
+	r->render.pixel_event_pds_rows = 5;
+	r->render.bg_pds_secondary_rows = 1;
+	r->render.bg_pds_primary_rows = 2;
+	r->zls.base.name = DRM_POWERVR_SGX_EXT_SGX545_RENDER;
+	r->kx.base.name = DRM_POWERVR_SGX_EXT_SGX545_TA_KICK;
+	for (int i = 0; i < 3; i++) {
+		r->k[i].head.size = sizeof(r->k[i]);
+		r->k[i].vdm_base = vdm;
+	}
 	r->j = (struct drm_powervr_sgx_job){
 		.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER, .context_handle = ctx,
-		.cmd_stream = (uintptr_t)r->render, .cmd_stream_len = 80,
+		.cmd = (uintptr_t)&r->render,
 		.ta_kicks = DRM_POWERVR_SGX_OBJ_ARRAY(1, r->k), .rt_dataset_handle = rtds,
 	};
 }
@@ -1037,8 +1268,7 @@ static void t_submit_render_invalid(int fd)
 	uint32_t ctx2 = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
 	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), rtds, rtds2;
-	uint32_t *r32;
-	struct rstreams r;
+	struct rcmd r;
 	int err;
 
 	rtds = create_rtds(fd, ctx, 128, 128, &err);
@@ -1047,65 +1277,80 @@ static void t_submit_render_invalid(int fd)
 	assert_eq(err, 0);
 	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
 	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
-	r32 = (uint32_t *)r.render;
 
-#define REJECT(err_, ...) do { rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000); \
+#define REJECT(err_, ...) do { rcmd_init(&r, ctx, rtds, 0x2e100000, 0x3e100000); \
 		__VA_ARGS__; assert_eq(submit(fd, &r.j, 1, NULL), -(err_)); } while (0)
+#define ZLS (r.render.head.extensions = (uintptr_t)&r.zls)
 
-	REJECT(EINVAL, r32[0] = 72);			/* main length is exact */
-	REJECT(EINVAL, r32[1] = 1);			/* header word must be zero */
-	REJECT(EINVAL, r.j.cmd_stream_len = 88);	/* no trailing bytes */
-	REJECT(EINVAL, r.j.cmd_stream_len = 8192);
-	REJECT(EINVAL, r.j.cmd_stream += 4);		/* 8-byte aligned */
-	REJECT(EFAULT, r.j.cmd_stream = 8);
+	/* The command's size and copy */
+	REJECT(EINVAL, r.render.head.size = 8);		/* below the head */
+	REJECT(EINVAL, r.render.head.size = 8192);	/* above the 4 KiB limit */
+	REJECT(E2BIG, r.render.head.size = sizeof(r.render) + 8; r.tail = 1);	/* unknown tail */
+	REJECT(EINVAL, r.render.head._padding_4 = 1);
+	REJECT(EFAULT, r.j.cmd = 8);
+	/* The extension chain */
+	REJECT(EFAULT, r.render.head.extensions = 8);
+	REJECT(EINVAL, ZLS; r.zls.base.name = 63);	/* no such name */
+	REJECT(EINVAL, ZLS; r.zls.base.name = DRM_POWERVR_SGX_EXT_SGX545_TA_KICK);	/* a kick's */
+	REJECT(EINVAL, ZLS; r.zls.base._padding_4 = 1);
+	REJECT(EINVAL, ZLS; r.zls.base.next = (uintptr_t)&r.zls);	/* the same name twice */
+	/* The SGX545 extension's fields and the cross-field rules */
+	REJECT(EINVAL, ZLS; r.zls.zls_control = 0x10000);	/* ZLS without a depth address */
+	REJECT(EINVAL, ZLS; r.zls.zls_control = 0x8);		/* ZLS bits 3-11 are the kernel's */
+	REJECT(EINVAL, ZLS; r.zls.flags_3d = 0x100);	/* stencil flag without a stencil address */
+	REJECT(EINVAL, ZLS; r.zls.flags_3d = 0x1);		/* 3D flags outside the mask */
+	/* The kicks */
 	REJECT(EINVAL, r.j.ta_kicks.count = 0);
-	REJECT(EOPNOTSUPP, r.j.ta_kicks.count = 3);	/* middle kicks: G12 */
-	REJECT(EINVAL, r.j.ta_kicks.count = 2; r.k[1].flags = 1);
-	REJECT(EINVAL, r.k[0].flags = 1);
-	REJECT(EINVAL, ((uint32_t *)r.kick)[0] = 24);
-	REJECT(EINVAL, r.kick[1] = 0x3e100002);		/* VDM base 4-byte aligned */
-	REJECT(EINVAL, r.kick[1] = 0x3e200000);		/* not mapped */
-	REJECT(EINVAL, ((uint32_t *)r.kick)[4] = 1);	/* ta_flags2 bits outside the mask */
-	REJECT(EINVAL, r.render[3] = 0x2e200000);	/* pixel event not mapped */
-	REJECT(EINVAL, r.render[3] = 0x3e100000);	/* pixel event outside PDS pixel */
-	REJECT(EINVAL, r.render[4] = 0x2e100008);	/* PDS addresses 16-byte aligned */
-	REJECT(EINVAL, r.render[5] = 0x100000000ull);	/* below 2^32 */
-	REJECT(EINVAL, r32[0x30 / 4] = 0);		/* rows 1..63 */
-	REJECT(EINVAL, r32[0x34 / 4] = 64);
-	REJECT(EINVAL, r32[0x3c / 4] = 0x10000);	/* ZLS without a depth address */
-	REJECT(EINVAL, r32[0x3c / 4] = 0x8);		/* ZLS bits 3-11 are the kernel's */
-	REJECT(EINVAL, r32[0x40 / 4] = 0x100);		/* stencil flag without a stencil address */
-	REJECT(EINVAL, r32[0x40 / 4] = 0x1);		/* 3D flags outside the mask */
-	REJECT(EINVAL, r.render[1] = 0x3e100000);	/* depth not mapped for the whole target */
+	REJECT(EINVAL, r.j.ta_kicks.count = 3);	/* more than max_ta_kicks */
+	REJECT(EINVAL, r.k[0].head.size = 16);		/* not the array's stride */
+	REJECT(EINVAL, r.k[0].head._padding_4 = 1);
+	REJECT(EINVAL, r.j.ta_kicks.count = 2; r.k[1].head.size = 32);
+	REJECT(EINVAL, r.k[0].head.extensions = (uintptr_t)&r.kx; r.kx.ta_flags2 = 1);	/* mask */
+	REJECT(EINVAL, r.k[0].head.extensions = (uintptr_t)&r.kx; r.kx._padding_14 = 1);
+	REJECT(EINVAL, r.k[0].head.extensions = (uintptr_t)&r.zls);	/* a render's extension */
+	REJECT(EINVAL, r.k[0].vdm_base = 0x3e100002);	/* VDM base 4-byte aligned */
+	REJECT(EINVAL, r.k[0].vdm_base = 0x3e200000);	/* not mapped */
+	/* The render's fields */
+	REJECT(EINVAL, r.render.pixel_event_pds_addr = 0x2e200000);	/* not mapped */
+	REJECT(EINVAL, r.render.pixel_event_pds_addr = 0x3e100000);	/* outside PDS pixel */
+	REJECT(EINVAL, r.render.bg_pds_secondary_addr = 0x2e100008);	/* 16-byte aligned */
+	REJECT(EINVAL, r.render.bg_pds_primary_addr = 0x100000000ull);	/* below 2^va_bits */
+	REJECT(EINVAL, r.render.pixel_event_pds_rows = 0);		/* rows 1..63 */
+	REJECT(EINVAL, r.render.bg_pds_secondary_rows = 64);
+	REJECT(EINVAL, r.render.depth_addr = 0x3e100000);	/* not mapped for the whole target */
+	/* The job */
 	REJECT(EINVAL, r.j.flags = 1);			/* render jobs have no flags yet */
+	REJECT(EINVAL, r.j._padding_c = 1);
 	REJECT(EINVAL, r.j.rt_dataset_handle = rtds2);	/* another context's dataset */
 	REJECT(ENOENT, r.j.rt_dataset_handle = 0xdead);
 	REJECT(EINVAL, r.j.context_handle = xctx);	/* a render job on a transfer context */
+#undef ZLS
 #undef REJECT
 }
 
-/* Transfer streams: every case fails validation, so nothing reaches the GPU. */
+/* Transfer commands: every case fails validation, so nothing reaches the GPU. */
 
-struct xstream {
-	uint64_t s[6];
+struct xcmd {
+	struct drm_powervr_sgx_cmd_transfer t;
+	uint64_t tail;
+	struct drm_powervr_sgx_ext_sgx545_render ext;
 	struct drm_powervr_sgx_job j;
 };
 
-static void xstream_init(struct xstream *x, uint32_t ctx, uint64_t bg, uint64_t pds)
+static void xcmd_init(struct xcmd *x, uint32_t ctx, uint64_t bg, uint64_t pds)
 {
-	uint32_t *s32 = (uint32_t *)x->s;
-
 	memset(x, 0, sizeof(*x));
-	s32[0] = 48;
-	x->s[1] = bg;
-	x->s[2] = pds;			/* pixel event */
-	s32[6] = 5;			/* its rows */
-	s32[9] = 1;			/* last tile 1, 3 */
-	s32[10] = 3;
-	s32[11] = 0x3f800000;
+	x->t.head.size = sizeof(x->t);
+	x->t.bg_block_addr = bg;
+	x->t.pixel_event_pds_addr = pds;
+	x->t.pixel_event_pds_rows = 5;
+	x->t.last_tile_x = 1;
+	x->t.last_tile_y = 3;
+	x->t.bg_depth_f32 = 0x3f800000;
+	x->ext.base.name = DRM_POWERVR_SGX_EXT_SGX545_RENDER;
 	x->j = (struct drm_powervr_sgx_job){
 		.type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER, .context_handle = ctx,
-		.cmd_stream = (uintptr_t)x->s, .cmd_stream_len = 48,
+		.cmd = (uintptr_t)&x->t,
 	};
 }
 
@@ -1114,39 +1359,51 @@ static void t_submit_transfer_invalid(int fd)
 	uint32_t vm = create_vm(fd), xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
 	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), rtds;
-	struct xstream x;
-	uint32_t *s32;
+	struct xcmd x;
 	int err;
 
 	rtds = create_rtds(fd, ctx, 64, 64, &err);
 	assert_eq(err, 0);
 	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
 	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
-	s32 = (uint32_t *)x.s;
 
-#define REJECT(err_, ...) do { xstream_init(&x, xctx, 0x3e100000, 0x2e100000); \
+#define REJECT(err_, ...) do { xcmd_init(&x, xctx, 0x3e100000, 0x2e100000); \
 		__VA_ARGS__; assert_eq(submit(fd, &x.j, 1, NULL), -(err_)); } while (0)
 
-	REJECT(EINVAL, s32[0] = 40);			/* length is exact */
-	REJECT(EINVAL, s32[1] = 1);			/* header word must be zero */
-	REJECT(EINVAL, x.j.cmd_stream_len = 0);
-	REJECT(EINVAL, x.j.cmd_stream += 4);		/* 8-byte aligned */
-	REJECT(EFAULT, x.j.cmd_stream = 8);
-	REJECT(EINVAL, x.s[1] = 0);			/* background block required */
-	REJECT(EINVAL, x.s[1] = 0x3e100008);		/* 16-byte aligned */
-	REJECT(EINVAL, x.s[1] = 0x3e200000);		/* not mapped */
-	REJECT(EINVAL, x.s[1] = 0x3e100f00);		/* not mapped for its 0x200 bytes */
-	REJECT(EINVAL, x.s[2] = 0x3e100000);		/* pixel event outside PDS pixel */
-	REJECT(EINVAL, x.s[2] = 0x2e200000);		/* pixel event not mapped */
-	REJECT(EINVAL, s32[6] = 0);			/* rows 1..63 */
-	REJECT(EINVAL, s32[6] = 64);
-	REJECT(EINVAL, s32[7] = 2);			/* first tile after the last */
-	REJECT(EINVAL, s32[10] = 0x10000);		/* tile limits */
+	REJECT(EINVAL, x.t.head.size = 8);
+	REJECT(EINVAL, x.t.head.size = 8192);
+	REJECT(E2BIG, x.t.head.size = sizeof(x.t) + 8; x.tail = 1);
+	REJECT(EINVAL, x.t.head._padding_4 = 1);
+	REJECT(EFAULT, x.j.cmd = 8);
+	REJECT(EINVAL, x.j.cmd = 0);			/* a transfer needs its command */
+	REJECT(EINVAL, x.t.head.extensions = (uintptr_t)&x.ext);	/* a render's extension */
+	REJECT(EINVAL, x.t.bg_block_addr = 0);		/* background block required */
+	REJECT(EINVAL, x.t.bg_block_addr = 0x3e100008);	/* 16-byte aligned */
+	REJECT(EINVAL, x.t.bg_block_addr = 0x3e200000);	/* not mapped */
+	REJECT(EINVAL, x.t.bg_block_addr = 0x3e100f00);	/* not mapped for its 0x200 bytes */
+	REJECT(EINVAL, x.t.pixel_event_pds_addr = 0x3e100000);	/* outside PDS pixel */
+	REJECT(EINVAL, x.t.pixel_event_pds_addr = 0x2e200000);	/* not mapped */
+	REJECT(EINVAL, x.t.pixel_event_pds_rows = 0);	/* rows 1..63 */
+	REJECT(EINVAL, x.t.pixel_event_pds_rows = 64);
+	REJECT(EINVAL, x.t.first_tile_x = 2);		/* first tile after the last */
+	REJECT(EINVAL, x.t.last_tile_y = 0x10000);	/* tile limits */
 	REJECT(EINVAL, x.j.flags = 2);			/* flags outside the mask */
 	REJECT(EINVAL, x.j.rt_dataset_handle = rtds);	/* transfers take no RT dataset */
 	REJECT(EINVAL, x.j.ta_kicks.count = 1);		/* or kicks */
 	REJECT(EINVAL, x.j.context_handle = ctx);	/* a transfer on a render context */
 #undef REJECT
+}
+
+/* Retired numbers stay empty: revision 2's SUBMIT_JOBS and revision 1's UPLOAD_CODE. */
+static void t_submit_old_number(int fd)
+{
+	struct drm_powervr_sgx_ioctl_submit_jobs_args a = {};
+	struct drm_powervr_sgx_ioctl_upload_code_args u = {};
+
+	assert_eq(xioctl(fd, DRM_IOWR(DRM_COMMAND_BASE + 0x0b,
+				       struct drm_powervr_sgx_ioctl_submit_jobs_args), &a), -EINVAL);
+	assert_eq(xioctl(fd, DRM_IOWR(DRM_COMMAND_BASE + 0x0d,
+				       struct drm_powervr_sgx_ioctl_upload_code_args), &u), -EINVAL);
 }
 
 /*
@@ -1163,10 +1420,10 @@ static void t_reserved_bits(int fd)
 	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), s = syncobj(fd), rtds;
 	struct drm_powervr_sgx_sync_op op;
-	struct drm_powervr_sgx_bo_ref ref;
+	struct drm_powervr_sgx_cache_range range;
 	struct drm_powervr_sgx_job j;
-	struct rstreams r;
-	struct xstream x;
+	struct rcmd r;
+	struct xcmd x;
 	int err;
 
 	rtds = create_rtds(fd, ctx, 64, 64, &err);
@@ -1184,14 +1441,8 @@ static void t_reserved_bits(int fd)
 		struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = { .handle = bo, ._padding_4 = 1u << b };
 		struct drm_powervr_sgx_ioctl_create_vm_context_args cv = { ._padding_4 = 1u << b };
 		struct drm_powervr_sgx_ioctl_destroy_vm_context_args dv = { .handle = vm, ._padding_4 = 1u << b };
-		struct drm_powervr_sgx_ioctl_vm_map_args m = {
-			.vm_context_handle = vm, .device_addr = 0x3e200000, .handle = bo, .size = PAGE,
-			.flags = 1u << b,
-		};
-		struct drm_powervr_sgx_ioctl_vm_map_args m2 = m;
-		struct drm_powervr_sgx_ioctl_vm_unmap_args u = {
-			.vm_context_handle = vm, .device_addr = 0x3e100000, .size = PAGE, ._padding_4 = 1u << b,
-		};
+		struct drm_powervr_sgx_vm_bind_op m = MAP_OP(bo, 0x3e200000, 0, PAGE);
+		struct drm_powervr_sgx_vm_bind_op m2 = m;
 		struct drm_powervr_sgx_ioctl_create_context_args cc = {
 			.type = DRM_POWERVR_SGX_CTX_TYPE_RENDER, .vm_context_handle = vm, .flags = 1u << b,
 		};
@@ -1207,11 +1458,16 @@ static void t_reserved_bits(int fd)
 		BIT_REJECT("GET_BO_MMAP_OFFSET padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_GET_BO_MMAP_OFFSET, &mo));
 		BIT_REJECT("CREATE_VM_CONTEXT padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_VM_CONTEXT, &cv));
 		BIT_REJECT("DESTROY_VM_CONTEXT padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &dv));
-		BIT_REJECT("VM_MAP flags", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &m));
-		m2._padding_14 = 1u << b;
-		m2.flags = 0;
-		BIT_REJECT("VM_MAP padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &m2));
-		BIT_REJECT("VM_UNMAP padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &u));
+		m.flags = 1u << b;
+		BIT_REJECT("VM_BIND op flags", b,
+			   vm_bind(fd, vm, DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC, &m, 1, NULL, 0));
+		m2._padding_24 = 1u << b;
+		BIT_REJECT("VM_BIND op padding", b,
+			   vm_bind(fd, vm, DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC, &m2, 1, NULL, 0));
+		if (b)
+			BIT_REJECT("VM_BIND flags", b,
+				   vm_bind(fd, vm, DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC | 1u << b,
+					   &m2, 0, NULL, 0));
 		BIT_REJECT("CREATE_CONTEXT flags", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &cc));
 		BIT_REJECT("DESTROY_CONTEXT padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &dc));
 		BIT_REJECT("GET_CONTEXT_STATE padding", b, xioctl(fd, DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE, &gs));
@@ -1227,14 +1483,17 @@ static void t_reserved_bits(int fd)
 		j = null_job(ctx, NULL, 0);
 		j.flags = 1u << b;
 		BIT_REJECT("null job flags", b, submit(fd, &j, 1, NULL));
-		rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+		rcmd_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
 		r.j.flags = 1u << b;
 		BIT_REJECT("render job flags", b, submit(fd, &r.j, 1, NULL));
-		rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
-		r.k[0].flags = 1u << b;
-		BIT_REJECT("TA kick flags", b, submit(fd, &r.j, 1, NULL));
+		rcmd_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+		r.k[0].head._padding_4 = 1u << b;
+		BIT_REJECT("TA kick head padding", b, submit(fd, &r.j, 1, NULL));
+		rcmd_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+		r.j._padding_c = 1u << b;
+		BIT_REJECT("job padding", b, submit(fd, &r.j, 1, NULL));
 		if (!((1u << b) & DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_FLAGS_MASK)) {
-			xstream_init(&x, xctx, 0x3e100000, 0x2e100000);
+			xcmd_init(&x, xctx, 0x3e100000, 0x2e100000);
 			x.j.flags = 1u << b;
 			BIT_REJECT("transfer job flags", b, submit(fd, &x.j, 1, NULL));
 		}
@@ -1252,11 +1511,13 @@ static void t_reserved_bits(int fd)
 			j = null_job(ctx, &op, 1);
 			BIT_REJECT("sync op handle type", b, submit(fd, &j, 1, NULL));
 		}
-		if (b >= 1) {
-			ref = (struct drm_powervr_sgx_bo_ref){ .handle = bo, .flags = 1u << b };
+		if (b >= 2) {
+			range = (struct drm_powervr_sgx_cache_range){
+				.handle = bo, .flags = CR_RD | 1u << b, .size = PAGE,
+			};
 			j = null_job(ctx, NULL, 0);
-			j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &ref);
-			BIT_REJECT("BO ref flags", b, submit(fd, &j, 1, NULL));
+			j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &range);
+			BIT_REJECT("cache range flags", b, submit(fd, &j, 1, NULL));
 		}
 	}
 
@@ -1276,8 +1537,8 @@ static void t_submit_other_vm(int fd)
 	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
 	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), rtds;
-	struct rstreams r;
-	struct xstream x;
+	struct rcmd r;
+	struct xcmd x;
 	int err;
 
 	rtds = create_rtds(fd, ctx, 64, 64, &err);
@@ -1285,24 +1546,24 @@ static void t_submit_other_vm(int fd)
 	/* Mapped in vm2 only. */
 	assert_eq(vm_map(fd, vm2, pds, 0x2e100000, 0, PAGE), 0);
 	assert_eq(vm_map(fd, vm2, gen, 0x3e100000, 0, PAGE), 0);
-	rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+	rcmd_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
 	assert_eq(submit(fd, &r.j, 1, NULL), -EINVAL);
-	xstream_init(&x, xctx, 0x3e100000, 0x2e100000);
+	xcmd_init(&x, xctx, 0x3e100000, 0x2e100000);
 	assert_eq(submit(fd, &x.j, 1, NULL), -EINVAL);
 
 	/* Mapped in vm, then unmapped: refused again. */
 	assert_eq(vm_map(fd, vm, pds, 0x2e100000, 0, PAGE), 0);
 	assert_eq(vm_map(fd, vm, gen, 0x3e100000, 0, PAGE), 0);
 	assert_eq(vm_unmap(fd, vm, 0x3e100000, PAGE), 0);
-	rstreams_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
+	rcmd_init(&r, ctx, rtds, 0x2e100000, 0x3e100000);
 	assert_eq(submit(fd, &r.j, 1, NULL), -EINVAL);
-	xstream_init(&x, xctx, 0x3e100000, 0x2e100000);
+	xcmd_init(&x, xctx, 0x3e100000, 0x2e100000);
 	assert_eq(submit(fd, &x.j, 1, NULL), -EINVAL);
 
 	/* Addresses in the kernel's ranges, which no client can map. */
-	rstreams_init(&r, ctx, rtds, 0x2e100000, 0x10000000);	/* 3D params */
+	rcmd_init(&r, ctx, rtds, 0x2e100000, 0x10000000);	/* 3D params */
 	assert_eq(submit(fd, &r.j, 1, NULL), -EINVAL);
-	xstream_init(&x, xctx, 0x10000000, 0x2e100000);
+	xcmd_init(&x, xctx, 0x10000000, 0x2e100000);
 	assert_eq(submit(fd, &x.j, 1, NULL), -EINVAL);
 }
 
@@ -1314,6 +1575,7 @@ static const struct {
 	{ "dev-query-short-size", t_query_short },
 	{ "dev-query-limits-quirks", t_query_limits_quirks },
 	{ "dev-query-heap-info", t_query_heap_info },
+	{ "dev-query-commands", t_query_commands },
 	{ "dev-query-invalid", t_query_invalid },
 	{ "create-bo", t_create_bo },
 	{ "create-bo-invalid", t_create_bo_invalid },
@@ -1321,6 +1583,8 @@ static const struct {
 	{ "mmap-bo-invalid", t_mmap_bo_invalid },
 	{ "vm-create-destroy", t_vm_create_destroy },
 	{ "vm-map-unmap", t_vm_map_unmap },
+	{ "vm-unmap-split", t_vm_unmap_split },
+	{ "vm-bind-ops", t_vm_bind_ops },
 	{ "vm-map-overlap", t_vm_map_overlap },
 	{ "vm-map-kernel-ranges", t_vm_map_kernel_ranges },
 	{ "vm-map-invalid", t_vm_map_invalid },
@@ -1332,7 +1596,7 @@ static const struct {
 	{ "submit-null-job-timeline", t_null_job_timeline },
 	{ "submit-null-job-chain", t_null_job_chain },
 	{ "submit-null-job-many", t_null_job_many },
-	{ "submit-null-job-bo-ref", t_null_job_bo_ref },
+	{ "submit-null-job-cache-ranges", t_null_job_cache_ranges },
 	{ "submit-null-job-vm-destroyed", t_null_job_vm_destroyed },
 	{ "submit-invalid", t_submit_invalid },
 	{ "context-state-invalid", t_context_state_invalid },
@@ -1340,6 +1604,7 @@ static const struct {
 	{ "submit-wait-unsignalled", t_submit_wait_unsignalled },
 	{ "rt-dataset-create-destroy", t_rtds_create_destroy },
 	{ "rt-dataset-invalid", t_rtds_invalid },
+	{ "submit-old-number", t_submit_old_number },
 	{ "submit-render-invalid", t_submit_render_invalid },
 	{ "submit-transfer-invalid", t_submit_transfer_invalid },
 	{ "reserved-bits", t_reserved_bits },
@@ -1347,6 +1612,8 @@ static const struct {
 	{ "prime", t_prime },
 	{ "upload-code-corpus", t_upload_code_corpus },
 	{ "upload-code-reject", t_upload_code_reject },
+	{ "upload-code-phas", t_upload_code_phas },
+	{ "upload-code-phas-window", t_upload_code_phas_window },
 	{ "upload-code-invalid", t_upload_code_invalid },
 	{ "upload-code-mapped", t_upload_code_mapped },
 	{ "submit-other-vm", t_submit_other_vm },

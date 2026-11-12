@@ -506,6 +506,7 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
       dd->has_heap[SGX_HEAP_TEXTURE] ? SGX_HEAP_TEXTURE : SGX_HEAP_GENERAL;
    impl->shared = true;
    impl->refs = 1;
+   impl->base.cpu_dirty = true; /* the CPU's lines before it was ours */
    impl->dmabuf_fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
    impl->map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
    if (impl->map == MAP_FAILED) {
@@ -836,6 +837,54 @@ shared_signal(struct psgx_dev *dd, const struct shared_use *sh, unsigned n)
    close(fd);
 }
 
+/* The bytes of shared buffers the kernel keeps coherent with the CPU around
+ * the job (UAPI.md D6): the frame's damage of a linear target, which it writes;
+ * the whole of any other buffer it writes, or of one the CPU wrote since a job
+ * last flushed it.  A buffer the job only reads, clean, needs nothing: the GPU
+ * reads memory.  The render rewrites the target's other tiles as it loaded
+ * them, which needs no flush either. */
+static unsigned
+cache_ranges(struct sgxws_ctx *c, const struct shared_use *sh, unsigned n_sh,
+             struct drm_powervr_sgx_cache_range *r)
+{
+   const struct psgx_bo *target = c->target.bo ? dbo(c->target.bo) : NULL;
+   const struct sgxws_rect *d = &c->damage;
+   unsigned n = 0;
+
+   for (unsigned i = 0; i < n_sh; i++) {
+      struct psgx_bo *bo = sh[i].bo;
+      uint32_t whole = 0;
+
+      if (bo->base.cpu_dirty)
+         whole |= DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ;
+      if (bo == target && !sgxws_target_twiddled(&c->target)) {
+         uint32_t pitch = c->target.stride * 4,
+                  x1 = MIN2(d->x1, c->rt->w), y1 = MIN2(d->y1, c->rt->h);
+
+         if (c->draws && x1 > d->x0 && y1 > d->y0)
+            r[n++] = (struct drm_powervr_sgx_cache_range){
+               .handle = bo->handle,
+               .flags = DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE,
+               .offset = (uint64_t)(c->target.va - bo->va) +
+                         (uint64_t)d->y0 * pitch + d->x0 * 4,
+               .size = (x1 - d->x0) * 4,
+               .stride = pitch,
+               .rows = y1 - d->y0,
+            };
+      } else if (sh[i].write) {
+         whole |= DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE;
+      }
+      if (whole)
+         r[n++] = (struct drm_powervr_sgx_cache_range){
+            .handle = bo->handle,
+            .flags = whole,
+            .size = bo->base.size,
+         };
+      bo->base.cpu_dirty = false;
+   }
+   return n;
+}
+
 static int
 psgx_kick(struct sgxws_ctx *c, uint32_t seq)
 {
@@ -862,13 +911,13 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
                   (c->rt->samples ? c->rt->samples : 1);
    struct drm_powervr_sgx_cmd_ta_kick kicks[TA_KICKS];
    struct shared_use sh[ARRAY_SIZE(c->use) + 1];
-   struct drm_powervr_sgx_bo_ref refs[ARRAY_SIZE(sh)];
+   struct drm_powervr_sgx_cache_range ranges[ARRAY_SIZE(sh) + 1];
    struct drm_powervr_sgx_sync_op ops[3];
    struct drm_powervr_sgx_job job;
    struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
       .jobs = {.stride = sizeof(job), .count = 1, .array = (uintptr_t)&job},
    };
-   unsigned n_sh = 0, n_ops = 0;
+   unsigned n_sh = 0, n_ops = 0, n_ranges;
    uint64_t point, t0;
    int e = 0;
 
@@ -920,13 +969,7 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    for (unsigned i = 0; i < c->n_use; i++)
       add_shared(sh, &n_sh, c->use[i].bo, c->use[i].write);
 
-   /* until the kernel flushes imports without it: the shared buffers'
-    * list, which is what makes it flush them around the job */
-   for (unsigned i = 0; i < n_sh; i++)
-      refs[i] = (struct drm_powervr_sgx_bo_ref){
-         .handle = sh[i].bo->handle,
-         .flags = sh[i].write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
-      };
+   n_ranges = cache_ranges(c, sh, n_sh, ranges);
 
    simple_mtx_lock(&dd->lock);
    point = ++dd->point;
@@ -956,9 +999,9 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
       .sync_ops = {.stride = sizeof(ops[0]),
                    .count = n_ops,
                    .array = (uintptr_t)ops},
-      .bo_refs = {.stride = sizeof(refs[0]),
-                  .count = n_sh,
-                  .array = (uintptr_t)refs},
+      .cache_ranges = {.stride = sizeof(ranges[0]),
+                       .count = n_ranges,
+                       .array = (uintptr_t)ranges},
       .ta_kicks = {.stride = sizeof(kicks[0]),
                    .count = TA_KICKS,
                    .array = (uintptr_t)kicks},

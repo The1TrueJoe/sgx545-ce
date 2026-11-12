@@ -33,12 +33,12 @@ Counts are rows of the tables below (one row per file or block of facts).
 | area | covered | partial | missing | n/a |
 |---|---|---|---|---|
 | gallium driver (`drivers/sgx`) | 44 | 27 | 2 | 12 |
-| winsys (`winsys/sgx`) | 44 | 34 | 2 | 3 |
+| winsys (`winsys/sgx`) | 45 | 33 | 2 | 3 |
 | compiler (`sgx/compiler`) | 33 | 26 | 0 | 5 |
 | USSE instruction set (`sgx/isa`) | 5 | 0 | 0 | 1 |
 | PDS (`sgx/pds`) | 4 | 0 | 0 | 1 |
 | kernel driver (`drm/`) | 33 | 44 | 5 | 2 (+ 7 test rows) |
-| **total** | **163** | **131** | **9** | **24** |
+| **total** | **164** | **130** | **9** | **24** |
 
 The instruction encodings (USSE and PDS) are generated from ISA.md and PDS.md
 and are covered. The gaps are in the state around them:
@@ -261,6 +261,12 @@ re-read these rows against the sections named:
   - the pixel-event in1 bits;
   - where vertex uniforms start (the probe's vertex override didn't take);
   - points without gl_PointSize (the DDK drops the draw).
+- **Winsys: `copy_fs`** (2026-11-11, from `es1base`): covered. The color
+  source (DOUTI 0x20, b21 = 0) arrives as one packed BGRA8 dword in pa0
+  (STATE.md §3 "Output select and TSP words"; PDS.md "DOUTI"), and a U8
+  sample lands packed in pa0 (STATE.md §3 "The DDK's fragment programs for
+  a flat color and one sample"). Still open: what DOUTI b21 = 1 does to the
+  color's format.
 - **New:** UKERNEL.md §5 "Where the DDK microkernel raises the host
   interrupt": every SW_EVENT site and what triggers it, the fact that no
   completion waits for the timer, the hardware-done to IRQ times, and where
@@ -573,7 +579,7 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | mkusse.py:59 `empty` | `phas.i #0,#0 [end wait=7]` | ISA.md "phase" (encoding) | covered |
 | mkusse.py:63-74 `clear_vs` | o0-o2 = pa0-2, o3 = c3 (1.0), o4-o7 = `pck.f32.u8 [scale]` of pa3 lanes 2, 1, 0, 3; 8 output dwords | NOTES.md "Findings" (clear vertex = x,y,z,ARGB8888); ISA.md "pck" (lanes, scale = /255), "Hardware constants" (c3); STATE.md §3 output select 0x00081800 | partial |
 | mkusse.py:77-85 `vpgen_vs` | `mov o0,pa0 [rpt=2]; mov o2,c3; mov o3,c3` | STATE.md §3 "Scissor and partial viewports" | covered |
-| mkusse.py:87-90 `copy_fs` | `mov o0, pa0 [skipinv end rcnt]`: the color iterator / background sample already the packed pixel | TEX.md §3 table (copy shader `phas.i; mov o0, pa0 [end]`); PDS.md "DOUTI" (0x20 color, 4 components) | partial |
+| mkusse.py:87-90 `copy_fs` | `mov o0, pa0 [skipinv end rcnt]`: the color iterator / background sample already the packed pixel | STATE.md §3 "Output select and TSP words" (the color source is one packed BGRA8 dword in pa0); STATE.md §3 "The DDK's fragment programs for a flat color and one sample" (a U8 sample lands packed in pa0); PDS.md "DOUTI" (0x20 color, 4 components, b21 = 0); TEX.md §3 table (copy shader `phas.i; mov o0, pa0 [end]`) | covered |
 | mkusse.py:94-115 `vs_xy`, `vs_xyz` | phase 0 (prologue, `limm pa3,#1.0`, `limm pa2,#0 [end]`), phase 1 `[wait=2]` copies pa0-3 to o0-3 | GEN.md "The API" / "Vertex programs end with an extra phase"; ISA.md `limm`, `phas.i` | partial |
 | mkusse.py:120-132 `fs_uniform_sec`, `fs_uniform` | secondary packs FP16 pa9/pa10 to BGRA8 in pa9 (`pck.u8.f16 dmask=6/9 scale`); main `mov o0, sa9 [skipinv end mask=1]` | NOTES.md "Findings" (FP16 uniform pairs); ISA.md "pck" (dmask lanes), "Program structure" (secondary pa = main sa), "What the draw-time builder emits" (probe's `mov o0, sa9 [end]`) | covered |
 | sgx_powervr_sgx.c:49-61 `TA_KICKS`, `heap_ids[]` | a scene = 2 TA kicks (stream, then terminate words); uAPI heap index → heap id | UAPI.md "SUBMIT_JOBS" (two elements, G9), §5; docs/uapi/powervr_sgx_drm.h | covered |
@@ -717,9 +723,6 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
   - o0-o2 = x, y, z; o3 = c3 (1.0);
   - o4-o7 = R, G, B, A as floats from the ARGB8888 word's bytes 2, 1, 0, 3 (`pck.f32.u8 [scale]`);
   - 8 output dwords to match output select 0x00081800.
-
-**`copy_fs` (partial)**
-- PDS.md "DOUTI": that the color iterator (source 0x20, 4 components) leaves the color packed as BGRA8 in pa0. The same for the background sample. That lets `mov o0, pa0` write the pixel unchanged.
 
 **CCB (partial)**
 - STATE.md §6 HW render context word 3: whether the 0x420 bytes after the 64 KB ring are control or room for a command that runs past the ring's end (the code assumes the latter).
@@ -1068,9 +1071,9 @@ The target doc is named.
 
 ### kernel driver: `drm/`
 
-`drm/powervr_sgx/powervr_sgx_stream*.{c,h}` and `powervr_sgx_cmd_checks.c`
-are byte-identical to `docs/uapi/stream/`, which is generated from
-`docs/uapi/powervr_sgx_kmd_stream.xml`, so UAPI.md §3 covers them.
+`drm/powervr_sgx/pvrsgx_cmd*.{c,h}` are links to `docs/uapi/cmd/`, whose
+tables are generated from `docs/uapi/powervr_sgx_cmd.xml`, so UAPI.md §3
+covers them.
 `include/uapi/drm/powervr_sgx_drm.h` is `docs/uapi/powervr_sgx_drm.h`.
 
 #### Table
@@ -1192,7 +1195,7 @@ are byte-identical to `docs/uapi/stream/`, which is generated from
 | `drm/tools/mkukfw.py` | builds/checks the 4a file: header struct `<2I10I4I32s` (0x60), header padded to 8, zlib CRC-32, patches_off 0 when none, default entry 0:0, the driver's checks incl. MAX_IMAGE 0xddf0, 64-pair table limit, word-1 placeholder mask 0x3f1f0 | UKERNEL.md "4a" | partial: same unstated limits as the `ukfw_parse` row; patches_off = 0 with no patches not stated |
 | `drm/tools/gen_usse_corpus.py` | test corpus extraction (drops setl/savl) | n/a | n/a |
 | `Makefile`, `Kconfig`, `MAINTAINERS.fragment`, `ci/*`, `Documentation/gpu/powervr_sgx/*` | build, CI kernel, RAM boot (`run.sh` extracts .rodata 0x2000 + 0xcf68), docs | DRM-DRIVER.md "7. Testing"; SRVINIT.md "The firmware file" | n/a (the 0x2000/0xcf68 extraction is covered) |
-| `powervr_sgx_stream*.{c,h}`, `powervr_sgx_cmd_checks.c` | stream framing, per-field checks, cross-field rules (identical to `docs/uapi/stream/`) | UAPI.md "3.1"-"3.6" (generated table) | covered |
+| `pvrsgx_cmd*.{c,h}` | command copy, extension chain, per-field checks, cross-field rules (links to `docs/uapi/cmd/`) | UAPI.md "3.1"-"3.6" (generated table) | covered |
 
 ##### Tests (one row each)
 

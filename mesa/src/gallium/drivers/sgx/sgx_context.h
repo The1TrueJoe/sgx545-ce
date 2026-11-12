@@ -100,6 +100,8 @@ struct sgx_pipe_shader {
       n_deps;
    /* the texel comes back F16 into two registers (T3 01028800) */
    bool dep_f16[SGX_MAX_DEP_SAMPLES];
+   /* its plane of an RG32 / RGBA32 texture (the state's address moves) */
+   uint8_t dep_plane[SGX_MAX_DEP_SAMPLES];
    /* a texelFetch (sgx_sample_info.fetch): sampled NEAREST, clamped */
    bool dep_fetch[SGX_MAX_DEP_SAMPLES];
    struct {
@@ -136,9 +138,9 @@ struct sgx_pipe_shader {
    /* colour buffer 0 is an integer format (pack_int_output): 0 not, 1 one of
     * 8 bits a channel, 2 R32, 3 + c channel c's plane of RG32 / RGBA32 */
    uint8_t rt_int;
-   /* units bound to an RGBA32 / RG32 texture, read word by word (the
-    * compiler's tex_r32x4 / tex_r32x2), and those whose s clamps */
-   uint32_t r32x4, r32x2, r32_clamp;
+   /* units bound to an RGBA32 / RG32 texture, read a plane at a time (the
+    * compiler's tex_r32x4 / tex_r32x2) */
+   uint32_t r32x4, r32x2;
    /* shadow samples: each unit's compare function (lower_shadow) */
    uint8_t compare[PIPE_MAX_SAMPLERS];
    struct sgx_pipe_shader *variants_srgb[8];

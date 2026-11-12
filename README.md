@@ -5,9 +5,27 @@
 
 An open graphics driver stack for the PowerVR **SGX** GPUs. It supports the **SGX545**: the
 GPU in Intel's Cedarview Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the
-Intel Atom CE5300/CE5310. Other SGX cores are welcome ([docs/porting/](docs/porting/README.md)).
-Every part runs from code in this repository. No Intel or Imagination binary is needed, in
-the kernel, the firmware or userspace.
+Intel Atom CE5300/CE5310. Every part runs from code in this repository. No Intel or
+Imagination binary is needed, in the kernel, the firmware or userspace.
+
+## GPUs
+
+One kernel driver, one Mesa driver and one microkernel source are meant to cover the whole
+SGX family: a new core is added as data in each of them, not as a copy of the code.
+
+| Core | ISA | Example hardware | Status |
+|---|---|---|---|
+| SGX545 | USSE | Intel Cedarview (Atom N2600, N2800, D2500, D2550, D2700); Intel Atom CE5300/CE5310 | **Supported** |
+| SGX530 | USSE | TI OMAP3 (OMAP3430, OMAP3630, DM3730), TI AM335x and AM3517 | **In bring-up** on an OMAP3630 board: the kernel driver finds and powers the core and reads its ID; the microkernel does not start yet |
+| SGX535 | USSE | Intel Poulsbo (GMA 500, Atom Z5xx) | Wanted |
+| SGX540 | USSE | TI OMAP4430/4460, Ingenic JZ4780 | Wanted |
+| SGX544 | USSE2 | TI OMAP4470, OMAP5 and AM57xx, Allwinner A31 and A83T | Wanted; needs USSE2 support in the compiler and assembler |
+| SGX543, SGX554 | USSE2 | Mostly phones and tablets | Wanted, as SGX544 |
+
+The cores marked USSE share an instruction set with the SGX545, so most of a port is that
+core's facts and its platform glue. USSE2 is a different instruction set and a larger
+project. If you have one of these and want to help, see [Contributing](#contributing) and
+the porting guide, [docs/porting/](docs/porting/README.md).
 
 | Part | Where | What it is |
 |---|---|---|

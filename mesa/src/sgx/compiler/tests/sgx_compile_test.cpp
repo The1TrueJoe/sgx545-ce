@@ -872,6 +872,51 @@ TEST_F(sgx_compile_test, fragment_flat_varyings)
    }
 }
 
+/* integer division by a power of two as the GLSL front end lowers it,
+ * isign(i) * (iabs(i) >> 2), and a shift left and an arithmetic shift right
+ * by constants: all become float arithmetic (integers are floats here) */
+TEST_F(sgx_compile_test, fragment_int_division_and_shifts)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, a);
+   nir_def *i = nir_f2i32(&b, nir_channel(&b, v, 0));
+   nir_def *j = nir_f2i32(&b, nir_channel(&b, v, 1));
+   nir_def *q =
+      nir_imul(&b, nir_isign(&b, i), nir_ushr_imm(&b, nir_iabs(&b, i), 2));
+   nir_def *l = nir_ishl_imm(&b, j, 3);
+   nir_def *r = nir_ishr_imm(&b, j, 1);
+   nir_store_var(&b, col,
+                 nir_vec4(&b, nir_i2f32(&b, q), nir_i2f32(&b, l),
+                          nir_i2f32(&b, r), nir_imm_float(&b, 1)),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+}
+
+/* an integer op with no float form fails to compile, with an error */
+TEST_F(sgx_compile_test, fragment_unsupported_int_op_fails)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *i = nir_f2i32(&b, nir_channel(&b, nir_load_var(&b, a), 0));
+   nir_def *c = nir_bit_count(&b, i);
+   nir_store_var(&b, col,
+                 nir_vec4(&b, nir_i2f32(&b, c), nir_imm_float(&b, 0),
+                          nir_imm_float(&b, 0), nir_imm_float(&b, 1)),
+                 0xf);
+   EXPECT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("unsupported integer op"),
+             std::string::npos)
+      << (out.log ? out.log : "");
+}
+
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
  * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
  * writes no PA register (the inputs phase 1 reads) */
@@ -1013,6 +1058,68 @@ TEST_F(sgx_compile_test, fragment_discard_one_phase)
    for (unsigned i = 0; i < out.n_blocks; i++)
       feedback |= out.blocks[i].kind == SGX_BLOCK_FEEDBACK;
    EXPECT_TRUE(feedback);
+}
+
+/* an alpha test a uniform gates, between the sample and the colour math (an
+ * alias-model shader's): phase 0 ends in the feedback nop */
+TEST_F(sgx_compile_test, fragment_uniform_gated_discard_ends_in_feedback)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec4_type(), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   nir_variable *on = var(nir_var_uniform, glsl_float_type(), "on", -1);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_trim_vector(&b, nir_load_var(&b, uv), 2);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_def *keep =
+      nir_fmul(&b, nir_sne(&b, nir_load_var(&b, on), nir_imm_float(&b, 0.0)),
+               nir_slt(&b, nir_channel(&b, t, 3), nir_imm_float(&b, 0.666)));
+   nir_discard_if(&b, nir_fneu_imm(&b, keep, 0.0));
+   nir_def *v = nir_fmul(&b, t, nir_load_var(&b, c4));
+   nir_store_var(&b, col, nir_fsat(&b, nir_fmul_imm(&b, v, 2.0)), 0xf);
+
+   for (int split = 0; split < 2; split++) {
+      split_phases = split;
+      ASSERT_TRUE(compile()) << out.log;
+      EXPECT_TRUE(out.discards);
+      ASSERT_GT(out.n_code, 0u);
+      EXPECT_EQ(out.code[out.n_code - 1], (uint64_t)0xf8000140u << 32)
+         << disasm();
+   }
+}
+
+/* a discard on a condition that folds to false (an RGB texture's alpha, 1,
+ * tested < 0.666): no discard left, no feedback point, drawn as opaque */
+TEST_F(sgx_compile_test, fragment_folded_discard_has_no_feedback)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_discard_if(&b, nir_flt_imm(&b, nir_imm_float(&b, 1.0), 0.666));
+   nir_store_var(&b, col, v, 0xf);
+
+   split_phases = true;
+   ASSERT_TRUE(compile()) << out.log;
+   EXPECT_FALSE(out.discards);
+   EXPECT_EQ(out.n_code1, 0u);
+   for (unsigned i = 0; i < out.n_blocks; i++)
+      EXPECT_NE(out.blocks[i].kind, SGX_BLOCK_FEEDBACK);
 }
 
 /* more constants than SA holds: the rest are loaded from memory (ld.a.d) */
@@ -1708,6 +1815,21 @@ TEST_F(sgx_compile_test, vertex_int_compare_select)
    EXPECT_TRUE(has("movc.ltz.i32")) << disasm();
 }
 
+/* sign(int): lower_isign's clamp to [-1, 1] back to isign, two movc (not
+ * the compare masks of imin and imax) */
+TEST_F(sgx_compile_test, vertex_int_sign)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, nir_isign(b, x), y);
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("movc.z.i32")) << disasm();
+   EXPECT_TRUE(has("movc.ltz.i32")) << disasm();
+   EXPECT_FALSE(has("testmask")) << disasm();
+}
+
 /* division: nir_lower_idiv, the high word of a product through i1 */
 TEST_F(sgx_compile_test, vertex_int_divide)
 {
@@ -2012,9 +2134,9 @@ TEST_F(sgx_compile_test, fragment_r32ui_texel_integer_one)
    EXPECT_TRUE(has(", #1 ")) << disasm();
 }
 
-/* tex_r32x4 / tex_r32x2: an RGBA32UI / RG32I texel as one dependent R32
- * read per channel, its word as it is (no RGBA8 unpack), the missing
- * channels (0, 1) */
+/* tex_r32x4 / tex_r32x2: an RGBA32UI / RG32I texel as one dependent read
+ * per plane, tagged with it, its word as it is (no RGBA8 unpack), the
+ * missing channels (0, 1); a texture() of a varying too */
 TEST_F(sgx_compile_test, r32_wide_texels_one_read_per_channel)
 {
    for (unsigned st = 0; st < 2; st++) {
@@ -2084,12 +2206,15 @@ TEST_F(sgx_compile_test, r32_wide_texels_one_read_per_channel)
       ASSERT_TRUE(compile()) << out.log;
       expect_decodes();
       ASSERT_EQ(out.n_samples, 6u);
-      unsigned fetches = 0;
+      unsigned fetches = 0, planes[2] = {0, 0};
       for (unsigned k = 0; k < out.n_samples; k++) {
          EXPECT_TRUE(out.samples[k].dependent);
          fetches += out.samples[k].fetch;
+         planes[out.samples[k].sampler & 1] |= 1u << out.samples[k].plane;
       }
       EXPECT_EQ(fetches, 2u);
+      EXPECT_EQ(planes[0], 0xfu);
+      EXPECT_EQ(planes[1], 0x3u);
       EXPECT_FALSE(has(".u8")) << disasm();
       EXPECT_FALSE(has("#255")) << disasm();
       sgx_shader_free(&out);
@@ -2100,75 +2225,52 @@ TEST_F(sgx_compile_test, r32_wide_texels_one_read_per_channel)
    }
 }
 
-/* r32 units' coordinates: the level from an explicit LOD (ceil(lod + 1/2)
- * - 1), texel floor(s * W_l), clamped or not, each channel at its
- * subtexel's center (N * x + c + 1/2) / (N * W_l); const_txs's 64x32 */
-TEST_F(sgx_compile_test, r32_wide_texel_coordinates)
+/* r32 units: each plane's read keeps the coordinate and LOD (the hardware
+ * wraps and picks the level), its plane in backend_flags */
+TEST_F(sgx_compile_test, r32_plane_reads_keep_coordinates)
 {
-   struct {
-      float s, lod;
-      bool clamp;
-      unsigned level;
-      float x;
-   } cases[] = {
-      {0.3f, 1.2f, false, 1, 9},   {-0.2f, 0.0f, true, 0, 0},
-      {1.3f, 0.4f, false, 0, 83},  {1.3f, 0.6f, true, 1, 31},
-      {0.5f, 9.0f, false, 6, 0},
-   };
-   for (auto &k : cases) {
-      start(MESA_SHADER_VERTEX);
-      nir_variable *us = var(
-         nir_var_uniform,
-         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
-         "u", -1);
-      nir_variable *r =
-         var(nir_var_shader_out, glsl_uvec4_type(), "r", VARYING_SLOT_VAR0);
-      nir_deref_instr *ud = nir_build_deref_var(&b, us);
-      struct nir_tex_builder tb = {};
-      tb.coord = nir_imm_vec2(&b, k.s, 0.25f);
-      tb.texture_deref = ud;
-      tb.sampler_deref = ud;
-      tb.dim = GLSL_SAMPLER_DIM_2D;
-      tb.dest_type = nir_type_uint32;
-      tb.lod = nir_imm_float(&b, k.lod);
-      nir_store_var(&b, r, nir_build_tex_struct(&b, nir_texop_txl, tb), 0xf);
-      struct sgx_compile_options o = {};
-      o.tex_r32x4 = 1;
-      o.tex_r32_clamp = k.clamp;
-      EXPECT_TRUE(sgx_lower_tex(b.shader, &o));
-      nir_shader_tex_pass(b.shader, const_txs, nir_metadata_control_flow, NULL);
-      bool progress;
-      do {
-         progress = false;
-         NIR_PASS(progress, b.shader, nir_opt_copy_prop);
-         NIR_PASS(progress, b.shader, nir_opt_constant_folding);
-         NIR_PASS(progress, b.shader, nir_opt_dce);
-      } while (progress);
-      unsigned n = 0;
-      nir_foreach_function_impl(impl, b.shader) {
-         nir_foreach_block(blk, impl) {
-            nir_foreach_instr(instr, blk) {
-               if (instr->type != nir_instr_type_tex)
-                  continue;
-               nir_tex_instr *t = nir_instr_as_tex(instr);
-               ASSERT_EQ(t->op, nir_texop_txl);
-               nir_src *c = &t->src[nir_tex_instr_src_index(t, nir_tex_src_coord)].src;
-               nir_src *l = &t->src[nir_tex_instr_src_index(t, nir_tex_src_lod)].src;
-               ASSERT_TRUE(nir_src_is_const(*c) && nir_src_is_const(*l));
-               float wl = (float)(64u >> k.level);
-               EXPECT_FLOAT_EQ(nir_src_as_float(*l), (float)k.level);
-               EXPECT_FLOAT_EQ(nir_src_comp_as_float(*c, 0),
-                               (4 * k.x + n + 0.5f) / (4 * wl))
-                  << "s " << k.s << " lod " << k.lod << " channel " << n;
-               EXPECT_FLOAT_EQ(nir_src_comp_as_float(*c, 1), 0.25f);
-               n++;
-            }
+   start(MESA_SHADER_VERTEX);
+   nir_variable *us = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+      "u", -1);
+   nir_variable *r =
+      var(nir_var_shader_out, glsl_uvec4_type(), "r", VARYING_SLOT_VAR0);
+   nir_deref_instr *ud = nir_build_deref_var(&b, us);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_imm_vec2(&b, 1.3f, 0.25f);
+   tb.texture_deref = ud;
+   tb.sampler_deref = ud;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_uint32;
+   tb.lod = nir_imm_float(&b, 1.2f);
+   nir_store_var(&b, r, nir_build_tex_struct(&b, nir_texop_txl, tb), 0xf);
+   struct sgx_compile_options o = {};
+   o.tex_r32x4 = 1;
+   EXPECT_TRUE(sgx_lower_tex(b.shader, &o));
+   unsigned planes = 0, n = 0;
+   nir_foreach_function_impl(impl, b.shader) {
+      nir_foreach_block(blk, impl) {
+         nir_foreach_instr(instr, blk) {
+            if (instr->type != nir_instr_type_tex)
+               continue;
+            nir_tex_instr *t = nir_instr_as_tex(instr);
+            ASSERT_EQ(t->op, nir_texop_txl);
+            nir_src *c = &t->src[nir_tex_instr_src_index(t, nir_tex_src_coord)].src;
+            nir_src *l = &t->src[nir_tex_instr_src_index(t, nir_tex_src_lod)].src;
+            ASSERT_TRUE(nir_src_is_const(*c) && nir_src_is_const(*l));
+            EXPECT_FLOAT_EQ(nir_src_comp_as_float(*c, 0), 1.3f);
+            EXPECT_FLOAT_EQ(nir_src_comp_as_float(*c, 1), 0.25f);
+            EXPECT_FLOAT_EQ(nir_src_as_float(*l), 1.2f);
+            planes |= 1u << (t->backend_flags >> 2 & 3);
+            n++;
          }
       }
-      EXPECT_EQ(n, 4u);
-      ralloc_free(b.shader);
-      b.shader = NULL;
    }
+   EXPECT_EQ(n, 4u);
+   EXPECT_EQ(planes, 0xfu);
+   ralloc_free(b.shader);
+   b.shader = NULL;
 }
 
 /* noperspective: the vertex shader writes v * gl_Position.w and w itself

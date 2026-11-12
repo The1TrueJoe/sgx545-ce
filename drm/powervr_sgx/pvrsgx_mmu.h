@@ -18,6 +18,7 @@ int pvrsgx_mmu_map_pages(struct pvrsgx_mmu *mmu, u32 dev_addr,
 			 struct page **pages, unsigned int npages, u32 flags);
 int pvrsgx_mmu_map_sgt(struct pvrsgx_mmu *mmu, u32 dev_addr,
 		       struct sg_table *sgt, u64 offset, u64 size, u32 flags);
+int pvrsgx_mmu_reserve(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
 void pvrsgx_mmu_unmap(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
 bool pvrsgx_mmu_range_empty(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
 bool pvrsgx_mmu_lookup(struct pvrsgx_mmu *mmu, u32 dev_addr, u32 *pde, u32 *pte);

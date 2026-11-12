@@ -3034,6 +3034,55 @@ vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
    set_refs(c, &in->def, x, nc);
 }
 
+/* The vertex colour's components the shader reads, from its one register
+ * (BGRA8: channel k in byte 2 - k for red and blue) to f32 or F16; b is
+ * 4 * pa + the first component */
+static void
+colour_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, unsigned b)
+{
+   struct sgx_ref raw = ref(SGX_F_PA, b / 4);
+   unsigned k0 = b % 4, nc = in->def.num_components;
+   nir_component_mask_t rd = nir_def_components_read(&in->def);
+#define COLOUR_LANE(k) (!((k) & 1) ? 2 - (k) : (k))
+   struct sgx_ref x[4];
+   if (in->def.bit_size == 16) {
+      unsigned t = new_vreg16(c, ALIGN_POT(nc, 2));
+      for (unsigned k = 0; k < nc; k += 2) {
+         x[k] = href(t, k);
+         if (k + 1 < nc)
+            x[k + 1] = href(t, k + 1);
+         if (!(rd >> k & 3))
+            continue;
+         struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F16_U8);
+         p->nops = 3;
+         p->op[0] = href(t, k);
+         p->op[1] = raw;
+         p->op[1].lane = COLOUR_LANE(k0 + k);
+         p->op[2] = raw;
+         p->op[2].lane = COLOUR_LANE(MIN2(k0 + k + 1, 3));
+         fld(p, SGX_FLD_SCALE, 1);
+         emit(c, p);
+      }
+   } else {
+      unsigned t = new_vreg(c, nc);
+      for (unsigned k = 0; k < nc; k++) {
+         x[k] = vref(t, k);
+         if (!(rd >> k & 1))
+            continue;
+         struct sgx_ins *p = ins_alloc(c, SGX_INS_ALU, SGX_OP_PCK_F32_U8);
+         p->nops = 3;
+         p->op[0] = vref(t, k);
+         p->op[1] = raw;
+         p->op[1].lane = COLOUR_LANE(k0 + k);
+         p->op[2] = ref(SGX_F_IMM, 0);
+         fld(p, SGX_FLD_SCALE, 1);
+         emit(c, p);
+      }
+   }
+#undef COLOUR_LANE
+   set_refs(c, &in->def, x, nc);
+}
+
 /* User clip plane p's distance into the TA (output select enables plane p):
  * `fdpc o<clip_o + p>, cp<p>, (x, 0), (c52, c53) [rpt=2]`, x * 1 + 0 * 1;
  * fdpc writes only its last iteration's destination, like fdp */
@@ -3338,6 +3387,10 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          vtx_unpack(c, in, r, c->opts->vtx_fmt[r / 4]);
          return;
       }
+      if (r & SGX_IN_U8) {
+         colour_unpack(c, in, r & ~SGX_IN_U8);
+         return;
+      }
       if (c->stage == MESA_SHADER_FRAGMENT && c->in_hi[at] >= 0) {
          /* an integer varying: the halves, rounded and joined */
          unsigned w = new_vreg(c, in->def.num_components);
@@ -3611,7 +3664,28 @@ is_input_load(struct sgx_ctx *c, nir_def *d)
 static unsigned
 iter_reg(const struct sgx_iter *it)
 {
-   return it->f16 ? (SGX_IN_HALF | 2 * it->pa) : it->pa;
+   return it->colour ? (SGX_IN_U8 | 4 * it->pa)
+          : it->f16  ? (SGX_IN_HALF | 2 * it->pa)
+                     : it->pa;
+}
+
+/* the PA registers an iteration fills */
+static unsigned
+iter_regs(const struct sgx_iter *it)
+{
+   return it->sample   ? (it->f16 ? 2 : 1)
+          : it->colour ? 1
+          : it->f16    ? (it->comps + 1) / 2
+                       : it->comps;
+}
+
+/* the PA register of an in_reg entry */
+static unsigned
+in_reg_pa(int r)
+{
+   return r & SGX_IN_HALF ? (r & ~SGX_IN_HALF) / 2
+          : r & SGX_IN_U8 ? (r & ~SGX_IN_U8) / 4
+                          : (unsigned)r;
 }
 
 /* pds_samples_alone: a set none of whose varyings anything reads but
@@ -3662,7 +3736,8 @@ sample_only_load(struct sgx_ctx *c, nir_intrinsic_instr *ld, unsigned comps)
          return false;
       nir_tex_instr *t = nir_instr_as_tex(ui);
       int ci = nir_tex_instr_src_index(t, nir_tex_src_coord);
-      if (t->op != nir_texop_tex || ci < 0 || u != &t->src[ci].src ||
+      if (t->op != nir_texop_tex || (t->backend_flags & SGX_TEX_PLANAR) ||
+          ci < 0 || u != &t->src[ci].src ||
           nir_tex_instr_src_index(t, nir_tex_src_bias) >= 0 ||
           nir_tex_instr_src_index(t, nir_tex_src_projector) >= 0 ||
           _mesa_hash_table_search(c->proj, t) ||
@@ -3693,7 +3768,7 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
       return;
    for (unsigned n = 0; n < c->n_iters;) {
       struct sgx_iter *it = &c->iters[n];
-      unsigned regs = it->f16 ? (it->comps + 1) / 2 : it->comps;
+      unsigned regs = iter_regs(it);
       /* (a flat set isn't one: the PDS would interpolate its coordinate) */
       if (it->sample || it->pointcoord || it->flat || it->set >= SGX_MAX_SETS) {
          n++;
@@ -3714,7 +3789,7 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
                at >= 0 && at < (int)ARRAY_SIZE(c->in_reg) ? c->in_reg[at] : -1;
             if (r < 0)
                continue;
-            unsigned reg = r & SGX_IN_HALF ? (r & ~SGX_IN_HALF) / 2 : r;
+            unsigned reg = in_reg_pa(r);
             if (reg < it->pa || reg >= it->pa + regs)
                continue;
             any = true;
@@ -3752,6 +3827,12 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
                c->in_reg[j] = SGX_IN_HALF | (h - 2 * regs);
             else if (h / 2 >= it->pa)
                c->in_reg[j] = -1;
+         } else if (r & SGX_IN_U8) {
+            unsigned q = r & ~SGX_IN_U8;
+            if (q / 4 >= end)
+               c->in_reg[j] = SGX_IN_U8 | (q - 4 * regs);
+            else if (q / 4 >= it->pa)
+               c->in_reg[j] = -1;
          } else if ((unsigned)r >= end) {
             c->in_reg[j] = r - regs;
          } else if ((unsigned)r >= it->pa) {
@@ -3773,14 +3854,6 @@ drop_sample_only_iters(struct sgx_ctx *c, nir_function_impl *impl)
  * fewer DOUTIs a pixel. Iterations fill PA in list order, so
  * the input PA registers are renamed to the new order, after allocation. Not
  * when a repeat or a PA vreg would straddle a moved boundary. */
-static unsigned
-iter_regs(const struct sgx_iter *it)
-{
-   return it->sample ? (it->f16 ? 2 : 1)
-          : it->f16  ? (it->comps + 1) / 2
-                     : it->comps;
-}
-
 static const struct sgx_sample *
 iter_sample(struct sgx_ctx *c, const struct sgx_iter *it)
 {
@@ -3841,8 +3914,8 @@ interleave_samples(struct sgx_ctx *c)
             for (unsigned k = 0; k < c->n_samples && !busy; k++)
                busy |= !c->samples[k]->dependent &&
                        c->samples[k]->coord_pa == (int)pi->pa;
-            if (pi->sample || pi->pointcoord || pi->set >= SGX_MAX_SETS ||
-                pi->f16 != (bool)f16 || busy)
+            if (pi->sample || pi->pointcoord || pi->colour ||
+                pi->set >= SGX_MAX_SETS || pi->f16 != (bool)f16 || busy)
                continue;
             partner[s] = p;
             taken[p] = true;
@@ -3919,7 +3992,7 @@ flat_load(struct sgx_ctx *c, nir_intrinsic_instr *in)
    int r = at >= 0 && at < (int)ARRAY_SIZE(c->in_reg) ? c->in_reg[at] : -1;
    if (r < 0)
       return false;
-   unsigned reg = r & SGX_IN_HALF ? (r & ~SGX_IN_HALF) / 2 : r;
+   unsigned reg = in_reg_pa(r);
    for (unsigned i = 0; i < c->n_iters; i++) {
       const struct sgx_iter *it = &c->iters[i];
       if (!it->sample && reg >= it->pa && reg < it->pa + iter_regs(it))
@@ -4516,6 +4589,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    s->coord_pa = -1;
    s->sampler = tex->texture_index;
    s->fetch = tex->backend_flags & SGX_TEX_FETCH;
+   bool planar = tex->backend_flags & SGX_TEX_PLANAR;
+   s->plane = tex->backend_flags >> SGX_TEX_PLANE_SHIFT & 3;
    /* non-dependent: the coordinate is (the start of) a varying the PDS
     * iterates, no bias; the PDS then samples and leaves the texel in pa */
    nir_legacy_src ls = nir_legacy_chase_src(&tex->src[ci].src);
@@ -4527,6 +4602,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
                 : NULL;
    if (he && !ss)
       ss = _mesa_hash_table_search(c->sample_set, he->data);
+   if (planar)
+      ss = he = NULL;
    if (ss) {
       /* a set only samples read: no plain iteration (drop_sample_only_iters) */
       s->dependent = false;
@@ -4549,7 +4626,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          sgx_fail(c, "projected read of a varying that isn't iterated");
          return;
       }
-   } else if (!vertex && bi < 0 && pi < 0) {
+   } else if (!vertex && bi < 0 && pi < 0 && !planar) {
       /* (a whole varying, or its first components; directly or through a
        * mov that takes its first components in order) */
       int pa = -1;
@@ -6301,9 +6378,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
       bool real = false;
       for (unsigned i = 0; i < c->n_iters; i++) {
          const struct sgx_iter *it = &c->iters[i];
-         npa = MAX2(npa, it->pa + (it->sample ? (it->f16 ? 2 : 1)
-                                   : it->f16  ? (it->comps + 1) / 2
-                                              : it->comps));
+         npa = MAX2(npa, it->pa + iter_regs(it));
          real |= !it->pointcoord;
       }
       if (!real)
@@ -6328,9 +6403,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             const struct sgx_iter *it = &c->iters[n];
             if (it->sample || (int)it->pa != i->smp->coord_pa)
                continue;
-            for (unsigned j = it->pa;
-                 j < it->pa + (it->f16 ? (it->comps + 1) / 2 : it->comps) &&
-                 j < 128;
+            for (unsigned j = it->pa; j < it->pa + iter_regs(it) && j < 128;
                  j++)
                last[j] = MAX2(last[j], (int)(2 * i->ip));
          }
@@ -7533,6 +7606,13 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    list_inithead(&c->ins);
 
    sgx_lower(c);
+   if (c->failed) {
+      out->stage = c->stage;
+      out->log = c->log;
+      c->log = NULL;
+      ralloc_free(c);
+      return -1;
+   }
    if (opts->verbose)
       nir_print_shader(nir, stderr);
 
@@ -7609,6 +7689,15 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       ret = sgx_finish_program(c, out);
       if (ret == 0 && split)
          split_output(out);
+      /* a program that discards (phase 0 of a split one) ends in its
+       * feedback point, where the driver puts the visibility test */
+      if (ret == 0 && out->discards &&
+          (!out->n_blocks ||
+           out->blocks[out->n_blocks - 1].kind != SGX_BLOCK_FEEDBACK ||
+           out->blocks[out->n_blocks - 1].at != out->n_code - 1)) {
+         sgx_fail(c, "discard: the feedback point isn't the last instruction");
+         ret = -1;
+      }
    }
    out->stage = c->stage;
    out->log = c->log;

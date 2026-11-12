@@ -31,6 +31,9 @@ static const nir_shader_compiler_options options = {
    .lower_fpow = true,
    .lower_fmod = true,
    .lower_fsign = true,
+   /* (integers are floats by then: a clamp to [-1, 1] stays imin/imax,
+    * which nir_lower_int_to_float takes, not isign, which it doesn't) */
+   .lower_isign = true,
    .lower_fceil = true,
    .lower_ftrunc = true,
    .lower_fround_even = true,
@@ -1972,13 +1975,18 @@ assign_io(struct sgx_ctx *c)
             continue;
          struct sgx_iter *it = &c->iters[c->n_iters++];
          it->set = set;
-         it->comps = MIN2(comps, 4);
+         /* (the colour source: four components packed BGRA8 in one
+          * register) */
+         it->colour = c->vary->colour && set == 0;
+         it->comps = it->colour ? 4 : MIN2(comps, 4);
          it->pa = pa;
-         it->f16 = set16[set];
+         it->f16 = set16[set] && !it->colour;
          it->flat = flat[set] && !smooth[set];
          /* F16: in_reg holds SGX_IN_HALF | the half index */
-         pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
-         pa += it->f16 ? (it->comps + 1) / 2 : it->comps;
+         pbase[set] = it->colour ? (int)(SGX_IN_U8 | 4 * pa)
+                      : it->f16  ? (int)(SGX_IN_HALF | 2 * pa)
+                                 : (int)pa;
+         pa += it->colour ? 1 : it->f16 ? (it->comps + 1) / 2 : it->comps;
       }
       c->n_pa_inputs = pa;
       nir_foreach_shader_in_variable (var, s)
@@ -2065,6 +2073,93 @@ copysign_instr(nir_builder *b, nir_alu_instr *alu, void *data)
    return false;
 }
 
+/* A shift by a constant as the integer arithmetic nir_lower_int_to_float
+ * takes (GLSL before 1.30 has no shifts: they come from the front end's
+ * lowering, e.g. a division by a power of two as a shift of iabs): ishl a
+ * multiply, ushr a division, ishr a division rounded down. */
+static bool
+lower_int_shift(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if ((alu->op != nir_op_ishl && alu->op != nir_op_ushr &&
+        alu->op != nir_op_ishr) ||
+       alu->def.bit_size != 32 || !nir_src_is_const(alu->src[1].src))
+      return false;
+   unsigned n = nir_alu_src_as_uint(alu->src[1]) & 31;
+   if (n > 23)
+      return false; /* past F32's exact integers */
+   b->cursor = nir_before_instr(&alu->instr);
+   nir_def *x = nir_ssa_for_alu_src(b, alu, 0);
+   nir_def *p = nir_imm_int(b, 1 << n), *r;
+   if (alu->op == nir_op_ishl) {
+      r = nir_imul(b, x, p);
+   } else if (alu->op == nir_op_ushr) {
+      r = nir_idiv(b, x, p);
+   } else {
+      /* (x + (x < 0 ? 1 - 2^n : 0)) / 2^n, truncated: floor(x / 2^n) */
+      nir_def *adj = nir_bcsel(b, nir_ilt_imm(b, x, 0),
+                               nir_imm_int(b, 1 - (1 << n)), nir_imm_int(b, 0));
+      r = nir_idiv(b, nir_iadd(b, x, adj), p);
+   }
+   nir_def_replace(&alu->def, r);
+   return true;
+}
+
+/* an integer op nir_lower_int_to_float has no float for (it asserts) */
+static bool
+int_to_float_takes(nir_op op)
+{
+   switch (op) {
+   case nir_op_mov:
+   case nir_op_vec2:
+   case nir_op_vec3:
+   case nir_op_vec4:
+   case nir_op_bcsel:
+   case nir_op_b2i32:
+   case nir_op_i2f32:
+   case nir_op_u2f32:
+   case nir_op_f2i32:
+   case nir_op_f2u32:
+   case nir_op_iadd:
+   case nir_op_isub:
+   case nir_op_imul:
+   case nir_op_idiv:
+   case nir_op_iabs:
+   case nir_op_ineg:
+   case nir_op_imax:
+   case nir_op_imin:
+   case nir_op_umax:
+   case nir_op_umin:
+   case nir_op_i32csel_gt:
+   case nir_op_i32csel_ge:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static bool
+check_int_ops(struct sgx_ctx *c, nir_shader *s)
+{
+   nir_foreach_function_impl (impl, s) {
+      nir_foreach_block (block, impl) {
+         nir_foreach_instr (instr, block) {
+            if (instr->type != nir_instr_type_alu)
+               continue;
+            nir_alu_instr *alu = nir_instr_as_alu(instr);
+            nir_alu_type t = nir_op_infos[alu->op].output_type;
+            if (alu->def.bit_size == 1 || int_to_float_takes(alu->op) ||
+                (nir_alu_type_get_base_type(t) != nir_type_int &&
+                 nir_alu_type_get_base_type(t) != nir_type_uint))
+               continue;
+            sgx_fail(c, "unsupported integer op %s",
+                     nir_op_infos[alu->op].name);
+            return false;
+         }
+      }
+   }
+   return true;
+}
+
 static bool
 all_offsets(const nir_instr *instr, const void *data)
 {
@@ -2109,45 +2204,17 @@ txf_to_txl_instr(nir_builder *b, nir_tex_instr *tex, void *data)
    return true;
 }
 
-/* a txl of channel tex's unit at coordinate coord and level lod, its first
- * component */
-static nir_def *
-r32_read(nir_builder *b, nir_tex_instr *tex, nir_def *coord, nir_def *lod)
-{
-   int ti = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
-   int si = nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
-   nir_tex_instr *t = nir_tex_instr_create(b->shader, ti >= 0 ? 4 : 2);
-   t->op = nir_texop_txl;
-   t->sampler_dim = tex->sampler_dim;
-   t->is_array = tex->is_array;
-   t->coord_components = tex->coord_components;
-   t->dest_type = tex->dest_type;
-   t->texture_index = t->sampler_index = tex->texture_index;
-   t->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
-   t->src[1] = nir_tex_src_for_ssa(nir_tex_src_lod, lod);
-   if (ti >= 0) {
-      t->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
-                                      tex->src[ti].src.ssa);
-      t->src[3] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
-                                      tex->src[si >= 0 ? si : ti].src.ssa);
-   }
-   if (tex->op == nir_texop_txf)
-      t->backend_flags |= SGX_TEX_FETCH;
-   nir_def_init(&t->instr, &t->def, 4, tex->def.bit_size);
-   nir_builder_instr_insert(b, &t->instr);
-   return nir_channel(b, &t->def, 0);
-}
-
-/* a texel of a tex_r32x4 / tex_r32x2 unit: channel c of texel x is R32
- * texel N * x + c. The level is picked here (NEAREST_MIPMAP_NEAREST's
- * rule), since the wide view's footprint would pick another, and each
- * channel is read at its subtexel's center at that level */
+/* a texel of a tex_r32x4 / tex_r32x2 unit: N planes, each an R32 texture
+ * of the texel's size, channel c in plane c. One read per plane at the
+ * read's own coordinate and LOD, tagged with its plane
+ * (sgx_sample_info.plane); the driver points each at its plane */
 static bool
 r32_instr(nir_builder *b, nir_tex_instr *tex, void *data)
 {
    const struct sgx_compile_options *o = data;
    unsigned u = tex->texture_index;
    if (!o || u >= 32 || nir_tex_instr_is_query(tex) ||
+       (tex->backend_flags & SGX_TEX_PLANAR) ||
        tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ||
        tex->sampler_dim == GLSL_SAMPLER_DIM_BUF ||
        tex->sampler_dim == GLSL_SAMPLER_DIM_MS ||
@@ -2158,70 +2225,23 @@ r32_instr(nir_builder *b, nir_tex_instr *tex, void *data)
    if (!n)
       return false;
    b->cursor = nir_before_instr(&tex->instr);
-   bool fetch = tex->op == nir_texop_txf;
-   nir_def *coord = tex->src[nir_tex_instr_src_index(tex, nir_tex_src_coord)].src.ssa;
-   unsigned dims = tex->coord_components - tex->is_array;
-   nir_def *size = nir_channels(b, nir_get_texture_size(b, tex),
-                                nir_component_mask(dims));
-   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
-   nir_def *lod;
-   if (fetch) {
-      lod = li >= 0 ? nir_i2f32(b, tex->src[li].src.ssa) : nir_imm_float(b, 0);
-   } else {
-      nir_def *lambda;
-      if (tex->op == nir_texop_txl) {
-         lambda = tex->src[li].src.ssa;
-      } else if (b->shader->info.stage == MESA_SHADER_FRAGMENT) {
-         nir_def *p = nir_fmul(b, nir_channels(b, coord, nir_component_mask(dims)),
-                               nir_i2f32(b, size));
-         lambda = nir_flog2(b, nir_fmax(b, nir_fast_length(b, nir_ddx(b, p)),
-                                        nir_fast_length(b, nir_ddy(b, p))));
-         int bi = nir_tex_instr_src_index(tex, nir_tex_src_bias);
-         if (bi >= 0)
-            lambda = nir_fadd(b, lambda, tex->src[bi].src.ssa);
-      } else {
-         lambda = nir_imm_float(b, 0);
-      }
-      /* ceil(lambda + 1/2) - 1 above 1/2, else the base level */
-      nir_def *levels = nir_build_texture_query(
-         b, tex, nir_texop_query_levels, 1, nir_type_int32, false, false);
-      lod = nir_fmax(b, nir_fadd_imm(b, nir_fceil(b, nir_fadd_imm(b, lambda, 0.5)), -1.0),
-                     nir_imm_float(b, 0.0));
-      lod = nir_fmin(b, lod, nir_fadd_imm(b, nir_i2f32(b, levels), -1.0));
+   /* (a dependent read has no projection: the divide here) */
+   int pi = nir_tex_instr_src_index(tex, nir_tex_src_projector);
+   if (pi >= 0) {
+      int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+      nir_def *q = nir_frcp(b, tex->src[pi].src.ssa);
+      nir_src_rewrite(&tex->src[ci].src, nir_fmul(b, tex->src[ci].src.ssa, q));
+      nir_tex_instr_remove_src(tex, pi);
    }
-   /* the level's size and texel center (i + 0.5) / size_l, s apart */
-   nir_def *sz = nir_u2f32(b, nir_umax(b, nir_ushr(b, size, nir_f2u32(b, lod)),
-                                       nir_imm_int(b, 1)));
-   nir_def *x;
-   nir_def *c[4];
-   for (unsigned d = 0; d < tex->coord_components; d++) {
-      nir_def *v = nir_channel(b, coord, d);
-      if (d >= dims)
-         c[d] = fetch ? nir_i2f32(b, v) : v;
-      else if (fetch)
-         c[d] = nir_fmul(b, nir_fadd_imm(b, nir_i2f32(b, v), 0.5),
-                         nir_frcp(b, nir_channel(b, sz, d)));
-      else
-         c[d] = v;
-   }
-   nir_def *w = nir_channel(b, sz, 0);
-   if (fetch) {
-      x = nir_i2f32(b, nir_channel(b, coord, 0));
-   } else {
-      x = nir_ffloor(b, nir_fmul(b, nir_channel(b, coord, 0), w));
-      if (o->tex_r32_clamp >> u & 1)
-         x = nir_fmin(b, nir_fmax(b, x, nir_imm_float(b, 0.0)),
-                      nir_fadd_imm(b, w, -1.0));
-   }
-   /* (a repeat's x outside [0, W) is the hardware's s wrap at N * W) */
-   nir_def *rw = nir_frcp(b, nir_fmul_imm(b, w, n));
-   nir_def *x4 = nir_fmul_imm(b, x, n);
    unsigned bits = tex->def.bit_size;
    nir_def *res[4];
    for (unsigned k = 0; k < 4; k++) {
       if (k < n) {
-         c[0] = nir_fmul(b, nir_fadd_imm(b, x4, k + 0.5), rw);
-         res[k] = r32_read(b, tex, nir_vec(b, c, tex->coord_components), lod);
+         nir_tex_instr *t =
+            nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
+         t->backend_flags |= SGX_TEX_PLANAR | k << SGX_TEX_PLANE_SHIFT;
+         nir_builder_instr_insert(b, &t->instr);
+         res[k] = nir_channel(b, &t->def, 0);
       } else if (k < 3) {
          res[k] = nir_imm_intN_t(b, 0, bits);
       } else {
@@ -2252,6 +2272,55 @@ sgx_lower_tex(nir_shader *s, const struct sgx_compile_options *opts)
    NIR_PASS(progress, s, nir_shader_tex_pass, txf_to_txl_instr,
             nir_metadata_control_flow, NULL);
    return progress;
+}
+
+/* src i of alu is the constant k in every component it reads */
+static bool
+alu_src_is_k(nir_alu_instr *alu, unsigned i, int64_t k)
+{
+   if (!nir_src_is_const(alu->src[i].src))
+      return false;
+   for (unsigned c = 0; c < alu->def.num_components; c++)
+      if (nir_src_comp_as_int(alu->src[i].src, alu->src[i].swizzle[c]) != k)
+         return false;
+   return true;
+}
+
+/* imin(imax(x, -1), 1) (lower_isign's, for the float path) back to isign:
+ * the integer units' isign is two movc */
+static bool
+isign_clamp_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   nir_op in_op;
+   int64_t ko, ki;
+   if (alu->op == nir_op_imin) {
+      in_op = nir_op_imax, ko = 1, ki = -1;
+   } else if (alu->op == nir_op_imax) {
+      in_op = nir_op_imin, ko = -1, ki = 1;
+   } else {
+      return false;
+   }
+   for (unsigned o = 0; o < 2; o++) {
+      if (!alu_src_is_k(alu, 1 - o, ko))
+         continue;
+      nir_alu_instr *in = nir_def_as_alu_or_null(alu->src[o].src.ssa);
+      if (!in || in->op != in_op ||
+          in->def.num_components != alu->def.num_components)
+         continue;
+      bool ident = true;
+      for (unsigned c = 0; c < alu->def.num_components; c++)
+         ident &= alu->src[o].swizzle[c] == c;
+      if (!ident)
+         continue;
+      for (unsigned i = 0; i < 2; i++) {
+         if (!alu_src_is_k(in, 1 - i, ki))
+            continue;
+         b->cursor = nir_before_instr(&alu->instr);
+         nir_def_replace(&alu->def, nir_isign(b, nir_ssa_for_alu_src(b, in, i)));
+         return true;
+      }
+   }
+   return false;
 }
 
 /* the w varying of SGX_NOPERSPECTIVE_W at a free slot, when the stage has a
@@ -2520,12 +2589,18 @@ sgx_lower(struct sgx_ctx *c)
    if (c->opts->native_integers) {
       /* integers stay integers; booleans are 0 / ~0 (testmask's dword) */
       NIR_PASS(_, s, nir_lower_bool_to_int32);
+      NIR_PASS(_, s, nir_shader_alu_pass, isign_clamp_instr,
+               nir_metadata_control_flow, NULL);
    } else {
       NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr,
                nir_metadata_control_flow, NULL);
       NIR_PASS(_, s, nir_shader_alu_pass, i2f16_instr,
                nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_shader_alu_pass, lower_int_shift,
+               nir_metadata_control_flow, NULL);
       NIR_PASS(_, s, nir_opt_dce);
+      if (!check_int_ops(c, s))
+         return;
       NIR_PASS(_, s, nir_lower_int_to_float);
       NIR_PASS(_, s, nir_opt_copy_prop);
       /* (a 16-bit bcsel would become fcsel, an f32-only opcode: b32csel
