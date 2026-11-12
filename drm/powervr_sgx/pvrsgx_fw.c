@@ -874,24 +874,62 @@ struct sweep_variant {
 };
 
 /*
- * With 0xa74 set, the entry program faults at PDS_EXEC_BASE + 0 (stage 1, log
- * 2026-11-12-0151). Whose fetch is it? The baseline; a program with no DOUT;
- * then a page mapped at PDS_EXEC_BASE holding the entry program, or its data
- * row and a HALT. If the fetch there is a PDS program's, the first runs the
- * microkernel and the second ends the fault with no task. Last, a page whose
- * rows 0 and 1 branch 64 KiB on, which needs no data or code start: a fault
- * at the page + 64 KiB means a PDS program there executes.
+ * The DOUTU's task fetches its code linearly from PDS_EXEC_BASE + 0 (stage 1,
+ * log 2026-11-12-0202). Alias the code arena's page 0, the image's first
+ * 4 KiB with its event entry, ladder and init, there: does the microkernel
+ * initialise from it? V4, the branch page, is dropped: a USSE fetch would
+ * run its words as USSE code.
  */
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .prog = PVRSGX_SWEEP_PROG_HALT },
-	{ .flags = PVRSGX_SWEEP_EXEC0_ENTRY },
-	{ .flags = PVRSGX_SWEEP_EXEC0_HALT },
-	{ .flags = PVRSGX_SWEEP_EXEC0_BRA },
+	{ .flags = PVRSGX_SWEEP_EXEC0_ALIAS },
 };
+
+/* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
+static int alias_map(struct pvrsgx_device *sdev)
+{
+	u32 va = (u32)pvrsgx_heaps(sdev)->pds_pixel.base;
+	int err;
+
+	err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, va, sdev->fw.code.pages, 1,
+				   SGX_MMU_PTE_READONLY);
+	if (!err)
+		drm_info(&sdev->base, "sweep: code page 0 aliased at PDS_EXEC_BASE 0x%08x\n", va);
+	return err;
+}
+
+static void alias_unmap(struct pvrsgx_device *sdev)
+{
+	pvrsgx_mmu_unmap(sdev->kernel_mmu, (u32)pvrsgx_heaps(sdev)->pds_pixel.base, PAGE_SIZE);
+}
+
+/*
+ * The alias variant runs to its predicted end, a fault at the next page
+ * after init: log EVENT_TIMER, INIT_STATUS and the BIF every 10 ms for
+ * 100 ms, then the microkernel's status words.
+ */
+static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *name)
+{
+	u32 tm[10], is[10], bi[10];
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(tm); i++) {
+		usleep_range(10000, 11000);
+		tm[i] = sgx_rd(sdev, SGX_CR_EVENT_TIMER);
+		is[i] = READ_ONCE(hc[HOSTCTL_INIT_STATUS]);
+		bi[i] = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+	}
+	drm_info(&sdev->base, "sweep %s: timer %x %x %x %x %x %x %x %x %x %x\n", name,
+		 tm[0], tm[1], tm[2], tm[3], tm[4], tm[5], tm[6], tm[7], tm[8], tm[9]);
+	drm_info(&sdev->base, "sweep %s: init %x %x %x %x %x %x %x %x %x %x\n", name,
+		 is[0], is[1], is[2], is[3], is[4], is[5], is[6], is[7], is[8], is[9]);
+	drm_info(&sdev->base, "sweep %s: BIF int %x %x %x %x %x %x %x %x %x %x\n", name,
+		 bi[0], bi[1], bi[2], bi[3], bi[4], bi[5], bi[6], bi[7], bi[8], bi[9]);
+	pvrsgx_fw_dump_status_words(sdev);
+}
 
 #define EXEC0_FLAGS	(PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT | \
 			 PVRSGX_SWEEP_EXEC0_BRA)
+#define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -934,7 +972,7 @@ static int exec0_fill(struct pvrsgx_device *sdev)
 /* The flags sweep_name() names; it prints the rest as hex. */
 #define SWEEP_NAMED	((u32)(PVRSGX_SWEEP_ENABLE | PVRSGX_SWEEP_PDS_INV | \
 			       PVRSGX_SWEEP_A68_HOLE | PVRSGX_SWEEP_PDS_CTRL | \
-			       EXEC0_FLAGS))
+			       SWEEP_PAGE_FLAGS))
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
@@ -970,6 +1008,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " exec base: HALT");
 	if (sv->flags & PVRSGX_SWEEP_EXEC0_BRA)
 		n += scnprintf(buf + n, len - n, " exec base: bra");
+	if (sv->flags & PVRSGX_SWEEP_EXEC0_ALIAS)
+		n += scnprintf(buf + n, len - n, " exec base: code page 0");
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
@@ -1186,6 +1226,11 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			err = exec0_fill(sdev);
 			if (err)
 				return err;
+			if (sv->flags & PVRSGX_SWEEP_EXEC0_ALIAS) {
+				err = alias_map(sdev);
+				if (err)
+					return err;
+			}
 			pvrsgx_reset(sdev, true);
 			/*
 			 * The SGX530's SOFT_RESET has no PDS bit: a unit still busy
@@ -1206,7 +1251,13 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			init_kick(sdev);
 		}
 		snprintf(when, sizeof(when), "variant %u (%s)", v, name);
-		ran = ladder_ran(sdev, when, &held);
+		if (sv->flags & PVRSGX_SWEEP_EXEC0_ALIAS) {
+			/* Not a ladder check: watch init to its predicted fault. */
+			alias_watch(sdev, hc, when);
+			ran = 0;
+		} else {
+			ran = ladder_ran(sdev, when, &held);
+		}
 		if (ran > 0) {
 			drm_info(&sdev->base, "sweep: %s runs the diagnostic ladder\n", when);
 			return 0;
@@ -1229,12 +1280,20 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			vendor_fault |= sv->vendor != 0;
 			err = bif_recover(sdev, when);
-			if (err)
+			if (err) {
+				if (sv->flags & PVRSGX_SWEEP_EXEC0_ALIAS)
+					alias_unmap(sdev);
 				return err;
+			}
 		}
 		if (sdev->sweep_nsaved) {
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			sweep_restore(sdev);
+		}
+		if (sv->flags & PVRSGX_SWEEP_EXEC0_ALIAS) {
+			sgx_wr(sdev, cr->event_pds_enable, 0);
+			pvrsgx_reset(sdev, true);
+			alias_unmap(sdev);
 		}
 	}
 	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");
