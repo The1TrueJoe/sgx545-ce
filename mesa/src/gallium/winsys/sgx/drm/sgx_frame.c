@@ -105,6 +105,19 @@ sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo)
       d->kif->bo_prepare_target(d, bo);
 }
 
+bool
+sgxws_target_twiddled(const struct sgxws_target *t)
+{
+   return t->t1_layout == SGX_TEXSTATE_LAYOUT_TWIDDLED;
+}
+
+void
+sgxws_bo_cpu_written(struct sgxws_bo *bo)
+{
+   if (bo->impl)
+      bo->impl->cpu_dirty = true;
+}
+
 int
 sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
                uint32_t size, uint32_t align)
@@ -1341,6 +1354,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->bias_units = 0;
    c->bias_factor = 0.0f;
    c->clip = (struct sgxws_rect){0, 0, rt->w, rt->h};
+   c->damage = (struct sgxws_rect){0, 0, 0, 0};
 
    /* the render details are the target's: written at the kick, once its
     * previous render is done */
@@ -1621,6 +1635,22 @@ vpgen_object(struct sgxws_ctx *c, bool set, const struct sgxws_rect *tiles,
             vertices_per_task(c->dev->core, 4));
 }
 
+/* the pixels a draw or clear may change: the clip it draws within */
+static void
+add_damage(struct sgxws_ctx *c)
+{
+   struct sgxws_rect *d = &c->damage;
+
+   if (d->x1 <= d->x0) {
+      *d = c->clip;
+      return;
+   }
+   d->x0 = MIN2(d->x0, c->clip.x0);
+   d->y0 = MIN2(d->y0, c->clip.y0);
+   d->x1 = MAX2(d->x1, c->clip.x1);
+   d->y1 = MAX2(d->y1, c->clip.y1);
+}
+
 /* Make r the visible pixels (STATE.md "Scissor and partial viewports"): reset
  * the bits over the whole target within the old rectangle's tiles, and set
  * them over r, which leaves r's tiles as the region clip the draws inherit.
@@ -1731,6 +1761,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
    vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0,
             8);
    c->draws++;
+   add_damage(c);
    return 0;
 }
 
@@ -2069,6 +2100,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
                vs->in_dwords, vs->out_dwords, vs->temps,
                vertices_per_task(c->dev->core, vs->out_dwords));
    c->draws++;
+   add_damage(c);
    /* SGX_TA_SPLIT: the GPU tiles what is recorded while the rest is */
    if (c->dev->ta_split && ++c->seg_draws >= c->dev->ta_split)
       return kick_ta(c);

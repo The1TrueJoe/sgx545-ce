@@ -860,6 +860,10 @@ sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
       }
    }
 
+   /* the CPU wrote a buffer another device shares: the next job flushes it */
+   if (res->shared && (ptrans->usage & PIPE_MAP_WRITE))
+      sgxws_bo_cpu_written(&res->bo);
+
    if (ptrans->resource->target == PIPE_BUFFER &&
        (ptrans->usage & PIPE_MAP_WRITE)) {
       if (res->vbo.map)
