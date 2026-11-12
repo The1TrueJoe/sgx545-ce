@@ -496,6 +496,12 @@ z scale.
     position; TSP word 0 counts it as one 4-component set (5) and word 1
     is 0. The pixel program iterates it with DOUTI source 0x20, 4
     components (`27c10000`), not as tc0 (capture: `es1base`, 2026-11-11).
+    It arrives as **one packed dword in pa0**, not as 4 F32: the DDK's whole
+    pixel program is `mov o0, pa0` after the `phas.i`, so pa0 is the pixel
+    as the PBE takes it, BGRA8 (B in bits 0-7, A in 24-31), and the frame is
+    right. Its DOUTU word 1 iterates one dword (`01000004`); the DOUTI has
+    b21 = 0 (capture: `es1base`). What b21 = 1 does to the format is not
+    captured.
     That b11 is what turns the first set into the color source is a
     **guess** (no capture without it). No second color source (0x21) has
     been seen.
