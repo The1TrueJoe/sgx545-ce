@@ -238,7 +238,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	mutex_unlock(&sdev->done_lock);
 
 	if (reap || !list_empty_careful(&sdev->inval_waits))
-		queue_work(sdev->wq, &sdev->reap_work);
+		queue_work(sdev->free_wq, &sdev->reap_work);
 	if (more && pvrsgx_job_fault_check(sdev))
 		return;
 	/* With a count the interrupt does it, and the poll is only a backstop. */
@@ -422,20 +422,30 @@ out:
 	return DRM_GPU_SCHED_STAT_RESET;
 }
 
-static void pvrsgx_free_job(struct drm_sched_job *sched_job)
+/* The puts that can reach a VM's release, which takes reservations. */
+static void free_job_work(struct work_struct *work)
 {
-	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
+	struct pvrsgx_job *job = container_of(work, struct pvrsgx_job, free_work);
 
-	/* Taken at submit, for this job: the GPU may suspend once none are left. */
-	pvrsgx_power_put(job->ctx->sdev, 1);
-
-	drm_sched_job_cleanup(sched_job);
-	dma_fence_put(job->hw_fence);
-	kfree(job->hw_fence_mem);	/* never run */
 	pvrsgx_prime_put(job);
 	pvrsgx_render_job_fini(job);
 	context_put(job->ctx);
 	kfree(job);
+}
+
+static void pvrsgx_free_job(struct drm_sched_job *sched_job)
+{
+	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
+	struct pvrsgx_device *sdev = job->ctx->sdev;
+
+	/* Taken at submit, for this job: the GPU may suspend once none are left. */
+	pvrsgx_power_put(sdev, 1);
+
+	drm_sched_job_cleanup(sched_job);
+	dma_fence_put(job->hw_fence);
+	kfree(job->hw_fence_mem);	/* never run */
+	INIT_WORK(&job->free_work, free_job_work);
+	queue_work(sdev->free_wq, &job->free_work);
 }
 
 static const struct drm_sched_backend_ops pvrsgx_sched_ops = {
@@ -483,12 +493,18 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	sdev->wq = alloc_workqueue("powervr_sgx", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
 	if (!sdev->wq)
 		return -ENOMEM;
+	sdev->free_wq = alloc_workqueue("powervr_sgx_free", WQ_UNBOUND, 0);
+	if (!sdev->free_wq) {
+		destroy_workqueue(sdev->wq);
+		return -ENOMEM;
+	}
 	lockdep_prime(sdev);
 	pvrsgx_coredump_init(sdev);
 	sdev->fence_context = dma_fence_context_alloc(1);
 	err = drm_sched_init(&sdev->sched, &args);
 	if (err) {
 		pvrsgx_coredump_fini(sdev);
+		destroy_workqueue(sdev->free_wq);
 		destroy_workqueue(sdev->wq);
 	}
 	return err;
@@ -567,6 +583,8 @@ void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 	drm_sched_fini(&sdev->sched);
 	cancel_delayed_work_sync(&sdev->poll_work);
 	cancel_work_sync(&sdev->reap_work);
+	/* Drains the jobs' final puts, which drm_sched_fini may have queued. */
+	destroy_workqueue(sdev->free_wq);
 	destroy_workqueue(sdev->wq);
 	pvrsgx_coredump_fini(sdev);
 	dma_fence_put(sdev->last_fence);
@@ -634,9 +652,12 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	if (err)
 		goto err_put;
 	pvrsgx_vm_user_get(ctx->vm);
-	err = xa_alloc(&sfile->contexts, &args->handle, ctx, xa_limit_32b, GFP_KERNEL);
-	if (err)
+	err = xa_alloc(&sfile->contexts, &args->handle, ctx,
+		       XA_LIMIT(1, PVRSGX_MAX_FILE_CONTEXTS), GFP_KERNEL);
+	if (err) {
+		err = err == -EBUSY ? -ENOSPC : err;
 		goto err_entity;
+	}
 	return 0;
 
 err_entity:
@@ -953,14 +974,14 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	}
 
 	/*
-	 * In order: a job's waits on earlier jobs of the submit, then arm, publish
-	 * and push it. An armed job must be pushed, so a wait that can't be added
-	 * fails this job and those after it; the earlier ones are already queued
-	 * (@failed_index). The VM's reservation, held throughout, keeps the order.
+	 * All or nothing. First each job's waits on earlier jobs of the submit,
+	 * then arm it; a wait that can't be added fails the call, and the armed
+	 * jobs, never published, are cleaned up unpushed (job_args_fini). Then
+	 * publish and push every job, which can't fail. The VM's reservation,
+	 * held throughout, keeps the order.
 	 */
 	for (u32 i = 0; i < n; i++) {
 		struct pvrsgx_job *job = ja[i].job;
-		struct dma_fence *done;
 
 		for (u32 d = 0; d < ja[i].nintra; d++) {
 			err = drm_sched_job_add_dependency(&job->base,
@@ -971,8 +992,12 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 			}
 		}
 		drm_sched_job_arm(&job->base);
-		done = &job->base.s_fence->finished;
-		ja[i].done = dma_fence_get(done);
+		ja[i].done = dma_fence_get(&job->base.s_fence->finished);
+	}
+
+	for (u32 i = 0; i < n; i++) {
+		struct pvrsgx_job *job = ja[i].job;
+		struct dma_fence *done = ja[i].done;
 
 		dma_resv_add_fence(drm_gpuvm_resv(&job->ctx->vm->gpuvm), done,
 				   DMA_RESV_USAGE_BOOKKEEP);

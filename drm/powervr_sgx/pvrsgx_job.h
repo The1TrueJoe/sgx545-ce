@@ -83,6 +83,8 @@ struct pvrsgx_cache_range {
  * struct pvrsgx_job - One submitted job
  */
 struct pvrsgx_job {
+	/** @free_work: The final puts, off the scheduler's queue. */
+	struct work_struct free_work;
 	/** @base: The scheduler job. */
 	struct drm_sched_job base;
 	/** @ctx: The context it was submitted on. */

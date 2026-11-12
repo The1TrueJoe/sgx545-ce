@@ -52,7 +52,7 @@ static const char *cur;
 
 static int xioctl(int fd, unsigned long req, void *arg)
 {
-	int r;
+	int r = 0;
 
 	do
 		r = ioctl(fd, req, arg);
@@ -626,6 +626,52 @@ static void t_context_invalid(int fd)
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
 }
 
+/* A file holds at most 64 contexts; the next one is -ENOSPC until one goes. */
+static void t_context_file_limit(int fd)
+{
+	uint32_t vm = create_vm(fd), h[64];
+	struct drm_powervr_sgx_ioctl_create_context_args a = {
+		.type = DRM_POWERVR_SGX_CTX_TYPE_RENDER, .vm_context_handle = vm,
+	};
+	struct drm_powervr_sgx_ioctl_destroy_context_args d = {};
+	uint32_t n = 0;
+	int r = 0;
+
+	while (n < 64 && !(r = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a)))
+		h[n++] = a.handle;
+	assert_eq(xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a), -ENOSPC);
+	for (uint32_t i = 0; i < n; i++) {
+		d.handle = h[i];
+		do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
+	}
+	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
+	d.handle = a.handle;
+	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
+}
+
+/* One PB for the device: a request for another size than the live one is refused. */
+static void t_context_pb_size(int fd)
+{
+	struct drm_powervr_sgx_dev_query_limits l = {};
+	uint32_t size = sizeof(l), vm = create_vm(fd);
+	struct drm_powervr_sgx_ioctl_create_context_args a = {
+		.type = DRM_POWERVR_SGX_CTX_TYPE_RENDER, .vm_context_handle = vm,
+	};
+	int r = 0;
+
+	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &l, &size), 0);
+	create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);	/* the PB exists now */
+	a.param_buffer_pages = l.pb_min_pages;
+	r = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
+	if (r == 0) {
+		/* The live PB has the minimum size: any other is refused. */
+		a.param_buffer_pages = l.pb_min_pages + 0x100;
+		do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
+	} else {
+		assert_eq(r, -EINVAL);
+	}
+}
+
 /* SUBMIT_JOBS */
 
 static void t_null_job(int fd)
@@ -639,6 +685,24 @@ static void t_null_job(int fd)
 	assert_eq(submit(fd, &j, 1, NULL), 0);
 	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
 	printf("  null job signalled in %lld us\n", (long long)(now_ns() - t0) / 1000);
+}
+
+/* All or nothing: a bad second job leaves the first one unsubmitted, its signal unset. */
+static void t_submit_all_or_nothing(int fd)
+{
+	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t s = syncobj(fd), failed = 0;
+	struct drm_powervr_sgx_sync_op op = SIGNAL(s);
+	struct drm_powervr_sgx_job j[2] = { null_job(ctx, &op, 1), null_job(ctx, NULL, 0) };
+
+	j[1].flags = 1u << 31;
+	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
+	assert_eq(failed, 1);
+	/* No fence was published: a wait on the syncobj finds none. */
+	assert_eq(syncobj_wait(fd, s, 0), -EINVAL);
+	j[1].flags = 0;
+	assert_eq(submit(fd, j, 2, &failed), 0);
+	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
 }
 
 static void t_null_job_timeline(int fd)
@@ -1587,8 +1651,11 @@ static const struct {
 	{ "context-create-destroy", t_context_create_destroy },
 	{ "vm-release-frees", t_vm_release_frees },
 	{ "context-invalid", t_context_invalid },
+	{ "context-pb-size", t_context_pb_size },
+	{ "context-file-limit", t_context_file_limit },
 	{ "submit-null-job", t_null_job },
 	{ "submit-null-job-timeline", t_null_job_timeline },
+	{ "submit-all-or-nothing", t_submit_all_or_nothing },
 	{ "submit-null-job-chain", t_null_job_chain },
 	{ "submit-null-job-many", t_null_job_many },
 	{ "submit-null-job-cache-ranges", t_null_job_cache_ranges },

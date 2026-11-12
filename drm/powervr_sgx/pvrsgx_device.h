@@ -202,10 +202,15 @@ struct pvrsgx_device {
 	/** @last_fence: Hardware fence of the job last sent to the firmware. */
 	struct dma_fence *last_fence;
 	/**
-	 * @wq: Runs @poll_work and @reap_work. The poll signals fences, so the queue
-	 * has a rescuer and never waits on memory reclaim.
+	 * @wq: Runs @poll_work, which signals fences: the queue has a rescuer
+	 * and never waits on memory reclaim.
 	 */
 	struct workqueue_struct *wq;
+	/**
+	 * @free_wq: Runs @reap_work and the jobs' final puts, which take
+	 * reservations and free memory: never the queue that signals fences.
+	 */
+	struct workqueue_struct *free_wq;
 	/** @poll_work: Checks completions while jobs are out. */
 	struct delayed_work poll_work;
 
@@ -262,6 +267,13 @@ struct pvrsgx_device {
 /**
  * struct pvrsgx_file - Per-open state
  */
+/*
+ * A file's limits: every context and RT dataset takes kernel memory from
+ * device-wide ranges, so one client may not take them all.
+ */
+#define PVRSGX_MAX_FILE_CONTEXTS	64
+#define PVRSGX_MAX_FILE_RTDS		64
+
 struct pvrsgx_file {
 	/** @sdev: The device. */
 	struct pvrsgx_device *sdev;

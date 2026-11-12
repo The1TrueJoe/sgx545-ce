@@ -282,6 +282,7 @@ static struct eq_fx *eq_device(struct kunit *test, unsigned int core, u32 core_r
 	INIT_WORK(&sdev->reap_work, eq_noop_work);
 	/* The restart path queues the reap; the real driver's own workqueue isn't set up here. */
 	sdev->wq = system_dfl_wq;
+	sdev->free_wq = system_dfl_wq;
 	sdev->irq = -1;
 	sdev->regs = (void __iomem __force *)fx->regs;
 

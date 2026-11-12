@@ -105,7 +105,7 @@ static void pb_init(struct pvrsgx_pb *pb)
  * between PBs, so two PBs would run each other's lists off their ends. The DPM
  * numbers PB pages from the 3D-params heap base, so the PB starts there, at the
  * same address in every VM (pvrsgx_pb_map). The first context sets the size;
- * later requests are ignored, as pb.c does.
+ * later requests for another size are refused.
  */
 static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 {
@@ -175,6 +175,10 @@ static struct pvrsgx_pb *dev_pb_get(struct pvrsgx_device *sdev, u32 req_pages)
 		}
 		sdev->pb = pb;
 		drm_info(&sdev->base, "parameter buffer: %#x pages\n", pb->pages);
+	} else if (req_pages && req_pages != sdev->pb->pages - PB_EXTRA_PAGES) {
+		/* A size the live buffer doesn't have is refused, not ignored. */
+		mutex_unlock(&sdev->pb_lock);
+		return ERR_PTR(-EINVAL);
 	}
 	pb = sdev->pb;
 	kref_get(&pb->ref);
@@ -580,10 +584,12 @@ int pvrsgx_ioctl_create_rt_dataset(struct drm_device *drm, void *data, struct dr
 	pvrsgx_context_put(ctx);
 	if (IS_ERR(s))
 		return PTR_ERR(s);
-	err = xa_alloc(&sfile->rtds, &args->handle, s, xa_limit_32b, GFP_KERNEL);
-	if (err)
+	err = xa_alloc(&sfile->rtds, &args->handle, s, XA_LIMIT(1, PVRSGX_MAX_FILE_RTDS), GFP_KERNEL);
+	if (err) {
 		pvrsgx_rtds_put(s);
-	return err;
+		return err == -EBUSY ? -ENOSPC : err;
+	}
+	return 0;
 }
 
 int pvrsgx_ioctl_destroy_rt_dataset(struct drm_device *drm, void *data, struct drm_file *file)

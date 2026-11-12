@@ -71,6 +71,8 @@ struct drm_powervr_sgx_obj_array {
  *  - -EINVAL: a reserved field or flag is not zero, or an argument is invalid.
  *  - -ENOENT: a handle does not name a live object of the required type.
  *  - -EFAULT: a user pointer cannot be read or written.
+ *  - -ENOSPC: the file already has 64 contexts or 64 RT datasets, or the
+ *    device's kernel memory ranges are full.
  *  - -EIO: the GPU could not be recovered by a reset (device lost). Every later
  *    ioctl other than destroy and GEM close returns it too.
  */
@@ -637,7 +639,7 @@ struct drm_powervr_sgx_ioctl_create_context_args {
 	 * &drm_powervr_sgx_dev_query_limits.pb_default_pages. Must be 0 for a transfer
 	 * context. The device has one parameter buffer, shared by every render
 	 * context of every client: the first render context sets its size, and
-	 * later requests are ignored.
+	 * a later non-zero request for another size fails with -EINVAL.
 	 */
 	__u32 param_buffer_pages;
 
@@ -1154,9 +1156,8 @@ struct drm_powervr_sgx_ioctl_submit_jobs_args {
 	struct drm_powervr_sgx_obj_array jobs;
 
 	/**
-	 * @failed_index: [OUT] On error, the index of the job that caused it.
-	 * When the error is -ENOMEM from a wait on an earlier job of the same
-	 * call, the jobs before it were submitted; for any other error none were.
+	 * @failed_index: [OUT] On error, the index of the job that caused it,
+	 * or ~0 when no single job did. No job was submitted.
 	 */
 	__u32 failed_index;
 
