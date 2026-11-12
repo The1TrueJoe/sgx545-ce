@@ -867,6 +867,9 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 	err = job_bo_refs(file, ja, &in->bo_refs);
 	if (err)
 		return err;
+	/* Cache ranges aren't implemented yet: refuse them, never ignore them. */
+	if (in->cache_ranges.count)
+		return -EINVAL;
 	return pvrsgx_validate_job(sdev, job);
 }
 
