@@ -188,6 +188,9 @@ no geometry-shader path).
 | `texelFetch` | `sgx_lower_tex`: txl at (i + 0.5) / max(size >> lod, 1), marked `sgx_sample_info.fetch` for NEAREST state of its own | — |
 | `textureSize`, `textureGrad`, the Offset variants, rect, 1D | `sgx_lower_tex` (`nir_lower_tex`); txs is the driver's (`SGX_K_TEXSIZE`) | — |
 | isampler / usampler | an RGBA8 texel's bytes, sign- or zero-extended | — |
+| R32F / R32UI / R32I | `tex_f32`: the raw word, (x, 0, 0, 1) with an integer 1 for an integer sampler | — |
+| RGBA32 / RG32 (int or float) | `tex_r32x4` / `tex_r32x2`: an R32 texture N times as wide (H2: T1 0x12 returns the word as it is); one dependent read per channel at (N x + c + ½) / (N W_l), the level picked in the shader (NEAREST_MIPMAP_NEAREST's ceil(λ + ½) − 1, λ from the derivatives of (s W, t H)), s wrapped by `tex_r32_clamp` or by the hardware's REPEAT | — |
+| noperspective | the vertex shader writes v · w and w itself (`SGX_NOPERSPECTIVE_W`), the fragment shader divides by the interpolated w: perspective-correct iteration of both leaves the screen-linear value | — |
 | integer varyings | two sets per row, the 16-bit halves as exact floats (`sgx_varying.split`) | flat: see below |
 | uniform blocks | `ld.a.d` from the address in constant `ubo_base_k + n`; word d at `#(d - 1)`, others through an `ima32` address | ld.a.d immediates: **hardware** (hwt_gaps) |
 | gl_VertexID, gl_InstanceID | the driver's (an input it gathers, a constant) | — |
@@ -212,7 +215,12 @@ rounding step off; a split integer's halves are exact floats below 2^16, and
 `pck.u16.f32` rounds them back to the exact value (to nearest, as hwt_p4
 measured for s16; u16 is assumed the same).
 
-Not done here: integer and float textures wider than RGBA8 (the texel
-formats are GL3.md's H2), MRT and packed render-target outputs (H1),
+The wide R32 path picks its own level since the N-times-wide view's
+footprint would pick one log2 N too coarse; at a level where W >> l is 0
+the view is narrower than N texels, so the driver caps such textures' last
+level. MIRRORED_REPEAT on s, cube maps and integer LOD clamps (min/max LOD,
+the sampler's LOD bias) aren't handled on these units.
+
+Not done here: MRT (H1),
 transform feedback (H4), texture arrays (GL3.md's layer-address path), and
 shadow-compare and cube-array variants beyond what Mesa lowers.
