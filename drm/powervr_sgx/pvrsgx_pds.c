@@ -82,15 +82,19 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 {
 	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, 4);
 	u32 doutu = pvrsgx_doutu(sdev->fw.code.dev_addr, sdev->fw.addr[PVRSGX_FW_UKERNEL] + e);
+	/* The bring-up sweep's variants 5 and 6 (pvrsgx_fw.c), event program only. */
+	bool sweep = b == PVRSGX_FW_PDS0;
+	u32 w1 = sweep && sdev->sweep_variant == 5 ? 0 : 2;
 
 	/* The temporaries field, in fours (docs/PDS.md, DOUTU word 0). */
 	if (sdev->family->ukernel_temps)
 		doutu = (doutu & ~PDS_DOUTU_TEMPS) |
 			FIELD_PREP(PDS_DOUTU_TEMPS, DIV_ROUND_UP(sdev->family->ukernel_temps, 4));
 
-	if (sdev->family->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS) {
+	if ((sdev->family->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS) ||
+	    (sweep && sdev->sweep_variant == 6)) {
 		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
-		pvrsgx_pds_ds(&p, PDS_D0(1), 2);
+		pvrsgx_pds_ds(&p, PDS_D0(1), w1);
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
 	} else {
 		/*
@@ -101,7 +105,7 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
 		pvrsgx_pds_ds(&p, PDS_D0(1), 0);
 		pvrsgx_pds_ds(&p, PDS_D1(0), 0);
-		pvrsgx_pds_ds(&p, PDS_D1(1), 2);
+		pvrsgx_pds_ds(&p, PDS_D1(1), w1);
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D1(1), PDS_D0(1), PDS_D0(0));
 	}
 	pvrsgx_pds_halt(&p);

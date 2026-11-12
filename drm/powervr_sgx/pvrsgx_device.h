@@ -117,6 +117,8 @@ struct pvrsgx_fw {
 	struct pvrsgx_kmem pdtable;
 	/** @pd_slots: The @pdtable slots VMs hold; slot 0 is the firmware's. */
 	struct ida pd_slots;
+	/** @event_entry: The microkernel offset the event program starts. */
+	u32 event_entry;
 };
 
 /**
@@ -179,6 +181,8 @@ struct pvrsgx_device {
 	bool lost;
 	/** @pm_pinned: Runtime PM is held active (single-context bring-up). */
 	bool pm_pinned;
+	/** @sweep_variant: The bring-up start sweep's variant (pvrsgx_fw.c), 0 normally. */
+	u8 sweep_variant;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;

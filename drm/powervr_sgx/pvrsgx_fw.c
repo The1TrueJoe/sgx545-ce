@@ -218,6 +218,7 @@ static int fw_build_open(struct pvrsgx_device *sdev)
 		entry[f->entries[i][0]] = f->entries[i][1];
 	for (u32 p = 0; p < ARRAY_SIZE(entry); p++)
 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
+	sdev->fw.event_entry = entry[0];
 
 	for (u32 i = 0; i < f->n_patches && !err; i++) {
 		u32 v = f->patches[i][1];
@@ -526,7 +527,32 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 dm = cr->use_code_base_dm_shift;
+	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
+	u32 enable = cr->event_pds_enable_all;
 	int err;
+
+	/* The bring-up sweep's variants (sweep_name[]); 0 is the normal start. */
+	switch (sdev->sweep_variant) {
+	case 1:
+		data0 = 2;
+		break;
+	case 2:
+		data0 = 4;
+		break;
+	case 3:
+		data1 = 2;
+		break;
+	case 4:
+		data0 = 0;
+		data1 = 0;
+		break;
+	case 7:
+		uk_dm = 2;
+		break;
+	case 9:
+		enable = 0x7fffffff;
+		break;
+	}
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -540,19 +566,21 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 		       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
 		       USE_CODE_BASE_ADDR_SHIFT);
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
-	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) |
-	       USE_CODE_BASE_DM_UKERNEL << dm);
+	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
+	/* Variant 8 sets DOUT_TIMEOUT_DISABLE (b6); later ones clear it again. */
+	if (cr->pds_ctrl && sdev->sweep_variant >= 8)
+		sgx_wr(sdev, cr->pds_ctrl, sdev->sweep_variant == 8 ? BIT(6) : 0);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
-	sgx_wr(sdev, cr->event_pds_data0, 1);
-	sgx_wr(sdev, cr->event_pds_data1, 6);
+	sgx_wr(sdev, cr->event_pds_data0, data0);
+	sgx_wr(sdev, cr->event_pds_data1, data1);
 	/* Before the events are enabled, so a wrong guess starts nothing. */
 	err = check_event_pds(sdev);
 	if (err)
 		return err;
-	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
+	sgx_wr(sdev, cr->event_pds_enable, enable);
 	return 0;
 }
 
@@ -710,6 +738,65 @@ static void init_kick(struct pvrsgx_device *sdev)
 }
 
 /*
+ * Bring-up only, off by default: on a guessed core's first start, if the
+ * diagnostic entry's first write (EVENT_TIMER) doesn't come within 100 ms,
+ * reset and try the next variant of the host's event-program setup, one
+ * change from the normal start each, until one does (docs/porting/cores/
+ * sgx530-stage1.md, "After the sixth attempt").
+ */
+static bool stage1_sweep;
+module_param(stage1_sweep, bool, 0444);
+MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
+
+static const char *const sweep_name[] = {
+	"baseline", "event data 2, 6", "event data 4, 6", "event data 1, 2",
+	"event data 0, 0", "DOUTU word 1 = 0", "2-dword data interleave",
+	"USE_CODE_BASE_15 data master 2", "PDS DOUT_TIMEOUT_DISABLE",
+	"event PDS enable 0x7fffffff",
+};
+
+static bool timer_moved(struct pvrsgx_device *sdev)
+{
+	u32 t;
+
+	return !read_poll_timeout(sgx_rd, t, t, 1000, 100000, false, sdev, SGX_CR_EVENT_TIMER);
+}
+
+static int start_sweep(struct pvrsgx_device *sdev, u32 *hc)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	char when[64];
+	int err;
+
+	for (u8 v = 0; v < ARRAY_SIZE(sweep_name); v++) {
+		if (v) {
+			sgx_wr(sdev, cr->event_pds_enable, 0);
+			sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
+			sdev->sweep_variant = v;
+			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
+			pvrsgx_reset(sdev, true);
+			*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
+			err = init_script_part2(sdev);
+			if (err)
+				return err;
+			hc[HOSTCTL_INIT_STATUS] = 0;
+			/* The rebuilt program is in memory before the kick. */
+			wmb();
+			init_kick(sdev);
+		}
+		if (timer_moved(sdev)) {
+			drm_info(&sdev->base, "sweep: variant %u (%s) starts the event program\n",
+				 v, sweep_name[v]);
+			return 0;
+		}
+		snprintf(when, sizeof(when), "sweep variant %u (%s)", v, sweep_name[v]);
+		bringup_diag(sdev, when);
+	}
+	drm_info(&sdev->base, "sweep: no variant starts the event program\n");
+	return 0;
+}
+
+/*
  * Start: clocks, init script part 1, reset, part 2, then the first event kick,
  * and the microkernel's init entry sets INIT_COMPLETE.
  */
@@ -795,7 +882,11 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	wmb();
 	init_kick(sdev);
 
-	err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
+	err = 0;
+	if (first && stage1_sweep && sdev->family->event_pds_guessed)
+		err = start_sweep(sdev, hc);
+	if (!err)
+		err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (first && probes_wanted(sdev))
 		probes_unmap(sdev, ARRAY_SIZE(code_base_probe));
 	if (err) {
