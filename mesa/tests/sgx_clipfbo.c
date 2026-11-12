@@ -10,7 +10,8 @@
  * whole after each and compared with the half-planes it should keep.  The
  * piglit test fails now and then once ARB_framebuffer_object puts it in an
  * FBO (docs/GL3.md); this prints where: the wrong pixels' count and bounding
- * box per combination, over 20 rounds.  Before each whole read, piglit's
+ * box per combination, over 20 rounds.  As piglit has it: a depth/stencil
+ * attachment, the quad from client vertex arrays.  Before each whole read, piglit's
  * own probes: twelve 1x1 reads as floats.
  *
  *   sgx_clipfbo
@@ -70,6 +71,13 @@ G(glBegin);
 G(glEnd);
 G(glVertex2f);
 G(glGetString);
+G(glGenRenderbuffers);
+G(glBindRenderbuffer);
+G(glRenderbufferStorage);
+G(glFramebufferRenderbuffer);
+G(glVertexPointer);
+G(glEnableClientState);
+G(glDrawArrays);
 
 #define S 250
 
@@ -138,6 +146,13 @@ main(void)
    GET(glEnd);
    GET(glVertex2f);
    GET(glGetString);
+   GET(glGenRenderbuffers);
+   GET(glBindRenderbuffer);
+   GET(glRenderbufferStorage);
+   GET(glFramebufferRenderbuffer);
+   GET(glVertexPointer);
+   GET(glEnableClientState);
+   GET(glDrawArrays);
    printf("renderer: %s\n", glGetString_(GL_RENDERER));
 
    GLuint tex, fb;
@@ -149,6 +164,16 @@ main(void)
    glBindFramebuffer_(GL_FRAMEBUFFER, fb);
    glFramebufferTexture2D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, tex, 0);
+   /* as piglit's window FBO: a depth/stencil buffer too (every render then
+    * loads and stores it, ZLS) */
+   GLuint ds;
+   glGenRenderbuffers_(1, &ds);
+   glBindRenderbuffer_(GL_RENDERBUFFER, ds);
+   glRenderbufferStorage_(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, S, S);
+   glFramebufferRenderbuffer_(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              GL_RENDERBUFFER, ds);
+   glFramebufferRenderbuffer_(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                              GL_RENDERBUFFER, ds);
    if (glCheckFramebufferStatus_(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
       return 2;
    const char *src = "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n";
@@ -175,12 +200,11 @@ main(void)
             (combos[k] >> i & 1 ? glEnable_ : glDisable_)(GL_CLIP_PLANE0 + i);
          glClearColor_(0, 0, 0, 0);
          glClear_(GL_COLOR_BUFFER_BIT);
-         glBegin_(GL_QUADS);
-         glVertex2f_(-1, -1);
-         glVertex2f_(1, -1);
-         glVertex2f_(1, 1);
-         glVertex2f_(-1, 1);
-         glEnd_();
+         /* as shader_runner's draw rect: client vertex arrays, a strip */
+         static const GLfloat v[] = {-1, -1, 1, -1, -1, 1, 1, 1};
+         glVertexPointer_(2, GL_FLOAT, 0, v);
+         glEnableClientState_(GL_VERTEX_ARRAY);
+         glDrawArrays_(GL_TRIANGLE_STRIP, 0, 4);
          /* first piglit's probes, one pixel each as floats (its relative
           * probes: the six inside points, then the six outside ones) */
          static const float pr[12][2] = {
