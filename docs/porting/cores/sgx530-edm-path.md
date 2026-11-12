@@ -43,31 +43,39 @@ in case a later store path wants `word1` bit26:
 ## 2. The launch, folded into real init
 
 Today `srvinit`/the driver kicks a bare-DOUTU event program at the microkernel's
-init entry. For the 530 the event program and the DOUTU become the §9 ones, and the
-init task gains the vendor's two-stage body (vendor-setup §5):
+init entry. For the 530 that event program keeps its **bare-DOUTU** shape — it only
+changes to the §9 DOUTU words and the 8-word data layout. **No second-stage DOUTD
+and no `sa` population are needed** (confirmed from the driver source and the probe
+runs, below):
 
-1. **The event program** (driver-built PDS0): the 8-word interleave carrying the
-   three DOUTU words at data words 0, 1, 8 (DS0[0], DS0[1], DS1[0]); `0xa6c`=3,
-   `0xa70`=0x00013d01. Launches the microkernel's init entry (code base 15, offset
-   0 → word0 0x0020000F). **Driver-side; ? on the exact per-context values.**
-2. **The init task, stage 1:** reads the control-block / CCB / host-control
-   addresses from `sa` (they arrive via the DMA below), installs the event-program
-   address and control words (0xa68/0xa6c/0xa70), tests the HWR flag, writes
-   `INIT_COMPLETE`… **except** `INIT_COMPLETE` is a memory store, which drops on the
-   530. So the host does **not** wait on `ui32InitStatus`; it considers init done
-   because it performed the register program and the kick. **C-ish** (the host
-   writes work; skipping the status wait is the change, shared with host-kick §8).
-3. **The init task, stage 2 (the vendor's second PDS program):** a **DOUTD** DMAs
-   the 0x128-byte TA/3D control block into the task's **secondary attributes**, and
-   attribute writes seed PA0–PA2. This is what gives the running task its CCB /
-   control-block pointers and its `pa` bank — via the DMA/attribute path, which
-   works, not via `st`/ALU, which don't. **U; the DOUTD/DMA control word from
-   vendor-setup §5 (0x01e0003f).**
+1. **The event program** (driver-built PDS0): a bare DOUTU — the 8-word interleave
+   carrying the three DOUTU words at data words 0, 1, 8 (DS0[0]=0x0020000F,
+   DS0[1]=0x04000000, DS1[0]=0x00000001), one MOVS→DOUTU, HALT; `0xa6c`=3,
+   `0xa70`=0x00013d01; the data arena mapped `EDMPROTECT`. Launches the microkernel's
+   init entry at **offset 0** (code base 15, bit 21 → word0 0x0020000F). This is the
+   exact program the §9 probes used (`pvrsgx_pds.c`, the `stage1_vlaunch` branch),
+   just pointed at the real init entry instead of a probe. **C** — the probes ran it.
+2. **The init task** derives its pointers from **r17 = ctlblk** (loader-patched,
+   `a.patch(17,"ctlblk")`), **not** from `sa`. The event program is a bare DOUTU with
+   no DMA, so `sa` is empty on entry; the handlers read host-control / CCB pointers
+   from r17, exactly as the existing microkernel does (ukernel.py's event-entry
+   comment). The init task reads those pointers (`ld`), installs the steady-state
+   event-program address and control words (0xa68/0xa6c/0xa70) with `str`, tests the
+   HWR flag, and **ends** — it does **not** write `INIT_COMPLETE`, because that store
+   drops on the 530 and the host does not wait on `ui32InitStatus` (it considers init
+   done because it performed the register program and the kick). **C** — r17, `ld`,
+   `str` all confirmed under §9; skipping the status wait is the one change.
 
-`ukernel/` provides the init-entry USSE code at event offset 0 and the body
-entries; the **driver** builds the event PDS, the DOUTD program, and the launch
-words. (This is the same split as §9's board test: the probe images carry only USSE
-code; the driver carries the PDS/launch — so the SGX545 golden is untouched.)
+**Why no DOUTD / no `sa`:** the write-context that makes temps/loads/`str` retire is
+**entirely the §9 DOUTU words** (word2=1 + word0 bit21), not a DMA. All three probes
+(xorr5, ldret, limmwr) ran under the bare-DOUTU §9 launch with `sa` empty and
+r17-derived pointers, and every one retired. `pa`, where a handler needs it (e.g. the
+3D background block), is written by a **per-handler DOUTA**, not an init-wide DMA.
+
+`ukernel/` provides the init-entry USSE code at event offset 0 and the body entries;
+the **driver** builds the (bare-DOUTU) event PDS and the launch words. (This is the
+same split as §9's board test: the probe images carry only USSE code; the driver
+carries the PDS/launch — so the SGX545 golden is untouched.)
 
 ---
 
@@ -77,8 +85,9 @@ Each handler becomes: **load the command into temps → program registers → ki
 wait on events → ack**, with every memory write removed.
 
 - **Load the command.** `ld` the kick's client fields and the control-block words
-  the handler needs into temporaries (needs `ldret` = C). The addresses come from
-  `sa` (the DMA'd control block) and from constants via `limm`.
+  the handler needs into temporaries (`ldret` = C). The base pointer is **r17 =
+  ctlblk** (loader-patched); other addresses are read from there or built with `limm`
+  (C). No `sa` is involved.
 - **Program registers.** `str` the BIF (DIR_LIST_BASE0 + INVALDC), the DPM
   (free-list load, state/control, OTPM), the ISP/PBE 3D-start group, and the TA/3D
   kick — all the sequences in UKERNEL.md §6, which are register writes. `str`
@@ -116,14 +125,14 @@ because the microkernel cannot write it:
 - **The kernel CCB ring** and its read/write offsets. The microkernel processes one
   kick; the host tracks submit/retire by fence, not by a microkernel-written offset.
 - **The control block, sync objects, RT data, PB descriptor, free lists** — the
-  host writes and reads them; it DMAs the control block into the task's `sa` at
-  launch (§2.3).
+  host writes and reads them; the microkernel reaches the control block through
+  r17 = ctlblk (loader-patched), so no launch-time DMA into `sa` is needed (§2).
 - **Completion / fences:** the host IRQ reads `EVENT_STATUS` and signals
   `dma_fence`; it writes the sync-heap words.
 - **Recovery:** the `drm_sched` per-job timeout is the watchdog; a job that doesn't
   raise its completion event is declared hung → devcoredump + reset.
-- **The event program, DOUTD, and launch words** (§2), and the per-context register
-  setup the kick needs.
+- **The bare-DOUTU event program and launch words** (§2), and the per-context
+  register setup the kick needs.
 
 ---
 
@@ -132,7 +141,7 @@ because the microkernel cannot write it:
 | piece | owner | note |
 |---|---|---|
 | microkernel USSE code (init entry, handlers, reduced to load/str/kick/ack) | `ukernel/` | no `st.a.d`; `pa` via DOUTA |
-| event PDS (8-word interleave), DOUTU words, DOUTD control-block DMA | driver | §9 launch, vendor-setup §5 |
+| event PDS (bare DOUTU, 8-word interleave, §9 DOUTU words) | driver | §9 launch; no DOUTD / no `sa` |
 | the 530 TA/3D/DPM/ISP register offsets | driver, confirmed one at a time | gap-13 worksheet |
 | CCB ring, control block, sync objects, PB, free lists | driver (host) | host-owned memory |
 | completion → `dma_fence`, recovery | driver (host IRQ + drm_sched) | no microkernel store |
@@ -144,8 +153,10 @@ because the microkernel cannot write it:
 1. **Confirm the two open register-file facts** on the board: `sgx530_ldret`
    (loads retire) and `sgx530_limmwr_r5_5c3` (str/limm, fresh constant — rules out
    the EVENT_TIMER residual). Both needed before relying on the path.
-2. **Init without the status wait:** fold the §9 event program + DOUTU + the
-   DOUTD control-block DMA into the real init; do not wait on `ui32InitStatus`.
+2. **Init without the status wait:** point the §9 bare-DOUTU event program at the
+   real init entry (r17 = ctlblk patched); do not wait on `ui32InitStatus`. No DOUTD,
+   no `sa`. Update `ldret` (step 1) confirmed; now `str`-install the steady-state
+   event program and end.
 3. **A minimal TA/3D kick** from the EDM task: load the client command into temps,
    `str` the BIF/DPM/ISP sequences (confirming each gap-13 offset as you reach it),
    kick, and let the host IRQ signal completion. Strip the microkernel's `st.a.d`
@@ -166,8 +177,10 @@ because the microkernel cannot write it:
   path — run it in the same slot, but the EDM path does not depend on it.
 - **gap-13 register offsets:** the TA/3D/DPM/ISP writes the microkernel `str`s are
   the longer pole; confirm cheapest-first per the worksheet.
-- **DOUTD control word / `sa` layout** for the control-block DMA (vendor-setup §5):
-  `?` on the exact 530 encoding; the driver works it out at init bring-up.
+- **`pa` via per-handler DOUTA:** the handlers that need a primary attribute (the 3D
+  background block) issue a DOUTA; `?` on the exact 530 DOUTA control word, worked out
+  when that handler is built. (This replaces the vendor's init-wide DOUTD, which the
+  open microkernel does not use.)
 
 ## 8. References
 - [sgx530-stage1.md](sgx530-stage1.md) — the write-path results, the bisect, the
