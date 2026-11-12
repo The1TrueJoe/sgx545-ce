@@ -2102,6 +2102,20 @@ TEST_F(sgx_compile_test, fragment_packed_render_target)
    EXPECT_TRUE(has(", o0, ")) << disasm();
 }
 
+/* rt_packed with a uvec4 output the driver didn't pack: an error, not .x */
+TEST_F(sgx_compile_test, fragment_packed_render_target_wide_fails)
+{
+   native = true;
+   rt_packed = 1;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *col = var(nir_var_shader_out, glsl_uvec4_type(), "color",
+                           FRAG_RESULT_DATA0);
+   nir_store_var(&b, col, nir_imm_ivec4(&b, 1, 2, 3, 4), 0xf);
+   ASSERT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("not one word"),
+             std::string::npos);
+}
+
 /* tex_f32 on an integer sampler (R32UI): the missing w is an integer 1 */
 TEST_F(sgx_compile_test, fragment_r32ui_texel_integer_one)
 {
