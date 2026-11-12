@@ -126,10 +126,12 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 	.event_pds_data1 = SGX545_CR_EVENT_PDS_DATA1,
 };
 
-/* Init script part 2 for the SGX530: the host's interrupt, named registers only. */
+/* Init script part 2 for the SGX530: the host's interrupt, and one SGX545 write. */
 static const struct pvrsgx_core_init_reg sgx530_init_regs[] = {
 	{ SGX_CR_EVENT_HOST_ENABLE, SGX_CR_EVENT_STATUS_SW_EVENT },
 	{ SGX_CR_EVENT_HOST_ENABLE2, 0 },
+	/* Unnamed; without it the PDS fetches nothing (stage 1, log 2026-11-12-0151). */
+	{ 0xa74, 0x208200 },
 };
 
 /*
