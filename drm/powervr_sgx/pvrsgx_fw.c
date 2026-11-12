@@ -422,10 +422,32 @@ static bool stage1_data_ro;
 module_param(stage1_data_ro, bool, 0444);
 MODULE_PARM_DESC(stage1_data_ro, "Map a guessed core's kernel data arena GPU read-only (gap 19 test)");
 
+/*
+ * Bring-up probe (vendor-setup §9, docs/porting/cores/sgx530-vendor-setup.md):
+ * the event program and launch words the vendor stack uses, built from that
+ * doc only. Off by default; the results are to be recorded as hardware (C)
+ * facts before any shipping default depends on them.
+ *   - the event DOUTU in an 8-word data interleave, words at memory 0, 1, 8;
+ *   - DOUTU word 0 = 0x0020000f (code base 15, bit 21, no bit 27, no temps),
+ *     word 1 = 0x04000000, word 2 = 1;
+ *   - event control words 0xa6c = 3, 0xa70 = 0x00013d01;
+ *   - the kernel data arena mapped with EDMPROTECT, to test the store path
+ *     under the vendor's requestor assumption.
+ */
+bool pvrsgx_stage1_vendor;
+module_param_named(stage1_vendor, pvrsgx_stage1_vendor, bool, 0444);
+MODULE_PARM_DESC(stage1_vendor, "The vendor-stack event program and launch words (sgx530 vendor-setup §9 probe)");
+
 static u32 data_pte_flags(struct pvrsgx_device *sdev)
 {
-	if (stage1_data_ro && sdev->family->event_pds_guessed)
+	if (!sdev->family->event_pds_guessed)
+		return SGX_MMU_PTE_CACHECONSISTENT |
+		       (sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT);
+	if (stage1_data_ro)
 		return SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_READONLY;
+	/* §9 maps it with EDMPROTECT, undoing data_no_edmprotect for the probe. */
+	if (pvrsgx_stage1_vendor)
+		return SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT;
 	return SGX_MMU_PTE_CACHECONSISTENT |
 	       (sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT);
 }
@@ -681,6 +703,12 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	 */
 	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
+
+	/* §9: the vendor's event control words. */
+	if (pvrsgx_stage1_vendor) {
+		data0 = 3;
+		data1 = 0x00013d01;
+	}
 
 	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DATA0_2)

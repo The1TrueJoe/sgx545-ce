@@ -149,6 +149,22 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		return;
 	}
 
+	/*
+	 * The vendor launch (vendor-setup §9): the three fixed DOUTU words in an
+	 * 8-word data interleave (word 2 at memory word 8, where that interleave
+	 * puts DS1[0]), a 12-word data segment so 0xa6c = 3 rows. The event entry
+	 * is at offset 0, so word 0 is code base 15 | bit 21 (0x0020000f).
+	 */
+	if (b == PVRSGX_FW_PDS0 && pvrsgx_stage1_vendor) {
+		p = pvrsgx_pds_prog(sdev, b, 12);
+		p.w[0] = 0x0020000f;	/* DOUTU word 0 = DS0[0] */
+		p.w[1] = 0x04000000;	/* DOUTU word 1 = DS0[1] */
+		p.w[8] = 0x00000001;	/* DOUTU word 2 = DS1[0], 8-word interleave */
+		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
+		pvrsgx_pds_halt(&p);
+		return;
+	}
+
 	/* The temporaries field, in fours (docs/PDS.md, DOUTU word 0). */
 	if (sdev->family->ukernel_temps)
 		doutu = (doutu & ~PDS_DOUTU_TEMPS) |

@@ -68,4 +68,7 @@ void pvrsgx_fw_dump_status_words(struct pvrsgx_device *sdev);
 int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd);
 void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot);
 
+/* Bring-up probe (vendor-setup §9), event program and launch words. */
+extern bool pvrsgx_stage1_vendor;
+
 #endif /* PVRSGX_FW_H */
