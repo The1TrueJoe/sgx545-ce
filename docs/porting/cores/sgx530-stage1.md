@@ -784,6 +784,45 @@ value: no ranges, no sweeps, no other offsets.
 - Each offset's read-back goes in the fact sheet, tagged C for the value read on the
   SGX530 and G for what the register does.
 
+## After the eighteenth attempt: 0xa74 makes the PDS execute
+
+Attempt 18 (log 2026-11-12-0151): **0xa74 = 0x208200 makes the PDS execute (C).**
+- **With F1:** a fault at 0x0e840000, F1's DOUTD source, with `BIF_INT_STAT` 0x4002. So the
+  SGX545's MOVS→DOUTD encoding runs on the SGX530, and the DOUT DMA is requestor b1.
+- **With the normal entry (MOVS→DOUTU, HALT):** a fault at 0x0d800000 = `PDS_EXEC_BASE` +
+  0, `BIF_INT_STAT` 0x4004. That is requestor b2, as the kicker read.
+- **`PDS_PC_BASE`:** 0 at every sample.
+- The four writes together gave the same; the others had no effect alone. 0xaac doesn't
+  latch. The fact sheet's "PDS block setup" table has every read-back.
+
+**The question:** what reads `PDS_EXEC_BASE` + 0? A PC of 0 and the b2 requestor fit a PDS
+program fetch at offset 0 (G). Either another event source that 0xa74 enables dispatches a
+program whose address register is unset, or the DOUTU itself triggers a second PDS
+program, as the SGX545's task setup can.
+
+**Attempt 19.** 0xa74 = 0x208200 is now part of the SGX530's init-script part 2 (kernel
+43831efb), so every start includes it. 0xabc, 0xa00, 0xa78, 0xaac, 0xa7c and 0xa80 stay out.
+The run uses the `sgx530_bases` image with `code_base_pads=1`: every code base 0-15 then
+points at mapped code, so a USSE task fetching through any base lands on a pad or the
+ladder instead of faulting. That answers the coordinator's question too: the DOUTU task's
+code base being unmapped would show as a pad, not a fault at `PDS_EXEC_BASE` + 0.
+
+| Variant | Change | Tells |
+|---|---|---|
+| V0 | none | the control: the fault at 0x0d800000 again |
+| V1 | PDS0 = data row + HALT (no DOUTU) | whether the offset-0 fetch is the DOUTU's doing: no fault means yes |
+| V2 | a kernel page mapped read-only at 0x0d800000 holding a copy of PDS0 (data row, MOVS→DOUTU, HALT) | the offset-0 fetch then runs a working entry, so the ladder (0xa5a) or a pad lands if it is a program fetch |
+| V3 | the same page holding data row + HALT | the fault should go away with no task, if it's a program fetch |
+
+- The page at 0x0d800000 is `PDS_EXEC_BASE`'s first page, the PDS pixel heap's start,
+  which is empty at init. Map exactly that one page, for this test only (approved under the
+  standing go), with the recovery reset first.
+- A ladder or a pad landing in V2 starts the microkernel.
+
+**Making 0xa74 part of the SGX530's start.** It is the first setup write shown to matter.
+Agreed from this side: once the coordinator agrees, it goes in init-script part 2, logged
+as C for its effect. Its bit meanings stay G.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
