@@ -98,6 +98,7 @@ struct pvrsgx_render_job {
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
 void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
 
+struct pvrsgx_rt_dataset *pvrsgx_rtds_create(struct pvrsgx_context *ctx, u32 w, u32 h, u32 samples);
 void pvrsgx_rtds_put(struct pvrsgx_rt_dataset *rtds);
 void pvrsgx_rtds_destroy_all(struct pvrsgx_file *sfile);
 int pvrsgx_ioctl_create_rt_dataset(struct drm_device *drm, void *data, struct drm_file *file);

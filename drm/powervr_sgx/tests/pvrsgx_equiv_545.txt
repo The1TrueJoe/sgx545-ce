@@ -536,6 +536,435 @@ ctx kmmu pte 30010000+2 9
 ctx kmmu pde 0c8 1
 ctx kmmu pte 32000000+e 19
 ctx kmmu pte 32010000+26 19
+render pbdesc +0004 00000062
+render pbdesc +0008 00610000
+render pbdesc +000c 00600000
+render pbdesc +0010 10062000
+render pbdesc +0018 00610000
+render pbdesc +001c 00600000
+render pbdesc +0028 00000072
+render pbdesc +002c 00000040
+render pbdesc +0030 00000040
+render pbdesc +0038 32011000
+render pbblocks +0000 00000062
+render pbblocks +0004 00610000
+render pbblocks +0008 32010000
+render pbfl +0000 ffff0001
+render pbfl +0004 00000002
+render pbfl +0008 00010003
+render pbfl +000c 00020004
+render pbfl +0010 00030005
+render pbfl +0014 00040006
+render pbfl +0018 00050007
+render pbfl +001c 00060008
+render pbfl +0020 00070009
+render pbfl +0024 0008000a
+render pbfl +0028 0009000b
+render pbfl +002c 000a000c
+render pbfl +0030 000b000d
+render pbfl +0034 000c000e
+render pbfl +0038 000d000f
+render pbfl +003c 000e0010
+render pbfl +0040 000f0011
+render pbfl +0044 00100012
+render pbfl +0048 00110013
+render pbfl +004c 00120014
+render pbfl +0050 00130015
+render pbfl +0054 00140016
+render pbfl +0058 00150017
+render pbfl +005c 00160018
+render pbfl +0060 00170019
+render pbfl +0064 0018001a
+render pbfl +0068 0019001b
+render pbfl +006c 001a001c
+render pbfl +0070 001b001d
+render pbfl +0074 001c001e
+render pbfl +0078 001d001f
+render pbfl +007c 001e0020
+render pbfl +0080 001f0021
+render pbfl +0084 00200022
+render pbfl +0088 00210023
+render pbfl +008c 00220024
+render pbfl +0090 00230025
+render pbfl +0094 00240026
+render pbfl +0098 00250027
+render pbfl +009c 00260028
+render pbfl +00a0 00270029
+render pbfl +00a4 0028002a
+render pbfl +00a8 0029002b
+render pbfl +00ac 002a002c
+render pbfl +00b0 002b002d
+render pbfl +00b4 002c002e
+render pbfl +00b8 002d002f
+render pbfl +00bc 002e0030
+render pbfl +00c0 002f0031
+render pbfl +00c4 00300032
+render pbfl +00c8 00310033
+render pbfl +00cc 00320034
+render pbfl +00d0 00330035
+render pbfl +00d4 00340036
+render pbfl +00d8 00350037
+render pbfl +00dc 00360038
+render pbfl +00e0 00370039
+render pbfl +00e4 0038003a
+render pbfl +00e8 0039003b
+render pbfl +00ec 003a003c
+render pbfl +00f0 003b003d
+render pbfl +00f4 003c003e
+render pbfl +00f8 003d003f
+render pbfl +00fc 003e0040
+render pbfl +0100 003f0041
+render pbfl +0104 00400042
+render pbfl +0108 00410043
+render pbfl +010c 00420044
+render pbfl +0110 00430045
+render pbfl +0114 00440046
+render pbfl +0118 00450047
+render pbfl +011c 00460048
+render pbfl +0120 00470049
+render pbfl +0124 0048004a
+render pbfl +0128 0049004b
+render pbfl +012c 004a004c
+render pbfl +0130 004b004d
+render pbfl +0134 004c004e
+render pbfl +0138 004d004f
+render pbfl +013c 004e0050
+render pbfl +0140 004f0051
+render pbfl +0144 00500052
+render pbfl +0148 00510053
+render pbfl +014c 00520054
+render pbfl +0150 00530055
+render pbfl +0154 00540056
+render pbfl +0158 00550057
+render pbfl +015c 00560058
+render pbfl +0160 00570059
+render pbfl +0164 0058005a
+render pbfl +0168 0059005b
+render pbfl +016c 005a005c
+render pbfl +0170 005b005d
+render pbfl +0174 005c005e
+render pbfl +0178 005d005f
+render pbfl +017c 005e0060
+render pbfl +0180 005f0061
+render pbfl +0184 0060ffff
+render rtds rtword 32036000 rtdata 32037000 done 2d002000 tailptr 2000
+render rtdata +0000 32036000
+render rtdata +0008 00000020
+render rtdata +0014 00000002
+render rtdata +0018 30010000
+render rtdata +0020 00000004
+render rtdata +0024 00000300
+render rtdata +0028 100a3000
+render rtdata +002c 20006000
+render rtdata +0030 20001000
+render rtdata +0034 20002000
+render rtdata +0038 20000000
+render rtdata +003c 00001000
+render rtdata +0040 00000001
+render rtdata +0048 32038000
+render rtdata +004c 00000010
+render rtdata +0050 30010000
+render rtdata +0058 00000004
+render rtdata +005c 00000300
+render rtdata +0060 100a4000
+render rtdata +0064 2000a000
+render rtdata +0068 20001000
+render rtdata +006c 20002000
+render rtdata +0070 20000000
+render rtdata +0074 00001000
+render rtdata +0078 00000001
+render rtdata +0080 3203d000
+render rtdata +0084 00000010
+render rd0 +0000 10000000
+render rd0 +0008 00000080
+render rd0 +000c 000f0000
+render rd0 +0010 80000000
+render rd0 +0038 80000000
+render rd0 +003c 80000000
+render rd0 +0040 3f800000
+render rd0 +0044 00000300
+render rd0 +0048 0200a300
+render rd0 +0050 00000088
+render rd0 +0058 00000030
+render rd0 +0064 00000001
+render rd0 +0068 00000001
+render rd0 +00cc 00000100
+render rd0 +00d0 2d003000
+render rd0 +00d8 32037000
+render rd0 +0104 00000001
+render rd0 +0110 3203a000
+render rd0 +0114 3203b000
+render rd0 +013c 07c00000
+render bg0 +0014 3f800000
+render bg0 +0020 3f800000
+render bg0 +0028 00000202
+render bg0 +003c 00100000
+render bg0 +0040 00001000
+render bg0 +0044 00003f80
+render bg0 +0048 12d00010
+render bg0 +004c 3f800000
+render bg0 +0050 0011e000
+render bg0 +0054 00001000
+render bg0 +0058 00003f80
+render hwsync0 +0000 2d004000
+render rd1 +0000 10000000
+render rd1 +0008 00000080
+render rd1 +000c 000f0000
+render rd1 +0010 80000000
+render rd1 +0038 80000000
+render rd1 +003c 80000000
+render rd1 +0040 3f800000
+render rd1 +0044 00000300
+render rd1 +0048 0200a400
+render rd1 +0050 00000088
+render rd1 +0058 00000030
+render rd1 +0064 00000001
+render rd1 +0068 00000001
+render rd1 +00cc 00000100
+render rd1 +00d0 2d005000
+render rd1 +00d8 32037000
+render rd1 +0104 00000001
+render rd1 +0110 3203f000
+render rd1 +0114 32040000
+render rd1 +013c 07c00000
+render bg1 +0014 3f800000
+render bg1 +0020 3f800000
+render bg1 +0028 00000202
+render bg1 +003c 00100000
+render bg1 +0040 00001000
+render bg1 +0044 00003f80
+render bg1 +0048 12d00010
+render bg1 +004c 3f800000
+render bg1 +0050 0011e000
+render bg1 +0054 00001000
+render bg1 +0058 00003f80
+render hwsync1 +0000 2d006000
+render f0 k0 ta +0000 000002c0
+render f0 k0 ta +0004 00000071
+render f0 k0 ta +0008 08000020
+render f0 k0 ta +000c 00030001
+render f0 k0 ta +0010 10000010
+render f0 k0 ta +0014 50000000
+render f0 k0 ta +0018 50000000
+render f0 k0 ta +0024 32010000
+render f0 k0 ta +0038 3203e000
+render f0 k0 ta +003c 32041000
+render f0 k0 ta +0040 32037000
+render f0 k0 ta +0044 32037050
+render f0 k0 ta +0058 00000001
+render f0 k0 ta +0238 20000000
+render f0 k0 ta +023c 82010018
+render f0 k0 ta +0240 02010018
+render f0 k0 ta +0244 0001d016
+render f0 k0 ta +0248 00000040
+render f0 k0 ta +0250 20000000
+render f0 k0 ta +0254 000000a2
+render f0 k0 ta +0258 20007000
+render f0 k0 ta +025c 20000000
+render f0 k0 ta +0260 358637bd
+render f0 k0 ta +0264 358637bd
+render f0 k0 ta +0268 01df02cf
+render f0 k0 ta +0274 10000000
+render f0 k0 ta +02a4 00000088
+render f0 k0 data 00000000 30010000 woff 2c0
+render f0 k1 ta +0000 000002c0
+render f0 k1 ta +0004 00000062
+render f0 k1 ta +0008 08000020
+render f0 k1 ta +000c 00030001
+render f0 k1 ta +0010 10000010
+render f0 k1 ta +0014 50000000
+render f0 k1 ta +0018 50000000
+render f0 k1 ta +001c 00000400
+render f0 k1 ta +0024 32010000
+render f0 k1 ta +0038 3203e000
+render f0 k1 ta +003c 32041000
+render f0 k1 ta +0040 32037000
+render f0 k1 ta +0044 32037050
+render f0 k1 ta +0058 00000001
+render f0 k1 ta +0078 2d000004
+render f0 k1 ta +0080 2d00000c
+render f0 k1 ta +0238 20000000
+render f0 k1 ta +023c 82010018
+render f0 k1 ta +0240 02010018
+render f0 k1 ta +0244 0001d016
+render f0 k1 ta +0248 00000040
+render f0 k1 ta +024c 00400001
+render f0 k1 ta +0250 20001000
+render f0 k1 ta +0254 000000a2
+render f0 k1 ta +0258 20007000
+render f0 k1 ta +025c 20000000
+render f0 k1 ta +0260 358637bd
+render f0 k1 ta +0264 358637bd
+render f0 k1 ta +0268 01df02cf
+render f0 k1 ta +0274 10000000
+render f0 k1 ta +02a4 00000088
+render f0 k1 data 00000000 30010000 woff 580
+render f0 entry 1 cmd_off 2c0 done_val 1
+render f0 rd +0000 10000000
+render f0 rd +0004 20100000
+render f0 rd +0008 00000080
+render f0 rd +000c 000f0000
+render f0 rd +0010 80000000
+render f0 rd +0018 3f000000
+render f0 rd +0020 20007000
+render f0 rd +0028 20003000
+render f0 rd +002c 001710b4
+render f0 rd +0038 80080000
+render f0 rd +003c 80080000
+render f0 rd +0040 3f800000
+render f0 rd +0044 00000300
+render f0 rd +0048 0200a400
+render f0 rd +0050 00000088
+render f0 rd +0058 00000030
+render f0 rd +005c 2e000300
+render f0 rd +0060 00000003
+render f0 rd +0064 00000001
+render f0 rd +0068 00000001
+render f0 rd +00cc 00000100
+render f0 rd +00d0 2d005000
+render f0 rd +00d8 32037000
+render f0 rd +00dc 32037050
+render f0 rd +0104 00000001
+render f0 rd +0110 3203f000
+render f0 rd +0114 32040000
+render f0 rd +013c 07c00000
+render f0 bg +0000 08000020
+render f0 bg +0004 00030001
+render f0 bg +0008 10000010
+render f0 bg +0014 3f800000
+render f0 bg +0020 3f800000
+render f0 bg +0028 00000202
+render f0 bg +003c 00100000
+render f0 bg +0040 00001000
+render f0 bg +0044 00003f80
+render f0 bg +0048 12d00010
+render f0 bg +004c 3f800000
+render f0 bg +0050 0011e000
+render f0 bg +0054 00001000
+render f0 bg +0058 00003f80
+render f0 w4 +0000 10000010
+render f0 deps +0000 2d006000
+render f0 deps +0004 00000001
+render f0 deps +000c 2d00200c
+render f0 deps +0014 2d002004
+render rtword +0000 00000001
+render sync3d +0008 00000001
+render done +0000 00000001
+render f1 k0 ta +0000 000002c0
+render f1 k0 ta +0004 00000061
+render f1 k0 ta +0008 08000020
+render f1 k0 ta +000c 00030001
+render f1 k0 ta +0010 10000010
+render f1 k0 ta +0014 50000000
+render f1 k0 ta +0018 50000000
+render f1 k0 ta +0020 00000001
+render f1 k0 ta +0024 32010000
+render f1 k0 ta +0038 32039000
+render f1 k0 ta +003c 3203c000
+render f1 k0 ta +0040 32037000
+render f1 k0 ta +0044 32037018
+render f1 k0 ta +0058 00000001
+render f1 k0 ta +0238 20000000
+render f1 k0 ta +023c 82010018
+render f1 k0 ta +0240 02010018
+render f1 k0 ta +0244 0001d016
+render f1 k0 ta +0248 00000040
+render f1 k0 ta +0250 20000000
+render f1 k0 ta +0254 000000a2
+render f1 k0 ta +0258 20003000
+render f1 k0 ta +025c 20000000
+render f1 k0 ta +0260 358637bd
+render f1 k0 ta +0264 358637bd
+render f1 k0 ta +0268 01df02cf
+render f1 k0 ta +0274 10000000
+render f1 k0 ta +02a4 00000088
+render f1 k0 data 00000000 30010000 woff 840
+render f1 k1 ta +0000 000002c0
+render f1 k1 ta +0004 00000062
+render f1 k1 ta +0008 08000020
+render f1 k1 ta +000c 00030001
+render f1 k1 ta +0010 10000010
+render f1 k1 ta +0014 50000000
+render f1 k1 ta +0018 50000000
+render f1 k1 ta +001c 00004400
+render f1 k1 ta +0020 00000001
+render f1 k1 ta +0024 32010000
+render f1 k1 ta +0038 32039000
+render f1 k1 ta +003c 3203c000
+render f1 k1 ta +0040 32037000
+render f1 k1 ta +0044 32037018
+render f1 k1 ta +0058 00000001
+render f1 k1 ta +0078 2d000004
+render f1 k1 ta +007c 00000001
+render f1 k1 ta +0080 2d00000c
+render f1 k1 ta +0238 20000000
+render f1 k1 ta +023c 82010018
+render f1 k1 ta +0240 02010018
+render f1 k1 ta +0244 0001d016
+render f1 k1 ta +0248 00000040
+render f1 k1 ta +024c 00400001
+render f1 k1 ta +0250 20001000
+render f1 k1 ta +0254 000000a2
+render f1 k1 ta +0258 20003000
+render f1 k1 ta +025c 20000000
+render f1 k1 ta +0260 358637bd
+render f1 k1 ta +0264 358637bd
+render f1 k1 ta +0268 01df02cf
+render f1 k1 ta +0274 10000000
+render f1 k1 ta +02a4 00000088
+render f1 k1 data 00000000 30010000 woff b00
+render f1 entry 0 cmd_off 840 done_val 2
+render f1 rd +0000 10000000
+render f1 rd +0004 20100000
+render f1 rd +0008 00000080
+render f1 rd +000c 000f0000
+render f1 rd +0010 80000000
+render f1 rd +0018 3f000000
+render f1 rd +0020 20003000
+render f1 rd +0028 20007000
+render f1 rd +002c 001710b4
+render f1 rd +0038 80080000
+render f1 rd +003c 80080000
+render f1 rd +0040 3f800000
+render f1 rd +0044 00000300
+render f1 rd +0048 0200a300
+render f1 rd +0050 00000088
+render f1 rd +0058 00000030
+render f1 rd +005c 2e000300
+render f1 rd +0060 00000003
+render f1 rd +0064 00000001
+render f1 rd +0068 00000001
+render f1 rd +00cc 00000100
+render f1 rd +00d0 2d003000
+render f1 rd +00d8 32037000
+render f1 rd +00dc 32037018
+render f1 rd +0104 00000001
+render f1 rd +0110 3203a000
+render f1 rd +0114 3203b000
+render f1 rd +013c 07c00000
+render f1 bg +0000 08000020
+render f1 bg +0004 00030001
+render f1 bg +0008 10000010
+render f1 bg +0014 3f800000
+render f1 bg +0020 3f800000
+render f1 bg +0028 00000202
+render f1 bg +003c 00100000
+render f1 bg +0040 00001000
+render f1 bg +0044 00003f80
+render f1 bg +0048 12d00010
+render f1 bg +004c 3f800000
+render f1 bg +0050 0011e000
+render f1 bg +0054 00001000
+render f1 bg +0058 00003f80
+render f1 w4 +0000 10000010
+render f1 deps +0000 2d004000
+render f1 deps +0004 00000001
+render f1 deps +000c 2d00200c
+render f1 deps +0010 00000001
+render f1 deps +0014 2d002004
+render rtword +0000 00000002
+render sync3d +0008 00000002
+render done +0000 00000002
 heaps heaps size 16 stride 32 count 6
 heaps heap0 +0000 3e000000
 heaps heap0 +0008 b2000000
