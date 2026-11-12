@@ -1442,10 +1442,21 @@ writes drop and reads return leftovers — attempts 31-35 exactly. Attempt 18 te
 block (0xa78/0xaac/0xabc/0xa00) only against "does the PDS run," never against "do writes
 land," and never wrote 0x810-0x818 / 0x800-0x804 / 0x4e8 / 0x13c at all.
 
-**Attempt 37 (the next step): write the full 545 `init_regs` set on the 530**, then test with `aluwr`. If
-writes then land (0x0fd7d000), bisect to the needed subset — start with the 0x810/0x814/0x818
-group. Driver-side (the 530 `init_regs` table), under the standing go (unnamed registers,
-known 545 values, as attempt 18). If it works, re-run the real image: likely init completing.
+**Attempt 37 (approved): write the 545 `init_regs` offsets the 530 skips.** The coordinator
+approved, under the standing go, these exact offsets at the 545 captured values (G): 0x800,
+0x804, 0x810, 0x814, 0x818, 0x4e8, 0x13c, 0xa00, 0xa7c, 0xa80, plus 0xa78/0xaac/0xabc. (These
+are ask-first: unnamed in both GPL headers. Approval is per these offsets, not implied by the
+diff.) Run it as a driver-side sweep, not folded into `sgx530_init_regs` until a variant
+proves what's needed:
+- each offset read once before the first write, logged;
+- the recovery reset first;
+- the full set together first, with `aluwr` as the readout;
+- if writes land (0x0fd7d000), bisect starting with 0x810/0x814/0x818, so the table keeps
+  only what's needed;
+- stop at the first hang; a plug cycle only to recover, the board owner told.
+
+Record the values G (545 capture) and the effect C once measured. If writes land, re-run the
+real image: likely init completing.
 
 ## Abort conditions
 
