@@ -457,7 +457,11 @@ def build(a):
         # one of each early instruction and self-loops, to find which first derails
         # on real hardware. No phas.i (V0 showed limm runs without it). Read back:
         # ctlblk 0x28 = A -> st.a.d runs; EVENT_TIMER = 0xa5a -> str runs; ctlblk
-        # 0x18 = B -> ran past str; a self-loop with no fault -> the USSE executes
+        # 0x18 = B -> ran past str; a self-loop with no fault -> the USSE executes.
+        # USSE_PHAS puts phas.i first (the real entry's order), to test whether the
+        # SGX530 needs it before any work (no USE_UNLIMITED_PHASES).
+        if USSE_PHAS:
+            a.phas()
         a.patch(17, "ctlblk")
         a.i(f"limm r0, #{USSE_MARK_A}")
         a.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r0 [moe]")   # 0x28, before str
