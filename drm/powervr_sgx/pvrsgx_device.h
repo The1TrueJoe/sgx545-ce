@@ -242,6 +242,10 @@ struct pvrsgx_device {
 
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+	/** @test_wr: KUnit only: sees every register write before it lands. */
+	void (*test_wr)(struct pvrsgx_device *sdev, u32 reg, u32 val);
+#endif
 };
 
 #define to_pvrsgx_device(drm) container_of_const(drm, struct pvrsgx_device, base)
@@ -272,6 +276,10 @@ static inline u32 sgx_rd(struct pvrsgx_device *sdev, u32 reg)
 
 static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 {
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+	if (sdev->test_wr)
+		sdev->test_wr(sdev, reg, val);
+#endif
 	iowrite32(val, sdev->regs + reg);
 }
 

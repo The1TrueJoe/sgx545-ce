@@ -321,25 +321,13 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 	return 0;
 }
 
-int pvrsgx_fw_init(struct pvrsgx_device *sdev)
+/* The arenas and the built image, once the file is loaded. */
+static int fw_arenas(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
-	const struct firmware *fw;
 	u32 pds_base;
 	int err;
 
-	f->name = sdev->core->fw_name;
-	err = request_firmware(&fw, f->name, sdev->base.dev);
-	if (err) {
-		drm_err(&sdev->base, "no microkernel: %s (%d)\n", f->name, err);
-		return err;
-	}
-	err = ukfw_load(sdev, fw);
-	if (err == -ENOENT)
-		drm_err(&sdev->base, "%s: not a microkernel file\n", f->name);
-	release_firmware(fw);
-	if (err)
-		return err;
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 
 	/*
@@ -367,6 +355,27 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		f->cpu[b] = (u8 *)km->cpu + off;
 	}
 	return fw_build(sdev, f->image);
+}
+
+int pvrsgx_fw_init(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_fw *f = &sdev->fw;
+	const struct firmware *fw;
+	int err;
+
+	f->name = sdev->core->fw_name;
+	err = request_firmware(&fw, f->name, sdev->base.dev);
+	if (err) {
+		drm_err(&sdev->base, "no microkernel: %s (%d)\n", f->name, err);
+		return err;
+	}
+	err = ukfw_load(sdev, fw);
+	if (err == -ENOENT)
+		drm_err(&sdev->base, "%s: not a microkernel file\n", f->name);
+	release_firmware(fw);
+	if (err)
+		return err;
+	return fw_arenas(sdev);
 }
 
 void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
@@ -587,4 +596,5 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
 #include "tests/pvrsgx_fw_test.c"
+#include "tests/pvrsgx_equiv_test.c"
 #endif

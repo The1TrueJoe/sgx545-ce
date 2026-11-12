@@ -45,6 +45,8 @@ config DRM_POWERVR_SGX_KUNIT_TEST
 	  image is accepted, and every malformed header, table and checksum
 	  is refused), of kernel-object teardown at unbind, of the core
 	  table, of a job's cache ranges and of a render target's tiling
-	  numbers. The tests need no GPU.
+	  numbers, and a record of the SGX545's register writes and
+	  firmware structures that a change must leave as it is. The tests
+	  need no GPU.
 
 	  For developers; if unsure, say N.
