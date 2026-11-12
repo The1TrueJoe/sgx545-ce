@@ -184,7 +184,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
 		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
 	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
-	       pvrsgx_mmu_pd_addr(sdev->idle_mmu));
+	       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
 	inval_dc(sdev);
 
 	sgx_wr(sdev, SGX_CR_SOFT_RESET, 0);
@@ -268,6 +268,36 @@ static int identify(struct pvrsgx_device *sdev)
 	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x: %s\n",
 		 sdev->core_id, sdev->core_rev, sdev->core->name);
 	return 0;
+}
+
+/*
+ * On a single-context core the microkernel runs on the job's directory, so
+ * every VM maps the firmware heaps. They get their page tables now, so the
+ * directory entries every VM copies never change.
+ */
+static int share_fw_heaps_init(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	const struct pvrsgx_va_range *r[] = { &h->kernel_code, &h->kernel_data, &h->sync };
+	int err = 0;
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return 0;
+	for (unsigned int i = 0; i < ARRAY_SIZE(r) && !err; i++)
+		err = pvrsgx_mmu_prealloc(sdev->kernel_mmu, r[i]->base, r[i]->end);
+	return err;
+}
+
+/* Point a VM's directory at the firmware heaps' page tables, on a single-context core. */
+void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return;
+	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->kernel_code.base, h->kernel_code.end);
+	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->kernel_data.base, h->kernel_data.end);
+	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->sync.base, h->sync.end);
 }
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
@@ -358,6 +388,9 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	}
 
 	err = identify(sdev);
+	if (err)
+		goto err_mmu;
+	err = share_fw_heaps_init(sdev);
 	if (err)
 		goto err_mmu;
 

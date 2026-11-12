@@ -544,7 +544,8 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	if (args->type == DRM_POWERVR_SGX_CTX_TYPE_TRANSFER && args->param_buffer_pages)
 		return -EINVAL;
 	if (args->param_buffer_pages &&
-	    (args->param_buffer_pages < 0x100 || args->param_buffer_pages > 0x8000))
+	    (args->param_buffer_pages < 0x100 ||
+	     args->param_buffer_pages > pvrsgx_heaps(to_pvrsgx_device(drm))->pb_max_pages))
 		return -EINVAL;
 
 	ctx = kzalloc_obj(*ctx);

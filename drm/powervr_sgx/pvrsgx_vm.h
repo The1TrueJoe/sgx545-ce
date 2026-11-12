@@ -22,7 +22,8 @@ struct pvrsgx_pb;
  *
  * Maps only the client heaps, plus (later) the kernel-owned structures the TA
  * and 3D read under it. Never the kernel code or data heaps: that is what keeps
- * a client's tasks away from the firmware's memory.
+ * a client's tasks away from the firmware's memory. A single-context core is
+ * the exception: there every VM shares the firmware heaps' page tables.
  */
 struct pvrsgx_vm {
 	/** @gpuvm: The GPU VA manager. */
@@ -45,9 +46,12 @@ struct pvrsgx_vm {
 	atomic_t users;
 	/** @ran_gen: &pvrsgx_device.fw_gen + 1 at its last job sent; 0 before any. */
 	u32 ran_gen;
+	/** @pd_slot: Its slot in the microkernel's PD table (single-context cores), or 0. */
+	int pd_slot;
 };
 
 struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);
+u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm);
 struct pvrsgx_vm *pvrsgx_vm_get(struct pvrsgx_vm *vm);
 void pvrsgx_vm_put(struct pvrsgx_vm *vm);
 void pvrsgx_vm_user_get(struct pvrsgx_vm *vm);

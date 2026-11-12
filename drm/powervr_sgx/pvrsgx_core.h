@@ -177,6 +177,15 @@ struct pvrsgx_core_info {
 	const char *fw_name;
 };
 
+/*
+ * One memory context: the microkernel, TA, 3D and 2D all translate through
+ * directory list 0, so the firmware heaps are in every VM's directory.
+ */
+static inline bool pvrsgx_core_single_context(const struct pvrsgx_core_family *f)
+{
+	return !(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS);
+}
+
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
 const struct pvrsgx_core_info *pvrsgx_core_lookup(const struct pvrsgx_core_family *family,
 						  u32 core_id, u32 core_rev);
