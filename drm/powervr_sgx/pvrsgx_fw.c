@@ -414,15 +414,6 @@ void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
 	ida_free(&sdev->fw.pd_slots, slot);
 }
 
-/*
- * Bring-up only: map the kernel data arena without EDMPROTECT on a core whose
- * event registers are a guess. On the SGX530 the task's stores to that arena
- * fault (stage 1, log 2026-11-12-0620).
- */
-static bool stage1_no_edmprotect;
-module_param(stage1_no_edmprotect, bool, 0444);
-MODULE_PARM_DESC(stage1_no_edmprotect, "Map the kernel data arena without EDMPROTECT on a guessed core");
-
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
@@ -445,11 +436,13 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		return err;
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 
-	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
+	/*
+	 * PTE flags as the DDK maps the same buffers: data read-write, code
+	 * read-only. Without EDMPROTECT where the core needs it (data_no_edmprotect).
+	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, pvrsgx_heaps(sdev)->kernel_data.base,
 				DATA_ARENA_SIZE, SGX_MMU_PTE_CACHECONSISTENT |
-				(stage1_no_edmprotect && sdev->family->event_pds_guessed ?
-				 0 : SGX_MMU_PTE_EDMPROTECT));
+				(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT));
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, pvrsgx_heaps(sdev)->kernel_code.base,

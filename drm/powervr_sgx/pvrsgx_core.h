@@ -146,6 +146,14 @@ struct pvrsgx_core_family {
 	 */
 	bool event_pds_guessed;
 	/**
+	 * @data_no_edmprotect: Map the kernel data arena without EDMPROTECT. A
+	 * bring-up stopgap for the SGX530, whose microkernel task's stores to an
+	 * EDMPROTECT page fault: EDMPROTECT is what keeps a client's stores out
+	 * of microkernel memory, so this must be undone, or client isolation
+	 * shown another way, before any client work on the core.
+	 */
+	bool data_no_edmprotect;
+	/**
 	 * @ukernel_temps: Temporary registers the microkernel's entry DOUTU
 	 * asks for (bits 24-31, in fours). 0 keeps pvrsgx_doutu()'s 32.
 	 */
