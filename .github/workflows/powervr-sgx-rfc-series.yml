@@ -2,7 +2,8 @@
 # drm-misc-next, and every patch is built and checked on its own (gcc and
 # clang W=1, sparse, smatch, checkpatch --strict, kernel-doc), as a reviewer
 # bisecting it would. The commit messages live outside this repository, so
-# the cut here uses placeholder messages: the code is what is checked.
+# the cut here uses placeholder messages: the code is what is checked. At
+# the tip the cut tree's own KUnit suites run under QEMU.
 name: powervr-sgx-rfc-series
 
 permissions:
@@ -38,11 +39,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             bc bison flex libelf-dev libssl-dev ccache sparse clang lld llvm \
-            libsqlite3-dev libdbd-sqlite3-perl libtry-tiny-perl
+            libsqlite3-dev libdbd-sqlite3-perl libtry-tiny-perl qemu-system-x86
           git clone -q --depth 1 -b $SMATCH_REF https://repo.or.cz/smatch.git smatch
           make -C smatch -j"$(nproc)" >/dev/null
 
       - name: Cut the series onto drm-misc-next
+        id: cut
         run: |
           set -eux
           git clone -q --depth 1 -b $KERNEL_BRANCH $KERNEL_GIT linux
@@ -58,6 +60,7 @@ jobs:
           ls msg
           sh drm/ci/rfc-series.sh "$PWD/linux" "$PWD" "$PWD/msg"
           git -C linux log --oneline "$(cat base.sha)..HEAD"
+          git -C linux rev-parse HEAD > tip.sha
 
       - name: Configuration (at the series tip)
         run: |
@@ -65,10 +68,10 @@ jobs:
           L=linux
           make -C $L ARCH=x86_64 x86_64_defconfig >/dev/null
           ./$L/scripts/config --file $L/.config -m DRM -m DRM_GMA500 -m DRM_POWERVR_SGX \
-            -e DRM_POWERVR_SGX_GMA500 -e OF -e DRM_POWERVR_SGX_OF -e KUNIT \
+            -e DRM_POWERVR_SGX_GMA500 -e KUNIT \
             -m DRM_POWERVR_SGX_KUNIT_TEST -e DEBUG_FS -e PM
           make -C $L ARCH=x86_64 olddefconfig >/dev/null
-          for want in CONFIG_DRM_POWERVR_SGX=m CONFIG_DRM_POWERVR_SGX_GMA500=y CONFIG_DRM_POWERVR_SGX_OF=y \
+          for want in CONFIG_DRM_POWERVR_SGX=m CONFIG_DRM_POWERVR_SGX_GMA500=y \
               CONFIG_DRM_POWERVR_SGX_KUNIT_TEST=m; do
             grep -qx "$want" $L/.config || { echo "missing $want"; exit 1; }
           done
@@ -143,3 +146,18 @@ jobs:
             fi
           done
           exit $fail
+
+      # A clean worktree of the tip: kunit.py builds out of tree, which needs a
+      # source tree without the in-tree .config the steps above use.
+      - name: KUnit (at the series tip)
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
+        run: |
+          set -euxo pipefail
+          git -C linux worktree add -q --detach ../linux-kunit "$(cat tip.sha)"
+          cd linux-kunit
+          ./tools/testing/kunit/kunit.py run --arch=x86_64 --jobs="$(nproc)" \
+            --kunitconfig=drivers/gpu/drm/powervr_sgx/tests/.kunitconfig \
+            --kconfig_add CONFIG_PCI=y --kconfig_add CONFIG_DRM=y --kconfig_add CONFIG_KUNIT=y \
+            --kconfig_add CONFIG_DRM_POWERVR_SGX=y --kconfig_add CONFIG_DRM_POWERVR_SGX_KUNIT_TEST=y \
+            2>&1 | tee ../kunit.log
+          grep -q 'powervr_sgx_equiv' ../kunit.log

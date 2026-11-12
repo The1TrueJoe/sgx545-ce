@@ -1,0 +1,1170 @@
+diff --git a/drivers/gpu/drm/powervr_sgx/Kconfig b/drivers/gpu/drm/powervr_sgx/Kconfig
+index 6c880ff..f7b6974 100644
+--- a/drivers/gpu/drm/powervr_sgx/Kconfig
++++ b/drivers/gpu/drm/powervr_sgx/Kconfig
+@@ -3,7 +3,7 @@
+ 
+ config DRM_POWERVR_SGX
+ 	tristate "PowerVR SGX5xx (SGX545: Intel CE5300, Cedarview)"
+-	depends on DRM && PCI && MMU && (X86 || ARM || COMPILE_TEST)
++	depends on DRM && PCI && MMU && (X86 || COMPILE_TEST)
+ 	select DRM_EXEC
+ 	select DRM_GEM_SHMEM_HELPER
+ 	select DRM_GPUVM
+@@ -35,19 +35,6 @@ config DRM_POWERVR_SGX_GMA500
+ 
+ 	  Say Y if this kernel runs on a Cedarview machine.
+ 
+-config DRM_POWERVR_SGX_OF
+-	bool "SGX on device tree SoCs (TI OMAP3630 SGX530)"
+-	depends on DRM_POWERVR_SGX && OF
+-	help
+-	  Bind to an SGX described by the img,powervr-sgx device tree
+-	  binding. Only parts whose GPU node sits in a ti-sysc module, which
+-	  clocks and powers it, are handled: the OMAP3630's SGX530. Its
+-	  clients aren't isolated from the firmware or from each other, so
+-	  the driver runs it only with powervr_sgx.allow_unisolated=1, for
+-	  bring-up. Dma-buf import isn't supported on ARM yet.
+-
+-	  Say N unless this kernel is for such an SoC.
+-
+ config DRM_POWERVR_SGX_KUNIT_TEST
+ 	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
+ 	depends on DRM_POWERVR_SGX && KUNIT
+diff --git a/drivers/gpu/drm/powervr_sgx/Makefile b/drivers/gpu/drm/powervr_sgx/Makefile
+index fa6514b..89fc90a 100644
+--- a/drivers/gpu/drm/powervr_sgx/Makefile
++++ b/drivers/gpu/drm/powervr_sgx/Makefile
+@@ -32,7 +32,6 @@ powervr_sgx-y := \
+ powervr_sgx-$(CONFIG_DEBUG_FS) += pvrsgx_debugfs.o
+ powervr_sgx-$(CONFIG_PM) += pvrsgx_pm.o
+ powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_GMA500) += pvrsgx_aux.o
+-powervr_sgx-$(CONFIG_DRM_POWERVR_SGX_OF) += pvrsgx_of.o
+ 
+ obj-$(CONFIG_DRM_POWERVR_SGX) += powervr_sgx.o
+ else
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_cache.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_cache.h
+index 76ccee6..5e51b1a 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_cache.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_cache.h
+@@ -7,7 +7,7 @@
+ /*
+  * The SGX doesn't snoop the CPU caches. Memory the CPU writes for the GPU is
+  * written through uncached (write-combined) mappings. On x86 the linear map
+- * of those pages is made write-combined too. Elsewhere (ARM) the linear map
++ * of those pages is made write-combined too. Elsewhere the linear map
+  * stays cacheable: the lines the page's zeroing left are written back once,
+  * and the CPU only writes the page through its own write-combined mapping.
+  */
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.c
+index f73c801..fadbf51 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.c
+@@ -321,33 +321,3 @@ const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx545 = {
+ 		[PVRSGX_CMD_TRANSFER] = &sgx545_transfer,
+ 	},
+ };
+-
+-/* sgx530: render depends on a value not yet known there. */
+-static const struct pvrsgx_cmd_def sgx530_render = {
+-	.name = "render",
+-	.type = PVRSGX_CMD_RENDER,
+-};
+-
+-/* sgx530: ta_kick depends on a value not yet known there. */
+-static const struct pvrsgx_cmd_def sgx530_ta_kick = {
+-	.name = "ta_kick",
+-	.type = PVRSGX_CMD_TA_KICK,
+-};
+-
+-/* sgx530: transfer depends on a value not yet known there. */
+-static const struct pvrsgx_cmd_def sgx530_transfer = {
+-	.name = "transfer",
+-	.type = PVRSGX_CMD_TRANSFER,
+-};
+-
+-const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx530 = {
+-	.name = "sgx530",
+-	.va_bits = 28,
+-	.pds_row_bytes = 0,
+-	.max_samples = 1,
+-	.cmds = {
+-		[PVRSGX_CMD_RENDER] = &sgx530_render,
+-		[PVRSGX_CMD_TA_KICK] = &sgx530_ta_kick,
+-		[PVRSGX_CMD_TRANSFER] = &sgx530_transfer,
+-	},
+-};
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.h
+index 611e46e..ef076d8 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_cmd_defs.h
+@@ -38,6 +38,5 @@ struct pvrsgx_cmd_transfer_all {
+ extern const u8 pvrsgx_cmd_ext_owner[64];
+ 
+ extern const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx545;
+-extern const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx530;
+ 
+ #endif /* PVRSGX_CMD_DEFS_H */
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_core.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_core.c
+index ebc0cba..98635b6 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_core.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_core.c
+@@ -16,11 +16,6 @@
+ #include "pvrsgx_fw.h"
+ #include "pvrsgx_hw.h"
+ 
+-bool pvrsgx_allow_unisolated;
+-module_param_named(allow_unisolated, pvrsgx_allow_unisolated, bool, 0444);
+-MODULE_PARM_DESC(allow_unisolated,
+-		 "Run a single-context core (SGX530), where clients can reach the firmware and each other's commands (default off)");
+-
+ static const struct pvrsgx_core_regs sgx545_regs = {
+ 	.core_id = SGX_CR_CORE_ID,
+ 	.core_revision = SGX_CR_CORE_REVISION,
+@@ -86,67 +81,6 @@ static const struct pvrsgx_core_init_reg sgx545_init_regs[] = {
+ 	{ 0xa00, 0x7c000 },
+ };
+ 
+-/*
+- * SGX530 (TI OMAP3630), from the GPL sgx530defs.h.
+- * It has no CLKGATECTL2, EVENT_KICK2 or BIF bank registers. The event PDS
+- * registers aren't in the GPL header: the SGX545's offsets, a guess here,
+- * checked by reading back before the first kick.
+- */
+-static const struct pvrsgx_core_regs sgx530_regs = {
+-	.core_id = 0x0010,
+-	.core_revision = 0x0014,
+-	/* 2D b0-1, ISP b4-5, TSP b8-9, TA b12-13, DPM b16-17, USE b20-21 */
+-	.clkgatectl_units = 0x00333333,
+-	.clkgatectl_dpm = GENMASK(17, 16),
+-	.clkgatestatus = 0x0004,
+-	.clkgatestatus_dpm = BIT(16),
+-	.soft_reset_bif = BIT(0),
+-	/* 2D b1, DPM b2, TA b3, USE b4, ISP b5, TSP b6 */
+-	.soft_reset_cores = GENMASK(6, 1),
+-	.use_code_base0 = SGX_CR_USE_CODE_BASE_0,
+-	.pds_exec_base = SGX_CR_PDS_EXEC_BASE,
+-	.bif_int_stat_fault_req = GENMASK(13, 0),
+-	.bif_int_stat_fault_type = BIT(14),	/* read or write */
+-	.bif_fault_addr = GENMASK(27, 12),
+-	.use_code_base_dm_shift = 24,
+-	/* 256-byte units: the EDM fetches at field << 8. */
+-	.use_code_base_addr_shift = 8,
+-	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
+-	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
+-	.event_pds_base = SGX545_CR_EVENT_PDS_BASE,
+-	.event_pds_data0 = SGX545_CR_EVENT_PDS_DATA0,
+-	.event_pds_data1 = SGX545_CR_EVENT_PDS_DATA1,
+-};
+-
+-/* Init script part 2 for the SGX530: the host's interrupt, and one SGX545 write. */
+-static const struct pvrsgx_core_init_reg sgx530_init_regs[] = {
+-	{ SGX_CR_EVENT_HOST_ENABLE, SGX_CR_EVENT_STATUS_SW_EVENT },
+-	{ SGX_CR_EVENT_HOST_ENABLE2, 0 },
+-	/* Unnamed; without it the PDS fetches nothing. */
+-	{ 0xa74, 0x208200 },
+-};
+-
+-/*
+- * 256 MiB, every heap on a 4 MiB directory entry. From PDS pixel up, the
+- * bases of the GPL SGX530 sgxconfig.h: kernel code above both PDS
+- * heaps, within the 64 MiB the EDM reaches past PDS_EXEC_BASE. The texture
+- * heap, which that layout lacks, is the top of its general heap.
+- */
+-static const struct pvrsgx_heap_layout sgx530_heaps = {
+-	.general = { 0x01800000, 0x05000000 },
+-	.texture = { 0x05000000, 0x08400000 },
+-	.params_3d = { 0x08400000, 0x0c400000 },
+-	.ta_data = { 0x0c400000, 0x0d400000 },
+-	.sync = { 0x0d400000, 0x0d800000 },
+-	.pds_pixel = { 0x0d800000, 0x0e000000 },
+-	.pds_vertex = { 0x0e000000, 0x0e800000 },
+-	.kernel_code = { 0x0ec00000, 0x0f000000 },
+-	.kernel_data = { 0x0f000000, 0x0f400000 },
+-	.usse_pixel = { 0x0f400000, 0x0f900000 },
+-	.usse_vertex = { 0x0fc00000, 0x0fe00000 },
+-	.pb_max_pages = 0x800,
+-};
+-
+ static const struct pvrsgx_core_family families[] = {
+ 	{
+ 		.name = "SGX545",
+@@ -165,25 +99,6 @@ static const struct pvrsgx_core_family families[] = {
+ 		.init_regs = sgx545_init_regs,
+ 		.num_init_regs = ARRAY_SIZE(sgx545_init_regs),
+ 	},
+-	{
+-		/* One memory context, one kick (BRN_22934), 28-bit addresses. */
+-		.name = "SGX530",
+-		.core = 530,
+-		/* Read on an OMAP3630 board. */
+-		.core_id = 0x01120000,
+-		.regs = &sgx530_regs,
+-		.isa = PVRSGX_ISA_SGX545,
+-		.num_dir_lists = 1,
+-		.va_bits = 28,
+-		.heaps = &sgx530_heaps,
+-		.quirks = PVRSGX_QUIRK_BRN_28889,
+-		.event_pds_guessed = true,
+-		/* Its task's stores to EDMPROTECT pages fault. */
+-		.data_no_edmprotect = true,
+-		.cmds = &pvrsgx_cmd_core_sgx530,
+-		.init_regs = sgx530_init_regs,
+-		.num_init_regs = ARRAY_SIZE(sgx530_init_regs),
+-	},
+ };
+ 
+ static const struct pvrsgx_core_info cores[] = {
+@@ -206,21 +121,9 @@ static const struct pvrsgx_core_info cores[] = {
+ 		.clock_hz = 400000000,
+ 		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
+ 	},
+-	{
+-		/*
+-		 * Revision read on our OMAP3630 test board. The microkernel's
+-		 * timer needs only the clock's order of magnitude.
+-		 */
+-		.family = &families[1],
+-		.name = "TI OMAP3630 (SGX530 1.2.5)",
+-		.core_rev = 0x00010205,
+-		.clock_hz = 200000000,
+-		.fw_name = "powervr_sgx/sgx530_ukernel.bin",
+-	},
+ };
+ 
+ MODULE_FIRMWARE("powervr_sgx/sgx545_ukernel.bin");
+-MODULE_FIRMWARE("powervr_sgx/sgx530_ukernel.bin");
+ 
+ /*
+  * Without EDM_VERTEX_PDSADDR_FULL_RANGE, a heap the EDM runs PDS code from
+@@ -251,19 +154,18 @@ static bool heaps_fit(const struct pvrsgx_core_family *f)
+ }
+ 
+ /*
+- * Whether the driver can run the core, not only identify it: either a
+- * directory list per VM, or exactly one; a heap layout within its address
+- * space; the event PDS registers that enter the microkernel; and the second
+- * kick register exactly when the core has one.
++ * Whether the driver can run the core, not only identify it: a directory
++ * list per VM; a heap layout within its address space; the event PDS
++ * registers that enter the microkernel; and the second kick register exactly
++ * when the core has one.
+  */
+ bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f)
+ {
+ 	const struct pvrsgx_core_regs *cr = f->regs;
+-	bool multi = f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS;
+ 	bool kick2 = f->features & PVRSGX_FEATURE_MULTI_EVENT_KICK;
+ 
+-	if (multi ? f->num_dir_lists < 2 || f->num_dir_lists > SGX_BIF_MAX_DIRLISTS :
+-		    f->num_dir_lists != 1)
++	if (!(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS) ||
++	    f->num_dir_lists < 2 || f->num_dir_lists > SGX_BIF_MAX_DIRLISTS)
+ 		return false;
+ 	if ((f->va_bits != 28 && f->va_bits != 32) || !f->heaps || !heaps_fit(f) || !f->cmds)
+ 		return false;
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_core.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_core.h
+index 58c1d46..769b51f 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_core.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_core.h
+@@ -136,19 +136,6 @@ struct pvrsgx_core_family {
+ 	const struct pvrsgx_heap_layout *heaps;
+ 	/** @quirks: PVRSGX_QUIRK_*. */
+ 	u32 quirks;
+-	/**
+-	 * @event_pds_guessed: The event PDS registers are a guess, not yet
+-	 * confirmed on this core: refuse to kick if the program address
+-	 * doesn't read back.
+-	 */
+-	bool event_pds_guessed;
+-	/**
+-	 * @data_no_edmprotect: Map the kernel data arena without EDMPROTECT. A
+-	 * bring-up stopgap for the SGX530, whose microkernel task's stores to an
+-	 * EDMPROTECT page fault. It runs only with allow_unisolated, which
+-	 * already gives up client isolation on such a core.
+-	 */
+-	bool data_no_edmprotect;
+ 	/** @cmds: What its client commands are checked against (pvrsgx_cmd_defs.c). */
+ 	const struct pvrsgx_cmd_core *cmds;
+ 	/** @init_regs: Init script part 2's register writes, in order. */
+@@ -177,17 +164,6 @@ struct pvrsgx_core_info {
+ 	const char *fw_name;
+ };
+ 
+-/*
+- * One memory context: the microkernel, TA, 3D and 2D all translate through
+- * directory list 0, so the firmware heaps are in every VM's directory.
+- */
+-static inline bool pvrsgx_core_single_context(const struct pvrsgx_core_family *f)
+-{
+-	return !(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS);
+-}
+-
+-extern bool pvrsgx_allow_unisolated;
+-
+ const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
+ bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f);
+ const struct pvrsgx_core_info *pvrsgx_core_lookup(const struct pvrsgx_core_family *family,
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_device.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_device.c
+index 9328e8e..20715a4 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_device.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_device.c
+@@ -179,12 +179,9 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
+ 
+ 	sgx_wr_opt(sdev, sdev->cr->bif_bank0,
+ 		   FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, pvrsgx_dirlist_edm(sdev)));
+-	/* With one directory list the EDM's is list 0, set below. */
+-	if (pvrsgx_dirlist_edm(sdev))
+-		sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
+-		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+-	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
+-	       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
++	sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
++	       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
++	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0), pvrsgx_mmu_pd_addr(sdev->idle_mmu));
+ 	inval_dc(sdev);
+ 
+ 	sgx_wr(sdev, SGX_CR_SOFT_RESET, 0);
+@@ -263,17 +260,6 @@ static int identify(struct pvrsgx_device *sdev)
+ 			 sdev->family->name, sdev->core_id, sdev->core_rev, sdev->family->name);
+ 		return -ENODEV;
+ 	}
+-	if (pvrsgx_core_single_context(sdev->family)) {
+-		if (!pvrsgx_allow_unisolated) {
+-			drm_err(&sdev->base,
+-				"%s has one memory context: every client could reach the firmware and the other clients' commands. Not running it; powervr_sgx.allow_unisolated=1 runs it anyway.\n",
+-				sdev->family->name);
+-			return -ENODEV;
+-		}
+-		drm_warn(&sdev->base,
+-			 "%s has one memory context: clients are not isolated from the firmware or from each other (allow_unisolated=1)\n",
+-			 sdev->family->name);
+-	}
+ 
+ 	sdev->core = pvrsgx_core_lookup(sdev->family, sdev->core_id, sdev->core_rev);
+ 	if (!sdev->core) {
+@@ -287,36 +273,6 @@ static int identify(struct pvrsgx_device *sdev)
+ 	return 0;
+ }
+ 
+-/*
+- * On a single-context core the microkernel runs on the job's directory, so
+- * every VM maps the firmware heaps. They get their page tables now, so the
+- * directory entries every VM copies never change.
+- */
+-static int share_fw_heaps_init(struct pvrsgx_device *sdev)
+-{
+-	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+-	const struct pvrsgx_va_range *r[] = { &h->kernel_code, &h->kernel_data, &h->sync };
+-	int err = 0;
+-
+-	if (!pvrsgx_core_single_context(sdev->family))
+-		return 0;
+-	for (unsigned int i = 0; i < ARRAY_SIZE(r) && !err; i++)
+-		err = pvrsgx_mmu_prealloc(sdev->kernel_mmu, r[i]->base, r[i]->end);
+-	return err;
+-}
+-
+-/* Point a VM's directory at the firmware heaps' page tables, on a single-context core. */
+-void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu)
+-{
+-	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+-
+-	if (!pvrsgx_core_single_context(sdev->family))
+-		return;
+-	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->kernel_code.base, h->kernel_code.end);
+-	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->kernel_data.base, h->kernel_data.end);
+-	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->sync.base, h->sync.end);
+-}
+-
+ #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+ /* Behind gma500 the hard handler runs from gma500's; its thread is a work item. */
+ static irqreturn_t pvrsgx_gma_irq(void *data)
+@@ -405,9 +361,6 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
+ 	}
+ 
+ 	err = identify(sdev);
+-	if (err)
+-		goto err_mmu;
+-	err = share_fw_heaps_init(sdev);
+ 	if (err)
+ 		goto err_mmu;
+ 
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_device.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_device.h
+index 0342b45..870f8af 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_device.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_device.h
+@@ -10,7 +10,6 @@
+ #include <drm/gpu_scheduler.h>
+ 
+ #include <linux/device.h>
+-#include <linux/idr.h>
+ #include <linux/io.h>
+ #include <linux/list.h>
+ #include <linux/mutex.h>
+@@ -87,10 +86,6 @@ struct pvrsgx_fw {
+ 	struct pvrsgx_kmem data;
+ 	/** @code: Kernel code heap: microkernel and its PDS programs. */
+ 	struct pvrsgx_kmem code;
+-	/** @pdtable: Single-context cores: the directory of each VM by slot, GPU read-only. */
+-	struct pvrsgx_kmem pdtable;
+-	/** @pd_slots: The @pdtable slots VMs hold. */
+-	struct ida pd_slots;
+ 	/** @addr: Device address of each buffer. */
+ 	u32 addr[PVRSGX_FW_NBUF];
+ 	/** @cpu: CPU address of each buffer. */
+@@ -148,7 +143,7 @@ struct pvrsgx_device {
+ 
+ 	/** @kernel_mmu: Page directory the microkernel translates through. */
+ 	struct pvrsgx_mmu *kernel_mmu;
+-	/** @idle_mmu: Empty directory for list 0 while no job runs (multi-context cores). */
++	/** @idle_mmu: Empty directory for list 0 while no job runs. */
+ 	struct pvrsgx_mmu *idle_mmu;
+ 	/** @reset_mmu: Scratch directory that absorbs faults during reset. */
+ 	struct pvrsgx_mmu *reset_mmu;
+@@ -254,8 +249,6 @@ struct pvrsgx_device {
+ 
+ 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
+ 	atomic_t irq_count;
+-	/** @pm_pinned: Runtime PM is held active (single-context bring-up). */
+-	bool pm_pinned;
+ #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+ 	/** @test_wr: KUnit only: sees every register write before it lands. */
+ 	void (*test_wr)(struct pvrsgx_device *sdev, u32 reg, u32 val);
+@@ -306,16 +299,6 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
+ 	iowrite32(val, sdev->regs + reg);
+ }
+ 
+-/*
+- * What list 0 holds while no job runs: an empty directory, or on a
+- * single-context core the firmware's, since the microkernel translates
+- * through list 0 too.
+- */
+-static inline struct pvrsgx_mmu *pvrsgx_idle_mmu(const struct pvrsgx_device *sdev)
+-{
+-	return pvrsgx_core_single_context(sdev->family) ? sdev->kernel_mmu : sdev->idle_mmu;
+-}
+-
+ /* The core's device-virtual layout. */
+ static inline const struct pvrsgx_heap_layout *pvrsgx_heaps(const struct pvrsgx_device *sdev)
+ {
+@@ -343,7 +326,6 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
+ 		      u32 dev_addr, u32 size, u32 pte_flags, gfp_t gfp);
+ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
+ void pvrsgx_kmem_release(struct pvrsgx_kmem *km);
+-void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu);
+ 
+ int pvrsgx_device_init(struct pvrsgx_device *sdev);
+ void pvrsgx_device_unplug(struct pvrsgx_device *sdev);
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.c
+index fe996a1..d2f9765 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.c
+@@ -350,23 +350,13 @@ static int __init pvrsgx_init(void)
+ 		return err;
+ 	err = pvrsgx_aux_register();
+ 	if (err)
+-		goto err_pci;
+-	err = pvrsgx_of_register();
+-	if (err)
+-		goto err_aux;
+-	return 0;
+-
+-err_aux:
+-	pvrsgx_aux_unregister();
+-err_pci:
+-	pci_unregister_driver(&pvrsgx_pci_driver);
++		pci_unregister_driver(&pvrsgx_pci_driver);
+ 	return err;
+ }
+ module_init(pvrsgx_init);
+ 
+ static void __exit pvrsgx_exit(void)
+ {
+-	pvrsgx_of_unregister();
+ 	pvrsgx_aux_unregister();
+ 	pci_unregister_driver(&pvrsgx_pci_driver);
+ }
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.h
+index a6acc52..6970ac6 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_drv.h
+@@ -36,14 +36,6 @@ static inline int pvrsgx_aux_register(void) { return 0; }
+ static inline void pvrsgx_aux_unregister(void) { }
+ #endif
+ 
+-#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_OF)
+-int pvrsgx_of_register(void);
+-void pvrsgx_of_unregister(void);
+-#else
+-static inline int pvrsgx_of_register(void) { return 0; }
+-static inline void pvrsgx_of_unregister(void) { }
+-#endif
+-
+ void *pvrsgx_obj_array_get(const struct drm_powervr_sgx_obj_array *in, u32 obj_size,
+ 			   u32 max_count);
+ int pvrsgx_obj_array_put(const struct drm_powervr_sgx_obj_array *out, const void *src,
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_dump.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_dump.c
+index e37d484..611dbc0 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_dump.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_dump.c
+@@ -80,7 +80,7 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool reg
+ 		       sdev->lost, sdev->reset_count, atomic_read(&sdev->irq_count));
+ 	seq_buf_printf(sb, "kernel PD 0x%08x idle PD 0x%08x\n",
+ 		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu),
+-		       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
++		       pvrsgx_mmu_pd_addr(sdev->idle_mmu));
+ 	seq_buf_printf(sb, "ccb wo %u ro %u issued %llu consumed %llu\n", READ_ONCE(ctl[0]),
+ 		       READ_ONCE(ctl[1]), sdev->ccb_issued, pvrsgx_ccb_consumed(sdev));
+ 	seq_buf_printf(sb, "hostctl init 0x%x power 0x%x uk-lockups %u ",
+@@ -149,8 +149,7 @@ static void dump_bif(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrs
+ 		       field_get(cr->bif_int_stat_fault_type, stat));
+ 	dump_lookup(sb, "job's", bad->ctx->vm->mmu, addr);
+ 	dump_lookup(sb, "firmware's", sdev->kernel_mmu, addr);
+-	if (!pvrsgx_core_single_context(sdev->family))
+-		dump_lookup(sb, "idle", sdev->idle_mmu, addr);
++	dump_lookup(sb, "idle", sdev->idle_mmu, addr);
+ }
+ 
+ /*
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.c
+index 4787ed6..53ac6a3 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.c
+@@ -42,7 +42,7 @@
+ #define UKFW_HEADER_MIN		0x60
+ #define UKFW_IF_MAJOR		1
+ #define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE | \
+-				 PVRSGX_UKFW_DONE_SEQ | PVRSGX_UKFW_SINGLE_CONTEXT)
++				 PVRSGX_UKFW_DONE_SEQ)
+ /* Bits 16-31: the microkernel's own build variants, nothing the host must know. */
+ #define UKFW_FEATURES_PRIVATE	GENMASK(31, 16)
+ #define UKFW_MAX_IMAGE		(CODE_ARENA_SIZE - PDS_BYTES - 0x10)
+@@ -73,7 +73,6 @@ enum ukfw_patch_value {
+ 	UKFW_CCBCTL,
+ 	UKFW_CCB,
+ 	UKFW_MISC,
+-	UKFW_PDTABLE,	/* single-context cores only */
+ };
+ 
+ /* The POWER command: data word 1. */
+@@ -205,17 +204,8 @@ static int fw_build_open(struct pvrsgx_device *sdev)
+ 	for (u32 p = 0; p < ARRAY_SIZE(entry); p++)
+ 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
+ 
+-	for (u32 i = 0; i < f->n_patches && !err; i++) {
+-		u32 v = f->patches[i][1];
+-
+-		if (v == UKFW_PDTABLE && !f->pdtable.pages) {
+-			drm_err(&sdev->base, "%s: a PD table patch on a multi-context core\n",
+-				f->name);
+-			return -EINVAL;
+-		}
+-		err = fw_limm(sdev, f->patches[i][0],
+-			      v == UKFW_PDTABLE ? f->pdtable.dev_addr : f->addr[value_buf[v]]);
+-	}
++	for (u32 i = 0; i < f->n_patches && !err; i++)
++		err = fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
+ 	if (err)
+ 		return err;
+ 	return 0;
+@@ -295,7 +285,7 @@ static int ukfw_parse(const u8 *data, size_t size, struct pvrsgx_fw *f, const ch
+ 	}
+ 	for (u32 i = 0; i < f->n_patches; i++) {
+ 		if (f->patches[i][0] > isize - 8 || !IS_ALIGNED(f->patches[i][0], 8) ||
+-		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_PDTABLE)
++		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_MISC)
+ 			return -EINVAL;
+ 	}
+ 	if (!entry0)
+@@ -319,21 +309,8 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+ 		drm_err(&sdev->base, "%s: %s\n", f->name, why);
+ 	if (err)
+ 		return err;
+-	/*
+-	 * Secure mode keeps the firmware out of every client directory, which a
+-	 * single-context core can't do: there the image must not claim it.
+-	 */
+-	if (pvrsgx_core_single_context(sdev->family)) {
+-		if ((f->features & (PVRSGX_UKFW_SECURE | PVRSGX_UKFW_SINGLE_CONTEXT)) !=
+-		    PVRSGX_UKFW_SINGLE_CONTEXT) {
+-			drm_err(&sdev->base, "%s: not an image for a single-context core\n",
+-				f->name);
+-			return -EINVAL;
+-		}
+-	} else if (f->features & PVRSGX_UKFW_SINGLE_CONTEXT) {
+-		drm_err(&sdev->base, "%s: an image for a single-context core\n", f->name);
+-		return -EINVAL;
+-	} else if (!(f->features & PVRSGX_UKFW_SECURE)) {
++	/* Secure mode keeps the firmware out of every client directory. */
++	if (!(f->features & PVRSGX_UKFW_SECURE)) {
+ 		drm_err(&sdev->base, "%s: not a secure-mode image; clients would reach the firmware\n",
+ 			f->name);
+ 		return -EINVAL;
+@@ -347,57 +324,6 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
+ 	return 0;
+ }
+ 
+-/*
+- * Single-context cores: the microkernel loads list 0 from this table, by the
+- * slot a HW context names, so no directory address it loads is GPU-writable.
+- * Read-only on the GPU, between the code arena and the kernel code objects.
+- * Every slot no VM holds names the firmware's directory.
+- */
+-#define PDTABLE_OFFSET	0xf000
+-#define PDTABLE_SLOTS	(PAGE_SIZE / sizeof(u32))
+-
+-/* The PD table sits past the code arena, inside the kernel code heap's first 64 KiB. */
+-static_assert(PDTABLE_OFFSET >= CODE_ARENA_SIZE);
+-static_assert(SZ_64K - PAGE_SIZE >= PDTABLE_OFFSET);
+-
+-static int pdtable_init(struct pvrsgx_device *sdev)
+-{
+-	struct pvrsgx_fw *f = &sdev->fw;
+-	int err;
+-
+-	if (!pvrsgx_core_single_context(sdev->family))
+-		return 0;
+-	err = pvrsgx_kmem_alloc(sdev, &f->pdtable,
+-				pvrsgx_heaps(sdev)->kernel_code.base + PDTABLE_OFFSET, PAGE_SIZE,
+-				SGX_MMU_PTE_READONLY, 0);
+-	if (err)
+-		return err;
+-	memset32(f->pdtable.cpu, pvrsgx_mmu_pd_addr(sdev->kernel_mmu), PDTABLE_SLOTS);
+-	return 0;
+-}
+-
+-/* A slot naming directory pd, for a new VM; its HW contexts carry the slot. */
+-int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd)
+-{
+-	int slot = ida_alloc_range(&sdev->fw.pd_slots, 1, PDTABLE_SLOTS - 1, GFP_KERNEL);
+-
+-	if (slot < 0)
+-		return slot;
+-	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pd);
+-	/* In memory before any command names the slot. */
+-	wmb();
+-	return slot;
+-}
+-
+-/* The VM is gone: its slot names the firmware's directory again. */
+-void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
+-{
+-	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+-	/* The slot names the firmware's directory before another VM can take it. */
+-	wmb();
+-	ida_free(&sdev->fw.pd_slots, slot);
+-}
+-
+ /* The arenas and the built image, once the file is loaded. */
+ static int fw_arenas(struct pvrsgx_device *sdev)
+ {
+@@ -408,22 +334,15 @@ static int fw_arenas(struct pvrsgx_device *sdev)
+ 
+ 	f->interface = DRM_POWERVR_SGX_FW_IF_V1;
+ 
+-	/*
+-	 * The PTE flags: data read-write and EDM-protected where the core allows
+-	 * it, code read-only.
+-	 */
++	/* The PTE flags: data read-write and EDM-protected, code read-only. */
+ 	err = pvrsgx_kmem_alloc(sdev, &f->data, h->kernel_data.base, DATA_ARENA_SIZE,
+-				SGX_MMU_PTE_CACHECONSISTENT |
+-				(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT), 0);
++				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT, 0);
+ 	if (err)
+ 		return err;
+ 	err = pvrsgx_kmem_alloc(sdev, &f->code, h->kernel_code.base, CODE_ARENA_SIZE,
+ 				SGX_MMU_PTE_READONLY, 0);
+ 	if (err)
+ 		return err;
+-	err = pdtable_init(sdev);
+-	if (err)
+-		return err;
+ 
+ 	pds_base = ALIGN(f->image_size, 0x10);
+ 	for (int b = 0; b < PVRSGX_FW_NBUF; b++) {
+@@ -444,7 +363,6 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
+ 	const struct firmware *fw;
+ 	int err;
+ 
+-	ida_init(&f->pd_slots);
+ 	f->name = sdev->core->fw_name;
+ 	err = request_firmware(&fw, f->name, sdev->base.dev);
+ 	if (err) {
+@@ -468,10 +386,8 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
+ 	sdev->fw.patches = NULL;
+ 	kfree(sdev->fw.image);
+ 	sdev->fw.image = NULL;
+-	pvrsgx_kmem_free(sdev, &sdev->fw.pdtable);
+ 	pvrsgx_kmem_free(sdev, &sdev->fw.code);
+ 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
+-	ida_destroy(&sdev->fw.pd_slots);
+ }
+ 
+ /* USE_CODE_BASE's data master for the pixel windows and for the microkernel's. */
+@@ -506,31 +422,13 @@ static u32 event_pds_addr(struct pvrsgx_device *sdev)
+ 	return a;
+ }
+ 
+-/* Where the event PDS registers are a guess, the address must read back before any kick. */
+-static int check_event_pds(struct pvrsgx_device *sdev)
+-{
+-	u32 want = event_pds_addr(sdev), got;
+-
+-	if (!sdev->family->event_pds_guessed)
+-		return 0;
+-	got = sgx_rd(sdev, sdev->cr->event_pds_base);
+-	if (got != want) {
+-		drm_err(&sdev->base,
+-			"event PDS base 0x%04x reads 0x%08x, not 0x%08x; not starting the microkernel\n",
+-			sdev->cr->event_pds_base, got, want);
+-		return -EIO;
+-	}
+-	return 0;
+-}
+-
+ /* Init script part 2: the core's script, then the bases. */
+-static int init_script_part2(struct pvrsgx_device *sdev)
++static void init_script_part2(struct pvrsgx_device *sdev)
+ {
+ 	const struct pvrsgx_core_family *fam = sdev->family;
+ 	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+ 	const struct pvrsgx_core_regs *cr = sdev->cr;
+ 	struct pvrsgx_fw *f = &sdev->fw;
+-	int err;
+ 
+ 	for (u32 i = 0; i < fam->num_init_regs; i++)
+ 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
+@@ -557,12 +455,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
+ 	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
+ 	sgx_wr(sdev, cr->event_pds_data0, 1);
+ 	sgx_wr(sdev, cr->event_pds_data1, 6);
+-	/* Before the events are enabled, so a wrong guess starts nothing. */
+-	err = check_event_pds(sdev);
+-	if (err)
+-		return err;
+ 	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
+-	return 0;
+ }
+ 
+ static void deinit_script(struct pvrsgx_device *sdev)
+@@ -650,9 +543,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
+ 	pvrsgx_reset(sdev, true);
+ 
+ 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
+-	err = init_script_part2(sdev);
+-	if (err)
+-		return err;
++	init_script_part2(sdev);
+ 
+ 	hc[HOSTCTL_INIT_STATUS] = 0;
+ 	/* The image and the host control block are in memory before the kick. */
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.h
+index 92dfa08..ea52b87 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_fw.h
+@@ -51,11 +51,6 @@ struct seq_buf;
+ #define PVRSGX_UKFW_SECURE		BIT(1)
+ /* It counts finished jobs in pvrsgx_fw_ta3d_ctl.done_seq, then interrupts. */
+ #define PVRSGX_UKFW_DONE_SEQ		BIT(2)
+-/*
+- * Runs on list 0 with the jobs, directories from the PD table, the firmware
+- * directory back on list 0 before any completion (single-context cores).
+- */
+-#define PVRSGX_UKFW_SINGLE_CONTEXT	BIT(3)
+ 
+ #define HOSTCTL_INIT_COMPLETE		BIT(0)
+ #define HOSTCTL_POWMAN_POWEROFF_COMPLETE BIT(3)
+@@ -63,8 +58,6 @@ struct seq_buf;
+ #define HOSTCTL_INTERRUPT_ACTIVE_POWER	BIT(1)
+ 
+ int pvrsgx_fw_init(struct pvrsgx_device *sdev);
+-int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd);
+-void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot);
+ void pvrsgx_fw_fini(struct pvrsgx_device *sdev);
+ int pvrsgx_fw_start(struct pvrsgx_device *sdev);
+ void pvrsgx_fw_stop(struct pvrsgx_device *sdev);
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.c
+index 7f204e7..64ee1a7 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.c
+@@ -109,8 +109,7 @@ static u32 *pte_get(struct pvrsgx_mmu *mmu, u32 dev_addr, bool alloc)
+ 	struct pvrsgx_mmu_pt *pt = mmu->pt[pdi];
+ 
+ 	if (!pt) {
+-		/* A directory entry with no table of ours is another directory's (shared). */
+-		if (!alloc || WARN_ON(mmu->pd[pdi]))
++		if (!alloc)
+ 			return NULL;
+ 		pt = kzalloc_obj(*pt);
+ 		if (!pt)
+@@ -253,29 +252,3 @@ bool pvrsgx_mmu_lookup(struct pvrsgx_mmu *mmu, u32 dev_addr, u32 *pde, u32 *pte)
+ 	mutex_unlock(&mmu->lock);
+ 	return true;
+ }
+-
+-/* Give [start, end) page tables of their own now, so their PDEs never change. */
+-int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u64 end)
+-{
+-	int err = 0;
+-
+-	mutex_lock(&mmu->lock);
+-	for (u64 a = start; a < end && !err; a += SGX_MMU_PDE_SPAN)
+-		err = pte_get(mmu, a, true) ? 0 : -ENOMEM;
+-	mutex_unlock(&mmu->lock);
+-	return err;
+-}
+-
+-/*
+- * Point dst's directory entries for [start, end) at src's page tables: src's
+- * mappings there show in dst too, and dst never maps anything there itself.
+- * Both ends 4 MiB aligned, src preallocated.
+- */
+-void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u64 end)
+-{
+-	for (u64 a = start; a < end; a += SGX_MMU_PDE_SPAN) {
+-		unsigned int i = a >> (SGX_MMU_PAGE_SHIFT + SGX_MMU_PT_SHIFT);
+-
+-		dst->pd[i] = src->pd[i];
+-	}
+-}
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.h
+index 7ad63a4..abb5702 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_mmu.h
+@@ -21,8 +21,6 @@ int pvrsgx_mmu_map_sgt(struct pvrsgx_mmu *mmu, u32 dev_addr,
+ int pvrsgx_mmu_reserve(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
+ void pvrsgx_mmu_unmap(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
+ bool pvrsgx_mmu_range_empty(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size);
+-int pvrsgx_mmu_prealloc(struct pvrsgx_mmu *mmu, u32 start, u64 end);
+-void pvrsgx_mmu_share(struct pvrsgx_mmu *dst, struct pvrsgx_mmu *src, u32 start, u64 end);
+ bool pvrsgx_mmu_lookup(struct pvrsgx_mmu *mmu, u32 dev_addr, u32 *pde, u32 *pte);
+ 
+ #endif /* PVRSGX_MMU_H */
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_of.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_of.c
+deleted file mode 100644
+index e347a36..0000000
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_of.c
++++ /dev/null
+@@ -1,119 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-/* Copyright © 2026 Joseph Telaak */
+-
+-/*
+- * An SGX on a device tree SoC (Documentation/devicetree/bindings/gpu/
+- * img,powervr-sgx.yaml). On TI parts the GPU node has no clocks or power
+- * domain of its own: its ti-sysc parent module enables both, and applies the
+- * SGX interrupt quirk, when the GPU device is runtime-resumed. Every register
+- * access happens with the parent held awake.
+- */
+-
+-#include <linux/dma-mapping.h>
+-#include <linux/io.h>
+-#include <linux/mod_devicetable.h>
+-#include <linux/module.h>
+-#include <linux/of.h>
+-#include <linux/platform_device.h>
+-#include <linux/pm_runtime.h>
+-#include <linux/property.h>
+-
+-#include "pvrsgx_device.h"
+-#include "pvrsgx_drv.h"
+-#include "pvrsgx_fw.h"
+-#include "pvrsgx_pm.h"
+-
+-static int pvrsgx_of_probe(struct platform_device *pdev)
+-{
+-	struct device *dev = &pdev->dev;
+-	struct pvrsgx_device *sdev;
+-	struct resource *res, win;
+-	int err, irq;
+-
+-	/* Clocks and resets on the GPU node itself (non-TI parts) aren't handled yet. */
+-	if (of_property_present(dev->of_node, "clocks") ||
+-	    of_property_present(dev->of_node, "resets")) {
+-		dev_err(dev, "GPU node with its own clocks or resets; not touching it\n");
+-		return -ENODEV;
+-	}
+-	if (!dev->parent || !pm_runtime_enabled(dev->parent)) {
+-		dev_err(dev, "no runtime-PM parent to clock the GPU; not touching it\n");
+-		return -ENODEV;
+-	}
+-
+-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+-	if (!res || resource_size(res) < PVRSGX_REGS_MIN)
+-		return -ENODEV;
+-	irq = platform_get_irq(pdev, 0);
+-	if (irq < 0)
+-		return irq;
+-
+-	err = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
+-	if (err)
+-		return err;
+-	dma_set_max_seg_size(dev, UINT_MAX);
+-
+-	sdev = pvrsgx_alloc(dev);
+-	if (IS_ERR(sdev))
+-		return PTR_ERR(sdev);
+-	sdev->family = pvrsgx_core_family_get((uintptr_t)device_get_match_data(dev));
+-	sdev->irq = irq;
+-	platform_set_drvdata(pdev, sdev);
+-
+-	/* Map only the registers: nothing past them is named (OMAP3 maps 32 MiB). */
+-	win = DEFINE_RES_MEM_NAMED(res->start, PVRSGX_REGS_MIN, PVRSGX_DRIVER_NAME);
+-	sdev->regs = devm_ioremap_resource(dev, &win);
+-	if (IS_ERR(sdev->regs))
+-		return PTR_ERR(sdev->regs);
+-
+-	/* The module is clocked only while its parent is awake. */
+-	err = pm_runtime_resume_and_get(dev->parent);
+-	if (err)
+-		return err;
+-	err = pvrsgx_probe_common(sdev);
+-	pm_runtime_put(dev->parent);
+-	return err;
+-}
+-
+-static void pvrsgx_of_remove(struct platform_device *pdev)
+-{
+-	pvrsgx_remove_common(platform_get_drvdata(pdev));
+-}
+-
+-static void pvrsgx_of_shutdown(struct platform_device *pdev)
+-{
+-	struct pvrsgx_device *sdev = platform_get_drvdata(pdev);
+-
+-	/* Only a powered core can be stopped. */
+-	if (sdev && pm_runtime_get_if_active(&pdev->dev) > 0) {
+-		pvrsgx_fw_stop(sdev);
+-		pm_runtime_put_noidle(&pdev->dev);
+-	}
+-}
+-
+-static const struct of_device_id pvrsgx_of_ids[] = {
+-	{ .compatible = "img,powervr-sgx530", .data = (void *)530 },
+-	{ }
+-};
+-MODULE_DEVICE_TABLE(of, pvrsgx_of_ids);
+-
+-static struct platform_driver pvrsgx_of_driver = {
+-	.probe = pvrsgx_of_probe,
+-	.remove = pvrsgx_of_remove,
+-	.shutdown = pvrsgx_of_shutdown,
+-	.driver = {
+-		.name = PVRSGX_DRIVER_NAME,
+-		.of_match_table = pvrsgx_of_ids,
+-		.pm = pm_ptr(&pvrsgx_pm_ops),
+-	},
+-};
+-
+-int pvrsgx_of_register(void)
+-{
+-	return platform_driver_register(&pvrsgx_of_driver);
+-}
+-
+-void pvrsgx_of_unregister(void)
+-{
+-	platform_driver_unregister(&pvrsgx_of_driver);
+-}
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_pm.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_pm.c
+index 24c93a9..3c927cb 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_pm.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_pm.c
+@@ -50,14 +50,6 @@ void pvrsgx_power_init(struct pvrsgx_device *sdev)
+ 	} else {
+ 		pm_runtime_set_active(dev);
+ 		pm_runtime_enable(dev);
+-		/*
+-		 * A single-context core is still in bring-up: its power-off and
+-		 * the state loss of a suspend are untested, so it stays awake.
+-		 */
+-		if (pvrsgx_core_single_context(sdev->family)) {
+-			pm_runtime_get_noresume(dev);
+-			sdev->pm_pinned = true;
+-		}
+ 	}
+ }
+ 
+@@ -76,10 +68,6 @@ void pvrsgx_power_fini(struct pvrsgx_device *sdev)
+ 		pm_runtime_disable(dev);
+ 		pm_runtime_set_suspended(dev);
+ 		pm_runtime_put_noidle(dev);
+-		if (sdev->pm_pinned) {
+-			pm_runtime_put_noidle(dev);
+-			sdev->pm_pinned = false;
+-		}
+ 	}
+ }
+ 
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.c b/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.c
+index b12d390..ed374f4 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.c
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.c
+@@ -18,7 +18,6 @@
+ #include <linux/dma-resv.h>
+ #include <linux/module.h>
+ #include <linux/overflow.h>
+-#include <linux/pm_runtime.h>
+ #include <linux/scatterlist.h>
+ #include <linux/sizes.h>
+ #include <linux/slab.h>
+@@ -290,29 +289,6 @@ static struct pvrsgx_vm_free *vm_free_alloc(void)
+ 	return f;
+ }
+ 
+-/*
+- * On a single-context core the microkernel puts list 0 back on the firmware's
+- * directory when it raises its interrupt, which can come after a job's
+- * completion shows. Before a VM's directory is freed, list 0 must not hold it.
+- * A suspended core holds nothing: the next start's reset sets list 0.
+- */
+-static void vm_pd_unload(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu)
+-{
+-	struct device *dev = sdev->base.dev;
+-	u32 pd = pvrsgx_mmu_pd_addr(mmu);
+-
+-	if (!pvrsgx_core_single_context(sdev->family))
+-		return;
+-	if (IS_ENABLED(CONFIG_PM) && pm_runtime_get_if_active(dev) <= 0)
+-		return;
+-	if (READ_ONCE(sdev->powered) && sgx_rd(sdev, SGX_CR_BIF_DIR_LIST_BASE0) == pd) {
+-		drm_dbg_driver(&sdev->base, "list 0 still on a released VM's directory\n");
+-		sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE0, pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+-	}
+-	if (IS_ENABLED(CONFIG_PM))
+-		pm_runtime_put(dev);
+-}
+-
+ static void vm_release(struct kref *ref)
+ {
+ 	struct pvrsgx_vm *vm = container_of(ref, struct pvrsgx_vm, ref);
+@@ -324,9 +300,6 @@ static void vm_release(struct kref *ref)
+ 	if (vm->pb)
+ 		pvrsgx_pb_unmap(vm);
+ 	drm_mm_takedown(&vm->params);
+-	if (vm->pd_slot)
+-		pvrsgx_fw_pd_slot_put(vm->sdev, vm->pd_slot);
+-	vm_pd_unload(vm->sdev, vm->mmu);
+ 	pvrsgx_mmu_destroy(vm->mmu);
+ 	/* The directory and its pages may come back as another VM's. */
+ 	mutex_lock(&vm->sdev->ccb_lock);
+@@ -403,18 +376,6 @@ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
+ 		kfree(vm);
+ 		return ERR_PTR(-ENOMEM);
+ 	}
+-	if (pvrsgx_core_single_context(sdev->family)) {
+-		pvrsgx_share_fw_heaps(sdev, vm->mmu);
+-		vm->pd_slot = pvrsgx_fw_pd_slot_get(sdev, pvrsgx_mmu_pd_addr(vm->mmu));
+-		if (vm->pd_slot < 0) {
+-			int err = vm->pd_slot;
+-
+-			drm_gem_object_put(r_obj);
+-			pvrsgx_mmu_destroy(vm->mmu);
+-			kfree(vm);
+-			return ERR_PTR(err);
+-		}
+-	}
+ 	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
+ 		       0, BIT_ULL(sdev->family->va_bits), 0, 0, &pvrsgx_gpuvm_ops);
+ 	drm_gem_object_put(r_obj);
+@@ -427,13 +388,10 @@ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
+ 	return vm;
+ }
+ 
+-/*
+- * What a HW context's directory word holds: the directory's address, or on a
+- * single-context core its slot in the microkernel's PD table.
+- */
++/* What a HW context's directory word holds: the directory's address. */
+ u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm)
+ {
+-	return vm->pd_slot ?: pvrsgx_mmu_pd_addr(vm->mmu);
++	return pvrsgx_mmu_pd_addr(vm->mmu);
+ }
+ 
+ struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle)
+diff --git a/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.h b/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.h
+index 9a9a952..cc88c1d 100644
+--- a/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.h
++++ b/drivers/gpu/drm/powervr_sgx/pvrsgx_vm.h
+@@ -22,8 +22,7 @@ struct pvrsgx_pb;
+  *
+  * Maps only the client heaps, plus (later) the kernel-owned structures the TA
+  * and 3D read under it. Never the kernel code or data heaps: that is what keeps
+- * a client's tasks away from the firmware's memory. A single-context core is
+- * the exception: there every VM shares the firmware heaps' page tables.
++ * a client's tasks away from the firmware's memory.
+  */
+ struct pvrsgx_vm {
+ 	/** @gpuvm: The GPU VA manager. */
+@@ -46,8 +45,6 @@ struct pvrsgx_vm {
+ 	atomic_t users;
+ 	/** @ran_gen: &pvrsgx_device.fw_gen + 1 at its last job sent; 0 before any. */
+ 	u32 ran_gen;
+-	/** @pd_slot: Its slot in the microkernel's PD table (single-context cores), or 0. */
+-	int pd_slot;
+ };
+ 
+ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);
+diff --git a/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_core_test.c b/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_core_test.c
+index ebc7059..499122e 100644
+--- a/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_core_test.c
++++ b/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_core_test.c
+@@ -83,31 +83,11 @@ static void core_test_sgx545_values(struct kunit *test)
+ 	KUNIT_EXPECT_EQ(test, f->regs->cr_b30, 0x0b30);
+ }
+ 
+-/* The SGX530: one directory list, 28 bits, BRN_28889, a layout the EDM reaches. */
+-static void core_test_sgx530(struct kunit *test)
+-{
+-	const struct pvrsgx_core_family *f = pvrsgx_core_family_get(530);
+-
+-	KUNIT_ASSERT_NOT_NULL(test, f);
+-	KUNIT_EXPECT_TRUE(test, pvrsgx_core_single_context(f));
+-	KUNIT_EXPECT_EQ(test, f->num_dir_lists, 1);
+-	KUNIT_EXPECT_EQ(test, f->va_bits, 28);
+-	KUNIT_EXPECT_EQ(test, f->quirks, PVRSGX_QUIRK_BRN_28889);
+-	KUNIT_EXPECT_EQ(test, f->regs->event_kick2, 0);
+-	KUNIT_EXPECT_EQ(test, f->regs->bif_bank0, 0);
+-	KUNIT_EXPECT_EQ(test, f->regs->clkgatectl2, 0);
+-	KUNIT_EXPECT_TRUE(test, pvrsgx_core_family_usable(f));
+-	KUNIT_EXPECT_FALSE(test, pvrsgx_core_single_context(pvrsgx_core_family_get(545)));
+-	KUNIT_EXPECT_STREQ(test, pvrsgx_core_lookup(f, 0x01120000, 0x00010205)->name,
+-			   "TI OMAP3630 (SGX530 1.2.5)");
+-}
+-
+ static struct kunit_case pvrsgx_core_test_cases[] = {
+ 	KUNIT_CASE(core_test_lookup),
+ 	KUNIT_CASE(core_test_unknown),
+ 	KUNIT_CASE(core_test_table),
+ 	KUNIT_CASE(core_test_sgx545_values),
+-	KUNIT_CASE(core_test_sgx530),
+ 	{}
+ };
+ 
+diff --git a/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_equiv_test.c b/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_equiv_test.c
+index 6a30926..e5c5349 100644
+--- a/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_equiv_test.c
++++ b/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_equiv_test.c
+@@ -312,7 +312,6 @@ static struct eq_fx *eq_device(struct kunit *test, unsigned int core, u32 core_r
+ 	file = eq_file(test);
+ 	fw.data = (const u8 *)file;
+ 	fw.size = sizeof(*file);
+-	ida_init(&sdev->fw.pd_slots);
+ 	sdev->fw.name = "equiv";
+ 	KUNIT_ASSERT_EQ(test, ukfw_load(sdev, &fw), 0);
+ 	KUNIT_ASSERT_EQ(test, fw_arenas(sdev), 0);
+diff --git a/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_fw_test.c b/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_fw_test.c
+index a278cdc..5da58ba 100644
+--- a/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_fw_test.c
++++ b/drivers/gpu/drm/powervr_sgx/tests/pvrsgx_fw_test.c
+@@ -137,7 +137,7 @@ static void ukfw_test_tables(struct kunit *test)
+ 		{ false, 0, T_IMAGE - 4, UKFW_TA3DCTL },	/* patch past the image */
+ 		{ false, 0, 0xc, UKFW_TA3DCTL },	/* patch not on an instruction */
+ 		{ false, 1, 0x48, 0 },		/* value 0 */
+-		{ false, 1, 0x48, UKFW_PDTABLE + 1 },	/* unknown value */
++		{ false, 1, 0x48, UKFW_MISC + 1 },	/* unknown value */
+ 	};
+ 
+ 	for (u32 i = 0; i < ARRAY_SIZE(bad); i++) {
