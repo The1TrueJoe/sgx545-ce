@@ -765,17 +765,24 @@ or attribute allocation, or some other resource the setup didn't give it.
 0xabc = 0xe. Those offsets sit in the same block as the event-PDS registers, which turned
 out to be at the SGX545's offsets on the SGX530. Our SGX530 init writes none of them.
 
-**Attempt 18, in order of risk:**
-1. **0xabc = 0xe**, the SGX545 vendor's value. This register is named on the SGX530
-   (`PDS`, K: `DOUT_TIMEOUT_DISABLE` b6); the value sets its unnamed bits 1-3. Then the
-   baseline and F1.
-2. **With the coordinator's OK** (these offsets are unnamed on the SGX530), each of 0xa00,
-   0xa74, 0xa78, 0xaac at the SGX545's value, one per variant. Each is read once before
-   the write, as was done for 0xa58-0xa70, and logged. Then all of them together, with
-   0xa7c/0xa80 = 0.
+**Attempt 18, approved** (the coordinator, under Joseph's standing go and with the board on
+the smart plug). Seven offsets inside the SGX register block, each with its known SGX545
+value: no ranges, no sweeps, no other offsets.
 
-Success is a task starting, or F1's fault at 0x0e840000, which would show that the PDS now
-fetches.
+| # | Variant | Writes |
+|---|---|---|
+| 1 | `PDS` alone | 0xabc = 0xe (named on the SGX530: `PDS`; 0xe sets its unnamed bits 1-3) |
+| 2 | one at a time, each read once before the write and logged | 0xa00 = 0x7c000; 0xa74 = 0x208200; 0xa78 = 0x2c; 0xaac = 0x45 |
+| 3 | the four together | as in 2 |
+| 4 | only if 2 and 3 change nothing, by the same rule | 0xa7c = 0, then 0xa80 = 0 |
+
+- Each variant runs the baseline and F1 (a fault at 0x0e840000 means the PDS now fetches).
+  Success is a task starting or that fault.
+- The recovery reset comes first, as always.
+- The sweep stops at the first variant that hangs the bus or the board. A power cycle is
+  only for recovery: it's logged, and the board's owner session is told first.
+- Each offset's read-back goes in the fact sheet, tagged C for the value read on the
+  SGX530 and G for what the register does.
 
 ## Abort conditions
 
