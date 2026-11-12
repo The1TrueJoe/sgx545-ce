@@ -486,10 +486,25 @@ static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
  * Where the event PDS registers are a guess, the program address must read
  * back before anything kicks the microkernel; if not, no kick.
  */
+/*
+ * The event program's address as the event PDS base register takes it. A core
+ * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there (stage 1, log
+ * 2026-11-11-2144), the 64 MiB the GPL DDK lets PDS code lie above
+ * PDS_EXEC_BASE: taken as an offset from it (G).
+ */
+static u32 event_pds_addr(struct pvrsgx_device *sdev)
+{
+	u32 a = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu;
+
+	if (!(sdev->family->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE))
+		a -= pvrsgx_heaps(sdev)->pds_pixel.base;
+	return a;
+}
+
 static int check_event_pds(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
-	u32 want = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu, got;
+	u32 want = event_pds_addr(sdev), got;
 
 	if (!sdev->family->event_pds_guessed)
 		return 0;
@@ -530,7 +545,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
-	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
+	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
 	sgx_wr(sdev, cr->event_pds_data0, 1);
 	sgx_wr(sdev, cr->event_pds_data1, 6);
 	/* Before the events are enabled, so a wrong guess starts nothing. */

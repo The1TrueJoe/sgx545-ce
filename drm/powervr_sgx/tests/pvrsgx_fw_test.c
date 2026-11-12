@@ -75,6 +75,24 @@ static int ukfw_try(struct kunit *test, struct ukfw_test_file *t, size_t size)
 	return err;
 }
 
+/*
+ * The event PDS base: absolute where the EDM reaches PDS code anywhere, an
+ * offset from PDS_EXEC_BASE (the PDS pixel heap) otherwise.
+ */
+static void ukfw_test_event_pds_addr(struct kunit *test)
+{
+	struct pvrsgx_device *sdev = kunit_kzalloc(test, sizeof(*sdev), GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, sdev);
+	sdev->family = pvrsgx_core_family_get(530);
+	sdev->fw.addr[PVRSGX_FW_PDS0] = 0x0ec04348;
+	KUNIT_EXPECT_EQ(test, event_pds_addr(sdev), 0x01404340);
+
+	sdev->family = pvrsgx_core_family_get(545);
+	sdev->fw.addr[PVRSGX_FW_PDS0] = 0x30004348;
+	KUNIT_EXPECT_EQ(test, event_pds_addr(sdev), 0x30004340);
+}
+
 static void ukfw_test_good(struct kunit *test)
 {
 	struct ukfw_test_file *t = ukfw_good(test);
@@ -157,6 +175,7 @@ static struct kunit_case pvrsgx_fw_test_cases[] = {
 	KUNIT_CASE(ukfw_test_crc),
 	KUNIT_CASE(ukfw_test_header),
 	KUNIT_CASE(ukfw_test_tables),
+	KUNIT_CASE(ukfw_test_event_pds_addr),
 	{}
 };
 
