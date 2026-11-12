@@ -22,13 +22,12 @@ struct pvrsgx_file;
 struct pvrsgx_vm;
 
 /**
- * struct pvrsgx_context - A queue of jobs in one VM
- */
-/*
- * A file's GPU time, for fdinfo. Its contexts hold it too: a job may finish
- * after its file has closed.
+ * struct pvrsgx_usage - A file's GPU time, for fdinfo
+ *
+ * Its contexts hold it too: a job may finish after its file has closed.
  */
 struct pvrsgx_usage {
+	/** @ref: Held by the file and by each of its contexts. */
 	struct kref ref;
 	/** @render_ns: Time render jobs of the file spent on the GPU. */
 	atomic64_t render_ns;
@@ -38,6 +37,9 @@ struct pvrsgx_usage *pvrsgx_usage_new(void);
 struct pvrsgx_usage *pvrsgx_usage_get(struct pvrsgx_usage *u);
 void pvrsgx_usage_put(struct pvrsgx_usage *u);
 
+/**
+ * struct pvrsgx_context - A queue of jobs in one VM
+ */
 struct pvrsgx_context {
 	/** @ref: Held by the handle and by each job. */
 	struct kref ref;

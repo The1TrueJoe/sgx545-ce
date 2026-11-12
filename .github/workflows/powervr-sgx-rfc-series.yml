@@ -77,7 +77,7 @@ jobs:
 
       - name: Every patch on its own
         run: |
-          set -u
+          set +e -u
           export CCACHE_DIR=~/.cache/ccache
           L=$PWD/linux C=$PWD/linux-clang
           fail=0
@@ -90,14 +90,24 @@ jobs:
             r=""
             # checkpatch --strict on the patch (the placeholder message and the missing
             # Signed-off-by are expected here).
-            git -C $L format-patch -1 --stdout $c > p.patch
+            # The trace header's TRACE_EVENT() layout and the golden's data aren't C style.
+            git -C $L format-patch -1 --stdout $c -- . ':!drivers/gpu/drm/powervr_sgx/pvrsgx_trace.h' \
+              ':!drivers/gpu/drm/powervr_sgx/tests/*.txt' > p.patch
             perl $L/scripts/checkpatch.pl --strict --terse --no-signoff --ignore FILE_PATH_CHANGES p.patch > cp.log 2>&1
             grep -E ': (ERROR|WARNING|CHECK):' cp.log > cp.bad || true
             [ -s cp.bad ] && r="$r checkpatch"
             # kernel-doc on the files it adds or changes.
             files=$(git -C $L diff-tree --no-commit-id --name-only -r $c | grep -E '^(drivers/gpu/drm/(powervr_sgx|gma500)/.*\.[ch]|include/uapi/drm/powervr_sgx_drm\.h)$' | grep -v _trace.h || true)
+            # New warnings only: gma500's files have some already. Line numbers dropped.
             if [ -n "$files" ]; then
-              (cd $L && python3 scripts/kernel-doc -none -Wall -Werror $files) > kd.log 2>&1 || r="$r kernel-doc"
+              kd() { (cd $L && python3 scripts/kernel-doc -none -Wall $(for f in $files; do [ -f $f ] && echo $f; done) 2>&1 |
+                      sed -E 's/:[0-9]+ / /' | sort -u); }
+              git -C $L checkout -q $c^
+              kd > kd.before
+              git -C $L checkout -q $c
+              kd > kd.after
+              comm -13 kd.before kd.after | grep -v 'warnings as errors' > kd.log
+              [ -s kd.log ] && r="$r kernel-doc"
             fi
             # Build what exists at this patch.
             T="drivers/gpu/drm/drm_gem_shmem_helper.o drivers/gpu/drm/gma500/"
