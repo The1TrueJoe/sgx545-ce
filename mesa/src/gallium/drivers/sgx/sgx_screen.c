@@ -54,6 +54,8 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"glsl130", SGX_DEBUG_GLSL130,
     "GLSL 1.30 and native integers, and so EXT_texture_integer (RG32 and RGBA32 sample wrong until the compiler fetches them word by word): for the GL 3.0 work's tests"},
+   {"mrt", SGX_DEBUG_MRT,
+    "four colour buffers, a draw a pass a buffer (H1: a second PBE emit hangs the GPU); until that passes on a board"},
    {"zlsdump", SGX_DEBUG_ZLS_DUMP,
     "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -127,7 +129,11 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
       caps->max_control_flow_depth = 32;
       /* ISA.md: 16 attributes, 10 texture coordinate sets on the SGX545 */
       caps->max_inputs = s == MESA_SHADER_VERTEX ? f->vs_inputs : f->fs_inputs;
-      caps->max_outputs = s == MESA_SHADER_VERTEX ? f->vs_outputs : 1;
+      /* fragment: one output a pass, so as many as colour buffers (MRT a
+       * pass a buffer) */
+      caps->max_outputs = s == MESA_SHADER_VERTEX     ? f->vs_outputs
+                          : sgx_drv_debug & SGX_DEBUG_MRT ? 4
+                                                          : 1;
       /* Constants live in SA registers, sa9 (sa10 in a vertex program) to
        * sa127.  How many uniforms that holds depends on the program: only
        * the constants it uses go there, and mediump ones two to a register
@@ -191,7 +197,9 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
            screen->info->rt_max_height);
    caps->max_texture_cube_levels = f->max_cube_levels;
    caps->max_texture_3d_levels = 0;
-   caps->max_render_targets = 1;
+   /* a pass a colour buffer (sgx_draw_vbo): with SGX_DEBUG=mrt until that
+    * passes on a board */
+   caps->max_render_targets = sgx_drv_debug & SGX_DEBUG_MRT ? 4 : 1;
    /* 1.30 with SGX_DEBUG=glsl130 (native integers, EXT_texture_integer),
     * for the GL 3.0 work's tests on a board */
    caps->glsl_feature_level = caps->glsl_feature_level_compatibility =

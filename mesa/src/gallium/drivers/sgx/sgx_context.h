@@ -138,6 +138,9 @@ struct sgx_pipe_shader {
    /* colour buffer 0 is an integer format (pack_int_outputs): 0 not, 1 one of
     * 8 bits a channel, 2 R32, 3 + c channel c's plane of RG32 / RGBA32 */
    uint8_t rt_int;
+   /* MRT: 1 + the colour buffer this variant draws into, its DATA output
+    * made output 0 (remap_outputs); 0 a single buffer */
+   uint8_t rt_target;
    /* units bound to an RGBA32 / RG32 texture, read a plane at a time (the
     * compiler's tex_r32x4 / tex_r32x2) */
    uint32_t r32x4, r32x2;
@@ -204,6 +207,8 @@ struct sgx_context {
     * depth and stencil (a later one tests depth EQUAL, writes neither) */
    unsigned rt_plane, recording_plane;
    bool rt_later_pass;
+   /* MRT, a pass a colour buffer: the one this pass draws or clears into */
+   unsigned rt_index;
 
    struct pipe_framebuffer_state framebuffer;
    struct pipe_viewport_state viewport;
@@ -292,6 +297,18 @@ void sgx_flush_resource_writes(struct sgx_context *ctx,
  * context's frame on the shared render context ends ours (sgxws_begin).
  * Compares addresses only: the resource may be gone. */
 struct sgx_resource *sgx_recording(struct sgx_context *ctx);
+
+/* the colour buffer the draw or clear pass is on (MRT: a pass a buffer,
+ * rt_index), or an empty surface */
+static inline const struct pipe_surface *
+sgx_cbuf(const struct sgx_context *ctx)
+{
+   static const struct pipe_surface none;
+
+   return ctx->rt_index < ctx->framebuffer.nr_cbufs
+             ? &ctx->framebuffer.cbufs[ctx->rt_index]
+             : &none;
+}
 void sgx_check_reset(struct sgx_context *ctx);
 
 #endif

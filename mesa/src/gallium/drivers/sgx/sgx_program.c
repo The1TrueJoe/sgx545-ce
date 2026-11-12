@@ -945,6 +945,35 @@ pack_int_outputs(nir_shader *nir, unsigned kind)
    return progress;
 }
 
+/* MRT, a pass a colour buffer: the pass for buffer t keeps FRAG_RESULT_DATA0
+ * + t as output 0 and drops the other DATA outputs (gl_FragColor stays: it
+ * writes every buffer) */
+static void
+remap_outputs(nir_shader *nir, unsigned t)
+{
+   bool demoted = false;
+
+   nir_foreach_shader_out_variable (var, nir) {
+      int loc = var->data.location;
+
+      if (loc < FRAG_RESULT_DATA0 || loc >= FRAG_RESULT_DATA0 + 8)
+         continue;
+      if (loc == FRAG_RESULT_DATA0 + (int)t) {
+         var->data.location = FRAG_RESULT_DATA0;
+      } else {
+         var->data.mode = nir_var_shader_temp;
+         demoted = true;
+      }
+   }
+   if (demoted) {
+      nir_fixup_deref_modes(nir);
+      NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+      NIR_PASS(_, nir, nir_opt_dce);
+      NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
+   }
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+}
+
 /* nir_lower_clip_vs stores CLIP_DIST0 (planes 0-3) only when one of them is
  * enabled, CLIP_DIST1 (4-7) only when one of those is.  The compiler counts
  * the planes from the variables (0..n-1, the TA's output select), so with
@@ -1140,6 +1169,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    opts.split_phases = !vertex && !(sgx_drv_debug & SGX_DEBUG_NO_PHASE_SPLIT);
    if (vertex)
       fill_clip_dist0(nir);
+   /* MRT: this variant's colour buffer's output as output 0 */
+   if (!vertex && so->rt_target)
+      remap_outputs(nir, so->rt_target - 1);
    /* an integer colour buffer: output 0 packed for it, as one word */
    if (!vertex && so->rt_int) {
       unsigned kind = so->rt_int;
@@ -1717,15 +1749,18 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    bool any_swz = false;
    uint8_t rt_int = 0;
    uint32_t r32x4 = 0, r32x2 = 0;
+   /* MRT: a variant a colour buffer (remap_outputs) */
+   uint8_t rt_target =
+      ctx->framebuffer.nr_cbufs > 1 ? ctx->rt_index + 1 : 0;
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
       return fs;
    /* an integer colour buffer takes its own packing (pack_int_outputs) */
-   if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
-       util_format_is_pure_integer(ctx->framebuffer.cbufs[0].format))
-      rt_int = sgx_tex_raw32(ctx->framebuffer.cbufs[0].format) > 1
+   if (sgx_cbuf(ctx)->texture &&
+       util_format_is_pure_integer(sgx_cbuf(ctx)->format))
+      rt_int = sgx_tex_raw32(sgx_cbuf(ctx)->format) > 1
                   ? 3 + ctx->rt_plane /* a plane: channel rt_plane */
-               : sgx_tex_raw32(ctx->framebuffer.cbufs[0].format) ? 2
+               : sgx_tex_raw32(sgx_cbuf(ctx)->format) ? 2
                                                                  : 1;
    BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS) {
       const struct pipe_sampler_view *v = ctx->views[unit];
@@ -1770,7 +1805,8 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
          any_swz = true;
       }
    }
-   if (!srgb && !any_swz && !not_bgra && !rt_int && !r32x4 && !r32x2)
+   if (!srgb && !any_swz && !not_bgra && !rt_int && !r32x4 && !r32x2 &&
+       !rt_target)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
@@ -1778,6 +1814,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
           fs->variants_srgb[i]->not_bgra == not_bgra &&
           fs->variants_srgb[i]->depth == depth &&
           fs->variants_srgb[i]->rt_int == rt_int &&
+          fs->variants_srgb[i]->rt_target == rt_target &&
           fs->variants_srgb[i]->r32x4 == r32x4 &&
           fs->variants_srgb[i]->r32x2 == r32x2 &&
           !memcmp(fs->variants_srgb[i]->compare, compare, sizeof(compare)) &&
@@ -1798,6 +1835,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    (*slot)->not_bgra = not_bgra;
    (*slot)->depth = depth;
    (*slot)->rt_int = rt_int;
+   (*slot)->rt_target = rt_target;
    (*slot)->r32x4 = r32x4;
    (*slot)->r32x2 = r32x2;
    memcpy((*slot)->compare, compare, sizeof(compare));
