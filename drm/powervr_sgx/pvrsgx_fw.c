@@ -515,8 +515,10 @@ static int check_event_pds(struct pvrsgx_device *sdev)
 	if (!sdev->family->event_pds_guessed)
 		return 0;
 	got = sgx_rd(sdev, cr->event_pds_base);
-	drm_info(&sdev->base, "event PDS base 0x%04x: wrote 0x%08x, read 0x%08x\n",
-		 cr->event_pds_base, want, got);
+	drm_info(&sdev->base,
+		 "event PDS base 0x%04x: wrote 0x%08x, read 0x%08x; data read 0x%x 0x%x\n",
+		 cr->event_pds_base, want, got, sgx_rd(sdev, cr->event_pds_data0),
+		 sgx_rd(sdev, cr->event_pds_data1));
 	/* The sweep's low bits may not stick: only the address has to. */
 	if (sdev->sweep_a68_low ? (got & ~0xfu) != (want & ~0xfu) : got != want) {
 		drm_err(&sdev->base, "event PDS base doesn't read back; not starting the microkernel\n");
@@ -799,9 +801,14 @@ struct sweep_variant {
 	u8 dest, cc, data0, data1, prog, a68_low;
 };
 
-/* Programs A, C and D under each 0x0a70, smallest first: is it the length? */
-static const u8 sweep_lens[] = { 1, 2, 3, 4, 6, 8, 12, 16, 20, 32, 64 };
-static const struct { u8 prog, data0; } sweep_progs[] = { { 1, 0 }, { 2, 0 }, { 3, 0 + 1 } };
+/*
+ * Programs F1 (DOUTD) and F2 (branch) under 0x0a70 = 6 and 16: does the PDS
+ * execute our first code row? Each faults at an address only it touches.
+ */
+static const u8 sweep_lens[] = { 6, 16 };
+static const struct { u8 prog, data0; } sweep_progs[] = {
+	{ PVRSGX_SWEEP_PROG_F1, 0 }, { PVRSGX_SWEEP_PROG_F2, 0 },
+};
 
 #define SWEEP_COUNT	(1 + ARRAY_SIZE(sweep_progs) * ARRAY_SIZE(sweep_lens))
 
@@ -820,11 +827,13 @@ static struct sweep_variant sweep_at(unsigned int v)
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
+	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2" };
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
 			  sv->data1 || sv->prog || sv->a68_low ? "" : "baseline");
 
 	if (sv->prog)
-		n += scnprintf(buf + n, len - n, " program %c", "?ACD"[sv->prog & 3]);
+		n += scnprintf(buf + n, len - n, " program %s",
+			       prog[sv->prog < ARRAY_SIZE(prog) ? sv->prog : 0]);
 	if (sv->a68_low)
 		n += scnprintf(buf + n, len - n, " 0xa68 low 0x%x", sv->a68_low);
 
@@ -909,6 +918,28 @@ static int ladder_ran(struct pvrsgx_device *sdev, const char *name, u32 *held)
 }
 
 /*
+ * The reset that completes faulting requests. If the fault is still there,
+ * hold the cores in reset and touch nothing more.
+ */
+static int bif_recover(struct pvrsgx_device *sdev, const char *what)
+{
+	u32 st;
+
+	pvrsgx_reset(sdev, true);
+	st = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+	if (st & sdev->cr->bif_int_stat_fault_req) {
+		drm_err(&sdev->base, "%s: BIF int 0x%x after recovery; cores held in reset\n",
+			what, st);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET,
+		       sdev->cr->soft_reset_bif | sdev->cr->soft_reset_cores);
+		sdev->lost = true;
+		return -EIO;
+	}
+	drm_info(&sdev->base, "%s: recovered, BIF int 0x%x\n", what, st);
+	return 0;
+}
+
+/*
  * The sweep's last step, if nothing ran: does this core report a BIF fault
  * at all? Point EVENT_KICKER at the hole below the kernel code heap, where
  * nothing is mapped, kick, and log BIF_INT_STAT, BIF_FAULT and
@@ -956,19 +987,7 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 		 rq[0], rq[1], rq[2], rq[3], rq[4], rq[5], rq[6], rq[7], rq[8], rq[9]);
 	/* Recovery: the kicker back, no kick, the reset that completes faults. */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, sdev->fw.addr[PVRSGX_FW_KICKER]);
-	pvrsgx_reset(sdev, true);
-	st[0] = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
-	if (st[0] & sdev->cr->bif_int_stat_fault_req) {
-		/* Still faulting: hold the cores in reset and touch nothing more. */
-		drm_err(&sdev->base, "fault check: BIF int 0x%x after recovery; cores held in reset\n",
-			st[0]);
-		sgx_wr(sdev, SGX_CR_SOFT_RESET,
-		       sdev->cr->soft_reset_bif | sdev->cr->soft_reset_cores);
-		sdev->lost = true;
-		return -EIO;
-	}
-	drm_info(&sdev->base, "fault check: recovered, BIF int 0x%x\n", st[0]);
-	return 0;
+	return bif_recover(sdev, "fault check");
 }
 
 /*
@@ -1007,7 +1026,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	char when[64];
-	u32 clk, held = 0;
+	u32 clk, st, held = 0;
 	int err, ran;
 
 	for (unsigned int v = 0; v < SWEEP_COUNT; v++) {
@@ -1062,6 +1081,18 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			return sweep_teardown(sdev, clk_idle, held);
 		}
 		bringup_diag(sdev, when);
+		/* F1 and F2 show they ran by faulting: log where, then recover. */
+		st = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+		if (st & cr->bif_int_stat_fault_req) {
+			drm_info(&sdev->base,
+				 "sweep %s: BIF int 0x%x fault 0x%08x (F1 reads 0x%08x, F2 branches to 0x%08x)\n",
+				 when, st, sgx_rd(sdev, SGX_CR_BIF_FAULT), pvrsgx_pds_f1_addr(sdev),
+				 sdev->fw.addr[PVRSGX_FW_PDS0] + 0x10 + 0x10000);
+			sgx_wr(sdev, cr->event_pds_enable, 0);
+			err = bif_recover(sdev, when);
+			if (err)
+				return err;
+		}
 	}
 	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");
 	return fault_check(sdev, hc);

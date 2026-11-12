@@ -33,5 +33,6 @@ void pvrsgx_pds_halt(struct pvrsgx_pds *p);
 struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b,
 				  unsigned int data);
 void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e);
+u32 pvrsgx_pds_f1_addr(struct pvrsgx_device *sdev);
 
 #endif /* PVRSGX_PDS_H */

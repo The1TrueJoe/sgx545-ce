@@ -132,6 +132,10 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_ALL_SLOTS		BIT(7)	/* every entry data word the DOUTU word */
 #define PVRSGX_SWEEP_ENABLE		BIT(8)	/* event PDS enable = @sweep_enable */
 
+/* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
+#define PVRSGX_SWEEP_PROG_F1		4
+#define PVRSGX_SWEEP_PROG_F2		5
+
 /**
  * struct pvrsgx_device - The SGX545
  */

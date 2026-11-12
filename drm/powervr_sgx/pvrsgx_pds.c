@@ -88,23 +88,46 @@ struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf
  * which branches to itself, so a running PDS sits on row 3. C: a branch from
  * row 1 to row 2, which halts. D: A from byte 0, with no data segment. They
  * run over PDS1's slot, which no SGX530 event register uses.
+ *
+ * F1 and F2 detect execution by a BIF fault at an address only that
+ * instruction touches. F1: a one-dword DOUTD from PVRSGX_PDS_F1_ADDR past the
+ * PDS vertex heap, where nothing is mapped. F2: a branch 0x10000 bytes past
+ * the first code word, beyond the code arena and the PD table.
  */
 #define BRA(t)	(0x97000000 | (t))
 #define HALT	0xaf000000
+#define PDS_DOUTD	3
 
 static const u32 sweep_prog[][12] = {
 	[1] = { BRA(8), HALT, HALT, HALT, HALT, HALT, HALT, HALT, BRA(8), HALT, HALT, HALT },
 	[2] = { BRA(4), HALT, HALT, HALT, HALT, HALT, HALT, HALT },
 	[3] = { BRA(8), HALT, HALT, HALT, HALT, HALT, HALT, HALT, BRA(8), HALT, HALT, HALT },
+	[PVRSGX_SWEEP_PROG_F2] = { BRA(0x4000), HALT, HALT, HALT },
 };
 
 #undef BRA
 #undef HALT
 
+/* F1's DOUTD source: in the hole past the PDS vertex heap, not the fault check's. */
+u32 pvrsgx_pds_f1_addr(struct pvrsgx_device *sdev)
+{
+	return (u32)pvrsgx_heaps(sdev)->pds_vertex.end + 0x40000;
+}
+
 static void pds_sweep_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 {
 	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, sdev->sweep_prog == 3 ? 0 : 4);
 
+	if (sdev->sweep_prog == PVRSGX_SWEEP_PROG_F1) {
+		/* [addr, 0, 0, 0]: (addr, ctrl 0 = one dword) under either interleave. */
+		pvrsgx_pds_ds(&p, PDS_D0(0), pvrsgx_pds_f1_addr(sdev));
+		pvrsgx_pds_ds(&p, PDS_D0(1), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(0), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(1), 0);
+		pvrsgx_pds_movs(&p, PDS_DOUTD, PDS_D0(0), PDS_D1(1), PDS_D0(1), PDS_D0(0));
+		pvrsgx_pds_halt(&p);
+		return;
+	}
 	for (unsigned int i = 0; i < ARRAY_SIZE(sweep_prog[0]); i++)
 		if (sweep_prog[sdev->sweep_prog][i])
 			pds_emit(&p, sweep_prog[sdev->sweep_prog][i]);
