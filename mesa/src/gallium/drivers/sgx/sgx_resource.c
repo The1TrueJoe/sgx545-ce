@@ -553,7 +553,7 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
          0x0d; /* swaps R and B against 0x0c: the PBE's order back */
       break;
    /* integer: the program packs the word (rt_packed, sgx_program.c
-    * pack_int_output), B, G, R, A bytes, which format 1 stores R, G, B, A;
+    * pack_int_outputs), B, G, R, A bytes, which format 1 stores R, G, B, A;
     * written unchanged (no dither) */
    case PIPE_FORMAT_R8G8B8A8_UINT:
    case PIPE_FORMAT_R8G8B8A8_SINT:

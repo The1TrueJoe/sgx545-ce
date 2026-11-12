@@ -864,45 +864,81 @@ lower_shadow(nir_shader *nir, const uint8_t *compare, const uint16_t *swz)
  * (sgx_resource_target; the compiler's rt_packed): output 0's channels as
  * the colour word's B, G, R, A bytes for a target of 8 bits a channel, their
  * low bytes (PBE format 1 stores them R, G, B, A); for R32 the value
- * itself; for plane c of an RG32 or RGBA32 one, channel c.  data: the
- * variant's rt_int. */
-static bool
-pack_int_output(nir_builder *b, nir_intrinsic_instr *st, void *data)
+ * itself; for plane c of an RG32 or RGBA32 one, channel c (kind: the
+ * variant's rt_int). */
+static nir_def *
+pack_word(nir_builder *b, nir_def *v, unsigned wm, unsigned kind)
 {
-   unsigned kind = *(const unsigned *)data;
-
-   if (st->intrinsic != nir_intrinsic_store_output)
-      return false;
-   unsigned loc = nir_intrinsic_io_semantics(st).location;
-   if ((loc != FRAG_RESULT_COLOR && loc != FRAG_RESULT_DATA0) ||
-       nir_intrinsic_component(st) || st->src[0].ssa->bit_size != 32)
-      return false;
-   b->cursor = nir_before_instr(&st->instr);
-   nir_def *v = st->src[0].ssa, *word;
-   unsigned n = v->num_components, wm = nir_intrinsic_write_mask(st);
+   unsigned n = v->num_components;
 
    if (kind >= 2) {
       /* R32: the value; a plane of RG32 / RGBA32 (kind 3 + c): channel c */
       unsigned c = kind == 2 ? 0 : kind - 3;
-      word = c < n ? nir_channel(b, v, c) : nir_imm_int(b, 0);
-   } else {
-      static const unsigned shift[4] = {16, 8, 0, 24}; /* r, g, b, a */
+      return c < n ? nir_channel(b, v, c) : nir_imm_int(b, 0);
+   }
+   static const unsigned shift[4] = {16, 8, 0, 24}; /* r, g, b, a */
+   nir_def *word = nir_imm_int(b, 0);
 
-      word = nir_imm_int(b, 0);
-      for (unsigned c = 0; c < n; c++) {
-         if (!(wm >> c & 1))
+   for (unsigned c = 0; c < n; c++) {
+      if (!(wm >> c & 1))
+         continue;
+      word = nir_ior(b, word,
+                     nir_ishl_imm(b, nir_iand_imm(b, nir_channel(b, v, c), 0xff),
+                                  shift[c]));
+   }
+   return word;
+}
+
+/* The program as the compiler takes it still has its outputs as variables
+ * (sgx_lower lowers I/O itself): output 0 is brought down to one store of
+ * the variable at the end, and that store becomes one of the packed word,
+ * the variable a uint (the compiler's rt_packed: one word, mask 1). */
+static bool
+pack_int_outputs(nir_shader *nir, unsigned kind)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   nir_variable *out = NULL;
+
+   nir_foreach_shader_out_variable (var, nir) {
+      if (var->data.location == FRAG_RESULT_COLOR ||
+          var->data.location == FRAG_RESULT_DATA0)
+         out = var;
+   }
+   if (!out || !glsl_type_is_32bit(glsl_without_array(out->type)))
+      return false;
+   NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries, impl,
+            nir_var_shader_out);
+   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+   NIR_PASS(_, nir, nir_split_var_copies);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+   NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+
+   nir_builder b = nir_builder_create(impl);
+   bool progress = false;
+
+   nir_foreach_block (block, impl) {
+      nir_foreach_instr_safe (instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
             continue;
-         word = nir_ior(b, word,
-                        nir_ishl_imm(b, nir_iand_imm(b, nir_channel(b, v, c),
-                                                     0xff),
-                                     shift[c]));
+         nir_intrinsic_instr *st = nir_instr_as_intrinsic(instr);
+
+         if (st->intrinsic != nir_intrinsic_store_deref ||
+             nir_deref_instr_get_variable(nir_src_as_deref(st->src[0])) != out)
+            continue;
+         b.cursor = nir_before_instr(instr);
+         nir_def *word = pack_word(&b, st->src[1].ssa,
+                                   nir_intrinsic_write_mask(st), kind);
+         nir_instr_remove(instr);
+         out->type = glsl_uint_type();
+         nir_store_deref(&b, nir_build_deref_var(&b, out), word, 0x1);
+         progress = true;
       }
    }
-   nir_src_rewrite(&st->src[0], word);
-   st->num_components = 1;
-   nir_intrinsic_set_write_mask(st, 1);
-   nir_intrinsic_set_src_type(st, nir_type_uint32);
-   return true;
+   if (progress) {
+      out->type = glsl_uint_type();
+      NIR_PASS(_, nir, nir_opt_dce);
+   }
+   return progress;
 }
 
 static bool
@@ -1077,9 +1113,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    if (!vertex && so->rt_int) {
       unsigned kind = so->rt_int;
 
-      NIR_PASS(_, nir, nir_shader_intrinsics_pass, pack_int_output,
-               nir_metadata_control_flow, &kind);
-      opts.rt_packed = 1;
+      if (pack_int_outputs(nir, kind))
+         opts.rt_packed = 1;
    }
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",
@@ -1650,7 +1685,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
       return fs;
-   /* an integer colour buffer takes its own packing (pack_int_output) */
+   /* an integer colour buffer takes its own packing (pack_int_outputs) */
    if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
        util_format_is_pure_integer(ctx->framebuffer.cbufs[0].format))
       rt_int = sgx_tex_raw32(ctx->framebuffer.cbufs[0].format) > 1
