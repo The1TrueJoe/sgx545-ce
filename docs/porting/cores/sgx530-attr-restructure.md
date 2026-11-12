@@ -105,17 +105,23 @@ likely to fit.
 
 ## 5. What still needs confirming before code
 
-- **Usable output count and peak pressure** (§3) — the two measurements that pick reallocation
-  vs spill. Do these first; the whole size depends on them.
+- **Usable output count** (§3) — peak output pressure is measured at 10, so the question is
+  whether ≥10 outputs are writable. Tested by the per-output fault-readout sweep (`or oN, r5,
+  r17; ld.a.d r3, oN`: the fault page is the readout, 0x0fd7d000 = writable). The earlier
+  store-based sweep was wrong — it used `r17` (through a `limm` that does not retire on the 530)
+  as the store base, so nothing would reach memory; **on the 530 there is no `limm`-loaded temp
+  base to store through.** The fault-readout needs no base.
+- **`st.a.d` reading an output as its source.** Needs a *mapped* store base, which `limm` cannot
+  provide. Use PA0: a **standalone DOUTA** (driver-set, persists — this does not need
+  DOUTA-then-DOUTU) puts a mapped control-block scratch address in PA0, then the task does
+  `or o0, r5, r17; st.a.d pa0, #0, o0`, and the host reads that scratch word (0x0fd7d000 =
+  st-from-output works). Probe `cores/sgx530_stout_o0.py`, paired with the driver's DOUTA.
 - **Emit-at-end semantics.** Outputs are normally emitted to the output buffer when a task
-  ends. The o0 probe wrote and read an output but then self-looped — it never ended, so emit
-  behavior is untested. If the microkernel's EDM-style task emits outputs on completion, using
-  them as scratch could write scratch to memory. Confirm the task either emits nothing or emits
-  somewhere harmless (the EDM task has no real output buffer), or the restructure needs the
-  emit suppressed.
-- **`st.a.d` reading an output as its source** (§2A constants path) — the o0 test read an
-  output as an `ld` base; a store reading an output as its data source is the same file but
-  untested. Fold into the usable-output probe.
+  ends. Every output probe self-loops, so emit is untested. If the microkernel's EDM-style task
+  emits outputs on completion, using them as scratch could write scratch to memory. Confirm the
+  task emits nothing or somewhere harmless (the EDM task has no real output buffer), or the
+  restructure needs the emit suppressed. Its own careful, recovery-ready probe (it needs the
+  task to actually end), later.
 
 ## 6. DOUTA-then-DOUTU on the SGX530: the open problem, and two ways round it
 
