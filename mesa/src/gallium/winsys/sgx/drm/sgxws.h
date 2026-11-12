@@ -301,8 +301,9 @@ struct sgxws_stats {
    uint64_t ns_target_wait,
       ns_slot_wait; /* a target's or ring slot's last render */
    uint64_t ns_sync_wait, ns_fence_wait;    /* a synchronous flush; fences */
-   uint64_t ns_latency, ns_latency_scanout; /* kick to seen done; of those, into
-                                               the scanout buffer */
+   uint64_t ns_latency, ns_latency_scanout; /* kick to done (renders a wait
+                                               saw end); of those, into the
+                                               scanout buffer */
    unsigned n_latency, n_latency_scanout;
    unsigned room_flushes; /* frames submitted early because a ring filled */
    uint64_t gpu_indices, gpu_verts; /* what the VDM was given: indices, and the

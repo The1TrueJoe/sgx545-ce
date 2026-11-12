@@ -129,6 +129,7 @@ def stats(path):
     if not os.path.exists(path):
         return {}
     acc = collections.defaultdict(list)
+    lat = [0.0, 0]
     for ln in open(path):
         m = re.match(r"sgx stats " + NUM + r" s: " + NUM + r" FPS, (\d+) flushes.*?(\d+) draws.*draw " + NUM +
                      r", flush\+wait " + NUM, ln)
@@ -153,10 +154,15 @@ def stats(path):
             acc["r_switch"].append(int(m.group(3)))
             if m.group(4) is not None:
                 acc["r_clear_only"].append(int(m.group(4)))
-        m = re.search(r"render latency \(kick to seen done\) " + NUM + r" ms over (\d+)", ln)
+        # weighted by renders: a window's mean over 2 renders is not one over 20
+        m = re.search(r"render latency \((?:kick to seen done|kick to done, renders a wait saw end)\) " + NUM + r" ms over (\d+)", ln)
         if m and int(m.group(2)):
-            acc["latency_ms"].append(float(m.group(1)))
-    return {k: sum(v) / len(v) for k, v in acc.items() if v}
+            lat[0] += float(m.group(1)) * int(m.group(2))
+            lat[1] += int(m.group(2))
+    res = {k: sum(v) / len(v) for k, v in acc.items() if v}
+    if lat[1]:
+        res["latency_ms"] = lat[0] / lat[1]
+    return res
 
 
 def metric(path):

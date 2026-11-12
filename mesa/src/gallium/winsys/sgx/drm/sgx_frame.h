@@ -222,7 +222,7 @@ struct sgxws_ctx {
    uint64_t ns_flush, ns_cmd, ns_sync_wait; /* all of sgxws_flush; the command;
                                                a synchronous flush's wait */
    uint64_t ns_latency;
-   unsigned n_latency; /* kick to seen done, renders that were waited for */
+   unsigned n_latency; /* kick to done, renders a wait saw end */
    uint64_t ns_latency_scanout;
    unsigned n_latency_scanout; /* of those, the ones into the scanout buffer */
    unsigned frames;

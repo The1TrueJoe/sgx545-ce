@@ -2138,13 +2138,19 @@ slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
 {
    uint32_t seq = c->slot_kick[i].seq;
 
+   bool timed = ms && c->slot_kick[i].kicked_ns;
+
    if (!sgxws_seq_after(seq, c->done_seq))
       return 0;
-   if (c->dev->kif->wait_seq(c, seq, ms))
-      return -ETIMEDOUT;
-   if (c->slot_kick[i].kicked_ns) {
-      uint64_t ns = sgxws_now_ns() - c->slot_kick[i].kicked_ns;
+   /* Render latency times only the renders a wait sees end: one already
+    * done when first looked at ended at some point since its kick that
+    * isn't known (a compositor idle between frames looks seconds later). */
+   if (c->dev->kif->wait_seq(c, seq, timed ? 0 : ms)) {
+      uint64_t ns;
 
+      if (!timed || c->dev->kif->wait_seq(c, seq, ms))
+         return -ETIMEDOUT;
+      ns = sgxws_now_ns() - c->slot_kick[i].kicked_ns;
       c->ns_latency += ns;
       c->n_latency++;
       if (c->slot_kick[i].scanout) {
