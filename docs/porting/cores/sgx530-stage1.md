@@ -557,6 +557,30 @@ any base still lands on a pad), each variant one change to PDS0's MOVS:
 - A pad or the ladder landing names the variant.
 - If a variant's PC stops cycling, or settles on a new value, log that too.
 
+## After the eleventh attempt: before the first instruction
+
+Attempt 11 (log 2026-11-11-2351) changed the MOVS's dest and cc, and tried the all-slots
+row. Nothing started. Under every change, cc 0 included, the PC sat on the event
+program's first instruction and never reached the HALT. A skipped MOVS would have reached
+it. So the PDS likely stalls before it executes the first instruction. It may be waiting
+on something it needs first, probably its data segment or a data-store allocation, which
+0xa6c/0xa70 describe.
+
+The third PC value, 0xf75c, came back with the same image that gave 0xf33c before. So it
+doesn't track our image: probably another PDS program or state, not ours.
+
+**Attempt 12:** one load, the `sgx530_bases` image with the pads, the kicker fix. A grid
+over the two event data registers, since every earlier 0xa6c/0xa70 change except 2/6
+ran without the kicker fix:
+- 0xa6c ∈ {0, 1, 2, 4};
+- 0xa70 ∈ {0, 1, 2, 4, 6, 8}.
+- That is 24 cells, including the baseline 1/6. Each logs the PC trace.
+
+Then two enable values with the kicker fix: 0xa58 = 0x7fffffff, and 0xa58 = 0.
+
+A cell whose PC reaches the HALT, or leaves the first instruction, narrows it down even
+if no task starts.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
