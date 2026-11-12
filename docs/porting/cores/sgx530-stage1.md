@@ -1182,6 +1182,44 @@ addressing, so it signals success without depending on the thing under test). `E
     base from a fixed place (an internal/index register), not the operand — an ISA
     difference to decode from the hwt_* suites, document C, and hand to cleanroom-isa.
 
+## After the twenty-ninth attempt: limm, not ld
+
+Attempt 29 (log 2026-11-12-0340) found the real cause: **`limm` loads the wrong value on the
+SGX530.**
+- **ld0** (`ld.a.d r3, r17, #0`): b1 fault at 0x0fd79000 — the offset doesn't matter.
+- **ld0nb** (`ld.a.d r3, r5, #0`, r5 = `limm` 0x0f004000): b1 fault at **0x0c004000**. The
+  base register is read, and the loaded value is 0x0c004000, not 0x0f004000.
+
+0x0c004000 = (bits 26-31) | (bits 0-20) of 0x0f004000, with **bits 21-25 dropped** (worth
+0x03000000, the exact difference). So `ld` is fine; the SGX530 decodes the `limm` value
+field differently from the SGX545, reading bits 21-25 from a different place in the
+instruction word (as 0, where the SGX545 encoding puts them). Every large `limm` in the
+image — and the patched r17 — loads wrong, which is why the first `limm`-built address
+faulted. Tag C (attempt 29). The low field (0-20) and bits 26-31 are correct.
+
+**Attempt 30: the `limm` field sweep** (`cores/sgx530_limm_b21.py` … `b27.py`). Each `limm`s
+r5 = a single bit 21-27, then `ld.a.d r3, r5, #0`; the fault page is the value the SGX530
+loaded, so it reads where each value bit lands.
+
+| Probe | r5 value | img sha256 (16) | packaged (16) |
+|---|---|---|---|
+| b21 | 0x00200000 | 95130a769f8fccdb… | 38e9b5547babb439… |
+| b22 | 0x00400000 | 2d012fa428a416c4… | c43d04a4e107c711… |
+| b23 | 0x00800000 | ac21851a3603ef16… | eaf9700b460e8b79… |
+| b24 | 0x01000000 | 72ae46039b9b122a… | 53f4edc3c9710c6a… |
+| b25 | 0x02000000 | 8230559bf0473b63… | aedb1b4b53b4c8e6… |
+| b26 | 0x04000000 | 073cbbc7686de92a… | 79c09d2225fefa74… |
+| b27 | 0x08000000 | 9a9a05867a58946a… | ecfdf000ac1d8f09… |
+
+Build each with `python3 ukernel/build.py sgx530_limm_b<n> …` then mkukfw; all same through
+asm.py and `sgx-asm`. `EVENT_TIMER` 0xa5a means the value decoded to a mapped address (no
+fault); otherwise the fault page is the decoded value. A bit at its own weight is correct;
+one landing elsewhere, or faulting at 0, shows the SGX530's field position for that bit.
+
+With the sweep, write the SGX530's `limm` value-field layout into ISA.md (C); the encoding
+goes to cleanroom-isa for `sgx.xml` and to the driver for `fw_limm`; then the image builds
+with `ISA_CORE = 530` and gets its own golden. The SGX545 golden is untouched.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
