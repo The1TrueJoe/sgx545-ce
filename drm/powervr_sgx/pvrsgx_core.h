@@ -17,6 +17,18 @@ struct pvrsgx_cmd_core;
 #define PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS	BIT(0)
 /* EUR_CR_EVENT_KICK1..3 next to EUR_CR_EVENT_KICK. */
 #define PVRSGX_FEATURE_MULTI_EVENT_KICK		BIT(1)
+/* The PDS data store interleaves DS0 and DS1 two words at a time (docs/PDS.md). */
+#define PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS	BIT(2)
+/*
+ * The EDM reaches PDS code anywhere. Without it, the kernel code and PDS
+ * vertex heaps lie within 64 MiB above the PDS pixel heap (PDS_EXEC_BASE):
+ * the GPL DDK's sgxconfig.h refuses any other layout.
+ */
+#define PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE	BIT(3)
+
+/* Errata the kernel works around (the GPL DDK's FIX_HW_BRN_*). */
+/* A BIF directory or table invalidate and a data invalidate never in one command. */
+#define PVRSGX_QUIRK_BRN_28889			BIT(0)
 
 /* The USSE instruction set, for the shader validator's tables. */
 enum pvrsgx_isa {
@@ -29,6 +41,34 @@ enum pvrsgx_isa {
 
 /* The device-virtual layout (pvrsgx_fw.h) needs a 32-bit address space. */
 #define PVRSGX_VA_BITS_REQUIRED	32
+
+/* A device-virtual range, [base, end). */
+struct pvrsgx_va_range {
+	u64 base;
+	u64 end;
+};
+
+/*
+ * struct pvrsgx_heap_layout - Where every heap sits (docs/UAPI.md section 5)
+ *
+ * Device-wide, the same in every VM. The kernel heaps (kernel code, kernel
+ * data, sync) are whole 4 MiB directory entries.
+ */
+struct pvrsgx_heap_layout {
+	struct pvrsgx_va_range params_3d;
+	struct pvrsgx_va_range ta_data;
+	struct pvrsgx_va_range sync;
+	struct pvrsgx_va_range pds_pixel;
+	struct pvrsgx_va_range kernel_code;
+	struct pvrsgx_va_range pds_vertex;
+	struct pvrsgx_va_range kernel_data;
+	struct pvrsgx_va_range usse_pixel;
+	struct pvrsgx_va_range usse_vertex;
+	struct pvrsgx_va_range general;
+	struct pvrsgx_va_range texture;
+	/* The largest PB, in pages, the 3D parameters heap holds. */
+	u32 pb_max_pages;
+};
 
 /*
  * struct pvrsgx_core_regs - Registers that move or change between SGX5xx cores
@@ -54,6 +94,12 @@ struct pvrsgx_core_regs {
 	u32 pds_exec_base;
 	u32 bif_int_stat_fault_req;
 	u32 bif_int_stat_fault_type;
+	u32 bif_fault_addr;		/* BIF_FAULT's address field */
+	u32 bif_bank_set;
+	u32 bif_bank0;
+	u32 use_code_base_dm_shift;	/* USE_CODE_BASE's data-master field */
+	u32 use_code_base_addr_shift;	/* USE_CODE_BASE's address unit, log2 bytes */
+	u32 vendor_b30;			/* unnamed, 0x100 in the SGX545's vendor script */
 	/* Not in the GPL header (pvrsgx_hw.h). */
 	u32 event_pds_enable;
 	u32 event_pds_enable_all;
@@ -93,6 +139,10 @@ struct pvrsgx_core_family {
 	u32 num_dir_lists;
 	/** @va_bits: Device-virtual address bits (SGX_FEATURE_ADDRESS_SPACE_SIZE). */
 	u32 va_bits;
+	/** @heaps: The device-virtual layout, within @va_bits. */
+	const struct pvrsgx_heap_layout *heaps;
+	/** @quirks: PVRSGX_QUIRK_*. */
+	u32 quirks;
 	/** @cmds: What its client commands are checked against (pvrsgx_cmd_defs.c). */
 	const struct pvrsgx_cmd_core *cmds;
 	/** @init_regs: Init script part 2's register writes, in order. */
