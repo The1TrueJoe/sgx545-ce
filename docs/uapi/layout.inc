@@ -186,9 +186,11 @@ FIELD(drm_powervr_sgx_sync_op, handle, 0x00, 4)
 FIELD(drm_powervr_sgx_sync_op, flags, 0x04, 4)
 FIELD(drm_powervr_sgx_sync_op, value, 0x08, 8)
 
-STRUCT(drm_powervr_sgx_bo_ref, 8)
+STRUCT(drm_powervr_sgx_bo_ref, 24)
 FIELD(drm_powervr_sgx_bo_ref, handle, 0x00, 4)
 FIELD(drm_powervr_sgx_bo_ref, flags, 0x04, 4)
+FIELD(drm_powervr_sgx_bo_ref, offset, 0x08, 8)
+FIELD(drm_powervr_sgx_bo_ref, size, 0x10, 8)
 
 STRUCT(drm_powervr_sgx_job, 80)
 FIELD(drm_powervr_sgx_job, type, 0x00, 4)
