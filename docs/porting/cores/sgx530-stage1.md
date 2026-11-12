@@ -1268,7 +1268,7 @@ for operand rK. Run these first:
 
 Then document the `ld.a.d` operand decode C in ISA.md and hand it to cleanroom-isa.
 
-## After the thirty-first attempt: limm doesn't write its register
+## After the thirty-first attempt: limm doesn't write its register (and str is suspect)
 
 Attempt 31 (log 2026-11-12-0350): the register-number sweep has **no pattern** — r0 →
 0x0055d000, r1 → 0x0722a000, r2 → 0x003e1000, r4 → 0x09e06000, r6 → 0x0503f000, r8 →
@@ -1281,9 +1281,21 @@ So **`limm` never wrote its destination** — that is why the `limm` value was i
 (attempt 30) and the leftovers are stable. `ld.a.d`'s operand decode is fine; the question is
 `limm`'s destination encoding, or whether `limm` executes at all on the SGX530.
 
-**Attempt 32: does `limm` write?** (`cores/sgx530_limmwr_r{5,17,0}.py`). `phas.i`, then
+(Numbering: the `sgx530_ldpre_*` preload probes ran as attempt 32; the `limmwr` test below is
+attempt 33, `aluwr` attempt 34.)
+
+**ld0nb already proved `limm` doesn't write (C).** Attempt 29's `ld.a.d r3, r5, #0` after
+`limm r5, #0x0f004000` faulted at r5's leftover 0x0c004000, not the limm value — so the load
+read r5's unwritten leftover. The fault page, not `str`, is the readout, and it already
+settles that `limm` does not write its destination.
+
+**Attempt 33: `limm` write via `str`** (`cores/sgx530_limmwr_r{5,17,0}.py`). `phas.i`, then
 `limm rK, #0xa5a`, then `str rK` to `EVENT_TIMER` (`str` reads the register back). No load
-before it, so nothing faults first.
+before it, so nothing faults first. **Result (log 2026-11-12-...):** no fault, the task
+self-loops, and `EVENT_TIMER` stays 0 — so `limm`, `str` and `ba` all execute without
+faulting, but `str` to `EVENT_TIMER` reads back 0 (its write doesn't take, or isn't
+visible). So attempt 33 can't separate `limm` from `str`, and `str` is suspect too. The
+fault-page readout (below) sidesteps both.
 
 | Probe | reg | img sha256 (16) | packaged (16) |
 |---|---|---|---|
@@ -1300,9 +1312,53 @@ Build each then mkukfw; all same through asm.py and `sgx-asm`. Read `EVENT_TIMER
 - **0 or something else:** `str` itself may not read the register as expected; cross-check
   with a second register.
 
+The which-register probes (`sgx530_ldpre_r*`) confirmed it (C): each faulted at exactly its
+register's unwritten leftover, never at a preloaded `(N+1)<<16` value, so preloading with
+`limm` reached no register.
+
+**Attempt 34: does a non-`limm` write land?** (`cores/sgx530_aluwr.py`) — the clean test,
+with the fault page as readout (no `str`). `or r5, r5, r17` (r5's leftover 0x0c004000 |
+r17's 0x0fd79000 = 0x0fd7d000), then `ld.a.d r3, r5, #0`. A fault at **0x0fd7d000** means the
+ALU wrote r5; at **0x0c004000** means it did not. Image 0x48 (sha256 81dd5785…, same through
+asm.py and `sgx-asm`; crc 0x1dd7e9fa, packaged 18ce50ba…).
+- `limmwr` leftover + `aluwr` 0x0fd7d000 → the register file writes, but `limm` specifically
+  does not. The fix is a SGX530 `limm` decode (destination field or opcode), handed to
+  cleanroom-isa.
+- both leftover → no write lands at all; `str`/the write path is broader, and `ld` reading
+  fine would need rechecking.
+
 This is the real blocker: with `limm` not writing, every constant and address the microkernel
-builds is its register's leftover. Decode it C and hand the `limm` (or `str`) behavior to
-cleanroom-isa.
+builds is its register's leftover. Decode it C and hand the behavior to cleanroom-isa.
+
+## After the thirty-fourth attempt: zero temporaries (the likely cause)
+
+Attempt 34 (log 3296b7ed): `aluwr` (`or r5, r5, r17`, then `ld r5`) faulted at **0x0c004000**,
+r5's leftover, not 0x0fd7d000. So the `or` didn't write r5 either — **no register write
+lands**, not just `limm` (attempt 33, with `str` also not taking). Source operands decode
+fine (attempt 31: `ld rN` reads register N). So writes go nowhere the reads see.
+
+**The hypothesis (the coordinator's, the likely cause): the task runs with zero
+temporaries.** On the SGX545 the DOUTU word 0 carries the temp count in bits 24-31
+(`(n+3)>>2`, PDS.md — not in any GPL header, so **U** on the SGX530). The driver sets it to 6
+(24 temps; attempt 24's `ukernel_temps`). If the SGX530 reads the temp count from a
+different position — as it read the code address from `>> 8` and the segment elsewhere —
+the task gets **0 temporaries**: every write to an r-register is dropped, and reads return
+the register bank's leftover. That matches attempts 31-34 exactly, and it is one field, not
+a whole destination-encoding difference.
+
+**Attempt 35: sweep the DOUTU temp-count field position** (driver-side, the kernel session
+builds DOUTU word 0). For the EDM entry DOUTU, put the temp value (e.g. 6, or a larger
+count) at candidate positions — the SGX545's b24-31, and shifted down — one per variant,
+leaving the code-address bits (0-23) intact (the entry's offset is 0, so b4-23 are free).
+Readout: the `aluwr` image (81dd5785…, packaged 18ce50ba…), by its fault page:
+- **0x0fd7d000:** that position is the SGX530's temp-count field — the `or` now writes r5.
+  Set the temp count there, and register writes (so `limm`, `imae`, the whole microkernel)
+  start working.
+- **0x0c004000:** still 0 temps; try the next position.
+
+If a position works, re-run the real `sgx530` image: with temporaries, `limm` and the stores
+should land and init can complete. Also worth a look: `phas.i`'s `temps4` field (ISA.md) as
+an alternate temp source, since the entry's `phas.i #0, #0` carries 0 there.
 
 ## Abort conditions
 
