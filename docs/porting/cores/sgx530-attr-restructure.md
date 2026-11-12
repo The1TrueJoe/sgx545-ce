@@ -40,9 +40,11 @@ load — the root of the first fault. Move them to primary attributes the PDS se
 - PA2+ = the small constants the entry stores (0, 1, version 0x00010000, DPM clear values),
   so `st.a.d PAn → memory` writes a constant with no ALU.
 
-The driver's PDS builder (`pvrsgx_pds_entry`) sets the DOUTA rows; attempt 40 proved its
-DOUTA-first `pds3` writes attributes correctly, so attribute setup is **not** blocked on the
-probe's multi-DOUTA ordering bug (§6).
+A DOUTA writes a primary attribute (confirmed: PA0, attempts 40-41) and the value persists.
+**But** setting an attribute *and launching the task in one PDS program* (DOUTA then DOUTU) is
+**not yet shown to work on the SGX530** — on the 530 the event program is `pds0`, a bare DOUTU,
+and every DOUTA-then-DOUTU the probe built issued the DOUTU at code base 0. §6 analyses why and
+gives two ways to get the attributes set before the task reads them.
 
 **(B) Scratch moves from temporaries to output registers.** Every `rN` the SGX530 microkernel
 writes becomes an output `oN`. Loads land in outputs (`ld.a.d oN, …`), ALU results go to
@@ -108,20 +110,44 @@ likely to fit.
   output as an `ld` base; a store reading an output as its data source is the same file but
   untested. Fold into the usable-output probe.
 
-## 6. The two-row / one-row DOUTU-zero, and why it does not block §2(A)
+## 6. DOUTA-then-DOUTU on the SGX530: the open problem, and two ways round it
 
-The coordinator asked why the multi-DOUTA PDS program issued its DOUTU with word 0 ≈ 0 under
-`0xa70` = 6 and 8. Attempt 41's one-row DOUTA hit the **same** b2 fault at code base 0 as the
-two-row form, so it is **not** the second data row's interleave (the earlier guess). With a
-DOUTA before it, the DOUTU issues with word 0 ≈ 0 in both layouts; the same DOUTU words with no
-preceding DOUTA run. The fault is the **DOUTA-before-DOUTU ordering in the probe's hand-built
-PDS** — the DOUTA consumes or rewrites what the following MOVS DOUTU reads, or that PDS needs
-the DOUTU issued first.
+**The facts (C, attempts 40-41).** A DOUTA writes a primary attribute and it persists (PA0 read
+back as 0x0e850000, then 0x0e860000, across resets/reloads). But a DOUTA *followed by a DOUTU in
+the same PDS program* makes the DOUTU issue with word 0 ≈ 0 — the task launches at code base 0
+(fault 0x0f400000). One-row and two-row DOUTA layouts fail identically, so it is **not** the
+data-row interleave. On the 530 the event register points at `pds0` (a bare DOUTU, `pds_ours()`
+in `srvinit.c`); `pds3` — the DDK/open event dispatcher that does DOUTA-then-DOUTU — **has never
+run on the 530**, so this pattern is simply unproven there, not known-good.
 
-This does **not** block the restructure's attribute setup, because the driver's real `pds3`
-puts its DOUTAs first and sets PA0 correctly (attempt 40). The probe's PDS construction differs
-from the driver's; only the probe needs its ordering fixed, and only to build multi-attribute
-*probes*. The restructure's attributes come from the driver's PDS builder, which works.
+**Why it may break (H, from PDS.md).** PDS.md records the captured working DOUTA as `2f800466`
+— top nibble 2 with bit 27 set (`.x2.s27`), the form that "also consumes word 2." The open
+`srvinit` `movs()` emits DOUTA as the plain `07…` form (no bit 27), and the probe does too. A
+DOUTA is a 2-word DOUT; if the hardware's DOUT sequencer expects the `2f` (3-word-consuming)
+form for a DOUTA that precedes another DOUT, the plain `07` DOUTA could leave the sequencer
+mis-aligned so the next DOUTU's word 0 reads short. This is a hypothesis, testable by rebuilding
+the DOUTA in the `2f` form and seeing whether the following DOUTU recovers. A second
+construction difference worth matching: the working `pds3` DOUTU reads word 1 from a DS word
+holding the constant **2** (the microkernel phase/swizzle count, D0(0)=2) and word 0 from a DS1
+word holding `doutu()`; the probe's slot choices differ, and mirroring `pds3`'s exact slots
+removes that variable.
+
+**Two ways to get the attributes set before the task reads them:**
+
+- **(A) Solve DOUTA-then-DOUTU** so the launch program (`pds0` today) also sets the attributes.
+  Needs the hypothesis above resolved on hardware. This is the general path and matches how the
+  DDK primary-attribute setup works (per-task, in the launch program).
+- **(B) Exploit persistence.** The primary attributes survive between PDS invocations on the 530
+  (observed across resets and reloads). So a **one-time setup program** could DOUTA the pointers
+  once, and the normal bare-DOUTU `pds0` launches would read the persisted PA0-PA2 — no
+  DOUTA-then-DOUTU needed. Cheaper, but it depends on the attributes surviving across **real task
+  launches** (not just resets), which is **U** and must be confirmed: set PA0 in one program,
+  launch an unrelated bare-DOUTU task, and check PA0 still reads back.
+
+Path (B) is the lower-risk first move if persistence holds across launches; path (A) is the
+fallback and the more general answer. Either way, attribute *setup* is an open SGX530 PDS
+problem, not a solved one — the earlier claim that the driver's `pds3` already handles it was
+wrong (it does not run on the 530).
 
 ## 7. SGX545 impact: none
 
