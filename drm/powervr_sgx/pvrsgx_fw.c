@@ -174,8 +174,9 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 	t->ccb_ctl = f->addr[PVRSGX_FW_CCBCTL];
 	t->ccb = f->addr[PVRSGX_FW_CCB];
 	t->kernel_pd = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
-	/* A fresh microkernel counts finished jobs from 0. */
+	/* A fresh microkernel counts finished jobs from 0, and no earlier no-op. */
 	WRITE_ONCE(sdev->done_seq, 0);
+	WRITE_ONCE(sdev->noops_seen, READ_ONCE(sdev->noops_sent));
 }
 
 /*

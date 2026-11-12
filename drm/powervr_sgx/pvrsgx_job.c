@@ -132,9 +132,10 @@ static void context_put(struct pvrsgx_context *ctx)
 }
 
 /*
- * How many of the oldest jobs on the GPU the microkernel says it has finished,
- * when it counts them (PVRSGX_UKFW_DONE_SEQ); otherwise -1. Jobs finish in
- * order, and POWER and cleanup commands are never on the active list.
+ * How many completions the microkernel reports beyond those accounted, when it
+ * counts them (PVRSGX_UKFW_DONE_SEQ); otherwise -1. It counts jobs, in order,
+ * and the no-ops the kernel sends that are not jobs (job_completions()); not
+ * POWER.
  */
 static s64 jobs_finished(struct pvrsgx_device *sdev)
 {
@@ -143,6 +144,15 @@ static s64 jobs_finished(struct pvrsgx_device *sdev)
 	if (!(sdev->fw.features & PVRSGX_UKFW_DONE_SEQ))
 		return -1;
 	return (u32)(READ_ONCE(t->done_seq) - sdev->done_seq);
+}
+
+/*
+ * The completions a counting microkernel reports before @job's: one per no-op
+ * the kernel sent ahead of it since the last job signalled, and its own.
+ */
+static u32 job_completions(struct pvrsgx_device *sdev, struct pvrsgx_job *job)
+{
+	return job->noops_before - sdev->noops_seen + 1;
 }
 
 static bool job_done(struct pvrsgx_job *job, u64 consumed)
@@ -161,7 +171,8 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	job = list_first_entry_or_null(&sdev->active, struct pvrsgx_job, node);
-	done = job && (sdev->fw.features & PVRSGX_UKFW_DONE_SEQ ? jobs_finished(sdev) > 0 :
+	done = job && (sdev->fw.features & PVRSGX_UKFW_DONE_SEQ ?
+		       jobs_finished(sdev) >= job_completions(sdev, job) :
 		       job_done(job, pvrsgx_ccb_consumed(sdev)));
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	return done;
@@ -211,11 +222,16 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	n = jobs_finished(sdev);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
-		if (n >= 0 ? !n : !job_done(job, consumed))
+		if (n >= 0) {
+			u32 need = job_completions(sdev, job);
+
+			if (n < need)
+				break;
+			n -= need;
+			sdev->done_seq += need;
+			sdev->noops_seen = job->noops_before;
+		} else if (!job_done(job, consumed)) {
 			break;
-		if (n > 0) {
-			n--;
-			sdev->done_seq++;
 		}
 		list_move_tail(&job->node, &finished);
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
@@ -341,6 +357,8 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	}
 
 	job->start_ns = ktime_get_ns();
+	/* After the send, so every no-op ahead of it counts; one just after only delays it. */
+	job->noops_before = READ_ONCE(sdev->noops_sent);
 	trace_pvrsgx_kick(job->type, job->ccb_seq, fence->seqno);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = dma_fence_get(fence);

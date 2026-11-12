@@ -113,6 +113,8 @@ static int ccb_split_inval(struct pvrsgx_device *sdev, u32 *cache_control)
 			none, &seq);
 	if (err)
 		return err;
+	/* Not a job, but a counting microkernel counts it (pvrsgx_job_process_done()). */
+	WRITE_ONCE(sdev->noops_sent, sdev->noops_sent + 1);
 	while (pvrsgx_ccb_consumed(sdev) < seq) {
 		if (time_after(jiffies, timeout)) {
 			drm_err(&sdev->base, "BIF invalidate not taken (BRN_28889)\n");

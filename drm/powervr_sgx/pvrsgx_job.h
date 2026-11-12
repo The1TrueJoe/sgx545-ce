@@ -96,10 +96,12 @@ struct pvrsgx_job {
 	struct dma_fence *hw_fence;
 	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initializes it. */
 	struct dma_fence *hw_fence_mem;
-	/** @ccb_seq: Kernel CCB command that carries the job. */
 	/** @start_ns: When run_job sent it to the microkernel. */
 	u64 start_ns;
+	/** @ccb_seq: Kernel CCB command that carries the job. */
 	u64 ccb_seq;
+	/** @noops_before: pvrsgx_device.noops_sent once the job was sent. */
+	u32 noops_before;
 	/** @node: In pvrsgx_device.active while on the GPU. */
 	struct list_head node;
 	/**
@@ -118,10 +120,6 @@ struct pvrsgx_job {
 	struct pvrsgx_cache_range *ranges;
 	/** @nranges: Number of @ranges. */
 	u32 nranges;
-	/** @signals: Syncobjs to signal with the job's fence. */
-	struct pvrsgx_signal *signals;
-	/** @nsignals: Number of @signals. */
-	u32 nsignals;
 };
 
 int pvrsgx_job_init(struct pvrsgx_device *sdev);

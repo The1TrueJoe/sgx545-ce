@@ -240,10 +240,17 @@ struct pvrsgx_device {
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
 	/**
-	 * @done_seq: Jobs signalled since the microkernel started, against its
-	 * count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
+	 * @done_seq: Completions accounted since the microkernel started, against
+	 * its count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
 	 */
 	u32 done_seq;
+	/**
+	 * @noops_sent: No-ops the kernel sent that are not jobs (the BIF part of a
+	 * split invalidate). A counting microkernel counts them too.
+	 */
+	u32 noops_sent;
+	/** @noops_seen: @noops_sent as of the last job signalled (under @fence_lock). */
+	u32 noops_seen;
 	/** @restarts: Microkernel restarts; graveyard entries from before one can go. */
 	u32 restarts;
 	/** @coredump_work: Hands a hang's dump to devcoredump, outside the reset. */
