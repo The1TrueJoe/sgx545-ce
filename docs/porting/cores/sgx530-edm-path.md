@@ -79,10 +79,31 @@ carries the PDS/launch — so the SGX545 golden is untouched.)
 
 ---
 
-## 3. The microkernel's reduced job (no committing stores)
+## 3. The microkernel's reduced job (stateless: no committing stores)
 
 Each handler becomes: **load the command into temps → program registers → kick →
 wait on events → ack**, with every memory write removed.
+
+**The microkernel is stateless.** Because `st.a.d` drops, the microkernel cannot
+persist *anything* between events — not the sync objects, and not its own
+coordination state: the CCB **read offset** (advanced in `kick_adv` via `st.a.d`),
+the TA-in-flight / render-in-flight markers, the DPM slot markers. All of that is
+host-owned. Each event is **self-contained**: the handler reads the current job and
+the host-maintained state (`ld`), programs registers (`str`), kicks, and ends. It
+writes no memory. For a single-context, one-job-at-a-time path this is enough,
+because the event *type* plus the current CCB command fully determine the action —
+the DDK's markers exist for multi-render bookkeeping that a single job does not need:
+
+| event | handler action (all `ld` + `str`, no `st`) |
+|---|---|
+| host kick (`EVENT_KICK`) | read the command at the host's CCB read offset → `do_ta` (program + kick the TA) |
+| `TA_FINISHED` | read the same current command's render details → `do_3d` (program + kick the 3D) |
+| `PIXELBE_END_RENDER` + `DPM_3D_MEM_FREE` | the render is done — the **host** IRQ signals the fence and advances the CCB read offset |
+
+So the **host advances the CCB read offset** (on the completion IRQ), not the
+microkernel; the read offset the microkernel reads on the next kick is the host's.
+This is the one piece of §4 to get exactly right — without it the microkernel
+re-reads the same command forever.
 
 - **Load the command.** `ld` the kick's client fields and the control-block words
   the handler needs into temporaries (`ldret` = C). The base pointer is **r17 =
@@ -122,8 +143,10 @@ one-word register mailbox via `str`.
 Everything firmware-visible, per the uAPI threat model (AGENTS.md §3.3), now also
 because the microkernel cannot write it:
 
-- **The kernel CCB ring** and its read/write offsets. The microkernel processes one
-  kick; the host tracks submit/retire by fence, not by a microkernel-written offset.
+- **The kernel CCB ring** and **both** its offsets. The host bumps the write offset
+  on submit, and — crucially — **advances the read offset on the completion IRQ**,
+  because the microkernel's `kick_adv` `st.a.d` drops. The microkernel only reads the
+  read offset to find the current command; it never advances it.
 - **The control block, sync objects, RT data, PB descriptor, free lists** — the
   host writes and reads them; the microkernel reaches the control block through
   r17 = ctlblk (loader-patched), so no launch-time DMA into `sa` is needed (§2).
