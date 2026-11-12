@@ -898,8 +898,20 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 		 "fault check: BIF fault %x %x %x %x %x %x %x %x %x %x req %x %x %x %x %x %x %x %x %x %x\n",
 		 fa[0], fa[1], fa[2], fa[3], fa[4], fa[5], fa[6], fa[7], fa[8], fa[9],
 		 rq[0], rq[1], rq[2], rq[3], rq[4], rq[5], rq[6], rq[7], rq[8], rq[9]);
+	/* Recovery: the kicker back, no kick, the reset that completes faults. */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, sdev->fw.addr[PVRSGX_FW_KICKER]);
 	pvrsgx_reset(sdev, true);
+	st[0] = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+	if (st[0] & sdev->cr->bif_int_stat_fault_req) {
+		/* Still faulting: hold the cores in reset and touch nothing more. */
+		drm_err(&sdev->base, "fault check: BIF int 0x%x after recovery; cores held in reset\n",
+			st[0]);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET,
+		       sdev->cr->soft_reset_bif | sdev->cr->soft_reset_cores);
+		sdev->lost = true;
+		return -EIO;
+	}
+	drm_info(&sdev->base, "fault check: recovered, BIF int 0x%x\n", st[0]);
 	return 0;
 }
 
@@ -1044,6 +1056,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (first && probes_wanted(sdev))
 		probes_unmap(sdev, ARRAY_SIZE(code_base_probe));
+	if (err && sdev->lost)
+		return err;
 	if (err) {
 		drm_err(&sdev->base,
 			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",
@@ -1094,6 +1108,9 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		/* A failed start: the clocks are on, the microkernel isn't. */
 		WRITE_ONCE(sdev->powered, false);
 		synchronize_irq(sdev->irq);
+		/* A start that left the BIF faulting holds the cores in reset already. */
+		if (sdev->lost)
+			return;
 		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
