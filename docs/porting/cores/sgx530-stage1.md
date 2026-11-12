@@ -223,8 +223,15 @@ per 4 KiB page. Each probe writes its own `EVENT_TIMER` value (b24 clear) and en
 The entry DOUTU's offset is 0, so its own unit can't matter. The probes test the other
 unknown, `USE_CODE_BASE`'s unit. The host writes field 0x40000, the kernel code heap at
 0x02000000 in 128 B units. Under a unit of 2^k bytes, base 15 would start at
-0x40000 << k. For a guessed-core start, the kernel maps probe k's code-arena page there,
-read-only like the code arena:
+0x40000 << k. With the module parameter `code_base_probes=1` (off by default, and only
+for an `event_pds_guessed` core's first start), powervr_sgx maps probe k's code-arena
+page there, read-only like the code arena:
+- it maps them before the reset, whose `INVALDC` covers them;
+- it logs `code-base unit probes mapped`;
+- it unmaps them right after the init wait.
+
+Without the parameter, nothing extra is mapped, and the probe image runs as the plain ladder.
+The 0xd000 page holds probe 9 and the PDS programs together.
 
 | k | Unit | Map at | Code-arena offset | `EVENT_TIMER` |
 |---|---|---|---|---|
@@ -250,8 +257,16 @@ Build it:
 - The packaged file is fa39d633…. The event program moves to 0x0200d020, still inside
   the code arena: the PDS programs end at 0xd220, under 0xe000.
 
-With the probes, attempt 4 also carries the entry DOUTU's 24-temporary request (bits 24-31 = 6; "After
-the third attempt"). Reading the result:
+The 24-temporary entry DOUTU (bits 24-31 = 6; "After the third attempt") is in the same
+driver build, kernel a8a66544, for every SGX530 start. That gives two ways to run the
+fourth attempt (the coordinator picks):
+- **Temporaries only:** the `sgx530_diag` image (845463a3…), no parameter. Read it
+  with the ladder table above.
+- **Temporaries and probes:** the `sgx530_probe` image (fa39d633…) with
+  `code_base_probes=1`. Check the log line. Without it, a 0 below says nothing about the
+  unit.
+
+Reading the combined run:
 
 | `EVENT_TIMER` after the kick | What it means |
 |---|---|
