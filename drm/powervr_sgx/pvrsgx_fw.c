@@ -528,43 +528,13 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 dm = cr->use_code_base_dm_shift;
 	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
-	u32 enable = cr->event_pds_enable_all;
-	/*
-	 * The SGX530's PDS_PC_BASE: the DDK never writes it and reads it in its
-	 * hang dump, so likely the PDS's program counter. Only variants 10 and 11
-	 * write it, to test the other reading: a base for the event offset.
-	 */
-	u32 pc_base = 0;
 	int err;
 
-	/* The bring-up sweep's variants (sweep_name[]); 0 is the normal start. */
-	switch (sdev->sweep_variant) {
-	case 1:
+	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
+	if (sdev->sweep_flags & PVRSGX_SWEEP_DATA0_2)
 		data0 = 2;
-		break;
-	case 2:
-		data0 = 4;
-		break;
-	case 3:
-		data1 = 2;
-		break;
-	case 4:
-		data0 = 0;
-		data1 = 0;
-		break;
-	case 7:
+	if (sdev->sweep_flags & PVRSGX_SWEEP_DM2)
 		uk_dm = 2;
-		break;
-	case 9:
-		enable = 0x7fffffff;
-		break;
-	case 10:
-		pc_base = f->addr[PVRSGX_FW_PDS0] & ~0xfu;
-		break;
-	case 11:
-		pc_base = h->kernel_code.base;
-		break;
-	}
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -580,11 +550,6 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
-	if (pc_base)
-		sgx_wr_opt(sdev, cr->pds_pc_base, pc_base);
-	/* Variant 8 sets DOUT_TIMEOUT_DISABLE (b6); later ones clear it again. */
-	if (cr->pds_ctrl && sdev->sweep_variant >= 8)
-		sgx_wr(sdev, cr->pds_ctrl, sdev->sweep_variant == 8 ? BIT(6) : 0);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
@@ -594,7 +559,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	err = check_event_pds(sdev);
 	if (err)
 		return err;
-	sgx_wr(sdev, cr->event_pds_enable, enable);
+	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
 	return 0;
 }
 
@@ -763,32 +728,52 @@ static void init_kick(struct pvrsgx_device *sdev)
 
 /*
  * Bring-up only, off by default: on a guessed core's first start, if the
- * diagnostic entry's first write (EVENT_TIMER) doesn't come within 100 ms,
- * reset and try the next variant of the host's event-program setup, one
- * change from the normal start each, until one does (docs/porting/cores/
- * sgx530-stage1.md, "After the sixth attempt").
+ * diagnostic entry's ladder doesn't run within 100 ms, reset and retry with
+ * the next combination of changes to the event program's hand-off to the
+ * USSE (docs/porting/cores/sgx530-stage1.md, "After the eighth attempt").
  */
 static bool stage1_sweep;
 module_param(stage1_sweep, bool, 0444);
 MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
 
-static const char *const sweep_name[] = {
-	"baseline", "event data 2, 6", "event data 4, 6", "event data 1, 2",
-	"event data 0, 0", "DOUTU word 1 = 0", "2-dword data interleave",
-	"USE_CODE_BASE_15 data master 2", "PDS DOUT_TIMEOUT_DISABLE",
-	"event PDS enable 0x7fffffff", "PDS_PC_BASE the event program",
-	"PDS_PC_BASE the kernel code heap", "timer start, no kick",
+#define D1	PVRSGX_SWEEP_DATA0_2
+#define W0	PVRSGX_SWEEP_DOUTU_W1_0
+#define IL	PVRSGX_SWEEP_INTERLEAVE
+#define DM	PVRSGX_SWEEP_DM2
+#define T4	PVRSGX_SWEEP_TEMPS4
+#define T0	PVRSGX_SWEEP_TEMPS0
+
+static const struct {
+	u32 flags;
+	const char *name;
+} sweep[] = {
+	{ 0, "baseline" },
+	{ D1, "event data 2" },
+	{ W0, "DOUTU word 1 = 0" },
+	{ IL, "2-dword interleave" },
+	{ DM, "code base 15 DM 2" },
+	{ D1 | W0, "data 2, word 1 = 0" },
+	{ D1 | IL, "data 2, interleave" },
+	{ D1 | DM, "data 2, DM 2" },
+	{ W0 | DM, "word 1 = 0, DM 2" },
+	{ D1 | W0 | DM, "data 2, word 1 = 0, DM 2" },
+	{ T4, "4 temporaries" },
+	{ D1 | T4, "data 2, 4 temporaries" },
+	{ T0, "0 temporaries" },
 };
 
-/* Variant 12 starts the event timer instead of kicking, as TI's SGX530 DDK does. */
-#define SWEEP_TIMER_START	12
-/* EVENT_TIMER's enable bit (both GPL headers); the period is in b0-23. */
-#define EVENT_TIMER_ENABLE	BIT(24)
+#undef D1
+#undef W0
+#undef IL
+#undef DM
+#undef T4
+#undef T0
 
 /*
- * Whether the diagnostic entry's ladder ran within 100 ms: its EVENT_TIMER
- * write (0xa5a, timer off), its wait-word marker, or the heartbeat. An enabled
- * timer counts down by itself, so a changed EVENT_TIMER alone proves nothing.
+ * Whether the diagnostic ladder ran: its EVENT_TIMER write (0xa5a, timer
+ * off), a code-base probe's (0xb00 + k), its wait-word marker, or the
+ * heartbeat. An enabled timer counts down by itself, so a changed
+ * EVENT_TIMER alone proves nothing.
  */
 #define LADDER_TIMER		0xa5a
 #define LADDER_MARKER		0xd1a60001
@@ -796,31 +781,45 @@ static const char *const sweep_name[] = {
 static bool ladder_seen(struct pvrsgx_device *sdev)
 {
 	const u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
+	u32 timer = sgx_rd(sdev, SGX_CR_EVENT_TIMER);
 
-	return sgx_rd(sdev, SGX_CR_EVENT_TIMER) == LADDER_TIMER ||
+	return timer == LADDER_TIMER || (timer >= 0xb00 && timer <= 0xb09) ||
 	       READ_ONCE(t[0x28]) == LADDER_MARKER || READ_ONCE(t[0x2a]);
 }
 
-static bool ladder_ran(struct pvrsgx_device *sdev)
+/* Poll for 100 ms, logging PDS_PC_BASE every 10 ms: where the PDS is. */
+static bool ladder_ran(struct pvrsgx_device *sdev, const char *name)
 {
-	bool seen;
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 pc[10] = {};
+	bool seen = false;
+	unsigned int i;
 
-	return !read_poll_timeout(ladder_seen, seen, seen, 1000, 100000, false, sdev);
+	for (i = 0; i < ARRAY_SIZE(pc) && !seen; i++) {
+		usleep_range(10000, 11000);
+		if (cr->pds_pc_base)
+			pc[i] = sgx_rd(sdev, cr->pds_pc_base);
+		seen = ladder_seen(sdev);
+	}
+	drm_info(&sdev->base,
+		 "sweep %s: PDS PC %x %x %x %x %x %x %x %x %x %x, timer 0x%08x\n",
+		 name, pc[0], pc[1], pc[2], pc[3], pc[4], pc[5], pc[6], pc[7], pc[8], pc[9],
+		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
+	return seen;
 }
 
 static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
-	/* The clock status before the first kick, what a reset should return to. */
-	u32 idle = clk_idle, clk;
 	char when[64];
+	u32 clk;
 	int err;
 
-	for (u8 v = 0; v < ARRAY_SIZE(sweep_name); v++) {
+	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
 		if (v) {
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
-			sdev->sweep_variant = v;
+			sdev->sweep_flags = sweep[v].flags;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			pvrsgx_reset(sdev, true);
 			/*
@@ -828,10 +827,10 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			 * here makes this variant depend on the last one.
 			 */
 			clk = sgx_rd(sdev, cr->clkgatestatus);
-			if (clk != idle)
+			if (clk != clk_idle)
 				drm_warn(&sdev->base,
 					 "sweep variant %u: clock status 0x%08x after the reset, 0x%08x before the first kick: not independent of variant %u\n",
-					 v, clk, idle, v - 1);
+					 v, clk, clk_idle, v - 1);
 			*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
 			err = init_script_part2(sdev);
 			if (err)
@@ -839,19 +838,13 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			hc[HOSTCTL_INIT_STATUS] = 0;
 			/* The rebuilt program is in memory before the kick. */
 			wmb();
-			if (v == SWEEP_TIMER_START) {
-				sgx_wr(sdev, SGX_CR_EVENT_TIMER,
-				       EVENT_TIMER_ENABLE | hc[HOSTCTL_UK_TIMER_CLOCK]);
-			} else {
-				init_kick(sdev);
-			}
+			init_kick(sdev);
 		}
-		if (ladder_ran(sdev)) {
-			drm_info(&sdev->base, "sweep: variant %u (%s) runs the diagnostic ladder\n",
-				 v, sweep_name[v]);
+		snprintf(when, sizeof(when), "variant %u (%s)", v, sweep[v].name);
+		if (ladder_ran(sdev, when)) {
+			drm_info(&sdev->base, "sweep: %s runs the diagnostic ladder\n", when);
 			return 0;
 		}
-		snprintf(when, sizeof(when), "sweep variant %u (%s)", v, sweep_name[v]);
 		bringup_diag(sdev, when);
 	}
 	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");

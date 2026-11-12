@@ -124,6 +124,14 @@ struct pvrsgx_fw {
 /**
  * struct pvrsgx_device - The SGX545
  */
+/* The bring-up start sweep's changes (pvrsgx_fw.c, pvrsgx_pds.c). */
+#define PVRSGX_SWEEP_DATA0_2		BIT(0)	/* event data 0 (0xa6c) = 2 */
+#define PVRSGX_SWEEP_DOUTU_W1_0		BIT(1)	/* the event DOUTU's word 1 = 0 */
+#define PVRSGX_SWEEP_INTERLEAVE		BIT(2)	/* the entry data, 2-dword interleave */
+#define PVRSGX_SWEEP_DM2		BIT(3)	/* code base 15's data master = 2 */
+#define PVRSGX_SWEEP_TEMPS4		BIT(4)	/* the event DOUTU asks for 4 temporaries */
+#define PVRSGX_SWEEP_TEMPS0		BIT(5)	/* ... or none */
+
 struct pvrsgx_device {
 	/** @base: The DRM device. */
 	struct drm_device base;
@@ -181,8 +189,8 @@ struct pvrsgx_device {
 	bool lost;
 	/** @pm_pinned: Runtime PM is held active (single-context bring-up). */
 	bool pm_pinned;
-	/** @sweep_variant: The bring-up start sweep's variant (pvrsgx_fw.c), 0 normally. */
-	u8 sweep_variant;
+	/** @sweep_flags: The bring-up start sweep's changes (PVRSGX_SWEEP_*), 0 normally. */
+	u32 sweep_flags;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
