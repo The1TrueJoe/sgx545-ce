@@ -1047,6 +1047,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
     * screen's, so GLSL ES 1.00 programs come with integers then too */
    opts.native_integers = so->native_integers =
       screen->base.shader_caps[nir->info.stage].integers;
+   /* uniform block n's address in constant SGX_K_UBO + n (fill_consts) */
+   if (nir->info.num_ubos)
+      opts.ubo_base_k = SGX_K_UBO;
    if (vtx_fmt) {
       memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));

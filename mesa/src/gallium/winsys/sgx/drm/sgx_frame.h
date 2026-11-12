@@ -204,6 +204,13 @@ struct sgxws_ctx {
    uint32_t last_blk[32];
    unsigned last_blk_n;
    uint32_t *last_u, last_u_cap, last_u_dwords, last_u_va;
+   /* the uniform blocks the frame has copied, by key (sgxws_ubo) */
+   struct {
+      uint64_t key;
+      const void *data;
+      uint32_t bytes, va;
+   } ubo_copy[16]; /* a ring of them, ubo_copy_next the oldest */
+   unsigned n_ubo_copy, ubo_copy_next;
    /* the frame's depth bias (render details +0x14, +0x18), once a draw
     * with it is recorded */
    bool bias_set;

@@ -301,7 +301,25 @@ struct sgxws_draw {
       uint32_t dwords; /* 0: none */
       uint8_t n_bases, base[8];
    } vs_mem, fs_mem;
+   /* Uniform blocks (the compiler's ld.a.d from a block's address): each
+    * copied to frame memory, the copy's address written into the program's
+    * SA register sa (an index into fs_consts or vs_consts, -1 none) and into
+    * word mem of its memory block (0 none). A block with a key the frame
+    * has copied already (the same key, bytes and contents' source) is
+    * copied once a frame; key 0: copied every draw */
+   const struct sgxws_ubo *ubos;
+   unsigned n_ubos;
 };
+
+struct sgxws_ubo {
+   const void *data;
+   uint32_t bytes;
+   uint64_t key;
+   bool fs; /* the fragment program's, else the vertex program's */
+   int16_t sa;
+   uint16_t mem;
+};
+#define SGXWS_MAX_UBOS 32
 
 /* where the winsys's time goes (SGX_STATS) */
 struct sgxws_stats {

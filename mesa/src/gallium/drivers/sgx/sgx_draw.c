@@ -912,6 +912,45 @@ staging(struct sgx_context *ctx, size_t dwords)
    return ctx->staging;
 }
 
+/* uniform block n of a stage for this draw: where its copy's address goes
+ * (sa: an index into the program's constants, -1 none; mem: a word of its
+ * memory block, 0 none). An unbound block reads as zeros */
+static void
+record_ubo(struct sgx_context *ctx, mesa_shader_stage stage, unsigned n,
+           int sa, unsigned mem)
+{
+   static const uint32_t zeros[4];
+   const struct pipe_constant_buffer *cb = &ctx->ubos[stage][n - 1];
+   struct sgxws_ubo *u;
+
+   if (ctx->n_draw_ubos == SGXWS_MAX_UBOS)
+      return;
+   u = &ctx->draw_ubos[ctx->n_draw_ubos++];
+   memset(u, 0, sizeof(*u));
+   u->fs = stage == MESA_SHADER_FRAGMENT;
+   u->sa = sa;
+   u->mem = mem;
+   u->data = zeros;
+   u->bytes = sizeof(zeros);
+   if (cb->user_buffer) {
+      u->data = (const uint8_t *)cb->user_buffer + cb->buffer_offset;
+      u->bytes = cb->buffer_size;
+   } else if (cb->buffer) {
+      struct sgx_resource *res = sgx_resource(cb->buffer);
+      unsigned size = cb->buffer->width0;
+
+      if (!res->data || cb->buffer_offset >= size)
+         return;
+      u->data = (const uint8_t *)res->data + cb->buffer_offset;
+      u->bytes = MIN2(cb->buffer_size, size - cb->buffer_offset);
+      /* copied once a frame while nothing writes it (gen counts the write
+       * maps; one still open may write more) */
+      if (!res->write_maps)
+         u->key = (uint64_t)res->uid << 32 | res->gen;
+   }
+   u->bytes = MIN2(u->bytes, 16384u);
+}
+
 /* a compiled shader's constants: sa[base + slot] = constant buffer 0 float k */
 static void
 fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
@@ -958,6 +997,16 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
        * constants are the float v */
       bool raw = cb && k->k < avail;
       uint32_t word = raw ? ((const uint32_t *)cb)[k->k] : 0;
+
+      /* uniform block n's address: the winsys's copy of it, written in
+       * where the constant lives (sgxws_ubo); 0 until then */
+      if (k->k > SGX_K_UBO && k->k <= SGX_K_UBO + SGX_MAX_UBOS) {
+         record_ubo(ctx, stage, k->k - SGX_K_UBO,
+                    k->slot != 0xffff ? (int)(base + k->slot) : -1,
+                    mem ? k->mem : 0);
+         word = 0;
+         raw = true;
+      }
 
       if (k->k >= SGX_K_LEVELS && k->k < SGX_K_LEVELS + SGX_K_SIZE_UNITS) {
          /* a view's level count (sgx_program.c lower_txs): a texture of F32
@@ -1798,10 +1847,13 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
       if (vfs)
          st.sprite = fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
       d.vs = &vs->prog;
+      ctx->n_draw_ubos = 0;
+      d.ubos = ctx->draw_ubos;
       if (vs->mem_dwords)
          mem_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, &d.vs_mem);
       else
          fill_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, NULL);
+      d.n_ubos = ctx->n_draw_ubos;
       d.vs_consts = vsc;
       n_fetch = ctx->vs->n_attribs;
    } else if (ctx->vs->kind != SGX_SHADER_VS_POSITION) {
@@ -1821,10 +1873,15 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
                      : blend && blend->blend ? 1
                                              : 0;
       d.fs = &fsp;
+      if (!d.ubos) {
+         ctx->n_draw_ubos = 0;
+         d.ubos = ctx->draw_ubos;
+      }
       if (fs->mem_dwords)
          mem_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, &d.fs_mem);
       else
          fill_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, NULL);
+      d.n_ubos = ctx->n_draw_ubos;
       /* a constant-colour blend reads the blend colour, packed BGRA8, in sa2 */
       if (blend && blend->blend && blend->constant) {
          const float *c = ctx->blend_color.color;

@@ -1391,6 +1391,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->draws = 0;
    c->ta_kicks = c->seg_draws = 0;
    c->last_blk_n = c->last_u_va = 0;
+   c->n_ubo_copy = c->ubo_copy_next = 0;
    c->n_use = 0;
    c->bias_set = false;
    c->bias_units = 0;
@@ -1856,6 +1857,46 @@ mte_ctrl(const struct sgxws_state *st)
 
 static int kick_ta(struct sgxws_ctx *c);
 
+/* uniform block i of a draw in this frame's general ring: a copy of its own,
+ * or the one an earlier draw of the frame made of the same key (sgxws_ubo);
+ * sgxws_draw has made the room (mem_bytes). Its address */
+static uint32_t
+ubo_copy(struct sgxws_ctx *c, const struct sgxws_draw *d, unsigned i,
+         const uint32_t *done)
+{
+   const struct sgxws_ubo *b = &d->ubos[i];
+   struct sgxws_ptr p;
+
+   /* the vertex and fragment programs reading one block */
+   for (unsigned j = 0; j < i; j++)
+      if (d->ubos[j].data == b->data && d->ubos[j].bytes == b->bytes &&
+          d->ubos[j].key == b->key)
+         return done[j];
+   if (b->key)
+      for (unsigned j = 0; j < c->n_ubo_copy; j++)
+         if (c->ubo_copy[j].key == b->key && c->ubo_copy[j].data == b->data &&
+             c->ubo_copy[j].bytes == b->bytes)
+            return c->ubo_copy[j].va;
+   /* whole vec4s, a block cut short padded with zeros (the compiler's loads
+    * read vec4s) */
+   uint32_t room = (b->bytes + 15) & ~15u;
+
+   p = ring_alloc(&c->gen, room ? room : 16, 16);
+   memset(p.p, 0, room ? room : 16);
+   memcpy(p.p, b->data, b->bytes);
+   if (b->key) {
+      unsigned j = c->ubo_copy_next;
+
+      c->ubo_copy_next = (j + 1) % 16;
+      c->n_ubo_copy = MAX2(c->n_ubo_copy, j + 1);
+      c->ubo_copy[j].key = b->key;
+      c->ubo_copy[j].data = b->data;
+      c->ubo_copy[j].bytes = b->bytes;
+      c->ubo_copy[j].va = p.va;
+   }
+   return p.va;
+}
+
 int
 sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 {
@@ -1867,9 +1908,17 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    uint32_t mem_bytes = ((d->vs_mem.dwords * 4 + 15) & ~15u) +
                         ((d->fs_mem.dwords * 4 + 15) & ~15u);
    struct sgxws_ptr v = {0}, u, vsec, vmem = {0}, fmem = {0};
+   uint32_t ubo_va[SGXWS_MAX_UBOS];
+   bool fs_ubos = false;
    struct sgxws_fetch fetch[SGXWS_MAX_FETCH];
    int e;
 
+   if (d->n_ubos > SGXWS_MAX_UBOS)
+      return -E2BIG;
+   for (unsigned i = 0; i < d->n_ubos; i++) {
+      mem_bytes += (d->ubos[i].bytes + 15) & ~15u;
+      fs_ubos |= d->ubos[i].fs && d->ubos[i].sa >= 0;
+   }
    if ((e = depth_bias(c, st)))
       return e;
    if (d->n_fetch) {
@@ -1967,13 +2016,26 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       fmem = ring_alloc(&c->gen, d->fs_mem.dwords * 4, 16);
       memcpy(fmem.p, d->fs_mem.words, d->fs_mem.dwords * 4);
    }
+   /* the uniform blocks, after any submit make_room made (a copy names
+    * this frame's memory), then their addresses in the memory blocks */
+   for (unsigned i = 0; i < d->n_ubos; i++)
+      ubo_va[i] = ubo_copy(c, d, i, ubo_va);
+   for (unsigned i = 0; i < d->n_ubos; i++) {
+      const struct sgxws_ubo *b = &d->ubos[i];
+      struct sgxws_ptr *m = b->fs ? &fmem : &vmem;
+
+      if (b->mem && m->p &&
+          b->mem < (b->fs ? d->fs_mem.dwords : d->vs_mem.dwords))
+         m->p[b->mem] = ubo_va[i];
+   }
 
    /* fragment: the constants and the secondary program that DMAs them, then
     * the primary program that runs the shader */
    if (fs->sec_dwords) {
       /* the frame's last block again when the constants are (a memory
        * block's address is new each draw) */
-      if (!d->fs_mem.dwords && c->last_u_va && !c->dev->state_always &&
+      if (!d->fs_mem.dwords && !fs_ubos && c->last_u_va &&
+          !c->dev->state_always &&
           c->last_u_dwords == fs->sec_dwords &&
           !memcmp(c->last_u, d->fs_consts, fs->sec_dwords * 4)) {
          u.va = c->last_u_va;
@@ -1982,8 +2044,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
          memcpy(u.p, d->fs_consts, fs->sec_dwords * 4);
          for (unsigned j = 0; j < d->fs_mem.n_bases && d->fs_mem.dwords; j++)
             u.p[d->fs_mem.base[j]] = fmem.va + 512 * j;
+         for (unsigned i = 0; i < d->n_ubos; i++)
+            if (d->ubos[i].fs && d->ubos[i].sa >= 0 &&
+                (unsigned)d->ubos[i].sa < fs->sec_dwords)
+               u.p[d->ubos[i].sa] = ubo_va[i];
          c->last_u_va = 0;
-         if (!d->fs_mem.dwords) {
+         if (!d->fs_mem.dwords && !fs_ubos) {
             if (c->last_u_cap < fs->sec_dwords) {
                uint32_t *m = realloc(c->last_u, fs->sec_dwords * 4);
 
@@ -2126,6 +2192,10 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       memcpy(vsec.p + 10, d->vs_consts, vs->const_dwords * 4);
    for (unsigned j = 0; j < d->vs_mem.n_bases && d->vs_mem.dwords; j++)
       vsec.p[10 + d->vs_mem.base[j]] = vmem.va + 512 * j;
+   for (unsigned i = 0; i < d->n_ubos; i++)
+      if (!d->ubos[i].fs && d->ubos[i].sa >= 0 &&
+          (unsigned)d->ubos[i].sa < vs->const_dwords)
+         vsec.p[10 + d->ubos[i].sa] = ubo_va[i];
    sec = pds_dma_task(c, &c->pds_vtx, vsec.va, vsec_dwords,
                       doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm_state(c, SGX_VDMCTRL_BLOCK_TYPE_PDS_STATE, sec, vrows,

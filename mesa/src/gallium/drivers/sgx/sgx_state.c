@@ -345,9 +345,12 @@ sgx_set_constant_buffer(struct pipe_context *pctx, mesa_shader_stage shader,
                         uint index, const struct pipe_constant_buffer *cb)
 {
    struct sgx_context *ctx = sgx_context(pctx);
-   struct pipe_constant_buffer *so = &ctx->constants[shader];
+   struct pipe_constant_buffer *so =
+      index == 0 ? &ctx->constants[shader]
+      : index <= SGX_MAX_UBOS ? &ctx->ubos[shader][index - 1]
+                              : NULL;
 
-   if (index != 0)
+   if (!so)
       return;
    if (!cb) {
       pipe_resource_reference(&so->buffer, NULL);

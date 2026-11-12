@@ -57,6 +57,7 @@ struct sgx_const {
 #define SGX_K_SIZE_UNITS   16
 #define SGX_K_INSTANCE_INT 1072
 #define SGX_K_UBO          1080
+#define SGX_MAX_UBOS       12 /* blocks 1-12 (0 is the default uniforms) */
 /* unit u's level count (textureQueryLevels, and the compiler's own level
  * choice for word-by-word fetches) at SGX_K_LEVELS + u, a raw integer */
 #define SGX_K_LEVELS       1096
@@ -223,6 +224,11 @@ struct sgx_context {
    struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
    unsigned num_vertex_buffers;
    struct pipe_constant_buffer constants[MESA_SHADER_STAGES];
+   /* uniform blocks 1-12 (ubos[s][n - 1]), and the draw's copies of them
+    * (fill_consts) */
+   struct pipe_constant_buffer ubos[MESA_SHADER_STAGES][SGX_MAX_UBOS];
+   struct sgxws_ubo draw_ubos[SGXWS_MAX_UBOS];
+   unsigned n_draw_ubos;
    struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS]; /* fragment */
    struct pipe_sampler_view *views[PIPE_MAX_SHADER_SAMPLER_VIEWS]; /* fragment */
 
