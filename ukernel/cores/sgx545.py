@@ -334,6 +334,7 @@ DIAG_PHAS = True             # False drops the event entry's phas.i (diagnostic 
 PROBES = None                # code-base-unit probes past the image (cores/sgx530_probe.py)
 BASE_PADS = None             # code-base pads past the image (cores/sgx530_bases.py)
 USSE_PROBE = None            # a minimal self-looping event task (cores/sgx530_usse.py)
+USSE_PHAS = False            # USSE probe: emit phas.i first (cores/sgx530_usse_phas.py)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
