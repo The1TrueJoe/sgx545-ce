@@ -463,6 +463,25 @@ def build(a):
         if USSE_PHAS:
             a.phas()
         a.patch(17, "ctlblk")
+        if USSE_LDGATE:
+            # isolate one ld.a.d: load from base at USSE_LDOFF, then signal with str
+            # (a register write, not a.d addressing). EVENT_TIMER = 0xa5a means the load
+            # did not fault; a fault names the effective address. USSE_LDBASE picks the
+            # base: None = the patched r17 (ctlblk); an int = limm that value into r5.
+            a.patch(14, "pdtable")
+            base = "r17"
+            if USSE_LDBASE is not None:
+                a.i(f"limm r5, #{USSE_LDBASE}")
+                base = "r5"
+            moe = " [moe]" if USSE_MOE else ""
+            a.i(f"ld.a.d r3, {base}, #{USSE_LDOFF}{moe}")
+            a.i("wdf")
+            a.i(f"limm r0, #{DIAG_TIMER}")
+            a.i(f"str #{CR_EVENT_TIMER // 4}, r0")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_MIRROR:
             # mirror the real entry's preamble exactly (both patches, the heartbeat
             # load) to isolate the real image's first-load fault, then store what was
