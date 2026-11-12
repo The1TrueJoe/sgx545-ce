@@ -43,6 +43,8 @@ struct pvrsgx_vm {
 	struct kref ref;
 	/** @users: The handle and the live contexts; at zero its mappings go. */
 	atomic_t users;
+	/** @ran_gen: &pvrsgx_device.fw_gen + 1 at its last job sent; 0 before any. */
+	u32 ran_gen;
 };
 
 struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);

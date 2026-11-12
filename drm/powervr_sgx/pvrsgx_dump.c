@@ -94,6 +94,8 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool reg
 	if (pvrsgx_kobj_pending(sdev, &kc))
 		seq_buf_printf(sb, "kobjs graveyard %u (%llu pages) unmapped %u (%llu pages)\n",
 			       kc.graveyard, kc.graveyard_pages, kc.unmapped, kc.unmapped_pages);
+	seq_buf_printf(sb, "client unmaps waiting for the invalidate %u\n",
+		       pvrsgx_ccb_inval_pending(sdev));
 	/* After a failed start the clocks are still on; after a stop they are not. */
 	if (!regs || !READ_ONCE(sdev->powered))
 		return;

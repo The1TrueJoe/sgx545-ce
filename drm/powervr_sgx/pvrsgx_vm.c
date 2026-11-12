@@ -146,6 +146,7 @@ static struct pvrsgx_va *to_pvrsgx_va(struct drm_gpuva *va)
 struct pvrsgx_vm_free {
 	struct dma_fence_cb cb;
 	struct work_struct work;
+	struct pvrsgx_inval_wait inval;
 	struct drm_device *drm;
 	struct dma_fence *fence;
 	struct list_head vas;
@@ -199,21 +200,40 @@ static void vm_unmap_all(struct pvrsgx_vm *vm, struct list_head *freed)
 	}
 }
 
+/* The invalidate has run: nothing can reach the unmapped pages any more. */
+static void vm_free_done(struct pvrsgx_inval_wait *w)
+{
+	struct pvrsgx_vm_free *f = container_of(w, struct pvrsgx_vm_free, inval);
+
+	vas_free(&f->vas);
+	pvrsgx_vm_put(f->vm);
+	dma_fence_put(f->fence);
+	drm_dev_put(f->drm);
+	kfree(f);
+}
+
 static void vm_free_work(struct work_struct *work)
 {
 	struct pvrsgx_vm_free *f = container_of(work, struct pvrsgx_vm_free, work);
+	struct pvrsgx_device *sdev = to_pvrsgx_device(f->drm);
 
+	f->inval.done = vm_free_done;
 	if (f->vm) {
 		mutex_lock(&f->vm->lock);
 		vm_unmap_all(f->vm, &f->vas);
 		mutex_unlock(&f->vm->lock);
-		vm_invalidate(f->vm->sdev, true);
-		pvrsgx_vm_put(f->vm);
+		/*
+		 * The BIF caches walks only of a directory a job ran on, and a
+		 * restart or power-off drops them: then there is nothing to wait for.
+		 */
+		if (!READ_ONCE(sdev->powered) ||
+		    READ_ONCE(f->vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1) {
+			vm_free_done(&f->inval);
+			return;
+		}
 	}
-	vas_free(&f->vas);
-	dma_fence_put(f->fence);
-	drm_dev_put(f->drm);
-	kfree(f);
+	pvrsgx_ccb_after_invalidate(sdev, &f->inval, PVRSGX_CC_INVAL_BIF_PT |
+				    PVRSGX_CC_INVAL_BIF_PD | PVRSGX_CC_INVAL_DATA);
 }
 
 static void vm_free_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
@@ -303,7 +323,11 @@ void pvrsgx_vm_user_put(struct pvrsgx_vm *vm)
 		vm_free_after_jobs(vm, f);
 		return;
 	}
-	/* No memory to defer it: wait for the jobs here. */
+	/*
+	 * No memory to defer it: wait for the jobs here. The pages then go before
+	 * the invalidate has run; nothing of this VM can run again, and the next
+	 * scene's directory switch invalidates before any translation.
+	 */
 	dma_resv_wait_timeout(pvrsgx_vm_resv(vm), DMA_RESV_USAGE_BOOKKEEP, false,
 			      MAX_SCHEDULE_TIMEOUT);
 	mutex_lock(&vm->lock);

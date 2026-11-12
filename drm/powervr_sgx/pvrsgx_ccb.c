@@ -97,3 +97,68 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_cmd type,
 	mutex_unlock(&sdev->ccb_lock);
 	return 0;
 }
+
+/*
+ * Unmapped is not unreachable: the BIF may keep a translation until it is
+ * invalidated, and the microkernel invalidates only for a command it takes,
+ * before it moves the read offset on. So what an unmap freed waits for that
+ * command: the next one sent, since cache_control rides on it. After the GPU
+ * is lost (stopped for good) nothing can translate any more.
+ */
+void pvrsgx_ccb_after_invalidate(struct pvrsgx_device *sdev, struct pvrsgx_inval_wait *w,
+				 u32 cache_control)
+{
+	unsigned long flags;
+
+	if (READ_ONCE(sdev->lost)) {
+		w->done(w);
+		return;
+	}
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= cache_control;
+	w->seq = sdev->ccb_issued + 1;
+	mutex_unlock(&sdev->ccb_lock);
+	spin_lock_irqsave(&sdev->inval_lock, flags);
+	list_add_tail(&w->node, &sdev->inval_waits);
+	spin_unlock_irqrestore(&sdev->inval_lock, flags);
+}
+
+/* For status dumps: how much work still waits for an invalidate. */
+u32 pvrsgx_ccb_inval_pending(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_inval_wait *w;
+	unsigned long flags;
+	u32 n = 0;
+
+	spin_lock_irqsave(&sdev->inval_lock, flags);
+	list_for_each_entry(w, &sdev->inval_waits, node)
+		n++;
+	spin_unlock_irqrestore(&sdev->inval_lock, flags);
+	return n;
+}
+
+/*
+ * Run what waited for an invalidate the microkernel has now taken; all of it
+ * once the GPU is stopped. A restart empties the ring, so everything sent
+ * before it counts as taken: the GPU was reset, and the first command after
+ * the start carries an invalidate of its own.
+ */
+void pvrsgx_ccb_inval_reap(struct pvrsgx_device *sdev, bool all)
+{
+	struct pvrsgx_inval_wait *w, *tmp;
+	unsigned long flags;
+	LIST_HEAD(done);
+	u64 consumed;
+
+	spin_lock_irqsave(&sdev->inval_lock, flags);
+	consumed = all || READ_ONCE(sdev->lost) ? U64_MAX : pvrsgx_ccb_consumed(sdev);
+	list_for_each_entry_safe(w, tmp, &sdev->inval_waits, node) {
+		if (w->seq <= consumed)
+			list_move_tail(&w->node, &done);
+	}
+	spin_unlock_irqrestore(&sdev->inval_lock, flags);
+	list_for_each_entry_safe(w, tmp, &done, node) {
+		list_del(&w->node);
+		w->done(w);
+	}
+}
