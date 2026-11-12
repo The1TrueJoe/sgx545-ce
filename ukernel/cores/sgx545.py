@@ -350,6 +350,9 @@ USSE_ALU_DST = 5             # aluwr: the register the or writes and the ld read
 USSE_PA_READ = False         # read pa0 as the ld base: are PDS-set attributes visible? (cores/sgx530_pa0.py)
 USSE_LDLOOP_PA0 = False      # loop ld.a.d r3,pa0; wdf forever: a list-0 PD switch under the task faults at PA0 (gap-19 T2; cores/sgx530_ldloop_pa0.py)
 USSE_ALU_DSTOP = None        # aluwr: an explicit dest/base operand (e.g. 'o0','pa0') for the write-file test
+USSE_ALU_NOWRITE = False     # aluwr control: emit a nop in place of the or, so the ld reads the dst's raw
+                             # leftover. aluwr vs this isolates whether the or changed the register at all
+                             # (within one register, no cross-probe leftover compare). (cores/sgx530_ldr5_ctl.py)
 USSE_STOUT = None           # 'o0': or it then st it to [pa0] (a driver-DOUTA-set scratch addr): st-from-output (cores/sgx530_stout_o0.py)
 USSE_ODIST = None           # read o{N} after writing o0..o9 distinct values: are the outputs distinct regs or aliases? (cores/sgx530_odist0.py)
 USSE_ODIST_N = 10           # how many outputs the odist sweep writes (11 includes o10 for the margin-1 check)

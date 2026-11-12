@@ -492,7 +492,12 @@ def build(a):
             # 0x0fd7d000 => the ALU wrote r5; at 0x0c004000 => it did not. No limm.
             a.patch(17, "ctlblk")
             dst = USSE_ALU_DSTOP or f"r{USSE_ALU_DST}"   # the or dest / ld base operand
-            a.i(f"or {dst}, r5, r17")          # = r5 leftover | r17 leftover = 0x0fd7d000
+            if USSE_ALU_NOWRITE:
+                a.i("nop")                     # control: no write, so the ld reads dst's raw leftover.
+                                               # aluwr (or) vs this (nop) isolates the or's effect on dst,
+                                               # comparing the same register, no cross-probe leftover math.
+            else:
+                a.i(f"or {dst}, r5, r17")      # = r5 leftover | r17 leftover = 0x0fd7d000
             for _ in range(USSE_ALU_NOPS):     # space the write from the dependent read:
                 a.i("nop")                     # if the 530 pairs/schedules them, nops break it
             a.i(f"ld.a.d r3, {dst}, #0")
