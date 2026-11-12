@@ -112,6 +112,8 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 	.use_code_base_dm_shift = 24,
 	.pds_pc_base = 0x0b2c,
 	.pds_ctrl = 0x0abc,
+	.pds_inv = { 0x0ad0, 0x0ad4, 0x0ad8, 0x0adc },
+	.pds_inv_csc = 0x0ae0,
 	/*
 	 * Not in any GPL header, for any core: the SGX545's offsets, from its
 	 * vendor init script (docs/SRVINIT.md), a guess here (G). Every named

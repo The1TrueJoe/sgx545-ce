@@ -93,6 +93,8 @@ struct pvrsgx_core_regs {
 	u32 vendor_b30;			/* unnamed, 0x100 in the SGX545's vendor script */
 	u32 pds_pc_base;		/* PDS_PC_BASE (SGX530), likely the PDS's PC */
 	u32 pds_ctrl;			/* PDS (DOUT_TIMEOUT_DISABLE b6), read only */
+	u32 pds_inv[4];			/* PDS_INV0-3 (SGX530): DSC b0 */
+	u32 pds_inv_csc;		/* PDS_INV_CSC (SGX530): KICK b0 */
 	/* Not in the GPL header (pvrsgx_hw.h). */
 	u32 event_pds_enable;
 	u32 event_pds_enable_all;

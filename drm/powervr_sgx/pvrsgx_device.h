@@ -131,6 +131,8 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_PADS_DM3		BIT(6)	/* code bases 0-14 at the pads, all DM 3 */
 #define PVRSGX_SWEEP_ALL_SLOTS		BIT(7)	/* every entry data word the DOUTU word */
 #define PVRSGX_SWEEP_ENABLE		BIT(8)	/* event PDS enable = @sweep_enable */
+#define PVRSGX_SWEEP_PDS_INV		BIT(9)	/* invalidate the PDS caches before the kick */
+#define PVRSGX_SWEEP_A68_HOLE		BIT(10)	/* event program address in the unmapped hole */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4
@@ -203,7 +205,7 @@ struct pvrsgx_device {
 	/** @sweep_cc: The sweep's MOVS condition for the event program, + 1; 0 none. */
 	u8 sweep_cc;
 	/** @sweep_data0: The sweep's event data 0 (0xa6c), + 1; 0 none. */
-	u8 sweep_data0;
+	u16 sweep_data0;
 	/** @sweep_data1: The sweep's event data 1 (0xa70), + 1; 0 none. */
 	u8 sweep_data1;
 	/** @sweep_enable: The sweep's event PDS enable, with PVRSGX_SWEEP_ENABLE. */

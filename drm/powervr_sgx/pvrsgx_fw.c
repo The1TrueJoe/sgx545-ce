@@ -499,7 +499,9 @@ static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
  */
 static u32 event_pds_addr(struct pvrsgx_device *sdev)
 {
-	u32 a = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu;
+	/* The stage-1 sweep's fetch test: a program address nothing maps. */
+	u32 a = sdev->sweep_flags & PVRSGX_SWEEP_A68_HOLE ? pvrsgx_pds_f1_addr(sdev) :
+		sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu;
 
 	if (!(sdev->family->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE))
 		a -= pvrsgx_heaps(sdev)->pds_pixel.base;
@@ -576,7 +578,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
 
-	/* The bring-up sweep's changes (sweep_at() below); none in a normal start. */
+	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DATA0_2)
 		data0 = 2;
 	if (sdev->sweep_data0)
@@ -613,6 +615,11 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	err = check_event_pds(sdev);
 	if (err)
 		return err;
+	if ((sdev->sweep_flags & PVRSGX_SWEEP_PDS_INV) && cr->pds_inv_csc) {
+		for (unsigned int i = 0; i < ARRAY_SIZE(cr->pds_inv); i++)
+			sgx_wr(sdev, cr->pds_inv[i], 1);
+		sgx_wr(sdev, cr->pds_inv_csc, 1);
+	}
 	sgx_wr(sdev, cr->event_pds_enable, sdev->sweep_flags & PVRSGX_SWEEP_ENABLE ?
 	       sdev->sweep_enable : cr->event_pds_enable_all);
 	return 0;
@@ -798,32 +805,26 @@ MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a gue
  */
 struct sweep_variant {
 	u32 flags, enable;
-	u8 dest, cc, data0, data1, prog, a68_low;
+	u16 data0;
+	u8 dest, cc, data1, prog, a68_low;
 };
 
 /*
- * Programs F1 (DOUTD) and F2 (branch) under 0x0a70 = 6 and 16: does the PDS
- * execute our first code row? Each faults at an address only it touches.
+ * Does the PDS fetch the program at all? The baseline; the PDS caches
+ * invalidated, alone and with F1; the code start 64 KiB past the program,
+ * unmapped (0x0a6c = 0x1000 rows); the program address in the unmapped hole.
+ * Each fetch faults where only it reads.
  */
-static const u8 sweep_lens[] = { 6, 16 };
-static const struct { u8 prog, data0; } sweep_progs[] = {
-	{ PVRSGX_SWEEP_PROG_F1, 0 }, { PVRSGX_SWEEP_PROG_F2, 0 },
+static const struct sweep_variant sweep[] = {
+	{ 0 },
+	{ .flags = PVRSGX_SWEEP_PDS_INV },
+	{ .flags = PVRSGX_SWEEP_PDS_INV, .prog = PVRSGX_SWEEP_PROG_F1 },
+	{ .data0 = 0x1000 + 1 },
+	{ .flags = PVRSGX_SWEEP_A68_HOLE },
 };
 
-#define SWEEP_COUNT	(1 + ARRAY_SIZE(sweep_progs) * ARRAY_SIZE(sweep_lens))
-
-/* Variant v: 0 the baseline, then each program under each length. */
-static struct sweep_variant sweep_at(unsigned int v)
-{
-	struct sweep_variant sv = {};
-
-	if (v--) {
-		sv.prog = sweep_progs[v / ARRAY_SIZE(sweep_lens)].prog;
-		sv.data0 = sweep_progs[v / ARRAY_SIZE(sweep_lens)].data0;
-		sv.data1 = sweep_lens[v % ARRAY_SIZE(sweep_lens)] + 1;
-	}
-	return sv;
-}
+/* The flags sweep_name() names; it prints the rest as hex. */
+#define SWEEP_NAMED	((u32)(PVRSGX_SWEEP_ENABLE | PVRSGX_SWEEP_PDS_INV | PVRSGX_SWEEP_A68_HOLE))
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
@@ -838,7 +839,7 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " 0xa68 low 0x%x", sv->a68_low);
 
 	if (sv->data0)
-		n += scnprintf(buf + n, len - n, " data0 %d", sv->data0 - 1);
+		n += scnprintf(buf + n, len - n, " data0 0x%x", sv->data0 - 1);
 	if (sv->data1)
 		n += scnprintf(buf + n, len - n, " data1 %d", sv->data1 - 1);
 	if (sv->dest)
@@ -847,8 +848,12 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " cc %d", sv->cc - 1);
 	if (sv->flags & PVRSGX_SWEEP_ENABLE)
 		n += scnprintf(buf + n, len - n, " enable 0x%x", sv->enable);
-	if (sv->flags & ~PVRSGX_SWEEP_ENABLE)
-		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~(u32)PVRSGX_SWEEP_ENABLE);
+	if (sv->flags & PVRSGX_SWEEP_PDS_INV)
+		n += scnprintf(buf + n, len - n, " PDS inv");
+	if (sv->flags & PVRSGX_SWEEP_A68_HOLE)
+		n += scnprintf(buf + n, len - n, " 0xa68 hole");
+	if (sv->flags & ~SWEEP_NAMED)
+		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~SWEEP_NAMED);
 }
 
 /*
@@ -1029,8 +1034,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 	u32 clk, st, held = 0;
 	int err, ran;
 
-	for (unsigned int v = 0; v < SWEEP_COUNT; v++) {
-		const struct sweep_variant var = sweep_at(v), *sv = &var;
+	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
+		const struct sweep_variant *sv = &sweep[v];
 		char name[40];
 
 		if ((sv->flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
@@ -1081,13 +1086,13 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			return sweep_teardown(sdev, clk_idle, held);
 		}
 		bringup_diag(sdev, when);
-		/* F1 and F2 show they ran by faulting: log where, then recover. */
+		/* A fetch or F1 shows it ran by faulting: log where, then recover. */
 		st = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
 		if (st & cr->bif_int_stat_fault_req) {
 			drm_info(&sdev->base,
-				 "sweep %s: BIF int 0x%x fault 0x%08x (F1 reads 0x%08x, F2 branches to 0x%08x)\n",
+				 "sweep %s: BIF int 0x%x fault 0x%08x (the hole 0x%08x, 0x1000 rows in 0x%08x)\n",
 				 when, st, sgx_rd(sdev, SGX_CR_BIF_FAULT), pvrsgx_pds_f1_addr(sdev),
-				 sdev->fw.addr[PVRSGX_FW_PDS0] + 0x10 + 0x10000);
+				 sdev->fw.addr[PVRSGX_FW_PDS0] + 0x10000);
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			err = bif_recover(sdev, when);
 			if (err)
