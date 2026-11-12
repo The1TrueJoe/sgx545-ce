@@ -1,0 +1,136 @@
+From 1f84042a5b5afeea6a149e76065761d1bd5ede42 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:45:34 -0500
+Subject: [PATCH 20/22] PLACEHOLDER 20 gallium: wire up the sgx driver (pipe
+ loader, DRI target, loader)
+
+---
+ .../auxiliary/pipe-loader/pipe_loader_drm.c     |  4 ++++
+ .../auxiliary/target-helpers/drm_helper.h       | 17 +++++++++++++++++
+ .../target-helpers/drm_helper_public.h          |  1 +
+ src/gallium/targets/dri/meson.build             |  2 +-
+ src/loader/loader.c                             | 12 ++++++++++++
+ src/loader/pci_id_driver_map.h                  |  2 ++
+ 6 files changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+index dc631b4..e07902f 100644
+--- a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+@@ -88,6 +88,7 @@ static const struct drm_driver_descriptor *driver_descriptors[] = {
+    &ethosu_driver_descriptor,
+    &tegra_driver_descriptor,
+    &lima_driver_descriptor,
++   &sgx_driver_descriptor,
+    &zink_driver_descriptor,
+    &kmsro_driver_descriptor,
+ };
+@@ -396,6 +397,9 @@ pipe_loader_get_compatible_render_capable_device_fds(int kms_only_fd, unsigned i
+ #if defined GALLIUM_VC4
+       "vc4",
+ #endif
++#if defined GALLIUM_SGX
++      "powervr_sgx",
++#endif
+ #if defined GALLIUM_ZINK
+       "zink",
+ #endif
+diff --git a/src/gallium/auxiliary/target-helpers/drm_helper.h b/src/gallium/auxiliary/target-helpers/drm_helper.h
+index e53b7ed..0540d04 100644
+--- a/src/gallium/auxiliary/target-helpers/drm_helper.h
++++ b/src/gallium/auxiliary/target-helpers/drm_helper.h
+@@ -417,6 +417,23 @@ DRM_DRIVER_DESCRIPTOR(lima, lima_driconf, ARRAY_SIZE(lima_driconf))
+ DRM_DRIVER_DESCRIPTOR_STUB(lima)
+ #endif
+ 
++#ifdef GALLIUM_SGX
++#include "sgx/sgx_public.h"
++
++static struct pipe_screen *
++pipe_sgx_create_screen(int fd, const struct pipe_screen_config *config)
++{
++   struct pipe_screen *screen;
++
++   screen = sgx_drm_screen_create(fd, config);
++   return screen ? debug_screen_wrap(screen) : NULL;
++}
++DRM_DRIVER_DESCRIPTOR(sgx, NULL, 0)
++
++#else
++DRM_DRIVER_DESCRIPTOR_STUB(sgx)
++#endif
++
+ #ifdef GALLIUM_ZINK
+ #include "zink/zink_public.h"
+ 
+diff --git a/src/gallium/auxiliary/target-helpers/drm_helper_public.h b/src/gallium/auxiliary/target-helpers/drm_helper_public.h
+index fe0e122..b5452ec 100644
+--- a/src/gallium/auxiliary/target-helpers/drm_helper_public.h
++++ b/src/gallium/auxiliary/target-helpers/drm_helper_public.h
+@@ -26,6 +26,7 @@ extern const struct drm_driver_descriptor rocket_driver_descriptor;
+ extern const struct drm_driver_descriptor ethosu_driver_descriptor;
+ extern const struct drm_driver_descriptor tegra_driver_descriptor;
+ extern const struct drm_driver_descriptor lima_driver_descriptor;
++extern const struct drm_driver_descriptor sgx_driver_descriptor;
+ extern const struct drm_driver_descriptor zink_driver_descriptor;
+ extern const struct drm_driver_descriptor kmsro_driver_descriptor;
+ 
+diff --git a/src/gallium/targets/dri/meson.build b/src/gallium/targets/dri/meson.build
+index 925c512..5b59b6b 100644
+--- a/src/gallium/targets/dri/meson.build
++++ b/src/gallium/targets/dri/meson.build
+@@ -61,7 +61,7 @@ libgallium_dri = shared_library(
+     driver_kmsro, driver_v3d, driver_vc4, driver_freedreno, driver_etnaviv,
+     driver_tegra, driver_i915, driver_svga, driver_virgl,
+     driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
+-    driver_asahi, driver_crocus, driver_rocket, driver_ethosu
++    driver_asahi, driver_crocus, driver_rocket, driver_ethosu, driver_sgx
+   ],
+   install : true,
+   name_suffix : libname_suffix,
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index babf20a..15193e4 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -146,6 +146,18 @@ iris_predicate(int fd, const char *driver)
+    return ret;
+ }
+ 
++/* the PowerVR SGX545 of Intel's CE5300/CE5310 and Cedarview SoCs, under its
++ * DRM driver */
++bool
++sgx_predicate(int fd, const char *driver)
++{
++   char *kernel_driver = loader_get_kernel_driver_name(fd);
++   bool ret = kernel_driver && strcmp(kernel_driver, "powervr_sgx") == 0;
++
++   free(kernel_driver);
++   return ret;
++}
++
+ /* choose zink or nouveau GL */
+ bool
+ nouveau_zink_predicate(int fd, const char *driver)
+diff --git a/src/loader/pci_id_driver_map.h b/src/loader/pci_id_driver_map.h
+index 38c9b97..aa8b994 100644
+--- a/src/loader/pci_id_driver_map.h
++++ b/src/loader/pci_id_driver_map.h
+@@ -46,6 +46,7 @@ static const int vmwgfx_chip_ids[] = {
+ 
+ bool amd_predicate(int fd, const char *driver);
+ bool iris_predicate(int fd, const char *driver);
++bool sgx_predicate(int fd, const char *driver);
+ bool nouveau_zink_predicate(int fd, const char *driver);
+ 
+ static const struct {
+@@ -55,6 +56,7 @@ static const struct {
+    int num_chips_ids;
+    bool (*predicate)(int fd, const char *driver);
+ } driver_map[] = {
++   { 0x8086, "sgx", NULL, -1, sgx_predicate },
+    { 0x8086, "i915", i915_chip_ids, ARRAY_SIZE(i915_chip_ids) },
+    { 0x8086, "crocus", crocus_chip_ids, ARRAY_SIZE(crocus_chip_ids) },
+    { 0x8086, "iris", NULL, -1, iris_predicate },
+-- 
+2.50.1 (Apple Git-155)
+

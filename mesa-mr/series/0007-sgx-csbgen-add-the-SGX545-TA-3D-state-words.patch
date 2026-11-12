@@ -1,0 +1,952 @@
+From 4e0701c04542ed006236e29d086481f9afbb65ba Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:31:13 -0500
+Subject: [PATCH 07/22] sgx/csbgen: add the SGX545 TA/3D state words
+
+[Placeholder. Mesa wants commit messages in the submitter's own words;
+what this one must say is in MR-FACTS.md, "Commit 7".]
+---
+ .clang-format-include               |   1 +
+ src/imagination/csbgen/meson.build  |   2 +
+ src/meson.build                     |   2 +-
+ src/sgx/csbgen/README.md            |  47 ++++++
+ src/sgx/csbgen/meson.build          |  34 ++++
+ src/sgx/csbgen/pbe.xml              |  55 ++++++
+ src/sgx/csbgen/sgx_csb.h            |  45 +++++
+ src/sgx/csbgen/ta.xml               | 193 +++++++++++++++++++++
+ src/sgx/csbgen/tests/meson.build    |  13 ++
+ src/sgx/csbgen/tests/sgx_csb_test.c | 249 ++++++++++++++++++++++++++++
+ src/sgx/csbgen/tex.xml              |  84 ++++++++++
+ src/sgx/csbgen/vdm.xml              |  95 +++++++++++
+ src/sgx/meson.build                 |   1 +
+ 13 files changed, 820 insertions(+), 1 deletion(-)
+ create mode 100644 src/sgx/csbgen/README.md
+ create mode 100644 src/sgx/csbgen/meson.build
+ create mode 100644 src/sgx/csbgen/pbe.xml
+ create mode 100644 src/sgx/csbgen/sgx_csb.h
+ create mode 100644 src/sgx/csbgen/ta.xml
+ create mode 100644 src/sgx/csbgen/tests/meson.build
+ create mode 100644 src/sgx/csbgen/tests/sgx_csb_test.c
+ create mode 100644 src/sgx/csbgen/tex.xml
+ create mode 100644 src/sgx/csbgen/vdm.xml
+
+diff --git a/.clang-format-include b/.clang-format-include
+index d5a4b26..101d6df 100644
+--- a/.clang-format-include
++++ b/.clang-format-include
+@@ -14,5 +14,6 @@ src/etnaviv/isa/**/*
+ src/imagination/**/*
+ src/kosmickrisp/**/*
+ src/gfxstream/**/*
++src/sgx/csbgen/**/*
+ src/sgx/isa/**/*
+ src/sgx/pds/**/*
+diff --git a/src/imagination/csbgen/meson.build b/src/imagination/csbgen/meson.build
+index c72e47b..6372174 100644
+--- a/src/imagination/csbgen/meson.build
++++ b/src/imagination/csbgen/meson.build
+@@ -1,6 +1,8 @@
+ # Copyright © 2022 Imagination Technologies Ltd.
+ # SPDX-License-Identifier: MIT
+ 
++pvr_gen_pack_header_py = files('gen_pack_header.py')
++
+ pvr_xml_pack = []
+ subdir('rogue')
+ subdir('volcanic')
+diff --git a/src/meson.build b/src/meson.build
+index 3d214b1..53300e2 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -95,7 +95,7 @@ endif
+ if with_gallium_freedreno or with_freedreno_vk or with_tools.contains('freedreno')
+   subdir('freedreno')
+ endif
+-if with_imagination_vk or with_tools.contains('imagination') or get_option('html-docs').allowed()
++if with_imagination_vk or with_tools.contains('imagination') or with_tools.contains('sgx') or get_option('html-docs').allowed()
+   subdir('imagination')
+ endif
+ if with_any_intel
+diff --git a/src/sgx/csbgen/README.md b/src/sgx/csbgen/README.md
+new file mode 100644
+index 0000000..68feee0
+--- /dev/null
++++ b/src/sgx/csbgen/README.md
+@@ -0,0 +1,47 @@
++# SGX545 TA/3D state words (csbgen)
++
++The XML files here describe the PowerVR SGX545's TA/3D state words in the
++format of Imagination's csbgen. `src/imagination/csbgen/gen_pack_header.py`,
++the generator the PowerVR Vulkan driver uses, turns each `<name>.xml` into
++`csbgen/<name>.h`, with a struct, `_header` defaults, `_pack()` and
++`_unpack()` per word. The same layout as `src/imagination/csbgen/rogue`.
++
++| file | prefix | words |
++|---|---|---|
++| `vdm.xml` | `SGX_VDMCTRL_` | the VDM control stream: state program (`PDS_STATE0/1`), the six draw words (`INDEX_LIST0`-`5`), stream terminate |
++| `ta.xml` | `SGX_TA_` | the TA state block: header, ISPA, ISPB, ISPC, the pixel PDS words, region clip, viewport, output select, W clamp, MTE, TSP0/TSP1 |
++| `pbe.xml` | `SGX_PBE_` | the pixel back end's four words and its sideband word |
++| `tex.xml` | `SGX_TEXSTATE_` | the four texture words a DOUTT sends (T0, strided T0, T1, T2, T3) |
++| `sgx_csb.h` | | the address type the generated code needs, the four headers, and `sgx_pack()` |
++| `tests/sgx_csb_test.c` | | packs and unpacks known words |
++
++## Use
++
++```c
++#include "sgx_csb.h"
++
++uint32_t w;
++
++sgx_pack(&w, TA_STATE_ISPB, ispb) {
++   ispb.line_width = 0x10;
++   ispb.color_mask = 0xf;
++}
++```
++
++`sgx_pack()` is the pack-in-place idiom of the Vulkan driver's
++`pvr_csb_pack()`: the struct starts from the XML's defaults, the block sets
++fields, and the word is packed when the block ends. Addresses are
++`sgx_dev_addr_t` (`SGX_DEV_ADDR(va)`).
++
++## Conventions
++
++- A field named `unknown_<bits>` holds bits whose value is known but whose
++  meaning isn't; its `default` (or a `<define>` per use, such as
++  `SGX_TA_STATE_MTE_UNKNOWN_2_31_DRAW`) is that value, so the constant
++  bits come from the description, not the caller.
++- Where a field's width isn't known, it runs up to the next known field.
++- Bits no field names are 0.
++
++## Tests
++
++`meson test --suite sgx` runs `sgx_csb` (with `-Dbuild-tests=true`).
+diff --git a/src/sgx/csbgen/meson.build b/src/sgx/csbgen/meson.build
+new file mode 100644
+index 0000000..5cc1e48
+--- /dev/null
++++ b/src/sgx/csbgen/meson.build
+@@ -0,0 +1,34 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++
++# The TA/3D state words, described in csbgen's XML and packed by the helpers
++# its generator (src/imagination/csbgen) writes: csbgen/<name>.h for each
++# <name>.xml, as src/imagination/csbgen/rogue does.
++
++sgx_csb_xml_files = [
++  'pbe.xml',
++  'ta.xml',
++  'tex.xml',
++  'vdm.xml',
++]
++
++sgx_csb_h = []
++foreach f : sgx_csb_xml_files
++  _name = '@0@.h'.format(f.split('.')[0])
++  sgx_csb_h += custom_target(
++    _name,
++    input : [pvr_gen_pack_header_py, f],
++    output : _name,
++    command : [prog_python, '@INPUT@'],
++    capture : true,
++  )
++endforeach
++
++idep_sgx_csb = declare_dependency(
++  include_directories : [include_directories('.', '..'), inc_imagination],
++  sources : sgx_csb_h,
++)
++
++if with_tests
++  subdir('tests')
++endif
+diff --git a/src/sgx/csbgen/pbe.xml b/src/sgx/csbgen/pbe.xml
+new file mode 100644
+index 0000000..f9025d9
+--- /dev/null
++++ b/src/sgx/csbgen/pbe.xml
+@@ -0,0 +1,55 @@
++<?xml version="1.0" ?>
++
++<!--
++Copyright © 2026 Joseph Telaak
++SPDX-License-Identifier: MIT
++
++The PBE (pixel back end) words the end-of-tile program emits, for Mesa's
++csbgen. A field named unknown_<bits> holds bits whose meaning is unknown,
++defaulting to the value they always have. A field of unknown width runs up
++to the next known field.
++-->
++
++<csbgen name="SGX" prefix="PBE">
++
++  <enum name="FORMAT">
++    <value name="BGRA8888" value="0"/>
++    <value name="RGBA8888" value="1"/>
++    <value name="RGB565"   value="3"/>
++    <value name="RGBA5551" value="4"/>
++    <value name="RGBA4444" value="5"/>
++  </enum>
++
++  <!-- the clip rectangle, in pixels, inclusive -->
++  <struct name="STATE_WORD0" length="1">
++    <field name="y_min" start="16" end="31" type="uint"/>
++    <field name="x_min" start="0" end="15" type="uint"/>
++  </struct>
++
++  <struct name="STATE_WORD1" length="1">
++    <field name="y_max" start="16" end="31" type="uint"/>
++    <field name="x_max" start="0" end="15" type="uint"/>
++  </struct>
++
++  <struct name="STATE_WORD2" length="1">
++    <field name="downscale" start="30" end="31" type="uint"/>
++    <field name="rotation" start="28" end="29" type="uint"/>
++    <field name="pitch" start="16" end="27" type="uint"/>  <!-- pitch in pixels / 2 - 1 -->
++    <!-- cleared, the PBE writes nothing at the address -->
++    <field name="write_enable" start="15" end="15" type="bool" default="1"/>
++  </struct>
++
++  <struct name="STATE_WORD3" length="1">
++    <field name="address" start="2" end="31" type="address" shift="2"/>
++  </struct>
++
++  <!-- the sideband word, the end-of-tile program's second EMITPIX -->
++  <struct name="SIDEBAND" length="1">
++    <field name="twiddled" start="13" end="13" type="bool"/>
++    <field name="unknown_12" start="12" end="12" type="bool"/>
++    <field name="dither" start="10" end="10" type="bool"/>
++    <field name="unknown_9" start="9" end="9" type="bool" default="1"/>
++    <field name="format" start="0" end="5" type="FORMAT"/>
++  </struct>
++
++</csbgen>
+diff --git a/src/sgx/csbgen/sgx_csb.h b/src/sgx/csbgen/sgx_csb.h
+new file mode 100644
+index 0000000..6d4f4bd
+--- /dev/null
++++ b/src/sgx/csbgen/sgx_csb.h
+@@ -0,0 +1,45 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * The state words of vdm.xml, ta.xml, pbe.xml and tex.xml, packed by csbgen's
++ * generated helpers.
++ */
++
++#ifndef SGX_CSB_H
++#define SGX_CSB_H
++
++#include <stdint.h>
++
++/* a GPU virtual address */
++typedef struct {
++   uint32_t addr;
++} sgx_dev_addr_t;
++
++#define SGX_DEV_ADDR(v) ((sgx_dev_addr_t){.addr = (v)})
++
++#define __pvr_address_type    sgx_dev_addr_t
++#define __pvr_get_address(a)  ((a).addr)
++#define __pvr_make_address(v) SGX_DEV_ADDR((uint32_t)(v))
++
++#include "csbgen/pbe.h"
++#include "csbgen/ta.h"
++#include "csbgen/tex.h"
++#include "csbgen/vdm.h"
++
++/*
++ * Pack one SGX_<T> at dst, with its fixed bits (the XML's defaults) and
++ * the fields the block sets:
++ *
++ *    sgx_pack(&w, TA_STATE_ISPB, ispb) {
++ *       ispb.line_width = 0x10;
++ *    }
++ */
++#define sgx_pack(dst, T, name)                                                 \
++   for (struct SGX_##T name = {SGX_##T##_header}, *_sgx_loop_##name = &name;   \
++        _sgx_loop_##name != NULL;                                              \
++        SGX_##T##_pack((dst), &name), _sgx_loop_##name = NULL)
++
++#endif
+diff --git a/src/sgx/csbgen/ta.xml b/src/sgx/csbgen/ta.xml
+new file mode 100644
+index 0000000..970ecb7
+--- /dev/null
++++ b/src/sgx/csbgen/ta.xml
+@@ -0,0 +1,193 @@
++<?xml version="1.0" ?>
++
++<!--
++Copyright © 2026 Joseph Telaak
++SPDX-License-Identifier: MIT
++
++The TA state block: a header word, then the groups it names, in the
++header's bit order. For Mesa's csbgen. A field named unknown_<bits> holds
++bits whose meaning is unknown, defaulting to the value they always have. A
++field of unknown width runs up to the next known field.
++-->
++
++<csbgen name="SGX" prefix="TA">
++
++  <!-- the GL compare functions, GL enum - 0x200 -->
++  <enum name="CMP">
++    <value name="NEVER"    value="0"/>
++    <value name="LESS"     value="1"/>
++    <value name="EQUAL"    value="2"/>
++    <value name="LEQUAL"   value="3"/>
++    <value name="GREATER"  value="4"/>
++    <value name="NOTEQUAL" value="5"/>
++    <value name="GEQUAL"   value="6"/>
++    <value name="ALWAYS"   value="7"/>
++  </enum>
++
++  <enum name="OBJTYPE">
++    <value name="TRIANGLE" value="0"/>
++    <value name="LINE"     value="1"/>
++    <value name="POINT"    value="3"/>
++    <value name="SPRITE"   value="4"/>  <!-- a point that generates gl_PointCoord -->
++  </enum>
++
++  <enum name="PASSTYPE">
++    <value name="OPAQUE"              value="0"/>
++    <value name="TRANSLUCENT"         value="1"/>
++    <value name="TRANSLUCENT_DISCARD" value="2"/>
++    <value name="VIEWPORT_GENERATE"   value="3"/>  <!-- writes the visible bits, draws nothing -->
++    <value name="PUNCH_THROUGH"       value="4"/>
++    <value name="DEPTH_ONLY"          value="5"/>
++  </enum>
++
++  <enum name="STENCILOP">
++    <value name="KEEP"      value="0"/>
++    <value name="ZERO"      value="1"/>
++    <value name="REPLACE"   value="2"/>
++    <value name="INCR"      value="3"/>
++    <value name="DECR"      value="4"/>
++    <value name="INVERT"    value="5"/>
++    <value name="INCR_WRAP" value="6"/>
++    <value name="DECR_WRAP" value="7"/>
++  </enum>
++
++  <enum name="CULL">
++    <value name="NONE" value="0"/>
++    <value name="CW"   value="1"/>  <!-- cull clockwise in screen space -->
++    <value name="CCW"  value="2"/>
++  </enum>
++
++  <!-- the groups that follow, in this order -->
++  <struct name="STATE_HEADER" length="1">
++    <field name="tsp1" start="15" end="15" type="bool"/>
++    <field name="tsp0" start="14" end="14" type="bool"/>
++    <field name="mte" start="12" end="12" type="bool"/>
++    <field name="wclamp" start="11" end="11" type="bool"/>
++    <field name="outselect" start="10" end="10" type="bool"/>
++    <field name="unknown_word" start="9" end="9" type="bool"/>  <!-- one word, always 0 -->
++    <field name="viewport" start="8" end="8" type="bool"/>
++    <field name="region_clip" start="7" end="7" type="bool"/>
++    <field name="pds" start="6" end="6" type="bool"/>
++    <!-- the second face's ISPA, ISPB, ISPC (two-sided stencil) -->
++    <field name="ispc2" start="5" end="5" type="bool"/>
++    <field name="ispb2" start="4" end="4" type="bool"/>
++    <field name="ispa2" start="3" end="3" type="bool"/>
++    <field name="ispc" start="2" end="2" type="bool"/>
++    <field name="ispb" start="1" end="1" type="bool"/>
++    <field name="ispa" start="0" end="0" type="bool"/>
++  </struct>
++
++  <struct name="STATE_ISPA" length="1">
++    <field name="pass_type" start="25" end="27" type="PASSTYPE"/>
++    <field name="depth_func" start="22" end="24" type="CMP"/>
++    <field name="no_color_write" start="21" end="21" type="bool"/>
++    <field name="depth_write_disable" start="20" end="20" type="bool"/>
++    <field name="objtype" start="15" end="18" type="OBJTYPE"/>
++    <field name="two_sided" start="11" end="11" type="bool"/>
++    <field name="ispb_present" start="9" end="9" type="bool"/>
++    <field name="ispc_present" start="8" end="8" type="bool"/>
++    <field name="stencil_ref" start="0" end="7" type="uint"/>
++  </struct>
++
++  <struct name="STATE_ISPB" length="1">
++    <field name="depth_bias" start="23" end="23" type="bool"/>
++    <field name="line_width" start="8" end="15" type="uint"/>  <!-- width * 16, at most 0xff -->
++    <field name="color_mask" start="4" end="7" type="uint"/>   <!-- R 8, G 4, B 2, A 1 -->
++  </struct>
++
++  <!-- stencil; for a VIEWPORT_GENERATE object func is 1 to set the visible
++       bits, 0 to reset them -->
++  <struct name="STATE_ISPC" length="1">
++    <field name="func" start="25" end="27" type="CMP"/>
++    <field name="sfail" start="22" end="24" type="STENCILOP"/>
++    <field name="zfail" start="19" end="21" type="STENCILOP"/>
++    <field name="zpass" start="16" end="18" type="STENCILOP"/>
++    <field name="compare_mask" start="8" end="15" type="uint"/>
++    <field name="write_mask" start="0" end="7" type="uint"/>
++  </struct>
++
++  <!-- PDS words 0 (secondary) and 2 (primary): a pixel PDS program -->
++  <struct name="STATE_PDS_PROGRAM" length="1">
++    <field name="data_rows" start="26" end="31" type="uint"/>  <!-- data bytes / 16 -->
++    <field name="offset" start="0" end="25" type="uint"/>      <!-- (addr - PDS pixel heap) >> 4 -->
++  </struct>
++
++  <!-- PDS word 1 -->
++  <struct name="STATE_PDS_SIZEINFO" length="1">
++    <!-- 12 / primary_units without secondary attributes, 0xb with -->
++    <field name="unknown_25_28" start="25" end="28" type="uint"/>
++    <field name="secondary_size" start="18" end="24" type="uint"/>  <!-- (dwords + 3) >> 2 -->
++    <field name="unknown_16_17" start="16" end="17" type="uint" default="3"/>
++    <!-- the primary attributes in units of 4 dwords, at least 1 -->
++    <field name="primary_units" start="0" end="15" type="uint"/>
++  </struct>
++
++  <!-- in 32 x 16-pixel tiles, inclusive -->
++  <struct name="STATE_REGION_CLIP0" length="1">
++    <field name="unknown_31" start="31" end="31" type="bool" default="1"/>
++    <field name="x_min" start="16" end="30" type="uint"/>
++    <field name="x_max" start="0" end="14" type="uint"/>
++  </struct>
++
++  <struct name="STATE_REGION_CLIP1" length="1">
++    <field name="y_min" start="16" end="30" type="uint"/>
++    <field name="y_max" start="0" end="14" type="uint"/>
++  </struct>
++
++  <struct name="STATE_VIEWPORT" length="6">
++    <field name="x_offset" start="0" end="31" type="float"/>
++    <field name="x_scale" start="32" end="63" type="float"/>
++    <field name="y_offset" start="64" end="95" type="float"/>
++    <field name="y_scale" start="96" end="127" type="float"/>
++    <field name="z_offset" start="128" end="159" type="float"/>
++    <field name="z_scale" start="160" end="191" type="float"/>
++  </struct>
++
++  <struct name="STATE_OUTSELECT" length="1">
++    <field name="out_dwords" start="16" end="31" type="uint"/>  <!-- vertex output dwords -->
++    <!-- 0 for a VIEWPORT_GENERATE object -->
++    <field name="unknown_11_13" start="11" end="13" type="uint">
++      <define name="DRAW" value="6"/>   <!-- 0x3000 -->
++      <!-- 0x3800: the first set after the position is the vertex colour,
++           the PDS's colour source (0x20) -->
++      <define name="DRAW_COLOUR" value="7"/>
++      <define name="CLEAR" value="3"/>  <!-- 0x1800 -->
++    </field>
++    <field name="point_size" start="8" end="8" type="bool"/>   <!-- the last output is the size -->
++    <!-- the user clip planes the TA clips against, plane n's result (fdpc
++         into cp<n>) an output after the others -->
++    <field name="clip_planes" start="0" end="5" type="uint"/>
++  </struct>
++
++  <struct name="STATE_WCLAMP" length="1">
++    <field name="value" start="0" end="31" type="float"/>  <!-- 1e-5 -->
++  </struct>
++
++  <struct name="STATE_MTE" length="1">
++    <field name="unknown_2_31" start="2" end="31" type="uint">
++      <define name="DRAW" value="0x555588"/>  <!-- 0x1555620 -->
++      <define name="CLEAR" value="0x10"/>     <!-- 0x40, also VIEWPORT_GENERATE objects -->
++    </field>
++    <field name="cull" start="0" end="1" type="CULL"/>
++  </struct>
++
++  <!-- TSP word 0: each texcoord set's size, 1-3 components or 5 for 4 -->
++  <struct name="STATE_TSP0" length="1">
++    <field name="set9" start="27" end="29" type="uint"/>
++    <field name="set8" start="24" end="26" type="uint"/>
++    <field name="set7" start="21" end="23" type="uint"/>
++    <field name="set6" start="18" end="20" type="uint"/>
++    <field name="set5" start="15" end="17" type="uint"/>
++    <field name="set4" start="12" end="14" type="uint"/>
++    <field name="set3" start="9" end="11" type="uint"/>
++    <field name="set2" start="6" end="8" type="uint"/>
++    <field name="set1" start="3" end="5" type="uint"/>
++    <field name="set0" start="0" end="2" type="uint"/>
++  </struct>
++
++  <!-- TSP word 1: the sets iterated as F16 (precision value at most 2) -->
++  <struct name="STATE_TSP1" length="1">
++    <field name="f16" start="0" end="9" type="uint"/>
++  </struct>
++
++</csbgen>
+diff --git a/src/sgx/csbgen/tests/meson.build b/src/sgx/csbgen/tests/meson.build
+new file mode 100644
+index 0000000..af36d3b
+--- /dev/null
++++ b/src/sgx/csbgen/tests/meson.build
+@@ -0,0 +1,13 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++
++test(
++  'sgx_csb',
++  executable(
++    'sgx_csb_test',
++    'sgx_csb_test.c',
++    include_directories : [inc_include, inc_src],
++    dependencies : [idep_sgx_csb],
++  ),
++  suite : ['sgx'],
++)
+diff --git a/src/sgx/csbgen/tests/sgx_csb_test.c b/src/sgx/csbgen/tests/sgx_csb_test.c
+new file mode 100644
+index 0000000..a3ab31b
+--- /dev/null
++++ b/src/sgx/csbgen/tests/sgx_csb_test.c
+@@ -0,0 +1,249 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * The state-word packers against known words: each case packs its fields,
++ * compares the word, then unpacks the word and packs it again.
++ */
++
++#include <stdio.h>
++
++#include "sgx_csb.h"
++
++static unsigned failures, cases;
++
++#define CHECK(T, expect, name, ...)                                            \
++   do {                                                                        \
++      uint32_t _w[8] = {0}, _w2[8] = {0};                                      \
++      struct SGX_##T _u;                                                       \
++      sgx_pack(_w, T, name)                                                    \
++      {                                                                        \
++         __VA_ARGS__;                                                          \
++      }                                                                        \
++      SGX_##T##_unpack(_w, &_u);                                               \
++      SGX_##T##_pack(_w2, &_u);                                                \
++      cases++;                                                                 \
++      if (_w[0] != (expect) || _w2[0] != _w[0]) {                              \
++         fprintf(stderr,                                                       \
++                 "%s:%d: " #T " %08x, expected %08x (repacked %08x)\n",        \
++                 __FILE__, __LINE__, _w[0], (uint32_t)(expect), _w2[0]);       \
++         failures++;                                                           \
++      }                                                                        \
++   } while (0)
++
++static void
++test_vdm(void)
++{
++   /* a state program and its info word, a TA block of 12 forwarded dwords */
++   CHECK(VDMCTRL_PDS_STATE0, 0x43040e00, s,
++         s.pds_addr = SGX_DEV_ADDR(0x3040e000));
++   CHECK(VDMCTRL_PDS_STATE1, 0x0e022403, s, s.data_rows = 3;
++         s.kind = SGX_VDMCTRL_STATE_KIND_TA_BLOCK; s.attr_size = 3);
++   /* the empty secondary update, the TA terminate */
++   CHECK(VDMCTRL_PDS_STATE0, 0x43040006, s,
++         s.pds_addr = SGX_DEV_ADDR(0x30400060));
++   CHECK(VDMCTRL_PDS_STATE1, 0x0400e100, s, s.data_rows = 1;
++         s.kind = SGX_VDMCTRL_STATE_KIND_DMA);
++   CHECK(VDMCTRL_PDS_STATE0, 0x63040000, s,
++         s.block_type = SGX_VDMCTRL_BLOCK_TYPE_PDS_STATE_TERMINATE;
++         s.pds_addr = SGX_DEV_ADDR(0x30400000));
++   CHECK(VDMCTRL_PDS_STATE1, 0x0e022401, s, s.data_rows = 3;
++         s.kind = SGX_VDMCTRL_STATE_KIND_TA_BLOCK; s.attr_size = 1);
++
++   /* a draw: three triangle indices, a fan of four */
++   CHECK(VDMCTRL_INDEX_LIST0, 0x80c00003, d,
++         d.prim = SGX_VDMCTRL_PRIM_TRIANGLES;
++         d.index_count = 3);
++   CHECK(VDMCTRL_INDEX_LIST0, 0x90c00004, d, d.fan = true; d.index_count = 4);
++   CHECK(VDMCTRL_INDEX_LIST1, 0x3e517004, d,
++         d.index_addr = SGX_DEV_ADDR(0x3e517004));
++   CHECK(VDMCTRL_INDEX_LIST2, 0xf0000000, d, d.batch = 15);
++   CHECK(VDMCTRL_INDEX_LIST3, 0x003fffff, d, (void)d);
++   CHECK(VDMCTRL_INDEX_LIST4, 0xf3040d82, d, d.vertices_per_task = 15;
++         d.pds_addr = SGX_DEV_ADDR(0x3040d820));
++   CHECK(VDMCTRL_INDEX_LIST5, 0x01c00082, d, d.data_rows = 2; d.in_size = 1;
++         d.n_min3 = 3; d.out_size = 1);
++   CHECK(VDMCTRL_STREAM_TERMINATE0, 0xc0000000, t, (void)t);
++}
++
++static void
++test_ta(void)
++{
++   /* headers: the clear, a triangle, two-sided stencil, a scissor object */
++   CHECK(TA_STATE_HEADER, 0xd4c3, h,
++         h.ispa = h.ispb = h.pds = h.region_clip = h.outselect = h.mte =
++            h.tsp0 = h.tsp1 = true);
++   CHECK(TA_STATE_HEADER, 0xdf43, h,
++         h.ispa = h.ispb = h.pds = h.viewport = h.unknown_word = h.outselect =
++            h.wclamp = true;
++         h.mte = h.tsp0 = h.tsp1 = true);
++   CHECK(
++      TA_STATE_HEADER, 0xdf7f, h,
++      h.ispa = h.ispb = h.ispc = h.ispa2 = h.ispb2 = h.ispc2 = h.pds =
++         h.viewport = true;
++      h.unknown_word = h.outselect = h.wclamp = h.mte = h.tsp0 = h.tsp1 = true);
++   CHECK(TA_STATE_HEADER, 0xd485, h,
++         h.ispa = h.ispc = h.region_clip = h.outselect = h.mte = h.tsp0 =
++            h.tsp1 = true);
++
++   /* ISPA: a scissor object; a stencil reference with depth off */
++   CHECK(TA_STATE_ISPA, 0x07e00100, a,
++         a.pass_type = SGX_TA_PASSTYPE_VIEWPORT_GENERATE;
++         a.no_color_write = true; a.depth_func = SGX_TA_CMP_ALWAYS;
++         a.ispc_present = true);
++   CHECK(TA_STATE_ISPA, 0x01d00355, a, a.stencil_ref = 0x55;
++         a.ispc_present = true; a.ispb_present = true;
++         a.depth_write_disable = true; a.depth_func = SGX_TA_CMP_ALWAYS);
++
++   /* ISPB: line width 9.5 */
++   CHECK(TA_STATE_ISPB, 0x000098f0, b, b.line_width = 0x98; b.color_mask = 0xf);
++
++   /* ISPC: EQUAL with masks; ZERO/REPLACE/INCR; the stencil clear */
++   CHECK(TA_STATE_ISPC, 0x0400f0ff, s, s.func = SGX_TA_CMP_EQUAL;
++         s.compare_mask = 0xf0; s.write_mask = 0xff);
++   CHECK(TA_STATE_ISPC, 0x0453f0ff, s, s.func = SGX_TA_CMP_EQUAL;
++         s.compare_mask = 0xf0; s.write_mask = 0xff;
++         s.sfail = SGX_TA_STENCILOP_ZERO; s.zfail = SGX_TA_STENCILOP_REPLACE;
++         s.zpass = SGX_TA_STENCILOP_INCR);
++   CHECK(TA_STATE_ISPC, 0x0e0200ff, s, s.func = SGX_TA_CMP_ALWAYS;
++         s.zpass = SGX_TA_STENCILOP_REPLACE; s.write_mask = 0xff);
++
++   /* PDS word 1: a uniform color, then 1-5 mediump varyings */
++   CHECK(TA_STATE_PDS_SIZEINFO, 0x160f0001, p, p.primary_units = 1;
++         p.secondary_size = 3; p.unknown_25_28 = 0xb);
++   CHECK(TA_STATE_PDS_SIZEINFO, 0x18030001, p, p.primary_units = 1;
++         p.unknown_25_28 = 12);
++   CHECK(TA_STATE_PDS_SIZEINFO, 0x0c030002, p, p.primary_units = 2;
++         p.unknown_25_28 = 6);
++   CHECK(TA_STATE_PDS_SIZEINFO, 0x08030003, p, p.primary_units = 3;
++         p.unknown_25_28 = 4);
++   CHECK(TA_STATE_PDS_PROGRAM, 0x04001800, p, p.data_rows = 1;
++         p.offset = 0x1800);
++
++   /* region clip: glScissor(37, 23, 101, 57) on 720x480 */
++   CHECK(TA_STATE_REGION_CLIP0, 0x80010004, r, r.x_min = 1; r.x_max = 4);
++   CHECK(TA_STATE_REGION_CLIP1, 0x0019001c, r, r.y_min = 0x19; r.y_max = 0x1c);
++
++   /* output select: the clear, a point, a point sprite with a varying */
++   CHECK(TA_STATE_OUTSELECT, 0x00081800, o, o.out_dwords = 8;
++         o.unknown_11_13 = SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_CLEAR);
++   CHECK(TA_STATE_OUTSELECT, 0x00073100, o, o.out_dwords = 7;
++         o.point_size = true;
++         o.unknown_11_13 = SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW);
++   CHECK(TA_STATE_OUTSELECT, 0x00093100, o, o.out_dwords = 9;
++         o.point_size = true;
++         o.unknown_11_13 = SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW);
++
++   CHECK(TA_STATE_WCLAMP, 0x3727c5ac, w, w.value = 1e-5f);
++   CHECK(TA_STATE_MTE, 0x01555621, m, m.cull = SGX_TA_CULL_CW;
++         m.unknown_2_31 = SGX_TA_STATE_MTE_UNKNOWN_2_31_DRAW);
++   CHECK(TA_STATE_MTE, 0x00000040, m,
++         m.unknown_2_31 = SGX_TA_STATE_MTE_UNKNOWN_2_31_CLEAR);
++
++   /* TSP: 4-component sets; a sprite's coordinate after a color */
++   CHECK(TA_STATE_TSP0, 0x5b6d, t,
++         t.set0 = t.set1 = t.set2 = t.set3 = t.set4 = 5);
++   CHECK(TA_STATE_TSP0, 0x15, t, t.set0 = 5; t.set1 = 2);
++   CHECK(TA_STATE_TSP1, 0x1f, t, t.f16 = 0x1f);
++}
++
++static void
++test_pbe(void)
++{
++   /* a 720x480 window: pitch 736 */
++   CHECK(PBE_STATE_WORD0, 0x00000000, w, (void)w);
++   CHECK(PBE_STATE_WORD1, 0x01df02cf, w, w.x_max = 719; w.y_max = 479);
++   CHECK(PBE_STATE_WORD2, 0x016f8000, w, w.pitch = 367);
++   CHECK(PBE_STATE_WORD3, 0x3e265000, w, w.address = SGX_DEV_ADDR(0x3e265000));
++   CHECK(PBE_SIDEBAND, 0x00000600, s, s.format = SGX_PBE_FORMAT_BGRA8888;
++         s.dither = true);
++   /* FBO targets: twiddled, dithered RGBA8888, RGB565, RGBA4444 */
++   CHECK(PBE_SIDEBAND, 0x00002601, s, s.format = SGX_PBE_FORMAT_RGBA8888;
++         s.dither = true; s.twiddled = true);
++   CHECK(PBE_SIDEBAND, 0x00002603, s, s.format = SGX_PBE_FORMAT_RGB565;
++         s.dither = true; s.twiddled = true);
++   CHECK(PBE_SIDEBAND, 0x00002605, s, s.format = SGX_PBE_FORMAT_RGBA4444;
++         s.dither = true; s.twiddled = true);
++}
++
++static void
++test_tex(void)
++{
++   /* T0: nearest repeat, L8, linear, clamp, mirror, mipmaps */
++   CHECK(TEXSTATE_WORD0, 0x07fe0000, t, t.no_mipmaps = true);
++   CHECK(TEXSTATE_WORD0, 0x47fe0000, t, t.no_mipmaps = true;
++         t.unknown_30 = true);
++   CHECK(TEXSTATE_WORD0, 0x07fe1400, t, t.no_mipmaps = true;
++         t.min_linear = t.mag_linear = true);
++   CHECK(TEXSTATE_WORD0, 0x07fe0090, t, t.no_mipmaps = true;
++         t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_CLAMP);
++   CHECK(TEXSTATE_WORD0, 0x07fe0048, t, t.no_mipmaps = true;
++         t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_MIRROR);
++   CHECK(TEXSTATE_WORD0, 0x07fa0000, t, (void)t);
++   CHECK(TEXSTATE_WORD0, 0x07fa1600, t,
++         t.mip_linear = t.min_linear = t.mag_linear = true);
++   /* a strided 736-pixel surface, and a 72-pixel 16-bit one (pitch in 32-bit
++    * words) */
++   CHECK(TEXSTATE_STRIDED_WORD0, 0x00b60e90, t, t.pitch_lo = 735 & 7;
++         t.pitch_hi = 735 >> 3; t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_CLAMP);
++   CHECK(TEXSTATE_STRIDED_WORD0, 0x00080690, t, t.pitch_lo = 35 & 7;
++         t.pitch_hi = 35 >> 3; t.wrap_s = t.wrap_t = SGX_TEXSTATE_WRAP_CLAMP);
++
++   /* T1: 8x8 RGBA8888, 12x6 linear, a 16x16 cube, a 720x480 window */
++   CHECK(TEXSTATE_WORD1, 0x0d007007, t, t.format = SGX_TEXSTATE_FORMAT_RGBA8888;
++         t.width = 7; t.height = 7);
++   CHECK(TEXSTATE_WORD1, 0x6d00b005, t, t.layout = SGX_TEXSTATE_LAYOUT_LINEAR;
++         t.format = SGX_TEXSTATE_FORMAT_RGBA8888; t.width = 11; t.height = 5);
++   CHECK(TEXSTATE_WORD1, 0x4d00f00f, t, t.layout = SGX_TEXSTATE_LAYOUT_CUBE;
++         t.format = SGX_TEXSTATE_FORMAT_RGBA8888; t.width = 15; t.height = 15);
++   CHECK(TEXSTATE_WORD1, 0xcc2cf1df, t, t.layout = SGX_TEXSTATE_LAYOUT_STRIDED;
++         t.format = SGX_TEXSTATE_FORMAT_BGRA8888; t.width = 719;
++         t.height = 479);
++   CHECK(TEXSTATE_WORD2, 0xf0001000, t, t.address = SGX_DEV_ADDR(0xf0001000));
++
++   /* T3: tex1, tex2, the background object's load */
++   CHECK(TEXSTATE_WORD3, 0x00800800, t, t.unknown_11 = true);
++   CHECK(TEXSTATE_WORD3, 0x01028800, t, t.unknown_23 = false;
++         t.unknown_11 = t.unknown_15 = true;
++         t.unknown_17 = t.unknown_24 = true);
++   CHECK(TEXSTATE_WORD3, 0x00800000, t, (void)t);
++}
++
++static void
++test_viewport(void)
++{
++   /* the six floats in order, and their unpack */
++   uint32_t w[6];
++   struct SGX_TA_STATE_VIEWPORT v;
++
++   sgx_pack(w, TA_STATE_VIEWPORT, vp)
++   {
++      vp.x_offset = 360.0f;
++      vp.x_scale = 360.0f;
++      vp.y_offset = 240.0f;
++      vp.y_scale = -240.0f;
++      vp.z_offset = 0.5f;
++      vp.z_scale = 0.5f;
++   }
++   SGX_TA_STATE_VIEWPORT_unpack(w, &v);
++   cases++;
++   if (w[0] != 0x43b40000 || w[3] != 0xc3700000 || w[5] != 0x3f000000 ||
++       v.y_scale != -240.0f) {
++      fprintf(stderr, "viewport %08x %08x %08x\n", w[0], w[3], w[5]);
++      failures++;
++   }
++}
++
++int
++main(void)
++{
++   test_vdm();
++   test_ta();
++   test_pbe();
++   test_tex();
++   test_viewport();
++   printf("%u/%u state words\n", cases - failures, cases);
++   return failures ? 1 : 0;
++}
+diff --git a/src/sgx/csbgen/tex.xml b/src/sgx/csbgen/tex.xml
+new file mode 100644
+index 0000000..e0e411b
+--- /dev/null
++++ b/src/sgx/csbgen/tex.xml
+@@ -0,0 +1,84 @@
++<?xml version="1.0" ?>
++
++<!--
++Copyright © 2026 Joseph Telaak
++SPDX-License-Identifier: MIT
++
++Texture state: the four words a DOUTT sends per sample, for Mesa's
++csbgen. A field named unknown_<bits> holds bits whose meaning is unknown,
++defaulting to the value they always have.
++-->
++
++<csbgen name="SGX" prefix="TEXSTATE">
++
++  <enum name="WRAP">
++    <value name="REPEAT" value="0"/>
++    <value name="MIRROR" value="1"/>
++    <value name="CLAMP"  value="2"/>
++  </enum>
++
++  <enum name="FORMAT">
++    <value name="RGBA4444" value="0x02"/>  <!-- stored ARGB4444 -->
++    <value name="RGBA5551" value="0x04"/>  <!-- stored ARGB1555 -->
++    <value name="RGB565"   value="0x05"/>
++    <value name="BGRA8888" value="0x0c"/>
++    <value name="RGBA8888" value="0x0d"/>
++    <value name="A8"       value="0x19"/>
++    <value name="L8"       value="0x1a"/>
++    <value name="LA88"     value="0x1b"/>
++    <value name="F32"      value="0x12"/>  <!-- a depth, sampled into the first channel; not filtered -->
++  </enum>
++
++  <enum name="LAYOUT">
++    <value name="TWIDDLED" value="0"/>
++    <value name="CUBE"     value="2"/>
++    <value name="LINEAR"   value="3"/>
++    <value name="STRIDED"  value="6"/>  <!-- the pitch is in STRIDED_WORD0 -->
++  </enum>
++
++  <struct name="WORD0" length="1">
++    <field name="unknown_30" start="30" end="30" type="bool"/>  <!-- set for L8, A8 and LA88 -->
++    <field name="unknown_21_26" start="21" end="26" type="uint" default="0x3f"/>
++    <field name="unknown_19_20" start="19" end="20" type="uint" default="3"/>
++    <field name="no_mipmaps" start="18" end="18" type="bool"/>
++    <field name="unknown_17" start="17" end="17" type="bool" default="1"/>
++    <field name="mag_linear" start="12" end="12" type="bool"/>
++    <field name="min_linear" start="10" end="10" type="bool"/>
++    <field name="mip_linear" start="9" end="9" type="bool"/>
++    <field name="wrap_s" start="6" end="8" type="WRAP"/>
++    <field name="wrap_t" start="3" end="5" type="WRAP"/>
++  </struct>
++
++  <!-- WORD0 of a LAYOUT_STRIDED surface: the pitch - 1, in 32-bit words,
++       split over b9-11 (low 3 bits) and b17-26 -->
++  <struct name="STRIDED_WORD0" length="1">
++    <field name="pitch_hi" start="17" end="26" type="uint"/>
++    <field name="mag_linear" start="12" end="12" type="bool"/>
++    <field name="pitch_lo" start="9" end="11" type="uint"/>
++    <field name="wrap_s" start="6" end="8" type="WRAP"/>
++    <field name="wrap_t" start="3" end="5" type="WRAP"/>
++  </struct>
++
++  <struct name="WORD1" length="1">
++    <field name="layout" start="29" end="31" type="LAYOUT"/>
++    <field name="format" start="24" end="28" type="FORMAT"/>
++    <field name="width" start="12" end="23" type="uint"/>   <!-- - 1 -->
++    <field name="height" start="0" end="11" type="uint"/>   <!-- - 1 -->
++  </struct>
++
++  <struct name="WORD2" length="1">
++    <field name="address" start="0" end="31" type="address" shift="0"/>
++  </struct>
++
++  <!-- the sample instruction's half: 00800800 for a 2-D sample (tex1),
++       01028800 for tex2 (b23 clear), 00800000 for the background object's
++       load -->
++  <struct name="WORD3" length="1">
++    <field name="unknown_24" start="24" end="24" type="bool"/>
++    <field name="unknown_23" start="23" end="23" type="bool" default="1"/>
++    <field name="unknown_17" start="17" end="17" type="bool"/>
++    <field name="unknown_15" start="15" end="15" type="bool"/>
++    <field name="unknown_11" start="11" end="11" type="bool"/>
++  </struct>
++
++</csbgen>
+diff --git a/src/sgx/csbgen/vdm.xml b/src/sgx/csbgen/vdm.xml
+new file mode 100644
+index 0000000..ab78c7c
+--- /dev/null
++++ b/src/sgx/csbgen/vdm.xml
+@@ -0,0 +1,95 @@
++<?xml version="1.0" ?>
++
++<!--
++Copyright © 2026 Joseph Telaak
++SPDX-License-Identifier: MIT
++
++The VDM control stream, for Mesa's csbgen
++(src/imagination/csbgen/gen_pack_header.py). A field named unknown_<bits>
++holds bits whose meaning is unknown, defaulting to the value they always
++have. A field of unknown width runs up to the next known field.
++-->
++
++<csbgen name="SGX" prefix="VDMCTRL">
++
++  <!-- b29-31 of a block's first word: the words read as a top nibble
++       (4, 6, 8, c), but a draw's b28 is the fan bit, so the type is
++       the top three bits -->
++  <enum name="BLOCK_TYPE">
++    <value name="PDS_STATE"           value="2"/>
++    <value name="PDS_STATE_TERMINATE" value="3"/>
++    <value name="INDEX_LIST"          value="4"/>
++    <value name="STREAM_TERMINATE"    value="6"/>
++  </enum>
++
++  <enum name="PRIM">
++    <value name="TRIANGLES"      value="0"/>
++    <value name="LINES"          value="1"/>
++    <value name="POINTS"         value="2"/>
++    <value name="TRIANGLE_STRIP" value="3"/>
++  </enum>
++
++  <!-- the low bits of a state program's info word, by what the program does -->
++  <enum name="STATE_KIND">
++    <value name="TA_BLOCK" value="0x20224"/>  <!-- 0x2022400: DMA a TA state block, emit it -->
++    <value name="DMA"      value="0xe1"/>     <!-- 0xe100: a plain state/secondary DMA -->
++  </enum>
++
++  <!-- a state program: the PDS vertex program that DMAs state -->
++  <struct name="PDS_STATE0" length="1">
++    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="PDS_STATE"/>
++    <field name="pds_addr" start="0" end="27" type="address" shift="4"/>
++  </struct>
++
++  <struct name="PDS_STATE1" length="1">
++    <field name="data_rows" start="26" end="31" type="uint"/>  <!-- 16-byte rows -->
++    <field name="kind" start="8" end="25" type="STATE_KIND"/>
++    <!-- (dwords the state task forwards + 3) >> 2 -->
++    <field name="attr_size" start="0" end="7" type="uint"/>
++    <!-- a TA block's rotating buffer index (0-3), ORed into attr_size; 0
++         works -->
++    <field name="buffer_index" start="0" end="1" type="uint"/>
++  </struct>
++
++  <!-- a draw: six words -->
++  <struct name="INDEX_LIST0" length="1">
++    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="INDEX_LIST"/>
++    <field name="fan" start="28" end="28" type="bool"/>  <!-- with TRIANGLES -->
++    <field name="prim" start="26" end="27" type="PRIM"/>
++    <field name="unknown_22_23" start="22" end="23" type="uint" default="3"/>
++    <field name="index_count" start="0" end="21" type="uint"/>
++  </struct>
++
++  <!-- 16-bit indices: b0 clear (32-bit: b0-1) -->
++  <struct name="INDEX_LIST1" length="1">
++    <field name="index_addr" start="1" end="31" type="address" shift="1"/>
++  </struct>
++
++  <struct name="INDEX_LIST2" length="1">
++    <field name="batch" start="28" end="31" type="uint"/>  <!-- batch - 1; 16 per batch -->
++    <field name="index_32bit" start="24" end="24" type="bool"/>
++    <field name="index_offset" start="0" end="23" type="uint"/>
++  </struct>
++
++  <struct name="INDEX_LIST3" length="1">
++    <field name="max_index" start="0" end="21" type="uint" default="0x3fffff"/>
++  </struct>
++
++  <!-- the vertex PDS program -->
++  <struct name="INDEX_LIST4" length="1">
++    <field name="vertices_per_task" start="28" end="31" type="uint"/>  <!-- - 1 -->
++    <field name="pds_addr" start="0" end="27" type="address" shift="4"/>
++  </struct>
++
++  <struct name="INDEX_LIST5" length="1">
++    <field name="out_size" start="24" end="31" type="uint"/>       <!-- ceil(output dwords / 4) -->
++    <field name="n_min3" start="22" end="23" type="uint"/>         <!-- min(n, 3); 3 works for every draw -->
++    <field name="in_size" start="7" end="21" type="uint"/>         <!-- ceil(input attribute bytes / 16) -->
++    <field name="data_rows" start="0" end="6" type="uint"/>        <!-- PDS data rows -->
++  </struct>
++
++  <struct name="STREAM_TERMINATE0" length="1">
++    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="STREAM_TERMINATE"/>
++  </struct>
++
++</csbgen>
+diff --git a/src/sgx/meson.build b/src/sgx/meson.build
+index 757c5ec..c8b4df8 100644
+--- a/src/sgx/meson.build
++++ b/src/sgx/meson.build
+@@ -1,5 +1,6 @@
+ # Copyright © 2026 Joseph Telaak
+ # SPDX-License-Identifier: MIT
+ 
++subdir('csbgen')
+ subdir('isa')
+ subdir('pds')
+-- 
+2.50.1 (Apple Git-155)
+

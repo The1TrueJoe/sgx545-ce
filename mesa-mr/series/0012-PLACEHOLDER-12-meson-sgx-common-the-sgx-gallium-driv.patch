@@ -1,0 +1,277 @@
+From c887f416a6fe6e917e1de2125cb591bbf1452994 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:40:40 -0500
+Subject: [PATCH 12/22] PLACEHOLDER 12 meson, sgx/common: the sgx gallium
+ driver option and the per-core table
+
+---
+ meson.build                |  2 +
+ meson.options              |  2 +-
+ src/meson.build            |  4 +-
+ src/sgx/common/meson.build | 15 +++++++
+ src/sgx/common/sgx_core.c  | 68 ++++++++++++++++++++++++++++++
+ src/sgx/common/sgx_core.h  | 84 ++++++++++++++++++++++++++++++++++++++
+ src/sgx/meson.build        |  4 ++
+ 7 files changed, 176 insertions(+), 3 deletions(-)
+ create mode 100644 src/sgx/common/meson.build
+ create mode 100644 src/sgx/common/sgx_core.c
+ create mode 100644 src/sgx/common/sgx_core.h
+
+diff --git a/meson.build b/meson.build
+index ff2c13f..76a41d7 100644
+--- a/meson.build
++++ b/meson.build
+@@ -237,6 +237,7 @@ with_gallium_d3d12 = gallium_drivers.contains('d3d12')
+ with_gallium_asahi = gallium_drivers.contains('asahi')
+ with_gallium_rocket = gallium_drivers.contains('rocket')
+ with_gallium_ethosu = gallium_drivers.contains('ethosu')
++with_gallium_sgx = gallium_drivers.contains('sgx')
+ foreach gallium_driver : gallium_drivers
+   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
+ endforeach
+@@ -266,6 +267,7 @@ with_gallium_drm = system_has_kms_drm and [
+   with_gallium_panfrost,
+   with_gallium_v3d,
+   with_gallium_vc4,
++  with_gallium_sgx,
+ ].contains(true)
+ 
+ _vulkan_drivers = get_option('vulkan-drivers')
+diff --git a/meson.options b/meson.options
+index 1a2530b..52a1586 100644
+--- a/meson.options
++++ b/meson.options
+@@ -87,7 +87,7 @@ option(
+     'all', 'auto',
+     'asahi', 'crocus', 'd3d12', 'ethosu', 'etnaviv', 'freedreno', 'i915', 'iris',
+     'lima', 'llvmpipe', 'nouveau', 'panfrost', 'r300', 'r600', 'radeonsi',
+-    'rocket', 'softpipe', 'svga', 'tegra', 'v3d', 'vc4', 'virgl', 'zink',
++    'rocket', 'sgx', 'softpipe', 'svga', 'tegra', 'v3d', 'vc4', 'virgl', 'zink',
+   ],
+   description : 'List of gallium drivers to build. If this is set to auto ' +
+                 'all drivers applicable to the target OS/architecture ' +
+diff --git a/src/meson.build b/src/meson.build
+index 53300e2..12b6692 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -95,7 +95,7 @@ endif
+ if with_gallium_freedreno or with_freedreno_vk or with_tools.contains('freedreno')
+   subdir('freedreno')
+ endif
+-if with_imagination_vk or with_tools.contains('imagination') or with_tools.contains('sgx') or get_option('html-docs').allowed()
++if with_imagination_vk or with_tools.contains('imagination') or with_gallium_sgx or with_tools.contains('sgx') or get_option('html-docs').allowed()
+   subdir('imagination')
+ endif
+ if with_any_intel
+@@ -104,7 +104,7 @@ endif
+ if with_gallium_lima or with_any_panfrost
+   subdir('panfrost')
+ endif
+-if with_tools.contains('sgx')
++if with_gallium_sgx or with_tools.contains('sgx')
+   subdir('sgx')
+ endif
+ if with_microsoft_clc or with_gallium_d3d12 or with_spirv_to_dxil or with_microsoft_vk
+diff --git a/src/sgx/common/meson.build b/src/sgx/common/meson.build
+new file mode 100644
+index 0000000..23eaba3
+--- /dev/null
++++ b/src/sgx/common/meson.build
+@@ -0,0 +1,15 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++
++# The per-core descriptions (sgx_core.h): one entry per SGX core.
++libsgx_core = static_library(
++  'sgx_core',
++  files('sgx_core.c'),
++  gnu_symbol_visibility : 'hidden',
++  build_by_default : false,
++)
++
++idep_sgx_core = declare_dependency(
++  include_directories : include_directories('.'),
++  link_with : libsgx_core,
++)
+diff --git a/src/sgx/common/sgx_core.c b/src/sgx/common/sgx_core.c
+new file mode 100644
+index 0000000..8a9a5e6
+--- /dev/null
++++ b/src/sgx/common/sgx_core.c
+@@ -0,0 +1,68 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#include <stddef.h>
++
++#include "sgx_core.h"
++
++static const struct sgx_core sgx_cores[] = {
++   {
++      /* Intel CE5300 (revision 1.0.14) and Cedarview (1.0.13) */
++      .name = "SGX545",
++      .id = 0x0115,
++      .rev_min = 0x0001000d,
++      .rev_max = 0x0001000e,
++      .usse = SGX_USSE1,
++      .verified_on = "Intel CE5300, Intel Cedarview (N2600)",
++
++      .max_texture_size = 2048,
++      .max_cube_levels = 12,
++      .samplers = 8,
++      .vs_inputs = 16,
++      .vs_outputs = 11,
++      .fs_inputs = 10,
++      .gl_max_temps = 64,
++      .temps = 124,
++      .pa_regs = 128,
++      .sa_regs = 128,
++      .coord_sets = 10,
++      .max_iters = 16,
++      .max_samples = 16,
++      .fragcoord_iter = 14,
++      .rt_max_width = 2048,
++      .rt_max_height = 2048,
++      .rt_max_samples = 1,
++      .line_width_max = 16,
++      .point_size_max = 511,
++
++      .vertex_task_dwords = 128,
++      .vertex_task_max = 16,
++      .dma_chunk_dwords = 16,
++
++      .f16 = true,
++      .c10 = true,
++      .efo_coissue = true,
++      .idx_regs = true,
++      .ld_const_mem = true,
++      .pds_samples = true,
++      .f16_sample_return = true,
++
++      .sample_texture_heap_only = true,
++      .npot_mip_hangs = true,
++   },
++};
++
++const struct sgx_core *
++sgx_core_lookup(uint32_t core_id, uint32_t core_revision)
++{
++   for (size_t i = 0; i < sizeof(sgx_cores) / sizeof(sgx_cores[0]); i++) {
++      const struct sgx_core *c = &sgx_cores[i];
++
++      if (c->id == core_id >> 16 && core_revision >= c->rev_min &&
++          core_revision <= c->rev_max)
++         return c;
++   }
++   return NULL;
++}
+diff --git a/src/sgx/common/sgx_core.h b/src/sgx/common/sgx_core.h
+new file mode 100644
+index 0000000..a68c9f8
+--- /dev/null
++++ b/src/sgx/common/sgx_core.h
+@@ -0,0 +1,84 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * What a core is: one entry per SGX core, found by the kernel's core id and
++ * revision.  Everything the driver, the winsys and the compiler need to know
++ * about a core and the kernel doesn't report lives here, so adding a core is
++ * adding an entry (docs/porting/mesa.md).  No code tests a core's id.
++ *
++ * The state words (csbgen) and the instruction sets (isaspec, PDS) are per
++ * family, not here: a core of another family needs its own descriptions.
++ *
++ * Each field says how its value is known: [HW] measured on hardware with the
++ * open stack, [D] from the vendor driver's behavior (captures, its limits),
++ * [G] a guess that works.
++ */
++#ifndef SGX_CORE_H
++#define SGX_CORE_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++/* the USSE generation: its instruction set and register files */
++enum sgx_usse {
++   SGX_USSE1 = 1, /* SGX520-545 */
++   SGX_USSE2 = 2, /* SGX543, 544, 554 */
++};
++
++struct sgx_core {
++   const char *name; /* "SGX545" */
++   uint16_t id;      /* EUR_CR_CORE_ID bits 16-31 */
++   /* revisions (EUR_CR_CORE_REVISION, major << 16 | minor << 8 | maint) */
++   uint32_t rev_min, rev_max;
++   enum sgx_usse usse;
++   /* where it has run: the machines whose dEQP-GLES2 mustpass and desktop
++    * sessions accepted this entry (docs/porting/mesa.md) */
++   const char *verified_on;
++
++   /* ---- limits ---- */
++   unsigned max_texture_size; /* texels a side, 2-D and cube [D] */
++   unsigned max_cube_levels;  /* [D] */
++   unsigned samplers;         /* texture units [D] */
++   unsigned vs_inputs;        /* vertex attribute vec4 slots [HW] */
++   unsigned vs_outputs;       /* vec4 outputs: position + coordinate sets */
++   unsigned fs_inputs;        /* vec4 varyings */
++   unsigned gl_max_temps;     /* GL's temporary limit (not the register file) */
++   unsigned temps;            /* USSE temporaries r0.. (compiler) [HW] */
++   unsigned pa_regs, sa_regs; /* primary, secondary attribute registers [HW] */
++   unsigned coord_sets;       /* TSP texture coordinate sets of 4 [HW] */
++   unsigned max_iters;        /* PDS iterations of a pixel program [D] */
++   unsigned max_samples;      /* texture samples of a pixel program [D] */
++   unsigned fragcoord_iter;   /* the PDS iterator of gl_FragCoord [HW] */
++   /* render targets, where the kernel doesn't report them (services) */
++   unsigned rt_max_width, rt_max_height, rt_max_samples; /* [D] */
++   unsigned line_width_max; /* ISPB: width * 16 in 8 bits [D] */
++   unsigned point_size_max; /* [D] */
++
++   /* ---- vertex work ---- */
++   unsigned vertex_task_dwords; /* vertices per USSE task: this / output
++                                   dwords... [HW: half of it hangs] */
++   unsigned vertex_task_max;    /* ...and at most this many [D] */
++   unsigned dma_chunk_dwords;   /* a PDS DMA moves at most this [HW] */
++
++   /* ---- features ---- */
++   bool f16;              /* USSE F16 arithmetic and iteration [HW] */
++   bool c10;              /* C10 color arithmetic (sop2/sop3/sopwm) [HW] */
++   bool efo_coissue;      /* efo co-issue chains [HW] */
++   bool idx_regs;         /* indexed SA access (ima16 into idx1) [HW] */
++   bool ld_const_mem;     /* constants past SA from memory (ld.a.d) [HW] */
++   bool pds_samples;      /* the PDS samples non-dependent textures [HW] */
++   bool f16_sample_return; /* the TAG returns F16 texels (T3 01028800) [HW] */
++
++   /* ---- what hangs it ---- */
++   bool sample_texture_heap_only; /* sampling outside the texture heap hangs
++                                     (the sample cache erratum) [D] */
++   bool npot_mip_hangs;           /* a mipmapped NPOT texture locks the 3D [HW] */
++};
++
++/* the core with this id and revision, or NULL: not driven */
++const struct sgx_core *sgx_core_lookup(uint32_t core_id, uint32_t core_revision);
++
++#endif
+diff --git a/src/sgx/meson.build b/src/sgx/meson.build
+index c8b4df8..96622f9 100644
+--- a/src/sgx/meson.build
++++ b/src/sgx/meson.build
+@@ -1,6 +1,10 @@
+ # Copyright © 2026 Joseph Telaak
+ # SPDX-License-Identifier: MIT
+ 
++# Shared SGX code below the gallium driver: the per-core descriptions
++# (common), the USSE instruction set and the PDS programs (isaspec), the
++# TA/3D state words (csbgen), and the NIR -> USSE compiler.
++subdir('common')
+ subdir('csbgen')
+ subdir('isa')
+ subdir('pds')
+-- 
+2.50.1 (Apple Git-155)
+

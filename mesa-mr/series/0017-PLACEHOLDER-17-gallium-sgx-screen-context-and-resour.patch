@@ -1,0 +1,2620 @@
+From 4e4379bd8d5c58bb83382de9831268ccae7c03a9 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:44:37 -0500
+Subject: [PATCH 17/22] PLACEHOLDER 17 gallium/sgx: screen, context and
+ resources
+
+---
+ src/gallium/drivers/sgx/.clang-format       |    6 +
+ src/gallium/drivers/sgx/meson.build         |   30 +
+ src/gallium/drivers/sgx/sgx_context.c       |  389 +++++++
+ src/gallium/drivers/sgx/sgx_context.h       |  248 +++++
+ src/gallium/drivers/sgx/sgx_program.h       |   39 +
+ src/gallium/drivers/sgx/sgx_public.h        |   15 +
+ src/gallium/drivers/sgx/sgx_resource.c      | 1002 +++++++++++++++++++
+ src/gallium/drivers/sgx/sgx_resource.h      |  139 +++
+ src/gallium/drivers/sgx/sgx_screen.c        |  401 ++++++++
+ src/gallium/drivers/sgx/sgx_screen.h        |  100 ++
+ src/gallium/drivers/sgx/sgx_texture.h       |   53 +
+ src/gallium/meson.build                     |    3 +
+ src/gallium/winsys/sgx/drm/meson.build      |    2 +-
+ src/gallium/winsys/sgx/drm/sgx_drm_public.h |   18 +
+ src/gallium/winsys/sgx/drm/sgx_drm_winsys.c |   35 +
+ 15 files changed, 2479 insertions(+), 1 deletion(-)
+ create mode 100644 src/gallium/drivers/sgx/.clang-format
+ create mode 100644 src/gallium/drivers/sgx/meson.build
+ create mode 100644 src/gallium/drivers/sgx/sgx_context.c
+ create mode 100644 src/gallium/drivers/sgx/sgx_context.h
+ create mode 100644 src/gallium/drivers/sgx/sgx_program.h
+ create mode 100644 src/gallium/drivers/sgx/sgx_public.h
+ create mode 100644 src/gallium/drivers/sgx/sgx_resource.c
+ create mode 100644 src/gallium/drivers/sgx/sgx_resource.h
+ create mode 100644 src/gallium/drivers/sgx/sgx_screen.c
+ create mode 100644 src/gallium/drivers/sgx/sgx_screen.h
+ create mode 100644 src/gallium/drivers/sgx/sgx_texture.h
+ create mode 100644 src/gallium/winsys/sgx/drm/sgx_drm_public.h
+ create mode 100644 src/gallium/winsys/sgx/drm/sgx_drm_winsys.c
+
+diff --git a/src/gallium/drivers/sgx/.clang-format b/src/gallium/drivers/sgx/.clang-format
+new file mode 100644
+index 0000000..b20aa1c
+--- /dev/null
++++ b/src/gallium/drivers/sgx/.clang-format
+@@ -0,0 +1,6 @@
++BasedOnStyle: InheritParentConfig
++DisableFormat: false
++
++AlignConsecutiveBitFields: Consecutive
++ColumnLimit: 80
++BreakStringLiterals: false
+diff --git a/src/gallium/drivers/sgx/meson.build b/src/gallium/drivers/sgx/meson.build
+new file mode 100644
+index 0000000..20b66cc
+--- /dev/null
++++ b/src/gallium/drivers/sgx/meson.build
+@@ -0,0 +1,30 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++
++files_sgx = files(
++  'sgx_context.c',
++  'sgx_context.h',
++  'sgx_program.h',
++  'sgx_public.h',
++  'sgx_resource.c',
++  'sgx_resource.h',
++  'sgx_screen.c',
++  'sgx_screen.h',
++  'sgx_texture.h',
++)
++
++libsgx = static_library(
++  'sgx',
++  files_sgx,
++  include_directories : [
++    inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
++  ],
++  dependencies : [idep_nir, idep_mesautil, idep_sgx_ws, idep_sgx_compiler,
++                  idep_sgx_core],
++)
++
++driver_sgx = declare_dependency(
++  compile_args : '-DGALLIUM_SGX',
++  link_with : [libsgx, libsgxwinsys, libsgx_compiler, libsgx_core],
++  dependencies : idep_nir,
++)
+diff --git a/src/gallium/drivers/sgx/sgx_context.c b/src/gallium/drivers/sgx/sgx_context.c
+new file mode 100644
+index 0000000..542f3ca
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_context.c
+@@ -0,0 +1,389 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#include <string.h>
++#include <time.h>
++
++#include "util/os_misc.h"
++#include "util/os_time.h"
++#include "util/u_debug.h"
++#include "util/u_debug_cb.h"
++#include "util/u_framebuffer.h"
++#include "util/u_inlines.h"
++#include "util/u_memory.h"
++#include "util/u_upload_mgr.h"
++
++#include "util/u_atomic.h"
++#include "sgx_context.h"
++#include "sgx_resource.h"
++#include "sgx_screen.h"
++
++/* A fence: the renders submitted before it, up to its kick number (renders
++ * finish in order).  Waiting for idle here made the swap's throttle (DRI
++ * waits on the previous frame's fence) wait for the frame just submitted, so
++ * CPU and GPU took turns every frame. */
++struct sgx_fence {
++   struct pipe_reference reference;
++   uint32_t seq;
++};
++
++static void
++sgx_fence_reference(struct pipe_screen *pscreen, struct pipe_fence_handle **ptr,
++                    struct pipe_fence_handle *fence)
++{
++   if (pipe_reference((struct pipe_reference *)*ptr,
++                      (struct pipe_reference *)fence))
++      FREE(*ptr);
++   *ptr = fence;
++}
++
++static bool
++sgx_fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
++                 struct pipe_fence_handle *fence, uint64_t timeout)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   bool done;
++
++   simple_mtx_lock(&screen->lock);
++   done = !screen->hw ||
++          !sgxws_wait_seq(screen->hw, ((struct sgx_fence *)fence)->seq,
++                          timeout ? 2000 : 0);
++   simple_mtx_unlock(&screen->lock);
++   return done;
++}
++
++struct sgx_resource *
++sgx_recording(struct sgx_context *ctx)
++{
++   if (ctx->recording &&
++       (!ctx->hw || sgxws_target_bo(ctx->hw) != &ctx->recording->bo))
++      ctx->recording = NULL;
++   return ctx->recording;
++}
++
++void
++sgx_flush_frame(struct sgx_context *ctx)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++   int e;
++
++   uint64_t t;
++
++   if (!sgx_recording(ctx))
++      return;
++   t = ctx->stats.on ? os_time_get_nano() : 0;
++   simple_mtx_lock(&screen->lock);
++   /* SGX_DEBUG=serial: wait for every frame's render (as before frames
++    * overlapped) */
++   e = sgxws_flush(ctx->hw, (sgx_drv_debug & SGX_DEBUG_SERIAL) ? 2000 : 0);
++   sgx_check_reset(ctx);
++   simple_mtx_unlock(&screen->lock);
++   if (ctx->stats.on) {
++      ctx->stats.flush_ns += os_time_get_nano() - t;
++      ctx->stats.flushes++;
++      sgx_stats_report(ctx);
++   }
++   if (e) {
++      fprintf(stderr, "sgx: frame did not finish: %d\n", e);
++      /* SGX_DEBUG=hangabort: stop the client at the first hang, before
++       * the recovery loop wedges the GPU (debugging on a shared box) */
++      if (sgx_drv_debug & SGX_DEBUG_HANG_ABORT)
++         abort();
++   }
++   ctx->recording = NULL;
++}
++
++void
++sgx_finish(struct sgx_context *ctx)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++
++   sgx_flush_frame(ctx);
++   simple_mtx_lock(&screen->lock);
++   if (ctx->hw && sgxws_wait_idle(ctx->hw, 2000))
++      fprintf(stderr, "sgx: a render did not finish\n");
++   simple_mtx_unlock(&screen->lock);
++}
++
++void
++sgx_stats_report(struct sgx_context *ctx)
++{
++   uint64_t now = os_time_get_nano(), dt = now - ctx->stats.t0, cpu;
++   double ms = 1e-6;
++   struct sgxws_stats ws = {0};
++   struct timespec ts;
++
++   if (dt < 2000000000ull)
++      return;
++   /* the thread's own CPU time: the rest of the window it waited */
++   clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
++   cpu = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
++   if (ctx->hw)
++      sgxws_get_stats(ctx->hw, &ws, true);
++   fprintf(
++      stderr,
++      "sgx stats: thread CPU %.0f ms of %.0f; flush %.0f: TA command %.0f, kick %.0f, target wait %.0f, "
++      "slot wait %.0f, sync wait %.0f ms\n",
++      (cpu - ctx->stats.cpu0) * ms, dt * ms, ws.ns_flush * ms, ws.ns_cmd * ms,
++      ws.ns_kick * ms, ws.ns_target_wait * ms, ws.ns_slot_wait * ms,
++      ws.ns_sync_wait * ms);
++   fprintf(
++      stderr,
++      "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u "
++      "(%u of clears only), readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to done, renders a wait saw end) %.1f ms over %u, into scanout %.1f ms over %u\n",
++      ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch,
++      ctx->stats.fl_switch_clear, ctx->stats.fl_read, ctx->stats.fl_deferred,
++      ctx->stats.zc_draws, ctx->stats.vc_hits, ctx->stats.vc_misses,
++      ctx->stats.vc_uncacheable, (unsigned)(ctx->vcache_bytes >> 10),
++      ws.ns_fence_wait * ms,
++      ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
++      ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout
++                           : 0,
++      ws.n_latency_scanout);
++   fprintf(
++      stderr,
++      "sgx stats: blits: GPU %u, copy %u, CPU %u (%llu px, %.0f ms); textures read back %.0f ms (%llu KB)\n",
++      ctx->stats.blit_gpu, ctx->stats.blit_copy, ctx->stats.blit_cpu,
++      (unsigned long long)ctx->stats.blit_cpu_px, ctx->stats.blit_cpu_ns * ms,
++      ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
++   fprintf(
++      stderr,
++      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame); TA state blocks %u sent, %u skipped; "
++      "buffers %u allocated, %u from the cache (%u cached still in use)\n",
++      (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
++      ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
++      ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0,
++      ws.state_sent, ws.state_skipped, ws.bo_allocs, ws.bo_cached, ws.bo_busy);
++   fprintf(
++      stderr,
++      "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
++      "%u vertices, %u texture writes (spare copies %llu KiB); ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
++      dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes,
++      ctx->stats.tex_flushes, ws.room_flushes, ctx->stats.draws,
++      ctx->stats.verts, ctx->stats.tex_writes,
++      (unsigned long long)(p_atomic_read(&sgx_screen(ctx->base.screen)->spare_bytes) >> 10),
++      ctx->stats.draw_ns * ms,
++      ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms,
++      ctx->stats.compile_ns * ms);
++   memset(&ctx->stats, 0, sizeof(ctx->stats));
++   ctx->stats.on = true;
++   ctx->stats.t0 = now;
++   ctx->stats.cpu0 = cpu;
++}
++
++void
++sgx_flush_resource_writes(struct sgx_context *ctx, struct sgx_resource *res)
++{
++   if (sgx_recording(ctx) == res)
++      sgx_flush_frame(ctx);
++}
++
++static void
++sgx_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
++          unsigned flags)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++
++   if (flags & PIPE_FLUSH_END_OF_FRAME)
++      ctx->stats.frames++;
++   /* A plain flush (glFlush) of an off-screen frame is deferred, as GL
++    * allows: submitting it split the frame, and the draws after it into the
++    * same target (an application that flushes, then draws an overlay) waited
++    * for the whole render.  The frame still goes at a fence, a
++    * readback, another target or the end of the frame; renders into the
++    * scanout buffer (the swap's copy) or a shared one (a dma-buf another
++    * process or device reads: Xorg's glamor flushes its screen pixmap so)
++    * go now. */
++   if (sgx_recording(ctx) && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) &&
++       !ctx->recording->wrapped && !ctx->recording->shared &&
++       !(sgx_drv_debug & SGX_DEBUG_FLUSH_ALL)) {
++      ctx->stats.fl_deferred++;
++      return;
++   }
++   if (ctx->recording) {
++      if (flags & PIPE_FLUSH_END_OF_FRAME)
++         ctx->stats.fl_eof++;
++      else
++         ctx->stats.fl_other++;
++   }
++   sgx_flush_frame(ctx);
++   if (fence) {
++      struct sgx_fence *f = CALLOC_STRUCT(sgx_fence);
++
++      pipe_reference_init(&f->reference, 1);
++      f->seq = ctx->hw ? sgxws_next_seq(ctx->hw) - 1 : 0;
++      *fence = NULL;
++      sgx_fence_reference(pctx->screen, fence, (struct pipe_fence_handle *)f);
++      sgx_fence_reference(pctx->screen, (struct pipe_fence_handle **)&f, NULL);
++   }
++}
++
++static void
++sgx_flush_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
++{
++   sgx_flush_resource_writes(sgx_context(pctx), sgx_resource(prsc));
++}
++
++static void
++sgx_context_destroy(struct pipe_context *pctx)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_screen *screen = sgx_screen(pctx->screen);
++
++   sgx_finish(ctx);
++   sgx_draw_fini(ctx);
++   if (ctx->blitter)
++      util_blitter_destroy(ctx->blitter);
++   util_unreference_framebuffer_state(&ctx->framebuffer);
++   for (unsigned i = 0; i < ctx->num_vertex_buffers; i++)
++      pipe_vertex_buffer_unreference(&ctx->vertex_buffers[i]);
++   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
++      pipe_resource_reference(&ctx->constants[i].buffer, NULL);
++   for (unsigned i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++)
++      pipe_sampler_view_reference(&ctx->views[i], NULL);
++   if (pctx->stream_uploader)
++      u_upload_destroy(pctx->stream_uploader);
++
++   simple_mtx_lock(&screen->lock);
++   if (ctx->hw) {
++      for (unsigned i = 0; i < ctx->num_rts; i++)
++         sgxws_rt_destroy(ctx->hw,
++                          ctx->rts[i]); /* flushes this context's frame */
++   }
++   simple_mtx_unlock(&screen->lock);
++
++   slab_destroy_child(&ctx->transfer_pool);
++   free(ctx->staging);
++   free(ctx->idx_staging);
++   free(ctx->mem_consts[0]);
++   free(ctx->mem_consts[1]);
++   FREE(ctx);
++}
++
++/* A GPU reset the winsys saw (GL_ARB_robustness).  It went on with a new
++ * kernel context, so a context that didn't ask about resets keeps rendering
++ * (the frames in flight were lost); one made to lose itself on a reset gets
++ * st's callback, which makes it refuse every call until the application
++ * makes another.  Called with the screen lock held. */
++void
++sgx_check_reset(struct sgx_context *ctx)
++{
++   enum pipe_reset_status status;
++
++   switch (sgxws_reset_status(ctx->hw)) {
++   case SGXWS_RESET_GUILTY:
++      status = PIPE_GUILTY_CONTEXT_RESET;
++      break;
++   case SGXWS_RESET_INNOCENT:
++      status = PIPE_INNOCENT_CONTEXT_RESET;
++      break;
++   case SGXWS_RESET_LOST:
++      status = PIPE_UNKNOWN_CONTEXT_RESET;
++      break;
++   default:
++      return;
++   }
++   if (ctx->reset == PIPE_NO_RESET || status == PIPE_GUILTY_CONTEXT_RESET)
++      ctx->reset = status;
++   if (ctx->reset_cb.reset)
++      ctx->reset_cb.reset(ctx->reset_cb.data, status);
++}
++
++static enum pipe_reset_status
++sgx_get_device_reset_status(struct pipe_context *pctx)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_screen *screen = sgx_screen(pctx->screen);
++   enum pipe_reset_status status;
++
++   simple_mtx_lock(&screen->lock);
++   sgx_check_reset(ctx);
++   status = ctx->reset;
++   ctx->reset = PIPE_NO_RESET;
++   simple_mtx_unlock(&screen->lock);
++   return status;
++}
++
++static void
++sgx_set_device_reset_callback(struct pipe_context *pctx,
++                              const struct pipe_device_reset_callback *cb)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++
++   if (cb)
++      ctx->reset_cb = *cb;
++   else
++      memset(&ctx->reset_cb, 0, sizeof(ctx->reset_cb));
++}
++
++struct pipe_context *
++sgx_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   struct sgx_context *ctx = CALLOC_STRUCT(sgx_context);
++
++   if (!ctx)
++      return NULL;
++
++   simple_mtx_lock(&screen->lock);
++   if (!screen->hw) {
++      /* the screen's one hardware context takes its first context's priority;
++       * SGX_CTX_PRIORITY=high|normal|low overrides it (an X server that
++       * doesn't ask) */
++      const char *env = os_get_option("SGX_CTX_PRIORITY");
++      int prio = flags & PIPE_CONTEXT_HIGH_PRIORITY  ? 1
++                 : flags & PIPE_CONTEXT_LOW_PRIORITY ? -1
++                                                     : 0;
++
++      if (env)
++         prio = !strcmp(env, "high") ? 1 : !strcmp(env, "low") ? -1 : 0;
++      screen->hw = sgxws_ctx_create(screen->dev, prio);
++   }
++   ctx->hw = screen->hw;
++   if (ctx->hw) {
++      sgxws_prog_builtin(ctx->hw, SGXWS_VS_XY, &ctx->vs_xy);
++      sgxws_prog_builtin(ctx->hw, SGXWS_VS_XYZ, &ctx->vs_xyz);
++      sgxws_prog_builtin(ctx->hw, SGXWS_FS_UNIFORM, &ctx->fs_uniform);
++   }
++   simple_mtx_unlock(&screen->lock);
++   if (!ctx->hw) {
++      FREE(ctx);
++      return NULL;
++   }
++
++   ctx->base.screen = pscreen;
++   ctx->base.priv = priv;
++   ctx->base.destroy = sgx_context_destroy;
++   ctx->base.flush = sgx_flush;
++   ctx->base.flush_resource = sgx_flush_resource;
++   ctx->base.get_device_reset_status = sgx_get_device_reset_status;
++   ctx->base.set_device_reset_callback = sgx_set_device_reset_callback;
++   ctx->base.set_debug_callback = u_default_set_debug_callback;
++
++   slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);
++   ctx->stats.on = (sgx_drv_debug & SGX_DEBUG_STATS) != 0;
++   ctx->stats.t0 = os_time_get_nano();
++   sgx_resource_context_init(ctx);
++   sgx_state_init(ctx);
++   sgx_draw_init(ctx);
++   sgx_program_init(ctx);
++
++   ctx->base.stream_uploader = u_upload_create_default(&ctx->base);
++   if (!ctx->base.stream_uploader) {
++      sgx_context_destroy(&ctx->base);
++      return NULL;
++   }
++   ctx->base.const_uploader = ctx->base.stream_uploader;
++   /* after every hook it creates state through */
++   ctx->blitter = util_blitter_create(&ctx->base);
++   return &ctx->base;
++}
++
++void
++sgx_fence_screen_init(struct sgx_screen *screen)
++{
++   screen->base.fence_reference = sgx_fence_reference;
++   screen->base.fence_finish = sgx_fence_finish;
++}
+diff --git a/src/gallium/drivers/sgx/sgx_context.h b/src/gallium/drivers/sgx/sgx_context.h
+new file mode 100644
+index 0000000..f2a52f2
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_context.h
+@@ -0,0 +1,248 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef SGX_CONTEXT_H
++#define SGX_CONTEXT_H
++
++#include "pipe/p_context.h"
++#include "pipe/p_state.h"
++#include "util/list.h"
++#include "util/slab.h"
++#include "util/u_blitter.h"
++
++#include "sgx_compiler.h"
++#include "sgxws.h"
++
++struct sgx_resource;
++struct nir_shader;
++struct sgx_varyings;
++
++/* what a shader turned out to be (sgx_program.c) */
++enum sgx_shader_kind {
++   SGX_SHADER_UNSUPPORTED,
++   SGX_SHADER_COMPILED,    /* by mesa/src/sgx/compiler */
++   SGX_SHADER_VS_POSITION, /* gl_Position = attribute 0 */
++   SGX_SHADER_FS_UNIFORM,  /* gl_FragColor = a vec4 uniform */
++   SGX_SHADER_FS_CONSTANT, /* gl_FragColor = a constant */
++};
++
++/* a constant in secondary attributes: sa[base + slot] = constant buffer 0 float
++ * k */
++struct sgx_const {
++   uint16_t k, slot, fmt,
++      shift;     /* fmt: 1 f32, 2 F16 half at shift, 3 C10 channel at shift,
++                  * 0x10 F16 half of the C10 value, 0x11 the literal `value`;
++                  * slot 0xffff: in the memory block only */
++   uint16_t mem; /* word of the constant memory block, 0 none */
++   uint32_t value;
++};
++
++#define SGX_MAX_CONSTS 256 /* SA dwords of constants (sa127 ends them) */
++/* fragment constants the driver fills: texture unit u's level-0 width and
++ * height at SGX_K_TEXSIZE + 2u (st's textureSize, as its rectangle lookups
++ * scale by it); past every uniform (128 vec4) and under the compiler's 1024 */
++#define SGX_K_TEXSIZE       1000
++#define SGX_K_TEXSIZE_UNITS 8
++
++#define SGX_MAX_DEP_SAMPLES 8
++
++/* the fragment driver block's register that sets gl_FrontFacing's sense:
++ * bit 0 clear when gallium's front_ccw is set (A/B against the DDK) */
++#define SGX_SA_FRONT 5
++
++struct sgx_pipe_shader {
++   struct nir_shader *nir;
++   enum sgx_shader_kind kind;
++   unsigned
++      ubo_offset; /* FS_UNIFORM: byte offset of the vec4 in constant buffer 0 */
++   float color[4]; /* FS_CONSTANT */
++   /* COMPILED: */
++   struct sgxws_prog prog;
++   unsigned n_consts, const_dwords;
++   struct sgx_const consts[SGX_MAX_CONST_MAP];
++   /* constants past sa127 (the compiler's ld.a.d): a block of mem_dwords per
++    * draw, its address + 512 * j in SA slot mem_base_slot[j] */
++   unsigned mem_dwords, n_mem_bases;
++   uint8_t mem_base_slot[8];
++   unsigned n_attribs; /* vertex: attribute slots, 4 dwords each */
++   /* fragment: the shader's code, kept for the blend variants (the colour
++    * epilogue is the blend, sgxws_blend) */
++   uint64_t *code; /* with the dependent samples' smp put in */
++   unsigned n_code, color_reg, temps;
++   /* split around its discard (unless SGX_DEBUG=nophasesplit): code is phase 0
++    * (the test), code1 phase 1 (the colour, into pa<color_reg>) */
++   uint64_t *code1;
++   unsigned n_code1;
++   int discard_pa; /* discards: the depth plane's first PA register; -1 doesn't */
++   /* dependent samples: the SA register of each one's 4 texture state words,
++    * and its sampler */
++   unsigned dep_sa[SGX_MAX_DEP_SAMPLES], dep_sampler[SGX_MAX_DEP_SAMPLES],
++      n_deps;
++   /* the texel comes back F16 into two registers (T3 01028800) */
++   bool dep_f16[SGX_MAX_DEP_SAMPLES];
++   struct {
++      struct sgxws_blend key;
++      uint32_t code;
++   } variants[32];
++   unsigned n_variants, next_variant;
++   bool uses_front_face;      /* fragment: reads SGX_SA_FRONT */
++   bool reads_pointcoord;     /* fragment: its varyings start at set 1,
++                                 gl_PointCoord is set 0 */
++   struct sgx_varyings *vary; /* compiled: the varyings' sets (a variant's: its
++                                 fragment shader's) */
++   /* vertex: the same compiled to the sets of a fragment shader whose
++    * varyings differ from its own (sgx_vs_for) */
++   struct sgx_pipe_shader *variants_vs[16];
++   unsigned next_variant_vs;
++   /* vertex: the input formats it unpacks (sgx_compile_options.vtx_fmt; all
++    * 0, f32 x 4, unless SGX_DEBUG=zerocopy picked a variant) */
++   uint8_t vtx_fmt[16];
++   /* vertex: st's program writes gl_PointSize, and this variant keeps it as
++    * an output (points draws; the others drop it, sgx_vs_for) */
++   bool writes_psize, points;
++   /* fragment: the same decoding what the samplers in its mask sample as
++    * sRGB, and swizzling what each sampler view's swizzle says (formats st
++    * stores in another, GL_R16 as RGBA8; 0: none) (sgx_fs_for) */
++   unsigned srgb;
++   uint32_t srgb_filter; /* of those, the ones it filters (lower_srgb_filter) */
++   uint16_t swz[PIPE_MAX_SAMPLERS];
++   uint32_t not_bgra; /* units bound to a texture not sampled B, G, R, A
++                         ordered (sgx_tex_bgra) */
++   uint32_t depth;    /* units bound to a depth texture (sgx_tex_depth) */
++   /* shadow samples: each unit's compare function (lower_shadow) */
++   uint8_t compare[PIPE_MAX_SAMPLERS];
++   struct sgx_pipe_shader *variants_srgb[8];
++   unsigned next_variant_srgb;
++};
++
++struct sgx_vertex_elements {
++   unsigned num_elements;
++   struct pipe_vertex_element elements[PIPE_MAX_ATTRIBS];
++};
++
++struct sgx_rasterizer {
++   struct pipe_rasterizer_state base;
++};
++
++struct sgx_dsa {
++   struct pipe_depth_stencil_alpha_state base;
++};
++
++struct sgx_blend {
++   struct pipe_blend_state base;
++   bool enable;              /* render target 0 blends, in a way sop2 can */
++   struct sgxws_blend hw[2]; /* by whether the colour buffer has alpha */
++};
++
++/* one render target's TA/3D structures, by size (sgxws_rt) */
++#define SGX_MAX_RTS 8
++
++struct vcache_chunk;
++
++struct sgx_context {
++   struct pipe_context base;
++
++   /* a GPU reset seen and not yet asked about, and st's callback (a context
++    * made to lose itself on a reset has one) */
++   enum pipe_reset_status reset;
++   struct pipe_device_reset_callback reset_cb;
++
++   struct sgxws_ctx *hw;
++   struct sgxws_prog vs_xy, vs_xyz, fs_uniform;
++   struct sgxws_rt *rts[SGX_MAX_RTS];
++   uint32_t rt_va[SGX_MAX_RTS]; /* the target each was made for */
++   uint32_t rt_w[SGX_MAX_RTS], rt_h[SGX_MAX_RTS]; /* and its size */
++   uint64_t rt_used[SGX_MAX_RTS], rt_clock;       /* when each was last taken */
++   unsigned num_rts;
++   struct sgx_resource *recording; /* the target of the frame being recorded */
++   struct sgx_resource *recording_zs; /* and its depth/stencil buffer */
++
++   struct pipe_framebuffer_state framebuffer;
++   struct pipe_viewport_state viewport;
++   struct pipe_scissor_state scissor;
++   struct pipe_blend_color blend_color;
++   struct pipe_stencil_ref stencil_ref;
++   struct sgx_rasterizer *rasterizer;
++   struct sgx_dsa *dsa;
++   struct sgx_blend *blend;
++   struct sgx_vertex_elements *velems;
++   struct sgx_pipe_shader *vs, *fs;
++   struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
++   unsigned num_vertex_buffers;
++   struct pipe_constant_buffer constants[MESA_SHADER_STAGES];
++   struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS]; /* fragment */
++   struct pipe_sampler_view *views[PIPE_MAX_SHADER_SAMPLER_VIEWS]; /* fragment */
++
++   /* SGX_STATS=1: where the time goes, printed every 2 s */
++   /* objects the frame being recorded has from clears (the stats tell a frame
++    * of clears alone) */
++   unsigned frame_clears;
++   struct {
++      bool on;
++      uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns, rb_ns, rb_bytes;
++      unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
++      unsigned fl_eof, fl_other, fl_switch, fl_read,
++         fl_deferred;           /* flushes by cause */
++      unsigned fl_switch_clear; /* of the switches, of a frame of clears only */
++      unsigned vc_hits, vc_misses, vc_uncacheable, zc_draws;
++      unsigned blit_gpu, blit_copy, blit_cpu;
++      uint64_t blit_cpu_px, blit_cpu_ns;
++   } stats;
++
++   struct blitter_context
++      *blitter; /* GPU blits: a quad through our own shaders */
++
++   /* draws from unchanged buffers, their vertices gathered and indices
++    * rebased once into device memory (sgx_draw.c) */
++   struct hash_table *vcache;
++   struct list_head vcache_lru; /* most recently used first */
++   uint64_t vcache_bytes;
++   struct list_head
++      vcache_chunks; /* the device memory its entries are cut from */
++   struct vcache_chunk *vcache_cur;
++
++   struct slab_child_pool transfer_pool;
++   uint32_t *staging; /* vertices gathered for one draw */
++   size_t staging_size;
++   uint16_t *idx_staging;   /* its 16-bit indices */
++   uint32_t *mem_consts[2]; /* a draw's constants in memory, vertex and fragment
++                               (sgx_draw.c) */
++   unsigned idx_staging_size;
++   bool warned_shader, warned_prim, warned_blend, warned_varyings, warned_cube,
++      warned_frag_depth;
++};
++
++static inline struct sgx_context *
++sgx_context(struct pipe_context *pctx)
++{
++   return (struct sgx_context *)pctx;
++}
++
++struct pipe_context *sgx_context_create(struct pipe_screen *pscreen, void *priv,
++                                        unsigned flags);
++
++void sgx_state_init(struct sgx_context *ctx);
++void sgx_draw_init(struct sgx_context *ctx);
++void sgx_draw_fini(struct sgx_context *ctx);
++void sgx_program_init(struct sgx_context *ctx);
++
++void sgx_stats_report(struct sgx_context *ctx);
++
++/* submit the frame being recorded (its render runs on while the CPU goes on) */
++void sgx_flush_frame(struct sgx_context *ctx);
++/* submit it and wait for every render submitted */
++void sgx_finish(struct sgx_context *ctx);
++/* before the CPU touches res: finish any frame that renders into it */
++void sgx_flush_resource_writes(struct sgx_context *ctx,
++                               struct sgx_resource *res);
++
++/* The frame this context records, if it still is one: a frame whose target
++ * was destroyed went at the destruction (sgx_resource.c), and another
++ * context's frame on the shared render context ends ours (sgxws_begin).
++ * Compares addresses only: the resource may be gone. */
++struct sgx_resource *sgx_recording(struct sgx_context *ctx);
++void sgx_check_reset(struct sgx_context *ctx);
++
++#endif
+diff --git a/src/gallium/drivers/sgx/sgx_program.h b/src/gallium/drivers/sgx/sgx_program.h
+new file mode 100644
+index 0000000..3cf2887
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_program.h
+@@ -0,0 +1,39 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef SGX_PROGRAM_H
++#define SGX_PROGRAM_H
++
++#include <stdint.h>
++
++struct nir_shader_compiler_options;
++struct sgx_context;
++struct sgx_pipe_shader;
++struct sgxws_blend;
++
++const struct nir_shader_compiler_options *sgx_get_nir_options(void);
++uint32_t sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
++                        const struct sgxws_blend *b);
++
++/* the compiled vertex shader vs as it goes with the compiled fragment shader
++ * fs (or NULL) and inputs in vtx_fmt (or NULL, f32 x 4): itself when their
++ * varyings' sets agree and the inputs are f32 x 4, else a variant writing
++ * fs's sets (gl_PointCoord's set 0 included) and unpacking vtx_fmt; NULL if
++ * it can't.  For points it keeps the point size st's program writes, which
++ * every other draw goes without */
++struct sgx_pipe_shader *sgx_vs_for(struct sgx_context *ctx,
++                                   struct sgx_pipe_shader *vs,
++                                   const struct sgx_pipe_shader *fs,
++                                   const uint8_t *vtx_fmt, bool points);
++
++/* the texture units a fragment shader samples (all, when it isn't known) */
++uint32_t sgx_fs_textures_used(const struct sgx_pipe_shader *fs);
++
++/* the bound fragment shader as the draw samples its textures: itself, or a
++ * variant decoding the sRGB views it samples; NULL if it can't */
++struct sgx_pipe_shader *sgx_fs_for(struct sgx_context *ctx,
++                                   struct sgx_pipe_shader *fs);
++
++#endif
+diff --git a/src/gallium/drivers/sgx/sgx_public.h b/src/gallium/drivers/sgx/sgx_public.h
+new file mode 100644
+index 0000000..b4928a6
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_public.h
+@@ -0,0 +1,15 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef SGX_PUBLIC_H
++#define SGX_PUBLIC_H
++
++struct pipe_screen;
++struct pipe_screen_config;
++
++struct pipe_screen *
++sgx_drm_screen_create(int fd, const struct pipe_screen_config *config);
++
++#endif
+diff --git a/src/gallium/drivers/sgx/sgx_resource.c b/src/gallium/drivers/sgx/sgx_resource.c
+new file mode 100644
+index 0000000..e0dc3ed
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_resource.c
+@@ -0,0 +1,1002 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#include <errno.h>
++#include <stdint.h>
++#include <unistd.h>
++
++#include "drm-uapi/drm_fourcc.h"
++#include "frontend/winsys_handle.h"
++#include "renderonly/renderonly.h"
++#include "util/format/u_format.h"
++#include "util/os_time.h"
++#include "util/u_atomic.h"
++#include "util/u_inlines.h"
++#include "util/u_math.h"
++#include "util/u_memory.h"
++#include "util/u_surface.h"
++#include "util/u_transfer.h"
++
++#include "sgx_context.h"
++#include "sgx_resource.h"
++#include "sgx_screen.h"
++#include "sgx_texture.h"
++
++/* What a window or pbuffer is, and the colour buffers in a format that isn't
++ * a texture format: rows of a multiple of 32 pixels (STATE.md section 4), read
++ * in place.  Anything in a texture format is laid out as a texture even when it
++ * is rendered to: the PBE writes that layout (TEX.md sections 4, 11). */
++static bool
++is_render_target(const struct pipe_resource *templ)
++{
++   if (templ->target == PIPE_BUFFER)
++      return false;
++   if (templ->bind &
++       (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))
++      return true;
++   return (templ->bind & PIPE_BIND_RENDER_TARGET) &&
++          !sgx_tex_format(templ->format);
++}
++
++/* A shared buffer is a linear render target as is_render_target makes them:
++ * BGRA/RGBA8, rows of a multiple of 32 pixels (STATE.md section 4), one level. */
++static bool
++shareable(const struct pipe_resource *templ)
++{
++   return templ->target == PIPE_TEXTURE_2D && templ->last_level == 0 &&
++          templ->array_size == 1 &&
++          util_format_get_blocksize(templ->format) == 4 &&
++          templ->nr_samples <= 1;
++}
++
++static size_t
++texture_size(struct pipe_resource *prsc, uint32_t stride)
++{
++   size_t size = 0;
++
++   for (unsigned l = 0; l <= prsc->last_level; l++) {
++      unsigned w = u_minify(prsc->width0, l), h = u_minify(prsc->height0, l);
++
++      size += (size_t)(l ? util_format_get_stride(prsc->format, w) : stride) *
++              util_format_get_nblocksy(prsc->format, h) * prsc->depth0 *
++              prsc->array_size;
++   }
++   return size;
++}
++
++static size_t
++level_offset(struct pipe_resource *prsc, uint32_t stride, unsigned level)
++{
++   size_t off = 0;
++
++   for (unsigned l = 0; l < level; l++) {
++      unsigned w = u_minify(prsc->width0, l), h = u_minify(prsc->height0, l);
++
++      off += (size_t)(l ? util_format_get_stride(prsc->format, w) : stride) *
++             util_format_get_nblocksy(prsc->format, h) * prsc->depth0 *
++             prsc->array_size;
++   }
++   return off;
++}
++
++/* kmsro with a display device whose buffers the CPU reads (simpledrm copies
++ * each frame out) */
++static bool
++dumb_display(const struct sgx_screen *screen)
++{
++   return screen->ro && screen->ro->create_for_resource ==
++                           renderonly_create_kms_dumb_buffer_for_resource;
++}
++
++/* A scanout buffer on such a display (dumb_later) when a KMS handle is asked
++ * for: the display device's own dumb buffer, cached, imported, with the
++ * contents so far (the kernel flushes the CPU caches around every job that
++ * lists it, which the winsys does for the frame's target).  A buffer already
++ * exported keeps its pages: the display device imports it instead. */
++static void
++make_scanout(struct sgx_screen *screen, struct sgx_resource *res)
++{
++   struct pipe_resource tmpl = res->base;
++   struct winsys_handle handle = {0};
++   struct sgxws_bo bo = {0};
++   int e;
++
++   res->dumb_later = false;
++   if (res->shared) {
++      res->scanout = renderonly_create_gpu_import_for_resource(
++         &res->base, screen->ro, NULL);
++      return;
++   }
++   tmpl.width0 = align(tmpl.width0, 32); /* rows of whole tiles */
++   res->scanout = renderonly_scanout_for_resource(&tmpl, screen->ro, &handle);
++   if (!res->scanout)
++      return;
++   simple_mtx_lock(&screen->lock);
++   e = handle.stride != res->stride
++          ? -EINVAL
++          : sgxws_bo_import(screen->dev, &bo, (int)handle.handle,
++                            handle.stride * res->base.height0);
++   if (!e) {
++      /* the frame recording into it goes, and its renders are waited for */
++      if (screen->hw && sgxws_target_bo(screen->hw) == &res->bo)
++         sgxws_flush(screen->hw, 0);
++      if (screen->hw)
++         sgxws_wait_idle(screen->hw, 2000);
++      memcpy(bo.map, res->bo.map, (size_t)res->stride * res->base.height0);
++      sgxws_bo_prepare_target(screen->dev, &bo);
++      sgxws_bo_free(screen->dev, &res->bo);
++      res->bo = bo;
++      res->shared = true;
++   }
++   simple_mtx_unlock(&screen->lock);
++   close(handle.handle);
++   if (e) {
++      renderonly_scanout_destroy(res->scanout, screen->ro);
++      res->scanout = renderonly_create_gpu_import_for_resource(
++         &res->base, screen->ro, NULL);
++   }
++}
++
++static struct pipe_resource *
++sgx_resource_create(struct pipe_screen *pscreen,
++                    const struct pipe_resource *templ)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   struct sgx_resource *res = CALLOC_STRUCT(sgx_resource);
++   struct pipe_resource *prsc;
++
++   if (!res)
++      return NULL;
++   prsc = &res->base;
++   *prsc = *templ;
++   pipe_reference_init(&prsc->reference, 1);
++   prsc->screen = pscreen;
++
++   if (templ->target == PIPE_BUFFER) {
++      static uint32_t next_uid;
++
++      res->uid = p_atomic_inc_return(&next_uid);
++      res->stride = templ->width0;
++      res->data = align_malloc(MAX2(templ->width0, 1), 64);
++      if (!res->data)
++         goto fail;
++      return prsc;
++   }
++
++   if (is_render_target(templ)) {
++      int e;
++
++      res->pitch = align(templ->width0, 32);
++      res->stride = res->pitch * util_format_get_blocksize(templ->format);
++      simple_mtx_lock(&screen->lock);
++      e = sgxws_bo_alloc(screen->dev, &res->bo, SGXWS_MEM_RENDER_TARGET,
++                         align(res->stride * templ->height0, 4096), 0x1000);
++      simple_mtx_unlock(&screen->lock);
++      if (e)
++         goto fail;
++      SGX_DBG(SYNC, "render target %ux%u %s at %#x\n", templ->width0,
++              templ->height0, util_format_short_name(templ->format),
++              res->bo.va);
++      /* kmsro with a display device whose buffers the CPU reads (simpledrm
++       * copies each frame out): ours until a KMS handle is asked for
++       * (sgx_resource_get_handle).  Every DRI3 back buffer is asked for as
++       * scanout and X only copies from it; a cached dumb buffer would be
++       * flushed around every render into it */
++      if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
++          dumb_display(screen)) {
++         res->dumb_later = true;
++         if (sgx_drv_debug & SGX_DEBUG_NO_LAZY_SCANOUT)
++            make_scanout(screen, res);
++         return prsc;
++      }
++      /* kmsro otherwise: exported to the display device, which scans it out */
++      if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ)) {
++         res->scanout = renderonly_scanout_for_resource(prsc, screen->ro, NULL);
++         if (!res->scanout) {
++            simple_mtx_lock(&screen->lock);
++            sgxws_bo_free(screen->dev, &res->bo);
++            simple_mtx_unlock(&screen->lock);
++            goto fail;
++         }
++      }
++      return prsc;
++   }
++
++   /* Everything else has a linear CPU copy; a texture the GPU can sample
++    * also has its device copy in the texture heap, laid out as docs/TEX.md
++    * says, rewritten from the CPU copy whenever a level is written. */
++   res->stride = util_format_get_stride(templ->format, templ->width0);
++   for (unsigned l = 0;
++        l <= templ->last_level && l < ARRAY_SIZE(res->level_offset); l++)
++      res->level_offset[l] = level_offset(prsc, res->stride, l);
++   res->data = align_malloc(MAX2(texture_size(prsc, res->stride), 1), 64);
++   if (!res->data)
++      goto fail;
++   /* (a depth buffer that isn't sampled has none: the ISP keeps depth) */
++   if (sgx_tex_format(templ->format) && templ->target != PIPE_TEXTURE_3D &&
++       templ->last_level < ARRAY_SIZE(res->level_offset) &&
++       (!sgx_tex_depth(templ->format) ||
++        (templ->bind & PIPE_BIND_SAMPLER_VIEW))) {
++      int e;
++
++      simple_mtx_lock(&screen->lock);
++      e = sgxws_bo_alloc(screen->dev, &res->bo, SGXWS_MEM_TEXTURE,
++                         align(MAX2(sgx_tex_size(prsc), 1), 4096), 0x1000);
++      simple_mtx_unlock(&screen->lock);
++      if (e)
++         goto fail;
++      res->texture = true;
++      res->tail_from = templ->last_level;
++      /* the X byte of a format without alpha is read as alpha: 1 from the
++       * start, for a texture rendered into before anything is uploaded */
++      if (!util_format_has_alpha(templ->format) &&
++          util_format_get_blocksize(templ->format) == 4 &&
++          !sgx_tex_depth(templ->format))
++         memset(res->bo.map, 0xff, sgx_tex_size(prsc));
++      /* R8 and RG8 as RGBA8 (sgx_tex_bpp): (0, 0, 0, 255) until written, the
++       * B and A a render into them leaves alone */
++      if (sgx_tex_bpp(templ->format) !=
++             util_format_get_blocksize(templ->format) &&
++          !sgx_tex_depth(templ->format))
++         for (size_t i = 0; i < sgx_tex_size(prsc) / 4; i++)
++            res->bo.map[i] = 0xff000000;
++   }
++   return prsc;
++
++fail:
++   FREE(res);
++   return NULL;
++}
++
++static struct pipe_resource *
++sgx_resource_from_user_memory(struct pipe_screen *pscreen,
++                              const struct pipe_resource *templ,
++                              void *user_memory)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   struct sgx_resource *res;
++   uint32_t size;
++   int e;
++
++   /* only what the fbdev EGL platform hands in: a page-aligned BGRA mapping */
++   if (templ->target != PIPE_TEXTURE_2D || ((uintptr_t)user_memory & 4095) ||
++       util_format_get_blocksize(templ->format) != 4)
++      return NULL;
++   res = CALLOC_STRUCT(sgx_resource);
++   if (!res)
++      return NULL;
++   res->base = *templ;
++   pipe_reference_init(&res->base.reference, 1);
++   res->base.screen = pscreen;
++   res->pitch = align(templ->width0, 32);
++   res->stride = res->pitch * 4;
++   size = align(res->stride * templ->height0, 4096);
++
++   simple_mtx_lock(&screen->lock);
++   e = sgxws_bo_wrap(screen->dev, &res->bo, user_memory, size);
++   simple_mtx_unlock(&screen->lock);
++   if (e) {
++      FREE(res);
++      return NULL;
++   }
++   res->wrapped = true;
++   return &res->base;
++}
++
++static struct pipe_resource *
++sgx_resource_from_handle(struct pipe_screen *pscreen,
++                         const struct pipe_resource *templ,
++                         struct winsys_handle *whandle, unsigned usage)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   struct sgx_resource *res;
++   int e;
++
++   if (whandle->type != WINSYS_HANDLE_TYPE_FD || !shareable(templ) ||
++       (templ->bind & PIPE_BIND_DEPTH_STENCIL) || whandle->offset ||
++       (whandle->modifier != DRM_FORMAT_MOD_LINEAR &&
++        whandle->modifier != DRM_FORMAT_MOD_INVALID) ||
++       whandle->stride % 128 || whandle->stride < templ->width0 * 4)
++      return NULL;
++   res = CALLOC_STRUCT(sgx_resource);
++   if (!res)
++      return NULL;
++   res->base = *templ;
++   pipe_reference_init(&res->base.reference, 1);
++   res->base.screen = pscreen;
++   res->stride = whandle->stride;
++   res->pitch = whandle->stride / 4;
++   res->shared = true;
++
++   simple_mtx_lock(&screen->lock);
++   e = sgxws_bo_import(screen->dev, &res->bo, (int)whandle->handle,
++                       res->stride * templ->height0);
++   if (!e)
++      sgxws_bo_prepare_target(screen->dev, &res->bo);
++   simple_mtx_unlock(&screen->lock);
++   if (e) {
++      SGX_DBG(SYNC, "dma-buf import of %ux%u failed: %d\n", templ->width0,
++              templ->height0, e);
++      FREE(res);
++      return NULL;
++   }
++   /* kmsro: a handle of it on the display device, for renderonly_get_handle */
++   if (screen->ro)
++      res->scanout = renderonly_create_gpu_import_for_resource(
++         &res->base, screen->ro, NULL);
++   return &res->base;
++}
++
++static bool
++sgx_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
++                        struct pipe_resource *prsc,
++                        struct winsys_handle *whandle, unsigned usage)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   struct sgx_resource *res = sgx_resource(prsc);
++   int e, fd;
++
++   /* only linear render targets: a texture's device copy is twiddled or
++    * re-encoded from its CPU copy */
++   if (!sgxws_bo_valid(&res->bo) || res->texture || res->wrapped ||
++       !res->pitch || !shareable(prsc))
++      return false;
++   whandle->stride = res->stride;
++   whandle->offset = 0;
++   whandle->modifier = DRM_FORMAT_MOD_LINEAR;
++   switch (whandle->type) {
++   case WINSYS_HANDLE_TYPE_KMS:
++      /* kmsro: the display device's handle */
++      if (screen->ro) {
++         if (res->dumb_later)
++            make_scanout(screen, res);
++         return res->scanout && renderonly_get_handle(res->scanout, whandle);
++      }
++      if (sgxws_bo_kms_handle(&res->bo, &whandle->handle))
++         return false;
++      res->shared = true;
++      return true;
++   case WINSYS_HANDLE_TYPE_FD:
++      simple_mtx_lock(&screen->lock);
++      e = sgxws_bo_export(screen->dev, &res->bo, &fd);
++      simple_mtx_unlock(&screen->lock);
++      if (e)
++         return false;
++      whandle->handle = (unsigned)fd;
++      res->shared = true;
++      return true;
++   default:
++      return false;
++   }
++}
++
++static bool
++sgx_resource_get_param(struct pipe_screen *pscreen, struct pipe_context *pctx,
++                       struct pipe_resource *prsc, unsigned plane,
++                       unsigned layer, unsigned level,
++                       enum pipe_resource_param param, unsigned usage,
++                       uint64_t *value)
++{
++   struct sgx_resource *res = sgx_resource(prsc);
++   struct winsys_handle whandle = {0};
++
++   switch (param) {
++   case PIPE_RESOURCE_PARAM_NPLANES:
++      *value = 1;
++      return true;
++   case PIPE_RESOURCE_PARAM_STRIDE:
++      *value = res->stride;
++      return true;
++   case PIPE_RESOURCE_PARAM_OFFSET:
++      *value = 0;
++      return true;
++   case PIPE_RESOURCE_PARAM_MODIFIER:
++      *value = DRM_FORMAT_MOD_LINEAR;
++      return true;
++   case PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS:
++   case PIPE_RESOURCE_PARAM_HANDLE_TYPE_FD:
++      whandle.type = param == PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS
++                        ? WINSYS_HANDLE_TYPE_KMS
++                        : WINSYS_HANDLE_TYPE_FD;
++      if (!sgx_resource_get_handle(pscreen, pctx, prsc, &whandle, usage))
++         return false;
++      *value = whandle.handle;
++      return true;
++   default:
++      return false;
++   }
++}
++
++/* A buffer's device copy that renders may still read: freed once they are
++ * done, the ones already done now (screen lock held).  A full list waits for
++ * the GPU. */
++static void
++vbo_retire(struct sgx_screen *screen, struct sgxws_bo *bo, uint32_t seq)
++{
++   uint32_t done;
++
++   if (!sgxws_bo_valid(bo))
++      return;
++   done = screen->hw ? sgxws_done_seq(screen->hw) : seq;
++   for (unsigned i = 0; i < screen->n_retired;) {
++      if (!sgxws_seq_after(screen->retired[i].seq, done)) {
++         sgxws_bo_free(screen->dev, &screen->retired[i].bo);
++         screen->retired[i] = screen->retired[--screen->n_retired];
++      } else {
++         i++;
++      }
++   }
++   if (sgxws_seq_after(seq, done) &&
++       screen->n_retired == ARRAY_SIZE(screen->retired)) {
++      sgxws_flush(screen->hw, 0);
++      sgxws_wait_idle(screen->hw, 2000);
++      for (unsigned i = 0; i < screen->n_retired; i++)
++         sgxws_bo_free(screen->dev, &screen->retired[i].bo);
++      screen->n_retired = 0;
++      done = seq;
++   }
++   if (sgxws_seq_after(seq, done)) {
++      screen->retired[screen->n_retired].bo = *bo;
++      screen->retired[screen->n_retired++].seq = seq;
++      memset(bo, 0, sizeof(*bo));
++   } else {
++      sgxws_bo_free(screen->dev, bo);
++   }
++}
++
++/* The buffer's device copy for a draw that reads bytes [off, off + size) of
++ * it (screen lock held).  Unmaps copy what was written, so a copy is current
++ * unless the buffer is mapped for writes still (a stream uploader writes more
++ * into its mapped buffer): then the draw's range is copied again, into the
++ * same copy.  Such a map is unsynchronized (a synchronized one retires a copy
++ * renders may read: sgx_transfer_map), whose writes promise to leave alone
++ * what renders still read, as the unmap's copy does.  (Replacing a busy copy
++ * here instead freed one that a draw of the frame being recorded still read:
++ * two inputs from one buffer, an MMU fault.) */
++bool
++sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res, uint32_t off,
++               uint32_t size)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++
++   off = MIN2(off, res->base.width0);
++   size = MIN2(size, res->base.width0 - off);
++   if (sgxws_bo_valid(&res->vbo)) {
++      if (res->write_maps)
++         memcpy((uint8_t *)res->vbo.map + off, (const uint8_t *)res->data + off,
++                size);
++      return true;
++   }
++   /* past the end, a page the vertex DMA and the VDM's index reads may run
++    * into */
++   if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX,
++                      align(MAX2(res->base.width0, 16), 4096) + 4096, 0x1000)) {
++      memset(&res->vbo, 0, sizeof(res->vbo));
++      return false;
++   }
++   memcpy(res->vbo.map, res->data, res->base.width0);
++   return true;
++}
++
++/* every spare lacks the texture's device contents (a render into it, a new
++ * tail) */
++static void
++spares_stale(struct sgx_resource *res)
++{
++   for (unsigned i = 0; i < res->n_spares; i++)
++      res->spare[i].n_dirty = SGX_ALT_ALL;
++}
++
++/* a spare sampled by the frame being recorded */
++static bool
++spare_in_frame(struct sgx_screen *screen, struct sgx_resource *res)
++{
++   for (unsigned i = 0; i < res->n_spares; i++)
++      if (res->spare[i].use_seq == sgxws_next_seq(screen->hw))
++         return true;
++   return false;
++}
++
++static void
++sgx_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   struct sgx_resource *res = sgx_resource(prsc);
++
++   if (sgxws_bo_valid(&res->bo)) {
++      simple_mtx_lock(&screen->lock);
++      /* a frame still being recorded into it or sampling it goes now (st
++       * draws its bitmap cache at teardown and then frees the bitmap: the
++       * frame went to the GPU after the texture was freed, a 3D lockup), and
++       * renders in flight may still use it (and a target's last render keeps
++       * a pointer to its sync data) */
++      if (screen->hw && (sgxws_target_bo(screen->hw) == &res->bo ||
++                         res->use_seq == sgxws_next_seq(screen->hw) ||
++                         spare_in_frame(screen, res)))
++         sgxws_flush(screen->hw, 0);
++      if (screen->hw)
++         sgxws_wait_idle(screen->hw, 2000);
++      sgxws_bo_free(screen->dev, &res->bo);
++      for (unsigned i = 0; i < res->n_spares; i++)
++         sgxws_bo_free(screen->dev, &res->spare[i].bo);
++      if (res->n_spares)
++         p_atomic_add(&screen->spare_bytes,
++                      -(int64_t)res->n_spares *
++                         (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
++      free(res->spare);
++      sgxws_bo_free(screen->dev, &res->cube0);
++      simple_mtx_unlock(&screen->lock);
++   }
++   if (sgxws_bo_valid(&res->zls)) {
++      /* a depth/stencil buffer: the frame storing into it goes now, and the
++       * renders that do are waited for */
++      simple_mtx_lock(&screen->lock);
++      if (screen->hw && res->use_seq == sgxws_next_seq(screen->hw))
++         sgxws_flush(screen->hw, 0);
++      if (screen->hw)
++         sgxws_wait_idle(screen->hw, 2000);
++      sgxws_bo_free(screen->dev, &res->zls);
++      simple_mtx_unlock(&screen->lock);
++   }
++   if (sgxws_bo_valid(&res->vbo)) {
++      simple_mtx_lock(&screen->lock);
++      vbo_retire(screen, &res->vbo, res->vbo_seq);
++      simple_mtx_unlock(&screen->lock);
++   }
++   if (res->scanout)
++      renderonly_scanout_destroy(res->scanout, screen->ro);
++   if (res->data)
++      align_free(res->data);
++   FREE(res);
++}
++
++bool
++sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
++                    unsigned level, unsigned layer, struct sgxws_target *t)
++{
++   memset(t, 0, sizeof(*t));
++   t->bo = &res->bo;
++   /* an sRGB texture renders as its linear format: without
++    * EXT_framebuffer_sRGB nothing is encoded on the way out */
++   switch (util_format_linear(res->base.format)) {
++   case PIPE_FORMAT_B8G8R8A8_UNORM:
++   case PIPE_FORMAT_B8G8R8X8_UNORM:
++      t->pbe_format = 0;
++      t->t1_format = 0x0c;
++      break;
++   case PIPE_FORMAT_R8G8B8A8_UNORM:
++   case PIPE_FORMAT_R8G8B8X8_UNORM:
++   case PIPE_FORMAT_R8_UNORM:   /* stored as RGBA8 (sgx_tex_bpp); the draws */
++   case PIPE_FORMAT_R8G8_UNORM: /* write R (and G) alone (sgx_target_mask) */
++      t->pbe_format = 1;
++      t->t1_format =
++         0x0d; /* swaps R and B against 0x0c: the PBE's order back */
++      break;
++   default:
++      return false;
++   }
++   if (res->texture) {
++      unsigned w = u_minify(res->base.width0, level),
++               h = u_minify(res->base.height0, level);
++      bool twiddled =
++         util_is_power_of_two_nonzero(w) && util_is_power_of_two_nonzero(h);
++
++      t->va = res->bo.va + sgx_tex_offset(&res->base, level, layer);
++      t->stride = twiddled ? w : align(w, 8);
++      t->t1_layout = twiddled ? 0 : 3;
++      sgxws_bo_prepare_target(screen->dev,
++                              &res->bo); /* (the caller holds the lock) */
++      res->rendered |= 1u << level;
++      spares_stale(res); /* the render isn't in the spares */
++      if (!level)
++         res->level0_gen++;
++      return true;
++   }
++   if (!res->bo.va || !res->pitch || level || layer ||
++       util_format_get_blocksize(res->base.format) != 4)
++      return false;
++   t->va = res->bo.va;
++   t->stride = res->pitch;
++   t->t1_layout = 6;
++   return true;
++}
++
++/* ---------------------------------------------------------------- transfers */
++
++static void *
++sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
++                 unsigned level, unsigned usage, const struct pipe_box *box,
++                 struct pipe_transfer **out)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_resource *res = sgx_resource(prsc);
++   struct sgx_transfer *trans;
++   struct pipe_transfer *ptrans;
++   uint8_t *base;
++   uint32_t stride;
++
++   /* A render target the frame being recorded writes: the CPU sees it once
++    * the render is done.  Everything else is either CPU memory or idle (the
++    * driver waits for every render). */
++   if (res->bo.va && !res->texture && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
++      ctx->stats.fl_read += ctx->recording == res;
++      if (ctx->recording == res)
++         SGX_DBG(
++            SYNC,
++            "readback ends the render into %s %ux%u (map usage %#x, box %d,%d %dx%d)\n",
++            util_format_short_name(prsc->format), prsc->width0, prsc->height0,
++            usage, box->x, box->y, box->width, box->height);
++      sgx_flush_resource_writes(ctx, res);
++      /* and the renders already submitted into it */
++      if (sgxws_bo_wait(&res->bo, 2000))
++         fprintf(stderr, "sgx: a render into a mapped buffer did not finish\n");
++   }
++   /* A texture the GPU rendered into: the CPU copy catches up first.  A read
++    * (piglit's probes, glReadPixels) brings up only the box it covers and the
++    * level stays rendered; a write brings up every level rendered into, as
++    * the unmap and the second copy work from the CPU copy. */
++   if (res->texture && res->rendered && !(usage & PIPE_MAP_UNSYNCHRONIZED) &&
++       ((usage & PIPE_MAP_WRITE) || (res->rendered & 1u << level))) {
++      uint64_t t;
++
++      ctx->stats.fl_read += ctx->recording == res;
++      if (ctx->recording == res)
++         SGX_DBG(
++            SYNC,
++            "readback ends the render into %s %ux%u (map usage %#x, box %d,%d %dx%d)\n",
++            util_format_short_name(prsc->format), prsc->width0, prsc->height0,
++            usage, box->x, box->y, box->width, box->height);
++      sgx_flush_resource_writes(ctx, res);
++      if (sgxws_bo_wait(&res->bo, 2000))
++         fprintf(stderr,
++                 "sgx: a render into a mapped texture did not finish\n");
++      t = ctx->stats.on ? os_time_get_nano() : 0;
++      if (usage & PIPE_MAP_WRITE) {
++         u_foreach_bit (l, res->rendered) {
++            sgx_tex_decode_level(res, l);
++            ctx->stats.rb_bytes += (uint64_t)util_format_get_stride(
++                                      prsc->format, u_minify(prsc->width0, l)) *
++                                   u_minify(prsc->height0, l) *
++                                   prsc->array_size;
++         }
++         res->rendered = 0;
++      } else {
++         for (int z = box->z; z < box->z + box->depth; z++)
++            sgx_tex_decode_box(res, level, z, box->x, box->y,
++                               box->x + box->width, box->y + box->height);
++         ctx->stats.rb_bytes +=
++            (uint64_t)util_format_get_stride(prsc->format, box->width) *
++            box->height * box->depth;
++      }
++      if (ctx->stats.on)
++         ctx->stats.rb_ns += os_time_get_nano() - t;
++   }
++   /* A texture write lands in the CPU copy; the unmap puts it on the device
++    * copy, or on a second one when a render may still sample the first
++    * (tex_write) */
++
++   trans = slab_zalloc(&ctx->transfer_pool);
++   if (!trans)
++      return NULL;
++   ptrans = &trans->base;
++   pipe_resource_reference(&ptrans->resource, prsc);
++   ptrans->level = level;
++   ptrans->usage = usage;
++   ptrans->box = *box;
++
++   if (prsc->target == PIPE_BUFFER) {
++      if (usage & PIPE_MAP_WRITE) {
++         res->gen++; /* the vertex cache's copies of it are stale */
++         res->write_maps++;
++         res->written_ns = os_time_get_nano();
++         /* a device copy a render may still read is left to it; the next
++          * draw makes another (an unsynchronized write promises to miss
++          * what renders read, and goes in at the unmap) */
++         if (sgxws_bo_valid(&res->vbo) && !(usage & PIPE_MAP_UNSYNCHRONIZED)) {
++            struct sgx_screen *screen = sgx_screen(pctx->screen);
++
++            simple_mtx_lock(&screen->lock);
++            if (screen->hw &&
++                sgxws_seq_after(res->vbo_seq, sgxws_done_seq(screen->hw)))
++               vbo_retire(screen, &res->vbo, res->vbo_seq);
++            simple_mtx_unlock(&screen->lock);
++         }
++      }
++      ptrans->stride = 0;
++      ptrans->layer_stride = 0;
++      *out = ptrans;
++      return (uint8_t *)res->data + box->x;
++   }
++
++   stride = level ? util_format_get_stride(prsc->format,
++                                           u_minify(prsc->width0, level))
++                  : res->stride;
++   base = res->bo.map && !res->texture ? (uint8_t *)res->bo.map
++                                       : (uint8_t *)res->data;
++   base += level_offset(prsc, res->stride, level);
++   ptrans->stride = stride;
++   ptrans->layer_stride =
++      (uintptr_t)stride *
++      util_format_get_nblocksy(prsc->format, u_minify(prsc->height0, level));
++   *out = ptrans;
++   return base + box->z * ptrans->layer_stride +
++          util_format_get_nblocksy(prsc->format, box->y) * stride +
++          util_format_get_stride(prsc->format, box->x);
++}
++
++static void
++spare_dirty_add(struct sgx_tex_copy *sp, unsigned level, unsigned layer,
++                unsigned x0, unsigned y0, unsigned x1, unsigned y1)
++{
++   if (sp->n_dirty == SGX_ALT_ALL)
++      return;
++   /* a box it already owes, or one inside it (a lightmap page updated at
++    * the same place every draw), costs nothing more */
++   for (unsigned i = 0; i < sp->n_dirty; i++)
++      if (sp->dirty[i].level == level && sp->dirty[i].layer == layer &&
++          sp->dirty[i].x0 <= x0 && sp->dirty[i].y0 <= y0 &&
++          sp->dirty[i].x1 >= MIN2(x1, 0xffff) && sp->dirty[i].y1 >= MIN2(y1, 0xffff))
++         return;
++   if (sp->n_dirty == ARRAY_SIZE(sp->dirty)) {
++      sp->n_dirty = SGX_ALT_ALL;
++      return;
++   }
++   sp->dirty[sp->n_dirty].level = level;
++   sp->dirty[sp->n_dirty].layer = layer;
++   sp->dirty[sp->n_dirty].x0 = x0;
++   sp->dirty[sp->n_dirty].y0 = y0;
++   sp->dirty[sp->n_dirty].x1 = MIN2(x1, 0xffff);
++   sp->dirty[sp->n_dirty].y1 = MIN2(y1, 0xffff);
++   sp->n_dirty++;
++}
++
++/* A texture's spares stay within 1 MiB, one at least: up to 15 for a
++ * 64 KiB lightmap page, one for a 4 MiB texture */
++static unsigned
++sgx_tex_spares_max(struct sgx_resource *res)
++{
++   size_t size = align(MAX2(sgx_tex_size(&res->base), 1), 4096);
++
++   return CLAMP((1u << 20) / size, 1, SGX_TEX_SPARES_MAX);
++}
++
++/* an idle spare, a new one, or none (all busy and no room for another) */
++static struct sgx_tex_copy *
++spare_get(struct sgx_context *ctx, struct sgx_resource *res, uint32_t done)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++   struct sgx_tex_copy *sp;
++
++   /* a shared buffer is one BO another device holds (and D6's flags are on
++    * it): never swapped for a spare (none is a texture today) */
++   if (res->shared)
++      return NULL;
++   /* a texture rendered into and not read back (an unsynchronized map
++    * skips the catch-up): its device copy has what the CPU copy lacks, and
++    * the frame recording into it holds &res->bo (sgxws_target_bo) */
++   if (res->rendered || sgx_recording(ctx) == res)
++      return NULL;
++   for (unsigned i = 0; i < res->n_spares; i++)
++      if (!sgxws_seq_after(res->spare[i].use_seq, done))
++         return &res->spare[i];
++   if (res->n_spares == sgx_tex_spares_max(res))
++      return NULL;
++   if (!res->spare) {
++      res->spare = calloc(SGX_TEX_SPARES_MAX, sizeof(*res->spare));
++      if (!res->spare)
++         return NULL;
++   }
++   sp = &res->spare[res->n_spares];
++   simple_mtx_lock(&screen->lock);
++   if (sgxws_bo_alloc(screen->dev, &sp->bo, SGXWS_MEM_TEXTURE,
++                      align(MAX2(sgx_tex_size(&res->base), 1), 4096), 0x1000)) {
++      memset(&sp->bo, 0, sizeof(sp->bo));
++      simple_mtx_unlock(&screen->lock);
++      return NULL;
++   }
++   simple_mtx_unlock(&screen->lock);
++   p_atomic_add(&screen->spare_bytes,
++                (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
++   sp->use_seq = 0;
++   sp->n_dirty = SGX_ALT_ALL;
++   res->n_spares++;
++   return sp;
++}
++
++/*
++ * A write to a texture's level box (already in the CPU copy) onto the device
++ * copy.  An application that animates sprites of a texture atlas updates it
++ * while the frames before still sample it, and a GL1 game updates a lightmap
++ * page between the draws of one frame: writing under a render in flight
++ * would show half-updated sprites or lightmaps, and waiting for the GPU at
++ * every update threw the CPU/GPU overlap away.  So a busy copy is left to
++ * its renders and an idle spare takes over, brought up to date from the CPU
++ * copy first; only with every copy busy and no room for another does the
++ * write wait.
++ */
++static void
++tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level,
++          unsigned layer, unsigned x0, unsigned y0, unsigned x1, unsigned y1)
++{
++   uint32_t done = ctx->hw ? sgxws_done_seq(ctx->hw) : 0;
++
++   if (ctx->hw && sgxws_seq_after(res->use_seq, done)) {
++      struct sgx_tex_copy *sp = spare_get(ctx, res, done);
++
++      if (!sp) {
++         /* every copy busy: wait for the renders, then write in place */
++         ctx->stats.tex_flushes += ctx->stats.on;
++         sgx_finish(ctx);
++      }
++      if (sp) {
++         struct sgxws_bo b = res->bo;
++         uint32_t u = res->use_seq;
++
++         res->bo = sp->bo, res->use_seq = sp->use_seq;
++         if (sp->n_dirty == SGX_ALT_ALL) {
++            for (unsigned l = 0; l <= res->base.last_level; l++)
++               sgx_tex_encode_level(res, l);
++         } else {
++            for (unsigned i = 0; i < sp->n_dirty; i++)
++               sgx_tex_encode_box(res, sp->dirty[i].level, sp->dirty[i].layer,
++                                  sp->dirty[i].x0, sp->dirty[i].y0,
++                                  sp->dirty[i].x1, sp->dirty[i].y1);
++         }
++         /* the copy that was current is up to date */
++         sp->bo = b, sp->use_seq = u, sp->n_dirty = 0;
++      }
++   }
++   sgx_tex_encode_box(res, level, layer, x0, y0, x1, y1);
++   for (unsigned i = 0; i < res->n_spares; i++)
++      spare_dirty_add(&res->spare[i], level, layer, x0, y0, x1, y1);
++   if (!level)
++      res->level0_gen++;
++}
++
++bool
++sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++
++   if (!res->cube0.va) {
++      simple_mtx_lock(&screen->lock);
++      if (sgxws_bo_alloc(screen->dev, &res->cube0, SGXWS_MEM_TEXTURE,
++                         align(sgx_tex_cube0_size(&res->base), 4096), 0x1000)) {
++         memset(&res->cube0, 0, sizeof(res->cube0));
++         simple_mtx_unlock(&screen->lock);
++         return false;
++      }
++      simple_mtx_unlock(&screen->lock);
++      res->cube0_gen = res->level0_gen - 1;
++   }
++   if (res->cube0_gen == res->level0_gen)
++      return true;
++   /* level 0 rendered into: the CPU copy catches up, as for a map */
++   if (res->rendered & 1) {
++      sgx_flush_resource_writes(ctx, res);
++      if (sgxws_bo_wait(&res->bo, 2000))
++         fprintf(stderr,
++                 "sgx: a render into a sampled cube map did not finish\n");
++      sgx_tex_decode_level(res, 0);
++      res->rendered &= ~1u;
++   }
++   /* (rare: a render in flight may still sample the old copy) */
++   if (ctx->hw && sgxws_seq_after(res->use_seq, sgxws_done_seq(ctx->hw)))
++      sgx_finish(ctx);
++   sgx_tex_encode_cube0(res);
++   res->cube0_gen = res->level0_gen;
++   return true;
++}
++
++/* The device tail of a mipmapped 2D texture from the last level a sampler
++ * view allows (sgx_tex_set_tail): rare, when GL_TEXTURE_MAX_LEVEL changes */
++void
++sgx_resource_tail(struct sgx_context *ctx, struct sgx_resource *res,
++                  unsigned last)
++{
++   if (!res->texture || res->base.target != PIPE_TEXTURE_2D ||
++       last == res->tail_from || last >= sgx_tex_dev_last(&res->base))
++      return;
++   /* levels rendered into: the CPU copy catches up, as for a map */
++   if (res->rendered) {
++      sgx_flush_resource_writes(ctx, res);
++      if (sgxws_bo_wait(&res->bo, 2000))
++         fprintf(stderr,
++                 "sgx: a render into a sampled texture did not finish\n");
++      for (unsigned l = 0; l <= res->base.last_level; l++)
++         if (res->rendered & 1u << l)
++            sgx_tex_decode_level(res, l);
++      res->rendered = 0;
++   }
++   if (ctx->hw && sgxws_seq_after(res->use_seq, sgxws_done_seq(ctx->hw)))
++      sgx_finish(ctx);
++   sgx_tex_set_tail(res, last);
++   spares_stale(res); /* the spares have the old tail */
++}
++
++static void
++sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_resource *res = sgx_resource(ptrans->resource);
++
++   /* only what the transfer covers: 16x16 updates of a 1024x512 atlas
++    * re-encoding the whole level each time were far too slow */
++   if (res->texture && (ptrans->usage & PIPE_MAP_WRITE)) {
++      uint64_t t = ctx->stats.on ? os_time_get_nano() : 0;
++
++      for (int z = ptrans->box.z; z < ptrans->box.z + ptrans->box.depth; z++)
++         tex_write(ctx, res, ptrans->level, z, ptrans->box.x, ptrans->box.y,
++                   ptrans->box.x + ptrans->box.width,
++                   ptrans->box.y + ptrans->box.height);
++      if (ctx->stats.on) {
++         ctx->stats.tex_ns += os_time_get_nano() - t;
++         ctx->stats.tex_writes++;
++      }
++   }
++
++   /* the CPU wrote a buffer another device shares: the next job flushes it */
++   if (res->shared && (ptrans->usage & PIPE_MAP_WRITE))
++      sgxws_bo_cpu_written(&res->bo);
++
++   if (ptrans->resource->target == PIPE_BUFFER &&
++       (ptrans->usage & PIPE_MAP_WRITE)) {
++      if (res->vbo.map)
++         memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
++                (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
++      if (res->write_maps)
++         res->write_maps--;
++   }
++   pipe_resource_reference(&ptrans->resource, NULL);
++   slab_free(&ctx->transfer_pool, ptrans);
++}
++
++void
++sgx_resource_screen_init(struct sgx_screen *screen)
++{
++   screen->base.resource_create = sgx_resource_create;
++   screen->base.resource_from_user_memory = sgx_resource_from_user_memory;
++   screen->base.resource_destroy = sgx_resource_destroy;
++   if (sgxws_dev_has_dmabuf(screen->dev)) {
++      screen->base.resource_from_handle = sgx_resource_from_handle;
++      screen->base.resource_get_handle = sgx_resource_get_handle;
++      screen->base.resource_get_param = sgx_resource_get_param;
++   }
++}
++
++/* clears of a surface outside glClear (st's copy and clear paths), on the
++ * CPU through a map: rare, and the map already decodes what a render left */
++static void
++sgx_clear_render_target(struct pipe_context *pctx, struct pipe_surface *dst,
++                        const union pipe_color_union *color, unsigned x,
++                        unsigned y, unsigned w, unsigned h,
++                        bool render_condition_enabled)
++{
++   util_clear_render_target(pctx, dst, color, x, y, w, h);
++}
++
++static void
++sgx_clear_depth_stencil(struct pipe_context *pctx, struct pipe_surface *dst,
++                        unsigned flags, double depth, unsigned stencil,
++                        unsigned x, unsigned y, unsigned w, unsigned h,
++                        bool render_condition_enabled)
++{
++   util_clear_depth_stencil(pctx, dst, flags, depth, stencil, x, y, w, h);
++}
++
++void
++sgx_resource_context_init(struct sgx_context *ctx)
++{
++   ctx->base.buffer_map = sgx_transfer_map;
++   ctx->base.texture_map = sgx_transfer_map;
++   ctx->base.buffer_unmap = sgx_transfer_unmap;
++   ctx->base.texture_unmap = sgx_transfer_unmap;
++   ctx->base.transfer_flush_region = u_default_transfer_flush_region;
++   ctx->base.buffer_subdata = u_default_buffer_subdata;
++   ctx->base.texture_subdata = u_default_texture_subdata;
++   ctx->base.clear_render_target = sgx_clear_render_target;
++   ctx->base.clear_depth_stencil = sgx_clear_depth_stencil;
++   ctx->base.clear_texture = u_default_clear_texture;
++}
+diff --git a/src/gallium/drivers/sgx/sgx_resource.h b/src/gallium/drivers/sgx/sgx_resource.h
+new file mode 100644
+index 0000000..6c1b6e4
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_resource.h
+@@ -0,0 +1,139 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef SGX_RESOURCE_H
++#define SGX_RESOURCE_H
++
++#include "pipe/p_state.h"
++
++#include "sgxws.h"
++
++struct sgx_context;
++struct sgx_screen;
++
++/* A spare device copy of a texture: it lacks what was written since it was
++ * current, the dirty boxes or everything (SGX_ALT_ALL) */
++struct sgx_tex_copy {
++   struct sgxws_bo bo;
++   uint32_t use_seq;
++   unsigned n_dirty;
++   struct {
++      uint16_t level, layer, x0, y0, x1, y1;
++   } dirty[32];
++};
++
++#define SGX_TEX_SPARES_MAX 15
++
++struct sgx_resource {
++   struct pipe_resource base;
++
++   /*
++    * Buffers (vertex, index, constant) live in CPU memory: the draw path
++    * reads them and copies what the GPU needs into the frame's rings.
++    * Textures and render targets are device memory.
++    */
++   void *data;
++   struct sgxws_bo bo;
++   bool wrapped; /* resource_from_user_memory: an fbdev mapping */
++   bool shared;  /* imported or exported dma-buf: its frames name it
++                    (sgxws_use_bo) */
++   struct renderonly_scanout
++      *scanout;     /* kmsro: its buffer on the display device */
++   bool dumb_later; /* kmsro with a display the CPU reads: made the display's
++                       dumb buffer when a KMS handle is asked for */
++
++   uint32_t uid, gen; /* buffers: an id never reused, and a count of writes
++                         (vertex cache) */
++   /* buffers (SGX_DEBUG=zerocopy): a device copy of data that draws DMA
++    * from, made at the first draw that reads it, kept up to date by writes;
++    * vbo_seq is the last kick that reads it */
++   struct sgxws_bo vbo;
++   uint32_t vbo_seq;
++   /* write maps open (a stream uploader keeps its buffer mapped while it
++    * writes more into it: sgx_buffer_vbo) */
++   unsigned write_maps;
++   uint64_t written_ns;     /* buffers: when last written */
++   uint32_t stride;         /* bytes per row of level 0 */
++   size_t level_offset[16]; /* each level in the linear CPU copy */
++   bool texture;      /* data is the CPU copy of bo (texture heap, laid out by
++                         sgx_texture.c) */
++   uint32_t rendered; /* a texture's levels rendered into since data was last
++                         brought up to date */
++   uint32_t pitch;    /* pixels per row of a render target (a multiple of 32) */
++
++   /* A texture written while a render may still sample it: the write goes to
++    * a spare copy, which takes over (the DDK's ghosting).  A frame that
++    * updates one texture between draws needs a copy per update in flight,
++    * so a texture has up to sgx_tex_spares_max spares (sgx_resource.c). */
++   uint32_t use_seq; /* the last kick that samples bo */
++   struct sgx_tex_copy *spare; /* SGX_TEX_SPARES_MAX, on the first spare */
++   unsigned n_spares;
++
++   /* A cube map with mip levels sampled without mipmapping: the TPU then
++    * spaces the faces by level 0 alone, so it samples a copy of the six
++    * level-0 faces laid out that way (docs/TEX.md: 0x1800 bytes for a 16x16
++    * RGBA cube with 5 levels, 0x3000 with mipmapping).
++    * level0_gen counts the writes to level 0; cube0_gen is the one cube0 has. */
++   struct sgxws_bo cube0;
++   uint32_t level0_gen, cube0_gen;
++
++   /* A mipmapped 2D texture's device chain runs to 1x1 (sgx_tex_dev_last);
++    * its levels past tail_from are box-filtered from that level, so sampling
++    * past GL_TEXTURE_MAX_LEVEL reads (a smaller copy of) the last level a
++    * sampler view allows.  The CPU copy keeps those levels' own texels. */
++   uint8_t tail_from;
++
++   /* A depth/stencil buffer's contents between renders: the ZLS buffer its
++    * renders store and load (sgxws_target), and the render size they were
++    * last stored at (0: nothing stored yet, so nothing to load). */
++   struct sgxws_bo zls;
++   uint32_t zls_bytes, zls_w, zls_h;
++};
++
++static inline struct sgx_resource *
++sgx_resource(struct pipe_resource *p)
++{
++   return (struct sgx_resource *)p;
++}
++
++/* what the TPU can sample: a texture in the texture heap, or a 32-bit
++ * render target read in place as a strided texture (TEX.md sections 3, 11) */
++static inline bool
++sgx_resource_sampleable(const struct sgx_resource *res)
++{
++   if (res->texture)
++      return true;
++   return res->bo.va && res->pitch && res->base.last_level == 0 &&
++          (res->base.format == PIPE_FORMAT_B8G8R8A8_UNORM ||
++           res->base.format == PIPE_FORMAT_B8G8R8X8_UNORM ||
++           res->base.format == PIPE_FORMAT_R8G8B8A8_UNORM ||
++           res->base.format == PIPE_FORMAT_R8G8B8X8_UNORM);
++}
++
++#define SGX_ALT_ALL (~0u)
++
++struct sgx_transfer {
++   struct pipe_transfer base;
++};
++
++void sgx_resource_screen_init(struct sgx_screen *screen);
++/* with the screen lock held: a buffer's device copy, made if need be */
++bool sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res,
++                    uint32_t off, uint32_t size);
++void sgx_resource_context_init(struct sgx_context *ctx);
++
++/* the target a render into this level and layer of the resource writes; with
++ * the screen lock held */
++bool sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
++                         unsigned level, unsigned layer,
++                         struct sgxws_target *t);
++
++/* brings res->cube0 up to date with level 0 (sgx_tex_words samples it) */
++bool sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res);
++
++void sgx_resource_tail(struct sgx_context *ctx, struct sgx_resource *res,
++                       unsigned last);
++
++#endif
+diff --git a/src/gallium/drivers/sgx/sgx_screen.c b/src/gallium/drivers/sgx/sgx_screen.c
+new file mode 100644
+index 0000000..cfdd94b
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_screen.c
+@@ -0,0 +1,401 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#include <stdio.h>
++#include <unistd.h>
++
++#include "drm-uapi/drm.h"
++#include "renderonly/renderonly.h"
++#include "util/format/u_format.h"
++#include "util/log.h"
++#include "util/u_debug.h"
++#include "util/u_memory.h"
++#include "util/u_screen.h"
++
++#include "sgx_context.h"
++#include "sgx_core.h"
++#include "sgx_program.h"
++#include "sgx_resource.h"
++#include "sgx_screen.h"
++#include "sgx_texture.h"
++
++uint32_t sgx_drv_debug;
++
++static const struct debug_named_value sgx_drv_debug_options[] = {
++   {"frame", SGX_DEBUG_FRAME, "print every frame the winsys submits"},
++   {"nir", SGX_DEBUG_NIR, "print every shader's NIR"},
++   {"draw", SGX_DEBUG_DRAW, "print every draw"},
++   {"sync", SGX_DEBUG_SYNC, "print allocations and waits"},
++   {"stats", SGX_DEBUG_STATS, "print where the time goes, every 2 s"},
++   {"serial", SGX_DEBUG_SERIAL,
++    "wait for every render after submitting it (no overlap)"},
++   {"hangabort", SGX_DEBUG_HANG_ABORT,
++    "abort at the first render that does not finish"},
++   {"flushall", SGX_DEBUG_FLUSH_ALL, "submit at every flush (none deferred)"},
++   {"novcache", SGX_DEBUG_NO_VCACHE, "no vertex cache"},
++   {"nof16", SGX_DEBUG_NO_F16, "no F16/C10 fragment arithmetic"},
++   {"noffmediump", SGX_DEBUG_NO_FF_MEDIUMP,
++    "fixed-function fragment programs at highp (F32), not mediump (F16; texture coordinates F32)"},
++   {"nozerocopy", SGX_DEBUG_NO_ZERO_COPY,
++    "vertex inputs gathered into f32 x 4, not DMAed where they are"},
++   {"nolazyscanout", SGX_DEBUG_NO_LAZY_SCANOUT,
++    "scanout buffers on a dumb-buffer display (kmsro) are the display's from the start, not when a KMS handle is asked for"},
++   {"nophasesplit", SGX_DEBUG_NO_PHASE_SPLIT,
++    "a fragment program that discards runs whole before the visibility feedback, not only its test (its colour after, as the DDK's alpha-tested programs)"},
++   {"nof16samples", SGX_DEBUG_NO_F16_SAMPLES,
++    "texels a mediump program reads come back RGBA8 to unpack, not F16 (T3 01028800)"},
++   {"nodepf16samples", SGX_DEBUG_NO_DEP_F16_SAMPLES,
++    "dependent texels a mediump program reads come back RGBA8 to unpack, not F16"},
++   {"nopdsmerge", SGX_DEBUG_NO_PDS_MERGE,
++    "a sample is merged only into the previous iteration of its own set, not of another"},
++   {"nozls", SGX_DEBUG_NO_ZLS,
++    "depth and stencil not kept across renders (no ZLS load or store)"},
++   {"flushrt", SGX_DEBUG_FLUSH_RT,
++    "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)"},
++   DEBUG_NAMED_VALUE_END};
++
++DEBUG_GET_ONCE_FLAGS_OPTION(sgx_drv_debug, "SGX_DEBUG", sgx_drv_debug_options,
++                            0)
++DEBUG_GET_ONCE_OPTION(sgx_dump_code, "SGX_DUMP_CODE", NULL)
++/* the winsys's debugging aids: a pvrtrace log of this client (and memory
++ * copies for its first n kicks), frames built but never sent from the n-th
++ * on, idle time after every render */
++DEBUG_GET_ONCE_OPTION(sgx_trace, "SGX_TRACE", NULL)
++DEBUG_GET_ONCE_NUM_OPTION(sgx_trace_kicks, "SGX_TRACE_KICKS", 0)
++DEBUG_GET_ONCE_NUM_OPTION(sgx_dry_run, "SGX_DRY_RUN", -1)
++DEBUG_GET_ONCE_NUM_OPTION(sgx_frame_gap_us, "SGX_FRAME_GAP_US", 0)
++/* frames in flight, 2 to 4 (4 by default): fewer trade throughput for
++ * latency (an X desktop behind a game) */
++DEBUG_GET_ONCE_NUM_OPTION(sgx_slots, "SGX_SLOTS", 0)
++/* every draw its own programs and TA state; the parameter buffer's size */
++DEBUG_GET_ONCE_BOOL_OPTION(sgx_state_always, "SGX_STATE_ALWAYS", false)
++DEBUG_GET_ONCE_NUM_OPTION(sgx_pb_pages, "SGX_PB_PAGES", 0)
++
++const char *
++sgx_dump_code_dir(void)
++{
++   return debug_get_option_sgx_dump_code();
++}
++
++static const char *
++sgx_get_name(struct pipe_screen *pscreen)
++{
++   return sgx_screen(pscreen)->name;
++}
++
++static const char *
++sgx_get_vendor(struct pipe_screen *pscreen)
++{
++   return "Mesa";
++}
++
++static const char *
++sgx_get_device_vendor(struct pipe_screen *pscreen)
++{
++   return "Imagination Technologies";
++}
++
++static int
++sgx_get_screen_fd(struct pipe_screen *pscreen)
++{
++   return sgx_screen(pscreen)->fd;
++}
++
++static void
++sgx_init_shader_caps(struct pipe_screen *pscreen)
++{
++   const struct sgx_core *f = sgx_screen(pscreen)->core;
++
++   for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT;
++        s += MESA_SHADER_FRAGMENT) {
++      struct pipe_shader_caps *caps =
++         (struct pipe_shader_caps *)&pscreen->shader_caps[s];
++
++      caps->max_instructions = caps->max_alu_instructions =
++         caps->max_tex_instructions = 16384;
++      /* 8: st then doesn't pack varyings (st_extensions.c), so every varying
++       * keeps a texture coordinate set of its own, as the DDK's compiler
++       * allocates them; a projected or plain read of a whole varying is then
++       * sampled by the PDS before the shader runs, not by the shader */
++      caps->max_tex_indirections = 8;
++      caps->max_control_flow_depth = 32;
++      /* ISA.md: 16 attributes, 10 texture coordinate sets on the SGX545 */
++      caps->max_inputs = s == MESA_SHADER_VERTEX ? f->vs_inputs : f->fs_inputs;
++      caps->max_outputs = s == MESA_SHADER_VERTEX ? f->vs_outputs : 1;
++      /* Constants live in SA registers, sa9 (sa10 in a vertex program) to
++       * sa127.  How many uniforms that holds depends on the program: only
++       * the constants it uses go there, and mediump ones two to a register
++       * (dEQP's nested struct arrays of mat4 fit in a fragment program, and
++       * failed at a limit of 24 vec4).  The constants that don't fit are
++       * loaded from a block in memory (ld.a.d, sgxws_const_mem), so the
++       * limit is GLES2's vertex minimum, 128 vec4, in both stages; a vertex
++       * program gets the 9 vec4 st keeps for lowered clip planes and point
++       * size on top, which leaves GL's 512 components to the application */
++      caps->max_const_buffer0_size =
++         (s == MESA_SHADER_VERTEX ? 128 + 9 : 128) * 4 * sizeof(float);
++      caps->max_const_buffers = 1;
++      /* u[i]: indexed from SA, or from the block when the array doesn't fit
++       * (without it GLSL selects over the whole array, a load per element) */
++      caps->indirect_const_addr = true;
++      caps->max_temps = f->gl_max_temps;
++      if (s == MESA_SHADER_FRAGMENT) {
++         caps->max_texture_samplers = caps->max_sampler_views = f->samplers;
++         /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
++          * uniforms), as the DDK computes them: the varyings, texture and
++          * clipping A/B cases are byte-identical to the DDK with it
++          * (sgx_varyab.sh, _texproj, _texshape, _nearclip), and the bench
++          * world runs 24-28 FPS against 20-27 in F32.  SGX_F16=0 keeps F32 */
++         caps->fp16 = caps->glsl_16bit_consts =
++            f->f16 && !(sgx_drv_debug & SGX_DEBUG_NO_F16);
++      }
++   }
++}
++
++static void
++sgx_init_screen_caps(struct pipe_screen *pscreen)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++   const struct sgx_core *f = screen->core;
++   struct pipe_caps *caps = (struct pipe_caps *)&pscreen->caps;
++
++   u_init_pipe_screen_caps(pscreen, 1);
++   caps->graphics = true;
++   caps->npot_textures = true;
++   /* sampler-view swizzles, applied in the fragment shader (sgx_fs_for):
++    * EXT_texture_swizzle, and the swizzle parameters glamor sets on GLES
++    * (patch 0005) */
++   caps->texture_swizzle = true;
++   /* GPU resets reported (sgx_get_device_reset_status): ARB_robustness */
++   caps->device_reset_status_query = true;
++   /* blending is shader code (STATE.md section 3): any equation per channel */
++   caps->blend_equation_separate = true;
++   caps->uma = true;
++   /* the kernel's scheduler takes a context's priority (glamor asks for
++    * high, so X's copies don't queue behind a game's frames) */
++   if (screen->info->priorities)
++      caps->context_priority_mask = PIPE_CONTEXT_PRIORITY_LOW |
++                                    PIPE_CONTEXT_PRIORITY_MEDIUM |
++                                    PIPE_CONTEXT_PRIORITY_HIGH;
++   /* a texture can be a render target: no bigger than the kernel takes one */
++   caps->max_texture_2d_size =
++      MIN3(f->max_texture_size, screen->info->rt_max_width,
++           screen->info->rt_max_height);
++   caps->max_texture_cube_levels = f->max_cube_levels;
++   caps->max_texture_3d_levels = 0;
++   caps->max_render_targets = 1;
++   caps->glsl_feature_level = 120;
++   caps->glsl_feature_level_compatibility = 120;
++   caps->essl_feature_level = 100;
++   caps->max_viewports = 1;
++   caps->vendor_id = screen->info->pci_vendor;
++   caps->device_id = screen->info->pci_device;
++   caps->fs_coord_origin_upper_left = true;
++   caps->fs_coord_pixel_center_half_integer = true;
++   caps->min_line_width = caps->min_line_width_aa = 1;
++   caps->min_point_size = caps->min_point_size_aa = 1;
++   caps->max_line_width = caps->max_line_width_aa = f->line_width_max;
++   caps->max_point_size = caps->max_point_size_aa = f->point_size_max;
++   caps->point_size_granularity = caps->line_width_granularity = 0.1f;
++   caps->max_texture_lod_bias = 16;
++   /* What desktop GL has and the hardware does in the shader: st lowers the
++    * alpha test to a discard, two-sided colour to a select on the face, and
++    * gives every vertex program a point size (fixed function's points; a GLES
++    * vertex program writes its own) */
++   caps->alpha_test = false;
++   caps->two_sided_color = false;
++   /* glShadeModel(GL_FLAT): st makes the colours flat inputs, iterated flat
++    * (sgx_iter_info.flat) */
++   caps->flatshade = false;
++   caps->point_size_fixed = PIPE_POINT_SIZE_LOWER_ALWAYS;
++   caps->clip_planes = 0;
++   caps->texture_transfer_modes = 0;
++   caps->max_vertex_element_src_offset = 2047;
++   /* the draw gathers vertices from wherever they are, so client arrays
++    * needn't be copied into upload buffers first (u_vbuf's copy would be a
++    * second memcpy of every client-array draw) */
++   caps->user_vertex_buffers = true;
++   /* linear render targets, over powervr_sgx */
++   if (sgxws_dev_has_dmabuf(sgx_screen(pscreen)->dev))
++      caps->dmabuf = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;
++}
++
++static bool
++sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
++                        enum pipe_texture_target target, unsigned sample_count,
++                        unsigned storage_sample_count, unsigned usage)
++{
++   if (sample_count > 1 ||
++       MAX2(1, sample_count) != MAX2(1, storage_sample_count))
++      return false;
++
++   if (usage &
++       (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) {
++      /* windows and pbuffers: the PBE's BGRA8888 (STATE.md section 4) */
++      if (format != PIPE_FORMAT_B8G8R8A8_UNORM &&
++          format != PIPE_FORMAT_B8G8R8X8_UNORM)
++         return false;
++   }
++   if (usage & PIPE_BIND_RENDER_TARGET) {
++      /* the PBE's formats (sgx_resource_target).  Not 565: st would then
++       * pick it for GL_RGB565 textures, and T1 0x05 hands the compiler's
++       * unpack R and B swapped; RGBA8 stands in */
++      if (format != PIPE_FORMAT_B8G8R8A8_UNORM &&
++          format != PIPE_FORMAT_B8G8R8X8_UNORM &&
++          format != PIPE_FORMAT_R8G8B8A8_UNORM &&
++          format != PIPE_FORMAT_R8G8B8X8_UNORM &&
++          /* stored as RGBA8, drawn into with R (and G) written alone
++           * (sgx_tex_bpp): GL_ARB_texture_rg, which X's glamor needs on GLES
++           * for its 8-bit pixmaps (glyphs, masks) */
++          format != PIPE_FORMAT_R8_UNORM && format != PIPE_FORMAT_R8G8_UNORM)
++         return false;
++   }
++   if (usage & PIPE_BIND_DEPTH_STENCIL) {
++      /* The ISP keeps depth and stencil per tile and no buffer is loaded or
++       * stored (no ZLS yet), so they are good within one render. */
++      if (format != PIPE_FORMAT_Z16_UNORM &&
++          format != PIPE_FORMAT_Z24X8_UNORM &&
++          format != PIPE_FORMAT_Z24_UNORM_S8_UINT)
++         return false;
++   }
++   if (usage & PIPE_BIND_VERTEX_BUFFER) {
++      /* gathered on the CPU, so anything util_format can unpack */
++      const struct util_format_description *desc =
++         util_format_description(format);
++
++      if (!desc || desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
++         return false;
++   }
++   if (usage & PIPE_BIND_INDEX_BUFFER) {
++      if (format != PIPE_FORMAT_R8_UINT && format != PIPE_FORMAT_R16_UINT &&
++          format != PIPE_FORMAT_R32_UINT)
++         return false;
++   }
++   /* textures: the formats with a T1 code (docs/TEX.md); render targets
++    * (an imported dma-buf among them: EGLImage, glamor's screen pixmap) are
++    * sampled in place through the strided layout */
++   if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx_tex_format(format) &&
++       !(usage & PIPE_BIND_RENDER_TARGET))
++      return false;
++   switch (target) {
++   case PIPE_BUFFER:
++   case PIPE_TEXTURE_1D: /* a 2D texture a texel high, sampled on that row
++                            (sgx_program.c) */
++   case PIPE_TEXTURE_2D:
++   case PIPE_TEXTURE_RECT:
++   case PIPE_TEXTURE_CUBE:
++      return true;
++   default:
++      return false;
++   }
++}
++
++/* a destroyed screen's connection and hardware context, for the next screen */
++static struct {
++   int fd;
++   struct sgxws_dev *dev;
++   struct sgxws_ctx *hw;
++} kept = {.fd = -1};
++static simple_mtx_t kept_lock = SIMPLE_MTX_INITIALIZER;
++
++static void
++sgx_screen_destroy(struct pipe_screen *pscreen)
++{
++   struct sgx_screen *screen = sgx_screen(pscreen);
++
++   /* Keep the services connection and a hardware context for the process's
++    * next screen instead of tearing them down: when srvinit started the
++    * microkernel, a render context's cleanup never completes (the bridge
++    * returns -EINVAL after its wait), and the next connection's TA then runs
++    * against a parameter buffer the microkernel doesn't use: no pages
++    * allocated, nothing drawn, renders waiting ~270 ms, then lockups (an
++    * application that initialises EGL, terminates it and initialises it
++    * again).  The process's
++    * exit releases them. */
++   simple_mtx_lock(&kept_lock);
++   if (kept.fd < 0) {
++      kept.fd = screen->dev_fd;
++      kept.dev = screen->dev;
++      kept.hw = screen->hw;
++      screen->hw = NULL;
++   } else {
++      if (screen->hw)
++         sgxws_ctx_destroy(screen->hw);
++      sgxws_dev_destroy(screen->dev);
++      close(screen->dev_fd);
++   }
++   simple_mtx_unlock(&kept_lock);
++   if (screen->fd != screen->dev_fd)
++      close(screen->fd);
++   if (screen->ro)
++      screen->ro->destroy(screen->ro);
++   slab_destroy_parent(&screen->transfer_pool);
++   simple_mtx_destroy(&screen->lock);
++   FREE(screen);
++}
++
++struct pipe_screen *
++sgx_screen_create(int fd, const struct pipe_screen_config *config,
++                  struct renderonly *ro)
++{
++   struct sgx_screen *screen = CALLOC_STRUCT(sgx_screen);
++
++   if (!screen)
++      return NULL;
++   sgx_drv_debug = debug_get_option_sgx_drv_debug();
++   screen->fd = screen->dev_fd = fd;
++   simple_mtx_lock(&kept_lock);
++   if (kept.fd >= 0) {
++      /* the previous screen's connection */
++      screen->dev_fd = kept.fd;
++      screen->dev = kept.dev;
++      screen->hw = kept.hw;
++      kept.fd = -1;
++      kept.hw = NULL;
++   }
++   simple_mtx_unlock(&kept_lock);
++   const struct sgxws_dev_options wsopts = {
++      .verbose = (sgx_drv_debug & SGX_DEBUG_FRAME) != 0,
++      .flush_rt = (sgx_drv_debug & SGX_DEBUG_FLUSH_RT) != 0,
++      .trace = debug_get_option_sgx_trace(),
++      .trace_kicks = debug_get_option_sgx_trace_kicks(),
++      .dry_run = debug_get_option_sgx_dry_run(),
++      .frame_gap_us = debug_get_option_sgx_frame_gap_us(),
++      .slots = debug_get_option_sgx_slots(),
++      .state_always = debug_get_option_sgx_state_always(),
++      .pb_pages = debug_get_option_sgx_pb_pages(),
++   };
++
++   if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {
++      FREE(screen);
++      return NULL;
++   }
++   screen->info = sgxws_dev_info(screen->dev);
++   /* the winsys refused a core without a description */
++   screen->core =
++      sgx_core_lookup(screen->info->core_id, screen->info->core_revision);
++   snprintf(screen->name, sizeof(screen->name), "PowerVR %s",
++            screen->core->name);
++   screen->ro = ro;
++   screen->zero_copy =
++      !(sgx_drv_debug & SGX_DEBUG_NO_ZERO_COPY) && screen->info->zero_copy;
++   simple_mtx_init(&screen->lock, mtx_plain);
++   slab_create_parent(&screen->transfer_pool, sizeof(struct sgx_transfer), 16);
++
++   screen->base.destroy = sgx_screen_destroy;
++   screen->base.get_name = sgx_get_name;
++   screen->base.get_vendor = sgx_get_vendor;
++   screen->base.get_device_vendor = sgx_get_device_vendor;
++   screen->base.get_screen_fd = sgx_get_screen_fd;
++   screen->base.is_format_supported = sgx_is_format_supported;
++   screen->base.context_create = sgx_context_create;
++   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
++      screen->base.nir_options[i] = sgx_get_nir_options();
++
++   sgx_resource_screen_init(screen);
++   sgx_fence_screen_init(screen);
++   sgx_init_shader_caps(&screen->base);
++   sgx_init_screen_caps(&screen->base);
++   return &screen->base;
++}
+diff --git a/src/gallium/drivers/sgx/sgx_screen.h b/src/gallium/drivers/sgx/sgx_screen.h
+new file mode 100644
+index 0000000..9cf7aee
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_screen.h
+@@ -0,0 +1,100 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef SGX_SCREEN_H
++#define SGX_SCREEN_H
++
++#include "pipe/p_screen.h"
++#include "util/simple_mtx.h"
++#include "util/slab.h"
++
++#include "sgxws.h"
++
++/* SGX_DEBUG=flag,flag... (sgx_drv_debug_options in sgx_screen.c) */
++#define SGX_DEBUG_FRAME              (1 << 0)
++#define SGX_DEBUG_NIR                (1 << 1)
++#define SGX_DEBUG_DRAW               (1 << 2)
++#define SGX_DEBUG_SYNC               (1 << 3)
++#define SGX_DEBUG_STATS              (1 << 4)
++#define SGX_DEBUG_SERIAL             (1 << 5)
++#define SGX_DEBUG_HANG_ABORT         (1 << 6)
++#define SGX_DEBUG_FLUSH_ALL          (1 << 7)
++#define SGX_DEBUG_NO_VCACHE          (1 << 8)
++#define SGX_DEBUG_NO_F16             (1 << 9)
++#define SGX_DEBUG_FLUSH_RT           (1 << 10)
++#define SGX_DEBUG_NO_FF_MEDIUMP      (1 << 11)
++#define SGX_DEBUG_NO_ZLS             (1 << 12)
++#define SGX_DEBUG_NO_ZERO_COPY       (1 << 13)
++#define SGX_DEBUG_NO_LAZY_SCANOUT    (1 << 14)
++#define SGX_DEBUG_NO_PHASE_SPLIT     (1 << 15)
++#define SGX_DEBUG_NO_F16_SAMPLES     (1 << 16)
++#define SGX_DEBUG_NO_PDS_MERGE       (1 << 17)
++#define SGX_DEBUG_NO_DEP_F16_SAMPLES (1 << 18)
++
++extern uint32_t sgx_drv_debug;
++/* SGX_DUMP_CODE=dir: every compiled program's instructions written there */
++const char *sgx_dump_code_dir(void);
++
++#define SGX_DBG(flag, ...)                                                     \
++   do {                                                                        \
++      if (sgx_drv_debug & SGX_DEBUG_##flag)                                    \
++         fprintf(stderr, "sgx: " __VA_ARGS__);                                 \
++   } while (0)
++
++struct sgx_core;
++
++struct sgx_screen {
++   struct pipe_screen base;
++   int fd;     /* the fd the screen was created on (its key) */
++   int dev_fd; /* the fd the services connection lives on */
++
++   /* the services connection; one per screen, used under lock */
++   struct sgxws_dev *dev;
++   simple_mtx_t lock;
++   uint64_t spare_bytes; /* textures' spare copies (p_atomic) */
++   /* The one hardware render context (CCB, parameter buffer) of the process,
++    * shared by every pipe context and serialised by the lock, as the DDK runs a
++    * GL client on one render context: a second render context with a parameter
++    * buffer of its own makes the microkernel's renders slow and then lock up
++    * (an application with two GL contexts).  A frame being
++    * recorded is flushed when another target or context starts one
++    * (sgxws_begin). */
++   struct sgxws_ctx *hw;
++
++   struct slab_parent_pool transfer_pool;
++
++   /* buffers' device copies a render may still read: freed once it's done */
++   struct {
++      struct sgxws_bo bo;
++      uint32_t seq;
++   } retired[32];
++   unsigned n_retired;
++
++   /* kmsro: the display device scanout buffers are allocated on */
++   bool zero_copy; /* sgxws_device_info.zero_copy, unless SGX_DEBUG=nozerocopy */
++   struct renderonly *ro;
++
++   /* the core: what the kernel reports, and what its entry adds */
++   const struct sgxws_device_info *info;
++   const struct sgx_core *core; /* sgx_core.h */
++   char name[48];
++};
++
++static inline struct sgx_screen *
++sgx_screen(struct pipe_screen *pscreen)
++{
++   return (struct sgx_screen *)pscreen;
++}
++
++struct renderonly;
++
++/* ro: a KMS-only display device that scanout buffers come from (kmsro), or NULL
++ */
++struct pipe_screen *sgx_screen_create(int fd,
++                                      const struct pipe_screen_config *config,
++                                      struct renderonly *ro);
++void sgx_fence_screen_init(struct sgx_screen *screen);
++
++#endif
+diff --git a/src/gallium/drivers/sgx/sgx_texture.h b/src/gallium/drivers/sgx/sgx_texture.h
+new file mode 100644
+index 0000000..63ffd6c
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_texture.h
+@@ -0,0 +1,53 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef SGX_TEXTURE_H
++#define SGX_TEXTURE_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#include "pipe/p_state.h"
++
++struct sgx_context;
++struct sgx_resource;
++
++/* T1 format code for a sampled gallium format, or 0 (docs/TEX.md section 1) */
++unsigned sgx_tex_format(enum pipe_format format);
++unsigned sgx_tex_bpp(enum pipe_format format);
++bool sgx_tex_bgra(enum pipe_format format);
++bool sgx_tex_depth(enum pipe_format format);
++unsigned sgx_tex_dev_last(const struct pipe_resource *prsc);
++void sgx_tex_set_tail(struct sgx_resource *res, unsigned l);
++
++/* the device layout of a texture: size in bytes, and each level and face's
++ * offset */
++size_t sgx_tex_size(const struct pipe_resource *prsc);
++size_t sgx_tex_offset(const struct pipe_resource *prsc, unsigned level,
++                      unsigned layer);
++
++/* lay a level out in device memory from the resource's linear CPU copy */
++void sgx_tex_encode_level(struct sgx_resource *res, unsigned level);
++void sgx_tex_encode_box(struct sgx_resource *res, unsigned level,
++                        unsigned layer, unsigned x0, unsigned y0, unsigned x1,
++                        unsigned y1);
++/* and back, after the GPU rendered into a level */
++void sgx_tex_decode_level(struct sgx_resource *res, unsigned level);
++void sgx_tex_decode_box(struct sgx_resource *res, unsigned level,
++                        unsigned layer, unsigned x0, unsigned y0, unsigned x1,
++                        unsigned y1);
++
++/* a cube map's six level-0 faces alone (res->cube0), and whether a sampler
++ * reads that copy: no mipmapping on a cube map that has levels */
++size_t sgx_tex_cube0_size(const struct pipe_resource *prsc);
++void sgx_tex_encode_cube0(struct sgx_resource *res);
++bool sgx_tex_uses_cube0(const struct pipe_sampler_view *view,
++                        const struct pipe_sampler_state *sampler);
++
++/* the four DOUTT words for a view and sampler (docs/STATE.md section 5) */
++void sgx_tex_words(const struct pipe_sampler_view *view,
++                   const struct pipe_sampler_state *sampler, uint32_t t[4]);
++
++#endif
+diff --git a/src/gallium/meson.build b/src/gallium/meson.build
+index d19c122..7a93613 100644
+--- a/src/gallium/meson.build
++++ b/src/gallium/meson.build
+@@ -193,6 +193,9 @@ else
+ endif
+ if with_gallium_sgx
+   subdir('winsys/sgx/drm')
++  subdir('drivers/sgx')
++else
++  driver_sgx = declare_dependency()
+ endif
+ if with_gallium_rocket
+   subdir('winsys/rocket/drm')
+diff --git a/src/gallium/winsys/sgx/drm/meson.build b/src/gallium/winsys/sgx/drm/meson.build
+index 3abd367..fbe99af 100644
+--- a/src/gallium/winsys/sgx/drm/meson.build
++++ b/src/gallium/winsys/sgx/drm/meson.build
+@@ -11,7 +11,7 @@ idep_sgx_ws = declare_dependency(
+ # structs included.
+ libsgxwinsys = static_library(
+   'sgxwinsys',
+-  files('sgx_frame.c', 'sgx_powervr_sgx.c'),
++  files('sgx_frame.c', 'sgx_powervr_sgx.c', 'sgx_drm_winsys.c'),
+   include_directories : [
+     inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
+   ],
+diff --git a/src/gallium/winsys/sgx/drm/sgx_drm_public.h b/src/gallium/winsys/sgx/drm/sgx_drm_public.h
+new file mode 100644
+index 0000000..354b033
+--- /dev/null
++++ b/src/gallium/winsys/sgx/drm/sgx_drm_public.h
+@@ -0,0 +1,18 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef SGX_DRM_PUBLIC_H
++#define SGX_DRM_PUBLIC_H
++
++struct pipe_screen;
++struct pipe_screen_config;
++struct renderonly;
++
++/* the GPU's render node paired with a KMS-only display device (kmsro) */
++struct pipe_screen *
++sgx_drm_screen_create_renderonly(int fd, struct renderonly *ro,
++                                 const struct pipe_screen_config *config);
++
++#endif
+diff --git a/src/gallium/winsys/sgx/drm/sgx_drm_winsys.c b/src/gallium/winsys/sgx/drm/sgx_drm_winsys.c
+new file mode 100644
+index 0000000..5ed9249
+--- /dev/null
++++ b/src/gallium/winsys/sgx/drm/sgx_drm_winsys.c
+@@ -0,0 +1,35 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "util/os_file.h"
++#include "util/u_screen.h"
++
++#include "sgx/sgx_public.h"
++#include "sgx/sgx_screen.h"
++#include "sgx_drm_public.h"
++
++static struct pipe_screen *
++create_screen(int fd, const struct pipe_screen_config *config,
++              struct renderonly *ro)
++{
++   return sgx_screen_create(fd, config, ro);
++}
++
++/* fd: the GPU's node (powervr_sgx, or pvrsrvkm); the screen keeps a dup of it */
++struct pipe_screen *
++sgx_drm_screen_create(int fd, const struct pipe_screen_config *config)
++{
++   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), config, NULL,
++                                         create_screen);
++}
++
++/* fd: powervr_sgx's render node; scanout buffers come from ro's display device */
++struct pipe_screen *
++sgx_drm_screen_create_renderonly(int fd, struct renderonly *ro,
++                                 const struct pipe_screen_config *config)
++{
++   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), config, ro,
++                                         create_screen);
++}
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,601 @@
+From 384698509de2482f66f6b4c114f7a4b2b99671e8 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:31:13 -0500
+Subject: [PATCH 05/22] sgx/isa: add sgx-asm and sgx-disasm
+
+[Placeholder. Mesa wants commit messages in the submitter's own words;
+what this one must say is in MR-FACTS.md, "Commit 5".]
+---
+ src/sgx/isa/README.md           |  26 ++++-
+ src/sgx/isa/assembler.c         | 193 ++++++++++++++++++++++++++++++++
+ src/sgx/isa/disasm.c            | 163 +++++++++++++++++++++++++++
+ src/sgx/isa/meson.build         |  18 +++
+ src/sgx/isa/tests/meson.build   |   9 ++
+ src/sgx/isa/tests/tools_test.py | 113 +++++++++++++++++++
+ 6 files changed, 521 insertions(+), 1 deletion(-)
+ create mode 100644 src/sgx/isa/assembler.c
+ create mode 100644 src/sgx/isa/disasm.c
+ create mode 100644 src/sgx/isa/tests/tools_test.py
+
+diff --git a/src/sgx/isa/README.md b/src/sgx/isa/README.md
+index da61535..9b76c61 100644
+--- a/src/sgx/isa/README.md
++++ b/src/sgx/isa/README.md
+@@ -13,8 +13,10 @@ glue and a small text assembler for the notation below.
+ | `sgx_isa_disasm.c` | the generated decoder plus custom fields, setfc tracking, bracket tidying |
+ | `sgx_isa_asm.c`, `sgx_isa_asm_int.c` | the text notation into `struct sgx_isa_instr` |
+ | `sgx_isa_coissue.c` | co-issue for a compiler: what an fdual's two halves read and write (`sgx_isa_fdual_use()`), and the same-word races of fdual and efo (`sgx_isa_coissue_hazard()`) |
++| `assembler.c`, `disasm.c` | `sgx-asm` and `sgx-disasm`, the command-line tools (`-Dtools=sgx`) |
+ | `sgx_isa_enums.py` | generates `sgx-isa-enums.h`: the opcode and operand-kind enums the encoder switches on, and the field-value enums |
+ | `tests/sgx_isa_test.c` | text -> struct -> words -> text round trip; checks expected words where a line gives them |
++| `tests/tools_test.py` | the lists again through `sgx-asm` and `sgx-disasm` |
+ | `tests/*.txt` | the test lists (`gles2.txt`: the forms a GLES2 compiler emits; `int.txt`: the integer, fixed-point and dual-issue classes; `coissue.txt`: the efo control words and the other spellings of efo and fdual, as `a == b` lines, and the co-issue hazards; `reject` lines must not assemble) |
+ 
+ Generated: `sgx-isa.c` / `sgx-isa.h` (decoder), `sgx-isa-encode.h`
+@@ -47,7 +49,29 @@ line:
+ `meson test --suite sgx` runs `sgx_isa` (with `-Dbuild-tests=true`):
+ every line of the lists is assembled, encoded, disassembled and compared
+ with its input, and a line that gives `; <lo> <hi>` must encode to those
+-words.
++words. `sgx_isa_tools` puts the same lines through `sgx-asm` and
++`sgx-disasm`, as hex and as binary.
++
++## Tools
++
++With `-Dtools=sgx`, Mesa builds two command-line tools; both
++only read and write files.
++
++    sgx-asm [-c core] [-F fc] [-b | -L] [-o out] [file...]
++    sgx-disasm [-c core] [-F fc] [-x] [-w] [file...]
++
++`sgx-asm` assembles a whole file in one run, one instruction per line. It
++writes one output per instruction, in order: `<lo> <hi>` in hex (the
++default), the words in binary, low word first and little endian (`-b`), or a
++listing of offset, words and disassembly (`-L`). Blank lines and lines
++starting with `#` are skipped, and `;` starts a comment. An error is reported
++as `<file>:<line>: <text>: <message>`, and the exit status is then 1.
++`sgx-disasm` reads binary, or with `-x` the first two hex words of each line
++(so the output of `sgx-asm` and of `sgx-disasm -w` read back). It prints the
++text, or with `-w` the words and the text.
++`-c` selects the core (545, the default), and `-F` the starting format
++control (1 = C10, 2 = F16; 1 by default). Both tools follow `setfc` from
++there.
+ 
+ ## Cores
+ 
+diff --git a/src/sgx/isa/assembler.c b/src/sgx/isa/assembler.c
+new file mode 100644
+index 0000000..f641bf2
+--- /dev/null
++++ b/src/sgx/isa/assembler.c
+@@ -0,0 +1,193 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * sgx-asm: assemble the USSE text notation (README.md), one instruction per
++ * line.
++ *
++ *    sgx-asm [-c core] [-F fc] [-b | -L] [-o out] [file...]
++ *
++ * Reads the files (or stdin) in one pass and writes one instruction per input
++ * instruction, in order:
++ *    (default) "<lo> <hi>" in hex, one line each;
++ *    -b        the words, low word first, little endian;
++ *    -L        a listing, "<offset>: <lo> <hi>  <disassembly>".
++ * Blank lines and lines starting with '#' are skipped; ';' starts a comment.
++ * -c selects the core (545 or sgx545, the default); -F the format control at
++ * the start (bit 0 C10, bit 1 F16; default 1, the program-start state). setfc
++ * instructions change it for the lines after them. Errors go to stderr as
++ * "<file>:<line>: <text>: <message>"; the exit status is 1 if there was one.
++ */
++
++#include <errno.h>
++#include <getopt.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "sgx_isa.h"
++#include "sgx_isa_asm.h"
++
++enum out_mode {
++   OUT_HEX,
++   OUT_BIN,
++   OUT_LIST,
++};
++
++struct asm_state {
++   struct sgx_isa_fc fc;
++   enum out_mode mode;
++   FILE *out;
++   unsigned offset;
++   unsigned errors;
++};
++
++static void
++put_le32(FILE *out, uint32_t v)
++{
++   uint8_t b[4] = {v, v >> 8, v >> 16, v >> 24};
++
++   fwrite(b, 1, sizeof(b), out);
++}
++
++static void
++assemble_line(struct asm_state *st, const char *name, unsigned lineno,
++              char *line)
++{
++   struct sgx_isa_instr I;
++   char err[256];
++
++   line[strcspn(line, "\r\n")] = '\0';
++   char *text = line + strspn(line, " \t");
++   if (!*text || *text == '#' || *text == ';')
++      return;
++
++   if (!sgx_isa_asm_line(text, &I, err, sizeof(err))) {
++      fprintf(stderr, "%s:%u: %s: %s\n", name, lineno, text, err);
++      st->errors++;
++      return;
++   }
++
++   uint64_t w = sgx_isa_encode(&I, &st->fc);
++   uint32_t lo = w, hi = w >> 32;
++
++   switch (st->mode) {
++   case OUT_HEX:
++      fprintf(st->out, "%08x %08x\n", lo, hi);
++      break;
++   case OUT_BIN:
++      put_le32(st->out, lo);
++      put_le32(st->out, hi);
++      break;
++   case OUT_LIST: {
++      char dis[512];
++
++      sgx_disasm_one(w, &st->fc, dis, sizeof(dis));
++      fprintf(st->out, "%06x: %08x %08x  %s\n", st->offset, lo, hi, dis);
++      break;
++   }
++   }
++   st->offset += 8;
++   sgx_isa_setfc(w, &st->fc);
++}
++
++static void
++assemble_file(struct asm_state *st, const char *name, FILE *in)
++{
++   char line[1024];
++   unsigned lineno = 0;
++
++   while (fgets(line, sizeof(line), in)) {
++      lineno++;
++      assemble_line(st, name, lineno, line);
++   }
++}
++
++/* "545" or "sgx545"; 0 if sgx.xml doesn't describe it */
++static unsigned
++parse_core(const char *arg)
++{
++   char *end;
++
++   if (!strncmp(arg, "sgx", 3))
++      arg += 3;
++   unsigned long core = strtoul(arg, &end, 10);
++   return *arg && !*end && core && sgx_isa_core_supported(core) ? core : 0;
++}
++
++static void
++usage(void)
++{
++   fprintf(stderr,
++           "usage: sgx-asm [-c core] [-F fc] [-b | -L] [-o out] [file...]\n");
++   exit(2);
++}
++
++int
++main(int argc, char **argv)
++{
++   struct asm_state st = {
++      .fc = SGX_ISA_FC_START,
++      .mode = OUT_HEX,
++   };
++   const char *out_name = NULL;
++   int opt;
++
++   while ((opt = getopt(argc, argv, "c:F:bLo:h")) != -1) {
++      switch (opt) {
++      case 'c':
++         st.fc.core = parse_core(optarg);
++         if (!st.fc.core) {
++            fprintf(stderr, "sgx-asm: core %s is not in sgx.xml\n", optarg);
++            return 2;
++         }
++         break;
++      case 'F': {
++         unsigned fc = strtoul(optarg, NULL, 0);
++         st.fc.c10 = fc & 1;
++         st.fc.f16 = fc & 2;
++         break;
++      }
++      case 'b':
++         st.mode = OUT_BIN;
++         break;
++      case 'L':
++         st.mode = OUT_LIST;
++         break;
++      case 'o':
++         out_name = optarg;
++         break;
++      default:
++         usage();
++      }
++   }
++
++   st.out =
++      out_name ? fopen(out_name, st.mode == OUT_BIN ? "wb" : "w") : stdout;
++   if (!st.out) {
++      fprintf(stderr, "sgx-asm: %s: %s\n", out_name, strerror(errno));
++      return 2;
++   }
++
++   if (optind == argc)
++      assemble_file(&st, "<stdin>", stdin);
++   for (int i = optind; i < argc; i++) {
++      FILE *in = fopen(argv[i], "r");
++
++      if (!in) {
++         fprintf(stderr, "sgx-asm: %s: %s\n", argv[i], strerror(errno));
++         st.errors++;
++         continue;
++      }
++      assemble_file(&st, argv[i], in);
++      fclose(in);
++   }
++
++   if (fclose(st.out)) {
++      fprintf(stderr, "sgx-asm: write error: %s\n", strerror(errno));
++      return 2;
++   }
++   return st.errors ? 1 : 0;
++}
+diff --git a/src/sgx/isa/disasm.c b/src/sgx/isa/disasm.c
+new file mode 100644
+index 0000000..14bface
+--- /dev/null
++++ b/src/sgx/isa/disasm.c
+@@ -0,0 +1,163 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * sgx-disasm: disassemble USSE instructions to the USSE text notation
++ * (README.md).
++ *
++ *    sgx-disasm [-c core] [-F fc] [-x] [-w] [file...]
++ *
++ * Reads the files (or stdin): words, low word first, little endian, or with
++ * -x hex text, the first two words of each line (so sgx-asm's output and
++ * -w's read back; '#' and ';' lines are skipped). Writes one line per
++ * instruction, the text alone, or with -w "<lo> <hi>  <text>". -c and -F as
++ * for sgx-asm; setfc words change the format control for the words after
++ * them. The exit status is 1 if a word didn't decode.
++ */
++
++#include <errno.h>
++#include <getopt.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "sgx_isa.h"
++
++struct dis_state {
++   struct sgx_isa_fc fc;
++   bool words;
++   unsigned errors;
++};
++
++static void
++disasm_word(struct dis_state *st, uint32_t lo, uint32_t hi)
++{
++   uint64_t w = lo | (uint64_t)hi << 32;
++   char dis[512];
++
++   if (!sgx_disasm_one(w, &st->fc, dis, sizeof(dis)))
++      st->errors++;
++   if (st->words)
++      printf("%08x %08x  %s\n", lo, hi, dis);
++   else
++      printf("%s\n", dis);
++   sgx_isa_setfc(w, &st->fc);
++}
++
++static void
++disasm_bin(struct dis_state *st, const char *name, FILE *in)
++{
++   uint8_t b[8];
++   size_t n;
++
++   while ((n = fread(b, 1, sizeof(b), in)) == sizeof(b)) {
++      disasm_word(st, b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24,
++                  b[4] | b[5] << 8 | b[6] << 16 | (uint32_t)b[7] << 24);
++   }
++   if (n) {
++      fprintf(stderr, "%s: %zu trailing bytes\n", name, n);
++      st->errors++;
++   }
++}
++
++static void
++disasm_hex(struct dis_state *st, const char *name, FILE *in)
++{
++   char line[1024];
++   unsigned lineno = 0;
++
++   while (fgets(line, sizeof(line), in)) {
++      char *text = line + strspn(line, " \t");
++      uint32_t lo, hi;
++
++      lineno++;
++      if (!*text || *text == '\n' || *text == '#' || *text == ';')
++         continue;
++      if (sscanf(text, "%x %x", &lo, &hi) != 2) {
++         text[strcspn(text, "\r\n")] = '\0';
++         fprintf(stderr, "%s:%u: not two hex words: %s\n", name, lineno, text);
++         st->errors++;
++         continue;
++      }
++      disasm_word(st, lo, hi);
++   }
++}
++
++/* "545" or "sgx545"; 0 if sgx.xml doesn't describe it */
++static unsigned
++parse_core(const char *arg)
++{
++   char *end;
++
++   if (!strncmp(arg, "sgx", 3))
++      arg += 3;
++   unsigned long core = strtoul(arg, &end, 10);
++   return *arg && !*end && core && sgx_isa_core_supported(core) ? core : 0;
++}
++
++static void
++usage(void)
++{
++   fprintf(stderr, "usage: sgx-disasm [-c core] [-F fc] [-x] [-w] [file...]\n");
++   exit(2);
++}
++
++int
++main(int argc, char **argv)
++{
++   struct dis_state st = {
++      .fc = SGX_ISA_FC_START,
++   };
++   bool hex = false;
++   int opt;
++
++   while ((opt = getopt(argc, argv, "c:F:xwh")) != -1) {
++      switch (opt) {
++      case 'c':
++         st.fc.core = parse_core(optarg);
++         if (!st.fc.core) {
++            fprintf(stderr, "sgx-disasm: core %s is not in sgx.xml\n", optarg);
++            return 2;
++         }
++         break;
++      case 'F': {
++         unsigned fc = strtoul(optarg, NULL, 0);
++         st.fc.c10 = fc & 1;
++         st.fc.f16 = fc & 2;
++         break;
++      }
++      case 'x':
++         hex = true;
++         break;
++      case 'w':
++         st.words = true;
++         break;
++      default:
++         usage();
++      }
++   }
++
++   if (optind == argc) {
++      if (hex)
++         disasm_hex(&st, "<stdin>", stdin);
++      else
++         disasm_bin(&st, "<stdin>", stdin);
++   }
++   for (int i = optind; i < argc; i++) {
++      FILE *in = fopen(argv[i], hex ? "r" : "rb");
++
++      if (!in) {
++         fprintf(stderr, "sgx-disasm: %s: %s\n", argv[i], strerror(errno));
++         st.errors++;
++         continue;
++      }
++      if (hex)
++         disasm_hex(&st, argv[i], in);
++      else
++         disasm_bin(&st, argv[i], in);
++      fclose(in);
++   }
++   return st.errors ? 1 : 0;
++}
+diff --git a/src/sgx/isa/meson.build b/src/sgx/isa/meson.build
+index eb9d3ec..494d9a7 100644
+--- a/src/sgx/isa/meson.build
++++ b/src/sgx/isa/meson.build
+@@ -50,6 +50,24 @@ idep_sgx_isa = declare_dependency(
+   sources : [sgx_isa_enums_h],
+ )
+ 
++sgx_asm = executable(
++  'sgx-asm',
++  'assembler.c',
++  include_directories : [inc_include, inc_src],
++  dependencies : [idep_sgx_isa, idep_mesautil],
++  build_by_default : with_tools.contains('sgx'),
++  install : false,
++)
++
++sgx_disasm = executable(
++  'sgx-disasm',
++  'disasm.c',
++  include_directories : [inc_include, inc_src],
++  dependencies : [idep_sgx_isa, idep_mesautil],
++  build_by_default : with_tools.contains('sgx'),
++  install : false,
++)
++
+ if with_tests
+   subdir('tests')
+ endif
+diff --git a/src/sgx/isa/tests/meson.build b/src/sgx/isa/tests/meson.build
+index 48d77c2..d6289cc 100644
+--- a/src/sgx/isa/tests/meson.build
++++ b/src/sgx/isa/tests/meson.build
+@@ -14,3 +14,12 @@ test(
+   args : files('gles2.txt', 'int.txt', 'coissue.txt'),
+   suite : ['sgx'],
+ )
++
++# sgx-asm and sgx-disasm over the same lists, in batch, hex and binary.
++test(
++  'sgx_isa_tools',
++  prog_python,
++  args : [files('tools_test.py'), sgx_asm, sgx_disasm,
++          files('gles2.txt', 'int.txt', 'coissue.txt')],
++  suite : ['sgx'],
++)
+diff --git a/src/sgx/isa/tests/tools_test.py b/src/sgx/isa/tests/tools_test.py
+new file mode 100644
+index 0000000..d7c0a78
+--- /dev/null
++++ b/src/sgx/isa/tests/tools_test.py
+@@ -0,0 +1,113 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++
++"""sgx-asm and sgx-disasm over the test lists.
++
++Each list's instruction lines go through sgx-asm in one run (hex and -b),
++must give the words a line quotes, and must disassemble back to their text
++through sgx-disasm (-x and binary). Also checks the error paths.
++
++   tools_test.py <sgx-asm> <sgx-disasm> <list>...
++"""
++
++import os
++import re
++import struct
++import subprocess
++import sys
++import tempfile
++
++
++def run(cmd, data=None, text=True):
++    return subprocess.run(cmd, input=data, capture_output=True, text=text)
++
++
++def same_text(a, b):
++    return re.sub(r'\s+', ' ', a.strip()) == re.sub(r'\s+', ' ', b.strip())
++
++
++def check_list(asm, dis, path):
++    fails = []
++    lines, want = [], []
++    with open(path, encoding='utf-8') as f:
++        for raw in f:
++            t = raw.strip()
++            if (not t or t.startswith('#') or ' == ' in t or
++                    t.startswith(('hazard ', 'safe ', 'reject '))):
++                continue
++            text, _, words = t.partition(';')
++            lines.append(text.strip())
++            w = words.split()
++            want.append(' '.join(w[:2]) if len(w) >= 2 else None)
++
++    src = '\n'.join(lines) + '\n'
++    r = run([asm], src)
++    if r.returncode:
++        return [f'{path}: sgx-asm failed: {r.stderr.strip()}'], 0
++    hexes = r.stdout.splitlines()
++    if len(hexes) != len(lines):
++        return [f'{path}: {len(lines)} lines gave {len(hexes)} words'], 0
++    for text, w, h in zip(lines, want, hexes):
++        if w is not None and h != w:
++            fails.append(f'{path}: {text}: {h}, expected {w}')
++
++    r = run([dis, '-x'], r.stdout)
++    texts = r.stdout.splitlines()
++    if r.returncode or len(texts) != len(lines):
++        fails.append(f'{path}: sgx-disasm -x failed: {r.stderr.strip()}')
++    else:
++        for text, d in zip(lines, texts):
++            if not same_text(text, d):
++                fails.append(f'{path}: {text}: disassembles as {d}')
++
++    rb = run([asm, '-b'], src.encode(), text=False)
++    words = b''.join(struct.pack('<II', *(int(x, 16) for x in h.split()))
++                     for h in hexes)
++    if rb.returncode or rb.stdout != words:
++        fails.append(f'{path}: sgx-asm -b differs from the hex output')
++    rd = run([dis], rb.stdout, text=False)
++    if rd.returncode or rd.stdout.decode().splitlines() != texts:
++        fails.append(f'{path}: sgx-disasm on -b differs from -x')
++    return fails, len(lines)
++
++
++def check_errors(asm, dis):
++    fails = []
++    with tempfile.TemporaryDirectory() as d:
++        p = os.path.join(d, 'bad.s')
++        with open(p, 'w') as f:
++            f.write('nop\nfrob r0, r1\nnop [end]\n')
++        r = run([asm, p])
++        if (r.returncode != 1 or f'{p}:2: frob r0, r1:' not in r.stderr or
++                len(r.stdout.splitlines()) != 2):
++            fails.append(f'sgx-asm on a bad line: {r.returncode} '
++                         f'{r.stderr.strip()!r}')
++    for tool in (asm, dis):
++        for core, status in (('535', 2), ('x', 2), ('0', 2), ('545', 0),
++                             ('sgx545', 0)):
++            r = run([tool, '-c', core], '')
++            if r.returncode != status:
++                fails.append(f'{tool} -c {core}: status {r.returncode}')
++    r = run([dis, '-x'], '00000000\n')
++    if r.returncode != 1:
++        fails.append('sgx-disasm -x on one word: status 0')
++    return fails
++
++
++def main():
++    asm, dis, lists = sys.argv[1], sys.argv[2], sys.argv[3:]
++    fails, count = [], 0
++    for path in lists:
++        f, n = check_list(asm, dis, path)
++        fails += f
++        count += n
++    fails += check_errors(asm, dis)
++    for f in fails:
++        print(f, file=sys.stderr)
++    print(f'{count} instructions through the tools, {len(fails)} failures',
++          file=sys.stderr)
++    return 1 if fails else 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+-- 
+2.50.1 (Apple Git-155)
+

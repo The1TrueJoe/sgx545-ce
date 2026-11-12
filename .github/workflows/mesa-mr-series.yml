@@ -1,0 +1,92 @@
+name: mesa-mr-series
+
+# The Mesa MR series (mesa-mr/series/*.patch) on Mesa main at mesa-mr/BASE:
+# every commit applied and built in turn, then meson test --suite sgx and the
+# loader tests at the end.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/mesa-mr-series]
+    paths:
+      - mesa-mr/**
+      - .github/workflows/mesa-mr-series.yml
+
+permissions:
+  contents: read
+
+jobs:
+  series:
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 180
+    steps:
+      - name: Build dependencies
+        run: |
+          set -eux
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git patch xz-utils python3 python3-mako python3-yaml python3-packaging \
+            python3-ply meson ninja-build pkg-config bison flex gcc g++ glslang-tools \
+            libdrm-dev libexpat1-dev zlib1g-dev libzstd-dev libudev-dev libelf-dev libgtest-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Mesa main at the series' base
+        run: |
+          set -eux
+          base=$(cat mesa-mr/BASE)
+          curl -fsSL -o mesa.tar.gz "https://gitlab.freedesktop.org/mesa/mesa/-/archive/$base/mesa-$base.tar.gz"
+          mkdir mesa && tar xzf mesa.tar.gz -C mesa --strip-components=1
+          cd mesa
+          git init -q && git config user.email ci@localhost && git config user.name ci
+          git add -A && git commit -qm "Mesa main $base"
+
+      - name: Every commit applied and built
+        run: |
+          set -eu
+          cd mesa
+          args_for() {
+            a="-Dplatforms= -Dglx=disabled -Dvulkan-drivers= -Dopengl=false -Dglvnd=disabled"
+            a="$a -Dgles1=disabled -Dgles2=enabled -Degl=enabled -Dgbm=enabled -Dllvm=disabled"
+            a="$a -Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled -Dbuild-tests=true"
+            if grep -q "'rocket', 'sgx', 'softpipe'" meson.options; then
+              a="$a -Dgallium-drivers=softpipe,sgx"
+            else
+              a="$a -Dgallium-drivers=softpipe"
+            fi
+            if grep -q "'panfrost', 'sgx', 'zink'" meson.options; then
+              a="$a -Dtools=sgx"
+            fi
+            echo "$a"
+          }
+          prev=
+          for p in ../mesa-mr/series/*.patch; do
+            echo "::group::$(basename $p)"
+            git am -q "$p"
+            args=$(args_for)
+            if [ "$args" != "$prev" ]; then
+              rm -rf build
+              meson setup build --buildtype=debugoptimized $args > setup.log 2>&1 || { tail -40 setup.log; exit 1; }
+              prev=$args
+            fi
+            extra=
+            for t in src/sgx/common/libsgx_core.a src/sgx/compiler/libsgx_compiler.a \
+                     src/gallium/winsys/sgx/drm/libsgxwinsys.a src/gallium/drivers/sgx/libsgx.a; do
+              ninja -C build -t targets all 2>/dev/null | grep -q "^$t:" && extra="$extra $t"
+            done
+            ninja -C build all $extra
+            echo "BUILT $(git log -1 --format='%h %s')" | tee -a ../built.txt
+            echo "::endgroup::"
+          done
+          cat ../built.txt
+
+      - name: meson test --suite sgx and the loader tests
+        run: |
+          set -eux
+          cd mesa
+          LC_ALL=C.UTF-8 meson test -C build --suite sgx --print-errorlogs
+          ninja -C build src/loader/loader_child_render_node_test src/loader/loader_cedarview_sysfs_test
+          build/src/loader/loader_child_render_node_test
+          build/src/loader/loader_cedarview_sysfs_test
+          LC_ALL=C.UTF-8 meson test -C build --list | grep -c . || true

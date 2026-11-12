@@ -1,0 +1,76 @@
+From 5e58c0c60f5e07a3e3754e26bb0fe123af358db4 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:31:12 -0500
+Subject: [PATCH 01/22] isaspec: allow <param>s on derived fields of bitset
+ type
+
+[Placeholder. Mesa wants commit messages in the submitter's own words;
+what this one must say is in MR-FACTS.md, "Commit 1".]
+---
+ docs/isaspec.rst               |  5 ++++-
+ src/compiler/isaspec/encode.py | 13 +++++++++++++
+ src/compiler/isaspec/isa.py    |  8 ++++++++
+ 3 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/docs/isaspec.rst b/docs/isaspec.rst
+index 3f3e498..34877b8 100644
+--- a/docs/isaspec.rst
++++ b/docs/isaspec.rst
+@@ -155,7 +155,10 @@ which have bitset types, parameters can be "passed" in via ``<param>``
+ elements, which can be referred to by the display template string, and/or
+ expressions.  For example, this helps to deal with cases where other fields
+ outside of that bitset control the encoding/decoding, such as in the
+-``#multisrc`` example:
++``#multisrc`` example.  A ``<derived>`` field may have a bitset type too,
++for a sub-encoding whose bits are scattered across the instruction: its
++expression puts the bits together, and it takes ``<param>`` elements the
++same way:
+ 
+ .. code-block:: xml
+ 
+diff --git a/src/compiler/isaspec/encode.py b/src/compiler/isaspec/encode.py
+index da94d59..24690f7 100755
+--- a/src/compiler/isaspec/encode.py
++++ b/src/compiler/isaspec/encode.py
+@@ -212,6 +212,19 @@ class State(object):
+                                     if target_name not in unique_names:
+                                         yield target_name
+                                         unique_names.append(target_name)
++        # Derived fields of bitset type aren't encoded themselves (their
++        # expression's fields are), but their params still reach the
++        # bitset's own expressions:
++        for name, bitset in self.isa.all_bitsets():
++            for case in bitset.cases:
++                for field in case.fields.values():
++                    if isinstance(field, BitSetDerivedField) and \
++                       field.get_c_typename() == 'TYPE_BITSET':
++                        for param in field.params:
++                            target_name = param[1]
++                            if target_name not in unique_names:
++                                yield target_name
++                                unique_names.append(target_name)
+ 
+     def case_name(self, bitset, name):
+        return bitset.encode.case_prefix + name.upper().replace('.', '_').replace('-', '_').replace('#', '')
+diff --git a/src/compiler/isaspec/isa.py b/src/compiler/isaspec/isa.py
+index dddf7db..08bb000 100644
+--- a/src/compiler/isaspec/isa.py
++++ b/src/compiler/isaspec/isa.py
+@@ -178,6 +178,14 @@ class BitSetDerivedField(BitSetField):
+         if 'display' in xml.attrib:
+             self.display = xml.attrib['display'].strip()
+         self.call = 'call' in xml.attrib and xml.attrib['call'] == 'true'
++        # A derived field may have a bitset type (e.g. an operand whose bits
++        # are scattered across the instruction), and pass it parameters:
++        self.params = []
++        for param in xml.findall('param'):
++            aas = name = param.attrib['name']
++            if 'as' in param.attrib:
++                aas = param.attrib['as']
++            self.params.append([name, aas])
+ 
+ class BitSetCase(object):
+     """Class that encapsulates a single bitset case
+-- 
+2.50.1 (Apple Git-155)
+

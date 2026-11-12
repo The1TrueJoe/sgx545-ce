@@ -1,0 +1,47 @@
+From abcdf5b1f03375d95cf2c5cd71f18ce2f1769877 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:40:33 -0500
+Subject: [PATCH 09/22] PLACEHOLDER 09 nir,glsl: nir_io_dont_optimize_varyings
+
+---
+ src/compiler/glsl/gl_nir_linker.c              | 3 ++-
+ src/compiler/nir/nir_shader_compiler_options.h | 9 +++++++++
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/compiler/glsl/gl_nir_linker.c b/src/compiler/glsl/gl_nir_linker.c
+index 10c7795..f62c357 100644
+--- a/src/compiler/glsl/gl_nir_linker.c
++++ b/src/compiler/glsl/gl_nir_linker.c
+@@ -1551,7 +1551,8 @@ gl_nir_lower_optimize_varyings(const struct gl_constants *consts,
+    for (unsigned i = 0; i < num_shaders; i++)
+       nir_lower_io_passes(shaders[i], true);
+ 
+-   if (debug_get_bool_option("MESA_GLSL_DISABLE_IO_OPT", false))
++   if (debug_get_bool_option("MESA_GLSL_DISABLE_IO_OPT", false) ||
++       (shaders[0]->options->io_options & nir_io_dont_optimize_varyings))
+       return;
+ 
+    nir_opt_varyings_bulk(shaders, num_shaders, spirv, max_uniform_comps,
+diff --git a/src/compiler/nir/nir_shader_compiler_options.h b/src/compiler/nir/nir_shader_compiler_options.h
+index 5bc0438..1e777f9 100644
+--- a/src/compiler/nir/nir_shader_compiler_options.h
++++ b/src/compiler/nir/nir_shader_compiler_options.h
+@@ -240,6 +240,15 @@ typedef enum {
+     */
+    nir_io_non_interpolated_as_uint = BITFIELD_BIT(14),
+ 
++   /**
++    * Whether the GLSL linker must keep varyings where it assigned them: it
++    * doesn't run nir_opt_varyings, which may pack several varyings into one
++    * vec4 slot. For hardware that fetches textures with interpolated
++    * coordinates before the fragment shader runs, which needs each
++    * coordinate as a whole vec4 slot from component 0.
++    */
++   nir_io_dont_optimize_varyings = BITFIELD_BIT(14),
++
+    /* Options affecting the GLSL compiler or Gallium are below. */
+ 
+    /**
+-- 
+2.50.1 (Apple Git-155)
+

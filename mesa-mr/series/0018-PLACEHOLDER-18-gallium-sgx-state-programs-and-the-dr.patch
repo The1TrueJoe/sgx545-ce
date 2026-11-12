@@ -1,0 +1,4352 @@
+From 46dc50826bbf1028456a930e9754f1d25857d7b5 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:45:01 -0500
+Subject: [PATCH 18/22] PLACEHOLDER 18 gallium/sgx: state, programs and the
+ draw path
+
+---
+ src/gallium/drivers/sgx/meson.build   |    3 +
+ src/gallium/drivers/sgx/sgx_draw.c    | 1936 +++++++++++++++++++++++++
+ src/gallium/drivers/sgx/sgx_program.c | 1576 ++++++++++++++++++++
+ src/gallium/drivers/sgx/sgx_state.c   |  783 ++++++++++
+ 4 files changed, 4298 insertions(+)
+ create mode 100644 src/gallium/drivers/sgx/sgx_draw.c
+ create mode 100644 src/gallium/drivers/sgx/sgx_program.c
+ create mode 100644 src/gallium/drivers/sgx/sgx_state.c
+
+diff --git a/src/gallium/drivers/sgx/meson.build b/src/gallium/drivers/sgx/meson.build
+index 20b66cc..ef5f662 100644
+--- a/src/gallium/drivers/sgx/meson.build
++++ b/src/gallium/drivers/sgx/meson.build
+@@ -4,12 +4,15 @@
+ files_sgx = files(
+   'sgx_context.c',
+   'sgx_context.h',
++  'sgx_draw.c',
++  'sgx_program.c',
+   'sgx_program.h',
+   'sgx_public.h',
+   'sgx_resource.c',
+   'sgx_resource.h',
+   'sgx_screen.c',
+   'sgx_screen.h',
++  'sgx_state.c',
+   'sgx_texture.h',
+ )
+ 
+diff --git a/src/gallium/drivers/sgx/sgx_draw.c b/src/gallium/drivers/sgx/sgx_draw.c
+new file mode 100644
+index 0000000..6357615
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_draw.c
+@@ -0,0 +1,1936 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * Draws and clears: gallium state in, sgxws objects out.  The vertices a
++ * draw uses are gathered on the CPU (indices resolved, attributes converted
++ * to the dwords the vertex program fetches) and copied into the frame's
++ * ring; the hardware then draws them through its identity index list.
++ */
++
++#include "util/format/u_format.h"
++#include "util/half_float.h"
++#include "util/hash_table.h"
++#include "util/list.h"
++#include "util/os_time.h"
++#include "util/u_inlines.h"
++#include "util/u_math.h"
++#include "util/u_prim.h"
++
++#include "sgx_compiler.h"
++#include "sgx_context.h"
++#include "sgx_csb.h"
++#include "sgx_program.h"
++#include "sgx_resource.h"
++#include "sgx_screen.h"
++#include "sgx_texture.h"
++
++/* A target's TA/3D structures, one set per target address while there are
++ * few: a target has one render in flight, so the back buffer and fb0 (the
++ * swap's copy) need sets of their own to render one after the other without
++ * waiting.  Past SGX_MAX_RTS targets share by size, and a size none has
++ * takes the place of the set used longest ago (never the frame being
++ * recorded, which was taken last). */
++static struct sgxws_rt *
++get_rt(struct sgx_context *ctx, uint32_t w, uint32_t h, uint32_t va)
++{
++   unsigned i, n = ctx->num_rts;
++
++   for (i = 0; i < n; i++)
++      if (ctx->rt_w[i] == w && ctx->rt_h[i] == h && ctx->rt_va[i] == va)
++         goto found;
++   if (n == SGX_MAX_RTS) {
++      for (i = 0; i < n; i++)
++         if (ctx->rt_w[i] == w && ctx->rt_h[i] == h)
++            goto found;
++      i = 0;
++      for (unsigned j = 1; j < n; j++)
++         if (ctx->rt_used[j] < ctx->rt_used[i])
++            i = j;
++      sgxws_rt_destroy(ctx->hw, ctx->rts[i]); /* waits for its renders */
++   } else {
++      i = ctx->num_rts++;
++   }
++   ctx->rts[i] = sgxws_rt_create(ctx->hw, w, h);
++   ctx->rt_va[i] = va;
++   ctx->rt_w[i] = w;
++   ctx->rt_h[i] = h;
++   if (!ctx->rts[i]) {
++      /* none made: the place goes (the last set moves into it) */
++      ctx->rts[i] = ctx->rts[--ctx->num_rts];
++      ctx->rt_va[i] = ctx->rt_va[ctx->num_rts];
++      ctx->rt_w[i] = ctx->rt_w[ctx->num_rts];
++      ctx->rt_h[i] = ctx->rt_h[ctx->num_rts];
++      ctx->rt_used[i] = ctx->rt_used[ctx->num_rts];
++      return NULL;
++   }
++found:
++   ctx->rt_used[i] = ++ctx->rt_clock;
++   return ctx->rts[i];
++}
++
++/* The depth/stencil buffer of a render that starts now, kept across renders
++ * (ZLS): its buffer, which the render stores at its end, loaded unless the
++ * render starts with a clear of all of it (zs_cleared) or nothing was stored
++ * at this size. */
++static bool
++zls_target(struct sgx_context *ctx, struct sgx_resource *zs, uint32_t w,
++           uint32_t h, bool zs_cleared, struct sgxws_target *t)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++   uint32_t bytes = align(sgxws_zls_pixels(w, h) * 5, 4096);
++
++   if (!zs || (sgx_drv_debug & SGX_DEBUG_NO_ZLS))
++      return true;
++   if (sgxws_bo_valid(&zs->zls) && zs->zls_bytes < bytes) {
++      /* renders that store into it: the frame being recorded (another
++       * target's, which begin_frame hasn't flushed yet) too */
++      sgxws_flush(ctx->hw, 0);
++      ctx->recording = NULL;
++      sgxws_wait_idle(ctx->hw, 2000);
++      sgxws_bo_free(screen->dev, &zs->zls);
++      zs->zls_w = zs->zls_h = 0;
++   }
++   if (!sgxws_bo_valid(&zs->zls)) {
++      if (sgxws_bo_alloc(screen->dev, &zs->zls, SGXWS_MEM_ZLS, bytes, 0x1000))
++         return false;
++      zs->zls_bytes = bytes;
++   }
++   t->zls_va = zs->zls.va;
++   t->zls_load = !zs_cleared && zs->zls_w == w && zs->zls_h == h;
++   SGX_DBG(SYNC, "depth/stencil %s %ux%u: ZLS buffer at %#x, %s\n",
++           util_format_short_name(zs->base.format), w, h, t->zls_va,
++           t->zls_load ? "load and store" : "store");
++   zs->zls_w = w;
++   zs->zls_h = h;
++   return true;
++}
++
++/* start (or continue) the frame into colour buffer 0; called with the lock
++ * held.  zs_cleared: the caller clears all of the depth/stencil buffer, so a
++ * render that starts here needn't load it. */
++static bool
++begin_frame(struct sgx_context *ctx, bool zs_cleared)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++   struct pipe_surface *cbuf = &ctx->framebuffer.cbufs[0];
++   struct sgx_resource *res, *zs;
++   struct sgxws_target t;
++   struct sgxws_rt *rt;
++   uint32_t rw, rh;
++
++   if (!ctx->framebuffer.nr_cbufs || !cbuf->texture) {
++      SGX_DBG(DRAW, "no colour buffer bound\n");
++      return false;
++   }
++   res = sgx_resource(cbuf->texture);
++   if (!sgx_resource_target(screen, res, cbuf->level, cbuf->first_layer, &t)) {
++      SGX_DBG(DRAW, "colour buffer %s %ux%u is not a render target\n",
++              util_format_short_name(cbuf->texture->format),
++              cbuf->texture->width0, cbuf->texture->height0);
++      return false;
++   }
++   t.scanout = res->wrapped;
++   rw = u_minify(res->base.width0, cbuf->level);
++   rh = u_minify(res->base.height0, cbuf->level);
++   rt = get_rt(ctx, rw, rh, t.va);
++   if (!rt)
++      return false;
++   zs = ctx->framebuffer.zsbuf.texture
++           ? sgx_resource(ctx->framebuffer.zsbuf.texture)
++           : NULL;
++   bool clears_only = sgx_recording(ctx) && ctx->frame_clears &&
++                      sgxws_frame_objects(ctx->hw) == ctx->frame_clears;
++
++   if (sgx_recording(ctx) && ctx->recording != res) {
++      SGX_DBG(SYNC, "target switch: %s %ux%u -> %s %ux%u\n",
++              util_format_short_name(ctx->recording->base.format),
++              ctx->recording->base.width0, ctx->recording->base.height0,
++              util_format_short_name(res->base.format), res->base.width0,
++              res->base.height0);
++      ctx->recording = NULL; /* sgxws_begin flushes the other frame */
++      ctx->stats.fl_switch++;
++      ctx->stats.fl_switch_clear += clears_only;
++   } else if (sgx_recording(ctx) && ctx->recording_zs != zs) {
++      SGX_DBG(SYNC, "depth/stencil buffer switch under %s %ux%u\n",
++              util_format_short_name(res->base.format), res->base.width0,
++              res->base.height0);
++      sgxws_flush(ctx->hw, 0);
++      ctx->recording = NULL;
++      ctx->stats.fl_switch++;
++      ctx->stats.fl_switch_clear += clears_only;
++   }
++   if (!sgx_recording(ctx)) {
++      if (!zls_target(ctx, zs, rw, rh, zs_cleared, &t))
++         return false;
++      ctx->frame_clears = 0;
++   }
++   if (sgxws_begin(ctx->hw, rt, &t))
++      return false;
++   ctx->recording = res;
++   ctx->recording_zs = zs;
++   /* its ZLS buffer is stored into by this render: freeing it flushes and
++    * waits (sgx_resource_destroy).  After sgxws_begin, which may have
++    * flushed another target's frame: the next kick is this render's. */
++   if (zs && sgxws_bo_valid(&zs->zls))
++      zs->use_seq = sgxws_next_seq(ctx->hw);
++   /* a write to the texture waits for this render, as for one that samples it */
++   if (res->texture)
++      res->use_seq = sgxws_next_seq(ctx->hw);
++   return true;
++}
++
++static unsigned target_mask(const struct sgx_context *ctx);
++
++static void
++sgx_clear(struct pipe_context *pctx, unsigned buffers,
++          uint32_t color_clear_mask, uint8_t stencil_clear_mask,
++          const struct pipe_scissor_state *scissor_state,
++          const union pipe_color_union *color, double depth, unsigned stencil)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_screen *screen = sgx_screen(pctx->screen);
++   bool have_depth = ctx->framebuffer.zsbuf.texture != NULL;
++
++   SGX_DBG(DRAW,
++           "clear %#x mask %#x (%.3f %.3f %.3f %.3f) depth %.3f, %u draws in "
++           "the frame\n",
++           buffers, color_clear_mask, color->f[0], color->f[1], color->f[2],
++           color->f[3], depth, ctx->hw ? sgxws_frame_objects(ctx->hw) : 0);
++   /* the colour bytes written, as the draws' colour mask (B b0 G b1 R b2 A
++    * b3); a buffer without alpha keeps its X byte written. A colour clear
++    * with a mask comes here, not as a quad: glColorMask(0, 0, 0, 1) and a
++    * clear must not touch RGB. */
++   unsigned cm = buffers & PIPE_CLEAR_COLOR0 ? color_clear_mask & 0xf : 0,
++            wmask;
++   bool clear_stencil = have_depth && (buffers & PIPE_CLEAR_STENCIL) &&
++                        util_format_has_stencil(util_format_description(
++                           ctx->framebuffer.zsbuf.format));
++
++   if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
++       !util_format_has_alpha(ctx->framebuffer.cbufs[0].format) && cm)
++      cm |= PIPE_MASK_A;
++   /* R8 and RG8 (stored as RGBA8): a clear of all their channels writes
++    * every byte with the colour they read as, (r, g or 0, 0, 1) */
++   unsigned tm = target_mask(ctx);
++   bool rg_whole = tm != PIPE_MASK_RGBA && (cm & tm) == tm;
++
++   cm = rg_whole ? PIPE_MASK_RGBA : cm & tm;
++   wmask = (cm & PIPE_MASK_B ? 1 : 0) | (cm & PIPE_MASK_G ? 2 : 0) |
++           (cm & PIPE_MASK_R ? 4 : 0) | (cm & PIPE_MASK_A ? 8 : 0);
++   /* a depth-only clear writes no colour (mask 0) */
++   if (!wmask && !(have_depth && (buffers & PIPE_CLEAR_DEPTH)) &&
++       !clear_stencil)
++      return; /* nothing to clear: every colour channel masked, no depth or
++                 stencil */
++   /* all of depth and stencil cleared: a render starting here loads neither */
++   bool zs_cleared =
++      have_depth && (buffers & PIPE_CLEAR_DEPTH) && !scissor_state &&
++      (!util_format_has_stencil(
++          util_format_description(ctx->framebuffer.zsbuf.format)) ||
++       (clear_stencil && stencil_clear_mask == 0xff));
++
++   simple_mtx_lock(&screen->lock);
++   if (begin_frame(ctx, zs_cleared)) {
++      static const float black[4];
++
++      /* A render that loads no depth starts at 1.0 (render details +0x40):
++       * sgxws_clear skips a 1.0 depth clear there.  A depth-only clear of a
++       * stencil format loads the stencil, and the depth with it, so it's
++       * drawn (ioquake3 starts every frame so). */
++      /* a buffer without alpha reads it as 1 wherever it's sampled: clear the X
++       * byte to that */
++      float rgba[4] = {color->f[0], color->f[1], color->f[2], color->f[3]};
++
++      if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
++          !util_format_has_alpha(ctx->framebuffer.cbufs[0].format))
++         rgba[3] = 1.0f;
++      if (rg_whole) {
++         if (!(tm & PIPE_MASK_G))
++            rgba[1] = 0.0f;
++         rgba[2] = 0.0f;
++      }
++      unsigned n0 = sgxws_frame_objects(ctx->hw);
++
++      sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? rgba : black,
++                  (float)depth, have_depth && (buffers & PIPE_CLEAR_DEPTH),
++                  wmask, clear_stencil ? (int)stencil : -1);
++      ctx->frame_clears += sgxws_frame_objects(ctx->hw) - n0;
++   }
++   simple_mtx_unlock(&screen->lock);
++}
++
++/* The channels a target takes: R8 and RG8 are stored as RGBA8 with B = 0
++ * and A = 255 (sgx_tex_bpp), which draws and clears leave as they are. */
++static unsigned
++target_mask(const struct sgx_context *ctx)
++{
++   if (!ctx->framebuffer.nr_cbufs || !ctx->framebuffer.cbufs[0].texture)
++      return PIPE_MASK_RGBA;
++   switch (ctx->framebuffer.cbufs[0].format) {
++   case PIPE_FORMAT_R8_UNORM:
++      return PIPE_MASK_R;
++   case PIPE_FORMAT_R8G8_UNORM:
++      return PIPE_MASK_R | PIPE_MASK_G;
++   default:
++      return PIPE_MASK_RGBA;
++   }
++}
++
++/* the ISPA depth compare is the GL enum's low bits (STATE.md section 3) */
++static uint32_t
++depth_func(const struct sgx_context *ctx)
++{
++   const struct pipe_depth_stencil_alpha_state *dsa =
++      ctx->dsa ? &ctx->dsa->base : NULL;
++
++   if (!dsa || !dsa->depth_enabled || !ctx->framebuffer.zsbuf.texture)
++      return 0;
++   return SGXWS_NEVER + dsa->depth_func; /* PIPE_FUNC_* is GL's order */
++}
++
++/* the ISPC word of one face (STATE.md "ISPC"; the ops' codes differ from
++ * gallium's) */
++static uint32_t
++stencil_word(const struct pipe_stencil_state *s)
++{
++   static const uint8_t op[] = {
++      [PIPE_STENCIL_OP_KEEP] = SGX_TA_STENCILOP_KEEP,
++      [PIPE_STENCIL_OP_ZERO] = SGX_TA_STENCILOP_ZERO,
++      [PIPE_STENCIL_OP_REPLACE] = SGX_TA_STENCILOP_REPLACE,
++      [PIPE_STENCIL_OP_INCR] = SGX_TA_STENCILOP_INCR,
++      [PIPE_STENCIL_OP_DECR] = SGX_TA_STENCILOP_DECR,
++      [PIPE_STENCIL_OP_INVERT] = SGX_TA_STENCILOP_INVERT,
++      [PIPE_STENCIL_OP_INCR_WRAP] = SGX_TA_STENCILOP_INCR_WRAP,
++      [PIPE_STENCIL_OP_DECR_WRAP] = SGX_TA_STENCILOP_DECR_WRAP,
++   };
++   uint32_t w;
++
++   sgx_pack(&w, TA_STATE_ISPC, ispc)
++   {
++      ispc.write_mask = s->writemask;
++      ispc.compare_mask = s->valuemask;
++      ispc.zpass = op[s->zpass_op];
++      ispc.zfail = op[s->zfail_op];
++      ispc.sfail = op[s->fail_op];
++      ispc.func = s->func; /* PIPE_FUNC_* is GL's order */
++   }
++   return w;
++}
++
++static void
++build_stencil(const struct sgx_context *ctx, struct sgxws_state *st)
++{
++   const struct pipe_depth_stencil_alpha_state *dsa =
++      ctx->dsa ? &ctx->dsa->base : NULL;
++
++   if (!dsa || !dsa->stencil[0].enabled || !ctx->framebuffer.zsbuf.texture ||
++       !util_format_has_stencil(
++          util_format_description(ctx->framebuffer.zsbuf.format)))
++      return;
++   st->stencil = true;
++   /* the hardware's first group is the back of gallium's front_ccw sense: with
++    * it set, gallium's face 1 (A/B against the DDK, windows and pbuffers) */
++   unsigned first = dsa->stencil[1].enabled && ctx->rasterizer &&
++                          ctx->rasterizer->base.front_ccw
++                       ? 1
++                       : 0;
++
++   st->ispc[0] = stencil_word(&dsa->stencil[first]);
++   st->stencil_ref[0] = ctx->stencil_ref.ref_value[first];
++   if (dsa->stencil[1].enabled) {
++      st->two_sided = true;
++      st->ispc[1] = stencil_word(&dsa->stencil[!first]);
++      st->stencil_ref[1] = ctx->stencil_ref.ref_value[!first];
++   }
++}
++
++static void
++build_state(struct sgx_context *ctx, struct sgxws_state *st)
++{
++   const struct pipe_rasterizer_state *rs =
++      ctx->rasterizer ? &ctx->rasterizer->base : NULL;
++   unsigned mask =
++      (ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA) &
++      target_mask(ctx);
++
++   memset(st, 0, sizeof(*st));
++   st->depth_func = depth_func(ctx);
++   st->depth_write = st->depth_func && ctx->dsa->base.depth_writemask;
++   if (rs && rs->cull_face == PIPE_FACE_BACK)
++      st->cull = SGXWS_BACK;
++   else if (rs && rs->cull_face == PIPE_FACE_FRONT)
++      st->cull = SGXWS_FRONT;
++   st->front_ccw = rs ? rs->front_ccw : true;
++   /* ISPB colour mask: R8 G4 B2 A1 */
++   st->color_mask = (mask & PIPE_MASK_R ? 8 : 0) |
++                    (mask & PIPE_MASK_G ? 4 : 0) |
++                    (mask & PIPE_MASK_B ? 2 : 0) | (mask & PIPE_MASK_A ? 1 : 0);
++   memcpy(st->vp_scale, ctx->viewport.scale, sizeof(st->vp_scale));
++   memcpy(st->vp_translate, ctx->viewport.translate, sizeof(st->vp_translate));
++   st->line_width = rs ? rs->line_width : 1.0f;
++   build_stencil(ctx, st);
++}
++
++/* The pixels a draw reaches, in the target's memory order: the viewport's
++ * rectangle (the hardware clips to the guard band, not to the viewport) and
++ * the scissor.  False when that is nothing. */
++static bool
++build_clip(const struct sgx_context *ctx, struct sgxws_rect *clip)
++{
++   const struct pipe_rasterizer_state *rs =
++      ctx->rasterizer ? &ctx->rasterizer->base : NULL;
++   const struct pipe_viewport_state *vp = &ctx->viewport;
++   unsigned w = ctx->framebuffer.width, h = ctx->framebuffer.height;
++   float x0 = vp->translate[0] - fabsf(vp->scale[0]),
++         x1 = vp->translate[0] + fabsf(vp->scale[0]);
++   float y0 = vp->translate[1] - fabsf(vp->scale[1]),
++         y1 = vp->translate[1] + fabsf(vp->scale[1]);
++
++   clip->x0 = x0 > 0 ? MIN2((unsigned)lrintf(x0), w) : 0;
++   clip->y0 = y0 > 0 ? MIN2((unsigned)lrintf(y0), h) : 0;
++   clip->x1 = x1 > 0 ? MIN2((unsigned)lrintf(x1), w) : 0;
++   clip->y1 = y1 > 0 ? MIN2((unsigned)lrintf(y1), h) : 0;
++   if (rs && rs->scissor) {
++      clip->x0 = MAX2(clip->x0, ctx->scissor.minx);
++      clip->y0 = MAX2(clip->y0, ctx->scissor.miny);
++      clip->x1 = MIN2(clip->x1, ctx->scissor.maxx);
++      clip->y1 = MIN2(clip->y1, ctx->scissor.maxy);
++   }
++   return clip->x0 < clip->x1 && clip->y0 < clip->y1;
++}
++
++static const float *
++constant_data(struct sgx_context *ctx, mesa_shader_stage stage)
++{
++   struct pipe_constant_buffer *cb = &ctx->constants[stage];
++
++   if (cb->user_buffer)
++      return (const float *)((const uint8_t *)cb->user_buffer +
++                             cb->buffer_offset);
++   if (cb->buffer)
++      return (const float *)((const uint8_t *)sgx_resource(cb->buffer)->data +
++                             cb->buffer_offset);
++   return NULL;
++}
++
++/* primitives the hardware doesn't have, drawn as lists of triangles or lines
++ * (desktop GL's quads, quad strips and polygons too) */
++static bool
++expanded_prim(enum mesa_prim mode)
++{
++   return mode == MESA_PRIM_TRIANGLE_FAN || mode == MESA_PRIM_LINE_STRIP ||
++          mode == MESA_PRIM_LINE_LOOP || mode == MESA_PRIM_QUADS ||
++          mode == MESA_PRIM_QUAD_STRIP || mode == MESA_PRIM_POLYGON;
++}
++
++/* how many vertices the list has (the count already trimmed to whole
++ * primitives) */
++static unsigned
++expanded_count(enum mesa_prim mode, unsigned count)
++{
++   switch (mode) {
++   case MESA_PRIM_TRIANGLE_FAN:
++   case MESA_PRIM_POLYGON:
++      return (count - 2) * 3;
++   case MESA_PRIM_TRIANGLE_STRIP:
++      return (count - 2) * 3;
++   case MESA_PRIM_LINE_STRIP:
++      return 2 * (count - 1);
++   case MESA_PRIM_LINE_LOOP:
++      return 2 * count;
++   case MESA_PRIM_QUADS:
++      return count / 4 * 6;
++   case MESA_PRIM_QUAD_STRIP:
++      return (count / 2 - 1) * 6;
++   default:
++      return count;
++   }
++}
++
++/* the list's i-th vertex, as an offset into the draw */
++static unsigned
++expanded_vertex(enum mesa_prim mode, unsigned i, unsigned out_count)
++{
++   switch (mode) {
++   case MESA_PRIM_TRIANGLE_FAN:
++   case MESA_PRIM_POLYGON:
++      return i % 3 == 0 ? 0 : i / 3 + i % 3;
++   /* a quad's two triangles keep its winding and both end on its last
++    * vertex, GL's provoking vertex for quads: 0 1 3, 1 2 3 */
++   case MESA_PRIM_QUADS: {
++      static const uint8_t quad[6] = {0, 1, 3, 1, 2, 3};
++      return i / 6 * 4 + quad[i % 6];
++   }
++   /* a strip's quad is 2q, 2q+1, 2q+3, 2q+2 around, its last vertex 2q+3:
++    * 0 1 3, 2 0 3 */
++   case MESA_PRIM_QUAD_STRIP: {
++      static const uint8_t quad[6] = {0, 1, 3, 2, 0, 3};
++      return i / 6 * 2 + quad[i % 6];
++   }
++   /* a strip's triangle t is t, t+1, t+2, its odd ones t+1, t, t+2 (GL's
++    * order, so every triangle keeps the strip's winding) */
++   case MESA_PRIM_TRIANGLE_STRIP: {
++      static const uint8_t odd[3] = {1, 0, 2};
++      return i / 3 + (i / 3 & 1 ? odd[i % 3] : i % 3);
++   }
++   case MESA_PRIM_LINE_STRIP:
++      return (i + 1) / 2;
++   case MESA_PRIM_LINE_LOOP:
++      return i == out_count - 1 ? 0 : (i + 1) / 2;
++   default:
++      return i;
++   }
++}
++
++/* where one vertex element comes from */
++struct fetch {
++   const uint8_t *base;
++   uint32_t stride;
++   enum pipe_format format;
++   unsigned dwords; /* dwords it fills in the vertex */
++   bool defaults;   /* missing components 0, 0, 0, 1 (compiled shaders) */
++   /* the bytes as they are, for a vertex shader that unpacks them
++    * (zero-copy: sgx_screen.zero_copy, sgx_pipe_shader.vtx_fmt): raw_bytes of
++    * them */
++   bool raw;
++   unsigned raw_bytes;
++   struct sgx_resource *res; /* the buffer, NULL for client memory */
++   uint32_t offset;          /* where in it */
++   unsigned vb;              /* its vertex buffer binding */
++};
++
++static bool
++setup_fetch(struct sgx_context *ctx, unsigned e, struct fetch *f)
++{
++   const struct pipe_vertex_element *ve;
++   const struct pipe_vertex_buffer *vb;
++
++   if (!ctx->velems || e >= ctx->velems->num_elements)
++      return false;
++   ve = &ctx->velems->elements[e];
++   if (ve->vertex_buffer_index >= ctx->num_vertex_buffers)
++      return false;
++   vb = &ctx->vertex_buffers[ve->vertex_buffer_index];
++   f->vb = ve->vertex_buffer_index;
++   f->res = NULL;
++   f->raw = false;
++   if (vb->is_user_buffer) {
++      f->base = vb->buffer.user;
++   } else if (vb->buffer.resource) {
++      f->res = sgx_resource(vb->buffer.resource);
++      f->base = f->res->data;
++   } else {
++      return false;
++   }
++   f->offset = vb->buffer_offset + ve->src_offset;
++   f->base += f->offset;
++   /* an instanced element is one value for the whole draw (one instance) */
++   f->stride = ve->instance_divisor ? 0 : ve->src_stride;
++   f->format = ve->src_format;
++   return true;
++}
++
++static void
++fetch_vertex(const struct fetch *f, unsigned index, uint32_t *out)
++{
++   const uint8_t *src = f->base + (size_t)index * f->stride;
++   float v[4] = {0, 0, 0, 1};
++
++   if (f->raw) {
++      memcpy(out, src, f->raw_bytes);
++      return;
++   }
++   if (!f->defaults && (f->format == PIPE_FORMAT_R32G32_FLOAT ||
++                        f->format == PIPE_FORMAT_R32G32B32_FLOAT ||
++                        f->format == PIPE_FORMAT_R32G32B32A32_FLOAT)) {
++      memcpy(out, src, f->dwords * 4);
++      return;
++   }
++   if (f->format == PIPE_FORMAT_R32G32B32A32_FLOAT)
++      memcpy(v, src, 16);
++   else if (f->format == PIPE_FORMAT_R32G32B32_FLOAT)
++      memcpy(v, src, 12);
++   else if (f->format == PIPE_FORMAT_R32G32_FLOAT)
++      memcpy(v, src, 8);
++   else if (f->format == PIPE_FORMAT_R32_FLOAT)
++      memcpy(v, src, 4);
++   else {
++      float t[4];
++      unsigned n = util_format_get_nr_components(f->format);
++
++      util_format_unpack_rgba(f->format, t, src, 1);
++      memcpy(v, t, n * sizeof(float));
++   }
++   memcpy(out, v, f->dwords * 4);
++}
++
++static uint32_t
++get_index(const struct pipe_draw_info *info, const void *indices, unsigned i)
++{
++   switch (info->index_size) {
++   case 1:
++      return ((const uint8_t *)indices)[i];
++   case 2:
++      return ((const uint16_t *)indices)[i];
++   default:
++      return ((const uint32_t *)indices)[i];
++   }
++}
++
++/* element f of vertices first .. first + n - 1 into dst, vertex_dwords
++ * apart: the common formats (f32 x 1-4, u8 x 4 unorm, s16 x 2 scaled) go
++ * without a call per vertex */
++static void
++fetch_range(const struct fetch *f, unsigned first, unsigned n, uint32_t *dst,
++            unsigned vertex_dwords)
++{
++   static float unorm8[256];
++   const uint8_t *src = f->base + (size_t)first * f->stride;
++   float *o = (float *)dst;
++
++   if (!f->defaults) {
++      for (unsigned i = 0; i < n; i++)
++         fetch_vertex(f, first + i, dst + i * vertex_dwords);
++      return;
++   }
++   if (f->raw) {
++      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords)
++         memcpy(o, src, f->raw_bytes);
++      return;
++   }
++   switch (f->format) {
++   case PIPE_FORMAT_R32G32B32A32_FLOAT:
++      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords)
++         memcpy(o, src, 16);
++      return;
++   case PIPE_FORMAT_R32G32B32_FLOAT:
++      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
++         memcpy(o, src, 12);
++         o[3] = 1.0f;
++      }
++      return;
++   case PIPE_FORMAT_R32G32_FLOAT:
++      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
++         memcpy(o, src, 8);
++         o[2] = 0.0f;
++         o[3] = 1.0f;
++      }
++      return;
++   case PIPE_FORMAT_R32_FLOAT:
++      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
++         memcpy(o, src, 4);
++         o[1] = o[2] = 0.0f;
++         o[3] = 1.0f;
++      }
++      return;
++   case PIPE_FORMAT_R8G8B8A8_UNORM:
++      if (unorm8[255] != 1.0f)
++         for (unsigned i = 0; i < 256; i++)
++            unorm8[i] = i / 255.0f;
++      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
++         o[0] = unorm8[src[0]];
++         o[1] = unorm8[src[1]];
++         o[2] = unorm8[src[2]];
++         o[3] = unorm8[src[3]];
++      }
++      return;
++   case PIPE_FORMAT_R16G16_SSCALED:
++      for (unsigned i = 0; i < n; i++, src += f->stride, o += vertex_dwords) {
++         int16_t v[2];
++
++         memcpy(v, src, 4);
++         o[0] = v[0];
++         o[1] = v[1];
++         o[2] = 0.0f;
++         o[3] = 1.0f;
++      }
++      return;
++   default:
++      for (unsigned i = 0; i < n; i++)
++         fetch_vertex(f, first + i, dst + i * vertex_dwords);
++      return;
++   }
++}
++
++/* every element of vertices first .. first + n - 1, packed */
++static void
++fetch_vertices(const struct fetch *f, unsigned n_fetch, unsigned first,
++               unsigned n, uint32_t *v, unsigned vertex_dwords)
++{
++   unsigned off = 0;
++
++   for (unsigned e = 0; e < n_fetch; e++) {
++      fetch_range(&f[e], first, n, v + off, vertex_dwords);
++      off += f[e].dwords;
++   }
++}
++
++static uint16_t *
++index_staging(struct sgx_context *ctx, unsigned n)
++{
++   if (n > ctx->idx_staging_size) {
++      free(ctx->idx_staging);
++      ctx->idx_staging_size = MAX2(n, 16384);
++      ctx->idx_staging = malloc(ctx->idx_staging_size * 2);
++      if (!ctx->idx_staging)
++         ctx->idx_staging_size = 0;
++   }
++   return ctx->idx_staging;
++}
++
++static uint32_t *
++staging(struct sgx_context *ctx, size_t dwords)
++{
++   if (dwords * 4 > ctx->staging_size) {
++      free(ctx->staging);
++      ctx->staging_size = MAX2(dwords * 4, 64 * 1024);
++      ctx->staging = malloc(ctx->staging_size);
++      if (!ctx->staging)
++         ctx->staging_size = 0;
++   }
++   return ctx->staging;
++}
++
++/* a compiled shader's constants: sa[base + slot] = constant buffer 0 float k */
++static void
++fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
++            const struct sgx_pipe_shader *so, uint32_t *block, unsigned base,
++            uint32_t *mem)
++{
++   const float *cb = constant_data(ctx, stage);
++   unsigned avail = ctx->constants[stage].buffer_size / 4;
++
++   /* F16 halves and C10 channels share a slot (or a word of the memory
++    * block, filled the same way; mem is mem_dwords long) */
++   for (unsigned i = 0; i < so->n_consts; i++) {
++      const struct sgx_const *k = &so->consts[i];
++
++      if (k->fmt == 1)
++         continue;
++      if (k->slot != 0xffff)
++         block[base + k->slot] = 0;
++      if (k->mem && mem)
++         mem[k->mem] = 0;
++   }
++   for (unsigned i = 0; i < so->n_consts; i++) {
++      const struct sgx_const *k = &so->consts[i];
++      float v = cb && k->k < avail ? cb[k->k] : 0.0f;
++
++      /* a texture's size (sgx_program.c lower_txs) */
++      if (stage == MESA_SHADER_FRAGMENT && k->k >= SGX_K_TEXSIZE &&
++          k->k < SGX_K_TEXSIZE + 2 * SGX_K_TEXSIZE_UNITS) {
++         const struct pipe_sampler_view *view =
++            ctx->views[(k->k - SGX_K_TEXSIZE) / 2];
++
++         v = !view ? 1.0f
++             : (k->k - SGX_K_TEXSIZE) & 1
++                ? (float)u_minify(view->texture->height0,
++                                  view->u.tex.first_level)
++                : (float)u_minify(view->texture->width0,
++                                  view->u.tex.first_level);
++      }
++      uint32_t bits,
++         *at[2] = {k->slot != 0xffff ? &block[base + k->slot] : NULL,
++                   k->mem && mem ? &mem[k->mem] : NULL};
++
++      if (k->fmt == 2) {
++         bits = (uint32_t)sgxws_f16(v) << k->shift;
++      } else if (k->fmt == 3 || k->fmt == 0x10) {
++         /* C10: round(v * 255), signed 10 bits, the product in double as the
++          * DDK has it (0.3f * 255 is 76.500003: 77, where a float product is
++          * 76.5 and rounds to even, 76); 0x10 is that value as F16, c / 255
++          * rounded to nearest as pck.f16.c10 gives it (c / 255 isn't dyadic,
++          * so the float in between can't round the F16 differently) */
++         int c =
++            CLAMP((int)lrint(CLAMP((double)v, -2.0, 2.0) * 255.0), -512, 511);
++
++         if (k->fmt == 3)
++            bits = ((uint32_t)c & 0x3ff) << k->shift;
++         else
++            bits = (uint32_t)sgxws_f16((float)(c / 255.0)) << k->shift;
++      } else if (k->fmt == 0x11) {
++         bits = k->value << k->shift;
++      } else if (k->fmt == 0x12) {
++         /* the vec4 at k as the BGRA8 colour output, packed once a draw
++          * instead of every pixel (the blend constant's packing, sa2) */
++         float c[4];
++
++         for (unsigned j = 0; j < 4; j++)
++            c[j] = cb && k->k + j < avail ? cb[k->k + j] : 0.0f;
++         bits = (uint32_t)float_to_ubyte(c[3]) << 24 |
++                (uint32_t)float_to_ubyte(c[0]) << 16 |
++                (uint32_t)float_to_ubyte(c[1]) << 8 | float_to_ubyte(c[2]);
++         for (unsigned j = 0; j < 2; j++)
++            if (at[j])
++               *at[j] = bits;
++         continue;
++      } else {
++         memcpy(&bits, &v, 4);
++         for (unsigned j = 0; j < 2; j++)
++            if (at[j])
++               *at[j] = bits;
++         continue;
++      }
++      for (unsigned j = 0; j < 2; j++)
++         if (at[j])
++            *at[j] |= bits;
++      SGX_DBG(DRAW, "  %s constant %u -> sa%d mem%u (fmt %u at %u) = %f\n",
++              stage == MESA_SHADER_VERTEX ? "vs" : "fs", k->k,
++              k->slot != 0xffff ? (int)(base + k->slot) : -1, k->mem, k->fmt,
++              k->shift, v);
++   }
++}
++
++/* a program's constants in memory for this draw (sgxws_const_mem), filled into
++ * a buffer of the context's; NULL when it has none */
++static void
++mem_consts(struct sgx_context *ctx, mesa_shader_stage stage,
++           const struct sgx_pipe_shader *so, uint32_t *block, unsigned base,
++           struct sgxws_const_mem *m)
++{
++   memset(m, 0, sizeof(*m));
++   if (!so->mem_dwords)
++      return;
++   uint32_t **buf = &ctx->mem_consts[stage == MESA_SHADER_VERTEX ? 0 : 1];
++
++   if (!*buf && !(*buf = malloc(SGX_MAX_CONST_MAP * 4 + 4)))
++      return;
++   memset(*buf, 0, so->mem_dwords * 4);
++   fill_consts(ctx, stage, so, block, base, *buf);
++   m->words = *buf;
++   m->dwords = so->mem_dwords;
++   m->n_bases = so->n_mem_bases;
++   for (unsigned j = 0; j < so->n_mem_bases; j++)
++      m->base[j] = base + so->mem_base_slot[j];
++}
++
++/* Every set the fragment program iterates or samples with must be one the
++ * vertex program outputs, with as many components: iterating a set the vertex
++ * program doesn't write locks the GPU up. */
++static bool
++varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
++{
++   for (unsigned i = 0; i < fs->n_douti; i++) {
++      const struct sgx_pds_douti *d = &fs->douti[i];
++      unsigned need[2][2] = {{0, 0}}, n = 0;
++      /* (with the vertex colour in set 0 a set's source is the set itself) */
++      unsigned base = vs->colour ? 0 : 1;
++
++      /* plain iteration: source set + 1; source 0 (gl_FragCoord) and sources
++       * from 0x20 on are not varyings (0x22: the depth plane of a discard) */
++      if (d->iterate && d->src > 0 && d->src < 0x20)
++         need[n][0] = d->src - base, need[n++][1] = d->comps;
++      /* the vertex colour (set 0, output select b11) */
++      if (d->iterate && d->src == 0x20) {
++         if (!vs->colour)
++            return false;
++         need[n][0] = 0, need[n++][1] = 4;
++      }
++      if (d->dim2 ||
++          d->proj) /* sample half: coordinate set + 1, 2-D or projected */
++         need[n][0] = d->sample_set - base, need[n++][1] = d->proj ? 3 : 2;
++      for (unsigned k = 0; k < n; k++) {
++         unsigned size = (vs->tsp_sizes >> (3 * need[k][0])) & 7;
++
++         if (need[k][0] >= 10 || !size || (size == 5 ? 4 : size) < need[k][1])
++            return false;
++      }
++   }
++   return true;
++}
++
++/* ------------------------------------------------------------- vertex cache */
++
++/*
++ * Display lists and static vertex buffers are drawn from buffers that don't
++ * change between frames, and every frame the draw gathered, converted and
++ * copied the same vertices again.  A
++ * draw whose vertices all come from buffers (or are constant) keeps its
++ * gathered vertices and rebased 16-bit indices in device memory, found again
++ * by what they were made from: the buffers (by id and write count), where in
++ * them, the formats, the index range.  An entry the GPU may still read is
++ * not freed.
++ */
++#define VCACHE_BUDGET (40u << 20)
++
++struct vcache_key {
++   uint32_t n_fetch, mode, index_size, ib_uid, ib_gen, start, count;
++   int32_t index_bias;
++   struct {
++      uint32_t uid, gen, offset, stride, format;
++      uint32_t konst[4]; /* a constant element's value (stride 0) */
++   } el[PIPE_MAX_ATTRIBS];
++};
++
++/* Entries are cut from 2 MB chunks of device memory, not allocated one by
++ * one: with hundreds of entries alive, every allocation crawled through the
++ * services' segment list (over a third of the render thread in
++ * _SegmentListInsert).  A chunk whose entries are all gone is used again. */
++#define VCACHE_CHUNK (2u << 20)
++
++struct vcache_chunk {
++   struct list_head link;
++   struct sgxws_bo bo;
++   uint32_t used, live;
++};
++
++struct vcache_entry {
++   struct vcache_key key; /* first: the hash table's key */
++   struct list_head link;
++   struct vcache_chunk *chunk;
++   uint32_t offset;
++   uint32_t verts_va, idx_va, nverts, nidx, last_seq, bytes;
++};
++
++static struct vcache_chunk *
++vcache_alloc(struct sgx_context *ctx, uint32_t bytes, uint32_t *offset)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++   struct vcache_chunk *k = ctx->vcache_cur;
++
++   if (bytes > VCACHE_CHUNK)
++      return NULL;
++   if (!k || k->used + bytes > VCACHE_CHUNK) {
++      /* an emptied chunk, else a new one */
++      k = NULL;
++      list_for_each_entry (struct vcache_chunk, c, &ctx->vcache_chunks, link) {
++         if (!c->live) {
++            k = c;
++            break;
++         }
++      }
++      if (!k) {
++         if (list_length(&ctx->vcache_chunks) >= 48 ||
++             !(k = calloc(1, sizeof(*k))))
++            return NULL;
++         if (sgxws_bo_alloc(screen->dev, &k->bo, SGXWS_MEM_VERTEX, VCACHE_CHUNK,
++                            0x1000)) {
++            free(k);
++            return NULL;
++         }
++         list_add(&k->link, &ctx->vcache_chunks);
++      }
++      k->used = 0;
++      ctx->vcache_cur = k;
++   }
++   *offset = k->used;
++   k->used += bytes;
++   k->live++;
++   return k;
++}
++
++static uint32_t
++vcache_hash(const void *k)
++{
++   return _mesa_hash_data(k, sizeof(struct vcache_key));
++}
++
++static bool
++vcache_equal(const void *a, const void *b)
++{
++   return !memcmp(a, b, sizeof(struct vcache_key));
++}
++
++static void
++vcache_free(struct sgx_context *ctx, struct vcache_entry *v)
++{
++   _mesa_hash_table_remove_key(ctx->vcache, &v->key);
++   list_del(&v->link);
++   ctx->vcache_bytes -= v->bytes;
++   v->chunk->live--;
++   free(v);
++}
++
++/* room for bytes more: the least recently used entries the GPU is done with go */
++static bool
++vcache_room(struct sgx_context *ctx, uint32_t bytes)
++{
++   uint32_t done = sgxws_done_seq(ctx->hw);
++
++   while (ctx->vcache_bytes + bytes > VCACHE_BUDGET &&
++          !list_is_empty(&ctx->vcache_lru)) {
++      struct vcache_entry *v =
++         list_last_entry(&ctx->vcache_lru, struct vcache_entry, link);
++
++      if (sgxws_seq_after(v->last_seq, done))
++         return false;
++      vcache_free(ctx, v);
++   }
++   return ctx->vcache_bytes + bytes <= VCACHE_BUDGET;
++}
++
++/* Draw draws[n] from the cache, filling it on a miss; false: not cacheable
++ * (the caller draws it the usual way).  Called with the lock held, the frame
++ * begun and d set up but for its vertices. */
++static bool
++vcache_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
++            const struct pipe_draw_start_count_bias *draw,
++            const struct fetch *f, unsigned n_fetch, unsigned vertex_dwords,
++            struct sgxws_draw *d)
++{
++   const struct sgx_resource *ib = NULL;
++   struct vcache_key key;
++   struct hash_entry *he;
++   struct vcache_entry *v;
++   /* triangle lists, and what is drawn as one: fans, and desktop GL's quads,
++    * quad strips and polygons (display lists of quads, drawn every frame) */
++   bool expand = expanded_prim(info->mode) &&
++                 u_reduced_prim(info->mode) == MESA_PRIM_TRIANGLES;
++   unsigned count = draw->count, out_count;
++   uint64_t now = os_time_get_nano();
++
++   if (!u_trim_pipe_prim(info->mode, &count))
++      return false;
++   out_count = expand ? expanded_count(info->mode, count) : count;
++   if (!ctx->vcache || out_count < 3 || n_fetch > PIPE_MAX_ATTRIBS ||
++       (info->mode != MESA_PRIM_TRIANGLES && !expand))
++      return false;
++   if (info->index_size) {
++      if (info->has_user_indices)
++         return false;
++      ib = sgx_resource(info->index.resource);
++   }
++   if (out_count > SGXWS_MAX_INDICES ||
++       (ib && now - ib->written_ns < 1000000000ull))
++      return false;
++   memset(&key, 0, sizeof(key));
++   key.n_fetch = n_fetch;
++   key.mode = info->mode;
++   key.index_size = info->index_size;
++   key.ib_uid = ib ? ib->uid : 0;
++   key.ib_gen = ib ? ib->gen : 0;
++   key.start = draw->start;
++   key.count = count;
++   key.index_bias = info->index_size ? draw->index_bias : 0;
++   for (unsigned e = 0; e < n_fetch; e++) {
++      if (!f[e].defaults)
++         return false;
++      key.el[e].format = f[e].format | (f[e].raw ? 0x80000000u : 0);
++      key.el[e].stride = f[e].stride;
++      if (!f[e].stride) {
++         fetch_vertex(&f[e], 0, key.el[e].konst);
++      } else {
++         /* a buffer rewritten in the last second (the GUI's, the hand's
++          * streams) would only churn the cache */
++         if (!f[e].res || now - f[e].res->written_ns < 1000000000ull)
++            return false;
++         key.el[e].uid = f[e].res->uid;
++         key.el[e].gen = f[e].res->gen;
++         key.el[e].offset = f[e].offset;
++      }
++   }
++
++   he = _mesa_hash_table_search(ctx->vcache, &key);
++   if (he) {
++      v = he->data;
++      ctx->stats.vc_hits++;
++   } else {
++      /* gather once: the vertices the draw uses, the indices rebased */
++      const void *indices = ib ? ib->data : NULL;
++      unsigned lo = ~0u, hi = 0, vbytes, ibytes;
++      uint32_t *verts;
++      uint16_t *ix;
++
++      for (unsigned i = 0; i < out_count; i++) {
++         unsigned k = expand ? expanded_vertex(info->mode, i, out_count) : i;
++         unsigned index =
++            info->index_size
++               ? get_index(info, indices, draw->start + k) + draw->index_bias
++               : draw->start + k;
++
++         lo = MIN2(lo, index);
++         hi = MAX2(hi, index);
++      }
++      if (hi - lo >= 65536 || hi - lo + 1 > 4 * out_count + 64) {
++         ctx->stats.vc_uncacheable++;
++         return false;
++      }
++      vbytes = align((hi - lo + 1) * vertex_dwords * 4, 64);
++      ibytes = align(out_count * 2, 16);
++      if (!vcache_room(ctx, vbytes + ibytes) || !(v = calloc(1, sizeof(*v)))) {
++         ctx->stats.vc_uncacheable++;
++         return false;
++      }
++      verts = staging(ctx, vbytes / 4 + ibytes / 4);
++      if (!verts ||
++          !(v->chunk = vcache_alloc(ctx, vbytes + ibytes, &v->offset))) {
++         free(v);
++         ctx->stats.vc_uncacheable++;
++         return false;
++      }
++      /* gathered in cached memory, then copied whole (the chunk is
++       * write-combined) */
++      fetch_vertices(f, n_fetch, lo, hi - lo + 1, verts, vertex_dwords);
++      ix = (uint16_t *)((uint8_t *)verts + vbytes);
++      for (unsigned i = 0; i < out_count; i++) {
++         unsigned k = expand ? expanded_vertex(info->mode, i, out_count) : i;
++         unsigned index =
++            info->index_size
++               ? get_index(info, indices, draw->start + k) + draw->index_bias
++               : draw->start + k;
++
++         ix[i] = (uint16_t)(index - lo);
++      }
++      memcpy((uint8_t *)v->chunk->bo.map + v->offset, verts,
++             vbytes + out_count * 2);
++      v->key = key;
++      v->verts_va = v->chunk->bo.va + v->offset;
++      v->idx_va = v->verts_va + vbytes;
++      v->nverts = hi - lo + 1;
++      v->nidx = out_count;
++      v->bytes = vbytes + ibytes;
++      ctx->vcache_bytes += v->bytes;
++      list_add(&v->link, &ctx->vcache_lru);
++      _mesa_hash_table_insert(ctx->vcache, &v->key, v);
++      ctx->stats.vc_misses++;
++   }
++   /* most recently used first; the frame being recorded reads it */
++   list_del(&v->link);
++   list_add(&v->link, &ctx->vcache_lru);
++   v->last_seq = sgxws_next_seq(ctx->hw);
++   d->verts = NULL;
++   d->indices = NULL;
++   d->verts_va = v->verts_va;
++   d->idx_va = v->idx_va;
++   d->count = v->nverts;
++   d->n_indices = v->nidx;
++   if (sgxws_draw(ctx->hw, d))
++      fprintf(stderr, "sgx: draw of %u indices dropped\n", v->nidx);
++   d->verts_va = d->idx_va = 0;
++   return true;
++}
++
++/* an input format the compiler unpacks (sgx_compile_options.vtx_fmt), and
++ * the bytes a vertex has of it */
++static bool
++vtx_format(enum pipe_format format, uint8_t *fmt, unsigned *bytes)
++{
++   switch (format) {
++   case PIPE_FORMAT_R32_FLOAT:
++      *fmt = SGX_VF_F32_1;
++      *bytes = 4;
++      return true;
++   case PIPE_FORMAT_R32G32_FLOAT:
++      *fmt = SGX_VF_F32_2;
++      *bytes = 8;
++      return true;
++   case PIPE_FORMAT_R32G32B32_FLOAT:
++      *fmt = SGX_VF_F32_3;
++      *bytes = 12;
++      return true;
++   case PIPE_FORMAT_R32G32B32A32_FLOAT:
++      *fmt = SGX_VF_F32_4;
++      *bytes = 16;
++      return true;
++   case PIPE_FORMAT_R8G8B8A8_UNORM:
++      *fmt = SGX_VF_UNORM8_4;
++      *bytes = 4;
++      return true;
++   case PIPE_FORMAT_R16G16_SSCALED:
++      *fmt = SGX_VF_SSCALED16_2;
++      *bytes = 4;
++      return true;
++   default:
++      return false;
++   }
++}
++
++/* raw inputs DMAed where they are (zero-copy, sgx_screen.zero_copy): a buffer's
++ * device copy in place, a client array's bytes copied as they are, one block
++ * per binding; the vertex shader unpacks them.  Draws up to the index limit;
++ * the rest take the gather, raw too. */
++static bool
++resident_indexed(const struct pipe_draw_info *info,
++                 const struct pipe_draw_start_count_bias *draw,
++                 const struct fetch *f, unsigned n_fetch)
++{
++   if (info->index_size != 2 || info->has_user_indices ||
++       info->mode != MESA_PRIM_TRIANGLES || draw->index_bias ||
++       info->primitive_restart)
++      return false;
++   for (unsigned e = 0; e < n_fetch; e++)
++      if (!f[e].res)
++         return false;
++   return true;
++}
++
++/* (zc_draw's: every fetch raw, from a buffer) */
++static bool
++zc_draw_resident(struct sgx_context *ctx, const struct pipe_draw_info *info,
++                 const struct pipe_draw_start_count_bias *draw,
++                 const struct fetch *f, unsigned n_fetch, struct sgxws_draw *d,
++                 struct sgxws_fetch *zf)
++{
++   struct sgx_resource *ib = sgx_resource(info->index.resource);
++   /* whole triangles in a piece */
++   const unsigned piece = SGXWS_MAX_INDICES / 3 * 3;
++   unsigned count = draw->count;
++
++   if (!u_trim_pipe_prim(info->mode, &count) || !count ||
++       !sgx_buffer_vbo(ctx, ib, draw->start * 2, count * 2))
++      return false;
++   for (unsigned e = 0; e < n_fetch; e++) {
++      if (!sgx_buffer_vbo(ctx, f[e].res, f[e].offset, ~0u))
++         return false;
++      zf[e] = (struct sgxws_fetch){.stride = f[e].stride,
++                                   .dwords = f[e].raw_bytes / 4,
++                                   .reg = 4 * e,
++                                   .va = f[e].res->vbo.va + f[e].offset};
++      if (zf[e].va & 3)
++         return false;
++   }
++   for (unsigned e = 0; e < n_fetch; e++)
++      f[e].res->vbo_seq = sgxws_next_seq(ctx->hw);
++   ib->vbo_seq = sgxws_next_seq(ctx->hw);
++   d->fetch = zf;
++   d->n_fetch = n_fetch;
++   d->blocks = NULL;
++   d->n_blocks = 0;
++   d->indices = NULL;
++   d->verts = NULL;
++   d->verts_va = 0;
++   d->count = 0x10000; /* (16-bit indices) */
++   for (unsigned p0 = 0; p0 < count; p0 += piece) {
++      d->idx_va = ib->vbo.va + (draw->start + p0) * 2;
++      d->n_indices = MIN2(piece, count - p0);
++      if (sgxws_draw(ctx->hw, d))
++         fprintf(stderr, "sgx: draw of %u indices dropped\n", d->n_indices);
++   }
++   SGX_DBG(DRAW, "resident indexed draw x%u\n", count);
++   ctx->stats.zc_draws++;
++   d->fetch = NULL;
++   d->n_fetch = 0;
++   d->idx_va = 0;
++   d->n_indices = 0;
++   return true;
++}
++
++static bool
++zc_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
++        const struct pipe_draw_start_count_bias *draw, const void *indices,
++        const struct fetch *f, unsigned n_fetch, struct sgxws_draw *d)
++{
++   struct sgxws_fetch zf[PIPE_MAX_ATTRIBS];
++   struct sgxws_block blocks[8];
++   const uint8_t *block_lo[8];
++   unsigned block_vb[8], n_blocks = 0;
++   bool list = expanded_prim(info->mode);
++   unsigned count = draw->count, out_count, lo = ~0u, hi = 0;
++   uint16_t *ix = NULL;
++
++   if (!u_trim_pipe_prim(info->mode, &count))
++      return false;
++   if (info->mode == MESA_PRIM_TRIANGLE_STRIP && count > SGXWS_MAX_INDICES)
++      return false;
++   out_count = list ? expanded_count(info->mode, count) : count;
++   /* a vertex program that reads no attribute takes the gather (sgxws_draw
++    * tells zero-copy from it by its fetches) */
++   if (!out_count || !n_fetch || n_fetch > PIPE_MAX_ATTRIBS)
++      return false;
++   for (unsigned e = 0; e < n_fetch; e++) {
++      if (!f[e].raw || f[e].dwords != 4 || (f[e].stride & 3) ||
++          f[e].stride > 0xffff)
++         return false;
++   }
++   /* a list of 16-bit indices in a buffer, every vertex buffer in device
++    * memory: the indices as they are, each fetch from vertex 0 (the DDK's
++    * draw from a VBO and an IBO: nothing read or copied a draw), in pieces
++    * of the index limit */
++   if (resident_indexed(info, draw, f, n_fetch))
++      return zc_draw_resident(ctx, info, draw, f, n_fetch, d, zf);
++   if (out_count > SGXWS_MAX_INDICES)
++      return false;
++   /* the vertices the draw uses: in order, or through 16-bit indices from lo */
++   if (info->index_size || list) {
++      uint32_t *ix32 = staging(ctx, out_count);
++
++      if (!ix32 || !(ix = index_staging(ctx, out_count)))
++         return false;
++      for (unsigned i = 0; i < out_count; i++) {
++         unsigned k = list ? expanded_vertex(info->mode, i, out_count) : i;
++
++         ix32[i] =
++            info->index_size
++               ? get_index(info, indices, draw->start + k) + draw->index_bias
++               : draw->start + k;
++         lo = MIN2(lo, ix32[i]);
++         hi = MAX2(hi, ix32[i]);
++      }
++      if (hi - lo >= 65536)
++         return false;
++      for (unsigned i = 0; i < out_count; i++)
++         ix[i] = (uint16_t)(ix32[i] - lo);
++   } else {
++      lo = draw->start;
++      hi = draw->start + count - 1;
++   }
++   for (unsigned e = 0; e < n_fetch; e++) {
++      unsigned n = f[e].raw_bytes / 4;
++
++      zf[e] =
++         (struct sgxws_fetch){.stride = f[e].stride, .dwords = n, .reg = 4 * e};
++      if (f[e].res) {
++         if (!sgx_buffer_vbo(ctx, f[e].res, f[e].offset + lo * f[e].stride,
++                             (hi - lo) * f[e].stride + n * 4))
++            return false;
++         zf[e].va = f[e].res->vbo.va + f[e].offset + lo * f[e].stride;
++         if (zf[e].va & 3)
++            return false;
++         continue;
++      }
++      /* a client array: its binding's bytes from vertex lo to the end of vertex
++       * hi */
++      unsigned b;
++      const uint8_t *first = f[e].base + (size_t)lo * f[e].stride;
++      const uint8_t *end = f[e].base + (size_t)hi * f[e].stride + n * 4;
++
++      for (b = 0; b < n_blocks && block_vb[b] != f[e].vb; b++)
++         ;
++      if (b == n_blocks) {
++         if (n_blocks == ARRAY_SIZE(blocks))
++            return false;
++         block_vb[n_blocks] = f[e].vb;
++         block_lo[n_blocks] = first;
++         blocks[n_blocks].cpu = first;
++         blocks[n_blocks++].bytes = end - first;
++      } else {
++         const uint8_t *bend = (const uint8_t *)blocks[b].cpu + blocks[b].bytes;
++
++         if (first < block_lo[b]) {
++            blocks[b].cpu = block_lo[b] = first;
++         }
++         blocks[b].bytes = MAX2(end, bend) - block_lo[b];
++      }
++      zf[e].block = b + 1;
++   }
++   /* offsets into the blocks, now that each block's start is known (a
++    * frame's ring part holds 16 MB: blocks past 4 MB take the gather) */
++   uint32_t total = 0;
++
++   for (unsigned b = 0; b < n_blocks; b++)
++      total += blocks[b].bytes;
++   if (total > 4u << 20)
++      return false;
++   for (unsigned e = 0; e < n_fetch; e++) {
++      if (!zf[e].block)
++         continue;
++      zf[e].va =
++         (f[e].base + (size_t)lo * f[e].stride) - block_lo[zf[e].block - 1];
++      if (zf[e].va & 3)
++         return false;
++   }
++   for (unsigned e = 0; e < n_fetch; e++)
++      if (f[e].res)
++         f[e].res->vbo_seq = sgxws_next_seq(ctx->hw);
++   d->fetch = zf;
++   d->n_fetch = n_fetch;
++   d->blocks = blocks;
++   d->n_blocks = n_blocks;
++   d->indices = ix;
++   d->n_indices = ix ? out_count : 0;
++   d->count = ix ? hi - lo + 1 : count;
++   d->verts = NULL;
++   d->verts_va = 0;
++   SGX_DBG(DRAW, "zero-copy draw %s x%u (%u vertices, %u blocks)\n",
++           u_prim_name(info->mode), out_count, d->count, n_blocks);
++   if (sgxws_draw(ctx->hw, d))
++      fprintf(stderr, "sgx: zero-copy draw of %u vertices dropped\n",
++              out_count);
++   ctx->stats.zc_draws++;
++   d->fetch = NULL;
++   d->n_fetch = 0;
++   d->blocks = NULL;
++   d->n_blocks = 0;
++   d->indices = NULL;
++   return true;
++}
++
++void
++sgx_draw_fini(struct sgx_context *ctx)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++
++   if (!ctx->vcache)
++      return;
++   simple_mtx_lock(&screen->lock);
++   list_for_each_entry_safe (struct vcache_entry, v, &ctx->vcache_lru, link)
++      vcache_free(ctx, v);
++   list_for_each_entry_safe (struct vcache_chunk, k, &ctx->vcache_chunks,
++                             link) {
++      sgxws_bo_free(screen->dev, &k->bo);
++      free(k);
++   }
++   simple_mtx_unlock(&screen->lock);
++   _mesa_hash_table_destroy(ctx->vcache, NULL);
++   ctx->vcache = NULL;
++}
++
++static void
++sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
++                  unsigned drawid_offset,
++                  const struct pipe_draw_indirect_info *indirect,
++                  const struct pipe_draw_start_count_bias *draws,
++                  unsigned num_draws)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_screen *screen = sgx_screen(pctx->screen);
++   struct sgxws_state st;
++   struct sgxws_draw d = {0};
++   struct sgxws_prog fsp;
++   struct sgxws_blend epi = {0};
++   const struct sgxws_blend *blend = NULL;
++   uint32_t fsc[SGXWS_FS_UNIFORM_DWORDS] = {0}, vsc[SGX_MAX_CONSTS] = {0};
++   uint32_t fsk[9 + SGX_MAX_CONSTS] = {0}, tex[PIPE_MAX_SAMPLERS][4];
++   const void *indices = NULL;
++   struct fetch f[PIPE_MAX_ATTRIBS];
++   unsigned n_fetch = 1, vertex_dwords = 0;
++   float color[4];
++   uint32_t prim;
++   uint32_t sampled = 0; /* the sampler units this draw reads */
++   bool compiled, raw = false;
++   bool points = info->mode == MESA_PRIM_POINTS;
++   uint8_t vfmt[16] = {0};
++   unsigned raw_bytes[16];
++
++   if (indirect || !ctx->vs || !ctx->fs)
++      return;
++   /* the fragment shader as these textures need it (sRGB decoded) */
++   struct sgx_pipe_shader *fs = sgx_fs_for(ctx, ctx->fs);
++   if (!fs)
++      return;
++   /* cube maps sampled without mipmapping, from their level-0 copy: brought
++    * up to date before anything of this draw is recorded (it may wait).
++    * Only the units the shader samples: a view left bound to another unit
++    * is not this draw's */
++   uint32_t used = sgx_fs_textures_used(ctx->fs);
++
++   for (unsigned unit = 0; unit < PIPE_MAX_SAMPLERS; unit++) {
++      struct pipe_sampler_view *view =
++         used >> unit & 1 ? ctx->views[unit] : NULL;
++
++      /* stopgap: no layout is known for NPOT cube faces, and sampling one of
++       * 16 texels or more, or its mipmaps, locks the 3D (piglit cubemap
++       * npot: a recovery a draw) */
++      if (view && view->texture->target == PIPE_TEXTURE_CUBE &&
++          !util_is_power_of_two_or_zero(view->texture->width0) &&
++          (view->texture->width0 >= 16 ||
++           (ctx->samplers[unit] &&
++            ctx->samplers[unit]->min_mip_filter != PIPE_TEX_MIPFILTER_NONE &&
++            view->u.tex.last_level > view->u.tex.first_level))) {
++         if (!ctx->warned_cube)
++            fprintf(
++               stderr,
++               "sgx: NPOT cube maps of 16 texels or more, or mipmapped, not drawn yet\n");
++         ctx->warned_cube = true;
++         return;
++      }
++      /* sampled past its last level: the device tail from that level */
++      if (view && ctx->samplers[unit] &&
++          ctx->samplers[unit]->min_mip_filter != PIPE_TEX_MIPFILTER_NONE)
++         sgx_resource_tail(ctx, sgx_resource(view->texture),
++                           view->u.tex.last_level);
++      if (view && sgx_tex_uses_cube0(view, ctx->samplers[unit]) &&
++          !sgx_resource_cube0(ctx, sgx_resource(view->texture)))
++         return;
++   }
++   build_state(ctx, &st);
++   if (ctx->rasterizer) {
++      const struct pipe_rasterizer_state *rs = &ctx->rasterizer->base;
++      enum mesa_prim r = u_reduced_prim(info->mode);
++
++      st.depth_bias = (r == MESA_PRIM_TRIANGLES ? rs->offset_tri
++                       : r == MESA_PRIM_LINES   ? rs->offset_line
++                                                : rs->offset_point) &&
++                      (rs->offset_units != 0.0f || rs->offset_scale != 0.0f);
++      st.bias_units = st.depth_bias ? lrintf(rs->offset_units) : 0;
++      st.bias_factor = st.depth_bias ? rs->offset_scale : 0.0f;
++   }
++   if (!build_clip(ctx, &st.clip))
++      return; /* nothing visible: a zero-area scissor or viewport */
++   /* both faces culled: no triangle survives (lines and points aren't culled) */
++   if (ctx->rasterizer &&
++       ctx->rasterizer->base.cull_face == PIPE_FACE_FRONT_AND_BACK &&
++       u_reduced_prim(info->mode) == MESA_PRIM_TRIANGLES)
++      return;
++   if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture) {
++      /* the colour epilogue: blend, then the colour mask (sgxws_blend) */
++      bool has_alpha = util_format_has_alpha(ctx->framebuffer.cbufs[0].format);
++      unsigned mask =
++         (ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA) &
++         target_mask(ctx);
++
++      if (ctx->blend && ctx->blend->enable)
++         epi = ctx->blend->hw[has_alpha];
++      if (!has_alpha)
++         mask |= PIPE_MASK_A;
++      /* A window's X byte takes whatever alpha came out.  A texture's is read
++       * as alpha where it's sampled, so it keeps the 1 it was created and
++       * cleared with: the blend's alpha is the tile's (tile * 1 + colour * 0) */
++      if (!has_alpha &&
++          sgx_resource(ctx->framebuffer.cbufs[0].texture)->texture) {
++         if (!epi.blend) {
++            epi.blend = 1;
++            epi.c1 = SGXWS_BS_ZERO | SGXWS_BS_INV;
++            epi.c2 = SGXWS_BS_ZERO;
++            epi.cop = SGXWS_BOP_ADD;
++         }
++         epi.aop = SGXWS_BOP_ADD;
++         epi.atrade = 0;
++         if (epi.constant) {
++            epi.fsa = SGXWS_BF_ZERO;
++            epi.fda = SGXWS_BF_ONE;
++         } else {
++            /* with swap the tile is the first source */
++            epi.a1 = epi.swap ? SGXWS_BS_ZERO | SGXWS_BS_INV : SGXWS_BS_ZERO;
++            epi.a2 = epi.swap ? SGXWS_BS_ZERO : SGXWS_BS_ZERO | SGXWS_BS_INV;
++         }
++      }
++      /* bytes of the packed BGRA8 colour */
++      epi.wmask = (mask & PIPE_MASK_B ? 1 : 0) | (mask & PIPE_MASK_G ? 2 : 0) |
++                  (mask & PIPE_MASK_R ? 4 : 0) | (mask & PIPE_MASK_A ? 8 : 0);
++      if (epi.blend || epi.wmask != 0xf)
++         blend = &epi;
++   }
++   /* each stage compiled or one of the fixed programs */
++   compiled = ctx->vs->kind == SGX_SHADER_COMPILED;
++   if (compiled) {
++      struct sgx_pipe_shader *vs = ctx->vs;
++      const struct sgx_pipe_shader *vfs =
++         fs->kind == SGX_SHADER_COMPILED ? fs : NULL;
++
++      /* zero-copy (sgx_screen.zero_copy): inputs the vertex shader unpacks
++       * itself, when the compiler knows every format */
++      raw = sgx_screen(ctx->base.screen)->zero_copy && ctx->velems &&
++            ctx->vs->n_attribs <= 16 &&
++            ctx->vs->n_attribs <= ctx->velems->num_elements;
++      for (unsigned e = 0; raw && e < ctx->vs->n_attribs; e++)
++         raw = vtx_format(ctx->velems->elements[e].src_format, &vfmt[e],
++                          &raw_bytes[e]);
++      /* the fragment shader's sets (gl_PointCoord: the vertex shader's
++       * varyings move up to leave set 0 free) */
++      if (vfs && fs->reads_pointcoord && !ctx->vs->writes_psize)
++         return;
++      if (vfs || raw || points) {
++         if (raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, vfmt, points)))
++            raw = false;
++         if (!raw && !(vs = sgx_vs_for(ctx, ctx->vs, vfs, NULL, points)))
++            return;
++      }
++      if (vfs)
++         st.sprite = fs->reads_pointcoord && info->mode == MESA_PRIM_POINTS;
++      d.vs = &vs->prog;
++      if (vs->mem_dwords)
++         mem_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, &d.vs_mem);
++      else
++         fill_consts(ctx, MESA_SHADER_VERTEX, vs, vsc, 0, NULL);
++      d.vs_consts = vsc;
++      n_fetch = ctx->vs->n_attribs;
++   } else if (ctx->vs->kind != SGX_SHADER_VS_POSITION) {
++      return;
++   }
++   if (fs->kind == SGX_SHADER_COMPILED) {
++      fsp = fs->prog;
++      if (blend) {
++         fsp.code = sgx_fs_program(ctx, fs, blend);
++         if (!fsp.code)
++            return;
++      }
++      /* pass type: a blend 1; discard 4, or 2 with a blend (ISA.md) */
++      st.pass_type = fs->discard_pa >= 0     ? (blend && blend->blend ? 2 : 4)
++                     : blend && blend->blend ? 1
++                                             : 0;
++      d.fs = &fsp;
++      if (fs->mem_dwords)
++         mem_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, &d.fs_mem);
++      else
++         fill_consts(ctx, MESA_SHADER_FRAGMENT, fs, fsk, 9, NULL);
++      /* a constant-colour blend reads the blend colour, packed BGRA8, in sa2 */
++      if (blend && blend->blend && blend->constant) {
++         const float *c = ctx->blend_color.color;
++
++         fsk[SGXWS_BLEND_CONST_SA] =
++            float_to_ubyte(c[3]) << 24 | float_to_ubyte(c[0]) << 16 |
++            float_to_ubyte(c[1]) << 8 | float_to_ubyte(c[2]);
++         fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
++         fsp.temps = MAX2(fsp.temps, 2);
++      }
++      if (fs->uses_front_face) {
++         fsk[SGX_SA_FRONT] =
++            !(ctx->rasterizer && ctx->rasterizer->base.front_ccw);
++         fsp.sec_dwords = MAX2(fsp.sec_dwords, 9);
++      }
++      /* a discard's visibility test (atst8 and pcoeff read sa3, sa4; ISA.md
++       * "Phases, visibility feedback and discard"): sa3 = 0xe000 | ISPA's depth
++       * compare (7 with the test off) | 8 without depth writes (always 0xe00f,
++       * LESS 0xe001, LEQUAL no write 0xe00b); sa4 = 0xee00 [G] */
++      if (fs->discard_pa >= 0) {
++         fsk[3] = 0xe000 | (st.depth_func ? (st.depth_func - 0x200) & 7 : 7) |
++                  (st.depth_write ? 0 : 8);
++         fsk[4] = 0xee00;
++      }
++      /* a dependent sample's texture state: the DOUTT words, in SA */
++      for (unsigned j = 0; j < fs->n_deps; j++) {
++         unsigned unit = fs->dep_sampler[j];
++         struct pipe_sampler_view *view =
++            unit < PIPE_MAX_SAMPLERS ? ctx->views[unit] : NULL;
++
++         if (!view || !sgx_resource_sampleable(sgx_resource(view->texture))) {
++            SGX_DBG(DRAW,
++                    "sampler %u: no texture the GPU can sample, draw skipped\n",
++                    unit);
++            return;
++         }
++         sgx_tex_words(view, ctx->samplers[unit], &fsk[fs->dep_sa[j]]);
++         /* an F16 texel: the whole T3, as for a PDS sample's */
++         if (fs->dep_f16[j])
++            fsk[fs->dep_sa[j] + 3] = 0x01028800u;
++         sgx_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
++         sampled |= 1u << unit;
++         SGX_DBG(
++            DRAW,
++            "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
++            j, unit, util_format_short_name(view->format),
++            view->texture->width0, view->texture->height0,
++            view->texture->target, view->texture->last_level + 1, fs->dep_sa[j],
++            fsk[fs->dep_sa[j]], fsk[fs->dep_sa[j] + 1], fsk[fs->dep_sa[j] + 2],
++            fsk[fs->dep_sa[j] + 3]);
++      }
++      d.fs_consts = fsk;
++      if (sgx_drv_debug & SGX_DEBUG_DRAW) {
++         fprintf(stderr, "  fs SA block: %u dwords, %u temps:", fsp.sec_dwords,
++                 fsp.temps);
++         for (unsigned i = 0; i < fsp.sec_dwords; i++)
++            fprintf(stderr, " %08x", fsk[i]);
++         fprintf(stderr, "\n");
++      }
++      for (unsigned i = 0; i < d.fs->n_douti; i++) {
++         unsigned unit = d.fs->douti_tex[i];
++         struct pipe_sampler_view *view = unit ? ctx->views[unit - 1] : NULL;
++
++         if (!unit)
++            continue;
++         if (!view || !sgx_resource_sampleable(sgx_resource(view->texture))) {
++            SGX_DBG(DRAW,
++                    "sampler %u: no texture the GPU can sample, draw skipped\n",
++                    unit - 1);
++            return;
++         }
++         sgx_tex_words(view, ctx->samplers[unit - 1], tex[unit - 1]);
++         sgx_resource(view->texture)->use_seq = sgxws_next_seq(ctx->hw);
++         sampled |= 1u << (unit - 1);
++      }
++      d.tex = (const uint32_t (*)[4])tex;
++   } else {
++      if (blend && !ctx->warned_blend) {
++         fprintf(
++            stderr,
++            "sgx: blending and colour masks need a compiled fragment shader\n");
++         ctx->warned_blend = true;
++      }
++      switch (fs->kind) {
++      case SGX_SHADER_FS_CONSTANT:
++         memcpy(color, fs->color, sizeof(color));
++         break;
++      case SGX_SHADER_FS_UNIFORM: {
++         const uint8_t *cb =
++            (const uint8_t *)constant_data(ctx, MESA_SHADER_FRAGMENT);
++
++         if (!cb)
++            return;
++         memcpy(color, cb + fs->ubo_offset, sizeof(color));
++         break;
++      }
++      default:
++         return;
++      }
++      d.fs = &ctx->fs_uniform;
++      fsc[SGXWS_FS_UNIFORM_OFF] = sgxws_f16(color[0]) | sgxws_f16(color[1])
++                                                           << 16;
++      fsc[SGXWS_FS_UNIFORM_OFF + 1] = sgxws_f16(color[2]) | sgxws_f16(color[3])
++                                                               << 16;
++      d.fs_consts = fsc;
++   }
++   switch (info->mode) {
++   case MESA_PRIM_TRIANGLES:
++      prim = SGXWS_TRIANGLES;
++      break;
++   case MESA_PRIM_TRIANGLE_STRIP:
++      prim = SGXWS_TRIANGLE_STRIP;
++      break;
++   case MESA_PRIM_TRIANGLE_FAN:
++   case MESA_PRIM_QUADS:
++   case MESA_PRIM_QUAD_STRIP:
++   case MESA_PRIM_POLYGON:
++      prim = SGXWS_TRIANGLES; /* drawn as a list */
++      break;
++   case MESA_PRIM_LINES:
++   case MESA_PRIM_LINE_STRIP: /* drawn as a list: the hardware has no line strip
++                               */
++   case MESA_PRIM_LINE_LOOP:
++      prim = SGXWS_LINES;
++      break;
++   case MESA_PRIM_POINTS:
++      /* the size comes from the vertex program; without one the DDK draws
++       * nothing too */
++      if (!compiled || !ctx->vs->writes_psize)
++         return;
++      prim = SGXWS_POINTS;
++      break;
++   default:
++      if (!ctx->warned_prim)
++         fprintf(stderr, "sgx: %s not drawn yet\n", u_prim_name(info->mode));
++      ctx->warned_prim = true;
++      return;
++   }
++   for (unsigned e = 0; e < n_fetch; e++) {
++      if (!setup_fetch(ctx, e, &f[e]))
++         return;
++      if (compiled) {
++         f[e].dwords = 4;
++         f[e].defaults = true;
++         f[e].raw = raw;
++         f[e].raw_bytes = raw ? raw_bytes[e] : 0;
++      } else {
++         /* gl_Position = attribute 0: two components fetched -> (x, y, 0, 1);
++          * more -> (x, y, z, 1) */
++         f[e].dwords = util_format_get_nr_components(f[e].format) == 2 ? 2 : 3;
++         f[e].defaults = false;
++         d.vs = f[e].dwords == 2 ? &ctx->vs_xy : &ctx->vs_xyz;
++      }
++      vertex_dwords += f[e].dwords;
++   }
++   if (compiled && fs->kind == SGX_SHADER_COMPILED &&
++       !varyings_match(d.vs, d.fs)) {
++      if (!ctx->warned_varyings)
++         fprintf(
++            stderr,
++            "sgx: the fragment shader iterates a varying the vertex shader doesn't "
++            "write (VS sets %#x, FS DOUTI %#x...): draw skipped\n",
++            d.vs->tsp_sizes, sgx_pds_douti_w0(&d.fs->douti[0]));
++      ctx->warned_varyings = true;
++      return;
++   }
++   d.state = &st;
++   d.prim = prim;
++
++   if (info->index_size) {
++      if (info->has_user_indices)
++         indices = info->index.user;
++      else
++         indices = sgx_resource(info->index.resource)->data;
++   }
++
++   simple_mtx_lock(&screen->lock);
++   if (!begin_frame(ctx, false))
++      goto out;
++   /* every shared texture it samples goes in the render's buffer list: a
++    * frame whose list is full is submitted first */
++   {
++      const struct sgxws_bo *shared[PIPE_MAX_SAMPLERS];
++      unsigned n_shared = 0;
++
++      u_foreach_bit (unit, sampled) {
++         struct sgx_resource *tex = sgx_resource(ctx->views[unit]->texture);
++
++         if (tex->shared)
++            shared[n_shared++] = &tex->bo;
++      }
++      if (!sgxws_use_bo_room(ctx->hw, shared, n_shared)) {
++         sgxws_flush(ctx->hw, 0);
++         ctx->recording = NULL;
++         ctx->stats.fl_other++;
++         if (!begin_frame(ctx, false))
++            goto out;
++      }
++   }
++   /* The textures it samples were marked used by the next kick before
++    * begin_frame, which flushes the previous target's frame when this draw
++    * switches targets: mark them again with the frame they're now in (a
++    * resource freed after this draw flushes that frame first: glCopyPixels'
++    * temporary, sampled into the window and freed at once).  Only those: a
++    * texture merely bound would look in flight, and a later upload into it
++    * would go to its second copy (dEQP fbo.render.stencil*) */
++   u_foreach_bit (unit, sampled) {
++      struct sgx_resource *tex = sgx_resource(ctx->views[unit]->texture);
++
++      tex->use_seq = sgxws_next_seq(ctx->hw);
++      if (tex->shared)
++         sgxws_use_bo(ctx->hw, &tex->bo, false);
++   }
++   for (unsigned n = 0; n < num_draws; n++) {
++      unsigned count = draws[n].count, start = draws[n].start, out_count;
++      bool list = expanded_prim(info->mode);
++      uint32_t *v;
++
++      /* only whole primitives: the VDM takes the count as it is */
++      if (!u_trim_pipe_prim(info->mode, &count))
++         continue;
++      /* a strip longer than the index limit is drawn as a list of its
++       * triangles, which goes in pieces like any list */
++      d.prim = prim;
++      if (info->mode == MESA_PRIM_TRIANGLE_STRIP && count > SGXWS_MAX_INDICES) {
++         list = true;
++         d.prim = SGXWS_TRIANGLES;
++      }
++      out_count = list ? expanded_count(info->mode, count) : count;
++      if (!out_count)
++         continue;
++      /* the vertex cache first: a display list drawn every frame is one DMA
++       * a vertex from its cached gather and its quads' indices expanded
++       * once, where zero-copy DMAs each input and expands them every draw
++       * (docs/PERF.md) */
++      bool zc = compiled && sgx_screen(ctx->base.screen)->zero_copy;
++
++      /* (zero-copy's draw from an index buffer as it is goes first: nothing
++       * of it is read on the CPU) */
++      if (zc && resident_indexed(info, &draws[n], f, n_fetch) &&
++          zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
++         continue;
++      if (compiled && (prim == SGXWS_TRIANGLES) &&
++          vcache_draw(ctx, info, &draws[n], f, n_fetch, vertex_dwords, &d))
++         continue;
++      if (zc && zc_draw(ctx, info, &draws[n], indices, f, n_fetch, &d))
++         continue;
++      /* glDrawArrays of a list or strip: the vertices in order */
++      if (!info->index_size && !list && count <= SGXWS_MAX_INDICES) {
++         if (!(v = staging(ctx, (size_t)count * vertex_dwords)))
++            continue;
++         fetch_vertices(f, n_fetch, start, count, v, vertex_dwords);
++         d.verts = v;
++         d.count = count;
++         d.indices = NULL;
++         if (sgxws_draw(ctx->hw, &d))
++            fprintf(stderr, "sgx: draw of %u vertices dropped\n", count);
++         continue;
++      }
++      /* indices (and what is drawn as a list): each vertex the draw uses
++       * fetched once, the GPU given 16-bit indices into them, as the DDK does.
++       * A list longer than the index limit goes in pieces of whole primitives. */
++      if (list || prim != SGXWS_TRIANGLE_STRIP ||
++          out_count <= SGXWS_MAX_INDICES) {
++         unsigned piece = d.prim == SGXWS_TRIANGLES ? SGXWS_MAX_INDICES / 3 * 3
++                          : d.prim == SGXWS_LINES   ? SGXWS_MAX_INDICES / 2 * 2
++                                                    : SGXWS_MAX_INDICES;
++
++         for (unsigned p0 = 0; p0 < out_count; p0 += piece) {
++            unsigned np = MIN2(piece, out_count - p0), lo = ~0u, hi = 0;
++            uint32_t *sparse = NULL;
++            uint32_t *ix32 =
++               staging(ctx, np); /* the piece's indices, before rebasing */
++            uint16_t *ix = index_staging(ctx, np);
++
++            if (!ix || !ix32)
++               break;
++            for (unsigned i = 0; i < np; i++) {
++               unsigned k = list
++                               ? expanded_vertex(info->mode, p0 + i, out_count)
++                               : p0 + i;
++
++               ix32[i] =
++                  info->index_size
++                     ? get_index(info, indices, start + k) + draws[n].index_bias
++                     : start + k;
++               lo = MIN2(lo, ix32[i]);
++               hi = MAX2(hi, ix32[i]);
++            }
++            if (hi - lo < 65536 && hi - lo + 1 <= 4 * np + 64) {
++               for (unsigned i = 0; i < np; i++)
++                  ix[i] = (uint16_t)(ix32[i] - lo);
++               /* (the indices are copied out of the staging buffer first) */
++               if (!(v = staging(ctx, (size_t)(hi - lo + 1) * vertex_dwords)))
++                  break;
++               fetch_vertices(f, n_fetch, lo, hi - lo + 1, v, vertex_dwords);
++               d.count = hi - lo + 1;
++               d.indices = ix;
++               d.n_indices = np;
++            } else {
++               /* a sparse range would fetch vertices nobody draws: this piece
++                * expanded, a vertex per index (ix32 is in the staging buffer) */
++               if (!(sparse = malloc((size_t)np * vertex_dwords * 4)))
++                  break;
++               for (unsigned i = 0; i < np; i++) {
++                  uint32_t *dst = sparse + i * vertex_dwords;
++
++                  for (unsigned e = 0; e < n_fetch; e++) {
++                     fetch_vertex(&f[e], ix32[i], dst);
++                     dst += f[e].dwords;
++                  }
++               }
++               v = sparse;
++               d.count = np;
++               d.indices = NULL;
++            }
++            d.verts = v;
++            SGX_DBG(DRAW, "draw %s x%u (%u vertices)%s\n",
++                    u_prim_name(info->mode), np, d.count,
++                    compiled ? " (compiled)" : "");
++            if (sgxws_draw(ctx->hw, &d))
++               fprintf(stderr, "sgx: draw of %u indices dropped\n", np);
++            free(sparse);
++            sparse = NULL;
++         }
++         d.indices = NULL;
++         continue;
++      }
++      /* the rest: every index expanded to its own vertex */
++      if (!(v = staging(ctx, (size_t)out_count * vertex_dwords)))
++         continue;
++      for (unsigned i = 0; i < out_count; i++) {
++         unsigned k = list ? expanded_vertex(info->mode, i, out_count) : i;
++         uint32_t index, *dst = v + i * vertex_dwords;
++
++         index = info->index_size
++                    ? get_index(info, indices, start + k) + draws[n].index_bias
++                    : start + k;
++         for (unsigned e = 0; e < n_fetch; e++) {
++            fetch_vertex(&f[e], index, dst);
++            dst += f[e].dwords;
++         }
++      }
++      d.verts = v;
++      d.count = out_count;
++      SGX_DBG(DRAW, "draw %s x%u%s\n", u_prim_name(info->mode), out_count,
++              compiled ? " (compiled)" : "");
++      if (sgxws_draw(ctx->hw, &d))
++         fprintf(stderr, "sgx: draw of %u vertices dropped\n", out_count);
++   }
++out:
++   simple_mtx_unlock(&screen->lock);
++}
++
++static void
++sgx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
++             unsigned drawid_offset,
++             const struct pipe_draw_indirect_info *indirect,
++             const struct pipe_draw_start_count_bias *draws, unsigned num_draws)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   uint64_t t;
++
++   if (!ctx->stats.on) {
++      sgx_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
++      return;
++   }
++   t = os_time_get_nano();
++   sgx_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
++   ctx->stats.draw_ns += os_time_get_nano() - t;
++   ctx->stats.draws += num_draws;
++   for (unsigned n = 0; n < num_draws; n++)
++      ctx->stats.verts += draws[n].count;
++}
++
++void
++sgx_draw_init(struct sgx_context *ctx)
++{
++   /* SGX_DEBUG=novcache: no vertex cache */
++   if (!(sgx_drv_debug & SGX_DEBUG_NO_VCACHE)) {
++      ctx->vcache = _mesa_hash_table_create(NULL, vcache_hash, vcache_equal);
++      list_inithead(&ctx->vcache_lru);
++      list_inithead(&ctx->vcache_chunks);
++   }
++   ctx->base.draw_vbo = sgx_draw_vbo;
++   ctx->base.clear = sgx_clear;
++}
+diff --git a/src/gallium/drivers/sgx/sgx_program.c b/src/gallium/drivers/sgx/sgx_program.c
+new file mode 100644
+index 0000000..2453682
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_program.c
+@@ -0,0 +1,1576 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * Shaders.  The NIR -> USSE backend (src/sgx/compiler) compiles each one
++ * to code plus a struct sgx_shader that says what it needs (docs/ISA.md
++ * "What a compiler needs"); this file finalises and uploads the programs and
++ * keeps what a draw needs: the constants' places in secondary attributes,
++ * the attribute slots, the vertex outputs, the fragment iterators.
++ *
++ * Varyings get texture coordinate sets in the order of their slots, the same
++ * on both sides when the two stages pass the same slots; a vertex shader that
++ * writes others is compiled again to its fragment shader's sets
++ * (sgx_vs_for).
++ *
++ * Before the compiler (SGX_DEBUG=novs,nofs still selects this), a shader was
++ * matched against the fixed programs the winsys carries (sgx_fixed.c):
++ * gl_Position = attribute 0, gl_FragColor = one vec4 uniform or constant.
++ */
++
++#include "compiler/nir/nir.h"
++#include "compiler/nir/nir_builder.h"
++#include "nir/tgsi_to_nir.h"
++#include "util/format/u_format.h"
++#include "util/os_time.h"
++#include "util/u_memory.h"
++
++#include "sgx_compiler.h"
++#include "sgx_context.h"
++#include "sgx_core.h"
++#include "sgx_csb.h"
++#include "sgx_program.h"
++#include "sgx_screen.h"
++#include "sgx_texture.h"
++
++const nir_shader_compiler_options *
++sgx_get_nir_options(void)
++{
++   /* the compiler's own, so the frontend builds what the compiler (and sgxc)
++    * expect */
++   return sgx_nir_options();
++}
++
++static unsigned
++type_size(const struct glsl_type *type, bool bindless)
++{
++   return glsl_count_attribute_slots(type, false);
++}
++
++/* the one store_output of a shader, or NULL */
++static nir_intrinsic_instr *
++single_output(nir_shader *nir)
++{
++   nir_intrinsic_instr *out = NULL;
++
++   nir_foreach_function_impl (impl, nir) {
++      nir_foreach_block (block, impl) {
++         nir_foreach_instr (instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++
++            switch (intr->intrinsic) {
++            case nir_intrinsic_store_output:
++               if (out)
++                  return NULL;
++               out = intr;
++               break;
++            case nir_intrinsic_load_input:
++            case nir_intrinsic_load_ubo:
++            case nir_intrinsic_load_ubo_vec4:
++            case nir_intrinsic_load_uniform:
++            case nir_intrinsic_load_const_buf_base_addr_lvp:
++               break;
++            default:
++               return NULL;
++            }
++         }
++      }
++   }
++   return out;
++}
++
++/* is component c of the stored value channel `comp` of a load intrinsic of this
++ * kind? */
++static nir_intrinsic_instr *
++source_load(nir_intrinsic_instr *store, unsigned c, unsigned *comp)
++{
++   nir_scalar s = nir_scalar_chase_movs(nir_get_scalar(store->src[0].ssa, c));
++
++   if (!nir_scalar_is_intrinsic(s))
++      return NULL;
++   *comp = s.comp;
++   return nir_def_as_intrinsic(s.def);
++}
++
++static bool
++source_const(nir_intrinsic_instr *store, unsigned c, float *v)
++{
++   nir_scalar s = nir_scalar_chase_movs(nir_get_scalar(store->src[0].ssa, c));
++
++   if (!nir_scalar_is_const(s))
++      return false;
++   *v = nir_scalar_as_float(s);
++   return true;
++}
++
++static void
++match_vs(struct sgx_pipe_shader *so)
++{
++   nir_intrinsic_instr *st = single_output(so->nir), *load = NULL;
++
++   if (!st || nir_intrinsic_io_semantics(st).location != VARYING_SLOT_POS ||
++       nir_intrinsic_write_mask(st) != 0xf ||
++       nir_intrinsic_component(st) != 0 || st->src[0].ssa->num_components != 4)
++      return;
++   for (unsigned c = 0; c < 4; c++) {
++      unsigned comp;
++      nir_intrinsic_instr *l = source_load(st, c, &comp);
++
++      if (!l || l->intrinsic != nir_intrinsic_load_input ||
++          nir_intrinsic_base(l) != 0 || !nir_src_is_const(l->src[0]) ||
++          nir_src_as_uint(l->src[0]) != 0 ||
++          nir_intrinsic_component(l) + comp != c || (load && l != load))
++         return;
++      load = l;
++   }
++   so->kind = SGX_SHADER_VS_POSITION;
++}
++
++static void
++match_fs(struct sgx_pipe_shader *so)
++{
++   nir_intrinsic_instr *st = single_output(so->nir), *load = NULL;
++   unsigned loc;
++   float k[4];
++   bool constant = true;
++
++   if (!st)
++      return;
++   loc = nir_intrinsic_io_semantics(st).location;
++   if ((loc != FRAG_RESULT_COLOR && loc != FRAG_RESULT_DATA0) ||
++       nir_intrinsic_write_mask(st) != 0xf ||
++       st->src[0].ssa->num_components != 4)
++      return;
++   for (unsigned c = 0; c < 4; c++)
++      constant &= source_const(st, c, &k[c]);
++   if (constant) {
++      memcpy(so->color, k, sizeof(k));
++      so->kind = SGX_SHADER_FS_CONSTANT;
++      return;
++   }
++   for (unsigned c = 0; c < 4; c++) {
++      unsigned comp;
++      nir_intrinsic_instr *l = source_load(st, c, &comp);
++
++      if (!l || comp != c || (load && l != load))
++         return;
++      if (l->intrinsic == nir_intrinsic_load_ubo) {
++         if (!nir_src_is_const(l->src[0]) || nir_src_as_uint(l->src[0]) != 0 ||
++             !nir_src_is_const(l->src[1]))
++            return;
++      } else if (l->intrinsic == nir_intrinsic_load_uniform) {
++         if (!nir_src_is_const(l->src[0]))
++            return;
++      } else {
++         return;
++      }
++      load = l;
++   }
++   /* load_ubo: a byte offset into constant buffer 0; load_uniform: vec4 slots */
++   if (load->intrinsic == nir_intrinsic_load_ubo)
++      so->ubo_offset = nir_src_as_uint(load->src[1]);
++   else
++      so->ubo_offset =
++         (nir_intrinsic_base(load) + nir_src_as_uint(load->src[0])) * 16;
++   so->kind = SGX_SHADER_FS_UNIFORM;
++}
++
++/* ---------------------------------------------------------------- compiled
++ * shaders */
++
++/* st hands uniforms over as load_uniform in vec4 slots; the compiler numbers
++ * constants in components (constant k = constant buffer 0 float k), a
++ * dynamic offset (a[i]) too */
++static bool
++rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
++{
++   if (in->intrinsic != nir_intrinsic_load_uniform)
++      return false;
++   b->cursor = nir_before_instr(&in->instr);
++   if (!nir_src_is_const(in->src[0])) {
++      nir_def *v = nir_load_uniform(b, in->def.num_components, in->def.bit_size,
++                                    nir_imul_imm(b, in->src[0].ssa, 4),
++                                    .base = nir_intrinsic_base(in) * 4,
++                                    .range = nir_intrinsic_range(in) * 4,
++                                    .dest_type = nir_intrinsic_dest_type(in));
++      nir_def_replace(&in->def, v);
++      return true;
++   }
++   nir_def *v = nir_load_uniform(
++      b, in->def.num_components, in->def.bit_size, nir_imm_int(b, 0),
++      .base = (nir_intrinsic_base(in) + nir_src_as_uint(in->src[0])) * 4,
++      .range = nir_intrinsic_range(in) * 4,
++      .dest_type = nir_intrinsic_dest_type(in));
++   nir_def_replace(&in->def, v);
++   return true;
++}
++
++/* textureSize (level 0) of a fragment program, which st's lowering of
++ * rectangle lookups asks for (coords / textureSize): the size from driver
++ * constants (SGX_K_TEXSIZE) the draw fills, as floats, where the program
++ * converts it to float anyway */
++static bool
++lower_txs(nir_builder *b, nir_instr *instr, void *data)
++{
++   if (instr->type != nir_instr_type_tex)
++      return false;
++   nir_tex_instr *tex = nir_instr_as_tex(instr);
++   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
++
++   if (tex->op != nir_texop_txs || tex->def.num_components > 2 ||
++       tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
++       (li >= 0 && (!nir_src_is_const(tex->src[li].src) ||
++                    nir_src_as_uint(tex->src[li].src))))
++      return false;
++   b->cursor = nir_before_instr(instr);
++   nir_def *f = nir_load_uniform(
++      b, tex->def.num_components, 32, nir_imm_int(b, 0),
++      .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
++      .range = tex->def.num_components, .dest_type = nir_type_float32);
++   nir_def *i = NULL;
++
++   nir_foreach_use_including_if_safe (use, &tex->def) {
++      nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
++
++      if (u && u->type == nir_instr_type_alu &&
++          nir_instr_as_alu(u)->op == nir_op_i2f32) {
++         nir_alu_instr *alu = nir_instr_as_alu(u);
++         unsigned swz[NIR_MAX_VEC_COMPONENTS];
++
++         for (unsigned c = 0; c < alu->def.num_components; c++)
++            swz[c] = alu->src[0].swizzle[c];
++         b->cursor = nir_after_instr(u);
++         nir_def_rewrite_uses(&alu->def,
++                              nir_swizzle(b, f, swz, alu->def.num_components));
++      } else {
++         if (!i) {
++            b->cursor = nir_after_instr(nir_def_instr(f));
++            i = nir_f2i32(b, f);
++         }
++         nir_src_rewrite(use, i);
++      }
++   }
++   nir_instr_remove(instr);
++   return true;
++}
++
++/*
++ * varying -> set location - VAR0, the same on both sides.  Entries are named
++ * the way the compiler looks varyings up (sgx_nir.c var_names): st names a
++ * packed varying "packed:a,b", one name per varying it holds.
++ */
++/* Desktop GL's built-in varyings (colours, back colours, fog, texture
++ * coordinates; also st's fixed-function shaders and GLES1 translation layers)
++ * are in the legacy slots, which the compiler doesn't assign: move them to VAR
++ * slots the program's own varyings leave free, each built-in its own whether
++ * this stage has it or not, so that two stages with the same varyings (a linked
++ * program's) place them alike; named after the built-in, so that a vertex
++ * shader compiled to its fragment shader's sets finds them anyway. st's
++ * two-sided colour reads the back colours in the fragment shader. */
++#define SGX_LEGACY_NAME "sgx_legacy"
++
++static void
++remap_legacy_varyings(nir_shader *nir)
++{
++   static const gl_varying_slot map[] = {
++      VARYING_SLOT_COL0, VARYING_SLOT_COL1, VARYING_SLOT_BFC0,
++      VARYING_SLOT_BFC1, VARYING_SLOT_FOGC, VARYING_SLOT_TEX0,
++      VARYING_SLOT_TEX1, VARYING_SLOT_TEX2, VARYING_SLOT_TEX3,
++      VARYING_SLOT_TEX4, VARYING_SLOT_TEX5, VARYING_SLOT_TEX6,
++      VARYING_SLOT_TEX7,
++   };
++   nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX
++                               ? nir_var_shader_out
++                               : nir_var_shader_in;
++   int slot[ARRAY_SIZE(map)];
++   uint32_t used = 0; /* VAR slots of the program's own varyings */
++   bool changed = false;
++
++   nir_foreach_variable_with_modes (var, nir, mode) {
++      if (var->data.location >= VARYING_SLOT_VAR0 &&
++          var->data.location < VARYING_SLOT_VAR0 + 32) {
++         for (unsigned r = 0;
++              r < glsl_count_vec4_slots(var->type, false, false); r++)
++            used |=
++               BITFIELD_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 31);
++      }
++   }
++   for (unsigned i = 0, s = 0; i < ARRAY_SIZE(map); i++) {
++      while (s < 32 && (used & BITFIELD_BIT(s)))
++         s++;
++      slot[i] = s < 32 ? (int)s++ : -1;
++   }
++   nir_foreach_variable_with_modes (var, nir, mode) {
++      for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
++         char name[32];
++
++         if (var->data.location != (int)map[i])
++            continue;
++         if (slot[i] < 0) {
++            fprintf(stderr, "sgx: no VAR slot left for a built-in varying\n");
++            break;
++         }
++         var->data.location = VARYING_SLOT_VAR0 + slot[i];
++         snprintf(name, sizeof(name), SGX_LEGACY_NAME "%u", i);
++         var->name = ralloc_strdup(nir, name);
++         changed = true;
++         break;
++      }
++   }
++   if (changed)
++      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
++}
++
++static int
++cmp_varying(const void *a, const void *b)
++{
++   const nir_variable *x = *(nir_variable *const *)a,
++                      *y = *(nir_variable *const *)b;
++
++   if (x->data.location != y->data.location)
++      return x->data.location - y->data.location;
++   return (int)x->data.location_frac - (int)y->data.location_frac;
++}
++
++/* The varyings' sets.  sprite: a fragment shader that reads gl_PointCoord
++ * (found here), or a vertex shader to go with one: the ISP writes the
++ * coordinate into set 0 (STATE.md "Lines and points"), so everything else
++ * moves up one set. */
++static void
++assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
++{
++   nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX
++                               ? nir_var_shader_out
++                               : nir_var_shader_in;
++   nir_variable *vars[ARRAY_SIZE(vary->v)];
++   unsigned n = 0;
++   uint64_t rows_used = 0; /* by location - VAR0 */
++   bool psize = false;
++   static bool warned;
++
++   memset(vary, 0, sizeof(*vary));
++   nir_foreach_variable_with_modes (var, nir, mode) {
++      if (nir->info.stage == MESA_SHADER_FRAGMENT &&
++          var->data.location == VARYING_SLOT_PNTC)
++         sprite = true;
++      /* the point size is the output dword after the sets */
++      if (nir->info.stage == MESA_SHADER_VERTEX &&
++          var->data.location == VARYING_SLOT_PSIZ)
++         psize = true;
++      if (var->data.location < VARYING_SLOT_VAR0 || n == ARRAY_SIZE(vars))
++         continue;
++      vars[n++] = var;
++      for (unsigned r = 0; r < glsl_count_vec4_slots(var->type, false, false);
++           r++)
++         rows_used |=
++            BITFIELD64_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 63);
++   }
++   /* a set per slot in slot order (after gl_PointCoord's set 0), each
++    * variable at its component in the slot */
++   qsort(vars, n, sizeof(vars[0]), cmp_varying);
++   for (unsigned i = 0; i < n; i++) {
++      nir_variable *var = vars[i];
++      const struct glsl_type *t = var->type;
++      unsigned slot = var->data.location - VARYING_SLOT_VAR0,
++               frac = var->data.location_frac;
++      unsigned rows = glsl_count_vec4_slots(t, false, false), comps, set;
++      struct sgx_varying *v = &vary->v[vary->n++];
++      char name[32];
++
++      t = glsl_without_array(t);
++      comps = glsl_type_is_matrix(t)
++                 ? glsl_get_vector_elements(glsl_get_column_type(t))
++                 : glsl_get_vector_elements(t);
++      /* a built-in the two stages may declare apart (gl_FogFragCoord a float
++       * against fog's vec4): the whole slot, under its own name */
++      bool legacy = var->name && !strncmp(var->name, SGX_LEGACY_NAME,
++                                          strlen(SGX_LEGACY_NAME));
++      if (legacy) {
++         frac = 0;
++         comps = 4;
++      }
++      set =
++         (sprite ? 1 : 0) + util_bitcount64(rows_used & BITFIELD64_MASK(slot));
++      /* The compiler finds a varying's set by name.  st's packed slots are
++       * named after what they hold ("packed:a,b"), and a varying split over
++       * two slots names both: two vec3 texture coordinates and the fog had
++       * the second slot written over the first.
++       * Each variable is named after its slot instead, the same in both
++       * stages. */
++      if (legacy)
++         snprintf(name, sizeof(name), "%s", var->name);
++      else
++         snprintf(name, sizeof(name), frac ? "sgx_v%u_%u" : "sgx_v%u", slot,
++                  frac);
++      var->name = ralloc_strdup(nir, name);
++      snprintf(v->name, sizeof(v->name), "%s", name);
++      v->set = set;
++      v->comp = frac;
++      v->rows = rows;
++      v->comps = comps;
++      v->precision = var->data.precision;
++      for (unsigned r = 0; r < rows && set + r < SGX_MAX_SETS; r++)
++         vary->set_comps[set + r] =
++            MAX2(vary->set_comps[set + r], frac + comps);
++   }
++   /* A flat primary colour (glShadeModel(GL_FLAT): st makes it a flat
++    * input) goes to set 0 as the TA's vertex colour, the one source the PDS
++    * iterates flat; the sets before it move up one.  Not with a sprite's
++    * coordinate in set 0. */
++   for (unsigned i = 0; nir->info.stage == MESA_SHADER_FRAGMENT && !sprite &&
++                        i < n && i < vary->n;
++        i++) {
++      struct sgx_varying *c = &vary->v[i];
++
++      if (strcmp(c->name, SGX_LEGACY_NAME "0") ||
++          vars[i]->data.interpolation != INTERP_MODE_FLAT || c->rows != 1)
++         continue;
++      for (unsigned j = 0; j < vary->n; j++) {
++         if (j != i && vary->v[j].set < c->set)
++            vary->v[j].set++;
++      }
++      c->set = 0;
++      memset(vary->set_comps, 0, sizeof(vary->set_comps));
++      for (unsigned j = 0; j < vary->n; j++) {
++         const struct sgx_varying *v = &vary->v[j];
++
++         for (unsigned r = 0; r < v->rows && v->set + r < SGX_MAX_SETS; r++)
++            vary->set_comps[v->set + r] =
++               MAX2(vary->set_comps[v->set + r], v->comp + v->comps);
++      }
++      vary->colour = true;
++      break;
++   }
++   /* past ten sets: rows into the free components of earlier sets */
++   vary->point_size = sprite;
++   if (sprite)
++      vary->set_comps[0] = 2;
++   if (!sgx_pack_varyings(vary) && !warned) {
++      fprintf(stderr, "sgx: varyings past ten sets of four components\n");
++      warned = true;
++   }
++   vary->point_size = sprite || psize;
++}
++
++/* the same sets for the same varyings (the stages' precisions may differ) */
++static bool
++same_varyings(const struct sgx_varyings *a, const struct sgx_varyings *b)
++{
++   if (a->n != b->n || a->colour != b->colour ||
++       memcmp(a->set_comps, b->set_comps, sizeof(a->set_comps)))
++      return false;
++   for (unsigned i = 0; i < a->n; i++) {
++      const struct sgx_varying *x = &a->v[i], *y = &b->v[i];
++
++      if (strcmp(x->name, y->name) || x->set != y->set || x->comp != y->comp ||
++          x->rows != y->rows || x->comps != y->comps)
++         return false;
++   }
++   return true;
++}
++
++#define SGX_FRAGCOORD_ITER 14
++
++/* what the draw needs from the compiled program besides its code: the
++ * dependent samples (where each smp goes in the flat program, its template,
++ * sampler and raw texel register) and the branches whose offsets move when
++ * the smps go in */
++struct prog_info {
++   const char *why; /* what read_program refused */
++   struct {
++      unsigned at, sampler, raw;
++      unsigned phase; /* split: at indexes code1 */
++      bool f16;       /* the texel returns F16, two registers from raw */
++      uint64_t smp;
++   } deps[SGX_MAX_DEP_SAMPLES];
++   unsigned n_deps;
++   unsigned branch_at[64]; /* flat indices of the branches */
++   unsigned n_branches;
++};
++
++/* The flat program with each dependent sample's smp and its wdf put in
++ * (ISA.md "The texture-sample sequence"): the template with the raw texel's
++ * temporary as destination (l21-27, h7 clear: r) and the sampler's 4 state
++ * words, in SA from `sa` on, as the texture state (src1 l7-13, bank l30-31 =
++ * 3: sa; h17 clear); then `wdf` on the template's DRC before the compiler's
++ * unpack reads the texel. Branch offsets are moved with the code. NULL on
++ * allocation failure; *n is the new length. */
++static uint64_t *
++insert_samples(const uint64_t *code, unsigned count,
++               const struct prog_info *info, const unsigned *sa, unsigned *n)
++{
++   unsigned total = count + 2 * info->n_deps, j = 0, k = 0;
++   uint64_t *w = malloc(total * sizeof(*w));
++   unsigned *map = malloc((count + 1) * sizeof(*map));
++
++   if (!w || !map) {
++      free(w);
++      free(map);
++      return NULL;
++   }
++   for (unsigned i = 0; i <= count; i++) {
++      while (j < info->n_deps && info->deps[j].at == i) {
++         uint32_t lo = (uint32_t)info->deps[j].smp,
++                  hi = info->deps[j].smp >> 32;
++
++         lo = (lo & ~(0x7fu << 21 | 0x7fu << 7 | 0xc0000000u)) |
++              info->deps[j].raw << 21 | sa[j] << 7 | 0xc0000000u;
++         hi &= ~(0x80u | 1u << 17);
++         w[k++] = (uint64_t)hi << 32 | lo;
++         w[k++] = (uint64_t)(0xf9200000u | (hi & 1)) << 32; /* wdf drc */
++         j++;
++      }
++      map[i] = k;
++      if (i < count)
++         w[k++] = code[i];
++   }
++   /* the branches' relative offsets (l0-17, signed) */
++   for (unsigned b = 0; b < info->n_branches; b++) {
++      unsigned i = info->branch_at[b];
++      uint32_t lo = (uint32_t)code[i], hi = code[i] >> 32;
++      int off = (int)(lo << 14) >> 14, t = (int)i + off;
++
++      if (i >= count || t < 0 || t > (int)count)
++         continue;
++      off = (int)map[t] - (int)map[i];
++      w[map[i]] =
++         (uint64_t)hi << 32 | (lo & ~0x3ffffu) | ((uint32_t)off & 0x3ffffu);
++   }
++   free(map);
++   *n = k;
++   return w;
++}
++
++static_assert(SGX_MAX_CONST_MAP == SGX_MAX_CONST_MAP,
++              "the driver holds the compiler's whole constant map");
++
++static bool
++read_program(const struct sgx_shader *out, struct sgx_pipe_shader *so,
++             struct prog_info *info)
++{
++   /* list C, decoded: kind 1 f32, 2 F16 half, 3 a C10 channel; ours
++    * (opts.driver_consts): 0x10 an F16 half of the C10 value, 0x11 a literal,
++    * 0x12 a vec4 packed as the BGRA8 colour */
++   for (unsigned i = 0; i < out->n_consts; i++) {
++      const struct sgx_const_map *m = &out->consts[i];
++      struct sgx_const *k = &so->consts[so->n_consts];
++
++      if (so->n_consts == SGX_MAX_CONST_MAP)
++         return info->why = "too many constants", false;
++      k->fmt = m->fmt;
++      k->k = m->k;
++      k->value = m->value;
++      k->slot = m->slot;
++      k->shift = m->shift;
++      k->mem = m->mem;
++      if (k->slot != SGX_SLOT_NONE)
++         so->const_dwords = MAX2(so->const_dwords, k->slot + 1u);
++      so->n_consts++;
++   }
++   if (out->mem_dwords > SGX_MAX_CONST_MAP + 1)
++      return info->why = "constant memory block too large", false;
++   so->mem_dwords = out->mem_dwords;
++   so->n_mem_bases = MIN2(out->n_mem_bases, ARRAY_SIZE(so->mem_base_slot));
++   for (unsigned j = 0; j < so->n_mem_bases; j++) {
++      so->mem_base_slot[j] = out->mem_base_slot[j];
++      so->const_dwords = MAX2(so->const_dwords, out->mem_base_slot[j] + 1u);
++   }
++   for (unsigned i = 0; i < out->n_samples; i++) {
++      const struct sgx_sample_info *x = &out->samples[i];
++
++      if (!x->dependent)
++         continue;
++      if (info->n_deps == SGX_MAX_DEP_SAMPLES)
++         return info->why = "too many dependent texture samples", false;
++      info->deps[info->n_deps].at = x->at;
++      info->deps[info->n_deps].sampler = x->sampler;
++      info->deps[info->n_deps].raw = x->reg;
++      info->deps[info->n_deps].smp = x->smp;
++      info->deps[info->n_deps].phase = x->phase;
++      info->deps[info->n_deps].f16 = x->f16;
++      info->n_deps++;
++   }
++   for (unsigned i = 0; i < out->n_blocks; i++) {
++      if (out->blocks[i].kind != SGX_BLOCK_BRANCH)
++         continue;
++      if (info->n_branches == ARRAY_SIZE(info->branch_at))
++         return info->why = "too many branches", false;
++      info->branch_at[info->n_branches++] = out->blocks[i].at;
++   }
++   return true;
++}
++
++/* the compiler's layout: vertex attributes where st put them
++ * (driver_location); uniforms and samplers are the compiler's */
++static int
++layout_place(void *data, enum sgx_layout_kind kind, const char *name)
++{
++   nir_shader *nir = data;
++
++   if (kind != SGX_LAYOUT_ATTRIB)
++      return -1;
++   nir_foreach_shader_in_variable (var, nir) {
++      if (var->name && !strcmp(var->name, name))
++         return var->data.driver_location;
++   }
++   return -1;
++}
++
++static unsigned
++layout_first_free(void *data, enum sgx_layout_kind kind)
++{
++   nir_shader *nir = data;
++   unsigned next = 0;
++
++   if (kind == SGX_LAYOUT_ATTRIB) {
++      nir_foreach_shader_in_variable (var, nir) {
++         if (var->name)
++            next = MAX2(next, var->data.driver_location +
++                                 glsl_count_attribute_slots(var->type, true));
++      }
++   }
++   return next;
++}
++
++/*
++ * Linear filtering of an sRGB texture, in the shader: the TPU filters the
++ * encoded texels and the decode comes after, where GL decodes first.  The four
++ * texels are sampled at their centres (where the TPU's filter returns the
++ * texel itself), decoded (nir_lower_tex's lower_srgb, after this) and mixed
++ * here.  Only for textures sampled at one level (sgx_fs_for): the level a
++ * minified lookup takes isn't known to the shader.  data: the units.
++ */
++static bool
++lower_srgb_filter(nir_builder *b, nir_instr *instr, void *data)
++{
++   uint32_t units = *(const uint32_t *)data;
++
++   if (instr->type != nir_instr_type_tex)
++      return false;
++   nir_tex_instr *tex = nir_instr_as_tex(instr);
++   int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
++   bool rect = tex->sampler_dim == GLSL_SAMPLER_DIM_RECT;
++
++   if (tex->op != nir_texop_tex || tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
++       !(units & (1u << tex->texture_index)) || tex->is_shadow ||
++       tex->is_array || ci < 0 || tex->coord_components != 2 ||
++       (tex->sampler_dim != GLSL_SAMPLER_DIM_2D && !rect) ||
++       nir_tex_instr_src_index(tex, nir_tex_src_projector) >= 0 ||
++       nir_tex_instr_src_index(tex, nir_tex_src_bias) >= 0 ||
++       nir_tex_instr_src_index(tex, nir_tex_src_offset) >= 0)
++      return false;
++   b->cursor = nir_before_instr(instr);
++   /* in texels: a rectangle texture's coordinates already are */
++   nir_def *sz =
++      rect ? NULL
++           : nir_load_uniform(b, 2, 32, nir_imm_int(b, 0),
++                              .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
++                              .range = 2, .dest_type = nir_type_float32);
++   nir_def *coord = tex->src[ci].src.ssa;
++   nir_def *u = nir_fadd_imm(b, sz ? nir_fmul(b, coord, sz) : coord, -0.5);
++   nir_def *i0 = nir_ffloor(b, u);
++   nir_def *f = nir_fsub(b, u, i0);
++   nir_def *t[4];
++
++   for (unsigned k = 0; k < 4; k++) {
++      nir_tex_instr *tap = nir_instr_as_tex(nir_instr_clone(b->shader, instr));
++      nir_def *c =
++         nir_fadd(b, i0, nir_imm_vec2(b, (k & 1) + 0.5f, (k >> 1) + 0.5f));
++
++      nir_builder_instr_insert(b, &tap->instr);
++      nir_src_rewrite(&tap->src[ci].src, sz ? nir_fdiv(b, c, sz) : c);
++      t[k] = &tap->def;
++   }
++   unsigned n = tex->def.num_components;
++   nir_def *fx = nir_replicate(b, nir_channel(b, f, 0), n);
++   nir_def *fy = nir_replicate(b, nir_channel(b, f, 1), n);
++   nir_def *r =
++      nir_flrp(b, nir_flrp(b, t[0], t[1], fx), nir_flrp(b, t[2], t[3], fx), fy);
++
++   nir_def_replace(&tex->def, r);
++   return true;
++}
++
++/* the units a fragment shader takes shadow samples of */
++static uint32_t
++shadow_units(nir_shader *nir)
++{
++   uint32_t units = 0;
++
++   nir_foreach_function_impl (impl, nir) {
++      nir_foreach_block (block, impl) {
++         nir_foreach_instr (instr, block) {
++            if (instr->type != nir_instr_type_tex ||
++                !nir_instr_as_tex(instr)->is_shadow)
++               continue;
++            nir_tex_instr *tex = nir_instr_as_tex(instr);
++            int d = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
++            nir_variable *var = d >= 0 ? nir_deref_instr_get_variable(
++                                            nir_src_as_deref(tex->src[d].src))
++                                       : NULL;
++            unsigned unit = var ? var->data.binding : tex->texture_index;
++
++            if (unit < 32)
++               units |= 1u << unit;
++         }
++      }
++   }
++   return units;
++}
++
++/* A shadow sample: the depth sampled as a value, compared in the shader
++ * (the TPU doesn't filter the F32 depth, so a compare of the nearest texel)
++ * with the sampler's function (compare: PIPE_FUNC + 1 by unit, 0 or NULL
++ * LEQUAL, GL's default) and swizzled as the view says (swz, sgx_fs_for). */
++static void
++lower_shadow(nir_shader *nir, const uint8_t *compare, const uint16_t *swz)
++{
++   enum compare_func func[PIPE_MAX_SAMPLERS];
++   nir_lower_tex_shadow_swizzle sw[PIPE_MAX_SAMPLERS];
++
++   for (unsigned u = 0; u < PIPE_MAX_SAMPLERS; u++) {
++      func[u] = compare && compare[u] ? (enum compare_func)(compare[u] - 1)
++                                      : COMPARE_FUNC_LEQUAL;
++      sw[u] = (nir_lower_tex_shadow_swizzle){PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y,
++                                             PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W};
++      if (swz && swz[u])
++         sw[u] = (nir_lower_tex_shadow_swizzle){
++            swz[u] & 7, swz[u] >> 3 & 7, swz[u] >> 6 & 7, swz[u] >> 9 & 7};
++   }
++   /* (the reference clamped to [0, 1], as for the fixed-point depths) */
++   NIR_PASS(_, nir, nir_lower_tex_shadow, PIPE_MAX_SAMPLERS, func, sw, true);
++}
++
++/* fs_vary: a vertex shader compiled to a fragment shader's sets; srgb: the
++ * samplers whose texels a fragment shader decodes from sRGB, srgb_filter
++ * those of them it filters itself (lower_srgb_filter) */
++static bool
++compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
++               nir_shader *orig, const struct sgx_varyings *fs_vary,
++               unsigned srgb, uint32_t srgb_filter, const uint16_t *swz,
++               uint32_t not_bgra, const uint8_t *vtx_fmt, bool points,
++               uint32_t depth, const uint8_t *compare)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++   nir_shader *nir = nir_shader_clone(NULL, orig);
++   struct sgx_compile_options opts = {0};
++   struct sgx_varyings vary;
++   struct sgx_shader out;
++   struct prog_info info = {0};
++   bool vertex = nir->info.stage == MESA_SHADER_VERTEX;
++
++   opts.verbose = (sgx_drv_debug & SGX_DEBUG_NIR) != 0;
++   /* The point size (st gives every vertex program one) is an output only
++    * for points: elsewhere it costs a dword a vertex in the parameter buffer
++    * and rounds the vertex up to the next four (the DDK's triangles carry
++    * none) */
++   if (vertex && !points) {
++      bool demoted = false;
++
++      nir_foreach_shader_out_variable (var, nir) {
++         if (var->data.location == VARYING_SLOT_PSIZ) {
++            var->data.mode = nir_var_shader_temp;
++            demoted = true;
++         }
++      }
++      if (demoted) {
++         nir_fixup_deref_modes(nir);
++         NIR_PASS(_, nir, nir_lower_vars_to_ssa);
++         NIR_PASS(_, nir, nir_opt_dce);
++         NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
++      }
++   }
++   opts.f16 = ctx->base.screen->shader_caps[nir->info.stage].fp16;
++   /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
++    * F16 and literals in SA, where libusc converts in a secondary program */
++   opts.driver_consts = true;
++   if (vtx_fmt) {
++      memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
++      memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
++   }
++   /* st's fixed-function fragment programs only owe the framebuffer's
++    * precision: mediump (texture coordinates stay F32); dEQP-GLES2 mustpass
++    * and piglit unchanged with it and F16 samples (EA1, 2026-11-10) */
++   /* the units sampling 8888 texels get them B, G, R, A ordered
++    * (sgx_tex_format): all of them unless the variant says otherwise */
++   /* a unit sampled for a compare holds a depth texture */
++   uint32_t shadow =
++      nir->info.stage == MESA_SHADER_FRAGMENT ? shadow_units(nir) : 0;
++   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
++      opts.tex_bgra = ~not_bgra & ~(depth | shadow);
++      opts.tex_f32 = depth | shadow;
++      /* a coordinate only samples read: the PDS samples from the set
++       * itself (a pure-sample DOUTI, source 0x24, below) */
++      opts.pds_samples_alone = screen->core->pds_samples;
++   }
++   /* texels a mediump read takes come back F16 (the sample's T3, below) */
++   opts.f16_samples = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
++                      screen->core->f16_sample_return &&
++                      !(sgx_drv_debug & SGX_DEBUG_NO_F16_SAMPLES);
++   /* and those of dependent samples (sgx_draw.c sets their T3) */
++   opts.dep_f16_samples =
++      opts.f16_samples && !(sgx_drv_debug & SGX_DEBUG_NO_DEP_F16_SAMPLES);
++   opts.fs_mediump = opts.f16 && nir->info.stage == MESA_SHADER_FRAGMENT &&
++                     nir->info.name && !strcmp(nir->info.name, "ff-fs") &&
++                     !(sgx_drv_debug & SGX_DEBUG_NO_FF_MEDIUMP);
++   NIR_PASS(_, nir, nir_shader_intrinsics_pass, rescale_uniform,
++            nir_metadata_control_flow, NULL);
++   {
++      /* a 1D texture is a 2D one a texel high (sgx_resource): its samples
++       * become 2D ones on that row; a rectangle texture's coordinates are
++       * divided by its size (lower_txs), which st's fixed-function programs
++       * leave to the driver (TFP's rectangle binding: xfwm4's compositor) */
++      nir_lower_tex_options tex = {.lower_1d = true,
++                                   .lower_srgb = srgb,
++                                   .lower_rect = true};
++
++      /* a sampler view's swizzle, as the texel comes out (sgx_fs_for); a
++       * shadow sample's goes on its result (lower_shadow) */
++      if (shadow)
++         lower_shadow(nir, compare, swz);
++      for (unsigned u = 0; swz && u < PIPE_MAX_SAMPLERS; u++) {
++         if (!swz[u] || (shadow >> u & 1))
++            continue;
++         tex.swizzle_result |= 1u << u;
++         for (unsigned c = 0; c < 4; c++)
++            tex.swizzles[u][c] = swz[u] >> (3 * c) & 7;
++      }
++      if (srgb_filter)
++         NIR_PASS(_, nir, nir_shader_instructions_pass, lower_srgb_filter,
++                  nir_metadata_control_flow, &srgb_filter);
++      NIR_PASS(_, nir, nir_lower_tex, &tex);
++   }
++   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
++      NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
++               nir_metadata_control_flow, NULL);
++      NIR_PASS(_, nir, nir_opt_dce);
++   }
++   remap_legacy_varyings(nir);
++   /* (names the variables the way the list does) */
++   assign_varyings(nir, &vary, false);
++   bool sprite = fs_vary && fs_vary->point_size;
++   if (fs_vary) {
++      bool psize = vary.point_size;
++
++      vary = *fs_vary;
++      vary.point_size = sprite || psize;
++   }
++   so->reads_pointcoord =
++      nir->info.stage == MESA_SHADER_FRAGMENT && vary.point_size;
++   if (!so->vary)
++      so->vary = MALLOC_STRUCT(sgx_varyings);
++   if (so->vary)
++      *so->vary = fs_vary ? *fs_vary : vary;
++   struct sgx_layout layout = {layout_place, layout_first_free, nir};
++
++   /* gl_FrontFacing against the winding gallium calls front, sgx_draw.c writes
++    * it */
++   opts.front_sa = SGX_SA_FRONT;
++
++   opts.layout = &layout;
++   if (vertex) {
++      /* a matrix attribute arrives as a variable per column, all with the
++       * matrix's name: name the later columns apart so each one gets its own
++       * slot */
++      nir_foreach_shader_in_variable (var, nir) {
++         nir_foreach_shader_in_variable (prev, nir) {
++            if (prev == var)
++               break;
++            if (var->name && prev->name && !strcmp(var->name, prev->name)) {
++               var->name = ralloc_asprintf(var, "%s#%d", var->name,
++                                           var->data.driver_location);
++               break;
++            }
++         }
++      }
++      nir_foreach_shader_in_variable (var, nir) {
++         if (var->name)
++            so->n_attribs = MAX2(
++               so->n_attribs, var->data.driver_location +
++                                 glsl_count_attribute_slots(var->type, true));
++      }
++   }
++   if (sgx_drv_debug & SGX_DEBUG_NIR)
++      nir_print_shader(nir, stderr);
++   /* a discarding fragment program in two phases, as the DDK runs its
++    * alpha-tested ones: the test before the visibility feedback, the colour
++    * after it for the pixels that pass (out.code1); the compiler decides */
++   opts.split_phases = !vertex && !(sgx_drv_debug & SGX_DEBUG_NO_PHASE_SPLIT);
++   if (sgx_compile(nir, &opts, &vary, &out)) {
++      fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",
++              vertex ? "vertex" : "fragment", out.log ? out.log : "");
++      sgx_shader_free(&out);
++      ralloc_free(nir);
++      return false;
++   }
++   if (sgx_dump_code_dir()) {
++      static unsigned seq;
++      char path[512];
++      FILE *fp;
++
++      /* "hi lo" hex per instruction, as sgxc's .code (dis.py -x reads the
++       * pairs) */
++      snprintf(path, sizeof(path), "%s/%s-%u.code", sgx_dump_code_dir(),
++               vertex ? "vs" : "fs", seq);
++      if ((fp = fopen(path, "w"))) {
++         for (unsigned i = 0; i < out.n_code; i++)
++            fprintf(fp, "%08x %08x\n", (unsigned)(out.code[i] >> 32),
++                    (unsigned)out.code[i]);
++         fclose(fp);
++      }
++      /* a split program's phase 1, as sgxc -P names it */
++      snprintf(path, sizeof(path), "%s/fs-%u.code1", sgx_dump_code_dir(), seq);
++      if (out.n_code1 && (fp = fopen(path, "w"))) {
++         for (unsigned i = 0; i < out.n_code1; i++)
++            fprintf(fp, "%08x %08x\n", (unsigned)(out.code1[i] >> 32),
++                    (unsigned)out.code1[i]);
++         fclose(fp);
++      }
++      seq++;
++   }
++   /* phase 1 is straight-line (the compiler splits only such programs): no
++    * branch offsets to move there */
++   for (unsigned i = 0; i < out.n_blocks1; i++) {
++      if (out.blocks1[i].kind == SGX_BLOCK_BRANCH) {
++         info.why = "a branch in phase 1";
++         out.n_code1 = 0;
++         break;
++      }
++   }
++   if (info.why || !read_program(&out, so, &info)) {
++      fprintf(stderr, "sgx: %s shader: not handled yet (%s)\n",
++              vertex ? "vertex" : "fragment", info.why);
++      sgx_shader_free(&out);
++      ralloc_free(nir);
++      return false;
++   }
++
++   {
++      /* An instruction names an SA register in 7 bits: a program's constants
++       * (from sa9, sa10 in a vertex program) and a fragment program's
++       * texture state (after them) end at sa127.  Past it the numbers wrap,
++       * onto registers the program never loaded, and the 3D locks up (piglit
++       * glsl-uniform-interstage-limits).  The compiler moves constants that
++       * don't fit to memory (mem_dwords), so this only catches a program
++       * whose SA use still runs past (a guard, not drawn). */
++      unsigned end = (vertex ? 10 : 9) + MAX2(so->const_dwords, out.sa_slots) +
++                     (vertex ? 0 : 4 * info.n_deps);
++
++      if (end > 128) {
++         fprintf(
++            stderr,
++            "sgx: %s shader needs SA registers up to sa%u (sa127 is the last): not drawn\n",
++            vertex ? "vertex" : "fragment", end - 1);
++         sgx_shader_free(&out);
++         ralloc_free(nir);
++         return false;
++      }
++   }
++
++   uint32_t old_code = so->prog.code;
++
++   memset(&so->prog, 0, sizeof(so->prog));
++   simple_mtx_lock(&screen->lock);
++   sgxws_code_free(ctx->hw, old_code);
++   if (vertex) {
++      unsigned dwords = 4, tsp[SGX_MAX_SETS] = {0};
++
++      so->prog.vertex = true;
++      so->prog.code =
++         sgxws_upload_vs(ctx->hw, out.code, out.n_code, out.n_temps);
++      so->prog.in_dwords = so->prog.attr_dwords = 4 * MAX2(so->n_attribs, 1);
++      for (unsigned s = 0; s < SGX_MAX_SETS; s++) {
++         unsigned n = vary.set_comps[s];
++
++         if (!n)
++            continue;
++         dwords += n;
++         /* TSP word 0: 1, 2, 3, or 5 for 4 components (STATE.md section 3) */
++         tsp[s] = n == 4 ? 5 : n;
++      }
++      STATIC_ASSERT(SGX_MAX_SETS == 10);
++      sgx_pack(&so->prog.tsp_sizes, TA_STATE_TSP0, t0)
++      {
++         t0.set0 = tsp[0];
++         t0.set1 = tsp[1];
++         t0.set2 = tsp[2];
++         t0.set3 = tsp[3];
++         t0.set4 = tsp[4];
++         t0.set5 = tsp[5];
++         t0.set6 = tsp[6];
++         t0.set7 = tsp[7];
++         t0.set8 = tsp[8];
++         t0.set9 = tsp[9];
++      }
++      so->prog.point_size = vary.point_size;
++      so->prog.colour = vary.colour;
++      /* TSP word 1 stays 0, as the DDK's for a sampled set: with a set's bit
++       * in it, the TPU samples at a constant coordinate; the DDK's for a
++       * sprite's coordinate set (`sprite`) is 1 */
++      sgx_pack(&so->prog.tsp_prec, TA_STATE_TSP1, t1) t1.f16 = sprite ? 1 : 0;
++      /* user clip planes 0..n_clip-1 (st's clip distances), their results
++       * after the point size */
++      so->prog.clip_planes = BITFIELD_MASK(MIN2(out.n_clip, 6));
++      so->prog.out_dwords = dwords + (vary.point_size ? 1 : 0) + out.n_clip;
++      so->prog.const_dwords = so->const_dwords;
++   } else {
++      /* dependent samples: their state words go in SA after the constants */
++      if (info.n_deps) {
++         unsigned sa[SGX_MAX_DEP_SAMPLES], n;
++
++         if (MAX2(so->const_dwords, out.sa_slots) + 4 * info.n_deps >
++             SGX_MAX_CONSTS) {
++            fprintf(stderr,
++                    "sgx: %u SA slots and %u dependent samples: not drawn\n",
++                    out.sa_slots, info.n_deps);
++            simple_mtx_unlock(&screen->lock);
++            sgx_shader_free(&out);
++            ralloc_free(nir);
++            return false;
++         }
++         /* after every SA register the program uses: its constants (list C)
++          * and the slots the compiler keeps for itself */
++         if (out.sa_slots > so->const_dwords)
++            SGX_DBG(NIR, "fragment program: %u SA slots, %u in list C\n",
++                    out.sa_slots, so->const_dwords);
++         so->const_dwords = MAX2(so->const_dwords, out.sa_slots);
++         for (unsigned j = 0; j < info.n_deps; j++) {
++            so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
++            so->dep_sampler[j] = info.deps[j].sampler;
++            so->dep_f16[j] = info.deps[j].f16;
++            sa[j] = so->dep_sa[j];
++         }
++         so->n_deps = info.n_deps;
++         so->const_dwords += 4 * info.n_deps;
++         if (out.n_code1) {
++            /* each phase's dependent samples into its own block */
++            struct prog_info i0 = info, i1 = info;
++            unsigned sa0[SGX_MAX_DEP_SAMPLES], sa1[SGX_MAX_DEP_SAMPLES], n1;
++
++            i0.n_deps = i1.n_deps = 0;
++            i1.n_branches = 0;
++            for (unsigned j = 0; j < info.n_deps; j++) {
++               struct prog_info *pi = info.deps[j].phase ? &i1 : &i0;
++               unsigned *ps = info.deps[j].phase ? sa1 : sa0;
++
++               ps[pi->n_deps] = sa[j];
++               pi->deps[pi->n_deps++] = info.deps[j];
++            }
++            so->code = insert_samples(out.code, out.n_code, &i0, sa0, &n);
++            so->code1 = insert_samples(out.code1, out.n_code1, &i1, sa1, &n1);
++            if (!so->code || !so->code1) {
++               free(so->code);
++               free(so->code1);
++               so->code = so->code1 = NULL;
++            }
++            so->n_code1 = so->code1 ? n1 : 0;
++         } else {
++            so->code = insert_samples(out.code, out.n_code, &info, sa, &n);
++         }
++         so->n_code = so->code ? n : 0;
++      } else if (out.n_code1) {
++         /* phase 0's code as the program's (it ends at the feedback nop, so
++          * the discard handling below applies), phase 1's after the feedback */
++         so->code = malloc(out.n_code * sizeof(*so->code));
++         so->code1 = malloc(out.n_code1 * sizeof(*so->code1));
++         if (so->code && so->code1) {
++            memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
++            memcpy(so->code1, out.code1, out.n_code1 * sizeof(*so->code1));
++            so->n_code = out.n_code;
++            so->n_code1 = out.n_code1;
++         } else {
++            free(so->code);
++            free(so->code1);
++            so->code = so->code1 = NULL;
++         }
++      } else {
++         so->code = malloc(MAX2(out.n_code, 1) * sizeof(*so->code));
++         if (so->code) {
++            memcpy(so->code, out.code, out.n_code * sizeof(*so->code));
++            so->n_code = out.n_code;
++         }
++      }
++      /* a program that discards: its feedback nop is the last instruction
++       * (the compiler's layout); the depth plane goes in after the iterated
++       * inputs, by one more PDS iteration. The compiled program's discards,
++       * not the shader's: a sampler view's swizzle can fold one away (an RGB
++       * texture's alpha is 1) */
++      so->discard_pa = -1;
++      if (out.discards) {
++         if (!so->n_code || so->code[so->n_code - 1] != (uint64_t)0xf8000140u
++                                                           << 32) {
++            fprintf(
++               stderr,
++               "sgx: fragment shader with discard: no feedback point, not drawn\n");
++            free(so->code);
++            free(so->code1);
++            so->code = so->code1 = NULL;
++         }
++      }
++      /* gl_FragDepth waits in pa<depth_pa> at the feedback nop for a depthf
++       * whose form isn't traced yet: until then the triangle's own depth */
++      if (out.writes_depth && !ctx->warned_frag_depth) {
++         fprintf(
++            stderr,
++            "sgx: gl_FragDepth not written yet (the triangle's depth is used)\n");
++         ctx->warned_frag_depth = true;
++      }
++      so->uses_front_face = out.uses_front_face;
++      so->color_reg = out.colour_pa;
++      so->temps = out.n_temps;
++      so->prog.temps = out.n_temps;
++      so->prog.pa_dwords = out.n_pa;
++      so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
++      /* One DOUTI per iteration, in PA order (docs/PDS.md "DOUTI"): a
++       * varying's iterator is its set + 1, or, with the vertex colour in set
++       * 0, the set itself (the PDS numbers the sets after the colour from 1:
++       * seen for a sample, an iteration assumed alike).
++       * The DDK's driver also iterates a
++       * placeholder colour (source 0x20) in a shader without varyings; that
++       * hangs the GPU when the vertex program outputs no colour, and ours
++       * never do, so there is none. */
++      int last_plain = -1, last_sample = -1;
++
++      for (unsigned i = 0; i < out.n_iters && i < ARRAY_SIZE(so->prog.douti);
++           i++) {
++         unsigned it = out.iters[i].set + 1;
++         unsigned tc = out.iters[i].set + (vary.colour ? 0 : 1);
++
++         if (out.iters[i].sample) {
++            /* sample half: coordinate set + 1, 2-D or projected (docs/PDS.md).
++             * The sample half is independent of the iterate half, so a sample
++             * is merged into the previous DOUTI when that one is a plain
++             * iteration of a coordinate set, of this set or another, as the
++             * DDK's generator does: its texel lands after that iteration, where
++             * a DOUTI of its own would put it.  Not into gl_FragCoord's or a
++             * point coordinate's (its w1 bits are the sample half's), nor a
++             * flat one's (b25-26 2 may take the sample's coordinate too).
++             * Otherwise a pure sample (source 0x24). */
++            bool proj = out.iters[i].proj;
++            unsigned prev = so->prog.n_douti - 1;
++            struct sgx_pds_douti *d =
++               so->prog.n_douti ? &so->prog.douti[prev] : NULL;
++            bool other_set = !(sgx_drv_debug & SGX_DEBUG_NO_PDS_MERGE);
++
++            if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 &&
++                !d->proj && d->iterate && !d->w1 && d->b25_26 == 3 &&
++                (d->src == tc ||
++                 (other_set && d->src >= 1 && d->src <= SGX_MAX_SETS))) {
++               d->sample_set = tc;
++               d->dim2 = !proj;
++               d->proj = proj;
++               so->prog.douti_tex[prev] = out.iters[i].sampler + 1;
++               last_sample = prev;
++            } else {
++               last_sample = so->prog.n_douti;
++               so->prog.douti_tex[so->prog.n_douti] = out.iters[i].sampler + 1;
++               so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
++                  .sample_set = tc,
++                  .dim2 = !proj,
++                  .proj = proj,
++                  .src = 0x24,
++                  .b25_26 = 3,
++               };
++            }
++            /* returned F16, two registers (opts.f16_samples): the DDK's T3
++             * for a sample its program does math on, as a whole word */
++            if (out.iters[i].f16) {
++               so->prog.douti_t3_clr[last_sample] = ~0u;
++               so->prog.douti_t3_set[last_sample] = 0x01028800u;
++            }
++            continue;
++         }
++         /* gl_FragCoord (the compiler's set 13) is source 0: x and y at pixel
++          * centres in the target's memory order, z, 1/w (docs/PDS.md "DOUTI") */
++         if (it == SGX_FRAGCOORD_ITER)
++            tc = 0;
++         /* set 0 as the vertex colour: source 0x20, four components into
++          * one register as BGRA8 */
++         bool colour =
++            vary.colour && out.iters[i].set == 0 && !out.iters[i].pointcoord;
++
++         last_plain = so->prog.n_douti;
++         so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
++            .src = colour ? 0x20 : tc,
++            .comps = colour ? 4 : out.iters[i].comps,
++            .iterate = true,
++            /* 2: the provoking (last) vertex's value, 3 interpolated; only
++             * the colour source iterates flat */
++            .b25_26 = out.iters[i].flat ? 2 : 3,
++            .prec1 = out.iters[i].f16,
++            .w1 = out.iters[i].pointcoord ? 0x10 : 0,
++         };
++      }
++      if (so->code && out.discards) {
++         /* the triangle's depth plane (source 0x22, 3 components) after the
++          * inputs: pa<n> on, n = the registers the iterations above fill (an
++          * F32 component 1, an F16 pair 1, a sampled texel or the vertex
++          * colour 1) */
++         unsigned pa = 0;
++
++         for (unsigned i = 0; i < so->prog.n_douti; i++) {
++            const struct sgx_pds_douti *d = &so->prog.douti[i];
++
++            if (d->iterate)
++               pa += d->src == 0x20 ? 1
++                     : d->prec1     ? (d->comps + 1) / 2
++                                    : d->comps;
++            if (d->dim2 || d->proj)
++               pa++;
++         }
++         /* (an F16 sample fills two) */
++         for (unsigned i = 0; i < out.n_iters; i++)
++            pa = MAX2(pa, (unsigned)out.iters[i].pa + out.iters[i].regs);
++         if (so->prog.n_douti == ARRAY_SIZE(so->prog.douti)) {
++            free(so->code);
++            free(so->code1);
++            so->code = so->code1 = NULL;
++         } else {
++            last_plain = so->prog.n_douti;
++            so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
++               .src = 0x22,
++               .comps = 3,
++               .iterate = true,
++               .b25_26 = 3,
++            };
++            so->discard_pa = pa;
++            so->prog.pa_dwords = MAX2(so->prog.pa_dwords, pa + 3);
++            /* the visibility test's words in sa3, sa4 come with the secondary
++             * DMA */
++            so->prog.sec_dwords = 9 + so->const_dwords;
++         }
++      }
++      so->prog.code =
++         !so->code ? 0
++         : so->code1 && so->discard_pa >= 0
++            ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
++                                    so->n_code1, so->color_reg, NULL,
++                                    so->discard_pa, so->temps)
++            : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg,
++                              NULL, so->discard_pa, so->temps);
++      if (last_plain >= 0)
++         so->prog.douti[last_plain].last_iter = true;
++      if (last_sample >= 0)
++         so->prog.douti[last_sample].last_sample = true;
++   }
++   simple_mtx_unlock(&screen->lock);
++   if (sgx_drv_debug & SGX_DEBUG_NIR)
++      fprintf(
++         stderr,
++         "sgx: compiled %s shader: %u instructions, %u temps, %u constants, %u iterators\n",
++         vertex ? "vertex" : "fragment", out.n_code, out.n_temps, so->n_consts,
++         out.n_iters);
++   so->kind = so->prog.code ? SGX_SHADER_COMPILED : SGX_SHADER_UNSUPPORTED;
++   sgx_shader_free(&out);
++   ralloc_free(nir);
++   return so->kind == SGX_SHADER_COMPILED;
++}
++
++static void *
++sgx_create_shader_state(struct pipe_context *pctx,
++                        const struct pipe_shader_state *cso)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_pipe_shader *so = CALLOC_STRUCT(sgx_pipe_shader);
++   nir_shader *nir;
++
++   if (!so)
++      return NULL;
++   so->discard_pa = -1;
++   if (cso->type == PIPE_SHADER_IR_NIR)
++      nir = cso->ir.nir;
++   else
++      nir = tgsi_to_nir(cso->tokens, pctx->screen, false);
++   so->nir = nir;
++   nir_foreach_shader_out_variable (var, nir)
++      so->writes_psize |= var->data.location == VARYING_SLOT_PSIZ;
++
++   if (!nir->info.io_lowered) {
++      uint64_t t = os_time_get_nano();
++      bool ok = compile_shader(ctx, so, nir, NULL, 0, 0, NULL, 0, NULL, false,
++                               0, NULL);
++
++      ctx->stats.compile_ns += os_time_get_nano() - t;
++      if (ok)
++         return so;
++   }
++
++   if (!nir->info.io_lowered)
++      NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
++               type_size, 0);
++   NIR_PASS(_, nir, nir_lower_vars_to_ssa);
++   NIR_PASS(_, nir, nir_opt_constant_folding);
++   NIR_PASS(_, nir, nir_opt_copy_prop);
++   NIR_PASS(_, nir, nir_opt_dce);
++
++   if (nir->info.stage == MESA_SHADER_VERTEX)
++      match_vs(so);
++   else if (nir->info.stage == MESA_SHADER_FRAGMENT)
++      match_fs(so);
++
++   if ((sgx_drv_debug & SGX_DEBUG_NIR) || (!so->kind && !ctx->warned_shader)) {
++      if (!so->kind)
++         fprintf(stderr,
++                 "sgx: no program for this %s shader yet (drawn as nothing):\n",
++                 mesa_shader_stage_name(nir->info.stage));
++      else
++         fprintf(stderr, "sgx: %s shader -> fixed program %d\n",
++                 mesa_shader_stage_name(nir->info.stage), so->kind);
++      if (!so->kind || (sgx_drv_debug & SGX_DEBUG_NIR))
++         nir_print_shader(nir, stderr);
++      if (!so->kind)
++         ctx->warned_shader = !(sgx_drv_debug & SGX_DEBUG_NIR);
++   }
++   return so;
++}
++
++static void
++sgx_bind_vs_state(struct pipe_context *pctx, void *hwcso)
++{
++   sgx_context(pctx)->vs = hwcso;
++}
++
++static void
++sgx_bind_fs_state(struct pipe_context *pctx, void *hwcso)
++{
++   sgx_context(pctx)->fs = hwcso;
++}
++
++/* a shader's programs (its blend variants too) go: the winsys frees their
++ * code once no render runs it */
++static void
++free_programs(struct sgx_context *ctx, struct sgx_pipe_shader *so)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++
++   if (!ctx->hw)
++      return;
++   simple_mtx_lock(&screen->lock);
++   sgxws_code_free(ctx->hw, so->prog.code);
++   for (unsigned i = 0; i < so->n_variants; i++)
++      sgxws_code_free(ctx->hw, so->variants[i].code);
++   simple_mtx_unlock(&screen->lock);
++}
++
++/* a variant (sgx_vs_for, sgx_fs_for) */
++static void
++destroy_variant(struct sgx_context *ctx, struct sgx_pipe_shader *v)
++{
++   if (!v)
++      return;
++   free_programs(ctx, v);
++   free(v->code);
++   free(v->code1);
++   FREE(v->vary);
++   FREE(v);
++}
++
++static void
++sgx_delete_shader_state(struct pipe_context *pctx, void *hwcso)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_pipe_shader *so = hwcso;
++
++   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_vs); i++)
++      destroy_variant(ctx, so->variants_vs[i]);
++   for (unsigned i = 0; i < ARRAY_SIZE(so->variants_srgb); i++)
++      destroy_variant(ctx, so->variants_srgb[i]);
++   ralloc_free(so->nir);
++   so->nir = NULL;
++   destroy_variant(ctx, so);
++}
++
++struct sgx_pipe_shader *
++sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
++           const struct sgx_pipe_shader *fs, const uint8_t *vtx_fmt,
++           bool points)
++{
++   static const uint8_t f32x4[16];
++   const struct sgx_varyings *vary = fs && fs->vary ? fs->vary : vs->vary;
++   struct sgx_pipe_shader **slot;
++
++   if (!vtx_fmt)
++      vtx_fmt = f32x4;
++   points = points && vs->writes_psize;
++   if ((!vs->vary || !vary || same_varyings(vs->vary, vary)) &&
++       !memcmp(vtx_fmt, f32x4, sizeof(f32x4)) && !points)
++      return vs;
++   for (unsigned i = 0; i < ARRAY_SIZE(vs->variants_vs); i++) {
++      struct sgx_pipe_shader *v = vs->variants_vs[i];
++
++      if (v && v->points == points &&
++          (!vary || (same_varyings(v->vary, vary) &&
++                     v->vary->point_size == vary->point_size)) &&
++          !memcmp(v->vtx_fmt, vtx_fmt, sizeof(v->vtx_fmt)))
++         return v;
++   }
++   if (!vs->nir)
++      return NULL;
++   /* the oldest goes */
++   slot = &vs->variants_vs[vs->next_variant_vs++ % ARRAY_SIZE(vs->variants_vs)];
++   destroy_variant(ctx, *slot);
++   if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
++      return NULL;
++   (*slot)->discard_pa = -1;
++   (*slot)->points = points;
++   if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, 0, NULL, 0,
++                       vtx_fmt, points, 0, NULL) ||
++       !(*slot)->prog.code) {
++      FREE((*slot)->vary);
++      FREE(*slot);
++      *slot = NULL;
++   }
++   return *slot;
++}
++
++/* the texture units a fragment shader samples (all, when it isn't known) */
++uint32_t
++sgx_fs_textures_used(const struct sgx_pipe_shader *fs)
++{
++   uint32_t mask = 0;
++   unsigned unit;
++
++   if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
++      return ~0u;
++   BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS)
++      mask |= 1u << unit;
++   return mask;
++}
++
++struct sgx_pipe_shader *
++sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
++{
++   struct sgx_pipe_shader **slot;
++   unsigned srgb = 0, unit;
++   uint32_t srgb_filter = 0;
++   uint16_t swz[PIPE_MAX_SAMPLERS] = {0};
++   uint32_t not_bgra = 0, depth = 0;
++   uint8_t compare[PIPE_MAX_SAMPLERS] = {0};
++   bool any_swz = false;
++
++   if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
++      return fs;
++   BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS) {
++      const struct pipe_sampler_view *v = ctx->views[unit];
++
++      if (!v)
++         continue;
++      if (util_format_is_srgb(v->format)) {
++         const struct pipe_sampler_state *ss = ctx->samplers[unit];
++
++         srgb |= 1u << unit;
++         /* filtered at one level: decoded before it's filtered */
++         if (ss &&
++             (ss->mag_img_filter == PIPE_TEX_FILTER_LINEAR ||
++              ss->min_img_filter == PIPE_TEX_FILTER_LINEAR) &&
++             (ss->min_mip_filter == PIPE_TEX_MIPFILTER_NONE ||
++              v->u.tex.first_level == v->u.tex.last_level))
++            srgb_filter |= 1u << unit;
++      }
++      if (!sgx_tex_bgra(v->format))
++         not_bgra |= 1u << unit;
++      if (sgx_tex_depth(v->format)) {
++         const struct pipe_sampler_state *ss = ctx->samplers[unit];
++
++         depth |= 1u << unit;
++         if (ss && ss->compare_mode == PIPE_TEX_COMPARE_R_TO_TEXTURE)
++            compare[unit] = ss->compare_func + 1;
++      }
++      /* XYZW: none, 0 */
++      if (v->swizzle_r != PIPE_SWIZZLE_X || v->swizzle_g != PIPE_SWIZZLE_Y ||
++          v->swizzle_b != PIPE_SWIZZLE_Z || v->swizzle_a != PIPE_SWIZZLE_W) {
++         /* b15 marks one: XXXX packs to 0 */
++         swz[unit] = 0x8000 | v->swizzle_r | v->swizzle_g << 3 |
++                     v->swizzle_b << 6 | v->swizzle_a << 9;
++         any_swz = true;
++      }
++   }
++   if (!srgb && !any_swz && !not_bgra)
++      return fs;
++   for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
++      if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
++          fs->variants_srgb[i]->srgb_filter == srgb_filter &&
++          fs->variants_srgb[i]->not_bgra == not_bgra &&
++          fs->variants_srgb[i]->depth == depth &&
++          !memcmp(fs->variants_srgb[i]->compare, compare, sizeof(compare)) &&
++          !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
++         return fs->variants_srgb[i];
++   }
++   /* the oldest goes */
++   slot = &fs->variants_srgb[fs->next_variant_srgb++ %
++                             ARRAY_SIZE(fs->variants_srgb)];
++   destroy_variant(ctx, *slot);
++   if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
++      return NULL;
++   (*slot)->discard_pa = -1;
++   (*slot)->srgb = srgb;
++   (*slot)->srgb_filter = srgb_filter;
++   memcpy((*slot)->swz, swz, sizeof(swz));
++   (*slot)->not_bgra = not_bgra;
++   (*slot)->depth = depth;
++   memcpy((*slot)->compare, compare, sizeof(compare));
++   if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz,
++                       not_bgra, NULL, false, depth, compare) ||
++       !(*slot)->code) {
++      FREE((*slot)->vary);
++      FREE(*slot);
++      *slot = NULL;
++   }
++   return *slot;
++}
++
++/* the compiled fragment shader's program with its colour blended (b), or
++ * without (NULL); 0 when there is none */
++
++uint32_t
++sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
++               const struct sgxws_blend *b)
++{
++   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
++   uint32_t va;
++
++   if (!b)
++      return so->prog.code;
++   for (unsigned i = 0; i < so->n_variants; i++) {
++      if (!memcmp(&so->variants[i].key, b, sizeof(*b)))
++         return so->variants[i].code;
++   }
++   if (!so->code)
++      return 0;
++   simple_mtx_lock(&screen->lock);
++   va = so->code1 && so->discard_pa >= 0
++           ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
++                                   so->n_code1, so->color_reg, b,
++                                   so->discard_pa, so->temps)
++           : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b,
++                             so->discard_pa, so->temps);
++   /* past the table's size, the slots are reused in turn, their programs
++    * freed (dEQP's fragment_ops.interaction draws one shader with dozens of
++    * blends) */
++   if (va) {
++      unsigned i = so->n_variants < ARRAY_SIZE(so->variants)
++                      ? so->n_variants++
++                      : so->next_variant++ % ARRAY_SIZE(so->variants);
++
++      sgxws_code_free(ctx->hw, so->variants[i].code); /* 0: a new slot */
++      so->variants[i].key = *b;
++      so->variants[i].code = va;
++   }
++   simple_mtx_unlock(&screen->lock);
++   return va;
++}
++
++void
++sgx_program_init(struct sgx_context *ctx)
++{
++   ctx->base.create_vs_state = sgx_create_shader_state;
++   ctx->base.bind_vs_state = sgx_bind_vs_state;
++   ctx->base.delete_vs_state = sgx_delete_shader_state;
++   ctx->base.create_fs_state = sgx_create_shader_state;
++   ctx->base.bind_fs_state = sgx_bind_fs_state;
++   ctx->base.delete_fs_state = sgx_delete_shader_state;
++}
+diff --git a/src/gallium/drivers/sgx/sgx_state.c b/src/gallium/drivers/sgx/sgx_state.c
+new file mode 100644
+index 0000000..7203655
+--- /dev/null
++++ b/src/gallium/drivers/sgx/sgx_state.c
+@@ -0,0 +1,783 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE
++#endif
++#include <math.h>
++#include <stdlib.h>
++
++#include "util/format/u_format.h"
++#include "util/os_time.h"
++#include "util/u_debug.h"
++#include "util/u_framebuffer.h"
++#include "util/u_helpers.h"
++#include "util/u_inlines.h"
++#include "util/u_memory.h"
++#include "util/u_surface.h"
++
++#include "sgx_context.h"
++#include "sgx_resource.h"
++#include "sgx_screen.h"
++
++/* A blend factor as a sop2 selector (sgxws_bsel), s1 the shader's colour and
++ * s2 the tile's; -1 for the constant and dual-source factors (the selectors
++ * those go through blend_bfactor).  Without alpha in the colour buffer its
++ * alpha reads as 1. */
++static int
++blend_sel(enum pipe_blendfactor f, bool alpha, bool dst_alpha)
++{
++   int s;
++
++   switch (f) {
++   case PIPE_BLENDFACTOR_ZERO:
++      s = SGXWS_BS_ZERO;
++      break;
++   case PIPE_BLENDFACTOR_ONE:
++      s = SGXWS_BS_ZERO | SGXWS_BS_INV;
++      break;
++   case PIPE_BLENDFACTOR_SRC_COLOR:
++      s = alpha ? SGXWS_BS_S1A : SGXWS_BS_S1;
++      break;
++   case PIPE_BLENDFACTOR_INV_SRC_COLOR:
++      s = (alpha ? SGXWS_BS_S1A : SGXWS_BS_S1) | SGXWS_BS_INV;
++      break;
++   case PIPE_BLENDFACTOR_SRC_ALPHA:
++      s = SGXWS_BS_S1A;
++      break;
++   case PIPE_BLENDFACTOR_INV_SRC_ALPHA:
++      s = SGXWS_BS_S1A | SGXWS_BS_INV;
++      break;
++   case PIPE_BLENDFACTOR_DST_COLOR:
++      s = alpha ? SGXWS_BS_S2A : SGXWS_BS_S2;
++      break;
++   case PIPE_BLENDFACTOR_INV_DST_COLOR:
++      s = (alpha ? SGXWS_BS_S2A : SGXWS_BS_S2) | SGXWS_BS_INV;
++      break;
++   case PIPE_BLENDFACTOR_DST_ALPHA:
++      s = SGXWS_BS_S2A;
++      break;
++   case PIPE_BLENDFACTOR_INV_DST_ALPHA:
++      s = SGXWS_BS_S2A | SGXWS_BS_INV;
++      break;
++   case PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE:
++      if (alpha)
++         return SGXWS_BS_ZERO | SGXWS_BS_INV;
++      return dst_alpha ? SGXWS_BS_ASAT : SGXWS_BS_ZERO; /* min(As, 1 - 1) */
++   default:
++      return -1;
++   }
++   if (!dst_alpha && (s & 7) == SGXWS_BS_S2A)
++      s = (s & SGXWS_BS_INV) ^ SGXWS_BS_INV; /* 1 -> one, 1 - 1 -> zero */
++   return s;
++}
++
++/* the selector with the sources traded (sop2 o0, o0, pa<c>) */
++static int
++blend_swap_sel(int s)
++{
++   static const uint8_t swap[] = {SGXWS_BS_ZERO, SGXWS_BS_S2, SGXWS_BS_S1,
++                                  SGXWS_BS_S2A, SGXWS_BS_S1A};
++
++   if ((s & 7) >= ARRAY_SIZE(swap))
++      return -1; /* asat is min(s1.a, 1 - s2.a): not swappable */
++   return swap[s & 7] | (s & SGXWS_BS_INV);
++}
++
++static bool
++blend_op(enum pipe_blend_func func, uint8_t *op, bool *reverse)
++{
++   switch (func) {
++   case PIPE_BLEND_ADD:
++      *op = SGXWS_BOP_ADD;
++      return true;
++   case PIPE_BLEND_SUBTRACT:
++      *op = SGXWS_BOP_SUB;
++      return true;
++   case PIPE_BLEND_REVERSE_SUBTRACT:
++      *op = SGXWS_BOP_SUB;
++      *reverse = true;
++      return true;
++   case PIPE_BLEND_MIN:
++      *op = SGXWS_BOP_MIN;
++      return true;
++   case PIPE_BLEND_MAX:
++      *op = SGXWS_BOP_MAX;
++      return true;
++   default:
++      return false;
++   }
++}
++
++static bool
++blend_factor_constant(enum pipe_blendfactor f)
++{
++   return f == PIPE_BLENDFACTOR_CONST_COLOR ||
++          f == PIPE_BLENDFACTOR_INV_CONST_COLOR ||
++          f == PIPE_BLENDFACTOR_CONST_ALPHA ||
++          f == PIPE_BLENDFACTOR_INV_CONST_ALPHA;
++}
++
++/* a factor of a constant-colour blend (sgxws_bfactor); without alpha in the
++ * colour buffer its alpha reads as 1 */
++static uint8_t
++blend_bfactor(enum pipe_blendfactor f, bool dst_alpha)
++{
++   switch (f) {
++   case PIPE_BLENDFACTOR_ONE:
++      return SGXWS_BF_ONE;
++   case PIPE_BLENDFACTOR_SRC_COLOR:
++      return SGXWS_BF_SRC_COLOR;
++   case PIPE_BLENDFACTOR_INV_SRC_COLOR:
++      return SGXWS_BF_ONE_MINUS_SRC_COLOR;
++   case PIPE_BLENDFACTOR_SRC_ALPHA:
++      return SGXWS_BF_SRC_ALPHA;
++   case PIPE_BLENDFACTOR_INV_SRC_ALPHA:
++      return SGXWS_BF_ONE_MINUS_SRC_ALPHA;
++   case PIPE_BLENDFACTOR_DST_ALPHA:
++      return dst_alpha ? SGXWS_BF_DST_ALPHA : SGXWS_BF_ONE;
++   case PIPE_BLENDFACTOR_INV_DST_ALPHA:
++      return dst_alpha ? SGXWS_BF_ONE_MINUS_DST_ALPHA : SGXWS_BF_ZERO;
++   case PIPE_BLENDFACTOR_DST_COLOR:
++      return SGXWS_BF_DST_COLOR;
++   case PIPE_BLENDFACTOR_INV_DST_COLOR:
++      return SGXWS_BF_ONE_MINUS_DST_COLOR;
++   case PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE:
++      return dst_alpha ? SGXWS_BF_SRC_ALPHA_SATURATE : SGXWS_BF_ZERO;
++   case PIPE_BLENDFACTOR_CONST_COLOR:
++      return SGXWS_BF_CONSTANT_COLOR;
++   case PIPE_BLENDFACTOR_INV_CONST_COLOR:
++      return SGXWS_BF_ONE_MINUS_CONSTANT_COLOR;
++   case PIPE_BLENDFACTOR_CONST_ALPHA:
++      return SGXWS_BF_CONSTANT_ALPHA;
++   case PIPE_BLENDFACTOR_INV_CONST_ALPHA:
++      return SGXWS_BF_ONE_MINUS_CONSTANT_ALPHA;
++   default:
++      return SGXWS_BF_ZERO;
++   }
++}
++
++/* render target 0's blend as the colour epilogue (sgxws_blend): sop2, or its
++ * sopwm form with a constant factor; false when neither can express it */
++static bool
++blend_hw(const struct pipe_rt_blend_state *rt, bool dst_alpha, bool force_sopwm,
++         struct sgxws_blend *b)
++{
++   bool rev_c = false, rev_a = false, min_c, min_a;
++   int c1, c2, a1, a2;
++
++   memset(b, 0, sizeof(*b));
++   if (!blend_op(rt->rgb_func, &b->cop, &rev_c) ||
++       !blend_op(rt->alpha_func, &b->aop, &rev_a))
++      return false;
++   /* MIN and MAX take no factors */
++   min_c = b->cop >= SGXWS_BOP_MIN;
++   min_a = b->aop >= SGXWS_BOP_MIN;
++   if (force_sopwm ||
++       (!min_c && (blend_factor_constant(rt->rgb_src_factor) ||
++                   blend_factor_constant(rt->rgb_dst_factor))) ||
++       (!min_a && (blend_factor_constant(rt->alpha_src_factor) ||
++                   blend_factor_constant(rt->alpha_dst_factor)))) {
++      /* dst - src reads r1, r0; a subtract on the other channel that runs
++       * the other way gets its products in r0 and r1 traded */
++      b->blend = 1;
++      b->constant = 1;
++      if (rev_c || rev_a) {
++         b->swap = rev_c || b->cop != SGXWS_BOP_SUB;
++         b->atrade = b->swap ? !rev_a && b->aop == SGXWS_BOP_SUB : rev_a;
++      }
++      b->fs =
++         min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_src_factor, dst_alpha);
++      b->fd =
++         min_c ? SGXWS_BF_ONE : blend_bfactor(rt->rgb_dst_factor, dst_alpha);
++      /* SRC_ALPHA_SATURATE's alpha is 1 */
++      b->fsa =
++         min_a || rt->alpha_src_factor == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE
++            ? SGXWS_BF_ONE
++            : blend_bfactor(rt->alpha_src_factor, dst_alpha);
++      b->fda =
++         min_a || rt->alpha_dst_factor == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE
++            ? SGXWS_BF_ONE
++            : blend_bfactor(rt->alpha_dst_factor, dst_alpha);
++      return true;
++   }
++   c1 = min_c ? SGXWS_BS_ZERO | SGXWS_BS_INV
++              : blend_sel(rt->rgb_src_factor, false, dst_alpha);
++   c2 = min_c ? SGXWS_BS_ZERO | SGXWS_BS_INV
++              : blend_sel(rt->rgb_dst_factor, false, dst_alpha);
++   a1 = min_a ? SGXWS_BS_ZERO | SGXWS_BS_INV
++              : blend_sel(rt->alpha_src_factor, true, dst_alpha);
++   a2 = min_a ? SGXWS_BS_ZERO | SGXWS_BS_INV
++              : blend_sel(rt->alpha_dst_factor, true, dst_alpha);
++   if (c1 < 0 || c2 < 0 || a1 < 0 || a2 < 0)
++      return false;
++   if (rev_c || rev_a) {
++      /* dst - src: the tile becomes s1.  A subtract on the other channel
++       * would then run the wrong way; add, min and max don't care */
++      if ((!rev_c && b->cop == SGXWS_BOP_SUB) ||
++          (!rev_a && b->aop == SGXWS_BOP_SUB))
++         return false;
++      int t = c1;
++
++      c1 = blend_swap_sel(c2);
++      c2 = blend_swap_sel(t);
++      t = a1;
++      a1 = blend_swap_sel(a2);
++      a2 = blend_swap_sel(t);
++      if (c1 < 0 || c2 < 0 || a1 < 0 || a2 < 0)
++         return false;
++      b->swap = 1;
++   }
++   b->blend = 1;
++   b->c1 = c1;
++   b->c2 = c2;
++   b->a1 = a1;
++   b->a2 = a2;
++   return true;
++}
++
++static void *
++sgx_create_blend_state(struct pipe_context *pctx,
++                       const struct pipe_blend_state *cso)
++{
++   struct sgx_blend *so = CALLOC_STRUCT(sgx_blend);
++
++   if (!so)
++      return NULL;
++   so->base = *cso;
++   if (cso->rt[0].blend_enable && !cso->logicop_enable) {
++      /* the sop2 form, or the sopwm one where sop2's selectors can't say it
++       * (SRC_ALPHA_SATURATE with the sources traded) */
++      for (unsigned i = 0; i < 2; i++)
++         so->enable = blend_hw(&cso->rt[0], i, false, &so->hw[i]) ||
++                      blend_hw(&cso->rt[0], i, true, &so->hw[i]);
++      so->enable = so->enable && so->hw[0].blend && so->hw[1].blend;
++      if (!so->enable)
++         fprintf(
++            stderr,
++            "sgx: blend (func %u/%u, factors %u %u %u %u) not drawn yet, drawing opaque\n",
++            cso->rt[0].rgb_func, cso->rt[0].alpha_func,
++            cso->rt[0].rgb_src_factor, cso->rt[0].rgb_dst_factor,
++            cso->rt[0].alpha_src_factor, cso->rt[0].alpha_dst_factor);
++   }
++   return so;
++}
++
++static void
++sgx_bind_blend_state(struct pipe_context *pctx, void *hwcso)
++{
++   sgx_context(pctx)->blend = hwcso;
++}
++
++static void *
++sgx_create_rasterizer_state(struct pipe_context *pctx,
++                            const struct pipe_rasterizer_state *cso)
++{
++   struct sgx_rasterizer *so = CALLOC_STRUCT(sgx_rasterizer);
++
++   if (so)
++      so->base = *cso;
++   return so;
++}
++
++static void
++sgx_bind_rasterizer_state(struct pipe_context *pctx, void *hwcso)
++{
++   sgx_context(pctx)->rasterizer = hwcso;
++}
++
++static void *
++sgx_create_dsa_state(struct pipe_context *pctx,
++                     const struct pipe_depth_stencil_alpha_state *cso)
++{
++   struct sgx_dsa *so = CALLOC_STRUCT(sgx_dsa);
++
++   if (so)
++      so->base = *cso;
++   return so;
++}
++
++static void
++sgx_bind_dsa_state(struct pipe_context *pctx, void *hwcso)
++{
++   sgx_context(pctx)->dsa = hwcso;
++}
++
++static void
++sgx_delete_state(struct pipe_context *pctx, void *hwcso)
++{
++   FREE(hwcso);
++}
++
++static void *
++sgx_create_vertex_elements(struct pipe_context *pctx, unsigned num_elements,
++                           const struct pipe_vertex_element *elements)
++{
++   struct sgx_vertex_elements *so = CALLOC_STRUCT(sgx_vertex_elements);
++
++   if (!so)
++      return NULL;
++   so->num_elements = num_elements;
++   memcpy(so->elements, elements, num_elements * sizeof(*elements));
++   return so;
++}
++
++static void
++sgx_bind_vertex_elements(struct pipe_context *pctx, void *hwcso)
++{
++   sgx_context(pctx)->velems = hwcso;
++}
++
++static void
++sgx_set_vertex_buffers(struct pipe_context *pctx, unsigned count,
++                       const struct pipe_vertex_buffer *vb)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++
++   util_set_vertex_buffers_count(ctx->vertex_buffers, &ctx->num_vertex_buffers,
++                                 vb, count);
++}
++
++static void
++sgx_set_constant_buffer(struct pipe_context *pctx, mesa_shader_stage shader,
++                        uint index, const struct pipe_constant_buffer *cb)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct pipe_constant_buffer *so = &ctx->constants[shader];
++
++   if (index != 0)
++      return;
++   if (!cb) {
++      pipe_resource_reference(&so->buffer, NULL);
++      memset(so, 0, sizeof(*so));
++      return;
++   }
++   pipe_resource_reference(&so->buffer, cb->buffer);
++   so->buffer_offset = cb->buffer_offset;
++   so->buffer_size = cb->buffer_size;
++   so->user_buffer = cb->user_buffer;
++}
++
++static void
++sgx_set_framebuffer_state(struct pipe_context *pctx,
++                          const struct pipe_framebuffer_state *fb)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++
++   util_copy_framebuffer_state(&ctx->framebuffer, fb);
++}
++
++static void
++sgx_set_viewport_states(struct pipe_context *pctx, unsigned start_slot,
++                        unsigned num_viewports,
++                        const struct pipe_viewport_state *viewport)
++{
++   if (start_slot == 0 && num_viewports)
++      sgx_context(pctx)->viewport = viewport[0];
++}
++
++static void
++sgx_set_scissor_states(struct pipe_context *pctx, unsigned start_slot,
++                       unsigned num_scissors,
++                       const struct pipe_scissor_state *scissor)
++{
++   if (start_slot == 0 && num_scissors)
++      sgx_context(pctx)->scissor = scissor[0];
++}
++
++static void
++sgx_set_blend_color(struct pipe_context *pctx,
++                    const struct pipe_blend_color *color)
++{
++   sgx_context(pctx)->blend_color = *color;
++}
++
++static void
++sgx_set_stencil_ref(struct pipe_context *pctx,
++                    const struct pipe_stencil_ref ref)
++{
++   sgx_context(pctx)->stencil_ref = ref;
++}
++
++static void
++sgx_set_sample_mask(struct pipe_context *pctx, unsigned sample_mask)
++{
++}
++
++static void
++sgx_set_polygon_stipple(struct pipe_context *pctx,
++                        const struct pipe_poly_stipple *stipple)
++{
++}
++
++static void
++sgx_set_clip_state(struct pipe_context *pctx,
++                   const struct pipe_clip_state *clip)
++{
++}
++
++static void *
++sgx_create_sampler_state(struct pipe_context *pctx,
++                         const struct pipe_sampler_state *cso)
++{
++   struct pipe_sampler_state *so = CALLOC_STRUCT(pipe_sampler_state);
++
++   if (so)
++      *so = *cso;
++   return so;
++}
++
++static void
++sgx_bind_sampler_states(struct pipe_context *pctx, mesa_shader_stage shader,
++                        unsigned start, unsigned nr, void **hwcso)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++
++   if (shader != MESA_SHADER_FRAGMENT)
++      return;
++   for (unsigned i = 0; i < nr && start + i < PIPE_MAX_SAMPLERS; i++)
++      ctx->samplers[start + i] = hwcso ? hwcso[i] : NULL;
++}
++
++static struct pipe_sampler_view *
++sgx_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
++                        const struct pipe_sampler_view *cso)
++{
++   struct pipe_sampler_view *so = CALLOC_STRUCT(pipe_sampler_view);
++
++   if (!so)
++      return NULL;
++   *so = *cso;
++   so->texture = NULL;
++   pipe_resource_reference(&so->texture, prsc);
++   so->reference.count = 1;
++   so->context = pctx;
++   return so;
++}
++
++static void
++sgx_sampler_view_destroy(struct pipe_context *pctx,
++                         struct pipe_sampler_view *view)
++{
++   pipe_resource_reference(&view->texture, NULL);
++   FREE(view);
++}
++
++static void
++sgx_set_sampler_views(struct pipe_context *pctx, mesa_shader_stage shader,
++                      unsigned start, unsigned nr,
++                      unsigned unbind_num_trailing_slots,
++                      struct pipe_sampler_view **views)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++
++   if (shader != MESA_SHADER_FRAGMENT)
++      return;
++   for (unsigned i = 0; i < nr + unbind_num_trailing_slots; i++) {
++      unsigned s = start + i;
++
++      if (s < PIPE_MAX_SHADER_SAMPLER_VIEWS)
++         pipe_sampler_view_reference(&ctx->views[s],
++                                     i < nr && views ? views[i] : NULL);
++   }
++}
++
++static void
++sgx_texture_barrier(struct pipe_context *pctx, unsigned flags)
++{
++}
++
++/* queries: none of GLES2's need the GPU yet */
++struct sgx_query {
++   unsigned type;
++};
++
++static struct pipe_query *
++sgx_create_query(struct pipe_context *pctx, unsigned query_type, unsigned index)
++{
++   struct sgx_query *q = CALLOC_STRUCT(sgx_query);
++
++   if (q)
++      q->type = query_type;
++   return (struct pipe_query *)q;
++}
++
++static void
++sgx_destroy_query(struct pipe_context *pctx, struct pipe_query *q)
++{
++   FREE(q);
++}
++
++static bool
++sgx_begin_end_query(struct pipe_context *pctx, struct pipe_query *q)
++{
++   return true;
++}
++
++static bool
++sgx_get_query_result(struct pipe_context *pctx, struct pipe_query *q, bool wait,
++                     union pipe_query_result *result)
++{
++   memset(result, 0, sizeof(*result));
++   return true;
++}
++
++static void
++sgx_set_active_query_state(struct pipe_context *pctx, bool enable)
++{
++}
++
++/* copies on the CPU: textures and buffers are CPU-visible, render targets are
++ * waited for by the map */
++static void
++sgx_resource_copy_region(struct pipe_context *pctx, struct pipe_resource *dst,
++                         unsigned dst_level, unsigned dstx, unsigned dsty,
++                         unsigned dstz, struct pipe_resource *src,
++                         unsigned src_level, const struct pipe_box *src_box)
++{
++   util_resource_copy_region(pctx, dst, dst_level, dstx, dsty, dstz, src,
++                             src_level, src_box);
++}
++
++/* A colour blit on the CPU, through the resources' transfers (which wait for
++ * the GPU and re-lay textures out): nearest or bilinear, any scale, any pair
++ * of formats util_format can unpack and pack. What st/mesa blits are mostly
++ * mipmap levels (generated a level from the one above) and glCopyTexImage;
++ * the driver has no GPU blit yet. */
++static bool
++sgx_blit_cpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
++{
++   const struct pipe_box *sb = &info->src.box, *db = &info->dst.box;
++   struct pipe_transfer *st, *dt;
++   uint8_t *src, *dst;
++   int sw = abs(sb->width), sh = abs(sb->height), dw = abs(db->width),
++       dh = abs(db->height);
++
++   if (info->mask != PIPE_MASK_RGBA && (info->mask & ~PIPE_MASK_RGBA))
++      return false;
++   if (info->scissor_enable || info->render_condition_enable ||
++       info->alpha_blend || info->num_window_rectangles || sb->depth != 1 ||
++       db->depth != 1 || !sw || !sh || !dw || !dh ||
++       util_format_is_depth_or_stencil(info->src.format) ||
++       util_format_is_pure_integer(info->src.format) ||
++       !util_format_unpack_description(info->src.format)->unpack_rgba ||
++       !util_format_pack_description(info->dst.format)->pack_rgba_float)
++      return false;
++   src = pipe_texture_map(pctx, info->src.resource, info->src.level, sb->z,
++                          PIPE_MAP_READ, MIN2(sb->x, sb->x + sb->width),
++                          MIN2(sb->y, sb->y + sb->height), sw, sh, &st);
++   if (!src)
++      return false;
++   dst = pipe_texture_map(pctx, info->dst.resource, info->dst.level, db->z,
++                          PIPE_MAP_WRITE, MIN2(db->x, db->x + db->width),
++                          MIN2(db->y, db->y + db->height), dw, dh, &dt);
++   if (!dst) {
++      pipe_texture_unmap(pctx, st);
++      return false;
++   }
++
++   unsigned sbpp = util_format_get_blocksize(info->src.format),
++            dbpp = util_format_get_blocksize(info->dst.format);
++
++   /* the same size, not mirrored left to right (glCopyTexSubImage): a row at
++    * a time through util_format's row converters, a vertical flip by the
++    * order of the rows */
++   if (sw == dw && sh == dh && (sb->width < 0) == (db->width < 0) &&
++       util_format_translate(info->dst.format, dst, dt->stride, 0, 0,
++                             info->src.format, src, st->stride, 0, 0, 0, 0)) {
++      for (int y = 0; y < dh; y++) {
++         int sy = (sb->height < 0) != (db->height < 0) ? sh - 1 - y : y;
++
++         util_format_translate(info->dst.format, dst + y * dt->stride,
++                               dt->stride, 0, 0, info->src.format,
++                               src + sy * st->stride, st->stride, 0, 0, dw, 1);
++      }
++      pipe_texture_unmap(pctx, st);
++      pipe_texture_unmap(pctx, dt);
++      return true;
++   }
++
++   bool linear =
++      info->filter == PIPE_TEX_FILTER_LINEAR && (sw != dw || sh != dh);
++   float *row = malloc(sizeof(float) * 4 * dw);
++
++   for (int y = 0; y < dh && row; y++) {
++      /* the destination row's centre in source pixels; a negative size flips */
++      float fy = (y + 0.5f) * sh / dh - 0.5f;
++      int yy = db->height < 0 ? dh - 1 - y : y;
++
++      for (int x = 0; x < dw; x++) {
++         float fx = (x + 0.5f) * sw / dw - 0.5f, c[4] = {0};
++         int xx = db->width < 0 ? dw - 1 - x : x;
++
++         if (linear) {
++            int x0 = MAX2((int)floorf(fx), 0), y0 = MAX2((int)floorf(fy), 0);
++            int x1 = MIN2(x0 + 1, sw - 1), y1 = MIN2(y0 + 1, sh - 1);
++            float ax = CLAMP(fx - x0, 0.0f, 1.0f),
++                  ay = CLAMP(fy - y0, 0.0f, 1.0f), t[4][4];
++            const int px[4] = {x0, x1, x0, x1}, py[4] = {y0, y0, y1, y1};
++            const float wt[4] = {(1 - ax) * (1 - ay), ax * (1 - ay),
++                                 (1 - ax) * ay, ax * ay};
++
++            for (int k = 0; k < 4; k++) {
++               int sx = sb->width < 0 ? sw - 1 - px[k] : px[k],
++                   sy = sb->height < 0 ? sh - 1 - py[k] : py[k];
++
++               util_format_unpack_rgba(info->src.format, t[k],
++                                       src + sy * st->stride + sx * sbpp, 1);
++               for (int i = 0; i < 4; i++)
++                  c[i] += wt[k] * t[k][i];
++            }
++         } else {
++            int sx = CLAMP((int)floorf(fx + 0.5f), 0, sw - 1),
++                sy = CLAMP((int)floorf(fy + 0.5f), 0, sh - 1);
++
++            if (sb->width < 0)
++               sx = sw - 1 - sx;
++            if (sb->height < 0)
++               sy = sh - 1 - sy;
++            util_format_unpack_rgba(info->src.format, c,
++                                    src + sy * st->stride + sx * sbpp, 1);
++         }
++         memcpy(&row[4 * xx], c, sizeof(c));
++      }
++      util_format_pack_rgba(info->dst.format, dst + yy * dt->stride, row, dw);
++   }
++   (void)dbpp;
++   free(row);
++   pipe_texture_unmap(pctx, st);
++   pipe_texture_unmap(pctx, dt);
++   return true;
++}
++
++/* A colour blit into a render target from anything the TPU samples, drawn
++ * by u_blitter through our own shaders: the swap's copy of the back buffer
++ * to fb0 (a CPU copy reads the back buffer out of uncached memory). */
++static bool
++sgx_blit_gpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   struct sgx_resource *src = sgx_resource(info->src.resource);
++   struct sgx_resource *dst = sgx_resource(info->dst.resource);
++   struct pipe_scissor_state scissor = {0};
++   struct pipe_stencil_ref ref = {0};
++   unsigned n_samplers = 0, n_views = 0;
++
++   if (!ctx->blitter || info->mask != PIPE_MASK_RGBA || info->scissor_enable ||
++       info->render_condition_enable || info->alpha_blend ||
++       info->num_window_rectangles || info->src.box.depth != 1 ||
++       info->dst.box.depth != 1 || info->dst.level || info->src.level ||
++       !sgx_resource_sampleable(src) || dst->texture || !dst->bo.va ||
++       !dst->pitch || util_format_get_blocksize(info->dst.format) != 4 ||
++       util_format_is_pure_integer(info->src.format) ||
++       util_format_is_depth_or_stencil(info->src.format))
++      return false;
++   for (unsigned i = 0; i < PIPE_MAX_SAMPLERS; i++)
++      if (ctx->samplers[i])
++         n_samplers = i + 1;
++   for (unsigned i = 0; i < PIPE_MAX_SAMPLERS; i++)
++      if (ctx->views[i])
++         n_views = i + 1;
++   util_blitter_save_vertex_buffers(ctx->blitter, ctx->vertex_buffers,
++                                    ctx->num_vertex_buffers);
++   util_blitter_save_vertex_elements(ctx->blitter, ctx->velems);
++   util_blitter_save_vertex_shader(ctx->blitter, ctx->vs);
++   util_blitter_save_so_targets(ctx->blitter, 0, NULL, MESA_PRIM_UNKNOWN);
++   util_blitter_save_rasterizer(ctx->blitter, ctx->rasterizer);
++   util_blitter_save_viewport(ctx->blitter, &ctx->viewport);
++   util_blitter_save_scissor(ctx->blitter, &scissor);
++   util_blitter_save_fragment_shader(ctx->blitter, ctx->fs);
++   util_blitter_save_blend(ctx->blitter, ctx->blend);
++   util_blitter_save_depth_stencil_alpha(ctx->blitter, ctx->dsa);
++   util_blitter_save_stencil_ref(ctx->blitter, &ref);
++   util_blitter_save_sample_mask(ctx->blitter, ~0u, 0);
++   util_blitter_save_framebuffer(ctx->blitter, &ctx->framebuffer);
++   util_blitter_save_fragment_sampler_states(ctx->blitter, n_samplers,
++                                             (void **)ctx->samplers);
++   util_blitter_save_fragment_sampler_views(ctx->blitter, n_views, ctx->views);
++   util_blitter_save_fragment_constant_buffer_slot(
++      ctx->blitter, &ctx->constants[MESA_SHADER_FRAGMENT]);
++   util_blitter_save_render_condition(ctx->blitter, NULL, false, 0);
++   util_blitter_blit(ctx->blitter, info, NULL);
++   return true;
++}
++
++static void
++sgx_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
++{
++   struct sgx_context *ctx = sgx_context(pctx);
++   uint64_t t0;
++
++   if (sgx_blit_gpu(pctx, info)) {
++      ctx->stats.blit_gpu++;
++      return;
++   }
++   if (util_try_blit_via_copy_region(pctx, info, false)) {
++      ctx->stats.blit_copy++;
++      return;
++   }
++   t0 = os_time_get_nano();
++   if (sgx_blit_cpu(pctx, info)) {
++      ctx->stats.blit_cpu++;
++      ctx->stats.blit_cpu_px +=
++         (uint64_t)abs(info->dst.box.width) * abs(info->dst.box.height);
++      ctx->stats.blit_cpu_ns += os_time_get_nano() - t0;
++      SGX_DBG(DRAW, "CPU blit %s %ux%u -> %s %ux%u (dst texture %d)\n",
++              util_format_short_name(info->src.format), info->src.box.width,
++              info->src.box.height, util_format_short_name(info->dst.format),
++              info->dst.box.width, info->dst.box.height,
++              sgx_resource(info->dst.resource)->texture);
++      return;
++   }
++   fprintf(stderr, "sgx: blit %s -> %s not supported yet\n",
++           util_format_short_name(info->src.format),
++           util_format_short_name(info->dst.format));
++}
++
++void
++sgx_state_init(struct sgx_context *ctx)
++{
++   struct pipe_context *p = &ctx->base;
++
++   p->create_blend_state = sgx_create_blend_state;
++   p->bind_blend_state = sgx_bind_blend_state;
++   p->delete_blend_state = sgx_delete_state;
++   p->create_rasterizer_state = sgx_create_rasterizer_state;
++   p->bind_rasterizer_state = sgx_bind_rasterizer_state;
++   p->delete_rasterizer_state = sgx_delete_state;
++   p->create_depth_stencil_alpha_state = sgx_create_dsa_state;
++   p->bind_depth_stencil_alpha_state = sgx_bind_dsa_state;
++   p->delete_depth_stencil_alpha_state = sgx_delete_state;
++   p->create_vertex_elements_state = sgx_create_vertex_elements;
++   p->bind_vertex_elements_state = sgx_bind_vertex_elements;
++   p->delete_vertex_elements_state = sgx_delete_state;
++   p->set_vertex_buffers = sgx_set_vertex_buffers;
++   p->set_constant_buffer = sgx_set_constant_buffer;
++   p->set_framebuffer_state = sgx_set_framebuffer_state;
++   p->set_viewport_states = sgx_set_viewport_states;
++   p->set_scissor_states = sgx_set_scissor_states;
++   p->set_blend_color = sgx_set_blend_color;
++   p->set_stencil_ref = sgx_set_stencil_ref;
++   p->set_sample_mask = sgx_set_sample_mask;
++   p->set_polygon_stipple = sgx_set_polygon_stipple;
++   p->set_clip_state = sgx_set_clip_state;
++   p->create_sampler_state = sgx_create_sampler_state;
++   p->bind_sampler_states = sgx_bind_sampler_states;
++   p->delete_sampler_state = sgx_delete_state;
++   p->create_sampler_view = sgx_create_sampler_view;
++   p->sampler_view_destroy = sgx_sampler_view_destroy;
++   p->sampler_view_release = u_default_sampler_view_release;
++   p->set_sampler_views = sgx_set_sampler_views;
++   p->texture_barrier = sgx_texture_barrier;
++   p->resource_release = u_default_resource_release;
++   p->create_query = sgx_create_query;
++   p->destroy_query = sgx_destroy_query;
++   p->begin_query = sgx_begin_end_query;
++   p->end_query = sgx_begin_end_query;
++   p->get_query_result = sgx_get_query_result;
++   p->set_active_query_state = sgx_set_active_query_state;
++   p->resource_copy_region = sgx_resource_copy_region;
++   p->blit = sgx_blit;
++}
+-- 
+2.50.1 (Apple Git-155)
+

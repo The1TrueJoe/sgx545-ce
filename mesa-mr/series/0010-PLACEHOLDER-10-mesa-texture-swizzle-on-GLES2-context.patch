@@ -1,0 +1,53 @@
+From a72aa800636ededd6ba5eb94c2a6b12284a15210 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:40:33 -0500
+Subject: [PATCH 10/22] PLACEHOLDER 10 mesa: texture swizzle on GLES2 contexts
+
+---
+ src/mesa/main/texparam.c | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/src/mesa/main/texparam.c b/src/mesa/main/texparam.c
+index f87fd5e..f9b14fc 100644
+--- a/src/mesa/main/texparam.c
++++ b/src/mesa/main/texparam.c
+@@ -264,6 +264,16 @@ is_valid_texture_tiling(struct gl_context *ctx, GLenum tiling)
+  * Set an integer-valued texture parameter
+  * \return GL_TRUE if legal AND the value changed, GL_FALSE otherwise
+  */
++/* An ES2 context takes the texture swizzle parameters when the driver can
++ * swizzle (GL_EXT_texture_swizzle on desktop GL): X's glamor 21.1.16 on GLES
++ * sets GL_TEXTURE_SWIZZLE_A on its GL_R8 glyph textures and reads coverage
++ * from alpha, without checking for GLES3. */
++static bool
++gles2_swizzle(const struct gl_context *ctx)
++{
++   return _mesa_is_gles2(ctx) && ctx->Extensions.EXT_texture_swizzle;
++}
++
+ static GLboolean
+ set_tex_parameteri(struct gl_context *ctx,
+                    struct gl_texture_object *texObj,
+@@ -575,7 +585,8 @@ set_tex_parameteri(struct gl_context *ctx,
+    case GL_TEXTURE_SWIZZLE_G_EXT:
+    case GL_TEXTURE_SWIZZLE_B_EXT:
+    case GL_TEXTURE_SWIZZLE_A_EXT:
+-      if (_mesa_has_EXT_texture_swizzle(ctx) || _mesa_is_gles3(ctx)) {
++      if (_mesa_has_EXT_texture_swizzle(ctx) || _mesa_is_gles3(ctx) ||
++          gles2_swizzle(ctx)) {
+          const GLuint comp = pname - GL_TEXTURE_SWIZZLE_R_EXT;
+          const GLint swz = comp_to_swizzle(params[0]);
+          if (swz < 0) {
+@@ -594,7 +605,8 @@ set_tex_parameteri(struct gl_context *ctx,
+       goto invalid_pname;
+ 
+    case GL_TEXTURE_SWIZZLE_RGBA_EXT:
+-      if (_mesa_has_EXT_texture_swizzle(ctx) || _mesa_is_gles3(ctx)) {
++      if (_mesa_has_EXT_texture_swizzle(ctx) || _mesa_is_gles3(ctx) ||
++          gles2_swizzle(ctx)) {
+          flush(ctx);
+          for (GLuint comp = 0; comp < 4; comp++) {
+             const GLint swz = comp_to_swizzle(params[comp]);
+-- 
+2.50.1 (Apple Git-155)
+

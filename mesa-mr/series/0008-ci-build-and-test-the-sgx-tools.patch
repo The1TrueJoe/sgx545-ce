@@ -1,0 +1,27 @@
+From 9fd28cc6c146352bdeeac869129148aaded2280c Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:31:14 -0500
+Subject: [PATCH 08/22] ci: build and test the sgx tools
+
+[Placeholder. Mesa wants commit messages in the submitter's own words;
+what this one must say is in MR-FACTS.md, "Commit 8".]
+---
+ .gitlab-ci/build/gitlab-ci.yml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/.gitlab-ci/build/gitlab-ci.yml b/.gitlab-ci/build/gitlab-ci.yml
+index 2384a45..b1764ea 100644
+--- a/.gitlab-ci/build/gitlab-ci.yml
++++ b/.gitlab-ci/build/gitlab-ci.yml
+@@ -242,7 +242,7 @@ debian-build-x86_64:
+     BUILDTYPE: "debugoptimized"
+     EXTRA_OPTION: >
+       -D spirv-to-dxil=true
+-      -D tools=drm-shim,etnaviv,freedreno,glsl,intel,intel-ui,nir,nouveau,lima,panfrost,asahi
++      -D tools=drm-shim,etnaviv,freedreno,glsl,intel,intel-ui,nir,nouveau,lima,panfrost,asahi,sgx
+       -D perfetto=true
+     S3_ARTIFACT_NAME: debian-build-x86_64
+ 
+-- 
+2.50.1 (Apple Git-155)
+

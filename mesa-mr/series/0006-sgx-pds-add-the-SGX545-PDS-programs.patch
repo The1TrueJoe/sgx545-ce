@@ -1,0 +1,1739 @@
+From bdb3039d761e33a6464814fe105c4c636f9ce6c6 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:31:13 -0500
+Subject: [PATCH 06/22] sgx/pds: add the SGX545 PDS programs
+
+[Placeholder. Mesa wants commit messages in the submitter's own words;
+what this one must say is in MR-FACTS.md, "Commit 6".]
+---
+ .clang-format-include            |   1 +
+ src/sgx/meson.build              |   1 +
+ src/sgx/pds/README.md            |  75 +++++
+ src/sgx/pds/isa.h                |  13 +
+ src/sgx/pds/meson.build          |  56 ++++
+ src/sgx/pds/sgx_pds.h            | 174 +++++++++++
+ src/sgx/pds/sgx_pds.xml          | 506 +++++++++++++++++++++++++++++++
+ src/sgx/pds/sgx_pds_asm.c        | 277 +++++++++++++++++
+ src/sgx/pds/sgx_pds_disasm.c     |  92 ++++++
+ src/sgx/pds/sgx_pds_encode.c     |  79 +++++
+ src/sgx/pds/tests/meson.build    |  16 +
+ src/sgx/pds/tests/pds.txt        |  48 +++
+ src/sgx/pds/tests/sgx_pds_test.c | 282 +++++++++++++++++
+ 13 files changed, 1620 insertions(+)
+ create mode 100644 src/sgx/pds/README.md
+ create mode 100644 src/sgx/pds/isa.h
+ create mode 100644 src/sgx/pds/meson.build
+ create mode 100644 src/sgx/pds/sgx_pds.h
+ create mode 100644 src/sgx/pds/sgx_pds.xml
+ create mode 100644 src/sgx/pds/sgx_pds_asm.c
+ create mode 100644 src/sgx/pds/sgx_pds_disasm.c
+ create mode 100644 src/sgx/pds/sgx_pds_encode.c
+ create mode 100644 src/sgx/pds/tests/meson.build
+ create mode 100644 src/sgx/pds/tests/pds.txt
+ create mode 100644 src/sgx/pds/tests/sgx_pds_test.c
+
+diff --git a/.clang-format-include b/.clang-format-include
+index ace6228..d5a4b26 100644
+--- a/.clang-format-include
++++ b/.clang-format-include
+@@ -15,3 +15,4 @@ src/imagination/**/*
+ src/kosmickrisp/**/*
+ src/gfxstream/**/*
+ src/sgx/isa/**/*
++src/sgx/pds/**/*
+diff --git a/src/sgx/meson.build b/src/sgx/meson.build
+index e968334..757c5ec 100644
+--- a/src/sgx/meson.build
++++ b/src/sgx/meson.build
+@@ -2,3 +2,4 @@
+ # SPDX-License-Identifier: MIT
+ 
+ subdir('isa')
++subdir('pds')
+diff --git a/src/sgx/pds/README.md b/src/sgx/pds/README.md
+new file mode 100644
+index 0000000..8718f61
+--- /dev/null
++++ b/src/sgx/pds/README.md
+@@ -0,0 +1,75 @@
++# SGX545 PDS programs (isaspec)
++
++`sgx_pds.xml` describes the PDS (programmable data sequencer) programs of
++the PowerVR SGX545 in Mesa's isaspec format. isaspec generates the encoder
++and the disassembler from it; the C files here are the glue and a small text
++assembler for the notation the disassembler prints.
++
++| file | what |
++|---|---|
++| `sgx_pds.xml` | the instructions (`#instruction`) and the DOUT data-word layouts (encode-only roots) |
++| `sgx_pds.h` | the API: `struct sgx_pds_instr`, `sgx_pds_encode()`, the DOUT word structs and encoders, the disassembler, the program layout |
++| `sgx_pds_encode.c` | leaf selection for the generated encoder; the data-word encoders |
++| `sgx_pds_disasm.c` | the generated decoder, number printing, whole-program dumps |
++| `sgx_pds_asm.c` | the disassembler's text back into `struct sgx_pds_instr` |
++| `tests/sgx_pds_test.c`, `tests/pds.txt` | text -> struct -> word -> text, known words, known DOUT data words, a random-word fuzz (`-f N`); `-d` disassembles words from stdin |
++
++The generated files are `sgxpds-isa.*`: isaspec names its functions after
++the part of the output file's name before the first `-`, so `sgx-pds`
++would collide with the USSE library's `sgx_isa_disasm`. The enums come
++from `../isa/sgx_isa_enums.py` (`--prefix sgx_pds`).
++
++## The instructions
++
++The text notation is what `sgx_pds_disasm.c` prints and `sgx_pds_asm.c`
++reads, one instruction per line: `[(p0) ]mnemonic[.suffix...] operands
++[item=n ...]`.
++
++| op | s | form | text |
++|---|---|---|---|
++| 0, 2 | x | MOVS (DOUT) | `<dout>[.x2][.s27][.ccN] w0, w1, w2, w3 [r1=n] [r2=n]` |
++| 4 | 0 / 1 | ADD / ? | `add dst, src1, src2`, `op0x4.s1` |
++| 6 | 0 / 1 | MUL16 / ? | `mul16 dst, src1, src2`, `op0x6.s1` |
++| c | 0 / 1 | OR / AND | `or`, `and` |
++| d | 0 / 1 | XOR / ? | `xor`, `op0xd.s1` |
++| 8 | 0 | TST | `tst src` (a ds1 source: the src2 form) |
++| 9 | 0 | BRA | `bra #n` |
++| a | 1 | HALT | `halt` |
++| f | 0 / 1 | SHL / SHR | `shl dst, src, #n` |
++
++- The condition: 7 is not printed, 0 is a `(p0) ` prefix, anything else a
++  `.cc<n>` suffix (MOVS's `.cc3` is the vertex-fetch DOUTU form).
++- A MOVS prints the four words it sends, each from select n: `ds0[n]`,
++  `ds1[n]`, `in<n>` (DS0 words 0x40+). A row no select reads is printed as
++  `[r1=n]` / `[r2=n]` when it isn't 0, so every word prints losslessly.
++- Operands: U (`ds0[n]`, `ds1[n]`, `in<n>`) for the ALU destination and the
++  shifts; S1 (`ds0[n]`, `in<n>`) and S2 (`ds1[n]`), with `.hi` for the high
++  half. Numbers below 10 print in decimal, the rest in hex.
++- A bit no field names is 0; a word that sets one does not decode.
++
++## The data words
++
++DOUTU words 0 and 1, the DOUTD control word, DOUTI words 0 and 1 and the
++DOUTA control word are encode-only roots: they sit in the data segment, which
++the decoder never sees (isaspec decodes from `#instruction` only). Each has a
++struct (`struct sgx_pds_doutu`, ...) and an encoder
++(`sgx_pds_doutu_w0()`, ...). The DOUTT words are texture state
++(`src/sgx/csbgen/tex.xml`), not described here.
++
++## Who uses it
++
++[Placeholder: rewrite in the submitter's own words. Facts to state:]
++
++- In this MR: the tests only.
++- Later: the gallium driver builds its PDS programs (pixel,
++  secondary/state, DMA, vertex fetch, pixel event, background, TA
++  terminate) and their DOUT words through it.
++
++## Tests
++
++`meson test --suite sgx` runs `sgx_pds` (with `-Dbuild-tests=true`):
++each line of `tests/pds.txt` goes text -> instruction -> word -> text, a
++line that gives a word must encode to it, and a set of known DOUT data words
++is checked field by field. `sgx_pds_test -f N` fuzzes N random
++words through decode and re-assembly; `-d` disassembles words read from
++stdin.
+diff --git a/src/sgx/pds/isa.h b/src/sgx/pds/isa.h
+new file mode 100644
+index 0000000..dc69984
+--- /dev/null
++++ b/src/sgx/pds/isa.h
+@@ -0,0 +1,13 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/* isaspec's generated decoder includes "isa.h". */
++
++#ifndef SGX_PDS_ISA_H
++#define SGX_PDS_ISA_H
++
++#include "compiler/isaspec/isaspec.h"
++
++#endif
+diff --git a/src/sgx/pds/meson.build b/src/sgx/pds/meson.build
+new file mode 100644
+index 0000000..e941e3d
+--- /dev/null
++++ b/src/sgx/pds/meson.build
+@@ -0,0 +1,56 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++
++# SGX545 PDS programs: sgx_pds.xml through
++# isaspec into an encoder and a disassembler, plus a text assembler.
++# (The generated files are named sgxpds-isa.*: isaspec names its
++# functions after the part of the file name before the first '-'.)
++
++sgx_pds_depend_files = [files('sgx_pds.xml'), isaspec_py_deps]
++
++sgx_pds_decode = custom_target(
++  'sgxpds-isa',
++  input : 'sgx_pds.xml',
++  output : ['sgxpds-isa.c', 'sgxpds-isa.h'],
++  command : [prog_isaspec_decode, '--xml', '@INPUT@',
++             '--out-c', '@OUTPUT0@', '--out-h', '@OUTPUT1@'],
++  depend_files : sgx_pds_depend_files,
++)
++
++sgx_pds_encode_h = custom_target(
++  'sgxpds-isa-encode.h',
++  input : 'sgx_pds.xml',
++  output : 'sgxpds-isa-encode.h',
++  command : [prog_isaspec_encode, '--xml', '@INPUT@', '--out-h', '@OUTPUT@'],
++  depend_files : sgx_pds_depend_files,
++)
++
++sgx_pds_enums_h = custom_target(
++  'sgxpds-isa-enums.h',
++  input : 'sgx_pds.xml',
++  output : 'sgxpds-isa-enums.h',
++  command : [prog_python, files('../isa/sgx_isa_enums.py'), '--xml', '@INPUT@',
++             '--out-h', '@OUTPUT@', '--prefix', 'sgx_pds', '--values', ''],
++  depend_files : [sgx_pds_depend_files, files('../isa/sgx_isa_enums.py')],
++)
++
++libsgx_pds = static_library(
++  'sgx_pds',
++  [sgx_pds_decode, sgx_pds_encode_h, sgx_pds_enums_h,
++   'sgx_pds_encode.c', 'sgx_pds_disasm.c', 'sgx_pds_asm.c'],
++  include_directories : [inc_include, inc_src, include_directories('.')],
++  dependencies : [idep_mesautil, idep_isaspec_decode],
++  link_with : [libisaspec],
++  gnu_symbol_visibility : 'hidden',
++  build_by_default : false,
++)
++
++idep_sgx_pds = declare_dependency(
++  include_directories : include_directories('.'),
++  link_with : libsgx_pds,
++  sources : [sgx_pds_enums_h],
++)
++
++if with_tests
++  subdir('tests')
++endif
+diff --git a/src/sgx/pds/sgx_pds.h b/src/sgx/pds/sgx_pds.h
+new file mode 100644
+index 0000000..89c7c2d
+--- /dev/null
++++ b/src/sgx/pds/sgx_pds.h
+@@ -0,0 +1,174 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * SGX545 PDS programs: the encoder and disassembler generated
++ * from sgx_pds.xml, the DOUT data-word encoders, and the program layout
++ * (data segment, then code).
++ */
++
++#ifndef SGX_PDS_H
++#define SGX_PDS_H
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++
++#include "sgxpds-isa-enums.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* condition field values */
++#define SGX_PDS_CC_P0     0 /* only if p0 */
++#define SGX_PDS_CC_3      3 /* the vertex-fetch DOUTU form */
++#define SGX_PDS_CC_ALWAYS 7
++
++/* DOUT targets */
++enum sgx_pds_dout {
++   SGX_PDS_DOUTI = 2, /* iterator setup, 2 words */
++   SGX_PDS_DOUTD = 3, /* DMA into USSE attributes, 2 words (3 with x2.s27) */
++   SGX_PDS_DOUTT = 4, /* texture state, 4 words */
++   SGX_PDS_DOUTU = 5, /* start the USSE task, 3 words */
++   SGX_PDS_DOUTA = 6, /* write a primary attribute register, 2 words */
++};
++
++/* MOVS selects: word n of a DOUT comes from */
++enum sgx_pds_sel {
++   SGX_PDS_S1_LO = 0, /* the DS0 pair's first word */
++   SGX_PDS_S1_HI = 1,
++   SGX_PDS_S2_LO = 2, /* the DS1 pair's first word */
++   SGX_PDS_S2_HI = 3,
++};
++
++enum sgx_pds_file {
++   SGX_PDS_FILE_DS0,
++   SGX_PDS_FILE_DS1,
++   SGX_PDS_FILE_IN, /* inputs: in0 vertex index, in1 instance index, ... */
++};
++
++/* A data-store word (U operands), or one of its 16-bit halves (S1, S2). */
++struct sgx_pds_reg {
++   uint8_t file; /* enum sgx_pds_file */
++   uint8_t num;  /* word */
++   bool hi;      /* S1/S2: the high half */
++};
++
++#define SGX_PDS_DS0(n) ((struct sgx_pds_reg){SGX_PDS_FILE_DS0, (n)})
++#define SGX_PDS_DS1(n) ((struct sgx_pds_reg){SGX_PDS_FILE_DS1, (n)})
++#define SGX_PDS_IN(n)  ((struct sgx_pds_reg){SGX_PDS_FILE_IN, (n)})
++
++struct sgx_pds_instr {
++   enum sgx_pds_opc opc;
++   uint8_t cc; /* SGX_PDS_CC_* */
++
++   /* movs */
++   uint8_t dest;   /* enum sgx_pds_dout */
++   uint8_t r1, r2; /* DS0 pair (words 2r, 2r+1; 0x20+ inputs), DS1 pair */
++   uint8_t sel[4]; /* enum sgx_pds_sel, per word sent */
++   bool x2, s27;   /* both: DOUTD adds word 2 to its address */
++
++   /* add, mul16, and, or, xor, op0xd.s1 (dst U, src1 S1, src2 S2),
++    * tst (src1 or, tst.s2, src2), shl/shr (dst U, src1 U) */
++   struct sgx_pds_reg dst, src1, src2;
++   uint8_t amount;  /* shift count */
++   uint32_t target; /* bra: instruction index */
++};
++
++uint32_t sgx_pds_encode(const struct sgx_pds_instr *instr);
++
++/* One instruction to text; false if nothing matched. */
++bool sgx_pds_disasm_one(uint32_t word, char *buf, size_t size);
++/* n instructions, one per line. */
++void sgx_pds_disasm(const uint32_t *code, unsigned n, FILE *out);
++/*
++ * A whole program as it sits in memory (data rows of DS0 DS0 DS1 DS1, then
++ * code): the data words by store, then the code to the last HALT.
++ */
++void sgx_pds_disasm_program(const uint32_t *words, unsigned rows,
++                            unsigned n_code, FILE *out);
++
++/* Text (the disassembler's notation) to an instruction; NULL or an error. */
++const char *sgx_pds_asm(const char *text, struct sgx_pds_instr *instr);
++
++/* ---- DOUT data words ---- */
++
++struct sgx_pds_doutu {
++   /* word 0 */
++   uint8_t base; /* USE code base register */
++   /* code offset in its 512 KB window, bytes (multiple of 8) */
++   uint32_t offset;
++   uint8_t temps4; /* bits 24-31: temporaries in fours */
++   /* word 1 */
++   bool b1;    /* microkernel tasks */
++   bool pixel; /* pixel tasks (b2) */
++   bool b22, b23;
++   bool iterations; /* the pixel program has plain iterations */
++   bool samples;    /* ... texture samples */
++};
++
++uint32_t sgx_pds_doutu_w0(const struct sgx_pds_doutu *u);
++uint32_t sgx_pds_doutu_w1(const struct sgx_pds_doutu *u);
++
++/* DOUTD word 1 (word 0 is the address, word 2 with x2.s27 an offset) */
++struct sgx_pds_doutd {
++   uint32_t dwords; /* 1-256 */
++   uint32_t reg;    /* destination attribute register */
++   uint8_t kind;    /* bits 22-24 */
++   bool secondary;  /* bit 25 */
++};
++
++uint32_t sgx_pds_doutd_ctrl(const struct sgx_pds_doutd *d);
++
++struct sgx_pds_douti {
++   /* sample half */
++   uint8_t sample_set; /* texture coordinate set + 1, 0 = no sample */
++   bool dim2, proj;
++   bool last_sample;
++   /* iterate half */
++   uint8_t src; /* set + 1; 0 position, 0x20 color, 0x22 depth plane, 0x24 pure
++                   sample */
++   bool color_prec;   /* b21 */
++   uint8_t comps;     /* 1-4 */
++   bool iterate;      /* plain iteration enabled */
++   uint8_t b25_26;    /* 3 from GL's builder, 0 on the clear's color and the
++                         background's sample */
++   bool prec2, prec1; /* b27, b28 (mediump: prec1) */
++   bool last_iter;
++   /* word 1 */
++   uint8_t w1; /* bits 0-6; 0x10 = a sprite's gl_PointCoord */
++};
++
++uint32_t sgx_pds_douti_w0(const struct sgx_pds_douti *i);
++uint32_t sgx_pds_douti_w1(const struct sgx_pds_douti *i);
++
++/* DOUTA word 1 (word 0 is the value) */
++struct sgx_pds_douta {
++   uint8_t reg; /* primary attribute register */
++};
++
++uint32_t sgx_pds_douta_ctrl(const struct sgx_pds_douta *a);
++
++/* ---- program layout ---- */
++
++/* DS0 / DS1 word n in a program's memory words (rows of DS0 DS0 DS1 DS1) */
++static inline unsigned
++sgx_pds_ds0_at(unsigned n)
++{
++   return (n >> 1) * 4 + (n & 1);
++}
++
++static inline unsigned
++sgx_pds_ds1_at(unsigned n)
++{
++   return (n >> 1) * 4 + 2 + (n & 1);
++}
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/src/sgx/pds/sgx_pds.xml b/src/sgx/pds/sgx_pds.xml
+new file mode 100644
+index 0000000..d8f94a3
+--- /dev/null
++++ b/src/sgx/pds/sgx_pds.xml
+@@ -0,0 +1,506 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++Copyright © 2026 Joseph Telaak
++SPDX-License-Identifier: MIT
++-->
++
++<!--
++SGX545 PDS (programmable data sequencer) programs.
++
++The code: 32-bit instructions (#instruction). The data words the DOUT
++instructions send (DOUTU, DOUTD, DOUTI, DOUTA) have encode-only roots of
++their own: they sit in the data segment, which the decoder doesn't see.
++
++Register operands come in three numberings:
++U (8-bit words: ds0, ds1, inputs), S1 (16-bit halves of ds0 and the inputs)
++and S2 (16-bit halves of ds1).
++-->
++
++<isa>
++
++<!-- ===================================================================== -->
++<!-- operands                                                               -->
++<!-- ===================================================================== -->
++
++<bitset name="#u" size="8">
++	<doc>U: 0x00-0x3f ds0, 0x40-0x7f ds1, 0x80+ inputs.</doc>
++	<encode type="struct sgx_pds_reg *" case-prefix="SGX_PDS_">
++		<map name="W">src->num</map>
++	</encode>
++</bitset>
++<bitset name="#u.ds0" extends="#u" displayname="ds0">
++	<display>{NAME}[{W}]</display>
++	<field name="W" low="0" high="5" type="custom"/>
++	<pattern low="6" high="7">00</pattern>
++</bitset>
++<bitset name="#u.ds1" extends="#u" displayname="ds1">
++	<display>{NAME}[{W}]</display>
++	<field name="W" low="0" high="5" type="custom"/>
++	<pattern low="6" high="7">01</pattern>
++</bitset>
++<bitset name="#u.in" extends="#u" displayname="in">
++	<display>{NAME}{W}</display>
++	<field name="W" low="0" high="6" type="custom"/>
++	<pattern pos="7">1</pattern>
++</bitset>
++
++<bitset name="#ud" size="7">
++	<doc>The ALU destination: U without the inputs (7 bits).</doc>
++	<encode type="struct sgx_pds_reg *" case-prefix="SGX_PDS_">
++		<map name="W">src->num</map>
++	</encode>
++</bitset>
++<bitset name="#ud.ds0" extends="#ud" displayname="ds0">
++	<display>{NAME}[{W}]</display>
++	<field name="W" low="0" high="5" type="custom"/>
++	<pattern pos="6">0</pattern>
++</bitset>
++<bitset name="#ud.ds1" extends="#ud" displayname="ds1">
++	<display>{NAME}[{W}]</display>
++	<field name="W" low="0" high="5" type="custom"/>
++	<pattern pos="6">1</pattern>
++</bitset>
++
++<enum name="#half">
++	<value val="0" display=""/>
++	<value val="1" display=".hi"/>
++</enum>
++
++<bitset name="#s1" size="8">
++	<doc>S1: ds0 halves; ds0 words 0x40+ are the inputs.</doc>
++	<encode type="struct sgx_pds_reg *" case-prefix="SGX_PDS_">
++		<map name="W">src->num</map>
++		<map name="HI">src->hi</map>
++	</encode>
++	<field name="HI" pos="0" type="#half"/>
++</bitset>
++<bitset name="#s1.ds0" extends="#s1" displayname="ds0">
++	<display>{NAME}[{W}]{HI}</display>
++	<field name="W" low="1" high="6" type="custom"/>
++	<pattern pos="7">0</pattern>
++</bitset>
++<bitset name="#s1.in" extends="#s1" displayname="in">
++	<display>{NAME}{W}{HI}</display>
++	<field name="W" low="1" high="6" type="custom"/>
++	<pattern pos="7">1</pattern>
++</bitset>
++
++<bitset name="#s2" size="7">
++	<doc>S2: ds1 halves.</doc>
++	<encode type="struct sgx_pds_reg *" case-prefix="SGX_PDS_">
++		<map name="W">src->num</map>
++		<map name="HI">src->hi</map>
++	</encode>
++</bitset>
++<bitset name="#s2.ds1" extends="#s2" displayname="ds1">
++	<display>{NAME}[{W}]{HI}</display>
++	<field name="HI" pos="0" type="#half"/>
++	<field name="W" low="1" high="6" type="custom"/>
++</bitset>
++
++<bitset name="#dsw" size="8">
++	<doc>
++		A data word a MOVS sends, for the display: bit 7 = ds1, else
++		ds0 (words 0x40+ are the inputs).
++	</doc>
++</bitset>
++<bitset name="#dsw.ds0" extends="#dsw" displayname="ds0">
++	<display>{NAME}[{W}]</display>
++	<field name="W" low="0" high="5" type="custom"/>
++	<pattern low="6" high="7">00</pattern>
++</bitset>
++<bitset name="#dsw.in" extends="#dsw" displayname="in">
++	<display>{NAME}{W}</display>
++	<field name="W" low="0" high="5" type="custom"/>
++	<pattern low="6" high="7">01</pattern>
++</bitset>
++<bitset name="#dsw.ds1" extends="#dsw" displayname="ds1">
++	<display>{NAME}[{W}]</display>
++	<field name="W" low="0" high="5" type="custom"/>
++	<pattern low="6" high="7">10</pattern>
++</bitset>
++
++<!-- ===================================================================== -->
++<!-- instructions                                                           -->
++<!-- ===================================================================== -->
++
++<enum name="#ccpfx">
++	<value val="0" display="(p0) "/>
++	<value val="1" display=""/>
++	<value val="2" display=""/>
++	<value val="3" display=""/>
++	<value val="4" display=""/>
++	<value val="5" display=""/>
++	<value val="6" display=""/>
++	<value val="7" display=""/>
++</enum>
++<enum name="#ccsfx">
++	<value val="0" display=""/>
++	<value val="1" display=".cc1"/>
++	<value val="2" display=".cc2"/>
++	<value val="3" display=".cc3"/>
++	<value val="4" display=".cc4"/>
++	<value val="5" display=".cc5"/>
++	<value val="6" display=".cc6"/>
++	<value val="7" display=""/>
++</enum>
++
++<bitset name="#instruction" size="32">
++	<doc>
++		Bits 28-31 opcode, 27 sub-op, 24-26 condition (7 always, 0 if p0).
++	</doc>
++	<field name="CC" low="24" high="26" type="uint"/>
++	<derived name="PFX" type="#ccpfx"><expr>{CC}</expr></derived>
++	<derived name="SFX" type="#ccsfx"><expr>{CC}</expr></derived>
++	<encode type="struct sgx_pds_instr *" case-prefix="SGX_PDS_OPC_">
++		<map name="CC">src->cc</map>
++		<map name="X2">src->x2</map>
++		<map name="S27">src->s27</map>
++		<map name="DEST">src->dest</map>
++		<map name="R1">src->r1</map>
++		<map name="R2">src->r2</map>
++		<map name="SW0">src->sel[0]</map>
++		<map name="SW1">src->sel[1]</map>
++		<map name="SW2">src->sel[2]</map>
++		<map name="SW3">src->sel[3]</map>
++		<map name="DST">&amp;src->dst</map>
++		<map name="SRC1">&amp;src->src1</map>
++		<map name="SRC2">&amp;src->src2</map>
++		<map name="SRC">&amp;src->src1</map>
++		<map name="AMOUNT">src->amount</map>
++		<map name="TARGET">src->target</map>
++	</encode>
++</bitset>
++
++<!-- MOVS: the DOUT instruction (opcode 0, or 2 with x2) -->
++
++<enum name="#dout">
++	<value val="0" display="dout0"/>
++	<value val="1" display="dout1"/>
++	<value val="2" display="douti"/>
++	<value val="3" display="doutd"/>
++	<value val="4" display="doutt"/>
++	<value val="5" display="doutu"/>
++	<value val="6" display="douta"/>
++	<value val="7" display="dout7"/>
++	<value val="8" display="dout8"/>
++	<value val="9" display="dout9"/>
++	<value val="10" display="dout10"/>
++	<value val="11" display="dout11"/>
++	<value val="12" display="dout12"/>
++	<value val="13" display="dout13"/>
++	<value val="14" display="dout14"/>
++	<value val="15" display="dout15"/>
++	<value val="16" display="dout16"/>
++	<value val="17" display="dout17"/>
++	<value val="18" display="dout18"/>
++	<value val="19" display="dout19"/>
++	<value val="20" display="dout20"/>
++	<value val="21" display="dout21"/>
++	<value val="22" display="dout22"/>
++	<value val="23" display="dout23"/>
++	<value val="24" display="dout24"/>
++	<value val="25" display="dout25"/>
++	<value val="26" display="dout26"/>
++	<value val="27" display="dout27"/>
++	<value val="28" display="dout28"/>
++	<value val="29" display="dout29"/>
++	<value val="30" display="dout30"/>
++	<value val="31" display="dout31"/>
++</enum>
++
++<bitset name="movs" extends="#instruction">
++	<doc>
++		Sends four data words to DOUT target DEST: word n is select
++		SWn of the DS0 pair R1 (0 lo, 1 hi) or the DS1 pair R2 (2 lo,
++		3 hi). x2 (bit 29) and s27 (bit 27) together make DOUTD add word
++		2 to its address; cc3 is the vertex-fetch DOUTU form.
++	</doc>
++	<display>
++		{PFX}{DEST}{X2}{S27}{SFX} {O0}, {O1}, {O2}, {O3}{UR1}{UR2}
++	</display>
++	<field name="DEST" low="0" high="4" type="#dout"/>
++	<field name="SW3" low="5" high="6" type="uint"/>
++	<field name="SW2" low="7" high="8" type="uint"/>
++	<field name="SW1" low="9" high="10" type="uint"/>
++	<field name="SW0" low="11" high="12" type="uint"/>
++	<field name="R2" low="13" high="17" type="uint"/>
++	<field name="R1" low="18" high="23" type="uint"/>
++	<field name="S27" pos="27" type="bool" display=".s27"/>
++	<pattern pos="28">0</pattern>
++	<field name="X2" pos="29" type="bool" display=".x2"/>
++	<pattern low="30" high="31">00</pattern>
++	<!-- a row no select reads (printed only when it isn't 0) -->
++	<derived name="UR1" type="custom" width="6">
++		<expr>(({SW0} &amp; 2) &amp;&amp; ({SW1} &amp; 2) &amp;&amp; ({SW2} &amp; 2) &amp;&amp; ({SW3} &amp; 2)) ? {R1} : 0</expr>
++	</derived>
++	<derived name="UR2" type="custom" width="6">
++		<expr>(!({SW0} &amp; 2) &amp;&amp; !({SW1} &amp; 2) &amp;&amp; !({SW2} &amp; 2) &amp;&amp; !({SW3} &amp; 2)) ? {R2} : 0</expr>
++	</derived>
++	<derived name="O0" type="#dsw" width="8">
++		<expr>({SW0} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW0} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW0} &amp; 1))</expr>
++	</derived>
++	<derived name="O1" type="#dsw" width="8">
++		<expr>({SW1} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW1} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW1} &amp; 1))</expr>
++	</derived>
++	<derived name="O2" type="#dsw" width="8">
++		<expr>({SW2} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW2} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW2} &amp; 1))</expr>
++	</derived>
++	<derived name="O3" type="#dsw" width="8">
++		<expr>({SW3} &amp; 2) ? (0x80 | ({R2} &lt;&lt; 1) | ({SW3} &amp; 1)) : (({R1} &lt;&lt; 1) | ({SW3} &amp; 1))</expr>
++	</derived>
++</bitset>
++
++<!-- arithmetic and logic: dst (U, 7 bits), src1 (S1), src2 (S2) -->
++
++<bitset name="#alu" extends="#instruction">
++	<display>
++		{PFX}{NAME}{SFX} {DST}, {SRC1}, {SRC2}
++	</display>
++	<field name="DST" low="0" high="6" type="#ud"/>
++	<pattern low="7" high="8">00</pattern>
++	<field name="SRC2" low="9" high="15" type="#s2"/>
++	<field name="SRC1" low="16" high="23" type="#s1"/>
++</bitset>
++<bitset name="add" extends="#alu">
++	<pattern pos="27">0</pattern>
++	<pattern low="28" high="31">0100</pattern>
++</bitset>
++<bitset name="mul16" extends="#alu">
++	<doc>src1's half times src2's half, 16 x 16 -> 32.</doc>
++	<pattern pos="27">0</pattern>
++	<pattern low="28" high="31">0110</pattern>
++</bitset>
++<bitset name="or" extends="#alu">
++	<pattern pos="27">0</pattern>
++	<pattern low="28" high="31">1100</pattern>
++</bitset>
++<bitset name="and" extends="#alu">
++	<pattern pos="27">1</pattern>
++	<pattern low="28" high="31">1100</pattern>
++</bitset>
++<bitset name="xor" extends="#alu">
++	<pattern pos="27">0</pattern>
++	<pattern low="28" high="31">1101</pattern>
++</bitset>
++<bitset name="op0x4.s1" extends="#alu">
++	<doc>Not seen in use.</doc>
++	<pattern pos="27">1</pattern>
++	<pattern low="28" high="31">0100</pattern>
++</bitset>
++<bitset name="op0x6.s1" extends="#alu">
++	<doc>Not seen in use.</doc>
++	<pattern pos="27">1</pattern>
++	<pattern low="28" high="31">0110</pattern>
++</bitset>
++<bitset name="op0xd.s1" extends="#alu">
++	<doc>Opcode d with s = 1: XOR-like where it is seen.</doc>
++	<pattern pos="27">1</pattern>
++	<pattern low="28" high="31">1101</pattern>
++</bitset>
++
++<!-- tst: p0 = (src == 0), src1 or (bit 8) src2 -->
++
++<bitset name="#tst" extends="#instruction">
++	<pattern low="0" high="7">00000000</pattern>
++	<pattern pos="27">0</pattern>
++	<pattern low="28" high="31">1000</pattern>
++</bitset>
++<bitset name="tst" extends="#tst">
++	<display>
++		{PFX}{NAME}{SFX} {SRC1}
++	</display>
++	<pattern pos="8">0</pattern>
++	<pattern low="9" high="15">0000000</pattern>
++	<field name="SRC1" low="16" high="23" type="#s1"/>
++</bitset>
++<bitset name="tst.s2" extends="#tst" displayname="tst">
++	<display>
++		{PFX}{NAME}{SFX} {SRC2}
++	</display>
++	<pattern pos="8">1</pattern>
++	<field name="SRC2" low="9" high="15" type="#s2"/>
++	<pattern low="16" high="23">00000000</pattern>
++</bitset>
++
++<!-- bra: to instruction TARGET, counted from the first code word -->
++
++<bitset name="bra" extends="#instruction">
++	<display>
++		{PFX}{NAME}{SFX} #{TARGET}
++	</display>
++	<field name="TARGET" low="0" high="23" type="custom"/>
++	<pattern pos="27">0</pattern>
++	<pattern low="28" high="31">1001</pattern>
++</bitset>
++
++<!-- shifts: dst = src (U) shifted by AMOUNT -->
++
++<bitset name="#shift" extends="#instruction">
++	<display>
++		{PFX}{NAME}{SFX} {DST}, {SRC}, #{AMOUNT}
++	</display>
++	<field name="DST" low="0" high="7" type="#u"/>
++	<field name="AMOUNT" low="8" high="15" type="custom"/>
++	<field name="SRC" low="16" high="23" type="#u"/>
++	<pattern low="28" high="31">1111</pattern>
++</bitset>
++<bitset name="shl" extends="#shift">
++	<pattern pos="27">0</pattern>
++</bitset>
++<bitset name="shr" extends="#shift">
++	<pattern pos="27">1</pattern>
++</bitset>
++
++<bitset name="halt" extends="#instruction">
++	<display>
++		{PFX}{NAME}{SFX}
++	</display>
++	<pattern low="0" high="23">000000000000000000000000</pattern>
++	<pattern pos="27">1</pattern>
++	<pattern low="28" high="31">1010</pattern>
++</bitset>
++
++<!-- ===================================================================== -->
++<!-- DOUT data words (encode only)                                          -->
++<!-- ===================================================================== -->
++
++<bitset name="#doutu-w0" size="32">
++	<doc>
++		DOUTU word 0: USE code base register, code offset / 8 in its
++		512 KB window, and the byte at 24-31 (temporaries in fours;
++		0x08 also marks the microkernel's tasks).
++	</doc>
++	<encode type="struct sgx_pds_doutu *">
++		<map name="BASE">src->base</map>
++		<map name="OFF">src->offset &gt;&gt; 3</map>
++		<map name="TEMPS">src->temps4</map>
++	</encode>
++	<field name="BASE" low="0" high="3" type="uint"/>
++	<field name="OFF" low="4" high="21" type="uint"/>
++	<pattern low="22" high="23">00</pattern>
++	<field name="TEMPS" low="24" high="31" type="uint"/>
++</bitset>
++<bitset name="doutu-w0" extends="#doutu-w0">
++	<display>{BASE} {OFF} {TEMPS}</display>
++</bitset>
++
++<bitset name="#doutu-w1" size="32">
++	<doc>
++		DOUTU word 1: b1 on microkernel tasks, b2 on pixel tasks, b24 =
++		the pixel program has plain iterations, b25 = it has samples;
++		b22/b23 as the pixel-event program's tasks set them. The rest
++		is reserved: a bit no field names is 0.
++	</doc>
++	<encode type="struct sgx_pds_doutu *">
++		<map name="B1">src->b1</map>
++		<map name="PIXEL">src->pixel</map>
++		<map name="B22">src->b22</map>
++		<map name="B23">src->b23</map>
++		<map name="ITER">src->iterations</map>
++		<map name="SMP">src->samples</map>
++	</encode>
++	<pattern pos="0">0</pattern>
++	<field name="B1" pos="1" type="bool"/>
++	<field name="PIXEL" pos="2" type="bool"/>
++	<pattern low="3" high="21">0000000000000000000</pattern>
++	<field name="B22" pos="22" type="bool"/>
++	<field name="B23" pos="23" type="bool"/>
++	<field name="ITER" pos="24" type="bool"/>
++	<field name="SMP" pos="25" type="bool"/>
++	<pattern low="26" high="31">000000</pattern>
++</bitset>
++<bitset name="doutu-w1" extends="#doutu-w1">
++	<display>{B1} {PIXEL} {B22} {B23} {ITER} {SMP}</display>
++</bitset>
++
++<bitset name="#doutd-ctrl" size="32">
++	<doc>
++		DOUTD word 1: dwords - 1, the destination attribute register,
++		b22-24 (1-3 on state and uniform DMAs) and b25 (set on them).
++	</doc>
++	<encode type="struct sgx_pds_doutd *">
++		<map name="DW">src->dwords - 1</map>
++		<map name="REG">src->reg</map>
++		<map name="KIND">src->kind</map>
++		<map name="SEC">src->secondary</map>
++	</encode>
++	<field name="DW" low="0" high="7" type="uint"/>
++	<field name="REG" low="8" high="21" type="uint"/>
++	<field name="KIND" low="22" high="24" type="uint"/>
++	<field name="SEC" pos="25" type="bool"/>
++	<pattern low="26" high="31">000000</pattern>
++</bitset>
++<bitset name="doutd-ctrl" extends="#doutd-ctrl">
++	<display>{DW} {REG} {KIND} {SEC}</display>
++</bitset>
++
++<bitset name="#douti" size="32">
++	<doc>
++		DOUTI word 0. Sample half: coordinate set + 1 (0 none), 2-D (b9),
++		projected (b10), last sample (b30). Iterate half: source (b11-16:
++		set + 1, 0 position, 0x20 color, 0x22 depth plane; 0x24 on pure
++		samples), color precision &lt; 2 (b21), components - 1, plain
++		iteration (b24), b25-26, precision 2 / 1 (b27 / b28), last plain
++		iteration (b29).
++	</doc>
++	<encode type="struct sgx_pds_douti *">
++		<map name="TC">src->sample_set</map>
++		<map name="DIM2">src->dim2</map>
++		<map name="PROJ">src->proj</map>
++		<map name="SRC">src->src</map>
++		<map name="CPREC">src->color_prec</map>
++		<map name="COMPS">src->comps ? src->comps - 1 : 0</map>
++		<map name="ITER">src->iterate</map>
++		<map name="B25">src->b25_26</map>
++		<map name="PREC2">src->prec2</map>
++		<map name="PREC1">src->prec1</map>
++		<map name="LASTI">src->last_iter</map>
++		<map name="LASTS">src->last_sample</map>
++	</encode>
++	<field name="TC" low="0" high="4" type="uint"/>
++	<pattern low="5" high="8">0000</pattern>
++	<field name="DIM2" pos="9" type="bool"/>
++	<field name="PROJ" pos="10" type="bool"/>
++	<field name="SRC" low="11" high="16" type="uint"/>
++	<pattern low="17" high="20">0000</pattern>
++	<field name="CPREC" pos="21" type="bool"/>
++	<field name="COMPS" low="22" high="23" type="uint"/>
++	<field name="ITER" pos="24" type="bool"/>
++	<field name="B25" low="25" high="26" type="uint"/>
++	<field name="PREC2" pos="27" type="bool"/>
++	<field name="PREC1" pos="28" type="bool"/>
++	<field name="LASTI" pos="29" type="bool"/>
++	<field name="LASTS" pos="30" type="bool"/>
++	<pattern pos="31">0</pattern>
++</bitset>
++<bitset name="douti" extends="#douti">
++	<display>{TC} {DIM2} {PROJ} {SRC} {CPREC} {COMPS} {ITER} {B25} {PREC2} {PREC1} {LASTI} {LASTS}</display>
++</bitset>
++
++<bitset name="#douti-w1" size="32">
++	<doc>DOUTI word 1: bits 0-6 go with the sample half; b4 = a sprite's gl_PointCoord.</doc>
++	<encode type="struct sgx_pds_douti *">
++		<map name="W1">src->w1</map>
++	</encode>
++	<field name="W1" low="0" high="6" type="uint"/>
++	<pattern low="7" high="31">0000000000000000000000000</pattern>
++</bitset>
++<bitset name="douti-w1" extends="#douti-w1">
++	<display>{W1}</display>
++</bitset>
++
++<bitset name="#douta-ctrl" size="32">
++	<doc>DOUTA word 1: bits 8-15 select the primary attribute register.</doc>
++	<encode type="struct sgx_pds_douta *">
++		<map name="REG">src->reg</map>
++	</encode>
++	<pattern low="0" high="7">00000000</pattern>
++	<field name="REG" low="8" high="15" type="uint"/>
++	<pattern low="16" high="31">0000000000000000</pattern>
++</bitset>
++<bitset name="douta-ctrl" extends="#douta-ctrl">
++	<display>{REG}</display>
++</bitset>
++
++</isa>
+diff --git a/src/sgx/pds/sgx_pds_asm.c b/src/sgx/pds/sgx_pds_asm.c
+new file mode 100644
+index 0000000..ab56fbc
+--- /dev/null
++++ b/src/sgx/pds/sgx_pds_asm.c
+@@ -0,0 +1,277 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * The disassembler's text back into struct sgx_pds_instr (tests, and
++ * programs written by hand):
++ *
++ *    [(p0)] <op>[.x2][.s27][.cc<n>] <operands> [r1=n] [r2=n]
++ *
++ * Words: ds0[n], ds1[n], in<n>, with .hi for the high half of S1/S2
++ * operands; immediates #n.
++ */
++
++#include <ctype.h>
++#include <errno.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "sgx_pds.h"
++
++struct cursor {
++   const char *p;
++};
++
++static void
++skip(struct cursor *c)
++{
++   while (isspace((unsigned char)*c->p) || *c->p == ',')
++      c->p++;
++}
++
++static bool
++eat(struct cursor *c, const char *s)
++{
++   skip(c);
++   size_t n = strlen(s);
++   if (strncmp(c->p, s, n))
++      return false;
++   c->p += n;
++   return true;
++}
++
++/* An unsigned number of at most 32 bits. */
++static bool
++number(struct cursor *c, uint32_t *v)
++{
++   char *end;
++
++   skip(c);
++   if (!isdigit((unsigned char)*c->p))
++      return false;
++   errno = 0;
++   unsigned long long n = strtoull(c->p, &end, 0);
++   if (errno || n > UINT32_MAX)
++      return false;
++   *v = n;
++   c->p = end;
++   return true;
++}
++
++/* ds0[n] / ds1[n] / in<n>, [.hi] */
++static bool
++word(struct cursor *c, struct sgx_pds_reg *r)
++{
++   uint32_t n;
++
++   memset(r, 0, sizeof(*r));
++   if (eat(c, "ds0[") || eat(c, "ds1[")) {
++      r->file = c->p[-2] == '0' ? SGX_PDS_FILE_DS0 : SGX_PDS_FILE_DS1;
++      if (!number(c, &n) || !eat(c, "]"))
++         return false;
++   } else if (eat(c, "in")) {
++      r->file = SGX_PDS_FILE_IN;
++      if (!number(c, &n))
++         return false;
++   } else {
++      return false;
++   }
++   r->num = n;
++   if (!strncmp(c->p, ".hi", 3)) {
++      r->hi = true;
++      c->p += 3;
++   }
++   return true;
++}
++
++static const struct {
++   const char *name;
++   enum sgx_pds_opc opc;
++} ops[] = {
++   {"op0xd.s1", SGX_PDS_OPC_OP0XD_S1}, {"op0x4.s1", SGX_PDS_OPC_OP0X4_S1},
++   {"op0x6.s1", SGX_PDS_OPC_OP0X6_S1}, {"add", SGX_PDS_OPC_ADD},
++   {"mul16", SGX_PDS_OPC_MUL16},       {"or", SGX_PDS_OPC_OR},
++   {"and", SGX_PDS_OPC_AND},           {"xor", SGX_PDS_OPC_XOR},
++   {"tst", SGX_PDS_OPC_TST},           {"bra", SGX_PDS_OPC_BRA},
++   {"shl", SGX_PDS_OPC_SHL},           {"shr", SGX_PDS_OPC_SHR},
++   {"halt", SGX_PDS_OPC_HALT},
++};
++
++static const char *const douts[] = {
++   [SGX_PDS_DOUTI] = "douti", [SGX_PDS_DOUTD] = "doutd",
++   [SGX_PDS_DOUTT] = "doutt", [SGX_PDS_DOUTU] = "doutu",
++   [SGX_PDS_DOUTA] = "douta",
++};
++
++static const char *
++movs(struct cursor *c, struct sgx_pds_instr *in)
++{
++   bool r1_set = false, r2_set = false;
++
++   for (unsigned k = 0; k < 4; k++) {
++      struct sgx_pds_reg r;
++
++      if (!word(c, &r) || r.hi)
++         return "expected a data word";
++      unsigned w = r.file == SGX_PDS_FILE_IN ? 0x40 + r.num : r.num;
++      bool s2 = r.file == SGX_PDS_FILE_DS1;
++      uint8_t *row = s2 ? &in->r2 : &in->r1;
++      bool *set = s2 ? &r2_set : &r1_set;
++
++      if (*set && *row != w >> 1)
++         return "words from two different rows of one store";
++      *row = w >> 1;
++      *set = true;
++      in->sel[k] = (s2 ? 2 : 0) | (w & 1);
++   }
++   for (;;) {
++      uint32_t n;
++
++      if (eat(c, "[r1=") && number(c, &n) && eat(c, "]"))
++         in->r1 = n;
++      else if (eat(c, "[r2=") && number(c, &n) && eat(c, "]"))
++         in->r2 = n;
++      else
++         break;
++   }
++   return NULL;
++}
++
++static const char *operands(struct cursor *c, struct sgx_pds_instr *in);
++
++const char *
++sgx_pds_asm(const char *text, struct sgx_pds_instr *in)
++{
++   struct cursor c = {text};
++
++   memset(in, 0, sizeof(*in));
++   in->cc = SGX_PDS_CC_ALWAYS;
++   if (eat(&c, "(p0)"))
++      in->cc = SGX_PDS_CC_P0;
++   skip(&c);
++
++   size_t len = 0;
++   while (c.p[len] && !isspace((unsigned char)c.p[len]))
++      len++;
++   char op[32];
++   if (!len || len >= sizeof(op))
++      return "no mnemonic";
++   memcpy(op, c.p, len);
++   op[len] = '\0';
++   c.p += len;
++
++   /* the mnemonic, then its suffixes */
++   char *sfx = NULL;
++   in->opc = SGX_PDS_OPC_NONE;
++   for (unsigned i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
++      size_t l = strlen(ops[i].name);
++      if (!strncmp(op, ops[i].name, l) && (op[l] == '\0' || op[l] == '.')) {
++         in->opc = ops[i].opc;
++         sfx = op + l;
++         break;
++      }
++   }
++   if (in->opc == SGX_PDS_OPC_NONE && !strncmp(op, "dout", 4)) {
++      in->opc = SGX_PDS_OPC_MOVS;
++      sfx = op + 4;
++      while (*sfx && *sfx != '.')
++         sfx++;
++      char save = *sfx;
++      *sfx = '\0';
++      in->dest = 0xff;
++      for (unsigned d = 0; d < sizeof(douts) / sizeof(douts[0]); d++) {
++         if (douts[d] && !strcmp(op, douts[d]))
++            in->dest = d;
++      }
++      if (in->dest == 0xff && isdigit((unsigned char)op[4])) {
++         char *end;
++         unsigned long d = strtoul(op + 4, &end, 10);
++         if (!*end && d <= 31)
++            in->dest = d;
++      }
++      *sfx = save;
++   }
++   if (in->opc == SGX_PDS_OPC_NONE)
++      return "unknown mnemonic";
++   while (*sfx == '.') {
++      sfx++;
++      if (!strncmp(sfx, "x2", 2) && in->opc == SGX_PDS_OPC_MOVS) {
++         in->x2 = true;
++         sfx += 2;
++      } else if (!strncmp(sfx, "s27", 3) && in->opc == SGX_PDS_OPC_MOVS) {
++         in->s27 = true;
++         sfx += 3;
++      } else if (!strncmp(sfx, "cc", 2) && sfx[2] >= '1' && sfx[2] <= '6') {
++         in->cc = sfx[2] - '0';
++         sfx += 3;
++      } else {
++         return "unknown suffix";
++      }
++   }
++   if (*sfx)
++      return "unknown suffix";
++
++   const char *err = operands(&c, in);
++   if (err)
++      return err;
++   skip(&c);
++   return *c.p ? "trailing text" : NULL;
++}
++
++static const char *
++operands(struct cursor *c, struct sgx_pds_instr *in)
++{
++   uint32_t n;
++
++   switch (in->opc) {
++   case SGX_PDS_OPC_MOVS:
++      if (in->dest > 31)
++         return "bad DOUT target";
++      return movs(c, in);
++   case SGX_PDS_OPC_ADD:
++   case SGX_PDS_OPC_MUL16:
++   case SGX_PDS_OPC_OR:
++   case SGX_PDS_OPC_AND:
++   case SGX_PDS_OPC_XOR:
++   case SGX_PDS_OPC_OP0XD_S1:
++   case SGX_PDS_OPC_OP0X4_S1:
++   case SGX_PDS_OPC_OP0X6_S1:
++      if (!word(c, &in->dst) || in->dst.file == SGX_PDS_FILE_IN || in->dst.hi)
++         return "bad destination";
++      if (!word(c, &in->src1) || in->src1.file == SGX_PDS_FILE_DS1)
++         return "src1 is ds0 or an input";
++      if (!word(c, &in->src2) || in->src2.file != SGX_PDS_FILE_DS1)
++         return "src2 is ds1";
++      return NULL;
++   case SGX_PDS_OPC_TST:
++      if (!word(c, &in->src1))
++         return "bad source";
++      if (in->src1.file == SGX_PDS_FILE_DS1) {
++         in->opc = SGX_PDS_OPC_TST_S2;
++         in->src2 = in->src1;
++         in->src1 = (struct sgx_pds_reg){0};
++      }
++      return NULL;
++   case SGX_PDS_OPC_BRA:
++      if (!eat(c, "#") || !number(c, &n))
++         return "expected #target";
++      in->target = n;
++      return NULL;
++   case SGX_PDS_OPC_SHL:
++   case SGX_PDS_OPC_SHR:
++      if (!word(c, &in->dst) || in->dst.hi || !word(c, &in->src1) ||
++          in->src1.hi)
++         return "bad operands";
++      if (!eat(c, "#") || !number(c, &n))
++         return "expected #amount";
++      in->amount = n;
++      return NULL;
++   case SGX_PDS_OPC_HALT:
++      return NULL;
++   default:
++      return "unknown mnemonic";
++   }
++}
+diff --git a/src/sgx/pds/sgx_pds_disasm.c b/src/sgx/pds/sgx_pds_disasm.c
+new file mode 100644
+index 0000000..011a247
+--- /dev/null
++++ b/src/sgx/pds/sgx_pds_disasm.c
+@@ -0,0 +1,92 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * The disassembler: isaspec's generated decoder, data-store word numbers
++ * printed as ds0[2] / ds1[0x30], and the program layout.
++ */
++
++#include <inttypes.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "sgx_pds.h"
++#include "sgxpds-isa.h"
++
++static void
++print_custom(struct isa_print_state *print, const char *name, uint64_t v)
++{
++   /* a MOVS row no select reads, only when it isn't 0 */
++   if (!strcmp(name, "UR1") || !strcmp(name, "UR2")) {
++      if (v)
++         isa_print(print, " [r%c=", name[2]);
++      else
++         return;
++   }
++   /* numbers below 10 in decimal, the rest in hex */
++   if (v < 10)
++      isa_print(print, "%" PRIu64, v);
++   else
++      isa_print(print, "0x%" PRIx64, v);
++   if (name[0] == 'U' && name[1] == 'R')
++      isa_print(print, "]");
++}
++
++static void
++tidy(char *s)
++{
++   size_t n = strlen(s);
++
++   while (n && (s[n - 1] == '\n' || s[n - 1] == ' ' || s[n - 1] == '\t'))
++      s[--n] = '\0';
++   for (char *p = s; *p; p++) {
++      if (*p == '\n' || *p == '\t')
++         *p = ' ';
++   }
++}
++
++bool
++sgx_pds_disasm_one(uint32_t word, char *buf, size_t size)
++{
++   char *text = NULL;
++   size_t len = 0;
++   FILE *out = open_memstream(&text, &len);
++
++   if (!out)
++      return false;
++   sgxpds_isa_disasm(&word, sizeof(word), out,
++                     &(struct isa_decode_options){
++                        .show_errors = true,
++                        .field_print_cb = print_custom,
++                     });
++   fclose(out);
++   tidy(text);
++   bool ok = !strstr(text, "no match") && !strstr(text, "unexpected bits");
++   snprintf(buf, size, "%s", text);
++   free(text);
++   return ok;
++}
++
++void
++sgx_pds_disasm(const uint32_t *code, unsigned n, FILE *out)
++{
++   char line[256];
++
++   for (unsigned i = 0; i < n; i++) {
++      sgx_pds_disasm_one(code[i], line, sizeof(line));
++      fprintf(out, "%3u: %08x  %s\n", i, code[i], line);
++   }
++}
++
++void
++sgx_pds_disasm_program(const uint32_t *words, unsigned rows, unsigned n_code,
++                       FILE *out)
++{
++   for (unsigned n = 0; n < 2 * rows; n++) {
++      fprintf(out, "ds0[%2u] = %08x   ds1[%2u] = %08x\n", n,
++              words[sgx_pds_ds0_at(n)], n, words[sgx_pds_ds1_at(n)]);
++   }
++   sgx_pds_disasm(words + 4 * rows, n_code, out);
++}
+diff --git a/src/sgx/pds/sgx_pds_encode.c b/src/sgx/pds/sgx_pds_encode.c
+new file mode 100644
+index 0000000..e7615de
+--- /dev/null
++++ b/src/sgx/pds/sgx_pds_encode.c
+@@ -0,0 +1,79 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * Glue for the encoder isaspec generates from sgx_pds.xml: the leaf
++ * selection of each hierarchy. Bit positions live in the XML.
++ */
++
++#include "sgx_pds.h"
++
++#include "util/macros.h"
++
++struct encode_state {
++   uint32_t gen;
++};
++
++static inline enum sgx_pds_opc
++__instruction_case(struct encode_state *s, const struct sgx_pds_instr *instr)
++{
++   return instr->opc;
++}
++
++static inline enum sgx_pds_case_u
++__u_case(struct encode_state *s, const struct sgx_pds_reg *r)
++{
++   switch (r->file) {
++   case SGX_PDS_FILE_DS0:
++      return SGX_PDS_U_DS0;
++   case SGX_PDS_FILE_DS1:
++      return SGX_PDS_U_DS1;
++   default:
++      return SGX_PDS_U_IN;
++   }
++}
++
++static inline enum sgx_pds_case_ud
++__ud_case(struct encode_state *s, const struct sgx_pds_reg *r)
++{
++   return r->file == SGX_PDS_FILE_DS1 ? SGX_PDS_UD_DS1 : SGX_PDS_UD_DS0;
++}
++
++static inline enum sgx_pds_case_s1
++__s1_case(struct encode_state *s, const struct sgx_pds_reg *r)
++{
++   return r->file == SGX_PDS_FILE_IN ? SGX_PDS_S1_IN : SGX_PDS_S1_DS0;
++}
++
++static inline enum sgx_pds_case_s2
++__s2_case(struct encode_state *s, const struct sgx_pds_reg *r)
++{
++   return SGX_PDS_S2_DS1;
++}
++
++#include "sgxpds-isa-encode.h"
++
++uint32_t
++sgx_pds_encode(const struct sgx_pds_instr *instr)
++{
++   struct encode_state s = {0};
++
++   return bitmask_to_uint64_t(
++      encode__instruction(&s, NULL, (struct sgx_pds_instr *)instr));
++}
++
++#define DATA_WORD(fn, root, type)                                              \
++   uint32_t fn(const struct type *v)                                           \
++   {                                                                           \
++      struct encode_state s = {0};                                             \
++      return bitmask_to_uint64_t(encode__##root(&s, NULL, (struct type *)v));  \
++   }
++
++DATA_WORD(sgx_pds_doutu_w0, doutu_w0, sgx_pds_doutu)
++DATA_WORD(sgx_pds_doutu_w1, doutu_w1, sgx_pds_doutu)
++DATA_WORD(sgx_pds_doutd_ctrl, doutd_ctrl, sgx_pds_doutd)
++DATA_WORD(sgx_pds_douti_w0, douti, sgx_pds_douti)
++DATA_WORD(sgx_pds_douti_w1, douti_w1, sgx_pds_douti)
++DATA_WORD(sgx_pds_douta_ctrl, douta_ctrl, sgx_pds_douta)
+diff --git a/src/sgx/pds/tests/meson.build b/src/sgx/pds/tests/meson.build
+new file mode 100644
+index 0000000..e38641c
+--- /dev/null
++++ b/src/sgx/pds/tests/meson.build
+@@ -0,0 +1,16 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++
++# Text -> instruction -> words -> text over each list; a line that gives
++# words must encode to them.
++test(
++  'sgx_pds',
++  executable(
++    'sgx_pds_test',
++    'sgx_pds_test.c',
++    include_directories : [inc_include, inc_src],
++    dependencies : [idep_sgx_pds, idep_mesautil],
++  ),
++  args : files('pds.txt'),
++  suite : ['sgx'],
++)
+diff --git a/src/sgx/pds/tests/pds.txt b/src/sgx/pds/tests/pds.txt
+new file mode 100644
+index 0000000..c5cec61
+--- /dev/null
++++ b/src/sgx/pds/tests/pds.txt
+@@ -0,0 +1,48 @@
++# Copyright © 2026 Joseph Telaak
++# SPDX-License-Identifier: MIT
++#
++# PDS instructions in the disassembler's notation, `<text> [; <word>]`.
++# A line with a word must encode to it; the rest only round-trip.
++
++# tst, bra, halt
++tst ds0[0] ; 87000000
++tst ds0[2] ; 87040000
++tst ds1[0x30] ; 8700c100
++(p0) bra #6 ; 90000006
++(p0) bra #0x18 ; 90000018
++bra #4 ; 97000004
++halt ; af000000
++doutd ds0[0], ds0[1], ds0[0], ds0[0] ; 07000203
++
++# alu and shifts
++op0xd.s1 ds1[0x30], in1, ds1[0] ; df820070
++shr ds0[0x30], in0, #4 ; ff800430
++shl ds0[0x31], ds0[0x31], #0x10 ; f7311031
++shr ds0[0x30], ds0[0x30], #0xf ; ff300f30
++shl ds1[0x30], in1, #0x14 ; f7811470
++add ds1[0x32], ds0[0x31], ds1[0x32]
++mul16 ds1[0x32], in0, ds1[0]
++mul16 ds0[0x31], in1.hi, ds1[3].hi
++and ds1[0x30], in1, ds1[2] ; cf820870
++op0x4.s1 ds0[1], ds0[2], ds1[3]
++op0x6.s1 ds1[1], in0x10, ds1[0x20].hi
++or ds0[0x30], ds0[6], ds1[0x30]
++xor ds0[0x30], ds0[0x30], ds1[0x30]
++(p0) add ds0[4], ds0[2], ds1[1]
++
++# movs (DOUT)
++doutd.x2.s27 ds0[0], ds0[1], ds1[0x32], ds1[0x32] ; 2f032343
++doutu.cc3 ds0[2], ds0[3], ds1[1], ds1[1] ; 030403e5
++douta.x2.s27 in0, ds1[0], in0, ds1[1] ; 2f800466
++doutu ds0[0], ds0[1], ds1[0], ds1[1]
++douti ds1[1], ds0[2], ds0[3], ds0[3]
++doutt ds1[2], ds1[3], ds0[4], ds0[5]
++doutd ds0[0], ds0[1], ds0[0], ds0[1] [r2=0x18]
++douta in2, ds1[0], in2, in2 ; 07840406
++doutu ds1[1], ds0[0x30], ds0[0x30], ds0[0x30]
++(p0) doutu ds0[0], ds0[1], ds0[0], ds0[0]
++doutd.x2 ds0[0], ds0[1], ds1[0x32], ds1[0x32]
++doutd.s27 ds0[0], ds0[1], ds1[0x32], ds1[0x32]
++dout7 ds0[0], ds0[0], ds0[0], ds0[0]
++douti ds0[0], ds0[1], ds0[0], ds0[1] [r2=5]
++doutd ds1[0], ds1[1], ds1[0], ds1[1] [r1=0x1c]
+diff --git a/src/sgx/pds/tests/sgx_pds_test.c b/src/sgx/pds/tests/sgx_pds_test.c
+new file mode 100644
+index 0000000..623650c
+--- /dev/null
++++ b/src/sgx/pds/tests/sgx_pds_test.c
+@@ -0,0 +1,282 @@
++/*
++ * Copyright © 2026 Joseph Telaak
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * sgx_pds_test [-f N] [-t] FILE...
++ * sgx_pds_test -d < words
++ *
++ * Each line of FILE is `<text> [; <word>]`: the text is assembled, encoded
++ * and disassembled again, and must come back the same; with a word, the
++ * encoding must equal it. Then a set of known DOUT data
++ * words. -f N also checks N random words: every word that decodes must
++ * assemble back to itself. -t prints `<text> ; <word>` for each line.
++ * -d disassembles hex words read from stdin, one `<word>  <text>` per word.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "sgx_pds.h"
++
++static unsigned failures, checked;
++
++static void
++fail(const char *what, const char *line, const char *detail)
++{
++   failures++;
++   fprintf(stderr, "FAIL %s: %s (%s)\n", what, line, detail);
++}
++
++static void
++check_line(const char *line, bool table)
++{
++   char text[256], back[256];
++   const char *semi = strchr(line, ';');
++   size_t n = semi ? (size_t)(semi - line) : strlen(line);
++   struct sgx_pds_instr in;
++
++   while (n &&
++          (line[n - 1] == ' ' || line[n - 1] == '\t' || line[n - 1] == '\n'))
++      n--;
++   memcpy(text, line, n);
++   text[n] = '\0';
++   checked++;
++
++   const char *err = sgx_pds_asm(text, &in);
++   if (err) {
++      fail("asm", text, err);
++      return;
++   }
++   uint32_t w = sgx_pds_encode(&in);
++   if (semi) {
++      uint32_t want = strtoul(semi + 1, NULL, 16);
++      if (w != want) {
++         snprintf(back, sizeof(back), "got %08x, want %08x", w, want);
++         fail("encode", text, back);
++      }
++   }
++   if (!sgx_pds_disasm_one(w, back, sizeof(back)) || strcmp(back, text)) {
++      char d[300];
++      snprintf(d, sizeof(d), "%08x disassembles to \"%s\"", w, back);
++      fail("round trip", text, d);
++   }
++   if (table)
++      printf("%s ; %08x\n", text, w);
++}
++
++static void
++check_word(const char *what, uint32_t got, uint32_t want)
++{
++   char d[64];
++
++   checked++;
++   if (got != want) {
++      snprintf(d, sizeof(d), "got %08x, want %08x", got, want);
++      fail("data word", what, d);
++   }
++}
++
++/* Known DOUT data words. */
++static void
++check_data_words(void)
++{
++   /* DOUTI */
++   check_word("37c00800: tc0 x4, f16, last",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.src = 1,
++                                                       .comps = 4,
++                                                       .iterate = true,
++                                                       .b25_26 = 3,
++                                                       .prec1 = true,
++                                                       .last_iter = true}),
++              0x37c00800);
++   check_word("17c00800: tc0 x4, f16",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.src = 1,
++                                                       .comps = 4,
++                                                       .iterate = true,
++                                                       .b25_26 = 3,
++                                                       .prec1 = true}),
++              0x17c00800);
++   check_word("37401000: tc1 x2, f16, last",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.src = 2,
++                                                       .comps = 2,
++                                                       .iterate = true,
++                                                       .b25_26 = 3,
++                                                       .prec1 = true,
++                                                       .last_iter = true}),
++              0x37401000);
++   check_word("37c00a02: tc0 x4 merged with a 2-D sample of tc1",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.sample_set = 2,
++                                                       .dim2 = true,
++                                                       .src = 1,
++                                                       .comps = 4,
++                                                       .iterate = true,
++                                                       .b25_26 = 3,
++                                                       .prec1 = true,
++                                                       .last_iter = true}),
++              0x37c00a02);
++   check_word("46012203: a pure 2-D sample of tc2, last sample",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.sample_set = 3,
++                                                       .dim2 = true,
++                                                       .src = 0x24,
++                                                       .b25_26 = 3,
++                                                       .last_sample = true}),
++              0x46012203);
++   check_word("21c10000: the clear's color x4",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.src = 0x20,
++                                                       .comps = 4,
++                                                       .iterate = true,
++                                                       .last_iter = true}),
++              0x21c10000);
++   check_word("40012001: background object, sample tc0",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.sample_set = 1,
++                                                       .src = 0x24,
++                                                       .last_sample = true}),
++              0x40012001);
++   check_word("27800000: gl_FragCoord x3",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.src = 0,
++                                                       .comps = 3,
++                                                       .iterate = true,
++                                                       .b25_26 = 3,
++                                                       .last_iter = true}),
++              0x27800000);
++   check_word("37400800 + w1 0x10: sprite gl_PointCoord",
++              sgx_pds_douti_w0(&(struct sgx_pds_douti){.src = 1,
++                                                       .comps = 2,
++                                                       .iterate = true,
++                                                       .b25_26 = 3,
++                                                       .prec1 = true,
++                                                       .last_iter = true}),
++              0x37400800);
++   check_word("douti w1 0x10",
++              sgx_pds_douti_w1(&(struct sgx_pds_douti){.w1 = 0x10}), 0x10);
++
++   /* DOUTU word 1 */
++   check_word(
++      "02000004: tex1",
++      sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.pixel = true, .samples = true}),
++      0x02000004);
++   check_word("01000004: vary2",
++              sgx_pds_doutu_w1(
++                 &(struct sgx_pds_doutu){.pixel = true, .iterations = true}),
++              0x01000004);
++   check_word("03000004: tex2",
++              sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.pixel = true,
++                                                       .iterations = true,
++                                                       .samples = true}),
++              0x03000004);
++   check_word("00000002: microkernel",
++              sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b1 = true}), 2);
++   check_word(
++      "00c00000: pixel event",
++      sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b22 = true, .b23 = true}),
++      0x00c00000);
++
++   /* DOUTU word 0: base 3, offset 0x1230, 8 temporaries */
++   check_word(
++      "doutu w0",
++      sgx_pds_doutu_w0(
++         &(struct sgx_pds_doutu){.base = 3, .offset = 0x1230, .temps4 = 2}),
++      0x02000000 | 0x1230 >> 3 << 4 | 3);
++
++   /* DOUTD word 1: attr3's streams (vec3 at register 4), a state DMA */
++   check_word(
++      "doutd vec3 -> 4",
++      sgx_pds_doutd_ctrl(&(struct sgx_pds_doutd){.dwords = 3, .reg = 4}),
++      0x00000402);
++   check_word("doutd state",
++              sgx_pds_doutd_ctrl(&(struct sgx_pds_doutd){.dwords = 10,
++                                                         .reg = 0,
++                                                         .kind = 1,
++                                                         .secondary = true}),
++              0x02400009);
++
++   /* DOUTA word 1: pds3's (in2, 0x100) */
++   check_word("douta pa1",
++              sgx_pds_douta_ctrl(&(struct sgx_pds_douta){.reg = 1}), 0x100);
++   check_word("douta pa2",
++              sgx_pds_douta_ctrl(&(struct sgx_pds_douta){.reg = 2}), 0x200);
++}
++
++static void
++fuzz(unsigned n)
++{
++   uint32_t x = 0x2545f491;
++   unsigned decoded = 0;
++
++   for (unsigned i = 0; i < n; i++) {
++      char text[256], back[256];
++      struct sgx_pds_instr in;
++
++      x ^= x << 13;
++      x ^= x >> 17;
++      x ^= x << 5;
++      /* bias toward valid opcodes: keep the top byte random, clear some low
++       * bits */
++      uint32_t w = i & 1 ? x : x & 0xff00ffff;
++
++      if (!sgx_pds_disasm_one(w, text, sizeof(text)))
++         continue;
++      decoded++;
++      checked++;
++      const char *err = sgx_pds_asm(text, &in);
++      uint32_t got = err ? 0 : sgx_pds_encode(&in);
++      if (err || got != w) {
++         snprintf(back, sizeof(back), "%08x -> %s -> %08x", w, err ? err : "",
++                  got);
++         fail("fuzz", text, back);
++      }
++   }
++   printf("fuzz: %u words, %u decode\n", n, decoded);
++}
++
++int
++main(int argc, char **argv)
++{
++   bool table = false;
++   unsigned nfuzz = 0;
++   int i = 1;
++
++   for (; i < argc && argv[i][0] == '-'; i++) {
++      if (!strcmp(argv[i], "-d")) {
++         unsigned w;
++         char text[256];
++
++         while (scanf("%x", &w) == 1) {
++            if (!sgx_pds_disasm_one(w, text, sizeof(text)))
++               failures++;
++            printf("%08x  %s\n", w, text);
++         }
++         return failures != 0;
++      }
++      if (!strcmp(argv[i], "-t"))
++         table = true;
++      else if (!strcmp(argv[i], "-f") && i + 1 < argc)
++         nfuzz = strtoul(argv[++i], NULL, 0);
++   }
++   for (; i < argc; i++) {
++      FILE *f = fopen(argv[i], "r");
++      char line[512];
++
++      if (!f) {
++         perror(argv[i]);
++         return 2;
++      }
++      while (fgets(line, sizeof(line), f)) {
++         char *p = line;
++         while (*p == ' ' || *p == '\t')
++            p++;
++         if (*p == '#' || *p == '\n' || !*p)
++            continue;
++         check_line(p, table);
++      }
++      fclose(f);
++   }
++   check_data_words();
++   if (nfuzz)
++      fuzz(nfuzz);
++   printf("%u checks, %u failures\n", checked, failures);
++   return failures != 0;
++}
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,46 @@
+From 818dcc2aac2dd3cacf14975486bf3f45e1ef24b1 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:31:12 -0500
+Subject: [PATCH 02/22] isaspec: encode: stop at the override that defines the
+ field
+
+[Placeholder. Mesa wants commit messages in the submitter's own words;
+what this one must say is in MR-FACTS.md, "Commit 2".]
+---
+ docs/isaspec.rst               | 4 +++-
+ src/compiler/isaspec/encode.py | 4 ++++
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/docs/isaspec.rst b/docs/isaspec.rst
+index 34877b8..b857549 100644
+--- a/docs/isaspec.rst
++++ b/docs/isaspec.rst
+@@ -229,7 +229,9 @@ An ``<override>`` in a bitset allows to redefine the display string, and/or
+ field definitions from the default case.  If the override's expr(ession)
+ evaluates to non-zero, ``<display>``, ``<field>``, and ``<derived>``
+ elements take precedence over what is defined in the top-level of the
+-bitset (i.e. the default case).
++bitset (i.e. the default case).  When more than one override defines a
++field, the first one whose expression holds wins, when encoding as when
++decoding.
+ 
+ Expressions
+ -----------
+diff --git a/src/compiler/isaspec/encode.py b/src/compiler/isaspec/encode.py
+index 24690f7..8d382c9 100755
+--- a/src/compiler/isaspec/encode.py
++++ b/src/compiler/isaspec/encode.py
+@@ -122,6 +122,10 @@ class DisplayField(object):
+                 # the named field, we are done
+                 if case.expr is None:
+                     return
++                # the case being encoded defines the field itself: that
++                # definition wins over later overrides and the default
++                if case is self.case.case:
++                    return
+         if bitset.extends is not None:
+             yield from self.fields(bitset.isa.bitsets[bitset.extends])
+ 
+-- 
+2.50.1 (Apple Git-155)
+

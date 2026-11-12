@@ -1,0 +1,64 @@
+From d8b6c083484ab03f480da22c6fc380a4f347392d Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Thu, 12 Nov 2026 17:31:13 -0500
+Subject: [PATCH 03/22] isaspec: decode: leave out roots nothing decodes from
+
+[Placeholder. Mesa wants commit messages in the submitter's own words;
+what this one must say is in MR-FACTS.md, "Commit 3".]
+---
+ src/compiler/isaspec/decode.py |  1 +
+ src/compiler/isaspec/isa.py    | 26 ++++++++++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/src/compiler/isaspec/decode.py b/src/compiler/isaspec/decode.py
+index 106cc88..589f11a 100755
+--- a/src/compiler/isaspec/decode.py
++++ b/src/compiler/isaspec/decode.py
+@@ -431,6 +431,7 @@ def main():
+     args = parser.parse_args()
+ 
+     isa = ISA(args.xml)
++    isa.drop_undecoded_roots()
+     s = State(isa)
+ 
+     try:
+diff --git a/src/compiler/isaspec/isa.py b/src/compiler/isaspec/isa.py
+index 08bb000..dbf3dfb 100644
+--- a/src/compiler/isaspec/isa.py
++++ b/src/compiler/isaspec/isa.py
+@@ -661,6 +661,32 @@ class ISA(object):
+ 
+         return parts
+ 
++    # Drops the roots decoding never starts from, with their bitsets.
++    # Decoding starts from #instruction and from the roots that are the type
++    # of a field; a root only an encoder uses (such as a data word outside
++    # the instruction stream) would otherwise give the decoder tables nothing
++    # references.
++    def drop_undecoded_roots(self):
++        decoded = {'#instruction'}
++        for _, bitset in self.all_bitsets():
++            for case in bitset.cases:
++                for field in case.fields.values():
++                    if field.type in self.roots:
++                        decoded.add(field.type)
++        drop = {n for n in self.roots if n not in decoded}
++        if not drop:
++            return
++        root_of = {id(b): b.get_root().name for _, b in self.all_bitsets()}
++        self.bitsets = {n: b for n, b in self.bitsets.items()
++                        if root_of[id(b)] not in drop}
++        for name in list(self.leafs):
++            leafs = [b for b in self.leafs[name] if root_of[id(b)] not in drop]
++            if leafs:
++                self.leafs[name] = leafs
++            else:
++                del self.leafs[name]
++        self.roots = {n: r for n, r in self.roots.items() if n not in drop}
++
+     # Returns all bitsets in the ISA, including all per-gen variants, in
+     # (name, bitset) pairs.
+     def all_bitsets(self):
+-- 
+2.50.1 (Apple Git-155)
+
