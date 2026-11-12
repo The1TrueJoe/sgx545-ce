@@ -88,6 +88,8 @@ static int pvrsgx_runtime_resume(struct device *dev)
 	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not start on resume: device lost\n");
 		sdev->lost = true;
+		/* Stopped: nothing translates any more, so unmapped memory can go. */
+		queue_work(system_dfl_wq, &sdev->reap_work);
 	}
 	return 0;
 }

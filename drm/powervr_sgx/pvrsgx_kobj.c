@@ -101,19 +101,38 @@ err_free:
 	return ERR_PTR(err);
 }
 
-static void kobj_free(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
+/* The invalidate has run: nothing can reach the object's pages any more. */
+static void kobj_free_done(struct pvrsgx_inval_wait *w)
 {
+	struct pvrsgx_kobj *o = container_of(w, struct pvrsgx_kobj, inval);
+	struct pvrsgx_device *sdev = o->sdev;
 	struct pvrsgx_vm *vm = o->vm;
 
-	if (vm && o->km.mmu != vm->mmu)
-		pvrsgx_mmu_unmap(vm->mmu, kobj_va(o), o->km.size);
-	pvrsgx_kmem_free(sdev, &o->km);
+	pvrsgx_kmem_release(&o->km);
 	mutex_lock(&sdev->kobj_lock);
 	drm_mm_remove_node(&o->node);
 	mutex_unlock(&sdev->kobj_lock);
 	kfree(o);
 	/* Last: the node may belong to the VM's own allocator. */
 	pvrsgx_vm_put(vm);
+}
+
+/*
+ * Unmapping is not the end: the BIF may hold a translation of the pages until
+ * the microkernel invalidates it, which it does for the next command. The
+ * pages, the address and the VM reference wait for that.
+ */
+static void kobj_free(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
+{
+	struct pvrsgx_vm *vm = o->vm;
+
+	if (vm && o->km.mmu != vm->mmu)
+		pvrsgx_mmu_unmap(vm->mmu, kobj_va(o), o->km.size);
+	pvrsgx_mmu_unmap(o->km.mmu, o->km.dev_addr, o->km.size);
+	o->sdev = sdev;
+	o->inval.done = kobj_free_done;
+	pvrsgx_ccb_after_invalidate(sdev, &o->inval,
+				    PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD);
 }
 
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
@@ -155,9 +174,12 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 		mutex_lock(&sdev->kobj_lock);
 		empty = list_empty(&sdev->graveyard);
 		mutex_unlock(&sdev->kobj_lock);
+		/* The GPU is stopped: what waits for an invalidate can go too. */
+		empty = empty && list_empty(&sdev->inval_waits);
 		if (empty)
 			break;
 		pvrsgx_kobj_reap(sdev, U64_MAX);
+		pvrsgx_ccb_inval_reap(sdev, true);
 	}
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		drm_mm_takedown(&sdev->krange[r]);

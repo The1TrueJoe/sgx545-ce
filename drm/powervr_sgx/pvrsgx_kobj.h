@@ -9,6 +9,7 @@
 #include <linux/list.h>
 #include <linux/types.h>
 
+#include "pvrsgx_ccb.h"
 #include "pvrsgx_device.h"
 
 struct pvrsgx_vm;
@@ -39,6 +40,10 @@ struct pvrsgx_kobj {
 	struct list_head grave;
 	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
 	u64 grave_seq;
+	/** @inval: Once unmapped, waits for the BIF invalidate before it is freed. */
+	struct pvrsgx_inval_wait inval;
+	/** @sdev: The device, for the free after the invalidate. */
+	struct pvrsgx_device *sdev;
 };
 
 static inline u32 *kobj_cpu(struct pvrsgx_kobj *o)

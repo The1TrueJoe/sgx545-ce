@@ -174,6 +174,10 @@ struct pvrsgx_device {
 	spinlock_t ccb_spin;
 	/** @ccb_issued: Commands written to the kernel CCB since the firmware started. */
 	u64 ccb_issued;
+	/** @inval_lock: Protects @inval_waits. */
+	spinlock_t inval_lock;
+	/** @inval_waits: &struct pvrsgx_inval_wait for invalidates not yet taken. */
+	struct list_head inval_waits;
 
 	/** @sched: The one scheduler; one job on the GPU at a time. */
 	struct drm_gpu_scheduler sched;
@@ -267,6 +271,7 @@ static inline u32 pvrsgx_dirlist_edm(const struct pvrsgx_device *sdev)
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
+void pvrsgx_kmem_release(struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_fini(struct pvrsgx_device *sdev);
