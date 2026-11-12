@@ -176,7 +176,7 @@ rotation of each triangle's vertices on the CPU before step 2.
 | GLSL 1.40 | — | compiler | — | compiler |
 | instancing, `gl_InstanceID` (`ARB_draw_instanced`) | the PDS vertex program's `in1` is the instance index (**unconfirmed**); no instance count is known in the VDM draw words | one VDM draw per instance, each with its own small PDS vertex program that writes the instance number with DOUTA into the primary attribute the compiler reads `gl_InstanceID` from. Native instancing, if H7 finds the count, replaces it | PDS.md (DOUTA: hardware; `in1`: unconfirmed); STATE.md §2 VDM draw | high (per-instance draws) |
 | instance divisors (`ARB_instanced_arrays`, 3.3, but cheap here) | PDS has the divisor's reciprocal sequence (capture) | per-instance draws: the per-instance stream's base moves on the CPU | PDS.md | high |
-| uniform buffers (`ARB_uniform_buffer_object`, 16 KiB, 12 per stage) | `ld.a.d` from a driver address: the state-emit programs the driver runs already use it | the driver puts each UBO's address in an SA register; the compiler loads with `ld.a.d`. Small UBOs could be copied into SA, but 16 KiB doesn't fit | STATE.md §2 (the state-emit program's `ld.a.d`: hardware, open driver); `sgxws_const_mem` already loads constants that don't fit in SA | high |
+| uniform buffers (`ARB_uniform_buffer_object`, 16 KiB, 12 per stage) | `ld.a.d` from a driver address: the state-emit programs the driver runs already use it | the driver puts the address of each block's copy in the frame in the constant the compiler loads from; the compiler loads with `ld.a.d` (in, `SGX_DEBUG=ubo,glsl130`: see "Status"). Small UBOs could be copied into SA, but 16 KiB doesn't fit | STATE.md §2 (the state-emit program's `ld.a.d`: hardware, open driver); `sgxws_const_mem` already loads constants that don't fit in SA | high |
 | `EXT_texture_snorm` | no signed sampler format known | sample the unorm format and convert in the shader (`2x - 1` from the byte, with the -1 clamp GL asks); render by packing | TEX.md §1 | high |
 | primitive restart (`NV_primitive_restart`) | none known | split on the CPU (`util_draw_vbo_without_prim_restart`); the driver already reads indices on the CPU | `sgx_draw.c` | high |
 | rectangle textures (`NV_texture_rectangle`) | NPOT linear layout (T1 layout 3) | unnormalized coordinates scaled in NIR (`nir_lower_tex` `lower_rect`) | TEX.md §1 (hardware) | high |
@@ -507,6 +507,38 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     `EXT_texture_integer` only with RGBA32UI/I render targets, which the
     plane passes now give; the switch stays off until the GL 3.0 set is
     there.
+- **Uniform blocks** (`SGX_DEBUG=ubo,glsl130`: 12 a stage of 16 KiB,
+  `ARB_uniform_buffer_object`). The compiler loads a block with `ld.a.d`
+  from the address in constant `SGX_K_UBO + n`. For each draw the winsys
+  copies every block the program reads into the frame's general ring and
+  writes the copy's address where that constant lives, in SA or in the
+  program's memory block (`sgxws_ubo`). A block nothing has written since
+  is copied once a frame (keyed on the buffer's id and write count). The
+  copies give each draw the contents it was recorded with, so a
+  `glBufferSubData` between two draws of one frame is right without a
+  flush, at the cost of a copy a draw for blocks written every draw.
+  - `load_ubo`'s block n is constant buffer 1 + n: st binds the default
+    uniforms as buffer 0 (`load_uniform`) and block i as 1 + i, and nothing
+    lowers the default uniforms to a block. So a fixed fragment program
+    never reads a `load_ubo` as buffer 0.
+  - Only with the native integers: the float path's `nir_lower_int_to_float`
+    turns a block's byte offset into a float (1280 arrives as 0x44a00000).
+  - On a CE5300 board (runs 20-22, 2026-11-12): `mesa/tests/sgx_ubo` exact
+    (a vertex block rewritten before every draw of one frame, a fragment
+    block, a member at byte 1280, past the load's immediate, a block array
+    indexed by a uniform, a block rewritten between two draws of one frame).
+  - piglit's 316 `arb_uniform_buffer_object` tests, with the option: 33
+    pass, 282 skip, 1 fail (`minmax`: GL 3.x's 1024 fragment uniform
+    components, the default uniforms' 508). With GL 3.1 / GLSL 1.40
+    overrides: 41 pass, 275 fail, no GPU faults. 270 of those fails check
+    the block in the vertex program and pass the result on in a
+    `flat out int`. The driver doesn't do flat varyings yet (see "Flat
+    varyings"): the first flat varying, the one the compiler puts on the
+    colour source, comes back wrong even with no block in the program, and
+    the next one, a texcoord set equal at every vertex, comes back exact.
+    The same tests with their checks moved to the fragment program pass (10
+    of 12 run). Two more fail to link (blocks over 16 KiB, as they should),
+    and `minmax`.
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
