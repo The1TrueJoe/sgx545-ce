@@ -473,6 +473,8 @@ def build(a):
             # 0x0fd7d000 => the ALU wrote r5; at 0x0c004000 => it did not. No limm.
             a.patch(17, "ctlblk")
             a.i("or r5, r5, r17")
+            for _ in range(USSE_ALU_NOPS):     # space the write from the dependent read:
+                a.i("nop")                     # if the 530 pairs/schedules them, nops break it
             a.i("ld.a.d r3, r5, #0")
             a.i("wdf")
             a.i(f"limm r0, #{DIAG_TIMER}")
