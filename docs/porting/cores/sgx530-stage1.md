@@ -1458,6 +1458,43 @@ proves what's needed:
 Record the values G (545 capture) and the effect C once measured. If writes land, re-run the
 real image: likely init completing.
 
+## After the thirty-seventh attempt: consolidation — the USSE executes but no write retires
+
+Attempt 37 (log b487d86a): the init-regs writes are flat, and the read-backs close the lead
+— **0x810/0x814/0x818/0x800/0x4e8/0xaac don't latch** (read 0 after the write), so those
+registers aren't implemented on the SGX530 and can't be the register-file setup. (0x804,
+0xa00, 0xa78, 0xabc do latch.) Read-backs recorded C in sgx530.md; the host-side init-regs
+lead is closed.
+
+**The consolidated finding (C, from attempts 24-37):**
+- The open microkernel's USSE code **executes** on the SGX530: `phas.i`, `ld.a.d` (it
+  generates the address and faults/loads), an unconditional `ba` (the self-loop runs), and
+  instruction fetch all work, with the code base at `>> 8` and `phas.i` first.
+- **No register write retires.** `limm`, an ALU `or`, and `str` to `EVENT_TIMER` all fail to
+  change the register a later read sees. Reads (`ld.a.d rN`) return each register's stable
+  power-on leftover, the same across boots (attempts 31-34).
+- **Ruled out as the cause:** the DOUTU word-0 temp field (35), `phas.i`'s temps4 (36), and
+  the host-side init-regs setup (37). DOUTU word 1 = 2 and word 2 = 0 are flag/unused, not a
+  temp field (PDS.md); the SGXMKIF init struct has no register-file field.
+
+So the SGX530 runs the task but writes results nowhere a read sees — a register-file /
+write-back / bank difference, not a single misplaced field. The two readings left:
+1. **Writes are dropped** — the task has no writable register file (0 temporaries), from a
+   setup the SGX530 needs that neither the DOUTU, `phas.i`, nor the host init provides.
+2. **Writes land in a bank reads don't see** — compute writes go to one bank, `ld.a.d`
+   reads its base from another, for the same register number.
+
+**Direction (for the coordinator):** our event entry uses **temporaries** as the pointer
+base (UKERNEL.md: "a reserved temp, not a secondary attribute", because the bare-DOUTU event
+context has no SA DMA), relying on SGX545 behavior. The SGX530 lacks `USE_UNLIMITED_PHASES`
+and has 2 USE pipes (not 4); its DDK microkernel may structure the EDM task differently
+(phases, or primary/secondary attributes set by the PDS rather than temporaries). Rather
+than more single-register sweeps, the next step is likely to compare how TI's GPL/DDK SGX530
+EDM task is built, or to decode the SGX530's USSE register-bank/write-back with cleanroom-isa.
+A cheap probe meanwhile: a PDS `DOUTA` that writes a primary attribute before the DOUTU,
+then a USSE read of it — if attributes are visible where temporaries aren't, the microkernel
+should use them on the SGX530.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
