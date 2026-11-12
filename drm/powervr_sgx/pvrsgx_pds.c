@@ -168,6 +168,21 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 	if (sw & PVRSGX_SWEEP_DOUTU_OR)
 		doutu |= sdev->sweep_doutu0;
 
+	if (sw & PVRSGX_SWEEP_DOUTA_1ROW) {
+		/*
+		 * One row, [value, 0, 0, doutu]: words 0 and 3 sit in the same
+		 * place under either interleave (the 1- and 2-dword layouts swap
+		 * only 1 and 2), so DOUTA gets (value, 0) and DOUTU (doutu, 0, 0).
+		 */
+		pvrsgx_pds_ds(&p, PDS_D0(0), sdev->sweep_doutu0);
+		pvrsgx_pds_ds(&p, PDS_D0(1), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(0), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(1), doutu);
+		pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_D0(0), PDS_D0(1), PDS_D0(0), PDS_D0(1));
+		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D1(1), PDS_D0(1), PDS_D1(0), PDS_D1(1));
+		pvrsgx_pds_halt(&p);
+		return;
+	}
 	if (sw & PVRSGX_SWEEP_DOUTA_PA0) {
 		/*
 		 * Two data rows: (value, ctrl 0 = PA0) for a DOUTA (docs/PDS.md),
