@@ -2521,6 +2521,24 @@ The image uses no float, F16, C10, `efo`, `fdual`, `smp`, `pck`, `setfc` or MOE 
 form. Those are compiler questions for the SGX530 ("What needs the ISA first" in
 porting/cores/sgx530.md).
 
+### limm: the value field differs (C, hardware)
+
+On hardware (stage-1 attempts 29-30, docs/porting/cores/sgx530-stage1.md), the SGX530
+decodes `limm`'s immediate differently from the SGX545. The SGX545 packs the value as
+`l0-20` (bits 0-20), `h4-8` (bits 21-25), `h12-17` (bits 26-31) ("limm", the class table
+above). On the SGX530:
+- bits 0-20 and bits 26-31 load correctly (**C**: `limm r5, #0x0f004000` loaded as
+  `0x0c004000` — bits 0-20 = 0x4000 and bits 26-31 = 0x3 both present);
+- **bits 21-25 are read from a different place** than `h4-8`, which the SGX530 reads as 0
+  (the 0x18 in that field of 0x0f004000 was dropped, a 0x03000000 difference).
+
+This breaks every `limm` with a value above 2 MiB, so it breaks the microkernel's
+address loads (the patched control-block pointer among them) as soon as the USSE runs.
+The `sgx530_limm_b21..b27` probes sweep bits 21-27 one at a time to find the SGX530's
+position for each; attempt 30 fills in the exact `h`-bit layout. Until then the position of
+bits 21-25 is **U**. Once known, `sgx.xml` gets an SGX530 `limm` form with the moved field,
+and the driver's `fw_limm` (which patches limm sites) matches it.
+
 ### What sgx.xml can take, and when
 
 - **Now:** nothing. Every row above is pending.
