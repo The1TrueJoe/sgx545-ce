@@ -9,9 +9,11 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/sizes.h>
 
 #include "pvrsgx_cmd_defs.h"
 #include "pvrsgx_core.h"
+#include "pvrsgx_fw.h"
 #include "pvrsgx_hw.h"
 
 static const struct pvrsgx_core_regs sgx545_regs = {
@@ -33,6 +35,12 @@ static const struct pvrsgx_core_regs sgx545_regs = {
 	.pds_exec_base = SGX_CR_PDS_EXEC_BASE,
 	.bif_int_stat_fault_req = SGX_CR_BIF_INT_STAT_FAULT_REQ,
 	.bif_int_stat_fault_type = SGX_CR_BIF_INT_STAT_FAULT_TYPE,
+	.bif_fault_addr = SGX_MMU_ADDR_MASK,
+	.bif_bank_set = SGX_CR_BIF_BANK_SET,
+	.bif_bank0 = SGX_CR_BIF_BANK0,
+	.use_code_base_dm_shift = 25,
+	.use_code_base_addr_shift = 7,
+	.vendor_b30 = 0x0b30,
 	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
 	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
 	.event_pds_base = SGX545_CR_EVENT_PDS_BASE,
@@ -40,6 +48,24 @@ static const struct pvrsgx_core_regs sgx545_regs = {
 	.event_pds_data1 = SGX545_CR_EVENT_PDS_DATA1,
 	.edm_task_reg0 = SGX545_CR_EDM_TASK_REG0,
 	.edm_task_reg1 = SGX545_CR_EDM_TASK_REG1,
+};
+
+/* docs/UAPI.md section 5: each heap runs to the next one's base. */
+static const struct pvrsgx_heap_layout sgx545_heaps = {
+	.params_3d = { PVRSGX_HEAP_3D_PARAMS, PVRSGX_HEAP_TA_DATA },
+	.ta_data = { PVRSGX_HEAP_TA_DATA, PVRSGX_HEAP_SYNC },
+	.sync = { PVRSGX_HEAP_SYNC, PVRSGX_HEAP_PDS_PIXEL },
+	.pds_pixel = { PVRSGX_HEAP_PDS_PIXEL, PVRSGX_HEAP_KERNEL_CODE },
+	.kernel_code = { PVRSGX_HEAP_KERNEL_CODE, PVRSGX_HEAP_PDS_VERTEX },
+	.pds_vertex = { PVRSGX_HEAP_PDS_VERTEX, PVRSGX_HEAP_KERNEL_DATA },
+	.kernel_data = { PVRSGX_HEAP_KERNEL_DATA, PVRSGX_HEAP_USSE_PIXEL },
+	.usse_pixel = { PVRSGX_HEAP_USSE_PIXEL,
+			PVRSGX_HEAP_USSE_PIXEL + PVRSGX_HEAP_USSE_PIXEL_SIZE },
+	.usse_vertex = { PVRSGX_HEAP_USSE_VERTEX,
+			 PVRSGX_HEAP_USSE_VERTEX + PVRSGX_HEAP_USSE_VERTEX_SIZE },
+	.general = { PVRSGX_HEAP_GENERAL, PVRSGX_HEAP_TEXTURE },
+	.texture = { PVRSGX_HEAP_TEXTURE, SZ_4G },
+	.pb_max_pages = 0x8000,
 };
 
 /*
@@ -62,10 +88,13 @@ static const struct pvrsgx_core_family families[] = {
 		.core_id = 0x01150000,
 		.regs = &sgx545_regs,
 		.features = PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS |
-			    PVRSGX_FEATURE_MULTI_EVENT_KICK,
+			    PVRSGX_FEATURE_MULTI_EVENT_KICK |
+			    PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS |
+			    PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE,
 		.isa = PVRSGX_ISA_SGX545,
 		.num_dir_lists = 16,
 		.va_bits = 32,
+		.heaps = &sgx545_heaps,
 		.cmds = &pvrsgx_cmd_core_sgx545,
 		.init_regs = sgx545_init_regs,
 		.num_init_regs = ARRAY_SIZE(sgx545_init_regs),
