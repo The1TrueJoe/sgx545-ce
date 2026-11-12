@@ -462,6 +462,18 @@ def build(a):
         # SGX530 needs it before any work (no USE_UNLIMITED_PHASES).
         if USSE_PHAS:
             a.phas()
+        if USSE_LIMMTEST is not None:
+            # does limm write its destination on the 530? limm rK, #0xa5a then
+            # str rK to EVENT_TIMER (str reads the register). EVENT_TIMER = 0xa5a =>
+            # limm wrote rK; rK's stable leftover (r5 0x0c004000, r17 0x0fd79000) =>
+            # limm did not write it. No ld before it, so nothing faults first.
+            k = USSE_LIMMTEST
+            a.i(f"limm r{k}, #{DIAG_TIMER}")
+            a.i(f"str #{CR_EVENT_TIMER // 4}, r{k}")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         a.patch(17, "ctlblk")
         if USSE_LDGATE:
             # isolate one ld.a.d: load from base at USSE_LDOFF, then signal with str
@@ -470,8 +482,14 @@ def build(a):
             # base: None = the patched r17 (ctlblk); an int = limm that value into r5.
             a.patch(14, "pdtable")
             base = "r17"
+            if USSE_LDPRELOAD:
+                # preload r0..r22 with distinct unmapped values rN = (N+1)<<16, so the
+                # fault page names which register the 530 actually read for operand rK
+                for n in range(23):
+                    if n != 3:                     # r3 is the ld destination
+                        a.i(f"limm r{n}, #{(n + 1) << 16}")
             if USSE_LDREG is not None:
-                base = f"r{USSE_LDREG}"             # name this register; its value is unused
+                base = f"r{USSE_LDREG}"             # name this register
             elif USSE_LDBASE is not None:
                 a.i(f"limm r5, #{USSE_LDBASE}")
                 base = "r5"
