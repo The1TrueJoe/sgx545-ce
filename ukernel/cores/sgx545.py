@@ -344,6 +344,7 @@ USSE_LDREG = None            # ld-gate: name register rN as the base, value unus
 USSE_LDPRELOAD = False       # ld-gate: preload r0..r22 = (N+1)<<16 first (which-register probe)
 USSE_LIMMTEST = None         # limm rK then str rK to EVENT_TIMER: does limm write? (cores/sgx530_limmwr_r*.py)
 USSE_ALUWRITE = False        # or r5,r5,r17 then ld r5: does a non-limm ALU write land? (cores/sgx530_aluwr.py)
+USSE_PHAS_TEMPS4 = 0         # phas.i temps4 field (temporaries/4); 0 = the normal phas.i #0,#0
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
