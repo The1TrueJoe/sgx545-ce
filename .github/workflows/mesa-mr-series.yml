@@ -37,15 +37,15 @@ jobs:
           set -eux
           base=$(cat mesa-mr/BASE)
           curl -fsSL -o mesa.tar.gz "https://gitlab.freedesktop.org/mesa/mesa/-/archive/$base/mesa-$base.tar.gz"
-          mkdir mesa && tar xzf mesa.tar.gz -C mesa --strip-components=1
-          cd mesa
+          mkdir mesa-src && tar xzf mesa.tar.gz -C mesa-src --strip-components=1
+          cd mesa-src
           git init -q && git config user.email ci@localhost && git config user.name ci
           git add -A && git commit -qm "Mesa main $base"
 
       - name: Every commit applied and built
         run: |
           set -eu
-          cd mesa
+          cd mesa-src
           args_for() {
             a="-Dplatforms= -Dglx=disabled -Dvulkan-drivers= -Dopengl=false -Dglvnd=disabled"
             a="$a -Dgles1=disabled -Dgles2=enabled -Degl=enabled -Dgbm=enabled -Dllvm=disabled"
@@ -84,7 +84,7 @@ jobs:
       - name: meson test --suite sgx and the loader tests
         run: |
           set -eux
-          cd mesa
+          cd mesa-src
           LC_ALL=C.UTF-8 meson test -C build --suite sgx --print-errorlogs
           ninja -C build src/loader/loader_child_render_node_test src/loader/loader_cedarview_sysfs_test
           build/src/loader/loader_child_render_node_test
