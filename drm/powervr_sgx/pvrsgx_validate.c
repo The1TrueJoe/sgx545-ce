@@ -150,6 +150,8 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 	if (err)
 		goto out_buf;
 	if (!list_empty(&obj->gpuva.list) && args->offset < bo->code_end) {
+		drm_dbg_driver(drm, "UPLOAD_CODE: 0x%llx is below mapped code's end 0x%llx\n",
+			       args->offset, bo->code_end);
 		err = -EBUSY;
 		goto out_unlock;
 	}
