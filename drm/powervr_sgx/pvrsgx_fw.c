@@ -901,30 +901,17 @@ struct sweep_variant {
 };
 
 /*
- * No register write lands (stage 1, logs 2026-11-12-0353 to -0443): does the
- * SGX530 need the rest of the SGX545's part 2? The baseline; then, with
- * stage1_vendor, the 0x8xx/0xaxx writes; those plus 0x4e8 and 0x13c; then
- * 0x810/0x814/0x818, 0x800/0x804 and the 0xaxx writes alone. Bits index
- * sweep_part2_regs[].
+ * No register write from the task lands (stage 1, logs 2026-11-12-0353 to
+ * -0507). Is a primary attribute the PDS writes visible to it? The
+ * baseline; then the event program does a DOUTA of 0x0e850000 (unmapped,
+ * past the PDS vertex heap on the SGX530) to PA0 before its DOUTU, with
+ * event data 0 = 2 for its two data rows. A task loading through PA0
+ * faults there if it sees the value.
  */
-#define REGSET(m)	{ .regset = (m) }
-#define RS_0X81X	0x0007	/* 0x818, 0x810, 0x814 */
-#define RS_0XAXX	0x13b0	/* 0xa7c, 0xa80, 0xa78, 0xaac, 0xabc, 0xa00 */
-#define RS_0X80X	0x0c00	/* 0x800, 0x804 */
-#define RS_OTHER	0x0048	/* 0x13c, 0x4e8 */
-
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	REGSET(RS_0X81X | RS_0XAXX | RS_0X80X),
-	REGSET(RS_0X81X | RS_0XAXX | RS_0X80X | RS_OTHER),
-	REGSET(RS_0X81X), REGSET(RS_0X80X), REGSET(RS_0XAXX),
+	{ .flags = PVRSGX_SWEEP_DOUTA_PA0, .doutu0 = 0x0e850000, .data0 = 2 + 1 },
 };
-
-#undef RS_OTHER
-#undef RS_0X80X
-#undef RS_0XAXX
-#undef RS_0X81X
-#undef REGSET
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
 static int alias_map(struct pvrsgx_device *sdev)
@@ -971,7 +958,8 @@ static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *n
 #define EXEC0_FLAGS	(PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT | \
 			 PVRSGX_SWEEP_EXEC0_BRA)
 #define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS | PVRSGX_SWEEP_CB15 | \
-				 PVRSGX_SWEEP_DOUTU_OR | PVRSGX_SWEEP_TEMPS_FIELD)
+				 PVRSGX_SWEEP_DOUTU_OR | PVRSGX_SWEEP_TEMPS_FIELD | \
+				 PVRSGX_SWEEP_DOUTA_PA0)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -1063,6 +1051,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " DOUTU w0 |= 0x%x", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_TEMPS_FIELD)
 		n += scnprintf(buf + n, len - n, " temps field %u", sv->doutu0);
+	if (sv->flags & PVRSGX_SWEEP_DOUTA_PA0)
+		n += scnprintf(buf + n, len - n, " DOUTA PA0 0x%x", sv->doutu0);
 	if (sv->regset)
 		n += scnprintf(buf + n, len - n, " part-2 set 0x%x", sv->regset);
 	if (sv->vendor == SWEEP_VENDOR_ALL)

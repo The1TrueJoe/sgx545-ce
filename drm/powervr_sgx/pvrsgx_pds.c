@@ -98,6 +98,7 @@ struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf
 #define BRA(t)	(0x97000000 | (t))
 #define HALT	0xaf000000
 #define PDS_DOUTD	3
+#define PDS_DOUTA	6
 
 static const u32 sweep_prog[][12] = {
 	[1] = { BRA(8), HALT, HALT, HALT, HALT, HALT, HALT, HALT, BRA(8), HALT, HALT, HALT },
@@ -167,6 +168,26 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 	if (sw & PVRSGX_SWEEP_DOUTU_OR)
 		doutu |= sdev->sweep_doutu0;
 
+	if (sw & PVRSGX_SWEEP_DOUTA_PA0) {
+		/*
+		 * Two data rows: (value, ctrl 0 = PA0) for a DOUTA (docs/PDS.md),
+		 * then the DOUTU's (doutu, 0, 0, w1). Event data 0 = 2 starts the
+		 * code after them; it runs over PDS1's slot, unused on the SGX530.
+		 */
+		p = pvrsgx_pds_prog(sdev, b, 8);
+		pvrsgx_pds_ds(&p, PDS_D0(0), sdev->sweep_doutu0);
+		pvrsgx_pds_ds(&p, PDS_D0(1), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(0), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(1), 0);
+		pvrsgx_pds_ds(&p, PDS_D0(2), doutu);
+		pvrsgx_pds_ds(&p, PDS_D0(3), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(2), 0);
+		pvrsgx_pds_ds(&p, PDS_D1(3), w1);
+		pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_D0(0), PDS_D0(1), PDS_D0(0), PDS_D0(1));
+		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(2), PDS_D1(3), PDS_D0(3), PDS_D0(2));
+		pvrsgx_pds_halt(&p);
+		return;
+	}
 	if (sw & PVRSGX_SWEEP_ALL_SLOTS) {
 		/* The DOUTU gets (doutu, doutu, doutu) under any data layout. */
 		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
