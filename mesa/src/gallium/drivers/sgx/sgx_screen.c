@@ -226,6 +226,11 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
       caps->start_instance = true;
    /* split at the restart index on the CPU (sgx_draw_vbo) */
    caps->primitive_restart = caps->primitive_restart_fixed_index = true;
+   /* attachments of different sizes: a render is their intersection, and a
+    * depth buffer's ZLS buffer is loaded only at the size that stored it
+    * (begin_frame); st turns ARB_framebuffer_object on with it, and with it
+    * GL_RENDERBUFFER_SAMPLES (docs/GL3.md) */
+   caps->mixed_framebuffer_sizes = true;
    /* linear render targets, over powervr_sgx */
    if (sgxws_dev_has_dmabuf(sgx_screen(pscreen)->dev))
       caps->dmabuf = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;
