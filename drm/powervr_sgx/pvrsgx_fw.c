@@ -324,6 +324,7 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 /* The arenas and the built image, once the file is loaded. */
 static int fw_arenas(struct pvrsgx_device *sdev)
 {
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 pds_base;
 	int err;
@@ -335,11 +336,11 @@ static int fw_arenas(struct pvrsgx_device *sdev)
 	 * (mmu.c, from EDM_PROTECT and read-only allocations): data read-write,
 	 * code read-only.
 	 */
-	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
+	err = pvrsgx_kmem_alloc(sdev, &f->data, h->kernel_data.base, DATA_ARENA_SIZE,
 				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT, 0);
 	if (err)
 		return err;
-	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE,
+	err = pvrsgx_kmem_alloc(sdev, &f->code, h->kernel_code.base, CODE_ARENA_SIZE,
 				SGX_MMU_PTE_READONLY, 0);
 	if (err)
 		return err;
@@ -390,20 +391,28 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
 }
 
-/* USE_CODE_BASE: device address >> 7, and the window's mode bits. */
-#define USE_CODE_BASE_ADDR_SHIFT	7
-#define USE_CODE_BASE_PIXEL		0x2000000
-#define USE_CODE_BASE_UKERNEL		0x6000000
+/* USE_CODE_BASE's data master for the pixel windows and for the microkernel's. */
+#define USE_CODE_BASE_DM_PIXEL		1
+#define USE_CODE_BASE_DM_UKERNEL	3
 
 static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 {
 	return sdev->cr->use_code_base0 + 4 * n;
 }
 
+/* A code base's value: the address in the core's unit, and the data master. */
+static u32 use_code_base_val(struct pvrsgx_device *sdev, u64 addr, u32 dm)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	return (u32)(addr >> cr->use_code_base_addr_shift) | dm << cr->use_code_base_dm_shift;
+}
+
 /* Init script part 2: the core's script, then the bases. */
 static void init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
 
@@ -416,17 +425,17 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 	 */
 	for (u32 i = 0; i < 10; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
-		       ((PVRSGX_HEAP_USSE_PIXEL + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
+		       use_code_base_val(sdev, h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2),
+					 USE_CODE_BASE_DM_PIXEL));
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_SPARE_BASE_INDEX),
-	       (PVRSGX_HEAP_USSE_PIXEL >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
+	       use_code_base_val(sdev, h->usse_pixel.base, USE_CODE_BASE_DM_PIXEL));
 	for (u32 i = 0; i < 4; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
-		       (PVRSGX_HEAP_USSE_VERTEX + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-		       USE_CODE_BASE_ADDR_SHIFT);
+		       use_code_base_val(sdev, h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2),
+					 0));
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
-	       (PVRSGX_HEAP_KERNEL_CODE >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_UKERNEL);
-	sgx_wr(sdev, cr->pds_exec_base, PVRSGX_HEAP_PDS_PIXEL);
+	       use_code_base_val(sdev, h->kernel_code.base, USE_CODE_BASE_DM_UKERNEL));
+	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);	/* unnamed, as the vendor script */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);

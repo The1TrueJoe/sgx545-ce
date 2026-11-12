@@ -112,7 +112,7 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			.rt_max_samples = sdev->family->cmds->max_samples,
 			.pb_min_pages = 0x100,
 			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
-			.pb_max_pages = 0x8000,
+			.pb_max_pages = pvrsgx_heaps(sdev)->pb_max_pages,
 			.max_ta_kicks = PVRSGX_MAX_TA_KICKS,
 			.va_bits = sdev->family->va_bits,
 			.caps = DRM_POWERVR_SGX_CAP_BACKWARD_BLITS,

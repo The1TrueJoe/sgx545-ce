@@ -57,10 +57,9 @@ static_assert(PVRSGX_USSE_WINDOW_INSTS * 8 == 1u << PVRSGX_USSE_WINDOW_LOG2);
  * targets count from when the task's PDS program names the window its first
  * word is in. One window per object makes that base the same for every entry.
  */
-static s64 code_place(u64 addr, u64 offset)
+static s64 code_place(const struct pvrsgx_heap_layout *h, u64 addr, u64 offset)
 {
-	u64 base = addr >= PVRSGX_HEAP_USSE_VERTEX ? PVRSGX_HEAP_USSE_VERTEX :
-						    PVRSGX_HEAP_USSE_PIXEL;
+	u64 base = addr >= h->usse_vertex.base ? h->usse_vertex.base : h->usse_pixel.base;
 	s64 start = (s64)(addr - base) - (s64)offset;
 
 	if (start < 0)
@@ -76,19 +75,22 @@ int pvrsgx_validate_vm_link(struct pvrsgx_bo *bo, u64 addr, u64 offset)
 {
 	if (!bo_is_code(bo) || !bo->code_abs)
 		return 0;
-	return code_place(addr, offset) == bo->code_place ? 0 : -EINVAL;
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(to_pvrsgx_device(bo->base.base.dev));
+
+	return code_place(h, addr, offset) == bo->code_place ? 0 : -EINVAL;
 }
 
 /* The one place every mapping of obj puts it, or PVRSGX_USSE_PLACE_NONE. */
 static s64 code_place_mapped(struct drm_gem_object *obj)
 {
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(to_pvrsgx_device(obj->dev));
 	struct drm_gpuvm_bo *vm_bo;
 	struct drm_gpuva *va;
 	s64 place = PVRSGX_USSE_PLACE_NONE;
 
 	drm_gem_for_each_gpuvm_bo(vm_bo, obj) {
 		drm_gpuvm_bo_for_each_va(va, vm_bo) {
-			s64 p = code_place(va->va.addr, va->gem.offset);
+			s64 p = code_place(h, va->va.addr, va->gem.offset);
 
 			if (place != PVRSGX_USSE_PLACE_NONE && p != place)
 				return PVRSGX_USSE_PLACE_NONE;

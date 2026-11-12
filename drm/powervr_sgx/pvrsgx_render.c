@@ -69,7 +69,7 @@ static void pb_init(struct pvrsgx_pb *pb)
 	struct pvrsgx_fw_pb_desc *pd;
 
 	/* Free list: prev<<16 | next per page, indexed from the range's base. */
-	first = (kobj_va(pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT;
+	first = (kobj_va(pb->buf) - pvrsgx_heaps(pb->sdev)->params_3d.base) >> PAGE_SHIFT;
 	last = first + pages - 1;
 	fl = kobj_cpu(pb->freelist);
 	for (u32 i = first; i <= last; i++)
@@ -674,9 +674,9 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 	if (!rdef || !kdef)
 		return -EOPNOTSUPP;
 
-	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
+	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].base = pvrsgx_heaps(sdev)->pds_pixel.base;
 	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].size =
-		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
+		pvrsgx_heaps(sdev)->pds_pixel.end - pvrsgx_heaps(sdev)->pds_pixel.base;
 	cctx.limits[PVRSGX_CMD_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
 	cctx.limits[PVRSGX_CMD_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
 	cctx.rt_pad_width = rj->rtds->n.xt * 32;
@@ -710,9 +710,9 @@ void pvrsgx_render_job_fini(struct pvrsgx_job *job)
 	job->render.rtds = NULL;
 }
 
-static u32 pds_word(u64 addr, u32 rows)
+static u32 pds_word(u64 pds, u64 addr, u32 rows)
 {
-	return rows << 26 | (u32)(addr - PVRSGX_HEAP_PDS_PIXEL) >> 4;
+	return rows << 26 | (u32)(addr - pds) >> 4;
 }
 
 /*
@@ -754,6 +754,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_fw_render_details *rd;
 	u32 f, odd, p, rgn_this, rgn_next, entry, *s3d, *done, *b;
 	u32 woff = r->ccb_woff, zls_base = 0;
+	u64 pds = pvrsgx_heaps(job->ctx->sdev)->pds_pixel.base;
 
 	if (first)
 		pb_rearm(job->ctx->sdev, r->pb);
@@ -790,7 +791,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		rd->pixel_event_pds = (u32)in->pixel_event_pds_addr;
 		rd->pixel_event_rows = in->pixel_event_pds_rows;
 		rd->rt_data_entry = entry;
-		kobj_cpu(s->rd_w4[p])[0] = pds_word(in->bg_pds_primary_addr,
+		kobj_cpu(s->rd_w4[p])[0] = pds_word(pds, in->bg_pds_primary_addr,
 						    in->bg_pds_primary_rows);
 
 		/*
@@ -799,7 +800,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		 * leaves them to the host, so it never runs on the job's directory.
 		 */
 		b = kobj_cpu(s->bgblock[p]);
-		b[0] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
+		b[0] = pds_word(pds, in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
 		b[1] = BG_PDS_MIDDLE;
 		b[2] = kobj_cpu(s->rd_w4[p])[0];
 
@@ -816,9 +817,9 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	cmd->ta_flags = PVRSGX_TA_FLAGS_BASE | (first ? PVRSGX_TA_FIRST_KICK : 0) |
 			(last ? PVRSGX_TA_LAST_KICK : 0) |
 			(first && !f ? PVRSGX_TA_FIRST_RENDER : 0);
-	cmd->bg_pds[0] = pds_word(in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
+	cmd->bg_pds[0] = pds_word(pds, in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
 	cmd->bg_pds[1] = BG_PDS_MIDDLE;
-	cmd->bg_pds[2] = pds_word(in->bg_pds_primary_addr, in->bg_pds_primary_rows);
+	cmd->bg_pds[2] = pds_word(pds, in->bg_pds_primary_addr, in->bg_pds_primary_rows);
 	cmd->ta_ctl[0] = TA_CTL;
 	cmd->ta_ctl[1] = TA_CTL;
 	if (last)
@@ -900,7 +901,8 @@ static void render_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, struct p
 	pvrsgx_kobj_dump(sb, "pbdesc", r->pb->desc, 0, sizeof(struct pvrsgx_fw_pb_desc));
 	pvrsgx_kobj_dump(sb, "pbblocks", r->pb->blocks, 0, 0x10);
 	pvrsgx_kobj_dump(sb, "freelist[first..]", r->pb->freelist,
-			 ((kobj_va(r->pb->buf) - PVRSGX_HEAP_3D_PARAMS) >> PAGE_SHIFT) * 4, 0x20);
+			 ((kobj_va(r->pb->buf) - pvrsgx_heaps(sdev)->params_3d.base) >>
+			  PAGE_SHIFT) * 4, 0x20);
 	pvrsgx_kobj_dump(sb, "scratch", r->scratch, 0, 0x40);
 	pvrsgx_kobj_dump(sb, "sync3d", r->sync3d, 0, SYNC_DATA_BYTES);
 	pvrsgx_kobj_dump(sb, "ta_cmd", r->ccb, cmd_off, sizeof(struct pvrsgx_fw_ta_cmd));

@@ -288,6 +288,12 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 	iowrite32(val, sdev->regs + reg);
 }
 
+/* The core's device-virtual layout. */
+static inline const struct pvrsgx_heap_layout *pvrsgx_heaps(const struct pvrsgx_device *sdev)
+{
+	return sdev->family->heaps;
+}
+
 /* A register from the core table: 0 is one the core lacks, never written. */
 static inline void sgx_wr_opt(struct pvrsgx_device *sdev, u32 reg, u32 val)
 {
