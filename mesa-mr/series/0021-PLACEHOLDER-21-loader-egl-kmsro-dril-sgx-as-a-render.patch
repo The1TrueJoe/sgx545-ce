@@ -1,4 +1,4 @@
-From 14f2d7f73227cc36b0c7301ca1391c6dd81eb310 Mon Sep 17 00:00:00 2001
+From bcdb124ed2a4af07670ba0f99e9821cc727508db Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:44 -0500
 Subject: [PATCH 21/22] PLACEHOLDER 21 loader, egl, kmsro, dril: sgx as a

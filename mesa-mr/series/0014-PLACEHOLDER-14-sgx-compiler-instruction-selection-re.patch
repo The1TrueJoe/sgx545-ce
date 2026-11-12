@@ -1,4 +1,4 @@
-From 7a865a0846e6e3885bd89c14e337e12042c72786 Mon Sep 17 00:00:00 2001
+From afdf177264eb133de358b212df87ae79fe6d919a Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:38 -0500
 Subject: [PATCH 14/22] PLACEHOLDER 14 sgx/compiler: instruction selection,

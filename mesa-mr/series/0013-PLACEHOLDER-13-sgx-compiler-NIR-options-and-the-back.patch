@@ -1,10 +1,11 @@
-From a609477ea65e8c8e0eee32e3721ea0a71e41023b Mon Sep 17 00:00:00 2001
+From ccc18f64729a6ed777071f589305c342de09e374 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:25 -0500
 Subject: [PATCH 13/22] PLACEHOLDER 13 sgx/compiler: NIR options and the
  backend's lowering passes
 
 ---
+ .clang-format-include           |    1 +
  src/sgx/compiler/meson.build    |   21 +
  src/sgx/compiler/sgx_compiler.h |  316 +++++
  src/sgx/compiler/sgx_forms.c    |  368 +++++
@@ -12,7 +13,7 @@ Subject: [PATCH 13/22] PLACEHOLDER 13 sgx/compiler: NIR options and the
  src/sgx/compiler/sgx_nir.c      | 2231 +++++++++++++++++++++++++++++++
  src/sgx/compiler/sgx_priv.h     |  323 +++++
  src/sgx/meson.build             |    4 +
- 7 files changed, 3453 insertions(+)
+ 8 files changed, 3454 insertions(+)
  create mode 100644 src/sgx/compiler/meson.build
  create mode 100644 src/sgx/compiler/sgx_compiler.h
  create mode 100644 src/sgx/compiler/sgx_forms.c
@@ -20,6 +21,15 @@ Subject: [PATCH 13/22] PLACEHOLDER 13 sgx/compiler: NIR options and the
  create mode 100644 src/sgx/compiler/sgx_nir.c
  create mode 100644 src/sgx/compiler/sgx_priv.h
 
+diff --git a/.clang-format-include b/.clang-format-include
+index e041304..8e283d1 100644
+--- a/.clang-format-include
++++ b/.clang-format-include
+@@ -18,3 +18,4 @@ src/sgx/csbgen/**/*
+ src/sgx/isa/**/*
+ src/sgx/pds/**/*
+ src/sgx/common/**/*
++src/sgx/compiler/**/*
 diff --git a/src/sgx/compiler/meson.build b/src/sgx/compiler/meson.build
 new file mode 100644
 index 0000000..4eac6f0

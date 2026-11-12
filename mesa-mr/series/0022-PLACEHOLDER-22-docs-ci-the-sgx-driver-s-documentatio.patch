@@ -1,4 +1,4 @@
-From 6f55ddace4e8a5dbf615989e23b65e4614a05805 Mon Sep 17 00:00:00 2001
+From 2214293023b1e0577eeae333928a842210bc1154 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:46:03 -0500
 Subject: [PATCH 22/22] PLACEHOLDER 22 docs, ci: the sgx driver's documentation

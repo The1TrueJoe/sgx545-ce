@@ -1,18 +1,19 @@
-From 1ce3764a449760ea14f5fdae8d4557f223ecc7a3 Mon Sep 17 00:00:00 2001
+From e72852780848acd0f6daeba88bd79e1a378e7e99 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:44:11 -0500
 Subject: [PATCH 16/22] PLACEHOLDER 16 gallium/winsys/sgx: the powervr_sgx
  winsys
 
 ---
+ .clang-format-include                        |    1 +
  src/gallium/meson.build                      |    3 +
  src/gallium/winsys/sgx/drm/.clang-format     |    6 +
  src/gallium/winsys/sgx/drm/meson.build       |   21 +
  src/gallium/winsys/sgx/drm/sgx_frame.c       | 2811 ++++++++++++++++++
  src/gallium/winsys/sgx/drm/sgx_frame.h       |  326 ++
- src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c | 1354 +++++++++
+ src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c | 1356 +++++++++
  src/gallium/winsys/sgx/drm/sgxws.h           |  496 +++
- 7 files changed, 5017 insertions(+)
+ 8 files changed, 5020 insertions(+)
  create mode 100644 src/gallium/winsys/sgx/drm/.clang-format
  create mode 100644 src/gallium/winsys/sgx/drm/meson.build
  create mode 100644 src/gallium/winsys/sgx/drm/sgx_frame.c
@@ -20,6 +21,18 @@ Subject: [PATCH 16/22] PLACEHOLDER 16 gallium/winsys/sgx: the powervr_sgx
  create mode 100644 src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c
  create mode 100644 src/gallium/winsys/sgx/drm/sgxws.h
 
+diff --git a/.clang-format-include b/.clang-format-include
+index 8e283d1..93e9cad 100644
+--- a/.clang-format-include
++++ b/.clang-format-include
+@@ -5,6 +5,7 @@ src/gallium/drivers/ethosu/**/*
+ src/gallium/drivers/i915
+ src/gallium/drivers/r300/compiler/*
+ src/gallium/drivers/rocket/**/*
++src/gallium/winsys/sgx/**/*
+ src/gallium/targets/teflon/**/*
+ src/gallium/frontends/teflon/**/*
+ src/amd/vulkan/**/*
 diff --git a/src/gallium/meson.build b/src/gallium/meson.build
 index 0bdbb59..d19c122 100644
 --- a/src/gallium/meson.build
@@ -75,7 +88,7 @@ index 0000000..3abd367
 +)
 diff --git a/src/gallium/winsys/sgx/drm/sgx_frame.c b/src/gallium/winsys/sgx/drm/sgx_frame.c
 new file mode 100644
-index 0000000..142d6bd
+index 0000000..21e0911
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgx_frame.c
 @@ -0,0 +1,2811 @@
@@ -125,7 +138,7 @@ index 0000000..142d6bd
 +#define H_PDSPIXEL  SGX_HEAP_PDSPIXEL
 +#define H_PDSVERTEX SGX_HEAP_PDSVERTEX
 +
-+#define f32    sgxws_f32
++#define f32 sgxws_f32
 +
 +uint32_t
 +sgxws_f32(float x)
@@ -355,7 +368,7 @@ index 0000000..142d6bd
 + * window its DOUTU names, and its absolute targets (phas.i, ba) count from
 + * that window's start, not the heap's (ISA.md) */
 +#define USSE_WINDOW_SHIFT 19
-+#define USSE_WINDOW_MASK ((1u << USSE_WINDOW_SHIFT) - 1)
++#define USSE_WINDOW_MASK  ((1u << USSE_WINDOW_SHIFT) - 1)
 +
 +static uint32_t
 +usse_heap_off(const struct sgxws_ctx *c, uint32_t va, bool vertex)
@@ -702,7 +715,8 @@ index 0000000..142d6bd
 +   if (rows_out)
 +      *rows_out = rows;
 +   if (mm) {
-+      unsigned i = mm->n < SGXWS_PDS_MEMO ? mm->n++ : mm->next++ % SGXWS_PDS_MEMO;
++      unsigned i =
++         mm->n < SGXWS_PDS_MEMO ? mm->n++ : mm->next++ % SGXWS_PDS_MEMO;
 +
 +      mm->e[i].p = *p;
 +      mm->e[i].va = m.va;
@@ -1060,10 +1074,9 @@ index 0000000..142d6bd
 +                                  doutu_w0(c, c->empty_p, false, 0), 0, NULL);
 +   /* DOUTI: iterate the colour (source 0x20), 4 components, plain iteration,
 +    * last [D] */
-+   c->clear_pds =
-+      pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0),
-+                doutu_w1_pixel(true, false), &clear_douti, NULL, NULL, NULL, 1,
-+                NULL, NULL);
++   c->clear_pds = pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0),
++                            doutu_w1_pixel(true, false), &clear_douti, NULL,
++                            NULL, NULL, 1, NULL, NULL);
 +
 +   /* identity index buffer: glDrawArrays draws through it (STATE.md section 2) */
 +   p = ring_alloc(&c->gen, IDX_COUNT * 2, 4);
@@ -2712,10 +2725,11 @@ index 0000000..142d6bd
 +          (m & 4 ? 1u << 14 : 0) | (m & 8 ? 1u << 11 : 0);
 +}
 +
-+static uint32_t
-+upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
-+          const uint64_t *code1, unsigned count1, unsigned color_pa,
-+          const struct sgxws_blend *blend, int discard_pa, unsigned temps);
++static uint32_t upload_fs(struct sgxws_ctx *c, const uint64_t *code,
++                          unsigned count, const uint64_t *code1,
++                          unsigned count1, unsigned color_pa,
++                          const struct sgxws_blend *blend, int discard_pa,
++                          unsigned temps);
 +
 +uint32_t
 +sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
@@ -2732,8 +2746,7 @@ index 0000000..142d6bd
 +                      const struct sgxws_blend *blend, int discard_pa,
 +                      unsigned temps)
 +{
-+   return upload_fs(c, code, n, code1, n1, color_pa1, blend, discard_pa,
-+                    temps);
++   return upload_fs(c, code, n, code1, n1, color_pa1, blend, discard_pa, temps);
 +}
 +
 +static uint32_t
@@ -2892,7 +2905,7 @@ index 0000000..142d6bd
 +}
 diff --git a/src/gallium/winsys/sgx/drm/sgx_frame.h b/src/gallium/winsys/sgx/drm/sgx_frame.h
 new file mode 100644
-index 0000000..539f991
+index 0000000..8d6bdd3
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgx_frame.h
 @@ -0,0 +1,326 @@
@@ -2969,7 +2982,7 @@ index 0000000..539f991
 +/* the connection to the kernel driver; a backend's device embeds it first */
 +struct sgxws_dev {
 +   const struct sgxws_kif *kif;
-+   const struct sgx_core *core; /* the core info describes (sgx_core.h) */
++   const struct sgx_core *core;   /* the core info describes (sgx_core.h) */
 +   struct sgxws_device_info info; /* filled by the backend; PCI ids by
 +                                     sgxws_dev_create */
 +   uint32_t heap_base[16];        /* device address of each heap, by heap id */
@@ -3060,7 +3073,7 @@ index 0000000..539f991
 +
 +struct sgxws_ctx {
 +   struct sgxws_dev *dev;
-+   void *k; /* the backend's */
++   void *k;      /* the backend's */
 +   int priority; /* sgxws_ctx_create's */
 +   /* program code, pixel [0] and vertex [1] (sgxws_usse_upload) */
 +   struct sgxws_code usse[2];
@@ -3224,10 +3237,10 @@ index 0000000..539f991
 +#endif
 diff --git a/src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c b/src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c
 new file mode 100644
-index 0000000..b90d093
+index 0000000..1c6e888
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c
-@@ -0,0 +1,1354 @@
+@@ -0,0 +1,1356 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -3309,11 +3322,11 @@ index 0000000..b90d093
 + * another device or process has seen; handed out again only once the
 + * timeline is past every job submitted before it was freed. */
 +#define PSGX_CACHE_BYTES (32u << 20)
-+#define PSGX_CACHE_NS 1000000000ull /* idle for longer: released */
++#define PSGX_CACHE_NS    1000000000ull /* idle for longer: released */
 +
 +struct cached_bo {
 +   struct psgx_bo *bo;
-+   uint64_t point;    /* the last job that may still use it */
++   uint64_t point; /* the last job that may still use it */
 +   uint64_t freed_ns;
 +};
 +
@@ -3545,9 +3558,8 @@ index 0000000..b90d093
 +   uint64_t now = sgxws_now_ns();
 +   unsigned n = 0;
 +
-+   while (n < dd->n_cache &&
-+          (dd->cache_bytes > keep ||
-+           now - dd->cache[n].freed_ns > PSGX_CACHE_NS)) {
++   while (n < dd->n_cache && (dd->cache_bytes > keep ||
++                              now - dd->cache[n].freed_ns > PSGX_CACHE_NS)) {
 +      dd->cache_bytes -= dd->cache[n].bo->base.size;
 +      bo_release(dd, dd->cache[n].bo, dd->cache[n].point);
 +      n++;
@@ -3618,7 +3630,9 @@ index 0000000..b90d093
 +      dd->max_cache = max;
 +   }
 +   dd->cache[dd->n_cache++] = (struct cached_bo){
-+      impl, dd->point, sgxws_now_ns(),
++      impl,
++      dd->point,
++      sgxws_now_ns(),
 +   };
 +   dd->cache_bytes += impl->base.size;
 +   cache_trim(dd, PSGX_CACHE_BYTES);
@@ -4216,8 +4230,8 @@ index 0000000..b90d093
 +      if (bo->base.cpu_dirty)
 +         whole |= DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ;
 +      if (bo == target && !sgxws_target_twiddled(&c->target)) {
-+         uint32_t pitch = c->target.stride * 4,
-+                  x1 = MIN2(d->x1, c->rt->w), y1 = MIN2(d->y1, c->rt->h);
++         uint32_t pitch = c->target.stride * 4, x1 = MIN2(d->x1, c->rt->w),
++                  y1 = MIN2(d->y1, c->rt->h);
 +
 +         if (c->draws && x1 > d->x0 && y1 > d->y0)
 +            r[n++] = (struct drm_powervr_sgx_cache_range){
@@ -4514,7 +4528,8 @@ index 0000000..b90d093
 +   }
 +   dd->render_exts = cq.render_exts;
 +   if (!(dd->render_exts & BITFIELD64_BIT(DRM_POWERVR_SGX_EXT_SGX545_RENDER)))
-+      mesa_logw("sgx: no SGX545 render extension: depth and stencil aren't stored");
++      mesa_logw(
++         "sgx: no SGX545 render extension: depth and stencil aren't stored");
 +   d->info.core_id = gi.core_id;
 +   d->info.core_revision = gi.core_revision;
 +   d->info.zero_copy = true;
@@ -4584,7 +4599,7 @@ index 0000000..b90d093
 +}
 diff --git a/src/gallium/winsys/sgx/drm/sgxws.h b/src/gallium/winsys/sgx/drm/sgxws.h
 new file mode 100644
-index 0000000..ebc374a
+index 0000000..8cf5c6e
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgxws.h
 @@ -0,0 +1,496 @@
@@ -4850,7 +4865,7 @@ index 0000000..ebc374a
 +};
 +
 +struct sgxws_draw {
-+   uint32_t prim;         /* SGXWS_* */
++   uint32_t prim; /* SGXWS_* */
 +   /* TSP word 1 bits besides the vertex program's: the sets the fragment
 +    * program iterates as F16 and doesn't sample from (SGX_DEBUG=tspf16) */
 +   uint32_t tsp_f16;
@@ -4900,7 +4915,7 @@ index 0000000..ebc374a
 +   unsigned room_flushes; /* frames submitted early because a ring filled */
 +   uint64_t gpu_indices, gpu_verts; /* what the VDM was given: indices, and the
 +                                       vertices they index */
-+   unsigned state_sent, state_skipped; /* draws' TA state blocks */
++   unsigned state_sent, state_skipped;     /* draws' TA state blocks */
 +   unsigned bo_allocs, bo_cached, bo_busy; /* buffers allocated; from the
 +                                              cache; cached ones still in use */
 +};

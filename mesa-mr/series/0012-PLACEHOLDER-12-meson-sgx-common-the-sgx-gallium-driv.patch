@@ -1,22 +1,32 @@
-From c887f416a6fe6e917e1de2125cb591bbf1452994 Mon Sep 17 00:00:00 2001
+From 9437ab219c66859da3c5fa66c45916ea7f75493f Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:40:40 -0500
 Subject: [PATCH 12/22] PLACEHOLDER 12 meson, sgx/common: the sgx gallium
  driver option and the per-core table
 
 ---
+ .clang-format-include      |  1 +
  meson.build                |  2 +
  meson.options              |  2 +-
  src/meson.build            |  4 +-
  src/sgx/common/meson.build | 15 +++++++
  src/sgx/common/sgx_core.c  | 68 ++++++++++++++++++++++++++++++
- src/sgx/common/sgx_core.h  | 84 ++++++++++++++++++++++++++++++++++++++
+ src/sgx/common/sgx_core.h  | 85 ++++++++++++++++++++++++++++++++++++++
  src/sgx/meson.build        |  4 ++
- 7 files changed, 176 insertions(+), 3 deletions(-)
+ 8 files changed, 178 insertions(+), 3 deletions(-)
  create mode 100644 src/sgx/common/meson.build
  create mode 100644 src/sgx/common/sgx_core.c
  create mode 100644 src/sgx/common/sgx_core.h
 
+diff --git a/.clang-format-include b/.clang-format-include
+index 101d6df..e041304 100644
+--- a/.clang-format-include
++++ b/.clang-format-include
+@@ -17,3 +17,4 @@ src/gfxstream/**/*
+ src/sgx/csbgen/**/*
+ src/sgx/isa/**/*
+ src/sgx/pds/**/*
++src/sgx/common/**/*
 diff --git a/meson.build b/meson.build
 index ff2c13f..76a41d7 100644
 --- a/meson.build
@@ -169,10 +179,10 @@ index 0000000..8a9a5e6
 +}
 diff --git a/src/sgx/common/sgx_core.h b/src/sgx/common/sgx_core.h
 new file mode 100644
-index 0000000..a68c9f8
+index 0000000..6e8ef15
 --- /dev/null
 +++ b/src/sgx/common/sgx_core.h
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,85 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -239,22 +249,23 @@ index 0000000..a68c9f8
 +   unsigned dma_chunk_dwords;   /* a PDS DMA moves at most this [HW] */
 +
 +   /* ---- features ---- */
-+   bool f16;              /* USSE F16 arithmetic and iteration [HW] */
-+   bool c10;              /* C10 color arithmetic (sop2/sop3/sopwm) [HW] */
-+   bool efo_coissue;      /* efo co-issue chains [HW] */
-+   bool idx_regs;         /* indexed SA access (ima16 into idx1) [HW] */
-+   bool ld_const_mem;     /* constants past SA from memory (ld.a.d) [HW] */
-+   bool pds_samples;      /* the PDS samples non-dependent textures [HW] */
++   bool f16;               /* USSE F16 arithmetic and iteration [HW] */
++   bool c10;               /* C10 color arithmetic (sop2/sop3/sopwm) [HW] */
++   bool efo_coissue;       /* efo co-issue chains [HW] */
++   bool idx_regs;          /* indexed SA access (ima16 into idx1) [HW] */
++   bool ld_const_mem;      /* constants past SA from memory (ld.a.d) [HW] */
++   bool pds_samples;       /* the PDS samples non-dependent textures [HW] */
 +   bool f16_sample_return; /* the TAG returns F16 texels (T3 01028800) [HW] */
 +
 +   /* ---- what hangs it ---- */
 +   bool sample_texture_heap_only; /* sampling outside the texture heap hangs
 +                                     (the sample cache erratum) [D] */
-+   bool npot_mip_hangs;           /* a mipmapped NPOT texture locks the 3D [HW] */
++   bool npot_mip_hangs; /* a mipmapped NPOT texture locks the 3D [HW] */
 +};
 +
 +/* the core with this id and revision, or NULL: not driven */
-+const struct sgx_core *sgx_core_lookup(uint32_t core_id, uint32_t core_revision);
++const struct sgx_core *sgx_core_lookup(uint32_t core_id,
++                                       uint32_t core_revision);
 +
 +#endif
 diff --git a/src/sgx/meson.build b/src/sgx/meson.build

@@ -1,17 +1,18 @@
-From 4e4379bd8d5c58bb83382de9831268ccae7c03a9 Mon Sep 17 00:00:00 2001
+From e20777f635debb0c905a90de28a73adfeaf52f52 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:44:37 -0500
 Subject: [PATCH 17/22] PLACEHOLDER 17 gallium/sgx: screen, context and
  resources
 
 ---
+ .clang-format-include                       |    1 +
  src/gallium/drivers/sgx/.clang-format       |    6 +
  src/gallium/drivers/sgx/meson.build         |   30 +
- src/gallium/drivers/sgx/sgx_context.c       |  389 +++++++
+ src/gallium/drivers/sgx/sgx_context.c       |  390 +++++++
  src/gallium/drivers/sgx/sgx_context.h       |  248 +++++
  src/gallium/drivers/sgx/sgx_program.h       |   39 +
  src/gallium/drivers/sgx/sgx_public.h        |   15 +
- src/gallium/drivers/sgx/sgx_resource.c      | 1002 +++++++++++++++++++
+ src/gallium/drivers/sgx/sgx_resource.c      | 1004 +++++++++++++++++++
  src/gallium/drivers/sgx/sgx_resource.h      |  139 +++
  src/gallium/drivers/sgx/sgx_screen.c        |  401 ++++++++
  src/gallium/drivers/sgx/sgx_screen.h        |  100 ++
@@ -20,7 +21,7 @@ Subject: [PATCH 17/22] PLACEHOLDER 17 gallium/sgx: screen, context and
  src/gallium/winsys/sgx/drm/meson.build      |    2 +-
  src/gallium/winsys/sgx/drm/sgx_drm_public.h |   18 +
  src/gallium/winsys/sgx/drm/sgx_drm_winsys.c |   35 +
- 15 files changed, 2479 insertions(+), 1 deletion(-)
+ 16 files changed, 2483 insertions(+), 1 deletion(-)
  create mode 100644 src/gallium/drivers/sgx/.clang-format
  create mode 100644 src/gallium/drivers/sgx/meson.build
  create mode 100644 src/gallium/drivers/sgx/sgx_context.c
@@ -35,6 +36,18 @@ Subject: [PATCH 17/22] PLACEHOLDER 17 gallium/sgx: screen, context and
  create mode 100644 src/gallium/winsys/sgx/drm/sgx_drm_public.h
  create mode 100644 src/gallium/winsys/sgx/drm/sgx_drm_winsys.c
 
+diff --git a/.clang-format-include b/.clang-format-include
+index 93e9cad..ad8c0ee 100644
+--- a/.clang-format-include
++++ b/.clang-format-include
+@@ -6,6 +6,7 @@ src/gallium/drivers/i915
+ src/gallium/drivers/r300/compiler/*
+ src/gallium/drivers/rocket/**/*
+ src/gallium/winsys/sgx/**/*
++src/gallium/drivers/sgx/**/*
+ src/gallium/targets/teflon/**/*
+ src/gallium/frontends/teflon/**/*
+ src/amd/vulkan/**/*
 diff --git a/src/gallium/drivers/sgx/.clang-format b/src/gallium/drivers/sgx/.clang-format
 new file mode 100644
 index 0000000..b20aa1c
@@ -85,10 +98,10 @@ index 0000000..20b66cc
 +)
 diff --git a/src/gallium/drivers/sgx/sgx_context.c b/src/gallium/drivers/sgx/sgx_context.c
 new file mode 100644
-index 0000000..542f3ca
+index 0000000..4b42111
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_context.c
-@@ -0,0 +1,389 @@
+@@ -0,0 +1,390 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -254,9 +267,10 @@ index 0000000..542f3ca
 +      dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes,
 +      ctx->stats.tex_flushes, ws.room_flushes, ctx->stats.draws,
 +      ctx->stats.verts, ctx->stats.tex_writes,
-+      (unsigned long long)(p_atomic_read(&sgx_screen(ctx->base.screen)->spare_bytes) >> 10),
-+      ctx->stats.draw_ns * ms,
-+      ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms,
++      (unsigned long long)(p_atomic_read(
++                              &sgx_screen(ctx->base.screen)->spare_bytes) >>
++                           10),
++      ctx->stats.draw_ns * ms, ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms,
 +      ctx->stats.compile_ns * ms);
 +   memset(&ctx->stats, 0, sizeof(ctx->stats));
 +   ctx->stats.on = true;
@@ -800,10 +814,10 @@ index 0000000..b4928a6
 +#endif
 diff --git a/src/gallium/drivers/sgx/sgx_resource.c b/src/gallium/drivers/sgx/sgx_resource.c
 new file mode 100644
-index 0000000..e0dc3ed
+index 0000000..842e410
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_resource.c
-@@ -0,0 +1,1002 @@
+@@ -0,0 +1,1004 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -1328,9 +1342,10 @@ index 0000000..e0dc3ed
 +      for (unsigned i = 0; i < res->n_spares; i++)
 +         sgxws_bo_free(screen->dev, &res->spare[i].bo);
 +      if (res->n_spares)
-+         p_atomic_add(&screen->spare_bytes,
-+                      -(int64_t)res->n_spares *
-+                         (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
++         p_atomic_add(
++            &screen->spare_bytes,
++            -(int64_t)res->n_spares *
++               (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
 +      free(res->spare);
 +      sgxws_bo_free(screen->dev, &res->cube0);
 +      simple_mtx_unlock(&screen->lock);
@@ -1543,7 +1558,8 @@ index 0000000..e0dc3ed
 +   for (unsigned i = 0; i < sp->n_dirty; i++)
 +      if (sp->dirty[i].level == level && sp->dirty[i].layer == layer &&
 +          sp->dirty[i].x0 <= x0 && sp->dirty[i].y0 <= y0 &&
-+          sp->dirty[i].x1 >= MIN2(x1, 0xffff) && sp->dirty[i].y1 >= MIN2(y1, 0xffff))
++          sp->dirty[i].x1 >= MIN2(x1, 0xffff) &&
++          sp->dirty[i].y1 >= MIN2(y1, 0xffff))
 +         return;
 +   if (sp->n_dirty == ARRAY_SIZE(sp->dirty)) {
 +      sp->n_dirty = SGX_ALT_ALL;
@@ -1808,7 +1824,7 @@ index 0000000..e0dc3ed
 +}
 diff --git a/src/gallium/drivers/sgx/sgx_resource.h b/src/gallium/drivers/sgx/sgx_resource.h
 new file mode 100644
-index 0000000..6c1b6e4
+index 0000000..2f84071
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_resource.h
 @@ -0,0 +1,139 @@
@@ -1881,7 +1897,7 @@ index 0000000..6c1b6e4
 +    * a spare copy, which takes over (the DDK's ghosting).  A frame that
 +    * updates one texture between draws needs a copy per update in flight,
 +    * so a texture has up to sgx_tex_spares_max spares (sgx_resource.c). */
-+   uint32_t use_seq; /* the last kick that samples bo */
++   uint32_t use_seq;           /* the last kick that samples bo */
 +   struct sgx_tex_copy *spare; /* SGX_TEX_SPARES_MAX, on the first spare */
 +   unsigned n_spares;
 +

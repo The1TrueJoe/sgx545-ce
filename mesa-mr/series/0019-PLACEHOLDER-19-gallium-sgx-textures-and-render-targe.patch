@@ -1,4 +1,4 @@
-From e581556afeae4f7fc72b8fc1e8c44fbf25988fbf Mon Sep 17 00:00:00 2001
+From 48dba6f1050923db1f8afe6f97d368a860cdb865 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:05 -0500
 Subject: [PATCH 19/22] PLACEHOLDER 19 gallium/sgx: textures and render targets

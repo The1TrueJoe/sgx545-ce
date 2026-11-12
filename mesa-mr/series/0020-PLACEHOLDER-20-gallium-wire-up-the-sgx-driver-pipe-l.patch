@@ -1,4 +1,4 @@
-From 1f84042a5b5afeea6a149e76065761d1bd5ede42 Mon Sep 17 00:00:00 2001
+From 4946b2bd90a001ac928db7c300fb3f7cb818db3f Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:34 -0500
 Subject: [PATCH 20/22] PLACEHOLDER 20 gallium: wire up the sgx driver (pipe
