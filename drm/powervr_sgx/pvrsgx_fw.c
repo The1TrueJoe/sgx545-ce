@@ -569,6 +569,9 @@ static void bringup_diag(struct pvrsgx_device *sdev, const char *when)
 		 when, sgx_rd(sdev, cr->clkgatestatus), sgx_rd(sdev, SGX_CR_EVENT_STATUS),
 		 sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT), sgx_rd(sdev, SGX_CR_BIF_INT_STAT),
 		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
+	if (cr->pds_pc_base)
+		drm_info(&sdev->base, "%s: PDS PC base 0x%08x PDS 0x%08x\n", when,
+			 sgx_rd(sdev, cr->pds_pc_base), sgx_rd(sdev, cr->pds_ctrl));
 	if (sdev->ocp)
 		drm_info(&sdev->base,
 			 "%s: OCP revision 0x%08x sysconfig 0x%08x debug config 0x%08x status 0x%08x\n",
@@ -588,12 +591,12 @@ static bool code_base_probes;
 module_param(code_base_probes, bool, 0444);
 MODULE_PARM_DESC(code_base_probes, "Map code-base unit probes on a guessed core's first start");
 
+/* The image's probe for a unit of 2^k bytes, at offset off in the code arena. */
 static const struct {
-	u32 off, va;
+	u32 off, k;
 } code_base_probe[] = {
-	{ 0x5000, 0x00040000 }, { 0x6000, 0x00080000 }, { 0x7000, 0x00100000 },
-	{ 0x8000, 0x00200000 }, { 0x9000, 0x00400000 }, { 0xa000, 0x00800000 },
-	{ 0xb000, 0x01000000 }, { 0xc000, 0x04000000 }, { 0xd000, 0x08000000 },
+	{ 0x5000, 0 }, { 0x6000, 1 }, { 0x7000, 2 }, { 0x8000, 3 }, { 0x9000, 4 },
+	{ 0xa000, 5 }, { 0xb000, 6 }, { 0xc000, 8 }, { 0xd000, 9 },
 };
 
 static bool probes_wanted(struct pvrsgx_device *sdev)
@@ -601,32 +604,52 @@ static bool probes_wanted(struct pvrsgx_device *sdev)
 	return code_base_probes && sdev->family->event_pds_guessed;
 }
 
+/*
+ * Where code base 15 starts if its unit is 2^k bytes, or 0 if that address
+ * is past the core's space or in a kernel heap mapped already.
+ */
+static u64 probe_va(struct pvrsgx_device *sdev, unsigned int i)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	u64 va = (h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) << code_base_probe[i].k;
+	const struct pvrsgx_va_range *kh[] = { &h->kernel_code, &h->kernel_data, &h->sync };
+
+	if (va & (PAGE_SIZE - 1) || va + PAGE_SIZE > BIT_ULL(sdev->family->va_bits))
+		return 0;
+	for (unsigned int j = 0; j < ARRAY_SIZE(kh); j++)
+		if (va < kh[j]->end && va + PAGE_SIZE > kh[j]->base)
+			return 0;
+	return va;
+}
+
+static void probes_unmap(struct pvrsgx_device *sdev, unsigned int n)
+{
+	for (unsigned int i = 0; i < n; i++)
+		if (probe_va(sdev, i))
+			pvrsgx_mmu_unmap(sdev->kernel_mmu, probe_va(sdev, i), PAGE_SIZE);
+}
+
 static int probes_map(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_kmem *code = &sdev->fw.code;
-	unsigned int i;
-	int err;
 
-	for (i = 0; i < ARRAY_SIZE(code_base_probe); i++) {
-		err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, code_base_probe[i].va,
+	for (unsigned int i = 0; i < ARRAY_SIZE(code_base_probe); i++) {
+		u64 va = probe_va(sdev, i);
+		int err;
+
+		if (!va)
+			continue;
+		err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, va,
 					   &code->pages[code_base_probe[i].off >> PAGE_SHIFT], 1,
 					   SGX_MMU_PTE_READONLY);
-		if (err)
-			goto undo;
+		if (err) {
+			probes_unmap(sdev, i);
+			return err;
+		}
+		drm_info(&sdev->base, "code-base unit probe %u B at 0x%08llx\n",
+			 1u << code_base_probe[i].k, va);
 	}
-	drm_info(&sdev->base, "code-base unit probes mapped\n");
 	return 0;
-
-undo:
-	while (i--)
-		pvrsgx_mmu_unmap(sdev->kernel_mmu, code_base_probe[i].va, PAGE_SIZE);
-	return err;
-}
-
-static void probes_unmap(struct pvrsgx_device *sdev)
-{
-	for (unsigned int i = 0; i < ARRAY_SIZE(code_base_probe); i++)
-		pvrsgx_mmu_unmap(sdev->kernel_mmu, code_base_probe[i].va, PAGE_SIZE);
 }
 
 /* Wait for init; on a guessed core, log every 100 ms that it doesn't come. */
@@ -759,7 +782,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 
 	err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (first && probes_wanted(sdev))
-		probes_unmap(sdev);
+		probes_unmap(sdev, ARRAY_SIZE(code_base_probe));
 	if (err) {
 		drm_err(&sdev->base,
 			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",

@@ -76,6 +76,37 @@ static void core_test_table(struct kunit *test)
 	}
 }
 
+/*
+ * The DDK's rule for a core without EDM_VERTEX_PDSADDR_FULL_RANGE: kernel code
+ * below the PDS pixel heap, or more than 64 MiB past it, is refused.
+ */
+static void core_test_pds_reach(struct kunit *test)
+{
+	const struct pvrsgx_core_family *f530 = pvrsgx_core_family_get(530);
+	struct pvrsgx_core_family f = *f530;
+	struct pvrsgx_heap_layout h = *f530->heaps;
+
+	f.heaps = &h;
+	KUNIT_EXPECT_TRUE(test, heaps_fit(&f));
+
+	/* Stage 1's first layout: kernel code below PDS_EXEC_BASE. */
+	h.kernel_code = (struct pvrsgx_va_range){ 0x02000000, 0x02400000 };
+	KUNIT_EXPECT_FALSE(test, heaps_fit(&f));
+	KUNIT_EXPECT_FALSE(test, pvrsgx_core_family_usable(&f));
+	f.features |= PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE;
+	KUNIT_EXPECT_TRUE(test, heaps_fit(&f));
+
+	/* Above, but past 64 MiB. */
+	f.features = f530->features;
+	h = *f530->heaps;
+	h.pds_pixel = (struct pvrsgx_va_range){ 0x00400000, 0x00800000 };
+	KUNIT_EXPECT_FALSE(test, heaps_fit(&f));
+	/* Exactly 64 MiB is still in reach. */
+	h.pds_pixel.base = h.kernel_code.end - SZ_64M;
+	h.pds_pixel.end = h.pds_pixel.base + SZ_4M;
+	KUNIT_EXPECT_TRUE(test, pds_reach(&f, &h.kernel_code));
+}
+
 /* Only the SGX530 overrides the entry DOUTU's temporaries: 24, so 6 in fours. */
 static void core_test_ukernel_temps(struct kunit *test)
 {
@@ -111,6 +142,13 @@ static void core_test_heaps(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, f530->heaps->kernel_data.end % SZ_4M, 0);
 	KUNIT_EXPECT_EQ(test, f530->heaps->sync.base % SZ_4M, 0);
 	KUNIT_EXPECT_EQ(test, f530->regs->bif_bank0, 0);
+	/* TI's SGX530 bases; kernel code and PDS vertex within reach of PDS_EXEC_BASE. */
+	KUNIT_EXPECT_EQ(test, f530->heaps->pds_pixel.base, 0x0d800000);
+	KUNIT_EXPECT_EQ(test, f530->heaps->kernel_code.base, 0x0ec00000);
+	KUNIT_EXPECT_FALSE(test, f530->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE);
+	KUNIT_EXPECT_TRUE(test, f545->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE);
+	KUNIT_EXPECT_TRUE(test, pds_reach(f530, &f530->heaps->kernel_code));
+	KUNIT_EXPECT_TRUE(test, pds_reach(f530, &f530->heaps->pds_vertex));
 	KUNIT_EXPECT_EQ(test, f530->regs->clkgatectl2, 0);
 	KUNIT_EXPECT_EQ(test, f530->regs->event_kick2, 0);
 	/* No register the SGX530's header doesn't name: the vendor script's 0xb30 is the 545's. */
@@ -134,6 +172,7 @@ static struct kunit_case pvrsgx_core_test_cases[] = {
 	KUNIT_CASE(core_test_identify_only),
 	KUNIT_CASE(core_test_heaps),
 	KUNIT_CASE(core_test_ukernel_temps),
+	KUNIT_CASE(core_test_pds_reach),
 	KUNIT_CASE(core_test_uapi_quirks),
 	KUNIT_CASE(core_test_table),
 	{}

@@ -110,6 +110,8 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 	.bif_int_stat_fault_type = BIT(14),	/* read or write */
 	.bif_fault_addr = GENMASK(27, 12),
 	.use_code_base_dm_shift = 24,
+	.pds_pc_base = 0x0b2c,
+	.pds_ctrl = 0x0abc,
 	/*
 	 * Not in any GPL header, for any core: the SGX545's offsets, from its
 	 * vendor init script (docs/SRVINIT.md), a guess here (G). Every named
@@ -130,21 +132,24 @@ static const struct pvrsgx_core_init_reg sgx530_init_regs[] = {
 
 /*
  * 256 MiB, every heap on a 4 MiB directory entry (docs/porting/
- * single-context.md section 5).
+ * single-context.md section 5). From PDS pixel up, the bases of TI's GPL
+ * SGX530 DDK (sgxconfig.h): kernel code above both PDS heaps, within the
+ * 64 MiB the EDM reaches past PDS_EXEC_BASE. The texture heap, which that
+ * DDK lacks, is the top of its general heap.
  */
 static const struct pvrsgx_heap_layout sgx530_heaps = {
-	.params_3d = { 0x00400000, 0x01400000 },
-	.ta_data = { 0x01400000, 0x01c00000 },
-	.sync = { 0x01c00000, 0x02000000 },
-	.kernel_code = { 0x02000000, 0x02400000 },
-	.kernel_data = { 0x02400000, 0x02c00000 },
-	.pds_pixel = { 0x02c00000, 0x03000000 },
-	.pds_vertex = { 0x03000000, 0x03400000 },
-	.usse_pixel = { 0x03400000, 0x03900000 },
-	.usse_vertex = { 0x03c00000, 0x03e00000 },
-	.general = { 0x04000000, 0x0c000000 },
-	.texture = { 0x0c000000, 0x10000000 },
-	.pb_max_pages = 0x800,	/* the free list and the rest share the heap */
+	.general = { 0x01800000, 0x05000000 },
+	.texture = { 0x05000000, 0x08400000 },
+	.params_3d = { 0x08400000, 0x0c400000 },
+	.ta_data = { 0x0c400000, 0x0d400000 },
+	.sync = { 0x0d400000, 0x0d800000 },
+	.pds_pixel = { 0x0d800000, 0x0e000000 },
+	.pds_vertex = { 0x0e000000, 0x0e800000 },
+	.kernel_code = { 0x0ec00000, 0x0f000000 },
+	.kernel_data = { 0x0f000000, 0x0f400000 },
+	.usse_pixel = { 0x0f400000, 0x0f900000 },
+	.usse_vertex = { 0x0fc00000, 0x0fe00000 },
+	.pb_max_pages = 0x800,
 };
 
 static const struct pvrsgx_core_family families[] = {
@@ -155,7 +160,8 @@ static const struct pvrsgx_core_family families[] = {
 		.regs = &sgx545_regs,
 		.features = PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS |
 			    PVRSGX_FEATURE_MULTI_EVENT_KICK |
-			    PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS,
+			    PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS |
+			    PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE,
 		.isa = PVRSGX_ISA_SGX545,
 		.num_dir_lists = 16,
 		.va_bits = 32,
@@ -220,6 +226,19 @@ static const struct pvrsgx_core_info cores[] = {
 MODULE_FIRMWARE("powervr_sgx/sgx545_ukernel.bin");
 MODULE_FIRMWARE("powervr_sgx/sgx530_ukernel.bin");
 
+/*
+ * Without EDM_VERTEX_PDSADDR_FULL_RANGE, a heap the EDM runs PDS code from
+ * lies within 64 MiB above the PDS pixel heap (the GPL DDK's sgxconfig.h).
+ */
+static bool pds_reach(const struct pvrsgx_core_family *f, const struct pvrsgx_va_range *r)
+{
+	u64 exec = f->heaps->pds_pixel.base;
+
+	if (f->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE)
+		return true;
+	return r->base >= exec && r->end - exec <= SZ_64M;
+}
+
 static bool heaps_fit(const struct pvrsgx_core_family *f)
 {
 	const struct pvrsgx_heap_layout *h = f->heaps;
@@ -232,7 +251,7 @@ static bool heaps_fit(const struct pvrsgx_core_family *f)
 	for (unsigned int i = 0; i < ARRAY_SIZE(r); i++)
 		if (r[i]->base >= r[i]->end || r[i]->end > BIT_ULL(f->va_bits))
 			return false;
-	return true;
+	return pds_reach(f, &h->kernel_code) && pds_reach(f, &h->pds_vertex);
 }
 
 /*

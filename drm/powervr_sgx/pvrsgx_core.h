@@ -17,6 +17,12 @@
 #define PVRSGX_FEATURE_MULTI_EVENT_KICK		BIT(1)
 /* The PDS data store interleaves DS0 and DS1 two words at a time (docs/PDS.md). */
 #define PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS	BIT(2)
+/*
+ * The EDM reaches PDS code anywhere. Without it, the kernel code and PDS
+ * vertex heaps lie within 64 MiB above the PDS pixel heap (PDS_EXEC_BASE):
+ * the GPL DDK's sgxconfig.h refuses any other layout.
+ */
+#define PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE	BIT(3)
 
 /* Errata the kernel works around (the GPL DDK's FIX_HW_BRN_*). */
 /* A BIF directory or table invalidate and a data invalidate never in one command. */
@@ -85,6 +91,8 @@ struct pvrsgx_core_regs {
 	u32 bif_bank0;
 	u32 use_code_base_dm_shift;	/* USE_CODE_BASE's data-master field */
 	u32 vendor_b30;			/* unnamed, 0x100 in the SGX545's vendor script */
+	u32 pds_pc_base;		/* PDS_PC_BASE, read for bring-up logs only */
+	u32 pds_ctrl;			/* PDS (DOUT_TIMEOUT_DISABLE b6), read only */
 	/* Not in the GPL header (pvrsgx_hw.h). */
 	u32 event_pds_enable;
 	u32 event_pds_enable_all;

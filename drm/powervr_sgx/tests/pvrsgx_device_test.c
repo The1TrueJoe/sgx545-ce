@@ -75,14 +75,17 @@ static void device_test_va_limit(struct kunit *test)
 
 	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x04000000, SZ_4K),
 			DRM_POWERVR_SGX_HEAP_GENERAL);
-	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x0ffff000, SZ_4K),
+	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x083ff000, SZ_4K),
 			DRM_POWERVR_SGX_HEAP_TEXTURE);
-	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x0ffff000, SZ_8K), -1);
+	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x083ff000, SZ_8K), -1);
+	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x0fdff000, SZ_4K),
+			DRM_POWERVR_SGX_HEAP_USSE_VERTEX);
 	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x10000000, SZ_4K), -1);
 	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0xf0000000, SZ_4K), -1);
 	/* The kernel heaps are no client's. */
-	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x02000000, SZ_4K), -1);
-	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x02400000, SZ_4K), -1);
+	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x0ec00000, SZ_4K), -1);
+	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x0f000000, SZ_4K), -1);
+	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s530, 0x0d400000, SZ_4K), -1);
 
 	KUNIT_EXPECT_EQ(test, pvrsgx_heap_find(s545, 0xf0000000, SZ_4K),
 			DRM_POWERVR_SGX_HEAP_TEXTURE);

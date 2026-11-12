@@ -202,23 +202,30 @@ together are harmless.
 
 The fixed layout (`pvrsgx_fw.h`, UAPI.md section 5) runs to 4 GiB. It becomes a
 `struct pvrsgx_heap_layout` per family. The SGX545 table holds today's values exactly.
-For the SGX530, a proposal within 256 MiB, every heap on a 4 MiB directory-entry boundary
-so the shared kernel heaps are whole entries:
+For the SGX530, within 256 MiB, every heap on a 4 MiB directory-entry boundary so the
+shared kernel heaps are whole entries. From PDS pixel up it uses the bases of TI's GPL
+SGX530 DDK (`sgxconfig.h`). The kernel code and PDS vertex heaps have to lie within 64
+MiB above the PDS pixel heap, which is `PDS_EXEC_BASE`: the SGX530 lacks
+`EDM_VERTEX_PDSADDR_FULL_RANGE`, and the GPL DDKs refuse any other layout.
+`pvrsgx_core_family_usable()` checks it ([cores/sgx530.md](cores/sgx530.md), "The PDS
+address range and the heap order"). Stage 1's first four attempts used an earlier layout
+with kernel code at 0x02000000, below PDS pixel, which breaks the rule.
 
 | heap | base | size | note |
 |---|---|---|---|
-| (none) | `0x00000000` | 4 MiB | null addresses fault |
-| 3D params | `0x00400000` | 16 MiB | PB within 0x10000 pages of the base; `pb_max_pages` 0x800, the free list and the rest sharing the heap |
-| TA data | `0x01400000` | 8 MiB | |
-| sync | `0x01c00000` | 4 MiB | kernel |
-| kernel code | `0x02000000` | 4 MiB | kernel, shared into every VM |
-| kernel data | `0x02400000` | 8 MiB | kernel, shared into every VM |
-| PDS pixel | `0x02c00000` | 4 MiB | `PDS_EXEC_BASE` |
-| PDS vertex | `0x03000000` | 4 MiB | |
-| USSE pixel | `0x03400000` | 5 MiB | code bases 0-9; the base unit is gap 9 |
-| USSE vertex | `0x03c00000` | 2 MiB | code bases 10-13 |
-| general | `0x04000000` | 128 MiB | |
-| texture | `0x0c000000` | 64 MiB | |
+| (none) | `0x00000000` | 24 MiB | null addresses fault |
+| general | `0x01800000` | 56 MiB | |
+| texture | `0x05000000` | 52 MiB | the top of TI's general heap |
+| 3D params | `0x08400000` | 64 MiB | `pb_max_pages` 0x800 |
+| TA data | `0x0c400000` | 16 MiB | |
+| sync | `0x0d400000` | 4 MiB | kernel, shared into every VM |
+| PDS pixel | `0x0d800000` | 8 MiB | `PDS_EXEC_BASE` |
+| PDS vertex | `0x0e000000` | 8 MiB | |
+| (TI's reserved code) | `0x0e800000` | 4 MiB | unused |
+| kernel code | `0x0ec00000` | 4 MiB | kernel, shared into every VM; within 64 MiB of `PDS_EXEC_BASE` |
+| kernel data | `0x0f000000` | 4 MiB | kernel, shared into every VM |
+| USSE pixel | `0x0f400000` | 5 MiB | code bases 0-9; the base unit is gap 9 |
+| USSE vertex | `0x0fc00000` | 2 MiB | code bases 10-13 |
 
 The microkernel's own code base (15) stays at the kernel code heap. `VM_MAP`, the kernel
 object ranges, the code-base programming and `HEAP_INFO` all read the layout. The DMA mask
