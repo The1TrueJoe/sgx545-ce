@@ -90,6 +90,7 @@ struct pvrsgx_core_regs {
 	u32 bif_bank_set;
 	u32 bif_bank0;
 	u32 use_code_base_dm_shift;	/* USE_CODE_BASE's data-master field */
+	u32 use_code_base_addr_shift;	/* USE_CODE_BASE's address unit, log2 bytes */
 	u32 vendor_b30;			/* unnamed, 0x100 in the SGX545's vendor script */
 	u32 pds_pc_base;		/* PDS_PC_BASE (SGX530), likely the PDS's PC */
 	u32 pds_ctrl;			/* PDS (DOUT_TIMEOUT_DISABLE b6), read only */
