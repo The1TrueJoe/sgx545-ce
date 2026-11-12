@@ -35,13 +35,6 @@ enum pvrsgx_isa {
 	PVRSGX_ISA_SGX545,
 };
 
-/* What this driver needs: a directory per VM, and the second kick for the microkernel's start. */
-#define PVRSGX_FEATURES_REQUIRED \
-	(PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS | PVRSGX_FEATURE_MULTI_EVENT_KICK)
-
-/* The device-virtual layout (pvrsgx_fw.h) needs a 32-bit address space. */
-#define PVRSGX_VA_BITS_REQUIRED	32
-
 /* A device-virtual range, [base, end). */
 struct pvrsgx_va_range {
 	u64 base;
@@ -149,6 +142,13 @@ struct pvrsgx_core_family {
 	 * doesn't read back.
 	 */
 	bool event_pds_guessed;
+	/**
+	 * @data_no_edmprotect: Map the kernel data arena without EDMPROTECT. A
+	 * bring-up stopgap for the SGX530, whose microkernel task's stores to an
+	 * EDMPROTECT page fault. It runs only with allow_unisolated, which
+	 * already gives up client isolation on such a core.
+	 */
+	bool data_no_edmprotect;
 	/** @cmds: What its client commands are checked against (pvrsgx_cmd_defs.c). */
 	const struct pvrsgx_cmd_core *cmds;
 	/** @init_regs: Init script part 2's register writes, in order. */
@@ -186,7 +186,10 @@ static inline bool pvrsgx_core_single_context(const struct pvrsgx_core_family *f
 	return !(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS);
 }
 
+extern bool pvrsgx_allow_unisolated;
+
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
+bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f);
 const struct pvrsgx_core_info *pvrsgx_core_lookup(const struct pvrsgx_core_family *family,
 						  u32 core_id, u32 core_rev);
 
