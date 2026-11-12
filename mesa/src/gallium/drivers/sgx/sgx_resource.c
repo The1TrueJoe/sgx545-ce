@@ -580,6 +580,162 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
 
 /* ---------------------------------------------------------------- transfers */
 
+/* Depth and stencil between the ZLS buffer, where renders keep them, and the
+ * CPU copy, which maps, copies and blits see (docs/TEX.md section 7, "The
+ * order of the stored depth").
+ *
+ * zls_index: where sample s of pixel (x, y) (the render's rows, top first)
+ * of a render of w x h keeps its float32 depth, in words from the buffer's
+ * start.  Tiles of 32 x 16 words, row-major over the padded width.  At 1
+ * sample a tile is 32 x 16 pixels, word bits y0 x0 y1 x1 y2 x2 y3 x3 x4.  At
+ * 4 the samples form one surface twice as wide and high (X = 2x + sx,
+ * Y = 2y + sy, 2 * align(w, 32) wide), with tile bits y0 x1 y1 x2 y2 x3 y3
+ * x0 x4.  Its stencil byte is taken to be at the same index, after the last
+ * depth (sgxws_zls_pixels(w, h) * samples * 4 bytes in): the doc covers
+ * depth only, and test H9 checks the stencil. */
+static uint32_t
+zls_index(uint32_t w, uint32_t h, unsigned samples, uint32_t x, uint32_t y,
+          unsigned s)
+{
+   uint32_t X = x, Y = y, across = align(w, 32) / 32, t;
+
+   (void)h;
+   if (samples > 1) {
+      X = 2 * x + (s & 1);
+      Y = 2 * y + (s >> 1);
+      across *= 2;
+   }
+   t = ((Y >> 4) * across + (X >> 5)) * 512;
+   uint32_t ix = X & 31, iy = Y & 15;
+   uint32_t xlo = samples > 1 ? (ix >> 1 & 1) | (ix >> 2 & 1) << 1 |
+                                   (ix >> 3 & 1) << 2
+                              : (ix & 1) | (ix >> 1 & 1) << 1 |
+                                   (ix >> 2 & 1) << 2;
+   uint32_t x3 = samples > 1 ? ix & 1 : ix >> 3 & 1;
+
+   return t | (iy & 1) | (xlo & 1) << 1 | (iy >> 1 & 1) << 2 |
+          (xlo >> 1 & 1) << 3 | (iy >> 2 & 1) << 4 | (xlo >> 2 & 1) << 5 |
+          (iy >> 3 & 1) << 6 | x3 << 7 | (ix >> 4 & 1) << 8;
+}
+
+/* the CPU copy of level 0 from the ZLS buffer, sample 0 (a 4x buffer's
+ * resolve: GL lets a depth/stencil resolve take any one sample) */
+static void
+zls_read(struct sgx_resource *res)
+{
+   enum pipe_format f = res->base.format;
+   const struct util_format_description *d = util_format_description(f);
+   unsigned samples = MAX2(res->base.nr_samples, 1);
+   uint32_t w = MIN2(res->zls_w, res->base.width0),
+            h = MIN2(res->zls_h, res->base.height0);
+   const float *depth = (const float *)res->zls.map;
+   const uint8_t *st = (const uint8_t *)res->zls.map +
+                       sgxws_zls_pixels(res->zls_w, res->zls_h) * samples * 4;
+   float *zr = malloc(sizeof(float) * w);
+   uint8_t *sr = malloc(w);
+
+   for (uint32_t y = 0; y < h && zr && sr; y++) {
+      uint8_t *row = (uint8_t *)res->data + y * res->stride;
+
+      for (uint32_t x = 0; x < w; x++) {
+         uint32_t i = zls_index(res->zls_w, res->zls_h, samples, x, y, 0);
+
+         zr[x] = depth[i];
+         sr[x] = st[i];
+      }
+      if (util_format_has_depth(d))
+         util_format_pack_z_float(f, row, zr, w);
+      if (util_format_has_stencil(d))
+         util_format_pack_s_8uint(f, row, sr, w);
+   }
+   free(zr);
+   free(sr);
+}
+
+/* the ZLS buffer from the CPU copy of level 0, every sample, laid out for a
+ * render of the resource's size, which then loads it (zls_target) */
+static int
+zls_write(struct sgx_context *ctx, struct sgx_resource *res)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+   enum pipe_format f = res->base.format;
+   const struct util_format_description *d = util_format_description(f);
+   unsigned samples = MAX2(res->base.nr_samples, 1);
+   uint32_t w = res->base.width0, h = res->base.height0;
+   uint32_t bytes = align(sgxws_zls_pixels(w, h) * 5 * samples, 4096);
+
+   simple_mtx_lock(&screen->lock);
+   /* the renders that load or store it are done first */
+   if (screen->hw && res->use_seq == sgxws_next_seq(screen->hw))
+      sgxws_flush(screen->hw, 0);
+   if (screen->hw)
+      sgxws_wait_idle(screen->hw, 2000);
+   if (sgxws_bo_valid(&res->zls) && res->zls_bytes < bytes)
+      sgxws_bo_free(screen->dev, &res->zls);
+   if (!sgxws_bo_valid(&res->zls)) {
+      if (sgxws_bo_alloc(screen->dev, &res->zls, SGXWS_MEM_ZLS, bytes,
+                         0x1000)) {
+         simple_mtx_unlock(&screen->lock);
+         return -ENOMEM;
+      }
+      res->zls_bytes = bytes;
+   }
+   simple_mtx_unlock(&screen->lock);
+
+   float *depth = (float *)res->zls.map;
+   uint8_t *st = (uint8_t *)res->zls.map + sgxws_zls_pixels(w, h) * samples * 4;
+   float *zr = malloc(sizeof(float) * w);
+   uint8_t *sr = malloc(w);
+
+   for (uint32_t y = 0; y < h && zr && sr; y++) {
+      const uint8_t *row = (const uint8_t *)res->data + y * res->stride;
+
+      if (util_format_has_depth(d))
+         util_format_unpack_z_float(f, zr, row, w);
+      else
+         for (uint32_t x = 0; x < w; x++)
+            zr[x] = 1.0f;
+      if (util_format_has_stencil(d))
+         util_format_unpack_s_8uint(f, sr, row, w);
+      else
+         memset(sr, 0, w);
+      for (unsigned s = 0; s < samples; s++)
+         for (uint32_t x = 0; x < w; x++) {
+            uint32_t i = zls_index(w, h, samples, x, y, s);
+
+            depth[i] = zr[x];
+            st[i] = sr[x];
+         }
+   }
+   free(zr);
+   free(sr);
+   res->zls_w = w;
+   res->zls_h = h;
+   res->zls_stored = false;
+   return 0;
+}
+
+/* before a map of a depth/stencil buffer: what renders stored is brought
+ * into the CPU copy */
+static void
+zls_sync_for_map(struct sgx_context *ctx, struct sgx_resource *res)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+
+   if (!res->zls_stored || !res->zls.map || !res->data || !res->zls_w)
+      return;
+   if (ctx->recording_zs == res && sgx_recording(ctx))
+      sgx_flush_frame(ctx);
+   simple_mtx_lock(&screen->lock);
+   if (screen->hw && res->use_seq == sgxws_next_seq(screen->hw))
+      sgxws_flush(screen->hw, 0);
+   if (screen->hw)
+      sgxws_wait_idle(screen->hw, 2000);
+   simple_mtx_unlock(&screen->lock);
+   zls_read(res);
+   res->zls_stored = false;
+}
+
 static void *
 sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
                  unsigned level, unsigned usage, const struct pipe_box *box,
@@ -648,6 +804,12 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
       if (ctx->stats.on)
          ctx->stats.rb_ns += os_time_get_nano() - t;
    }
+   /* A depth/stencil buffer's renders keep their results in its ZLS buffer:
+    * the CPU copy catches up from it (level 0 only: renders write no other) */
+   if (util_format_is_depth_or_stencil(prsc->format) && !level &&
+       prsc->target != PIPE_BUFFER && !(usage & PIPE_MAP_UNSYNCHRONIZED) &&
+       !(usage & PIPE_MAP_DISCARD_WHOLE_RESOURCE))
+      zls_sync_for_map(ctx, res);
    /* A texture write lands in the CPU copy; the unmap puts it on the device
     * copy, or on a second one when a render may still sample the first
     * (tex_write) */
@@ -859,6 +1021,13 @@ sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
          ctx->stats.tex_writes++;
       }
    }
+
+   /* and a write to a depth/stencil buffer goes into its ZLS buffer, which
+    * the next render of its size loads (DrawPixels, CopyPixels, blits) */
+   if (util_format_is_depth_or_stencil(ptrans->resource->format) &&
+       !ptrans->level && ptrans->resource->target != PIPE_BUFFER &&
+       (ptrans->usage & PIPE_MAP_WRITE) && res->data)
+      zls_write(ctx, res);
 
    if (ptrans->resource->target == PIPE_BUFFER &&
        (ptrans->usage & PIPE_MAP_WRITE)) {

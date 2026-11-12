@@ -217,8 +217,10 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
    /* its ZLS buffer is stored into by this render: freeing it flushes and
     * waits (sgx_resource_destroy).  After sgxws_begin, which may have
     * flushed another target's frame: the next kick is this render's. */
-   if (zs && sgxws_bo_valid(&zs->zls))
+   if (zs && sgxws_bo_valid(&zs->zls) && t.zls_va == zs->zls.va) {
       zs->use_seq = sgxws_next_seq(ctx->hw);
+      zs->zls_stored = true;
+   }
    /* a write to the texture waits for this render, as for one that samples it */
    if (res->texture)
       res->use_seq = sgxws_next_seq(ctx->hw);

@@ -80,6 +80,9 @@ struct sgx_resource {
     * last stored at (0: nothing stored yet, so nothing to load). */
    struct sgxws_bo zls;
    uint32_t zls_bytes, zls_w, zls_h;
+   /* a render stored into zls after the CPU copy (data) was last brought
+    * up from it: a map reads it back first (sgx_transfer_map) */
+   bool zls_stored;
 };
 
 static inline struct sgx_resource *

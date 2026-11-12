@@ -7,13 +7,18 @@ depth and stencil lie (docs/TEX.md section 7).
 
     python3 -I tools/zls_layout.py DUMP...
 
-The test's depth plane is 0.05 + 0.9 * (Y + X / w) / h at window position
-(X, Y), so each stored float gives back the position it was computed at; its
+The test's depth plane is 0.05 + 0.9 * (Y - 0.5 + X / w) / h at window
+position (X, Y), so each stored float gives back the position it was computed
+at (the row exactly, at a pixel centre); its
 stencil blocks are bx << 4 | by for 8x8 blocks. For every dump this prints
 the first stored entries as positions, then how well some layouts fit:
-row-major over the padded width (rows bottom-up and top-down), and 32x16
-tiles in row-major order, each tile row-major inside. At 4x the positions
-carry the sample's offset in the pixel.
+TEX.md section 7's order (32x16 tiles, twiddled inside; at 4x one surface of
+samples twice as wide and high), row-major over the padded width (rows
+bottom-up and top-down), and 32x16 tiles row-major inside. A 1x depth fit is
+exact: each word must decode to its pixel. At 4x a sample's offset in the
+pixel shifts the plane, so the TEX.md fit checks that the word lies within
+its pixel's range of the plane (its row exactly, its column to the range),
+and the stencil fit checks the 8x8 block of every sample.
 """
 import math
 import os
@@ -30,7 +35,7 @@ def align(v, a):
 
 def decode(d, w, h):
     """(X, Y) for a stored depth, or None for the clear (1.0) or garbage"""
-    if not (0.04 < d < 0.97):
+    if not (0.03 < d < 0.98):
         return None
     v = (d - 0.05) / 0.9 * h
     y = math.floor(v)
@@ -54,6 +59,52 @@ def layouts(W, H, w, h):
     return {"row-major, rows up": rows_up, "row-major, rows down": rows_down,
             "32x16 tiles, rows up": lambda i: tiles(i, False),
             "32x16 tiles, rows down": lambda i: tiles(i, True)}
+
+
+def tex_index(w, h, S, x, y, s):
+    """docs/TEX.md section 7: the word of sample s (sx = s & 1, sy = s >> 1)
+    of pixel (x, y), rows top first"""
+    X, Y, across = x, y, align(w, 32) // 32
+    if S > 1:
+        X, Y, across = 2 * x + (s & 1), 2 * y + (s >> 1), across * 2
+    t = ((Y >> 4) * across + (X >> 5)) * 512
+    ix, iy = X & 31, Y & 15
+    if S > 1:
+        xb = [ix >> 1 & 1, ix >> 2 & 1, ix >> 3 & 1, ix & 1]
+    else:
+        xb = [ix & 1, ix >> 1 & 1, ix >> 2 & 1, ix >> 3 & 1]
+    return (t | (iy & 1) | xb[0] << 1 | (iy >> 1 & 1) << 2 | xb[1] << 3 |
+            (iy >> 2 & 1) << 4 | xb[2] << 5 | (iy >> 3 & 1) << 6 | xb[3] << 7 |
+            (ix >> 4 & 1) << 8)
+
+
+def plane(x, y, w, h):
+    """the test's depth at window position (x, y)"""
+    return 0.05 + 0.9 * (y - 0.5 + x / w) / h
+
+
+def tex_fit(depth, st, w, h, S):
+    """(depth ok, depth total, stencil ok, stencil total) under TEX.md's order,
+    for the drawn pixels"""
+    dok = dtot = sok = stot = 0
+    for y in range(h):
+        for x in range(w):
+            lo, hi = plane(x, y, w, h), plane(x + 1, y, w, h)
+            for s in range(S):
+                i = tex_index(w, h, S, x, y, s)
+                d = depth[i]
+                dtot += 1
+                if S == 1:
+                    p = decode(d, w, h)
+                    dok += p is not None and math.floor(p[0]) == x and p[1] == y
+                else:
+                    # a sample at (X, Y) inside the pixel: the plane between
+                    # its (x, y) corner and its (x + 1, y + 1) corner
+                    dok += lo - 1e-6 <= d <= hi + 0.9 / h + 1e-6
+                if st is not None:
+                    stot += 1
+                    sok += st[i] == ((x // 8) << 4 | (y // 8))
+    return dok, dtot, sok, stot
 
 
 def report(path):
@@ -80,6 +131,11 @@ def report(path):
             p = pos[i]
             print(f"   [{i:6d}] {depth[i]:.7f} " +
                   (f"x {p[0]:8.3f} y {p[1]:5.0f}" if p else "(clear or pad)"))
+    st = data[n * 4:n * 5] if fmt.endswith("S8_UINT") and len(data) >= n * 5 else None
+    dok, dtot, sok, stot = tex_fit(depth, st, w, h, s)
+    print(f"   fit TEX.md order, depth   {dok}/{dtot}")
+    if st is not None:
+        print(f"   fit TEX.md order, stencil {sok}/{stot}")
     if s == 1:
         for name, f in layouts(W, H, w, h).items():
             ok = tot = 0

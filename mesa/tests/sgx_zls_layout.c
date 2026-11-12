@@ -10,16 +10,19 @@
  *
  * Each case is an FBO with a depth (or depth/stencil) renderbuffer:
  *
- *   depth    a plane, window depth 0.05 + 0.9 * (Y + X / w) / h at window
- *            position (X, Y), written with GL_ALWAYS: Y is the integer part
- *            of the depth's scaled value and X / w the fraction, so every
+ *   depth    a plane, window depth 0.05 + 0.9 * (Y - 0.5 + X / w) / h at
+ *            window position (X, Y), written with GL_ALWAYS: at a pixel's
+ *            centre the row is the integer part of the depth's scaled value
+ *            and (X / w) the fraction, so every
  *            stored float gives back the position it was computed at (a
  *            pixel's centre at 1x, a sample's position at 4x)
  *   stencil  8x8 blocks, block (bx, by) set to bx << 4 | by (GL_REPLACE)
  *
  * at 96x64 and 120x72 (padded to 128x80: neither a whole number of 32x16
  * tiles), with GL_DEPTH_COMPONENT24 and GL_DEPTH24_STENCIL8, at 1 and 4
- * samples, and once with no colour buffer (a depth-only framebuffer).  One
+ * samples, then GL_DEPTH_COMPONENT16 once, and once with no colour buffer (a
+ * depth-only framebuffer).  docs/TEX.md section 7 has the depth order from
+ * window captures; this checks it for FBOs, 16-bit depth and the stencil.  One
  * glFinish a case, so one ZLS dump a case, in the order printed.
  *
  *   SGX_DEBUG=zlsdump sgx_zls_layout
@@ -92,8 +95,8 @@ run(int w, int h, GLenum fmt, int samples, int colour)
    GLuint f, rb[2];
    int stencil = fmt == GL_DEPTH24_STENCIL8;
    /* glOrtho(.., -1, 1): window depth d is vertex z 1 - 2d */
-   float d00 = 0.05f, d10 = 0.05f + 0.9f / h, d01 = 0.95f,
-         d11 = 0.95f + 0.9f / h;
+   float d00 = 0.05f - 0.45f / h, d10 = 0.05f + 0.45f / h,
+         d01 = 0.95f - 0.45f / h, d11 = 0.95f + 0.45f / h;
    const GLfloat plane[] = {
       0, 0, 1 - 2 * d00, (GLfloat)w, 0, 1 - 2 * d10, 0, (GLfloat)h, 1 - 2 * d01,
       0, (GLfloat)h, 1 - 2 * d01, (GLfloat)w, 0, 1 - 2 * d10, (GLfloat)w,
@@ -122,7 +125,9 @@ run(int w, int h, GLenum fmt, int samples, int colour)
    GLenum st = glCheckFramebufferStatus_(GL_FRAMEBUFFER);
 
    printf("case %dx%d %s s%d %s: %s\n", w, h,
-          stencil ? "Z24_UNORM_S8_UINT" : "Z24X8_UNORM", samples ? samples : 1,
+          stencil ? "Z24_UNORM_S8_UINT"
+          : fmt == GL_DEPTH_COMPONENT16 ? "Z16_UNORM" : "Z24X8_UNORM",
+          samples ? samples : 1,
           colour ? "colour" : "depth-only",
           st == GL_FRAMEBUFFER_COMPLETE ? "complete" : "INCOMPLETE");
    if (st != GL_FRAMEBUFFER_COMPLETE) {
@@ -257,6 +262,7 @@ main(void)
          run(sizes[i][0], sizes[i][1], GL_DEPTH_COMPONENT24, samples, 1);
          run(sizes[i][0], sizes[i][1], GL_DEPTH24_STENCIL8, samples, 1);
       }
+   run(96, 64, GL_DEPTH_COMPONENT16, 0, 1);
    run(96, 64, GL_DEPTH24_STENCIL8, 0, 0);
    return failures ? 1 : 0;
 }

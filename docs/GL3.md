@@ -234,7 +234,9 @@ style), unless it says capture. In order of how much each unblocks:
   with the T0 and T3 bits that no capture sets swept one at a time.
 - **H9, the ZLS buffer's layout** (`mesa/tests/sgx_zls_layout.c`,
   `SGX_DEBUG=zlsdump`, `tools/zls_layout.py`). The depth and stencil a render
-  stores exist only in its ZLS buffer, in an order no doc gives. Depth
+  stores exist only in its ZLS buffer. TEX.md section 7 gives the depth's
+  order at 1 and 4 samples from window captures; stencil, FBOs and 16-bit
+  depth are not covered. Depth
   readback, CopyPixels, DrawPixels into depth, depth/stencil blits and the
   4x resolve all need that order. A depth plane whose every value names its
   window position, plus stencil in 8×8 blocks, is drawn at 1x and 4x and
@@ -355,15 +357,28 @@ five crashes (`getteximage-depth`, `texsubimage-depth-formats`,
 `fbo-alphatest-nocolor` and its `-ff` variant, now start and fail: a
 framebuffer with no colour buffer wasn't drawn (`begin_frame`).
 
-Since then, not yet on a board: a framebuffer with only a depth buffer
-renders into a colour buffer of the context's own (`dummy_cb`, made in
-`set_framebuffer_state` at the framebuffer's size and the depth buffer's
-samples), and a render is the framebuffer's size, the attachments'
-intersection. A ZLS buffer is still loaded only by a render of the size
-that stored it, so a depth buffer used at two render sizes loses its
-contents but can't be corrupted. `mixed_framebuffer_sizes` stays off until
-H9 gives the ZLS layout and depth readback, depth blits and the 4x
-depth/stencil resolve are built on it.
+Since then, not yet on a board:
+
+- A framebuffer with only a depth buffer renders into a colour buffer of
+  the context's own (`dummy_cb`, made in `set_framebuffer_state` at the
+  framebuffer's size and the depth buffer's samples).
+- A render is the framebuffer's size, the attachments' intersection. A ZLS
+  buffer is loaded only by a render of the size that stored it, so a depth
+  buffer used at two render sizes loses its contents but can't be corrupted.
+- Depth and stencil reach the CPU copy (`sgx_resource.c`, `zls_read` and
+  `zls_write`) in TEX.md section 7's order (`zls_index`). A map of a depth or
+  stencil buffer reads back what renders stored (sample 0 of a 4x one), and
+  a write goes into the ZLS buffer, which the next render of the buffer's
+  size loads. So glReadPixels, CopyPixels and DrawPixels of depth and
+  stencil, copies, and depth/stencil blits and 4x resolves (`sgx_blit_zs`,
+  nearest, any scale) all go through it. The stencil bytes are taken to be
+  in the depth's order, which no capture shows; H9 checks it.
+- Not yet: a sampled depth texture rendered into (`fbo-depthtex`), whose
+  sampler copy isn't brought up from the ZLS buffer.
+
+`mixed_framebuffer_sizes` stays off until H9 and the depth/stencil gate pass:
+the 12 `depthstencil-default_fb … samples=2/4` tests, their single-sample
+versions and `fbo-depthtex`.
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
