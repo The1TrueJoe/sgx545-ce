@@ -1782,6 +1782,10 @@ for `stout_o0`'s distinctive 0x0fd7d000 — found off t[0x18] = a misplaced stor
 difference); absent = not committed or a non-coherent read. Only then weigh a documented flush.
 Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
 
+> **Board probing is paused here (after attempt 47).** For the one-page handoff — what works, the
+> four gates, and what the AM335x vendor capture must show — see
+> [sgx530-state.md](sgx530-state.md).
+
 ## After the forty-seventh attempt (50367971): the write context, not the register files (C)
 
 Attempt 47 ran all three open gates in one slot. The results converge on one cause.
