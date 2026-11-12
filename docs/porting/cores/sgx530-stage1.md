@@ -1300,9 +1300,22 @@ Build each then mkukfw; all same through asm.py and `sgx-asm`. Read `EVENT_TIMER
 - **0 or something else:** `str` itself may not read the register as expected; cross-check
   with a second register.
 
+The which-register probes (`sgx530_ldpre_r*`) confirmed it (C): each faulted at exactly its
+register's unwritten leftover, never at a preloaded `(N+1)<<16` value, so preloading with
+`limm` reached no register.
+
+**Pair it with a non-`limm` write** (`cores/sgx530_aluwr.py`): `or r5, r5, r17` (r5's
+leftover 0x0c004000 | r17's 0x0fd79000 = 0x0fd7d000), then `ld.a.d r3, r5, #0`. A fault at
+**0x0fd7d000** means the ALU wrote r5; at **0x0c004000** means it did not. Image 0x48 (sha256
+81dd5785…, same through asm.py and `sgx-asm`; crc 0x1dd7e9fa, packaged 18ce50ba…).
+- `limmwr` leftover + `aluwr` 0x0fd7d000 → the register file writes, but `limm` specifically
+  does not. The fix is a SGX530 `limm` decode (destination field or opcode), handed to
+  cleanroom-isa.
+- both leftover → no write lands at all; `str`/the write path is broader, and `ld` reading
+  fine would need rechecking.
+
 This is the real blocker: with `limm` not writing, every constant and address the microkernel
-builds is its register's leftover. Decode it C and hand the `limm` (or `str`) behavior to
-cleanroom-isa.
+builds is its register's leftover. Decode it C and hand the behavior to cleanroom-isa.
 
 ## Abort conditions
 
