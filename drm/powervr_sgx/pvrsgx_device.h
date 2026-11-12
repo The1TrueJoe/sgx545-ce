@@ -199,6 +199,11 @@ struct pvrsgx_device {
 	struct list_head active;
 	/** @last_fence: Hardware fence of the job last sent to the firmware. */
 	struct dma_fence *last_fence;
+	/**
+	 * @wq: Runs @poll_work and @reap_work. The poll signals fences, so the queue
+	 * has a rescuer and never waits on memory reclaim.
+	 */
+	struct workqueue_struct *wq;
 	/** @poll_work: Checks completions while jobs are out. */
 	struct delayed_work poll_work;
 
