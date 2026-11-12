@@ -158,11 +158,17 @@ static void vm_unmapped_done(struct pvrsgx_inval_wait *w)
  */
 static void vm_free_unmapped(struct pvrsgx_vm *vm, struct drm_gpuva **vas, u32 n)
 {
+	struct pvrsgx_device *sdev = vm->sdev;
 	struct vm_unmapped *u;
 
 	if (!n)
 		return;
-	u = kzalloc_flex(*u, vas, n);
+	/*
+	 * The BIF caches walks only of a directory a job ran on, and a restart
+	 * or power-off drops them: then there is nothing to wait for.
+	 */
+	u = !READ_ONCE(sdev->powered) || READ_ONCE(vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1 ?
+	    NULL : kzalloc_flex(*u, vas, n);
 	if (!u) {
 		for (u32 i = 0; i < n; i++)
 			va_release(vm, vas[i]);
