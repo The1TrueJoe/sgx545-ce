@@ -1330,6 +1330,36 @@ asm.py and `sgx-asm`; crc 0x1dd7e9fa, packaged 18ce50ba…).
 This is the real blocker: with `limm` not writing, every constant and address the microkernel
 builds is its register's leftover. Decode it C and hand the behavior to cleanroom-isa.
 
+## After the thirty-fourth attempt: zero temporaries (the likely cause)
+
+Attempt 34 (log 3296b7ed): `aluwr` (`or r5, r5, r17`, then `ld r5`) faulted at **0x0c004000**,
+r5's leftover, not 0x0fd7d000. So the `or` didn't write r5 either — **no register write
+lands**, not just `limm` (attempt 33, with `str` also not taking). Source operands decode
+fine (attempt 31: `ld rN` reads register N). So writes go nowhere the reads see.
+
+**The hypothesis (the coordinator's, the likely cause): the task runs with zero
+temporaries.** On the SGX545 the DOUTU word 0 carries the temp count in bits 24-31
+(`(n+3)>>2`, PDS.md — not in any GPL header, so **U** on the SGX530). The driver sets it to 6
+(24 temps; attempt 24's `ukernel_temps`). If the SGX530 reads the temp count from a
+different position — as it read the code address from `>> 8` and the segment elsewhere —
+the task gets **0 temporaries**: every write to an r-register is dropped, and reads return
+the register bank's leftover. That matches attempts 31-34 exactly, and it is one field, not
+a whole destination-encoding difference.
+
+**Attempt 35: sweep the DOUTU temp-count field position** (driver-side, the kernel session
+builds DOUTU word 0). For the EDM entry DOUTU, put the temp value (e.g. 6, or a larger
+count) at candidate positions — the SGX545's b24-31, and shifted down — one per variant,
+leaving the code-address bits (0-23) intact (the entry's offset is 0, so b4-23 are free).
+Readout: the `aluwr` image (81dd5785…, packaged 18ce50ba…), by its fault page:
+- **0x0fd7d000:** that position is the SGX530's temp-count field — the `or` now writes r5.
+  Set the temp count there, and register writes (so `limm`, `imae`, the whole microkernel)
+  start working.
+- **0x0c004000:** still 0 temps; try the next position.
+
+If a position works, re-run the real `sgx530` image: with temporaries, `limm` and the stores
+should land and init can complete. Also worth a look: `phas.i`'s `temps4` field (ISA.md) as
+an alternate temp source, since the entry's `phas.i #0, #0` carries 0 there.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
