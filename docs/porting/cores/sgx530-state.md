@@ -1,10 +1,13 @@
 # State of the SGX530 port (stage 1, after attempt 47)
 
-A one-page summary for whoever picks up the **AM335x vendor capture**. Detail lives in
+A one-page summary for whoever picks up the **OMAP3630 vendor capture**. Detail lives in
 [sgx530-stage1.md](sgx530-stage1.md) (the attempt-by-attempt runbook),
 [sgx530-attr-restructure.md](sgx530-attr-restructure.md) (the restructure design) and
-[sgx530.md](sgx530.md) (the fact sheet). Board probing is **paused** here by plan: the register
-files are fully mapped and the next unknown is a task-setup question only a working driver shows.
+[sgx530.md](sgx530.md) (the fact sheet). The register files are fully mapped; the next unknown is a
+task-setup question only a working driver shows. There is no AM335x board, so this is now pursued on
+the OMAP3630 board: a vendor-stack capture (a separate analysis-side session, into
+`sgx530-vendor-setup.md`), plus cheap black-box checks from this side (runbook §"fresh black-box
+hypotheses").
 
 ## Where it stands, in one paragraph
 
@@ -53,7 +56,7 @@ neither works. Unblocking the 530 needs the task-context setup the vendor driver
 | `DOUTA` then `DOUTU` in one PDS program | misfires — DOUTU at code base 0, and the DOUTA may not write either (C) |
 | task's store to an `EDMPROTECT` page | faults; the DM field (0/1/2/3) doesn't change it (C) — the task isn't the EDM requestor |
 
-## What a vendor capture (TI's SGX530 EDM task, AM335x) must show
+## What a vendor capture (TI's rev-125 SGX530 EDM task, on the OMAP3630 board) must show
 
 The capture is the critical path. Three things to read from a working EDM task:
 
@@ -83,7 +86,8 @@ this layer.
   The 545 golden stays byte-identical throughout.
 - **Clean-room**: everything here is from `docs/` and black-box board tests; no decompiles.
 
-## Open questions for Joseph
+## Open questions
 
-- The AM335x capture board (open question §7.1/§7.3): the critical path above.
+- No AM335x board; the vendor capture runs on the OMAP3630 board (a separate analysis-side session,
+  which also handles the closed rev-125 user-space run).
 - Isolation before client work is a separate hard gate (fact-sheet **gap 19**), independent of this.

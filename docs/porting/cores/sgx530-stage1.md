@@ -1840,3 +1840,51 @@ for the right ones.
 - If it passed: microkernel.md stage 3, the host kick and the CCB (get-misc-info, which
   also raises the first host interrupt; gap 3), then the first TA (stage 4). Instruction-level ISA tests come after the first frame, and so does the move to
   `sgx-asm -c 530`.
+
+## After attempt 47: board probing resumes; fresh black-box hypotheses
+
+There is no AM335x board, so the write-retire blocker is pursued on the OMAP3630 board
+itself. A separate analysis-side session studies the vendor stack and will write its findings into
+`docs/porting/cores/sgx530-vendor-setup.md`; this (implementation) side works from `docs/` only and
+contributes the black-box checks below, run on the OMAP3630 board under its standing go (RAM boot
+only, named registers only).
+
+All hypotheses below are grounded in our own board tests, not in any vendor or GPL source. Attempt
+47 ruled out: the DOUTU temp-count field position (35), `phas.i` temps4 (36), the host init-regs we
+tried (37), instruction pairing to 8 nops (38), the limm value-field layout (30), `[moe]`/offset
+scaling (27-29), the `EDMPROTECT` data-master field 0-3 for the store fault (45), the 2f `DOUTA`
+form (43), the pds3 slot layout (46-47), and st-from-output vs temp-store (46). The hypotheses here
+are not covered by any of those.
+
+Ordered cheapest first. "Cheap" = kernel-side, no new image; "medium" = one new probe image.
+
+- **H-A — the store target page's `EDMPROTECT` state (cheap; may need no run).** Attempt 45 showed a
+  task store to an `EDMPROTECT` page (PTE/PDE b4) **faults**; gate 3 (46-47) showed a store to the
+  data arena **commits to neither arena** and `pa0` is in the data arena so it is "not misplaced."
+  Open question to the kernel session: was b4 actually **clear** on the exact page the 46/47 store
+  targeted? If every page we stored to had b4 set, "stores never commit" is really "every page was
+  EDM-protected." Cheap confirm: re-run `stout` to a page with b4 explicitly clear and writable to
+  all masters. Distinguishes "no store path at all" from "always-protected."
+- **H-B — the task store is held in a GPU cache, unflushed when the host scans (cheap).** Our
+  `stout` probe does `st; idf; wdf; loop`, then the host scans DRAM after an `rmb`. The store may
+  sit in a GPU-side cache that the task's own `idf/wdf` does not drain all the way to DRAM. Cheap
+  confirm: after the store task, have the **host** do a BIF cache invalidate (and read the
+  `EVENT_STATUS2` cache-invalidate-complete bit) **before** the DRAM scan. If the value then
+  appears, stores do commit and the gate is a flush, not a missing write context.
+- **H-C — the launch must open a write window (medium).** Gate 1/2: ALU writes to **outputs**
+  retire, a **standalone** `DOUTA` writes a `pa` that persists, but temporaries and the `pa` bank
+  written by the task itself do not retire (attempt 47). Hypothesis: the task launch has to declare
+  a non-zero `pa`/secondary-attribute **allocation** (the write window the restructure doc's gate 2
+  is about), separate from the temp **count** already ruled out in attempt 35; without it the
+  temp/`pa` writes alias nowhere while the output/emit path still works. Test: a probe that declares
+  a non-zero secondary-attribute allocation in the launch, then an ALU write to a temp and to `pa`,
+  readout via the `aluwr` fault path.
+- **H-D — the data-master type gates the whole write context, not just the store fault (medium).**
+  Attempt 45 swept `USE_CODE_BASE`'s data-master field only for the **store fault**. Re-check
+  **temp retirement** across that field: launch `aluwr`-to-temp under each DM value. If one makes
+  temp writes retire, the task was running as the wrong data master, which would also explain why
+  it is not the `EDMPROTECT` requestor.
+
+Recommend **H-A and H-B first** (cheap, no image, one board slot), then **H-C**. Report each
+result to the coordinator before any long run. The analysis-side capture remains the definitive
+answer; these narrow it and may unblock sooner.
