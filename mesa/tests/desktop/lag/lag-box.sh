@@ -176,8 +176,8 @@ sampler=$!
 PERF=
 for p in /usr/bin/perf /usr/sbin/perf; do [ -x "$R$p" ] && PERF="chroot $R $p" && break; done
 [ -z "$PERF" ] && command -v perf > /dev/null && PERF=perf
-# PERFARGS: perf record's options instead of -a -g -F 499 (cycles:P, PEBS on
-# Atom); e.g. "-a -g -e cpu-clock -F 499" for hrtimer sampling
+# PERFARGS: perf record's options, cpu-clock by default (cycles:P, PEBS,
+# corrupts memory on Bonnell Atoms)
 [ -n "${NOPERF:-}" ] && PERF=
 [ -z "$PERF" ] && echo "no perf in the root or on the box: no CPU profiles" >> "$OUT/notes.txt"
 
@@ -186,7 +186,7 @@ for w in "$@"; do
 	fl0=$(wc -l < /tmp/lag-xfwm4.err)
 	perfpid=
 	if [ -n "$PERF" ] && [ $w != idle ]; then
-		$PERF record ${PERFARGS:--a -g -F 499} -o /tmp/lag-perf-$w.data > /tmp/lag-perf-$w.log 2>&1 &
+		$PERF record ${PERFARGS:--a -g -e cpu-clock -F 499} -o /tmp/lag-perf-$w.data > /tmp/lag-perf-$w.log 2>&1 &
 		perfpid=$!
 		sleep 1
 	fi
