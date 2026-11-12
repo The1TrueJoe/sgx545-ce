@@ -899,6 +899,14 @@ pack_int_outputs(nir_shader *nir, unsigned kind)
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
    nir_variable *out = NULL;
 
+   NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries, impl,
+            nir_var_shader_out);
+   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+   NIR_PASS(_, nir, nir_split_var_copies);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+   NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+   /* after the lowering: it makes the variable that was the output the
+    * temporary and the output a new variable */
    nir_foreach_shader_out_variable (var, nir) {
       if (var->data.location == FRAG_RESULT_COLOR ||
           var->data.location == FRAG_RESULT_DATA0)
@@ -906,12 +914,6 @@ pack_int_outputs(nir_shader *nir, unsigned kind)
    }
    if (!out || !glsl_type_is_32bit(glsl_without_array(out->type)))
       return false;
-   NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries, impl,
-            nir_var_shader_out);
-   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
-   NIR_PASS(_, nir, nir_split_var_copies);
-   NIR_PASS(_, nir, nir_lower_var_copies);
-   NIR_PASS(_, nir, nir_lower_vars_to_ssa);
 
    nir_builder b = nir_builder_create(impl);
    bool progress = false;
