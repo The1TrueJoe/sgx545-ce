@@ -23,8 +23,10 @@
 #include <linux/dma-fence-chain.h>
 #include <linux/dma-resv.h>
 #include <linux/module.h>
+#include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
@@ -206,12 +208,12 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	mutex_unlock(&sdev->done_lock);
 
 	if (reap || !list_empty_careful(&sdev->inval_waits))
-		queue_work(system_dfl_wq, &sdev->reap_work);
+		queue_work(sdev->wq, &sdev->reap_work);
 	if (more && pvrsgx_job_fault_check(sdev))
 		return;
 	/* With a count the interrupt does it, and the poll is only a backstop. */
 	if (more)
-		mod_delayed_work(system_dfl_wq, &sdev->poll_work,
+		mod_delayed_work(sdev->wq, &sdev->poll_work,
 				 sdev->fw.features & PVRSGX_UKFW_DONE_SEQ ? HZ / 10 : 1);
 }
 
@@ -301,7 +303,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_add_tail(&job->node, &sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
-	mod_delayed_work(system_dfl_wq, &sdev->poll_work, 0);
+	mod_delayed_work(sdev->wq, &sdev->poll_work, 0);
 	drm_dev_exit(idx);
 	return fence;
 
@@ -409,6 +411,24 @@ static const struct drm_sched_backend_ops pvrsgx_sched_ops = {
 	.free_job = pvrsgx_free_job,
 };
 
+/*
+ * Teach lockdep that the locks run_job, the completion and the timeout take
+ * are taken while fences are pending, which reclaim can wait for: an
+ * allocation that can reclaim, made under any of them, is then reported at
+ * once instead of when memory runs low.
+ */
+static void lockdep_prime(struct pvrsgx_device *sdev)
+{
+	if (!IS_ENABLED(CONFIG_LOCKDEP))
+		return;
+	fs_reclaim_acquire(GFP_KERNEL);
+	might_lock(&sdev->reset_lock);
+	might_lock(&sdev->done_lock);
+	might_lock(&sdev->ccb_lock);
+	might_lock(&sdev->kobj_lock);
+	fs_reclaim_release(GFP_KERNEL);
+}
+
 int pvrsgx_job_init(struct pvrsgx_device *sdev)
 {
 	const struct drm_sched_init_args args = {
@@ -420,14 +440,25 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 		.dev = sdev->base.dev,
 	};
 
+	int err;
+
 	spin_lock_init(&sdev->fence_lock);
 	mutex_init(&sdev->reset_lock);
 	INIT_LIST_HEAD(&sdev->active);
 	INIT_DELAYED_WORK(&sdev->poll_work, poll_work_fn);
 	INIT_WORK(&sdev->reap_work, reap_work_fn);
+	sdev->wq = alloc_workqueue("powervr_sgx", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+	if (!sdev->wq)
+		return -ENOMEM;
+	lockdep_prime(sdev);
 	pvrsgx_coredump_init(sdev);
 	sdev->fence_context = dma_fence_context_alloc(1);
-	return drm_sched_init(&sdev->sched, &args);
+	err = drm_sched_init(&sdev->sched, &args);
+	if (err) {
+		pvrsgx_coredump_fini(sdev);
+		destroy_workqueue(sdev->wq);
+	}
+	return err;
 }
 
 /*
@@ -503,6 +534,7 @@ void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 	drm_sched_fini(&sdev->sched);
 	cancel_delayed_work_sync(&sdev->poll_work);
 	cancel_work_sync(&sdev->reap_work);
+	destroy_workqueue(sdev->wq);
 	pvrsgx_coredump_fini(sdev);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = NULL;
