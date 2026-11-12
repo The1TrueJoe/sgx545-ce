@@ -556,11 +556,11 @@ diff -ruN powervr_sgx.orig/pvrsgx_pds.c powervr_sgx/pvrsgx_pds.c
 diff -ruN powervr_sgx.orig/pvrsgx_pds.h powervr_sgx/pvrsgx_pds.h
 --- a/drm/powervr_sgx/pvrsgx_pds.h	2026-11-11 02:56:17
 +++ b/drm/powervr_sgx/pvrsgx_pds.h	2026-11-11 02:56:18
-@@ -15,8 +15,16 @@
+@@ -15,9 +15,16 @@
   */
  #define PDS_D0(n)		(n)
  #define PDS_D1(n)		(0x40 + (n))
-+#define PDS_IN(n)		(0x80 + (n))
+ #define PDS_IN(n)		(0x80 + (n))
 +#define PDS_T0		PDS_D0(0x30)
 +#define PDS_T1		PDS_D1(0x30)
 +#define PDS_CC_P0		0
@@ -573,7 +573,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_pds.h powervr_sgx/pvrsgx_pds.h
  
  /* A PDS program being assembled into a firmware buffer. */
  struct pvrsgx_pds {
-@@ -29,6 +37,10 @@
+@@ -30,6 +37,10 @@
  void pvrsgx_pds_ds(struct pvrsgx_pds *p, unsigned int r, u32 v);
  void pvrsgx_pds_movs(struct pvrsgx_pds *p, unsigned int dest, unsigned int a,
  		     unsigned int b, unsigned int c, unsigned int d);
