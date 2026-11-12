@@ -574,7 +574,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
 
-	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
+	/* The bring-up sweep's changes (sweep_at() below); none in a normal start. */
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DATA0_2)
 		data0 = 2;
 	if (sdev->sweep_data0)
@@ -799,13 +799,24 @@ struct sweep_variant {
 	u8 dest, cc, data0, data1, prog, a68_low;
 };
 
-static const struct sweep_variant sweep[] = {
-	{ 0 },
-	{ .prog = 1 }, { .prog = 2 },
-	{ .prog = 3, .data0 = 0 + 1 },
-	{ .prog = 1, .a68_low = 0x1 }, { .prog = 1, .a68_low = 0x4 },
-	{ .prog = 1, .a68_low = 0xf },
-};
+/* Programs A, C and D under each 0x0a70, smallest first: is it the length? */
+static const u8 sweep_lens[] = { 1, 2, 3, 4, 6, 8, 12, 16, 20, 32, 64 };
+static const struct { u8 prog, data0; } sweep_progs[] = { { 1, 0 }, { 2, 0 }, { 3, 0 + 1 } };
+
+#define SWEEP_COUNT	(1 + ARRAY_SIZE(sweep_progs) * ARRAY_SIZE(sweep_lens))
+
+/* Variant v: 0 the baseline, then each program under each length. */
+static struct sweep_variant sweep_at(unsigned int v)
+{
+	struct sweep_variant sv = {};
+
+	if (v--) {
+		sv.prog = sweep_progs[v / ARRAY_SIZE(sweep_lens)].prog;
+		sv.data0 = sweep_progs[v / ARRAY_SIZE(sweep_lens)].data0;
+		sv.data1 = sweep_lens[v % ARRAY_SIZE(sweep_lens)] + 1;
+	}
+	return sv;
+}
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
@@ -850,8 +861,29 @@ static bool ladder_seen(struct pvrsgx_device *sdev)
 	       READ_ONCE(t[0x28]) == LADDER_MARKER || READ_ONCE(t[0x2a]);
 }
 
-/* Poll for 100 ms, logging PDS_PC_BASE every 10 ms: where the PDS is. */
-static bool ladder_ran(struct pvrsgx_device *sdev, const char *name)
+/*
+ * Whether the PDS sits on one row of the event program past the one it
+ * starts on, in the last five samples: a branch loop that executes.
+ * PDS_PC_BASE is in dwords, the start row event data 0 rows in.
+ */
+static bool pds_held(struct pvrsgx_device *sdev, const u32 *pc, unsigned int n)
+{
+	u32 start = (event_pds_addr(sdev) & ~0xfu) / 4 +
+		    4 * (sdev->sweep_data0 ? sdev->sweep_data0 - 1 : 1);
+
+	if (n < 5 || pc[n - 1] <= start || pc[n - 1] > start + 16)
+		return false;
+	for (unsigned int i = n - 5; i < n - 1; i++)
+		if (pc[i] != pc[n - 1])
+			return false;
+	return true;
+}
+
+/*
+ * Poll for 100 ms, logging PDS_PC_BASE every 10 ms: where the PDS is.
+ * 1 if the ladder ran, -EBUSY if the PDS is held in a loop, else 0.
+ */
+static int ladder_ran(struct pvrsgx_device *sdev, const char *name)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	u32 pc[10] = {};
@@ -868,7 +900,9 @@ static bool ladder_ran(struct pvrsgx_device *sdev, const char *name)
 		 "sweep %s: PDS PC %x %x %x %x %x %x %x %x %x %x, timer 0x%08x\n",
 		 name, pc[0], pc[1], pc[2], pc[3], pc[4], pc[5], pc[6], pc[7], pc[8], pc[9],
 		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
-	return seen;
+	if (seen)
+		return 1;
+	return cr->pds_pc_base && pds_held(sdev, pc, i) ? -EBUSY : 0;
 }
 
 /*
@@ -939,10 +973,10 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	char when[64];
 	u32 clk;
-	int err;
+	int err, ran;
 
-	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
-		const struct sweep_variant *sv = &sweep[v];
+	for (unsigned int v = 0; v < SWEEP_COUNT; v++) {
+		const struct sweep_variant var = sweep_at(v), *sv = &var;
 		char name[40];
 
 		if ((sv->flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
@@ -980,9 +1014,17 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			init_kick(sdev);
 		}
 		snprintf(when, sizeof(when), "variant %u (%s)", v, name);
-		if (ladder_ran(sdev, when)) {
+		ran = ladder_ran(sdev, when);
+		if (ran > 0) {
 			drm_info(&sdev->base, "sweep: %s runs the diagnostic ladder\n", when);
 			return 0;
+		}
+		if (ran < 0) {
+			/* The SGX530 has no PDS reset: later variants would run after it. */
+			bringup_diag(sdev, when);
+			drm_info(&sdev->base, "sweep: %s holds the PDS in its loop; stopping\n",
+				 when);
+			return -ETIMEDOUT;
 		}
 		bringup_diag(sdev, when);
 	}
