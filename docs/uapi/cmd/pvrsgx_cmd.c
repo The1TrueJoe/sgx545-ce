@@ -2,8 +2,8 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * Client commands: the copy from userspace and the per-field checks
- * (docs/uapi/rev3-commands.md sections 3 and 4). The per-command cross-field
+ * Client commands: the copy from userspace and the per-field checks, from
+ * the per-core tables in pvrsgx_cmd_defs.c. The per-command cross-field
  * rules are in pvrsgx_cmd_checks.c.
  */
 

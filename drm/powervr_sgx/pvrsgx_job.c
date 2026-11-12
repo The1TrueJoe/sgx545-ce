@@ -22,6 +22,7 @@
 #include <linux/capability.h>
 #include <linux/dma-fence-chain.h>
 #include <linux/dma-resv.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
@@ -75,6 +76,32 @@ static const struct dma_fence_ops pvrsgx_fence_ops = {
 	.get_timeline_name = fence_timeline_name,
 };
 
+struct pvrsgx_usage *pvrsgx_usage_new(void)
+{
+	struct pvrsgx_usage *u = kzalloc_obj(*u);
+
+	if (u)
+		kref_init(&u->ref);
+	return u;
+}
+
+struct pvrsgx_usage *pvrsgx_usage_get(struct pvrsgx_usage *u)
+{
+	kref_get(&u->ref);
+	return u;
+}
+
+static void usage_release(struct kref *ref)
+{
+	kfree(container_of(ref, struct pvrsgx_usage, ref));
+}
+
+void pvrsgx_usage_put(struct pvrsgx_usage *u)
+{
+	if (u)
+		kref_put(&u->ref, usage_release);
+}
+
 static void context_release(struct kref *ref)
 {
 	struct pvrsgx_context *ctx = container_of(ref, struct pvrsgx_context, ref);
@@ -91,6 +118,7 @@ static void context_release(struct kref *ref)
 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
 	mutex_unlock(&sdev->ccb_lock);
 	pvrsgx_vm_put(ctx->vm);
+	pvrsgx_usage_put(ctx->usage);
 	kfree(ctx);
 }
 
@@ -200,6 +228,8 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &finished, node) {
 		list_del_init(&job->node);
+		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER)
+			atomic64_add(ktime_get_ns() - job->start_ns, &job->ctx->usage->render_ns);
 		trace_pvrsgx_job_done(job->type, job->hw_fence->seqno);
 		dma_fence_signal_locked(job->hw_fence);
 	}
@@ -297,6 +327,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		goto fail_exit;
 	}
 
+	job->start_ns = ktime_get_ns();
 	trace_pvrsgx_kick(job->type, job->ccb_seq, fence->seqno);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = dma_fence_get(fence);
@@ -380,6 +411,8 @@ fail:
 		/* Lost: the cores stay in reset, and run_job fails every job. */
 		pvrsgx_fw_halt(sdev);
 		WRITE_ONCE(sdev->lost, true);
+		/* DMA is off and the fences are signaled: tell userspace to rebind. */
+		drm_dev_wedged_event(&sdev->base, DRM_WEDGE_RECOVERY_REBIND, NULL);
 	}
 	drm_dev_exit(idx);
 out:
@@ -590,6 +623,7 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	}
 	ctx->sdev = sdev;
 	ctx->type = args->type;
+	ctx->usage = pvrsgx_usage_get(sfile->usage);
 	kref_init(&ctx->ref);
 	err = ctx->type == DRM_POWERVR_SGX_CTX_TYPE_RENDER ?
 	      pvrsgx_render_ctx_init(sdev, ctx, args->param_buffer_pages) :

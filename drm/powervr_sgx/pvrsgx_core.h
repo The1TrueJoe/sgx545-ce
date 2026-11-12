@@ -17,7 +17,7 @@ struct pvrsgx_cmd_core;
 #define PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS	BIT(0)
 /* EUR_CR_EVENT_KICK1..3 next to EUR_CR_EVENT_KICK. */
 #define PVRSGX_FEATURE_MULTI_EVENT_KICK		BIT(1)
-/* The PDS data store interleaves DS0 and DS1 two words at a time (docs/PDS.md). */
+/* The PDS data store interleaves DS0 and DS1 two words at a time. */
 #define PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS	BIT(2)
 /*
  * The EDM reaches PDS code anywhere. Without it, the kernel code and PDS
@@ -42,7 +42,7 @@ struct pvrsgx_va_range {
 };
 
 /*
- * struct pvrsgx_heap_layout - Where every heap sits (docs/UAPI.md section 5)
+ * struct pvrsgx_heap_layout - Where every heap sits
  *
  * Device-wide, the same in every VM. The kernel heaps (kernel code, kernel
  * data, sync) are whole 4 MiB directory entries.

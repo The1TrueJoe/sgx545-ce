@@ -2,9 +2,8 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * Client commands (docs/uapi/rev3-commands.md): copied from userspace with
- * their extensions, then checked field by field from the tables
- * docs/uapi/gen_cmd.py writes per core (pvrsgx_cmd_defs.c).
+ * Client commands: copied from userspace with their extensions, then checked
+ * field by field from the per-core tables in pvrsgx_cmd_defs.c.
  */
 
 #ifndef PVRSGX_CMD_H

@@ -24,6 +24,20 @@ struct pvrsgx_vm;
 /**
  * struct pvrsgx_context - A queue of jobs in one VM
  */
+/*
+ * A file's GPU time, for fdinfo. Its contexts hold it too: a job may finish
+ * after its file has closed.
+ */
+struct pvrsgx_usage {
+	struct kref ref;
+	/** @render_ns: Time render jobs of the file spent on the GPU. */
+	atomic64_t render_ns;
+};
+
+struct pvrsgx_usage *pvrsgx_usage_new(void);
+struct pvrsgx_usage *pvrsgx_usage_get(struct pvrsgx_usage *u);
+void pvrsgx_usage_put(struct pvrsgx_usage *u);
+
 struct pvrsgx_context {
 	/** @ref: Held by the handle and by each job. */
 	struct kref ref;
@@ -31,6 +45,8 @@ struct pvrsgx_context {
 	struct pvrsgx_device *sdev;
 	/** @vm: The VM its jobs run in. */
 	struct pvrsgx_vm *vm;
+	/** @usage: Its file's GPU time. */
+	struct pvrsgx_usage *usage;
 	/** @entity: Its scheduler queue. */
 	struct drm_sched_entity entity;
 	/** @type: enum drm_powervr_sgx_ctx_type. */
@@ -77,6 +93,8 @@ struct pvrsgx_job {
 	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initialises it. */
 	struct dma_fence *hw_fence_mem;
 	/** @ccb_seq: Kernel CCB command that carries the job. */
+	/** @start_ns: When run_job sent it to the microkernel. */
+	u64 start_ns;
 	u64 ccb_seq;
 	/** @node: In pvrsgx_device.active while on the GPU. */
 	struct list_head node;

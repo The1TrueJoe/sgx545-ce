@@ -55,7 +55,7 @@ static const struct pvrsgx_core_regs sgx545_regs = {
 	.edm_task_reg1 = SGX545_CR_EDM_TASK_REG1,
 };
 
-/* docs/UAPI.md section 5: each heap runs to the next one's base. */
+/* Each heap runs to the next one's base. */
 static const struct pvrsgx_heap_layout sgx545_heaps = {
 	.params_3d = { PVRSGX_HEAP_3D_PARAMS, PVRSGX_HEAP_TA_DATA },
 	.ta_data = { PVRSGX_HEAP_TA_DATA, PVRSGX_HEAP_SYNC },
@@ -87,7 +87,7 @@ static const struct pvrsgx_core_init_reg sgx545_init_regs[] = {
 };
 
 /*
- * SGX530 (TI OMAP3630), from sgx530defs.h (docs/porting/cores/sgx530.md).
+ * SGX530 (TI OMAP3630), from the GPL sgx530defs.h.
  * It has no CLKGATECTL2, EVENT_KICK2 or BIF bank registers. The event PDS
  * registers aren't in the GPL header: the SGX545's offsets, a guess here,
  * checked by reading back before the first kick.
@@ -169,7 +169,7 @@ static const struct pvrsgx_core_family families[] = {
 		/* One memory context, one kick (BRN_22934), 28-bit addresses. */
 		.name = "SGX530",
 		.core = 530,
-		/* Read on our OMAP3630 test board (docs/porting/cores/sgx530.md). */
+		/* Read on an OMAP3630 board. */
 		.core_id = 0x01120000,
 		.regs = &sgx530_regs,
 		.isa = PVRSGX_ISA_SGX545,

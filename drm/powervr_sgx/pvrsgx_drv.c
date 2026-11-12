@@ -168,6 +168,11 @@ static int pvrsgx_open(struct drm_device *drm, struct drm_file *file)
 
 	if (!sfile)
 		return -ENOMEM;
+	sfile->usage = pvrsgx_usage_new();
+	if (!sfile->usage) {
+		kfree(sfile);
+		return -ENOMEM;
+	}
 	sfile->sdev = to_pvrsgx_device(drm);
 	xa_init_flags(&sfile->vms, XA_FLAGS_ALLOC1);
 	xa_init_flags(&sfile->contexts, XA_FLAGS_ALLOC1);
@@ -186,6 +191,7 @@ static void pvrsgx_postclose(struct drm_device *drm, struct drm_file *file)
 	xa_destroy(&sfile->rtds);
 	xa_destroy(&sfile->contexts);
 	xa_destroy(&sfile->vms);
+	pvrsgx_usage_put(sfile->usage);
 	kfree(sfile);
 	file->driver_priv = NULL;
 }
@@ -208,7 +214,21 @@ static const struct drm_ioctl_desc pvrsgx_ioctls[] = {
 	IOCTL(UPLOAD_CODE, pvrsgx_ioctl_upload_code),
 };
 
-DEFINE_DRM_GEM_FOPS(pvrsgx_fops);
+/* drm-usage-stats.rst: the file's render time and its objects' memory. */
+static void pvrsgx_show_fdinfo(struct drm_printer *p, struct drm_file *file)
+{
+	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
+
+	drm_printf(p, "drm-engine-render:\t%llu ns\n",
+		   (u64)atomic64_read(&sfile->usage->render_ns));
+	drm_show_memory_stats(p, file);
+}
+
+static const struct file_operations pvrsgx_fops = {
+	.owner = THIS_MODULE,
+	DRM_GEM_FOPS,
+	.show_fdinfo = drm_show_fdinfo,
+};
 
 static const struct drm_driver pvrsgx_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_RENDER | DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
@@ -217,6 +237,7 @@ static const struct drm_driver pvrsgx_drm_driver = {
 	.ioctls = pvrsgx_ioctls,
 	.num_ioctls = ARRAY_SIZE(pvrsgx_ioctls),
 	.fops = &pvrsgx_fops,
+	.show_fdinfo = pvrsgx_show_fdinfo,
 #if defined(CONFIG_DEBUG_FS)
 	.debugfs_init = pvrsgx_debugfs_init,
 #endif

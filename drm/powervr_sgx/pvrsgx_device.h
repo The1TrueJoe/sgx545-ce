@@ -271,6 +271,8 @@ struct pvrsgx_file {
 	struct xarray contexts;
 	/** @rtds: RT datasets by handle. */
 	struct xarray rtds;
+	/** @usage: GPU time, for fdinfo. */
+	struct pvrsgx_usage *usage;
 };
 
 static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)
