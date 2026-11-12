@@ -132,7 +132,7 @@ static void inval_dc(struct pvrsgx_device *sdev)
  * The reset sequence for a single-core SGX5xx: reset everything, clear the directory
  * lists, take the cores out of reset with list 0 on a scratch directory that
  * absorbs faults left over from before, then give the microkernel its own
- * directory on list 15.
+ * directory on the last list (list 15 on the SGX545).
  */
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 {
@@ -140,8 +140,8 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	reset_sleep(sdev);
 
 	sgx_wr(sdev, SGX_CR_BIF_CTRL, 0);
-	sgx_wr(sdev, SGX_CR_BIF_BANK_SET, 0);
-	sgx_wr(sdev, SGX_CR_BIF_BANK0, 0);
+	sgx_wr_opt(sdev, sdev->cr->bif_bank_set, 0);
+	sgx_wr_opt(sdev, sdev->cr->bif_bank0, 0);
 	for (unsigned int i = 0; i < sdev->family->num_dir_lists; i++)
 		sgx_wr(sdev, sgx_cr_bif_dir_list_base(i), 0);
 
@@ -158,7 +158,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 
 			if (!(stat & sdev->cr->bif_int_stat_fault_req))
 				break;
-			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK;
+			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & sdev->cr->bif_fault_addr;
 			drm_warn(&sdev->base, "reset: page fault 0x%x at 0x%08x\n", stat, addr);
 			soft_reset(sdev, true);
 			pvrsgx_mmu_map_pages(sdev->reset_mmu, addr, &sdev->reset_page, 1, 0);
@@ -177,10 +177,12 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		reset_sleep(sdev);
 	}
 
-	sgx_wr(sdev, SGX_CR_BIF_BANK0,
-	       FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, pvrsgx_dirlist_edm(sdev)));
-	sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
-	       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	sgx_wr_opt(sdev, sdev->cr->bif_bank0,
+		   FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, pvrsgx_dirlist_edm(sdev)));
+	/* With one directory list the EDM's is list 0, set below. */
+	if (pvrsgx_dirlist_edm(sdev))
+		sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
+		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
 	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
 	       pvrsgx_mmu_pd_addr(sdev->idle_mmu));
 	inval_dc(sdev);

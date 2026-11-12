@@ -288,6 +288,13 @@ static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 	iowrite32(val, sdev->regs + reg);
 }
 
+/* A register from the core table: 0 is one the core lacks, never written. */
+static inline void sgx_wr_opt(struct pvrsgx_device *sdev, u32 reg, u32 val)
+{
+	if (reg)
+		sgx_wr(sdev, reg, val);
+}
+
 /*
  * The microkernel translates through the last directory list; TA, 3D and
  * host requests through list 0, which the microkernel points at the job's
