@@ -953,17 +953,19 @@ word 0 alone suggests. Candidates: a `USE_CODE_BASE` the SGX530 EDM does use (at
 and 19 say the pixel/vertex ones are ignored, but index 15 at a different encoding is
 untested here), or `PDS_PC_BASE`/another base the EDM adds.
 
-**Attempt 22, in one load, no alias:**
-1. **Repeatability** of the attempt-21 selector cells (the kernel session's 14 variants:
-   temps alone, temps|0xf, temps|b27, temps|0xf|b27, and the single selector bits), to
-   confirm the flat +0x8000 vs +0 split.
-2. **A real segment, if word 0 has one:** the computed words for segment 40 (offset
-   0x01400000): 0x06000008 (nibble 8, high 2 in b19-b20), 0x06000007 (the SGX545
+**Attempt 22 (ran as kernel b49aaf7c):** the repeatability sweep of the attempt-21 selector
+cells (temps alone, temps|0xf, temps|b27, temps|0xf|b27, and the single selector bits), to
+confirm the flat +0x8000 vs +0 split.
+
+**Attempt 23, in one load, no alias, on top of attempt 22:**
+1. **A real segment, if word 0 has one:** the computed words for segment 40 (offset
+   0x01400000): 0x06100008 (nibble 8, high 2 in b19-b20), 0x06000007 (the SGX545
    `(seg+15)&15`), 0x06f80000-style. A fault at or near 0x0ec00000 names the fix.
-3. **Does the EDM use `USE_CODE_BASE_15`?** With the normal word, set `USE_CODE_BASE_15` to
-   three values (0, kernel code >> 7, 0x08000000 >> 7) and read where the fetch faults. If
-   it moves, the EDM uses the register and the earlier setup was the bug; if it stays at
-   `PDS_EXEC_BASE`, the EDM ignores it.
+2. **Does the EDM use `USE_CODE_BASE_15`?** With the normal word, set `USE_CODE_BASE_15` to
+   three values (0, kernel code >> 7 = 0x1d8000, 0x08000000 >> 7 = 0x100000) and read where
+   the fetch faults. If it moves, the EDM uses the register and the earlier setup was the
+   bug; if it stays at `PDS_EXEC_BASE`, the EDM ignores it. This is the likeliest real
+   answer, since the DDK reaches +0x01400000.
 
 **The fix depends on the result:**
 - A word-0 segment reaches 0x0ec00000: set the EDM DOUTU word 0 to it, SGX530 only, heap
