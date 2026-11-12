@@ -13,7 +13,8 @@
  *           texelFetch into an RGBA8 framebuffer as bytes (an R32 value's
  *           four bytes; an 8-bit channel's byte): every texel against what
  *           was uploaded, the missing channels as (0, 0, 1)
- *   render  a 16x8 integer colour buffer (RGBA8UI, RG8UI, R8UI, R32UI)
+ *   render  a 16x8 integer colour buffer (RGBA8UI, RG8UI, R8UI, R32UI,
+ *           RG32UI, RGBA32UI: the last two a pass a channel)
  *           cleared with glClearColorIuiEXT, then a draw over its left half
  *           writing values made from the pixel's position; read back with
  *           GL_RGBA_INTEGER: the left half the draw's, the right the clear's
@@ -229,6 +230,8 @@ sample_case(const struct sfmt *f)
    glUniform1i_(glGetUniformLocation_(p, "t"), 0);
    /* a 32-bit format: one pass a channel (its word's four bytes) */
    unsigned passes = f->bytes == 4 ? f->comps : 1, ok = 0;
+   char map[H][W + 1];
+   memset(map, 0, sizeof(map));
    for (unsigned ch = 0; ch < passes; ch++) {
       if (f->bytes == 4)
          glUniform1i_(glGetUniformLocation_(p, "c"), ch);
@@ -245,7 +248,10 @@ sample_case(const struct sfmt *f)
             for (unsigned c = 0; c < 4; c++)
                want[c] = c < f->comps ? (uint8_t)pattern(i, c) : c == 3 ? 1 : 0;
          }
-         ok += !memcmp(px + 4 * i, want, 4);
+         int good = !memcmp(px + 4 * i, want, 4);
+         ok += good;
+         if (!ch)
+            map[i / W][i % W] = good ? '.' : 'x';
       }
    }
    GLenum e = glGetError_();
@@ -253,6 +259,9 @@ sample_case(const struct sfmt *f)
           ok == W * H * passes && !e && !e0 ? "PASS" : "FAIL", f->name, ok,
           W * H * passes, px[4], px[5], px[6], px[7], e0, e);
    failures += !(ok == W * H * passes && !e && !e0);
+   if (ok != W * H * passes)
+      for (int y = H - 1; y >= 0; y--)
+         printf("    y%u %s\n", y, map[y]);
    glBindFramebuffer_(GL_FRAMEBUFFER, 0);
    glDeleteFramebuffers_(1, &fb);
    glDeleteTextures_(1, &tex);
@@ -263,7 +272,8 @@ struct rfmt {
    const char *name;
    GLenum ifmt, fmt, type;
    unsigned comps;
-   int r32;
+   int r32;  /* R32UI */
+   int wide; /* RG32UI / RGBA32UI: a pass a channel into planes */
 };
 
 static void
@@ -271,9 +281,16 @@ render_case(const struct rfmt *f)
 {
    static const GLuint clear[4] = {0x11, 0x22, 0x33, 0x44};
    static const uint32_t clear32 = 0xc0ffee42u;
+   static const GLuint clearw[4] = {0x01020304u, 0xa0b0c0d0u, 5u, 0xffffffffu};
    GLuint out[W * H * 4];
    const char *fs =
-      f->r32 ? "#version 130\n"
+      f->wide ? "#version 130\n"
+                "out uvec4 o;\n"
+                "void main() {\n"
+                "   uvec2 q = uvec2(gl_FragCoord.xy);\n"
+                "   o = uvec4(0x80000000u | q.x, q.y + 100000u, 7u, 0xdeadbeefu);\n"
+                "}\n"
+      : f->r32 ? "#version 130\n"
                "out uint o;\n"
                "void main() {\n"
                "   uvec2 q = uvec2(gl_FragCoord.xy);\n"
@@ -301,7 +318,9 @@ render_case(const struct rfmt *f)
       goto out;
    }
    glViewport_(0, 0, W, H);
-   if (f->r32)
+   if (f->wide)
+      glClearColorIuiEXT_(clearw[0], clearw[1], clearw[2], clearw[3]);
+   else if (f->r32)
       glClearColorIuiEXT_(clear32, 0, 0, 0);
    else
       glClearColorIuiEXT_(clear[0], clear[1], clear[2], clear[3]);
@@ -317,7 +336,12 @@ render_case(const struct rfmt *f)
          GLuint want[4];
          int drawn = x < W / 2;
 
-         if (f->r32) {
+         if (f->wide) {
+            const GLuint d[4] = {0x80000000u | x, y + 100000u, 7u, 0xdeadbeefu};
+            for (unsigned c = 0; c < 4; c++)
+               want[c] = c < f->comps ? (drawn ? d[c] : clearw[c])
+                         : c == 3 ? 1 : 0;
+         } else if (f->r32) {
             want[0] = drawn ? (0x80000000u | x << 16 | y << 4 | 5u) : clear32;
             want[1] = want[2] = 0;
             want[3] = 1;
@@ -443,10 +467,12 @@ main(void)
       {"RGBA32I", GL_RGBA32I, GL_RGBA_INTEGER, GL_INT, 4, 4, 1},
    };
    static const struct rfmt rf[] = {
-      {"RGBA8UI", GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, 4, 0},
-      {"RG8UI", GL_RG8UI, GL_RG_INTEGER, GL_UNSIGNED_BYTE, 2, 0},
-      {"R8UI", GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, 1, 0},
-      {"R32UI", GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, 1, 1},
+      {"RGBA8UI", GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, 4, 0, 0},
+      {"RG8UI", GL_RG8UI, GL_RG_INTEGER, GL_UNSIGNED_BYTE, 2, 0, 0},
+      {"R8UI", GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, 1, 0, 0},
+      {"R32UI", GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, 1, 1, 0},
+      {"RG32UI", GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT, 2, 0, 1},
+      {"RGBA32UI", GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT, 4, 0, 1},
    };
    for (unsigned i = 0; i < sizeof(sf) / sizeof(sf[0]); i++)
       sample_case(&sf[i]);
