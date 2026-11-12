@@ -1220,6 +1220,45 @@ With the sweep, write the SGX530's `limm` value-field layout into ISA.md (C); th
 goes to cleanroom-isa for `sgx.xml` and to the driver for `fw_limm`; then the image builds
 with `ISA_CORE = 530` and gets its own golden. The SGX545 golden is untouched.
 
+## After the thirtieth attempt: ld.a.d's source operand, not limm
+
+Attempt 30 (log 2026-11-12-...) **retracted the limm reading.** The seven `sgx530_limm_b21..b27`
+probes each `limm`ed a different single bit into r5, then `ld.a.d r3, r5, #0`, and **all
+faulted at the same 0x0c004000** — the `limm` value doesn't matter. So `limm` is fine
+(ISA.md retraction, commit 628f2415).
+
+The fault address depends on **which register `ld.a.d` names**, not its contents:
+- `ld.a.d r3, r17, #0` → 0x0fd79000;
+- `ld.a.d r3, r5, #0` → 0x0c004000 (any r5).
+
+So the SGX530 derives `ld.a.d`'s base from the source-operand field (the register number),
+not from the register's contents. The offset doesn't matter either (attempt 29). This is an
+`ld.a.d` source-operand decode difference from the SGX545 (which loads `[contents +
+offset]`).
+
+**Attempt 31: the register-number sweep** (`cores/sgx530_ldreg_r0.py` …). `ld.a.d r3, rN,
+#0` with the register value unused; the fault page is the address the SGX530 derives from
+naming rN. r5 and r17 are known (0x0c004000, 0x0fd79000); these fill in the rest.
+
+| Probe | reg | img sha256 (16) | packaged (16) |
+|---|---|---|---|
+| r0 | 0 | fdf991dfae928e52… | a1f0273a986cfd72… |
+| r1 | 1 | 10c357de7fb026ed… | 9bf16d19208814da… |
+| r2 | 2 | e306298f6590af2b… | 35f83e3a8f747b3a… |
+| r3 | 3 | fcf0c79f98111276… | a9c77fb5bdab5199… |
+| r4 | 4 | de7729ecacc0688a… | 63c98cbec606820d… |
+| r6 | 6 | 375fa4590dc1ec5e… | 45d33975e862cb01… |
+| r8 | 8 | 95ce1938a9843280… | d60bd70036780c14… |
+| r16 | 16 | 9c284028437ded28… | 8576a33a8d1b85ca… |
+| r31 | 31 | ec3ec17493749fef… | 1a46787cacb89952… |
+
+Build each `python3 ukernel/build.py sgx530_ldreg_r<n> …` then mkukfw; all same through
+asm.py and `sgx-asm`. `EVENT_TIMER` 0xa5a = the derived address was mapped (no fault); else
+the fault page is that address. Map reg number → address: a clean linear or bit-placed
+relation reveals how the SGX530 reads the source-operand field (a shifted/narrower register
+field, or the field used as an immediate/address). Then document it C in ISA.md and hand the
+`ld.a.d` operand decode to cleanroom-isa.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
