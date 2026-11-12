@@ -68,6 +68,8 @@ int pvrsgx_cmd_copy(const struct pvrsgx_cmd_def *def, u64 uptr, void *all, u64 *
 	*present = 0;
 	if (!def->supported)
 		return -EOPNOTSUPP;
+	if (!uptr)
+		return -EINVAL;
 	if (get_user(size, (const u32 __user *)src))
 		return -EFAULT;
 	if (size < sizeof(*head) || size > PVRSGX_CMD_MAX_SIZE)

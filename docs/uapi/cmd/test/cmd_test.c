@@ -145,6 +145,7 @@ static void test_render_copy(void)
 	EXPECT_EQ(render(&r), -EINVAL, "head padding");
 	r = good_render();
 
+	EXPECT_EQ(render(NULL), -EINVAL, "no command");
 	shim_fault = &r;
 	EXPECT_EQ(render(&r), -EFAULT, "an unreadable command");
 	shim_fault = NULL;
@@ -305,6 +306,7 @@ static void test_transfer(void)
 	struct pvrsgx_cmd_ctx c = ctx();
 	u64 present;
 
+	EXPECT_EQ(pvrsgx_cmd_copy(def, 0, &all, &present), -EINVAL, "a transfer needs its command");
 	EXPECT_EQ(pvrsgx_cmd_copy(def, UPTR(&t), &all, &present), 0, "a transfer");
 	EXPECT_EQ(pvrsgx_cmd_check(core545, def, &c, &all, present), 0, "a transfer's checks");
 	EXPECT_EQ(pvrsgx_cmd_check_mapped(core545, def, &c, &all, present), 0, "its extents");
