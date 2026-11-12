@@ -467,7 +467,8 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     (`sgxws_begin`). Neither changed this test.
   Not diagnosed further: GPU-side state the driver doesn't log (constants,
   programs, output registers) would need a dump of the job stream.
-- **MRT, a pass a colour buffer** (`SGX_DEBUG=mrt`: four buffers; H1 found a
+- **MRT, a pass a colour buffer** (four buffers by default, `SGX_DEBUG=nomrt`
+  for one; H1 found a
   second PBE emit in one end-of-tile program hangs the GPU). A draw runs once
   for each buffer the shader writes (`gl_FragColor` writes them all), into
   that buffer, with a fragment variant whose output 0 is `FRAG_RESULT_DATA0
@@ -478,8 +479,16 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
   2026-11-12): `sgx_mrt` exact in all four buffers with the near quad kept
   where the two overlap; piglit's draw-buffers list goes from 19 skip to 13
   pass, 6 skip, 0 fail under the option; dEQP, the gate, ms, ff and gl21 with
-  the option off unchanged against run 11. Not yet the default: the
-  baselines with it on still to run.
+  the option off unchanged against run 11. Run 19 (2026-11-12), every list
+  with four buffers, against run 18 with one: no pass → fail.
+  - dEQP 78 F / 16637 P: `fragdata.invalid_assign_to_1` pass → skip, as it
+    should (it only runs with one draw buffer).
+  - ff `arb_draw_buffers@fbo-mrt-alphatest` and ms
+    `negative-mismatched-samples` skip → pass.
+  - ms `alpha-to-coverage-no-draw-buffer-zero 4` skip → **fail**, not yet
+    looked at (alpha-to-coverage from buffer 0 when the shader doesn't
+    write buffer 0).
+  - zs unchanged; gl21 only fixed-clip-enables (the intermittent above).
 - **Integer textures and render targets** (`SGX_DEBUG=glsl130` only, with
   `MESA_GL_VERSION_OVERRIDE=3.0 MESA_GLSL_VERSION_OVERRIDE=130`;
   `mesa/tests/sgx_inttex`, every case passing, run 14):
