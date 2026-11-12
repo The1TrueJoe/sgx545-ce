@@ -176,6 +176,8 @@ static const struct pvrsgx_core_family families[] = {
 		.heaps = &sgx530_heaps,
 		.quirks = PVRSGX_QUIRK_BRN_28889,
 		.event_pds_guessed = true,
+		/* The image uses r0-r17 and r23 (its manifest's "temps"); 32 may not fit. */
+		.ukernel_temps = 24,
 		.init_regs = sgx530_init_regs,
 		.num_init_regs = ARRAY_SIZE(sgx530_init_regs),
 	},

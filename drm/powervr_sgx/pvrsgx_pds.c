@@ -6,8 +6,14 @@
  * (docs/PDS.md for the encoding, docs/SRVINIT.md for the programs).
  */
 
+#include <linux/bitfield.h>
+#include <linux/math.h>
+
 #include "pvrsgx_fw.h"
 #include "pvrsgx_pds.h"
+
+/* DOUTU word 0: temporary registers, in fours. */
+#define PDS_DOUTU_TEMPS		GENMASK(31, 24)
 
 /*
  * DOUTU word 0 for microkernel code at device address a, in the kernel code
@@ -76,6 +82,11 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 {
 	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, 4);
 	u32 doutu = pvrsgx_doutu(sdev->fw.code.dev_addr, sdev->fw.addr[PVRSGX_FW_UKERNEL] + e);
+
+	/* The temporaries field, in fours (docs/PDS.md, DOUTU word 0). */
+	if (sdev->family->ukernel_temps)
+		doutu = (doutu & ~PDS_DOUTU_TEMPS) |
+			FIELD_PREP(PDS_DOUTU_TEMPS, DIV_ROUND_UP(sdev->family->ukernel_temps, 4));
 
 	if (sdev->family->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS) {
 		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);

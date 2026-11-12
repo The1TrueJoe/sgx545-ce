@@ -76,6 +76,14 @@ static void core_test_table(struct kunit *test)
 	}
 }
 
+/* Only the SGX530 overrides the entry DOUTU's temporaries: 24, so 6 in fours. */
+static void core_test_ukernel_temps(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, pvrsgx_core_family_get(545)->ukernel_temps, 0);
+	KUNIT_EXPECT_EQ(test, pvrsgx_core_family_get(530)->ukernel_temps, 24);
+	KUNIT_EXPECT_EQ(test, DIV_ROUND_UP(pvrsgx_core_family_get(530)->ukernel_temps, 4), 6);
+}
+
 /* The SGX545's layout is the fixed one of docs/UAPI.md section 5; the SGX530's fits 28 bits. */
 static void core_test_heaps(struct kunit *test)
 {
@@ -125,6 +133,7 @@ static struct kunit_case pvrsgx_core_test_cases[] = {
 	KUNIT_CASE(core_test_unknown),
 	KUNIT_CASE(core_test_identify_only),
 	KUNIT_CASE(core_test_heaps),
+	KUNIT_CASE(core_test_ukernel_temps),
 	KUNIT_CASE(core_test_uapi_quirks),
 	KUNIT_CASE(core_test_table),
 	{}
