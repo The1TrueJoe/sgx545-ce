@@ -62,7 +62,7 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		if (!km->pages[i])
 			goto err_free;
 	}
-	if (pvrsgx_pages_wc(km->pages, km->npages))
+	if (pvrsgx_pages_wc(sdev->base.dev, km->pages, km->npages))
 		goto err_free;
 	km->cpu = vmap(km->pages, km->npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 	if (!km->cpu)

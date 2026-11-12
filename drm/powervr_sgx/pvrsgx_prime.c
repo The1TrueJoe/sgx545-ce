@@ -167,6 +167,9 @@ struct drm_gem_object *pvrsgx_prime_import_sg_table(struct drm_device *drm,
 	struct iosys_map map;
 	int err;
 
+	/* An import's flushes are CPU cache flushes of its vmap, which only x86 has here. */
+	if (!IS_ENABLED(CONFIG_X86))
+		return ERR_PTR(-EOPNOTSUPP);
 	err = dma_buf_vmap_unlocked(attach->dmabuf, &map);
 	if (err)
 		return ERR_PTR(err);
