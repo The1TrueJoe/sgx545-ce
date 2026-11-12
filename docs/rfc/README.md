@@ -106,22 +106,28 @@ MAINTAINERS, Kconfig), committed as one patch and run through
 Read through the public mirror at ratatoskr.run (lore and the freedesktop.org
 archive refuse automated reads; not bypassed).
 
-- **"[RFC] drm/gma500: SGX535 render ownership, MMU and failure handling"**
-  (2026-11-01 to 11-08). The reMESA author (SGX535-reMESA, Poulsbo) asks
-  whether SGX535 rendering belongs in gma500 or in a separate driver. Patrik
-  Jakobsson: keep it in gma500 if only gma500 hardware is targeted; a separate
-  driver "may be better" if other devices will be supported. He also asked for
-  short mails, saying he assumed much of the text was AI-written. The author
-  settled on gma500 and plans a small patch, then asked about the SGX544
-  (Clover Trail+), leaning towards a separate driver. That question had no
-  answer when last read.
-  - Ours is the separate, multi-device driver Patrik described. The Poulsbo
-    SGX535 fits it as a core-table entry behind the same gma500 auxiliary
-    device as Cedarview. The cover letter offers that, and asks rather than
-    competes (question 2).
-  - Timing: if the SGX535 render code lands inside gma500 first, there will be
-    two SGX render stacks. Writing to the reMESA author before posting may be
-    the friendlier first step. That's Joseph's call.
+- **Gabriel Gama, "[RFC] drm/gma500: SGX535 render ownership, MMU and failure
+  handling"** (2026-11-01 to 11-08), then **"[RFC PATCH v2 0/6] drm/gma500:
+  prepare GEM and MMU for 3D"** (2026-11-09). Full threads, read from lore's
+  mbox: `sgx545-work/upstream/lore-sgx535-thread-2026-11-12.txt` and
+  `lore-gama-gma500-3d-v2-2026-11-12.mbox`.
+  - Patrik Jakobsson: "If you only plan on targeting gma500 hardware ... keep
+    the SGX535 code in gma500 ... If you plan to target other devices it might
+    be better to separate them". Gama keeps SGX535 (Poulsbo) in gma500. By the
+    same rule ours is separate, because it also runs the CE5300.
+  - His v2 is six gma500 GEM/MMU fixes on 7.4-rc2: the dumb size helper, an
+    unpin underflow, MMU insertion and cache-flush fixes, and KUnit tests. It
+    has no rendering and no uAPI. It fixes the existing Poulsbo MMU code and
+    isn't a Cedarview 3D design, so it doesn't conflict with ours. At the cut,
+    check that our gma500 patches apply on top of his v2 in case it lands
+    first.
+  - Patrik's firmware question in that thread was answered by Gama ("needs
+    none").
+  - Gama's 2026-11-08 question about the SGX544MP2 (Clover Trail+) is
+    unanswered. A core-table entry in this driver is the answer; question 2
+    says so without naming him.
+  - Zimmermann: "Present both drivers at the same time", so the draft Mesa MR
+    goes out with the RFC.
   - Tone: the cover letter is kept short. Its AI disclosure is Joseph's
     paragraph (a placeholder until then); there are no per-patch tags.
 - **drm/imagination** is busy: async VM_BIND with sparse mappings
@@ -157,7 +163,7 @@ archive refuse automated reads; not bypassed).
 
 ## Decisions (2026-11-12, Joseph: "follow convention")
 
-- **Gama's gma500 3D RFC:** not written to first. Question 2 names it in one
+- **Gama's gma500 work:** not written to first. Question 2 names it in one
   neutral line, and gma500 0001 stays as it is.
 - **MAINTAINERS:** `M:` Joseph alone, no `R:` line. The cover letter offers a
   reviewer slot in one sentence.

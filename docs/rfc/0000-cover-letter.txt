@@ -70,9 +70,11 @@ Questions for reviewers
 2. Cedarview and Poulsbo. Their SGX sits behind gma500. A follow-up
    has gma500 publish it as an auxiliary device that this driver binds
    to, as nova-drm and i915's GSC do; on four Cedarview machines it
-   renders with the open firmware. Gabriel Gama's "drm/gma500: prepare
-   GEM and MMU for 3D" [2] takes the other route, 3D inside gma500.
-   Is a separate render driver the right split?
+   renders with the open firmware. Gabriel Gama is preparing gma500's
+   own SGX535 (Poulsbo) code [2]. This driver is separate because it
+   also runs hardware without gma500, the CE5300, and an SGX535 or
+   SGX544 would be one more core-table entry in it. Is that the right
+   split?
 3. Cache maintenance for imports is part of SUBMIT_JOBS, as per-job
    byte ranges, rather than a separate BO_SYNC-style ioctl. Is cache
    work in the submit path acceptable?
