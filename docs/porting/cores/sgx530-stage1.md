@@ -346,6 +346,44 @@ Their values before and after the kick are new facts whatever attempt 5 shows.
 If attempt 5 is still all zero, 0xa6c/0xa70 is next, then DOUTU word 1, then the MOVS
 selects.
 
+## After the sixth attempt: one slot, several variables
+
+Attempt 6 (log 2026-11-11-2154) wrote 0xa68 as an offset from `PDS_EXEC_BASE`
+(0x01404340, read back whole). It ran with the SGX530 DDK's heap layout and the
+24-temporary DOUTU, and still gave all zero: `EVENT_TIMER` 0, `PDS_PC_BASE` and `PDS` 0,
+`USE_CLKS` on, reads 2/0/1/2/2, no fault.
+
+Every remaining suspect is a host-side setting. The image can't split them, because none
+of its code runs until a task starts. One board slot can still test several if the driver
+**sweeps them in one load**. For each variant:
+1. hold the cores in reset and run the normal start sequence;
+2. apply that one change;
+3. kick, and poll `EVENT_TIMER` for about 100 ms;
+4. log the variant and what it read.
+
+The sweep stops at the first variant whose `EVENT_TIMER` leaves 0, and carries on with the
+normal init poll from there. Each variant is one change from attempt 6's baseline:
+
+| # | Change | Why |
+|---|---|---|
+| 0 | none (attempt 6) | the control |
+| 1 | 0xa6c/0xa70 = 2, 6 | if 0xa6c counts data rows and an SGX530 row is 2 dwords (no 2-dword interleave), the entry's 4 data words are 2 rows |
+| 2 | 0xa6c/0xa70 = 4, 6 | 0xa6c in dwords |
+| 3 | 0xa6c/0xa70 = 1, 2 | 0xa70 as the code's dwords (MOVS + HALT), not the whole program's |
+| 4 | 0xa6c/0xa70 = 0, 0 | the reset values: the PDS's defaults, if it has any |
+| 5 | DOUTU word 1 = 0 | 2 comes from the SGX545 microkernel templates; vertex and state tasks have 0 |
+| 6 | the entry's data in the SGX545's 2-dword interleave | the other layout, if both MOVS readings were wrong |
+| 7 | `USE_CODE_BASE_15` DM = 2 | DM 3 for the EDM is the SGX545 vendor's value. The field is 2 bits on every core, and no GPL source numbers the data masters |
+| 8 | `PDS` (0x0abc) b6, `DOUT_TIMEOUT_DISABLE` (K) | if a DOUT the USSE doesn't take times out and the PDS reruns the program, that fits reads that come and go with nothing started |
+| 9 | 0xa58 = 0x7fffffff | the enable value is the SGX545's (G) and leaves out b14 and others. It is unclear whether the kick needs an enabled bit at all. b31 (master interrupt) stays out. |
+
+All of it uses registers the start already writes or the SGX530 header names. Each
+variant costs a soft reset and about 100 ms.
+
+The image stays `sgx530_diag`: the first marker to land, `EVENT_TIMER` 0xa5a, names
+the variant. If none lands, the result still rules out each single change. The next
+step would then be pairs, starting with 1 or 2 combined with 5.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
