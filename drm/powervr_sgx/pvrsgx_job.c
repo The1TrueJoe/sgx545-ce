@@ -843,16 +843,36 @@ static void job_args_fini(struct job_args *ja)
 }
 
 /* The latest earlier job of this submit that signals handle at point, or -1. */
-static int intra_signaller(const struct job_args *prev, u32 nprev, u32 handle, u64 point)
+/*
+ * Whether earlier jobs of this submit signal @handle at @point or past it
+ * (point 0: at all); if so, every one of them that signals @handle joins the
+ * job's waits. That waits for more than a timeline point needs, never less.
+ */
+static bool intra_waits(struct job_args *ja, const struct job_args *prev, u32 nprev,
+			u32 handle, u64 point)
 {
-	for (int k = nprev - 1; k >= 0; k--) {
+	bool covered = false;
+
+	for (u32 k = 0; k < nprev; k++) {
 		for (u32 s = 0; s < prev[k].nsignals; s++) {
 			if (prev[k].signals[s].handle == handle &&
-			    prev[k].signals[s].point == point)
-				return k;
+			    (!point || prev[k].signals[s].point >= point))
+				covered = true;
 		}
 	}
-	return -1;
+	if (!covered)
+		return false;
+	for (u32 k = 0; k < nprev; k++) {
+		bool signals = false, listed = false;
+
+		for (u32 s = 0; s < prev[k].nsignals; s++)
+			signals |= prev[k].signals[s].handle == handle;
+		for (u32 d = 0; d < ja->nintra; d++)
+			listed |= ja->intra[d] == k;
+		if (signals && !listed)
+			ja->intra[ja->nintra++] = k;
+	}
+	return true;
 }
 
 static int job_sync_ops(struct drm_file *file, struct job_args *ja,
@@ -867,7 +887,7 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 		return PTR_ERR_OR_ZERO(ops);
 
 	ja->signals = kvcalloc(arr->count, sizeof(*ja->signals), GFP_KERNEL);
-	ja->intra = kvcalloc(arr->count, sizeof(*ja->intra), GFP_KERNEL);
+	ja->intra = kvcalloc(max(nprev, 1u), sizeof(*ja->intra), GFP_KERNEL);
 	if (!ja->signals || !ja->intra) {
 		err = -ENOMEM;
 		goto out;
@@ -885,11 +905,12 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 		}
 
 		if (!(ops[i].flags & DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL)) {
-			int k = intra_signaller(prev, nprev, ops[i].handle, ops[i].value);
-
-			/* Its fence exists once that job is armed: added then. */
-			if (k >= 0) {
-				ja->intra[ja->nintra++] = k;
+			/* Their fences exist once those jobs are armed: added then. */
+			if (intra_waits(ja, prev, nprev, ops[i].handle, ops[i].value)) {
+				/* And whatever the syncobj holds already, earlier points. */
+				if (drm_syncobj_find_fence(file, ops[i].handle, 0, 0, &fence))
+					continue;
+				err = drm_sched_job_add_dependency(&ja->job->base, fence);
 				continue;
 			}
 			err = drm_syncobj_find_fence(file, ops[i].handle, ops[i].value, 0, &fence);
@@ -1113,3 +1134,7 @@ out_free:
 	kvfree(in);
 	return err;
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_job_test.c"
+#endif
