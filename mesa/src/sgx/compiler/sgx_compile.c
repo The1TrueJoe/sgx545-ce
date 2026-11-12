@@ -339,6 +339,18 @@ emit(struct sgx_ctx *c, struct sgx_ins *i)
    return i;
 }
 
+/* a constant read at a lane (pck .l<n>): the value from that byte up, at
+ * lane 0, since its register (hw constant, literal, limm) is chosen by value */
+static struct sgx_ref
+k_lane(struct sgx_ref r)
+{
+   if (r.lane) {
+      r.n >>= 8 * r.lane;
+      r.lane = 0;
+   }
+   return r;
+}
+
 /* a copy of src (rpt iterations, stepping if src steps) into a new vreg */
 static struct sgx_ref
 materialize(struct sgx_ctx *c, struct sgx_ins *at, struct sgx_ref src,
@@ -350,6 +362,7 @@ materialize(struct sgx_ctx *c, struct sgx_ins *at, struct sgx_ref src,
    if (src.file == SGX_F_K) {
       /* one limm per component (a stepping constant only has 0.0 / 1.0) */
       assert(n == 1 || !src.step);
+      src = k_lane(src);
       m = ins_alloc(c, SGX_INS_ALU, SGX_OP_LIMM);
       m->nops = 2;
       m->op[0] = vref(v, 0);
@@ -406,6 +419,7 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          continue;
       }
       if (r->file == SGX_F_K) {
+         *r = k_lane(*r);
          const struct sgx_slot *s = slot_of(i->form, k);
          int h = hw_const(r->n);
          bool negok = s && s->neg;
