@@ -2234,7 +2234,7 @@ sgx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    /* a planar colour buffer (RG32, RGBA32): the draw once a channel, into
     * its plane; the first pass the colour mask lets through tests and writes
     * depth and stencil, the later ones only test depth (build_state) */
-   /* MRT: a pass a colour buffer the shader writes (SGX_DEBUG=mrt; H1: a
+   /* MRT: a pass a colour buffer the shader writes (H1: a
     * second PBE emit hangs the GPU), the first pass of all testing and
     * writing depth and stencil */
    unsigned targets = MAX2(ctx->framebuffer.nr_cbufs, 1);

@@ -4,7 +4,7 @@
  */
 
 /*
- * MRT a pass a colour buffer (SGX_DEBUG=mrt, docs/GL3.md): a 64x64 FBO with
+ * MRT a pass a colour buffer (docs/GL3.md): a 64x64 FBO with
  * four RGBA8 colour textures and a 24-bit depth buffer.  A shader writes a
  * different colour into each gl_FragData[i]; a quad near the eye over the
  * left two thirds, then one farther away over the right two thirds with
@@ -13,7 +13,7 @@
  * later passes' depth EQUAL keeping the first pass's result), the clear
  * colour nowhere.
  *
- *   SGX_DEBUG=mrt sgx_mrt
+ *   sgx_mrt
  *
  * zig cc -target x86_64-linux-gnu.2.36 -I<mesa include> -o sgx_mrt sgx_mrt.c
  * -ldl
@@ -196,7 +196,7 @@ main(void)
    printf("renderer: %s, GL_MAX_DRAW_BUFFERS %d\n", glGetString_(GL_RENDERER),
           maxdb);
    if (maxdb < N) {
-      printf("FAIL: fewer than %d draw buffers (SGX_DEBUG=mrt?)\n", N);
+      printf("FAIL: fewer than %d draw buffers (SGX_DEBUG=nomrt?)\n", N);
       return 1;
    }
 
