@@ -138,6 +138,7 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_PDS_CTRL		BIT(11)	/* PDS (0xabc) = 0xe, the SGX545's value */
 #define PVRSGX_SWEEP_EXEC0_ENTRY	BIT(12)	/* a page at PDS_EXEC_BASE: the entry program */
 #define PVRSGX_SWEEP_EXEC0_HALT		BIT(13)	/* ... or its data row and a HALT */
+#define PVRSGX_SWEEP_EXEC0_BRA		BIT(14)	/* ... or rows 0 and 1 a branch 64 KiB on */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4

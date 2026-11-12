@@ -878,14 +878,20 @@ struct sweep_variant {
  * 2026-11-12-0151). Whose fetch is it? The baseline; a program with no DOUT;
  * then a page mapped at PDS_EXEC_BASE holding the entry program, or its data
  * row and a HALT. If the fetch there is a PDS program's, the first runs the
- * microkernel and the second ends the fault with no task.
+ * microkernel and the second ends the fault with no task. Last, a page whose
+ * rows 0 and 1 branch 64 KiB on, which needs no data or code start: a fault
+ * at the page + 64 KiB means a PDS program there executes.
  */
 static const struct sweep_variant sweep[] = {
 	{ 0 },
 	{ .prog = PVRSGX_SWEEP_PROG_HALT },
 	{ .flags = PVRSGX_SWEEP_EXEC0_ENTRY },
 	{ .flags = PVRSGX_SWEEP_EXEC0_HALT },
+	{ .flags = PVRSGX_SWEEP_EXEC0_BRA },
 };
+
+#define EXEC0_FLAGS	(PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT | \
+			 PVRSGX_SWEEP_EXEC0_BRA)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -898,7 +904,7 @@ static int exec0_fill(struct pvrsgx_device *sdev)
 	u32 *w;
 	int err;
 
-	if (!(sdev->sweep_flags & (PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT))) {
+	if (!(sdev->sweep_flags & EXEC0_FLAGS)) {
 		pvrsgx_kmem_free(sdev, km);
 		return 0;
 	}
@@ -912,6 +918,13 @@ static int exec0_fill(struct pvrsgx_device *sdev)
 	}
 	w = km->cpu;
 	memset32(w, 0, PAGE_SIZE / sizeof(u32));
+	if (sdev->sweep_flags & PVRSGX_SWEEP_EXEC0_BRA) {
+		/* bra #0x4000, HALTs: rows 0 and 1 alike. */
+		memset32(w, 0xaf000000, 8);
+		w[0] = 0x97004000;
+		w[4] = 0x97004000;
+		return 0;
+	}
 	memcpy(w, sdev->fw.cpu[PVRSGX_FW_PDS0], entry ? 0x18 : 0x10);
 	if (!entry)
 		w[4] = 0xaf000000;	/* HALT */
@@ -921,7 +934,7 @@ static int exec0_fill(struct pvrsgx_device *sdev)
 /* The flags sweep_name() names; it prints the rest as hex. */
 #define SWEEP_NAMED	((u32)(PVRSGX_SWEEP_ENABLE | PVRSGX_SWEEP_PDS_INV | \
 			       PVRSGX_SWEEP_A68_HOLE | PVRSGX_SWEEP_PDS_CTRL | \
-			       PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT))
+			       EXEC0_FLAGS))
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
@@ -955,6 +968,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " exec base: entry");
 	if (sv->flags & PVRSGX_SWEEP_EXEC0_HALT)
 		n += scnprintf(buf + n, len - n, " exec base: HALT");
+	if (sv->flags & PVRSGX_SWEEP_EXEC0_BRA)
+		n += scnprintf(buf + n, len - n, " exec base: bra");
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
