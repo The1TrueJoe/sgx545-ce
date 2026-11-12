@@ -888,6 +888,41 @@ static bool stage1_sweep;
 module_param(stage1_sweep, bool, 0444);
 MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
 
+/*
+ * Bring-up only: a value a store test's task stores. If the start fails,
+ * log every place it is in the firmware's data and code arenas.
+ */
+static uint stage1_scan;
+module_param(stage1_scan, uint, 0444);
+MODULE_PARM_DESC(stage1_scan, "On a guessed core's failed start, find this value in the firmware arenas");
+
+static void scan_arena(struct pvrsgx_device *sdev, const struct pvrsgx_kmem *km,
+		       const char *name)
+{
+	const u32 *w = km->cpu;
+	unsigned int hits = 0;
+
+	for (u32 i = 0; w && i < km->size / 4; i++) {
+		if (READ_ONCE(w[i]) != stage1_scan)
+			continue;
+		if (hits++ < 8)
+			drm_info(&sdev->base, "scan: 0x%08x in the %s arena at +0x%04x (0x%08x)\n",
+				 stage1_scan, name, i * 4, km->dev_addr + i * 4);
+	}
+	drm_info(&sdev->base, "scan: 0x%08x %u times in the %s arena (0x%x bytes)\n",
+		 stage1_scan, hits, name, km->size);
+}
+
+static void fw_scan(struct pvrsgx_device *sdev)
+{
+	if (!stage1_scan)
+		return;
+	/* The GPU's writes before the CPU's reads. */
+	rmb();
+	scan_arena(sdev, &sdev->fw.data, "data");
+	scan_arena(sdev, &sdev->fw.code, "code");
+}
+
 static bool stage1_vendor;
 module_param(stage1_vendor, bool, 0444);
 MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unnamed init writes");
@@ -907,16 +942,20 @@ struct sweep_variant {
 };
 
 /*
- * A DOUTA ahead of the DOUTU leaves the task starting at code base 0 in our
- * layouts (stage 1, logs 2026-11-12-0517 to -0606). Laid out as the SGX545's
- * own pds3 instead: the baseline, then that program writing 0x0e880000
- * (unmapped, a value PA0 hasn't held) to PA0, with two data rows (event data
- * 0 = 2, 1 = 8). A task that starts and loads through PA0 faults there.
+ * A DOUTA ahead of the DOUTU leaves the task starting at code base 0, even
+ * laid out as the SGX545's pds3 (stage 1, log 2026-11-12-0642). With a task
+ * that loads through PA0, each baseline reads PA0 back as its fault page:
+ * the baseline, pds3's layout with its DOUTA of in0, the baseline, a one-row
+ * DOUTA of the control block's version word (for the store test), and the
+ * baseline, which reads it back without a fault.
  */
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .flags = PVRSGX_SWEEP_PDS3_MIRROR, .doutu0 = 0x0e880000, .data0 = 2 + 1,
+	{ .flags = PVRSGX_SWEEP_PDS3_MIRROR | PVRSGX_SWEEP_PDS3_IN0, .data0 = 2 + 1,
 	  .data1 = 8 + 1 },
+	{ 0 },
+	{ .flags = PVRSGX_SWEEP_DOUTA_1ROW | PVRSGX_SWEEP_DOUTA_CTLBLK },
+	{ 0 },
 };
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
@@ -967,7 +1006,7 @@ static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *n
 				 PVRSGX_SWEEP_DOUTU_OR | PVRSGX_SWEEP_TEMPS_FIELD | \
 				 PVRSGX_SWEEP_DOUTA_PA0 | PVRSGX_SWEEP_DOUTA_1ROW | \
 				 PVRSGX_SWEEP_DOUTA_X2 | PVRSGX_SWEEP_DOUTA_CTLBLK | \
-				 PVRSGX_SWEEP_PDS3_MIRROR)
+				 PVRSGX_SWEEP_PDS3_MIRROR | PVRSGX_SWEEP_PDS3_IN0)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -1062,7 +1101,9 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " temps field %u", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_DOUTA_PA0)
 		n += scnprintf(buf + n, len - n, " DOUTA PA0 0x%x", sv->doutu0);
-	if (sv->flags & PVRSGX_SWEEP_PDS3_MIRROR)
+	if (sv->flags & PVRSGX_SWEEP_PDS3_IN0)
+		n += scnprintf(buf + n, len - n, " pds3 mirror PA0 in0");
+	else if (sv->flags & PVRSGX_SWEEP_PDS3_MIRROR)
 		n += scnprintf(buf + n, len - n, " pds3 mirror PA0 0x%x", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_DOUTA_CTLBLK)
 		n += scnprintf(buf + n, len - n, " one-row DOUTA PA0 ctlblk");
@@ -1483,8 +1524,10 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			sgx_rd(sdev, SGX_CR_BIF_INT_STAT), sgx_rd(sdev, SGX_CR_BIF_FAULT),
 			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 		/* Memory only: a heartbeat of 0 means the event program never ran. */
-		if (sdev->family->event_pds_guessed)
+		if (sdev->family->event_pds_guessed) {
 			pvrsgx_fw_dump_status_words(sdev);
+			fw_scan(sdev);
+		}
 		return err;
 	}
 	if (sdev->family->event_pds_guessed)

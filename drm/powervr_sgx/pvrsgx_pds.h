@@ -15,6 +15,7 @@
  */
 #define PDS_D0(n)		(n)
 #define PDS_D1(n)		(0x40 + (n))
+#define PDS_IN(n)		(0x80 + (n))
 #define PDS_CC_ALWAYS	7
 #define PDS_DOUTU		5
 

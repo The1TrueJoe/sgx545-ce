@@ -174,7 +174,8 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		 * (ds1[3] = doutu, ds0[0] = 2, ds0[1]), thirteen tst ds0[0] after the
 		 * DOUTA, as pds3 spaces them. The DOUTA's value is in ds0[2]. Words
 		 * 0, 4 and 7 hold 2, the value and doutu under either interleave;
-		 * 1 and 2, which swap between them, are both 0.
+		 * 1 and 2, which swap between them, are both 0. Or pds3's own
+		 * DOUTA form, 0x07800406: the value from in0.
 		 */
 		p = pvrsgx_pds_prog(sdev, b, 8);
 		pvrsgx_pds_ds(&p, PDS_D0(0), 2);
@@ -185,7 +186,11 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		pvrsgx_pds_ds(&p, PDS_D0(3), 0);
 		pvrsgx_pds_ds(&p, PDS_D1(2), 0);
 		pvrsgx_pds_ds(&p, PDS_D1(3), doutu);
-		pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_D0(2), PDS_D1(0), PDS_D0(2), PDS_D0(2));
+		if (sw & PVRSGX_SWEEP_PDS3_IN0)
+			pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_IN(0), PDS_D1(0), PDS_IN(0), PDS_IN(0));
+		else
+			pvrsgx_pds_movs(&p, PDS_DOUTA, PDS_D0(2), PDS_D1(0), PDS_D0(2),
+					PDS_D0(2));
 		for (unsigned int i = 0; i < 13; i++)
 			pds_emit(&p, 0x87000000);	/* tst ds0[0] */
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D1(3), PDS_D0(0), PDS_D0(1), PDS_D0(0));
