@@ -97,6 +97,41 @@ void pvrsgx_mmu_destroy(struct pvrsgx_mmu *mmu)
 	kfree(mmu);
 }
 
+/*
+ * Every address of @mmu on @page: one table whose every entry is @page, named
+ * by every directory entry. Nothing is mapped into @mmu after this, so using
+ * it later allocates nothing.
+ */
+int pvrsgx_mmu_fill(struct pvrsgx_mmu *mmu, struct page *page, u32 flags)
+{
+	phys_addr_t pa = page_to_phys(page);
+	struct pvrsgx_mmu_pt *pt;
+	u32 pde;
+
+	if (upper_32_bits(pa))
+		return -EFAULT;
+	pt = kzalloc_obj(*pt);
+	if (!pt)
+		return -ENOMEM;
+	pt->page = table_page_alloc(mmu->sdev, &pt->cpu);
+	if (!pt->page) {
+		kfree(pt);
+		return -ENOMEM;
+	}
+	for (unsigned int i = 0; i < SGX_MMU_PT_ENTRIES; i++)
+		pt->cpu[i] = (lower_32_bits(pa) & SGX_MMU_ADDR_MASK) | flags | SGX_MMU_PTE_VALID;
+	pde = (lower_32_bits(page_to_phys(pt->page)) & SGX_MMU_ADDR_MASK) |
+	      SGX_MMU_PDE_PAGE_SIZE_4K | SGX_MMU_PDE_VALID;
+
+	mutex_lock(&mmu->lock);
+	/* Freed once, through entry 0; the others are shared entries. */
+	mmu->pt[0] = pt;
+	for (unsigned int i = 0; i < SGX_MMU_PD_ENTRIES; i++)
+		mmu->pd[i] = pde;
+	mutex_unlock(&mmu->lock);
+	return 0;
+}
+
 u32 pvrsgx_mmu_pd_addr(struct pvrsgx_mmu *mmu)
 {
 	return lower_32_bits(page_to_phys(mmu->pd_page));

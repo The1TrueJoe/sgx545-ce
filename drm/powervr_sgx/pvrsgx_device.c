@@ -152,7 +152,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		reset_sleep(sdev);
 		inval_dc(sdev);
 
-		/* Let each faulting request complete on a scratch page. */
+		/* Let each faulting request complete on the scratch page, which every address maps. */
 		for (int n = 0; n < 32; n++) {
 			u32 stat = sgx_rd(sdev, SGX_CR_BIF_INT_STAT), addr;
 
@@ -161,16 +161,12 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & sdev->cr->bif_fault_addr;
 			drm_warn(&sdev->base, "reset: page fault 0x%x at 0x%08x\n", stat, addr);
 			soft_reset(sdev, true);
-			pvrsgx_mmu_map_pages(sdev->reset_mmu, addr, &sdev->reset_page, 1, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR, sgx_rd(sdev, SGX_CR_EVENT_STATUS));
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR2, sgx_rd(sdev, SGX_CR_EVENT_STATUS2));
-			/* The reset page's PTE is in memory before the cores leave reset. */
-			wmb();
 			reset_sleep(sdev);
 			soft_reset(sdev, false);
 			reset_sleep(sdev);
 			inval_dc(sdev);
-			pvrsgx_mmu_unmap(sdev->reset_mmu, addr, SGX_MMU_PAGE_SIZE);
 		}
 	} else {
 		soft_reset(sdev, false);
@@ -403,6 +399,10 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 		err = -ENOMEM;
 		goto err_mmu;
 	}
+	/* A reset, in the fence-signalling path, then maps nothing. */
+	err = pvrsgx_mmu_fill(sdev->reset_mmu, sdev->reset_page, 0);
+	if (err)
+		goto err_mmu;
 
 	err = identify(sdev);
 	if (err)

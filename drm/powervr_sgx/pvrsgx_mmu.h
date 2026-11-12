@@ -13,6 +13,7 @@ struct sg_table;
 struct pvrsgx_mmu *pvrsgx_mmu_create(struct pvrsgx_device *sdev);
 void pvrsgx_mmu_destroy(struct pvrsgx_mmu *mmu);
 u32 pvrsgx_mmu_pd_addr(struct pvrsgx_mmu *mmu);
+int pvrsgx_mmu_fill(struct pvrsgx_mmu *mmu, struct page *page, u32 flags);
 
 int pvrsgx_mmu_map_pages(struct pvrsgx_mmu *mmu, u32 dev_addr,
 			 struct page **pages, unsigned int npages, u32 flags);
