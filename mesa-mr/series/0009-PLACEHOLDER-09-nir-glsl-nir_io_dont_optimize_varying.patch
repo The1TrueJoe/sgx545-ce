@@ -1,7 +1,7 @@
 From abcdf5b1f03375d95cf2c5cd71f18ce2f1769877 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:40:33 -0500
-Subject: [PATCH 09/22] PLACEHOLDER 09 nir,glsl: nir_io_dont_optimize_varyings
+Subject: [PATCH 09/21] PLACEHOLDER 09 nir,glsl: nir_io_dont_optimize_varyings
 
 ---
  src/compiler/glsl/gl_nir_linker.c              | 3 ++-

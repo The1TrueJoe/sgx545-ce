@@ -1,7 +1,7 @@
 From 818dcc2aac2dd3cacf14975486bf3f45e1ef24b1 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:12 -0500
-Subject: [PATCH 02/22] isaspec: encode: stop at the override that defines the
+Subject: [PATCH 02/21] isaspec: encode: stop at the override that defines the
  field
 
 [Placeholder. Mesa wants commit messages in the submitter's own words;

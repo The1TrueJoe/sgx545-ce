@@ -1,7 +1,7 @@
 From 5e58c0c60f5e07a3e3754e26bb0fe123af358db4 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:12 -0500
-Subject: [PATCH 01/22] isaspec: allow <param>s on derived fields of bitset
+Subject: [PATCH 01/21] isaspec: allow <param>s on derived fields of bitset
  type
 
 [Placeholder. Mesa wants commit messages in the submitter's own words;

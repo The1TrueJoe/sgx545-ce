@@ -1,7 +1,7 @@
-From bcdb124ed2a4af07670ba0f99e9821cc727508db Mon Sep 17 00:00:00 2001
+From a409d00449f7ca274cb494ff674e787c278bb0cb Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:44 -0500
-Subject: [PATCH 21/22] PLACEHOLDER 21 loader, egl, kmsro, dril: sgx as a
+Subject: [PATCH 20/21] PLACEHOLDER 21 loader, egl, kmsro, dril: sgx as a
  render-only GPU beside a display-only device
 
 ---

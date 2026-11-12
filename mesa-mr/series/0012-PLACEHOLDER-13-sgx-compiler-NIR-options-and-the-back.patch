@@ -1,7 +1,7 @@
-From ccc18f64729a6ed777071f589305c342de09e374 Mon Sep 17 00:00:00 2001
+From b042ce97c4e3177c3f27828e7aaee7d1ef166bdf Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:25 -0500
-Subject: [PATCH 13/22] PLACEHOLDER 13 sgx/compiler: NIR options and the
+Subject: [PATCH 12/21] PLACEHOLDER 13 sgx/compiler: NIR options and the
  backend's lowering passes
 
 ---

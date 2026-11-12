@@ -1,7 +1,7 @@
-From 84291751af2a9891f91d68c0166e8a31280f0f2c Mon Sep 17 00:00:00 2001
+From 22a0658b4de0c68f56f2a9235daa2b3bb12d8c1f Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:01 -0500
-Subject: [PATCH 18/22] PLACEHOLDER 18 gallium/sgx: state, programs and the
+Subject: [PATCH 17/21] PLACEHOLDER 18 gallium/sgx: state, programs and the
  draw path
 
 ---
@@ -36,7 +36,7 @@ index 20b66cc..ef5f662 100644
  
 diff --git a/src/gallium/drivers/sgx/sgx_draw.c b/src/gallium/drivers/sgx/sgx_draw.c
 new file mode 100644
-index 0000000..6357615
+index 0000000..ece3e44
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_draw.c
 @@ -0,0 +1,1936 @@
@@ -174,7 +174,7 @@ index 0000000..6357615
 +              cbuf->texture->width0, cbuf->texture->height0);
 +      return false;
 +   }
-+   t.scanout = res->wrapped;
++   t.scanout = false;
 +   rw = u_minify(res->base.width0, cbuf->level);
 +   rh = u_minify(res->base.height0, cbuf->level);
 +   rt = get_rt(ctx, rw, rh, t.va);

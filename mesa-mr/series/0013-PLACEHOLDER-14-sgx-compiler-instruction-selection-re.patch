@@ -1,7 +1,7 @@
-From afdf177264eb133de358b212df87ae79fe6d919a Mon Sep 17 00:00:00 2001
+From 9c4378210930cc44d44a0e45e6615e945df8bfb4 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:38 -0500
-Subject: [PATCH 14/22] PLACEHOLDER 14 sgx/compiler: instruction selection,
+Subject: [PATCH 13/21] PLACEHOLDER 14 sgx/compiler: instruction selection,
  register allocation and encoding
 
 ---

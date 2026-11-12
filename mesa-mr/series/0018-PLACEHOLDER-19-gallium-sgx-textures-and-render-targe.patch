@@ -1,7 +1,7 @@
-From 48dba6f1050923db1f8afe6f97d368a860cdb865 Mon Sep 17 00:00:00 2001
+From 0d395d297fda42c84fb3aa776ccd9b773a1199f9 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:05 -0500
-Subject: [PATCH 19/22] PLACEHOLDER 19 gallium/sgx: textures and render targets
+Subject: [PATCH 18/21] PLACEHOLDER 19 gallium/sgx: textures and render targets
 
 ---
  src/gallium/drivers/sgx/meson.build   |   1 +

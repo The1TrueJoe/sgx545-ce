@@ -1,7 +1,7 @@
-From 36a23b0ca5af53cc6bed549bd7eff050c058b7d0 Mon Sep 17 00:00:00 2001
+From 26688e70772b6fdc83a0b9a674f62be19d71bb56 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:40:34 -0500
-Subject: [PATCH 11/22] PLACEHOLDER 11 include/drm-uapi: powervr_sgx_drm.h
+Subject: [PATCH 10/21] PLACEHOLDER 11 include/drm-uapi: powervr_sgx_drm.h
 
 ---
  include/drm-uapi/powervr_sgx_drm.h | 1171 ++++++++++++++++++++++++++++

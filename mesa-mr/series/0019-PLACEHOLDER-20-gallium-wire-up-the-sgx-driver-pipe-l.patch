@@ -1,7 +1,7 @@
-From 4946b2bd90a001ac928db7c300fb3f7cb818db3f Mon Sep 17 00:00:00 2001
+From f0a53591c55fc03e876fba73cd2ce5e6c12a6a7f Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:45:34 -0500
-Subject: [PATCH 20/22] PLACEHOLDER 20 gallium: wire up the sgx driver (pipe
+Subject: [PATCH 19/21] PLACEHOLDER 20 gallium: wire up the sgx driver (pipe
  loader, DRI target, loader)
 
 ---

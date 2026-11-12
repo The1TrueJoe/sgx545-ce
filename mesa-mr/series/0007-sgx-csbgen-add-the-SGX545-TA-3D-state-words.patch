@@ -1,7 +1,7 @@
 From 4e0701c04542ed006236e29d086481f9afbb65ba Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:13 -0500
-Subject: [PATCH 07/22] sgx/csbgen: add the SGX545 TA/3D state words
+Subject: [PATCH 07/21] sgx/csbgen: add the SGX545 TA/3D state words
 
 [Placeholder. Mesa wants commit messages in the submitter's own words;
 what this one must say is in MR-FACTS.md, "Commit 7".]

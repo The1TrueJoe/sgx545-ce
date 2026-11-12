@@ -1,7 +1,7 @@
-From e72852780848acd0f6daeba88bd79e1a378e7e99 Mon Sep 17 00:00:00 2001
+From 04f4e3d4bcc69af7517eac631b2350ec24d48f66 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:44:11 -0500
-Subject: [PATCH 16/22] PLACEHOLDER 16 gallium/winsys/sgx: the powervr_sgx
+Subject: [PATCH 15/21] PLACEHOLDER 16 gallium/winsys/sgx: the powervr_sgx
  winsys
 
 ---
@@ -9,11 +9,11 @@ Subject: [PATCH 16/22] PLACEHOLDER 16 gallium/winsys/sgx: the powervr_sgx
  src/gallium/meson.build                      |    3 +
  src/gallium/winsys/sgx/drm/.clang-format     |    6 +
  src/gallium/winsys/sgx/drm/meson.build       |   21 +
- src/gallium/winsys/sgx/drm/sgx_frame.c       | 2811 ++++++++++++++++++
- src/gallium/winsys/sgx/drm/sgx_frame.h       |  326 ++
- src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c | 1356 +++++++++
- src/gallium/winsys/sgx/drm/sgxws.h           |  496 +++
- 8 files changed, 5020 insertions(+)
+ src/gallium/winsys/sgx/drm/sgx_frame.c       | 2779 ++++++++++++++++++
+ src/gallium/winsys/sgx/drm/sgx_frame.h       |  314 ++
+ src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c | 1354 +++++++++
+ src/gallium/winsys/sgx/drm/sgxws.h           |  486 +++
+ 8 files changed, 4964 insertions(+)
  create mode 100644 src/gallium/winsys/sgx/drm/.clang-format
  create mode 100644 src/gallium/winsys/sgx/drm/meson.build
  create mode 100644 src/gallium/winsys/sgx/drm/sgx_frame.c
@@ -88,10 +88,10 @@ index 0000000..3abd367
 +)
 diff --git a/src/gallium/winsys/sgx/drm/sgx_frame.c b/src/gallium/winsys/sgx/drm/sgx_frame.c
 new file mode 100644
-index 0000000..21e0911
+index 0000000..6f6ca12
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgx_frame.c
-@@ -0,0 +1,2811 @@
+@@ -0,0 +1,2779 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -246,13 +246,6 @@ index 0000000..21e0911
 +      return sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x3, size, align);
 +   }
 +   return -EINVAL;
-+}
-+
-+int
-+sgxws_bo_wrap(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu,
-+              uint32_t size)
-+{
-+   return d->kif->bo_wrap ? d->kif->bo_wrap(d, bo, cpu, size) : -ENOTSUP;
 +}
 +
 +bool
@@ -916,7 +909,6 @@ index 0000000..21e0911
 +      d->info.rt_max_samples = d->core->rt_max_samples;
 +   }
 +   d->verbose = opts->verbose;
-+   d->flush_rt = opts->flush_rt;
 +   d->frame_gap_us = opts->frame_gap_us;
 +   d->state_always = opts->state_always;
 +   /* four: the next frame records while this one renders (a game's frame is
@@ -985,8 +977,6 @@ index 0000000..21e0911
 +   c->dev = d;
 +   c->priority = priority;
 +   c->slots = d->slots;
-+   /* the kernel side first: under services, the kernel-data and sync
-+    * allocations come before the rings */
 +   if (d->kif->ctx_init(c)) {
 +      free(c);
 +      return NULL;
@@ -2383,30 +2373,10 @@ index 0000000..21e0911
 + * last.  What the CPU must not touch while a render runs:
 + *  - the ring slot it was recorded in, until it is done (the slot is used
 + *    again c->slots submissions later);
-+ *  - under services, its render target's structures (render details, region
-+ *    headers, sync lists): the next frame into the same target is kicked
-+ *    once the one before is done, so a target has one render in flight.
 + * Different targets (the back buffer, then the swap's copy to fb0) are in
 + * flight together; the microkernel runs them in order.
 + */
 +static int sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms);
-+
-+/* under services, the target's last render is done before its next scene's
-+ * first kick (the client writes its render details) */
-+static void
-+target_wait(struct sgxws_ctx *c)
-+{
-+   struct sgxws_rt *s = c->rt;
-+   uint64_t t0 = sgxws_now_ns();
-+
-+   if (!c->dev->kif->rt_one_in_flight || c->ta_kicks)
-+      return;
-+   if (sgxws_seq_after(s->seq, c->done_seq) &&
-+       c->slot_kick[s->seq_slot].seq == s->seq &&
-+       slot_wait(c, s->seq_slot, 2000))
-+      mesa_loge("sgx: the target's last render did not finish");
-+   c->ns_target_wait += sgxws_now_ns() - t0;
-+}
 +
 +/* a TA kick of what is recorded, the scene going on: the next objects start
 + * a new VDM segment after this one's terminate */
@@ -2421,7 +2391,6 @@ index 0000000..21e0911
 +    * frames in flight (the last is the frame's own kick) */
 +   if (kif->ring_kicks && c->ta_kicks + 2 > kif->ring_kicks / c->slots)
 +      return 0;
-+   target_wait(c);
 +   sgxws_vdm_end(c);
 +   if ((e = code_sync(c)) || (e = kif->kick_ta(c)))
 +      return e;
@@ -2454,7 +2423,6 @@ index 0000000..21e0911
 +      return 0;
 +
 +   sgxws_vdm_end(c);
-+   target_wait(c);
 +   if ((e = code_sync(c)))
 +      mesa_loge("sgx: shader upload refused: %d", e);
 +   else
@@ -2905,10 +2873,10 @@ index 0000000..21e0911
 +}
 diff --git a/src/gallium/winsys/sgx/drm/sgx_frame.h b/src/gallium/winsys/sgx/drm/sgx_frame.h
 new file mode 100644
-index 0000000..8d6bdd3
+index 0000000..85266a4
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgx_frame.h
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,314 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -2922,9 +2890,8 @@ index 0000000..8d6bdd3
 + * docs/ISA.md (docs/GEN.md maps each buffer to its source).  What it
 + * adds to sgxgen:
 + *
-+ *  - colour buffers are the caller's (a pipe_resource, a wrapped fbdev
-+ *    mapping, an imported dma-buf); a render target (sgxws_rt) is only the
-+ *    TA/3D structures for one size;
++ *  - colour buffers are the caller's (a pipe_resource, an imported dma-buf); a
++ * render target (sgxws_rt) is only the TA/3D structures for one size;
 + *  - any number of frames per context and per render target, one kick per
 + *    frame;
 + *  - the per-frame rings are reset once a frame's render has finished, so a
@@ -2940,10 +2907,6 @@ index 0000000..8d6bdd3
 + *  - sgx_powervr_sgx.c: the powervr_sgx DRM driver (docs/UAPI.md).  The
 + *    kernel owns every structure the microkernel reads; a frame is one
 + *    SUBMIT_JOBS render job.
-+ *  - sgx_pvr.c: the DDK's services driver, pvrsrvkm, through libpvr
-+ *    (the DDK's services stack).  Built only with the
-+ *    kernel's bridge headers (meson option sgx-pvrsrvkm), so nothing of
-+ *    kernel/src reaches the rest of the winsys.
 + */
 +
 +#ifndef SGX_FRAME_H
@@ -2958,8 +2921,7 @@ index 0000000..8d6bdd3
 +#include "sgx_fixed.h"
 +#include "sgxws.h"
 +
-+/* where a buffer lives: the SGX heap ids (the low byte of a services heap
-+ * ID), which index sgxws_dev.heap_base */
++/* where a buffer lives: the SGX heap ids, which index sgxws_dev.heap_base */
 +enum sgx_heap {
 +   SGX_HEAP_GENERAL = 0,
 +   SGX_HEAP_TADATA = 1,
@@ -2989,7 +2951,6 @@ index 0000000..8d6bdd3
 +   uint8_t usse_base_index[2];    /* the first code base register of the pixel,
 +                                     vertex USSE heap */
 +   int verbose;
-+   bool flush_rt; /* sgxws_dev_options */
 +   unsigned frame_gap_us;
 +   bool state_always; /* every draw its own programs and TA state */
 +   unsigned slots;
@@ -3162,17 +3123,12 @@ index 0000000..8d6bdd3
 + */
 +struct sgxws_kif {
 +   const char *name;
-+   /* the target's previous render must be done before the next is kicked
-+    * (the client writes the target's render details) */
-+   bool rt_one_in_flight;
 +   void (*dev_destroy)(struct sgxws_dev *d);
 +
 +   /* a buffer in a heap; in a USSE heap, a code buffer whose map may be a copy */
 +   int (*bo_alloc)(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
 +                   uint32_t attribs, uint32_t size, uint32_t align);
 +   void (*bo_free)(struct sgxws_dev *d, struct sgxws_bo *bo);
-+   int (*bo_wrap)(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu,
-+                  uint32_t size);
 +   int (*bo_import)(struct sgxws_dev *d, struct sgxws_bo *bo, int fd,
 +                    uint32_t size);
 +   int (*bo_export)(struct sgxws_dev *d, const struct sgxws_bo *bo, int *fd);
@@ -3237,10 +3193,10 @@ index 0000000..8d6bdd3
 +#endif
 diff --git a/src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c b/src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c
 new file mode 100644
-index 0000000..1c6e888
+index 0000000..108d50b
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgx_powervr_sgx.c
-@@ -0,0 +1,1356 @@
+@@ -0,0 +1,1354 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -4492,8 +4448,6 @@ index 0000000..1c6e888
 +   d->kif = &psgx_kif;
 +   dd->fd = fd;
 +   dd->pb_pages = opts->pb_pages;
-+   if (opts->trace)
-+      mesa_logw("sgx: SGX_TRACE is for the services driver; ignored");
 +   ver = drmGetVersion(fd);
 +   if (!ver || ver->version_major != PSGX_UAPI_MAJOR) {
 +      mesa_loge("sgx: powervr_sgx uAPI %d.%d, this Mesa speaks %d.x",
@@ -4599,10 +4553,10 @@ index 0000000..1c6e888
 +}
 diff --git a/src/gallium/winsys/sgx/drm/sgxws.h b/src/gallium/winsys/sgx/drm/sgxws.h
 new file mode 100644
-index 0000000..8cf5c6e
+index 0000000..d9ae4c3
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgxws.h
-@@ -0,0 +1,496 @@
+@@ -0,0 +1,486 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -4612,11 +4566,9 @@ index 0000000..8cf5c6e
 + * sgxws: the interface between the gallium driver and the SGX545 winsys.
 + *
 + * Everything here is GL-level state and the hardware's own words as docs/
-+ * describes them (STATE.md, PDS.md, ISA.md): nothing from the kernel's
-+ * services headers.  How a buffer, a context or a submission reaches the
-+ * kernel is the winsys's business (sgx_frame.h: the powervr_sgx DRM
-+ * driver, or the DDK's services through libpvr); the driver sees opaque
-+ * handles.
++ * describes them (STATE.md, PDS.md, ISA.md).  How a buffer, a context or a
++ * submission reaches the kernel is the winsys's business (sgx_frame.h: the
++ * powervr_sgx DRM driver); the driver sees opaque handles.
 + */
 +
 +#ifndef SGXWS_H
@@ -4922,13 +4874,9 @@ index 0000000..8cf5c6e
 +
 +/* debugging aids the driver passes on (its SGX_DEBUG options) */
 +struct sgxws_dev_options {
-+   bool verbose;      /* print every frame submitted */
-+   bool flush_rt;     /* SGX_FLUSH_HW_RENDER_TARGET at a target's destruction */
-+   const char *trace; /* a pvrtrace log of this client (services only) */
-+   unsigned
-+      trace_kicks; /* and memory copies for its first n kicks only (0: all) */
-+   int dry_run;    /* frames from the n-th on are built (and traced) but never
-+                      sent; -1: off */
++   bool verbose;          /* print every frame submitted */
++   int dry_run;           /* frames from the n-th on are built but never
++                             sent; -1: off */
 +   unsigned frame_gap_us; /* idle time after each render */
 +   unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 4) */
 +   unsigned ta_split;     /* a TA kick every n objects of a frame, the scene's
@@ -4951,7 +4899,7 @@ index 0000000..8cf5c6e
 +   uint32_t rt_max_width, rt_max_height, rt_max_samples;
 +   uint16_t pci_vendor, pci_device; /* 0 when the GPU is not a PCI function */
 +   /* zero-copy draws (vertex buffers DMAed where they are) by default:
-+    * powervr_sgx's; services' only on request (SGX_DEBUG=zerocopy) */
++    * powervr_sgx's */
 +   bool zero_copy;
 +   /* contexts can be created at low, normal or high priority */
 +   bool priorities;
@@ -4961,10 +4909,6 @@ index 0000000..8cf5c6e
 +
 +int sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
 +                   uint32_t size, uint32_t align);
-+/* a CPU mapping (the fbdev framebuffer) made a render target; services only
-+ * (-ENOTSUP) */
-+int sgxws_bo_wrap(struct sgxws_dev *d, struct sgxws_bo *bo, void *cpu,
-+                  uint32_t size);
 +void sgxws_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo);
 +
 +/* Sharing (powervr_sgx only; -ENOTSUP otherwise).  A buffer imported or

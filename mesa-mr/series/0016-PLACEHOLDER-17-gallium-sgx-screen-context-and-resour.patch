@@ -1,27 +1,27 @@
-From e20777f635debb0c905a90de28a73adfeaf52f52 Mon Sep 17 00:00:00 2001
+From 7481b008dbcf136cca4494ff3e912e50564ff17b Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:44:37 -0500
-Subject: [PATCH 17/22] PLACEHOLDER 17 gallium/sgx: screen, context and
+Subject: [PATCH 16/21] PLACEHOLDER 17 gallium/sgx: screen, context and
  resources
 
 ---
- .clang-format-include                       |    1 +
- src/gallium/drivers/sgx/.clang-format       |    6 +
- src/gallium/drivers/sgx/meson.build         |   30 +
- src/gallium/drivers/sgx/sgx_context.c       |  390 +++++++
- src/gallium/drivers/sgx/sgx_context.h       |  248 +++++
- src/gallium/drivers/sgx/sgx_program.h       |   39 +
- src/gallium/drivers/sgx/sgx_public.h        |   15 +
- src/gallium/drivers/sgx/sgx_resource.c      | 1004 +++++++++++++++++++
- src/gallium/drivers/sgx/sgx_resource.h      |  139 +++
- src/gallium/drivers/sgx/sgx_screen.c        |  401 ++++++++
- src/gallium/drivers/sgx/sgx_screen.h        |  100 ++
- src/gallium/drivers/sgx/sgx_texture.h       |   53 +
- src/gallium/meson.build                     |    3 +
- src/gallium/winsys/sgx/drm/meson.build      |    2 +-
- src/gallium/winsys/sgx/drm/sgx_drm_public.h |   18 +
- src/gallium/winsys/sgx/drm/sgx_drm_winsys.c |   35 +
- 16 files changed, 2483 insertions(+), 1 deletion(-)
+ .clang-format-include                       |   1 +
+ src/gallium/drivers/sgx/.clang-format       |   6 +
+ src/gallium/drivers/sgx/meson.build         |  30 +
+ src/gallium/drivers/sgx/sgx_context.c       | 389 ++++++++
+ src/gallium/drivers/sgx/sgx_context.h       | 248 +++++
+ src/gallium/drivers/sgx/sgx_program.h       |  39 +
+ src/gallium/drivers/sgx/sgx_public.h        |  15 +
+ src/gallium/drivers/sgx/sgx_resource.c      | 968 ++++++++++++++++++++
+ src/gallium/drivers/sgx/sgx_resource.h      | 138 +++
+ src/gallium/drivers/sgx/sgx_screen.c        | 393 ++++++++
+ src/gallium/drivers/sgx/sgx_screen.h        |  99 ++
+ src/gallium/drivers/sgx/sgx_texture.h       |  53 ++
+ src/gallium/meson.build                     |   3 +
+ src/gallium/winsys/sgx/drm/meson.build      |   2 +-
+ src/gallium/winsys/sgx/drm/sgx_drm_public.h |  18 +
+ src/gallium/winsys/sgx/drm/sgx_drm_winsys.c |  35 +
+ 16 files changed, 2436 insertions(+), 1 deletion(-)
  create mode 100644 src/gallium/drivers/sgx/.clang-format
  create mode 100644 src/gallium/drivers/sgx/meson.build
  create mode 100644 src/gallium/drivers/sgx/sgx_context.c
@@ -98,10 +98,10 @@ index 0000000..20b66cc
 +)
 diff --git a/src/gallium/drivers/sgx/sgx_context.c b/src/gallium/drivers/sgx/sgx_context.c
 new file mode 100644
-index 0000000..4b42111
+index 0000000..77d9e02
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_context.c
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,389 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -302,8 +302,7 @@ index 0000000..4b42111
 +    * process or device reads: Xorg's glamor flushes its screen pixmap so)
 +    * go now. */
 +   if (sgx_recording(ctx) && !fence && !(flags & PIPE_FLUSH_END_OF_FRAME) &&
-+       !ctx->recording->wrapped && !ctx->recording->shared &&
-+       !(sgx_drv_debug & SGX_DEBUG_FLUSH_ALL)) {
++       !ctx->recording->shared && !(sgx_drv_debug & SGX_DEBUG_FLUSH_ALL)) {
 +      ctx->stats.fl_deferred++;
 +      return;
 +   }
@@ -814,10 +813,10 @@ index 0000000..b4928a6
 +#endif
 diff --git a/src/gallium/drivers/sgx/sgx_resource.c b/src/gallium/drivers/sgx/sgx_resource.c
 new file mode 100644
-index 0000000..842e410
+index 0000000..1f12052
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_resource.c
-@@ -0,0 +1,1004 @@
+@@ -0,0 +1,968 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -1071,41 +1070,6 @@ index 0000000..842e410
 +}
 +
 +static struct pipe_resource *
-+sgx_resource_from_user_memory(struct pipe_screen *pscreen,
-+                              const struct pipe_resource *templ,
-+                              void *user_memory)
-+{
-+   struct sgx_screen *screen = sgx_screen(pscreen);
-+   struct sgx_resource *res;
-+   uint32_t size;
-+   int e;
-+
-+   /* only what the fbdev EGL platform hands in: a page-aligned BGRA mapping */
-+   if (templ->target != PIPE_TEXTURE_2D || ((uintptr_t)user_memory & 4095) ||
-+       util_format_get_blocksize(templ->format) != 4)
-+      return NULL;
-+   res = CALLOC_STRUCT(sgx_resource);
-+   if (!res)
-+      return NULL;
-+   res->base = *templ;
-+   pipe_reference_init(&res->base.reference, 1);
-+   res->base.screen = pscreen;
-+   res->pitch = align(templ->width0, 32);
-+   res->stride = res->pitch * 4;
-+   size = align(res->stride * templ->height0, 4096);
-+
-+   simple_mtx_lock(&screen->lock);
-+   e = sgxws_bo_wrap(screen->dev, &res->bo, user_memory, size);
-+   simple_mtx_unlock(&screen->lock);
-+   if (e) {
-+      FREE(res);
-+      return NULL;
-+   }
-+   res->wrapped = true;
-+   return &res->base;
-+}
-+
-+static struct pipe_resource *
 +sgx_resource_from_handle(struct pipe_screen *pscreen,
 +                         const struct pipe_resource *templ,
 +                         struct winsys_handle *whandle, unsigned usage)
@@ -1160,8 +1124,8 @@ index 0000000..842e410
 +
 +   /* only linear render targets: a texture's device copy is twiddled or
 +    * re-encoded from its CPU copy */
-+   if (!sgxws_bo_valid(&res->bo) || res->texture || res->wrapped ||
-+       !res->pitch || !shareable(prsc))
++   if (!sgxws_bo_valid(&res->bo) || res->texture || !res->pitch ||
++       !shareable(prsc))
 +      return false;
 +   whandle->stride = res->stride;
 +   whandle->offset = 0;
@@ -1779,7 +1743,6 @@ index 0000000..842e410
 +sgx_resource_screen_init(struct sgx_screen *screen)
 +{
 +   screen->base.resource_create = sgx_resource_create;
-+   screen->base.resource_from_user_memory = sgx_resource_from_user_memory;
 +   screen->base.resource_destroy = sgx_resource_destroy;
 +   if (sgxws_dev_has_dmabuf(screen->dev)) {
 +      screen->base.resource_from_handle = sgx_resource_from_handle;
@@ -1824,10 +1787,10 @@ index 0000000..842e410
 +}
 diff --git a/src/gallium/drivers/sgx/sgx_resource.h b/src/gallium/drivers/sgx/sgx_resource.h
 new file mode 100644
-index 0000000..2f84071
+index 0000000..565bd80
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_resource.h
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,138 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -1866,9 +1829,8 @@ index 0000000..2f84071
 +    */
 +   void *data;
 +   struct sgxws_bo bo;
-+   bool wrapped; /* resource_from_user_memory: an fbdev mapping */
-+   bool shared;  /* imported or exported dma-buf: its frames name it
-+                    (sgxws_use_bo) */
++   bool shared; /* imported or exported dma-buf: its frames name it
++                   (sgxws_use_bo) */
 +   struct renderonly_scanout
 +      *scanout;     /* kmsro: its buffer on the display device */
 +   bool dumb_later; /* kmsro with a display the CPU reads: made the display's
@@ -1969,10 +1931,10 @@ index 0000000..2f84071
 +#endif
 diff --git a/src/gallium/drivers/sgx/sgx_screen.c b/src/gallium/drivers/sgx/sgx_screen.c
 new file mode 100644
-index 0000000..cfdd94b
+index 0000000..7f103e6
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_screen.c
-@@ -0,0 +1,401 @@
+@@ -0,0 +1,393 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -2027,18 +1989,13 @@ index 0000000..cfdd94b
 +    "a sample is merged only into the previous iteration of its own set, not of another"},
 +   {"nozls", SGX_DEBUG_NO_ZLS,
 +    "depth and stencil not kept across renders (no ZLS load or store)"},
-+   {"flushrt", SGX_DEBUG_FLUSH_RT,
-+    "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)"},
 +   DEBUG_NAMED_VALUE_END};
 +
 +DEBUG_GET_ONCE_FLAGS_OPTION(sgx_drv_debug, "SGX_DEBUG", sgx_drv_debug_options,
 +                            0)
 +DEBUG_GET_ONCE_OPTION(sgx_dump_code, "SGX_DUMP_CODE", NULL)
-+/* the winsys's debugging aids: a pvrtrace log of this client (and memory
-+ * copies for its first n kicks), frames built but never sent from the n-th
++/* the winsys's debugging aids: frames built but never sent from the n-th
 + * on, idle time after every render */
-+DEBUG_GET_ONCE_OPTION(sgx_trace, "SGX_TRACE", NULL)
-+DEBUG_GET_ONCE_NUM_OPTION(sgx_trace_kicks, "SGX_TRACE_KICKS", 0)
 +DEBUG_GET_ONCE_NUM_OPTION(sgx_dry_run, "SGX_DRY_RUN", -1)
 +DEBUG_GET_ONCE_NUM_OPTION(sgx_frame_gap_us, "SGX_FRAME_GAP_US", 0)
 +/* frames in flight, 2 to 4 (4 by default): fewer trade throughput for
@@ -2332,9 +2289,6 @@ index 0000000..cfdd94b
 +   simple_mtx_unlock(&kept_lock);
 +   const struct sgxws_dev_options wsopts = {
 +      .verbose = (sgx_drv_debug & SGX_DEBUG_FRAME) != 0,
-+      .flush_rt = (sgx_drv_debug & SGX_DEBUG_FLUSH_RT) != 0,
-+      .trace = debug_get_option_sgx_trace(),
-+      .trace_kicks = debug_get_option_sgx_trace_kicks(),
 +      .dry_run = debug_get_option_sgx_dry_run(),
 +      .frame_gap_us = debug_get_option_sgx_frame_gap_us(),
 +      .slots = debug_get_option_sgx_slots(),
@@ -2376,10 +2330,10 @@ index 0000000..cfdd94b
 +}
 diff --git a/src/gallium/drivers/sgx/sgx_screen.h b/src/gallium/drivers/sgx/sgx_screen.h
 new file mode 100644
-index 0000000..9cf7aee
+index 0000000..141c6fa
 --- /dev/null
 +++ b/src/gallium/drivers/sgx/sgx_screen.h
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,99 @@
 +/*
 + * Copyright © 2026 Joseph Telaak
 + * SPDX-License-Identifier: MIT
@@ -2405,7 +2359,6 @@ index 0000000..9cf7aee
 +#define SGX_DEBUG_FLUSH_ALL          (1 << 7)
 +#define SGX_DEBUG_NO_VCACHE          (1 << 8)
 +#define SGX_DEBUG_NO_F16             (1 << 9)
-+#define SGX_DEBUG_FLUSH_RT           (1 << 10)
 +#define SGX_DEBUG_NO_FF_MEDIUMP      (1 << 11)
 +#define SGX_DEBUG_NO_ZLS             (1 << 12)
 +#define SGX_DEBUG_NO_ZERO_COPY       (1 << 13)
@@ -2592,7 +2545,7 @@ index 0000000..354b033
 +#endif
 diff --git a/src/gallium/winsys/sgx/drm/sgx_drm_winsys.c b/src/gallium/winsys/sgx/drm/sgx_drm_winsys.c
 new file mode 100644
-index 0000000..5ed9249
+index 0000000..38b8fea
 --- /dev/null
 +++ b/src/gallium/winsys/sgx/drm/sgx_drm_winsys.c
 @@ -0,0 +1,35 @@
@@ -2615,7 +2568,7 @@ index 0000000..5ed9249
 +   return sgx_screen_create(fd, config, ro);
 +}
 +
-+/* fd: the GPU's node (powervr_sgx, or pvrsrvkm); the screen keeps a dup of it */
++/* fd: the GPU's node (powervr_sgx); the screen keeps a dup of it */
 +struct pipe_screen *
 +sgx_drm_screen_create(int fd, const struct pipe_screen_config *config)
 +{

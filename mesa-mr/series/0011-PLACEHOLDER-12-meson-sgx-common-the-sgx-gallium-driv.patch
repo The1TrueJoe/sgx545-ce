@@ -1,7 +1,7 @@
-From 9437ab219c66859da3c5fa66c45916ea7f75493f Mon Sep 17 00:00:00 2001
+From 5964e424c7e220bcc055e9e78b30365003750ebe Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:40:40 -0500
-Subject: [PATCH 12/22] PLACEHOLDER 12 meson, sgx/common: the sgx gallium
+Subject: [PATCH 11/21] PLACEHOLDER 12 meson, sgx/common: the sgx gallium
  driver option and the per-core table
 
 ---
@@ -179,7 +179,7 @@ index 0000000..8a9a5e6
 +}
 diff --git a/src/sgx/common/sgx_core.h b/src/sgx/common/sgx_core.h
 new file mode 100644
-index 0000000..6e8ef15
+index 0000000..66d81f9
 --- /dev/null
 +++ b/src/sgx/common/sgx_core.h
 @@ -0,0 +1,85 @@
@@ -237,7 +237,7 @@ index 0000000..6e8ef15
 +   unsigned max_iters;        /* PDS iterations of a pixel program [D] */
 +   unsigned max_samples;      /* texture samples of a pixel program [D] */
 +   unsigned fragcoord_iter;   /* the PDS iterator of gl_FragCoord [HW] */
-+   /* render targets, where the kernel doesn't report them (services) */
++   /* render targets, where the kernel doesn't report them */
 +   unsigned rt_max_width, rt_max_height, rt_max_samples; /* [D] */
 +   unsigned line_width_max; /* ISPB: width * 16 in 8 bits [D] */
 +   unsigned point_size_max; /* [D] */

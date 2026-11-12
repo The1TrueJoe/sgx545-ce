@@ -1,7 +1,7 @@
 From 384698509de2482f66f6b4c114f7a4b2b99671e8 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:31:13 -0500
-Subject: [PATCH 05/22] sgx/isa: add sgx-asm and sgx-disasm
+Subject: [PATCH 05/21] sgx/isa: add sgx-asm and sgx-disasm
 
 [Placeholder. Mesa wants commit messages in the submitter's own words;
 what this one must say is in MR-FACTS.md, "Commit 5".]

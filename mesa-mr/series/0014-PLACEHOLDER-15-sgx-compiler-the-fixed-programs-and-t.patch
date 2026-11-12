@@ -1,7 +1,7 @@
-From 9c542143489cb175d006462be4fbbab5c1407ecd Mon Sep 17 00:00:00 2001
+From cb39da4d421e2db5d5ad37e3bf3de0d2514c288e Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Thu, 12 Nov 2026 17:43:52 -0500
-Subject: [PATCH 15/22] PLACEHOLDER 15 sgx/compiler: the fixed programs and the
+Subject: [PATCH 14/21] PLACEHOLDER 15 sgx/compiler: the fixed programs and the
  unit tests
 
 ---
