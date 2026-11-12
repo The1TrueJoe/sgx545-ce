@@ -949,7 +949,7 @@ record_ubo(struct sgx_context *ctx, mesa_shader_stage stage, unsigned n,
       if (!res->write_maps)
          u->key = (uint64_t)res->uid << 32 | res->gen;
    }
-   u->bytes = MIN2(u->bytes, 16384u);
+   u->bytes = MIN2(u->bytes, (unsigned)SGX_UBO_BYTES);
 }
 
 /* a compiled shader's constants: sa[base + slot] = constant buffer 0 float k */

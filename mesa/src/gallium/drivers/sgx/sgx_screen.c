@@ -57,7 +57,7 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
    {"nomrt", SGX_DEBUG_NO_MRT,
     "one colour buffer, as before MRT (a draw a pass a buffer, H1: a second PBE emit hangs the GPU)"},
    {"ubo", SGX_DEBUG_UBO,
-    "uniform blocks, 12 a stage of 16 KiB, each copied into the frame for a draw (ARB_uniform_buffer_object; with glsl130 only, as their offsets are integers): until that passes on a board"},
+    "uniform blocks, 12 a stage of 64 KiB, each copied into the frame for a draw (ARB_uniform_buffer_object; with glsl130 only, as their offsets are integers): until that passes on a board"},
    {"zlsdump", SGX_DEBUG_ZLS_DUMP,
     "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -211,11 +211,13 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
            screen->info->rt_max_height);
    caps->max_texture_cube_levels = f->max_cube_levels;
    caps->max_texture_3d_levels = 0;
-   /* uniform blocks (SGX_DEBUG=ubo): GL 3.1's 16 KiB; st takes
-    * ARB_uniform_buffer_object at no less. They are copied for each frame,
-    * so any offset will do */
+   /* uniform blocks (SGX_DEBUG=ubo): 64 KiB, as most drivers have (GL 3.1
+    * asks 16 KiB, and st takes ARB_uniform_buffer_object at no less; piglit's
+    * generated blocks reach 32 KiB). Each is copied into the frame
+    * (sgx_draw.c record_ubo) and read by ld.a.d from any offset, so the
+    * size costs nothing a program doesn't bind, and any offset will do */
    if (sgx_ubos())
-      caps->max_constant_buffer_size = 16384;
+      caps->max_constant_buffer_size = SGX_UBO_BYTES;
    caps->constant_buffer_offset_alignment = 16;
    /* a pass a colour buffer (sgx_draw_vbo); SGX_DEBUG=nomrt for one */
    caps->max_render_targets = sgx_drv_debug & SGX_DEBUG_NO_MRT ? 1 : 4;

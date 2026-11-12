@@ -57,6 +57,7 @@ struct sgx_const {
 #define SGX_K_SIZE_UNITS   16
 #define SGX_K_INSTANCE_INT 1072
 #define SGX_K_UBO          1080
+#define SGX_UBO_BYTES      65536 /* a block's size, GL_MAX_UNIFORM_BLOCK_SIZE */
 #define SGX_MAX_UBOS       12 /* load_ubo's blocks 0-11: constant buffers 1-12 */
 /* unit u's level count (textureQueryLevels, and the compiler's own level
  * choice for word-by-word fetches) at SGX_K_LEVELS + u, a raw integer */
