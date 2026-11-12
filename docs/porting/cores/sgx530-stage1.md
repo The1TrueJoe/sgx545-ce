@@ -1782,6 +1782,41 @@ for `stout_o0`'s distinctive 0x0fd7d000 — found off t[0x18] = a misplaced stor
 difference); absent = not committed or a non-coherent read. Only then weigh a documented flush.
 Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
 
+## After the forty-seventh attempt (50367971): the write context, not the register files (C)
+
+Attempt 47 ran all three open gates in one slot. The results converge on one cause.
+
+- **Gate 2 (DOUTA-then-DOUTU): flat (C).** Variant 2 (the in0-source DOUTA) still launched at
+  code base 0 (b2 0x0f400000). And the baselines are telling: v0/v2/v4 (a bare task reading PA0)
+  did **not** fault, so PA0 was still a mapped address — meaning the pds3-layout DOUTA (attempt 46
+  and the in0 variant) **never wrote PA0 at all**, unlike the standalone `.x2` DOUTA of attempt 43
+  (which did land, 0x0e870000). So in the pds3 multi-instruction layout even the DOUTA fails;
+  only a **standalone** DOUTA writes an attribute. Path (A) is dead; path (B), a standalone DOUTA
+  re-issued by the driver, is the only attribute-input mechanism.
+- **Gate 3 (store visibility): the store does not commit to DRAM (C).** `stout_o0` (0x0fd7d000)
+  and `stout_r5` (0x0c004000) appear **nowhere** in the data arena (0xe000) or the code arena
+  (0xe000), read from DRAM after an `rmb`. Since `pa0` = ctlblk+0x60 is *inside* the data arena,
+  this is not a misplaced store — the store simply does not reach memory.
+- **Gate 4 (a retiring load/write destination): fails (C).** `aluwr_pa0w` did not fault, and with
+  PA0 confirmed still mapped (v3/v4), that means `or pa0, r5, r17` did not land: **the task cannot
+  write the pa bank.**
+
+**The unified picture (G).** On the SGX530 event task as we launch it (event kick → code base 15
+DOUTU), the **only** write that takes effect is an **ALU write to an output**. Temporaries don't
+retire; the pa bank doesn't retire; `ld` cannot target an output (not encodable), so a load has no
+retiring destination; memory stores don't commit; and the task is not the requestor `EDMPROTECT`
+admits. That is one signature, not five bugs: the task lacks a valid **write / EDM-task context**,
+and only the output/emit path — which does not go through that context — works. The event→DOUTU
+launch we use is not the full EDM task setup the vendor driver uses.
+
+**Consequence: the register-file restructure cannot make the microkernel run.** Scratch in outputs
+is real, but the task cannot load memory into a usable register (gate 4) or store to the control
+block (gate 3), so it cannot read the CCB/control block or persist state — the microkernel's basic
+job. The restructure was necessary groundwork but is not sufficient. **The AM335x vendor capture of
+TI's working SGX530 EDM task setup is now the critical path** (fact sheet gap, open question §7):
+it should reveal the task-context setup that makes writes commit. Continued register-file probing
+will not unlock it. Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §3, §5.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
