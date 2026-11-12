@@ -547,7 +547,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	INIT_LIST_HEAD(&sdev->active);
 	INIT_DELAYED_WORK(&sdev->poll_work, poll_work_fn);
 	INIT_WORK(&sdev->reap_work, reap_work_fn);
-	sdev->wq = alloc_workqueue("powervr_sgx", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+	sdev->wq = alloc_workqueue("powervr_sgx", WQ_MEM_RECLAIM | WQ_UNBOUND | WQ_HIGHPRI, 0);
 	if (!sdev->wq)
 		return -ENOMEM;
 	sdev->free_wq = alloc_workqueue("powervr_sgx_free", WQ_UNBOUND, 0);

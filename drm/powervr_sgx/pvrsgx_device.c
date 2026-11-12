@@ -321,7 +321,8 @@ static irqreturn_t pvrsgx_gma_irq(void *data)
 	irqreturn_t ret = pvrsgx_irq(sdev->irq, sdev);
 
 	if (ret == IRQ_WAKE_THREAD) {
-		queue_work(system_highpri_wq, &sdev->irq_work);
+		/* Reclaim-safe: it signals fences. */
+		queue_work(sdev->wq, &sdev->irq_work);
 		return IRQ_HANDLED;
 	}
 	return ret;
@@ -334,6 +335,16 @@ static void pvrsgx_gma_irq_work(struct work_struct *work)
 	pvrsgx_irq_thread(sdev->irq, sdev);
 }
 #endif
+
+/* No interrupt handler still running once this returns, bottom half included. */
+void pvrsgx_irq_sync(struct pvrsgx_device *sdev)
+{
+	synchronize_irq(sdev->irq);
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+	if (sdev->gma_sgx)
+		flush_work(&sdev->irq_work);
+#endif
+}
 
 static int irq_setup(struct pvrsgx_device *sdev)
 {

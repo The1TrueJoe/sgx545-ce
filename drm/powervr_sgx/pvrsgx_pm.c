@@ -83,12 +83,15 @@ void pvrsgx_power_fini(struct pvrsgx_device *sdev)
 	}
 }
 
+/* Both under the reset lock: never in the middle of a reset's restart. */
 static int pvrsgx_runtime_suspend(struct device *dev)
 {
 	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
 
-	if (!sdev->lost)
-		pvrsgx_fw_stop(sdev);
+	/* Lost too: after a failed start the clocks are still on (fw_stop's second branch). */
+	mutex_lock(&sdev->reset_lock);
+	pvrsgx_fw_stop(sdev);
+	mutex_unlock(&sdev->reset_lock);
 	return 0;
 }
 
@@ -97,10 +100,13 @@ static int pvrsgx_runtime_resume(struct device *dev)
 	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
 
 	/* A failed start loses the device: run_job then fails every job with -EIO. */
+	mutex_lock(&sdev->reset_lock);
 	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not start on resume: device lost\n");
+		pvrsgx_fw_stop(sdev);
 		sdev->lost = true;
 	}
+	mutex_unlock(&sdev->reset_lock);
 	return 0;
 }
 

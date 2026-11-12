@@ -187,6 +187,8 @@ struct pvrsgx_device {
 	spinlock_t ccb_spin;
 	/** @ccb_issued: Commands written to the kernel CCB since load, across restarts. */
 	u64 ccb_issued;
+	/** @ccb_reset_seq: @ccb_issued at the ring's last reset (under @ccb_spin). */
+	u64 ccb_reset_seq;
 	/** @inval_lock: Protects @inval_waits. */
 	spinlock_t inval_lock;
 	/** @inval_waits: &struct pvrsgx_inval_wait for invalidates not yet taken. */
@@ -365,6 +367,7 @@ void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_unplug(struct pvrsgx_device *sdev);
+void pvrsgx_irq_sync(struct pvrsgx_device *sdev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);
