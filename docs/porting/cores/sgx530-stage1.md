@@ -2077,3 +2077,37 @@ patched to under §9 (the kernel session has it).
 and stable). If gate 1 turns out NOT solved, the stage-1 output-only-retire
 restructure (outputs as scratch) plus §9's correct launch is still a viable path,
 and host-kick remains the other fallback.
+
+## The §9 subset trap: the or-based gate-1 test is degenerate; use xor
+
+`ldr5_ctl` ran (21:43 UTC): raw r5 under §9 = **0x0fa93000**, equal to `aluwr`. The
+control block address the probe patches into r17 under §9 is **ctlblk = 0x0f003000**
+(kernel_data.base 0x0f000000 + TA3DCTL 0x3000).
+
+That value springs a trap that makes **both** earlier reads of gate 1 invalid.
+`r17 = 0x0f003000` is a **subset** of r5's leftover 0x0fa93000 (`r5 & r17 == r17`),
+so `or r5, r5, r17` = `r5 | r17` = **r5 unchanged** — the or is a no-op on the
+*value* whether or not the write retires. So `aluwr == ldr5_ctl == 0x0fa93000` is
+guaranteed by the operands and says **nothing** about retirement. (And the output
+side is also confounded: `aluwr_o0` = 0x0f373000 while `r5 | r17` = 0x0fa93000, so
+either o0's leftover differs per image or the output path transforms the value —
+either way o0 is not a usable anchor here.) **Gate 1 remains undecided.** My earlier
+"likely passed" and the follow-up "did not retire" were both read off a degenerate
+test; neither conclusion is supported.
+
+**The fix — `sgx530_xorr5`:** `xor r5, r5, r17` is a non-identity even when r17 ⊆ r5.
+With the measured leftovers, `r5 ^ r17 = 0x0fa93000 ^ 0x0f003000 = 0x00a90000`, a
+different, unmapped address:
+- fault at **0x00a90000** ⇒ the xor changed r5 ⇒ a temporary write **retired** (gate 1 YES);
+- fault at **0x0fa93000** ⇒ r5 untouched ⇒ it did **not** (gate 1 NO).
+Two distinct predicted addresses, within r5, no o0 and no cross-image leftover math.
+Image (asm.py oracle, core-rev 0x00010205): img
+`e64809432729abe7489a5f374fa69aaecfac929dcb697a21892a8ecf824f26e8`, pkg
+`6349db081155cebdc304c76912119c05b191da97e1e804944fcd9ddf9942181e` (crc 0x44b5680e).
+
+Lesson for the leftover map: a probe that ORs two values can only reveal a retire
+when the second operand carries a bit the destination lacks. Pick operands whose
+result differs from the destination's leftover; `xor` guarantees it.
+
+**Unchanged:** gate 2 (the task launches and runs) is solid, and word2 is not the
+write-context lever.

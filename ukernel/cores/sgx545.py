@@ -353,6 +353,9 @@ USSE_ALU_DSTOP = None        # aluwr: an explicit dest/base operand (e.g. 'o0','
 USSE_ALU_NOWRITE = False     # aluwr control: emit a nop in place of the or, so the ld reads the dst's raw
                              # leftover. aluwr vs this isolates whether the or changed the register at all
                              # (within one register, no cross-probe leftover compare). (cores/sgx530_ldr5_ctl.py)
+USSE_ALU_OP = "or"           # aluwr: the bitwise op. 'xor' makes the write a non-identity on the value even
+                             # when r17 (ctlblk) is a subset of r5's leftover, where 'or' is a value-no-op
+                             # and can't detect a retire. (cores/sgx530_xorr5.py)
 USSE_STOUT = None           # 'o0': or it then st it to [pa0] (a driver-DOUTA-set scratch addr): st-from-output (cores/sgx530_stout_o0.py)
 USSE_ODIST = None           # read o{N} after writing o0..o9 distinct values: are the outputs distinct regs or aliases? (cores/sgx530_odist0.py)
 USSE_ODIST_N = 10           # how many outputs the odist sweep writes (11 includes o10 for the margin-1 check)

@@ -497,7 +497,8 @@ def build(a):
                                                # aluwr (or) vs this (nop) isolates the or's effect on dst,
                                                # comparing the same register, no cross-probe leftover math.
             else:
-                a.i(f"or {dst}, r5, r17")      # = r5 leftover | r17 leftover = 0x0fd7d000
+                a.i(f"{USSE_ALU_OP} {dst}, r5, r17")  # 'or' = r5|r17; 'xor' = r5^r17 (non-identity even
+                                               # when r17 is a subset of r5, where 'or' can't show a retire)
             for _ in range(USSE_ALU_NOPS):     # space the write from the dependent read:
                 a.i("nop")                     # if the 530 pairs/schedules them, nops break it
             a.i(f"ld.a.d r3, {dst}, #0")
