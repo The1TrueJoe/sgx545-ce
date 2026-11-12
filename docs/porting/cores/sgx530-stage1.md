@@ -1020,6 +1020,48 @@ TI's layout; no alias.
 3. If stage 1 passes, the driver change is `USE_CODE_BASE` encoding `addr >> 8` for the
    SGX530, every code base in part 2, recorded as C.
 
+## After the twenty-fourth attempt: the task runs, then derails
+
+Attempt 24 (log 2026-11-12-0311): the `>> 8` fix is confirmed.
+- **V1** (code base 15 = 0x1b0000): fault at exactly 0x0b000000 = 0x1b0000 << 8 & 0x0fffffff.
+  So `USE_CODE_BASE` is `addr >> 8` on the SGX530 (C, now four cells).
+- **V0** (the fix, all code bases `>> 8`, code base 15 = 0xec000): the fault leaves
+  `PDS_EXEC_BASE` for the first time, a b2 code fetch at 0x08039000. But `EVENT_TIMER` is 0
+  and `INIT_STATUS` is 0.
+
+So the EDM task now fetches from the kernel code heap (0x0ec00000) and runs, but derails
+before the diagnostic ladder's first `str` (the `EVENT_TIMER` write) commits. This is the
+**first time USSE code has actually executed on the SGX530**: every earlier attempt faulted
+on the first fetch, at the wrong page. The ladder's instruction 1 is `str #691, r0`
+(`EVENT_TIMER`), and `str`/`ldr` are flagged in ISA.md's SGX530 delta as possibly encoded
+differently. 0x08039000 is not a literal in the `str` word, so it isn't a simple
+bits-as-target misdecode; the probe localizes it instead.
+
+**Attempt 25: the minimal USSE probe** (`cores/sgx530_usse.py`). The event task is the
+smallest program that exercises one of each early instruction, then self-loops, with no
+`phas.i` (V0 showed `limm` runs without it):
+- `st.a.d` A -> ctlblk 0x28 = 0xbeef1 (before the str);
+- `str` -> `EVENT_TIMER` = 0xa5a;
+- `st.a.d` B -> ctlblk 0x18 = 0xc0de2 (after the str);
+- a `ba` self-loop.
+
+Build: `python3 ukernel/build.py sgx530_usse …`, then mkukfw. Image 0x68 (104 B), sha256
+cb18a5a7…, same through asm.py and `sgx-asm`; `--check` crc 0xac4ecbbd; packaged 0bcce2c7….
+It has only the `ctlblk` patch (no `pdtable`; the probe uses neither the PD table nor init).
+
+Read-back after the start:
+- **ctlblk 0x28 = 0xbeef1, `EVENT_TIMER` = 0xa5a, ctlblk 0x18 = 0xc0de2, and a self-loop
+  with no fault** (the probe times out, `INIT_STATUS` 0): the USSE runs `st.a.d`, `str` and
+  `ba`. Then the attempt-24 fault was later, in the init path, and attempt 26 bisects init.
+- **ctlblk 0x28 = 0xbeef1, `EVENT_TIMER` = 0, ctlblk 0x18 = 0, a b2 fault**: `str` is the
+  first to derail. `str`/`ldr` encode differently on the SGX530; decode them from the
+  hwt_* suites and the fault, and fix the assembler for the SGX530.
+- **ctlblk 0x28 = 0 and a fault**: even `st.a.d` derails; the fault address is the first
+  real clue to the SGX530's store encoding.
+
+The self-loop holds the USSE; recovery reset first, and the start's teardown already holds
+the cores in reset on a timeout.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
