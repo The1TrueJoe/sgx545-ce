@@ -124,9 +124,12 @@ likely to fit.
   wedges the GPU — the 530 task simply is not treated as the EDM, and the DM field does not change
   that: on the 530 a USSE task issues as a USSE data master, not the EDM, and the single shared
   directory list 0 leaves EDM_PROTECT nothing to scope by. Analysis in sgx530.md, "Why the SGX530
-  USSE task is not the EDM requestor".) **Stage-2 open item (gap 19):** the stopgap removes kernel
-  isolation, so before any client work, isolate kernel memory by the per-context page directory
-  (the kernel driver omits kernel heaps from client PDs), not EDM_PROTECT.
+  USSE task is not the EDM requestor".) **Stage-2 open item (gap 19), a hard gate before any client
+  work:** restoring isolation on the 530 is unsolved — EDM_PROTECT can't be the boundary, and
+  omitting kernel memory from client PDs can't either (one shared list, so the microkernel runs on
+  the client's PD and needs its code/control block/CCB mapped there, UAPI P2). Isolation must come
+  from an instruction checker (E3), `READONLY` mappings where the microkernel only reads (E1,
+  enforced), and/or per-kick list switching — M2/M3 work the per-context-PD design does not cover.
 - **Does the store reach memory? — still open (attempt 45).** With EDM_PROTECT off the store no
   longer faults, but the target word still read 0. Either `st` cannot read an **output** as its
   data source, or `idf`/`wdf` does not flush the USE data cache to memory (the DDK uses op0x100).
