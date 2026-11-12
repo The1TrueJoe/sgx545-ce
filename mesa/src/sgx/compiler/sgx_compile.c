@@ -6904,6 +6904,13 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
    list_inithead(&c->ins);
 
    sgx_lower(c);
+   if (c->failed) {
+      out->stage = c->stage;
+      out->log = c->log;
+      c->log = NULL;
+      ralloc_free(c);
+      return -1;
+   }
    if (opts->verbose)
       nir_print_shader(nir, stderr);
 
