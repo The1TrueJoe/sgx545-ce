@@ -233,15 +233,17 @@ sgx_resource_create(struct pipe_screen *pscreen,
        * start, for a texture rendered into before anything is uploaded */
       if (!util_format_has_alpha(templ->format) &&
           util_format_get_blocksize(templ->format) == 4 &&
-          !sgx_tex_depth(templ->format))
+          !sgx_tex_word32(templ->format))
          memset(res->bo.map, 0xff, sgx_tex_size(prsc));
       /* R8 and RG8 as RGBA8 (sgx_tex_bpp): (0, 0, 0, 255) until written, the
        * B and A a render into them leaves alone */
       if (sgx_tex_bpp(templ->format) !=
              util_format_get_blocksize(templ->format) &&
-          !sgx_tex_depth(templ->format))
+          !sgx_tex_word32(templ->format))
          for (size_t i = 0; i < sgx_tex_size(prsc) / 4; i++)
-            res->bo.map[i] = 0xff000000;
+            res->bo.map[i] = util_format_is_pure_integer(templ->format)
+                                ? 0x01000000
+                                : 0xff000000;
    }
    return prsc;
 

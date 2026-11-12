@@ -301,6 +301,14 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx_tex_format(format) &&
        !(usage & PIPE_BIND_RENDER_TARGET))
       return false;
+   /* RG32 and RGBA32 are stored for the compiler's word-by-word fetches
+    * (sgx_tex_raw32), which it doesn't do yet: not sampled until it does */
+   if ((usage & PIPE_BIND_SAMPLER_VIEW) && sgx_tex_raw32(format) > 1)
+      return false;
+   /* a raw 32-bit format is sampled NEAREST only, the one level */
+   if ((usage & PIPE_BIND_SAMPLER_VIEW) && sgx_tex_raw32(format) &&
+       target == PIPE_TEXTURE_CUBE)
+      return false;
    switch (target) {
    case PIPE_BUFFER:
    case PIPE_TEXTURE_1D: /* a 2D texture a texel high, sampled on that row

@@ -795,6 +795,18 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
       bool raw = cb && k->k < avail;
       uint32_t word = raw ? ((const uint32_t *)cb)[k->k] : 0;
 
+      if (k->k >= SGX_K_LEVELS && k->k < SGX_K_LEVELS + SGX_K_SIZE_UNITS) {
+         /* a view's level count (sgx_program.c lower_txs): a texture of F32
+          * words is sampled at its base level alone (sgx_tex_words) */
+         const struct pipe_sampler_view *view =
+            stage == MESA_SHADER_FRAGMENT ? ctx->views[k->k - SGX_K_LEVELS]
+                                          : NULL;
+
+         word = !view || sgx_tex_word32(view->format)
+                   ? 1
+                   : view->u.tex.last_level - view->u.tex.first_level + 1;
+         raw = true;
+      }
       if (k->k >= SGX_K_SIZE && k->k < SGX_K_SIZE + 3 * SGX_K_SIZE_UNITS) {
          /* the base level's width, height, and depth or layers
           * (sgx_program.c lower_txs_int) */

@@ -519,8 +519,8 @@ Agreed with the compiler (2026-11-11):
 - **Driver constants**, above the user constants and the compiler's other
   numbers (`SGX_MAX_CONST_K` = 1280): 1024 + 3u the base level's width,
   height and depth of unit u (0-15); 1072 gl_InstanceID; 1080 + n UBO n's
-  GPU address (`ubo_base_k` = 1080, up to 16); the rest of 1024-1279
-  reserved. 960 + 4s are the border colors. `SGX_K_TEXSIZE` (1000) and
+  GPU address (`ubo_base_k` = 1080, up to 16); 1096 + u unit u's level
+  count (textureQueryLevels); the rest of 1024-1279 reserved. 960 + 4s are the border colors. `SGX_K_TEXSIZE` (1000) and
   `SGX_K_INSTANCE` (1016) move into the block when the driver takes the
   compiler's `native_integers`. Under `native_integers` the sizes and
   gl_InstanceID are raw integers, otherwise floats. The compiler's

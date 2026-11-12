@@ -289,6 +289,16 @@ lower_txs(nir_builder *b, nir_instr *instr, void *data)
 
    if (tex->op == nir_texop_txs && *(const bool *)data)
       return lower_txs_int(b, tex);
+   /* the view's level count, from the draw (SGX_K_LEVELS) */
+   if (tex->op == nir_texop_query_levels && *(const bool *)data &&
+       tex->texture_index < SGX_K_SIZE_UNITS) {
+      b->cursor = nir_before_instr(instr);
+      nir_def_replace(&tex->def,
+                      nir_load_uniform(b, 1, 32, nir_imm_int(b, 0),
+                                       .base = SGX_K_LEVELS + tex->texture_index,
+                                       .range = 1, .dest_type = nir_type_int32));
+      return true;
+   }
    if (tex->op != nir_texop_txs || tex->def.num_components > 2 ||
        tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
        (li >= 0 && (!nir_src_is_const(tex->src[li].src) ||
@@ -1527,6 +1537,9 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       }
       if (!sgx_tex_bgra(v->format))
          not_bgra |= 1u << unit;
+      /* one F32 word a texel (tex_f32): depth, and R32 (raw) */
+      if (sgx_tex_raw32(v->format) == 1)
+         depth |= 1u << unit;
       if (sgx_tex_depth(v->format)) {
          const struct pipe_sampler_state *ss = ctx->samplers[unit];
 

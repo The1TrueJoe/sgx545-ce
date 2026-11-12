@@ -57,6 +57,9 @@ struct sgx_const {
 #define SGX_K_SIZE_UNITS   16
 #define SGX_K_INSTANCE_INT 1072
 #define SGX_K_UBO          1080
+/* unit u's level count (textureQueryLevels, and the compiler's own level
+ * choice for word-by-word fetches) at SGX_K_LEVELS + u, a raw integer */
+#define SGX_K_LEVELS       1096
 
 #define SGX_MAX_DEP_SAMPLES 8
 
