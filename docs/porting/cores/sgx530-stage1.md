@@ -520,6 +520,87 @@ recovers like this:
 If the kernel side can't do steps 2-4 for this start, it should skip the calibration.
 The pad passes don't need it.
 
+## After the tenth attempt: the MOVS itself
+
+Attempt 10 (log 2026-11-11-2339) ran 18 variants with pads on code bases 0-14, under the
+usual DMs and under DM 3. No pad and no ladder ran.
+
+**The SGX530 reports BIF faults (C).** The calibration pointed `EVENT_KICKER` at
+0x0e800000 and kicked:
+- `BIF_INT_STAT` read 0x4004 and `BIF_FAULT` 0x0e800000 at every sample; `MEM_REQ_STAT` 0.
+- Recovery left no fault pending, with no scratch-page rounds needed.
+- So the kick reads the kicker word, and every earlier "no fault" means no access went
+  unmapped.
+
+Across attempts 4, 9 and 10, no USSE task starts, through any code base, unit or DM.
+The PDS runs our event program, passes its MOVS, reaches its HALT, and loops.
+
+**What's left is the MOVS.** It passes, yet no task starts. Two of its fields would do that
+silently if the SGX530 reads them differently:
+- **dest** (bits 0-4), 5 = DOUTU on the SGX545. Another number on the SGX530 would send the
+  three words to another unit.
+- **cc** (bits 24-26), 7 = always on the SGX545. If it means something else, the MOVS is
+  skipped. The SGX545's vertex-fetch DOUTU uses cc 3.
+
+**Attempt 11:** one load, the `sgx530_bases` image with `code_base_pads=1` (so a task through
+any base still lands on a pad), each variant one change to PDS0's MOVS:
+
+| Variant | Change |
+|---|---|
+| control | dest 5, cc 7 |
+| dest | 4, 6, 7, 1, 0, 2 |
+| cc | 3, 0 |
+| all-slots | the row's four data words all = the DOUTU word, all four selects 0: DOUTU (w0, w0, w0) under any interleave |
+
+- dest 3 is DOUTD, a DMA from the address in word 0. Leave it out: with our word it would
+  fault at 0x0600000f or so.
+- A pad or the ladder landing names the variant.
+- If a variant's PC stops cycling, or settles on a new value, log that too.
+
+## After the eleventh attempt: before the first instruction
+
+Attempt 11 (log 2026-11-11-2351) changed the MOVS's dest and cc, and tried the all-slots
+row. Nothing started. Under every change, cc 0 included, the PC sat on the event
+program's first instruction and never reached the HALT. A skipped MOVS would have reached
+it. So the PDS likely stalls before it executes the first instruction. It may be waiting
+on something it needs first, probably its data segment or a data-store allocation, which
+0xa6c/0xa70 describe.
+
+The third PC value, 0xf75c, came back with the same image that gave 0xf33c before. So it
+doesn't track our image: probably another PDS program or state, not ours.
+
+**Attempt 12:** one load, the `sgx530_bases` image with the pads, the kicker fix. A grid
+over the two event data registers, since every earlier 0xa6c/0xa70 change except 2/6
+ran without the kicker fix:
+- 0xa6c ∈ {0, 1, 2, 4};
+- 0xa70 ∈ {0, 1, 2, 4, 6, 8}.
+- That is 24 cells, including the baseline 1/6. Each logs the PC trace.
+
+Then two enable values with the kicker fix: 0xa58 = 0x7fffffff, and 0xa58 = 0.
+
+A cell whose PC reaches the HALT, or leaves the first instruction, narrows it down even
+if no task starts.
+
+## After the twelfth attempt: 0xa6c is the code start
+
+Attempt 12 (log 2026-11-12-0002) found what 0xa6c does: it is where the PDS starts
+executing, in dwords from the event program's start (C).
+- 0 starts the PDS on the program's first word, 1 on the next, 4 on the MOVS.
+- 0xa70 changed nothing in that test.
+- The 1 used since attempt 1 started the PDS on data word 1. That explains attempts 1-11.
+- On the SGX545, 1 plausibly counts one 16-byte row (G).
+
+The SGX530's start now writes 0xa6c = 4, the program's 4-dword data segment. The PDS then
+sits on the MOVS, and still no task starts.
+
+**Attempt 13** reruns the earlier variants from that start, with no image change. Its
+first useful read is cc 0:
+- the PC moves to the HALT: the PDS executes the MOVS and waits on its DOUT;
+- the PC stays on the MOVS: it is stuck before executing it.
+
+The MOVS-side variants are crossed with the two likeliest readings of 0xa70: 4, the data
+segment in dwords, and 6, the whole program.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
