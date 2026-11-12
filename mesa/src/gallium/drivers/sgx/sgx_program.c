@@ -927,12 +927,14 @@ pack_int_outputs(nir_shader *nir, unsigned kind)
          if (st->intrinsic != nir_intrinsic_store_deref ||
              nir_deref_instr_get_variable(nir_src_as_deref(st->src[0])) != out)
             continue;
+         /* the new store goes in before the old one goes (the cursor is
+          * the old one's place) */
          b.cursor = nir_before_instr(instr);
          nir_def *word = pack_word(&b, st->src[1].ssa,
                                    nir_intrinsic_write_mask(st), kind);
-         nir_instr_remove(instr);
          out->type = glsl_uint_type();
          nir_store_deref(&b, nir_build_deref_var(&b, out), word, 0x1);
+         nir_instr_remove(instr);
          progress = true;
       }
    }
