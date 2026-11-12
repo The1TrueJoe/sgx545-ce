@@ -441,7 +441,7 @@ static void t_vm_unmap_split(int fd)
 	assert_eq(vm_map(fd, vm, bo, 0x3e200000, 0, 4 * PAGE), 0);
 }
 
-/* The ops of one call apply all or none; their syncs wait first and signal after. */
+/* The ops of one call apply all or none. A synchronous bind takes no fences. */
 static void t_vm_bind_ops(int fd)
 {
 	uint32_t vm = create_vm(fd), bo = create_bo(fd, 4 * PAGE, 0), done = syncobj(fd);
@@ -457,18 +457,16 @@ static void t_vm_bind_ops(int fd)
 	assert_eq(vm_bind(fd, vm, sync, ops, 3, NULL, 0), -EEXIST);	/* the third */
 	assert_eq(vm_map(fd, vm, bo, 0x3e300000, 0, PAGE), 0);	/* the first didn't apply */
 	assert_eq(vm_unmap(fd, vm, 0x3e300000, PAGE), 0);
-	assert_eq(vm_bind(fd, vm, sync, ops, 2, &sig, 1), 0);
-	assert_eq(syncobj_wait(fd, done, 0), 0);
+	/* a signal or a wait: refused, nothing applied */
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, &sig, 1), -EINVAL);
+	sig.flags = 0;
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, &sig, 1), -EINVAL);
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, NULL, 0), 0);
 	ops[2] = (struct drm_powervr_sgx_vm_bind_op)UNMAP_OP(0x3e300000, 2 * PAGE);
 	assert_eq(vm_bind(fd, vm, sync, &ops[2], 1, NULL, 0), 0);
 	/* overlapping ops in one call */
 	ops[1] = (struct drm_powervr_sgx_vm_bind_op)UNMAP_OP(0x3e300000, PAGE);
 	assert_eq(vm_bind(fd, vm, sync, ops, 2, NULL, 0), -EINVAL);
-	/* a wait on a syncobj with no fence */
-	sig.flags = 0;
-	assert_eq(vm_bind(fd, vm, sync, ops, 1, &sig, 1), 0);
-	sig.handle = syncobj(fd);
-	assert_eq(vm_bind(fd, vm, sync, &ops[1], 1, &sig, 1), -EINVAL);
 }
 
 static void t_vm_map_overlap(int fd)
@@ -1394,16 +1392,13 @@ static void t_submit_transfer_invalid(int fd)
 #undef REJECT
 }
 
-/* Retired numbers stay empty: revision 2's SUBMIT_JOBS and revision 1's UPLOAD_CODE. */
-static void t_submit_old_number(int fd)
+/* The ioctl numbers are dense: the one past SUBMIT_JOBS doesn't exist. */
+static void t_ioctl_past_last(int fd)
 {
 	struct drm_powervr_sgx_ioctl_submit_jobs_args a = {};
-	struct drm_powervr_sgx_ioctl_upload_code_args u = {};
 
-	assert_eq(xioctl(fd, DRM_IOWR(DRM_COMMAND_BASE + 0x0b,
-				       struct drm_powervr_sgx_ioctl_submit_jobs_args), &a), -EINVAL);
 	assert_eq(xioctl(fd, DRM_IOWR(DRM_COMMAND_BASE + 0x0d,
-				       struct drm_powervr_sgx_ioctl_upload_code_args), &u), -EINVAL);
+				       struct drm_powervr_sgx_ioctl_submit_jobs_args), &a), -EINVAL);
 }
 
 /*
@@ -1604,7 +1599,7 @@ static const struct {
 	{ "submit-wait-unsignalled", t_submit_wait_unsignalled },
 	{ "rt-dataset-create-destroy", t_rtds_create_destroy },
 	{ "rt-dataset-invalid", t_rtds_invalid },
-	{ "submit-old-number", t_submit_old_number },
+	{ "ioctl-past-last", t_ioctl_past_last },
 	{ "submit-render-invalid", t_submit_render_invalid },
 	{ "submit-transfer-invalid", t_submit_transfer_invalid },
 	{ "reserved-bits", t_reserved_bits },
