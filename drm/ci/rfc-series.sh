@@ -5,14 +5,14 @@
 # Commit the RFC series onto a drm-misc-next tree (a b4 prep branch), as
 # upstream would carry it: the shmem DMA-device fix, gma500 0001 and 0002, the uAPI with its docs and
 # MAINTAINERS entry, the driver by area, the KUnit tests. Messages:
-# docs/rfc/series.
+# the series message directory (kept out of this tree).
 #
-#   rfc-series.sh <kernel tree> <repo root>
+#   rfc-series.sh <kernel tree> <repo root> <message dir>
 set -eu
 K=$1
 R=$2
 DRM=$R/drm
-MSG=$R/docs/rfc/series
+MSG=$3
 D=$K/drivers/gpu/drm/powervr_sgx
 
 cd "$K"
