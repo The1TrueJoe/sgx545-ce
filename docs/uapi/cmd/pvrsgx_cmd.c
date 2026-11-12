@@ -177,7 +177,7 @@ static int mapped_fields(const struct pvrsgx_cmd_core *core, const struct pvrsgx
 {
 	for (u32 i = 0; i < n; i++) {
 		const struct pvrsgx_cmd_field *f = &fields[i];
-		u64 addr, size;
+		u64 addr, size, samples = ctx->rt_samples ? ctx->rt_samples : 1;
 
 		if (f->check != PVRSGX_CMD_CHECK_ADDR || !f->extent)
 			continue;
@@ -189,10 +189,10 @@ static int mapped_fields(const struct pvrsgx_cmd_core *core, const struct pvrsgx
 			size = f->extent_bytes;
 			break;
 		case PVRSGX_CMD_EXTENT_RT_DEPTH:
-			size = (u64)ctx->rt_pad_width * ctx->rt_pad_height * 4;
+			size = (u64)ctx->rt_pad_width * ctx->rt_pad_height * 4 * samples;
 			break;
 		case PVRSGX_CMD_EXTENT_RT_STENCIL:
-			size = (u64)ctx->rt_pad_width * ctx->rt_pad_height;
+			size = (u64)ctx->rt_pad_width * ctx->rt_pad_height * samples;
 			break;
 		case PVRSGX_CMD_EXTENT_PDS_ROWS: {
 			u32 rows;

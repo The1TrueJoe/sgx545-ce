@@ -19,12 +19,16 @@
 #define ZLS_BASE_MASK 0xfff00000U
 #define ZLS_OFFSET_LIMIT_LOG2 30
 
-int pvrsgx_check_render(const struct pvrsgx_cmd_core *core, const struct pvrsgx_cmd_render_all *r)
+int pvrsgx_check_render(const struct pvrsgx_cmd_core *core, const struct pvrsgx_cmd_render_all *r,
+			u32 samples)
 {
 	/* The SGX545 extension; all zero when it wasn't sent or on another core. */
 	u32 zls = r->sgx545_render.zls_control, flags = r->sgx545_render.flags_3d;
 	u64 depth = r->base.depth_addr, stencil = r->base.stencil_addr, base, limit;
 
+	/* Multisampled depth and stencil are per sample and always stored. */
+	if (samples == 4 && !zls)
+		return -EINVAL;
 	if (zls && !depth)
 		return -EINVAL;
 	if (((zls & ZLS_STENCIL_BITS) || (flags & FLAGS_3D_STENCIL)) && !stencil)

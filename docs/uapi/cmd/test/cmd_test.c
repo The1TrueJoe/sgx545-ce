@@ -39,12 +39,13 @@ static void race(void)
 
 #define UPTR(p) ((u64)(uintptr_t)(p))
 
-/* One VM: PDS pixel heap [0x2e000000, +32 MiB), 0x2000 of it mapped; 4 MiB of general. */
+/* One VM: PDS pixel heap [0x2e000000, +32 MiB), 0x2000 of it mapped; 4 + 8 MiB of general. */
 static bool mapped(const void *priv, u64 addr, u64 size)
 {
 	(void)priv;
 	return (addr >= 0x2e000000 && addr + size <= 0x2e002000) ||
-	       (addr >= 0x3e000000 && addr + size <= 0x3e400000);
+	       (addr >= 0x3e000000 && addr + size <= 0x3e400000) ||
+	       (addr >= 0x3e800000 && addr + size <= 0x3f000000);
 }
 
 static struct pvrsgx_cmd_ctx ctx(void)
@@ -79,21 +80,28 @@ static struct drm_powervr_sgx_cmd_render good_render(void)
 	return r;
 }
 
-/* copy, then every check, as the kernel's submit runs them */
-static int submit_render(const struct pvrsgx_cmd_core *core, const struct pvrsgx_cmd_def *def,
-			 const void *cmd, struct pvrsgx_cmd_render_all *all)
+/* copy, then every check, as the kernel's submit runs them, into a target of @samples */
+static int submit_render_ms(const struct pvrsgx_cmd_core *core, const struct pvrsgx_cmd_def *def,
+			    const void *cmd, struct pvrsgx_cmd_render_all *all, u32 samples)
 {
 	struct pvrsgx_cmd_ctx c = ctx();
 	u64 present;
 	int err = pvrsgx_cmd_copy(def, UPTR(cmd), all, &present);
 
+	c.rt_samples = samples;
 	if (!err)
 		err = pvrsgx_cmd_check(core, def, &c, all, present);
 	if (!err)
 		err = pvrsgx_cmd_check_mapped(core, def, &c, all, present);
 	if (!err)
-		err = pvrsgx_check_render(core, all);
+		err = pvrsgx_check_render(core, all, samples);
 	return err;
+}
+
+static int submit_render(const struct pvrsgx_cmd_core *core, const struct pvrsgx_cmd_def *def,
+			 const void *cmd, struct pvrsgx_cmd_render_all *all)
+{
+	return submit_render_ms(core, def, cmd, all, 1);
 }
 
 static int render(const void *cmd)
@@ -256,6 +264,27 @@ static void test_render_fields(void)
 	EXPECT_EQ(render(&r), -EINVAL, "ZLS without a depth address");
 }
 
+/* 4x: depth and stencil per sample, and ZLS always on. */
+static void test_render_4x(void)
+{
+	struct drm_powervr_sgx_ext_sgx545_render e = {
+		.base.name = DRM_POWERVR_SGX_EXT_SGX545_RENDER,
+		.zls_control = 0x00080000,
+	};
+	const struct pvrsgx_cmd_def *def = core545->cmds[PVRSGX_CMD_RENDER];
+	struct drm_powervr_sgx_cmd_render r = good_render();
+	struct pvrsgx_cmd_render_all all;
+
+	EXPECT_EQ(submit_render_ms(core545, def, &r, &all, 4), -EINVAL, "a 4x render without ZLS");
+	r.head.extensions = UPTR(&e);
+	r.depth_addr = 0x3e800000;	/* 8 MiB mapped: 4 x 736 x 480 x 4 fits */
+	EXPECT_EQ(submit_render_ms(core545, def, &r, &all, 4), 0, "a 4x render with ZLS");
+	r.depth_addr = 0x3ec00000;	/* 4 MiB left: one sample's depth only */
+	EXPECT_EQ(submit_render_ms(core545, def, &r, &all, 1), 0, "1x depth in 4 MiB");
+	EXPECT_EQ(submit_render_ms(core545, def, &r, &all, 4), -EINVAL,
+		  "4x depth past the mapping");
+}
+
 static void test_ta_kick(void)
 {
 	const struct pvrsgx_cmd_def *def = core545->cmds[PVRSGX_CMD_TA_KICK];
@@ -330,6 +359,8 @@ static void test_sgx530(void)
 	u64 present;
 
 	EXPECT_EQ(c->va_bits, 28, "the SGX530's address bits");
+	EXPECT_EQ(c->max_samples, 1, "the SGX530: single-sampled until 4x is known there");
+	EXPECT_EQ(core545->max_samples, 4, "the SGX545 renders 4x");
 	for (unsigned t = 0; t < PVRSGX_CMD_COUNT; t++)
 		EXPECT_EQ(c->cmds[t]->supported, 0, "no SGX530 command until its values are known");
 	EXPECT_EQ(pvrsgx_cmd_copy(c->cmds[PVRSGX_CMD_RENDER], UPTR(&r), &all, &present), -EOPNOTSUPP,
@@ -342,6 +373,7 @@ int main(void)
 	test_render_copy();
 	test_extensions();
 	test_render_fields();
+	test_render_4x();
 	test_ta_kick();
 	test_transfer();
 	test_sgx530();

@@ -47,14 +47,15 @@ void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
 
 /* A render target's tiling numbers. */
 struct pvrsgx_rt_numbers {
-	u32 xt, yt, mx, my, padx, pady;
-	u32 mtile1, mtile2, te_screen, mt_tiles, region_bytes, tailptr_bytes;
+	u32 xt, yt, mx, my, padx, pady, zls_xt;
+	u32 mtile1, mtile2, te_screen, mt_tiles, rt_mt_tiles, region_bytes, tailptr_bytes;
+	u32 te_aa, rt_flags;
 };
 
 struct pvrsgx_rt_dataset {
 	struct kref ref;
 	struct pvrsgx_context *ctx;
-	u32 w, h;
+	u32 w, h, samples;
 	struct pvrsgx_rt_numbers n;
 	/*
 	 * Per RT-data entry, which alternates by frame parity, so one frame's TA

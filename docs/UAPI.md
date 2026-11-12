@@ -260,9 +260,17 @@ The kernel computes (all capture, STATE.md 6):
 - RT data with two entries, three render-details sets, the TA-data blocks, and the
   0x200-byte background object block with its vertices from `w` and `h`.
 
-`samples` must be 1 in this version. TE AA has multisample bits, but no capture shows a
-multisampled frame (G14). `flags` is reserved. `TE_AA`, `RT +0x10`, `+0x14`, `+0x18` and
-`+0x68` are kernel constants in this version (G12).
+`samples` is 1 or 4 (0 is 1). At 4 the target is 2×2 samples per pixel, resolved at the end
+of each tile (capture `ms1`/`ms4`, STATE.md "Multisampling (4x)"). The TE tiles samples:
+the numbers above come from `2·xt` and `2·yt` tiles, with `w·h·4` against `0x4b000`; the
+macrotile registers and tiles per macrotile are those halved, in pixel tiles, and
+`TE_SCREEN` stays in pixel tiles. That gives, at 720×480, `TE_MTILE1` `8180c012`, 0x30 tiles
+per macrotile, region arrays of 0x9000 and tail pointers of 0x4000. The kernel also sets
+`TE_AA` b31 and b30, RT +0x10 b1, RT +0x14 and +0x18 `eaa26e26` (0x88 at 1x), and the ZLS
+control's tile count from `2·xt`. Only 720×480 is captured at 4x; other sizes follow the
+same formulas (G14). The client sets the PBE's resolve (word 2 b30) and the ZLS 3D flags
+itself. `flags` is reserved. `TE_AA`, `RT +0x10`, `+0x14`, `+0x18` and `+0x68` are
+otherwise kernel constants in this version (G12).
 
 ### SUBMIT_JOBS
 
@@ -344,7 +352,8 @@ from the start of the struct. One column per core: an address must be below
 
 - **address** fields are device-virtual addresses in the job's VM. "mapped" is
   checked against the VM's mappings at submit: `rt_depth` is `pad_w·pad_h·4` and
-  `rt_stencil` is `pad_w·pad_h` of the job's RT dataset (section 3.4); `pds_rows`
+  `rt_stencil` is `pad_w·pad_h` of the job's RT dataset (section 3.4), times its
+  samples; `pds_rows`
   is the row count times the core's `pds_row_bytes`.
 - "none" means the value goes into a register or a firmware word that the
   hardware reads as a number, with no address in it. Nothing outside the VM
@@ -384,10 +393,10 @@ from the start of the struct. One column per core: an address must be below
 | `ext_sgx545_ta_kick` (24 B, id 2, sgx545) | 0x00 | head | |  |  |
 | | 0x10 | `ta_flags2` | u32 | mask `0x02c80000` | - |
 
-| core | va_bits | pds_row_bytes | commands offered |
-|---|---|---|---|
-| sgx545 | 32 | 16 | render, ta_kick, transfer |
-| sgx530 | 28 | unknown | none |
+| core | va_bits | pds_row_bytes | max_samples | commands offered |
+|---|---|---|---|---|
+| sgx545 | 32 | 16 | 4 | render, ta_kick, transfer |
+| sgx530 | 28 | unknown | unknown | none |
 <!-- cmd-table end -->
 
 Where a field says "mapped", that is a programming-error check made at submit time. A
@@ -426,6 +435,7 @@ Cross-field rules, in the kernel's render check:
 
 | rule | evidence |
 |---|---|
+| `zls_control` is not 0 into a 4-sample RT dataset: its depth and stencil are per sample and always stored, so a 4x render needs a ZLS buffer even without a depth config | capture: the vendor stack allocates 4 × 736×480×5 bytes and turns ZLS on for a window with no depth (`ms4`) |
 | `depth_addr` is not 0 when `zls_control` is not 0 | hardware: ZLS stores to it (TEX.md 7) |
 | `stencil_addr` is not 0 when `zls_control` has bit 0 or 1, or `flags_3d` has bit 8 | hardware: a bad stencil address locks up the 3D (TEX.md 7) |
 | depth and stencil each lie less than 2^30 above the ZLS request base, `min(depth, stencil) & 0xfff00000` | capture for the base (STATE.md 6); the 2^30 limit is a guess (G13) |
