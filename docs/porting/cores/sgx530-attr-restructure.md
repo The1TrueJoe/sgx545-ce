@@ -77,14 +77,27 @@ plus the §2(A) attribute change for the two bases (r17, r14 → PA0, PA1), plus
 Contained — it changes the register convention, not each path's logic. The `<10 usable` spill
 case does not arise. **The margin is one** (eleven outputs, ten needed) *if* o10 is distinct too.
 
-**Distinctness is now confirmed (C, attempt 44):** o0..o9 are ten distinct task-writable
-registers, so the scratch side of the reallocation is a GO (margin 1 pending `odist10`). **But a
-third gate appeared:** the task's `st` to a mapped control-block page faulted (attempt 44, likely
-EDM_PROTECT — §5). The microkernel cannot run if its stores fault, so the restructure's three
-gates are: **(1) scratch → outputs: green;** (2) bases → attributes (DOUTA-then-DOUTU, pds3-mirror
-next); **(3) task stores land (the EDM data-master / EDM_PROTECT question, attempt 45).** The
-register reallocation is ready to draft, but it only makes the microkernel *run* once gates (2)
-and (3) are green too.
+**Status after attempt 47 — the restructure is necessary but not sufficient.** Of the four gates
+the probing surfaced, one is green and three have failed or are blocked, and they share one cause:
+
+- **(1) scratch → outputs: GREEN (C).** o0..o10 are eleven distinct task-writable registers.
+- **(2) bases → attributes: path A dead (C).** DOUTA-then-DOUTU in one program never launches, and
+  in the pds3 layout even the DOUTA fails to write PA0 (attempt 47); only a *standalone* DOUTA
+  writes an attribute (path B: the driver re-issues it per power transition).
+- **(3) task stores reach memory: no (C, attempt 47).** The store commits to neither arena
+  (scanned from DRAM) — the task cannot persist state to the control block.
+- **(4) a retiring load destination: no (C, attempt 47).** The task cannot write the pa bank, `ld`
+  cannot target an output, and temps don't retire — so a loaded value has nowhere to live.
+
+These are one signature: on the 530 event task as we launch it, **only an ALU write to an output
+takes effect**; every path that would move data to or from memory (loads to a retiring register,
+stores, the pa bank) is dead, and the task is not the requestor EDM_PROTECT admits. The task lacks
+a valid **write / EDM-task context**. So the register-file restructure — real and validated as far
+as it goes — **cannot by itself make the microkernel run**: a microkernel that can neither read the
+CCB/control block nor persist state does nothing. **The critical path is now the AM335x vendor
+capture of TI's working SGX530 EDM task setup** (open question §7), which should show the
+task-context setup that makes writes commit. The restructure stays on the shelf, ready, for after
+that setup is understood. Further register-file probing will not unlock it.
 
 ## 4. Which microkernel paths change
 
