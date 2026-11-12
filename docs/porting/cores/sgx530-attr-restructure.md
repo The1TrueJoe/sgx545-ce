@@ -119,9 +119,14 @@ likely to fit.
   store `st.a.d pa0, #0, o0` **faulted** (BIF 0x4004, control-block page). Attempt 45 found the
   cause: **EDM_PROTECT (C).** The code-base-15 data-master field at 3/0/1/2 made no difference, but
   mapping the arena **CACHECONSISTENT only (no EDM_PROTECT)** stopped the fault. So the driver fix
-  is clean: the SGX530 maps the microkernel's writable structures without EDM_PROTECT. (This fits
-  UAPI.md P2 — a 545 client `st` into EDM_PROTECT memory wedges the GPU — the 530 task simply is
-  not treated as the EDM, and the DM field does not change that.)
+  is clean: the SGX530 maps the microkernel's writable structures without EDM_PROTECT (a bring-up
+  stopgap, landed as d8160ba2). (This fits UAPI.md P2 — a 545 client `st` into EDM_PROTECT memory
+  wedges the GPU — the 530 task simply is not treated as the EDM, and the DM field does not change
+  that: on the 530 a USSE task issues as a USSE data master, not the EDM, and the single shared
+  directory list 0 leaves EDM_PROTECT nothing to scope by. Analysis in sgx530.md, "Why the SGX530
+  USSE task is not the EDM requestor".) **Stage-2 open item (gap 19):** the stopgap removes kernel
+  isolation, so before any client work, isolate kernel memory by the per-context page directory
+  (the kernel driver omits kernel heaps from client PDs), not EDM_PROTECT.
 - **Does the store reach memory? — still open (attempt 45).** With EDM_PROTECT off the store no
   longer faults, but the target word still read 0. Either `st` cannot read an **output** as its
   data source, or `idf`/`wdf` does not flush the USE data cache to memory (the DDK uses op0x100).
