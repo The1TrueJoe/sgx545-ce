@@ -323,7 +323,17 @@ only layout that puts kernel code below `PDS_EXEC_BASE` (0x02000000 against 0x02
 - Move the PDS, kernel and shader heaps to the DDK's bases above. `PDS_EXEC_BASE` becomes
   0x0D800000 (its K field is b20-27), and the kernel code heap 0x0EC00000.
 - `USE_CODE_BASE_15` = 0x0EC00000 >> 7 = 0x1d8000, inside its 24-bit field.
-- The image needs no change: its addresses are patched.
+- The image needs no change. It holds no heap address: its only addresses are the two
+  loader patches, `ctlblk` (r17) and `pdtable` (r14). Everything else comes through the
+  control block the host fills: host control, CCB control, the kernel CCB, and command
+  data. Branch targets count from code base 15, whatever it points at.
+  - Every other immediate is a register mask or an event bit: `EVENT_STATUS`/`HOST_CLEAR`
+    masks such as 0x20842000, `EVENT_TIMER`'s enable, the MADD invalidate 0x10000000, the
+    field-keep masks 0xf83fffff and 0x07ffffff, and the bounded waits' bits.
+  - The manifest holds only offsets.
+  - Only the probe table is layout-specific. It maps at the code-base field << k, so with
+    kernel code at 0x0EC00000 (field 0x1d8000) its addresses change, and k ≥ 8 would
+    start past 28 bits.
 - Run it with the `sgx530_diag` image and the 24-temporary DOUTU.
 
 **Free reads to add**, named in the SGX530's K header, at every sample:
