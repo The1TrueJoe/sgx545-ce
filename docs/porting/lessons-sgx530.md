@@ -306,3 +306,18 @@ with `--core`, and `test_sgx530.py` next to `test_emu.py`.
     what attempt 3 saw. The manifest now records `temps`. A port should have the host
     size the entry DOUTU from it. A third core then can't inherit a request it can't
     meet.
+
+### 2026-11-12: the diagnostic approach was the blocker
+
+26. **A diagnostic entry must keep the first instruction the hardware needs.** To read
+    stage 1 cheaply we put EVENT_TIMER/ctlblk markers at the very start of the event task
+    (cores/sgx530_diag.py and the probe), before `phas.i`. On the SGX545 that is fine
+    (USE_UNLIMITED_PHASES). The SGX530 lacks it and needs `phas.i` first to declare the
+    task's phase; starting with `limm`/`st.a.d` left the phase undefined and the fetch
+    garbage (attempts 24-25: an image-dependent b2 fault before any instruction committed).
+    The real microkernel entry has `phas.i` first and was never the problem. So the
+    marker-first diagnostic cost several attempts chasing a fault the shipping image
+    doesn't have. For a core without unlimited phases, a diagnostic task must emit `phas.i`
+    first too, then its markers (cores/sgx530_usse_phas.py). More generally: a probe must
+    preserve whatever the hardware requires before the instruction under test, or it
+    measures the probe's own scaffold.
