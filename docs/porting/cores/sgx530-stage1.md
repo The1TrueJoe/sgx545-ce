@@ -520,6 +520,43 @@ recovers like this:
 If the kernel side can't do steps 2-4 for this start, it should skip the calibration.
 The pad passes don't need it.
 
+## After the tenth attempt: the MOVS itself
+
+Attempt 10 (log 2026-11-11-2339) ran 18 variants with pads on code bases 0-14, under the
+usual DMs and under DM 3. No pad and no ladder ran.
+
+**The SGX530 reports BIF faults (C).** The calibration pointed `EVENT_KICKER` at
+0x0e800000 and kicked:
+- `BIF_INT_STAT` read 0x4004 and `BIF_FAULT` 0x0e800000 at every sample; `MEM_REQ_STAT` 0.
+- Recovery left no fault pending, with no scratch-page rounds needed.
+- So the kick reads the kicker word, and every earlier "no fault" means no access went
+  unmapped.
+
+Across attempts 4, 9 and 10, no USSE task starts, through any code base, unit or DM.
+The PDS runs our event program, passes its MOVS, reaches its HALT, and loops.
+
+**What's left is the MOVS.** It passes, yet no task starts. Two of its fields would do that
+silently if the SGX530 reads them differently:
+- **dest** (bits 0-4), 5 = DOUTU on the SGX545. Another number on the SGX530 would send the
+  three words to another unit.
+- **cc** (bits 24-26), 7 = always on the SGX545. If it means something else, the MOVS is
+  skipped. The SGX545's vertex-fetch DOUTU uses cc 3.
+
+**Attempt 11:** one load, the `sgx530_bases` image with `code_base_pads=1` (so a task through
+any base still lands on a pad), each variant one change to PDS0's MOVS:
+
+| Variant | Change |
+|---|---|
+| control | dest 5, cc 7 |
+| dest | 4, 6, 7, 1, 0, 2 |
+| cc | 3, 0 |
+| all-slots | the row's four data words all = the DOUTU word, all four selects 0: DOUTU (w0, w0, w0) under any interleave |
+
+- dest 3 is DOUTD, a DMA from the address in word 0. Leave it out: with our word it would
+  fault at 0x0600000f or so.
+- A pad or the ladder landing names the variant.
+- If a variant's PC stops cycling, or settles on a new value, log that too.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
