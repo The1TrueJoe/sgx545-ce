@@ -174,19 +174,23 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
  */
 static bool pvrsgx_job_fault_check(struct pvrsgx_device *sdev)
 {
-	bool fault;
+	bool fault = false;
 	int idx;
 
-	if (READ_ONCE(sdev->faulted) || READ_ONCE(sdev->lost) || !READ_ONCE(sdev->powered) ||
-	    !drm_dev_enter(&sdev->base, &idx))
+	/* Not during a reset, which gates the clocks and clears the fault. */
+	if (!mutex_trylock(&sdev->reset_lock))
 		return false;
-	fault = sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & sdev->cr->bif_int_stat_fault_req;
-	drm_dev_exit(idx);
-	if (!fault)
-		return false;
-	WRITE_ONCE(sdev->faulted, true);
-	drm_sched_fault(&sdev->sched);
-	return true;
+	if (!sdev->faulted && !sdev->lost && READ_ONCE(sdev->powered) &&
+	    drm_dev_enter(&sdev->base, &idx)) {
+		fault = sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & sdev->cr->bif_int_stat_fault_req;
+		drm_dev_exit(idx);
+		if (fault)
+			WRITE_ONCE(sdev->faulted, true);
+	}
+	mutex_unlock(&sdev->reset_lock);
+	if (fault)
+		drm_sched_fault(&sdev->sched);
+	return fault;
 }
 
 /* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
@@ -234,10 +238,11 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
-	mutex_unlock(&sdev->done_lock);
-
+	/* Queued under the lock, so a waiter that takes it can flush it. */
 	if (reap || !list_empty_careful(&sdev->inval_waits))
 		queue_work(sdev->free_wq, &sdev->reap_work);
+	mutex_unlock(&sdev->done_lock);
+
 	if (more && pvrsgx_job_fault_check(sdev))
 		return;
 	/* With a count the interrupt does it, and the poll is only a backstop. */
@@ -255,7 +260,8 @@ static void reap_work_fn(struct work_struct *work)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	done = sdev->renders_done;
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
-	pvrsgx_kobj_reap(sdev, done);
+	/* Lost, the GPU is stopped for good: everything can go. */
+	pvrsgx_kobj_reap(sdev, READ_ONCE(sdev->lost) ? U64_MAX : done);
 	pvrsgx_ccb_inval_reap(sdev, false);
 }
 
@@ -356,16 +362,22 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 {
 	struct pvrsgx_job *bad = to_pvrsgx_job(sched_job), *job, *tmp;
 	struct pvrsgx_device *sdev = bad->ctx->sdev;
-	bool fault = READ_ONCE(sdev->faulted), lost, cookie;
+	bool fault, lost, cookie, wedged = false;
 	unsigned long flags;
 	int idx;
 
-	drm_sched_stop(&sdev->sched, sched_job);
+	mutex_lock(&sdev->reset_lock);
+	/* Finished but not yet freed, or held by system sleep: not a hang. */
+	if (sdev->quiesced || (bad->hw_fence && dma_fence_is_signaled(bad->hw_fence))) {
+		mutex_unlock(&sdev->reset_lock);
+		return DRM_GPU_SCHED_STAT_NO_HANG;
+	}
+	drm_sched_wqueue_stop(&sdev->sched);
+	fault = sdev->faulted;
 	/* Every fence on the GPU and in the queue waits on what follows. */
 	cookie = dma_fence_begin_signalling();
 	/* After unbind (pvrsgx_job_unplug) the hardware is gone: fail, touch nothing. */
-	mutex_lock(&sdev->reset_lock);
-	lost = READ_ONCE(sdev->lost) || !drm_dev_enter(&sdev->base, &idx);
+	lost = sdev->lost || !drm_dev_enter(&sdev->base, &idx);
 	if (lost)
 		goto fail;
 	if (fault)
@@ -393,6 +405,12 @@ fail:
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	mutex_unlock(&sdev->done_lock);
+	dma_fence_end_signalling(cookie);
+	/*
+	 * Their callbacks still attached, the jobs' finished fences carry these
+	 * errors; the scheduler, stopped after, only takes the jobs off its list.
+	 */
+	drm_sched_stop(&sdev->sched, sched_job);
 	if (lost)
 		goto out;
 
@@ -401,6 +419,7 @@ fail:
 	 * straight into the full start (clocks, scripts, a reset that drains
 	 * pending faults, the first kick).
 	 */
+	cookie = dma_fence_begin_signalling();
 	sdev->reset_count++;
 	sdev->fw_running = false;
 	/* The restart's reset clears the BIF's fault state. */
@@ -410,14 +429,16 @@ fail:
 		/* Lost: the cores stay in reset, and run_job fails every job. */
 		pvrsgx_fw_halt(sdev);
 		WRITE_ONCE(sdev->lost, true);
-		/* DMA is off and the fences are signaled: tell userspace to rebind. */
-		drm_dev_wedged_event(&sdev->base, DRM_WEDGE_RECOVERY_REBIND, NULL);
+		wedged = true;
 	}
+	dma_fence_end_signalling(cookie);
 	drm_dev_exit(idx);
 out:
-	mutex_unlock(&sdev->reset_lock);
-	dma_fence_end_signalling(cookie);
 	drm_sched_start(&sdev->sched, 0);
+	mutex_unlock(&sdev->reset_lock);
+	/* DMA is off and the fences are signaled: tell userspace to rebind. It allocates. */
+	if (wedged)
+		drm_dev_wedged_event(&sdev->base, DRM_WEDGE_RECOVERY_REBIND, NULL);
 	return DRM_GPU_SCHED_STAT_RESET;
 }
 
@@ -520,15 +541,11 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	unsigned long flags;
 	bool cookie;
 
-	drm_sched_wqueue_stop(&sdev->sched);
-	/* A reset under way finishes first; one after this sees @lost. */
+	/* A reset under way finishes first, scheduler restart included; one after sees @lost. */
 	mutex_lock(&sdev->reset_lock);
+	drm_sched_wqueue_stop(&sdev->sched);
 	WRITE_ONCE(sdev->lost, true);
 	pvrsgx_fw_stop(sdev);
-	mutex_unlock(&sdev->reset_lock);
-	cancel_delayed_work_sync(&sdev->poll_work);
-	/* Stopped: nothing translates any more, so unmapped memory can go. */
-	pvrsgx_ccb_inval_reap(sdev, true);
 
 	mutex_lock(&sdev->done_lock);
 	cookie = dma_fence_begin_signalling();
@@ -541,7 +558,17 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
 	mutex_unlock(&sdev->done_lock);
+	/* Nothing on the GPU now: a done check after this finds none and stays off. */
+	cancel_delayed_work_sync(&sdev->poll_work);
 	drm_sched_wqueue_start(&sdev->sched);
+	mutex_unlock(&sdev->reset_lock);
+
+	/*
+	 * Stopped: nothing translates any more, so unmapped memory can go, and
+	 * every kernel object in the graveyard, whose VMs hold the DRM device.
+	 */
+	pvrsgx_ccb_inval_reap(sdev, true);
+	pvrsgx_kobj_reap(sdev, U64_MAX);
 }
 
 /*
@@ -556,14 +583,24 @@ int pvrsgx_job_quiesce(struct pvrsgx_device *sdev)
 	for (int i = 0; i < 2; i++) {
 		struct dma_fence *last;
 
+		/* Between resets: none is under way, and none restarts the scheduler after. */
+		mutex_lock(&sdev->reset_lock);
 		drm_sched_wqueue_stop(&sdev->sched);
 		/* Set only by run_job, which is stopped. Jobs finish in order. */
-		last = sdev->last_fence;
+		last = dma_fence_get(sdev->last_fence);
 		if (!last || dma_fence_is_signaled(last)) {
+			sdev->quiesced = true;
+			mutex_unlock(&sdev->reset_lock);
+			dma_fence_put(last);
+			/* The done check that signaled it has queued its reap. */
+			mutex_lock(&sdev->done_lock);
+			mutex_unlock(&sdev->done_lock);
 			flush_work(&sdev->reap_work);
 			return 0;
 		}
+		mutex_unlock(&sdev->reset_lock);
 		left = dma_fence_wait_timeout(last, false, left);
+		dma_fence_put(last);
 		if (left <= 0)
 			break;
 	}
@@ -574,7 +611,10 @@ int pvrsgx_job_quiesce(struct pvrsgx_device *sdev)
 
 void pvrsgx_job_unquiesce(struct pvrsgx_device *sdev)
 {
+	mutex_lock(&sdev->reset_lock);
+	sdev->quiesced = false;
 	drm_sched_wqueue_start(&sdev->sched);
+	mutex_unlock(&sdev->reset_lock);
 }
 
 void pvrsgx_job_fini(struct pvrsgx_device *sdev)

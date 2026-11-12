@@ -160,6 +160,9 @@ void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 	o->grave_restarts = READ_ONCE(sdev->restarts);
 	list_add_tail(&o->grave, &sdev->graveyard);
 	mutex_unlock(&sdev->kobj_lock);
+	/* No render will finish to free it (unbind, or a device lost): free it now. */
+	if (READ_ONCE(sdev->lost))
+		queue_work(sdev->free_wq, &sdev->reap_work);
 }
 
 /*

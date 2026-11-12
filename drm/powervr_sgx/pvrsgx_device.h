@@ -171,8 +171,13 @@ struct pvrsgx_device {
 	u32 fw_gen;
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
-	/** @reset_lock: Serializes a GPU reset with unbind. */
+	/**
+	 * @reset_lock: Serializes a GPU reset, from stopping the scheduler to
+	 * starting it, with unbind, system sleep and the fault check.
+	 */
 	struct mutex reset_lock;
+	/** @quiesced: System sleep holds the GPU; a timeout then finds no hang. */
+	bool quiesced;
 	/** @faulted: The BIF reported a page fault; the running job ends with -EFAULT. */
 	bool faulted;
 
