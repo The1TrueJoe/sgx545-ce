@@ -477,8 +477,7 @@ static void rtds_init(struct pvrsgx_rt_dataset *s)
 	}
 }
 
-static struct pvrsgx_rt_dataset *rtds_create(struct pvrsgx_context *ctx, u32 w, u32 h,
-					     u32 samples)
+struct pvrsgx_rt_dataset *pvrsgx_rtds_create(struct pvrsgx_context *ctx, u32 w, u32 h, u32 samples)
 {
 	struct pvrsgx_device *sdev = ctx->sdev;
 	struct pvrsgx_render_ctx *r = ctx->render;
@@ -577,7 +576,7 @@ int pvrsgx_ioctl_create_rt_dataset(struct drm_device *drm, void *data, struct dr
 		pvrsgx_context_put(ctx);
 		return -EINVAL;
 	}
-	s = rtds_create(ctx, args->width, args->height, args->samples ?: 1);
+	s = pvrsgx_rtds_create(ctx, args->width, args->height, args->samples ?: 1);
 	pvrsgx_context_put(ctx);
 	if (IS_ERR(s))
 		return PTR_ERR(s);

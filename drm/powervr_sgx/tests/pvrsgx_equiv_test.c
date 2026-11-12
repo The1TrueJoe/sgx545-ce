@@ -4,8 +4,9 @@
 /*
  * The SGX545 path, recorded: every register write, in order, and the bytes
  * of every structure the kernel builds for the microkernel, through a start,
- * a command, a recovery, a stop, a resume, a render and a transfer context
- * and the heap query. Included from pvrsgx_fw.c so it reaches the loader's
+ * a command, a recovery, a stop, a resume, a render and a transfer context,
+ * a render target dataset and two frames of a two-kick render built through
+ * it, and the heap query. Included from pvrsgx_fw.c so it reaches the loader's
  * static functions.
  *
  * Registers are a memory buffer, and a stand-in for the microkernel answers
@@ -369,6 +370,89 @@ static void eq_heaps(struct eq_fx *fx)
 	}
 }
 
+/*
+ * A 720x480 dataset, then two frames of a two-kick render: everything the
+ * kernel writes for the microkernel at the dataset's creation and at each
+ * kick (the PB, the dataset's structures, the TA commands, the render
+ * details, the background object and the syncs).
+ */
+static void eq_render(struct eq_fx *fx, struct pvrsgx_context *ctx)
+{
+	struct pvrsgx_device *sdev = fx->sdev;
+	struct pvrsgx_render_ctx *r = ctx->render;
+	u64 pds = pvrsgx_heaps(sdev)->pds_pixel.base;
+	struct pvrsgx_rt_dataset *s;
+	struct pvrsgx_job *job;
+	char name[24];
+
+	eq_words(fx, "pbdesc", kobj_cpu(r->pb->desc), sizeof(struct pvrsgx_fw_pb_desc), -1);
+	eq_words(fx, "pbblocks", kobj_cpu(r->pb->blocks), 12, -1);
+	eq_words(fx, "pbfl", kobj_cpu(r->pb->freelist), r->pb->freelist->km.size, -1);
+
+	s = pvrsgx_rtds_create(ctx, 720, 480, 1);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(fx->test, s);
+	eq_add(fx, "rtds rtword %08x rtdata %08x done %08x tailptr %08x", kobj_va(s->rtword),
+	       kobj_va(s->rtdata), kobj_va(s->done), kobj_va(s->tailptr));
+	eq_words(fx, "rtdata", kobj_cpu(s->rtdata), sizeof(struct pvrsgx_fw_rt_data), -1);
+	for (int i = 0; i < 2; i++) {
+		snprintf(name, sizeof(name), "rd%d", i);
+		eq_words(fx, name, kobj_cpu(s->rd[i]), sizeof(struct pvrsgx_fw_render_details), -1);
+		snprintf(name, sizeof(name), "bg%d", i);
+		eq_words(fx, name, kobj_cpu(s->bgblock[i]), 0x60, -1);
+		snprintf(name, sizeof(name), "hwsync%d", i);
+		eq_words(fx, name, kobj_cpu(s->hwsync[i]), sizeof(struct pvrsgx_fw_rt_deps), -1);
+	}
+
+	job = kunit_kzalloc(fx->test, sizeof(*job), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(fx->test, job);
+	job->ctx = ctx;
+	job->render.rtds = s;
+	job->render.nkicks = 2;
+	job->render.render.base.depth_addr = 0x20100000;
+	job->render.render.base.stencil_addr = 0x20180000;
+	job->render.render.base.pixel_event_pds_addr = pds + 0x300;
+	job->render.render.base.pixel_event_pds_rows = 3;
+	job->render.render.base.bg_pds_secondary_addr = pds + 0x200;
+	job->render.render.base.bg_pds_secondary_rows = 2;
+	job->render.render.base.bg_pds_primary_addr = pds + 0x100;
+	job->render.render.base.bg_pds_primary_rows = 4;
+	job->render.render.base.bg_depth_f32 = 0x3f800000;
+	job->render.render.base.depth_bias_factor_f32 = 0x3f000000;
+	job->render.render.sgx545_render.zls_control = 0x00171004;
+	job->render.kick[0].base.vdm_base = 0x20000000;
+	job->render.kick[1].base.vdm_base = 0x20001000;
+	job->render.kick[1].sgx545_ta_kick.ta_flags2 = 0x1;
+
+	for (u32 f = 0; f < 2; f++) {
+		for (u32 k = 0; k < 2; k++) {
+			u32 woff = r->ccb_woff, data[6];
+
+			KUNIT_ASSERT_EQ(fx->test, pvrsgx_render_job_build(job, k, data), 0);
+			snprintf(name, sizeof(name), "f%u k%u ta", f, k);
+			eq_words(fx, name, (u8 *)kobj_cpu(r->ccb) + woff,
+				 sizeof(struct pvrsgx_fw_ta_cmd), -1);
+			eq_add(fx, "f%u k%u data %08x %08x woff %x", f, k, data[0], data[1],
+			       r->ccb_woff);
+		}
+		eq_add(fx, "f%u entry %u cmd_off %x done_val %x", f, job->render.entry,
+		       job->render.cmd_off, job->done_val);
+		snprintf(name, sizeof(name), "f%u rd", f);
+		eq_words(fx, name, kobj_cpu(s->rd[job->render.entry]),
+			 sizeof(struct pvrsgx_fw_render_details), -1);
+		snprintf(name, sizeof(name), "f%u bg", f);
+		eq_words(fx, name, kobj_cpu(s->bgblock[job->render.entry]), 0x60, -1);
+		snprintf(name, sizeof(name), "f%u w4", f);
+		eq_words(fx, name, kobj_cpu(s->rd_w4[job->render.entry]), 4, -1);
+		snprintf(name, sizeof(name), "f%u deps", f);
+		eq_words(fx, name, kobj_cpu(s->hwsync[job->render.entry]),
+			 sizeof(struct pvrsgx_fw_rt_deps), -1);
+		eq_words(fx, "rtword", kobj_cpu(s->rtword), 4, -1);
+		eq_words(fx, "sync3d", kobj_cpu(r->sync3d), SYNC_DATA_BYTES, -1);
+		eq_words(fx, "done", kobj_cpu(s->done), SYNC_DATA_BYTES, -1);
+	}
+	pvrsgx_rtds_put(s);
+}
+
 static void equiv_test_sgx545(struct kunit *test)
 {
 	struct eq_fx *fx = eq_device(test, 545, 0x0001000e);
@@ -418,6 +502,7 @@ static void equiv_test_sgx545(struct kunit *test)
 	vm = pvrsgx_vm_create(sdev);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vm);
 	eq_pd(fx, vm->mmu);
+	kref_init(&rctx.ref);
 	rctx.sdev = sdev;
 	rctx.vm = vm;
 	xctx.sdev = sdev;
@@ -442,6 +527,9 @@ static void equiv_test_sgx545(struct kunit *test)
 	eq_mmu(fx, "vmmu", vm->mmu);
 	eq_mmu(fx, "kmmu", sdev->kernel_mmu);
 	eq_check(fx, "ctx");
+
+	eq_render(fx, &rctx);
+	eq_check(fx, "render");
 
 	eq_heaps(fx);
 	eq_check(fx, "heaps");
